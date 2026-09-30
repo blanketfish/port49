@@ -140,7 +140,9 @@ every finding is fixed below, with the review's fix unless the line says otherwi
   latest fetch (Tasks 5, 9, 11). 3: the API logs a fixed route name and says a
   refusal once per reason and caller. 4: the rotation hint is given only for an unknown signing key;
   a signature that does not verify is called out for investigation (`bundle.ErrUnknownKey`). 5: every
-  ask of the service has a 30 s deadline and dials with a 10 s one. 6: *departing from the review's
+  ask port49d makes of the service has a 30 s deadline (`requestTimeout`, cold start and the fetcher
+  alike), and every dial a 10 s one; `port49 inventory sync` waits up to 6 min for its answer, since
+  the sync it asks for is bounded by the service's `sync_timeout` (default 5m). 6: *departing from the review's
   "re-read at SIGHUP":* the client reads `ca_file` at every handshake, as it reads its certificate, so
   a CA rotation needs neither a restart nor a signal. 7: the mirror copy is 0640. 8: the fence says
   "the user this process runs as". 9: `Open` checks `bundle`, `policy_sha256` and `platform_set` for
@@ -655,7 +657,8 @@ and the text to put in its place; where a paragraph is new, the text it goes aft
      genuine bundle and never forge one; the start line names the sequence and publication time it
      started from, and the first pull replaces it.
 
-  At start port49d verifies both copies and starts from the one with the higher sequence. It asks
+  At start port49d verifies both copies and starts from the one published later (`published_at`,
+  which survives a sequence reset). It asks
   the service at start only when it has neither, and until a bundle arrives it keeps its TACACS+
   listener closed, so a device finds the connection refused and falls to its next server or its
   local method at once (§15, L4), and `/readyz` on the metrics listener answers 503. It says why
@@ -739,7 +742,8 @@ and the text to put in its place; where a paragraph is new, the text it goes aft
   - **Cold start**: a daemon with no snapshot keeps its TACACS+ listener closed and `/readyz` at
     503, and retries, while existing replicas keep serving; a daemon restarted with the inventory
     service down starts from its persisted bundle, one scheduled onto a fresh node starts from the
-    shared mirror's copy, and with both it starts from the higher sequence.
+    shared mirror's copy, and with both it starts from the one published later (`published_at`,
+    which survives a sequence reset).
   - **The document is verified everywhere**: a document the service did not sign — from the API,
     the persisted copy or the mirror — is refused and the bundle in force keeps serving; one carrying
     a key group, a `key_ref` pin, or a name with a control character is refused; a signing key
@@ -1184,7 +1188,8 @@ tests/lab/sot/run.sh nautobot-3 l30      # also records every L27 file: the L27 
   keep the env files from Step 6 by setting it then) and run README's audit loop over
   `tests/lab/sot tests/lab/results/L30-*.md`. Expected: `0`.
 
-- [ ] **Step 10: Commit**
+- [ ] **Step 10: Commit**, after `make build && make test && make vet` (expected: exit 0; the commit
+  carries Go code, the recorder and a unit test):
 
 ```bash
 git add tests/lab/cmd/sot-record tests/lab/sot tests/lab/l30_unit_test.go tests/lab/results/L30-*.md
@@ -1339,6 +1344,17 @@ func TestInventoryKeygenWritesAPairOnceAndNamesIt(t *testing.T) {
 		!strings.Contains(errOut.String(), "already exists") {
 		t.Fatalf("exit %d: %s", code, errOut.String())
 	}
+	// One file present: refused before either is written, so no lone new
+	// private key is left beside an old public one (conflict scan F14).
+	lone := t.TempDir()
+	os.WriteFile(filepath.Join(lone, "signing.pub"), []byte("old"), 0o644)
+	errOut.Reset()
+	if code := run([]string{"inventory", "keygen", "--dir", lone}, &out, &errOut); code != 1 {
+		t.Fatalf("exit %d", code)
+	}
+	if _, err := os.Stat(filepath.Join(lone, "signing.key")); err == nil {
+		t.Fatal("a lone signing.key was left")
+	}
 }
 ```
 
@@ -1456,28 +1472,42 @@ func inventoryKeygen(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "port49 inventory keygen:", err)
 		return 1
 	}
+	// Refuse before writing either, so a refusal never leaves one new file
+	// beside an old one (conflict scan F14).
+	for _, name := range []string{"signing.key", "signing.pub"} {
+		if _, err := os.Lstat(filepath.Join(*dir, name)); err == nil {
+			fmt.Fprintf(stderr, "port49 inventory keygen: %s already exists; a new key is written beside no old one\n",
+				filepath.Join(*dir, name))
+			return 1
+		}
+	}
+	var written []string
+	undo := func() {
+		for _, w := range written {
+			os.Remove(w)
+		}
+	}
 	for _, f := range []struct {
 		name string
 		body []byte
 		mode os.FileMode
 	}{{"signing.key", privPEM, 0o600}, {"signing.pub", pubPEM, 0o644}} {
 		path := filepath.Join(*dir, f.name)
+		// O_EXCL still: a file that appeared since the check is not overwritten.
 		out, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, f.mode)
-		if errors.Is(err, os.ErrExist) {
-			fmt.Fprintf(stderr, "port49 inventory keygen: %s already exists; a new key is written beside no old one\n", path)
-			return 1
-		}
 		if err != nil {
+			undo()
 			fmt.Fprintln(stderr, "port49 inventory keygen:", err)
 			return 1
 		}
-		if _, err := out.Write(f.body); err != nil {
-			out.Close()
-			fmt.Fprintln(stderr, "port49 inventory keygen:", err)
-			return 1
+		written = append(written, path)
+		_, werr := out.Write(f.body)
+		if cerr := out.Close(); werr == nil {
+			werr = cerr
 		}
-		if err := out.Close(); err != nil {
-			fmt.Fprintln(stderr, "port49 inventory keygen:", err)
+		if werr != nil {
+			undo() // the first file is removed if the second fails
+			fmt.Fprintln(stderr, "port49 inventory keygen:", werr)
 			return 1
 		}
 	}
@@ -1512,7 +1542,9 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 - Modify: `internal/policy/file.go` (`fileKeyGroup.Match.Name`), `internal/policy/admit.go`
   (`buildKeyGroups`)
 - Modify: `internal/bundle/bundle.go` (`canonGroup.Name`)
-- Test: `internal/admission/admission_test.go`, `internal/policy/admit_test.go`
+- Test: `internal/admission/admission_test.go`, `internal/policy/admit_test.go` (new tests, and
+  `TestKeyGroupLoadErrors`' "no match" and "both terms" cases updated to the new wording: each is still
+  refused with its reason)
 
 **Interfaces:**
 - Consumes: `admission.Assign`, `TierPin`, `KeyGroup`; `policy.buildKeyGroups`, `fileKeyGroup`;
@@ -1662,8 +1694,10 @@ func Assign(d Device, groups []KeyGroup) (Assignment, error) {
   `internal/policy/admit.go` `buildKeyGroups`: set `kg.Name = g.Match.Name`; refuse a name that is
   not 1 to 255 bytes of printable ASCII without a space (`"%s: match.name is not a device name"`,
   not quoting it); replace the two-way `switch` with a count of the terms given
-  (`name`, `cidr`, `attributes`): not exactly one is `"%s: match on exactly one of name, cidr or
-  attributes: each tier is its own group (spec §10)"`; and add a `names map[string]string`, where a
+  (`name`, `cidr`, `attributes`): none is `"%s: matches on neither name, cidr nor attributes, so it
+  would admit the whole fleet under %s; give it one"` (today's message, generalized), and two or more is
+  `"%s: match on exactly one of name, cidr or attributes: each tier is its own group (spec §10)"`; and
+  add a `names map[string]string`, where a
   second group for one name is `"%s: %s and %s tie for device %s (spec §10); keep one"`. A name group
   naming a device the inventory lacks is kept, as a scope's pinned name is (plan 6a Task 17): a device
   racked later takes it.
@@ -1671,8 +1705,14 @@ func Assign(d Device, groups []KeyGroup) (Assignment, error) {
   In `internal/bundle/bundle.go`, add `Name string `json:"name,omitempty"`` to `canonGroup` and set it
   from `g.Name` in `canonical`: an inventory file carries no name group, so no bundle name changes.
 
+  In `internal/policy/admit_test.go`'s `TestKeyGroupLoadErrors`, change two expected substrings,
+  and nothing else in the test: "no match" expects `"matches on neither name, cidr nor attributes"`
+  (was `"matches on neither cidr nor attributes"`), and "both terms" expects `"exactly one of name,
+  cidr or attributes"` (was `"not both"`). Both cases are still refused, each with its reason; the
+  wording names the new term.
+
 - [ ] **Step 4: Run them.** `go test ./internal/admission/ ./internal/policy/ ./internal/bundle/ ./cmd/port49/ -count=1`
-  Expected: PASS, with every existing key-group and bundle-name test unchanged.
+  Expected: PASS. Every other existing key-group and bundle-name test is unchanged.
 
 - [ ] **Step 5: Commit** (after `make build && make test && make vet`)
 
@@ -1682,7 +1722,9 @@ git commit -m "feat(admission): a policy key group pins a device by name, at tie
 
 Plan 6b owner decision 3, revised after the pre-flight review (B1): the
 inventory service carries no pin, so the pin tier moves into the reviewed
-policy. A /32 group is tier 3 and is not a pin.
+policy. A /32 group is tier 3 and is not a pin. TestKeyGroupLoadErrors'
+"no match" and "both terms" cases now expect the wording that names the
+name term; both are still refused.
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
@@ -1907,7 +1949,7 @@ func TestAnOversizedDocumentIsRefusedUnread(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run them.** `go test ./internal/bundle/ -run 'Document|Envelope|VerifyKey|SignedBytes|AssignsAKey|UnusableName' -count=1`
+- [ ] **Step 2: Run them.** `go test ./internal/bundle/ -count=1`
   Expected: FAIL (undefined: `Seal`, `Open`, `NewDocument`, `envelope`, …).
 
 - [ ] **Step 3: Implement.** In `internal/bundle/bundle.go` rename `canonical` to `Canonical` (its two
@@ -3676,7 +3718,7 @@ func TestAQuarantinedDeviceIsPublishedAndSaid(t *testing.T) {
 }
 ```
 
-- [ ] **Step 3: Run them.** `go test ./internal/inventory/ -run 'Sync|Source.*Bound|Refused|Restart|Quarantined|LeftOut' -count=1`
+- [ ] **Step 3: Run them.** `go test ./internal/inventory/ -count=1`
   Expected: FAIL (undefined: `Syncer`, `NewMetrics`, …).
 
 - [ ] **Step 4: Implement the metrics.** Create `internal/inventory/metrics.go`:
@@ -4525,7 +4567,7 @@ func TestADeviceIsDescribedByAnyOfItsAddresses(t *testing.T) {
   with `rig.pubs()` from `sync_test.go` (Task 9), and `testpki.Loopback()` a helper returning
   `[]net.IP{net.ParseIP("127.0.0.1")}` (add it in Step 1).
 
-- [ ] **Step 3: Run them.** `go test ./internal/inventory/ -run 'API|Reader|Caller|URISAN|ClientCertificate|Diff|Described|NotThere' -count=1`
+- [ ] **Step 3: Run them.** `go test ./internal/inventory/ -count=1`
   Expected: FAIL (undefined: `API`, `Server`, `CallerOf`, …).
 
 - [ ] **Step 4: Implement the caller.** Create `internal/inventory/caller.go`:
@@ -5255,7 +5297,9 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
     string) (*Client, error)` — `https` only, no user information in the URL, the CA file's
     certificates as the only roots, and both the CA file and the client certificate re-read at each
     handshake (a renewed workload certificate or a rotated CA is used without a restart; pre-flight
-    minor 6); dials time out at 10 s (minor 5).
+    minor 6); dials time out at 10 s (minor 5). The client sets no deadline of its own on an ask:
+    port49d's asks carry `requestTimeout` (30 s, Task 14) in their context, and `port49 inventory
+    sync` waits up to 6 min (`ResponseHeaderTimeout`) for a sync the service bounds by `sync_timeout`.
   - `func (c *Client) Version(ctx context.Context) (VersionInfo, error)`;
     `func (c *Client) Bundle(ctx context.Context, etag string) (raw []byte, newETag string, notModified bool, err error)`;
     `func (c *Client) Sync(ctx context.Context) (Result, error)`;
@@ -5602,8 +5646,12 @@ func verifyService(cs tls.ConnectionState, caFile, host string) error {
 	return err
 }
 
-func (c *Client) do(ctx context.Context, method, path string, hdr map[string]string) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(ctx, method, c.base.JoinPath(path).String(), nil)
+// do asks path, with query as the URL's query: JoinPath would escape a `?`
+// written into the path (conflict scan F13).
+func (c *Client) do(ctx context.Context, method, path, query string, hdr map[string]string) (*http.Response, error) {
+	u := c.base.JoinPath(path)
+	u.RawQuery = query
+	req, err := http.NewRequestWithContext(ctx, method, u.String(), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -5639,7 +5687,7 @@ func answer(resp *http.Response, v any) error {
 
 func (c *Client) Version(ctx context.Context) (VersionInfo, error) {
 	var v VersionInfo
-	resp, err := c.do(ctx, "GET", "/v1/bundle/version", nil)
+	resp, err := c.do(ctx, "GET", "/v1/bundle/version", "", nil)
 	if err != nil {
 		return v, err
 	}
@@ -5653,7 +5701,7 @@ func (c *Client) Bundle(ctx context.Context, etag string) ([]byte, string, bool,
 	if etag != "" {
 		hdr["If-None-Match"] = etag
 	}
-	resp, err := c.do(ctx, "GET", "/v1/bundle", hdr)
+	resp, err := c.do(ctx, "GET", "/v1/bundle", "", hdr)
 	if err != nil {
 		return nil, "", false, err
 	}
@@ -5677,7 +5725,7 @@ func (c *Client) Bundle(ctx context.Context, etag string) ([]byte, string, bool,
 
 func (c *Client) Sync(ctx context.Context) (Result, error) {
 	var r Result
-	resp, err := c.do(ctx, "POST", "/v1/sync", nil)
+	resp, err := c.do(ctx, "POST", "/v1/sync", "", nil)
 	if err != nil {
 		return r, err
 	}
@@ -5686,16 +5734,13 @@ func (c *Client) Sync(ctx context.Context) (Result, error) {
 
 func (c *Client) Diff(ctx context.Context, from int64) (DiffResult, error) {
 	var d DiffResult
-	resp, err := c.do(ctx, "GET", "/v1/bundle/diff?from="+strconv.FormatInt(from, 10), nil)
+	resp, err := c.do(ctx, "GET", "/v1/bundle/diff", "from="+strconv.FormatInt(from, 10), nil)
 	if err != nil {
 		return d, err
 	}
 	return d, answer(resp, &d)
 }
 ```
-
-  `c.base.JoinPath` escapes `?`; build the diff URL as `c.base.JoinPath("/v1/bundle/diff")` with
-  `RawQuery` set instead if the test shows it, and keep the behaviour.
 
 - [ ] **Step 4: Implement the commands.** In `cmd/port49/inventory.go`, dispatch `sync` from
   `inventoryCmd`, and in `inventoryDiff` a `--service` branch taken when `--service` is given (then
@@ -6031,8 +6076,14 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 - Create: `cmd/port49d/coldstart.go`
 - Test: `cmd/port49d/coldstart_test.go`
 - Modify: `cmd/port49d/main.go` (the metrics listener first, `/readyz`, the service path);
-  `cmd/port49d/reload.go` (no inventory-file poll in service mode)
-- Modify: `internal/daemon/metrics/metrics.go` (`InventoryBundleSequence`, `InventoryPersistFailed`)
+  `cmd/port49d/reload.go` (no inventory-file poll in service mode; `inForce`, `seq`, `latestRaw`,
+  `startDocument`)
+- Modify (mechanically, for the `loadPolicy` and `buildBroker` signatures): `cmd/port49d/broker_test.go`
+  (`loadPolicy` and every `buildBroker` call), `cmd/port49d/reload_test.go` (`newReloadRig`'s
+  `buildBroker`), `cmd/port49d/reload_inventory_test.go` (`restart`'s `loadPolicy`/`buildBroker`); name
+  them in the report and the commit
+- Modify: `internal/daemon/metrics/metrics.go` (`InventoryBundleSequence`, `InventoryPersistFailed`,
+  `InventoryBundleRefused`)
 
 **Interfaces:**
 - Consumes: `config.InventoryServiceConfig`, `config.VerifyKeys` (Task 13); `inventory.Client`,
@@ -6049,12 +6100,17 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
     uses it too).
   - `func persistBundle(dir string, raw []byte) error` — `dir/bundle.json`, 0600, atomic.
   - `func coldStart(ctx context.Context, svc *config.InventoryServiceConfig, keys []ed25519.PublicKey,
-    c fetchClient) (*inventory.Published, string, error)` — the document and where it came from
+    c fetchClient, m *metrics.Metrics) (*inventory.Published, string, error)` — the document and where
+    it came from
     (`the persisted copy`, `the mirror's copy`, `the service`); of two copies, the one published later
     (minor 11).
-  - `func (r *reloader) startDocument(p *inventory.Published, from string)` — records the etag and
-    sequence in force, and dates the snapshot: from `p.Doc.PublishedAt` for a copy, from now for the
-    service (M5).
+  - `func (r *reloader) startDocument(p *inventory.Published, from string)` — records the etag,
+    sequence and sealed bytes in force, and dates the snapshot: from `p.Doc.PublishedAt` for a copy,
+    from now for the service (M5). This task declares the reloader fields it writes: `inForce string`,
+    `seq int64`, `latestRaw []byte`; Task 15 declares the rest.
+  - `metrics.InventoryBundleRefused` (`port49_inventory_bundle_refused`): 1 while a document port49d
+    was given does not open or was refused; a copy that fails `bundle.Open` at cold start sets it
+    (spec §10 as Task 1 writes it: "refused, said once, and alarmed").
   - `metrics.InventoryBundleSequence` (`port49_inventory_bundle_sequence`),
     `metrics.InventoryPersistFailed` (`port49_inventory_persist_failed`).
   - `/readyz` on the metrics listener: 200 while the TACACS+ listener serves, 503 before and during
@@ -6077,11 +6133,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/bundle"
 	"github.com/rhwendt/port49/internal/config"
+	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/inventory"
 )
 
@@ -6147,7 +6205,7 @@ func TestColdStartTakesTheNewerCopyAndNeverAsksTheService(t *testing.T) {
 	e := stderr
 	defer func() { stderr = e }()
 	stderr = &out
-	p, from, err := coldStart(context.Background(), svc, keys, &fakeService{t: t, forbid: true})
+	p, from, err := coldStart(context.Background(), svc, keys, &fakeService{t: t, forbid: true}, testMetrics())
 	if err != nil || p.Doc.Sequence != 5 || from != "the mirror's copy" {
 		t.Fatalf("%v %q %v", p, from, err)
 	}
@@ -6163,7 +6221,7 @@ func TestColdStartPrefersTheLaterPublicationOverTheHigherSequence(t *testing.T) 
 	e := stderr
 	defer func() { stderr = e }()
 	stderr = &out
-	p, from, err := coldStart(context.Background(), svc, keys, &fakeService{t: t, forbid: true})
+	p, from, err := coldStart(context.Background(), svc, keys, &fakeService{t: t, forbid: true}, testMetrics())
 	if err != nil || p.Doc.Sequence != 2 || from != "the mirror's copy" ||
 		!strings.Contains(out.String(), "published later than the persisted copy") {
 		t.Fatalf("%v %q %v %s", p, from, err, out.String())
@@ -6187,7 +6245,7 @@ func TestAHungMirrorNeverHoldsUpAStartFromThePersistedCopy(t *testing.T) {
 	defer func() { stderr = e }()
 	stderr = &out
 	start := time.Now()
-	p, from, err := coldStart(context.Background(), svc, keys, &fakeService{t: t, forbid: true})
+	p, from, err := coldStart(context.Background(), svc, keys, &fakeService{t: t, forbid: true}, testMetrics())
 	if err != nil || from != "the persisted copy" || p.Doc.Sequence != 3 || time.Since(start) > 5*time.Second ||
 		!strings.Contains(out.String(), "the mirror's copy is passed over: mirror_dir "+svc.MirrorDir+" did not answer in") {
 		t.Fatalf("%v %q %v %s", p, from, err, out.String())
@@ -6214,7 +6272,10 @@ func TestAStartFromACopyCountsTheAgeFromItsPublication(t *testing.T) {
 	}
 }
 
-// A copy the service did not sign is passed over, and said.
+func testMetrics() *metrics.Metrics { return metrics.New(prometheus.NewRegistry()) }
+
+// A copy the service did not sign is passed over, said, and alarmed (spec
+// §10: "refused, said once, and alarmed").
 func TestACopyThatDoesNotVerifyIsPassedOver(t *testing.T) {
 	svc, key, keys := coldRig(t)
 	_, other, _ := ed25519.GenerateKey(rand.Reader)
@@ -6224,10 +6285,14 @@ func TestACopyThatDoesNotVerifyIsPassedOver(t *testing.T) {
 	e := stderr
 	defer func() { stderr = e }()
 	stderr = &out
-	p, from, err := coldStart(context.Background(), svc, keys, &fakeService{t: t, forbid: true})
+	m := testMetrics()
+	p, from, err := coldStart(context.Background(), svc, keys, &fakeService{t: t, forbid: true}, m)
 	if err != nil || p.Doc.Sequence != 3 || from != "the persisted copy" ||
 		!strings.Contains(out.String(), "which no verify key holds") {
 		t.Fatalf("%v %q %v %s", p, from, err, out.String())
+	}
+	if testutil.ToFloat64(m.InventoryBundleRefused) != 1 {
+		t.Fatal("port49_inventory_bundle_refused is not 1 for a copy that does not open")
 	}
 }
 
@@ -6251,7 +6316,7 @@ func TestWithNoCopyItWaitsForTheServiceSayingWhyOnce(t *testing.T) {
 	e := stderr
 	defer func() { stderr = e }()
 	stderr = &out
-	p, from, err := coldStart(context.Background(), svc, keys, &fakeService{bundles: [][]byte{nil, nil, nil, doc}})
+	p, from, err := coldStart(context.Background(), svc, keys, &fakeService{bundles: [][]byte{nil, nil, nil, doc}}, testMetrics())
 	if err != nil || p.Doc.Sequence != 1 || from != "the service" {
 		t.Fatalf("%v %q %v", p, from, err)
 	}
@@ -6274,7 +6339,8 @@ func TestColdStartEndsWithItsContext(t *testing.T) {
 	e := stderr
 	defer func() { stderr = e }()
 	stderr = &syncBuffer{}
-	if _, _, err := coldStart(ctx, svc, keys, &fakeService{bundles: [][]byte{nil}}); !errors.Is(err, context.DeadlineExceeded) {
+	if _, _, err := coldStart(ctx, svc, keys, &fakeService{bundles: [][]byte{nil}}, testMetrics()); !errors.Is(err,
+		context.DeadlineExceeded) {
 		t.Fatalf("got %v", err)
 	}
 }
@@ -6487,8 +6553,9 @@ func mirrorWithin(dir string, keys []ed25519.PublicKey) (*inventory.Published, e
 		err error
 	}
 	done := make(chan result, 1)
+	read := readMirror // read before the goroutine: a test swaps the variable back while it blocks
 	go func() {
-		p, err := readMirror(dir, keys)
+		p, err := read(dir, keys)
 		done <- result{p, err}
 	}()
 	select {
@@ -6516,31 +6583,33 @@ func persistBundle(dir string, raw []byte) error {
 // reason it is still waiting is said once. A copy that does not open is said
 // and passed over.
 func coldStart(ctx context.Context, svc *config.InventoryServiceConfig, keys []ed25519.PublicKey,
-	c fetchClient) (*inventory.Published, string, error) {
+	c fetchClient, m *metrics.Metrics) (*inventory.Published, string, error) {
 	persistedWhy, mirrorWhy := "none in "+svc.StateDir, "none configured"
 	var best *inventory.Published
 	from := ""
 	if p, err := readPersisted(svc.StateDir, keys); err != nil {
 		persistedWhy = oneLine(err)
+		m.InventoryBundleRefused.Set(1) // refused, said once, and alarmed (spec §10)
 		fmt.Fprintf(stderr, "port49d: inventory: the persisted copy is passed over: %s\n", persistedWhy)
 	} else if p != nil {
 		best, from = p, "the persisted copy"
 	}
 	if svc.MirrorDir != "" {
 		mirrorWhy = "none in " + svc.MirrorDir
-		if m, err := mirrorWithin(svc.MirrorDir, keys); err != nil {
+		if mc, err := mirrorWithin(svc.MirrorDir, keys); err != nil {
 			mirrorWhy = oneLine(err)
+			m.InventoryBundleRefused.Set(1)
 			fmt.Fprintf(stderr, "port49d: inventory: the mirror's copy is passed over: %s\n", mirrorWhy)
-		} else if m != nil && (best == nil || m.Doc.PublishedAt.After(best.Doc.PublishedAt)) {
+		} else if mc != nil && (best == nil || mc.Doc.PublishedAt.After(best.Doc.PublishedAt)) {
 			// Newer is later publication: a sequence starts again at 1
 			// after a service reset, a publication time does not
 			// (pre-flight minor 11).
 			if best != nil {
 				fmt.Fprintf(stderr, "port49d: inventory: the mirror's bundle %d, published %s, is published later "+
-					"than the persisted copy's bundle %d, published %s\n", m.Doc.Sequence,
-					m.Doc.PublishedAt.Format(time.RFC3339), best.Doc.Sequence, best.Doc.PublishedAt.Format(time.RFC3339))
+					"than the persisted copy's bundle %d, published %s\n", mc.Doc.Sequence,
+					mc.Doc.PublishedAt.Format(time.RFC3339), best.Doc.Sequence, best.Doc.PublishedAt.Format(time.RFC3339))
 			}
-			best, from = m, "the mirror's copy"
+			best, from = mc, "the mirror's copy"
 		}
 	}
 	said := ""
@@ -6554,6 +6623,7 @@ func coldStart(ctx context.Context, svc *config.InventoryServiceConfig, keys []e
 				best, from = &inventory.Published{Raw: raw, Doc: doc, Inv: inv}, "the service"
 				break
 			}
+			m.InventoryBundleRefused.Set(1)
 			err = oerr
 		}
 		if why := fmt.Sprintf("port49d: inventory: no bundle yet (persisted copy: %s; mirror: %s; service at %s: %s); "+
@@ -6611,7 +6681,7 @@ func coldStart(ctx context.Context, svc *config.InventoryServiceConfig, keys []e
 			cfg.InventoryService.TLSCertFile, cfg.InventoryService.TLSKeyFile); err != nil {
 			return fmt.Errorf("inventory.service: %w", err)
 		}
-		if startDoc, startFrom, err = coldStart(ctx, cfg.InventoryService, verifyKeysAtStart, client); err != nil {
+		if startDoc, startFrom, err = coldStart(ctx, cfg.InventoryService, verifyKeysAtStart, client, m); err != nil {
 			if ctx.Err() != nil {
 				return nil // stopped while waiting for a bundle: nothing was served
 			}
@@ -6635,8 +6705,20 @@ func coldStart(ctx context.Context, svc *config.InventoryServiceConfig, keys []e
      `the inventory service's bundle N` in service mode; pass the label in from `run` as a new
      parameter, `loadPolicy(cfg config.Config, inventoryFrom string)`, and update its callers and
      `buildBroker`'s signature to carry it.
-  5. Hand the reloader the start document: `r.startDocument(startDoc, startFrom)` after
-     `newReloader`, with `startDocument` in `reload.go`:
+  5. Hand the reloader the start document, once: `r.startDocument(startDoc, startFrom)` after
+     `newReloader` (Task 15 adds the fetcher after this call and does not call it again). Add to the
+     `reloader` struct the fields it writes:
+
+```go
+	// Service mode (inventory.service): inForce is the etag of the document
+	// in force, seq its sequence, and latestRaw its sealed bytes, which a
+	// persist that failed is retried with (pre-flight M7).
+	inForce   string
+	seq       int64
+	latestRaw []byte
+```
+
+     and `startDocument` in `reload.go`:
 
 ```go
 // startDocument records the document the start loaded — its etag and
@@ -6649,7 +6731,7 @@ func (r *reloader) startDocument(p *inventory.Published, from string) {
 	if p == nil {
 		return
 	}
-	r.inForce, r.seq = bundle.ETag(p.Raw), p.Doc.Sequence
+	r.inForce, r.seq, r.latestRaw = bundle.ETag(p.Raw), p.Doc.Sequence, p.Raw
 	seen := r.now()
 	if from != "the service" {
 		seen = p.Doc.PublishedAt
@@ -6671,6 +6753,11 @@ func (r *reloader) startDocument(p *inventory.Published, from string) {
 	// not be written to inventory.service.state_dir, so a restart with the
 	// service down would start from an older copy, or none.
 	InventoryPersistFailed prometheus.Gauge
+	// port49_inventory_bundle_refused: 1 while a document port49d was given
+	// — a copy at cold start, or one the service sent — did not open or was
+	// refused; the bundle in force keeps serving. The first document from the
+	// service applied or confirmed in force clears it.
+	InventoryBundleRefused prometheus.Gauge
 ```
 
 - [ ] **Step 5: Run them.** `go test ./cmd/port49d/ ./internal/daemon/metrics/ -count=1`
@@ -6696,10 +6783,11 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 - Modify: `cmd/port49d/reload.go`, `cmd/port49d/main.go`
 - Modify: `internal/bundle/diff.go` (`CheckFrom`; the key-group hint only where the inventory in force
   carries key groups), `internal/bundle/diff_test.go`
-- Modify: `internal/daemon/metrics/metrics.go` (`InventoryFetches`, `InventoryBundleRefused`)
+- Modify: `internal/daemon/metrics/metrics.go` (`InventoryFetches`)
 
 **Interfaces:**
-- Consumes: `fetchClient`, `persistBundle` (Task 14); `bundle.Open`, `bundle.ETag`; `bundle.Parse`,
+- Consumes: `fetchClient`, `persistBundle`, `requestTimeout`, the reloader's `inForce`, `seq` and
+  `latestRaw`, `startDocument`, `metrics.InventoryBundleRefused` (Task 14); `bundle.Open`, `bundle.ETag`; `bundle.Parse`,
   `bundle.Diff`; `config.InventoryServiceOf`, `config.VerifyKeys` (Task 13); the reloader's `swap`,
   `after`, `rereadBound`, `invSeen`.
 - Produces:
@@ -6707,15 +6795,16 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
   - `type fetcher struct { client fetchClient; keys func() []ed25519.PublicKey; url string; interval
     time.Duration; metrics *metrics.Metrics }` and `func (f *fetcher) run(ctx context.Context, out
     chan<- received, poke <-chan struct{})`.
-  - On `reloader`: `docs <-chan received`, `poke chan<- struct{}`, `inForce`, `docRefused string`,
-    `latest *received`, `seq int64`, `verifyKeys atomic.Pointer[[]ed25519.PublicKey]`;
+  - On `reloader` (beside Task 14's `inForce`, `seq`, `latestRaw`): `docs <-chan received`, `poke
+    chan<- struct{}`, `docRefused`, `persistSaid string`, `latest *received`, `verifyKeys
+    atomic.Pointer[[]ed25519.PublicKey]`;
     `func (r *reloader) receive(ctx context.Context, d received)`;
     `func (r *reloader) loadDocument(ctx context.Context, trigger string, d received)`;
-    `func (r *reloader) rereadVerifyKeys()`; `startDocument` is Task 14's.
+    `func (r *reloader) rereadVerifyKeys()`; `func (r *reloader) reopenLatest()`.
   - `func bundle.CheckFrom(old, new *policy.Policy, maxRemovedPercent int, fix string) error`;
     `Check` is `CheckFrom(…, "fix the file")`.
   - `metrics.InventoryFetches` (`port49_inventory_fetches_total{outcome}`: `unchanged`, `received`,
-    `failed`, `invalid`), `metrics.InventoryBundleRefused` (`port49_inventory_bundle_refused`).
+    `failed`, `invalid`).
 
 - [ ] **Step 1: Write the failing tests.** Create `cmd/port49d/reload_service_test.go`:
 
@@ -7048,6 +7137,11 @@ func (f *fetcher) once(ctx context.Context) (received, bool) {
 		raw, etag, notModified, err = f.client.Bundle(cctx, f.etag)
 	}
 	if err != nil {
+		if ctx.Err() != nil {
+			// port49d is shutting down: nothing failed, and a line saying the
+			// service did not answer would be false at 3am (conflict scan F8).
+			return received{}, false
+		}
 		f.metrics.InventoryFetches.WithLabelValues("failed").Inc()
 		if msg := oneLine(err); msg != f.failing {
 			f.failing = msg
@@ -7204,6 +7298,11 @@ func (r *reloader) receive(ctx context.Context, d received) {
 	if d.unchanged {
 		if d.etag == r.inForce {
 			r.invSeen.Store(r.now().UnixNano())
+			// The service confirms the document in force: nothing it sent
+			// is pending refusal, and a cold start's refused copy is behind
+			// us (Task 14).
+			r.docRefused = ""
+			r.metrics.InventoryBundleRefused.Set(0)
 			// A persist that failed is tried again at every confirmation,
 			// not only at the next document (pre-flight M7).
 			if r.persistSaid != "" && r.latestRaw != nil {
@@ -7321,23 +7420,37 @@ func (r *reloader) rereadVerifyKeys() {
 }
 ```
 
-  with `persistSaid string` and `latestRaw []byte` (the sealed bytes of the document in force, set
-  here and by `startDocument`) added to the reloader. In `reload`, in service mode, after
-  `rereadBound()` add `r.rereadVerifyKeys()`, and after the policy load:
+  with `persistSaid string` added to the reloader (`latestRaw` is Task 14's, which `startDocument`
+  sets). Add:
 
 ```go
+// reopenLatest opens the latest document received again under the verify
+// keys now in force, when it was refused for its signature: a SIGHUP that
+// added the service's new key applies the document it could not open.
+func (r *reloader) reopenLatest() {
+	if d := r.latest; d != nil && d.err != nil {
+		if doc, inv, err := bundle.Open(d.raw, *r.verifyKeys.Load()); err == nil {
+			d.pub, d.err = &inventory.Published{Raw: d.raw, Doc: doc, Inv: inv}, nil
+		}
+	}
+}
+```
+
+  and make `reload` run in this order (conflict scan F10; Task 17 inserts its combined check at the
+  marked line):
+
+```go
+func (r *reloader) reload(ctx context.Context, trigger string) {
+	r.rereadBound()
+	r.rereadVerifyKeys()
+	r.reopenLatest()
+	// (Task 17: the combined check of both sources goes here.)
+	raw, v, err := policyVersion(r.cfg.Broker.PolicyFile)
+	r.load(ctx, trigger, raw, v, err)
 	if r.cfg.InventoryService != nil {
-		if r.latest != nil && r.latest.etag != r.inForce {
-			d := *r.latest
-			if d.err != nil {
-				// Refused under the keys before this SIGHUP: open it again
-				// under the ones now in force.
-				if doc, inv, err := bundle.Open(d.raw, *r.verifyKeys.Load()); err == nil {
-					d.pub, d.err = &inventory.Published{Raw: d.raw, Doc: doc, Inv: inv}, nil
-				}
-			}
+		if d := r.latest; d != nil && d.etag != r.inForce {
 			r.docRefused = ""
-			r.loadDocument(ctx, trigger, d)
+			r.loadDocument(ctx, trigger, *d)
 		}
 		select {
 		case r.poke <- struct{}{}:
@@ -7345,24 +7458,59 @@ func (r *reloader) rereadVerifyKeys() {
 		}
 		return
 	}
+	// With inventory_file, the file as plan 6a reads it (unchanged below).
+	iraw, iv, ierr := inventoryVersion(r.cfg.InventoryFile)
+	if iv != r.inventory {
+		r.invPending = ""
+		r.loadInventory(ctx, trigger, iraw, iv, ierr)
+	}
+}
 ```
 
-  In `main.go`, in service mode, build the fetcher and its channels before starting the reloader:
+  (`rereadVerifyKeys` returns at once in file mode.)
+
+  In `main.go`'s reloader goroutine, in service mode, after Task 14's `r.startDocument(startDoc,
+  startFrom)` (not called again here, conflict scan F11), start the fetcher, and **join it** before the
+  goroutine closes `reloadDone`, so `run` returns only once the fetcher has (conflict scan F8):
 
 ```go
-		docs, poke := make(chan received, 1), make(chan struct{}, 1)
-		r.docs, r.poke = docs, poke
-		keys := verifyKeysAtStart // from Task 14's block
-		r.verifyKeys.Store(&keys)
-		r.startDocument(startDoc, startFrom)
-		f := &fetcher{client: client, keys: func() []ed25519.PublicKey { return *r.verifyKeys.Load() },
-			url: cfg.InventoryService.URL, interval: cfg.InventoryService.PollInterval, metrics: m}
-		f.etag = r.inForce
-		go f.run(ctx, docs, poke)
+		var fetchDone chan struct{}
+		if cfg.InventoryService != nil {
+			docs, poke := make(chan received, 1), make(chan struct{}, 1)
+			r.docs, r.poke = docs, poke
+			keys := verifyKeysAtStart // from Task 14's block
+			r.verifyKeys.Store(&keys)
+			f := &fetcher{client: client, keys: func() []ed25519.PublicKey { return *r.verifyKeys.Load() },
+				url: cfg.InventoryService.URL, interval: cfg.InventoryService.PollInterval, metrics: m}
+			f.etag = r.inForce
+			fetchDone = make(chan struct{})
+			go func() { defer close(fetchDone); f.run(ctx, docs, poke) }()
+		}
+		r.run(ctx, hup)
+		if fetchDone != nil {
+			<-fetchDone // ctx is done: the fetcher returns without a line
+		}
 ```
 
-  and add the two metrics (`InventoryFetches` a `CounterVec` on `outcome`, `InventoryBundleRefused` a
-  `Gauge`) to `internal/daemon/metrics/metrics.go` with their `Help` and registration.
+  and add `InventoryFetches` (a `CounterVec` on `outcome`) to `internal/daemon/metrics/metrics.go`
+  with its `Help` and registration. Add to `fetch_test.go`:
+
+```go
+// Conflict scan F8: an ask cut short by shutdown says nothing.
+func TestAShutdownMidAskSaysNothing(t *testing.T) {
+	svc := &scriptService{versionErr: context.Canceled}
+	f := newFetcher(svc, nil)
+	var out syncBuffer
+	e := stderr
+	defer func() { stderr = e }()
+	stderr = &out
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, ok := f.once(ctx); ok || out.String() != "" {
+		t.Fatalf("%v %q", ok, out.String())
+	}
+}
+```
 
 - [ ] **Step 6: Run them.** `go test ./cmd/port49d/ ./internal/bundle/ ./internal/daemon/metrics/ -count=1`
   Expected: PASS.
@@ -7544,7 +7692,10 @@ func TestAWholeFleetReAddressLoadsTogetherAtSIGHUP(t *testing.T) {
 	rig.writeInventory(t, strings.ReplaceAll(withoutGroups, "10.0.0.", "11.0.0."))
 	rig.sighupWithBound(t, 10)
 	out := rig.out.String()
-	if !strings.Contains(out, "port49d: policy and inventory reloaded together (SIGHUP)") || strings.Contains(out, "refused") {
+	// Every swap line ends "… N refused admission"; the refusal forms are what
+	// must be absent (conflict scan F3).
+	if !strings.Contains(out, "port49d: policy and inventory reloaded together (SIGHUP)") ||
+		strings.Contains(out, " refused; ") || strings.Contains(out, "refused together") {
 		t.Fatalf("%s", out)
 	}
 	if d, ok := rig.b.Policy.Load().Device("leaf1"); !ok || d.Addresses[0].String() != "11.0.0.1" ||
@@ -7717,17 +7868,20 @@ func (r *reloader) loadBoth(ctx context.Context, trigger string, raw []byte, v s
 ```
 
   Then call it in three places:
-  1. `reload` (SIGHUP), before the separate loads: read the policy (`raw, v, err :=
-     policyVersion(...)`); if `err == nil && v != old.Source`, and the inventory has a version not in
-     force — file mode: `inventoryVersion` read now differs from `r.inventory` and parses; service mode:
-     `r.latest` opened and not in force (after `rereadVerifyKeys` and the re-open of Task 15) — call
-     `loadBoth(ctx, trigger, …)` and return whatever it did (the separate loads are not tried: the
-     operator's SIGHUP asserts both edits are done).
+  1. `reload` (SIGHUP), at the line Task 15 marks — after `rereadBound`, `rereadVerifyKeys` and
+     `reopenLatest`, before the separate loads: read the policy (`raw, v, err := policyVersion(...)`);
+     if `err == nil && v != old.Source`, and the inventory has a version not in force — file mode:
+     `inventoryVersion` read now differs from `r.inventory` and parses; service mode: `r.latest` opened
+     (`err == nil`) and not in force — call `loadBoth(ctx, trigger, raw, v, inv, iv, d)` with `d` nil in
+     file mode and `r.latest` in service mode, poke the fetcher in service mode, and return whatever it
+     did (the separate loads are not tried: the operator's SIGHUP asserts both edits are done).
   2. `load` (a policy reload), where it would say the refusal: first `if inv, iv, d, ok :=
      r.settledInventory(); ok { r.loadBoth(ctx, trigger, raw, v, inv, iv, d); return }`.
   3. `loadInventory` and `loadDocument`, where each would say its refusal: first `if raw, v, ok :=
-     r.settledPolicy(); ok { r.loadBoth(ctx, trigger, raw, v, inv, iv, d); return }`, with `inv` and `iv`
-     the inventory that load was refused for.
+     r.settledPolicy(); ok { r.loadBoth(ctx, trigger, raw, v, inv, iv, dp); return }`, with `inv` and
+     `iv` the inventory that load was refused for, and `dp` nil in `loadInventory` and `&d` in
+     `loadDocument` (whose `d` is a value; `loadBoth` takes `*received`). In `loadDocument` the combined
+     try applies only when `d.err == nil`.
 
   The 6a tests of each file alone (`TestTheKeyGroupMoveInEveryOrder` and the bound tests) still pass:
   in each, the other file has no version not in force.
@@ -8171,29 +8325,43 @@ key_groups:
   `tests/lab/quarantine-sync/policy.yaml`:
 
 ```yaml
-# Spec §14's quarantine through a sync (plan 6b Task 19). A role landing at a
-# level no platform renders quarantines each device it reaches (spec §10; the
-# 6a unit test's unmapped level); it reaches only the lab devices, by name, so
-# the dummy devices the same sync carries load and are served.
+# Spec §14's quarantine through a sync (plan 6b Task 19). Two probe subjects
+# fail joint validation on the lab devices, one way for each platform, and
+# reach them by name, so the dummy devices the same sync carries load and are
+# served (conflict scan F5):
+# - quarantine_probe names @loopback, a class only arista_eos defines, which
+#   quarantines nx1, xe1, srx1 and vsrx1 (tests/lab/quarantine/policy.yaml's
+#   cause);
+# - eos_probe lands alone at a level arista_eos cannot render, which
+#   quarantines leaf1 (plan 6a's TestAQuarantinedDeviceDoesNotStopTheStart's
+#   cause). An unmapped level is not used on Junos: it renders no level, and
+#   decision 26 gives that subject the fail-closed reply, not a quarantine.
+# Checked against inventory-lab.yaml on 2026-09-30: all five quarantined,
+# fixed.yaml none; l29_unit_test.go asserts both before any run.
 privilege_levels: [{name: readonly}, {name: operator}, {name: unmapped}, {name: admin}]
 scopes:
   - {name: all_devices, match: {}}
-  - {name: lab_devices, match: {name: [leaf1, srx1, vsrx1, nx1, xe1]}}
+  - {name: lab_devices, match: {name: [srx1, vsrx1, nx1, xe1]}}
+  - {name: lab_eos, match: {name: [leaf1]}}
 roles:
   - {name: network_admin, privilege: admin, permit: ["**"]}
+  - {name: eos_class_only, privilege: admin, permit: ["show interfaces @loopback"]}
   - {name: unrenderable, privilege: unmapped, permit: ["show version"]}
 subjects:
   - {name: slice_operator, identity: ["user:alice@slice.port49.test"], username: slice01,
      enable: token, token_ttl: 60s}
+  - {name: quarantine_probe, identity: ["user:probe@slice.port49.test"], username: probe01, token_ttl: 60s}
+  - {name: eos_probe, identity: ["user:eosprobe@slice.port49.test"], username: probe02, token_ttl: 60s}
 grants:
   - {subject: slice_operator, scope: all_devices, roles: [network_admin], max_privilege: admin}
-  - {subject: slice_operator, scope: lab_devices, roles: [unrenderable], max_privilege: admin}
+  - {subject: quarantine_probe, scope: lab_devices, roles: [eos_class_only], max_privilege: admin}
+  - {subject: eos_probe, scope: lab_eos, roles: [unrenderable]}
 key_groups:
   - {match: {cidr: 172.100.100.0/24}, key_ref: lab_key}
   - {match: {cidr: 10.99.0.0/24}, key_ref: lab_key}
 ```
 
-  and `tests/lab/quarantine-sync/fixed.yaml`, the same without the `lab_devices` grant: the named fix.
+  and `tests/lab/quarantine-sync/fixed.yaml`, the same without the two probe grants: the named fix.
 
 - [ ] **Step 2: The harness pieces.** Create `tests/lab/inventory_test.go`:
 
@@ -8481,6 +8649,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"testing"
 )
 
 // labLine is one device line of the lab inventory. The file pads names to
@@ -8498,6 +8667,25 @@ func labSource(inventoryLab string) string {
 		body += fmt.Sprintf("  - {name: dummy-%02d, platform: arista_eos, addresses: [10.99.0.%d]}\n", i, 100+i)
 	}
 	return body
+}
+
+// labLineOf is node's line in the lab inventory, and labPlatformOf its
+// platform: the inventory's (juniper_junos), not the results note's name for
+// the image (conflict scan F6).
+func labLineOf(t *testing.T, src, node string) string {
+	t.Helper()
+	for _, m := range labLine.FindAllStringSubmatch(src, -1) {
+		if m[1] == node {
+			return m[0]
+		}
+	}
+	t.Fatalf("the lab inventory has no device %s", node)
+	return ""
+}
+
+func labPlatformOf(t *testing.T, src, node string) string {
+	t.Helper()
+	return labLine.FindStringSubmatch(labLineOf(t, src, node))[2]
 }
 
 // l29Edit is one reload phase's change to src for node.
@@ -8543,12 +8731,16 @@ func l29Edit(src, node, phase string) (string, error) {
 package lab
 
 import (
+	"net/netip"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/bundle"
+	"github.com/rhwendt/port49/internal/policy"
 	"gopkg.in/yaml.v3"
 )
 
@@ -8582,6 +8774,12 @@ func TestL29EditsOnTheRealLabInventory(t *testing.T) {
 			}
 		}
 	}
+	for node, platform := range map[string]string{"leaf1": "arista_eos", "srx1": "juniper_junos",
+		"vsrx1": "juniper_junos", "nx1": "cisco_nxos", "xe1": "cisco_iosxe"} {
+		if labLineOf(t, src, node) == "" || labPlatformOf(t, src, node) != platform {
+			t.Fatalf("%s: %q", node, labPlatformOf(t, src, node))
+		}
+	}
 	pol, err := os.ReadFile(filepath.Join("l29", "policy.yaml"))
 	if err != nil {
 		t.Fatal(err)
@@ -8592,6 +8790,39 @@ func TestL29EditsOnTheRealLabInventory(t *testing.T) {
 	if err := yaml.Unmarshal(append(pol, []byte("  - {match: {name: leaf1}, key_ref: lab_key2}\n")...), &f); err != nil ||
 		len(f.KeyGroups) != 3 {
 		t.Fatalf("the rekeyed phase's policy: %v, %d groups", err, len(f.KeyGroups))
+	}
+}
+
+// Conflict scan F5: the quarantine-sync policy quarantines each of the five
+// lab devices, whatever its platform, and none of the dummies; fixed.yaml
+// quarantines none. Checked before any lab night is spent on it.
+func TestQuarantineSyncPolicyQuarantinesEveryLabNode(t *testing.T) {
+	inv, err := admission.LoadFile("inventory-lab.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	devices := append(inv.Devices,
+		admission.Device{Name: "dummy-eos", Platform: "arista_eos", Addresses: []netip.Addr{netip.MustParseAddr("10.99.0.11")}},
+		admission.Device{Name: "dummy-xe", Platform: "cisco_iosxe", Addresses: []netip.Addr{netip.MustParseAddr("10.99.0.41")}})
+	for file, want := range map[string]int{"policy.yaml": 5, "fixed.yaml": 0} {
+		raw, err := os.ReadFile(filepath.Join("quarantine-sync", file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		p, err := policy.Parse(raw, policy.Env{Devices: devices})
+		if err != nil {
+			t.Fatalf("%s: %v", file, err)
+		}
+		var names []string
+		for _, q := range p.Quarantines(time.Now()) {
+			if strings.HasPrefix(q.Device, "dummy-") {
+				t.Fatalf("%s quarantines %s", file, q.Device)
+			}
+			names = append(names, q.Device)
+		}
+		if len(names) != want {
+			t.Fatalf("%s quarantines %v, want %d devices", file, names, want)
+		}
 	}
 }
 ```
@@ -8738,7 +8969,8 @@ done
   empty and port 49 free between runs). A phase whose command never returned is not a result: fix the
   harness, not the note.
 
-- [ ] **Step 7: Commit** the test code, the policies and the notes and evidence the runs wrote:
+- [ ] **Step 7: Commit** the test code, the policies and the notes and evidence the runs wrote, after
+  `make build && make test && make vet` (expected: exit 0):
 
 ```bash
 git add tests/lab/inventory_test.go tests/lab/l29_test.go tests/lab/l29_phases_test.go tests/lab/l29_unit_test.go \
@@ -8839,22 +9071,67 @@ func (sh *labShell) Run(cmd string, per time.Duration) (string, time.Duration, e
 
 func (sh *labShell) Close() { sh.c.Close() }
 
-// singleConnection turns the platform's TACACS+ single-connection mode on,
-// with the keyword checked at `?` first, and says what it did.
+// singleConnection turns the platform's TACACS+ single-connection mode on
+// where the image offers it — asked at `?` first, so the image, not this
+// code, decides (conflict scan F15) — and says what it did.
 func (l *lab) singleConnection(t *testing.T) string {
 	t.Helper()
+	type way struct {
+		enter, ask []string // configuration mode, then the context the keyword is asked in
+		set        func()
+		said       string
+	}
+	w := way{enter: []string{"configure terminal"}, ask: []string{"tacacs-server host 172.100.100.1 ?"},
+		set: func() { l.carriedConfigure(t, "tacacs-server host 172.100.100.1 single-connection key 0 "+labKeyDefault) },
+		said: "`tacacs-server host 172.100.100.1 single-connection`"}
 	switch {
 	case strings.HasPrefix(l.p.name, "juniper_"):
-		l.junosConfigureAdmin(t, []string{"set system tacplus-server 172.100.100.1 single-connection"})
-		return "on: `set system tacplus-server 172.100.100.1 single-connection`"
+		w = way{enter: []string{"configure"}, ask: []string{"set system tacplus-server 172.100.100.1 ?"},
+			set: func() {
+				l.junosConfigureAdmin(t, []string{"set system tacplus-server 172.100.100.1 single-connection"})
+			}, said: "`set system tacplus-server 172.100.100.1 single-connection`"}
 	case l.p.name == "cisco_iosxe":
-		l.carriedConfigure(t, "tacacs server port49-host", "single-connection")
-		return "on: `single-connection` under `tacacs server port49-host`"
-	case l.p.name == "arista_eos":
-		l.carriedConfigure(t, "tacacs-server host 172.100.100.1 single-connection key 0 "+labKeyDefault)
-		return "on: `tacacs-server host 172.100.100.1 single-connection`"
+		w = way{enter: []string{"configure terminal", "tacacs server port49-host"}, ask: []string{"?"},
+			set:  func() { l.carriedConfigure(t, "tacacs server port49-host", "single-connection") },
+			said: "`single-connection` under `tacacs server port49-host`"}
 	}
-	return "not available on this image: the phases run on whatever connections the device opens"
+	if !l.offered(t, w.enter, w.ask, "single-connection") {
+		return "not available on this image (its `?` does not offer single-connection): the phases run on " +
+			"whatever connections the device opens"
+	}
+	w.set()
+	return "on: " + w.said
+}
+
+// offered asks the device, as break-glass in configuration mode, for the
+// help at the end of ask, and reports whether keyword is among the choices.
+// The half-typed line is cleared (Ctrl-U) and configuration mode left
+// without committing anything.
+func (l *lab) offered(t *testing.T, enter, ask []string, keyword string) bool {
+	t.Helper()
+	sh, err := l.shell(breakglassUser, breakglassPassword)
+	if err != nil {
+		t.Fatalf("the `?` check: %v", err)
+	}
+	defer sh.Close()
+	cfg := []string{l.p.node + "(config", l.p.node + "#", l.p.node + ">"}
+	for _, e := range enter {
+		if _, err := sh.c.sendExpect(e, 30*time.Second, cfg...); err != nil {
+			t.Fatalf("the `?` check: %s: %v", e, err)
+		}
+	}
+	var help string
+	for _, a := range ask {
+		out, _ := sh.c.sendExpect(a, 30*time.Second, cfg...)
+		help += out
+	}
+	sh.c.sendExpect("\x15", 10*time.Second, cfg...) // Ctrl-U: clear what `?` left on the line
+	leave := "end"
+	if strings.HasPrefix(l.p.name, "juniper_") {
+		leave = "exit configuration-mode"
+	}
+	sh.c.sendExpect(leave, 30*time.Second, cfg...)
+	return strings.Contains(help, keyword)
 }
 
 // timedLogins is a token login, and a break-glass login with three `show
@@ -8888,9 +9165,10 @@ func firstLine(s string) string {
 }
 ```
 
-  Before `singleConnection` sends a keyword, it checks it on the device at `?` (a break-glass
-  `labShell` running the line with ` ?`); an image that does not offer it gets `not available on this
-  image`, as NX-OS does, and the note records which. Nothing here is a claim: whether a connection
+  `singleConnection` asks every image at `?` first (`offered`), NX-OS included, so the image decides
+  and the note records what it offered. If `sendExpect` sends the line with a newline after the `?`,
+  the device answers the half line with an incomplete-command error, which `offered` ignores; adjust
+  the clearing to what the image does and keep the check. Nothing here is a claim: whether a connection
   stayed open across midnight is read from the capture (the same TCP 4-tuple before and after).
   Change `ptyCommands` in `harness_test.go` to build on `labShell` (its loop is `Run` plus the
   `[confirm]` and configuration-prompt handling it has now) and run `make lab-unit` to see nothing else
@@ -8994,8 +9272,9 @@ func TestL29Midnight(t *testing.T) {
 
   The test does not decide what the device should do: it records it.
 
-- [ ] **Step 2: Build, vet, and commit the test before any night.** `make build && make lab-unit &&
-  go vet -tags lab ./tests/lab/` (expected: exit 0), then, on `feature/inventory-service`:
+- [ ] **Step 2: Build, test, vet, and commit the test before any night.** `make build && make test &&
+  make vet && go vet -tags lab ./tests/lab/` (expected: exit 0; `make test` runs `make lab-unit`),
+  then, on `feature/inventory-service`:
 
 ```bash
 git add tests/lab/l29_shell_test.go tests/lab/l29_midnight_test.go tests/lab/harness_test.go
@@ -9005,20 +9284,30 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 ```
 
-  Code never goes to `main` directly, so the test is on the branch before the first night.
+  Code never goes to `main` directly, so the test is on the branch before the first night. Note this
+  commit's hash: every night runs from it.
 
-- [ ] **Step 3: Schedule four runs, one a night.** The controller starts each in the background at
-  23:15Z (the N9Kv at 22:50Z, for its 15-minute boot), under the stall watchdog with `STALL=25` (40 on
-  the N9Kv; the minute log lines keep it fed through the wait):
+- [ ] **Step 3: Schedule four runs, one a night, from a pinned worktree.** The nights never build in
+  the worktree Tasks 3–18 are editing (`.worktrees/inventory-service`): a night built there could run a
+  half-edited `bin/port49d` (conflict scan F7). Each night runs from its own worktree, checked out at
+  Step 2's commit, where `make build` builds exactly 6a's port49d plus Task 20's test. The controller
+  starts each in the background at 23:15Z (the N9Kv at 22:50Z, for its 15-minute boot), under the
+  stall watchdog with `STALL=25` (40 on the N9Kv; the minute log lines keep it fed through the wait):
 
 ```bash
+git worktree add --detach .worktrees/l29-midnight <Step 2's commit>
+cd .worktrees/l29-midnight
 make build
 PORT49_L29_MIDNIGHT=1 PORT49_LAB_PLATFORMS=eos go test -tags lab ./tests/lab/ -run '^TestL29Midnight$' \
   -count=1 -v -timeout 150m > tests/lab/logs/l29-midnight-eos.log 2>&1 &
 echo $! > tests/lab/logs/l29-midnight-eos.pid
 ```
 
-  then `make evidence`, and the next night the next platform (`nxos`, `iosxe`, `junos`). A night that
+  The worktree is kept for all four nights. After each night, run `make evidence` in it, copy its
+  raw captures into the main checkout's `tests/lab/captures/` (the labpcap audit reads them there),
+  and bring the note and the redacted evidence to Step 4's branch; only after the last night, and
+  after the copy, remove the worktree (`git worktree remove .worktrees/l29-midnight`). The next
+  night the next platform (`nxos`, `iosxe`, `junos`). A night that
   misses its midnight — the device late, a stall — is run again the next night; it is never read as a
   result. Nothing else runs on beehive's Docker from the start of a night's run to its end: no night
   shares a night with any part of Task 2, or overlaps Task 19's runs; the controller schedules those by
