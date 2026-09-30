@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/rhwendt/port49/internal/bundle"
 	"github.com/rhwendt/port49/internal/config"
@@ -37,10 +38,64 @@ const (
 	// maxErrorReply bounds the read of a reply that is not a 200: the
 	// service's is one short JSON error code.
 	maxErrorReply = 4 << 10
-	// dialTimeout bounds a dial and a handshake: a black-holed service costs
-	// 10s, not the kernel's minutes (pre-flight minor 5).
-	dialTimeout = 10 * time.Second
+	// maxVersionReply, maxJudgementReply and bundle.MaxDocument bound a 200's
+	// body, per ask: a version is a few hundred bytes, a sync's result or a
+	// diff is a line per change (16 MiB is some 50,000), and only a bundle is
+	// a document.
+	maxVersionReply   = 64 << 10
+	maxJudgementReply = 16 << 20
+	// maxPrinted bounds one string of the service's, or one error, printed.
+	maxPrinted = 4096
 )
+
+// dialTimeout bounds a dial and a handshake: a black-holed service costs 10s,
+// not the kernel's minutes (pre-flight minor 5). A variable for the test.
+var dialTimeout = 10 * time.Second
+
+// ErrNoConnection is a dial or a TLS handshake that failed: the ask was never
+// sent, so the service did nothing for it.
+var ErrNoConnection = errors.New("no connection to the inventory service")
+
+// Printable is s, the service's text, as one line: a control character, a
+// format character (a bidi override), a line or paragraph separator, or an
+// invalid byte is `?`, never terminal control or a forged line, and past
+// maxPrinted bytes it is cut and marked.
+func Printable(s string) string {
+	cut := len(s) > maxPrinted
+	if cut {
+		s = s[:maxPrinted]
+	}
+	s = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp) {
+			return '?'
+		}
+		return r
+	}, strings.ToValidUTF8(s, "?"))
+	if cut {
+		s += "…"
+	}
+	return s
+}
+
+// cleanError is an error whose text is Printable: a transport or TLS error
+// can carry what the service presented — a certificate's names, which anyone
+// answering its address chooses — and that is not printed or logged raw.
+// errors.Is and errors.As still reach the cause.
+type cleanError struct {
+	text string
+	err  error
+}
+
+func (e *cleanError) Error() string { return e.text }
+func (e *cleanError) Unwrap() error { return e.err }
+
+// clean is err with Printable text; every error the client returns is one.
+func clean(err error) error {
+	if err == nil || err == ErrNoBundle {
+		return err
+	}
+	return &cleanError{text: Printable(err.Error()), err: err}
+}
 
 // NewClient is a client of the service at rawURL, https and with no user
 // information, query or fragment. The CA file and the client certificate
@@ -49,6 +104,11 @@ const (
 // ResponseHeaderTimeout, 6 minutes, which outlasts a sync the service bounds
 // by sync_timeout: a caller's context bounds the rest.
 func NewClient(rawURL, caFile, certFile, keyFile string) (*Client, error) {
+	c, err := newClient(rawURL, caFile, certFile, keyFile)
+	return c, clean(err)
+}
+
+func newClient(rawURL, caFile, certFile, keyFile string) (*Client, error) {
 	u, err := url.Parse(rawURL)
 	if err != nil || u.Scheme != "https" || u.Host == "" || u.Opaque != "" {
 		return nil, errors.New("inventory.service.url must be https://host[:port]")
@@ -69,7 +129,7 @@ func NewClient(rawURL, caFile, certFile, keyFile string) (*Client, error) {
 		return nil, fmt.Errorf("tls_cert_file %s, tls_key_file %s: %w", certFile, keyFile, err)
 	}
 	host := u.Hostname()
-	dialer := &net.Dialer{Timeout: dialTimeout}
+	dialer := &net.Dialer{}
 	tr := &http.Transport{
 		// Each connection's TLS config is built at its dial from the files
 		// as they are then, and verified by crypto/tls in full: the chain to
@@ -88,13 +148,13 @@ func NewClient(rawURL, caFile, certFile, keyFile string) (*Client, error) {
 			defer cancel()
 			raw, err := dialer.DialContext(ctx, network, addr)
 			if err != nil {
-				return nil, err
+				return nil, fmt.Errorf("%w: %w", ErrNoConnection, err)
 			}
 			conn := tls.Client(raw, &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: pool, ServerName: host,
 				Certificates: []tls.Certificate{cert}})
 			if err := conn.HandshakeContext(ctx); err != nil {
 				raw.Close()
-				return nil, err
+				return nil, fmt.Errorf("%w: %w", ErrNoConnection, err)
 			}
 			return conn, nil
 		},
@@ -136,11 +196,11 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 	return c.http.Do(req)
 }
 
-// answer decodes a 200's JSON into v, bounded like a document, or says what
+// answer decodes a 200's JSON, at most max bytes, into v, or says what
 // the service refused with: its error code when that is one printable word,
 // never its body. A no_bundle answer is ErrNoBundle, as the service's own
 // Diff says it.
-func answer(resp *http.Response, v any) error {
+func answer(resp *http.Response, v any, max int64) error {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorReply))
@@ -156,7 +216,7 @@ func answer(resp *http.Response, v any) error {
 		}
 		return fmt.Errorf("the inventory service answered %d (%s)", resp.StatusCode, e.Error)
 	}
-	body, err := readBounded(resp.Body)
+	body, err := readBounded(resp.Body, max)
 	if err != nil {
 		return err
 	}
@@ -167,14 +227,14 @@ func answer(resp *http.Response, v any) error {
 	return nil
 }
 
-// readBounded reads a 200's body, refusing one larger than a document.
-func readBounded(r io.Reader) ([]byte, error) {
-	raw, err := io.ReadAll(io.LimitReader(r, bundle.MaxDocument+1))
+// readBounded reads a 200's body, refusing one larger than max.
+func readBounded(r io.Reader, max int64) ([]byte, error) {
+	raw, err := io.ReadAll(io.LimitReader(r, max+1))
 	if err != nil {
 		return nil, err
 	}
-	if len(raw) > bundle.MaxDocument {
-		return nil, fmt.Errorf("the inventory service sent more than %d bytes", bundle.MaxDocument)
+	if int64(len(raw)) > max {
+		return nil, fmt.Errorf("the inventory service sent more than %d bytes", max)
 	}
 	return raw, nil
 }
@@ -183,15 +243,20 @@ func (c *Client) Version(ctx context.Context) (VersionInfo, error) {
 	var v VersionInfo
 	resp, err := c.do(ctx, "GET", "/v1/bundle/version", nil, nil)
 	if err != nil {
-		return v, err
+		return v, clean(err)
 	}
-	return v, answer(resp, &v)
+	return v, clean(answer(resp, &v, maxVersionReply))
 }
 
 // Bundle is the sealed document, unless etag is the service's, which is
 // notModified. The document is not yet trusted: the caller opens it
 // (bundle.Open) against its verify keys before using anything in it.
 func (c *Client) Bundle(ctx context.Context, etag string) ([]byte, string, bool, error) {
+	raw, newETag, notModified, err := c.bundle(ctx, etag)
+	return raw, newETag, notModified, clean(err)
+}
+
+func (c *Client) bundle(ctx context.Context, etag string) ([]byte, string, bool, error) {
 	hdr := map[string]string{}
 	if etag != "" {
 		hdr["If-None-Match"] = etag
@@ -205,10 +270,10 @@ func (c *Client) Bundle(ctx context.Context, etag string) ([]byte, string, bool,
 		return nil, etag, true, nil
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, "", false, answer(resp, nil)
+		return nil, "", false, answer(resp, nil, 0)
 	}
 	defer resp.Body.Close()
-	raw, err := readBounded(resp.Body)
+	raw, err := readBounded(resp.Body, bundle.MaxDocument)
 	if err != nil {
 		return nil, "", false, err
 	}
@@ -219,16 +284,16 @@ func (c *Client) Sync(ctx context.Context) (Result, error) {
 	var r Result
 	resp, err := c.do(ctx, "POST", "/v1/sync", nil, nil)
 	if err != nil {
-		return r, err
+		return r, clean(err)
 	}
-	return r, answer(resp, &r)
+	return r, clean(answer(resp, &r, maxJudgementReply))
 }
 
 func (c *Client) Diff(ctx context.Context, from int64) (DiffResult, error) {
 	var d DiffResult
 	resp, err := c.do(ctx, "GET", "/v1/bundle/diff", url.Values{"from": {strconv.FormatInt(from, 10)}}, nil)
 	if err != nil {
-		return d, err
+		return d, clean(err)
 	}
-	return d, answer(resp, &d)
+	return d, clean(answer(resp, &d, maxJudgementReply))
 }

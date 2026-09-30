@@ -2,10 +2,15 @@ package inventory
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"io"
 	"log"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -31,10 +36,18 @@ func (rig *apiRig) clientFiles(t *testing.T, l testpki.Leaf) (ca, cert, key stri
 	}
 	certPEM, keyPEM, _ := testpki.PEMs(c)
 	ca, cert, key = filepath.Join(dir, "ca.pem"), filepath.Join(dir, "c.pem"), filepath.Join(dir, "k.pem")
-	os.WriteFile(ca, rig.ca.PEM(), 0o644)
-	os.WriteFile(cert, certPEM, 0o644)
-	os.WriteFile(key, keyPEM, 0o600)
+	writeFile(t, ca, rig.ca.PEM(), 0o644)
+	writeFile(t, cert, certPEM, 0o644)
+	writeFile(t, key, keyPEM, 0o600)
 	return ca, cert, key
+}
+
+// writeFile writes body to path, failing the test if it cannot.
+func writeFile(t *testing.T, path string, body []byte, mode os.FileMode) {
+	t.Helper()
+	if err := os.WriteFile(path, body, mode); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // fake is a TLS server the rig's CA vouches for, as a certificate for ips,
@@ -101,17 +114,17 @@ func TestTheClientReadsTheCAFileAtEachHandshake(t *testing.T) {
 	}
 	good, _ := os.ReadFile(ca)
 	other, _ := testpki.NewCA("another", time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
-	os.WriteFile(ca, other.PEM(), 0o644)
+	writeFile(t, ca, other.PEM(), 0o644)
 	if _, err := c.Version(context.Background()); err == nil || errors.Is(err, ErrNoBundle) {
 		t.Fatalf("a service the CA file does not vouch for was answered: %v", err)
 	}
-	os.WriteFile(ca, good, 0o644)
+	writeFile(t, ca, good, 0o644)
 	c.http.CloseIdleConnections()
 	if _, err := c.Version(context.Background()); !errors.Is(err, ErrNoBundle) {
 		t.Fatalf("the CA put back: %v", err)
 	}
 	// An emptied CA file is no roots at all, never the system's.
-	os.WriteFile(ca, nil, 0o644)
+	writeFile(t, ca, nil, 0o644)
 	c.http.CloseIdleConnections()
 	if _, err := c.Version(context.Background()); err == nil || errors.Is(err, ErrNoBundle) {
 		t.Fatalf("an empty CA file was trusted: %v", err)
@@ -136,7 +149,7 @@ func TestAClientWithoutACAFileIsRefused(t *testing.T) {
 	rig := newAPIRig(t)
 	_, cert, key := rig.clientFiles(t, testpki.Leaf{CommonName: "alice", Emails: []string{"alice@example.com"}})
 	empty := filepath.Join(t.TempDir(), "empty.pem")
-	os.WriteFile(empty, nil, 0o644)
+	writeFile(t, empty, nil, 0o644)
 	for _, ca := range []string{"", filepath.Join(t.TempDir(), "missing.pem"), empty} {
 		if _, err := NewClient(rig.srv.URL, ca, cert, key); err == nil {
 			t.Errorf("ca_file %q: accepted", ca)
@@ -206,5 +219,66 @@ func TestAServiceErrorIsNotEchoed(t *testing.T) {
 			len(err.Error()) > 512 || !strings.Contains(err.Error(), "500") {
 			t.Fatalf("%.80q", err)
 		}
+	}
+}
+
+// Whoever answers the service's address chooses the certificate it presents,
+// and crypto/tls names its DNS names in the error: they reach neither the
+// terminal nor port49d's log raw.
+func TestACertificatesNamesAreNotEchoedRaw(t *testing.T) {
+	rig := newAPIRig(t)
+	ca, cert, key := rig.clientFiles(t, testpki.Leaf{CommonName: "alice", Emails: []string{"alice@example.com"}})
+	priv, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(1), NotBefore: time.Now().Add(-time.Hour),
+		NotAfter: time.Now().Add(time.Hour), DNSNames: []string{"evil\x1b[2Jcleared\nforged"},
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &priv.PublicKey, priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewUnstartedServer(http.NotFoundHandler())
+	srv.TLS = &tls.Config{Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: priv}}}
+	srv.Config.ErrorLog = log.New(io.Discard, "", 0)
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+	// By name, so the mismatch error lists the certificate's DNS names.
+	c, err := NewClient(strings.Replace(srv.URL, "127.0.0.1", "localhost", 1), ca, cert, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = c.Version(context.Background())
+	if err == nil || !errors.Is(err, ErrNoConnection) || !strings.Contains(err.Error(), "evil") ||
+		strings.ContainsAny(err.Error(), "\x1b\n") {
+		t.Fatalf("%q", err)
+	}
+}
+
+// A service that accepts and never finishes the handshake costs dialTimeout,
+// and is no connection: the ask was never sent.
+func TestAHandshakeThatNeverEndsIsNoConnection(t *testing.T) {
+	rig := newAPIRig(t)
+	ca, cert, key := rig.clientFiles(t, testpki.Leaf{CommonName: "alice", Emails: []string{"alice@example.com"}})
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			t.Cleanup(func() { conn.Close() })
+		}
+	}()
+	defer func(d time.Duration) { dialTimeout = d }(dialTimeout)
+	dialTimeout = 200 * time.Millisecond
+	c, err := NewClient("https://"+ln.Addr().String(), ca, cert, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Sync(context.Background()); !errors.Is(err, ErrNoConnection) {
+		t.Fatalf("%v", err)
 	}
 }

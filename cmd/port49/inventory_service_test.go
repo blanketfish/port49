@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -50,7 +51,9 @@ func startService(t *testing.T) *testService {
 		t.Fatal(err)
 	}
 	_, key, _ := ed25519.GenerateKey(rand.Reader)
-	os.WriteFile(filepath.Join(dir, "policy.yaml"), []byte(servicePolicy), 0o600)
+	if err := os.WriteFile(filepath.Join(dir, "policy.yaml"), []byte(servicePolicy), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	s := &testService{dir: dir, ca: filepath.Join(pki, testpki.InvCA), cert: filepath.Join(pki, testpki.InvOperatorCert),
 		key: filepath.Join(pki, testpki.InvOperatorKey)}
 	s.writeSource(t, leaf01)
@@ -173,11 +176,39 @@ func TestInventorySyncSaysHowLongItWaited(t *testing.T) {
 	}
 }
 
+// A service that cannot be reached was asked for nothing: the CLI says so,
+// not that a sync may still finish.
+func TestInventorySyncToNoServiceSaysNoSyncWasAsked(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pki := filepath.Join(dir, "pki")
+	if err := testpki.WriteInventoryLab(pki, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	ln.Close() // nothing listens there now
+	var out, errOut bytes.Buffer
+	code := run([]string{"inventory", "sync", "--service", "https://" + addr, "--ca", filepath.Join(pki, testpki.InvCA),
+		"--cert", filepath.Join(pki, testpki.InvOperatorCert), "--key", filepath.Join(pki, testpki.InvOperatorKey)},
+		&out, &errOut)
+	if code != 1 || strings.Contains(errOut.String(), "may still finish") ||
+		!strings.Contains(errOut.String(), "no sync was asked for") {
+		t.Fatalf("exit %d: %s", code, errOut.String())
+	}
+}
+
 // What the service says is printed as text, never as terminal control.
 func TestPrintResultPrintsNoControlCharacters(t *testing.T) {
 	var out bytes.Buffer
-	code := printResult(&out, inventory.Result{Outcome: "refused", Sequence: 3, Reason: "bad\x1b[2Jthing\nforged line"})
-	if code != 1 || strings.ContainsAny(out.String(), "\x1b") || strings.Count(out.String(), "\n") != 1 {
+	code := printResult(&out, inventory.Result{Outcome: "refused", Sequence: 3,
+		Reason: "bad\x1b[2Jthing\nforged line\u2028and\u2029another\u202eflipped"})
+	if code != 1 || strings.ContainsAny(out.String(), "\x1b\u2028\u2029\u202e") || strings.Count(out.String(), "\n") != 1 {
 		t.Fatalf("exit %d: %q", code, out.String())
 	}
 }

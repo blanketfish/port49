@@ -14,7 +14,6 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/rhwendt/port49/internal/bundle"
 	"github.com/rhwendt/port49/internal/config"
@@ -413,17 +412,26 @@ func inventorySync(args []string, stdout, stderr io.Writer) int {
 	defer cancel()
 	res, err := c.Sync(ctx)
 	if err != nil {
+		// A connection never made asked for nothing. Only an ask sent and
+		// not answered in time may still be running at the service.
 		var ne net.Error
-		if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &ne) && ne.Timeout()) {
+		switch {
+		case errors.Is(err, inventory.ErrNoConnection):
+			fmt.Fprintf(stderr, "port49 inventory sync: %v; no sync was asked for\n", err)
+		case ctx.Err() == context.DeadlineExceeded || (errors.As(err, &ne) && ne.Timeout()):
 			fmt.Fprintf(stderr, "port49 inventory sync: no answer within %v; the service may still finish the sync: "+
 				"its log, or port49 inventory diff --service, says what it did\n", syncWait)
-			return 1
+		default:
+			fmt.Fprintln(stderr, "port49 inventory sync:", err)
 		}
-		fmt.Fprintln(stderr, "port49 inventory sync:", err)
 		return 1
 	}
 	return printResult(stdout, res)
 }
+
+// diffWait is how long `port49 inventory diff --service` waits for the
+// service's answer: a diff is a read, and the usage says so.
+const diffWait = time.Minute
 
 // serviceDiff is `port49 inventory diff --service`: what changed from bundle
 // from to the one the service publishes, as the service judges it.
@@ -433,37 +441,37 @@ func serviceDiff(svc *service, from int64, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "port49 inventory diff:", err)
 		return 1
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), diffWait)
 	defer cancel()
 	d, err := c.Diff(ctx, from)
 	if err != nil {
 		fmt.Fprintln(stderr, "port49 inventory diff:", err)
 		return 1
 	}
-	fmt.Fprintf(stdout, "bundle %d → %d: %s\n", d.From, d.To, printable(d.Summary))
+	fmt.Fprintf(stdout, "bundle %d → %d: %s\n", d.From, d.To, inventory.Printable(d.Summary))
 	for _, c := range d.Changes {
-		fmt.Fprintln(stdout, printable(c.Line("")))
+		fmt.Fprintln(stdout, inventory.Printable(c.Line("")))
 	}
 	return 0
 }
 
 // printResult is a sync's outcome as `port49 inventory sync` prints it, and
 // its exit code: 0 for published and unchanged, 1 otherwise. Every string
-// is the service's, so each is printed through printable.
+// is the service's, so each is printed through inventory.Printable.
 func printResult(w io.Writer, res inventory.Result) int {
 	switch res.Outcome {
 	case "published":
-		fmt.Fprintf(w, "published bundle %d (%s): %s; %d quarantined\n", res.Sequence, printable(res.Bundle),
-			printable(res.Summary), len(res.Quarantined))
+		fmt.Fprintf(w, "published bundle %d (%s): %s; %d quarantined\n", res.Sequence, inventory.Printable(res.Bundle),
+			inventory.Printable(res.Summary), len(res.Quarantined))
 		for _, c := range res.Changes {
-			fmt.Fprintln(w, printable(c.Line("")))
+			fmt.Fprintln(w, inventory.Printable(c.Line("")))
 		}
 		for _, q := range res.Quarantined {
-			fmt.Fprintf(w, "  device %s (%s) is quarantined against the service's policy: %s\n", printable(q.Device),
-				printable(q.Platform), printable(q.Cause))
+			fmt.Fprintf(w, "  device %s (%s) is quarantined against the service's policy: %s\n", inventory.Printable(q.Device),
+				inventory.Printable(q.Platform), inventory.Printable(q.Cause))
 		}
 		for _, l := range res.LeftOut {
-			fmt.Fprintf(w, "  left out: %s\n", printable(l))
+			fmt.Fprintf(w, "  left out: %s\n", inventory.Printable(l))
 		}
 		return 0
 	case "unchanged":
@@ -474,30 +482,6 @@ func printResult(w io.Writer, res inventory.Result) int {
 	if res.Sequence > 0 {
 		still = fmt.Sprintf("still publishing bundle %d", res.Sequence)
 	}
-	fmt.Fprintf(w, "%s; %s: %s\n", printable(res.Outcome), still, printable(res.Reason))
+	fmt.Fprintf(w, "%s; %s: %s\n", inventory.Printable(res.Outcome), still, inventory.Printable(res.Reason))
 	return 1
-}
-
-// maxPrinted bounds one string of the service's printed.
-const maxPrinted = 4096
-
-// printable is s from the service as one line of text: a control character
-// or an invalid byte is `?`, never terminal control or a forged line, and a
-// string past maxPrinted bytes is cut and marked.
-func printable(s string) string {
-	cut := len(s) > maxPrinted
-	if cut {
-		s = s[:maxPrinted]
-	}
-	s = strings.ToValidUTF8(s, "?")
-	s = strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
-			return '?'
-		}
-		return r
-	}, s)
-	if cut {
-		s += "…"
-	}
-	return s
 }
