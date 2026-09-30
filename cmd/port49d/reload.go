@@ -427,66 +427,84 @@ func (r *reloader) confirmed() {
 	}
 }
 
-// loadDocument puts the service's document in force, as loadInventory puts a
-// file (spec §10): parsed against the policy in force, bounded by
-// inventory.max_removed_percent, swapped in one pointer, its security changes
-// recorded, the refresh run, and the document persisted. One that does not
-// open or does not pass changes nothing, is said once per document, and
-// holds port49_inventory_bundle_refused at 1.
+// openDocument opens raw, a document the service sent, and judges it
+// against the one in force. EVERY PATH THAT APPLIES A SERVICE DOCUMENT GOES
+// THROUGH IT, at the moment it applies: loadDocument, and any reload that
+// combines both sources (Task 17). Nothing opened earlier — by the fetcher,
+// or at a SIGHUP before — is trusted, since a key this SIGHUP removed must
+// not apply a document (ruling 1).
 //
-// The document is opened here, under the verify keys in force now, every
-// time: whatever the fetcher opened it under, or a SIGHUP before, a key this
-// SIGHUP removed must not apply it (ruling 1). d.pub and d.err are not read.
-//
-// A document must be later than the one in force, by (published_at,
+// It opens raw under the verify keys in force now, then refuses a document
+// published more than maxPublishedSkew ahead of this clock (a
+// *publishedAhead, which would outrank every later copy at a cold start;
+// spec §10), and one not later than the document in force by (published_at,
 // sequence): a later published_at, or the same with a higher sequence. A
 // service whose state_dir was reset publishes later, so its sequence may go
 // back (Decided 3); published_at is signed and survives the reset, so an
 // older genuine document replayed — from before the reset too — is refused.
-// So is one published more than maxPublishedSkew ahead of this clock, which
-// would outrank every later copy at a cold start (spec §10); the service
-// confirming it judges it again (receive).
-func (r *reloader) loadDocument(ctx context.Context, trigger string, d received) {
-	old := r.broker.Policy.Load()
-	label := trigger
-	var pol *policy.Policy
-	var pub *inventory.Published
-	r.latestAhead = false
+//
+// pub is non-nil whenever raw opened, refused or not, so the caller can name
+// its sequence; it is safe to apply only when err is nil.
+func (r *reloader) openDocument(raw []byte) (*inventory.Published, error) {
 	var keys []ed25519.PublicKey
 	if k := r.verifyKeys.Load(); k != nil {
 		keys = *k
 	}
-	doc, inv, err := bundle.Open(d.raw, keys)
-	if err == nil {
-		pub = &inventory.Published{Raw: d.raw, Doc: doc, Inv: inv}
-		label = fmt.Sprintf("%s, bundle %d", trigger, doc.Sequence)
-		err = publishedInFuture(pub, r.now())
-		var pa *publishedAhead
-		r.latestAhead = errors.As(err, &pa)
-		if err == nil && !doc.PublishedAt.After(r.inForceAt) &&
-			!(doc.PublishedAt.Equal(r.inForceAt) && doc.Sequence > r.seq) {
-			err = fmt.Errorf("bundle %d, published %s, is not later than bundle %d in force, published %s: an "+
-				"older document sent again, or the service's clock went back; investigate the service and whoever "+
-				"can answer as it", doc.Sequence, doc.PublishedAt.Format(time.RFC3339), r.seq,
-				r.inForceAt.Format(time.RFC3339))
-		}
-		if err == nil {
-			pol, err = bundle.Parse(old.Raw(), inv, policy.Env{KeyRefs: r.cfg.KeyRefs()})
-		}
-		if err == nil {
-			err = bundle.CheckFrom(old, pol, r.cfg.MaxRemovedPercent, "fix the source of truth")
-		}
-	} else if errors.Is(err, bundle.ErrUnknownKey) {
-		err = fmt.Errorf("the document does not open (%w); if the service's signing key was rotated, add its "+
-			"public key to inventory.service.verify_key_files and send SIGHUP", err)
-	} else {
+	doc, inv, err := bundle.Open(raw, keys)
+	switch {
+	case errors.Is(err, bundle.ErrUnknownKey):
+		return nil, fmt.Errorf("the document does not open (%w); if the service's signing key was rotated, add "+
+			"its public key to inventory.service.verify_key_files and send SIGHUP", err)
+	case err != nil:
 		// Not a rotation: a signature that does not verify under a key
 		// port49d holds is tampering or a foreign signer (pre-flight minor 4).
-		err = fmt.Errorf("the document does not open (%w); it was not signed by any key port49d holds for the "+
-			"service: investigate", err)
+		return nil, fmt.Errorf("the document does not open (%w); it was not signed by any key port49d holds for "+
+			"the service: investigate", err)
+	}
+	pub := &inventory.Published{Raw: raw, Doc: doc, Inv: inv}
+	if err := publishedInFuture(pub, r.now()); err != nil {
+		return pub, err
+	}
+	if !doc.PublishedAt.After(r.inForceAt) && !(doc.PublishedAt.Equal(r.inForceAt) && doc.Sequence > r.seq) {
+		return pub, fmt.Errorf("bundle %d, published %s, is not later than bundle %d in force, published %s: an "+
+			"older document sent again, or the service's clock went back; investigate the service and whoever "+
+			"can answer as it", doc.Sequence, doc.PublishedAt.Format(time.RFC3339), r.seq,
+			r.inForceAt.Format(time.RFC3339))
+	}
+	return pub, nil
+}
+
+// loadDocument puts the service's document in force, as loadInventory puts a
+// file (spec §10): opened and judged by openDocument, parsed against the
+// policy in force, bounded by inventory.max_removed_percent, swapped in one
+// pointer, its security changes recorded, the refresh run, and the document
+// persisted. d.pub and d.err are not read. One that does not open or does
+// not pass changes nothing, is said once per document, and holds
+// port49_inventory_bundle_refused at 1. Each refusal is counted, except one
+// judged again only because the service confirmed it while it is still
+// ahead of this clock: that is counted once per document, not once per poll.
+func (r *reloader) loadDocument(ctx context.Context, trigger string, d received) {
+	old := r.broker.Policy.Load()
+	label := trigger
+	var pol *policy.Policy
+	pub, err := r.openDocument(d.raw)
+	if pub != nil {
+		label = fmt.Sprintf("%s, bundle %d", trigger, pub.Doc.Sequence)
+	}
+	var pa *publishedAhead
+	ahead := errors.As(err, &pa)
+	stillAhead := ahead && r.latestAhead && d.etag == r.docRefused
+	r.latestAhead = ahead
+	if err == nil {
+		pol, err = bundle.Parse(old.Raw(), pub.Inv, policy.Env{KeyRefs: r.cfg.KeyRefs()})
+	}
+	if err == nil {
+		err = bundle.CheckFrom(old, pol, r.cfg.MaxRemovedPercent, "fix the source of truth")
 	}
 	if err != nil {
-		r.metrics.InventoryReloads.WithLabelValues("refused").Inc()
+		if !stillAhead {
+			r.metrics.InventoryReloads.WithLabelValues("refused").Inc()
+		}
 		r.metrics.InventoryBundleRefused.Set(1)
 		if d.etag != r.docRefused {
 			r.docRefused = d.etag
@@ -497,11 +515,11 @@ func (r *reloader) loadDocument(ctx context.Context, trigger string, d received)
 	}
 	r.docRefused = ""
 	r.metrics.InventoryBundleRefused.Set(0)
-	if doc.Sequence < r.seq {
+	if pub.Doc.Sequence < r.seq {
 		fmt.Fprintf(stderr, "port49d: inventory: the service's sequence went back from %d to %d: its state_dir was "+
-			"reset; applying it (spec §10)\n", r.seq, doc.Sequence)
+			"reset; applying it (spec §10)\n", r.seq, pub.Doc.Sequence)
 	}
-	r.inForce, r.seq, r.inForceAt, r.latestRaw = bundle.ETag(d.raw), doc.Sequence, doc.PublishedAt, d.raw
+	r.inForce, r.seq, r.inForceAt, r.latestRaw = bundle.ETag(d.raw), pub.Doc.Sequence, pub.Doc.PublishedAt, d.raw
 	r.invSeen.Store(r.now().UnixNano())
 	r.metrics.InventoryBundleSequence.Set(float64(r.seq))
 	r.persist(d.raw)

@@ -317,8 +317,17 @@ func TestADocumentAheadOfTheClockAppliesOnceTheClockCatchesUp(t *testing.T) {
 	rig.now = now
 	rig.receive(ahead)
 	rig.receive(received{etag: ahead.etag, unchanged: true})
+	rig.receive(received{etag: ahead.etag, unchanged: true})
 	if _, ok := rig.b.Policy.Load().Device("leaf2"); ok {
 		t.Fatal("applied while still ahead")
+	}
+	// Judged again at each poll, but refused once per document: the counter
+	// is not a poll counter.
+	if n := testutil.ToFloat64(rig.m.InventoryReloads.WithLabelValues("refused")); n != 1 {
+		t.Fatalf("reloads_total{refused} is %v for one document still ahead", n)
+	}
+	if strings.Count(rig.out.String(), "refused; still serving") != 1 {
+		t.Fatalf("%s", rig.out.String())
 	}
 	rig.now = now.Add(time.Hour)
 	rig.receive(received{etag: ahead.etag, unchanged: true})
