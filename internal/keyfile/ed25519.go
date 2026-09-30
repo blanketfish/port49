@@ -75,7 +75,8 @@ func onePEMBlock(raw []byte, path string) (*pem.Block, error) {
 		return nil, fmt.Errorf("keyfile: %s has text before its PEM block; a key file holds one block and nothing else",
 			path)
 	}
-	if len(bytes.TrimSpace(rest)) != 0 {
+	// pem.Decode also skips a malformed BEGIN line before the block.
+	if len(bytes.TrimSpace(rest)) != 0 || bytes.Count(raw, []byte("-----BEGIN ")) != 1 {
 		return nil, fmt.Errorf("keyfile: %s holds more than one PEM block, or text after it; a key file holds one "+
 			"block and nothing else", path)
 	}

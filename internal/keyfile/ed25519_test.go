@@ -93,9 +93,10 @@ func TestAKeyFileHoldsOneBlockAndNothingElse(t *testing.T) {
 		priv, pub []byte
 		want      string
 	}{
-		"a second block": {cat(privPEM, otherPriv), cat(pubPEM, otherPub), "more than one PEM block"},
-		"text after":     {cat(privPEM, []byte("SECRET-trailer\n")), cat(pubPEM, []byte("SECRET-trailer\n")), "more than one PEM block"},
-		"text before":    {cat([]byte("SECRET-preamble\n"), privPEM), cat([]byte("SECRET-preamble\n"), pubPEM), "text before its PEM block"},
+		"a second block":        {cat(privPEM, otherPriv), cat(pubPEM, otherPub), "more than one PEM block"},
+		"text after":            {cat(privPEM, []byte("SECRET-trailer\n")), cat(pubPEM, []byte("SECRET-trailer\n")), "more than one PEM block"},
+		"a broken block before": {cat([]byte("-----BEGIN JUNK\n"), privPEM), cat([]byte("-----BEGIN JUNK\n"), pubPEM), "more than one PEM block"},
+		"text before":           {cat([]byte("SECRET-preamble\n"), privPEM), cat([]byte("SECRET-preamble\n"), pubPEM), "text before its PEM block"},
 	} {
 		if _, err := LoadEd25519(writeKey(t, c.priv, 0o600)); err == nil || !strings.Contains(err.Error(), c.want) ||
 			strings.Contains(err.Error(), "SECRET") {
