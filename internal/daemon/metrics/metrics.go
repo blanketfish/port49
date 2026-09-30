@@ -27,7 +27,8 @@ type Metrics struct {
 	// retire_after: struck and reset at once, L28), "held_refused" (a source
 	// inside the backoff its last strike earned, reset at Accept, L28),
 	// "admission_closed" (an open connection whose device a reload refused,
-	// removed, renamed or re-keyed: reset at its next packet, no strike),
+	// removed, renamed, re-keyed or re-platformed: reset at its next packet,
+	// no strike),
 	// "panic" (a connection recovered from a panic), and "accept_error"
 	// (Accept failed and the listener is being retried).
 	ConnectionEvents *prometheus.CounterVec

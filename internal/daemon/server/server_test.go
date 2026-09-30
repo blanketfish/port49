@@ -137,6 +137,7 @@ func (c *client) recv(t *testing.T) (wire.Header, []byte) {
 type testServer struct {
 	addr      string
 	metrics   *metrics.Metrics
+	spool     *acct.Spool
 	cancel    context.CancelFunc
 	stopSpool context.CancelFunc
 	served    chan struct{}
@@ -213,7 +214,7 @@ func newTestServerWith(t *testing.T, log *syncBuffer, st store.Store, authz auth
 	}
 	served := make(chan struct{})
 	go func() { defer close(served); Serve(ctx, ln, d) }()
-	ts := &testServer{addr: ln.Addr().String(), metrics: m, cancel: cancel, stopSpool: stopSpool, served: served, spoolDone: spoolDone}
+	ts := &testServer{addr: ln.Addr().String(), metrics: m, spool: sp, cancel: cancel, stopSpool: stopSpool, served: served, spoolDone: spoolDone}
 	t.Cleanup(ts.shutdown)
 	return ts
 }
@@ -1417,9 +1418,15 @@ var (
 // the test to judge the second packet's fate.
 func reloadBetweenPackets(t *testing.T, reload func(*swapAdmitter)) (*client, *testServer, *syncBuffer) {
 	t.Helper()
+	return reloadFrom(t, admission.Resolved{Device: leaf01, KeyRef: "prod_key"}, reload)
+}
+
+// reloadFrom is reloadBetweenPackets with the connection admitted as first.
+func reloadFrom(t *testing.T, first admission.Resolved, reload func(*swapAdmitter)) (*client, *testServer, *syncBuffer) {
+	t.Helper()
 	log := &syncBuffer{}
 	adm := &swapAdmitter{}
-	adm.swap(t, admission.Resolved{Device: leaf01, KeyRef: "prod_key"})
+	adm.swap(t, first)
 	ts := newTestServerWith(t, log, memory.New(time.Now), nil, func(d *Deps) {
 		d.Admission = adm
 		d.Keys["new_key"] = keyring.Set{Ref: "new_key", Versions: []keyring.Version{{Number: 1, Secret: []byte("n1")}}}
@@ -1565,5 +1572,94 @@ func TestAReloadOfAnotherDeviceLeavesTheConnectionOpen(t *testing.T) {
 	c.recv(t)
 	if n := testutil.ToFloat64(ts.metrics.ConnectionEvents.WithLabelValues("admission_closed")); n != 0 {
 		t.Fatalf("admission_closed = %v", n)
+	}
+}
+
+// R1: a reload that changes a device's platform ends its open connection, as
+// one that re-keys it does: its session would otherwise be denied
+// blob_platform_mismatch at every command for the connection's life, and its
+// records redacted under a platform no longer in force.
+func TestAReloadThatChangesThePlatformResetsItsOpenConnection(t *testing.T) {
+	c, ts, log := reloadBetweenPackets(t, func(a *swapAdmitter) {
+		moved := leaf01
+		moved.Platform = "cisco_iosxe"
+		a.swap(t, admission.Resolved{Device: moved, KeyRef: "prod_key"})
+	})
+	resetWithNoStrike(t, c, ts, log, "admission_changed")
+}
+
+// A policy `based_on:` edit moves a variant's wire platform under the same
+// name; the open connection read its wire facts from the old base.
+func TestAReloadThatChangesTheWirePlatformResetsItsOpenConnection(t *testing.T) {
+	variant := leaf01
+	variant.Platform = "my_eos"
+	c, ts, log := reloadFrom(t, admission.Resolved{Device: variant, KeyRef: "prod_key", WirePlatform: "arista_eos"},
+		func(a *swapAdmitter) {
+			a.swap(t, admission.Resolved{Device: variant, KeyRef: "prod_key", WirePlatform: "cisco_iosxe"})
+		})
+	resetWithNoStrike(t, c, ts, log, "admission_changed")
+}
+
+// variantRedactor is port49d's redactorFor over a swappable variant table: a
+// platform's built-in patterns are its wire platform's, so a variant deleted
+// from the policy resolves to the default patterns alone.
+type variantRedactor struct {
+	bases atomic.Pointer[map[string]string]
+}
+
+func (v *variantRedactor) redact(name string) []platform.Redaction {
+	if base, ok := (*v.bases.Load())[name]; ok {
+		name = base
+	}
+	return platform.Redactions(name)
+}
+
+// R1's redaction half: a connection admitted as a `based_on: juniper_junos`
+// variant, whose variant a reload deletes (the device now plain Junos), never
+// has an accounting record written under the deleted name, whose patterns
+// would be the default's alone: a secret Junos's patterns hide never reaches
+// the log.
+func TestAnOpenConnectionsRecordsAreNeverRedactedUnderADeletedVariant(t *testing.T) {
+	const before, after = "Hx7qPw2Ls9Vb", "Zr4mKt8Nc1Qy"
+	vr := &variantRedactor{}
+	vr.bases.Store(&map[string]string{"my_junos": "juniper_junos"})
+	variant := leaf01
+	variant.Platform = "my_junos"
+	log := &syncBuffer{}
+	adm := &swapAdmitter{}
+	adm.swap(t, admission.Resolved{Device: variant, KeyRef: "prod_key", WirePlatform: "juniper_junos"})
+	ts := newTestServerWith(t, log, memory.New(time.Now), nil, func(d *Deps) {
+		d.Admission = adm
+		d.Limits = slowBackoff()
+	})
+	ts.spool.WithRedactor(vr.redact)
+	account := func(secret string) []byte {
+		return wire.AcctRequest{Flags: wire.AcctFlagStop, AuthenMethod: wire.AuthenMethodTACACSPlus, PrivLvl: 15,
+			AuthenType: wire.AuthenTypeASCII, Service: wire.AuthenServiceLogin, User: []byte("alice"),
+			Port: []byte("vty0"), Args: [][]byte{[]byte("service=shell"), []byte("cmd=set system login user bob " +
+				"encrypted-password " + secret + " <cr>")}}.Encode()
+	}
+	c := dial(t, ts.addr, []byte("k2"))
+	c.send(t, wire.TypeAcct, account(before), wire.FlagSingleConnect)
+	c.recv(t)
+	if !waitFor(t, func() bool { return log.contains(`"event":"account"`) }) {
+		t.Fatalf("no account record: %s", log.String())
+	}
+	if log.contains(before) {
+		t.Fatalf("the variant's own record was not redacted as Junos: %s", log.String())
+	}
+	vr.bases.Store(&map[string]string{})
+	junos := leaf01
+	junos.Platform = "juniper_junos"
+	adm.swap(t, admission.Resolved{Device: junos, KeyRef: "prod_key"})
+	c.sid, c.seq = c.sid+1, 1
+	c.send(t, wire.TypeAcct, account(after), wire.FlagSingleConnect)
+	c.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if n, err := c.conn.Read(make([]byte, 1)); !errors.Is(err, syscall.ECONNRESET) {
+		t.Fatalf("want a reset with no reply, got %d bytes, %v", n, err)
+	}
+	ts.shutdown()
+	if log.contains(after) {
+		t.Fatalf("a secret Junos's patterns hide reached the log under the deleted variant: %s", log.String())
 	}
 }

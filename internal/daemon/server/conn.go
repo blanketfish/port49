@@ -96,11 +96,14 @@ func (s *conn) refusedAdmission(h wire.Header) {
 }
 
 // readmitted asks admission in force about this connection's source at the
-// time of this packet, so a reload that refuses, removes, renames or re-keys
-// the device ends its open connections rather than leaving them on the
-// admission they began with: a busy single-connect connection resets its
-// idle timer on every packet and so has no end (spec §10). It returns the
-// diagnosis naming why, or "" while the connection's admission still holds.
+// time of this packet, so a reload that refuses, removes, renames, re-keys or
+// re-platforms the device ends its open connections rather than leaving them
+// on the admission they began with: a busy single-connect connection resets
+// its idle timer on every packet and so has no end (spec §10). A platform or
+// `based_on:` change counts: the connection would be denied
+// blob_platform_mismatch at every command, and its records redacted under a
+// platform no longer in force. It returns the diagnosis naming why, or ""
+// while the connection's admission still holds.
 func (s *conn) readmitted() keyring.Diagnosis {
 	now, found := s.d.Admission.Lookup(s.src)
 	switch {
@@ -108,7 +111,8 @@ func (s *conn) readmitted() keyring.Diagnosis {
 		return keyring.DiagUnadmittedSource
 	case now.Refused != "":
 		return keyring.DiagAdmissionRefused
-	case now.Device.Name != s.dev.Device.Name || now.KeyRef != s.dev.KeyRef:
+	case now.Device.Name != s.dev.Device.Name || now.KeyRef != s.dev.KeyRef ||
+		now.Device.Platform != s.dev.Device.Platform || now.WirePlatform != s.dev.WirePlatform:
 		return keyring.DiagAdmissionChanged
 	}
 	return ""

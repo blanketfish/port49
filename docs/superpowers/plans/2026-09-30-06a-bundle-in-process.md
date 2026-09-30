@@ -8301,7 +8301,8 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
   port49d.yaml and send `SIGHUP`, which re-reads it; then lower it again. A policy test naming a
   device the inventory no longer has fails `port49 policy test`, and never a reload.
 - **A reload reaches open connections.** A device an inventory or policy reload refuses, removes,
-  renames or moves to another `key_ref` loses its open connections at their next packet: reset,
+  renames, moves to another `key_ref`, or gives another platform or `based_on:` base loses its
+  open connections at their next packet: reset,
   with no reply and no strike, and one `unvalidated` record naming the device and key it was
   admitted as, reason `device_unknown` (`port49_connection_events_total{event="admission_closed"}`).
   Moving a device off a suspect key therefore stops that key on the device at once, not when its
@@ -8340,8 +8341,8 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
   and `key_version`; a new report event, `inventory_change`, records an address added to an existing
   device, a device's `key_ref` changing, a device newly admitted, and a device joining or leaving a
   `security_log: true` scope. Two new diagnoses: `admission_refused`, a device the inventory names
-  and admission refuses, and `admission_changed`, an open connection whose device a reload renamed
-  or re-keyed.
+  and admission refuses, and `admission_changed`, an open connection whose device a reload renamed,
+  re-keyed or re-platformed.
 - **New commands:** `port49 keys status`, `port49 keys show`, `port49 keys diagnose` (needs
   `admin_socket`), `port49 inventory diff`; `port49 policy test --config` adds the key checks;
   `port49 policy replay --policy --inventory` verifies a redacted blob's records.

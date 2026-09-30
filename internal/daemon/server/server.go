@@ -30,9 +30,9 @@ import (
 // Admitter answers which device a source address is and which key_ref admits
 // it (spec §10). port49d passes the policy in force's index. It is read at
 // each Accept and again at every packet, so a reload reaches the next
-// connection, and one that refuses, removes, renames or re-keys a device ends
-// that device's open connections at their next packet; *admission.Trie is
-// one.
+// connection, and one that refuses, removes, renames, re-keys or
+// re-platforms a device ends that device's open connections at their next
+// packet; *admission.Trie is one.
 type Admitter interface {
 	Lookup(netip.Addr) (admission.Resolved, bool)
 }

@@ -1012,8 +1012,8 @@ text, task by task:
 - **Final review and fix wave** (`final-review.md`, `fixwave-report.md` beside the ledger).
   - **I1: a reload ends an open connection whose admission it withdrew.** Every packet looks its
     source up again in the admission in force, beside the quarantine and `retire_after` checks.
-    A device refused, removed, renamed or moved to another `key_ref` is reset at its next packet,
-    with no reply and no strike, and one `unvalidated` record, reason `device_unknown`, diagnosis
+    A device refused, removed, renamed, moved to another `key_ref`, or given another platform or
+    `based_on:` base (re-review R1) is reset at its next packet, with no reply and no strike, and one `unvalidated` record, reason `device_unknown`, diagnosis
     `admission_refused`, `unadmitted_source` or the new `admission_changed`
     (`port49_connection_events_total{event="admission_closed"}`). Spec §10's "in-flight
     connections complete against the snapshot they began with" was amended as Task 14 amended
