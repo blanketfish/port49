@@ -3,9 +3,12 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -17,6 +20,8 @@ import (
 	"time"
 
 	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/rhwendt/port49/internal/config"
+	"github.com/rhwendt/port49/internal/keyfile"
 	"github.com/rhwendt/port49/internal/tacacs/wire"
 	"github.com/rhwendt/port49/internal/testpki"
 )
@@ -343,5 +348,112 @@ func TestRunServesAPolicyEditToALiveSessionWithNoLogout(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "port49d: accounting spool drained, exiting") {
 		t.Fatalf("stderr: %q", out.String())
+	}
+}
+
+// keyPath writes key's public half where verify_key_files can name it, in a
+// directory only its owner can write.
+func keyPath(t *testing.T, key ed25519.PrivateKey) string {
+	t.Helper()
+	_, pubPEM, err := keyfile.EncodeEd25519(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(safeDir(t), "signing.pub") // read behind the fence, as config.VerifyKeys reads it
+	if err := os.WriteFile(p, pubPEM, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// writeServiceRunConfig is writeRunConfig with inventory.service in place of
+// inventory_file: svc's url, state_dir and mirror_dir, pki's inventory PKI
+// for its TLS files — the service's own, so the two verify each other, or a
+// fresh one when pki is "" (pre-flight M8) — and pubFile as its one verify
+// key (a fresh key's when "").
+func writeServiceRunConfig(t *testing.T, b *config.BrokerConfig, svc *config.InventoryServiceConfig,
+	pki, pubFile string) string {
+	t.Helper()
+	cfgPath := writeRunConfig(t, b)
+	raw, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pki == "" {
+		pki = filepath.Join(safeDir(t), "inv-pki")
+		if err := testpki.WriteInventoryLab(pki, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if pubFile == "" {
+		_, key, _ := ed25519.GenerateKey(rand.Reader)
+		pubFile = keyPath(t, key)
+	}
+	mirror := ""
+	if svc.MirrorDir != "" {
+		mirror = "    mirror_dir: " + svc.MirrorDir + "\n"
+	}
+	body := regexp.MustCompile(`(?m)^inventory_file: .*\n`).ReplaceAllString(string(raw), "") +
+		fmt.Sprintf("inventory:\n  service:\n    url: %s\n    ca_file: %s\n    tls_cert_file: %s\n"+
+			"    tls_key_file: %s\n    verify_key_files: [%s]\n    poll_interval: 5s\n    state_dir: %s\n%s",
+			svc.URL, filepath.Join(pki, testpki.InvCA), filepath.Join(pki, testpki.InvDaemonCert),
+			filepath.Join(pki, testpki.InvDaemonKey), pubFile, svc.StateDir, mirror)
+	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return cfgPath
+}
+
+// Spec §10, cold start: no copy, no service — port49d serves no TACACS+ and
+// is not ready, and says why.
+func TestRunWithNoBundleServesNoTACACSAndIsNotReady(t *testing.T) {
+	var out, log syncBuffer
+	e, o := stderr, stdout
+	t.Cleanup(func() { stderr, stdout = e, o })
+	stderr, stdout = &out, &log
+	b := brokerConfig(t, minimalPolicy+"key_groups: [{match: {cidr: 127.0.0.0/8}, key_ref: k}]\n").Broker
+	svc, _, _ := coldRig(t)
+	svc.URL, svc.MirrorDir = "https://127.0.0.1:1", ""
+	cfgPath := writeServiceRunConfig(t, b, svc, "", "")
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- run(ctx, cfgPath) }()
+	t.Cleanup(func() { cancel(); <-done })
+	waitFor(t, &out, "port49d: inventory: no bundle yet")
+	metrics := regexp.MustCompile(`metrics on (127\.0\.0\.1:\d+)`).FindStringSubmatch(out.String())
+	if metrics == nil {
+		t.Fatalf("the metrics address is not said: %s", out.String())
+	}
+	if resp, err := http.Get("http://" + metrics[1] + "/readyz"); err != nil || resp.StatusCode != 503 {
+		t.Fatalf("readyz: %v %v", resp, err)
+	}
+	if strings.Contains(out.String(), "port49d: listening on") {
+		t.Fatal("TACACS+ is listening with no bundle")
+	}
+}
+
+// A restart in place with the service down starts from the persisted copy.
+func TestRunStartsFromThePersistedCopyWithTheServiceDown(t *testing.T) {
+	var out, log syncBuffer
+	e, o := stderr, stdout
+	t.Cleanup(func() { stderr, stdout = e, o })
+	stderr, stdout = &out, &log
+	b := brokerConfig(t, minimalPolicy+"key_groups: [{match: {cidr: 10.0.0.0/8}, key_ref: k}]\n").Broker
+	svc, key, _ := coldRig(t)
+	svc.URL, svc.MirrorDir = "https://127.0.0.1:1", ""
+	persistBundle(svc.StateDir, sealedDoc(t, key, 7, 2))
+	cfgPath := writeServiceRunConfig(t, b, svc, "", keyPath(t, key))
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- run(ctx, cfgPath) }()
+	t.Cleanup(func() { cancel(); <-done })
+	waitFor(t, &out, "port49d: listening on")
+	if !strings.Contains(out.String(), "port49d: inventory: starting from bundle 7 (") ||
+		!strings.Contains(out.String(), "the persisted copy") {
+		t.Fatalf("the start line: %s", out.String())
+	}
+	metrics := regexp.MustCompile(`metrics on (127\.0\.0\.1:\d+)`).FindStringSubmatch(out.String())
+	if resp, err := http.Get("http://" + metrics[1] + "/readyz"); err != nil || resp.StatusCode != 200 {
+		t.Fatalf("readyz: %v %v", resp, err)
 	}
 }

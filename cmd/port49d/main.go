@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -42,6 +43,7 @@ import (
 	"github.com/rhwendt/port49/internal/daemon/server"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/engine"
+	"github.com/rhwendt/port49/internal/inventory"
 	"github.com/rhwendt/port49/internal/keyring"
 	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/policy"
@@ -197,12 +199,12 @@ var (
 // ends the start with one line rather than surfacing at the first mint. Each
 // error names the config key and the file, so that line says what to go and
 // fix.
-func buildBroker(cfg config.Config, st store.Store, minter *token.Minter, log decision.Emitter,
+func buildBroker(cfg config.Config, inventoryFrom string, st store.Store, minter *token.Minter, log decision.Emitter,
 	m *metrics.Metrics) (*http.Server, *broker.Broker, error) {
 	if cfg.Broker == nil {
 		return nil, nil, nil
 	}
-	pol, err := loadPolicy(cfg)
+	pol, err := loadPolicy(cfg, inventoryFrom)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -249,8 +251,9 @@ func buildBroker(cfg config.Config, st store.Store, minter *token.Minter, log de
 // (spec §4, §6). It is the one load, at start and at every reload, so a file
 // the start would refuse is a file a reload refuses, with the same words. A
 // file anyone but port49d's user or root could have written is one of them
-// (readPolicyFile).
-func loadPolicy(cfg config.Config) (*policy.Policy, error) {
+// (readPolicyFile). inventoryFrom names where the inventory came from, for
+// that refusal: "inventory_file <path>", or the inventory service's bundle.
+func loadPolicy(cfg config.Config, inventoryFrom string) (*policy.Policy, error) {
 	raw, err := readPolicyFile(cfg.Broker.PolicyFile)
 	if err != nil {
 		return nil, fmt.Errorf("broker.policy_file %s: %w", cfg.Broker.PolicyFile, err)
@@ -266,8 +269,8 @@ func loadPolicy(cfg config.Config) (*policy.Policy, error) {
 	// snapshot that newly refuses the fleet, in the same words.
 	if n := len(pol.Devices()); n > 0 && len(pol.AdmissionRefusals()) == n {
 		r := pol.AdmissionRefusals()[0]
-		return nil, fmt.Errorf("broker.policy_file %s with inventory_file %s: %w", cfg.Broker.PolicyFile,
-			cfg.InventoryFile, quotesCut{fmt.Errorf("the bundle admits none of the %d device(s) in the inventory "+
+		return nil, fmt.Errorf("broker.policy_file %s with %s: %w", cfg.Broker.PolicyFile,
+			inventoryFrom, quotesCut{fmt.Errorf("the bundle admits none of the %d device(s) in the inventory "+
 				"(%s: %s); check key_groups and the key_refs port49d.yaml defines, and if key_groups was deleted "+
 				"from the inventory file, add it to the policy file; to take the whole fleet off deliberately, "+
 				"stop port49d", n, r.Device.Name, r.Refused)})
@@ -464,9 +467,12 @@ func run(parent context.Context, cfgPath string) error {
 	// With a broker the inventory is live, so it is read behind the policy
 	// file's fence, first and only there (config.Load leaves it unread), and
 	// hashed now rather than when the reloader starts: the reloader starts
-	// from the bytes loaded, so an edit in between is loaded (M1).
+	// from the bytes loaded, so an edit in between is loaded (M1). With
+	// inventory.service there is no file: the cold start below takes its
+	// place, once the metrics listener is up.
 	var inventoryAtStart string
-	if cfg.Broker != nil {
+	inventoryFrom := "inventory_file " + cfg.InventoryFile
+	if cfg.Broker != nil && cfg.InventoryService == nil {
 		inv, v, err := fencedInventory(cfg)
 		if err != nil {
 			return err
@@ -480,6 +486,63 @@ func run(parent context.Context, cfgPath string) error {
 
 	reg := prometheus.NewRegistry()
 	m := metrics.New(reg)
+
+	// A dead metrics listener is not a detail: without it nobody can see the
+	// daemon at all, so its error ends the process rather than disappearing.
+	// It binds first of all, before a cold start that may wait on the
+	// inventory service, so the daemon is visible — and /readyz says it is
+	// not ready — for as long as that takes. Its address is said at once for
+	// the same reason.
+	mln, err := net.Listen("tcp", cfg.MetricsListen)
+	if err != nil {
+		return fmt.Errorf("metrics listener on %s: %w", cfg.MetricsListen, err)
+	}
+	defer mln.Close()
+	// ready is set while the TACACS+ listener serves: /readyz answers 200
+	// then, and 503 before it opens and from the start of shutdown.
+	var ready atomic.Bool
+	metricsErr := make(chan error, 1)
+	go func() {
+		mux := http.NewServeMux()
+		mux.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
+		mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+		mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
+			if ready.Load() {
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			http.Error(w, "not serving TACACS+", http.StatusServiceUnavailable)
+		})
+		metricsErr <- http.Serve(mln, mux)
+	}()
+	fmt.Fprintf(stderr, "port49d: metrics on %s\n", mln.Addr())
+
+	var startDoc *inventory.Published
+	var startFrom string
+	if cfg.InventoryService != nil {
+		// Spec §10, cold start: a copy, or the service; until one, no
+		// listener and /readyz 503 (Decided 5). The verify keys and the
+		// client are the fetcher's to go on with after the start.
+		verifyKeysAtStart, err := config.VerifyKeys(cfg.InventoryService.VerifyKeyFiles)
+		if err != nil {
+			return err
+		}
+		client, err := inventory.NewClient(cfg.InventoryService.URL, cfg.InventoryService.CAFile,
+			cfg.InventoryService.TLSCertFile, cfg.InventoryService.TLSKeyFile)
+		if err != nil {
+			return fmt.Errorf("inventory.service: %w", err)
+		}
+		if startDoc, startFrom, err = coldStart(ctx, cfg.InventoryService, verifyKeysAtStart, client, m); err != nil {
+			if ctx.Err() != nil {
+				return nil // stopped while waiting for a bundle: nothing was served
+			}
+			return err
+		}
+		cfg.Inventory = startDoc.Inv
+		inventoryFrom = fmt.Sprintf("the inventory service's bundle %d", startDoc.Doc.Sequence)
+		m.InventoryBundleSequence.Set(float64(startDoc.Doc.Sequence))
+	}
+
 	log := decision.NewJSONLinesWithFailureHook(stdout, m.DecisionLogWriteFailures.Inc)
 	lim := limits.New(cfg.Limits, time.Now)
 
@@ -559,7 +622,7 @@ func run(parent context.Context, cfgPath string) error {
 	sessions := session.New(st, time.Now, cfg.ContextIdleTTL, cfg.Session.IndexTTL)
 	_ = sessions
 
-	brokerSrv, brk, err := buildBroker(cfg, st, minter, log, m)
+	brokerSrv, brk, err := buildBroker(cfg, inventoryFrom, st, minter, log, m)
 	if err != nil {
 		stopSpool()
 		<-spoolDone
@@ -642,24 +705,6 @@ func run(parent context.Context, cfgPath string) error {
 		Acct:   acct.New(handlerStore, spool, m, time.Now, platform.SystemUsers()).WithRedactor(redactorFor(live)),
 		Limits: lim, Metrics: m, Log: log, Now: time.Now, IdleTimeout: cfg.Limits.IdleTimeout}
 
-	// A dead metrics listener is not a detail: without it nobody can see the
-	// daemon at all, so its error ends the process rather than disappearing.
-	// It binds first, as the others do, so a port taken ends the start and
-	// the line below names the address bound.
-	mln, err := net.Listen("tcp", cfg.MetricsListen)
-	if err != nil {
-		stopSpool()
-		<-spoolDone
-		return fmt.Errorf("metrics listener on %s: %w", cfg.MetricsListen, err)
-	}
-	metricsErr := make(chan error, 1)
-	go func() {
-		mux := http.NewServeMux()
-		mux.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
-		mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
-		metricsErr <- http.Serve(mln, mux)
-	}()
-
 	ln, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
 		mln.Close()
@@ -710,6 +755,7 @@ func run(parent context.Context, cfgPath string) error {
 	}
 	fmt.Fprintf(stderr, "port49d: listening on %s, metrics on %s, %d devices admitted\n",
 		ln.Addr(), mln.Addr(), admitted)
+	ready.Store(true)
 
 	brokerErr := make(chan error, 1)
 	if brokerSrv != nil {
@@ -736,6 +782,7 @@ func run(parent context.Context, cfgPath string) error {
 		}
 		r := newReloader(cfg, brk, m, time.Now)
 		r.inventory, r.cfgPath = inventoryAtStart, cfgPath
+		r.startDocument(startDoc, startFrom)
 		r.seen, r.held = seen, deps.Held
 		r.run(ctx, hup)
 	}()
@@ -746,17 +793,21 @@ func run(parent context.Context, cfgPath string) error {
 	var runErr error
 	select {
 	case err := <-metricsErr:
+		ready.Store(false)
 		runErr = fmt.Errorf("metrics listener on %s: %w", cfg.MetricsListen, err)
 		cancel()
 		<-serveErr
 	case err := <-brokerErr:
+		ready.Store(false)
 		runErr = fmt.Errorf("broker listener on %s: %w", cfg.Broker.Listen, err)
 		cancel()
 		<-serveErr
 	case err := <-serveErr:
+		ready.Store(false)
 		runErr = err
 		cancel()
 	case <-ctx.Done():
+		ready.Store(false)
 		fmt.Fprintln(stderr, "port49d: signal received, draining")
 		<-serveErr
 	}

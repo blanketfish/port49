@@ -74,6 +74,9 @@ func TestNewRegistersEveryMetric(t *testing.T) {
 		"port49_inventory_reloads_total":           false,
 		"port49_inventory_file_refused":            false,
 		"port49_inventory_snapshot_age_seconds":    false,
+		"port49_inventory_bundle_sequence":         false,
+		"port49_inventory_persist_failed":          false,
+		"port49_inventory_bundle_refused":          false,
 		// The key-version alert gates on uptime with it (spec §10).
 		"process_start_time_seconds": false,
 	}

@@ -151,8 +151,20 @@ type Metrics struct {
 	// admitted). Each is an inventory_change record naming the device; the
 	// label is the kind only.
 	InventoryChanges *prometheus.CounterVec
-	inventoryAge     atomic.Pointer[func() float64]
-	keys             atomic.Pointer[keyWatch]
+	// port49_inventory_bundle_sequence: the inventory service's sequence of
+	// the document in force; 0 with inventory_file.
+	InventoryBundleSequence prometheus.Gauge
+	// port49_inventory_persist_failed: 1 while the document in force could
+	// not be written to inventory.service.state_dir, so a restart with the
+	// service down would start from an older copy, or none.
+	InventoryPersistFailed prometheus.Gauge
+	// port49_inventory_bundle_refused: 1 while a document port49d was given
+	// — a copy at cold start, or one the service sent — did not open or was
+	// refused; the bundle in force keeps serving. The first document from the
+	// service applied or confirmed in force clears it.
+	InventoryBundleRefused prometheus.Gauge
+	inventoryAge           atomic.Pointer[func() float64]
+	keys                   atomic.Pointer[keyWatch]
 }
 
 // KeySample is one key version at a scrape: how many devices' latest
@@ -269,6 +281,12 @@ func New(reg prometheus.Registerer) *Metrics {
 			Help: "1 while the inventory file on disk is one port49d refused, or has not stopped changing."}),
 		InventoryChanges: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_inventory_changes_total",
 			Help: "Security-relevant changes a bundle swap made, by kind."}, []string{"kind"}),
+		InventoryBundleSequence: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_inventory_bundle_sequence",
+			Help: "The inventory service's sequence of the document in force; 0 with inventory_file."}),
+		InventoryPersistFailed: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_inventory_persist_failed",
+			Help: "1 while the document in force could not be written to inventory.service.state_dir."}),
+		InventoryBundleRefused: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_inventory_bundle_refused",
+			Help: "1 while a document port49d was given did not open or was refused; the bundle in force keeps serving."}),
 	}
 	m.InventorySnapshotAge = prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "port49_inventory_snapshot_age_seconds",
 		Help: "Seconds since the inventory file was last read and found in force, or loaded."}, func() float64 {
@@ -296,7 +314,7 @@ func New(reg prometheus.Registerer) *Metrics {
 		m.StoreOps, m.DecisionLogWriteFailures, m.CryptOpenFailures, m.Attributions, m.BrokerItemErrors, m.BlobCache,
 		m.DevicesQuarantined, m.DevicesAdmissionRefused, m.ContextRefreshes, m.TokensSuperseded, m.PolicyReloads, m.PolicyFileRefused,
 		m.PolicyRefreshPending, m.InventoryReloads, m.InventoryFileRefused, m.InventorySnapshotAge,
-		m.InventoryChanges)
+		m.InventoryChanges, m.InventoryBundleSequence, m.InventoryPersistFailed, m.InventoryBundleRefused)
 	// process_start_time_seconds among them: an alert on
 	// port49_key_version_devices gates on uptime, because the count starts
 	// at 0 with every restart (spec §10). No labels.

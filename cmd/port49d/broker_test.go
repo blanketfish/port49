@@ -65,7 +65,7 @@ func TestPort49dAndTheToolsNameOneBundle(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg.Inventory = inv
-	daemon, err := loadPolicy(cfg)
+	daemon, err := loadPolicy(cfg, "inventory_file "+cfg.InventoryFile)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,20 +91,20 @@ grants: [{subject: s, scope: all_devices, roles: [r]}]
 `
 
 func buildWith(cfg config.Config) error {
-	_, _, err := buildBroker(cfg, memory.New(time.Now), seedMinter(), decision.NewJSONLines(io.Discard),
+	_, _, err := buildBroker(cfg, "inventory_file "+cfg.InventoryFile, memory.New(time.Now), seedMinter(), decision.NewJSONLines(io.Discard),
 		metrics.New(prometheus.NewRegistry()))
 	return err
 }
 
 func TestNoBrokerBlockBuildsNoBroker(t *testing.T) {
-	srv, b, err := buildBroker(config.Config{}, nil, nil, nil, nil)
+	srv, b, err := buildBroker(config.Config{}, "", nil, nil, nil, nil)
 	if srv != nil || b != nil || err != nil {
 		t.Fatalf("%v %v %v", srv, b, err)
 	}
 }
 
 func TestABrokerBuildsFromItsFiles(t *testing.T) {
-	srv, _, err := buildBroker(brokerConfig(t, minimalPolicy), memory.New(time.Now), seedMinter(),
+	srv, _, err := buildBroker(brokerConfig(t, minimalPolicy), "inventory_file", memory.New(time.Now), seedMinter(),
 		decision.NewJSONLines(io.Discard), metrics.New(prometheus.NewRegistry()))
 	if err != nil {
 		t.Fatal(err)
@@ -143,7 +143,7 @@ func TestAQuarantinedDeviceDoesNotStopTheStart(t *testing.T) {
 	var out bytes.Buffer
 	defer func(w io.Writer) { stderr = w }(stderr)
 	stderr = &out
-	_, b, err := buildBroker(brokerConfig(t, unmappedLevel+strings.Replace(minimalPolicy, "privilege: admin", "privilege: unmapped", 1)),
+	_, b, err := buildBroker(brokerConfig(t, unmappedLevel+strings.Replace(minimalPolicy, "privilege: admin", "privilege: unmapped", 1)), "inventory_file",
 		memory.New(time.Now), seedMinter(), decision.NewJSONLines(io.Discard), metrics.New(prometheus.NewRegistry()))
 	if err != nil {
 		t.Fatalf("a quarantined device must not stop the start: %v", err)
@@ -166,7 +166,7 @@ func TestAWidenedDenyIsSaidAtStart(t *testing.T) {
 	stderr = &out
 	cfg := brokerConfig(t, strings.Replace(minimalPolicy, `permit: ["**"]}`, `permit: ["**"], deny: ["* * /tftp/"]}`, 1))
 	cfg.Inventory.Devices = append(cfg.Inventory.Devices, admission.Device{Name: "ntp1", Platform: "meinberg_lantime", KeyRef: "lab_key"})
-	_, b, err := buildBroker(cfg, memory.New(time.Now), seedMinter(), decision.NewJSONLines(io.Discard),
+	_, b, err := buildBroker(cfg, "inventory_file "+cfg.InventoryFile, memory.New(time.Now), seedMinter(), decision.NewJSONLines(io.Discard),
 		metrics.New(prometheus.NewRegistry()))
 	if err != nil {
 		t.Fatal(err)
@@ -188,7 +188,7 @@ func TestAJoinedInterfacePermitIsSaidAtStart(t *testing.T) {
 	stderr = &out
 	cfg := brokerConfig(t, strings.Replace(minimalPolicy, `permit: ["**"]}`, `permit: ["**", "interface Gi1 **"]}`, 1))
 	cfg.Inventory.Devices = append(cfg.Inventory.Devices, admission.Device{Name: "xe1", Platform: "cisco_iosxe", KeyRef: "lab_key"})
-	if _, _, err := buildBroker(cfg, memory.New(time.Now), seedMinter(), decision.NewJSONLines(io.Discard),
+	if _, _, err := buildBroker(cfg, "inventory_file "+cfg.InventoryFile, memory.New(time.Now), seedMinter(), decision.NewJSONLines(io.Discard),
 		metrics.New(prometheus.NewRegistry())); err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +205,7 @@ func TestARuleSecretLiteralIsSaidAtStartRedacted(t *testing.T) {
 	stderr = &out
 	cfg := brokerConfig(t, strings.Replace(minimalPolicy, `permit: ["**"]}`,
 		`permit: ["**"], deny: ["snmp-server community Hunter2 **"]}`, 1))
-	_, b, err := buildBroker(cfg, memory.New(time.Now), seedMinter(), decision.NewJSONLines(io.Discard),
+	_, b, err := buildBroker(cfg, "inventory_file "+cfg.InventoryFile, memory.New(time.Now), seedMinter(), decision.NewJSONLines(io.Discard),
 		metrics.New(prometheus.NewRegistry()))
 	if err != nil {
 		t.Fatal(err)
@@ -237,7 +237,7 @@ subjects: [{name: s, identity: ["user:alice@example.com"], username: alice, toke
 grants:
   - {subject: s, scope: all_devices, roles: [op]}
   - {subject: s, scope: all_devices, roles: [adm], expires: `+lapse.Format(time.RFC3339)+`}
-`), memory.New(time.Now), seedMinter(), decision.NewJSONLines(io.Discard), metrics.New(prometheus.NewRegistry()))
+`), "inventory_file", memory.New(time.Now), seedMinter(), decision.NewJSONLines(io.Discard), metrics.New(prometheus.NewRegistry()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -365,7 +365,7 @@ func TestBrokerTLSErrorsReachPort49dsLog(t *testing.T) {
 	defer func(w io.Writer) { stderr = w }(stderr)
 	stderr = &out
 
-	srv, _, err := buildBroker(brokerConfig(t, minimalPolicy), memory.New(time.Now), seedMinter(),
+	srv, _, err := buildBroker(brokerConfig(t, minimalPolicy), "inventory_file", memory.New(time.Now), seedMinter(),
 		decision.NewJSONLines(io.Discard), metrics.New(prometheus.NewRegistry()))
 	if err != nil {
 		t.Fatal(err)
@@ -510,7 +510,7 @@ func TestPort49dAdmitsFromThePolicyInForce(t *testing.T) {
 	cfg := brokerConfig(t, minimalPolicy)
 	cfg.Inventory.Devices = append(cfg.Inventory.Devices, admission.Device{Name: "stray", Platform: "arista_eos",
 		Addresses: []netip.Addr{netip.MustParseAddr("192.0.2.9")}})
-	_, b, err := buildBroker(cfg, memory.New(time.Now), seedMinter(), decision.NewJSONLines(io.Discard),
+	_, b, err := buildBroker(cfg, "inventory_file "+cfg.InventoryFile, memory.New(time.Now), seedMinter(), decision.NewJSONLines(io.Discard),
 		metrics.New(prometheus.NewRegistry()))
 	if err != nil {
 		t.Fatal(err)

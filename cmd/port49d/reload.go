@@ -16,6 +16,7 @@ import (
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/engine"
+	"github.com/rhwendt/port49/internal/inventory"
 	"github.com/rhwendt/port49/internal/keyring"
 	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/store"
@@ -101,6 +102,12 @@ type reloader struct {
 	// invSeen is when the inventory file was last read and found in force,
 	// or loaded: port49_inventory_snapshot_age_seconds reads it at scrape.
 	invSeen atomic.Int64
+	// Service mode (inventory.service): inForce is the etag of the document
+	// in force, seq its sequence, and latestRaw its sealed bytes, which a
+	// persist that failed is retried with (pre-flight M7).
+	inForce   string
+	seq       int64
+	latestRaw []byte
 	// stopped is set while the last refresh pass did not complete, so the
 	// one that does says so whatever it found.
 	stopped bool
@@ -110,13 +117,34 @@ func newReloader(cfg config.Config, b *broker.Broker, m *metrics.Metrics, now fu
 	start := now()
 	r := &reloader{cfg: cfg, broker: b, metrics: m, now: now, interval: cfg.Broker.PolicyWatchInterval,
 		priors: []broker.Prior{{Policy: b.Policy.Load(), At: start}}}
-	// run sets the version the start loaded; this is a test's.
-	_, r.inventory, _ = inventoryVersion(cfg.InventoryFile)
+	// run sets the version the start loaded; this is a test's. In service
+	// mode there is no inventory file.
+	if cfg.InventoryFile != "" {
+		_, r.inventory, _ = inventoryVersion(cfg.InventoryFile)
+	}
 	r.expiry, _ = b.Policy.Load().NextChange(start)
 	r.reschedule()
 	r.invSeen.Store(start.UnixNano())
 	m.WatchInventoryAge(func() float64 { return now().Sub(time.Unix(0, r.invSeen.Load())).Seconds() })
 	return r
+}
+
+// startDocument records the document the start loaded — its etag and
+// sequence, so the fetcher's first unchanged answer confirms it — and dates
+// the snapshot. A copy, persisted or mirrored, confirms nothing: the age
+// counts from its publication, which may overstate it, the safe direction,
+// until the first confirmation (spec §10; pre-flight M5). From the service,
+// the start is itself a confirmation.
+func (r *reloader) startDocument(p *inventory.Published, from string) {
+	if p == nil {
+		return
+	}
+	r.inForce, r.seq, r.latestRaw = bundle.ETag(p.Raw), p.Doc.Sequence, p.Raw
+	seen := r.now()
+	if from != "the service" {
+		seen = p.Doc.PublishedAt
+	}
+	r.invSeen.Store(seen.UnixNano())
 }
 
 // inventoryVersion is policyVersion for inventory_file: read behind the fence
@@ -180,10 +208,13 @@ func arm(timer *time.Timer, due, now time.Time) {
 	}
 }
 
-// poll reads both files, the policy first.
+// poll reads both files, the policy first; in service mode there is no
+// inventory file to read.
 func (r *reloader) poll(ctx context.Context) {
 	r.pollPolicy(ctx)
-	r.pollInventory(ctx)
+	if r.cfg.InventoryService == nil {
+		r.pollInventory(ctx)
+	}
 }
 
 // pollPolicy reads the policy file and loads it once two reads in a row agree
@@ -267,6 +298,9 @@ func (r *reloader) reload(ctx context.Context, trigger string) {
 	r.rereadBound()
 	raw, v, err := policyVersion(r.cfg.Broker.PolicyFile)
 	r.load(ctx, trigger, raw, v, err)
+	if r.cfg.InventoryService != nil {
+		return
+	}
 	iraw, iv, ierr := inventoryVersion(r.cfg.InventoryFile)
 	if iv != r.inventory {
 		r.invPending = ""
