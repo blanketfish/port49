@@ -1207,6 +1207,10 @@ sets moving into the policy repository; `key_ref` on `port49_key_version_devices
 ACLs, for `inventory_file` as for the policy file; `TestAnotherUIDIsRefused` run in CI as root;
 the inventory-only refresh's cost at fleet size.
 
+**Carried from plan 6b** (final review Minor 7): port49d's config loader
+(internal/config/config.go) ignores a second YAML document; refuse it as port49-inventory does.
+`config.InventoryServiceOf`, which `SIGHUP` reads, ignores one too.
+
 ## Plan 13 — User and admin documentation
 
 **Builds:** a published documentation site — MkDocs Material on GitHub Pages, deployed by a
