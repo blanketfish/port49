@@ -1386,3 +1386,184 @@ func TestAHeldSourceIsRefusedWithAReset(t *testing.T) {
 		t.Fatalf("want the held source refused with a reset, got %v", err)
 	}
 }
+
+// swapAdmitter is the policy in force's admission index as port49d gives it:
+// a pointer a reload swaps while connections are open.
+type swapAdmitter struct {
+	p atomic.Pointer[admission.Trie]
+}
+
+func (a *swapAdmitter) Lookup(addr netip.Addr) (admission.Resolved, bool) {
+	return a.p.Load().Lookup(addr)
+}
+
+func (a *swapAdmitter) swap(t *testing.T, rs ...admission.Resolved) {
+	t.Helper()
+	trie, err := admission.NewTrie(rs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.p.Store(trie)
+}
+
+var (
+	leaf01 = admission.Device{Name: "leaf-01", Platform: "arista_eos", Addresses: []netip.Addr{netip.MustParseAddr("127.0.0.1")}}
+	leaf02 = admission.Device{Name: "leaf-02", Platform: "arista_eos", Addresses: []netip.Addr{netip.MustParseAddr("192.0.2.2")}}
+)
+
+// reloadBetweenPackets opens a single-connect connection as leaf-01 under
+// prod_key, answers one exchange, lets reload swap the admission index, and
+// sends a second packet on the same connection. It returns the client for
+// the test to judge the second packet's fate.
+func reloadBetweenPackets(t *testing.T, reload func(*swapAdmitter)) (*client, *testServer, *syncBuffer) {
+	t.Helper()
+	log := &syncBuffer{}
+	adm := &swapAdmitter{}
+	adm.swap(t, admission.Resolved{Device: leaf01, KeyRef: "prod_key"})
+	ts := newTestServerWith(t, log, memory.New(time.Now), nil, func(d *Deps) {
+		d.Admission = adm
+		d.Keys["new_key"] = keyring.Set{Ref: "new_key", Versions: []keyring.Version{{Number: 1, Secret: []byte("n1")}}}
+		d.Limits = slowBackoff()
+	})
+	c := dial(t, ts.addr, []byte("k2"))
+	start := wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP,
+		Service: wire.AuthenServiceLogin, User: []byte("alice"), Data: []byte("p49_e2e")}.Encode()
+	c.send(t, wire.TypeAuthen, start, wire.FlagSingleConnect)
+	c.recv(t)
+	reload(adm)
+	c.sid, c.seq = c.sid+1, 1
+	c.send(t, wire.TypeAuthen, start, wire.FlagSingleConnect)
+	return c, ts, log
+}
+
+// resetWithNoStrike asserts the open connection was reset at once with no
+// reply, one record naming why (device_unknown, diag) and the device it was
+// admitted as, and no strike: the next connection from the source is not
+// refused at Accept.
+func resetWithNoStrike(t *testing.T, c *client, ts *testServer, log *syncBuffer, diag string) {
+	t.Helper()
+	began := time.Now()
+	c.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if n, err := c.conn.Read(make([]byte, 1)); !errors.Is(err, syscall.ECONNRESET) {
+		t.Fatalf("want a reset with no reply, got %d bytes, %v", n, err)
+	}
+	if held := time.Since(began); held > 500*time.Millisecond {
+		t.Fatalf("the connection was held %s before it was reset", held)
+	}
+	want := `"diagnosis":"` + diag + `"`
+	if !waitFor(t, func() bool { return log.contains(want) }) {
+		t.Fatalf("no %s record: %s", diag, log.String())
+	}
+	var found int
+	for _, r := range log.records(t) {
+		u, _ := r["unvalidated"].(map[string]any)
+		if u == nil || u["diagnosis"] != diag {
+			continue
+		}
+		found++
+		dev, _ := r["device"].(map[string]any)
+		if r["reason"] != "device_unknown" || dev == nil || dev["name"] != "leaf-01" || u["key_ref"] != "prod_key" {
+			t.Fatalf("the record does not name the device it was admitted as and why: %v", r)
+		}
+	}
+	if found != 1 {
+		t.Fatalf("%d %s records, want one", found, diag)
+	}
+	if log.contains("p49_e2e") {
+		t.Fatalf("a credential reached the log: %s", log.String())
+	}
+	if n := testutil.ToFloat64(ts.metrics.ConnectionEvents.WithLabelValues("admission_closed")); n != 1 {
+		t.Fatalf("admission_closed = %v", n)
+	}
+	for _, ev := range []string{"malformed_backoff", "key_miss_closed", "unadmitted_source"} {
+		if n := testutil.ToFloat64(ts.metrics.ConnectionEvents.WithLabelValues(ev)); n != 0 {
+			t.Fatalf("%s = %v: a reload's close is not the device's fault", ev, n)
+		}
+	}
+	if n := testutil.ToFloat64(ts.metrics.Unvalidated.WithLabelValues(diag)); n != 1 {
+		t.Fatalf("unvalidated{%s} = %v", diag, n)
+	}
+}
+
+// I1: a reload that refuses the device an open connection was admitted as
+// ends that connection at its next packet — a busy single-connect connection
+// has no end, so "complete against the snapshot it began with" had no bound
+// (spec §10).
+func TestAReloadThatRefusesTheDeviceResetsItsOpenConnection(t *testing.T) {
+	c, ts, log := reloadBetweenPackets(t, func(a *swapAdmitter) {
+		a.swap(t, admission.Resolved{Device: leaf01, Refused: "matches no key group, so no key admits it (spec §10)",
+			Refusal: admission.RefusedNoGroup})
+	})
+	resetWithNoStrike(t, c, ts, log, "admission_refused")
+	// The next connection is not held for a strike; it is refused as a
+	// refused device's always is.
+	c = dial(t, ts.addr, []byte("k2"))
+	c.send(t, wire.TypeAuthen, wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP,
+		Service: wire.AuthenServiceLogin, User: []byte("alice")}.Encode(), 0)
+	closedAtOnce(t, c)
+	if n := testutil.ToFloat64(ts.metrics.ConnectionEvents.WithLabelValues("held_refused")); n != 0 {
+		t.Fatalf("held_refused = %v: the reload's close struck the source", n)
+	}
+}
+
+func TestAReloadThatRemovesTheDeviceResetsItsOpenConnection(t *testing.T) {
+	c, ts, log := reloadBetweenPackets(t, func(a *swapAdmitter) {
+		a.swap(t, admission.Resolved{Device: leaf02, KeyRef: "prod_key"})
+	})
+	resetWithNoStrike(t, c, ts, log, "unadmitted_source")
+}
+
+func TestAReloadThatRenamesTheDeviceResetsItsOpenConnection(t *testing.T) {
+	c, ts, log := reloadBetweenPackets(t, func(a *swapAdmitter) {
+		renamed := leaf01
+		renamed.Name = "leaf-01-new"
+		a.swap(t, admission.Resolved{Device: renamed, KeyRef: "prod_key"})
+	})
+	resetWithNoStrike(t, c, ts, log, "admission_changed")
+}
+
+// Moving a device off a key_ref is the answer to a suspected key compromise,
+// so the old key must stop at once: the open connection gets no reply under
+// it, and a new connection under it is a key miss, while the new key works.
+func TestAReloadThatRekeysTheDeviceStopsTheOldKeyAtOnce(t *testing.T) {
+	c, ts, log := reloadBetweenPackets(t, func(a *swapAdmitter) {
+		a.swap(t, admission.Resolved{Device: leaf01, KeyRef: "new_key"})
+	})
+	resetWithNoStrike(t, c, ts, log, "admission_changed")
+
+	old := dial(t, ts.addr, []byte("k2"))
+	old.send(t, wire.TypeAuthen, wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP,
+		Service: wire.AuthenServiceLogin, User: []byte("alice")}.Encode(), 0)
+	closedAtOnce(t, old)
+	if !waitFor(t, func() bool { return log.contains(`"diagnosis":"no_known_key_matches"`) }) {
+		t.Fatalf("the old key was not a miss after the swap: %s", log.String())
+	}
+	if n := testutil.ToFloat64(ts.metrics.KeyValidations.WithLabelValues("prod_key", "2", "validated")); n != 1 {
+		t.Fatalf("prod_key v2 validated %v times; only the exchange before the swap may", n)
+	}
+}
+
+// The new key works on a fresh connection once the device is moved to it.
+func TestAReloadThatRekeysTheDeviceAdmitsTheNewKey(t *testing.T) {
+	c, ts, _ := reloadBetweenPackets(t, func(a *swapAdmitter) {
+		a.swap(t, admission.Resolved{Device: leaf01, KeyRef: "new_key"})
+	})
+	c.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	c.conn.Read(make([]byte, 1))
+	fresh := dial(t, ts.addr, []byte("n1"))
+	fresh.send(t, wire.TypeAuthen, wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP,
+		Service: wire.AuthenServiceLogin, User: []byte("alice")}.Encode(), 0)
+	fresh.recv(t)
+}
+
+// A reload that changes another device leaves an open connection alone.
+func TestAReloadOfAnotherDeviceLeavesTheConnectionOpen(t *testing.T) {
+	c, ts, _ := reloadBetweenPackets(t, func(a *swapAdmitter) {
+		a.swap(t, admission.Resolved{Device: leaf01, KeyRef: "prod_key"},
+			admission.Resolved{Device: leaf02, KeyRef: "new_key"})
+	})
+	c.recv(t)
+	if n := testutil.ToFloat64(ts.metrics.ConnectionEvents.WithLabelValues("admission_closed")); n != 0 {
+		t.Fatalf("admission_closed = %v", n)
+	}
+}

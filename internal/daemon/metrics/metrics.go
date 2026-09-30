@@ -25,9 +25,11 @@ type Metrics struct {
 	// (a strike from an address not in the inventory), "key_miss_closed" (a
 	// first packet no accepted key validated, or one past its version's
 	// retire_after: struck and reset at once, L28), "held_refused" (a source
-	// inside the backoff its last strike earned, reset at Accept, L28), "panic" (a connection
-	// recovered from a panic), and "accept_error" (Accept failed and the
-	// listener is being retried).
+	// inside the backoff its last strike earned, reset at Accept, L28),
+	// "admission_closed" (an open connection whose device a reload refused,
+	// removed, renamed or re-keyed: reset at its next packet, no strike),
+	// "panic" (a connection recovered from a panic), and "accept_error"
+	// (Accept failed and the listener is being retried).
 	ConnectionEvents *prometheus.CounterVec
 	AuthFailures     prometheus.Counter // port49_authentication_failures_total
 	SpoolDepth       prometheus.Gauge   // port49_accounting_spool_depth

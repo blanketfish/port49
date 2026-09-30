@@ -95,6 +95,41 @@ func (s *conn) refusedAdmission(h wire.Header) {
 	s.d.Metrics.Unvalidated.WithLabelValues(string(keyring.DiagAdmissionRefused)).Inc()
 }
 
+// readmitted asks admission in force about this connection's source at the
+// time of this packet, so a reload that refuses, removes, renames or re-keys
+// the device ends its open connections rather than leaving them on the
+// admission they began with: a busy single-connect connection resets its
+// idle timer on every packet and so has no end (spec §10). It returns the
+// diagnosis naming why, or "" while the connection's admission still holds.
+func (s *conn) readmitted() keyring.Diagnosis {
+	now, found := s.d.Admission.Lookup(s.src)
+	switch {
+	case !found:
+		return keyring.DiagUnadmittedSource
+	case now.Refused != "":
+		return keyring.DiagAdmissionRefused
+	case now.Device.Name != s.dev.Device.Name || now.KeyRef != s.dev.KeyRef:
+		return keyring.DiagAdmissionChanged
+	}
+	return ""
+}
+
+// admissionWithdrawn records a packet on a connection whose admission a
+// reload withdrew and closes it with a reset, with nothing read past the
+// header and no strike: the change is port49d's, not the device's. The
+// record names the device and key_ref the connection was admitted as, and
+// device_unknown, since that admission is no longer one port49d knows (spec
+// §5.7). How a device takes this reset is unmeasured (L29).
+func (s *conn) admissionWithdrawn(h wire.Header, diag keyring.Diagnosis) {
+	s.d.Log.Emit(decision.Record{TS: s.d.Now(), Event: decision.EventUnvalidated, Reason: decision.DeviceUnknown,
+		Device: &decision.Device{NAS: s.src.String(), Name: s.dev.Device.Name, Platform: s.dev.Device.Platform},
+		Unvalidated: &decision.Unvalidated{Source: s.src.String(), Diagnosis: string(diag), KeyRef: s.dev.KeyRef,
+			Version: s.version, Type: uint8(h.Type), SeqNo: h.SeqNo, SessionID: h.SessionID, Length: h.Length}})
+	s.d.Metrics.Unvalidated.WithLabelValues(string(diag)).Inc()
+	s.d.Metrics.ConnectionEvents.WithLabelValues("admission_closed").Inc()
+	reset(s.c)
+}
+
 // quarantined asks the policy about this connection's device at the time of
 // this packet, so a single-connection session opened before a grant's expiry
 // is closed from it, and one opened during a quarantine is served once it ends.
@@ -197,6 +232,11 @@ func (s *conn) serve(ctx context.Context) {
 			}
 			s.unvalidated(h, nil, keyring.DiagUnadmittedSource, 0)
 			s.backoff(ctx, "unadmitted_source")
+			return
+		}
+
+		if diag := s.readmitted(); diag != "" {
+			s.admissionWithdrawn(h, diag)
 			return
 		}
 

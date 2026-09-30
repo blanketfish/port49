@@ -405,8 +405,9 @@ func sayPolicy(pol *policy.Policy, now time.Time) {
 }
 
 // liveAdmission is the policy in force's admission index, read at each
-// Accept: a reload reaches the next connection, and a connection finishes on
-// the index it began with (spec §10).
+// Accept and at every packet: a reload reaches the next connection, and ends
+// an open one whose device it refused, removed, renamed or re-keyed (spec
+// §10).
 type liveAdmission struct{ live *policy.Live }
 
 func (a liveAdmission) Lookup(addr netip.Addr) (admission.Resolved, bool) {
