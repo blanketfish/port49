@@ -64,7 +64,22 @@ Only `<get-software-information/>` was sent in any NETCONF session. A cell is `h
 | port 830 | refused | refused | hello | hello | — |
 | port 830: get-software-information | — | — | result | result | — |
 
-### Accounting `cmd=` per class
+The abbreviation rows (`xml-mod netconf`, `junoscr netconf`) are refused in C and R too, with the same `unknown command.`: hidden commands do not abbreviate on this image, so those rows are not valid forms and **say nothing about the deny**. There is no abbreviation path around it because there is no abbreviation at all.
+
+### Isolation
+
+A W or L refusal is `deny` only where C, with the same bits and no deny, reached the probe; otherwise `unisolated`, and it says nothing about the deny. A canonical probe (`entry: xml-mode netconf`, `entry: junoscript netconf`, `port 830`) left unisolated fails the test. (Added by hand from the table above after review; the test now computes it, `jsdVerdict`. No rerun.)
+
+| probe | W | L |
+|---|---|---|
+| show version | reached | reached |
+| entry: xml-mode netconf | deny | deny |
+| entry: xml-mod netconf | unisolated | unisolated |
+| entry: junoscript netconf | deny | deny |
+| entry: junoscr netconf | unisolated | unisolated |
+| port 830 | deny | deny |
+
+### Accounting `cmd=` by time window (a class's block can open with late records of the one before)
 
 W:
 
@@ -153,7 +168,8 @@ alice10 cmd=logout
 junoscr
               ^
 unknown command.
-alice01@srx1> junoscr   netconf
+
+alice01@srx1> junoscr   netconf
               ^
 unknown command.
 
@@ -166,7 +182,8 @@ alice01@srx1>
 junoscript
               ^
 unknown command.
-alice01@srx1> junoscript   netconf
+
+alice01@srx1> junoscript   netconf
               ^
 unknown command.
 
@@ -179,7 +196,8 @@ alice01@srx1>
 xml-mod
               ^
 unknown command.
-alice01@srx1> xml-mod   netconf
+
+alice01@srx1> xml-mod   netconf
               ^
 unknown command.
 
@@ -192,7 +210,8 @@ alice01@srx1>
 xml-mode
               ^
 unknown command.
-alice01@srx1> xml-mode   netconf
+
+alice01@srx1> xml-mode   netconf
               ^
 unknown command.
 
@@ -241,7 +260,8 @@ JUNOS OS libs [20240604.39c9257_builder_stable_12_234]
 junoscr
               ^
 unknown command.
-alice03@srx1> junoscr   netconf
+
+alice03@srx1> junoscr   netconf
               ^
 unknown command.
 
@@ -254,7 +274,8 @@ alice03@srx1>
 junoscript
               ^
 unknown command.
-alice03@srx1> junoscript   netconf
+
+alice03@srx1> junoscript   netconf
               ^
 unknown command.
 
@@ -267,7 +288,8 @@ alice03@srx1>
 xml-mod
               ^
 unknown command.
-alice03@srx1> xml-mod   netconf
+
+alice03@srx1> xml-mod   netconf
               ^
 unknown command.
 
@@ -280,7 +302,8 @@ alice03@srx1>
 xml-mode
               ^
 unknown command.
-alice03@srx1> xml-mode   netconf
+
+alice03@srx1> xml-mode   netconf
               ^
 unknown command.
 
@@ -430,7 +453,8 @@ JUNOS OS libs [20240604.39c9257_builder_stable_12_234]
 junoscr
                      ^
 syntax error.
-alice09@srx1> junoscr   netconf
+
+alice09@srx1> junoscr   netconf
               ^
 unknown command.
 
@@ -469,7 +493,8 @@ junoscript netconf
 xml-mod
                      ^
 syntax error.
-alice08@srx1> xml-mod   netconf
+
+alice08@srx1> xml-mod   netconf
               ^
 unknown command.
 
@@ -601,7 +626,8 @@ JUNOS OS libs [20240604.39c9257_builder_stable_12_234]
 junoscr
                         ^
 syntax error.
-breakglass@srx1> junoscr   netconf
+
+breakglass@srx1> junoscr   netconf
                  ^
 unknown command.
 
@@ -640,7 +666,8 @@ junoscript netconf
 xml-mod
                         ^
 syntax error.
-breakglass@srx1> xml-mod   netconf
+
+breakglass@srx1> xml-mod   netconf
                  ^
 unknown command.
 
