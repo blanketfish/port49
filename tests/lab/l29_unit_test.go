@@ -234,7 +234,16 @@ func TestL29ConnectionsReadsEachConnectionsReset(t *testing.T) {
 	if err := os.WriteFile(path, buf, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	got := l29Connections(path, dev, base.Add(10*time.Second))
+	got, mid := l29Connections(path, dev, base.Add(10*time.Second))
+	if mid != 1 {
+		t.Errorf("%d connection(s) counted as reset mid-connection, want 1 (40001)", mid)
+	}
+	// The quarantine test's premise reads the same capture: packets the
+	// device sent at or after an instant.
+	if n, err := l29DeviceSent(path, dev, base.Add(10*time.Second)); err != nil || n != 4 {
+		t.Errorf("l29DeviceSent after the change: %d, %v; want 4 (40001's packet, 40002's SYN and packet, "+
+			"40003's SYN)", n, err)
+	}
 	for port, want := range map[string]string{"40001": "**reset mid-connection**", "40002": "reset at its first packet",
 		"40003": "reset before the device sent on it", "40004": "not reset by port49d"} {
 		var row string
@@ -249,6 +258,39 @@ func TestL29ConnectionsReadsEachConnectionsReset(t *testing.T) {
 	}
 	if strings.Contains(got, "40005") {
 		t.Errorf("another device's connection was read:\n%s", got)
+	}
+}
+
+// The premise readers over the texts and records they are given: l28Live's
+// slow success is a success (review I2), and only port49d's record of a
+// reset of an open connection, with the phase's diagnosis, counts (I1).
+func TestL29PremiseReaders(t *testing.T) {
+	for live, want := range map[string]bool{
+		"Before this phase, with port49d validating the device's key: the first probe login reached port49 (3s).": true,
+		"Before this phase, with port49d validating the device's key: no probe login reached port49 until probe " +
+			"attempt 3; why is not established (41s).": true,
+		"Before this phase: **no probe login reached port49 in 152s**.": false,
+	} {
+		if got := l28Reached(live); got != want {
+			t.Errorf("l28Reached(%q) = %v, want %v", live, got, want)
+		}
+	}
+	if l29SingleSet("not available at `x`: ...\nThe phases run on whatever connections the device opens") ||
+		!l29SingleSet("on: `tacacs-server host 172.100.100.1 single-connection`") {
+		t.Error("l29SingleSet misreads singleConnection's line")
+	}
+	firstPacket := map[string]any{"event": "unvalidated", "unvalidated": map[string]any{"diagnosis": "admission_withdrawn",
+		"type": float64(2)}}
+	otherDiag := map[string]any{"event": "unvalidated", "reason": "device_unknown",
+		"unvalidated": map[string]any{"diagnosis": "unadmitted_source", "type": float64(2)}}
+	open := map[string]any{"event": "unvalidated", "reason": "device_unknown",
+		"unvalidated": map[string]any{"diagnosis": "admission_withdrawn", "type": float64(3)}}
+	if l29Withdrawn([]map[string]any{firstPacket, otherDiag}, "admission_withdrawn") != nil {
+		t.Error("l29Withdrawn took a record without reason=device_unknown, or with another diagnosis")
+	}
+	r := l29Withdrawn([]map[string]any{firstPacket, otherDiag, open}, "admission_withdrawn")
+	if r == nil || l29Type(r) != "acct" {
+		t.Errorf("l29Withdrawn = %v (type %q), want the device_unknown admission_withdrawn record, type acct", r, l29Type(r))
 	}
 }
 

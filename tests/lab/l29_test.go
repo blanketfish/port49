@@ -42,13 +42,17 @@ const l29Reading = "**Reading the records and the captures.** port49d writes one
 	"carried the command in flight (an unvalidated record carries the source address, not its port), nor what " +
 	"the device did with the reset. The first comes from the capture: the per-connection table below reads each " +
 	"connection's 4-tuple, whether the device sent on it before the change, and when port49d reset it. The " +
-	"second comes from the device's own output in the open session.\n\n"
+	"second comes from the device's own output in the open session. A phase with no such record, or whose capture " +
+	"holds no connection reset mid-connection, measured L28's first-packet case and fails.\n\n"
 
 // l29Phase is one change to the device under test. change makes it and
 // returns what it did, for the note, and the port49d line it must produce
 // before the next command.
 type l29Phase struct {
-	name   string
+	name string
+	// diag is the diagnosis port49d's record of a reset of a connection
+	// open across the change carries for this phase (conn.readmitted).
+	diag   string
 	change func(t *testing.T, l *lab, li *labInventory, policy string) (did, wait string)
 }
 
@@ -67,18 +71,16 @@ func l29Phases(src string) []l29Phase {
 		}
 	}
 	return []l29Phase{
-		{"removed", sync("removed")},
-		{"renamed", sync("renamed")},
-		{"replatformed", sync("replatformed")},
-		{"refused", sync("refused")},
-		{"rekeyed", func(t *testing.T, l *lab, _ *labInventory, policy string) (string, string) {
+		{"removed", "unadmitted_source", sync("removed")},
+		{"renamed", "admission_withdrawn", sync("renamed")},
+		{"replatformed", "admission_withdrawn", sync("replatformed")},
+		{"refused", "admission_refused", sync("refused")},
+		{"rekeyed", "admission_withdrawn", func(t *testing.T, l *lab, _ *labInventory, policy string) (string, string) {
 			raw, err := os.ReadFile(policy)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := os.WriteFile(policy, []byte(l29Pin(string(raw), l.p.node)), 0o600); err != nil {
-				t.Fatal(err)
-			}
+			writeAtomic(t, policy, []byte(l29Pin(string(raw), l.p.node)), 0o600)
 			did := "port49d's broker.policy_file given `- {match: {name: " + l.p.node + "}, key_ref: lab_key2}` " +
 				"(a reviewed pin onto the rotation key, which the device does not hold); the service's copy unchanged"
 			return did, "port49d: policy reloaded"
@@ -118,7 +120,17 @@ func TestL29Reload(t *testing.T) {
 		l29Budget(t, 10*time.Minute)
 		fmt.Fprintf(&obs, "**Control, port49d stopped** (L28's `stopped` phase):\n\n%s", l.l28Phase(t, "stopped", "", ""))
 		pr.at(t, "single-connection")
-		fmt.Fprintf(&obs, "Single-connection: %s.\n\n", l.singleConnection(t))
+		single := l.singleConnection(t)
+		fmt.Fprintf(&obs, "Single-connection: %s.\n\n", single)
+		if !l29SingleSet(single) {
+			// port49d keeps a connection open only when the device's first
+			// packet asks it to (TAC_PLUS_SINGLE_CONNECT_FLAG); without it no
+			// connection is open across a change, and every phase would
+			// measure L28's first-packet case. The phases still run, for the
+			// record, and each fails its own check.
+			fail("single-connection was not set on the device (its `?` offered it nowhere): no connection stays " +
+				"open across a change, so this run cannot measure L29's reset of an open connection")
+		}
 		pr.at(t, "the device clock")
 		fmt.Fprintf(&obs, "%s\n\n", l.deviceClock(t))
 		li := l.startInventory(t, src, filepath.Join(root, "tests", "lab", "l29", "policy.yaml"))
@@ -145,9 +157,7 @@ func (l *lab) l29ReloadPhase(t *testing.T, li *labInventory, src, policy string,
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(policy, raw, 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeAtomic(t, policy, raw, 0o600)
 	li.writeSource(t, src)
 	if out := li.sync(t); !strings.Contains(out, "published bundle") && !strings.HasPrefix(out, "unchanged:") {
 		fail("%s: the sync restoring the lab source neither published it nor found it current: %s", ph.name, oneLine(out))
@@ -158,7 +168,7 @@ func (l *lab) l29ReloadPhase(t *testing.T, li *labInventory, src, policy string,
 	pr.at(t, "phase %s: port49d restarted on the service config, probing until the device asks it", ph.name)
 	live := l.l28Live(t, l.serviceConfig(t, li, policy))
 	fmt.Fprintf(&b, "%s\n\n", live)
-	if strings.Contains(live, "no probe login reached") {
+	if !l28Reached(live) {
 		fail("%s: no probe login reached port49d before the change", ph.name)
 		return b.String()
 	}
@@ -170,7 +180,9 @@ func (l *lab) l29ReloadPhase(t *testing.T, li *labInventory, src, policy string,
 		fail("%s: the token session as %s did not open: %s", ph.name, user, oneLine(err.Error()))
 		return b.String()
 	}
-	defer sh.Close()
+	// Closed once: before the next logins, or here on an early return.
+	closeShell := sync.OnceFunc(sh.Close)
+	defer closeShell()
 	out, took, ended, err := sh.runOrEnd("show version", 30*time.Second)
 	if err != nil || ended || l29Refused(l.p.name, out) {
 		fail("%s: `show version` before the change did not run (ended %v, %v): %q", ph.name, ended, err, firstLine(out))
@@ -200,11 +212,23 @@ func (l *lab) l29ReloadPhase(t *testing.T, li *labInventory, src, policy string,
 	if !sh.ended() {
 		second = l29Outcome(l.p.name, sh, "show version", fail, ph.name+": the second `show version` after the change")
 	}
-	sh.Close()
+	closeShell()
 	recs = l.drainRecords(offChange, 10*time.Second)
 	fromDevice := l29FromDevice(recs, l.p.addr)
 	if len(fromDevice) == 0 {
 		fail("%s: no packet from the device reached port49d after the change: this phase measured nothing", ph.name)
+	}
+	// The phase's premise: a connection open across the change was reset.
+	// Without it the phase measured L28's first-packet case, not L29's.
+	withdrawn := l29Withdrawn(fromDevice, ph.diag)
+	if withdrawn == nil {
+		fail("%s: no connection open across the change was reset (no reason=device_unknown record with diagnosis "+
+			"%s from the device): this phase measured L28's first-packet case, not L29's", ph.name, ph.diag)
+	} else if typ := l29Type(withdrawn); typ == "acct" && !strings.HasPrefix(l.p.name, "juniper_") {
+		first = "the reset hit an accounting packet, not the command (port49d's first device_unknown record is " +
+			"`type=acct`); the command then: " + first
+	} else {
+		first += fmt.Sprintf(" (the reset's packet: `type=%s`)", typ)
 	}
 
 	pr.at(t, "phase %s: the next logins", ph.name)
@@ -212,7 +236,11 @@ func (l *lab) l29ReloadPhase(t *testing.T, li *labInventory, src, policy string,
 	next := l.timedLogins(t)
 	nextRecs := l29FromDevice(l.drainRecords(offNext, 10*time.Second), l.p.addr)
 	capLine := l.captureLine(t)
-	conns := l29Connections(l.capAbs, l.p.addr, changeAt)
+	conns, mid := l29Connections(l.capAbs, l.p.addr, changeAt)
+	if mid == 0 {
+		fail("%s: the capture holds no connection the device sent on before the change and port49d reset after it: "+
+			"no reset mid-connection was captured", ph.name)
+	}
 	stop()
 	fmt.Fprintf(&b, "Times are the host's, UTC: the change began %s; port49d said `%s` by %s; the command in flight "+
 		"was sent at %s.\n\n", l29Clock(changeAt), wait, l29Clock(appliedAt), l29Clock(sentAt))
@@ -262,20 +290,22 @@ func TestQuarantineThroughASync(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(policy, raw, 0o600); err != nil {
-			t.Fatal(err)
-		}
+		writeAtomic(t, policy, raw, 0o600)
 		var obs strings.Builder
 		fmt.Fprintf(&obs, "%s\n\n", l29Built())
 		l29Budget(t, 30*time.Minute)
-		pr.at(t, "single-connection")
-		fmt.Fprintf(&obs, "Single-connection: %s.\n\n", l.singleConnection(t))
+		// Single-connection is not configured here: §14 does not need it, and
+		// each change costs two port49d restarts. The device carries whatever
+		// an earlier test in this deploy set (TestL29Reload turns it on).
+		obs.WriteString("Single-connection: not configured by this test; the device keeps whatever an earlier test in " +
+			"this deploy set (TestL29Reload turns it on where the image offers it).\n\n")
 		li := l.startInventory(t, quarantineDummies, policy)
 		l29RestoreStanding(t, l)
 		stop := l.capture(t, "quarantine-sync")
 		defer stop()
 		pr.at(t, "port49d on bundle 1, the dummies alone")
 		l.l28Restart(t, l.serviceConfig(t, li, policy))
+		offRestart := l.mark()
 
 		// 1. The sync that introduces the device, and changes dummy-xe beside it.
 		pr.at(t, "the sync introducing %s", node)
@@ -302,6 +332,35 @@ func TestQuarantineThroughASync(t *testing.T) {
 		}
 		fmt.Fprintf(&obs, "port49d reloaded bundle 2 by %s and named %s quarantined by %s (host UTC).\n\n",
 			l29Clock(reloadAt), node, l29Clock(quarAt))
+
+		// Under bundle 1 the device was unadmitted, and any packet it sent
+		// then earned a strike, whose hold (at most malformed_backoff_max,
+		// 5s by default) resets its next connections at Accept with no
+		// record. It is waited out, so every connection below meets the
+		// quarantine; none can be struck once bundle 2 is in force.
+		pr.at(t, "any unadmitted-source hold from before the introduction")
+		obs.WriteString(l.l29WaitOutStrikes(t, offRestart, reloadAt, fail))
+
+		// The device is asking port49d: a probe login until one is closed as
+		// quarantined. None in 150s is a premise failure if the capture holds
+		// no packet from the device since bundle 2 (it did not ask), and a
+		// contradiction of §14 if it does (it asked, and was not quarantined).
+		pr.at(t, "probing until a connection from %s is closed as quarantined", node)
+		qprobe, asked := l.l29QuarantineProbe(t)
+		fmt.Fprintf(&obs, "Quarantine probe: %s\n\n", qprobe)
+		if !asked {
+			l.flushCapture(t)
+			switch n, err := l29DeviceSent(l.capAbs, l.p.addr, reloadAt); {
+			case err != nil:
+				fail("no probe login was closed as quarantined in 150s, and the capture could not be read (%v)", err)
+			case n == 0:
+				fail("no probe login was closed as quarantined in 150s, and the capture holds no packet from the " +
+					"device to port 49 since bundle 2: the device did not ask port49d")
+			default:
+				contradict("the device sent %d packet(s) to port 49 since bundle 2, and none was recorded "+
+					"device_quarantined", n)
+			}
+		}
 
 		// 2. A mint for the device, over a held broker session.
 		pr.at(t, "the mint while quarantined")
@@ -338,9 +397,7 @@ func TestQuarantineThroughASync(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(policy, fixed, 0o600); err != nil {
-			t.Fatal(err)
-		}
+		writeAtomic(t, policy, fixed, 0o600)
 		li.writePolicy(t, policy)
 		out = li.sync(t)
 		if !strings.Contains(out, "published bundle 3") || !strings.Contains(out, "; 0 quarantined") {
@@ -353,17 +410,26 @@ func TestQuarantineThroughASync(t *testing.T) {
 		if _, ok := l.waitForLine(t, errOff, "0 device(s) quarantined now", time.Second); !ok {
 			contradict("port49d's reload after the fix does not say 0 device(s) quarantined now")
 		}
+		// The sync's one effect at port49d: its policy-mismatch alarm (spec
+		// §13, decision 29), raised while port49d's policy was fixed and
+		// the service's bundle still built on the old one, clears when
+		// bundle 3 arrives. Recorded, not asserted.
+		mismatch := "port49d did **not** say, within 30s, that the service's policy and the policy in force agree again"
+		if at, ok := l.waitForLine(t, errOff, "the service's policy and the policy in force agree again", 30*time.Second); ok {
+			mismatch = "port49d said the service's policy and the policy in force agree again by " + l29Clock(at) +
+				": the policy-mismatch alarm cleared with bundle 3"
+		}
 		fmt.Fprintf(&obs, "After the fix (`quarantine-sync/fixed.yaml` written at %s to port49d's policy_file and the "+
 			"service's):\n\n```\n%s```\n\nport49d said `policy reloaded` by %s. port49d took the fix from its own "+
 			"policy_file (spec §13, decision 29): the service's bundle 3 carries the same devices, so it changes "+
-			"nothing at port49d, and the sync's part in the fix is the service's own report of 0 quarantined.\n\n",
-			l29Clock(fixedAt), out, l29Clock(polAt))
+			"nothing at port49d, and the sync's part in the fix is the service's own report of 0 quarantined. %s.\n\n",
+			l29Clock(fixedAt), out, l29Clock(polAt), mismatch)
 
 		// 5. The device admitted: probed until it asks port49d, then the mint
 		// and the logins.
 		pr.at(t, "the logins after the fix")
-		probe := l.l29Probe(t)
-		if strings.Contains(probe, "no probe login reached") {
+		probe, reached := l.l29Probe(t)
+		if !reached {
 			fail("no probe login reached port49d after the fix")
 		}
 		off = l.mark()
@@ -380,6 +446,15 @@ func TestQuarantineThroughASync(t *testing.T) {
 				slice = fmt.Sprintf("logged in in %s", time.Since(t0).Round(10*time.Millisecond))
 			}
 			mintA = "a token (not printed)"
+			switch {
+			case strings.HasPrefix(l.p.name, "juniper_"):
+				// Measured on EOS, NX-OS and IOS-XE (results/slice-*.md); on
+				// Junos a broker login rests on plan 5b's projection under
+				// this policy, which is not what this test measures.
+				slice += " (recorded, not asserted: on Junos it depends on the projection)"
+			case !strings.HasPrefix(slice, "logged in"):
+				contradict("%s's broker-minted token for %s did not log in after the fix: %s", sliceUser, node, slice)
+			}
 		}
 		admitted := l.timedLogins(t)
 		after := l.drainRecords(off, 10*time.Second)
@@ -438,7 +513,9 @@ func (l *lab) l29Note(t *testing.T, entry, claim, obs string, failed []string) {
 
 // l29Built names the binaries' commit.
 func l29Built() string {
-	rev, _ := exec.Command("git", "-C", root, "rev-parse", "--short", "HEAD").Output()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	rev, _ := exec.CommandContext(ctx, "git", "-C", root, "rev-parse", "--short", "HEAD").Output()
 	return fmt.Sprintf("port49d, port49 and port49-inventory built from `%s` (`make build`).", strings.TrimSpace(string(rev)))
 }
 
@@ -465,7 +542,14 @@ func l29RestoreStanding(t *testing.T, l *lab) {
 // than need is left before `go test -timeout`: that panic tears nothing down.
 func l29Budget(t *testing.T, need time.Duration) {
 	t.Helper()
-	if d, ok := t.Deadline(); ok && time.Until(d) < need {
+	d, ok := t.Deadline()
+	if !ok {
+		t.Logf("l29: no go test -timeout: no budget to check")
+		return
+	}
+	// Logged at every check, so a budget stop reads apart from a failure.
+	t.Logf("l29: %s left before go test's -timeout; the next step may take %s", time.Until(d).Round(time.Second), need)
+	if time.Until(d) < need {
 		t.Fatalf("%s left before go test's -timeout, and the next step may take %s: stopping here so the "+
 			"teardown runs; re-run with a longer -timeout", time.Until(d).Round(time.Second), need)
 	}
@@ -674,8 +758,8 @@ func hasReason(recs []map[string]any, reason string) bool {
 }
 
 // l29Probe is l28Live without the restart: probe logins until one reaches
-// port49d, or 150s.
-func (l *lab) l29Probe(t *testing.T) string {
+// port49d, or 150s. reached says which.
+func (l *lab) l29Probe(t *testing.T) (said string, reached bool) {
 	t.Helper()
 	t0 := time.Now()
 	for attempt := 1; ; attempt++ {
@@ -689,9 +773,9 @@ func (l *lab) l29Probe(t *testing.T) string {
 		took := time.Since(t0).Round(time.Second)
 		switch {
 		case redeemFor(recs, l4ProbeUser) != nil:
-			return fmt.Sprintf("probe attempt %d reached port49 (%s).", attempt, took)
+			return fmt.Sprintf("probe attempt %d reached port49 (%s).", attempt, took), true
 		case time.Since(t0) > 150*time.Second:
-			return fmt.Sprintf("**no probe login reached port49 in %s**.", took)
+			return fmt.Sprintf("**no probe login reached port49 in %s**.", took), false
 		}
 		time.Sleep(5 * time.Second)
 	}
@@ -737,6 +821,69 @@ func l29Mint(sock, device string) (said, tok string) {
 	return fmt.Sprintf("%d characters on stdout, not a token; stderr: %s", len(out), strings.TrimSpace(stderr.String())), ""
 }
 
+// l29Packet is one captured TCP packet between addr and port 49: the
+// device's port on it, whether the device sent it, and when.
+type l29Packet struct {
+	port       uint16
+	fromDevice bool
+	at         time.Time
+	fl         labpcap.Flow
+}
+
+// l29Packets reads the capture at path for every TCP packet between addr and
+// port 49, in capture order.
+func l29Packets(path, addr string) ([]l29Packet, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	f, err := labpcap.Parse(raw)
+	if err != nil {
+		return nil, err
+	}
+	nano := binary.LittleEndian.Uint32(raw[0:4]) == 0xa1b23c4d
+	var out []l29Packet
+	for _, r := range f.Records {
+		fl, ok := labpcap.FlowOf(f.Link, f.Bytes(r))
+		if !ok {
+			continue
+		}
+		p := l29Packet{fl: fl, fromDevice: fl.Src.String() == addr && fl.DstPort == 49}
+		switch {
+		case p.fromDevice:
+			p.port = fl.SrcPort
+		case fl.Dst.String() == addr && fl.SrcPort == 49:
+			p.port = fl.DstPort
+		default:
+			continue
+		}
+		sec := binary.LittleEndian.Uint32(f.Raw[r.HeaderOff : r.HeaderOff+4])
+		frac := binary.LittleEndian.Uint32(f.Raw[r.HeaderOff+4 : r.HeaderOff+8])
+		p.at = time.Unix(int64(sec), int64(frac)*1000)
+		if nano {
+			p.at = time.Unix(int64(sec), int64(frac))
+		}
+		out = append(out, p)
+	}
+	return out, nil
+}
+
+// l29DeviceSent counts the packets the device sent to port 49 at or after
+// since, in the capture at path.
+func l29DeviceSent(path, addr string, since time.Time) (int, error) {
+	pkts, err := l29Packets(path, addr)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, p := range pkts {
+		if p.fromDevice && !p.at.Before(since) {
+			n++
+		}
+	}
+	return n, nil
+}
+
 // l29Connections reads the capture at path for every TCP connection between
 // addr and port 49: when it was first seen, whether the device sent on it
 // before change, when the device first sent on it after, and when port49d
@@ -744,73 +891,44 @@ func l29Mint(sock, device string) (said, tok string) {
 // reset after it is one reset mid-connection; one opened after the change
 // and reset at its first packet is a first-packet miss. `tcpdump -i any`
 // sees a packet on each interface it crosses; each is read once here by
-// taking the first sighting.
-func l29Connections(path, addr string, change time.Time) string {
-	raw, err := os.ReadFile(path)
+// taking the first sighting. mid is how many connections read as reset
+// mid-connection: the phase's premise, from the capture's side.
+func l29Connections(path, addr string, change time.Time) (table string, mid int) {
+	pkts, err := l29Packets(path, addr)
 	if err != nil {
-		return fmt.Sprintf("the capture could not be read (%v).\n", err)
+		return fmt.Sprintf("the capture could not be read (%v).\n", err), 0
 	}
-	f, err := labpcap.Parse(raw)
-	if err != nil {
-		return fmt.Sprintf("the capture could not be parsed (%v).\n", err)
-	}
-	nano := binary.LittleEndian.Uint32(raw[0:4]) == 0xa1b23c4d
 	type conn struct {
-		port                          uint16
-		seen, before, after, rst, syn time.Time
-		sentBefore                    bool
+		seen, after, rst, syn time.Time
+		sentBefore            bool
 	}
 	conns := map[uint16]*conn{}
 	var order []uint16
-	for _, r := range f.Records {
-		fl, ok := labpcap.FlowOf(f.Link, f.Bytes(r))
-		if !ok {
-			continue
-		}
-		var port uint16
-		fromDevice := fl.Src.String() == addr && fl.DstPort == 49
-		switch {
-		case fromDevice:
-			port = fl.SrcPort
-		case fl.Dst.String() == addr && fl.SrcPort == 49:
-			port = fl.DstPort
-		default:
-			continue
-		}
-		sec := binary.LittleEndian.Uint32(f.Raw[r.HeaderOff : r.HeaderOff+4])
-		frac := binary.LittleEndian.Uint32(f.Raw[r.HeaderOff+4 : r.HeaderOff+8])
-		at := time.Unix(int64(sec), int64(frac)*1000)
-		if nano {
-			at = time.Unix(int64(sec), int64(frac))
-		}
-		c := conns[port]
+	for _, p := range pkts {
+		c := conns[p.port]
 		if c == nil {
-			c = &conn{port: port, seen: at}
-			conns[port] = c
-			order = append(order, port)
+			c = &conn{seen: p.at}
+			conns[p.port] = c
+			order = append(order, p.port)
 		}
 		switch {
-		case fromDevice && fl.SYN() && c.syn.IsZero():
-			c.syn = at
-		case fromDevice && fl.PayloadLen > 0 && at.Before(change):
+		case p.fromDevice && p.fl.SYN() && c.syn.IsZero():
+			c.syn = p.at
+		case p.fromDevice && p.fl.PayloadLen > 0 && p.at.Before(change):
 			c.sentBefore = true
-		case fromDevice && fl.PayloadLen > 0 && c.after.IsZero():
-			c.after = at
-		case !fromDevice && fl.Flags&0x04 != 0 && c.rst.IsZero():
-			c.rst = at
+		case p.fromDevice && p.fl.PayloadLen > 0 && c.after.IsZero():
+			c.after = p.at
+		case !p.fromDevice && p.fl.Flags&0x04 != 0 && c.rst.IsZero():
+			c.rst = p.at
 		}
 	}
 	if len(order) == 0 {
-		return "none: the capture holds no packet between the device and port 49.\n"
+		return "none: the capture holds no packet between the device and port 49.\n", 0
 	}
 	var b strings.Builder
 	b.WriteString("| device port | first seen | device sent before the change | device first sent after it | " +
 		"port49d reset it | reading |\n|---|---|---|---|---|---|\n")
 	for i, p := range order {
-		if i == 40 {
-			fmt.Fprintf(&b, "| … | %d more connection(s) not listed | | | | |\n", len(order)-40)
-			break
-		}
 		c := conns[p]
 		var reading string
 		switch {
@@ -820,6 +938,7 @@ func l29Connections(path, addr string, change time.Time) string {
 			reading = "reset before the change"
 		case c.sentBefore:
 			reading = "**reset mid-connection**: open across the change"
+			mid++
 		case !c.after.IsZero() && !c.after.After(c.rst):
 			reading = "reset at its first packet after the change"
 		case c.after.IsZero():
@@ -827,9 +946,111 @@ func l29Connections(path, addr string, change time.Time) string {
 		default:
 			reading = "reset"
 		}
-		fmt.Fprintf(&b, "| %d | %s | %v | %s | %s | %s |\n", p, l29Clock(c.seen), c.sentBefore, l29Clock(c.after),
-			l29Clock(c.rst), reading)
+		switch {
+		case i == 40:
+			fmt.Fprintf(&b, "| … | %d more connection(s) not listed | | | | |\n", len(order)-40)
+		case i < 40:
+			fmt.Fprintf(&b, "| %d | %s | %v | %s | %s | %s |\n", p, l29Clock(c.seen), c.sentBefore, l29Clock(c.after),
+				l29Clock(c.rst), reading)
+		}
 	}
-	fmt.Fprintf(&b, "\nThe change began at %s (host UTC).\n", l29Clock(change))
-	return b.String()
+	fmt.Fprintf(&b, "\nThe change began at %s (host UTC); %d connection(s) read as reset mid-connection.\n",
+		l29Clock(change), mid)
+	return b.String(), mid
+}
+
+// l28Reached reports whether l28Live's line says a probe reached port49d,
+// on its first attempt or a later one: only its failure text says none did.
+func l28Reached(live string) bool {
+	return !strings.Contains(live, "**no probe login reached port49 in")
+}
+
+// l29SingleSet reports whether singleConnection set the mode anywhere: its
+// line when nothing was set ends by saying the phases run on whatever
+// connections the device opens.
+func l29SingleSet(said string) bool {
+	return !strings.Contains(said, "The phases run on whatever connections the device opens")
+}
+
+// l29Withdrawn is the first record of a reset of a connection port49d had
+// admitted before the change: reason device_unknown, with diag.
+func l29Withdrawn(recs []map[string]any, diag string) map[string]any {
+	for _, r := range recs {
+		if str(r, "reason") == "device_unknown" && str(sub(r, "unvalidated"), "diagnosis") == diag {
+			return r
+		}
+	}
+	return nil
+}
+
+// l29Type is an unvalidated record's header type, by name.
+func l29Type(r map[string]any) string {
+	typ, _ := sub(r, "unvalidated")["type"].(float64)
+	if name, ok := l28Types[int(typ)]; ok {
+		return name
+	}
+	return fmt.Sprint(typ)
+}
+
+// l29WaitOutStrikes finds the unadmitted-source strikes the device earned
+// under bundle 1 (records since off), waits until the last one plus 6s —
+// past malformed_backoff_max's 5s default, and a hold is re-armed only by a
+// new strike — and says so for the note. A strike after reloadAt, when
+// bundle 2 admits the device, is a premise failure.
+func (l *lab) l29WaitOutStrikes(t *testing.T, off int64, reloadAt time.Time, fail func(string, ...any)) string {
+	t.Helper()
+	var last time.Time
+	n := 0
+	for _, r := range l.recordsSince(off) {
+		if str(sub(r, "unvalidated"), "source") != l.p.addr || str(sub(r, "unvalidated"), "diagnosis") != "unadmitted_source" {
+			continue
+		}
+		ts, ok := recTime(r)
+		if !ok {
+			continue
+		}
+		if !reloadAt.IsZero() && ts.After(reloadAt) {
+			fail("an unadmitted_source record from the device at %s, after bundle 2 admitted it", l29Clock(ts))
+			continue
+		}
+		n++
+		if ts.After(last) {
+			last = ts
+		}
+	}
+	if n == 0 {
+		return "The device earned no unadmitted-source strike before its introduction; nothing was waited out.\n\n"
+	}
+	until := last.Add(6 * time.Second)
+	if d := time.Until(until); d > 0 {
+		time.Sleep(d)
+	}
+	return fmt.Sprintf("The device earned %d unadmitted-source strike(s) before its introduction, the last at %s; "+
+		"the test waited until %s (the last plus 6s, past malformed_backoff_max's 5s) so no connection below is "+
+		"reset at Accept for it.\n\n", n, l29Clock(last), l29Clock(until))
+}
+
+// l29QuarantineProbe dials a probe login every 5s, for up to 150s, until one
+// connection from the device is recorded device_quarantined, and says what
+// it saw; asked is false when none was.
+func (l *lab) l29QuarantineProbe(t *testing.T) (said string, asked bool) {
+	t.Helper()
+	t0 := time.Now()
+	for attempt := 1; ; attempt++ {
+		off := l.mark()
+		if c, err := l.dial(l4ProbeUser, l4ProbePassword, 30*time.Second); err == nil {
+			c.Close()
+		}
+		recs := l.waitForRecords(off, 15*time.Second, func(rs []map[string]any) bool {
+			return hasReason(l29FromDevice(rs, l.p.addr), "device_quarantined")
+		})
+		took := time.Since(t0).Round(time.Second)
+		switch {
+		case hasReason(l29FromDevice(recs, l.p.addr), "device_quarantined"):
+			return fmt.Sprintf("probe attempt %d's connection was closed as `device_quarantined` (%s).", attempt, took), true
+		case time.Since(t0) > 150*time.Second:
+			return fmt.Sprintf("**no probe connection was recorded device_quarantined in %s**.", took), false
+		}
+		time.Sleep(5 * time.Second)
+	}
 }

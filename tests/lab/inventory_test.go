@@ -71,7 +71,10 @@ func (l *lab) startInventory(t *testing.T, source, policyPath string) *labInvent
 	}
 	// Its output names the files and the key_id, never the key; it is
 	// printed only on a failure.
-	if out, err := exec.Command(filepath.Join(root, "bin", "port49"), "inventory", "keygen", "--dir", keys).CombinedOutput(); err != nil {
+	kctx, kcancel := context.WithTimeout(context.Background(), 30*time.Second)
+	out, err := exec.CommandContext(kctx, filepath.Join(root, "bin", "port49"), "inventory", "keygen", "--dir", keys).CombinedOutput()
+	kcancel()
+	if err != nil {
 		t.Fatalf("port49 inventory keygen (run `make build` first): %v: %s", err, out)
 	}
 	li.pubFile = filepath.Join(keys, "signing.pub")
@@ -135,9 +138,7 @@ sync: [{name: lab_file, type: file, path: %s}]
 // 0755 directory, which the fence passes.
 func (li *labInventory) writeSource(t *testing.T, body string) {
 	t.Helper()
-	if err := os.WriteFile(li.source, []byte(body), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeAtomic(t, li.source, []byte(body), 0o644)
 }
 
 func (li *labInventory) writePolicy(t *testing.T, from string) {
@@ -146,8 +147,32 @@ func (li *labInventory) writePolicy(t *testing.T, from string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(li.policy, raw, 0o600); err != nil {
+	writeAtomic(t, li.policy, raw, 0o600)
+}
+
+// writeAtomic replaces path with body, mode, by a rename from a file beside
+// it, so a reader watching path — port49d's policy watch, the service's sync
+// — never reads it half written.
+func writeAtomic(t *testing.T, path string, body []byte, mode os.FileMode) {
+	t.Helper()
+	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
 		t.Fatal(err)
+	}
+	tmp := f.Name()
+	_, err = f.Write(body)
+	if err == nil {
+		err = f.Chmod(mode)
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(tmp, path)
+	}
+	if err != nil {
+		os.Remove(tmp)
+		t.Fatalf("writing %s: %v", path, err)
 	}
 }
 
