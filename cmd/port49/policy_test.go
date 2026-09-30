@@ -1170,3 +1170,19 @@ func TestPolicyDiffLoadsTheBundleAsPort49dDoes(t *testing.T) {
 		t.Fatalf("bundle %s source %s", p.Bundle, p.Source)
 	}
 }
+
+// policy diff says which side's inventory failed, and names the inventory
+// file, not a policy file, as the fault.
+func TestPolicyDiffNamesTheInventoryForAnInventoryFault(t *testing.T) {
+	pol, inv := policyFixture(t)
+	if err := os.WriteFile(inv, []byte("devices: [{name: a, platform: arista_eos, addresses: [10.0.0.1]},\n"+
+		"  {name: b, platform: arista_eos, addresses: [10.0.0.1]}]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	code := run([]string{"policy", "diff", "--old", pol, "--new", pol, "--inventory", inv}, &out, &errOut)
+	if code != 1 || !strings.HasPrefix(errOut.String(), "port49 policy diff: --old inventory "+inv+": ") ||
+		strings.Contains(errOut.String(), "policy: "+pol) {
+		t.Fatalf("exit %d: %s", code, errOut.String())
+	}
+}

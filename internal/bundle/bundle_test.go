@@ -2,6 +2,8 @@ package bundle
 
 import (
 	"net/netip"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -84,5 +86,33 @@ func TestParseNamesTheBundleAndKeepsThePolicysOwnHash(t *testing.T) {
 	dup := admission.Inventory{Devices: []admission.Device{dev("a", "10.0.0.1", nil), dev("b", "10.0.0.1", nil)}}
 	if _, err := Parse([]byte(pol), dup, policy.Env{}); err == nil || !strings.Contains(err.Error(), `"b"`) {
 		t.Fatalf("a collision: %v", err)
+	}
+}
+
+// An inventory fault names the inventory file, not the policy file: the
+// operator is sent to the file to fix (plan 6a pre-flight M5).
+func TestLoadNamesTheInventoryFileForItsFault(t *testing.T) {
+	dir := t.TempDir()
+	polPath, invPath := filepath.Join(dir, "policy.yaml"), filepath.Join(dir, "inventory.yaml")
+	if err := os.WriteFile(polPath, []byte(pol), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{
+		"a duplicate address": "devices: [{name: a, platform: arista_eos, addresses: [10.0.0.1]},\n" +
+			"  {name: b, platform: arista_eos, addresses: [10.0.0.1]}]\n",
+		"an unknown key": "devices: [{name: a, platform: arista_eos, addresses: [10.0.0.1], keyref: k}]\n",
+	} {
+		if err := os.WriteFile(invPath, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, err := Load(polPath, invPath, policy.Env{})
+		if err == nil || !strings.HasPrefix(err.Error(), "inventory_file "+invPath+": ") ||
+			strings.Contains(err.Error(), polPath) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if _, err := Load(polPath, filepath.Join(dir, "absent.yaml"), policy.Env{}); err == nil ||
+		!strings.HasPrefix(err.Error(), "inventory_file "+filepath.Join(dir, "absent.yaml")+": ") {
+		t.Errorf("a missing inventory: %v", err)
 	}
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -38,6 +39,16 @@ func (f *policyFiles) missing() bool { return f.policy == "" || f.inventory == "
 // so a bundle a tool names is the one port49d's records carry.
 func (f *policyFiles) load() (*policy.Policy, error) {
 	return bundle.Load(f.policy, f.inventory, policy.Env{})
+}
+
+// diffFault says which side of a diff failed to load, and which of its two
+// files is at fault: an inventory fault names the inventory, not the policy.
+func diffFault(side string, err error) string {
+	var inv *bundle.InventoryError
+	if errors.As(err, &inv) {
+		return fmt.Sprintf("%s inventory %s: %v", side, inv.Path, inv.Err)
+	}
+	return fmt.Sprintf("%s: %v", side, err)
 }
 
 // explainCmd resolves a hypothetical decision and prints exactly one reason
@@ -293,12 +304,12 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 	stderr = errOut
 	before, err := bundle.Load(*oldPath, *inventory, policy.Env{})
 	if err != nil {
-		fmt.Fprintln(stderr, "port49 policy diff: --old:", err)
+		fmt.Fprintln(stderr, "port49 policy diff:", diffFault("--old", err))
 		return 1
 	}
 	after, err := bundle.Load(*newPath, *inventory, policy.Env{})
 	if err != nil {
-		fmt.Fprintln(stderr, "port49 policy diff: --new:", err)
+		fmt.Fprintln(stderr, "port49 policy diff:", diffFault("--new", err))
 		return 1
 	}
 	out.learn(before, after)

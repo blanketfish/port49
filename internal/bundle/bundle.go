@@ -104,12 +104,27 @@ func Parse(policyRaw []byte, inv admission.Inventory, env policy.Env) (*policy.P
 	return policy.Parse(policyRaw, env)
 }
 
+// InventoryError is a fault in the inventory file — unreadable, malformed, or
+// refused by admission.Validate — named by the file's path, so the operator is
+// sent to the inventory, not the policy (plan 6a pre-flight M5).
+type InventoryError struct {
+	Path string
+	Err  error
+}
+
+func (e *InventoryError) Error() string { return "inventory_file " + e.Path + ": " + e.Err.Error() }
+func (e *InventoryError) Unwrap() error { return e.Err }
+
 // Load reads the two files and builds the bundle, as every offline tool does,
 // so the bundle it names is the one port49d's records carry for those files.
+// An inventory fault is an *InventoryError.
 func Load(policyPath, inventoryPath string, env policy.Env) (*policy.Policy, error) {
 	inv, err := admission.LoadFile(inventoryPath)
+	if err == nil {
+		err = admission.Validate(inv.Devices)
+	}
 	if err != nil {
-		return nil, err
+		return nil, &InventoryError{Path: inventoryPath, Err: err}
 	}
 	raw, err := os.ReadFile(policyPath)
 	if err != nil {
