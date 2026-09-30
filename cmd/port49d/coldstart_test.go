@@ -528,6 +528,45 @@ func TestAClockCatchUpDoesNotClearARealRefusal(t *testing.T) {
 	}
 }
 
+// The service's document refused for anything but its date — here another
+// key's signature — is a real refusal: a copy taken later on the clock
+// catching up does not clear the alarm.
+func TestAClockCatchUpDoesNotClearTheServicesRefusal(t *testing.T) {
+	svc, key, keys := coldRig(t)
+	svc.MirrorDir = ""
+	_, other, _ := ed25519.GenerateKey(rand.Reader)
+	published := time.Now().Truncate(time.Second)
+	mustPersist(t, svc.StateDir, sealedDocAt(t, key, 8, 1, published))
+	var clock atomic.Int64
+	clock.Store(published.Add(-time.Hour).UnixNano())
+	defer func(c func() time.Time) { coldNow = c }(coldNow)
+	coldNow = func() time.Time { return time.Unix(0, clock.Load()) }
+	var out syncBuffer
+	e := stderr
+	defer func() { stderr = e }()
+	stderr = &out
+	m := testMetrics()
+	done := make(chan string, 1)
+	go func() {
+		_, from, _ := coldStart(context.Background(), svc, keys,
+			&fakeService{bundles: [][]byte{sealedDocAt(t, other, 9, 1, published.Add(-2*time.Hour))}}, m, nil)
+		done <- from
+	}()
+	waitFor(t, &out, "its bundle is refused: ")
+	clock.Store(published.UnixNano())
+	select {
+	case from := <-done:
+		if from != "the persisted copy" {
+			t.Fatalf("from %q: %s", from, out.String())
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("still waiting: %s", out.String())
+	}
+	if testutil.ToFloat64(m.InventoryBundleRefused) != 1 {
+		t.Fatal("the clock catching up cleared the alarm for the service's document another key signed")
+	}
+}
+
 // Within the skew, a document dated a little ahead is taken, and its age is
 // 0, never negative.
 func TestTheSnapshotAgeIsNeverNegative(t *testing.T) {

@@ -273,6 +273,11 @@ func coldStart(ctx context.Context, svc *config.InventoryServiceConfig, keys []e
 				break
 			}
 			m.InventoryBundleRefused.Set(1)
+			// Refused for anything but its date is a real refusal: a copy
+			// the clock later reaches does not clear it.
+			if pa := (*publishedAhead)(nil); !errors.As(oerr, &pa) {
+				refusedOther = true
+			}
 			err = fmt.Errorf("its bundle is refused: %w", oerr)
 		}
 		if ctx.Err() != nil {
