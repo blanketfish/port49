@@ -48,6 +48,29 @@ func TestAFileSourceThatAssignsAKeyIsRefused(t *testing.T) {
 	}
 }
 
+// A name that cannot reach a line as it is goes by its position, and the fix
+// is at the source: a key group cannot match a position.
+func TestAPinOnAnUnprintableNameIsRefusedByPosition(t *testing.T) {
+	src := FileSource{SourceName: "lab_file", Path: fencedFile(t,
+		"devices:\n  - {name: leaf 01, platform: arista_eos, addresses: [10.0.0.1], key_ref: lab_key}\n")}
+	_, err := src.Fetch(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "device #0 pins key_ref") ||
+		strings.Contains(err.Error(), "leaf 01") || strings.Contains(err.Error(), "{match: {name: #0}") ||
+		!strings.Contains(err.Error(), "fix its name at the source") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+// A decode error prints a line and a category, never the file's text.
+func TestAFileSourceDecodeErrorDoesNotEchoTheFile(t *testing.T) {
+	src := FileSource{SourceName: "lab_file", Path: fencedFile(t,
+		"devices:\n  - {name: leaf-01, platform: arista_eos, attributes: p49_s3cr3t_t0ken}\n")}
+	_, err := src.Fetch(context.Background())
+	if err == nil || strings.Contains(err.Error(), "s3cr3t") || !strings.Contains(err.Error(), "line 2") {
+		t.Fatalf("got %v", err)
+	}
+}
+
 // The source file decides access within one pull: it is read behind the
 // write fence (Task 6).
 func TestAFileSourceOthersCouldWriteIsRefused(t *testing.T) {

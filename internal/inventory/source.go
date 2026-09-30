@@ -51,14 +51,20 @@ func (f FileSource) Fetch(context.Context) (admission.Inventory, error) {
 			"move the block to the policy file (spec §13, decision 30)", f.Path)
 	}
 	for i, d := range inv.Devices {
-		if d.KeyRef != "" {
-			// The fix names the device: a pin is a policy key group matching
-			// the name, tier 1 (Task 3a).
-			label := deviceLabel(i, d.Name)
-			return admission.Inventory{}, fmt.Errorf("%s: device %s pins key_ref; the inventory service never "+
-				"assigns keys: pin it in the policy file with {match: {name: %s}, key_ref: ...}, which is tier 1, "+
-				"and remove the pin here (spec §13, decision 30)", f.Path, label, label)
+		if d.KeyRef == "" {
+			continue
 		}
+		if !bundle.NameOK(d.Name) {
+			// A key group cannot match a position: the name is fixed first.
+			return admission.Inventory{}, fmt.Errorf("%s: device %s pins key_ref; the inventory service never "+
+				"assigns keys, and its name is not one a policy key group can match: fix its name at the source, "+
+				"then move the pin to the policy file (spec §13, decision 30)", f.Path, deviceLabel(i, d.Name))
+		}
+		// The fix names the device: a pin is a policy key group matching
+		// the name, tier 1 (Task 3a).
+		return admission.Inventory{}, fmt.Errorf("%s: device %s pins key_ref; the inventory service never "+
+			"assigns keys: pin it in the policy file with {match: {name: %s}, key_ref: ...}, which is tier 1, "+
+			"and remove the pin here (spec §13, decision 30)", f.Path, d.Name, d.Name)
 	}
 	return inv, nil
 }
