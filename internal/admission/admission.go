@@ -158,7 +158,7 @@ func Assign(d Device, groups []KeyGroup) (Assignment, error) {
 		}
 	}
 	if len(attrHits) > 1 {
-		return Assignment{}, fmt.Errorf("admission: device %q matches key groups %q and %q in the attribute tier", d.Name, attrHits[0].KeyRef, attrHits[1].KeyRef)
+		return Assignment{}, fmt.Errorf("admission: device %q matches key groups %s and %s in the attribute tier", d.Name, attrHits[0], attrHits[1])
 	}
 	if len(attrHits) == 1 {
 		return Assignment{KeyRef: attrHits[0].KeyRef, Tier: TierAttribute, Group: attrHits[0].String()}, nil // tier 2
@@ -178,7 +178,7 @@ func Assign(d Device, groups []KeyGroup) (Assignment, error) {
 			continue
 		}
 		if len(hits) > 1 && hits[0].CIDR.Bits() == hits[1].CIDR.Bits() {
-			return Assignment{}, fmt.Errorf("admission: device %q address %s matches key groups %q and %q at equal prefix length", d.Name, a, hits[0].KeyRef, hits[1].KeyRef)
+			return Assignment{}, fmt.Errorf("admission: device %q address %s matches key groups %s and %s at equal prefix length", d.Name, a, hits[0], hits[1])
 		}
 		winners = append(winners, hits[0])
 	}

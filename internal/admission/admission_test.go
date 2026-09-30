@@ -314,3 +314,16 @@ func TestResolveRefusesATieAndANoMatch(t *testing.T) {
 		t.Errorf("no match: %+v", r)
 	}
 }
+
+// Two attribute groups can share a key_ref, so a tie names each group by what
+// it matches, not only by the key_ref.
+func TestATieNamesTheGroupsByWhatTheyMatch(t *testing.T) {
+	groups := []KeyGroup{{Attributes: map[string]string{"site": "campus"}, KeyRef: "k"},
+		{Attributes: map[string]string{"role": "leaf"}, KeyRef: "k"}}
+	both := Device{Name: "both", Attributes: map[string]string{"site": "campus", "role": "leaf"}}
+	_, err := Assign(both, groups)
+	if err == nil || !strings.Contains(err.Error(), "attributes {site: campus} → k") ||
+		!strings.Contains(err.Error(), "attributes {role: leaf} → k") {
+		t.Fatalf("want both groups named, got %v", err)
+	}
+}
