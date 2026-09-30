@@ -67,27 +67,7 @@ func (sh *labShell) Close() { sh.c.Close() }
 // locally by class. Each place is set only where its own `?` offered it.
 func (l *lab) singleConnection(t *testing.T) string {
 	t.Helper()
-	type place struct {
-		enter, ask []string // configuration mode, then the context the keyword is asked in
-		lines      []string // what sets it, typed in configuration mode
-		said       string
-	}
-	places := []place{{enter: []string{"configure terminal"}, ask: []string{"tacacs-server host 172.100.100.1 ?"},
-		lines: []string{"tacacs-server host 172.100.100.1 single-connection key 0 " + labKeyDefault},
-		said:  "`tacacs-server host 172.100.100.1 single-connection`"}}
-	switch {
-	case strings.HasPrefix(l.p.name, "juniper_"):
-		places = nil
-		for _, ctx := range []string{"set system tacplus-server 172.100.100.1",
-			"set system accounting destination tacplus server 172.100.100.1"} {
-			places = append(places, place{enter: []string{"configure"}, ask: []string{ctx + " ?"},
-				lines: []string{ctx + " single-connection"}, said: "`" + ctx + " single-connection`"})
-		}
-	case l.p.name == "cisco_iosxe":
-		places = []place{{enter: []string{"configure terminal", "tacacs server port49-host"}, ask: []string{"?"},
-			lines: []string{"tacacs server port49-host", "single-connection"},
-			said:  "`single-connection` under `tacacs server port49-host`"}}
-	}
+	places := singleConnectionPlaces(l.p.name)
 	var set, said []string
 	for _, p := range places {
 		ok, help := l.offered(t, p.enter, p.ask, "single-connection")
@@ -109,6 +89,43 @@ func (l *lab) singleConnection(t *testing.T) string {
 		l.carriedConfigure(t, set...)
 	}
 	return strings.Join(said, "; ")
+}
+
+// scPlace is one place singleConnection asks for the mode and sets it.
+type scPlace struct {
+	enter, ask []string // configuration mode, then the context the keyword is asked in
+	lines      []string // what sets it, typed in configuration mode
+	said       string
+}
+
+// singleConnectionPlaces is where platform is asked for single-connection and
+// the lines that set it. EOS takes the keyword before `key` (its run on
+// 2026-09-30 set it so). NX-OS takes nothing after `single-connection` and
+// takes it after `key 0 <key>`: its `?` after `single-connection` offers only
+// <CR>, and after `key 0 <key>` offers single-connection
+// (tests/lab/results/single-connection-syntax-cisco_nxos.md).
+func singleConnectionPlaces(platform string) []scPlace {
+	switch {
+	case strings.HasPrefix(platform, "juniper_"):
+		var places []scPlace
+		for _, ctx := range []string{"set system tacplus-server 172.100.100.1",
+			"set system accounting destination tacplus server 172.100.100.1"} {
+			places = append(places, scPlace{enter: []string{"configure"}, ask: []string{ctx + " ?"},
+				lines: []string{ctx + " single-connection"}, said: "`" + ctx + " single-connection`"})
+		}
+		return places
+	case platform == "cisco_iosxe":
+		return []scPlace{{enter: []string{"configure terminal", "tacacs server port49-host"}, ask: []string{"?"},
+			lines: []string{"tacacs server port49-host", "single-connection"},
+			said:  "`single-connection` under `tacacs server port49-host`"}}
+	case platform == "cisco_nxos":
+		return []scPlace{{enter: []string{"configure terminal"}, ask: []string{"tacacs-server host 172.100.100.1 ?"},
+			lines: []string{"tacacs-server host 172.100.100.1 key 0 " + labKeyDefault + " single-connection"},
+			said:  "`tacacs-server host 172.100.100.1 key 0 <key> single-connection`"}}
+	}
+	return []scPlace{{enter: []string{"configure terminal"}, ask: []string{"tacacs-server host 172.100.100.1 ?"},
+		lines: []string{"tacacs-server host 172.100.100.1 single-connection key 0 " + labKeyDefault},
+		said:  "`tacacs-server host 172.100.100.1 single-connection`"}}
 }
 
 // offered asks the device, as break-glass in configuration mode, for the

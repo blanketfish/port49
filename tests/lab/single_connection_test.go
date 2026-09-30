@@ -44,8 +44,9 @@ func TestSingleConnectionSyntax(t *testing.T) {
 			l.p.name, time.Now().UTC().Format("2006-01-02"), l.p.name, l.p.node, l.p.addr, l.p.version, l.p.image)
 		for _, ask := range singleConnectionAsks {
 			typed := strings.ReplaceAll(ask, "<key>", labKeyDefault)
-			ok, help := l.offered(t, []string{"configure terminal"}, []string{typed}, "single-connection")
+			_, help := l.offered(t, []string{"configure terminal"}, []string{typed}, "single-connection")
 			help = strings.TrimSpace(strings.ReplaceAll(help, "\r", "")) // offered has replaced the key with <key>
+			ok := helpOffers(help, "single-connection")
 			fmt.Fprintf(&b, "### `%s`\n\nOffers `single-connection`: %v. The device said:\n\n```\n%s\n```\n\n", ask, ok, help)
 			t.Logf("single-connection: `%s`: offers single-connection %v", ask, ok)
 		}
@@ -55,4 +56,17 @@ func TestSingleConnectionSyntax(t *testing.T) {
 		}
 		t.Logf("wrote %s", path)
 	})
+}
+
+// helpOffers reports whether help, a `?` answer, lists keyword among its
+// choices: a line of the list, not the echo of the half line typed, which may
+// hold the keyword itself.
+func helpOffers(help, keyword string) bool {
+	lines := strings.Split(help, "\n")
+	for _, ln := range lines[min(1, len(lines)):] {
+		if f := strings.Fields(ln); len(f) > 0 && f[0] == keyword {
+			return true
+		}
+	}
+	return false
 }
