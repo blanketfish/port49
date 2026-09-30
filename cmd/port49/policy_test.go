@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -1291,6 +1292,34 @@ func TestPolicyDiffFailsOnADeviceTheNewPolicyRefuses(t *testing.T) {
 	var out, errOut bytes.Buffer
 	code := run([]string{"policy", "diff", "--old", old, "--new", typo, "--inventory", inv}, &out, &errOut)
 	if code != 1 || !strings.Contains(out.String(), "REFUSED: admission: leaf-01 (arista_eos) is newly refused") {
+		t.Fatalf("exit %d:\n%s%s", code, out.String(), errOut.String())
+	}
+}
+
+// A key_groups edit that refuses a fleet names the first 20 devices and
+// counts the rest, so the cause is not buried; the exit still fails (Task 17
+// review).
+func TestPolicyDiffCapsTheNewlyRefusedLines(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	var inv strings.Builder
+	inv.WriteString("devices:\n")
+	for i := range 25 {
+		fmt.Fprintf(&inv, "  - {name: leaf-%02d, platform: arista_eos, addresses: [10.20.0.%d]}\n", i, i+1)
+	}
+	old := write("old.yaml", keysPolicy)
+	typo := write("new.yaml", strings.Replace(keysPolicy, "cidr: 10.0.0.0/8", "cidr: 11.0.0.0/8", 1))
+	var out, errOut bytes.Buffer
+	code := run([]string{"policy", "diff", "--old", old, "--new", typo, "--inventory", write("inventory.yaml",
+		inv.String())}, &out, &errOut)
+	if code != 1 || strings.Count(out.String(), "is newly refused: ") != 20 ||
+		!strings.Contains(out.String(), "REFUSED: admission: and 5 more devices newly refused\n") {
 		t.Fatalf("exit %d:\n%s%s", code, out.String(), errOut.String())
 	}
 }

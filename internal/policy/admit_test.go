@@ -108,6 +108,10 @@ func TestKeyGroupLoadErrors(t *testing.T) {
 			"tie for every device"},
 		{"a key_ref that is no name", "  - {match: {cidr: 10.0.0.0/8}, key_ref: Sx9qT4vLm2pR7zK0wYh5}\n",
 			"key_groups[0]: key_ref is not a valid key_ref name"},
+		// netip quotes the value it could not parse; the error names the
+		// position instead (Task 18 review m1).
+		{"a cidr that is no prefix", "  - {match: {cidr: Sx9qT4vLm2pR7zK0wYh5}, key_ref: k}\n",
+			"match.cidr is not a CIDR prefix"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			_, err := Parse([]byte(good+"key_groups:\n"+c.groups), env())
