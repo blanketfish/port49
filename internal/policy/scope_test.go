@@ -250,3 +250,26 @@ func TestAScopePinsDevicesByName(t *testing.T) {
 		t.Fatalf("a comparison on name: %v", err)
 	}
 }
+
+// A pin on a name the inventory lacks selects nothing. CI reports it as a
+// warning, not a failure: a device may be pinned before it is onboarded
+// (plan 6a, Task 5 carry), but a typo in a deny-bearing pin is a mitigation
+// that never applies, and review must see it.
+func TestLintReportsAPinTheInventoryLacks(t *testing.T) {
+	body := strings.Replace(good, "  - {name: all_devices, match: {}}\n",
+		"  - {name: all_devices, match: {}}\n  - {name: pinned, match: {name: [leaf-01, leaf-0l]}}\n", 1)
+	p, err := Parse([]byte(body), env())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, f := range p.Lint(time.Now()) {
+		if f.Kind == FindingPinAbsent {
+			got = append(got, f.Message)
+		}
+	}
+	if len(got) != 1 || !strings.Contains(got[0], `scope "pinned" pins "leaf-0l", which is not in the inventory`) ||
+		!strings.Contains(got[0], "a warning, not a failure") {
+		t.Fatalf("%q", got)
+	}
+}
