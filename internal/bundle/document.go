@@ -131,9 +131,17 @@ func Open(raw []byte, keys []ed25519.PublicKey) (Document, admission.Inventory, 
 		return Document{}, admission.Inventory{}, errors.New("bundle: the document's bundle, policy_sha256, " +
 			"platform_set or sequence is not of the form port49 writes")
 	}
-	for name := range d.Sources {
+	for name, devices := range d.Sources {
 		if !NameOK(name) {
 			return Document{}, admission.Inventory{}, errors.New("bundle: the document names a source that is not a name")
+		}
+		// The service's next sync bounds against these, and its lines name
+		// them: DeviceProblem's name rule, as for the inventory.
+		for _, dev := range devices {
+			if !NameOK(dev) {
+				return Document{}, admission.Inventory{}, errors.New("bundle: the document lists a device under a " +
+					"source whose name is not 1 to 255 bytes of printable ASCII without a space")
+			}
 		}
 	}
 	inv, err := inventoryOf(d.Inventory)

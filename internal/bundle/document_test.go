@@ -131,6 +131,22 @@ func TestADocumentWithAnUnusableNameIsRefusedWithoutEchoingIt(t *testing.T) {
 	}
 }
 
+// A device name a source lists is held to the inventory's name rule, and not
+// printed.
+func TestADocumentWithAnUnusableSourceDeviceNameIsRefusedWithoutEchoingIt(t *testing.T) {
+	pub, key, _ := ed25519.GenerateKey(rand.Reader)
+	for _, bad := range []string{"leaf\nINJECTED", "leaf INJECTED", "leaf\x1b[2JINJECTED", ""} {
+		raw, err := Seal(NewDocument(1, time.Now(), []byte(docPolicy), "1.1.0", docInventory(),
+			map[string][]string{"lab_file": {"leaf-01", bad}}), key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := Open(raw, []ed25519.PublicKey{pub}); err == nil || strings.Contains(err.Error(), "INJECTED") {
+			t.Errorf("%q: %v", bad, err)
+		}
+	}
+}
+
 // A field a line prints is checked for shape (pre-flight minor 9), and an
 // unknown signer is told apart from a bad signature (minor 4).
 func TestAPrintedFieldOfTheWrongShapeIsRefused(t *testing.T) {
