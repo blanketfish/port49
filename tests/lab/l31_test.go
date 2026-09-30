@@ -3,6 +3,7 @@
 package lab
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -30,9 +31,13 @@ const l31Reading = "**Reading the records and the captures.** port49d records th
 	"count reads the flag byte of each TACACS+ header the device sent (0x04 is single-connection on), and no " +
 	"body byte, on the connections the device opened after the change. The bar holds each declined phase's " +
 	"break-glass to the rekeyed control's time plus 1.5 s, and never 5 s or more: no AAA exchange waited out " +
-	"the device's timeout. IOS-XE retries about 100–200 ms after a reset, against a first window of 100 ms, " +
-	"so one or two of its first retries may land after the window and be recorded before the doubling catches " +
-	"up. The control has the same dynamics. The stopped control is measured before this test sets " +
+	"the device's timeout. The refusals at Accept the verdict rests on are counted inside the break-glass " +
+	"session's own interval, since the token login before it retries too; a phase in which the device opened no " +
+	"connection to port 49 during break-glass is not a measurement, because the device went to local without " +
+	"asking. A break-glass whose commands the device answered with its refusal text did not run them. IOS-XE " +
+	"retries about 100–200 ms after a reset, against a first window of 100 ms, so one or two of its first " +
+	"retries may land after the window and be recorded before the doubling catches up. The control has the same " +
+	"dynamics. The stopped control is measured before this test sets " +
 	"single-connection, as in L29. With nothing listening, the SYN itself is refused, so the flag plays no " +
 	"part there.\n\n"
 
@@ -46,13 +51,16 @@ type l31Phase struct {
 }
 
 // l31Result is one phase's section of the note and its break-glass time.
-// measured is false when the phase stopped at a premise before its capture
-// was read, so atAccept means nothing.
+// timed is true once the logins ran, so bg and bgOK mean something. measured
+// is true only when, beyond that, the capture was read and every premise of
+// the phase held; otherwise atAccept means nothing and the phase is not a
+// measurement. atAccept counts the refusals at Accept inside the break-glass
+// session's interval, atAcceptPhase those since the change.
 type l31Result struct {
-	section, bgCell, tally string
-	bg                     time.Duration
-	bgOK, measured         bool
-	atAccept               int
+	section, bgCell, tally  string
+	bg                      time.Duration
+	timed, bgOK, measured   bool
+	atAccept, atAcceptPhase int
 }
 
 // l31Phases: the rekeyed control first, since the declined phases are held to
@@ -108,11 +116,15 @@ func l31Bar(control time.Duration) time.Duration {
 // the images L31 measured slow, and on vEOS as a no-regression check.
 //
 // Every premise is asserted. If single-connection was not set, a change was
-// not applied, the path under test recorded nothing, a Cisco device's packets
-// lacked the single-connect flag, or the control was itself slow, the run
-// fails and its note opens with the NOT A MEASUREMENT banner. A phase whose
-// break-glass did not log in, or went over the bar, contradicts the fix: the
-// run fails, and the note says the claim did not hold.
+// not applied, the path under test recorded nothing, break-glass never asked
+// port49d (no SYN from the device during it), a Cisco device's packets lacked
+// the single-connect flag, the capture could not be read, or the control was
+// itself slow, the run fails and its note opens with the NOT A MEASUREMENT
+// banner. Such a phase, or any phase without a timed control, is written as
+// not a measurement, never as a contradiction. A measured phase whose
+// break-glass did not log in and run its commands (a refusal is not running
+// them), or went over the bar, contradicts the fix: the run fails, and the
+// note says the claim did not hold.
 func TestL31BreakGlass(t *testing.T) {
 	eachPlatform(t, func(t *testing.T, l *lab) {
 		cisco := l.p.name == "cisco_iosxe" || l.p.name == "cisco_nxos"
@@ -149,19 +161,27 @@ func TestL31BreakGlass(t *testing.T) {
 		l29RestoreStanding(t, l)
 		obs.WriteString(l31Reading)
 		summary := "| phase | break-glass login plus three `show version` | bar | connections refused at Accept " +
-			"after the change | records from the device |\n|---|---|---|---|---|\n"
+			"during break-glass | refused at Accept since the change | records from the device |\n" +
+			"|---|---|---|---|---|---|\n"
 		var control time.Duration
+		controlOK := false
 		for _, ph := range l31Phases(src) {
 			r := l.l31Run(t, li, src, policy, ph, cisco, pr, fail)
 			obs.WriteString(r.section)
 			bar := "(the control)"
 			switch {
 			case ph.name == "rekeyed":
-				control = r.bg
-				if !r.bgOK || r.bg >= 5*time.Second {
-					fail("the rekeyed control's break-glass did not log in under 5 s (%s): there is no fast path in this "+
-						"run to hold the declined phases to", r.bgCell)
+				switch {
+				case r.timed && (!r.bgOK || r.bg >= 5*time.Second):
+					fail("the rekeyed control's break-glass did not log in and run its commands under 5 s (%s): there "+
+						"is no fast path in this run to hold the declined phases to", r.bgCell)
+				case r.measured:
+					control, controlOK = r.bg, true
 				}
+			case !r.measured:
+				bar = "not a measurement"
+			case !controlOK:
+				bar = "no control"
 			case !r.bgOK:
 				contradict("%s: break-glass did not log in and run its commands (%s)", ph.name, r.bgCell)
 			default:
@@ -177,18 +197,25 @@ func TestL31BreakGlass(t *testing.T) {
 			// fast phase would pass for some other reason nobody observed.
 			if cisco && r.measured && r.atAccept == 0 {
 				if ph.name == "rekeyed" {
-					fail("rekeyed: no connection from the device was refused at Accept after the change: the control's " +
-						"fast path did not run")
+					fail("rekeyed: no connection from the device was refused at Accept during break-glass: the " +
+						"control's fast path did not run")
 				} else {
-					contradict("%s: no connection from the device was refused at Accept after the change (spec §15 L31)",
+					contradict("%s: no connection from the device was refused at Accept during break-glass (spec §15 L31)",
 						ph.name)
 				}
 			}
-			summary += fmt.Sprintf("| %s | %s | %s | %d | %s |\n", ph.name, r.bgCell, bar, r.atAccept, r.tally)
+			summary += fmt.Sprintf("| %s | %s | %s | %d | %d | %s |\n", ph.name, r.bgCell, bar, r.atAccept,
+				r.atAcceptPhase, r.tally)
 		}
 		obs.WriteString("### Summary\n\n" + summary + "\n")
-		if len(contradicted) > 0 {
+		switch {
+		case len(contradicted) > 0 && len(failed) > 0:
+			obs.WriteString("**Not a measurement, so these are not findings against the claim.** The steps also " +
+				"showed:\n\n")
+		case len(contradicted) > 0:
 			obs.WriteString("**The claim did not hold here.** The steps ran, and:\n\n")
+		}
+		if len(contradicted) > 0 {
 			for _, m := range contradicted {
 				obs.WriteString("- " + m + "\n")
 			}
@@ -246,43 +273,56 @@ func (l *lab) l31Run(t *testing.T, li *labInventory, src, policy string, ph l31P
 	}
 
 	pr.at(t, "phase %s: the logins", ph.name)
-	rows, bg, bgOK := l.timeLogins(t)
-	r.bg, r.bgOK = bg, bgOK
-	r.bgCell = "not observed in " + bg.Round(10*time.Millisecond).String()
+	rows, bgFrom, bg, bgOK := l.timeLogins(t)
+	bgUntil := bgFrom.Add(bg)
+	r.timed, r.bg, r.bgOK = true, bg, bgOK
+	r.bgCell = "did not log in and run them, in " + bg.Round(10*time.Millisecond).String() + " (the phase's table says why)"
 	if bgOK {
 		r.bgCell = "logged in and ran them in " + bg.Round(10*time.Millisecond).String()
+	}
+	premised := true
+	failp := func(format string, args ...any) {
+		premised = false
+		fail(format, args...)
 	}
 	recs := l29FromDevice(l.drainRecords(off, 10*time.Second), l.p.addr)
 	r.tally = l29Tally(recs)
 	if !l31Recorded(recs, ph.diag) {
-		fail("%s: no record from the device with diagnosis %s after the change: the path under test did not run",
+		failp("%s: no record from the device with diagnosis %s after the change: the path under test did not run",
 			ph.name, ph.diag)
 	}
 
-	// captureLine probes the live capture to flush it; stop() flushes again
-	// and ends tcpdump. Only then is the file read, so no count comes from a
-	// half-written tail.
-	capLine := l.captureLine(t)
+	// stop() flushes the capture and ends tcpdump. Only then is the file read
+	// and its count quoted, so no count comes from a half-written tail and
+	// nothing that arrived after a flush is left out.
 	stop()
+	capLine := l.stoppedCaptureLine(t)
 	conns, _, _ := l29Connections(l.capAbs, l.p.addr, applied)
-	if r.atAccept, err = l31RefusedAtAccept(l.capAbs, l.p.addr, applied); err != nil {
-		fail("%s: the capture could not be read: %v", ph.name, err)
-	}
-	set, unset, err := l31SingleConnect(l.capAbs, l.p.addr, applied)
-	switch {
+	asked, errAsked := l31Opened(l.capAbs, l.p.addr, bgFrom, bgUntil)
+	atAccept, errWindow := l31RefusedAtAccept(l.capAbs, l.p.addr, bgFrom, bgUntil)
+	atPhase, errPhase := l31RefusedAtAccept(l.capAbs, l.p.addr, applied, time.Time{})
+	set, unset, errFlag := l31SingleConnect(l.capAbs, l.p.addr, applied)
+	r.atAccept, r.atAcceptPhase = atAccept, atPhase
+	switch err := errors.Join(errAsked, errWindow, errPhase, errFlag); {
 	case err != nil:
-		fail("%s: the capture's TACACS+ headers could not be read: %v", ph.name, err)
+		failp("%s: the capture could not be read: %v", ph.name, err)
+	case asked == 0:
+		failp("%s: break-glass never asked port49d: the device opened no connection to port 49 between %s and %s "+
+			"(host UTC), so it went to local without trying, and this phase measured nothing", ph.name,
+			l29Clock(bgFrom), l29Clock(bgUntil))
 	case cisco && set == 0:
-		fail("%s: no TACACS+ packet the device sent after the change carried the single-connect flag (0x04; %d "+
+		failp("%s: no TACACS+ packet the device sent after the change carried the single-connect flag (0x04; %d "+
 			"without it): this phase did not measure L31's variable", ph.name, unset)
 	}
-	r.measured = true
+	r.measured = premised
 	fmt.Fprintf(&b, "port49d said the change was in force by %s (host UTC).\n\n| step | outcome |\n|---|---|\n%s\n",
 		l29Clock(applied), rows)
+	fmt.Fprintf(&b, "Break-glass ran from %s to %s (host UTC); the device opened %d connection(s) to port 49 in that "+
+		"interval, and port49d refused %d of them at Accept (%d since the change).\n\n", l29Clock(bgFrom),
+		l29Clock(bgUntil), asked, atAccept, atPhase)
 	fmt.Fprintf(&b, "TACACS+ headers the device sent after the change: single-connect flag (0x04) set on %d, clear on "+
-		"%d.\n\nRecords from the device since the change: %s\n\nConnections from the device refused at Accept since "+
-		"the change: %d.\n\nConnections between the device and port 49 in this phase's capture:\n\n%s\nCapture: %s\n\n",
-		set, unset, r.tally, r.atAccept, conns, capLine)
+		"%d.\n\nRecords from the device since the change: %s\n\nConnections between the device and port 49 in this "+
+		"phase's capture:\n\n%s\nCapture: %s\n\n", set, unset, r.tally, conns, capLine)
 	r.section = b.String()
 	return r
 }
@@ -297,12 +337,38 @@ func l31Recorded(recs []map[string]any, diag string) bool {
 	return false
 }
 
-// l31RefusedAtAccept counts the connections from addr to port 49 opened at or
-// after since that port49d reset before the device sent anything on them,
-// which is what a refusal at Accept looks like. It reads TCP flags and
-// payload lengths only. `tcpdump -i any` sees each packet more than once,
-// which the per-port flags absorb.
-func l31RefusedAtAccept(path, addr string, since time.Time) (int, error) {
+// l31Within reports whether at falls in [since, until]; a zero until is no
+// upper bound.
+func l31Within(at, since, until time.Time) bool {
+	return !at.Before(since) && (until.IsZero() || !at.After(until))
+}
+
+// l31Opened counts the connections from addr to port 49 whose SYN falls in
+// [since, until]: whether the device asked port49d at all in that interval.
+// A connection is known by the device's port, and `tcpdump -i any`'s copies
+// of one SYN count once.
+func l31Opened(path, addr string, since, until time.Time) (int, error) {
+	pkts, err := l29Packets(path, addr)
+	if err != nil {
+		return 0, err
+	}
+	opened := map[uint16]bool{}
+	for _, p := range pkts {
+		if p.fromDevice && p.fl.SYN() && l31Within(p.at, since, until) {
+			opened[p.port] = true
+		}
+	}
+	return len(opened), nil
+}
+
+// l31RefusedAtAccept counts the connections from addr to port 49 opened in
+// [since, until] (a zero until is no upper bound) that port49d reset before
+// the device sent anything on them, which is what a refusal at Accept looks
+// like. Only what the device sent and port49d reset at or after since is
+// read, so an earlier connection on a reused port does not mask one. It
+// reads TCP flags and payload lengths only. `tcpdump -i any` sees each packet
+// more than once, which the per-port flags absorb.
+func l31RefusedAtAccept(path, addr string, since, until time.Time) (int, error) {
 	pkts, err := l29Packets(path, addr)
 	if err != nil {
 		return 0, err
@@ -310,14 +376,17 @@ func l31RefusedAtAccept(path, addr string, since time.Time) (int, error) {
 	type conn struct{ syn, sent, rst bool }
 	conns := map[uint16]*conn{}
 	for _, p := range pkts {
+		if p.at.Before(since) {
+			continue
+		}
 		c := conns[p.port]
 		if c == nil {
 			c = &conn{}
 			conns[p.port] = c
 		}
 		switch {
-		case p.fromDevice && p.fl.SYN() && !p.at.Before(since):
-			c.syn = true
+		case p.fromDevice && p.fl.SYN():
+			c.syn = c.syn || l31Within(p.at, since, until)
 		case p.fromDevice && p.fl.PayloadLen > 0:
 			c.sent = true
 		case !p.fromDevice && p.fl.Flags&0x04 != 0:

@@ -1868,6 +1868,14 @@ func summarize(recs []map[string]any) string {
 func (l *lab) captureLine(t *testing.T) string {
 	t.Helper()
 	l.flushCapture(t)
+	return l.stoppedCaptureLine(t)
+}
+
+// stoppedCaptureLine is captureLine for a capture already stopped: nothing is
+// flushed, and the count is the finished file's, so nothing that arrived
+// between a flush and the stop is left out of it (L31).
+func (l *lab) stoppedCaptureLine(t *testing.T) string {
+	t.Helper()
 	line := fmt.Sprintf("`%s`", l.evidencePath)
 	if total, device, err := pcapCounts(l.capAbs); err != nil {
 		line += fmt.Sprintf(" — **could not be read back** (%v), so this note quotes the decision log only.", err)
