@@ -312,7 +312,9 @@ The owner's rule is to trace a mechanism on a bad day first.
   inventory.service.verify_key_files and send SIGHUP`, with `port49_inventory_bundle_refused` at 1.
   The documented order: add the new public key to every port49d's `verify_key_files` and `SIGHUP`;
   add the old public key to the service's own `verify_key_files`; switch its `signing_key_file` and
-  restart it (it continues at bundle N+1, its bound intact); later drop the old key from both. A
+  restart it: it re-seals the bundle in force under the new key as bundle N+1, the fleet unchanged,
+  its bound intact, and says so (final review I1); wait until every port49d's
+  `port49_inventory_bundle_sequence` shows N+1; only then drop the old key from both. A
   document whose signature does not verify under a key port49d holds says instead `…; it was not
   signed by any key port49d holds for the service: investigate` — tampering, not a rotation.
 - **A policy change reaches the service before port49d:** `port49d: inventory: the service built
@@ -9433,8 +9435,11 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
   is written 0640: give port49d the mount's group.
 - **Rotating the service's signing key:** add the new public key to every port49d's
   `verify_key_files` and send `SIGHUP`; add the old public key to the service's own
-  `verify_key_files`; switch its `signing_key_file` and restart it, and it continues at the next
-  sequence with its per-source bound intact; then drop the old key from both. A bundle signed by a key
+  `verify_key_files`; switch its `signing_key_file` and restart it: it re-seals the bundle in force
+  under the new key as the next sequence, the fleet unchanged, with its per-source bound intact, and
+  says `re-sealed as bundle N+1`; wait until every port49d's `port49_inventory_bundle_sequence` shows
+  N+1; only then drop the old key from both. Dropped sooner, a port49d that restarts holds only a copy
+  the old key signed, opens none, and serves no TACACS+ until the service answers. A bundle signed by a key
   port49d does not hold is refused and alarmed (`port49_inventory_bundle_refused`) with the rotation
   hint; one whose signature does not verify says to investigate. Rotating the service's TLS CA needs
   no signal: port49d reads `ca_file` at each connection.

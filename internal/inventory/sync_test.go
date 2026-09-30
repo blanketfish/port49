@@ -222,7 +222,8 @@ func TestASigningKeyRotationKeepsTheSequenceAndTheBound(t *testing.T) {
 	_, newKey, _ := ed25519.GenerateKey(rand.Reader)
 	rotated := rig.syncer(newKey)
 	rotated.VerifyKeys = []ed25519.PublicKey{rig.pub}
-	if err := rotated.Restore(); err != nil || rotated.Current() == nil || rotated.Current().Doc.Sequence != 1 {
+	// Restore re-seals bundle 1 under the new key as bundle 2 (final review I1).
+	if err := rotated.Restore(); err != nil || rotated.Current() == nil || rotated.Current().Doc.Sequence != 2 {
 		t.Fatalf("%v %v", rotated.Current(), err)
 	}
 	rig.src.inv = devices(5)
@@ -230,8 +231,75 @@ func TestASigningKeyRotationKeepsTheSequenceAndTheBound(t *testing.T) {
 		t.Fatalf("the bound did not survive the rotation: %+v", res)
 	}
 	rig.src.inv = devices(11)
-	if res := rotated.Sync(context.Background(), "startup"); res.Outcome != "published" || res.Sequence != 2 {
+	if res := rotated.Sync(context.Background(), "startup"); res.Outcome != "published" || res.Sequence != 3 {
 		t.Fatalf("%+v", res)
+	}
+}
+
+// Final review I1: after a rotation the bundle published is re-sealed under
+// the new key as the next sequence, the fleet unchanged — at Restore, or at
+// the next sync when Restore could not keep it — so once every port49d holds
+// it the old key can leave verify_key_files, and a service restarted without
+// it starts.
+func TestARotatedKeyReSealsTheBundleOnAStableFleet(t *testing.T) {
+	rig := newSyncRig(t, syncPolicy, devices(3))
+	first := rig.sync(t)
+	_, newKey, _ := ed25519.GenerateKey(rand.Reader)
+	newPub := []ed25519.PublicKey{newKey.Public().(ed25519.PublicKey)}
+	rotated := rig.syncer(newKey)
+	rotated.VerifyKeys = []ed25519.PublicKey{rig.pub}
+	if err := rotated.Restore(); err != nil {
+		t.Fatal(err)
+	}
+	cur := rotated.Current()
+	if cur == nil || cur.Doc.Sequence != 2 || cur.Doc.Bundle != first.Bundle || !cur.Doc.PublishedAt.After(time.Time{}) {
+		t.Fatalf("not re-sealed as bundle 2 of the same fleet: %+v", cur)
+	}
+	for what, get := range map[string]func([]ed25519.PublicKey) (*Published, error){"state_dir": rotated.State.Latest,
+		"mirror": rotated.State.Mirror} {
+		if p, err := get(newPub); err != nil || p.Doc.Sequence != 2 {
+			t.Fatalf("%s does not hold bundle 2 under the new key alone: %v %v", what, p, err)
+		}
+	}
+	if !strings.Contains(rig.out.String(), "port49-inventory: bundle 1 is signed by another key than the signing key "+
+		bundle.KeyIDOf(newPub[0])+"; re-sealed as bundle 2") {
+		t.Fatalf("not said: %s", rig.out)
+	}
+	if res := rotated.Sync(context.Background(), "schedule"); res.Outcome != "unchanged" || res.Sequence != 2 {
+		t.Fatalf("a second pass re-sealed again: %+v", res)
+	}
+	// The old key dropped: the service restarts on what it now holds.
+	dropped := rig.syncer(newKey)
+	if err := dropped.Restore(); err != nil || dropped.Current().Doc.Sequence != 2 {
+		t.Fatalf("restart without the old key: %v %v", dropped.Current(), err)
+	}
+}
+
+// Final review I1: a Restore that could not keep the re-sealed bundle serves
+// the old one, and the next sync re-seals it, the fleet unchanged.
+func TestARotatedKeyReSealsAtTheNextSyncWhenRestoreCouldNot(t *testing.T) {
+	rig := newSyncRig(t, syncPolicy, devices(3))
+	rig.sync(t)
+	_, newKey, _ := ed25519.GenerateKey(rand.Reader)
+	rotated := rig.syncer(newKey)
+	rotated.VerifyKeys = []ed25519.PublicKey{rig.pub}
+	if err := os.Chmod(rotated.State.Dir, 0o500); err != nil { // published.json cannot be written
+		t.Fatal(err)
+	}
+	err := rotated.Restore()
+	os.Chmod(rotated.State.Dir, 0o700)
+	if err != nil || rotated.Current().Doc.Sequence != 1 {
+		t.Fatalf("%v %v", rotated.Current(), err)
+	}
+	if !strings.Contains(rig.out.String(), "could not be kept") {
+		t.Fatalf("not said: %s", rig.out)
+	}
+	res := rotated.Sync(context.Background(), "schedule")
+	if res.Sequence != 2 || rotated.Current().Doc.Sequence != 2 {
+		t.Fatalf("not re-sealed at the next sync: %+v", res)
+	}
+	if _, _, err := bundle.Open(rotated.Current().Raw, []ed25519.PublicKey{newKey.Public().(ed25519.PublicKey)}); err != nil {
+		t.Fatal(err)
 	}
 }
 

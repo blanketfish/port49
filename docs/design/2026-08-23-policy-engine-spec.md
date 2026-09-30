@@ -5724,7 +5724,11 @@ copy — the API's, its own persisted one, the mirror's — against the keys in
 inventory. A document carries neither key groups nor pins: key assignment is reviewed policy, and a
 synced source's writer choosing a device's key is an escalation with no diff; a pin is a policy key
 group matching the device's name, at tier 1 (§10). The service reads its own state and mirror against its own
-`verify_key_files`, so rotating its signing key keeps its sequence and its bound.
+`verify_key_files`, so rotating its signing key keeps its sequence and its bound. A service whose
+signing key did not sign the bundle it holds re-seals that bundle under its key as the next
+sequence, the fleet unchanged, at start and at each sync, so the rotation order is: add the new
+public key to every port49d, add the old one to the service, switch the service's key and restart
+it, wait until every port49d holds the re-sealed bundle N+1, and only then drop the old key.
 The mirror is a directory the deployment mounts (`mirror_dir`), not an object-store API: no
 object-store credential sits beside port49d, and the signature is what makes a shared mount safe to
 read.

@@ -142,8 +142,48 @@ func (s *Syncer) Restore() error {
 	s.publish(best)
 	fmt.Fprintf(s.Log, "port49-inventory: serving bundle %d (%s), published %s\n", best.Doc.Sequence,
 		best.Doc.Bundle, best.Doc.PublishedAt.Format(time.RFC3339))
-	s.mirror(best.Raw) // a mirror behind the state is brought level at once (M7)
+	if _, err := s.reseal(); err != nil {
+		// Serving the old key's bundle is safe while port49d still lists
+		// that key; the next sync tries again.
+		fmt.Fprintf(s.Log, "port49-inventory: %s; serving it as it is, and the next sync tries again\n", oneLine(err))
+	}
+	s.mirror(s.current.Load().Raw) // a mirror behind the state is brought level at once (M7)
 	return nil
+}
+
+// reseal re-seals the bundle published under the signing key when another
+// key signed it — a rotation — as the next sequence, published now, the
+// fleet unchanged (final review I1). Without it a stable fleet keeps the old
+// key's signature in force, and dropping that key from port49d's
+// verify_key_files leaves every restarting port49d with no copy it can open.
+// port49d takes the result as the same devices under a new sequence, and
+// persists it. It says what it did, and whether it did anything.
+func (s *Syncer) reseal() (bool, error) {
+	cur := s.current.Load()
+	if cur == nil {
+		return false, nil
+	}
+	own := s.Key.Public().(ed25519.PublicKey)
+	if _, _, err := bundle.Open(cur.Raw, []ed25519.PublicKey{own}); !errors.Is(err, bundle.ErrUnknownKey) {
+		return false, nil
+	}
+	doc := cur.Doc
+	doc.Sequence++
+	doc.PublishedAt = s.Now().UTC()
+	raw, err := bundle.Seal(doc, s.Key)
+	if err == nil {
+		err = s.State.Save(Published{Raw: raw, Doc: doc, Inv: cur.Inv})
+	}
+	if err != nil {
+		return false, fmt.Errorf("bundle %d is signed by another key than the signing key %s, and its re-sealing as "+
+			"bundle %d could not be kept: state_dir %s: %s", cur.Doc.Sequence, bundle.KeyIDOf(own), doc.Sequence,
+			s.State.Dir, oneLine(err))
+	}
+	s.publish(&Published{Raw: raw, Doc: doc, Inv: cur.Inv})
+	fmt.Fprintf(s.Log, "port49-inventory: bundle %d is signed by another key than the signing key %s; re-sealed as "+
+		"bundle %d, the fleet unchanged; once every port49d's port49_inventory_bundle_sequence shows %d, the old "+
+		"key can leave verify_key_files\n", cur.Doc.Sequence, bundle.KeyIDOf(own), doc.Sequence, doc.Sequence)
+	return true, nil
 }
 
 func (s *Syncer) publish(p *Published) {
@@ -173,6 +213,17 @@ func (s *Syncer) Sync(ctx context.Context, trigger string, only ...string) Resul
 	res := s.sync(bounded, ctx, only)
 	if res.Outcome == OutcomeFailed && ctx.Err() != nil {
 		return res
+	}
+	// A sync that did not publish leaves the bundle published as it was: if
+	// a rotation left it under the old key, it is re-sealed now (I1).
+	if res.Outcome != OutcomePublished {
+		if resealed, err := s.reseal(); err != nil && res.Outcome == OutcomeUnchanged {
+			res = Result{Outcome: OutcomeFailed, Sequence: res.Sequence, Bundle: res.Bundle, Reason: oneLine(err)}
+		} else if err != nil {
+			res.Reason += "; and " + oneLine(err) // the refusal or failure stays the sync's outcome
+		} else if resealed {
+			res.Sequence = s.current.Load().Doc.Sequence
+		}
 	}
 	if cur := s.current.Load(); cur != nil {
 		s.mirror(cur.Raw)

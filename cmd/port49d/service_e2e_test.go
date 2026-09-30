@@ -482,10 +482,11 @@ func TestADocumentSignedByAnUnlistedKeyIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The service re-seals bundle 1 under the key it now holds as bundle 2
+	// (final review I1): a document signed by a key port49d does not list.
 	svc = startServiceSigning(t, dir, svc.addr, rogue)
-	svc.writeSource(t, 3)
-	if res := svc.sync(t); res.Outcome != inventory.OutcomePublished || res.Sequence != 2 {
-		t.Fatalf("%+v", res)
+	if cur := svc.syncer.Current(); cur.Doc.Sequence != 2 {
+		t.Fatalf("the service serves bundle %d, want 2: %s", cur.Doc.Sequence, svc.log.String())
 	}
 	poke(t)
 	waitWithin(t, out, "port49d: inventory reload (inventory service) refused; still serving bundle ", pokeWait)
@@ -576,6 +577,49 @@ func TestAFreshPort49dWithNothingWaitsForTheService(t *testing.T) {
 	// Cold start asks again every poll_interval.
 	waitWithin(t, out, "port49d: listening on", e2ePoll+3*time.Second)
 	if !strings.Contains(out.String(), "starting from bundle 1 (the service), published") ||
+		readyz(t, out) != http.StatusOK {
+		t.Fatalf("%s", out.String())
+	}
+}
+
+// Final review I1, the rotation as the operator notes give it: port49d lists
+// both keys, the service restarts on the new key, and on a stable fleet it
+// re-seals the bundle in force as the next sequence, which port49d takes as
+// the same devices and persists. Then the old key is dropped: port49d
+// restarts, the service down, from its persisted copy and serves.
+func TestARotationOnAStableFleetLetsTheOldKeyBeDropped(t *testing.T) {
+	dir := safeDir(t)
+	svc := startService(t, dir, "127.0.0.1:0")
+	_, newKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newPub := keyPath(t, newKey)
+	state := filepath.Join(safeDir(t), "state")
+	out, _, stop := port49dOn(t, svc.url, svc.pki(), svc.pubFile+", "+newPub, state, "")
+	waitFor(t, out, "port49d: listening on")
+	svc.stop(t)
+	svc = startServiceSigning(t, dir, svc.addr, newKey)
+	if cur := svc.syncer.Current(); cur.Doc.Sequence != 2 {
+		t.Fatalf("the service serves bundle %d after the rotation, want 2 re-sealed; it said %s", cur.Doc.Sequence,
+			svc.log.String())
+	}
+	poke(t)
+	deadline := time.Now().Add(pokeWait)
+	for gauge(t, out, "port49_inventory_bundle_sequence") != 2 {
+		if time.Now().After(deadline) {
+			t.Fatalf("port49d did not take bundle 2: %s", out.String())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if n := persistedSequence(t, state, newPub); n != 2 {
+		t.Fatalf("persisted bundle %d, want 2", n)
+	}
+	stop()
+	svc.stop(t)
+	out, _, _ = port49dOn(t, svc.url, svc.pki(), newPub, state, "")
+	waitFor(t, out, "port49d: listening on")
+	if !strings.Contains(out.String(), "port49d: inventory: starting from bundle 2 (the persisted copy)") ||
 		readyz(t, out) != http.StatusOK {
 		t.Fatalf("%s", out.String())
 	}
