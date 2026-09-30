@@ -3957,12 +3957,14 @@ no longer quarantined. Through the inventory service's syncs, on the same four i
 failed quarantined it, the rest of the sync applied, its connections were closed
 `device_quarantined`, its mints refused, break-glass logged in and ran its commands, and the fix
 admitted it again. Break-glass took 0.32 s on vEOS and 0.47 s on vJunos-router, but 16.7 s on the
-N9Kv and 20.3 s on the C8000V. Those runs followed L29's in the same deploy, which leaves
-single-connection on; the 2026-09-24 runs above, with it off, took under a second. With
-single-connection on, IOS-XE and NX-OS take a reset that follows their request as transient and
-wait out their 5 s timeout on every AAA exchange, and the quarantine close never refuses their
-retries at Accept, as a key miss's does, so break-glass there costs 16–21 s (§15 L31, open;
-`tests/lab/results/L31-breakglass-cisco-singleconnection.md`).
+N9Kv and 20.3 s on the C8000V. Those runs left single-connection on, and with it IOS-XE and NX-OS
+take a reset that comes after their request as transient and wait out their 5 s timeout on every
+AAA exchange, unless the retry is refused at Accept before they write (§15 L31;
+`tests/lab/results/L31-breakglass-cisco-singleconnection.md`). So the close is a key miss's without
+the strike: the first connection's packet is recorded and the connection reset at once, and the
+source's next connections inside a decline window are refused at Accept with a reset and no record
+("A declined source is refused at Accept", under "Admission and keys"). What that costs break-glass
+on IOS-XE and NX-OS with single-connection on is L31's (open).
 
 A consumer runs on exactly one bundle version at a time, so a decision is always attributable
 to a single, nameable state of the world. `bundle/diff` then covers policy change, inventory
@@ -4081,8 +4083,9 @@ close it.
 on (below), one assigned a `key_ref` port49d.yaml defines no key for, one pinning a `key_ref` that
 is not a name (above; the pin is not printed), and one whose `transport` port49d does not serve
 (below), are each refused admission: named at start and at every reload that loads, counted in
-`port49_devices_admission_refused`, and every packet from them closed after the header, with nothing
-decrypted, no reply, no strike, and the report bucket `admission_refused` (below). The rest of the
+`port49_devices_admission_refused`, and each connection from them closed after its first header,
+with nothing decrypted, no reply, no strike, and the report bucket `admission_refused`, and their
+next connections refused at Accept inside a decline window (below). The rest of the
 fleet loads. The broker refuses to mint for a refused device (`device_unknown`, §5.7), and a policy
 refresh revokes its live contexts: it cannot reach port49d, so a token for it would only be a login
 that silently falls to its local method (the close is a quarantine's, measured on four images:
@@ -4362,6 +4365,36 @@ runs its commands in the time port49d stopped gives, on all four images, and its
 refused (`tests/lab/results/L28-arista_eos.md`, `L28-cisco_nxos.md`, `L28-cisco_iosxe.md`,
 `L28-juniper_vjunos-router.md`).
 
+**A declined source is refused at Accept, and takes no strike.** port49d declines a connection
+through no fault of the device's when admission refuses the device (above), when the device is
+quarantined ("A quarantined device gets silence, not FAIL"), or when a reload refused or removed it
+under an open connection ("How a daemon refreshes its snapshot"). Such a connection is closed the
+way a key miss is, without the strike: one `unvalidated` record for its packet, and a TCP reset at
+once, with no reply. The source then gets a decline window on the strike's schedule and settings:
+`limits.malformed_backoff_base`, doubling up to `limits.malformed_backoff_max`, with the count
+starting over after `limits.malformed_window` with no decline. A new connection from the source
+inside the window is refused at Accept with a reset and no record, and is counted as
+`port49_connection_events_total{event="declined_refused"}`, which has no device label. The window
+refuses only a connection whose first packet port49d would decline anyway. At each Accept inside
+the window, port49d asks admission in force and the policy again. If a reload has admitted the
+source again, or its quarantine has ended, the window is dropped and the connection is served. So a
+fix takes effect at the next connection, and a window never outlasts its reason. A decline is not a
+strike: it never refuses a connection that would be served, and never lengthens a strike's backoff.
+Once the source is admitted, its window is dropped at its first connection, and its count lapses
+after `limits.malformed_window`. As with a strike, the log holds one record for
+each connection that reached a packet, and connections refused inside a window are counted, not
+recorded. A source the inventory does not name at all is struck rather than declined (above). It is
+closed with a record, a strike and a reset at once, never held for the backoff, and its next
+connections are refused at Accept for the strike's backoff (`held_refused`). A removed device's
+retries are therefore `declined_refused` for at most one window, and only when the removal ended an
+open connection. After that they are `held_refused`: its strikes are recorded `unadmitted_source`,
+which is what tells them apart from a key miss's (`key_miss_closed`) or garbage
+(`malformed_backoff`). The window exists because of how
+IOS-XE and NX-OS behave with single-connection on. They take a reset that comes after their request
+as transient and wait out their 5 s timeout on every AAA exchange. A reset that comes before they
+write makes them fall to their local method at once (§15 L31,
+`tests/lab/results/L31-breakglass-cisco-singleconnection.md`).
+
 #### Retirement is enforced, and that is the point
 
 `retire_after` is a date, and past it the version is refused. This is the tension worth
@@ -4564,8 +4597,11 @@ serves the device, the command in flight is refused on vEOS (at once) and on the
 own 5 s when removed or refused), runs on the N9Kv and on vJunos-router (which authorizes commands locally, so the reset
 hit accounting), the next token login is refused, and break-glass logs in — in up to 2.1 s on vEOS
 and vJunos-router, and up to 30 s on the C8000V and 41 s on the N9Kv, against 1.3 s and 2.6 s with
-port49d stopped, because the connections after the reset are closed only after the device's
-request and never refused at Accept (§15 L31, open). Where port49d still serves the device under a new name or platform, its FAIL is
+port49d stopped. The slow cases came from the connections after the reset, which were closed only
+after the device's request and never refused at Accept. A reset for a reload that refused or
+removed the device now opens a decline window, so those connections are refused at Accept ("A
+declined source is refused at Accept"; §15 L31, open). A rename, re-key or re-platform opens none:
+that device is still admitted. Where port49d still serves the device under a new name or platform, its FAIL is
 final on EOS, NX-OS and IOS-XE, so break-glass is not let in there, as with any served device (L4).
 
 **Validate locally before swapping.** The service already applies bounded-change safety, but
@@ -6142,6 +6178,14 @@ Beyond those already listed in the design document's §14:
 - **Unresolvable `key_ref`** fails that device closed, not the daemon.
 - **A device no key group admits**, and one two groups tie on, is refused admission on its own
   and its packets closed after the header as `admission_refused`; the rest of the fleet loads.
+- **A declined source is refused at Accept**: after one recorded packet from a refused or quarantined
+  device, or from one a reload refused or removed under an open connection, its next connection
+  inside the decline window is reset at Accept with no record, counted `declined_refused`, and with
+  no strike. A reload that admits it again, or the end of its quarantine, serves its next connection
+  at once. An unadmitted source's packet is recorded, struck and reset at once, never held, and its
+  next connection inside the backoff is reset at Accept and counted `held_refused`. So a removed
+  device's retries are `declined_refused` for at most one window (only when the removal ended an
+  open connection), and `held_refused` after that, with each strike recorded `unadmitted_source`.
 - **An inventory-only reload** leaves a live context whose answer did not change unwritten and
   unrecorded, revokes one on a device removed from inventory, and writes one `inventory_change`
   record per address added, per `key_ref` change, per device newly admitted and per
