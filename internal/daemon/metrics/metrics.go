@@ -142,8 +142,11 @@ type Metrics struct {
 	// snapshot in force was last confirmed or loaded (spec §10) — inventory_file
 	// read and found in force, or the service confirming its document; a start
 	// from a copy counts from its published_at. NaN while a cold start has no
-	// snapshot yet. Staleness is an alarm, never a fail-closed: the snapshot
-	// never expires.
+	// snapshot yet, which a comparison never matches, so the staleness alert is
+	// `port49_inventory_snapshot_age_seconds > N or
+	// port49_inventory_snapshot_age_seconds != port49_inventory_snapshot_age_seconds`
+	// (NaN is the one value not equal to itself). Staleness is an alarm, never
+	// a fail-closed: the snapshot never expires.
 	InventorySnapshotAge prometheus.GaugeFunc
 	// port49_inventory_changes_total{kind}: security-relevant changes a bundle
 	// swap made (spec §10) — "address_added" (an address on a device already
@@ -297,10 +300,13 @@ func New(reg prometheus.Registerer) *Metrics {
 		InventoryBundleRefused: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_inventory_bundle_refused",
 			Help: "1 while a document port49d was given did not open or was refused; the bundle in force keeps serving."}),
 		InventoryMirrorUnreadable: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_inventory_mirror_unreadable",
-			Help: "1 when the start could not read mirror_dir's copy: it hung past the deadline, or the read failed."}),
+			Help: "1 when the start could not read mirror_dir's copy: it hung past the deadline, or the read failed; " +
+				"it holds until the next start."}),
 	}
 	m.InventorySnapshotAge = prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "port49_inventory_snapshot_age_seconds",
-		Help: "Seconds since the inventory snapshot in force was last confirmed or loaded; NaN while there is none."}, func() float64 {
+		Help: "Seconds since the inventory snapshot in force was last confirmed or loaded; NaN while there is none, " +
+			"so alert on port49_inventory_snapshot_age_seconds > N or " +
+			"port49_inventory_snapshot_age_seconds != port49_inventory_snapshot_age_seconds."}, func() float64 {
 		if age := m.inventoryAge.Load(); age != nil {
 			return (*age)()
 		}

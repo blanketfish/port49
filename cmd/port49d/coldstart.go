@@ -120,15 +120,35 @@ func persistBundle(dir string, raw []byte) error {
 // cold start, and date the snapshot in the future.
 const maxPublishedSkew = 5 * time.Minute
 
+// coldNow is cold start's clock, swapped in tests.
+var coldNow = time.Now
+
+// publishedAhead is a document refused only for its published_at being more
+// than maxPublishedSkew after this host's clock. Either clock may be the
+// wrong one, so a copy refused for it alone is judged again at every pass of
+// the wait: a host that booted behind and is put right by NTP starts from
+// its copy then, with the service still down (spec §10: a restart in place
+// needs nothing).
+type publishedAhead struct{ msg string }
+
+func (e *publishedAhead) Error() string { return e.msg }
+
 // publishedInFuture refuses p when its published_at is more than
 // maxPublishedSkew after now.
 func publishedInFuture(p *inventory.Published, now time.Time) error {
 	if p.Doc.PublishedAt.After(now.Add(maxPublishedSkew)) {
-		return fmt.Errorf("bundle %d is published %s, more than %s after this host's clock (%s); check the "+
-			"inventory service's clock", p.Doc.Sequence, p.Doc.PublishedAt.Format(time.RFC3339), maxPublishedSkew,
-			now.UTC().Format(time.RFC3339))
+		return &publishedAhead{fmt.Sprintf("bundle %d is published %s, more than %s after this host's clock (%s); "+
+			"this host's clock or the signer's is wrong", p.Doc.Sequence, p.Doc.PublishedAt.Format(time.RFC3339),
+			maxPublishedSkew, now.UTC().Format(time.RFC3339))}
 	}
 	return nil
+}
+
+// coldCopy is one of the two copies a cold start reads: which, and how.
+type coldCopy struct {
+	name string // "the persisted copy", "the mirror's copy"
+	dir  string
+	read func() (*inventory.Published, error)
 }
 
 // coldStart is port49d's first inventory with inventory.service (spec §10,
@@ -145,67 +165,96 @@ func publishedInFuture(p *inventory.Published, now time.Time) error {
 // verification or the checks — bundle.Open, or a published_at too far in the
 // future — whichever source it came from; the service confirming the bundle
 // in force, or sending another, clears it (a start from the service is that
-// confirmation). A copy that could not be read at all — absent, unreadable,
-// refused by the fence, the wrong shape, or a mirror that hung — is said, with
-// why, and not counted as refused: no document was judged. A mirror that
-// could not be read sets port49_inventory_mirror_unreadable instead.
+// confirmation), as does a start from a copy when every refusal was only of
+// a published_at this host's clock had not reached. A copy that could not be
+// read at all — absent, unreadable, refused by the fence, the wrong shape, or
+// a mirror that hung — is said, with why, and not counted as refused: no
+// document was judged. A mirror that could not be read sets
+// port49_inventory_mirror_unreadable instead.
+//
+// A copy refused only for being published ahead of this clock is read and
+// judged again, whole, at each pass of the wait (publishedAhead).
 //
 // Every copy is opened against keys before any field of it is read. The
 // document's own bundle ID is never printed or trusted: the one in force is
 // the one port49d computes from its policy and the document's inventory.
 func coldStart(ctx context.Context, svc *config.InventoryServiceConfig, keys []ed25519.PublicKey,
 	c fetchClient, m *metrics.Metrics, rd *readiness) (*inventory.Published, string, error) {
-	persistedWhy, mirrorWhy := "none in "+svc.StateDir, "none configured"
-	// judge is what a copy in dir that was read is held to beyond
-	// bundle.Open.
-	judge := func(dir string, p *inventory.Published, err error) (*inventory.Published, error) {
+	copies := []coldCopy{{name: "the persisted copy", dir: svc.StateDir,
+		read: func() (*inventory.Published, error) { return readPersisted(svc.StateDir, keys) }}}
+	if svc.MirrorDir != "" {
+		copies = append(copies, coldCopy{name: "the mirror's copy", dir: svc.MirrorDir,
+			read: func() (*inventory.Published, error) { return mirrorWithin(ctx, svc.MirrorDir, keys) }})
+	}
+	why := map[string]string{"the persisted copy": "none in " + svc.StateDir, "the mirror's copy": "none configured"}
+	if svc.MirrorDir != "" {
+		why["the mirror's copy"] = "none in " + svc.MirrorDir
+	}
+	// ahead holds the copies refused only for their published_at; refusedOther
+	// is set once any document is refused for anything else, which only the
+	// service's word clears.
+	var ahead []coldCopy
+	refusedOther := false
+	// judge reads cp, opens it, and holds it to the clock; a copy it cannot
+	// use is said, with why, and alarmed if a document was read. again is a
+	// copy judged again for the clock, whose still being ahead was said.
+	judge := func(cp coldCopy, again bool) *inventory.Published {
+		p, err := cp.read()
 		if err == nil && p != nil {
-			if ferr := publishedInFuture(p, time.Now()); ferr != nil {
-				return nil, inventory.NotOpened(filepath.Join(dir, persistedName), ferr)
+			if ferr := publishedInFuture(p, coldNow()); ferr != nil {
+				p, err = nil, inventory.NotOpened(filepath.Join(cp.dir, persistedName), ferr)
 			}
 		}
-		return p, err
+		var pa *publishedAhead
+		switch {
+		case ctx.Err() != nil:
+			return nil
+		case err == nil:
+			return p
+		case errors.As(err, &pa):
+			ahead = append(ahead, cp)
+			m.InventoryBundleRefused.Set(1)
+			if again {
+				return nil
+			}
+			fmt.Fprintf(stderr, "port49d: inventory: %s is refused until this host's clock reaches it: %s\n", cp.name,
+				oneLine(err))
+		case errors.Is(err, inventory.ErrNotOpened):
+			refusedOther = true
+			m.InventoryBundleRefused.Set(1) // refused, said once, and alarmed (spec §10)
+			fmt.Fprintf(stderr, "port49d: inventory: %s is refused: %s\n", cp.name, oneLine(err))
+		default:
+			if cp.name == "the mirror's copy" {
+				m.InventoryMirrorUnreadable.Set(1)
+			}
+			fmt.Fprintf(stderr, "port49d: inventory: %s is passed over: %s\n", cp.name, oneLine(err))
+		}
+		why[cp.name] = oneLine(err)
+		return nil
 	}
 	var best *inventory.Published
 	from := ""
-	p, err := readPersisted(svc.StateDir, keys)
-	if p, err = judge(svc.StateDir, p, err); err != nil {
-		persistedWhy = oneLine(err)
-		if errors.Is(err, inventory.ErrNotOpened) {
-			m.InventoryBundleRefused.Set(1) // refused, said once, and alarmed (spec §10)
-			fmt.Fprintf(stderr, "port49d: inventory: the persisted copy is refused: %s\n", persistedWhy)
-		} else {
-			fmt.Fprintf(stderr, "port49d: inventory: the persisted copy is passed over: %s\n", persistedWhy)
-		}
-	} else if p != nil {
-		best, from = p, "the persisted copy"
-	}
-	if svc.MirrorDir != "" {
-		mirrorWhy = "none in " + svc.MirrorDir
-		mc, err := mirrorWithin(ctx, svc.MirrorDir, keys)
-		mc, err = judge(svc.MirrorDir, mc, err)
-		switch {
-		case ctx.Err() != nil:
-			return nil, "", ctx.Err()
-		case errors.Is(err, inventory.ErrNotOpened):
-			mirrorWhy = oneLine(err)
-			m.InventoryBundleRefused.Set(1)
-			fmt.Fprintf(stderr, "port49d: inventory: the mirror's copy is refused: %s\n", mirrorWhy)
-		case err != nil:
-			mirrorWhy = oneLine(err)
-			m.InventoryMirrorUnreadable.Set(1)
-			fmt.Fprintf(stderr, "port49d: inventory: the mirror's copy is passed over: %s\n", mirrorWhy)
-		case mc != nil && (best == nil || mc.Doc.PublishedAt.After(best.Doc.PublishedAt)):
+	// choose takes the newer of what judge made of cps, the earlier on a tie.
+	choose := func(cps []coldCopy, again bool) {
+		for _, cp := range cps {
+			p := judge(cp, again)
+			if p == nil || (best != nil && !p.Doc.PublishedAt.After(best.Doc.PublishedAt)) {
+				continue
+			}
 			// Newer is later publication: a sequence starts again at 1
 			// after a service reset, a publication time does not
 			// (pre-flight minor 11).
-			if best != nil {
+			if best != nil { // only the mirror's copy follows the persisted one
 				fmt.Fprintf(stderr, "port49d: inventory: the mirror's bundle %d, published %s, is published later "+
-					"than the persisted copy's bundle %d, published %s\n", mc.Doc.Sequence,
-					mc.Doc.PublishedAt.Format(time.RFC3339), best.Doc.Sequence, best.Doc.PublishedAt.Format(time.RFC3339))
+					"than the persisted copy's bundle %d, published %s\n", p.Doc.Sequence,
+					p.Doc.PublishedAt.Format(time.RFC3339), best.Doc.Sequence, best.Doc.PublishedAt.Format(time.RFC3339))
 			}
-			best, from = mc, "the mirror's copy"
+			best, from = p, cp.name
 		}
+	}
+	choose(copies, false)
+	if ctx.Err() != nil {
+		return nil, "", ctx.Err()
 	}
 	said := ""
 	for best == nil {
@@ -217,7 +266,7 @@ func coldStart(ctx context.Context, svc *config.InventoryServiceConfig, keys []e
 			doc, inv, oerr := bundle.Open(raw, keys)
 			p := &inventory.Published{Raw: raw, Doc: doc, Inv: inv}
 			if oerr == nil {
-				oerr = publishedInFuture(p, time.Now())
+				oerr = publishedInFuture(p, coldNow())
 			}
 			if oerr == nil {
 				best, from = p, "the service"
@@ -229,16 +278,28 @@ func coldStart(ctx context.Context, svc *config.InventoryServiceConfig, keys []e
 		if ctx.Err() != nil {
 			return nil, "", ctx.Err()
 		}
-		if why := fmt.Sprintf("port49d: inventory: no bundle yet (persisted copy: %s; mirror: %s; service at %s: %s); "+
-			"TACACS+ is not served until one arrives, and /readyz answers 503 (spec §10, cold start)", persistedWhy,
-			mirrorWhy, svc.URL, oneLine(err)); why != said {
-			fmt.Fprintln(stderr, why)
-			said = why
+		if line := fmt.Sprintf("port49d: inventory: no bundle yet (persisted copy: %s; mirror: %s; service at %s: %s); "+
+			"TACACS+ is not served until one arrives, and /readyz answers 503 (spec §10, cold start)",
+			why["the persisted copy"], why["the mirror's copy"], svc.URL, oneLine(err)); line != said {
+			fmt.Fprintln(stderr, line)
+			said = line
 		}
 		select {
 		case <-ctx.Done():
 			return nil, "", ctx.Err()
 		case <-time.After(svc.PollInterval):
+		}
+		// A copy refused only for the clock is judged again, read afresh
+		// through the same path, now that the clock has moved.
+		again := ahead
+		ahead = nil
+		choose(again, true)
+		if ctx.Err() != nil {
+			return nil, "", ctx.Err()
+		}
+		if best != nil && !refusedOther && len(ahead) == 0 {
+			// Every refusal was of the clock, and the clock has caught up.
+			m.InventoryBundleRefused.Set(0)
 		}
 	}
 	if from == "the service" {

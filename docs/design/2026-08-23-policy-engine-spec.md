@@ -4615,7 +4615,12 @@ whoever can write a verify key accepts any inventory it signs; so a signing-key 
 restart. `port49_inventory_snapshot_age_seconds` is the time since the service last confirmed the
 document in force, or one was loaded; a start from the persisted copy or the mirror counts it from
 that document's `published_at`, so a restart never makes an old snapshot look fresh; until a start
-has a snapshot it has no age, and the gauge reads NaN. The mirror is
+has a snapshot it has no age, and the gauge reads NaN, which no comparison matches, so the
+staleness alert is `port49_inventory_snapshot_age_seconds > N or
+port49_inventory_snapshot_age_seconds != port49_inventory_snapshot_age_seconds`. A copy refused
+only because its `published_at` is ahead of port49d's clock is judged again at each pass of the
+wait, so a host that booted with its clock behind starts from it once the clock is right; when the
+clock was the only refusal, that start clears `port49_inventory_bundle_refused`. The mirror is
 read under a 10 s deadline at start: a hung mount is passed over, said, and never holds up a start
 from the persisted copy. A copy that could not be read — a mirror that hung, a read that failed, a
 persisted copy the fence refuses — is said with why and is not a refusal; a mirror that could not

@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -405,8 +406,9 @@ func TestACopyPublishedInTheFutureIsRefused(t *testing.T) {
 	m := testMetrics()
 	p, from, err := coldStart(context.Background(), svc, keys, &fakeService{t: t, forbid: true}, m, nil)
 	if err != nil || from != "the persisted copy" || p.Doc.Sequence != 3 ||
-		!strings.Contains(out.String(), "the mirror's copy is refused: ") ||
-		!strings.Contains(out.String(), "more than 5m0s after this host's clock") {
+		!strings.Contains(out.String(), "the mirror's copy is refused until this host's clock reaches it: ") ||
+		!strings.Contains(out.String(), "more than 5m0s after this host's clock") ||
+		!strings.Contains(out.String(), "this host's clock or the signer's is wrong") {
 		t.Fatalf("bundle %d %q %v %s", seqOf(p), from, err, out.String())
 	}
 	if testutil.ToFloat64(m.InventoryBundleRefused) != 1 {
@@ -432,6 +434,97 @@ func TestADocumentFromTheServicePublishedInTheFutureIsRefused(t *testing.T) {
 	}
 	if testutil.ToFloat64(m.InventoryBundleRefused) != 0 {
 		t.Fatal("the service's good document did not clear the alarm")
+	}
+}
+
+// A host that boots with its clock behind, the service down, refuses its
+// genuine copies as published ahead of it, and serves nothing; once its
+// clock is put right the next pass of the wait judges them again and starts
+// from the persisted copy, clearing the alarm (spec §10: a restart in place
+// needs nothing).
+func TestACopyRefusedForTheClockIsTakenOnceTheClockCatchesUp(t *testing.T) {
+	svc, key, keys := coldRig(t)
+	published := time.Now().Truncate(time.Second)
+	mustPersist(t, svc.StateDir, sealedDocAt(t, key, 8, 1, published))
+	mustMirror(t, svc.MirrorDir, sealedDocAt(t, key, 7, 1, published.Add(-time.Minute)))
+	var clock atomic.Int64
+	clock.Store(published.Add(-time.Hour).UnixNano()) // booted an hour behind
+	defer func(c func() time.Time) { coldNow = c }(coldNow)
+	coldNow = func() time.Time { return time.Unix(0, clock.Load()) }
+	var out syncBuffer
+	e := stderr
+	defer func() { stderr = e }()
+	stderr = &out
+	m := testMetrics()
+	type result struct {
+		p    *inventory.Published
+		from string
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		p, from, err := coldStart(context.Background(), svc, keys, &fakeService{bundles: [][]byte{nil}}, m, nil)
+		done <- result{p, from, err}
+	}()
+	waitFor(t, &out, "port49d: inventory: no bundle yet")
+	select {
+	case r := <-done:
+		t.Fatalf("started with the clock behind: bundle %d %q %v", seqOf(r.p), r.from, r.err)
+	case <-time.After(50 * time.Millisecond): // several passes of the 10ms wait
+	}
+	if n := strings.Count(out.String(), "is refused until this host's clock reaches it"); n != 2 ||
+		testutil.ToFloat64(m.InventoryBundleRefused) != 1 {
+		t.Fatalf("refused %d times, alarm %v: %s", n, testutil.ToFloat64(m.InventoryBundleRefused), out.String())
+	}
+	clock.Store(published.UnixNano()) // NTP puts it right
+	select {
+	case r := <-done:
+		if r.err != nil || r.from != "the persisted copy" || seqOf(r.p) != 8 {
+			t.Fatalf("bundle %d %q %v", seqOf(r.p), r.from, r.err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("still waiting after the clock caught up: %s", out.String())
+	}
+	if testutil.ToFloat64(m.InventoryBundleRefused) != 0 {
+		t.Fatal("port49_inventory_bundle_refused is still 1 with every refusal the clock's, and the clock right")
+	}
+}
+
+// A refusal that was not the clock's — here a persisted copy another key
+// signed — keeps the alarm when the mirror's copy is taken on the clock
+// catching up: only the service's word clears it.
+func TestAClockCatchUpDoesNotClearARealRefusal(t *testing.T) {
+	svc, key, keys := coldRig(t)
+	_, other, _ := ed25519.GenerateKey(rand.Reader)
+	published := time.Now().Truncate(time.Second)
+	mustPersist(t, svc.StateDir, sealedDocAt(t, other, 8, 1, published))
+	mustMirror(t, svc.MirrorDir, sealedDocAt(t, key, 7, 1, published))
+	var clock atomic.Int64
+	clock.Store(published.Add(-time.Hour).UnixNano())
+	defer func(c func() time.Time) { coldNow = c }(coldNow)
+	coldNow = func() time.Time { return time.Unix(0, clock.Load()) }
+	var out syncBuffer
+	e := stderr
+	defer func() { stderr = e }()
+	stderr = &out
+	m := testMetrics()
+	done := make(chan string, 1)
+	go func() {
+		_, from, _ := coldStart(context.Background(), svc, keys, &fakeService{bundles: [][]byte{nil}}, m, nil)
+		done <- from
+	}()
+	waitFor(t, &out, "port49d: inventory: no bundle yet")
+	clock.Store(published.UnixNano())
+	select {
+	case from := <-done:
+		if from != "the mirror's copy" {
+			t.Fatalf("from %q: %s", from, out.String())
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("still waiting: %s", out.String())
+	}
+	if testutil.ToFloat64(m.InventoryBundleRefused) != 1 {
+		t.Fatal("the clock catching up cleared the alarm for a copy another key signed")
 	}
 }
 
