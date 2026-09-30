@@ -637,3 +637,52 @@ func TestRunDrainsAfterSIGHUPWithANamedPipeAsItsConfig(t *testing.T) {
 		t.Fatalf("shutdown did not return: %s", out.String())
 	}
 }
+
+// Task 10: a device admission refuses is the operator's 3am signal in three
+// places, all said at start: its own stderr line with why, the listening
+// line's admitted count, which leaves it out, and the gauge.
+func TestRunSaysARefusedDeviceAtStart(t *testing.T) {
+	var out syncBuffer
+	defer func(w io.Writer) { stderr = w }(stderr)
+	stderr = &out
+	cfgPath := writeRunConfig(t, brokerConfig(t, minimalPolicy).Broker)
+	if err := os.WriteFile(filepath.Join(filepath.Dir(cfgPath), "inventory.yaml"), []byte(`
+devices:
+  - {name: leaf1, platform: arista_eos, addresses: [127.0.0.1]}
+  - {name: leaf2, platform: arista_eos, addresses: [10.9.9.9]}
+key_groups:
+  - {match: {cidr: 127.0.0.0/8}, key_ref: k}
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- run(ctx, cfgPath) }()
+	defer func() {
+		cancel()
+		<-done
+	}()
+	waitFor(t, &out, "port49d: listening on ")
+	if !strings.Contains(out.String(), "port49d: admission: device leaf2 (arista_eos) is refused: ") {
+		t.Fatalf("the refused device was not named at start: %s", out.String())
+	}
+	if !regexp.MustCompile(`port49d: listening on \S+, metrics on \S+, 1 devices admitted\n`).MatchString(out.String()) {
+		t.Fatalf("the listening line does not count one admitted device: %s", out.String())
+	}
+	m := regexp.MustCompile(`metrics on (127\.0\.0\.1:\d+)`).FindStringSubmatch(out.String())
+	if m == nil {
+		t.Fatalf("stderr: %q", out.String())
+	}
+	resp, err := http.Get("http://" + m[1] + "/metrics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !regexp.MustCompile(`(?m)^port49_devices_admission_refused 1$`).Match(body) {
+		t.Fatalf("port49_devices_admission_refused is not 1:\n%s", body)
+	}
+}
