@@ -3957,7 +3957,8 @@ no longer quarantined. Through the inventory service's syncs, on the same four i
 failed quarantined it, the rest of the sync applied, its connections were closed
 `device_quarantined`, its mints refused, break-glass logged in and ran its commands, and the fix
 admitted it again. Break-glass took 0.32 s on vEOS and 0.47 s on vJunos-router, but 16.7 s on the
-N9Kv and 20.3 s on the C8000V. Those runs left single-connection on, and with it IOS-XE and NX-OS
+N9Kv and 20.3 s on the C8000V. Those runs left single-connection on; the 2026-09-24 runs above,
+with it off, took under a second. With single-connection on, IOS-XE and NX-OS
 take a reset that comes after their request as transient and wait out their 5 s timeout on every
 AAA exchange, unless the retry is refused at Accept before they write (§15 L31;
 `tests/lab/results/L31-breakglass-cisco-singleconnection.md`). So the close is a key miss's without
@@ -4375,13 +4376,14 @@ once, with no reply. The source then gets a decline window on the strike's sched
 starting over after `limits.malformed_window` with no decline. A new connection from the source
 inside the window is refused at Accept with a reset and no record, and is counted as
 `port49_connection_events_total{event="declined_refused"}`, which has no device label. The window
-refuses only a connection whose first packet port49d would decline anyway. At each Accept inside
-the window, port49d asks admission in force and the policy again. If a reload has admitted the
+refuses only a connection whose first packet port49d would decline or strike anyway. At each Accept
+inside the window, port49d asks admission in force and the policy again. If a reload has admitted the
 source again, or its quarantine has ended, the window is dropped and the connection is served. So a
 fix takes effect at the next connection, and a window never outlasts its reason. A decline is not a
 strike: it never refuses a connection that would be served, and never lengthens a strike's backoff.
-Once the source is admitted, its window is dropped at its first connection, and its count lapses
-after `limits.malformed_window`. As with a strike, the log holds one record for
+Once the source is admitted, its window and count are dropped at its first connection inside the
+window; otherwise the count lapses after `limits.malformed_window`. As with a strike, the log holds
+one record for
 each connection that reached a packet, and connections refused inside a window are counted, not
 recorded. A source the inventory does not name at all is struck rather than declined (above). It is
 closed with a record, a strike and a reset at once, never held for the backoff, and its next
