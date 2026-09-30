@@ -36,8 +36,11 @@ built, below). **6a written 2026-09-30, revised the same day** after its pre-fli
 lab, one lab-and-docs; plan 6 is split at the seam below, and three owner decisions are listed at
 its top), and **executed 2026-09-30** on `feature/bundle-in-process`, reviewed per task and
 whole-branch, with a final fix wave. It closed L27 and L28 and opened L29 and L30 (Plan 6a — As
-built, below); **merged 2026-09-30 (PR #15)**.
-6b and 7–13 not yet.
+built, below); **merged 2026-09-30 (PR #15)**. **6b written 2026-09-30**
+(`2026-09-30-06b-inventory-service.md`, twenty-one tasks: one docs, one lab, sixteen code, two lab, one
+lab-and-docs); it splits again at the source, leaving the NetBox and Nautobot connectors and the
+webhook trigger to plan 6c, and three owner decisions are listed at its top.
+6c and 7–13 not yet.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -952,14 +955,24 @@ commands and the system users by platform name, so 5a refuses `based_on: juniper
   order; `SIGHUP` re-reads the bound; the broker refuses to mint for a refused device
   (`device_unknown`); a test on an absent device fails CI and never a reload; a policy reload is held to
   the same bound as an inventory reload, and `policy diff` fails on a newly refused device.
-- **Plan 6b — the inventory service; written after 6a merges, against L27's fixtures.**
-  `cmd/port49-inventory` with the §10 API over mutual TLS, the NetBox, Nautobot and file connectors
-  (version detection, GraphQL first, REST fallback, the slug alias table, filters), the four sync
-  triggers (10-minute schedule, authenticated webhooks, `port49 inventory sync`, startup), bounded
-  change in the service, the bundle document and its sequence number, port49d's 30 s pull with
-  ETag, the persisted last good bundle, the shared mirror, cold-start readiness, and spec §14's
-  quarantine-through-a-sync lab assertion. Also owner decision 3's mismatch alarm and L27's gaps
-  (Plan 6a — As built, "Carried").
+- **Plan 6b — `2026-09-30-06b-inventory-service.md`. Written 2026-09-30.**
+  `cmd/port49-inventory` with the §10 API over mutual TLS (read and sync rights), the file connector,
+  three of the four sync triggers (10-minute schedule, `port49 inventory sync`, startup), bounded
+  change per source in the service, the signed bundle document and its sequence number, port49d's
+  30 s pull with ETag, the persisted last good bundle, the shared mirror (a mounted directory), and
+  cold-start readiness; owner decision 3's mismatch alarm; `SIGHUP` and a refused load trying both
+  sources together (6a m7); the write fence moved to `internal/fence`. Lab: L29 (the reload case
+  through syncs, and the midnight case as four scheduled runs), spec §14's quarantine through a sync,
+  and L30 recorded as fixtures for 6c. Owner decisions at its top: every copy of the bundle signed
+  (ed25519) and verified; the mirror a directory, not an object-store API; nothing the service sends
+  assigns a key.
+- **Plan 6c — the NetBox and Nautobot connectors; written after 6b merges, against L27's and L30's
+  fixtures.** Version detection by `/api/status/`, GraphQL first, the REST fallback (`?depth=1` on
+  Nautobot 2.x, following `next` as L30 finds it), the slug alias table, filters and maps, source
+  credentials by `secret_env`, and the authenticated webhook trigger (HMAC-SHA512 of the body, ordered
+  by the body's `timestamp`, a delivery only triggering a sync). Split from 6b because the connectors
+  are the contributable surface and hold the only source-of-truth credentials, and two of their facts
+  (L30) were unmeasured when 6b was written.
 
 **Go-dark on a store outage is plan 7's**, with the remote store (plan 4's "Hands to plan 6": "plan
 6 or 7, whichever brings the remote store"; plan 6 builds none), and so are the warm context
