@@ -1526,7 +1526,7 @@ func TestAReloadThatRenamesTheDeviceResetsItsOpenConnection(t *testing.T) {
 		renamed.Name = "leaf-01-new"
 		a.swap(t, admission.Resolved{Device: renamed, KeyRef: "prod_key"})
 	})
-	resetWithNoStrike(t, c, ts, log, "admission_changed")
+	resetWithNoStrike(t, c, ts, log, "admission_withdrawn")
 }
 
 // Moving a device off a key_ref is the answer to a suspected key compromise,
@@ -1536,7 +1536,7 @@ func TestAReloadThatRekeysTheDeviceStopsTheOldKeyAtOnce(t *testing.T) {
 	c, ts, log := reloadBetweenPackets(t, func(a *swapAdmitter) {
 		a.swap(t, admission.Resolved{Device: leaf01, KeyRef: "new_key"})
 	})
-	resetWithNoStrike(t, c, ts, log, "admission_changed")
+	resetWithNoStrike(t, c, ts, log, "admission_withdrawn")
 
 	old := dial(t, ts.addr, []byte("k2"))
 	old.send(t, wire.TypeAuthen, wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP,
@@ -1585,7 +1585,7 @@ func TestAReloadThatChangesThePlatformResetsItsOpenConnection(t *testing.T) {
 		moved.Platform = "cisco_iosxe"
 		a.swap(t, admission.Resolved{Device: moved, KeyRef: "prod_key"})
 	})
-	resetWithNoStrike(t, c, ts, log, "admission_changed")
+	resetWithNoStrike(t, c, ts, log, "admission_withdrawn")
 }
 
 // A policy `based_on:` edit moves a variant's wire platform under the same
@@ -1597,7 +1597,7 @@ func TestAReloadThatChangesTheWirePlatformResetsItsOpenConnection(t *testing.T) 
 		func(a *swapAdmitter) {
 			a.swap(t, admission.Resolved{Device: variant, KeyRef: "prod_key", WirePlatform: "cisco_iosxe"})
 		})
-	resetWithNoStrike(t, c, ts, log, "admission_changed")
+	resetWithNoStrike(t, c, ts, log, "admission_withdrawn")
 }
 
 // variantRedactor is port49d's redactorFor over a swappable variant table: a

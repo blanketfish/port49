@@ -4218,7 +4218,7 @@ that hash is of the bytes as they arrived on the wire, never of a deobfuscated b
 
 A sixth, `admission_refused`, is a device the inventory names and admission refuses (above). The
 device is not at fault, so it is kept apart from both the key report and the noise. A seventh,
-`admission_changed`, is a packet on an open connection whose device a reload renamed, moved to
+`admission_withdrawn`, is a packet on an open connection whose device a reload renamed, moved to
 another `key_ref`, or gave another platform or `based_on:` base ("How a daemon refreshes its
 snapshot"); a reload that refuses or removes the device is recorded under `admission_refused` or
 `unadmitted_source`, with no strike either way.
@@ -4448,7 +4448,7 @@ the new snapshot refuses, removes, renames, moves to another `key_ref`, or gives
 wire platform (a `based_on:` edit or removal) is closed at that packet, after the header, with a TCP
 reset and no reply, and no strike, since the change is port49d's and not the device's. One
 `unvalidated` record names the device and `key_ref` the connection was admitted as, reason
-`device_unknown` (§5.7), and why: `admission_refused`, `unadmitted_source`, or `admission_changed`
+`device_unknown` (§5.7), and why: `admission_refused`, `unadmitted_source`, or `admission_withdrawn`
 for a rename, a new `key_ref` or a new platform;
 `port49_connection_events_total{event="admission_closed"}` counts it. "Complete against the snapshot
 they began with" would have no bound, because a busy single-connect connection resets its idle timer

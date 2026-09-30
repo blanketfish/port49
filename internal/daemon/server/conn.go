@@ -113,7 +113,7 @@ func (s *conn) readmitted() keyring.Diagnosis {
 		return keyring.DiagAdmissionRefused
 	case now.Device.Name != s.dev.Device.Name || now.KeyRef != s.dev.KeyRef ||
 		now.Device.Platform != s.dev.Device.Platform || now.WirePlatform != s.dev.WirePlatform:
-		return keyring.DiagAdmissionChanged
+		return keyring.DiagAdmissionWithdrawn
 	}
 	return ""
 }

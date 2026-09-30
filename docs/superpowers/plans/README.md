@@ -1014,7 +1014,7 @@ text, task by task:
     source up again in the admission in force, beside the quarantine and `retire_after` checks.
     A device refused, removed, renamed, moved to another `key_ref`, or given another platform or
     `based_on:` base (re-review R1) is reset at its next packet, with no reply and no strike, and one `unvalidated` record, reason `device_unknown`, diagnosis
-    `admission_refused`, `unadmitted_source` or the new `admission_changed`
+    `admission_refused`, `unadmitted_source` or the new `admission_withdrawn`
     (`port49_connection_events_total{event="admission_closed"}`). Spec §10's "in-flight
     connections complete against the snapshot they began with" was amended as Task 14 amended
     Decided 7: a busy single-connect connection has no end, and a device moved off a compromised

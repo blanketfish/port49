@@ -8341,7 +8341,7 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
   and `key_version`; a new report event, `inventory_change`, records an address added to an existing
   device, a device's `key_ref` changing, a device newly admitted, and a device joining or leaving a
   `security_log: true` scope. Two new diagnoses: `admission_refused`, a device the inventory names
-  and admission refuses, and `admission_changed`, an open connection whose device a reload renamed,
+  and admission refuses, and `admission_withdrawn`, an open connection whose device a reload renamed,
   re-keyed or re-platformed.
 - **New commands:** `port49 keys status`, `port49 keys show`, `port49 keys diagnose` (needs
   `admin_socket`), `port49 inventory diff`; `port49 policy test --config` adds the key checks;
@@ -8398,6 +8398,6 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 - **Reason codes:** none added. `device_unknown`'s meaning is extended to a refused device on `mint`
   and `refresh`, and a diagnosis (`admission_refused`) and a report event (`inventory_change`) are
   added, all in the spec first (Task 1). The final fix wave extended `device_unknown` to an open
-  connection whose admission a reload withdrew and added the diagnosis `admission_changed`, spec
+  connection whose admission a reload withdrew and added the diagnosis `admission_withdrawn`, spec
   first too.
 - **The pre-flight review:** every finding is resolved (the section at the top); none is left.

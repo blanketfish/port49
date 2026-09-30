@@ -243,8 +243,8 @@ func Describe(diagnosis string, version int) string {
 		return "malformed after validation"
 	case "admission_refused":
 		return "in inventory, admission refused"
-	case "admission_changed":
-		return "admission changed on an open connection"
+	case "admission_withdrawn":
+		return "admission withdrawn on an open connection"
 	}
 	return diagnosis
 }

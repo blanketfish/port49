@@ -39,7 +39,7 @@ const (
 	DiagMalformedAfterValidation Diagnosis = "malformed_after_validation" // key validated, body did not decode
 	DiagDeviceQuarantined        Diagnosis = "device_quarantined"         // admitted, but quarantined by policy (spec §10)
 	DiagAdmissionRefused         Diagnosis = "admission_refused"          // in inventory, and admission refused it (spec §10)
-	DiagAdmissionChanged         Diagnosis = "admission_changed"          // an open connection's device renamed, re-keyed or re-platformed by a reload (spec §10)
+	DiagAdmissionWithdrawn       Diagnosis = "admission_withdrawn"        // an open connection's device renamed, re-keyed or re-platformed by a reload (spec §10)
 )
 
 type Result struct {
