@@ -13,6 +13,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/rhwendt/port49/internal/yamlfault"
 )
 
 // Transport is how a device speaks TACACS+ (spec §10: a device record MUST
@@ -351,7 +353,10 @@ func ParseFile(raw []byte, path string) (Inventory, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(raw))
 	dec.KnownFields(true)
 	if err := dec.Decode(&f); err != nil && err != io.EOF {
-		return Inventory{}, fmt.Errorf("admission: %s: %w; check the key spelling against the inventory schema", path, err)
+		// A line and a category, never the file's text: a record's key_ref
+		// pin is where a secret gets pasted (yamlfault).
+		return Inventory{}, fmt.Errorf("admission: %s: %w; check the key spelling against the inventory schema", path,
+			yamlfault.Of(err))
 	}
 	var inv Inventory
 	for _, d := range f.Devices {
@@ -361,10 +366,12 @@ func ParseFile(raw []byte, path string) (Inventory, error) {
 			d.Transport = TransportTCP
 		}
 		dev := Device{Name: d.Name, Platform: d.Platform, Attributes: d.Attributes, KeyRef: d.KeyRef, Transport: d.Transport}
-		for _, s := range d.Addresses {
+		for i, s := range d.Addresses {
+			// netip's error quotes the value; the index says where it is.
 			a, err := netip.ParseAddr(s)
 			if err != nil {
-				return Inventory{}, fmt.Errorf("admission: %s: device %q: %w", path, d.Name, err)
+				return Inventory{}, fmt.Errorf("admission: %s: device %q: addresses[%d] is not an IP address", path,
+					d.Name, i)
 			}
 			dev.Addresses = append(dev.Addresses, a)
 		}
@@ -379,7 +386,8 @@ func ParseFile(raw []byte, path string) (Inventory, error) {
 		if g.Match.CIDR != "" {
 			p, err := netip.ParsePrefix(g.Match.CIDR)
 			if err != nil {
-				return Inventory{}, fmt.Errorf("admission: key group %q: %w", g.KeyRef, err)
+				return Inventory{}, fmt.Errorf("admission: %s: key_groups[%d] (%s): match.cidr is not a CIDR prefix",
+					path, i, g.KeyRef)
 			}
 			kg.CIDR = p
 		}

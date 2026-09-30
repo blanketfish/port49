@@ -88,8 +88,11 @@ func TestLoadFileRefusesUnknownKeys(t *testing.T) {
 	if err == nil {
 		t.Fatal("a misspelled inventory key must be refused at load")
 	}
-	if !strings.Contains(err.Error(), p) || !strings.Contains(err.Error(), "keyref") {
-		t.Fatalf("the error must name the file and the key, got %v", err)
+	// The key by its line, not its text: a decode error quotes nothing from
+	// the file, where a secret may be pasted (yamlfault).
+	if !strings.Contains(err.Error(), p) || !strings.Contains(err.Error(), "line 2: an unknown field") ||
+		strings.Contains(err.Error(), "keyref") {
+		t.Fatalf("the error must name the file and the key's line, and quote nothing, got %v", err)
 	}
 }
 
