@@ -54,7 +54,7 @@ Break-glass ran from 23:20:58.583Z to 23:20:59.861Z (host UTC); the device opene
 
 TACACS+ headers the device sent after the change: single-connect flag (0x04) set on 4, clear on 0.
 
-Records from the device since the change: `event=unvalidated diagnosis=no_known_key_matches type=authen` ×2; `event=unvalidated diagnosis=no_known_key_matches type=author` ×2; `event=unvalidated reason=device_unknown diagnosis=admission_withdrawn device=xe1 type=authen` ×1
+Records from the device since just before the change: `event=unvalidated diagnosis=no_known_key_matches type=authen` ×2; `event=unvalidated diagnosis=no_known_key_matches type=author` ×2; `event=unvalidated reason=device_unknown diagnosis=admission_withdrawn device=xe1 type=authen` ×1
 
 Connections between the device and port 49 in this phase's capture:
 
@@ -98,7 +98,7 @@ Break-glass ran from 23:21:25.192Z to 23:21:26.468Z (host UTC); the device opene
 
 TACACS+ headers the device sent after the change: single-connect flag (0x04) set on 4, clear on 0.
 
-Records from the device since the change: `event=unvalidated diagnosis=unadmitted_source type=authen` ×2; `event=unvalidated diagnosis=unadmitted_source type=author` ×2; `event=unvalidated reason=device_unknown diagnosis=unadmitted_source device=xe1 type=authen` ×1
+Records from the device since just before the change: `event=unvalidated diagnosis=unadmitted_source type=authen` ×2; `event=unvalidated diagnosis=unadmitted_source type=author` ×2; `event=unvalidated reason=device_unknown diagnosis=unadmitted_source device=xe1 type=authen` ×1
 
 Connections between the device and port 49 in this phase's capture:
 
@@ -142,7 +142,7 @@ Break-glass ran from 23:21:51.820Z to 23:21:53.598Z (host UTC); the device opene
 
 TACACS+ headers the device sent after the change: single-connect flag (0x04) set on 4, clear on 0.
 
-Records from the device since the change: `event=unvalidated diagnosis=admission_refused device=xe1 type=authen` ×2; `event=unvalidated diagnosis=admission_refused device=xe1 type=author` ×2; `event=unvalidated reason=device_unknown diagnosis=admission_refused device=xe1 type=authen` ×1
+Records from the device since just before the change: `event=unvalidated diagnosis=admission_refused device=xe1 type=authen` ×2; `event=unvalidated diagnosis=admission_refused device=xe1 type=author` ×2; `event=unvalidated reason=device_unknown diagnosis=admission_refused device=xe1 type=authen` ×1
 
 Connections between the device and port 49 in this phase's capture:
 
@@ -185,7 +185,7 @@ Break-glass ran from 23:22:15.940Z to 23:22:17.719Z (host UTC); the device opene
 
 TACACS+ headers the device sent after the change: single-connect flag (0x04) set on 4, clear on 0.
 
-Records from the device since the change: `event=unvalidated reason=device_quarantined diagnosis=device_quarantined device=xe1 type=authen` ×3; `event=unvalidated reason=device_quarantined diagnosis=device_quarantined device=xe1 type=author` ×2
+Records from the device since just before the change: `event=unvalidated reason=device_quarantined diagnosis=device_quarantined device=xe1 type=authen` ×3; `event=unvalidated reason=device_quarantined diagnosis=device_quarantined device=xe1 type=author` ×2
 
 Connections between the device and port 49 in this phase's capture:
 
@@ -211,7 +211,7 @@ Capture: `tests/lab/evidence/L31-quarantined-cisco_iosxe.pcap` — 166 packets t
 
 ### Summary
 
-| phase | break-glass login plus three `show version` | bar | connections refused at Accept during break-glass | refused at Accept since the change | records from the device |
+| phase | break-glass login plus three `show version` | bar | connections refused at Accept during break-glass | refused at Accept since the change | records from the device since just before the change |
 |---|---|---|---|---|---|
 | rekeyed | logged in and ran them in 1.28s | (the control) | 5 | 5 | `event=unvalidated diagnosis=no_known_key_matches type=authen` ×2; `event=unvalidated diagnosis=no_known_key_matches type=author` ×2; `event=unvalidated reason=device_unknown diagnosis=admission_withdrawn device=xe1 type=authen` ×1 |
 | removed | logged in and ran them in 1.28s | 2.78s | 6 | 6 | `event=unvalidated diagnosis=unadmitted_source type=authen` ×2; `event=unvalidated diagnosis=unadmitted_source type=author` ×2; `event=unvalidated reason=device_unknown diagnosis=unadmitted_source device=xe1 type=authen` ×1 |

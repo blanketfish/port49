@@ -161,7 +161,8 @@ func TestL31BreakGlass(t *testing.T) {
 		l29RestoreStanding(t, l)
 		obs.WriteString(l31Reading)
 		summary := "| phase | break-glass login plus three `show version` | bar | connections refused at Accept " +
-			"during break-glass | refused at Accept since the change | records from the device |\n" +
+			"during break-glass | refused at Accept since the change | records from the device since just before " +
+			"the change |\n" +
 			"|---|---|---|---|---|---|\n"
 		var control time.Duration
 		controlOK := false
@@ -321,7 +322,8 @@ func (l *lab) l31Run(t *testing.T, li *labInventory, src, policy string, ph l31P
 		"interval, and port49d refused %d of them at Accept (%d since the change).\n\n", l29Clock(bgFrom),
 		l29Clock(bgUntil), asked, atAccept, atPhase)
 	fmt.Fprintf(&b, "TACACS+ headers the device sent after the change: single-connect flag (0x04) set on %d, clear on "+
-		"%d.\n\nRecords from the device since the change: %s\n\nConnections between the device and port 49 in this "+
+		"%d.\n\nRecords from the device since just before the change: %s\n\nConnections between the device and "+
+		"port 49 in this "+
 		"phase's capture:\n\n%s\nCapture: %s\n\n", set, unset, r.tally, conns, capLine)
 	r.section = b.String()
 	return r

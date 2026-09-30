@@ -54,7 +54,7 @@ Break-glass ran from 23:24:27.222Z to 23:24:27.564Z (host UTC); the device opene
 
 TACACS+ headers the device sent after the change: single-connect flag (0x04) set on 5, clear on 0.
 
-Records from the device since the change: `event=unvalidated diagnosis=no_known_key_matches type=authen` ×2; `event=unvalidated diagnosis=no_known_key_matches type=author` ×1
+Records from the device since just before the change: `event=unvalidated diagnosis=no_known_key_matches type=authen` ×2; `event=unvalidated diagnosis=no_known_key_matches type=author` ×1
 
 Connections between the device and port 49 in this phase's capture:
 
@@ -107,7 +107,7 @@ Break-glass ran from 23:24:46.095Z to 23:24:46.420Z (host UTC); the device opene
 
 TACACS+ headers the device sent after the change: single-connect flag (0x04) set on 5, clear on 0.
 
-Records from the device since the change: `event=unvalidated diagnosis=unadmitted_source type=authen` ×2; `event=unvalidated diagnosis=unadmitted_source type=author` ×1
+Records from the device since just before the change: `event=unvalidated diagnosis=unadmitted_source type=authen` ×2; `event=unvalidated diagnosis=unadmitted_source type=author` ×1
 
 Connections between the device and port 49 in this phase's capture:
 
@@ -159,7 +159,7 @@ Break-glass ran from 23:25:05.415Z to 23:25:05.738Z (host UTC); the device opene
 
 TACACS+ headers the device sent after the change: single-connect flag (0x04) set on 6, clear on 0.
 
-Records from the device since the change: `event=unvalidated diagnosis=admission_refused device=leaf1 type=authen` ×2; `event=unvalidated diagnosis=admission_refused device=leaf1 type=author` ×1
+Records from the device since just before the change: `event=unvalidated diagnosis=admission_refused device=leaf1 type=authen` ×2; `event=unvalidated diagnosis=admission_refused device=leaf1 type=author` ×1
 
 Connections between the device and port 49 in this phase's capture:
 
@@ -206,7 +206,7 @@ Break-glass ran from 23:25:20.739Z to 23:25:21.060Z (host UTC); the device opene
 
 TACACS+ headers the device sent after the change: single-connect flag (0x04) set on 3, clear on 0.
 
-Records from the device since the change: `event=unvalidated reason=device_quarantined diagnosis=device_quarantined device=leaf1 type=authen` ×2; `event=unvalidated reason=device_quarantined diagnosis=device_quarantined device=leaf1 type=author` ×1
+Records from the device since just before the change: `event=unvalidated reason=device_quarantined diagnosis=device_quarantined device=leaf1 type=authen` ×2; `event=unvalidated reason=device_quarantined diagnosis=device_quarantined device=leaf1 type=author` ×1
 
 Connections between the device and port 49 in this phase's capture:
 
@@ -238,7 +238,7 @@ Capture: `tests/lab/evidence/L31-quarantined-arista_eos.pcap` — 192 packets to
 
 ### Summary
 
-| phase | break-glass login plus three `show version` | bar | connections refused at Accept during break-glass | refused at Accept since the change | records from the device |
+| phase | break-glass login plus three `show version` | bar | connections refused at Accept during break-glass | refused at Accept since the change | records from the device since just before the change |
 |---|---|---|---|---|---|
 | rekeyed | logged in and ran them in 340ms | (the control) | 12 | 13 | `event=unvalidated diagnosis=no_known_key_matches type=authen` ×2; `event=unvalidated diagnosis=no_known_key_matches type=author` ×1 |
 | removed | logged in and ran them in 330ms | 1.84s | 11 | 13 | `event=unvalidated diagnosis=unadmitted_source type=authen` ×2; `event=unvalidated diagnosis=unadmitted_source type=author` ×1 |

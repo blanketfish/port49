@@ -54,7 +54,7 @@ Break-glass ran from 23:15:43.799Z to 23:15:46.413Z (host UTC); the device opene
 
 TACACS+ headers the device sent after the change: single-connect flag (0x04) set on 5, clear on 0.
 
-Records from the device since the change: `event=account` ×1; `event=unvalidated diagnosis=no_known_key_matches type=acct` ×2; `event=unvalidated diagnosis=no_known_key_matches type=authen` ×1; `event=unvalidated diagnosis=no_known_key_matches type=author` ×2; `event=unvalidated reason=device_unknown diagnosis=admission_withdrawn device=nx1 type=authen` ×1
+Records from the device since just before the change: `event=account` ×1; `event=unvalidated diagnosis=no_known_key_matches type=acct` ×2; `event=unvalidated diagnosis=no_known_key_matches type=authen` ×1; `event=unvalidated diagnosis=no_known_key_matches type=author` ×2; `event=unvalidated reason=device_unknown diagnosis=admission_withdrawn device=nx1 type=authen` ×1
 
 Connections between the device and port 49 in this phase's capture:
 
@@ -105,7 +105,7 @@ Break-glass ran from 23:16:08.047Z to 23:16:10.667Z (host UTC); the device opene
 
 TACACS+ headers the device sent after the change: single-connect flag (0x04) set on 5, clear on 0.
 
-Records from the device since the change: `event=account` ×1; `event=unvalidated diagnosis=unadmitted_source type=acct` ×2; `event=unvalidated diagnosis=unadmitted_source type=authen` ×1; `event=unvalidated diagnosis=unadmitted_source type=author` ×2; `event=unvalidated reason=device_unknown diagnosis=unadmitted_source device=nx1 type=authen` ×1
+Records from the device since just before the change: `event=account` ×1; `event=unvalidated diagnosis=unadmitted_source type=acct` ×2; `event=unvalidated diagnosis=unadmitted_source type=authen` ×1; `event=unvalidated diagnosis=unadmitted_source type=author` ×2; `event=unvalidated reason=device_unknown diagnosis=unadmitted_source device=nx1 type=authen` ×1
 
 Connections between the device and port 49 in this phase's capture:
 
@@ -155,7 +155,7 @@ Break-glass ran from 23:16:34.016Z to 23:16:36.598Z (host UTC); the device opene
 
 TACACS+ headers the device sent after the change: single-connect flag (0x04) set on 5, clear on 0.
 
-Records from the device since the change: `event=account` ×1; `event=unvalidated diagnosis=admission_refused device=nx1 type=acct` ×2; `event=unvalidated diagnosis=admission_refused device=nx1 type=authen` ×1; `event=unvalidated diagnosis=admission_refused device=nx1 type=author` ×2; `event=unvalidated reason=device_unknown diagnosis=admission_refused device=nx1 type=authen` ×1
+Records from the device since just before the change: `event=account` ×1; `event=unvalidated diagnosis=admission_refused device=nx1 type=acct` ×2; `event=unvalidated diagnosis=admission_refused device=nx1 type=authen` ×1; `event=unvalidated diagnosis=admission_refused device=nx1 type=author` ×2; `event=unvalidated reason=device_unknown diagnosis=admission_refused device=nx1 type=authen` ×1
 
 Connections between the device and port 49 in this phase's capture:
 
@@ -200,7 +200,7 @@ Break-glass ran from 23:16:57.384Z to 23:16:59.990Z (host UTC); the device opene
 
 TACACS+ headers the device sent after the change: single-connect flag (0x04) set on 5, clear on 0.
 
-Records from the device since the change: `event=account` ×1; `event=unvalidated reason=device_quarantined diagnosis=device_quarantined device=nx1 type=acct` ×2; `event=unvalidated reason=device_quarantined diagnosis=device_quarantined device=nx1 type=authen` ×2; `event=unvalidated reason=device_quarantined diagnosis=device_quarantined device=nx1 type=author` ×2
+Records from the device since just before the change: `event=account` ×1; `event=unvalidated reason=device_quarantined diagnosis=device_quarantined device=nx1 type=acct` ×2; `event=unvalidated reason=device_quarantined diagnosis=device_quarantined device=nx1 type=authen` ×2; `event=unvalidated reason=device_quarantined diagnosis=device_quarantined device=nx1 type=author` ×2
 
 Connections between the device and port 49 in this phase's capture:
 
@@ -230,7 +230,7 @@ Capture: `tests/lab/evidence/L31-quarantined-cisco_nxos.pcap` — 200 packets to
 
 ### Summary
 
-| phase | break-glass login plus three `show version` | bar | connections refused at Accept during break-glass | refused at Accept since the change | records from the device |
+| phase | break-glass login plus three `show version` | bar | connections refused at Accept during break-glass | refused at Accept since the change | records from the device since just before the change |
 |---|---|---|---|---|---|
 | rekeyed | logged in and ran them in 2.61s | (the control) | 11 | 11 | `event=account` ×1; `event=unvalidated diagnosis=no_known_key_matches type=acct` ×2; `event=unvalidated diagnosis=no_known_key_matches type=authen` ×1; `event=unvalidated diagnosis=no_known_key_matches type=author` ×2; `event=unvalidated reason=device_unknown diagnosis=admission_withdrawn device=nx1 type=authen` ×1 |
 | removed | logged in and ran them in 2.62s | 4.11s | 11 | 11 | `event=account` ×1; `event=unvalidated diagnosis=unadmitted_source type=acct` ×2; `event=unvalidated diagnosis=unadmitted_source type=authen` ×1; `event=unvalidated diagnosis=unadmitted_source type=author` ×2; `event=unvalidated reason=device_unknown diagnosis=unadmitted_source device=nx1 type=authen` ×1 |
