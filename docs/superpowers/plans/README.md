@@ -36,7 +36,7 @@ built, below). **6a written 2026-09-30, revised the same day** after its pre-fli
 lab, one lab-and-docs; plan 6 is split at the seam below, and three owner decisions are listed at
 its top), and **executed 2026-09-30** on `feature/bundle-in-process`, reviewed per task and
 whole-branch, with a final fix wave. It closed L27 and L28 and opened L29 and L30 (Plan 6a — As
-built, below); **not merged yet** <!-- at merge: replace "not merged yet" with "merged <date> (PR #N)" -->.
+built, below); **merged 2026-09-30 (PR #15)**.
 6b and 7–13 not yet.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
@@ -930,7 +930,7 @@ commands and the system users by platform name, so 5a refuses `based_on: juniper
 **Split into 6a and 6b (2026-09-30).** The seam is the bundle's source:
 
 - **Plan 6a — `2026-09-30-06a-bundle-in-process.md`. Written 2026-09-30; executed 2026-09-30
-  (as built, below); not merged yet.** <!-- at merge: replace "not merged yet" with "merged <date> (PR #N)" -->
+  (as built, below); merged 2026-09-30 (PR #15).**
   Everything that
   consumes a bundle, with the bundle built in port49d from `inventory_file` and
   `broker.policy_file`: `bundle.ID` (a content hash) and `bundle.Parse`; the loaded policy as the
