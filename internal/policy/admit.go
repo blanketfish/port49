@@ -131,7 +131,9 @@ func (p *Policy) Admitted(name string) (admission.Resolved, bool) {
 	return r, ok
 }
 
-// AdmissionRefusals are the inventory devices admission refuses, by name.
+// AdmissionRefusals are the inventory devices admission refuses, by name. It
+// is meaningful only where AdmissionAssessed: on an unassessed policy every
+// device is refused no_key_group, and nothing acts on it.
 func (p *Policy) AdmissionRefusals() []admission.Resolved {
 	var out []admission.Resolved
 	for _, name := range sortedKeys(p.admitted) {
@@ -142,7 +144,9 @@ func (p *Policy) AdmissionRefusals() []admission.Resolved {
 	return out
 }
 
-// KeyAssignment is how a device's key_ref was chosen, for `port49 keys show`.
+// KeyAssignment is how a device's key_ref was chosen, for `port49 keys show`:
+// not whether it is admitted, since a device refused for an unknown key or
+// its transport still has one. Read Admitted for that.
 func (p *Policy) KeyAssignment(name string) (admission.Assignment, bool) {
 	as, ok := p.assigned[name]
 	return as, ok

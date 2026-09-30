@@ -100,7 +100,12 @@ func (p *Policy) resolveNow(sub *Subject, d admission.Device, now time.Time) (Re
 	if err := p.quarantined(d, now); err != nil {
 		return Resolution{}, err
 	}
-	if r, ok := p.admitted[d.Name]; ok && r.Refused != "" && p.AdmissionAssessed() {
+	// A device this policy's inventory does not name was never assessed,
+	// so it is refused as well: nothing mints for it (fails closed).
+	if r, ok := p.admitted[d.Name]; p.AdmissionAssessed() && (!ok || r.Refused != "") {
+		if !ok {
+			r.Refused = "is not in the inventory admission assessed"
+		}
 		return Resolution{}, fmt.Errorf("%w: %s", ErrDeviceRefused, r.Refused)
 	}
 	return p.resolved(sub, d, c)

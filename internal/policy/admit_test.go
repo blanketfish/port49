@@ -192,6 +192,13 @@ func TestARefusedDeviceDoesNotResolve(t *testing.T) {
 	if _, err := p.Resolve("user:nobody@example.com", stray, noon); !errors.Is(err, ErrNoGrants) {
 		t.Fatalf("no grant is answered first: %v", err)
 	}
+	// A device this inventory never named was never assessed: it fails closed
+	// (review M-1).
+	ghost := admission.Device{Name: "ghost", Platform: "arista_eos",
+		Addresses: []netip.Addr{netip.MustParseAddr("10.0.9.1")}}
+	if _, err := p.Resolve("user:alice@example.com", ghost, noon); !errors.Is(err, ErrDeviceRefused) {
+		t.Fatalf("ghost: %v", err)
+	}
 	unassessed := mustParse(t, good)
 	if unassessed.AdmissionAssessed() {
 		t.Fatal("no key groups and no key names is assessed")
@@ -199,6 +206,38 @@ func TestARefusedDeviceDoesNotResolve(t *testing.T) {
 	leaf, _ := unassessed.Device("leaf-01")
 	if _, err := unassessed.Resolve("user:alice@example.com", leaf, noon); err != nil {
 		t.Fatalf("an unassessed policy refused: %v", err)
+	}
+}
+
+// A declared subject whose grants do not select a refused device is told
+// no_grants_matched, never that the device exists and is refused: the grants
+// are checked first, as for a quarantine (design §17; plan 6a I2).
+func TestARefusedDeviceIsNeverRevealedAheadOfTheGrants(t *testing.T) {
+	body := strings.Replace(keyGrouped, "grants:\n",
+		"  - {name: bob, identity: \"user:bob@example.com\", username: bob, token_ttl: 60s}\n"+
+			"grants:\n  - {subject: bob, scope: dc_fabric, roles: [read_only]}\n", 1)
+	e := env()
+	e.Devices = append(e.Devices, admission.Device{Name: "stray", Platform: "arista_eos",
+		Addresses:  []netip.Addr{netip.MustParseAddr("192.0.2.9")},
+		Attributes: map[string]string{"site": "edge"}})
+	p, err := Parse([]byte(body), e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stray, _ := p.Device("stray")
+	if r, _ := p.Admitted("stray"); r.Refused == "" {
+		t.Fatalf("stray is admitted: %+v", r)
+	}
+	if _, err := p.ResolveSubject("bob", stray, noon); !errors.Is(err, ErrNoGrants) {
+		t.Fatalf("ResolveSubject: %v", err)
+	}
+	if _, err := p.Resolve("user:bob@example.com", stray, noon); !errors.Is(err, ErrNoGrants) {
+		t.Fatalf("Resolve: %v", err)
+	}
+	// bob's grant still resolves where it selects an admitted device.
+	leaf, _ := p.Device("leaf-01")
+	if _, err := p.ResolveSubject("bob", leaf, noon); err != nil {
+		t.Fatalf("leaf-01: %v", err)
 	}
 }
 
