@@ -262,6 +262,17 @@ func TestValidateNamesBothDevicesOfACollision(t *testing.T) {
 	}
 }
 
+// A bad address names its device by position: the name has passed no shape
+// check yet, so it is not echoed.
+func TestABadAddressNamesItsDeviceByPosition(t *testing.T) {
+	_, err := ParseFile([]byte("devices:\n  - {name: ok-1, platform: arista_eos, addresses: [10.0.0.1]}\n"+
+		"  - {name: \"leaf 01\\u001b[2J\", platform: arista_eos, addresses: [10.0.0.2, nope]}\n"), "")
+	if err == nil || !strings.Contains(err.Error(), "devices[1]: addresses[1] is not an IP address") ||
+		strings.Contains(err.Error(), "leaf 01") {
+		t.Fatalf("got %v", err)
+	}
+}
+
 // An unsupported transport refuses its device alone, never the file: a sync
 // can write one, and refusing the file would stop every inventory change
 // fleet-wide (spec §10).

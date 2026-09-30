@@ -393,7 +393,7 @@ func ParseFile(raw []byte, path string) (Inventory, error) {
 			yamlfault.Of(err))
 	}
 	var inv Inventory
-	for _, d := range f.Devices {
+	for n, d := range f.Devices {
 		// An unsupported transport is kept as written: Resolve refuses the
 		// device, not the file. Absent is tcp, in one spelling.
 		if d.Transport == "" {
@@ -401,11 +401,12 @@ func ParseFile(raw []byte, path string) (Inventory, error) {
 		}
 		dev := Device{Name: d.Name, Platform: d.Platform, Attributes: d.Attributes, KeyRef: d.KeyRef, Transport: d.Transport}
 		for i, s := range d.Addresses {
-			// netip's error quotes the value; the index says where it is.
+			// netip's error quotes the value, and the name has passed no
+			// shape check: positions say where it is.
 			a, err := netip.ParseAddr(s)
 			if err != nil {
-				return Inventory{}, fmt.Errorf("admission: %sdevice %q: addresses[%d] is not an IP address", at,
-					d.Name, i)
+				return Inventory{}, fmt.Errorf("admission: %sdevices[%d]: addresses[%d] is not an IP address", at,
+					n, i)
 			}
 			dev.Addresses = append(dev.Addresses, a)
 		}
