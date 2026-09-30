@@ -26,7 +26,7 @@
 - **Credentials:** every password, secret key and API token was random per run, passed by environment,
   and is in no committed file; no fixture carries an `Authorization` header. The webhook secret
   `l27-lab-webhook-secret` is **public and lab only**, as in L27.
-- **Status:** L30 open; Task 21 closes the row.
+- **Status:** L30 closed — measured 2026-09-30 (spec §15, row L30, and its note under the register; plan 6b Task 21)
 
 ## Claim
 
