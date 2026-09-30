@@ -45,9 +45,6 @@ func serviceBlock(t *testing.T) string {
 	if err := os.WriteFile(pub, pubPEM, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(pub, 0o644); err != nil {
-		t.Fatal(err)
-	}
 	return fmt.Sprintf(`inventory:
   service:
     url: https://inv.example:8443
@@ -93,6 +90,9 @@ func TestTheInventoryServiceBlockIsRefusedWhereItCannotWork(t *testing.T) {
 		}, "inventory.service.verify_key_files[0]"},
 		"poll too fast": {func() (Config, error) {
 			return loadService(t, false, true, block+"    poll_interval: 1s\n")
+		}, "poll_interval must be between 5s and 10m"},
+		"poll too slow": {func() (Config, error) {
+			return loadService(t, false, true, block+"    poll_interval: 11m\n")
 		}, "poll_interval must be between 5s and 10m"},
 	} {
 		if _, err := c.cfg(); err == nil || !strings.Contains(err.Error(), c.want) {
@@ -184,5 +184,46 @@ func TestInventoryServiceDecodeErrorsEchoNothing(t *testing.T) {
 	if _, err := InventoryServiceOf([]byte("inventory:\n  service:\n    url: https://" + secret + "@inv.example\n")); err == nil ||
 		strings.Contains(err.Error(), secret) {
 		t.Fatalf("got %v", err)
+	}
+}
+
+// The url is https://host[:port] and nothing else, as the client takes it.
+func TestTheServiceURLIsHostAndPortOnly(t *testing.T) {
+	block := serviceBlock(t)
+	for _, u := range []string{"https://inv.example:8443/v1", "https://inv.example:8443?token=x",
+		"https://inv.example:8443/?", "https://inv.example:8443#frag", "https://user@inv.example:8443",
+		"https://", "https:inv.example"} {
+		if _, err := loadService(t, false, true, strings.Replace(block, "https://inv.example:8443", u, 1)); err == nil ||
+			!strings.Contains(err.Error(), "inventory.service.url must be https://host[:port]") {
+			t.Errorf("%s: got %v", u, err)
+		}
+	}
+	for _, u := range []string{"https://inv.example", "https://inv.example:8443/"} {
+		if _, err := loadService(t, false, true, strings.Replace(block, "https://inv.example:8443", u, 1)); err != nil {
+			t.Errorf("%s: %v", u, err)
+		}
+	}
+}
+
+// mirror_dir and state_dir are apart, as the service requires of its own:
+// neither is, or is under, the other; a sibling that shares a prefix is apart.
+func TestTheMirrorAndTheStateAreApart(t *testing.T) {
+	block := serviceBlock(t)
+	for mirror, want := range map[string]string{
+		"/var/lib/port49/inventory":         "mirror_dir must be outside state_dir",
+		"/var/lib/port49/inventory/":        "mirror_dir must be outside state_dir",
+		"/var/lib/port49/inventory/mirror":  "mirror_dir must be outside state_dir",
+		"/var/lib/port49":                   "state_dir must be outside mirror_dir",
+		"/var/lib/port49/../port49":         "state_dir must be outside mirror_dir",
+		"/var/lib/port49/inventory-mirror":  "",
+		"/var/lib/port49/inventory.mirror/": "",
+	} {
+		_, err := loadService(t, false, true, block+"    mirror_dir: "+mirror+"\n")
+		if want == "" && err != nil {
+			t.Errorf("%s: %v", mirror, err)
+		}
+		if want != "" && (err == nil || !strings.Contains(err.Error(), want)) {
+			t.Errorf("%s: got %v, want %q", mirror, err, want)
+		}
 	}
 }

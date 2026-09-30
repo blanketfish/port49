@@ -958,8 +958,13 @@ func checkKeyRefs(keys map[string]KeySet, raw []byte) error {
 // above all is required — without it RootCAs would be nil, which Go reads as
 // the host's roots, and any public CA could vouch for the service.
 func checkService(s InventoryServiceConfig) (*InventoryServiceConfig, error) {
-	if u, err := url.Parse(s.URL); err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil {
-		return nil, fmt.Errorf("config: inventory.service.url must be https://host[:port], with no user information")
+	// What the client (internal/inventory) refuses, refused at load: no
+	// user information, where a credential would sit, and no path, query or
+	// fragment, where a token would be pasted. None is printed.
+	if u, err := url.Parse(s.URL); err != nil || u.Scheme != "https" || u.Host == "" || u.Opaque != "" ||
+		u.User != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+		return nil, fmt.Errorf("config: inventory.service.url must be https://host[:port], with no user " +
+			"information, path, query or fragment")
 	}
 	for _, req := range []struct{ key, v string }{{"ca_file", s.CAFile}, {"tls_cert_file", s.TLSCertFile},
 		{"tls_key_file", s.TLSKeyFile}, {"state_dir", s.StateDir}} {
@@ -972,6 +977,16 @@ func checkService(s InventoryServiceConfig) (*InventoryServiceConfig, error) {
 	}
 	if s.MirrorDir != "" && !filepath.IsAbs(s.MirrorDir) {
 		return nil, fmt.Errorf("config: inventory.service.mirror_dir must be an absolute path")
+	}
+	// As the service refuses them (internal/inventory's config): the mirror is
+	// a separate copy, and neither directory is a part of the other.
+	if s.MirrorDir != "" && within(s.StateDir, s.MirrorDir) {
+		return nil, fmt.Errorf("config: inventory.service.mirror_dir must be outside state_dir; the mirror is a " +
+			"separate copy, not a part of the state")
+	}
+	if s.MirrorDir != "" && within(s.MirrorDir, s.StateDir) {
+		return nil, fmt.Errorf("config: inventory.service.state_dir must be outside mirror_dir; the mirror is a " +
+			"separate copy, and the state is not a part of it")
 	}
 	if len(s.VerifyKeyFiles) == 0 {
 		return nil, fmt.Errorf("config: inventory.service.verify_key_files must name the service's signing public " +
@@ -991,6 +1006,12 @@ func checkService(s InventoryServiceConfig) (*InventoryServiceConfig, error) {
 			s.PollInterval)
 	}
 	return &s, nil
+}
+
+// within reports whether dir is base or a directory under it.
+func within(base, dir string) bool {
+	rel, err := filepath.Rel(filepath.Clean(base), filepath.Clean(dir))
+	return err == nil && (rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))))
 }
 
 // VerifyKeys reads each verify key file behind the write fence (pre-flight
