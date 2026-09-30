@@ -9,8 +9,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rhwendt/port49/internal/bundle"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/engine"
+	"github.com/rhwendt/port49/internal/policy"
 )
 
 // unmappedLevel declares a level no built-in platform renders: a role landing
@@ -464,9 +466,6 @@ func TestGrantsRemoveFailsWhenStdoutFails(t *testing.T) {
 // adapter fact from the policy file itself, so an enable-username the file
 // declares refuses the load in CI exactly as it refuses port49d's start.
 func TestOfflineToolsReadTheAdaptersFromThePolicyFile(t *testing.T) {
-	if e := offlineEnv(nil); e.Dialects != nil || !e.Now.IsZero() {
-		t.Fatalf("%+v", e)
-	}
 	pol, inv := policyFixture(t)
 	raw := readFile(t, pol)
 	if err := os.WriteFile(pol, append([]byte("platforms: {arista_eos: {enable_username: enab}}\n"), raw...), 0o600); err != nil {
@@ -1130,5 +1129,44 @@ func TestPolicyDiffPrintsAProjectionChange(t *testing.T) {
 	if got := projectionText("narrow", []string{"view", "view-configuration"}, "p49-readonly"); got !=
 		"narrow (template p49-readonly, bits view view-configuration)" {
 		t.Errorf("%q", got)
+	}
+}
+
+// I7: every tool names the bundle port49d names for the same two files.
+func TestPolicyDiffLoadsTheBundleAsPort49dDoes(t *testing.T) {
+	dir := t.TempDir()
+	pol := filepath.Join(dir, "policy.yaml")
+	inv := filepath.Join(dir, "inventory.yaml")
+	if err := os.WriteFile(pol, []byte("scopes: [{name: all_devices, match: {}}]\n"+
+		"roles: [{name: r, privilege: readonly, permit: [show **]}]\n"+
+		"subjects: [{name: s, identity: [\"user:alice@example.com\"], username: alice, token_ttl: 60s}]\n"+
+		"grants: [{subject: s, scope: all_devices, roles: [r]}]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(inv, []byte("devices: [{name: leaf-01, platform: arista_eos, addresses: [10.0.0.1]},\n"+
+		"  {name: lab-01, platform: arista_eos, addresses: [192.168.0.1]}]\n"+
+		"key_groups: [{match: {cidr: 10.0.0.0/8}, key_ref: prod_key}]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := run([]string{"policy", "diff", "--old", pol, "--new", pol, "--inventory", inv}, &out, &errOut); code != 0 {
+		t.Fatalf("exit %d: %s%s", code, out.String(), errOut.String())
+	}
+	// explain reads the inventory's key groups as port49d does, so a device
+	// none of them admits is refused, not minted for.
+	out.Reset()
+	if code := run([]string{"explain", "--policy", pol, "--inventory", inv, "--subject", "s", "--device", "lab-01",
+		"--command", "show version"}, &out, &errOut); code != 0 || !strings.HasPrefix(out.String(), "deny device_unknown") {
+		t.Fatalf("lab-01, which no key group admits: exit %d: %s%s", code, out.String(), errOut.String())
+	}
+	p, err := bundle.Load(pol, inv, policy.Env{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := p.Admitted("leaf-01"); r.KeyRef != "prod_key" {
+		t.Fatalf("the inventory's key groups were not read: %+v", r)
+	}
+	if !strings.HasPrefix(p.Bundle, "sha256:") || p.Bundle == p.Source {
+		t.Fatalf("bundle %s source %s", p.Bundle, p.Source)
 	}
 }

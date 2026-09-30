@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/rhwendt/port49/internal/admission"
+	"github.com/rhwendt/port49/internal/bundle"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/policy"
@@ -25,15 +26,6 @@ import (
 // CI runs them; they never ask a broker.
 type policyFiles struct{ policy, inventory string }
 
-// offlineEnv is the environment the offline tools load a policy in: the
-// inventory, and nothing else. Every adapter fact a joint check reads — the
-// enable username that `enable: auto` needs included — is in the policy
-// file's platform set and `platforms:` blocks, which port49d loads the same
-// way, so CI answers what port49d answers (plan 4 pre-flight N5).
-func offlineEnv(devices []admission.Device) policy.Env {
-	return policy.Env{Devices: devices}
-}
-
 func (f *policyFiles) register(fs *flag.FlagSet) {
 	fs.StringVar(&f.policy, "policy", "", "the policy file")
 	fs.StringVar(&f.inventory, "inventory", "", "the inventory file the daemon admits from (inventory_file)")
@@ -42,12 +34,10 @@ func (f *policyFiles) register(fs *flag.FlagSet) {
 // missing reports a usage error: a policy tool needs both files.
 func (f *policyFiles) missing() bool { return f.policy == "" || f.inventory == "" }
 
+// load builds the bundle from the two files as port49d does (bundle.Load),
+// so a bundle a tool names is the one port49d's records carry.
 func (f *policyFiles) load() (*policy.Policy, error) {
-	inv, err := admission.LoadFile(f.inventory)
-	if err != nil {
-		return nil, err
-	}
-	return policy.Load(f.policy, offlineEnv(inv.Devices))
+	return bundle.Load(f.policy, f.inventory, policy.Env{})
 }
 
 // explainCmd resolves a hypothetical decision and prints exactly one reason
@@ -301,17 +291,12 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 	out, errOut, flush := redactOutput(stdout, stderr)
 	defer flush()
 	stderr = errOut
-	inv, err := admission.LoadFile(*inventory)
-	if err != nil {
-		fmt.Fprintln(stderr, "port49 policy diff:", err)
-		return 1
-	}
-	before, err := policy.Load(*oldPath, offlineEnv(inv.Devices))
+	before, err := bundle.Load(*oldPath, *inventory, policy.Env{})
 	if err != nil {
 		fmt.Fprintln(stderr, "port49 policy diff: --old:", err)
 		return 1
 	}
-	after, err := policy.Load(*newPath, offlineEnv(inv.Devices))
+	after, err := bundle.Load(*newPath, *inventory, policy.Env{})
 	if err != nil {
 		fmt.Fprintln(stderr, "port49 policy diff: --new:", err)
 		return 1
@@ -737,7 +722,7 @@ func grantsRemove(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "port49 grants remove:", err)
 		return 1
 	}
-	after, err := policy.Parse(out, offlineEnv(inv.Devices))
+	after, err := bundle.Parse(out, inv, policy.Env{})
 	if err != nil {
 		fmt.Fprintf(stderr, "port49 grants remove: the policy without %s does not load, so nothing was written: %v\n",
 			*subject, err)

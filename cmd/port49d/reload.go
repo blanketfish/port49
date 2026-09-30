@@ -156,7 +156,7 @@ func arm(timer *time.Timer, due, now time.Time) {
 func (r *reloader) poll(ctx context.Context) {
 	raw, v, err := policyVersion(r.cfg.Broker.PolicyFile)
 	switch {
-	case v == r.broker.Policy.Load().Bundle:
+	case v == r.broker.Policy.Load().Source:
 		// The file in force ends a run of differing reads: blips days
 		// apart — a file missing for a moment in a ConfigMap swap — must
 		// not add up to the never-settles alarm.
@@ -180,7 +180,7 @@ func (r *reloader) poll(ctx context.Context) {
 			r.metrics.PolicyFileRefused.Set(1)
 			fmt.Fprintf(stderr, "port49d: policy: broker.policy_file %s has changed at each of the last %d reads, "+
 				"%s apart, so it is not loaded; still serving %s; write it once, atomically\n",
-				r.cfg.Broker.PolicyFile, stillChangingAfter, r.interval, r.broker.Policy.Load().Bundle)
+				r.cfg.Broker.PolicyFile, stillChangingAfter, r.interval, r.broker.Policy.Load().Source)
 		}
 	default:
 		r.pending = ""
@@ -203,12 +203,12 @@ func (r *reloader) load(ctx context.Context, trigger string, raw []byte, v strin
 	r.changing = 0
 	old := r.broker.Policy.Load()
 	var pol *policy.Policy
-	if err == nil && v == old.Bundle {
+	if err == nil && v == old.Source {
 		// The bytes in force: nothing to compile, and nothing is refused
 		// that was loaded before (a SIGHUP with no edit).
 		pol = old
 	} else if err == nil {
-		pol, err = parsePolicy(r.cfg, raw)
+		pol, err = parseBundle(r.cfg, raw, old.Inventory())
 	} else {
 		err = fmt.Errorf("broker.policy_file %s: %w", r.cfg.Broker.PolicyFile, err)
 	}
@@ -216,16 +216,16 @@ func (r *reloader) load(ctx context.Context, trigger string, raw []byte, v strin
 		r.metrics.PolicyReloads.WithLabelValues("refused").Inc()
 		r.metrics.PolicyFileRefused.Set(1)
 		r.refused = v
-		fmt.Fprintf(stderr, "port49d: policy reload (%s) refused; still serving %s: %s\n", trigger, old.Bundle,
+		fmt.Fprintf(stderr, "port49d: policy reload (%s) refused; still serving %s: %s\n", trigger, old.Source,
 			oneLine(err))
 		return
 	}
 	r.refused = ""
 	r.metrics.PolicyFileRefused.Set(0)
-	if pol.Bundle == old.Bundle {
+	if pol.Source == old.Source {
 		r.metrics.PolicyReloads.WithLabelValues("unchanged").Inc()
 		fmt.Fprintf(stderr, "port49d: policy reload (%s): broker.policy_file unchanged, %s in force\n", trigger,
-			pol.Bundle)
+			pol.Source)
 		return
 	}
 	r.broker.Policy.Swap(pol)
@@ -238,8 +238,8 @@ func (r *reloader) load(ctx context.Context, trigger string, raw []byte, v strin
 	r.settle = now.Add(settleAfterReload)
 	r.metrics.PolicyRefreshPending.Set(1)
 	r.metrics.PolicyReloads.WithLabelValues("applied").Inc()
-	fmt.Fprintf(stderr, "port49d: policy reloaded (%s): %s replaces %s; %d device(s) quarantined now, %d before\n",
-		trigger, pol.Bundle, old.Bundle, quarantinedAt(pol, now), quarantinedAt(old, now))
+	fmt.Fprintf(stderr, "port49d: policy reloaded (%s): %s replaces %s (bundle %s); %d device(s) quarantined now, %d before\n",
+		trigger, pol.Source, old.Source, pol.Bundle, quarantinedAt(pol, now), quarantinedAt(old, now))
 	sayPolicy(pol, now)
 	r.refresh(ctx)
 }

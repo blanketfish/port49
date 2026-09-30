@@ -164,3 +164,12 @@ func (p *Policy) Notices() []string { return slices.Clone(p.notices) }
 // (Env.KeyRefs, which port49d always sets). An offline tool given neither —
 // most of the test corpus — resolves every device as before.
 func (p *Policy) AdmissionAssessed() bool { return len(p.keyGroups) > 0 || p.env.KeyRefs != nil }
+
+// Raw is the policy file's bytes as loaded.
+func (p *Policy) Raw() []byte { return slices.Clone(p.raw) }
+
+// Inventory is the inventory this policy was loaded against, as read: the
+// devices and any key groups the inventory file still carried.
+func (p *Policy) Inventory() admission.Inventory {
+	return admission.Inventory{Devices: slices.Clone(p.env.Devices), KeyGroups: slices.Clone(p.env.InventoryKeyGroups)}
+}

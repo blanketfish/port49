@@ -48,6 +48,10 @@ type Env struct {
 	// with a notice; where it has its own, this file's win and the notice
 	// names these ignored (plan 6a Decided 4).
 	InventoryKeyGroups []admission.KeyGroup
+	// Bundle names the bundle this policy is loaded into (bundle.ID), on
+	// every blob and record (spec §5.7, §10). Empty is the policy file's own
+	// sha256, as before plan 6a: a test, and a tool given one file.
+	Bundle string
 	// Dialects replaces platforms of the pinned set when non-nil: tests use
 	// it to stand a platform up with other behaviour.
 	Dialects map[string]platform.Dialect
@@ -64,9 +68,17 @@ type Env struct {
 
 // Policy is a loaded, validated policy file.
 type Policy struct {
-	// Bundle names this policy on every blob and record: the sha256 of the
-	// file's bytes, until plan 6 publishes versioned bundles (spec §5.7).
+	// Bundle names the bundle this policy was loaded into, on every blob and
+	// record (spec §5.7, §10): bundle.ID, or the policy file's sha256 where
+	// the caller named none.
 	Bundle string
+	// Source is the policy file's own sha256, whatever bundle it is loaded
+	// into: what port49d compares file versions by, and what a refresh reads
+	// to tell an inventory-only swap from a policy edit (spec §5.1.3).
+	Source string
+	// raw is the file's bytes, so an inventory reload can load them again
+	// against the new inventory (plan 6a).
+	raw []byte
 
 	// set is the platform set the policy pins (spec §8), and adapters its
 	// platforms: the built-in set, the file's `platforms:` blocks over it,
@@ -242,7 +254,10 @@ func Parse(raw []byte, env Env) (*Policy, error) {
 		return nil, errors.New("the policy file must be one YAML document; remove the `---` separator and " +
 			"everything after it, or merge it into the first document")
 	}
-	p := &Policy{Bundle: engine.HashOf(raw), env: env}
+	p := &Policy{Bundle: env.Bundle, Source: engine.HashOf(raw), raw: slices.Clone(raw), env: env}
+	if p.Bundle == "" {
+		p.Bundle = p.Source
+	}
 	p.devIndex = make(map[string]admission.Device, len(env.Devices))
 	for _, d := range env.Devices {
 		p.devIndex[d.Name] = d

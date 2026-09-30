@@ -57,7 +57,8 @@ func TestARefusedPolicyNeverPrintsARuleSecret(t *testing.T) {
 	} {
 		secret := tt.prefix + strings.Replace(minimalPolicy, `permit: ["**"]}`,
 			`permit: ["**"], deny: ["`+tt.deny+`"]}`, 1)
-		if _, err := parsePolicy(brokerConfig(t, minimalPolicy), []byte(secret)); err == nil ||
+		cfg := brokerConfig(t, minimalPolicy)
+		if _, err := parseBundle(cfg, []byte(secret), cfg.Inventory); err == nil ||
 			strings.Contains(err.Error(), "Hunter2") || !strings.Contains(err.Error(), tt.want) {
 			t.Fatalf("%s, at start: %v", tt.name, err)
 		}

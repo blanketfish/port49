@@ -30,6 +30,7 @@ import (
 
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/broker"
+	"github.com/rhwendt/port49/internal/bundle"
 	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/daemon/acct"
 	"github.com/rhwendt/port49/internal/daemon/authen"
@@ -264,14 +265,15 @@ func loadPolicy(cfg config.Config) (*policy.Policy, error) {
 	if err != nil {
 		return nil, fmt.Errorf("broker.policy_file %s: %w", cfg.Broker.PolicyFile, err)
 	}
-	return parsePolicy(cfg, raw)
+	return parseBundle(cfg, raw, cfg.Inventory)
 }
 
-// parsePolicy is loadPolicy for bytes already read: a reload loads exactly the
-// bytes it hashed, so the version it remembers refusing is the version it
-// refused, and the version the watch saw agree twice is the version loaded.
-func parsePolicy(cfg config.Config, raw []byte) (*policy.Policy, error) {
-	pol, err := policy.Parse(raw, policy.Env{Devices: cfg.Inventory.Devices})
+// parseBundle builds the bundle from the policy file's bytes and an
+// inventory (bundle.Parse): a reload of either loads the one it read against
+// the other in force, so the version it remembers refusing is the version it
+// refused.
+func parseBundle(cfg config.Config, raw []byte, inv admission.Inventory) (*policy.Policy, error) {
+	pol, err := bundle.Parse(raw, inv, policy.Env{})
 	if err != nil {
 		return nil, fmt.Errorf("broker.policy_file %s: %w", cfg.Broker.PolicyFile, quotesCut{err})
 	}

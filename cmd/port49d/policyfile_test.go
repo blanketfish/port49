@@ -306,7 +306,7 @@ func TestAPolicyInASearchOnlyDirectoryIsRead(t *testing.T) {
 func TestARefusalQuotesAtMost64Characters(t *testing.T) {
 	cfg := brokerConfig(t, minimalPolicy)
 	long := strings.Repeat("x", 200)
-	_, err := parsePolicy(cfg, []byte(strings.Replace(minimalPolicy, "roles: [r]", "roles: ["+long+"]", 1)))
+	_, err := parseBundle(cfg, []byte(strings.Replace(minimalPolicy, "roles: [r]", "roles: ["+long+"]", 1)), cfg.Inventory)
 	if err == nil {
 		t.Fatal("a grant naming no role must not load")
 	}
