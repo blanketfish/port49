@@ -136,6 +136,21 @@ to the rulings.
   - M12: the webhook listener binds each stack's own gateway. Task 2.
   - None is left.
 
+**Re-review (same day).** Five further findings, each ruled:
+- **N1 (a policy reload could log out the fleet).** A policy reload is held to the inventory's
+  bound: `bundle.CheckAdmission` counts devices going from admitted to refused against
+  `inventory.max_removed_percent`. A reload over the bound is refused, naming them; the policy in
+  force keeps serving, with the alarm raised, and `SIGHUP` retries after the bound is raised.
+  `port49 policy diff` fails on a newly refused device, and `port49 policy test` now fails on every
+  refused device, a device no group admits included. Tasks 7, 12, 17; the real reload path is
+  tested with a `key_groups` typo, and the sessions and tokens survive.
+- **N2:** `port49 explain` says a refused device is refused, and why. Task 4.
+- **N3:** the fence's §10 text names what it checks: the file, its directory, and each directory
+  holding a link. Task 1.
+- **N4:** `offlineEnv`'s own test goes with it. Task 6.
+- **N5:** a device added and admitted is a security change (`device_added`), as Decided 9 says.
+  Tasks 1, 7, 13.
+
 ## Why this plan is 6a, and what 6b is
 
 The roadmap's brief for plan 6 is more than one branch: the bundle and every consumer of it, key
@@ -578,12 +593,22 @@ and the text to put in its place; where a paragraph is new, the text it goes aft
   is one port49d refused. `SIGHUP` also re-reads `inventory.max_removed_percent` from port49d.yaml,
   so a deliberate large removal is: raise it, send `SIGHUP`, and lower it again.
 
+  **A policy reload is held to the same bound.** Key groups are policy, and a refused device's live
+  contexts are revoked and its tokens deleted, so a `key_groups` edit that misses the fleet would
+  otherwise log everyone out within seconds, and a revert would not bring the sessions back. A
+  policy reload that refuses admission to more than `inventory.max_removed_percent` of the devices
+  the policy in force admits is refused, naming them; the policy in force keeps serving and
+  `port49_policy_file_refused` is 1, and raising the bound and sending `SIGHUP` applies a deliberate
+  change.
+
   **The inventory file is privilege-granting, and read as the policy file is.** Its attributes and
   names decide scope membership, its addresses are handed to SSH clients by the mint, and a
   record's `key_ref` pins a key; a live reload makes an edit effective within seconds. So it is
   read behind the policy file's fence (§5.1.3): refused, at start and at every reload, when the
-  file or any directory on its path could have been written by anyone but port49d's user or root,
-  when it is not a regular file, or when it is larger than 64 MiB. At a reload the refusal is said
+  file, the directory holding it, or a directory holding a symbolic link on its path could have
+  been written by anyone but port49d's user or root, when it is not a regular file, or when it is
+  larger than 64 MiB. Directories above those are not checked: the deployment must keep them
+  writable by root alone, as it must for the policy file's (plan 12). At a reload the refusal is said
   once and the bundle in force keeps serving; at start it refuses the start. The deployment
   documents owe the same warning for this path as for the policy file's (plan 12).
 
@@ -647,8 +672,9 @@ and the text to put in its place; where a paragraph is new, the text it goes aft
   "to_bundle": ...}}` for an address added to a device already in inventory, and `scope_joined`
   or `scope_left` with `"scope"` for a device entering or leaving a scope with `security_log:
   true` (§5.5, §10), `key_ref_changed` with `"from"` and `"to"` for a device's key assignment
-  changing, and `admission_changed` with `"to": "admitted"` for a device becoming admitted. Its
-  `device` block names the device. It is what makes a source-of-truth edit
+  changing, `admission_changed` with `"to": "admitted"` for a device already in inventory becoming
+  admitted, and `device_added` with `"to": "admitted"` for a device added and admitted, whose
+  addresses are new capture targets. Its `device` block names the device. It is what makes a source-of-truth edit
   that moves privilege visible in the log it moved (§10), and
   `port49_inventory_changes_total{kind}` is its alarm.
   ```
@@ -728,9 +754,11 @@ and the text to put in its place; where a paragraph is new, the text it goes aft
   reads §10's "a policy whose `accept` set is empty for a `key_ref` still assigned by a key group"
   as that case: `current` is always accepted, so the set is empty only where the key is not
   defined at all. It reports an `accept` version whose `retire_after` has passed and one with none.
-  Without `--config` it still fails on a key group tie and reports devices no group admits. It
-  fails on a test naming a device the inventory does not have, which a load no longer refuses
-  (§10).
+  Without `--config` it still fails on every device admission refuses where key groups are
+  declared: a tie, and a device no group admits, since port49d serves neither. It fails on a test
+  naming a device the inventory does not have, which a load no longer refuses (§10).
+  **`port49 policy diff`** fails on a device the new policy refuses admission and the old admitted,
+  naming it: the edit port49d's reload would refuse over `inventory.max_removed_percent` (§5.1.3).
   ```
 
 - [ ] **Step 9: §13, a new decision, and §14.** After decision 27, add:
@@ -1804,6 +1832,7 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 - Modify: `internal/policy/file.go` (the `key_groups` block)
 - Modify: `internal/policy/load.go` (`Env`, `Policy`, `Parse`, `refusedKeys`, `device`, `buildTests`)
 - Modify: `internal/policy/resolve.go` (`ErrDeviceRefused`, `resolveNow`), `internal/policy/tests.go` (`RunTests`)
+- Modify: `internal/policy/explain.go` (`Explanation.Refused`, `Explain`, `Render`)
 - Create: `internal/policy/admit.go`
 - Test: `internal/policy/admit_test.go`
 
@@ -2171,6 +2200,58 @@ var ErrDeviceRefused = errors.New("policy: admission refuses the device")
 
   `resolve` (no quarantine, read by the joint checks, the diff and lint) is unchanged, so what a
   policy would compile for a refused device is still reported.
+
+  **`port49 explain` explains a refused device (N2).** In `internal/policy/explain.go`,
+  `Explanation` gains, beside `Quarantined`:
+
+```go
+	// Refused is device_unknown on a device the inventory names and
+	// admission refuses (spec §10), with why. Nothing else is filled in.
+	Refused string
+```
+
+  `Explain`'s `switch` gains, after the `ErrDeviceQuarantined` case:
+
+```go
+	case errors.Is(err, ErrDeviceRefused):
+		r, _ := p.admitted[d.Name]
+		e.Refused = r.Refused
+		return e, nil
+```
+
+  and `Render`, before its quarantine branch:
+
+```go
+	if e.Refused != "" {
+		fmt.Fprintf(w, "deny %s\n  %s (%s) is in the inventory and admission refuses it: %s; nothing is minted "+
+			"for it, and port49d closes its connections after the header (spec §10)\n", decision.DeviceUnknown,
+			e.Device, e.Platform, e.Refused)
+		return
+	}
+```
+
+  Add to `admit_test.go`:
+
+```go
+func TestExplainSaysADeviceIsRefusedAndWhy(t *testing.T) {
+	e := env()
+	e.Devices = append(e.Devices, admission.Device{Name: "stray", Platform: "arista_eos",
+		Addresses: []netip.Addr{netip.MustParseAddr("192.0.2.9")}})
+	p, err := Parse([]byte(keyGrouped), e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	x, err := p.Explain("alice", "", "stray", "show version", noon)
+	if err != nil || !strings.Contains(x.Refused, "matches no key group") {
+		t.Fatalf("%+v, %v", x, err)
+	}
+	var out strings.Builder
+	x.Render(&out, false)
+	if !strings.Contains(out.String(), "deny device_unknown") {
+		t.Fatalf("%s", out.String())
+	}
+}
+```
 
 - [ ] **Step 5: `internal/policy/admit.go`:**
 
@@ -2766,7 +2847,11 @@ func (f *policyFiles) load() (*policy.Policy, error) {
     inv, policy.Env{})` and `after, err := bundle.Parse(moved, inv, policy.Env{})`.
 
   `grep -n 'offlineEnv\|policy.Load(\|policy.Parse(' cmd/port49/*.go | grep -v _test` then lists
-  nothing. Add to `cmd/port49/policy_test.go`:
+  nothing. `offlineEnv`'s own test goes with it: in `cmd/port49/policy_test.go`'s
+  `TestOfflineToolsReadTheAdaptersFromThePolicyFile` (`:467`), delete the first three lines, `if e :=
+  offlineEnv(nil); e.Dialects != nil || !e.Now.IsZero() { t.Fatalf("%+v", e) }`. The rest of that
+  test, which runs `policy test` on a file declaring an enable username, still holds, now through
+  `bundle.Load`. `grep -rn offlineEnv cmd` then lists nothing. Add to `cmd/port49/policy_test.go`:
 
 ```go
 // I7: every tool names the bundle port49d names for the same two files.
@@ -2868,7 +2953,12 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
   - `func Diff(old, new *policy.Policy, now time.Time) Report`
   - `func (r Report) Summary() string` — `bundle <from> → <to>: +N device(s), -M, K changed`
   - `func (r Report) Security() []Change`
-  - `func Check(old, new *policy.Policy, maxRemovedPercent int) error`
+  - `func Check(old, new *policy.Policy, maxRemovedPercent int) error` — an inventory reload's bound:
+    removals plus devices newly refused.
+  - `func CheckAdmission(old, new *policy.Policy, maxRemovedPercent int) error` — a policy reload's
+    bound: devices admitted under old and refused under new, the same message (N1).
+  - `func NewlyRefused(old, new *policy.Policy) []admission.Resolved` — those devices, by name,
+    for the refusal lines, `port49 policy diff` and Check.
 
 - [ ] **Step 1: Write the failing tests.** Create `internal/bundle/diff_test.go`:
 
@@ -2963,6 +3053,39 @@ func TestDiffSaysWhatChangedAndWhichChangesAreSecurity(t *testing.T) {
 	if got := strings.Join(kinds, ","); !strings.Contains(got, "key_ref_changed leaf-02") ||
 		!strings.Contains(got, "admission_changed stray") {
 		t.Fatalf("security: %s", got)
+	}
+	// N5: a device added and admitted is a security change; one added and
+	// refused is not.
+	added := mustBundle(t, dev("leaf-02", "10.0.1.2", map[string]string{"site": "dc1"}), dev("stray", "192.0.2.8", nil),
+		dev("newbie", "10.0.1.9", nil), dev("outsider", "192.0.2.9", nil))
+	kinds = nil
+	for _, c := range Diff(before, added, time.Now()).Security() {
+		kinds = append(kinds, c.Kind+" "+c.Device)
+	}
+	if got := strings.Join(kinds, ","); !strings.Contains(got, "device_added newbie") || strings.Contains(got, "outsider") {
+		t.Fatalf("security: %s", got)
+	}
+}
+
+// N1: a policy that refuses more than the bound of the devices admitted
+// under the policy in force is refused, naming them.
+func TestCheckAdmissionBoundsAPolicyThatRefusesTheFleet(t *testing.T) {
+	devs := []admission.Device{dev("a", "10.0.3.1", nil), dev("b", "10.0.3.2", nil)}
+	old := mustBundle(t, devs...)
+	typo, err := Parse([]byte(strings.Replace(withScopes, "cidr: 10.0.0.0/8", "cidr: 11.0.0.0/8", 1)),
+		admission.Inventory{Devices: devs}, policy.Env{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = CheckAdmission(old, typo, 10)
+	if err == nil || !strings.Contains(err.Error(), "refuses admission to 2 of 2 devices") || !strings.Contains(err.Error(), "a, b") {
+		t.Fatalf("%v", err)
+	}
+	if err := CheckAdmission(old, typo, 100); err != nil {
+		t.Fatalf("the bound off: %v", err)
+	}
+	if err := CheckAdmission(old, old, 10); err != nil {
+		t.Fatalf("no change: %v", err)
 	}
 	if s := rep.Summary(); !strings.Contains(s, "+1 device(s), -1, 1 changed") || !strings.Contains(s, old.Bundle) {
 		t.Fatalf("summary: %s", s)
@@ -3100,7 +3223,11 @@ func Diff(old, new *policy.Policy, now time.Time) Report {
 		switch {
 		case !inOld:
 			rep.Added++
-			add(Change{Kind: DeviceAdded, Device: name, Platform: n.Platform, To: admissionState(new, name, now)})
+			// An added device that is admitted starts being answered, and its
+			// addresses are new capture targets: a security change, as a
+			// device already in inventory becoming admitted is (N5).
+			state := admissionState(new, name, now)
+			add(Change{Kind: DeviceAdded, Device: name, Platform: n.Platform, To: state, Security: state == "admitted"})
 		case !inNew:
 			rep.Removed++
 			add(Change{Kind: DeviceRemoved, Device: name, Platform: o.Platform})
@@ -3198,36 +3325,69 @@ func Check(old, new *policy.Policy, maxRemovedPercent int) error {
 		return nil
 	}
 	after := byName(new.Devices())
-	removed, refused := 0, 0
-	var named []string
+	removed := 0
 	for _, d := range old.Devices() {
 		if _, ok := after[d.Name]; !ok {
 			removed++
-			continue
-		}
-		ro, _ := old.Admitted(d.Name)
-		rn, _ := new.Admitted(d.Name)
-		if new.AdmissionAssessed() && ro.Refused == "" && rn.Refused != "" {
-			refused++
-			if len(named) < 5 {
-				named = append(named, d.Name)
-			}
 		}
 	}
-	if gone := removed + refused; gone*100 > was*maxRemovedPercent {
+	refused := NewlyRefused(old, new)
+	if gone := removed + len(refused); gone*100 > was*maxRemovedPercent {
 		msg := fmt.Sprintf("the new inventory removes %d of %d devices and refuses %d more (%d%%), more than "+
-			"inventory.max_removed_percent (%d%%)", removed, was, refused, gone*100/was, maxRemovedPercent)
-		if refused > 0 {
-			msg += fmt.Sprintf("; newly refused: %s", strings.Join(named, ", "))
-			if refused > len(named) {
-				msg += fmt.Sprintf(" and %d more", refused-len(named))
-			}
-			msg += " (if key_groups was deleted from the inventory file, add it to the policy file first)"
+			"inventory.max_removed_percent (%d%%)", removed, was, len(refused), gone*100/was, maxRemovedPercent)
+		if len(refused) > 0 {
+			msg += "; newly refused: " + names(refused) +
+				" (if key_groups was deleted from the inventory file, add it to the policy file first)"
 		}
 		return errors.New(msg + "; fix the file, or, if the change is meant, raise inventory.max_removed_percent " +
 			"in port49d.yaml and send SIGHUP, which re-reads it with the reload")
 	}
 	return nil
+}
+
+// CheckAdmission is a policy reload's bound (plan 6a, N1). Key groups are
+// policy, so a policy edit can refuse the fleet — a CIDR typo, or the block
+// deleted — and a refused device's contexts are revoked and its tokens
+// deleted (I2): unbounded, one bad edit is a fleet-wide logout that a revert
+// does not undo. It refuses a policy that newly refuses more than
+// maxRemovedPercent of the devices admitted under old, naming them.
+func CheckAdmission(old, new *policy.Policy, maxRemovedPercent int) error {
+	was := len(old.Devices())
+	refused := NewlyRefused(old, new)
+	if was == 0 || maxRemovedPercent >= 100 || len(refused)*100 <= was*maxRemovedPercent {
+		return nil
+	}
+	return fmt.Errorf("the new policy refuses admission to %d of %d devices (%d%%), more than "+
+		"inventory.max_removed_percent (%d%%): %s; check key_groups, or, if the change is meant, raise "+
+		"inventory.max_removed_percent in port49d.yaml and send SIGHUP, which re-reads it with the reload",
+		len(refused), was, len(refused)*100/was, maxRemovedPercent, names(refused))
+}
+
+// NewlyRefused is every device in both bundles that old admits and new
+// refuses, by name, where new assesses admission.
+func NewlyRefused(old, new *policy.Policy) []admission.Resolved {
+	if !new.AdmissionAssessed() {
+		return nil
+	}
+	var out []admission.Resolved
+	for _, r := range new.AdmissionRefusals() {
+		if ro, ok := old.Admitted(r.Device.Name); ok && ro.Refused == "" {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// names is up to five devices by name, and how many more.
+func names(rs []admission.Resolved) string {
+	var n []string
+	for i, r := range rs {
+		if i == 5 {
+			return strings.Join(n, ", ") + fmt.Sprintf(" and %d more", len(rs)-5)
+		}
+		n = append(n, r.Device.Name)
+	}
+	return strings.Join(n, ", ")
 }
 
 // admissionState is a device's admission in one word.
@@ -5127,6 +5287,70 @@ func (r *reloader) rereadBound() {
 
   Delete `checkInventory` and its comment.
 
+  **A policy reload is bounded as an inventory reload is (N1).** In `load`, the new policy is held to
+  `bundle.CheckAdmission` before it is swapped in:
+
+```go
+	} else if err == nil {
+		pol, err = parseBundle(r.cfg, raw, old.Inventory())
+		if err == nil {
+			// Key groups are policy, and a refused device's sessions are
+			// revoked and its tokens deleted (I2): a key_groups typo must not
+			// log out the fleet (plan 6a, N1).
+			err = bundle.CheckAdmission(old, pol, r.cfg.MaxRemovedPercent)
+		}
+	} else {
+```
+
+  An over-the-bound policy takes the existing refusal branch: the policy in force keeps serving,
+  `port49_policy_file_refused` is 1, the version is remembered and said once, and the line names the
+  devices. `SIGHUP` re-reads the bound (`rereadBound`) before it loads, so raising the bound and
+  sending `SIGHUP` applies a deliberate change. Add to `cmd/port49d/reload_inventory_test.go`:
+
+```go
+// N1, through the real policy reload: a key_groups typo that would refuse the
+// fleet is refused, and every live session and unspent token survives;
+// raising the bound and sending SIGHUP applies it.
+func TestAKeyGroupsTypoCannotLogOutTheFleet(t *testing.T) {
+	rig := newReloadRig(t, policyWithGroups)
+	rig.writeInventory(t, withoutGroups)
+	rig.pollTwice()
+	k := rig.aliceLoggedIn(t)
+	tk := store.TokenKey{NAS: "leaf1", Username: "alice"}
+	if _, err := rig.st.PutToken(context.Background(), tk, store.Token{ID: "t1", Secret: []byte("p49_t1"),
+		Kind: store.KindLogin, Principal: "user:alice@example.com", ExpiresAt: rig.now.Add(time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	rig.write(t, strings.Replace(policyWithGroups, "cidr: 10.0.0.0/8", "cidr: 11.0.0.0/8", 1))
+	rig.pollTwice()
+	rig.pollTwice()
+	out := rig.out.String()
+	if strings.Count(out, "policy reload (file changed) refused") != 1 ||
+		!strings.Contains(out, "refuses admission to 2 of 2 devices") || !strings.Contains(out, "leaf1, leaf2") {
+		t.Fatalf("the refusal: %s", out)
+	}
+	if testutil.ToFloat64(rig.m.PolicyFileRefused) != 1 {
+		t.Fatal("port49_policy_file_refused is not 1")
+	}
+	if c, err := rig.st.GetContext(context.Background(), k); err != nil || !c.RevokedAt.IsZero() {
+		t.Fatalf("the session was revoked: %+v, %v", c, err)
+	}
+	if toks, _ := rig.st.Candidates(context.Background(), tk); len(toks) != 1 {
+		t.Fatalf("the token went: %d left", len(toks))
+	}
+	rig.r.cfgPath = filepath.Join(t.TempDir(), "port49d.yaml")
+	if err := os.WriteFile(rig.r.cfgPath, []byte("inventory: {max_removed_percent: 100}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rig.with(func() { rig.r.reload(context.Background(), "SIGHUP") })
+	if len(rig.b.Policy.Load().AdmissionRefusals()) != 2 {
+		t.Fatalf("SIGHUP with the bound raised did not apply: %s", rig.out.String())
+	}
+}
+```
+
+  (import `time` and `internal/store` there.)
+
 - [ ] **Step 6: Run the tests, everything, and commit**
 
 Run: `go test ./cmd/port49d/ ./internal/config/ -count=1 -race && make test && make vet && make build`
@@ -5199,7 +5423,8 @@ Expected: FAIL to compile — `rig.m.InventoryChanges undefined`.
 	// swap made (spec §10) — "address_added" (an address on a device already
 	// in inventory, which a mint hands to an SSH client), "scope_joined" and
 	// "scope_left" (a scope with security_log: true), "key_ref_changed" (a
-	// device moved onto another key) and "admission_changed" (a device newly
+	// device moved onto another key), "admission_changed" (a device already
+	// in inventory newly admitted) and "device_added" (a device added and
 	// admitted). Each is an inventory_change record naming the device; the
 	// label is the kind only.
 	InventoryChanges *prometheus.CounterVec
@@ -7026,27 +7251,29 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 
 ---
 
-### Task 17: `port49 policy test` fails on a key-group tie and, with `--config`, on an undefined key
+### Task 17: `policy test` fails on every refused device and an undefined key; `policy diff` on a newly refused one
 
 **Files:**
-- Modify: `cmd/port49/policy.go` (`policyTest`, `keyReports`)
+- Modify: `cmd/port49/policy.go` (`policyTest`, `keyReports`, `policyDiff`)
 - Test: `cmd/port49/policy_test.go`
 
 **Interfaces:**
 - Consumes: `(*policy.Policy).AdmissionRefusals`, `KeyGroups` (Task 4); `admission.Resolved.Refusal`
   codes (Task 3); `readKeySets`, `keyRefsOf`, `policyFiles.loadWith` (Task 15).
-- Produces: `policy test` lines `admission: <device> (<platform>) refused: <cause>` (failing),
-  `report: <device> (<platform>) refused: <cause>` (reported), `keys: <text>` (failing) and `report:
-  key <ref> version <n> ...` (reported); a trailing `N admission refusal(s), M key fault(s)` line
-  when either is non-zero; exit 1 on either.
+- Consumes also: `bundle.NewlyRefused` (Task 7).
+- Produces: `policy test` lines `admission: <device> (<platform>) refused: <cause>` (failing, for
+  every refused device, where admission is assessed), `keys: <text>` (failing) and `report: key
+  <ref> version <n> ...` (reported); a trailing `N admission refusal(s), M key fault(s)` line when
+  either is non-zero; exit 1 on either. `policy diff` lines `REFUSED: admission: <device>
+  (<platform>) is newly refused: <cause>`, failing (N1).
 
 - [ ] **Step 1: Write the failing tests.** Append to `cmd/port49/policy_test.go`:
 
 ```go
-// Spec §10, §12: CI fails on a key-group tie (owner decision 1) and, given
-// port49d.yaml, on a key_ref it does not define; a device no group admits is
-// reported, since refusing one is admission working; retire_after problems are
-// reported.
+// Spec §10, §12: CI fails on every device admission refuses — a key-group tie
+// (owner decision 1), a device no group admits, and, given port49d.yaml, one
+// assigned a key_ref it does not define — since port49d serves none of them;
+// retire_after problems are reported.
 func TestPolicyTestJudgesAdmissionAndKeys(t *testing.T) {
 	dir := t.TempDir()
 	write := func(name, body string) string {
@@ -7063,10 +7290,10 @@ func TestPolicyTestJudgesAdmissionAndKeys(t *testing.T) {
   - {name: stray, platform: arista_eos, addresses: [192.0.2.9]}
 `)
 	var out, errOut bytes.Buffer
-	if code := run([]string{"policy", "test", "--policy", write("p.yaml", base), "--inventory", inv}, &out, &errOut); code != 0 {
-		t.Fatalf("a device in no group fails the gate: exit %d\n%s%s", code, out.String(), errOut.String())
+	if code := run([]string{"policy", "test", "--policy", write("p.yaml", base), "--inventory", inv}, &out, &errOut); code != 1 {
+		t.Fatalf("a device in no group passed the gate: exit %d\n%s%s", code, out.String(), errOut.String())
 	}
-	if !strings.Contains(out.String(), "report: stray (arista_eos) refused: matches no key group") {
+	if !strings.Contains(out.String(), "admission: stray (arista_eos) refused: matches no key group") {
 		t.Fatalf("%s", out.String())
 	}
 	out.Reset()
@@ -7113,7 +7340,7 @@ func TestPolicyTestFailsATestOnAnAbsentDevice(t *testing.T) {
 - [ ] **Step 2: Run it to see it fail**
 
 Run: `go test ./cmd/port49/ -run 'TestPolicyTestJudgesAdmissionAndKeys|TestPolicyTestFailsATestOnAnAbsentDevice' -count=1`
-Expected: FAIL — `flag provided but not defined: -config`, and no `report: stray` line.
+Expected: FAIL — `flag provided but not defined: -config`, and no `admission: stray` line.
 
 - [ ] **Step 3: Implement.** In `policyTest`, register `cfgPath := fs.String("config", "",
   "port49d.yaml, for the key checks CI owes (spec §10); no secret is read")`, and load:
@@ -7135,20 +7362,18 @@ Expected: FAIL — `flag provided but not defined: -config`, and no `report: str
   After the quarantine lines:
 
 ```go
-	// Admission (spec §10). A tie is the policy's to fix and fails the gate
-	// (plan 6a owner decision 1), and so does a key_ref port49d.yaml defines
-	// no key for; a device no group admits is reported, since refusing a
-	// device in an unexpected range is admission working. A policy with no
-	// key groups, loaded with no --config, has nothing to say here.
+	// Admission (spec §10). Every refused device fails the gate — a tie
+	// (plan 6a owner decision 1), a device no group admits, and a key_ref
+	// port49d.yaml defines no key for — since port49d serves none of them and
+	// a policy edit that refuses the fleet must not pass CI (N1). A device in
+	// an unexpected range is removed from the inventory, or given a group, in
+	// review. A policy with no key groups, loaded with no --config, has
+	// nothing to say here.
 	admissionFails := 0
-	if len(p.KeyGroups()) > 0 || refs != nil {
+	if p.AdmissionAssessed() {
 		for _, r := range p.AdmissionRefusals() {
-			kind := "report"
-			if r.Refusal == admission.RefusedTie || r.Refusal == admission.RefusedUnknownKey {
-				kind = "admission"
-				admissionFails++
-			}
-			fmt.Fprintf(stdout, "%s: %s (%s) refused: %s\n", kind, r.Device.Name, r.Device.Platform, r.Refused)
+			admissionFails++
+			fmt.Fprintf(stdout, "admission: %s (%s) refused: %s\n", r.Device.Name, r.Device.Platform, r.Refused)
 		}
 	}
 	keyFaults := 0
@@ -7209,6 +7434,44 @@ func keyReports(sets map[string]config.KeySet, p *policy.Policy, now time.Time) 
 
   Update `policyTest`'s doc comment to name the two new failures and `--config`, and `usage`'s
   line to `port49 policy test --policy FILE --inventory FILE [--config PORT49D_YAML]`.
+
+  **`policy diff` fails on a device the new policy refuses and the old admitted (N1).** In
+  `policyDiff`, after `out.learn(before, after)`:
+
+```go
+	// A key_groups edit that refuses devices the old policy admitted is the
+	// edit port49d's reload bound catches (bundle.CheckAdmission): CI fails
+	// it first, naming each.
+	newlyRefused := bundle.NewlyRefused(before, after)
+	for _, r := range newlyRefused {
+		fmt.Fprintf(stdout, "REFUSED: admission: %s (%s) is newly refused: %s\n", r.Device.Name, r.Device.Platform,
+			r.Refused)
+	}
+```
+
+  and add `|| len(newlyRefused) > 0` to its final failure condition (`policy.go:525`), and
+  `%d devices newly refused admission` with `len(newlyRefused)` to its summary line. Add:
+
+```go
+func TestPolicyDiffFailsOnADeviceTheNewPolicyRefuses(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	old := write("old.yaml", keysPolicy)
+	typo := write("new.yaml", strings.Replace(keysPolicy, "cidr: 10.0.0.0/8", "cidr: 11.0.0.0/8", 1))
+	inv := write("inventory.yaml", keysInventory)
+	var out, errOut bytes.Buffer
+	code := run([]string{"policy", "diff", "--old", old, "--new", typo, "--inventory", inv}, &out, &errOut)
+	if code != 1 || !strings.Contains(out.String(), "REFUSED: admission: leaf-01 (arista_eos) is newly refused") {
+		t.Fatalf("exit %d:\n%s%s", code, out.String(), errOut.String())
+	}
+}
+```
 
 - [ ] **Step 4: Run the tests, everything, and commit**
 
@@ -8022,6 +8285,12 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
   `port49_inventory_file_refused` is 1. For a deliberate large removal, raise the bound in
   port49d.yaml and send `SIGHUP`, which re-reads it; then lower it again. A policy test naming a
   device the inventory no longer has fails `port49 policy test`, and never a reload.
+- **A policy reload is bounded too.** A policy whose `key_groups` would refuse admission to more
+  than `inventory.max_removed_percent` of the devices admitted now is refused, naming them, and the
+  policy in force keeps serving, with `port49_policy_file_refused` at 1; nobody is logged out.
+  `port49 policy diff` fails on such an edit, and `port49 policy test` fails on any device
+  admission refuses, so CI catches it first. `port49 explain` on a refused device says it is
+  refused and why.
 - **New config keys:** `inventory: {max_removed_percent: N}`; `retire_after: YYYY-MM-DD` on `accept`
   key versions (admits through that day UTC); `admin_socket: /run/port49/port49d.sock` (off by
   default).

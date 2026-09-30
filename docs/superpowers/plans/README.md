@@ -941,7 +941,8 @@ commands and the system users by platform name, so 5a refuses `based_on: juniper
   whether port49d takes the policy from the service. Revised after its pre-flight review: the
   inventory file is read behind the policy file's write fence; the key-group move is safe in every
   order; `SIGHUP` re-reads the bound; the broker refuses to mint for a refused device
-  (`device_unknown`); a test on an absent device fails CI and never a reload.
+  (`device_unknown`); a test on an absent device fails CI and never a reload; a policy reload is held to
+  the same bound as an inventory reload, and `policy diff` fails on a newly refused device.
 - **Plan 6b — the inventory service; written after 6a merges, against L27's fixtures.**
   `cmd/port49-inventory` with the §10 API over mutual TLS, the NetBox, Nautobot and file connectors
   (version detection, GraphQL first, REST fallback, the slug alias table, filters), the four sync
