@@ -13,7 +13,7 @@ Spec §14: a sync introducing a device whose platform fails joint validation pub
 
 ## Observation
 
-port49d, port49 and port49-inventory built from `2f9ff4b` (`make build`).
+port49d, port49 and port49-inventory built from `6fcce47` (`make build`).
 
 Single-connection: not configured by this test; the device keeps whatever an earlier test in this deploy set (TestL29Reload turns it on where the image offers it).
 
@@ -28,19 +28,19 @@ published bundle 2 (sha256:21a358bc6553f9f1f3f10f58780282c85a89ba9e662acbea48ec3
   device srx1 (juniper_junos) is quarantined against the service's policy: subject "quarantine_probe": role "eos_class_only" names @loopback, which juniper_junos does not define
 ```
 
-port49d reloaded bundle 2 by 21:39:41.653Z and named srx1 quarantined by 21:39:41.653Z (host UTC).
+port49d reloaded bundle 2 by 21:48:55.499Z and named srx1 quarantined by 21:48:55.499Z (host UTC).
 
 The device earned no unadmitted-source strike before its introduction; nothing was waited out.
 
 Quarantine probe: probe attempt 1's connection was closed as `device_quarantined` (5s).
 
-After the fix (`quarantine-sync/fixed.yaml` written at 21:40:02.383Z to port49d's policy_file and the service's):
+After the fix (`quarantine-sync/fixed.yaml` written at 21:49:16.236Z to port49d's policy_file and the service's):
 
 ```
 published bundle 3 (sha256:58b8a7ae44c5c9188c611ee110ccd98329e3337133944147e579b376ef89ef36): bundle sha256:58b8a7ae44c5c9188c611ee110ccd98329e3337133944147e579b376ef89ef36 → sha256:58b8a7ae44c5c9188c611ee110ccd98329e3337133944147e579b376ef89ef36: +0 device(s), -0, 0 changed; 0 quarantined
 ```
 
-port49d said `policy reloaded` by 21:40:03.661Z. port49d took the fix from its own policy_file (spec §13, decision 29): the service's bundle 3 carries the same devices, so it changes nothing at port49d, and the sync's part in the fix is the service's own report of 0 quarantined. port49d said the service's policy and the policy in force agree again by 21:40:06.667Z: the policy-mismatch alarm cleared with bundle 3.
+port49d said `policy reloaded` by 21:49:17.473Z. port49d took the fix from its own policy_file (spec §13, decision 29): the service's bundle 3 carries the same devices, so it changes nothing at port49d, and the sync's part in the fix is the service's own report of 0 quarantined. port49d said the service's policy and the policy in force agree again by 21:49:20.479Z: the policy-mismatch alarm cleared with bundle 3.
 
 | step | while quarantined | after the fix |
 |---|---|---|
@@ -52,7 +52,7 @@ While quarantined:
 | step | outcome |
 |---|---|
 | next token login (`alice12`) | refused: ssh: handshake failed: ssh: unable to authenticate, attempted methods [none password keyboard-interactive], no supported methods remain in 5.06s |
-| break-glass login plus three `show version` | logged in and ran them in 460ms |
+| break-glass login plus three `show version` | logged in and ran them in 470ms |
 
 Records: `event=unvalidated reason=device_quarantined diagnosis=device_quarantined device=srx1 type=acct` ×9; `event=unvalidated reason=device_quarantined diagnosis=device_quarantined device=srx1 type=authen` ×3
 
