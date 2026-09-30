@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/rhwendt/port49/internal/bundle"
+	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/policy"
@@ -120,14 +121,17 @@ func policyCmd(args []string, stdout, stderr io.Writer) int {
 // inventory — every load-time check is a failure here — prints what CI must
 // report, the shadowed-deny report, then runs the file's tests. It exits 1 if
 // the policy does not load, any test fails, a deny is shadowed and no test
-// exercises it, a device is quarantined now or at a later expiry, or a
+// exercises it, a device is quarantined now or at a later expiry, a
 // composition gets a projection's fail-closed reply (spec §8, "CI MUST refuse
-// the policy"; §13 decision 26).
+// the policy"; §13 decision 26), admission refuses a device (spec §10), or,
+// given --config (port49d.yaml, no secret read), a key group names a key_ref
+// it does not define.
 func policyTest(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("port49 policy test", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var files policyFiles
 	files.register(fs)
+	cfgPath := fs.String("config", "", "port49d.yaml, for the key checks CI owes (spec §10); no secret is read")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -140,7 +144,22 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
 	out, errOut, flush := redactOutput(stdout, stderr)
 	defer flush()
 	stderr = errOut
-	p, err := files.load()
+	var sets map[string]config.KeySet
+	var refs []string
+	if *cfgPath != "" {
+		var err error
+		if sets, err = readKeySets(*cfgPath); err != nil {
+			fmt.Fprintln(stderr, "port49 policy test:", err)
+			return 1
+		}
+		// A port49d.yaml with no keys defines none: every key group's
+		// key_ref is undefined, not unchecked (M3).
+		if sets == nil {
+			sets = map[string]config.KeySet{}
+		}
+		refs = keyRefsOf(sets)
+	}
+	p, err := files.loadWith(refs)
 	if err != nil {
 		fmt.Fprintln(stderr, "port49 policy test:", err)
 		return 1
@@ -162,6 +181,27 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
 		for _, e := range q.Entries {
 			fmt.Fprintf(stdout, "quarantine: %s (%s): %s\n", q.Device, q.Platform, quarantineLine(e, now))
 		}
+	}
+	// Admission (spec §10). Every refused device fails the gate — a tie
+	// (plan 6a owner decision 1), a device no group admits, and a key_ref
+	// port49d.yaml defines no key for — since port49d serves none of them and
+	// a policy edit that refuses the fleet must not pass CI (N1). A device in
+	// an unexpected range is removed from the inventory, or given a group, in
+	// review. A policy with no key groups, loaded with no --config, has
+	// nothing to say here.
+	admissionFails := 0
+	if p.AdmissionAssessed() {
+		for _, r := range p.AdmissionRefusals() {
+			admissionFails++
+			fmt.Fprintf(stdout, "admission: %s (%s) refused: %s\n", r.Device.Name, r.Device.Platform, r.Refused)
+		}
+	}
+	keyFaults := 0
+	for _, line := range keyReports(sets, p, now) {
+		if strings.HasPrefix(line, "keys: ") {
+			keyFaults++
+		}
+		fmt.Fprintln(stdout, line)
 	}
 	findings := p.Lint(now)
 	for _, f := range findings {
@@ -271,10 +311,45 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stdout, "%d tests, %d failed; %d shadowed denies, %d unacknowledged; %d quarantined, %d "+
 		"projection refusals\n", len(results), failed, len(shadows), unacknowledged, quarantined, refused)
-	if failed > 0 || unacknowledged > 0 || quarantined > 0 || refused > 0 {
+	if admissionFails+keyFaults > 0 {
+		fmt.Fprintf(stdout, "%d admission refusal(s), %d key fault(s)\n", admissionFails, keyFaults)
+	}
+	if failed > 0 || unacknowledged > 0 || quarantined > 0 || refused > 0 || admissionFails > 0 || keyFaults > 0 {
 		return 1
 	}
 	return 0
+}
+
+// keyReports are the key checks CI owes (spec §10, "Retirement is enforced"):
+// a key group naming a key_ref port49d.yaml does not define fails, and an
+// accept version past its retire_after, or with none, is reported. With no
+// port49d.yaml there is nothing to check.
+func keyReports(sets map[string]config.KeySet, p *policy.Policy, now time.Time) []string {
+	if sets == nil {
+		return nil
+	}
+	var out []string
+	for _, g := range p.KeyGroups() {
+		if _, ok := sets[g.KeyRef]; !ok {
+			out = append(out, fmt.Sprintf("keys: key group %s names key_ref %s, which port49d.yaml does not define; "+
+				"every device it matches fails closed", g, g.KeyRef))
+		}
+	}
+	for _, ref := range keyRefsOf(sets) {
+		for _, v := range sets[ref].Accept {
+			switch {
+			case v.RetireAt.IsZero():
+				out = append(out, fmt.Sprintf("report: key %s version %d has no retire_after; an indefinitely accepted "+
+					"version is what rotation exists to prevent", ref, v.Version))
+			case !now.Before(v.RetireAt):
+				out = append(out, fmt.Sprintf("report: key %s version %d: retire_after %s has passed; it admits no "+
+					"device", ref, v.Version, v.RetireAfter))
+			default:
+				out = append(out, fmt.Sprintf("report: key %s version %d: retire_after %s", ref, v.Version, v.RetireAfter))
+			}
+		}
+	}
+	return out
 }
 
 // policyDiff is the effective-permission diff and the privilege-expansion
@@ -323,6 +398,14 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 	stdout = out
 	now := time.Now()
 	d := policy.Compare(before, after, now)
+	// A key_groups edit that refuses devices the old policy admitted is the
+	// edit port49d's reload bound catches (bundle.CheckAdmission): CI fails
+	// it first, naming each.
+	newlyRefused := bundle.NewlyRefused(before, after)
+	for _, r := range newlyRefused {
+		fmt.Fprintf(stdout, "REFUSED: admission: %s (%s) is newly refused: %s\n", r.Device.Name, r.Device.Platform,
+			r.Refused)
+	}
 	// A change that first holds at a later grant expiry says when.
 	from := func(at time.Time) string {
 		if at.After(now) {
@@ -520,13 +603,14 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintf(stdout, "%d commands changed: %d widen, %d narrow; %d unacknowledged expansions past a deny; "+
 		"%d unacknowledged privilege raises; %d unacknowledged regex-constrained widenings; %d unacknowledged "+
 		"principal or username changes; %d devices newly quarantined, %d released; %d mints newly refused; "+
-		"%d unresolved; %d unacknowledged adapter edits; %d projection refusals\n", len(d.Changes), widen, narrow,
+		"%d unresolved; %d unacknowledged adapter edits; %d projection refusals; %d devices newly refused "+
+		"admission\n", len(d.Changes), widen, narrow,
 		d.Unacknowledged(), d.UnacknowledgedLevels(), d.UnacknowledgedRegex(), d.UnacknowledgedPrincipals(),
 		len(d.Quarantined), len(d.Released), len(d.Refused), len(d.Unresolved), d.UnacknowledgedAdapters(),
-		len(d.ProjectionRefusals))
+		len(d.ProjectionRefusals), len(newlyRefused))
 	if d.Unacknowledged() > 0 || d.UnacknowledgedLevels() > 0 || d.UnacknowledgedRegex() > 0 ||
 		d.UnacknowledgedPrincipals() > 0 || len(d.Quarantined) > 0 || len(d.Refused) > 0 || len(d.Unresolved) > 0 ||
-		d.UnacknowledgedAdapters() > 0 || len(d.ProjectionRefusals) > 0 {
+		d.UnacknowledgedAdapters() > 0 || len(d.ProjectionRefusals) > 0 || len(newlyRefused) > 0 {
 		return 1
 	}
 	return 0

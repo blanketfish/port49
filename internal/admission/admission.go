@@ -55,8 +55,8 @@ type Resolved struct {
 	// all the same, so its packets are told apart from an unknown source's.
 	Refused string
 	// Refusal is which of the four it is (RefusedTransport, RefusedNoGroup,
-	// RefusedTie, RefusedUnknownKey), for a reader that decides by it: `port49 policy
-	// test` fails on a tie and an unknown key and reports the other.
+	// RefusedTie, RefusedUnknownKey), for a reader that decides by it. `port49 policy
+	// test` fails on every one (plan 6a, N1).
 	Refusal string
 }
 
