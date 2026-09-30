@@ -106,11 +106,17 @@ func TestKeyGroupLoadErrors(t *testing.T) {
 			"tie for every device"},
 		{"one attribute set twice", "  - {match: {attributes: {a: b}}, key_ref: a}\n  - {match: {attributes: {a: b}}, key_ref: b}\n",
 			"tie for every device"},
+		{"a key_ref that is no name", "  - {match: {cidr: 10.0.0.0/8}, key_ref: Sx9qT4vLm2pR7zK0wYh5}\n",
+			"key_groups[0]: key_ref is not a valid key_ref name"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			_, err := Parse([]byte(good+"key_groups:\n"+c.groups), env())
 			if err == nil || !strings.Contains(err.Error(), c.want) {
 				t.Fatalf("want %q, got %v", c.want, err)
+			}
+			// A key_ref that is no name may be a secret pasted there.
+			if strings.Contains(err.Error(), "Sx9qT") {
+				t.Fatalf("printed the key_ref: %v", err)
 			}
 		})
 	}

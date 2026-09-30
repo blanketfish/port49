@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/netip"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -66,6 +67,16 @@ const (
 	RefusedTie        = "key_group_tie"
 	RefusedUnknownKey = "key_ref_undefined"
 )
+
+// KeyRefShape is what a key_ref looks like wherever one is named: port49d.yaml's
+// keys, a policy's key_groups. A key_ref is the name every report prints, so
+// one that is not a name, most likely a secret pasted where the name goes, is
+// refused without being printed. A secret that is all lowercase hex and at
+// most 64 characters matches the shape and cannot be told apart from a name.
+var KeyRefShape = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
+
+// KeyRefShapeRule is KeyRefShape in words, for the refusal.
+const KeyRefShapeRule = "lowercase letters, digits and _, starting with a letter; at most 64"
 
 // Tier is which rule assigned a device its key_ref, most specific first
 // (spec §10, "Key group matching is deterministic").

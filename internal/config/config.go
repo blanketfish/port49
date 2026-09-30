@@ -506,14 +506,15 @@ func Load(path string) (Config, error) {
 		c.Broker = &b
 	}
 
-	if c.Keys, err = checkKeySets(c.Keys); err != nil {
+	if c.Keys, err = checkKeySets(c.Keys, raw); err != nil {
 		return Config{}, err
 	}
 	for ref, ks := range c.Keys {
 		for _, v := range allVersions(ks) {
 			s, ok := os.LookupEnv(v.SecretEnv)
 			if !ok || s == "" {
-				return Config{}, fmt.Errorf("config: key %s version %d: environment variable %s is not set", ref, v.Version, v.SecretEnv)
+				return Config{}, fmt.Errorf("config: key %s version %d: its secret_env names an environment variable "+
+					"that is not set", ref, v.Version)
 			}
 			c.secrets[v.SecretEnv] = s
 		}
@@ -577,12 +578,12 @@ func Load(path string) (Config, error) {
 		// editing a systemd file at 3am.
 		s, ok := os.LookupEnv(k.ref.SecretEnv)
 		if !ok || s == "" {
-			return Config{}, fmt.Errorf("config: %s (id %q): environment variable %s is not set",
-				k.what, k.ref.ID, k.ref.SecretEnv)
+			return Config{}, fmt.Errorf("config: %s (id %q): its secret_env names an environment variable that "+
+				"is not set", k.what, k.ref.ID)
 		}
 		if len(s) != 32 {
-			return Config{}, fmt.Errorf("config: %s (id %q): %s must be exactly 32 bytes for AES-256, got %d",
-				k.what, k.ref.ID, k.ref.SecretEnv, len(s))
+			return Config{}, fmt.Errorf("config: %s (id %q): the variable its secret_env names must hold exactly "+
+				"32 bytes for AES-256, got %d", k.what, k.ref.ID, len(s))
 		}
 		c.secrets[k.ref.SecretEnv] = s
 	}
@@ -753,7 +754,10 @@ func (c Config) Keyring() map[string]keyring.Set {
 // checkKeySets validates keys without reading a secret: every version
 // numbered from 1 and once, a secret_env named, and retire_after a date on an
 // accept version only. It returns the sets with RetireAt filled.
-func checkKeySets(keys map[string]KeySet) (map[string]KeySet, error) {
+func checkKeySets(keys map[string]KeySet, raw []byte) (map[string]KeySet, error) {
+	if err := checkKeyRefs(keys, raw); err != nil {
+		return nil, err
+	}
 	out := make(map[string]KeySet, len(keys))
 	for ref, ks := range keys {
 		seen := map[int]bool{}
@@ -811,7 +815,43 @@ func KeySets(raw []byte) (map[string]KeySet, error) {
 	if err := dec.Decode(&f); err != nil && err != io.EOF {
 		return nil, fmt.Errorf("config: %w; check the key spelling against the port49d.yaml schema", decodeFault(err))
 	}
-	return checkKeySets(f.Keys)
+	return checkKeySets(f.Keys, raw)
+}
+
+// checkKeyRefs refuses a key under keys: that is not a key_ref name
+// (admission.KeyRefShape), by its line in raw and never by the name: every
+// report prints a key_ref, and one that is not a name is most likely a secret.
+func checkKeyRefs(keys map[string]KeySet, raw []byte) error {
+	var bad []string
+	for ref := range keys {
+		if !admission.KeyRefShape.MatchString(ref) {
+			bad = append(bad, ref)
+		}
+	}
+	if len(bad) == 0 {
+		return nil
+	}
+	line := 0
+	var doc yaml.Node
+	if yaml.Unmarshal(raw, &doc) == nil && len(doc.Content) == 1 {
+		top := doc.Content[0]
+		for i := 0; i+1 < len(top.Content); i += 2 {
+			if top.Content[i].Value != "keys" {
+				continue
+			}
+			for j, keys := 0, top.Content[i+1]; j+1 < len(keys.Content); j += 2 {
+				if !admission.KeyRefShape.MatchString(keys.Content[j].Value) && (line == 0 || keys.Content[j].Line < line) {
+					line = keys.Content[j].Line
+				}
+			}
+		}
+	}
+	where := "a key under keys:"
+	if line > 0 {
+		where = fmt.Sprintf("a key under keys: on line %d", line)
+	}
+	return fmt.Errorf("config: %s is not a valid key_ref name (%s): it names the key, never holds it",
+		where, admission.KeyRefShapeRule)
 }
 
 // decodeFault is a port49d.yaml decode error as it is shown: each fault's

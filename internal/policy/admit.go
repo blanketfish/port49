@@ -38,6 +38,10 @@ func (p *Policy) buildKeyGroups(f file) error {
 		if g.KeyRef == "" {
 			return fmt.Errorf("%s: key_ref is required: every group names the key it admits", at)
 		}
+		if !admission.KeyRefShape.MatchString(g.KeyRef) {
+			return fmt.Errorf("%s: key_ref is not a valid key_ref name (%s): it names the key, never holds it",
+				at, admission.KeyRefShapeRule)
+		}
 		kg := admission.KeyGroup{Attributes: g.Match.Attributes, KeyRef: g.KeyRef}
 		if g.Match.CIDR != "" {
 			pfx, err := netip.ParsePrefix(g.Match.CIDR)

@@ -618,7 +618,9 @@ func TestEncryptionKeyIsRequiredAnd32Bytes(t *testing.T) {
 	if err == nil {
 		t.Fatal("an unset encryption secret must be refused")
 	}
-	for _, want := range []string{"PORT49_ENC_V2", `"v2"`, "encryption.current", "is not set"} {
+	// Not the variable's name: a secret pasted as secret_env can look like one
+	// (TestASecretEnvThatIsNoNameIsNotPrinted). The file names it at this block.
+	for _, want := range []string{`"v2"`, "encryption.current", "is not set"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("an unset encryption secret must be refused by name: the error must contain %q, got %v", want, err)
 		}
@@ -632,7 +634,7 @@ func TestEncryptionKeyIsRequiredAnd32Bytes(t *testing.T) {
 	if err == nil {
 		t.Fatal("a non-32-byte key must be refused")
 	}
-	for _, want := range []string{"PORT49_ENC_V2", `"v2"`, "32 bytes", "got 9"} {
+	for _, want := range []string{`"v2"`, "32 bytes", "got 9"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("a short key must be refused by name and length: the error must contain %q, got %v", want, err)
 		}
@@ -642,8 +644,9 @@ func TestEncryptionKeyIsRequiredAnd32Bytes(t *testing.T) {
 	t.Setenv("PORT49_ENC_V2", "22222222222222222222222222222222")
 	body = fmt.Sprintf(sampleNoEncryption, invPath) +
 		"\nencryption:\n  current:  {id: v2, secret_env: PORT49_ENC_V2}\n  previous: {id: v1, secret_env: PORT49_ENC_V1}\n"
-	if _, err := Load(write(t, "d.yaml", body)); err == nil || !strings.Contains(err.Error(), "PORT49_ENC_V1") {
-		t.Fatalf("a named-but-unset previous key must be refused by name: %v", err)
+	if _, err := Load(write(t, "d.yaml", body)); err == nil || !strings.Contains(err.Error(), "encryption.previous") ||
+		!strings.Contains(err.Error(), "is not set") {
+		t.Fatalf("a named-but-unset previous key must be refused by its block: %v", err)
 	}
 }
 
@@ -1082,5 +1085,37 @@ func TestASecretEnvThatIsNoNameIsNotPrinted(t *testing.T) {
 		if f := leaked(err.Error(), leakDash); f != "" {
 			t.Fatalf("%s: printed %q: %v", name, f, err)
 		}
+		// An alphanumeric secret reads as a variable's name, so it reaches the
+		// lookup; the lookup's error does not print the name either.
+		body = strings.Replace(fmt.Sprintf(sample, invPath), "secret_env: "+name, "secret_env: "+leakAlnum, 1)
+		_, err = Load(write(t, "port49d.yaml", body))
+		if err == nil || !strings.Contains(err.Error(), "is not set") {
+			t.Fatalf("%s: want the variable unset, got %v", name, err)
+		}
+		if f := leaked(err.Error(), leakAlnum); f != "" {
+			t.Fatalf("%s: printed %q: %v", name, f, err)
+		}
+	}
+}
+
+// A key_ref is a name the reports print, so one that is not a name, most
+// likely a secret pasted as the key, is refused at load without being printed.
+func TestAKeyRefThatIsNoNameIsRefusedUnprinted(t *testing.T) {
+	setKeyEnv(t)
+	invPath := write(t, "inventory.yaml", inv)
+	// A second key beside prod_key, so the load gets as far as the start
+	// notices, which name every key with no retire_after.
+	body := strings.Replace(fmt.Sprintf(sample, invPath), "limits:", "  "+leakAlnum+":\n"+
+		"    current: {version: 5, secret_env: T_PROD_V3}\n    accept: [{version: 4, secret_env: T_PROD_V2}]\nlimits:", 1)
+	c, err := Load(write(t, "port49d.yaml", body))
+	if err == nil || !strings.Contains(err.Error(), "on line 9 is not a valid key_ref name") {
+		t.Fatalf("want the key_ref refused by line, got %v (notices %q)", err, c.Notices)
+	}
+	if f := leaked(err.Error()+strings.Join(c.Notices, "\n"), leakAlnum); f != "" {
+		t.Fatalf("printed %q: %v", f, err)
+	}
+	_, err = KeySets([]byte("keys:\n  " + leakAlnum + ":\n    current: {version: 3, secret_env: X}\n"))
+	if err == nil || !strings.Contains(err.Error(), "on line 2 is not a valid key_ref name") || leaked(err.Error(), leakAlnum) != "" {
+		t.Fatalf("KeySets: %v", err)
 	}
 }
