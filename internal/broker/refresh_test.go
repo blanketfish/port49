@@ -1096,3 +1096,142 @@ func TestADeviceRemovedFromInventoryIsRevokedAndItsTokensGo(t *testing.T) {
 		t.Fatalf("%d token(s) for the removed device survive", len(toks))
 	}
 }
+
+// swap loads body against devs, into a bundle named by fill, and swaps it in
+// as an inventory reload does, returning what the refresh compares against.
+// keyRefs are the keys port49d holds (policy.Env.KeyRefs).
+func (f *fixture) swap(t *testing.T, body string, devs []admission.Device, keyRefs []string, fill string) []Prior {
+	t.Helper()
+	pol, err := policy.Parse([]byte(body), policy.Env{Devices: devs, KeyRefs: keyRefs, Now: f.b.Now(),
+		Bundle: "sha256:" + strings.Repeat(fill, 64)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return []Prior{{Policy: f.b.Policy.Swap(pol), At: f.b.Now()}}
+}
+
+// withLeaf1 is the fixture's inventory with leaf1 replaced by change(leaf1).
+func (f *fixture) withLeaf1(change func(*admission.Device)) []admission.Device {
+	out := []admission.Device{f.devices["leaf1"], f.devices["nx1"], f.devices["bare"]}
+	leaf1 := out[0]
+	leaf1.Attributes = map[string]string{}
+	for k, v := range f.devices["leaf1"].Attributes {
+		leaf1.Attributes[k] = v
+	}
+	change(&leaf1)
+	out[0] = leaf1
+	return out
+}
+
+// refreshRecords is the reasons of the `refresh` records logged since the
+// last reset.
+func (f *fixture) refreshRecords(t *testing.T) []any {
+	t.Helper()
+	var reasons []any
+	for _, r := range f.records(t) {
+		if r["event"] == "refresh" {
+			reasons = append(reasons, r["reason"])
+		}
+	}
+	return reasons
+}
+
+// The skip's safety half (plan 6a Decided 3): an inventory-only swap that
+// changes what decides a context's reply rewrites it and records it. Only an
+// unchanged answer is left alone; the policy file being the same is not
+// enough.
+func TestAnInventoryOnlySwapThatChangesAContextRewritesIt(t *testing.T) {
+	// siteLab adds a scope on the site attribute, which denies debug to
+	// netops on the devices it selects.
+	siteLab := edit(t,
+		"  - {name: all_devices, match: {}}\n",
+		"  - {name: all_devices, match: {}}\n  - {name: lab, match: {site: lab}, on_missing: include}\n",
+		roleList, roleList+"  - {name: no_debug, deny: [\"debug **\"]}\n") +
+		"  - {subject: netops, scope: lab, roles: [no_debug]}\n"
+	for _, c := range []struct {
+		name          string
+		body          string
+		before, after func(*admission.Device)
+	}{
+		{"the device moves platform", testPolicy,
+			func(*admission.Device) {},
+			func(d *admission.Device) { d.Platform = "cisco_nxos" }},
+		{"a scope no longer selects it", siteLab,
+			func(d *admission.Device) { d.Attributes["site"] = "lab" },
+			func(d *admission.Device) { d.Attributes["site"] = "campus" }},
+		{"a scope newly selects it", siteLab,
+			func(d *admission.Device) { d.Attributes["site"] = "campus" },
+			func(d *admission.Device) { d.Attributes["site"] = "lab" }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFixture(t, 8)
+			f.swap(t, c.body, f.withLeaf1(c.before), nil, "a")
+			before := f.login(t, alice, "leaf1", "alice")
+			f.log.Reset()
+			rep, err := f.b.Refresh(context.Background(), f.swap(t, c.body, f.withLeaf1(c.after), nil, "b"))
+			if err != nil || rep.Updated != 1 || rep.Unchanged != 0 {
+				t.Fatalf("%+v, %v", rep, err)
+			}
+			if after := f.context(t, "leaf1", "alice"); after.BlobHash == before.BlobHash {
+				t.Fatal("the context was left on the blob its old inventory record compiled")
+			}
+			if got := f.refreshRecords(t); len(got) != 1 || got[0] != "grants_matched" {
+				t.Fatalf("the refresh recorded %v, not one grants_matched", got)
+			}
+		})
+	}
+}
+
+// A device's key_ref is not in its reply: a move to another key port49d
+// holds leaves its context as it was, and a move to one it holds no key for
+// refuses the device, whose context is revoked device_unknown (spec §10).
+func TestAnInventoryOnlyKeyRefChange(t *testing.T) {
+	pin := func(k string) func(*admission.Device) { return func(d *admission.Device) { d.KeyRef = k } }
+	for _, c := range []struct {
+		name             string
+		to               string
+		updated, revoked int
+		unchanged        int
+		reasons          []any
+	}{
+		{"to another key held", "k2", 0, 0, 1, nil},
+		{"to a key not held", "k3", 0, 1, 0, []any{"device_unknown"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFixture(t, 8)
+			held := []string{"k1", "k2"}
+			f.swap(t, testPolicy, f.withLeaf1(pin("k1")), held, "a")
+			before := f.login(t, alice, "leaf1", "alice")
+			f.log.Reset()
+			rep, err := f.b.Refresh(context.Background(), f.swap(t, testPolicy, f.withLeaf1(pin(c.to)), held, "b"))
+			if err != nil || rep.Updated != c.updated || rep.Revoked != c.revoked || rep.Unchanged != c.unchanged {
+				t.Fatalf("%+v, %v", rep, err)
+			}
+			after := f.context(t, "leaf1", "alice")
+			if c.revoked == 0 && (after.BlobHash != before.BlobHash || !after.RevokedAt.IsZero()) {
+				t.Fatalf("the context was changed: %+v", after)
+			}
+			if c.revoked == 1 && after.RevokedAt.IsZero() {
+				t.Fatal("the context on the refused device is live")
+			}
+			if got := f.refreshRecords(t); len(got) != len(c.reasons) || (len(got) == 1 && got[0] != c.reasons[0]) {
+				t.Fatalf("the refresh recorded %v, not %v", got, c.reasons)
+			}
+		})
+	}
+}
+
+// Design §17 at the broker: a caller with no grant on a refused device is
+// answered no_grants_matched, as for a device that does not exist, so the
+// refusal tells it nothing.
+func TestARefusedDeviceIsNoGrantsMatchedToACallerWithNoGrant(t *testing.T) {
+	f := newFixture(t, 8)
+	f.swap(t, testPolicy, f.withLeaf1(func(d *admission.Device) { d.KeyRef = "k9" }), []string{"k1"}, "a")
+	carol := f.client(t, "carol@example.com", f.now.Add(24*time.Hour))
+	for _, dev := range []string{"leaf1", "nosuch"} {
+		it := decodeMint(t, f.post(context.Background(), f.state(carol), `{"devices":["`+dev+`"]}`, "")).Results[0]
+		if it.Verdict != "deny" || it.Reason != "no_grants_matched" {
+			t.Fatalf("%s: %+v", dev, it)
+		}
+	}
+}

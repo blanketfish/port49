@@ -526,11 +526,11 @@ func (b *Broker) unreached(step refreshStep, rep *RefreshReport) {
 		which = fmt.Sprintf("username %q", step.rec.Session.Username)
 	}
 	if step.rec.Device.Platform == "" {
-		// A device the inventory in force no longer names: its platform is
-		// not known, so its live session is assumed out of reach, as the
+		// A device the inventory in force no longer names, or names with no
+		// platform: its live session is assumed out of reach, as the
 		// operator must hear for one that is.
-		log.Printf("broker: refresh: the context on %q (%s) was %s, but the inventory in force no longer names "+
-			"the device, so whether it authorizes commands is not known: its live session may keep what it had "+
+		log.Printf("broker: refresh: the context on %q (%s) was %s, but the inventory in force gives the device "+
+			"no platform, so whether it authorizes commands is not known: its live session may keep what it had "+
 			"at login until logout (spec §13 decision 21)", step.rec.Device.Name, which, step.outcome)
 		return
 	}
