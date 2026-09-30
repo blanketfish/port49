@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -23,6 +24,7 @@ import (
 	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/engine"
 	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/store/memory"
 	"github.com/rhwendt/port49/internal/testpki"
@@ -393,11 +395,22 @@ func TestBrokerTLSErrorsReachPort49dsLog(t *testing.T) {
 // writeRunConfig writes a complete port49d.yaml whose broker block uses b,
 // and returns its path. It has no lab: block: it is the production shape, a
 // daemon answering only what the broker minted (plan 4, Decided 12).
+// safeDir is a fresh directory only its owner can write, whatever the umask.
+func safeDir(t *testing.T) string {
+	t.Helper()
+	d := t.TempDir()
+	if err := os.Chmod(d, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
+
 func writeRunConfig(t *testing.T, b *config.BrokerConfig) string {
 	t.Helper()
 	t.Setenv("T_RUN_SECRET", "run-test-secret")
 	t.Setenv("T_RUN_ENC", "33333333333333333333333333333333")
-	dir := t.TempDir()
+	// safeDir: the inventory is read behind the policy file's fence.
+	dir := safeDir(t)
 	inv := filepath.Join(dir, "inventory.yaml")
 	if err := os.WriteFile(inv, []byte(`
 devices:
@@ -523,5 +536,59 @@ func TestTheKeyGroupMoveNeverStopsAStartThatCouldServe(t *testing.T) {
 	none.Inventory.Devices[0].KeyRef = ""
 	if err := buildWith(none); err == nil || !strings.Contains(err.Error(), "admits none of the 1 device(s)") {
 		t.Fatalf("a bundle admitting nothing: %v", err)
+	}
+}
+
+// C2 at start: with a broker, a group-writable inventory file refuses the
+// start, and a private one is what the reloader starts from.
+func TestAStartReadsTheInventoryBehindTheFence(t *testing.T) {
+	cfg := brokerConfig(t, minimalPolicy)
+	cfg.InventoryFile = filepath.Join(safeDir(t), "inventory.yaml")
+	body := "devices: [{name: leaf1, platform: arista_eos, key_ref: lab_key}]\n"
+	if err := os.WriteFile(cfg.InventoryFile, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	inv, v, err := fencedInventory(cfg)
+	if err != nil || len(inv.Devices) != 1 || v != engine.HashOf([]byte(body)) {
+		t.Fatalf("%+v %s %v", inv, v, err)
+	}
+	if err := os.Chmod(cfg.InventoryFile, 0o666); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := fencedInventory(cfg); err == nil || !strings.Contains(err.Error(), "inventory_file") {
+		t.Fatalf("a world-writable inventory started: %v", err)
+	}
+}
+
+// A fault in the fenced bytes names the inventory file, as bundle.LoadInventory
+// does, so the operator is sent to the inventory, not the policy.
+func TestAFencedInventoryFaultNamesTheInventoryFile(t *testing.T) {
+	cfg := brokerConfig(t, minimalPolicy)
+	cfg.InventoryFile = filepath.Join(safeDir(t), "inventory.yaml")
+	for name, body := range map[string]string{
+		"malformed": "devices: [{name: leaf1, keyref: lab_key}]\n",
+		"invalid":   "devices: [{name: leaf1, platform: arista_eos}, {name: leaf1, platform: arista_eos}]\n",
+	} {
+		if err := os.WriteFile(cfg.InventoryFile, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		var ie *bundle.InventoryError
+		if _, _, err := fencedInventory(cfg); !errors.As(err, &ie) || ie.Path != cfg.InventoryFile {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
+
+// With a broker, run refuses to start on an inventory file others could
+// write, naming it, rather than serve from bytes anyone could have chosen.
+func TestRunRefusesAnInventoryFileOthersCouldWrite(t *testing.T) {
+	cfgPath := writeRunConfig(t, brokerConfig(t, minimalPolicy).Broker)
+	inv := filepath.Join(filepath.Dir(cfgPath), "inventory.yaml")
+	if err := os.Chmod(inv, 0o666); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runExpectingRefusal(t, cfgPath); err == nil || !strings.Contains(err.Error(), "inventory_file "+inv) ||
+		!strings.Contains(err.Error(), "writable by others") {
+		t.Fatalf("run: %v", err)
 	}
 }

@@ -40,6 +40,7 @@ import (
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/daemon/server"
 	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/engine"
 	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/session"
@@ -272,6 +273,27 @@ func loadPolicy(cfg config.Config) (*policy.Policy, error) {
 	return pol, nil
 }
 
+// fencedInventory reads inventory_file behind the fence (readInventoryFile)
+// and returns it with the version the reloader starts from: the hash of the
+// bytes loaded, so an edit between config.Load's read and this one is loaded,
+// never skipped (plan 6a, M1). config.Load has read the file once already,
+// plainly; with a broker these bytes replace what it read. A fault is a
+// *bundle.InventoryError, as bundle.LoadInventory's is, naming the file.
+func fencedInventory(cfg config.Config) (admission.Inventory, string, error) {
+	raw, err := readInventoryFile(cfg.InventoryFile)
+	if err != nil {
+		return admission.Inventory{}, "", &bundle.InventoryError{Path: cfg.InventoryFile, Err: err}
+	}
+	inv, err := admission.ParseFile(raw, cfg.InventoryFile)
+	if err == nil {
+		err = admission.Validate(inv.Devices)
+	}
+	if err != nil {
+		return admission.Inventory{}, "", &bundle.InventoryError{Path: cfg.InventoryFile, Err: quotesCut{err}}
+	}
+	return inv, engine.HashOf(raw), nil
+}
+
 // parseBundle builds the bundle from the policy file's bytes and an
 // inventory (bundle.Parse): a reload of either loads the one it read against
 // the other in force, so the version it remembers refusing is the version it
@@ -438,7 +460,16 @@ func run(parent context.Context, cfgPath string) error {
 	}
 	// The inventory as loaded, hashed now rather than when the reloader
 	// starts: an edit in between would otherwise never be said (checkInventory).
+	// With a broker the inventory is live, so it is read behind the policy
+	// file's fence, and the reloader starts from the bytes loaded (M1).
 	_, inventoryAtStart, _ := fileVersion(cfg.InventoryFile)
+	if cfg.Broker != nil {
+		inv, v, err := fencedInventory(cfg)
+		if err != nil {
+			return err
+		}
+		cfg.Inventory, inventoryAtStart = inv, v
+	}
 	announce(stderr, &cfg)
 
 	ctx, cancel := context.WithCancel(parent)

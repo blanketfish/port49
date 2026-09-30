@@ -82,6 +82,27 @@ var readOnlyFS = func(f *os.File) (bool, error) {
 // start or a reload until something writes to it, and read to at most
 // maxPolicySize.
 func readPolicyFile(path string) ([]byte, error) {
+	return readGuarded(path, maxPolicySize, "policy file")
+}
+
+// maxInventorySize bounds the inventory file's read. A 10,000-device
+// inventory is a few megabytes; the bound is there so a link aimed at a
+// multi-gigabyte file is not read into memory at every poll.
+const maxInventorySize = 64 << 20
+
+// readInventoryFile reads inventory_file behind the same fence: with a broker
+// it is reloaded live and decides scope membership, the addresses a mint
+// hands out and key pins, so whoever can write it decides access within
+// seconds, as for the policy file (spec §10; plan 6a C2).
+func readInventoryFile(path string) ([]byte, error) {
+	return readGuarded(path, maxInventorySize, "inventory file")
+}
+
+// readGuarded is readPolicyFile's fence for any file port49d reloads live:
+// the link walk, the owner and mode of the file and its directory, a regular
+// file opened non-blocking, and at most max bytes, what naming the file in the
+// size refusal.
+func readGuarded(path string, max int64, what string) ([]byte, error) {
 	target, err := resolvePolicyPath(path)
 	if err != nil {
 		return nil, err
@@ -114,14 +135,22 @@ func readPolicyFile(path string) ([]byte, error) {
 	if err := writableByUsAlone("the directory "+dir, di); err != nil {
 		return nil, err
 	}
-	raw, err := io.ReadAll(io.LimitReader(f, maxPolicySize+1))
+	raw, err := io.ReadAll(io.LimitReader(f, max+1))
 	if err != nil {
 		return nil, err
 	}
-	if len(raw) > maxPolicySize {
-		return nil, fmt.Errorf("%s is larger than %d bytes; it is not a policy file", target, maxPolicySize)
+	if int64(len(raw)) > max {
+		return nil, fmt.Errorf("%s is larger than %d bytes; it is not a%s %s", target, max, article(what), what)
 	}
 	return raw, nil
+}
+
+// article is "n" before a word starting with a vowel, else "".
+func article(word string) string {
+	if word != "" && strings.ContainsRune("aeiou", rune(word[0])) {
+		return "n"
+	}
+	return ""
 }
 
 // resolvePolicyPath follows path one component at a time to the name with no
@@ -235,7 +264,7 @@ func ownedByUsOrRoot(what string, fi fs.FileInfo) error {
 		return fmt.Errorf("%s: cannot read its owner", what)
 	}
 	if euid := geteuid(); uid != uint32(euid) && uid != 0 {
-		return fmt.Errorf("%s is owned by uid %d; whoever can write the policy decides every operator's access, "+
+		return fmt.Errorf("%s is owned by uid %d; whoever can write it decides who gets access, "+
 			"so it must belong to the user port49d runs as (uid %d) or to root - chown it", what, uid, euid)
 	}
 	return nil
@@ -243,8 +272,8 @@ func ownedByUsOrRoot(what string, fi fs.FileInfo) error {
 
 func notWritableByOthers(what string, fi fs.FileInfo) error {
 	if perm := fi.Mode().Perm(); perm&0o022 != 0 {
-		return fmt.Errorf("%s is mode %v, writable by others than its owner; whoever can write the policy "+
-			"decides every operator's access - chmod go-w it", what, perm)
+		return fmt.Errorf("%s is mode %v, writable by others than its owner; whoever can write it "+
+			"decides who gets access - chmod go-w it", what, perm)
 	}
 	return nil
 }

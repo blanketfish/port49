@@ -12,3 +12,9 @@ func readPolicyFile(string) ([]byte, error) {
 	return nil, errors.New("port49d reads broker.policy_file on Linux only: the check of who could have written " +
 		"it is Linux's")
 }
+
+// readInventoryFile refuses on every system but Linux, as readPolicyFile does.
+func readInventoryFile(string) ([]byte, error) {
+	return nil, errors.New("port49d reads inventory_file with a broker on Linux only: the check of who could " +
+		"have written it is Linux's")
+}
