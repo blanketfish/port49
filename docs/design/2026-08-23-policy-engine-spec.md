@@ -4993,7 +4993,7 @@ Without `--config` it still fails on every device admission refuses where key gr
 declared: a tie, and a device no group admits, since port49d serves neither. It fails on a test
 naming a device the inventory does not have, which a load no longer refuses (§10).
 **`port49 policy diff`** fails on a device the new policy refuses admission and the old admitted,
-naming it: the edit port49d's reload would refuse over `inventory.max_removed_percent` (§5.1.3).
+naming it: the edit port49d's reload would refuse over `inventory.max_removed_percent` (§10).
 
 **Access review** is a rendering of the flat grant table, not an investigation:
 `port49 access review --subject <name>` lists every grant row the subject appears in, with
