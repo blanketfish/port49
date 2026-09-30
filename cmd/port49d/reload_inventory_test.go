@@ -252,7 +252,7 @@ func (rig *reloadRig) restart(t *testing.T) error {
 		return err
 	}
 	cfg.Inventory = inv
-	pol, err := loadPolicy(cfg)
+	pol, err := loadPolicy(cfg, "inventory_file "+cfg.InventoryFile)
 	if err == nil && (len(pol.Devices()) != 2 || len(pol.AdmissionRefusals()) != 0) {
 		return fmt.Errorf("%d devices, refused %+v", len(pol.Devices()), pol.AdmissionRefusals())
 	}

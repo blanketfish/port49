@@ -1,8 +1,12 @@
 #!/bin/bash
 # run.sh: record one L27 stack (spec §15 L27, plan 6a Task 2). See README.md.
 #
-#   tests/lab/sot/run.sh <stack> [legacy]
-#   stack: netbox-3.7 | netbox-4 | nautobot-1.6 | nautobot-2
+#   tests/lab/sot/run.sh <stack> [legacy|l30]
+#   stack: netbox-3.7 | netbox-4 | nautobot-1.6 | nautobot-2 | nautobot-3
+#
+# l30 (spec §15 L30, plan 6b Task 2) also seeds 120 devices, reads the list
+# 50 at a time to its end, reads one page through an nginx reverse proxy
+# (the compose files' l30 profile), and writes tests/lab/sot/l30/<stack>/.
 #
 # Generates fresh random lab credentials into a 0600 env file outside the
 # repository, brings the stack up, waits (10 minute deadline) for
@@ -13,21 +17,24 @@
 # (or under `sg docker -c`).
 set -euo pipefail
 
-stack=${1:?usage: run.sh <netbox-3.7|netbox-4|nautobot-1.6|nautobot-2> [legacy]}
+stack=${1:?usage: run.sh <netbox-3.7|netbox-4|nautobot-1.6|nautobot-2|nautobot-3> [legacy|l30]}
 legacy=${2:-}
 case $stack in
 netbox-3.7) product=netbox port=18037 project=port49-l27-netbox37 ;;
 netbox-4) product=netbox port=18080 project=port49-l27-netbox4 ;;
 nautobot-1.6) product=nautobot port=18016 project=port49-l27-nautobot16 ;;
 nautobot-2) product=nautobot port=18020 project=port49-l27-nautobot2 ;;
+nautobot-3) product=nautobot port=18030 project=port49-l27-nautobot3 ;;
 *) echo "run.sh: unknown stack $stack" >&2; exit 64 ;;
 esac
-[ -z "$legacy" ] || [ "$legacy" = legacy ] || { echo "run.sh: second argument is 'legacy' or nothing" >&2; exit 64; }
+[ -z "$legacy" ] || [ "$legacy" = legacy ] || [ "$legacy" = l30 ] ||
+	{ echo "run.sh: second argument is 'legacy', 'l30' or nothing" >&2; exit 64; }
 
 root=$(pwd)
 compose=$root/tests/lab/sot/compose/$stack.yml
 [ -f "$compose" ] || { echo "run.sh: run from the repository root ($compose not found)" >&2; exit 64; }
-suffix=${legacy:+-legacy}
+suffix=""
+[ "$legacy" = legacy ] && suffix=-legacy
 out=$root/tests/lab/sot/fixtures/$stack$suffix
 mkdir -p "$root/tests/lab/logs"
 log=$root/tests/lab/logs/l27-$stack$suffix.log
@@ -49,10 +56,29 @@ flags=()
 case $stack in
 netbox-4) scheme=Bearer; flags+=(-probe-v1-token) ;;
 nautobot-2) flags+=(-depth1-read) ;;
+nautobot-3) flags+=(-depth1-read) ;;
 esac
-[ -n "$legacy" ] && flags+=(-prefer-legacy)
+[ "$legacy" = legacy ] && flags+=(-prefer-legacy)
 
-dc() { docker compose --env-file "$envf" -f "$compose" "$@"; }
+# The proxy service is in the compose files' l30 profile, but compose
+# interpolates every service, profiled or not: both variables are set on
+# every run so a file's ${L30_…:?} fails only when run by hand without them.
+export L30_PROXY_PORT=$((port + 1000)) L30_PROXY_CONF=$tmp/l30-proxy.conf
+upstream=netbox
+[ "$product" = nautobot ] && upstream=nautobot
+sed "s/netbox:8080/$upstream:8080/" "$root/tests/lab/sot/compose/l30-proxy.conf" >"$L30_PROXY_CONF"
+chmod 644 "$L30_PROXY_CONF"
+profile=()
+if [ "$legacy" = l30 ]; then
+	out=$root/tests/lab/sot/l30/$stack
+	log=$root/tests/lab/logs/l30-$stack.log
+	flags+=(-devices 120 -page-limit 50 -proxy "http://127.0.0.1:$L30_PROXY_PORT")
+	# Nautobot 1.6 took only the legacy spelling (L27).
+	[ "$stack" = nautobot-1.6 ] && flags+=(-prefer-legacy)
+	profile=(--profile l30)
+fi
+
+dc() { docker compose --env-file "$envf" -f "$compose" "${profile[@]}" "$@"; }
 cleanup() {
 	set +e
 	if [ -f "$envf" ]; then

@@ -193,8 +193,8 @@ func LoadTLS(certFile, keyFile, anchorFile string) (tls.Certificate, *x509.CertP
 		anchors = append(anchors, c)
 	}
 	if len(anchors) != 1 {
-		return tls.Certificate{}, nil, fmt.Errorf("broker: client_ca_file %s holds %d certificates; the vertical "+
-			"slice trusts exactly one anchor (design §19 step 3)", anchorFile, len(anchors))
+		return tls.Certificate{}, nil, fmt.Errorf("broker: client_ca_file %s holds %d certificates; exactly one "+
+			"trust anchor is accepted (design §19 step 3)", anchorFile, len(anchors))
 	}
 	pool := x509.NewCertPool()
 	pool.AddCert(anchors[0])

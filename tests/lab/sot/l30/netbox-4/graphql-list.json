@@ -1,0 +1,60 @@
+[
+  {
+    "errors": null,
+    "first": {
+      "name": "leaf-01",
+      "status": "active"
+    },
+    "names": 120,
+    "query": "{ device_list { name status } }",
+    "status": 200,
+    "step": "graphql_list_0"
+  },
+  {
+    "errors": null,
+    "first": {
+      "name": "leaf-01"
+    },
+    "names": 50,
+    "query": "{ device_list(pagination: {offset: 0, limit: 50}) { name } }",
+    "status": 200,
+    "step": "graphql_list_1"
+  },
+  {
+    "errors": null,
+    "first": {
+      "name": "leaf-051"
+    },
+    "names": 50,
+    "query": "{ device_list(pagination: {offset: 50, limit: 50}) { name } }",
+    "status": 200,
+    "step": "graphql_list_2"
+  },
+  {
+    "errors": [
+      {
+        "locations": [
+          {
+            "column": 15,
+            "line": 1
+          }
+        ],
+        "message": "Unknown argument 'limit' on field 'Query.device_list'."
+      },
+      {
+        "locations": [
+          {
+            "column": 26,
+            "line": 1
+          }
+        ],
+        "message": "Unknown argument 'offset' on field 'Query.device_list'."
+      }
+    ],
+    "first": null,
+    "names": 0,
+    "query": "{ device_list(limit: 50, offset: 0) { name } }",
+    "status": 200,
+    "step": "graphql_list_3"
+  }
+]

@@ -755,6 +755,7 @@ func TestAQuarantineTakesEffectAtTheExpiryAndEndsWithIt(t *testing.T) {
 	pol := quarantinePolicy(t, loaded, adminUntil, opUntil)
 	var clock atomic.Pointer[time.Time]
 	clock.Store(&loaded)
+	lim := slowBackoff()
 	st := memory.New(time.Now)
 	for _, id := range []string{"a", "b", "c"} {
 		if _, err := st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
@@ -766,7 +767,7 @@ func TestAQuarantineTakesEffectAtTheExpiryAndEndsWithIt(t *testing.T) {
 	ts := newTestServerWith(t, log, st, nil, func(d *Deps) {
 		d.Quarantined = pol.Quarantined
 		d.Now = func() time.Time { return *clock.Load() }
-		d.Limits = slowBackoff()
+		d.Limits = lim
 	})
 	login := func(c *client, sid uint32, tok string) {
 		c.sid, c.seq = sid, 1
@@ -803,7 +804,21 @@ func TestAQuarantineTakesEffectAtTheExpiryAndEndsWithIt(t *testing.T) {
 		t.Fatalf("unvalidated{device_quarantined} = %v", testutil.ToFloat64(ts.metrics.Unvalidated.WithLabelValues("device_quarantined")))
 	}
 
-	// Once the quarantine's span ends the device is served again.
+	// Once the quarantine's span ends the device is served again. The two
+	// connections just closed hold both of the source's per-NAS slots until
+	// each one's goroutine releases its slot, which it does just after the
+	// socket closes (and after Connections{open} falls): a dial in that
+	// window is refused at the cap, a test race and not the quarantine's
+	// doing (final review Minor 8). Wait for a slot to come free first.
+	if !waitFor(t, func() bool {
+		release, ok := lim.Acquire(netip.MustParseAddr("127.0.0.1"))
+		if ok {
+			release()
+		}
+		return ok
+	}) {
+		t.Fatal("no per-NAS slot came free after both quarantined connections were closed")
+	}
 	ended := opUntil.Add(time.Second)
 	clock.Store(&ended)
 	again := dial(t, ts.addr, []byte("k2"))
@@ -1364,8 +1379,16 @@ func TestAPacketPastItsDateIsClosedWithAReset(t *testing.T) {
 	if !waitFor(t, func() bool { return log.contains(`"diagnosis":"matches_retired"`) }) {
 		t.Fatalf("no matches_retired record: %s", log.String())
 	}
-	// The strike: the next connection from this source is refused at Accept.
-	closedAtOnce(t, dial(t, ts.addr, []byte("k2")))
+	// The strike: the next connection from this source is refused at Accept,
+	// with a reset. On loopback that reset can reach the client before
+	// connect() returns, so the dial itself may fail with it: the same
+	// refusal (final review Minor 8).
+	if conn, err := net.Dial("tcp", ts.addr); err == nil {
+		t.Cleanup(func() { conn.Close() })
+		closedAtOnce(t, &client{conn: conn, key: []byte("k2"), sid: 0xabcd1234, seq: 1})
+	} else if !errors.Is(err, syscall.ECONNRESET) {
+		t.Fatalf("want the struck source refused at Accept with a reset, got %v", err)
+	}
 	if n := testutil.ToFloat64(ts.metrics.ConnectionEvents.WithLabelValues("held_refused")); n != 1 {
 		t.Fatalf("held_refused = %v; the packet past its date was not struck", n)
 	}

@@ -1,0 +1,34 @@
+# Spec §14's quarantine through a sync (plan 6b Task 19). Two probe subjects
+# fail joint validation on the lab devices, one way for each platform, and
+# reach them by name, so the dummy devices the same sync carries load and are
+# served (conflict scan F5):
+# - quarantine_probe names @loopback, a class only arista_eos defines, which
+#   quarantines nx1, xe1, srx1 and vsrx1 (tests/lab/quarantine/policy.yaml's
+#   cause);
+# - eos_probe lands alone at a level arista_eos cannot render, which
+#   quarantines leaf1 (plan 6a's TestAQuarantinedDeviceDoesNotStopTheStart's
+#   cause). An unmapped level is not used on Junos: it renders no level, and
+#   decision 26 gives that subject the fail-closed reply, not a quarantine.
+# Checked against inventory-lab.yaml on 2026-09-30: all five quarantined,
+# fixed.yaml none; l29_unit_test.go asserts both before any run.
+privilege_levels: [{name: readonly}, {name: operator}, {name: unmapped}, {name: admin}]
+scopes:
+  - {name: all_devices, match: {}}
+  - {name: lab_devices, match: {name: [srx1, vsrx1, nx1, xe1]}}
+  - {name: lab_eos, match: {name: [leaf1]}}
+roles:
+  - {name: network_admin, privilege: admin, permit: ["**"]}
+  - {name: eos_class_only, privilege: admin, permit: ["show interfaces @loopback"]}
+  - {name: unrenderable, privilege: unmapped, permit: ["show version"]}
+subjects:
+  - {name: slice_operator, identity: ["user:alice@slice.port49.test"], username: slice01,
+     enable: token, token_ttl: 60s}
+  - {name: quarantine_probe, identity: ["user:probe@slice.port49.test"], username: probe01, token_ttl: 60s}
+  - {name: eos_probe, identity: ["user:eosprobe@slice.port49.test"], username: probe02, token_ttl: 60s}
+grants:
+  - {subject: slice_operator, scope: all_devices, roles: [network_admin], max_privilege: admin}
+  - {subject: quarantine_probe, scope: lab_devices, roles: [eos_class_only], max_privilege: admin}
+  - {subject: eos_probe, scope: lab_eos, roles: [unrenderable]}
+key_groups:
+  - {match: {cidr: 172.100.100.0/24}, key_ref: lab_key}
+  - {match: {cidr: 10.99.0.0/24}, key_ref: lab_key}

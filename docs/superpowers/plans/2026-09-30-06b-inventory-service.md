@@ -312,7 +312,9 @@ The owner's rule is to trace a mechanism on a bad day first.
   inventory.service.verify_key_files and send SIGHUP`, with `port49_inventory_bundle_refused` at 1.
   The documented order: add the new public key to every port49d's `verify_key_files` and `SIGHUP`;
   add the old public key to the service's own `verify_key_files`; switch its `signing_key_file` and
-  restart it (it continues at bundle N+1, its bound intact); later drop the old key from both. A
+  restart it: it re-seals the bundle in force under the new key as bundle N+1, the fleet unchanged,
+  its bound intact, and says so (final review I1); wait until every port49d's
+  `port49_inventory_bundle_sequence` shows N+1; only then drop the old key from both. A
   document whose signature does not verify under a key port49d holds says instead `…; it was not
   signed by any key port49d holds for the service: investigate` — tampering, not a rotation.
 - **A policy change reaches the service before port49d:** `port49d: inventory: the service built
@@ -9423,18 +9425,27 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
   snapshot never expires; `port49_inventory_snapshot_age_seconds` climbs), restarts from its persisted
   copy, and a fresh port49d starts from the mirror's — of the two, the one published later. A start
   from a copy counts `port49_inventory_snapshot_age_seconds` from that copy's publication, so a restart
-  does not clear a staleness alarm. A mirror mount that hangs is passed over after 10 s, said. With
+  does not clear a staleness alarm. A mirror mount that hangs is passed over after 10 s, said. The
+  service reads and writes the mirror under the same 10 s deadline, with its metrics listener up
+  first: a hung mount shows as `port49_inventory_mirror_behind` 1 and a line, holds up no sync, and
+  a `SIGTERM` still stops it; with its `state_dir` empty, a hung mirror stops its start, said. With
   neither copy, port49d keeps TACACS+ closed and `/readyz` at 503 until the service answers, saying
   why once per reason: devices find the connection refused and fall to their next server or local
   method.
 - **Protect the verify keys like the policy file.** `verify_key_files` on both sides are read
   behind the same write fence: owned by the process's user or root, not writable by group or others. A
-  loose one refuses port49d's start, and a `SIGHUP` re-read keeps the keys in force. The mirror copy
-  is written 0640: give port49d the mount's group.
+  loose one refuses port49d's start, and a `SIGHUP` re-read keeps the keys in force. Protect
+  `inventory.service.ca_file` the same way: port49d reads it as a regular file with no owner check,
+  and whoever can write it chooses which service port49d trusts. Signatures bound the harm (such a
+  service can deny port49d a new bundle, or replay one port49d already refuses), but not the outage.
+  The mirror copy is written 0640: give port49d the mount's group.
 - **Rotating the service's signing key:** add the new public key to every port49d's
   `verify_key_files` and send `SIGHUP`; add the old public key to the service's own
-  `verify_key_files`; switch its `signing_key_file` and restart it, and it continues at the next
-  sequence with its per-source bound intact; then drop the old key from both. A bundle signed by a key
+  `verify_key_files`; switch its `signing_key_file` and restart it: it re-seals the bundle in force
+  under the new key as the next sequence, the fleet unchanged, with its per-source bound intact, and
+  says `re-sealed as bundle N+1`; wait until every port49d's `port49_inventory_bundle_sequence` shows
+  N+1; only then drop the old key from both. Dropped sooner, a port49d that restarts holds only a copy
+  the old key signed, opens none, and serves no TACACS+ until the service answers. A bundle signed by a key
   port49d does not hold is refused and alarmed (`port49_inventory_bundle_refused`) with the rotation
   hint; one whose signature does not verify says to investigate. Rotating the service's TLS CA needs
   no signal: port49d reads `ca_file` at each connection.

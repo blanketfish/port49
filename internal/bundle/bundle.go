@@ -29,7 +29,7 @@ import (
 // keys for, and the keys themselves, are the daemon's, so two daemons with
 // different keys name one bundle and may admit differently from it (spec §10).
 func ID(policyRaw []byte, inv admission.Inventory) string {
-	sum := sha256.Sum256([]byte(engine.HashOf(policyRaw) + "\n" + engine.HashOf(canonical(inv))))
+	sum := sha256.Sum256([]byte(engine.HashOf(policyRaw) + "\n" + engine.HashOf(Canonical(inv))))
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
@@ -43,6 +43,7 @@ type canonDevice struct {
 }
 
 type canonGroup struct {
+	Name       string            `json:"name,omitempty"`
 	CIDR       string            `json:"cidr,omitempty"`
 	Attributes map[string]string `json:"attributes,omitempty"`
 	KeyRef     string            `json:"key_ref"`
@@ -54,13 +55,13 @@ func (g canonGroup) key() string {
 	return string(b)
 }
 
-// canonical is the inventory in one spelling: devices by name, each one's
+// Canonical is the inventory in one spelling: devices by name, each one's
 // addresses sorted, an empty attribute map as none and `tcp` as the default
 // it is, and key groups sorted with each CIDR masked: admission.Assign
 // refuses a tie rather than take the first group, and a prefix contains what
 // its masked form does, so neither decides access (Task 6 review M1).
 // encoding/json writes map keys sorted.
-func canonical(inv admission.Inventory) []byte {
+func Canonical(inv admission.Inventory) []byte {
 	devs := make([]canonDevice, 0, len(inv.Devices))
 	for _, d := range inv.Devices {
 		addrs := slices.Clone(d.Addresses)
@@ -80,7 +81,7 @@ func canonical(inv admission.Inventory) []byte {
 	slices.SortFunc(devs, func(a, b canonDevice) int { return strings.Compare(a.Name, b.Name) })
 	groups := make([]canonGroup, len(inv.KeyGroups))
 	for i, g := range inv.KeyGroups {
-		groups[i] = canonGroup{KeyRef: g.KeyRef}
+		groups[i] = canonGroup{Name: g.Name, KeyRef: g.KeyRef}
 		if g.CIDR.IsValid() {
 			groups[i].CIDR = g.CIDR.Masked().String()
 		}

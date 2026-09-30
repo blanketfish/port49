@@ -104,3 +104,48 @@ func TestWriteLabNeverWritesTheNewKeyIntoAnOldLooseFile(t *testing.T) {
 		t.Fatalf("the new key: %v %v", fi, err)
 	}
 }
+
+// WriteInventoryLab's files are what the lab inventory service and its
+// callers load: the server certificate verifies for 127.0.0.1, both clients
+// for clientAuth under the one CA, each naming its one identity, and every
+// key is 0600.
+func TestWriteInventoryLabWritesAUsableSet(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now()
+	if err := WriteInventoryLab(dir, now); err != nil {
+		t.Fatal(err)
+	}
+	pool := x509.NewCertPool()
+	caPEM, err := os.ReadFile(filepath.Join(dir, InvCA))
+	if err != nil || !pool.AppendCertsFromPEM(caPEM) {
+		t.Fatalf("ca: %v", err)
+	}
+	load := func(cert, key string) *x509.Certificate {
+		t.Helper()
+		c, err := tls.LoadX509KeyPair(filepath.Join(dir, cert), filepath.Join(dir, key))
+		if err != nil {
+			t.Fatal(err)
+		}
+		leaf, _ := x509.ParseCertificate(c.Certificate[0])
+		return leaf
+	}
+	srv := load(InvServerCert, InvServerKey)
+	if _, err := srv.Verify(x509.VerifyOptions{Roots: pool, CurrentTime: now}); err != nil || srv.VerifyHostname("127.0.0.1") != nil {
+		t.Fatalf("server certificate: %v", err)
+	}
+	client := x509.VerifyOptions{Roots: pool, CurrentTime: now, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}}
+	d := load(InvDaemonCert, InvDaemonKey)
+	if _, err := d.Verify(client); err != nil || len(d.URIs) != 1 || d.URIs[0].String() != InvDaemonID || len(d.EmailAddresses) != 0 {
+		t.Fatalf("port49d certificate: %v %v", err, d.URIs)
+	}
+	o := load(InvOperatorCert, InvOperatorKey)
+	if _, err := o.Verify(client); err != nil || len(o.URIs) != 0 || len(o.EmailAddresses) != 1 ||
+		o.EmailAddresses[0] != "alice@slice.port49.test" {
+		t.Fatalf("operator certificate: %v %v", err, o.EmailAddresses)
+	}
+	for _, k := range []string{InvServerKey, InvDaemonKey, InvOperatorKey} {
+		if fi, err := os.Stat(filepath.Join(dir, k)); err != nil || fi.Mode().Perm() != 0o600 {
+			t.Fatalf("%s must be 0600: %v", k, err)
+		}
+	}
+}

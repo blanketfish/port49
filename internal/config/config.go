@@ -11,9 +11,12 @@ package config
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -24,6 +27,7 @@ import (
 
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/daemon/limits"
+	"github.com/rhwendt/port49/internal/fence"
 	"github.com/rhwendt/port49/internal/keyring"
 	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/store/crypt"
@@ -253,15 +257,44 @@ type fileConfig struct {
 // pointer tells an absent key (the default) from an explicit 0, which refuses
 // every removal.
 type inventoryYAML struct {
-	MaxRemovedPercent *int `yaml:"max_removed_percent"`
+	MaxRemovedPercent *int                    `yaml:"max_removed_percent"`
+	Service           *InventoryServiceConfig `yaml:"service"`
+}
+
+// InventoryServiceConfig is where port49d takes its inventory from when the
+// inventory service publishes it (spec §10), in place of inventory_file.
+// port49d asks url every poll_interval for the bundle's version, over mutual
+// TLS with its own certificate, and fetches a new document when it changes.
+// Every document, from the service, from state_dir or from mirror_dir, is
+// verified against verify_key_files (spec §13, decision 30) and applied
+// against port49d's own broker.policy_file (decision 29).
+type InventoryServiceConfig struct {
+	URL         string `yaml:"url"`
+	CAFile      string `yaml:"ca_file"`
+	TLSCertFile string `yaml:"tls_cert_file"`
+	TLSKeyFile  string `yaml:"tls_key_file"`
+	// VerifyKeyFiles are the service's signing public keys: two while its key
+	// rotates. SIGHUP re-reads the list.
+	VerifyKeyFiles []string `yaml:"verify_key_files"`
+	// PollInterval is how often port49d asks: default 30s, 5s to 10m.
+	PollInterval time.Duration `yaml:"poll_interval"`
+	// StateDir holds the last document port49d applied, bundle.json, which a
+	// restart starts from with no service (spec §10, a MUST).
+	StateDir string `yaml:"state_dir"`
+	// MirrorDir is the shared copy the service writes, read at a cold start
+	// when StateDir has none. Optional.
+	MirrorDir string `yaml:"mirror_dir"`
 }
 
 type Config struct {
 	Listen        string
 	MetricsListen string
 	InventoryFile string
-	Keys          map[string]KeySet
-	Limits        limits.Config
+	// InventoryService is nil without an inventory.service block; with one,
+	// InventoryFile is empty.
+	InventoryService *InventoryServiceConfig
+	Keys             map[string]KeySet
+	Limits           limits.Config
 	// ReceiptIdleTTL slides a receipt forward on every presentation it
 	// answers; ReceiptMaxAge caps it from the first redemption and never
 	// moves. A presentation past either is FAIL on the wire and `token_spent`
@@ -496,8 +529,20 @@ func Load(path string) (Config, error) {
 	if c.Accounting.SpoolPath == "" {
 		c.Accounting.SpoolPath = "/var/lib/port49/acct.jsonl"
 	}
-	if c.InventoryFile == "" {
-		return Config{}, fmt.Errorf("config: inventory_file is required")
+	switch svc := f.InventoryOpts.Service; {
+	case svc != nil && c.InventoryFile != "":
+		return Config{}, fmt.Errorf("config: name inventory_file or inventory.service, not both: two inventory " +
+			"sources would be the disagreement the bundle exists to prevent (spec §10)")
+	case svc == nil && c.InventoryFile == "":
+		return Config{}, fmt.Errorf("config: inventory_file or inventory.service is required")
+	case svc != nil:
+		if f.Broker == nil {
+			return Config{}, fmt.Errorf("config: inventory.service needs a broker: block: port49d applies the " +
+				"service's inventory against its own broker.policy_file (spec §13, decision 29)")
+		}
+		if c.InventoryService, err = checkService(*svc); err != nil {
+			return Config{}, err
+		}
 	}
 	if c.MaxRemovedPercent, err = inventoryBound(f.InventoryOpts); err != nil {
 		return Config{}, err
@@ -905,6 +950,98 @@ func checkKeyRefs(keys map[string]KeySet, raw []byte) error {
 	}
 	return fmt.Errorf("config: %s is not a valid key_ref name (%s): it names the key, never holds it",
 		where, admission.KeyRefShapeRule)
+}
+
+// checkService is inventory.service checked as Load checks it. Every path is
+// required to be absolute, and named by its key when it is not: port49d's
+// working directory is not a place its trust roots should depend on. ca_file
+// above all is required — without it RootCAs would be nil, which Go reads as
+// the host's roots, and any public CA could vouch for the service.
+func checkService(s InventoryServiceConfig) (*InventoryServiceConfig, error) {
+	// What the client (internal/inventory) refuses, refused at load: no
+	// user information, where a credential would sit, and no path, query or
+	// fragment, where a token would be pasted. None is printed.
+	if u, err := url.Parse(s.URL); err != nil || u.Scheme != "https" || u.Host == "" || u.Opaque != "" ||
+		u.User != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+		return nil, fmt.Errorf("config: inventory.service.url must be https://host[:port], with no user " +
+			"information, path, query or fragment")
+	}
+	for _, req := range []struct{ key, v string }{{"ca_file", s.CAFile}, {"tls_cert_file", s.TLSCertFile},
+		{"tls_key_file", s.TLSKeyFile}, {"state_dir", s.StateDir}} {
+		if req.v == "" {
+			return nil, fmt.Errorf("config: inventory.service.%s is required", req.key)
+		}
+		if !filepath.IsAbs(req.v) {
+			return nil, fmt.Errorf("config: inventory.service.%s must be an absolute path", req.key)
+		}
+	}
+	if s.MirrorDir != "" && !filepath.IsAbs(s.MirrorDir) {
+		return nil, fmt.Errorf("config: inventory.service.mirror_dir must be an absolute path")
+	}
+	// As the service refuses them (internal/inventory's config): the mirror is
+	// a separate copy, and neither directory is a part of the other.
+	if s.MirrorDir != "" && within(s.StateDir, s.MirrorDir) {
+		return nil, fmt.Errorf("config: inventory.service.mirror_dir must be outside state_dir; the mirror is a " +
+			"separate copy, not a part of the state")
+	}
+	if s.MirrorDir != "" && within(s.MirrorDir, s.StateDir) {
+		return nil, fmt.Errorf("config: inventory.service.state_dir must be outside mirror_dir; the mirror is a " +
+			"separate copy, and the state is not a part of it")
+	}
+	if len(s.VerifyKeyFiles) == 0 {
+		return nil, fmt.Errorf("config: inventory.service.verify_key_files must name the service's signing public " +
+			"key (port49 inventory keygen writes it)")
+	}
+	for i, f := range s.VerifyKeyFiles {
+		if !filepath.IsAbs(f) {
+			return nil, fmt.Errorf("config: inventory.service.verify_key_files[%d] must be an absolute path", i)
+		}
+	}
+	if _, err := VerifyKeys(s.VerifyKeyFiles); err != nil {
+		return nil, err
+	}
+	s.PollInterval = orD(s.PollInterval, 30*time.Second)
+	if s.PollInterval < 5*time.Second || s.PollInterval > 10*time.Minute {
+		return nil, fmt.Errorf("config: inventory.service.poll_interval must be between 5s and 10m; got %s",
+			s.PollInterval)
+	}
+	return &s, nil
+}
+
+// within reports whether dir is base or a directory under it.
+func within(base, dir string) bool {
+	rel, err := filepath.Rel(filepath.Clean(base), filepath.Clean(dir))
+	return err == nil && (rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))))
+}
+
+// VerifyKeys reads each verify key file behind the write fence (pre-flight
+// M3): a verify key is the trust root of the bundle's signature, so whoever
+// could write it would have any inventory they sign accepted — from the
+// mirror, the persisted copy and the API alike. One that does not read is
+// named by its position and path.
+func VerifyKeys(files []string) ([]ed25519.PublicKey, error) {
+	keys, err := fence.ReadVerifyKeys("inventory.service.verify_key_files", files)
+	if err != nil {
+		return nil, fmt.Errorf("config: %w", err)
+	}
+	return keys, nil
+}
+
+// InventoryServiceOf is inventory.service from a port49d.yaml's bytes,
+// decoded as strictly as Load and checked as Load checks it, or nil when the
+// file has none: what SIGHUP re-reads verify_key_files from. It resolves no
+// secret.
+func InventoryServiceOf(raw []byte) (*InventoryServiceConfig, error) {
+	var f fileConfig
+	dec := yaml.NewDecoder(bytes.NewReader(raw))
+	dec.KnownFields(true)
+	if err := dec.Decode(&f); err != nil && err != io.EOF {
+		return nil, fmt.Errorf("config: %w; check the key spelling against the port49d.yaml schema", decodeFault(err))
+	}
+	if f.InventoryOpts.Service == nil {
+		return nil, nil
+	}
+	return checkService(*f.InventoryOpts.Service)
 }
 
 // decodeFault is a port49d.yaml decode error as it is shown: each fault's

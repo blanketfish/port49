@@ -2,22 +2,35 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/rhwendt/port49/internal/bundle"
 	"github.com/rhwendt/port49/internal/config"
+	"github.com/rhwendt/port49/internal/inventory"
+	"github.com/rhwendt/port49/internal/keyfile"
 	"github.com/rhwendt/port49/internal/policy"
 )
 
 func inventoryCmd(args []string, stdout, stderr io.Writer) int {
 	if len(args) > 0 && args[0] == "diff" {
 		return inventoryDiff(args[1:], stdout, stderr)
+	}
+	if len(args) > 0 && args[0] == "sync" {
+		return inventorySync(args[1:], stdout, stderr)
+	}
+	if len(args) > 0 && args[0] == "keygen" {
+		return inventoryKeygen(args[1:], stdout, stderr)
 	}
 	fmt.Fprint(stderr, usage)
 	return 2
@@ -28,7 +41,8 @@ func inventoryCmd(args []string, stdout, stderr io.Writer) int {
 // scope membership, the security lines marked `!` as port49d writes them
 // inventory_change records — and whether port49d would load it, by the
 // checks its reload runs (bundle.Check; with --new-policy,
-// bundle.CheckAdmission for the policy's reload too).
+// bundle.CheckAdmission for the policy's reload too). With --service it is
+// the service's diff instead: from bundle --from to the one it publishes.
 func inventoryDiff(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("port49 inventory diff", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -37,7 +51,21 @@ func inventoryDiff(args []string, stdout, stderr io.Writer) int {
 	maxRemoved := fs.Int("max-removed-percent", 10, "port49d.yaml's inventory.max_removed_percent")
 	cfgPath := fs.String("config", "", "port49d.yaml: the key_refs it defines and inventory.max_removed_percent, "+
 		"as port49d reads them; no secret is read")
+	svc := serviceFlags(fs)
+	from := fs.Int64("from", 0, "with --service: the sequence of the bundle to diff from")
 	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if svc.url != "" {
+		if flagSet(fs, "policy") || flagSet(fs, "new-policy") || flagSet(fs, "max-removed-percent") ||
+			flagSet(fs, "config") || fs.NArg() != 0 || !svc.complete() || *from < 1 {
+			fmt.Fprint(stderr, usage)
+			return 2
+		}
+		return serviceDiff(svc, *from, stdout, stderr)
+	}
+	if svc.any() || flagSet(fs, "from") {
+		fmt.Fprint(stderr, usage)
 		return 2
 	}
 	if *polPath == "" || fs.NArg() != 2 || *maxRemoved < 0 || *maxRemoved > 100 {
@@ -236,7 +264,7 @@ func printChanges(w io.Writer, rep bundle.Report, to *policy.Policy) {
 		addresses[d.Name] = strings.Join(as, ", ")
 	}
 	for _, c := range rep.Changes {
-		fmt.Fprintln(w, changeLine(c, addresses[c.Device]))
+		fmt.Fprintln(w, c.Line(addresses[c.Device]))
 	}
 }
 
@@ -257,32 +285,203 @@ func flagSet(fs *flag.FlagSet, name string) bool {
 	return set
 }
 
-// changeLine is one change, `!` first where the log would carry it as a
-// security event. addresses is the device's in the new inventory, for an
-// added device: each is a new place a mint sends an operator.
-func changeLine(c bundle.Change, addresses string) string {
-	mark := " "
-	if c.Security {
-		mark = "!"
+// inventoryKeygen is `port49 inventory keygen`: the inventory service's
+// signing key pair (spec §13, decision 30). signing.key goes to the service
+// alone, signing.pub to every port49d's inventory.service.verify_key_files.
+// Neither file is ever overwritten: a new key beside a daemon still holding
+// the old public half would strand it on the bundle in force.
+func inventoryKeygen(args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("port49 inventory keygen", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	dir := flags.String("dir", "", "the directory to write signing.key and signing.pub into")
+	if err := flags.Parse(args); err != nil || *dir == "" || flags.NArg() != 0 {
+		fmt.Fprint(stderr, usage)
+		return 2
 	}
-	switch c.Kind {
-	case bundle.DeviceAdded:
-		return fmt.Sprintf("%s device added %s (%s) at %s: %s", mark, c.Device, c.Platform, addresses, c.To)
-	case bundle.DeviceRemoved:
-		return fmt.Sprintf("%s device removed %s (%s)", mark, c.Device, c.Platform)
-	case bundle.AddressAdded:
-		return fmt.Sprintf("%s address added %s: %s", mark, c.Device, c.Address)
-	case bundle.AddressRemoved:
-		return fmt.Sprintf("%s address removed %s: %s", mark, c.Device, c.Address)
-	case bundle.ScopeJoined, bundle.ScopeLeft:
-		verb, tag := "joined", ""
-		if c.Kind == bundle.ScopeLeft {
-			verb = "left"
+	// Refuse before writing either, so a refusal never leaves one new file
+	// beside an old one (conflict scan F14).
+	for _, name := range []string{"signing.key", "signing.pub"} {
+		if _, err := os.Lstat(filepath.Join(*dir, name)); err == nil {
+			fmt.Fprintf(stderr, "port49 inventory keygen: %s already exists; a new key is written beside no old one\n",
+				filepath.Join(*dir, name))
+			return 1
 		}
-		if c.Security {
-			tag = " (security_log)"
-		}
-		return fmt.Sprintf("%s scope %s%s: %s %s", mark, c.Scope, tag, c.Device, verb)
 	}
-	return fmt.Sprintf("%s %s %s: %s → %s", mark, c.Kind, c.Device, c.From, c.To)
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		fmt.Fprintln(stderr, "port49 inventory keygen:", err)
+		return 1
+	}
+	privPEM, pubPEM, err := keyfile.EncodeEd25519(priv)
+	if err != nil {
+		fmt.Fprintln(stderr, "port49 inventory keygen:", err)
+		return 1
+	}
+	var written []string
+	undo := func() {
+		for _, w := range written {
+			os.Remove(w)
+		}
+	}
+	for _, f := range []struct {
+		name string
+		body []byte
+		mode os.FileMode
+	}{{"signing.key", privPEM, 0o600}, {"signing.pub", pubPEM, 0o644}} {
+		path := filepath.Join(*dir, f.name)
+		// O_EXCL still: a file that appeared since the check is not overwritten.
+		out, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, f.mode)
+		if err != nil {
+			undo()
+			fmt.Fprintln(stderr, "port49 inventory keygen:", err)
+			return 1
+		}
+		written = append(written, path)
+		// The mode exactly, whatever the umask: signing.pub is meant to be
+		// copied out, signing.key read by its owner alone.
+		werr := out.Chmod(f.mode)
+		if werr == nil {
+			_, werr = out.Write(f.body)
+		}
+		if werr == nil {
+			werr = out.Sync()
+		}
+		if cerr := out.Close(); werr == nil {
+			werr = cerr
+		}
+		if werr != nil {
+			undo() // the first file is removed if the second fails
+			fmt.Fprintln(stderr, "port49 inventory keygen:", werr)
+			return 1
+		}
+	}
+	// The directory too, so a crash after the success line cannot lose
+	// either name.
+	if err := syncDir(*dir); err != nil {
+		undo()
+		fmt.Fprintln(stderr, "port49 inventory keygen:", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "port49 inventory keygen: wrote %s (0600: port49-inventory's signing_key_file) and %s "+
+		"(every port49d's inventory.service.verify_key_files); key_id %s\n", filepath.Join(*dir, "signing.key"),
+		filepath.Join(*dir, "signing.pub"), keyfile.Ed25519KeyID(priv.Public().(ed25519.PublicKey)))
+	return 0
+}
+
+// service is the flags that name the inventory service and the client's
+// certificate for it.
+type service struct{ url, ca, cert, key string }
+
+func serviceFlags(fs *flag.FlagSet) *service {
+	s := &service{}
+	fs.StringVar(&s.url, "service", "", "the inventory service, https://host[:port]")
+	fs.StringVar(&s.ca, "ca", "", "the CA file that issues the service's certificate, and nothing else")
+	fs.StringVar(&s.cert, "cert", "", "the client certificate the service names you by")
+	fs.StringVar(&s.key, "key", "", "its private key (owner-only)")
+	return s
+}
+
+func (s *service) complete() bool { return s.url != "" && s.ca != "" && s.cert != "" && s.key != "" }
+func (s *service) any() bool      { return s.url != "" || s.ca != "" || s.cert != "" || s.key != "" }
+
+// syncWait is how long `port49 inventory sync` waits for the service's
+// answer: longer than the sync_timeout default, 5m, which bounds the sync
+// itself (conflict scan F16). A variable for the test.
+var syncWait = 6 * time.Minute
+
+// inventorySync is `port49 inventory sync`: the service syncs now, as its
+// timer would, and says what it did. It exits 0 when the service published
+// or found nothing changed, 1 otherwise.
+func inventorySync(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("port49 inventory sync", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	svc := serviceFlags(fs)
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if !svc.complete() || fs.NArg() != 0 {
+		fmt.Fprint(stderr, usage)
+		return 2
+	}
+	c, err := inventory.NewClient(svc.url, svc.ca, svc.cert, svc.key)
+	if err != nil {
+		fmt.Fprintln(stderr, "port49 inventory sync:", err)
+		return 1
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), syncWait)
+	defer cancel()
+	res, err := c.Sync(ctx)
+	if err != nil {
+		// A connection never made asked for nothing. Only an ask sent and
+		// not answered in time may still be running at the service.
+		var ne net.Error
+		switch {
+		case errors.Is(err, inventory.ErrNoConnection):
+			fmt.Fprintf(stderr, "port49 inventory sync: %v; no sync was asked for\n", err)
+		case ctx.Err() == context.DeadlineExceeded || (errors.As(err, &ne) && ne.Timeout()):
+			fmt.Fprintf(stderr, "port49 inventory sync: no answer within %v; the service may still finish the sync: "+
+				"its log, or port49 inventory diff --service, says what it did\n", syncWait)
+		default:
+			fmt.Fprintln(stderr, "port49 inventory sync:", err)
+		}
+		return 1
+	}
+	return printResult(stdout, res)
+}
+
+// diffWait is how long `port49 inventory diff --service` waits for the
+// service's answer: a diff is a read, and the usage says so.
+const diffWait = time.Minute
+
+// serviceDiff is `port49 inventory diff --service`: what changed from bundle
+// from to the one the service publishes, as the service judges it.
+func serviceDiff(svc *service, from int64, stdout, stderr io.Writer) int {
+	c, err := inventory.NewClient(svc.url, svc.ca, svc.cert, svc.key)
+	if err != nil {
+		fmt.Fprintln(stderr, "port49 inventory diff:", err)
+		return 1
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), diffWait)
+	defer cancel()
+	d, err := c.Diff(ctx, from)
+	if err != nil {
+		fmt.Fprintln(stderr, "port49 inventory diff:", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "bundle %d → %d: %s\n", d.From, d.To, inventory.Printable(d.Summary))
+	for _, c := range d.Changes {
+		fmt.Fprintln(stdout, inventory.Printable(c.Line("")))
+	}
+	return 0
+}
+
+// printResult is a sync's outcome as `port49 inventory sync` prints it, and
+// its exit code: 0 for published and unchanged, 1 otherwise. Every string
+// is the service's, so each is printed through inventory.Printable.
+func printResult(w io.Writer, res inventory.Result) int {
+	switch res.Outcome {
+	case "published":
+		fmt.Fprintf(w, "published bundle %d (%s): %s; %d quarantined\n", res.Sequence, inventory.Printable(res.Bundle),
+			inventory.Printable(res.Summary), len(res.Quarantined))
+		for _, c := range res.Changes {
+			fmt.Fprintln(w, inventory.Printable(c.Line("")))
+		}
+		for _, q := range res.Quarantined {
+			fmt.Fprintf(w, "  device %s (%s) is quarantined against the service's policy: %s\n", inventory.Printable(q.Device),
+				inventory.Printable(q.Platform), inventory.Printable(q.Cause))
+		}
+		for _, l := range res.LeftOut {
+			fmt.Fprintf(w, "  left out: %s\n", inventory.Printable(l))
+		}
+		return 0
+	case "unchanged":
+		fmt.Fprintf(w, "unchanged: bundle %d is current\n", res.Sequence)
+		return 0
+	}
+	still := "no bundle is published yet"
+	if res.Sequence > 0 {
+		still = fmt.Sprintf("still publishing bundle %d", res.Sequence)
+	}
+	fmt.Fprintf(w, "%s; %s: %s\n", inventory.Printable(res.Outcome), still, inventory.Printable(res.Reason))
+	return 1
 }

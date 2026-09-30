@@ -99,8 +99,8 @@ func TestAKeyGroupTieOnOneDeviceRefusesThatDevice(t *testing.T) {
 func TestKeyGroupLoadErrors(t *testing.T) {
 	for _, c := range []struct{ name, groups, want string }{
 		{"no key_ref", "  - {match: {cidr: 10.0.0.0/8}}\n", "key_ref is required"},
-		{"no match", "  - {key_ref: k}\n", "matches on neither cidr nor attributes"},
-		{"both terms", "  - {match: {cidr: 10.0.0.0/8, attributes: {a: b}}, key_ref: k}\n", "not both"},
+		{"no match", "  - {key_ref: k}\n", "matches on neither name, cidr nor attributes"},
+		{"both terms", "  - {match: {cidr: 10.0.0.0/8, attributes: {a: b}}, key_ref: k}\n", "exactly one of name, cidr or attributes"},
 		{"host bits", "  - {match: {cidr: 10.0.0.1/8}, key_ref: k}\n", "host bits"},
 		{"one prefix twice", "  - {match: {cidr: 10.0.0.0/8}, key_ref: a}\n  - {match: {cidr: 10.0.0.0/8}, key_ref: b}\n",
 			"tie for every device"},
@@ -316,6 +316,43 @@ func TestAPinThatIsNoNameRefusesThatDeviceAlone(t *testing.T) {
 	for _, d := range inventory() {
 		if r, _ := p.Admitted(d.Name); r.Refused != "" && d.KeyRef == "" {
 			t.Errorf("%s refused: %s", d.Name, r.Refused)
+		}
+	}
+}
+
+// Owner decision 3: the pin, in the reviewed policy, by name.
+func TestAKeyGroupPinsADeviceByName(t *testing.T) {
+	e := env()
+	e.KeyRefs = []string{"campus_key", "prod_key", "pin_key"}
+	p, err := Parse([]byte(keyGrouped+"  - {match: {name: campus-sw-7}, key_ref: pin_key}\n"), e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if as, _ := p.KeyAssignment("campus-sw-7"); as.KeyRef != "pin_key" || as.Tier != admission.TierPin {
+		t.Fatalf("%+v", as)
+	}
+}
+
+func TestANameGroupIsOneTermAndOneGroupPerName(t *testing.T) {
+	for name, c := range map[string]struct{ group, want string }{
+		"with a cidr": {"  - {match: {name: leaf-01, cidr: 10.0.0.0/8}, key_ref: prod_key}\n", "exactly one of name, cidr or attributes"},
+		"twice":       {"  - {match: {name: leaf-01}, key_ref: prod_key}\n  - {match: {name: leaf-01}, key_ref: campus_key}\n", "tie for device leaf-01"},
+		"not a name":  {"  - {match: {name: \"leaf 01\"}, key_ref: prod_key}\n", "match.name is not a device name"},
+	} {
+		if _, err := Parse([]byte(keyGrouped+c.group), env()); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: got %v, want %q", name, err, c.want)
+		}
+	}
+	// A value that is no name is not echoed.
+	if _, err := Parse([]byte(keyGrouped+"  - {match: {name: \"leaf 01\"}, key_ref: prod_key}\n"), env()); err == nil ||
+		strings.Contains(err.Error(), "leaf 01") {
+		t.Fatalf("echoed the rejected name: %v", err)
+	}
+	// 253 bytes is a device name; 254 is not (broker's maxDeviceName).
+	for n, ok := range map[int]bool{253: true, 254: false} {
+		_, err := Parse([]byte(keyGrouped+"  - {match: {name: "+strings.Repeat("a", n)+"}, key_ref: prod_key}\n"), env())
+		if refused := err != nil && strings.Contains(err.Error(), "match.name is not a device name"); refused == ok {
+			t.Errorf("%d bytes: got %v", n, err)
 		}
 	}
 }

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	adapter "github.com/rhwendt/port49/internal/platform"
+	"github.com/rhwendt/port49/tests/lab/labcreds"
 )
 
 // TestAdapterCarried is the rest of L22 (plan 5a, Task 17): the measurements
@@ -155,10 +156,10 @@ func (l *lab) carriedConfigure(t *testing.T, lines ...string) string {
 		for _, ln := range lines {
 			got, err := c.sendExpect(ln, 60*time.Second, cfg)
 			if err != nil {
-				return fmt.Errorf("%q: %w", ln, err)
+				return errors.New(hideKeys(fmt.Sprintf("%q: %v", ln, err)))
 			}
 			if strings.Contains(got, "% ") || strings.Contains(got, "ERROR") {
-				return fmt.Errorf("%q was refused by the device:\n%s", ln, got)
+				return errors.New(hideKeys(fmt.Sprintf("%q was refused by the device:\n%s", ln, got)))
 			}
 		}
 		if _, err := c.sendExpect("end", 45*time.Second, c.prompt); err != nil {
@@ -168,6 +169,18 @@ func (l *lab) carriedConfigure(t *testing.T, lines ...string) string {
 		return nil
 	})
 	return out
+}
+
+// hideKeys replaces the TACACS+ keys a configuration line may carry (the lab
+// key, and the rotation key l28Rotate types) with `<key>`, so an error never
+// quotes one, published or not.
+func hideKeys(s string) string {
+	for _, k := range []string{labKeyDefault, os.Getenv("PORT49_L28_NEW_KEY"), labcreds.RotationKey} {
+		if k != "" {
+			s = strings.ReplaceAll(s, k, "<key>")
+		}
+	}
+	return s
 }
 
 // checkConfigShows is what each platform's configuration is read from:

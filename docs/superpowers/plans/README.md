@@ -40,8 +40,11 @@ built, below); **merged 2026-09-30 (PR #15)**. **6b written 2026-09-30, revised 
 its pre-flight review (`2026-09-30-06b-inventory-service.md`, twenty-two tasks: one docs, one lab,
 seventeen code, two lab, one lab-and-docs); it splits again at the source, leaving the NetBox and
 Nautobot connectors and the webhook trigger to plan 6c, and three owner decisions are listed at its
-top. Its Task 19 gates the merge; its Task 20 (L29 at midnight) runs first and may land after it.
-6c and 7–13 not yet.
+top. **Executed 2026-09-30** on `feature/inventory-service`, reviewed per task and whole-branch,
+with a fix wave; Task 20's midnight nights were dropped by the owner's ruling. It closed L29 and
+L30, and spec §14's quarantine through a sync passed on four images; it opened L31, slow Cisco
+break-glass with single-connection on (Plan 6b — As built, below); **ready to merge**. Next,
+`fix/breakglass-reset`, which closes L31. 6c and 7–13 not yet.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -956,7 +959,8 @@ commands and the system users by platform name, so 5a refuses `based_on: juniper
   order; `SIGHUP` re-reads the bound; the broker refuses to mint for a refused device
   (`device_unknown`); a test on an absent device fails CI and never a reload; a policy reload is held to
   the same bound as an inventory reload, and `policy diff` fails on a newly refused device.
-- **Plan 6b — `2026-09-30-06b-inventory-service.md`. Written 2026-09-30.**
+- **Plan 6b — `2026-09-30-06b-inventory-service.md`. Written 2026-09-30; executed 2026-09-30
+  (as built, below); ready to merge.**
   `cmd/port49-inventory` with the §10 API over mutual TLS (read and sync rights), the file connector,
   three of the four sync triggers (10-minute schedule, `port49 inventory sync`, startup), bounded
   change per source in the service, the signed bundle document and its sequence number, port49d's
@@ -968,6 +972,19 @@ commands and the system users by platform name, so 5a refuses `based_on: juniper
   (ed25519) and verified; the mirror a directory, not an object-store API; nothing the service sends
   assigns a key, and the pin tier moves into the reviewed policy as a key group matching a device name
   (revised after the pre-flight review: a `/32` group is tier 3 and is not a pin).
+- **Fix `fix/breakglass-reset` — right after 6b merges, before 6c.** Closes **L31** (spec §15;
+  `tests/lab/results/L31-breakglass-cisco-singleconnection.md`). With single-connection on,
+  IOS-XE and NX-OS wait out their 5 s timeout after a reset that follows their request, so
+  break-glass costs 16–21 s on a refused or quarantined device and 30–41 s on a removed one. Give
+  the unadmitted, refused and quarantined paths (`internal/daemon/server/conn.go:233-238`,
+  `:261-262`) L28's shape: record the first connection, reset it at once, and refuse the source's
+  next connections at Accept for a short window. The unadmitted path takes a `keyMiss`-style close
+  in place of `backoff`. Refused and quarantined, which take no strike by spec, get a strike-free
+  window checked beside `Holding` (`server.go:119`) and cleared at every reload, so a fix or
+  re-admission takes effect at once. Retries inside the window are counted, not recorded, so spec
+  §10's "one record per connection" for the quarantine close and the `conn.go` comment change with
+  it. Lab: IOS-XE and NX-OS with single-connection on, removed, refused and quarantined, against
+  port49d stopped; the run closes L31.
 - **Plan 6c — the NetBox and Nautobot connectors; written after 6b merges, against L27's and L30's
   fixtures.** Version detection by `/api/status/`, GraphQL first, the REST fallback (`?depth=1` on
   Nautobot 2.x, following `next` as L30 finds it), the slug alias table, filters and maps, source
@@ -976,7 +993,16 @@ commands and the system users by platform name, so 5a refuses `based_on: juniper
   `sync_timeout`; and `port49 inventory export --service … [--from N]`, so the offline tools keep an
   `--inventory` when no source is a file. Split from 6b because the connectors
   are the contributable surface and hold the only source-of-truth credentials, and two of their facts
-  (L30) were unmeasured when 6b was written.
+  (L30) were unmeasured when 6b was written. **From L30, as measured** (spec §15; `L30-netbox.md`,
+  `L30-nautobot.md`): follow `next` only when its scheme, host and port are the configured base's
+  (every product builds `next` from the host the request arrived under), or rebuild it from the
+  base; read GraphQL's `errors` before `data` even on HTTP 200 (NetBox 4.7.1 answers an unknown
+  argument that way, with no names); take the status spelling per product and version (`"ACTIVE"`
+  on NetBox 3.7, `"active"` on 4.x, `{"name": "Active"}` on Nautobot); page GraphQL by
+  `pagination: {offset, limit}` on NetBox 4.x and `limit`/`offset` on Nautobot, and not at all on
+  NetBox 3.7; and expect no `cluster` or `software_image_files` on a Nautobot 3.2.6 device, which
+  otherwise answered as 2.4.43 did, so no separate 3.x profile is indicated. Its lab run syncs a
+  NetBox and a Nautobot to a device end to end.
 
 **Go-dark on a store outage is plan 7's**, with the remote store (plan 4's "Hands to plan 6": "plan
 6 or 7, whichever brings the remote store"; plan 6 builds none), and so are the warm context
@@ -1106,6 +1132,122 @@ and Nautobot 3.x. Both are plan 6b's.
   11a (`config.Load`'s pre-fence read), fixed; Task 16's stale detection, fixed; Task 16's
   non-root CI, plan 12 (above); final review m6, m9 and m10, fixed; m7, plan 6b (above); m8, L30.
 
+### Plan 6b — As built
+
+Executed 2026-09-30 on `feature/inventory-service`, each task reviewed, then a whole-branch review,
+a fix wave and a scoped re-review; the ledger is
+`.superpowers/sdd/2026-09-30-06b-inventory-service/progress.md`, with `final-review.md` and
+`fixwave-report.md` beside it. A conflict scan before Task 1 ruled twenty mismatches between tasks
+(F1–F20) and patched the plan on `main`, so each brief carried its fix. What differs from the plan's
+text, task by task:
+
+- **Conflict scan.** A cold start takes the copy published later (`published_at`), not the higher
+  sequence (F1). The fetcher is joined at shutdown and says nothing when its context ends (F8). A
+  cold-start copy that does not open sets `port49_inventory_bundle_refused` (F19). Lab tasks run
+  `make test && make vet` before committing (F17).
+- **Task 4.** `bundle.Open` refuses a document whose `sources` lists name a device that fails the
+  inventory's name check, without echoing it, so the one choke point closes log injection; the
+  syncer lists only names that pass.
+- **Task 5.** port49-inventory.yaml refuses a second YAML document. port49d.yaml's loader does not;
+  that is carried to plan 12.
+- **Task 8.** The service reads its state behind the fence, a link in a file's own name refused
+  (`fence.ReadNoLink`), because `state_dir` is the sequence's trust anchor: a planted older signed
+  document could otherwise roll it back. The mirror is trusted by signature alone
+  (`fence.ReadSigned`: no link in its name, a regular file, capped), so a ConfigMap-link mirror
+  mount is refused, which fails closed. The rollback floor includes `published.json`.
+- **Task 9.** `Restore` refuses a start rather than publish below a copy: a `state_dir` copy it
+  cannot open, and, with `state_dir` empty, a mirror copy it cannot open. Beside a good `state_dir`
+  a bad mirror is said and shows as `port49_inventory_mirror_behind`. `WriteMirror` never lowers the
+  mirror's sequence, and the service rewrites a mirror that differs from its sealed bundle at start
+  and at every pass, not only at a publish. The per-source `interval` was kept, as spec §10 has it,
+  reversing pre-flight Minor 2.
+- **Task 10.** Review found a URI SAN beginning `user:` impersonating an email identity: it is
+  refused. A nil trust anchor is refused rather than falling back to the system roots, and
+  `inventory.Server` returns an error. `readers` and `syncers` match exactly, `*` is not a wildcard,
+  and a `user:` entry with an upper-case letter refuses the config, since callers' emails are
+  matched lower-cased.
+- **Task 12.** The client dials with a fresh, fully verified TLS config per connection, so a CA
+  rotation needs no signal; text from a peer's certificate in a TLS error is sanitized before it is
+  printed; the diff URL is built with `RawQuery`. `port49 inventory sync` waits as long as a sync
+  may take (`sync_timeout`); every ask port49d makes has its 30 s deadline (F16).
+- **Task 13.** Every path under `inventory.service` is absolute, `state_dir` and `mirror_dir` may
+  not overlap either way, and the URL is strict `https`.
+- **Task 14.** A copy published more than 5 minutes ahead of port49d's clock is refused, and judged
+  again as the clock advances. The persisted copy is read through `fence.Read`, the mirror's through
+  `OpenSignedFile`.
+- **Task 15.** Review found that a `SIGHUP` could apply a held document signed by a key it had just
+  removed: every apply now opens the document under the verify keys in force at that moment, through
+  one `openDocument`. Documents are ordered by (`published_at`, `sequence`), so an older document
+  replayed from before a service reset is refused.
+- **Task 17.** The combined check runs in `reload` after the verify keys are re-read, through
+  `openDocument`. A policy that fails to parse while an inventory is settled is said with it, and the
+  inventory is tried again once a policy loads.
+- **Task 19.** A phase counts only when port49d's `device_unknown` record and the capture both show
+  a connection open across the change. The capture is read against the instant port49d applied the
+  reload, not the sync's start, and an idle connection open before it counts. NX-OS's
+  single-connection line is typed as its `?` offers (`key 0 <key> single-connection`). A mid-run
+  `make build` in the shared worktree invalidated one vJunos run, so every device run since builds
+  in a pinned, detached worktree.
+- **Task 20** was built and reviewed, and its four overnight runs were dropped (owner decisions,
+  below). `TestL29Midnight` stays in `tests/lab/`, gated by `PORT49_L29_MIDNIGHT`, and unused.
+- **Final review** (FIX FIRST: no critical, three important, nine minor; all seven security
+  invariants held) **and fix wave**, re-reviewed MERGE:
+  - **I1: a correctly followed signing-key rotation left the old key's signature in force** on a
+    stable fleet, so dropping the old key took TACACS+ down at the next port49d restart. The
+    service now re-seals a bundle another key signed as the next sequence, at start and after every
+    sync that does not publish, and says when the old key can go (decision 30's rotation order).
+  - **I2: cold start persisted the newer copy before the policy accepted it,** so a restart during
+    a re-address crash-looped. port49d now takes the newest copy its policy loads, bounds the
+    mirror's copy against the persisted one by its own `max_removed_percent`, falls back to the
+    other copy with a line, and persists only after the broker is built.
+  - **I3: a hung mirror mount hung the service silently.** Mirror reads and writes run under a
+    10 s deadline outside the sync lock, `mirror_behind` is 1 before the read, and the metrics
+    listener, `/healthz` and `/readyz` (503) bind before `Restore`.
+  - Minors: the service's `policy_file` behind the fence; the next sequence is above both the
+    history and the last publication, so a Save that failed halfway no longer wedges the service;
+    a clock stepped back publishes 1 s after the last publication, said; a refused document counts
+    `port49_inventory_fetches_total{outcome="refused"}`, not `unchanged`, and a `SIGHUP` counts it
+    once; two pre-6b server tests wait out their own teardown; the operator notes say to protect
+    `ca_file`; the plan-12 carry below. Folded in after the re-review: two overlapping mirror calls
+    no longer read a slow mirror as hung (N1).
+
+**Owner decisions, as ruled:** 1, every copy of the bundle signed (ed25519) and verified, the
+service's own state and mirror against its own `verify_key_files`; 2, the mirror a mounted
+directory, not an object-store API; 3, nothing the service sends assigns a key, and a pin is a
+policy key group matching the device's name, at tier 1 (a `/32` group is tier 3). **Ryan,
+2026-09-30:** Task 20's midnight nights are dropped. The device sees the same TCP reset from
+`retire_after` as from a reload, which Task 19 measured, and port49d's reset at the date is tested
+in code with an injected clock (`internal/daemon/server/server_test.go`). L29 was reworded to say
+so.
+
+**Rows:** **L29 closed** 2026-09-30 on all four images (`L29-reload-*.md`). The session survives
+the reset everywhere. Where port49d no longer serves the device, break-glass logs in: in up to
+2.1 s on vEOS and vJunos-router, and up to 30 s on the C8000V and 41 s on the N9Kv. Where it still
+serves the device under a new name or platform, its FAIL is final on EOS, NX-OS and IOS-XE.
+vJunos-router held a connection open across some changes only: its committed note (the run at
+6fcce47) measures removed and refused; earlier runs, observed in the lab log and not register
+evidence, varied in which phases held one open. **L30 closed** 2026-09-30 (`L30-netbox.md`,
+`L30-nautobot.md`), with which of `Host` and `X-Forwarded-Host` a product reads, and a proxied
+`next` followed, named as unmeasured outside its question. **Spec §14's quarantine through a sync
+passed** on all four (`quarantine-sync-*.md`). **L31 opened** (open; closes in `fix/breakglass-reset`): with single-connection on, break-glass on
+IOS-XE and NX-OS costs 16–41 s after a de-admitted device's reset (`L31-breakglass-cisco-singleconnection.md`). The C8000V's
+liveness probe again reached port49 only at its second or third attempt before two of six phases
+(30 s, 54 s); why is still not established.
+
+**Carried, for later plans:**
+
+- **Plan 6c:** the connectors, the webhook trigger, `Fetch` within `sync_timeout`, and `port49
+  inventory export` (Plan 6c, above), written against L27 and L30 as measured: `next` followed only
+  to the configured base's scheme, host and port; GraphQL `errors` read even on HTTP 200; the status
+  spelling per product; Nautobot 3.2.6 dropping `cluster` and `software_image_files`.
+- **Plan 12:** port49d.yaml's loader, and `config.InventoryServiceOf`, ignore a second YAML
+  document (Plan 12, above).
+- **`fix/breakglass-reset` (above), L31:** break-glass on the N9Kv and the C8000V took 17–41 s
+  after a reload removed or refused the device, and 16.7 s and 20.3 s through a quarantine sync.
+  The cause is analysed in `L31-breakglass-cisco-singleconnection.md`: with single-connection on,
+  a reset after the request is waited out, and those paths never refuse the retries at Accept.
+- **Later, unassigned:** the C8000V's slow liveness probe (above).
+
 ## Plan 7 — Broker in full (§19 step 7)
 
 Design §7 (OIDC public client with PKCE, certificate-to-directory mapping, directory
@@ -1206,6 +1348,10 @@ sets moving into the policy repository; `key_ref` on `port49_key_version_devices
 `port49_key_retirement_seconds` as well as above; the write fence's ancestor directories and
 ACLs, for `inventory_file` as for the policy file; `TestAnotherUIDIsRefused` run in CI as root;
 the inventory-only refresh's cost at fleet size.
+
+**Carried from plan 6b** (final review Minor 7): port49d's config loader
+(internal/config/config.go) ignores a second YAML document; refuse it as port49-inventory does.
+`config.InventoryServiceOf`, which `SIGHUP` reads, ignores one too.
 
 ## Plan 13 — User and admin documentation
 

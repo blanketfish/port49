@@ -53,7 +53,7 @@ func newReloadRig(t *testing.T, policyBody string) *reloadRig {
 	}
 	rig.st = memory.New(rig.clock)
 	rig.m = metrics.New(prometheus.NewRegistry())
-	_, b, err := buildBroker(rig.cfg, rig.st, seedMinter(), decision.NewJSONLines(io.Discard), rig.m)
+	_, b, err := buildBroker(rig.cfg, "inventory_file "+rig.cfg.InventoryFile, rig.st, seedMinter(), decision.NewJSONLines(io.Discard), rig.m)
 	if err != nil {
 		t.Fatal(err)
 	}

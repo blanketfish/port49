@@ -3871,13 +3871,28 @@ GET  /v1/bundle                      full bundle; ETag for cheap no-op refresh
 GET  /v1/bundle/version              current version, for polling
 GET  /v1/bundle/diff?from=<ver>      for CI and `port49 inventory diff`
 POST /v1/sync                        on-demand trigger
-GET  /v1/healthz
 GET  /v1/devices/{address}           diagnostic only — MUST NOT be used on the hot path
 ```
 
 **Consumers pull and cache; they never query per request.** A daemon calling this API per
 connection would make the syncer a hot-path dependency and rebuild the problem the component
 exists to prevent.
+
+**The API is mutual TLS on every path** (plan 6b). The service verifies each client certificate
+against one trust anchor and names the caller by the leaf's one URI SAN, verbatim, a workload's
+identity (design document §7), or, where there is none, `user:` and its one email SAN,
+lower-cased; a certificate with several of either is refused, since ambiguity fails closed. Two
+lists in the service's configuration decide what a caller may do: `readers` may read the bundle,
+its version, a diff and one device; `syncers` may do all of that and `POST /v1/sync`
+(design document §17: reading a snapshot is not the right to trigger a sync). Probes read
+`/healthz` and `/readyz` on the service's plain metrics listener, which carries no fleet data.
+
+**Four triggers are built in two plans.** The schedule (each source's `interval`, default the
+top-level `interval`, default 10 minutes; a sync of one source rebuilds the merged bundle from every
+source's latest fetch), startup,
+and `port49 inventory sync` are plan 6b's, with the file connector; the NetBox and Nautobot
+connectors and their authenticated webhooks are plan 6c's, written against the fixtures L27 and
+L30 recorded.
 
 ### One versioned bundle
 
@@ -3886,13 +3901,15 @@ the pinned platform set (§8). Distributing them separately means they can disag
 evaluating policy `v88` against inventory `v1841` and platform set `1.4.0`, while another
 replica holds a different combination. Nothing would report the mismatch.
 
-They are therefore published as **one versioned bundle**:
+They therefore travel as **one versioned bundle**. The service publishes its inventory half, a
+signed document naming the policy it was built against; each port49d joins it to its own
+`broker.policy_file` (below; §13, decision 29):
 
 ```
-bundle v2291
-  inventory      device records, addresses, platforms, attributes
-  policy         compiled roles, scopes, subjects, grants
-  platform_set   1.0.0, as pinned by the policy repository
+bundle document, sequence 2291 (signed by the service)
+  inventory       device records, addresses, platforms, attributes; no key assignment
+  policy_sha256   sha256:…, the policy the service built it against, never the policy
+  platform_set    1.0.0, as pinned by that policy
 ```
 
 **A sync can make a valid policy invalid, and the bundle builder quarantines rather than
@@ -3914,8 +3931,8 @@ moves.
 A joint check that no platform could pass is the policy's own error, not a device's: a class
 no platform defines, or a `max_privilege` no platform can number, refuses the policy at load.
 One that fails for some platforms quarantines the devices on them. port49d builds the bundle
-itself from `inventory_file` and `broker.policy_file` (plan 6a), and plan 6b's inventory service
-publishes it: each quarantined device is logged with its cause at start and at every reload that
+itself from `broker.policy_file` and the inventory, whether `inventory_file` (plan 6a) or the
+document plan 6b's inventory service publishes (§13, decision 29): each quarantined device is logged with its cause at start and at every reload that
 loads, its mints are refused `device_quarantined`, and its connections are closed without a
 reply (plan 4).
 
@@ -3933,7 +3950,19 @@ timeout; IOS-XE still asks per command and is told no at once, about 0.27s
 correct policy for the device, not that the device is suspect, and port49 cannot block the
 console or a local account under either shape — so the choice is only whether the failure
 looks like a rejection or an outage, and the outage is the one whose consequences are known.
-Clearing it is the policy or adapter change CI named, followed by the next sync.
+Clearing it is the policy or adapter change CI named: port49d applies it from its own
+`broker.policy_file` at the reload (decision 29), and the service's next sync reports the device
+no longer quarantined. Through the inventory service's syncs, on the same four images on
+2026-09-30 (`tests/lab/results/quarantine-sync-*.md`), a sync introducing a device its platform
+failed quarantined it, the rest of the sync applied, its connections were closed
+`device_quarantined`, its mints refused, break-glass logged in and ran its commands, and the fix
+admitted it again. Break-glass took 0.32 s on vEOS and 0.47 s on vJunos-router, but 16.7 s on the
+N9Kv and 20.3 s on the C8000V. Those runs followed L29's in the same deploy, which leaves
+single-connection on; the 2026-09-24 runs above, with it off, took under a second. With
+single-connection on, IOS-XE and NX-OS take a reset that follows their request as transient and
+wait out their 5 s timeout on every AAA exchange, and the quarantine close never refuses their
+retries at Accept, as a key miss's does, so break-glass there costs 16–21 s (§15 L31, open;
+`tests/lab/results/L31-breakglass-cisco-singleconnection.md`).
 
 A consumer runs on exactly one bundle version at a time, so a decision is always attributable
 to a single, nameable state of the world. `bundle/diff` then covers policy change, inventory
@@ -3949,14 +3978,49 @@ the same bundle and may refuse different devices (below), and each says so at lo
 The loaded policy carries the admission index, the device table and the quarantine with it, and
 one pointer swaps all four (§13, decision 28).
 
-This also closes a gap the documents otherwise leave open: **how policy reaches the broker**
-was previously unspecified.
+This also closes a gap the documents otherwise leave open: **how policy reaches the broker** was
+previously unspecified. It reaches it from the broker's own `broker.policy_file`, reviewed and
+deployed beside port49d (§13, decision 29). The service holds the source-of-truth credentials and
+runs third-party connectors, and a compromise of it can already move devices between scopes and
+add addresses; taking policy from it too would let it grant anyone anything. The bundle document
+names the policy the service built it against (`policy_sha256`) and never carries one. port49d
+builds the bundle it runs on from its own policy and the document's inventory, as it builds it from
+two files. When the two hashes differ it still applies the inventory, against its own policy, says
+so once per pair of hashes, and sets `port49_inventory_policy_mismatch` to 1 until they agree:
+nothing the service sends changes the policy, and a policy rollout that reaches port49d before
+the service never stalls inventory.
+
+**The bundle document is signed** (§13, decision 30). It is the inventory in the canonical form
+the bundle's name hashes, with its `sequence` (the service's publication count, an integer), the
+`policy_sha256` and `platform_set` the service built it against, the device names each source
+gave (`sources`), and `published_at`, sealed as `{"document": …, "key_id": "ed25519:…",
+"signature": …}` with the service's ed25519 key over the document's exact bytes. The same sealed
+bytes are what the API serves, what the service keeps in its state directory and writes to the
+shared mirror, and what port49d persists, and port49d verifies them against the public keys in
+`inventory.service.verify_key_files` wherever they came from. A document carries **no key
+assignment**: no `key_groups`, and no device's `key_ref` pin. The service refuses a source that
+has either, and port49d refuses a document that does (§10, "Admission and keys": key assignment is
+reviewed policy). A pin is a policy key group matching the device by name (below). A document that
+does not verify, does not parse, carries a key assignment, or names a device with a control
+character or an unusable name is refused, said once, and alarmed
+(`port49_inventory_bundle_refused`), and the bundle in force keeps serving.
+
+**The service's state directory is its sequence's trust anchor, and read behind the fence.** It
+reads `state_dir`'s published bundle and history behind the policy file's write fence, with a link
+in a file's own name refused rather than followed, and its `policy_file` behind the same fence;
+the mirror only as port49d does (below). It refuses to start rather than publish below what it
+already published: on a `state_dir` copy it cannot open, on a published bundle older than its
+history's newest, and, with `state_dir` empty, on a mirror copy it cannot open or a mirror mount
+that does not answer in 10 s. Each refusal names the fix — add the old key to `verify_key_files`
+after a rotation, mend the mount, or move the copy aside to start fresh. Beside a good `state_dir`,
+a mirror it cannot open or read is said, `port49_inventory_mirror_behind` is 1, and the service
+serves `state_dir`'s bundle.
 
 **Consumers take what they need**, which is not the same thing:
 
 | Component | Consumes | Why |
 |---|---|---|
-| broker | inventory, policy, platform set | resolves and compiles decisions |
+| broker | inventory (from the bundle), policy (its own `broker.policy_file`), platform set (the policy's pin) | resolves and compiles decisions |
 | daemon | addresses, and the `key_ref` the bundle resolved from the policy's key groups | to admit a connection and select a key |
 
 The daemon deliberately does **not** evaluate policy or platform definitions. It receives
@@ -3964,9 +4028,10 @@ compiled decisions through blobs (§5.1.2) instead, so a version mismatch betwee
 daemon cannot change how a command is evaluated. The bundle carries facts; the blob carries
 decisions.
 
-**The service emits key *references*, never key material.** A snapshot carries
-`key_ref: prod_key`, and the daemon resolves that from its own secret mount. A compromised
-inventory service leaks the fleet list, not the ability to speak to it.
+**The service emits no key assignment, and never key material.** A document carries a device's
+facts and no `key_ref`: port49d resolves each device's `key_ref` from its own policy's key groups
+and each `key_ref` from its own secret mount. A compromised inventory service leaks the fleet list,
+not the ability to speak to it, and cannot choose a device's key.
 
 ### Admission and keys
 
@@ -3999,7 +4064,7 @@ and the notice names the inventory's as ignored, so the inventory's writer never
 beside the reviewed policy. To move the block, add it to the policy file, then delete it from
 the inventory file: no device is refused at any step, and a restart or reload between the two
 loads. Deleting it from the inventory first would leave every device refused, and the reload is
-refused by the bound (below). A group matches on a CIDR or on attributes, never both; a CIDR
+refused by the bound (below). A group matches on a CIDR, on attributes, or on a device name, exactly one; a CIDR
 with host bits set is refused.
 
 **A `key_ref` is a name: `^[a-z][a-z0-9_]{0,63}$`**, lowercase letters, digits and `_`, starting
@@ -4055,7 +4120,8 @@ Key groups can overlap — a `10.0.0.0/8` group and a `10.20.0.0/16` group, or a
 an attribute group covering the same device. Resolution is by tier, most specific first:
 
 ```
-1  a device record pinning key_ref explicitly
+1  a device record pinning key_ref (inventory_file), or a policy key group matching the
+   device's name
 2  an attribute match
 3  the longest matching CIDR prefix
 ```
@@ -4072,6 +4138,15 @@ the policy there would block every inventory change fleet-wide.
 
 The device-pinned tier exists so an overlap can be resolved explicitly rather than by
 contorting the CIDR layout.
+
+A pin in the policy is a key group matching one device name, `{match: {name: leaf-01}, key_ref:
+prod_key}`: it matches on the name alone, never with a CIDR or attributes, and outranks every
+attribute and CIDR group whatever the device's addresses. Two name groups for one device tie for
+every device they could match and are a policy load error. With `inventory_file`, a record pin and a
+name group that name different keys refuse that device alone. A key group on a `/32` is not a pin:
+it is tier 3, every attribute group outranks it, and it follows the address rather than the device.
+With the inventory service, a record carries no pin (§13, decision 30) and the policy name group is
+the only tier 1; the inventory `key_groups` fallback above is `inventory_file`'s alone.
 
 ### Key rotation
 
@@ -4141,9 +4216,11 @@ version only until that instant: past it, every later packet on the connection i
 new connection's first packet would be: a `matches_retired` record, a strike, and the
 connection reset at once with no reply (below, "Devices presenting a key that does not
 validate"). "For the connection's life" would have no bound, because a busy single-connect
-connection resets its idle timer on every packet and so can stay open indefinitely. What a
-device does when its open connection is closed this way is unmeasured (L29, open): L28 measured
-only the first packet of a connection. port49d says at start, and `port49 policy test --config`
+connection resets its idle timer on every packet and so can stay open indefinitely. The device
+sees the same reset a reload's withdrawal sends (below, "How a daemon refreshes its snapshot"),
+measured on four images: the session survives, and a key miss's next connections meet the
+strike's backoff as L28 measured (§15 L29, `tests/lab/results/L29-reload-*.md`); the reset at the
+date itself is tested in code with an injected clock. port49d says at start, and `port49 policy test --config`
 reports, a version whose date has passed and an `accept` version with none.
 
 The key sets, `retire_after` included, live in port49d.yaml beside the references to their
@@ -4370,7 +4447,8 @@ device sourcing from an unlisted interface fails device binding, and the failure
 obviously trace back to inventory. `ip tacacs source-interface` — or the platform equivalent
 — MUST be pinned in the reference AAA configuration.
 
-`name`, `platform`, `addresses` and `attributes` are the facts; `key_ref` pins a key (tier 1);
+`name`, `platform`, `addresses` and `attributes` are the facts; `key_ref` pins a key (tier 1,
+with `inventory_file` only; with the inventory service a pin is the policy's name group);
 `transport` is above. An inventory is refused whole when it does not parse, names a device twice
 or with no name, or gives one address to two devices.
 
@@ -4381,9 +4459,9 @@ follow the same snapshot contract. A file connector is required regardless, as t
 equivalent of the in-memory store — containerlab runs, CI policy tests, and `port49 explain`
 against a hypothetical device all need an inventory that is not a live source of truth.
 
-Four triggers, not one:
+Four triggers, not one (the webhook is plan 6c's, with the connectors):
 
-- **Scheduled full sync every 10 minutes.** That is the window a newly-racked device sits
+- **Scheduled full sync, each source at its `interval` (default 10 minutes).** That is the window a newly-racked device sits
   un-admittable if a webhook is missed, which is about the tolerance before it becomes a
   ticket.
 - **Webhook-driven refresh.** Both products emit outbound webhooks on device create and
@@ -4401,31 +4479,53 @@ root version, with an explicit override available.
 Both products expose GraphQL; one query returns devices, addresses, platform, site, role,
 and tags. REST remains a fallback for older installations.
 
-**Bounded change per sync.** A sync that would remove more than `max_removed_percent` of the
-fleet MUST refuse, retain the last good snapshot, and alarm. A partially-available source of
-truth or a mistyped filter would otherwise silently deauthorize the fleet.
+**Bounded change per sync.** A sync in which a source takes more than its
+`safety.max_removed_percent` of the devices it gave the last published bundle out of service —
+removed, or kept and newly refused admission under the service's policy — MUST refuse, retain the
+last good snapshot, and alarm (`port49_inventory_sync_refused`). A source's bound defaults to the
+top-level `safety.max_removed_percent`, default 10. An empty result, and one the service's policy
+admits none of, are refused whatever the bound. A partially-available source of truth or a
+mistyped filter would otherwise silently deauthorize the fleet. Each port49d bounds the document
+again by its own `inventory.max_removed_percent`: a deliberate large removal raises both.
 
 **Platform slug translation.** Real installations say `eos`, `arista-eos`, `arista_eos`, or
 `veos`. Ship an alias table, allow overrides, and warn on unrecognized slugs rather than
 falling back to generic in silence.
 
 ```yaml
-inventory:
-  sync:
-    - name: netbox_prod
-      type: netbox
-      url: https://netbox.example.com
-      token_secret_ref: vault:port49/prod/netbox   # resolved like a key secret_ref, never inline
-      interval: 10m
-      filter: {status: active, has_primary_ip: true}
-      map:
-        site:       site.slug
-        role:       device_role.slug
-        platform:   platform.slug
-        os_version: custom_fields.os_version
-      safety:
-        max_removed_percent: 10
+# port49-inventory.yaml (plan 6b: the file source; netbox and nautobot are plan 6c's)
+listen: ":8443"
+metrics_listen: ":9050"
+tls_cert_file: /etc/port49-inventory/server.pem
+tls_key_file: /etc/port49-inventory/server-key.pem
+client_ca_file: /etc/port49-inventory/clients-ca.pem
+readers: ["spiffe://example.com/port49d"]
+syncers: ["user:alice@example.com", "spiffe://example.com/policy-ci"]
+signing_key_file: /etc/port49-inventory/signing.key
+policy_file: /etc/port49-inventory/policy.yaml
+state_dir: /var/lib/port49-inventory
+mirror_dir: /mnt/port49-bundle
+interval: 10m                     # a source's default
+safety: {max_removed_percent: 10}
+sync:
+  - name: lab_file
+    type: file
+    path: /etc/port49-inventory/inventory.yaml
+    interval: 10m
+    safety: {max_removed_percent: 10}
+  # plan 6c:
+  # - name: netbox_prod
+  #   type: netbox
+  #   url: https://netbox.example.com
+  #   token_secret_ref: vault:port49/prod/netbox   # resolved like a key secret_ref, never inline
+  #   interval: 10m
+  #   filter: {status: active, has_primary_ip: true}
+  #   map: {site: site.slug, role: role.slug, platform: platform.slug, os_version: custom_fields.os_version}  # NetBox 4.x profile; 3.7 uses device_role
 ```
+
+A device whose name is not 1–255 bytes of printable ASCII without a space, or whose platform or
+attributes carry a control character, is left out of the sync, said and counted: it could not
+reach a record or a line safely, and the broker refuses to mint for such a name anyway.
 
 ### How a daemon refreshes its snapshot
 
@@ -4433,11 +4533,11 @@ The daemon consumes only the inventory portion of the bundle; "snapshot" below m
 portion, refreshed as a whole because the bundle is versioned as a whole.
 
 ```
-every 30s:
+every 30s (inventory.service.poll_interval):
   GET /v1/bundle/version
-  if version == held.version:  done          ← the common case
+  if etag == held.etag:  done                     ← the common case
   GET /v1/bundle  (If-None-Match: <etag>)
-  parse → build index → validate → atomic pointer swap
+  verify signature → parse → build index → validate → bound → atomic pointer swap → persist
 ```
 
 **Build fully, then swap.** The snapshot is parsed and indexed into a prefix trie (`address or CIDR
@@ -4457,14 +4557,23 @@ speaking it, a removed one would keep being answered under its old name, and one
 platform would be denied `blob_platform_mismatch` at every command, its records redacted under a
 platform no longer in force (a deleted variant's name has no patterns but the default's). The same
 reasoning ended a key version at `retire_after` on an open connection ("Version sets, and no
-cutover"). What a device does with this reset is unmeasured (§15 L29, open).
+cutover"). What a device does with this reset was measured on vEOS, the N9Kv, the C8000V and
+vJunos-router on 2026-09-30, each change a sync through the inventory service (§15 L29,
+`tests/lab/results/L29-reload-*.md`): the session survives on all four. Where port49d no longer
+serves the device, the command in flight is refused on vEOS (at once) and on the C8000V (after its
+own 5 s when removed or refused), runs on the N9Kv and on vJunos-router (which authorizes commands locally, so the reset
+hit accounting), the next token login is refused, and break-glass logs in — in up to 2.1 s on vEOS
+and vJunos-router, and up to 30 s on the C8000V and 41 s on the N9Kv, against 1.3 s and 2.6 s with
+port49d stopped, because the connections after the reset are closed only after the device's
+request and never refused at Accept (§15 L31, open). Where port49d still serves the device under a new name or platform, its FAIL is
+final on EOS, NX-OS and IOS-XE, so break-glass is not let in there, as with any served device (L4).
 
 **Validate locally before swapping.** The service already applies bounded-change safety, but
 the daemon MUST NOT trust the payload: reject a snapshot that fails to parse, that is empty,
 or that drops more than the configured share; retain the previous one and alarm.
 
 **The snapshot never expires.** Staleness is a metric and an alarm —
-`inventory_snapshot_age_seconds` — never a fail-closed. An admission table with a TTL means a
+`port49_inventory_snapshot_age_seconds` — never a fail-closed. An admission table with a TTL means a
 prolonged syncer outage eventually halts all authentication fleet-wide, which is the
 readiness-probe mistake of §12 of the design document in a different form. A stale device
 list is a far smaller problem than no device list; revoking a specific device is a key
@@ -4481,9 +4590,28 @@ duration of an inventory outage, which means no autoscaling under load and no re
 crash loop or a node replacement — precisely when capacity matters. Two mechanisms, in order:
 
 1. **The last good bundle is persisted to local disk** (a MUST, not a SHOULD), so a restart in
-   place needs nothing.
+   place needs nothing: port49d writes each document it applies to
+   `inventory.service.state_dir/bundle.json`, atomically, mode 0600, and reads it at start behind
+   the policy file's write fence.
 2. **A shared object-store location** holds the most recent bundle, written by the inventory
-   service and readable by daemons. A pod scheduled onto a fresh node reads that and serves.
+   service and readable by daemons. A pod scheduled onto a fresh node reads that and serves. The
+   location is a directory the deployment mounts (`mirror_dir` on both sides): port49 speaks no
+   object-store API. The copy is signed, so whoever can write the store can replay an older
+   genuine bundle and never forge one; the start line names the sequence and publication time it
+   started from, and a later pull replaces it (below). The mirror's file is opened without
+   following a link in its own name and must be a regular file no larger than a document may be, so a mount that
+   presents it through a symbolic link, as a Kubernetes ConfigMap mount does, is refused: that
+   fails closed, and the mirror must be a real volume. The service writes it mode 0640, so port49d
+   needs the mount's group, and never replaces it with a lower sequence than the copy there.
+
+At start port49d verifies both copies and starts from the one published later (`published_at`,
+which survives a sequence reset). It asks
+the service at start only when it has neither, and until a bundle arrives it keeps its TACACS+
+listener closed, so a device finds the connection refused and falls to its local method at once, measured over
+SSH with port49d stopped (§15, L4; `tests/lab/results/quarantine-arista_eos.md`,
+`quarantine-cisco_nxos.md`, `quarantine-cisco_iosxe.md`, `quarantine-juniper_vjunos-router.md`);
+a second server is unmeasured (L4, open), and `/readyz` on the metrics listener answers 503. It says why
+once per distinct reason and asks again every `poll_interval`.
 
 Both are cold and cached; neither puts the inventory service on a request path. Without at
 least one of them, the singleton is not free after all — it is a startup dependency wearing a
@@ -4496,7 +4624,7 @@ device rather than the ten-thousandth.
 **Every swap logs a summary** — `snapshot v1841 → v1842: +3 devices, -1, 2 changed` — so an
 unexpected fleet change is visible in the daemon's own logs, not only in the service's.
 
-**Until plan 6b, the snapshot is `inventory_file`.** port49d watches it as it watches the policy
+**With `inventory_file`, the snapshot is the file.** port49d watches it as it watches the policy
 file (§5.1.3): it loads a changed file once two reads a watch interval apart agree, at once on
 `SIGHUP`, and says a refusal once per distinct content. It validates as above and refuses an
 empty file and one that removes more than `inventory.max_removed_percent` of the devices in
@@ -4511,6 +4639,44 @@ any other. `port49_inventory_snapshot_age_seconds` is the time since the file in
 read and found unchanged or loaded; `port49_inventory_file_refused` is 1 while the file on disk
 is one port49d refused. `SIGHUP` also re-reads `inventory.max_removed_percent` from port49d.yaml,
 so a deliberate large removal is: raise it, send `SIGHUP`, and lower it again.
+
+**With `inventory.service`, the snapshot is the service's document**, and `inventory_file` is
+absent: port49d.yaml naming both is refused, as is `inventory.service` without a `broker:` block.
+A document is a reload like a file's: parsed against the policy in force, bounded by
+`inventory.max_removed_percent` (`fix the source of truth, or, …`), swapped in one pointer, its
+security changes written as `inventory_change` records, and followed by the refresh. It is applied
+only when it is later than the document in force, by `published_at` and then `sequence`: an older
+genuine document sent again, by whoever can answer as the service, is refused. `published_at` is
+signed and survives a reset of the service's state, so a service that starts again from sequence 1
+publishes later and is applied, and a sequence that goes backwards is applied only then. A refused one
+is said once per document, `port49_inventory_bundle_refused` is 1 until the service confirms the
+bundle in force or sends a new document, and `SIGHUP` tries the
+document held again after the bound is raised. `SIGHUP` also re-reads
+`inventory.service.verify_key_files`, read behind the write fence as the policy file is, since
+whoever can write a verify key accepts any inventory it signs; so a signing-key rotation needs no
+restart. `port49_inventory_snapshot_age_seconds` is the time since the service last confirmed the
+document in force, or one was loaded; a start from the persisted copy or the mirror counts it from
+that document's `published_at`, so a restart never makes an old snapshot look fresh; until a start
+has a snapshot it has no age, and the gauge reads NaN, which no comparison matches, so the
+staleness alert is `port49_inventory_snapshot_age_seconds > N or
+port49_inventory_snapshot_age_seconds != port49_inventory_snapshot_age_seconds`. A copy refused
+only because its `published_at` is ahead of port49d's clock is judged again at each pass of the
+wait, so a host that booted with its clock behind starts from it once the clock is right; when the
+clock was the only refusal, that start clears `port49_inventory_bundle_refused`. The mirror is
+read under a 10 s deadline at start: a hung mount is passed over, said, and never holds up a start
+from the persisted copy. A copy that could not be read — a mirror that hung, a read that failed, a
+persisted copy the fence refuses — is said with why and is not a refusal; a mirror that could not
+be read sets `port49_inventory_mirror_unreadable` to 1 until the next start. A document that was
+read and failed verification or its checks, from either copy or the service, sets
+`port49_inventory_bundle_refused`; so does one whose `published_at` is more than 5 minutes ahead of
+port49d's clock, which would otherwise outrank every later copy.
+
+**A reload of either source tries both together when both have moved.** At `SIGHUP`, and whenever
+a load of one is refused while the other holds a settled version not in force, port49d builds the
+bundle from both and bounds it against the bundle in force as one step, by `bundle.Check` and the
+policy's bound together. It passes and one swap applies both; it fails and neither is applied, one
+line naming both. A whole-fleet re-address with its key group — where each file alone admits none —
+then loads, and no bundle between the two revokes a context the final one keeps.
 
 **A policy reload is held to the same bound.** Key groups are policy, and a refused device's live
 contexts are revoked and its tokens deleted, so a `key_groups` edit that misses the fleet would
@@ -5094,6 +5260,16 @@ devices, as port49d reads it, and every verdict says the `key_ref`s went uncheck
 port49d.yaml. An inventory decode error is printed as its line and a fixed category, and a bad
 address or CIDR by its position, never its text.
 
+**`port49 inventory sync --service <url> --ca <file> --cert <file> --key <file>`** asks the
+inventory service to sync now (`POST /v1/sync`, the `syncers` right) and prints its outcome:
+`published`, with the sequence, the swap's summary and every security change marked `!`;
+`unchanged`; `refused`, with why; or `failed`. It exits 0 on `published` and `unchanged`, and 1
+otherwise. **`port49 inventory diff --service <url> … --from <sequence>`** prints what changed
+between that published bundle and the latest, as `inventory diff` prints two files, the
+inventory's change judged under the policy the service holds now; the service keeps the last 64.
+**`port49 inventory keygen --dir <dir>`** writes the service's signing key (`signing.key`, 0600)
+and its public half (`signing.pub`), refuses to overwrite either, and prints the `key_id`.
+
 **`port49 policy test --config <port49d.yaml>`** adds the key checks §10 requires of CI: it fails
 on a key group naming a `key_ref` the file does not define, and on a device assigned one. It
 reads §10's "a policy whose `accept` set is empty for a `key_ref` still assigned by a key group"
@@ -5116,7 +5292,8 @@ so nothing is left behind to match. Directory-driven humans are offboarded by gr
 these two commands are the offboarding path for machine subjects and literal identities,
 which is the cost decision 2 accepted. A subject block with no grants is reported by CI.
 
-**Rollback** is `git revert` of the policy change and `port49 inventory sync`; the bundle
+**Rollback** is `git revert` of the policy change, deployed to port49d's `broker.policy_file`
+and the service's `policy_file`, and `port49 inventory sync`; the bundle
 that results is a new version, not a reused old one, so a rollback is attributable like any
 other publish. There is no pin-to-old-version command, because a consumer holding a bundle
 the repository no longer describes is the drift the bundle exists to prevent.
@@ -5565,15 +5742,38 @@ images (`L9-abbreviations-juniper_*.md`). The ruling amends
 decision 22's "regexes for what bits cannot separate" to regexes over keywords only. (§8, §12,
 §15)
 
-**28. The bundle is one pointer, built in port49d until the inventory service publishes it.**
+**28. The bundle is one pointer, built in port49d.**
 *Plan 6a, 2026-09-30.* The policy loaded against the inventory carries the admission index, the
 device table, the quarantine and the policy, and `policy.Live` swaps it whole, so no mint, packet
 or refresh sees one version's inventory and another's policy (§10). Its name is a content hash
 (§10). port49d builds it from `inventory_file` and `broker.policy_file`, watches both, and bounds
 an inventory reload as a sync is bounded. Key groups are policy. A device a group cannot admit is
 refused on its own, never the daemon. An inventory-only swap leaves a context whose answer did
-not change as it is (§5.1.3). Plan 6b adds the service as a second source of the same bundle;
-whether port49d then takes the policy from it is an owner decision recorded in plan 6a.
+not change as it is (§5.1.3). Plan 6b adds the service as the other source of the same bundle's
+inventory; the policy stays port49d's own (decision 29).
+
+**29. port49d takes only the inventory from the service; the policy stays its own.** *Plan 6a
+owner decision 3, built in plan 6b, 2026-09-30.* The service's bundle names the policy it was
+built against and carries none. port49d builds its bundle from its own `broker.policy_file` and
+the service's inventory, and a hash mismatch is said and alarmed (`port49_inventory_policy_mismatch`),
+and the inventory is applied against port49d's own policy; the service's policy is never applied: the service holds third-party credentials and connectors, and a compromise of it
+must not reach the grants.
+
+**30. The bundle document is signed, and assigns no key.** *Plan 6b, 2026-09-30, owner decisions
+1 to 3 at their defaults.* The service signs each document with ed25519 and port49d verifies every
+copy — the API's, its own persisted one, the mirror's — against the keys in
+`inventory.service.verify_key_files`, so a shared mirror mount's writers cannot forge an
+inventory. A document carries neither key groups nor pins: key assignment is reviewed policy, and a
+synced source's writer choosing a device's key is an escalation with no diff; a pin is a policy key
+group matching the device's name, at tier 1 (§10). The service reads its own state and mirror against its own
+`verify_key_files`, so rotating its signing key keeps its sequence and its bound. A service whose
+signing key did not sign the bundle it holds re-seals that bundle under its key as the next
+sequence, the fleet unchanged, at start and at each sync, so the rotation order is: add the new
+public key to every port49d, add the old one to the service, switch the service's key and restart
+it, wait until every port49d holds the re-sealed bundle N+1, and only then drop the old key.
+The mirror is a directory the deployment mounts (`mirror_dir`), not an object-store API: no
+object-store credential sits beside port49d, and the signature is what makes a shared mount safe to
+read.
 
 ### Deferred, with reasons
 
@@ -5864,7 +6064,10 @@ Beyond those already listed in the design document's §14:
 - **Quarantine**: a sync introducing a device whose platform fails joint validation publishes
   the bundle with that device quarantined, the rest of the sync applies, a connection from
   the device is closed without a reply and logged `device_quarantined`, the device falls to
-  its local method in the lab, and the next sync after the named fix admits it.
+  its local method in the lab, and the named fix admits it: port49d takes the fix from its own
+  `broker.policy_file` (decision 29), and the service's next sync reports the device clear.
+  Passed through the inventory service's syncs on vEOS, the N9Kv, the C8000V and vJunos-router on
+  2026-09-30 (plan 6b Task 19, `tests/lab/results/quarantine-sync-*.md`).
 - **Unencrypted flag**: a packet with `TAC_PLUS_UNENCRYPTED_FLAG` set is refused before its
   body is parsed and lands in its own report bucket.
 - **Fall-through on FAIL** is asserted absent per platform under the reference AAA
@@ -5914,9 +6117,28 @@ Beyond those already listed in the design document's §14:
   snapshot is rejected and the previous one retained.
 - **Snapshot never expires**: a daemon with a stale snapshot and an unreachable inventory
   service continues authenticating, alarming on age.
-- **Cold start**: a daemon with no snapshot stays unready while existing replicas keep
-  serving; a daemon restarted with the inventory service down starts from its persisted
-  bundle, and one scheduled onto a fresh node starts from the shared object-store copy.
+- **Cold start**: a daemon with no snapshot keeps its TACACS+ listener closed and `/readyz` at
+  503, and retries, while existing replicas keep serving; a daemon restarted with the inventory
+  service down starts from its persisted bundle, one scheduled onto a fresh node starts from the
+  shared mirror's copy, and with both it starts from the one published later (`published_at`,
+  which survives a sequence reset).
+- **The document is verified everywhere**: a document the service did not sign — from the API,
+  the persisted copy or the mirror — is refused and the bundle in force keeps serving; one carrying
+  a key group, a `key_ref` pin, or a name with a control character is refused; a signing key
+  added to `verify_key_files` takes effect at `SIGHUP`.
+- **Policy mismatch**: a document built against another policy is applied against the policy in
+  force, said, and alarmed, and changes no grant.
+- **The service bounds each source**: a source that removes or newly refuses more than its bound
+  of the devices it gave last time refuses the sync, and the last published bundle keeps being
+  served; each daemon bounds the document again.
+- **Both sources at once**: a whole-fleet re-address, where each source alone admits no device,
+  loads at `SIGHUP` as one swap, and no live context on a device the final bundle admits is revoked.
+- **API rights**: a reader cannot trigger a sync, a certificate the anchor does not verify gets no
+  answer, and one with two URI SANs is refused.
+- **A pin in the policy**: a key group matching a device's name assigns its key at tier 1, over an
+  attribute group and over every address's CIDR group; two name groups for one device refuse the
+  policy.
+- **One rule for a usable device**: whatever the service publishes, port49d opens.
 - **Unresolvable `key_ref`** fails that device closed, not the daemon.
 - **A device no key group admits**, and one two groups tie on, is refused admission on its own
   and its packets closed after the header as `admission_refused`; the rest of the fleet loads.
@@ -6065,10 +6287,11 @@ implemented against a guess. This section is the one place the distinction is ke
 | **L26** | The Junos operational CLI keyword tree under `show`: at each command path, the words proven keywords — offered by completion there, and shown a keyword by `\| display xml rpc` (an element named as the word, none holding it as text, or a path still asking for a `<command>`) — and whether an argument may be typed there; anything without that evidence is an argument. The pipe is first proven to run nothing. Walked over the break-glass CLI, seeds first, bounded in breadth, depth, nodes and commands. Scope: the images captured, and no hidden argument. | Which denies and allows the projection may send (decision 27; §8); `platforms/keywords/<set>/juniper_junos.yaml` | Junos (vSRX / vJunos-router in containerlab) | closed — measured 2026-09-25; `tests/lab/results/L26-juniper_vjunos-router.md`, `L26-juniper_vsrx.md`. The pipe ran nothing on either image, and neither walk stopped at a bound: vJunos-router 23.4R2-S2.1, 136 nodes and 755 keywords; vSRX 21.4R3.15, 118 nodes and 668. Both images were walked twice: vJunos-router's rerun reproduced its first tree byte for byte, and vSRX's runs disagreed, so a keyword is one only where every run on every image proves it: set 1.1.0's tree intersects every committed run (three trees), 528 keywords, and adds L26b's seven (535, frozen with the set). Nothing under `show configuration` is proven. Scope: these two images, and no hidden argument; see below |
 | **L26b** | Whether a word is a keyword to `deny-commands`, by the deny itself: a deny naming the word at its path refuses the command, the CLI's caret under the word, while a paired control without the deny runs it with positive evidence. Probed: the words after `show` that L26 offered and did not prove (`cli`, `host`, `ingress-replication`, `policy`, `task`), `exit`, `save`, `set cli`, and every `show configuration` hierarchy the image offers. | The L26b overlays laid over L26's trees (`tests/lab/results/L26b-keywords-juniper_*.yaml`), and so set 1.1.0's keyword tree; whether a deny naming a `show configuration` hierarchy may be sent (decision 27; §8) | Junos (vSRX / vJunos-router in containerlab) | closed — measured 2026-09-25; `tests/lab/results/L26b-juniper_vjunos-router.md`, `L26b-juniper_vsrx.md`. Proven on both images: `show cli`, `show host`, `show ingress-replication`, `show policy`, `show task`, `set cli` and `exit`. `save` is proven on vJunos-router and unproven on vSRX, so it is not a keyword in the set. **A deny naming a `show configuration` hierarchy is not enforced**: every offered hierarchy, 32 on vJunos-router and 25 on vSRX, ran under a deny naming it; see below |
 | **L26c** | Whether a projected Junos CLI session reaches a native RPC with the NETCONF service off: `xml-mode netconf need-trailer` and `xml-mode netconf`, then `<get-software-information/>`, `<get-configuration/>` and a `<command>` RPC; `op url`; `start shell`; the NETCONF subsystem on port 22 with `netconf ssh` deleted; and whether the fail-closed reply's `deny-commands .*` refuses those entry points. Beside it, unmeasured: whether a deny naming the entry points (`xml-mode`, `op`) binds, with their abbreviations and through a class's own deny list; whether an RPC reaches past a deny beneath `view-configuration`; the SSH exec channel (`ssh <device> xml-mode …`); and `scp`. | `JunosFacts.DenyBindsRPCs`, false in set 1.1.0 and provisional on this row: port49 assumes a deny beneath a sent bit or the baseline guards the CLI only, so it fails closed (§8, option C); whether the management-services allowlist is sufficient (§8) | Junos (vSRX / vJunos-router in containerlab) | open — measured 2026-09-25 on vJunos-router 23.4R2-S2.1 and vSRX 21.4R3.15 (`tests/lab/results/L26c-juniper_*.md`), the two agreeing: under a projected class (`view`, a rendered deny naming `show configuration`), `xml-mode netconf` returned a hello and `<get-software-information/>` ran, as in the control; `<get-configuration/>` returned an empty `<configuration>` there and in the control alike, `view` lacking `view-configuration`; a `<command>show configuration</command>` RPC was refused, which the control's own bits leave unisolated here (over NETCONF the deny refused one the control ran, `L12-netconf-juniper_*.md`); `op url` was accepted up to the copy; `start shell` was refused by the bits, as in the control; `deny-commands .*` refused `xml-mode` and `op url`; and with `netconf ssh` deleted port 22's NETCONF subsystem was refused in every class, break-glass included. The run failed its four `view`-only `get-configuration` cells (reclassified since as bits-limited, not rerun); the `xml-mode` probes ran before `netconf ssh` was deleted; and `view` alone cannot set a deny against RPC reach: a rerun is owed (L26c review I-1, I-4). The questions beside it are open. The owner reported on 2026-09-25, from SRX hardware (Junos 23.4R2-S8.7, no capture, `tests/lab/results/L26c-operator-juniper_srx.md`): `<get-configuration/>` through `xml-mode netconf` passed a deny of `show configuration` beneath `view-configuration`; a deny of `show version` refused `<get-software-information/>`; no sent deny naming `xml-mode` refused it, while `^.*$` did (with every other command); accounting recorded the entry as `cmd=xml-mode netconf <cr>`; and with the NETCONF service (`netconf ssh`, port 830) deactivated, `xml-mode netconf` from an SSH CLI session on port 22 still opened NETCONF and `<get-configuration/>` returned the configuration, so the management-services allowlist does not close `xml-mode`. On 2026-09-28 the owner reported the same with the deny set on the local class, and that `deny-commands "junoscript"`, set on the class or sent by TACACS+, refused `xml-mode netconf` while `show version` still ran: Junos appears to authorize `xml-mode` as `junoscript`. Without a capture these do not close the row. Measured 2026-09-30 on vJunos-router 23.4R2-S2.1 and vSRX 21.4R3.15 (`tests/lab/results/L26c-junoscript-juniper_*.md`), the two agreeing and each refusal isolated against a control with the same bits and no deny. `deny-commands "junoscript"`, sent by TACACS+ or set on the local class, refused `xml-mode netconf` and `junoscript netconf` while `show version` ran. It also refused that user's NETCONF on port 830 with `error: unknown command: xml-mode`, where the control reached `<get-software-information/>` both ways. A deny naming `xml-mode` did not bind. The abbreviated forms were refused in every class, so they say nothing about the deny. This confirms the owner's `junoscript` reports. Because the deny also ends that user's NETCONF, port49 does not send it by default (roadmap, 2026-09-30), and option C stands. The rest of the row stays open |
-| **L27** | What NetBox and Nautobot's APIs return for a device, per product and major version: where the version is reported (`/api/status/`, the `API-Version` header on `/api/`); the field names for role, platform, site or location, primary address, custom fields and tags, over REST and over one GraphQL query; which GraphQL query shape each version takes, and whether one query returns every interface address; how REST paginates; and what a device create, update and delete webhook carries — its headers and body, and whether `X-Hook-Signature` is HMAC-SHA512 of the body under the webhook's secret. | Plan 6b's connectors: version detection and mapping profiles, GraphQL first with REST as the fallback, webhook authentication (§10, "Connectors and sync cadence") | NetBox 3.7 and 4.x; Nautobot 1.6 and 2.x | closed — measured 2026-09-30; tests/lab/results/L27-netbox.md, L27-nautobot.md. NetBox 3.7.8 and 4.7.1, Nautobot 1.6.32 and 2.4.43; fixtures in `tests/lab/sot/fixtures/`. One GraphQL query returned every interface address on all four, each in its own query shape; every webhook signature was HMAC-SHA512 of the body. *Unmeasured:* a non-null pagination `next` (each run held one device) and Nautobot 3.x, split to L30; see below |
+| **L27** | What NetBox and Nautobot's APIs return for a device, per product and major version: where the version is reported (`/api/status/`, the `API-Version` header on `/api/`); the field names for role, platform, site or location, primary address, custom fields and tags, over REST and over one GraphQL query; which GraphQL query shape each version takes, and whether one query returns every interface address; how REST paginates; and what a device create, update and delete webhook carries — its headers and body, and whether `X-Hook-Signature` is HMAC-SHA512 of the body under the webhook's secret. | Plan 6c's connectors: version detection and mapping profiles, GraphQL first with REST as the fallback, webhook authentication (§10, "Connectors and sync cadence") | NetBox 3.7 and 4.x; Nautobot 1.6 and 2.x | closed — measured 2026-09-30; tests/lab/results/L27-netbox.md, L27-nautobot.md. NetBox 3.7.8 and 4.7.1, Nautobot 1.6.32 and 2.4.43; fixtures in `tests/lab/sot/fixtures/`. One GraphQL query returned every interface address on all four, each in its own query shape; every webhook signature was HMAC-SHA512 of the body. *Unmeasured:* a non-null pagination `next` (each run held one device) and Nautobot 3.x, split to L30; see below |
 | **L28** | What a device does when port49d cannot validate its key on a connection's first packet. For a key port49d does not hold, one it holds only as retired, and one past its `retire_after`: whether a break-glass login succeeds and how long it takes, how long a command in an open break-glass session takes, and whether a token login is refused. And that a second version accepted beside the current one lets the device work unchanged, and that the device given the current key works at once with no port49d change. Measured first with port49d holding the connection for the per-source backoff and closing it without a reply, then closing it at once with a FIN, then as port49d does now: one record and a strike, the connection reset at once with no reply, and the source's next connections inside its backoff refused at Accept with a reset (§10, "A key miss is closed at once"). An open connection passing its version's `retire_after` is L29's. | Key rotation's no-cutover claim and the retirement lockout's shape (§10 "Retirement is enforced"); the design document's "a key mismatch is indistinguishable from an outage" (§12); whether a key miss should be closed at once, as a quarantine is | EOS, NX-OS, IOS-XE, Junos | closed — measured 2026-09-30; tests/lab/results/L28-arista_eos.md, L28-cisco_nxos.md, L28-cisco_iosxe.md, L28-juniper_vjunos-router.md. The hold stalled break-glass on all four images (`L28-held-*.md`) and a FIN still stalled the C8000V (`L28-fin-cisco_iosxe.md`), so port49d now resets (branch H). With the reset, break-glass logs in and runs its commands in the time port49d stopped gives on all four, and every token login is refused, for an unknown, a retired and an expired key; a second accepted version logs token users in at v1, and the device given the new key logs in at v2 with no port49d change; see below |
-| **L29** | What a device does when port49d resets an open connection mid-session: at its first packet past the connection's key version's `retire_after` (§10, "Version sets, and no cutover"), and at its first packet after a reload refused, removed, renamed, re-keyed or re-platformed its device (§10, "How a daemon refreshes its snapshot"). For each: whether the command or login in flight fails or falls to the local method, and how long it takes; for `retire_after`, whether the device's next connection, refused at Accept inside the strike's backoff and then presenting the retired key, behaves as L28 measured; for a reload, which strikes nothing, whether the next connection is refused at once as a refused device's is. The `retire_after` case needs a run whose connection is open across 00:00:00Z the day after `retire_after`; the reload case needs only a `SIGHUP` between two commands. | That ending a key version at `retire_after` on an open connection costs the device what a first-packet key miss does (§10; plan 6a Decided 7, amended in its Task 14), and that ending an open connection on a reload costs it what a quarantine's close does (§10; plan 6a final review I1) | EOS, NX-OS, IOS-XE, Junos | open — added 2026-09-30 (plan 6a Task 21), split from L28, which measured the first packet only; the reload case added in plan 6a's final fix wave. Owner: plan 6b, the next plan with a device lab run (spec §14's quarantine through a sync), whose syncs make the reload case routine |
-| **L30** | How NetBox and Nautobot page a device list that does not fit one page, and what Nautobot 3.x returns: for NetBox 3.7 and 4.x and Nautobot 1.6 and 2.x, a REST list holding more devices than its `limit`, whether `next` is an absolute URL, which host and scheme it carries behind a proxy, whether following it to the end returns every device once, and how GraphQL pages the same list, if at all; and for Nautobot 3.x, every L27 question (version source, field names, GraphQL shape, pagination, webhook body and signature). | Plan 6b's connectors: following `next` rather than building offsets, and whether Nautobot 3.x needs its own profile (§10, "Connectors and sync cadence") | NetBox 3.7 and 4.x; Nautobot 1.6, 2.x and 3.x | open — added 2026-09-30 (plan 6a final fix wave), split from L27, whose runs each held one device. Owner: plan 6b |
+| **L29** | What a device does when port49d resets a connection it holds open mid-session, at its first packet after a reload refused, removed, renamed, re-keyed or re-platformed its device (§10, "How a daemon refreshes its snapshot"): whether the session survives; whether the command in flight fails or falls to the local method, and how long it takes; whether the next command runs; and whether the next token login is refused and break-glass logs in, and how long each takes. The same reset, with a strike, ends an open connection at its first packet past its key version's `retire_after` (§10, "Version sets, and no cutover"). The device sees the same reset either way, so this row measures the device's side of both through the reload case (owner's ruling, 2026-09-30); that port49d resets an open connection at `retire_after` is tested in code with an injected clock (`internal/daemon/server/server_test.go`, `TestAnOpenConnectionDoesNotOutliveItsVersionsDate`, `TestAPacketPastItsDateIsClosedWithAReset`), and the strike's backoff that follows is L28's. | That ending a key version at `retire_after` on an open connection costs the device what a first-packet key miss does (§10; plan 6a Decided 7, amended in its Task 14), and that ending an open connection on a reload costs it what a quarantine's close does (§10; plan 6a final review I1) | EOS, NX-OS, IOS-XE, Junos | closed — measured 2026-09-30; tests/lab/results/L29-reload-arista_eos.md, L29-reload-cisco_nxos.md, L29-reload-cisco_iosxe.md, L29-reload-juniper_vjunos-router.md. vEOS-lab 4.31.2F, Nexus 9300v 10.4(2)F, Catalyst 8000V 17.13.01a and vJunos-router 23.4R2-S2.1, each reload a `port49 inventory sync` but the re-key, a policy edit; captures `tests/lab/evidence/L29-reload-<phase>-<platform>.pcap`. The session survived the reset on all four. Where port49d could no longer serve the device (removed, refused, or re-keyed onto a key it does not hold), the next token login was refused and break-glass logged in, in up to 2.1 s on vEOS and vJunos-router and up to 30 s on the C8000V and 41 s on the N9Kv (why: L31); where port49d still served the device (renamed, re-platformed), its FAIL is final on EOS, NX-OS and IOS-XE and break-glass was not let in (L4). vJunos-router held a connection open across some changes and not others: its note measures removed and refused, and its banner marks the three phases in which no connection was open, so no session could be affected. The midnight run was dropped by the same ruling; see below |
+| **L30** | How NetBox and Nautobot page a device list that does not fit one page, and what Nautobot 3.x returns: for NetBox 3.7 and 4.x and Nautobot 1.6 and 2.x, a REST list holding more devices than its `limit`, whether `next` is an absolute URL, which host and scheme it carries behind a proxy, whether following it to the end returns every device once, and how GraphQL pages the same list, if at all; and for Nautobot 3.x, every L27 question (version source, field names, GraphQL shape, pagination, webhook body and signature). | Plan 6c's connectors: following `next` rather than building offsets, and whether Nautobot 3.x needs its own profile (§10, "Connectors and sync cadence") | NetBox 3.7 and 4.x; Nautobot 1.6, 2.x and 3.x | closed — measured 2026-09-30; tests/lab/results/L30-netbox.md, L30-nautobot.md. NetBox 3.7.8 and 4.7.1, Nautobot 1.6.32, 2.4.43 and 3.2.6, 120 devices paged 50 at a time, behind an nginx 1.27 reverse proxy as well as directly; fixtures in `tests/lab/sot/l30/`, checked by `TestL30FixturesAreWhatTheNotesSay`. On all five, `next` is absolute and names the host, port and scheme the request came in on (behind the proxy, the proxy's host and port and `X-Forwarded-Proto`'s scheme), and following it to `null` returned all 120 once. GraphQL returned all 120 unpaged on all five; it pages by `pagination: {offset, limit}` on NetBox 4.7.1, which answers `limit`/`offset` with HTTP 200 and an `errors` list, by `limit`/`offset` on every Nautobot, and by no shape tried on NetBox 3.7.8. Nautobot 3.2.6 answered every L27 question as 2.4.43 did, less the device fields `cluster` and `software_image_files`. *Unmeasured, outside the row's question:* which of `Host` and `X-Forwarded-Host` the products read (the proxy sent the same value in both), and following a proxied `next`; see below |
+| **L31** | What break-glass costs on IOS-XE and NX-OS with single-connection on, when port49d resets a de-admitted device's connection after the device has written its request: a device removed from inventory (unadmitted), refused admission, or quarantined. For each: break-glass login plus three commands against port49d stopped, and whether the device's retries after the reset are refused at Accept before it writes. | That a de-admitted or quarantined device costs the device what a refused connection does, and falls to its local method at once (§10, "A quarantined device gets silence, not FAIL"; the reload paragraph under "How a daemon refreshes its snapshot"; §15 L29) | IOS-XE, NX-OS (single-connection on) | open — observed 2026-09-30, cause analysed; tests/lab/results/L31-breakglass-cisco-singleconnection.md. Catalyst 8000V 17.13.01a and Nexus 9300v 10.4(2)F, from plan 6b's L29 and quarantine-sync captures (header flag `0x04`): break-glass took 30.1 s and 40.9 s removed, 20.6 s and 17.6 s refused, 20.3 s and 16.7 s quarantined, against 1.28 s and 2.62 s stopped, and 1.53 s and 2.6 s re-keyed, where a key miss's retries are refused at Accept. The fix, `fix/breakglass-reset` (roadmap), gives the unadmitted, refused and quarantined paths L28's shape, and its lab run closes the row |
 
 **What has been measured so far, per row.** The measurements exist and the notes are in the
 repository. NX-OS was measured on 2026-09-20 and is no longer outstanding; **IOS-XE was
@@ -7664,9 +7887,101 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
   re-keys or re-platforms a device resets its open connections at their next packet with no strike
   (§10, "How a daemon refreshes its snapshot"), also unmeasured; a `SIGHUP` between two commands in
   one session measures it. Owned by plan 6b, the next plan with a device lab run.
+
+  **Reworded 2026-09-30** (owner's ruling): the midnight case is dropped. A reset of an open
+  connection is the same TCP reset whether a reload or `retire_after` causes it, so the reload
+  case measures the device's side of both; that port49d resets an open connection at its
+  version's date is tested in code with an injected clock (`internal/daemon/server/server_test.go`),
+  and what the strike after it costs the device's next connections is L28's. Plan 6b's
+  `TestL29Midnight` stays in `tests/lab/`, gated by `PORT49_L29_MIDNIGHT`, and unused.
+
+  **Measured 2026-09-30** by plan 6b Task 19 (`tests/lab/l29_test.go`, `TestL29Reload`), on the
+  four images L28 ran, with single-connection set on each (NX-OS as its `?` allows: `key 0 <key>
+  single-connection`, `results/single-connection-syntax-cisco_nxos.md`). Each phase opens a token
+  session and runs `show version`, makes the change — a `port49 inventory sync` removing,
+  renaming, re-platforming or refusing the device, or a policy edit re-keying it to a key it does
+  not hold — waits for port49d's reload line, then runs the command in flight, a second command,
+  the next token login, and break-glass plus three `show version`. A phase is a measurement only
+  when port49d's `device_unknown` record and the capture both show a connection open at the
+  instant port49d applied the reload and reset after it; an idle connection, opened before that
+  instant and reset at its first packet after, counts. The reset hit an `author` packet on EOS,
+  NX-OS and IOS-XE (two connections per phase on IOS-XE) and an `acct` packet on vJunos-router.
+
+  | image | session | command in flight | second command | next token login | break-glass plus three commands (port49d stopped) |
+  |---|---|---|---|---|---|
+  | vEOS-lab 4.31.2F | survived | refused in 0.1 s every phase, `% Authorization denied … Unknown role`; EOS did not fall to local for it | refused, but ran on a new connection when re-platformed | refused, 0.5–2.7 s; logged in when re-platformed | 0.32–2.1 s when removed, refused or re-keyed (0.38 s); not let in when renamed or re-platformed |
+  | Nexus 9300v 10.4(2)F | survived | ran in 0.7–0.8 s every phase, on a new connection or the fall-through | ran, but refused `AAA authorization failed` when renamed | refused, 1.9–9.9 s; logged in when re-platformed | 2.6 s re-keyed, 17.6 s refused, 40.9 s removed (2.62 s); not let in when renamed or re-platformed |
+  | Catalyst 8000V 17.13.01a | survived | refused `% Authorization failed.` after 5.01 s when removed or refused, and in 0.5 s when re-keyed; ran in 0.5 s when renamed or re-platformed | as the first | refused, 4.0–14 s; logged in when re-platformed | 1.5 s re-keyed, 20.6 s refused, 30.1 s removed (1.28 s); not let in when renamed or re-platformed |
+  | vJunos-router 23.4R2-S2.1 | survived | ran in 0.2 s every phase: Junos authorizes commands locally by class, so the reset hit accounting only | ran | refused, 5.1–6.6 s; logged in when re-platformed | 0.45–2.1 s every phase, renamed and re-platformed included (0.46 s) |
+
+  Break-glass is not let in where port49d still serves the device under its new name or platform:
+  port49d answers it FAIL, which EOS, NX-OS and IOS-XE take as final (L4); Junos with `password`
+  listed tries local. Removed or refused, the N9Kv and the C8000V took up to 41 s and 30 s against
+  their 2.6 s and 1.3 s with port49d stopped: with single-connection on, the two Cisco images wait
+  out their 5 s timeout after a reset that follows their request, and those paths never refuse the
+  retries at Accept (L31, `tests/lab/results/L31-breakglass-cisco-singleconnection.md`); re-keyed, a first-packet
+  key miss after the reset, they stayed at stopped times, as in L28. The quarantine's 2026-09-24
+  runs held a local user's session and these a token user's, so the two are not compared command
+  for command. Before two of the six C8000V phases the harness's liveness probe reached port49 only
+  at its second or third attempt (30 s, 54 s), as in L28; why is still not established.
+
+  vJunos-router held a connection open across some changes and not others. The evidence is the
+  committed note, `L29-reload-juniper_vjunos-router.md` (run at 6fcce47): removed and refused
+  measured, and a banner naming the three phases (renamed, re-platformed, re-keyed) in which no
+  connection was open across the change — the device's accounting arrived on new connections, or
+  the capture and port49d's record disagreed about an idle connection, which does not count — so no
+  session could be affected. Three earlier vJunos runs, whose notes were replaced, were observed in
+  the lab log to vary run to run in which phases held a connection open; they are not register
+  evidence.
 - **L30** — added 2026-09-30 by plan 6a's final fix wave, split from L27: its runs each held one
-  device, so no list paged and `next` was always null, and Nautobot 3.x was not run. Plan 6b's
+  device, so no list paged and `next` was always null, and Nautobot 3.x was not run. Plan 6c's
   pagination code and any Nautobot 3.x profile cite it until it closes.
+
+  **Measured 2026-09-30** by plan 6b Task 2 on beehive (`tests/lab/results/L30-netbox.md`,
+  `L30-nautobot.md`; fixtures in `tests/lab/sot/l30/`, checked by
+  `TestL30FixturesAreWhatTheNotesSay`), each version in its own Compose stack with 120 devices,
+  read at `limit=50` directly and through an nginx reverse proxy
+  (`tests/lab/sot/compose/l30-proxy.conf`, sending the client's `Host` as `Host` and
+  `X-Forwarded-Host`, and `X-Forwarded-Proto: https`).
+
+  | version | `next` read directly | `next` through the proxy | `next` to `null` | GraphQL, unpaged | GraphQL paged shape | GraphQL `status` |
+  |---|---|---|---|---|---|---|
+  | NetBox 3.7.8 | absolute, the dialed scheme, host and port | `https://`, the proxy's host and port; every `results[].url` the same | 3 pages, 50/50/20, 120 once | 120 | none tried: `pagination` and `limit`/`offset` are 400 | `"ACTIVE"` |
+  | NetBox 4.7.1 | absolute | as 3.7.8 | as 3.7.8 | 120 | `pagination: {offset, limit}`; `limit`/`offset` is **HTTP 200 with `errors`** and no names | `"active"` |
+  | Nautobot 1.6.32 | absolute | as NetBox | as NetBox | 120 | `devices(limit, offset)` | `{"name": "Active"}` |
+  | Nautobot 2.4.43 | absolute | as NetBox | as NetBox | 120 | `devices(limit, offset)` | `{"name": "Active"}` |
+  | Nautobot 3.2.6 | absolute | as NetBox | as NetBox | 120 | `devices(limit, offset)` | `{"name": "Active"}` |
+
+  Nautobot 3.2.6 answered every L27 question as 2.4.43 did: `/api/status/` `nautobot-version`
+  (`Api-Version: 3.2`); `role` and `location`; REST at default depth naming no related object, and
+  `?depth=1` inlining them; the `graphql_0` shape (no `slug`), returning every interface address;
+  `count`/`next`/`previous`/`results`; webhooks carrying the change, out of change order (arrived
+  updated, deleted, created, 3.2–3.4 s after the body's `timestamp`), each signed HMAC-SHA512 of the
+  body. Its device drops `cluster` and `software_image_files`, fields L27's seed never set. So no
+  separate 3.x profile is indicated by this row. A `next` names whatever host the request arrived
+  under, so a connector that follows it verbatim goes where the response says: 6c follows `next`
+  only when its scheme, host and port are the configured base's. *Unmeasured, outside the row's
+  question:* which of `Host` and `X-Forwarded-Host` the products read (the proxy sent the same value
+  in both); following a proxied `next` (only the first page was read through the proxy); a list
+  changing between pages; a GraphQL list above any server cap.
+- **L31** — added 2026-09-30 by plan 6b Task 21, from an analysis of plan 6b's L29 and
+  quarantine-sync captures (`tests/lab/results/L31-breakglass-cisco-singleconnection.md`; flags and
+  timings only, no payload). With single-connection on, the TACACS+ header's single-connect flag is
+  `0x04` (`0x00` in L28's captures and the 2026-09-24 quarantine runs). A reset that follows the
+  device's request is then taken as transient: IOS-XE reconnects and resends every ~200 ms until its
+  5 s timeout, and NX-OS waits out ~5 s after each command's accounting, so every AAA exchange in a
+  break-glass session costs ~5 s. A reset before the device writes — a refusal at Accept — makes
+  both fall through at once. port49d's unadmitted path (`internal/daemon/server/conn.go:237-238`)
+  holds the connection for the strike's backoff, up to 5 s, before the reset, and its refused and
+  quarantined paths (`conn.go:233-234`, `:261-262`) reset at once but take no strike; none of the
+  three refuses the retries at Accept, as the key-miss path does (`conn.go:181`,
+  `internal/daemon/server/server.go:119`). The re-key in the same deploy, a key miss, stayed at 1.53 s
+  on IOS-XE and 2.6 s on NX-OS. vEOS and vJunos-router with single-connection on are unaffected.
+  Pre-existing behaviour, exposed by the 6b lab configuration. Until the fix, a Cisco device with
+  single-connection on takes 16–21 s per break-glass session when refused or quarantined and 30–41 s
+  when removed; break-glass still logs in. The fix (`fix/breakglass-reset`) refuses the source's
+  next connections at Accept for a short window on all three paths, strike-free for the refused and
+  quarantined, and its run on IOS-XE and NX-OS with single-connection on closes the row.
 
 Entries are added when a new claim is made, never removed. A closed entry keeps its row so a
 later reader can find the evidence.

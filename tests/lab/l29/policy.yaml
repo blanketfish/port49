@@ -1,0 +1,30 @@
+# L29's reload case (plan 6b Task 19): tests/lab/slice/policy.yaml's text, with
+# the key groups below appended. key_groups: stays the last block: the rekeyed
+# phase appends a pin to its list.
+#
+# The vertical slice's lab policy (plan 3). One subject: the client certificate
+# `go run ./tests/lab/cmd/slice-pki` cuts. It may do everything on every device
+# except one command, so the end-to-end run can show a permit and a denial that
+# only the compiled blob could have made: `show hostname` (and `show users`, the
+# IOS-XE stand-in, which has no `show hostname`) is in no deny list in
+# port49d-lab.yaml, so a denial of it cannot have come from the lab authorizer.
+#
+# `slice01` is a username no seed uses, so nothing but a broker-minted token can
+# log in under it.
+#
+# `all_devices` is declared: since plan 4 it is an ordinary scope (spec §5.5).
+scopes:
+  - {name: all_devices, match: {}}
+roles:
+  - {name: network_admin, privilege: admin, permit: ["**"]}
+  - {name: slice_denies, deny: ["show hostname", "show users"]}
+subjects:
+  - {name: slice_operator, identity: ["user:alice@slice.port49.test"], username: slice01,
+     enable: token, token_ttl: 60s}
+grants:
+  - {subject: slice_operator, scope: all_devices, roles: [network_admin, slice_denies], max_privilege: admin}
+# The lab inventory's own group, moved to the policy, since the service
+# carries none (spec §13, decision 30); and the dummy devices' (labSource).
+key_groups:
+  - {match: {cidr: 172.100.100.0/24}, key_ref: lab_key}
+  - {match: {cidr: 10.99.0.0/24}, key_ref: lab_key}

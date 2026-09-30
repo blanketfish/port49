@@ -1665,31 +1665,24 @@ func (l *lab) loginWithin(user, password string, per time.Duration, commands ...
 // prompt does not return within per ends the session: it and the rest are
 // returned as *notObserved.
 func (l *lab) ptyCommands(user, password string, per time.Duration, commands ...string) ([]string, error) {
-	c, err := l.sshCLI(user, password)
+	sh, err := l.shell(user, password)
 	if err != nil {
 		return nil, err
 	}
-	defer c.Close()
-	prompts := []string{l.p.node + "#", l.p.node + ">"}
-	if _, err := c.expect(60*time.Second, prompts...); err != nil {
-		return nil, err
-	}
-	if _, err := c.sendExpect("terminal length 0", per, prompts...); err != nil {
-		return nil, err
-	}
+	defer sh.Close()
 	// A command that enters configuration mode ends at the configuration
 	// prompt, and `end` leaves it again so the next command runs in exec.
 	cfg := l.p.node + "(config"
 	var outs []string
 	for _, cmd := range commands {
-		out, err := c.sendExpect(cmd, per, append([]string{"[confirm]", cfg}, prompts...)...)
+		out, _, err := sh.runUntil(cmd, per, "[confirm]", cfg)
 		if err == nil && strings.Contains(out, "[confirm]") {
 			var more string
-			more, err = c.sendExpect("n", per, prompts...)
+			more, _, err = sh.Run("n", per)
 			out += more
 		}
 		if err == nil && strings.Contains(out, cfg) {
-			_, err = c.sendExpect("end", per, prompts...)
+			_, _, err = sh.Run("end", per)
 		}
 		lines := strings.Split(strings.ReplaceAll(out, "\r", ""), "\n")
 		if len(lines) > 0 {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/engine"
+	"github.com/rhwendt/port49/internal/inventory"
 	"github.com/rhwendt/port49/internal/keyring"
 	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/store"
@@ -89,6 +91,9 @@ type reloader struct {
 	// and changing are to the policy file, for the inventory file.
 	inventory, invPending, invRefused string
 	invChanging                       int
+	// together is the pair of versions, policy and inventory, last refused
+	// together, so a combined refusal is said once per pair (loadBoth).
+	together string
 	// cfgPath is port49d.yaml, whose inventory.max_removed_percent SIGHUP
 	// re-reads (plan 6a, I1); run sets it.
 	cfgPath string
@@ -101,22 +106,125 @@ type reloader struct {
 	// invSeen is when the inventory file was last read and found in force,
 	// or loaded: port49_inventory_snapshot_age_seconds reads it at scrape.
 	invSeen atomic.Int64
+	// Service mode (inventory.service): inForce is the etag of the document
+	// in force, seq its sequence, inForceAt its published_at, and latestRaw
+	// its sealed bytes, which a persist that failed is retried with
+	// (pre-flight M7).
+	inForce   string
+	seq       int64
+	inForceAt time.Time
+	latestRaw []byte
+	// docs is what the fetcher hands over, and poke asks it to fetch the
+	// document again at SIGHUP; both nil in file mode, where a receive
+	// never fires and a poke is dropped (startFetcher).
+	docs <-chan received
+	poke chan<- struct{}
+	// rejudged is the etag of the document a SIGHUP judged again and asked
+	// the fetcher for once more, until the next whole document arrives.
+	rejudged string
+	// docRefused is the etag of the document last refused, so a refusal is
+	// said once per document; persistSaid is the persist failure last said;
+	// persistOwed is set while latestRaw may not be state_dir's copy — a
+	// start from a copy other than the persisted one, whose persist at start
+	// may have failed, or a persist that failed since — so the service's next
+	// confirmation writes it (pre-flight M7).
+	docRefused, persistSaid string
+	persistOwed             bool
+	// docPolicy is the policy_sha256 the document in force was built
+	// against, and mismatch the pair of hashes last said to differ, so a
+	// mismatch is said once per pair (sayPolicyMatch).
+	docPolicy, mismatch string
+	// latest is the last document the service sent, held so SIGHUP can try it
+	// again under a raised bound or new verify keys; latestAhead is set while
+	// its only refusal was a published_at ahead of this clock.
+	latest      *received
+	latestAhead bool
+	// verifyKeys are the service's public keys in force: the fetcher opens
+	// under them, and SIGHUP replaces them (rereadVerifyKeys).
+	verifyKeys atomic.Pointer[[]ed25519.PublicKey]
 	// stopped is set while the last refresh pass did not complete, so the
 	// one that does says so whatever it found.
 	stopped bool
 }
 
+// combinedFrom is the load that asked loadBoth for a combined try: a SIGHUP,
+// which tries both, or the refusal of one source alone.
+type combinedFrom int
+
+const (
+	atSIGHUP combinedFrom = iota
+	fromPolicy
+	fromInventory
+)
+
 func newReloader(cfg config.Config, b *broker.Broker, m *metrics.Metrics, now func() time.Time) *reloader {
 	start := now()
 	r := &reloader{cfg: cfg, broker: b, metrics: m, now: now, interval: cfg.Broker.PolicyWatchInterval,
 		priors: []broker.Prior{{Policy: b.Policy.Load(), At: start}}}
-	// run sets the version the start loaded; this is a test's.
-	_, r.inventory, _ = inventoryVersion(cfg.InventoryFile)
+	// run sets the version the start loaded; this is a test's. In service
+	// mode there is no inventory file.
+	if cfg.InventoryFile != "" {
+		_, r.inventory, _ = inventoryVersion(cfg.InventoryFile)
+	}
 	r.expiry, _ = b.Policy.Load().NextChange(start)
 	r.reschedule()
 	r.invSeen.Store(start.UnixNano())
-	m.WatchInventoryAge(func() float64 { return now().Sub(time.Unix(0, r.invSeen.Load())).Seconds() })
+	// Never negative: a document dated a little ahead of this clock, within
+	// maxPublishedSkew, is as fresh as can be, not younger than now.
+	m.WatchInventoryAge(func() float64 { return max(now().Sub(time.Unix(0, r.invSeen.Load())).Seconds(), 0) })
 	return r
+}
+
+// startDocument records the document the start loaded — its etag and
+// sequence, so the fetcher's first unchanged answer confirms it — and dates
+// the snapshot. A copy, persisted or mirrored, confirms nothing: the age
+// counts from its publication, which may overstate it, the safe direction,
+// until the first confirmation (spec §10; pre-flight M5). From the service,
+// the start is itself a confirmation.
+func (r *reloader) startDocument(p *inventory.Published, from string) {
+	if p == nil {
+		return
+	}
+	r.inForce, r.seq, r.inForceAt, r.latestRaw = bundle.ETag(p.Raw), p.Doc.Sequence, p.Doc.PublishedAt, p.Raw
+	r.docPolicy = p.Doc.PolicySHA256
+	// The persisted copy is state_dir's already; any other may not have
+	// been written there (cold start says so if it failed).
+	r.persistOwed = from != "the persisted copy"
+	seen := r.now()
+	if from != "the service" {
+		seen = p.Doc.PublishedAt
+	}
+	r.invSeen.Store(seen.UnixNano())
+	r.sayPolicyMatch()
+}
+
+// sayPolicyMatch compares the policy the service built the document in force
+// against with the policy in force (spec §13, decision 29). A difference is
+// never applied — the inventory is loaded against port49d's own policy — but
+// it is said once per pair of hashes, and port49_inventory_policy_mismatch is
+// 1 until they agree, which is said too. A rollout in progress holds it
+// briefly; one that stays names a service or a daemon deployed from another
+// commit of the policy repository.
+func (r *reloader) sayPolicyMatch() {
+	if r.docPolicy == "" {
+		return
+	}
+	mine := r.broker.Policy.Load().Source
+	if r.docPolicy == mine {
+		r.metrics.InventoryPolicyMismatch.Set(0)
+		if r.mismatch != "" {
+			r.mismatch = ""
+			fmt.Fprintf(stderr, "port49d: inventory: the service's policy and the policy in force agree again (%s)\n", mine)
+		}
+		return
+	}
+	r.metrics.InventoryPolicyMismatch.Set(1)
+	if key := r.docPolicy + " " + mine; key != r.mismatch {
+		r.mismatch = key
+		fmt.Fprintf(stderr, "port49d: inventory: the service built bundle %d against policy %s, and the policy in "+
+			"force is %s; its inventory is applied against the policy in force, and nothing the service sends changes "+
+			"the policy (spec §13, decision 29)\n", r.seq, r.docPolicy, mine)
+	}
 }
 
 // inventoryVersion is policyVersion for inventory_file: read behind the fence
@@ -159,6 +267,8 @@ func (r *reloader) run(ctx context.Context, hup <-chan os.Signal) {
 			return
 		case <-hup:
 			r.reload(ctx, "SIGHUP")
+		case d := <-r.docs:
+			r.receive(ctx, d)
 		case <-tick.C:
 			r.poll(ctx)
 		case <-timer.C:
@@ -180,10 +290,13 @@ func arm(timer *time.Timer, due, now time.Time) {
 	}
 }
 
-// poll reads both files, the policy first.
+// poll reads both files, the policy first; in service mode there is no
+// inventory file to read.
 func (r *reloader) poll(ctx context.Context) {
 	r.pollPolicy(ctx)
-	r.pollInventory(ctx)
+	if r.cfg.InventoryService == nil {
+		r.pollInventory(ctx)
+	}
 }
 
 // pollPolicy reads the policy file and loads it once two reads in a row agree
@@ -204,6 +317,7 @@ func (r *reloader) pollPolicy(ctx context.Context) {
 			r.metrics.PolicyFileRefused.Set(0)
 			fmt.Fprintf(stderr, "port49d: policy: broker.policy_file %s is the policy in force again (%s, bundle %s)\n",
 				r.cfg.Broker.PolicyFile, v, r.broker.Policy.Load().Bundle)
+			r.retryInventory(ctx, "policy file put back")
 		}
 	case v == r.refused:
 		r.pending, r.changing = "", 0
@@ -222,7 +336,24 @@ func (r *reloader) pollPolicy(ctx context.Context) {
 		}
 	default:
 		r.pending = ""
-		r.load(ctx, "file changed", raw, v, err)
+		if r.load(ctx, "file changed", raw, v, err) {
+			r.retryInventory(ctx, "file changed")
+		}
+	}
+}
+
+// retryInventory tries again, against the policy now in force, an inventory
+// refused against the one before it — the key-group move done in the wrong
+// order, or an edit refused together with a policy since fixed or put back
+// (plan 6a, C3): inventory_file at the next polls, which read it again; the
+// service's document held, now, through loadDocument, which opens it under
+// the verify keys in force. A pending inventory edit is loaded by the polls
+// as it would be.
+func (r *reloader) retryInventory(ctx context.Context, trigger string) {
+	r.invRefused = ""
+	if l := r.latest; r.cfg.InventoryService != nil && l != nil && l.etag != r.inForce {
+		r.docRefused = ""
+		r.loadDocument(ctx, trigger, *l)
 	}
 }
 
@@ -236,9 +367,11 @@ func (r *reloader) pollInventory(ctx context.Context) {
 		r.invSeen.Store(r.now().UnixNano())
 		alarmed := r.invChanging >= stillChangingAfter
 		r.invPending, r.invChanging = "", 0
+		// Set whatever was said: a retry may have cleared invRefused, and
+		// the file in force is refused by nothing.
+		r.metrics.InventoryFileRefused.Set(0)
 		if r.invRefused != "" || alarmed {
 			r.invRefused = ""
-			r.metrics.InventoryFileRefused.Set(0)
 			fmt.Fprintf(stderr, "port49d: inventory: inventory_file %s is the inventory in force again (bundle %s)\n",
 				r.cfg.InventoryFile, r.broker.Policy.Load().Bundle)
 		}
@@ -259,19 +392,194 @@ func (r *reloader) pollInventory(ctx context.Context) {
 }
 
 // reload reads each file once and loads what it read: SIGHUP's path, with no
-// second read, because the operator asked. It re-reads the bound first, so
-// raising it and sending SIGHUP applies a change refused over it, and it
-// loads the inventory whenever its version is not the one in force, so a
-// refused inventory is tried again.
+// second read, because the operator asked. It re-reads the bound and the
+// verify keys first, so raising the bound, or adding the service's new key,
+// and sending SIGHUP applies a change refused before, and it loads the
+// inventory whenever its version is not the one in force, so a refused
+// inventory is tried again. In service mode that is the latest document the
+// service sent, and the fetcher is asked to fetch the document again. When
+// both sources have a version not in force and the policy parses, the two are
+// loaded together, and only together (loadBoth): the operator's SIGHUP
+// asserts both edits are done. A policy that does not read or parse is said
+// alone, with its own fault, and the inventory is loaded as it would be
+// without it.
 func (r *reloader) reload(ctx context.Context, trigger string) {
 	r.rereadBound()
+	r.rereadVerifyKeys()
+	r.together = ""
 	raw, v, err := policyVersion(r.cfg.Broker.PolicyFile)
+	if err == nil && v != r.broker.Policy.Load().Source && r.policyParses(raw) {
+		if inv, iv, d, ok := r.newInventory(); ok {
+			if !r.loadBoth(ctx, trigger, atSIGHUP, raw, v, inv, iv, d) && d != nil {
+				r.rejudged = d.etag // the poke below fetches it again (receive)
+			}
+			if r.cfg.InventoryService != nil {
+				select {
+				case r.poke <- struct{}{}:
+				default:
+				}
+			}
+			return
+		}
+	}
 	r.load(ctx, trigger, raw, v, err)
+	if r.cfg.InventoryService != nil {
+		if d := r.latest; d != nil && d.etag != r.inForce {
+			r.docRefused = ""
+			r.loadDocument(ctx, trigger, *d)
+			r.rejudged = d.etag // the poke below fetches it again (receive)
+		}
+		select {
+		case r.poke <- struct{}{}:
+		default:
+		}
+		return
+	}
 	iraw, iv, ierr := inventoryVersion(r.cfg.InventoryFile)
 	if iv != r.inventory {
 		r.invPending = ""
 		r.loadInventory(ctx, trigger, iraw, iv, ierr)
 	}
+}
+
+// settledPolicy is the policy file's version not in force that a combined
+// load may take: read now, differing from the policy in force, and agreed by
+// the last poll (pending) or refused already — never one the watch has seen
+// only once, which an editor may still be writing — and one that parses: a
+// policy that does not is its own fault, which no inventory can fix.
+func (r *reloader) settledPolicy() ([]byte, string, bool) {
+	raw, v, err := policyVersion(r.cfg.Broker.PolicyFile)
+	if err != nil || v == r.broker.Policy.Load().Source || (v != r.pending && v != r.refused) {
+		return nil, "", false
+	}
+	return raw, v, r.policyParses(raw)
+}
+
+// policyParses reports whether raw, the policy file's bytes, compiles against
+// the inventory in force: only a policy that does can be refused for what it
+// admits, which is the refusal a new inventory can change.
+func (r *reloader) policyParses(raw []byte) bool {
+	_, err := parseBundle(r.cfg, raw, r.broker.Policy.Load().Inventory())
+	return err == nil
+}
+
+// settledInventory is the inventory's version not in force that a combined
+// load may take: with inventory_file, the file agreed by the last poll or
+// refused already; with the service, the latest document received
+// (newInventory).
+func (r *reloader) settledInventory() (admission.Inventory, string, *received, bool) {
+	if r.cfg.InventoryService == nil {
+		if _, v, err := inventoryVersion(r.cfg.InventoryFile); err != nil || (v != r.invPending && v != r.invRefused) {
+			return admission.Inventory{}, "", nil, false
+		}
+	}
+	return r.newInventory()
+}
+
+// newInventory is the inventory's version not in force, whatever the watch
+// has seen of it: with inventory_file, the file read now and parsed; with the
+// service, the latest document received, opened now by openDocument — under
+// the verify keys in force, never an earlier opening's result (ruling 1). The
+// *received it returns carries that opening; it is nil in file mode.
+func (r *reloader) newInventory() (admission.Inventory, string, *received, bool) {
+	if r.cfg.InventoryService != nil {
+		l := r.latest
+		if l == nil || l.etag == r.inForce {
+			return admission.Inventory{}, "", nil, false
+		}
+		pub, err := r.openDocument(l.raw)
+		if err != nil {
+			return admission.Inventory{}, "", nil, false
+		}
+		return pub.Inv, l.etag, &received{pub: pub, raw: l.raw, etag: l.etag}, true
+	}
+	raw, v, err := inventoryVersion(r.cfg.InventoryFile)
+	if err != nil || v == r.inventory {
+		return admission.Inventory{}, "", nil, false
+	}
+	inv, err := admission.ParseFile(raw, "")
+	if err != nil {
+		return admission.Inventory{}, "", nil, false
+	}
+	return inv, v, nil, true
+}
+
+// loadBoth builds the bundle from a new policy and a new inventory together
+// and puts it in force as one swap when it passes both bounds, judged on the
+// combined result (spec §10; plan 6a final review m7): a whole-fleet
+// re-address, which each source alone refuses, loads, and no bundle between
+// the two revokes a context the final one keeps. Refused, neither is applied,
+// and one line names both, once per pair. The source whose load asked for the
+// try (from), both at SIGHUP, is marked refused with its alarm up; the other
+// is marked only if it was refused already, and one the watch has only seen
+// stays pending, to be tried alone at its turn. d is the service's document,
+// opened by openDocument just now by the caller, or nil in file mode. It
+// reports whether it applied.
+func (r *reloader) loadBoth(ctx context.Context, trigger string, from combinedFrom, raw []byte, v string,
+	inv admission.Inventory, iv string, d *received) bool {
+	old := r.broker.Policy.Load()
+	fix := "fix the file"
+	if d != nil {
+		fix = "fix the source of truth"
+	}
+	pol, err := parseBundle(r.cfg, raw, inv)
+	if err == nil {
+		err = bundle.CheckFrom(old, pol, r.cfg.MaxRemovedPercent, fix)
+	}
+	if err == nil {
+		err = bundle.CheckAdmission(old, pol, r.cfg.MaxRemovedPercent)
+	}
+	if err != nil {
+		if from != fromInventory || v == r.refused {
+			r.metrics.PolicyReloads.WithLabelValues("refused").Inc()
+			r.metrics.PolicyFileRefused.Set(1)
+			r.refused, r.pending = v, ""
+		}
+		// A service document not in force was tried alone when it arrived.
+		if d != nil || from != fromPolicy || iv == r.invRefused {
+			r.metrics.InventoryReloads.WithLabelValues("refused").Inc()
+			if d != nil {
+				r.docRefused = iv
+				r.metrics.InventoryBundleRefused.Set(1)
+			} else {
+				r.invRefused, r.invPending = iv, ""
+				r.metrics.InventoryFileRefused.Set(1)
+			}
+		}
+		if pair := v + " " + iv; pair != r.together {
+			r.together = pair
+			fmt.Fprintf(stderr, "port49d: policy and inventory reload (%s) refused together; still serving %s "+
+				"(bundle %s): %s\n", trigger, old.Source, old.Bundle, oneLine(quotesCut{err}))
+		}
+		return false
+	}
+	r.refused, r.changing, r.pending, r.together = "", 0, "", ""
+	r.metrics.PolicyFileRefused.Set(0)
+	r.metrics.PolicyReloads.WithLabelValues("applied").Inc()
+	r.metrics.InventoryReloads.WithLabelValues("applied").Inc()
+	if d != nil {
+		if d.pub.Doc.Sequence < r.seq {
+			fmt.Fprintf(stderr, "port49d: inventory: the service's sequence went back from %d to %d: its state_dir "+
+				"was reset; applying it (spec §10)\n", r.seq, d.pub.Doc.Sequence)
+		}
+		r.inForce, r.seq, r.inForceAt, r.latestRaw = d.etag, d.pub.Doc.Sequence, d.pub.Doc.PublishedAt, d.raw
+		r.docRefused, r.docPolicy, r.latestAhead = "", d.pub.Doc.PolicySHA256, false
+		r.metrics.InventoryBundleRefused.Set(0)
+		r.metrics.InventoryBundleSequence.Set(float64(r.seq))
+		r.persist(d.raw)
+	} else {
+		r.inventory, r.invRefused, r.invPending, r.invChanging = iv, "", "", 0
+		r.metrics.InventoryFileRefused.Set(0)
+	}
+	r.invSeen.Store(r.now().UnixNano())
+	now := r.swap(pol)
+	rep := bundle.Diff(old, pol, now)
+	fmt.Fprintf(stderr, "port49d: policy and inventory reloaded together (%s): %s replaces %s; %s; %d device(s) "+
+		"quarantined now, %d before; %d refused admission\n", trigger, pol.Source, old.Source, rep.Summary(),
+		quarantinedAt(pol, now), quarantinedAt(old, now), len(pol.AdmissionRefusals()))
+	r.after(ctx, "policy and inventory", rep, pol, now)
+	r.sayPolicyMatch()
+	return true
 }
 
 // rereadBound re-reads inventory.max_removed_percent from port49d.yaml, the
@@ -300,13 +608,274 @@ func (r *reloader) rereadBound() {
 	}
 }
 
+// receive is one thing the fetcher handed over: a confirmation of the
+// document in force, which keeps the snapshot young, or a document, which is
+// loaded as a reload. The document in force sent whole again — the fetch a
+// SIGHUP asks for — is a confirmation too. The service confirming a document
+// refused only for being published ahead of this clock judges it again, as
+// cold start judges such a copy at each pass (spec §10).
+//
+// An unchanged answer is counted here, not by the fetcher: "unchanged" when
+// it confirms the document in force, and "refused" when it confirms one
+// port49d refused, which is not the healthy fetch "unchanged" reads as
+// beside port49_inventory_bundle_refused at 1 (final review Minor 5).
+//
+// The fetch a SIGHUP asks for brings back, whole, the document that SIGHUP
+// has just judged (reload): refused again under the same keys and bound, it
+// is held and neither judged, said nor counted a second time (final review
+// Minor 6).
+func (r *reloader) receive(ctx context.Context, d received) {
+	rejudged := r.rejudged
+	if !d.unchanged {
+		r.rejudged = ""
+	}
+	if d.unchanged {
+		outcome := "unchanged"
+		if d.etag != r.inForce {
+			outcome = "refused"
+		}
+		r.metrics.InventoryFetches.WithLabelValues(outcome).Inc()
+	}
+	if d.etag == r.inForce {
+		r.confirmed()
+		return
+	}
+	if d.unchanged {
+		if l := r.latest; l != nil && r.latestAhead && d.etag == l.etag {
+			r.loadDocument(ctx, "inventory service", *l)
+		}
+		return
+	}
+	r.latest = &d
+	if d.etag == rejudged && d.etag == r.docRefused {
+		return
+	}
+	r.loadDocument(ctx, "inventory service", d)
+}
+
+// confirmed is the service confirming the document in force: the snapshot
+// is young again, nothing it sent is pending refusal, a cold start's refused
+// copy is behind us (Task 14), and a persist owed is tried again, at every
+// confirmation rather than only at the next document (pre-flight M7). A
+// document in force that no longer opens under the verify keys in force — a
+// SIGHUP removed its signer — confirms nothing: it keeps serving, since
+// nothing else is at hand, but port49_inventory_bundle_refused stays 1, said
+// once, until the service sends one that opens.
+func (r *reloader) confirmed() {
+	r.invSeen.Store(r.now().UnixNano())
+	if keys := r.verifyKeys.Load(); r.latestRaw != nil && keys != nil {
+		if _, _, err := bundle.Open(r.latestRaw, *keys); err != nil {
+			r.metrics.InventoryBundleRefused.Set(1)
+			if r.docRefused != r.inForce {
+				r.docRefused = r.inForce
+				fmt.Fprintf(stderr, "port49d: inventory: bundle %d, in force, no longer opens under the verify keys "+
+					"in force (%s); it keeps serving until the service sends a document that does, and "+
+					"port49_inventory_bundle_refused stays 1\n", r.seq, oneLine(quotesCut{err}))
+			}
+			return
+		}
+	}
+	r.docRefused = ""
+	r.metrics.InventoryBundleRefused.Set(0)
+	if r.persistOwed && r.latestRaw != nil {
+		r.persist(r.latestRaw)
+	}
+}
+
+// openDocument opens raw, a document the service sent, and judges it
+// against the one in force. EVERY PATH THAT APPLIES A SERVICE DOCUMENT GOES
+// THROUGH IT, at the moment it applies: loadDocument, and any reload that
+// combines both sources (Task 17). Nothing opened earlier — by the fetcher,
+// or at a SIGHUP before — is trusted, since a key this SIGHUP removed must
+// not apply a document (ruling 1).
+//
+// It opens raw under the verify keys in force now, then refuses a document
+// published more than maxPublishedSkew ahead of this clock (a
+// *publishedAhead, which would outrank every later copy at a cold start;
+// spec §10), and one not later than the document in force by (published_at,
+// sequence): a later published_at, or the same with a higher sequence. A
+// service whose state_dir was reset publishes later, so its sequence may go
+// back (Decided 3); published_at is signed and survives the reset, so an
+// older genuine document replayed — from before the reset too — is refused.
+//
+// pub is non-nil whenever raw opened, refused or not, so the caller can name
+// its sequence; it is safe to apply only when err is nil.
+func (r *reloader) openDocument(raw []byte) (*inventory.Published, error) {
+	var keys []ed25519.PublicKey
+	if k := r.verifyKeys.Load(); k != nil {
+		keys = *k
+	}
+	doc, inv, err := bundle.Open(raw, keys)
+	switch {
+	case errors.Is(err, bundle.ErrUnknownKey):
+		return nil, fmt.Errorf("the document does not open (%w); if the service's signing key was rotated, add "+
+			"its public key to inventory.service.verify_key_files and send SIGHUP", err)
+	case err != nil:
+		// Not a rotation: a signature that does not verify under a key
+		// port49d holds is tampering or a foreign signer (pre-flight minor 4).
+		return nil, fmt.Errorf("the document does not open (%w); it was not signed by any key port49d holds for "+
+			"the service: investigate", err)
+	}
+	pub := &inventory.Published{Raw: raw, Doc: doc, Inv: inv}
+	if err := publishedInFuture(pub, r.now()); err != nil {
+		return pub, err
+	}
+	if !doc.PublishedAt.After(r.inForceAt) && !(doc.PublishedAt.Equal(r.inForceAt) && doc.Sequence > r.seq) {
+		return pub, fmt.Errorf("bundle %d, published %s, is not later than bundle %d in force, published %s: an "+
+			"older document sent again, or the service's clock went back; investigate the service and whoever "+
+			"can answer as it", doc.Sequence, doc.PublishedAt.Format(time.RFC3339), r.seq,
+			r.inForceAt.Format(time.RFC3339))
+	}
+	return pub, nil
+}
+
+// loadDocument puts the service's document in force, as loadInventory puts a
+// file (spec §10): opened and judged by openDocument, parsed against the
+// policy in force, bounded by inventory.max_removed_percent, swapped in one
+// pointer, its security changes recorded, the refresh run, and the document
+// persisted. d.pub and d.err are not read. One that does not open or does
+// not pass changes nothing, is said once per document, and holds
+// port49_inventory_bundle_refused at 1. Each refusal is counted, except one
+// judged again only because the service confirmed it while it is still
+// ahead of this clock: that is counted once per document, not once per poll.
+func (r *reloader) loadDocument(ctx context.Context, trigger string, d received) {
+	old := r.broker.Policy.Load()
+	label := trigger
+	var pol *policy.Policy
+	pub, err := r.openDocument(d.raw)
+	if pub != nil {
+		label = fmt.Sprintf("%s, bundle %d", trigger, pub.Doc.Sequence)
+	}
+	var pa *publishedAhead
+	ahead := errors.As(err, &pa)
+	stillAhead := ahead && r.latestAhead && d.etag == r.docRefused
+	r.latestAhead = ahead
+	opened := err == nil
+	if err == nil {
+		pol, err = bundle.Parse(old.Raw(), pub.Inv, policy.Env{KeyRefs: r.cfg.KeyRefs()})
+	}
+	if err == nil {
+		err = bundle.CheckFrom(old, pol, r.cfg.MaxRemovedPercent, "fix the source of truth")
+	}
+	if err != nil && opened {
+		// Opened and judged just now, but refused against the policy in
+		// force: tried with the policy's settled version not in force, if
+		// there is one (spec §10).
+		if praw, pv, ok := r.settledPolicy(); ok {
+			r.loadBoth(ctx, trigger, fromInventory, praw, pv, pub.Inv, d.etag, &received{pub: pub, raw: d.raw, etag: d.etag})
+			return
+		}
+	}
+	if err != nil {
+		if !stillAhead {
+			r.metrics.InventoryReloads.WithLabelValues("refused").Inc()
+		}
+		r.metrics.InventoryBundleRefused.Set(1)
+		if d.etag != r.docRefused {
+			r.docRefused = d.etag
+			fmt.Fprintf(stderr, "port49d: inventory reload (%s) refused; still serving bundle %s (%d): %s\n", label,
+				old.Bundle, r.seq, oneLine(quotesCut{err}))
+		}
+		return
+	}
+	r.docRefused = ""
+	r.metrics.InventoryBundleRefused.Set(0)
+	if pub.Doc.Sequence < r.seq {
+		fmt.Fprintf(stderr, "port49d: inventory: the service's sequence went back from %d to %d: its state_dir was "+
+			"reset; applying it (spec §10)\n", r.seq, pub.Doc.Sequence)
+	}
+	r.inForce, r.seq, r.inForceAt, r.latestRaw = bundle.ETag(d.raw), pub.Doc.Sequence, pub.Doc.PublishedAt, d.raw
+	r.docPolicy = pub.Doc.PolicySHA256
+	r.invSeen.Store(r.now().UnixNano())
+	r.metrics.InventoryBundleSequence.Set(float64(r.seq))
+	r.persist(d.raw)
+	if pol.Bundle == old.Bundle {
+		// The same devices under a new sequence: nothing to swap.
+		r.metrics.InventoryReloads.WithLabelValues("unchanged").Inc()
+		r.sayPolicyMatch()
+		return
+	}
+	r.metrics.InventoryReloads.WithLabelValues("applied").Inc()
+	now := r.swap(pol)
+	r.refused = ""
+	rep := bundle.Diff(old, pol, now)
+	fmt.Fprintf(stderr, "port49d: inventory reloaded (%s): %s; %d device(s) quarantined now, %d before; %d refused "+
+		"admission\n", label, rep.Summary(), quarantinedAt(pol, now), quarantinedAt(old, now), len(pol.AdmissionRefusals()))
+	r.after(ctx, "inventory", rep, pol, now)
+	r.sayPolicyMatch()
+}
+
+// persist keeps raw as port49d's copy, atomically (persistBundle); a failure
+// is said once and alarmed, owed to the next confirmation, and serving goes
+// on.
+func (r *reloader) persist(raw []byte) {
+	if err := persistBundle(r.cfg.InventoryService.StateDir, raw); err != nil {
+		r.persistOwed = true
+		if r.metrics.InventoryPersistFailed.Set(1); r.persistSaid != oneLine(err) {
+			r.persistSaid = oneLine(err)
+			fmt.Fprintf(stderr, "port49d: inventory: state_dir %s: %s; a restart with the service down would start "+
+				"from an older copy\n", r.cfg.InventoryService.StateDir, r.persistSaid)
+		}
+		return
+	}
+	r.persistSaid, r.persistOwed = "", false
+	r.metrics.InventoryPersistFailed.Set(0)
+}
+
+// rereadVerifyKeys re-reads inventory.service.verify_key_files from
+// port49d.yaml at SIGHUP (Decided 12), behind the write fence
+// (config.VerifyKeys). A file that does not read keeps the keys in force,
+// said. The inventory source is read at start only: a port49d.yaml whose
+// inventory.service block was removed, or whose other keys changed, is said
+// and changes nothing — never read as no verify keys.
+func (r *reloader) rereadVerifyKeys() {
+	if r.cfgPath == "" {
+		return
+	}
+	raw, err := config.ReadRegular(r.cfgPath, config.MaxConfigSize)
+	var svc *config.InventoryServiceConfig
+	if err == nil {
+		svc, err = config.InventoryServiceOf(raw)
+	}
+	if r.cfg.InventoryService == nil {
+		if err == nil && svc != nil {
+			fmt.Fprintf(stderr, "port49d: SIGHUP: %s has an inventory.service block; the inventory source is read at "+
+				"start only; still reading inventory_file %s\n", r.cfgPath, r.cfg.InventoryFile)
+		}
+		return
+	}
+	var keys []ed25519.PublicKey
+	if err == nil && svc != nil {
+		keys, err = config.VerifyKeys(svc.VerifyKeyFiles)
+	}
+	switch {
+	case err != nil:
+		fmt.Fprintf(stderr, "port49d: SIGHUP: inventory.service.verify_key_files not re-read from %s (%s); keeping "+
+			"the keys in force\n", r.cfgPath, oneLine(err))
+	case svc == nil:
+		fmt.Fprintf(stderr, "port49d: SIGHUP: %s has no inventory.service block; the inventory source is read at "+
+			"start only; keeping the service and the keys in force\n", r.cfgPath)
+	default:
+		r.verifyKeys.Store(&keys)
+		fmt.Fprintf(stderr, "port49d: SIGHUP: %d inventory verify key(s) in force\n", len(keys))
+		if cur := r.cfg.InventoryService; svc.URL != cur.URL || svc.CAFile != cur.CAFile ||
+			svc.TLSCertFile != cur.TLSCertFile || svc.TLSKeyFile != cur.TLSKeyFile || svc.StateDir != cur.StateDir ||
+			svc.MirrorDir != cur.MirrorDir || svc.PollInterval != cur.PollInterval {
+			fmt.Fprintf(stderr, "port49d: SIGHUP: inventory.service in %s differs from the one in force beyond "+
+				"verify_key_files; those keys are read at start only, so still asking %s every %s\n", r.cfgPath,
+				cur.URL, cur.PollInterval)
+		}
+	}
+}
+
 // load puts raw, the policy file's content read as version v, in force and
 // refreshes, if it loads and passes the admission bound. A file that does
 // not, or could not be read (err), changes nothing.
-func (r *reloader) load(ctx context.Context, trigger string, raw []byte, v string, err error) {
+func (r *reloader) load(ctx context.Context, trigger string, raw []byte, v string, err error) bool {
 	r.changing = 0
 	old := r.broker.Policy.Load()
 	var pol *policy.Policy
+	forAdmission := false
 	if err == nil && v == old.Source {
 		// The bytes in force: nothing to compile, and nothing is refused
 		// that was loaded before (a SIGHUP with no edit).
@@ -319,6 +888,7 @@ func (r *reloader) load(ctx context.Context, trigger string, raw []byte, v strin
 			// not log out the fleet (plan 6a, N1). A policy that admits no
 			// device is refused whatever the bound.
 			if err = bundle.CheckAdmission(old, pol, r.cfg.MaxRemovedPercent); err != nil {
+				forAdmission = true
 				err = fmt.Errorf("broker.policy_file %s: %w", r.cfg.Broker.PolicyFile, err)
 			}
 		}
@@ -326,12 +896,21 @@ func (r *reloader) load(ctx context.Context, trigger string, raw []byte, v strin
 		err = fmt.Errorf("broker.policy_file %s: %w", r.cfg.Broker.PolicyFile, err)
 	}
 	if err != nil {
+		// Refused alone for what it admits, it is tried with the inventory's
+		// settled version not in force, if there is one (spec §10). One that
+		// did not read or parse is its own fault, said alone: no inventory
+		// can fix it, and a pending inventory edit is not held up by it.
+		if forAdmission {
+			if inv, iv, d, ok := r.settledInventory(); ok {
+				return r.loadBoth(ctx, trigger, fromPolicy, raw, v, inv, iv, d)
+			}
+		}
 		r.metrics.PolicyReloads.WithLabelValues("refused").Inc()
 		r.metrics.PolicyFileRefused.Set(1)
 		r.refused = v
 		fmt.Fprintf(stderr, "port49d: policy reload (%s) refused; still serving %s (bundle %s): %s\n", trigger,
 			old.Source, old.Bundle, oneLine(err))
-		return
+		return false
 	}
 	r.refused = ""
 	r.metrics.PolicyFileRefused.Set(0)
@@ -339,7 +918,7 @@ func (r *reloader) load(ctx context.Context, trigger string, raw []byte, v strin
 		r.metrics.PolicyReloads.WithLabelValues("unchanged").Inc()
 		fmt.Fprintf(stderr, "port49d: policy reload (%s): broker.policy_file unchanged, %s in force (bundle %s)\n",
 			trigger, pol.Source, pol.Bundle)
-		return
+		return false
 	}
 	r.metrics.PolicyReloads.WithLabelValues("applied").Inc()
 	now := r.swap(pol)
@@ -350,6 +929,8 @@ func (r *reloader) load(ctx context.Context, trigger string, raw []byte, v strin
 	fmt.Fprintf(stderr, "port49d: policy reloaded (%s): %s replaces %s (bundle %s); %d device(s) quarantined now, %d before\n",
 		trigger, pol.Source, old.Source, pol.Bundle, quarantinedAt(pol, now), quarantinedAt(old, now))
 	r.after(ctx, "policy", bundle.Diff(old, pol, now), pol, now)
+	r.sayPolicyMatch()
+	return true
 }
 
 // loadInventory builds a bundle from raw, the inventory file read as version
@@ -362,8 +943,19 @@ func (r *reloader) loadInventory(ctx context.Context, trigger string, raw []byte
 	r.invChanging = 0
 	old := r.broker.Policy.Load()
 	var pol *policy.Policy
+	var inv admission.Inventory
 	if err == nil {
-		pol, err = r.inventoryBundle(old, raw)
+		inv, err = admission.ParseFile(raw, "") // the error below names the file
+		if err != nil {
+			err = fmt.Errorf("inventory_file %s: %w", r.cfg.InventoryFile, quotesCut{err})
+		} else if pol, err = r.inventoryBundle(old, inv); err != nil {
+			// Refused alone, a file that parses is tried with the policy's
+			// settled version not in force, if there is one (spec §10).
+			if praw, pv, ok := r.settledPolicy(); ok {
+				r.loadBoth(ctx, trigger, fromInventory, praw, pv, inv, v, nil)
+				return
+			}
+		}
 	} else {
 		err = fmt.Errorf("inventory_file %s: %w", r.cfg.InventoryFile, err)
 	}
@@ -397,15 +989,11 @@ func (r *reloader) loadInventory(ctx context.Context, trigger string, raw []byte
 	r.after(ctx, "inventory", rep, pol, now)
 }
 
-// inventoryBundle is the bundle raw, the inventory file's bytes, makes with
-// the policy in force, if it parses and passes Check. A fault after the parse
-// is named as the inventory's, not the policy file's: the policy in force
-// loaded before (plan 6a, M5).
-func (r *reloader) inventoryBundle(old *policy.Policy, raw []byte) (*policy.Policy, error) {
-	inv, err := admission.ParseFile(raw, "") // the error below names the file
-	if err != nil {
-		return nil, fmt.Errorf("inventory_file %s: %w", r.cfg.InventoryFile, quotesCut{err})
-	}
+// inventoryBundle is the bundle inv, the inventory file parsed, makes with
+// the policy in force, if it passes Check. A fault is named as the
+// inventory's, not the policy file's: the policy in force loaded before (plan
+// 6a, M5).
+func (r *reloader) inventoryBundle(old *policy.Policy, inv admission.Inventory) (*policy.Policy, error) {
 	pol, err := bundle.Parse(old.Raw(), inv, policy.Env{KeyRefs: r.cfg.KeyRefs()})
 	if err == nil {
 		err = bundle.Check(old, pol, r.cfg.MaxRemovedPercent)

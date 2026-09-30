@@ -32,13 +32,53 @@ const (
 // Change is one thing a swap changed. From and To are the before and after
 // where the kind has them.
 type Change struct {
-	Kind, Device, Platform, Scope, Address, From, To string
+	Kind     string `json:"kind,omitempty"`
+	Device   string `json:"device,omitempty"`
+	Platform string `json:"platform,omitempty"`
+	Scope    string `json:"scope,omitempty"`
+	Address  string `json:"address,omitempty"`
+	From     string `json:"from,omitempty"`
+	To       string `json:"to,omitempty"`
 	// Security marks what the log must carry as an inventory_change record:
 	// an address added to a device already in inventory — the mint response
 	// hands it to an SSH client, so a rogue one is a credential-capture path —
 	// a device joining or leaving a scope with security_log: true (spec §5.5,
 	// §10), a device's key_ref changing, and a device becoming admitted.
-	Security bool
+	Security bool `json:"security"`
+}
+
+// Line is c on one line, `!` first where the log would carry it as a
+// security event. addresses is the device's in the new inventory, for an
+// added device: each is a new place a mint sends an operator. Empty, where
+// the caller has none to give, the line leaves them out.
+func (c Change) Line(addresses string) string {
+	mark := " "
+	if c.Security {
+		mark = "!"
+	}
+	switch c.Kind {
+	case DeviceAdded:
+		if addresses == "" {
+			return fmt.Sprintf("%s device added %s (%s): %s", mark, c.Device, c.Platform, c.To)
+		}
+		return fmt.Sprintf("%s device added %s (%s) at %s: %s", mark, c.Device, c.Platform, addresses, c.To)
+	case DeviceRemoved:
+		return fmt.Sprintf("%s device removed %s (%s)", mark, c.Device, c.Platform)
+	case AddressAdded:
+		return fmt.Sprintf("%s address added %s: %s", mark, c.Device, c.Address)
+	case AddressRemoved:
+		return fmt.Sprintf("%s address removed %s: %s", mark, c.Device, c.Address)
+	case ScopeJoined, ScopeLeft:
+		verb, tag := "joined", ""
+		if c.Kind == ScopeLeft {
+			verb = "left"
+		}
+		if c.Security {
+			tag = " (security_log)"
+		}
+		return fmt.Sprintf("%s scope %s%s: %s %s", mark, c.Scope, tag, c.Device, verb)
+	}
+	return fmt.Sprintf("%s %s %s: %s → %s", mark, c.Kind, c.Device, c.From, c.To)
 }
 
 // Report is what one swap changed.
@@ -164,11 +204,22 @@ func (r Report) Security() []Change {
 // block or a mistyped pin does to a whole fleet (plan 6a, I4). 100 turns the
 // share off; nothing turns the empty check off.
 func Check(old, new *policy.Policy, maxRemovedPercent int) error {
+	return CheckFrom(old, new, maxRemovedPercent, "fix the file")
+}
+
+// CheckFrom is Check with fix, what the bound's refusal tells the operator to
+// fix: "fix the file" for inventory_file, "fix the source of truth" for the
+// inventory service's document (spec §10). The hint that key_groups was
+// deleted from the inventory file is given only when the inventory in force
+// carries key groups: a document from the service never does, and the hint
+// would send an operator looking for a file there is none of.
+func CheckFrom(old, new *policy.Policy, maxRemovedPercent int, fix string) error {
 	if len(new.Devices()) == 0 {
 		return errors.New("the new inventory names no device; an empty inventory admits nothing, so it is never " +
 			"loaded (spec §10)")
 	}
-	if err := admitsNone("inventory", new); err != nil {
+	hint := len(old.Inventory().KeyGroups) > 0
+	if err := admitsNone("inventory", new, hint); err != nil {
 		return err
 	}
 	was := len(old.Devices())
@@ -187,10 +238,12 @@ func Check(old, new *policy.Policy, maxRemovedPercent int) error {
 		msg := fmt.Sprintf("the new inventory removes %d of %d devices and refuses %d more (%d%%), more than "+
 			"inventory.max_removed_percent (%d%%)", removed, was, len(refused), gone*100/was, maxRemovedPercent)
 		if len(refused) > 0 {
-			msg += "; newly refused: " + names(refused) +
-				" (if key_groups was deleted from the inventory file, add it to the policy file first)"
+			msg += "; newly refused: " + names(refused)
+			if hint {
+				msg += " (if key_groups was deleted from the inventory file, add it to the policy file first)"
+			}
 		}
-		return errors.New(msg + "; fix the file, or, if the change is meant, raise inventory.max_removed_percent " +
+		return errors.New(msg + "; " + fix + ", or, if the change is meant, raise inventory.max_removed_percent " +
 			"in port49d.yaml and send SIGHUP, which re-reads it with the reload")
 	}
 	return nil
@@ -203,7 +256,7 @@ func Check(old, new *policy.Policy, maxRemovedPercent int) error {
 // does not undo. It refuses a policy that newly refuses more than
 // maxRemovedPercent of the devices admitted under old, naming them.
 func CheckAdmission(old, new *policy.Policy, maxRemovedPercent int) error {
-	if err := admitsNone("policy", new); err != nil {
+	if err := admitsNone("policy", new, false); err != nil {
 		return err
 	}
 	// The share is of the devices the policy in force admits (spec §10).
@@ -224,17 +277,19 @@ func CheckAdmission(old, new *policy.Policy, maxRemovedPercent int) error {
 // admitsNone refuses a bundle that admits no device of a non-empty inventory,
 // whatever the bound, as a start is (spec §10): that is no device's fault, and
 // taking the whole fleet off is done by stopping port49d, not by a reload.
-// what is the file the reload read: "inventory" or "policy". A bundle an
-// offline tool loaded unassessed — no key groups, no key_refs — is read as
-// port49d, always assessing, reads it: only its pinned devices are admitted
-// (AdmissionRefusals; plan 6a, I1), as `policy test` judges it.
-func admitsNone(what string, p *policy.Policy) error {
+// what is the file the reload read: "inventory" or "policy"; hint adds the
+// key-group move done in the wrong order, for an inventory in force that
+// carries key groups. A bundle an offline tool loaded unassessed — no key
+// groups, no key_refs — is read as port49d, always assessing, reads it: only
+// its pinned devices are admitted (AdmissionRefusals; plan 6a, I1), as
+// `policy test` judges it.
+func admitsNone(what string, p *policy.Policy, hint bool) error {
 	n := len(p.Devices())
 	if n == 0 || len(p.AdmissionRefusals()) < n {
 		return nil
 	}
 	check := "check key_groups and the key_refs port49d.yaml defines"
-	if what == "inventory" {
+	if hint {
 		// The key-group move done in the wrong order (plan 6a, C3).
 		check += " (if key_groups was deleted from the inventory file, add it to the policy file first)"
 	}

@@ -34,6 +34,10 @@ type Device struct {
 }
 
 type KeyGroup struct {
+	// Name matches one device by its inventory name: the pin, in the
+	// reviewed policy, at tier 1 (spec §10; plan 6b owner decision 3). A
+	// group matches on exactly one of Name, CIDR and Attributes.
+	Name       string
 	CIDR       netip.Prefix // zero value when this is an attribute group
 	Attributes map[string]string
 	KeyRef     string
@@ -100,6 +104,9 @@ type Assignment struct {
 
 // String renders a group as `keys show` and the refusal lines name it.
 func (g KeyGroup) String() string {
+	if g.Name != "" {
+		return fmt.Sprintf("name %s → %s", g.Name, g.KeyRef)
+	}
 	if g.CIDR.IsValid() {
 		return fmt.Sprintf("cidr %s → %s", g.CIDR, g.KeyRef)
 	}
@@ -153,16 +160,38 @@ func Validate(devices []Device) error {
 	return nil
 }
 
-// Assign is d's key_ref by tier (spec §10): a pin on the record, then an
-// attribute group, then the longest matching CIDR, which every one of the
-// device's addresses must agree on. No group matching is the zero
-// Assignment, and the caller refuses the device. Two groups tying in one tier
-// is an error naming both: refusing to guess is the only conservative answer,
-// since a device admitted under the wrong group is admitted under the wrong
-// key.
+// Assign is d's key_ref by tier (spec §10): a pin — on the record, or a group
+// matching the device's name — then an attribute group, then the longest
+// matching CIDR, which every one of the device's addresses must agree on. No
+// group matching is the zero Assignment, and the caller refuses the device.
+// Two groups tying in one tier is an error naming both: refusing to guess is
+// the only conservative answer, since a device admitted under the wrong group
+// is admitted under the wrong key.
 func Assign(d Device, groups []KeyGroup) (Assignment, error) {
+	// Tier 1: a pin, on the record (inventory_file) or as a policy group
+	// matching the name. Two that name different keys are a tie, refused:
+	// guessing between two reviewed pins would admit under the wrong key.
+	var named []KeyGroup
+	for _, g := range groups {
+		if g.Name != "" && g.Name == d.Name {
+			named = append(named, g)
+		}
+	}
+	if len(named) > 1 {
+		return Assignment{}, fmt.Errorf("admission: device %q matches key groups %s and %s in the pin tier", d.Name,
+			named[0], named[1])
+	}
 	if d.KeyRef != "" {
-		return Assignment{KeyRef: d.KeyRef, Tier: TierPin, Group: "key_ref pinned on the device record"}, nil // tier 1
+		if len(named) == 1 && named[0].KeyRef != d.KeyRef {
+			// The record's key_ref is not printed: a pin is where a secret
+			// gets pasted.
+			return Assignment{}, fmt.Errorf("admission: device %q is pinned on its record and by key group %s, "+
+				"to different keys, in the pin tier", d.Name, named[0])
+		}
+		return Assignment{KeyRef: d.KeyRef, Tier: TierPin, Group: "key_ref pinned on the device record"}, nil
+	}
+	if len(named) == 1 {
+		return Assignment{KeyRef: named[0].KeyRef, Tier: TierPin, Group: named[0].String()}, nil
 	}
 	var attrHits []KeyGroup
 	for _, g := range groups {
@@ -364,7 +393,7 @@ func ParseFile(raw []byte, path string) (Inventory, error) {
 			yamlfault.Of(err))
 	}
 	var inv Inventory
-	for _, d := range f.Devices {
+	for n, d := range f.Devices {
 		// An unsupported transport is kept as written: Resolve refuses the
 		// device, not the file. Absent is tcp, in one spelling.
 		if d.Transport == "" {
@@ -372,11 +401,12 @@ func ParseFile(raw []byte, path string) (Inventory, error) {
 		}
 		dev := Device{Name: d.Name, Platform: d.Platform, Attributes: d.Attributes, KeyRef: d.KeyRef, Transport: d.Transport}
 		for i, s := range d.Addresses {
-			// netip's error quotes the value; the index says where it is.
+			// netip's error quotes the value, and the name has passed no
+			// shape check: positions say where it is.
 			a, err := netip.ParseAddr(s)
 			if err != nil {
-				return Inventory{}, fmt.Errorf("admission: %sdevice %q: addresses[%d] is not an IP address", at,
-					d.Name, i)
+				return Inventory{}, fmt.Errorf("admission: %sdevices[%d]: addresses[%d] is not an IP address", at,
+					n, i)
 			}
 			dev.Addresses = append(dev.Addresses, a)
 		}
