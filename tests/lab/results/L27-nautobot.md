@@ -21,7 +21,8 @@
   and is in no committed file; no fixture carries an `Authorization` header. The webhook secret
   `l27-lab-webhook-secret` is **public and lab only** (never use it anywhere else), kept so
   `X-Hook-Signature` in `webhooks.json` can be verified against it.
-- **Status:** L27 stays open here; plan 6a Task 21 closes it for the versions measured.
+- **Status:** L27 closed 2026-09-30 by plan 6a Task 21 for the versions measured; a non-null
+  pagination `next` and Nautobot 3.x are L30, open.
 
 ## Claim
 
