@@ -626,6 +626,11 @@ func Load(path string) (Config, error) {
 		}
 	}
 	for _, d := range inv.Devices {
+		if d.KeyRef != "" && !admission.KeyRefShape.MatchString(d.KeyRef) {
+			// Not printed: a pin that is not a name may be a secret.
+			return Config{}, fmt.Errorf("config: device %q pins a key_ref that is not a valid key_ref name (%s)",
+				d.Name, admission.KeyRefShapeRule)
+		}
 		if d.KeyRef != "" {
 			if _, ok := c.Keys[d.KeyRef]; !ok {
 				return Config{}, fmt.Errorf("config: device %q pins key_ref %q which is not in keys", d.Name, d.KeyRef)

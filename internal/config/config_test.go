@@ -1119,3 +1119,15 @@ func TestAKeyRefThatIsNoNameIsRefusedUnprinted(t *testing.T) {
 		t.Fatalf("KeySets: %v", err)
 	}
 }
+
+// Without a broker every device must be admitted at start, so a pin that is
+// not a key_ref name refuses the start, without printing the pin.
+func TestANoBrokerPinThatIsNoNameIsRefusedUnprinted(t *testing.T) {
+	setKeyEnv(t)
+	invPath := write(t, "inventory.yaml", strings.Replace(inv, "key_groups:", "  - {name: pasted, platform: arista_eos, "+
+		"addresses: [127.0.0.9], key_ref: "+leakAlnum+"}\nkey_groups:", 1))
+	_, err := Load(write(t, "port49d.yaml", fmt.Sprintf(sample, invPath)))
+	if err == nil || !strings.Contains(err.Error(), "not a valid key_ref name") || leaked(err.Error(), leakAlnum) != "" {
+		t.Fatalf("%v", err)
+	}
+}

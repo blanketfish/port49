@@ -133,6 +133,8 @@ func TestKeysNeverPrintASecret(t *testing.T) {
 		"keys:\n  prod_key:\n    current: !" + alnum + " x\n",
 		"keys:\n  prod_key:\n    current: " + tick + "\n",
 		"keys:\n  prod_key:\n    current: {version: 3, secret_env: \"" + v3 + "\"}\n",
+		"keys:\n  prod_key:\n    current: {version: 3, secret_env: " + alnum + "}\n",
+		"keys:\n  " + alnum + ":\n    current: {version: 3, secret_env: X}\n",
 	} {
 		bad := filepath.Join(dir, fmt.Sprintf("bad-%d.yaml", i))
 		if err := os.WriteFile(bad, []byte(body), 0o600); err != nil {
@@ -198,5 +200,31 @@ func TestKeysShowDoesNotCallAPastVersionAccepted(t *testing.T) {
 	if strings.Contains(out.String(), "also accepted: version 2") ||
 		!strings.Contains(out.String(), "version 2 retired: retire_after 2020-01-01 has passed, so it admits none") {
 		t.Fatalf("%s", out.String())
+	}
+}
+
+// A device whose pin is not a key_ref name is refused alone, and neither
+// command prints the pin.
+func TestKeysNeverPrintAPastedPin(t *testing.T) {
+	const secret = "Wd7ZkP2mRq9TxL4vNc8B"
+	pol, _, cfg, log := keysFiles(t)
+	inv := filepath.Join(t.TempDir(), "inventory.yaml")
+	if err := os.WriteFile(inv, []byte(keysInventory+"  - {name: pasted, platform: arista_eos, addresses: [10.20.9.9], "+
+		"key_ref: "+secret+"}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"keys", "show", "--policy", pol, "--inventory", inv, "--config", cfg, "pasted"},
+		{"keys", "show", "--policy", pol, "--inventory", inv, "pasted"},
+		{"keys", "status", "--policy", pol, "--inventory", inv, "--config", cfg, log},
+	} {
+		var out, errOut bytes.Buffer
+		code := run(args, &out, &errOut)
+		if strings.Contains(out.String()+errOut.String(), "Wd7Zk") {
+			t.Errorf("%v printed the pin:\n%s%s", args[1], out.String(), errOut.String())
+		}
+		if args[1] == "status" && (code != 0 || !strings.Contains(out.String(), "rotation not finished: leaf-19")) {
+			t.Errorf("the rest of the fleet: exit %d\n%s%s", code, out.String(), errOut.String())
+		}
 	}
 }

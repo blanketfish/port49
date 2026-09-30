@@ -327,3 +327,40 @@ func TestATieNamesTheGroupsByWhatTheyMatch(t *testing.T) {
 		t.Fatalf("want both groups named, got %v", err)
 	}
 }
+
+// A pin that is not a key_ref name, most likely a secret pasted there,
+// refuses that device alone and is never printed.
+func TestAPinThatIsNoNameRefusesTheDeviceUnprinted(t *testing.T) {
+	const secret = "Sx9qT4vLm2pR7zK0wYh5"
+	bad := Device{Name: "bad", KeyRef: secret, Transport: TransportTCP, Addresses: []netip.Addr{netip.MustParseAddr("10.0.0.1")}}
+	good := Device{Name: "good", KeyRef: "prod_key", Transport: TransportTCP, Addresses: []netip.Addr{netip.MustParseAddr("10.0.0.2")}}
+	r := Resolve(bad, nil)
+	if r.Refusal != RefusedUnknownKey || r.KeyRef != "" || !strings.Contains(r.Refused, "not a valid key_ref name") ||
+		strings.Contains(r.Refused, "Sx9qT") {
+		t.Fatalf("%+v", r)
+	}
+	tr, err := Build(Inventory{Devices: []Device{bad, good}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := tr.Lookup(bad.Addresses[0]); ok {
+		t.Fatal("the bad pin was admitted")
+	}
+	if r, ok := tr.Lookup(good.Addresses[0]); !ok || r.KeyRef != "prod_key" {
+		t.Fatalf("the rest of the inventory: %+v", r)
+	}
+}
+
+// An inventory key group's key_ref is shape-checked as a policy's is, and a
+// bad one is refused without being printed.
+func TestAnInventoryKeyGroupKeyRefThatIsNoNameIsRefusedUnprinted(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "inventory.yaml")
+	body := "devices: []\nkey_groups:\n  - {match: {cidr: 10.0.0.0/8}, key_ref: Sx9qT4vLm2pR7zK0wYh5}\n"
+	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadFile(p); err == nil || !strings.Contains(err.Error(), "not a valid key_ref name") ||
+		strings.Contains(err.Error(), "Sx9qT") {
+		t.Fatalf("%v", err)
+	}
+}

@@ -284,3 +284,34 @@ func TestADeviceRefusedForAnUnknownKeyCarriesNoKeyRef(t *testing.T) {
 		t.Fatalf("the index admits it: %+v", r)
 	}
 }
+
+// A pin that is not a key_ref name refuses that device alone: the policy and
+// the rest of the fleet load, and nothing the load says prints the pin.
+func TestAPinThatIsNoNameRefusesThatDeviceAlone(t *testing.T) {
+	const secret = "Sx9qT4vLm2pR7zK0wYh5"
+	e := env()
+	e.KeyRefs = []string{"k"}
+	e.Devices = append(e.Devices, admission.Device{Name: "pasted", Platform: "arista_eos", KeyRef: secret,
+		Transport: admission.TransportTCP, Addresses: []netip.Addr{netip.MustParseAddr("192.0.2.200")}})
+	p, err := Parse([]byte(good+"key_groups:\n  - {match: {cidr: 0.0.0.0/0}, key_ref: k}\n"), e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, _ := p.Admitted("pasted")
+	if r.Refusal != admission.RefusedUnknownKey || r.KeyRef != "" {
+		t.Fatalf("pasted: %+v", r)
+	}
+	var said []string
+	for _, r := range p.AdmissionRefusals() {
+		said = append(said, r.Refused)
+	}
+	said = append(said, p.Notices()...)
+	if strings.Contains(strings.Join(said, "\n"), "Sx9qT") {
+		t.Fatalf("printed the pin: %q", said)
+	}
+	for _, d := range inventory() {
+		if r, _ := p.Admitted(d.Name); r.Refused != "" && d.KeyRef == "" {
+			t.Errorf("%s refused: %s", d.Name, r.Refused)
+		}
+	}
+}

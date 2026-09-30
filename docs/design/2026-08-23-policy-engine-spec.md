@@ -4002,8 +4002,19 @@ loads. Deleting it from the inventory first would leave every device refused, an
 refused by the bound (below). A group matches on a CIDR or on attributes, never both; a CIDR
 with host bits set is refused.
 
+**A `key_ref` is a name: `^[a-z][a-z0-9_]{0,63}$`**, lowercase letters, digits and `_`, starting
+with a letter, at most 64 characters. The shape holds wherever one is written: a key under
+port49d.yaml's `keys:`, a key group in either file, and a pin on a device record. Every report
+prints a `key_ref` (`port49 keys status`, the start notices, the decision log), so one that is not
+a name, most likely a secret pasted where the name goes, is refused without being printed: a key
+under `keys:` refuses the file by its line, a key group refuses its file by its position, and a
+pin refuses that device alone (below). A secret that is all lowercase hex and 64 characters or
+fewer matches the shape and cannot be told from a name; the shape narrows the mistake, it does not
+close it.
+
 **A device is refused on its own, never the daemon.** A device no group admits, one two groups
-tie on (below), one assigned a `key_ref` port49d.yaml defines no key for, and one whose
+tie on (below), one assigned a `key_ref` port49d.yaml defines no key for, one pinning a `key_ref`
+that is not a name (above; the pin is not printed), and one whose
 `transport` port49d does not serve (below), are each refused
 admission: named at start and at every reload that loads, counted in
 `port49_devices_admission_refused`, and every packet from them closed after the header, with
@@ -5014,7 +5025,11 @@ unauthenticated listener (§10). **`port49 keys show --policy <file> --inventory
 <port49d.yaml>] <device>`** resolves which `key_ref` a device matches, by which tier and group,
 and, with `--config`, which version to provision; rendering the secret itself is a
 separately-authorized operation this build does not offer, since a group key is shared across the
-devices in its group.
+devices in its group. `keys show` and `keys status` name a key by its `key_ref` and version only, and
+a `key_ref` has §10's shape (`^[a-z][a-z0-9_]{0,63}$`): one that is not a name is refused, not
+printed, since it is most likely a secret pasted there, and neither command prints a
+port49d.yaml parse error's text, only its line and a fixed category. A secret that is all
+lowercase hex and 64 characters or fewer passes the shape.
 
 **`port49 inventory diff --policy <file> [--new-policy <file>] <old-inventory> <new-inventory>`**
 prints what a change to the inventory does to the bundle: devices added, removed and changed,

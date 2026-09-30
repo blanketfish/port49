@@ -218,6 +218,17 @@ func transportRefusal(d Device) string {
 	}
 }
 
+// pinRefusal is why d's pinned key_ref cannot be used, or "" when it has none
+// or it is a key_ref name (KeyRefShape). The pin is not in the text: one that
+// is not a name is most likely a secret pasted where the name goes.
+func pinRefusal(d Device) string {
+	if d.KeyRef == "" || KeyRefShape.MatchString(d.KeyRef) {
+		return ""
+	}
+	return "pins a key_ref that is not a valid key_ref name (" + KeyRefShapeRule + "), so it fails closed; " +
+		"the pin is not shown, since it may be a secret pasted there (spec §10)"
+}
+
 // Resolve is one device's admission from its record and the key groups: its
 // key_ref, or why it is refused — a transport port49d does not serve, two
 // groups tying on it, or no group matching it (spec §10). It fails closed: a
@@ -227,6 +238,10 @@ func Resolve(d Device, groups []KeyGroup) Resolved {
 	r := Resolved{Device: d}
 	if why := transportRefusal(d); why != "" {
 		r.Refused, r.Refusal = why, RefusedTransport
+		return r
+	}
+	if why := pinRefusal(d); why != "" {
+		r.Refused, r.Refusal = why, RefusedUnknownKey
 		return r
 	}
 	as, err := Assign(d, groups)
@@ -269,7 +284,7 @@ func Build(inv Inventory) (*Trie, error) {
 	}
 	entries := make([]Resolved, 0, len(inv.Devices))
 	for _, d := range inv.Devices {
-		if transportRefusal(d) != "" {
+		if transportRefusal(d) != "" || pinRefusal(d) != "" {
 			continue // refused alone (spec §10)
 		}
 		as, err := Assign(d, inv.KeyGroups)
@@ -355,7 +370,11 @@ func ParseFile(raw []byte, path string) (Inventory, error) {
 		}
 		inv.Devices = append(inv.Devices, dev)
 	}
-	for _, g := range f.KeyGroups {
+	for i, g := range f.KeyGroups {
+		if g.KeyRef != "" && !KeyRefShape.MatchString(g.KeyRef) {
+			return Inventory{}, fmt.Errorf("admission: %s: key_groups[%d]: key_ref is not a valid key_ref name (%s): "+
+				"it names the key, never holds it", path, i, KeyRefShapeRule)
+		}
 		kg := KeyGroup{Attributes: g.Match.Attributes, KeyRef: g.KeyRef}
 		if g.Match.CIDR != "" {
 			p, err := netip.ParsePrefix(g.Match.CIDR)
