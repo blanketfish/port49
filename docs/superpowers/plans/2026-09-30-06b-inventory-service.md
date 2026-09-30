@@ -9434,8 +9434,11 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
   method.
 - **Protect the verify keys like the policy file.** `verify_key_files` on both sides are read
   behind the same write fence: owned by the process's user or root, not writable by group or others. A
-  loose one refuses port49d's start, and a `SIGHUP` re-read keeps the keys in force. The mirror copy
-  is written 0640: give port49d the mount's group.
+  loose one refuses port49d's start, and a `SIGHUP` re-read keeps the keys in force. Protect
+  `inventory.service.ca_file` the same way: port49d reads it as a regular file with no owner check,
+  and whoever can write it chooses which service port49d trusts. Signatures bound the harm (such a
+  service can deny port49d a new bundle, or replay one port49d already refuses), but not the outage.
+  The mirror copy is written 0640: give port49d the mount's group.
 - **Rotating the service's signing key:** add the new public key to every port49d's
   `verify_key_files` and send `SIGHUP`; add the old public key to the service's own
   `verify_key_files`; switch its `signing_key_file` and restart it: it re-seals the bundle in force
