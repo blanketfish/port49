@@ -14,6 +14,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
+	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/engine"
 	"github.com/rhwendt/port49/internal/store"
 )
@@ -568,5 +569,114 @@ func TestInventoryLinesNameTheBundle(t *testing.T) {
 	rig.with(func() { rig.r.poll(context.Background()) })
 	if testutil.ToFloat64(rig.m.InventoryFileRefused) != 0 {
 		t.Fatalf("a file that settles clears the alarm: %s", rig.out.String())
+	}
+}
+
+// Spec §10: an address added to a device already in inventory, and a device
+// joining or leaving a security_log scope, are security events — one
+// inventory_change record each, counted.
+func TestASwapThatMovesPrivilegeIsLogged(t *testing.T) {
+	watched := strings.Replace(minimalPolicy, "scopes: [{name: all_devices, match: {}}]",
+		"scopes: [{name: all_devices, match: {}}, {name: watched, match: {name: [leaf2]}, security_log: true}]", 1)
+	rig := newReloadRig(t, watched)
+	var buf syncBuffer
+	rig.b.Log = decision.NewJSONLines(&buf)
+	rig.writeInventory(t, twoDevices)
+	rig.pollTwice()
+	got := buf.String()
+	for _, want := range []string{`"event":"inventory_change"`, `"kind":"address_added"`, `"address":"10.0.0.1"`,
+		`"kind":"scope_joined"`, `"scope":"watched"`, `"name":"leaf2"`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %s in %s", want, got)
+		}
+	}
+	if n := testutil.ToFloat64(rig.m.InventoryChanges.WithLabelValues("address_added")); n != 1 {
+		t.Fatalf("address_added = %v", n)
+	}
+	if n := testutil.ToFloat64(rig.m.InventoryChanges.WithLabelValues("scope_joined")); n != 1 {
+		t.Fatalf("scope_joined = %v", n)
+	}
+	// Exactly these, and leaf2 added and admitted: one record per change.
+	if n := strings.Count(got, `"event":"inventory_change"`); n != 3 ||
+		!strings.Contains(got, `"kind":"device_added"`) || !strings.Contains(got, `"to":"admitted"`) {
+		t.Fatalf("%d records: %s", n, got)
+	}
+	bundle := rig.b.Policy.Load().Bundle
+	if !strings.Contains(got, `"to_bundle":"`+bundle+`"`) {
+		t.Fatalf("the records do not name the bundle swapped in, %s: %s", bundle, got)
+	}
+	if !strings.Contains(rig.out.String(), "3 security change(s) written as inventory_change records") {
+		t.Fatalf("the swap does not say it wrote them: %s", rig.out.String())
+	}
+}
+
+// A refused swap moved nothing, so it writes no inventory_change record: its
+// refusal line and metric are what it says.
+func TestARefusedSwapWritesNoInventoryChange(t *testing.T) {
+	rig := newReloadRig(t, minimalPolicy)
+	rig.writeInventory(t, twoDevices)
+	rig.pollTwice()
+	var buf syncBuffer
+	rig.b.Log = decision.NewJSONLines(&buf)
+	before := testutil.ToFloat64(rig.m.InventoryChanges.WithLabelValues("address_added"))
+	// An address added to leaf1, in a file that drops half the fleet.
+	rig.writeInventory(t, "devices:\n  - {name: leaf1, platform: arista_eos, addresses: [10.0.0.1, 10.0.0.9], "+
+		"key_ref: lab_key}\n")
+	rig.pollTwice()
+	if testutil.ToFloat64(rig.m.InventoryReloads.WithLabelValues("refused")) != 1 {
+		t.Fatalf("not refused: %s", rig.out.String())
+	}
+	if strings.Contains(buf.String(), "inventory_change") ||
+		testutil.ToFloat64(rig.m.InventoryChanges.WithLabelValues("address_added")) != before {
+		t.Fatalf("a refused swap was logged as a change: %s", buf.String())
+	}
+}
+
+// A swap that moves no privilege — an attribute edited — writes no record.
+func TestABenignSwapWritesNoInventoryChange(t *testing.T) {
+	rig := newReloadRig(t, minimalPolicy)
+	rig.writeInventory(t, twoDevices)
+	rig.pollTwice()
+	var buf syncBuffer
+	rig.b.Log = decision.NewJSONLines(&buf)
+	mark := len(rig.out.String())
+	rig.writeInventory(t, strings.Replace(twoDevices, "addresses: [10.0.0.2],",
+		"addresses: [10.0.0.2], attributes: {site: dc1},", 1))
+	rig.pollTwice()
+	if testutil.ToFloat64(rig.m.InventoryReloads.WithLabelValues("applied")) != 2 {
+		t.Fatalf("the attribute edit was not applied: %s", rig.out.String())
+	}
+	if strings.Contains(buf.String(), "inventory_change") ||
+		strings.Contains(rig.out.String()[mark:], "written as inventory_change records") {
+		t.Fatalf("a benign swap was logged as a security change: %s%s", buf.String(), rig.out.String()[mark:])
+	}
+}
+
+// A policy swap is a swap too: a device moved into a security_log scope by a
+// policy edit is recorded as an inventory edit would be (spec §5.5, §10).
+func TestAPolicySwapThatMovesPrivilegeIsLogged(t *testing.T) {
+	watching := func(name string) string {
+		return strings.Replace(minimalPolicy, "scopes: [{name: all_devices, match: {}}]",
+			"scopes: [{name: all_devices, match: {}}, {name: watched, match: {name: ["+name+
+				"]}, security_log: true}]", 1)
+	}
+	rig := newReloadRig(t, watching("leaf2"))
+	rig.writeInventory(t, twoDevices)
+	rig.pollTwice()
+	var buf syncBuffer
+	rig.b.Log = decision.NewJSONLines(&buf)
+	rig.write(t, watching("leaf1"))
+	rig.pollTwice()
+	got := buf.String()
+	for _, want := range []string{`"kind":"scope_joined","scope":"watched"`, `"kind":"scope_left","scope":"watched"`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %s in %s", want, got)
+		}
+	}
+	if n := strings.Count(got, `"event":"inventory_change"`); n != 2 {
+		t.Fatalf("%d records: %s", n, got)
+	}
+	if n := testutil.ToFloat64(rig.m.InventoryChanges.WithLabelValues("scope_left")); n != 1 {
+		t.Fatalf("scope_left = %v", n)
 	}
 }

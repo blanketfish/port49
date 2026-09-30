@@ -14,6 +14,7 @@ import (
 	"github.com/rhwendt/port49/internal/bundle"
 	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
+	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/engine"
 	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/store"
@@ -421,11 +422,30 @@ func (r *reloader) swap(pol *policy.Policy) time.Time {
 	return now
 }
 
-// after is what every swap runs once its line is written: the lines a start
-// would print, and the refresh that carries the bundle into live contexts.
+// after is what every swap runs once its line is written: an inventory_change
+// record for each security change it made, the lines a start would print, and
+// the refresh that carries the bundle into live contexts.
 func (r *reloader) after(ctx context.Context, rep bundle.Report, pol *policy.Policy, now time.Time) {
+	if n := r.securityEvents(rep, now); n > 0 {
+		fmt.Fprintf(stderr, "port49d: inventory: %d security change(s) written as inventory_change records "+
+			"(spec §10)\n", n)
+	}
 	sayPolicy(pol, now)
 	r.refresh(ctx)
+}
+
+// securityEvents writes one inventory_change record for each security change
+// the swap made, and counts it (spec §5.7, §10). It returns how many.
+func (r *reloader) securityEvents(rep bundle.Report, now time.Time) int {
+	changes := rep.Security()
+	for _, c := range changes {
+		r.broker.Log.Emit(decision.Record{TS: now, Event: decision.EventInventoryChange,
+			Device: &decision.Device{Name: c.Device, Platform: c.Platform},
+			Change: &decision.Change{Kind: c.Kind, Scope: c.Scope, Address: c.Address, From: c.From, To: c.To,
+				FromBundle: rep.From, ToBundle: rep.To}})
+		r.metrics.InventoryChanges.WithLabelValues(c.Kind).Inc()
+	}
+	return len(changes)
 }
 
 // refresh runs one refresh pass and schedules the next. A pass the store

@@ -133,7 +133,16 @@ type Metrics struct {
 	// last read and found in force, or loaded (spec §10). Staleness is an
 	// alarm, never a fail-closed: the snapshot never expires.
 	InventorySnapshotAge prometheus.GaugeFunc
-	inventoryAge         atomic.Pointer[func() float64]
+	// port49_inventory_changes_total{kind}: security-relevant changes a bundle
+	// swap made (spec §10) — "address_added" (an address on a device already
+	// in inventory, which a mint hands to an SSH client), "scope_joined" and
+	// "scope_left" (a scope with security_log: true), "key_ref_changed" (a
+	// device moved onto another key), "admission_changed" (a device already
+	// in inventory newly admitted) and "device_added" (a device added and
+	// admitted). Each is an inventory_change record naming the device; the
+	// label is the kind only.
+	InventoryChanges *prometheus.CounterVec
+	inventoryAge     atomic.Pointer[func() float64]
 }
 
 // WatchInventoryAge sets what port49_inventory_snapshot_age_seconds reports.
@@ -202,6 +211,8 @@ func New(reg prometheus.Registerer) *Metrics {
 			Help: "Attempts to put a changed inventory file in force, by outcome."}, []string{"outcome"}),
 		InventoryFileRefused: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_inventory_file_refused",
 			Help: "1 while the inventory file on disk is one port49d refused, or has not stopped changing."}),
+		InventoryChanges: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_inventory_changes_total",
+			Help: "Security-relevant changes a bundle swap made, by kind."}, []string{"kind"}),
 	}
 	m.InventorySnapshotAge = prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "port49_inventory_snapshot_age_seconds",
 		Help: "Seconds since the inventory file was last read and found in force, or loaded."}, func() float64 {
@@ -228,6 +239,7 @@ func New(reg prometheus.Registerer) *Metrics {
 		m.Connections, m.ConnectionEvents, m.AuthFailures, m.SpoolDepth, m.SpoolDrops, m.SpoolQuarantines,
 		m.StoreOps, m.DecisionLogWriteFailures, m.CryptOpenFailures, m.Attributions, m.BrokerItemErrors, m.BlobCache,
 		m.DevicesQuarantined, m.DevicesAdmissionRefused, m.ContextRefreshes, m.TokensSuperseded, m.PolicyReloads, m.PolicyFileRefused,
-		m.PolicyRefreshPending, m.InventoryReloads, m.InventoryFileRefused, m.InventorySnapshotAge)
+		m.PolicyRefreshPending, m.InventoryReloads, m.InventoryFileRefused, m.InventorySnapshotAge,
+		m.InventoryChanges)
 	return m
 }
