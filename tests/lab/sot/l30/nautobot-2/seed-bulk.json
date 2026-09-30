@@ -1,0 +1,14 @@
+[
+  {
+    "created": 100,
+    "sent": 100,
+    "status": 201,
+    "step": "bulk_2"
+  },
+  {
+    "created": 19,
+    "sent": 19,
+    "status": 201,
+    "step": "bulk_102"
+  }
+]

@@ -1,0 +1,32 @@
+{
+  "step": "api_root",
+  "method": "GET",
+  "path": "/api/",
+  "status": 200,
+  "headers": {
+    "Allow": "GET, HEAD, OPTIONS",
+    "Api-Version": "2.4",
+    "Content-Length": "613",
+    "Content-Type": "application/json",
+    "Cross-Origin-Opener-Policy": "same-origin",
+    "Referrer-Policy": "same-origin",
+    "Vary": "Accept, Cookie, origin",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY"
+  },
+  "body": {
+    "apps": "http://127.0.0.1:18020/api/apps/",
+    "circuits": "http://127.0.0.1:18020/api/circuits/",
+    "cloud": "http://127.0.0.1:18020/api/cloud/",
+    "dcim": "http://127.0.0.1:18020/api/dcim/",
+    "extras": "http://127.0.0.1:18020/api/extras/",
+    "graphql": "http://127.0.0.1:18020/api/graphql/",
+    "ipam": "http://127.0.0.1:18020/api/ipam/",
+    "plugins": "http://127.0.0.1:18020/api/plugins/",
+    "status": "http://127.0.0.1:18020/api/status/",
+    "tenancy": "http://127.0.0.1:18020/api/tenancy/",
+    "users": "http://127.0.0.1:18020/api/users/",
+    "virtualization": "http://127.0.0.1:18020/api/virtualization/",
+    "wireless": "http://127.0.0.1:18020/api/wireless/"
+  }
+}

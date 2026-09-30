@@ -1,0 +1,1095 @@
+{
+  "calls": [
+    {
+      "step": "webhook",
+      "method": "POST",
+      "path": "/api/extras/webhooks/",
+      "request": {
+        "content_types": [
+          "dcim.device"
+        ],
+        "enabled": true,
+        "http_content_type": "application/json",
+        "http_method": "POST",
+        "name": "l27",
+        "payload_url": "http://172.19.0.1:18999/",
+        "secret": "l27-lab-webhook-secret",
+        "type_create": true,
+        "type_delete": true,
+        "type_update": true
+      },
+      "status": 201,
+      "headers": {
+        "Allow": "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS",
+        "Api-Version": "1.2",
+        "Content-Length": "643",
+        "Content-Type": "application/json",
+        "Location": "http://127.0.0.1:18016/api/extras/webhooks/452bede5-47bb-45dd-af0d-be21d92adf14/",
+        "Referrer-Policy": "same-origin",
+        "Vary": "Accept, Cookie, origin",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY"
+      },
+      "body": {
+        "id": "452bede5-47bb-45dd-af0d-be21d92adf14",
+        "display": "l27",
+        "url": "http://127.0.0.1:18016/api/extras/webhooks/452bede5-47bb-45dd-af0d-be21d92adf14/",
+        "content_types": [
+          "dcim.device"
+        ],
+        "name": "l27",
+        "type_create": true,
+        "type_update": true,
+        "type_delete": true,
+        "payload_url": "http://172.19.0.1:18999/",
+        "http_method": "POST",
+        "http_content_type": "application/json",
+        "additional_headers": "",
+        "body_template": "",
+        "secret": "l27-lab-webhook-secret",
+        "ssl_verification": true,
+        "ca_file_path": null,
+        "created": "2026-09-30",
+        "last_updated": "2026-09-30T15:45:08.731406Z",
+        "notes_url": "http://127.0.0.1:18016/api/extras/webhooks/452bede5-47bb-45dd-af0d-be21d92adf14/notes/"
+      }
+    },
+    {
+      "step": "update",
+      "method": "PATCH",
+      "path": "/api/dcim/devices/c704dca0-b82d-45f2-859a-38ff1d3f5d9b/",
+      "request": {
+        "custom_fields": {
+          "os_version": "4.32.2F"
+        }
+      },
+      "status": 200,
+      "headers": {
+        "Allow": "GET, PUT, PATCH, DELETE, HEAD, OPTIONS",
+        "Api-Version": "1.2",
+        "Content-Length": "2520",
+        "Content-Type": "application/json",
+        "Referrer-Policy": "same-origin",
+        "Vary": "Accept, Cookie, origin",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY"
+      },
+      "body": {
+        "id": "c704dca0-b82d-45f2-859a-38ff1d3f5d9b",
+        "display": "leaf-01",
+        "url": "http://127.0.0.1:18016/api/dcim/devices/c704dca0-b82d-45f2-859a-38ff1d3f5d9b/",
+        "name": "leaf-01",
+        "device_type": {
+          "display": "Arista vEOS",
+          "id": "1f611b8f-e7c6-47db-9dc5-1c032fcd8937",
+          "url": "http://127.0.0.1:18016/api/dcim/device-types/1f611b8f-e7c6-47db-9dc5-1c032fcd8937/",
+          "manufacturer": {
+            "display": "Arista",
+            "id": "7222f27a-4855-44ad-ae00-8aae2f6af03f",
+            "url": "http://127.0.0.1:18016/api/dcim/manufacturers/7222f27a-4855-44ad-ae00-8aae2f6af03f/",
+            "name": "Arista",
+            "slug": "arista"
+          },
+          "model": "vEOS",
+          "slug": "veos"
+        },
+        "device_role": {
+          "display": "leaf",
+          "id": "a57abca4-2d55-4367-84d5-56e738cc36dd",
+          "url": "http://127.0.0.1:18016/api/dcim/device-roles/a57abca4-2d55-4367-84d5-56e738cc36dd/",
+          "name": "leaf",
+          "slug": "leaf"
+        },
+        "tenant": null,
+        "platform": {
+          "display": "eos",
+          "id": "2f76cebd-1df9-4993-a299-f5f67cd4ac12",
+          "url": "http://127.0.0.1:18016/api/dcim/platforms/2f76cebd-1df9-4993-a299-f5f67cd4ac12/",
+          "name": "eos",
+          "slug": "eos"
+        },
+        "serial": "",
+        "asset_tag": null,
+        "site": {
+          "display": "dc1",
+          "id": "779bc198-eff8-46ee-9821-8d0434aea770",
+          "url": "http://127.0.0.1:18016/api/dcim/sites/779bc198-eff8-46ee-9821-8d0434aea770/",
+          "name": "dc1",
+          "slug": "dc1"
+        },
+        "location": null,
+        "rack": null,
+        "position": null,
+        "face": null,
+        "parent_device": null,
+        "status": {
+          "value": "active",
+          "label": "Active"
+        },
+        "primary_ip": {
+          "display": "10.0.1.5/32",
+          "id": "f8343209-3d58-4274-b766-c43d99aeb04e",
+          "url": "http://127.0.0.1:18016/api/ipam/ip-addresses/f8343209-3d58-4274-b766-c43d99aeb04e/",
+          "family": 4,
+          "address": "10.0.1.5/32"
+        },
+        "primary_ip4": {
+          "display": "10.0.1.5/32",
+          "id": "f8343209-3d58-4274-b766-c43d99aeb04e",
+          "url": "http://127.0.0.1:18016/api/ipam/ip-addresses/f8343209-3d58-4274-b766-c43d99aeb04e/",
+          "family": 4,
+          "address": "10.0.1.5/32"
+        },
+        "primary_ip6": null,
+        "secrets_group": null,
+        "cluster": null,
+        "virtual_chassis": null,
+        "vc_position": null,
+        "vc_priority": null,
+        "device_redundancy_group": null,
+        "device_redundancy_group_priority": null,
+        "comments": "",
+        "local_context_schema": null,
+        "local_context_data": null,
+        "config_context": {},
+        "created": "2026-09-30",
+        "last_updated": "2026-09-30T15:45:08.992305Z",
+        "tags": [
+          {
+            "display": "port49",
+            "id": "0f9913aa-8046-44a6-b0ba-776246283dda",
+            "url": "http://127.0.0.1:18016/api/extras/tags/0f9913aa-8046-44a6-b0ba-776246283dda/",
+            "name": "port49",
+            "slug": "port49",
+            "color": "9e9e9e",
+            "created": "2026-09-30",
+            "last_updated": "2026-09-30T15:45:00.639144Z"
+          }
+        ],
+        "notes_url": "http://127.0.0.1:18016/api/dcim/devices/c704dca0-b82d-45f2-859a-38ff1d3f5d9b/notes/",
+        "custom_fields": {
+          "os_version": "4.32.2F"
+        },
+        "computed_fields": {},
+        "relationships": {}
+      }
+    },
+    {
+      "step": "create_2",
+      "method": "POST",
+      "path": "/api/dcim/devices/",
+      "request": {
+        "device_type": "1f611b8f-e7c6-47db-9dc5-1c032fcd8937",
+        "location": "779bc198-eff8-46ee-9821-8d0434aea770",
+        "name": "leaf-02",
+        "role": "a57abca4-2d55-4367-84d5-56e738cc36dd",
+        "status": "Active"
+      },
+      "status": 400,
+      "headers": {
+        "Allow": "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS",
+        "Api-Version": "1.2",
+        "Content-Length": "178",
+        "Content-Type": "application/json",
+        "Referrer-Policy": "same-origin",
+        "Vary": "Accept, Cookie, origin",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY"
+      },
+      "body": {
+        "device_role": [
+          "This field is required."
+        ],
+        "site": [
+          "This field is required."
+        ],
+        "location": [
+          "Related object not found using the provided ID: 779bc198-eff8-46ee-9821-8d0434aea770"
+        ]
+      }
+    },
+    {
+      "step": "create_2_v1",
+      "method": "POST",
+      "path": "/api/dcim/devices/",
+      "request": {
+        "device_role": "a57abca4-2d55-4367-84d5-56e738cc36dd",
+        "device_type": "1f611b8f-e7c6-47db-9dc5-1c032fcd8937",
+        "name": "leaf-02",
+        "site": "779bc198-eff8-46ee-9821-8d0434aea770",
+        "status": "active"
+      },
+      "status": 201,
+      "headers": {
+        "Allow": "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS",
+        "Api-Version": "1.2",
+        "Content-Length": "1696",
+        "Content-Type": "application/json",
+        "Location": "http://127.0.0.1:18016/api/dcim/devices/a1b4daa4-a10d-4d61-81eb-e65e348beb7e/",
+        "Referrer-Policy": "same-origin",
+        "Vary": "Accept, Cookie, origin",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY"
+      },
+      "body": {
+        "id": "a1b4daa4-a10d-4d61-81eb-e65e348beb7e",
+        "display": "leaf-02",
+        "url": "http://127.0.0.1:18016/api/dcim/devices/a1b4daa4-a10d-4d61-81eb-e65e348beb7e/",
+        "name": "leaf-02",
+        "device_type": {
+          "display": "Arista vEOS",
+          "id": "1f611b8f-e7c6-47db-9dc5-1c032fcd8937",
+          "url": "http://127.0.0.1:18016/api/dcim/device-types/1f611b8f-e7c6-47db-9dc5-1c032fcd8937/",
+          "manufacturer": {
+            "display": "Arista",
+            "id": "7222f27a-4855-44ad-ae00-8aae2f6af03f",
+            "url": "http://127.0.0.1:18016/api/dcim/manufacturers/7222f27a-4855-44ad-ae00-8aae2f6af03f/",
+            "name": "Arista",
+            "slug": "arista"
+          },
+          "model": "vEOS",
+          "slug": "veos"
+        },
+        "device_role": {
+          "display": "leaf",
+          "id": "a57abca4-2d55-4367-84d5-56e738cc36dd",
+          "url": "http://127.0.0.1:18016/api/dcim/device-roles/a57abca4-2d55-4367-84d5-56e738cc36dd/",
+          "name": "leaf",
+          "slug": "leaf"
+        },
+        "tenant": null,
+        "platform": null,
+        "serial": "",
+        "asset_tag": null,
+        "site": {
+          "display": "dc1",
+          "id": "779bc198-eff8-46ee-9821-8d0434aea770",
+          "url": "http://127.0.0.1:18016/api/dcim/sites/779bc198-eff8-46ee-9821-8d0434aea770/",
+          "name": "dc1",
+          "slug": "dc1"
+        },
+        "location": null,
+        "rack": null,
+        "position": null,
+        "face": null,
+        "parent_device": null,
+        "status": {
+          "value": "active",
+          "label": "Active"
+        },
+        "primary_ip": null,
+        "primary_ip4": null,
+        "primary_ip6": null,
+        "secrets_group": null,
+        "cluster": null,
+        "virtual_chassis": null,
+        "vc_position": null,
+        "vc_priority": null,
+        "device_redundancy_group": null,
+        "device_redundancy_group_priority": null,
+        "comments": "",
+        "local_context_schema": null,
+        "local_context_data": null,
+        "config_context": {},
+        "created": "2026-09-30",
+        "last_updated": "2026-09-30T15:45:09.050263Z",
+        "tags": [],
+        "notes_url": "http://127.0.0.1:18016/api/dcim/devices/a1b4daa4-a10d-4d61-81eb-e65e348beb7e/notes/",
+        "custom_fields": {
+          "os_version": null
+        },
+        "computed_fields": {},
+        "relationships": {}
+      }
+    },
+    {
+      "step": "delete_2",
+      "method": "DELETE",
+      "path": "/api/dcim/devices/a1b4daa4-a10d-4d61-81eb-e65e348beb7e/",
+      "request": {},
+      "status": 204,
+      "headers": {
+        "Allow": "GET, PUT, PATCH, DELETE, HEAD, OPTIONS",
+        "Api-Version": "1.2",
+        "Content-Length": "0",
+        "Referrer-Policy": "same-origin",
+        "Vary": "Accept, Cookie, origin",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY"
+      },
+      "body": ""
+    }
+  ],
+  "deliveries": [
+    {
+      "at": "2026-09-30T15:45:09.010300259Z",
+      "headers": {
+        "Accept-Encoding": "identity",
+        "Content-Length": "7527",
+        "Content-Type": "application/json",
+        "User-Agent": "python-urllib3/2.2.2",
+        "X-Hook-Signature": "c4b8ec9615bde61e813bdbf6fdad4103fda597198651223d2f116630d97a9573ef83e917eed134b5769a5f083107bacda554aa0776d2671a214fdc7934d32316"
+      },
+      "body": {
+        "event": "updated",
+        "timestamp": "2026-09-30 15:45:09.003345+00:00",
+        "model": "device",
+        "username": "admin",
+        "request_id": "c98cf614-c5e5-4d57-ae59-976087788e04",
+        "data": {
+          "id": "c704dca0-b82d-45f2-859a-38ff1d3f5d9b",
+          "display": "leaf-01",
+          "url": "/api/dcim/devices/c704dca0-b82d-45f2-859a-38ff1d3f5d9b/",
+          "name": "leaf-01",
+          "device_type": {
+            "display": "Arista vEOS",
+            "id": "1f611b8f-e7c6-47db-9dc5-1c032fcd8937",
+            "url": "/api/dcim/device-types/1f611b8f-e7c6-47db-9dc5-1c032fcd8937/",
+            "manufacturer": {
+              "display": "Arista",
+              "id": "7222f27a-4855-44ad-ae00-8aae2f6af03f",
+              "url": "/api/dcim/manufacturers/7222f27a-4855-44ad-ae00-8aae2f6af03f/",
+              "name": "Arista",
+              "slug": "arista"
+            },
+            "model": "vEOS",
+            "slug": "veos"
+          },
+          "device_role": {
+            "display": "leaf",
+            "id": "a57abca4-2d55-4367-84d5-56e738cc36dd",
+            "url": "/api/dcim/device-roles/a57abca4-2d55-4367-84d5-56e738cc36dd/",
+            "name": "leaf",
+            "slug": "leaf"
+          },
+          "tenant": null,
+          "platform": {
+            "display": "eos",
+            "id": "2f76cebd-1df9-4993-a299-f5f67cd4ac12",
+            "url": "/api/dcim/platforms/2f76cebd-1df9-4993-a299-f5f67cd4ac12/",
+            "name": "eos",
+            "slug": "eos"
+          },
+          "serial": "",
+          "asset_tag": null,
+          "site": {
+            "display": "dc1",
+            "id": "779bc198-eff8-46ee-9821-8d0434aea770",
+            "url": "/api/dcim/sites/779bc198-eff8-46ee-9821-8d0434aea770/",
+            "name": "dc1",
+            "slug": "dc1"
+          },
+          "location": null,
+          "rack": null,
+          "position": null,
+          "face": null,
+          "parent_device": null,
+          "status": {
+            "value": "active",
+            "label": "Active"
+          },
+          "primary_ip": {
+            "display": "10.0.1.5/32",
+            "id": "f8343209-3d58-4274-b766-c43d99aeb04e",
+            "url": "/api/ipam/ip-addresses/f8343209-3d58-4274-b766-c43d99aeb04e/",
+            "family": 4,
+            "address": "10.0.1.5/32"
+          },
+          "primary_ip4": {
+            "display": "10.0.1.5/32",
+            "id": "f8343209-3d58-4274-b766-c43d99aeb04e",
+            "url": "/api/ipam/ip-addresses/f8343209-3d58-4274-b766-c43d99aeb04e/",
+            "family": 4,
+            "address": "10.0.1.5/32"
+          },
+          "primary_ip6": null,
+          "secrets_group": null,
+          "cluster": null,
+          "virtual_chassis": null,
+          "vc_position": null,
+          "vc_priority": null,
+          "device_redundancy_group": null,
+          "device_redundancy_group_priority": null,
+          "comments": "",
+          "local_context_schema": null,
+          "local_context_data": null,
+          "created": "2026-09-30",
+          "last_updated": "2026-09-30T15:45:08.992305Z",
+          "tags": [
+            {
+              "display": "port49",
+              "id": "0f9913aa-8046-44a6-b0ba-776246283dda",
+              "url": "/api/extras/tags/0f9913aa-8046-44a6-b0ba-776246283dda/",
+              "name": "port49",
+              "slug": "port49",
+              "color": "9e9e9e",
+              "created": "2026-09-30",
+              "last_updated": "2026-09-30T15:45:00.639144Z"
+            }
+          ],
+          "notes_url": "/api/dcim/devices/c704dca0-b82d-45f2-859a-38ff1d3f5d9b/notes/",
+          "custom_fields": {
+            "os_version": "4.32.2F"
+          }
+        },
+        "snapshots": {
+          "prechange": {
+            "id": "c704dca0-b82d-45f2-859a-38ff1d3f5d9b",
+            "url": "/api/dcim/devices/c704dca0-b82d-45f2-859a-38ff1d3f5d9b/",
+            "face": null,
+            "name": "leaf-01",
+            "rack": null,
+            "site": {
+              "id": "779bc198-eff8-46ee-9821-8d0434aea770",
+              "url": "/api/dcim/sites/779bc198-eff8-46ee-9821-8d0434aea770/",
+              "name": "dc1",
+              "slug": "dc1",
+              "display": "dc1"
+            },
+            "tags": [
+              {
+                "id": "0f9913aa-8046-44a6-b0ba-776246283dda",
+                "url": "/api/extras/tags/0f9913aa-8046-44a6-b0ba-776246283dda/",
+                "name": "port49",
+                "slug": "port49",
+                "color": "9e9e9e",
+                "created": "2026-09-30",
+                "display": "port49",
+                "last_updated": "2026-09-30T15:45:00.639144Z"
+              }
+            ],
+            "serial": "",
+            "status": {
+              "label": "Active",
+              "value": "active"
+            },
+            "tenant": null,
+            "cluster": null,
+            "created": "2026-09-30",
+            "display": "leaf-01",
+            "comments": "",
+            "location": null,
+            "platform": {
+              "id": "2f76cebd-1df9-4993-a299-f5f67cd4ac12",
+              "url": "/api/dcim/platforms/2f76cebd-1df9-4993-a299-f5f67cd4ac12/",
+              "name": "eos",
+              "slug": "eos",
+              "display": "eos"
+            },
+            "position": null,
+            "asset_tag": null,
+            "notes_url": "/api/dcim/devices/c704dca0-b82d-45f2-859a-38ff1d3f5d9b/notes/",
+            "primary_ip": {
+              "id": "f8343209-3d58-4274-b766-c43d99aeb04e",
+              "url": "/api/ipam/ip-addresses/f8343209-3d58-4274-b766-c43d99aeb04e/",
+              "family": 4,
+              "address": "10.0.1.5/32",
+              "display": "10.0.1.5/32"
+            },
+            "device_role": {
+              "id": "a57abca4-2d55-4367-84d5-56e738cc36dd",
+              "url": "/api/dcim/device-roles/a57abca4-2d55-4367-84d5-56e738cc36dd/",
+              "name": "leaf",
+              "slug": "leaf",
+              "display": "leaf"
+            },
+            "device_type": {
+              "id": "1f611b8f-e7c6-47db-9dc5-1c032fcd8937",
+              "url": "/api/dcim/device-types/1f611b8f-e7c6-47db-9dc5-1c032fcd8937/",
+              "slug": "veos",
+              "model": "vEOS",
+              "display": "Arista vEOS",
+              "manufacturer": {
+                "id": "7222f27a-4855-44ad-ae00-8aae2f6af03f",
+                "url": "/api/dcim/manufacturers/7222f27a-4855-44ad-ae00-8aae2f6af03f/",
+                "name": "Arista",
+                "slug": "arista",
+                "display": "Arista"
+              }
+            },
+            "primary_ip4": {
+              "id": "f8343209-3d58-4274-b766-c43d99aeb04e",
+              "url": "/api/ipam/ip-addresses/f8343209-3d58-4274-b766-c43d99aeb04e/",
+              "family": 4,
+              "address": "10.0.1.5/32",
+              "display": "10.0.1.5/32"
+            },
+            "primary_ip6": null,
+            "vc_position": null,
+            "vc_priority": null,
+            "last_updated": "2026-09-30T15:45:01.191651Z",
+            "custom_fields": {
+              "os_version": "4.31.2F"
+            },
+            "parent_device": null,
+            "secrets_group": null,
+            "virtual_chassis": null,
+            "local_context_data": null,
+            "local_context_schema": null,
+            "device_redundancy_group": null,
+            "device_redundancy_group_priority": null
+          },
+          "postchange": {
+            "id": "c704dca0-b82d-45f2-859a-38ff1d3f5d9b",
+            "url": "/api/dcim/devices/c704dca0-b82d-45f2-859a-38ff1d3f5d9b/",
+            "face": null,
+            "name": "leaf-01",
+            "rack": null,
+            "site": {
+              "id": "779bc198-eff8-46ee-9821-8d0434aea770",
+              "url": "/api/dcim/sites/779bc198-eff8-46ee-9821-8d0434aea770/",
+              "name": "dc1",
+              "slug": "dc1",
+              "display": "dc1"
+            },
+            "tags": [
+              {
+                "id": "0f9913aa-8046-44a6-b0ba-776246283dda",
+                "url": "/api/extras/tags/0f9913aa-8046-44a6-b0ba-776246283dda/",
+                "name": "port49",
+                "slug": "port49",
+                "color": "9e9e9e",
+                "created": "2026-09-30",
+                "display": "port49",
+                "last_updated": "2026-09-30T15:45:00.639144Z"
+              }
+            ],
+            "serial": "",
+            "status": {
+              "label": "Active",
+              "value": "active"
+            },
+            "tenant": null,
+            "cluster": null,
+            "created": "2026-09-30",
+            "display": "leaf-01",
+            "comments": "",
+            "location": null,
+            "platform": {
+              "id": "2f76cebd-1df9-4993-a299-f5f67cd4ac12",
+              "url": "/api/dcim/platforms/2f76cebd-1df9-4993-a299-f5f67cd4ac12/",
+              "name": "eos",
+              "slug": "eos",
+              "display": "eos"
+            },
+            "position": null,
+            "asset_tag": null,
+            "notes_url": "/api/dcim/devices/c704dca0-b82d-45f2-859a-38ff1d3f5d9b/notes/",
+            "primary_ip": {
+              "id": "f8343209-3d58-4274-b766-c43d99aeb04e",
+              "url": "/api/ipam/ip-addresses/f8343209-3d58-4274-b766-c43d99aeb04e/",
+              "family": 4,
+              "address": "10.0.1.5/32",
+              "display": "10.0.1.5/32"
+            },
+            "device_role": {
+              "id": "a57abca4-2d55-4367-84d5-56e738cc36dd",
+              "url": "/api/dcim/device-roles/a57abca4-2d55-4367-84d5-56e738cc36dd/",
+              "name": "leaf",
+              "slug": "leaf",
+              "display": "leaf"
+            },
+            "device_type": {
+              "id": "1f611b8f-e7c6-47db-9dc5-1c032fcd8937",
+              "url": "/api/dcim/device-types/1f611b8f-e7c6-47db-9dc5-1c032fcd8937/",
+              "slug": "veos",
+              "model": "vEOS",
+              "display": "Arista vEOS",
+              "manufacturer": {
+                "id": "7222f27a-4855-44ad-ae00-8aae2f6af03f",
+                "url": "/api/dcim/manufacturers/7222f27a-4855-44ad-ae00-8aae2f6af03f/",
+                "name": "Arista",
+                "slug": "arista",
+                "display": "Arista"
+              }
+            },
+            "primary_ip4": {
+              "id": "f8343209-3d58-4274-b766-c43d99aeb04e",
+              "url": "/api/ipam/ip-addresses/f8343209-3d58-4274-b766-c43d99aeb04e/",
+              "family": 4,
+              "address": "10.0.1.5/32",
+              "display": "10.0.1.5/32"
+            },
+            "primary_ip6": null,
+            "vc_position": null,
+            "vc_priority": null,
+            "last_updated": "2026-09-30T15:45:08.992305Z",
+            "custom_fields": {
+              "os_version": "4.32.2F"
+            },
+            "parent_device": null,
+            "secrets_group": null,
+            "virtual_chassis": null,
+            "local_context_data": null,
+            "local_context_schema": null,
+            "device_redundancy_group": null,
+            "device_redundancy_group_priority": null
+          },
+          "differences": {
+            "removed": {
+              "custom_fields": {
+                "os_version": "4.31.2F"
+              }
+            },
+            "added": {
+              "custom_fields": {
+                "os_version": "4.32.2F"
+              }
+            }
+          }
+        }
+      },
+      "signature_is_hmac_sha512_of_body": true
+    },
+    {
+      "at": "2026-09-30T15:45:09.066385231Z",
+      "headers": {
+        "Accept-Encoding": "identity",
+        "Content-Length": "5113",
+        "Content-Type": "application/json",
+        "User-Agent": "python-urllib3/2.2.2",
+        "X-Hook-Signature": "d2a205214cd3e6c5a9f1174590f26aa5b08ad37572f7a039597beabed8fe333955260bc0260262399250212ed6547287efb3f94c73b55704e3f5bdc15e366f3e"
+      },
+      "body": {
+        "event": "created",
+        "timestamp": "2026-09-30 15:45:09.061855+00:00",
+        "model": "device",
+        "username": "admin",
+        "request_id": "89c60c88-c828-412e-8bdf-34d145e21c86",
+        "data": {
+          "id": "a1b4daa4-a10d-4d61-81eb-e65e348beb7e",
+          "display": "leaf-02",
+          "url": "/api/dcim/devices/a1b4daa4-a10d-4d61-81eb-e65e348beb7e/",
+          "name": "leaf-02",
+          "device_type": {
+            "display": "Arista vEOS",
+            "id": "1f611b8f-e7c6-47db-9dc5-1c032fcd8937",
+            "url": "/api/dcim/device-types/1f611b8f-e7c6-47db-9dc5-1c032fcd8937/",
+            "manufacturer": {
+              "display": "Arista",
+              "id": "7222f27a-4855-44ad-ae00-8aae2f6af03f",
+              "url": "/api/dcim/manufacturers/7222f27a-4855-44ad-ae00-8aae2f6af03f/",
+              "name": "Arista",
+              "slug": "arista"
+            },
+            "model": "vEOS",
+            "slug": "veos"
+          },
+          "device_role": {
+            "display": "leaf",
+            "id": "a57abca4-2d55-4367-84d5-56e738cc36dd",
+            "url": "/api/dcim/device-roles/a57abca4-2d55-4367-84d5-56e738cc36dd/",
+            "name": "leaf",
+            "slug": "leaf"
+          },
+          "tenant": null,
+          "platform": null,
+          "serial": "",
+          "asset_tag": null,
+          "site": {
+            "display": "dc1",
+            "id": "779bc198-eff8-46ee-9821-8d0434aea770",
+            "url": "/api/dcim/sites/779bc198-eff8-46ee-9821-8d0434aea770/",
+            "name": "dc1",
+            "slug": "dc1"
+          },
+          "location": null,
+          "rack": null,
+          "position": null,
+          "face": null,
+          "parent_device": null,
+          "status": {
+            "value": "active",
+            "label": "Active"
+          },
+          "primary_ip": null,
+          "primary_ip4": null,
+          "primary_ip6": null,
+          "secrets_group": null,
+          "cluster": null,
+          "virtual_chassis": null,
+          "vc_position": null,
+          "vc_priority": null,
+          "device_redundancy_group": null,
+          "device_redundancy_group_priority": null,
+          "comments": "",
+          "local_context_schema": null,
+          "local_context_data": null,
+          "created": "2026-09-30",
+          "last_updated": "2026-09-30T15:45:09.050263Z",
+          "tags": [],
+          "notes_url": "/api/dcim/devices/a1b4daa4-a10d-4d61-81eb-e65e348beb7e/notes/",
+          "custom_fields": {
+            "os_version": null
+          }
+        },
+        "snapshots": {
+          "prechange": null,
+          "postchange": {
+            "id": "a1b4daa4-a10d-4d61-81eb-e65e348beb7e",
+            "url": "/api/dcim/devices/a1b4daa4-a10d-4d61-81eb-e65e348beb7e/",
+            "face": null,
+            "name": "leaf-02",
+            "rack": null,
+            "site": {
+              "id": "779bc198-eff8-46ee-9821-8d0434aea770",
+              "url": "/api/dcim/sites/779bc198-eff8-46ee-9821-8d0434aea770/",
+              "name": "dc1",
+              "slug": "dc1",
+              "display": "dc1"
+            },
+            "tags": [],
+            "serial": "",
+            "status": {
+              "label": "Active",
+              "value": "active"
+            },
+            "tenant": null,
+            "cluster": null,
+            "created": "2026-09-30",
+            "display": "leaf-02",
+            "comments": "",
+            "location": null,
+            "platform": null,
+            "position": null,
+            "asset_tag": null,
+            "notes_url": "/api/dcim/devices/a1b4daa4-a10d-4d61-81eb-e65e348beb7e/notes/",
+            "primary_ip": null,
+            "device_role": {
+              "id": "a57abca4-2d55-4367-84d5-56e738cc36dd",
+              "url": "/api/dcim/device-roles/a57abca4-2d55-4367-84d5-56e738cc36dd/",
+              "name": "leaf",
+              "slug": "leaf",
+              "display": "leaf"
+            },
+            "device_type": {
+              "id": "1f611b8f-e7c6-47db-9dc5-1c032fcd8937",
+              "url": "/api/dcim/device-types/1f611b8f-e7c6-47db-9dc5-1c032fcd8937/",
+              "slug": "veos",
+              "model": "vEOS",
+              "display": "Arista vEOS",
+              "manufacturer": {
+                "id": "7222f27a-4855-44ad-ae00-8aae2f6af03f",
+                "url": "/api/dcim/manufacturers/7222f27a-4855-44ad-ae00-8aae2f6af03f/",
+                "name": "Arista",
+                "slug": "arista",
+                "display": "Arista"
+              }
+            },
+            "primary_ip4": null,
+            "primary_ip6": null,
+            "vc_position": null,
+            "vc_priority": null,
+            "last_updated": "2026-09-30T15:45:09.050263Z",
+            "custom_fields": {
+              "os_version": null
+            },
+            "parent_device": null,
+            "secrets_group": null,
+            "virtual_chassis": null,
+            "local_context_data": null,
+            "local_context_schema": null,
+            "device_redundancy_group": null,
+            "device_redundancy_group_priority": null
+          },
+          "differences": {
+            "removed": null,
+            "added": {
+              "id": "a1b4daa4-a10d-4d61-81eb-e65e348beb7e",
+              "url": "/api/dcim/devices/a1b4daa4-a10d-4d61-81eb-e65e348beb7e/",
+              "face": null,
+              "name": "leaf-02",
+              "rack": null,
+              "site": {
+                "id": "779bc198-eff8-46ee-9821-8d0434aea770",
+                "url": "/api/dcim/sites/779bc198-eff8-46ee-9821-8d0434aea770/",
+                "name": "dc1",
+                "slug": "dc1",
+                "display": "dc1"
+              },
+              "tags": [],
+              "serial": "",
+              "status": {
+                "label": "Active",
+                "value": "active"
+              },
+              "tenant": null,
+              "cluster": null,
+              "created": "2026-09-30",
+              "display": "leaf-02",
+              "comments": "",
+              "location": null,
+              "platform": null,
+              "position": null,
+              "asset_tag": null,
+              "notes_url": "/api/dcim/devices/a1b4daa4-a10d-4d61-81eb-e65e348beb7e/notes/",
+              "primary_ip": null,
+              "device_role": {
+                "id": "a57abca4-2d55-4367-84d5-56e738cc36dd",
+                "url": "/api/dcim/device-roles/a57abca4-2d55-4367-84d5-56e738cc36dd/",
+                "name": "leaf",
+                "slug": "leaf",
+                "display": "leaf"
+              },
+              "device_type": {
+                "id": "1f611b8f-e7c6-47db-9dc5-1c032fcd8937",
+                "url": "/api/dcim/device-types/1f611b8f-e7c6-47db-9dc5-1c032fcd8937/",
+                "slug": "veos",
+                "model": "vEOS",
+                "display": "Arista vEOS",
+                "manufacturer": {
+                  "id": "7222f27a-4855-44ad-ae00-8aae2f6af03f",
+                  "url": "/api/dcim/manufacturers/7222f27a-4855-44ad-ae00-8aae2f6af03f/",
+                  "name": "Arista",
+                  "slug": "arista",
+                  "display": "Arista"
+                }
+              },
+              "primary_ip4": null,
+              "primary_ip6": null,
+              "vc_position": null,
+              "vc_priority": null,
+              "last_updated": "2026-09-30T15:45:09.050263Z",
+              "custom_fields": {
+                "os_version": null
+              },
+              "parent_device": null,
+              "secrets_group": null,
+              "virtual_chassis": null,
+              "local_context_data": null,
+              "local_context_schema": null,
+              "device_redundancy_group": null,
+              "device_redundancy_group_priority": null
+            }
+          }
+        }
+      },
+      "signature_is_hmac_sha512_of_body": true
+    },
+    {
+      "at": "2026-09-30T15:45:09.20799526Z",
+      "headers": {
+        "Accept-Encoding": "identity",
+        "Content-Length": "5113",
+        "Content-Type": "application/json",
+        "User-Agent": "python-urllib3/2.2.2",
+        "X-Hook-Signature": "131419e2b42c890711d0ad1774aeca44faeb0ca7e55746ae4d0ae5232b32dca1a768eee93d5c3a987b5e79fafb41912fcca789c485728ef6a9398e3825b6ee00"
+      },
+      "body": {
+        "event": "deleted",
+        "timestamp": "2026-09-30 15:45:09.203432+00:00",
+        "model": "device",
+        "username": "admin",
+        "request_id": "c017c47d-8a54-4a12-bfe2-9face1e61f7e",
+        "data": {
+          "id": "a1b4daa4-a10d-4d61-81eb-e65e348beb7e",
+          "display": "leaf-02",
+          "url": "/api/dcim/devices/a1b4daa4-a10d-4d61-81eb-e65e348beb7e/",
+          "name": "leaf-02",
+          "device_type": {
+            "display": "Arista vEOS",
+            "id": "1f611b8f-e7c6-47db-9dc5-1c032fcd8937",
+            "url": "/api/dcim/device-types/1f611b8f-e7c6-47db-9dc5-1c032fcd8937/",
+            "manufacturer": {
+              "display": "Arista",
+              "id": "7222f27a-4855-44ad-ae00-8aae2f6af03f",
+              "url": "/api/dcim/manufacturers/7222f27a-4855-44ad-ae00-8aae2f6af03f/",
+              "name": "Arista",
+              "slug": "arista"
+            },
+            "model": "vEOS",
+            "slug": "veos"
+          },
+          "device_role": {
+            "display": "leaf",
+            "id": "a57abca4-2d55-4367-84d5-56e738cc36dd",
+            "url": "/api/dcim/device-roles/a57abca4-2d55-4367-84d5-56e738cc36dd/",
+            "name": "leaf",
+            "slug": "leaf"
+          },
+          "tenant": null,
+          "platform": null,
+          "serial": "",
+          "asset_tag": null,
+          "site": {
+            "display": "dc1",
+            "id": "779bc198-eff8-46ee-9821-8d0434aea770",
+            "url": "/api/dcim/sites/779bc198-eff8-46ee-9821-8d0434aea770/",
+            "name": "dc1",
+            "slug": "dc1"
+          },
+          "location": null,
+          "rack": null,
+          "position": null,
+          "face": null,
+          "parent_device": null,
+          "status": {
+            "value": "active",
+            "label": "Active"
+          },
+          "primary_ip": null,
+          "primary_ip4": null,
+          "primary_ip6": null,
+          "secrets_group": null,
+          "cluster": null,
+          "virtual_chassis": null,
+          "vc_position": null,
+          "vc_priority": null,
+          "device_redundancy_group": null,
+          "device_redundancy_group_priority": null,
+          "comments": "",
+          "local_context_schema": null,
+          "local_context_data": null,
+          "created": "2026-09-30",
+          "last_updated": "2026-09-30T15:45:09.050263Z",
+          "tags": [],
+          "notes_url": "/api/dcim/devices/a1b4daa4-a10d-4d61-81eb-e65e348beb7e/notes/",
+          "custom_fields": {
+            "os_version": null
+          }
+        },
+        "snapshots": {
+          "prechange": {
+            "id": "a1b4daa4-a10d-4d61-81eb-e65e348beb7e",
+            "url": "/api/dcim/devices/a1b4daa4-a10d-4d61-81eb-e65e348beb7e/",
+            "face": null,
+            "name": "leaf-02",
+            "rack": null,
+            "site": {
+              "id": "779bc198-eff8-46ee-9821-8d0434aea770",
+              "url": "/api/dcim/sites/779bc198-eff8-46ee-9821-8d0434aea770/",
+              "name": "dc1",
+              "slug": "dc1",
+              "display": "dc1"
+            },
+            "tags": [],
+            "serial": "",
+            "status": {
+              "label": "Active",
+              "value": "active"
+            },
+            "tenant": null,
+            "cluster": null,
+            "created": "2026-09-30",
+            "display": "leaf-02",
+            "comments": "",
+            "location": null,
+            "platform": null,
+            "position": null,
+            "asset_tag": null,
+            "notes_url": "/api/dcim/devices/a1b4daa4-a10d-4d61-81eb-e65e348beb7e/notes/",
+            "primary_ip": null,
+            "device_role": {
+              "id": "a57abca4-2d55-4367-84d5-56e738cc36dd",
+              "url": "/api/dcim/device-roles/a57abca4-2d55-4367-84d5-56e738cc36dd/",
+              "name": "leaf",
+              "slug": "leaf",
+              "display": "leaf"
+            },
+            "device_type": {
+              "id": "1f611b8f-e7c6-47db-9dc5-1c032fcd8937",
+              "url": "/api/dcim/device-types/1f611b8f-e7c6-47db-9dc5-1c032fcd8937/",
+              "slug": "veos",
+              "model": "vEOS",
+              "display": "Arista vEOS",
+              "manufacturer": {
+                "id": "7222f27a-4855-44ad-ae00-8aae2f6af03f",
+                "url": "/api/dcim/manufacturers/7222f27a-4855-44ad-ae00-8aae2f6af03f/",
+                "name": "Arista",
+                "slug": "arista",
+                "display": "Arista"
+              }
+            },
+            "primary_ip4": null,
+            "primary_ip6": null,
+            "vc_position": null,
+            "vc_priority": null,
+            "last_updated": "2026-09-30T15:45:09.050263Z",
+            "custom_fields": {
+              "os_version": null
+            },
+            "parent_device": null,
+            "secrets_group": null,
+            "virtual_chassis": null,
+            "local_context_data": null,
+            "local_context_schema": null,
+            "device_redundancy_group": null,
+            "device_redundancy_group_priority": null
+          },
+          "postchange": null,
+          "differences": {
+            "removed": {
+              "id": "a1b4daa4-a10d-4d61-81eb-e65e348beb7e",
+              "url": "/api/dcim/devices/a1b4daa4-a10d-4d61-81eb-e65e348beb7e/",
+              "face": null,
+              "name": "leaf-02",
+              "rack": null,
+              "site": {
+                "id": "779bc198-eff8-46ee-9821-8d0434aea770",
+                "url": "/api/dcim/sites/779bc198-eff8-46ee-9821-8d0434aea770/",
+                "name": "dc1",
+                "slug": "dc1",
+                "display": "dc1"
+              },
+              "tags": [],
+              "serial": "",
+              "status": {
+                "label": "Active",
+                "value": "active"
+              },
+              "tenant": null,
+              "cluster": null,
+              "created": "2026-09-30",
+              "display": "leaf-02",
+              "comments": "",
+              "location": null,
+              "platform": null,
+              "position": null,
+              "asset_tag": null,
+              "notes_url": "/api/dcim/devices/a1b4daa4-a10d-4d61-81eb-e65e348beb7e/notes/",
+              "primary_ip": null,
+              "device_role": {
+                "id": "a57abca4-2d55-4367-84d5-56e738cc36dd",
+                "url": "/api/dcim/device-roles/a57abca4-2d55-4367-84d5-56e738cc36dd/",
+                "name": "leaf",
+                "slug": "leaf",
+                "display": "leaf"
+              },
+              "device_type": {
+                "id": "1f611b8f-e7c6-47db-9dc5-1c032fcd8937",
+                "url": "/api/dcim/device-types/1f611b8f-e7c6-47db-9dc5-1c032fcd8937/",
+                "slug": "veos",
+                "model": "vEOS",
+                "display": "Arista vEOS",
+                "manufacturer": {
+                  "id": "7222f27a-4855-44ad-ae00-8aae2f6af03f",
+                  "url": "/api/dcim/manufacturers/7222f27a-4855-44ad-ae00-8aae2f6af03f/",
+                  "name": "Arista",
+                  "slug": "arista",
+                  "display": "Arista"
+                }
+              },
+              "primary_ip4": null,
+              "primary_ip6": null,
+              "vc_position": null,
+              "vc_priority": null,
+              "last_updated": "2026-09-30T15:45:09.050263Z",
+              "custom_fields": {
+                "os_version": null
+              },
+              "parent_device": null,
+              "secrets_group": null,
+              "virtual_chassis": null,
+              "local_context_data": null,
+              "local_context_schema": null,
+              "device_redundancy_group": null,
+              "device_redundancy_group_priority": null
+            },
+            "added": null
+          }
+        }
+      },
+      "signature_is_hmac_sha512_of_body": true
+    }
+  ]
+}

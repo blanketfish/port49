@@ -1,0 +1,98 @@
+{
+  "step": "rest_page",
+  "method": "GET",
+  "path": "/api/dcim/devices/?limit=1",
+  "status": 200,
+  "headers": {
+    "Allow": "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS",
+    "Api-Version": "2.4",
+    "Content-Length": "2290",
+    "Content-Type": "application/json",
+    "Cross-Origin-Opener-Policy": "same-origin",
+    "Referrer-Policy": "same-origin",
+    "Vary": "Accept, Cookie, origin",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY"
+  },
+  "body": {
+    "count": 1,
+    "next": null,
+    "previous": null,
+    "results": [
+      {
+        "id": "e5ad2bb8-f2c1-4a00-8c3e-f40ebd449d5f",
+        "object_type": "dcim.device",
+        "display": "leaf-01",
+        "url": "http://127.0.0.1:18020/api/dcim/devices/e5ad2bb8-f2c1-4a00-8c3e-f40ebd449d5f/",
+        "natural_slug": "leaf-01__dc1_e5ad",
+        "face": null,
+        "local_config_context_data": null,
+        "local_config_context_data_owner_object_id": null,
+        "name": "leaf-01",
+        "serial": "",
+        "asset_tag": null,
+        "position": null,
+        "device_redundancy_group_priority": null,
+        "vc_position": null,
+        "vc_priority": null,
+        "comments": "",
+        "local_config_context_schema": null,
+        "local_config_context_data_owner_content_type": null,
+        "device_type": {
+          "id": "5c2c7474-ae78-4ed5-a911-77c46de8dedf",
+          "object_type": "dcim.devicetype",
+          "url": "http://127.0.0.1:18020/api/dcim/device-types/5c2c7474-ae78-4ed5-a911-77c46de8dedf/"
+        },
+        "status": {
+          "id": "0b9caacf-de97-4640-83fc-e55823d0f1eb",
+          "object_type": "extras.status",
+          "url": "http://127.0.0.1:18020/api/extras/statuses/0b9caacf-de97-4640-83fc-e55823d0f1eb/"
+        },
+        "role": {
+          "id": "3e5830dc-a6a6-4607-87b2-928c29473b4f",
+          "object_type": "extras.role",
+          "url": "http://127.0.0.1:18020/api/extras/roles/3e5830dc-a6a6-4607-87b2-928c29473b4f/"
+        },
+        "tenant": null,
+        "platform": {
+          "id": "fb97a7e3-dffc-41f4-bb9f-1a86ff5f1804",
+          "object_type": "dcim.platform",
+          "url": "http://127.0.0.1:18020/api/dcim/platforms/fb97a7e3-dffc-41f4-bb9f-1a86ff5f1804/"
+        },
+        "location": {
+          "id": "f3e02ee4-1774-4b66-90f6-a12e61ffb9aa",
+          "object_type": "dcim.location",
+          "url": "http://127.0.0.1:18020/api/dcim/locations/f3e02ee4-1774-4b66-90f6-a12e61ffb9aa/"
+        },
+        "rack": null,
+        "primary_ip4": {
+          "id": "32d952a2-10d1-4386-b19f-cf20ebd18964",
+          "object_type": "ipam.ipaddress",
+          "url": "http://127.0.0.1:18020/api/ipam/ip-addresses/32d952a2-10d1-4386-b19f-cf20ebd18964/"
+        },
+        "primary_ip6": null,
+        "cluster": null,
+        "virtual_chassis": null,
+        "device_redundancy_group": null,
+        "software_version": null,
+        "secrets_group": null,
+        "controller_managed_device_group": null,
+        "software_image_files": [],
+        "created": "2026-09-30T15:47:51.675797Z",
+        "last_updated": "2026-09-30T15:47:52.314513Z",
+        "notes_url": "http://127.0.0.1:18020/api/dcim/devices/e5ad2bb8-f2c1-4a00-8c3e-f40ebd449d5f/notes/",
+        "custom_fields": {
+          "os_version": "4.31.2F"
+        },
+        "tags": [
+          {
+            "id": "1a9418a0-c554-4fb4-b7cf-75df3b3ff310",
+            "object_type": "extras.tag",
+            "url": "http://127.0.0.1:18020/api/extras/tags/1a9418a0-c554-4fb4-b7cf-75df3b3ff310/"
+          }
+        ],
+        "parent_bay": null
+      }
+    ]
+  }
+}

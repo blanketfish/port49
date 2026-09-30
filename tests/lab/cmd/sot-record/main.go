@@ -17,6 +17,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -31,6 +32,7 @@ type recorder struct {
 	client                            *http.Client
 	ids                               map[string]any
 	secrets                           []string
+	hosts                             []string // -url's and -proxy's host:port, the only hosts callURL dials
 }
 
 // exchange is one recorded call: what was asked, and everything the server
@@ -103,6 +105,36 @@ func (r *recorder) callAs(step, method, path string, body any, auth string, lear
 		x.Body, _ = json.Marshal(string(raw))
 	}
 	return x, learned
+}
+
+// callURL is call for a full URL, as a list's `next` gives one: the base is
+// not prepended, and the credential goes only to the recorder's own base or
+// proxy host, never to a host a response named.
+func (r *recorder) callURL(step, full string) exchange {
+	u, err := url.Parse(full)
+	if err != nil {
+		return exchange{Step: step, Method: "GET", Path: full, Status: 0, Headers: map[string]string{},
+			Body: json.RawMessage(`"not a URL"`)}
+	}
+	if !r.ownHost(u.Host) {
+		// Recorded, never followed: the token would go to wherever next says.
+		return exchange{Step: step, Method: "GET", Path: full, Status: 0, Headers: map[string]string{},
+			Body: json.RawMessage(`"next names a host the recorder did not dial; not followed"`)}
+	}
+	saved := r.base
+	r.base = u.Scheme + "://" + u.Host
+	defer func() { r.base = saved }()
+	return r.call(step, "GET", u.RequestURI(), nil)
+}
+
+// ownHost reports whether h is the host of -url or of -proxy.
+func (r *recorder) ownHost(h string) bool {
+	for _, own := range r.hosts {
+		if h == own {
+			return true
+		}
+	}
+	return false
 }
 
 // redact replaces every part of every API credential the run holds or was
@@ -259,6 +291,9 @@ func main() {
 	wait := flag.Duration("webhook-wait", 20*time.Second, "how long to wait for the worker to deliver")
 	probeV1 := flag.Bool("probe-v1-token", false, "NetBox 4: issue a v1 token over the API and try it with the Token scheme")
 	depth1 := flag.Bool("depth1-read", false, "Nautobot 2: read the device again with ?depth=1")
+	devices := flag.Int("devices", 1, "L30: create this many devices in all (leaf-01 and leaf-002..), to make a list page")
+	pageLimit := flag.Int("page-limit", 50, "L30: the REST limit and the GraphQL page size")
+	proxy := flag.String("proxy", "", "L30: a reverse proxy's base URL in front of -url, to read one page through")
 	flag.Parse()
 	token, secret := os.Getenv("L27_TOKEN"), os.Getenv("L27_WEBHOOK_SECRET")
 	if *product == "" || *base == "" || *out == "" || *listen == "" || token == "" || secret == "" {
@@ -269,6 +304,11 @@ func main() {
 	}
 	r := &recorder{base: *base, token: token, scheme: *scheme, product: *product, out: *out, legacy: *legacy,
 		client: &http.Client{Timeout: 60 * time.Second}, ids: map[string]any{}, secrets: credentialParts(token)}
+	for _, b := range []string{*base, *proxy} {
+		if u, err := url.Parse(b); b != "" && err == nil {
+			r.hosts = append(r.hosts, u.Host)
+		}
+	}
 
 	var mu sync.Mutex
 	var hooks []hook
@@ -337,6 +377,14 @@ func main() {
 		fmt.Printf("sot-record: graphql_%d: %d\n", i, x.Status)
 	}
 	r.write("graphql.json", gql)
+	if *devices > 1 {
+		r.write("seed-bulk.json", r.seedMany(*product, *devices))
+		r.write("rest-pages.json", r.pages(*pageLimit))
+		if *proxy != "" {
+			r.write("rest-page-proxied.json", r.viaProxy(*proxy, *pageLimit))
+		}
+		r.write("graphql-list.json", r.graphQLList(*product, gqlPath, *pageLimit))
+	}
 
 	var hookCalls []exchange
 	for _, s := range webhookSteps(*product, "http://"+*listen+"/", secret) {

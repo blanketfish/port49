@@ -1,0 +1,140 @@
+{
+  "step": "rest_device",
+  "method": "GET",
+  "path": "/api/dcim/devices/?name=leaf-01",
+  "status": 200,
+  "headers": {
+    "Allow": "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS",
+    "Api-Version": "3.7",
+    "Content-Length": "2052",
+    "Content-Type": "application/json",
+    "Cross-Origin-Opener-Policy": "same-origin",
+    "Date": "Wed, 30 Sep 2026 15:39:38 GMT",
+    "Referrer-Policy": "same-origin",
+    "Server": "Unit/1.31.1",
+    "Vary": "HX-Request, Cookie, origin",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "SAMEORIGIN",
+    "X-Request-Id": "7774db09-4e59-4739-9575-ff556690a09d"
+  },
+  "body": {
+    "count": 1,
+    "next": null,
+    "previous": null,
+    "results": [
+      {
+        "id": 1,
+        "url": "http://127.0.0.1:18037/api/dcim/devices/1/",
+        "display": "leaf-01",
+        "name": "leaf-01",
+        "device_type": {
+          "id": 1,
+          "url": "http://127.0.0.1:18037/api/dcim/device-types/1/",
+          "display": "vEOS",
+          "manufacturer": {
+            "id": 1,
+            "url": "http://127.0.0.1:18037/api/dcim/manufacturers/1/",
+            "display": "Arista",
+            "name": "Arista",
+            "slug": "arista"
+          },
+          "model": "vEOS",
+          "slug": "veos"
+        },
+        "role": {
+          "id": 1,
+          "url": "http://127.0.0.1:18037/api/dcim/device-roles/1/",
+          "display": "leaf",
+          "name": "leaf",
+          "slug": "leaf"
+        },
+        "device_role": {
+          "id": 1,
+          "url": "http://127.0.0.1:18037/api/dcim/device-roles/1/",
+          "display": "leaf",
+          "name": "leaf",
+          "slug": "leaf"
+        },
+        "tenant": null,
+        "platform": {
+          "id": 1,
+          "url": "http://127.0.0.1:18037/api/dcim/platforms/1/",
+          "display": "eos",
+          "name": "eos",
+          "slug": "eos"
+        },
+        "serial": "",
+        "asset_tag": null,
+        "site": {
+          "id": 1,
+          "url": "http://127.0.0.1:18037/api/dcim/sites/1/",
+          "display": "dc1",
+          "name": "dc1",
+          "slug": "dc1"
+        },
+        "location": null,
+        "rack": null,
+        "position": null,
+        "face": null,
+        "latitude": null,
+        "longitude": null,
+        "parent_device": null,
+        "status": {
+          "value": "active",
+          "label": "Active"
+        },
+        "airflow": null,
+        "primary_ip": {
+          "id": 1,
+          "url": "http://127.0.0.1:18037/api/ipam/ip-addresses/1/",
+          "display": "10.0.1.5/32",
+          "family": 4,
+          "address": "10.0.1.5/32"
+        },
+        "primary_ip4": {
+          "id": 1,
+          "url": "http://127.0.0.1:18037/api/ipam/ip-addresses/1/",
+          "display": "10.0.1.5/32",
+          "family": 4,
+          "address": "10.0.1.5/32"
+        },
+        "primary_ip6": null,
+        "oob_ip": null,
+        "cluster": null,
+        "virtual_chassis": null,
+        "vc_position": null,
+        "vc_priority": null,
+        "description": "",
+        "comments": "",
+        "config_template": null,
+        "config_context": {},
+        "local_context_data": null,
+        "tags": [
+          {
+            "id": 1,
+            "url": "http://127.0.0.1:18037/api/extras/tags/1/",
+            "display": "port49",
+            "name": "port49",
+            "slug": "port49",
+            "color": "9e9e9e"
+          }
+        ],
+        "custom_fields": {
+          "os_version": "4.31.2F"
+        },
+        "created": "2026-09-30T15:39:37.968761Z",
+        "last_updated": "2026-09-30T15:39:38.275479Z",
+        "console_port_count": 0,
+        "console_server_port_count": 0,
+        "power_port_count": 0,
+        "power_outlet_count": 0,
+        "interface_count": 2,
+        "front_port_count": 0,
+        "rear_port_count": 0,
+        "device_bay_count": 0,
+        "module_bay_count": 0,
+        "inventory_item_count": 0
+      }
+    ]
+  }
+}

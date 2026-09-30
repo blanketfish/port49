@@ -1,0 +1,28 @@
+{
+  "step": "api_root",
+  "method": "GET",
+  "path": "/api/",
+  "status": 200,
+  "headers": {
+    "Allow": "GET, HEAD, OPTIONS",
+    "Api-Version": "1.2",
+    "Content-Length": "477",
+    "Content-Type": "application/json",
+    "Referrer-Policy": "same-origin",
+    "Vary": "Accept, Cookie, origin",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY"
+  },
+  "body": {
+    "circuits": "http://127.0.0.1:18016/api/circuits/",
+    "dcim": "http://127.0.0.1:18016/api/dcim/",
+    "extras": "http://127.0.0.1:18016/api/extras/",
+    "graphql": "http://127.0.0.1:18016/api/graphql/",
+    "ipam": "http://127.0.0.1:18016/api/ipam/",
+    "plugins": "http://127.0.0.1:18016/api/plugins/",
+    "status": "http://127.0.0.1:18016/api/status/",
+    "tenancy": "http://127.0.0.1:18016/api/tenancy/",
+    "users": "http://127.0.0.1:18016/api/users/",
+    "virtualization": "http://127.0.0.1:18016/api/virtualization/"
+  }
+}

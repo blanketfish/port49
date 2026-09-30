@@ -1,5 +1,10 @@
 package main
 
+import (
+	"encoding/json"
+	"fmt"
+)
+
 type step struct {
 	step, method, path string
 	body               map[string]any
@@ -123,4 +128,134 @@ func webhookSteps(product, url, secret string) []step {
 		secondLegacy,
 		step{"delete_2", "DELETE", "/api/dcim/devices/@create_2.id/", nil},
 	)
+}
+
+// seedMany creates devices leaf-002 .. leaf-<n> beside leaf-01, in one bulk
+// POST per hundred (both products take a JSON list on the device endpoint),
+// each naming the objects leaf-01's seed created. Only each call's status and
+// how many it created are recorded: the bodies are leaf-01's shape n times.
+func (r *recorder) seedMany(product string, n int) []map[string]any {
+	var out []map[string]any
+	for start := 2; start <= n; start += 100 {
+		var batch []any
+		for i := start; i < start+100 && i <= n; i++ {
+			d := map[string]any{"name": fmt.Sprintf("leaf-%03d", i), "device_type": "@device_type.id",
+				"platform": "@platform.id", "status": "active"}
+			if product == "nautobot" {
+				d["status"] = "Active"
+				d["role"], d["location"] = "@role.id", "@location.id"
+				if r.legacy {
+					d["status"], d["device_role"], d["site"] = "active", "@role_v1.id", "@site_v1.id"
+					delete(d, "role")
+					delete(d, "location")
+				}
+			} else {
+				d["role"], d["site"] = "@role.id", "@site.id"
+			}
+			batch = append(batch, d)
+		}
+		x := r.call(fmt.Sprintf("bulk_%d", start), "POST", "/api/dcim/devices/", batch)
+		var created []any
+		_ = json.Unmarshal(x.Body, &created)
+		out = append(out, map[string]any{"step": x.Step, "status": x.Status, "sent": len(batch), "created": len(created)})
+		fmt.Printf("sot-record: bulk %d: %d, %d created\n", start, x.Status, len(created))
+	}
+	return out
+}
+
+// pages reads the device list limit at a time and follows each `next` as the
+// product wrote it, to a null or 100 pages, recording per page the status,
+// count, next and previous, and in all every name seen and every name seen
+// twice. next is followed verbatim — host, scheme and all — since whether it
+// can be is the question.
+func (r *recorder) pages(limit int) map[string]any {
+	next := fmt.Sprintf("%s/api/dcim/devices/?limit=%d", r.base, limit)
+	var pages []map[string]any
+	seen := map[string]bool{}
+	var names, repeated []string
+	count, ended := 0, "page_cap"
+	for i := 0; i < 100 && next != ""; i++ {
+		x := r.callURL(fmt.Sprintf("page_%d", i), next)
+		var body struct {
+			Count    int     `json:"count"`
+			Next     *string `json:"next"`
+			Previous *string `json:"previous"`
+			Results  []struct {
+				Name string `json:"name"`
+			} `json:"results"`
+		}
+		_ = json.Unmarshal(x.Body, &body)
+		pages = append(pages, map[string]any{"step": x.Step, "url": next, "status": x.Status, "count": body.Count,
+			"next": body.Next, "previous": body.Previous, "results": len(body.Results)})
+		if x.Status != 200 {
+			ended = fmt.Sprintf("status_%d", x.Status)
+			break
+		}
+		count = body.Count
+		for _, d := range body.Results {
+			if seen[d.Name] {
+				repeated = append(repeated, d.Name)
+			}
+			seen[d.Name] = true
+			names = append(names, d.Name)
+		}
+		next = ""
+		if body.Next != nil {
+			next = *body.Next
+		} else {
+			ended = "null_next"
+		}
+	}
+	return map[string]any{"limit": limit, "pages": pages, "count": count, "names": names, "repeated": repeated,
+		"ended_at": ended}
+}
+
+// viaProxy reads the first page through the reverse proxy, which forwards
+// the client's Host and sets X-Forwarded-Proto: https and X-Forwarded-Host,
+// and records the next the product wrote there.
+func (r *recorder) viaProxy(proxy string, limit int) exchange {
+	return r.callURL("page_proxied", fmt.Sprintf("%s/api/dcim/devices/?limit=%d", proxy, limit))
+}
+
+// graphQLList asks for every device's name through each list shape a version
+// might take — unpaged, and paged by the version's own arguments — and
+// records how many names each returned, so a silent page cap shows, and the
+// first device as returned, so the status value's spelling is on record.
+func (r *recorder) graphQLList(product, path string, limit int) []map[string]any {
+	var out []map[string]any
+	for i, q := range graphQLListCandidates(product, limit) {
+		x := r.call(fmt.Sprintf("graphql_list_%d", i), "POST", path, map[string]any{"query": q})
+		var body struct {
+			Data   map[string][]map[string]any `json:"data"`
+			Errors []any                       `json:"errors"`
+		}
+		_ = json.Unmarshal(x.Body, &body)
+		n := 0
+		var first map[string]any
+		for _, list := range body.Data {
+			n += len(list)
+			if first == nil && len(list) > 0 {
+				first = list[0]
+			}
+		}
+		out = append(out, map[string]any{"step": x.Step, "query": q, "status": x.Status, "names": n,
+			"first": first, "errors": body.Errors})
+	}
+	return out
+}
+
+func graphQLListCandidates(product string, limit int) []string {
+	if product == "nautobot" {
+		return []string{
+			`{ devices { name status { name } } }`,
+			fmt.Sprintf(`{ devices(limit: %d, offset: 0) { name } }`, limit),
+			fmt.Sprintf(`{ devices(limit: %d, offset: %d) { name } }`, limit, limit),
+		}
+	}
+	return []string{
+		`{ device_list { name status } }`,
+		fmt.Sprintf(`{ device_list(pagination: {offset: 0, limit: %d}) { name } }`, limit),
+		fmt.Sprintf(`{ device_list(pagination: {offset: %d, limit: %d}) { name } }`, limit, limit),
+		fmt.Sprintf(`{ device_list(limit: %d, offset: 0) { name } }`, limit),
+	}
 }
