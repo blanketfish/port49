@@ -515,3 +515,31 @@ func TestADeviceNewlyLeftOutIsSaidOnAnUnchangedSync(t *testing.T) {
 		t.Fatalf("said %d times: %q", n, rig.out)
 	}
 }
+
+// Beside a good state_dir, a mirror that cannot be read does not stop the
+// start: the mirror is a copy. It is said, and mirror_behind shows it.
+func TestAGoodStateDirStartsBesideAnUnreadableMirror(t *testing.T) {
+	rig := newSyncRig(t, syncPolicy, devices(3))
+	rig.sync(t)
+	mirror := filepath.Join(rig.s.State.MirrorDir, "bundle.json")
+	if err := os.Remove(mirror); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(rig.dir, "policy.yaml"), mirror); err != nil {
+		t.Fatal(err)
+	}
+	again := rig.syncer(rig.s.Key)
+	rig.out.Reset()
+	if err := again.Restore(); err != nil || again.Current() == nil || again.Current().Doc.Sequence != 1 {
+		t.Fatalf("%v %v", again.Current(), err)
+	}
+	if testutil.ToFloat64(again.Metrics.MirrorBehind) != 1 {
+		t.Fatal("port49_inventory_mirror_behind is not 1")
+	}
+	if n := strings.Count(rig.out.String(), "mirror_dir "+rig.s.State.MirrorDir+" holds a copy the service cannot open"); n != 1 {
+		t.Fatalf("said %d times: %s", n, rig.out)
+	}
+	if strings.Contains(rig.out.String(), "scopes:") {
+		t.Fatalf("the line quotes the file: %s", rig.out)
+	}
+}

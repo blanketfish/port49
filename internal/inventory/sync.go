@@ -100,11 +100,12 @@ func (s *Syncer) keys() []ed25519.PublicKey {
 
 // Restore serves what the service last published, the newer of state_dir's
 // copy and the mirror's, so a restart serves at once and continues the
-// sequence (Decided 3). A copy that is there but does not open or verify is
-// an error, and the service does not start: passed over, with state_dir lost,
-// it would start the sequence again at 1, unbounded, below the copy every
-// port49d holds (review of Task 9, Important 1). A copy that is not there at
-// all is a fresh start. It holds the sync lock, so it is safe beside a sync.
+// sequence (Decided 3). A state_dir copy that does not open, or a mirror copy
+// that does not open while state_dir holds none, is an error, and the service
+// does not start: passed over, it would start the sequence again at 1,
+// unbounded, below the copy every port49d holds (review of Task 9, Important
+// 1). Beside a good state_dir, a mirror that does not open is said and shows
+// as mirror_behind. A copy that is not there at all is a fresh start. It holds the sync lock, so it is safe beside a sync.
 func (s *Syncer) Restore() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -115,6 +116,14 @@ func (s *Syncer) Restore() error {
 		get  func([]ed25519.PublicKey) (*Published, error)
 	}{{"state_dir " + s.State.Dir, s.State.Latest}, {"mirror_dir " + s.State.MirrorDir, s.State.Mirror}} {
 		p, err := c.get(keys)
+		if err != nil && best != nil {
+			// state_dir holds a good bundle: the mirror is a copy of it, not
+			// the floor. Said, and mirror() below keeps mirror_behind 1 while
+			// it cannot be brought level; WriteMirror's floor keeps a newer one.
+			fmt.Fprintf(s.Log, "port49-inventory: %s holds a copy the service cannot open: %s; serving state_dir's "+
+				"bundle %d\n", c.what, oneLine(err), best.Doc.Sequence)
+			continue
+		}
 		if err != nil {
 			// Open's and the fence's errors name the file and quote nothing in it.
 			return fmt.Errorf("port49-inventory: %s holds a bundle the service cannot open: %s; the service does "+
