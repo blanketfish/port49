@@ -3,6 +3,7 @@
 package lab
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -125,33 +126,47 @@ func (l *lab) offered(t *testing.T, enter, ask []string, keyword string) (bool, 
 	}
 	cfg := []string{l.p.node + "(config", l.p.node + "#", l.p.node + ">"}
 	var help string
+	// An ask may carry the lab key (TestSingleConnectionSyntax types it to
+	// read the help after it): every error and the help returned have it
+	// replaced by <key>, so a failure prints no key.
+	redact := func(s string) string { return strings.ReplaceAll(s, labKeyDefault, "<key>") }
 	l.withAdminCLI(t, open, func(c *cliConn) error {
-		for _, e := range enter {
-			if _, err := c.sendExpect(e, 30*time.Second, cfg...); err != nil {
-				return fmt.Errorf("the `?` check: %s: %w", e, err)
-			}
-		}
-		for _, a := range ask {
-			from := len(c.transcript())
-			if _, err := fmt.Fprint(c.in, a); err != nil {
-				return fmt.Errorf("the `?` check: %s: %w", a, err)
-			}
-			// The help ends with the prompt and the half line redrawn.
-			out, err := c.expectFrom(from, 30*time.Second, cfg...)
-			if err != nil {
-				return fmt.Errorf("the `?` check: %s: the help was not observed: %w", a, err)
-			}
-			help += out
-		}
-		if _, err := fmt.Fprint(c.in, "\x15"); err != nil { // Ctrl-U: clear what `?` left on the line
-			return err
-		}
-		if _, err := c.sendExpect(leave, 30*time.Second, back); err != nil {
-			return fmt.Errorf("the `?` check: %s: %w", leave, err)
+		if err := l.offeredIn(c, enter, ask, cfg, leave, back, &help); err != nil {
+			return errors.New(redact(err.Error()))
 		}
 		return nil
 	})
+	help = redact(help)
 	return strings.Contains(help, keyword), help
+}
+
+// offeredIn is offered's work on an open admin CLI c: enter, each ask and its
+// help appended to help, Ctrl-U, and leave.
+func (l *lab) offeredIn(c *cliConn, enter, ask, cfg []string, leave, back string, help *string) error {
+	for _, e := range enter {
+		if _, err := c.sendExpect(e, 30*time.Second, cfg...); err != nil {
+			return fmt.Errorf("the `?` check: %s: %w", e, err)
+		}
+	}
+	for _, a := range ask {
+		from := len(c.transcript())
+		if _, err := fmt.Fprint(c.in, a); err != nil {
+			return fmt.Errorf("the `?` check: %s: %w", a, err)
+		}
+		// The help ends with the prompt and the half line redrawn.
+		out, err := c.expectFrom(from, 30*time.Second, cfg...)
+		if err != nil {
+			return fmt.Errorf("the `?` check: %s: the help was not observed: %w", a, err)
+		}
+		*help += out
+	}
+	if _, err := fmt.Fprint(c.in, "\x15"); err != nil { // Ctrl-U: clear what `?` left on the line
+		return err
+	}
+	if _, err := c.sendExpect(leave, 30*time.Second, back); err != nil {
+		return fmt.Errorf("the `?` check: %s: %w", leave, err)
+	}
+	return nil
 }
 
 // timedLogins is a token login, and a break-glass login with three `show
