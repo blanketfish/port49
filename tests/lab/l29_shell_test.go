@@ -59,37 +59,55 @@ func (sh *labShell) Close() { sh.c.Close() }
 // Both the question and the change go over a break-glass CLI with port49d
 // stopped (withAdminCLI), which restarts it on the standing config: a caller
 // that wants another config restarts port49d on it afterwards.
+//
+// Junos is asked in two places: its accounting has a server stanza of its
+// own (`system accounting destination tacplus server`), and accounting is
+// what an open Junos session sends port49, since Junos authorizes commands
+// locally by class. Each place is set only where its own `?` offered it.
 func (l *lab) singleConnection(t *testing.T) string {
 	t.Helper()
-	type way struct {
+	type place struct {
 		enter, ask []string // configuration mode, then the context the keyword is asked in
-		set        func()
+		lines      []string // what sets it, typed in configuration mode
 		said       string
 	}
-	w := way{enter: []string{"configure terminal"}, ask: []string{"tacacs-server host 172.100.100.1 ?"},
-		set: func() {
-			l.carriedConfigure(t, "tacacs-server host 172.100.100.1 single-connection key 0 "+labKeyDefault)
-		},
-		said: "`tacacs-server host 172.100.100.1 single-connection`"}
+	places := []place{{enter: []string{"configure terminal"}, ask: []string{"tacacs-server host 172.100.100.1 ?"},
+		lines: []string{"tacacs-server host 172.100.100.1 single-connection key 0 " + labKeyDefault},
+		said:  "`tacacs-server host 172.100.100.1 single-connection`"}}
 	switch {
 	case strings.HasPrefix(l.p.name, "juniper_"):
-		w = way{enter: []string{"configure"}, ask: []string{"set system tacplus-server 172.100.100.1 ?"},
-			set: func() {
-				l.junosConfigureAdmin(t, []string{"set system tacplus-server 172.100.100.1 single-connection"})
-			}, said: "`set system tacplus-server 172.100.100.1 single-connection`"}
+		places = nil
+		for _, ctx := range []string{"set system tacplus-server 172.100.100.1",
+			"set system accounting destination tacplus server 172.100.100.1"} {
+			places = append(places, place{enter: []string{"configure"}, ask: []string{ctx + " ?"},
+				lines: []string{ctx + " single-connection"}, said: "`" + ctx + " single-connection`"})
+		}
 	case l.p.name == "cisco_iosxe":
-		w = way{enter: []string{"configure terminal", "tacacs server port49-host"}, ask: []string{"?"},
-			set:  func() { l.carriedConfigure(t, "tacacs server port49-host", "single-connection") },
-			said: "`single-connection` under `tacacs server port49-host`"}
+		places = []place{{enter: []string{"configure terminal", "tacacs server port49-host"}, ask: []string{"?"},
+			lines: []string{"tacacs server port49-host", "single-connection"},
+			said:  "`single-connection` under `tacacs server port49-host`"}}
 	}
-	ok, help := l.offered(t, w.enter, w.ask, "single-connection")
-	if !ok {
-		return fmt.Sprintf("not available on this image: after `%s`, `%s` did not offer single-connection; "+
-			"the device said:\n\n```\n%s\n```\n\nThe phases run on whatever connections the device opens",
-			strings.Join(w.enter, "`, `"), strings.Join(w.ask, "`, `"), strings.TrimSpace(strings.ReplaceAll(help, "\r", "")))
+	var set, said []string
+	for _, p := range places {
+		ok, help := l.offered(t, p.enter, p.ask, "single-connection")
+		if !ok {
+			said = append(said, fmt.Sprintf("not available at `%s`: after `%s`, its `?` did not offer "+
+				"single-connection; the device said:\n\n```\n%s\n```\n", strings.Join(p.ask, "`, `"),
+				strings.Join(p.enter, "`, `"), strings.TrimSpace(strings.ReplaceAll(help, "\r", ""))))
+			continue
+		}
+		set = append(set, p.lines...)
+		said = append(said, "on: "+p.said)
 	}
-	w.set()
-	return "on: " + w.said
+	switch {
+	case len(set) == 0:
+		return strings.Join(said, "; ") + "\nThe phases run on whatever connections the device opens"
+	case strings.HasPrefix(l.p.name, "juniper_"):
+		l.junosConfigureAdmin(t, set)
+	default:
+		l.carriedConfigure(t, set...)
+	}
+	return strings.Join(said, "; ")
 }
 
 // offered asks the device, as break-glass in configuration mode, for the
