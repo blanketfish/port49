@@ -113,21 +113,36 @@ func TestAReAddressFromTheServiceLoadsWithThePolicy(t *testing.T) {
 // opened again under the keys this SIGHUP put in force, so a SIGHUP that
 // removes its signer while the policy edit that goes with it is on disk
 // applies neither, and the bundle in force keeps serving.
+//
+// The bundle stays because this policy alone admits none, so it is refused
+// alone too. A policy that passed alone would apply alone here, and that is
+// right as well: with the document unopenable there is no inventory to pair
+// it with, so the SIGHUP is two separate loads, not a half-applied pair.
 func TestACombinedSIGHUPThatRemovesTheSignerAppliesNeither(t *testing.T) {
 	rig := newServiceRig(t, groupedPolicy)
 	rig.receive(rig.doc(t, 1, groupedPolicy, 2))
 	rig.receive(rig.doc(t, 2, groupedPolicy, 0, deviceAt("leaf1", "11.0.0.1"), deviceAt("leaf2", "11.0.0.2")))
 	serving := rig.b.Policy.Load().Bundle
 	rig.write(t, strings.Replace(groupedPolicy, "cidr: 10.0.0.0/8", "cidr: 11.0.0.0/8", 1))
-	_, otherKey, _ := ed25519.GenerateKey(rand.Reader)
-	_, otherPEM, _ := keyfile.EncodeEd25519(otherKey)
+	_, otherKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, otherPEM, err := keyfile.EncodeEd25519(otherKey)
+	if err != nil {
+		t.Fatal(err)
+	}
 	keyFile := filepath.Join(safeDir(t), "other.pub")
-	os.WriteFile(keyFile, otherPEM, 0o644)
+	if err := os.WriteFile(keyFile, otherPEM, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	rig.r.cfgPath = filepath.Join(t.TempDir(), "port49d.yaml")
-	os.WriteFile(rig.r.cfgPath, []byte(fmt.Sprintf(`inventory:
+	if err := os.WriteFile(rig.r.cfgPath, []byte(fmt.Sprintf(`inventory:
   service: {url: "https://inv.test:8443", ca_file: /x, tls_cert_file: /x, tls_key_file: /x,
             state_dir: /x, verify_key_files: [%s]}
-`, keyFile)), 0o600)
+`, keyFile)), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	rig.with(func() { rig.r.reload(context.Background(), "SIGHUP") })
 	out := rig.out.String()
 	if rig.b.Policy.Load().Bundle != serving || rig.r.seq != 1 || strings.Contains(out, "reloaded together") {
@@ -136,5 +151,141 @@ func TestACombinedSIGHUPThatRemovesTheSignerAppliesNeither(t *testing.T) {
 	if !strings.Contains(out, "inventory reload (SIGHUP) refused") || !strings.Contains(out, "which no verify key holds") ||
 		testutil.ToFloat64(rig.m.InventoryBundleRefused) != 1 || testutil.ToFloat64(rig.m.PolicyFileRefused) != 1 {
 		t.Fatalf("%s", out)
+	}
+}
+
+// Review I1: a policy that does not parse is its own fault, said alone with
+// its own text; an inventory edit on the watch at the same time is not held
+// up or alarmed by it, and putting the policy back clears the policy's alarm
+// and leaves the inventory in force.
+func TestAPolicyTypoDoesNotHoldUpAGoodInventoryEdit(t *testing.T) {
+	rig := newReloadRig(t, policyWithGroups)
+	rig.writeInventory(t, withoutGroups)
+	rig.pollTwice()
+	rig.write(t, policyWithGroups+"this is: [not valid\n")
+	rig.writeInventory(t, withoutGroups+"  - {name: leaf3, platform: arista_eos, addresses: [10.0.0.3]}\n")
+	rig.pollTwice()
+	rig.pollTwice()
+	out := rig.out.String()
+	if !strings.Contains(out, "port49d: policy reload (file changed) refused") || !strings.Contains(out, "yaml") ||
+		strings.Contains(out, "refused together") {
+		t.Fatalf("the policy's fault is not said alone: %s", out)
+	}
+	if _, ok := rig.b.Policy.Load().Device("leaf3"); !ok || testutil.ToFloat64(rig.m.InventoryFileRefused) != 0 ||
+		testutil.ToFloat64(rig.m.PolicyFileRefused) != 1 {
+		t.Fatalf("the inventory edit was held up: %s", out)
+	}
+	rig.write(t, policyWithGroups)
+	rig.pollTwice()
+	if !strings.Contains(rig.out.String(), "is the policy in force again") ||
+		testutil.ToFloat64(rig.m.PolicyFileRefused) != 0 || testutil.ToFloat64(rig.m.InventoryFileRefused) != 0 {
+		t.Fatalf("%s", rig.out.String())
+	}
+	if _, ok := rig.b.Policy.Load().Device("leaf3"); !ok {
+		t.Fatal("leaf3 left")
+	}
+}
+
+// Review I1 and I3: a typo in the policy half of a whole-fleet re-address.
+// The typo is said alone; the inventory, refused alone for what it admits,
+// is refused on its own terms, not together with a policy that cannot load.
+// Fixing the policy then loads both, together.
+func TestFixingAPolicyTypoLoadsTheReAddressTogether(t *testing.T) {
+	rig := newReloadRig(t, policyWithGroups)
+	rig.writeInventory(t, withoutGroups)
+	rig.pollTwice()
+	moved := strings.Replace(policyWithGroups, "cidr: 10.0.0.0/8", "cidr: 11.0.0.0/8", 1)
+	rig.write(t, moved+"this is: [not valid\n")
+	rig.writeInventory(t, strings.ReplaceAll(withoutGroups, "10.0.0.", "11.0.0."))
+	rig.pollTwice()
+	rig.pollTwice()
+	out := rig.out.String()
+	if strings.Contains(out, "refused together") || !strings.Contains(out, "port49d: policy reload (file changed) refused") ||
+		!strings.Contains(out, "port49d: inventory reload (inventory file changed) refused") {
+		t.Fatalf("%s", out)
+	}
+	rig.write(t, moved)
+	rig.pollTwice()
+	if !strings.Contains(rig.out.String(), "port49d: policy and inventory reloaded together (file changed)") ||
+		testutil.ToFloat64(rig.m.PolicyFileRefused) != 0 || testutil.ToFloat64(rig.m.InventoryFileRefused) != 0 {
+		t.Fatalf("%s", rig.out.String())
+	}
+	if d, ok := rig.b.Policy.Load().Device("leaf1"); !ok || d.Addresses[0].String() != "11.0.0.1" ||
+		len(rig.b.Policy.Load().AdmissionRefusals()) != 0 {
+		t.Fatalf("not applied: %s", rig.out.String())
+	}
+}
+
+// Review I2: a policy file someone else could write is refused with the
+// fence's own words, and an inventory edit pending at the time is not
+// refused with it.
+func TestAnUnreadablePolicyIsSaidWithItsOwnFault(t *testing.T) {
+	rig := newReloadRig(t, policyWithGroups)
+	rig.writeInventory(t, withoutGroups)
+	rig.pollTwice()
+	rig.write(t, strings.Replace(policyWithGroups, "cidr: 10.0.0.0/8", "cidr: 11.0.0.0/8", 1))
+	if err := os.Chmod(rig.cfg.Broker.PolicyFile, 0o666); err != nil {
+		t.Fatal(err)
+	}
+	rig.writeInventory(t, withoutGroups+"  - {name: leaf3, platform: arista_eos, addresses: [10.0.0.3]}\n")
+	rig.pollTwice()
+	rig.pollTwice()
+	out := rig.out.String()
+	if !strings.Contains(out, "chmod go-w") || strings.Contains(out, "refused together") ||
+		strings.Contains(out, "declares no subjects") {
+		t.Fatalf("the fence's fault is not the one said: %s", out)
+	}
+	if _, ok := rig.b.Policy.Load().Device("leaf3"); !ok || testutil.ToFloat64(rig.m.InventoryFileRefused) != 0 {
+		t.Fatalf("the inventory edit was refused with it: %s", out)
+	}
+}
+
+// Review I1: a combined try the policy's load asked for, refused, leaves an
+// inventory edit the watch has only seen pending — no alarm — to be tried
+// alone at its turn; that try, refused with the same policy, is not said a
+// second time.
+func TestACombinedRefusalLeavesAPendingInventoryPending(t *testing.T) {
+	rig := newReloadRig(t, policyWithGroups)
+	rig.writeInventory(t, withoutGroups)
+	rig.pollTwice()
+	rig.write(t, strings.Replace(policyWithGroups, "cidr: 10.0.0.0/8", "cidr: 11.0.0.0/8", 1))
+	rig.writeInventory(t, "devices:\n  - {name: leaf1, platform: arista_eos, addresses: [11.0.0.1]}\n")
+	ctx := context.Background()
+	rig.with(func() {
+		rig.r.pollInventory(ctx)
+		rig.r.pollPolicy(ctx)
+		rig.r.pollPolicy(ctx)
+	})
+	if !strings.Contains(rig.out.String(), "refused together") || rig.r.invRefused != "" || rig.r.invPending == "" ||
+		testutil.ToFloat64(rig.m.InventoryFileRefused) != 0 || testutil.ToFloat64(rig.m.PolicyFileRefused) != 1 {
+		t.Fatalf("the pending inventory was marked refused: %s", rig.out.String())
+	}
+	rig.with(func() { rig.r.pollInventory(ctx) })
+	if strings.Count(rig.out.String(), "refused together") != 1 || testutil.ToFloat64(rig.m.InventoryFileRefused) != 1 {
+		t.Fatalf("%s", rig.out.String())
+	}
+}
+
+// Review I3 (service mode): a document refused against the policy in force
+// is tried again, opened under the keys in force, when a policy that admits
+// it loads alone.
+func TestARefusedDocumentIsRetriedWhenAPolicyThatAdmitsItLoads(t *testing.T) {
+	rig := newServiceRig(t, groupedPolicy)
+	rig.receive(rig.doc(t, 1, groupedPolicy, 2))
+	readdressed := rig.doc(t, 2, groupedPolicy, 0, deviceAt("leaf1", "11.0.0.1"), deviceAt("leaf2", "11.0.0.2"))
+	rig.receive(readdressed)
+	if testutil.ToFloat64(rig.m.InventoryBundleRefused) != 1 {
+		t.Fatalf("setup: %s", rig.out.String())
+	}
+	rig.write(t, strings.Replace(groupedPolicy, "key_groups: [", "key_groups: [{match: {cidr: 11.0.0.0/8}, key_ref: lab_key}, ", 1))
+	rig.pollTwice()
+	out := rig.out.String()
+	if !strings.Contains(out, "port49d: policy reloaded (file changed)") || strings.Contains(out, "together") ||
+		!strings.Contains(out, "port49d: inventory reloaded (file changed, bundle 2)") {
+		t.Fatalf("%s", out)
+	}
+	if rig.r.inForce != readdressed.etag || testutil.ToFloat64(rig.m.InventoryBundleRefused) != 0 ||
+		len(rig.b.Policy.Load().AdmissionRefusals()) != 0 {
+		t.Fatalf("not applied: %s", out)
 	}
 }
