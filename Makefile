@@ -3,6 +3,7 @@
 build:
 	go build -o bin/port49d ./cmd/port49d
 	go build -o bin/port49 ./cmd/port49
+	go build -o bin/port49-inventory ./cmd/port49-inventory
 
 test: lab-unit
 	go test ./... -count=1
