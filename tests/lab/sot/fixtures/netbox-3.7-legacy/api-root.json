@@ -1,0 +1,34 @@
+{
+  "step": "api_root",
+  "method": "GET",
+  "path": "/api/",
+  "status": 200,
+  "headers": {
+    "Allow": "GET, HEAD, OPTIONS",
+    "Api-Version": "3.7",
+    "Content-Length": "561",
+    "Content-Type": "application/json",
+    "Cross-Origin-Opener-Policy": "same-origin",
+    "Date": "Wed, 30 Sep 2026 06:11:38 GMT",
+    "Referrer-Policy": "same-origin",
+    "Server": "Unit/1.31.1",
+    "Vary": "HX-Request, Cookie, origin",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "SAMEORIGIN",
+    "X-Request-Id": "e3f06d69-8e6f-4ffd-b9aa-34d17a843c95"
+  },
+  "body": {
+    "circuits": "http://127.0.0.1:18037/api/circuits/",
+    "core": "http://127.0.0.1:18037/api/core/",
+    "dcim": "http://127.0.0.1:18037/api/dcim/",
+    "extras": "http://127.0.0.1:18037/api/extras/",
+    "ipam": "http://127.0.0.1:18037/api/ipam/",
+    "plugins": "http://127.0.0.1:18037/api/plugins/",
+    "status": "http://127.0.0.1:18037/api/status/",
+    "tenancy": "http://127.0.0.1:18037/api/tenancy/",
+    "users": "http://127.0.0.1:18037/api/users/",
+    "virtualization": "http://127.0.0.1:18037/api/virtualization/",
+    "vpn": "http://127.0.0.1:18037/api/vpn/",
+    "wireless": "http://127.0.0.1:18037/api/wireless/"
+  }
+}

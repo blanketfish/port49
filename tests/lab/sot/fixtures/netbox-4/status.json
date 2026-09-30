@@ -1,0 +1,43 @@
+{
+  "step": "status",
+  "method": "GET",
+  "path": "/api/status/",
+  "status": 200,
+  "headers": {
+    "Allow": "GET, HEAD, OPTIONS",
+    "Api-Version": "4.7",
+    "Content-Language": "en",
+    "Content-Length": "470",
+    "Content-Type": "application/json",
+    "Cross-Origin-Opener-Policy": "same-origin",
+    "Date": "Wed, 30 Sep 2026 06:07:37 GMT",
+    "Referrer-Policy": "same-origin",
+    "Server": "granian",
+    "Vary": "HX-Request, Accept-Language, Cookie, origin",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "SAMEORIGIN",
+    "X-Request-Id": "13e4d35d-3e97-4a70-9dad-0316d0f0bb07"
+  },
+  "body": {
+    "django-version": "6.1.1",
+    "hostname": "87852ba57d9c",
+    "installed_apps": {
+      "django_filters": "26.1",
+      "django_prometheus": "2.4.0",
+      "django_rq": "4.2.0",
+      "django_tables2": "3.0.1",
+      "drf_spectacular": "0.30.0",
+      "drf_spectacular_sidecar": "2026.9.1",
+      "mptt": "0.18.0",
+      "rest_framework": "3.18.0",
+      "social_django": "6.0.1",
+      "taggit": "6.1.0",
+      "timezone_field": "7.2.2"
+    },
+    "netbox-version": "4.7.1",
+    "netbox-full-version": "4.7.1-Docker-5.1.1",
+    "plugins": {},
+    "python-version": "3.14.4",
+    "rq-workers-running": 0
+  }
+}
