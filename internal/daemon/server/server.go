@@ -45,7 +45,11 @@ type Deps struct {
 	Keys        map[string]keyring.Set
 	// KeySeen marks the key version each admitted device's connection
 	// validated under (keyring.Seen.Mark); nil marks nothing.
-	KeySeen     func(device, keyRef string, version int)
+	KeySeen func(device, keyRef string, version int)
+	// Held keeps each admitted device's last unvalidated packet for `port49
+	// keys diagnose` (spec §10); nil keeps nothing. port49d sets it only with
+	// admin_socket configured.
+	Held        *keyring.Held
 	Authen      *authen.Handler
 	Author      *author.Handler
 	Acct        *acct.Handler

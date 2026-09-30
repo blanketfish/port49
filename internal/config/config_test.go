@@ -1131,3 +1131,18 @@ func TestANoBrokerPinThatIsNoNameIsRefusedUnprinted(t *testing.T) {
 		t.Fatalf("%v", err)
 	}
 }
+
+// admin_socket is off unless set (plan 6a owner decision 2), and Load
+// carries the path it names.
+func TestLoadCarriesAdminSocketOffByDefault(t *testing.T) {
+	setKeyEnv(t)
+	invPath := write(t, "inventory.yaml", inv)
+	c, err := Load(write(t, "port49d.yaml", fmt.Sprintf(sample, invPath)))
+	if err != nil || c.AdminSocket != "" {
+		t.Fatalf("%q, %v", c.AdminSocket, err)
+	}
+	c, err = Load(write(t, "admin.yaml", "admin_socket: /run/port49/port49d.sock\n"+fmt.Sprintf(sample, invPath)))
+	if err != nil || c.AdminSocket != "/run/port49/port49d.sock" {
+		t.Fatalf("%q, %v", c.AdminSocket, err)
+	}
+}

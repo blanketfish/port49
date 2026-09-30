@@ -1273,3 +1273,21 @@ func TestAnOpenConnectionDoesNotOutliveItsVersionsDate(t *testing.T) {
 		t.Fatalf("a reply (%d bytes) under a version past its date", n)
 	}
 }
+
+// A packet no key an admitted device is assigned validates is held, as it
+// arrived, for keys diagnose; it is never logged (spec §10).
+func TestAnUnvalidatedPacketIsHeldForDiagnosis(t *testing.T) {
+	log := &syncBuffer{}
+	held := &keyring.Held{}
+	ts := newTestServerWith(t, log, memory.New(time.Now), nil, func(d *Deps) { d.Held = held })
+	c := dial(t, ts.addr, []byte("some-other-key"))
+	c.send(t, wire.TypeAuthen, wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP,
+		Service: wire.AuthenServiceLogin, User: []byte("alice"), Data: []byte("p49_e2e")}.Encode(), 0)
+	if !waitFor(t, func() bool { _, ok := held.Get("leaf-01"); return ok }) {
+		t.Fatal("nothing held")
+	}
+	p, _ := held.Get("leaf-01")
+	if p.Source.String() != "127.0.0.1" || !keyring.Validates(p.Header, wire.Obfuscate(p.Header, []byte("some-other-key"), p.Body)) {
+		t.Fatalf("%+v", p)
+	}
+}

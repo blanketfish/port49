@@ -245,6 +245,7 @@ type fileConfig struct {
 	Broker         *BrokerConfig             `yaml:"broker"`
 	Lab            *LabConfig                `yaml:"lab"`
 	InventoryOpts  inventoryYAML             `yaml:"inventory"`
+	AdminSocket    string                    `yaml:"admin_socket"`
 }
 
 // inventoryYAML is how port49d bounds an inventory reload (spec §10). The
@@ -274,6 +275,11 @@ type Config struct {
 	// block is.
 	Broker *BrokerConfig
 	Lab    *LabConfig
+
+	// AdminSocket is where port49d answers `port49 keys diagnose` (plan 6a
+	// owner decision 2): a Unix socket, 0600, for port49d's user and root.
+	// Empty, the default, is off, and no packet is held.
+	AdminSocket string
 
 	// MaxRemovedPercent refuses an inventory reload that takes more than this
 	// share of the devices in force out of service — removed, or kept and
@@ -414,6 +420,7 @@ func Load(path string) (Config, error) {
 		ContextIdleTTL: orD(f.ContextIdleTTL, 12*time.Hour),
 		Accounting:     f.Accounting,
 		Lab:            f.Lab,
+		AdminSocket:    f.AdminSocket,
 		// staleness_ceiling has no default: 0 means the check is off, which is
 		// what SessionConfig.StalenessCeiling argues for.
 		Session: SessionConfig{

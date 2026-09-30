@@ -34,6 +34,7 @@ import (
 	"github.com/rhwendt/port49/internal/bundle"
 	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/daemon/acct"
+	"github.com/rhwendt/port49/internal/daemon/admin"
 	"github.com/rhwendt/port49/internal/daemon/authen"
 	"github.com/rhwendt/port49/internal/daemon/author"
 	"github.com/rhwendt/port49/internal/daemon/limits"
@@ -678,6 +679,28 @@ func run(parent context.Context, cfgPath string) error {
 			return fmt.Errorf("broker listener on %s: %w", brokerSrv.Addr, err)
 		}
 	}
+	// The admin socket binds before anything says "listening", as the broker
+	// does, and a failure lets go of every listener already bound (pre-flight
+	// M6). Only with it configured is any packet held: off, nothing is.
+	if cfg.AdminSocket != "" {
+		held := &keyring.Held{}
+		deps.Held = held
+		aln, err := admin.Listen(cfg.AdminSocket)
+		if err != nil {
+			if bln != nil {
+				bln.Close()
+			}
+			ln.Close()
+			mln.Close()
+			stopSpool()
+			<-spoolDone
+			return fmt.Errorf("admin_socket %s: %w", cfg.AdminSocket, err)
+		}
+		srv := &admin.Server{Held: held, Keys: keySets, Now: time.Now, Assigned: assignedKeyRef(cfg, live)}
+		go srv.Serve(ctx, aln)
+		fmt.Fprintf(stderr, "port49d: admin socket on %s (port49 keys diagnose)\n", cfg.AdminSocket)
+	}
+
 	// The bound address, not the configured one: `:49` says nothing about
 	// which address answered, and `:0` says nothing about which port.
 	admitted := len(cfg.Inventory.Devices)
@@ -750,6 +773,29 @@ func run(parent context.Context, cfgPath string) error {
 	fmt.Fprintln(stderr, "port49d: accounting spool drained, exiting")
 	mln.Close()
 	return runErr
+}
+
+// assignedKeyRef is the key_ref a device is assigned now, for keys diagnose:
+// the policy in force's with a broker, and without one the admission index
+// config.Load built, by the device's first address. Empty is a name port49d
+// does not admit.
+func assignedKeyRef(cfg config.Config, live *policy.Live) func(string) string {
+	return func(name string) string {
+		if live != nil {
+			r, _ := live.Load().Admitted(name)
+			return r.KeyRef
+		}
+		if cfg.Admission == nil {
+			return ""
+		}
+		for _, d := range cfg.Inventory.Devices {
+			if d.Name == name && len(d.Addresses) > 0 {
+				r, _ := cfg.Admission.Lookup(d.Addresses[0])
+				return r.KeyRef
+			}
+		}
+		return ""
+	}
 }
 
 // labHandlerStore is the store the request handlers see: st itself unless the

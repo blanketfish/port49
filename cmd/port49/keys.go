@@ -1,14 +1,17 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"sort"
 	"time"
 
 	"github.com/rhwendt/port49/internal/config"
+	"github.com/rhwendt/port49/internal/daemon/admin"
 	"github.com/rhwendt/port49/internal/keystatus"
 )
 
@@ -25,6 +28,8 @@ func keysCmd(args []string, stdout, stderr io.Writer) int {
 			return keysStatus(args[1:], stdout, stderr)
 		case "show":
 			return keysShow(args[1:], stdout, stderr)
+		case "diagnose":
+			return keysDiagnose(args[1:], stdout, stderr)
 		}
 	}
 	fmt.Fprint(stderr, usage)
@@ -188,5 +193,43 @@ func keysShow(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintln(stdout, "  the secret is not shown: rendering it is a separately authorized operation this build "+
 		"does not offer (spec §12)")
+	return 0
+}
+
+// keysDiagnose is `port49 keys diagnose` (spec §10, §12): port49d tries every
+// key it holds on the device's last unvalidated packet and names what matched.
+func keysDiagnose(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("port49 keys diagnose", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	socket := fs.String("socket", "/run/port49/port49d.sock", "port49d's admin_socket")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() != 1 {
+		fmt.Fprint(stderr, usage)
+		return 2
+	}
+	c, err := net.DialTimeout("unix", *socket, 5*time.Second)
+	if err != nil {
+		fmt.Fprintf(stderr, "port49 keys diagnose: %v (is admin_socket set in port49d.yaml, and are you port49d's "+
+			"user or root?)\n", err)
+		return 1
+	}
+	defer c.Close()
+	_ = c.SetDeadline(time.Now().Add(10 * time.Second))
+	if err := json.NewEncoder(c).Encode(admin.Request{Op: "keys_diagnose", Device: fs.Arg(0)}); err != nil {
+		fmt.Fprintln(stderr, "port49 keys diagnose:", err)
+		return 1
+	}
+	var resp admin.Response
+	if err := json.NewDecoder(c).Decode(&resp); err != nil {
+		fmt.Fprintln(stderr, "port49 keys diagnose:", err)
+		return 1
+	}
+	if resp.Error != "" {
+		fmt.Fprintln(stderr, "port49 keys diagnose:", resp.Error)
+		return 1
+	}
+	fmt.Fprintln(stdout, resp.Text)
 	return 0
 }

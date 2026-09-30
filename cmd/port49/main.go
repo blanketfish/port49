@@ -48,6 +48,7 @@ const usage = `usage:
   port49 devices capabilities --policy FILE --inventory FILE [--since DURATION] LOGFILE...|-
   port49 keys status --policy FILE --inventory FILE --config PORT49D_YAML [--since DURATION] LOGFILE...|-
   port49 keys show --policy FILE --inventory FILE [--config PORT49D_YAML] DEVICE
+  port49 keys diagnose [--socket PATH] DEVICE
 `
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }

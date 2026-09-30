@@ -263,6 +263,9 @@ func (s *conn) deobfuscate(ctx context.Context, h wire.Header, obf []byte) ([]by
 		if r.Diagnosis != keyring.DiagValidated {
 			// A retired version identifies the sender in the record and nothing
 			// more: no admission, no reply.
+			if s.d.Held != nil {
+				s.d.Held.Put(s.dev.Device.Name, s.src, h, obf, s.d.Now())
+			}
 			s.unvalidated(h, obf, r.Diagnosis, r.Version)
 			s.backoff(ctx, "malformed_backoff")
 			return nil, false
