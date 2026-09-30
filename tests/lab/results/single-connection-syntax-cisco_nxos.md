@@ -31,7 +31,7 @@ tacacs-server host 172.100.100.1 ?
 
 ### `tacacs-server host 172.100.100.1 single-connection ?`
 
-Offers `single-connection`: true. The device said:
+Offers `single-connection`: false. The device said:
 
 ```
 tacacs-server host 172.100.100.1 single-connection ?
@@ -56,7 +56,7 @@ tacacs-server host 172.100.100.1 key 0 <key> ?
 
 ### `tacacs-server host 172.100.100.1 key 0 <key> single-connection ?`
 
-Offers `single-connection`: true. The device said:
+Offers `single-connection`: false. The device said:
 
 ```
 tacacs-server host 172.100.100.1 key 0 <key> single-connection ?
