@@ -34,11 +34,47 @@ log=$root/tests/lab/logs/l27-$stack$suffix.log
 
 # The env file lives outside the repository. L27_ENV_DIR keeps it (for a
 # count-only secret audit after the run); otherwise it is deleted on exit.
+# The curl header file and the recorder binary live in a private temporary
+# directory that is always deleted on exit.
 envdir=${L27_ENV_DIR:-}
 keep=1
 if [ -z "$envdir" ]; then envdir=$(mktemp -d); keep=0; fi
 envf=$envdir/l27-$stack$suffix.env
-bin=$(mktemp -d)/sot-record
+tmp=$(mktemp -d)
+bin=$tmp/sot-record
+hdr=$tmp/auth-header
+
+scheme=Token
+flags=()
+case $stack in
+netbox-4) scheme=Bearer; flags+=(-probe-v1-token) ;;
+nautobot-2) flags+=(-depth1-read) ;;
+esac
+[ -n "$legacy" ] && flags+=(-prefer-legacy)
+
+dc() { docker compose --env-file "$envf" -f "$compose" "$@"; }
+cleanup() {
+	set +e
+	if [ -f "$envf" ]; then
+		dc logs --no-color >"$log.compose" 2>&1
+		# Every generated value, and a v2 token's key and secret, out of the
+		# log. The sed script is a 0600 file, so no value is on a command line.
+		(
+			umask 077
+			while IFS='=' read -r _ v; do
+				[ -n "$v" ] && printf 's/%s/<redacted>/g\n' "$v"
+			done <"$envf" >"$tmp/redact.sed"
+		)
+		sed -i -f "$tmp/redact.sed" "$log.compose"
+		dc down -v >>"$log" 2>&1
+		echo "run.sh: $stack$suffix torn down at $(date -u +%FT%TZ)" >>"$log"
+	fi
+	[ "$keep" = 1 ] || rm -rf "$envdir"
+	rm -rf "$tmp"
+}
+# Set before any credential exists, so every exit removes what was written.
+trap cleanup EXIT
+trap 'exit 3' TERM INT
 
 rnd() { LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c "$1" || true; }
 umask 077
@@ -60,42 +96,21 @@ umask 077
 		echo "L27_TOKEN=$(openssl rand -hex 20)"
 	fi
 } >"$envf"
-umask 022
 set -a
 . "$envf"
 set +a
+# curl reads the header from this 0600 file (-H @file), so the token is never
+# on a command line; printf is a builtin and runs no process.
+printf 'Authorization: %s %s\n' "$scheme" "$L27_TOKEN" >"$hdr"
+umask 022
 export L27_WEBHOOK_SECRET=l27-lab-webhook-secret # public, lab only: 6b's verifier is tested against it
-
-scheme=Token
-flags=()
-case $stack in
-netbox-4) scheme=Bearer; flags+=(-probe-v1-token) ;;
-nautobot-2) flags+=(-depth1-read) ;;
-esac
-[ -n "$legacy" ] && flags+=(-prefer-legacy)
-
-dc() { docker compose --env-file "$envf" -f "$compose" "$@"; }
-cleanup() {
-	set +e
-	dc logs --no-color >"$log.compose" 2>&1
-	# Every generated value, and a v2 token's key and secret, out of the log.
-	while IFS='=' read -r _ v; do
-		[ -n "$v" ] && sed -i "s/$v/<redacted>/g" "$log.compose"
-	done <"$envf"
-	dc down -v >>"$log" 2>&1
-	echo "run.sh: $stack$suffix torn down at $(date -u +%FT%TZ)" >>"$log"
-	[ "$keep" = 1 ] || rm -rf "$envdir"
-	rm -rf "$(dirname "$bin")"
-}
-trap cleanup EXIT
-trap 'exit 3' TERM INT
 
 : >"$log"
 echo "run.sh: $stack$suffix up at $(date -u +%FT%TZ)" | tee -a "$log"
 go build -o "$bin" ./tests/lab/cmd/sot-record
 dc up -d >>"$log" 2>&1 || { echo "run.sh: compose up failed; see $log" | tee -a "$log"; exit 1; }
 deadline=$(($(date +%s) + 600))
-until curl -fsS -o /dev/null -H "Authorization: $scheme $L27_TOKEN" "http://127.0.0.1:$port/api/status/" 2>/dev/null; do
+until curl -fsS -o /dev/null -H @"$hdr" "http://127.0.0.1:$port/api/status/" 2>/dev/null; do
 	if [ "$(date +%s)" -ge "$deadline" ]; then
 		echo "run.sh: STALL: /api/status/ not answered in 10 minutes" | tee -a "$log"
 		tail -40 "$log" >&2
