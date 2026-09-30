@@ -36,10 +36,11 @@ built, below). **6a written 2026-09-30, revised the same day** after its pre-fli
 lab, one lab-and-docs; plan 6 is split at the seam below, and three owner decisions are listed at
 its top), and **executed 2026-09-30** on `feature/bundle-in-process`, reviewed per task and
 whole-branch, with a final fix wave. It closed L27 and L28 and opened L29 and L30 (Plan 6a — As
-built, below); **merged 2026-09-30 (PR #15)**. **6b written 2026-09-30**
-(`2026-09-30-06b-inventory-service.md`, twenty-one tasks: one docs, one lab, sixteen code, two lab, one
-lab-and-docs); it splits again at the source, leaving the NetBox and Nautobot connectors and the
-webhook trigger to plan 6c, and three owner decisions are listed at its top.
+built, below); **merged 2026-09-30 (PR #15)**. **6b written 2026-09-30, revised the same day** after
+its pre-flight review (`2026-09-30-06b-inventory-service.md`, twenty-two tasks: one docs, one lab,
+seventeen code, two lab, one lab-and-docs); it splits again at the source, leaving the NetBox and
+Nautobot connectors and the webhook trigger to plan 6c, and three owner decisions are listed at its
+top. Its Task 19 gates the merge; its Task 20 (L29 at midnight) runs first and may land after it.
 6c and 7–13 not yet.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
@@ -965,12 +966,15 @@ commands and the system users by platform name, so 5a refuses `based_on: juniper
   through syncs, and the midnight case as four scheduled runs), spec §14's quarantine through a sync,
   and L30 recorded as fixtures for 6c. Owner decisions at its top: every copy of the bundle signed
   (ed25519) and verified; the mirror a directory, not an object-store API; nothing the service sends
-  assigns a key.
+  assigns a key, and the pin tier moves into the reviewed policy as a key group matching a device name
+  (revised after the pre-flight review: a `/32` group is tier 3 and is not a pin).
 - **Plan 6c — the NetBox and Nautobot connectors; written after 6b merges, against L27's and L30's
   fixtures.** Version detection by `/api/status/`, GraphQL first, the REST fallback (`?depth=1` on
   Nautobot 2.x, following `next` as L30 finds it), the slug alias table, filters and maps, source
   credentials by `secret_env`, and the authenticated webhook trigger (HMAC-SHA512 of the body, ordered
-  by the body's `timestamp`, a delivery only triggering a sync). Split from 6b because the connectors
+  by the body's `timestamp`, a delivery only triggering a sync); every `Fetch` returning within
+  `sync_timeout`; and `port49 inventory export --service … [--from N]`, so the offline tools keep an
+  `--inventory` when no source is a file. Split from 6b because the connectors
   are the contributable surface and hold the only source-of-truth credentials, and two of their facts
   (L30) were unmeasured when 6b was written.
 
