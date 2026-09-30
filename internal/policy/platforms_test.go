@@ -688,3 +688,46 @@ grants: [{subject: s, scope: all_devices, roles: [r]}]
 		t.Fatalf("the reply carries the hash: %q", res.Projection.Attributes)
 	}
 }
+
+// A variant projects with its base's keyword tree (spec §8; plan 6a): the
+// same composition on a juniper_junos variant and on juniper_junos gets the
+// same reply, a capability with a keyword deny and a fail-closed one alike.
+// Read under its own name the variant would have no tree, and the reply
+// would differ (task 9 review).
+func TestAJunosVariantProjectsWithJunossKeywordTree(t *testing.T) {
+	e := env()
+	e.Devices = append(e.Devices, admission.Device{Name: "srx-var-1", Platform: "srx_variant",
+		Addresses: []netip.Addr{netip.MustParseAddr("10.0.5.50")}})
+	for _, deny := range []string{"restart **", "request system reboot", "set system root-authentication **"} {
+		p, err := Parse([]byte(`
+platform_set: 1.1.0
+platforms:
+  srx_variant: {based_on: juniper_junos}
+scopes: [{name: all_devices, match: {}}]
+roles:
+  - {name: r, privilege: admin, permit: ["**"], deny: ["`+deny+`"]}
+subjects: [{name: s, identity: "user:s@example.com", username: s, token_ttl: 60s}]
+grants: [{subject: s, scope: all_devices, roles: [r]}]
+`), e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got [2]projection.Result
+		for i, name := range []string{"srx-fw-04", "srx-var-1"} {
+			d, ok := p.device(name)
+			if !ok {
+				t.Fatal(name)
+			}
+			res, err := p.ResolveSubject("s", d, noon)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got[i] = *res.Projection
+		}
+		if got[0].Shape != got[1].Shape || got[0].FailClosed != got[1].FailClosed ||
+			!reflect.DeepEqual(got[0].Attributes, got[1].Attributes) {
+			t.Errorf("deny %q: junos %s %s %q, variant %s %s %q", deny, got[0].Shape, got[0].FailClosed,
+				got[0].Attributes, got[1].Shape, got[1].FailClosed, got[1].Attributes)
+		}
+	}
+}
