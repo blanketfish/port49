@@ -44,7 +44,7 @@ top. **Executed 2026-09-30** on `feature/inventory-service`, reviewed per task a
 with a fix wave; Task 20's midnight nights were dropped by the owner's ruling. It closed L29 and
 L30, and spec §14's quarantine through a sync passed on four images; it opened L31, slow Cisco
 break-glass with single-connection on (Plan 6b — As built, below); **merged 2026-09-30 (PR #17)**. Next,
-`fix/breakglass-reset`, which closes L31: **written 2026-09-30** (`2026-09-30-06b1-breakglass-reset.md`, seven tasks: one docs, three code, one lab harness, one lab run, one lab-and-docs; no owner decisions); **executed 2026-09-30** on `fix/breakglass-reset`, closing L31 (Fix `fix/breakglass-reset` — As built, below); ready to merge. Next is 6c; 7–13 not yet.
+`fix/breakglass-reset`, which closes L31: **written 2026-09-30** (`2026-09-30-06b1-breakglass-reset.md`, seven tasks: one docs, three code, one lab harness, one lab run, one lab-and-docs; no owner decisions); **executed 2026-09-30** on `fix/breakglass-reset`, closing L31 (Fix `fix/breakglass-reset` — As built, below); **merged 2026-09-30 (PR #18)**. Next is 6c; 7–13 not yet.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -960,7 +960,7 @@ commands and the system users by platform name, so 5a refuses `based_on: juniper
   (`device_unknown`); a test on an absent device fails CI and never a reload; a policy reload is held to
   the same bound as an inventory reload, and `policy diff` fails on a newly refused device.
 - **Plan 6b — `2026-09-30-06b-inventory-service.md`. Written 2026-09-30; executed 2026-09-30
-  (as built, below); ready to merge.**
+  (as built, below); merged 2026-09-30 (PR #18).**
   `cmd/port49-inventory` with the §10 API over mutual TLS (read and sync rights), the file connector,
   three of the four sync triggers (10-minute schedule, `port49 inventory sync`, startup), bounded
   change per source in the service, the signed bundle document and its sequence number, port49d's
