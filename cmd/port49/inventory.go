@@ -86,88 +86,131 @@ func inventoryDiff(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	now := time.Now()
+	// Every admitted device rests on a key_ref; without --config none was
+	// checked against the keys port49d.yaml defines, and a pin to one it
+	// does not define is refused there, not here. Every verdict says so.
+	unchecked := ""
+	if *cfgPath == "" && len(new.AdmissionRefusals()) < len(new.Devices()) {
+		unchecked = "; key_refs not checked against port49d.yaml: pass --config to check them"
+	}
 	if bytes.Equal(old.Raw(), new.Raw()) {
-		// One file changed: one inventory reload, against the policy in force.
+		// One file changed: one inventory reload, against the policy in force,
+		// checked before the bundles are compared, as port49d does.
 		rep := bundle.Diff(old, new, now)
 		fmt.Fprintln(stdout, rep.Summary())
-		if new.Bundle == old.Bundle {
-			fmt.Fprintf(stdout, "unchanged: the same inventory, respelled; bundle %s stays in force\n", old.Bundle)
-			return 0
+		if new.Bundle != old.Bundle {
+			printChanges(stdout, rep, new)
 		}
-		printChanges(stdout, rep, new)
 		if err := bundle.Check(old, new, bound); err != nil {
-			fmt.Fprintf(stdout, "refused: %v\n", err)
+			fmt.Fprintf(stdout, "refused: %v%s\n", err, unchecked)
 			return 1
 		}
-		fmt.Fprintf(stdout, "ok: port49d would take the new inventory (inventory.max_removed_percent %d%%)\n", bound)
+		if new.Bundle == old.Bundle {
+			fmt.Fprintf(stdout, "unchanged: the same inventory, respelled; bundle %s stays in force%s\n", old.Bundle,
+				unchecked)
+			return 0
+		}
+		fmt.Fprintf(stdout, "ok: port49d would take the new inventory (inventory.max_removed_percent %d%%)%s\n", bound,
+			unchecked)
 		return 0
 	}
 	// Both files changed: two reloads, each loading its file against the
-	// other in force, bounded, and logged as its own swap. A reload refused is
-	// tried again once the other file lands (plan 6a, C3), so port49d ends on
-	// the new bundle if either order passes both of its bounds. Each order is
-	// shown step by step, as port49d would log it: a device that joins a scope
-	// in one step and leaves it in the next is two inventory_change records.
+	// other in force, bounded, and logged as its own swap. Each order is shown
+	// step by step, as port49d would log it: a device that joins a scope in
+	// one step and leaves it in the next is two inventory_change records.
 	fmt.Fprintln(stdout, bundle.Diff(old, new, now).Summary())
-	policyFirst := reloadOrder(stdout, now, "policy file first", old, new,
-		func() (*policy.Policy, error) { return bundle.Load(*newPol, oldInv, env) },
-		func(mid *policy.Policy) error { return bundle.CheckAdmission(old, mid, bound) },
-		func(mid *policy.Policy) error { return bundle.Check(mid, new, bound) },
-		"policy", "inventory")
-	inventoryFirst := reloadOrder(stdout, now, "inventory file first", old, new,
-		func() (*policy.Policy, error) { return bundle.Load(*polPath, newInv, env) },
-		func(mid *policy.Policy) error { return bundle.Check(old, mid, bound) },
-		func(mid *policy.Policy) error { return bundle.CheckAdmission(mid, new, bound) },
-		"inventory", "policy")
+	orders := []order{
+		reloadOrder(stdout, now, old, new,
+			func() (*policy.Policy, error) { return bundle.Load(*newPol, oldInv, env) },
+			func(mid *policy.Policy) error { return bundle.CheckAdmission(old, mid, bound) },
+			func(mid *policy.Policy) error { return bundle.Check(mid, new, bound) },
+			"policy", "inventory"),
+		reloadOrder(stdout, now, old, new,
+			func() (*policy.Policy, error) { return bundle.Load(*polPath, newInv, env) },
+			func(mid *policy.Policy) error { return bundle.Check(old, mid, bound) },
+			func(mid *policy.Policy) error { return bundle.CheckAdmission(mid, new, bound) },
+			"inventory", "policy"),
+	}
+	// An order whose first reload is taken and whose second is refused
+	// leaves port49d on the bundle between: the refused file is tried again
+	// only when the other file changes again (plan 6a, C3), and a SIGHUP
+	// runs the same check on the same state. That fails the diff.
+	stuck := false
+	for _, o := range orders {
+		if o.stuck != nil {
+			stuck = true
+			fmt.Fprintf(stdout, "refused: if the %s file lands first, port49d takes it, then refuses the %s file (%v) "+
+				"and stays on that bundle until the %s file changes again%s\n", o.first, o.second, o.stuck, o.first,
+				unchecked)
+		}
+	}
+	if stuck {
+		return 1
+	}
+	// Otherwise an order refused is refused at its first reload, which swaps
+	// nothing: the other file's reload runs next, as the other order.
+	policyFirst, inventoryFirst := orders[0].err, orders[1].err
 	switch {
 	case policyFirst == nil && inventoryFirst == nil:
-		fmt.Fprintf(stdout, "ok: port49d would take both, in either order (inventory.max_removed_percent %d%%)\n", bound)
+		fmt.Fprintf(stdout, "ok: port49d would take both, in either order (inventory.max_removed_percent %d%%)%s\n",
+			bound, unchecked)
 	case policyFirst == nil || inventoryFirst == nil:
 		first, then := "policy", "inventory"
 		if policyFirst != nil {
 			first, then = then, first
 		}
 		fmt.Fprintf(stdout, "ok: port49d would take both (inventory.max_removed_percent %d%%); if the %s file "+
-			"lands first, its reload is refused until the %s file lands\n", bound, then, first)
+			"lands first, its reload is refused until the %s file lands%s\n", bound, then, first, unchecked)
 	default:
-		fmt.Fprintln(stdout, "refused: port49d would take both files in neither order")
+		fmt.Fprintf(stdout, "refused: port49d would take both files in neither order%s\n", unchecked)
 		return 1
 	}
 	return 0
 }
 
-// reloadOrder prints two reloads in turn under heading, first then second,
-// as port49d runs them: the first file's loaded against the other in force
-// (load) and bounded (firstCheck), then the second's (secondCheck). Each step
-// taken is printed with its changes, the security ones marked as that swap's
+// order is one order of a two-file change's reloads: err is nil when both
+// are taken, and stuck is the second reload's refusal when the first was
+// taken, which leaves port49d on the bundle between.
+type order struct {
+	first, second string
+	err, stuck    error
+}
+
+// reloadOrder prints two reloads in turn, first then second, as port49d runs
+// them: the first file's loaded against the other in force (load) and
+// bounded (firstCheck), then the second's (secondCheck). Each step taken is
+// printed with its changes, the security ones marked as that swap's
 // inventory_change records; a step refused swaps nothing and logs nothing.
-// It ends with the verdict line, and returns nil when both are taken.
-func reloadOrder(w io.Writer, now time.Time, heading string, old, new *policy.Policy,
+// It ends with the order's verdict line.
+func reloadOrder(w io.Writer, now time.Time, old, new *policy.Policy,
 	load func() (*policy.Policy, error), firstCheck, secondCheck func(*policy.Policy) error,
-	first, second string) error {
+	first, second string) order {
+	heading := first + " file first"
 	fmt.Fprintf(w, "%s:\n", heading)
-	err := func() error {
-		mid, err := load()
-		if err != nil {
-			return fmt.Errorf("the %s reload is refused: port49d would not load it against the %s in force: %s",
-				first, second, loadFault(err))
-		}
-		if err := firstCheck(mid); err != nil {
-			return fmt.Errorf("the %s reload is refused: %w", first, err)
-		}
+	o := order{first: first, second: second}
+	mid, err := load()
+	switch {
+	case err != nil:
+		o.err = fmt.Errorf("the %s reload is refused: port49d would not load it against the %s in force: %s",
+			first, second, loadFault(err))
+	case firstCheck(mid) != nil:
+		o.err = fmt.Errorf("the %s reload is refused: %w", first, firstCheck(mid))
+	default:
 		step(w, now, first, old, mid)
 		if err := secondCheck(mid); err != nil {
-			return fmt.Errorf("the %s reload after it is refused: %w", second, err)
+			o.stuck = err
+			o.err = fmt.Errorf("the %s reload after it is refused, and port49d stays on the bundle between: %w",
+				second, err)
+			break
 		}
 		step(w, now, second, mid, new)
-		return nil
-	}()
-	if err != nil {
-		fmt.Fprintf(w, "%s: %v\n", heading, err)
-		return err
+	}
+	if o.err != nil {
+		fmt.Fprintf(w, "%s: %v\n", heading, o.err)
+		return o
 	}
 	fmt.Fprintf(w, "%s: taken\n", heading)
-	return nil
+	return o
 }
 
 // step prints one reload port49d takes: its summary line and its changes.

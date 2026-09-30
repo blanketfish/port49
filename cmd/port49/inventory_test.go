@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -169,11 +170,99 @@ func TestInventoryDiffWithANewPolicySaysTheOrder(t *testing.T) {
 		!strings.Contains(out.String(), "refused: the new inventory admits none of the 2 device(s)") {
 		t.Fatalf("exit %d: %s%s", code, out.String(), errOut.String())
 	}
-	// Neither order: the new policy deletes the key groups too.
+	// The new policy deletes the key groups too: the policy reload is taken
+	// (the inventory in force still has them), and the inventory's after it
+	// is refused, so port49d stays on the bundle between.
 	out.Reset()
 	if code := run([]string{"inventory", "diff", "--policy", oldPol, "--new-policy", write("bare2.yaml", bare+"\n"), old, new},
-		&out, &errOut); code != 1 || !strings.Contains(out.String(), "refused: port49d would take both files in neither order") {
+		&out, &errOut); code != 1 || !strings.Contains(out.String(), "refused: if the policy file lands first, port49d "+
+		"takes it, then refuses the inventory file (the new inventory admits none") {
 		t.Fatalf("exit %d: %s%s", code, out.String(), errOut.String())
+	}
+}
+
+// Neither order: each file's reload is refused against the other in force,
+// so whichever lands first swaps nothing, and so does the other.
+func TestInventoryDiffWithANewPolicyInNeitherOrder(t *testing.T) {
+	_, _, _, write := diffFiles(t)
+	groups := func(cidr string) string {
+		return strings.Replace(diffPolicy, "cidr: 10.0.0.0/8", "cidr: "+cidr, 1)
+	}
+	oldPol, newPol := write("old-policy.yaml", groups("172.16.0.0/12")), write("new-policy.yaml", groups("10.9.0.0/16"))
+	old := write("old.yaml", "devices:\n  - {name: leaf-01, platform: arista_eos, addresses: [172.16.0.1]}\n"+
+		"  - {name: leaf-02, platform: arista_eos, addresses: [172.16.0.2]}\n")
+	new := write("new.yaml", "devices:\n  - {name: leaf-01, platform: arista_eos, addresses: [10.9.0.1]}\n"+
+		"  - {name: leaf-02, platform: arista_eos, addresses: [10.9.0.2]}\n")
+	var out, errOut bytes.Buffer
+	if code := run([]string{"inventory", "diff", "--policy", oldPol, "--new-policy", newPol, old, new}, &out, &errOut); code != 1 ||
+		!strings.Contains(out.String(), "refused: port49d would take both files in neither order") ||
+		strings.Contains(out.String(), "stays on that bundle") {
+		t.Fatalf("exit %d: %s%s", code, out.String(), errOut.String())
+	}
+}
+
+// The reviewer's case (I1): the new policy narrows key_groups, and the new
+// inventory adds devices outside the narrowed range. Inventory first, the
+// inventory reload is taken and the policy's after it refused, so port49d
+// stays half-applied: the diff fails, and says so, not "refused until".
+func TestInventoryDiffFailsAChangePort49dWouldHalfTake(t *testing.T) {
+	_, _, _, write := diffFiles(t)
+	oldPol := write("old-policy.yaml", diffPolicy)
+	newPol := write("new-policy.yaml", strings.Replace(diffPolicy, "cidr: 10.0.0.0/8", "cidr: 10.0.1.0/24", 1))
+	var oldBody, added strings.Builder
+	oldBody.WriteString("devices:\n")
+	for i := 1; i <= 10; i++ {
+		fmt.Fprintf(&oldBody, "  - {name: leaf-%02d, platform: arista_eos, addresses: [10.0.1.%d]}\n", i, i)
+	}
+	for i := 1; i <= 5; i++ {
+		fmt.Fprintf(&added, "  - {name: n%d, platform: arista_eos, addresses: [10.0.2.%d]}\n", i, i)
+	}
+	old := write("old.yaml", oldBody.String())
+	new := write("new.yaml", oldBody.String()+added.String())
+	var out, errOut bytes.Buffer
+	code := run([]string{"inventory", "diff", "--policy", oldPol, "--new-policy", newPol, old, new}, &out, &errOut)
+	got := out.String()
+	if code != 1 {
+		t.Fatalf("exit %d, want 1:\n%s%s", code, got, errOut.String())
+	}
+	for _, want := range []string{"policy file first: taken", "! device added n1 (arista_eos) at 10.0.2.1: admitted",
+		"refused: if the inventory file lands first, port49d takes it, then refuses the policy file (the new policy " +
+			"refuses admission to 5 of 15 devices",
+		"and stays on that bundle until the inventory file changes again"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "ok:") || strings.Contains(got, "refused until") {
+		t.Errorf("a half-take is reported as converging:\n%s", got)
+	}
+}
+
+// Without --config every verdict says the key_refs went unchecked (I2): a pin
+// to a key port49d.yaml does not define reads as admitted here and is refused
+// there. With --config it is not said.
+func TestInventoryDiffSaysTheKeyRefsWentUnchecked(t *testing.T) {
+	_, pol, old, write := diffFiles(t)
+	new := write("new.yaml", "devices:\n  - {name: leaf-01, platform: arista_eos, addresses: [10.0.1.1]}\n"+
+		"  - {name: leaf-02, platform: arista_eos, addresses: [10.0.1.2], key_ref: lab_key}\n")
+	const note = "key_refs not checked against port49d.yaml: pass --config to check them"
+	var out, errOut bytes.Buffer
+	if code := run([]string{"inventory", "diff", "--policy", pol, old, new}, &out, &errOut); code != 0 ||
+		!strings.Contains(out.String(), "ok: port49d would take the new inventory (inventory.max_removed_percent 10%); "+note) {
+		t.Fatalf("exit %d: %s%s", code, out.String(), errOut.String())
+	}
+	half := write("half.yaml", "devices:\n  - {name: leaf-01, platform: arista_eos, addresses: [10.0.1.1]}\n")
+	out.Reset()
+	if code := run([]string{"inventory", "diff", "--policy", pol, old, half}, &out, &errOut); code != 1 ||
+		!strings.Contains(out.String(), note) {
+		t.Fatalf("a refused verdict must say it too: exit %d: %s", code, out.String())
+	}
+	cfg := write("port49d.yaml", "keys:\n  prod_key: {current: {version: 1, secret_env: NEVER_READ}}\n"+
+		"  lab_key: {current: {version: 1, secret_env: NEVER_READ}}\n")
+	out.Reset()
+	if code := run([]string{"inventory", "diff", "--policy", pol, "--config", cfg, old, new}, &out, &errOut); code != 0 ||
+		strings.Contains(out.String(), note) {
+		t.Fatalf("with --config: exit %d: %s", code, out.String())
 	}
 }
 

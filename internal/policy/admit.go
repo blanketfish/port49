@@ -44,9 +44,10 @@ func (p *Policy) buildKeyGroups(f file) error {
 		}
 		kg := admission.KeyGroup{Attributes: g.Match.Attributes, KeyRef: g.KeyRef}
 		if g.Match.CIDR != "" {
+			// netip's error quotes the value; the position says where it is.
 			pfx, err := netip.ParsePrefix(g.Match.CIDR)
 			if err != nil {
-				return fmt.Errorf("%s: %w", at, err)
+				return fmt.Errorf("%s: match.cidr is not a CIDR prefix", at)
 			}
 			if pfx != pfx.Masked() {
 				return fmt.Errorf("%s: cidr %s has host bits set; write %s", at, pfx, pfx.Masked())
