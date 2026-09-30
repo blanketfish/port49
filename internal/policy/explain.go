@@ -29,6 +29,9 @@ type Explanation struct {
 	// filled in but notes.
 	Quarantined bool
 	Quarantine  []string
+	// Refused is device_unknown on a device the inventory names and
+	// admission refuses (spec §10), with why. Nothing else is filled in.
+	Refused string
 	// MintError is the mint item error the broker would answer instead of a
 	// token (attribute_too_long, attribute_unsafe, broker_error), and
 	// MintDetail what it names. Nothing is decided past it: no token, no
@@ -96,6 +99,9 @@ func (p *Policy) Explain(subject, principal, device, line string, now time.Time)
 	case errors.Is(err, ErrDeviceQuarantined):
 		e.Quarantined = true
 		e.Quarantine, e.Caveats = p.quarantineAt(d.Name, now)
+		return e, nil
+	case errors.Is(err, ErrDeviceRefused):
+		e.Refused = p.admitted[d.Name].Refused
 		return e, nil
 	case err != nil:
 		return e, err
@@ -327,6 +333,12 @@ func (e Explanation) Redacted(rules []platform.Redaction) Explanation {
 // Render writes the explanation for a person: the verdict and its one reason
 // first, then what it rests on.
 func (e Explanation) Render(w io.Writer, showAttributes bool) {
+	if e.Refused != "" {
+		fmt.Fprintf(w, "deny %s\n  %s (%s) is in the inventory and admission refuses it: %s; nothing is minted "+
+			"for it, and port49d closes its connections after the header (spec §10)\n", decision.DeviceUnknown,
+			e.Device, e.Platform, e.Refused)
+		return
+	}
 	if e.Quarantined {
 		fmt.Fprintf(w, "deny %s\n  %s (%s) fails a joint check now, so nothing is minted for it and port49d "+
 			"closes its connections without a reply while the check fails (spec §10):\n",

@@ -38,6 +38,16 @@ type Env struct {
 	// Devices is the inventory: the file inventory the daemon admits from,
 	// until plan 6's bundle.
 	Devices []admission.Device
+	// KeyRefs are the key_refs port49d.yaml defines keys for, by name only:
+	// a device assigned one outside them is refused admission (spec §10).
+	// nil is not known — an offline tool given no --config — and refuses no
+	// device for it.
+	KeyRefs []string
+	// InventoryKeyGroups are the key groups an inventory file still carries
+	// (admission.Inventory.KeyGroups). They apply where this file has none,
+	// with a notice; where it has its own, this file's win and the notice
+	// names these ignored (plan 6a Decided 4).
+	InventoryKeyGroups []admission.KeyGroup
 	// Dialects replaces platforms of the pinned set when non-nil: tests use
 	// it to stand a platform up with other behaviour.
 	Dialects map[string]platform.Dialect
@@ -80,6 +90,18 @@ type Policy struct {
 	env     Env
 	// quarantine is every device a joint check failed on, by name (Task 10).
 	quarantine map[string]*Quarantine
+	// devIndex is the inventory by name, filled first thing in Parse, so
+	// every step — buildTests included — finds a device in O(1).
+	devIndex map[string]admission.Device
+	// keyGroups assign each device its key_ref (spec §10), and admitted and
+	// assigned are the answer for each inventory device, by name; trie
+	// indexes admitted by address. notices are what a load says without
+	// refusing (admit.go).
+	keyGroups []admission.KeyGroup
+	admitted  map[string]admission.Resolved
+	assigned  map[string]admission.Assignment
+	trie      *admission.Trie
+	notices   []string
 }
 
 // Scope selects devices by their inventory attributes (spec §5.5).
@@ -221,7 +243,11 @@ func Parse(raw []byte, env Env) (*Policy, error) {
 			"everything after it, or merge it into the first document")
 	}
 	p := &Policy{Bundle: engine.HashOf(raw), env: env}
-	for _, step := range []func(file) error{p.buildPlatforms, p.buildLevels, p.checkBlockOrder, p.buildRoles, p.buildScopes, p.buildSubjects,
+	p.devIndex = make(map[string]admission.Device, len(env.Devices))
+	for _, d := range env.Devices {
+		p.devIndex[d.Name] = d
+	}
+	for _, step := range []func(file) error{p.buildPlatforms, p.buildKeyGroups, p.admit, p.buildLevels, p.checkBlockOrder, p.buildRoles, p.buildScopes, p.buildSubjects,
 		p.buildGrants, p.checkMinters, p.buildTests, p.buildAcknowledgments} {
 		if err := step(f); err != nil {
 			return nil, err
@@ -249,21 +275,14 @@ var (
 )
 
 // refusedKeys names the plan that reads a key this build does not, before the
-// strict decode can say only that the field is unknown. Spec §11's example
-// carries two of them.
+// strict decode can say only that the field is unknown.
 func refusedKeys(raw []byte) error {
 	var loose struct {
-		KeyGroups any              `yaml:"key_groups"`
 		Roles     []map[string]any `yaml:"roles"`
 		Platforms map[string]any   `yaml:"platforms"`
 	}
 	if err := yaml.Unmarshal(raw, &loose); err != nil {
 		return nil // the strict decode reports it, with a line number
-	}
-	switch {
-	case loose.KeyGroups != nil:
-		return errors.New("key_groups: key groups live in the inventory file (inventory_file) until plan 6 " +
-			"moves them to the policy repository; move the block there")
 	}
 	// A block key written with no value, or null, decodes as unset and
 	// inherits the set's value: it reads as set and means the opposite
@@ -1369,9 +1388,6 @@ func (p *Policy) buildTests(f file) error {
 				return fmt.Errorf("%s: principal: %w", row, err)
 			}
 		}
-		if _, ok := p.device(t.Device); !ok {
-			return fmt.Errorf("%s: device %q is not in the inventory", row, t.Device)
-		}
 		if err := p.checkLevel(t.Level); err != nil {
 			return fmt.Errorf("%s: level: %w", row, err)
 		}
@@ -1460,12 +1476,8 @@ func (p *Policy) acknowledgment(role, rule string) (Acknowledgment, bool) {
 }
 
 func (p *Policy) device(name string) (admission.Device, bool) {
-	for _, d := range p.env.Devices {
-		if d.Name == name {
-			return d, true
-		}
-	}
-	return admission.Device{}, false
+	d, ok := p.devIndex[name]
+	return d, ok
 }
 
 // platforms is every dialect this policy can meet: its pinned set, the

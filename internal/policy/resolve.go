@@ -100,6 +100,9 @@ func (p *Policy) resolveNow(sub *Subject, d admission.Device, now time.Time) (Re
 	if err := p.quarantined(d, now); err != nil {
 		return Resolution{}, err
 	}
+	if r, ok := p.admitted[d.Name]; ok && r.Refused != "" && p.AdmissionAssessed() {
+		return Resolution{}, fmt.Errorf("%w: %s", ErrDeviceRefused, r.Refused)
+	}
 	return p.resolved(sub, d, c)
 }
 
@@ -410,6 +413,13 @@ func (p *Policy) render(dialect platform.Dialect, level string) ([]string, strin
 // policy-and-inventory check at load, so nothing is minted for it (spec §10,
 // §13 decision 20). The wrapped message names the cause.
 var ErrDeviceQuarantined = errors.New("policy: the device is quarantined")
+
+// ErrDeviceRefused is a device the inventory names and admission refuses
+// (spec §10): no key group admits it, two tie on it, or its key_ref is one
+// port49d holds no key for. It cannot reach port49d, so nothing is minted for
+// it, and a refresh revokes its contexts; the mint denies it device_unknown
+// (spec §5.7). The wrapped message names the cause.
+var ErrDeviceRefused = errors.New("policy: admission refuses the device")
 
 // Quarantine is one device a joint check fails on, now or once a grant
 // expires, and every entry: which subject's composition fails, from when,
