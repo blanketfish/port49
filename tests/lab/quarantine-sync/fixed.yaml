@@ -1,0 +1,22 @@
+# Spec §14's named fix (plan 6b Task 19): quarantine-sync/policy.yaml without
+# the two probe grants whose compositions fail joint validation on the lab
+# devices. The next sync after this edit admits the device.
+privilege_levels: [{name: readonly}, {name: operator}, {name: unmapped}, {name: admin}]
+scopes:
+  - {name: all_devices, match: {}}
+  - {name: lab_devices, match: {name: [srx1, vsrx1, nx1, xe1]}}
+  - {name: lab_eos, match: {name: [leaf1]}}
+roles:
+  - {name: network_admin, privilege: admin, permit: ["**"]}
+  - {name: eos_class_only, privilege: admin, permit: ["show interfaces @loopback"]}
+  - {name: unrenderable, privilege: unmapped, permit: ["show version"]}
+subjects:
+  - {name: slice_operator, identity: ["user:alice@slice.port49.test"], username: slice01,
+     enable: token, token_ttl: 60s}
+  - {name: quarantine_probe, identity: ["user:probe@slice.port49.test"], username: probe01, token_ttl: 60s}
+  - {name: eos_probe, identity: ["user:eosprobe@slice.port49.test"], username: probe02, token_ttl: 60s}
+grants:
+  - {subject: slice_operator, scope: all_devices, roles: [network_admin], max_privilege: admin}
+key_groups:
+  - {match: {cidr: 172.100.100.0/24}, key_ref: lab_key}
+  - {match: {cidr: 10.99.0.0/24}, key_ref: lab_key}
