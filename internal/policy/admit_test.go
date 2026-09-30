@@ -343,4 +343,16 @@ func TestANameGroupIsOneTermAndOneGroupPerName(t *testing.T) {
 			t.Errorf("%s: got %v, want %q", name, err, c.want)
 		}
 	}
+	// A value that is no name is not echoed.
+	if _, err := Parse([]byte(keyGrouped+"  - {match: {name: \"leaf 01\"}, key_ref: prod_key}\n"), env()); err == nil ||
+		strings.Contains(err.Error(), "leaf 01") {
+		t.Fatalf("echoed the rejected name: %v", err)
+	}
+	// 253 bytes is a device name; 254 is not (broker's maxDeviceName).
+	for n, ok := range map[int]bool{253: true, 254: false} {
+		_, err := Parse([]byte(keyGrouped+"  - {match: {name: "+strings.Repeat("a", n)+"}, key_ref: prod_key}\n"), env())
+		if refused := err != nil && strings.Contains(err.Error(), "match.name is not a device name"); refused == ok {
+			t.Errorf("%d bytes: got %v", n, err)
+		}
+	}
 }

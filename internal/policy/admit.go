@@ -47,8 +47,10 @@ func (p *Policy) buildKeyGroups(f file) error {
 				at, admission.KeyRefShapeRule)
 		}
 		kg := admission.KeyGroup{Name: g.Match.Name, Attributes: g.Match.Attributes, KeyRef: g.KeyRef}
-		// Not quoted: a value that is no name is not echoed.
-		if kg.Name != "" && (len(kg.Name) > 255 ||
+		// Not quoted: a value that is no name is not echoed. 253 is the
+		// broker's maxDeviceName (a DNS name's length); broker imports this
+		// package, so the two are kept equal by hand.
+		if kg.Name != "" && (len(kg.Name) > 253 ||
 			strings.IndexFunc(kg.Name, func(r rune) bool { return r < 0x21 || r > 0x7e }) >= 0) {
 			return fmt.Errorf("%s: match.name is not a device name", at)
 		}

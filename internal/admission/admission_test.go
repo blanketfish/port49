@@ -406,6 +406,11 @@ func TestARecordPinAndANameGroupMustAgree(t *testing.T) {
 	if _, err := Assign(Device{Name: "leaf-01", KeyRef: "a"}, groups); err == nil {
 		t.Fatal("a disagreement was not refused")
 	}
+	// The record's key_ref is not printed: a pin is where a secret gets pasted.
+	if _, err := Assign(Device{Name: "leaf-01", KeyRef: "sx9qt4vlm2pr7zk0wyh5"}, groups); err == nil ||
+		strings.Contains(err.Error(), "sx9qt") {
+		t.Fatalf("printed the record's pin: %v", err)
+	}
 	if as, err := Assign(Device{Name: "leaf-01", KeyRef: "b"}, groups); err != nil || as.KeyRef != "b" {
 		t.Fatalf("%+v %v", as, err)
 	}
