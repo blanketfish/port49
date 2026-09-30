@@ -93,8 +93,10 @@ func (f *fetcher) once(ctx context.Context) (received, bool) {
 	}
 	f.answered()
 	if notModified {
+		// Not the header's etag: the one asked with (f.etag), which is what
+		// the service said is unchanged.
 		f.metrics.InventoryFetches.WithLabelValues("unchanged").Inc()
-		return received{etag: etag, unchanged: true}, true
+		return received{etag: f.etag, unchanged: true}, true
 	}
 	// The etag is port49d's own hash of the bytes, never the header's: it is
 	// what the document in force is known by (startDocument), so a service

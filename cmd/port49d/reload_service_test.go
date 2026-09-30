@@ -248,6 +248,85 @@ func TestAnOlderDocumentSentAgainIsRefused(t *testing.T) {
 	}
 }
 
+// Review Important 1: after a reset, a genuine document from before it has
+// the higher sequence but the earlier published_at, and a replay of it is
+// refused: documents are ordered by (published_at, sequence).
+func TestAReplayFromBeforeAResetIsRefused(t *testing.T) {
+	rig := newServiceRig(t, groupedPolicy)
+	before := rig.doc(t, 40, groupedPolicy, 2)
+	rig.receive(before)
+	rig.now = rig.now.Add(time.Hour)
+	rig.receive(rig.doc(t, 1, groupedPolicy, 2, admission.Device{Name: "leaf9", Platform: "arista_eos",
+		Addresses: []netip.Addr{netip.MustParseAddr("10.0.0.9")}, Transport: admission.TransportTCP}))
+	rig.receive(before)
+	out := rig.out.String()
+	if _, ok := rig.b.Policy.Load().Device("leaf9"); !ok || rig.r.seq != 1 {
+		t.Fatalf("the replay from before the reset was applied: %s", out)
+	}
+	if !strings.Contains(out, "bundle 40, published") || !strings.Contains(out, "or the service's clock went back") ||
+		testutil.ToFloat64(rig.m.InventoryBundleRefused) != 1 {
+		t.Fatalf("%s", out)
+	}
+}
+
+// Review Critical 1: a document held after a refusal is opened again under
+// the keys in force when it is tried again, so a SIGHUP that removes its
+// signer and raises the bound does not apply it.
+func TestASIGHUPThatRemovesTheSignerDoesNotApplyTheDocumentHeld(t *testing.T) {
+	rig := newServiceRig(t, groupedPolicy)
+	rig.receive(rig.doc(t, 1, groupedPolicy, 10))
+	rig.receive(rig.doc(t, 2, groupedPolicy, 5)) // over the bound, held
+	before := rig.b.Policy.Load().Bundle
+	_, otherKey, _ := ed25519.GenerateKey(rand.Reader)
+	_, otherPEM, _ := keyfile.EncodeEd25519(otherKey)
+	keyFile := filepath.Join(safeDir(t), "other.pub")
+	os.WriteFile(keyFile, otherPEM, 0o644)
+	rig.r.cfgPath = filepath.Join(t.TempDir(), "port49d.yaml")
+	os.WriteFile(rig.r.cfgPath, []byte(fmt.Sprintf(`inventory:
+  max_removed_percent: 100
+  service: {url: "https://inv.test:8443", ca_file: /x, tls_cert_file: /x, tls_key_file: /x,
+            state_dir: /x, verify_key_files: [%s]}
+`, keyFile)), 0o600)
+	rig.with(func() { rig.r.reload(context.Background(), "SIGHUP") })
+	out := rig.out.String()
+	if rig.b.Policy.Load().Bundle != before || rig.r.seq != 1 {
+		t.Fatalf("the document signed by the removed key was applied: %s", out)
+	}
+	if !strings.Contains(out, "inventory reload (SIGHUP) refused") || !strings.Contains(out, "which no verify key holds") ||
+		testutil.ToFloat64(rig.m.InventoryBundleRefused) != 1 {
+		t.Fatalf("%s", out)
+	}
+	// Review minor 3: the document in force no longer opens either, so the
+	// service confirming it keeps the alarm, said once.
+	rig.receive(received{etag: rig.r.inForce, unchanged: true})
+	rig.receive(received{etag: rig.r.inForce, unchanged: true})
+	if testutil.ToFloat64(rig.m.InventoryBundleRefused) != 1 ||
+		strings.Count(rig.out.String(), "in force, no longer opens under the verify keys in force") != 1 {
+		t.Fatalf("%s", rig.out.String())
+	}
+}
+
+// Review minor 1: a document refused only for being published ahead of this
+// clock is judged again at each confirmation of it, and applies once the
+// clock reaches it.
+func TestADocumentAheadOfTheClockAppliesOnceTheClockCatchesUp(t *testing.T) {
+	rig := newServiceRig(t, groupedPolicy)
+	now := rig.now
+	rig.now = now.Add(time.Hour)
+	ahead := rig.doc(t, 1, groupedPolicy, 2)
+	rig.now = now
+	rig.receive(ahead)
+	rig.receive(received{etag: ahead.etag, unchanged: true})
+	if _, ok := rig.b.Policy.Load().Device("leaf2"); ok {
+		t.Fatal("applied while still ahead")
+	}
+	rig.now = now.Add(time.Hour)
+	rig.receive(received{etag: ahead.etag, unchanged: true})
+	if _, ok := rig.b.Policy.Load().Device("leaf2"); !ok || testutil.ToFloat64(rig.m.InventoryBundleRefused) != 0 {
+		t.Fatalf("not applied once the clock caught up: %s", rig.out.String())
+	}
+}
+
 // Spec §10: a document published more than maxPublishedSkew ahead of this
 // clock is refused from the service as from a copy.
 func TestAPulledDocumentPublishedInTheFutureIsRefused(t *testing.T) {

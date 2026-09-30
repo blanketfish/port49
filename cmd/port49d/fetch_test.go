@@ -121,3 +121,24 @@ func TestAShutdownMidAskSaysNothing(t *testing.T) {
 		t.Fatalf("%v %q", ok, out.String())
 	}
 }
+
+// notModifiedService answers every document ask 304, with an ETag header of
+// its own choosing.
+type notModifiedService struct{ header string }
+
+func (s notModifiedService) Version(context.Context) (inventory.VersionInfo, error) {
+	return inventory.VersionInfo{}, nil
+}
+
+func (s notModifiedService) Bundle(context.Context, string) ([]byte, string, bool, error) {
+	return nil, s.header, true, nil
+}
+
+// Review minor 2: a 304 confirms the etag asked with, never the header's.
+func TestANotModifiedConfirmsTheETagAskedWith(t *testing.T) {
+	f := newFetcher(notModifiedService{header: `"in-force"`}, nil)
+	f.etag = `"refused"`
+	if d, ok := f.once(context.Background()); !ok || !d.unchanged || d.etag != `"refused"` {
+		t.Fatalf("%+v", d)
+	}
+}
