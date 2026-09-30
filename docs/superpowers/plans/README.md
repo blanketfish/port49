@@ -733,11 +733,12 @@ commit-checker step (`L12-projection-juniper_*.md`).
 - **A `junoscript` deny may lift option C.** On SRX hardware (operator-reported,
   `L26c-operator-juniper_srx.md`), `deny-commands "junoscript"`, sent by TACACS+ or set on the
   class, refused `xml-mode netconf` while other commands ran, and refused that user's NETCONF
-  sessions on port 830 too (`unknown command: xml-mode`). So it may also replace `check-config`'s
-  NETCONF-off requirement: automation accounts keep NETCONF in a class without the deny. Measure it in the lab on both
-  images, with a capture: abbreviations, `op`, and whether anything else reaches RPCs. If it
-  holds, port49 can send it on capability replies, and grants now failing closed under option C
-  could project.
+  sessions on port 830 too (`unknown command: xml-mode`). **port49 will not send it by default.**
+  The owner ruled on 2026-09-30 that humans run Ansible over NETCONF under their own accounts, so
+  a `junoscript` deny on human classes would break that automation. Option C stays. At most, the
+  deny could be an explicit per-grant opt-in for grants whose holders never use NETCONF. The lab
+  confirmation on both images (branch `lab/junoscript-deny`) records the behavior that ruling
+  rests on.
 - **Revisit `check-config`'s NETCONF-off requirement.** On SRX hardware `xml-mode` opens NETCONF
   with the service off (`L26c-operator-juniper_srx.md`), so turning the service off doesn't close
   RPC reach. Under option C a capability reply goes out only where the grant permits everything
