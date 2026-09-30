@@ -18,6 +18,7 @@ import (
 	"io/fs"
 	"math/big"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"time"
@@ -61,6 +62,7 @@ type Leaf struct {
 	CommonName          string
 	Emails              []string
 	IPs                 []net.IP
+	URIs                []*url.URL
 	Client              bool
 	NoExtKeyUsage       bool
 	NotBefore, NotAfter time.Time
@@ -81,7 +83,7 @@ func (ca *CA) Issue(l Leaf) (tls.Certificate, error) {
 		eku = x509.ExtKeyUsageClientAuth
 	}
 	tmpl := &x509.Certificate{SerialNumber: sn, Subject: pkix.Name{CommonName: l.CommonName},
-		EmailAddresses: l.Emails, IPAddresses: l.IPs, NotBefore: l.NotBefore, NotAfter: l.NotAfter,
+		EmailAddresses: l.Emails, IPAddresses: l.IPs, URIs: l.URIs, NotBefore: l.NotBefore, NotAfter: l.NotAfter,
 		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{eku}}
 	if l.NoExtKeyUsage {
 		tmpl.ExtKeyUsage = nil
@@ -96,6 +98,9 @@ func (ca *CA) Issue(l Leaf) (tls.Certificate, error) {
 	}
 	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key, Leaf: leaf}, nil
 }
+
+// Loopback is 127.0.0.1, the address a test or lab server's certificate names.
+func Loopback() []net.IP { return []net.IP{net.ParseIP("127.0.0.1")} }
 
 // Pool is a certificate pool holding only this CA.
 func (ca *CA) Pool() *x509.CertPool {
@@ -166,6 +171,70 @@ func WriteLab(dir, email string, now time.Time) error {
 			return err
 		}
 		files[l.cert], files[l.key] = c, k
+	}
+	for name, body := range files {
+		if err := writeFresh(filepath.Join(dir, name), body); err != nil {
+			return fmt.Errorf("testpki: %s: %w", name, err)
+		}
+	}
+	return nil
+}
+
+// The file names WriteInventoryLab writes, and the identity its port49d
+// client certificate names.
+const (
+	InvCA           = "inventory-ca.pem"
+	InvServerCert   = "inventory.pem"
+	InvServerKey    = "inventory-key.pem"
+	InvDaemonCert   = "port49d.pem"
+	InvDaemonKey    = "port49d-key.pem"
+	InvOperatorCert = "operator.pem"
+	InvOperatorKey  = "operator-key.pem"
+	InvDaemonID     = "spiffe://port49.test/port49d"
+)
+
+// WriteInventoryLab writes the inventory service's lab PKI into dir, as
+// WriteLab writes the slice's: one CA that is both the service's client trust
+// anchor and the issuer of its server certificate (for 127.0.0.1); a client
+// certificate for port49d, named by the URI SAN InvDaemonID; and one for an
+// operator, named by the email alice@slice.port49.test. Everything is valid
+// for a day from now. Keys are 0600.
+func WriteInventoryLab(dir string, now time.Time) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		return err
+	}
+	nb, na := now.Add(-time.Hour), now.Add(24*time.Hour)
+	ca, err := NewCA("port49 lab inventory CA", nb, na)
+	if err != nil {
+		return err
+	}
+	daemonID, err := url.Parse(InvDaemonID)
+	if err != nil {
+		return err
+	}
+	files := map[string][]byte{InvCA: ca.PEM()}
+	for _, l := range []struct {
+		leaf      Leaf
+		cert, key string
+	}{
+		{Leaf{CommonName: "port49 lab inventory", IPs: Loopback()}, InvServerCert, InvServerKey},
+		{Leaf{CommonName: "port49d", URIs: []*url.URL{daemonID}, Client: true}, InvDaemonCert, InvDaemonKey},
+		{Leaf{CommonName: "alice", Emails: []string{"alice@slice.port49.test"}, Client: true}, InvOperatorCert,
+			InvOperatorKey},
+	} {
+		l.leaf.NotBefore, l.leaf.NotAfter = nb, na
+		c, err := ca.Issue(l.leaf)
+		if err != nil {
+			return err
+		}
+		certPEM, keyPEM, err := PEMs(c)
+		if err != nil {
+			return err
+		}
+		files[l.cert], files[l.key] = certPEM, keyPEM
 	}
 	for name, body := range files {
 		if err := writeFresh(filepath.Join(dir, name), body); err != nil {
