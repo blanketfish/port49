@@ -1132,8 +1132,9 @@ func TestPolicyDiffPrintsAProjectionChange(t *testing.T) {
 	}
 }
 
-// I7: every tool names the bundle port49d names for the same two files.
-func TestPolicyDiffLoadsTheBundleAsPort49dDoes(t *testing.T) {
+// I7: every tool loads the bundle port49d loads for the same two files: diff
+// loads, and explain refuses a device only the inventory's key groups decide.
+func TestToolsLoadTheBundleAsPort49dDoes(t *testing.T) {
 	dir := t.TempDir()
 	pol := filepath.Join(dir, "policy.yaml")
 	inv := filepath.Join(dir, "inventory.yaml")
@@ -1184,5 +1185,31 @@ func TestPolicyDiffNamesTheInventoryForAnInventoryFault(t *testing.T) {
 	if code != 1 || !strings.HasPrefix(errOut.String(), "port49 policy diff: --old inventory "+inv+": ") ||
 		strings.Contains(errOut.String(), "policy: "+pol) {
 		t.Fatalf("exit %d: %s", code, errOut.String())
+	}
+}
+
+// grants remove and platform upgrade name the inventory file for its fault,
+// never the policy or its platform set (Task 6 review I1).
+func TestToolsNameTheInventoryFileOnItsFault(t *testing.T) {
+	for _, args := range [][]string{
+		{"grants", "remove", "--subject", "noc"},
+		{"platform", "upgrade", "--to", "1.0.0"},
+	} {
+		pol, inv := policyFixture(t)
+		if err := os.WriteFile(inv, []byte("devices: [{name: a, platform: arista_eos, addresses: [10.0.0.1]},\n"+
+			"  {name: b, platform: arista_eos, addresses: [10.0.0.1]}]\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		before := readFile(t, pol)
+		var out, errOut bytes.Buffer
+		code := run(append(args, "--policy", pol, "--inventory", inv, "--write"), &out, &errOut)
+		want := "port49 " + args[0] + " " + args[1] + ": inventory_file " + inv + ": "
+		if code != 1 || !strings.HasPrefix(errOut.String(), want) || strings.Contains(errOut.String(), "does not load") ||
+			strings.Contains(errOut.String(), "platform_set") {
+			t.Errorf("%s: exit %d: %s", args[1], code, errOut.String())
+		}
+		if string(readFile(t, pol)) != string(before) {
+			t.Errorf("%s wrote the policy", args[1])
+		}
 	}
 }

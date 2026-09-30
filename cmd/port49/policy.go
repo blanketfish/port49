@@ -14,7 +14,6 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/bundle"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/platform"
@@ -728,7 +727,7 @@ func grantsRemove(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "port49 grants remove:", err)
 		return 1
 	}
-	inv, err := admission.LoadFile(files.inventory)
+	inv, err := bundle.LoadInventory(files.inventory)
 	if err != nil {
 		fmt.Fprintln(stderr, "port49 grants remove:", err)
 		return 1

@@ -15,7 +15,6 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/bundle"
 	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/platform"
@@ -267,7 +266,7 @@ func platformUpgrade(args []string, stdout, stderr io.Writer) int {
 	out, errOut, flush := redactOutput(stdout, stderr)
 	defer flush()
 	stdout, stderr = out, errOut
-	inv, err := admission.LoadFile(files.inventory)
+	inv, err := bundle.LoadInventory(files.inventory)
 	if err != nil {
 		fmt.Fprintln(stderr, "port49 platform upgrade:", err)
 		return 1

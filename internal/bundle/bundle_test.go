@@ -43,6 +43,16 @@ func TestIDIsTheContent(t *testing.T) {
 	if ID([]byte(pol), a) == ID([]byte(pol), c) {
 		t.Fatal("an attribute did not change the name")
 	}
+	// Key groups in another order, or a CIDR written with host bits, admit
+	// the same devices under the same keys (Assign refuses a tie rather than
+	// take the first): the same bundle (Task 6 review M1).
+	g1 := admission.KeyGroup{CIDR: netip.MustParsePrefix("10.0.0.0/8"), KeyRef: "prod_key"}
+	g2 := admission.KeyGroup{Attributes: map[string]string{"env": "lab"}, KeyRef: "lab_key"}
+	host := admission.KeyGroup{CIDR: netip.MustParsePrefix("10.1.2.3/8"), KeyRef: "prod_key"}
+	if ID([]byte(pol), admission.Inventory{Devices: a.Devices, KeyGroups: []admission.KeyGroup{g1, g2}}) !=
+		ID([]byte(pol), admission.Inventory{Devices: a.Devices, KeyGroups: []admission.KeyGroup{g2, host}}) {
+		t.Fatal("reordered key groups, or a CIDR's host bits, changed the name")
+	}
 	// Every other fact that decides admission names another bundle too.
 	for name, change := range map[string]func(*admission.Inventory){
 		"a pinned key_ref": func(i *admission.Inventory) { i.Devices[0].KeyRef = "lab_key" },

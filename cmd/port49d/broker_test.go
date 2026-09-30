@@ -18,9 +18,11 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/rhwendt/port49/internal/admission"
+	"github.com/rhwendt/port49/internal/bundle"
 	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/store/memory"
 	"github.com/rhwendt/port49/internal/testpki"
 )
@@ -41,6 +43,34 @@ func brokerConfig(t *testing.T, policyBody string) config.Config {
 		Broker: &config.BrokerConfig{Listen: "127.0.0.1:0", TLSCertFile: filepath.Join(dir, testpki.LabServerCert),
 			TLSKeyFile: filepath.Join(dir, testpki.LabServerKey), ClientCAFile: filepath.Join(dir, testpki.LabCA),
 			PolicyFile: pol, BatchMax: 10},
+	}
+}
+
+// port49d names the bundle an offline tool names for the same two files, so a
+// bundle in a record is one CI can load (Task 6 review M2).
+func TestPort49dAndTheToolsNameOneBundle(t *testing.T) {
+	cfg := brokerConfig(t, minimalPolicy+"key_groups: [{match: {cidr: 10.0.0.0/8}, key_ref: prod_key}]\n")
+	cfg.InventoryFile = filepath.Join(t.TempDir(), "inventory.yaml")
+	if err := os.WriteFile(cfg.InventoryFile, []byte("devices:\n"+
+		"  - {name: leaf-02, platform: arista_eos, addresses: [10.0.0.3], attributes: {site: dc1}}\n"+
+		"  - {name: leaf-01, platform: arista_eos, addresses: [10.0.0.2, 10.0.0.1]}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	inv, err := admission.LoadFile(cfg.InventoryFile) // as config.Load reads it
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Inventory = inv
+	daemon, err := loadPolicy(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tool, err := bundle.Load(cfg.Broker.PolicyFile, cfg.InventoryFile, policy.Env{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if daemon.Bundle != tool.Bundle || daemon.Bundle == daemon.Source {
+		t.Fatalf("port49d %s, the tools %s (source %s)", daemon.Bundle, tool.Bundle, daemon.Source)
 	}
 }
 

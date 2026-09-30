@@ -48,9 +48,17 @@ type canonGroup struct {
 	KeyRef     string            `json:"key_ref"`
 }
 
+// key orders groups by their whole content.
+func (g canonGroup) key() string {
+	b, _ := json.Marshal(g)
+	return string(b)
+}
+
 // canonical is the inventory in one spelling: devices by name, each one's
 // addresses sorted, an empty attribute map as none and `tcp` as the default
-// it is. Key groups keep their order, which a reader of the file sees.
+// it is, and key groups sorted with each CIDR masked: admission.Assign
+// refuses a tie rather than take the first group, and a prefix contains what
+// its masked form does, so neither decides access (Task 6 review M1).
 // encoding/json writes map keys sorted.
 func canonical(inv admission.Inventory) []byte {
 	devs := make([]canonDevice, 0, len(inv.Devices))
@@ -74,12 +82,13 @@ func canonical(inv admission.Inventory) []byte {
 	for i, g := range inv.KeyGroups {
 		groups[i] = canonGroup{KeyRef: g.KeyRef}
 		if g.CIDR.IsValid() {
-			groups[i].CIDR = g.CIDR.String()
+			groups[i].CIDR = g.CIDR.Masked().String()
 		}
 		if len(g.Attributes) > 0 {
 			groups[i].Attributes = g.Attributes
 		}
 	}
+	slices.SortFunc(groups, func(a, b canonGroup) int { return strings.Compare(a.key(), b.key()) })
 	b, err := json.Marshal(struct {
 		Format    string        `json:"format"`
 		Devices   []canonDevice `json:"devices"`
@@ -115,16 +124,27 @@ type InventoryError struct {
 func (e *InventoryError) Error() string { return "inventory_file " + e.Path + ": " + e.Err.Error() }
 func (e *InventoryError) Unwrap() error { return e.Err }
 
-// Load reads the two files and builds the bundle, as every offline tool does,
-// so the bundle it names is the one port49d's records carry for those files.
-// An inventory fault is an *InventoryError.
-func Load(policyPath, inventoryPath string, env policy.Env) (*policy.Policy, error) {
-	inv, err := admission.LoadFile(inventoryPath)
+// LoadInventory reads and validates the inventory file, as Parse would: every
+// tool that reads it before loading the policy reads it here, so its fault is
+// an *InventoryError naming the file, not a policy that does not load.
+func LoadInventory(path string) (admission.Inventory, error) {
+	inv, err := admission.LoadFile(path)
 	if err == nil {
 		err = admission.Validate(inv.Devices)
 	}
 	if err != nil {
-		return nil, &InventoryError{Path: inventoryPath, Err: err}
+		return admission.Inventory{}, &InventoryError{Path: path, Err: err}
+	}
+	return inv, nil
+}
+
+// Load reads the two files and builds the bundle, as every offline tool does,
+// so the bundle it names is the one port49d's records carry for those files.
+// An inventory fault is an *InventoryError.
+func Load(policyPath, inventoryPath string, env policy.Env) (*policy.Policy, error) {
+	inv, err := LoadInventory(inventoryPath)
+	if err != nil {
+		return nil, err
 	}
 	raw, err := os.ReadFile(policyPath)
 	if err != nil {
