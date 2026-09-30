@@ -1602,6 +1602,96 @@ func TestAReloadBetweenAcceptsReAskAndUndeclineFailsClosed(t *testing.T) {
 	}
 }
 
+// The same for a quarantine that starts just after Accept asked and found the
+// device not quarantined: serve asks the quarantine again at the first
+// packet, closes it silent with one record and nothing read, and reopens the
+// window.
+func TestAQuarantineBetweenAcceptsReAskAndUndeclineFailsClosed(t *testing.T) {
+	log := &syncBuffer{}
+	st := memory.New(time.Now)
+	if _, err := st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
+		store.Token{ID: "e2e", Secret: []byte("p49_e2e"), Kind: store.KindLogin, Principal: "user:alice@example.com",
+			ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	var quarantined, startAfterNextAsk atomic.Bool
+	quarantined.Store(true)
+	lim := slowBackoff()
+	ts := newTestServerWith(t, log, st, nil, func(d *Deps) {
+		d.Quarantined = func(string, time.Time) (string, bool) {
+			q := quarantined.Load()
+			if startAfterNextAsk.Swap(false) {
+				quarantined.Store(true)
+			}
+			return "test", q
+		}
+		d.Limits = lim
+	})
+	src := netip.MustParseAddr("127.0.0.1")
+	start := wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP,
+		Service: wire.AuthenServiceLogin, User: []byte("alice"), Data: []byte("p49_e2e")}.Encode()
+	c := dial(t, ts.addr, []byte("k2"))
+	c.send(t, wire.TypeAuthen, start, 0)
+	closedAtOnce(t, c)
+	if !lim.Declined(src) {
+		t.Fatal("the quarantine opened no decline window")
+	}
+
+	// The quarantine ends, and another starts just after the next Accept has
+	// asked.
+	quarantined.Store(false)
+	startAfterNextAsk.Store(true)
+	if !waitFor(t, func() bool {
+		release, ok := lim.Acquire(src)
+		if ok {
+			release()
+		}
+		return ok
+	}) {
+		t.Fatal("no per-NAS slot came free")
+	}
+	c = dial(t, ts.addr, []byte("k2"))
+	c.send(t, wire.TypeAuthen, start, 0)
+	c.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if n, err := c.conn.Read(make([]byte, 1)); !errors.Is(err, syscall.ECONNRESET) {
+		t.Fatalf("want the connection reset with no reply, got %d bytes, %v", n, err)
+	}
+	if startAfterNextAsk.Load() {
+		t.Fatal("the quarantine never started between Accept's re-ask and its Undecline")
+	}
+	if !waitFor(t, func() bool {
+		return testutil.ToFloat64(ts.metrics.Unvalidated.WithLabelValues("device_quarantined")) == 2
+	}) {
+		t.Fatalf("unvalidated{device_quarantined} = %v", testutil.ToFloat64(ts.metrics.Unvalidated.WithLabelValues("device_quarantined")))
+	}
+	if log.contains(`"event":"redeem"`) || log.contains(`"diagnosis":"validated"`) || log.contains("p49_e2e") {
+		t.Fatalf("the quarantined device's credential was tried: %s", log.String())
+	}
+	if toks, err := st.Candidates(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"}); err != nil ||
+		len(toks) != 1 {
+		t.Fatalf("the token was spent: %d left, %v", len(toks), err)
+	}
+	if !lim.Declined(src) {
+		t.Fatal("the late quarantine reopened no window")
+	}
+	if !waitFor(t, func() bool {
+		release, ok := lim.Acquire(src)
+		if ok {
+			release()
+		}
+		return ok
+	}) {
+		t.Fatal("no per-NAS slot came free")
+	}
+	refusedAtAccept(t, &net.Dialer{}, ts.addr)
+	if n := testutil.ToFloat64(ts.metrics.ConnectionEvents.WithLabelValues("declined_refused")); n != 1 {
+		t.Fatalf("declined_refused = %v", n)
+	}
+	if lim.Holding(src) {
+		t.Fatal("the late quarantine struck the source")
+	}
+}
+
 // A validated connection marks its device's key version, and an accept
 // version past its date is refused as a retired one is.
 func TestKeyVersionsAreMarkedAndADatePastRefuses(t *testing.T) {

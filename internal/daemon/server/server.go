@@ -139,7 +139,11 @@ func Serve(ctx context.Context, ln net.Listener, d Deps) error {
 		// quarantine again at every packet, and declines the packet if either
 		// has changed, reopening the window. At worst the device meets one
 		// decline more than an atomic check would give it, never an admission
-		// port49d does not hold. A refusal here opens no new window.
+		// port49d does not hold. A Decline from another connection that lands
+		// before Undecline is dropped with it. That also fails closed: the
+		// device is asked again at its next packet, so the loss costs one more
+		// record and, on IOS-XE and NX-OS with single-connection on, one ~5 s
+		// wait, never an admission. A refusal here opens no new window.
 		if d.Limits.Declined(src) {
 			if declining(d, dev, admitted) {
 				release()
