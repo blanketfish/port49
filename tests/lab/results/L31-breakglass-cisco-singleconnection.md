@@ -24,7 +24,9 @@
 - **Transport:** SSH
 - **Read:** TCP flags and timestamps, and the TACACS+ 12-byte cleartext header only (type, seq, flags,
   length). No body byte was decoded or printed.
-- **Status:** L31 open; the fix is `fix/breakglass-reset` (roadmap), which closes the row with a lab run.
+- **Status:** the pre-fix analysis, kept as history. L31 closed 2026-09-30 with
+  `fix/breakglass-reset`: `L31-cisco_iosxe.md`, `L31-cisco_nxos.md` and `L31-arista_eos.md` measure
+  break-glass at the key miss's time on every declined path.
 
 ## Claim
 
