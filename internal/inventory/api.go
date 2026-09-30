@@ -169,7 +169,7 @@ func (a *API) version(w http.ResponseWriter, _ *http.Request, _ string) {
 		PolicySHA256: p.Doc.PolicySHA256, PublishedAt: p.Doc.PublishedAt})
 }
 
-func (a *API) diff(w http.ResponseWriter, r *http.Request, _ string) {
+func (a *API) diff(w http.ResponseWriter, r *http.Request, caller string) {
 	from, err := strconv.ParseInt(r.URL.Query().Get("from"), 10, 64)
 	if err != nil || from < 1 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "from_not_a_sequence"})
@@ -185,8 +185,11 @@ func (a *API) diff(w http.ResponseWriter, r *http.Request, _ string) {
 		return
 	case err != nil:
 		// The service's own text — paths, a policy error — is for its
-		// operator, not the caller.
-		fmt.Fprintf(a.Log, "port49-inventory: api: diff from %d: %s\n", from, oneLine(err))
+		// operator, not the caller; said once per caller, so a broken
+		// policy file polled by every reader is one line each.
+		if a.tell("diff_failed " + caller) {
+			fmt.Fprintf(a.Log, "port49-inventory: api: diff from %d: %s\n", from, oneLine(err))
+		}
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal"})
 		return
 	}
@@ -231,6 +234,9 @@ func Server(addr string, cert tls.Certificate, anchor *x509.CertPool, h http.Han
 	return &http.Server{Addr: addr, Handler: h, ErrorLog: errLog,
 		ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 6 * time.Minute,
 		IdleTimeout: 2 * time.Minute, MaxHeaderBytes: 16 << 10,
+		// OPTIONS * goes to h, which refuses it (bad_path), not to net/http's
+		// ungated 200.
+		DisableGeneralOptionsHandler: true,
 		TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{cert}, ClientCAs: anchor,
 			ClientAuth: tls.RequireAndVerifyClientCert},
 		TLSNextProto: map[string]func(*http.Server, *tls.Conn, http.Handler){}}, nil

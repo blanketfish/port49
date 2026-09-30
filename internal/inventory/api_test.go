@@ -402,6 +402,13 @@ func TestADiffThatFailsIsNotNotKept(t *testing.T) {
 		!strings.Contains(rig.out.String(), "policy.yaml") {
 		t.Fatalf("the failure is not said: %s", rig.out)
 	}
+	// Said once per caller, not once per request.
+	for i := 0; i < 3; i++ {
+		rig.do(t, rig.reader, "GET", fmt.Sprintf("/v1/bundle/diff?from=%d", i+1), nil)
+	}
+	if n := strings.Count(rig.out.String(), "port49-inventory: api: diff from"); n != 1 {
+		t.Fatalf("said %d times: %s", n, rig.out)
+	}
 }
 
 // The diff and its To come from one bundle published.
@@ -477,6 +484,20 @@ func TestServerServesHTTP1WithBoundedHeaders(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusRequestHeaderFieldsTooLarge {
 		t.Fatalf("a 32 KiB header: %d", resp.StatusCode)
+	}
+	// OPTIONS * reaches the handler, not net/http's ungated 200, and is
+	// refused there, for a caller in neither list too.
+	for _, cl := range []*http.Client{c, rig.nobody} {
+		req, _ = http.NewRequest("OPTIONS", base, nil)
+		req.URL.Opaque = "*"
+		resp, err = cl.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("OPTIONS *: %d", resp.StatusCode)
+		}
 	}
 }
 
