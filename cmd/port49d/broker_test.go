@@ -539,7 +539,7 @@ func TestTheKeyGroupMoveNeverStopsAStartThatCouldServe(t *testing.T) {
 	}
 }
 
-// C2 at start: with a broker, a group-writable inventory file refuses the
+// C2 at start: with a broker, a world-writable inventory file refuses the
 // start, and a private one is what the reloader starts from.
 func TestAStartReadsTheInventoryBehindTheFence(t *testing.T) {
 	cfg := brokerConfig(t, minimalPolicy)
@@ -568,6 +568,8 @@ func TestAFencedInventoryFaultNamesTheInventoryFile(t *testing.T) {
 	for name, body := range map[string]string{
 		"malformed": "devices: [{name: leaf1, keyref: lab_key}]\n",
 		"invalid":   "devices: [{name: leaf1, platform: arista_eos}, {name: leaf1, platform: arista_eos}]\n",
+		"one address twice": "devices: [{name: a, platform: arista_eos, addresses: [10.0.0.1]}, " +
+			"{name: b, platform: arista_eos, addresses: [10.0.0.1]}]\n",
 	} {
 		if err := os.WriteFile(cfg.InventoryFile, []byte(body), 0o600); err != nil {
 			t.Fatal(err)

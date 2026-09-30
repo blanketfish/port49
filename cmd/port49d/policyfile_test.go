@@ -517,3 +517,21 @@ func TestAnInventoryFIFOIsRefused(t *testing.T) {
 		t.Fatalf("%v", err)
 	}
 }
+
+// With a broker nothing reads the inventory before the fence: a FIFO at its
+// path is refused with the fence's words, and the start returns rather than
+// hanging in a plain read (runExpectingRefusal's deadline).
+func TestRunRefusesAnInventoryFIFOWithoutHanging(t *testing.T) {
+	cfgPath := writeRunConfig(t, brokerConfig(t, minimalPolicy).Broker)
+	inv := filepath.Join(filepath.Dir(cfgPath), "inventory.yaml")
+	if err := os.Remove(inv); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(inv, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runExpectingRefusal(t, cfgPath); err == nil || !strings.Contains(err.Error(), "inventory_file "+inv) ||
+		!strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("run: %v", err)
+	}
+}

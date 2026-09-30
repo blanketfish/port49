@@ -537,24 +537,27 @@ func Load(path string) (Config, error) {
 			"never tried", f.Encryption.Current.ID)
 	}
 
+	if c.Broker != nil {
+		// With a broker the inventory is live, and port49d reads it behind
+		// the policy file's fence (fencedInventory, plan 6a C2), so it is not
+		// read here at all: a plain read first would hang on a FIFO, or read
+		// a link to a huge file whole, before the fence could refuse it. Key
+		// groups are the policy's (spec §10), and port49d admits from the
+		// policy loaded against that inventory, which refuses a device a group
+		// cannot admit on its own, never the daemon (policy.Policy.Admission;
+		// plan 6a Decided 5).
+		return c, nil
+	}
 	inv, err := admission.LoadFile(c.InventoryFile)
 	if err != nil {
 		return Config{}, err
 	}
 	// Names and addresses are the inventory's own faults, and an inventory
-	// that has one cannot be used at all: refused at start, as a reload
-	// refuses it (spec §10).
+	// that has one cannot be used at all: refused at start (spec §10).
 	if err := admission.Validate(inv.Devices); err != nil {
 		return Config{}, err
 	}
 	c.Inventory = inv
-	if c.Broker != nil {
-		// With a broker, key groups are the policy's (spec §10), and port49d
-		// admits from the policy loaded against this inventory, which refuses
-		// a device a group cannot admit on its own, never the daemon
-		// (policy.Policy.Admission; plan 6a Decided 5).
-		return c, nil
-	}
 	// No broker: plan 1's mode, the lab's. The inventory's own key groups
 	// are read once, here, and a device none admits refuses the start.
 	for _, g := range inv.KeyGroups {

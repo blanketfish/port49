@@ -276,8 +276,8 @@ func loadPolicy(cfg config.Config) (*policy.Policy, error) {
 // fencedInventory reads inventory_file behind the fence (readInventoryFile)
 // and returns it with the version the reloader starts from: the hash of the
 // bytes loaded, so an edit between config.Load's read and this one is loaded,
-// never skipped (plan 6a, M1). config.Load has read the file once already,
-// plainly; with a broker these bytes replace what it read. A fault is a
+// never skipped (plan 6a, M1). With a broker config.Load leaves the file
+// unread, so these are the only bytes of it port49d reads at start. A fault is a
 // *bundle.InventoryError, as bundle.LoadInventory's is, naming the file.
 func fencedInventory(cfg config.Config) (admission.Inventory, string, error) {
 	raw, err := readInventoryFile(cfg.InventoryFile)
@@ -461,14 +461,17 @@ func run(parent context.Context, cfgPath string) error {
 	// The inventory as loaded, hashed now rather than when the reloader
 	// starts: an edit in between would otherwise never be said (checkInventory).
 	// With a broker the inventory is live, so it is read behind the policy
-	// file's fence, and the reloader starts from the bytes loaded (M1).
-	_, inventoryAtStart, _ := fileVersion(cfg.InventoryFile)
+	// file's fence, first and only there (config.Load leaves it unread), and
+	// the reloader starts from the bytes loaded (M1).
+	var inventoryAtStart string
 	if cfg.Broker != nil {
 		inv, v, err := fencedInventory(cfg)
 		if err != nil {
 			return err
 		}
 		cfg.Inventory, inventoryAtStart = inv, v
+	} else {
+		_, inventoryAtStart, _ = fileVersion(cfg.InventoryFile)
 	}
 	announce(stderr, &cfg)
 

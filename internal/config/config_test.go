@@ -870,14 +870,29 @@ func TestWithABrokerAnOrphanIsTheDevicesProblemNotTheDaemons(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a broker config refused an orphan device: %v", err)
 	}
-	if cfg.Admission != nil || len(cfg.Inventory.Devices) != 1 {
-		t.Fatalf("admission %v, inventory %+v", cfg.Admission, cfg.Inventory)
+	if cfg.Admission != nil {
+		t.Fatalf("admission %v", cfg.Admission)
 	}
 	if got := cfg.KeyRefs(); len(got) != 1 || got[0] != "prod_key" {
 		t.Fatalf("KeyRefs: %q", got)
 	}
-	dup := write(t, "dup.yaml", "devices:\n  - {name: a, addresses: [10.0.0.1]}\n  - {name: b, addresses: [10.0.0.1]}\n")
-	if _, err := Load(write(t, "g.yaml", strings.Replace(body, orphan, dup, 1))); err == nil {
-		t.Fatal("an address claimed twice is the inventory's fault and refuses the start")
+}
+
+// With a broker the inventory is live and read behind the policy file's
+// fence (port49d's fencedInventory, plan 6a C2), so Load does not read it at
+// all: a plain read first would hang on a FIFO, or read a link to a huge file
+// whole, before the fence could refuse it. An inventory fault — an address
+// claimed twice — is found there, naming the file.
+func TestWithABrokerLoadDoesNotReadTheInventory(t *testing.T) {
+	setKeyEnv(t)
+	missing := filepath.Join(t.TempDir(), "never-read.yaml")
+	body := fmt.Sprintf(sample, missing) + "broker: {listen: \"127.0.0.1:0\", tls_cert_file: c, tls_key_file: k, " +
+		"client_ca_file: ca, policy_file: p}\n"
+	cfg, err := Load(write(t, "f.yaml", body))
+	if err != nil {
+		t.Fatalf("a broker config read inventory_file: %v", err)
+	}
+	if cfg.InventoryFile != missing || len(cfg.Inventory.Devices) != 0 {
+		t.Fatalf("inventory_file %q, inventory %+v", cfg.InventoryFile, cfg.Inventory)
 	}
 }
