@@ -120,9 +120,13 @@ func TestADeclineOpensAWindowOnTheStrikesSchedule(t *testing.T) {
 		t.Fatal("the first window outlasted the backoff base")
 	}
 	l.Decline(a)
-	now = now.Add(150 * time.Millisecond)
+	now = now.Add(199 * time.Millisecond)
 	if !l.Declined(a) {
 		t.Fatal("the second window did not double to 200ms")
+	}
+	now = now.Add(2 * time.Millisecond)
+	if l.Declined(a) {
+		t.Fatal("the second window outlasted 200ms")
 	}
 }
 
