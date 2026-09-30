@@ -201,3 +201,19 @@ func (p *Policy) levelIndex(level string) int {
 	}
 	return slices.Index(p.levels, level)
 }
+
+// Scopes is every declared scope, by name: what the bundle diff compares
+// membership of across a swap (spec §10).
+func (p *Policy) Scopes() []*Scope {
+	out := make([]*Scope, 0, len(p.scopes))
+	for _, name := range sortedKeys(p.scopes) {
+		out = append(out, p.scopes[name])
+	}
+	return out
+}
+
+// Selects reports whether the scope selects the device, as a grant reads it.
+func (s *Scope) Selects(d admission.Device) bool {
+	ok, _ := s.selects(d)
+	return ok
+}
