@@ -6,9 +6,12 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 
+	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/broker"
+	"github.com/rhwendt/port49/internal/bundle"
 	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/engine"
@@ -31,8 +34,8 @@ const (
 	stillChangingAfter = 6
 )
 
-// reloader keeps the broker's policy the one in broker.policy_file (plan 4b).
-// It is one goroutine, so a reload, a poll and a scheduled refresh never run
+// reloader keeps the broker's bundle the one broker.policy_file (plan 4b) and
+// inventory_file (plan 6a) make. It is one goroutine, so a reload, a poll and a scheduled refresh never run
 // at once: every field below is its own.
 //
 // What an operator sees. A file that loads: one line naming the bundle it
@@ -47,7 +50,13 @@ const (
 // reached keep their previous policy until then. The pass that completes
 // after a stop always says so. port49_policy_refresh_pending is 1 from a swap
 // or an expiry until the settle pass after it completes, and while any pass
-// is owed a retry.
+// is owed a retry. The inventory file is watched the same way, behind the
+// same fence (readInventoryFile), with port49_inventory_file_refused as its
+// alarm; an edit to either that would take more than
+// inventory.max_removed_percent of the fleet out of service, or all of it,
+// is refused (bundle.Check, bundle.CheckAdmission). Nothing is half-applied:
+// a refused edit leaves the bundle in force as it was, and a swap is one
+// pointer (policy.Live).
 type reloader struct {
 	cfg      config.Config
 	broker   *broker.Broker
@@ -73,9 +82,17 @@ type reloader struct {
 	// changing counts the reads in a row that found a version differing from
 	// the one before, so a file that never settles is said once.
 	changing int
-	// inventory is the inventory file's version as loaded at start, and
-	// inventorySaid the changed version last said.
-	inventory, inventorySaid string
+	// inventory is the inventory file's version in force (inventoryVersion),
+	// and invPending, invRefused and invChanging are what pending, refused
+	// and changing are to the policy file, for the inventory file.
+	inventory, invPending, invRefused string
+	invChanging                       int
+	// cfgPath is port49d.yaml, whose inventory.max_removed_percent SIGHUP
+	// re-reads (plan 6a, I1); run sets it.
+	cfgPath string
+	// invSeen is when the inventory file was last read and found in force,
+	// or loaded: port49_inventory_snapshot_age_seconds reads it at scrape.
+	invSeen atomic.Int64
 	// stopped is set while the last refresh pass did not complete, so the
 	// one that does says so whatever it found.
 	stopped bool
@@ -85,23 +102,29 @@ func newReloader(cfg config.Config, b *broker.Broker, m *metrics.Metrics, now fu
 	start := now()
 	r := &reloader{cfg: cfg, broker: b, metrics: m, now: now, interval: cfg.Broker.PolicyWatchInterval,
 		priors: []broker.Prior{{Policy: b.Policy.Load(), At: start}}}
-	_, r.inventory, _ = fileVersion(cfg.InventoryFile)
+	// run sets the version the start loaded; this is a test's.
+	_, r.inventory, _ = inventoryVersion(cfg.InventoryFile)
 	r.expiry, _ = b.Policy.Load().NextChange(start)
 	r.reschedule()
+	r.invSeen.Store(start.UnixNano())
+	m.WatchInventoryAge(func() float64 { return now().Sub(time.Unix(0, r.invSeen.Load())).Seconds() })
 	return r
 }
 
-// fileVersion is a file's content and a string that changes when it does: its
-// sha256, or why it could not be read.
-func fileVersion(path string) ([]byte, string, error) {
-	raw, err := os.ReadFile(path)
+// inventoryVersion is policyVersion for inventory_file: read behind the fence
+// (readInventoryFile), so a file someone else could have written is a
+// version of its own — refused, and said once — and putting its mode right
+// is a change the watch sees. A named pipe is refused, never waited on.
+func inventoryVersion(path string) ([]byte, string, error) {
+	raw, err := readInventoryFile(path)
 	if err != nil {
 		return nil, "unreadable: " + err.Error(), err
 	}
 	return raw, engine.HashOf(raw), nil
 }
 
-// policyVersion is fileVersion for the policy file, read as the start reads it
+// policyVersion is the policy file's content and a string that changes when it
+// does — its sha256, or why it could not be read — read as the start reads it
 // (readPolicyFile): the version of a file that loads is the bundle it loads
 // as, and a file someone else could have written is a version of its own —
 // refused, and said once — so putting its mode right is a change the watch
@@ -149,11 +172,17 @@ func arm(timer *time.Timer, due, now time.Time) {
 	}
 }
 
-// poll reads the policy file and loads it once two reads in a row agree on a
-// version that is neither the one in force nor one already refused. What it
-// loads is the second read's bytes, the ones the two reads agreed on: read
-// again, a file an editor began writing in between would be loaded half-way.
+// poll reads both files, the policy first.
 func (r *reloader) poll(ctx context.Context) {
+	r.pollPolicy(ctx)
+	r.pollInventory(ctx)
+}
+
+// pollPolicy reads the policy file and loads it once two reads in a row agree
+// on a version that is neither the one in force nor one already refused. What
+// it loads is the second read's bytes, the ones the two reads agreed on: read
+// again, a file an editor began writing in between would be loaded half-way.
+func (r *reloader) pollPolicy(ctx context.Context) {
 	raw, v, err := policyVersion(r.cfg.Broker.PolicyFile)
 	switch {
 	case v == r.broker.Policy.Load().Source:
@@ -165,8 +194,8 @@ func (r *reloader) poll(ctx context.Context) {
 		if r.refused != "" || alarmed {
 			r.refused = ""
 			r.metrics.PolicyFileRefused.Set(0)
-			fmt.Fprintf(stderr, "port49d: policy: broker.policy_file %s is the policy in force again (%s)\n",
-				r.cfg.Broker.PolicyFile, v)
+			fmt.Fprintf(stderr, "port49d: policy: broker.policy_file %s is the policy in force again (%s, bundle %s)\n",
+				r.cfg.Broker.PolicyFile, v, r.broker.Policy.Load().Bundle)
 		}
 	case v == r.refused:
 		r.pending, r.changing = "", 0
@@ -179,8 +208,9 @@ func (r *reloader) poll(ctx context.Context) {
 		if r.changing++; r.changing == stillChangingAfter {
 			r.metrics.PolicyFileRefused.Set(1)
 			fmt.Fprintf(stderr, "port49d: policy: broker.policy_file %s has changed at each of the last %d reads, "+
-				"%s apart, so it is not loaded; still serving %s; write it once, atomically\n",
-				r.cfg.Broker.PolicyFile, stillChangingAfter, r.interval, r.broker.Policy.Load().Source)
+				"%s apart, so it is not loaded; still serving %s (bundle %s); write it once, atomically\n",
+				r.cfg.Broker.PolicyFile, stillChangingAfter, r.interval, r.broker.Policy.Load().Source,
+				r.broker.Policy.Load().Bundle)
 		}
 	default:
 		r.pending = ""
@@ -188,18 +218,81 @@ func (r *reloader) poll(ctx context.Context) {
 	}
 }
 
-// reload reads the policy file once and loads what it read: SIGHUP's path,
-// with no second read, because the operator asked.
+// pollInventory is pollPolicy for inventory_file (spec §10): a changed file
+// is loaded once two reads in a row agree, a refused one is said once, and
+// one that never settles is said and alarmed.
+func (r *reloader) pollInventory(ctx context.Context) {
+	raw, v, err := inventoryVersion(r.cfg.InventoryFile)
+	switch {
+	case v == r.inventory:
+		r.invSeen.Store(r.now().UnixNano())
+		alarmed := r.invChanging >= stillChangingAfter
+		r.invPending, r.invChanging = "", 0
+		if r.invRefused != "" || alarmed {
+			r.invRefused = ""
+			r.metrics.InventoryFileRefused.Set(0)
+			fmt.Fprintf(stderr, "port49d: inventory: inventory_file %s is the inventory in force again (bundle %s)\n",
+				r.cfg.InventoryFile, r.broker.Policy.Load().Bundle)
+		}
+	case v == r.invRefused:
+		r.invPending, r.invChanging = "", 0
+	case v != r.invPending:
+		r.invPending = v
+		if r.invChanging++; r.invChanging == stillChangingAfter {
+			r.metrics.InventoryFileRefused.Set(1)
+			fmt.Fprintf(stderr, "port49d: inventory: inventory_file %s has changed at each of the last %d reads, "+
+				"%s apart, so it is not loaded; still serving bundle %s; write it once, atomically\n",
+				r.cfg.InventoryFile, stillChangingAfter, r.interval, r.broker.Policy.Load().Bundle)
+		}
+	default:
+		r.invPending = ""
+		r.loadInventory(ctx, "inventory file changed", raw, v, err)
+	}
+}
+
+// reload reads each file once and loads what it read: SIGHUP's path, with no
+// second read, because the operator asked. It re-reads the bound first, so
+// raising it and sending SIGHUP applies a change refused over it, and it
+// loads the inventory whenever its version is not the one in force, so a
+// refused inventory is tried again.
 func (r *reloader) reload(ctx context.Context, trigger string) {
+	r.rereadBound()
 	raw, v, err := policyVersion(r.cfg.Broker.PolicyFile)
 	r.load(ctx, trigger, raw, v, err)
+	iraw, iv, ierr := inventoryVersion(r.cfg.InventoryFile)
+	if iv != r.inventory {
+		r.invPending = ""
+		r.loadInventory(ctx, trigger, iraw, iv, ierr)
+	}
+}
+
+// rereadBound re-reads inventory.max_removed_percent from port49d.yaml, the
+// one key SIGHUP re-reads, so a deliberate large removal needs no restart
+// (plan 6a, I1). A file that does not read keeps the bound in force, said.
+func (r *reloader) rereadBound() {
+	if r.cfgPath == "" {
+		return
+	}
+	raw, err := os.ReadFile(r.cfgPath)
+	var n int
+	if err == nil {
+		n, err = config.InventoryBound(raw)
+	}
+	switch {
+	case err != nil:
+		fmt.Fprintf(stderr, "port49d: SIGHUP: inventory.max_removed_percent not re-read from %s (%s); keeping %d%%\n",
+			r.cfgPath, oneLine(err), r.cfg.MaxRemovedPercent)
+	case n != r.cfg.MaxRemovedPercent:
+		fmt.Fprintf(stderr, "port49d: SIGHUP: inventory.max_removed_percent is now %d%% (was %d%%)\n", n,
+			r.cfg.MaxRemovedPercent)
+		r.cfg.MaxRemovedPercent = n
+	}
 }
 
 // load puts raw, the policy file's content read as version v, in force and
-// refreshes, if it loads. A file that does not load, or could not be read
-// (err), changes nothing.
+// refreshes, if it loads and passes the admission bound. A file that does
+// not, or could not be read (err), changes nothing.
 func (r *reloader) load(ctx context.Context, trigger string, raw []byte, v string, err error) {
-	r.checkInventory()
 	r.changing = 0
 	old := r.broker.Policy.Load()
 	var pol *policy.Policy
@@ -209,6 +302,15 @@ func (r *reloader) load(ctx context.Context, trigger string, raw []byte, v strin
 		pol = old
 	} else if err == nil {
 		pol, err = parseBundle(r.cfg, raw, old.Inventory())
+		if err == nil {
+			// Key groups are policy, and a refused device's sessions are
+			// revoked and its tokens deleted (I2): a key_groups typo must
+			// not log out the fleet (plan 6a, N1). A policy that admits no
+			// device is refused whatever the bound.
+			if err = bundle.CheckAdmission(old, pol, r.cfg.MaxRemovedPercent); err != nil {
+				err = fmt.Errorf("broker.policy_file %s: %w", r.cfg.Broker.PolicyFile, err)
+			}
+		}
 	} else {
 		err = fmt.Errorf("broker.policy_file %s: %w", r.cfg.Broker.PolicyFile, err)
 	}
@@ -216,30 +318,112 @@ func (r *reloader) load(ctx context.Context, trigger string, raw []byte, v strin
 		r.metrics.PolicyReloads.WithLabelValues("refused").Inc()
 		r.metrics.PolicyFileRefused.Set(1)
 		r.refused = v
-		fmt.Fprintf(stderr, "port49d: policy reload (%s) refused; still serving %s: %s\n", trigger, old.Source,
-			oneLine(err))
+		fmt.Fprintf(stderr, "port49d: policy reload (%s) refused; still serving %s (bundle %s): %s\n", trigger,
+			old.Source, old.Bundle, oneLine(err))
 		return
 	}
 	r.refused = ""
 	r.metrics.PolicyFileRefused.Set(0)
 	if pol.Source == old.Source {
 		r.metrics.PolicyReloads.WithLabelValues("unchanged").Inc()
-		fmt.Fprintf(stderr, "port49d: policy reload (%s): broker.policy_file unchanged, %s in force\n", trigger,
-			pol.Source)
+		fmt.Fprintf(stderr, "port49d: policy reload (%s): broker.policy_file unchanged, %s in force (bundle %s)\n",
+			trigger, pol.Source, pol.Bundle)
 		return
 	}
+	r.metrics.PolicyReloads.WithLabelValues("applied").Inc()
+	now := r.swap(pol)
+	// An inventory edit refused against the policy replaced — the key-group
+	// move done in the wrong order, say — is tried again against this one at
+	// the next polls (plan 6a, C3).
+	r.invRefused = ""
+	fmt.Fprintf(stderr, "port49d: policy reloaded (%s): %s replaces %s (bundle %s); %d device(s) quarantined now, %d before\n",
+		trigger, pol.Source, old.Source, pol.Bundle, quarantinedAt(pol, now), quarantinedAt(old, now))
+	r.after(ctx, bundle.Diff(old, pol, now), pol, now)
+}
+
+// loadInventory builds a bundle from raw, the inventory file read as version
+// v, and the policy in force, and puts it in force if it loads and passes the
+// bounded-change check (spec §10). One that does not changes nothing: the
+// bundle in force keeps serving, the refusal is said once per version, and
+// port49_inventory_file_refused is 1 until a file loads or the one in force
+// is put back.
+func (r *reloader) loadInventory(ctx context.Context, trigger string, raw []byte, v string, err error) {
+	r.invChanging = 0
+	old := r.broker.Policy.Load()
+	var pol *policy.Policy
+	if err == nil {
+		pol, err = r.inventoryBundle(old, raw)
+	} else {
+		err = fmt.Errorf("inventory_file %s: %w", r.cfg.InventoryFile, err)
+	}
+	if err != nil {
+		r.metrics.InventoryReloads.WithLabelValues("refused").Inc()
+		r.metrics.InventoryFileRefused.Set(1)
+		r.invRefused = v
+		fmt.Fprintf(stderr, "port49d: inventory reload (%s) refused; still serving bundle %s: %s\n", trigger,
+			old.Bundle, oneLine(err))
+		return
+	}
+	r.inventory, r.invRefused = v, ""
+	r.invSeen.Store(r.now().UnixNano())
+	r.metrics.InventoryFileRefused.Set(0)
+	if pol.Bundle == old.Bundle {
+		// The same devices, respelled: nothing to swap.
+		r.metrics.InventoryReloads.WithLabelValues("unchanged").Inc()
+		fmt.Fprintf(stderr, "port49d: inventory reload (%s): the same inventory, respelled; bundle %s in force\n",
+			trigger, old.Bundle)
+		return
+	}
+	r.metrics.InventoryReloads.WithLabelValues("applied").Inc()
+	now := r.swap(pol)
+	// A policy edit refused against the inventory replaced is tried again
+	// against this one at the next polls, as the other way round (C3).
+	r.refused = ""
+	rep := bundle.Diff(old, pol, now)
+	fmt.Fprintf(stderr, "port49d: inventory reloaded (%s): %s; %d device(s) quarantined now, %d before; %d refused "+
+		"admission\n", trigger, rep.Summary(), quarantinedAt(pol, now), quarantinedAt(old, now),
+		len(pol.AdmissionRefusals()))
+	r.after(ctx, rep, pol, now)
+}
+
+// inventoryBundle is the bundle raw, the inventory file's bytes, makes with
+// the policy in force, if it parses and passes Check. A fault after the parse
+// is named as the inventory's, not the policy file's: the policy in force
+// loaded before (plan 6a, M5).
+func (r *reloader) inventoryBundle(old *policy.Policy, raw []byte) (*policy.Policy, error) {
+	inv, err := admission.ParseFile(raw, r.cfg.InventoryFile)
+	if err != nil {
+		return nil, fmt.Errorf("inventory_file %s: %w", r.cfg.InventoryFile, quotesCut{err})
+	}
+	pol, err := bundle.Parse(old.Raw(), inv, policy.Env{KeyRefs: r.cfg.KeyRefs()})
+	if err == nil {
+		err = bundle.Check(old, pol, r.cfg.MaxRemovedPercent)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("inventory_file %s, loaded against the policy in force: %w", r.cfg.InventoryFile,
+			quotesCut{err})
+	}
+	return pol, nil
+}
+
+// swap puts pol in force and opens its span, as every reload does: Swap
+// waits for the mints in flight, which finish on the bundle they started
+// with, so the replaced bundle's span ends when it returns; the next grant
+// expiry is read from pol, and a settle pass is owed.
+func (r *reloader) swap(pol *policy.Policy) time.Time {
 	r.broker.Policy.Swap(pol)
-	// Swap waits for the mints in flight, which finish on the policy they
-	// started with, so the replaced policy's span ends when it returns.
 	now := r.now()
 	r.priors[len(r.priors)-1].Until = now
 	r.priors = append(r.priors, broker.Prior{Policy: pol, At: now})
 	r.expiry, _ = pol.NextChange(now)
 	r.settle = now.Add(settleAfterReload)
 	r.metrics.PolicyRefreshPending.Set(1)
-	r.metrics.PolicyReloads.WithLabelValues("applied").Inc()
-	fmt.Fprintf(stderr, "port49d: policy reloaded (%s): %s replaces %s (bundle %s); %d device(s) quarantined now, %d before\n",
-		trigger, pol.Source, old.Source, pol.Bundle, quarantinedAt(pol, now), quarantinedAt(old, now))
+	return now
+}
+
+// after is what every swap runs once its line is written: the lines a start
+// would print, and the refresh that carries the bundle into live contexts.
+func (r *reloader) after(ctx context.Context, rep bundle.Report, pol *policy.Policy, now time.Time) {
 	sayPolicy(pol, now)
 	r.refresh(ctx)
 }
@@ -356,21 +540,4 @@ func quarantinedAt(p *policy.Policy, now time.Time) int {
 		}
 	}
 	return n
-}
-
-// checkInventory says, once per change, that the inventory file on disk is
-// not the one port49d loaded. The inventory is read at start and only then
-// until plan 6's snapshot refresh (spec §10): admission, the key ring and the
-// broker's device table are built from it once, and a reload checks the new
-// policy against that same inventory. So an inventory edit is not applied by a
-// reload, and an operator who sent SIGHUP after one is told so rather than
-// left to believe it.
-func (r *reloader) checkInventory() {
-	_, v, _ := fileVersion(r.cfg.InventoryFile)
-	if v == r.inventory || v == r.inventorySaid {
-		return
-	}
-	r.inventorySaid = v
-	fmt.Fprintf(stderr, "port49d: inventory_file %s has changed since start and is not reloaded (plan 6); the "+
-		"policy is checked against the inventory loaded at start; restart port49d to apply it\n", r.cfg.InventoryFile)
 }

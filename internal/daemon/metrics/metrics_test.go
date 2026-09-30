@@ -36,6 +36,9 @@ func TestNewRegistersEveryMetric(t *testing.T) {
 	m.PolicyReloads.WithLabelValues("applied").Inc()
 	m.PolicyFileRefused.Set(0)
 	m.PolicyRefreshPending.Set(0)
+	m.InventoryReloads.WithLabelValues("applied").Inc()
+	m.InventoryFileRefused.Set(0)
+	m.WatchInventoryAge(func() float64 { return 1 })
 
 	// Gather all metrics from registry.
 	families, err := reg.Gather()
@@ -67,6 +70,9 @@ func TestNewRegistersEveryMetric(t *testing.T) {
 		"port49_policy_reloads_total":              false,
 		"port49_policy_file_refused":               false,
 		"port49_policy_refresh_pending":            false,
+		"port49_inventory_reloads_total":           false,
+		"port49_inventory_file_refused":            false,
+		"port49_inventory_snapshot_age_seconds":    false,
 	}
 
 	// Check that all expected metrics are present and all gathered metrics are snake_case.

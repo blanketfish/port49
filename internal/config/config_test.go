@@ -896,3 +896,35 @@ func TestWithABrokerLoadDoesNotReadTheInventory(t *testing.T) {
 		t.Fatalf("inventory_file %q, inventory %+v", cfg.InventoryFile, cfg.Inventory)
 	}
 }
+
+func TestInventoryMaxRemovedPercent(t *testing.T) {
+	setKeyEnv(t)
+	i := write(t, "inv.yaml", inv)
+	cfg, err := Load(write(t, "a.yaml", fmt.Sprintf(sample, i)))
+	if err != nil || cfg.MaxRemovedPercent != 10 {
+		t.Fatalf("default: %d, %v", cfg.MaxRemovedPercent, err)
+	}
+	cfg, err = Load(write(t, "b.yaml", fmt.Sprintf(sample, i)+"inventory: {max_removed_percent: 100}\n"))
+	if err != nil || cfg.MaxRemovedPercent != 100 {
+		t.Fatalf("100: %d, %v", cfg.MaxRemovedPercent, err)
+	}
+	if _, err := Load(write(t, "c.yaml", fmt.Sprintf(sample, i)+"inventory: {max_removed_percent: 150}\n")); err == nil {
+		t.Fatal("150 loaded")
+	}
+}
+
+// SIGHUP re-reads the one key (plan 6a, I1): as strictly as Load, so a typo
+// is an error rather than the default, and an explicit 0 is not the default.
+func TestInventoryBound(t *testing.T) {
+	for body, want := range map[string]int{"": 10, "inventory: {max_removed_percent: 0}\n": 0,
+		"inventory: {max_removed_percent: 35}\n": 35} {
+		if got, err := InventoryBound([]byte(body)); err != nil || got != want {
+			t.Fatalf("%q: %d, %v", body, got, err)
+		}
+	}
+	for _, body := range []string{"inventory: {max_removed_percnt: 35}\n", "inventory: {max_removed_percent: -1}\n"} {
+		if _, err := InventoryBound([]byte(body)); err == nil {
+			t.Fatalf("%q read", body)
+		}
+	}
+}

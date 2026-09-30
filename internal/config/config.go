@@ -237,6 +237,14 @@ type fileConfig struct {
 	Token          TokenConfig               `yaml:"token"`
 	Broker         *BrokerConfig             `yaml:"broker"`
 	Lab            *LabConfig                `yaml:"lab"`
+	InventoryOpts  inventoryYAML             `yaml:"inventory"`
+}
+
+// inventoryYAML is how port49d bounds an inventory reload (spec §10). The
+// pointer tells an absent key (the default) from an explicit 0, which refuses
+// every removal.
+type inventoryYAML struct {
+	MaxRemovedPercent *int `yaml:"max_removed_percent"`
 }
 
 type Config struct {
@@ -259,6 +267,14 @@ type Config struct {
 	// block is.
 	Broker *BrokerConfig
 	Lab    *LabConfig
+
+	// MaxRemovedPercent refuses an inventory reload that takes more than this
+	// share of the devices in force out of service — removed, or kept and
+	// newly refused admission (spec §10, bounded change): default 10, 100
+	// turns the bound off. An empty inventory is refused whatever it says.
+	// It is read at start and re-read at every SIGHUP (InventoryBound), so a
+	// deliberate large removal is: raise it, send SIGHUP, lower it again.
+	MaxRemovedPercent int
 
 	// SessionServices is the resolved authorization-`service` table: every
 	// built-in platform, with any operator override already applied. It is
@@ -317,6 +333,30 @@ func MaxSessionAge(raw []byte) (time.Duration, error) {
 		return 0, fmt.Errorf("config: session.max_session_age_default must be greater than zero; got %s", d)
 	}
 	return d, nil
+}
+
+// InventoryBound reads inventory.max_removed_percent from a port49d.yaml's
+// bytes, with Load's default and range: what port49d re-reads at SIGHUP. It
+// resolves no secret and decodes as strictly as Load, so a typo is an error,
+// never the default.
+func InventoryBound(raw []byte) (int, error) {
+	var f fileConfig
+	dec := yaml.NewDecoder(bytes.NewReader(raw))
+	dec.KnownFields(true)
+	if err := dec.Decode(&f); err != nil && err != io.EOF {
+		return 0, fmt.Errorf("config: %w; check the key spelling against the port49d.yaml schema", err)
+	}
+	return inventoryBound(f.InventoryOpts)
+}
+
+func inventoryBound(o inventoryYAML) (int, error) {
+	if o.MaxRemovedPercent == nil {
+		return 10, nil
+	}
+	if p := *o.MaxRemovedPercent; p < 0 || p > 100 {
+		return 0, fmt.Errorf("config: inventory.max_removed_percent must be between 0 and 100; got %d", p)
+	}
+	return *o.MaxRemovedPercent, nil
 }
 
 func Load(path string) (Config, error) {
@@ -407,6 +447,9 @@ func Load(path string) (Config, error) {
 	}
 	if c.InventoryFile == "" {
 		return Config{}, fmt.Errorf("config: inventory_file is required")
+	}
+	if c.MaxRemovedPercent, err = inventoryBound(f.InventoryOpts); err != nil {
+		return Config{}, err
 	}
 	if err := checkPositive(c); err != nil {
 		return Config{}, err

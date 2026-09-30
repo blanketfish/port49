@@ -45,7 +45,9 @@ func newReloadRig(t *testing.T, policyBody string) *reloadRig {
 	stderr = io.Discard
 	rig.cfg = brokerConfig(t, policyBody)
 	rig.cfg.Broker.PolicyWatchInterval = time.Second
-	rig.cfg.InventoryFile = filepath.Join(t.TempDir(), "inventory.yaml")
+	rig.cfg.MaxRemovedPercent = 10 // config.Load's default
+	// safeDir: the inventory is read behind the policy file's fence.
+	rig.cfg.InventoryFile = filepath.Join(safeDir(t), "inventory.yaml")
 	if err := os.WriteFile(rig.cfg.InventoryFile, []byte("devices: []\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -393,21 +395,6 @@ func TestTheRefreshIsScheduledAtTheNextGrantExpiry(t *testing.T) {
 		lapse.UTC().Format(time.RFC3339)+"}", 1))
 	if !rig.r.due.Equal(lapse) {
 		t.Fatalf("due %v, want the expiry %v", rig.r.due, lapse)
-	}
-}
-
-// The inventory is read once, at start, until plan 6: a reload after an
-// inventory edit says so, once, rather than leaving an operator to believe
-// SIGHUP applied it.
-func TestAnInventoryEditIsSaidNotApplied(t *testing.T) {
-	rig := newReloadRig(t, minimalPolicy)
-	if err := os.WriteFile(rig.cfg.InventoryFile, []byte("devices: [{name: leaf2, platform: arista_eos}]\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	rig.with(func() { rig.r.reload(context.Background(), "SIGHUP") })
-	rig.with(func() { rig.r.reload(context.Background(), "SIGHUP") })
-	if n := strings.Count(rig.out.String(), "has changed since start and is not reloaded"); n != 1 {
-		t.Fatalf("said %d times: %q", n, rig.out.String())
 	}
 }
 

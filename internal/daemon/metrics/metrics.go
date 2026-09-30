@@ -117,7 +117,27 @@ type Metrics struct {
 	// beside port49_policy_file_refused: an edit that loaded, and has not yet
 	// reached every live session.
 	PolicyRefreshPending prometheus.Gauge
+	// port49_inventory_reloads_total{outcome}: attempts to put a changed
+	// inventory_file in force (plan 6a) — "applied", "unchanged" (the same
+	// devices, respelled), or "refused" (it could not be read behind the
+	// fence, did not parse, repeated a name or an address, was empty,
+	// admitted no device, or took more than max_removed_percent out of
+	// service; the bundle in force keeps serving). The watch counts a refused
+	// file once per distinct content.
+	InventoryReloads *prometheus.CounterVec
+	// port49_inventory_file_refused: 1 while inventory_file on disk is one
+	// port49d refused, or one that has changed at every read for six reads
+	// running; 0 once a file loads or the file in force is put back.
+	InventoryFileRefused prometheus.Gauge
+	// port49_inventory_snapshot_age_seconds: how long since inventory_file was
+	// last read and found in force, or loaded (spec §10). Staleness is an
+	// alarm, never a fail-closed: the snapshot never expires.
+	InventorySnapshotAge prometheus.GaugeFunc
+	inventoryAge         atomic.Pointer[func() float64]
 }
+
+// WatchInventoryAge sets what port49_inventory_snapshot_age_seconds reports.
+func (m *Metrics) WatchInventoryAge(age func() float64) { m.inventoryAge.Store(&age) }
 
 // CountQuarantined sets what port49_devices_quarantined reports at each scrape.
 func (m *Metrics) CountQuarantined(count func() int) { m.quarantined.Store(&count) }
@@ -178,7 +198,18 @@ func New(reg prometheus.Registerer) *Metrics {
 			Help: "1 while the policy file on disk is one port49d refused, or has not stopped changing, and an older policy is serving."}),
 		PolicyRefreshPending: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_policy_refresh_pending",
 			Help: "1 from a policy swap or grant expiry until its settle pass has carried it into every live login context."}),
+		InventoryReloads: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_inventory_reloads_total",
+			Help: "Attempts to put a changed inventory file in force, by outcome."}, []string{"outcome"}),
+		InventoryFileRefused: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_inventory_file_refused",
+			Help: "1 while the inventory file on disk is one port49d refused, or has not stopped changing."}),
 	}
+	m.InventorySnapshotAge = prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "port49_inventory_snapshot_age_seconds",
+		Help: "Seconds since the inventory file was last read and found in force, or loaded."}, func() float64 {
+		if age := m.inventoryAge.Load(); age != nil {
+			return (*age)()
+		}
+		return 0
+	})
 	m.DevicesQuarantined = prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "port49_devices_quarantined",
 		Help: "Inventory devices the loaded policy quarantines now."}, func() float64 {
 		if count := m.quarantined.Load(); count != nil {
@@ -197,6 +228,6 @@ func New(reg prometheus.Registerer) *Metrics {
 		m.Connections, m.ConnectionEvents, m.AuthFailures, m.SpoolDepth, m.SpoolDrops, m.SpoolQuarantines,
 		m.StoreOps, m.DecisionLogWriteFailures, m.CryptOpenFailures, m.Attributions, m.BrokerItemErrors, m.BlobCache,
 		m.DevicesQuarantined, m.DevicesAdmissionRefused, m.ContextRefreshes, m.TokensSuperseded, m.PolicyReloads, m.PolicyFileRefused,
-		m.PolicyRefreshPending)
+		m.PolicyRefreshPending, m.InventoryReloads, m.InventoryFileRefused, m.InventorySnapshotAge)
 	return m
 }

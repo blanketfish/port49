@@ -458,11 +458,10 @@ func run(parent context.Context, cfgPath string) error {
 	if err != nil {
 		return err
 	}
-	// The inventory as loaded, hashed now rather than when the reloader
-	// starts: an edit in between would otherwise never be said (checkInventory).
 	// With a broker the inventory is live, so it is read behind the policy
 	// file's fence, first and only there (config.Load leaves it unread), and
-	// the reloader starts from the bytes loaded (M1).
+	// hashed now rather than when the reloader starts: the reloader starts
+	// from the bytes loaded, so an edit in between is loaded (M1).
 	var inventoryAtStart string
 	if cfg.Broker != nil {
 		inv, v, err := fencedInventory(cfg)
@@ -470,8 +469,6 @@ func run(parent context.Context, cfgPath string) error {
 			return err
 		}
 		cfg.Inventory, inventoryAtStart = inv, v
-	} else {
-		_, inventoryAtStart, _ = fileVersion(cfg.InventoryFile)
 	}
 	announce(stderr, &cfg)
 
@@ -701,7 +698,7 @@ func run(parent context.Context, cfgPath string) error {
 			}
 		}
 		r := newReloader(cfg, brk, m, time.Now)
-		r.inventory = inventoryAtStart
+		r.inventory, r.cfgPath = inventoryAtStart, cfgPath
 		r.run(ctx, hup)
 	}()
 

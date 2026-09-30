@@ -230,9 +230,14 @@ func admitsNone(what string, p *policy.Policy) error {
 	if n == 0 || !p.AdmissionAssessed() || len(p.AdmissionRefusals()) < n {
 		return nil
 	}
+	check := "check key_groups and the key_refs port49d.yaml defines"
+	if what == "inventory" {
+		// The key-group move done in the wrong order (plan 6a, C3).
+		check += " (if key_groups was deleted from the inventory file, add it to the policy file first)"
+	}
 	return fmt.Errorf("the new %s admits none of the %d device(s) in the inventory; a reload that refuses the "+
-		"whole fleet is never loaded, whatever inventory.max_removed_percent says (spec §10); check key_groups "+
-		"and the key_refs port49d.yaml defines, or, to take the whole fleet off deliberately, stop port49d", what, n)
+		"whole fleet is never loaded, whatever inventory.max_removed_percent says (spec §10); %s, or, to take "+
+		"the whole fleet off deliberately, stop port49d", what, n, check)
 }
 
 // NewlyRefused is every device in both bundles that old admits and new
