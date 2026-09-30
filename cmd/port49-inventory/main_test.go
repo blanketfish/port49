@@ -13,6 +13,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -414,5 +415,54 @@ func TestAnEmptyClientCARefusesTheStart(t *testing.T) {
 	err := run(context.Background(), f.cfg, make(chan os.Signal))
 	if err == nil || !strings.Contains(err.Error(), "client_ca_file") {
 		t.Fatalf("got %v", err)
+	}
+}
+
+// Final review I3: a Restore held up by a mirror mount that hangs is
+// visible — the metrics listener is up and not ready — and a SIGTERM still
+// stops the service, quietly.
+func TestAStartHeldUpByTheMirrorIsVisibleAndStopsOnSIGTERM(t *testing.T) {
+	f := newFixture(t, 0o600)
+	var out syncBuffer
+	e, r := stderr, restore
+	defer func() { stderr, restore, onListening = e, r, nil }()
+	stderr = &out
+	onListening = func(string, string) { t.Error("the API listened with Restore still waiting") }
+	entered := make(chan struct{})
+	restore = func(_ *inventory.Syncer, ctx context.Context) error {
+		close(entered)
+		<-ctx.Done() // a mount that hangs, until the signal
+		return ctx.Err()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- run(ctx, f.cfg, make(chan os.Signal)) }()
+	select {
+	case <-entered:
+	case err := <-done:
+		t.Fatalf("run: %v; stderr %s", err, &out)
+	case <-time.After(10 * time.Second):
+		t.Fatalf("Restore was never reached: %s", &out)
+	}
+	m := regexp.MustCompile(`port49-inventory: metrics on (127\.0\.0\.1:\d+)`).FindStringSubmatch(out.String())
+	if m == nil {
+		cancel()
+		<-done
+		t.Fatalf("the metrics listener is not up before Restore: %s", &out)
+	}
+	if code, _ := get(t, http.DefaultClient, "http://"+m[1]+"/healthz"); code != 200 {
+		t.Errorf("healthz %d", code)
+	}
+	if code, _ := get(t, http.DefaultClient, "http://"+m[1]+"/readyz"); code != 503 {
+		t.Errorf("readyz %d", code)
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("a SIGTERM during Restore is an error: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("SIGTERM did not stop a service held up in Restore: %s", &out)
 	}
 }

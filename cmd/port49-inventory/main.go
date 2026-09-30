@@ -57,6 +57,9 @@ var onListening func(api, metrics string)
 // newSources builds the configured sources; a test swaps it.
 var newSources = inventory.NewSources
 
+// restore is the Syncer's Restore; a test swaps it for one that hangs.
+var restore = (*inventory.Syncer).Restore
+
 // maxConns caps the API's connections: its callers are a fleet of port49d
 // polling every 30 s and a few operators.
 const maxConns = 512
@@ -103,11 +106,6 @@ func run(ctx context.Context, cfgPath string, hup <-chan os.Signal) error {
 		PolicyFile: cfg.PolicyFile, Key: key, VerifyKeys: verify, Timeout: cfg.SyncTimeout,
 		State:   inventory.State{Dir: cfg.StateDir, MirrorDir: cfg.MirrorDir, Keep: 64},
 		Metrics: m, Now: time.Now, Log: stderr}
-	// A copy the service cannot open stops it here, before any listener: it
-	// never serves below the bundle every port49d holds.
-	if err := s.Restore(); err != nil {
-		return err
-	}
 	api := &inventory.API{Syncer: s, Readers: cfg.Readers, Syncers: cfg.Syncers, Now: time.Now, Log: stderr, Metrics: m}
 	var reqs inflight
 	srv, err := inventory.Server(cfg.Listen, cert, anchor, reqs.wrap(api.Handler()),
@@ -122,14 +120,13 @@ func run(ctx context.Context, cfgPath string, hup <-chan os.Signal) error {
 	defer cancel()
 	srv.BaseContext = func(net.Listener) context.Context { return ctx }
 
+	// The metrics listener binds before Restore, which reads the mirror: a
+	// mount that hangs holds the start up to its deadline, and meanwhile
+	// /healthz, /readyz (503) and port49_inventory_mirror_behind show it
+	// (final review I3). Its address is said at once for the same reason.
 	mln, err := net.Listen("tcp", cfg.MetricsListen)
 	if err != nil {
 		return fmt.Errorf("metrics_listen %s: %w", cfg.MetricsListen, err)
-	}
-	ln, err := net.Listen("tcp", cfg.Listen)
-	if err != nil {
-		mln.Close()
-		return fmt.Errorf("listen %s: %w", cfg.Listen, err)
 	}
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
@@ -147,6 +144,28 @@ func run(ctx context.Context, cfgPath string, hup <-chan os.Signal) error {
 		ErrorLog: stdlog.New(stderr, prefix+"metrics: ", 0)}
 	metricsErr := make(chan error, 1)
 	go func() { metricsErr <- msrv.Serve(mln) }()
+	fmt.Fprintf(stderr, prefix+"metrics on %s\n", mln.Addr())
+	stopMetrics := func() {
+		msrv.Close()
+		<-metricsErr
+	}
+
+	// A copy the service cannot open stops it here, before the API listens:
+	// it never serves below the bundle every port49d holds. A SIGTERM while
+	// Restore waits on a hung mirror ends the start quietly.
+	if err := restore(s, ctx); err != nil {
+		stopMetrics()
+		if ctx.Err() != nil {
+			fmt.Fprintln(stderr, prefix+"signal received, exiting")
+			return nil
+		}
+		return err
+	}
+	ln, err := net.Listen("tcp", cfg.Listen)
+	if err != nil {
+		stopMetrics()
+		return fmt.Errorf("listen %s: %w", cfg.Listen, err)
+	}
 	apiErr := make(chan error, 1)
 	go func() { apiErr <- srv.ServeTLS(broker.Limit(ln, maxConns), "", "") }()
 

@@ -75,9 +75,16 @@ type Syncer struct {
 
 	mu      sync.Mutex
 	current atomic.Pointer[Published]
-	// said is the last refusal or failure said, and mirrorSaid the last mirror
-	// fault, so each is said once.
-	said, mirrorSaid string
+	// said is the last refusal or failure said, so each is said once.
+	said string
+	// mirrorMu guards the mirror's bookkeeping, never a read or write of it:
+	// mirrorOut is closed when the read or write last started returns, nil
+	// once it has; mirrorSaid is the last mirror fault said, so each is said
+	// once. mirrorDeadline bounds one read or write; zero is 10s.
+	mirrorMu       sync.Mutex
+	mirrorOut      chan struct{}
+	mirrorSaid     string
+	mirrorDeadline time.Duration
 	// leftOutSaid is the devices left out as last said, so an unchanged
 	// sync says only those newly left out.
 	leftOutSaid []string
@@ -105,33 +112,52 @@ func (s *Syncer) keys() []ed25519.PublicKey {
 // does not start: passed over, it would start the sequence again at 1,
 // unbounded, below the copy every port49d holds (review of Task 9, Important
 // 1). Beside a good state_dir, a mirror that does not open is said and shows
-// as mirror_behind. A copy that is not there at all is a fresh start. It holds the sync lock, so it is safe beside a sync.
-func (s *Syncer) Restore() error {
+// as mirror_behind. A copy that is not there at all is a fresh start.
+//
+// The mirror is read under its deadline (mirrorIO): one that hangs is passed
+// over beside a good state_dir, as one that does not open is, and with
+// state_dir empty stops the start, said, since it may hold the bundle every
+// port49d holds (final review I3). ctx ending — a SIGTERM — ends the wait,
+// and Restore returns ctx's error. It holds the sync lock, so it is safe
+// beside a sync.
+func (s *Syncer) Restore(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	keys := s.keys()
-	var best *Published
-	for _, c := range []struct {
-		what string
-		get  func([]ed25519.PublicKey) (*Published, error)
-	}{{"state_dir " + s.State.Dir, s.State.Latest}, {"mirror_dir " + s.State.MirrorDir, s.State.Mirror}} {
-		p, err := c.get(keys)
-		if err != nil && best != nil {
+	best, err := s.State.Latest(keys)
+	if err != nil {
+		// Open's and the fence's errors name the file and quote nothing in it.
+		return fmt.Errorf("port49-inventory: state_dir %s holds a bundle the service cannot open: %s; the service "+
+			"does not start below it: if a signing key was rotated, add the old key to verify_key_files; to start "+
+			"fresh, move it aside", s.State.Dir, oneLine(err))
+	}
+	if s.State.MirrorDir != "" {
+		// Behind until shown level, so a mirror that hangs shows at once.
+		s.Metrics.MirrorBehind.Set(1)
+		var m *Published
+		err := s.mirrorIO(ctx, func() (err error) { m, err = s.State.Mirror(keys); return err })
+		switch {
+		case ctx.Err() != nil:
+			return ctx.Err()
+		case errors.Is(err, errMirrorHung) && best != nil:
+			fmt.Fprintf(s.Log, "port49-inventory: %s; serving state_dir's bundle %d\n", oneLine(err),
+				best.Doc.Sequence)
+		case err != nil && best != nil:
 			// state_dir holds a good bundle: the mirror is a copy of it, not
 			// the floor. Said, and mirror() below keeps mirror_behind 1 while
 			// it cannot be brought level; WriteMirror's floor keeps a newer one.
-			fmt.Fprintf(s.Log, "port49-inventory: %s holds a copy the service cannot open: %s; serving state_dir's "+
-				"bundle %d\n", c.what, oneLine(err), best.Doc.Sequence)
-			continue
-		}
-		if err != nil {
-			// Open's and the fence's errors name the file and quote nothing in it.
-			return fmt.Errorf("port49-inventory: %s holds a bundle the service cannot open: %s; the service does "+
-				"not start below it: if a signing key was rotated, add the old key to verify_key_files; to start "+
-				"fresh, move it aside", c.what, oneLine(err))
-		}
-		if p != nil && (best == nil || p.Doc.Sequence > best.Doc.Sequence) {
-			best = p
+			fmt.Fprintf(s.Log, "port49-inventory: mirror_dir %s holds a copy the service cannot open: %s; serving "+
+				"state_dir's bundle %d\n", s.State.MirrorDir, oneLine(err), best.Doc.Sequence)
+		case errors.Is(err, errMirrorHung):
+			return fmt.Errorf("port49-inventory: %s, and state_dir %s holds no bundle: the mirror may hold the "+
+				"bundle every port49d holds, and the service does not start below it: mend the mount, or, to "+
+				"start fresh, move its copy aside", oneLine(err), s.State.Dir)
+		case err != nil:
+			return fmt.Errorf("port49-inventory: mirror_dir %s holds a bundle the service cannot open: %s; the "+
+				"service does not start below it: if a signing key was rotated, add the old key to "+
+				"verify_key_files; to start fresh, move it aside", s.State.MirrorDir, oneLine(err))
+		case m != nil && (best == nil || m.Doc.Sequence > best.Doc.Sequence):
+			best = m
 		}
 	}
 	if best == nil {
@@ -147,7 +173,7 @@ func (s *Syncer) Restore() error {
 		// that key; the next sync tries again.
 		fmt.Fprintf(s.Log, "port49-inventory: %s; serving it as it is, and the next sync tries again\n", oneLine(err))
 	}
-	s.mirror(s.current.Load().Raw) // a mirror behind the state is brought level at once (M7)
+	s.mirror(ctx) // a mirror behind the state is brought level at once (M7)
 	return nil
 }
 
@@ -202,6 +228,16 @@ func (s *Syncer) publish(p *Published) {
 // — a shutdown — returns quietly: it is not said, counted or mirrored, and a
 // sync that ran past Timeout while its caller waited is still a failure.
 func (s *Syncer) Sync(ctx context.Context, trigger string, only ...string) Result {
+	res, quiet := s.syncLocked(ctx, trigger, only)
+	if !quiet {
+		s.mirror(ctx)
+	}
+	return res
+}
+
+// syncLocked is Sync's sync, under the sync lock; quiet is a sync its
+// caller's end cut short, which is neither said, counted nor mirrored.
+func (s *Syncer) syncLocked(ctx context.Context, trigger string, only []string) (Result, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	timeout := s.Timeout
@@ -212,7 +248,7 @@ func (s *Syncer) Sync(ctx context.Context, trigger string, only ...string) Resul
 	defer cancel()
 	res := s.sync(bounded, ctx, only)
 	if res.Outcome == OutcomeFailed && ctx.Err() != nil {
-		return res
+		return res, true
 	}
 	// A sync that did not publish leaves the bundle published as it was: if
 	// a rotation left it under the old key, it is re-sealed now (I1).
@@ -225,9 +261,6 @@ func (s *Syncer) Sync(ctx context.Context, trigger string, only ...string) Resul
 			res.Sequence = s.current.Load().Doc.Sequence
 		}
 	}
-	if cur := s.current.Load(); cur != nil {
-		s.mirror(cur.Raw)
-	}
 	s.Metrics.Syncs.WithLabelValues(trigger, res.Outcome).Inc()
 	s.Metrics.SyncRefused.Set(b2f(res.Outcome == OutcomeRefused))
 	s.Metrics.SyncFailing.Set(b2f(res.Outcome == OutcomeFailed))
@@ -235,7 +268,7 @@ func (s *Syncer) Sync(ctx context.Context, trigger string, only ...string) Resul
 		s.Metrics.LastGood.Set(float64(s.Now().Unix()))
 	}
 	s.say(trigger, res)
-	return res
+	return res, false
 }
 
 // sync fetches under ctx, the bounded one; caller is Sync's own, whose end
@@ -355,34 +388,93 @@ func (s *Syncer) sync(ctx, caller context.Context, only []string) Result {
 		Quarantined: quarantined, LeftOut: leftOut}
 }
 
-// mirror brings the mirror's copy level with raw, the bundle published,
+// mirror brings the mirror's copy level with the bundle published,
 // whenever it differs — at Restore and after every sync, whatever the sync
 // found — so a failed write is retried and a wiped volume refilled (spec
 // §10: the store "holds the most recent bundle"; pre-flight M7). Reading it
-// costs one bounded read. A failure is said once per distinct fault and
-// counted; port49_inventory_mirror_behind is 1 until the copy is level.
-func (s *Syncer) mirror(raw []byte) {
-	if s.State.MirrorDir == "" {
+// costs one bounded read, under mirrorIO's deadline, and never under the
+// sync lock. port49_inventory_mirror_behind is 1 from before the read until
+// the copy is shown level, so a mount that hangs shows at once (final review
+// I3). A failure is said once per distinct fault and counted; one cut short
+// by ctx — a shutdown — is neither.
+func (s *Syncer) mirror(ctx context.Context) {
+	cur := s.current.Load()
+	if s.State.MirrorDir == "" || cur == nil {
 		return
 	}
-	if have, err := s.State.MirrorRaw(); err == nil && bytes.Equal(have, raw) {
+	s.Metrics.MirrorBehind.Set(1)
+	err := s.mirrorIO(ctx, func() error {
+		if have, err := s.State.MirrorRaw(); err == nil && bytes.Equal(have, cur.Raw) {
+			return nil
+		}
+		return s.State.WriteMirror(cur.Raw)
+	})
+	if ctx.Err() != nil {
+		return
+	}
+	s.mirrorMu.Lock()
+	defer s.mirrorMu.Unlock()
+	if err == nil {
 		s.Metrics.MirrorBehind.Set(0)
 		s.mirrorSaid = ""
 		return
 	}
-	s.Metrics.MirrorBehind.Set(1)
-	if err := s.State.WriteMirror(raw); err != nil {
-		s.Metrics.MirrorFailures.Inc()
-		if msg := oneLine(err); msg != s.mirrorSaid {
-			s.mirrorSaid = msg
-			fmt.Fprintf(s.Log, "port49-inventory: mirror_dir %s: %s; the bundle is published from the API and "+
-				"state_dir, and a port49d starting with neither the service nor its own copy waits for one\n",
-				s.State.MirrorDir, msg)
-		}
-		return
+	s.Metrics.MirrorFailures.Inc()
+	if msg := oneLine(err); msg != s.mirrorSaid {
+		s.mirrorSaid = msg
+		fmt.Fprintf(s.Log, "port49-inventory: mirror_dir %s: %s; the bundle is published from the API and "+
+			"state_dir, and a port49d starting with neither the service nor its own copy waits for one\n",
+			s.State.MirrorDir, msg)
 	}
-	s.Metrics.MirrorBehind.Set(0)
-	s.mirrorSaid = ""
+}
+
+// errMirrorHung is a read or write of mirror_dir that did not return by
+// its deadline, or one started while an earlier one is still out.
+var errMirrorHung = errors.New("mirror_dir did not answer")
+
+// mirrorIO runs op, a read or write of mirror_dir, in a goroutine and waits
+// for it until the deadline (10s) or ctx ends, as port49d reads the mirror
+// (pre-flight M4): a FUSE, NFS or object-store CSI mount that hangs blocks
+// in the kernel, and O_NONBLOCK does not help on a regular file. One that
+// does not return is abandoned, and no other is started while it is still
+// out — each later call fails at once — so a hang costs one goroutine, not
+// one per sync.
+func (s *Syncer) mirrorIO(ctx context.Context, op func() error) error {
+	s.mirrorMu.Lock()
+	if s.mirrorOut != nil {
+		select {
+		case <-s.mirrorOut:
+			s.mirrorOut = nil
+		default:
+			s.mirrorMu.Unlock()
+			return fmt.Errorf("mirror_dir %s has not answered a read or write started earlier, which is abandoned: %w",
+				s.State.MirrorDir, errMirrorHung)
+		}
+	}
+	done := make(chan struct{})
+	s.mirrorOut = done
+	deadline := s.mirrorDeadline
+	s.mirrorMu.Unlock()
+	if deadline == 0 {
+		deadline = 10 * time.Second
+	}
+	var err error
+	go func() { err = op(); close(done) }()
+	timer := time.NewTimer(deadline)
+	defer timer.Stop()
+	select {
+	case <-done:
+		s.mirrorMu.Lock()
+		if s.mirrorOut == done {
+			s.mirrorOut = nil
+		}
+		s.mirrorMu.Unlock()
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return fmt.Errorf("mirror_dir %s did not answer in %s: %w", s.State.MirrorDir, deadline, errMirrorHung)
+	}
 }
 
 // quarantinedIn is every device next quarantines now, its cause redacted by

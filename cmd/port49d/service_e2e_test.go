@@ -108,7 +108,7 @@ func startServiceSigning(t *testing.T, dir, addr string, key ed25519.PrivateKey)
 		PolicyFile: filepath.Join(dir, "policy.yaml"), Key: key, VerifyKeys: verify, Metrics: m, Now: time.Now,
 		Log: s.log, State: inventory.State{Dir: filepath.Join(dir, "state"), MirrorDir: filepath.Join(dir, "mirror"),
 			Keep: 64}}
-	if err := s.syncer.Restore(); err != nil {
+	if err := s.syncer.Restore(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	api := &inventory.API{Syncer: s.syncer, Readers: []string{testpki.InvDaemonID},

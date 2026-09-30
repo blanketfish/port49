@@ -32,6 +32,16 @@ type Published struct {
 type State struct {
 	Dir, MirrorDir string
 	Keep           int
+	// readMirror is the mirror's read, fence.ReadSigned when nil; a test
+	// sets one that hangs, as a FUSE, NFS or object-store CSI mount can.
+	readMirror reader
+}
+
+func (s State) mirrorReader() reader {
+	if s.readMirror != nil {
+		return s.readMirror
+	}
+	return fence.ReadSigned
 }
 
 const (
@@ -224,7 +234,7 @@ func (s State) MirrorRaw() ([]byte, error) {
 	if s.MirrorDir == "" {
 		return nil, nil
 	}
-	raw, err := fence.ReadSigned(filepath.Join(s.MirrorDir, mirrorName), bundle.MaxDocument, "bundle")
+	raw, err := s.mirrorReader()(filepath.Join(s.MirrorDir, mirrorName), bundle.MaxDocument, "bundle")
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
 	}
@@ -236,7 +246,7 @@ func (s State) Mirror(keys []ed25519.PublicKey) (*Published, error) {
 	if s.MirrorDir == "" {
 		return nil, nil
 	}
-	return openIfPresent(fence.ReadSigned, filepath.Join(s.MirrorDir, mirrorName), keys)
+	return openIfPresent(s.mirrorReader(), filepath.Join(s.MirrorDir, mirrorName), keys)
 }
 
 // reader is a bounded read of a file: fence.ReadNoLink for the service's own

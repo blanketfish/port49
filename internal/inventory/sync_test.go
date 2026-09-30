@@ -223,7 +223,7 @@ func TestASigningKeyRotationKeepsTheSequenceAndTheBound(t *testing.T) {
 	rotated := rig.syncer(newKey)
 	rotated.VerifyKeys = []ed25519.PublicKey{rig.pub}
 	// Restore re-seals bundle 1 under the new key as bundle 2 (final review I1).
-	if err := rotated.Restore(); err != nil || rotated.Current() == nil || rotated.Current().Doc.Sequence != 2 {
+	if err := rotated.Restore(context.Background()); err != nil || rotated.Current() == nil || rotated.Current().Doc.Sequence != 2 {
 		t.Fatalf("%v %v", rotated.Current(), err)
 	}
 	rig.src.inv = devices(5)
@@ -248,7 +248,7 @@ func TestARotatedKeyReSealsTheBundleOnAStableFleet(t *testing.T) {
 	newPub := []ed25519.PublicKey{newKey.Public().(ed25519.PublicKey)}
 	rotated := rig.syncer(newKey)
 	rotated.VerifyKeys = []ed25519.PublicKey{rig.pub}
-	if err := rotated.Restore(); err != nil {
+	if err := rotated.Restore(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	cur := rotated.Current()
@@ -270,7 +270,7 @@ func TestARotatedKeyReSealsTheBundleOnAStableFleet(t *testing.T) {
 	}
 	// The old key dropped: the service restarts on what it now holds.
 	dropped := rig.syncer(newKey)
-	if err := dropped.Restore(); err != nil || dropped.Current().Doc.Sequence != 2 {
+	if err := dropped.Restore(context.Background()); err != nil || dropped.Current().Doc.Sequence != 2 {
 		t.Fatalf("restart without the old key: %v %v", dropped.Current(), err)
 	}
 }
@@ -286,7 +286,7 @@ func TestARotatedKeyReSealsAtTheNextSyncWhenRestoreCouldNot(t *testing.T) {
 	if err := os.Chmod(rotated.State.Dir, 0o500); err != nil { // published.json cannot be written
 		t.Fatal(err)
 	}
-	err := rotated.Restore()
+	err := rotated.Restore(context.Background())
 	os.Chmod(rotated.State.Dir, 0o700)
 	if err != nil || rotated.Current().Doc.Sequence != 1 {
 		t.Fatalf("%v %v", rotated.Current(), err)
@@ -420,12 +420,12 @@ func TestARestartContinuesTheSequence(t *testing.T) {
 	rig.src.inv = devices(4)
 	rig.sync(t)
 	again := rig.syncer(rig.s.Key)
-	if err := again.Restore(); err != nil || again.Current().Doc.Sequence != 2 {
+	if err := again.Restore(context.Background()); err != nil || again.Current().Doc.Sequence != 2 {
 		t.Fatalf("%v %v", again.Current(), err)
 	}
 	os.RemoveAll(rig.s.State.Dir)
 	lost := rig.syncer(rig.s.Key)
-	if err := lost.Restore(); err != nil || lost.Current().Doc.Sequence != 2 {
+	if err := lost.Restore(context.Background()); err != nil || lost.Current().Doc.Sequence != 2 {
 		t.Fatalf("from the mirror: %v %v", lost.Current(), err)
 	}
 	rig.src.inv = devices(5)
@@ -464,7 +464,7 @@ func TestRestoreIsSafeBesideASync(t *testing.T) {
 	go func() {
 		defer close(done)
 		for i := 0; i < 20; i++ {
-			errs <- rig.s.Restore()
+			errs <- rig.s.Restore(context.Background())
 		}
 	}()
 	for i := 0; i < 20; i++ {
@@ -496,7 +496,7 @@ func TestALostStateDirAndAMirrorThatDoesNotOpenRefuseTheStart(t *testing.T) {
 	}
 	_, newKey, _ := ed25519.GenerateKey(rand.Reader)
 	rotated := rig.syncer(newKey)
-	err := rotated.Restore()
+	err := rotated.Restore(context.Background())
 	mirror := filepath.Join(rig.s.State.MirrorDir, "bundle.json")
 	if err == nil || !strings.Contains(err.Error(), mirror) || !strings.Contains(err.Error(), "move it aside") {
 		t.Fatalf("the start was not refused: %v", err)
@@ -519,7 +519,7 @@ func TestALostStateDirAndAMirrorThatDoesNotOpenRefuseTheStart(t *testing.T) {
 // A mirror that is not there at all is a fresh start, as before.
 func TestNoCopyAnywhereIsAFreshStart(t *testing.T) {
 	rig := newSyncRig(t, syncPolicy, devices(1))
-	if err := rig.s.Restore(); err != nil || rig.s.Current() != nil {
+	if err := rig.s.Restore(context.Background()); err != nil || rig.s.Current() != nil {
 		t.Fatalf("%v %v", rig.s.Current(), err)
 	}
 }
@@ -598,7 +598,7 @@ func TestAGoodStateDirStartsBesideAnUnreadableMirror(t *testing.T) {
 	}
 	again := rig.syncer(rig.s.Key)
 	rig.out.Reset()
-	if err := again.Restore(); err != nil || again.Current() == nil || again.Current().Doc.Sequence != 1 {
+	if err := again.Restore(context.Background()); err != nil || again.Current() == nil || again.Current().Doc.Sequence != 1 {
 		t.Fatalf("%v %v", again.Current(), err)
 	}
 	if testutil.ToFloat64(again.Metrics.MirrorBehind) != 1 {

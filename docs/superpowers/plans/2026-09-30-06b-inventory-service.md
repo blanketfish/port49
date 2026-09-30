@@ -9425,7 +9425,10 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
   snapshot never expires; `port49_inventory_snapshot_age_seconds` climbs), restarts from its persisted
   copy, and a fresh port49d starts from the mirror's — of the two, the one published later. A start
   from a copy counts `port49_inventory_snapshot_age_seconds` from that copy's publication, so a restart
-  does not clear a staleness alarm. A mirror mount that hangs is passed over after 10 s, said. With
+  does not clear a staleness alarm. A mirror mount that hangs is passed over after 10 s, said. The
+  service reads and writes the mirror under the same 10 s deadline, with its metrics listener up
+  first: a hung mount shows as `port49_inventory_mirror_behind` 1 and a line, holds up no sync, and
+  a `SIGTERM` still stops it; with its `state_dir` empty, a hung mirror stops its start, said. With
   neither copy, port49d keeps TACACS+ closed and `/readyz` at 503 until the service answers, saying
   why once per reason: devices find the connection refused and fall to their next server or local
   method.
