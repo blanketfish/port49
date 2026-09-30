@@ -137,6 +137,42 @@ func (l *lab) jsdPort830(t *testing.T, r l26cRun) {
 	}
 }
 
+// junosJSDCanonical are the probes points 1-3 rest on: a W or L refusal of
+// one must be isolated by C reaching it.
+var junosJSDCanonical = []string{"entry: xml-mode netconf", "entry: junoscript netconf", "port 830"}
+
+// jsdVerdict reads each W and L cell against C: a refusal is "deny" only
+// where C, with the same bits and no deny, reached the probe; otherwise it is
+// "unisolated", since the refusal may be the bits' or the form's. A cell that
+// ran or reached NETCONF is "reached". unisolated lists every canonical cell
+// that is not isolated, and any is a failure.
+func jsdVerdict(runs map[string]l26cRun, probes []string) (readings map[string]string, unisolated []string) {
+	readings = map[string]string{}
+	for _, cls := range []string{"W", "L"} {
+		for _, p := range probes {
+			cell, ok := runs[cls].cells[p]
+			if !ok {
+				continue
+			}
+			reached := func(c string) bool { return l26cReached(c) || c == "ran" }
+			var v string
+			switch {
+			case reached(cell):
+				v = "reached"
+			case (cell == "refused" || cell == "login refused") && reached(runs["C"].cells[p]):
+				v = "deny"
+			default:
+				v = "unisolated"
+			}
+			readings[cls+" "+p] = v
+			if v == "unisolated" && slices.Contains(junosJSDCanonical, p) {
+				unisolated = append(unisolated, fmt.Sprintf("%s %s: %s, and C %s", cls, p, cell, cellOr(runs["C"], p)))
+			}
+		}
+	}
+	return readings, unisolated
+}
+
 // jsdTokensLeft is how many seeded logins this platform's run has left.
 func (l *lab) jsdTokensLeft() int {
 	l.mu.Lock()
@@ -280,6 +316,10 @@ func TestL26cJunoscriptDeny(t *testing.T) {
 				}
 			}
 		}
+		readings, unisolated := jsdVerdict(runs, probes)
+		for _, u := range unisolated {
+			t.Errorf("unisolated: %s", u)
+		}
 
 		var b strings.Builder
 		fmt.Fprintf(&b, "The classes were committed: %s.\n\n```\n%s\n```\n\nOn the device afterwards:\n\n```\n%s\n```\n\n",
@@ -299,7 +339,18 @@ func TestL26cJunoscriptDeny(t *testing.T) {
 			fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | %s |\n", tableCell(p), cellOr(runs["W"], p), cellOr(runs["L"], p),
 				cellOr(runs["X"], p), cellOr(runs["C"], p), cellOr(runs["R"], p))
 		}
-		b.WriteString("\n### Accounting `cmd=` per class\n")
+		b.WriteString("\n### Isolation\n\nA W or L refusal is `deny` only where C, with the same bits and no deny, " +
+			"reached the probe; otherwise `unisolated`, and it says nothing about the deny. A canonical probe " +
+			"(`" + strings.Join(junosJSDCanonical, "`, `") + "`) left unisolated fails the test.\n\n")
+		b.WriteString("| probe | W | L |\n|---|---|---|\n")
+		for _, p := range probes {
+			w, l := readings["W "+p], readings["L "+p]
+			if w == "" && l == "" {
+				continue
+			}
+			fmt.Fprintf(&b, "| %s | %s | %s |\n", tableCell(p), jsdOrDash(w), jsdOrDash(l))
+		}
+		b.WriteString("\n### Accounting `cmd=` by time window (a class's block can open with late records of the one before)\n")
 		for _, v := range junosJSDVariants {
 			fmt.Fprintf(&b, "\n%s:\n\n```\n%s```\n", v.name, jsdOrNone(acct[v.name]))
 		}
@@ -321,6 +372,13 @@ func TestL26cJunoscriptDeny(t *testing.T) {
 			"under the `junoscript` deny (the owner's SRX report, results/L26c-operator-juniper_srx.md).",
 			b.String())
 	})
+}
+
+func jsdOrDash(s string) string {
+	if s == "" {
+		return "—"
+	}
+	return s
 }
 
 func jsdOrNone(s string) string {
