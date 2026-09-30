@@ -148,9 +148,7 @@ func (s *conn) quarantined() bool {
 // backoff holds the connection for the limiter's per-source delay before it is
 // closed, so a source that floods malformed packets pays a growing cost while
 // every other source is untouched. It is cancellable so shutdown is not stuck
-// behind it. event is the ConnectionEvents label: callers pass a diagnosis
-// distinct from "malformed_backoff" when the strike isn't itself a malformed
-// packet (an unadmitted source), so the two are distinguishable in metrics.
+// behind it. event is the ConnectionEvents label.
 func (s *conn) backoff(ctx context.Context, event string) {
 	d := s.d.Limits.Malformed(s.src)
 	s.d.Metrics.ConnectionEvents.WithLabelValues(event).Inc()
@@ -183,6 +181,20 @@ func (s *conn) keyMiss(h wire.Header, obf []byte, diag keyring.Diagnosis, versio
 	s.d.Limits.Malformed(s.src)
 	reset(s.c)
 	s.d.Metrics.ConnectionEvents.WithLabelValues("key_miss_closed").Inc()
+}
+
+// unadmitted closes a connection from a source the inventory does not name
+// the way keyMiss closes a key miss (L28 branch H): the record, a strike, and
+// a reset at once, never a hold for the backoff. The strike's backoff then
+// refuses the source's next connections at Accept, before the device writes.
+// With single-connection on, IOS-XE and NX-OS wait out their 5 s timeout
+// after a reset that follows their request, and fall to their local method at
+// once after one that comes before it (spec §15 L31).
+func (s *conn) unadmitted(h wire.Header) {
+	s.unvalidated(h, nil, keyring.DiagUnadmittedSource, 0)
+	s.d.Limits.Malformed(s.src)
+	reset(s.c)
+	s.d.Metrics.ConnectionEvents.WithLabelValues("unadmitted_source").Inc()
 }
 
 // protocolError closes a connection whose key validated but whose packet
@@ -234,8 +246,7 @@ func (s *conn) serve(ctx context.Context) {
 				s.refusedAdmission(h)
 				return
 			}
-			s.unvalidated(h, nil, keyring.DiagUnadmittedSource, 0)
-			s.backoff(ctx, "unadmitted_source")
+			s.unadmitted(h)
 			return
 		}
 

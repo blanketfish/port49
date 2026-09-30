@@ -663,6 +663,68 @@ func TestUnadmittedSourceIsRecordedAndClosed(t *testing.T) {
 	}
 }
 
+// refusedAtAccept dials addr from d and asserts the connection is reset
+// before anything is written on it, which is what a refusal at Accept looks
+// like. On loopback that reset can reach the client before connect()
+// returns, so the dial itself may fail with it (final review Minor 8). Nothing
+// is sent, so nothing can be read or recorded.
+func refusedAtAccept(t *testing.T, d *net.Dialer, addr string) {
+	t.Helper()
+	conn, err := d.Dial("tcp", addr)
+	if err != nil {
+		if !errors.Is(err, syscall.ECONNRESET) {
+			t.Fatalf("want the connection refused at Accept with a reset, got %v", err)
+		}
+		return
+	}
+	t.Cleanup(func() { conn.Close() })
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if n, err := conn.Read(make([]byte, 1)); !errors.Is(err, syscall.ECONNRESET) {
+		t.Fatalf("want the connection refused at Accept with a reset, got %d bytes, %v", n, err)
+	}
+}
+
+// An unadmitted source is closed as a key miss is (L28 branch H; spec §15
+// L31). It gets the record, a strike, and a reset at once, and is never held
+// for the backoff. Its next connection is refused at Accept, before it
+// writes: with single-connection on, IOS-XE and NX-OS wait out their 5 s
+// timeout after a reset that follows their request.
+func TestAnUnadmittedSourceIsResetAtOnceAndRefusedAtAccept(t *testing.T) {
+	log := &syncBuffer{}
+	ts := newTestServerWith(t, log, memory.New(time.Now), nil, func(d *Deps) { d.Limits = slowBackoff() })
+	// 127.0.0.2 is loopback but not in the inventory.
+	d := &net.Dialer{LocalAddr: &net.TCPAddr{IP: net.IPv4(127, 0, 0, 2)}}
+	conn, err := d.Dial("tcp", ts.addr)
+	if err != nil {
+		t.Skipf("cannot source from 127.0.0.2 on this host: %v", err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	c := &client{conn: conn, key: []byte("k2"), sid: 7, seq: 1}
+	c.send(t, wire.TypeAuthen, wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP,
+		Service: wire.AuthenServiceLogin, User: []byte("alice"), Data: []byte("p49_e2e")}.Encode(), 0)
+	began := time.Now()
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := conn.Read(make([]byte, 1)); !errors.Is(err, syscall.ECONNRESET) {
+		t.Fatalf("want a reset, got %v", err)
+	}
+	if held := time.Since(began); held > 500*time.Millisecond {
+		t.Fatalf("the connection was held %s before the reset: an unadmitted source is not held for the backoff", held)
+	}
+	if !waitFor(t, func() bool { return log.contains(`"diagnosis":"unadmitted_source"`) }) {
+		t.Fatalf("log: %s", log.String())
+	}
+	refusedAtAccept(t, d, ts.addr)
+	if n := testutil.ToFloat64(ts.metrics.ConnectionEvents.WithLabelValues("held_refused")); n != 1 {
+		t.Fatalf("held_refused = %v: the strike did not refuse the next connection at Accept", n)
+	}
+	if n := testutil.ToFloat64(ts.metrics.ConnectionEvents.WithLabelValues("unadmitted_source")); n != 1 {
+		t.Fatalf("unadmitted_source = %v", n)
+	}
+	if n := testutil.ToFloat64(ts.metrics.Unvalidated.WithLabelValues("unadmitted_source")); n != 1 {
+		t.Fatalf("unvalidated{unadmitted_source} = %v: the connection refused at Accept left a record", n)
+	}
+}
+
 // quarantinePolicy is a policy under which leaf-01 (arista_eos) is quarantined
 // from adminUntil to opUntil: once the admin grant lapses, the custom level
 // `unmapped` left has no rendering on arista_eos, and once the operator grant lapses too

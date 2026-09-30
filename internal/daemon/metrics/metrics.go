@@ -22,10 +22,14 @@ type Metrics struct {
 	// "refused_cap" (the per-source connection cap), "idle_closed" (the idle
 	// timeout, which also fires on a stall partway through a packet),
 	// "malformed_backoff" (a strike from an admitted source), "unadmitted_source"
-	// (a strike from an address not in the inventory), "key_miss_closed" (a
-	// first packet no accepted key validated, or one past its version's
-	// retire_after: struck and reset at once, L28), "held_refused" (a source
-	// inside the backoff its last strike earned, reset at Accept, L28),
+	// (a strike from an address not in the inventory: recorded and reset at
+	// once, L31), "key_miss_closed" (a first packet no accepted key validated,
+	// or one past its version's retire_after: struck and reset at once, L28),
+	// "held_refused" (a source inside the backoff its last strike earned,
+	// reset at Accept, L28; the strike is a key miss, garbage, or an address
+	// the inventory does not name, a removed device's retries included, so
+	// the event that opened it says which: "key_miss_closed",
+	// "malformed_backoff" or "unadmitted_source"),
 	// "admission_closed" (an open connection whose device a reload refused,
 	// removed, renamed, re-keyed or re-platformed: reset at its next packet,
 	// no strike),
