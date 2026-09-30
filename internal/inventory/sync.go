@@ -79,12 +79,14 @@ type Syncer struct {
 	said string
 	// mirrorMu guards the mirror's bookkeeping, never a read or write of it:
 	// mirrorOut is closed when the read or write last started returns, nil
-	// once it has; mirrorSaid is the last mirror fault said, so each is said
-	// once. mirrorDeadline bounds one read or write; zero is 10s.
-	mirrorMu       sync.Mutex
-	mirrorOut      chan struct{}
-	mirrorSaid     string
-	mirrorDeadline time.Duration
+	// once it has, and mirrorAbandoned is set once it passed its deadline;
+	// mirrorSaid is the last mirror fault said, so each is said once.
+	// mirrorDeadline bounds one read or write; zero is 10s.
+	mirrorMu        sync.Mutex
+	mirrorOut       chan struct{}
+	mirrorAbandoned bool
+	mirrorSaid      string
+	mirrorDeadline  time.Duration
 	// leftOutSaid is the devices left out as last said, so an unchanged
 	// sync says only those newly left out.
 	leftOutSaid []string
@@ -482,32 +484,53 @@ var errMirrorHung = errors.New("mirror_dir did not answer")
 // for it until the deadline (10s) or ctx ends, as port49d reads the mirror
 // (pre-flight M4): a FUSE, NFS or object-store CSI mount that hangs blocks
 // in the kernel, and O_NONBLOCK does not help on a regular file. One that
-// does not return is abandoned, and no other is started while it is still
-// out — each later call fails at once — so a hang costs one goroutine, not
-// one per sync.
+// passes its deadline is abandoned, and no other is started while it is
+// still out — each later call fails at once — so a hang costs one goroutine,
+// not one per sync. A call that finds another's op in flight but not
+// abandoned — two passes overlapping on a slow, healthy mount — waits for
+// it, within its own deadline and ctx, and then runs its own (fix-wave
+// re-review N1).
 func (s *Syncer) mirrorIO(ctx context.Context, op func() error) error {
 	s.mirrorMu.Lock()
-	if s.mirrorOut != nil {
-		select {
-		case <-s.mirrorOut:
-			s.mirrorOut = nil
-		default:
-			s.mirrorMu.Unlock()
-			return fmt.Errorf("mirror_dir %s has not answered a read or write started earlier, which is abandoned: %w",
-				s.State.MirrorDir, errMirrorHung)
-		}
-	}
-	done := make(chan struct{})
-	s.mirrorOut = done
 	deadline := s.mirrorDeadline
 	s.mirrorMu.Unlock()
 	if deadline == 0 {
 		deadline = 10 * time.Second
 	}
-	var err error
-	go func() { err = op(); close(done) }()
 	timer := time.NewTimer(deadline)
 	defer timer.Stop()
+	hung := func() error {
+		return fmt.Errorf("mirror_dir %s did not answer in %s: %w", s.State.MirrorDir, deadline, errMirrorHung)
+	}
+	s.mirrorMu.Lock()
+	for s.mirrorOut != nil {
+		out := s.mirrorOut
+		select {
+		case <-out:
+			s.mirrorOut, s.mirrorAbandoned = nil, false
+			continue
+		default:
+		}
+		if s.mirrorAbandoned {
+			s.mirrorMu.Unlock()
+			return fmt.Errorf("mirror_dir %s has not answered a read or write started earlier, which is abandoned: %w",
+				s.State.MirrorDir, errMirrorHung)
+		}
+		s.mirrorMu.Unlock()
+		select {
+		case <-out:
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timer.C:
+			return hung()
+		}
+		s.mirrorMu.Lock()
+	}
+	done := make(chan struct{})
+	s.mirrorOut = done
+	s.mirrorMu.Unlock()
+	var err error
+	go func() { err = op(); close(done) }()
 	select {
 	case <-done:
 		s.mirrorMu.Lock()
@@ -517,9 +540,15 @@ func (s *Syncer) mirrorIO(ctx context.Context, op func() error) error {
 		s.mirrorMu.Unlock()
 		return err
 	case <-ctx.Done():
+		// Cut short by a shutdown, not abandoned: a later call waits for it.
 		return ctx.Err()
 	case <-timer.C:
-		return fmt.Errorf("mirror_dir %s did not answer in %s: %w", s.State.MirrorDir, deadline, errMirrorHung)
+		s.mirrorMu.Lock()
+		if s.mirrorOut == done {
+			s.mirrorAbandoned = true
+		}
+		s.mirrorMu.Unlock()
+		return hung()
 	}
 }
 

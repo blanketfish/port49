@@ -410,7 +410,9 @@ func (r *reloader) reload(ctx context.Context, trigger string) {
 	raw, v, err := policyVersion(r.cfg.Broker.PolicyFile)
 	if err == nil && v != r.broker.Policy.Load().Source && r.policyParses(raw) {
 		if inv, iv, d, ok := r.newInventory(); ok {
-			r.loadBoth(ctx, trigger, atSIGHUP, raw, v, inv, iv, d)
+			if !r.loadBoth(ctx, trigger, atSIGHUP, raw, v, inv, iv, d) && d != nil {
+				r.rejudged = d.etag // the poke below fetches it again (receive)
+			}
 			if r.cfg.InventoryService != nil {
 				select {
 				case r.poke <- struct{}{}:

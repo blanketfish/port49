@@ -289,3 +289,25 @@ func TestARefusedDocumentIsRetriedWhenAPolicyThatAdmitsItLoads(t *testing.T) {
 		t.Fatalf("not applied: %s", out)
 	}
 }
+
+// Fix-wave re-review: the combined SIGHUP refuses the document held with the
+// policy edit, and the fetch that SIGHUP asks for brings the same document
+// back whole; refused again under the same keys, policy and bound, it is
+// counted once, as the separate path counts it (final review Minor 6).
+func TestACombinedSIGHUPCountsARefusedDocumentOnce(t *testing.T) {
+	rig := newServiceRig(t, groupedPolicy)
+	rig.receive(rig.doc(t, 1, groupedPolicy, 2))
+	readdressed := rig.doc(t, 2, groupedPolicy, 0, deviceAt("leaf1", "11.0.0.1"), deviceAt("leaf2", "11.0.0.2"))
+	rig.receive(readdressed)
+	// The policy moves its key group, but not to where the fleet went.
+	rig.write(t, strings.Replace(groupedPolicy, "cidr: 10.0.0.0/8", "cidr: 12.0.0.0/8", 1))
+	before := testutil.ToFloat64(rig.m.InventoryReloads.WithLabelValues("refused"))
+	rig.sighupWithBound(t, 10)
+	rig.receive(readdressed) // the poke's fetch: the same bytes, whole
+	if !strings.Contains(rig.out.String(), "port49d: policy and inventory reload (SIGHUP) refused together") {
+		t.Fatalf("the fixture's SIGHUP did not take the combined path: %s", rig.out.String())
+	}
+	if n := testutil.ToFloat64(rig.m.InventoryReloads.WithLabelValues("refused")) - before; n != 1 {
+		t.Fatalf("a combined SIGHUP counted the document held %v times", n)
+	}
+}
