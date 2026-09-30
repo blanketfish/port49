@@ -543,3 +543,58 @@ func TestAGoodStateDirStartsBesideAnUnreadableMirror(t *testing.T) {
 		t.Fatalf("the line quotes the file: %s", rig.out)
 	}
 }
+
+// blockSource answers only when its ctx is done.
+type blockSource struct{ name string }
+
+func (b blockSource) Name() string { return b.name }
+func (b blockSource) Fetch(ctx context.Context) (admission.Inventory, error) {
+	<-ctx.Done()
+	return admission.Inventory{}, fmt.Errorf("fetch: %w", ctx.Err())
+}
+
+// A sync its caller cancels, at shutdown, returns quietly: nothing failed
+// that a line or a gauge should say, and the bundle published stands.
+func TestASyncItsCallerCancelsIsQuiet(t *testing.T) {
+	rig := newSyncRig(t, syncPolicy, devices(3))
+	rig.sync(t)
+	rig.s.Sources = []Source{blockSource{name: "a"}}
+	rig.out.Reset()
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(20*time.Millisecond, cancel)
+	if res := rig.s.Sync(ctx, "schedule"); res.Outcome != OutcomeFailed || res.Sequence != 1 {
+		t.Fatalf("%+v", res)
+	}
+	if rig.out.Len() != 0 {
+		t.Fatalf("said: %s", rig.out)
+	}
+	if testutil.ToFloat64(rig.s.Metrics.SyncFailing) != 0 ||
+		testutil.ToFloat64(rig.s.Metrics.Syncs.WithLabelValues("schedule", OutcomeFailed)) != 0 {
+		t.Fatal("a canceled sync was counted")
+	}
+	if cur := rig.s.Current(); cur == nil || cur.Doc.Sequence != 1 {
+		t.Fatalf("the bundle published moved: %v", cur)
+	}
+}
+
+// A source that runs past sync_timeout while its caller is live has failed,
+// and says so.
+func TestASyncPastItsOwnDeadlineIsAFailure(t *testing.T) {
+	rig := newSyncRig(t, syncPolicy, devices(3))
+	rig.sync(t)
+	rig.s.Sources = []Source{blockSource{name: "a"}}
+	rig.s.Timeout = 20 * time.Millisecond
+	if res := rig.s.Sync(context.Background(), "schedule"); res.Outcome != OutcomeFailed || res.Sequence != 1 {
+		t.Fatalf("%+v", res)
+	}
+	if !strings.Contains(rig.out.String(), "sync (schedule) failed; still publishing bundle 1: source a: fetch: "+
+		"context deadline exceeded") {
+		t.Fatalf("not said: %s", rig.out)
+	}
+	if testutil.ToFloat64(rig.s.Metrics.SyncFailing) != 1 {
+		t.Fatal("port49_inventory_sync_failing is not 1")
+	}
+	if cur := rig.s.Current(); cur == nil || cur.Doc.Sequence != 1 {
+		t.Fatalf("the bundle published moved: %v", cur)
+	}
+}

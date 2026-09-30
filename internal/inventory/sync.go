@@ -158,7 +158,9 @@ func (s *Syncer) publish(p *Published) {
 // is empty, and any source not fetched since start — and rebuilds the merged
 // bundle from every source's latest fetch, so each source syncs on its own
 // interval (spec §10). Whatever it found, the mirror is brought level with
-// the bundle published (M7).
+// the bundle published (M7). A sync that fails once its caller's ctx is done
+// — a shutdown — returns quietly: it is not said, counted or mirrored, and a
+// sync that ran past Timeout while its caller waited is still a failure.
 func (s *Syncer) Sync(ctx context.Context, trigger string, only ...string) Result {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -166,9 +168,12 @@ func (s *Syncer) Sync(ctx context.Context, trigger string, only ...string) Resul
 	if timeout == 0 {
 		timeout = 5 * time.Minute
 	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
+	bounded, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	res := s.sync(ctx, only)
+	res := s.sync(bounded, only)
+	if res.Outcome == OutcomeFailed && ctx.Err() != nil {
+		return res
+	}
 	if cur := s.current.Load(); cur != nil {
 		s.mirror(cur.Raw)
 	}
