@@ -557,3 +557,39 @@ func TestTheStartsDocumentIsJudgedForAPolicyMismatch(t *testing.T) {
 		t.Fatalf("not said at start: %s", rig.out.String())
 	}
 }
+
+// Decision 29 on the SIGHUP path: a mismatched document held back by the
+// bound and applied at SIGHUP raises the alarm as a pulled one does.
+func TestASIGHUPAppliedDocumentIsJudgedForAPolicyMismatch(t *testing.T) {
+	rig := newServiceRig(t, groupedPolicy)
+	rig.receive(rig.doc(t, 1, groupedPolicy, 10))
+	rig.receive(rig.doc(t, 2, groupedPolicy+"# ahead\n", 5))
+	if testutil.ToFloat64(rig.m.InventoryBundleRefused) != 1 || testutil.ToFloat64(rig.m.InventoryPolicyMismatch) != 0 {
+		t.Fatalf("a refused document raised the alarm, or was not refused: %s", rig.out.String())
+	}
+	rig.sighupWithBound(t, 100)
+	if len(rig.b.Policy.Load().Devices()) != 5 || testutil.ToFloat64(rig.m.InventoryPolicyMismatch) != 1 ||
+		!strings.Contains(rig.out.String(), "port49d: inventory: the service built bundle 2 against policy ") {
+		t.Fatalf("SIGHUP applied it without the alarm: %s", rig.out.String())
+	}
+}
+
+// A policy reload that is refused leaves the policy in force, so the alarm
+// holds — even when the refused file is the very policy the service used.
+func TestARefusedPolicyReloadKeepsTheMismatchAlarmed(t *testing.T) {
+	rig := newServiceRig(t, groupedPolicy)
+	rig.receive(rig.doc(t, 1, minimalPolicy, 2))
+	if testutil.ToFloat64(rig.m.InventoryPolicyMismatch) != 1 {
+		t.Fatalf("not alarmed: %s", rig.out.String())
+	}
+	// minimalPolicy has no key_groups: it admits no device, so it is refused.
+	rig.write(t, minimalPolicy)
+	rig.pollTwice()
+	out := rig.out.String()
+	if !strings.Contains(out, "port49d: policy reload (file changed) refused") {
+		t.Fatalf("the policy was not refused: %s", out)
+	}
+	if testutil.ToFloat64(rig.m.InventoryPolicyMismatch) != 1 || strings.Contains(out, "agree again") {
+		t.Fatalf("a refused policy reload cleared the alarm: %s", out)
+	}
+}
