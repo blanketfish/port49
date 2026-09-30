@@ -5,6 +5,7 @@ package lab
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -42,8 +43,8 @@ func untilUTC(t *testing.T, at time.Time) {
 // L28's phases time), runs before and after midnight, so the only thing that
 // changes across 00:00:00Z is the date. The premise is asserted, not only
 // recorded: a night where port49d did not admit the session under v1 before
-// midnight, or retired it early, or admitted v1 after, fails rather than
-// writing a note that reads as L29's answer.
+// midnight, or retired it early, or admitted v1 after, fails, and its note
+// opens with a banner saying it is not a measurement.
 func TestL29Midnight(t *testing.T) {
 	if os.Getenv("PORT49_L29_MIDNIGHT") != "1" {
 		t.Skip("L29's midnight case runs only across a real 00:00:00Z: set PORT49_L29_MIDNIGHT=1 and start the " +
@@ -54,6 +55,17 @@ func TestL29Midnight(t *testing.T) {
 		midnight := time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, time.UTC)
 		if time.Until(midnight) < 15*time.Minute {
 			t.Fatal("the device came up too late for tonight's midnight; start the run earlier")
+		}
+		if _, ok := l29Refusals[l.p.name]; !ok {
+			t.Fatalf("no measured refusal text for %s in l29Refusals; a refusal could not be told from output", l.p.name)
+		}
+		// failed is every check this night failed, for the note's banner: a
+		// note written from a failed night must never read as L29's answer.
+		var failed []string
+		fail := func(format string, args ...any) {
+			msg := fmt.Sprintf(format, args...)
+			failed = append(failed, msg)
+			t.Error(msg)
 		}
 		single := l.singleConnection(t)
 		t.Logf("l29: single-connection: %s", single)
@@ -91,7 +103,7 @@ func TestL29Midnight(t *testing.T) {
 			if err != nil {
 				t.Fatalf("show version at %s: %v", midnight.Add(at).Format("15:04Z"), err)
 			}
-			if l29Refused(out) {
+			if l29Refused(l.p.name, out) {
 				t.Fatalf("show version at %s, before midnight, was refused: %q; this night measures nothing",
 					midnight.Add(at).Format("15:04Z"), firstLine(out))
 			}
@@ -101,20 +113,43 @@ func TestL29Midnight(t *testing.T) {
 		out, took, err := sh.Run("show version", 60*time.Second)
 		inFlight := fmt.Sprintf("printed its output in %s", took.Round(10*time.Millisecond))
 		if err != nil {
-			t.Errorf("show version past midnight not observed in 60s: %v", err)
+			fail("show version past midnight not observed in 60s: %s", oneLine(err.Error()))
 			inFlight = "not observed in 60s"
-		} else if l29Refused(out) {
+		} else if l29Refused(l.p.name, out) {
 			inFlight = fmt.Sprintf("refused in %s: %q", took.Round(10*time.Millisecond), firstLine(out))
 		}
 		recs := l.drainRecords(off, 10*time.Second)
-		lastV1, reset := l29Premise(t, recs, user, midnight)
+		lastV1, reset, premise := l29Premise(recs, user, midnight)
+		for _, p := range premise {
+			fail("%s", p)
+		}
 		untilUTC(t, midnight.Add(30*time.Second))
 		offNext := l.mark()
 		next := l.timedLogins(t)
 		nextRecs := l.drainRecords(offNext, 10*time.Second)
 		diags, versions := l29Counts(nextRecs)
+		// As L28's expired phase checks its logins: past retire_after, v1
+		// admits nothing, and the device's key is recorded as retired.
+		if versions["v1"] > 0 {
+			fail("%d record(s) from the logins after midnight validated under v1: v1 was not retired", versions["v1"])
+		}
+		if !hasDiag(diags, "matches_retired") {
+			fail("no matches_retired record from the logins after midnight: %v", diags)
+		}
 		capLine := l.captureLine(t)
 		stop()
+		banner := ""
+		if t.Failed() {
+			banner = "**THIS NIGHT FAILED ITS PREMISE CHECKS: NOT A MEASUREMENT.** It is re-run, never read as " +
+				"L29's answer (plan 6b Task 20, Step 3). Failed checks:\n\n"
+			for _, f := range failed {
+				banner += "- " + f + "\n"
+			}
+			if len(failed) == 0 {
+				banner += "- a harness check (see the run's log)\n"
+			}
+			banner += "\n"
+		}
 		l.result(t, "L29-midnight", l29MidnightClaim, fmt.Sprintf("retire_after: %s (v1 admits through "+
 			"%sT23:59:59.999Z). %s %s Last record under v1: %s. First packet refused as retired: %s; the record "+
 			"cannot say whether that packet was on the connection open across midnight or the first packet of a "+
@@ -127,21 +162,54 @@ func TestL29Midnight(t *testing.T) {
 			"Compare `tests/lab/results/L28-%s.md`'s `expired` and `stopped` phases.\n",
 			today, today, clock, live, lastV1, reset, single, strings.Join(before, ", "), inFlight, next,
 			summarize(recs), diags, versions, capLine, l.p.name))
+		if banner != "" {
+			l29Banner(t, l, banner)
+		}
 	})
 }
 
-// l29Refused reports whether a command's output is the device refusing it.
-func l29Refused(out string) bool {
-	return strings.Contains(out, "% ") || strings.Contains(out, "error:") ||
-		strings.Contains(strings.ToLower(out), "authorization failed")
+// l29Banner puts banner above everything in the note l.result just wrote,
+// so the first thing a reader sees is that the night failed.
+func l29Banner(t *testing.T, l *lab, banner string) {
+	t.Helper()
+	path := filepath.Join(root, "tests", "lab", "results", "L29-midnight-"+l.p.name+".md")
+	note, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("the failed night's banner: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(labcreds.RedactNote(banner)+string(note)), 0o644); err != nil {
+		t.Fatalf("the failed night's banner: %v", err)
+	}
+}
+
+// l29Refusals is each platform's text when it refuses a command, as the lab
+// recorded it; nothing in a `show version` reply contains it.
+var l29Refusals = map[string]string{
+	// tests/lab/results/L4-error-arista_eos.md: `% Authorization denied for
+	// command 'show version': port49: ...`
+	"arista_eos": "% Authorization denied for command",
+	// tests/lab/results/L4-error-cisco_iosxe.md: `% Authorization failed.`
+	"cisco_iosxe": "% Authorization failed.",
+	// tests/lab/results/L4-error-cisco_nxos.md: `Error: AAA authorization
+	// failed AAA_AUTHOR_STATUS_METHOD=16(0x10)`
+	"cisco_nxos": "Error: AAA authorization failed",
+	// tests/lab/results/L26b-juniper_vjunos-router.md: a class deny is
+	// `unknown command.` (Junos authorizes commands locally by class).
+	"juniper_vjunos-router": "unknown command.",
+}
+
+// l29Refused reports whether a command's output is platform refusing it.
+func l29Refused(platform, out string) bool {
+	marker, ok := l29Refusals[platform]
+	return ok && strings.Contains(out, marker)
 }
 
 // l29Premise checks that the records hold what the night is premised on, and
-// returns the last v1 record's time and the first matches_retired record's:
-// the token session admitted under v1 in [23:58Z, 00:00:00Z), no v1 record at
-// or after 00:00:00Z, and no packet refused as retired before it.
-func l29Premise(t *testing.T, recs []map[string]any, user string, midnight time.Time) (lastV1, reset string) {
-	t.Helper()
+// returns the last v1 record's time, the first matches_retired record's, and
+// each check that failed: the token session admitted under v1 in [23:58Z,
+// 00:00:00Z), no v1 record at or after 00:00:00Z, and no packet refused as
+// retired before it.
+func l29Premise(recs []map[string]any, user string, midnight time.Time) (lastV1, reset string, failed []string) {
 	lastV1, reset = "none", "none"
 	sessionV1 := false
 	for _, r := range recs {
@@ -152,7 +220,8 @@ func l29Premise(t *testing.T, recs []map[string]any, user string, midnight time.
 		if d := sub(r, "device"); d != nil && d["key_version"] == float64(1) {
 			lastV1 = ts.UTC().Format(time.RFC3339Nano)
 			if !ts.Before(midnight) {
-				t.Errorf("a record under v1 at %s, at or after 00:00:00Z: v1 was not retired at midnight", lastV1)
+				failed = append(failed, fmt.Sprintf("a record under v1 at %s, at or after 00:00:00Z: v1 was not "+
+					"retired at midnight", lastV1))
 			}
 			if s := sub(r, "session"); s != nil && str(s, "username") == user &&
 				!ts.Before(midnight.Add(-2*time.Minute)) && ts.Before(midnight) {
@@ -162,15 +231,15 @@ func l29Premise(t *testing.T, recs []map[string]any, user string, midnight time.
 		if u := sub(r, "unvalidated"); u != nil && reset == "none" && str(u, "diagnosis") == "matches_retired" {
 			reset = ts.UTC().Format(time.RFC3339Nano)
 			if ts.Before(midnight) {
-				t.Errorf("a packet refused as retired at %s, before 00:00:00Z", reset)
+				failed = append(failed, fmt.Sprintf("a packet refused as retired at %s, before 00:00:00Z", reset))
 			}
 		}
 	}
 	if !sessionV1 {
-		t.Errorf("no record for %s under v1 in [23:58Z, 00:00:00Z): the session was not shown to be admitted "+
-			"under v1 before midnight", user)
+		failed = append(failed, fmt.Sprintf("no record for %s under v1 in [23:58Z, 00:00:00Z): the session was "+
+			"not shown to be admitted under v1 before midnight", user))
 	}
-	return lastV1, reset
+	return lastV1, reset, failed
 }
 
 // l29Counts is l28Phase's tally: unvalidated records by diagnosis/type, and
@@ -205,22 +274,28 @@ func (l *lab) deviceClock(t *testing.T) string {
 		cmd = "show system uptime"
 		open = func(l *lab) (*cliConn, error) { return l.junosCLI(breakglassUser, breakglassPassword) }
 	}
+	// Not withAdminCLI: its failures are fatal, and this reading is not worth
+	// the night. port49d is left stopped, since l28Live restarts it on the
+	// midnight config next.
+	if err := l.stopDaemon(); err != nil {
+		return fmt.Sprintf("Device clock: not read (stopping port49d for the break-glass CLI: %s).", oneLine(err.Error()))
+	}
+	c, err := open(l)
+	if err != nil {
+		return fmt.Sprintf("Device clock: not read (no break-glass CLI: %s).", oneLine(err.Error()))
+	}
+	defer c.Close()
+	h0 := time.Now().UTC()
 	var out string
-	var h0, h1 time.Time
-	l.withAdminCLI(t, open, func(c *cliConn) error {
-		var err error
-		h0 = time.Now().UTC()
-		if strings.HasPrefix(l.p.name, "juniper_") {
-			out, err = junosShow(c, cmd)
-		} else {
-			out, err = l.adminShow(c, cmd)
-		}
-		h1 = time.Now().UTC()
-		if err != nil {
-			return fmt.Errorf("the device clock (%s): %w", cmd, err)
-		}
-		return nil
-	})
+	if strings.HasPrefix(l.p.name, "juniper_") {
+		out, err = junosShow(c, cmd)
+	} else {
+		out, err = l.adminShow(c, cmd)
+	}
+	h1 := time.Now().UTC()
+	if err != nil {
+		return fmt.Sprintf("Device clock: not read (`%s`: %s).", cmd, oneLine(err.Error()))
+	}
 	said := l29Output(out, l.p.node)
 	if strings.HasPrefix(l.p.name, "juniper_") {
 		said, _, _ = strings.Cut(said, "; ")
