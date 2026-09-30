@@ -615,7 +615,8 @@ read on a timer and on `SIGHUP`, and a change is handled in four steps:
    `port49_policy_file_refused` holds at 1 until a file loads or the old one is put back. A typo
    never takes the fleet down, and that includes a file that parses but that no platform can
    compile (§10). So is a file that refuses admission to more than
-   `inventory.max_removed_percent` of the devices the policy in force admits (§10). Nothing is
+   `inventory.max_removed_percent` of the devices the policy in force admits, or that admits no
+   device at all whatever the bound (§10). Nothing is
    half-applied. The timer is
    `broker.policy_watch_interval` (default 5s, 1s to 5m). A change it finds is loaded once
    two reads in a row agree, and what is loaded is the bytes those two reads agreed on, so an
