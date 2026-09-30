@@ -4011,7 +4011,8 @@ rest of the fleet loads. The broker refuses to mint for a refused device (`devic
 it would only be a login that silently falls to its local method (the close is a quarantine's,
 measured on four images: `tests/lab/results/quarantine-*.md`). One case refuses the start
 rather than a device: a bundle that admits none of a non-empty inventory — key groups declared in
-neither file, say — which no device caused. port49d with no `broker:` block has no policy and
+neither file, say — which no device caused. The same bundle at a reload, of either file, is
+refused whatever `inventory.max_removed_percent` says (below). port49d with no `broker:` block has no policy and
 keeps plan 1's behaviour: the inventory file's key groups, read at start, and a start refused by
 either fault.
 
@@ -4414,7 +4415,10 @@ file (§5.1.3): it loads a changed file once two reads a watch interval apart ag
 `SIGHUP`, and says a refusal once per distinct content. It validates as above and refuses an
 empty file and one that removes more than `inventory.max_removed_percent` of the devices in
 force (default 10; 100 turns the bound off), counting a device that goes from admitted to
-refused as removed. It builds a bundle from the file and the policy in force,
+refused as removed. Whatever the bound, it refuses a file whose bundle admits none of its
+devices, as a start is refused (above): the bundle in force keeps serving,
+`port49_inventory_file_refused` is 1, and the one line that says so names the deliberate path,
+which is to stop port49d. It builds a bundle from the file and the policy in force,
 swaps the two in one pointer, and runs the refresh a policy reload runs (§5.1.3): a device
 removed from inventory has its live contexts revoked, and one leaving a scope is narrowed like
 any other. `port49_inventory_snapshot_age_seconds` is the time since the file in force was last
@@ -4428,7 +4432,10 @@ otherwise log everyone out within seconds, and a revert would not bring the sess
 policy reload that refuses admission to more than `inventory.max_removed_percent` of the devices
 the policy in force admits is refused, naming them; the policy in force keeps serving and
 `port49_policy_file_refused` is 1, and raising the bound and sending `SIGHUP` applies a deliberate
-change.
+change. A policy reload whose bundle admits no device of a non-empty inventory is refused
+whatever the bound, as a start is (above): the policy in force keeps serving, the refusal is
+said once, and its line names the deliberate path to take the whole fleet off, which is to stop
+port49d.
 
 **The inventory file is privilege-granting, and read as the policy file is.** Its attributes and
 names decide scope membership, its addresses are handed to SSH clients by the mint, and a
