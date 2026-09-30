@@ -588,3 +588,64 @@ func TestAVerbatimBlobNeverPrintsWhatTheLogRedacted(t *testing.T) {
 		}
 	}
 }
+
+// The session side of the same guard (final review m5): a blob whose
+// attributes carry a secret, logged redacted and supplied verbatim by the
+// files, diverges from a session record whose reply was edited, or whose
+// values the attributes cannot take, and the detail names the log's side
+// only: no attribute the blob gives, and none of the secret.
+func TestAVerbatimBlobNeverPrintsItsSessionAttributes(t *testing.T) {
+	const secret = "Xk9vQ7pLm2Zr"
+	b := engine.Blob{Bundle: "sha256:policy", Platform: "arista_eos",
+		Normalize: engine.Normalize{PipeToken: "|", StripCR: true}, Privilege: "admin",
+		Attributes: []string{"priv-lvl=15", "x-" + secret + "*/home/{username}"}}
+	body, hash, err := engine.Encode(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shown := []byte(strings.ReplaceAll(string(body), secret, platform.Redacted))
+	if string(shown) == string(body) {
+		t.Fatal("the fixture's secret is not in the blob to redact")
+	}
+	device := &decision.Device{Name: "leaf-01", Platform: "arista_eos"}
+	src := func(decision.Record, time.Time) ([]byte, bool) { return body, true }
+	for _, c := range []struct {
+		name, username string
+		logged         []string
+		want           string
+	}{
+		{"the reply edited", "alice", []string{"priv-lvl=15"}, "the session attributes do not"},
+		{"values the attributes cannot take", "al=ice", []string{"priv-lvl=15"}, "do not fit this record's values"},
+	} {
+		var log bytes.Buffer
+		sink := decision.NewJSONLines(&log)
+		sink.Emit(decision.Record{TS: time.Now(), Event: decision.EventBlob,
+			Blob: &decision.Blob{Hash: hash, Body: shown, Redacted: true}})
+		sink.Emit(decision.Record{TS: time.Now(), Event: decision.EventAuthorizeSession,
+			Verdict: decision.VerdictPermit, Reason: b.SessionReason(), Principal: "user:alice@example.com",
+			Device: device, Session: &decision.Session{Username: c.username},
+			Reply: &decision.Reply{Attributes: c.logged}, Policy: &decision.Policy{Bundle: b.Bundle, Blob: hash}})
+		if strings.Contains(log.String(), secret) {
+			t.Fatalf("%s: the fixture's log carries the secret", c.name)
+		}
+		res, err := ReplayWith(strings.NewReader(log.String()), 0, src)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var session *Result
+		for i := range res {
+			if res[i].Event == decision.EventAuthorizeSession {
+				session = &res[i]
+			}
+		}
+		if session == nil || session.Status != Diverge || !strings.Contains(session.Detail, c.want) {
+			t.Fatalf("%s: %+v", c.name, res)
+		}
+		printed := fmt.Sprintf("%+v %v %s", *session, *session, session.Detail)
+		for _, f := range append(secretForms(secret), "x-", "/home/") {
+			if strings.Contains(printed, f) {
+				t.Fatalf("%s: the result prints %q from the blob: %s", c.name, f, printed)
+			}
+		}
+	}
+}
