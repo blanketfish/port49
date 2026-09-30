@@ -226,6 +226,10 @@ func TestL29ConnectionsReadsEachConnectionsReset(t *testing.T) {
 	// 40003: reset before the device sent on it.
 	seg(14, dev, srv, 40003, 49, syn, 0)
 	seg(14, srv, dev, 49, 40003, rst|ack, 0)
+	// 40006: open (idle) before the change, reset at its first packet after.
+	seg(5, dev, srv, 40006, 49, syn, 0)
+	seg(15, dev, srv, 40006, 49, psh|ack, 40)
+	seg(15, srv, dev, 49, 40006, rst|ack, 0)
 	// 40004: served before the change, never reset.
 	seg(3, dev, srv, 40004, 49, psh|ack, 40)
 	// Traffic that is not the device's is not read.
@@ -234,18 +238,19 @@ func TestL29ConnectionsReadsEachConnectionsReset(t *testing.T) {
 	if err := os.WriteFile(path, buf, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	got, mid := l29Connections(path, dev, base.Add(10*time.Second))
-	if mid != 1 {
-		t.Errorf("%d connection(s) counted as reset mid-connection, want 1 (40001)", mid)
+	got, mid, idle := l29Connections(path, dev, base.Add(10*time.Second))
+	if mid != 1 || idle != 1 {
+		t.Errorf("%d mid-connection and %d idle-open reset(s), want 1 (40001) and 1 (40006)", mid, idle)
 	}
 	// The quarantine test's premise reads the same capture: packets the
 	// device sent at or after an instant.
-	if n, err := l29DeviceSent(path, dev, base.Add(10*time.Second)); err != nil || n != 4 {
-		t.Errorf("l29DeviceSent after the change: %d, %v; want 4 (40001's packet, 40002's SYN and packet, "+
-			"40003's SYN)", n, err)
+	if n, err := l29DeviceSent(path, dev, base.Add(10*time.Second)); err != nil || n != 5 {
+		t.Errorf("l29DeviceSent after the change: %d, %v; want 5 (40001's packet, 40002's SYN and packet, "+
+			"40003's SYN, 40006's packet)", n, err)
 	}
 	for port, want := range map[string]string{"40001": "**reset mid-connection**", "40002": "reset at its first packet",
-		"40003": "reset before the device sent on it", "40004": "not reset by port49d"} {
+		"40003": "reset before the device sent on it", "40004": "not reset by port49d",
+		"40006": "**open (idle) before the change, reset at its first packet**"} {
 		var row string
 		for _, line := range strings.Split(got, "\n") {
 			if strings.HasPrefix(line, "| "+port+" |") {
@@ -258,6 +263,29 @@ func TestL29ConnectionsReadsEachConnectionsReset(t *testing.T) {
 	}
 	if strings.Contains(got, "40005") {
 		t.Errorf("another device's connection was read:\n%s", got)
+	}
+}
+
+// The capture the ruling was made on: vJunos-router's refused phase on
+// 2026-09-30 (a copy of its redacted evidence, kept beside the policy so a
+// re-run's evidence does not replace it). Connection 46436 was opened 7.5s
+// before the change, sent nothing until after it, and was reset at that
+// packet: open (idle) before the change, not a first-packet miss.
+func TestL29ConnectionsOnTheVJunosRefusedCapture(t *testing.T) {
+	change := time.Date(2026, 9, 30, 20, 51, 49, 657_000_000, time.UTC)
+	got, mid, idle := l29Connections(filepath.Join("l29", "refused-juniper_vjunos-router-2026-09-30.pcap"),
+		"172.100.100.21", change)
+	if mid != 0 || idle != 1 {
+		t.Errorf("%d mid-connection and %d idle-open reset(s), want 0 and 1\n%s", mid, idle, got)
+	}
+	var row string
+	for _, line := range strings.Split(got, "\n") {
+		if strings.HasPrefix(line, "| 46436 |") {
+			row = line
+		}
+	}
+	if !strings.Contains(row, "open (idle) before the change, reset at its first packet") {
+		t.Errorf("connection 46436: %q\n%s", row, got)
 	}
 }
 

@@ -43,7 +43,9 @@ const l29Reading = "**Reading the records and the captures.** port49d writes one
 	"the device did with the reset. The first comes from the capture: the per-connection table below reads each " +
 	"connection's 4-tuple, whether the device sent on it before the change, and when port49d reset it. The " +
 	"second comes from the device's own output in the open session. A phase with no such record, or whose capture " +
-	"holds no connection reset mid-connection, measured L28's first-packet case and fails.\n\n"
+	"holds no connection reset mid-connection, measured L28's first-packet case and fails. A connection open " +
+	"before the change with nothing sent on it, and reset at its first packet after it, is a reset of an open " +
+	"connection too, and counts when port49d's device_unknown record names it so.\n\n"
 
 // l29Phase is one change to the device under test. change makes it and
 // returns what it did, for the note, and the port49d line it must produce
@@ -236,10 +238,19 @@ func (l *lab) l29ReloadPhase(t *testing.T, li *labInventory, src, policy string,
 	next := l.timedLogins(t)
 	nextRecs := l29FromDevice(l.drainRecords(offNext, 10*time.Second), l.p.addr)
 	capLine := l.captureLine(t)
-	conns, mid := l29Connections(l.capAbs, l.p.addr, changeAt)
-	if mid == 0 {
-		fail("%s: the capture holds no connection the device sent on before the change and port49d reset after it: "+
-			"no reset mid-connection was captured", ph.name)
+	conns, mid, idle := l29Connections(l.capAbs, l.p.addr, changeAt)
+	// An idle open connection meets the premise only beside port49d's
+	// record that it was admitted before the change (withdrawn, above).
+	if mid == 0 && (idle == 0 || withdrawn == nil) {
+		fail("%s: the capture holds no connection open across the change that port49d reset after it: no reset "+
+			"of an open connection was captured", ph.name)
+		if withdrawn == nil {
+			// Said plainly as the observation, not only as a failed check.
+			fmt.Fprintf(&b, "**Observation: the device held no connection open across this change.** port49d wrote "+
+				"no device_unknown record, and the capture holds no connection open before the change that port49d "+
+				"reset after it; what the device sent after the change went on connections it opened after it "+
+				"(records: %s).\n\n", l29Tally(fromDevice))
+		}
 	}
 	stop()
 	fmt.Fprintf(&b, "Times are the host's, UTC: the change began %s; port49d said `%s` by %s; the command in flight "+
@@ -892,11 +903,16 @@ func l29DeviceSent(path, addr string, since time.Time) (int, error) {
 // and reset at its first packet is a first-packet miss. `tcpdump -i any`
 // sees a packet on each interface it crosses; each is read once here by
 // taking the first sighting. mid is how many connections read as reset
-// mid-connection: the phase's premise, from the capture's side.
-func l29Connections(path, addr string, change time.Time) (table string, mid int) {
+// mid-connection: the phase's premise, from the capture's side. idle is how
+// many were open before the change with nothing sent on them, and reset at
+// their first packet after it: a reset of an open connection too (the
+// controller's ruling on the vJunos refused phase), but one the capture
+// cannot tell from a first-packet miss alone, so it meets the premise only
+// beside port49d's device_unknown record for it.
+func l29Connections(path, addr string, change time.Time) (table string, mid, idle int) {
 	pkts, err := l29Packets(path, addr)
 	if err != nil {
-		return fmt.Sprintf("the capture could not be read (%v).\n", err), 0
+		return fmt.Sprintf("the capture could not be read (%v).\n", err), 0, 0
 	}
 	type conn struct {
 		seen, after, rst, syn time.Time
@@ -923,7 +939,7 @@ func l29Connections(path, addr string, change time.Time) (table string, mid int)
 		}
 	}
 	if len(order) == 0 {
-		return "none: the capture holds no packet between the device and port 49.\n", 0
+		return "none: the capture holds no packet between the device and port 49.\n", 0, 0
 	}
 	var b strings.Builder
 	b.WriteString("| device port | first seen | device sent before the change | device first sent after it | " +
@@ -939,6 +955,9 @@ func l29Connections(path, addr string, change time.Time) (table string, mid int)
 		case c.sentBefore:
 			reading = "**reset mid-connection**: open across the change"
 			mid++
+		case c.seen.Before(change) && !c.after.IsZero() && !c.after.After(c.rst):
+			reading = "**open (idle) before the change, reset at its first packet**"
+			idle++
 		case !c.after.IsZero() && !c.after.After(c.rst):
 			reading = "reset at its first packet after the change"
 		case c.after.IsZero():
@@ -954,9 +973,9 @@ func l29Connections(path, addr string, change time.Time) (table string, mid int)
 				l29Clock(c.rst), reading)
 		}
 	}
-	fmt.Fprintf(&b, "\nThe change began at %s (host UTC); %d connection(s) read as reset mid-connection.\n",
-		l29Clock(change), mid)
-	return b.String(), mid
+	fmt.Fprintf(&b, "\nThe change began at %s (host UTC); %d connection(s) read as reset mid-connection, %d as open "+
+		"(idle) before the change and reset at its first packet.\n", l29Clock(change), mid, idle)
+	return b.String(), mid, idle
 }
 
 // l28Reached reports whether l28Live's line says a probe reached port49d,
