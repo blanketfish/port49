@@ -43,7 +43,7 @@ Nautobot connectors and the webhook trigger to plan 6c, and three owner decision
 top. **Executed 2026-09-30** on `feature/inventory-service`, reviewed per task and whole-branch,
 with a fix wave; Task 20's midnight nights were dropped by the owner's ruling. It closed L29 and
 L30, and spec §14's quarantine through a sync passed on four images; it opened L31, slow Cisco
-break-glass with single-connection on (Plan 6b — As built, below); **ready to merge**. Next,
+break-glass with single-connection on (Plan 6b — As built, below); **merged 2026-09-30 (PR #17)**. Next,
 `fix/breakglass-reset`, which closes L31. 6c and 7–13 not yet.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
