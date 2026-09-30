@@ -605,8 +605,8 @@ func TestASwapThatMovesPrivilegeIsLogged(t *testing.T) {
 	if !strings.Contains(got, `"to_bundle":"`+bundle+`"`) {
 		t.Fatalf("the records do not name the bundle swapped in, %s: %s", bundle, got)
 	}
-	if !strings.Contains(rig.out.String(), "3 security change(s) written as inventory_change records") {
-		t.Fatalf("the swap does not say it wrote them: %s", rig.out.String())
+	if !strings.Contains(rig.out.String(), "port49d: inventory: 3 security change(s) written as inventory_change records") {
+		t.Fatalf("the inventory swap does not say it wrote them: %s", rig.out.String())
 	}
 }
 
@@ -678,5 +678,9 @@ func TestAPolicySwapThatMovesPrivilegeIsLogged(t *testing.T) {
 	}
 	if n := testutil.ToFloat64(rig.m.InventoryChanges.WithLabelValues("scope_left")); n != 1 {
 		t.Fatalf("scope_left = %v", n)
+	}
+	// The line names the file whose swap changed access: the policy file.
+	if !strings.Contains(rig.out.String(), "port49d: policy: 2 security change(s) written as inventory_change records") {
+		t.Fatalf("the policy swap's line does not name the policy file: %s", rig.out.String())
 	}
 }

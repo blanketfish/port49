@@ -339,7 +339,7 @@ func (r *reloader) load(ctx context.Context, trigger string, raw []byte, v strin
 	r.invRefused = ""
 	fmt.Fprintf(stderr, "port49d: policy reloaded (%s): %s replaces %s (bundle %s); %d device(s) quarantined now, %d before\n",
 		trigger, pol.Source, old.Source, pol.Bundle, quarantinedAt(pol, now), quarantinedAt(old, now))
-	r.after(ctx, bundle.Diff(old, pol, now), pol, now)
+	r.after(ctx, "policy", bundle.Diff(old, pol, now), pol, now)
 }
 
 // loadInventory builds a bundle from raw, the inventory file read as version
@@ -384,7 +384,7 @@ func (r *reloader) loadInventory(ctx context.Context, trigger string, raw []byte
 	fmt.Fprintf(stderr, "port49d: inventory reloaded (%s): %s; %d device(s) quarantined now, %d before; %d refused "+
 		"admission\n", trigger, rep.Summary(), quarantinedAt(pol, now), quarantinedAt(old, now),
 		len(pol.AdmissionRefusals()))
-	r.after(ctx, rep, pol, now)
+	r.after(ctx, "inventory", rep, pol, now)
 }
 
 // inventoryBundle is the bundle raw, the inventory file's bytes, makes with
@@ -424,11 +424,13 @@ func (r *reloader) swap(pol *policy.Policy) time.Time {
 
 // after is what every swap runs once its line is written: an inventory_change
 // record for each security change it made, the lines a start would print, and
-// the refresh that carries the bundle into live contexts.
-func (r *reloader) after(ctx context.Context, rep bundle.Report, pol *policy.Policy, now time.Time) {
+// the refresh that carries the bundle into live contexts. file, "policy" or
+// "inventory", names the file whose swap it was: the security line's prefix
+// says which file changed access.
+func (r *reloader) after(ctx context.Context, file string, rep bundle.Report, pol *policy.Policy, now time.Time) {
 	if n := r.securityEvents(rep, now); n > 0 {
-		fmt.Fprintf(stderr, "port49d: inventory: %d security change(s) written as inventory_change records "+
-			"(spec §10)\n", n)
+		fmt.Fprintf(stderr, "port49d: %s: %d security change(s) written as inventory_change records "+
+			"(spec §10)\n", file, n)
 	}
 	sayPolicy(pol, now)
 	r.refresh(ctx)
