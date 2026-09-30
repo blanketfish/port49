@@ -39,8 +39,9 @@ const e2ePolicy = minimalPolicy + "key_groups: [{match: {cidr: 10.0.0.0/8}, key_
 // shortest config.Load accepts.
 const e2ePoll = 5 * time.Second
 
-// pokeWait bounds a wait for what a SIGHUP's fetch brings, well inside
-// e2ePoll, so a pass cannot be the poll's doing.
+// pokeWait bounds a wait for what a SIGHUP's fetch brings. It is inside
+// e2ePoll, so a pass is the poke's doing only while each poke comes soon
+// after the fetch before it: here within about 1s, a 2s margin.
 const pokeWait = 3 * time.Second
 
 // scrapeClient bounds every request the tests make of port49d's metrics
@@ -273,13 +274,8 @@ func readyz(t *testing.T, out *syncBuffer) int {
 // its labels as the scrape spells them.
 func gauge(t *testing.T, out *syncBuffer, series string) float64 {
 	t.Helper()
-	resp, err := scrapeClient.Get("http://" + metricsAddr(t, out) + "/metrics")
-	if err != nil {
-		t.Fatal(err)
-	}
-	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	m := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(series) + ` (\S+)$`).FindSubmatch(body)
+	body := scrape(t, out)
+	m := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(series) + ` (\S+)$`).FindStringSubmatch(body)
 	if m == nil {
 		t.Fatalf("no %s in the scrape:\n%s", series, body)
 	}
@@ -297,7 +293,7 @@ func fetchesAtLeast(t *testing.T, out *syncBuffer, outcome string, n float64) {
 	series := `port49_inventory_fetches_total{outcome="` + outcome + `"}`
 	deadline := time.Now().Add(pokeWait)
 	for {
-		if strings.Contains(scrape(t, out), series) && gauge(t, out, series) >= n {
+		if strings.Contains(scrape(t, out), series+" ") && gauge(t, out, series) >= n {
 			return
 		}
 		if time.Now().After(deadline) {
@@ -434,6 +430,10 @@ func TestPort49dRestartsFromItsCopyWithTheServiceDown(t *testing.T) {
 	fetchesAtLeast(t, out, "failed", 1)
 	poke(t)
 	fetchesAtLeast(t, out, "failed", 2)
+	// The counter moves before the line is said; the fetcher is serial, so
+	// once a third fetch has failed, the second's line, if any, is written.
+	poke(t)
+	fetchesAtLeast(t, out, "failed", 3)
 	if n := strings.Count(out.String(), "did not answer"); n != 1 {
 		t.Fatalf("said %d times: %s", n, out.String())
 	}
@@ -518,6 +518,10 @@ func TestADocumentSignedByAnUnlistedKeyIsRefused(t *testing.T) {
 	poke(t)
 	waitWithin(t, out, "port49d: inventory reload (SIGHUP) refused; still serving bundle ", pokeWait)
 	fetchesAtLeast(t, out, "invalid", invalid+1)
+	// The counter moves before the reloader speaks; once the next fetch is
+	// counted, whatever the last one made it say is written.
+	poke(t)
+	fetchesAtLeast(t, out, "invalid", invalid+2)
 	if n := strings.Count(out.String(), "(inventory service) refused"); n != 1 {
 		t.Fatalf("said %d times: %s", n, out.String())
 	}
@@ -539,6 +543,9 @@ func TestAFreshPort49dStartsFromTheMirror(t *testing.T) {
 	}
 	if readyz(t, out) != http.StatusOK {
 		t.Fatal("not ready with the mirror's copy")
+	}
+	if st := leaf0(t, out).login("nobody", "not-a-token"); st != wire.AuthenStatusFail {
+		t.Fatalf("leaf0, admitted by the mirror's copy, answered %d", st)
 	}
 }
 
