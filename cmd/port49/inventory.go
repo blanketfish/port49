@@ -189,12 +189,16 @@ func reloadOrder(w io.Writer, now time.Time, old, new *policy.Policy,
 	fmt.Fprintf(w, "%s:\n", heading)
 	o := order{first: first, second: second}
 	mid, err := load()
+	var cerr error
+	if err == nil {
+		cerr = firstCheck(mid)
+	}
 	switch {
 	case err != nil:
 		o.err = fmt.Errorf("the %s reload is refused: port49d would not load it against the %s in force: %s",
 			first, second, loadFault(err))
-	case firstCheck(mid) != nil:
-		o.err = fmt.Errorf("the %s reload is refused: %w", first, firstCheck(mid))
+	case cerr != nil:
+		o.err = fmt.Errorf("the %s reload is refused: %w", first, cerr)
 	default:
 		step(w, now, first, old, mid)
 		if err := secondCheck(mid); err != nil {
