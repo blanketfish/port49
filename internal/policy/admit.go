@@ -136,9 +136,10 @@ func (p *Policy) Admitted(name string) (admission.Resolved, bool) {
 	return r, ok
 }
 
-// AdmissionRefusals are the inventory devices admission refuses, by name. It
-// is meaningful only where AdmissionAssessed: on an unassessed policy every
-// device is refused no_key_group, and nothing acts on it.
+// AdmissionRefusals are the inventory devices admission refuses, by name. On
+// an unassessed policy — no key groups and no Env.KeyRefs — every device not
+// pinned on its record is refused no_key_group, which is what port49d, always
+// assessing, would refuse; an offline tool reads it so (plan 6a, I1).
 func (p *Policy) AdmissionRefusals() []admission.Resolved {
 	var out []admission.Resolved
 	for _, name := range sortedKeys(p.admitted) {

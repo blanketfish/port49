@@ -1334,18 +1334,109 @@ func TestPolicyTestFailsATieAndAnUndefinedKeyByDevice(t *testing.T) {
 	}
 }
 
-// M3: a port49d.yaml with no keys defines none, so every key group's
-// key_ref is undefined and the gate fails, rather than having nothing to check.
+// M3: a port49d.yaml with no keys defines none (readKeySets returns an
+// empty map, never nil), so every key group's key_ref is undefined and the
+// gate fails, rather than having nothing to check.
 func TestPolicyTestReadsAnEmptyKeysBlockAsUndefined(t *testing.T) {
 	pol, inv, _, _ := keysFiles(t)
 	cfg := filepath.Join(t.TempDir(), "port49d.yaml")
 	if err := os.WriteFile(cfg, []byte("keys: {}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	for _, body := range []string{"keys: {}\n", "listen: \":49\"\n", ""} {
+		none := filepath.Join(t.TempDir(), "port49d.yaml")
+		if err := os.WriteFile(none, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if sets, err := readKeySets(none); err != nil || sets == nil {
+			t.Fatalf("%q: sets %v, err %v: a file with no keys must define none, not be unchecked", body, sets, err)
+		}
+	}
 	var out, errOut bytes.Buffer
 	code := run([]string{"policy", "test", "--policy", pol, "--inventory", inv, "--config", cfg}, &out, &errOut)
 	if code != 1 || !strings.Contains(out.String(), "keys: key group cidr 10.0.0.0/8 → prod_key names key_ref prod_key") ||
 		!strings.Contains(out.String(), "admission: leaf-01 (arista_eos) refused: ") {
 		t.Fatalf("exit %d:\n%s%s", code, out.String(), errOut.String())
+	}
+}
+
+// I1: port49d always assesses admission, so a bundle with no key_groups in
+// either file admits only pinned devices, and none here: its start and every
+// reload refuse it. `policy test` fails it with or without --config, and
+// `policy diff` fails the edit that deletes the block, naming each device.
+func TestCIFailsWhenTheKeyGroupsBlockIsRemoved(t *testing.T) {
+	pol, inv, cfg, _ := keysFiles(t)
+	gone := filepath.Join(t.TempDir(), "nogroups.yaml")
+	body := strings.Replace(keysPolicy, "key_groups: [{match: {cidr: 10.0.0.0/8}, key_ref: prod_key}]\n", "", 1)
+	if body == keysPolicy {
+		t.Fatal("the fixture kept its key_groups")
+	}
+	if err := os.WriteFile(gone, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, extra := range [][]string{nil, {"--config", cfg}} {
+		var out, errOut bytes.Buffer
+		args := append([]string{"policy", "test", "--policy", gone, "--inventory", inv}, extra...)
+		code := run(args, &out, &errOut)
+		got := out.String() + errOut.String()
+		if code != 1 || !strings.Contains(got, "admission: neither the policy nor the inventory declares key_groups") ||
+			!strings.Contains(got, "port49d admits none of the 2 device(s)") ||
+			!strings.Contains(got, "admission: leaf-19 (arista_eos) refused: matches no key group") {
+			t.Fatalf("%v: exit %d:\n%s", extra, code, got)
+		}
+	}
+	var out, errOut bytes.Buffer
+	code := run([]string{"policy", "diff", "--old", pol, "--new", gone, "--inventory", inv}, &out, &errOut)
+	got := out.String() + errOut.String()
+	if code != 1 || !strings.Contains(got, "REFUSED: admission: the key_groups block was removed") ||
+		!strings.Contains(got, "REFUSED: admission: leaf-01 (arista_eos) is newly refused") ||
+		!strings.Contains(got, "REFUSED: admission: leaf-19 (arista_eos) is newly refused") ||
+		!strings.Contains(got, "; 2 devices newly refused admission") {
+		t.Fatalf("diff: exit %d:\n%s", code, got)
+	}
+}
+
+// A device pinned to a key_ref on its inventory record is admitted with no
+// key group, as port49d admits it; the gate fails only the unpinned.
+func TestPolicyTestWithNoKeyGroupsFailsOnlyTheUnpinned(t *testing.T) {
+	dir := t.TempDir()
+	pol := filepath.Join(dir, "p.yaml")
+	inv := filepath.Join(dir, "i.yaml")
+	body := strings.Replace(keysPolicy, "key_groups: [{match: {cidr: 10.0.0.0/8}, key_ref: prod_key}]\n", "", 1)
+	if err := os.WriteFile(pol, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(inv, []byte(`devices:
+  - {name: leaf-01, platform: arista_eos, addresses: [10.20.0.7], key_ref: prod_key}
+  - {name: leaf-19, platform: arista_eos, addresses: [10.20.4.9]}
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	code := run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errOut)
+	got := out.String()
+	if code != 1 || !strings.Contains(got, "admission: leaf-19 (arista_eos) refused: matches no key group") ||
+		strings.Contains(got, "leaf-01") || strings.Contains(got, "admits none") {
+		t.Fatalf("exit %d:\n%s%s", code, got, errOut.String())
+	}
+}
+
+// An inventory with no devices has no admission to judge: port49d's own
+// admit-none check passes an empty inventory, so the gate says nothing.
+func TestPolicyTestOnAnEmptyInventorySaysNothingOfAdmission(t *testing.T) {
+	dir := t.TempDir()
+	pol := filepath.Join(dir, "p.yaml")
+	inv := filepath.Join(dir, "i.yaml")
+	body := strings.Replace(keysPolicy, "key_groups: [{match: {cidr: 10.0.0.0/8}, key_ref: prod_key}]\n", "", 1)
+	if err := os.WriteFile(pol, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(inv, []byte("devices: []\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	run([]string{"policy", "test", "--policy", pol, "--inventory", inv}, &out, &errOut)
+	if strings.Contains(out.String()+errOut.String(), "admission") {
+		t.Fatalf("%s%s", out.String(), errOut.String())
 	}
 }

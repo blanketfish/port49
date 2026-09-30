@@ -36,7 +36,9 @@ func keysCmd(args []string, stdout, stderr io.Writer) int {
 	return 2
 }
 
-// readKeySets reads port49d.yaml's keys: block, no secret included.
+// readKeySets reads port49d.yaml's keys: block, no secret included. On
+// success the map is never nil, so a file with no keys defines none and
+// every key group's key_ref reads as undefined (M3), never as unchecked.
 func readKeySets(path string) (map[string]config.KeySet, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {

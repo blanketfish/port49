@@ -241,11 +241,11 @@ func admitsNone(what string, p *policy.Policy) error {
 }
 
 // NewlyRefused is every device in both bundles that old admits and new
-// refuses, by name, where new assesses admission.
+// refuses, by name. A new bundle that does not assess admission — no key
+// groups, and no key_refs, as only an offline tool loads one — is read as
+// port49d reads it: a device no group admits and no pin assigns is refused
+// (I1), so the edit that deletes key_groups is seen.
 func NewlyRefused(old, new *policy.Policy) []admission.Resolved {
-	if !new.AdmissionAssessed() {
-		return nil
-	}
 	var out []admission.Resolved
 	for _, r := range new.AdmissionRefusals() {
 		if ro, ok := old.Admitted(r.Device.Name); ok && ro.Refused == "" {

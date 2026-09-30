@@ -131,7 +131,8 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	var files policyFiles
 	files.register(fs)
-	cfgPath := fs.String("config", "", "port49d.yaml, for the key checks CI owes (spec §10); no secret is read")
+	cfgPath := fs.String("config", "", "port49d.yaml, for the key checks CI owes (spec §10): only its keys: block is read and "+
+		"checked, so this is not a port49d.yaml validator; no secret is read")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -151,11 +152,6 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
 		if sets, err = readKeySets(*cfgPath); err != nil {
 			fmt.Fprintln(stderr, "port49 policy test:", err)
 			return 1
-		}
-		// A port49d.yaml with no keys defines none: every key group's
-		// key_ref is undefined, not unchecked (M3).
-		if sets == nil {
-			sets = map[string]config.KeySet{}
 		}
 		refs = keyRefsOf(sets)
 	}
@@ -187,14 +183,25 @@ func policyTest(args []string, stdout, stderr io.Writer) int {
 	// port49d.yaml defines no key for — since port49d serves none of them and
 	// a policy edit that refuses the fleet must not pass CI (N1). A device in
 	// an unexpected range is removed from the inventory, or given a group, in
-	// review. A policy with no key groups, loaded with no --config, has
-	// nothing to say here.
+	// review. port49d always assesses admission, so a bundle with no key
+	// groups in either file admits only devices pinned on their records, and
+	// its start and reloads refuse one that admits none (I1): CI judges it as
+	// port49d does, --config or not. An inventory with no devices has
+	// nothing to judge, as port49d's own check has not.
 	admissionFails := 0
-	if p.AdmissionAssessed() {
-		for _, r := range p.AdmissionRefusals() {
-			admissionFails++
-			fmt.Fprintf(stdout, "admission: %s (%s) refused: %s\n", r.Device.Name, r.Device.Platform, r.Refused)
+	refusals := p.AdmissionRefusals()
+	if len(p.KeyGroups()) == 0 && len(p.Devices()) > 0 {
+		line := "admission: neither the policy nor the inventory declares key_groups, so only a device pinned to a " +
+			"key_ref on its inventory record is admitted"
+		if len(refusals) == len(p.Devices()) {
+			line += fmt.Sprintf("; port49d admits none of the %d device(s), and its start and every reload refuse "+
+				"this bundle", len(p.Devices()))
 		}
+		fmt.Fprintln(stdout, line+"; add a key_groups block to the policy file (spec §10)")
+	}
+	for _, r := range refusals {
+		admissionFails++
+		fmt.Fprintf(stdout, "admission: %s (%s) refused: %s\n", r.Device.Name, r.Device.Platform, r.Refused)
 	}
 	keyFaults := 0
 	for _, line := range keyReports(sets, p, now) {
@@ -402,7 +409,17 @@ func policyDiff(args []string, stdout, stderr io.Writer) int {
 	// edit port49d's reload bound catches (bundle.CheckAdmission): CI fails
 	// it first, naming each.
 	newlyRefused := bundle.NewlyRefused(before, after)
-	for _, r := range newlyRefused {
+	if len(newlyRefused) > 0 && len(before.KeyGroups()) > 0 && len(after.KeyGroups()) == 0 {
+		fmt.Fprintln(stdout, "REFUSED: admission: the key_groups block was removed, and the inventory declares "+
+			"none, so port49d admits only devices pinned to a key_ref on their records; restore the block "+
+			"(spec §10)")
+	}
+	const shownRefused = 20 // a fleet's worth of lines buries the cause
+	for i, r := range newlyRefused {
+		if i == shownRefused {
+			fmt.Fprintf(stdout, "REFUSED: admission: and %d more devices newly refused\n", len(newlyRefused)-i)
+			break
+		}
 		fmt.Fprintf(stdout, "REFUSED: admission: %s (%s) is newly refused: %s\n", r.Device.Name, r.Device.Platform,
 			r.Refused)
 	}
