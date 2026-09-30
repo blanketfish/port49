@@ -22,7 +22,10 @@ type Metrics struct {
 	// "refused_cap" (the per-source connection cap), "idle_closed" (the idle
 	// timeout, which also fires on a stall partway through a packet),
 	// "malformed_backoff" (a strike from an admitted source), "unadmitted_source"
-	// (a strike from an address not in the inventory), "panic" (a connection
+	// (a strike from an address not in the inventory), "key_miss_closed" (a
+	// first packet no accepted key validated: struck and closed at once, L28),
+	// "held_refused" (a source inside the backoff its last strike earned,
+	// refused at Accept, L28), "panic" (a connection
 	// recovered from a panic), and "accept_error" (Accept failed and the
 	// listener is being retried).
 	ConnectionEvents *prometheus.CounterVec

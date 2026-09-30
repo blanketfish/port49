@@ -262,12 +262,15 @@ func (s *conn) deobfuscate(ctx context.Context, h wire.Header, obf []byte) ([]by
 		s.d.Metrics.KeyValidations.WithLabelValues(s.keys.Ref, strconv.Itoa(r.Version), string(r.Diagnosis)).Inc()
 		if r.Diagnosis != keyring.DiagValidated {
 			// A retired version identifies the sender in the record and nothing
-			// more: no admission, no reply.
+			// more: no admission, no reply. The strike is counted, and the next
+			// connection inside its backoff is refused at Accept; this one is
+			// closed at once, never held silent (L28 branch H).
 			if s.d.Held != nil {
 				s.d.Held.Put(s.dev.Device.Name, s.src, h, obf, s.d.Now())
 			}
 			s.unvalidated(h, obf, r.Diagnosis, r.Version)
-			s.backoff(ctx, "malformed_backoff")
+			s.d.Limits.Malformed(s.src)
+			s.d.Metrics.ConnectionEvents.WithLabelValues("key_miss_closed").Inc()
 			return nil, false
 		}
 		s.version = r.Version

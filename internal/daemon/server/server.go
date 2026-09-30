@@ -114,6 +114,12 @@ func Serve(ctx context.Context, ln net.Listener, d Deps) error {
 			c.Close()
 			continue
 		}
+		if d.Limits.Holding(src) {
+			release()
+			d.Metrics.ConnectionEvents.WithLabelValues("held_refused").Inc()
+			c.Close()
+			continue
+		}
 		d.Metrics.Connections.WithLabelValues("open").Inc()
 
 		// Admitted is Refused == "", never an index hit or a key_ref alone: a

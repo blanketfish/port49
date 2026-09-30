@@ -1291,3 +1291,21 @@ func TestAnUnvalidatedPacketIsHeldForDiagnosis(t *testing.T) {
 		t.Fatalf("%+v", p)
 	}
 }
+
+// L28 branch H: a key miss from an admitted device is closed at once, and a
+// source inside its backoff is refused at Accept rather than held silent,
+// so a device missed in a rotation falls to its local method without
+// waiting (tests/lab/results/L28-*.md).
+func TestAKeyMissIsClosedAtOnceAndAHeldSourceRefusedAtAccept(t *testing.T) {
+	log := &syncBuffer{}
+	ts := newTestServerWith(t, log, memory.New(time.Now), nil, func(d *Deps) { d.Limits = slowBackoff() })
+	c := dial(t, ts.addr, []byte("wrong"))
+	c.send(t, wire.TypeAuthen, wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP,
+		Service: wire.AuthenServiceLogin, User: []byte("alice"), Data: []byte("p49_e2e")}.Encode(), 0)
+	closedAtOnce(t, c)
+	c = dial(t, ts.addr, []byte("k2"))
+	closedAtOnce(t, c)
+	if n := testutil.ToFloat64(ts.metrics.ConnectionEvents.WithLabelValues("held_refused")); n != 1 {
+		t.Fatalf("held_refused = %v", n)
+	}
+}
