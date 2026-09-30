@@ -1,8 +1,8 @@
 // Command sot-record measures what a NetBox or Nautobot API returns for a
 // device (spec §15, L27) and writes each response as a fixture under -out.
 // It records responses and never the request's Authorization header, so a
-// fixture carries no credential; a response that echoes the token has it
-// replaced by "<redacted>". Every call's outcome is recorded, a refusal
+// fixture carries no credential; a response or webhook delivery that echoes
+// a credential the run holds or was issued has it replaced by "<redacted>". Every call's outcome is recorded, a refusal
 // included: a call a version does not take is the finding.
 package main
 
@@ -46,6 +46,15 @@ type exchange struct {
 }
 
 func (r *recorder) call(step, method, path string, body any) exchange {
+	x, _ := r.callAs(step, method, path, body, r.scheme+" "+r.token, nil)
+	return x
+}
+
+// callAs is call with the given Authorization value. Each field named in
+// learn that the response carries as a string is a credential the product
+// just issued: it joins the redacted set before this response is recorded,
+// and is returned so a later call can use it.
+func (r *recorder) callAs(step, method, path string, body any, auth string, learn []string) (exchange, map[string]string) {
 	var reqBody []byte
 	if body != nil {
 		reqBody, _ = json.Marshal(r.expand(body))
@@ -55,7 +64,7 @@ func (r *recorder) call(step, method, path string, body any) exchange {
 	if err != nil {
 		fail("%s: %v", step, err)
 	}
-	req.Header.Set("Authorization", r.scheme+" "+r.token)
+	req.Header.Set("Authorization", auth)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	resp, err := r.client.Do(req)
@@ -64,14 +73,28 @@ func (r *recorder) call(step, method, path string, body any) exchange {
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+	learned := map[string]string{}
+	if len(learn) > 0 {
+		var obj map[string]any
+		if json.Unmarshal(raw, &obj) == nil {
+			for _, f := range learn {
+				if s, ok := obj[f].(string); ok && len(s) >= 8 {
+					// NetBox's display of a token is its last six characters
+					// behind asterisks: the tail is redacted too.
+					r.secrets = append(r.secrets, s, s[len(s)-6:])
+					learned[f] = s
+				}
+			}
+		}
+	}
 	raw = r.redact(raw)
 	x := exchange{Step: step, Method: method, Path: path, Status: resp.StatusCode, Headers: map[string]string{}}
 	if reqBody != nil {
 		x.Request = reqBody
 	}
-	for k := range resp.Header {
+	for k, vs := range resp.Header {
 		if k != "Set-Cookie" {
-			x.Headers[k] = string(r.redact([]byte(resp.Header.Get(k))))
+			x.Headers[k] = string(r.redact([]byte(strings.Join(vs, ", "))))
 		}
 	}
 	if json.Valid(raw) {
@@ -79,10 +102,11 @@ func (r *recorder) call(step, method, path string, body any) exchange {
 	} else {
 		x.Body, _ = json.Marshal(string(raw))
 	}
-	return x
+	return x, learned
 }
 
-// redact replaces every part of the API credential in b with "<redacted>".
+// redact replaces every part of every API credential the run holds or was
+// issued in b with "<redacted>".
 func (r *recorder) redact(b []byte) []byte {
 	for _, s := range r.secrets {
 		b = bytes.ReplaceAll(b, []byte(s), []byte("<redacted>"))
@@ -233,6 +257,8 @@ func main() {
 	legacy := flag.Bool("prefer-legacy", false, "name the objects an older version's spelling created")
 	scheme := flag.String("auth-scheme", "Token", `the Authorization scheme: "Token", or "Bearer" for a NetBox v2 token`)
 	wait := flag.Duration("webhook-wait", 20*time.Second, "how long to wait for the worker to deliver")
+	probeV1 := flag.Bool("probe-v1-token", false, "NetBox 4: issue a v1 token over the API and try it with the Token scheme")
+	depth1 := flag.Bool("depth1-read", false, "Nautobot 2: read the device again with ?depth=1")
 	flag.Parse()
 	token, secret := os.Getenv("L27_TOKEN"), os.Getenv("L27_WEBHOOK_SECRET")
 	if *product == "" || *base == "" || *out == "" || *listen == "" || token == "" || secret == "" {
@@ -259,8 +285,8 @@ func main() {
 		if !json.Valid(body) {
 			h.Body, _ = json.Marshal(string(body))
 		}
-		for k := range req.Header {
-			h.Headers[k] = req.Header.Get(k)
+		for k, vs := range req.Header {
+			h.Headers[k] = strings.Join(vs, ", ")
 		}
 		mu.Lock()
 		hooks = append(hooks, h)
@@ -270,6 +296,21 @@ func main() {
 
 	r.write("status.json", r.call("status", "GET", "/api/status/", nil))
 	r.write("api-root.json", r.call("api_root", "GET", "/api/", nil))
+	if *probeV1 {
+		// Whether NetBox 4 still takes a v1 token: issue one for the admin
+		// (user 1, the only user) and read /api/status/ with "Token <it>".
+		// The issued token is redacted from the fixture like the run's own.
+		create, got := r.callAs("v1_token_create", "POST", "/api/users/tokens/",
+			map[string]any{"user": 1, "version": 1, "description": "l27 v1 probe"}, r.scheme+" "+r.token, []string{"token", "key"})
+		probe := []exchange{create}
+		fmt.Printf("sot-record: v1_token_create: %d\n", create.Status)
+		if tok := got["token"]; tok != "" {
+			x, _ := r.callAs("v1_token_status", "GET", "/api/status/", nil, "Token "+tok, nil)
+			probe = append(probe, x)
+			fmt.Printf("sot-record: v1_token_status: %d\n", x.Status)
+		}
+		r.write("auth-v1.json", probe)
+	}
 	var seeded []exchange
 	for _, s := range seedFor(*product, r) {
 		x := r.call(s.step, s.method, s.path, s.body)
@@ -279,6 +320,9 @@ func main() {
 	}
 	r.write("seed.json", seeded)
 	r.write("rest-device.json", r.call("rest_device", "GET", "/api/dcim/devices/?name=leaf-01", nil))
+	if *depth1 {
+		r.write("rest-device-depth1.json", r.call("rest_device_depth1", "GET", "/api/dcim/devices/?name=leaf-01&depth=1", nil))
+	}
 	r.write("rest-page.json", r.call("rest_page", "GET", "/api/dcim/devices/?limit=1", nil))
 	// NetBox serves GraphQL at /graphql/, Nautobot at /api/graphql/; a 404
 	// here is recorded like any other answer.
@@ -303,6 +347,12 @@ func main() {
 	}
 	time.Sleep(*wait) // the worker delivers asynchronously
 	mu.Lock()
+	for i := range hooks {
+		hooks[i].Body = r.redact(hooks[i].Body)
+		for k, v := range hooks[i].Headers {
+			hooks[i].Headers[k] = string(r.redact([]byte(v)))
+		}
+	}
 	r.write("webhooks.json", map[string]any{"calls": hookCalls, "deliveries": hooks})
 	mu.Unlock()
 	fmt.Printf("sot-record: %s at %s: %d seed calls, %d GraphQL candidates, %d webhook deliveries\n",

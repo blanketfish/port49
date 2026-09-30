@@ -19,18 +19,18 @@
     "previous": null,
     "results": [
       {
-        "id": "5b91c1ca-716f-4a77-8643-8fd4f0fce764",
+        "id": "510b4627-68fc-45ea-8e1c-3c35bda84ab6",
         "display": "leaf-01",
-        "url": "http://127.0.0.1:18016/api/dcim/devices/5b91c1ca-716f-4a77-8643-8fd4f0fce764/",
+        "url": "http://127.0.0.1:18016/api/dcim/devices/510b4627-68fc-45ea-8e1c-3c35bda84ab6/",
         "name": "leaf-01",
         "device_type": {
           "display": "Arista vEOS",
-          "id": "83813699-f495-47ff-9afa-beab31a79c99",
-          "url": "http://127.0.0.1:18016/api/dcim/device-types/83813699-f495-47ff-9afa-beab31a79c99/",
+          "id": "94fe128e-4050-4f09-80bd-b9dc26b42f5e",
+          "url": "http://127.0.0.1:18016/api/dcim/device-types/94fe128e-4050-4f09-80bd-b9dc26b42f5e/",
           "manufacturer": {
             "display": "Arista",
-            "id": "dbfe5483-bbbb-4582-a4c2-b92cdcb86909",
-            "url": "http://127.0.0.1:18016/api/dcim/manufacturers/dbfe5483-bbbb-4582-a4c2-b92cdcb86909/",
+            "id": "9d381cf2-34b6-4c98-8552-441238128588",
+            "url": "http://127.0.0.1:18016/api/dcim/manufacturers/9d381cf2-34b6-4c98-8552-441238128588/",
             "name": "Arista",
             "slug": "arista"
           },
@@ -39,16 +39,16 @@
         },
         "device_role": {
           "display": "leaf",
-          "id": "eb274e07-d692-40f7-9056-6f8fa873a851",
-          "url": "http://127.0.0.1:18016/api/dcim/device-roles/eb274e07-d692-40f7-9056-6f8fa873a851/",
+          "id": "cf78c07a-ddaf-45a6-9e9e-d0b7c9cc336f",
+          "url": "http://127.0.0.1:18016/api/dcim/device-roles/cf78c07a-ddaf-45a6-9e9e-d0b7c9cc336f/",
           "name": "leaf",
           "slug": "leaf"
         },
         "tenant": null,
         "platform": {
           "display": "eos",
-          "id": "53ff9ee8-3165-454b-8247-5c6f6d02dd67",
-          "url": "http://127.0.0.1:18016/api/dcim/platforms/53ff9ee8-3165-454b-8247-5c6f6d02dd67/",
+          "id": "b579054b-e429-4af7-b45b-a4cc3ee77744",
+          "url": "http://127.0.0.1:18016/api/dcim/platforms/b579054b-e429-4af7-b45b-a4cc3ee77744/",
           "name": "eos",
           "slug": "eos"
         },
@@ -56,8 +56,8 @@
         "asset_tag": null,
         "site": {
           "display": "dc1",
-          "id": "e5756be6-7cfa-4acc-8634-5fcb07359444",
-          "url": "http://127.0.0.1:18016/api/dcim/sites/e5756be6-7cfa-4acc-8634-5fcb07359444/",
+          "id": "4d75a663-02b7-4d44-890d-4c1181a1a816",
+          "url": "http://127.0.0.1:18016/api/dcim/sites/4d75a663-02b7-4d44-890d-4c1181a1a816/",
           "name": "dc1",
           "slug": "dc1"
         },
@@ -72,15 +72,15 @@
         },
         "primary_ip": {
           "display": "10.0.1.5/32",
-          "id": "e583abc6-4a7e-44e9-9bcd-9298b3d1047d",
-          "url": "http://127.0.0.1:18016/api/ipam/ip-addresses/e583abc6-4a7e-44e9-9bcd-9298b3d1047d/",
+          "id": "bfa87067-f5c6-412c-b69f-5eaf0967b58c",
+          "url": "http://127.0.0.1:18016/api/ipam/ip-addresses/bfa87067-f5c6-412c-b69f-5eaf0967b58c/",
           "family": 4,
           "address": "10.0.1.5/32"
         },
         "primary_ip4": {
           "display": "10.0.1.5/32",
-          "id": "e583abc6-4a7e-44e9-9bcd-9298b3d1047d",
-          "url": "http://127.0.0.1:18016/api/ipam/ip-addresses/e583abc6-4a7e-44e9-9bcd-9298b3d1047d/",
+          "id": "bfa87067-f5c6-412c-b69f-5eaf0967b58c",
+          "url": "http://127.0.0.1:18016/api/ipam/ip-addresses/bfa87067-f5c6-412c-b69f-5eaf0967b58c/",
           "family": 4,
           "address": "10.0.1.5/32"
         },
@@ -97,20 +97,20 @@
         "local_context_data": null,
         "config_context": {},
         "created": "2026-09-30",
-        "last_updated": "2026-09-30T06:17:04.548312Z",
+        "last_updated": "2026-09-30T06:44:51.180675Z",
         "tags": [
           {
             "display": "port49",
-            "id": "65edf738-36a0-41f1-beb7-4970d0f23837",
-            "url": "http://127.0.0.1:18016/api/extras/tags/65edf738-36a0-41f1-beb7-4970d0f23837/",
+            "id": "5dd784ce-9568-4bf6-832e-39e2e1daad4e",
+            "url": "http://127.0.0.1:18016/api/extras/tags/5dd784ce-9568-4bf6-832e-39e2e1daad4e/",
             "name": "port49",
             "slug": "port49",
             "color": "9e9e9e",
             "created": "2026-09-30",
-            "last_updated": "2026-09-30T06:17:03.911556Z"
+            "last_updated": "2026-09-30T06:44:50.541820Z"
           }
         ],
-        "notes_url": "http://127.0.0.1:18016/api/dcim/devices/5b91c1ca-716f-4a77-8643-8fd4f0fce764/notes/",
+        "notes_url": "http://127.0.0.1:18016/api/dcim/devices/510b4627-68fc-45ea-8e1c-3c35bda84ab6/notes/",
         "custom_fields": {
           "os_version": "4.31.2F"
         }

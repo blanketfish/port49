@@ -20,11 +20,11 @@
     "previous": null,
     "results": [
       {
-        "id": "293cbb6a-28d0-4db7-93e6-60ab0b47f342",
+        "id": "3af8fb9c-23ea-4a16-9781-fdf171500a8c",
         "object_type": "dcim.device",
         "display": "leaf-01",
-        "url": "http://127.0.0.1:18020/api/dcim/devices/293cbb6a-28d0-4db7-93e6-60ab0b47f342/",
-        "natural_slug": "leaf-01__dc1_293c",
+        "url": "http://127.0.0.1:18020/api/dcim/devices/3af8fb9c-23ea-4a16-9781-fdf171500a8c/",
+        "natural_slug": "leaf-01__dc1_3af8",
         "face": null,
         "local_config_context_data": null,
         "local_config_context_data_owner_object_id": null,
@@ -39,36 +39,36 @@
         "local_config_context_schema": null,
         "local_config_context_data_owner_content_type": null,
         "device_type": {
-          "id": "1bdf6aa4-d989-4223-b3bb-b4e3812d199a",
+          "id": "c3880a7a-85bf-43e6-bee8-6a1b8969c187",
           "object_type": "dcim.devicetype",
-          "url": "http://127.0.0.1:18020/api/dcim/device-types/1bdf6aa4-d989-4223-b3bb-b4e3812d199a/"
+          "url": "http://127.0.0.1:18020/api/dcim/device-types/c3880a7a-85bf-43e6-bee8-6a1b8969c187/"
         },
         "status": {
-          "id": "459aed7d-1943-4092-89a3-adf891877620",
+          "id": "8922acc8-9033-4801-a69d-ad265f93388c",
           "object_type": "extras.status",
-          "url": "http://127.0.0.1:18020/api/extras/statuses/459aed7d-1943-4092-89a3-adf891877620/"
+          "url": "http://127.0.0.1:18020/api/extras/statuses/8922acc8-9033-4801-a69d-ad265f93388c/"
         },
         "role": {
-          "id": "8d82ac8f-b6c8-46fe-8c5e-fd7c470dcb27",
+          "id": "e3a9b10d-5bf3-4596-964e-2eb1cce31f00",
           "object_type": "extras.role",
-          "url": "http://127.0.0.1:18020/api/extras/roles/8d82ac8f-b6c8-46fe-8c5e-fd7c470dcb27/"
+          "url": "http://127.0.0.1:18020/api/extras/roles/e3a9b10d-5bf3-4596-964e-2eb1cce31f00/"
         },
         "tenant": null,
         "platform": {
-          "id": "107c6539-4de2-490e-b1a9-1e8bd3961366",
+          "id": "c024ec0d-e5a6-4d0d-9154-9ec9d893b6eb",
           "object_type": "dcim.platform",
-          "url": "http://127.0.0.1:18020/api/dcim/platforms/107c6539-4de2-490e-b1a9-1e8bd3961366/"
+          "url": "http://127.0.0.1:18020/api/dcim/platforms/c024ec0d-e5a6-4d0d-9154-9ec9d893b6eb/"
         },
         "location": {
-          "id": "23228f3f-4202-4d0e-9ae9-f3234fad8466",
+          "id": "e8f2e9ba-b924-40a8-919d-b335bc0d2a74",
           "object_type": "dcim.location",
-          "url": "http://127.0.0.1:18020/api/dcim/locations/23228f3f-4202-4d0e-9ae9-f3234fad8466/"
+          "url": "http://127.0.0.1:18020/api/dcim/locations/e8f2e9ba-b924-40a8-919d-b335bc0d2a74/"
         },
         "rack": null,
         "primary_ip4": {
-          "id": "9a002b1d-8a35-4d26-974c-63a3b88312df",
+          "id": "da71bff8-1e78-4ea5-a064-f3e96632e634",
           "object_type": "ipam.ipaddress",
-          "url": "http://127.0.0.1:18020/api/ipam/ip-addresses/9a002b1d-8a35-4d26-974c-63a3b88312df/"
+          "url": "http://127.0.0.1:18020/api/ipam/ip-addresses/da71bff8-1e78-4ea5-a064-f3e96632e634/"
         },
         "primary_ip6": null,
         "cluster": null,
@@ -78,17 +78,17 @@
         "secrets_group": null,
         "controller_managed_device_group": null,
         "software_image_files": [],
-        "created": "2026-09-30T06:14:22.508219Z",
-        "last_updated": "2026-09-30T06:14:23.115121Z",
-        "notes_url": "http://127.0.0.1:18020/api/dcim/devices/293cbb6a-28d0-4db7-93e6-60ab0b47f342/notes/",
+        "created": "2026-09-30T06:47:31.807869Z",
+        "last_updated": "2026-09-30T06:47:32.493073Z",
+        "notes_url": "http://127.0.0.1:18020/api/dcim/devices/3af8fb9c-23ea-4a16-9781-fdf171500a8c/notes/",
         "custom_fields": {
           "os_version": "4.31.2F"
         },
         "tags": [
           {
-            "id": "4b380231-50a1-48f2-8e9f-0ada8f1dd1fa",
+            "id": "edcf97d9-7279-471e-b5b6-6e6152e6488b",
             "object_type": "extras.tag",
-            "url": "http://127.0.0.1:18020/api/extras/tags/4b380231-50a1-48f2-8e9f-0ada8f1dd1fa/"
+            "url": "http://127.0.0.1:18020/api/extras/tags/edcf97d9-7279-471e-b5b6-6e6152e6488b/"
           }
         ],
         "parent_bay": null

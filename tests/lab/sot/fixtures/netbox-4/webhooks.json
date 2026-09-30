@@ -20,15 +20,15 @@
         "Content-Length": "530",
         "Content-Type": "application/json",
         "Cross-Origin-Opener-Policy": "same-origin",
-        "Date": "Wed, 30 Sep 2026 06:07:38 GMT",
-        "Etag": "W/\"2026-09-30T06:07:38.527321+00:00\"",
+        "Date": "Wed, 30 Sep 2026 06:38:02 GMT",
+        "Etag": "W/\"2026-09-30T06:38:02.234581+00:00\"",
         "Location": "http://127.0.0.1:18080/api/extras/webhooks/1/",
         "Referrer-Policy": "same-origin",
         "Server": "granian",
         "Vary": "HX-Request, Accept-Language, Cookie, origin",
         "X-Content-Type-Options": "nosniff",
         "X-Frame-Options": "SAMEORIGIN",
-        "X-Request-Id": "1be3c665-72c2-4e9a-a7ef-f093d751ebfd"
+        "X-Request-Id": "8116b182-76cd-41da-96f2-918628034e38"
       },
       "body": {
         "id": 1,
@@ -49,8 +49,8 @@
         "custom_fields": {},
         "owner": null,
         "tags": [],
-        "created": "2026-09-30T06:07:38.527309Z",
-        "last_updated": "2026-09-30T06:07:38.527321Z"
+        "created": "2026-09-30T06:38:02.234573Z",
+        "last_updated": "2026-09-30T06:38:02.234581Z"
       }
     },
     {
@@ -80,15 +80,15 @@
         "Content-Length": "693",
         "Content-Type": "application/json",
         "Cross-Origin-Opener-Policy": "same-origin",
-        "Date": "Wed, 30 Sep 2026 06:07:38 GMT",
-        "Etag": "W/\"2026-09-30T06:07:38.552449+00:00\"",
+        "Date": "Wed, 30 Sep 2026 06:38:02 GMT",
+        "Etag": "W/\"2026-09-30T06:38:02.258482+00:00\"",
         "Location": "http://127.0.0.1:18080/api/extras/event-rules/1/",
         "Referrer-Policy": "same-origin",
         "Server": "granian",
         "Vary": "HX-Request, Accept-Language, Cookie, origin",
         "X-Content-Type-Options": "nosniff",
         "X-Frame-Options": "SAMEORIGIN",
-        "X-Request-Id": "c0750b14-03c3-4757-a440-d720b18ea142"
+        "X-Request-Id": "b2801ee5-a259-41e0-848c-b464b6de29cb"
       },
       "body": {
         "id": 1,
@@ -124,8 +124,8 @@
         "custom_fields": {},
         "owner": null,
         "tags": [],
-        "created": "2026-09-30T06:07:38.552440Z",
-        "last_updated": "2026-09-30T06:07:38.552449Z"
+        "created": "2026-09-30T06:38:02.258472Z",
+        "last_updated": "2026-09-30T06:38:02.258482Z"
       }
     },
     {
@@ -154,13 +154,13 @@
         "Content-Length": "51",
         "Content-Type": "application/json",
         "Cross-Origin-Opener-Policy": "same-origin",
-        "Date": "Wed, 30 Sep 2026 06:07:38 GMT",
+        "Date": "Wed, 30 Sep 2026 06:38:02 GMT",
         "Referrer-Policy": "same-origin",
         "Server": "granian",
         "Vary": "HX-Request, Accept-Language, Cookie, origin",
         "X-Content-Type-Options": "nosniff",
         "X-Frame-Options": "SAMEORIGIN",
-        "X-Request-Id": "29309891-008f-4113-8efd-631fb30da1ed"
+        "X-Request-Id": "c298cb75-1cdd-4c23-985c-b49f05aeed4d"
       },
       "body": {
         "name": [
@@ -193,13 +193,13 @@
         "Content-Length": "139",
         "Content-Type": "application/json",
         "Cross-Origin-Opener-Policy": "same-origin",
-        "Date": "Wed, 30 Sep 2026 06:07:38 GMT",
+        "Date": "Wed, 30 Sep 2026 06:38:02 GMT",
         "Referrer-Policy": "same-origin",
         "Server": "granian",
         "Vary": "HX-Request, Accept-Language, Cookie, origin",
         "X-Content-Type-Options": "nosniff",
         "X-Frame-Options": "SAMEORIGIN",
-        "X-Request-Id": "43ddb027-2899-4199-aa48-0c08c7310a5b"
+        "X-Request-Id": "c524e381-a158-4a6b-b2bb-da072e3c8038"
       },
       "body": {
         "object_types": [
@@ -230,14 +230,14 @@
         "Content-Length": "2461",
         "Content-Type": "application/json",
         "Cross-Origin-Opener-Policy": "same-origin",
-        "Date": "Wed, 30 Sep 2026 06:07:38 GMT",
-        "Etag": "W/\"2026-09-30T06:07:38.640501+00:00\"",
+        "Date": "Wed, 30 Sep 2026 06:38:02 GMT",
+        "Etag": "W/\"2026-09-30T06:38:02.349102+00:00\"",
         "Referrer-Policy": "same-origin",
         "Server": "granian",
         "Vary": "HX-Request, Accept-Language, Cookie, origin",
         "X-Content-Type-Options": "nosniff",
         "X-Frame-Options": "SAMEORIGIN",
-        "X-Request-Id": "990fe205-0dcb-445b-90fd-ea5f05175310"
+        "X-Request-Id": "2fb1b643-74d6-4c75-8a46-456a5409fead"
       },
       "body": {
         "id": 1,
@@ -362,8 +362,8 @@
         "custom_fields": {
           "os_version": "4.32.2F"
         },
-        "created": "2026-09-30T06:07:37.903861Z",
-        "last_updated": "2026-09-30T06:07:38.640501Z",
+        "created": "2026-09-30T06:38:01.604504Z",
+        "last_updated": "2026-09-30T06:38:02.349102Z",
         "console_port_count": 0,
         "console_server_port_count": 0,
         "power_port_count": 0,
@@ -397,15 +397,15 @@
         "Content-Length": "1687",
         "Content-Type": "application/json",
         "Cross-Origin-Opener-Policy": "same-origin",
-        "Date": "Wed, 30 Sep 2026 06:07:38 GMT",
-        "Etag": "W/\"2026-09-30T06:07:38.699182+00:00\"",
+        "Date": "Wed, 30 Sep 2026 06:38:02 GMT",
+        "Etag": "W/\"2026-09-30T06:38:02.414030+00:00\"",
         "Location": "http://127.0.0.1:18080/api/dcim/devices/2/",
         "Referrer-Policy": "same-origin",
         "Server": "granian",
         "Vary": "HX-Request, Accept-Language, Cookie, origin",
         "X-Content-Type-Options": "nosniff",
         "X-Frame-Options": "SAMEORIGIN",
-        "X-Request-Id": "65e071fd-e0fe-418c-9e6e-6dc7ce9c2757"
+        "X-Request-Id": "b71f143d-f8d6-4599-92e3-ede694ab142d"
       },
       "body": {
         "id": 2,
@@ -484,8 +484,8 @@
         "custom_fields": {
           "os_version": null
         },
-        "created": "2026-09-30T06:07:38.699172Z",
-        "last_updated": "2026-09-30T06:07:38.699182Z",
+        "created": "2026-09-30T06:38:02.414021Z",
+        "last_updated": "2026-09-30T06:38:02.414030Z",
         "console_port_count": 0,
         "console_server_port_count": 0,
         "power_port_count": 0,
@@ -519,13 +519,13 @@
         "Content-Length": "36",
         "Content-Type": "application/json",
         "Cross-Origin-Opener-Policy": "same-origin",
-        "Date": "Wed, 30 Sep 2026 06:07:38 GMT",
+        "Date": "Wed, 30 Sep 2026 06:38:02 GMT",
         "Referrer-Policy": "same-origin",
         "Server": "granian",
         "Vary": "HX-Request, Accept-Language, Cookie, origin",
         "X-Content-Type-Options": "nosniff",
         "X-Frame-Options": "SAMEORIGIN",
-        "X-Request-Id": "264c9682-efd4-4322-a463-65ef478656b2"
+        "X-Request-Id": "84be2350-94a3-474d-8be0-4289b3260057"
       },
       "body": {
         "role": [
@@ -545,30 +545,30 @@
         "Content-Language": "en",
         "Content-Length": "0",
         "Cross-Origin-Opener-Policy": "same-origin",
-        "Date": "Wed, 30 Sep 2026 06:07:38 GMT",
+        "Date": "Wed, 30 Sep 2026 06:38:02 GMT",
         "Referrer-Policy": "same-origin",
         "Server": "granian",
         "Vary": "HX-Request, Accept-Language, Cookie, origin",
         "X-Content-Type-Options": "nosniff",
         "X-Frame-Options": "SAMEORIGIN",
-        "X-Request-Id": "cd66326f-2128-4d1b-8a27-251c8a1d692e"
+        "X-Request-Id": "3d5cab7e-1716-49d0-bf46-eaa035a0bf4b"
       },
       "body": ""
     }
   ],
   "deliveries": [
     {
-      "at": "2026-09-30T06:07:39.423206298Z",
+      "at": "2026-09-30T06:38:03.093065652Z",
       "headers": {
         "Accept-Encoding": "identity",
         "Content-Length": "4636",
         "Content-Type": "application/json",
         "User-Agent": "python-urllib3/2.8.0",
-        "X-Hook-Signature": "0ff02a521eb3bf861624a717de415a02839639f5356404d2e0aa609528abb9155c4f40263fc79494b31fe01e05bbe2b8a3156877570adf7edeb507f84d6abbc6"
+        "X-Hook-Signature": "164d2ffa6b705e854f5ac6d1c6754cbd6cb510868e65ab2a4330abe893cf3a5574151da8b49467ed95c5955ff0ff5611b0155d7dfcd71d803ef446b30584d62d"
       },
       "body": {
         "event": "updated",
-        "timestamp": "2026-09-30T06:07:38.684126+00:00",
+        "timestamp": "2026-09-30T06:38:02.397790+00:00",
         "object_type": "dcim.device",
         "data": {
           "id": 1,
@@ -693,8 +693,8 @@
           "custom_fields": {
             "os_version": "4.32.2F"
           },
-          "created": "2026-09-30T06:07:37.903861Z",
-          "last_updated": "2026-09-30T06:07:38.640501Z",
+          "created": "2026-09-30T06:38:01.604504Z",
+          "last_updated": "2026-09-30T06:38:02.349102Z",
           "console_port_count": 0,
           "console_server_port_count": 0,
           "power_port_count": 0,
@@ -709,7 +709,7 @@
           "inventory_item_count": 0
         },
         "request": {
-          "id": "990fe205-0dcb-445b-90fd-ea5f05175310",
+          "id": "2fb1b643-74d6-4c75-8a46-456a5409fead",
           "path": "/api/dcim/devices/1/",
           "path_info": "/api/dcim/devices/1/",
           "method": "PATCH",
@@ -718,7 +718,7 @@
         },
         "snapshots": {
           "prechange": {
-            "created": "2026-09-30T06:07:37.903Z",
+            "created": "2026-09-30T06:38:01.604Z",
             "owner": null,
             "description": "",
             "comments": "",
@@ -768,7 +768,7 @@
             ]
           },
           "postchange": {
-            "created": "2026-09-30T06:07:37.903Z",
+            "created": "2026-09-30T06:38:01.604Z",
             "owner": null,
             "description": "",
             "comments": "",
@@ -822,17 +822,17 @@
       "signature_is_hmac_sha512_of_body": true
     },
     {
-      "at": "2026-09-30T06:07:39.457798978Z",
+      "at": "2026-09-30T06:38:03.127034962Z",
       "headers": {
         "Accept-Encoding": "identity",
         "Content-Length": "2966",
         "Content-Type": "application/json",
         "User-Agent": "python-urllib3/2.8.0",
-        "X-Hook-Signature": "798444517d727b351c0476f8ad501ef485f26b66d1450738bb48c19d9a1bf90c2872836efd6182aa04cae7ded15aa519f969743df668388044e7a5ae08ba6d2b"
+        "X-Hook-Signature": "a036b3f6907672ce93b430808221da6c74326b9627a0784fa2eda97c0acfa9002db64a08b8987b1ac7b9fa85606b18f9dfd7a11dec17400b696662ddaa4f1e59"
       },
       "body": {
         "event": "created",
-        "timestamp": "2026-09-30T06:07:38.763551+00:00",
+        "timestamp": "2026-09-30T06:38:02.481710+00:00",
         "object_type": "dcim.device",
         "data": {
           "id": 2,
@@ -911,8 +911,8 @@
           "custom_fields": {
             "os_version": null
           },
-          "created": "2026-09-30T06:07:38.699172Z",
-          "last_updated": "2026-09-30T06:07:38.699182Z",
+          "created": "2026-09-30T06:38:02.414021Z",
+          "last_updated": "2026-09-30T06:38:02.414030Z",
           "console_port_count": 0,
           "console_server_port_count": 0,
           "power_port_count": 0,
@@ -927,7 +927,7 @@
           "inventory_item_count": 0
         },
         "request": {
-          "id": "65e071fd-e0fe-418c-9e6e-6dc7ce9c2757",
+          "id": "b71f143d-f8d6-4599-92e3-ede694ab142d",
           "path": "/api/dcim/devices/",
           "path_info": "/api/dcim/devices/",
           "method": "POST",
@@ -937,7 +937,7 @@
         "snapshots": {
           "prechange": null,
           "postchange": {
-            "created": "2026-09-30T06:07:38.699Z",
+            "created": "2026-09-30T06:38:02.414Z",
             "owner": null,
             "description": "",
             "comments": "",
@@ -989,17 +989,17 @@
       "signature_is_hmac_sha512_of_body": true
     },
     {
-      "at": "2026-09-30T06:07:39.492892033Z",
+      "at": "2026-09-30T06:38:03.165041395Z",
       "headers": {
         "Accept-Encoding": "identity",
         "Content-Length": "2972",
         "Content-Type": "application/json",
         "User-Agent": "python-urllib3/2.8.0",
-        "X-Hook-Signature": "cd56f9f89a84a682dd994289618222edc2da5a7ad9dc0ecad5060d5884534721e54440b66d22ee1118d10e0f648a66da665c143abb7abeb8b938667604ef1ace"
+        "X-Hook-Signature": "c682d02091a51ef65c56ee806728785bef76bd724e49fbeef844941fe1ea7210527aae3d8557f5fa3344ba26582f042b9903d7cf79afba729a75bc56e0e76500"
       },
       "body": {
         "event": "deleted",
-        "timestamp": "2026-09-30T06:07:38.892566+00:00",
+        "timestamp": "2026-09-30T06:38:02.612829+00:00",
         "object_type": "dcim.device",
         "data": {
           "id": 2,
@@ -1078,8 +1078,8 @@
           "custom_fields": {
             "os_version": null
           },
-          "created": "2026-09-30T06:07:38.699172Z",
-          "last_updated": "2026-09-30T06:07:38.699182Z",
+          "created": "2026-09-30T06:38:02.414021Z",
+          "last_updated": "2026-09-30T06:38:02.414030Z",
           "console_port_count": 0,
           "console_server_port_count": 0,
           "power_port_count": 0,
@@ -1094,7 +1094,7 @@
           "inventory_item_count": 0
         },
         "request": {
-          "id": "cd66326f-2128-4d1b-8a27-251c8a1d692e",
+          "id": "3d5cab7e-1716-49d0-bf46-eaa035a0bf4b",
           "path": "/api/dcim/devices/2/",
           "path_info": "/api/dcim/devices/2/",
           "method": "DELETE",
@@ -1103,7 +1103,7 @@
         },
         "snapshots": {
           "prechange": {
-            "created": "2026-09-30T06:07:38.699Z",
+            "created": "2026-09-30T06:38:02.414Z",
             "owner": null,
             "description": "",
             "comments": "",

@@ -11,13 +11,15 @@
   - `docker.io/library/postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea`
   - `docker.io/valkey/valkey:8-alpine@sha256:081c2f5cb575efc901aa80ff9cdbd1ec6a301682fd35e1ebb4b0990a4a4a8507`
 - **Compose files:** `tests/lab/sot/compose/netbox-3.7.yml`, `tests/lab/sot/compose/netbox-4.yml`
-- **Recorder:** `tests/lab/cmd/sot-record` (`-product netbox`; 4.7.1 with `-auth-scheme Bearer`)
+- **Run:** `tests/lab/sot/run.sh netbox-3.7`, `run.sh netbox-3.7 legacy`, `run.sh netbox-4` (procedure and
+  variables: `tests/lab/sot/README.md`); recorder `tests/lab/cmd/sot-record` (`-product netbox`; 4.7.1 with
+  `-auth-scheme Bearer -probe-v1-token`)
 - **Capture pointer (the fixtures):** `tests/lab/sot/fixtures/netbox-3.7/`,
   `tests/lab/sot/fixtures/netbox-3.7-legacy/` (the `-prefer-legacy` rerun), `tests/lab/sot/fixtures/netbox-4/`
 - **Credentials:** every password, secret key, pepper and API token was random per run, passed by
   environment, and is in no committed file; no fixture carries an `Authorization` header. The webhook
-  secret `l27-lab-webhook-secret` is a lab value, kept so `X-Hook-Signature` in `webhooks.json` can be
-  verified against it.
+  secret `l27-lab-webhook-secret` is **public and lab only** (never use it anywhere else), kept so
+  `X-Hook-Signature` in `webhooks.json` can be verified against it.
 - **Status:** L27 stays open here; plan 6a Task 21 closes it for the versions measured.
 
 ## Claim
@@ -35,7 +37,8 @@ same outcome for every step (below).
 | claim | 3.7.8 | 4.7.1 |
 |---|---|---|
 | version reported by | `status.json` body `netbox-version` = `"3.7.8"`; `api-root.json` header `Api-Version` = `"3.7"` (also on `status.json`) | `status.json` body `netbox-version` = `"4.7.1"`, `netbox-full-version` = `"4.7.1-Docker-5.1.1"`; `api-root.json` header `Api-Version` = `"4.7"` |
-| API token the stack issues | v1: `Authorization: Token <40 hex>` | v2: `Authorization: Bearer nbt_<12-char key>.<40-char token>` (netbox-docker 5.1.1 creates only a v2 token, and only with `API_TOKEN_PEPPER_1` set) |
+| API token the stack provisions (source: the compose file and `run.sh`, not a fixture; the recorder never records a request's auth) | v1, `Authorization: Token <40 hex>`: every 3.7 fixture was read with it | v2, `Authorization: Bearer nbt_<12-char key>.<40-char token>`: netbox-docker 5.1.1's `super_user.py` creates only a v2 token, and only with `API_TOKEN_PEPPER_1` set; every other 4.7 fixture was read with it |
+| v1 token on 4.x | not asked (3.7 has only v1) | **accepted**: `auth-v1.json` step `v1_token_create` (`POST /api/users/tokens/` `{"user": 1, "version": 1}`) 201, body `version` = 1, `key` = `null`, `pepper_id` = `null`, `token` issued (recorded as `<redacted>`); step `v1_token_status` (`GET /api/status/` with `Authorization: Token <that token>`) 200, `netbox-version` = `"4.7.1"` |
 | role field (REST write) | `role`: `seed.json` step `device` 201; `device_role` refused: step `device_v3` 400 `{"role": ["This field is required."]}` | `role`: step `device` 201; step `device_v3` 400 `{"role": ["This field is required."]}` |
 | role field (REST read) | `rest-device.json` `results[0]` has **both** `role` and `device_role`, the same object (`id`, `url`, `display`, `name`, `slug`) | `results[0].role` only (`id`, `url`, `display`, `name`, `slug`, `description`, `device_count`, `virtualmachine_count`, `_depth`); no `device_role` key |
 | platform (REST) | `results[0].platform` = `{id, url, display, name, slug}` | `results[0].platform`, same keys plus `description`, counts, `_depth` |
@@ -51,7 +54,8 @@ same outcome for every step (below).
 | one GraphQL query returns every interface address | yes, `graphql_3`: `interfaces` = `Loopback0` → `10.0.1.6/32`, `Management1` → `10.0.1.5/32` | yes, `graphql_0`: the same two interfaces and addresses |
 | REST pagination | `rest-page.json` (`?limit=1`): body keys `count`, `next`, `previous`, `results`; `count` = 1, `next` = `null` | same keys; `count` = 1, `next` = `null` |
 | webhook configuration | a webhook has no event or model fields: `webhooks.json` call `webhook` 201; delivery needs an event rule, which 3.7 takes as `content_types` + `type_create`/`type_update`/`type_delete`: call `event_rule` (`object_types` + `event_types`) 400 `{"content_types": ["This field is required."]}`, call `event_rule_v3` 201 | call `webhook` 201, call `event_rule` (`object_types`, `event_types: ["object_created", "object_updated", "object_deleted"]`) 201; call `event_rule_v3` 400 `{"object_types": …, "event_types": ["This field is required."], …}` |
-| webhook deliveries | 3 (`updated`, `created`, `deleted`), in that order | 3 (`updated`, `created`, `deleted`), in that order |
+| webhook deliveries | 3, arrived `updated`, `created`, `deleted` (`deliveries[].at`), the order the changes were made (body `timestamp`) | 3, arrived `updated`, `created`, `deleted`, the order the changes were made |
+| webhook latency (body `timestamp` to arrival `at`) | 0.03–0.04 s | 0.55–0.70 s |
 | webhook headers | `Content-Type: application/json`, `User-Agent: python-urllib3/2.2.1`, `X-Hook-Signature`, `Content-Length`, `Accept-Encoding` | the same set; `User-Agent: python-urllib3/2.8.0` |
 | webhook body | keys `event` (`"created"`/`"updated"`/`"deleted"`), `timestamp`, `model` = `"device"`, `username` = `"admin"`, `request_id`, `data` (the REST device), `snapshots` {`prechange`, `postchange`} | keys `event`, `timestamp`, `object_type` = `"dcim.device"`, `request` {`id`, `path`, `method`, `user`: `"admin"`, …}, `data`, `snapshots` {`prechange`, `postchange`}; no `model`, `username` or `request_id` |
 | webhook body carries the change | update: `data.custom_fields.os_version` = `"4.32.2F"`; create has `prechange` null, delete has `postchange` null | the same |
@@ -63,9 +67,13 @@ same outcome for every step (below).
 custom field and the event rule. `netbox-3.7-legacy/` (fresh stack, `-prefer-legacy`) recorded the same
 status for every step, the same `graphql_3` success and the same 3 deliveries as `netbox-3.7/`.
 
+Order and latency are one run's sample each (three events, one worker); 6b orders by the body
+`timestamp`, never by arrival.
+
 ### Not observed
 
 - `next` non-null: the run holds one device when `rest-page.json` is read, so pagination's `next`
   link was never populated; the body shape (`count`/`next`/`previous`/`results`) is what was recorded.
-- `rq-workers-running` in `status.json` reads 0 on both versions: `status.json` is read before the
-  worker had registered. The worker delivered every webhook later in the same run.
+- `rq-workers-running` in `status.json` reads 0 on both versions, though the worker delivered every
+  webhook later in the same run. That `status.json` was read before the worker registered is an
+  inference, not a recorded fact.

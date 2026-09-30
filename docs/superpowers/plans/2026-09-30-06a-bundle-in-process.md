@@ -1299,21 +1299,24 @@ never "fixed" by guessing a different call without recording that too.
   — so neither run's fixtures overwrite the other's. Which spelling each version refused is the
   finding, and the note cites both directories.
 
-- [ ] **Step 4: Run it, per product and version.** For each of the four stacks:
+- [ ] **Step 4: Run it, per product and version.** For each of the four stacks, with
+  `tests/lab/sot/run.sh` (its `README.md` beside it lists every variable):
 
   ```bash
-  export L27_TOKEN=$(openssl rand -hex 20) L27_WEBHOOK_SECRET=l27-lab-webhook-secret
-  docker compose -f tests/lab/sot/compose/netbox-4.yml up -d
-  until curl -fsS -H "Authorization: Token $L27_TOKEN" http://127.0.0.1:18080/api/status/ >/dev/null; do sleep 10; done
-  GW=$(docker network inspect port49-l27-netbox4_default --format '{{(index .IPAM.Config 0).Gateway}}')
-  go run ./tests/lab/cmd/sot-record -product netbox -url http://127.0.0.1:18080 \
-    -out tests/lab/sot/fixtures/netbox-4 -webhook-listen "$GW:18999" \
-    2>&1 | tee tests/lab/logs/l27-netbox-4.log
-  docker compose -f tests/lab/sot/compose/netbox-4.yml down -v
+  tests/lab/sot/run.sh netbox-4          # likewise netbox-3.7, nautobot-1.6, nautobot-2
+  tests/lab/sot/run.sh netbox-3.7 legacy # the -prefer-legacy rerun, fixtures/<stack>-legacy
   ```
 
+  The script generates every database password, secret key, admin password and API token fresh per
+  run into a 0600 env file outside the repository (the compose files read `${L27_…:?}` and hold no
+  value), and never prints one. NetBox 4's token is v2: netbox-docker 5.1.1 provisions it from a
+  12-character key, a 40-character token and a pepper, and the recorder sends
+  `Authorization: Bearer nbt_<key>.<token>` (`-auth-scheme Bearer`); every other stack uses
+  `Token <40 hex>`. The script brings the stack up, gives `/api/status/` 10 minutes, runs the
+  recorder under a 10-minute timeout, logs to `tests/lab/logs/l27-<stack>.log` (the compose log beside
+  it, credentials replaced by `<redacted>`), and runs `docker compose down -v` on every exit.
   Compose puts each stack on its own network, `<name>_default`, and the worker reaches the host on
-  that network's gateway, so the listener binds it, read per stack as above. If the host firewall
+  that network's gateway, so the listener binds it; the script reads it per stack. If the host firewall
   drops the worker's connection to it, the deliveries count is zero and the worker's log says
   so: open the port for that bridge and rerun the stack. Run the Task-level watchdog (above) beside each. Expected:
   the recorder's last line counts at least one webhook delivery. Zero deliveries is a finding (the

@@ -16,18 +16,18 @@
       "Content-Length": "577",
       "Content-Type": "application/json",
       "Cross-Origin-Opener-Policy": "same-origin",
-      "Location": "http://127.0.0.1:18020/api/dcim/location-types/df94fcec-62f9-4dd2-bd79-eda6f9fa158c/",
+      "Location": "http://127.0.0.1:18020/api/dcim/location-types/13d7fa23-d5d8-466c-8f3d-0868f71266b1/",
       "Referrer-Policy": "same-origin",
       "Vary": "Accept, Cookie, origin",
       "X-Content-Type-Options": "nosniff",
       "X-Frame-Options": "DENY"
     },
     "body": {
-      "id": "df94fcec-62f9-4dd2-bd79-eda6f9fa158c",
+      "id": "13d7fa23-d5d8-466c-8f3d-0868f71266b1",
       "object_type": "dcim.locationtype",
       "display": "Site",
-      "url": "http://127.0.0.1:18020/api/dcim/location-types/df94fcec-62f9-4dd2-bd79-eda6f9fa158c/",
-      "natural_slug": "site_df94",
+      "url": "http://127.0.0.1:18020/api/dcim/location-types/13d7fa23-d5d8-466c-8f3d-0868f71266b1/",
+      "natural_slug": "site_13d7",
       "tree_depth": null,
       "content_types": [
         "dcim.device"
@@ -36,9 +36,9 @@
       "description": "",
       "nestable": false,
       "parent": null,
-      "created": "2026-09-30T06:14:22.154127Z",
-      "last_updated": "2026-09-30T06:14:22.154147Z",
-      "notes_url": "http://127.0.0.1:18020/api/dcim/location-types/df94fcec-62f9-4dd2-bd79-eda6f9fa158c/notes/",
+      "created": "2026-09-30T06:47:31.414840Z",
+      "last_updated": "2026-09-30T06:47:31.414858Z",
+      "notes_url": "http://127.0.0.1:18020/api/dcim/location-types/13d7fa23-d5d8-466c-8f3d-0868f71266b1/notes/",
       "custom_fields": {},
       "computed_fields": {},
       "relationships": {}
@@ -49,7 +49,7 @@
     "method": "POST",
     "path": "/api/dcim/locations/",
     "request": {
-      "location_type": "df94fcec-62f9-4dd2-bd79-eda6f9fa158c",
+      "location_type": "13d7fa23-d5d8-466c-8f3d-0868f71266b1",
       "name": "dc1",
       "status": "Active"
     },
@@ -60,18 +60,18 @@
       "Content-Length": "1087",
       "Content-Type": "application/json",
       "Cross-Origin-Opener-Policy": "same-origin",
-      "Location": "http://127.0.0.1:18020/api/dcim/locations/23228f3f-4202-4d0e-9ae9-f3234fad8466/",
+      "Location": "http://127.0.0.1:18020/api/dcim/locations/e8f2e9ba-b924-40a8-919d-b335bc0d2a74/",
       "Referrer-Policy": "same-origin",
       "Vary": "Accept, Cookie, origin",
       "X-Content-Type-Options": "nosniff",
       "X-Frame-Options": "DENY"
     },
     "body": {
-      "id": "23228f3f-4202-4d0e-9ae9-f3234fad8466",
+      "id": "e8f2e9ba-b924-40a8-919d-b335bc0d2a74",
       "object_type": "dcim.location",
       "display": "dc1",
-      "url": "http://127.0.0.1:18020/api/dcim/locations/23228f3f-4202-4d0e-9ae9-f3234fad8466/",
-      "natural_slug": "dc1_2322",
+      "url": "http://127.0.0.1:18020/api/dcim/locations/e8f2e9ba-b924-40a8-919d-b335bc0d2a74/",
+      "natural_slug": "dc1_e8f2",
       "tree_depth": null,
       "time_zone": null,
       "name": "dc1",
@@ -88,19 +88,19 @@
       "comments": "",
       "parent": null,
       "location_type": {
-        "id": "df94fcec-62f9-4dd2-bd79-eda6f9fa158c",
+        "id": "13d7fa23-d5d8-466c-8f3d-0868f71266b1",
         "object_type": "dcim.locationtype",
-        "url": "http://127.0.0.1:18020/api/dcim/location-types/df94fcec-62f9-4dd2-bd79-eda6f9fa158c/"
+        "url": "http://127.0.0.1:18020/api/dcim/location-types/13d7fa23-d5d8-466c-8f3d-0868f71266b1/"
       },
       "status": {
-        "id": "459aed7d-1943-4092-89a3-adf891877620",
+        "id": "8922acc8-9033-4801-a69d-ad265f93388c",
         "object_type": "extras.status",
-        "url": "http://127.0.0.1:18020/api/extras/statuses/459aed7d-1943-4092-89a3-adf891877620/"
+        "url": "http://127.0.0.1:18020/api/extras/statuses/8922acc8-9033-4801-a69d-ad265f93388c/"
       },
       "tenant": null,
-      "created": "2026-09-30T06:14:22.240033Z",
-      "last_updated": "2026-09-30T06:14:22.240043Z",
-      "notes_url": "http://127.0.0.1:18020/api/dcim/locations/23228f3f-4202-4d0e-9ae9-f3234fad8466/notes/",
+      "created": "2026-09-30T06:47:31.538260Z",
+      "last_updated": "2026-09-30T06:47:31.538276Z",
+      "notes_url": "http://127.0.0.1:18020/api/dcim/locations/e8f2e9ba-b924-40a8-919d-b335bc0d2a74/notes/",
       "custom_fields": {},
       "computed_fields": {},
       "relationships": {},
@@ -145,23 +145,23 @@
       "Content-Length": "500",
       "Content-Type": "application/json",
       "Cross-Origin-Opener-Policy": "same-origin",
-      "Location": "http://127.0.0.1:18020/api/dcim/manufacturers/f2a079b5-6ed0-4671-9f8f-c8e9fbc23e22/",
+      "Location": "http://127.0.0.1:18020/api/dcim/manufacturers/9233a240-456e-4c47-9e70-6a8fecef8423/",
       "Referrer-Policy": "same-origin",
       "Vary": "Accept, Cookie, origin",
       "X-Content-Type-Options": "nosniff",
       "X-Frame-Options": "DENY"
     },
     "body": {
-      "id": "f2a079b5-6ed0-4671-9f8f-c8e9fbc23e22",
+      "id": "9233a240-456e-4c47-9e70-6a8fecef8423",
       "object_type": "dcim.manufacturer",
       "display": "Arista",
-      "url": "http://127.0.0.1:18020/api/dcim/manufacturers/f2a079b5-6ed0-4671-9f8f-c8e9fbc23e22/",
-      "natural_slug": "arista_f2a0",
+      "url": "http://127.0.0.1:18020/api/dcim/manufacturers/9233a240-456e-4c47-9e70-6a8fecef8423/",
+      "natural_slug": "arista_9233",
       "name": "Arista",
       "description": "",
-      "created": "2026-09-30T06:14:22.294179Z",
-      "last_updated": "2026-09-30T06:14:22.294188Z",
-      "notes_url": "http://127.0.0.1:18020/api/dcim/manufacturers/f2a079b5-6ed0-4671-9f8f-c8e9fbc23e22/notes/",
+      "created": "2026-09-30T06:47:31.608929Z",
+      "last_updated": "2026-09-30T06:47:31.608937Z",
+      "notes_url": "http://127.0.0.1:18020/api/dcim/manufacturers/9233a240-456e-4c47-9e70-6a8fecef8423/notes/",
       "custom_fields": {},
       "computed_fields": {},
       "relationships": {}
@@ -172,7 +172,7 @@
     "method": "POST",
     "path": "/api/dcim/device-types/",
     "request": {
-      "manufacturer": "f2a079b5-6ed0-4671-9f8f-c8e9fbc23e22",
+      "manufacturer": "9233a240-456e-4c47-9e70-6a8fecef8423",
       "model": "vEOS",
       "slug": "veos"
     },
@@ -183,18 +183,18 @@
       "Content-Length": "856",
       "Content-Type": "application/json",
       "Cross-Origin-Opener-Policy": "same-origin",
-      "Location": "http://127.0.0.1:18020/api/dcim/device-types/1bdf6aa4-d989-4223-b3bb-b4e3812d199a/",
+      "Location": "http://127.0.0.1:18020/api/dcim/device-types/c3880a7a-85bf-43e6-bee8-6a1b8969c187/",
       "Referrer-Policy": "same-origin",
       "Vary": "Accept, Cookie, origin",
       "X-Content-Type-Options": "nosniff",
       "X-Frame-Options": "DENY"
     },
     "body": {
-      "id": "1bdf6aa4-d989-4223-b3bb-b4e3812d199a",
+      "id": "c3880a7a-85bf-43e6-bee8-6a1b8969c187",
       "object_type": "dcim.devicetype",
       "display": "Arista vEOS",
-      "url": "http://127.0.0.1:18020/api/dcim/device-types/1bdf6aa4-d989-4223-b3bb-b4e3812d199a/",
-      "natural_slug": "arista_veos_1bdf",
+      "url": "http://127.0.0.1:18020/api/dcim/device-types/c3880a7a-85bf-43e6-bee8-6a1b8969c187/",
+      "natural_slug": "arista_veos_c388",
       "subdevice_role": null,
       "front_image": null,
       "rear_image": null,
@@ -204,15 +204,15 @@
       "is_full_depth": true,
       "comments": "",
       "manufacturer": {
-        "id": "f2a079b5-6ed0-4671-9f8f-c8e9fbc23e22",
+        "id": "9233a240-456e-4c47-9e70-6a8fecef8423",
         "object_type": "dcim.manufacturer",
-        "url": "http://127.0.0.1:18020/api/dcim/manufacturers/f2a079b5-6ed0-4671-9f8f-c8e9fbc23e22/"
+        "url": "http://127.0.0.1:18020/api/dcim/manufacturers/9233a240-456e-4c47-9e70-6a8fecef8423/"
       },
       "device_family": null,
       "software_image_files": [],
-      "created": "2026-09-30T06:14:22.322155Z",
-      "last_updated": "2026-09-30T06:14:22.322164Z",
-      "notes_url": "http://127.0.0.1:18020/api/dcim/device-types/1bdf6aa4-d989-4223-b3bb-b4e3812d199a/notes/",
+      "created": "2026-09-30T06:47:31.633785Z",
+      "last_updated": "2026-09-30T06:47:31.633792Z",
+      "notes_url": "http://127.0.0.1:18020/api/dcim/device-types/c3880a7a-85bf-43e6-bee8-6a1b8969c187/notes/",
       "custom_fields": {},
       "computed_fields": {},
       "relationships": {},
@@ -236,18 +236,18 @@
       "Content-Length": "539",
       "Content-Type": "application/json",
       "Cross-Origin-Opener-Policy": "same-origin",
-      "Location": "http://127.0.0.1:18020/api/extras/roles/8d82ac8f-b6c8-46fe-8c5e-fd7c470dcb27/",
+      "Location": "http://127.0.0.1:18020/api/extras/roles/e3a9b10d-5bf3-4596-964e-2eb1cce31f00/",
       "Referrer-Policy": "same-origin",
       "Vary": "Accept, Cookie, origin",
       "X-Content-Type-Options": "nosniff",
       "X-Frame-Options": "DENY"
     },
     "body": {
-      "id": "8d82ac8f-b6c8-46fe-8c5e-fd7c470dcb27",
+      "id": "e3a9b10d-5bf3-4596-964e-2eb1cce31f00",
       "object_type": "extras.role",
       "display": "leaf",
-      "url": "http://127.0.0.1:18020/api/extras/roles/8d82ac8f-b6c8-46fe-8c5e-fd7c470dcb27/",
-      "natural_slug": "leaf_8d82",
+      "url": "http://127.0.0.1:18020/api/extras/roles/e3a9b10d-5bf3-4596-964e-2eb1cce31f00/",
+      "natural_slug": "leaf_e3a9",
       "content_types": [
         "dcim.device"
       ],
@@ -255,9 +255,9 @@
       "color": "9e9e9e",
       "description": "",
       "weight": null,
-      "created": "2026-09-30T06:14:22.354946Z",
-      "last_updated": "2026-09-30T06:14:22.354954Z",
-      "notes_url": "http://127.0.0.1:18020/api/extras/roles/8d82ac8f-b6c8-46fe-8c5e-fd7c470dcb27/notes/",
+      "created": "2026-09-30T06:47:31.664549Z",
+      "last_updated": "2026-09-30T06:47:31.664556Z",
+      "notes_url": "http://127.0.0.1:18020/api/extras/roles/e3a9b10d-5bf3-4596-964e-2eb1cce31f00/notes/",
       "custom_fields": {},
       "computed_fields": {},
       "relationships": {}
@@ -301,18 +301,18 @@
       "Content-Length": "903",
       "Content-Type": "application/json",
       "Cross-Origin-Opener-Policy": "same-origin",
-      "Location": "http://127.0.0.1:18020/api/dcim/platforms/107c6539-4de2-490e-b1a9-1e8bd3961366/",
+      "Location": "http://127.0.0.1:18020/api/dcim/platforms/c024ec0d-e5a6-4d0d-9154-9ec9d893b6eb/",
       "Referrer-Policy": "same-origin",
       "Vary": "Accept, Cookie, origin",
       "X-Content-Type-Options": "nosniff",
       "X-Frame-Options": "DENY"
     },
     "body": {
-      "id": "107c6539-4de2-490e-b1a9-1e8bd3961366",
+      "id": "c024ec0d-e5a6-4d0d-9154-9ec9d893b6eb",
       "object_type": "dcim.platform",
       "display": "eos",
-      "url": "http://127.0.0.1:18020/api/dcim/platforms/107c6539-4de2-490e-b1a9-1e8bd3961366/",
-      "natural_slug": "eos_107c",
+      "url": "http://127.0.0.1:18020/api/dcim/platforms/c024ec0d-e5a6-4d0d-9154-9ec9d893b6eb/",
+      "natural_slug": "eos_c024",
       "network_driver_mappings": {
         "aerleon": "arista",
         "ansible": "arista.eos.eos",
@@ -334,9 +334,9 @@
       "napalm_args": null,
       "description": "",
       "manufacturer": null,
-      "created": "2026-09-30T06:14:22.387141Z",
-      "last_updated": "2026-09-30T06:14:22.387149Z",
-      "notes_url": "http://127.0.0.1:18020/api/dcim/platforms/107c6539-4de2-490e-b1a9-1e8bd3961366/notes/",
+      "created": "2026-09-30T06:47:31.694394Z",
+      "last_updated": "2026-09-30T06:47:31.694404Z",
+      "notes_url": "http://127.0.0.1:18020/api/dcim/platforms/c024ec0d-e5a6-4d0d-9154-9ec9d893b6eb/notes/",
       "custom_fields": {},
       "computed_fields": {},
       "relationships": {}
@@ -360,27 +360,27 @@
       "Content-Length": "528",
       "Content-Type": "application/json",
       "Cross-Origin-Opener-Policy": "same-origin",
-      "Location": "http://127.0.0.1:18020/api/extras/tags/4b380231-50a1-48f2-8e9f-0ada8f1dd1fa/",
+      "Location": "http://127.0.0.1:18020/api/extras/tags/edcf97d9-7279-471e-b5b6-6e6152e6488b/",
       "Referrer-Policy": "same-origin",
       "Vary": "Accept, Cookie, origin",
       "X-Content-Type-Options": "nosniff",
       "X-Frame-Options": "DENY"
     },
     "body": {
-      "id": "4b380231-50a1-48f2-8e9f-0ada8f1dd1fa",
+      "id": "edcf97d9-7279-471e-b5b6-6e6152e6488b",
       "object_type": "extras.tag",
       "display": "port49",
-      "url": "http://127.0.0.1:18020/api/extras/tags/4b380231-50a1-48f2-8e9f-0ada8f1dd1fa/",
-      "natural_slug": "port49_4b38",
+      "url": "http://127.0.0.1:18020/api/extras/tags/edcf97d9-7279-471e-b5b6-6e6152e6488b/",
+      "natural_slug": "port49_edcf",
       "content_types": [
         "dcim.device"
       ],
       "name": "port49",
       "color": "9e9e9e",
       "description": "",
-      "created": "2026-09-30T06:14:22.412228Z",
-      "last_updated": "2026-09-30T06:14:22.412245Z",
-      "notes_url": "http://127.0.0.1:18020/api/extras/tags/4b380231-50a1-48f2-8e9f-0ada8f1dd1fa/notes/",
+      "created": "2026-09-30T06:47:31.717872Z",
+      "last_updated": "2026-09-30T06:47:31.717879Z",
+      "notes_url": "http://127.0.0.1:18020/api/extras/tags/edcf97d9-7279-471e-b5b6-6e6152e6488b/notes/",
       "custom_fields": {},
       "computed_fields": {},
       "relationships": {}
@@ -406,18 +406,18 @@
       "Content-Length": "751",
       "Content-Type": "application/json",
       "Cross-Origin-Opener-Policy": "same-origin",
-      "Location": "http://127.0.0.1:18020/api/extras/custom-fields/44a6952a-440d-46c6-a630-6416c812cbba/",
+      "Location": "http://127.0.0.1:18020/api/extras/custom-fields/0df3c92c-166a-4b6f-a61f-ecbf2b503b80/",
       "Referrer-Policy": "same-origin",
       "Vary": "Accept, Cookie, origin",
       "X-Content-Type-Options": "nosniff",
       "X-Frame-Options": "DENY"
     },
     "body": {
-      "id": "44a6952a-440d-46c6-a630-6416c812cbba",
+      "id": "0df3c92c-166a-4b6f-a61f-ecbf2b503b80",
       "object_type": "extras.customfield",
       "display": "os_version",
-      "url": "http://127.0.0.1:18020/api/extras/custom-fields/44a6952a-440d-46c6-a630-6416c812cbba/",
-      "natural_slug": "os-version_44a6",
+      "url": "http://127.0.0.1:18020/api/extras/custom-fields/0df3c92c-166a-4b6f-a61f-ecbf2b503b80/",
+      "natural_slug": "os-version_0df3",
       "content_types": [
         "dcim.device"
       ],
@@ -440,9 +440,9 @@
       "validation_maximum": null,
       "validation_regex": "",
       "advanced_ui": false,
-      "created": "2026-09-30T06:14:22.439894Z",
-      "last_updated": "2026-09-30T06:14:22.439902Z",
-      "notes_url": "http://127.0.0.1:18020/api/extras/custom-fields/44a6952a-440d-46c6-a630-6416c812cbba/notes/"
+      "created": "2026-09-30T06:47:31.743634Z",
+      "last_updated": "2026-09-30T06:47:31.743642Z",
+      "notes_url": "http://127.0.0.1:18020/api/extras/custom-fields/0df3c92c-166a-4b6f-a61f-ecbf2b503b80/notes/"
     }
   },
   {
@@ -453,14 +453,14 @@
       "custom_fields": {
         "os_version": "4.31.2F"
       },
-      "device_type": "1bdf6aa4-d989-4223-b3bb-b4e3812d199a",
-      "location": "23228f3f-4202-4d0e-9ae9-f3234fad8466",
+      "device_type": "c3880a7a-85bf-43e6-bee8-6a1b8969c187",
+      "location": "e8f2e9ba-b924-40a8-919d-b335bc0d2a74",
       "name": "leaf-01",
-      "platform": "107c6539-4de2-490e-b1a9-1e8bd3961366",
-      "role": "8d82ac8f-b6c8-46fe-8c5e-fd7c470dcb27",
+      "platform": "c024ec0d-e5a6-4d0d-9154-9ec9d893b6eb",
+      "role": "e3a9b10d-5bf3-4596-964e-2eb1cce31f00",
       "status": "Active",
       "tags": [
-        "4b380231-50a1-48f2-8e9f-0ada8f1dd1fa"
+        "edcf97d9-7279-471e-b5b6-6e6152e6488b"
       ]
     },
     "status": 201,
@@ -470,18 +470,18 @@
       "Content-Length": "2135",
       "Content-Type": "application/json",
       "Cross-Origin-Opener-Policy": "same-origin",
-      "Location": "http://127.0.0.1:18020/api/dcim/devices/293cbb6a-28d0-4db7-93e6-60ab0b47f342/",
+      "Location": "http://127.0.0.1:18020/api/dcim/devices/3af8fb9c-23ea-4a16-9781-fdf171500a8c/",
       "Referrer-Policy": "same-origin",
       "Vary": "Accept, Cookie, origin",
       "X-Content-Type-Options": "nosniff",
       "X-Frame-Options": "DENY"
     },
     "body": {
-      "id": "293cbb6a-28d0-4db7-93e6-60ab0b47f342",
+      "id": "3af8fb9c-23ea-4a16-9781-fdf171500a8c",
       "object_type": "dcim.device",
       "display": "leaf-01",
-      "url": "http://127.0.0.1:18020/api/dcim/devices/293cbb6a-28d0-4db7-93e6-60ab0b47f342/",
-      "natural_slug": "leaf-01__dc1_293c",
+      "url": "http://127.0.0.1:18020/api/dcim/devices/3af8fb9c-23ea-4a16-9781-fdf171500a8c/",
+      "natural_slug": "leaf-01__dc1_3af8",
       "face": null,
       "local_config_context_data": null,
       "local_config_context_data_owner_object_id": null,
@@ -496,30 +496,30 @@
       "local_config_context_schema": null,
       "local_config_context_data_owner_content_type": null,
       "device_type": {
-        "id": "1bdf6aa4-d989-4223-b3bb-b4e3812d199a",
+        "id": "c3880a7a-85bf-43e6-bee8-6a1b8969c187",
         "object_type": "dcim.devicetype",
-        "url": "http://127.0.0.1:18020/api/dcim/device-types/1bdf6aa4-d989-4223-b3bb-b4e3812d199a/"
+        "url": "http://127.0.0.1:18020/api/dcim/device-types/c3880a7a-85bf-43e6-bee8-6a1b8969c187/"
       },
       "status": {
-        "id": "459aed7d-1943-4092-89a3-adf891877620",
+        "id": "8922acc8-9033-4801-a69d-ad265f93388c",
         "object_type": "extras.status",
-        "url": "http://127.0.0.1:18020/api/extras/statuses/459aed7d-1943-4092-89a3-adf891877620/"
+        "url": "http://127.0.0.1:18020/api/extras/statuses/8922acc8-9033-4801-a69d-ad265f93388c/"
       },
       "role": {
-        "id": "8d82ac8f-b6c8-46fe-8c5e-fd7c470dcb27",
+        "id": "e3a9b10d-5bf3-4596-964e-2eb1cce31f00",
         "object_type": "extras.role",
-        "url": "http://127.0.0.1:18020/api/extras/roles/8d82ac8f-b6c8-46fe-8c5e-fd7c470dcb27/"
+        "url": "http://127.0.0.1:18020/api/extras/roles/e3a9b10d-5bf3-4596-964e-2eb1cce31f00/"
       },
       "tenant": null,
       "platform": {
-        "id": "107c6539-4de2-490e-b1a9-1e8bd3961366",
+        "id": "c024ec0d-e5a6-4d0d-9154-9ec9d893b6eb",
         "object_type": "dcim.platform",
-        "url": "http://127.0.0.1:18020/api/dcim/platforms/107c6539-4de2-490e-b1a9-1e8bd3961366/"
+        "url": "http://127.0.0.1:18020/api/dcim/platforms/c024ec0d-e5a6-4d0d-9154-9ec9d893b6eb/"
       },
       "location": {
-        "id": "23228f3f-4202-4d0e-9ae9-f3234fad8466",
+        "id": "e8f2e9ba-b924-40a8-919d-b335bc0d2a74",
         "object_type": "dcim.location",
-        "url": "http://127.0.0.1:18020/api/dcim/locations/23228f3f-4202-4d0e-9ae9-f3234fad8466/"
+        "url": "http://127.0.0.1:18020/api/dcim/locations/e8f2e9ba-b924-40a8-919d-b335bc0d2a74/"
       },
       "rack": null,
       "primary_ip4": null,
@@ -531,9 +531,9 @@
       "secrets_group": null,
       "controller_managed_device_group": null,
       "software_image_files": [],
-      "created": "2026-09-30T06:14:22.508219Z",
-      "last_updated": "2026-09-30T06:14:22.508228Z",
-      "notes_url": "http://127.0.0.1:18020/api/dcim/devices/293cbb6a-28d0-4db7-93e6-60ab0b47f342/notes/",
+      "created": "2026-09-30T06:47:31.807869Z",
+      "last_updated": "2026-09-30T06:47:31.807877Z",
+      "notes_url": "http://127.0.0.1:18020/api/dcim/devices/3af8fb9c-23ea-4a16-9781-fdf171500a8c/notes/",
       "custom_fields": {
         "os_version": "4.31.2F"
       },
@@ -541,9 +541,9 @@
       "relationships": {},
       "tags": [
         {
-          "id": "4b380231-50a1-48f2-8e9f-0ada8f1dd1fa",
+          "id": "edcf97d9-7279-471e-b5b6-6e6152e6488b",
           "object_type": "extras.tag",
-          "url": "http://127.0.0.1:18020/api/extras/tags/4b380231-50a1-48f2-8e9f-0ada8f1dd1fa/"
+          "url": "http://127.0.0.1:18020/api/extras/tags/edcf97d9-7279-471e-b5b6-6e6152e6488b/"
         }
       ],
       "parent_bay": null,
@@ -559,13 +559,13 @@
         "os_version": "4.31.2F"
       },
       "device_role": null,
-      "device_type": "1bdf6aa4-d989-4223-b3bb-b4e3812d199a",
+      "device_type": "c3880a7a-85bf-43e6-bee8-6a1b8969c187",
       "name": "leaf-01",
-      "platform": "107c6539-4de2-490e-b1a9-1e8bd3961366",
+      "platform": "c024ec0d-e5a6-4d0d-9154-9ec9d893b6eb",
       "site": null,
       "status": "active",
       "tags": [
-        "4b380231-50a1-48f2-8e9f-0ada8f1dd1fa"
+        "edcf97d9-7279-471e-b5b6-6e6152e6488b"
       ]
     },
     "status": 400,
@@ -597,7 +597,7 @@
     "method": "POST",
     "path": "/api/dcim/interfaces/",
     "request": {
-      "device": "293cbb6a-28d0-4db7-93e6-60ab0b47f342",
+      "device": "3af8fb9c-23ea-4a16-9781-fdf171500a8c",
       "name": "Management1",
       "status": "Active",
       "type": "virtual"
@@ -609,20 +609,20 @@
       "Content-Length": "1319",
       "Content-Type": "application/json",
       "Cross-Origin-Opener-Policy": "same-origin",
-      "Location": "http://127.0.0.1:18020/api/dcim/interfaces/2c669ea0-c7d2-4cf7-ada0-0438972eebc2/",
+      "Location": "http://127.0.0.1:18020/api/dcim/interfaces/fc1f46d1-f7f8-4a63-9bcd-0969889bdd9b/",
       "Referrer-Policy": "same-origin",
       "Vary": "Accept, Cookie, origin",
       "X-Content-Type-Options": "nosniff",
       "X-Frame-Options": "DENY"
     },
     "body": {
-      "id": "2c669ea0-c7d2-4cf7-ada0-0438972eebc2",
+      "id": "fc1f46d1-f7f8-4a63-9bcd-0969889bdd9b",
       "object_type": "dcim.interface",
       "display": "Management1",
-      "url": "http://127.0.0.1:18020/api/dcim/interfaces/2c669ea0-c7d2-4cf7-ada0-0438972eebc2/",
+      "url": "http://127.0.0.1:18020/api/dcim/interfaces/fc1f46d1-f7f8-4a63-9bcd-0969889bdd9b/",
       "cable_peer_type": null,
       "cable_peer": null,
-      "natural_slug": "leaf-01__dc1__management1_2c66",
+      "natural_slug": "leaf-01__dc1__management1_fc1f",
       "connected_endpoint_type": null,
       "connected_endpoint": null,
       "connected_endpoint_reachable": null,
@@ -641,16 +641,16 @@
       "mtu": null,
       "mgmt_only": false,
       "device": {
-        "id": "293cbb6a-28d0-4db7-93e6-60ab0b47f342",
+        "id": "3af8fb9c-23ea-4a16-9781-fdf171500a8c",
         "object_type": "dcim.device",
-        "url": "http://127.0.0.1:18020/api/dcim/devices/293cbb6a-28d0-4db7-93e6-60ab0b47f342/"
+        "url": "http://127.0.0.1:18020/api/dcim/devices/3af8fb9c-23ea-4a16-9781-fdf171500a8c/"
       },
       "module": null,
       "cable": null,
       "status": {
-        "id": "459aed7d-1943-4092-89a3-adf891877620",
+        "id": "8922acc8-9033-4801-a69d-ad265f93388c",
         "object_type": "extras.status",
-        "url": "http://127.0.0.1:18020/api/extras/statuses/459aed7d-1943-4092-89a3-adf891877620/"
+        "url": "http://127.0.0.1:18020/api/extras/statuses/8922acc8-9033-4801-a69d-ad265f93388c/"
       },
       "role": null,
       "parent_interface": null,
@@ -660,9 +660,9 @@
       "vrf": null,
       "tagged_vlans": [],
       "ip_addresses": [],
-      "created": "2026-09-30T06:14:22.629234Z",
-      "last_updated": "2026-09-30T06:14:22.629250Z",
-      "notes_url": "http://127.0.0.1:18020/api/dcim/interfaces/2c669ea0-c7d2-4cf7-ada0-0438972eebc2/notes/",
+      "created": "2026-09-30T06:47:31.922872Z",
+      "last_updated": "2026-09-30T06:47:31.922880Z",
+      "notes_url": "http://127.0.0.1:18020/api/dcim/interfaces/fc1f46d1-f7f8-4a63-9bcd-0969889bdd9b/notes/",
       "custom_fields": {},
       "computed_fields": {},
       "relationships": {},
@@ -674,7 +674,7 @@
     "method": "POST",
     "path": "/api/dcim/interfaces/",
     "request": {
-      "device": "293cbb6a-28d0-4db7-93e6-60ab0b47f342",
+      "device": "3af8fb9c-23ea-4a16-9781-fdf171500a8c",
       "name": "Management1",
       "status": "active",
       "type": "virtual"
@@ -702,7 +702,7 @@
     "method": "POST",
     "path": "/api/dcim/interfaces/",
     "request": {
-      "device": "293cbb6a-28d0-4db7-93e6-60ab0b47f342",
+      "device": "3af8fb9c-23ea-4a16-9781-fdf171500a8c",
       "name": "Loopback0",
       "status": "Active",
       "type": "virtual"
@@ -714,20 +714,20 @@
       "Content-Length": "1313",
       "Content-Type": "application/json",
       "Cross-Origin-Opener-Policy": "same-origin",
-      "Location": "http://127.0.0.1:18020/api/dcim/interfaces/fa409dd7-7939-48e9-b9ad-41eaf0319174/",
+      "Location": "http://127.0.0.1:18020/api/dcim/interfaces/ace1ac0e-e53a-4ef8-b0da-431709ee0515/",
       "Referrer-Policy": "same-origin",
       "Vary": "Accept, Cookie, origin",
       "X-Content-Type-Options": "nosniff",
       "X-Frame-Options": "DENY"
     },
     "body": {
-      "id": "fa409dd7-7939-48e9-b9ad-41eaf0319174",
+      "id": "ace1ac0e-e53a-4ef8-b0da-431709ee0515",
       "object_type": "dcim.interface",
       "display": "Loopback0",
-      "url": "http://127.0.0.1:18020/api/dcim/interfaces/fa409dd7-7939-48e9-b9ad-41eaf0319174/",
+      "url": "http://127.0.0.1:18020/api/dcim/interfaces/ace1ac0e-e53a-4ef8-b0da-431709ee0515/",
       "cable_peer_type": null,
       "cable_peer": null,
-      "natural_slug": "leaf-01__dc1__loopback0_fa40",
+      "natural_slug": "leaf-01__dc1__loopback0_ace1",
       "connected_endpoint_type": null,
       "connected_endpoint": null,
       "connected_endpoint_reachable": null,
@@ -746,16 +746,16 @@
       "mtu": null,
       "mgmt_only": false,
       "device": {
-        "id": "293cbb6a-28d0-4db7-93e6-60ab0b47f342",
+        "id": "3af8fb9c-23ea-4a16-9781-fdf171500a8c",
         "object_type": "dcim.device",
-        "url": "http://127.0.0.1:18020/api/dcim/devices/293cbb6a-28d0-4db7-93e6-60ab0b47f342/"
+        "url": "http://127.0.0.1:18020/api/dcim/devices/3af8fb9c-23ea-4a16-9781-fdf171500a8c/"
       },
       "module": null,
       "cable": null,
       "status": {
-        "id": "459aed7d-1943-4092-89a3-adf891877620",
+        "id": "8922acc8-9033-4801-a69d-ad265f93388c",
         "object_type": "extras.status",
-        "url": "http://127.0.0.1:18020/api/extras/statuses/459aed7d-1943-4092-89a3-adf891877620/"
+        "url": "http://127.0.0.1:18020/api/extras/statuses/8922acc8-9033-4801-a69d-ad265f93388c/"
       },
       "role": null,
       "parent_interface": null,
@@ -765,9 +765,9 @@
       "vrf": null,
       "tagged_vlans": [],
       "ip_addresses": [],
-      "created": "2026-09-30T06:14:22.684830Z",
-      "last_updated": "2026-09-30T06:14:22.684841Z",
-      "notes_url": "http://127.0.0.1:18020/api/dcim/interfaces/fa409dd7-7939-48e9-b9ad-41eaf0319174/notes/",
+      "created": "2026-09-30T06:47:31.977921Z",
+      "last_updated": "2026-09-30T06:47:31.977930Z",
+      "notes_url": "http://127.0.0.1:18020/api/dcim/interfaces/ace1ac0e-e53a-4ef8-b0da-431709ee0515/notes/",
       "custom_fields": {},
       "computed_fields": {},
       "relationships": {},
@@ -779,7 +779,7 @@
     "method": "POST",
     "path": "/api/dcim/interfaces/",
     "request": {
-      "device": "293cbb6a-28d0-4db7-93e6-60ab0b47f342",
+      "device": "3af8fb9c-23ea-4a16-9781-fdf171500a8c",
       "name": "Loopback0",
       "status": "active",
       "type": "virtual"
@@ -817,18 +817,18 @@
       "Content-Length": "1113",
       "Content-Type": "application/json",
       "Cross-Origin-Opener-Policy": "same-origin",
-      "Location": "http://127.0.0.1:18020/api/ipam/prefixes/76f9d878-d852-46ef-b8fc-919da53d001e/",
+      "Location": "http://127.0.0.1:18020/api/ipam/prefixes/c4c1726a-317d-4ce7-96b0-8281031bc2e6/",
       "Referrer-Policy": "same-origin",
       "Vary": "Accept, Cookie, origin",
       "X-Content-Type-Options": "nosniff",
       "X-Frame-Options": "DENY"
     },
     "body": {
-      "id": "76f9d878-d852-46ef-b8fc-919da53d001e",
+      "id": "c4c1726a-317d-4ce7-96b0-8281031bc2e6",
       "object_type": "ipam.prefix",
       "display": "10.0.0.0/8: Global",
-      "url": "http://127.0.0.1:18020/api/ipam/prefixes/76f9d878-d852-46ef-b8fc-919da53d001e/",
-      "natural_slug": "global_10-0-0-0_8_76f9",
+      "url": "http://127.0.0.1:18020/api/ipam/prefixes/c4c1726a-317d-4ce7-96b0-8281031bc2e6/",
+      "natural_slug": "global_10-0-0-0_8_c4c1",
       "prefix": "10.0.0.0/8",
       "type": {
         "value": "network",
@@ -841,25 +841,25 @@
       "date_allocated": null,
       "description": "",
       "status": {
-        "id": "459aed7d-1943-4092-89a3-adf891877620",
+        "id": "8922acc8-9033-4801-a69d-ad265f93388c",
         "object_type": "extras.status",
-        "url": "http://127.0.0.1:18020/api/extras/statuses/459aed7d-1943-4092-89a3-adf891877620/"
+        "url": "http://127.0.0.1:18020/api/extras/statuses/8922acc8-9033-4801-a69d-ad265f93388c/"
       },
       "role": null,
       "parent": null,
       "namespace": {
-        "id": "9165c428-9945-4838-8c35-f8f0383c7c5b",
+        "id": "89d44f97-c8e6-404c-a1d8-a2facac89ed1",
         "object_type": "ipam.namespace",
-        "url": "http://127.0.0.1:18020/api/ipam/namespaces/9165c428-9945-4838-8c35-f8f0383c7c5b/"
+        "url": "http://127.0.0.1:18020/api/ipam/namespaces/89d44f97-c8e6-404c-a1d8-a2facac89ed1/"
       },
       "tenant": null,
       "vlan": null,
       "rir": null,
       "locations": [],
-      "created": "2026-09-30T06:14:22.738130Z",
-      "last_updated": "2026-09-30T06:14:22.738145Z",
+      "created": "2026-09-30T06:47:32.063765Z",
+      "last_updated": "2026-09-30T06:47:32.063783Z",
       "tags": [],
-      "notes_url": "http://127.0.0.1:18020/api/ipam/prefixes/76f9d878-d852-46ef-b8fc-919da53d001e/notes/",
+      "notes_url": "http://127.0.0.1:18020/api/ipam/prefixes/c4c1726a-317d-4ce7-96b0-8281031bc2e6/notes/",
       "custom_fields": {},
       "computed_fields": {},
       "relationships": {},
@@ -898,7 +898,7 @@
     "path": "/api/ipam/ip-addresses/",
     "request": {
       "address": "10.0.1.5/32",
-      "assigned_object_id": "2c669ea0-c7d2-4cf7-ada0-0438972eebc2",
+      "assigned_object_id": "fc1f46d1-f7f8-4a63-9bcd-0969889bdd9b",
       "assigned_object_type": "dcim.interface",
       "status": "active"
     },
@@ -952,7 +952,7 @@
     "path": "/api/ipam/ip-addresses/",
     "request": {
       "address": "10.0.1.6/32",
-      "assigned_object_id": "fa409dd7-7939-48e9-b9ad-41eaf0319174",
+      "assigned_object_id": "ace1ac0e-e53a-4ef8-b0da-431709ee0515",
       "assigned_object_type": "dcim.interface",
       "status": "active"
     },
@@ -980,7 +980,7 @@
     "path": "/api/ipam/ip-addresses/",
     "request": {
       "address": "10.0.1.5/32",
-      "parent": "76f9d878-d852-46ef-b8fc-919da53d001e",
+      "parent": "c4c1726a-317d-4ce7-96b0-8281031bc2e6",
       "status": "Active"
     },
     "status": 201,
@@ -990,18 +990,18 @@
       "Content-Length": "1050",
       "Content-Type": "application/json",
       "Cross-Origin-Opener-Policy": "same-origin",
-      "Location": "http://127.0.0.1:18020/api/ipam/ip-addresses/9a002b1d-8a35-4d26-974c-63a3b88312df/",
+      "Location": "http://127.0.0.1:18020/api/ipam/ip-addresses/da71bff8-1e78-4ea5-a064-f3e96632e634/",
       "Referrer-Policy": "same-origin",
       "Vary": "Accept, Cookie, origin",
       "X-Content-Type-Options": "nosniff",
       "X-Frame-Options": "DENY"
     },
     "body": {
-      "id": "9a002b1d-8a35-4d26-974c-63a3b88312df",
+      "id": "da71bff8-1e78-4ea5-a064-f3e96632e634",
       "object_type": "ipam.ipaddress",
       "display": "10.0.1.5/32",
-      "url": "http://127.0.0.1:18020/api/ipam/ip-addresses/9a002b1d-8a35-4d26-974c-63a3b88312df/",
-      "natural_slug": "global_10-0-1-5_9a00",
+      "url": "http://127.0.0.1:18020/api/ipam/ip-addresses/da71bff8-1e78-4ea5-a064-f3e96632e634/",
+      "natural_slug": "global_10-0-1-5_da71",
       "address": "10.0.1.5/32",
       "host": "10.0.1.5",
       "mask_length": 32,
@@ -1010,22 +1010,22 @@
       "dns_name": "",
       "description": "",
       "status": {
-        "id": "459aed7d-1943-4092-89a3-adf891877620",
+        "id": "8922acc8-9033-4801-a69d-ad265f93388c",
         "object_type": "extras.status",
-        "url": "http://127.0.0.1:18020/api/extras/statuses/459aed7d-1943-4092-89a3-adf891877620/"
+        "url": "http://127.0.0.1:18020/api/extras/statuses/8922acc8-9033-4801-a69d-ad265f93388c/"
       },
       "role": null,
       "parent": {
-        "id": "76f9d878-d852-46ef-b8fc-919da53d001e",
+        "id": "c4c1726a-317d-4ce7-96b0-8281031bc2e6",
         "object_type": "ipam.prefix",
-        "url": "http://127.0.0.1:18020/api/ipam/prefixes/76f9d878-d852-46ef-b8fc-919da53d001e/"
+        "url": "http://127.0.0.1:18020/api/ipam/prefixes/c4c1726a-317d-4ce7-96b0-8281031bc2e6/"
       },
       "tenant": null,
       "nat_inside": null,
-      "created": "2026-09-30T06:14:22.811959Z",
-      "last_updated": "2026-09-30T06:14:22.811968Z",
+      "created": "2026-09-30T06:47:32.176688Z",
+      "last_updated": "2026-09-30T06:47:32.176696Z",
       "tags": [],
-      "notes_url": "http://127.0.0.1:18020/api/ipam/ip-addresses/9a002b1d-8a35-4d26-974c-63a3b88312df/notes/",
+      "notes_url": "http://127.0.0.1:18020/api/ipam/ip-addresses/da71bff8-1e78-4ea5-a064-f3e96632e634/notes/",
       "custom_fields": {},
       "computed_fields": {},
       "relationships": {},
@@ -1040,7 +1040,7 @@
     "path": "/api/ipam/ip-addresses/",
     "request": {
       "address": "10.0.1.6/32",
-      "parent": "76f9d878-d852-46ef-b8fc-919da53d001e",
+      "parent": "c4c1726a-317d-4ce7-96b0-8281031bc2e6",
       "status": "Active"
     },
     "status": 201,
@@ -1050,18 +1050,18 @@
       "Content-Length": "1050",
       "Content-Type": "application/json",
       "Cross-Origin-Opener-Policy": "same-origin",
-      "Location": "http://127.0.0.1:18020/api/ipam/ip-addresses/fcf1dd25-44f1-4023-bb9d-ddc818dbe8bd/",
+      "Location": "http://127.0.0.1:18020/api/ipam/ip-addresses/4da5791d-07bb-4987-90f4-3407fee31c7f/",
       "Referrer-Policy": "same-origin",
       "Vary": "Accept, Cookie, origin",
       "X-Content-Type-Options": "nosniff",
       "X-Frame-Options": "DENY"
     },
     "body": {
-      "id": "fcf1dd25-44f1-4023-bb9d-ddc818dbe8bd",
+      "id": "4da5791d-07bb-4987-90f4-3407fee31c7f",
       "object_type": "ipam.ipaddress",
       "display": "10.0.1.6/32",
-      "url": "http://127.0.0.1:18020/api/ipam/ip-addresses/fcf1dd25-44f1-4023-bb9d-ddc818dbe8bd/",
-      "natural_slug": "global_10-0-1-6_fcf1",
+      "url": "http://127.0.0.1:18020/api/ipam/ip-addresses/4da5791d-07bb-4987-90f4-3407fee31c7f/",
+      "natural_slug": "global_10-0-1-6_4da5",
       "address": "10.0.1.6/32",
       "host": "10.0.1.6",
       "mask_length": 32,
@@ -1070,22 +1070,22 @@
       "dns_name": "",
       "description": "",
       "status": {
-        "id": "459aed7d-1943-4092-89a3-adf891877620",
+        "id": "8922acc8-9033-4801-a69d-ad265f93388c",
         "object_type": "extras.status",
-        "url": "http://127.0.0.1:18020/api/extras/statuses/459aed7d-1943-4092-89a3-adf891877620/"
+        "url": "http://127.0.0.1:18020/api/extras/statuses/8922acc8-9033-4801-a69d-ad265f93388c/"
       },
       "role": null,
       "parent": {
-        "id": "76f9d878-d852-46ef-b8fc-919da53d001e",
+        "id": "c4c1726a-317d-4ce7-96b0-8281031bc2e6",
         "object_type": "ipam.prefix",
-        "url": "http://127.0.0.1:18020/api/ipam/prefixes/76f9d878-d852-46ef-b8fc-919da53d001e/"
+        "url": "http://127.0.0.1:18020/api/ipam/prefixes/c4c1726a-317d-4ce7-96b0-8281031bc2e6/"
       },
       "tenant": null,
       "nat_inside": null,
-      "created": "2026-09-30T06:14:22.852745Z",
-      "last_updated": "2026-09-30T06:14:22.852754Z",
+      "created": "2026-09-30T06:47:32.219594Z",
+      "last_updated": "2026-09-30T06:47:32.219602Z",
       "tags": [],
-      "notes_url": "http://127.0.0.1:18020/api/ipam/ip-addresses/fcf1dd25-44f1-4023-bb9d-ddc818dbe8bd/notes/",
+      "notes_url": "http://127.0.0.1:18020/api/ipam/ip-addresses/4da5791d-07bb-4987-90f4-3407fee31c7f/notes/",
       "custom_fields": {},
       "computed_fields": {},
       "relationships": {},
@@ -1099,8 +1099,8 @@
     "method": "POST",
     "path": "/api/ipam/ip-address-to-interface/",
     "request": {
-      "interface": "2c669ea0-c7d2-4cf7-ada0-0438972eebc2",
-      "ip_address": "9a002b1d-8a35-4d26-974c-63a3b88312df"
+      "interface": "fc1f46d1-f7f8-4a63-9bcd-0969889bdd9b",
+      "ip_address": "da71bff8-1e78-4ea5-a064-f3e96632e634"
     },
     "status": 201,
     "headers": {
@@ -1109,18 +1109,18 @@
       "Content-Length": "816",
       "Content-Type": "application/json",
       "Cross-Origin-Opener-Policy": "same-origin",
-      "Location": "http://127.0.0.1:18020/api/ipam/ip-address-to-interface/af4e1df7-5bb0-43eb-b849-81d696cba842/",
+      "Location": "http://127.0.0.1:18020/api/ipam/ip-address-to-interface/6302a0f5-5876-4750-88e1-671da2ecb4dc/",
       "Referrer-Policy": "same-origin",
       "Vary": "Accept, Cookie, origin",
       "X-Content-Type-Options": "nosniff",
       "X-Frame-Options": "DENY"
     },
     "body": {
-      "id": "af4e1df7-5bb0-43eb-b849-81d696cba842",
+      "id": "6302a0f5-5876-4750-88e1-671da2ecb4dc",
       "object_type": "ipam.ipaddresstointerface",
       "display": "10.0.1.5/32 leaf-01 Management1",
-      "url": "http://127.0.0.1:18020/api/ipam/ip-address-to-interface/af4e1df7-5bb0-43eb-b849-81d696cba842/",
-      "natural_slug": "global_10-0-1-5_leaf-01__dc1__management1_af4e",
+      "url": "http://127.0.0.1:18020/api/ipam/ip-address-to-interface/6302a0f5-5876-4750-88e1-671da2ecb4dc/",
+      "natural_slug": "global_10-0-1-5_leaf-01__dc1__management1_6302",
       "is_source": false,
       "is_destination": false,
       "is_default": false,
@@ -1129,14 +1129,14 @@
       "is_secondary": false,
       "is_standby": false,
       "ip_address": {
-        "id": "9a002b1d-8a35-4d26-974c-63a3b88312df",
+        "id": "da71bff8-1e78-4ea5-a064-f3e96632e634",
         "object_type": "ipam.ipaddress",
-        "url": "http://127.0.0.1:18020/api/ipam/ip-addresses/9a002b1d-8a35-4d26-974c-63a3b88312df/"
+        "url": "http://127.0.0.1:18020/api/ipam/ip-addresses/da71bff8-1e78-4ea5-a064-f3e96632e634/"
       },
       "interface": {
-        "id": "2c669ea0-c7d2-4cf7-ada0-0438972eebc2",
+        "id": "fc1f46d1-f7f8-4a63-9bcd-0969889bdd9b",
         "object_type": "dcim.interface",
-        "url": "http://127.0.0.1:18020/api/dcim/interfaces/2c669ea0-c7d2-4cf7-ada0-0438972eebc2/"
+        "url": "http://127.0.0.1:18020/api/dcim/interfaces/fc1f46d1-f7f8-4a63-9bcd-0969889bdd9b/"
       },
       "vm_interface": null
     }
@@ -1146,8 +1146,8 @@
     "method": "POST",
     "path": "/api/ipam/ip-address-to-interface/",
     "request": {
-      "interface": "fa409dd7-7939-48e9-b9ad-41eaf0319174",
-      "ip_address": "fcf1dd25-44f1-4023-bb9d-ddc818dbe8bd"
+      "interface": "ace1ac0e-e53a-4ef8-b0da-431709ee0515",
+      "ip_address": "4da5791d-07bb-4987-90f4-3407fee31c7f"
     },
     "status": 201,
     "headers": {
@@ -1156,18 +1156,18 @@
       "Content-Length": "812",
       "Content-Type": "application/json",
       "Cross-Origin-Opener-Policy": "same-origin",
-      "Location": "http://127.0.0.1:18020/api/ipam/ip-address-to-interface/6b23403b-8281-4712-8724-5f426729669b/",
+      "Location": "http://127.0.0.1:18020/api/ipam/ip-address-to-interface/4b6c01b9-c787-457c-9dc7-f94f5381d504/",
       "Referrer-Policy": "same-origin",
       "Vary": "Accept, Cookie, origin",
       "X-Content-Type-Options": "nosniff",
       "X-Frame-Options": "DENY"
     },
     "body": {
-      "id": "6b23403b-8281-4712-8724-5f426729669b",
+      "id": "4b6c01b9-c787-457c-9dc7-f94f5381d504",
       "object_type": "ipam.ipaddresstointerface",
       "display": "10.0.1.6/32 leaf-01 Loopback0",
-      "url": "http://127.0.0.1:18020/api/ipam/ip-address-to-interface/6b23403b-8281-4712-8724-5f426729669b/",
-      "natural_slug": "global_10-0-1-6_leaf-01__dc1__loopback0_6b23",
+      "url": "http://127.0.0.1:18020/api/ipam/ip-address-to-interface/4b6c01b9-c787-457c-9dc7-f94f5381d504/",
+      "natural_slug": "global_10-0-1-6_leaf-01__dc1__loopback0_4b6c",
       "is_source": false,
       "is_destination": false,
       "is_default": false,
@@ -1176,14 +1176,14 @@
       "is_secondary": false,
       "is_standby": false,
       "ip_address": {
-        "id": "fcf1dd25-44f1-4023-bb9d-ddc818dbe8bd",
+        "id": "4da5791d-07bb-4987-90f4-3407fee31c7f",
         "object_type": "ipam.ipaddress",
-        "url": "http://127.0.0.1:18020/api/ipam/ip-addresses/fcf1dd25-44f1-4023-bb9d-ddc818dbe8bd/"
+        "url": "http://127.0.0.1:18020/api/ipam/ip-addresses/4da5791d-07bb-4987-90f4-3407fee31c7f/"
       },
       "interface": {
-        "id": "fa409dd7-7939-48e9-b9ad-41eaf0319174",
+        "id": "ace1ac0e-e53a-4ef8-b0da-431709ee0515",
         "object_type": "dcim.interface",
-        "url": "http://127.0.0.1:18020/api/dcim/interfaces/fa409dd7-7939-48e9-b9ad-41eaf0319174/"
+        "url": "http://127.0.0.1:18020/api/dcim/interfaces/ace1ac0e-e53a-4ef8-b0da-431709ee0515/"
       },
       "vm_interface": null
     }
@@ -1191,9 +1191,9 @@
   {
     "step": "primary",
     "method": "PATCH",
-    "path": "/api/dcim/devices/293cbb6a-28d0-4db7-93e6-60ab0b47f342/",
+    "path": "/api/dcim/devices/3af8fb9c-23ea-4a16-9781-fdf171500a8c/",
     "request": {
-      "primary_ip4": "9a002b1d-8a35-4d26-974c-63a3b88312df"
+      "primary_ip4": "da71bff8-1e78-4ea5-a064-f3e96632e634"
     },
     "status": 200,
     "headers": {
@@ -1208,11 +1208,11 @@
       "X-Frame-Options": "DENY"
     },
     "body": {
-      "id": "293cbb6a-28d0-4db7-93e6-60ab0b47f342",
+      "id": "3af8fb9c-23ea-4a16-9781-fdf171500a8c",
       "object_type": "dcim.device",
       "display": "leaf-01",
-      "url": "http://127.0.0.1:18020/api/dcim/devices/293cbb6a-28d0-4db7-93e6-60ab0b47f342/",
-      "natural_slug": "leaf-01__dc1_293c",
+      "url": "http://127.0.0.1:18020/api/dcim/devices/3af8fb9c-23ea-4a16-9781-fdf171500a8c/",
+      "natural_slug": "leaf-01__dc1_3af8",
       "face": null,
       "local_config_context_data": null,
       "local_config_context_data_owner_object_id": null,
@@ -1227,36 +1227,36 @@
       "local_config_context_schema": null,
       "local_config_context_data_owner_content_type": null,
       "device_type": {
-        "id": "1bdf6aa4-d989-4223-b3bb-b4e3812d199a",
+        "id": "c3880a7a-85bf-43e6-bee8-6a1b8969c187",
         "object_type": "dcim.devicetype",
-        "url": "http://127.0.0.1:18020/api/dcim/device-types/1bdf6aa4-d989-4223-b3bb-b4e3812d199a/"
+        "url": "http://127.0.0.1:18020/api/dcim/device-types/c3880a7a-85bf-43e6-bee8-6a1b8969c187/"
       },
       "status": {
-        "id": "459aed7d-1943-4092-89a3-adf891877620",
+        "id": "8922acc8-9033-4801-a69d-ad265f93388c",
         "object_type": "extras.status",
-        "url": "http://127.0.0.1:18020/api/extras/statuses/459aed7d-1943-4092-89a3-adf891877620/"
+        "url": "http://127.0.0.1:18020/api/extras/statuses/8922acc8-9033-4801-a69d-ad265f93388c/"
       },
       "role": {
-        "id": "8d82ac8f-b6c8-46fe-8c5e-fd7c470dcb27",
+        "id": "e3a9b10d-5bf3-4596-964e-2eb1cce31f00",
         "object_type": "extras.role",
-        "url": "http://127.0.0.1:18020/api/extras/roles/8d82ac8f-b6c8-46fe-8c5e-fd7c470dcb27/"
+        "url": "http://127.0.0.1:18020/api/extras/roles/e3a9b10d-5bf3-4596-964e-2eb1cce31f00/"
       },
       "tenant": null,
       "platform": {
-        "id": "107c6539-4de2-490e-b1a9-1e8bd3961366",
+        "id": "c024ec0d-e5a6-4d0d-9154-9ec9d893b6eb",
         "object_type": "dcim.platform",
-        "url": "http://127.0.0.1:18020/api/dcim/platforms/107c6539-4de2-490e-b1a9-1e8bd3961366/"
+        "url": "http://127.0.0.1:18020/api/dcim/platforms/c024ec0d-e5a6-4d0d-9154-9ec9d893b6eb/"
       },
       "location": {
-        "id": "23228f3f-4202-4d0e-9ae9-f3234fad8466",
+        "id": "e8f2e9ba-b924-40a8-919d-b335bc0d2a74",
         "object_type": "dcim.location",
-        "url": "http://127.0.0.1:18020/api/dcim/locations/23228f3f-4202-4d0e-9ae9-f3234fad8466/"
+        "url": "http://127.0.0.1:18020/api/dcim/locations/e8f2e9ba-b924-40a8-919d-b335bc0d2a74/"
       },
       "rack": null,
       "primary_ip4": {
-        "id": "9a002b1d-8a35-4d26-974c-63a3b88312df",
+        "id": "da71bff8-1e78-4ea5-a064-f3e96632e634",
         "object_type": "ipam.ipaddress",
-        "url": "http://127.0.0.1:18020/api/ipam/ip-addresses/9a002b1d-8a35-4d26-974c-63a3b88312df/"
+        "url": "http://127.0.0.1:18020/api/ipam/ip-addresses/da71bff8-1e78-4ea5-a064-f3e96632e634/"
       },
       "primary_ip6": null,
       "cluster": null,
@@ -1266,9 +1266,9 @@
       "secrets_group": null,
       "controller_managed_device_group": null,
       "software_image_files": [],
-      "created": "2026-09-30T06:14:22.508219Z",
-      "last_updated": "2026-09-30T06:14:23.115121Z",
-      "notes_url": "http://127.0.0.1:18020/api/dcim/devices/293cbb6a-28d0-4db7-93e6-60ab0b47f342/notes/",
+      "created": "2026-09-30T06:47:31.807869Z",
+      "last_updated": "2026-09-30T06:47:32.493073Z",
+      "notes_url": "http://127.0.0.1:18020/api/dcim/devices/3af8fb9c-23ea-4a16-9781-fdf171500a8c/notes/",
       "custom_fields": {
         "os_version": "4.31.2F"
       },
@@ -1276,9 +1276,9 @@
       "relationships": {},
       "tags": [
         {
-          "id": "4b380231-50a1-48f2-8e9f-0ada8f1dd1fa",
+          "id": "edcf97d9-7279-471e-b5b6-6e6152e6488b",
           "object_type": "extras.tag",
-          "url": "http://127.0.0.1:18020/api/extras/tags/4b380231-50a1-48f2-8e9f-0ada8f1dd1fa/"
+          "url": "http://127.0.0.1:18020/api/extras/tags/edcf97d9-7279-471e-b5b6-6e6152e6488b/"
         }
       ],
       "parent_bay": null,

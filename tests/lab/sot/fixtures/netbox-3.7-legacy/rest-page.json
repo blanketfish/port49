@@ -9,13 +9,13 @@
     "Content-Length": "2052",
     "Content-Type": "application/json",
     "Cross-Origin-Opener-Policy": "same-origin",
-    "Date": "Wed, 30 Sep 2026 06:11:39 GMT",
+    "Date": "Wed, 30 Sep 2026 06:42:12 GMT",
     "Referrer-Policy": "same-origin",
     "Server": "Unit/1.31.1",
     "Vary": "HX-Request, Cookie, origin",
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "SAMEORIGIN",
-    "X-Request-Id": "ded75682-1532-49e5-9a40-cb0f31ad8c8c"
+    "X-Request-Id": "dca851e2-37fc-4846-b211-3c011a902ef7"
   },
   "body": {
     "count": 1,
@@ -122,8 +122,8 @@
         "custom_fields": {
           "os_version": "4.31.2F"
         },
-        "created": "2026-09-30T06:11:38.973942Z",
-        "last_updated": "2026-09-30T06:11:39.239817Z",
+        "created": "2026-09-30T06:42:11.953058Z",
+        "last_updated": "2026-09-30T06:42:12.221113Z",
         "console_port_count": 0,
         "console_server_port_count": 0,
         "power_port_count": 0,
