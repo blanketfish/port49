@@ -388,31 +388,36 @@ func (s *Syncer) say(trigger string, res Result) {
 	}
 }
 
+// ErrNoBundle is Diff's error before the first bundle is published.
+var ErrNoBundle = errors.New("no bundle is published yet")
+
 // Diff is what changed from bundle from to the bundle published, both judged
 // under the policy the service holds now (spec §12, `inventory diff
-// --service`).
-func (s *Syncer) Diff(from int64) (bundle.Report, error) {
+// --service`), and that bundle's sequence: one snapshot, so a sync publishing
+// meanwhile cannot put a later sequence beside an earlier diff. A bundle no
+// longer kept is ErrNotKept.
+func (s *Syncer) Diff(from int64) (bundle.Report, int64, error) {
 	cur := s.current.Load()
 	if cur == nil {
-		return bundle.Report{}, errors.New("no bundle is published yet")
+		return bundle.Report{}, 0, ErrNoBundle
 	}
 	old, err := s.State.At(from, s.keys())
 	if err != nil {
-		return bundle.Report{}, err
+		return bundle.Report{}, 0, err
 	}
 	raw, err := config.ReadRegular(s.PolicyFile, maxPolicy)
 	if err != nil {
-		return bundle.Report{}, err
+		return bundle.Report{}, 0, err
 	}
 	o, err := bundle.Parse(raw, old.Inv, policy.Env{})
 	if err != nil {
-		return bundle.Report{}, err
+		return bundle.Report{}, 0, err
 	}
 	n, err := bundle.Parse(raw, cur.Inv, policy.Env{})
 	if err != nil {
-		return bundle.Report{}, err
+		return bundle.Report{}, 0, err
 	}
-	return bundle.Diff(o, n, s.Now()), nil
+	return bundle.Diff(o, n, s.Now()), cur.Doc.Sequence, nil
 }
 
 // DeviceView is one device as GET /v1/devices/{address} shows it: a

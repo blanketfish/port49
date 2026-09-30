@@ -4,11 +4,13 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"net/netip"
+	"path"
 	"slices"
 	"strconv"
 	"sync"
@@ -65,7 +67,26 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("/", a.gate(false, func(w http.ResponseWriter, _ *http.Request, _ string) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not_found"})
 	}))
-	return mux
+	return a.canonical(mux)
+}
+
+// canonical refuses, 400, a path that is not already clean — `//`, a `.` or
+// `..` segment, encoded or not, a trailing slash — before the mux sees it,
+// so the mux never answers one with an ungated redirect. It is counted and
+// said once, with a fixed label: the path is the caller's text.
+func (a *API) canonical(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if p := r.URL.Path; p == "" || p[0] != '/' || path.Clean(p) != p {
+			a.Metrics.APIRefused.WithLabelValues("bad_path").Inc()
+			if a.tell("bad_path") {
+				fmt.Fprintln(a.Log, "port49-inventory: api: refused a path that is not canonical (bad_path); "+
+					"a client asks for a clean path, with no empty or dot segment")
+			}
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad_path"})
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 type handler func(w http.ResponseWriter, r *http.Request, caller string)
@@ -100,21 +121,26 @@ func (a *API) gate(sync bool, h handler) http.HandlerFunc {
 // (pre-flight minor 3). caller is CallerOf's name, printable by construction.
 func (a *API) refuse(w http.ResponseWriter, reason, caller, right string) {
 	a.Metrics.APIRefused.WithLabelValues(reason).Inc()
-	a.mu.Lock()
-	if a.told == nil {
-		a.told = map[string]bool{}
-	}
-	key := reason + " " + caller
-	say := !a.told[key] && len(a.told) < maxTold
-	if say {
-		a.told[key] = true
-	}
-	a.mu.Unlock()
-	if say {
+	if a.tell(reason + " " + caller) {
 		fmt.Fprintf(a.Log, "port49-inventory: api: refused %s (%s) %s; readers and syncers in port49-inventory.yaml "+
 			"decide who may call\n", caller, right, reason)
 	}
 	writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
+}
+
+// tell reports whether key is new, remembering it, while fewer than maxTold
+// are remembered: each refusal is said once, and memory stays bounded.
+func (a *API) tell(key string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.told == nil {
+		a.told = map[string]bool{}
+	}
+	if a.told[key] || len(a.told) >= maxTold {
+		return false
+	}
+	a.told[key] = true
+	return true
 }
 
 func (a *API) bundle(w http.ResponseWriter, r *http.Request, _ string) {
@@ -149,13 +175,22 @@ func (a *API) diff(w http.ResponseWriter, r *http.Request, _ string) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "from_not_a_sequence"})
 		return
 	}
-	rep, err := a.Syncer.Diff(from)
-	if err != nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not_kept", "detail": oneLine(err)})
+	rep, to, err := a.Syncer.Diff(from)
+	switch {
+	case errors.Is(err, ErrNoBundle):
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "no_bundle"})
+		return
+	case errors.Is(err, ErrNotKept):
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not_kept"})
+		return
+	case err != nil:
+		// The service's own text — paths, a policy error — is for its
+		// operator, not the caller.
+		fmt.Fprintf(a.Log, "port49-inventory: api: diff from %d: %s\n", from, oneLine(err))
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal"})
 		return
 	}
-	writeJSON(w, http.StatusOK, DiffResult{From: from, To: a.Syncer.Current().Doc.Sequence, Summary: rep.Summary(),
-		Changes: rep.Changes})
+	writeJSON(w, http.StatusOK, DiffResult{From: from, To: to, Summary: rep.Summary(), Changes: rep.Changes})
 }
 
 func (a *API) device(w http.ResponseWriter, r *http.Request, _ string) {
@@ -185,13 +220,18 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 
 // Server serves h over mutual TLS on addr (spec §10): a client certificate
 // is required on every path and verified against anchor, the one trust
-// anchor. HTTP/1.1 only (a non-nil TLSNextProto). WriteTimeout covers a POST
-// /v1/sync waiting for a slow source.
-func Server(addr string, cert tls.Certificate, anchor *x509.CertPool, h http.Handler, errLog *log.Logger) *http.Server {
+// anchor. A nil anchor is refused: crypto/tls would verify a client against
+// the host's system roots. HTTP/1.1 only (a non-nil TLSNextProto).
+// WriteTimeout covers a POST /v1/sync waiting for a slow source.
+func Server(addr string, cert tls.Certificate, anchor *x509.CertPool, h http.Handler, errLog *log.Logger) (*http.Server, error) {
+	if anchor == nil {
+		return nil, errors.New("port49-inventory: api: no client trust anchor; client_ca_file names the one CA " +
+			"that issues callers' certificates")
+	}
 	return &http.Server{Addr: addr, Handler: h, ErrorLog: errLog,
 		ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 6 * time.Minute,
 		IdleTimeout: 2 * time.Minute, MaxHeaderBytes: 16 << 10,
 		TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{cert}, ClientCAs: anchor,
 			ClientAuth: tls.RequireAndVerifyClientCert},
-		TLSNextProto: map[string]func(*http.Server, *tls.Conn, http.Handler){}}
+		TLSNextProto: map[string]func(*http.Server, *tls.Conn, http.Handler){}}, nil
 }

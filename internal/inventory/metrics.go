@@ -57,7 +57,7 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		MirrorBehind: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_inventory_mirror_behind",
 			Help: "1 while the mirror's copy differs from the bundle published."}),
 		APIRefused: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_inventory_api_refused_total",
-			Help: "API requests refused, by reason (untrusted, forbidden)."}, []string{"reason"}),
+			Help: "API requests refused, by reason (untrusted, forbidden, bad_path)."}, []string{"reason"}),
 	}
 	reg.MustRegister(m.Syncs, m.SyncRefused, m.SyncFailing, m.SourceErrors, m.LeftOut, m.Published, m.PublishedAt,
 		m.Devices, m.LastGood, m.MirrorFailures, m.MirrorBehind, m.APIRefused)

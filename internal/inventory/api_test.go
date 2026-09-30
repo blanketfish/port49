@@ -3,9 +3,11 @@ package inventory
 import (
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -59,9 +61,13 @@ func newAPIRigWith(t *testing.T, readers, syncers []string) *apiRig {
 		NotAfter: time.Now().Add(time.Hour)})
 	api := &API{Syncer: rig.s, Readers: readers, Syncers: syncers, Now: time.Now, Log: rig.out,
 		Metrics: rig.s.Metrics}
-	s := Server("127.0.0.1:0", srvCert, ca.Pool(), api.Handler(), log.New(io.Discard, "", 0))
+	s, err := Server("127.0.0.1:0", srvCert, ca.Pool(), api.Handler(), log.New(io.Discard, "", 0))
+	if err != nil {
+		t.Fatal(err)
+	}
 	rig.srv = httptest.NewUnstartedServer(s.Handler)
 	rig.srv.TLS = s.TLSConfig
+	rig.srv.Config.ErrorLog = s.ErrorLog
 	rig.srv.StartTLS()
 	t.Cleanup(rig.srv.Close)
 	rig.reader = rig.client(t, testpki.Leaf{CommonName: "d", URIs: []*url.URL{uri("spiffe://port49.test/port49d")}})
@@ -215,6 +221,64 @@ func TestAnIdentityMatchesExactly(t *testing.T) {
 	}
 }
 
+// A workload cannot take a person's rights: a URI SAN spelled as a person's
+// identity names no one, for a sync or a read.
+func TestAURISANCannotImpersonateAPerson(t *testing.T) {
+	rig := newAPIRigWith(t, []string{"user:alice@example.com"}, []string{"user:alice@example.com"})
+	forged := rig.client(t, testpki.Leaf{CommonName: "alice", URIs: []*url.URL{uri("user:alice@example.com")}})
+	for _, m := range []struct{ method, path string }{{"POST", "/v1/sync"}, {"GET", "/v1/bundle/version"}} {
+		if resp, body := rig.do(t, forged, m.method, m.path, nil); resp.StatusCode != 403 {
+			t.Fatalf("%s %s: %d %s", m.method, m.path, resp.StatusCode, body)
+		}
+	}
+	if rig.s.Current() != nil {
+		t.Fatal("the forged caller ran a sync")
+	}
+}
+
+// One URI SAN and one email SAN name the workload only: the email grants
+// nothing, so the person's sync right does not come with it.
+func TestAURISANAndAnEmailSANNameTheWorkloadOnly(t *testing.T) {
+	rig := newAPIRigWith(t, []string{"spiffe://port49.test/port49d"}, []string{"user:alice@example.com"})
+	both := rig.client(t, testpki.Leaf{CommonName: "d", URIs: []*url.URL{uri("spiffe://port49.test/port49d")},
+		Emails: []string{"alice@example.com"}})
+	if resp, body := rig.do(t, both, "POST", "/v1/sync", nil); resp.StatusCode != 403 {
+		t.Fatalf("sync: %d %s", resp.StatusCode, body)
+	}
+	if resp, body := rig.do(t, both, "GET", "/v1/bundle/version", nil); resp.StatusCode != 503 {
+		t.Fatalf("read: %d %s", resp.StatusCode, body)
+	}
+}
+
+// A path that is not canonical is refused 400 before anyone is named, never
+// redirected, counted, and said with a fixed label, never the path.
+func TestANonCanonicalPathIsRefused(t *testing.T) {
+	rig := newAPIRig(t)
+	rig.sync(t)
+	rig.out.Reset()
+	paths := []string{"/v1//bundle", "/v1/x/../bundle", "/v1/./bundle", "/v1/%2e%2e/v1/bundle", "/v1/bundle/",
+		"/v1/%2E/sync"}
+	for _, p := range paths {
+		for _, c := range []*http.Client{rig.reader, rig.nobody} {
+			c.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+			if resp, body := rig.do(t, c, "GET", p, nil); resp.StatusCode != 400 || !strings.Contains(string(body), `"bad_path"`) {
+				t.Fatalf("%s: %d %s", p, resp.StatusCode, body)
+			}
+		}
+	}
+	if resp, _ := rig.do(t, rig.syncer, "POST", "/v1/./sync", nil); resp.StatusCode != 400 || rig.s.Current().Doc.Sequence != 1 {
+		t.Fatalf("POST /v1/./sync: %d", resp.StatusCode)
+	}
+	if n := testutil.ToFloat64(rig.s.Metrics.APIRefused.WithLabelValues("bad_path")); n != float64(2*len(paths)+1) {
+		t.Fatalf("counted %v", n)
+	}
+	out := rig.out.String()
+	if strings.Count(out, "port49-inventory: api: refused a path that is not canonical") != 1 || strings.Contains(out, "..") ||
+		strings.Contains(out, "//") {
+		t.Fatalf("%s", out)
+	}
+}
+
 func TestACallerInNeitherListIsRefusedAndSaidOnce(t *testing.T) {
 	rig := newAPIRig(t)
 	for i := 0; i < 3; i++ {
@@ -315,6 +379,104 @@ func TestADiffNamesWhatChangedSinceASequence(t *testing.T) {
 	}
 	if resp, _ := rig.do(t, rig.reader, "GET", "/v1/bundle/diff?from=99", nil); resp.StatusCode != 404 {
 		t.Fatalf("from=99: %d", resp.StatusCode)
+	}
+}
+
+// A diff that fails for any reason but a bundle not kept is a 500 with a
+// fixed body; what failed is said in the log, not sent to the reader.
+func TestADiffThatFailsIsNotNotKept(t *testing.T) {
+	rig := newAPIRig(t)
+	if resp, body := rig.do(t, rig.reader, "GET", "/v1/bundle/diff?from=1", nil); resp.StatusCode != 503 ||
+		!strings.Contains(string(body), `"no_bundle"`) {
+		t.Fatalf("before a bundle: %d %s", resp.StatusCode, body)
+	}
+	rig.sync(t)
+	if err := os.Remove(rig.s.PolicyFile); err != nil {
+		t.Fatal(err)
+	}
+	resp, body := rig.do(t, rig.reader, "GET", "/v1/bundle/diff?from=1", nil)
+	if resp.StatusCode != 500 || strings.TrimSpace(string(body)) != `{"error":"internal"}` {
+		t.Fatalf("%d %s", resp.StatusCode, body)
+	}
+	if !strings.Contains(rig.out.String(), "port49-inventory: api: diff from 1:") ||
+		!strings.Contains(rig.out.String(), "policy.yaml") {
+		t.Fatalf("the failure is not said: %s", rig.out)
+	}
+}
+
+// The diff and its To come from one bundle published.
+func TestADiffNamesTheBundleItWasTakenAgainst(t *testing.T) {
+	rig := newAPIRig(t)
+	rig.sync(t)
+	rig.src.inv = devices(4)
+	rig.sync(t)
+	rep, to, err := rig.s.Diff(1)
+	if err != nil || to != 2 || !strings.Contains(rep.Summary(), "+1 device(s)") {
+		t.Fatalf("%d %v %s", to, err, rep.Summary())
+	}
+	if _, _, err := rig.s.Diff(99); !errors.Is(err, ErrNotKept) {
+		t.Fatalf("from 99: %v", err)
+	}
+}
+
+// Server refuses a nil trust anchor: crypto/tls would verify a client
+// against the system roots.
+func TestServerRefusesANilAnchor(t *testing.T) {
+	ca, err := testpki.NewCA("c", time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, _ := ca.Issue(testpki.Leaf{CommonName: "inv", IPs: testpki.Loopback(), NotBefore: time.Now().Add(-time.Hour),
+		NotAfter: time.Now().Add(time.Hour)})
+	if s, err := Server("127.0.0.1:0", cert, nil, http.NotFoundHandler(), log.New(io.Discard, "", 0)); err == nil || s != nil {
+		t.Fatalf("served with a nil anchor: %v", err)
+	}
+}
+
+// Server itself, on a real listener: HTTP/1.1 even to a client asking for
+// h2, headers bounded, and the timeouts set.
+func TestServerServesHTTP1WithBoundedHeaders(t *testing.T) {
+	rig := newAPIRig(t)
+	srvCert, _ := rig.ca.Issue(testpki.Leaf{CommonName: "inv", IPs: testpki.Loopback(),
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour)})
+	api := &API{Syncer: rig.s, Readers: []string{"spiffe://port49.test/port49d"}, Now: time.Now, Log: rig.out,
+		Metrics: rig.s.Metrics}
+	s, err := Server("127.0.0.1:0", srvCert, rig.ca.Pool(), api.Handler(), log.New(io.Discard, "", 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.ReadHeaderTimeout != 10*time.Second || s.ReadTimeout != 30*time.Second || s.WriteTimeout != 6*time.Minute ||
+		s.IdleTimeout != 2*time.Minute || s.MaxHeaderBytes != 16<<10 {
+		t.Fatalf("timeouts or header bound: %+v", s)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go s.ServeTLS(ln, "", "")
+	t.Cleanup(func() { s.Close() })
+	base := "https://" + ln.Addr().String()
+	tr := rig.reader.Transport.(*http.Transport).Clone()
+	tr.ForceAttemptHTTP2 = true
+	tr.TLSClientConfig.NextProtos = []string{"h2", "http/1.1"}
+	c := &http.Client{Timeout: 10 * time.Second, Transport: tr}
+	resp, err := c.Get(base + "/v1/bundle/version")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.ProtoMajor != 1 || resp.TLS.NegotiatedProtocol == "h2" || resp.StatusCode != 503 {
+		t.Fatalf("%s %q %d", resp.Proto, resp.TLS.NegotiatedProtocol, resp.StatusCode)
+	}
+	req, _ := http.NewRequest("GET", base+"/v1/bundle/version", nil)
+	req.Header.Set("X-Big", strings.Repeat("a", 32<<10))
+	resp, err = c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusRequestHeaderFieldsTooLarge {
+		t.Fatalf("a 32 KiB header: %d", resp.StatusCode)
 	}
 }
 

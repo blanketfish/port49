@@ -89,7 +89,7 @@ type fileConfig struct {
 // identityShape is a caller as CallerOf names one: `user:` and an email, or a
 // URI with a scheme; printable ASCII, no space, no control character, so a
 // matched identity is safe to print.
-var identityShape = regexp.MustCompile(`^(user:[!-?A-~]+@[!-?A-~]+|[a-z][a-z0-9+.-]*://[!-~]+)$`)
+var identityShape = regexp.MustCompile(`^(user:[!-?A-~]+@[!-?A-~]+|` + uriIdentity + `)$`)
 
 // Load reads port49-inventory.yaml as port49d reads its own: a regular file,
 // bounded, strictly decoded, a decode error printed as its line and a
