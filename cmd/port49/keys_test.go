@@ -1,0 +1,171 @@
+package main
+
+import (
+	"bytes"
+	"encoding/base64"
+	"encoding/hex"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/rhwendt/port49/internal/decision"
+)
+
+const keysPolicy = `
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: r, privilege: readonly, permit: [show **]}]
+subjects: [{name: s, identity: ["user:alice@example.com"], username: alice, token_ttl: 60s}]
+grants: [{subject: s, scope: all_devices, roles: [r]}]
+key_groups: [{match: {cidr: 10.0.0.0/8}, key_ref: prod_key}]
+`
+
+const keysInventory = `devices:
+  - {name: leaf-01, platform: arista_eos, addresses: [10.20.0.7]}
+  - {name: leaf-19, platform: arista_eos, addresses: [10.20.4.9]}
+`
+
+const keysConfig = `keys:
+  prod_key:
+    current: {version: 3, secret_env: NEVER_READ_V3}
+    accept:  [{version: 2, secret_env: NEVER_READ_V2, retire_after: 2026-10-01}]
+`
+
+func keysFiles(t *testing.T) (policyPath, inventoryPath, configPath, logPath string) {
+	t.Helper()
+	dir := t.TempDir()
+	write := func(name, body string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	var log bytes.Buffer
+	sink := decision.NewJSONLines(&log)
+	now := time.Now()
+	sink.Emit(decision.Record{TS: now.Add(-time.Minute), Event: decision.EventRedeem,
+		Device: &decision.Device{Name: "leaf-01", Platform: "arista_eos", KeyRef: "prod_key", KeyVersion: 3}})
+	sink.Emit(decision.Record{TS: now.Add(-2 * time.Minute), Event: decision.EventRedeem,
+		Device: &decision.Device{Name: "leaf-19", Platform: "arista_eos", KeyRef: "prod_key", KeyVersion: 2}})
+	return write("policy.yaml", keysPolicy), write("inventory.yaml", keysInventory),
+		write("port49d.yaml", keysConfig), write("decisions.jsonl", log.String())
+}
+
+func TestKeysStatusNamesTheDeviceOnTheOldVersion(t *testing.T) {
+	pol, inv, cfg, log := keysFiles(t)
+	var out, errOut bytes.Buffer
+	code := run([]string{"keys", "status", "--policy", pol, "--inventory", inv, "--config", cfg, log}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "rotation not finished: leaf-19") {
+		t.Fatalf("%s", out.String())
+	}
+}
+
+func TestKeysShowSaysWhichKeyAndWhy(t *testing.T) {
+	pol, inv, cfg, _ := keysFiles(t)
+	var out, errOut bytes.Buffer
+	code := run([]string{"keys", "show", "--policy", pol, "--inventory", inv, "--config", cfg, "leaf-19"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errOut.String())
+	}
+	for _, want := range []string{"leaf-19: key_ref prod_key, by the cidr tier (cidr 10.0.0.0/8 → prod_key)",
+		"provision version 3", "also accepted: version 2, retire_after 2026-10-01", "the secret is not shown"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("missing %q in %s", want, out.String())
+		}
+	}
+	if code := run([]string{"keys", "show", "--policy", pol, "--inventory", inv, "nobody"}, &out, &errOut); code != 1 {
+		t.Fatalf("an unknown device exits %d", code)
+	}
+}
+
+// secretForms are the ways a secret could leak into output: as written, in
+// either case, quoted, escaped, hex and base64.
+func secretForms(secret string) []string {
+	forms := []string{secret, strings.ToLower(secret), strings.ToUpper(secret), fmt.Sprintf("%q", secret),
+		strconv.QuoteToASCII(secret), hex.EncodeToString([]byte(secret)), strings.ToUpper(hex.EncodeToString([]byte(secret))),
+		base64.StdEncoding.EncodeToString([]byte(secret)), base64.RawStdEncoding.EncodeToString([]byte(secret)),
+		base64.URLEncoding.EncodeToString([]byte(secret)), base64.RawURLEncoding.EncodeToString([]byte(secret))}
+	// A truncated echo is a leak too: a YAML type error prints a value's
+	// first seven characters.
+	for i := 0; i+6 <= len(secret); i++ {
+		forms = append(forms, secret[i:i+6])
+	}
+	return forms
+}
+
+// Spec §12: `keys status` and `keys show` name a key by key_ref and version
+// and never render its secret, in any mode or error path.
+func TestKeysNeverPrintASecret(t *testing.T) {
+	const v3, v2 = "Sx9-qT4v!Lm2@pR7zK0w#Yh5", "Qa8$ZmN3^tBv6&cXe1*Wr4Ju"
+	t.Setenv("NEVER_READ_V3", v3)
+	t.Setenv("NEVER_READ_V2", v2)
+	pol, inv, cfg, log := keysFiles(t)
+	dir := t.TempDir()
+	// An operator who pastes the secret where port49d.yaml names only its
+	// environment variable: the decode error must not echo it.
+	inline := filepath.Join(dir, "inline.yaml")
+	if err := os.WriteFile(inline, []byte("keys:\n  prod_key:\n    current: "+v3+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	misplaced := filepath.Join(dir, "misplaced.yaml")
+	if err := os.WriteFile(misplaced, []byte("keys:\n  prod_key:\n    current: {version: "+v3+", secret_env: X}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cases := [][]string{
+		{"keys", "status", "--policy", pol, "--inventory", inv, "--config", cfg, log},
+		{"keys", "status", "--policy", pol, "--inventory", inv, "--config", cfg, "--since", "90s", log},
+		{"keys", "show", "--policy", pol, "--inventory", inv, "--config", cfg, "leaf-19"},
+		{"keys", "show", "--policy", pol, "--inventory", inv, "--config", cfg, "nobody"},
+		{"keys", "show", "--policy", pol, "--inventory", inv, "--config", inline, "leaf-19"},
+		{"keys", "show", "--policy", pol, "--inventory", inv, "--config", misplaced, "leaf-19"},
+		{"keys", "status", "--policy", pol, "--inventory", inv, "--config", inline, log},
+		{"keys", "status", "--policy", pol, "--inventory", inv, "--config", misplaced, log},
+		{"keys", "show", "--bogus"},
+	}
+	for _, args := range cases {
+		var out, errOut bytes.Buffer
+		run(args, &out, &errOut)
+		for _, secret := range []string{v3, v2} {
+			for _, form := range secretForms(secret) {
+				if strings.Contains(out.String(), form) || strings.Contains(errOut.String(), form) {
+					t.Errorf("%v printed the secret as %q:\nstdout: %s\nstderr: %s", args[1:3], form, out.String(), errOut.String())
+				}
+			}
+		}
+	}
+}
+
+// Two groups tying on a device are named by what they match, not only by
+// key_ref: two attribute groups can share one.
+func TestKeysShowNamesTheGroupsOfATie(t *testing.T) {
+	_, _, cfg, _ := keysFiles(t)
+	dir := t.TempDir()
+	pol := filepath.Join(dir, "policy.yaml")
+	inv := filepath.Join(dir, "inventory.yaml")
+	body := strings.Replace(keysPolicy, "key_groups: [{match: {cidr: 10.0.0.0/8}, key_ref: prod_key}]",
+		"key_groups: [{match: {attributes: {site: campus}}, key_ref: prod_key}, "+
+			"{match: {attributes: {role: leaf}}, key_ref: prod_key}]", 1)
+	if err := os.WriteFile(pol, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(inv, []byte("devices:\n  - {name: leaf-19, platform: arista_eos, addresses: [10.20.4.9], "+
+		"attributes: {site: campus, role: leaf}}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	if code := run([]string{"keys", "show", "--policy", pol, "--inventory", inv, "--config", cfg, "leaf-19"}, &out, &errOut); code != 1 {
+		t.Fatalf("a tie exits %d: %s%s", code, out.String(), errOut.String())
+	}
+	for _, want := range []string{"attributes {site: campus} → prod_key", "attributes {role: leaf} → prod_key"} {
+		if !strings.Contains(out.String()+errOut.String(), want) {
+			t.Errorf("missing %q in %s%s", want, out.String(), errOut.String())
+		}
+	}
+}

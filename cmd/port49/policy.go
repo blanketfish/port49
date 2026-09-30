@@ -37,7 +37,14 @@ func (f *policyFiles) missing() bool { return f.policy == "" || f.inventory == "
 // load builds the bundle from the two files as port49d does (bundle.Load),
 // so a bundle a tool names is the one port49d's records carry.
 func (f *policyFiles) load() (*policy.Policy, error) {
-	return bundle.Load(f.policy, f.inventory, policy.Env{})
+	return f.loadWith(nil)
+}
+
+// loadWith is load with the key_refs port49d.yaml defines
+// (policy.Env.KeyRefs), so a device assigned any other is refused as port49d
+// refuses it.
+func (f *policyFiles) loadWith(keyRefs []string) (*policy.Policy, error) {
+	return bundle.Load(f.policy, f.inventory, policy.Env{KeyRefs: keyRefs})
 }
 
 // diffFault says which side of a diff failed to load, and which of its two
