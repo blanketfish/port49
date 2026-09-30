@@ -189,3 +189,23 @@ func TestWhatTheServiceCannotRunWithoutIsRefused(t *testing.T) {
 		}
 	}
 }
+
+// CallerOf names a person by a lower-cased email, so a `user:` entry with a
+// capital would match nobody, silently: it is refused, by list and index,
+// never quoting the value. A URI SAN is matched as written, capitals and all.
+func TestAUserIdentityIsWrittenInLowerCase(t *testing.T) {
+	for _, c := range []struct{ from, to, want string }{
+		{`"user:alice@example.com"`, `"user:Alice@example.com"`, "syncers[0]"},
+		{`"spiffe://example.com/port49d"`, `"user:bob@Example.COM"`, "readers[0]"},
+	} {
+		_, err := loadString(t, strings.Replace(minimalConfig, c.from, c.to, 1))
+		if err == nil || !strings.Contains(err.Error(), c.want) || !strings.Contains(err.Error(), "lower case") ||
+			strings.Contains(err.Error(), "lice@") || strings.Contains(err.Error(), "bob@") {
+			t.Errorf("%s: got %v", c.to, err)
+		}
+	}
+	if _, err := loadString(t, strings.Replace(minimalConfig, "spiffe://example.com/port49d",
+		"spiffe://example.com/Port49d", 1)); err != nil {
+		t.Errorf("a URI SAN with a capital: %v", err)
+	}
+}

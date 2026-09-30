@@ -181,6 +181,12 @@ func Load(path string) (Config, error) {
 				return Config{}, fmt.Errorf("port49-inventory: %s[%d] is not an identity: `user:` and an email, "+
 					"or a certificate's URI SAN such as spiffe://...", l.key, i)
 			}
+			// CallerOf lower-cases a caller's email, and a match is exact:
+			// an entry with a capital would match nobody, silently.
+			if strings.HasPrefix(id, "user:") && id != strings.ToLower(id) {
+				return Config{}, fmt.Errorf("port49-inventory: %s[%d] has an upper-case letter; write a user: "+
+					"address in lower case, as a caller's certificate email is matched in lower case", l.key, i)
+			}
 		}
 	}
 	if c.MaxRemovedPercent, err = bound("safety.max_removed_percent", f.Safety, 10); err != nil {

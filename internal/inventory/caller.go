@@ -46,6 +46,10 @@ func CallerOf(cs *tls.ConnectionState, now time.Time) (string, error) {
 		}
 		return id, nil
 	case len(leaf.EmailAddresses) == 1:
+		// Lower-cased because an email's case names no one different in
+		// practice, and the broker names a person the same way; Load refuses
+		// a `user:` entry with a capital, so API.gate's exact match
+		// compares like with like.
 		e := strings.ToLower(leaf.EmailAddresses[0])
 		if !bundle.NameOK(e) || strings.Count(e, "@") != 1 {
 			return "", errors.New("the certificate's email SAN is not one printable address")
