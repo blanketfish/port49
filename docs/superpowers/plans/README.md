@@ -44,7 +44,10 @@ top. **Executed 2026-09-30** on `feature/inventory-service`, reviewed per task a
 with a fix wave; Task 20's midnight nights were dropped by the owner's ruling. It closed L29 and
 L30, and spec §14's quarantine through a sync passed on four images; it opened L31, slow Cisco
 break-glass with single-connection on (Plan 6b — As built, below); **merged 2026-09-30 (PR #17)**. Next,
-`fix/breakglass-reset`, which closes L31: **written 2026-09-30** (`2026-09-30-06b1-breakglass-reset.md`, seven tasks: one docs, three code, one lab harness, one lab run, one lab-and-docs; no owner decisions); **executed 2026-09-30** on `fix/breakglass-reset`, closing L31 (Fix `fix/breakglass-reset` — As built, below); **merged 2026-09-30 (PR #18)**. **6c written 2026-10-01** (`2026-10-01-06c-inventory-connectors.md`, seventeen tasks after its pre-flight review the same day: one docs, thirteen code, two lab, one lab-and-docs; no owner decisions, fourteen rulings where spec §10 was silent, recorded as decision 31; it opens L32 and L33); **executed 2026-10-01** on `feature/inventory-connectors`, reviewed per task and whole-branch (MERGE, 0/0/8), with a fix wave, closing L32 and L33 (Plan 6c — As built, below); **merged 2026-10-01 (PR #19)**. Next, plan 7. 7–13 not yet.
+`fix/breakglass-reset`, which closes L31: **written 2026-09-30** (`2026-09-30-06b1-breakglass-reset.md`, seven tasks: one docs, three code, one lab harness, one lab run, one lab-and-docs; no owner decisions); **executed 2026-09-30** on `fix/breakglass-reset`, closing L31 (Fix `fix/breakglass-reset` — As built, below); **merged 2026-09-30 (PR #18)**. **6c written 2026-10-01** (`2026-10-01-06c-inventory-connectors.md`, seventeen tasks after its pre-flight review the same day: one docs, thirteen code, two lab, one lab-and-docs; no owner decisions, fourteen rulings where spec §10 was silent, recorded as decision 31; it opens L32 and L33); **executed 2026-10-01** on `feature/inventory-connectors`, reviewed per task and whole-branch (MERGE, 0/0/8), with a fix wave, closing L32 and L33 (Plan 6c — As built, below); **merged 2026-10-01 (PR #19)**. Plan 7 is **split into 7a–7h** (below, with one owner decision,
+D1, the shared store's backend, which 7a–7c do not need); **7a written 2026-10-01**
+(`2026-10-01-07a-revocation-and-broker-limits.md`, thirteen tasks: one docs, ten code, one lab,
+one docs; no owner decision, ten rulings recorded as decision 32). 7b–7h and 8–13 not yet.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -1472,6 +1475,104 @@ built it (plan 4's "Hands to plan 6"). Also owed by plan 3's reviews:
 **Carried from plan 6a:** go-dark on a store outage, the warm context cache, plan 4b's
 remote-store items, and the `crypt_open_failures_total{record="token"}` alarm (Plan 6a — As
 built, "Carried").
+
+**Split into 7a–7h (2026-10-01).** Plan 7 is the largest step group, and one platform-critical
+choice in it is not made by the design: which shared store backs the broker once it leaves
+`port49d` (design §12 lists Redis, Valkey, DynamoDB, etcd and an RDBMS as pluggable and picks none).
+That is **Decision D1** below, for Ryan. The split is ordered by dependency first and security value
+second, so that the three sub-plans that do not touch the store's backend come first and D1 has
+until 7c merges to be made. Every sub-plan is separately mergeable and leaves `make test` green.
+
+- **Plan 7a — `2026-10-01-07a-revocation-and-broker-limits.md`. Written 2026-10-01.** The carried
+  security debts that need no backend: an **atomic idempotency reservation** (put-if-absent per
+  device, the whole batch reserved before its first mint, a concurrent duplicate answered `409
+  idempotency_in_progress`); a **broker listener that does its own TLS handshakes**, so every
+  failure is counted by reason (`port49_broker_tls_handshake_failures_total{reason}`), with a
+  **per-source cap on connections not yet authenticated** (reset at accept) and a **per-principal
+  cap on held connections** (the oldest closed for the newest, so a laptop's dead connections never
+  lock its owner out); and **revocation that reaches everything**: a standing mark by principal or
+  by certificate (issuer, serial) checked at every mint, before and after its token writes, that
+  closes the held connections it names, marks the live contexts, deletes the receipts and, through
+  a new token index, the unspent tokens (plan 2's "largest remaining hole in revocation"), names
+  the contexts it cannot reach, and is one `revoke` record (a new §5.7 event). An operator revokes
+  and lifts with `port49 revoke` over the admin socket; the marks are kept in
+  `broker.revocations_file`, so a restart forgets none. The store interface gains the reservation,
+  the token index and the marks, each with a `storetest` property every backend must pass; no
+  backend is built. Lab: revocation end to end on vEOS, the N9Kv, the C8000V and vJunos-router.
+- **Plan 7b — session lifetime and certificate status.** `/v1/refresh` on the certificate path
+  (the signed-nonce challenge over the held connection, `auth_time` the broker's verification time,
+  decision 17); `max_session_age` per role, composed as the minimum (lifting plan 4's load
+  refusal); the ceiling warning in `server_msg` and the grace window's sweep; CRL (and OCSP)
+  checking of client certificates at mint, feeding 7a's certificate marks (spec §5.1.4); the
+  refresh's per-context records naming unreached contexts as 7a's revoke record does (decision 21).
+  Lab: L2's open truncation length and IOS-XE, which the warning rests on.
+- **Plan 7c — the API and its authorization.** `api:` rights enforced (`revoke_others`,
+  `explain_others`, `sync`, `keys_show`, `replay`; self-only by default, design §17);
+  `POST /v1/tokens/revoke` (by principal, or by (device, username)) over 7a's `Revoke`;
+  `GET /v1/identity`; `POST /v1/explain`; `/healthz` and `/readyz` on the broker; plan 4b's candidate
+  reload guard weighed and ruled.
+- **Plan 7d — the shared store (D1).** The backend D1 chooses, implementing every store method
+  with its atomicity and passing every `storetest` property, 7a's included; store-native mutual-TLS
+  authentication per component (design §17); a hard timeout and a circuit breaker on every store
+  call, and pool separation between token and context operations (design §12); plan 4b's
+  remote-store items (a deadline on each refresh and per-packet store call; the settle pass's
+  redeem-to-write assumption; unindexed contexts invisible to the refresh); PR #7's third follow-up,
+  a replace, its unindex and its index made one atomic operation; the
+  `crypt_open_failures_total{record="token"}` alarm.
+- **Plan 7e — the broker as its own process.** `cmd/port49-broker`, and `port49d` serving
+  TACACS+ with no broker inside; `b.superseded` and `b.blobsSeen` moved into the store and bounded
+  (4b final review m10); decision-log emits under the policy hold bounded (4b Task 4); one refresh
+  runner across broker replicas; `broker.revocations_file` retired if D1's backend persists. Lab:
+  the slice on the split deployment.
+- **Plan 7f — go-dark and the warm context cache.** The owner's ruling of 2026-09-24: `port49d`
+  health-checks the store and closes its TACACS+ listener after N failed checks, reopening after M;
+  the per-replica read-through cache of contexts and blobs, TTL in seconds, served past its TTL
+  through an outage and alarmed (design §12). Lab: a new register row, what each image does when
+  port49d closes its listener mid-session, beside port49d stopped.
+- **Plan 7g — the directory.** LDAP and Active Directory group resolution with design §10's server
+  pool (priority, sticky selection, circuit breaker, failback hysteresis, site awareness), nested
+  groups by configuration, SASL EXTERNAL, GSSAPI or simple bind; the certificate-to-directory mapping
+  replacing the slice's declared `username:` (strong, or issuer-pinned weak, ambiguity failing
+  closed); group subjects minting; pre-warm and grace; the scheduled refresh through
+  `active_principals` stamping `refreshed_at`, and the `staleness_ceiling` default, in one change.
+  Lab: a new register row for nested-group resolution on OpenLDAP and Samba AD.
+- **Plan 7h — OIDC and trust domains.** The verifier lists `identity.humans` and
+  `identity.machines` (decision 16); OIDC ID and access tokens validated against the provider's
+  JWKS; `/v1/config`'s issuer and client id; `prompt=login` refresh with `auth_time` from the
+  assertion; `POST /v1/logout` back-channel by `sid` or `sub`, as 7a's marks by `sid`; `amr` and `acr`
+  recorded. The agent's OIDC public client stays plan 9's. Lab: a new register row for the logout
+  token a provider sends.
+
+Order: 7a–7c do not depend on D1, and are the ones a stolen laptop or an abusive caller needs
+first. 7d–7f need D1's backend. 7g and 7h integrate external identity systems, are the largest,
+and each brings its own lab row. If D1 is still open when 7c merges, 7g may move ahead of 7d; it
+needs no store change.
+
+**Decision D1, for Ryan: which shared store does 7d build?** The design requires atomic
+match-and-delete with TTL, an atomic remove-and-write, compare-and-set on contexts, and
+reachability from every daemon (§12), and leaves the product open. The options, against what
+port49 needs most (a redeemed token never comes back, and a revocation mark is never lost):
+
+1. **etcd (recommended).** Raft: every acknowledged write survives a leader failover, so a
+   redemption, a reservation and a revocation mark never roll back. Transactions give every
+   compare-and-set the store needs, leases give TTL, and client authentication is mutual TLS with
+   per-component roles (design §17's internal interfaces). Throughput is thousands of writes a
+   second, above the §5 target of ~170 authentications a second. Costs: a lease per expiry
+   bucket to keep lease churn down, an 8 GiB soft size limit (port49's records are small), and
+   every write crosses to the leader.
+2. **Valkey or Redis.** The fastest, and Lua scripts make each operation atomic. Replication is
+   asynchronous: a failover can lose an acknowledged write, so a redeemed token can be redeemed
+   again and a revocation mark can vanish. `WAIT` narrows that and does not close it. Acceptable
+   only with the replay window documented, which is what design §13 already says of regional
+   replication.
+3. **PostgreSQL.** Serializable transactions and row locks; widely operated. TTL becomes a sweeper's
+   job, and connection counts need a pooler at fleet scale.
+4. **DynamoDB.** Conditional writes and transactions fit well, but it is one cloud's, and most network
+   teams run port49 on premises.
+
+Recommendation: etcd first, the interface kept pluggable, and a Valkey backend later only with its
+replay window stated. 7a builds nothing that depends on this: its store methods are added to the
+interface and the memory store, with `storetest` properties the chosen backend must pass.
 
 ## Plan 8 — Workload certificates (§19 step 8)
 
