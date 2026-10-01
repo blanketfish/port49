@@ -53,6 +53,17 @@ type Config struct {
 // trusts. The answer is `port49 login`.
 var ErrSessionOver = errors.New("agent: the session is over; run `port49 login`")
 
+// RevokedError is a session an operator's revocation ended (spec §5.1.4).
+// It is ErrSessionOver to errors.Is, but its text does not say to log in:
+// a login is refused the same way until the revocation is lifted. Detail is
+// the broker's, which says since when and who lifts it.
+type RevokedError struct{ Detail string }
+
+func (e *RevokedError) Error() string { return "agent: the session is over: " + e.Detail }
+
+// Is makes a revocation ErrSessionOver, so every caller ends the session.
+func (e *RevokedError) Is(target error) bool { return target == ErrSessionOver }
+
 // connectTimeout bounds Connect: the dial and the handshake that is the
 // session's one use of the key. It is inside `port49 login`'s 15-second wait,
 // so a broker that never answers is reported through the agent's own log
@@ -352,8 +363,9 @@ func sessionOver(status int, e api.Error) error {
 		return fmt.Errorf("%w: the broker no longer trusts this certificate (%s)", ErrSessionOver, e.Detail)
 	case "credential_revoked":
 		// An operator revoked this principal or this certificate (spec
-		// §5.1.4): nothing this session holds will mint again.
-		return fmt.Errorf("%w: %s", ErrSessionOver, e.Detail)
+		// §5.1.4): nothing this session holds will mint again, and no new
+		// one until the lift.
+		return &RevokedError{Detail: e.Detail}
 	}
 	return nil
 }
@@ -539,11 +551,16 @@ func (a *Agent) Handler() http.Handler {
 		}
 		item, err := a.Mint(r.Context(), req.Device, req.Enable, time.Duration(req.TTLSeconds)*time.Second)
 		var ie *ItemError
+		var revoked *RevokedError
 		switch {
 		case errors.As(err, &ie):
 			// The item as the broker sent it: its error is the client's to
 			// report, and Client.Token turns it back into an ItemError.
 			writeJSON(w, http.StatusOK, item)
+		case errors.As(err, &revoked):
+			// Its own code, so the client rebuilds it without the
+			// ErrSessionOver text that says to log in.
+			writeJSON(w, http.StatusGone, api.Error{Error: "credential_revoked", Detail: revoked.Detail})
 		case errors.Is(err, ErrSessionOver):
 			writeJSON(w, http.StatusGone, api.Error{Error: "session_over", Detail: err.Error()})
 		case err != nil:

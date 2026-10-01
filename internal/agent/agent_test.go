@@ -425,6 +425,11 @@ func TestARevocationEndsTheSession(t *testing.T) {
 	if !errors.Is(err, ErrSessionOver) || !strings.Contains(err.Error(), "this principal was revoked at") {
 		t.Fatalf("401 credential_revoked: %v", err)
 	}
+	// A login is refused the same way until the lift: telling the operator
+	// to run it sends them round in a circle (final review M9).
+	if strings.Contains(err.Error(), "port49 login") {
+		t.Fatalf("a revoked session says to log in: %v", err)
+	}
 	select {
 	case <-r.a.Done():
 	default:
@@ -762,6 +767,29 @@ func TestTheSocketSaysWhyTheSessionEnded(t *testing.T) {
 	t.Cleanup(func() { _ = srv.Close() })
 	_, err = NewClient(p).Token(context.Background(), TokenRequest{Device: "leaf1"})
 	if !errors.Is(err, ErrSessionOver) || !strings.Contains(err.Error(), "no longer trusts") {
+		t.Fatalf("through the socket: %v", err)
+	}
+}
+
+// A revocation reaches `port49 token` through the socket still
+// ErrSessionOver, saying who lifts it and not to log in (final review M9).
+func TestTheSocketSaysARevocationWithoutSayingToLogIn(t *testing.T) {
+	r := newRig(t)
+	r.fb.mu.Lock()
+	r.fb.revoked = true
+	r.fb.mu.Unlock()
+	base := shortDir(t)
+	p := filepath.Join(base, "s", "agent.sock")
+	ln, err := Listen(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &http.Server{Handler: r.a.Handler()}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+	_, err = NewClient(p).Token(context.Background(), TokenRequest{Device: "leaf1"})
+	if !errors.Is(err, ErrSessionOver) || err.Error() != "agent: the session is over: this principal was revoked at "+
+		"2026-10-01T00:00:00Z; nothing is minted for it until an operator lifts the revocation (port49 revoke --lift)" {
 		t.Fatalf("through the socket: %v", err)
 	}
 }

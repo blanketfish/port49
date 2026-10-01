@@ -302,6 +302,7 @@ func tokenCmd(args []string, stdout, stderr io.Writer) int {
 	case errors.Is(err, agent.ErrSessionOver):
 		// The error says to log in and then why the session ended: an
 		// expired certificate has to be renewed before a login will work.
+		// A revocation says since when and who lifts it instead.
 		fmt.Fprintf(stderr, "port49 token: %s\n", unprefixed(err))
 		return 1
 	case err != nil:
