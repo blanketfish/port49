@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -237,6 +238,34 @@ func TestAReasonIsSaidOncePerTenSeconds(t *testing.T) {
 	}
 	c.Close()
 	errs.waitFor(t, "(2 more like it since")
+}
+
+// A failure is counted only once its line is said or held back, so a
+// reader that sees the count, as TestAReasonIsSaidOncePerTenSeconds does
+// before it moves the clock, never races the line it implies (fixA N1).
+func TestAHandshakeFailureIsSaidBeforeItIsCounted(t *testing.T) {
+	f := newFixture(t, 8)
+	entered, gate := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	addr, _ := serveThrough(t, f, DefaultListenerLimits, func(string, ...any) {
+		once.Do(func() {
+			close(entered)
+			<-gate
+		})
+	})
+	c, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Close()
+	<-entered
+	failures := f.b.Metrics.BrokerHandshakeFailures.WithLabelValues("client_closed")
+	if n := testutil.ToFloat64(failures); n != 0 {
+		close(gate)
+		t.Fatalf("counted %v while its line was still being said", n)
+	}
+	close(gate)
+	eventually(t, "counted", func() bool { return testutil.ToFloat64(failures) == 1 })
 }
 
 // A source holds at most MaxPendingPerSource connections not yet bound to

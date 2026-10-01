@@ -309,9 +309,11 @@ func (l *Listener) refuse(c *trackedConn, tc *tls.Conn, reason string, err error
 		return
 	default:
 	}
-	l.m.BrokerHandshakeFailures.WithLabelValues(reason).Inc()
+	// Said before counted: a reader that sees the count sees the line
+	// said or held back (fixA N1).
 	l.say("handshake_"+reason, "port49d: broker: TLS handshake from %s failed (%s): %s", c.src, reason,
 		printsafe.Line(err.Error(), 300))
+	l.m.BrokerHandshakeFailures.WithLabelValues(reason).Inc()
 	_ = tc.Close()
 }
 
