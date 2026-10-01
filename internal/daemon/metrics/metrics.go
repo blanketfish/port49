@@ -130,7 +130,8 @@ type Metrics struct {
 	ContextRefreshes *prometheus.CounterVec
 	// port49_session_refreshes_total{outcome}: session refreshes (spec §5.6;
 	// decision 33). Per context a refresh visited: "extended", "revoked" (the
-	// policy in force withdrew it), "past_grace" (deleted, its grace window
+	// policy in force withdrew it, or the context could not be judged and was
+	// revoked failing closed), "past_grace" (deleted, its grace window
 	// over) or "not_judged" (the policy did not just judge and keep it: a
 	// quarantined device, a write that lost every race). Per refresh:
 	// "refused" (no live challenge, a bad signature, a mark), "store_error"

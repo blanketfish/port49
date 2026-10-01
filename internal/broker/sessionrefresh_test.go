@@ -217,8 +217,9 @@ func TestARefreshIsBoundToItsConnectionAndItsKey(t *testing.T) {
 		t.Fatalf("an answer at 61s: %d", s)
 	}
 
-	// Another key, the same principal: refused. (The 61s answer refreshed
-	// nothing, so no pacing applies.)
+	// Another key, the same principal: refused. (The 61s answer consumed its
+	// nonce, so it is paced as any answer is.)
+	f.advance(11 * time.Second)
 	nonce, text = challengeOn(t, c, br)
 	renewed := f.client(t, "alice@example.com", f.now.Add(time.Hour))
 	if s, _ := answerOn(t, c, br, c, renewed, nonce, text); s != 401 {
@@ -242,7 +243,8 @@ func TestARefreshIsBoundToItsConnectionAndItsKey(t *testing.T) {
 	}
 }
 
-// A connection refreshes once per 10s (pre-flight M17).
+// A connection refreshes once per 10s, and a bad answer is paced as a good
+// one is: every consumed nonce counts (pre-flight M17).
 func TestARefreshIsRateLimited(t *testing.T) {
 	f := newFixture(t, 8)
 	addr, _ := serveThrough(t, f, DefaultListenerLimits, nil)
@@ -252,6 +254,15 @@ func TestARefreshIsRateLimited(t *testing.T) {
 	}
 	if r := postOn(t, c, br, "/v1/refresh/challenge", ""); r.status != 429 || !strings.Contains(r.body, "refresh_too_soon") {
 		t.Fatalf("a second refresh inside 10s: %d %s", r.status, r.body)
+	}
+	f.advance(11 * time.Second)
+	nonce, text := challengeOn(t, c, br)
+	renewed := f.client(t, "alice@example.com", f.now.Add(time.Hour))
+	if s, _ := answerOn(t, c, br, c, renewed, nonce, text); s != 401 {
+		t.Fatalf("a bad answer: %d", s)
+	}
+	if r := postOn(t, c, br, "/v1/refresh/challenge", ""); r.status != 429 || !strings.Contains(r.body, "refresh_too_soon") {
+		t.Fatalf("a challenge inside 10s of a bad answer: %d %s", r.status, r.body)
 	}
 }
 
@@ -285,4 +296,115 @@ func TestARevokedCallerCannotRefresh(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A refresh the store fails is answered 503 store_unavailable with one
+// refresh deny store_unavailable record naming the principal, as a mint's
+// store error is (spec §5.7): the marks unreadable before the extension
+// (nothing extended), the live sessions unreadable, or the marks unreadable
+// after the extension (the connection renewed, some sessions may be
+// extended; Retry-After waits out the pacing).
+func TestARefreshTheStoreFailsIsRecorded(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		st    func(store.Store) store.Store
+		text  string
+		retry string
+	}{
+		{"marks", func(s store.Store) store.Store { return &revocationFailingStore{Store: s} },
+			"could not read the revocations in force, so it extended nothing", ""},
+		{"sessions", func(s store.Store) store.Store { return indexUnreadableStore{s} },
+			"some may have been extended", "10"},
+		{"marks_after", func(s store.Store) store.Store { return &revocationFailingStore{Store: s, ok: 2} },
+			"some may have been extended", "10"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t, 8)
+			addr, _ := serveThrough(t, f, DefaultListenerLimits, nil)
+			c, br := held(t, f, addr, f.alice)
+			f.liveContextAt(t, "leaf1", "alice", alicePrincipal, certKey(f.alice), f.now, f.now.Add(time.Hour))
+			f.b.Store = tc.st(f.st)
+			nonce, text := challengeOn(t, c, br)
+			status, body, retry := answerHeaders(t, c, br, f.alice, nonce, text)
+			if status != 503 || !strings.Contains(body, "store_unavailable") || !strings.Contains(body, tc.text) ||
+				retry != tc.retry {
+				t.Fatalf("%d %s Retry-After %q", status, body, retry)
+			}
+			denies := 0
+			for _, r := range eventsOf(f.records(t), "refresh") {
+				if r["verdict"] == "deny" {
+					denies++
+					if r["reason"] != "store_unavailable" || r["principal"] != alicePrincipal {
+						t.Fatalf("the refresh record: %v", r)
+					}
+				}
+			}
+			if denies != 1 {
+				t.Fatalf("%d refresh deny records, want 1", denies)
+			}
+			if n := testutil.ToFloat64(f.b.Metrics.SessionRefreshes.WithLabelValues("store_error")); n != 1 {
+				t.Fatalf("port49_session_refreshes_total{outcome=store_error} = %v", n)
+			}
+		})
+	}
+}
+
+// indexUnreadableStore cannot read the context index.
+type indexUnreadableStore struct{ store.Store }
+
+func (indexUnreadableStore) ContextsByPrincipal(context.Context, string) ([]store.ContextRef, error) {
+	return nil, errors.New("store: connection refused")
+}
+
+// answerHeaders is answerOn over c's own exporter, returning Retry-After
+// too.
+func answerHeaders(t *testing.T, c *tls.Conn, br *bufio.Reader, cert tls.Certificate, nonce []byte,
+	nonceText string) (int, string, string) {
+	t.Helper()
+	cs := c.ConnectionState()
+	ekm, err := cs.ExportKeyingMaterial(api.RefreshExporterLabel, nil, 32)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sig, err := api.SignRefresh(cert.PrivateKey.(crypto.Signer), api.RefreshMessage(nonce, ekm))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(api.RefreshRequest{Nonce: nonceText, Signature: base64.RawURLEncoding.EncodeToString(sig)})
+	r := postOn(t, c, br, "/v1/refresh", string(body))
+	return r.status, r.body, r.retryAfter
+}
+
+// A revocation that lands while a refresh extends is answered
+// credential_revoked, as a mint's is after its last write (revokedSince):
+// the refresh is not reported extended (7a parity).
+func TestARevocationDuringARefreshIsAnswered(t *testing.T) {
+	f := newFixture(t, 8)
+	addr, _ := serveThrough(t, f, DefaultListenerLimits, nil)
+	c, br := held(t, f, addr, f.alice)
+	f.liveContextAt(t, "leaf1", "alice", alicePrincipal, certKey(f.alice), f.now, f.now.Add(time.Hour))
+	f.b.Store = markingStore{Store: f.st, f: f}
+	nonce, text := challengeOn(t, c, br)
+	if s, body := answerOn(t, c, br, c, f.alice, nonce, text); s != 401 || !strings.Contains(body, "credential_revoked") {
+		t.Fatalf("%d %s", s, body)
+	}
+	recs := eventsOf(f.records(t), "refresh")
+	if last := recs[len(recs)-1]; last["reason"] != "credential_revoked" || last["verdict"] != "deny" {
+		t.Fatalf("%v", last)
+	}
+}
+
+// markingStore revokes alice's principal as the refresh reads her live
+// sessions: after the first mark check, before the extension.
+type markingStore struct {
+	store.Store
+	f *fixture
+}
+
+func (s markingStore) ContextsByPrincipal(ctx context.Context, principal string) ([]store.ContextRef, error) {
+	if err := s.Store.PutRevocation(ctx, store.Revocation{Kind: store.RevocationPrincipal, Key: principal,
+		At: s.f.b.Now(), Origin: "test"}); err != nil {
+		return nil, err
+	}
+	return s.Store.ContextsByPrincipal(ctx, principal)
 }

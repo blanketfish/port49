@@ -83,9 +83,14 @@ func (b *Broker) refresh(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", "the body is not a refresh request")
 		return
 	}
+	// Every consumed nonce is paced, whether its answer verifies or not: a
+	// caller looping challenge and bad answer is held to one per refreshEvery
+	// as a good one is (pre-flight M17).
 	h.mu.Lock()
 	nonce, exp := h.nonce, h.nonceExp
-	h.nonce = nil
+	if nonce != nil {
+		h.nonce, h.lastRefresh = nil, now
+	}
 	h.mu.Unlock()
 	got, _ := base64.RawURLEncoding.DecodeString(req.Nonce)
 	sig, _ := base64.RawURLEncoding.DecodeString(req.Signature)
@@ -107,8 +112,7 @@ func (b *Broker) refresh(w http.ResponseWriter, r *http.Request) {
 	rv, revoked, err := b.revocation(ctx, principal, cred)
 	switch {
 	case err != nil:
-		b.Metrics.SessionRefreshes.WithLabelValues("store_error").Inc()
-		writeError(w, http.StatusServiceUnavailable, string(decision.StoreUnavailable),
+		b.refreshStoreError(w, now, principal, cred, 0,
 			"the broker could not read the revocations in force, so it extended nothing; try again")
 		return
 	case revoked:
@@ -118,17 +122,51 @@ func (b *Broker) refresh(w http.ResponseWriter, r *http.Request) {
 	}
 	// Certificate status (Task 10) is checked here, beside the marks.
 	at := b.Now() // the broker's verification time: the one clock §5.6 gives it
+	// The connection's clock moves before the extension, and stays moved if
+	// the extension fails: the signature and the marks verified, so this was
+	// a fresh authentication of the connection whatever the store does next.
 	h.mu.Lock()
 	h.at, h.lastRefresh = at, at
 	h.mu.Unlock()
 	rep, err := b.RefreshSession(ctx, principal, cred, at)
 	if err != nil {
-		b.Metrics.SessionRefreshes.WithLabelValues("store_error").Inc()
-		writeError(w, http.StatusServiceUnavailable, string(decision.StoreUnavailable),
-			"the broker could not read your live sessions, so it extended nothing; try again") // fixed text (M5)
+		b.refreshStoreError(w, at, principal, cred, refreshEvery, partialRefreshText) // fixed text (M5)
+		return
+	}
+	// The marks again, after the extension's writes, as a mint reads them
+	// after its last token write (revokedSince): a revocation that landed
+	// while this refresh extended is answered, not reported as extended.
+	switch rv, revoked, err := b.revocation(ctx, principal, cred); {
+	case err != nil:
+		b.refreshStoreError(w, at, principal, cred, refreshEvery, partialRefreshText)
+		return
+	case revoked:
+		b.Metrics.SessionRefreshes.WithLabelValues("refused").Inc()
+		b.refuseRevokedAs(w, decision.EventRefresh, b.Now(), principal, cred, rv)
 		return
 	}
 	writeJSON(w, http.StatusOK, rep.response(b.MaxSessionAge))
+}
+
+// partialRefreshText answers a refresh whose signature verified but whose
+// extension failed part way: the connection is renewed, and some sessions
+// may already be extended.
+const partialRefreshText = "the broker could not finish extending your live sessions; some may have been " +
+	"extended; retry after Retry-After and the retry reports them all"
+
+// refreshStoreError answers a refresh the store failed 503
+// store_unavailable, with its one refresh deny record (spec §5.7), as a
+// mint's store error is answered. A non-zero retry is sent as Retry-After:
+// the connection's pacing, which a retry sooner would meet as a 429.
+func (b *Broker) refreshStoreError(w http.ResponseWriter, now time.Time, principal string, cred store.Credential,
+	retry time.Duration, text string) {
+	b.Metrics.SessionRefreshes.WithLabelValues("store_error").Inc()
+	b.emit(decision.Record{TS: now, Event: decision.EventRefresh, Verdict: decision.VerdictDeny,
+		Reason: decision.StoreUnavailable, Principal: principal, Auth: &decision.Auth{Method: cred.Method}})
+	if retry > 0 {
+		w.Header().Set("Retry-After", strconv.Itoa(int(retry/time.Second)))
+	}
+	writeError(w, http.StatusServiceUnavailable, string(decision.StoreUnavailable), text)
 }
 
 // refuseRefresh answers a refresh that proved nothing, and records it

@@ -258,8 +258,9 @@ func (f *fixture) postAt(ctx context.Context, cs *tls.ConnectionState, body, key
 
 // heldAnswer is one response on a held connection.
 type heldAnswer struct {
-	status int
-	body   string
+	status     int
+	body       string
+	retryAfter string
 }
 
 // postOn writes one POST to path with body on the held connection c and
@@ -280,7 +281,7 @@ func postOn(t *testing.T, c *tls.Conn, br *bufio.Reader, path, body string) held
 	if err != nil {
 		t.Fatal(err)
 	}
-	return heldAnswer{status: resp.StatusCode, body: string(raw)}
+	return heldAnswer{status: resp.StatusCode, body: string(raw), retryAfter: resp.Header.Get("Retry-After")}
 }
 
 func (f *fixture) records(t *testing.T) []map[string]any {
