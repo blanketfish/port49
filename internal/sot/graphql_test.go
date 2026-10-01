@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/rhwendt/port49/internal/sot/sottest"
@@ -105,6 +106,87 @@ func TestAGraphQL404IsErrNoGraphQL(t *testing.T) {
 	if _, err := c.graphqlDevices(context.Background(), p, basic(p), 50); err == nil ||
 		!strings.Contains(err.Error(), "answered HTTP 403") {
 		t.Fatalf("got %v", err)
+	}
+}
+
+// A 404 that carries GraphQL errors is a GraphQL server refusing, not
+// GraphQL off: it is the server's error, and nothing falls back on it.
+func TestA404WithErrorsIsNotErrNoGraphQL(t *testing.T) {
+	srv, ca := sottest.TLS(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte(`{"data": null, "errors": [{"message": "no such field"}]}`))
+	}))
+	c, _ := newClient(srv.URL, ca, NewSecret(token), "nautobot")
+	_, err := c.graphqlDevices(context.Background(), profiles[Nautobot2], basic(profiles[Nautobot2]), 50)
+	if err == nil || err == errNoGraphQL || !strings.Contains(err.Error(), "HTTP 404 with 1 error(s); the first: no such field") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+// A status error names the request as the client sent it, under the url's
+// path, as a GET's does.
+func TestAGraphQLStatusErrorNamesThePathUnderThePrefix(t *testing.T) {
+	srv, ca := sottest.TLS(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	c, _ := newClient(srv.URL+"/netbox", ca, NewSecret(token), "netbox")
+	_, err := c.graphqlDevices(context.Background(), profiles[NetBox4], basic(profiles[NetBox4]), 50)
+	if err == nil || !strings.Contains(err.Error(), "POST /netbox/graphql/ answered HTTP 500") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+// A page size below 1 would never see a short page; it is refused before
+// any request.
+func TestAPageSizeBelowOneIsRefused(t *testing.T) {
+	s, c, p := replay(t, "nautobot-2", 3)
+	if _, err := c.graphqlDevices(context.Background(), p, basic(p), 0); err == nil ||
+		!strings.Contains(err.Error(), "page_size must be at least 1") {
+		t.Fatalf("got %v", err)
+	}
+	for _, r := range s.Requests() {
+		if r.Method == http.MethodPost {
+			t.Fatalf("asked GraphQL: %+v", r)
+		}
+	}
+}
+
+// A release that honours the limit and ignores the offset answers the first
+// page every time; the second page fails the read, not the thousandth.
+func TestAReleaseThatIgnoresTheOffsetFailsAtTheSecondPage(t *testing.T) {
+	var posts atomic.Int32
+	srv, ca := sottest.TLS(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		posts.Add(1)
+		w.Write([]byte(`{"data": {"devices": [{"name": "a"}, {"name": "b"}]}}`))
+	}))
+	c, _ := newClient(srv.URL, ca, NewSecret(token), "nautobot")
+	_, err := c.graphqlDevices(context.Background(), profiles[Nautobot2], basic(profiles[Nautobot2]), 2)
+	if err == nil || !strings.Contains(err.Error(), "GraphQL page 1 began with the device page 0 began with (name a)") ||
+		!strings.Contains(err.Error(), "ignored the offset") {
+		t.Fatalf("got %v", err)
+	}
+	if n := posts.Load(); n != 2 {
+		t.Fatalf("%d GraphQL requests, want 2", n)
+	}
+}
+
+// A repeat later in a page fails at that page, by the I1 check.
+func TestARepeatFailsAtThePageThatHoldsIt(t *testing.T) {
+	var posts atomic.Int32
+	srv, ca := sottest.TLS(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if posts.Add(1) == 1 {
+			w.Write([]byte(`{"data": {"devices": [{"name": "a"}, {"name": "b"}]}}`))
+			return
+		}
+		w.Write([]byte(`{"data": {"devices": [{"name": "c"}, {"name": "b"}]}}`))
+	}))
+	c, _ := newClient(srv.URL, ca, NewSecret(token), "nautobot")
+	_, err := c.graphqlDevices(context.Background(), profiles[Nautobot2], basic(profiles[Nautobot2]), 2)
+	if err == nil || !strings.Contains(err.Error(), "GraphQL gave one device twice (name b)") {
+		t.Fatalf("got %v", err)
+	}
+	if n := posts.Load(); n != 2 {
+		t.Fatalf("%d GraphQL requests, want 2", n)
 	}
 }
 

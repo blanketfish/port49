@@ -65,12 +65,19 @@ func (p Profile) listQuery(sel selection, offset, limit int) string {
 
 // graphqlDevices is every device over GraphQL, page by page where p pages,
 // to a short page. A page longer than pageSize (a release that ignored the
-// paging arguments, pre-flight M4), a list past maxFetch bytes (M3), and a
-// list naming a device twice (a page boundary shifted under a concurrent
-// insert, I1) fail it. The caller checks the count (Source.graphql).
+// paging arguments, pre-flight M4), a page that begins as the one before it
+// did (a release that ignored the offset), a list past maxFetch bytes (M3),
+// and a list naming a device twice (a page boundary shifted under a
+// concurrent insert, I1) fail it, at the page that shows it. The caller
+// checks the count (Source.graphql).
 func (c *client) graphqlDevices(ctx context.Context, p Profile, sel selection, pageSize int) ([]map[string]any, error) {
+	if pageSize < 1 {
+		return nil, errors.New("page_size must be at least 1")
+	}
 	u := c.at(p.graphqlPath, nil)
 	b := newBudget()
+	seen := keys{}
+	first := ""
 	var out []map[string]any
 	for page := 0; ; page++ {
 		if page >= maxPages {
@@ -87,7 +94,7 @@ func (c *client) graphqlDevices(ctx context.Context, p Profile, sel selection, p
 		if err := b.spend(len(a.body)); err != nil {
 			return nil, err
 		}
-		devs, err := p.graphqlPage(a)
+		devs, err := p.graphqlPage(a, what(http.MethodPost, u))
 		if err != nil {
 			return nil, err
 		}
@@ -95,12 +102,23 @@ func (c *client) graphqlDevices(ctx context.Context, p Profile, sel selection, p
 			return nil, fmt.Errorf("GraphQL page %d gave %d devices for a page of %d: the release ignored the page "+
 				"size, so its paging cannot be trusted", page, len(devs), pageSize)
 		}
+		if len(devs) > 0 {
+			k := keyOf(devs[0], "name")
+			if k != "" && k == first {
+				return nil, fmt.Errorf("GraphQL page %d began with the device page %d began with (name %s): the "+
+					"release ignored the offset, so its paging cannot be trusted", page, page-1, printable(k))
+			}
+			first = k
+		}
+		if err := seen.add(devs, "name", "GraphQL"); err != nil {
+			return nil, err
+		}
 		out = append(out, devs...)
 		if len(out) > maxDevices {
 			return nil, fmt.Errorf("GraphQL gave more than %d devices", maxDevices)
 		}
 		if p.paging == pageNone || len(devs) < pageSize {
-			return out, distinct(out, "name", "GraphQL")
+			return out, nil
 		}
 	}
 }
@@ -111,33 +129,44 @@ func (c *client) graphqlDevices(ctx context.Context, p Profile, sel selection, p
 // repeats or skips the device at a page boundary (pre-flight I1); a repeat
 // fails here, naming the cause, rather than at admission's "two devices are
 // both named". An empty key is skipped: NetBox allows a device no name.
-func distinct(devs []map[string]any, key, api string) error {
-	seen := map[string]bool{}
+func distinct(devs []map[string]any, key, api string) error { return keys{}.add(devs, key, api) }
+
+// keys is the devices a list has given so far, by key, so a repeat fails at
+// the page that holds it rather than after the last (distinct).
+type keys map[string]bool
+
+func (s keys) add(devs []map[string]any, key, api string) error {
 	for _, d := range devs {
-		k := ""
-		switch v := d[key].(type) {
-		case string:
-			k = v
-		case json.Number:
-			k = v.String()
-		}
+		k := keyOf(d, key)
 		if k == "" {
 			continue
 		}
-		if seen[k] {
+		if s[k] {
 			return fmt.Errorf("%s gave one device twice (%s %s): the list changed between pages; the next sync "+
 				"reads it again", api, key, printable(k))
 		}
-		seen[k] = true
+		s[k] = true
 	}
 	return nil
+}
+
+// keyOf is d's key as text: a string, or a number as the source wrote it;
+// "" for anything else.
+func keyOf(d map[string]any, key string) string {
+	switch v := d[key].(type) {
+	case string:
+		return v
+	case json.Number:
+		return v.String()
+	}
+	return ""
 }
 
 // graphqlPage reads one answer: its errors before its data, whatever the
 // HTTP status, since NetBox 4.7.1 refuses an argument with HTTP 200 and an
 // errors list (L30). An error message is the source's text: printed safely,
-// and only the first.
-func (p Profile) graphqlPage(a answer) ([]map[string]any, error) {
+// and only the first. req names the request in a status error.
+func (p Profile) graphqlPage(a answer, req string) ([]map[string]any, error) {
 	var r struct {
 		Data   map[string]json.RawMessage `json:"data"`
 		Errors []struct {
@@ -152,10 +181,13 @@ func (p Profile) graphqlPage(a answer) ([]map[string]any, error) {
 			printable(r.Errors[0].Message))
 	}
 	switch {
+	// A 404 that carries GraphQL errors is a GraphQL server refusing, not
+	// GraphQL off: it returned above, and fails the sync with nothing falling
+	// back. GraphQL off answers an HTML or DRF {"detail": ...} 404.
 	case a.status == http.StatusNotFound:
 		return nil, errNoGraphQL
 	case a.status != http.StatusOK:
-		return nil, statusError("POST "+p.graphqlPath, a.status)
+		return nil, statusError(req, a.status)
 	case derr != nil:
 		return nil, errors.New("GraphQL answered something that is not JSON")
 	}
