@@ -49,8 +49,9 @@ const (
 	maxIdempotencyKey = 128
 )
 
-// Broker is the slice's broker. Every field is required but Redact, Conns and
-// Persist.
+// Broker is the slice's broker. Every field is required but Redact, Sessions
+// (which only Revoke needs, and refuses without), Conns, Persist and
+// RevokeTimeout.
 type Broker struct {
 	// Policy is the policy in force. port49d swaps it when the file changes
 	// (plan 4b), and a request resolves against the one version it held from
