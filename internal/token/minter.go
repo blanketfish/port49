@@ -239,6 +239,9 @@ type Result struct {
 	// MintedAt is when the tokens were minted, kept in the idempotency
 	// record so a replay can be judged against Request.SupersededAt.
 	MintedAt time.Time
+	// Replayed is set on a result answered from the idempotency record,
+	// for which no token was minted and no permit recorded. Never stored.
+	Replayed bool `json:"-"`
 }
 
 // Minter issues device tokens. It is in-process and knows nothing of HTTP;
@@ -303,6 +306,7 @@ func (m *Minter) Mint(ctx context.Context, r Request) (Result, error) {
 				// a zero one, and is not replayed either.
 				idemErr = "idempotency record names tokens a policy change or a revocation deleted; minted again rather than replayed"
 			default:
+				prev.Replayed = true
 				return prev, nil
 			}
 			expect = rec.Holder

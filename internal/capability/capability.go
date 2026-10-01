@@ -204,7 +204,9 @@ func Infer(records []decision.Record, devices []Device, opt Options) Report {
 		// lastMint is, by principal, the tokens its latest permit here
 		// minted. A deny credential_revoked naming the device follows the
 		// permit of a mint a revocation overtook, whose tokens were deleted
-		// and never returned (spec §5.7): they were not issued.
+		// and never returned (spec §5.7): they were not issued. A replay so
+		// refused recorded no permit, and its deny names no device, so the
+		// original mint's tokens, which were returned, stay counted.
 		lastMint := map[string]int{}
 		for _, r := range recs {
 			if r.Event == decision.EventMint {

@@ -436,6 +436,11 @@ func revokedError(rv store.Revocation) api.Error {
 // device's permit, already recorded, is followed by a deny
 // credential_revoked naming it, with index_error when its tokens could not
 // be deleted (spec §5.7). It returns how many it recorded.
+//
+// A replayed item's tokens are deleted too, but it gets no deny: this
+// request recorded no permit for it, and the permit a device deny would
+// follow is the original mint's, whose tokens were returned then and so
+// were issued (port49 capability; Task 7 review N1).
 func (b *Broker) unmint(ctx context.Context, principal string, cred store.Credential, items []api.MintItem) int {
 	now := b.Now()
 	n := 0
@@ -444,14 +449,20 @@ func (b *Broker) unmint(ctx context.Context, principal string, cred store.Creden
 			continue
 		}
 		k := store.TokenKey{NAS: it.Device, Username: it.Username}
-		rec := revokedRecord(now, principal, cred)
-		rec.Device = &decision.Device{Name: it.Device, Platform: it.Platform}
-		if err := b.Store.DeleteTokens(ctx, k); err != nil {
+		err := b.Store.DeleteTokens(ctx, k)
+		if err != nil {
 			b.logf("broker: deleting the tokens a revoked mint wrote under %q on %q: %v; they expire at their TTL",
 				it.Username, it.Device, err)
-			rec.IndexError = fmt.Sprintf("tokens not deleted: %v; they expire at their TTL", err)
 		}
 		b.supersede(k, now)
+		if it.Replayed {
+			continue
+		}
+		rec := revokedRecord(now, principal, cred)
+		rec.Device = &decision.Device{Name: it.Device, Platform: it.Platform}
+		if err != nil {
+			rec.IndexError = fmt.Sprintf("tokens not deleted: %v; they expire at their TTL", err)
+		}
 		b.emit(rec)
 		n++
 	}
@@ -581,7 +592,8 @@ func (b *Broker) mintOne(ctx context.Context, pol *policy.Policy, principal stri
 	// idempotent replay is counted again: it is a permit answered.
 	b.Metrics.Decisions.WithLabelValues(decision.EventMint, decision.VerdictPermit, string(decision.GrantsMatched)).Inc()
 	item := api.MintItem{Device: name, Verdict: decision.VerdictPermit, Platform: dev.Platform,
-		Username: out.Username, Login: out.Login, Enable: out.Enable, ExpiresAt: out.ExpiresAt.UTC().Format(time.RFC3339)}
+		Username: out.Username, Login: out.Login, Enable: out.Enable, ExpiresAt: out.ExpiresAt.UTC().Format(time.RFC3339),
+		Replayed: out.Replayed}
 	if len(dev.Addresses) > 0 {
 		// A fact from the source of truth; the client must not trust it
 		// further than an SSH host key (design §17).

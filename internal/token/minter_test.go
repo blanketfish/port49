@@ -141,6 +141,11 @@ func TestIdempotentReplay(t *testing.T) {
 	if err != nil || !sameResult(a, b) {
 		t.Fatalf("%+v %+v %v", a, b, err)
 	}
+	// The broker records no permit for a replay and so no deny after one
+	// (Task 7 review N1): only the replay says it is one.
+	if a.Replayed || !b.Replayed {
+		t.Fatalf("Replayed: minted %v, replayed %v", a.Replayed, b.Replayed)
+	}
 	if c, _ := st.Candidates(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"}); len(c) != 1 {
 		t.Fatal("replay minted again")
 	}

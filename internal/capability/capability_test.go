@@ -283,6 +283,35 @@ func TestMintsARevocationUndidAreNotCounted(t *testing.T) {
 	}
 }
 
+// A deny subtracts the permit it follows once: a second deny with no permit
+// between subtracts nothing, and a permit after it, a mint after the lift,
+// counts again (Task 7 review N2).
+func TestARevokedMintIsUncountedOnceAndARemintCounts(t *testing.T) {
+	var l logb
+	permit := func(n int) {
+		l.add(decision.EventMint, "xe1", "lab", "", func(r *decision.Record) {
+			r.Session, r.Verdict, r.Principal = nil, decision.VerdictPermit, "user:alice@example.com"
+			r.Mint = &decision.Mint{TokenSHA256: make([]string, n)}
+		})
+	}
+	deny := func() {
+		l.add(decision.EventMint, "xe1", "lab", "", func(r *decision.Record) {
+			r.Session, r.Verdict, r.Reason = nil, decision.VerdictDeny, decision.CredentialRevoked
+			r.Principal = "user:alice@example.com"
+		})
+	}
+	permit(1)
+	deny()
+	deny()
+	permit(2)
+	devices := []Device{{Name: "xe1", Platform: "cisco_iosxe", Supports: eos}}
+	r := Infer(l.recs, devices, Options{}).Rows[0]
+	if !slices.Equal(r.Notes,
+		[]string{"never seen: no TACACS+ record in the window, so nothing is inferred (2 tokens minted for it)"}) {
+		t.Fatalf("%+v", r)
+	}
+}
+
 // A device whose every packet failed to validate, as one with the wrong key
 // sends, is not seen: the note says it asked and did not validate, the hint
 // an operator needs, and pages nobody (final review minor 12).

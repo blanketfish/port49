@@ -387,7 +387,10 @@ func TestARevokedReplayReturnsNothing(t *testing.T) {
 
 // A mark that lands while a replay is being answered: the replay wrote no
 // token, but the check after still refuses it, and deletes the tokens the
-// replay would have handed back.
+// replay would have handed back. It recorded no permit, so its one deny
+// names no device: a device deny would follow the original mint's permit,
+// whose tokens were returned, and port49 capability would uncount them
+// (Task 7 review N1).
 func TestARevocationDuringAReplayReturnsNothing(t *testing.T) {
 	f := newFixture(t, 8)
 	decodeMint(t, f.post(context.Background(), f.state(f.alice), `{"devices":["leaf1"]}`, "01Q"))
@@ -404,6 +407,15 @@ func TestARevocationDuringAReplayReturnsNothing(t *testing.T) {
 	}
 	if n := f.live(t, "leaf1"); n != 0 {
 		t.Fatalf("%d token(s) the refused replay named survived", n)
+	}
+	var denies []map[string]any
+	for _, r := range f.records(t) {
+		if r["event"] == "mint" && r["verdict"] == "deny" && r["reason"] == "credential_revoked" {
+			denies = append(denies, r)
+		}
+	}
+	if len(denies) != 1 || denies[0]["device"] != nil || denies[0]["principal"] != "user:alice@example.com" {
+		t.Fatalf("the refused replay's denies: %v", denies)
 	}
 }
 
