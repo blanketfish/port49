@@ -353,6 +353,34 @@ func TestIdempotencyReservesOnceThroughTheSealingLayer(t *testing.T) {
 	}, now)
 }
 
+func TestIdempotencyLeaseExpiresThroughTheSealingLayer(t *testing.T) {
+	now := time.Unix(1_757_041_495, 0)
+	storetest.IdempotencyLeaseExpires(t, func() (store.Store, func(time.Duration)) {
+		return Wrap(memory.New(func() time.Time { return now }), keys(), nil),
+			func(d time.Duration) { now = now.Add(d) }
+	}, now)
+}
+
+// A pending reservation has nothing sealed in it, so reading one back is
+// not a record that will not open: no open failure is counted, and no
+// decryption error reaches the caller.
+func TestAPendingReservationReadsBackWithoutOpening(t *testing.T) {
+	ctx := context.Background()
+	failures := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "t"}, []string{"record"})
+	s := Wrap(memory.New(time.Now), keys(), failures)
+	if _, ok, err := s.ReserveIdempotency(ctx, "user:alice", "k",
+		store.Idempotency{BodyHash: "b", Holder: "h", Pending: true, ExpiresAt: time.Now().Add(time.Minute)}); err != nil || !ok {
+		t.Fatalf("%v %v", ok, err)
+	}
+	r, err := s.GetIdempotency(ctx, "user:alice", "k")
+	if err != nil || !r.Pending || r.Holder != "h" {
+		t.Fatalf("reading a pending reservation: %+v %v", r, err)
+	}
+	if n := testutil.ToFloat64(failures.WithLabelValues("idempotency")); n != 0 {
+		t.Fatalf("a pending reservation counted %v open failures", n)
+	}
+}
+
 // A completed record holds the minted tokens, so the inner store sees it
 // sealed; a reservation holds no response, and one that tries to carry one
 // is refused rather than written in clear.

@@ -1081,9 +1081,17 @@ func (s *Store) GetIdempotency(_ context.Context, principal, key string) (store.
 	return store.Idempotency{}, store.ErrNotFound
 }
 
+// errNoHolder refuses an idempotency record without a holder: the empty
+// holder is one any request can name, so it would hand a reservation's
+// rights to everyone.
+var errNoHolder = errors.New("store: an idempotency record must name its holder")
+
 // ReserveIdempotency is design §17's put-if-absent: under the one lock, a
 // live record is returned untouched and only its absence is written.
 func (s *Store) ReserveIdempotency(_ context.Context, principal, key string, rec store.Idempotency) (store.Idempotency, bool, error) {
+	if rec.Holder == "" {
+		return store.Idempotency{}, false, errNoHolder
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	k := idemKey(principal, key)
@@ -1096,8 +1104,14 @@ func (s *Store) ReserveIdempotency(_ context.Context, principal, key string, rec
 }
 
 // CompleteIdempotency writes rec over the live record only while that
-// record's holder is expect.
+// record's holder is expect. Nobody holds the empty holder.
 func (s *Store) CompleteIdempotency(_ context.Context, principal, key, expect string, rec store.Idempotency) error {
+	if rec.Holder == "" {
+		return errNoHolder
+	}
+	if expect == "" {
+		return store.ErrConflict
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	k := idemKey(principal, key)

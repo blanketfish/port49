@@ -608,12 +608,14 @@ type Store interface {
 	// ReserveIdempotency writes rec under (principal, key) when no live
 	// record is there, in one atomic step, and reports true. When one is, it
 	// writes nothing and returns that record and false. Two concurrent
-	// requests under one key therefore cannot both pass (design §17).
+	// requests under one key therefore cannot both pass (design §17). A
+	// record without a Holder is refused: the empty holder is anyone's.
 	ReserveIdempotency(ctx context.Context, principal, key string, rec Idempotency) (Idempotency, bool, error)
 	// CompleteIdempotency replaces the live record under (principal, key)
 	// with rec only while that record's Holder is expect; otherwise it writes
 	// nothing and returns ErrConflict. An expired reservation, or one another
-	// request has taken since, is never overwritten.
+	// request has taken since, is never overwritten. An empty expect is
+	// ErrConflict, and a rec without a Holder is refused.
 	CompleteIdempotency(ctx context.Context, principal, key, expect string, rec Idempotency) error
 	// ReleaseIdempotency deletes the record under (principal, key) only
 	// while it is a pending reservation held by holder; anything else stays.

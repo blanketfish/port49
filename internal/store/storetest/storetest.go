@@ -380,4 +380,60 @@ func IdempotencyReservesOnce(t *testing.T, newStore func() store.Store, now time
 	if _, ok, err := s.ReserveIdempotency(ctx, "user:bob@example.com", key, pending("bob")); err != nil || !ok {
 		t.Fatalf("another principal under the same key is its own record: %v %v", ok, err)
 	}
+
+	// The empty holder is one anyone can name, so the store refuses it on
+	// every side: no reservation or completion carries it, and no completion
+	// expects it.
+	if _, ok, err := s.ReserveIdempotency(ctx, principal, "anon", pending("")); err == nil || ok {
+		t.Fatalf("a reservation without a holder: %v %v, want refused", ok, err)
+	}
+	if _, ok, err := s.ReserveIdempotency(ctx, principal, "anon", pending("anon-holder")); err != nil || !ok {
+		t.Fatalf("a refused reservation wrote a record: %v %v", ok, err)
+	}
+	anon := done
+	anon.Holder = ""
+	if err := s.CompleteIdempotency(ctx, principal, "anon", "anon-holder", anon); err == nil {
+		t.Fatal("a completion without a holder was written")
+	}
+	if err := s.CompleteIdempotency(ctx, principal, "anon", "", done); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("a completion expecting the empty holder: %v, want ErrConflict", err)
+	}
+	if cur, ok, _ := s.ReserveIdempotency(ctx, principal, "anon", pending("late")); ok || !cur.Pending || cur.Holder != "anon-holder" {
+		t.Fatalf("a refused completion changed the reservation: %+v %v", cur, ok)
+	}
+}
+
+// IdempotencyLeaseExpires is the reservation's lease (plan 7a): a
+// reservation a dead broker left behind expires, past it a retry reserves
+// afresh, and the dead holder can no longer complete or release what is now
+// someone else's.
+//
+// newStore returns a fresh store whose clock reads now, and a func that moves
+// that clock forward; a backend whose expiry is server-side advances it by
+// its own means.
+func IdempotencyLeaseExpires(t *testing.T, newStore func() (store.Store, func(time.Duration)), now time.Time) {
+	t.Helper()
+	ctx := context.Background()
+	s, advance := newStore()
+	res := func(h string) store.Idempotency {
+		return store.Idempotency{BodyHash: "h1", Holder: h, Pending: true, ExpiresAt: now.Add(time.Minute)}
+	}
+	if _, ok, err := s.ReserveIdempotency(ctx, "user:alice", "k", res("dead")); err != nil || !ok {
+		t.Fatalf("first reservation: %v %v", ok, err)
+	}
+	advance(time.Minute)
+	now = now.Add(time.Minute)
+	if _, ok, err := s.ReserveIdempotency(ctx, "user:alice", "k", res("retry")); err != nil || !ok {
+		t.Fatalf("a reservation past its expiry must not stand: %v %v", ok, err)
+	}
+	if err := s.CompleteIdempotency(ctx, "user:alice", "k", "dead",
+		store.Idempotency{BodyHash: "h1", Holder: "dead", ExpiresAt: now.Add(time.Hour)}); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("the dead holder completed the retry's reservation: %v", err)
+	}
+	if err := s.ReleaseIdempotency(ctx, "user:alice", "k", "dead"); err != nil {
+		t.Fatal(err)
+	}
+	if cur, ok, _ := s.ReserveIdempotency(ctx, "user:alice", "k", res("third")); ok || cur.Holder != "retry" {
+		t.Fatalf("the dead holder released the retry's reservation: %+v %v", cur, ok)
+	}
 }

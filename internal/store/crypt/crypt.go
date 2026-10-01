@@ -466,6 +466,11 @@ func (w *wrapped) GetIdempotency(ctx context.Context, principal, key string) (st
 	if err != nil {
 		return store.Idempotency{}, err
 	}
+	// A pending reservation has nothing sealed: opening it would count a
+	// decryption failure that is not one.
+	if rec.Pending {
+		return rec, nil
+	}
 	resp, err := w.keys.Open(rec.Sealed)
 	if err != nil {
 		return store.Idempotency{}, w.openErr("idempotency", err)
