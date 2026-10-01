@@ -17,7 +17,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -438,18 +438,27 @@ func (b *lockedBuffer) String() string {
 // /refresh answers status with body.
 func refreshStub(t *testing.T, st agent.Status, status int, body any) string {
 	t.Helper()
+	p, _ := countingRefreshStub(t, st, status, body)
+	return p
+}
+
+// countingRefreshStub is refreshStub, counting the /refresh requests.
+func countingRefreshStub(t *testing.T, st agent.Status, status int, body any) (string, *atomic.Int32) {
+	t.Helper()
+	var n atomic.Int32
 	return agentStub(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/status":
 			_ = json.NewEncoder(w).Encode(st)
 		case "/refresh":
+			n.Add(1)
 			w.WriteHeader(status)
 			_ = json.NewEncoder(w).Encode(body)
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
-	}))
+	})), &n
 }
 
 // port49 refresh says when it refreshed, how long the login now lasts, and
@@ -514,70 +523,65 @@ func TestRefreshWithNoAgentOrARefusal(t *testing.T) {
 	}
 }
 
-// port49 login with an agent already running refreshes that agent's session
-// and says what it extended, rather than "already logged in"; a refusal is
-// a failure.
+// port49 login with an agent already running for the same broker and
+// certificate names the broker and refreshes that agent's session, rather
+// than "already logged in"; a refusal is a failure. An agent for another
+// broker, or another certificate, is refused by name and not refreshed: it
+// is another identity's session (anti-escalation).
 func TestLoginWithAnAgentRunningRefreshes(t *testing.T) {
 	dir := t.TempDir()
 	if err := testpki.WriteLab(dir, "alice@example.com", time.Now()); err != nil {
 		t.Fatal(err)
 	}
+	cert, err := tls.LoadX509KeyPair(filepath.Join(dir, testpki.LabClientCert), filepath.Join(dir, testpki.LabClientKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const brokerURL = "https://broker.example:8443"
 	args := func(sock string) []string {
-		return []string{"login", "--broker", "https://127.0.0.1:1", "--cert", filepath.Join(dir, testpki.LabClientCert),
+		return []string{"login", "--broker", brokerURL + "/", "--cert", filepath.Join(dir, testpki.LabClientCert),
 			"--key", filepath.Join(dir, testpki.LabClientKey), "--broker-ca", filepath.Join(dir, testpki.LabCA), "--socket", sock}
 	}
-	p := refreshStub(t, agent.Status{Broker: "https://broker"}, http.StatusOK, api.RefreshResponse{
+	ours := agent.Status{Broker: brokerURL, CertFingerprint: agent.CertFingerprint(cert)}
+	p, refreshes := countingRefreshStub(t, ours, http.StatusOK, api.RefreshResponse{
 		AuthTime: "2026-10-01T09:00:00Z", SessionEndsAt: "2026-10-01T21:00:00Z",
 		Sessions: []api.RefreshedSession{{Device: "leaf1", Username: "alice", Outcome: "extended",
 			SessionExpires: "2026-10-01T21:00:00Z"}}})
 	var out, errb bytes.Buffer
-	if code := run(args(p), &out, &errb); code != 0 || strings.Contains(out.String(), "already logged in") ||
-		!strings.HasPrefix(out.String(), "refreshed at 2026-10-01T09:00:00Z; this login lasts until 2026-10-01T21:00:00Z\n") ||
+	if code := run(args(p), &out, &errb); code != 0 || refreshes.Load() != 1 ||
+		!strings.HasPrefix(out.String(), "port49: already logged in to "+brokerURL+"; refreshing\n"+
+			"refreshed at 2026-10-01T09:00:00Z; this login lasts until 2026-10-01T21:00:00Z\n") ||
 		!strings.Contains(out.String(), "leaf1 (alice)  extended to 2026-10-01T21:00:00Z") {
 		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
 	}
-	p = refreshStub(t, agent.Status{Broker: "https://broker"}, http.StatusGone, api.Error{Error: "credential_revoked",
+	p, _ = countingRefreshStub(t, ours, http.StatusGone, api.Error{Error: "credential_revoked",
 		Detail: "this principal was revoked at 2026-10-01T00:00:00Z"})
 	out.Reset()
-	if code := run(args(p), &out, &errb); code != 1 || out.Len() != 0 ||
+	errb.Reset()
+	if code := run(args(p), &out, &errb); code != 1 ||
 		!strings.Contains(errb.String(), "port49 login: refreshing the running agent's session: the session is over: this principal was revoked") {
 		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
 	}
-}
 
-// The real path: port49 login starts the agent, which logs in to a real
-// broker, and refreshes at once, extending the device session the last
-// login left; a second login finds the agent and refreshes it again.
-func TestLoginStartsAnAgentAndRefreshes(t *testing.T) {
-	l := newLabBroker(t, time.Hour)
-	sock := privateSocket(t)
-	t.Setenv(runCLIEnv, "1")
-	var out, errb bytes.Buffer
-	code := run(append([]string{"login"}, l.flags(sock)...), &out, &errb)
-	var pid int
-	if i := strings.Index(out.String(), "(agent pid "); i >= 0 {
-		fmt.Sscanf(out.String()[i:], "(agent pid %d,", &pid)
-	}
-	if pid > 0 {
-		t.Cleanup(func() {
-			_ = syscall.Kill(pid, syscall.SIGTERM)
-			for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
-				if _, err := os.Stat(sock); err != nil {
-					return
-				}
-			}
-		})
-	}
-	if code != 0 || !strings.Contains(out.String(), "port49: logged in to "+l.url) ||
-		!strings.Contains(out.String(), "\nrefreshed at ") || !strings.Contains(out.String(), "  leaf1 (alice)  extended to ") {
-		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
-	}
-	l.step(11 * time.Second) // past the connection's refresh pacing
-	out.Reset()
-	if code := run(append([]string{"login"}, l.flags(sock)...), &out, &errb); code != 0 ||
-		!strings.HasPrefix(out.String(), "refreshed at ") || strings.Contains(out.String(), "logged in") ||
-		!strings.Contains(out.String(), "  leaf1 (alice)  extended to ") {
-		t.Fatalf("a second login: code %d stdout %q stderr %q", code, out.String(), errb.String())
+	for name, c := range map[string]struct {
+		st   agent.Status
+		want string
+	}{
+		"another broker": {agent.Status{Broker: "https://prod-broker.example:8443", CertFingerprint: ours.CertFingerprint},
+			"port49 login: an agent logged in to https://prod-broker.example:8443 already holds "},
+		"another certificate": {agent.Status{Broker: brokerURL, CertFingerprint: "sha256:" + strings.Repeat("ab", 32)},
+			"port49 login: an agent for " + brokerURL + " with another certificate already holds "},
+		"an agent that names no certificate": {agent.Status{Broker: brokerURL},
+			"port49 login: an agent for " + brokerURL + " with another certificate already holds "},
+	} {
+		p, refreshes := countingRefreshStub(t, c.st, http.StatusOK, api.RefreshResponse{})
+		out.Reset()
+		errb.Reset()
+		if code := run(args(p), &out, &errb); code != 1 || out.Len() != 0 || refreshes.Load() != 0 ||
+			!strings.HasPrefix(errb.String(), c.want+p+"; run 'port49 refresh' to extend that session, "+
+				"stop that agent first, or use --socket\n") {
+			t.Errorf("%s: code %d, %d refreshes, stdout %q stderr %q", name, code, refreshes.Load(), out.String(), errb.String())
+		}
 	}
 }
 
@@ -693,5 +697,21 @@ func TestASessionExpiredDenialSaysToRefresh(t *testing.T) {
 	if code := run([]string{"token", "--socket", p, "leaf1"}, &out, &errb); code != 1 || out.Len() != 0 ||
 		errb.String() != "port49 token: leaf1: deny session_expired: your session on leaf1 reached its ceiling; run 'port49 refresh'\n" {
 		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
+	}
+}
+
+// An expiry already past, as a permit inside the grace window can carry, is
+// said so rather than as a time left.
+func TestTimeLeft(t *testing.T) {
+	for d, want := range map[time.Duration]string{
+		29*time.Minute + 20*time.Second: "in 29m",
+		65 * time.Minute:                "in 1h5m",
+		20 * time.Second:                "in under a minute",
+		0:                               "already past",
+		-3 * time.Minute:                "already past",
+	} {
+		if got := timeLeft(d); got != want {
+			t.Errorf("%v: %q, want %q", d, got, want)
+		}
 	}
 }

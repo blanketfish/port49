@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -55,7 +56,8 @@ import (
 // does, over the connection's exporter value, recording the remote address
 // each refresh path was asked on. refreshRefusals answers that many
 // refreshes with their refusal first, in order; tooSoon answers every
-// challenge 429 refresh_too_soon. certStatus answers /v1/config, every mint
+// challenge 429 refresh_too_soon; dropRefresh hangs up on that many refresh
+// answers without a reply. order is every refresh path, in arrival order. certStatus answers /v1/config, every mint
 // and every refresh 503 certificate_status_unavailable, as the broker does
 // when it cannot establish the certificate's status (Task 10).
 type fakeBroker struct {
@@ -70,6 +72,8 @@ type fakeBroker struct {
 	revoked    bool
 
 	addrs           map[string][]string
+	order           []string
+	dropRefresh     int
 	nonce           []byte
 	refreshRefusals []refusal
 	tooSoon         bool
@@ -90,6 +94,9 @@ func (fb *fakeBroker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fb.addrs = map[string][]string{}
 	}
 	fb.addrs[r.URL.Path] = append(fb.addrs[r.URL.Path], r.RemoteAddr)
+	if strings.HasPrefix(r.URL.Path, "/v1/refresh") {
+		fb.order = append(fb.order, r.URL.Path)
+	}
 	fb.mu.Unlock()
 	if certStatus && r.URL.Path != "/v1/refresh/challenge" {
 		writeJSON(w, 503, api.Error{Error: "certificate_status_unavailable",
@@ -115,12 +122,21 @@ func (fb *fakeBroker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fb.mu.Lock()
 		nonce := fb.nonce
 		fb.nonce = nil
+		drop := fb.dropRefresh > 0
+		if drop {
+			fb.dropRefresh--
+		}
 		var ref *refusal
 		if len(fb.refreshRefusals) > 0 {
 			ref = &fb.refreshRefusals[0]
 			fb.refreshRefusals = fb.refreshRefusals[1:]
 		}
 		fb.mu.Unlock()
+		if drop {
+			c, _, _ := w.(http.Hijacker).Hijack()
+			c.Close()
+			return
+		}
 		if ref != nil {
 			if ref.retryAfter != "" {
 				w.Header().Set("Retry-After", ref.retryAfter)
@@ -1035,6 +1051,9 @@ func answerOne(c *tls.Conn, br *bufio.Reader) bool {
 	// A week: past the client certificate's day, so a test can move the
 	// agent's clock beyond the certificate without ending the session first.
 	var body any = api.Config{Methods: []string{"x509"}, MaxSessionAgeSeconds: 7 * 24 * 3600, BatchMax: 10}
+	if req.URL.Path == "/v1/refresh/challenge" {
+		body = api.RefreshChallenge{Nonce: base64.RawURLEncoding.EncodeToString(make([]byte, api.RefreshNonceLen))}
+	}
 	if req.URL.Path == "/v1/tokens" {
 		var mr api.MintRequest
 		_ = json.NewDecoder(req.Body).Decode(&mr)
@@ -1484,7 +1503,8 @@ func TestTheClientRefreshesOverTheSocket(t *testing.T) {
 	t.Cleanup(func() { _ = srv.Close() })
 
 	c := NewClient(p)
-	if st, err := c.Status(context.Background()); err != nil || st.CeilingWarningSeconds != 1800 {
+	if st, err := c.Status(context.Background()); err != nil || st.CeilingWarningSeconds != 1800 ||
+		st.CertFingerprint != CertFingerprint(r.a.cert) || !strings.HasPrefix(st.CertFingerprint, "sha256:") {
 		t.Fatalf("status %+v %v", st, err)
 	}
 	out, err := c.Refresh(context.Background())
@@ -1511,5 +1531,193 @@ func TestTheClientRefreshesOverTheSocket(t *testing.T) {
 	var revoked *RevokedError
 	if !errors.As(err, &revoked) || strings.Contains(err.Error(), "port49 login") {
 		t.Fatalf("a revoked refresh through the socket: %v", err)
+	}
+}
+
+// A refresh whose answer is lost in transit, the held connection dropped
+// after the answer was sent, is tried once more with a new challenge on a
+// new connection, and succeeds there.
+func TestALostRefreshAnswerIsTriedOnANewConnection(t *testing.T) {
+	r := newRig(t)
+	first := r.a.SessionEndsAt()
+	r.fb.mu.Lock()
+	r.fb.dropRefresh = 1
+	r.fb.mu.Unlock()
+	if _, err := r.a.Refresh(context.Background()); err != nil {
+		t.Fatalf("a lost answer, then a good one: %v", err)
+	}
+	r.fb.mu.Lock()
+	order := append([]string(nil), r.fb.order...)
+	r.fb.mu.Unlock()
+	if len(order) != 4 || r.a.Handshakes() != 2 || !r.a.SessionEndsAt().After(first) {
+		t.Fatalf("order %q, %d handshakes, deadline moved %v", order, r.a.Handshakes(), r.a.SessionEndsAt().After(first))
+	}
+}
+
+// The connection changing between the challenge and its answer, here the
+// challenge's connection closed before the answer goes out, fails closed
+// at the real broker (no nonce on the new connection) and is tried once
+// more on the new one, which succeeds (decision 33).
+func TestAConnectionSwappedUnderARefreshIsTriedAgain(t *testing.T) {
+	r := newRealRig(t)
+	first := r.a.SessionEndsAt()
+	r.advance(time.Minute)
+	var (
+		mu    sync.Mutex
+		held  net.Conn
+		gets  int
+		swaps int
+	)
+	ctx := httptrace.WithClientTrace(context.Background(), &httptrace.ClientTrace{
+		GetConn: func(string) {
+			mu.Lock()
+			defer mu.Unlock()
+			gets++
+			if gets == 2 && held != nil {
+				held.Close() // the answer's turn: the challenge's connection is gone
+				swaps++
+			}
+		},
+		GotConn: func(i httptrace.GotConnInfo) {
+			mu.Lock()
+			defer mu.Unlock()
+			if held == nil {
+				held = i.Conn
+			}
+		},
+	})
+	out, err := r.a.Refresh(ctx)
+	if err != nil || len(out.Sessions) != 1 || out.Sessions[0].Outcome != "extended" {
+		t.Fatalf("Refresh: %+v %v", out.Sessions, err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if swaps != 1 || r.a.Handshakes() != 2 || !r.a.SessionEndsAt().After(first) {
+		t.Fatalf("swaps %d, %d handshakes, deadline moved %v", swaps, r.a.Handshakes(), r.a.SessionEndsAt().After(first))
+	}
+}
+
+// Concurrent refreshes run one at a time: a second challenge never replaces
+// the first one's nonce before its answer.
+func TestConcurrentRefreshesRunOneAtATime(t *testing.T) {
+	r := newRig(t)
+	var wg sync.WaitGroup
+	errs := make(chan error, 4)
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := r.a.Refresh(context.Background())
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("a concurrent refresh: %v", err)
+		}
+	}
+	r.fb.mu.Lock()
+	order := append([]string(nil), r.fb.order...)
+	r.fb.mu.Unlock()
+	if len(order) != 8 {
+		t.Fatalf("order %q", order)
+	}
+	for i, p := range order {
+		want := "/v1/refresh/challenge"
+		if i%2 == 1 {
+			want = "/v1/refresh"
+		}
+		if p != want {
+			t.Fatalf("order %q: a challenge and its answer interleaved", order)
+		}
+	}
+}
+
+// A refresh of a session already over, ended by the broker or past the
+// agent's own deadline, asks the broker nothing.
+func TestARefreshOfAnEndedSessionAsksNothing(t *testing.T) {
+	r := newRig(t)
+	r.fb.mu.Lock()
+	r.fb.refreshRefusals = []refusal{{status: 401, e: api.Error{Error: "credential_revoked",
+		Detail: "this principal was revoked at 2026-10-01T00:00:00Z"}}}
+	r.fb.mu.Unlock()
+	var revoked *RevokedError
+	if _, err := r.a.Refresh(context.Background()); !errors.As(err, &revoked) {
+		t.Fatalf("a revoked refresh: %v", err)
+	}
+	if _, err := r.a.Refresh(context.Background()); !errors.Is(err, ErrSessionOver) {
+		t.Fatalf("a refresh of an ended session: %v", err)
+	}
+	r.fb.mu.Lock()
+	n := len(r.fb.order)
+	r.fb.mu.Unlock()
+	if n != 2 {
+		t.Fatalf("an ended session reached the broker: %d refresh requests, want 2", n)
+	}
+
+	r = newRig(t)
+	r.advance(61 * time.Second)
+	if _, err := r.a.Refresh(context.Background()); !errors.Is(err, ErrSessionOver) {
+		t.Fatalf("a refresh past the deadline: %v", err)
+	}
+	r.fb.mu.Lock()
+	n = len(r.fb.order)
+	r.fb.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("a session past its deadline reached the broker: %d refresh requests", n)
+	}
+}
+
+// A refresh whose reconnect meets a hang-up with the certificate past its
+// NotAfter ends the session, as a mint's does, and is not tried again: on
+// the challenge's leg, and on the answer's when the connection changed
+// between the two (pre-flight F10).
+func TestAnExpiredHangUpDuringARefreshEndsTheSession(t *testing.T) {
+	for _, leg := range []string{"challenge", "answer"} {
+		t.Run(leg, func(t *testing.T) {
+			var accepted atomic.Int32
+			url, ca, cli := rawBroker(t, func(i int, c *tls.Conn, raw *net.TCPConn) {
+				accepted.Add(1)
+				switch {
+				case i == 1:
+					answerOne(c, bufio.NewReader(c)) // Connect's /v1/config
+				case i == 2 && leg == "answer":
+					// The challenge, answered; then the connection closes,
+					// so the answer goes out on a new one.
+					answerOne(c, bufio.NewReader(c))
+					_ = c.Close()
+					return
+				}
+				hangUp(raw, true)
+			})
+			var mu sync.Mutex
+			now := time.Now()
+			clock := func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+			a := New(Config{BrokerURL: url, Cert: cli, BrokerCA: ca.Pool(), Now: clock})
+			if _, err := a.Connect(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			mu.Lock()
+			now = now.Add(25 * time.Hour) // the client certificate is good for a day
+			mu.Unlock()
+			_, err := a.Refresh(context.Background())
+			if !errors.Is(err, ErrSessionOver) || !strings.Contains(err.Error(), "your certificate expired at") {
+				t.Fatalf("an expired hang-up: %v", err)
+			}
+			select {
+			case <-a.Done():
+			default:
+				t.Fatal("Done must close")
+			}
+			want := int32(2)
+			if leg == "answer" {
+				want = 3
+			}
+			if n := accepted.Load(); n != want {
+				t.Fatalf("%d connections, want %d: an ended session was tried again", n, want)
+			}
+		})
 	}
 }

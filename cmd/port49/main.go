@@ -171,12 +171,30 @@ func login(args []string, stdout, stderr io.Writer) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	if _, err := sf.config(stderr); err != nil {
+	cfg, err := sf.config(stderr)
+	if err != nil {
 		fmt.Fprintln(stderr, "port49 login:", err)
 		return 2
 	}
 	ctx := context.Background()
-	if _, err := agent.NewClient(sf.socket).Status(ctx); err == nil {
+	if st, err := agent.NewClient(sf.socket).Status(ctx); err == nil {
+		// Only the session these flags name is refreshed. Another broker's,
+		// or another certificate's, is someone else's identity: refreshing
+		// it would extend that identity's device sessions while the
+		// operator believes they switched (anti-escalation).
+		var other string
+		switch {
+		case strings.TrimRight(sf.broker, "/") != st.Broker:
+			other = fmt.Sprintf("an agent logged in to %s", st.Broker)
+		case agent.CertFingerprint(cfg.Cert) != st.CertFingerprint:
+			other = fmt.Sprintf("an agent for %s with another certificate", st.Broker)
+		}
+		if other != "" {
+			fmt.Fprintf(stderr, "port49 login: %s already holds %s; run 'port49 refresh' to extend that session, "+
+				"stop that agent first, or use --socket\n", other, sf.socket)
+			return 1
+		}
+		fmt.Fprintf(stdout, "port49: already logged in to %s; refreshing\n", st.Broker)
 		out, err := agent.NewClient(sf.socket).Refresh(ctx)
 		if err != nil {
 			fmt.Fprintln(stderr, "port49 login: refreshing the running agent's session:", unprefixed(err))
@@ -361,8 +379,8 @@ func tokenCmd(args []string, stdout, stderr io.Writer) int {
 	if exp, err := time.Parse(time.RFC3339, item.SessionExpiresAt); err == nil {
 		if st, err := agent.NewClient(*socket).Status(context.Background()); err == nil && st.CeilingWarningSeconds > 0 {
 			if left := time.Until(exp); left <= time.Duration(st.CeilingWarningSeconds)*time.Second {
-				fmt.Fprintf(stderr, "port49: your session on %s ends at %s (in %s); run 'port49 refresh'\n",
-					device, item.SessionExpiresAt, inMinutes(left))
+				fmt.Fprintf(stderr, "port49: your session on %s ends at %s (%s); run 'port49 refresh'\n",
+					device, item.SessionExpiresAt, timeLeft(left))
 			}
 		}
 	}
@@ -374,12 +392,17 @@ func tokenCmd(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// inMinutes is d to the minute as the operator reads it: "29m", "1h5m".
-func inMinutes(d time.Duration) string {
-	if d < time.Minute {
-		return "under a minute"
+// timeLeft is d to the minute as the operator reads it: "in 29m", "in 1h5m".
+// An expiry already past, as a permit inside the grace window can carry, is
+// said so.
+func timeLeft(d time.Duration) string {
+	switch {
+	case d <= 0:
+		return "already past"
+	case d < time.Minute:
+		return "in under a minute"
 	}
-	return strings.TrimSuffix(d.Round(time.Minute).String(), "0s")
+	return "in " + strings.TrimSuffix(d.Round(time.Minute).String(), "0s")
 }
 
 func lastLines(s string, n int) string {

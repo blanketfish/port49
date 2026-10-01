@@ -17,6 +17,7 @@ import (
 	"context"
 	"crypto"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
@@ -104,6 +105,8 @@ type Agent struct {
 	now        func() time.Time
 	log        io.Writer
 	handshakes atomic.Int64
+	// fingerprint is the certificate's, as CertFingerprint gives it.
+	fingerprint string
 
 	mu       sync.Mutex
 	deadline time.Time
@@ -138,6 +141,7 @@ func New(c Config) *Agent {
 		a.log = io.Discard
 	}
 	a.cert = c.Cert
+	a.fingerprint = CertFingerprint(c.Cert)
 	cert := c.Cert
 	dialer := &tls.Dialer{Config: &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: c.BrokerCA,
 		// Always presented. Go's default presents a certificate only when the
@@ -161,6 +165,19 @@ func New(c Config) *Agent {
 	}
 	a.client = &http.Client{Transport: tr, Timeout: 30 * time.Second}
 	return a
+}
+
+// CertFingerprint is "sha256:" and the hex SHA-256 of the certificate's leaf
+// DER, as the broker's records name a certificate; "" for none. It is a
+// public certificate's hash, not a credential: `port49 login` compares it to
+// tell whether a running agent holds the session of the certificate it was
+// given.
+func CertFingerprint(c tls.Certificate) string {
+	if len(c.Certificate) == 0 {
+		return ""
+	}
+	sum := sha256.Sum256(c.Certificate[0])
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 // Connect opens the session: the handshake, which is the one use of the key
@@ -341,21 +358,7 @@ func (a *Agent) post(ctx context.Context, body []byte, key string) (*http.Respon
 			return resp, nil
 		}
 		a.client.CloseIdleConnections()
-		if refused := a.refusal(err); refused != nil {
-			// A reconnect whose handshake failed: the certificate expired
-			// or the trust changed under the session, and no retry will
-			// mint (Ruling Q1; pre-flight F10).
-			over := fmt.Errorf("%w: %s", ErrSessionOver, strings.TrimPrefix(refused.Error(), "agent: "))
-			a.end(over)
-			return nil, over
-		}
-		// A hang-up with a certificate past its NotAfter is that refusal
-		// with its alert lost, which over a real network the RST can
-		// discard: nothing this session holds will mint again, so it ends
-		// as the alert would have (pre-flight F10).
-		if hup := (*hangUpError)(nil); errors.As(err, &hup) && !hup.expired.IsZero() {
-			over := fmt.Errorf("%w: %s", ErrSessionOver, strings.TrimPrefix(hup.Error(), "agent: "))
-			a.end(over)
+		if over := a.refusedReconnect(err); over != nil {
 			return nil, over
 		}
 		if attempt == 2 {
@@ -370,6 +373,29 @@ func (a *Agent) post(ctx context.Context, body []byte, key string) (*http.Respon
 			return nil, fmt.Errorf("agent: the broker at %s is unreachable: %w", a.broker, err)
 		}
 	}
+}
+
+// refusedReconnect ends the session on a transport error that means no
+// reconnect will be accepted, and returns why; nil for any other error.
+func (a *Agent) refusedReconnect(err error) error {
+	if refused := a.refusal(err); refused != nil {
+		// A reconnect whose handshake failed: the certificate expired
+		// or the trust changed under the session, and no retry will
+		// mint (Ruling Q1; pre-flight F10).
+		over := fmt.Errorf("%w: %s", ErrSessionOver, strings.TrimPrefix(refused.Error(), "agent: "))
+		a.end(over)
+		return over
+	}
+	// A hang-up with a certificate past its NotAfter is that refusal
+	// with its alert lost, which over a real network the RST can
+	// discard: nothing this session holds will mint again, so it ends
+	// as the alert would have (pre-flight F10).
+	if hup := (*hangUpError)(nil); errors.As(err, &hup) && !hup.expired.IsZero() {
+		over := fmt.Errorf("%w: %s", ErrSessionOver, strings.TrimPrefix(hup.Error(), "agent: "))
+		a.end(over)
+		return over
+	}
+	return nil
 }
 
 // sessionOver is the ErrSessionOver a broker's answer means, or nil: a 401
@@ -464,6 +490,11 @@ func (a *Agent) refreshOnce(ctx context.Context, signer crypto.Signer) (api.Refr
 	}
 	resp, err := a.do(req)
 	if err != nil {
+		// A reconnect the broker refuses ends the session, as a mint's
+		// does; no new challenge would be answered either.
+		if over := a.refusedReconnect(err); over != nil {
+			return api.RefreshResponse{}, false, over
+		}
 		return api.RefreshResponse{}, false, fmt.Errorf("agent: the broker at %s is unreachable: %w", a.broker, err)
 	}
 	if resp.StatusCode != http.StatusOK {
@@ -510,6 +541,9 @@ func (a *Agent) refreshOnce(ctx context.Context, signer crypto.Signer) (api.Refr
 	req.Header.Set("Content-Type", "application/json")
 	resp, err = a.do(req)
 	if err != nil {
+		if over := a.refusedReconnect(err); over != nil {
+			return api.RefreshResponse{}, false, over
+		}
 		return api.RefreshResponse{}, true, fmt.Errorf("agent: the broker at %s is unreachable: %w", a.broker, err)
 	}
 	defer drain(resp.Body)
@@ -726,11 +760,13 @@ type TokenRequest struct {
 	TTLSeconds int    `json:"ttl_seconds"`
 }
 
-// Status is GET /status on the agent's socket. CeilingWarningSeconds is the
+// Status is GET /status on the agent's socket. CertFingerprint is the
+// session's certificate (CertFingerprint). CeilingWarningSeconds is the
 // broker's session.ceiling_warning: how near a device's own ceiling
 // `port49 token` warns.
 type Status struct {
 	Broker                string `json:"broker"`
+	CertFingerprint       string `json:"cert_fingerprint"`
 	SessionEndsAt         string `json:"session_ends_at"`
 	Handshakes            int64  `json:"handshakes"`
 	CeilingWarningSeconds int    `json:"ceiling_warning_seconds"`
@@ -787,7 +823,7 @@ func (a *Agent) Handler() http.Handler {
 		a.mu.Lock()
 		warn := a.ceilingWarning
 		a.mu.Unlock()
-		writeJSON(w, http.StatusOK, Status{Broker: a.broker,
+		writeJSON(w, http.StatusOK, Status{Broker: a.broker, CertFingerprint: a.fingerprint,
 			SessionEndsAt: a.SessionEndsAt().UTC().Format(time.RFC3339), Handshakes: a.Handshakes(),
 			CeilingWarningSeconds: int(warn / time.Second)})
 	})
