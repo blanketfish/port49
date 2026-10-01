@@ -151,6 +151,67 @@ without touching the others.
 **No reason code, decision event or diagnosis is added** (spec §5.7): the service is not a decision
 point, and its lines and metrics are its record, as plan 6b ruled.
 
+## Revised after the pre-flight review (2026-10-01)
+
+The pre-flight review (`.superpowers/sdd/2026-10-01-06c-inventory-connectors/preflight-review.md`)
+found no critical, three important and seventeen minor problems. Every one is fixed below, with the
+review's fix unless the line says otherwise; none was rebutted. The rulings above stand; where an
+item here amends one, it says which, and the task text carries the amended rule.
+
+- **I1 (a list that shifts under a delete).** Amends ruling 6. Offset paging that loses a page
+  boundary to a concurrent delete returns a list one short whose last count agrees, and drops a live
+  device. Now a GraphQL list is taken only when its length equals REST's `count` read before it
+  **and** after it (`n == before == after`, the after read always made); a REST read only when every
+  page gives the same `count` and the total equals it; and either list only when no device appears
+  twice (REST by `id`, GraphQL by name, an empty name skipped). `sottest.Server.DeleteAfterPage`
+  replays the shift, and Task 8 tests each reader against it (Tasks 4, 5, 6, 8).
+- **I2 (addresses lost under an attribute key group).** New **Task 10a** (6b's `checkSafety` and
+  `bundle.CheckFrom`): a device that had an address in the bundle in force and has none in the new
+  one counts as out of service in both bounds, beside removed and newly refused, and the refusal
+  names it (`leaves N more with no address`). Under an attribute key group such a device stays
+  "admitted" while port49d, admitting by address, can no longer reach it.
+- **I3 (lab guards that could pass on nothing).** `TestL32FixturesAreWhatTheNotesSay` requires two
+  probes, each 200 with a `next` host, and four reads, and scopes "failed" to the read's own line;
+  `TestL33FixturesAreWhatTheNotesSay` requires three phases, each published phase's change and
+  seconds in the note, an unpublished one on a line with "failed", the webhook calls, and the
+  `bad_signature` count (Tasks 14, 15). `TestL33Webhooks` also asserts at least one accepted delivery
+  per published phase.
+- **M1.** `sot.Secret` holds its value behind a pointer, so a `Secret` reached through an unexported
+  field (inside `*sot.Source`) prints as an address, not the value; a test formats `*Source` (Tasks 2,
+  8).
+- **M2.** `readCA` reads through `config.ReadRegular`, as the service client does, so a FIFO at
+  `ca_file` is refused rather than blocking a dial (Task 2).
+- **M3.** A fetch reads at most 256 MiB summed over its pages, refused with a line saying so; an
+  answer header later than 2 minutes is said with `page_size` named (Tasks 2, 5, 6).
+- **M4.** A GraphQL page longer than `page_size` fails the read ("ignored the page size") (Task 5).
+- **M5.** The generic-platform line offers a `platforms:` block only when the name fits the policy's
+  platform-name shape; otherwise it names `platform_aliases` alone (Task 10; operator notes).
+- **M6.** Amends ruling 12: the line is said at each publication that changes the set of generic
+  platforms, and the gauge always holds the count (Task 1 text, Task 10).
+- **M7.** `export --from N` refuses a bundle whose sequence is not N (Task 13).
+- **M8.** `export --out` writes 0600, and the usage says so (Task 13).
+- **M9.** Amends ruling 3: every 401 has one body, `{"error":"unauthorized"}`, so a caller cannot
+  tell a configured source from another; the outcome stays in the metric and the line (Task 11).
+- **M10.** The webhook server's `net/http` error log drops TLS handshake errors and counts them
+  (`outcome="tls_handshake"`), and says any other line once (Tasks 11, 12).
+- **M11.** A full replay cache evicts its soonest-expiring entry rather than stop remembering
+  (Task 11).
+- **M12.** An absent `token_secret_env` says it is required, not malformed (Task 9).
+- **M13.** Interface reads leave out loopback, link-local, multicast and unspecified addresses, which
+  cannot source TACACS+ and repeat across devices, said once (Task 7; operator notes). The test is
+  that explicit list rather than the review's `!IsGlobalUnicast() && !IsPrivate()`, which reads the
+  same in Go (a private address is global unicast there) but names less of what it leaves out.
+- **M14.** When more than half the devices a source keeps give no platform, the source says once to
+  map `platform` to another path (Task 8).
+- **M15.** Task 1's spec text names the measured release for each paging, depth and status claim and
+  says the profile reads the rest of the major the same way, said as unmeasured.
+- **M16.** (a) The roadmap's 6c bullet no longer says webhooks are ordered by `timestamp` (edited in
+  this revision). (b) Task 4 says the per-device addresses are synthesized for the tests, not seeded.
+- **M17.** (a) `run.sh` writes the lab PKI after `trap cleanup EXIT`. (b) L33's note reads a single
+  `bad_signature` as "not sent again within 120 s". Also from the review's sections 4 and 5: the
+  operator notes say to leave the webhook's body template empty and how to handle a shared primary
+  address; the replay's `Status` knob cannot panic on an empty status.
+
 ## What the operator sees
 
 The owner's rule is to trace a mechanism on a bad day first.
@@ -181,8 +242,14 @@ The owner's rule is to trace a mechanism on a bad day first.
   lab run for the release, or `api: rest` for that source while one is done.
 - **A server cap or a concurrent bulk delete cuts the GraphQL list short:** `source netbox_prod:
   GraphQL gave 1000 devices and REST counts 1203 before and 1203 after: a page was lost, a server
-  capped the list, or the list changed during the sync; the next sync reads it again`. Nothing is
-  de-admitted. Fix a persistent one by lowering `page_size`.
+  capped the list, or the list changed during the sync; the next sync reads it again`. A delete
+  between pages fails the same way (`… gave 1202 devices and REST counts 1203 before and 1202
+  after …`), as does a REST page whose `count` moved. Nothing is de-admitted. Fix a persistent cap by
+  lowering `page_size`.
+- **An IPAM clean-up, or a token that lost its IPAM view, strips every device's address:** the
+  sync is refused by the source's bound (`source netbox_prod removes 0 of 203 devices and refuses 0
+  more and leaves 203 more with no address (100%) …`), and each port49d bounds it again the same
+  way. The bundle in force keeps serving.
 - **A reverse proxy in front of NetBox rewrites `Host`:** said once, `source netbox_prod: a page's
   next names another scheme, host or port than url; it is rebuilt on url, and the token is sent
   nowhere else: check the proxy's Host and X-Forwarded-Proto headers`. The sync proceeds.
@@ -191,10 +258,10 @@ The owner's rule is to trace a mechanism on a bad day first.
   refused by the source's bound (`source netbox_prod removes 203 of 203 devices …`). Nothing is
   published; `port49_inventory_sync_refused` is 1.
 - **A new platform slug appears (`eos-lab`):** the device is admitted and served by the generic
-  adapter, and every publication says `port49-inventory: bundle 1845: platform eos-lab (2 device(s))
-  has no adapter in the policy and is served by the generic one, priv-lvl only (spec §8): name it in
-  the source's platform_aliases, or give it a platforms: block in the policy`;
-  `port49_inventory_generic_platform_devices` is 2.
+  adapter, and the publication that brings it says `port49-inventory: bundle 1845: platform eos-lab
+  (2 device(s)) has no adapter in the policy and is served by the generic one, priv-lvl only (spec
+  §8): name it in the source's platform_aliases (a policy platforms: block cannot be named eos-lab)`;
+  `port49_inventory_generic_platform_devices` is 2 for as long as it lasts.
 - **The webhook secret in NetBox does not match:** `port49-inventory: webhook: refused a delivery
   for source netbox_prod from 10.0.0.9 (bad_signature): the webhook's secret in the source must be
   the value webhook_secret_env names`, once;
@@ -309,6 +376,8 @@ internal/inventory/config.go                  MOD  netbox and nautobot sources, 
 internal/inventory/source.go                  MOD  NewSources builds sot sources (Task 9)
 internal/inventory/sync.go                    MOD  fetch within sync_timeout; generic platforms; At (Tasks 10, 13)
 internal/inventory/metrics.go                 MOD  source_hung, generic_platform_devices (Task 10); webhooks (Task 11)
+internal/inventory/safety.go                  MOD  a device left with no address is out of service (Task 10a)
+internal/bundle/diff.go                       MOD  Unaddressed; CheckFrom counts it (Task 10a)
 internal/inventory/webhook.go                 NEW  Webhooks, WebhookServer (Task 11)
 internal/inventory/trigger.go                 NEW  Debouncer (Task 12)
 cmd/port49-inventory/main.go                  MOD  the webhook listener and debouncer (Task 12)
@@ -328,11 +397,11 @@ tests/lab/sot/l32/, l33/, results/L32-*.md, L33-*.md   NEW  written by the lab r
 docs/superpowers/plans/README.md              MOD  plan 6c as built (Task 16)
 ```
 
-Sixteen tasks:
+Seventeen tasks:
 - **Task 1** is docs, and comes first: every later task cites the text it writes.
-- **Tasks 2–13** are code. Every one leaves `make test` green. Tasks 2–8 are `internal/sot` and depend
-  on nothing outside it but `admission`, `bundle` and `testpki`; Tasks 9–13 wire it into the service
-  and the tool.
+- **Tasks 2–13, with 10a,** are code. Every one leaves `make test` green. Tasks 2–8 are `internal/sot`
+  and depend on nothing outside it but `admission`, `bundle`, `config` and `testpki`; Tasks 9–13 wire
+  it into the service and the tool; Task 10a amends 6b's two bounds (pre-flight I2).
 - **Task 14** is a lab measurement (L32) of Tasks 2–8 as built, on Compose.
 - **Task 15** is a lab measurement (L33) of Tasks 9–12 as built, and the device run end to end. It
   gates the merge.
@@ -382,9 +451,11 @@ measure is written as their open rows, and cited to them.
   only for a source configured with `webhook_secret_env`, as `application/json`, at most 1 MiB, with
   an `X-Hook-Signature` equal to HMAC-SHA512 of the body under that secret (L27, L30), and with a
   `timestamp` within 5 minutes of the service's clock either way; one whose signature was taken in
-  the last 10 minutes triggers nothing. Anything else is refused (401, 413, 415 or 400), counted
-  (`port49_inventory_webhooks_total{source, outcome}`) and said once per source and outcome, naming
-  the sender's address and never the body, the signature or the secret. A taken delivery triggers a
+  the last 10 minutes triggers nothing. Anything else is refused (401, 413, 415 or 400; every 401
+  with the one body `{"error":"unauthorized"}`, so a caller cannot tell a configured source name from
+  another), counted (`port49_inventory_webhooks_total{source, outcome}`) and said once per source and
+  outcome, naming the sender's address and never the body, the signature or the secret; a failed TLS
+  handshake is counted (`outcome="tls_handshake"`), not logged. A taken delivery triggers a
   sync of its source 2 s later, coalescing a burst; a source is synced from webhooks at most once
   per 30 s, with at most one sync pending. Nothing in a delivery reaches the bundle: the sync reads
   the source's API, so delivery order, which is not change order on Nautobot (L27, L30), orders
@@ -414,13 +485,17 @@ measure is written as their open rows, and cited to them.
   Both products expose GraphQL; one query returns devices, addresses, platform, site, role,
   and tags (L27). The connector asks for what its map, filter and address rule read, and reads
   GraphQL's `errors` before its `data`, whatever the HTTP status: NetBox 4.7.1 refuses an unknown
-  argument with HTTP 200 and an `errors` list (L30). It pages by `pagination: {offset, limit}` on
-  NetBox 4.x, by `limit` and `offset` on Nautobot, and not at all on NetBox 3.7, which took no paging
-  shape tried and returned the whole list (L30). A GraphQL list whose length matches neither REST's
-  `count` read before it nor one read after fails the sync: a server cap or a page lost to a
-  concurrent change would otherwise look like devices removed. REST remains a fallback, taken when
-  GraphQL answers 404 or the source says `api: rest`: it reads `?depth=1` on Nautobot 2.x and 3.x,
-  whose default depth names no related object (L27, L30), and follows `next` (below). REST does not
+  argument with HTTP 200 and an `errors` list (L30). It pages by `pagination: {offset, limit}`, as
+  NetBox 4.7.1 took (L30), by `limit` and `offset`, as Nautobot 1.6.32, 2.4.43 and 3.2.6 took, and not
+  at all for NetBox 3.7, whose 3.7.8 took no paging shape tried and returned the whole list (L30); each
+  profile reads the other minors of its major the same way, and says such a release is unmeasured. A
+  GraphQL list is taken only when its length equals REST's `count` read before it and read after it,
+  and no device appears in it twice: a server cap, or a page boundary lost to a concurrent delete,
+  would otherwise look like devices removed. A page longer than the page size asked for, or a fetch
+  past 256 MiB, fails the sync. REST remains a fallback, taken when GraphQL answers 404 or the source
+  says `api: rest`: it reads `?depth=1` under the `nautobot_2` profile, since Nautobot 2.4.43 and 3.2.6
+  at default depth named no related object (L27, L30), and follows `next` (below); every page must
+  give the same `count`, and the total must equal it, with no device twice. REST does not
   give interface addresses in the device list, so a source that asks for them reads GraphQL. The
   connector's own query, on each measured release, is §15 L32's.
 
@@ -435,24 +510,28 @@ measure is written as their open rows, and cited to them.
 
   **Bounded change per sync.** A sync in which a source takes more than its
   `safety.max_removed_percent` of the devices it gave the last published bundle out of service —
-  removed, or kept and newly refused admission under the service's policy — MUST refuse, retain the
+  removed, kept and newly refused admission under the service's policy, or kept with an address in
+  the bundle in force and none now (plan 6c: port49d admits by source address, so under an attribute
+  key group such a device stays "admitted" and is unreachable) — MUST refuse, retain the
   last good snapshot, and alarm (`port49_inventory_sync_refused`). A source's bound defaults to the
   top-level `safety.max_removed_percent`, default 10. An empty result, and one the service's policy
   admits none of, are refused whatever the bound. A partially-available source of truth or a
   mistyped filter would otherwise silently deauthorize the fleet. Each port49d bounds the document
-  again by its own `inventory.max_removed_percent`: a deliberate large removal raises both.
+  again by its own `inventory.max_removed_percent`, counting the same three: a deliberate large
+  removal raises both.
 
   **Platform slug translation.** Real installations say `eos`, `arista-eos`, `arista_eos`, or
   `veos`. The connector ships an alias table (those, and the netutils drivers Nautobot reports in
   `platform.network_driver`, such as `cisco_xe`), a source's `platform_aliases` adds to or overrides
   it, and a slug neither knows is kept as the device's platform: the device is admitted and served by
-  the generic adapter (§8, "Unknown platforms"), and every sync that publishes it says so and sets
-  `port49_inventory_generic_platform_devices`, whatever the source, rather than falling back to
-  generic in silence.
+  the generic adapter (§8, "Unknown platforms"); each publication that changes the set of such
+  platforms says so, and `port49_inventory_generic_platform_devices` holds their devices' count
+  always, whatever the source, rather than falling back to generic in silence.
 
   **Filters, maps and addresses run in the service.** A source's `filter` (`status`, default
-  `[active]`, compared in lower case so each product's spelling matches — `"ACTIVE"` on NetBox 3.7,
-  `"active"` on 4.x, `{"name": "Active"}` on Nautobot, L30; `tags`, every one named; `has_primary_ip`)
+  `[active]`, compared in lower case so each recorded spelling matches — `"ACTIVE"` on NetBox 3.7.8,
+  `"active"` on 4.7.1, `{"name": "Active"}` on every Nautobot measured, L30; `tags`, every one named;
+  `has_primary_ip`)
   is applied to what was read, since the products' filter arguments differ per release and L27
   measured only `name`'s. Its `map` names, per attribute, a path the profile reads (L27, L30): on
   NetBox `site.slug`, `role.slug`, `platform.slug`; on Nautobot 1.6 those and
@@ -460,8 +539,9 @@ measure is written as their open rows, and cited to them.
   `platform.network_driver`; on every profile `status` and `custom_fields.<key>`. `platform` names the
   device's platform. A device's addresses are its primary addresses (`primary_ip4`, `primary_ip6`)
   unless `addresses.interfaces` names interfaces, or `addresses.all_interfaces` asks for every one,
-  since every address listed admits its source and an address on two devices refuses the sync. An
-  attribute a device does not give — a null custom field, or one that is an object or a list — is
+  since every address listed admits its source and an address on two devices refuses the sync; an
+  interface's loopback, link-local, multicast or unspecified address is left out, since it cannot
+  source TACACS+ and repeats across devices. An attribute a device does not give — a null custom field, or one that is an object or a list — is
   left unset, never invented, and §5.5's `on_missing` decides what that means. A connector returns no
   key assignment: nothing it reads can carry one (§13, decision 30).
 
@@ -540,10 +620,12 @@ measure is written as their open rows, and cited to them.
   2026-10-01, rulings where §10 was silent, each the option that denies more.* The connectors select
   a profile from `/api/status/` by the releases L27 and L30 measured, refuse a major none measured
   unless a profile is named, read only the fields those runs recorded, read GraphQL's `errors`
-  before its `data`, check a GraphQL list against REST's `count`, follow `next` only on the source's
+  before its `data`, take a list only when it equals REST's `count` before and after it with no
+  device twice, follow `next` only on the source's
   `url` (rebuilding it there otherwise) and no redirect at all, filter in the service, take primary
   addresses unless interfaces are named, leave an attribute a device does not give unset, and pass an
-  unrecognized platform through, said. A source of truth is `https` with a named CA, its token and
+  unrecognized platform through, said. A device left with no address counts against the bound in
+  the service and in port49d. A source of truth is `https` with a named CA, its token and
   webhook secret named by `secret_env`-style keys until plan 12's `secret_ref`, and never printed.
   A webhook arrives on its own TLS listener, since no product can present a client certificate, and
   is authenticated by HMAC-SHA512 of its body; it carries nothing into the bundle and only triggers a
@@ -558,7 +640,10 @@ measure is written as their open rows, and cited to them.
   ```markdown
   - **Connectors read what was measured**: the profile is chosen from `/api/status/`, and a major no
     lab run measured is refused unless a profile is named; GraphQL `errors` fail a fetch even on HTTP
-    200; a GraphQL list matching neither REST `count` fails the sync and de-admits nothing; `next` is
+    200; a GraphQL list whose length is not REST's `count` both before and after, a REST page whose
+    `count` moved, or a list naming a device twice fails the sync and de-admits nothing; a sync that
+    leaves more than the bound's share of a source's devices with no address is refused, by the
+    service and by port49d; `next` is
     followed only on the source's `url` and otherwise rebuilt there, and no redirect is followed, so
     the token reaches no other host; a filter, a map path and an address rule each take the
     product's recorded spelling; the token appears in no line and no error.
@@ -569,14 +654,15 @@ measure is written as their open rows, and cited to them.
   - **Every `Fetch` returns within `sync_timeout`**: a source that ignores its context is abandoned 5 s
     past the deadline, the sync fails and the bundle in force keeps serving, and the source is not
     asked again until the abandoned call returns.
-  - **Export verifies**: a bundle that does not open under the verify keys writes nothing; one that
-    does writes a file `--inventory` loads to the same bundle.
+  - **Export verifies**: a bundle that does not open under the verify keys writes nothing, nor one
+    whose sequence is not the one `--from` asked for; one that does writes a file `--inventory` loads
+    to the same bundle.
   ```
 
 - [ ] **Step 8: §15, the register table.** After the row `| **L31** | … |`, add two rows:
 
   ```markdown
-  | **L32** | What the inventory service's NetBox and Nautobot connectors read as built (plan 6c), from each measured release: the GraphQL list query with every field the connector asks for (`status`, `primary_ip4`, `primary_ip6`, the map's paths, every interface address), paged as the profile pages it, returning every device once and matching REST's `count`; the REST fallback (`?depth=1` on Nautobot 2.x and 3.x) to a null `next`; and both through a TLS-terminating reverse proxy that sends the client's host as `Host` alone, and through one that sends the upstream's name as `Host` and the client's as `X-Forwarded-Host`: which header each release builds `next` from, and whether the connector reads every device through each, following `next` or rebuilding it on its `url`. | Plan 6c's connectors: the query per profile, the count check, following or rebuilding `next` (§10, "Connectors and sync cadence"; §13, decision 31) | NetBox 3.7 and 4.x; Nautobot 1.6, 2.x and 3.x | open |
+  | **L32** | What the inventory service's NetBox and Nautobot connectors read as built (plan 6c), from each measured release: the GraphQL list query with every field the connector asks for (`status`, `primary_ip4`, `primary_ip6`, the map's paths, every interface address), paged as the profile pages it, returning every device once and matching REST's `count`; the REST fallback (`?depth=1` under the `nautobot_2` profile) to a null `next`; and both through a TLS-terminating reverse proxy that sends the client's host as `Host` alone, and through one that sends the upstream's name as `Host` and the client's as `X-Forwarded-Host`: which header each release builds `next` from, and whether the connector reads every device through each, following `next` or rebuilding it on its `url`. | Plan 6c's connectors: the query per profile, the count check, following or rebuilding `next` (§10, "Connectors and sync cadence"; §13, decision 31) | NetBox 3.7 and 4.x; Nautobot 1.6, 2.x and 3.x | open |
   | **L33** | What NetBox and Nautobot do delivering a webhook to port49-inventory's `webhook_listen`, per measured release: whether each delivers to an `https` payload URL whose certificate a private CA issued (`ca_file_path`, `ssl_verification` on); whether port49-inventory authenticates every delivery as it arrives (HMAC-SHA512 of the body, `X-Hook-Signature`) and finds its `timestamp` inside the 5-minute window; how long a change takes from the API write to the published bundle; whether a delivery port49-inventory refuses (HTTP 401) is sent again; and, end to end on one device, how long a NetBox and a Nautobot change takes to reach port49d's admission through the webhook. | Plan 6c's webhook trigger: TLS on the webhook listener, the freshness window, the 401 answer (§10; §13, decision 31) | NetBox 3.7 and 4.x; Nautobot 1.6, 2.x and 3.x; vEOS-lab for the device run | open |
   ```
 
@@ -656,7 +742,10 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
     `func (c *client) getJSON(ctx context.Context, u *url.URL, v any) error`;
     `type answer struct{ status int; body []byte }`;
     `func statusError(what string, status int) error`; `func printable(s string) string`;
-    `var maxResponse int64` (64 MiB); `const maxPages = 1000`, `const maxDevices = 100_000`.
+    `var maxResponse int64` (64 MiB); `const maxPages = 1000`, `const maxDevices = 100_000`;
+    `var maxFetch int64` (256 MiB), `type budget struct{ left int64 }`, `func newBudget() *budget`,
+    `func (b *budget) spend(n int) error` (pre-flight M3).
+  - Consumes `config.ReadRegular` for the CA file (pre-flight M2).
   - `func sottest.TLS(t testing.TB, h http.Handler) (*httptest.Server, string)` — a server under a CA
     of its own, and a `ca_file` that trusts it.
 
@@ -718,8 +807,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/rhwendt/port49/internal/sot/sottest"
 )
@@ -736,8 +828,17 @@ func TestASecretNeverPrints(t *testing.T) {
 	if b, _ := json.Marshal(s); strings.Contains(string(b), "hunter2") {
 		t.Fatalf("JSON: %s", b)
 	}
-	if s.Token.Reveal() != "hunter2-token" || s.Token.Empty() || !NewSecret("").Empty() {
+	if s.Token.Reveal() != "hunter2-token" || s.Token.Empty() || !NewSecret("").Empty() || !(Secret{}).Empty() {
 		t.Fatal("Reveal or Empty")
+	}
+	// Reached through an unexported field, fmt prints a struct field by
+	// field: the pointer keeps the value out (pre-flight M1).
+	hidden := struct{ cfg struct{ token Secret } }{}
+	hidden.cfg.token = NewSecret("hunter2-token")
+	for _, verb := range []string{"%v", "%+v", "%#v"} {
+		if out := fmt.Sprintf(verb, hidden); strings.Contains(out, "hunter2") {
+			t.Fatalf("%s printed it through an unexported field: %s", verb, out)
+		}
 	}
 }
 
@@ -852,6 +953,38 @@ func TestAServerTheCAFileDoesNotTrustIsRefused(t *testing.T) {
 	}
 }
 
+// Pre-flight M2: a FIFO at ca_file is refused, not read until something
+// writes to it.
+func TestACAFileThatIsAFIFOIsRefused(t *testing.T) {
+	fifo := filepath.Join(t.TempDir(), "ca.pem")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Skip(err)
+	}
+	done := make(chan error, 1)
+	go func() { _, err := newClient("https://netbox.example.com", fifo, NewSecret(token), "netbox"); done <- err }()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "ca_file") {
+			t.Fatalf("got %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("reading a FIFO blocked")
+	}
+}
+
+// Pre-flight M3: a fetch reads at most maxFetch bytes over all its pages.
+func TestABudgetBoundsAFetch(t *testing.T) {
+	defer func(m int64) { maxFetch = m }(maxFetch)
+	maxFetch = 100
+	b := newBudget()
+	if err := b.spend(60); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.spend(60); err == nil || !strings.Contains(err.Error(), "the most one sync reads") {
+		t.Fatalf("got %v", err)
+	}
+}
+
 func TestPrintableCutsAndNeutralises(t *testing.T) {
 	if got := printable("a\x1b[2Jb\nc"); got != "a?[2Jb?c" {
 		t.Fatalf("%q", got)
@@ -884,18 +1017,26 @@ import (
 // Secret is a credential read from the environment: a source's API token,
 // or its webhook secret. It prints as <redacted> under every fmt verb and in
 // JSON, so a configuration printed whole — by a test, a panic, a %+v — never
-// carries it. Reveal is the one way to the value, at the one place that
-// sends or checks it.
-type Secret struct{ v string }
+// carries it. fmt calls Format only on a value it can reach through
+// exported fields; reached through an unexported one (a Source's cfg, a
+// client's auth) a Secret is printed field by field, so the value sits
+// behind a pointer and prints as an address there (pre-flight M1). Reveal is
+// the one way to the value, at the one place that sends or checks it.
+type Secret struct{ p *string }
 
 // NewSecret holds v.
-func NewSecret(v string) Secret { return Secret{v} }
+func NewSecret(v string) Secret { return Secret{&v} }
 
 // Reveal is the value: for the Authorization header, or the HMAC key.
-func (s Secret) Reveal() string { return s.v }
+func (s Secret) Reveal() string {
+	if s.p == nil {
+		return ""
+	}
+	return *s.p
+}
 
 // Empty is whether there is no value.
-func (s Secret) Empty() bool { return s.v == "" }
+func (s Secret) Empty() bool { return s.Reveal() == "" }
 
 func (Secret) Format(f fmt.State, _ rune)   { io.WriteString(f, "<redacted>") }
 func (Secret) String() string               { return "<redacted>" }
@@ -920,16 +1061,37 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/rhwendt/port49/internal/config"
 )
 
 // maxResponse bounds one answer's body: a GraphQL page of page_size devices
 // with their interfaces is a few MiB, and 64 MiB is inventory_file's bound.
 // A variable for the tests.
 var maxResponse int64 = 64 << 20
+
+// maxFetch bounds the bytes one fetch reads summed over its pages
+// (pre-flight M3): the page and device caps do not bound bytes, and a broken
+// or compromised source must not exhaust the service's memory. A variable
+// for the tests.
+var maxFetch int64 = 256 << 20
+
+// budget is what is left of maxFetch for one fetch's list.
+type budget struct{ left int64 }
+
+func newBudget() *budget { return &budget{left: maxFetch} }
+
+// spend takes n bytes of a page, or refuses the fetch.
+func (b *budget) spend(n int) error {
+	if b.left -= int64(n); b.left < 0 {
+		return fmt.Errorf("the device list is larger than %d MiB, the most one sync reads: filter the source, or "+
+			"split it into two sources", maxFetch>>20)
+	}
+	return nil
+}
 
 const (
 	// maxErrorBody bounds what is read of an answer that is neither a 200 nor
@@ -1040,17 +1202,13 @@ func readCA(path string) (*x509.CertPool, error) {
 		return nil, errors.New("ca_file: none given; name the CA bundle that issues the source's certificate " +
 			"(the host's own bundle file is a valid choice for a public one)")
 	}
-	f, err := os.Open(path)
+	// As the service client reads its CA (internal/inventory/client.go): a
+	// regular file, opened without blocking and bounded, so a FIFO at ca_file
+	// is refused rather than hanging a dial (pre-flight M2). A symbolic link
+	// is followed, so a distribution's bundle link still works.
+	raw, err := config.ReadRegular(path, maxCAFile)
 	if err != nil {
 		return nil, fmt.Errorf("ca_file %s: %w", path, err)
-	}
-	defer f.Close()
-	raw, err := io.ReadAll(io.LimitReader(f, maxCAFile+1))
-	if err != nil {
-		return nil, fmt.Errorf("ca_file %s: %w", path, err)
-	}
-	if len(raw) > maxCAFile {
-		return nil, fmt.Errorf("ca_file %s is larger than %d bytes", path, maxCAFile)
 	}
 	pool := x509.NewCertPool()
 	if !pool.AppendCertsFromPEM(raw) {
@@ -1089,6 +1247,12 @@ func (c *client) do(ctx context.Context, method string, u *url.URL, body []byte,
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
+		if strings.Contains(err.Error(), "timeout awaiting response headers") {
+			// net/http's ResponseHeaderTimeout: the source took over 2
+			// minutes to begin an answer, which a large page does (pre-flight
+			// M3). A dial or handshake timeout reads otherwise.
+			return answer{}, fmt.Errorf("%s: no answer began within 2m: lower page_size", what(method, u))
+		}
 		return answer{}, clean(err)
 	}
 	defer resp.Body.Close()
@@ -1618,12 +1782,16 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
     `func (s *Server) SetDevices(n int)`; `func (s *Server) Requests() []Request`;
     `func (s *Server) Unrecorded() []string` — every identifier a GraphQL query asked for that no
     recorded query of the stack asked for;
-    `func sottest.Name(i int) string` — device i's name (`leaf-01`, then `leaf-002`…, as L30 seeded);
-    `func sottest.Addr(i, which int) string` — device i's address, `which` 5 for Management1 (the
-    primary) and 6 for Loopback0: `10.<which>.<i/250>.<i%250+1>`.
+    `func sottest.Name(i int) string` — device i's name (`leaf-01`, then `leaf-002`…, as L30 named
+    them); `func sottest.Addr(i, which int) string` — device i's address, `which` 5 for Management1
+    (the primary) and 6 for Loopback0: `10.<which>.<i/250>.<i%250+1>`. The addresses, and each clone's
+    `id`, are synthesized for the tests: L30's seed gave `leaf-002`… no address, interface, custom
+    field or tag (`tests/lab/cmd/sot-record/seed.go`).
+  - `Server.DeleteAfterPage int` (pre-flight I1).
 
 The connector's tests (Tasks 5–8) and the service's (Tasks 9, 12) talk to this instead of a live
-product. Every shape it serves is a recorded one: leaf-01's GraphQL and REST bodies, the stack's
+product. Every shape it serves is a recorded one, with the per-device values above synthesized:
+leaf-01's GraphQL and REST bodies, the stack's
 status, `count`/`next`/`previous`/`results` paging with an absolute `next`, and each stack's
 GraphQL paging, refusals included (NetBox 3.7.8: `400` to every paging shape tried; NetBox 4.7.1:
 `200` with `errors` to `limit`/`offset`). One shape is not recorded and is marked so: Nautobot's
@@ -1822,8 +1990,13 @@ type Server struct {
 	DropFromGraphQL int
 	// Auth, set, is the one Authorization taken; any other is 401.
 	Auth string
-	// Status is device i's status, lower case; absent is "active".
+	// Status is device i's status, lower case; absent or empty is "active".
 	Status map[int]string
+	// DeleteAfterPage, nonzero, deletes the list's first device once that
+	// many list pages (GraphQL, or REST with a limit other than 1) have been
+	// served, so every later page shifts left by one, as offset paging does
+	// under a concurrent delete (pre-flight I1).
+	DeleteAfterPage int
 
 	product, list, gqlPath string
 	status                 map[string]any
@@ -1833,6 +2006,8 @@ type Server struct {
 
 	mu         sync.Mutex
 	n          int
+	deleted    int // devices deleted from the list's head: position j is device j+deleted
+	pages      int
 	log        []Request
 	unrecorded map[string]bool
 }
@@ -1989,25 +2164,35 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Lock()
 	s.log = append(s.log, req)
-	n := s.n
+	n, del := s.n, s.deleted
 	s.mu.Unlock()
 	if s.Auth != "" && req.Authorization != s.Auth {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"detail": "Invalid token"})
 		return
 	}
+	list := false
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == "/api/status/":
 		writeJSON(w, http.StatusOK, s.status)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/dcim/devices/":
-		s.rest(w, r, n)
+		s.rest(w, r, n, del)
+		list = r.URL.Query().Get("limit") != "1"
 	case r.Method == http.MethodPost && r.URL.Path == s.gqlPath:
-		s.graphql(w, gql.Query, n)
+		s.graphql(w, gql.Query, n, del)
+		list = true
 	default:
 		http.NotFound(w, r)
 	}
+	if list {
+		s.mu.Lock()
+		if s.pages++; s.DeleteAfterPage > 0 && s.pages == s.DeleteAfterPage {
+			s.n, s.deleted = s.n-1, s.deleted+1
+		}
+		s.mu.Unlock()
+	}
 }
 
-func (s *Server) rest(w http.ResponseWriter, r *http.Request, n int) {
+func (s *Server) rest(w http.ResponseWriter, r *http.Request, n, del int) {
 	q := r.URL.Query()
 	limit, _ := strconv.Atoi(q.Get("limit"))
 	if limit <= 0 {
@@ -2021,8 +2206,8 @@ func (s *Server) rest(w http.ResponseWriter, r *http.Request, n int) {
 		base = s.restShallow
 	}
 	results := []any{}
-	for i := offset + 1; i <= n && i <= offset+limit; i++ {
-		results = append(results, s.device(base, i, "rest", shallow))
+	for j := offset + 1; j <= n && j <= offset+limit; j++ {
+		results = append(results, s.device(base, j+del, "rest", shallow))
 	}
 	var next any
 	if offset+limit < n {
@@ -2056,7 +2241,7 @@ func errorsOf(msgs ...string) map[string]any {
 	return map[string]any{"data": nil, "errors": errs}
 }
 
-func (s *Server) graphql(w http.ResponseWriter, query string, n int) {
+func (s *Server) graphql(w http.ResponseWriter, query string, n, del int) {
 	s.mu.Lock()
 	for _, tok := range ident.FindAllString(query, -1) {
 		if !s.recorded[tok] {
@@ -2101,8 +2286,8 @@ func (s *Server) graphql(w http.ResponseWriter, query string, n int) {
 		offset, _ = strconv.Atoi(m[2])
 	}
 	devs := []any{}
-	for i := offset + 1; i <= n-s.DropFromGraphQL && i <= offset+limit; i++ {
-		devs = append(devs, s.device(s.gqlDev, i, "graphql", false))
+	for j := offset + 1; j <= n-s.DropFromGraphQL && j <= offset+limit; j++ {
+		devs = append(devs, s.device(s.gqlDev, j+del, "graphql", false))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": map[string]any{s.list: devs}})
 }
@@ -2111,7 +2296,9 @@ func (s *Server) graphql(w http.ResponseWriter, query string, n int) {
 // the stack's spelling for api (L30), and no primary_ip6, as none was set.
 func (s *Server) device(base map[string]any, i int, api string, shallow bool) map[string]any {
 	d := clone(base)
-	d["name"] = Name(i)
+	// Its own id and name: the connector refuses a list naming a device twice
+	// (pre-flight I1), and every clone of leaf-01 would otherwise share its id.
+	d["name"], d["id"] = Name(i), i
 	if shallow {
 		return d // every related object is {id, object_type, url}
 	}
@@ -2138,7 +2325,7 @@ func (s *Server) device(base map[string]any, i int, api string, shallow bool) ma
 		}
 	}
 	st := "active"
-	if v, ok := s.Status[i]; ok {
+	if v := s.Status[i]; v != "" {
 		st = v
 	}
 	title := strings.ToUpper(st[:1]) + st[1:]
@@ -2217,6 +2404,8 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
   - `func (p Profile) graphqlPage(a answer) ([]map[string]any, error)`.
   - `func (c *client) restCount(ctx context.Context) (int, error)` — `count` of
     `GET /api/dcim/devices/?limit=1`.
+  - `func distinct(devs []map[string]any, key, api string) error` — a list naming one device twice
+    fails (pre-flight I1); Task 6 uses it with `"id"`.
 
 - [ ] **Step 1: Write the failing tests.** Create `internal/sot/graphql_test.go`:
 
@@ -2342,6 +2531,32 @@ func TestAnErrorMessageIsPrintedSafely(t *testing.T) {
 	}
 }
 
+// Pre-flight M4: a release that ignores the page size returns the whole
+// list every page; the first long page fails the read.
+func TestAPageLongerThanThePageSizeFails(t *testing.T) {
+	srv, ca := sottest.TLS(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte(`{"data": {"devices": [{"name": "a"}, {"name": "b"}, {"name": "c"}]}}`))
+	}))
+	c, _ := newClient(srv.URL, ca, NewSecret(token), "nautobot")
+	if _, err := c.graphqlDevices(context.Background(), profiles[Nautobot2], basic(profiles[Nautobot2]), 2); err == nil ||
+		!strings.Contains(err.Error(), "ignored the page size") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+// Pre-flight I1: a list naming one device twice is refused; a device with
+// no name is not counted against another.
+func TestAListNamingADeviceTwiceFails(t *testing.T) {
+	srv, ca := sottest.TLS(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte(`{"data": {"device_list": [{"name": "a"}, {"name": null}, {"name": null}, {"name": "a"}]}}`))
+	}))
+	c, _ := newClient(srv.URL, ca, NewSecret(token), "netbox")
+	if _, err := c.graphqlDevices(context.Background(), profiles[NetBox37], basic(profiles[NetBox37]), 50); err == nil ||
+		!strings.Contains(err.Error(), "GraphQL gave one device twice (name a)") {
+		t.Fatalf("got %v", err)
+	}
+}
+
 func TestRestCountIsTheListsCount(t *testing.T) {
 	_, c, _ := replay(t, "nautobot-3", 120)
 	if n, err := c.restCount(context.Background()); err != nil || n != 120 {
@@ -2350,7 +2565,7 @@ func TestRestCountIsTheListsCount(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run them.** `go test ./internal/sot/ -run 'Selection|GraphQL|Errors|ErrorMessage|RestCount' -count=1`
+- [ ] **Step 2: Run them.** `go test ./internal/sot/ -run 'Selection|GraphQL|Errors|ErrorMessage|RestCount|Longer|Twice' -count=1`
   Expected: FAIL (undefined: `selection`, `graphqlDevices`, …).
 
 - [ ] **Step 3: Implement.** Create `internal/sot/graphql.go`:
@@ -2422,9 +2637,13 @@ func (p Profile) listQuery(sel selection, offset, limit int) string {
 }
 
 // graphqlDevices is every device over GraphQL, page by page where p pages,
-// to a short page. The caller checks the count (Source.graphql).
+// to a short page. A page longer than pageSize (a release that ignored the
+// paging arguments, pre-flight M4), a list past maxFetch bytes (M3), and a
+// list naming a device twice (a page boundary shifted under a concurrent
+// insert, I1) fail it. The caller checks the count (Source.graphql).
 func (c *client) graphqlDevices(ctx context.Context, p Profile, sel selection, pageSize int) ([]map[string]any, error) {
 	u := c.at(p.graphqlPath, nil)
+	b := newBudget()
 	var out []map[string]any
 	for page := 0; ; page++ {
 		if page >= maxPages {
@@ -2438,18 +2657,53 @@ func (c *client) graphqlDevices(ctx context.Context, p Profile, sel selection, p
 		if err != nil {
 			return nil, err
 		}
+		if err := b.spend(len(a.body)); err != nil {
+			return nil, err
+		}
 		devs, err := p.graphqlPage(a)
 		if err != nil {
 			return nil, err
+		}
+		if p.paging != pageNone && len(devs) > pageSize {
+			return nil, fmt.Errorf("GraphQL page %d gave %d devices for a page of %d: the release ignored the page "+
+				"size, so its paging cannot be trusted", page, len(devs), pageSize)
 		}
 		out = append(out, devs...)
 		if len(out) > maxDevices {
 			return nil, fmt.Errorf("GraphQL gave more than %d devices", maxDevices)
 		}
 		if p.paging == pageNone || len(devs) < pageSize {
-			return out, nil
+			return out, distinct(out, "name", "GraphQL")
 		}
 	}
+}
+
+// distinct refuses a list that holds one device twice, by key ("id" over
+// REST, "name" over GraphQL, which is not asked for an id: L27 and L30
+// recorded none in a query). Offset paging across a concurrent change
+// repeats or skips the device at a page boundary (pre-flight I1); a repeat
+// fails here, naming the cause, rather than at admission's "two devices are
+// both named". An empty key is skipped: NetBox allows a device no name.
+func distinct(devs []map[string]any, key, api string) error {
+	seen := map[string]bool{}
+	for _, d := range devs {
+		k := ""
+		switch v := d[key].(type) {
+		case string:
+			k = v
+		case json.Number:
+			k = v.String()
+		}
+		if k == "" {
+			continue
+		}
+		if seen[k] {
+			return fmt.Errorf("%s gave one device twice (%s %s): the list changed between pages; the next sync "+
+				"reads it again", api, key, printable(k))
+		}
+		seen[k] = true
+	}
+	return nil
 }
 
 // graphqlPage reads one answer: its errors before its data, whatever the
@@ -2535,8 +2789,9 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 - Test: `internal/sot/rest_test.go`
 
 **Interfaces:**
-- Consumes: `client`, `getJSON`, `printable`, `maxPages`, `maxDevices` (Task 2); `Profile.depthOne`
-  (Task 3); `sottest.Server.NextHost`, `NextPath`, `Requests` (Task 4); `replay` (Task 5's test helper).
+- Consumes: `client`, `do`, `statusError`, `what`, `newBudget`, `printable`, `maxPages`, `maxDevices`
+  (Task 2); `Profile.depthOne` (Task 3); `sottest.Server.NextHost`, `NextPath`, `Requests` (Task 4);
+  `distinct` and `replay` (Task 5).
 - Produces:
   - `func (c *client) restDevices(ctx context.Context, p Profile, pageSize int) ([]map[string]any, bool, error)`
     — every device, and whether some `next` was rebuilt.
@@ -2624,6 +2879,25 @@ func TestARESTListShortOfItsCountFails(t *testing.T) {
 	}
 }
 
+// Pre-flight I1: an insert between pages shifts the list right and repeats
+// a device; it is refused by id.
+func TestARESTListRepeatingADeviceFails(t *testing.T) {
+	var self string
+	srv, ca := sottest.TLS(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("offset") == "" {
+			fmt.Fprintf(w, `{"count": 2, "next": %q, "previous": null, "results": [{"id": 7, "name": "a"}]}`, self)
+			return
+		}
+		fmt.Fprint(w, `{"count": 2, "next": null, "previous": null, "results": [{"id": 7, "name": "a"}]}`)
+	}))
+	self = srv.URL + "/api/dcim/devices/?limit=1&offset=1"
+	c, _ := newClient(srv.URL, ca, NewSecret(token), "netbox")
+	if devs, _, err := c.restDevices(context.Background(), profiles[NetBox4], 1); err == nil || devs != nil ||
+		!strings.Contains(err.Error(), "REST gave one device twice (id 7)") {
+		t.Fatalf("%v %v", devs, err)
+	}
+}
+
 func TestANextThatLoopsIsRefused(t *testing.T) {
 	var self string
 	srv, ca := sottest.TLS(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -2662,7 +2936,7 @@ func TestFollow(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run them.** `go test ./internal/sot/ -run 'REST|Next|Follow' -count=1`
+- [ ] **Step 2: Run them.** `go test ./internal/sot/ -run 'REST|Next|Follow|Repeating' -count=1`
   Expected: FAIL (undefined: `restDevices`, `follow`).
 
 - [ ] **Step 3: Implement.** Create `internal/sot/rest.go`:
@@ -2671,9 +2945,12 @@ func TestFollow(t *testing.T) {
 package sot
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -2682,18 +2959,23 @@ import (
 // restDevices is every device over REST, following next to null (L30:
 // absolute on every release, and every device once). rebuilt says whether
 // some next named another origin and was rebuilt on the base, which the
-// caller says once. The total must equal the last page's count.
+// caller says once. Every page must give the first page's count, the total
+// must equal it, and no device may appear twice by id (pre-flight I1): a
+// delete between pages shifts the rest left and drops a live device at the
+// boundary, and its count moves. The pages' bytes are bounded together by
+// maxFetch (M3).
 func (c *client) restDevices(ctx context.Context, p Profile, pageSize int) ([]map[string]any, bool, error) {
 	q := url.Values{"limit": {strconv.Itoa(pageSize)}}
 	if p.depthOne {
-		// Nautobot 2.x and 3.x name no related object at default depth
-		// (L27, L30).
+		// Nautobot 2.4.43 and 3.2.6 named no related object at default
+		// depth (L27, L30).
 		q.Set("depth", "1")
 	}
 	u := c.at("/api/dcim/devices/", q)
 	seen := map[string]bool{}
+	b := newBudget()
 	var devs []map[string]any
-	rebuilt, count := false, 0
+	rebuilt, count := false, -1
 	for page := 0; u != nil; page++ {
 		if page >= maxPages {
 			return nil, rebuilt, fmt.Errorf("REST gave more than %d pages", maxPages)
@@ -2702,16 +2984,32 @@ func (c *client) restDevices(ctx context.Context, p Profile, pageSize int) ([]ma
 			return nil, rebuilt, fmt.Errorf("REST page %d's next names a page already read", page)
 		}
 		seen[u.String()] = true
+		a, err := c.do(ctx, http.MethodGet, u, nil, false)
+		if err != nil {
+			return nil, rebuilt, err
+		}
+		if a.status != http.StatusOK {
+			return nil, rebuilt, statusError(what(http.MethodGet, u), a.status)
+		}
+		if err := b.spend(len(a.body)); err != nil {
+			return nil, rebuilt, err
+		}
 		var body struct {
 			Count   *int             `json:"count"`
 			Next    *string          `json:"next"`
 			Results []map[string]any `json:"results"`
 		}
-		if err := c.getJSON(ctx, u, &body); err != nil {
-			return nil, rebuilt, err
+		dec := json.NewDecoder(bytes.NewReader(a.body))
+		dec.UseNumber()
+		if err := dec.Decode(&body); err != nil {
+			return nil, rebuilt, fmt.Errorf("REST page %d is not the JSON asked for", page)
 		}
 		if body.Count == nil {
 			return nil, rebuilt, fmt.Errorf("REST page %d gives no count", page)
+		}
+		if count >= 0 && *body.Count != count {
+			return nil, rebuilt, fmt.Errorf("REST page %d counts %d devices and page 0 counted %d: the list changed "+
+				"during the sync; the next sync reads it again", page, *body.Count, count)
 		}
 		count = *body.Count
 		devs = append(devs, body.Results...)
@@ -2730,6 +3028,9 @@ func (c *client) restDevices(ctx context.Context, p Profile, pageSize int) ([]ma
 	if len(devs) != count {
 		return nil, rebuilt, fmt.Errorf("REST gave %d devices and counts %d: the list changed during the sync, or "+
 			"a page was lost; the next sync reads it again", len(devs), count)
+	}
+	if err := distinct(devs, "id", "REST"); err != nil {
+		return nil, rebuilt, err
 	}
 	return devs, rebuilt, nil
 }
@@ -2807,7 +3108,8 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
   - `func (m Mapping) mapOf(p Profile) map[string]string`; `func (m Mapping) needsInterfaces() bool`;
     `func (m Mapping) check(p Profile, api string) error`; `func (m Mapping) selection(p Profile) selection`;
     `func (m Mapping) device(p Profile, api string, raw map[string]any) (admission.Device, bool, []string)`
-    — the device, whether the filter keeps it, and the notes the caller says once each.
+    — the device, whether the filter keeps it, and the notes the caller says once each;
+    `func sourceable(a netip.Addr) bool` (pre-flight M13).
   - `func platformName(slug string, overrides map[string]string) string`; `var builtinAliases map[string]string`;
     `var sot.PlatformNameShape *regexp.Regexp` (`^[a-z][a-z0-9_]*$`, the policy's platform name shape),
     for the config loader.
@@ -3012,6 +3314,20 @@ func TestCustomFieldsAndStatusMapToAttributes(t *testing.T) {
 	}
 }
 
+// Pre-flight M13: an interface's loopback or link-local address is left
+// out, said once as a note; the primary is kept whatever it is.
+func TestAnInterfaceAddressThatCannotSourceTACACSIsLeftOut(t *testing.T) {
+	body := strings.Replace(netbox4GraphQL, `{"name": "Loopback0", "ip_addresses": [{"address": "10.0.1.6/32"}]}`,
+		`{"name": "Loopback0", "ip_addresses": [{"address": "10.0.1.6/32"}, {"address": "127.0.0.1/8"}, `+
+			`{"address": "fe80::1/64"}]}`, 1)
+	d, _, notes := (Mapping{Addresses: Addresses{Primary: true, AllInterfaces: true}}).device(profiles[NetBox4],
+		"graphql", raw(t, body))
+	if addrs(d.Addresses) != "10.0.1.5,10.0.1.6" || len(notes) != 1 ||
+		!strings.Contains(notes[0], "cannot source TACACS+") {
+		t.Fatalf("%s %v", addrs(d.Addresses), notes)
+	}
+}
+
 func TestAnAddressThatDoesNotParseIsSaidAndLeftOut(t *testing.T) {
 	body := strings.Replace(netbox4GraphQL, `"primary_ip4": {"address": "10.0.1.5/32"}`, `"primary_ip4": {"address": "ten"}`, 1)
 	d, keep, notes := (Mapping{Addresses: Addresses{Primary: true}}).device(profiles[NetBox4], "graphql", raw(t, body))
@@ -3043,7 +3359,7 @@ func TestTheAliasTable(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run them.** `go test ./internal/sot/ -run 'Map|Path|Filter|Interfaces|Custom|Address|Alias' -count=1`
+- [ ] **Step 2: Run them.** `go test ./internal/sot/ -run 'Map|Path|Filter|Interface|Custom|Address|Alias' -count=1`
   Expected: FAIL (undefined: `Mapping`, `platformName`, …).
 
 - [ ] **Step 3: Implement.** Create `internal/sot/alias.go`:
@@ -3267,14 +3583,27 @@ func (m Mapping) device(p Profile, api string, raw map[string]any) (admission.De
 		add(p6, "primary_ip6")
 	}
 	if m.needsInterfaces() {
+		skipped := 0
 		for i, itf := range list(raw["interfaces"]) {
 			im := asMap(itf)
 			if !m.Addresses.AllInterfaces && !slices.Contains(m.Addresses.Interfaces, str(im["name"])) {
 				continue
 			}
 			for j, ip := range list(im["ip_addresses"]) {
-				add(str(asMap(ip)["address"]), fmt.Sprintf("interfaces[%d].ip_addresses[%d]", i, j))
+				s := str(asMap(ip)["address"])
+				// Pre-flight M13: an address that cannot source TACACS+ to
+				// port49d, and that every device may hold, is left out; kept,
+				// two devices sharing one would refuse every sync.
+				if a, err := addrOf(s); err == nil && !sourceable(a) {
+					skipped++
+					continue
+				}
+				add(s, fmt.Sprintf("interfaces[%d].ip_addresses[%d]", i, j))
 			}
+		}
+		if skipped > 0 {
+			notes = append(notes, "interface addresses that cannot source TACACS+ (loopback, link-local, "+
+				"multicast, unspecified) are left out of every device's addresses")
 		}
 	}
 	slices.SortFunc(d.Addresses, func(a, b netip.Addr) int { return a.Compare(b) })
@@ -3309,6 +3638,14 @@ func (m Mapping) device(p Profile, api string, raw map[string]any) (admission.De
 		d.Attributes[attr] = v
 	}
 	return d, true, notes
+}
+
+// sourceable is whether a can be the source address of a device's TACACS+
+// connection to port49d: not loopback (127/8, ::1), link-local (fe80::/10,
+// 169.254/16), multicast or unspecified. Private and global unicast are.
+func sourceable(a netip.Addr) bool {
+	return !a.IsLoopback() && !a.IsLinkLocalUnicast() && !a.IsMulticast() && !a.IsLinkLocalMulticast() &&
+		!a.IsInterfaceLocalMulticast() && !a.IsUnspecified()
 }
 
 // addrOf is an address as the products write one, with or without its
@@ -3395,6 +3732,7 @@ package sot
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -3468,6 +3806,51 @@ func TestAGraphQLListShortOfTheCountFails(t *testing.T) {
 	}
 }
 
+// Pre-flight I1: a delete between pages shifts every later page left and
+// drops a live device at the boundary, while the list and the count after
+// agree. Neither reader takes such a list.
+func TestADeleteBetweenPagesFailsEitherRead(t *testing.T) {
+	for api, want := range map[string]string{
+		"graphql": "GraphQL gave 119 devices and REST counts 120 before and 119 after",
+		"rest":    "REST page 1 counts 119 devices and page 0 counted 120",
+	} {
+		src, s, _ := source(t, "netbox-4", 120, api, Mapping{Addresses: Addresses{Primary: true}})
+		s.DeleteAfterPage = 1
+		inv, err := src.Fetch(context.Background())
+		if err == nil || len(inv.Devices) != 0 || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %d devices, %v", api, len(inv.Devices), err)
+		}
+	}
+}
+
+// Pre-flight M1: a Source printed whole does not print its token.
+func TestASourcePrintedWholeHoldsNoToken(t *testing.T) {
+	src, _, _ := source(t, "netbox-4", 1, "graphql", Mapping{Addresses: Addresses{Primary: true}})
+	for _, verb := range []string{"%v", "%+v", "%#v"} {
+		if out := fmt.Sprintf(verb, src); strings.Contains(out, token) {
+			t.Fatalf("%s printed the token", verb)
+		}
+	}
+}
+
+// Pre-flight M14: when most devices give no platform under the map, the
+// source says once where to look.
+func TestAnEmptyPlatformPathIsPointedAt(t *testing.T) {
+	src, _, out := source(t, "nautobot-3", 3, "graphql", Mapping{Addresses: Addresses{Primary: true},
+		Map: map[string]string{"platform": "platform.name", "site": "location.name"}})
+	// platform.name is "eos" on every replayed device: no note.
+	src.Fetch(context.Background())
+	if strings.Contains(out.String(), "give no") {
+		t.Fatalf("%s", out)
+	}
+	src, _, out = source(t, "nautobot-3", 3, "graphql", Mapping{Addresses: Addresses{Primary: true},
+		Map: map[string]string{"platform": "custom_fields.no_such_field"}})
+	src.Fetch(context.Background())
+	if !strings.Contains(out.String(), "3 of 3 device(s) give no custom_fields.no_such_field") {
+		t.Fatalf("%s", out)
+	}
+}
+
 // api auto reads REST when GraphQL answers 404, and says so once; api
 // graphql does not.
 func TestAMissingGraphQLFallsBackOnlyWhenAuto(t *testing.T) {
@@ -3533,7 +3916,7 @@ func TestTheReleaseIsSaidOnceWhileItHolds(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run them.** `go test ./internal/sot/ -run 'Recorded|Short|Missing|Rebuilt|Override|Release' -count=1`
+- [ ] **Step 2: Run them.** `go test ./internal/sot/ -run 'Recorded|Short|Missing|Rebuilt|Override|Release|Delete|Whole|Platform' -count=1`
   Expected: FAIL (undefined: `New`, `Config`, `Source`).
 
 - [ ] **Step 3: Implement.** Create `internal/sot/source.go`:
@@ -3657,12 +4040,33 @@ func (s *Source) Fetch(ctx context.Context) (admission.Inventory, error) {
 			inv.Devices = append(inv.Devices, d)
 		}
 	}
+	// Pre-flight M14: a default path many installations leave empty
+	// (Nautobot's platform.network_driver) leaves every device out, one line
+	// each; say once where to look.
+	if noPlatform := len(inv.Devices) - withPlatform(inv.Devices); len(inv.Devices) > 0 &&
+		noPlatform*2 > len(inv.Devices) {
+		s.note(fmt.Sprintf("%d of %d device(s) give no %s, so they have no platform and are left out: map "+
+			"platform to another path (map: {platform: ...}, e.g. platform.name or platform.slug)", noPlatform,
+			len(inv.Devices), s.cfg.Mapping.mapOf(p)["platform"]))
+	}
 	return inv, nil
 }
 
-// graphql is the GraphQL list, checked against REST's count read before it
-// and, when they differ, after it (decision 31): a server cap or a page lost
-// to a concurrent change would otherwise look like devices removed.
+func withPlatform(devs []admission.Device) int {
+	n := 0
+	for _, d := range devs {
+		if d.Platform != "" {
+			n++
+		}
+	}
+	return n
+}
+
+// graphql is the GraphQL list, taken only when its length equals REST's
+// count read before it and after it (pre-flight I1, amending decision 31's
+// "either"): a server cap, or a page boundary lost to a concurrent delete —
+// which shortens the list and the after count alike — would otherwise drop
+// a live device. The next sync, or the debouncer's one more, reads it again.
 func (s *Source) graphql(ctx context.Context, p Profile) ([]map[string]any, error) {
 	before, err := s.c.restCount(ctx)
 	if err != nil {
@@ -3672,16 +4076,14 @@ func (s *Source) graphql(ctx context.Context, p Profile) ([]map[string]any, erro
 	if err != nil {
 		return nil, err
 	}
-	if n := len(devs); n != before {
-		after, err := s.c.restCount(ctx)
-		if err != nil {
-			return nil, err
-		}
-		if n != after {
-			return nil, fmt.Errorf("GraphQL gave %d devices and REST counts %d before and %d after: a page was lost, "+
-				"a server capped the list, or the list changed during the sync; the next sync reads it again", n,
-				before, after)
-		}
+	after, err := s.c.restCount(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if n := len(devs); n != before || before != after {
+		return nil, fmt.Errorf("GraphQL gave %d devices and REST counts %d before and %d after: a page was lost, "+
+			"a server capped the list, or the list changed during the sync; the next sync reads it again", n,
+			before, after)
 	}
 	return devs, nil
 }
@@ -3846,6 +4248,7 @@ func TestWhatANetboxSourceCannotHave(t *testing.T) {
 		"http":               {"url: https://", "url: http://", "url must be https://"},
 		"a token in the url": {"url: https://netbox.example.com", "url: https://netbox.example.com/?t=" + testToken, "a query"},
 		"no ca_file":         {"    ca_file: /etc/i/netbox-ca.pem\n", "", "ca_file is required"},
+		"no token_secret_env": {"    token_secret_env: PORT49_TEST_NETBOX_TOKEN\n", "", "sync[1].token_secret_env is required"},
 		"relative ca_file":   {"ca_file: /etc/i/netbox-ca.pem", "ca_file: netbox-ca.pem", "ca_file is required, an absolute path"},
 		"a nautobot profile": {"token_secret_env:", "profile: nautobot_2\n    token_secret_env:", "profile must be one of netbox_3_7, netbox_4"},
 		"api":                {"token_secret_env:", "api: soap\n    token_secret_env:", "api must be auto, graphql or rest"},
@@ -4107,6 +4510,10 @@ var (
 // gets pasted. A value is min to max printable ASCII characters without a
 // space, so it cannot split a header.
 func secretFromEnv(key, name string, min, max int) (sot.Secret, error) {
+	if name == "" {
+		// Pre-flight M12: absent, not malformed.
+		return sot.Secret{}, fmt.Errorf("port49-inventory: %s is required", key)
+	}
 	if !envNameShape.MatchString(name) {
 		return sot.Secret{}, fmt.Errorf("port49-inventory: %s is not an environment variable name (letters, digits "+
 			"and _)", key)
@@ -4440,7 +4847,8 @@ func TestAGenericPlatformIsSaidAndCounted(t *testing.T) {
 		t.Fatalf("%+v %s", res, rig.out)
 	}
 	if !strings.Contains(rig.out.String(), "port49-inventory: bundle 1: platform eos-lab (2 device(s)) has no adapter "+
-		"in the policy and is served by the generic one, priv-lvl only (spec §8)") {
+		"in the policy and is served by the generic one, priv-lvl only (spec §8): name it in the source's "+
+		"platform_aliases (a policy platforms: block cannot be named eos-lab)") {
 		t.Fatalf("%s", rig.out)
 	}
 	if testutil.ToFloat64(rig.s.Metrics.GenericDevices) != 2 {
@@ -4649,15 +5057,22 @@ func (s *Syncer) sayGeneric(res Result) {
 	}
 	s.genericSaid = key
 	for _, g := range res.Generic {
+		// A policy platforms: block is named as a policy platform is
+		// (^[a-z][a-z0-9_]*$); most slugs are hyphenated, and the hint must
+		// not send an operator to a policy load error (pre-flight M5).
+		fix := "name it in the source's platform_aliases, or give it a platforms: block in the policy"
+		if !sot.PlatformNameShape.MatchString(g.Platform) {
+			fix = "name it in the source's platform_aliases (a policy platforms: block cannot be named " + g.Platform + ")"
+		}
 		fmt.Fprintf(s.Log, "port49-inventory: bundle %d: platform %s (%d device(s)) has no adapter in the policy and is "+
-			"served by the generic one, priv-lvl only (spec §8): name it in the source's platform_aliases, or give it a "+
-			"platforms: block in the policy\n", res.Sequence, g.Platform, g.Devices)
+			"served by the generic one, priv-lvl only (spec §8): %s\n", res.Sequence, g.Platform, g.Devices, fix)
 	}
 }
 ```
 
   A platform name reaches a line only once `bundle.DeviceProblem` has passed it (printable ASCII, no
-  space), so it is printed as it is.
+  space), so it is printed as it is. `sync.go` imports `github.com/rhwendt/port49/internal/sot` for
+  `PlatformNameShape` (Task 9 already made `internal/inventory` depend on it).
 
 - [ ] **Step 6: `inventory sync` prints them.** In `cmd/port49/inventory.go`'s `printResult`, in the
   `"published"` case after the quarantined loop, and in the `"unchanged"` case after its line, add:
@@ -4691,6 +5106,240 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 
 ---
 
+### Task 10a: A device left with no address is out of service, in both bounds (pre-flight I2)
+
+**Files:**
+- Modify: `internal/bundle/diff.go` (`Unaddressed`, `CheckFrom`)
+- Modify: `internal/inventory/safety.go` (`checkSafety`)
+- Test: `internal/bundle/diff_test.go`, `internal/inventory/sync_test.go`
+
+**Interfaces:**
+- Consumes: `bundle.NewlyRefused`, `byName`, `CheckFrom` (plan 6a); `checkSafety` (plan 6b);
+  `bundle.Parse`; `policy.Env`; the sync rig (plan 6b).
+- Produces: `func bundle.Unaddressed(old, new *policy.Policy) []string` — sorted names;
+  `func nameList(names []string) string` (unexported; up to five, and how many more).
+
+The bounds count a device out of service when it is removed or newly refused. port49d admits a
+connection by its source address, so a device kept under its name, still admitted by an attribute key
+group (tier 2, which outranks every CIDR group), but now with **no address** is out of service too,
+and neither bound sees it. Plan 6c makes attribute groups the natural shape and adds ways for
+addresses to vanish while names stay: an IPAM clean-up, a token that lost its IPAM view (whether
+the related object then reads as null is unmeasured), an unmeasured release's address shape. This task
+is 6b's code, changed here because 6c is what exposes it; its text in spec §10 is Task 1's.
+
+- [ ] **Step 1: Write the failing tests.** Append to `internal/inventory/sync_test.go`:
+
+```go
+// attrPolicy admits by attribute: an address-less device stays admitted.
+const attrPolicy = `
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: r, privilege: admin, permit: ["**"]}]
+subjects: [{name: s, identity: ["user:alice@example.com"], username: alice, token_ttl: 60s}]
+grants: [{subject: s, scope: all_devices, roles: [r]}]
+key_groups: [{match: {attributes: {site: dc1}}, key_ref: lab_key}]
+`
+
+func sited(inv admission.Inventory, addressed bool) admission.Inventory {
+	for i := range inv.Devices {
+		inv.Devices[i].Attributes = map[string]string{"site": "dc1"}
+		if !addressed {
+			inv.Devices[i].Addresses = nil
+		}
+	}
+	return inv
+}
+
+// Pre-flight I2: a source that strips every device's address, the names
+// and the key group's attribute kept, is refused by its bound.
+func TestASourceThatStripsEveryAddressIsRefused(t *testing.T) {
+	rig := newSyncRig(t, attrPolicy, sited(devices(20), true))
+	if res := rig.sync(t); res.Outcome != OutcomePublished {
+		t.Fatalf("%+v", res)
+	}
+	rig.src.inv = sited(devices(20), false)
+	res := rig.sync(t)
+	if res.Outcome != OutcomeRefused || !strings.Contains(res.Reason,
+		"source a removes 0 of 20 devices and refuses 0 more and leaves 20 more with no address (100%)") {
+		t.Fatalf("%+v", res)
+	}
+	// One device of twenty is under the 10% bound.
+	one := sited(devices(20), true)
+	one.Devices[0].Addresses = nil
+	rig.src.inv = one
+	if res := rig.sync(t); res.Outcome != OutcomePublished {
+		t.Fatalf("one device: %+v", res)
+	}
+}
+```
+
+  Append to `internal/bundle/diff_test.go`:
+
+```go
+// Pre-flight I2: port49d's bound counts a device left with no address, as
+// the service's does, and names it.
+func TestCheckCountsADeviceLeftWithNoAddress(t *testing.T) {
+	pol := []byte(`
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: r, privilege: admin, permit: ["**"]}]
+subjects: [{name: s, identity: ["user:alice@example.com"], username: alice, token_ttl: 60s}]
+grants: [{subject: s, scope: all_devices, roles: [r]}]
+key_groups: [{match: {attributes: {site: dc1}}, key_ref: lab_key}]
+`)
+	inv := func(addressed bool) admission.Inventory {
+		var out admission.Inventory
+		for i := 1; i <= 3; i++ {
+			d := admission.Device{Name: fmt.Sprintf("leaf-%02d", i), Platform: "arista_eos",
+				Attributes: map[string]string{"site": "dc1"}, Transport: admission.TransportTCP}
+			if addressed {
+				d.Addresses = []netip.Addr{netip.AddrFrom4([4]byte{10, 0, 0, byte(i)})}
+			}
+			out.Devices = append(out.Devices, d)
+		}
+		return out
+	}
+	env := policy.Env{KeyRefs: []string{"lab_key"}}
+	old, err := Parse(pol, inv(true), env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bare, err := Parse(pol, inv(false), env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(Unaddressed(old, bare), ","); got != "leaf-01,leaf-02,leaf-03" {
+		t.Fatalf("Unaddressed: %q", got)
+	}
+	err = CheckFrom(old, bare, 10, "fix the source of truth")
+	if err == nil || !strings.Contains(err.Error(), "removes 0 of 3 devices and refuses 0 more and leaves 3 more with "+
+		"no address (100%)") || !strings.Contains(err.Error(), "left with no address: leaf-01, leaf-02, leaf-03") {
+		t.Fatalf("got %v", err)
+	}
+	if err := CheckFrom(old, bare, 100, "fix the source of truth"); err != nil {
+		t.Fatalf("a bound of 100 is off: %v", err)
+	}
+	if got := Unaddressed(bare, old); len(got) != 0 {
+		t.Fatalf("gaining addresses is not losing them: %v", got)
+	}
+}
+```
+
+  with `"fmt"`, `"net/netip"`, `"strings"`, `"github.com/rhwendt/port49/internal/admission"` and
+  `"github.com/rhwendt/port49/internal/policy"` imported where the file lacks them.
+
+- [ ] **Step 2: Run them.** `go test ./internal/bundle/ ./internal/inventory/ -run 'NoAddress|StripsEveryAddress' -count=1`
+  Expected: FAIL (undefined: `Unaddressed`; the strip publishes).
+
+- [ ] **Step 3: Implement.** In `internal/bundle/diff.go`, after `NewlyRefused`, add:
+
+```go
+// Unaddressed is every device, by name and sorted, that old gives at least
+// one address and new keeps under its name with none, and that new does not
+// newly refuse (NewlyRefused counts those). port49d admits a connection by
+// its source address, so such a device is out of service even while an
+// attribute key group keeps it "admitted" (plan 6c, pre-flight I2).
+func Unaddressed(old, new *policy.Policy) []string {
+	before := byName(old.Devices())
+	refused := map[string]bool{}
+	for _, r := range NewlyRefused(old, new) {
+		refused[r.Device.Name] = true
+	}
+	var out []string
+	for _, d := range new.Devices() {
+		if o, ok := before[d.Name]; ok && len(o.Addresses) > 0 && len(d.Addresses) == 0 && !refused[d.Name] {
+			out = append(out, d.Name)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+// nameList is up to five names, and how many more.
+func nameList(ns []string) string {
+	if len(ns) > 5 {
+		return strings.Join(ns[:5], ", ") + fmt.Sprintf(" and %d more", len(ns)-5)
+	}
+	return strings.Join(ns, ", ")
+}
+```
+
+  In `CheckFrom`, replace the lines from `refused := NewlyRefused(old, new)` through the `msg :=
+  fmt.Sprintf(…)` statement with:
+
+```go
+	refused := NewlyRefused(old, new)
+	bare := Unaddressed(old, new)
+	if gone := removed + len(refused) + len(bare); gone*100 > was*maxRemovedPercent {
+		msg := fmt.Sprintf("the new inventory removes %d of %d devices and refuses %d more", removed, was, len(refused))
+		if len(bare) > 0 {
+			msg += fmt.Sprintf(" and leaves %d more with no address", len(bare))
+		}
+		msg += fmt.Sprintf(" (%d%%), more than inventory.max_removed_percent (%d%%)", gone*100/was, maxRemovedPercent)
+		if len(bare) > 0 {
+			msg += "; left with no address: " + nameList(bare)
+		}
+```
+
+  (the `if len(refused) > 0 {…}` block and the `return errors.New(msg + …)` that follow stay as
+  they are). With no device left bare, every line reads as before, so 6a's and 6b's tests stand.
+  Add `"slices"` to the imports if `diff.go` lacks it.
+
+  In `internal/inventory/safety.go`'s `checkSafety`, after the `newly` map is filled, add:
+
+```go
+	bare := map[string]bool{}
+	for _, name := range bundle.Unaddressed(prevPol, next) {
+		bare[name] = true
+	}
+```
+
+  and replace the counting loop and the refusal with:
+
+```go
+		removed, refused, unaddressed := 0, 0, 0
+		for _, d := range was {
+			switch {
+			case !now[d]:
+				removed++
+			case newly[d]:
+				refused++
+			case bare[d]:
+				unaddressed++
+			}
+		}
+		if gone := removed + refused + unaddressed; gone*100 > len(was)*b {
+			what := fmt.Sprintf("source %s removes %d of %d devices and refuses %d more", name, removed, len(was), refused)
+			if unaddressed > 0 {
+				// Pre-flight I2: port49d admits by address.
+				what += fmt.Sprintf(" and leaves %d more with no address", unaddressed)
+			}
+			return fmt.Errorf("%s (%d%%), more than its safety.max_removed_percent (%d%%); fix the source, or, if "+
+				"the change is meant, raise safety.max_removed_percent in port49-inventory.yaml and restart "+
+				"port49-inventory", what, gone*100/len(was), b)
+		}
+```
+
+  The words with nothing left bare are 6b's, unchanged.
+
+- [ ] **Step 4: Run them.** `go test ./internal/bundle/ ./internal/inventory/ ./cmd/... -count=1`
+  Expected: PASS, 6a's and 6b's bound tests among them.
+
+- [ ] **Step 5: Commit** (after `make build && make test && make vet`)
+
+```bash
+git add internal/bundle internal/inventory
+git commit -m "fix(inventory): a device left with no address is out of service in both bounds
+
+port49d admits a connection by its source address, so a device kept
+under its name by an attribute key group but stripped of every address
+is out of service; checkSafety and bundle.CheckFrom now count it beside
+removed and newly refused, and name it (plan 6c pre-flight I2).
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+```
+
+---
+
 ### Task 11: The webhook: authenticated by its signature, fresh, once, and only a trigger
 
 **Files:**
@@ -4705,10 +5354,11 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
   - Outcomes: `const HookAccepted = "accepted"`, `HookDuplicate = "duplicate"`, `HookStale = "stale"`,
     `HookBadSignature = "bad_signature"`, `HookUnsigned = "unsigned"`, `HookTooLarge = "too_large"`,
     `HookBadBody = "bad_body"`, `HookBadContentType = "bad_content_type"`,
-    `HookUnknownSource = "unknown_source"`, `HookBadPath = "bad_path"`.
+    `HookUnknownSource = "unknown_source"`, `HookBadPath = "bad_path"`, `HookTLSHandshake = "tls_handshake"`.
   - `type Webhooks struct { Secrets map[string][]byte; Notify func(source string); Now func() time.Time; Log io.Writer; Metrics *Metrics; /* unexported */ }`;
     `func (h *Webhooks) Handler() http.Handler`.
-  - `func WebhookServer(addr string, cert tls.Certificate, h http.Handler, errLog *log.Logger) *http.Server`.
+  - `func WebhookServer(addr string, cert tls.Certificate, h http.Handler, errLog *log.Logger) *http.Server`;
+    `func WebhookErrorLog(m *Metrics, out io.Writer) *log.Logger` (pre-flight M10).
   - `func parseHookTime(s string) (time.Time, error)`; `const maxWebhookBody`, `webhookWindow`, `maxSeen`.
   - Metric: `Webhooks *prometheus.CounterVec` (`port49_inventory_webhooks_total{source, outcome}`).
 
@@ -4723,6 +5373,7 @@ import (
 	"crypto/sha512"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -4942,6 +5593,50 @@ func TestAuthenticationIsSaidOnceAndAgainAfterARefusal(t *testing.T) {
 	}
 }
 
+// Pre-flight M9: every 401 has one body, so a wrong name and a right one
+// read alike.
+func TestEvery401ReadsAlike(t *testing.T) {
+	rig := newHookRig(time.Date(2026, 10, 1, 2, 0, 0, 0, time.UTC))
+	b := body("2026-10-01T02:00:00.000000+00:00")
+	for _, path := range []string{"/v1/webhook/netbox_prod", "/v1/webhook/not_a_source"} {
+		w := rig.deliver(path, b, sign(b, "a-different-secret-of-thirty-two-chars"), "application/json")
+		if w.Code != http.StatusUnauthorized || strings.TrimSpace(w.Body.String()) != `{"error":"unauthorized"}` {
+			t.Fatalf("%s: %d %s", path, w.Code, w.Body)
+		}
+	}
+}
+
+// Pre-flight M11: a full cache still remembers the newest delivery.
+func TestAFullReplayCacheRemembersTheNewest(t *testing.T) {
+	now := time.Date(2026, 10, 1, 2, 0, 0, 0, time.UTC)
+	h := &Webhooks{}
+	for i := 0; i < maxSeen; i++ {
+		h.remember(fmt.Sprintf("k%d", i), now.Add(time.Duration(i)*time.Millisecond))
+	}
+	if !h.remember("newest", now.Add(time.Second)) || h.remember("newest", now.Add(time.Second)) {
+		t.Fatal("the newest delivery was not remembered")
+	}
+	if len(h.seen) != maxSeen {
+		t.Fatalf("%d remembered", len(h.seen))
+	}
+}
+
+// Pre-flight M10: a handshake error is counted and not logged; another line
+// is said once.
+func TestTheWebhookErrorLogCountsHandshakes(t *testing.T) {
+	m := NewMetrics(prometheus.NewRegistry())
+	var out bytes.Buffer
+	l := WebhookErrorLog(m, &out)
+	for i := 0; i < 3; i++ {
+		l.Printf("http: TLS handshake error from 10.0.0.%d:5000: EOF", i)
+		l.Printf("http: Accept error: too many open files")
+	}
+	if testutil.ToFloat64(m.Webhooks.WithLabelValues("", HookTLSHandshake)) != 3 ||
+		strings.Count(out.String(), "Accept error") != 1 || strings.Contains(out.String(), "handshake") {
+		t.Fatalf("%s", out.String())
+	}
+}
+
 func TestBothRecordedTimestampSpellingsParse(t *testing.T) {
 	for _, s := range []string{"2026-09-30T15:43:34.000898+00:00", "2026-09-30 15:52:04.757496+00:00",
 		"2026-09-30T15:43:34+00:00"} {
@@ -4955,7 +5650,7 @@ func TestBothRecordedTimestampSpellingsParse(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run them.** `go test ./internal/inventory/ -run 'Deliver|Stale|Repeated|Authenticat|Timestamp|Signed' -count=1`
+- [ ] **Step 2: Run them.** `go test ./internal/inventory/ -run 'Deliver|Stale|Repeated|Authenticat|Timestamp|Signed|401|Cache|ErrorLog' -count=1`
   Expected: FAIL (undefined: `Webhooks`, `parseHookTime`, …).
 
 - [ ] **Step 3: Implement the metric.** In `internal/inventory/metrics.go`, add to `Metrics`:
@@ -5024,6 +5719,10 @@ const (
 	HookBadContentType = "bad_content_type"
 	HookUnknownSource  = "unknown_source"
 	HookBadPath        = "bad_path"
+	// HookTLSHandshake counts a TLS handshake that failed: counted, never
+	// logged, since the listener faces the source of truth's network and a
+	// scanner would otherwise write a line per probe (pre-flight M10).
+	HookTLSHandshake = "tls_handshake"
 )
 
 // hookHint is what a refusal's line tells the operator to do.
@@ -5156,9 +5855,7 @@ func parseHookTime(s string) (time.Time, error) {
 
 // remember reports whether key, a source and a signature, is new inside
 // twice the window — the span a delivery stays fresh — and remembers it.
-// Past maxSeen, expired keys are dropped; if none has expired, the key is
-// taken and not remembered: a flood of authentic deliveries costs a sync
-// every 30 s whatever this says (Debouncer).
+// At maxSeen, expired keys are dropped, and then the soonest to expire.
 func (h *Webhooks) remember(key string, now time.Time) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -5175,9 +5872,18 @@ func (h *Webhooks) remember(key string, now time.Time) bool {
 			}
 		}
 	}
-	if len(h.seen) < maxSeen {
-		h.seen[key] = now.Add(2 * webhookWindow)
+	if len(h.seen) >= maxSeen {
+		// Still full of live entries (a bulk import): the soonest to expire
+		// goes, so the newest delivery is always remembered (pre-flight M11).
+		var oldest string
+		for k, until := range h.seen {
+			if oldest == "" || until.Before(h.seen[oldest]) {
+				oldest = k
+			}
+		}
+		delete(h.seen, oldest)
 	}
+	h.seen[key] = now.Add(2 * webhookWindow)
 	return true
 }
 
@@ -5205,7 +5911,15 @@ func (h *Webhooks) refuse(w http.ResponseWriter, r *http.Request, source, outcom
 		fmt.Fprintf(h.Log, "port49-inventory: webhook: refused %s from %s (%s): %s\n", what, remoteHost(r), outcome,
 			hookHint[outcome])
 	}
-	writeJSON(w, code, map[string]string{"error": outcome})
+	// Every 401 has one body, so an unauthenticated caller cannot tell a
+	// configured source's name (unsigned, bad_signature) from another
+	// (unknown_source); the outcome is the metric's and the line's
+	// (pre-flight M9).
+	body := outcome
+	if code == http.StatusUnauthorized {
+		body = "unauthorized"
+	}
+	writeJSON(w, code, map[string]string{"error": body})
 }
 
 // accepted counts a delivery taken, and says the first a source sends, and
@@ -5252,6 +5966,39 @@ func WebhookServer(addr string, cert tls.Certificate, h http.Handler, errLog *lo
 		TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{cert},
 			ClientAuth: tls.NoClientCert},
 		TLSNextProto: map[string]func(*http.Server, *tls.Conn, http.Handler){}}
+}
+
+// WebhookErrorLog is the webhook server's net/http error log: a TLS
+// handshake error is counted (outcome tls_handshake, source "") and dropped;
+// any other line is said once, while fewer than maxTold are remembered
+// (pre-flight M10).
+func WebhookErrorLog(m *Metrics, out io.Writer) *log.Logger {
+	return log.New(&errorLine{m: m, out: out, said: map[string]bool{}}, "", 0)
+}
+
+type errorLine struct {
+	m    *Metrics
+	out  io.Writer
+	mu   sync.Mutex
+	said map[string]bool
+}
+
+func (e *errorLine) Write(p []byte) (int, error) {
+	line := strings.TrimSpace(string(p))
+	if strings.Contains(line, "TLS handshake error") {
+		e.m.Webhooks.WithLabelValues("", HookTLSHandshake).Inc()
+		return len(p), nil
+	}
+	e.mu.Lock()
+	say := !e.said[line] && len(e.said) < maxTold
+	if say {
+		e.said[line] = true
+	}
+	e.mu.Unlock()
+	if say {
+		fmt.Fprintf(e.out, "port49-inventory: webhook: %s\n", line)
+	}
+	return len(p), nil
 }
 ```
 
@@ -5627,7 +6374,7 @@ const maxWebhookConns = 64
 			func(_ context.Context, name string) { syncNow("webhook", name) })
 		hooks := &inventory.Webhooks{Secrets: cfg.WebhookSecrets(), Notify: deb.Notify, Now: time.Now, Log: stderr,
 			Metrics: m}
-		wsrv = inventory.WebhookServer(cfg.WebhookListen, wcert, hooks.Handler(), stdlog.New(stderr, prefix+"webhook: ", 0))
+		wsrv = inventory.WebhookServer(cfg.WebhookListen, wcert, hooks.Handler(), inventory.WebhookErrorLog(m, stderr))
 		webhookErr = make(chan error, 1)
 		go func() { webhookErr <- wsrv.ServeTLS(broker.Limit(wln, maxWebhookConns), "", "") }()
 		deb.Run(ctx, &tickers)
@@ -5850,6 +6597,13 @@ func TestInventoryExportWritesWhatTheOfflineToolsRead(t *testing.T) {
 		!strings.Contains(stderr.String(), "port49 inventory export: bundle 1, 2 device(s), written to "+out) {
 		t.Fatalf("exit %d: %s", code, stderr.String())
 	}
+	fi, err := os.Stat(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o600 {
+		t.Fatalf("the export's mode is %v, not 0600", fi.Mode().Perm()) // pre-flight M8
+	}
 	inv, err := admission.LoadFile(out)
 	if err != nil || len(inv.Devices) != 2 {
 		t.Fatalf("%+v %v", inv, err)
@@ -5910,6 +6664,31 @@ func TestInventoryExportVerifiesBeforeItWrites(t *testing.T) {
 	if code := run([]string{"inventory", "export", "--service", svc.url, "--ca", svc.ca, "--cert", svc.cert, "--key",
 		svc.key}, &stdout, &stderr); code != 2 {
 		t.Fatalf("no --verify-key: exit %d", code)
+	}
+}
+
+// Pre-flight M7: a genuine bundle that is not the one --from asked for is
+// refused. The stub answers bundle 2 to every ask.
+func TestInventoryExportFromChecksTheSequence(t *testing.T) {
+	svc := startService(t)
+	svc.sync(t)
+	svc.writeSource(t, leaf01+"  - {name: leaf-02, platform: arista_eos, addresses: [10.0.0.2]}\n")
+	svc.sync(t)
+	two := svc.syncer.Current().Raw
+	stub := serveTLS(t, filepath.Join(svc.dir, "pki"), http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(two)
+	}))
+	out := filepath.Join(t.TempDir(), "inventory.yaml")
+	args := []string{"inventory", "export", "--service", stub, "--ca", svc.ca, "--cert", svc.cert, "--key", svc.key,
+		"--verify-key", svc.pub, "--from", "1", "--out", out}
+	var stdout, stderr bytes.Buffer
+	if code := run(args, &stdout, &stderr); code != 1 ||
+		!strings.Contains(stderr.String(), "the service answered bundle 2 for --from 1") {
+		t.Fatalf("exit %d: %s", code, stderr.String())
+	}
+	if _, err := os.Stat(out); err == nil {
+		t.Fatal("wrote a file")
 	}
 }
 ```
@@ -6095,7 +6874,7 @@ func inventoryExport(args []string, stdout, stderr io.Writer) int {
 	fs.Var(&verify, "verify-key", "the service's public key (signing.pub), as port49d's verify_key_files holds it; "+
 		"once per key")
 	from := fs.Int64("from", 0, "a bundle's sequence in the service's history (default: the bundle it publishes)")
-	outPath := fs.String("out", "", "the file to write, which must not exist (default: standard output)")
+	outPath := fs.String("out", "", "the file to write, which must not exist, mode 0600 (default: standard output)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -6139,6 +6918,12 @@ func inventoryExport(args []string, stdout, stderr io.Writer) int {
 			"nothing is written\n", inventory.Printable(err.Error()))
 		return 1
 	}
+	if *from > 0 && doc.Sequence != *from {
+		// A genuine bundle, but not the one asked for (pre-flight M7).
+		fmt.Fprintf(stderr, "port49 inventory export: the service answered bundle %d for --from %d; nothing is "+
+			"written\n", doc.Sequence, *from)
+		return 1
+	}
 	body, err := admission.EncodeFile(inv)
 	if err != nil {
 		fmt.Fprintln(stderr, "port49 inventory export:", err)
@@ -6162,10 +6947,11 @@ func inventoryExport(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// writeNew writes body to path, which must not exist, 0644, and syncs it; a
-// failure removes what it wrote.
+// writeNew writes body to path, which must not exist, 0600, and syncs it; a
+// failure removes what it wrote. 0600: the fleet list and its addresses are
+// not for the world, as plan 6b made the mirror 0640 (pre-flight M8).
 func writeNew(path string, body []byte) error {
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		if errors.Is(err, os.ErrExist) {
 			return fmt.Errorf("%s exists; an export is written beside no old one", path)
@@ -6191,6 +6977,7 @@ func writeNew(path string, body []byte) error {
 
 ```
   port49 inventory export --service URL --ca FILE --cert FILE --key FILE --verify-key FILE [--from SEQUENCE] [--out FILE]
+      (--out is written 0600, never over an existing file)
 ```
 
 - [ ] **Step 6: Run them.** `go test ./internal/admission/ ./internal/inventory/ ./cmd/port49/ -count=1`
@@ -6393,8 +7180,10 @@ server {
 - [ ] **Step 3: `run.sh`'s new modes.** In `tests/lab/sot/run.sh`:
 
   Change the second-argument check to accept `l32`, `l33` and `e2e` beside `legacy` and `l30`, and its
-  usage line to `[legacy|l30|l32|l33|e2e]`. After the `L30_PROXY_CONF` lines (`chmod 644
-  "$L30_PROXY_CONF"`), add:
+  usage line to `[legacy|l30|l32|l33|e2e]`. Directly after `trap 'exit 3' TERM INT` (so the cleanup
+  trap already removes `$tmp`, key material included, if anything below fails: pre-flight M17a; the
+  env file does not exist yet, so the cleanup calls no `docker compose` without these variables),
+  add:
 
 ```bash
 # L32 and L33 (plan 6c): two TLS proxies in the l32 profile, and the lab PKI they
@@ -6648,14 +7437,33 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
 
+// noteLine is whether one line of note holds every needle: a register
+// note's table row, checked against its record cell by cell, so a word
+// elsewhere in the note cannot stand in for it (pre-flight I3).
+func noteLine(note string, needles ...string) bool {
+	for _, line := range strings.Split(note, "\n") {
+		all := true
+		for _, n := range needles {
+			all = all && n != "" && strings.Contains(line, n)
+		}
+		if all {
+			return true
+		}
+	}
+	return false
+}
+
 // TestL32FixturesAreWhatTheNotesSay reads every L32 record: it carries no
-// credential, its product's note names its directory and every host a next
-// named through each proxy, and each read either got the 120 devices or the
-// note says it failed.
+// credential; it holds two probes, each answered 200 with a next naming a
+// host, and four reads; and its product's note names its directory, has a
+// row per probe naming the stack, the proxy and the host next named, and a
+// row per read naming the stack, the proxy, the API and either the device
+// count or "failed" (pre-flight I3).
 func TestL32FixturesAreWhatTheNotesSay(t *testing.T) {
 	files, _ := filepath.Glob(filepath.Join("sot", "l32", "*", "connector.json"))
 	if len(files) == 0 {
@@ -6683,17 +7491,27 @@ func TestL32FixturesAreWhatTheNotesSay(t *testing.T) {
 		if !strings.Contains(string(note), "tests/lab/sot/l32/"+stack+"/") {
 			t.Errorf("the note does not name tests/lab/sot/l32/%s/", stack)
 		}
+		if len(rec.Probes) != 2 || len(rec.Reads) != 4 {
+			t.Fatalf("%s: %d probes and %d reads, want 2 and 4", stack, len(rec.Probes), len(rec.Reads))
+		}
 		for _, p := range rec.Probes {
-			if !strings.Contains(string(note), p.NextHost) {
-				t.Errorf("%s: the note does not say next named %s through the %s proxy", stack, p.NextHost, p.Proxy)
+			if p.Status != 200 || p.NextHost == "" {
+				t.Errorf("%s: the %s probe answered %d with next host %q: it measured nothing", stack, p.Proxy,
+					p.Status, p.NextHost)
+			}
+			if !noteLine(string(note), stack, "proxy_"+p.Proxy, p.NextHost) {
+				t.Errorf("%s: no note row says next named %s through proxy_%s", stack, p.NextHost, p.Proxy)
 			}
 		}
 		for _, r := range rec.Reads {
-			if r.Error == "" && r.Devices != 120 {
+			want := strconv.Itoa(r.Devices)
+			if r.Error != "" {
+				want = "failed"
+			} else if r.Devices != 120 {
 				t.Errorf("%s %s %s: %d devices and no error", stack, r.Proxy, r.API, r.Devices)
 			}
-			if r.Error != "" && !strings.Contains(string(note), "failed") {
-				t.Errorf("%s %s %s failed, and the note says nothing failed", stack, r.Proxy, r.API)
+			if !noteLine(string(note), stack, "proxy_"+r.Proxy, r.API, want) {
+				t.Errorf("%s: no note row names the %s read through proxy_%s with %q", stack, r.API, r.Proxy, want)
 			}
 		}
 	}
@@ -6746,7 +7564,11 @@ done
   host there means `X-Forwarded-Host`, `netbox:8080` or `nautobot:8080` means `Host`; each of the
   four reads' device count and seconds; whether a rebuilt `next` was said; leaf-01 as read. Its "Not
   observed" lists what the run did not ask (a GraphQL list above any server cap; a list changing
-  between pages). Quote every value from the record; infer nothing the record does not hold.
+  between pages). Quote every value from the record; infer nothing the record does not hold. The
+  unit test reads the rows (pre-flight I3), so write one row per probe, `| <stack> | proxy_<host|xfh>
+  | next: <scheme>://<next_host> | … |`, and one per read, `| <stack> | proxy_<host|xfh> |
+  <graphql|rest> | <devices> devices, <seconds> s | … |`, with `failed: <error>` in place of the
+  count for a read that failed.
 
 - [ ] **Step 8: Check and commit the evidence.** `make lab-unit` (runs `TestL32FixturesAreWhatTheNotesSay`),
   `make test && make vet`, then:
@@ -7342,6 +8164,11 @@ func TestL33Webhooks(t *testing.T) {
 		ph := l33Phase{Change: ch.name, Published: ok, Accepted: l33Counts(t)[inventory.HookAccepted] - before}
 		if ok {
 			ph.Seconds = at.Sub(t0).Seconds()
+			if ph.Accepted < 1 {
+				// The interval is 24h, so only a webhook publishes; a
+				// publication with no accepted delivery is not one.
+				t.Errorf("%s: published with no accepted delivery counted", ch.name)
+			}
 		} else {
 			t.Errorf("%s: no publication through the webhook in 2m", ch.name)
 		}
@@ -7396,16 +8223,21 @@ package lab
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
 
 // TestL33FixturesAreWhatTheNotesSay reads every L33 record: no secret or
-// token in it, its product's note names its directory, every phase that
-// published is in the note with its seconds, and a phase that did not is
-// called a failure there.
+// token in it; three phases and the webhook's create calls; and in its
+// product's note, its directory, a row per published phase naming the
+// stack, the change and its seconds to two places, a row per unpublished
+// phase naming the stack, the change and "failed", and a row naming the
+// stack and the bad_signature count (pre-flight I3; noteLine is
+// l32_unit_test.go's).
 func TestL33FixturesAreWhatTheNotesSay(t *testing.T) {
 	files, _ := filepath.Glob(filepath.Join("sot", "l33", "*", "webhooks.json"))
 	if len(files) == 0 {
@@ -7433,10 +8265,22 @@ func TestL33FixturesAreWhatTheNotesSay(t *testing.T) {
 		if !strings.Contains(string(note), "tests/lab/sot/l33/"+stack+"/") {
 			t.Errorf("the note does not name tests/lab/sot/l33/%s/", stack)
 		}
+		if len(rec.Phases) != 3 || len(rec.WebhookCalls) == 0 {
+			t.Fatalf("%s: %d phases and %d webhook calls, want 3 and some", stack, len(rec.Phases), len(rec.WebhookCalls))
+		}
 		for _, p := range rec.Phases {
-			if !p.Published && !strings.Contains(string(note), "failed") {
-				t.Errorf("%s: %q did not publish, and the note says nothing failed", stack, p.Change)
+			want := fmt.Sprintf("%.2f", p.Seconds)
+			if !p.Published {
+				want = "failed"
+			} else if p.Accepted < 1 {
+				t.Errorf("%s: %q published with no accepted delivery counted", stack, p.Change)
 			}
+			if !noteLine(string(note), stack, p.Change, want) {
+				t.Errorf("%s: no note row names %q with %q", stack, p.Change, want)
+			}
+		}
+		if !noteLine(string(note), stack, "bad_signature", strconv.Itoa(rec.BadSignature)) {
+			t.Errorf("%s: no note row gives bad_signature %d", stack, rec.BadSignature)
 		}
 	}
 }
@@ -7659,9 +8503,13 @@ make evidence
   `L30-netbox.md`'s form, from the records: per release, the webhook's create calls
   (`webhook_calls`), and for each of the three changes whether it published through the webhook, the
   seconds from the API write, and the accepted deliveries counted; the wrong secret's
-  `bad_signature` count in 120 s (1: not sent again; more: sent again that many times); `stale`
+  `bad_signature` count in 120 s (1: not sent again within 120 s, since a retry with a longer backoff
+  would not be seen; more: sent again that many times within it); `stale`
   (0 expected); the capture pointer `tests/lab/sot/l33/<stack>/`; **Status: measured; closed by plan
-  6c Task 16**. The device notes (`L33-e2e-<product>-arista_eos.md`) were written by the test; add
+  6c Task 16**. The unit test reads the rows (pre-flight I3), so write one row per change,
+  `| <stack> | <change, as the record spells it> | <seconds to two places> s | <accepted> accepted |`,
+  with `failed` in place of the seconds for a change that did not publish, and one row
+  `| <stack> | bad_signature | <count> in 120 s | … |`. The device notes (`L33-e2e-<product>-arista_eos.md`) were written by the test; add
   nothing to them but the controller's reading below the table if a cell needs one. Run
   `make lab-unit`.
 
@@ -7763,14 +8611,25 @@ the attributes entirely and must name `platform`; `custom_fields.<key>` maps a c
 `status` maps the status, lower case. `addresses.interfaces` adds the addresses on named interfaces
 (say `[Loopback0]` when TACACS+ is sourced from a loopback); `all_interfaces` adds every one, which
 fails the whole sync if any address sits on two devices (a VRRP address, a reused management
-address), so prefer named interfaces. A custom field that is empty, or not a string, number or
+address), so prefer named interfaces. An interface's loopback, link-local, multicast or unspecified
+address is never taken: it cannot source TACACS+, and every device has the same ones. A device left
+with no address counts against the source's bound like a removed one, so an IPAM clean-up that
+strips addresses is refused, not published. Nautobot installations that leave a platform's network
+driver empty should set `map: {platform: platform.name, ...}`; the service says so when most devices
+give no platform. A custom field that is empty, or not a string, number or
 boolean, leaves its attribute unset; your scopes' `on_missing` decides what that means.
 
 **Platforms.** `eos`, `arista-eos`, `veos`, `cisco_xe`, `ios-xe`, `nx-os`, `junos` and the like map to
 port49's names. Anything else is kept as it is: the device is admitted on the generic adapter
-(priv-lvl only), every publication says so, and `port49_inventory_generic_platform_devices` counts
-them. Map your own spelling with `platform_aliases: {eos-lab: arista_eos}`, or write the platform a
-`platforms:` block in the policy.
+(priv-lvl only), the publication that brings a new one says so, and
+`port49_inventory_generic_platform_devices` counts them for as long as they last. Map your own
+spelling with `platform_aliases: {eos-lab: arista_eos}`. A `platforms:` block in the policy is the
+other way only for a name of lowercase letters, digits and `_` (`eos_lab`, never `eos-lab`): the
+policy refuses any other platform name, and the service's line says which way is open.
+
+**Two devices with one primary address** (a virtual-chassis member, a management address reused in
+another VRF) refuse every sync of the source, as spec §10 requires: the bundle in force keeps
+serving. Filter one of them out (a tag, or a status), or give it another primary address.
 
 **Webhooks.** Set `webhook_listen` (for example `:8444`) and, per source, `webhook_secret_env`
 naming a variable that holds 32 to 255 printable characters. Point the product at
@@ -7782,6 +8641,10 @@ verification on, and the CA file that issued the webhook's certificate (the API'
 - NetBox 3.7: the same webhook, and an event rule in 3.7's spelling (`content_types`, `type_create`,
   `type_update`, `type_delete`).
 - Nautobot: one webhook on `dcim.device` with create, update and delete ticked.
+Leave the webhook's body template empty: the service reads the default body's `timestamp`, and a
+template without one is refused (`bad_body`) at every delivery. Every refused delivery is answered
+401 with the same body, whatever the reason; the service's line and
+`port49_inventory_webhooks_total{outcome}` give the reason.
 A delivery only makes the service sync that source, 2 s after it; a burst is one sync, and a source
 syncs from webhooks at most every 30 s. Nothing in a delivery is trusted. A delivery more than 5
 minutes from the service's clock is refused (`stale`): keep NTP on both hosts. Anyone who can read
@@ -7796,12 +8659,14 @@ it never sends the token anywhere but `url`, and never follows a redirect.
 `port49_inventory_sync_refused` (a bound or an empty result), `port49_inventory_source_hung{source}`
 (a fetch abandoned past `sync_timeout`), `port49_inventory_generic_platform_devices` (above zero:
 an unmapped platform), and `port49_inventory_webhooks_total{source,outcome}` by outcome: a rise in
-`bad_signature`, `unsigned` or `stale` is a misconfiguration or someone else knocking.
+`bad_signature`, `unsigned` or `stale` is a misconfiguration or someone else knocking, and
+`tls_handshake` (source `""`) counts failed handshakes, which are not logged.
 
 **An inventory for the offline tools.** `port49 inventory export --service https://inv:8443 --ca
 ca.pem --cert me.pem --key me-key.pem --verify-key signing.pub --out inventory.yaml` writes the
 published bundle's inventory, verified against the service's public key, in `inventory_file`'s
-schema; `--from N` takes bundle N from the service's last 64. Use it with `port49 policy test`,
+schema, mode 0600 (the fleet list is not for the world); `--from N` takes bundle N from the
+service's last 64, and is refused if the service answers another. Use it with `port49 policy test`,
 `policy diff`, `inventory diff` and `explain`.
 
 **At 3am.** See "What the operator sees" in the plan, which the docs should carry whole: each line
@@ -7814,8 +8679,9 @@ there is what the service says, and what to do.
 - **Version detection:** Task 3 (profiles, `/api/status/`, override), Task 8 (said, per sync).
 - **GraphQL first, REST fallback:** Tasks 5, 6, 8; `?depth=1` on Nautobot 2.x and 3.x (Task 6);
   `next` on the base (Task 6); `errors` before `data` (Task 5); the count check (Task 8).
-- **Bounded change per sync:** unchanged from 6b; connectors feed it (Task 9's `NewSources`); a
-  short GraphQL list cannot reach it as removals (Task 8).
+- **Bounded change per sync:** 6b's, fed by the connectors (Task 9's `NewSources`), now counting a
+  device left with no address in the service and in port49d (Task 10a, pre-flight I2); a list that is
+  short, shifted, or names a device twice cannot reach it as removals (Tasks 5, 6, 8; pre-flight I1).
 - **Platform slug translation:** the table and overrides (Task 7), the warning for any source
   (Task 10).
 - **Filters and maps:** Task 7, configured in Task 9.

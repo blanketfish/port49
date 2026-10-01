@@ -44,7 +44,7 @@ top. **Executed 2026-09-30** on `feature/inventory-service`, reviewed per task a
 with a fix wave; Task 20's midnight nights were dropped by the owner's ruling. It closed L29 and
 L30, and spec §14's quarantine through a sync passed on four images; it opened L31, slow Cisco
 break-glass with single-connection on (Plan 6b — As built, below); **merged 2026-09-30 (PR #17)**. Next,
-`fix/breakglass-reset`, which closes L31: **written 2026-09-30** (`2026-09-30-06b1-breakglass-reset.md`, seven tasks: one docs, three code, one lab harness, one lab run, one lab-and-docs; no owner decisions); **executed 2026-09-30** on `fix/breakglass-reset`, closing L31 (Fix `fix/breakglass-reset` — As built, below); **merged 2026-09-30 (PR #18)**. **6c written 2026-10-01** (`2026-10-01-06c-inventory-connectors.md`, sixteen tasks: one docs, twelve code, two lab, one lab-and-docs; no owner decisions, fourteen rulings where spec §10 was silent, recorded as decision 31; it opens L32 and L33). 7–13 not yet.
+`fix/breakglass-reset`, which closes L31: **written 2026-09-30** (`2026-09-30-06b1-breakglass-reset.md`, seven tasks: one docs, three code, one lab harness, one lab run, one lab-and-docs; no owner decisions); **executed 2026-09-30** on `fix/breakglass-reset`, closing L31 (Fix `fix/breakglass-reset` — As built, below); **merged 2026-09-30 (PR #18)**. **6c written 2026-10-01** (`2026-10-01-06c-inventory-connectors.md`, seventeen tasks after its pre-flight review the same day: one docs, thirteen code, two lab, one lab-and-docs; no owner decisions, fourteen rulings where spec §10 was silent, recorded as decision 31; it opens L32 and L33). 7–13 not yet.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -995,8 +995,9 @@ commands and the system users by platform name, so 5a refuses `based_on: juniper
   built, through two kinds of TLS proxy) and L33 (webhooks to port49-inventory over TLS, and a NetBox
   and a Nautobot synced to vEOS). Version detection by `/api/status/`, GraphQL first, the REST fallback (`?depth=1` on
   Nautobot 2.x, following `next` as L30 finds it), the slug alias table, filters and maps, source
-  credentials by `secret_env`, and the authenticated webhook trigger (HMAC-SHA512 of the body, ordered
-  by the body's `timestamp`, a delivery only triggering a sync); every `Fetch` returning within
+  credentials by `secret_env`, and the authenticated webhook trigger (HMAC-SHA512 of the body; a delivery
+  only triggers a sync, so its order orders nothing and its `timestamp` is read for freshness alone,
+  plan 6c ruling 2); every `Fetch` returning within
   `sync_timeout`; and `port49 inventory export --service … [--from N]`, so the offline tools keep an
   `--inventory` when no source is a file. Split from 6b because the connectors
   are the contributable surface and hold the only source-of-truth credentials, and two of their facts
