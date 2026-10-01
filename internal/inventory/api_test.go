@@ -551,7 +551,8 @@ func TestTheBundleQueryTakesOnlyOneSequence(t *testing.T) {
 	rig.sync(t)
 	for _, path := range []string{"/v1/bundle?sequence=", "/v1/bundle?sequence=-1",
 		"/v1/bundle?sequence=9223372036854775808", "/v1/bundle?sequence=1&sequence=1", "/v1/bundle?seq=1",
-		"/v1/bundle?sequence=1.0", "/v1/bundle?sequence=0x1", "/v1/bundle?sequence=%2e%2e%2f1"} {
+		"/v1/bundle?sequence=1.0", "/v1/bundle?sequence=0x1", "/v1/bundle?sequence=%2e%2e%2f1",
+		"/v1/bundle?sequence=%2B1", "/v1/bundle?sequence=01"} {
 		if resp, body := rig.do(t, rig.reader, "GET", path, nil); resp.StatusCode != 400 ||
 			!strings.Contains(string(body), "not_a_sequence") {
 			t.Errorf("%s: %d %s", path, resp.StatusCode, body)

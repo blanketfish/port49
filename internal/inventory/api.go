@@ -145,7 +145,7 @@ func (a *API) tell(key string) bool {
 
 // bundle is GET /v1/bundle: the bundle published, or with ?sequence=N bundle
 // N from the history (spec §12, `inventory export --from`). The query takes
-// sequence alone.
+// sequence alone, in its one decimal spelling.
 func (a *API) bundle(w http.ResponseWriter, r *http.Request, caller string) {
 	p := a.Syncer.Current()
 	if q := r.URL.Query(); len(q) > 0 {
@@ -154,7 +154,8 @@ func (a *API) bundle(w http.ResponseWriter, r *http.Request, caller string) {
 		if ok && len(q) == 1 && len(v) == 1 {
 			seq, err = strconv.ParseInt(v[0], 10, 64)
 		}
-		if !ok || len(q) != 1 || len(v) != 1 || err != nil || seq < 1 {
+		// One spelling per sequence: `+1` and `01` are not 1.
+		if !ok || len(q) != 1 || len(v) != 1 || err != nil || seq < 1 || strconv.FormatInt(seq, 10) != v[0] {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "not_a_sequence"})
 			return
 		}

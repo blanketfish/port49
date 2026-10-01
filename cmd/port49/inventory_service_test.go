@@ -423,7 +423,7 @@ func TestInventoryExportNeverWritesThroughALink(t *testing.T) {
 		}
 		var stdout, stderr bytes.Buffer
 		if code := run(exportArgs(svc, "--out", link), &stdout, &stderr); code != 1 ||
-			!strings.Contains(stderr.String(), "exists") {
+			!strings.Contains(stderr.String(), link+" is a symbolic link") {
 			t.Fatalf("%s: exit %d: %s", name, code, stderr.String())
 		}
 	}
@@ -444,5 +444,36 @@ func TestInventoryExportRefusesAMalformedFrom(t *testing.T) {
 			"--key", "c", "--verify-key", "d", "--from", from}, &stdout, &stderr); code != 2 {
 			t.Errorf("--from %s: exit %d: %s", from, code, stderr.String())
 		}
+	}
+}
+
+// Fix round 1 (I1): an export standard output did not take fails, and says
+// no bundle was exported.
+func TestInventoryExportFailsWhenStandardOutputDoes(t *testing.T) {
+	svc := startService(t)
+	svc.sync(t)
+	var stderr bytes.Buffer
+	if code := run(exportArgs(svc), failingWriter{}, &stderr); code != 1 ||
+		!strings.Contains(stderr.String(), "standard output: "+os.ErrClosed.Error()) ||
+		strings.Contains(stderr.String(), "device(s)") {
+		t.Fatalf("exit %d: %s", code, stderr.String())
+	}
+}
+
+// Fix round 1 (M2): the header names the service by scheme and host; a
+// path in --service is not copied into the file.
+func TestInventoryExportHeaderNamesOnlyTheServiceHost(t *testing.T) {
+	svc := startService(t)
+	svc.sync(t)
+	raw := svc.syncer.Current().Raw
+	stub := serveTLS(t, filepath.Join(svc.dir, "pki"), http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(raw)
+	}))
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"inventory", "export", "--service", stub + "/not-for-the-file", "--ca", svc.ca, "--cert",
+		svc.cert, "--key", svc.key, "--verify-key", svc.pub}, &stdout, &stderr); code != 0 ||
+		!strings.Contains(stdout.String(), "from "+stub+".\n") || strings.Contains(stdout.String(), "not-for-the-file") {
+		t.Fatalf("exit %d: %s %s", code, stdout.String(), stderr.String())
 	}
 }

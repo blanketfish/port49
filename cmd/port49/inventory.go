@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -575,13 +576,24 @@ func inventoryExport(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "port49 inventory export:", err)
 		return 1
 	}
+	// The service's scheme and host only: a path is the operator's text,
+	// and the file is passed around.
+	origin := "the service"
+	if u, err := url.Parse(svc.url); err == nil {
+		origin = inventory.Printable(u.Scheme + "://" + u.Host)
+	}
 	header := fmt.Sprintf("# port49 inventory export: bundle %d (%s), published %s, from %s.\n"+
 		"# The inventory service's facts only: no key assignment (spec §13, decision 30).\n", doc.Sequence, doc.Bundle,
-		doc.PublishedAt.Format(time.RFC3339), inventory.Printable(svc.url))
+		doc.PublishedAt.Format(time.RFC3339), origin)
 	body = append([]byte(header), body...)
 	where := ""
 	if *outPath == "" {
-		stdout.Write(body)
+		// A short write is a truncated inventory that may still parse, as
+		// part of the fleet: it fails the export.
+		if _, err := stdout.Write(body); err != nil {
+			fmt.Fprintln(stderr, "port49 inventory export: standard output:", err)
+			return 1
+		}
 	} else {
 		if err := writeNew(*outPath, body); err != nil {
 			fmt.Fprintln(stderr, "port49 inventory export:", err)
@@ -600,6 +612,9 @@ func writeNew(path string, body []byte) error {
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		if errors.Is(err, os.ErrExist) {
+			if fi, lerr := os.Lstat(path); lerr == nil && fi.Mode()&os.ModeSymlink != 0 {
+				return fmt.Errorf("%s is a symbolic link; an export is never written through one", path)
+			}
 			return fmt.Errorf("%s exists; an export is written beside no old one", path)
 		}
 		return err
