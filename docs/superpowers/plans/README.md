@@ -54,11 +54,14 @@ whole-branch (FIX FIRST 0/1/9, then a fix wave and a MERGE re-review), with a la
 agent surviving a revocation, and the listener now answers a revoked caller `credential_revoked`
 (Plan 7a — As built, below); **merged 2026-10-01 (PR #20)**. **7b written 2026-10-01**
 (`2026-10-01-07b-session-lifetime-and-cert-status.md`, thirteen tasks: one docs, ten code, one lab,
-one lab-and-docs; eleven rulings recorded as decision 33; one owner decision, D-7b-1, whether a
+one lab-and-docs; twelve rulings recorded as decision 33; one owner decision, D-7b-1, whether a
 certificate whose revocation status cannot be established is refused (ruled refuse) and whether
 certificate status is required (ruled required, with an explicit `disabled`); it opens L34; revised the same day after its pre-flight review: two critical, thirteen important and
 twenty-two minor fixed, one minor rebutted in part; its re-check's three important and five minor
-fixed the same day).
+fixed the same day); **executed 2026-10-01** on `feature/session-lifetime-and-cert-status`,
+reviewed per task, closing L34 with `cisco_iosxe` the one platform that shows the ceiling warning,
+and measuring L2 on five images (open: Junos cannot show it) (Plan 7b — As built, below); final
+review and merge pending.
 7c–7h and 8–13 not yet.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
@@ -1791,6 +1794,230 @@ for the revoked login):
   persists; the revocation's residual window (a redemption that removed its token before the delete
   and writes its context after the second pass), closed atomically in the store.
 - **7e:** the listener and the marks in the separate broker process.
+
+### Plan 7b — As built
+
+Executed 2026-10-01 on `feature/session-lifetime-and-cert-status` (base 0fc2761), thirteen tasks,
+each reviewed per task; the ledger is
+`.superpowers/sdd/2026-10-01-07b-session-lifetime-and-cert-status/progress.md`, with each task's
+brief, report and review beside it. A pre-flight review revised the plan first (two critical,
+thirteen important and twenty-two minor fixed at 196aba0, M8 rebutted in part; its re-check's three
+important and five minor fixed at 0fc2761). What differs from the plan's text, task by task:
+
+- **Task 1 (docs; 52c5ac0, aa407ee).** §17 had no error-code list, so the new codes got an Errors
+  paragraph. The review added an OCSP `revoked` answer as a marking origin (`ocsp <responder>`), the
+  `refresh` meanings of `trust_domain_unresolved` and `credential_revoked` in §5.7, and the held
+  connection's own ceiling at `session.max_session_age_default` in §5.6 and decision 33.
+- **Task 2 (`max_session_age`; 0ba650f, 0b1c50e).** `SessionAge` gains `Never`: a zero
+  `SessionAge` takes the default, never `never`, so a value nobody set fails closed. `port49
+  explain` says `session.max_session_age_default (no role names a finite one)`.
+- **Task 3 (the mint's ceiling; f3faa9e, d8fcd1e).** An idempotent replay keeps its tokens' original
+  `session_expires_at`, and a record whose tokens are past their ceiling is minted again, not
+  replayed (`token.Result.SessionExpiresAt`). The per-device test was rebuilt so one device's
+  ceiling differs from the other's. Controller ruling: the connection keeps the default ceiling, so
+  a role longer than the default still re-authenticates the connection at the default (Ruling 1, as
+  intended).
+- **Task 4 (the store; 7ca5b26, 5c5605c).** A context with no `auth_time` given a finite ceiling by
+  policy gets one in the distant past, so it is denied `session_expired` (fail closed; a `storetest`
+  property). The grace check uses the authorizer's predicate. A refresh of a `never` context past
+  any cutoff is pinned to succeed.
+- **Task 5 (the policy refresh; 691008e, 17b780d, 8dae9e3).** A context with no `auth_time` is
+  written at every policy refresh, and so fails closed. A quarantined record on a session-only
+  platform also carries `unreached`. §5.1.3 and §5.7 say the refresh moves `session_expires` only
+  earlier.
+- **Task 6 (warning, grace; dadd556, 87836c5).** The blob's TTL is bumped on permits, not only on a
+  touch (the Task 3 review's carry), throttled to once per half idle TTL per hash on each replica
+  (50 permits, one write). `main.go` sets `Broker.CeilingWarning`, which nothing set before, so
+  `ceiling_warning_seconds` was always 0. A delete that loses its compare-and-set counts as
+  `conflict`, not as a store error. The warning matches the peer's own platform name, so an
+  inventory variant is warned only if listed by its own name.
+- **Task 7 (`/v1/refresh`; 4443480, 2334ece, ff2405d).** A refresh's store errors are recorded
+  `refresh deny store_unavailable` and counted `store_error`. The marks are read again after the
+  extension, and a mark found then is answered `credential_revoked`. A 503 after the connection was
+  renewed sends `Retry-After: 10` and says some sessions may have been extended. Controller ruling:
+  every consumed nonce is paced, except an expired one, so an agent retrying after a stale nonce is
+  not made to wait. A context `refreshContext` revoked for a fault is reported `revoked`, not
+  `not_judged`.
+- **Task 8 (the agent; 915dbd6, 495d74b).** Controller ruling: `port49 login` refreshes a running
+  agent only when its broker and its certificate's fingerprint match the flags. Otherwise it exits 1
+  naming the running agent's broker. The agent never moves its own deadline on a 503. A refresh whose
+  connection drops or is swapped is tried once on a new connection.
+- **Task 9 (`certstatus`; 8a9a11d, 6521fd2, df78f0b).** Retries back off from 30s again after a
+  recovery (the plan's code waited a full `refresh_interval`). OCSP signatures are verified by hand,
+  so an intermediate's own embedded certificate works. A list with no `NextUpdate` is fresh for
+  `refresh_interval` from its `ThisUpdate`, not from its load. An empty chain is Unknown. From the
+  review: the whole OCSP CertID is matched (name hash, key hash and serial); SHA-1 signatures on
+  CRLs and OCSP are refused (controller ruling; SHA-1 stays allowed as the CertID hash); a caller
+  hanging up never poisons the shared OCSP answer; a CRL must name `issuer_file`'s subject byte for
+  byte, and says so when the names differ only in encoding; a CRL dated more than 5m ahead is
+  refused.
+- **Task 10 (refusals and marks; a726c33, 152aab3).** The queued revocation runs after the 401 is
+  written, so the client reads its answer before the connection closes. A standing mark makes a
+  replayed CRL entry a no-op. A refusal while queued is queued once. The status check and the mark
+  check are decided under `bind`'s one lock (a mark wins over a 503). The `allow` line is limited
+  per class of failure, so no responder text keys it. The agent's 503 message no longer repeats
+  itself.
+- **Task 11 (port49d; 56839bb, 4cf1945, 68d86e3).** The `Checker` is built in `cmd/port49d`, not
+  on `config.CertificateStatusConfig`: config → certstatus → inventory (`WriteAtomic`) → config is
+  an import cycle. The start line prints before the first fetch, and a list coming into force says
+  `CRL <name> loaded (next update …)`. `disabled: true` beside any other key is refused. An
+  `issuer_file` must be a CA; an OCSP `responder` must be http(s).
+- **Task 12 (lab; e13250d, 4bd3100, 6dece62, 1330674, ec50053, 52a81e7, d73ca51, 6791b73).** The
+  vSRX prompt is `srx1`, its configured host-name, not its node name; the harness waited for the
+  wrong one (ec50053). NX-OS ran at 4bd3100 and vJunos-router's session run at 6dece62, the rest at
+  ec50053; the commits between change only how the test reads and writes notes. The step 7 and 8
+  refresh quotes in the session notes are rebuilt from the recorded cells and marked so; the
+  harness now keeps the raw refresh output (`tests/lab/evidence/session-refresh-<platform>.txt`).
+- **Task 13 (38c43fd, caffec6, 0b09d54, and this section).** `cisco_iosxe` alone joins
+  `ceilingWarningOn`. L34 closes; L2 stays open, its N9Kv clause corrected (rule 4). §5.6 and
+  decision 33 say what L34 found.
+- **Final review and fix wave.** Not run when this section was written. Handed to it: Task 3 M-3
+  (`Mint` should refuse `MaxSessionAge > 0` with a zero `AuthTime`), and the stale comment on
+  `TestARefreshIsRateLimited` ("every consumed nonce counts", before Task 7's pacing ruling).
+
+**Rulings, as made** (spec §13, decision 33; the plan's twelve rulings): all stand. Ruling 4's
+allow-list holds `cisco_iosxe` alone, from L34. Ruling 6 is amended by Task 7 (an expired nonce is
+not paced) and Task 8 (`port49 login` refreshes only its own agent). Ruling 9 is amended by Task 9:
+SHA-1 signatures are never trusted, the whole CertID is matched, and a CRL's issuer name must equal
+`issuer_file`'s subject byte for byte.
+
+**D-7b-1** (refuse or allow when status cannot be established; certificate status required): no
+answer from the owner yet. Built as ruled: `refuse` by default, `allow` available, the key
+required with `disabled: true` as the opt-out.
+
+**Lab (Task 12)**, all five images on beehive, 2026-10-01 (`tests/lab/results/L34-*.md`, `L2-*.md`,
+`session-*.md`; captures `tests/lab/evidence/session-<platform>.pcap`):
+
+- **IOS-XE 17.13.01a.** L34: the warning shown before the prompt and with each permitted command's
+  output; still a permit. L2: a denial shown in full, 64–1000 bytes. Session: the ceiling denial,
+  the grace-window refresh that resumed, and "session ended" after it, each printed as port49 wrote
+  it.
+- **vEOS-lab 4.31.2F (image tagged 4.32.2F).** L34: not shown; still a permit. L2: shown in full,
+  64–1000 bytes. Session: as IOS-XE, each message after the device's `% Authorization denied for
+  command …:`.
+- **NX-OS 10.4(2)F.** L34: not shown; still a permit. L2: never shown. Session: the ceiling and
+  the end were enforced, and the device printed only `Error: AAA authorization failed
+  AAA_AUTHOR_STATUS_METHOD=16(0x10)`.
+- **vJunos-router 23.4R2-S2.1, vSRX 21.4R3.15.** L34: not shown at login; no command reply exists.
+  L2: not measurable; a session denial shows nothing and does not stop the login. Session: `show
+  version` ran past the ceiling and past the grace window (decision 21); the refresh said "not
+  reached: the device keeps its own session", and past the window "past the grace window, not
+  resumed".
+- Every image: `port49 token` printed its stderr warning inside the window.
+
+**Operator notes** (for the pull request body and plan 13's docs; the plan's "Operator-facing
+notes", amended):
+
+- **Breaking: `broker.certificate_status` is required** whenever a broker is configured. To choose
+  not to check, write `disabled: true` and nothing else beside it; any other key next to it is
+  refused. port49d says it is disabled at every start.
+- **What to name.** Your CA's CRLs (`file:` or `url:`), each with `issuer_file:`, the CA
+  certificate that signs it, which must be your `client_ca_file` anchor or signed by it. Add an
+  OCSP `responder` (or `use_aia: true`) if you have one, with `hash: sha1` for a responder that
+  knows no SHA-256 CertID.
+  - `issuer_file` must be the CA certificate itself, the one your clients chain to. A re-issued copy
+    of it (same key, another certificate) does not match: every certificate under it has an
+    unknown status, refused `503` under the default `on_unavailable: refuse`.
+  - The CRL's issuer name must be byte for byte your CA certificate's subject. A CRL whose issuer
+    is the same name encoded differently (UTF8String for PrintableString) is refused, and the
+    message says so; the CA must encode its CRL issuer as its certificate's subject.
+  - An intermediate CA: also name the root's CRL (`issuer_file` = your `client_ca_file`), or an
+    OCSP responder the root signs for. port49d checks each CA in the chain and says at start when
+    nothing covers one.
+  - Keep `client_ca_file` and each `issuer_file` root-owned and not group- or other-writable.
+    port49d does not check this yet.
+- **What is never trusted.** A CRL that does not verify against its `issuer_file`, or one that is
+  scoped (partitioned, delta, an unknown critical extension), is never used; watch
+  `port49_crl_loads_total{outcome="refused"}`. A CRL or OCSP answer signed with SHA-1 is not
+  trusted: the status is unknown ("signed with … SHA1, which port49 does not trust"), with no
+  override. SHA-1 is accepted only as the OCSP CertID hash.
+- **What is refused and what is marked.** A certificate a CRL or OCSP revokes, or one under a
+  revoked issuing CA, is refused at login, mint and refresh. If it still holds something (a
+  connection, a device session, an unspent token), port49d revokes it as `port49 revoke --cert`
+  would: `port49 revoke --list` shows origin `crl <name>`. A `certificateHold` entry is refused
+  while listed and never marked. Lift a CRL-origin mark only after the CA delists the certificate:
+  while it is listed, the mark comes back at the next restart or the certificate's next use.
+- **`on_unavailable: refuse` (the default; D-7b-1 open).** A CRL past its next update, or an OCSP
+  responder down, answers new logins, mints and refreshes for that issuer `503
+  certificate_status_unavailable` with `Retry-After: 60`, recorded `<event> deny
+  trust_domain_unresolved`. No agent session ends, live device sessions run to their ceiling, and
+  break-glass is unaffected. `allow` keeps logins working through an outage and lets a certificate
+  revoked during it in until the CRL returns.
+- **Loading.** At first start a `url:` source says `CRL <name> (not loaded yet)` until its first
+  fetch; that is normal. A list coming into force, or recovering, says `CRL <name> loaded (next
+  update …)`. A failed load is retried from 30s with backoff. Verified lists are kept beside
+  `revocations_file` (`crl-<name>.der`) and serve across a restart until their next update; back
+  them up with it. Alert on `time() - port49_crl_next_update_timestamp_seconds > -3600` and on
+  `port49_cert_status_unavailable_total`.
+- **New: `max_session_age` per role.** A duration (at least `1m`) or `never`. A session on a device
+  ends at the least of its roles' (a role naming none takes `session.max_session_age_default`), and
+  `port49 explain` shows it. Shortening a role reaches live sessions at the next policy refresh;
+  lengthening it, or `never`, at each operator's next `port49 refresh` or login.
+- **New: `port49 refresh`.** It re-authenticates on your held broker connection and extends every
+  live device session your policy still grants: no reconnect, and the candidate configuration stays
+  intact. It prints one line per device: extended to when, revoked by the policy, past the grace
+  window (log in again there), not extended this time (run it again), or not reached (Junos keeps
+  its own session). One refresh per connection per 10s.
+  - `port49 login` with an agent already running for the same broker and certificate says
+    `already logged in to <broker>; refreshing` and refreshes. With another broker or certificate it
+    exits 1 naming the running agent's broker.
+  - With today's PEM key files a refresh proves you hold the key file, not that you are at the
+    keyboard; a script running `port49 refresh` in a loop keeps sessions alive indefinitely. Keep
+    key files readable only by their owner; a hardware key (plan 9) adds the touch.
+- **The warning.** Within `session.ceiling_warning` (default 30m) of the end:
+  - On IOS-XE, permitted commands print `port49: session ends in Nm - run 'port49 refresh'` after
+    their output, and the login prints it before the prompt. A script that reads command output on
+    IOS-XE sees that line in a session's last 30m.
+  - EOS, NX-OS and Junos show nothing (L34). There, `port49 token` is the warning: `port49: your
+    session on <device> ends at <time> (in Nm); run 'port49 refresh'` on stderr, `--json` included.
+    It does so on every platform.
+  - `session.ceiling_warning_platforms` adds a platform at your own risk (unmeasured). A platform
+    variant is listed by its own name. `0s` turns the server_msg warning off.
+- **Past the end.** Commands are refused `session expired - run 'port49 refresh' (or 'port49
+  login') within Nm to resume` for `session.grace_window` (default 10m), and a refresh in that
+  window resumes them. After it the session is deleted: `session ended - get a new token ('port49
+  token') and log in again`. NX-OS prints only its own `Error: AAA authorization failed`, with no
+  hint to refresh. Junos keeps its session past the ceiling and the grace window (decision 21):
+  close it on the device.
+- **Clocks.** CRL and OCSP freshness follow port49d's clock, so an NTP step forward can make a fresh
+  list stale. `port49 token`'s warning follows the laptop's clock.
+- **New metrics.** `port49_broker_connection_events_total{event}` gains `status_unavailable_refused`
+  (`revoked_refused` stays for revoked certificates and principals, so a CA outage does not read as
+  revocations); `port49_session_refreshes_total{outcome}` (`extended`, `revoked`, `past_grace`,
+  `not_judged`, `refused`, `store_error`, `too_soon`); `port49_ceiling_warnings_total`;
+  `port49_cert_status_checks_total{source,result}`; `port49_crl_loads_total{crl,outcome}`;
+  `port49_crl_next_update_timestamp_seconds{crl}`; `port49_cert_status_unavailable_total`.
+- **New records.** `refresh permit grants_matched` per extended session, with `auth_time` and
+  `session_expires`; `refresh deny session_expired` past the grace window; `refresh deny
+  trust_domain_unresolved` for a signature that did not verify or a status not established; `refresh
+  deny credential_revoked`; `refresh deny store_unavailable`; `mint deny session_expired` per device
+  already past its ceiling; `mint deny trust_domain_unresolved`; `unreached: true` on refresh records
+  for session-only platforms.
+- **API.** `POST /v1/refresh/challenge` and `POST /v1/refresh`, on the held connection only, with
+  `refresh_challenge_missing` (401) and `refresh_too_soon` (429); `503
+  certificate_status_unavailable` with `Retry-After`; `GET /v1/config` gains
+  `ceiling_warning_seconds`; mint items gain `session_expires_at`, and a `session_expired` item
+  carries a detail.
+
+**Unassigned follow-ups:**
+
+- Fence `client_ca_file` and every `issuer_file` together (owner, no group or other write), as
+  `policy_file` is fenced. Fencing `issuer_file` alone buys nothing: a swapped file fails closed.
+- `Checker` lives in `cmd/port49d` because of the import cycle above; moving `inventory.WriteAtomic`
+  to a leaf package would let it return to `config`.
+
+**After the merge:** copy the ten raw captures from the feature worktree's `tests/lab/captures/`
+(archived at `/mnt/images/port49-captures-7b-t12-2026-10-01/`) into main's, or main's labpcap
+audit fails.
+
+**Carried, for later plans:**
+
+- **7c:** the HTTP revocation, and `api:` rights over `RefreshSession`'s self-only rule.
+- **7g:** the `staleness_ceiling` default and the scheduled refresh.
+- **7h:** the OIDC refresh: `prompt=login`, `auth_time` from the assertion, `sid` re-indexing.
+- **9:** the hardware key's touch on refresh, and a PKCS#1 v1.5 mapping for tokens without PSS.
+- **12:** the Junos `idle-timeout` classes rendered from a per-role ceiling rather than the default,
+  and `port49 policy diff` reporting a changed ceiling (pre-flight M11).
 
 ## Plan 8 — Workload certificates (§19 step 8)
 
