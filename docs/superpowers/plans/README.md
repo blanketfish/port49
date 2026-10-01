@@ -49,10 +49,10 @@ D1, the shared store's backend, which 7a–7c do not need); **7a written 2026-10
 (`2026-10-01-07a-revocation-and-broker-limits.md`, thirteen tasks: one docs, ten code, one lab,
 one docs; no owner decision, ten rulings recorded as decision 32; revised the same day after its
 pre-flight review: one critical, seven important and twenty-two minor fixed, one minor rebutted);
-**executed 2026-10-01** on `feature/revocation-and-broker-limits`, reviewed per task (the
-whole-branch review and its fix wave to follow), with a lab-driven fix: the first lab run found the
+**executed 2026-10-01** on `feature/revocation-and-broker-limits`, reviewed per task and
+whole-branch (FIX FIRST 0/1/9, then a fix wave and a MERGE re-review), with a lab-driven fix: the first lab run found the
 agent surviving a revocation, and the listener now answers a revoked caller `credential_revoked`
-(Plan 7a — As built, below).
+(Plan 7a — As built, below); **merged 2026-10-01 (PR #20)**. Next, plan 7b.
 7b–7h and 8–13 not yet.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
@@ -1585,7 +1585,11 @@ interface and the memory store, with `storetest` properties the chosen backend m
 ### Plan 7a — As built
 
 Executed 2026-10-01 on `feature/revocation-and-broker-limits`, thirteen tasks and one lab-driven
-fix (fixA), each reviewed; the ledger is
+fix (fixA), each reviewed; merged 2026-10-01 (PR #20, merge bf96a46) after the fix wave's re-review
+said MERGE. Two non-blocking follow-ups from that re-review: R1, `storetest` should say when it skips
+the holderless-record case for a store that is not a `storetest.Planter` (7d's backend test must
+implement Planter); R2, `Agent.Mint` after Done returns a bare `ErrSessionOver` rather than the
+recorded reason; the ledger is
 `.superpowers/sdd/2026-10-01-07a-revocation-and-broker-limits/progress.md`, with each task's brief,
 report and review beside it. A pre-flight review revised the plan first (one critical, seven
 important, twenty-two minor fixed at 1ac1665; M8 rebutted: a retransmission with no live context
