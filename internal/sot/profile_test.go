@@ -75,6 +75,14 @@ func TestAnUnmeasuredMajorIsRefusedUnlessAProfileIsNamed(t *testing.T) {
 		!strings.Contains(err.Error(), "is not a netbox profile") {
 		t.Fatalf("a Nautobot profile for NetBox: %v", err)
 	}
+	// A measured release read with a profile the lab did not pair with it is
+	// off the measured path; the profile detection would pick stays on it.
+	if _, measured, err := Detect(Version{"nautobot", "2.4.43", 2, 4}, Nautobot16); err != nil || measured {
+		t.Fatalf("2.4.43 as nautobot_1_6: measured=%v %v", measured, err)
+	}
+	if _, measured, err := Detect(Version{"netbox", "4.7.1", 4, 7}, NetBox4); err != nil || !measured {
+		t.Fatalf("4.7.1 as netbox_4: measured=%v %v", measured, err)
+	}
 }
 
 func TestTheStatusMustNameTheProduct(t *testing.T) {
@@ -90,6 +98,18 @@ func TestTheStatusMustNameTheProduct(t *testing.T) {
 	if _, err := versionOf(map[string]any{"netbox-version": "4.7.1\x1b[2J"}, "netbox"); err == nil ||
 		strings.Contains(err.Error(), "\x1b") {
 		t.Fatalf("got %v", err)
+	}
+	// A value of another shape is refused, and the error names the shape wanted.
+	for _, raw := range []any{4.7, "12345.1.0", "4.7.1\n", "2.0.0b1"} {
+		if _, err := versionOf(map[string]any{"netbox-version": raw}, "netbox"); err == nil ||
+			!strings.Contains(err.Error(), "want <major>.<minor>") {
+			t.Errorf("%#v: %v", raw, err)
+		}
+	}
+	// A body naming both products is read as the configured one.
+	both := map[string]any{"netbox-version": "4.7.1", "nautobot-version": "2.4.43"}
+	if v, err := versionOf(both, "nautobot"); err != nil || v.Text != "2.4.43" || v.Major != 2 {
+		t.Fatalf("both, as nautobot: %+v %v", v, err)
 	}
 }
 

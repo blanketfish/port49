@@ -69,10 +69,10 @@ var netboxFields = map[string]field{
 }
 
 var profiles = map[string]Profile{
-	// L27, L30: NetBox 3.7.8 takes role (and reads device_role beside it),
-	// custom_fields as a scalar, status as the upper-case enum name over
-	// GraphQL ("ACTIVE") and {value, label} over REST; its GraphQL list took
-	// no paging shape tried and returned all 120.
+	// L27, L30: NetBox 3.7.8 takes role over GraphQL (REST reads device_role
+	// beside it), custom_fields as an object, status as the upper-case enum
+	// name over GraphQL ("ACTIVE") and {value, label} over REST; its GraphQL
+	// list took no paging shape tried and returned all 120.
 	NetBox37: {Name: NetBox37, Product: "netbox", graphqlPath: "/graphql/", list: "device_list", paging: pageNone,
 		tagKey: "slug", status: field{[]string{"status"}, []string{"status", "value"}},
 		customFields: both("custom_fields"), fields: netboxFields,
@@ -179,7 +179,8 @@ func versionOf(status map[string]any, product string) (Version, error) {
 	text, _ := raw.(string)
 	m := versionShape.FindStringSubmatch(text)
 	if m == nil {
-		return Version{}, fmt.Errorf("/api/status/ gives a %s-version that is not a release number", product)
+		return Version{}, fmt.Errorf("/api/status/ gives a %s-version that is not a release number "+
+			"(want <major>.<minor>[.<patch>][-suffix])", product)
 	}
 	major, _ := strconv.Atoi(m[1])
 	minor, _ := strconv.Atoi(m[2])
@@ -206,30 +207,38 @@ func measuredList(product string) string {
 	return strings.Join(out, ", ")
 }
 
-// Detect picks v's profile by major and minor, as L27 and L30 measured, and
-// says whether a lab run measured that minor. override, a profile name, is
-// taken as given (spec §10: "an explicit override available").
+// pick is v's profile by major and minor, as L27 and L30 measured, and false
+// for a major no lab run measured.
+func pick(v Version) (string, bool) {
+	switch {
+	case v.Product == "netbox" && v.Major == 3 && v.Minor == 7:
+		return NetBox37, true
+	case v.Product == "netbox" && v.Major == 4:
+		return NetBox4, true
+	case v.Product == "nautobot" && v.Major == 1 && v.Minor == 6:
+		return Nautobot16, true
+	case v.Product == "nautobot" && (v.Major == 2 || v.Major == 3):
+		return Nautobot2, true
+	}
+	return "", false
+}
+
+// Detect picks v's profile and says whether a lab run measured that minor
+// with that profile. override, a profile name, is taken as given (spec §10:
+// "an explicit override available"); it is measured only when it is the
+// profile detection would pick.
 func Detect(v Version, override string) (Profile, bool, error) {
+	auto, ok := pick(v)
 	if override != "" {
 		if !KnownProfile(v.Product, override) {
 			return Profile{}, false, fmt.Errorf("profile %s is not a %s profile", override, v.Product)
 		}
-		return profiles[override], isMeasured(v), nil
+		return profiles[override], ok && auto == override && isMeasured(v), nil
 	}
-	var name string
-	switch {
-	case v.Product == "netbox" && v.Major == 3 && v.Minor == 7:
-		name = NetBox37
-	case v.Product == "netbox" && v.Major == 4:
-		name = NetBox4
-	case v.Product == "nautobot" && v.Major == 1 && v.Minor == 6:
-		name = Nautobot16
-	case v.Product == "nautobot" && (v.Major == 2 || v.Major == 3):
-		name = Nautobot2
-	default:
+	if !ok {
 		return Profile{}, false, fmt.Errorf("%s %s is a release no lab run measured (spec §15 L27, L30: %s); set profile "+
 			"to read it with a measured release's fields, at your own risk", productName(v.Product), v.Text,
 			measuredList(v.Product))
 	}
-	return profiles[name], isMeasured(v), nil
+	return profiles[auto], isMeasured(v), nil
 }
