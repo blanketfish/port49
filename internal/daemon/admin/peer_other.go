@@ -10,8 +10,8 @@ import (
 var errNeedsLinux = errors.New("admin_socket needs Linux: it checks the caller's uid (SO_PEERCRED)")
 
 // peerAllowed refuses everyone where the caller's uid cannot be read.
-func peerAllowed(net.Conn) error {
-	return errNeedsLinux
+func peerAllowed(net.Conn) (uint32, error) {
+	return 0, errNeedsLinux
 }
 
 // listenPrivate refuses to open a socket that would answer no one.

@@ -803,8 +803,15 @@ func run(parent context.Context, cfgPath string) error {
 			return fmt.Errorf("admin_socket %s: %w", cfg.AdminSocket, err)
 		}
 		srv := &admin.Server{Held: held, Keys: keySets, Now: time.Now, Assigned: assignedKeyRef(cfg, live)}
+		if brk != nil {
+			srv.Revoke, srv.Revocations = adminRevoke(brk), adminRevocations(brk.Store)
+		}
 		go srv.Serve(ctx, aln)
-		fmt.Fprintf(stderr, "port49d: admin socket on %s (port49 keys diagnose)\n", cfg.AdminSocket)
+		fmt.Fprintf(stderr, "port49d: admin socket on %s (port49 keys diagnose, port49 revoke)\n", cfg.AdminSocket)
+	}
+	if brk != nil && cfg.AdminSocket == "" {
+		fmt.Fprintln(stderr, "port49d: broker: port49 revoke is unavailable: set admin_socket; until then, cut "+
+			"someone off by removing their grants from broker.policy_file")
 	}
 
 	// The bound address, not the configured one: `:49` says nothing about

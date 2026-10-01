@@ -14,6 +14,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/rhwendt/port49/internal/broker"
+	"github.com/rhwendt/port49/internal/daemon/admin"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/fence"
@@ -285,5 +287,37 @@ func countRevocations(rs []store.Revocation, m *metrics.Metrics) {
 	}
 	for by, c := range n {
 		m.RevocationsInForce.WithLabelValues(by).Set(float64(c))
+	}
+}
+
+// adminRevoke is the admin socket's revoke op over brk (plan 7a). The
+// record's origin is the uid the socket read off the caller.
+func adminRevoke(brk *broker.Broker) func(context.Context, admin.RevokeOp) (string, bool, error) {
+	return func(ctx context.Context, op admin.RevokeOp) (string, bool, error) {
+		req := broker.RevokeRequest{Principal: op.Principal, Issuer: op.Issuer, Serial: op.Serial,
+			Origin: fmt.Sprintf("admin_socket uid %d", op.UID)}
+		if op.Lift {
+			rep, err := brk.Lift(ctx, req)
+			if err != nil {
+				return "", false, err
+			}
+			return rep.LiftedText(), rep.Partial(), nil
+		}
+		rep, err := brk.Revoke(ctx, req)
+		if err != nil {
+			return "", false, err
+		}
+		return rep.Text(), rep.Partial(), nil
+	}
+}
+
+// adminRevocations is the admin socket's revocations op.
+func adminRevocations(st store.Store) func(context.Context) (string, error) {
+	return func(ctx context.Context) (string, error) {
+		rs, err := st.ListRevocations(ctx)
+		if err != nil {
+			return "", err
+		}
+		return broker.RevocationsText(rs), nil
 	}
 }

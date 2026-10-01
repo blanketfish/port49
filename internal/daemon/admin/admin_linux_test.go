@@ -5,6 +5,8 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net"
 	"os"
 	"os/exec"
@@ -185,5 +187,114 @@ func TestOnlyARefusedDialIsStale(t *testing.T) {
 		if stale(op(e)) {
 			t.Fatalf("%v read as stale", e)
 		}
+	}
+}
+
+// serve starts s on a socket in a fresh directory and returns its path.
+func serve(t *testing.T, s *Server) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "port49d.sock")
+	ln, err := Listen(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go s.Serve(ctx, ln)
+	return p
+}
+
+// Only root or port49d's own uid may revoke, lift or list (spec §13
+// decision 32 ruling 9). Another uid is refused before its request is read,
+// and nothing is revoked. Without root to run a client as another uid, the
+// socket's idea of its own uid is moved instead, so the test's uid is the
+// other one; TestAnotherUIDIsRefused runs a real other uid as root.
+func TestAnotherUIDCannotRevokeLiftOrList(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root is always answered")
+	}
+	own := ownUID
+	t.Cleanup(func() { ownUID = own })
+	ownUID = func() uint32 { return uint32(os.Geteuid()) + 1 }
+	called := make(chan string, 4)
+	p := serve(t, &Server{Held: &keyring.Held{}, Now: time.Now,
+		Revoke: func(_ context.Context, op RevokeOp) (string, bool, error) {
+			called <- "revoke"
+			return "revoked", false, nil
+		},
+		Revocations: func(context.Context) (string, error) { called <- "revocations"; return "", nil }})
+	for _, req := range []Request{{Op: "revoke", Principal: "user:alice@example.com"},
+		{Op: "revoke", Principal: "user:alice@example.com", Lift: true}, {Op: "revocations"}} {
+		c, err := net.Dial("unix", p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		json.NewEncoder(c).Encode(req)
+		var r Response
+		err = json.NewDecoder(c).Decode(&r)
+		c.Close()
+		if err != nil || !strings.HasPrefix(r.Error, fmt.Sprintf("refused: uid %d is neither port49d's", os.Geteuid())) ||
+			r.Text != "" {
+			t.Fatalf("%+v: %+v, %v", req, r, err)
+		}
+	}
+	select {
+	case op := <-called:
+		t.Fatalf("a refused caller reached %s", op)
+	default:
+	}
+}
+
+// A revocation that cannot finish gives up at the server's deadline, and
+// the caller is told so, not left waiting.
+func TestARevocationGivesUpAtTheDeadlineAndSaysSo(t *testing.T) {
+	p := serve(t, &Server{Held: &keyring.Held{}, Now: time.Now, OpTimeout: 100 * time.Millisecond,
+		Revoke: func(ctx context.Context, op RevokeOp) (string, bool, error) {
+			<-ctx.Done() // a hung store gives up only with its ctx
+			return "", false, fmt.Errorf("broker: the revocation could not be recorded (%w)", ctx.Err())
+		},
+		Revocations: func(context.Context) (string, error) { return "", nil }})
+	c, err := net.Dial("unix", p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	start := time.Now()
+	json.NewEncoder(c).Encode(Request{Op: "revoke", Principal: "user:alice@example.com"})
+	var r Response
+	if err := json.NewDecoder(c).Decode(&r); err != nil || !strings.Contains(r.Error, "deadline exceeded") {
+		t.Fatalf("%+v, %v", r, err)
+	}
+	if d := time.Since(start); d > 3*time.Second {
+		t.Fatalf("answered after %v", d)
+	}
+}
+
+// A caller that hangs up mid-revocation ends the op's ctx: nothing goes on
+// waiting on its behalf.
+func TestACallerThatHangsUpEndsItsOp(t *testing.T) {
+	entered, ended := make(chan struct{}), make(chan error, 1)
+	p := serve(t, &Server{Held: &keyring.Held{}, Now: time.Now,
+		Revoke: func(ctx context.Context, op RevokeOp) (string, bool, error) {
+			close(entered)
+			<-ctx.Done()
+			ended <- ctx.Err()
+			return "", false, ctx.Err()
+		},
+		Revocations: func(context.Context) (string, error) { return "", nil }})
+	c, err := net.Dial("unix", p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	json.NewEncoder(c).Encode(Request{Op: "revoke", Principal: "user:alice@example.com"})
+	<-entered
+	c.Close()
+	select {
+	case err := <-ended:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("the op ended by %v, not the hang-up", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the op went on after its caller hung up")
 	}
 }
