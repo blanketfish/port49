@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/rhwendt/port49/internal/agent"
+	"github.com/rhwendt/port49/internal/store"
 )
 
 // A revocation ends the agent's session, end to end (spec §5.1.4; pre-flight
@@ -53,5 +54,19 @@ func TestARevocationEndsTheAgentsSession(t *testing.T) {
 				t.Fatalf("the agent's log: %q", log.String())
 			}
 		})
+	}
+}
+
+// An agent started on a revoked credential is answered credential_revoked
+// at its first request, `GET /v1/config`, and Connect says so, and since
+// when, rather than "401 Unauthorized" (spec §5.1.4).
+func TestARevokedCallersConnectSaysWhy(t *testing.T) {
+	f := newFixture(t, 8)
+	addr, bl := serveThrough(t, f, DefaultListenerLimits, nil)
+	bl.Revoked(store.Revocation{Kind: store.RevocationPrincipal, Key: "user:alice@example.com", At: f.now}, true)
+	a := agent.New(agent.Config{BrokerURL: "https://" + addr, Cert: f.alice, BrokerCA: f.ca.Pool(), Now: f.b.Now})
+	_, err := a.Connect(context.Background())
+	if !errors.Is(err, agent.ErrSessionOver) || !strings.Contains(err.Error(), "this principal was revoked at ") {
+		t.Fatalf("Connect on a revoked principal: %v", err)
 	}
 }

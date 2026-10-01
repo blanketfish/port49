@@ -784,6 +784,7 @@ func run(parent context.Context, cfgPath string) error {
 		for _, r := range marks {
 			bl.Revoked(r, true)
 		}
+		bl.Refused = brk.RefusedAtBind
 		brk.Conns = bl
 	}
 	// The admin socket binds before anything says "listening", as the broker

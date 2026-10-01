@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
+	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/testpki"
 )
@@ -44,6 +46,7 @@ func serveThrough(t *testing.T, f *fixture, lim ListenerLimits, logf func(string
 		logf = func(string, ...any) {}
 	}
 	bl := NewListener(Limit(raw, MaxConns), srv.TLSConfig, lim, f.b.Metrics, f.b.Now, logf)
+	bl.Refused = f.b.RefusedAtBind // as port49d wires it
 	go func() { _ = srv.Serve(bl) }()
 	t.Cleanup(func() { _ = srv.Close() })
 	return raw.Addr().String(), bl
@@ -578,13 +581,62 @@ func dialAs(t *testing.T, f *fixture, addr string, cert tls.Certificate) *tls.Co
 	return c
 }
 
+// refusedLog points f's decision log at a buffer the listener's
+// goroutines can write while the test reads it.
+func refusedLog(f *fixture) *lockedBuffer {
+	lb := &lockedBuffer{}
+	f.b.Log = decision.NewJSONLines(lb)
+	return lb
+}
+
+// wantRefusedRecords wants exactly one mint deny credential_revoked record
+// per cert, in order, each naming alice and that certificate's fingerprint
+// and nothing from the request (spec §5.7), and port49_decisions to count
+// them.
+func wantRefusedRecords(t *testing.T, f *fixture, lb *lockedBuffer, certs ...tls.Certificate) {
+	t.Helper()
+	var recs []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(lb.String()), "\n") {
+		if line == "" {
+			continue
+		}
+		var m map[string]any
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Fatal(err)
+		}
+		recs = append(recs, m)
+	}
+	if len(recs) != len(certs) {
+		t.Fatalf("%d records, want %d: %s", len(recs), len(certs), lb)
+	}
+	for i, cert := range certs {
+		_, cred, err := Identity(f.state(cert), f.now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r := recs[i]
+		auth, _ := r["auth"].(map[string]any)
+		if r["event"] != "mint" || r["verdict"] != "deny" || r["reason"] != "credential_revoked" ||
+			r["principal"] != "user:alice@example.com" || auth["method"] != "cert" ||
+			auth["fingerprint"] != cred.Fingerprint || r["device"] != nil || len(r) != 6 {
+			t.Fatalf("record %d: %v", i, r)
+		}
+	}
+	if got := testutil.ToFloat64(f.b.Metrics.Decisions.WithLabelValues("mint", "deny", "credential_revoked")); got !=
+		float64(len(certs)) {
+		t.Fatalf("port49_decisions{mint,deny,credential_revoked} %v, want %d", got, len(certs))
+	}
+}
+
 // A marked certificate's new connection is answered the 401
 // credential_revoked a mint under the mark is answered, and closed: a bare
 // close reads to the agent as a broker that restarted, and leaves its
 // session up (spec §5.1.4; the vEOS lab, plan 7a). The request reaches no
-// handler: nothing is recorded, nothing minted.
+// handler, and is recorded as a mint under the mark is: one mint deny
+// credential_revoked (spec §5.7).
 func TestAMarkedCertificateIsAnsweredCredentialRevoked(t *testing.T) {
 	f := newFixture(t, 8)
+	lb := refusedLog(f)
 	addr, bl := serveThrough(t, f, DefaultListenerLimits, nil)
 	at := f.now.Add(-time.Minute)
 	bl.Revoked(store.Revocation{Kind: store.RevocationCert, Key: certKey(f.alice), At: at}, true)
@@ -592,16 +644,16 @@ func TestAMarkedCertificateIsAnsweredCredentialRevoked(t *testing.T) {
 	if got := testutil.ToFloat64(f.b.Metrics.BrokerConnectionEvents.WithLabelValues("revoked_refused")); got != 1 {
 		t.Fatalf("revoked_refused %v", got)
 	}
-	if f.log.Len() != 0 {
-		t.Fatalf("a marked connection reached the handler: %s", f.log)
-	}
+	wantRefusedRecords(t, f, lb, f.alice)
 	eventually(t, "nothing charged", func() bool { return f.gauge("pending") == 0 && f.gauge("held") == 0 })
 }
 
 // A marked principal's is answered the same, naming the principal: every
-// certificate it holds is refused so.
+// certificate it holds is refused so, and each refusal recorded with its
+// own certificate's fingerprint.
 func TestAMarkedPrincipalIsAnsweredCredentialRevoked(t *testing.T) {
 	f := newFixture(t, 8)
+	lb := refusedLog(f)
 	addr, bl := serveThrough(t, f, DefaultListenerLimits, nil)
 	at := f.now.Add(-time.Minute)
 	bl.Revoked(store.Revocation{Kind: store.RevocationPrincipal, Key: "user:alice@example.com", At: at}, true)
@@ -612,20 +664,19 @@ func TestAMarkedPrincipalIsAnsweredCredentialRevoked(t *testing.T) {
 	if got := testutil.ToFloat64(f.b.Metrics.BrokerConnectionEvents.WithLabelValues("revoked_refused")); got != 2 {
 		t.Fatalf("revoked_refused %v", got)
 	}
-	if f.log.Len() != 0 {
-		t.Fatalf("a marked connection reached the handler: %s", f.log)
-	}
+	wantRefusedRecords(t, f, lb, f.alice, renewed)
 	carol := f.client(t, "carol@example.com", f.now.Add(time.Hour))
 	held(t, f, addr, carol) // anyone else binds as before
 }
 
 // A marked connection that sends nothing stays charged to its source, never
 // held, until revokedAnswerTimeout, and is then closed: it is counted once,
-// and gives back its charge.
+// gives back its charge, and writes no record, since nothing was asked.
 func TestASilentMarkedConnectionIsClosedAtTheDeadline(t *testing.T) {
 	defer func(d time.Duration) { revokedAnswerTimeout = d }(revokedAnswerTimeout)
 	revokedAnswerTimeout = 600 * time.Millisecond
 	f := newFixture(t, 8)
+	lb := refusedLog(f)
 	errs := &lockedBuffer{}
 	addr, bl := serveThrough(t, f, DefaultListenerLimits, logTo(errs))
 	bl.Revoked(store.Revocation{Kind: store.RevocationCert, Key: certKey(f.alice), At: f.now}, true)
@@ -649,12 +700,15 @@ func TestASilentMarkedConnectionIsClosedAtTheDeadline(t *testing.T) {
 	if !strings.Contains(errs.String(), "credential_revoked") {
 		t.Fatalf("the line: %q", errs.String())
 	}
+	wantRefusedRecords(t, f, lb)
 }
 
-// A marked connection's request is read for at most revokedRequestMax bytes:
-// one just under it is answered, and one over it is cut off unanswered.
+// A marked connection's request line and headers are read for at most
+// revokedRequestMax bytes: exactly that is answered, and one byte more is
+// cut off unanswered and unrecorded.
 func TestAnOversizedRequestOnAMarkedConnectionIsCutOff(t *testing.T) {
 	f := newFixture(t, 8)
+	lb := refusedLog(f)
 	addr, bl := serveThrough(t, f, DefaultListenerLimits, nil)
 	bl.Revoked(store.Revocation{Kind: store.RevocationCert, Key: certKey(f.alice), At: f.now}, true)
 	request := func(pad int) string {
@@ -674,11 +728,47 @@ func TestAnOversizedRequestOnAMarkedConnectionIsCutOff(t *testing.T) {
 		t.Fatalf("a request of exactly revokedRequestMax bytes: %v %v", resp, err)
 	}
 	c = dialAs(t, f, addr, f.alice)
-	go func() { _, _ = io.WriteString(c, request(revokedRequestMax)) }()
+	go func() { _, _ = io.WriteString(c, request(revokedRequestMax-len(request(0))+1)) }()
 	_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
 	if resp, err := http.ReadResponse(bufio.NewReader(c), nil); err == nil {
 		t.Fatalf("an oversized request was answered: %s", resp.Status)
 	} else if ne := net.Error(nil); errors.As(err, &ne) && ne.Timeout() {
 		t.Fatal("an oversized request was held to the deadline")
 	}
+	eventually(t, "the cut-off connection closed", func() bool { return f.gauge("pending") == 0 })
+	wantRefusedRecords(t, f, lb, f.alice)
+}
+
+// A batch mint's body is not the headers' bound: past revokedRequestMax,
+// and past revokedBodyMax, the request is answered 401 credential_revoked
+// all the same, and the body the broker never reads does not reset the
+// answer away (design §17's sweep client).
+func TestALargeBodyOnAMarkedConnectionIsAnswered(t *testing.T) {
+	f := newFixture(t, 8)
+	lb := refusedLog(f)
+	addr, bl := serveThrough(t, f, DefaultListenerLimits, nil)
+	at := f.now.Add(-time.Minute)
+	bl.Revoked(store.Revocation{Kind: store.RevocationCert, Key: certKey(f.alice), At: at}, true)
+	for _, size := range []int{2 * revokedRequestMax, 4 * revokedBodyMax} {
+		names := make([]string, size/40+1) // 40 bytes each, quoted and comma'd
+		for i := range names {
+			names[i] = fmt.Sprintf(`"device-%030d"`, i)
+		}
+		body := `{"devices":[` + strings.Join(names, ",") + `]}`
+		c := dialAs(t, f, addr, f.alice)
+		go func() {
+			_, _ = fmt.Fprintf(c, "POST /v1/tokens HTTP/1.1\r\nHost: broker\r\nContent-Type: application/json\r\n"+
+				"Content-Length: %d\r\n\r\n%s", len(body), body)
+		}()
+		_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
+		resp, err := http.ReadResponse(bufio.NewReader(c), nil)
+		if err != nil {
+			t.Fatalf("a %d-byte body: %v", len(body), err)
+		}
+		got, err := io.ReadAll(resp.Body)
+		if err != nil || resp.StatusCode != http.StatusUnauthorized || !strings.Contains(string(got), `"credential_revoked"`) {
+			t.Fatalf("a %d-byte body: %s %q %v", len(body), resp.Status, got, err)
+		}
+	}
+	wantRefusedRecords(t, f, lb, f.alice, f.alice)
 }

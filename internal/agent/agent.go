@@ -166,7 +166,14 @@ func (a *Agent) Connect(ctx context.Context) (api.Config, error) {
 	}
 	defer drain(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return api.Config{}, fmt.Errorf("agent: %s/v1/config answered %s", a.broker, resp.Status)
+		var e api.Error
+		_ = json.NewDecoder(resp.Body).Decode(&e)
+		if over := sessionOver(resp.StatusCode, e); over != nil {
+			// A revoked principal or certificate is answered so as its
+			// connection binds (spec §5.1.4): say why, and since when.
+			return api.Config{}, over
+		}
+		return api.Config{}, fmt.Errorf("agent: %s/v1/config answered %s: %s %s", a.broker, resp.Status, e.Error, e.Detail)
 	}
 	var c api.Config
 	if err := json.NewDecoder(resp.Body).Decode(&c); err != nil {
@@ -259,25 +266,9 @@ func (a *Agent) Mint(ctx context.Context, device string, enable bool, ttl time.D
 	if resp.StatusCode != http.StatusOK {
 		var e api.Error
 		_ = json.NewDecoder(resp.Body).Decode(&e)
-		if resp.StatusCode == http.StatusUnauthorized {
-			var over error
-			switch e.Error {
-			case "session_expired":
-				over = ErrSessionOver
-			case "trust_domain_unresolved":
-				// The certificate expired, or stopped verifying, under the
-				// held connection: nothing this session can do will mint
-				// again (spec §13, decision 12).
-				over = fmt.Errorf("%w: the broker no longer trusts this certificate (%s)", ErrSessionOver, e.Detail)
-			case "credential_revoked":
-				// An operator revoked this principal or this certificate
-				// (spec §5.1.4): nothing this session holds will mint again.
-				over = fmt.Errorf("%w: %s", ErrSessionOver, e.Detail)
-			}
-			if over != nil {
-				a.end(over)
-				return api.MintItem{}, over
-			}
+		if over := sessionOver(resp.StatusCode, e); over != nil {
+			a.end(over)
+			return api.MintItem{}, over
 		}
 		return api.MintItem{}, fmt.Errorf("agent: the broker answered %s: %s %s", resp.Status, e.Error, e.Detail)
 	}
@@ -343,6 +334,28 @@ func (a *Agent) post(ctx context.Context, body []byte, key string) (*http.Respon
 			return nil, fmt.Errorf("agent: the broker at %s is unreachable: %w", a.broker, err)
 		}
 	}
+}
+
+// sessionOver is the ErrSessionOver a broker's answer means, or nil: a 401
+// that nothing this session holds will get past.
+func sessionOver(status int, e api.Error) error {
+	if status != http.StatusUnauthorized {
+		return nil
+	}
+	switch e.Error {
+	case "session_expired":
+		return ErrSessionOver
+	case "trust_domain_unresolved":
+		// The certificate expired, or stopped verifying, under the held
+		// connection: nothing this session can do will mint again (spec
+		// §13, decision 12).
+		return fmt.Errorf("%w: the broker no longer trusts this certificate (%s)", ErrSessionOver, e.Detail)
+	case "credential_revoked":
+		// An operator revoked this principal or this certificate (spec
+		// §5.1.4): nothing this session holds will mint again.
+		return fmt.Errorf("%w: %s", ErrSessionOver, e.Detail)
+	}
+	return nil
 }
 
 // ItemError is a device the broker could not decide: a fault on its side or

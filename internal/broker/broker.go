@@ -403,6 +403,14 @@ func revokedRecord(now time.Time, principal string, cred store.Credential) decis
 		Auth: &decision.Auth{Method: cred.Method, Fingerprint: cred.Fingerprint}}
 }
 
+// RefusedAtBind records a request the broker's listener refused
+// credential_revoked, its connection's principal or certificate marked
+// (Listener.Refused): the same one mint deny record a mint under the mark
+// writes, counted in port49_decisions (spec §5.7).
+func (b *Broker) RefusedAtBind(principal string, cred store.Credential) {
+	b.emit(revokedRecord(b.Now(), principal, cred))
+}
+
 // answerRevoked is the 401 credential_revoked, with the connection closed
 // so nothing more rides it.
 func answerRevoked(w http.ResponseWriter, rv store.Revocation) {

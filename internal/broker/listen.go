@@ -56,10 +56,19 @@ type ConnCloser interface {
 // answer: a client that sends nothing is closed at it. Swapped in tests.
 var revokedAnswerTimeout = 5 * time.Second
 
-// revokedRequestMax bounds the bytes a marked connection's request is read
-// for, its headers and body together: an agent's mint is well under it, and
-// a longer request is cut off unanswered.
+// revokedRequestMax bounds the bytes a marked connection's request line and
+// headers are read for: an agent's are well under it, and longer ones are
+// cut off unanswered.
 const revokedRequestMax = 4 << 10
+
+// revokedBodyMax bounds how much of a marked connection's request body is
+// drained before it is answered, and revokedDrainMax how much more is read
+// and thrown away after the answer, so a batch mint's body left unread does
+// not reset the answer away.
+const (
+	revokedBodyMax  = 64 << 10
+	revokedDrainMax = 1 << 20
+)
 
 // sayEvery is how often one reason's line is said: a flood is one line and
 // a count, never a flood of lines.
@@ -78,6 +87,12 @@ type Listener struct {
 	m     *metrics.Metrics
 	now   func() time.Time
 	logf  func(format string, args ...any)
+
+	// Refused records a marked connection's request refused
+	// credential_revoked: one mint deny record each (spec §5.7), which
+	// port49d sets to Broker.RefusedAtBind. Set it before the first Accept;
+	// nil records nothing.
+	Refused func(principal string, cred store.Credential)
 
 	ready     chan *tls.Conn
 	done      chan struct{}
@@ -267,7 +282,7 @@ func (l *Listener) handshake(c *trackedConn) {
 			return
 		}
 		if rv != nil {
-			l.answerRevoked(tc, *rv)
+			l.answerRevoked(tc, *rv, principal, cred)
 			return
 		}
 	}
@@ -382,29 +397,43 @@ func (l *Listener) bind(c *trackedConn, principal, certKey string) (*store.Revoc
 	return nil, true
 }
 
-// answerRevoked reads one request from a marked connection, bounded by
-// revokedRequestMax and revokedAnswerTimeout, answers it the 401
-// credential_revoked a mint under the mark is answered, and closes it. The
-// agent ends its session on that answer (spec §5.1.4), where a bare close
-// reads as a broker that restarted. The request reaches no handler and no
-// store, and is never logged.
-func (l *Listener) answerRevoked(tc *tls.Conn, rv store.Revocation) {
+// answerRevoked reads one request from a marked connection, its line and
+// headers bounded by revokedRequestMax and all of it by
+// revokedAnswerTimeout, answers it the 401 credential_revoked a mint under
+// the mark is answered, records it (Refused), and closes it. The agent ends
+// its session on that answer (spec §5.1.4), where a bare close reads as a
+// broker that restarted. The request reaches no handler and no store, and is
+// never logged; a connection that sends none is closed unanswered and
+// unrecorded.
+func (l *Listener) answerRevoked(tc *tls.Conn, rv store.Revocation, principal string, cred store.Credential) {
 	defer tc.Close()
 	_ = tc.SetDeadline(time.Now().Add(revokedAnswerTimeout))
-	req, err := http.ReadRequest(bufio.NewReader(&io.LimitedReader{R: tc, N: revokedRequestMax}))
+	lr := &io.LimitedReader{R: tc, N: revokedRequestMax}
+	req, err := http.ReadRequest(bufio.NewReader(lr))
 	if err != nil {
 		return
 	}
-	// Read to its end, so the close is not a reset the answer is lost to.
-	if _, err := io.Copy(io.Discard, req.Body); err != nil {
+	// Its body is drained to its end when that is under revokedBodyMax, so
+	// the close is not a reset the answer is lost to; past it, the answer
+	// goes anyway, and the rest is drained after it.
+	lr.N += revokedBodyMax
+	_, err = io.Copy(io.Discard, req.Body)
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
 		return
+	}
+	if l.Refused != nil {
+		l.Refused(principal, cred)
 	}
 	var body bytes.Buffer
 	_ = json.NewEncoder(&body).Encode(revokedError(rv))
 	resp := &http.Response{StatusCode: http.StatusUnauthorized, ProtoMajor: 1, ProtoMinor: 1, Request: req,
 		Header: http.Header{"Content-Type": {"application/json"}}, ContentLength: int64(body.Len()),
 		Body: io.NopCloser(&body), Close: true}
-	_ = resp.Write(tc)
+	if werr := resp.Write(tc); werr == nil && err != nil {
+		_ = tc.CloseWrite()
+		_, _ = io.Copy(io.Discard, io.LimitReader(tc, revokedDrainMax))
+	}
 }
 
 // CloseHeld closes every held connection match names, and returns how many
