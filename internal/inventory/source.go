@@ -24,6 +24,17 @@ type Source interface {
 	Fetch(ctx context.Context) (admission.Inventory, error)
 }
 
+// Confirmer is a Source that confirms a device is gone before it reads as
+// removed (sot.Source). Before each Fetch the syncer gives it the names the
+// bundle in force holds for it, so it confirms against what devices are
+// served, not its own last read, which a refused or abandoned sync discards,
+// and not nothing after a restart (plan 6c final review M2).
+type Confirmer interface {
+	ConfirmAgainst(names []string)
+}
+
+var _ Confirmer = (*sot.Source)(nil)
+
 // maxSourceFile bounds a file source's read as inventory_file's is bounded.
 const maxSourceFile = 64 << 20
 

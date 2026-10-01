@@ -1065,3 +1065,72 @@ func TestTheServicesBoundAndPort49dsAgree(t *testing.T) {
 		}
 	}
 }
+
+// confirmSource is a memSource that records the names it is given to
+// confirm a removal against before each Fetch.
+type confirmSource struct {
+	memSource
+	against [][]string // one per Fetch: nil when none was given
+	given   []string
+	isGiven bool
+}
+
+func (c *confirmSource) ConfirmAgainst(names []string) {
+	c.given, c.isGiven = slices.Clone(names), true
+}
+func (c *confirmSource) Fetch(ctx context.Context) (admission.Inventory, error) {
+	if c.isGiven {
+		c.against = append(c.against, c.given)
+	} else {
+		c.against = append(c.against, nil)
+	}
+	c.given, c.isGiven = nil, false
+	return c.memSource.Fetch(ctx)
+}
+
+// Final review M2: a source confirms a removal against the names the bundle
+// in force holds for it, not against its own last read, which a refused sync
+// discards; so a refusal, and a restart that restores the bundle, leave the
+// baseline where the devices are.
+func TestARemovalIsConfirmedAgainstTheBundleInForce(t *testing.T) {
+	rig := newSyncRig(t, syncPolicy, devices(3))
+	src := &confirmSource{memSource: memSource{name: "a", inv: devices(3)}}
+	rig.s.Sources = []Source{src}
+	want := []string{"leaf-01", "leaf-02", "leaf-03"}
+	if res := rig.sync(t); res.Outcome != "published" {
+		t.Fatalf("%+v", res)
+	}
+	src.inv = devices(1)
+	if res := rig.sync(t); res.Outcome != "refused" {
+		t.Fatalf("%+v", res)
+	}
+	if res := rig.sync(t); res.Outcome != "refused" {
+		t.Fatalf("%+v", res)
+	}
+	// No bundle before the first: nothing to confirm against. Then the
+	// bundle's names, refusal or not.
+	if src.against[0] != nil || !slices.Equal(src.against[1], want) || !slices.Equal(src.against[2], want) {
+		t.Fatalf("confirmed against %q", src.against)
+	}
+	restarted := rig.syncer(nil)
+	restarted.Key = rig.s.Key
+	restarted.VerifyKeys = rig.pubs()
+	fresh := &confirmSource{memSource: memSource{name: "a", inv: devices(1)}}
+	restarted.Sources = []Source{fresh}
+	if err := restarted.Restore(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if res := restarted.Sync(context.Background(), "startup"); res.Outcome != "refused" ||
+		len(fresh.against) != 1 || !slices.Equal(fresh.against[0], want) {
+		t.Fatalf("after a restart: %+v, confirmed against %q", res, fresh.against)
+	}
+	// A source the bundle in force does not name confirms against nothing.
+	rig.src.inv = devices(3)
+	other := &confirmSource{memSource: memSource{name: "b", inv: admission.Inventory{}}}
+	rig.s.Sources = []Source{src, other}
+	src.inv = devices(3)
+	rig.sync(t)
+	if got := other.against[0]; got == nil || len(got) != 0 {
+		t.Fatalf("a new source confirmed against %q", got)
+	}
+}

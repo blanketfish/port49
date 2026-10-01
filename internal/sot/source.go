@@ -28,8 +28,9 @@ type Config struct {
 	Log io.Writer
 }
 
-// maxNotes bounds the notes a source remembers as said: past it, a note is
-// not said again, and memory stays bounded whatever a source sends.
+// maxNotes bounds the notes a source remembers as said, its own and its
+// devices' each: past it, a note is not said again, and memory stays bounded
+// whatever a source sends.
 const maxNotes = 256
 
 // Source is one NetBox or Nautobot source: an inventory.Source.
@@ -37,9 +38,10 @@ type Source struct {
 	cfg Config
 	c   *client
 
-	mu    sync.Mutex
-	said  map[string]bool
-	shown string // the release, profile and API last said
+	mu         sync.Mutex
+	said       map[string]bool // the source's own notes said
+	saidDevice map[string]bool // notes of single devices said
+	shown      string          // the release, profile and API last said
 	// last is the names of the devices the last successful read kept, nil
 	// before one: what a read that lacks one of them must confirm is gone.
 	last map[string]bool
@@ -52,7 +54,7 @@ func New(cfg Config) (*Source, error) {
 	if err != nil {
 		return nil, fmt.Errorf("source %s: %w", cfg.Name, err)
 	}
-	return &Source{cfg: cfg, c: c, said: map[string]bool{}}, nil
+	return &Source{cfg: cfg, c: c, said: map[string]bool{}, saidDevice: map[string]bool{}}, nil
 }
 
 func (s *Source) Name() string { return s.cfg.Name }
@@ -121,6 +123,21 @@ func (s *Source) Fetch(ctx context.Context) (admission.Inventory, error) {
 				"or a delete and an insert, across a page boundary); the next sync reads it again")
 		}
 	}
+}
+
+// ConfirmAgainst sets the names the next read confirms a removal against:
+// the syncer gives the names the bundle in force holds for this source, so a
+// read it refused is no baseline, and a restart confirms against the bundle
+// it restored rather than nothing (plan 6c final review M2). Without it, the
+// last read this source kept is the baseline.
+func (s *Source) ConfirmAgainst(names []string) {
+	set := make(map[string]bool, len(names))
+	for _, n := range names {
+		set[n] = true
+	}
+	s.mu.Lock()
+	s.last = set
+	s.mu.Unlock()
 }
 
 // accept remembers the names l kept, for the next read to confirm against,
@@ -238,7 +255,7 @@ func (s *Source) read(ctx context.Context) (listing, error) {
 		}
 		d, keep, notes := s.cfg.Mapping.device(p, api, raw)
 		for _, n := range notes {
-			s.note(n)
+			s.deviceNote(n)
 		}
 		if keep {
 			l.inv.Devices = append(l.inv.Devices, d)
@@ -330,13 +347,21 @@ func (s *Source) show(v Version, p Profile, api string) {
 	}
 }
 
-// note says text once.
-func (s *Source) note(text string) {
+// note says text, a fact of the source itself, once.
+func (s *Source) note(text string) { s.sayOnce(s.said, text) }
+
+// deviceNote says text, a fact of one device, once. Device notes are bounded
+// apart from the source's, so a fleet of them cannot use up the bound and
+// silence a rebuilt next or a fallback (plan 6c final review M3).
+func (s *Source) deviceNote(text string) { s.sayOnce(s.saidDevice, text) }
+
+// sayOnce says text unless said holds it or is full.
+func (s *Source) sayOnce(said map[string]bool, text string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.said[text] || len(s.said) >= maxNotes {
+	if said[text] || len(said) >= maxNotes {
 		return
 	}
-	s.said[text] = true
+	said[text] = true
 	fmt.Fprintf(s.cfg.Log, "port49-inventory: source %s: %s\n", s.cfg.Name, text)
 }

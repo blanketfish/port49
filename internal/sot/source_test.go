@@ -426,3 +426,53 @@ func TestAnIgnoredNameFilterFailsTheSync(t *testing.T) {
 		t.Fatalf("%d devices, %v", n, err)
 	}
 }
+
+// Final review M2: the names the syncer gives are what a read confirms
+// against, in place of the source's own last read: a cold source confirms
+// against the bundle in force, and a read the syncer refused is no baseline.
+func TestARemovalIsConfirmedAgainstTheNamesGiven(t *testing.T) {
+	all := make([]string, 0, 120)
+	for i := 1; i <= 120; i++ {
+		all = append(all, sottest.Name(i))
+	}
+	// Cold: a delete before the boundary and an insert after it skip
+	// leaf-051, which is asked for, found, and the read fails.
+	src, s, _ := source(t, "netbox-4", 120, "graphql", Mapping{Filter: Filter{Status: []string{"active"}},
+		Addresses: Addresses{Primary: true}})
+	src.ConfirmAgainst(all)
+	s.ReplaceAfterPage = 1
+	if _, err := src.Fetch(context.Background()); err == nil || !strings.Contains(err.Error(), "the list shifted") {
+		t.Fatalf("cold, given the bundle's names: %v", err)
+	}
+	// Read 120, then 119 (leaf-120 deleted), which the syncer refuses and
+	// gives the 120 again: leaf-120 is confirmed gone by name once more.
+	src, s, _ = source(t, "netbox-4", 120, "rest", Mapping{Addresses: Addresses{Primary: true}})
+	if _, err := src.Fetch(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	s.SetDevices(119)
+	if _, err := src.Fetch(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	src.ConfirmAgainst(all)
+	from := len(s.Requests())
+	if inv, err := src.Fetch(context.Background()); err != nil || len(inv.Devices) != 119 || named(s, from) != 1 {
+		t.Fatalf("%d devices, %d asked by name, %v", len(inv.Devices), named(s, from), err)
+	}
+}
+
+// Final review M3: notes about single devices have their own bound, so a
+// fleet of them cannot silence what the source says of itself.
+func TestDeviceNotesLeaveRoomForTheSources(t *testing.T) {
+	src, _, out := source(t, "netbox-4", 1, "rest", Mapping{Addresses: Addresses{Primary: true}})
+	for i := 0; i < 2*maxNotes; i++ {
+		src.deviceNote(fmt.Sprintf("device leaf-%d: a fact it could not read", i))
+	}
+	if got := strings.Count(out.String(), "device leaf-"); got != maxNotes {
+		t.Fatalf("%d device notes said, want %d", got, maxNotes)
+	}
+	src.note("a page's next names another origin")
+	if !strings.Contains(out.String(), "a page's next names another origin") {
+		t.Fatal("the source's own note was not said")
+	}
+}

@@ -238,8 +238,10 @@ func (s *Syncer) fetch(ctx, caller context.Context, src Source) (admission.Inven
 }
 
 // track keeps o as name's fetch out, and settles it when the call returns,
-// whenever that is: the hung gauge falls then, not at the source's next
-// fetch, which may be an interval away (review I1). Called under mu.
+// whenever that is: the hung gauge falls then, or, when a sync is running
+// then and holds mu, when that sync ends (at most sync_timeout and
+// fetchGrace later); not at the source's next fetch, which may be an
+// interval away (review I1; final review M4). Called under mu.
 func (s *Syncer) track(name string, o *fetchOut) {
 	if s.out == nil {
 		s.out = map[string]*fetchOut{}
@@ -476,6 +478,9 @@ func (s *Syncer) sync(ctx, caller context.Context, only []string) Result {
 	for _, src := range s.Sources {
 		got, cached := s.fetched[src.Name()]
 		if !cached || len(only) == 0 || slices.Contains(only, src.Name()) {
+			if c, ok := src.(Confirmer); ok && prev != nil {
+				c.ConfirmAgainst(append([]string{}, prev.Doc.Sources[src.Name()]...))
+			}
 			var err error
 			if got, err = s.fetch(ctx, caller, src); err != nil {
 				if caller.Err() == nil {
