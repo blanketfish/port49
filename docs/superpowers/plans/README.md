@@ -47,7 +47,9 @@ break-glass with single-connection on (Plan 6b — As built, below); **merged 20
 `fix/breakglass-reset`, which closes L31: **written 2026-09-30** (`2026-09-30-06b1-breakglass-reset.md`, seven tasks: one docs, three code, one lab harness, one lab run, one lab-and-docs; no owner decisions); **executed 2026-09-30** on `fix/breakglass-reset`, closing L31 (Fix `fix/breakglass-reset` — As built, below); **merged 2026-09-30 (PR #18)**. **6c written 2026-10-01** (`2026-10-01-06c-inventory-connectors.md`, seventeen tasks after its pre-flight review the same day: one docs, thirteen code, two lab, one lab-and-docs; no owner decisions, fourteen rulings where spec §10 was silent, recorded as decision 31; it opens L32 and L33); **executed 2026-10-01** on `feature/inventory-connectors`, reviewed per task and whole-branch (MERGE, 0/0/8), with a fix wave, closing L32 and L33 (Plan 6c — As built, below); **merged 2026-10-01 (PR #19)**. Plan 7 is **split into 7a–7h** (below, with one owner decision,
 D1, the shared store's backend, which 7a–7c do not need); **7a written 2026-10-01**
 (`2026-10-01-07a-revocation-and-broker-limits.md`, thirteen tasks: one docs, ten code, one lab,
-one docs; no owner decision, ten rulings recorded as decision 32). 7b–7h and 8–13 not yet.
+one docs; no owner decision, ten rulings recorded as decision 32; revised the same day after its
+pre-flight review: one critical, seven important and twenty-two minor fixed, one minor rebutted).
+7b–7h and 8–13 not yet.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -1492,11 +1494,13 @@ until 7c merges to be made. Every sub-plan is separately mergeable and leaves `m
   cap on held connections** (the oldest closed for the newest, so a laptop's dead connections never
   lock its owner out); and **revocation that reaches everything**: a standing mark by principal or
   by certificate (issuer, serial) checked at every mint, before and after its token writes, that
-  closes the held connections it names, marks the live contexts, deletes the receipts and, through
-  a new token index, the unspent tokens (plan 2's "largest remaining hole in revocation"), names
-  the contexts it cannot reach, and is one `revoke` record (a new §5.7 event). An operator revokes
+  closes the held connections it names (and, from the listener's in-memory copy, refuses them as
+  they bind), deletes the unspent tokens through a new token index (plan 2's "largest remaining
+  hole in revocation"), marks the live contexts twice and deletes the receipts, names the contexts
+  it cannot reach, and is one `revoke` record (a new §5.7 event). An operator revokes
   and lifts with `port49 revoke` over the admin socket; the marks are kept in
-  `broker.revocations_file`, so a restart forgets none. The store interface gains the reservation,
+  `broker.revocations_file` (its directory fenced, created at the first start beside a marker, a
+  missing or unreadable file refusing every later start), so a restart forgets none. The store interface gains the reservation,
   the token index and the marks, each with a `storetest` property every backend must pass; no
   backend is built. Lab: revocation end to end on vEOS, the N9Kv, the C8000V and vJunos-router.
 - **Plan 7b — session lifetime and certificate status.** `/v1/refresh` on the certificate path
