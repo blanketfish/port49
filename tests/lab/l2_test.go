@@ -365,7 +365,7 @@ func TestL2Truncation(t *testing.T) {
 				"truncation length are not observed on this image."
 			// Junos does not refuse a login whose session authorization
 			// fails (results/junos-session-service-*.md, Phase C).
-			prompt := "@" + l.p.node + ">"
+			prompt := "@" + l.hostName() + ">"
 			in := 0
 			for _, r := range rows {
 				if strings.Contains(r.printed, prompt) {

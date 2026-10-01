@@ -22,7 +22,7 @@ func (l *lab) shell(user, password string) (*labShell, error) {
 	if err != nil {
 		return nil, err
 	}
-	sh := &labShell{c: c, prompts: []string{l.p.node + "#", l.p.node + ">"}}
+	sh := &labShell{c: c, prompts: []string{l.hostName() + "#", l.hostName() + ">"}}
 	if _, err := c.expect(60*time.Second, sh.prompts...); err != nil {
 		c.Close()
 		return nil, err
@@ -36,6 +36,16 @@ func (l *lab) shell(user, password string) (*labShell, error) {
 		return nil, err
 	}
 	return sh, nil
+}
+
+// hostName is the name in the device's prompt: its node name, but on both
+// Junos images the host-name of configs/vjunos-startup.conf, which they
+// share, so vSRX (node vsrx1) prompts `user@srx1>`.
+func (l *lab) hostName() string {
+	if strings.HasPrefix(l.p.name, "juniper_") {
+		return "srx1"
+	}
+	return l.p.node
 }
 
 // Run sends cmd and waits up to per for the prompt: its output, how long,
