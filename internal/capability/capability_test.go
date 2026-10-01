@@ -256,6 +256,33 @@ func TestMintsAloneAreNeverSeen(t *testing.T) {
 	}
 }
 
+// A mint refused after its writes — a revocation landed while it minted —
+// recorded a permit and then a deny credential_revoked naming the device
+// (spec §5.7): its tokens were deleted and never returned, so they are not
+// counted as minted. Another principal's permit on the device still is.
+func TestMintsARevocationUndidAreNotCounted(t *testing.T) {
+	var l logb
+	permit := func(principal string, n int) {
+		l.add(decision.EventMint, "xe1", "lab", "", func(r *decision.Record) {
+			r.Session, r.Verdict, r.Principal = nil, decision.VerdictPermit, principal
+			r.Mint = &decision.Mint{TokenSHA256: make([]string, n)}
+		})
+	}
+	permit("user:alice@example.com", 1)
+	permit("user:bob@example.com", 2)
+	permit("user:alice@example.com", 2)
+	l.add(decision.EventMint, "xe1", "lab", "", func(r *decision.Record) {
+		r.Session, r.Verdict, r.Reason = nil, decision.VerdictDeny, decision.CredentialRevoked
+		r.Principal = "user:alice@example.com"
+	})
+	devices := []Device{{Name: "xe1", Platform: "cisco_iosxe", Supports: eos}}
+	r := Infer(l.recs, devices, Options{}).Rows[0]
+	if !slices.Equal(r.Notes,
+		[]string{"never seen: no TACACS+ record in the window, so nothing is inferred (3 tokens minted for it)"}) {
+		t.Fatalf("%+v", r)
+	}
+}
+
 // A device whose every packet failed to validate, as one with the wrong key
 // sends, is not seen: the note says it asked and did not validate, the hint
 // an operator needs, and pages nobody (final review minor 12).

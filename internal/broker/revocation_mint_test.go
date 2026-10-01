@@ -92,9 +92,10 @@ func (p *pausedStore) ReserveIdempotency(ctx context.Context, principal, key str
 	return p.Store.ReserveIdempotency(ctx, principal, key, rec)
 }
 
-// pauseAt puts the fixture's minter over a pausedStore and returns it.
+// pauseAt puts the fixture's minter over a pausedStore, over the broker's
+// store, and returns it.
 func (f *fixture) pauseAt(method, nas string) *pausedStore {
-	p := &pausedStore{Store: f.st, method: method, nas: nas, entered: make(chan struct{}), gate: make(chan struct{})}
+	p := &pausedStore{Store: f.b.Store, method: method, nas: nas, entered: make(chan struct{}), gate: make(chan struct{})}
 	f.b.Minter = token.NewMinter(p, decision.NewJSONLines(f.log), rand.Reader, token.TagKey([]byte("k")), f.b.Now, 8)
 	return p
 }
@@ -140,15 +141,15 @@ func TestARevokedCertificateMintsNothingAndAnotherDoes(t *testing.T) {
 }
 
 // revocationFailingStore cannot read the marks once it has answered ok
-// reads.
+// reads, for bad reads, or for good when bad is 0.
 type revocationFailingStore struct {
 	store.Store
-	ok    int32
-	reads atomic.Int32
+	ok, bad int32
+	reads   atomic.Int32
 }
 
 func (s *revocationFailingStore) GetRevocation(ctx context.Context, kind, key string) (store.Revocation, error) {
-	if s.reads.Add(1) > s.ok {
+	if n := s.reads.Add(1); n > s.ok && (s.bad == 0 || n <= s.ok+s.bad) {
 		return store.Revocation{}, errors.New("store: connection refused")
 	}
 	return s.Store.GetRevocation(ctx, kind, key)
@@ -186,6 +187,22 @@ func TestUnreadableMarksAfterTheWritesReturnNothing(t *testing.T) {
 	}
 }
 
+// A request the check after its writes could not clear supersedes what it
+// wrote: its retry mints afresh rather than replaying tokens that may
+// predate a mark another certificate's retry would otherwise be handed.
+func TestUnreadableMarksAfterTheWritesSupersedeThem(t *testing.T) {
+	f := newFixture(t, 8)
+	f.b.Store = &revocationFailingStore{Store: f.st, ok: 2, bad: 1}
+	if w := f.post(context.Background(), f.state(f.alice), `{"devices":["leaf1"]}`, "01U"); w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("%s", answer(w))
+	}
+	f.advance(time.Second)
+	decodeMint(t, f.post(context.Background(), f.state(f.alice), `{"devices":["leaf1"]}`, "01U"))
+	if n := f.live(t, "leaf1"); n != 2 {
+		t.Fatalf("%d live: the retry must mint afresh, not replay the unconfirmed mint", n)
+	}
+}
+
 // The race decision 32 ruling 6 closes, deterministically: the mint indexes
 // its token, a revocation lands and sweeps the index — which names a key
 // that holds no token yet — and only then is the token written. The mint
@@ -215,9 +232,15 @@ func TestARevocationDuringAMintDeletesWhatItWrote(t *testing.T) {
 	if n := f.live(t, "leaf1"); n != 0 {
 		t.Fatalf("%d token(s) survived the revocation", n)
 	}
+	// The permit the minter recorded at its write is followed by a deny
+	// naming the same device, so the two join (spec §5.7).
 	recs := eventsOf(f.records(t), "mint")
-	if last := recs[len(recs)-1]; last["verdict"] != "deny" || last["reason"] != "credential_revoked" {
-		t.Fatalf("the last mint record must be the refusal: %v", recs)
+	if len(recs) != 2 || recs[0]["verdict"] != "permit" {
+		t.Fatalf("records: %v", recs)
+	}
+	assertRevokedOn(t, f, recs[1], "leaf1")
+	if _, ok := recs[1]["index_error"]; ok {
+		t.Fatalf("a delete that succeeded is no index_error: %v", recs[1])
 	}
 	if err := f.st.DeleteRevocation(context.Background(), store.RevocationPrincipal, "user:alice@example.com"); err != nil {
 		t.Fatal(err)
@@ -252,6 +275,76 @@ func TestARevocationMidBatchDeletesEveryDevice(t *testing.T) {
 			t.Fatalf("%d token(s) survived on %s", n, d)
 		}
 	}
+	recs := eventsOf(f.records(t), "mint")
+	if len(recs) != 4 {
+		t.Fatalf("two permits and a deny for each: %v", recs)
+	}
+	assertRevokedOn(t, f, recs[2], "leaf1")
+	assertRevokedOn(t, f, recs[3], "nx1")
+}
+
+func assertRevokedOn(t *testing.T, f *fixture, rec map[string]any, device string) {
+	t.Helper()
+	dev, _ := rec["device"].(map[string]any)
+	auth, _ := rec["auth"].(map[string]any)
+	if rec["verdict"] != "deny" || rec["reason"] != "credential_revoked" || dev["name"] != device ||
+		rec["principal"] != "user:alice@example.com" || auth["fingerprint"] != "sha256:"+fingerprint(f.alice) {
+		t.Fatalf("want deny credential_revoked naming %s: %v", device, rec)
+	}
+}
+
+// deleteFailingStore cannot delete tokens.
+type deleteFailingStore struct{ store.Store }
+
+func (deleteFailingStore) DeleteTokens(context.Context, store.TokenKey) error {
+	return errors.New("store: connection refused")
+}
+
+// Tokens a refused mint could not delete are said so on the device's deny,
+// where an operator reading the decision log finds them, not only in the
+// process log.
+func TestAnUndeletedTokenIsNamedOnItsDeny(t *testing.T) {
+	f := newFixture(t, 8)
+	f.b.Store = deleteFailingStore{f.st}
+	p := f.pauseAt("PutToken", "")
+	answered := make(chan *httptest.ResponseRecorder, 1)
+	go func() { answered <- f.post(context.Background(), f.state(f.alice), `{"devices":["leaf1"]}`, "") }()
+	<-p.entered
+	f.revoke(t, store.RevocationPrincipal, "user:alice@example.com")
+	close(p.gate)
+	if w := <-answered; w.Code != http.StatusUnauthorized {
+		t.Fatalf("%s", answer(w))
+	}
+	recs := eventsOf(f.records(t), "mint")
+	assertRevokedOn(t, f, recs[len(recs)-1], "leaf1")
+	if ie, _ := recs[len(recs)-1]["index_error"].(string); !strings.HasPrefix(ie, "tokens not deleted: ") {
+		t.Fatalf("index_error: %q", ie)
+	}
+}
+
+// cancelHonouringStore fails a call on a context that is done, as a remote
+// store does; the memory store does not look.
+type cancelHonouringStore struct{ store.Store }
+
+func (s cancelHonouringStore) GetRevocation(ctx context.Context, kind, key string) (store.Revocation, error) {
+	if err := ctx.Err(); err != nil {
+		return store.Revocation{}, err
+	}
+	return s.Store.GetRevocation(ctx, kind, key)
+}
+
+func (s cancelHonouringStore) DeleteTokens(ctx context.Context, k store.TokenKey) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return s.Store.DeleteTokens(ctx, k)
+}
+
+func (s cancelHonouringStore) PutToken(ctx context.Context, k store.TokenKey, t store.Token) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	return s.Store.PutToken(ctx, k, t)
 }
 
 // A caller that hangs up mid-batch leaves nothing behind either: the check
@@ -259,18 +352,20 @@ func TestARevocationMidBatchDeletesEveryDevice(t *testing.T) {
 // cancel.
 func TestARevocationAfterTheCallerHungUpDeletesWhatItWrote(t *testing.T) {
 	f := newFixture(t, 8)
+	f.b.Store = cancelHonouringStore{f.st}
 	p := f.pauseAt("PutToken", "nx1")
 	ctx, hangUp := context.WithCancel(context.Background())
-	answered := make(chan struct{})
-	go func() {
-		f.post(ctx, f.state(f.alice), `{"devices":["leaf1","nx1"]}`, "01H")
-		close(answered)
-	}()
+	answered := make(chan *httptest.ResponseRecorder, 1)
+	go func() { answered <- f.post(ctx, f.state(f.alice), `{"devices":["leaf1","nx1"]}`, "01H") }()
 	<-p.entered
 	hangUp()
 	f.revokeAndSweep(t, "user:alice@example.com")
 	close(p.gate)
-	<-answered
+	// On the caller's context the check would fail store_unavailable and
+	// leave leaf1's token.
+	if w := <-answered; w.Code != http.StatusUnauthorized {
+		t.Fatalf("%s", answer(w))
+	}
 	for _, d := range []string{"leaf1", "nx1"} {
 		if n := f.live(t, d); n != 0 {
 			t.Fatalf("%d token(s) survived on %s after the caller hung up", n, d)

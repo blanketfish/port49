@@ -193,9 +193,9 @@ func (a *Agent) Handshakes() int64 { return a.handshakes.Load() }
 
 // Done is closed when the broker ends the session — it answered
 // session_expired or credential_revoked, or it no longer trusts the
-// certificate. The agent process
-// exits on it, so the next `port49 login` starts a new session instead of
-// finding this one "already logged in" (pre-flight F10).
+// certificate. The agent process exits on it, so the next `port49 login`
+// starts a new session instead of finding this one "already logged in"
+// (pre-flight F10).
 func (a *Agent) Done() <-chan struct{} { return a.done }
 
 // end records why the broker ended the session and closes Done, once.
@@ -212,8 +212,9 @@ func (a *Agent) end(why error) {
 // §17); a 409 idempotency_in_progress, that first try still minting, is
 // waited out under the same key. A 401 session_expired or
 // trust_domain_unresolved ends the session, and so does a reconnect whose
-// handshake the broker refuses. A 401 credential_revoked ends it too. An item the broker could not decide is
-// returned with an *ItemError, never alone.
+// handshake the broker refuses. A 401 credential_revoked ends it too. An
+// item the broker could not decide is returned with an *ItemError, never
+// alone.
 func (a *Agent) Mint(ctx context.Context, device string, enable bool, ttl time.Duration) (api.MintItem, error) {
 	select {
 	case <-a.done:
