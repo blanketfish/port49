@@ -483,8 +483,10 @@ func TokenIndex(t *testing.T, newStore func() store.Store, now time.Time) {
 	}
 
 	// A certificate key with no issuer or no serial names no certificate,
-	// as IndexContext reads it: indexed, every such login would share it.
-	for _, blank := range []string{store.CertKey("", ""), store.CertKey("CN=Corp CA", ""), store.CertKey("", "3f9a01")} {
+	// as IndexContext reads it: indexed, every such login would share it. A
+	// key that is not a CertKey at all names none either.
+	for _, blank := range []string{store.CertKey("", ""), store.CertKey("CN=Corp CA", ""), store.CertKey("", "3f9a01"),
+		"3f9a01"} {
 		if err := s.IndexToken(ctx, bob, blank, store.TokenKey{NAS: "leaf-02", Username: "bob"}, time.Minute); err != nil {
 			t.Fatal(err)
 		}
@@ -499,7 +501,7 @@ func TokenIndex(t *testing.T, newStore func() store.Store, now time.Time) {
 // whole, so a repeat neither moves its time nor its origin; a principal's
 // and a certificate's marks are kept apart; and the list is sorted. A mark
 // that could match nothing — an unknown kind, an empty key, a certificate
-// key with no issuer or no serial, which the token and context indexes
+// key with no issuer, no serial or no "|", which the token and context indexes
 // never hold — is refused, so a revocation never reports a mark that
 // revokes nothing.
 func RevocationMarks(t *testing.T, newStore func() store.Store, now time.Time) {
@@ -510,10 +512,14 @@ func RevocationMarks(t *testing.T, newStore func() store.Store, now time.Time) {
 		Origin: "admin_socket uid 0"}
 	cert := store.Revocation{Kind: store.RevocationCert, Key: store.CertKey("CN=Corp CA", "3f9a01"),
 		At: now.Add(time.Second), Origin: "admin_socket uid 0"}
+	// bob sorts after alice within the principal kind, and is put first, so
+	// the list's order within a kind is the store's, not the order of puts.
+	bob := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:bob@example.com", At: now,
+		Origin: "admin_socket uid 0"}
 	if _, err := s.GetRevocation(ctx, alice.Kind, alice.Key); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("no mark yet: %v", err)
 	}
-	for _, r := range []store.Revocation{cert, alice} {
+	for _, r := range []store.Revocation{bob, cert, alice} {
 		if err := s.PutRevocation(ctx, r); err != nil {
 			t.Fatal(err)
 		}
@@ -537,13 +543,15 @@ func RevocationMarks(t *testing.T, newStore func() store.Store, now time.Time) {
 		{Kind: store.RevocationCert, Key: "", At: now},
 		{Kind: store.RevocationCert, Key: store.CertKey("", "3f9a01"), At: now},
 		{Kind: store.RevocationCert, Key: store.CertKey("CN=Corp CA", ""), At: now},
+		{Kind: store.RevocationCert, Key: "3f9a01", At: now},
 	} {
 		if err := s.PutRevocation(ctx, r); err == nil {
 			t.Fatalf("an incomplete mark was taken: %+v", r)
 		}
 	}
 	list, err := s.ListRevocations(ctx)
-	if err != nil || len(list) != 2 || list[0].Kind != store.RevocationCert || list[1].Key != alice.Key {
+	if err != nil || len(list) != 3 || list[0].Kind != store.RevocationCert || list[1].Key != alice.Key ||
+		list[2].Key != bob.Key {
 		t.Fatalf("list: %+v %v", list, err)
 	}
 	if err := s.DeleteRevocation(ctx, alice.Kind, alice.Key); err != nil {

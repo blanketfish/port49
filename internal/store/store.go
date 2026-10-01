@@ -607,7 +607,8 @@ type Store interface {
 	// the later expiry where one is already recorded. The minter writes it
 	// before the token, so no token exists that a revocation cannot find
 	// (plan 7a). An empty principal or certKey skips that index, as
-	// IndexContext does, and so does a certKey with no issuer or no serial.
+	// IndexContext does, and so does a certKey with no issuer or no serial,
+	// or that is not a CertKey at all.
 	// An entry outliving its token costs a revocation one DeleteTokens on an
 	// empty key.
 	IndexToken(ctx context.Context, principal, certKey string, k TokenKey, ttl time.Duration) error
@@ -639,7 +640,8 @@ type Store interface {
 	// kept whole: a repeat never moves its time or origin, and never lifts.
 	// A mark that could match nothing is refused: a Kind that is neither
 	// RevocationPrincipal nor RevocationCert, an empty Key, or a certificate
-	// Key with no issuer or no serial, which IndexToken never indexes.
+	// Key that is not a CertKey or has no issuer or no serial, which
+	// IndexToken never indexes.
 	PutRevocation(ctx context.Context, r Revocation) error
 	// GetRevocation is the mark in force for (kind, key), or ErrNotFound.
 	GetRevocation(ctx context.Context, kind, key string) (Revocation, error)

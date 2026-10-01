@@ -1405,7 +1405,9 @@ func TestARevocationMarkNeverExpires(t *testing.T) {
 	now := time.Unix(1_757_041_495, 0)
 	s := New(func() time.Time { return now })
 	ctx := context.Background()
-	_ = s.PutRevocation(ctx, store.Revocation{Kind: store.RevocationPrincipal, Key: "user:alice", At: now})
+	if err := s.PutRevocation(ctx, store.Revocation{Kind: store.RevocationPrincipal, Key: "user:alice", At: now}); err != nil {
+		t.Fatal(err)
+	}
 	for i := 0; i < sweepEvery; i++ { // through a sweep
 		_ = s.PutBlob(ctx, fmt.Sprintf("b%d", i), []byte("x"), time.Second)
 	}

@@ -886,12 +886,13 @@ func listRefs(idx map[string]map[store.ContextRef]time.Time, key string, now tim
 }
 
 // blankCertKey reports whether certKey is store.CertKey of an empty issuer or
-// an empty serial. It names no certificate: every OIDC login's credential has
-// neither, so "|" would be one index entry holding every OIDC operator's
-// context on the fleet, and a revocation by it would revoke them all. It is
-// treated as "" — never indexed — as the empty sid is (ruling P8).
+// an empty serial, or is not a CertKey at all (no "|"). It names no
+// certificate: every OIDC login's credential has neither, so "|" would be one
+// index entry holding every OIDC operator's context on the fleet, and a
+// revocation by it would revoke them all. It is treated as "" — never
+// indexed — as the empty sid is (ruling P8).
 func blankCertKey(certKey string) bool {
-	return certKey == "" || strings.HasPrefix(certKey, "|") || strings.HasSuffix(certKey, "|")
+	return !strings.Contains(certKey, "|") || strings.HasPrefix(certKey, "|") || strings.HasSuffix(certKey, "|")
 }
 
 // IndexContext adds ref to each non-empty index — principal, sid, and cert —
