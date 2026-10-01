@@ -3874,7 +3874,7 @@ GET  /v1/bundle/diff?from=<ver>      for CI and `port49 inventory diff`
 POST /v1/sync                        on-demand trigger
 GET  /v1/devices/{address}           diagnostic only — MUST NOT be used on the hot path
 
-POST /v1/webhook/{source}            on webhook_listen, a listener of its own (below)
+POST /v1/webhook/{source}            not the API: webhook_listen, TLS without a client certificate (below)
 ```
 
 **Consumers pull and cache; they never query per request.** A daemon calling this API per
@@ -4559,11 +4559,12 @@ past 256 MiB, fails the sync. REST remains a fallback, taken when GraphQL answer
 says `api: rest`: it reads `?depth=1` under the `nautobot_2` profile, since Nautobot 2.4.43 and 3.2.6
 at default depth named no related object (L27, L30), and follows `next` (below); every page must
 give the same `count`, and the total must equal it, with no device twice. REST does not
-give interface addresses in the device list, so a source that asks for them reads GraphQL. The
-connector's own query, on each measured release, is §15 L32's.
+give interface addresses in the device list, so a source that asks for them reads GraphQL only:
+`api: rest` with interfaces is refused at load, and a GraphQL 404 fails the sync rather than
+falling back. The connector's own query, on each measured release, is §15 L32's.
 
 **`next` is followed only on the configured base.** Every product builds `next` from the host the
-request arrived under (L30), so behind a proxy that rewrites `Host` it names another origin. A `next`
+request arrived under (L30), so behind a proxy that rewrites `Host` it can name another origin. A `next`
 whose scheme, host and port are the source `url`'s is followed; one on another origin is rebuilt on
 the `url`, its path and query kept, and said once; one whose path is not the `url`'s device list is
 refused. No redirect is followed: the source's token is sent to `url` and nowhere else. A REST read
@@ -4594,19 +4595,20 @@ always, whatever the source, rather than falling back to generic in silence.
 **Filters, maps and addresses run in the service.** A source's `filter` (`status`, default
 `[active]`, compared in lower case so each recorded spelling matches — `"ACTIVE"` on NetBox 3.7.8,
 `"active"` on 4.7.1, `{"name": "Active"}` on every Nautobot measured, L30; `tags`, every one named;
-`has_primary_ip`)
-is applied to what was read, since the products' filter arguments differ per release and L27
-measured only `name`'s. Its `map` names, per attribute, a path the profile reads (L27, L30): on
-NetBox `site.slug`, `role.slug`, `platform.slug`; on Nautobot 1.6 those and
+`has_primary_ip`) is applied to what was read, since the products' filter arguments differ per
+release and L27 measured only `name`'s. Its `map` names, per attribute, a path the profile reads
+(L27, L30): on NetBox `site.slug`, `role.slug`, `platform.slug`; on Nautobot 1.6 those and
 `platform.network_driver`; on Nautobot 2.x and 3.x `location.name`, `role.name`, `platform.name`,
 `platform.network_driver`; on every profile `status` and `custom_fields.<key>`. `platform` names the
-device's platform. A device's addresses are its primary addresses (`primary_ip4`, `primary_ip6`)
-unless `addresses.interfaces` names interfaces, or `addresses.all_interfaces` asks for every one,
-since every address listed admits its source and an address on two devices refuses the sync; an
-interface's loopback, link-local, multicast or unspecified address is left out, since it cannot
-source TACACS+ and repeats across devices. An attribute a device does not give — a null custom field, or one that is an object or a list — is
-left unset, never invented, and §5.5's `on_missing` decides what that means. A connector returns no
-key assignment: nothing it reads can carry one (§13, decision 30).
+device's platform. A device's addresses are its primary addresses (`primary_ip4`, `primary_ip6`;
+`addresses.primary`, default true) and, where `addresses.interfaces` names interfaces or
+`addresses.all_interfaces` asks for every one, those interfaces' addresses too; `primary: false` is
+taken only beside interfaces. Interface addresses are opt-in, since every address listed admits its
+source and an address on two devices refuses the sync; an interface's loopback, link-local,
+multicast or unspecified address is left out, since it cannot source TACACS+ and repeats across
+devices. An attribute a device does not give — a null custom field, or one that is an object or a
+list — is left unset, never invented, and §5.5's `on_missing` decides what that means. A connector
+returns no key assignment: nothing it reads can carry one (§13, decision 30).
 
 **Every `Fetch` returns within `sync_timeout`.** Each request is under the sync's deadline, and a
 connector that has not returned 5 s past it is abandoned: the sync fails, the source is marked
@@ -5412,10 +5414,11 @@ and its public half (`signing.pub`), refuses to overwrite either, and prints the
 <file> [--verify-key <file>] [--from <sequence>] [--out <file>]`** reads the bundle the service
 publishes, or bundle `<sequence>` from its history (`GET /v1/bundle?sequence=<n>`, the read right;
 the service keeps the last 64), opens it against the verify keys as port49d does, and writes its
-inventory in `inventory_file`'s schema to `--out`, which it never overwrites, or to standard
-output, so the offline tools (`policy test`, `policy diff`, `inventory diff`, `explain`) keep an
-`--inventory` when no source is a file. The file carries no key assignment, since no document can.
-A document that does not open is refused and nothing is written.
+inventory in `inventory_file`'s schema to `--out`, written 0600 and never overwritten, or to
+standard output, so the offline tools (`policy test`, `policy diff`, `inventory diff`, `explain`)
+keep an `--inventory` when no source is a file. The file carries no key assignment, since no
+document can. A document that does not open, or whose sequence is not `<sequence>`, is refused and
+nothing is written.
 
 **`port49 policy test --config <port49d.yaml>`** adds the key checks §10 requires of CI: it fails
 on a key group naming a `key_ref` the file does not define, and on a device assigned one. It
@@ -5927,10 +5930,10 @@ read.
 a profile from `/api/status/` by the releases L27 and L30 measured, refuse a major none measured
 unless a profile is named, read only the fields those runs recorded, read GraphQL's `errors`
 before its `data`, take a list only when it equals REST's `count` before and after it with no
-device twice, follow `next` only on the source's
-`url` (rebuilding it there otherwise) and no redirect at all, filter in the service, take primary
-addresses unless interfaces are named, leave an attribute a device does not give unset, and pass an
-unrecognized platform through, said. A device left with no address counts against the bound in
+device twice, follow `next` only on the source's `url` (rebuilding it there otherwise) and no
+redirect at all, filter in the service, take primary addresses, and interface addresses only where
+named, leave an attribute a device does not give unset, and pass an unrecognized platform through,
+said. A device left with no address counts against the bound in
 the service and in port49d. A source of truth is `https` with a named CA, its token and
 webhook secret named by `secret_env`-style keys until plan 12's `secret_ref`, and never printed.
 A webhook arrives on its own TLS listener, since no product can present a client certificate, and
