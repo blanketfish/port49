@@ -12,8 +12,9 @@ import (
 	"testing"
 )
 
-// TestL33FixturesAreWhatTheNotesSay reads every L33 record: no secret or
-// token in it; three phases and the webhook's create calls; and in its
+// TestL33FixturesAreWhatTheNotesSay reads the record of each of L33's five
+// stacks, failing if one is missing: no secret or token in it; three phases
+// and the webhook's create calls; and in its
 // product's note, its directory, a row per published phase naming the
 // stack, the change and its seconds to two places, a row per unpublished
 // phase naming the stack, the change and "failed", a row naming the stack

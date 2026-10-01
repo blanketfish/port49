@@ -77,8 +77,9 @@ func TestEveryStackListsOverGraphQLAsItPages(t *testing.T) {
 		if posts != want {
 			t.Errorf("%s: %d GraphQL requests, want %d", stack, posts, want)
 		}
-		// primary_ip6 is L32's to measure: every other identifier was in a
-		// recorded query.
+		// primary_ip6 is in no recorded fixture query (L32 measured the
+		// connector asking for it on every release): every other identifier
+		// was in a recorded query.
 		if got := strings.Join(s.Unrecorded(), ","); got != "primary_ip6" {
 			t.Errorf("%s: asked for unrecorded %q", stack, got)
 		}
