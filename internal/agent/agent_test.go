@@ -312,6 +312,27 @@ func TestAnInProgressAnswerIsWaitedOutUnderTheSameKey(t *testing.T) {
 	}
 }
 
+// Mint waits out an in-progress answer by the broker's Retry-After, not
+// its own delay: the stub asks for 1s, and the agent's own is 10s (Task 3
+// review M7).
+func TestMintWaitsByTheBrokersRetryAfter(t *testing.T) {
+	defer func(d, m time.Duration) { inProgressDelay, inProgressDelayMax = d, m }(inProgressDelay, inProgressDelayMax)
+	inProgressDelay, inProgressDelayMax = 10*time.Second, 10*time.Second
+	r := newRig(t)
+	r.fb.mu.Lock()
+	r.fb.inProgress = 1
+	r.fb.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	start := time.Now()
+	if item, err := r.a.Mint(ctx, "leaf1", false, 0); err != nil || item.Verdict != "permit" {
+		t.Fatalf("Mint (waited %v): %+v %v", time.Since(start), item, err)
+	}
+	if waited := time.Since(start); waited < 900*time.Millisecond {
+		t.Fatalf("waited %v; the broker asked for 1s", waited)
+	}
+}
+
 // The broker's Retry-After sets the wait, capped so no answer parks a login
 // for long; without one the agent can read, it waits its own delay.
 func TestRetryAfterIsHonouredUpToACap(t *testing.T) {
