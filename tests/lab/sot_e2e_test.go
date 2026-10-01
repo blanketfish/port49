@@ -19,7 +19,7 @@ const sotE2EClaim = "A change in a source of truth reaches a device's admission 
 	"the device is removed."
 
 // TestSoTDeviceEndToEnd runs one stack (run.sh <netbox-4|nautobot-3> e2e,
-// with PORT49_LAB_PLATFORMS=arista_eos) to vEOS.
+// with PORT49_LAB_PLATFORMS=eos) to vEOS.
 func TestSoTDeviceEndToEnd(t *testing.T) {
 	stack := os.Getenv("L32_STACK")
 	if stack == "" || os.Getenv("L33_HOOK_BIND") == "" {

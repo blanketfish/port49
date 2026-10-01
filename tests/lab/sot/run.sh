@@ -187,7 +187,7 @@ if [ "$rc" = 0 ] && [ -n "$test" ]; then
 	# port49-inventory.lab.
 	bridge=$(docker network inspect bridge --format '{{(index .IPAM.Config 0).Gateway}}')
 	extra=()
-	[ "$legacy" = e2e ] && extra=(PORT49_LAB_PLATFORMS=arista_eos)
+	[ "$legacy" = e2e ] && extra=(PORT49_LAB_PLATFORMS=eos)
 	env "${extra[@]}" L32_STACK="$stack" L32_PRODUCT="$product" L32_CA="$pki/ca.pem" \
 		L32_HOST_URL="https://127.0.0.1:$L32_HOST_PORT" L32_XFH_URL="https://127.0.0.1:$L32_XFH_PORT" \
 		L32_PLAIN_URL="https://127.0.0.1:$L32_PLAIN_PORT" \

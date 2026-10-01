@@ -347,7 +347,7 @@ controller still watches the log: a run that has not written a line in 10 minute
 stalled run is never read as a result.
 
 **The device run** (Task 15, Step 8) follows plan 5b's "Running the lab": vEOS only
-(`PORT49_LAB_PLATFORMS=arista_eos`), the harness's boot budget (6 min) plus up to 8 min for TACACS+
+(`PORT49_LAB_PLATFORMS=eos`), the harness's boot budget (6 min) plus up to 8 min for TACACS+
 readiness, a deadline on every read, and **a stall watchdog run by the controller for the whole
 run** (`STALL=25` minutes), which on a stall destroys the topology and kills `bin/port49d`,
 `bin/port49-inventory` and any `tcpdump` on `tests/lab/captures`, and runs `run.sh`'s cleanup
@@ -7235,7 +7235,7 @@ if [ "$rc" = 0 ] && [ -n "$test" ]; then
 	# port49-inventory.lab.
 	bridge=$(docker network inspect bridge --format '{{(index .IPAM.Config 0).Gateway}}')
 	extra=()
-	[ "$legacy" = e2e ] && extra=(PORT49_LAB_PLATFORMS=arista_eos)
+	[ "$legacy" = e2e ] && extra=(PORT49_LAB_PLATFORMS=eos)
 	env "${extra[@]}" L32_STACK="$stack" L32_PRODUCT="$product" L32_CA="$pki/ca.pem" \
 		L32_HOST_URL="https://127.0.0.1:$L32_HOST_PORT" L32_XFH_URL="https://127.0.0.1:$L32_XFH_PORT" \
 		L33_DIRECT_URL="http://127.0.0.1:$port" L33_PKI="$pki" L33_HOOK_BIND="$bridge:18444" \
@@ -8321,7 +8321,7 @@ const sotE2EClaim = "A change in a source of truth reaches a device's admission 
 	"the device is removed."
 
 // TestSoTDeviceEndToEnd runs one stack (run.sh <netbox-4|nautobot-3> e2e,
-// with PORT49_LAB_PLATFORMS=arista_eos) to vEOS.
+// with PORT49_LAB_PLATFORMS=eos) to vEOS.
 func TestSoTDeviceEndToEnd(t *testing.T) {
 	stack := os.Getenv("L32_STACK")
 	if stack == "" || os.Getenv("L33_HOOK_BIND") == "" {
