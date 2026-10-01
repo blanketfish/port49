@@ -151,7 +151,8 @@ func runSessionStep(platform string, sh *labShell, cmd string) sessionStep {
 	// (results/slice-cisco_iosxe.md), so port49's text without the
 	// command's output is a refusal there.
 	s.refused = l29Refused(platform, s.out) || strings.Contains(s.out, sessionExpiredMsg) ||
-		strings.Contains(s.out, sessionEndedMsg) || (!s.printed && strings.Contains(s.out, "port49: "))
+		strings.Contains(s.out, sessionEndedMsg) ||
+		(platform == "cisco_iosxe" && !s.printed && strings.Contains(s.out, "port49: "))
 	s.warned = strings.Contains(s.out, sessionWarning)
 	return s
 }
@@ -476,7 +477,9 @@ func TestSessionLifetime(t *testing.T) {
 			"**Session reply:** the warning %s; the login %s.\n\n"+
 			"**Per-command reply:** %s.\n\n"+
 			"The warning's text (`%s`) appears %d time(s) anywhere in the session's whole transcript, from login "+
-			"to its last command.\n\n"+
+			"to its last command. The transcript includes the reply to the paging command the harness types after "+
+			"the first prompt (`terminal length 0`, or `set cli screen-length 0` on Junos), which a per-command "+
+			"platform authorizes like any other command.\n\n"+
 			"The refresh's output:\n\n```\n%s\n```\n%s",
 			l29Cell(mintWarn), sliceUser, loginCell, recordCell(sessRec),
 			inWarn.cell(l.p.name), map[bool]string{true: "port49 was not asked (decision 21)", false: recordCell(cmdRec)}[sessionOnly],
@@ -510,6 +513,11 @@ func TestSessionLifetime(t *testing.T) {
 		if !sessionOnly {
 			sessObs += fmt.Sprintf("| 8. `show version` once more | %s |\n", sessionCmdCell(goneAgain, goneAgainRec))
 		}
+		sessObs += fmt.Sprintf("\n`port49 refresh`'s output in full, at step 5:\n\n```\n%s\n```\n\nAt step 7:\n\n"+
+			"```\n%s\n```\n\nAt step 8:\n\n```\n%s\n```\n", refreshed, resumed, late)
+		sessObs += "\n**Not exercised here:** a nonce used twice, a challenge answered on another connection, the " +
+			"10 s rate limit, and a refresh triggered by anything but an operator's `port49 refresh`. Those clauses " +
+			"are unit-tested (plan 7b, Tasks 6–8); these notes are not evidence for them.\n"
 		sessObs += fmt.Sprintf("\nRecords from `port49 login` on: %s.%s", l29Tally(sliceAll(all)), junosNote)
 		sessObs += "\n" + l29Built() + "\n"
 		if len(failed) > 0 {

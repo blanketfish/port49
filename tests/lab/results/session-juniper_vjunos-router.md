@@ -28,6 +28,29 @@ Run at a 6m `max_session_age` (`tests/lab/slice/session-policy.yaml`), `session.
 | 8. `show version` at the new ceiling + the grace window + 10 s (22:12:44.000Z) | its output appeared in 200ms; port49's text: no port49 text and no refusal; port49 was not asked (decision 21) |
 | 8. `port49 refresh` after it | `refreshed at 2026-10-01T22:12:44Z; this login lasts until 2026-10-02T10:12:44Z srx1 (slice01) past the grace window, not resumed: log in again there, not reache…`; 1 refresh record(s) |
 
+`port49 refresh`'s output in full, at step 5:
+
+```
+refreshed at 2026-10-01T21:58:24Z; this login lasts until 2026-10-02T09:58:24Z
+  srx1 (slice01)  extended to 2026-10-01T22:04:24Z, not reached: the device keeps its own session
+```
+
+At step 7:
+
+```
+refreshed at 2026-10-01T22:04:34Z; this login lasts until 2026-10-02T10:04:34Z
+  srx1 (slice01)  extended to 2026-10-01T22:10:34Z, not reached: the device keeps its own session
+```
+
+At step 8:
+
+```
+refreshed at 2026-10-01T22:12:44Z; this login lasts until 2026-10-02T10:12:44Z
+  srx1 (slice01)  past the grace window, not resumed: log in again there, not reached: the device keeps its own session
+```
+
+**Not exercised here:** a nonce used twice, a challenge answered on another connection, the 10 s rate limit, and a refresh triggered by anything but an operator's `port49 refresh`. Those clauses are unit-tested (plan 7b, Tasks 6–8); these notes are not evidence for them.
+
 Records from `port49 login` on: `event=account` ×6; `event=authorize_session reason=context_matched` ×1; `event=mint reason=grants_matched` ×1; `event=redeem reason=token_redeemed` ×1; `event=refresh reason=grants_matched` ×2; `event=refresh reason=session_expired` ×1.
 
 On Junos the session reply at login is the one `server_msg` the device is ever sent (decision 21): Junos authorizes no command with port49, so the command rows say only whether `show version` ran, and the ceiling and the grace window are read off the refresh's answer and the records.

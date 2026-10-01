@@ -30,7 +30,7 @@ Run at a 6m `max_session_age` with `session.ceiling_warning: 2m`; the login and 
 
 **Per-command reply:** not measurable on Junos: no per-command reply is ever sent (decision 21).
 
-The warning's text (`port49: session ends in`) appears 0 time(s) anywhere in the session's whole transcript, from login to its last command.
+The warning's text (`port49: session ends in`) appears 0 time(s) anywhere in the session's whole transcript, from login to its last command. The transcript includes the reply to the paging command the harness types after the first prompt (`terminal length 0`, or `set cli screen-length 0` on Junos), which a per-command platform authorizes like any other command.
 
 The refresh's output:
 

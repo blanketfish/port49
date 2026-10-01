@@ -372,10 +372,21 @@ func TestL2Truncation(t *testing.T) {
 					in++
 				}
 			}
-			display += fmt.Sprintf(" The login reached an operational-mode prompt (`%s`) at %d of %d lengths all "+
-				"the same: the device does not refuse a login whose session authorization fails "+
-				"(`tests/lab/results/junos-session-service-%s.md`, phase C), so a session denial shows the "+
-				"operator nothing at all.", prompt, in, len(rows), l.p.name)
+			if in == len(rows) {
+				display += fmt.Sprintf(" The login reached an operational-mode prompt (`%s`) at %d of %d lengths all "+
+					"the same: the device does not refuse a login whose session authorization fails "+
+					"(`tests/lab/results/junos-session-service-%s.md`, phase C), so a session denial shows the "+
+					"operator nothing at all.", prompt, in, len(rows), l.p.name)
+			} else {
+				var at []string
+				for _, r := range rows {
+					if strings.Contains(r.printed, prompt) {
+						at = append(at, fmt.Sprintf("N=%d", r.n))
+					}
+				}
+				display += fmt.Sprintf(" The login reached an operational-mode prompt (`%s`) at %d of %d lengths "+
+					"(%s); at the others it did not.", prompt, in, len(rows), strings.Join(at, ", "))
+			}
 		case maxShown == 0:
 			display = fmt.Sprintf("**Not displayed** at any length: the device printed no %d-byte prefix of the "+
 				"message, so its truncation length cannot be read.", l2MinShown)
@@ -387,9 +398,12 @@ func TestL2Truncation(t *testing.T) {
 		}
 		fmt.Fprintf(&b, "\n%s\n", display)
 		if sessionOnly {
-			fmt.Fprintf(&b, "\n### Break-glass past 255 bytes\n\nThe owner's production prior: on Junos a reply "+
-				"over 255 bytes locked the user out. Break-glass was proved before each length over 255 and after "+
-				"the last, the run stopping at the first length that left it refused.\n\n| When | Break-glass |\n"+
+			fmt.Fprintf(&b, "\n### Break-glass around long session denials\n\nThe owner's production prior: on Junos "+
+				"a reply over 255 bytes locked the user out. Break-glass was proved before each length over 255 and "+
+				"after the last, the run stopping at the first length that left it refused. This run sent a long "+
+				"*deny* `server_msg`, which Junos ignores (above); the prior concerns a long *permit* reply, which "+
+				"this run never sent. These rows show only that a long session denial did not lock break-glass out; "+
+				"they neither confirm nor refute the prior.\n\n| When | Break-glass |\n"+
 				"|---|---|\n%s\n", strings.Join(bgRows, "\n"))
 			if lockedAt > 0 {
 				fmt.Fprintf(&b, "\n**Finding:** after N=%d the device refused break-glass.\n", lockedAt)

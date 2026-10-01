@@ -30,9 +30,9 @@ Each length on a port49d of its own, started on the standing lab config with `la
 
 **Not measurable: session-only (decision 21).** The session denial carried the padded message at every length, and the login printed none of it, so the device's display and its truncation length are not observed on this image. The login reached an operational-mode prompt (`@srx1>`) at 7 of 7 lengths all the same: the device does not refuse a login whose session authorization fails (`tests/lab/results/junos-session-service-juniper_vjunos-router.md`, phase C), so a session denial shows the operator nothing at all.
 
-### Break-glass past 255 bytes
+### Break-glass around long session denials
 
-The owner's production prior: on Junos a reply over 255 bytes locked the user out. Break-glass was proved before each length over 255 and after the last, the run stopping at the first length that left it refused.
+The owner's production prior: on Junos a reply over 255 bytes locked the user out. Break-glass was proved before each length over 255 and after the last, the run stopping at the first length that left it refused. This run sent a long *deny* `server_msg`, which Junos ignores (above); the prior concerns a long *permit* reply, which this run never sent. These rows show only that a long session denial did not lock break-glass out; they neither confirm nor refute the prior.
 
 | When | Break-glass |
 |---|---|

@@ -29,6 +29,29 @@ Run at a 6m `max_session_age` (`tests/lab/slice/session-policy.yaml`), `session.
 | 8. `port49 refresh` after it | `refreshed at 2026-10-01T23:23:21Z; this login lasts until 2026-10-02T11:23:21Z no live device session to extend`; 0 refresh record(s) |
 | 8. `show version` once more | refused in 300ms; the device printed `port49: this session was not authenticated by port49`; the record: deny context_missing, server_msg `port49: this session was not authenticated by port49` |
 
+`port49 refresh`'s output in full, at step 5:
+
+```
+refreshed at 2026-10-01T23:09:01Z; this login lasts until 2026-10-02T11:09:01Z
+  xe1 (slice01)  extended to 2026-10-01T23:15:01Z
+```
+
+At step 7:
+
+```
+refreshed at 2026-10-01T23:15:11Z; this login lasts until 2026-10-02T11:15:11Z
+  xe1 (slice01)  extended to 2026-10-01T23:21:11Z
+```
+
+At step 8:
+
+```
+refreshed at 2026-10-01T23:23:21Z; this login lasts until 2026-10-02T11:23:21Z
+  no live device session to extend
+```
+
+**Not exercised here:** a nonce used twice, a challenge answered on another connection, the 10 s rate limit, and a refresh triggered by anything but an operator's `port49 refresh`. Those clauses are unit-tested (plan 7b, Tasks 6–8); these notes are not evidence for them.
+
 Records from `port49 login` on: `event=account` ×5; `event=authorize_command reason=context_missing` ×1; `event=authorize_command reason=permit_dominates` ×4; `event=authorize_command reason=session_expired` ×2; `event=authorize_session reason=context_matched` ×1; `event=mint reason=grants_matched` ×1; `event=redeem reason=token_redeemed` ×1; `event=refresh reason=grants_matched` ×2.
 port49d, port49 and port49-inventory built from `ec50053` (`make build`).
 
