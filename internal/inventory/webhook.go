@@ -2,6 +2,7 @@ package inventory
 
 import (
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha512"
 	"crypto/tls"
 	"encoding/hex"
@@ -76,10 +77,12 @@ type Webhooks struct {
 	Log     io.Writer
 	Metrics *Metrics
 
-	mu   sync.Mutex
-	seen map[string]time.Time
-	told map[string]bool
-	ok   map[string]bool
+	mu      sync.Mutex
+	seen    map[string]time.Time
+	told    map[string]bool
+	ok      map[string]bool
+	rearmed map[string]time.Time
+	decoy   []byte
 }
 
 func (h *Webhooks) Handler() http.Handler {
@@ -98,15 +101,18 @@ func (h *Webhooks) Handler() http.Handler {
 }
 
 // deliver checks a delivery cheapest first: it reads the body, capped,
-// only once the path names a source and a signature is present and well
-// formed, and parses it only after the signature verifies.
+// only once a signature is present and well formed, and parses it only
+// after the signature verifies. A name that is not a configured source with
+// a secret goes through the same checks under a random decoy key and is
+// refused only where the signature is compared, so no answer, and no read,
+// before that tells a configured name from another (spec §10; review I1).
 func (h *Webhooks) deliver(w http.ResponseWriter, r *http.Request) {
 	source := r.PathValue("source")
-	secret, ok := h.Secrets[source]
-	if !ok {
+	secret, known := h.Secrets[source]
+	known = known && len(secret) > 0
+	if !known {
 		// The name is the caller's text: neither counted under it nor said.
-		h.refuse(w, r, "", HookUnknownSource, http.StatusUnauthorized)
-		return
+		source, secret = "", h.decoyKey()
 	}
 	if mt, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type")); mt != "application/json" {
 		h.refuse(w, r, source, HookBadContentType, http.StatusUnsupportedMediaType)
@@ -122,6 +128,10 @@ func (h *Webhooks) deliver(w http.ResponseWriter, r *http.Request) {
 		h.refuse(w, r, source, HookBadSignature, http.StatusUnauthorized)
 		return
 	}
+	if r.ContentLength > maxWebhookBody {
+		h.refuse(w, r, source, HookTooLarge, http.StatusRequestEntityTooLarge)
+		return
+	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxWebhookBody))
 	if err != nil {
 		var tooBig *http.MaxBytesError
@@ -134,8 +144,12 @@ func (h *Webhooks) deliver(w http.ResponseWriter, r *http.Request) {
 	}
 	mac := hmac.New(sha512.New, secret)
 	mac.Write(body)
-	if !hmac.Equal(mac.Sum(nil), sig) {
-		h.refuse(w, r, source, HookBadSignature, http.StatusUnauthorized)
+	if !hmac.Equal(mac.Sum(nil), sig) || !known {
+		outcome := HookBadSignature
+		if !known {
+			outcome = HookUnknownSource
+		}
+		h.refuse(w, r, source, outcome, http.StatusUnauthorized)
 		return
 	}
 	var b struct {
@@ -150,17 +164,19 @@ func (h *Webhooks) deliver(w http.ResponseWriter, r *http.Request) {
 		h.refuse(w, r, source, HookBadBody, http.StatusBadRequest)
 		return
 	}
-	now := h.Now()
+	// Wall time throughout: at has no monotonic reading, and the replay
+	// cache must expire on the clock freshness is judged by (review M1).
+	now := h.Now().Round(0)
 	if d := now.Sub(at); d > webhookWindow || d < -webhookWindow {
 		h.refuse(w, r, source, HookStale, http.StatusBadRequest)
 		return
 	}
-	if !h.remember(source+"\x00"+hex.EncodeToString(sig), now) {
+	if !h.remember(source+"\x00"+hex.EncodeToString(sig), at, now) {
 		h.Metrics.Webhooks.WithLabelValues(source, HookDuplicate).Inc()
 		writeJSON(w, http.StatusAccepted, map[string]string{"outcome": HookDuplicate})
 		return
 	}
-	h.accepted(source, r)
+	h.accepted(source, r, now)
 	h.Notify(source)
 	writeJSON(w, http.StatusAccepted, map[string]string{"outcome": HookAccepted})
 }
@@ -179,21 +195,22 @@ func parseHookTime(s string) (time.Time, error) {
 	return time.Time{}, errors.New("not a timestamp")
 }
 
-// remember reports whether key, a source and a signature, is new inside
-// twice the window — the span a delivery stays fresh — and remembers it.
-// At maxSeen, expired keys are dropped, and then the soonest to expire.
-func (h *Webhooks) remember(key string, now time.Time) bool {
+// remember reports whether key, a source and a signature, is new, and
+// remembers it until at+webhookWindow: the last instant a delivery stamped
+// at passes freshness, inclusive, as the freshness check is. At maxSeen,
+// expired keys are dropped, and then the soonest to expire.
+func (h *Webhooks) remember(key string, at, now time.Time) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.seen == nil {
 		h.seen = map[string]time.Time{}
 	}
-	if until, ok := h.seen[key]; ok && now.Before(until) {
+	if until, ok := h.seen[key]; ok && !now.After(until) {
 		return false
 	}
 	if len(h.seen) >= maxSeen {
 		for k, until := range h.seen {
-			if !now.Before(until) {
+			if now.After(until) {
 				delete(h.seen, k)
 			}
 		}
@@ -209,8 +226,20 @@ func (h *Webhooks) remember(key string, now time.Time) bool {
 		}
 		delete(h.seen, oldest)
 	}
-	h.seen[key] = now.Add(2 * webhookWindow)
+	h.seen[key] = at.Add(webhookWindow)
 	return true
+}
+
+// decoyKey is the key a name that is not a configured source is checked
+// under: random, made once, and never any source's secret.
+func (h *Webhooks) decoyKey() []byte {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.decoy == nil {
+		h.decoy = make([]byte, sha512.Size)
+		rand.Read(h.decoy)
+	}
+	return h.decoy
 }
 
 // refuse answers code, counts the outcome, and says it once per source and
@@ -249,19 +278,27 @@ func (h *Webhooks) refuse(w http.ResponseWriter, r *http.Request, source, outcom
 }
 
 // accepted counts a delivery taken, and says the first a source sends, and
-// the first after a refusal of that source was said.
-func (h *Webhooks) accepted(source string, r *http.Request) {
+// the first after a refusal of that source was said. That re-arms the
+// source's refusals at most once a webhookWindow, so a refusal recurring
+// between real deliveries (a second webhook left on an old secret) is said
+// once a window, not once a delivery (review I2); the metric counts each.
+func (h *Webhooks) accepted(source string, r *http.Request, now time.Time) {
 	h.Metrics.Webhooks.WithLabelValues(source, HookAccepted).Inc()
 	h.mu.Lock()
 	if h.ok == nil {
-		h.ok = map[string]bool{}
+		h.ok, h.rearmed = map[string]bool{}, map[string]time.Time{}
 	}
 	first, again := !h.ok[source], false
 	h.ok[source] = true
-	for k := range h.told {
-		if strings.HasSuffix(k, "\x00"+source) {
-			delete(h.told, k)
-			again = true
+	if last, ok := h.rearmed[source]; !ok || now.Sub(last) >= webhookWindow {
+		for k := range h.told {
+			if strings.HasSuffix(k, "\x00"+source) {
+				delete(h.told, k)
+				again = true
+			}
+		}
+		if again {
+			h.rearmed[source] = now
 		}
 	}
 	h.mu.Unlock()
@@ -296,17 +333,25 @@ func WebhookServer(addr string, cert tls.Certificate, h http.Handler, errLog *lo
 
 // WebhookErrorLog is the webhook server's net/http error log: a TLS
 // handshake error is counted (outcome tls_handshake, source "") and dropped;
-// any other line is said once, while fewer than maxTold are remembered
-// (pre-flight M10).
+// any other line is said once a webhookWindow, while fewer than maxTold are
+// remembered, and the line that fills that memory says so (pre-flight M10;
+// review M4).
 func WebhookErrorLog(m *Metrics, out io.Writer) *log.Logger {
-	return log.New(&errorLine{m: m, out: out, said: map[string]bool{}}, "", 0)
+	return webhookErrorLog(m, out, time.Now)
+}
+
+func webhookErrorLog(m *Metrics, out io.Writer, now func() time.Time) *log.Logger {
+	return log.New(&errorLine{m: m, out: out, now: now, said: map[string]bool{}}, "", 0)
 }
 
 type errorLine struct {
-	m    *Metrics
-	out  io.Writer
-	mu   sync.Mutex
-	said map[string]bool
+	m     *Metrics
+	out   io.Writer
+	now   func() time.Time
+	mu    sync.Mutex
+	since time.Time
+	said  map[string]bool
+	full  bool
 }
 
 func (e *errorLine) Write(p []byte) (int, error) {
@@ -316,13 +361,22 @@ func (e *errorLine) Write(p []byte) (int, error) {
 		return len(p), nil
 	}
 	e.mu.Lock()
-	say := !e.said[line] && len(e.said) < maxTold
-	if say {
+	if now := e.now(); now.Sub(e.since) >= webhookWindow {
+		e.since, e.said, e.full = now, map[string]bool{}, false
+	}
+	var say string
+	switch {
+	case e.said[line]:
+	case len(e.said) < maxTold-1:
 		e.said[line] = true
+		say = line
+	case !e.full:
+		e.full = true
+		say = "further webhook server errors are not said for up to 5m"
 	}
 	e.mu.Unlock()
-	if say {
-		fmt.Fprintf(e.out, "port49-inventory: webhook: %s\n", line)
+	if say != "" {
+		fmt.Fprintf(e.out, "port49-inventory: webhook: %s\n", say)
 	}
 	return len(p), nil
 }

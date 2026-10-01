@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -245,9 +246,9 @@ func TestAFullReplayCacheRemembersTheNewest(t *testing.T) {
 	now := time.Date(2026, 10, 1, 2, 0, 0, 0, time.UTC)
 	h := &Webhooks{}
 	for i := 0; i < maxSeen; i++ {
-		h.remember(fmt.Sprintf("k%d", i), now.Add(time.Duration(i)*time.Millisecond))
+		h.remember(fmt.Sprintf("k%d", i), now.Add(time.Duration(i)*time.Millisecond), now)
 	}
-	if !h.remember("newest", now.Add(time.Second)) || h.remember("newest", now.Add(time.Second)) {
+	if !h.remember("newest", now.Add(time.Second), now) || h.remember("newest", now.Add(time.Second), now) {
 		t.Fatal("the newest delivery was not remembered")
 	}
 	if len(h.seen) != maxSeen {
@@ -430,4 +431,160 @@ func (s *syncBuffer) Write(p []byte) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.b.Write(p)
+}
+
+// Review I1, M5: until the signature is checked, a configured name and an
+// unconfigured one are answered alike and read alike, so no answer before
+// it says which names are configured.
+func TestAnUnknownNameIsAnsweredLikeAKnownOneUntilTheSignature(t *testing.T) {
+	b := body("2026-10-01T02:00:00+00:00")
+	fake := strings.Repeat("ab", sha512.Size)
+	big := bytes.Repeat([]byte("a"), maxWebhookBody+10)
+	for name, c := range map[string]struct {
+		body          []byte
+		sig, ctype    string
+		contentLength int64 // 0: as the body; -1: streamed
+	}{
+		"text/plain":         {b, fake, "text/plain", 0},
+		"no content type":    {b, fake, "", 0},
+		"unsigned":           {b, "", "application/json", 0},
+		"not hex":            {b, "zz", "application/json", 0},
+		"short signature":    {b, "abcd", "application/json", 0},
+		"declared too large": {big, fake, "application/json", 0},
+		"streamed too large": {big, fake, "application/json", -1},
+		"forged":             {b, fake, "application/json", 0},
+	} {
+		var answers [2]string
+		var read [2]int
+		for i, path := range []string{"/v1/webhook/netbox_prod", "/v1/webhook/not_a_source"} {
+			rig := newHookRig(time.Date(2026, 10, 1, 2, 0, 0, 0, time.UTC))
+			src := &countingReader{r: bytes.NewReader(c.body)}
+			req := httptest.NewRequest(http.MethodPost, path, src)
+			req.ContentLength = int64(len(c.body))
+			if c.contentLength != 0 {
+				req.ContentLength = c.contentLength
+			}
+			if c.ctype != "" {
+				req.Header.Set("Content-Type", c.ctype)
+			}
+			if c.sig != "" {
+				req.Header.Set("X-Hook-Signature", c.sig)
+			}
+			w := httptest.NewRecorder()
+			rig.h.Handler().ServeHTTP(w, req)
+			answers[i] = fmt.Sprintf("%d %s %s", w.Code, w.Header().Get("Content-Type"), w.Body)
+			read[i] = src.n
+		}
+		if answers[0] != answers[1] || read[0] != read[1] {
+			t.Errorf("%s: known %q read %d, unknown %q read %d", name, answers[0], read[0], answers[1], read[1])
+		}
+	}
+}
+
+type countingReader struct {
+	r io.Reader
+	n int
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += n
+	return n, err
+}
+
+// Review M3: a declared length over the cap is refused before any read.
+func TestADeclaredLengthOverTheCapIsNotRead(t *testing.T) {
+	rig := newHookRig(time.Date(2026, 10, 1, 2, 0, 0, 0, time.UTC))
+	src := &endless{}
+	req := httptest.NewRequest(http.MethodPost, "/v1/webhook/netbox_prod", src)
+	req.ContentLength = maxWebhookBody + 1
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Hook-Signature", strings.Repeat("ab", sha512.Size))
+	w := httptest.NewRecorder()
+	rig.h.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusRequestEntityTooLarge || src.n != 0 || rig.count("netbox_prod", HookTooLarge) != 1 {
+		t.Fatalf("%d, read %d", w.Code, src.n)
+	}
+}
+
+// Review M2: an empty secret authenticates nothing, not even a delivery
+// signed with the empty key.
+func TestAnEmptySecretAuthenticatesNothing(t *testing.T) {
+	rig := newHookRig(time.Date(2026, 10, 1, 2, 0, 0, 0, time.UTC))
+	rig.h.Secrets["empty"] = nil
+	b := body("2026-10-01T02:00:00+00:00")
+	if w := rig.deliver("/v1/webhook/empty", b, sign(b, ""), "application/json"); w.Code != http.StatusUnauthorized ||
+		len(rig.notified) != 0 || rig.count("", HookUnknownSource) != 1 {
+		t.Fatalf("%d %v", w.Code, rig.notified)
+	}
+}
+
+// Review M1: a delivery taken at the first instant it is fresh is still
+// remembered at the last.
+func TestADeliveryIsRememberedForAsLongAsItIsFresh(t *testing.T) {
+	ts := time.Date(2026, 10, 1, 2, 0, 0, 0, time.UTC)
+	rig := newHookRig(ts.Add(-webhookWindow))
+	b := body("2026-10-01T02:00:00+00:00")
+	for _, now := range []time.Time{ts.Add(-webhookWindow), ts, ts.Add(webhookWindow)} {
+		rig.now = now
+		if w := rig.deliver("/v1/webhook/netbox_prod", b, sign(b, hookSecret), "application/json"); w.Code != http.StatusAccepted {
+			t.Fatalf("%s: %d", now, w.Code)
+		}
+	}
+	if len(rig.notified) != 1 || rig.count("netbox_prod", HookDuplicate) != 2 {
+		t.Fatalf("%v", rig.notified)
+	}
+	rig.now = ts.Add(webhookWindow + time.Nanosecond)
+	if w := rig.deliver("/v1/webhook/netbox_prod", b, sign(b, hookSecret), "application/json"); w.Code !=
+		http.StatusBadRequest || len(rig.notified) != 1 {
+		t.Fatalf("past the window: %d", w.Code)
+	}
+}
+
+// Review I2: a refusal that recurs between real deliveries is said again at
+// most once a window, not once a delivery.
+func TestARecurringRefusalIsSaidAgainAtMostOnceAWindow(t *testing.T) {
+	start := time.Date(2026, 10, 1, 2, 0, 0, 0, time.UTC)
+	rig := newHookRig(start)
+	for i := 0; i < 10; i++ {
+		rig.now = start.Add(time.Duration(i) * time.Second)
+		b := body(rig.now.Format("2006-01-02T15:04:05.000000-07:00"))
+		rig.deliver("/v1/webhook/netbox_prod", b, sign(b, hookSecret), "application/json")
+		rig.deliver("/v1/webhook/netbox_prod", b, sign(b, "a-different-secret-of-thirty-two-chars"), "application/json")
+	}
+	log := rig.out.String()
+	if n := strings.Count(log, "(bad_signature)"); n != 2 {
+		t.Fatalf("bad_signature said %d times: %s", n, log)
+	}
+	if n := strings.Count(log, "authenticate again"); n != 1 {
+		t.Fatalf("again said %d times: %s", n, log)
+	}
+	rig.now = start.Add(webhookWindow + 10*time.Second)
+	b := body(rig.now.Format("2006-01-02T15:04:05.000000-07:00"))
+	rig.deliver("/v1/webhook/netbox_prod", b, sign(b, hookSecret), "application/json")
+	rig.deliver("/v1/webhook/netbox_prod", b, sign(b, "a-different-secret-of-thirty-two-chars"), "application/json")
+	if n := strings.Count(rig.out.String(), "(bad_signature)"); n != 3 {
+		t.Fatalf("a window on, bad_signature said %d times", n)
+	}
+}
+
+// Review M4: the error log's lines are said again a window on, and the
+// line that fills its memory says the rest go unsaid.
+func TestTheWebhookErrorLogForgetsAfterAWindow(t *testing.T) {
+	m := NewMetrics(prometheus.NewRegistry())
+	var out bytes.Buffer
+	now := time.Date(2026, 10, 1, 2, 0, 0, 0, time.UTC)
+	l := webhookErrorLog(m, &out, func() time.Time { return now })
+	for i := 0; i < maxTold+5; i++ {
+		l.Printf("http: Accept error: too many open files; retrying in %dms", i)
+	}
+	if n := strings.Count(out.String(), "Accept error"); n != maxTold-1 ||
+		strings.Count(out.String(), "further webhook server errors") != 1 {
+		t.Fatalf("said %d: %s", n, out.String()[len(out.String())-300:])
+	}
+	now = now.Add(webhookWindow)
+	l.Printf("http: Accept error: too many open files; retrying in 5ms")
+	if n := strings.Count(out.String(), "retrying in 5ms"); n != 2 {
+		t.Fatalf("a window on, said %d", n)
+	}
 }
