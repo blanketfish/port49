@@ -1,0 +1,153 @@
+package sot
+
+import (
+	"context"
+	"net/http"
+	"strings"
+	"testing"
+
+	"github.com/rhwendt/port49/internal/sot/sottest"
+)
+
+// replay is a client of a sottest.Server for stack with n devices, and the
+// profile the stack's status detects.
+func replay(t *testing.T, stack string, n int) (*sottest.Server, *client, Profile) {
+	t.Helper()
+	s := sottest.New(t, stack, n)
+	product := strings.SplitN(stack, "-", 2)[0]
+	c, err := newClient(s.URL, s.CAFile, NewSecret(token), product)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var status map[string]any
+	if err := c.getJSON(context.Background(), c.at("/api/status/", nil), &status); err != nil {
+		t.Fatal(err)
+	}
+	v, err := versionOf(status, product)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, _, err := Detect(v, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s, c, p
+}
+
+// basic is what every read asks for: name, status, the primary addresses.
+func basic(p Profile) selection {
+	s := selection{}
+	s.add([]string{"name"})
+	s.add(p.status.graphql)
+	s.add([]string{"primary_ip4", "address"})
+	s.add([]string{"primary_ip6", "address"})
+	return s
+}
+
+func TestASelectionIsSortedAndNested(t *testing.T) {
+	s := selection{}
+	s.add([]string{"status"})
+	s.add([]string{"platform", "slug"})
+	s.add([]string{"name"})
+	s.add([]string{"platform", "network_driver"})
+	if got := s.String(); got != "name platform { network_driver slug } status" {
+		t.Fatalf("%q", got)
+	}
+}
+
+// L30: each profile pages as its release took it, and the query is the
+// recorded shape: NetBox 4.7.1 pagination: {offset, limit}, Nautobot
+// limit/offset, NetBox 3.7.8 nothing.
+func TestEveryStackListsOverGraphQLAsItPages(t *testing.T) {
+	for stack, want := range map[string]int{"netbox-3.7": 1, "netbox-4": 3, "nautobot-1.6": 3, "nautobot-2": 3,
+		"nautobot-3": 3} {
+		s, c, p := replay(t, stack, 120)
+		devs, err := c.graphqlDevices(context.Background(), p, basic(p), 50)
+		if err != nil || len(devs) != 120 {
+			t.Fatalf("%s: %d devices, %v", stack, len(devs), err)
+		}
+		posts := 0
+		for _, r := range s.Requests() {
+			if r.Method == http.MethodPost {
+				posts++
+			}
+		}
+		if posts != want {
+			t.Errorf("%s: %d GraphQL requests, want %d", stack, posts, want)
+		}
+		// primary_ip6 is L32's to measure: every other identifier was in a
+		// recorded query.
+		if got := strings.Join(s.Unrecorded(), ","); got != "primary_ip6" {
+			t.Errorf("%s: asked for unrecorded %q", stack, got)
+		}
+	}
+}
+
+// L30: NetBox 4.7.1 refuses with HTTP 200 and an errors list. A reader of
+// the status alone takes it for an empty inventory; the errors come first.
+func TestErrorsAreReadBeforeDataEvenOnA200(t *testing.T) {
+	s, c, p := replay(t, "netbox-4", 3)
+	s.GraphQL200Errors = true
+	_, err := c.graphqlDevices(context.Background(), p, basic(p), 50)
+	if err == nil || !strings.Contains(err.Error(), "GraphQL answered HTTP 200 with 2 error(s); the first: "+
+		"Unknown argument 'limit' on field 'Query.device_list'.") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestAGraphQL404IsErrNoGraphQL(t *testing.T) {
+	s, c, p := replay(t, "nautobot-2", 3)
+	s.GraphQLStatus = http.StatusNotFound
+	if _, err := c.graphqlDevices(context.Background(), p, basic(p), 50); err != errNoGraphQL {
+		t.Fatalf("got %v", err)
+	}
+	s.GraphQLStatus = http.StatusForbidden
+	if _, err := c.graphqlDevices(context.Background(), p, basic(p), 50); err == nil ||
+		!strings.Contains(err.Error(), "answered HTTP 403") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestAnErrorMessageIsPrintedSafely(t *testing.T) {
+	srv, ca := sottest.TLS(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte(`{"data": null, "errors": [{"message": "bad\u001b[2J` + strings.Repeat("x", 400) + `"}]}`))
+	}))
+	c, _ := newClient(srv.URL, ca, NewSecret(token), "netbox")
+	_, err := c.graphqlDevices(context.Background(), profiles[NetBox4], basic(profiles[NetBox4]), 50)
+	if err == nil || strings.Contains(err.Error(), "\x1b") || len(err.Error()) > 400 {
+		t.Fatalf("got %q", err)
+	}
+}
+
+// Pre-flight M4: a release that ignores the page size returns the whole
+// list every page; the first long page fails the read.
+func TestAPageLongerThanThePageSizeFails(t *testing.T) {
+	srv, ca := sottest.TLS(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte(`{"data": {"devices": [{"name": "a"}, {"name": "b"}, {"name": "c"}]}}`))
+	}))
+	c, _ := newClient(srv.URL, ca, NewSecret(token), "nautobot")
+	if _, err := c.graphqlDevices(context.Background(), profiles[Nautobot2], basic(profiles[Nautobot2]), 2); err == nil ||
+		!strings.Contains(err.Error(), "ignored the page size") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+// Pre-flight I1: a list naming one device twice is refused; a device with
+// no name is not counted against another.
+func TestAListNamingADeviceTwiceFails(t *testing.T) {
+	srv, ca := sottest.TLS(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte(`{"data": {"device_list": [{"name": "a"}, {"name": null}, {"name": null}, {"name": "a"}]}}`))
+	}))
+	c, _ := newClient(srv.URL, ca, NewSecret(token), "netbox")
+	if _, err := c.graphqlDevices(context.Background(), profiles[NetBox37], basic(profiles[NetBox37]), 50); err == nil ||
+		!strings.Contains(err.Error(), "GraphQL gave one device twice (name a)") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestRestCountIsTheListsCount(t *testing.T) {
+	_, c, _ := replay(t, "nautobot-3", 120)
+	if n, err := c.restCount(context.Background()); err != nil || n != 120 {
+		t.Fatalf("%d %v", n, err)
+	}
+}
