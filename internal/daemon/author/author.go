@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rhwendt/port49/internal/daemon/authen"
@@ -98,7 +99,18 @@ type Handler struct {
 	// redact is the redaction every record passes through before it is
 	// written (spec §5.8); nil is the built-in patterns.
 	redact platform.Redactor
+
+	// bumped is when this replica last bumped each blob hash successfully,
+	// so a blob is bumped at most once per half idle TTL (bumpBlob). At most
+	// blobBumpMax entries.
+	bumpMu sync.Mutex
+	bumped map[string]time.Time
 }
+
+// blobBumpMax bounds Handler.bumped, as blobCacheMax bounds the blob cache.
+// Past it one entry is dropped, which costs that hash one early bump and
+// never a missed one.
+const blobBumpMax = 1024
 
 // WithRedactor sets the redaction applied to every record before it is
 // written: port49d passes the policy in force's, so a `platforms:` block's
@@ -317,6 +329,9 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AuthorR
 	// (spec §5.6; decision 33). Whether the device shows it is L34's; the
 	// record says it was sent. A denial never carries it: its server_msg
 	// says why it was denied.
+	// HasCeiling here and not the bare SessionExpires check above, on
+	// purpose: a context with no auth_time is still denied at its ceiling,
+	// but is not warned (store.Context.HasCeiling).
 	var warning string
 	if h.ceilingWarning > 0 && c.HasCeiling() && platform.CeilingWarning(peer.Platform, h.warnPlatforms) {
 		if left := c.SessionExpires.Sub(now); left <= h.ceilingWarning {
@@ -383,7 +398,8 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AuthorR
 	//
 	// And only when the remaining life has fallen below half, which is what
 	// LastTouchedAt is for: a steady operator costs one store write per half
-	// TTL, not one per command.
+	// TTL, not one per command. The blob bump below keeps the same bound,
+	// per blob hash on each replica.
 	if now.Sub(c.LastTouchedAt) >= h.contextIdleTTL/2 {
 		err := h.store.TouchContext(ctx, store.ContextKey{NAS: peer.NAS, Username: user}, h.contextIdleTTL)
 		// Counted on both outcomes, as every other store call site in this
@@ -394,14 +410,12 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AuthorR
 		h.metrics.StoreOps.WithLabelValues("touch_context", storeOutcome(err)).Inc()
 	}
 	// The context's blob lives as long as the context (decision 19): a
-	// session with no ceiling outlives the TTL it was minted with. Every
-	// permit, not only the touch above: a refresh may write the blob with a
-	// shorter TTL than the context it stamps, and the next touch is half an
-	// idle TTL away. A context's expiry is never past now+contextIdleTTL, so
-	// this keeps its blob at least as long.
+	// session with no ceiling outlives the TTL it was minted with. It is not
+	// tied to the touch above, because a refresh may write the blob with a
+	// shorter TTL than the context it stamps and the next touch is half an
+	// idle TTL away; bumpBlob throttles it per hash instead.
 	if c.BlobHash != "" {
-		err := h.store.BumpBlob(ctx, c.BlobHash, h.contextIdleTTL)
-		h.metrics.StoreOps.WithLabelValues("bump_blob", storeOutcome(err)).Inc()
+		h.bumpBlob(ctx, c.BlobHash, now)
 	}
 
 	resp := wire.AuthorResponse{Status: wire.AuthorStatusPassAdd}
@@ -477,6 +491,41 @@ func redactPolicy(rules []platform.Redaction, pol *decision.Policy) (*decision.P
 		}
 	}
 	return &out, redacted
+}
+
+// bumpBlob extends hash's blob to 1.5 idle TTLs, at most once per half idle
+// TTL on this replica. That is enough: every writer extends a context to at
+// most now+contextIdleTTL (touch, refresh, login), so a permit before the
+// next bump is due leaves its context expiring no later than the last bump
+// plus 1.5 TTLs, and the first permit after it bumps again. PutBlob and
+// BumpBlob never shorten an expiry, so a refresh's re-put cannot undo one,
+// and a hash this replica has not bumped — a refresh just moved the blob —
+// is bumped at its first permit. Only a bump that succeeded is recorded, so
+// a failed one is retried at the next permit.
+func (h *Handler) bumpBlob(ctx context.Context, hash string, now time.Time) {
+	h.bumpMu.Lock()
+	last, ok := h.bumped[hash]
+	h.bumpMu.Unlock()
+	if ok && now.Sub(last) < h.contextIdleTTL/2 {
+		return
+	}
+	err := h.store.BumpBlob(ctx, hash, h.contextIdleTTL+h.contextIdleTTL/2)
+	h.metrics.StoreOps.WithLabelValues("bump_blob", storeOutcome(err)).Inc()
+	if err != nil {
+		return
+	}
+	h.bumpMu.Lock()
+	defer h.bumpMu.Unlock()
+	if h.bumped == nil {
+		h.bumped = map[string]time.Time{}
+	}
+	if _, ok := h.bumped[hash]; !ok && len(h.bumped) >= blobBumpMax {
+		for k := range h.bumped {
+			delete(h.bumped, k)
+			break
+		}
+	}
+	h.bumped[hash] = now
 }
 
 // ceilMinutes is d in whole minutes, rounded up, at least one: an operator

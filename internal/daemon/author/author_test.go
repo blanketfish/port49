@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -1325,6 +1326,81 @@ func TestEveryPermitBumpsTheBlob(t *testing.T) {
 	}
 	if got := testutil.ToFloat64(f.h.metrics.StoreOps.WithLabelValues("bump_blob", "ok")); got != 1 {
 		t.Fatalf("bump_blob ok %v", got)
+	}
+}
+
+// The bump is throttled per blob hash on each replica: permits within half an
+// idle TTL of a successful bump write nothing more, and the first after it
+// bumps again (Task 6 review, I-1). Blobs are shared by content hash, so an
+// unthrottled bump is a write per command onto a few hot keys.
+func TestTheBlobBumpIsThrottled(t *testing.T) {
+	f := newAuthorFixture(t) // idle TTL 24h
+	f.put(t, store.Context{LastTouchedAt: f.now})
+	bumps := func() float64 { return testutil.ToFloat64(f.h.metrics.StoreOps.WithLabelValues("bump_blob", "ok")) }
+	for i := 0; i < 50; i++ {
+		*f.clock = f.now.Add(time.Duration(i) * 10 * time.Minute) // 50 permits across 8h10m
+		if resp, _ := f.authorize(t, "cmd=show"); resp.Status != wire.AuthorStatusPassAdd {
+			t.Fatalf("permit %d: %+v", i, resp)
+		}
+	}
+	if got := bumps(); got != 1 {
+		t.Fatalf("50 permits within half the idle TTL cost %v bump_blob writes, want 1", got)
+	}
+	// The bump went to 1.5 idle TTLs, so a context touched at the last
+	// moment before the next bump still has its blob.
+	if !f.blobLiveAt(t, f.now.Add(36*time.Hour-time.Second)) {
+		t.Fatal("the bump did not extend the blob to 1.5 idle TTLs")
+	}
+	*f.clock = f.now.Add(12 * time.Hour)
+	f.authorize(t, "cmd=show")
+	if got := bumps(); got != 2 {
+		t.Fatalf("the first permit half an idle TTL after the bump did not bump again: %v", got)
+	}
+}
+
+// A failed bump is not recorded, so the next permit tries again.
+func TestAFailedBlobBumpIsRetried(t *testing.T) {
+	f := newAuthorFixture(t)
+	f.put(t, store.Context{LastTouchedAt: f.now})
+	failing := &failingBumpStore{Store: f.st, fail: true}
+	f.h.store = failing
+	f.authorize(t, "cmd=show")
+	failing.fail = false
+	f.authorize(t, "cmd=show")
+	if ok, bad := testutil.ToFloat64(f.h.metrics.StoreOps.WithLabelValues("bump_blob", "ok")),
+		testutil.ToFloat64(f.h.metrics.StoreOps.WithLabelValues("bump_blob", "error")); ok != 1 || bad != 1 {
+		t.Fatalf("bump_blob ok %v error %v", ok, bad)
+	}
+}
+
+type failingBumpStore struct {
+	*memory.Store
+	fail bool
+}
+
+func (s *failingBumpStore) BumpBlob(ctx context.Context, hash string, ttl time.Duration) error {
+	if s.fail {
+		return errors.New("store down")
+	}
+	return s.Store.BumpBlob(ctx, hash, ttl)
+}
+
+// The throttle's memory is bounded: past blobBumpMax hashes an entry is
+// dropped, which costs that hash one early bump and never a missed one.
+func TestTheBlobBumpMemoryIsBounded(t *testing.T) {
+	f := newAuthorFixture(t)
+	for i := 0; i < blobBumpMax+10; i++ {
+		hash := fmt.Sprintf("hash-%d", i)
+		if err := f.st.PutBlob(context.Background(), hash, []byte("{}"), time.Hour); err != nil {
+			t.Fatal(err)
+		}
+		f.h.bumpBlob(context.Background(), hash, f.now)
+	}
+	if got := testutil.ToFloat64(f.h.metrics.StoreOps.WithLabelValues("bump_blob", "ok")); got != blobBumpMax+10 {
+		t.Fatalf("bump_blob ok %v: the bumps did not land, so the bound is untested", got)
+	}
+	if n := len(f.h.bumped); n > blobBumpMax {
+		t.Fatalf("%d entries, bound %d", n, blobBumpMax)
 	}
 }
 
