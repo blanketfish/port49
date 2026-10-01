@@ -918,3 +918,20 @@ func (s *liftGatedStore) GetRevocation(ctx context.Context, kind, key string) (s
 	})
 	return s.Store.GetRevocation(ctx, kind, key)
 }
+
+// A caller already gone when the semaphore is free gets the same answer
+// every time: the slot is taken and the revocation runs whole. Only a wait
+// is cut short by its ctx's end.
+func TestACallerAlreadyGoneWithTheSlotFreeIsRevokedEveryTime(t *testing.T) {
+	f := newFixture(t, 8)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for i := 0; i < 50; i++ {
+		if _, err := f.b.Revoke(ctx, RevokeRequest{Principal: alice}); err != nil {
+			t.Fatalf("revoke %d: %v", i, err)
+		}
+		if _, err := f.b.Lift(ctx, RevokeRequest{Principal: alice}); err != nil {
+			t.Fatalf("lift %d: %v", i, err)
+		}
+	}
+}

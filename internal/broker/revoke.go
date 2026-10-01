@@ -276,7 +276,9 @@ func (b *Broker) Lift(ctx context.Context, req RevokeRequest) (RevokeReport, err
 const fallback = "cut access another way: remove the principal's grants from broker.policy_file (live within " +
 	"two watch intervals), or stop port49d"
 
-// acquireRevoke takes revokeSem, or gives up when ctx ends first.
+// acquireRevoke takes revokeSem, or gives up when ctx ends first. A free
+// slot is taken whatever ctx says, so a caller already gone is answered the
+// same way every time: only an actual wait is cut short by ctx's end.
 func (b *Broker) acquireRevoke(ctx context.Context) (func(), error) {
 	b.mu.Lock()
 	if b.revokeSem == nil {
@@ -287,13 +289,18 @@ func (b *Broker) acquireRevoke(ctx context.Context) (func(), error) {
 	select {
 	case sem <- struct{}{}:
 		return func() { <-sem }, nil
+	default:
+	}
+	select {
+	case sem <- struct{}{}:
+		return func() { <-sem }, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
 }
 
-// DefaultRevokeTimeout is RevokeTimeout's zero value: the admin socket's
-// own bound on an op.
+// DefaultRevokeTimeout is RevokeTimeout's zero value. port49d sets
+// RevokeTimeout to the admin socket's own bound (admin.OpTimeout).
 const DefaultRevokeTimeout = 60 * time.Second
 
 // detach is the ctx a revocation or lift runs on once it holds revokeSem:

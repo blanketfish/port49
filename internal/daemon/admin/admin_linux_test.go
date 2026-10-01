@@ -298,3 +298,28 @@ func TestACallerThatHangsUpEndsItsOp(t *testing.T) {
 		t.Fatal("the op went on after its caller hung up")
 	}
 }
+
+// A misspelt key is refused, not dropped: "lifted" for "lift" would
+// otherwise revoke what the operator meant to lift. Nothing reaches the
+// broker, and the answer does not echo the request.
+func TestAnUnknownKeyIsRefused(t *testing.T) {
+	called := make(chan RevokeOp, 1)
+	p := serve(t, &Server{Held: &keyring.Held{}, Now: time.Now,
+		Revoke:      func(_ context.Context, op RevokeOp) (string, bool, error) { called <- op; return "", false, nil },
+		Revocations: func(context.Context) (string, error) { return "", nil }})
+	c, err := net.Dial("unix", p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	c.Write([]byte(`{"op":"revoke","principal":"user:alice@example.com","lifted":true}` + "\n"))
+	var r Response
+	if err := json.NewDecoder(c).Decode(&r); err != nil || r.Error != "a request is one JSON object with known keys" {
+		t.Fatalf("%+v, %v", r, err)
+	}
+	select {
+	case op := <-called:
+		t.Fatalf("a request with an unknown key reached the broker: %+v", op)
+	default:
+	}
+}

@@ -44,9 +44,10 @@ type RevokeOp struct {
 	UID                       uint32
 }
 
-// opTimeout bounds a revocation, which walks every live context and token
-// key of what it revokes.
-const opTimeout = 60 * time.Second
+// OpTimeout bounds a revoke's or lift's wait for its turn behind another,
+// and a list. A revocation under way is bounded by Broker.RevokeTimeout,
+// which port49d sets to this, so the connection's deadline covers both.
+const OpTimeout = 60 * time.Second
 
 // Response is the one line port49d answers.
 type Response struct {
@@ -68,8 +69,8 @@ type Server struct {
 	// port49d runs no broker; the ops are then refused, saying so.
 	Revoke      func(ctx context.Context, op RevokeOp) (text string, partial bool, err error)
 	Revocations func(ctx context.Context) (string, error)
-	// OpTimeout bounds revoke and revocations; zero is opTimeout. Tests
-	// shorten it.
+	// OpTimeout bounds revoke and revocations; zero is the package's
+	// OpTimeout. Tests shorten it.
 	OpTimeout time.Duration
 }
 
@@ -150,9 +151,13 @@ func (s *Server) handle(c net.Conn) {
 		_ = enc.Encode(Response{Error: "refused: " + err.Error()})
 		return
 	}
+	// A misspelt key is refused, never dropped: "lifted" read as nothing
+	// would turn a lift into a revocation.
 	var req Request
-	if err := json.NewDecoder(io.LimitReader(c, maxRequest)).Decode(&req); err != nil {
-		_ = enc.Encode(Response{Error: "a request is one JSON object"})
+	dec := json.NewDecoder(io.LimitReader(c, maxRequest))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		_ = enc.Encode(Response{Error: "a request is one JSON object with known keys"})
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -176,7 +181,7 @@ func (s *Server) opTimeout() time.Duration {
 	if s.OpTimeout > 0 {
 		return s.OpTimeout
 	}
-	return opTimeout
+	return OpTimeout
 }
 
 func (s *Server) answer(ctx context.Context, req Request, uid uint32) (resp Response) {

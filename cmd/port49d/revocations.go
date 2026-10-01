@@ -316,7 +316,7 @@ func adminRevocations(st store.Store) func(context.Context) (string, error) {
 	return func(ctx context.Context) (string, error) {
 		rs, err := st.ListRevocations(ctx)
 		if err != nil {
-			return "", err
+			return "", fmt.Errorf("broker: the revocations in force could not be read (%w)", err)
 		}
 		return broker.RevocationsText(rs), nil
 	}

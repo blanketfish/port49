@@ -804,6 +804,9 @@ func run(parent context.Context, cfgPath string) error {
 		}
 		srv := &admin.Server{Held: held, Keys: keySets, Now: time.Now, Assigned: assignedKeyRef(cfg, live)}
 		if brk != nil {
+			// The socket's deadline covers the wait and the run; one bound
+			// for both, so they cannot drift apart.
+			brk.RevokeTimeout = admin.OpTimeout
 			srv.Revoke, srv.Revocations = adminRevoke(brk), adminRevocations(brk.Store)
 		}
 		go srv.Serve(ctx, aln)

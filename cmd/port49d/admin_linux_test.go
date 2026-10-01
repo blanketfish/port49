@@ -469,3 +469,19 @@ func TestConcurrentRevocationsAreEachAnswered(t *testing.T) {
 		t.Fatalf("%+v %v", r, err)
 	}
 }
+
+// listFailingStore fails every list of the marks.
+type listFailingStore struct{ store.Store }
+
+func (listFailingStore) ListRevocations(context.Context) ([]store.Revocation, error) {
+	return nil, context.DeadlineExceeded
+}
+
+// A list the store cannot answer says what failed, not a bare store error.
+func TestAFailedListSaysWhatFailed(t *testing.T) {
+	_, err := adminRevocations(listFailingStore{memory.New(time.Now)})(context.Background())
+	if err == nil || !strings.HasPrefix(err.Error(), "broker: the revocations in force could not be read") ||
+		!strings.Contains(err.Error(), "deadline exceeded") {
+		t.Fatalf("%v", err)
+	}
+}
