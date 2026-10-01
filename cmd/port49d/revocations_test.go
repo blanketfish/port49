@@ -2,8 +2,11 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"io"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,6 +22,7 @@ import (
 	"github.com/rhwendt/port49/internal/session"
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/store/memory"
+	"github.com/rhwendt/port49/internal/token"
 )
 
 func newMetrics() *metrics.Metrics { return metrics.New(prometheus.NewRegistry()) }
@@ -84,6 +88,26 @@ func TestTheFirstStartCreatesTheFileAndALaterMissingOneRefuses(t *testing.T) {
 	}
 	if _, _, err := loadRevocations(path); err == nil || !strings.Contains(err.Error(), "is missing") {
 		t.Fatalf("a deleted file after the first start: %v", err)
+	}
+
+	// A file laid down before the first start (config management, a backup
+	// restored onto a new volume) gets its marker at the first load, so its
+	// later loss refuses the start too (Task 9 review I1).
+	path = filepath.Join(safeDir(t), "revocations.json")
+	if err := os.WriteFile(path, []byte(`{"revocations": []}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, created, err := loadRevocations(path); err != nil || created {
+		t.Fatalf("a file laid down by hand: %v %v", created, err)
+	}
+	if fi, err := os.Stat(path + ".created"); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("its marker: %v %v", fi, err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := loadRevocations(path); err == nil || !strings.Contains(err.Error(), "is missing") {
+		t.Fatalf("a hand-laid file deleted: %v", err)
 	}
 }
 
@@ -185,7 +209,9 @@ func TestAFailedWriteIsAlarmed(t *testing.T) {
 }
 
 // hangWrites makes every revocations file write block until the returned
-// release is called, and shortens persistDeadline to d.
+// release is called, and shortens persistDeadline to d. A test that hangs
+// a write ends with settle, so no released write races the removal of its
+// directory.
 func hangWrites(t *testing.T, d time.Duration) (release func()) {
 	t.Helper()
 	gate := make(chan struct{})
@@ -207,6 +233,17 @@ func hangWrites(t *testing.T, d time.Duration) (release func()) {
 		writeRevocations, persistDeadline = w, pd
 	})
 	return release
+}
+
+// settle releases the hung writes and waits for the slot: a call is given
+// it only once every pass before it, catch-up passes included, has returned.
+func settle(t *testing.T, release func(), persist func(context.Context) error) {
+	t.Helper()
+	release()
+	persistDeadline = 5 * time.Second
+	if err := persist(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // A write to a hung mount does not hang Persist: it gives up at its
@@ -243,11 +280,7 @@ func TestAHungWriteGivesUpAtItsDeadline(t *testing.T) {
 		}
 		put("user:bob@example.com")
 	}
-	release()
-	persistDeadline = 5 * time.Second
-	if err := persist(ctx); err != nil {
-		t.Fatal(err)
-	}
+	settle(t, release, persist)
 	rs, _, err := loadRevocations(path)
 	if err != nil || len(rs) != 2 {
 		t.Fatalf("after the hung write returned: %v %v", rs, err)
@@ -257,6 +290,52 @@ func TestAHungWriteGivesUpAtItsDeadline(t *testing.T) {
 	}
 }
 
+// Once a hung write returns, the file catches up on its own with the marks
+// put while it hung, and only then is the alarm lowered: no further
+// revocation is needed to save them (Task 9 review M3).
+func TestTheFileCatchesUpAfterAHungWriteReturns(t *testing.T) {
+	ctx := context.Background()
+	m := newMetrics()
+	st := memory.New(time.Now)
+	path := filepath.Join(safeDir(t), "revocations.json")
+	persist := persister(st, path, m)
+	release := hangWrites(t, 50*time.Millisecond)
+	for _, key := range []string{"user:alice@example.com", "user:bob@example.com"} {
+		if err := st.PutRevocation(ctx, store.Revocation{Kind: store.RevocationPrincipal, Key: key, At: time.Now(),
+			Origin: "test"}); err != nil {
+			t.Fatal(err)
+		}
+		if err := persist(ctx); err == nil {
+			t.Fatalf("%s: saved through a hung write", key)
+		}
+	}
+	if testutil.ToFloat64(m.RevocationsFileFailed) != 1 {
+		t.Fatal("not alarmed")
+	}
+	release()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		raw, _ := os.ReadFile(path)
+		if strings.Contains(string(raw), "user:bob@example.com") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the file did not catch up: %s", raw)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	for testutil.ToFloat64(m.RevocationsFileFailed) != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the alarm stayed up after the file caught up")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if rs, _, err := loadRevocations(path); err != nil || len(rs) != 2 {
+		t.Fatalf("%v %v", rs, err)
+	}
+	settle(t, release, persist)
+}
+
 // A revocation behind a hung write is not held by it: Revoke, as port49d
 // wires it, returns unsaved within the deadline, the mark standing in the
 // store, so its token and context passes run (Task 8 review).
@@ -264,24 +343,50 @@ func TestARevocationBehindAHungWriteIsReportedUnsaved(t *testing.T) {
 	cfg := brokerConfig(t, minimalPolicy)
 	st := memory.New(time.Now)
 	m := newMetrics()
-	_, brk, err := buildBroker(cfg, "inventory_file "+cfg.InventoryFile, st, seedMinter(),
+	minter := token.NewMinter(st, decision.NewJSONLines(io.Discard), rand.Reader, token.TagKey([]byte("revoke-test-key")),
+		time.Now, 8)
+	srv, brk, err := buildBroker(cfg, "inventory_file "+cfg.InventoryFile, st, minter,
 		decision.NewJSONLines(io.Discard), m)
 	if err != nil {
 		t.Fatal(err)
 	}
 	brk.Sessions = session.New(st, time.Now, time.Hour, time.Hour)
 	brk.Persist = persister(st, filepath.Join(safeDir(t), "revocations.json"), m)
-	hangWrites(t, 50*time.Millisecond)
+	// alice holds an unspent token on leaf1, minted as port49d mints it.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go srv.ServeTLS(ln, "", "")
+	t.Cleanup(func() { srv.Close() })
+	if status, _, err := postAsAlice(filepath.Dir(cfg.Broker.ClientCAFile), ln.Addr().String()); err != nil ||
+		status != http.StatusOK {
+		t.Fatalf("the mint: %d %v", status, err)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	keys, err := st.TokensByPrincipal(ctx, "user:alice@example.com")
+	if err != nil || len(keys) != 1 {
+		t.Fatalf("alice's token keys: %v %v", keys, err)
+	}
+
+	release := hangWrites(t, 50*time.Millisecond)
 	rep, err := brk.Revoke(ctx, broker.RevokeRequest{Principal: "user:alice@example.com", Origin: "test"})
-	if err != nil || rep.Saved || rep.SaveErr == nil || !errors.Is(rep.SaveErr, context.DeadlineExceeded) {
+	if err != nil || rep.Err != nil || rep.Saved || rep.SaveErr == nil || !errors.Is(rep.SaveErr, context.DeadlineExceeded) {
 		t.Fatalf("%+v %v", rep, err)
 	}
 	if _, err := st.GetRevocation(ctx, store.RevocationPrincipal, "user:alice@example.com"); err != nil {
 		t.Fatalf("the mark: %v", err)
 	}
+	if toks, err := st.Candidates(ctx, keys[0]); err != nil || len(toks) != 0 || rep.TokenKeys != 1 {
+		t.Fatalf("alice's unspent token survived the revocation: %d left, %d keys emptied, %v", len(toks),
+			rep.TokenKeys, err)
+	}
+	if testutil.ToFloat64(m.RevocationsFileFailed) != 1 {
+		t.Fatal("an unsaved revocation is not alarmed")
+	}
 	if ctx.Err() != nil {
 		t.Fatal("Revoke waited out the caller's deadline")
 	}
+	settle(t, release, brk.Persist)
 }

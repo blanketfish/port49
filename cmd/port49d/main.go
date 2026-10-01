@@ -652,15 +652,17 @@ func run(parent context.Context, cfgPath string) error {
 		brk.Sessions = sessions
 		// Every mark in the file is in force before the broker serves a
 		// request: a port49d that forgot a revocation would mint for a stolen
-		// certificate again (spec §13 decision 32).
+		// certificate again (spec §13 decision 32). Restored into, and saved
+		// from, the broker's own store, the one every mint reads, so the two
+		// cannot drift apart (Task 9 review M6).
 		var created bool
-		marks, created, err = restoreRevocations(ctx, st, cfg.Broker.RevocationsFile, m)
+		marks, created, err = restoreRevocations(ctx, brk.Store, cfg.Broker.RevocationsFile, m)
 		if err != nil {
 			stopSpool()
 			<-spoolDone
 			return fmt.Errorf("broker.revocations_file %s: %w", cfg.Broker.RevocationsFile, err)
 		}
-		brk.Persist = persister(st, cfg.Broker.RevocationsFile, m)
+		brk.Persist = persister(brk.Store, cfg.Broker.RevocationsFile, m)
 		if created {
 			fmt.Fprintf(stderr, "port49d: broker: created %s (no revocations); if this is not a first install, "+
 				"stop port49d and restore the file\n", cfg.Broker.RevocationsFile)

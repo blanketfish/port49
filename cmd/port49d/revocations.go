@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -46,7 +47,10 @@ func markerOf(path string) string { return path + ".created" }
 // write, refuses the start. With neither the file nor its marker present it
 // is the first start: the marker is written, then an empty file, and
 // created is true. With the marker present a missing file refuses the
-// start. Anything else it cannot read whole is an error, which refuses it.
+// start. A file that loads with no marker beside it (laid down by config
+// management, or restored from a backup onto a new volume) is given one, so
+// its later loss refuses the start too rather than reading as a first
+// install. Anything else it cannot read whole is an error, which refuses it.
 func loadRevocations(path string) ([]store.Revocation, bool, error) {
 	if err := fence.CheckDir(path, "revocations file"); err != nil {
 		return nil, false, err
@@ -66,8 +70,7 @@ func loadRevocations(path string) ([]store.Revocation, bool, error) {
 		}
 		// The marker first: a crash between the two leaves a marker and no
 		// file, which refuses the next start, never one that reads as new.
-		if err := inventory.WriteAtomic(filepath.Dir(abs), filepath.Base(markerOf(abs)),
-			[]byte("port49d created "+filepath.Base(abs)+" at "+decision.FormatTime(time.Now())+"\n"), 0o600); err != nil {
+		if err := writeMarker(abs); err != nil {
 			return nil, false, err
 		}
 		if err := saveRevocations(abs, nil); err != nil {
@@ -99,7 +102,25 @@ func loadRevocations(path string) ([]store.Revocation, bool, error) {
 		}
 		out = append(out, store.Revocation{Kind: e.Kind, Key: e.Key, At: at, Origin: e.Origin})
 	}
+	switch _, err := os.Lstat(markerOf(path)); {
+	case errors.Is(err, fs.ErrNotExist):
+		abs, err := filepath.Abs(path)
+		if err != nil {
+			return nil, false, err
+		}
+		if err := writeMarker(abs); err != nil {
+			return nil, false, err
+		}
+	case err != nil:
+		return nil, false, err
+	}
 	return out, false, nil
+}
+
+// writeMarker writes the marker beside the file at abs, 0600, atomically.
+func writeMarker(abs string) error {
+	return inventory.WriteAtomic(filepath.Dir(abs), filepath.Base(markerOf(abs)),
+		[]byte("port49d created "+filepath.Base(abs)+" at "+decision.FormatTime(time.Now())+"\n"), 0o600)
 }
 
 // saveRevocations writes rs whole, 0600, atomically: a reader sees the old
@@ -158,43 +179,81 @@ var (
 // file unsaved and raising port49_revocations_file_failed; the mark stands
 // in the store and the revocation goes on. A later call waits for the slot
 // under its own deadline, so a write abandoned by one call can never land
-// after a newer one and drop a mark. It never calls Revoke or Lift, which
-// hold the semaphore this is called under.
+// after a newer one and drop a mark.
+//
+// A call that gives up leaves the file behind the store (dirty). The
+// goroutine holding the slot lists and writes again until a pass ends with
+// nothing behind it, so once a hung write returns the file catches up with
+// every mark put during the hang, with no further revocation; the alarm is
+// lowered only by a pass that leaves the file holding them all. It never
+// calls Revoke or Lift, which hold the semaphore this is called under.
 func persister(st store.Store, path string, m *metrics.Metrics) func(context.Context) error {
 	slot := make(chan struct{}, 1)
+	var mu sync.Mutex // dirty and the alarm
+	dirty := false
+	behind := func() {
+		mu.Lock()
+		dirty = true
+		m.RevocationsFileFailed.Set(1)
+		mu.Unlock()
+	}
 	return func(ctx context.Context) error {
-		ctx, cancel := context.WithTimeout(ctx, persistDeadline)
+		deadline := persistDeadline
+		ctx, cancel := context.WithTimeout(ctx, deadline)
 		defer cancel()
-		fail := func(err error) error {
-			m.RevocationsFileFailed.Set(1)
-			return fmt.Errorf("%s: %w", path, err)
-		}
 		select {
 		case slot <- struct{}{}:
 		case <-ctx.Done():
-			return fail(fmt.Errorf("an earlier write has not returned (%w)", ctx.Err()))
+			behind()
+			return fmt.Errorf("%s: an earlier write has not returned (%w)", path, ctx.Err())
 		}
 		write := writeRevocations // read before the goroutine: a test swaps the variable back while it blocks
+		// A pass may outlive this call, so each is bounded on its own.
+		detached := context.WithoutCancel(ctx)
 		done := make(chan error, 1)
 		go func() {
 			defer func() { <-slot }()
-			rs, err := st.ListRevocations(ctx)
-			if err == nil {
-				countRevocations(rs, m)
-				err = write(path, rs)
+			for {
+				mu.Lock()
+				dirty = false
+				mu.Unlock()
+				pctx, cancel := context.WithTimeout(detached, deadline)
+				rs, err := st.ListRevocations(pctx)
+				cancel()
+				if err == nil {
+					countRevocations(rs, m)
+					err = write(path, rs)
+				}
+				mu.Lock()
+				switch {
+				case err != nil:
+					m.RevocationsFileFailed.Set(1)
+				case !dirty:
+					m.RevocationsFileFailed.Set(0)
+				default:
+					mu.Unlock()
+					continue
+				}
+				mu.Unlock()
+				done <- err
+				return
 			}
-			done <- err
 		}()
+		var err error
 		select {
-		case err := <-done:
-			if err != nil {
-				return fail(err)
-			}
-			m.RevocationsFileFailed.Set(0)
-			return nil
+		case err = <-done:
 		case <-ctx.Done():
-			return fail(fmt.Errorf("the write did not return (%w)", ctx.Err()))
+			select {
+			case err = <-done: // it returned as the deadline struck: its answer stands
+			default:
+				behind()
+				return fmt.Errorf("%s: the write did not return (%w)", path, ctx.Err())
+			}
 		}
+		if err != nil {
+			return fmt.Errorf("%s: %w", path, err)
+		}
+		return nil
 	}
 }
 

@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -130,5 +131,25 @@ func TestTheRevocationsFileIsOutsideTheServicesDirectories(t *testing.T) {
 			!strings.Contains(err.Error(), want)) {
 			t.Errorf("%s: got %v, want %q", path, err, want)
 		}
+	}
+}
+
+// inventory.service's trust files are paths port49d reads too, and so is
+// none of them the revocations file or its marker (Task 9 review M5).
+func TestTheRevocationsFileIsNotAServiceTrustFile(t *testing.T) {
+	block := serviceBlock(t)
+	pub := regexp.MustCompile(`verify_key_files: \[(\S+)\]`).FindStringSubmatch(block)[1]
+	for _, other := range []string{"/etc/port49/inventory-ca.pem", "/etc/port49/port49d.pem",
+		"/etc/port49/port49d-key.pem", pub} {
+		b := strings.Replace(brokerBlock, "/var/lib/port49/revocations.json", other, 1)
+		if _, err := loadService(t, false, false, b+block); err == nil ||
+			!strings.Contains(err.Error(), "broker.revocations_file is port49d's own state") {
+			t.Errorf("revocations_file %s: %v", other, err)
+		}
+	}
+	b := strings.Replace(brokerBlock, "/var/lib/port49/revocations.json", "/etc/port49/port49d", 1)
+	if _, err := loadService(t, false, false, b+strings.Replace(block, "/etc/port49/port49d.pem",
+		"/etc/port49/port49d.created", 1)); err == nil || !strings.Contains(err.Error(), "marker") {
+		t.Errorf("a marker that is the service's certificate: %v", err)
 	}
 }

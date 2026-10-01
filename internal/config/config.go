@@ -1046,9 +1046,10 @@ func checkService(s InventoryServiceConfig) (*InventoryServiceConfig, error) {
 // ownRevocationsFile refuses a broker.revocations_file that is another path
 // port49d reads or writes, compared as absolute paths (pre-flight M13):
 // written over the policy or a key it would destroy it, and a file shared
-// with another writer is not the record of revocations. Nor may it sit in
-// the inventory service's state or mirror directory, whose files the service
-// and port49d rewrite.
+// with another writer is not the record of revocations. Its marker
+// (<file>.created), which port49d writes too, is held to the same. Nor may it
+// sit in the inventory service's state or mirror directory, whose files the
+// service and port49d rewrite.
 func ownRevocationsFile(c Config, b BrokerConfig) error {
 	revAbs, err := filepath.Abs(b.RevocationsFile)
 	if err != nil {
@@ -1064,12 +1065,28 @@ func ownRevocationsFile(c Config, b BrokerConfig) error {
 		others = append(others, struct{ key, path string }{"lab.seed_token_file", c.Lab.SeedTokenFile},
 			struct{ key, path string }{"lab.fault_file", c.Lab.FaultFile})
 	}
+	if s := c.InventoryService; s != nil {
+		others = append(others, struct{ key, path string }{"inventory.service.ca_file", s.CAFile},
+			struct{ key, path string }{"inventory.service.tls_cert_file", s.TLSCertFile},
+			struct{ key, path string }{"inventory.service.tls_key_file", s.TLSKeyFile})
+		for i, f := range s.VerifyKeyFiles {
+			others = append(others, struct{ key, path string }{fmt.Sprintf("inventory.service.verify_key_files[%d]", i), f})
+		}
+	}
 	for _, o := range others {
 		if o.path == "" {
 			continue
 		}
-		if oAbs, err := filepath.Abs(o.path); err == nil && oAbs == revAbs {
+		oAbs, err := filepath.Abs(o.path)
+		if err != nil {
+			continue
+		}
+		switch oAbs {
+		case revAbs:
 			return fmt.Errorf("config: broker.revocations_file is port49d's own state and may not be %s", o.key)
+		case revAbs + ".created":
+			return fmt.Errorf("config: broker.revocations_file's marker (%s.created) is port49d's own state and "+
+				"may not be %s", filepath.Base(revAbs), o.key)
 		}
 	}
 	if s := c.InventoryService; s != nil {
