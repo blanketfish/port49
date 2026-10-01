@@ -4,10 +4,10 @@
 - **Platform:** cisco_iosxe (containerlab node `xe1`, 172.100.100.41)
 - **Image version:** Catalyst 8000V 17.13.01a (`vrnetlab/cisco_c8000v:17.13.01a`)
 - **Image ID:** `sha256:ec5b86bf54286ef3bfecee6ec4ba576289ec2da78c301a007a091d694a6c414b`
-- **Run:** at commit 5ccd2ef, from a detached worktree pinned to it (`make build` there), on beehive: `PORT49_LAB_PLATFORMS=iosxe go test -tags lab ./tests/lab/ -run TestRevokeEndToEnd -count=1 -timeout 45m -v` (under `sg docker -c`)
+- **Run:** at commit e4326e6, from a detached worktree pinned to it (`make build` there), on beehive: `PORT49_LAB_PLATFORMS=iosxe go test -tags lab ./tests/lab/ -run TestRevokeEndToEnd -count=1 -timeout 45m -v` (under `sg docker -c`)
 - **Credentials:** no token, password or key appears in this note; tokens are named only by the decision log's `credential_sha256`, and the capture's credential fields are redacted
 - **Topology:** `tests/lab/topologies/iosxe.clab.yml`
-- **Capture:** `tests/lab/evidence/revoke-cisco_iosxe.pcap` — 410 packets to or from the device, countable with `tcpdump -r tests/lab/evidence/revoke-cisco_iosxe.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`). The run's own count was 390: the last 20 packets are the TACACS+ accounting connection the device opened when the test closed the SSH session, which happened after the test had counted the capture and written this note (fix round 1 corrects the count; the evidence is unchanged).
+- **Capture:** `tests/lab/evidence/revoke-cisco_iosxe.pcap` — 430 packets to or from the device, countable with `tcpdump -r tests/lab/evidence/revoke-cisco_iosxe.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** SSH
 
 ## Claim
@@ -18,26 +18,27 @@ A revocation by principal or by certificate (`port49 revoke` over the admin sock
 
 | Step | What happened |
 |---|---|
-| `show version` before the revocation | printed its output in 300ms: `show version` |
+| `show version` before the revocation | printed its output in 300ms: `Cisco IOS XE Software, Version 17.13.01a` |
 | `port49 revoke --principal user:alice@slice.port49.test` | exit 0; report below |
 | `show version` in the same session after it | refused in 300ms: `port49: this session was revoked - log in again` |
 | a login with a token minted before it, unspent | refused, `token_not_found` |
-| the agent's next mint | a 401 credential_revoked, which ended the agent's session: `port49 token: the session is over; run 'port49 login': this principal was revoked at 2026-10-01T15:40:15Z; nothing is minted for it until an operator lifts the …`; the agent exited; a second `port49 token`: `port49 token: no agent at /tmp/p49revoke2555909036/a/agent.sock; run 'port49 login' (exit: exit status 1)` |
+| the agent's next mint | a 401 credential_revoked, which ended the agent's session: `port49 token: the session is over; run 'port49 login': this principal was revoked at 2026-10-01T15:59:31Z; nothing is minted for it until an operator lifts the …`; the agent exited; a second `port49 token`: `port49 token: no agent at /tmp/p49revoke424125398/a/agent.sock; run 'port49 login' (exit: exit status 1)` |
+| `port49 login` before the lift | refused: `port49 agent: the session is over; run 'port49 login': this principal was revoked at 2026-10-01T15:59:31Z; nothing is minted for it until an operator lifts the …` |
 | `port49 revoke --lift`, then a new agent, a mint and a login | logged in and ran show version |
-| `port49 revoke --cert` (the agent's certificate), then the agent's mint | a 401 credential_revoked, which ended the agent's session: `port49 token: the session is over; run 'port49 login': this certificate was revoked at 2026-10-01T15:40:23Z; nothing is minted for it until an operator lifts th…`; the agent exited; a second `port49 token`: `port49 token: no agent at /tmp/p49revoke3833353549/a/agent.sock; run 'port49 login' (exit: exit status 1)` |
+| `port49 revoke --cert` (the agent's certificate), then the agent's mint | a 401 credential_revoked, which ended the agent's session: `port49 token: the session is over; run 'port49 login': this certificate was revoked at 2026-10-01T15:59:38Z; nothing is minted for it until an operator lifts th…`; the agent exited; a second `port49 token`: `port49 token: no agent at /tmp/p49revoke591944148/a/agent.sock; run 'port49 login' (exit: exit status 1)` |
 
-Records: 2 revoke for the principal, 2 for the certificate, 1 authorize_command deny credential_revoked, 2 mint deny credential_revoked. port49d's stderr: 1 line(s) of the listener closing a revoked connection as it bound (at most one per 10 s; later ones are counted on the next).
+Records: 2 revoke for the principal, 2 for the certificate, 1 authorize_command deny credential_revoked, 3 mint deny credential_revoked. port49d's stderr: 1 line(s) of the listener closing a revoked connection as it bound (at most one per 10 s; later ones are counted on the next).
 
 The principal's revocation report, as `port49 revoke` printed it:
 
 ```
-revoked user:alice@slice.port49.test at 2026-10-01T15:40:15Z: 1 live context(s) marked, the unspent tokens under 1 (device, username) key(s) deleted, 1 held broker connection(s) closed; every mint by user:alice@slice.port49.test is refused until `port49 revoke --lift --principal user:alice@slice.port49.test`
+revoked user:alice@slice.port49.test at 2026-10-01T15:59:31Z: 1 live context(s) marked, the unspent tokens under 1 (device, username) key(s) deleted, 1 held broker connection(s) closed; every mint by user:alice@slice.port49.test is refused until `port49 revoke --lift --principal user:alice@slice.port49.test`
 ```
 
 The certificate's:
 
 ```
-port49 revoke: tests/lab/logs/slice-pki/client.pem: subject "CN=alice@slice.port49.test", issuer "CN=port49 lab slice CA", serial 27248b6885aa4720
-revoked the certificate issuer="CN=port49 lab slice CA" serial=27248b6885aa4720 (as the broker compares it) at 2026-10-01T15:40:23Z: 1 live context(s) marked, the unspent tokens under 0 (device, username) key(s) deleted, 1 held broker connection(s) closed; every mint with this certificate is refused until `port49 revoke --lift --cert-issuer "CN=port49 lab slice CA" --cert-serial 27248b6885aa4720`
+port49 revoke: tests/lab/logs/slice-pki/client.pem: subject "CN=alice@slice.port49.test", issuer "CN=port49 lab slice CA", serial 1e8b118c89a0dd0d
+revoked the certificate issuer="CN=port49 lab slice CA" serial=1e8b118c89a0dd0d (as the broker compares it) at 2026-10-01T15:59:38Z: 1 live context(s) marked, the unspent tokens under 0 (device, username) key(s) deleted, 1 held broker connection(s) closed; every mint with this certificate is refused until `port49 revoke --lift --cert-issuer "CN=port49 lab slice CA" --cert-serial 1e8b118c89a0dd0d`
 ```
 
