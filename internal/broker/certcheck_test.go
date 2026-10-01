@@ -541,6 +541,23 @@ func TestACRLEntryRevokesWhatIsPresent(t *testing.T) {
 		waitMark(t, f, f.alice, "crl corp")
 	})
 
+	// A restart's replay is revoked as a new entry is: only its queue line
+	// is quiet. A mark missing at restart, from a revocations_file restored
+	// from an older backup or a lifted mark, is put back, and the context
+	// still live under the certificate is revoked (Task 11 re-review R1).
+	t.Run("replay with the mark missing", func(t *testing.T) {
+		f := newFixture(t, 8)
+		withStatus(t, f, "refuse", nil)
+		f.liveContext(t, "leaf1", "alice", alicePrincipal, certKey(f.alice))
+		f.b.OnCRLEntry(issuer(f.alice), serial(f.alice), "corp", true)
+		eventually(t, "the revocation", func() bool { return certRevocations(f) == 1 })
+		waitMark(t, f, f.alice, "crl corp")
+		eventually(t, "the live context revoked", func() bool {
+			c, err := f.st.GetContext(context.Background(), store.ContextKey{NAS: "leaf1", Username: "alice"})
+			return err == nil && !c.RevokedAt.IsZero()
+		})
+	})
+
 	t.Run("unspent token", func(t *testing.T) {
 		f := newFixture(t, 8)
 		withStatus(t, f, "refuse", nil)
