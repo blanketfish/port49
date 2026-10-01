@@ -147,8 +147,11 @@ func runSessionStep(platform string, sh *labShell, cmd string) sessionStep {
 	}
 	s.out, s.took, s.ended, s.err = sh.runOrEnd(cmd, 60*time.Second)
 	s.printed = sessionVersion[platform] != "" && strings.Contains(s.out, sessionVersion[platform])
+	// IOS-XE prints a FAIL's server_msg and nothing else
+	// (results/slice-cisco_iosxe.md), so port49's text without the
+	// command's output is a refusal there.
 	s.refused = l29Refused(platform, s.out) || strings.Contains(s.out, sessionExpiredMsg) ||
-		strings.Contains(s.out, sessionEndedMsg)
+		strings.Contains(s.out, sessionEndedMsg) || (!s.printed && strings.Contains(s.out, "port49: "))
 	s.warned = strings.Contains(s.out, sessionWarning)
 	return s
 }
