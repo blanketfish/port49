@@ -363,6 +363,19 @@ func TestL2Truncation(t *testing.T) {
 			display = "**Not measurable: session-only (decision 21).** The session denial carried the padded " +
 				"message at every length, and the login printed none of it, so the device's display and its " +
 				"truncation length are not observed on this image."
+			// Junos does not refuse a login whose session authorization
+			// fails (results/junos-session-service-*.md, Phase C).
+			prompt := "@" + l.p.node + ">"
+			in := 0
+			for _, r := range rows {
+				if strings.Contains(r.printed, prompt) {
+					in++
+				}
+			}
+			display += fmt.Sprintf(" The login reached an operational-mode prompt (`%s`) at %d of %d lengths all "+
+				"the same: the device does not refuse a login whose session authorization fails "+
+				"(`tests/lab/results/junos-session-service-%s.md`, phase C), so a session denial shows the "+
+				"operator nothing at all.", prompt, in, len(rows), l.p.name)
 		case maxShown == 0:
 			display = fmt.Sprintf("**Not displayed** at any length: the device printed no %d-byte prefix of the "+
 				"message, so its truncation length cannot be read.", l2MinShown)
