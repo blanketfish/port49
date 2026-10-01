@@ -426,7 +426,12 @@ func TestSessionLifetime(t *testing.T) {
 		}
 		lateRecs := sliceRecords(l.recordsSince(offLate), "refresh", "")
 
-		// The notes.
+		// The notes. The whole transcript is searched too: a warning a device
+		// printed after its prompt would be missed by the steps' own reads.
+		whole := 0
+		if sh != nil {
+			whole = strings.Count(sh.c.transcript(), sessionWarning)
+		}
 		all := l.recordsSince(off)
 		stopAgent()
 		sessionCmdCell := func(s sessionStep, r map[string]any) string {
@@ -467,6 +472,8 @@ func TestSessionLifetime(t *testing.T) {
 			"| `show version` after the refresh | %s | %s |\n\n"+
 			"**Session reply:** the warning %s; the login %s.\n\n"+
 			"**Per-command reply:** %s.\n\n"+
+			"The warning's text (`%s`) appears %d time(s) anywhere in the session's whole transcript, from login "+
+			"to its last command.\n\n"+
 			"The refresh's output:\n\n```\n%s\n```\n%s",
 			l29Cell(mintWarn), sliceUser, loginCell, recordCell(sessRec),
 			inWarn.cell(l.p.name), map[bool]string{true: "port49 was not asked (decision 21)", false: recordCell(cmdRec)}[sessionOnly],
@@ -476,7 +483,7 @@ func TestSessionLifetime(t *testing.T) {
 			map[bool]string{true: "reached a prompt, so the reply was still a permit", false: "**did not reach a prompt**"}[loginErr == nil],
 			map[bool]string{true: "not measurable on Junos: no per-command reply is ever sent (decision 21)",
 				false: "the warning " + shown(inWarn.warned) + "; " + permitted(inWarn)}[sessionOnly],
-			refreshed, junosNote)
+			sessionWarning, whole, refreshed, junosNote)
 
 		sessObs := fmt.Sprintf("Run at a 6m `max_session_age` (`%s`), `session.ceiling_warning: 2m`, "+
 			"`session.grace_window: 2m`. `port49 login` at %s; the token's ceiling ran from the held connection's "+

@@ -58,6 +58,21 @@ func l2Shown(out, msg string) int {
 	return 0
 }
 
+// l2Edge quotes the last 24 bytes of the prefix shown and the 24 the
+// device printed after it, so a reader sees the cut, not only its length.
+func l2Edge(out, msg string, shown int) string {
+	if shown == 0 {
+		return "—"
+	}
+	flat := strings.NewReplacer("\r", "", "\n", "").Replace(out)
+	i := strings.Index(flat, msg[:shown])
+	if i < 0 {
+		return "—"
+	}
+	after := flat[i+shown : min(len(flat), i+shown+24)]
+	return fmt.Sprintf("…%s, then %s", l29Cell(msg[max(0, shown-24):shown]), l29Cell(after))
+}
+
 // l2MinShown is the shortest prefix l2Shown counts: "port49: denied b",
 // and lab.deny_message_length's own floor.
 const l2MinShown = 16
@@ -327,7 +342,8 @@ func TestL2Truncation(t *testing.T) {
 		}
 		fmt.Fprintf(&b, ". The message is `%s`, a space, and `0123456789` repeated to N bytes, so the last digit "+
 			"shown says where the device cut.\n\n", base)
-		fmt.Fprintf(&b, "| N (bytes) | The record | Longest prefix shown | What the device printed |\n|---|---|---|---|\n")
+		fmt.Fprintf(&b, "| N (bytes) | The record | Longest prefix shown | Where it ends, and what follows | What the "+
+			"device printed |\n|---|---|---|---|---|\n")
 		maxShown, full := 0, 0
 		for _, r := range rows {
 			shown := fmt.Sprintf("%d", r.shown)
@@ -336,7 +352,8 @@ func TestL2Truncation(t *testing.T) {
 				full++
 			}
 			maxShown = max(maxShown, r.shown)
-			fmt.Fprintf(&b, "| %d | %s | %s | %s |\n", r.n, r.record, shown, l29Cell(r.printed))
+			fmt.Fprintf(&b, "| %d | %s | %s | %s | %s |\n", r.n, r.record, shown, l2Edge(r.printed, l2Padded(base, r.n), r.shown),
+				l29Cell(r.printed))
 		}
 		display := ""
 		switch {
