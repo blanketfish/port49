@@ -496,7 +496,7 @@ func TestACertificateMarkedBeforeServeNeverBinds(t *testing.T) {
 
 // A mark that lands while a handshake is under way is read at bind: the
 // connection is refused there, and nothing it was charged stays charged.
-func TestAMarkMidHandshakeRefusesAtBind(t *testing.T) {
+func TestAMarkMidHandshakeIsRefusedAtBind(t *testing.T) {
 	f := newFixture(t, 8)
 	addr, bl := serveThrough(t, f, DefaultListenerLimits, nil)
 	asked, release := make(chan struct{}), make(chan struct{})
