@@ -221,13 +221,13 @@ func (s *Syncer) fetch(ctx, caller context.Context, src Source) (admission.Inven
 	defer grace.Stop()
 	select {
 	case g := <-ch:
-		// Spec §10: every Fetch returns within sync_timeout. An answer in
-		// the grace is late, and a sync never publishes one (review M4).
+		// Deliberate: spec §10 abandons only a connector that has not
+		// returned 5 s past the deadline, so a whole answer inside the grace
+		// is used, and the sync may publish it past sync_timeout (review M4).
 		if g.err != nil {
 			return g.inv, fmt.Errorf("did not finish within sync_timeout (%s): %w", s.timeout(), g.err)
 		}
-		return admission.Inventory{}, fmt.Errorf("returned after sync_timeout (%s); its answer is not used",
-			s.timeout())
+		return g.inv, nil
 	case <-grace.C:
 	}
 	o := &fetchOut{done: done}

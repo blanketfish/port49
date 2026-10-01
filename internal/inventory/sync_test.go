@@ -885,9 +885,10 @@ func TestAShutdownWithAStuckSourceReturnsQuietly(t *testing.T) {
 	}
 }
 
-// Review M4: spec §10, every Fetch returns within sync_timeout. An answer
-// that arrives inside the grace is late, and is not published.
-func TestALateAnswerIsNotPublished(t *testing.T) {
+// Review M4: spec §10 abandons only a source that has not returned 5 s past
+// the deadline, so a whole answer inside the grace is used, and the source
+// is not marked hung.
+func TestALateAnswerInsideTheGraceIsUsed(t *testing.T) {
 	defer func(g time.Duration) { fetchGrace = g }(fetchGrace)
 	fetchGrace = time.Second
 	rig := newSyncRig(t, syncPolicy, devices(3))
@@ -898,13 +899,11 @@ func TestALateAnswerIsNotPublished(t *testing.T) {
 		return devices(4), nil
 	})}
 	rig.s.Timeout = 30 * time.Millisecond
-	res := rig.sync(t)
-	if res.Outcome != OutcomeFailed || res.Sequence != 1 ||
-		!strings.Contains(res.Reason, "source a: returned after sync_timeout (30ms); its answer is not used") {
+	if res := rig.sync(t); res.Outcome != OutcomePublished || res.Sequence != 2 {
 		t.Fatalf("%+v", res)
 	}
-	if testutil.ToFloat64(rig.s.Metrics.SourceHung.WithLabelValues("a")) != 0 || rig.s.Current().Doc.Sequence != 1 {
-		t.Fatal("a late answer was published or marked hung")
+	if testutil.ToFloat64(rig.s.Metrics.SourceHung.WithLabelValues("a")) != 0 {
+		t.Fatal("a source that returned inside the grace was marked hung")
 	}
 }
 
