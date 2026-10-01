@@ -14,11 +14,11 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/rhwendt/port49/internal/bundle"
 	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/keyfile"
+	"github.com/rhwendt/port49/internal/printsafe"
 )
 
 // Client reads the service's API over mutual TLS: port49d's fetcher, and the
@@ -60,22 +60,7 @@ var ErrNoConnection = errors.New("no connection to the inventory service")
 // format character (a bidi override), a line or paragraph separator, or an
 // invalid byte is `?`, never terminal control or a forged line, and past
 // maxPrinted bytes it is cut and marked.
-func Printable(s string) string {
-	cut := len(s) > maxPrinted
-	if cut {
-		s = s[:maxPrinted]
-	}
-	s = strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp) {
-			return '?'
-		}
-		return r
-	}, strings.ToValidUTF8(s, "?"))
-	if cut {
-		s += "…"
-	}
-	return s
-}
+func Printable(s string) string { return printsafe.Line(s, maxPrinted) }
 
 // cleanError is an error whose text is Printable: a transport or TLS error
 // can carry what the service presented — a certificate's names, which anyone

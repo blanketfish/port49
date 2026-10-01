@@ -14,9 +14,9 @@ import (
 	"net/url"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/rhwendt/port49/internal/config"
+	"github.com/rhwendt/port49/internal/printsafe"
 )
 
 // maxResponse bounds one answer's body: a GraphQL page of page_size devices
@@ -264,24 +264,8 @@ func statusError(what string, status int) error {
 }
 
 // printable is s, the source's text, as one line of at most maxPrinted
-// bytes: a control or format character, a line or paragraph separator, or
-// an invalid byte is `?`, as inventory.Printable has it.
-func printable(s string) string {
-	cut := len(s) > maxPrinted
-	if cut {
-		s = s[:maxPrinted]
-	}
-	s = strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp) {
-			return '?'
-		}
-		return r
-	}, strings.ToValidUTF8(s, "?"))
-	if cut {
-		s += "…"
-	}
-	return s
-}
+// bytes (printsafe.Line).
+func printable(s string) string { return printsafe.Line(s, maxPrinted) }
 
 // cleanError is an error whose text is printable: a TLS error can carry the
 // names in a certificate whoever answers the address chose.

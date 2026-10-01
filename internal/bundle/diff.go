@@ -357,14 +357,11 @@ func nameList(ns []string) string {
 
 // names is up to five devices by name, and how many more.
 func names(rs []admission.Resolved) string {
-	var n []string
+	n := make([]string, len(rs))
 	for i, r := range rs {
-		if i == 5 {
-			return strings.Join(n, ", ") + fmt.Sprintf(" and %d more", len(rs)-5)
-		}
-		n = append(n, r.Device.Name)
+		n[i] = r.Device.Name
 	}
-	return strings.Join(n, ", ")
+	return nameList(n)
 }
 
 // admissionState is a device's admission in one word. On a policy that does
