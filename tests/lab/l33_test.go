@@ -270,8 +270,13 @@ func TestL33Webhooks(t *testing.T) {
 	}
 	a.removeWebhooks("port49-l33-wrong")
 	a.removeWebhooks("port49-l33-503")
-	if raw, _ := os.ReadFile(li.errPath); strings.Contains(string(raw), secret) {
+	logged, _ := os.ReadFile(li.errPath)
+	if strings.Contains(string(logged), secret) {
 		t.Fatal("the service's log holds the webhook secret")
+	}
+	// Final review M6: nor the API token the service reads the source with.
+	if tok := os.Getenv("L27_TOKEN"); tok == "" || strings.Contains(string(logged), tok) {
+		t.Fatal("the service's log holds the API token, or L27_TOKEN is unset")
 	}
 	dir := filepath.Join(root, "tests", "lab", "sot", "l33", stack)
 	if err := os.MkdirAll(dir, 0o755); err != nil {

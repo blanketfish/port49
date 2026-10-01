@@ -150,8 +150,13 @@ func TestSoTDeviceEndToEnd(t *testing.T) {
 			}
 			fmt.Fprintf(&obs, "| %s | %s | %s | %s | %s |\n", ch.name, cell(okPub, pub), cell(okRel, rel), after, glass)
 		}
-		if raw, _ := os.ReadFile(li.errPath); strings.Contains(string(raw), secret) {
+		logged, _ := os.ReadFile(li.errPath)
+		if strings.Contains(string(logged), secret) {
 			fail("the service's log holds the webhook secret")
+		}
+		// Final review M6: nor the API token the service reads the source with.
+		if tok := os.Getenv("L27_TOKEN"); tok == "" || strings.Contains(string(logged), tok) {
+			fail("the service's log holds the API token, or L27_TOKEN is unset")
 		}
 		pr.end()
 		l.l29Note(t, "L33-e2e-"+a.product, sotE2EClaim, obs.String(), failed)
