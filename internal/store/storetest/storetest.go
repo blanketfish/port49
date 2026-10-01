@@ -294,3 +294,90 @@ func RevocationIsMonotonic(t *testing.T, newStore func() store.Store, now time.T
 		t.Fatalf("a later mark must replace an earlier one: %v, want %v", got, now)
 	}
 }
+
+// IdempotencyReservesOnce is design §17's "a retry that reaches a different
+// replica MUST behave identically" made a store property (plan 7a): of many
+// concurrent reservations under one key exactly one wins, and every loser
+// sees the winner's pending record; a completion is a compare-and-set on the
+// holder; a release takes only its own pending reservation; and a key is
+// scoped to its principal.
+//
+// newStore returns a fresh store whose clock returns now.
+func IdempotencyReservesOnce(t *testing.T, newStore func() store.Store, now time.Time) {
+	t.Helper()
+	const principal, key, racers = "user:alice@example.com", "01J\x00leaf-01", 32
+	ctx := context.Background()
+	s := newStore()
+	pending := func(holder string) store.Idempotency {
+		return store.Idempotency{BodyHash: "h1", Holder: holder, Pending: true, ExpiresAt: now.Add(time.Minute)}
+	}
+	start := make(chan struct{})
+	won := make(chan string, racers)
+	var wg sync.WaitGroup
+	for i := 0; i < racers; i++ {
+		holder := fmt.Sprintf("holder-%02d", i)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			cur, ok, err := s.ReserveIdempotency(ctx, principal, key, pending(holder))
+			switch {
+			case err != nil:
+				t.Error(err)
+			case ok:
+				won <- holder
+			case !cur.Pending || cur.BodyHash != "h1" || cur.Holder == "":
+				t.Errorf("a losing reservation must see the winner's pending record: %+v", cur)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(won)
+	var winners []string
+	for h := range won {
+		winners = append(winners, h)
+	}
+	if len(winners) != 1 {
+		t.Fatalf("%d concurrent reservations of one key won: %v", len(winners), winners)
+	}
+	winner := winners[0]
+
+	if err := s.ReleaseIdempotency(ctx, principal, key, "someone-else"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, _ := s.ReserveIdempotency(ctx, principal, key, pending("late")); ok {
+		t.Fatal("a release by another holder removed the reservation")
+	}
+	done := store.Idempotency{BodyHash: "h1", Holder: winner, Response: []byte(`{"login":"x"}`),
+		ExpiresAt: now.Add(time.Hour)}
+	if err := s.CompleteIdempotency(ctx, principal, key, "someone-else", done); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("a completion by another holder: %v, want ErrConflict", err)
+	}
+	if err := s.CompleteIdempotency(ctx, principal, key, winner, done); err != nil {
+		t.Fatal(err)
+	}
+	cur, ok, err := s.ReserveIdempotency(ctx, principal, key, pending("after"))
+	if err != nil || ok || cur.Pending || cur.Holder != winner || string(cur.Response) != `{"login":"x"}` {
+		t.Fatalf("after completion a reservation must find the completed record: %+v %v %v", cur, ok, err)
+	}
+	if err := s.ReleaseIdempotency(ctx, principal, key, winner); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, _ := s.ReserveIdempotency(ctx, principal, key, pending("after-release")); ok {
+		t.Fatal("a release removed a completed record")
+	}
+	// Taking over a completed record (a replay the minter abandons) is a
+	// compare-and-set on the old holder too.
+	again := done
+	again.Holder, again.Response = "next", []byte(`{"login":"y"}`)
+	if err := s.CompleteIdempotency(ctx, principal, key, winner, again); err != nil {
+		t.Fatalf("replacing a completed record by its holder: %v", err)
+	}
+	if err := s.CompleteIdempotency(ctx, principal, "never-reserved", "", done); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("completing a key nobody reserved: %v, want ErrConflict", err)
+	}
+	if _, ok, err := s.ReserveIdempotency(ctx, "user:bob@example.com", key, pending("bob")); err != nil || !ok {
+		t.Fatalf("another principal under the same key is its own record: %v %v", ok, err)
+	}
+}

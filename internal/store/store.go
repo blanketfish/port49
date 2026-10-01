@@ -13,10 +13,11 @@ import (
 
 var ErrNotFound = errors.New("store: not found")
 
-// ErrConflict is SwapContext refusing a write because the context is no longer
-// the one the caller read: another writer landed in between, or the record
-// expired, or one appeared where none was. Nothing was written. The caller
-// reads again and decides again; JoinContext is the loop that does.
+// ErrConflict is a compare-and-set refused because the record is no longer
+// the one the caller read: SwapContext's context, written by another writer
+// since, expired, or appeared where none was; or CompleteIdempotency's
+// record, no longer held by the caller (plan 7a). Nothing was written. The
+// caller reads again and decides again; JoinContext is the loop that does.
 var ErrConflict = errors.New("store: context changed since it was read")
 
 // UnreadableContextError is a context record the store returned and the
@@ -348,6 +349,14 @@ type Idempotency struct {
 	Response  []byte // sealed — it contains the minted tokens (design §17)
 	ExpiresAt time.Time
 	Sealed    []byte
+	// Holder is the request that reserved the record (ReserveIdempotency):
+	// random, never logged, and kept when the record is completed, so a
+	// completion is a compare-and-set on it (CompleteIdempotency).
+	Holder string
+	// Pending is a reservation whose mint has not finished. It carries no
+	// Response; a request that finds it is told to retry, and nothing is
+	// minted for it (design §17).
+	Pending bool
 }
 
 type Store interface {
@@ -596,6 +605,19 @@ type Store interface {
 
 	PutIdempotency(ctx context.Context, principal, key string, rec Idempotency) error
 	GetIdempotency(ctx context.Context, principal, key string) (Idempotency, error)
+	// ReserveIdempotency writes rec under (principal, key) when no live
+	// record is there, in one atomic step, and reports true. When one is, it
+	// writes nothing and returns that record and false. Two concurrent
+	// requests under one key therefore cannot both pass (design §17).
+	ReserveIdempotency(ctx context.Context, principal, key string, rec Idempotency) (Idempotency, bool, error)
+	// CompleteIdempotency replaces the live record under (principal, key)
+	// with rec only while that record's Holder is expect; otherwise it writes
+	// nothing and returns ErrConflict. An expired reservation, or one another
+	// request has taken since, is never overwritten.
+	CompleteIdempotency(ctx context.Context, principal, key, expect string, rec Idempotency) error
+	// ReleaseIdempotency deletes the record under (principal, key) only
+	// while it is a pending reservation held by holder; anything else stays.
+	ReleaseIdempotency(ctx context.Context, principal, key, holder string) error
 }
 
 // CertKey is the index key a CRL or OCSP response names (spec §5.1.4).

@@ -447,6 +447,15 @@ func (noStore) PutIdempotency(context.Context, string, string, store.Idempotency
 func (noStore) GetIdempotency(context.Context, string, string) (store.Idempotency, error) {
 	panic("store called")
 }
+func (noStore) ReserveIdempotency(context.Context, string, string, store.Idempotency) (store.Idempotency, bool, error) {
+	panic("store called")
+}
+func (noStore) CompleteIdempotency(context.Context, string, string, string, store.Idempotency) error {
+	panic("store called")
+}
+func (noStore) ReleaseIdempotency(context.Context, string, string, string) error {
+	panic("store called")
+}
 
 func (noStore) AnnotateContext(context.Context, store.ContextKey, string, string) error {
 	panic("store called")

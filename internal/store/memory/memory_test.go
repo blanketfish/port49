@@ -1349,3 +1349,37 @@ func TestRevocationIsMonotonicOnTheMemoryStore(t *testing.T) {
 	now := time.Unix(1_757_041_495, 0)
 	storetest.RevocationIsMonotonic(t, func() store.Store { return New(func() time.Time { return now }) }, now)
 }
+
+func TestIdempotencyReservesOnce(t *testing.T) {
+	now := time.Unix(1_757_041_495, 0)
+	storetest.IdempotencyReservesOnce(t, func() store.Store { return New(func() time.Time { return now }) }, now)
+}
+
+// A reservation a dead broker left behind expires: past it a retry
+// reserves afresh, and the dead holder can no longer complete or release
+// what is now someone else's.
+func TestAnExpiredReservationIsNobodys(t *testing.T) {
+	now := time.Unix(1_757_041_495, 0)
+	s := New(func() time.Time { return now })
+	ctx := context.Background()
+	res := func(h string) store.Idempotency {
+		return store.Idempotency{BodyHash: "h1", Holder: h, Pending: true, ExpiresAt: now.Add(time.Minute)}
+	}
+	if _, ok, _ := s.ReserveIdempotency(ctx, "user:alice", "k", res("dead")); !ok {
+		t.Fatal("first reservation")
+	}
+	now = now.Add(time.Minute)
+	if _, ok, err := s.ReserveIdempotency(ctx, "user:alice", "k", res("retry")); err != nil || !ok {
+		t.Fatalf("a reservation past its expiry must not stand: %v %v", ok, err)
+	}
+	if err := s.CompleteIdempotency(ctx, "user:alice", "k", "dead",
+		store.Idempotency{BodyHash: "h1", Holder: "dead", ExpiresAt: now.Add(time.Hour)}); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("the dead holder completed the retry's reservation: %v", err)
+	}
+	if err := s.ReleaseIdempotency(ctx, "user:alice", "k", "dead"); err != nil {
+		t.Fatal(err)
+	}
+	if cur, ok, _ := s.ReserveIdempotency(ctx, "user:alice", "k", res("third")); ok || cur.Holder != "retry" {
+		t.Fatalf("the dead holder released the retry's reservation: %+v %v", cur, ok)
+	}
+}

@@ -474,4 +474,40 @@ func (w *wrapped) GetIdempotency(ctx context.Context, principal, key string) (st
 	return rec, nil
 }
 
+// ReserveIdempotency passes a reservation through: it holds no response, so
+// there is nothing to seal, and one that tries to carry a response is
+// refused rather than written in clear. A completed record it finds is
+// opened, as GetIdempotency opens one.
+func (w *wrapped) ReserveIdempotency(ctx context.Context, principal, key string, rec store.Idempotency) (store.Idempotency, bool, error) {
+	if len(rec.Response) != 0 {
+		return store.Idempotency{}, false, errors.New("crypt: a reservation carries no response")
+	}
+	cur, ok, err := w.inner.ReserveIdempotency(ctx, principal, key, rec)
+	if err != nil || ok || cur.Pending {
+		return cur, ok, err
+	}
+	resp, err := w.keys.Open(cur.Sealed)
+	if err != nil {
+		return store.Idempotency{}, false, w.openErr("idempotency", err)
+	}
+	cur.Response, cur.Sealed = resp, nil
+	return cur, false, nil
+}
+
+// CompleteIdempotency seals the response, which holds the minted tokens
+// (design §17), before the compare-and-set below.
+func (w *wrapped) CompleteIdempotency(ctx context.Context, principal, key, expect string, rec store.Idempotency) error {
+	s, err := w.keys.Seal(rec.Response)
+	if err != nil {
+		return err
+	}
+	rec.Response, rec.Sealed = nil, s
+	return w.inner.CompleteIdempotency(ctx, principal, key, expect, rec)
+}
+
+// ReleaseIdempotency touches no sealed field.
+func (w *wrapped) ReleaseIdempotency(ctx context.Context, principal, key, holder string) error {
+	return w.inner.ReleaseIdempotency(ctx, principal, key, holder)
+}
+
 var _ store.Store = (*wrapped)(nil)

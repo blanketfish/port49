@@ -346,6 +346,43 @@ func TestJoinRacesRevocationThroughTheSealingLayer(t *testing.T) {
 	}, now)
 }
 
+func TestIdempotencyReservesOnceThroughTheSealingLayer(t *testing.T) {
+	now := time.Unix(1_757_041_495, 0)
+	storetest.IdempotencyReservesOnce(t, func() store.Store {
+		return Wrap(memory.New(func() time.Time { return now }), keys(), nil)
+	}, now)
+}
+
+// A completed record holds the minted tokens, so the inner store sees it
+// sealed; a reservation holds no response, and one that tries to carry one
+// is refused rather than written in clear.
+func TestACompletedReservationIsSealed(t *testing.T) {
+	ctx := context.Background()
+	inner := memory.New(time.Now)
+	s := Wrap(inner, keys(), nil)
+	exp := time.Now().Add(time.Hour)
+	if _, ok, err := s.ReserveIdempotency(ctx, "user:alice", "k",
+		store.Idempotency{BodyHash: "b", Holder: "h", Pending: true, ExpiresAt: exp}); err != nil || !ok {
+		t.Fatalf("%v %v", ok, err)
+	}
+	if err := s.CompleteIdempotency(ctx, "user:alice", "k", "h",
+		store.Idempotency{BodyHash: "b", Holder: "h", Response: []byte(`{"login":"p49_x"}`), ExpiresAt: exp}); err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := inner.GetIdempotency(ctx, "user:alice", "k"); r.Response != nil || len(r.Sealed) == 0 {
+		t.Fatalf("the inner store holds the response in clear: %+v", r)
+	}
+	cur, ok, err := s.ReserveIdempotency(ctx, "user:alice", "k",
+		store.Idempotency{BodyHash: "b", Holder: "h2", Pending: true, ExpiresAt: exp})
+	if err != nil || ok || string(cur.Response) != `{"login":"p49_x"}` {
+		t.Fatalf("a reservation must find the completed record opened: %+v %v %v", cur, ok, err)
+	}
+	if _, _, err := s.ReserveIdempotency(ctx, "user:alice", "k2",
+		store.Idempotency{BodyHash: "b", Holder: "h", Pending: true, Response: []byte("x"), ExpiresAt: exp}); err == nil {
+		t.Fatal("a reservation carrying a response was written")
+	}
+}
+
 // Ruling R1 through the real sealing layer: a context sealed under a key that
 // has left the two-key window, and revoked, is replaced by the next login
 // rather than refusing it, and the revocation carries. What makes it possible

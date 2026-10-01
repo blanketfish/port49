@@ -1056,19 +1056,78 @@ func (s *Store) PutIdempotency(_ context.Context, principal, key string, rec sto
 	return nil
 }
 
+// liveIdemLocked is the live record under k, deleting one past its expiry.
+func (s *Store) liveIdemLocked(k string) (store.Idempotency, bool) {
+	r, ok := s.idem[k]
+	if !ok {
+		return store.Idempotency{}, false
+	}
+	if !r.ExpiresAt.After(s.now()) {
+		delete(s.idem, k)
+		return store.Idempotency{}, false
+	}
+	return r, true
+}
+
 // GetIdempotency returns the record written under (principal, key), or
 // ErrNotFound if it is absent, expired, or was written under a different
 // principal.
 func (s *Store) GetIdempotency(_ context.Context, principal, key string) (store.Idempotency, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	k := idemKey(principal, key)
-	r, ok := s.idem[k]
-	if !ok || !r.ExpiresAt.After(s.now()) {
-		delete(s.idem, k)
-		return store.Idempotency{}, store.ErrNotFound
+	if r, ok := s.liveIdemLocked(idemKey(principal, key)); ok {
+		return r, nil
 	}
-	return r, nil
+	return store.Idempotency{}, store.ErrNotFound
+}
+
+// ReserveIdempotency is design §17's put-if-absent: under the one lock, a
+// live record is returned untouched and only its absence is written.
+func (s *Store) ReserveIdempotency(_ context.Context, principal, key string, rec store.Idempotency) (store.Idempotency, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	k := idemKey(principal, key)
+	if cur, ok := s.liveIdemLocked(k); ok {
+		return cur, false, nil
+	}
+	s.idem[k] = rec
+	s.wroteLocked()
+	return store.Idempotency{}, true, nil
+}
+
+// CompleteIdempotency writes rec over the live record only while that
+// record's holder is expect.
+func (s *Store) CompleteIdempotency(_ context.Context, principal, key, expect string, rec store.Idempotency) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	k := idemKey(principal, key)
+	if cur, ok := s.liveIdemLocked(k); !ok || cur.Holder != expect {
+		return store.ErrConflict
+	}
+	s.idem[k] = rec
+	s.wroteLocked()
+	return nil
+}
+
+// ReleaseIdempotency deletes holder's own pending reservation and nothing
+// else.
+func (s *Store) ReleaseIdempotency(_ context.Context, principal, key, holder string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	k := idemKey(principal, key)
+	if cur, ok := s.liveIdemLocked(k); ok && cur.Pending && cur.Holder == holder {
+		delete(s.idem, k)
+	}
+	return nil
+}
+
+// wroteLocked counts a write and sweeps every sweepEvery writes, as every
+// writer here does.
+func (s *Store) wroteLocked() {
+	s.writes++
+	if s.writes%sweepEvery == 0 {
+		s.sweepLocked()
+	}
 }
 
 var _ store.Store = (*Store)(nil)
