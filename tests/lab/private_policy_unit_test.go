@@ -48,14 +48,14 @@ func TestPrivatePolicyCopiesABrokerConfigsInventory(t *testing.T) {
 		}
 	}
 	got, err := privatePolicy(standing+"\nbroker:\n  policy_file: "+pol+"\n"+
-		"  revocations_file: tests/lab/logs/revocations-slice.json\n", dir)
+		"  revocations_file: tests/lab/logs/revocations-slice.json\n  certificate_status: {disabled: true}\n", dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	inv := filepath.Join(dir, "inventory.yaml")
 	if !strings.Contains(got, "\ninventory_file: "+inv+"\n") ||
 		!strings.Contains(got, "\n  policy_file: "+filepath.Join(dir, "policy.yaml")+"\n") ||
-		!strings.Contains(got, "\n  revocations_file: "+rev+"\n") {
+		!strings.Contains(got, "\n  revocations_file: "+rev+"\n  certificate_status: {disabled: true}\n") {
 		t.Fatalf("the lines were not pointed at the copies:\n%s", got)
 	}
 	for _, p := range []string{rev, rev + ".created"} {

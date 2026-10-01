@@ -219,6 +219,45 @@ type BrokerConfig struct {
 	// that are not bound to a principal; the next is reset. Default 16; 1 to
 	// 256.
 	MaxPendingConnsPerSource int `yaml:"max_pending_conns_per_source"`
+	// CertificateStatus is required (plan 7b); see CertificateStatusConfig.
+	CertificateStatus *CertificateStatusConfig `yaml:"certificate_status"`
+}
+
+// CertificateStatusConfig is broker.certificate_status (spec §5.1.4;
+// decision 33): where the broker learns a client certificate's revocation.
+// Required with a broker: Disabled is the explicit choice not to check.
+//
+// Each CRL is read from a file or fetched over http(s), and names the CA
+// certificate that signs it (issuer_file): the trust anchor, or one the
+// anchor signed, byte for byte the certificate in a client's chain. Each
+// verified list is kept beside broker.revocations_file as crl-<name>.der, so
+// a restart keeps it. A status that cannot be established is refused (503,
+// retried) under on_unavailable: refuse, the default, or admitted and said
+// under allow.
+type CertificateStatusConfig struct {
+	Disabled        bool                   `yaml:"disabled"`
+	CRLs            []CertificateStatusCRL `yaml:"crls"`
+	OCSP            *CertificateStatusOCSP `yaml:"ocsp"`
+	RefreshInterval time.Duration          `yaml:"refresh_interval"` // 1m to 24h; default 10m
+	OnUnavailable   string                 `yaml:"on_unavailable"`   // refuse (default) or allow
+}
+
+// CertificateStatusCRL is one broker.certificate_status.crls entry: exactly
+// one of File and URL.
+type CertificateStatusCRL struct {
+	Name       string `yaml:"name"`
+	File       string `yaml:"file"`
+	URL        string `yaml:"url"`
+	IssuerFile string `yaml:"issuer_file"`
+}
+
+// CertificateStatusOCSP is broker.certificate_status.ocsp: a fixed
+// responder, or each certificate's own (use_aia).
+type CertificateStatusOCSP struct {
+	Responder string        `yaml:"responder"`
+	UseAIA    bool          `yaml:"use_aia"`
+	Timeout   time.Duration `yaml:"timeout"` // 100ms to 10s; default 2s
+	Hash      string        `yaml:"hash"`    // the CertID hash: sha256 (default) or sha1
 }
 
 // encKeyYAML names one encryption-at-rest key: the id that travels with every
@@ -687,6 +726,16 @@ func Load(path string) (Config, error) {
 		if err := ownRevocationsFile(c, b); err != nil {
 			return Config{}, err
 		}
+		if b.CertificateStatus == nil {
+			return Config{}, fmt.Errorf("config: broker.certificate_status is required when broker: is present: " +
+				"name the CRLs or OCSP responder that say whether a client certificate is revoked, or set " +
+				"certificate_status: {disabled: true} to check none (spec §5.1.4)")
+		}
+		cs := *b.CertificateStatus
+		if err := checkCertificateStatus(&cs, b); err != nil {
+			return Config{}, err
+		}
+		b.CertificateStatus = &cs
 		c.Broker = &b
 	}
 
@@ -1159,6 +1208,108 @@ func ownRevocationsFile(c Config, b BrokerConfig) error {
 		}
 	}
 	return nil
+}
+
+// crlName is a CRL source's name: it names the kept list's file and the
+// crl_next_update metric's label.
+var crlName = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
+
+// checkCertificateStatus checks broker.certificate_status and applies its
+// defaults in place. A refusal names the key, and never repeats a URL,
+// which may carry a credential.
+func checkCertificateStatus(cs *CertificateStatusConfig, b BrokerConfig) error {
+	const key = "broker.certificate_status"
+	if cs.Disabled {
+		if len(cs.CRLs) > 0 || cs.OCSP != nil {
+			return fmt.Errorf("config: %s.disabled is true beside a CRL or OCSP source: remove the sources, or "+
+				"disabled", key)
+		}
+		return nil
+	}
+	if len(cs.CRLs) == 0 && cs.OCSP == nil {
+		return fmt.Errorf("config: %s: name at least one crls entry or an ocsp block, or set disabled: true", key)
+	}
+	revAbs, err := filepath.Abs(b.RevocationsFile)
+	if err != nil {
+		return fmt.Errorf("config: broker.revocations_file: %w", err)
+	}
+	stateDir := filepath.Dir(revAbs)
+	seen := map[string]bool{}
+	for i, src := range cs.CRLs {
+		at := fmt.Sprintf("%s.crls[%d]", key, i)
+		switch {
+		case !crlName.MatchString(src.Name):
+			return fmt.Errorf("config: %s.name must match %s", at, crlName)
+		case seen[src.Name]:
+			return fmt.Errorf("config: %s.name %s names another source too; each is kept under its own name", at,
+				src.Name)
+		case (src.File == "") == (src.URL == ""):
+			return fmt.Errorf("config: %s: set exactly one of file and url", at)
+		case src.URL != "" && !httpURL(src.URL):
+			return fmt.Errorf("config: %s.url must be an http or https URL with a host", at)
+		case src.IssuerFile == "":
+			return fmt.Errorf("config: %s.issuer_file is required: the CA certificate that signs the list", at)
+		}
+		seen[src.Name] = true
+		// The kept list is port49d's own state, written beside the
+		// revocations file: it may be no file an operator gave it.
+		kept := filepath.Join(stateDir, "crl-"+src.Name+".der")
+		for _, o := range []struct{ key, path string }{
+			{"broker.revocations_file", b.RevocationsFile}, {"broker.revocations_file's marker", b.RevocationsFile + ".created"},
+			{"broker.policy_file", b.PolicyFile}, {"broker.tls_cert_file", b.TLSCertFile},
+			{"broker.tls_key_file", b.TLSKeyFile}, {"broker.client_ca_file", b.ClientCAFile},
+			{at + ".file", src.File}, {at + ".issuer_file", src.IssuerFile},
+		} {
+			if o.path == "" {
+				continue
+			}
+			if oAbs, err := filepath.Abs(o.path); err == nil && oAbs == kept {
+				return fmt.Errorf("config: %s.name %s: its kept list, %s, would be %s", at, src.Name, kept, o.key)
+			}
+		}
+	}
+	if cs.OCSP != nil {
+		oc := *cs.OCSP
+		o := &oc
+		switch {
+		case o.Responder == "" && !o.UseAIA:
+			return fmt.Errorf("config: %s.ocsp: set responder, or use_aia: true to ask each certificate's own", key)
+		case o.Responder != "" && !httpURL(o.Responder):
+			return fmt.Errorf("config: %s.ocsp.responder must be an http or https URL with a host", key)
+		}
+		o.Timeout = orD(o.Timeout, 2*time.Second)
+		if o.Timeout < 100*time.Millisecond || o.Timeout > 10*time.Second {
+			return fmt.Errorf("config: %s.ocsp.timeout must be between 100ms and 10s; got %s", key, o.Timeout)
+		}
+		switch o.Hash {
+		case "":
+			o.Hash = "sha256"
+		case "sha256", "sha1":
+		default:
+			return fmt.Errorf("config: %s.ocsp.hash must be sha256 or sha1 (the CertID hash alone); got %q", key,
+				o.Hash)
+		}
+		cs.OCSP = o
+	}
+	cs.RefreshInterval = orD(cs.RefreshInterval, 10*time.Minute)
+	if cs.RefreshInterval < time.Minute || cs.RefreshInterval > 24*time.Hour {
+		return fmt.Errorf("config: %s.refresh_interval must be between 1m and 24h; got %s", key, cs.RefreshInterval)
+	}
+	switch cs.OnUnavailable {
+	case "":
+		cs.OnUnavailable = "refuse"
+	case "refuse", "allow":
+	default:
+		return fmt.Errorf("config: %s.on_unavailable must be refuse or allow; got %q", key, cs.OnUnavailable)
+	}
+	return nil
+}
+
+// httpURL is whether s is an http or https URL with a host, the only kind a
+// status source is fetched over.
+func httpURL(s string) bool {
+	u, err := url.Parse(s)
+	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
 }
 
 // within reports whether dir is base or a directory under it.

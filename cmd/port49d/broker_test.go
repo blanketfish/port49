@@ -51,7 +51,8 @@ func brokerConfig(t *testing.T, policyBody string) config.Config {
 		Broker: &config.BrokerConfig{Listen: "127.0.0.1:0", TLSCertFile: filepath.Join(dir, testpki.LabServerCert),
 			TLSKeyFile: filepath.Join(dir, testpki.LabServerKey), ClientCAFile: filepath.Join(dir, testpki.LabCA),
 			PolicyFile: pol, BatchMax: 10, RevocationsFile: filepath.Join(dir, "revocations.json"),
-			MaxConnsPerPrincipal: 4, MaxPendingConnsPerSource: 16},
+			MaxConnsPerPrincipal: 4, MaxPendingConnsPerSource: 16,
+			CertificateStatus: &config.CertificateStatusConfig{Disabled: true}},
 	}
 }
 
@@ -444,8 +445,9 @@ broker:
   policy_file: %s
   revocations_file: %s
   policy_watch_interval: 1s
-`, inv, filepath.Join(dir, "acct.jsonl"), b.Listen, b.TLSCertFile, b.TLSKeyFile, b.ClientCAFile,
-		b.PolicyFile, b.RevocationsFile)), 0o600); err != nil {
+  certificate_status:
+%s`, inv, filepath.Join(dir, "acct.jsonl"), b.Listen, b.TLSCertFile, b.TLSKeyFile, b.ClientCAFile,
+		b.PolicyFile, b.RevocationsFile, certStatusYAML(t, b.CertificateStatus))), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return cfgPath
@@ -628,13 +630,22 @@ func TestRunRefusesAnInventoryFileOthersCouldWrite(t *testing.T) {
 // client certificate in pkiDir, and returns the status and the body; the
 // caller judges them. It never prints a token.
 func postAsAlice(pkiDir, addr string) (int, string, error) {
-	cert, err := tls.LoadX509KeyPair(filepath.Join(pkiDir, testpki.LabClientCert), filepath.Join(pkiDir, testpki.LabClientKey))
+	resp, body, err := postAsAliceResponse(pkiDir, addr)
 	if err != nil {
 		return 0, "", err
 	}
+	return resp.StatusCode, body, nil
+}
+
+// postAsAliceResponse is postAsAlice with the answer's headers.
+func postAsAliceResponse(pkiDir, addr string) (*http.Response, string, error) {
+	cert, err := tls.LoadX509KeyPair(filepath.Join(pkiDir, testpki.LabClientCert), filepath.Join(pkiDir, testpki.LabClientKey))
+	if err != nil {
+		return nil, "", err
+	}
 	caPEM, err := os.ReadFile(filepath.Join(pkiDir, testpki.LabCA))
 	if err != nil {
-		return 0, "", err
+		return nil, "", err
 	}
 	roots := x509.NewCertPool()
 	roots.AppendCertsFromPEM(caPEM)
@@ -642,11 +653,11 @@ func postAsAlice(pkiDir, addr string) (int, string, error) {
 		Certificates: []tls.Certificate{cert}, RootCAs: roots, MinVersion: tls.VersionTLS13}}}
 	resp, err := c.Post("https://"+addr+"/v1/tokens", "application/json", strings.NewReader(`{"devices":["leaf1"]}`))
 	if err != nil {
-		return 0, "", err
+		return nil, "", err
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
-	return resp.StatusCode, string(body), err
+	return resp, string(body), err
 }
 
 // aliceCertKey is the mark key of the lab client certificate, as Identity
