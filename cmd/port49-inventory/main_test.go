@@ -1,11 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha512"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net"
@@ -24,6 +28,7 @@ import (
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/inventory"
 	"github.com/rhwendt/port49/internal/keyfile"
+	"github.com/rhwendt/port49/internal/sot/sottest"
 	"github.com/rhwendt/port49/internal/testpki"
 )
 
@@ -466,5 +471,218 @@ func TestAStartHeldUpByTheMirrorIsVisibleAndStopsOnSIGTERM(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatalf("SIGTERM did not stop a service held up in Restore: %s", &out)
+	}
+}
+
+const (
+	testHookSecret  = "l33-unit-test-webhook-secret-0123456789"
+	testNetboxToken = "nbt_abcdefabcdef.0123456789abcdef0123456789abcdef01234567"
+)
+
+func signHook(body []byte) string {
+	mac := hmac.New(sha512.New, []byte(testHookSecret))
+	mac.Write(body)
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// hookFixture is newFixture with a NetBox source taking webhooks on
+// listen in place of the file source, and the debouncer's settle and gap.
+func hookFixture(t *testing.T, listen string, settle, gap time.Duration) (fixture, *sottest.Server) {
+	t.Helper()
+	s, g := webhookSettle, webhookGap
+	t.Cleanup(func() { webhookSettle, webhookGap = s, g })
+	webhookSettle, webhookGap = settle, gap
+	t.Setenv("PORT49_TEST_NETBOX_TOKEN", testNetboxToken)
+	t.Setenv("PORT49_TEST_NETBOX_HOOK", testHookSecret)
+	nb := sottest.New(t, "netbox-4", 3)
+	nb.Auth = "Bearer " + testNetboxToken
+	f := newFixture(t, 0o600)
+	raw, err := os.ReadFile(f.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := strings.Replace(string(raw), "sync: [{name: lab_file, type: file, path: "+f.source+"}]",
+		fmt.Sprintf("webhook_listen: %s\nsync:\n  - {name: netbox_prod, type: netbox, url: %q, ca_file: %s, "+
+			"token_secret_env: PORT49_TEST_NETBOX_TOKEN, webhook_secret_env: PORT49_TEST_NETBOX_HOOK}\n", listen,
+			nb.URL, nb.CAFile), 1)
+	if cfg == string(raw) {
+		t.Fatal("the fixture's sync line moved; update this test")
+	}
+	if err := os.WriteFile(f.cfg, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return f, nb
+}
+
+// startHooked starts the service and returns the webhook listener's
+// address once the startup sync has published.
+func startHooked(t *testing.T, f fixture, out *syncBuffer, hup chan os.Signal) (string, string) {
+	t.Helper()
+	hooks := make(chan string, 1)
+	onWebhook = func(addr string) { hooks <- addr }
+	t.Cleanup(func() { onWebhook = nil })
+	_, metrics, _ := start(t, f, out, hup)
+	addr := <-hooks
+	waitFor(t, out, "sync (startup): published bundle 1")
+	waitFor(t, out, "webhooks on "+addr+" for netbox_prod")
+	return addr, metrics
+}
+
+// postHook posts a delivery stamped now, signed by sig or, when sig is "",
+// by testHookSecret, and returns the status code.
+func postHook(t *testing.T, c *http.Client, addr, sig string) int {
+	t.Helper()
+	b := []byte(`{"event": "created", "timestamp": "` +
+		time.Now().UTC().Format("2006-01-02T15:04:05.000000-07:00") + `", "object_type": "dcim.device"}`)
+	if sig == "" {
+		sig = signHook(b)
+	}
+	req, _ := http.NewRequest(http.MethodPost, "https://"+addr+"/v1/webhook/netbox_prod", bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Hook-Signature", sig)
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Error(err)
+		return 0
+	}
+	resp.Body.Close()
+	return resp.StatusCode
+}
+
+// Spec §10, decision 31: a NetBox source, its webhook on a TLS listener of
+// its own, and an authentic delivery that syncs the source; a mis-signed one
+// syncs nothing.
+func TestAWebhookTriggersASyncOfItsSource(t *testing.T) {
+	f, nb := hookFixture(t, "127.0.0.1:0", 10*time.Millisecond, 10*time.Millisecond)
+	var out syncBuffer
+	addr, _ := startHooked(t, f, &out, make(chan os.Signal, 1))
+	nb.SetDevices(4)
+	c := f.client(t, testpki.InvOperatorCert, testpki.InvOperatorKey)
+	if code := postHook(t, c, addr, strings.Repeat("ab", 64)); code != http.StatusUnauthorized {
+		t.Fatalf("mis-signed: %d", code)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if strings.Contains(out.String(), "sync (webhook)") {
+		t.Fatalf("a mis-signed delivery synced: %s", &out)
+	}
+	if code := postHook(t, c, addr, ""); code != http.StatusAccepted {
+		t.Fatalf("signed: %d", code)
+	}
+	waitFor(t, &out, "sync (webhook): published bundle 2")
+	for _, leak := range []string{testNetboxToken, testHookSecret} {
+		if strings.Contains(out.String(), leak) {
+			t.Fatalf("the log holds a secret: %s", &out)
+		}
+	}
+}
+
+// A webhook_listen already taken refuses the start, naming the key.
+func TestAWebhookListenInUseRefusesTheStart(t *testing.T) {
+	taken, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer taken.Close()
+	f, _ := hookFixture(t, taken.Addr().String(), time.Hour, time.Hour)
+	var out syncBuffer
+	e := stderr
+	defer func() { stderr = e }()
+	stderr = &out
+	err = run(context.Background(), f.cfg, make(chan os.Signal))
+	if err == nil || !strings.HasPrefix(err.Error(), "webhook_listen "+taken.Addr().String()+": ") {
+		t.Fatalf("run: %v", err)
+	}
+}
+
+// A shutdown with a webhook sync pending drops it: run returns at once,
+// starts no sync, and says nothing false.
+func TestShutdownWithAWebhookSyncPending(t *testing.T) {
+	f, nb := hookFixture(t, "127.0.0.1:0", time.Hour, time.Hour)
+	var out syncBuffer
+	hooks := make(chan string, 1)
+	onWebhook = func(addr string) { hooks <- addr }
+	defer func() { onWebhook = nil }()
+	e := stderr
+	defer func() { stderr = e }()
+	stderr = &out
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- run(ctx, f.cfg, make(chan os.Signal)) }()
+	var addr string
+	select {
+	case addr = <-hooks:
+	case err := <-done:
+		t.Fatalf("run: %v; %s", err, &out)
+	case <-time.After(10 * time.Second):
+		t.Fatalf("no webhook listener: %s", &out)
+	}
+	waitFor(t, &out, "sync (startup): published bundle 1 ")
+	nb.SetDevices(4)
+	c := f.client(t, testpki.InvOperatorCert, testpki.InvOperatorKey)
+	if code := postHook(t, c, addr, ""); code != http.StatusAccepted {
+		t.Fatalf("signed: %d", code)
+	}
+	began := time.Now()
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatalf("run did not return: %s", &out)
+	}
+	if d := time.Since(began); d >= grace {
+		t.Fatalf("shutdown took %v", d)
+	}
+	said := out.String()
+	if strings.Contains(said, "sync (webhook)") || strings.Contains(said, "failed") ||
+		strings.Contains(said, "context canceled") {
+		t.Fatalf("a pending webhook sync was run or said at shutdown: %s", said)
+	}
+	if !strings.HasSuffix(said, "port49-inventory: signal received, exiting\n") {
+		t.Fatalf("last line: %s", said)
+	}
+	if conn, err := net.DialTimeout("tcp", addr, 2*time.Second); err == nil {
+		conn.Close()
+		t.Fatal("the webhook listener is still open")
+	}
+}
+
+// A SIGHUP racing a webhook's sync: the two syncs run one after the other,
+// and the race detector sees nothing.
+func TestASIGHUPRacingAWebhookSync(t *testing.T) {
+	f, nb := hookFixture(t, "127.0.0.1:0", time.Millisecond, time.Millisecond)
+	var out syncBuffer
+	hup := make(chan os.Signal, 1)
+	addr, metrics := startHooked(t, f, &out, hup)
+	nb.SetDevices(4)
+	c := f.client(t, testpki.InvOperatorCert, testpki.InvOperatorKey)
+	for i := 0; i < 5; i++ {
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() { defer wg.Done(); hup <- syscall.SIGHUP }()
+		go func() {
+			defer wg.Done()
+			if code := postHook(t, c, addr, ""); code != http.StatusAccepted {
+				t.Errorf("signed: %d", code)
+			}
+		}()
+		wg.Wait()
+	}
+	waitFor(t, &out, "published bundle 2 ")
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		_, body := get(t, http.DefaultClient, "http://"+metrics+"/metrics")
+		if strings.Contains(body, `trigger="signal"}`) && strings.Contains(body, `trigger="webhook"}`) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("both syncs never ran: %s", body)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if said := out.String(); strings.Contains(said, "published bundle 3 ") || strings.Contains(said, "failed") {
+		t.Fatalf("%s", said)
 	}
 }
