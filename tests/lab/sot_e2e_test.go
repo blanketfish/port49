@@ -81,7 +81,7 @@ func TestSoTDeviceEndToEnd(t *testing.T) {
 			"/etc/port49-lab/ca.pem"); err != nil {
 			t.Fatal(err)
 		}
-		stop := l.capture(t, "L33-e2e")
+		stop := l.capture(t, "L33-e2e-"+a.product)
 		defer stop()
 		l.l28Restart(t, l.serviceConfig(t, li, policy))
 		agent, stopAgent := l29Agent(t)
