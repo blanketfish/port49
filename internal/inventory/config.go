@@ -540,13 +540,13 @@ func (c Config) WebhookSources() []string {
 }
 
 // WebhookSecrets is each webhook source's secret, the HMAC key its
-// deliveries are checked with. Never print or log the map: it is the
-// secrets themselves, without Secret's redaction.
-func (c Config) WebhookSecrets() map[string][]byte {
-	out := map[string][]byte{}
+// deliveries are checked with, each still a Secret, redacted however it is
+// printed.
+func (c Config) WebhookSecrets() map[string]sot.Secret {
+	out := map[string]sot.Secret{}
 	for _, s := range c.Sync {
 		if !s.WebhookSecret.Empty() {
-			out[s.Name] = []byte(s.WebhookSecret.Reveal())
+			out[s.Name] = s.WebhookSecret
 		}
 	}
 	return out

@@ -273,7 +273,7 @@ func TestWebhookListenAndAWebhookSourceGoTogether(t *testing.T) {
 		t.Fatalf("no source: %v", err)
 	}
 	c, err := loadString(t, "webhook_listen: 127.0.0.1:8444\n"+minimalConfig+netboxSource+hook)
-	if err != nil || string(c.WebhookSecrets()["netbox_prod"]) != testHookSecret ||
+	if err != nil || c.WebhookSecrets()["netbox_prod"].Reveal() != testHookSecret ||
 		strings.Join(c.WebhookSources(), ",") != "netbox_prod" || len(c.WebhookSecrets()) != 1 {
 		t.Fatalf("%v %v", c.WebhookSources(), err)
 	}

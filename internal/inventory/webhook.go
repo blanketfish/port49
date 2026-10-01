@@ -18,6 +18,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/rhwendt/port49/internal/sot"
 )
 
 const (
@@ -71,7 +73,9 @@ var hookHint = map[string]string{
 // order, which is not change order on Nautobot (L27, L30), orders nothing,
 // and its timestamp is read only for freshness.
 type Webhooks struct {
-	Secrets map[string][]byte
+	// Secrets is each webhook source's secret, redacted however it is
+	// printed (final review M5).
+	Secrets map[string]sot.Secret
 	Notify  func(source string)
 	Now     func() time.Time
 	Log     io.Writer
@@ -109,7 +113,8 @@ func (h *Webhooks) Handler() http.Handler {
 // before that tells a configured name from another (spec §10; review I1).
 func (h *Webhooks) deliver(w http.ResponseWriter, r *http.Request) {
 	source := r.PathValue("source")
-	secret, known := h.Secrets[source]
+	held, known := h.Secrets[source]
+	secret := []byte(held.Reveal())
 	known = known && len(secret) > 0
 	if !known {
 		// The name is the caller's text: neither counted under it nor said.

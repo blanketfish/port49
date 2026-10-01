@@ -19,6 +19,8 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+
+	"github.com/rhwendt/port49/internal/sot"
 )
 
 const hookSecret = "l33-unit-test-webhook-secret-0123456789"
@@ -32,7 +34,7 @@ type hookRig struct {
 
 func newHookRig(now time.Time) *hookRig {
 	rig := &hookRig{now: now, out: &bytes.Buffer{}}
-	rig.h = &Webhooks{Secrets: map[string][]byte{"netbox_prod": []byte(hookSecret)},
+	rig.h = &Webhooks{Secrets: map[string]sot.Secret{"netbox_prod": sot.NewSecret(hookSecret)},
 		Notify: func(s string) { rig.notified = append(rig.notified, s) }, Now: func() time.Time { return rig.now },
 		Log: rig.out, Metrics: NewMetrics(prometheus.NewRegistry())}
 	return rig
@@ -336,7 +338,7 @@ func TestAFutureDeliveryTriggersNothing(t *testing.T) {
 // out of the log and out of the answer.
 func TestNoOutcomeLeaksTheSecretTheSignatureOrTheBody(t *testing.T) {
 	rig := newHookRig(time.Date(2026, 10, 1, 2, 0, 0, 0, time.UTC))
-	rig.h.Secrets["nautobot_dc2"] = []byte("second-source-webhook-secret-abcdef")
+	rig.h.Secrets["nautobot_dc2"] = sot.NewSecret("second-source-webhook-secret-abcdef")
 	good := body("2026-10-01T02:00:00.5+00:00")
 	stale := body("2026-10-01T01:00:00+00:00")
 	noTS := []byte(`{"event": "updated", "data": {"name": "leaf-01"}}`)
@@ -353,7 +355,7 @@ func TestNoOutcomeLeaksTheSecretTheSignatureOrTheBody(t *testing.T) {
 	}
 	for _, src := range []string{"netbox_prod", "nautobot_dc2"} {
 		p := "/v1/webhook/" + src
-		secret := string(rig.h.Secrets[src])
+		secret := rig.h.Secrets[src].Reveal()
 		send(p, good, sign(good, secret), "application/json")
 		send(p, good, sign(good, secret), "application/json")
 		send(p, good, sign(good, "a-different-secret-of-thirty-two-chars"), "application/json")
@@ -511,7 +513,7 @@ func TestADeclaredLengthOverTheCapIsNotRead(t *testing.T) {
 // signed with the empty key.
 func TestAnEmptySecretAuthenticatesNothing(t *testing.T) {
 	rig := newHookRig(time.Date(2026, 10, 1, 2, 0, 0, 0, time.UTC))
-	rig.h.Secrets["empty"] = nil
+	rig.h.Secrets["empty"] = sot.Secret{}
 	b := body("2026-10-01T02:00:00+00:00")
 	if w := rig.deliver("/v1/webhook/empty", b, sign(b, ""), "application/json"); w.Code != http.StatusUnauthorized ||
 		len(rig.notified) != 0 || rig.count("", HookUnknownSource) != 1 {
@@ -614,5 +616,16 @@ func TestAnOutageAfterADeferredReArmIsSaidOnce(t *testing.T) {
 	}
 	if len(rig.notified) != 2 {
 		t.Fatalf("%v", rig.notified)
+	}
+}
+
+// Final review M5: Webhooks printed whole, as a test failure or a panic dump
+// would print it, holds no secret.
+func TestWebhooksPrintedWholeHoldNoSecret(t *testing.T) {
+	rig := newHookRig(time.Date(2026, 10, 1, 2, 0, 0, 0, time.UTC))
+	for _, verb := range []string{"%v", "%+v", "%#v", "%s"} {
+		if got := fmt.Sprintf(verb, rig.h); strings.Contains(got, hookSecret) {
+			t.Fatalf("%s printed the secret", verb)
+		}
 	}
 }
