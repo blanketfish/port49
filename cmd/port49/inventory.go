@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/bundle"
 	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/inventory"
@@ -31,6 +32,9 @@ func inventoryCmd(args []string, stdout, stderr io.Writer) int {
 	}
 	if len(args) > 0 && args[0] == "keygen" {
 		return inventoryKeygen(args[1:], stdout, stderr)
+	}
+	if len(args) > 0 && args[0] == "export" {
+		return inventoryExport(args[1:], stdout, stderr)
 	}
 	fmt.Fprint(stderr, usage)
 	return 2
@@ -492,4 +496,123 @@ func printResult(w io.Writer, res inventory.Result) int {
 	}
 	fmt.Fprintf(w, "%s; %s: %s\n", inventory.Printable(res.Outcome), still, inventory.Printable(res.Reason))
 	return 1
+}
+
+// stringsFlag is a flag given once per value.
+type stringsFlag []string
+
+func (f *stringsFlag) String() string     { return strings.Join(*f, ",") }
+func (f *stringsFlag) Set(v string) error { *f = append(*f, v); return nil }
+
+// inventoryExport is `port49 inventory export` (spec §12): the bundle the
+// service publishes, or bundle --from from its history, opened against
+// --verify-key as port49d opens it (decision 31), and its inventory written
+// in inventory_file's schema — to --out, never over an existing file, or to
+// standard output — so the offline tools keep an --inventory when no source
+// is a file. A bundle that does not open writes nothing.
+func inventoryExport(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("port49 inventory export", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	svc := serviceFlags(fs)
+	var verify stringsFlag
+	fs.Var(&verify, "verify-key", "the service's public key (signing.pub), as port49d's verify_key_files holds it; "+
+		"once per key")
+	from := fs.Int64("from", 0, "a bundle's sequence in the service's history (default: the bundle it publishes)")
+	outPath := fs.String("out", "", "the file to write, which must not exist, mode 0600 (default: standard output)")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	// An explicit --from is a sequence, 1 or more: --from 0 is not "the
+	// published bundle" by accident.
+	if !svc.complete() || len(verify) == 0 || fs.NArg() != 0 || (flagSet(fs, "from") && *from < 1) {
+		fmt.Fprint(stderr, usage)
+		return 2
+	}
+	var keys []ed25519.PublicKey
+	for _, p := range verify {
+		raw, err := os.ReadFile(p)
+		var k ed25519.PublicKey
+		if err == nil {
+			k, err = keyfile.ParseEd25519Public(raw, p)
+		}
+		if err != nil {
+			fmt.Fprintln(stderr, "port49 inventory export: --verify-key:", err)
+			return 1
+		}
+		keys = append(keys, k)
+	}
+	c, err := inventory.NewClient(svc.url, svc.ca, svc.cert, svc.key)
+	if err != nil {
+		fmt.Fprintln(stderr, "port49 inventory export:", err)
+		return 1
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), diffWait)
+	defer cancel()
+	var raw []byte
+	if *from > 0 {
+		raw, err = c.BundleAt(ctx, *from)
+	} else {
+		raw, _, _, err = c.Bundle(ctx, "")
+	}
+	if err != nil {
+		fmt.Fprintln(stderr, "port49 inventory export:", err)
+		return 1
+	}
+	doc, inv, err := bundle.Open(raw, keys)
+	if err != nil {
+		fmt.Fprintf(stderr, "port49 inventory export: the service's bundle does not open under --verify-key: %s; "+
+			"nothing is written\n", inventory.Printable(err.Error()))
+		return 1
+	}
+	if *from > 0 && doc.Sequence != *from {
+		// A genuine bundle, but not the one asked for (pre-flight M7).
+		fmt.Fprintf(stderr, "port49 inventory export: the service answered bundle %d for --from %d; nothing is "+
+			"written\n", doc.Sequence, *from)
+		return 1
+	}
+	body, err := admission.EncodeFile(inv)
+	if err != nil {
+		fmt.Fprintln(stderr, "port49 inventory export:", err)
+		return 1
+	}
+	header := fmt.Sprintf("# port49 inventory export: bundle %d (%s), published %s, from %s.\n"+
+		"# The inventory service's facts only: no key assignment (spec §13, decision 30).\n", doc.Sequence, doc.Bundle,
+		doc.PublishedAt.Format(time.RFC3339), inventory.Printable(svc.url))
+	body = append([]byte(header), body...)
+	where := ""
+	if *outPath == "" {
+		stdout.Write(body)
+	} else {
+		if err := writeNew(*outPath, body); err != nil {
+			fmt.Fprintln(stderr, "port49 inventory export:", err)
+			return 1
+		}
+		where = ", written to " + *outPath
+	}
+	fmt.Fprintf(stderr, "port49 inventory export: bundle %d, %d device(s)%s\n", doc.Sequence, len(inv.Devices), where)
+	return 0
+}
+
+// writeNew writes body to path, which must not exist, 0600, and syncs it; a
+// failure removes what it wrote. 0600: the fleet list and its addresses are
+// not for the world, as plan 6b made the mirror 0640 (pre-flight M8).
+func writeNew(path string, body []byte) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return fmt.Errorf("%s exists; an export is written beside no old one", path)
+		}
+		return err
+	}
+	_, err = f.Write(body)
+	if err == nil {
+		err = f.Sync()
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		os.Remove(path)
+	}
+	return err
 }

@@ -5,6 +5,8 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/base64"
+	"encoding/json"
 	"io"
 	"log"
 	"net"
@@ -18,8 +20,13 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
+	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/broker"
+	"github.com/rhwendt/port49/internal/bundle"
+	"github.com/rhwendt/port49/internal/fence"
 	"github.com/rhwendt/port49/internal/inventory"
+	"github.com/rhwendt/port49/internal/keyfile"
+	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/testpki"
 )
 
@@ -36,8 +43,8 @@ const leaf01 = "  - {name: leaf-01, platform: arista_eos, addresses: [10.0.0.1]}
 // testService is port49-inventory in-process, its syncer the operator's
 // certificate may drive: the lab inventory PKI's operator is a syncer.
 type testService struct {
-	url, ca, cert, key, dir string
-	syncer                  *inventory.Syncer
+	url, ca, cert, key, dir, pub string
+	syncer                       *inventory.Syncer
 }
 
 func startService(t *testing.T) *testService {
@@ -51,11 +58,18 @@ func startService(t *testing.T) *testService {
 		t.Fatal(err)
 	}
 	_, key, _ := ed25519.GenerateKey(rand.Reader)
+	_, pubPEM, err := keyfile.EncodeEd25519(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "signing.pub"), pubPEM, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(dir, "policy.yaml"), []byte(servicePolicy), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	s := &testService{dir: dir, ca: filepath.Join(pki, testpki.InvCA), cert: filepath.Join(pki, testpki.InvOperatorCert),
-		key: filepath.Join(pki, testpki.InvOperatorKey)}
+		key: filepath.Join(pki, testpki.InvOperatorKey), pub: filepath.Join(dir, "signing.pub")}
 	s.writeSource(t, leaf01)
 	m := inventory.NewMetrics(prometheus.NewRegistry())
 	s.syncer = &inventory.Syncer{Sources: []inventory.Source{inventory.FileSource{SourceName: "lab_file",
@@ -222,5 +236,213 @@ func TestInventorySyncPrintsAGenericPlatform(t *testing.T) {
 		!strings.Contains(out.String(), "  platform eos-lab (1 device(s)) has no adapter in the policy and is served "+
 			"by the generic one, priv-lvl only (spec §8)") {
 		t.Fatalf("exit %d: %s %s", code, out.String(), errOut.String())
+	}
+}
+
+func exportArgs(svc *testService, more ...string) []string {
+	return append([]string{"inventory", "export", "--service", svc.url, "--ca", svc.ca, "--cert", svc.cert, "--key",
+		svc.key, "--verify-key", svc.pub}, more...)
+}
+
+// Spec §12: the export is a file the offline tools take, for the same
+// bundle the service published, and it never writes over a file.
+func TestInventoryExportWritesWhatTheOfflineToolsRead(t *testing.T) {
+	svc := startService(t)
+	svc.writeSource(t, leaf01+"  - {name: leaf-02, platform: arista_eos, addresses: [10.0.0.2, \"2001:db8::2\"], "+
+		"attributes: {site: dc1}}\n")
+	svc.sync(t)
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o755); err != nil { // the fence refuses a directory others could write
+		t.Fatal(err)
+	}
+	out := filepath.Join(dir, "inventory.yaml")
+	var stdout, stderr bytes.Buffer
+	if code := run(exportArgs(svc, "--out", out), &stdout, &stderr); code != 0 ||
+		!strings.Contains(stderr.String(), "port49 inventory export: bundle 1, 2 device(s), written to "+out) {
+		t.Fatalf("exit %d: %s", code, stderr.String())
+	}
+	fi, err := os.Stat(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o600 {
+		t.Fatalf("the export's mode is %v, not 0600", fi.Mode().Perm()) // pre-flight M8
+	}
+	// port49d reads inventory_file behind the fence, then parses it and the
+	// policy into the bundle it serves.
+	raw, err := fence.Read(out, 64<<20, "inventory file")
+	if err != nil {
+		t.Fatal(err)
+	}
+	inv, err := admission.ParseFile(raw, out)
+	if err != nil || len(inv.Devices) != 2 {
+		t.Fatalf("%+v %v", inv, err)
+	}
+	pol, err := os.ReadFile(filepath.Join(svc.dir, "policy.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := bundle.ID(pol, inv), svc.syncer.Current().Doc.Bundle; got != want {
+		t.Fatalf("the export is bundle %s, the service published %s", got, want)
+	}
+	if p, err := bundle.Load(filepath.Join(svc.dir, "policy.yaml"), out, policy.Env{}); err != nil ||
+		p.Bundle != svc.syncer.Current().Doc.Bundle {
+		t.Fatalf("port49d's load: %v", err)
+	}
+	stderr.Reset()
+	if code := run(exportArgs(svc, "--out", out), &stdout, &stderr); code != 1 || !strings.Contains(stderr.String(), "exists") {
+		t.Fatalf("exit %d: %s", code, stderr.String())
+	}
+}
+
+func TestInventoryExportReadsTheHistory(t *testing.T) {
+	svc := startService(t)
+	svc.sync(t)
+	svc.writeSource(t, leaf01+"  - {name: leaf-02, platform: arista_eos, addresses: [10.0.0.2]}\n")
+	svc.sync(t)
+	var stdout, stderr bytes.Buffer
+	if code := run(exportArgs(svc, "--from", "1"), &stdout, &stderr); code != 0 ||
+		!strings.HasPrefix(stdout.String(), "# port49 inventory export: bundle 1 (sha256:") ||
+		!strings.Contains(stdout.String(), "name: leaf-01") || strings.Contains(stdout.String(), "leaf-02") {
+		t.Fatalf("exit %d: %s %s", code, stdout.String(), stderr.String())
+	}
+	stderr.Reset()
+	if code := run(exportArgs(svc, "--from", "99"), &stdout, &stderr); code != 1 ||
+		!strings.Contains(stderr.String(), "answered 404 (not_kept)") {
+		t.Fatalf("exit %d: %s", code, stderr.String())
+	}
+}
+
+// Decision 31: a bundle that does not open under the verify keys writes
+// nothing.
+func TestInventoryExportVerifiesBeforeItWrites(t *testing.T) {
+	svc := startService(t)
+	svc.sync(t)
+	_, other, _ := ed25519.GenerateKey(rand.Reader)
+	_, otherPEM, _ := keyfile.EncodeEd25519(other)
+	otherPub := filepath.Join(t.TempDir(), "other.pub")
+	if err := os.WriteFile(otherPub, otherPEM, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(t.TempDir(), "inventory.yaml")
+	args := []string{"inventory", "export", "--service", svc.url, "--ca", svc.ca, "--cert", svc.cert, "--key", svc.key,
+		"--verify-key", otherPub, "--out", out}
+	var stdout, stderr bytes.Buffer
+	if code := run(args, &stdout, &stderr); code != 1 || !strings.Contains(stderr.String(), "does not open under "+
+		"--verify-key") || stdout.Len() != 0 {
+		t.Fatalf("exit %d: %s", code, stderr.String())
+	}
+	if _, err := os.Stat(out); err == nil {
+		t.Fatal("wrote a file")
+	}
+	if code := run([]string{"inventory", "export", "--service", svc.url, "--ca", svc.ca, "--cert", svc.cert, "--key",
+		svc.key}, &stdout, &stderr); code != 2 {
+		t.Fatalf("no --verify-key: exit %d", code)
+	}
+}
+
+// Pre-flight M7: a genuine bundle that is not the one --from asked for is
+// refused. The stub answers bundle 2 to every ask.
+func TestInventoryExportFromChecksTheSequence(t *testing.T) {
+	svc := startService(t)
+	svc.sync(t)
+	svc.writeSource(t, leaf01+"  - {name: leaf-02, platform: arista_eos, addresses: [10.0.0.2]}\n")
+	svc.sync(t)
+	two := svc.syncer.Current().Raw
+	stub := serveTLS(t, filepath.Join(svc.dir, "pki"), http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(two)
+	}))
+	out := filepath.Join(t.TempDir(), "inventory.yaml")
+	args := []string{"inventory", "export", "--service", stub, "--ca", svc.ca, "--cert", svc.cert, "--key", svc.key,
+		"--verify-key", svc.pub, "--from", "1", "--out", out}
+	var stdout, stderr bytes.Buffer
+	if code := run(args, &stdout, &stderr); code != 1 ||
+		!strings.Contains(stderr.String(), "the service answered bundle 2 for --from 1") {
+		t.Fatalf("exit %d: %s", code, stderr.String())
+	}
+	if _, err := os.Stat(out); err == nil {
+		t.Fatal("wrote a file")
+	}
+}
+
+// Decision 31: a bundle whose signature was forged — its document changed
+// after sealing — opens under no key, and nothing is written, to --out or
+// to standard output.
+func TestInventoryExportRefusesAForgedBundle(t *testing.T) {
+	svc := startService(t)
+	svc.sync(t)
+	var env map[string]any
+	if err := json.Unmarshal(svc.syncer.Current().Raw, &env); err != nil {
+		t.Fatal(err)
+	}
+	doc, err := base64.StdEncoding.DecodeString(env["document"].(string))
+	if err != nil || !bytes.Contains(doc, []byte("leaf-01")) {
+		t.Fatalf("%v %s", err, doc)
+	}
+	env["document"] = base64.StdEncoding.EncodeToString(bytes.Replace(doc, []byte("leaf-01"), []byte("leaf-99"), 1))
+	forged, err := json.Marshal(env) // the signature kept, the document changed
+	if err != nil {
+		t.Fatal(err)
+	}
+	stub := serveTLS(t, filepath.Join(svc.dir, "pki"), http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(forged)
+	}))
+	for _, more := range [][]string{nil, {"--out", filepath.Join(t.TempDir(), "inventory.yaml")}} {
+		args := append([]string{"inventory", "export", "--service", stub, "--ca", svc.ca, "--cert", svc.cert, "--key",
+			svc.key, "--verify-key", svc.pub}, more...)
+		var stdout, stderr bytes.Buffer
+		if code := run(args, &stdout, &stderr); code != 1 || stdout.Len() != 0 ||
+			!strings.Contains(stderr.String(), "does not open under --verify-key") ||
+			!strings.Contains(stderr.String(), "nothing is written") {
+			t.Fatalf("%v: exit %d: %s %s", more, code, stdout.String(), stderr.String())
+		}
+		if len(more) > 0 {
+			if _, err := os.Lstat(more[1]); err == nil {
+				t.Fatal("wrote a file")
+			}
+		}
+	}
+}
+
+// An --out that is a symbolic link is never followed: not to a file it
+// would overwrite, and not to a name it would create (a dangling link).
+func TestInventoryExportNeverWritesThroughALink(t *testing.T) {
+	svc := startService(t)
+	svc.sync(t)
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target")
+	if err := os.WriteFile(target, []byte("keep\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for name, to := range map[string]string{"to-a-file": target, "dangling": filepath.Join(dir, "absent")} {
+		link := filepath.Join(dir, name)
+		if err := os.Symlink(to, link); err != nil {
+			t.Fatal(err)
+		}
+		var stdout, stderr bytes.Buffer
+		if code := run(exportArgs(svc, "--out", link), &stdout, &stderr); code != 1 ||
+			!strings.Contains(stderr.String(), "exists") {
+			t.Fatalf("%s: exit %d: %s", name, code, stderr.String())
+		}
+	}
+	if raw, _ := os.ReadFile(target); string(raw) != "keep\n" {
+		t.Fatalf("the link's target is now %q", raw)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "absent")); err == nil {
+		t.Fatal("created the dangling link's target")
+	}
+}
+
+// --from is a positive sequence; anything else is a usage error, asked of
+// no service.
+func TestInventoryExportRefusesAMalformedFrom(t *testing.T) {
+	for _, from := range []string{"0", "-1", "x", "1.5", "9223372036854775808"} {
+		var stdout, stderr bytes.Buffer
+		if code := run([]string{"inventory", "export", "--service", "https://inv.example", "--ca", "a", "--cert", "b",
+			"--key", "c", "--verify-key", "d", "--from", from}, &stdout, &stderr); code != 2 {
+			t.Errorf("--from %s: exit %d: %s", from, code, stderr.String())
+		}
 	}
 }

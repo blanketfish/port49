@@ -845,6 +845,20 @@ func (s *Syncer) Diff(from int64) (bundle.Report, int64, error) {
 	return bundle.Diff(o, n, s.Now()), cur.Doc.Sequence, nil
 }
 
+// At is bundle seq: the one published, or one state_dir's history keeps,
+// opened against the service's own keys (spec §12, `inventory export
+// --from`). ErrNoBundle before the first; ErrNotKept for one not kept.
+func (s *Syncer) At(seq int64) (*Published, error) {
+	cur := s.current.Load()
+	if cur == nil {
+		return nil, ErrNoBundle
+	}
+	if cur.Doc.Sequence == seq {
+		return cur, nil
+	}
+	return s.State.At(seq, s.keys())
+}
+
 // DeviceView is one device as GET /v1/devices/{address} shows it: a
 // diagnostic, never on a hot path (spec §10).
 type DeviceView struct {

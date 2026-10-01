@@ -143,8 +143,37 @@ func (a *API) tell(key string) bool {
 	return true
 }
 
-func (a *API) bundle(w http.ResponseWriter, r *http.Request, _ string) {
+// bundle is GET /v1/bundle: the bundle published, or with ?sequence=N bundle
+// N from the history (spec §12, `inventory export --from`). The query takes
+// sequence alone.
+func (a *API) bundle(w http.ResponseWriter, r *http.Request, caller string) {
 	p := a.Syncer.Current()
+	if q := r.URL.Query(); len(q) > 0 {
+		v, ok := q["sequence"]
+		seq, err := int64(0), error(nil)
+		if ok && len(q) == 1 && len(v) == 1 {
+			seq, err = strconv.ParseInt(v[0], 10, 64)
+		}
+		if !ok || len(q) != 1 || len(v) != 1 || err != nil || seq < 1 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "not_a_sequence"})
+			return
+		}
+		switch p, err = a.Syncer.At(seq); {
+		case errors.Is(err, ErrNoBundle):
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "no_bundle"})
+			return
+		case errors.Is(err, ErrNotKept):
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not_kept"})
+			return
+		case err != nil:
+			// The service's own text, for its operator, once per caller.
+			if a.tell("bundle_at_failed " + caller) {
+				fmt.Fprintf(a.Log, "port49-inventory: api: bundle %d: %s\n", seq, oneLine(err))
+			}
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal"})
+			return
+		}
+	}
 	if p == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "no_bundle"})
 		return

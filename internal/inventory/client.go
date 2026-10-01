@@ -280,6 +280,24 @@ func (c *Client) bundle(ctx context.Context, etag string) ([]byte, string, bool,
 	return raw, resp.Header.Get("ETag"), false, nil
 }
 
+// BundleAt is bundle seq from the service's history, sealed and not yet
+// trusted: the caller opens it (bundle.Open) against its verify keys.
+func (c *Client) BundleAt(ctx context.Context, seq int64) ([]byte, error) {
+	resp, err := c.do(ctx, "GET", "/v1/bundle", url.Values{"sequence": {strconv.FormatInt(seq, 10)}}, nil)
+	if err != nil {
+		return nil, clean(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, clean(answer(resp, nil, 0))
+	}
+	defer resp.Body.Close()
+	raw, err := readBounded(resp.Body, bundle.MaxDocument)
+	if err != nil {
+		return nil, clean(err)
+	}
+	return raw, nil
+}
+
 func (c *Client) Sync(ctx context.Context) (Result, error) {
 	var r Result
 	resp, err := c.do(ctx, "POST", "/v1/sync", nil, nil)
