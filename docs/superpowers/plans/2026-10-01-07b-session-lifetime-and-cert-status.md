@@ -317,8 +317,9 @@ task text carry the fixes, and decision 33's text (Task 1) is amended to match.
 - **I3** (scoping extensions ignored): Ruling 9, Task 9, with a test per refusal.
 - **I4** (unjudged contexts extended): Ruling 7, Tasks 5 and 7. `refreshContext` returns its
   outcome; only `unchanged` and landed `updated` are extended; the rest is `not_judged`.
-- **I5** (a refresh kept the old window): Ruling 3, Tasks 4 and 7. `ContextRefresh.MaxSessionAge`
-  sets the policy's ceiling from the new auth_time; `-1` keeps the window for the old callers.
+- **I5** (a refresh kept the old window): Ruling 3, Tasks 4 and 7. `ContextRefresh.SessionAge`
+  sets the policy's ceiling from the new auth_time; a nil `SessionAge` keeps the window for the old
+  callers.
 - **I6** (the agent exited at its first deadline): Task 8. `agentMain` re-arms on a deadline change,
   with a test.
 - **I7** (an unavailable status ended sessions): Ruling 10, Tasks 1, 8 and 10. `503
@@ -371,6 +372,22 @@ task text carry the fixes, and decision 33's text (Task 1) is amended to match.
   - `(*lab).result`;
   - `SessionRefreshReport.Err` dropped from the interface list;
   - the listener's 10s line.
+
+### Re-check 1 (2026-10-01)
+
+The re-check found three Important (R1–R3) and five Minor (R4–R8). All eight are fixed as proposed.
+- **R1** (the 61s case never reached its assertion): Task 7. The test advances 11s past the 59s
+  refresh's pacing before the next challenge. No other case refreshes twice inside 10s.
+- **R2** (a quarantined device expected extended): Task 7. "bare" is `not_judged`; a new
+  `juniper_junos` device is the extended-and-unreached case, and the test first asserts it resolves.
+- **R3** (only the issuing CA's CRL refuses every login): Task 11 says at start which intermediates
+  nothing covers, with a test; the operator notes say to name the root's CRL.
+- **R4**: Task 6's interface signatures; the I5 line above names `SessionAge`, nil keeping the window.
+- **R5**: `alicePrincipal` is defined in Task 7's fixture step, not credited to 7a.
+- **R6**: a bind-time 503 counts `status_unavailable_refused`, not `revoked_refused`.
+- **R7**: design §17 lists the three new API codes (Task 1); Task 9 checks in two openssl-built IDP
+  fixtures.
+- **R8**: an OCSP answer embedding the issuer's own certificate is accepted (Task 9), with a test.
 
 ## What the operator sees
 
@@ -739,6 +756,20 @@ behaviour: the warning's display is cited to L34, opened here.
   ```
   POST  /v1/refresh/challenge  certificate path: a single-use nonce the agent signs for /v1/refresh
   ```
+
+  Then, where §17 lists the API's error codes (beside 7a's `idempotency_in_progress`), add these
+  (re-check R7). They are the API's own codes, not reason codes: each request's decision record keeps
+  its §5.7 reason.
+
+  ```
+  401  refresh_challenge_missing        /v1/refresh with no outstanding challenge on this connection, or a stale one
+  429  refresh_too_soon                 a refresh on this connection less than 10s after the last; Retry-After
+  503  certificate_status_unavailable   the certificate's status could not be established (on_unavailable: refuse); Retry-After: 60
+  ```
+
+  If §17 has no list of error codes yet, put these three under a new "Errors" paragraph after the
+  surface block, with 7a's two (`409 idempotency_in_progress`, `400 bad_request` for a repeated
+  device) above them.
 
 - [ ] **Step 11: Design §12, the failure matrix.** After the row that begins `| **Revocations file
   missing or refused**`, add:
@@ -1571,14 +1602,15 @@ bookkeeping, as `RevokedAt` is.
 
 **Interfaces:**
 - Produces:
-  - `func platform.CeilingWarning(name string) bool`: an allow-list, empty until L34's notes name
-    the platforms that show the warning and still permit (Task 13; pre-flight M10).
+  - `func platform.CeilingWarning(name string, added []string) bool`: an allow-list, empty until L34's
+    notes name the platforms that show the warning and still permit (Task 13; pre-flight M10), plus
+    `added`, the operator's list.
   - `config.SessionConfig.CeilingWarningPlatforms []string` (`session.ceiling_warning_platforms`):
     platforms an operator adds to the allow-list, unmeasured. The lab sets all five to measure them.
   - `config.LabConfig.DenySession bool` (`lab.deny_session`): the lab instrument fails the session
     authorization itself with its (padded) deny message, so L2's truncation is measurable on Junos,
     which never authorizes a command (pre-flight I12).
-  - `func (h *Handler) WithCeilingWarning(d time.Duration) *Handler`
+  - `func (h *Handler) WithCeilingWarning(d time.Duration, added []string) *Handler`
   - `config.SessionConfig.CeilingWarning time.Duration` (`session.ceiling_warning`, default 30m,
     `0s` off, at most 24h); `config.LabConfig.DenyMessageLength int` (`lab.deny_message_length`, 0
     or 16–4096)
@@ -1966,9 +1998,18 @@ bookkeeping, as `RevokedAt` is.
   }
   ```
 
-  Also add `postOn(t, c, br, path, body) struct{ status int; body string }`, which writes one request
-  on a held connection and reads its whole response, and `loadPolicy(t, text)`, which swaps
-  `f.b.Policy` to a policy loaded from `text` over `f.devices`. Each sits beside its neighbours.
+  Also add:
+  - `postOn(t, c, br, path, body) struct{ status int; body string }`, which writes one request on a
+    held connection and reads its whole response;
+  - `loadPolicy(t, text)`, which swaps `f.b.Policy` to a policy loaded from `text` over `f.devices`;
+  - `newFixtureWithDevices(t, cap, extra ...admission.Device)`, which is `newFixture` with `extra`
+    added to the inventory the policy loads against. If `testPolicy` quarantines a `juniper_junos`
+    device (its projection), the R2 test's first assertion says so: give that test a policy whose
+    roles project, such as `permit: ["show **"]`, rather than weakening the assertion;
+  - `const alicePrincipal = "user:alice@example.com"`, beside `newFixture`, unless the file already
+    has it. 7a's tests spell the string inline (re-check R5).
+
+  Each sits beside its neighbours.
 
 - [ ] **Step 3: The handlers' tests.** Create `internal/broker/sessionrefresh_test.go`. Each case
   signs correctly, so that the property under test is the only defect (pre-flight I10).
@@ -2048,19 +2089,25 @@ bookkeeping, as `RevokedAt` is.
   }
 
   // What the policy did not just judge and keep is not extended: a context
-  // past its grace window is deleted and named; one on a quarantined device,
-  // and one whose policy write lost every race, are not judged; a withdrawn
-  // grant is revoked; one on a device with no platform is extended and named
-  // unreached (pre-flight I4).
+  // past its grace window is deleted and named; one on a quarantined device
+  // ("bare", which has no platform) and one whose policy write lost every race
+  // are not judged; a withdrawn grant is revoked; one on a session-only
+  // platform (Junos) is extended and named unreached (pre-flight I4; re-check
+  // R2).
   func TestARefreshExtendsOnlyWhatThePolicyKept(t *testing.T) {
-  	f := newFixture(t, 8)
+  	f := newFixtureWithDevices(t, 8, admission.Device{Name: "mx1", Platform: "juniper_junos",
+  		Addresses: []netip.Addr{netip.MustParseAddr("172.100.100.51")}})
+  	if _, err := f.b.Policy.Load().Resolve(alicePrincipal, f.devices["mx1"], f.now); err != nil {
+  		t.Fatalf("mx1 must resolve for alice, not be quarantined: %v", err)
+  	}
   	addr, _ := serveThrough(t, f, DefaultListenerLimits, nil)
   	c, br := held(t, f, addr, f.alice)
   	auth := f.now
   	f.b.GraceWindow = 10 * time.Minute
   	f.liveContextAt(t, "leaf1", "alice", alicePrincipal, certKey(f.alice), auth, auth.Add(time.Hour))   // inside grace
   	f.liveContextAt(t, "nx1", "alice", alicePrincipal, certKey(f.alice), auth, auth.Add(30*time.Minute)) // past grace
-  	f.liveContextAt(t, "bare", "alice", alicePrincipal, certKey(f.alice), auth, auth.Add(8*time.Hour))   // unreached
+  	f.liveContextAt(t, "bare", "alice", alicePrincipal, certKey(f.alice), auth, auth.Add(8*time.Hour))   // quarantined
+  	f.liveContextAt(t, "mx1", "alice", alicePrincipal, certKey(f.alice), auth, auth.Add(8*time.Hour))    // session-only
   	f.advance(time.Hour + 5*time.Minute)
   	status, resp := refreshOn(t, c, br, f.alice)
   	by := map[string]api.RefreshedSession{}
@@ -2068,7 +2115,7 @@ bookkeeping, as `RevokedAt` is.
   		by[s.Device] = s
   	}
   	if status != 200 || by["leaf1"].Outcome != "extended" || by["nx1"].Outcome != "past_grace" ||
-  		by["bare"].Outcome != "extended" || !by["bare"].Unreached {
+  		by["bare"].Outcome != "not_judged" || by["mx1"].Outcome != "extended" || !by["mx1"].Unreached {
   		t.Fatalf("%d %+v", status, resp)
   	}
   	if _, err := f.st.GetContext(context.Background(), store.ContextKey{NAS: "nx1", Username: "alice"}); !errors.Is(err, store.ErrNotFound) {
@@ -2142,13 +2189,15 @@ bookkeeping, as `RevokedAt` is.
   	if s, _ := answer(t, c, br, c, f.alice, nonce, text); s != 200 {
   		t.Fatalf("an answer at 59s: %d", s)
   	}
+  	f.advance(11 * time.Second) // past the 59s refresh's 10s pacing (re-check R1)
   	nonce, text = challengeOn(t, c, br)
   	f.advance(61 * time.Second)
   	if s, _ := answer(t, c, br, c, f.alice, nonce, text); s != 401 {
   		t.Fatalf("an answer at 61s: %d", s)
   	}
 
-  	// Another key, the same principal: refused.
+  	// Another key, the same principal: refused. (The 61s answer refreshed
+  	// nothing, so no pacing applies.)
   	nonce, text = challengeOn(t, c, br)
   	renewed := f.client(t, "alice@example.com", f.now.Add(time.Hour))
   	if s, _ := answer(t, c, br, c, renewed, nonce, text); s != 401 {
@@ -2196,7 +2245,8 @@ bookkeeping, as `RevokedAt` is.
   }
   ```
 
-  (`held`, `serveThrough`, `certKey`, `alicePrincipal` and `f.revoke` are 7a's. The listener answers
+  (`held`, `serveThrough`, `certKey` and `f.revoke` are 7a's; `alicePrincipal` is Step 2's (re-check
+  R5). The listener answers
   a principal marked before the handshake at bind; this test marks after it, so the refresh's own
   check is what refuses.)
 
@@ -3040,6 +3090,19 @@ bookkeeping, as `RevokedAt` is.
      - an entry with a critical extension.
 
      An IDP with `onlyContainsUserCerts` alone loads and covers leaves only.
+
+     **Two fixtures built outside Go** (re-check R7), so a tagging mistake mirrored in the decoder
+     and in the Go-built test lists cannot pass both. Check in
+     `internal/certstatus/testdata/idp-user-certs.der` and `idp-distribution-point.der`, with
+     `testdata/idp-ca.pem` (their signer) and `testdata/README.md` giving the commands that made
+     them: an `openssl ca -gencrl` run under a config whose `crl_extensions` section holds
+     `issuingDistributionPoint = critical, @idp`, with `[idp] onlyuser = TRUE` for the first and
+     `[idp] fullname = URI:http://pki.example.com/a.crl` for the second. The test loads each against `idp-ca.pem` at a clock inside its validity:
+     - `idp-user-certs.der` loads, and `userCertsOnly` on its IDP returns `true`;
+     - `idp-distribution-point.der` is refused, its detail naming the distribution point.
+
+     Make the fixtures valid for ten years (`-crldays 3650`), and say in the README to regenerate
+     them before then.
   7. **The chain.** An intermediate-issued leaf, chain `[leaf, intermediate, root]`, against the
      intermediate's list and the root's list (pre-flight I2):
      - the leaf is `Good`;
@@ -3079,6 +3142,9 @@ bookkeeping, as `RevokedAt` is.
     - the issuer signing `good` is `Good`, cached to `min(NextUpdate, 1h)`, so a second `Check`
       makes no call;
     - an in-validity delegate with the OCSP-signing usage is accepted;
+    - an answer the issuer signs with the issuer's own certificate embedded in it (the responder
+      passes the issuer as `ocsp.CreateResponse`'s `responderCert` and sets `Certificate`) is
+      accepted, though the issuer carries no OCSP-signing usage (re-check R8);
     - `revoked` is `Revoked`.
   - **A failure** is cached 30s: a second `Check` within 30s makes no call, and one after makes one
     (M15).
@@ -3581,7 +3647,9 @@ bookkeeping, as `RevokedAt` is.
   	switch {
   	case err != nil:
   		return unknown("its answer does not verify for this issuer")
-  	case r.Certificate != nil && !delegateOK(r.Certificate, now):
+  	case r.Certificate != nil && !bytes.Equal(r.Certificate.Raw, issuer.Raw) && !delegateOK(r.Certificate, now):
+  		// The issuer itself, embedded by some responders, is the issuer
+  		// signing directly (re-check R8).
   		return unknown("its answer is signed by a delegate without the OCSP-signing usage, or out of validity")
   	case r.SerialNumber == nil || r.SerialNumber.Cmp(cert.SerialNumber) != 0:
   		return unknown("its answer is for another serial")
@@ -3712,7 +3780,8 @@ bookkeeping, as `RevokedAt` is.
   - **An unknown status:**
     - with `OnUnavailable: "refuse"`, the mint is answered `503 certificate_status_unavailable` with
       `Retry-After: 60`, its record `mint deny trust_domain_unresolved`;
-    - so is the bind, and the refresh (pre-flight I7);
+    - so is the bind, counted `BrokerConnectionEvents{event="status_unavailable_refused"}` and not
+      `revoked_refused` (re-check R6), and the refresh (pre-flight I7);
     - with `"allow"`, the mint goes through, and two checks within 10m say the line once (M1).
   - **`OnCRLEntry`** for:
     - a certificate with a held connection: the queued revocation runs, the connection is closed, and
@@ -3928,7 +3997,12 @@ bookkeeping, as `RevokedAt` is.
   ```go
   		if l.Status != nil {
   			if ref := l.Status(cs, principal, cred); ref != nil {
-  				l.m.BrokerConnectionEvents.WithLabelValues("revoked_refused").Inc()
+  				// A CA outage is not a revocation on the dashboard (re-check R6).
+  				event := "revoked_refused"
+  				if ref.RetryAfter > 0 {
+  					event = "status_unavailable_refused"
+  				}
+  				l.m.BrokerConnectionEvents.WithLabelValues(event).Inc()
   				l.answerRefused(tc, ref.Status, api.Error{Error: ref.Error, Detail: ref.Detail}, ref.RetryAfter,
   					principal, cred, ref.Reason)
   				return
@@ -3942,6 +4016,10 @@ bookkeeping, as `RevokedAt` is.
     decision.Reason)`, setting `Retry-After` when non-zero. The mark path in `bind` passes `401`,
     `revokedError(rv)`, `0` and `decision.CredentialRevoked`.
   - **`Refused`.** It takes the reason; update port49d's setter (`Broker.RefusedAtBind`) to record it.
+  - **The event** (re-check R6). In `internal/daemon/metrics/metrics.go`, extend
+    `BrokerConnectionEvents`' comment: "…principal is marked), status_unavailable_refused (answered
+    503 certificate_status_unavailable and closed at bind: its certificate status could not be
+    established)." Add `internal/daemon/metrics/metrics.go` to this task's `git add`.
   - **`HoldsCert`.** Add it:
 
   ```go
@@ -3972,7 +4050,7 @@ bookkeeping, as `RevokedAt` is.
 - [ ] **Step 7: Commit.**
 
   ```bash
-  git add internal/broker internal/agent
+  git add internal/broker internal/agent internal/daemon/metrics/metrics.go
   git commit -m "feat(broker): refuse a revoked or unestablished certificate before it binds, at mint and refresh
 
   The chain's status is checked before bind, so a revoked certificate never holds a slot or
@@ -4046,7 +4124,14 @@ bookkeeping, as `RevokedAt` is.
     - the start line names the CRL and its next update;
     - a TLS connection with that client is answered `401 credential_revoked`.
   - **`disabled: true`.** The start line says certificate status is disabled.
-  - **A stale CRL.** With `on_unavailable: refuse`, a mint is answered `401 trust_domain_unresolved`.
+  - **A stale CRL.** With `on_unavailable: refuse`, a mint is answered `503
+    certificate_status_unavailable` with `Retry-After: 60` (pre-flight I7).
+  - **An uncovered intermediate** (re-check R3). With a root anchor, an intermediate signed by it,
+    `crls` naming only the intermediate's list (`issuer_file` the intermediate) and no `ocsp`, the
+    start says `port49d: broker: certificate status: certificates issued by <the intermediate's
+    subject> will be refused: nothing covers <the intermediate's subject> itself; name the root CA's
+    CRL`, and the daemon still starts. With the root's CRL added (`issuer_file` the anchor), or with an
+    `ocsp` block, the line is absent.
 
 - [ ] **Step 3: Run them to see them fail.** `go test ./internal/config/ ./cmd/port49d/ -run 'Certificate|CertStatus' -count=1`
   Expected: FAIL.
@@ -4108,13 +4193,47 @@ bookkeeping, as `RevokedAt` is.
   			for _, err := range checker.LoadPersisted() {
   				fmt.Fprintf(stderr, "port49d: broker: certificate status: %s\n", printsafe.Line(err.Error(), 300))
   			}
+  			for _, subject := range uncoveredIssuers(ccfg, anchorCert) { // re-check R3
+  				fmt.Fprintf(stderr, "port49d: broker: certificate status: certificates issued by %s will be refused: "+
+  					"nothing covers %s itself; name the root CA's CRL\n", subject, subject)
+  			}
   			brk.CertStatus, brk.OnUnavailable = checker, cs.OnUnavailable
   		}
   	}
   ```
 
   (`anchorCert` is the one certificate `broker.LoadTLS` read from `client_ca_file`; give
-  `buildBroker`'s caller access to it.) After the listeners bind and "listening" is said, start the
+  `buildBroker`'s caller access to it.)
+
+  `uncoveredIssuers` sits beside the wiring. Ruling 9 checks every certificate in the chain but the
+  anchor, so an intermediate's own status needs a list the anchor signs, or OCSP. A start that has
+  neither says so once per intermediate, rather than leaving the first login to find it:
+
+  ```go
+  // uncoveredIssuers names each CRL signer other than the anchor whose own
+  // status nothing can establish: no source's issuer_file is the anchor and
+  // OCSP is off. Every certificate it issued is then Unknown, and refused
+  // under on_unavailable: refuse (re-check R3).
+  func uncoveredIssuers(cfg certstatus.Config, anchor *x509.Certificate) []string {
+  	if cfg.OCSP != nil {
+  		return nil
+  	}
+  	for _, src := range cfg.CRLs {
+  		if bytes.Equal(src.Issuer.Raw, anchor.Raw) {
+  			return nil
+  		}
+  	}
+  	var out []string
+  	seen := map[string]bool{}
+  	for _, src := range cfg.CRLs {
+  		if subject := src.Issuer.Subject.String(); !seen[subject] {
+  			seen[subject] = true
+  			out = append(out, printsafe.Line(subject, 200))
+  		}
+  	}
+  	return out
+  }
+  ``` After the listeners bind and "listening" is said, start the
   network side and the revocation queue, joined at shutdown as the fetcher is (plan 6b, F8):
 
   ```go
@@ -4374,6 +4493,10 @@ premise, opened by Task 1. L2's clauses still open are the truncation length, IO
   - **What is marked.** If the certificate holds anything (a connection, a device session, an unspent
     token), port49d revokes it as `port49 revoke --cert` would: see `port49 revoke --list`, origin
     `crl …`. A `certificateHold` entry is refused while listed and never marked.
+  - **An intermediate CA.** Also name the root's CRL (`issuer_file` = your `client_ca_file`), or
+    every certificate under the intermediate is refused: port49d checks each CA in the chain, and
+    nothing else says whether the intermediate itself is revoked. An OCSP responder the root signs
+    for covers it too. port49d says so at start when nothing does (re-check R3).
   - **What is never trusted.** A CRL that does not verify against its `issuer_file` is never used,
     and nor is one that is scoped (partitioned, delta, unknown critical extension); check
     `port49_crl_loads_total{outcome="refused"}`.
@@ -4391,6 +4514,9 @@ premise, opened by Task 1. L2's clauses still open are the truncation length, IO
 - **Clocks.** CRL and OCSP freshness follow port49d's clock, so an NTP step forward can make a fresh
   list stale. The `port49 token` warning follows the laptop's clock.
 - **New metrics:**
+  - `port49_broker_connection_events_total{event}` gains `status_unavailable_refused`: a login
+    answered 503 because its certificate's status could not be established. `revoked_refused` stays
+    for revoked certificates and principals only, so a CA outage does not read as revocations;
   - `port49_session_refreshes_total{outcome}`, with `outcome` per context `extended`, `revoked`,
     `past_grace`, `not_judged`, and per refresh `refused`, `store_error`, `too_soon`;
   - `port49_ceiling_warnings_total`;

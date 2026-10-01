@@ -57,7 +57,8 @@ agent surviving a revocation, and the listener now answers a revoked caller `cre
 one lab-and-docs; eleven rulings recorded as decision 33; one owner decision, D-7b-1, whether a
 certificate whose revocation status cannot be established is refused (ruled refuse) and whether
 certificate status is required (ruled required, with an explicit `disabled`); it opens L34; revised the same day after its pre-flight review: two critical, thirteen important and
-twenty-two minor fixed, one minor rebutted in part).
+twenty-two minor fixed, one minor rebutted in part; its re-check's three important and five minor
+fixed the same day).
 7c–7h and 8–13 not yet.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
