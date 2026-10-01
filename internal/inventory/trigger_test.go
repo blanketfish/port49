@@ -17,7 +17,8 @@ func (f *fires) fire(context.Context, string) {
 	f.at = append(f.at, time.Now())
 	f.mu.Unlock()
 }
-func (f *fires) n() int { f.mu.Lock(); defer f.mu.Unlock(); return len(f.at) }
+func (f *fires) n() int              { f.mu.Lock(); defer f.mu.Unlock(); return len(f.at) }
+func (f *fires) get(i int) time.Time { f.mu.Lock(); defer f.mu.Unlock(); return f.at[i] }
 
 func runDebouncer(t *testing.T, d *Debouncer) func() {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -84,6 +85,36 @@ func TestADeliveryDuringASyncBringsOneMore(t *testing.T) {
 	stop()
 	if f.n() != 2 {
 		t.Fatalf("%d syncs", f.n())
+	}
+}
+
+// Decision 31: a delivery inside the gap, then silence, is one more sync, no
+// sooner than gap after the last began: a change is never lost to the window.
+func TestADeliveryInsideTheGapIsSyncedAfterIt(t *testing.T) {
+	var f fires
+	fired := make(chan struct{}, 4)
+	d := NewDebouncer([]string{"nb"}, time.Millisecond, 200*time.Millisecond, func(ctx context.Context, s string) {
+		f.fire(ctx, s)
+		fired <- struct{}{}
+	})
+	stop := runDebouncer(t, d)
+	defer stop()
+	d.Notify("nb")
+	<-fired
+	time.Sleep(20 * time.Millisecond)
+	d.Notify("nb")
+	select {
+	case <-fired:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a delivery inside the gap was lost")
+	}
+	if g := f.get(1).Sub(f.get(0)); g < 200*time.Millisecond {
+		t.Fatalf("second sync %v after the first", g)
+	}
+	select {
+	case <-fired:
+		t.Fatal("a third sync")
+	case <-time.After(400 * time.Millisecond):
 	}
 }
 

@@ -203,6 +203,9 @@ func run(ctx context.Context, cfgPath string, hup <-chan os.Signal) error {
 	// certificate, and a debouncer per source, joined with the tickers.
 	var webhookErr chan error // nil, so never ready, with no webhook source
 	var wsrv *http.Server
+	// The webhook's handlers are joined at shutdown as the API's are: one
+	// past the grace would otherwise count and say after run returns.
+	var hookReqs inflight
 	webhooks := ""
 	if cfg.WebhookListen != "" {
 		wln, err := net.Listen("tcp", cfg.WebhookListen)
@@ -216,7 +219,7 @@ func run(ctx context.Context, cfgPath string, hup <-chan os.Signal) error {
 			func(_ context.Context, name string) { syncNow("webhook", name) })
 		hooks := &inventory.Webhooks{Secrets: cfg.WebhookSecrets(), Notify: deb.Notify, Now: time.Now, Log: stderr,
 			Metrics: m}
-		wsrv = inventory.WebhookServer(cfg.WebhookListen, wcert, hooks.Handler(), inventory.WebhookErrorLog(m, stderr))
+		wsrv = inventory.WebhookServer(cfg.WebhookListen, wcert, hookReqs.wrap(hooks.Handler()), inventory.WebhookErrorLog(m, stderr))
 		webhookErr = make(chan error, 1)
 		go func() { webhookErr <- wsrv.ServeTLS(broker.Limit(wln, maxWebhookConns), "", "") }()
 		deb.Run(ctx, &tickers)
@@ -226,9 +229,9 @@ func run(ctx context.Context, cfgPath string, hup <-chan os.Signal) error {
 		}
 	}
 
-	// shutdown closes every listener, waits for the API's requests, and
-	// joins every goroutine run started. apiDone, metricsDone and
-	// webhookDone say whether that server's Serve has already returned.
+	// shutdown closes every listener, waits for the API's and the webhook's
+	// requests, and joins every goroutine run started. apiDone, metricsDone
+	// and webhookDone say whether that server's Serve has already returned.
 	shutdown := func(apiDone, metricsDone, webhookDone bool) {
 		cancel()
 		shut, done := context.WithTimeout(context.Background(), grace)
@@ -247,6 +250,7 @@ func run(ctx context.Context, cfgPath string, hup <-chan os.Signal) error {
 			}
 		}
 		reqs.wait()
+		hookReqs.wait()
 		if !apiDone {
 			<-apiErr
 		}

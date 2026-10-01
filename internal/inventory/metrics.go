@@ -5,8 +5,8 @@ import "github.com/prometheus/client_golang/prometheus"
 // Metrics is what the service exports on metrics_listen. No label names a
 // device; source names are configuration, not device identity.
 type Metrics struct {
-	// Syncs counts syncs by trigger (startup, schedule, api, signal) and
-	// outcome (published, unchanged, refused, failed).
+	// Syncs counts syncs by trigger (startup, schedule, api, signal,
+	// webhook) and outcome (published, unchanged, refused, failed).
 	Syncs *prometheus.CounterVec
 	// SyncRefused is 1 while the last sync was refused — over a bound,
 	// empty, admitting none, a device in two sources — and the bundle
