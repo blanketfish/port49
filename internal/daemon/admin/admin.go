@@ -59,9 +59,10 @@ const answerMargin = 10 * time.Second
 
 // RevokeWait is how long port49d holds a revoke's or lift's connection open
 // at the default OpTimeout: its wait for its turn, its run (Broker.
-// RevokeTimeout, which port49d sets to OpTimeout), the revocations_file
-// save it waits on, and the answer. A client waits longer, so it is never
-// the side that gives up first on a revocation that goes on to finish.
+// RevokeTimeout, which port49d sets to OpTimeout), and the answer. The
+// revocations_file save runs inside the run's bound; PersistTimeout is
+// headroom for it. A client waits longer, so it is never the side that
+// gives up first on a revocation that goes on to finish.
 const RevokeWait = 2*OpTimeout + PersistTimeout + answerMargin
 
 // ListWait is RevokeWait for a list, which takes no turn.
@@ -157,9 +158,9 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 // leaves nothing waiting on its behalf behind a hung revocation. The broker
 // honours that end only while it waits its turn; a revocation under way
 // finishes, under its own bound of the same length (Broker.RevokeTimeout),
-// so the connection is given both, and the save (RevokeWait). The caller's end is seen as a read that
-// fails, so a client keeps its write side open until it has the answer (no
-// half-close).
+// so the connection is given both (RevokeWait). The caller's end is seen as
+// a read that fails, so a client keeps its write side open until it has the
+// answer (no half-close).
 func (s *Server) handle(c net.Conn) {
 	defer c.Close()
 	_ = c.SetDeadline(time.Now().Add(5 * time.Second))

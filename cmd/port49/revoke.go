@@ -80,8 +80,10 @@ func revokeCmd(args []string, stdout, stderr io.Writer) int {
 		}
 		req.CertIssuer, req.CertSerial = c.Issuer.String(), c.SerialNumber.Text(16)
 		// The broker's report names the issuer and serial, not whose
-		// certificate it is; this says, before anything is sent.
-		fmt.Fprintf(stderr, "port49 revoke: %s: subject %s, issuer %s, serial %s\n", *certFile, c.Subject,
+		// certificate it is; this says, before anything is sent. Quoted as
+		// the broker quotes an issuer: a hostile certificate's names must
+		// not reach the terminal as escape sequences.
+		fmt.Fprintf(stderr, "port49 revoke: %s: subject %q, issuer %q, serial %s\n", *certFile, c.Subject.String(),
 			req.CertIssuer, req.CertSerial)
 	}
 	return askRevoke(*socket, req, revokeWait, stdout, stderr)

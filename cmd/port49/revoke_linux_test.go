@@ -272,7 +272,7 @@ func TestRevokeCertFileForms(t *testing.T) {
 	var out, errb bytes.Buffer
 	der := write("alice.der", leaf.Leaf.Raw)
 	if code := run([]string{"revoke", "--socket", socket, "--cert", der}, &out, &errb); code != 0 ||
-		!strings.Contains(errb.String(), "subject CN=alice, issuer CN=Corp Issuing CA, serial "+leaf.Leaf.SerialNumber.Text(16)) {
+		!strings.Contains(errb.String(), `subject "CN=alice", issuer "CN=Corp Issuing CA", serial `+leaf.Leaf.SerialNumber.Text(16)) {
 		t.Fatalf("exit %d: %q", code, errb.String())
 	}
 	if ops := sent(); len(ops) != 1 || ops[0].Issuer != leaf.Leaf.Issuer.String() || ops[0].Serial != leaf.Leaf.SerialNumber.Text(16) {
@@ -304,7 +304,19 @@ func TestRevokeCertFileForms(t *testing.T) {
 			t.Errorf("%s: key material printed", name)
 		}
 	}
-	if n := len(sent()); n != 1 {
+	// A hostile certificate's names reach the terminal quoted, never as
+	// escape sequences.
+	evil, err := ca.Issue(testpki.Leaf{CommonName: "a\x1b[31mred\a", Client: true, NotBefore: now.Add(-time.Hour),
+		NotAfter: now.Add(time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	errb.Reset()
+	if code := run([]string{"revoke", "--socket", socket, "--cert", write("evil.der", evil.Leaf.Raw)}, &out, &errb); code != 0 ||
+		strings.ContainsAny(errb.String(), "\x1b\a") || !strings.Contains(errb.String(), `subject "CN=a\x1b[31mred\a"`) {
+		t.Fatalf("exit %d: %q", code, errb.String())
+	}
+	if n := len(sent()); n != 2 {
 		t.Fatalf("a refused file sent a revocation: %d sent", n)
 	}
 
