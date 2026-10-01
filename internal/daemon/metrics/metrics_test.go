@@ -37,6 +37,7 @@ func TestNewRegistersEveryMetric(t *testing.T) {
 	m.BlobCache.WithLabelValues("hit").Inc()
 	m.CountQuarantined(func() int { return 1 })
 	m.ContextRefreshes.WithLabelValues("updated").Inc()
+	m.SessionRefreshes.WithLabelValues("extended").Inc()
 	m.TokensSuperseded.Inc()
 	m.CeilingWarnings.Inc()
 	m.Revocations.WithLabelValues("principal", "applied").Inc()
@@ -80,6 +81,7 @@ func TestNewRegistersEveryMetric(t *testing.T) {
 		"port49_blob_cache_lookups_total":            false,
 		"port49_devices_quarantined":                 false,
 		"port49_context_refreshes_total":             false,
+		"port49_session_refreshes_total":             false,
 		"port49_tokens_superseded_total":             false,
 		"port49_ceiling_warnings_total":              false,
 		"port49_revocations_total":                   false,

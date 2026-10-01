@@ -67,6 +67,11 @@ type Broker struct {
 	// CeilingWarning is session.ceiling_warning, told to the agent by
 	// /v1/config so `port49 token` warns too (plan 7b).
 	CeilingWarning time.Duration
+	// ContextIdleTTL is the idle lifetime a refreshed context is extended to,
+	// and GraceWindow how long past its ceiling a refresh may still resume
+	// one (spec §5.6): port49d's context_idle_ttl and session.grace_window.
+	ContextIdleTTL time.Duration
+	GraceWindow    time.Duration
 	// Redact is the redaction the blob event's rule text passes through
 	// before it is logged (spec §5.8): port49d passes the policy in force's.
 	// Nil is the built-in patterns.
@@ -105,22 +110,34 @@ type Broker struct {
 	superseded map[store.TokenKey]time.Time
 }
 
-// Handler routes the two endpoints the slice serves.
+// Handler routes the endpoints the broker serves.
 func (b *Broker) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/config", b.config)
 	mux.HandleFunc("POST /v1/tokens", b.tokens)
+	mux.HandleFunc("POST /v1/refresh/challenge", b.refreshChallenge)
+	mux.HandleFunc("POST /v1/refresh", b.refresh)
 	return mux
 }
 
 // heldConn is one connection's session state (design §7: on the certificate
-// path the agent's session IS the connection). at is when the broker accepted
-// the connection: stamped before the handshake that follows, so never later
-// than the key's use, and it never moves. A first request's time would let a
-// client handshake, idle, and start its session's clock later (plan 3,
-// Decided 2; pre-flight F3).
+// path the agent's session IS the connection). at is when it authenticated:
+// stamped at accept, before the handshake (plan 3, Decided 2), and moved
+// only by a refresh that verified (spec §5.6; decision 33). nonce is the
+// refresh challenge outstanding on it, single use; lastRefresh paces
+// refreshes to one per refreshEvery.
 type heldConn struct {
-	at time.Time
+	mu          sync.Mutex
+	at          time.Time
+	nonce       []byte
+	nonceExp    time.Time
+	lastRefresh time.Time
+}
+
+func (h *heldConn) authAt() time.Time {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.at
 }
 
 type heldConnKey struct{}
@@ -136,10 +153,17 @@ func withHeldConn(ctx context.Context, at time.Time) context.Context {
 // no held-connection state — a handler driven without Server — authenticated
 // now.
 func (b *Broker) authTime(r *http.Request) time.Time {
-	if h, ok := r.Context().Value(heldConnKey{}).(*heldConn); ok {
-		return h.at
+	if h := heldOf(r); h != nil {
+		return h.authAt()
 	}
 	return b.Now()
+}
+
+// heldOf is r's connection's session state, nil for a request driven without
+// Server.
+func heldOf(r *http.Request) *heldConn {
+	h, _ := r.Context().Value(heldConnKey{}).(*heldConn)
+	return h
 }
 
 func (b *Broker) config(w http.ResponseWriter, _ *http.Request) {
@@ -396,7 +420,16 @@ func (b *Broker) revocation(ctx context.Context, principal string, cred store.Cr
 // §5.7), and answerRevoked.
 func (b *Broker) refuseRevoked(w http.ResponseWriter, now time.Time, principal string, cred store.Credential,
 	rv store.Revocation) {
-	b.emit(revokedRecord(now, principal, cred))
+	b.refuseRevokedAs(w, decision.EventMint, now, principal, cred, rv)
+}
+
+// refuseRevokedAs is refuseRevoked with the record's event given: a refresh
+// under a mark is recorded as a refresh (pre-flight M2).
+func (b *Broker) refuseRevokedAs(w http.ResponseWriter, event string, now time.Time, principal string,
+	cred store.Credential, rv store.Revocation) {
+	rec := revokedRecord(now, principal, cred)
+	rec.Event = event
+	b.emit(rec)
 	answerRevoked(w, rv)
 }
 

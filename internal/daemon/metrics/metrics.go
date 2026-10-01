@@ -128,6 +128,14 @@ type Metrics struct {
 	// A context the refresh skipped — another principal's since, the lab's,
 	// already revoked — is not counted. The label is the outcome only.
 	ContextRefreshes *prometheus.CounterVec
+	// port49_session_refreshes_total{outcome}: session refreshes (spec §5.6;
+	// decision 33). Per context a refresh visited: "extended", "revoked" (the
+	// policy in force withdrew it), "past_grace" (deleted, its grace window
+	// over) or "not_judged" (the policy did not just judge and keep it: a
+	// quarantined device, a write that lost every race). Per refresh:
+	// "refused" (no live challenge, a bad signature, a mark), "store_error"
+	// or "too_soon" (paced, refresh_too_soon). The label is the outcome only.
+	SessionRefreshes *prometheus.CounterVec
 	// port49_tokens_superseded_total: (device, username) keys whose unspent
 	// tokens a policy change deleted, because the policy now in force would
 	// not mint what they carry. Each is one operator's `port49 token` to run
@@ -339,6 +347,9 @@ func New(reg prometheus.Registerer) *Metrics {
 			Help: "Compiled-blob cache lookups by the authorizer, by outcome."}, []string{"outcome"}),
 		ContextRefreshes: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_context_refreshes_total",
 			Help: "Live login contexts a policy refresh visited, by outcome."}, []string{"outcome"}),
+		SessionRefreshes: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_session_refreshes_total",
+			Help: "Session refreshes: per context extended, revoked, past_grace or not_judged; per refresh refused, " +
+				"store_error or too_soon."}, []string{"outcome"}),
 		TokensSuperseded: prometheus.NewCounter(prometheus.CounterOpts{Name: "port49_tokens_superseded_total",
 			Help: "(device, username) keys whose unspent tokens a policy change deleted."}),
 		CeilingWarnings: prometheus.NewCounter(prometheus.CounterOpts{Name: "port49_ceiling_warnings_total",
@@ -404,7 +415,7 @@ func New(reg prometheus.Registerer) *Metrics {
 		m.Connections, m.ConnectionEvents, m.AuthFailures, m.SpoolDepth, m.SpoolDrops, m.SpoolQuarantines,
 		m.StoreOps, m.DecisionLogWriteFailures, m.CryptOpenFailures, m.Attributions, m.BrokerItemErrors, m.BrokerIdempotency,
 		m.BrokerHandshakeFailures, m.BrokerConnectionEvents, m.BrokerConnections, m.BlobCache,
-		m.DevicesQuarantined, m.DevicesAdmissionRefused, m.ContextRefreshes, m.TokensSuperseded, m.CeilingWarnings,
+		m.DevicesQuarantined, m.DevicesAdmissionRefused, m.ContextRefreshes, m.SessionRefreshes, m.TokensSuperseded, m.CeilingWarnings,
 		m.Revocations, m.RevocationsInForce, m.RevocationsFileFailed, m.PolicyReloads, m.PolicyFileRefused,
 		m.PolicyRefreshPending, m.InventoryReloads, m.InventoryFileRefused, m.InventorySnapshotAge,
 		m.InventoryChanges, m.InventoryBundleSequence, m.InventoryPersistFailed, m.InventoryBundleRefused,

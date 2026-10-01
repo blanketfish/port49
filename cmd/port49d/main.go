@@ -232,7 +232,8 @@ func buildBroker(cfg config.Config, inventoryFrom string, st store.Store, minter
 	}
 	b := &broker.Broker{Policy: policy.NewLive(pol), Minter: minter, Store: st, Log: log, Metrics: m, Now: time.Now,
 		MaxSessionAge: cfg.Session.MaxSessionAgeDefault, BatchMax: cfg.Broker.BatchMax,
-		CeilingWarning: cfg.Session.CeilingWarning}
+		CeilingWarning: cfg.Session.CeilingWarning, ContextIdleTTL: cfg.ContextIdleTTL,
+		GraceWindow: cfg.Session.GraceWindow}
 	// The blob event's rule text is redacted as the daemon's records are,
 	// with the policy in force's patterns (spec §5.8).
 	b.Redact = redactorFor(b.Policy)
