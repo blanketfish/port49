@@ -500,8 +500,17 @@ func (w *wrapped) ReserveIdempotency(ctx context.Context, principal, key string,
 }
 
 // CompleteIdempotency seals the response, which holds the minted tokens
-// (design §17), before the compare-and-set below.
+// (design §17), before the compare-and-set below. A pending record (Mint's
+// renewal of its hold) holds no response and passes through unsealed, as a
+// reservation does; one that tries to carry a response is refused rather
+// than written in clear.
 func (w *wrapped) CompleteIdempotency(ctx context.Context, principal, key, expect string, rec store.Idempotency) error {
+	if rec.Pending {
+		if len(rec.Response) != 0 {
+			return errors.New("crypt: a pending record carries no response")
+		}
+		return w.inner.CompleteIdempotency(ctx, principal, key, expect, rec)
+	}
 	s, err := w.keys.Seal(rec.Response)
 	if err != nil {
 		return err

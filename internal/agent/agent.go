@@ -26,6 +26,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptrace"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -61,12 +62,26 @@ var connectTimeout = 10 * time.Second
 
 // inProgressRetries and inProgressDelay bound how long Mint waits for a
 // first try still minting under its key: fifteen seconds, past the
-// broker's ten-second bound on a mint's store calls. Vars so a test can
-// shorten them.
+// broker's ten-second bound on a mint's store calls. The broker's
+// Retry-After, when it sends one, replaces inProgressDelay up to
+// inProgressDelayMax, so a broker that asks for an hour cannot park a
+// login for one. Vars so a test can shorten them.
 var (
-	inProgressRetries = 15
-	inProgressDelay   = time.Second
+	inProgressRetries  = 15
+	inProgressDelay    = time.Second
+	inProgressDelayMax = 5 * time.Second
 )
+
+// retryAfter is how long to wait before asking again: the broker's
+// Retry-After in whole seconds, capped at inProgressDelayMax, or
+// inProgressDelay when it sends none the agent can read.
+func retryAfter(h http.Header) time.Duration {
+	n, err := strconv.Atoi(h.Get("Retry-After"))
+	if err != nil || n <= 0 {
+		return min(inProgressDelay, inProgressDelayMax)
+	}
+	return min(time.Duration(n)*time.Second, inProgressDelayMax)
+}
 
 // Agent is one operator session.
 type Agent struct {
@@ -194,9 +209,10 @@ func (a *Agent) end(why error) {
 // is retried once, on a new connection, under the same Idempotency-Key, so a
 // mint whose response was lost is replayed rather than cut again (design
 // §17); a 409 idempotency_in_progress, that first try still minting, is
-// waited out under the same key. A 401 session_expired or trust_domain_unresolved ends the session,
-// and so does a reconnect whose handshake the broker refuses. An item the
-// broker could not decide is returned with an *ItemError, never alone.
+// waited out under the same key. A 401 session_expired or
+// trust_domain_unresolved ends the session, and so does a reconnect whose
+// handshake the broker refuses. An item the broker could not decide is
+// returned with an *ItemError, never alone.
 func (a *Agent) Mint(ctx context.Context, device string, enable bool, ttl time.Duration) (api.MintItem, error) {
 	select {
 	case <-a.done:
@@ -234,7 +250,7 @@ func (a *Agent) Mint(ctx context.Context, device string, enable bool, ttl time.D
 		select {
 		case <-ctx.Done():
 			return api.MintItem{}, ctx.Err()
-		case <-time.After(inProgressDelay):
+		case <-time.After(retryAfter(resp.Header)):
 		}
 	}
 	defer drain(resp.Body)

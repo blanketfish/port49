@@ -274,8 +274,8 @@ func TestALostResponseIsRetriedUnderTheSameKey(t *testing.T) {
 // is answered from that try rather than cutting a second pair (design §17),
 // and gives up, naming the code, once the wait is past the broker's bound.
 func TestAnInProgressAnswerIsWaitedOutUnderTheSameKey(t *testing.T) {
-	defer func(d time.Duration) { inProgressDelay = d }(inProgressDelay)
-	inProgressDelay = 10 * time.Millisecond
+	defer func(d, m time.Duration) { inProgressDelay, inProgressDelayMax = d, m }(inProgressDelay, inProgressDelayMax)
+	inProgressDelay, inProgressDelayMax = 10*time.Millisecond, 10*time.Millisecond // the stub asks for 1s
 	r := newRig(t)
 	r.fb.mu.Lock()
 	r.fb.inProgress = 2
@@ -299,6 +299,31 @@ func TestAnInProgressAnswerIsWaitedOutUnderTheSameKey(t *testing.T) {
 	}
 	if n := len(r.fb.seen()); n != inProgressRetries+1 {
 		t.Fatalf("%d requests, want %d", n, inProgressRetries+1)
+	}
+}
+
+// The broker's Retry-After sets the wait, capped so no answer parks a login
+// for long; without one the agent can read, it waits its own delay.
+func TestRetryAfterIsHonouredUpToACap(t *testing.T) {
+	for _, tc := range []struct {
+		header string
+		want   time.Duration
+	}{
+		{"1", time.Second},
+		{"3", 3 * time.Second},
+		{"3600", inProgressDelayMax},
+		{"", inProgressDelay},
+		{"0", inProgressDelay},
+		{"-2", inProgressDelay},
+		{"Wed, 21 Oct 2026 07:28:00 GMT", inProgressDelay},
+	} {
+		h := http.Header{}
+		if tc.header != "" {
+			h.Set("Retry-After", tc.header)
+		}
+		if got := retryAfter(h); got != tc.want {
+			t.Errorf("Retry-After %q: %v, want %v", tc.header, got, tc.want)
+		}
 	}
 }
 

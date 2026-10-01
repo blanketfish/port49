@@ -450,11 +450,54 @@ func TestAnAbandonedReplayIsTakenOverBeforeItMints(t *testing.T) {
 	if _, err := m.Mint(ctx, a); err != nil {
 		t.Fatalf("the first abandoned replay: %v", err)
 	}
-	if _, err := m.Mint(ctx, b); !errors.Is(err, ErrIdempotencyInProgress) && !errors.Is(err, ErrIdempotencyConflict) {
+	if _, err := m.Mint(ctx, b); !errors.Is(err, ErrIdempotencyInProgress) {
 		t.Fatalf("the second abandoned replay minted: %v", err)
 	}
 	if c, _ := st.Candidates(ctx, store.TokenKey{NAS: "leaf-01", Username: subject().Username}); len(c) != 2 {
 		t.Fatalf("%d tokens: the first mint and one re-mint, not two", len(c))
+	}
+}
+
+// timingOutStore fails the reservation of one device as a store call whose
+// context ran out does, and ends that context; its releases honour their
+// context, as a networked store's would.
+type timingOutStore struct {
+	*memory.Store
+	fail   string
+	cancel context.CancelFunc
+}
+
+func (s *timingOutStore) ReserveIdempotency(ctx context.Context, principal, key string, rec store.Idempotency) (store.Idempotency, bool, error) {
+	if key == idemScope("01J", s.fail) {
+		s.fail = ""
+		s.cancel()
+		return store.Idempotency{}, false, context.DeadlineExceeded
+	}
+	return s.Store.ReserveIdempotency(ctx, principal, key, rec)
+}
+
+func (s *timingOutStore) ReleaseIdempotency(ctx context.Context, principal, key, holder string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return s.Store.ReleaseIdempotency(ctx, principal, key, holder)
+}
+
+// A batch refused at a store that timed out gives back what it reserved
+// on a context of its own, not the one that ran out: the retry reserves
+// rather than being told for a minute that a mint is in progress when
+// none is.
+func TestAReserveCutShortByTheStoreGivesBackWhatItTook(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	st := &timingOutStore{Store: memory.New(time.Now), fail: "leaf-02", cancel: cancel}
+	m := NewMinter(st, decision.NewJSONLines(&bytes.Buffer{}), rand.Reader, TagKey([]byte("k")), time.Now, 3)
+	p := subject().Principal
+	devices := []string{"leaf-01", "leaf-02"}
+	if _, err := m.Reserve(ctx, p, "01J", devices, "h1"); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("the store's timeout: %v", err)
+	}
+	if _, err := m.Reserve(context.Background(), p, "01J", devices, "h1"); err != nil {
+		t.Fatalf("the retry after a store error: %v", err)
 	}
 }
 

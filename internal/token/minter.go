@@ -29,7 +29,8 @@ var ErrIdempotencyInProgress = errors.New("token: a request under this idempoten
 
 // ReservationTTL is how long a reservation stands with its mint unfinished.
 // A broker that dies mid-mint leaves one behind; past this a retry mints
-// afresh, and the record says the first attempt's tokens went unrecorded.
+// afresh, and the first attempt's tokens, never returned, stand unspent
+// until their TTL.
 // Mint renews a device's reservation for this long just before minting it,
 // so the lease covers one device's mint, not a whole batch: a mint's store
 // calls are bounded at ten seconds (the broker's holdTimeout), so a minute is
@@ -179,21 +180,35 @@ func (m *Minter) Reserve(ctx context.Context, principal, key string, devices []s
 		cur, ok, err := m.store.ReserveIdempotency(ctx, principal, idemScope(key, device), rec)
 		switch {
 		case err != nil:
-			m.Release(ctx, principal, res)
+			m.giveBack(ctx, principal, res)
 			return nil, fmt.Errorf("token: reserving the idempotency key: %w", err)
 		case ok:
 			res.reserved = append(res.reserved, device)
 		case cur.BodyHash != bodyHash:
-			m.Release(ctx, principal, res)
+			m.giveBack(ctx, principal, res)
 			return nil, ErrIdempotencyConflict
 		case cur.Pending:
-			m.Release(ctx, principal, res)
+			m.giveBack(ctx, principal, res)
 			return nil, ErrIdempotencyInProgress
 		default:
 			res.Found[device] = cur
 		}
 	}
 	return res, nil
+}
+
+// releaseTimeout bounds giveBack's store calls, as the broker's holdTimeout
+// bounds a mint's.
+const releaseTimeout = 10 * time.Second
+
+// giveBack is Release for a batch Reserve refuses, on a context of its own:
+// the caller's is often the one that just ran out at the store, and released
+// on it, nothing would be given back, and every retry for a minute would be
+// told a mint is in progress when none is.
+func (m *Minter) giveBack(ctx context.Context, principal string, res *Reservation) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), releaseTimeout)
+	defer cancel()
+	m.Release(ctx, principal, res)
 }
 
 // Release gives back every reservation res took whose mint did not

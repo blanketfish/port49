@@ -411,6 +411,31 @@ func TestACompletedReservationIsSealed(t *testing.T) {
 	}
 }
 
+// A renewal of a pending hold is a pending record: nothing is sealed into
+// it, so it reads back without opening, and one carrying a response is
+// refused rather than written in clear.
+func TestARenewedHoldIsNotSealed(t *testing.T) {
+	ctx := context.Background()
+	inner := memory.New(time.Now)
+	s := Wrap(inner, keys(), nil)
+	exp := time.Now().Add(time.Minute)
+	if _, ok, err := s.ReserveIdempotency(ctx, "user:alice", "k",
+		store.Idempotency{BodyHash: "b", Holder: "h", Pending: true, ExpiresAt: exp}); err != nil || !ok {
+		t.Fatalf("%v %v", ok, err)
+	}
+	if err := s.CompleteIdempotency(ctx, "user:alice", "k", "h",
+		store.Idempotency{BodyHash: "b", Holder: "h", Pending: true, ExpiresAt: exp.Add(time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := inner.GetIdempotency(ctx, "user:alice", "k"); !r.Pending || len(r.Sealed) != 0 || !r.ExpiresAt.Equal(exp.Add(time.Minute)) {
+		t.Fatalf("the renewed hold: %+v", r)
+	}
+	if err := s.CompleteIdempotency(ctx, "user:alice", "k", "h",
+		store.Idempotency{BodyHash: "b", Holder: "h", Pending: true, Response: []byte("x"), ExpiresAt: exp}); err == nil {
+		t.Fatal("a pending record carrying a response was written")
+	}
+}
+
 // Ruling R1 through the real sealing layer: a context sealed under a key that
 // has left the two-key window, and revoked, is replaced by the next login
 // rather than refusing it, and the revocation carries. What makes it possible
