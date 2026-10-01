@@ -52,6 +52,10 @@ type Store struct {
 	tokensByPrincipal map[string]map[store.TokenKey]time.Time
 	tokensByCert      map[string]map[store.TokenKey]time.Time
 
+	// revocations are the standing marks (plan 7a), by (Kind, Key). The
+	// sweep never touches them: only DeleteRevocation lifts one.
+	revocations map[[2]string]store.Revocation
+
 	writes int // incremented on every write; triggers sweep at sweepEvery
 	// revs is the last context revision handed out. It is store-wide rather
 	// than per key so a context that is deleted and written again never
@@ -150,6 +154,7 @@ func New(now func() time.Time) *Store {
 		idem:                make(map[string]store.Idempotency),
 		tokensByPrincipal:   make(map[string]map[store.TokenKey]time.Time),
 		tokensByCert:        make(map[string]map[store.TokenKey]time.Time),
+		revocations:         make(map[[2]string]store.Revocation),
 	}
 }
 
@@ -1216,6 +1221,66 @@ func (s *Store) ReleaseIdempotency(_ context.Context, principal, key, holder str
 		delete(s.idem, k)
 	}
 	return nil
+}
+
+// errIncompleteMark refuses a revocation mark that could match nothing: it
+// would be reported as in force and revoke nothing.
+var errIncompleteMark = errors.New("store: a revocation mark must name a principal, or a certificate by issuer and serial")
+
+// PutRevocation writes r unless a mark for its key already stands.
+func (s *Store) PutRevocation(_ context.Context, r store.Revocation) error {
+	switch r.Kind {
+	case store.RevocationPrincipal:
+		if r.Key == "" {
+			return errIncompleteMark
+		}
+	case store.RevocationCert:
+		if blankCertKey(r.Key) {
+			return errIncompleteMark
+		}
+	default:
+		return errIncompleteMark
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	k := [2]string{r.Kind, r.Key}
+	if _, ok := s.revocations[k]; !ok {
+		s.revocations[k] = r
+	}
+	s.wroteLocked()
+	return nil
+}
+
+func (s *Store) GetRevocation(_ context.Context, kind, key string) (store.Revocation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if r, ok := s.revocations[[2]string{kind, key}]; ok {
+		return r, nil
+	}
+	return store.Revocation{}, store.ErrNotFound
+}
+
+func (s *Store) DeleteRevocation(_ context.Context, kind, key string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.revocations, [2]string{kind, key})
+	return nil
+}
+
+func (s *Store) ListRevocations(_ context.Context) ([]store.Revocation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]store.Revocation, 0, len(s.revocations))
+	for _, r := range s.revocations {
+		out = append(out, r)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Kind != out[j].Kind {
+			return out[i].Kind < out[j].Kind
+		}
+		return out[i].Key < out[j].Key
+	})
+	return out, nil
 }
 
 // wroteLocked counts a write and sweeps every sweepEvery writes, as every

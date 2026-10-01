@@ -540,4 +540,22 @@ func (w *wrapped) ReleaseIdempotency(ctx context.Context, principal, key, holder
 	return w.inner.ReleaseIdempotency(ctx, principal, key, holder)
 }
 
+// Revocation marks are plaintext: identity, no credential, and revocation
+// must not depend on the encryption key.
+func (w *wrapped) PutRevocation(ctx context.Context, r store.Revocation) error {
+	return w.inner.PutRevocation(ctx, r)
+}
+
+func (w *wrapped) GetRevocation(ctx context.Context, kind, key string) (store.Revocation, error) {
+	return w.inner.GetRevocation(ctx, kind, key)
+}
+
+func (w *wrapped) DeleteRevocation(ctx context.Context, kind, key string) error {
+	return w.inner.DeleteRevocation(ctx, kind, key)
+}
+
+func (w *wrapped) ListRevocations(ctx context.Context) ([]store.Revocation, error) {
+	return w.inner.ListRevocations(ctx)
+}
+
 var _ store.Store = (*wrapped)(nil)

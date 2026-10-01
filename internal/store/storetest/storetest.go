@@ -493,3 +493,69 @@ func TokenIndex(t *testing.T, newStore func() store.Store, now time.Time) {
 		}
 	}
 }
+
+// RevocationMarks is the mark a revocation leaves (spec §5.1.4; plan 7a): it
+// stands until it is deleted; a second put of the same key keeps the first
+// whole, so a repeat neither moves its time nor its origin; a principal's
+// and a certificate's marks are kept apart; and the list is sorted. A mark
+// that could match nothing — an unknown kind, an empty key, a certificate
+// key with no issuer or no serial, which the token and context indexes
+// never hold — is refused, so a revocation never reports a mark that
+// revokes nothing.
+func RevocationMarks(t *testing.T, newStore func() store.Store, now time.Time) {
+	t.Helper()
+	ctx := context.Background()
+	s := newStore()
+	alice := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:alice@example.com", At: now,
+		Origin: "admin_socket uid 0"}
+	cert := store.Revocation{Kind: store.RevocationCert, Key: store.CertKey("CN=Corp CA", "3f9a01"),
+		At: now.Add(time.Second), Origin: "admin_socket uid 0"}
+	if _, err := s.GetRevocation(ctx, alice.Kind, alice.Key); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("no mark yet: %v", err)
+	}
+	for _, r := range []store.Revocation{cert, alice} {
+		if err := s.PutRevocation(ctx, r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	again := alice
+	again.At, again.Origin = now.Add(time.Hour), "admin_socket uid 1000"
+	if err := s.PutRevocation(ctx, again); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetRevocation(ctx, alice.Kind, alice.Key)
+	if err != nil || !got.At.Equal(now) || got.Origin != alice.Origin {
+		t.Fatalf("a repeat revocation moved the mark: %+v %v", got, err)
+	}
+	if _, err := s.GetRevocation(ctx, store.RevocationCert, alice.Key); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("a principal's mark answered for a certificate: %v", err)
+	}
+	for _, r := range []store.Revocation{
+		{Kind: "", Key: "user:bob@example.com", At: now},
+		{Kind: "device", Key: "user:bob@example.com", At: now},
+		{Kind: store.RevocationPrincipal, Key: "", At: now},
+		{Kind: store.RevocationCert, Key: "", At: now},
+		{Kind: store.RevocationCert, Key: store.CertKey("", "3f9a01"), At: now},
+		{Kind: store.RevocationCert, Key: store.CertKey("CN=Corp CA", ""), At: now},
+	} {
+		if err := s.PutRevocation(ctx, r); err == nil {
+			t.Fatalf("an incomplete mark was taken: %+v", r)
+		}
+	}
+	list, err := s.ListRevocations(ctx)
+	if err != nil || len(list) != 2 || list[0].Kind != store.RevocationCert || list[1].Key != alice.Key {
+		t.Fatalf("list: %+v %v", list, err)
+	}
+	if err := s.DeleteRevocation(ctx, alice.Kind, alice.Key); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.GetRevocation(ctx, alice.Kind, alice.Key); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("a lifted mark stands: %v", err)
+	}
+	if err := s.DeleteRevocation(ctx, alice.Kind, alice.Key); err != nil {
+		t.Fatalf("lifting a mark twice: %v", err)
+	}
+	if got, err := s.GetRevocation(ctx, cert.Kind, cert.Key); err != nil || !got.At.Equal(cert.At) {
+		t.Fatalf("lifting a principal's mark lifted the certificate's: %+v %v", got, err)
+	}
+}

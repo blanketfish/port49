@@ -634,10 +634,44 @@ type Store interface {
 	// ReleaseIdempotency deletes the record under (principal, key) only
 	// while it is a pending reservation held by holder; anything else stays.
 	ReleaseIdempotency(ctx context.Context, principal, key, holder string) error
+
+	// PutRevocation puts r in force. An existing mark for (r.Kind, r.Key) is
+	// kept whole: a repeat never moves its time or origin, and never lifts.
+	// A mark that could match nothing is refused: a Kind that is neither
+	// RevocationPrincipal nor RevocationCert, an empty Key, or a certificate
+	// Key with no issuer or no serial, which IndexToken never indexes.
+	PutRevocation(ctx context.Context, r Revocation) error
+	// GetRevocation is the mark in force for (kind, key), or ErrNotFound.
+	GetRevocation(ctx context.Context, kind, key string) (Revocation, error)
+	// DeleteRevocation lifts the mark for (kind, key); none is not an error.
+	DeleteRevocation(ctx context.Context, kind, key string) error
+	// ListRevocations is every mark in force, sorted by (Kind, Key).
+	ListRevocations(ctx context.Context) ([]Revocation, error)
 }
 
 // CertKey is the index key a CRL or OCSP response names (spec §5.1.4).
 func CertKey(issuer, serial string) string { return issuer + "|" + serial }
+
+// Revocation kinds (spec §5.1.4; plan 7a).
+const (
+	RevocationPrincipal = "principal"
+	RevocationCert      = "cert"
+)
+
+// Revocation is a standing refusal of a principal, or of one certificate
+// by CertKey(issuer, serial): every mint it names is refused until an
+// operator deletes it (spec §5.1.4, §13 decision 32). It never expires. It
+// is plaintext, as the indexes are: it names identity and holds no
+// credential, and revocation must not depend on the encryption key.
+type Revocation struct {
+	Kind string
+	Key  string
+	// At is when the mark took force. A second put of the same key keeps the
+	// first mark whole: the refusal has stood since then.
+	At time.Time
+	// Origin says who asked: "admin_socket uid 0".
+	Origin string
+}
 
 // HasCeiling reports whether this context carries a session ceiling.
 func (c Context) HasCeiling() bool { return !c.SessionExpires.IsZero() && !c.AuthTime.IsZero() }

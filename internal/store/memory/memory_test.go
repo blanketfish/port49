@@ -1393,3 +1393,24 @@ func TestATokenIndexEntryExpiresWithItsLongestToken(t *testing.T) {
 		t.Fatalf("at 10m: %v", got)
 	}
 }
+
+func TestRevocationMarks(t *testing.T) {
+	now := time.Unix(1_757_041_495, 0)
+	storetest.RevocationMarks(t, func() store.Store { return New(func() time.Time { return now }) }, now)
+}
+
+// A mark does not expire however far the clock moves: only a delete lifts
+// it (spec §13, decision 32).
+func TestARevocationMarkNeverExpires(t *testing.T) {
+	now := time.Unix(1_757_041_495, 0)
+	s := New(func() time.Time { return now })
+	ctx := context.Background()
+	_ = s.PutRevocation(ctx, store.Revocation{Kind: store.RevocationPrincipal, Key: "user:alice", At: now})
+	for i := 0; i < sweepEvery; i++ { // through a sweep
+		_ = s.PutBlob(ctx, fmt.Sprintf("b%d", i), []byte("x"), time.Second)
+	}
+	now = now.Add(10 * 365 * 24 * time.Hour)
+	if _, err := s.GetRevocation(ctx, store.RevocationPrincipal, "user:alice"); err != nil {
+		t.Fatalf("a mark expired: %v", err)
+	}
+}

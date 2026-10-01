@@ -465,6 +465,18 @@ func (noStore) CompleteIdempotency(context.Context, string, string, string, stor
 func (noStore) ReleaseIdempotency(context.Context, string, string, string) error {
 	panic("store called")
 }
+func (noStore) PutRevocation(context.Context, store.Revocation) error {
+	panic("store called")
+}
+func (noStore) GetRevocation(context.Context, string, string) (store.Revocation, error) {
+	panic("store called")
+}
+func (noStore) DeleteRevocation(context.Context, string, string) error {
+	panic("store called")
+}
+func (noStore) ListRevocations(context.Context) ([]store.Revocation, error) {
+	panic("store called")
+}
 
 func (noStore) AnnotateContext(context.Context, store.ContextKey, string, string) error {
 	panic("store called")

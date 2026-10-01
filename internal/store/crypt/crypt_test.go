@@ -533,3 +533,10 @@ func TestTokenIndexThroughTheSealingLayer(t *testing.T) {
 		return Wrap(memory.New(func() time.Time { return now }), keys(), nil)
 	}, now)
 }
+
+func TestRevocationMarksThroughTheSealingLayer(t *testing.T) {
+	now := time.Unix(1_757_041_495, 0)
+	storetest.RevocationMarks(t, func() store.Store {
+		return Wrap(memory.New(func() time.Time { return now }), keys(), nil)
+	}, now)
+}
