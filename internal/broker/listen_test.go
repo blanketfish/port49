@@ -29,6 +29,14 @@ import (
 // logf (nil drops them), and returns the address and the listener.
 func serveThrough(t *testing.T, f *fixture, lim ListenerLimits, logf func(string, ...any)) (string, *Listener) {
 	t.Helper()
+	return serveThroughWith(t, f, lim, logf, nil)
+}
+
+// serveThroughWith is serveThrough with set run on the listener before it
+// serves, so a hook it sets is in place before any connection.
+func serveThroughWith(t *testing.T, f *fixture, lim ListenerLimits, logf func(string, ...any),
+	set func(*Listener)) (string, *Listener) {
+	t.Helper()
 	now := f.b.Now()
 	srvCert, err := f.ca.Issue(testpki.Leaf{CommonName: "broker", IPs: []net.IP{net.ParseIP("127.0.0.1")},
 		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(48 * time.Hour)})
@@ -48,6 +56,9 @@ func serveThrough(t *testing.T, f *fixture, lim ListenerLimits, logf func(string
 	}
 	bl := NewListener(Limit(raw, MaxConns), srv.TLSConfig, lim, f.b.Metrics, f.b.Now, logf)
 	bl.Refused = f.b.RefusedAtBind // as port49d wires it
+	if set != nil {
+		set(bl)
+	}
 	go func() { _ = srv.Serve(bl) }()
 	t.Cleanup(func() { _ = srv.Close() })
 	return raw.Addr().String(), bl

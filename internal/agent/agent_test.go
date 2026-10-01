@@ -99,6 +99,7 @@ func (fb *fakeBroker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	fb.mu.Unlock()
 	if certStatus && r.URL.Path != "/v1/refresh/challenge" {
+		w.Header().Set("Retry-After", "60") // as the broker's writeRefusal answers it
 		writeJSON(w, 503, api.Error{Error: "certificate_status_unavailable",
 			Detail: "the broker cannot reach the certificate's OCSP responder"})
 		return

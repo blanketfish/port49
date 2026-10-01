@@ -123,7 +123,19 @@ func (b *Broker) refresh(w http.ResponseWriter, r *http.Request) {
 		b.refuseRevokedAs(w, decision.EventRefresh, now, principal, cred, rv)
 		return
 	}
-	// Certificate status (Task 10) is checked here, beside the marks.
+	// The certificate's status, beside the marks (spec §5.1.4): a revoked one
+	// is answered credential_revoked and closed; one not established is 503,
+	// to be retried, and ends nothing. Either is one refresh deny record.
+	statusCtx, cancelStatus := context.WithTimeout(r.Context(), holdTimeout)
+	ref := b.certRefusal(statusCtx, r.TLS, cred)
+	cancelStatus()
+	if ref != nil {
+		b.Metrics.SessionRefreshes.WithLabelValues("refused").Inc()
+		b.emit(decision.Record{TS: now, Event: decision.EventRefresh, Verdict: decision.VerdictDeny, Reason: ref.Reason,
+			Principal: principal, Auth: &decision.Auth{Method: cred.Method, Fingerprint: cred.Fingerprint}})
+		b.answerRefusal(w, r, ref)
+		return
+	}
 	at := b.Now() // the broker's verification time: the one clock §5.6 gives it
 	// The connection's clock moves before the extension, and stays moved if
 	// the extension fails: the signature and the marks verified, so this was

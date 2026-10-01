@@ -12,11 +12,14 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
 
+	"github.com/rhwendt/port49/internal/broker/api"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
+	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/printsafe"
 	"github.com/rhwendt/port49/internal/store"
 )
@@ -44,12 +47,14 @@ var DefaultListenerLimits = ListenerLimits{MaxPendingPerSource: 16, MaxPerPrinci
 	HandshakeTimeout: 10 * time.Second}
 
 // ConnCloser is the listener as a revocation sees it (Broker.Conns):
-// CloseHeld closes the held connections a mark names, and Revoked keeps the
+// CloseHeld closes the held connections a mark names, Revoked keeps the
 // listener's in-memory copy of the marks, by (store.Revocation kind, key),
-// which answers a marked connection credential_revoked as it binds.
+// which answers a marked connection credential_revoked as it binds, and
+// HoldsCert says whether a certificate a CRL names holds a connection.
 type ConnCloser interface {
 	CloseHeld(match func(principal, certKey string) bool) int
 	Revoked(mark store.Revocation, on bool)
+	HoldsCert(certKey string) bool
 }
 
 // revokedAnswerTimeout bounds a marked connection's one request and its
@@ -88,11 +93,18 @@ type Listener struct {
 	now   func() time.Time
 	logf  func(format string, args ...any)
 
-	// Refused records a marked connection's request refused
-	// credential_revoked: one mint deny record each (spec §5.7), which
-	// port49d sets to Broker.RefusedAtBind. Set it before the first Accept;
-	// nil records nothing.
-	Refused func(principal string, cred store.Credential)
+	// Refused records a request refused as its connection bound, with the
+	// reason: credential_revoked for a mark, or Status's. One mint deny
+	// record each (spec §5.7), which port49d sets to Broker.RefusedAtBind.
+	// Set it before the first Accept; nil records nothing.
+	Refused func(principal string, cred store.Credential, reason decision.Reason)
+	// Status answers a certificate chain's revocation status before the
+	// connection binds (spec §5.1.4): a refusal is answered, recorded
+	// (Refused) and closed while the connection is still charged to its
+	// source, so a revoked certificate never holds a slot or evicts its
+	// owner's connections. port49d sets it to Broker.BindStatus; nil checks
+	// nothing.
+	Status func(cs tls.ConnectionState, principal string, cred store.Credential) *BindRefusal
 
 	ready     chan *tls.Conn
 	done      chan struct{}
@@ -276,13 +288,33 @@ func (l *Listener) handshake(c *trackedConn) {
 			l.refuse(c, tc, "identity_refused", err)
 			return
 		}
-		rv, ok := l.bind(c, principal, store.CertKey(cred.Issuer, cred.Serial))
+		// A marked connection skips the status check: bind answers it
+		// credential_revoked, which a CA outage must not turn into a 503 the
+		// agent keeps its session on.
+		certKey := store.CertKey(cred.Issuer, cred.Serial)
+		if l.Status != nil && !l.isMarked(principal, certKey) {
+			if ref := l.Status(cs, principal, cred); ref != nil {
+				// A CA outage is not a revocation on the dashboard (re-check R6).
+				event := "revoked_refused"
+				if ref.RetryAfter > 0 {
+					event = "status_unavailable_refused"
+				}
+				l.m.BrokerConnectionEvents.WithLabelValues(event).Inc()
+				l.say(event, "port49d: broker: answering a connection from %s %s and closing it before it "+
+					"bound: %s", c.src, ref.Error, printsafe.Line(ref.Detail, 300))
+				l.answerRefused(tc, ref.Status, api.Error{Error: ref.Error, Detail: ref.Detail}, ref.RetryAfter,
+					principal, cred, ref.Reason)
+				return
+			}
+		}
+		rv, ok := l.bind(c, principal, certKey)
 		if !ok {
 			_ = tc.Close()
 			return
 		}
 		if rv != nil {
-			l.answerRevoked(tc, *rv, principal, cred)
+			l.answerRefused(tc, http.StatusUnauthorized, revokedError(*rv), 0, principal, cred,
+				decision.CredentialRevoked)
 			return
 		}
 	}
@@ -343,7 +375,7 @@ func handshakeReason(err error) string {
 // connections, closing the principal's oldest past MaxPerPrincipal. It
 // reports false when c was closed under it, and the mark when one names c's
 // principal or certificate: c is then left charged to its source, never
-// held, for answerRevoked to answer and close.
+// held, for answerRefused to answer and close.
 func (l *Listener) bind(c *trackedConn, principal, certKey string) (*store.Revocation, bool) {
 	l.mu.Lock()
 	if c.gone {
@@ -399,15 +431,17 @@ func (l *Listener) bind(c *trackedConn, principal, certKey string) (*store.Revoc
 	return nil, true
 }
 
-// answerRevoked reads one request from a marked connection, its line and
-// headers bounded by revokedRequestMax and all of it by
-// revokedAnswerTimeout, answers it the 401 credential_revoked a mint under
-// the mark is answered, records it (Refused), and closes it. The agent ends
-// its session on that answer (spec §5.1.4), where a bare close reads as a
-// broker that restarted. The request reaches no handler and no store, and is
-// never logged; a connection that sends none is closed unanswered and
-// unrecorded.
-func (l *Listener) answerRevoked(tc *tls.Conn, rv store.Revocation, principal string, cred store.Credential) {
+// answerRefused reads one request from a connection refused as it bound,
+// its line and headers bounded by revokedRequestMax and all of it by
+// revokedAnswerTimeout, answers it status and body — the 401
+// credential_revoked a mint under a mark is answered, or a status
+// refusal's, with Retry-After when retryAfter is set — records it (Refused,
+// with reason), and closes it. The agent ends its session on a 401 (spec
+// §5.1.4), where a bare close reads as a broker that restarted, and keeps it
+// on a 503. The request reaches no handler and no store, and is never
+// logged; a connection that sends none is closed unanswered and unrecorded.
+func (l *Listener) answerRefused(tc *tls.Conn, status int, body api.Error, retryAfter int, principal string,
+	cred store.Credential, reason decision.Reason) {
 	defer tc.Close()
 	_ = tc.SetDeadline(time.Now().Add(revokedAnswerTimeout))
 	lr := &io.LimitedReader{R: tc, N: revokedRequestMax}
@@ -425,13 +459,16 @@ func (l *Listener) answerRevoked(tc *tls.Conn, rv store.Revocation, principal st
 		return
 	}
 	if l.Refused != nil {
-		l.Refused(principal, cred)
+		l.Refused(principal, cred, reason)
 	}
-	var body bytes.Buffer
-	_ = json.NewEncoder(&body).Encode(revokedError(rv))
-	resp := &http.Response{StatusCode: http.StatusUnauthorized, ProtoMajor: 1, ProtoMinor: 1, Request: req,
-		Header: http.Header{"Content-Type": {"application/json"}}, ContentLength: int64(body.Len()),
-		Body: io.NopCloser(&body), Close: true}
+	var buf bytes.Buffer
+	_ = json.NewEncoder(&buf).Encode(body)
+	header := http.Header{"Content-Type": {"application/json"}}
+	if retryAfter > 0 {
+		header.Set("Retry-After", strconv.Itoa(retryAfter))
+	}
+	resp := &http.Response{StatusCode: status, ProtoMajor: 1, ProtoMinor: 1, Request: req,
+		Header: header, ContentLength: int64(buf.Len()), Body: io.NopCloser(&buf), Close: true}
 	if werr := resp.Write(tc); werr == nil && err != nil {
 		_ = tc.CloseWrite()
 		_, _ = io.Copy(io.Discard, io.LimitReader(tc, revokedDrainMax))
@@ -458,6 +495,29 @@ func (l *Listener) CloseHeld(match func(principal, certKey string) bool) int {
 		l.m.BrokerConnectionEvents.WithLabelValues("revoked_closed").Add(float64(len(hit)))
 	}
 	return len(hit)
+}
+
+// isMarked reports whether a mark names principal or certKey.
+func (l *Listener) isMarked(principal, certKey string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	_, p := l.marked[[2]string{store.RevocationPrincipal, principal}]
+	_, c := l.marked[[2]string{store.RevocationCert, certKey}]
+	return p || c
+}
+
+// HoldsCert reports whether a held connection was made with certKey.
+func (l *Listener) HoldsCert(certKey string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, conns := range l.held {
+		for _, c := range conns {
+			if c.certKey == certKey {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // Close closes the connection and, once, gives back what it was charged.

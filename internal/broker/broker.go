@@ -50,8 +50,8 @@ const (
 )
 
 // Broker is the slice's broker. Every field is required but Redact, Sessions
-// (which only Revoke needs, and refuses without), Conns, Persist and
-// RevokeTimeout.
+// (which only Revoke needs, and refuses without), Conns, Persist,
+// RevokeTimeout, CertStatus and OnUnavailable.
 type Broker struct {
 	// Policy is the policy in force. port49d swaps it when the file changes
 	// (plan 4b), and a request resolves against the one version it held from
@@ -91,6 +91,17 @@ type Broker struct {
 	// DefaultRevokeTimeout.
 	RevokeTimeout time.Duration
 
+	// CertStatus answers a certificate chain's revocation status (spec
+	// §5.1.4; decision 33): nil checks nothing, port49d's `disabled: true`.
+	// OnUnavailable is "refuse" or "allow", for a status it cannot establish.
+	CertStatus    StatusChecker
+	OnUnavailable string
+
+	// queueOnce makes revokeQueue, the certificates a CRL or a refusal
+	// named, waiting for RunRevocationQueue (OnCRLEntry).
+	queueOnce   sync.Once
+	revokeQueue chan queuedRevoke
+
 	// revokeSem is a one-slot semaphore serialising Revoke and Lift (M5),
 	// made lazily under mu. A channel, not a mutex, so a caller waiting
 	// behind a hung store call or Persist gives up when its ctx ends.
@@ -108,6 +119,12 @@ type Broker struct {
 	// (token.Request). It holds at most one entry per key the policy has
 	// ever minted for.
 	superseded map[store.TokenKey]time.Time
+	// queued is, by (issuer, serial), each certificate in revokeQueue, and
+	// pending each one a store error or a full queue left for RetryPending.
+	queued  map[[2]string]bool
+	pending map[[2]string]queuedRevoke
+	// said is, by key, when sayOnce last said it.
+	said map[string]time.Time
 }
 
 // Handler routes the endpoints the broker serves.
@@ -223,6 +240,15 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
 		return
 	case revoked:
 		b.refuseRevoked(w, now, principal, cred, rv)
+		return
+	}
+	statusCtx, cancelStatus := context.WithTimeout(r.Context(), holdTimeout)
+	ref := b.certRefusal(statusCtx, r.TLS, cred)
+	cancelStatus()
+	if ref != nil {
+		b.emit(decision.Record{TS: now, Event: decision.EventMint, Verdict: decision.VerdictDeny, Reason: ref.Reason,
+			Principal: principal, Auth: &decision.Auth{Method: cred.Method, Fingerprint: cred.Fingerprint}})
+		b.answerRefusal(w, r, ref)
 		return
 	}
 
@@ -441,12 +467,15 @@ func revokedRecord(now time.Time, principal string, cred store.Credential) decis
 		Auth: &decision.Auth{Method: cred.Method, Fingerprint: cred.Fingerprint}}
 }
 
-// RefusedAtBind records a request the broker's listener refused
-// credential_revoked, its connection's principal or certificate marked
-// (Listener.Refused): the same one mint deny record a mint under the mark
-// writes, counted in port49_decisions (spec §5.7).
-func (b *Broker) RefusedAtBind(principal string, cred store.Credential) {
-	b.emit(revokedRecord(b.Now(), principal, cred))
+// RefusedAtBind records a request the broker's listener refused as its
+// connection bound (Listener.Refused): credential_revoked for a mark on its
+// principal or certificate, or the reason its certificate's status gave.
+// It is the same one mint deny record a mint refused so writes, counted in
+// port49_decisions (spec §5.7).
+func (b *Broker) RefusedAtBind(principal string, cred store.Credential, reason decision.Reason) {
+	rec := revokedRecord(b.Now(), principal, cred)
+	rec.Reason = reason
+	b.emit(rec)
 }
 
 // answerRevoked is the 401 credential_revoked, with the connection closed

@@ -35,6 +35,15 @@ func (c *fakeConns) Revoked(mark store.Revocation, on bool) {
 	c.marked[[2]string{mark.Kind, mark.Key}] = on
 }
 
+func (c *fakeConns) HoldsCert(certKey string) bool {
+	for _, h := range c.held {
+		if h[1] == certKey {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *fakeConns) CloseHeld(match func(principal, certKey string) bool) int {
 	var kept [][2]string
 	n := 0
