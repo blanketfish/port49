@@ -299,4 +299,37 @@ key_groups: [{match: {attributes: {site: dc1}}, key_ref: lab_key}]
 	if got := Unaddressed(bare, old); len(got) != 0 {
 		t.Fatalf("gaining addresses is not losing them: %v", got)
 	}
+	if got := Unaddressed(bare, bare); len(got) != 0 {
+		t.Fatalf("a device that never had an address did not lose one: %v", got)
+	}
+
+	// A device newly refused and stripped too counts once, as refused.
+	moved := inv(true)
+	moved.Devices[0].Attributes = map[string]string{"site": "dc2"}
+	moved.Devices[0].Addresses = nil
+	next, err := Parse(pol, moved, env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := NewlyRefused(old, next); len(r) != 1 || r[0].Device.Name != "leaf-01" {
+		t.Fatalf("NewlyRefused: %v", r)
+	}
+	if got := Unaddressed(old, next); len(got) != 0 {
+		t.Fatalf("a newly refused device is counted twice: %v", got)
+	}
+
+	// A device old already refuses was out of service before it lost its
+	// address: it is not counted again (review M3).
+	was := inv(true)
+	was.Devices[0].Attributes = map[string]string{"site": "dc2"}
+	before, err := Parse(pol, was, env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := Unaddressed(before, next); len(got) != 0 {
+		t.Fatalf("an already refused device is counted: %v", got)
+	}
+	if err := CheckFrom(before, next, 10, "fix the source of truth"); err != nil {
+		t.Fatalf("stripping an already refused device: %v", err)
+	}
 }

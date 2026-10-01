@@ -321,11 +321,12 @@ func NewlyRefused(old, new *policy.Policy) []admission.Resolved {
 	return out
 }
 
-// Unaddressed is every device, by name and sorted, that old gives at least
-// one address and new keeps under its name with none, and that new does not
-// newly refuse (NewlyRefused counts those). port49d admits a connection by
-// its source address, so such a device is out of service even while an
-// attribute key group keeps it "admitted" (plan 6c, pre-flight I2).
+// Unaddressed is every device, by name and sorted, that old admits and gives
+// at least one address and new keeps under its name with none, and that new
+// does not newly refuse (NewlyRefused counts those). A device old refuses
+// was out of service already, as NewlyRefused reads it. port49d admits a
+// connection by its source address, so such a device is out of service even
+// while an attribute key group keeps it "admitted" (plan 6c, pre-flight I2).
 func Unaddressed(old, new *policy.Policy) []string {
 	before := byName(old.Devices())
 	refused := map[string]bool{}
@@ -334,7 +335,11 @@ func Unaddressed(old, new *policy.Policy) []string {
 	}
 	var out []string
 	for _, d := range new.Devices() {
-		if o, ok := before[d.Name]; ok && len(o.Addresses) > 0 && len(d.Addresses) == 0 && !refused[d.Name] {
+		o, ok := before[d.Name]
+		if !ok || len(o.Addresses) == 0 || len(d.Addresses) > 0 || refused[d.Name] {
+			continue
+		}
+		if ro, ok := old.Admitted(d.Name); ok && ro.Refused == "" {
 			out = append(out, d.Name)
 		}
 	}

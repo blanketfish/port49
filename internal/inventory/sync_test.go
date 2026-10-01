@@ -1009,6 +1009,10 @@ func TestASourceThatStripsEveryAddressIsRefused(t *testing.T) {
 func TestTheServicesBoundAndPort49dsAgree(t *testing.T) {
 	const n, bound = 20, 10
 	prevInv := sited(devices(n), true)
+	// The last device never had an address, and the one before it is
+	// already refused: neither is newly out of service when it has none.
+	prevInv.Devices[n-1].Addresses = nil
+	prevInv.Devices[n-2].Attributes = map[string]string{"site": "dc2"}
 	names := make([]string, n)
 	for i, d := range prevInv.Devices {
 		names[i] = d.Name
@@ -1028,6 +1032,9 @@ func TestTheServicesBoundAndPort49dsAgree(t *testing.T) {
 				// Devices 0.. are removed, then refused (the key group's
 				// attribute gone), then left with no address.
 				next := sited(devices(n), true)
+				next.Devices[n-1].Addresses = nil
+				next.Devices[n-2].Attributes = map[string]string{"site": "dc2"}
+				next.Devices[n-2].Addresses = nil
 				for i := removed; i < removed+refused; i++ {
 					next.Devices[i].Attributes = map[string]string{"site": "dc2"}
 				}
