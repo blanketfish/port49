@@ -695,10 +695,11 @@ read on a timer and on `SIGHUP`, and a change is handled in four steps:
    and any receipt replay, but the session keeps what it had at login until logout. The
    refresh counts those contexts on its process-log summary ("N of them on platforms that do
    not authorize commands keep their live session until logout") and names each one's
-   `ctx_id` in the process log; the `refresh` record carries no field for it yet (plan 7's
-   revocation by identity adds one, §5.7 first). `auth_time`, `session_expires`, `refreshed_at` and the
-   idle TTL are not touched: nothing about the operator's authentication or the directory was
-   re-verified, and a reload is not activity.
+   `ctx_id` in the process log, and the `refresh` record carries `session.unreached: true`
+   (§5.7). `auth_time`, `refreshed_at` and the idle TTL are not touched, and `session_expires`
+   only moves earlier, to `auth_time` plus the ceiling the policy in force gives (decision 33),
+   named on the record as `session.session_expires`: nothing about the operator's
+   authentication or the directory was re-verified, and a reload is not activity.
 
 Every policy edit changes the bundle (§5.7), so every live context takes a new blob at a reload and
 the records decided after it name the policy that was in force. The one exception is a login
@@ -1827,7 +1828,7 @@ events (`account`, `account_gap`, `blob`, `inventory_change`) that share the env
 | `authorize_session` | daemon | the session and its returned attributes (§6) |
 | `authorize_command` | daemon | one command vector |
 | `escalate` | daemon | an `enable` exchange, attributed to the principal (§7) |
-| `refresh` | broker | whether a live context takes the policy now in force, or is revoked (§5.1.3); or, on a session refresh (`/v1/refresh`), whether it is extended, with `session.auth_time` and `session.session_expires` (§5.6). A context on a platform that never asks about a command carries `session.unreached: true` (decision 21) |
+| `refresh` | broker | whether a live context takes the policy now in force, or is revoked (§5.1.3); or, on a session refresh (`/v1/refresh`), whether it is extended, with `session.auth_time` and `session.session_expires` (§5.6); or, on a policy refresh, `session.session_expires` where the ceiling moved earlier. A context on a platform that never asks about a command carries `session.unreached: true` (decision 21) |
 | `revoke` | broker | a revocation by principal or by certificate (§5.1.4): what it reached, and the live contexts it could not; or a revocation lifted |
 | `blob` | broker | not a decision: the full compiled blob, emitted once per hash so replay depends on the log alone (§5.1.1) |
 
