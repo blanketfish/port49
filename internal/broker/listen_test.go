@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -389,4 +390,154 @@ func TestShutdownReturnsThroughTheListenerWithEverySlotHeld(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("Serve did not return after Shutdown with every slot held")
 	}
+}
+
+// A source at its pending cap is refused alone: another address is admitted,
+// handshakes, and holds a pending slot of its own (spec §13 decision 32).
+func TestAFullSourceDoesNotRefuseAnother(t *testing.T) {
+	f := newFixture(t, 8)
+	lim := DefaultListenerLimits
+	lim.MaxPendingPerSource = 2
+	addr, _ := serveThrough(t, f, lim, nil)
+	for i := 0; i < 2; i++ {
+		c, err := net.Dial("tcp", addr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+	}
+	eventually(t, "two pending", func() bool { return f.gauge("pending") == 2 })
+	third, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer third.Close()
+	if !closedByPeer(third) {
+		t.Fatal("a third connection from 127.0.0.1 was held, not reset")
+	}
+	other := &net.Dialer{LocalAddr: &net.TCPAddr{IP: net.ParseIP("127.0.0.2")}}
+	c, err := tls.DialWithDialer(other, "tcp", addr, &tls.Config{Certificates: []tls.Certificate{f.alice},
+		RootCAs: f.ca.Pool(), MinVersion: tls.VersionTLS13})
+	if errors.Is(err, syscall.EADDRNOTAVAIL) {
+		t.Skip("cannot dial from 127.0.0.2 here")
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	ask(t, c, bufio.NewReader(c))
+	silent, err := other.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer silent.Close()
+	eventually(t, "127.0.0.2's silent connection pending", func() bool { return f.gauge("pending") == 3 })
+	if f.gauge("held") != 1 {
+		t.Fatalf("held %v", f.gauge("held"))
+	}
+	if got := testutil.ToFloat64(f.b.Metrics.BrokerConnectionEvents.WithLabelValues("source_cap_refused")); got != 1 {
+		t.Fatalf("source_cap_refused %v", got)
+	}
+}
+
+// The listener accepts nothing before the first Accept, so a mark handed to
+// it before Serve is in place for the first connection: a certificate
+// marked at start-up never binds, even one that dialled before the mark.
+func TestACertificateMarkedBeforeServeNeverBinds(t *testing.T) {
+	f := newFixture(t, 8)
+	now := f.b.Now()
+	srvCert, err := f.ca.Issue(testpki.Leaf{CommonName: "broker", IPs: []net.IP{net.ParseIP("127.0.0.1")},
+		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(48 * time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv, err := f.b.Server("127.0.0.1:0", srvCert, f.ca.Pool())
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bl := NewListener(Limit(raw, MaxConns), srv.TLSConfig, DefaultListenerLimits, f.b.Metrics, f.b.Now, nil)
+	t.Cleanup(func() { _ = srv.Close(); _ = bl.Close() })
+	type dialed struct {
+		c   *tls.Conn
+		err error
+	}
+	got := make(chan dialed, 1)
+	go func() {
+		c, err := tls.Dial("tcp", raw.Addr().String(), &tls.Config{Certificates: []tls.Certificate{f.alice},
+			RootCAs: f.ca.Pool(), MinVersion: tls.VersionTLS13})
+		got <- dialed{c, err}
+	}()
+	// Had the listener started at NewListener, the handshake would finish and
+	// bind here, before the mark.
+	time.Sleep(300 * time.Millisecond)
+	if f.gauge("pending") != 0 || f.gauge("held") != 0 {
+		t.Fatalf("accepted before the first Accept: pending %v held %v", f.gauge("pending"), f.gauge("held"))
+	}
+	bl.Revoked(store.RevocationCert, store.CertKey(f.alice.Leaf.Issuer.String(), f.alice.Leaf.SerialNumber.Text(16)), true)
+	go func() { _ = srv.Serve(bl) }()
+	d := <-got
+	if d.err == nil {
+		defer d.c.Close()
+		if !closedByPeer(d.c) {
+			t.Fatal("a certificate marked before Serve was held")
+		}
+	}
+	eventually(t, "revoked_refused counted", func() bool {
+		return testutil.ToFloat64(f.b.Metrics.BrokerConnectionEvents.WithLabelValues("revoked_refused")) == 1
+	})
+	if f.gauge("held") != 0 {
+		t.Fatalf("held %v", f.gauge("held"))
+	}
+}
+
+// A mark that lands while a handshake is under way is read at bind: the
+// connection is refused there, and nothing it was charged stays charged.
+func TestAMarkMidHandshakeRefusesAtBind(t *testing.T) {
+	f := newFixture(t, 8)
+	addr, bl := serveThrough(t, f, DefaultListenerLimits, nil)
+	asked, release := make(chan struct{}), make(chan struct{})
+	type dialed struct {
+		c   *tls.Conn
+		err error
+	}
+	got := make(chan dialed, 1)
+	go func() {
+		c, err := tls.Dial("tcp", addr, &tls.Config{RootCAs: f.ca.Pool(), MinVersion: tls.VersionTLS13,
+			GetClientCertificate: func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
+				close(asked)
+				<-release
+				return &f.alice, nil
+			}})
+		got <- dialed{c, err}
+	}()
+	select {
+	case <-asked:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the broker never asked for a client certificate")
+	}
+	if f.gauge("pending") != 1 {
+		t.Fatalf("pending mid-handshake %v", f.gauge("pending"))
+	}
+	bl.Revoked(store.RevocationCert, store.CertKey(f.alice.Leaf.Issuer.String(), f.alice.Leaf.SerialNumber.Text(16)), true)
+	close(release)
+	d := <-got
+	if d.err == nil {
+		defer d.c.Close()
+		if !closedByPeer(d.c) {
+			t.Fatal("a certificate marked mid-handshake was held")
+		}
+	}
+	eventually(t, "revoked_refused counted", func() bool {
+		return testutil.ToFloat64(f.b.Metrics.BrokerConnectionEvents.WithLabelValues("revoked_refused")) == 1
+	})
+	eventually(t, "every count back to 0", func() bool {
+		bl.mu.Lock()
+		open, pending, held := len(bl.open), len(bl.pending), len(bl.held)
+		bl.mu.Unlock()
+		return open == 0 && pending == 0 && held == 0 && f.gauge("pending") == 0 && f.gauge("held") == 0
+	})
 }

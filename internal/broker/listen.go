@@ -68,6 +68,7 @@ type Listener struct {
 
 	ready     chan *tls.Conn
 	done      chan struct{}
+	startOnce sync.Once
 	closeOnce sync.Once
 
 	mu sync.Mutex
@@ -113,9 +114,12 @@ type trackedConn struct {
 	closeOnce  sync.Once
 }
 
-// NewListener starts accepting from inner at once; connections whose
-// handshake is done wait for Accept. cfg is the broker's (Broker.Server's
-// TLSConfig). logf says the listener's lines; nil says nothing.
+// NewListener accepts nothing from inner until the first Accept, so the
+// marks a caller hands it (Revoked) before srv.Serve are all in place before
+// any connection can bind; from then on it accepts on its own, and
+// connections whose handshake is done wait for Accept. cfg is the broker's
+// (Broker.Server's TLSConfig). logf says the listener's lines; nil says
+// nothing.
 func NewListener(inner net.Listener, cfg *tls.Config, lim ListenerLimits, m *metrics.Metrics, now func() time.Time,
 	logf func(format string, args ...any)) *Listener {
 	if logf == nil {
@@ -125,15 +129,15 @@ func NewListener(inner net.Listener, cfg *tls.Config, lim ListenerLimits, m *met
 		ready: make(chan *tls.Conn), done: make(chan struct{}),
 		pending: map[netip.Addr]int{}, open: map[*trackedConn]bool{}, held: map[string][]*trackedConn{},
 		marked: map[[2]string]bool{}, lines: map[string]*lineLimit{}}
-	go l.acceptLoop()
 	return l
 }
 
 func (l *Listener) Addr() net.Addr { return l.inner.Addr() }
 
 // Accept returns a connection whose handshake is done, or net.ErrClosed
-// once the listener is closed.
+// once the listener is closed. The first call starts accepting from inner.
 func (l *Listener) Accept() (net.Conn, error) {
+	l.startOnce.Do(func() { go l.acceptLoop() })
 	select {
 	case tc := <-l.ready:
 		return tc, nil
@@ -199,6 +203,15 @@ func (l *Listener) acceptLoop() {
 func (l *Listener) admit(raw net.Conn) *trackedConn {
 	src := sourceOf(raw.RemoteAddr())
 	l.mu.Lock()
+	select {
+	case <-l.done:
+		// Close has run, and its sweep of open may have missed this one:
+		// it must not handshake on after the listener is gone.
+		l.mu.Unlock()
+		reset(raw)
+		return nil
+	default:
+	}
 	if l.pending[src] >= l.lim.MaxPendingPerSource {
 		l.mu.Unlock()
 		reset(raw)
@@ -253,8 +266,15 @@ func (l *Listener) handshake(c *trackedConn) {
 
 // refuse counts and says a failed handshake, and closes the connection.
 // The error can quote a client certificate's subject, so it is made
-// printable and cut.
+// printable and cut. A handshake Close cut short is not a failure: it is
+// neither counted nor said, or every restart would read as an attack.
 func (l *Listener) refuse(c *trackedConn, tc *tls.Conn, reason string, err error) {
+	select {
+	case <-l.done:
+		_ = tc.Close()
+		return
+	default:
+	}
 	l.m.BrokerHandshakeFailures.WithLabelValues(reason).Inc()
 	l.say("handshake_"+reason, "port49d: broker: TLS handshake from %s failed (%s): %s", c.src, reason,
 		printsafe.Line(err.Error(), 300))
@@ -407,9 +427,11 @@ func (l *Listener) gauge() {
 	for _, conns := range l.held {
 		held += len(conns)
 	}
-	l.mu.Unlock()
+	// Set under mu: two events setting outside it could land out of order
+	// and leave the gauge naming a connection that is gone.
 	l.m.BrokerConnections.WithLabelValues("pending").Set(float64(pending))
 	l.m.BrokerConnections.WithLabelValues("held").Set(float64(held))
+	l.mu.Unlock()
 }
 
 // say logs a line at most once per reason per sayEvery; the next line says
