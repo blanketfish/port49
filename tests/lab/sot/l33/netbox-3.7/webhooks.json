@@ -1,0 +1,36 @@
+{
+  "stack": "netbox-3.7",
+  "at": "2026-10-01T09:13:23.282126005Z",
+  "built": "port49d, port49 and port49-inventory built from `c8a63d8` (`make build`).",
+  "webhook_calls": [
+    "webhook 201",
+    "event_rule 201"
+  ],
+  "phases": [
+    {
+      "change": "update leaf-01's os_version",
+      "accepted": 1,
+      "published": true,
+      "seconds": 2.435994714
+    },
+    {
+      "change": "create leaf-200",
+      "accepted": 1,
+      "published": true,
+      "seconds": 2.429749128
+    },
+    {
+      "change": "delete leaf-200",
+      "accepted": 1,
+      "published": true,
+      "seconds": 2.6516275350000003
+    }
+  ],
+  "refused_change": "update leaf-01's os_version, under the wrong secret and to a listener answering 503",
+  "bad_signature": 1,
+  "unavailable": 1,
+  "unavailable_at": [
+    0.1
+  ],
+  "stale": 0
+}

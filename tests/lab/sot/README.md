@@ -68,7 +68,7 @@ Set `L27_ENV_DIR=<dir>` to keep the env file after the run, for a count-only aud
 reached a committed file:
 
 ```bash
-for v in $(cut -d= -f2- "$L27_ENV_DIR"/*.env); do grep -rFc -- "$v" tests/lab/sot tests/lab/results/L27-*.md tests/lab/results/L30-*.md tests/lab/results/L32-*.md; done \
+for v in $(cut -d= -f2- "$L27_ENV_DIR"/*.env); do grep -rFc -- "$v" tests/lab/sot tests/lab/results/L27-*.md tests/lab/results/L30-*.md tests/lab/results/L32-*.md tests/lab/results/L33-*.md; done \
   | awk -F: '{s+=$NF} END{print s+0}'   # must print 0
 ```
 
