@@ -123,16 +123,13 @@ func (c *client) graphqlDevices(ctx context.Context, p Profile, sel selection, p
 	}
 }
 
-// distinct refuses a list that holds one device twice, by key ("id" over
-// REST, "name" over GraphQL, which is not asked for an id: L27 and L30
-// recorded none in a query). Offset paging across a concurrent change
-// repeats or skips the device at a page boundary (pre-flight I1); a repeat
-// fails here, naming the cause, rather than at admission's "two devices are
-// both named". An empty key is skipped: NetBox allows a device no name.
-func distinct(devs []map[string]any, key, api string) error { return keys{}.add(devs, key, api) }
-
-// keys is the devices a list has given so far, by key, so a repeat fails at
-// the page that holds it rather than after the last (distinct).
+// keys is the devices a list has given so far, by key ("id" over REST,
+// "name" over GraphQL, which is not asked for an id: L27 and L30 recorded
+// none in a query). Offset paging across a concurrent change repeats or
+// skips the device at a page boundary (pre-flight I1); a repeat fails at the
+// page that holds it, naming the cause, rather than at admission's "two
+// devices are both named". An empty key is skipped: NetBox allows a device
+// no name.
 type keys map[string]bool
 
 func (s keys) add(devs []map[string]any, key, api string) error {

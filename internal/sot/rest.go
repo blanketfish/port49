@@ -34,7 +34,10 @@ func (c *client) restDevices(ctx context.Context, p Profile, pageSize int) ([]ma
 		q.Set("depth", "1")
 	}
 	u := c.at("/api/dcim/devices/", q)
+	// read is the pages asked for, by path and query with its keys sorted,
+	// so a next that reorders its query still names a page already read.
 	read := map[string]bool{}
+	pageOf := func(u *url.URL) string { return u.Path + "?" + u.Query().Encode() }
 	seen := keys{}
 	b := newBudget()
 	var devs []map[string]any
@@ -43,7 +46,7 @@ func (c *client) restDevices(ctx context.Context, p Profile, pageSize int) ([]ma
 		if page >= maxPages {
 			return nil, rebuilt, fmt.Errorf("REST gave more than %d pages", maxPages)
 		}
-		read[u.String()] = true
+		read[pageOf(u)] = true
 		a, err := c.do(ctx, http.MethodGet, u, nil, false)
 		if err != nil {
 			return nil, rebuilt, err
@@ -89,8 +92,15 @@ func (c *client) restDevices(ctx context.Context, p Profile, pageSize int) ([]ma
 			if err != nil {
 				return nil, rebuilt, fmt.Errorf("REST page %d: %w", page, err)
 			}
-			if read[next.String()] {
+			if read[pageOf(next)] {
 				return nil, rebuilt, fmt.Errorf("REST page %d's next names a page already read", page)
+			}
+			if p.depthOne && next.Query().Get("depth") != "1" {
+				// Without depth=1 the rest of the list would name no related
+				// object (L27, L30), which reads as a mapping fault, not a
+				// paging one.
+				return nil, rebuilt, fmt.Errorf("REST page %d's next drops depth=1, which this release needs; not "+
+					"followed", page)
 			}
 			u, rebuilt = next, rebuilt || r
 		}
@@ -120,11 +130,11 @@ func (c *client) restDevices(ctx context.Context, p Profile, pageSize int) ([]ma
 // follow is the URL a page's next names, on the base, its path and query
 // kept; rebuilt says its scheme, host or port was not the base's (decision
 // 31). It is always built on the base, so a next naming the base's host in
-// another case or with its default port is sent as url spells it. Every product builds next from the host the
-// request arrived under (L30), so behind a proxy that rewrites Host it names
-// another origin, and following it would send the token there. Its path
-// must be the base's device list, so a next cannot steer a read anywhere
-// else on the source either.
+// another case or with its default port is sent as url spells it. Every
+// product builds next from the host the request arrived under (L30), so
+// behind a proxy that rewrites Host it names another origin, and following
+// it would send the token there. Its path must be the base's device list,
+// so a next cannot steer a read anywhere else on the source either.
 func (c *client) follow(next string) (*url.URL, bool, error) {
 	n, err := url.Parse(next)
 	if err != nil || !n.IsAbs() || n.Host == "" || n.Opaque != "" || n.User != nil || n.Fragment != "" {

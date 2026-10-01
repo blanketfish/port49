@@ -224,3 +224,48 @@ func TestARESTCountThatMovesBetweenPagesFails(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+// A next that reorders its query still names the page it names: the loop
+// is refused at the second page, not after maxPages.
+func TestANextThatLoopsInAnotherQueryOrderIsRefused(t *testing.T) {
+	var gets atomic.Int32
+	var base string
+	srv, ca := sottest.TLS(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := gets.Add(1)
+		next := base + "/api/dcim/devices/?offset=0&limit=1"
+		if n%2 == 0 {
+			next = base + "/api/dcim/devices/?limit=1&offset=0"
+		}
+		fmt.Fprintf(w, `{"count": 120, "next": %q, "previous": null, "results": [{"name": "leaf-%02d"}]}`, next, n)
+	}))
+	base = srv.URL
+	c, _ := newClient(srv.URL, ca, NewSecret(token), "netbox")
+	if _, _, err := c.restDevices(context.Background(), profiles[NetBox4], 1); err == nil ||
+		!strings.Contains(err.Error(), "REST page 1's next names a page already read") {
+		t.Fatalf("got %v", err)
+	}
+	if n := gets.Load(); n != 2 {
+		t.Fatalf("%d REST requests, want 2", n)
+	}
+}
+
+// Nautobot 2.x and 3.x name no related object without depth=1 (L27, L30):
+// a next that drops it is not followed.
+func TestANextDroppingDepthOneIsNotFollowed(t *testing.T) {
+	var gets atomic.Int32
+	var base string
+	srv, ca := sottest.TLS(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gets.Add(1)
+		fmt.Fprintf(w, `{"count": 2, "next": %q, "previous": null, "results": [{"id": "a1", "name": "a"}]}`,
+			base+"/api/dcim/devices/?limit=1&offset=1")
+	}))
+	base = srv.URL
+	c, _ := newClient(srv.URL, ca, NewSecret(token), "nautobot")
+	if _, _, err := c.restDevices(context.Background(), profiles[Nautobot2], 1); err == nil ||
+		!strings.Contains(err.Error(), "REST page 0's next drops depth=1") {
+		t.Fatalf("got %v", err)
+	}
+	if n := gets.Load(); n != 1 {
+		t.Fatalf("%d REST requests, want 1", n)
+	}
+}
