@@ -1313,7 +1313,7 @@ written the context when it is refused, and that context is revoked, so every au
 it is denied anyway until the idle TTL reclaims it. The `redeem` record carries the principal, the
 `ctx_id` and `session.revoked_at`, the revocation that refused it. A retransmission is answered from
 the live context, not from the status the receipt stored: while the context it names is revoked it is
-refused `credential_revoked` again. A token minted after the revocation joins and lifts it, by the
+refused `credential_revoked` again (unless an operator's revocation deleted its receipt, below). A token minted after the revocation joins and lifts it, by the
 table, and a refusal made after the join has therefore marked its receipt failed (the receipt was
 written PASS before the join): once the revocation is lifted, the retransmission replays the
 refusal, FAIL `receipt_replayed`. It is not replayed as a PASS, with one exception: the concurrent
@@ -6052,15 +6052,19 @@ fallback (remove the principal's grants from `broker.policy_file`, live within t
 intervals, or stop port49d); then held connections
 are closed, unspent tokens deleted, contexts marked and receipts deleted, and the contexts read and
 marked a second time, catching a redemption in flight; the broker's listener holds the marks in
-memory and closes a marked certificate's or principal's connection as it binds. A mint reads the
+memory and answers a marked certificate's or principal's connection `credential_revoked` as it
+binds, records it as a refused mint, and closes it (amended after plan 7a's lab: closed without an
+answer, the agent survived the revocation on vEOS, the N9Kv and the C8000V; measured as amended in
+`tests/lab/results/revoke-*.md`). A mint reads the
 marks before anything else and after its last token write, and deletes what it wrote if one
 appeared. The minter indexes every token by principal and by certificate before writing it, and
 refuses the mint if it cannot. The marks are kept in `broker.revocations_file`, required with a
 broker, read behind the fence with its directory fenced whether or not the file exists, and
 created at the first start beside a marker; after that a missing file, or one that does not
 parse, refuses the start. Revocation is an admin-socket operation open to port49d's user and root;
-the HTTP one, under `api:` rights, is plan 7c's. The marks are read at mint, not at the handshake,
-so `port49 login` still touches no store. (§5.1.4, §5.7, §12; design document §11, §12, §17)
+the HTTP one, under `api:` rights, is plan 7c's. The store's marks are read at mint, not at the
+handshake, so `port49 login` still touches no store; a revoked operator's login is refused at the
+agent's first request, from the listener's copy. (§5.1.4, §5.7, §12; design document §11, §12, §17)
 
 ### Deferred, with reasons
 

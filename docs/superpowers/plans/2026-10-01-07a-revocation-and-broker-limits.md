@@ -6216,10 +6216,13 @@ slice and spec §14's quarantine through a sync were. If it contradicts a doc, t
   credential_revoked` names the principal and the certificate's fingerprint.
 - **API:** `409 idempotency_in_progress` (with `Retry-After: 1`) when a request is retried under its
   `Idempotency-Key` while the first is still minting; the agent waits it out. A batch naming a device
-  twice is `400 bad_request`. A revoked caller gets `401 credential_revoked` and the connection is
-  closed.
-- **`port49 login` still succeeds for a revoked operator** (login touches no store); the first
-  `port49 token` is refused and ends the agent with the broker's reason.
+  twice is `400 bad_request`. A revoked caller's connection is answered `401 credential_revoked` as
+  it binds, with one `mint deny credential_revoked` record, and closed.
+- **`port49 login` is refused for a revoked operator:** the agent's first request is answered `401
+  credential_revoked`, and `port49 login` (or `port49 agent`) prints "… was revoked at <time>" and
+  exits. A mark that lands after the agent's connection bound refuses its next mint, which ends the
+  agent with the same reason; the next `port49 token` finds no agent. port49d says the refusal on
+  stderr (rate-limited) and counts it (`revoked_refused`, `port49_decisions`).
 
 ## Self-review against the spec
 

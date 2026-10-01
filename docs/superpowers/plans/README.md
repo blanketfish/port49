@@ -48,7 +48,11 @@ break-glass with single-connection on (Plan 6b — As built, below); **merged 20
 D1, the shared store's backend, which 7a–7c do not need); **7a written 2026-10-01**
 (`2026-10-01-07a-revocation-and-broker-limits.md`, thirteen tasks: one docs, ten code, one lab,
 one docs; no owner decision, ten rulings recorded as decision 32; revised the same day after its
-pre-flight review: one critical, seven important and twenty-two minor fixed, one minor rebutted).
+pre-flight review: one critical, seven important and twenty-two minor fixed, one minor rebutted);
+**executed 2026-10-01** on `feature/revocation-and-broker-limits`, reviewed per task (the
+whole-branch review and its fix wave to follow), with a lab-driven fix: the first lab run found the
+agent surviving a revocation, and the listener now answers a revoked caller `credential_revoked`
+(Plan 7a — As built, below).
 7b–7h and 8–13 not yet.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
@@ -1577,6 +1581,167 @@ port49 needs most (a redeemed token never comes back, and a revocation mark is n
 Recommendation: etcd first, the interface kept pluggable, and a Valkey backend later only with its
 replay window stated. 7a builds nothing that depends on this: its store methods are added to the
 interface and the memory store, with `storetest` properties the chosen backend must pass.
+
+### Plan 7a — As built
+
+Executed 2026-10-01 on `feature/revocation-and-broker-limits`, thirteen tasks and one lab-driven
+fix (fixA), each reviewed; the ledger is
+`.superpowers/sdd/2026-10-01-07a-revocation-and-broker-limits/progress.md`, with each task's brief,
+report and review beside it. A pre-flight review revised the plan first (one critical, seven
+important, twenty-two minor fixed at 1ac1665; M8 rebutted: a retransmission with no live context
+answers `token_spent` and never replays a receipt, spec §5.6). What differs from the plan's text,
+task by task:
+
+- **Task 1 (docs; d0aedba, 9cb67bc).** The report events are renumbered around `revoke`; a
+  retransmission whose receipt a revocation deleted is answered `token_not_found` (§5.1.4, §5.6, the
+  `token_not_found` row); `revocation_lifted` is worded by decision 15 (a certificate's mark does not
+  keep a context revoked); decision 32 names the fallback for an unwritable mark; decision 21 gives
+  the `revoke` record's `unreached` to 7a and a refresh's to 7b.
+- **Task 2 (idempotency reservation; 9d6e56f, 2038c3c, 2e6a662).** A reservation or completion with
+  no holder is refused, and a completion expecting the empty holder conflicts, so a holderless record
+  is never taken over; a pending record reads back through the sealing layer without opening; the
+  lease's expiry is a `storetest` property of its own (`IdempotencyLeaseExpires`), since
+  `IdempotencyReservesOnce` runs on a fixed clock.
+- **Task 3 (the batch reserves; aabd43c, 4a8d154).** Controller ruling: each device's hold is renewed
+  by a compare-and-set on its holder before its mint (one minute per device, not per batch), so a
+  batch longer than the lease never lets a retry mint the same device; a lapsed or taken hold
+  answers the whole request `409 idempotency_in_progress`, and the same CAS takes over an abandoned
+  replay. A refused reservation is given back on its own context; the agent honours `Retry-After`
+  up to 5 s. A completed record from before 7a (no holder) that is abandoned is answered 409 until
+  it expires (bounded, fails safe).
+- **Task 4 (token index; 8d4685a, 0576543).** A blank certificate key (no issuer, no serial, no
+  `|`) is never indexed; a mint with no principal is refused (`ErrNoPrincipal`); the index outlives
+  its token by a minute so a skewed clock cannot drop it first.
+- **Task 5 (marks; 333548d, 2120e54).** `PutRevocation` refuses a mark that could match nothing (an
+  unknown kind, an empty key, a blank certificate key), a deviation accepted in review and a
+  `storetest` property; a list's order within a kind is pinned.
+- **Task 6 (the listener; b6a9b33, df8c834, 3381730).** The accept loop starts at the first `Accept`,
+  so marks fed before `Serve` are in place before any connection binds; a mark that lands
+  mid-handshake is refused at bind; the per-source isolation is a committed test (a second loopback
+  address).
+- **Task 7 (mint checks; 83f5e5c, 2efadc0, 0b53496).** The after-write check runs on both exits
+  that follow writes (the 200 and a mid-batch `409`); a mint refused after its writes records `deny
+  credential_revoked` for each device it minted, with `index_error` when the delete failed (spec §5.7,
+  2efadc0), and `capability` does not count those tokens; a replay is refused to a revoked caller;
+  when the second mark read fails, each written key is superseded (amending ruling 6).
+- **Task 8 (`Revoke`, `Lift`; 2dd8723, a9727f0, 21185e9).** `normal()` refuses `user:` alone and a
+  serial empty after `0x`/`-`; an all-digit serial is flagged (it may be openssl's decimal); an
+  issuer with a control or format character is refused. The listener is told and held connections
+  closed before the file is saved; Revoke and Lift are serialised by a one-slot semaphore that gives
+  up at the caller's deadline, so a hung store cannot block every later revocation. A key is counted
+  only if it held tokens; a certificate revocation says the principal's other certificates lost
+  their tokens on those devices too. A context on a device the policy in force no longer lists is
+  counted unreached.
+- **Task 9 (port49d; 8cac758, d545bfb, 1da0f2d).** A save runs under a 5 s deadline in a one-slot
+  writer that catches the file up after a hung write and lowers `port49_revocations_file_failed` only
+  when every mark in force is written; a file laid down by hand gets its `.created` marker at the
+  next start (else a later loss read as a first install). Marks are restored into, and saved from,
+  `brk.Store`. With a listener in front, a principal marked across a restart was closed at bind (the
+  test asserted that until fixA, below).
+- **Task 10 (admin socket; 7209348, d579122, 19e1cff).** Controller ruling: a caller's hang-up
+  cancels only the wait for the revocation slot; once a revocation or lift holds it, every step runs
+  detached under `Broker.RevokeTimeout` (= `admin.OpTimeout`, 60 s), so a dropped SSH session never
+  leaves a revocation half done. Unknown request keys are refused; a failed list names what failed.
+- **Task 11 (`port49 revoke`; 021d408, eaa735c, 616bb5c).** Controller ruling: the client waits
+  `RevokeWait + 5s` (140 s) for a revoke or lift, longer than the plan's 70 s, so the operator sees
+  the report of a revocation still running. A failure after the request was sent prints "port49d did
+  not answer … the revocation may be in force — check `port49 revoke --list`". `--cert` takes one
+  certificate, PEM or DER, refuses a file holding a private key or more than one certificate, caps
+  the read at 1 MiB, and prints the subject and issuer quoted. The client never half-closes.
+- **Task 12 (lab; 2957904, 9e257ae, a85c58e, 5ccd2ef, ebb10d4, e4326e6, 64a9996).** The first runs at
+  2957904 found that on vEOS, the N9Kv and the C8000V **the agent survived the revocation**: the
+  listener closed the reconnect at bind without answering, and the agent read the hang-up as one that
+  does not end a session. That contradicted spec §5.1.4 and the pre-flight's I4 (those first notes
+  were overwritten before commit; the finding is recorded here and in bfd482a's message). Ruling (a)
+  fixed it (fixA, below), and all four images were rerun. On IOS-XE the refusal prints only the
+  `server_msg`; the test was taught that (9e257ae). The review's tightenings (each report names one
+  held connection closed, and on Junos the session not reached; the `show version` line quoted; a
+  revoked operator's `port49 login` refused) were measured in a full rerun at e4326e6 (64a9996).
+- **fixA (bfd482a, fe556d3, 504cb53, 1b46f56; most of its broker code in 9e257ae).** The listener
+  completes the handshake of a marked certificate or principal, reads one bounded request (4 KiB of
+  headers, the body drained, 5 s), answers `401 credential_revoked` with the mint path's body and the
+  mark's own time, records it as `mint deny credential_revoked` (principal and fingerprint), and
+  closes; it never reaches a handler or the store, and is never held or charged to the principal's
+  cap. The agent's `Connect` reads the reason, so `port49 login` prints "… was revoked at …". Spec
+  §5.1.4 and design §17 say so (1b46f56). **9e257ae is mislabelled:** "test(lab): read IOS-XE's FAIL
+  text…" also carries most of fixA's broker code, swept in by a `git commit -am` in the shared
+  worktree; history is left as is by ruling, and lab commits since name their paths. Found and fixed
+  in passing: a cold-start clock race in port49d, where a clock step between two copies' readings
+  could take the older bundle (504cb53; one clock reading per pass).
+- **Task 13 (docs; this section).** Spec §5.6's retransmission sentence names the deleted-receipt
+  exception; decision 32 amended (below); `tests/lab/README.md`'s `chmod go-w` covers
+  `tests/lab/logs`, the lab's `revocations_file` directory, which the fence refuses group-writable;
+  the plan's operator notes no longer say a revoked operator's login succeeds.
+- **Final review and fix wave:** not yet run. Parked for the fix wave: Task 3 M7 (no test that the
+  agent waits by `Retry-After` rather than its default); Task 7 N1 (a replay refused by the after-write
+  check is recorded as a device deny and subtracted in `capability`, though the replay wrote nothing;
+  the §5.7 sentence is not literally true for a replay) and N2 (no test for a re-permit after a deny
+  in `capability`); fixA N1 (`TestAReasonIsSaidOncePerTenSeconds` flakes: `refuse` counts before it
+  says). Accepted, not to be fixed: Task 8/9 M2 (a hung disk keeps minted tokens redeemable up to 5 s
+  longer, behind the save deadline); Task 10 N1 (noted).
+
+**Rulings, as made** (spec §13, decision 32; the plan's ten rulings): all stand, with these
+amendments, each the option that denies more. Ruling 5 and ruling 10: a marked connection is
+answered `credential_revoked` as it binds, recorded, and closed, not closed unanswered; a revoked
+operator's `port49 login` is refused at its first request, not admitted until its first mint (lab,
+fixA; decision 32 amended in this task, citing `tests/lab/results/revoke-*.md`). Ruling 6: when the
+second mark read fails, the written keys are superseded (Task 7). Ruling 8: a hand-laid file is
+given its marker; a save runs under a deadline and catches up (Task 9). Ruling 9: a hang-up cancels
+only the wait for the slot (Task 10). Ruling 4: a mark that could match nothing is refused, not
+written (Task 5).
+
+**Lab (Task 12).** No register row: the device behaviours rest on the slice, L4 and L17 notes.
+Revocation end to end at e4326e6, all four PASS (`tests/lab/results/revoke-<platform>.md`, captures
+`tests/lab/evidence/revoke-<platform>.pcap`): **vEOS 4.31.2F** (`revoke-arista_eos.md`): the next
+command refused "% Authorization denied … this session was revoked"; **N9Kv 10.4(2)F**
+(`revoke-cisco_nxos.md`): refused "Error: AAA authorization failed"; **C8000V 17.13.01a**
+(`revoke-cisco_iosxe.md`): refused, the device printing only the `server_msg`; **vJunos-router
+23.4R2-S2.1** (`revoke-juniper_vjunos-router.md`): the session kept what it had at login, and both
+reports named `srx1 (slice01)` not reached. On every image an unspent token was refused
+`token_not_found`, both agents ended on `401 credential_revoked` with one `mint deny` each, a revoked
+`port49 login` was refused "revoked at", and a login after the lift worked.
+
+**Operator notes** (for plan 13's docs, beside the plan's "Operator-facing notes", which are amended
+for the revoked login):
+
+- After revoking a stolen certificate, also close that user's sessions on the devices: under
+  decision 15 the context is shared per (principal, device), so the owner's next login re-admits a
+  still-open device shell; Junos keeps what it had at login anyway, and the report names the
+  sessions it did not reach.
+- `port49_revocations_file_failed` at 1: run the revoke again; do not restart port49d while it is
+  raised, or the restart forgets the unsaved mark.
+- A revocations file laid down by hand on a read-only volume refuses the start (port49d cannot write
+  its marker).
+- `port49 revoke --cert FILE` takes the leaf alone (it refuses a bundle), PEM or DER, refuses a file
+  holding a private key, and warns on an all-digit serial: use `--cert`, not a decimal serial copied
+  from `openssl x509 -text`.
+- Exit codes: 0 done, 1 refused or unreachable, 2 usage, 3 in force but incomplete or unsaved. "port49d
+  did not answer — the revocation may be in force" means check `port49 revoke --list` before
+  retrying.
+- A revoked caller's broker connection is answered `credential_revoked`; port49d says it on stderr
+  (rate-limited), counts it (`revoked_refused`, `port49_decisions`) and writes a `mint deny` record.
+
+**Decisions for Ryan (open, not changed):**
+
+- **D1**, the shared store's backend (above; 7d; etcd recommended).
+- **Task 9 review M1:** an unmounted or empty revocations volume that passes the fence looks like a
+  first install, so port49d creates an empty file and starts with no marks, saying so in one stderr
+  line. Closing it changes decision 32 (and pre-flight C1). Recommendation: require an explicit
+  one-time init instead of creating the file.
+- **Decision 15's cost on a certificate's mark:** the owner's next login re-admits the stolen
+  certificate's still-open device shell (operator notes, above). Decision 15 already accepts this.
+
+**Carried, for later plans:**
+
+- **7b:** the refresh records' `unreached` field (decision 21); CRL and OCSP feeding the certificate
+  marks.
+- **7c:** the HTTP revocation over `Broker.Revoke`; self-revocation's shape (a principal revoking its
+  own tokens without a standing mark).
+- **7d:** `storetest.IdempotencyReservesOnce` (and `IdempotencyLeaseExpires`), `TokenIndex` and
+  `RevocationMarks` for the chosen backend; whether `broker.revocations_file` stays once the store
+  persists; the revocation's residual window (a redemption that removed its token before the delete
+  and writes its context after the second pass), closed atomically in the store.
+- **7e:** the listener and the marks in the separate broker process.
 
 ## Plan 8 — Workload certificates (§19 step 8)
 
