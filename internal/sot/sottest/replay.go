@@ -156,6 +156,21 @@ func New(t testing.TB, stack string, n int) *Server {
 			s.note(l.Query)
 		}
 	}
+	// L32 asked each stack's list for id beside name (connector.json
+	// graphql_id): recorded where the stack answered it with no errors.
+	if p := filepath.Join(fixtures(), "..", "l32", stack, "connector.json"); exists(p) {
+		var l32 struct {
+			GraphQLID struct {
+				Query      string `json:"query"`
+				Errors     int    `json:"errors"`
+				Selectable bool   `json:"selectable"`
+			} `json:"graphql_id"`
+		}
+		read(t, p, &l32)
+		if l32.GraphQLID.Selectable && l32.GraphQLID.Errors == 0 {
+			s.note(l32.GraphQLID.Query)
+		}
+	}
 	s.restShallow = firstResult(t, filepath.Join(dir, "rest-device.json"))
 	s.restDev = s.restShallow
 	if p := filepath.Join(dir, "rest-device-depth1.json"); exists(p) {
@@ -659,10 +674,15 @@ func (s *Server) device(base map[string]any, v dev, api string, shallow bool) ma
 	d := clone(base)
 	// Its own id, name, display and url: the connector refuses a list naming
 	// a device twice (pre-flight I1), and every clone of leaf-01 would
-	// otherwise share its id. The id is in the stack's recorded form, a
-	// number on NetBox and a UUID string on Nautobot (L30 rest-device*.json).
+	// otherwise share its id. The id is in the stack's recorded form: over
+	// REST a number on NetBox and a UUID string on Nautobot (L30
+	// rest-device*.json), over GraphQL a string on every release (L32
+	// connector.json graphql_id).
 	id, ipID := s.id(i, 8), s.id(i, 9)
 	d["name"], d["id"] = v.name, id
+	if api == "graphql" {
+		d["id"] = fmt.Sprint(id)
+	}
 	if _, ok := d["display"]; ok {
 		d["display"] = v.name
 	}

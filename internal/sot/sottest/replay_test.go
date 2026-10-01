@@ -388,3 +388,30 @@ func TestAShiftSkipsADeviceAndKeepsTheCount(t *testing.T) {
 		}
 	}
 }
+
+// L32 (connector.json graphql_id): every stack's GraphQL list gives id as a
+// string, the id REST gives the device, and asking for it is recorded.
+func TestGraphQLGivesIDAsAString(t *testing.T) {
+	for _, stack := range []string{"netbox-3.7", "netbox-4", "nautobot-1.6", "nautobot-2", "nautobot-3"} {
+		s := New(t, stack, 3)
+		list, gql := "devices", s.URL+"/api/graphql/"
+		if strings.HasPrefix(stack, "netbox") {
+			list, gql = "device_list", s.URL+"/graphql/"
+		}
+		var r gqlAnswer
+		if code := post(t, client(t, s), gql, "{ "+list+" { id name } }", &r); code != 200 || len(r.Data[list]) != 3 {
+			t.Fatalf("%s: %d, %d devices", stack, code, len(r.Data[list]))
+		}
+		var page struct {
+			Results []map[string]any `json:"results"`
+		}
+		get(t, client(t, s), s.URL+"/api/dcim/devices/?name="+Name(2), &page)
+		id, ok := r.Data[list][1]["id"].(string)
+		if !ok || id == "" || id != fmt.Sprint(page.Results[0]["id"]) {
+			t.Errorf("%s: GraphQL id %#v, REST id %#v", stack, r.Data[list][1]["id"], page.Results[0]["id"])
+		}
+		if got := s.Unrecorded(); len(got) != 0 {
+			t.Errorf("%s: asked for unrecorded %v", stack, got)
+		}
+	}
+}

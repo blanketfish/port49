@@ -189,7 +189,7 @@ func TestCustomFieldsAndStatusMapToAttributes(t *testing.T) {
 		!strings.Contains(notes[0], "custom field owner is not a string, number or boolean; attribute owner is left unset") {
 		t.Fatalf("%+v %v", d.Attributes, notes)
 	}
-	if got := m.selection(p).String(); got != "custom_fields name platform { slug } primary_ip4 { address } "+
+	if got := m.selection(p).String(); got != "custom_fields id name platform { slug } primary_ip4 { address } "+
 		"primary_ip6 { address } status" {
 		t.Fatalf("%q", got)
 	}

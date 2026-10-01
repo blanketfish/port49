@@ -267,11 +267,12 @@ func TestASkippedDeviceIsConfirmedNotRemoved(t *testing.T) {
 							s.ReplaceAfterPage = 1
 						}
 					})
-					if api == "rest" && knob == "rename" {
-						// A rename keeps the device's id, which REST lists
-						// twice: the read fails at that page, before any
+					if knob == "rename" {
+						// A rename keeps the device's id, which the list
+						// gives twice over REST and over GraphQL (keyed by
+						// id, L32): the read fails at that page, before any
 						// device is asked for (pre-flight I1).
-						if err == nil || n != 0 || !strings.Contains(err.Error(), "REST gave one device twice") {
+						if err == nil || n != 0 || !strings.Contains(err.Error(), "gave one device twice (id ") {
 							t.Errorf("%s: %d devices, %v", name, n, err)
 						}
 						continue
@@ -315,14 +316,17 @@ func TestARealRemovalPassesOnOneRead(t *testing.T) {
 	if err != nil || n != 119 || lists(s, from) != 1 {
 		t.Fatalf("deleted: %d devices, %d reads, %v", n, lists(s, from), err)
 	}
-	// leaf-051 skipped by a rename, and offline: asked for, out of scope.
+	// leaf-051 skipped by a delete and an insert, and offline: asked for,
+	// out of scope. (A rename is caught by its repeated id before any
+	// device is asked for.)
 	src, s, _ = source(t, "nautobot-2", 120, "graphql", Mapping{Filter: Filter{Status: []string{"active"}},
 		Addresses: Addresses{Primary: true}})
 	n, err = fetches(t, src, s, func() {
 		from = len(s.Requests())
-		s.RenameAfterPage, s.Status = 1, map[int]string{51: "offline"}
+		s.ReplaceAfterPage, s.Status = 1, map[int]string{51: "offline"}
 	})
-	// leaf-01, now z-leaf-01, is kept; leaf-051 is offline, and a removal.
+	// leaf-01, read before its delete, and leaf-121 are kept; leaf-051 is
+	// offline, and a removal.
 	asked := strings.Contains(fmt.Sprint(s.Requests()[from:]), "name="+sottest.Name(51))
 	if err != nil || n != 120 || lists(s, from) != 1 || !asked {
 		t.Fatalf("offline: %d devices, %d reads, asked %v, %v", n, lists(s, from), asked, err)
@@ -402,7 +406,7 @@ func TestALargeRemovalPassesOnTwoReads(t *testing.T) {
 // shift stopped, holds.
 func TestALargeShiftFailsUntilItStops(t *testing.T) {
 	src, s, from, n, err := remove(t, "nautobot-2", "graphql", 600, 300, func(s *sottest.Server) {
-		s.RenameAfterPage, s.Shifts = 1, 1
+		s.ReplaceAfterPage, s.Shifts = 1, 1
 	})
 	if err == nil || n != 0 || lists(s, from) != 2 || named(s, from) != 0 ||
 		!strings.Contains(err.Error(), "the list changed between two reads") || strings.Contains(err.Error(), "leaf-") {

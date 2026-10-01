@@ -38,6 +38,7 @@ func replay(t *testing.T, stack string, n int) (*sottest.Server, *client, Profil
 // basic is what every read asks for: name, status, the primary addresses.
 func basic(p Profile) selection {
 	s := selection{}
+	s.add([]string{"id"})
 	s.add([]string{"name"})
 	s.add(p.status.graphql)
 	s.add([]string{"primary_ip4", "address"})
@@ -175,14 +176,14 @@ func TestARepeatFailsAtThePageThatHoldsIt(t *testing.T) {
 	var posts atomic.Int32
 	srv, ca := sottest.TLS(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		if posts.Add(1) == 1 {
-			w.Write([]byte(`{"data": {"devices": [{"name": "a"}, {"name": "b"}]}}`))
+			w.Write([]byte(`{"data": {"devices": [{"id": "1", "name": "a"}, {"id": "2", "name": "b"}]}}`))
 			return
 		}
-		w.Write([]byte(`{"data": {"devices": [{"name": "c"}, {"name": "b"}]}}`))
+		w.Write([]byte(`{"data": {"devices": [{"id": "3", "name": "c"}, {"id": "2", "name": "b"}]}}`))
 	}))
 	c, _ := newClient(srv.URL, ca, NewSecret(token), "nautobot")
 	_, err := c.graphqlDevices(context.Background(), profiles[Nautobot2], basic(profiles[Nautobot2]), 2)
-	if err == nil || !strings.Contains(err.Error(), "GraphQL gave one device twice (name b)") {
+	if err == nil || !strings.Contains(err.Error(), "GraphQL gave one device twice (id 2)") {
 		t.Fatalf("got %v", err)
 	}
 	if n := posts.Load(); n != 2 {
@@ -214,16 +215,47 @@ func TestAPageLongerThanThePageSizeFails(t *testing.T) {
 	}
 }
 
-// Pre-flight I1: a list naming one device twice is refused; a device with
-// no name is not counted against another.
+// Pre-flight I1: a list giving one device twice, by id, is refused; two
+// unnamed devices are two devices, and one unnamed device given twice is
+// caught as any other.
 func TestAListNamingADeviceTwiceFails(t *testing.T) {
+	for body, want := range map[string]string{
+		`[{"id": "1", "name": "a"}, {"id": "2", "name": null}, {"id": "3", "name": null}, {"id": "1", "name": "a"}]`: "(id 1)",
+		`[{"id": "1", "name": "a"}, {"id": "2", "name": null}, {"id": "3", "name": "b"}, {"id": "2", "name": null}]`: "(id 2)",
+	} {
+		srv, ca := sottest.TLS(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Write([]byte(`{"data": {"device_list": ` + body + `}}`))
+		}))
+		c, _ := newClient(srv.URL, ca, NewSecret(token), "netbox")
+		if _, err := c.graphqlDevices(context.Background(), profiles[NetBox37], basic(profiles[NetBox37]), 50); err == nil ||
+			!strings.Contains(err.Error(), "GraphQL gave one device twice "+want) {
+			t.Errorf("%s: got %v", want, err)
+		}
+	}
 	srv, ca := sottest.TLS(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Write([]byte(`{"data": {"device_list": [{"name": "a"}, {"name": null}, {"name": null}, {"name": "a"}]}}`))
+		w.Write([]byte(`{"data": {"device_list": [{"id": "1", "name": null}, {"id": "2", "name": null}]}}`))
 	}))
 	c, _ := newClient(srv.URL, ca, NewSecret(token), "netbox")
-	if _, err := c.graphqlDevices(context.Background(), profiles[NetBox37], basic(profiles[NetBox37]), 50); err == nil ||
-		!strings.Contains(err.Error(), "GraphQL gave one device twice (name a)") {
-		t.Fatalf("got %v", err)
+	if devs, err := c.graphqlDevices(context.Background(), profiles[NetBox37], basic(profiles[NetBox37]), 50); err != nil ||
+		len(devs) != 2 {
+		t.Fatalf("two unnamed devices: %d, %v", len(devs), err)
+	}
+}
+
+// L32 review: a device renamed between pages to a name that sorts last is
+// listed twice under two names, and the device past the boundary is
+// skipped, while the count holds. Keyed by id (L32: every release lets the
+// list select id, a string), the read fails at the page that repeats it,
+// with I1's cause, rather than at admission or not at all.
+func TestARenameAcrossPagesFailsAtThePage(t *testing.T) {
+	for _, stack := range []string{"netbox-4", "nautobot-1.6", "nautobot-2", "nautobot-3"} {
+		s, c, p := replay(t, stack, 120)
+		s.RenameAfterPage = 1
+		devs, err := c.graphqlDevices(context.Background(), p, basic(p), 50)
+		if err == nil || !strings.Contains(err.Error(), "GraphQL gave one device twice (id ") ||
+			!strings.Contains(err.Error(), "the list changed between pages") || strings.Contains(err.Error(), "leaf-") {
+			t.Errorf("%s: %d devices, %v", stack, len(devs), err)
+		}
 	}
 }
 

@@ -67,8 +67,8 @@ func (p Profile) listQuery(sel selection, offset, limit int) string {
 // to a short page. A page longer than pageSize (a release that ignored the
 // paging arguments, pre-flight M4), a page that begins as the one before it
 // did (a release that ignored the offset), a list past maxFetch bytes (M3),
-// and a list naming a device twice (a page boundary shifted under a
-// concurrent insert, I1) fail it, at the page that shows it. The caller
+// and a list giving one id twice (a page boundary shifted under a
+// concurrent insert or a rename, I1) fail it, at the page that shows it. The caller
 // checks the count (Source.graphql).
 func (c *client) graphqlDevices(ctx context.Context, p Profile, sel selection, pageSize int) ([]map[string]any, error) {
 	if pageSize < 1 {
@@ -110,7 +110,7 @@ func (c *client) graphqlDevices(ctx context.Context, p Profile, sel selection, p
 			}
 			first = k
 		}
-		if err := seen.add(devs, "name", "GraphQL"); err != nil {
+		if err := seen.add(devs, "id", "GraphQL"); err != nil {
 			return nil, err
 		}
 		out = append(out, devs...)
@@ -123,13 +123,13 @@ func (c *client) graphqlDevices(ctx context.Context, p Profile, sel selection, p
 	}
 }
 
-// keys is the devices a list has given so far, by key ("id" over REST,
-// "name" over GraphQL, which is not asked for an id: L27 and L30 recorded
-// none in a query). Offset paging across a concurrent change repeats or
+// keys is the devices a list has given so far, by id, over REST and over
+// GraphQL (L32: every measured release lets the GraphQL list select id, and
+// gives it as a string). Offset paging across a concurrent change repeats or
 // skips the device at a page boundary (pre-flight I1); a repeat fails at the
 // page that holds it, naming the cause, rather than at admission's "two
-// devices are both named". An empty key is skipped: NetBox allows a device
-// no name.
+// devices are both named". A rename between pages lists one device under
+// two names, which only its id shows. An empty key is skipped.
 type keys map[string]bool
 
 func (s keys) add(devs []map[string]any, key, api string) error {

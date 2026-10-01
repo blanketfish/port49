@@ -82,11 +82,12 @@ func (m Mapping) check(p Profile, api string) error {
 	return nil
 }
 
-// selection is what a GraphQL read asks for under m: name, status, the
-// primary addresses, and only what the map, the filter and the address rule
-// read.
+// selection is what a GraphQL read asks for under m: id (the list's key,
+// L32), name, status, the primary addresses, and only what the map, the
+// filter and the address rule read.
 func (m Mapping) selection(p Profile) selection {
 	s := selection{}
+	s.add([]string{"id"})
 	s.add([]string{"name"})
 	s.add(p.status.graphql)
 	s.add([]string{"primary_ip4", "address"})
