@@ -490,8 +490,10 @@ func (s *Server) graphql(w http.ResponseWriter, query string, n, del int) {
 			writeJSON(w, http.StatusOK, errorsOf(unknown...))
 			return
 		}
-		// Not recorded: filters, a lone limit, and every other argument.
-		writeJSON(w, http.StatusBadRequest, errorsOf("Not recorded: an argument shape no L30 list query used."))
+		// Recorded (netbox-4 filters:, Nautobot name: answered 200), not
+		// replayed: the replay does not filter, so it refuses rather than
+		// answer the whole list. A lone limit and any other argument alike.
+		writeJSON(w, http.StatusBadRequest, errorsOf("Not replayed: an argument shape the replay does not filter by."))
 		return
 	}
 	devs := []any{}

@@ -205,15 +205,20 @@ func TestPreviousIsAsRecorded(t *testing.T) {
 	}
 }
 
-// A knob set between requests is not a race (run under -race). The page is
-// larger than the server's write buffer, so the client has it before the
-// handler returns.
+// A knob set between requests is not a race (run under -race). Each get
+// leaves the body unread, so the test sets the knob while the handler may
+// still be finishing; a handler that read DeleteAfterPage after writing the
+// page would race with it.
 func TestDeleteAfterPageSetBetweenRequests(t *testing.T) {
 	s := New(t, "netbox-4", 120)
 	c := client(t, s)
+	for i := 0; i < 50; i++ {
+		get(t, c, s.URL+"/api/dcim/devices/?limit=50", nil)
+		s.DeleteAfterPage = 1000 + i
+	}
+	s.DeleteAfterPage = 52
 	var page restPage
 	get(t, c, s.URL+"/api/dcim/devices/?limit=50", &page)
-	s.DeleteAfterPage = 2
 	get(t, c, s.URL+"/api/dcim/devices/?limit=50", &page)
 	get(t, c, s.URL+"/api/dcim/devices/?limit=50", &page)
 	if page.Results[0]["name"] != Name(2) {
@@ -234,8 +239,10 @@ func TestALiteralIsNoIdentifier(t *testing.T) {
 	}
 }
 
-// An argument no recorded list query used is refused, not answered as the
-// whole list; the paging arguments are taken in either order.
+// An argument the replay does not page by is refused, not answered as the
+// whole list: netbox-4 filters: and Nautobot name: are recorded (200), not
+// replayed, as the replay does not filter. The paging arguments are taken
+// in either order.
 func TestAnUnrecordedArgumentIsRefused(t *testing.T) {
 	var r struct {
 		Data   map[string][]map[string]any `json:"data"`
