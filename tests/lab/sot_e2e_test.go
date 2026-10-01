@@ -67,10 +67,10 @@ func TestSoTDeviceEndToEnd(t *testing.T) {
 		if withSite == string(raw) {
 			t.Fatal("tests/lab/l29/policy.yaml has no key_groups: block to add to")
 		}
-		policy := filepath.Join(privateDir(t, "sot-e2e-"+l.p.name), "policy.yaml")
+		policy := filepath.Join(privateDir(t, "sot-e2e-"+l.p.name+"-"+a.product), "policy.yaml")
 		writeAtomic(t, policy, []byte(withSite), 0o600)
 		secret := l33Secret(t)
-		li := newLabInventory(t, l.p.name)
+		li := newLabInventory(t, l.p.name+"-"+a.product)
 		startInventoryWith(t, li, policy, l33SyncYAML(stack, a.product), []string{"L33_WEBHOOK_SECRET=" + secret})
 		l29RestoreStanding(t, l)
 		if err := a.removeWebhooks("l27"); err != nil {

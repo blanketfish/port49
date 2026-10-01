@@ -82,11 +82,14 @@ said `source l33's deliveries authenticate` once, at the first, and the wrong se
 **Sent again?** Neither the 401 nor the 503 was. Every release's worker logged the task
 `nautobot.extras.tasks.process_webhook` for each as `raised unexpected: RequestException('Status 401 returned ...
 webhook FAILED to process.')` (`503`), once, and no task for it after. No release has a retry setting for webhooks: `process_webhook` is a plain
-`@nautobot_task` with no `autoretry_for`, `max_retries` or `retry_backoff`, and no setting names one, in 1.6.32,
+`@nautobot_task` (`nautobot/extras/tasks.py:108` in 1.6.32, `:225` in 2.4.43, `:64` in 3.2.6; `nautobot_task =
+shared_task` in `nautobot/core/celery/__init__.py`) with no `autoretry_for`, `max_retries` or `retry_backoff`, and no setting names one, in 1.6.32,
 2.4.43 and 3.2.6 alike (read from each image's `nautobot/extras/tasks.py` and the package). So a Nautobot delivery
-refused or answered 503 is lost; the scheduled sync covers the change.
+refused 401, or answered 503 (here by the stand-in listener), is lost; the scheduled sync covers the change.
 
 ### Not observed
 
 - A delivery whose certificate the worker's default trust store holds (only the private CA was tried).
 - A burst of changes inside the debouncer's 30 s gap (each change here was 35 s after the last).
+- A 503 from port49-inventory itself (it answers 503 only on a connection open when shutdown began), and a
+  delivery while port49-inventory is down (connection refused), the common restart case.

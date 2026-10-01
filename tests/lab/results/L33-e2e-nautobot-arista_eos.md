@@ -29,4 +29,6 @@ Controller's reading: the "no token" cell for status offline is the removal work
 login. With the device out of the bundle, the mint answers `no_grants_matched`, since a subject with no grant
 on a device is answered that before anything else (spec §5.7). The device is not in inventory, so the grant's
 scope `all_devices` matches nothing. Break-glass logged in while it was removed, and the token login worked
-again once the status was restored.
+again once the status was restored. The refusal was measured at the mint: no token was presented to the
+device while it was removed; a device's behavior on a connection after removal is L29's
+(`tests/lab/results/L29-reload-arista_eos.md`, Phase: removed).

@@ -20,15 +20,12 @@ import (
 // and the bad_signature count, and a row naming the stack, 503 and the 503
 // listener's count (pre-flight I3; noteLine is l32_unit_test.go's).
 func TestL33FixturesAreWhatTheNotesSay(t *testing.T) {
-	files, _ := filepath.Glob(filepath.Join("sot", "l33", "*", "webhooks.json"))
-	if len(files) == 0 {
-		t.Skip("no L33 records yet")
-	}
-	for _, f := range files {
-		stack := filepath.Base(filepath.Dir(f))
+	// L33's releases (spec §15): each has a record.
+	for _, stack := range []string{"netbox-3.7", "netbox-4", "nautobot-1.6", "nautobot-2", "nautobot-3"} {
+		f := filepath.Join("sot", "l33", stack, "webhooks.json")
 		raw, err := os.ReadFile(f)
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("%s has no L33 record: %v", stack, err)
 		}
 		for _, leak := range []string{"secret\":", "Authorization", "nbt_", "X-Hook-Signature"} {
 			if strings.Contains(string(raw), leak) {
@@ -67,6 +64,16 @@ func TestL33FixturesAreWhatTheNotesSay(t *testing.T) {
 		}
 		if !noteLine(string(note), cell(stack), cell("503")+" "+strconv.Itoa(rec.Unavailable)+" in 120 s |") {
 			t.Errorf("%s: no note row gives the 503 listener's %d deliveries", stack, rec.Unavailable)
+		}
+		if len(rec.UnavailableAt) > 0 && !noteLine(string(note), cell(stack), cell("503"),
+			fmt.Sprintf("%.2f s after the write", rec.UnavailableAt[0])) {
+			t.Errorf("%s: the 503 row does not give the arrival at %.2f s", stack, rec.UnavailableAt[0])
+		}
+		if !noteLine(string(note), cell(stack), cell("stale"), cell(strconv.Itoa(rec.Stale))) {
+			t.Errorf("%s: no note row gives stale %d", stack, rec.Stale)
+		}
+		if !noteLine(string(note), cell(stack), cell("webhook created"), cell(strings.Join(rec.WebhookCalls, ", "))) {
+			t.Errorf("%s: no note row gives the webhook's create calls %v", stack, rec.WebhookCalls)
 		}
 	}
 }

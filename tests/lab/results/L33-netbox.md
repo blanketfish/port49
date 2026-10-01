@@ -72,7 +72,7 @@ secret's refusal once (`bad_signature`, naming the source and the worker's addre
 (`503`) and `webhook FAILED to process`, and the job ended there. NetBox's own retry is `RQ_RETRY_MAX` (default 0,
 so none) with `RQ_RETRY_INTERVAL` (default 60 s), applied to every event-rule job in both releases
 (`utilities/rqworker.py` `get_rq_retry()`, called from `extras/events.py` in 3.7.8 and `extras/event_rules.py` in
-4.7.1); netbox-docker's configuration leaves it unset. So a NetBox delivery refused or answered 503 is lost unless
+4.7.1); netbox-docker's configuration leaves it unset. So a NetBox delivery refused 401, or answered 503 (here by the stand-in listener), is lost unless
 the operator sets `RQ_RETRY_MAX`; the scheduled sync covers the change. A retry with a backoff past 120 s would
 not be seen here, but at the default the job is not retried at all.
 
@@ -81,3 +81,5 @@ not be seen here, but at the default the job is not retried at all.
 - A delivery whose certificate the worker's default trust store holds (only the private CA was tried).
 - A burst of changes inside the debouncer's 30 s gap (each change here was 35 s after the last).
 - A release with `RQ_RETRY_MAX` set.
+- A 503 from port49-inventory itself (it answers 503 only on a connection open when shutdown began), and a
+  delivery while port49-inventory is down (connection refused), the common restart case.
