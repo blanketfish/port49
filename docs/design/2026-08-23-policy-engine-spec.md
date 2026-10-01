@@ -866,12 +866,16 @@ deletes every unspent token under each `(device, username)` key that certificate
 same principal's other certificates' included: the store holds no finer cut, and the error is
 toward denying. A principal is compared as `Identity` spells it, `user:` and the lower-cased email.
 The broker's listener holds the marks in memory too, so a connection made with a revoked
-certificate is closed as it binds, and cannot close its owner's other connections. A mint reads the marks before
-anything else and again after its last token write, and deletes what it wrote if a mark appeared:
-whichever of a mint and a revocation reads the other's write, no token minted under a revoked
-credential survives. The marks are read at mint, not at the TLS handshake: `port49 login` touches
-no store (design document §12), so a revoked operator's login succeeds and the first mint is
-refused `credential_revoked`, which ends the agent's session. Each revocation is one `revoke`
+certificate, or by a revoked principal, is answered `credential_revoked` and closed as it binds,
+and cannot close its owner's other connections. Its one request is answered as a mint under the
+mark is, and recorded as one (§5.7), but reaches no handler and no store. A mint reads the marks
+before anything else and again after its last token write, and deletes what it wrote if a mark
+appeared: whichever of a mint and a revocation reads the other's write, no token minted under a
+revoked credential survives. The store's marks are read at mint, not at the TLS handshake:
+`port49 login` touches no store (design document §12). A revoked operator's `port49 login` is therefore
+refused `credential_revoked` at the agent's first request, from the listener's copy, and a mark
+that lands after the agent's connection bound refuses its next mint `credential_revoked`; either
+ends the agent's session. Each revocation is one `revoke`
 record (§5.7) naming what it reached and the live contexts it could not, on a platform that never
 asks about a command (§13, decision 21) or on a device the inventory gives no platform. Revocation
 by an OIDC `sid` or `sub` arrives with plan 7h, and from a CRL or an OCSP response with plan 7b,
