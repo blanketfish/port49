@@ -408,6 +408,9 @@ func (noStore) SetPrivilege(context.Context, store.ContextKey, uint8) error {
 func (noStore) DeleteContext(context.Context, store.ContextKey) error {
 	panic("store called")
 }
+func (noStore) DeleteContextIf(context.Context, store.ContextKey, uint64) error {
+	panic("store called")
+}
 func (noStore) PutBlob(context.Context, string, []byte, time.Duration) error {
 	panic("store called")
 }

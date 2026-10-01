@@ -359,9 +359,10 @@ func (w *wrapped) AnnotateContext(ctx context.Context, k store.ContextKey, discH
 
 // RefreshContext passes through, and the one field it does not carry is the
 // reason it can: every field in store.ContextRefresh is plaintext -- two
-// timestamps and a policy blob hash -- and the window it recomputes is read
-// from SessionExpires and AuthTime, which PutContext also leaves in the clear.
-// The credential's sid is the field a refresh would otherwise want to write,
+// timestamps, a policy blob hash, a session age, a grace cutoff and a
+// revision -- and the window it recomputes, and the ceiling GraceCutoff is
+// compared with, are read from SessionExpires and AuthTime, which PutContext
+// also leaves in the clear. The credential's sid is the field a refresh would otherwise want to write,
 // and it lives inside the sealed Credential; writing it here could only be a
 // read-unseal-modify-reseal-write, which is the read-modify-write the setters
 // exist to avoid (AnnotateContext above). A rotated sid moves in the plaintext
@@ -394,6 +395,12 @@ func (w *wrapped) SetContextPolicy(ctx context.Context, k store.ContextKey, poli
 // DeleteContext is addressed by key alone.
 func (w *wrapped) DeleteContext(ctx context.Context, k store.ContextKey) error {
 	return w.inner.DeleteContext(ctx, k)
+}
+
+// DeleteContextIf passes through: it is addressed by key and compares Rev,
+// which is plaintext bookkeeping.
+func (w *wrapped) DeleteContextIf(ctx context.Context, k store.ContextKey, rev uint64) error {
+	return w.inner.DeleteContextIf(ctx, k, rev)
 }
 
 // PutBlob passes through unsealed. Blobs hold no identity (design §12).

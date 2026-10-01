@@ -647,10 +647,26 @@ func (s *Store) RefreshContext(_ context.Context, k store.ContextKey, r store.Co
 		delete(s.contexts, k)
 		return store.ErrNotFound
 	}
+	// Both refusals are made here, under the lock, before anything is
+	// written: a revision checked outside it could move before the write, and
+	// a ceiling checked outside it could be the one a racing refresh replaced.
+	if r.ExpectRev != 0 && e.rev != r.ExpectRev {
+		return store.ErrConflict
+	}
+	if !r.GraceCutoff.IsZero() && e.c.HasCeiling() && e.c.SessionExpires.Before(r.GraceCutoff) {
+		return store.ErrPastGrace
+	}
 	// The window is read here, under the lock, from the pair this call is
 	// about to overwrite. A caller computing it from a copy it read earlier
 	// would compute it from a pair another refresh may already have moved.
-	if e.c.HasCeiling() {
+	// A SessionAge replaces it outright: a refresh is a fresh authentication
+	// event, so it may lengthen the ceiling (decision 33).
+	switch {
+	case r.SessionAge != nil && *r.SessionAge == 0:
+		e.c.SessionExpires = time.Time{}
+	case r.SessionAge != nil:
+		e.c.SessionExpires = r.AuthTime.Add(*r.SessionAge)
+	case e.c.HasCeiling():
 		e.c.SessionExpires = r.AuthTime.Add(e.c.SessionExpires.Sub(e.c.AuthTime))
 	}
 	e.c.AuthTime = r.AuthTime
@@ -701,9 +717,9 @@ func (s *Store) SetRevokedAt(_ context.Context, k store.ContextKey, at time.Time
 }
 
 // SetContextPolicy is the refresher's setter: the compare, the write and the
-// clamp are one critical section (store.Store). It compares the policy
+// clamps are one critical section (store.Store). It compares the policy
 // revision, moves both revisions, and nothing about the expiry: a policy edit
-// is not activity.
+// is not activity. The session ceiling only ever moves earlier here.
 func (s *Store) SetContextPolicy(_ context.Context, k store.ContextKey, policyRev uint64, p store.ContextPolicy) error {
 	if p.RevokedAt.IsZero() && p.BlobHash == "" {
 		// A live context pointing at no blob is a corrupt record, whatever
@@ -731,6 +747,13 @@ func (s *Store) SetContextPolicy(_ context.Context, k store.ContextKey, policyRe
 		if ceiling, ok := e.c.PrivilegeCeiling(); ok && e.c.PrivLvl > ceiling {
 			e.c.PrivLvl = ceiling
 		}
+		// A context with a zero AuthTime is the lab's instrument's and has
+		// no ceiling to measure from.
+		if p.MaxSessionAge > 0 && !e.c.AuthTime.IsZero() {
+			if ceiling := e.c.AuthTime.Add(p.MaxSessionAge); e.c.SessionExpires.IsZero() || ceiling.Before(e.c.SessionExpires) {
+				e.c.SessionExpires = ceiling
+			}
+		}
 	}
 	e.rev = s.nextRevLocked()
 	e.policyRev = e.rev
@@ -741,6 +764,24 @@ func (s *Store) SetContextPolicy(_ context.Context, k store.ContextKey, policyRe
 func (s *Store) DeleteContext(_ context.Context, k store.ContextKey) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	delete(s.contexts, k)
+	return nil
+}
+
+// DeleteContextIf is DeleteContext as a compare-and-set on Rev (store.Store):
+// the grace window's sweep never deletes a context a login wrote since it was
+// read.
+func (s *Store) DeleteContextIf(_ context.Context, k store.ContextKey, rev uint64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok := s.contexts[k]
+	if !ok || !e.exp.After(s.now()) {
+		delete(s.contexts, k)
+		return store.ErrNotFound
+	}
+	if e.rev != rev {
+		return store.ErrConflict
+	}
 	delete(s.contexts, k)
 	return nil
 }

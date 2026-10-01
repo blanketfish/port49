@@ -1434,3 +1434,23 @@ func TestARevocationMarkNeverExpires(t *testing.T) {
 		t.Fatalf("a mark expired: %v", err)
 	}
 }
+
+func TestCeilingShortensOnly(t *testing.T) {
+	now := time.Unix(1_757_041_495, 0)
+	storetest.CeilingShortensOnly(t, func() store.Store { return New(func() time.Time { return now }) }, now)
+}
+
+func TestRefreshSetsTheCeiling(t *testing.T) {
+	now := time.Unix(1_757_041_495, 0)
+	storetest.RefreshSetsTheCeiling(t, func() store.Store { return New(func() time.Time { return now }) }, now)
+}
+
+func TestRefreshStopsAtGrace(t *testing.T) {
+	now := time.Unix(1_757_041_495, 0)
+	storetest.RefreshStopsAtGrace(t, func() store.Store { return New(func() time.Time { return now }) }, now)
+}
+
+func TestWritesBindToTheRevision(t *testing.T) {
+	now := time.Unix(1_757_041_495, 0)
+	storetest.WritesBindToTheRevision(t, func() store.Store { return New(func() time.Time { return now }) }, now)
+}

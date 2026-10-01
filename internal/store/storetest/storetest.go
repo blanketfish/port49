@@ -599,3 +599,129 @@ func RevocationMarks(t *testing.T, newStore func() store.Store, now time.Time) {
 		t.Fatalf("lifting a principal's mark lifted the certificate's: %+v %v", got, err)
 	}
 }
+
+// CeilingShortensOnly is decision 33's rule for a policy edit: a policy
+// write shortens a context's ceiling, gives one to a context with none, and
+// never lengthens or removes one.
+func CeilingShortensOnly(t *testing.T, newStore func() store.Store, now time.Time) {
+	t.Helper()
+	ctx := context.Background()
+	k := store.ContextKey{NAS: "leaf-01", Username: "alice"}
+	auth := now.Add(-time.Hour)
+	for _, tc := range []struct {
+		name    string
+		expires time.Time // zero: no ceiling
+		age     time.Duration
+		want    time.Time
+	}{
+		{"shortened", auth.Add(8 * time.Hour), 2 * time.Hour, auth.Add(2 * time.Hour)},
+		{"never lengthened", auth.Add(2 * time.Hour), 8 * time.Hour, auth.Add(2 * time.Hour)},
+		{"given one", time.Time{}, 2 * time.Hour, auth.Add(2 * time.Hour)},
+		{"never removed", auth.Add(2 * time.Hour), 0, auth.Add(2 * time.Hour)},
+	} {
+		s := newStore()
+		if err := s.PutContext(ctx, k, store.Context{CtxID: "c", Principal: "user:a", Username: "alice", BlobHash: "b1",
+			AuthTime: auth, SessionExpires: tc.expires, RefreshedAt: auth}, time.Hour); err != nil {
+			t.Fatal(err)
+		}
+		c, _ := s.GetContext(ctx, k)
+		if err := s.SetContextPolicy(ctx, k, c.PolicyRev, store.ContextPolicy{BlobHash: "b2", MaxSessionAge: tc.age}); err != nil {
+			t.Fatal(err)
+		}
+		if c, _ := s.GetContext(ctx, k); !c.SessionExpires.Equal(tc.want) {
+			t.Errorf("%s: session_expires %v, want %v", tc.name, c.SessionExpires, tc.want)
+		}
+	}
+}
+
+// RefreshSetsTheCeiling: a refresh is a fresh authentication event, so it
+// sets the ceiling it is given from the new auth_time, lengthening, or
+// clearing it for never; one given none keeps the window (spec §5.6).
+func RefreshSetsTheCeiling(t *testing.T, newStore func() store.Store, now time.Time) {
+	t.Helper()
+	ctx := context.Background()
+	k := store.ContextKey{NAS: "leaf-01", Username: "alice"}
+	auth := now.Add(-time.Hour)
+	eight, never := 8*time.Hour, time.Duration(0)
+	for _, tc := range []struct {
+		name string
+		age  *time.Duration
+		want time.Time
+	}{
+		{"set", &eight, now.Add(8 * time.Hour)},
+		{"never", &never, time.Time{}},
+		{"window kept", nil, now.Add(2 * time.Hour)},
+	} {
+		s := newStore()
+		if err := s.PutContext(ctx, k, store.Context{CtxID: "c", Principal: "user:a", Username: "alice", BlobHash: "b",
+			AuthTime: auth, SessionExpires: auth.Add(2 * time.Hour), RefreshedAt: auth}, time.Hour); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.RefreshContext(ctx, k, store.ContextRefresh{AuthTime: now, RefreshedAt: now, SessionAge: tc.age},
+			time.Hour); err != nil {
+			t.Fatal(err)
+		}
+		if c, _ := s.GetContext(ctx, k); !c.SessionExpires.Equal(tc.want) {
+			t.Errorf("%s: session_expires %v, want %v", tc.name, c.SessionExpires, tc.want)
+		}
+	}
+}
+
+// RefreshStopsAtGrace: a refresh whose GraceCutoff is after the context's
+// ceiling writes nothing and says so (spec §5.6, teardown row 3); one inside
+// the window resumes the context.
+func RefreshStopsAtGrace(t *testing.T, newStore func() store.Store, now time.Time) {
+	t.Helper()
+	ctx := context.Background()
+	k := store.ContextKey{NAS: "leaf-01", Username: "alice"}
+	s := newStore()
+	auth := now.Add(-3 * time.Hour)
+	if err := s.PutContext(ctx, k, store.Context{CtxID: "c", Principal: "user:a", Username: "alice", BlobHash: "b",
+		AuthTime: auth, SessionExpires: auth.Add(2 * time.Hour), RefreshedAt: auth}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	err := s.RefreshContext(ctx, k, store.ContextRefresh{AuthTime: now, RefreshedAt: now,
+		GraceCutoff: now.Add(-10 * time.Minute)}, time.Hour)
+	if !errors.Is(err, store.ErrPastGrace) {
+		t.Fatalf("a context an hour past its ceiling with a 10m window: %v", err)
+	}
+	if c, _ := s.GetContext(ctx, k); !c.AuthTime.Equal(auth) {
+		t.Fatal("a refused refresh wrote")
+	}
+	if err := s.RefreshContext(ctx, k, store.ContextRefresh{AuthTime: now, RefreshedAt: now,
+		GraceCutoff: now.Add(-2 * time.Hour)}, time.Hour); err != nil {
+		t.Fatalf("inside the window: %v", err)
+	}
+}
+
+// WritesBindToTheRevision: a refresh with ExpectRev, and DeleteContextIf,
+// act only on the record read; a write landing in between makes each
+// ErrConflict and leaves the record (pre-flight M4).
+func WritesBindToTheRevision(t *testing.T, newStore func() store.Store, now time.Time) {
+	t.Helper()
+	ctx := context.Background()
+	k := store.ContextKey{NAS: "leaf-01", Username: "alice"}
+	s := newStore()
+	if err := s.PutContext(ctx, k, store.Context{CtxID: "c", Principal: "user:a", Username: "alice", BlobHash: "b",
+		AuthTime: now, SessionExpires: now.Add(time.Hour), RefreshedAt: now}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	read, _ := s.GetContext(ctx, k)
+	if err := s.SetPrivilege(ctx, k, 15); err != nil { // another writer lands
+		t.Fatal(err)
+	}
+	if err := s.RefreshContext(ctx, k, store.ContextRefresh{AuthTime: now, RefreshedAt: now, ExpectRev: read.Rev},
+		time.Hour); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("a refresh against a stale revision: %v", err)
+	}
+	if err := s.DeleteContextIf(ctx, k, read.Rev); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("a delete against a stale revision: %v", err)
+	}
+	cur, _ := s.GetContext(ctx, k)
+	if err := s.DeleteContextIf(ctx, k, cur.Rev); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.GetContext(ctx, k); !errors.Is(err, store.ErrNotFound) {
+		t.Fatal("the delete at the current revision did not delete")
+	}
+}

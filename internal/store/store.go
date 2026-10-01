@@ -16,9 +16,17 @@ var ErrNotFound = errors.New("store: not found")
 // ErrConflict is a compare-and-set refused because the record is no longer
 // the one the caller read: SwapContext's context, written by another writer
 // since, expired, or appeared where none was; or CompleteIdempotency's
-// record, no longer held by the caller (plan 7a). Nothing was written. The
+// record, no longer held by the caller (plan 7a); or a RefreshContext with an
+// ExpectRev, or a DeleteContextIf, whose revision moved (plan 7b). Nothing was
+// written. The
 // caller reads again and decides again; JoinContext is the loop that does.
 var ErrConflict = errors.New("store: context changed since it was read")
+
+// ErrPastGrace is RefreshContext refusing a context whose ceiling is
+// earlier than the refresh's GraceCutoff: past the grace window, a session
+// is over and no refresh resumes it (spec §5.6, teardown row 3). Nothing
+// was written.
+var ErrPastGrace = errors.New("store: context is past its grace window")
 
 // UnreadableContextError is a context record the store returned and the
 // sealing layer could not open: sealed under a key that has left the two-key
@@ -300,11 +308,12 @@ func HashDiscriminator(v string) string {
 // is what keeps it closed.
 type ContextRefresh struct {
 	// AuthTime is the new authentication time. SessionExpires is recomputed
-	// from it inside the store's lock, keeping the window the record's own
-	// (AuthTime, SessionExpires) pair described: a ceiling moves forward by
-	// the same span, and a context without one (HasCeiling false) does not
-	// gain one. The caller cannot compute it, because the pair it would read
-	// is the pair the write is about to replace.
+	// from it inside the store's lock: from SessionAge when it is set, and
+	// otherwise keeping the window the record's own (AuthTime,
+	// SessionExpires) pair described — a ceiling moves forward by the same
+	// span, and a context without one (HasCeiling false) does not gain one.
+	// The caller cannot compute it, because the pair it would read is the
+	// pair the write is about to replace.
 	AuthTime time.Time
 	// RefreshedAt is the staleness clock (spec §5.1.1). It is the broker's
 	// clock, not the store's: the refresh happened when the broker said it
@@ -314,6 +323,22 @@ type ContextRefresh struct {
 	// Empty leaves it alone — a refresh that did not recompute policy must
 	// not erase the hash the authorizer reads.
 	BlobHash string
+	// SessionAge, when set, is the ceiling the policy in force gives this
+	// context: SessionExpires becomes AuthTime plus it, and zero clears it
+	// (never). A refresh is a fresh authentication event, so it may lengthen
+	// a ceiling (spec §5.6; decision 33). Nil keeps the window the record's
+	// own pair described, as before.
+	SessionAge *time.Duration
+	// GraceCutoff, when non-zero, is the earliest ceiling a refresh may
+	// extend: the refresh time less the grace window. A context with a
+	// ceiling before it is ErrPastGrace and is not written. It is checked
+	// under the store's lock, so a refresh racing the window's end cannot
+	// resume a session the window closed.
+	GraceCutoff time.Time
+	// ExpectRev, when non-zero, is the revision the caller read: the write
+	// lands only on that record, else ErrConflict, so a context another
+	// principal's login replaced in between is not extended.
+	ExpectRev uint64
 }
 
 // ContextPolicy is what a policy refresh writes into a live context (spec
@@ -336,6 +361,12 @@ type ContextPolicy struct {
 	MaxPrivilege uint8
 	// Enable replaces the enable mechanism: none | auto | token (spec §7).
 	Enable string
+	// MaxSessionAge is the policy's ceiling for this principal on this
+	// device, zero for never (spec §5.6). SessionExpires becomes AuthTime
+	// plus it only when that is earlier, or the context has none: a policy
+	// edit shortens a session, and only a fresh authentication event
+	// lengthens one (decision 33). Zero changes nothing.
+	MaxSessionAge time.Duration
 }
 
 // ContextRef is what the indexes hold: the context key, nothing more.
@@ -492,7 +523,15 @@ type Store interface {
 	//
 	// SessionExpires is recomputed here rather than by the caller because the
 	// pair it is computed from is the pair about to be overwritten; see
-	// ContextRefresh.AuthTime.
+	// ContextRefresh.AuthTime. A SessionAge sets it from the new AuthTime, and
+	// may lengthen it: a refresh is a fresh authentication event (decision 33).
+	//
+	// Two checks come first, under the same lock, and either refuses with
+	// nothing written. An ExpectRev that is not the record's Rev is
+	// ErrConflict: the context was replaced or written since the caller read
+	// it. A GraceCutoff later than the context's ceiling is ErrPastGrace: the
+	// session ended with the grace window, and a refresh does not resume it
+	// (spec §5.6, teardown row 3).
 	//
 	// It deliberately does NOT write the credential's sid. Sid lives inside
 	// Credential, which is sealed, and a narrow setter cannot write one field
@@ -546,11 +585,16 @@ type Store interface {
 	// max_privilege reaches the next command as privilege_exceeded. It never
 	// raises PrivLvl: a widened level reaches the device only through the next
 	// session authorization or enable, which is where a level is granted.
+	// SessionExpires follows the same one-way rule: a MaxSessionAge whose
+	// AuthTime plus it is earlier than the ceiling, or a context with none,
+	// moves it to that; a later one, or zero, leaves it (decision 33). A
+	// policy edit shortens a session and never lengthens or removes a ceiling.
 	//
 	// It does not extend the expiry or stamp LastTouchedAt: a policy edit is
 	// not activity, or every reload would keep every idle context alive. It
-	// does not touch AuthTime, SessionExpires or RefreshedAt: nothing about
-	// the operator's authentication or the directory was re-verified. And it
+	// does not touch AuthTime or RefreshedAt, nor lengthen SessionExpires:
+	// nothing about the operator's authentication or the directory was
+	// re-verified. And it
 	// never clears RevokedAt, for the reason RefreshContext never does, nor
 	// moves it earlier: a revoking write onto a context already revoked later
 	// keeps the later mark, so no token minted between the two can lift it.
@@ -563,6 +607,11 @@ type Store interface {
 	// Plan 2 owns it — revocation and §5.6 teardown rows 2 through 4 all need
 	// it — so it stays.
 	DeleteContext(ctx context.Context, k ContextKey) error
+	// DeleteContextIf deletes the context only while its Rev is rev, the
+	// revision the caller read: ErrConflict otherwise, ErrNotFound when it is
+	// absent. The grace window's sweep uses it, so it never deletes a context
+	// a login wrote since it was read.
+	DeleteContextIf(ctx context.Context, k ContextKey, rev uint64) error
 
 	PutBlob(ctx context.Context, hash string, body []byte, ttl time.Duration) error
 	GetBlob(ctx context.Context, hash string) ([]byte, error)
