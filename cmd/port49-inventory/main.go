@@ -84,7 +84,7 @@ func run(ctx context.Context, cfgPath string, hup <-chan os.Signal) error {
 		// LoadTLS's errors name the file at fault; its prefix is the broker's.
 		return fmt.Errorf("TLS: %s", strings.TrimPrefix(err.Error(), "broker: "))
 	}
-	sources, err := newSources(cfg.Sync)
+	sources, err := newSources(cfg.Sync, stderr)
 	if err != nil {
 		return err
 	}

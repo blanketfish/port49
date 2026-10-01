@@ -348,7 +348,9 @@ func TestShutdownEndsAnAPISyncInFlight(t *testing.T) {
 	src := &heldSource{held: make(chan struct{}, 1)}
 	orig := newSources
 	defer func() { newSources = orig }()
-	newSources = func([]inventory.SourceConfig) ([]inventory.Source, error) { return []inventory.Source{src}, nil }
+	newSources = func([]inventory.SourceConfig, io.Writer) ([]inventory.Source, error) {
+		return []inventory.Source{src}, nil
+	}
 	var out syncBuffer
 	e := stderr
 	defer func() { stderr = e; onListening = nil }()

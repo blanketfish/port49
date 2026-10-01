@@ -2,10 +2,14 @@ package inventory
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/rhwendt/port49/internal/sot"
+	"github.com/rhwendt/port49/internal/sot/sottest"
 )
 
 // fencedFile writes body where the fence passes it: a directory only its
@@ -85,8 +89,19 @@ func TestAFileSourceOthersCouldWriteIsRefused(t *testing.T) {
 }
 
 func TestNewSourcesBuildsEachConfiguredSource(t *testing.T) {
-	srcs, err := NewSources([]SourceConfig{{Name: "a", Type: "file", Path: "/x"}, {Name: "b", Type: "file", Path: "/y"}})
+	nb := sottest.New(t, "netbox-4", 1)
+	srcs, err := NewSources([]SourceConfig{{Name: "a", Type: "file", Path: "/x"},
+		{Name: "b", Type: "netbox", URL: nb.URL, CAFile: nb.CAFile, Token: sot.NewSecret("t"), API: "auto", PageSize: 50,
+			Mapping: sot.Mapping{Addresses: sot.Addresses{Primary: true}}}}, io.Discard)
 	if err != nil || len(srcs) != 2 || srcs[1].Name() != "b" {
 		t.Fatalf("%v %v", srcs, err)
+	}
+	if _, ok := srcs[1].(*sot.Source); !ok {
+		t.Fatalf("%T", srcs[1])
+	}
+	// The CA file is read at start: a missing one stops the start.
+	if _, err := NewSources([]SourceConfig{{Name: "b", Type: "netbox", URL: nb.URL, CAFile: "/nonexistent/ca.pem",
+		Token: sot.NewSecret("t")}}, io.Discard); err == nil || !strings.Contains(err.Error(), "source b: ca_file") {
+		t.Fatalf("got %v", err)
 	}
 }

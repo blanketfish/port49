@@ -3,10 +3,12 @@ package inventory
 import (
 	"context"
 	"fmt"
+	"io"
 
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/bundle"
 	"github.com/rhwendt/port49/internal/fence"
+	"github.com/rhwendt/port49/internal/sot"
 )
 
 // Source is one source of truth the service syncs from (spec §10,
@@ -69,14 +71,22 @@ func (f FileSource) Fetch(context.Context) (admission.Inventory, error) {
 	return inv, nil
 }
 
-// NewSources builds each configured source. Load has refused every type
-// this build does not have.
-func NewSources(cfgs []SourceConfig) ([]Source, error) {
+// NewSources builds each configured source; log is where a netbox or
+// nautobot source says what it found. Load has refused every type this
+// build does not have; a CA file that cannot be read stops the start here.
+func NewSources(cfgs []SourceConfig, log io.Writer) ([]Source, error) {
 	var out []Source
 	for _, c := range cfgs {
 		switch c.Type {
 		case "file":
 			out = append(out, FileSource{SourceName: c.Name, Path: c.Path})
+		case "netbox", "nautobot":
+			s, err := sot.New(sot.Config{Name: c.Name, Product: c.Type, URL: c.URL, CAFile: c.CAFile, Token: c.Token,
+				Profile: c.Profile, API: c.API, PageSize: c.PageSize, Mapping: c.Mapping, Log: log})
+			if err != nil {
+				return nil, fmt.Errorf("port49-inventory: %w", err)
+			}
+			out = append(out, s)
 		default:
 			return nil, fmt.Errorf("port49-inventory: source %s: type %s is not built", c.Name, c.Type)
 		}
