@@ -400,6 +400,16 @@ func (e Explanation) Render(w io.Writer, showAttributes bool) {
 		ceiling = fmt.Sprintf("%s (priv-lvl %d)", r.Ceiling, r.MaxPrivilege)
 	}
 	fmt.Fprintf(w, "  level       %s; max_privilege %s\n", level, ceiling)
+	switch a := r.SessionAge; {
+	case a.Least == 0 && !a.Unset:
+		fmt.Fprintf(w, "  session     max_session_age never (every role says never)\n")
+	case a.Least == 0:
+		fmt.Fprintf(w, "  session     max_session_age session.max_session_age_default (no role names one)\n")
+	case a.Unset:
+		fmt.Fprintf(w, "  session     max_session_age the lesser of %s and session.max_session_age_default\n", a.Least)
+	default:
+		fmt.Fprintf(w, "  session     max_session_age %s (the least of its roles')\n", a.Least)
+	}
 	for _, s := range r.Incomparable {
 		fmt.Fprintf(w, "  scope       %s selected this device because its version could not be compared (spec §5.5)\n", s)
 	}

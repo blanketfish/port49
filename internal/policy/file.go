@@ -85,6 +85,9 @@ type fileRole struct {
 	Deny       []string            `yaml:"deny"`
 	Pipe       *filePipe           `yaml:"pipe"`
 	Attributes map[string][]string `yaml:"attributes"`
+	// MaxSessionAge is a pointer, so an absent key (nil) is told from an
+	// explicit empty one, which is refused.
+	MaxSessionAge *string `yaml:"max_session_age"`
 }
 
 type filePipe struct {

@@ -138,6 +138,10 @@ type Role struct {
 	Deny       []string
 	Pipe       []string // nil: the shipped default
 	Attributes map[string][]string
+	// MaxSessionAge is how long a session may run on one authentication
+	// event under this role (spec §5.6): nil names none, and the role takes
+	// session.max_session_age_default; zero is `never`.
+	MaxSessionAge *time.Duration
 }
 
 // Subject addresses a set of principals (spec §2).
@@ -311,14 +315,16 @@ func refusedKeys(raw []byte) error {
 			}
 		}
 	}
+	// A null max_session_age decodes as none and takes port49d's default:
+	// it reads as set and means the default.
 	for i, r := range loose.Roles {
-		if _, ok := r["max_session_age"]; ok {
+		if v, ok := r["max_session_age"]; ok && v == nil {
 			role := fmt.Sprintf("roles[%d]", i)
 			if name, ok := r["name"].(string); ok && name != "" {
 				role = fmt.Sprintf("role %q", name)
 			}
-			return fmt.Errorf("%s: max_session_age per role is plan 7's; session.max_session_age_default "+
-				"in port49d.yaml applies to every role until then", role)
+			return fmt.Errorf("%s: max_session_age is null: give it a duration or never, or remove the key to "+
+				"take session.max_session_age_default (spec §5.6)", role)
 		}
 	}
 	return nil
@@ -856,6 +862,13 @@ func (p *Policy) buildRoles(f file) error {
 			return fmt.Errorf("role %q: privilege: %w", r.Name, err)
 		}
 		role := &Role{Name: r.Name, Privilege: r.Privilege, Reason: r.Reason, Attributes: r.Attributes}
+		if r.MaxSessionAge != nil {
+			age, err := parseSessionAge(*r.MaxSessionAge)
+			if err != nil {
+				return fmt.Errorf("role %q: max_session_age: %w", r.Name, err)
+			}
+			role.MaxSessionAge = &age
+		}
 		// A rule is named by its list and position, never quoted: a refusal
 		// goes to logs, and the refused file's own redaction patterns never
 		// loaded (spec §5.8).
@@ -898,6 +911,20 @@ func (p *Policy) buildRoles(f file) error {
 		p.roles[r.Name] = role
 	}
 	return nil
+}
+
+// parseSessionAge reads a role's max_session_age: `never` (zero), or a
+// duration of at least a minute (spec §5.6; decision 33). A shorter one
+// would expire a session between two commands.
+func parseSessionAge(s string) (time.Duration, error) {
+	if s == "never" {
+		return 0, nil
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil || d < time.Minute {
+		return 0, fmt.Errorf("must be a duration of at least 1m, or never; got %q", s)
+	}
+	return d, nil
 }
 
 // checkRule parses a rule and refuses a regex that buys specificity by how it

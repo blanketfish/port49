@@ -268,3 +268,20 @@ grants: [{subject: g, scope: all_devices, roles: [ro]}, {subject: s, scope: all_
 		t.Errorf("a subject with an identity is checked with it:\n%s", out)
 	}
 }
+
+// explain says the session's max_session_age ceiling and where it comes from
+// (spec §5.6, §12).
+func TestExplainSaysTheSessionAge(t *testing.T) {
+	for _, tc := range []struct {
+		ages []string
+		want string
+	}{
+		{[]string{"2h", ""}, "session     max_session_age the lesser of 2h0m0s and session.max_session_age_default"},
+		{[]string{"2h", "8h"}, "session     max_session_age 2h0m0s (the least of its roles')"},
+		{[]string{"never", ""}, "session     max_session_age session.max_session_age_default (no role names one)"},
+		{[]string{"never"}, "session     max_session_age never (every role says never)"},
+	} {
+		_, out := explained(t, sessionAgePolicy(t, tc.ages...), "s", "", "leaf-01", "", false)
+		mustContain(t, out, tc.want)
+	}
+}
