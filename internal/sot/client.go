@@ -141,7 +141,11 @@ func newClient(base, caFile string, token Secret, product string) (*client, erro
 			}
 			return conn, nil
 		},
-		ResponseHeaderTimeout: 2 * time.Minute, MaxIdleConnsPerHost: 2}
+		ResponseHeaderTimeout: 2 * time.Minute, MaxIdleConnsPerHost: 2,
+		// DefaultTransport's: port49 closes an idle connection before the
+		// source, or a proxy in front of it, does, and a rotated CA reaches
+		// the next dial.
+		IdleConnTimeout: 90 * time.Second}
 	return &client{base: u, auth: NewSecret(scheme + token.Reveal()), http: &http.Client{Transport: tr,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
 }
@@ -181,8 +185,12 @@ func what(method string, u *url.URL) string { return method + " " + printable(u.
 
 // do sends one request with the token and reads its answer: a 200's body, or
 // with full a body whatever the status (GraphQL's errors), up to maxResponse;
-// any other answer's up to maxErrorBody, never printed.
+// any other answer's up to maxErrorBody, never printed. It sends to the
+// base's origin alone, whoever built u (decision 31).
 func (c *client) do(ctx context.Context, method string, u *url.URL, body []byte, full bool) (answer, error) {
+	if u.Scheme != c.base.Scheme || u.Host != c.base.Host {
+		return answer{}, fmt.Errorf("%s is not on url; the token is sent to url alone", what(method, u))
+	}
 	var rd io.Reader
 	if body != nil {
 		rd = bytes.NewReader(body)
@@ -204,7 +212,7 @@ func (c *client) do(ctx context.Context, method string, u *url.URL, body []byte,
 			// M3). A dial or handshake timeout reads otherwise.
 			return answer{}, fmt.Errorf("%s: no answer began within 2m: lower page_size", what(method, u))
 		}
-		return answer{}, clean(err)
+		return answer{}, clean(what(method, u), err)
 	}
 	defer resp.Body.Close()
 	limit := int64(maxErrorBody)
@@ -213,7 +221,7 @@ func (c *client) do(ctx context.Context, method string, u *url.URL, body []byte,
 	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
-		return answer{}, clean(err)
+		return answer{}, clean(what(method, u), err)
 	}
 	if int64(len(raw)) > limit {
 		if limit == maxResponse {
@@ -285,4 +293,14 @@ type cleanError struct {
 func (e *cleanError) Error() string { return e.text }
 func (e *cleanError) Unwrap() error { return e.err }
 
-func clean(err error) error { return &cleanError{text: printable(err.Error()), err: err} }
+// clean is err after what. A *url.Error is unwrapped to its cause: its own
+// text quotes the whole URL, a next's query included, and printable's cut
+// would land in the cause the operator needs.
+func clean(what string, err error) error {
+	cause := err
+	var ue *url.Error
+	if errors.As(err, &ue) && ue.Err != nil {
+		cause = ue.Err
+	}
+	return &cleanError{text: what + ": " + printable(cause.Error()), err: err}
+}

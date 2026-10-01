@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -193,4 +194,56 @@ func TestPrintableCutsAndNeutralises(t *testing.T) {
 	if got := printable(strings.Repeat("x", 300)); len(got) > maxPrinted+len("…") {
 		t.Fatalf("%d bytes", len(got))
 	}
+}
+
+// Decision 31 is the client's own: do sends the token to the base's origin
+// alone, whoever built the URL.
+func TestAForeignOriginIsRefused(t *testing.T) {
+	elsewhere := 0
+	other, _ := sottest.TLS(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) { elsewhere++ }))
+	srv, ca := sottest.TLS(t, http.NotFoundHandler())
+	cl, err := newClient(srv.URL, ca, NewSecret(token), "netbox")
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreign, err := url.Parse(other.URL + "/api/status/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cl.do(context.Background(), http.MethodGet, foreign, nil, false); err == nil ||
+		!strings.Contains(err.Error(), "is not on url") || elsewhere != 0 {
+		t.Fatalf("%v; requests elsewhere: %d", err, elsewhere)
+	}
+}
+
+// A transport error prints the path once and the cause whole: a long query
+// a next named does not cut the cause away.
+func TestATransportErrorKeepsItsCause(t *testing.T) {
+	srv, _ := sottest.TLS(t, http.NotFoundHandler())
+	_, otherCA := sottest.TLS(t, http.NotFoundHandler())
+	cl, _ := newClient(srv.URL, otherCA, NewSecret(token), "netbox")
+	var v map[string]any
+	err := cl.getJSON(context.Background(), cl.at("/api/status/", url.Values{"q": {strings.Repeat("a", 500)}}), &v)
+	if err == nil || !strings.HasPrefix(err.Error(), "GET /api/status/: ") || !strings.Contains(err.Error(), "certificate") ||
+		strings.Contains(err.Error(), "aaaa") {
+		t.Fatalf("%v", err)
+	}
+}
+
+// An idle connection is closed before the source or a proxy closes it, and
+// a rotated CA reaches the next dial.
+func TestIdleConnectionsExpire(t *testing.T) {
+	cl, err := newClient("https://netbox.example.com", writeCA(t), NewSecret(token), "netbox")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cl.http.Transport.(*http.Transport).IdleConnTimeout; got != 90*time.Second {
+		t.Fatalf("IdleConnTimeout %v", got)
+	}
+}
+
+func writeCA(t *testing.T) string {
+	t.Helper()
+	_, ca := sottest.TLS(t, http.NotFoundHandler())
+	return ca
 }
