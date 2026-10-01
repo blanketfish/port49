@@ -83,6 +83,9 @@ func (f *fixture) login(t *testing.T, principal, device, username string) store.
 	c := store.Context{CtxID: "ctx-" + device + "-" + username, Principal: principal, Username: username, PrivLvl: 15,
 		BlobHash: tok.BlobHash, MaxPrivilege: tok.MaxPrivilege, Enable: tok.Enable, AuthTime: f.now,
 		CreatedAt: f.now, RefreshedAt: f.now}
+	if tok.MaxSessionAge > 0 { // the token's ceiling, as the daemon's redeem writes it
+		c.SessionExpires = c.AuthTime.Add(tok.MaxSessionAge)
+	}
 	if err := f.st.PutContext(ctx, k, c, 12*time.Hour); err != nil {
 		t.Fatal(err)
 	}
@@ -1290,5 +1293,92 @@ func TestARefusedDeviceIsNoGrantsMatchedToACallerWithNoGrant(t *testing.T) {
 		if it.Verdict != "deny" || it.Reason != "no_grants_matched" {
 			t.Fatalf("%s: %+v", dev, it)
 		}
+	}
+}
+
+// A role shortened in the policy shortens every live context's ceiling at
+// the next refresh, and says so on the record; one lengthened does not
+// (decision 33).
+func TestAPolicyRefreshShortensALiveCeiling(t *testing.T) {
+	f := newFixture(t, 8) // alice's login on leaf1 carries the 12h default
+	before := f.login(t, alice, "leaf1", "alice")
+	f.log.Reset()
+	// The edit rewrites the context (its bundle is new), but not its ceiling.
+	priors := f.reload(t, edit(t, `permit: ["**"]}`, `permit: ["**"], max_session_age: 24h}`,
+		`deny: ["reload **"]}`, `deny: ["reload **"], max_session_age: 24h}`))
+	if _, err := f.b.Refresh(context.Background(), priors); err != nil {
+		t.Fatal(err)
+	}
+	recs := eventsOf(f.records(t), "refresh")
+	if c := f.context(t, "leaf1", "alice"); !c.SessionExpires.Equal(before.SessionExpires) || len(recs) != 1 ||
+		recs[0]["session"].(map[string]any)["session_expires"] != nil {
+		t.Fatalf("a lengthened ceiling waits for a fresh authentication: %v, %v", c.SessionExpires, recs)
+	}
+	f.log.Reset()
+	priors = f.reload(t, edit(t, `permit: ["**"]}`, `permit: ["**"], max_session_age: 1h}`))
+	rep, err := f.b.Refresh(context.Background(), priors)
+	if err != nil || rep.Updated != 1 {
+		t.Fatalf("%+v %v", rep, err)
+	}
+	c := f.context(t, "leaf1", "alice")
+	if !c.SessionExpires.Equal(c.AuthTime.Add(time.Hour)) {
+		t.Fatalf("session_expires %v, auth_time %v", c.SessionExpires, c.AuthTime)
+	}
+	recs = eventsOf(f.records(t), "refresh")
+	if len(recs) != 1 || recs[0]["session"].(map[string]any)["session_expires"] == nil {
+		t.Fatalf("the record does not say the ceiling moved: %v", recs)
+	}
+}
+
+// liveContextOn writes alice's leaf1 context under device too, indexed under
+// her: a context the mint would refuse, as on a device with no platform.
+func (f *fixture) liveContextOn(t *testing.T, device, username string) {
+	t.Helper()
+	ctx := context.Background()
+	c := f.context(t, "leaf1", username)
+	c.CtxID = "ctx-" + device + "-" + username
+	if err := f.st.PutContext(ctx, store.ContextKey{NAS: device, Username: username}, c, 12*time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.IndexContext(ctx, c.Principal, "", "", store.ContextRef{NAS: device, Username: username},
+		12*time.Hour); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A refresh record for a context on a platform that never asks about a
+// command says unreached (decision 21; carried from plan 7a).
+func TestARefreshRecordNamesAnUnreachedContext(t *testing.T) {
+	f := newFixture(t, 8)
+	f.login(t, alice, "leaf1", "alice")
+	f.liveContextOn(t, "bare", "alice") // no platform: assumed out of reach, as the revocation assumes
+	if _, err := f.b.Refresh(context.Background(), f.reload(t, edit(t, `permit: ["**"]`, `permit: ["show **"]`))); err != nil {
+		t.Fatal(err)
+	}
+	recs := eventsOf(f.records(t), "refresh")
+	if len(recs) != 2 {
+		t.Fatalf("one record per context: %v", recs)
+	}
+	for _, rec := range recs {
+		s := rec["session"].(map[string]any)
+		if (rec["device"].(map[string]any)["name"] == "bare") != (s["unreached"] == true) {
+			t.Fatalf("unreached on the wrong record: %v", rec)
+		}
+	}
+}
+
+// A context the policy in force leaves as it is has no record to mark
+// unreached, on a platform that never asks about a command or any other
+// (pre-flight I13).
+func TestAnUnchangedContextDoesNotPanic(t *testing.T) {
+	f := newFixture(t, 8)
+	f.login(t, alice, "leaf1", "alice")
+	f.log.Reset()
+	rep, err := f.b.Refresh(context.Background(), f.reload(t, testPolicy))
+	if err != nil || rep.Unchanged != 1 || rep.Updated != 0 {
+		t.Fatalf("%+v %v", rep, err)
+	}
+	if recs := eventsOf(f.records(t), "refresh"); len(recs) != 0 {
+		t.Fatalf("an unchanged context is recorded: %v", recs)
 	}
 }

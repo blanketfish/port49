@@ -343,7 +343,7 @@ func (b *Broker) refreshContexts(ctx context.Context, cur *policy.Policy, priors
 			return err
 		}
 		for _, ref := range refs {
-			switch err := b.refreshContext(ctx, cur, priors, now, principal, ref, rep, quarantined, sameSource); {
+			switch _, err := b.refreshContext(ctx, cur, priors, now, principal, ref, rep, quarantined, sameSource); {
 			case errors.Is(err, store.ErrConflict):
 				if busy == nil {
 					busy = err
@@ -370,8 +370,11 @@ func (b *Broker) refreshContexts(ctx context.Context, cur *policy.Policy, priors
 // and deciding again when a write landed between its read and its own, up to
 // store.MaxJoinAttempts times. quarantined collects the ctx_ids the pass
 // leaves for a quarantine. sameSource is an inventory-only swap (Refresh).
+// outcome is what it counted the context, or "skipped" for one it left
+// without judging: gone, another principal's, the lab's, or revoked already.
 func (b *Broker) refreshContext(ctx context.Context, cur *policy.Policy, priors []Prior, now time.Time,
-	principal string, ref store.ContextRef, rep *RefreshReport, quarantined map[string]bool, sameSource bool) error {
+	principal string, ref store.ContextRef, rep *RefreshReport, quarantined map[string]bool,
+	sameSource bool) (outcome string, err error) {
 	k := store.ContextKey{NAS: ref.NAS, Username: ref.Username}
 	known, plat := knownPlatform(cur, priors, ref.NAS)
 	for attempt := 0; attempt < store.MaxJoinAttempts; attempt++ {
@@ -379,10 +382,10 @@ func (b *Broker) refreshContext(ctx context.Context, cur *policy.Policy, priors 
 		var unreadable *store.UnreadableContextError
 		switch {
 		case errors.Is(err, store.ErrNotFound):
-			return nil // the index outlived the context; its own TTL reclaims it
+			return "skipped", nil // the index outlived the context; its own TTL reclaims it
 		case errors.As(err, &unreadable):
 			if !unreadable.RevokedAt.IsZero() {
-				return nil // revoked already, and a refresh never lifts a mark
+				return "skipped", nil // revoked already, and a refresh never lifts a mark
 			}
 			// Sealed under a key that has left the two-key window, or failing
 			// authentication: whose it is and what it holds cannot be read,
@@ -398,32 +401,35 @@ func (b *Broker) refreshContext(ctx context.Context, cur *policy.Policy, priors 
 			rec := decision.Record{TS: now, Event: decision.EventRefresh, Verdict: decision.VerdictDeny,
 				Reason:  decision.BlobUnavailable,
 				Device:  &decision.Device{Name: ref.NAS, Platform: plat},
-				Session: &decision.Session{Username: ref.Username},
+				Session: &decision.Session{Username: ref.Username, Unreached: sessionOnly(known, plat)},
 				Policy:  &decision.Policy{Bundle: cur.Bundle}}
-			return b.revoke(ctx, k, now, refreshStep{revoke: true, rec: rec, outcome: "failed",
-				sessionOnly: sessionOnly(known, plat)}, rep)
+			step := refreshStep{revoke: true, rec: rec, outcome: "failed", sessionOnly: sessionOnly(known, plat)}
+			return b.revoke(ctx, k, now, step, rep)
 		case err != nil:
-			return err
+			return "", err
 		}
 		// Another principal's since the index was read (its own pass reaches
 		// it), the lab's instrument's (no blob; it answers from config), or
 		// revoked already (a refresh never lifts a mark, store.Store).
 		if c.Principal != principal || c.BlobHash == "" || !c.RevokedAt.IsZero() {
-			return nil
+			return "skipped", nil
 		}
 		step := b.decideRefresh(cur, now, principal, ref, c)
 		step.sessionOnly = sessionOnly(known, plat)
+		if step.rec.Session != nil { // an unchanged step carries no record (pre-flight I13)
+			step.rec.Session.Unreached = step.sessionOnly
+		}
 		if step.rec.Device != nil && step.rec.Device.Platform == "" {
 			step.rec.Device.Platform = plat
 		}
-		if sameSource && step.write != nil && step.rec.Session.PrivilegeClamped == nil &&
+		if sameSource && step.write != nil && step.rec.Session.PrivilegeClamped == nil && !step.shortens &&
 			step.write.MaxPrivilege == c.MaxPrivilege && step.write.Enable == c.Enable &&
 			b.sameButBundle(ctx, c.BlobHash, step.write.BlobHash, step.body) {
 			// An inventory-only swap that left this context's answer as it
 			// was: nothing is written and nothing recorded, and it goes on
 			// naming the bundle that compiled it, which is still true.
 			b.count(rep, "unchanged")
-			return nil
+			return "unchanged", nil
 		}
 		switch {
 		case step.revoke:
@@ -434,28 +440,28 @@ func (b *Broker) refreshContext(ctx context.Context, cur *policy.Policy, priors 
 				b.emit(step.rec)
 			}
 			b.count(rep, step.outcome)
-			return nil
+			return step.outcome, nil
 		case step.write == nil:
 			b.count(rep, step.outcome)
-			return nil
+			return step.outcome, nil
 		}
 		// The blob is in the store, and in the log, before any context
 		// names it: the daemon's next command reads it by that name.
 		if err := b.putBlob(ctx, step.write.BlobHash, step.body, b.MaxSessionAge); err != nil {
-			return err
+			return "", err
 		}
 		switch err := b.Store.SetContextPolicy(ctx, k, c.PolicyRev, *step.write); {
 		case errors.Is(err, store.ErrConflict):
 			continue
 		case errors.Is(err, store.ErrNotFound):
-			return nil
+			return "skipped", nil
 		case err != nil:
-			return err
+			return "", err
 		}
 		b.emit(step.rec)
 		b.count(rep, step.outcome)
 		b.unreached(step, rep)
-		return nil
+		return step.outcome, nil
 	}
 	// Still changing after every attempt: a login or a privilege change
 	// landing between every read and its write. A revocation never gets here
@@ -464,8 +470,8 @@ func (b *Broker) refreshContext(ctx context.Context, cur *policy.Policy, priors 
 	log.Printf("broker: refresh: the context for %q on %q was still changing after %d attempts; left for the retry",
 		ref.Username, ref.NAS, store.MaxJoinAttempts)
 	b.count(rep, "failed")
-	return fmt.Errorf("the context for %q on %q was still changing after %d attempts: %w", ref.Username, ref.NAS,
-		store.MaxJoinAttempts, store.ErrConflict)
+	return "failed", fmt.Errorf("the context for %q on %q was still changing after %d attempts: %w", ref.Username,
+		ref.NAS, store.MaxJoinAttempts, store.ErrConflict)
 }
 
 // sameButBundle reports whether the blob a context names is the new one but
@@ -510,19 +516,20 @@ func knownPlatform(cur *policy.Policy, priors []Prior, name string) (*policy.Pol
 // writes the mark alone and keeps the later of two, and records and counts it.
 // It does not compare: a revocation is right whoever the record belongs to by
 // now, at the worst revoking a login another principal made a moment ago,
-// whose owner logs in again (fail closed).
+// whose owner logs in again (fail closed). It returns the step's outcome, or
+// "skipped" for a context already gone.
 func (b *Broker) revoke(ctx context.Context, k store.ContextKey, at time.Time, step refreshStep,
-	rep *RefreshReport) error {
+	rep *RefreshReport) (string, error) {
 	switch err := b.Store.SetRevokedAt(ctx, k, at); {
 	case errors.Is(err, store.ErrNotFound):
-		return nil
+		return "skipped", nil
 	case err != nil:
-		return err
+		return "", err
 	}
 	b.emit(step.rec)
 	b.count(rep, step.outcome)
 	b.unreached(step, rep)
-	return nil
+	return step.outcome, nil
 }
 
 // sessionOnly reports whether a platform never asks about a command (spec §13
@@ -588,6 +595,10 @@ type refreshStep struct {
 	// sessionOnly is a context on a platform that never asks about a
 	// command: a change written to it does not reach its live session.
 	sessionOnly bool
+	// age is the policy in force's ceiling for the context, zero for never,
+	// and shortens is that ceiling moving the context's earlier.
+	age      time.Duration
+	shortens bool
 }
 
 // decideRefresh is what the policy in force says about principal on the
@@ -666,16 +677,26 @@ func (b *Broker) decideRefresh(cur *policy.Policy, now time.Time, principal stri
 		return fault("the policy in force compiled to a blob the daemon would refuse", detail)
 	}
 	clamp := res.HasCeiling && c.PrivLvl > res.MaxPrivilege
-	if hash == c.BlobHash && res.MaxPrivilege == c.MaxPrivilege && res.Enable == c.Enable && !clamp {
-		return refreshStep{outcome: "unchanged"}
+	// shortens is a ceiling the policy in force puts earlier than the
+	// context's, or on a context with none: a policy edit shortens a live
+	// session, and only a fresh authentication lengthens one (decision 33).
+	// A context with no AuthTime is the store's to fail closed.
+	age := res.SessionAge.Of(b.MaxSessionAge)
+	shortens := age > 0 && !c.AuthTime.IsZero() &&
+		(c.SessionExpires.IsZero() || c.AuthTime.Add(age).Before(c.SessionExpires))
+	if hash == c.BlobHash && res.MaxPrivilege == c.MaxPrivilege && res.Enable == c.Enable && !clamp && !shortens {
+		return refreshStep{outcome: "unchanged", age: age}
 	}
 	rec.Verdict, rec.Reason, rec.Policy.Blob = decision.VerdictPermit, decision.GrantsMatched, hash
 	if clamp {
 		rec.Session.PrivilegeClamped = &decision.PrivilegeClamp{From: c.PrivLvl, To: res.MaxPrivilege}
 		rec.Session.Privilege = res.MaxPrivilege
 	}
-	return refreshStep{write: &store.ContextPolicy{BlobHash: hash, MaxPrivilege: res.MaxPrivilege, Enable: res.Enable},
-		body: body, rec: rec, outcome: "updated"}
+	if shortens {
+		rec.Session.SessionExpires = decision.FormatTime(c.AuthTime.Add(age))
+	}
+	return refreshStep{write: &store.ContextPolicy{BlobHash: hash, MaxPrivilege: res.MaxPrivilege, Enable: res.Enable,
+		MaxSessionAge: age}, body: body, rec: rec, outcome: "updated", age: age, shortens: shortens}
 }
 
 // count adds one context to the report and the metric.
