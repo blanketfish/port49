@@ -20,6 +20,7 @@ import (
 
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/bundle"
+	"github.com/rhwendt/port49/internal/policy"
 )
 
 const syncPolicy = `
@@ -956,5 +957,104 @@ func TestACallCutShortAndStillOutIsAbandonedAtTheNextBound(t *testing.T) {
 	}
 	if res := rig.sync(t); res.Outcome != OutcomePublished {
 		t.Fatalf("%+v", res)
+	}
+}
+
+// attrPolicy admits by attribute: an address-less device stays admitted.
+const attrPolicy = `
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: r, privilege: admin, permit: ["**"]}]
+subjects: [{name: s, identity: ["user:alice@example.com"], username: alice, token_ttl: 60s}]
+grants: [{subject: s, scope: all_devices, roles: [r]}]
+key_groups: [{match: {attributes: {site: dc1}}, key_ref: lab_key}]
+`
+
+func sited(inv admission.Inventory, addressed bool) admission.Inventory {
+	for i := range inv.Devices {
+		inv.Devices[i].Attributes = map[string]string{"site": "dc1"}
+		if !addressed {
+			inv.Devices[i].Addresses = nil
+		}
+	}
+	return inv
+}
+
+// Pre-flight I2: a source that strips every device's address, the names
+// and the key group's attribute kept, is refused by its bound.
+func TestASourceThatStripsEveryAddressIsRefused(t *testing.T) {
+	rig := newSyncRig(t, attrPolicy, sited(devices(20), true))
+	if res := rig.sync(t); res.Outcome != OutcomePublished {
+		t.Fatalf("%+v", res)
+	}
+	rig.src.inv = sited(devices(20), false)
+	res := rig.sync(t)
+	if res.Outcome != OutcomeRefused || !strings.Contains(res.Reason,
+		"source a removes 0 of 20 devices and refuses 0 more and leaves 20 more with no address (100%)") {
+		t.Fatalf("%+v", res)
+	}
+	// One device of twenty is under the 10% bound.
+	one := sited(devices(20), true)
+	one.Devices[0].Addresses = nil
+	rig.src.inv = one
+	if res := rig.sync(t); res.Outcome != OutcomePublished {
+		t.Fatalf("one device: %+v", res)
+	}
+}
+
+// Pre-flight I2: the service's bound and port49d's count the same devices
+// out of service, so a bundle the service publishes is never refused by
+// port49d's bound for a reason the service could not see, nor the other way
+// round. Each side parses as it does in production: the service with no
+// key_refs, port49d with its own.
+func TestTheServicesBoundAndPort49dsAgree(t *testing.T) {
+	const n, bound = 20, 10
+	prevInv := sited(devices(n), true)
+	names := make([]string, n)
+	for i, d := range prevInv.Devices {
+		names[i] = d.Name
+	}
+	prev := &Published{Doc: bundle.Document{Sources: map[string][]string{"a": names}}, Inv: prevInv}
+	parse := func(inv admission.Inventory, env policy.Env) *policy.Policy {
+		p, err := bundle.Parse([]byte(attrPolicy), inv, env)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	daemon := policy.Env{KeyRefs: []string{"lab_key"}}
+	for removed := 0; removed <= 3; removed++ {
+		for refused := 0; refused <= 3; refused++ {
+			for bare := 0; bare <= 3; bare++ {
+				// Devices 0.. are removed, then refused (the key group's
+				// attribute gone), then left with no address.
+				next := sited(devices(n), true)
+				for i := removed; i < removed+refused; i++ {
+					next.Devices[i].Attributes = map[string]string{"site": "dc2"}
+				}
+				for i := removed + refused; i < removed+refused+bare; i++ {
+					next.Devices[i].Addresses = nil
+				}
+				// A refused device left bare too counts once, as refused.
+				if refused > 0 {
+					next.Devices[removed].Addresses = nil
+				}
+				next.Devices = next.Devices[removed:]
+				now := map[string]bool{}
+				for _, d := range next.Devices {
+					now[d.Name] = true
+				}
+				service := checkSafety(prev, parse(prevInv, policy.Env{}), parse(next, policy.Env{}), now,
+					map[string]int{"a": bound}, bound, "policy.yaml")
+				port49d := bundle.CheckFrom(parse(prevInv, daemon), parse(next, daemon), bound, "fix the source of truth")
+				if (service == nil) != (port49d == nil) {
+					t.Fatalf("removed %d refused %d bare %d: the service says %v, port49d says %v", removed, refused,
+						bare, service, port49d)
+				}
+				if want := (removed+refused+bare)*100 > n*bound; want != (service != nil) {
+					t.Fatalf("removed %d refused %d bare %d: refused is %v, want %v (%v)", removed, refused, bare,
+						service != nil, want, service)
+				}
+			}
+		}
 	}
 }

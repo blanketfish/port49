@@ -201,7 +201,8 @@ func (r Report) Security() []Change {
 // (spec §10, bounded change): an inventory with no device, and one that
 // takes more than maxRemovedPercent of the devices in old out of service —
 // removed, or kept and newly refused admission, which a dropped key-group
-// block or a mistyped pin does to a whole fleet (plan 6a, I4). 100 turns the
+// block or a mistyped pin does to a whole fleet (plan 6a, I4), or kept with
+// no address left (Unaddressed; plan 6c, pre-flight I2). 100 turns the
 // share off; nothing turns the empty check off.
 func Check(old, new *policy.Policy, maxRemovedPercent int) error {
 	return CheckFrom(old, new, maxRemovedPercent, "fix the file")
@@ -234,9 +235,16 @@ func CheckFrom(old, new *policy.Policy, maxRemovedPercent int, fix string) error
 		}
 	}
 	refused := NewlyRefused(old, new)
-	if gone := removed + len(refused); gone*100 > was*maxRemovedPercent {
-		msg := fmt.Sprintf("the new inventory removes %d of %d devices and refuses %d more (%d%%), more than "+
-			"inventory.max_removed_percent (%d%%)", removed, was, len(refused), gone*100/was, maxRemovedPercent)
+	bare := Unaddressed(old, new)
+	if gone := removed + len(refused) + len(bare); gone*100 > was*maxRemovedPercent {
+		msg := fmt.Sprintf("the new inventory removes %d of %d devices and refuses %d more", removed, was, len(refused))
+		if len(bare) > 0 {
+			msg += fmt.Sprintf(" and leaves %d more with no address", len(bare))
+		}
+		msg += fmt.Sprintf(" (%d%%), more than inventory.max_removed_percent (%d%%)", gone*100/was, maxRemovedPercent)
+		if len(bare) > 0 {
+			msg += "; left with no address: " + nameList(bare)
+		}
 		if len(refused) > 0 {
 			msg += "; newly refused: " + names(refused)
 			if hint {
@@ -311,6 +319,35 @@ func NewlyRefused(old, new *policy.Policy) []admission.Resolved {
 		}
 	}
 	return out
+}
+
+// Unaddressed is every device, by name and sorted, that old gives at least
+// one address and new keeps under its name with none, and that new does not
+// newly refuse (NewlyRefused counts those). port49d admits a connection by
+// its source address, so such a device is out of service even while an
+// attribute key group keeps it "admitted" (plan 6c, pre-flight I2).
+func Unaddressed(old, new *policy.Policy) []string {
+	before := byName(old.Devices())
+	refused := map[string]bool{}
+	for _, r := range NewlyRefused(old, new) {
+		refused[r.Device.Name] = true
+	}
+	var out []string
+	for _, d := range new.Devices() {
+		if o, ok := before[d.Name]; ok && len(o.Addresses) > 0 && len(d.Addresses) == 0 && !refused[d.Name] {
+			out = append(out, d.Name)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+// nameList is up to five names, and how many more.
+func nameList(ns []string) string {
+	if len(ns) > 5 {
+		return strings.Join(ns[:5], ", ") + fmt.Sprintf(" and %d more", len(ns)-5)
+	}
+	return strings.Join(ns, ", ")
 }
 
 // names is up to five devices by name, and how many more.
