@@ -163,7 +163,7 @@ func portOf(u *url.URL) string {
 
 // restNamed is the devices REST gives for ?name=name, with depth=1 where p
 // needs it: the form L30 recorded on every release (rest-device*.json), one
-// device or none. Its bytes are spent from b.
+// device or none, each of that name. Its bytes are spent from b.
 func (c *client) restNamed(ctx context.Context, p Profile, name string, b *budget) ([]map[string]any, error) {
 	q := url.Values{"name": {name}}
 	if p.depthOne {
@@ -189,6 +189,14 @@ func (c *client) restNamed(ctx context.Context, p Profile, name string, b *budge
 	if err := dec.Decode(&body); err != nil || body.Count == nil {
 		// Never the name: it is the source's text, and the body's.
 		return nil, errors.New("GET /api/dcim/devices/ by name is not the JSON asked for")
+	}
+	for _, d := range body.Results {
+		// A filter a proxy or a release dropped answers the list's first
+		// page, which would read every device asked for as gone.
+		if n, _ := d["name"].(string); n != name {
+			return nil, errors.New("GET /api/dcim/devices/ by name answered a device of another name: the name " +
+				"filter was not applied, so a device cannot be confirmed gone")
+		}
 	}
 	return body.Results, nil
 }

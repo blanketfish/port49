@@ -342,3 +342,83 @@ func TestTheFirstReadConfirmsNothing(t *testing.T) {
 		}
 	}
 }
+
+// named is how many devices s was asked for by name from the request at from.
+func named(s *sottest.Server, from int) int {
+	n := 0
+	for _, r := range s.Requests()[from:] {
+		if strings.Contains(r.RawQuery, "name=") {
+			n++
+		}
+	}
+	return n
+}
+
+// remove reads src once with n devices, then again with keep, after shift.
+func remove(t *testing.T, stack, api string, n, keep int, shift func(*sottest.Server)) (*Source, *sottest.Server,
+	int, int, error) {
+	t.Helper()
+	src, s, _ := source(t, stack, n, api, Mapping{Filter: Filter{Status: []string{"active"}},
+		Addresses: Addresses{Primary: true}})
+	if inv, err := src.Fetch(context.Background()); err != nil || len(inv.Devices) != n {
+		t.Fatalf("first read: %d %v", len(inv.Devices), err)
+	}
+	from := len(s.Requests())
+	s.SetDevices(keep)
+	if shift != nil {
+		shift(s)
+	}
+	inv, err := src.Fetch(context.Background())
+	return src, s, from, len(inv.Devices), err
+}
+
+// Task 8 review I1: up to maxConfirm absent devices are asked for by name;
+// past it, the list is read once more, and nothing is asked by name.
+func TestPastMaxConfirmTheListIsReadTwice(t *testing.T) {
+	for _, absent := range []int{maxConfirm, maxConfirm + 1} {
+		_, s, from, n, err := remove(t, "netbox-4", "rest", 300, 300-absent, nil)
+		reads, asked := 1, absent
+		if absent > maxConfirm {
+			reads, asked = 2, 0
+		}
+		if err != nil || n != 300-absent || lists(s, from) != reads || named(s, from) != asked {
+			t.Errorf("%d absent: %d devices, %d reads, %d asked, %v", absent, n, lists(s, from), named(s, from), err)
+		}
+	}
+}
+
+// A large genuine removal passes on two agreeing reads.
+func TestALargeRemovalPassesOnTwoReads(t *testing.T) {
+	for _, api := range []string{"graphql", "rest"} {
+		_, s, from, n, err := remove(t, "nautobot-2", api, 600, 300, nil)
+		if err != nil || n != 300 || lists(s, from) != 2 || named(s, from) != 0 {
+			t.Errorf("%s: %d devices, %d reads, %d asked, %v", api, n, lists(s, from), named(s, from), err)
+		}
+	}
+}
+
+// A shift during a large removal makes the two reads disagree: the sync
+// fails with nothing that looks like a removal, and the next, with the
+// shift stopped, holds.
+func TestALargeShiftFailsUntilItStops(t *testing.T) {
+	src, s, from, n, err := remove(t, "nautobot-2", "graphql", 600, 300, func(s *sottest.Server) {
+		s.RenameAfterPage, s.Shifts = 1, 1
+	})
+	if err == nil || n != 0 || lists(s, from) != 2 || named(s, from) != 0 ||
+		!strings.Contains(err.Error(), "the list changed between two reads") || strings.Contains(err.Error(), "leaf-") {
+		t.Fatalf("%d devices, %d reads, %v", n, lists(s, from), err)
+	}
+	if inv, err := src.Fetch(context.Background()); err != nil || len(inv.Devices) != 300 {
+		t.Fatalf("after the shift: %d %v", len(inv.Devices), err)
+	}
+}
+
+// Task 8 review M1: a name filter that was not applied answers devices of
+// other names, which fails the sync rather than read every one as gone.
+func TestAnIgnoredNameFilterFailsTheSync(t *testing.T) {
+	_, _, _, n, err := remove(t, "netbox-4", "rest", 120, 119, func(s *sottest.Server) { s.IgnoreNameFilter = true })
+	if err == nil || n != 0 || !strings.Contains(err.Error(), "the name filter was not applied") ||
+		strings.Contains(err.Error(), "leaf-") {
+		t.Fatalf("%d devices, %v", n, err)
+	}
+}

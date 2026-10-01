@@ -65,17 +65,28 @@ type listing struct {
 	names map[string]bool
 }
 
+// maxConfirm is the most absent names a read confirms one by one. Past it,
+// the list is read once more instead, and taken only if both reads list the
+// same names: one more list read, whatever the size of the removal, where a
+// request a name would outlast sync_timeout on a large one (plan 6c Task 8
+// review I1).
+const maxConfirm = 256
+
 // Fetch reads every device: the release from /api/status/ and its profile,
 // the list over GraphQL — checked against REST's count — or over REST, and
 // each device through the mapping. A device the last read kept and this one
-// lacks is asked for by name before it counts as removed (removal
+// lacks is confirmed gone before it counts as removed (removal
 // confirmation): offset paging skips a live device at a page boundary when a
 // rename moves one from before the boundary to after it, or a delete before
-// it meets an insert after it, and every count still holds. Still there and
-// in scope, the list is read once more; a second such read fails the sync,
-// so a shifting list never reads as a removal. Every request is under ctx,
-// which the syncer bounds by sync_timeout. Nothing it reads can assign a
-// key.
+// it meets an insert after it, and every count still holds. Up to
+// maxConfirm such devices are each asked for by name; one still there and
+// in scope reads the list once more, and a second such read fails the
+// sync. Past maxConfirm, a second whole read must list the same names, as
+// the policy watcher's two reads must agree (spec §5, "Policy reload"); a
+// skip is a race at a boundary, which a second read does not repeat unless
+// the edits still run. Either way a shifting list fails the sync and never
+// reads as a removal. Every request is under ctx, which the syncer bounds by
+// sync_timeout. Nothing it reads can assign a key.
 func (s *Source) Fetch(ctx context.Context) (admission.Inventory, error) {
 	s.mu.Lock()
 	last := s.last
@@ -85,21 +96,24 @@ func (s *Source) Fetch(ctx context.Context) (admission.Inventory, error) {
 		if err != nil {
 			return admission.Inventory{}, err
 		}
-		skipped, err := s.skipped(ctx, l, last)
+		absent := absentFrom(last, l.names)
+		if len(absent) > maxConfirm {
+			again, err := s.read(ctx)
+			if err != nil {
+				return admission.Inventory{}, err
+			}
+			if !sameNames(l.names, again.names) {
+				return admission.Inventory{}, fmt.Errorf("%d devices the last sync read are gone, and the list "+
+					"changed between two reads; the next sync reads it again", len(absent))
+			}
+			return s.accept(again), nil
+		}
+		skipped, err := s.skipped(ctx, l, absent)
 		if err != nil {
 			return admission.Inventory{}, err
 		}
 		if !skipped {
-			kept := make(map[string]bool, len(l.inv.Devices))
-			for _, d := range l.inv.Devices {
-				if d.Name != "" {
-					kept[d.Name] = true
-				}
-			}
-			s.mu.Lock()
-			s.last = kept
-			s.mu.Unlock()
-			return l.inv, nil
+			return s.accept(l), nil
 		}
 		if try == 1 {
 			return admission.Inventory{}, errors.New("two reads running lacked a device the last sync read that " +
@@ -109,25 +123,58 @@ func (s *Source) Fetch(ctx context.Context) (admission.Inventory, error) {
 	}
 }
 
-// skipped is whether some device last kept that l lacks is still there by
-// name and kept by the filter: a device the read skipped, not one removed.
-// It asks for each such name over REST's ?name= (L30: count 1 on every
-// release), at most as many as last holds, under one maxFetch budget, and
-// stops at the first still there.
-func (s *Source) skipped(ctx context.Context, l listing, last map[string]bool) (bool, error) {
-	b := newBudget()
-	for _, name := range sortedKeys(last) {
-		if l.names[name] {
-			continue
+// accept remembers the names l kept, for the next read to confirm against,
+// and is l's devices.
+func (s *Source) accept(l listing) admission.Inventory {
+	kept := make(map[string]bool, len(l.inv.Devices))
+	for _, d := range l.inv.Devices {
+		if d.Name != "" {
+			kept[d.Name] = true
 		}
+	}
+	s.mu.Lock()
+	s.last = kept
+	s.mu.Unlock()
+	return l.inv
+}
+
+// absentFrom is the names in last that names lacks, sorted.
+func absentFrom(last, names map[string]bool) []string {
+	var out []string
+	for _, name := range sortedKeys(last) {
+		if !names[name] {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+func sameNames(a, b map[string]bool) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for name := range a {
+		if !b[name] {
+			return false
+		}
+	}
+	return true
+}
+
+// skipped is whether some device in absent is still there by name and kept
+// by the filter: a device the read skipped, not one removed. It asks for
+// each over REST's ?name= (L30: count 1 on every release), at most
+// maxConfirm, and stops at the first still there. One maxFetch budget bounds
+// the bytes the pass transfers; each answer is dropped once read, so it is
+// not memory held.
+func (s *Source) skipped(ctx context.Context, l listing, absent []string) (bool, error) {
+	b := newBudget()
+	for _, name := range absent {
 		devs, err := s.c.restNamed(ctx, l.p, name, b)
 		if err != nil {
 			return false, err
 		}
 		for _, raw := range devs {
-			if n, _ := raw["name"].(string); n != name {
-				continue
-			}
 			if _, keep, _ := s.cfg.Mapping.device(l.p, "rest", raw); keep {
 				return true, nil
 			}

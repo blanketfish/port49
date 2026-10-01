@@ -65,6 +65,10 @@ type Server struct {
 	// removal confirmation exists for (plan 6c Task 8). Not recorded: L30
 	// lists a list changing between pages under Not observed.
 	RenameAfterPage, ReplaceAfterPage, Shifts int
+	// IgnoreNameFilter answers REST's ?name= as the unfiltered list, as a
+	// proxy or a release that dropped the filter would. Not recorded: every
+	// L30 stack applied it.
+	IgnoreNameFilter bool
 
 	product, list, gqlPath string
 	status                 map[string]any
@@ -362,7 +366,7 @@ func (s *Server) rest(w http.ResponseWriter, r *http.Request, devs []dev) {
 	}
 	// ?name= is the named device alone, count 1, as every stack answered
 	// it (rest-device*.json); a name no device has is count 0.
-	if name, ok := q["name"]; ok {
+	if name, ok := q["name"]; ok && !s.IgnoreNameFilter {
 		devs = s.named(devs, name[0])
 	}
 	n := len(devs)
