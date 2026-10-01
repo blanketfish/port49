@@ -220,25 +220,80 @@ func TestAConnectionPastTheCeilingIsRefused(t *testing.T) {
 // per item, session_expired, and another device on the same connection is
 // not (spec §5.6; decision 33).
 func TestTheMintCarriesEachDevicesCeiling(t *testing.T) {
-	f := newFixtureWithPolicy(t, 8, strings.Replace(testPolicy,
-		"{name: network_admin, privilege: admin, permit: [\"**\"]}",
-		"{name: network_admin, privilege: admin, permit: [\"**\"], max_session_age: 1h}", 1))
+	f := newFixtureWithPolicy(t, 8, shortLeaf1Policy)
 	ctx := context.Background()
 	auth := f.now
-	r := decodeMint(t, f.post(ctx, f.state(f.alice), `{"devices":["leaf1"]}`, ""))
-	if r.Results[0].SessionExpiresAt != auth.Add(time.Hour).UTC().Format(time.RFC3339) {
-		t.Fatalf("session_expires_at: %+v", r.Results[0])
+	check := func(r api.MintResponse, leaf1Denied bool) {
+		t.Helper()
+		got := map[string]api.MintItem{}
+		for _, it := range r.Results {
+			got[it.Device] = it
+		}
+		if l := got["leaf1"]; leaf1Denied {
+			if l.Verdict != "deny" || l.Reason != "session_expired" || !strings.Contains(l.Detail, "port49 refresh") {
+				t.Fatalf("a device past its ceiling: %+v", l)
+			}
+		} else if l.Verdict != "permit" || l.SessionExpiresAt != auth.Add(time.Hour).UTC().Format(time.RFC3339) {
+			t.Fatalf("leaf1's session_expires_at: %+v", l)
+		}
+		if n := got["nx1"]; n.Verdict != "permit" ||
+			n.SessionExpiresAt != auth.Add(12*time.Hour).UTC().Format(time.RFC3339) {
+			t.Fatalf("nx1 keeps the default ceiling: %+v", n)
+		}
 	}
-	toks, _ := f.st.Candidates(ctx, store.TokenKey{NAS: "leaf1", Username: "alice"})
-	if len(toks) != 1 || toks[0].MaxSessionAge != time.Hour {
-		t.Fatalf("the token's max_session_age: %+v", toks)
+	check(decodeMint(t, f.post(ctx, f.state(f.alice), `{"devices":["leaf1","nx1"]}`, "")), false)
+	for nas, want := range map[string]time.Duration{"leaf1": time.Hour, "nx1": 12 * time.Hour} {
+		toks, _ := f.st.Candidates(ctx, store.TokenKey{NAS: nas, Username: "alice"})
+		if len(toks) != 1 || toks[0].MaxSessionAge != want {
+			t.Fatalf("%s's token max_session_age: %+v", nas, toks)
+		}
 	}
-	// An hour on, on a connection that authenticated at auth: refused per item.
+	// An hour on, on a connection that authenticated at auth: leaf1 is
+	// refused per item, nx1 is not.
 	f.advance(time.Hour)
-	r = decodeMint(t, f.postAt(ctx, f.state(f.alice), `{"devices":["leaf1"]}`, "", auth))
-	if r.Results[0].Verdict != "deny" || r.Results[0].Reason != "session_expired" ||
-		!strings.Contains(r.Results[0].Detail, "port49 refresh") {
-		t.Fatalf("a device past its ceiling: %+v", r.Results[0])
+	check(decodeMint(t, f.postAt(ctx, f.state(f.alice), `{"devices":["leaf1","nx1"]}`, "", auth)), true)
+}
+
+// shortLeaf1Policy gives leaf1, through an eos scope, a 1h ceiling and alice
+// a 15m token_ttl; nx1 keeps port49d's 12h default.
+var shortLeaf1Policy = strings.NewReplacer(
+	"  - {name: all_devices, match: {}}\n",
+	"  - {name: all_devices, match: {}}\n  - {name: eos, match: {platform: arista_eos}, on_missing: exclude}\n",
+	"  - {name: no_reload, deny: [\"reload **\"]}\n",
+	"  - {name: no_reload, deny: [\"reload **\"]}\n  - {name: short_session, max_session_age: 1h}\n",
+	"max_privilege: admin}\n",
+	"max_privilege: admin}\n  - {subject: netops, scope: eos, roles: [short_session]}\n",
+	"enable: token, token_ttl: 60s}",
+	"enable: token, token_ttl: 15m}",
+).Replace(testPolicy)
+
+// A replay answers with the token it minted, so with that token's ceiling,
+// not the new connection's; and a token whose ceiling has passed is never
+// replayed: the mint is made again under the connection asking, whose
+// ceiling the broker has just checked.
+func TestAReplayKeepsItsTokensCeiling(t *testing.T) {
+	f := newFixtureWithPolicy(t, 8, shortLeaf1Policy)
+	ctx := context.Background()
+	auth := f.now
+	body := `{"devices":["leaf1"]}`
+	f.advance(55 * time.Minute)
+	first := decodeMint(t, f.postAt(ctx, f.state(f.alice), body, "k1", auth)).Results[0]
+	if first.Verdict != "permit" || first.SessionExpiresAt != auth.Add(time.Hour).UTC().Format(time.RFC3339) {
+		t.Fatalf("the first mint: %+v", first)
+	}
+	// A fresh connection before the ceiling: the same token, its own ceiling.
+	f.advance(3 * time.Minute)
+	again := decodeMint(t, f.postAt(ctx, f.state(f.alice), body, "k1", f.now)).Results[0]
+	if again.Login != first.Login || again.SessionExpiresAt != first.SessionExpiresAt {
+		t.Fatalf("a replay reports the ceiling of the token it returns: %+v, first %+v", again, first)
+	}
+	// Past it: minted again, under the new connection.
+	f.advance(3 * time.Minute)
+	now := f.now
+	fresh := decodeMint(t, f.postAt(ctx, f.state(f.alice), body, "k1", now)).Results[0]
+	if fresh.Verdict != "permit" || fresh.Login == first.Login ||
+		fresh.SessionExpiresAt != now.Add(time.Hour).UTC().Format(time.RFC3339) {
+		t.Fatalf("a token past its ceiling is not replayed: %+v, first %+v", fresh, first)
 	}
 }
 

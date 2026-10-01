@@ -609,7 +609,13 @@ func (b *Broker) mintOne(ctx context.Context, pol *policy.Policy, principal stri
 	item := api.MintItem{Device: name, Verdict: decision.VerdictPermit, Platform: dev.Platform,
 		Username: out.Username, Login: out.Login, Enable: out.Enable, ExpiresAt: out.ExpiresAt.UTC().Format(time.RFC3339),
 		Replayed: out.Replayed}
-	if age > 0 {
+	// A replay answers with the ceiling of the tokens it returns, which
+	// their connection's authentication set. A record written before the
+	// minter kept it has none, and is answered with this connection's.
+	switch {
+	case !out.SessionExpiresAt.IsZero():
+		item.SessionExpiresAt = out.SessionExpiresAt.UTC().Format(time.RFC3339)
+	case age > 0:
 		item.SessionExpiresAt = authTime.Add(age).UTC().Format(time.RFC3339)
 	}
 	if len(dev.Addresses) > 0 {
@@ -640,9 +646,9 @@ func (b *Broker) fault(name, code, detail string) api.MintItem {
 // TTL is ttl, at least the ceiling of any context it backs (blobTTL): a
 // context's session_expires is its auth_time plus that, and auth_time is never
 // later than the mint, so no context this blob backs can outlive it. PutBlob
-// keeps the later expiry, so a re-put never shortens it. A blob is emitted once per process, and the log's first copy
-// serves every later re-put, including one after the store's copy expired
-// (plan 3, Decided 8).
+// keeps the later expiry, so a re-put never shortens it. A blob is emitted
+// once per process, and the log's first copy serves every later re-put,
+// including one after the store's copy expired (plan 3, Decided 8).
 //
 // The emit happens under b.mu, so a second request for the same hash cannot
 // return from putBlob, and so cannot reach Mint, until the blob record is

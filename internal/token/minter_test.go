@@ -33,7 +33,7 @@ func minter(t *testing.T) (*Minter, *memory.Store, *bytes.Buffer) {
 
 func subject() Subject {
 	return Subject{Principal: "user:alice@example.com", Username: "alice", TokenTTL: 900 * time.Second,
-		Enable: "token", MaxPrivilege: 15, MaxSessionAge: 8 * time.Hour,
+		Enable: "token", MaxPrivilege: 15, MaxSessionAge: 8 * time.Hour, AuthTime: time.Now(),
 		Credential: store.Credential{Method: "oidc", Sub: "a7f3", Sid: "s1"}}
 }
 

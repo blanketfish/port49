@@ -239,6 +239,11 @@ type Result struct {
 	// MintedAt is when the tokens were minted, kept in the idempotency
 	// record so a replay can be judged against Request.SupersededAt.
 	MintedAt time.Time
+	// SessionExpiresAt is when a login with these tokens stops being
+	// authorized: the subject's AuthTime plus its MaxSessionAge, zero for
+	// never. Kept in the idempotency record so a replay answers with the
+	// ceiling of the tokens it returns, and is not made past it.
+	SessionExpiresAt time.Time
 	// Replayed is set on a result answered from the idempotency record,
 	// for which no token was minted and no permit recorded. Never stored.
 	Replayed bool `json:"-"`
@@ -305,6 +310,11 @@ func (m *Minter) Mint(ctx context.Context, r Request) (Result, error) {
 				// device accepts. A record from before MintedAt was kept has
 				// a zero one, and is not replayed either.
 				idemErr = "idempotency record names tokens a policy change or a revocation deleted; minted again rather than replayed"
+			case !prev.SessionExpiresAt.IsZero() && !m.now().Before(prev.SessionExpiresAt):
+				// Its tokens' ceiling has passed: replayed, the caller would
+				// hold a token for a context born expired. Minted again under
+				// this request's subject, whose ceiling the broker checked.
+				idemErr = "idempotency record names tokens past their session ceiling; minted again rather than replayed"
 			default:
 				prev.Replayed = true
 				return prev, nil
@@ -368,6 +378,9 @@ func (m *Minter) Mint(ctx context.Context, r Request) (Result, error) {
 	mintedAt := m.now()
 	expires := mintedAt.Add(ttl)
 	out := Result{ExpiresAt: expires, Username: r.Subject.Username, MintedAt: mintedAt}
+	if r.Subject.MaxSessionAge > 0 {
+		out.SessionExpiresAt = r.Subject.AuthTime.Add(r.Subject.MaxSessionAge)
+	}
 	var hashes []string
 
 	mint := func(kind string) (string, error) {
