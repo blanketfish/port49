@@ -31,7 +31,9 @@ import (
 // item carries that error code and no verdict, as the broker does for a fault
 // on its own side; hollow answers an item with neither. inProgress answers
 // that many mints 409 idempotency_in_progress first, as the broker does while
-// an earlier try under the key is still minting.
+// an earlier try under the key is still minting. revoked answers every mint
+// 401 credential_revoked, as the broker does once an operator revokes the
+// principal or the certificate.
 type fakeBroker struct {
 	mu         sync.Mutex
 	keys       []string
@@ -41,6 +43,7 @@ type fakeBroker struct {
 	itemError  string
 	hollow     bool
 	inProgress int
+	revoked    bool
 }
 
 func (fb *fakeBroker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -51,6 +54,7 @@ func (fb *fakeBroker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fb.mu.Lock()
 		fb.keys = append(fb.keys, r.Header.Get("Idempotency-Key"))
 		n, drop, expired, untrusted := len(fb.keys), fb.dropFirst && len(fb.keys) == 1, fb.expired, fb.untrusted
+		revoked := fb.revoked
 		itemError, hollow := fb.itemError, fb.hollow
 		busy := n <= fb.inProgress
 		fb.mu.Unlock()
@@ -66,6 +70,12 @@ func (fb *fakeBroker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if untrusted {
 			writeJSON(w, 401, api.Error{Error: "trust_domain_unresolved",
 				Detail: "broker: no trusted client certificate: the certificate is valid 2026-09-22T00:00:00Z to 2026-09-23T00:00:00Z"})
+			return
+		}
+		if revoked {
+			w.Header().Set("Connection", "close")
+			writeJSON(w, 401, api.Error{Error: "credential_revoked",
+				Detail: "this principal was revoked at 2026-10-01T00:00:00Z; nothing is minted for it until an operator lifts the revocation (port49 revoke --lift)"})
 			return
 		}
 		if busy {
@@ -368,6 +378,31 @@ func TestAnUntrustedAnswerEndsTheSession(t *testing.T) {
 	_, err := r.a.Mint(context.Background(), "leaf1", false, 0)
 	if !errors.Is(err, ErrSessionOver) || !strings.Contains(err.Error(), "no longer trusts") {
 		t.Fatalf("401 trust_domain_unresolved: %v", err)
+	}
+	select {
+	case <-r.a.Done():
+	default:
+		t.Fatal("Done must close")
+	}
+	if _, err := r.a.Mint(context.Background(), "leaf1", false, 0); !errors.Is(err, ErrSessionOver) {
+		t.Fatalf("an ended session: %v", err)
+	}
+	if n := len(r.fb.seen()); n != 1 {
+		t.Fatalf("an ended session must not reach the broker again: %d asks", n)
+	}
+}
+
+// An operator's revocation ends the session: the agent answers
+// ErrSessionOver carrying the broker's detail, Done closes, and the next
+// Mint asks the broker nothing (spec §5.1.4).
+func TestARevocationEndsTheSession(t *testing.T) {
+	r := newRig(t)
+	r.fb.mu.Lock()
+	r.fb.revoked = true
+	r.fb.mu.Unlock()
+	_, err := r.a.Mint(context.Background(), "leaf1", false, 0)
+	if !errors.Is(err, ErrSessionOver) || !strings.Contains(err.Error(), "this principal was revoked at") {
+		t.Fatalf("401 credential_revoked: %v", err)
 	}
 	select {
 	case <-r.a.Done():

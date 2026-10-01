@@ -72,8 +72,8 @@ type Broker struct {
 	// recorded the context left for a quarantine: one record per context per
 	// policy, not one per pass (refreshContext).
 	quarantineRecorded map[string]string
-	// superseded is, by (device, username), when a refresh last deleted its
-	// unspent tokens: an idempotent retry of a mint from before then is not
+	// superseded is, by (device, username), when a refresh or a revocation
+	// last deleted its unspent tokens: an idempotent retry of a mint from before then is not
 	// replayed with a token that no longer exists (token.Request). It holds
 	// at most one entry per key the policy has ever minted for.
 	superseded map[store.TokenKey]time.Time
@@ -154,6 +154,24 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, string(decision.SessionExpired), fmt.Sprintf(
 			"this connection authenticated at %s, more than max_session_age (%s) ago; authenticate again",
 			authTime.UTC().Format(time.RFC3339), b.MaxSessionAge))
+		return
+	}
+	// A revocation stands against the principal, or this certificate, until
+	// an operator lifts it (spec §5.1.4). It is read before anything else, so
+	// a revoked caller is told nothing more, and again after the last token
+	// write, below. Marks that cannot be read mint for no one.
+	checkCtx, cancelCheck := context.WithTimeout(r.Context(), holdTimeout)
+	rv, revoked, err := b.revocation(checkCtx, principal, cred)
+	cancelCheck()
+	switch {
+	case err != nil:
+		b.emit(decision.Record{TS: now, Event: decision.EventMint, Verdict: decision.VerdictDeny,
+			Reason: decision.StoreUnavailable, Principal: principal, Auth: &decision.Auth{Method: cred.Method}})
+		writeError(w, http.StatusServiceUnavailable, string(decision.StoreUnavailable),
+			"the broker could not read the revocations in force, so it minted nothing; try again")
+		return
+	case revoked:
+		b.refuseRevoked(w, now, principal, cred, rv)
 		return
 	}
 
@@ -262,15 +280,123 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
 			// key, or lapsed before its turn: two retries that both
 			// abandoned a replay, or a batch that outlasted its
 			// reservation. Nothing is minted for it, and the devices
-			// already minted are completed records a retry replays.
+			// already minted are completed records a retry replays — unless
+			// a revocation landed while they were written.
 			release()
+			if b.revokedSince(w, r, principal, cred, resp.Results) {
+				return
+			}
 			b.writeInProgress(w)
 			return
 		}
 		resp.Results = append(resp.Results, item)
 	}
 	release()
+	if b.revokedSince(w, r, principal, cred, resp.Results) {
+		return
+	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// revokedSince reads the marks again after a request's last token write,
+// and answers the request when one stands. A revocation that landed while
+// this request minted may have read the token index before these tokens
+// were indexed; reading the marks now closes that: whichever of the two
+// read the other's write, no token survives (spec §5.1.4; decision 32).
+// A mark deletes what the request wrote and refuses it credential_revoked.
+// Marks that cannot be read refuse it store_unavailable and leave the
+// tokens: they are never returned to anyone, so no one can present them,
+// and a revocation's own index pass finds them. Deleting there would take
+// an earlier mint's tokens under the same key with them (pre-flight M7).
+// It runs on its own deadline, without the caller's cancel: a caller that
+// hung up must not leave its tokens behind.
+func (b *Broker) revokedSince(w http.ResponseWriter, r *http.Request, principal string, cred store.Credential,
+	items []api.MintItem) bool {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), holdTimeout)
+	defer cancel()
+	rv, revoked, err := b.revocation(ctx, principal, cred)
+	switch {
+	case err != nil:
+		b.emit(decision.Record{TS: b.Now(), Event: decision.EventMint, Verdict: decision.VerdictDeny,
+			Reason: decision.StoreUnavailable, Principal: principal, Auth: &decision.Auth{Method: cred.Method}})
+		writeError(w, http.StatusServiceUnavailable, string(decision.StoreUnavailable), "the broker could not "+
+			"confirm that no revocation landed during this mint, so it returns nothing; try again")
+		return true
+	case revoked:
+		b.unmint(ctx, items)
+		b.refuseRevoked(w, b.Now(), principal, cred, rv)
+		return true
+	}
+	return false
+}
+
+// revocation is the mark refusing this caller, if any: one on the
+// principal, then one on the certificate (spec §5.1.4). A certificate with
+// no issuer or serial is never a mark's key.
+func (b *Broker) revocation(ctx context.Context, principal string, cred store.Credential) (store.Revocation, bool, error) {
+	keys := [][2]string{{store.RevocationPrincipal, principal}}
+	if cred.Issuer != "" && cred.Serial != "" {
+		keys = append(keys, [2]string{store.RevocationCert, store.CertKey(cred.Issuer, cred.Serial)})
+	}
+	for _, k := range keys {
+		rv, err := b.Store.GetRevocation(ctx, k[0], k[1])
+		switch {
+		case err == nil:
+			return rv, true, nil
+		case !errors.Is(err, store.ErrNotFound):
+			return store.Revocation{}, false, err
+		}
+	}
+	return store.Revocation{}, false, nil
+}
+
+// refuseRevoked answers a caller a revocation stands against: 401
+// credential_revoked, the connection closed so nothing more rides it, and
+// one mint record naming whose credential it was (spec §5.7).
+func (b *Broker) refuseRevoked(w http.ResponseWriter, now time.Time, principal string, cred store.Credential,
+	rv store.Revocation) {
+	b.emit(decision.Record{TS: now, Event: decision.EventMint, Verdict: decision.VerdictDeny,
+		Reason: decision.CredentialRevoked, Principal: principal,
+		Auth: &decision.Auth{Method: cred.Method, Fingerprint: cred.Fingerprint}})
+	what := "this principal"
+	if rv.Kind == store.RevocationCert {
+		what = "this certificate"
+	}
+	w.Header().Set("Connection", "close")
+	writeError(w, http.StatusUnauthorized, string(decision.CredentialRevoked), fmt.Sprintf(
+		"%s was revoked at %s; nothing is minted for it until an operator lifts the revocation "+
+			"(port49 revoke --lift)", what, rv.At.UTC().Format(time.RFC3339)))
+}
+
+// unmint deletes the unspent tokens under every key a refused request
+// minted under, and marks each key superseded, so a replay of the request
+// is minted afresh rather than handed a token that no longer exists.
+func (b *Broker) unmint(ctx context.Context, items []api.MintItem) {
+	now := b.Now()
+	for _, it := range items {
+		if it.Verdict != decision.VerdictPermit {
+			continue
+		}
+		k := store.TokenKey{NAS: it.Device, Username: it.Username}
+		if err := b.Store.DeleteTokens(ctx, k); err != nil {
+			b.logf("broker: deleting the tokens a revoked mint wrote under %q on %q: %v; they expire at their TTL",
+				it.Username, it.Device, err)
+		}
+		b.supersede(k, now)
+	}
+}
+
+// supersede records that k's unspent tokens were deleted at at, keeping
+// the later of two (token.Request.SupersededAt).
+func (b *Broker) supersede(k store.TokenKey, at time.Time) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.superseded == nil {
+		b.superseded = map[store.TokenKey]time.Time{}
+	}
+	if at.After(b.superseded[k]) {
+		b.superseded[k] = at
+	}
 }
 
 // mintOne answers one device. The only error it returns is

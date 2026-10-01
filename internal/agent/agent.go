@@ -192,7 +192,8 @@ func (a *Agent) SessionEndsAt() time.Time {
 func (a *Agent) Handshakes() int64 { return a.handshakes.Load() }
 
 // Done is closed when the broker ends the session — it answered
-// session_expired, or it no longer trusts the certificate. The agent process
+// session_expired or credential_revoked, or it no longer trusts the
+// certificate. The agent process
 // exits on it, so the next `port49 login` starts a new session instead of
 // finding this one "already logged in" (pre-flight F10).
 func (a *Agent) Done() <-chan struct{} { return a.done }
@@ -211,7 +212,7 @@ func (a *Agent) end(why error) {
 // §17); a 409 idempotency_in_progress, that first try still minting, is
 // waited out under the same key. A 401 session_expired or
 // trust_domain_unresolved ends the session, and so does a reconnect whose
-// handshake the broker refuses. An item the broker could not decide is
+// handshake the broker refuses. A 401 credential_revoked ends it too. An item the broker could not decide is
 // returned with an *ItemError, never alone.
 func (a *Agent) Mint(ctx context.Context, device string, enable bool, ttl time.Duration) (api.MintItem, error) {
 	select {
@@ -267,6 +268,10 @@ func (a *Agent) Mint(ctx context.Context, device string, enable bool, ttl time.D
 				// held connection: nothing this session can do will mint
 				// again (spec §13, decision 12).
 				over = fmt.Errorf("%w: the broker no longer trusts this certificate (%s)", ErrSessionOver, e.Detail)
+			case "credential_revoked":
+				// An operator revoked this principal or this certificate
+				// (spec §5.1.4): nothing this session holds will mint again.
+				over = fmt.Errorf("%w: %s", ErrSessionOver, e.Detail)
 			}
 			if over != nil {
 				a.end(over)
