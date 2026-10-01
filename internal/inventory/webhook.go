@@ -82,6 +82,7 @@ type Webhooks struct {
 	told    map[string]bool
 	ok      map[string]bool
 	rearmed map[string]time.Time
+	owed    map[string]bool
 	decoy   []byte
 }
 
@@ -252,6 +253,11 @@ func (h *Webhooks) refuse(w http.ResponseWriter, r *http.Request, source, outcom
 	if h.told == nil {
 		h.told = map[string]bool{}
 	}
+	if h.owed[source] && h.Now().Round(0).Sub(h.rearmed[source]) >= webhookWindow {
+		// A re-arm a real delivery could not take inside the window is
+		// taken now, so a refusal that starts after it is said (re-review N1).
+		h.rearm(source, h.Now().Round(0))
+	}
 	key := outcome + "\x00" + source
 	say := !h.told[key] && len(h.told) < maxTold
 	if say {
@@ -282,24 +288,20 @@ func (h *Webhooks) refuse(w http.ResponseWriter, r *http.Request, source, outcom
 // source's refusals at most once a webhookWindow, so a refusal recurring
 // between real deliveries (a second webhook left on an old secret) is said
 // once a window, not once a delivery (review I2); the metric counts each.
+// A re-arm the window defers is owed, and the next refusal past the window
+// takes it (re-review N1).
 func (h *Webhooks) accepted(source string, r *http.Request, now time.Time) {
 	h.Metrics.Webhooks.WithLabelValues(source, HookAccepted).Inc()
 	h.mu.Lock()
-	if h.ok == nil {
-		h.ok, h.rearmed = map[string]bool{}, map[string]time.Time{}
-	}
 	first, again := !h.ok[source], false
+	if h.ok == nil {
+		h.ok = map[string]bool{}
+	}
 	h.ok[source] = true
 	if last, ok := h.rearmed[source]; !ok || now.Sub(last) >= webhookWindow {
-		for k := range h.told {
-			if strings.HasSuffix(k, "\x00"+source) {
-				delete(h.told, k)
-				again = true
-			}
-		}
-		if again {
-			h.rearmed[source] = now
-		}
+		again = h.rearm(source, now)
+	} else if h.toldFor(source) {
+		h.owed[source] = true
 	}
 	h.mu.Unlock()
 	switch {
@@ -310,6 +312,37 @@ func (h *Webhooks) accepted(source string, r *http.Request, now time.Time) {
 		fmt.Fprintf(h.Log, "port49-inventory: webhook: source %s's deliveries authenticate again (from %s)\n", source,
 			remoteHost(r))
 	}
+}
+
+// rearm forgets source's refusals as said, reporting whether any were, and
+// marks when; h.mu is held.
+func (h *Webhooks) rearm(source string, now time.Time) bool {
+	if h.rearmed == nil {
+		h.rearmed, h.owed = map[string]time.Time{}, map[string]bool{}
+	}
+	delete(h.owed, source)
+	cleared := false
+	for k := range h.told {
+		if strings.HasSuffix(k, "\x00"+source) {
+			delete(h.told, k)
+			cleared = true
+		}
+	}
+	if cleared {
+		h.rearmed[source] = now
+	}
+	return cleared
+}
+
+// toldFor reports whether a refusal of source is remembered as said; h.mu
+// is held.
+func (h *Webhooks) toldFor(source string) bool {
+	for k := range h.told {
+		if strings.HasSuffix(k, "\x00"+source) {
+			return true
+		}
+	}
+	return false
 }
 
 func remoteHost(r *http.Request) string {

@@ -588,3 +588,31 @@ func TestTheWebhookErrorLogForgetsAfterAWindow(t *testing.T) {
 		t.Fatalf("a window on, said %d", n)
 	}
 }
+
+// Re-review N1: a re-arm a real delivery could not take inside the window
+// is owed, and the first refusal past the window takes it, so an outage
+// that starts just after is said once — and only once.
+func TestAnOutageAfterADeferredReArmIsSaidOnce(t *testing.T) {
+	start := time.Date(2026, 10, 1, 2, 0, 0, 0, time.UTC)
+	rig := newHookRig(start)
+	stray := "a-different-secret-of-thirty-two-chars"
+	at := func(d time.Duration, secret string) {
+		rig.now = start.Add(d)
+		b := body(rig.now.Format("2006-01-02T15:04:05.000000-07:00"))
+		rig.deliver("/v1/webhook/netbox_prod", b, sign(b, secret), "application/json")
+	}
+	at(0, stray)
+	at(time.Second, hookSecret)
+	at(2*time.Second, stray)
+	at(3*time.Second, hookSecret)
+	before := strings.Count(rig.out.String(), "(bad_signature)")
+	for d := 4 * time.Second; d < time.Hour; d += 30 * time.Second {
+		at(d, stray)
+	}
+	if n := strings.Count(rig.out.String(), "(bad_signature)") - before; n != 1 {
+		t.Fatalf("the outage was said %d times: %s", n, rig.out)
+	}
+	if len(rig.notified) != 2 {
+		t.Fatalf("%v", rig.notified)
+	}
+}
