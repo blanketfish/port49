@@ -30,7 +30,7 @@ type CA struct {
 	Key  *ecdsa.PrivateKey
 }
 
-// NewCA makes a CA valid from notBefore to notAfter.
+// NewCA makes a CA valid from notBefore to notAfter. It may sign CRLs.
 func NewCA(cn string, notBefore, notAfter time.Time) (*CA, error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -42,7 +42,7 @@ func NewCA(cn string, notBefore, notAfter time.Time) (*CA, error) {
 	}
 	tmpl := &x509.Certificate{SerialNumber: sn, Subject: pkix.Name{CommonName: cn},
 		NotBefore: notBefore, NotAfter: notAfter, IsCA: true, BasicConstraintsValid: true,
-		KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature}
+		KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageCRLSign | x509.KeyUsageDigitalSignature}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
 	if err != nil {
 		return nil, err

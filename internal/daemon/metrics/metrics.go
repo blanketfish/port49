@@ -155,6 +155,22 @@ type Metrics struct {
 	// port49_revocations_file_failed: 1 while the last write of
 	// broker.revocations_file failed, so a restart would forget a mark.
 	RevocationsFileFailed prometheus.Gauge
+	// port49_cert_status_checks_total{source, result}: broker certificate
+	// status checks of a chain, by the source that decided ("crl", "ocsp" or
+	// "none") and the verdict ("good", "revoked" or "unknown") (spec §5.1.4).
+	CertStatusChecks *prometheus.CounterVec
+	// port49_crl_loads_total{crl, outcome}: loads of a configured CRL source
+	// by its name: "loaded", "unchanged", "failed" (it could not be fetched)
+	// or "refused" (it did not verify, is out of scope, or is older than the
+	// list in force).
+	CRLLoads *prometheus.CounterVec
+	// port49_crl_next_update_timestamp_seconds{crl}: the Unix time the list
+	// in force passes its next update, set after every load; alert on
+	// time() - port49_crl_next_update_timestamp_seconds > 0.
+	CRLNextUpdate *prometheus.GaugeVec
+	// port49_cert_status_unavailable_total: checks whose status could not be
+	// established. No labels.
+	CertStatusUnavailable prometheus.Counter
 	// port49_policy_reloads_total{outcome}: attempts to put a changed policy
 	// file in force (plan 4b) — "applied", "unchanged" (a SIGHUP with nothing
 	// new), or "refused" (the file does not load; the policy in force keeps
@@ -361,6 +377,14 @@ func New(reg prometheus.Registerer) *Metrics {
 			Help: "Revocation marks in force now."}, []string{"by"}),
 		RevocationsFileFailed: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_revocations_file_failed",
 			Help: "1 while broker.revocations_file could not be written; a restart would forget a revocation."}),
+		CertStatusChecks: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_cert_status_checks_total",
+			Help: "Broker certificate status checks, by the source that decided and the result."}, []string{"source", "result"}),
+		CRLLoads: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_crl_loads_total",
+			Help: "Loads of a CRL source, by outcome: loaded, unchanged, failed or refused."}, []string{"crl", "outcome"}),
+		CRLNextUpdate: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "port49_crl_next_update_timestamp_seconds",
+			Help: "The Unix time the CRL in force passes its next update."}, []string{"crl"}),
+		CertStatusUnavailable: prometheus.NewCounter(prometheus.CounterOpts{Name: "port49_cert_status_unavailable_total",
+			Help: "Certificate status checks whose status could not be established."}),
 		PolicyReloads: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_policy_reloads_total",
 			Help: "Attempts to put a changed policy file in force, by outcome."}, []string{"outcome"}),
 		PolicyFileRefused: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_policy_file_refused",
@@ -417,7 +441,8 @@ func New(reg prometheus.Registerer) *Metrics {
 		m.StoreOps, m.DecisionLogWriteFailures, m.CryptOpenFailures, m.Attributions, m.BrokerItemErrors, m.BrokerIdempotency,
 		m.BrokerHandshakeFailures, m.BrokerConnectionEvents, m.BrokerConnections, m.BlobCache,
 		m.DevicesQuarantined, m.DevicesAdmissionRefused, m.ContextRefreshes, m.SessionRefreshes, m.TokensSuperseded, m.CeilingWarnings,
-		m.Revocations, m.RevocationsInForce, m.RevocationsFileFailed, m.PolicyReloads, m.PolicyFileRefused,
+		m.Revocations, m.RevocationsInForce, m.RevocationsFileFailed, m.CertStatusChecks, m.CRLLoads, m.CRLNextUpdate,
+		m.CertStatusUnavailable, m.PolicyReloads, m.PolicyFileRefused,
 		m.PolicyRefreshPending, m.InventoryReloads, m.InventoryFileRefused, m.InventorySnapshotAge,
 		m.InventoryChanges, m.InventoryBundleSequence, m.InventoryPersistFailed, m.InventoryBundleRefused,
 		m.InventoryPolicyMismatch, m.InventoryMirrorUnreadable, m.InventoryFetches)

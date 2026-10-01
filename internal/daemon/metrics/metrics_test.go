@@ -43,6 +43,10 @@ func TestNewRegistersEveryMetric(t *testing.T) {
 	m.Revocations.WithLabelValues("principal", "applied").Inc()
 	m.RevocationsInForce.WithLabelValues("cert").Set(1)
 	m.RevocationsFileFailed.Set(0)
+	m.CertStatusChecks.WithLabelValues("crl", "good").Inc()
+	m.CRLLoads.WithLabelValues("corp_issuing", "loaded").Inc()
+	m.CRLNextUpdate.WithLabelValues("corp_issuing").Set(1)
+	m.CertStatusUnavailable.Inc()
 	m.PolicyReloads.WithLabelValues("applied").Inc()
 	m.PolicyFileRefused.Set(0)
 	m.PolicyRefreshPending.Set(0)
@@ -87,6 +91,10 @@ func TestNewRegistersEveryMetric(t *testing.T) {
 		"port49_revocations_total":                   false,
 		"port49_revocations_in_force":                false,
 		"port49_revocations_file_failed":             false,
+		"port49_cert_status_checks_total":            false,
+		"port49_crl_loads_total":                     false,
+		"port49_crl_next_update_timestamp_seconds":   false,
+		"port49_cert_status_unavailable_total":       false,
 		"port49_policy_reloads_total":                false,
 		"port49_policy_file_refused":                 false,
 		"port49_policy_refresh_pending":              false,
