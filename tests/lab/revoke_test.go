@@ -23,12 +23,13 @@ const revokeClaim = "A revocation by principal or by certificate (`port49 revoke
 	"command the session's next command is refused and the session stays open; on Junos the open session keeps " +
 	"what it had at login (spec §13 decision 21), and the revocation names it as not reached; a token minted " +
 	"before the revocation and not yet spent is deleted, so its login is refused token_not_found; the revocation " +
-	"closes the agent's held broker connection, the agent's next mint is refused (its new connection is closed " +
-	"by the broker's listener as it binds), and the agent ends; and after a lift a new login works."
+	"closes the agent's held broker connection; the agent's next mint, on a new connection, is answered 401 " +
+	"credential_revoked by the broker's listener as it binds, the agent ends on it, and a second `port49 token` " +
+	"finds no agent; and after a lift a new login works."
 
-// revokeRefusedLine is what port49d's listener writes when it closes a
-// revoked principal's or certificate's new connection as it binds.
-const revokeRefusedLine = "as it bound: "
+// revokeRefusedLine is in the line port49d's listener writes when it
+// refuses a revoked principal's or certificate's new connection as it binds.
+const revokeRefusedLine = " as it bound"
 
 // revokedMsg is the server_msg of an authorize_command deny
 // credential_revoked (internal/daemon/author). IOS-XE prints a FAIL's
@@ -134,6 +135,9 @@ func mintRefusal(said string) string {
 	switch {
 	case strings.Contains(said, "credential_revoked"):
 		return "a 401 credential_revoked"
+	case strings.Contains(said, "the session is over") && strings.Contains(said, " was revoked at "):
+		// The agent ended its session on the 401 and says why.
+		return "a 401 credential_revoked, which ended the agent's session"
 	case strings.Contains(said, "closed a new connection right after the handshake"):
 		return "a new connection closed right after the handshake"
 	}
@@ -163,6 +167,30 @@ func (l *lab) errLinesSince(off int64, s string) []string {
 		}
 	}
 	return out
+}
+
+// revokedMint asks the agent at sock (pid) for a token after a
+// revocation, and checks what the claim says follows: the mint refused
+// with a 401 credential_revoked, the agent ended on it, and a second
+// `port49 token` finding no agent. It returns what the first said, whether
+// the agent ended, and what the second said.
+func revokedMint(sock string, pid int, device, what string, fail func(string, ...any)) (said string, gone bool, again string) {
+	said, tok := l29Mint(sock, device)
+	if tok != "" {
+		fail("the agent minted a token after %s revocation", what)
+	}
+	if !strings.HasPrefix(mintRefusal(said), "a 401 credential_revoked") {
+		fail("after %s revocation the agent's mint was refused with %s: %q", what, mintRefusal(said), said)
+	}
+	if gone = agentEnded(pid); !gone {
+		fail("the agent (pid %d) was still running 10 s after %s revocation refused its mint (%s)", pid, what,
+			mintRefusal(said))
+	}
+	again, tok = l29Mint(sock, device)
+	if tok != "" || !strings.Contains(again, "no agent at") {
+		fail("a second `port49 token` after %s revocation found an agent: %q (a token: %v)", what, again, tok != "")
+	}
+	return said, gone, again
 }
 
 func TestRevokeEndToEnd(t *testing.T) {
@@ -258,18 +286,9 @@ func TestRevokeEndToEnd(t *testing.T) {
 			fail("the old token's login was refused %q, not token_not_found: the token was not deleted", tok2Reason)
 		}
 		// The revocation closed the agent's held connection, so its next
-		// mint dials anew, and the listener closes that connection as it
-		// binds, before any mint: the agent sees a closed connection, not a
-		// 401. What it then does is what this measures.
-		agentSaid, tok3 := l29Mint(sock, l.p.node)
-		if tok3 != "" {
-			fail("the agent minted a token after the revocation")
-		}
-		agentGone := agentEnded(pid)
-		if !agentGone {
-			fail("the agent (pid %d) was still running 10 s after its mint was refused (%s)", pid,
-				mintRefusal(agentSaid))
-		}
+		// mint dials anew; the listener answers that connection's request
+		// 401 credential_revoked as it binds, and the agent ends.
+		agentSaid, agentGone, agentAfter := revokedMint(sock, pid, l.p.node, "the principal's", fail)
 
 		// 3. Lift, and a new login works.
 		liftText, ok := revokeCLI(socket, "--lift", "--principal", slicePrincipal)
@@ -297,15 +316,7 @@ func TestRevokeEndToEnd(t *testing.T) {
 		if !ok {
 			fail("port49 revoke --cert: %s", certText)
 		}
-		certSaid, tok5 := l29Mint(sock2, l.p.node)
-		if tok5 != "" {
-			fail("the agent minted a token after the certificate's revocation")
-		}
-		agent2Gone := agentEnded(pid2)
-		if !agent2Gone {
-			fail("the agent (pid %d) was still running 10 s after the certificate's revocation (%s)", pid2,
-				mintRefusal(certSaid))
-		}
+		certSaid, agent2Gone, agent2After := revokedMint(sock2, pid2, l.p.node, "the certificate's", fail)
 		certLift, ok := revokeCLI(socket, "--lift", "--cert", filepath.Join(slicePKIDir, testpki.LabClientCert))
 		if !ok {
 			fail("lifting the certificate: %s", certLift)
@@ -332,8 +343,8 @@ func TestRevokeEndToEnd(t *testing.T) {
 			fail("no authorize_command deny credential_revoked")
 		}
 		// Each refused mint is refused at the listener (a stderr line, at
-		// most one per 10 s) or, a connection that bound before the mark,
-		// at the mint (a record): two refusals, two of either.
+		// most one per 10 s; a held one is counted on the next) or, a
+		// connection that bound before the mark, at the mint (a record).
 		refusedLines := l.errLinesSince(errOff, revokeRefusedLine)
 		mintRevoked := len(sliceRecords(recs, "mint", "credential_revoked"))
 		if len(refusedLines)+mintRevoked < 2 {
@@ -346,17 +357,18 @@ func TestRevokeEndToEnd(t *testing.T) {
 			"| `port49 revoke --principal %s` | exit %s; report below |\n"+
 			"| `show version` in the same session after it | %s |\n"+
 			"| a login with a token minted before it, unspent | refused, `%s` |\n"+
-			"| the agent's next mint | %s: %s; the agent %s |\n"+
+			"| the agent's next mint | %s: %s; the agent %s; a second `port49 token`: %s |\n"+
 			"| `port49 revoke --lift`, then a new agent, a mint and a login | %s |\n"+
-			"| `port49 revoke --cert` (the agent's certificate), then the agent's mint | %s: %s; the agent %s |\n\n"+
+			"| `port49 revoke --cert` (the agent's certificate), then the agent's mint | %s: %s; the agent %s; a "+
+			"second `port49 token`: %s |\n\n"+
 			"Records: %d revoke for the principal, %d for the certificate, %d authorize_command deny "+
 			"credential_revoked, %d mint deny credential_revoked. port49d's stderr: %d line(s) of the listener "+
 			"closing a revoked connection as it bound (at most one per 10 s; later ones are counted on the next).\n\n"+
 			"The principal's revocation report, as `port49 revoke` printed it:\n\n```\n%s\n```\n\n"+
 			"The certificate's:\n\n```\n%s\n```\n",
 			before, slicePrincipal, map[bool]string{true: "0", false: "non-zero"}[revokedOK],
-			after, tok2Reason, mintRefusal(agentSaid), l29Cell(agentSaid), gone[agentGone], liftLogin,
-			mintRefusal(certSaid), l29Cell(certSaid), gone[agent2Gone],
+			after, tok2Reason, mintRefusal(agentSaid), l29Cell(agentSaid), gone[agentGone], l29Cell(agentAfter), liftLogin,
+			mintRefusal(certSaid), l29Cell(certSaid), gone[agent2Gone], l29Cell(agent2After),
 			len(sliceRecords(recs, "revoke", "")), certRevokes,
 			len(sliceRecords(recs, "authorize_command", "credential_revoked")), mintRevoked, len(refusedLines),
 			revokedText, certText)
