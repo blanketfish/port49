@@ -50,8 +50,8 @@ type Server struct {
 	// Status is device i's status, lower case; absent or empty is "active".
 	Status map[int]string
 	// DeleteAfterPage, nonzero, deletes the list's first device once that
-	// many list pages (GraphQL, or REST with a limit other than 1) have been
-	// served, so every later page shifts left by one: a model of offset
+	// many list pages (unfiltered: GraphQL, or REST with a limit other than 1)
+	// have been served, so every later page shifts left by one: a model of offset
 	// paging under a concurrent delete (pre-flight I1). Not recorded: L30
 	// lists a list changing between pages under Not observed.
 	DeleteAfterPage int
@@ -248,10 +248,9 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, s.status)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/dcim/devices/":
 		s.rest(w, r, n, del)
-		list = r.URL.Query().Get("limit") != "1"
+		list = r.URL.Query().Get("limit") != "1" && !r.URL.Query().Has("name")
 	case r.Method == http.MethodPost && r.URL.Path == s.gqlPath:
-		s.graphql(w, gql.Query, n, del)
-		list = true
+		list = s.graphql(w, gql.Query, n, del)
 	default:
 		http.NotFound(w, r)
 	}
@@ -262,6 +261,27 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		s.mu.Unlock()
 	}
+}
+
+// devices is the list as it stands, by device number: n devices, the first
+// del deleted, the last drop left out.
+func (s *Server) devices(n, del, drop int) []int {
+	out := []int{}
+	for j := 1; j <= n-drop; j++ {
+		out = append(out, j+del)
+	}
+	return out
+}
+
+// named is the devices in devs named name: one, or none.
+func (s *Server) named(devs []int, name string) []int {
+	out := []int{}
+	for _, i := range devs {
+		if Name(i) == name {
+			out = append(out, i)
+		}
+	}
+	return out
 }
 
 func (s *Server) rest(w http.ResponseWriter, r *http.Request, n, del int) {
@@ -277,9 +297,16 @@ func (s *Server) rest(w http.ResponseWriter, r *http.Request, n, del int) {
 	if shallow {
 		base = s.restShallow
 	}
+	// ?name= is the named device alone, count 1, as every stack answered
+	// it (rest-device*.json); a name no device has is count 0.
+	devs := s.devices(n, del, 0)
+	if name, ok := q["name"]; ok {
+		devs = s.named(devs, name[0])
+	}
+	n = len(devs)
 	results := []any{}
-	for j := offset + 1; j <= n && j <= offset+limit; j++ {
-		results = append(results, s.device(base, j+del, "rest", shallow))
+	for j := offset; j < n && j < offset+limit; j++ {
+		results = append(results, s.device(base, devs[j], "rest", shallow))
 	}
 	host := s.NextHost
 	if host == "" {
@@ -384,6 +411,33 @@ func argsOf(query, list string) map[string]string {
 	return argsIn(m[1])
 }
 
+// The name filters L30 recorded (graphql.json), each the whole argument
+// group: name: "x", filters: {name: {exact: "x"}}, and filters: {name: "x"}.
+var (
+	nameFilter  = regexp.MustCompile(`^\(\s*name\s*:\s*"((?:[^"\\]|\\.)*)"\s*\)$`)
+	exactFilter = regexp.MustCompile(`^\(\s*filters\s*:\s*\{\s*name\s*:\s*\{\s*exact\s*:\s*"((?:[^"\\]|\\.)*)"\s*\}\s*\}\s*\)$`)
+	plainFilter = regexp.MustCompile(`^\(\s*filters\s*:\s*\{\s*name\s*:\s*"((?:[^"\\]|\\.)*)"\s*\}\s*\)$`)
+)
+
+// filterOf is the name query's list field filters by, and which recorded
+// shape it took: "name", "exact" or "plain"; ok false if none.
+func filterOf(query, list string) (name, shape string, ok bool) {
+	m := regexp.MustCompile(`^\s*\{\s*` + list + `\s*(\([^)]*\))`).FindStringSubmatch(query)
+	if m == nil {
+		return "", "", false
+	}
+	for shape, re := range map[string]*regexp.Regexp{"name": nameFilter, "exact": exactFilter, "plain": plainFilter} {
+		if f := re.FindStringSubmatch(m[1]); f != nil {
+			name, err := strconv.Unquote(`"` + f[1] + `"`)
+			if err != nil {
+				name = f[1]
+			}
+			return name, shape, true
+		}
+	}
+	return "", "", false
+}
+
 // argsIn is the arguments in text, an argument group or a brace group.
 func argsIn(text string) map[string]string {
 	out := map[string]string{}
@@ -411,7 +465,7 @@ func errorsOf(msgs ...string) map[string]any {
 	return map[string]any{"data": nil, "errors": errs}
 }
 
-func (s *Server) graphql(w http.ResponseWriter, query string, n, del int) {
+func (s *Server) graphql(w http.ResponseWriter, query string, n, del int) bool {
 	s.mu.Lock()
 	for _, tok := range identifiers(query) {
 		if !s.recorded[tok] {
@@ -428,18 +482,38 @@ func (s *Server) graphql(w http.ResponseWriter, query string, n, del int) {
 	case s.GraphQLStatus != 0:
 		w.WriteHeader(s.GraphQLStatus)
 		io.WriteString(w, "<html>not here</html>")
-		return
+		return false
 	case s.GraphQL200Errors:
 		writeJSON(w, http.StatusOK, errorsOf(limitOffset...))
-		return
+		return false
 	case !isList || len(sel) != 1 || fields == nil:
 		// Not recorded: a query of anything but the device list.
 		writeJSON(w, http.StatusBadRequest, errorsOf("Cannot query field on type 'Query'."))
-		return
+		return false
 	}
 	// Unpaged, the list is every device. Not recorded past 120: L30 lists a
 	// GraphQL list larger than any server-side cap under Not observed.
 	offset, limit := 0, n
+	// The filters L30 recorded, each answered as its stack answered it
+	// (graphql.json): the named device alone, or the stack's refusal. NetBox
+	// 4.7.1's name: falls to its recorded unknown-argument answer below.
+	if name, shape, ok := filterOf(query, s.list); ok {
+		switch {
+		case shape == "name" && s.Stack != "netbox-4", shape == "exact" && s.Stack == "netbox-4":
+			devs := []any{}
+			for _, i := range s.named(s.devices(n, del, s.DropFromGraphQL), name) {
+				devs = append(devs, project(s.device(s.gqlDev, i, "graphql", false), fields))
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"data": map[string]any{s.list: devs}})
+			return false
+		case shape == "plain" && s.Stack == "netbox-4":
+			writeJSON(w, http.StatusOK, errorsOf(fmt.Sprintf("Expected value of type 'StrFilterLookup', found %q.", name)))
+			return false
+		case shape != "name" && s.Stack == "netbox-3.7":
+			writeJSON(w, http.StatusBadRequest, errorsOf("Unknown argument 'filters' on field 'Query.device_list'."))
+			return false
+		}
+	}
 	args := argsOf(query, s.list)
 	_, nestedArg := args["pagination"]
 	switch {
@@ -450,31 +524,31 @@ func (s *Server) graphql(w http.ResponseWriter, query string, n, del int) {
 		case "netbox-3.7":
 			writeJSON(w, http.StatusBadRequest,
 				errorsOf("Unknown argument 'pagination' on field 'Query.device_list'. Did you mean 'position'?"))
-			return
+			return false
 		default:
 			// Not recorded: no run asked Nautobot for pagination; it answers
 			// as an unknown argument would.
 			writeJSON(w, http.StatusBadRequest, errorsOf("Unknown argument 'pagination' on field 'Query.devices'."))
-			return
+			return false
 		}
 		var ok bool
 		if offset, limit, ok = offsetLimit(argsIn(args["pagination"])); !ok {
 			writeJSON(w, http.StatusBadRequest, errorsOf("Not recorded: a pagination shape no L30 list query used."))
-			return
+			return false
 		}
 	case len(args) == 2 && args["limit"] != "" && args["offset"] != "":
 		switch s.Stack {
 		case "netbox-4":
 			writeJSON(w, http.StatusOK, errorsOf(limitOffset...))
-			return
+			return false
 		case "netbox-3.7":
 			writeJSON(w, http.StatusBadRequest, errorsOf(limitOffset...))
-			return
+			return false
 		}
 		var ok bool
 		if offset, limit, ok = offsetLimit(args); !ok {
 			writeJSON(w, http.StatusBadRequest, errorsOf("Not recorded: a limit or offset no L30 list query used."))
-			return
+			return false
 		}
 	default:
 		// NetBox 4.7.1 answered an argument it does not know (name:) with
@@ -488,19 +562,25 @@ func (s *Server) graphql(w http.ResponseWriter, query string, n, del int) {
 		if s.Stack == "netbox-4" && len(unknown) > 0 {
 			sort.Strings(unknown)
 			writeJSON(w, http.StatusOK, errorsOf(unknown...))
-			return
+			return false
 		}
-		// Recorded (netbox-4 filters:, Nautobot name: answered 200), not
-		// replayed: the replay does not filter, so it refuses rather than
-		// answer the whole list. A lone limit and any other argument alike.
-		writeJSON(w, http.StatusBadRequest, errorsOf("Not replayed: an argument shape the replay does not filter by."))
-		return
+		if _, lone := args["limit"]; lone && len(args) == 1 && s.product == "nautobot" {
+			// Not recorded: every Nautobot list query sent limit with offset.
+			writeJSON(w, http.StatusBadRequest, errorsOf("Not recorded: limit without offset."))
+			return false
+		}
+		// Not replayed: every other argument shape, a filter combined with
+		// paging among them; the replay refuses rather than answer the whole
+		// list.
+		writeJSON(w, http.StatusBadRequest, errorsOf("Not replayed: an argument shape the replay does not take."))
+		return false
 	}
 	devs := []any{}
 	for j := offset + 1; j <= n-s.DropFromGraphQL && j <= offset+limit; j++ {
 		devs = append(devs, project(s.device(s.gqlDev, j+del, "graphql", false), fields))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": map[string]any{s.list: devs}})
+	return true
 }
 
 // device is device i: base with its name, its addresses and its status in

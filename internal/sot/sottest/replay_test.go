@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -239,36 +240,92 @@ func TestALiteralIsNoIdentifier(t *testing.T) {
 	}
 }
 
-// An argument the replay does not page by is refused, not answered as the
-// whole list: netbox-4 filters: and Nautobot name: are recorded (200), not
-// replayed, as the replay does not filter. The paging arguments are taken
-// in either order.
+type gqlAnswer struct {
+	Data   map[string][]map[string]any `json:"data"`
+	Errors []struct {
+		Message string `json:"message"`
+	} `json:"errors"`
+}
+
+// An argument shape the replay does not take is refused, not answered as
+// the whole list; the paging arguments are taken in either order.
 func TestAnUnrecordedArgumentIsRefused(t *testing.T) {
-	var r struct {
-		Data   map[string][]map[string]any `json:"data"`
-		Errors []struct {
-			Message string `json:"message"`
-		} `json:"errors"`
-	}
 	s := New(t, "nautobot-2", 5)
 	c := client(t, s)
+	var r gqlAnswer
 	if code := post(t, c, s.URL+"/api/graphql/", "{ devices(offset:1,limit:2) { name } }", &r); code != 200 ||
 		len(r.Data["devices"]) != 2 || r.Data["devices"][0]["name"] != Name(2) {
 		t.Fatalf("offset first: %d %v", code, r.Data)
 	}
-	for _, q := range []string{`{ devices(limit: 2) { name } }`, `{ devices(name: "leaf-01") { name } }`} {
-		if code := post(t, c, s.URL+"/api/graphql/", q, &r); code != 400 {
-			t.Fatalf("%s: %d", q, code)
+	for q, want := range map[string]string{
+		`{ devices(limit: 2) { name } }`:                             "Not recorded: limit without offset.",
+		`{ devices(name: "leaf-01", limit: 2, offset: 0) { name } }`: "Not replayed: an argument shape the replay does not take.",
+		`{ devices(role: "leaf") { name } }`:                         "Not replayed: an argument shape the replay does not take.",
+		`{ devices(filters: {name: {exact: "leaf-01"}}) { name } }`:  "Not replayed: an argument shape the replay does not take.",
+	} {
+		var r gqlAnswer
+		if code := post(t, c, s.URL+"/api/graphql/", q, &r); code != 400 || len(r.Errors) != 1 || r.Errors[0].Message != want {
+			t.Fatalf("%s: %d %v", q, code, r.Errors)
 		}
 	}
-	s4 := New(t, "netbox-4", 5)
-	if code := post(t, client(t, s4), s4.URL+"/graphql/", `{ device_list(filters: {name: {exact: "x"}}) { name } }`, &r); code != 400 {
-		t.Fatalf("filters: %d", code)
+}
+
+// Every filter L30 recorded answers as its stack answered it
+// (graphql.json, rest-device*.json): the named device alone, or the
+// recorded refusal.
+func TestEachRecordedFilterIsTheNamedDevice(t *testing.T) {
+	filters := map[string]string{"nautobot-1.6": `devices(name: "%s")`, "nautobot-2": `devices(name: "%s")`,
+		"nautobot-3": `devices(name: "%s")`, "netbox-3.7": `device_list(name: "%s")`,
+		"netbox-4": `device_list(filters: {name: {exact: "%s"}})`}
+	for stack, filter := range filters {
+		s := New(t, stack, 60)
+		c := client(t, s)
+		gql, list := s.URL+"/api/graphql/", "devices"
+		if strings.HasPrefix(stack, "netbox") {
+			gql, list = s.URL+"/graphql/", "device_list"
+		}
+		for _, want := range []int{1, 42} {
+			var r gqlAnswer
+			q := "{ " + fmt.Sprintf(filter, Name(want)) + " { name primary_ip4 { address } } }"
+			if code := post(t, c, gql, q, &r); code != 200 || len(r.Data[list]) != 1 || r.Data[list][0]["name"] != Name(want) ||
+				r.Data[list][0]["primary_ip4"].(map[string]any)["address"] != Addr(want, 5) {
+				t.Fatalf("%s: %s: %d %v %v", stack, q, code, r.Data, r.Errors)
+			}
+			var page struct {
+				Count          int
+				Next, Previous *string
+				Results        []map[string]any
+			}
+			get(t, c, s.URL+"/api/dcim/devices/?name="+Name(want), &page)
+			if page.Count != 1 || page.Next != nil || page.Previous != nil || len(page.Results) != 1 ||
+				page.Results[0]["name"] != Name(want) {
+				t.Fatalf("%s: REST ?name=%s: %+v", stack, Name(want), page)
+			}
+		}
+		var r gqlAnswer
+		if code := post(t, c, gql, "{ "+fmt.Sprintf(filter, "spine-9")+" { name } }", &r); code != 200 || len(r.Data[list]) != 0 {
+			t.Fatalf("%s: no such device: %d %v", stack, code, r.Data)
+		}
+		var page struct{ Count int }
+		if get(t, c, s.URL+"/api/dcim/devices/?name=spine-9", &page); page.Count != 0 {
+			t.Fatalf("%s: REST no such device: %d", stack, page.Count)
+		}
 	}
-	// Recorded: 4.7.1 answers name: with 200 and errors.
-	r.Errors = nil
-	if code := post(t, client(t, s4), s4.URL+"/graphql/", `{ device_list(name: "leaf-01") { name } }`, &r); code != 200 ||
-		len(r.Errors) != 1 || r.Errors[0].Message != "Unknown argument 'name' on field 'Query.device_list'." {
-		t.Fatalf("name: %d %v", code, r.Errors)
+	// The refusals recorded for the shapes a stack did not take.
+	for _, c := range []struct {
+		stack, filter, want string
+		code                int
+	}{
+		{"netbox-4", `device_list(filters: {name: "leaf-01"})`, `Expected value of type 'StrFilterLookup', found "leaf-01".`, 200},
+		{"netbox-4", `device_list(name: "leaf-01")`, "Unknown argument 'name' on field 'Query.device_list'.", 200},
+		{"netbox-3.7", `device_list(filters: {name: {exact: "leaf-01"}})`, "Unknown argument 'filters' on field 'Query.device_list'.", 400},
+		{"netbox-3.7", `device_list(filters: {name: "leaf-01"})`, "Unknown argument 'filters' on field 'Query.device_list'.", 400},
+	} {
+		s := New(t, c.stack, 3)
+		var r gqlAnswer
+		if code := post(t, client(t, s), s.URL+"/graphql/", "{ "+c.filter+" { name } }", &r); code != c.code ||
+			len(r.Errors) != 1 || r.Errors[0].Message != c.want || r.Data != nil {
+			t.Fatalf("%s %s: %d %v", c.stack, c.filter, code, r.Errors)
+		}
 	}
 }
