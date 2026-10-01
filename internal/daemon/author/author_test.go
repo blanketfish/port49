@@ -1142,7 +1142,7 @@ func nilIfEmpty(s string) any {
 
 // Inside ceiling_warning, a permitted reply carries the warning in
 // server_msg, and the record says so; outside it, nothing (spec §5.6;
-// decision 33, provisional on L34).
+// decision 33; L34).
 func TestAPermitNearTheCeilingWarns(t *testing.T) {
 	for _, tc := range []struct {
 		left time.Duration
