@@ -398,6 +398,15 @@ func IdempotencyReservesOnce(t *testing.T, newStore func() store.Store, now time
 	if err := s.CompleteIdempotency(ctx, principal, "anon", "", done); !errors.Is(err, store.ErrConflict) {
 		t.Fatalf("a completion expecting the empty holder: %v, want ErrConflict", err)
 	}
+	// A record with no holder at all (one PutIdempotency wrote) is still
+	// nobody's: expecting the empty holder does not match it.
+	if err := s.PutIdempotency(ctx, principal, "planted",
+		store.Idempotency{BodyHash: "h1", Response: []byte("x"), ExpiresAt: now.Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CompleteIdempotency(ctx, principal, "planted", "", done); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("a completion expecting the empty holder of a holderless record: %v, want ErrConflict", err)
+	}
 	if cur, ok, _ := s.ReserveIdempotency(ctx, principal, "anon", pending("late")); ok || !cur.Pending || cur.Holder != "anon-holder" {
 		t.Fatalf("a refused completion changed the reservation: %+v %v", cur, ok)
 	}
