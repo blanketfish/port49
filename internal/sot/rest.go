@@ -160,3 +160,35 @@ func portOf(u *url.URL) string {
 	}
 	return "80"
 }
+
+// restNamed is the devices REST gives for ?name=name, with depth=1 where p
+// needs it: the form L30 recorded on every release (rest-device*.json), one
+// device or none. Its bytes are spent from b.
+func (c *client) restNamed(ctx context.Context, p Profile, name string, b *budget) ([]map[string]any, error) {
+	q := url.Values{"name": {name}}
+	if p.depthOne {
+		q.Set("depth", "1")
+	}
+	u := c.at("/api/dcim/devices/", q)
+	a, err := c.do(ctx, http.MethodGet, u, nil, false)
+	if err != nil {
+		return nil, err
+	}
+	if a.status != http.StatusOK {
+		return nil, statusError(what(http.MethodGet, u), a.status)
+	}
+	if err := b.spend(len(a.body)); err != nil {
+		return nil, err
+	}
+	var body struct {
+		Count   *int             `json:"count"`
+		Results []map[string]any `json:"results"`
+	}
+	dec := json.NewDecoder(bytes.NewReader(a.body))
+	dec.UseNumber()
+	if err := dec.Decode(&body); err != nil || body.Count == nil {
+		// Never the name: it is the source's text, and the body's.
+		return nil, errors.New("GET /api/dcim/devices/ by name is not the JSON asked for")
+	}
+	return body.Results, nil
+}

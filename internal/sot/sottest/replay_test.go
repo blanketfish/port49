@@ -329,3 +329,62 @@ func TestEachRecordedFilterIsTheNamedDevice(t *testing.T) {
 		}
 	}
 }
+
+// readAll is the names a REST read of pages of 50 gives, and each page's count.
+func readAll(t *testing.T, c *http.Client, s *Server) ([]string, []int) {
+	t.Helper()
+	var names []string
+	var counts []int
+	for next := s.URL + "/api/dcim/devices/?limit=50"; next != ""; {
+		var page struct {
+			Count   int              `json:"count"`
+			Next    *string          `json:"next"`
+			Results []map[string]any `json:"results"`
+		}
+		get(t, c, next, &page)
+		counts = append(counts, page.Count)
+		for _, d := range page.Results {
+			names = append(names, d["name"].(string))
+		}
+		next = ""
+		if page.Next != nil {
+			next = *page.Next
+		}
+	}
+	return names, counts
+}
+
+// A rename to a name that sorts last, or a delete and an insert, after a
+// read's first page skips the device past the boundary while every count
+// holds; the skipped device is still there by name. Shifts bounds the reads
+// it happens in.
+func TestAShiftSkipsADeviceAndKeepsTheCount(t *testing.T) {
+	for knob, moved := range map[string]string{"rename": "z-" + Name(1), "replace": Name(121)} {
+		s := New(t, "netbox-4", 120)
+		c := client(t, s)
+		if knob == "rename" {
+			s.RenameAfterPage = 1
+		} else {
+			s.ReplaceAfterPage = 1
+		}
+		s.Shifts = 1
+		names, counts := readAll(t, c, s)
+		if len(names) != 120 || strings.Contains(strings.Join(names, " "), Name(51)) ||
+			names[119] != moved || counts[0] != 120 || counts[2] != 120 {
+			t.Fatalf("%s: %d names, last %s, counts %v", knob, len(names), names[len(names)-1], counts)
+		}
+		var page struct {
+			Count   int              `json:"count"`
+			Results []map[string]any `json:"results"`
+		}
+		get(t, c, s.URL+"/api/dcim/devices/?name="+Name(51), &page)
+		if page.Count != 1 || page.Results[0]["name"] != Name(51) {
+			t.Fatalf("%s: by name: %+v", knob, page)
+		}
+		// The shift does not repeat past Shifts: the next read is whole.
+		names, _ = readAll(t, c, s)
+		if len(names) != 120 || names[0] != Name(2) || names[49] != Name(51) || names[119] != moved {
+			t.Fatalf("%s: second read %v", knob, names)
+		}
+	}
+}

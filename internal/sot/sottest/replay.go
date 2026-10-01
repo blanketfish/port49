@@ -55,6 +55,16 @@ type Server struct {
 	// paging under a concurrent delete (pre-flight I1). Not recorded: L30
 	// lists a list changing between pages under Not observed.
 	DeleteAfterPage int
+	// RenameAfterPage, nonzero, renames the list's first device to a name
+	// that sorts last (z-<name>) once that many pages of a read have been
+	// served, a read beginning at a list page at offset 0: every later page
+	// shifts left by one, the device just past the boundary is skipped, and
+	// every count holds. ReplaceAfterPage instead deletes the first device
+	// and inserts a new one at the end, to the same effect. Shifts bounds how
+	// many reads either acts in; 0 is every read. A model of the two shifts
+	// removal confirmation exists for (plan 6c Task 8). Not recorded: L30
+	// lists a list changing between pages under Not observed.
+	RenameAfterPage, ReplaceAfterPage, Shifts int
 
 	product, list, gqlPath string
 	status                 map[string]any
@@ -62,10 +72,15 @@ type Server struct {
 	restDev, restShallow   map[string]any
 	recorded               map[string]bool
 
-	mu         sync.Mutex
-	n          int
-	deleted    int // devices deleted from the list's head: position j is device j+deleted
+	mu      sync.Mutex
+	n       int
+	deleted int // devices deleted from the list's head: position j is device j+deleted
+	// tail is the devices after the first n: renamed, or inserted.
+	tail       []dev
+	top        int // the highest device number given
 	pages      int
+	readPages  int // the list pages served since a read began
+	shifted    int // the reads RenameAfterPage or ReplaceAfterPage acted in
 	log        []Request
 	unrecorded map[string]bool
 }
@@ -94,7 +109,7 @@ func identifiers(query string) []string {
 func New(t testing.TB, stack string, n int) *Server {
 	t.Helper()
 	dir := filepath.Join(fixtures(), stack)
-	s := &Server{Stack: stack, product: strings.SplitN(stack, "-", 2)[0], n: n, recorded: map[string]bool{},
+	s := &Server{Stack: stack, product: strings.SplitN(stack, "-", 2)[0], n: n, top: n, recorded: map[string]bool{},
 		unrecorded: map[string]bool{}, list: "device_list", gqlPath: "/graphql/"}
 	if s.product == "nautobot" {
 		s.list, s.gqlPath = "devices", "/api/graphql/"
@@ -202,7 +217,12 @@ func Name(i int) string {
 // Loopback0 (which 6), with its prefix length, as the products write one.
 func Addr(i, which int) string { return fmt.Sprintf("10.%d.%d.%d/32", which, i/250, i%250+1) }
 
-func (s *Server) SetDevices(n int) { s.mu.Lock(); s.n = n; s.mu.Unlock() }
+// SetDevices sets the devices before the tail to n.
+func (s *Server) SetDevices(n int) {
+	s.mu.Lock()
+	s.n, s.top = n, max(s.top, s.deleted+n)
+	s.mu.Unlock()
+}
 
 func (s *Server) Requests() []Request {
 	s.mu.Lock()
@@ -235,22 +255,24 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.Lock()
 	s.log = append(s.log, req)
-	n, del, deleteAfter := s.n, s.deleted, s.DeleteAfterPage
+	devs, deleteAfter := s.listLocked(), s.DeleteAfterPage
+	rename, replace, shifts := s.RenameAfterPage, s.ReplaceAfterPage, s.Shifts
 	s.mu.Unlock()
 	if s.Auth != "" && req.Authorization != s.Auth {
 		// Not recorded: no run sent a bad token (see Auth).
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"detail": "Invalid token"})
 		return
 	}
-	list := false
+	list, offset := false, 0
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == "/api/status/":
 		writeJSON(w, http.StatusOK, s.status)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/dcim/devices/":
-		s.rest(w, r, n, del)
+		s.rest(w, r, devs)
 		list = r.URL.Query().Get("limit") != "1" && !r.URL.Query().Has("name")
+		offset, _ = strconv.Atoi(r.URL.Query().Get("offset"))
 	case r.Method == http.MethodPost && r.URL.Path == s.gqlPath:
-		list = s.graphql(w, gql.Query, n, del)
+		list, offset = s.graphql(w, gql.Query, devs)
 	default:
 		http.NotFound(w, r)
 	}
@@ -259,32 +281,73 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		if s.pages++; deleteAfter > 0 && s.pages == deleteAfter {
 			s.n, s.deleted = s.n-1, s.deleted+1
 		}
+		if offset == 0 {
+			s.readPages = 0
+		}
+		s.readPages++
+		if shifts == 0 || s.shifted < shifts {
+			switch {
+			case rename > 0 && s.readPages == rename:
+				s.shiftLocked(true)
+			case replace > 0 && s.readPages == replace:
+				s.shiftLocked(false)
+			}
+		}
 		s.mu.Unlock()
 	}
 }
 
-// devices is the list as it stands, by device number: n devices, the first
-// del deleted, the last drop left out.
-func (s *Server) devices(n, del, drop int) []int {
-	out := []int{}
-	for j := 1; j <= n-drop; j++ {
-		out = append(out, j+del)
+// dev is one device: its number, which gives its id and addresses, and its
+// name.
+type dev struct {
+	num  int
+	name string
+}
+
+// listLocked is the list as it stands: n devices, the first deleted ones
+// gone, then the tail.
+func (s *Server) listLocked() []dev {
+	out := []dev{}
+	for j := 1; j <= s.n; j++ {
+		out = append(out, dev{j + s.deleted, Name(j + s.deleted)})
 	}
-	return out
+	return append(out, s.tail...)
+}
+
+// shiftLocked takes the list's first device away and puts at the end that
+// device renamed, or a new one.
+func (s *Server) shiftLocked(rename bool) {
+	var head dev
+	switch {
+	case s.n > 0:
+		head = dev{1 + s.deleted, Name(1 + s.deleted)}
+		s.n, s.deleted = s.n-1, s.deleted+1
+	case len(s.tail) > 0:
+		head, s.tail = s.tail[0], s.tail[1:]
+	default:
+		return
+	}
+	if rename {
+		s.tail = append(s.tail, dev{head.num, "z-" + head.name})
+	} else {
+		s.top++
+		s.tail = append(s.tail, dev{s.top, Name(s.top)})
+	}
+	s.shifted++
 }
 
 // named is the devices in devs named name: one, or none.
-func (s *Server) named(devs []int, name string) []int {
-	out := []int{}
-	for _, i := range devs {
-		if Name(i) == name {
-			out = append(out, i)
+func (s *Server) named(devs []dev, name string) []dev {
+	out := []dev{}
+	for _, d := range devs {
+		if d.name == name {
+			out = append(out, d)
 		}
 	}
 	return out
 }
 
-func (s *Server) rest(w http.ResponseWriter, r *http.Request, n, del int) {
+func (s *Server) rest(w http.ResponseWriter, r *http.Request, devs []dev) {
 	q := r.URL.Query()
 	limit, _ := strconv.Atoi(q.Get("limit"))
 	if limit <= 0 {
@@ -299,11 +362,10 @@ func (s *Server) rest(w http.ResponseWriter, r *http.Request, n, del int) {
 	}
 	// ?name= is the named device alone, count 1, as every stack answered
 	// it (rest-device*.json); a name no device has is count 0.
-	devs := s.devices(n, del, 0)
 	if name, ok := q["name"]; ok {
 		devs = s.named(devs, name[0])
 	}
-	n = len(devs)
+	n := len(devs)
 	results := []any{}
 	for j := offset; j < n && j < offset+limit; j++ {
 		results = append(results, s.device(base, devs[j], "rest", shallow))
@@ -465,7 +527,9 @@ func errorsOf(msgs ...string) map[string]any {
 	return map[string]any{"data": nil, "errors": errs}
 }
 
-func (s *Server) graphql(w http.ResponseWriter, query string, n, del int) bool {
+// graphql answers query, and says whether it was a page of the list, and
+// at which offset.
+func (s *Server) graphql(w http.ResponseWriter, query string, all []dev) (bool, int) {
 	s.mu.Lock()
 	for _, tok := range identifiers(query) {
 		if !s.recorded[tok] {
@@ -482,36 +546,37 @@ func (s *Server) graphql(w http.ResponseWriter, query string, n, del int) bool {
 	case s.GraphQLStatus != 0:
 		w.WriteHeader(s.GraphQLStatus)
 		io.WriteString(w, "<html>not here</html>")
-		return false
+		return false, 0
 	case s.GraphQL200Errors:
 		writeJSON(w, http.StatusOK, errorsOf(limitOffset...))
-		return false
+		return false, 0
 	case !isList || len(sel) != 1 || fields == nil:
 		// Not recorded: a query of anything but the device list.
 		writeJSON(w, http.StatusBadRequest, errorsOf("Cannot query field on type 'Query'."))
-		return false
+		return false, 0
 	}
 	// Unpaged, the list is every device. Not recorded past 120: L30 lists a
 	// GraphQL list larger than any server-side cap under Not observed.
-	offset, limit := 0, n
+	devs := all[:max(len(all)-s.DropFromGraphQL, 0)]
+	offset, limit := 0, len(devs)
 	// The filters L30 recorded, each answered as its stack answered it
 	// (graphql.json): the named device alone, or the stack's refusal. NetBox
 	// 4.7.1's name: falls to its recorded unknown-argument answer below.
 	if name, shape, ok := filterOf(query, s.list); ok {
 		switch {
 		case shape == "name" && s.Stack != "netbox-4", shape == "exact" && s.Stack == "netbox-4":
-			devs := []any{}
-			for _, i := range s.named(s.devices(n, del, s.DropFromGraphQL), name) {
-				devs = append(devs, project(s.device(s.gqlDev, i, "graphql", false), fields))
+			named := []any{}
+			for _, d := range s.named(devs, name) {
+				named = append(named, project(s.device(s.gqlDev, d, "graphql", false), fields))
 			}
-			writeJSON(w, http.StatusOK, map[string]any{"data": map[string]any{s.list: devs}})
-			return false
+			writeJSON(w, http.StatusOK, map[string]any{"data": map[string]any{s.list: named}})
+			return false, 0
 		case shape == "plain" && s.Stack == "netbox-4":
 			writeJSON(w, http.StatusOK, errorsOf(fmt.Sprintf("Expected value of type 'StrFilterLookup', found %q.", name)))
-			return false
+			return false, 0
 		case shape != "name" && s.Stack == "netbox-3.7":
 			writeJSON(w, http.StatusBadRequest, errorsOf("Unknown argument 'filters' on field 'Query.device_list'."))
-			return false
+			return false, 0
 		}
 	}
 	args := argsOf(query, s.list)
@@ -524,31 +589,31 @@ func (s *Server) graphql(w http.ResponseWriter, query string, n, del int) bool {
 		case "netbox-3.7":
 			writeJSON(w, http.StatusBadRequest,
 				errorsOf("Unknown argument 'pagination' on field 'Query.device_list'. Did you mean 'position'?"))
-			return false
+			return false, 0
 		default:
 			// Not recorded: no run asked Nautobot for pagination; it answers
 			// as an unknown argument would.
 			writeJSON(w, http.StatusBadRequest, errorsOf("Unknown argument 'pagination' on field 'Query.devices'."))
-			return false
+			return false, 0
 		}
 		var ok bool
 		if offset, limit, ok = offsetLimit(argsIn(args["pagination"])); !ok {
 			writeJSON(w, http.StatusBadRequest, errorsOf("Not recorded: a pagination shape no L30 list query used."))
-			return false
+			return false, 0
 		}
 	case len(args) == 2 && args["limit"] != "" && args["offset"] != "":
 		switch s.Stack {
 		case "netbox-4":
 			writeJSON(w, http.StatusOK, errorsOf(limitOffset...))
-			return false
+			return false, 0
 		case "netbox-3.7":
 			writeJSON(w, http.StatusBadRequest, errorsOf(limitOffset...))
-			return false
+			return false, 0
 		}
 		var ok bool
 		if offset, limit, ok = offsetLimit(args); !ok {
 			writeJSON(w, http.StatusBadRequest, errorsOf("Not recorded: a limit or offset no L30 list query used."))
-			return false
+			return false, 0
 		}
 	default:
 		// NetBox 4.7.1 answered an argument it does not know (name:) with
@@ -562,39 +627,40 @@ func (s *Server) graphql(w http.ResponseWriter, query string, n, del int) bool {
 		if s.Stack == "netbox-4" && len(unknown) > 0 {
 			sort.Strings(unknown)
 			writeJSON(w, http.StatusOK, errorsOf(unknown...))
-			return false
+			return false, 0
 		}
 		if _, lone := args["limit"]; lone && len(args) == 1 && s.product == "nautobot" {
 			// Not recorded: every Nautobot list query sent limit with offset.
 			writeJSON(w, http.StatusBadRequest, errorsOf("Not recorded: limit without offset."))
-			return false
+			return false, 0
 		}
 		// Not replayed: every other argument shape, a filter combined with
 		// paging among them; the replay refuses rather than answer the whole
 		// list.
 		writeJSON(w, http.StatusBadRequest, errorsOf("Not replayed: an argument shape the replay does not take."))
-		return false
+		return false, 0
 	}
-	devs := []any{}
-	for j := offset + 1; j <= n-s.DropFromGraphQL && j <= offset+limit; j++ {
-		devs = append(devs, project(s.device(s.gqlDev, j+del, "graphql", false), fields))
+	page := []any{}
+	for j := offset; j < len(devs) && j < offset+limit; j++ {
+		page = append(page, project(s.device(s.gqlDev, devs[j], "graphql", false), fields))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"data": map[string]any{s.list: devs}})
-	return true
+	writeJSON(w, http.StatusOK, map[string]any{"data": map[string]any{s.list: page}})
+	return true, offset
 }
 
-// device is device i: base with its name, its addresses and its status in
+// device is device v: base with its name, its addresses and its status in
 // the stack's spelling for api (L30), and no primary_ip6, as none was set.
-func (s *Server) device(base map[string]any, i int, api string, shallow bool) map[string]any {
+func (s *Server) device(base map[string]any, v dev, api string, shallow bool) map[string]any {
+	i := v.num
 	d := clone(base)
 	// Its own id, name, display and url: the connector refuses a list naming
 	// a device twice (pre-flight I1), and every clone of leaf-01 would
 	// otherwise share its id. The id is in the stack's recorded form, a
 	// number on NetBox and a UUID string on Nautobot (L30 rest-device*.json).
 	id, ipID := s.id(i, 8), s.id(i, 9)
-	d["name"], d["id"] = Name(i), id
+	d["name"], d["id"] = v.name, id
 	if _, ok := d["display"]; ok {
-		d["display"] = Name(i)
+		d["display"] = v.name
 	}
 	if _, ok := d["url"]; ok {
 		d["url"] = fmt.Sprintf("%s/api/dcim/devices/%v/", s.URL, id)
