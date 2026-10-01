@@ -83,6 +83,20 @@ type Metrics struct {
 	// body under the key), "in_progress" (the same body still minting), and
 	// "store_error" (the reservation could not be read or written).
 	BrokerIdempotency *prometheus.CounterVec
+	// port49_broker_tls_handshake_failures_total{reason}: handshakes the
+	// broker's listener did not complete (spec §13 decision 32): reason is
+	// untrusted_chain, identity_refused, server_cert_refused, timeout,
+	// client_closed or protocol.
+	BrokerHandshakeFailures *prometheus.CounterVec
+	// port49_broker_connection_events_total{event}: source_cap_refused (reset
+	// at accept, its source holding max_pending_conns_per_source),
+	// principal_cap_evicted (a principal's oldest held connection closed for
+	// its newest), revoked_closed (closed by a revocation), revoked_refused
+	// (closed at bind: its certificate or principal is marked).
+	BrokerConnectionEvents *prometheus.CounterVec
+	// port49_broker_connections{state}: pending (not yet bound to a
+	// principal: handshaking, or certificate-less) and held.
+	BrokerConnections *prometheus.GaugeVec
 	// port49_blob_cache_lookups_total{outcome}: the authorizer's per-replica
 	// blob cache, "hit" or "miss" (spec §5.1.1). A miss is one store read,
 	// counted again in port49_store_operations_total{op="get_blob"}; a hit
@@ -301,6 +315,12 @@ func New(reg prometheus.Registerer) *Metrics {
 			Help: "Mint items the broker could not decide, by API error code."}, []string{"error"}),
 		BrokerIdempotency: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_broker_idempotency_refusals_total",
 			Help: "Mint requests refused whole at their Idempotency-Key, by outcome."}, []string{"outcome"}),
+		BrokerHandshakeFailures: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_broker_tls_handshake_failures_total",
+			Help: "TLS handshakes the broker's listener did not complete, by reason."}, []string{"reason"}),
+		BrokerConnectionEvents: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_broker_connection_events_total",
+			Help: "Broker connections refused at accept or closed by the broker, by event."}, []string{"event"}),
+		BrokerConnections: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "port49_broker_connections",
+			Help: "Broker connections open now: pending (not yet bound to a principal) and held."}, []string{"state"}),
 		BlobCache: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_blob_cache_lookups_total",
 			Help: "Compiled-blob cache lookups by the authorizer, by outcome."}, []string{"outcome"}),
 		ContextRefreshes: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_context_refreshes_total",
@@ -360,7 +380,8 @@ func New(reg prometheus.Registerer) *Metrics {
 	})
 	reg.MustRegister(m.Requests, m.Latency, m.Decisions, m.Unvalidated, m.KeyValidations,
 		m.Connections, m.ConnectionEvents, m.AuthFailures, m.SpoolDepth, m.SpoolDrops, m.SpoolQuarantines,
-		m.StoreOps, m.DecisionLogWriteFailures, m.CryptOpenFailures, m.Attributions, m.BrokerItemErrors, m.BrokerIdempotency, m.BlobCache,
+		m.StoreOps, m.DecisionLogWriteFailures, m.CryptOpenFailures, m.Attributions, m.BrokerItemErrors, m.BrokerIdempotency,
+		m.BrokerHandshakeFailures, m.BrokerConnectionEvents, m.BrokerConnections, m.BlobCache,
 		m.DevicesQuarantined, m.DevicesAdmissionRefused, m.ContextRefreshes, m.TokensSuperseded, m.PolicyReloads, m.PolicyFileRefused,
 		m.PolicyRefreshPending, m.InventoryReloads, m.InventoryFileRefused, m.InventorySnapshotAge,
 		m.InventoryChanges, m.InventoryBundleSequence, m.InventoryPersistFailed, m.InventoryBundleRefused,
