@@ -174,19 +174,22 @@ func (b *Broker) Refresh(ctx context.Context, priors []Prior) (RefreshReport, er
 // minted is what a token for one principal on one device carries of its
 // policy, the bundle aside: every policy file has its own bundle, so comparing
 // it would supersede every token at every edit. ttl is the subject's
-// token_ttl, the longest the token can live.
+// token_ttl, the longest the token can live; age is the device's
+// max_session_age, zero for never.
 type minted struct {
 	username string
 	blob     []byte
 	ceiling  uint8
 	enable   string
 	ttl      time.Duration
+	age      time.Duration
 }
 
 // mintedBy is what p would mint for principal on d at at, and false when it
 // would mint nothing: no grant, a quarantine, or a refusal the broker makes as
-// an item error (policy.MintCheck).
-func mintedBy(p *policy.Policy, principal string, d admission.Device, at time.Time) (minted, bool) {
+// an item error (policy.MintCheck). def is port49d's max_session_age.
+func mintedBy(p *policy.Policy, principal string, d admission.Device, at time.Time,
+	def time.Duration) (minted, bool) {
 	res, err := p.Resolve(principal, d, at)
 	if err != nil {
 		return minted{}, false
@@ -201,16 +204,24 @@ func mintedBy(p *policy.Policy, principal string, d admission.Device, at time.Ti
 		return minted{}, false
 	}
 	return minted{username: res.Username, blob: body, ceiling: res.MaxPrivilege, enable: res.Enable,
-		ttl: res.TokenTTL}, true
+		ttl: res.TokenTTL, age: res.SessionAge.Of(def)}, true
 }
 
 // keeps reports whether a token m describes is one o would have minted: the
-// same answer, and a life no longer than o allows. A shortened token_ttl — an
-// incident's response, say — supersedes the tokens minted under the longer
-// one; a lengthened one does not, since those tokens live less than allowed.
+// same answer, and a life no longer than o allows. A shortened token_ttl or
+// max_session_age — an incident's response, say — supersedes the tokens
+// minted under the longer one; a lengthened one does not, since those tokens
+// live less than allowed.
 func (m minted) keeps(o minted) bool {
 	return m.username == o.username && bytes.Equal(m.blob, o.blob) && m.ceiling == o.ceiling &&
-		m.enable == o.enable && m.ttl <= o.ttl
+		m.enable == o.enable && m.ttl <= o.ttl && !longerAge(m.age, o.age)
+}
+
+// longerAge reports whether a ceiling of a outlasts one of b, zero being
+// never: a token minted under a longer ceiling than the policy in force
+// allows is superseded, as a longer token_ttl is (decision 33).
+func longerAge(a, b time.Duration) bool {
+	return b != 0 && (a == 0 || a > b)
 }
 
 // supersedeTokens deletes the unspent tokens of every (device, username) where
@@ -259,7 +270,7 @@ func (b *Broker) supersedeTokens(ctx context.Context, cur *policy.Policy, now ti
 					continue // the prior did not know it, so it minted nothing for it
 				}
 				for _, at := range instants {
-					was, ok := mintedFor(pr.Policy, principal, d, at)
+					was, ok := mintedFor(pr.Policy, principal, d, at, b.MaxSessionAge)
 					if !ok {
 						continue // nothing was minted then, so nothing is superseded
 					}
@@ -268,7 +279,7 @@ func (b *Broker) supersedeTokens(ctx context.Context, cur *policy.Policy, now ti
 						// A device the inventory in force no longer names mints
 						// nothing now, so every token for it is superseded.
 						if nd, ok := cur.Device(name); ok {
-							is.m, is.ok = mintedFor(cur, principal, nd, now)
+							is.m, is.ok = mintedFor(cur, principal, nd, now, b.MaxSessionAge)
 						}
 						current[[2]string{principal, name}] = is
 					}
@@ -430,7 +441,7 @@ func (b *Broker) refreshContext(ctx context.Context, cur *policy.Policy, priors 
 		}
 		// The blob is in the store, and in the log, before any context
 		// names it: the daemon's next command reads it by that name.
-		if err := b.putBlob(ctx, step.write.BlobHash, step.body); err != nil {
+		if err := b.putBlob(ctx, step.write.BlobHash, step.body, b.MaxSessionAge); err != nil {
 			return err
 		}
 		switch err := b.Store.SetContextPolicy(ctx, k, c.PolicyRev, *step.write); {

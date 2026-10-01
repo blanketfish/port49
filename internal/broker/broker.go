@@ -64,6 +64,9 @@ type Broker struct {
 	Now           func() time.Time
 	MaxSessionAge time.Duration
 	BatchMax      int
+	// CeilingWarning is session.ceiling_warning, told to the agent by
+	// /v1/config so `port49 token` warns too (plan 7b).
+	CeilingWarning time.Duration
 	// Redact is the redaction the blob event's rule text passes through
 	// before it is logged (spec §5.8): port49d passes the policy in force's.
 	// Nil is the built-in patterns.
@@ -141,7 +144,8 @@ func (b *Broker) authTime(r *http.Request) time.Time {
 
 func (b *Broker) config(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, api.Config{Methods: []string{"x509"},
-		MaxSessionAgeSeconds: int(b.MaxSessionAge / time.Second), BatchMax: b.BatchMax})
+		MaxSessionAgeSeconds: int(b.MaxSessionAge / time.Second), BatchMax: b.BatchMax,
+		CeilingWarningSeconds: int(b.CeilingWarning / time.Second)})
 }
 
 // deviceName reports whether name can be an inventory name: 1 to
@@ -561,12 +565,22 @@ func (b *Broker) mintOne(ctx context.Context, pol *policy.Policy, principal stri
 		b.logf("broker: the policy for %s on %q compiled to a blob the daemon would refuse: %s", principal, name, detail)
 		return b.fault(name, "broker_error", "the broker could not compile this device's policy; tell the operator"), nil
 	}
+	// The device's ceiling is the least of its roles' (spec §5.6). One that
+	// has passed since this connection authenticated would mint a token for a
+	// context born expired: refused for this device alone, and `port49
+	// refresh` resumes it (decision 33).
+	age := res.SessionAge.Of(b.MaxSessionAge)
+	if age > 0 && !b.Now().Before(authTime.Add(age)) {
+		item := deny(decision.SessionExpired, dev.Platform)
+		item.Detail = "this device's session ceiling has passed since you authenticated; run 'port49 refresh'"
+		return item, nil
+	}
 	body, hash, err := engine.Encode(res.Blob)
 	if err != nil {
 		b.logf("broker: the policy for %s on %q compiled to a blob the daemon would refuse: %v", principal, name, err)
 		return b.fault(name, "broker_error", "the broker could not compile this device's policy; tell the operator"), nil
 	}
-	if err := b.putBlob(ctx, hash, body); err != nil {
+	if err := b.putBlob(ctx, hash, body, blobTTL(age, b.MaxSessionAge)); err != nil {
 		return deny(decision.StoreUnavailable, dev.Platform), nil
 	}
 	b.mu.Lock()
@@ -574,7 +588,7 @@ func (b *Broker) mintOne(ctx context.Context, pol *policy.Policy, principal stri
 	b.mu.Unlock()
 	out, err := b.Minter.Mint(ctx, token.Request{
 		Subject: token.Subject{Principal: principal, Username: res.Username, TokenTTL: res.TokenTTL,
-			Enable: res.Enable, MaxPrivilege: res.MaxPrivilege, MaxSessionAge: b.MaxSessionAge,
+			Enable: res.Enable, MaxPrivilege: res.MaxPrivilege, MaxSessionAge: age,
 			Credential: cred, AuthTime: authTime},
 		Device: name, Platform: dev.Platform, BlobHash: hash, WithEnable: req.Enable,
 		TTL:         time.Duration(req.TTLSeconds) * time.Second,
@@ -595,12 +609,22 @@ func (b *Broker) mintOne(ctx context.Context, pol *policy.Policy, principal stri
 	item := api.MintItem{Device: name, Verdict: decision.VerdictPermit, Platform: dev.Platform,
 		Username: out.Username, Login: out.Login, Enable: out.Enable, ExpiresAt: out.ExpiresAt.UTC().Format(time.RFC3339),
 		Replayed: out.Replayed}
+	if age > 0 {
+		item.SessionExpiresAt = authTime.Add(age).UTC().Format(time.RFC3339)
+	}
 	if len(dev.Addresses) > 0 {
 		// A fact from the source of truth; the client must not trust it
 		// further than an SSH host key (design §17).
 		item.Address = dev.Addresses[0].String()
 	}
 	return item, nil
+}
+
+// blobTTL is how long a minted blob is kept: as long as the longest context
+// it can back at mint (decision 19). A `never` context keeps it alive by
+// the daemon's bump on activity (plan 7b, Task 6).
+func blobTTL(age, def time.Duration) time.Duration {
+	return max(age, def)
 }
 
 // fault is an item the broker could not decide: its own error, not a
@@ -613,10 +637,10 @@ func (b *Broker) fault(name, code, detail string) api.MintItem {
 
 // putBlob writes an encoded blob under its hash and emits it into the log the
 // first time this process writes it (spec §5.1.1; §13, decision 19). Its store
-// TTL is max_session_age: a context's session_expires is its auth_time plus
-// that, and auth_time is never later than the mint, so no context this blob
-// backs can outlive it. PutBlob keeps the later expiry, so a re-put never
-// shortens it. A blob is emitted once per process, and the log's first copy
+// TTL is ttl, at least the ceiling of any context it backs (blobTTL): a
+// context's session_expires is its auth_time plus that, and auth_time is never
+// later than the mint, so no context this blob backs can outlive it. PutBlob
+// keeps the later expiry, so a re-put never shortens it. A blob is emitted once per process, and the log's first copy
 // serves every later re-put, including one after the store's copy expired
 // (plan 3, Decided 8).
 //
@@ -631,8 +655,8 @@ func (b *Broker) fault(name, code, detail string) api.MintItem {
 // and a mint record naming a blob the log never carried cannot be replayed.
 // The refusal is counted by port49_decision_log_write_failures_total. An
 // Emitter that cannot report a refusal is trusted, as before.
-func (b *Broker) putBlob(ctx context.Context, hash string, body []byte) error {
-	if err := b.Store.PutBlob(ctx, hash, body, b.MaxSessionAge); err != nil {
+func (b *Broker) putBlob(ctx context.Context, hash string, body []byte, ttl time.Duration) error {
+	if err := b.Store.PutBlob(ctx, hash, body, ttl); err != nil {
 		return err
 	}
 	b.mu.Lock()

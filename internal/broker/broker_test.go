@@ -215,6 +215,33 @@ func TestAConnectionPastTheCeilingIsRefused(t *testing.T) {
 	}
 }
 
+// A device's ceiling is its roles', on the token and on the item; a device
+// whose ceiling has passed since the connection authenticated is refused
+// per item, session_expired, and another device on the same connection is
+// not (spec §5.6; decision 33).
+func TestTheMintCarriesEachDevicesCeiling(t *testing.T) {
+	f := newFixtureWithPolicy(t, 8, strings.Replace(testPolicy,
+		"{name: network_admin, privilege: admin, permit: [\"**\"]}",
+		"{name: network_admin, privilege: admin, permit: [\"**\"], max_session_age: 1h}", 1))
+	ctx := context.Background()
+	auth := f.now
+	r := decodeMint(t, f.post(ctx, f.state(f.alice), `{"devices":["leaf1"]}`, ""))
+	if r.Results[0].SessionExpiresAt != auth.Add(time.Hour).UTC().Format(time.RFC3339) {
+		t.Fatalf("session_expires_at: %+v", r.Results[0])
+	}
+	toks, _ := f.st.Candidates(ctx, store.TokenKey{NAS: "leaf1", Username: "alice"})
+	if len(toks) != 1 || toks[0].MaxSessionAge != time.Hour {
+		t.Fatalf("the token's max_session_age: %+v", toks)
+	}
+	// An hour on, on a connection that authenticated at auth: refused per item.
+	f.advance(time.Hour)
+	r = decodeMint(t, f.postAt(ctx, f.state(f.alice), `{"devices":["leaf1"]}`, "", auth))
+	if r.Results[0].Verdict != "deny" || r.Results[0].Reason != "session_expired" ||
+		!strings.Contains(r.Results[0].Detail, "port49 refresh") {
+		t.Fatalf("a device past its ceiling: %+v", r.Results[0])
+	}
+}
+
 // A retry with the same key and body replays the same tokens; the same key
 // with another body is a conflict and mints nothing (design §17). The key is
 // the principal's own: another caller sending it gets nothing of alice's.

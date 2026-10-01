@@ -8,6 +8,9 @@ type Config struct {
 	Methods              []string `json:"methods"`
 	MaxSessionAgeSeconds int      `json:"max_session_age_seconds"`
 	BatchMax             int      `json:"batch_max"`
+	// CeilingWarningSeconds is session.ceiling_warning: how near a device's
+	// ceiling `port49 token` warns (plan 7b).
+	CeilingWarningSeconds int `json:"ceiling_warning_seconds,omitempty"`
 }
 
 // MintRequest is POST /v1/tokens. TTLSeconds is a request, not an
@@ -36,6 +39,10 @@ type MintItem struct {
 	ExpiresAt string `json:"expires_at,omitempty"`
 	Error     string `json:"error,omitempty"`
 	Detail    string `json:"detail,omitempty"`
+	// SessionExpiresAt is when a login with this token stops being
+	// authorized: the connection's authentication plus the device's
+	// max_session_age (spec §5.6). Empty when the roles say never.
+	SessionExpiresAt string `json:"session_expires_at,omitempty"`
 	// Replayed is the broker's own, never on the wire: this permit is an
 	// idempotent replay, which recorded no permit of its own.
 	Replayed bool `json:"-"`

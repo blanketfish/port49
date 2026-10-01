@@ -801,6 +801,20 @@ func TestAShortenedTokenTTLSupersedesTokens(t *testing.T) {
 	}
 }
 
+// A role whose ceiling was shortened supersedes the tokens minted under the
+// longer one; a lengthened one does not (decision 33's shorten-only rule,
+// carried to tokens as token_ttl's is).
+func TestAShortenedCeilingSupersedesTokens(t *testing.T) {
+	long := minted{username: "a", ttl: time.Minute, age: 8 * time.Hour}
+	short := long
+	short.age = time.Hour
+	never := long
+	never.age = 0
+	if long.keeps(short) || !short.keeps(long) || never.keeps(long) || !long.keeps(never) {
+		t.Fatal("keeps must refuse a token whose ceiling is longer than the policy in force allows")
+	}
+}
+
 // A subject whose username changed can no longer mint under the name the
 // context is keyed by, so the context is revoked, and the record names no
 // grant: none selects this key any more.
@@ -896,9 +910,10 @@ func TestASettlePassComparesNoPolicyWithItself(t *testing.T) {
 	f := newFixture(t, 8)
 	mints := 0
 	was := mintedFor
-	mintedFor = func(p *policy.Policy, principal string, d admission.Device, at time.Time) (minted, bool) {
+	mintedFor = func(p *policy.Policy, principal string, d admission.Device, at time.Time,
+		def time.Duration) (minted, bool) {
 		mints++
-		return was(p, principal, d, at)
+		return was(p, principal, d, at, def)
 	}
 	t.Cleanup(func() { mintedFor = was })
 	if _, err := f.b.Refresh(context.Background(), []Prior{{Policy: f.b.Policy.Load(), At: f.now}}); err != nil {

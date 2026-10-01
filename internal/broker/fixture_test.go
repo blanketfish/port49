@@ -61,6 +61,12 @@ type fixture struct {
 // "bare" is in inventory with no platform, which admission.LoadFile allows.
 func newFixture(t *testing.T, candidateCap int) *fixture {
 	t.Helper()
+	return newFixtureWithPolicy(t, candidateCap, testPolicy)
+}
+
+// newFixtureWithPolicy is newFixture with policyText in place of testPolicy.
+func newFixtureWithPolicy(t *testing.T, candidateCap int, policyText string) *fixture {
+	t.Helper()
 	f := &fixture{log: &bytes.Buffer{}, now: time.Now().Truncate(time.Second)}
 	clock := func() time.Time {
 		f.mu.Lock()
@@ -69,7 +75,7 @@ func newFixture(t *testing.T, candidateCap int) *fixture {
 	}
 	f.st = memory.New(clock)
 	path := filepath.Join(t.TempDir(), "policy.yaml")
-	if err := os.WriteFile(path, []byte(testPolicy), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(policyText), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	devices := map[string]admission.Device{
@@ -146,6 +152,13 @@ func (f *fixture) post(ctx context.Context, cs *tls.ConnectionState, body, key s
 	w := httptest.NewRecorder()
 	f.b.Handler().ServeHTTP(w, r)
 	return w
+}
+
+// postAt is post on a connection that authenticated at at, as Server's
+// ConnContext gives every request on one connection.
+func (f *fixture) postAt(ctx context.Context, cs *tls.ConnectionState, body, key string,
+	at time.Time) *httptest.ResponseRecorder {
+	return f.post(withHeldConn(ctx, at), cs, body, key)
 }
 
 func (f *fixture) records(t *testing.T) []map[string]any {
