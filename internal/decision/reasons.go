@@ -48,9 +48,12 @@ const (
 	SessionExpired        Reason = "session_expired"
 	ContextStale          Reason = "context_stale"
 	CredentialRevoked     Reason = "credential_revoked"
-	DeviceUnknown         Reason = "device_unknown"
-	PlatformUnknown       Reason = "platform_unknown"
-	BlobUnavailable       Reason = "blob_unavailable"
+	// RevocationLifted: a revoke record for an operator lifting a revocation
+	// (spec §5.1.4, §5.7). A permit.
+	RevocationLifted Reason = "revocation_lifted"
+	DeviceUnknown    Reason = "device_unknown"
+	PlatformUnknown  Reason = "platform_unknown"
+	BlobUnavailable  Reason = "blob_unavailable"
 	// BlobPlatformMismatch: the context's blob was compiled for a platform
 	// other than the one the daemon's inventory gives this device. Its
 	// attributes and dialect are another platform's, so it is never answered
@@ -90,6 +93,10 @@ const (
 // It is a decision, so it has a verdict and a reason from the table above.
 const EventRefresh = "refresh"
 
+// EventRevoke is a revocation by principal or by certificate, or one lifted
+// (spec §5.1.4, §5.7): deny credential_revoked, or permit revocation_lifted.
+const EventRevoke = "revoke"
+
 const (
 	VerdictPermit = "permit"
 	VerdictDeny   = "deny"
@@ -103,7 +110,7 @@ var reasons = []Reason{
 	ContextMatched, EscalationGranted, PermitDominates, PipeStageDenied, ServiceUnsupported, EnableRefused,
 	CeilingExceeded, NoRuleMatched, NoPermitDominatesDeny, ContextMissing, UsernameMismatch, RemAddrMismatch,
 	PrivilegeExceeded, SessionExpired, ContextStale, CredentialRevoked, DeviceUnknown, PlatformUnknown,
-	BlobUnavailable, BlobPlatformMismatch, DeviceQuarantined, ProjectionFailClosed,
+	BlobUnavailable, BlobPlatformMismatch, DeviceQuarantined, ProjectionFailClosed, RevocationLifted,
 }
 
 // Known reports whether r is in spec §5.7's vocabulary. A policy test's

@@ -287,7 +287,7 @@ func TestARevokedCertificateNeverEvictsItsOwner(t *testing.T) {
 		held(t, f, addr, f.alice)
 	}
 	ask(t, rc, rbr)
-	stolenKey := store.CertKey(f.alice.Leaf.Issuer.String(), f.alice.Leaf.SerialNumber.Text(16))
+	stolenKey := certKey(f.alice)
 	bl.Revoked(store.RevocationCert, stolenKey, true)
 	for i := 0; i < 10; i++ {
 		c, err := tls.Dial("tcp", addr, &tls.Config{Certificates: []tls.Certificate{f.alice}, RootCAs: f.ca.Pool(),
@@ -324,7 +324,7 @@ func TestCloseHeldClosesWhatItNames(t *testing.T) {
 		t.Fatal("alice's connections are open")
 	}
 	ask(t, cc, cbr)
-	carolKey := store.CertKey(carol.Leaf.Issuer.String(), carol.Leaf.SerialNumber.Text(16))
+	carolKey := certKey(carol)
 	if n := bl.CloseHeld(func(_, ck string) bool { return ck == carolKey }); n != 1 || !closedByPeer(cc) {
 		t.Fatalf("closing carol's certificate closed %d", n)
 	}

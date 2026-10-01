@@ -32,6 +32,7 @@ import (
 	"github.com/rhwendt/port49/internal/engine"
 	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/policy"
+	"github.com/rhwendt/port49/internal/session"
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/token"
 )
@@ -48,7 +49,8 @@ const (
 	maxIdempotencyKey = 128
 )
 
-// Broker is the slice's broker. Every field is required.
+// Broker is the slice's broker. Every field is required but Redact, Conns and
+// Persist.
 type Broker struct {
 	// Policy is the policy in force. port49d swaps it when the file changes
 	// (plan 4b), and a request resolves against the one version it held from
@@ -63,8 +65,17 @@ type Broker struct {
 	BatchMax      int
 	// Redact is the redaction the blob event's rule text passes through
 	// before it is logged (spec §5.8): port49d passes the policy in force's.
-	// It is the one optional field; nil is the built-in patterns.
+	// Nil is the built-in patterns.
 	Redact platform.Redactor
+	// Sessions marks a revoked principal's or certificate's live contexts
+	// and deletes their receipts (Revoke). Required for Revoke.
+	Sessions *session.Manager
+	// Conns closes a revoked principal's or certificate's held connections:
+	// the Listener this broker is served through. Nil closes none.
+	Conns ConnCloser
+	// Persist writes the marks in force to broker.revocations_file after
+	// every change. Nil keeps them in the store alone.
+	Persist func(context.Context) error
 
 	mu        sync.Mutex
 	blobsSeen map[string]bool

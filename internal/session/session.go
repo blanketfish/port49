@@ -11,18 +11,16 @@
 // re-put of a copy read at the top of the request silently discards whichever
 // of them landed in between (store.Store's comment on TouchContext).
 //
-// What revocation here does NOT do: it does not delete the principal's
-// unredeemed tokens. Design §1182 puts that on the broker — "broker deletes on
-// revoke by principal, sid, or (device, username)" — and until the broker does
-// it, a revoked principal's unredeemed token still redeems. On a device where
-// the revoked context is still live the damage is contained: the token was
-// minted before the revocation, so the login is refused `credential_revoked`
-// and the token spent (package authen; spec §5.6). On a device with no live
-// context there is nothing to join, and the redemption writes a fresh context
-// with no revoked_at on it. The operator sees a revocation that marked every
-// context and deleted every receipt, and then a PERMIT on a device they
-// thought they had closed, with no log line connecting the two. Plan 7 owns
-// closing this.
+// What revocation here does NOT do: delete the principal's unredeemed
+// tokens. The broker does that, through the token index, before it calls
+// RevokeByPrincipal or RevokeByCert, and calls them twice (broker.Revoke,
+// plan 7a): a token deleted first cannot redeem into a fresh context the
+// marking missed, and the second pass marks a context a redemption already
+// in flight wrote. One window remains: a redemption that removed its token
+// before the broker's delete and writes its context after the second pass,
+// one store round trip wide. It writes a fresh context with no revoked_at.
+// Closing it needs the redemption and the revocation to meet atomically in
+// the store, which is plan 7d's.
 //
 // Which of the refs returned here is unreachable at the device — a
 // session-only platform, spec §13 decision 21 — is the caller's question, not
