@@ -733,7 +733,7 @@ func TestRunRestoresRevocationsBeforeTheBrokerServes(t *testing.T) {
 				!strings.Contains(body, "revoked at 2026-10-02T03:12:09Z") {
 				t.Fatalf("by %s: alice's connection: %d %s %v", mark.Kind, status, body, err)
 			}
-			waitForCount(t, &out, "credential_revoked: user:alice@example.com or its certificate is revoked", i+1)
+			waitForCount(t, &out, "as it bound: user:alice@example.com or its certificate is revoked", i+1)
 			stop()
 		}
 	})

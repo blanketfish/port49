@@ -347,8 +347,8 @@ func (l *Listener) bind(c *trackedConn, principal, certKey string) (*store.Revoc
 		// that.
 		l.mu.Unlock()
 		l.m.BrokerConnectionEvents.WithLabelValues("revoked_refused").Inc()
-		l.say("revoked_refused", "port49d: broker: refused a connection from %s as it bound, answering its "+
-			"request credential_revoked: %s or its certificate is revoked", c.src, principal)
+		l.say("revoked_refused", "port49d: broker: answering a connection from %s credential_revoked and "+
+			"closing it as it bound: %s or its certificate is revoked", c.src, principal)
 		return &store.Revocation{Kind: k[0], Key: k[1], At: at}, true
 	}
 	l.unpendLocked(c.src)
