@@ -36,6 +36,12 @@ type Metrics struct {
 	// GenericDevices is how many devices the last good sync's bundle serves
 	// with the generic adapter (spec §8, "Unknown platforms").
 	GenericDevices prometheus.Gauge
+	// Webhooks counts deliveries on webhook_listen, by source (configuration;
+	// "" when the path names none) and outcome (accepted, duplicate, stale,
+	// bad_signature, unsigned, too_large, bad_body, bad_content_type,
+	// unknown_source, bad_path; tls_handshake, source "", from the server's
+	// error log).
+	Webhooks *prometheus.CounterVec
 }
 
 func NewMetrics(reg prometheus.Registerer) *Metrics {
@@ -69,7 +75,10 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		Help: "1 while a source's fetch, abandoned past sync_timeout, has not returned."}, []string{"source"})
 	m.GenericDevices = prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_inventory_generic_platform_devices",
 		Help: "Devices in the last good sync whose platform has no adapter in the policy."})
+	m.Webhooks = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_inventory_webhooks_total",
+		Help: "Webhook deliveries, by source and outcome."}, []string{"source", "outcome"})
 	reg.MustRegister(m.Syncs, m.SyncRefused, m.SyncFailing, m.SourceErrors, m.LeftOut, m.Published, m.PublishedAt,
-		m.Devices, m.LastGood, m.MirrorFailures, m.MirrorBehind, m.APIRefused, m.SourceHung, m.GenericDevices)
+		m.Devices, m.LastGood, m.MirrorFailures, m.MirrorBehind, m.APIRefused, m.SourceHung, m.GenericDevices,
+		m.Webhooks)
 	return m
 }

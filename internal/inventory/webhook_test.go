@@ -1,0 +1,433 @@
+package inventory
+
+import (
+	"bytes"
+	"crypto/hmac"
+	"crypto/sha512"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
+)
+
+const hookSecret = "l33-unit-test-webhook-secret-0123456789"
+
+type hookRig struct {
+	h        *Webhooks
+	now      time.Time
+	notified []string
+	out      *bytes.Buffer
+}
+
+func newHookRig(now time.Time) *hookRig {
+	rig := &hookRig{now: now, out: &bytes.Buffer{}}
+	rig.h = &Webhooks{Secrets: map[string][]byte{"netbox_prod": []byte(hookSecret)},
+		Notify: func(s string) { rig.notified = append(rig.notified, s) }, Now: func() time.Time { return rig.now },
+		Log: rig.out, Metrics: NewMetrics(prometheus.NewRegistry())}
+	return rig
+}
+
+func sign(body []byte, secret string) string {
+	mac := hmac.New(sha512.New, []byte(secret))
+	mac.Write(body)
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+func (rig *hookRig) deliver(path string, body []byte, sig, ctype string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(body))
+	req.RemoteAddr = "10.0.0.9:51000"
+	if ctype != "" {
+		req.Header.Set("Content-Type", ctype)
+	}
+	if sig != "" {
+		req.Header.Set("X-Hook-Signature", sig)
+	}
+	w := httptest.NewRecorder()
+	rig.h.Handler().ServeHTTP(w, req)
+	return w
+}
+
+func (rig *hookRig) count(source, outcome string) float64 {
+	return testutil.ToFloat64(rig.h.Metrics.Webhooks.WithLabelValues(source, outcome))
+}
+
+func body(ts string) []byte {
+	return []byte(`{"event": "updated", "timestamp": "` + ts + `", "object_type": "dcim.device", "data": {"name": "leaf-01"}}`)
+}
+
+// L27, L30: every delivery recorded, re-signed with this test's secret and
+// read at the instant it arrived, is taken — both timestamp spellings,
+// NetBox's (T) and Nautobot's (space).
+func TestTheRecordedDeliveriesAuthenticate(t *testing.T) {
+	files, _ := filepath.Glob(filepath.Join("..", "..", "tests", "lab", "sot", "*", "*", "webhooks.json"))
+	if len(files) < 6 {
+		t.Fatalf("found %d recorded webhooks.json", len(files))
+	}
+	n := 0
+	for _, f := range files {
+		raw, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var rec struct {
+			Deliveries []struct {
+				At   time.Time       `json:"at"`
+				Body json.RawMessage `json:"body"`
+			} `json:"deliveries"`
+		}
+		if err := json.Unmarshal(raw, &rec); err != nil {
+			t.Fatal(err)
+		}
+		for _, d := range rec.Deliveries {
+			rig := newHookRig(d.At)
+			if w := rig.deliver("/v1/webhook/netbox_prod", d.Body, sign(d.Body, hookSecret), "application/json"); w.Code !=
+				http.StatusAccepted || len(rig.notified) != 1 {
+				t.Fatalf("%s: %d %s", f, w.Code, w.Body)
+			}
+			n++
+		}
+	}
+	if n < 15 {
+		t.Fatalf("only %d deliveries read", n)
+	}
+}
+
+// Decision 31: an unsigned or mis-signed delivery triggers nothing, is said
+// once per source and outcome, and the log never holds the secret, the
+// signature or the body.
+func TestAnUnsignedOrMisSignedDeliveryTriggersNothing(t *testing.T) {
+	now := time.Date(2026, 10, 1, 2, 0, 0, 0, time.UTC)
+	rig := newHookRig(now)
+	b := body("2026-10-01T02:00:00.000000+00:00")
+	bad := sign(b, "a-different-secret-of-thirty-two-chars")
+	for i := 0; i < 3; i++ {
+		if w := rig.deliver("/v1/webhook/netbox_prod", b, "", "application/json"); w.Code != http.StatusUnauthorized {
+			t.Fatalf("unsigned: %d", w.Code)
+		}
+		if w := rig.deliver("/v1/webhook/netbox_prod", b, bad, "application/json"); w.Code != http.StatusUnauthorized {
+			t.Fatalf("mis-signed: %d", w.Code)
+		}
+		if w := rig.deliver("/v1/webhook/netbox_prod", b, "zz", "application/json"); w.Code != http.StatusUnauthorized {
+			t.Fatalf("not hex: %d", w.Code)
+		}
+	}
+	if len(rig.notified) != 0 || rig.count("netbox_prod", HookUnsigned) != 3 || rig.count("netbox_prod", HookBadSignature) != 6 {
+		t.Fatalf("%v %v %v", rig.notified, rig.count("netbox_prod", HookUnsigned), rig.count("netbox_prod", HookBadSignature))
+	}
+	log := rig.out.String()
+	if strings.Count(log, "(bad_signature)") != 1 || strings.Count(log, "(unsigned)") != 1 ||
+		!strings.Contains(log, "port49-inventory: webhook: refused a delivery for source netbox_prod from 10.0.0.9 "+
+			"(bad_signature): the webhook's secret in the source must be the value webhook_secret_env names") {
+		t.Fatalf("%s", log)
+	}
+	for _, leak := range []string{hookSecret, bad, "leaf-01", "updated"} {
+		if strings.Contains(log, leak) {
+			t.Fatalf("the log holds %q: %s", leak, log)
+		}
+	}
+}
+
+func TestAStaleDeliveryTriggersNothing(t *testing.T) {
+	b := body("2026-10-01 02:00:00.000000+00:00")
+	for _, now := range []time.Time{time.Date(2026, 10, 1, 2, 5, 1, 0, time.UTC), time.Date(2026, 10, 1, 1, 54, 59, 0, time.UTC)} {
+		rig := newHookRig(now)
+		if w := rig.deliver("/v1/webhook/netbox_prod", b, sign(b, hookSecret), "application/json"); w.Code !=
+			http.StatusBadRequest || len(rig.notified) != 0 || rig.count("netbox_prod", HookStale) != 1 {
+			t.Fatalf("%s: %d", now, w.Code)
+		}
+	}
+	rig := newHookRig(time.Date(2026, 10, 1, 2, 4, 59, 0, time.UTC))
+	if w := rig.deliver("/v1/webhook/netbox_prod", b, sign(b, hookSecret), "application/json"); w.Code != http.StatusAccepted {
+		t.Fatalf("inside the window: %d", w.Code)
+	}
+}
+
+// A delivery taken once is not taken again inside the window: a replay, or
+// a product's retry of one it did not see answered, triggers once.
+func TestARepeatedDeliveryTriggersOnce(t *testing.T) {
+	rig := newHookRig(time.Date(2026, 10, 1, 2, 0, 0, 0, time.UTC))
+	b := body("2026-10-01T02:00:00.000000+00:00")
+	for i := 0; i < 3; i++ {
+		if w := rig.deliver("/v1/webhook/netbox_prod", b, sign(b, hookSecret), "application/json"); w.Code != http.StatusAccepted {
+			t.Fatalf("%d", w.Code)
+		}
+	}
+	if len(rig.notified) != 1 || rig.count("netbox_prod", HookDuplicate) != 2 || rig.count("netbox_prod", HookAccepted) != 1 {
+		t.Fatalf("%v", rig.notified)
+	}
+}
+
+func TestWhatIsNotADeliveryIsRefusedUnread(t *testing.T) {
+	rig := newHookRig(time.Date(2026, 10, 1, 2, 0, 0, 0, time.UTC))
+	b := body("2026-10-01T02:00:00.000000+00:00")
+	big := append([]byte(`{"timestamp": "2026-10-01T02:00:00+00:00", "x": "`), bytes.Repeat([]byte("a"), maxWebhookBody)...)
+	big = append(big, `"}`...)
+	for name, c := range map[string]struct {
+		path  string
+		body  []byte
+		sig   string
+		ctype string
+		code  int
+		label string
+	}{
+		"too large":      {"/v1/webhook/netbox_prod", big, sign(big, hookSecret), "application/json", 413, HookTooLarge},
+		"not json":       {"/v1/webhook/netbox_prod", b, sign(b, hookSecret), "text/plain", 415, HookBadContentType},
+		"no timestamp":   {"/v1/webhook/netbox_prod", []byte(`{"event": "x"}`), sign([]byte(`{"event": "x"}`), hookSecret), "application/json", 400, HookBadBody},
+		"unknown source": {"/v1/webhook/evil%1Bsource", b, sign(b, hookSecret), "application/json", 401, HookUnknownSource},
+		"not a webhook":  {"/v1/bundle", b, sign(b, hookSecret), "application/json", 404, HookBadPath},
+		"unclean path":   {"/v1/webhook/../webhook/netbox_prod", b, sign(b, hookSecret), "application/json", 404, HookBadPath},
+	} {
+		if w := rig.deliver(c.path, c.body, c.sig, c.ctype); w.Code != c.code {
+			t.Errorf("%s: %d", name, w.Code)
+		}
+		src := "netbox_prod"
+		if c.label == HookUnknownSource || c.label == HookBadPath {
+			src = "" // the caller's text is never a label value
+		}
+		if rig.count(src, c.label) < 1 {
+			t.Errorf("%s: not counted as %s", name, c.label)
+		}
+	}
+	if len(rig.notified) != 0 {
+		t.Fatalf("%v", rig.notified)
+	}
+	if strings.Contains(rig.out.String(), "evil") {
+		t.Fatalf("echoed the path: %s", rig.out)
+	}
+}
+
+// The first delivery a source authenticates is said, and so is the first
+// after a refusal was said.
+func TestAuthenticationIsSaidOnceAndAgainAfterARefusal(t *testing.T) {
+	rig := newHookRig(time.Date(2026, 10, 1, 2, 0, 0, 0, time.UTC))
+	for i, ts := range []string{"2026-10-01T02:00:00.1+00:00", "2026-10-01T02:00:00.2+00:00"} {
+		b := body(ts)
+		rig.deliver("/v1/webhook/netbox_prod", b, sign(b, hookSecret), "application/json")
+		if n := strings.Count(rig.out.String(), "deliveries authenticate"); n != 1 {
+			t.Fatalf("delivery %d: said %d times", i, n)
+		}
+	}
+	b := body("2026-10-01T02:00:00.3+00:00")
+	rig.deliver("/v1/webhook/netbox_prod", b, "", "application/json")
+	b = body("2026-10-01T02:00:00.4+00:00")
+	rig.deliver("/v1/webhook/netbox_prod", b, sign(b, hookSecret), "application/json")
+	if !strings.Contains(rig.out.String(), "port49-inventory: webhook: source netbox_prod's deliveries authenticate "+
+		"again (from 10.0.0.9)") {
+		t.Fatalf("%s", rig.out)
+	}
+}
+
+// Pre-flight M9: every 401 has one body, so a wrong name and a right one
+// read alike.
+func TestEvery401ReadsAlike(t *testing.T) {
+	rig := newHookRig(time.Date(2026, 10, 1, 2, 0, 0, 0, time.UTC))
+	b := body("2026-10-01T02:00:00.000000+00:00")
+	for _, path := range []string{"/v1/webhook/netbox_prod", "/v1/webhook/not_a_source"} {
+		w := rig.deliver(path, b, sign(b, "a-different-secret-of-thirty-two-chars"), "application/json")
+		if w.Code != http.StatusUnauthorized || strings.TrimSpace(w.Body.String()) != `{"error":"unauthorized"}` {
+			t.Fatalf("%s: %d %s", path, w.Code, w.Body)
+		}
+	}
+}
+
+// Pre-flight M11: a full cache still remembers the newest delivery.
+func TestAFullReplayCacheRemembersTheNewest(t *testing.T) {
+	now := time.Date(2026, 10, 1, 2, 0, 0, 0, time.UTC)
+	h := &Webhooks{}
+	for i := 0; i < maxSeen; i++ {
+		h.remember(fmt.Sprintf("k%d", i), now.Add(time.Duration(i)*time.Millisecond))
+	}
+	if !h.remember("newest", now.Add(time.Second)) || h.remember("newest", now.Add(time.Second)) {
+		t.Fatal("the newest delivery was not remembered")
+	}
+	if len(h.seen) != maxSeen {
+		t.Fatalf("%d remembered", len(h.seen))
+	}
+}
+
+// Pre-flight M10: a handshake error is counted and not logged; another line
+// is said once.
+func TestTheWebhookErrorLogCountsHandshakes(t *testing.T) {
+	m := NewMetrics(prometheus.NewRegistry())
+	var out bytes.Buffer
+	l := WebhookErrorLog(m, &out)
+	for i := 0; i < 3; i++ {
+		l.Printf("http: TLS handshake error from 10.0.0.%d:5000: EOF", i)
+		l.Printf("http: Accept error: too many open files")
+	}
+	if testutil.ToFloat64(m.Webhooks.WithLabelValues("", HookTLSHandshake)) != 3 ||
+		strings.Count(out.String(), "Accept error") != 1 || strings.Contains(out.String(), "handshake") {
+		t.Fatalf("%s", out.String())
+	}
+}
+
+func TestBothRecordedTimestampSpellingsParse(t *testing.T) {
+	for _, s := range []string{"2026-09-30T15:43:34.000898+00:00", "2026-09-30 15:52:04.757496+00:00",
+		"2026-09-30T15:43:34+00:00"} {
+		if _, err := parseHookTime(s); err != nil {
+			t.Errorf("%s: %v", s, err)
+		}
+	}
+	if _, err := parseHookTime("yesterday"); err == nil {
+		t.Fatal("parsed nonsense")
+	}
+}
+
+// endless streams a JSON-looking body that never ends, counting what was
+// read: a sender still writing when the cap is reached.
+type endless struct{ n int }
+
+func (e *endless) Read(p []byte) (int, error) {
+	if e.n == 0 && len(p) > 0 {
+		p[0] = '{'
+		e.n++
+		return 1, nil
+	}
+	for i := range p {
+		p[i] = 'a'
+	}
+	e.n += len(p)
+	return len(p), nil
+}
+
+// A body still streaming when the cap is reached is refused 413 having read
+// no more than the cap, and triggers nothing.
+func TestAStreamingBodyIsCutAtTheCap(t *testing.T) {
+	rig := newHookRig(time.Date(2026, 10, 1, 2, 0, 0, 0, time.UTC))
+	src := &endless{}
+	req := httptest.NewRequest(http.MethodPost, "/v1/webhook/netbox_prod", src)
+	req.ContentLength = -1
+	req.RemoteAddr = "10.0.0.9:51000"
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Hook-Signature", sign([]byte("{}"), hookSecret))
+	w := httptest.NewRecorder()
+	rig.h.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusRequestEntityTooLarge || rig.count("netbox_prod", HookTooLarge) != 1 || len(rig.notified) != 0 {
+		t.Fatalf("%d %v", w.Code, rig.notified)
+	}
+	if src.n > maxWebhookBody+64<<10 {
+		t.Fatalf("read %d bytes past a cap of %d", src.n, maxWebhookBody)
+	}
+}
+
+// Decision 31: a delivery dated ahead of this host's clock past the window
+// is refused like one behind it.
+func TestAFutureDeliveryTriggersNothing(t *testing.T) {
+	rig := newHookRig(time.Date(2026, 10, 1, 2, 0, 0, 0, time.UTC))
+	b := body("2026-10-01T02:05:01+00:00")
+	if w := rig.deliver("/v1/webhook/netbox_prod", b, sign(b, hookSecret), "application/json"); w.Code !=
+		http.StatusBadRequest || len(rig.notified) != 0 || rig.count("netbox_prod", HookStale) != 1 {
+		t.Fatalf("%d %v", w.Code, rig.notified)
+	}
+}
+
+// Every outcome, said or not, leaves the secret, the signature and the body
+// out of the log and out of the answer.
+func TestNoOutcomeLeaksTheSecretTheSignatureOrTheBody(t *testing.T) {
+	rig := newHookRig(time.Date(2026, 10, 1, 2, 0, 0, 0, time.UTC))
+	rig.h.Secrets["nautobot_dc2"] = []byte("second-source-webhook-secret-abcdef")
+	good := body("2026-10-01T02:00:00.5+00:00")
+	stale := body("2026-10-01T01:00:00+00:00")
+	noTS := []byte(`{"event": "updated", "data": {"name": "leaf-01"}}`)
+	notJSON := []byte(`event=updated&name=leaf-01`)
+	var sigs []string
+	send := func(path string, b []byte, sig, ctype string) {
+		sigs = append(sigs, sig)
+		w := rig.deliver(path, b, sig, ctype)
+		for _, leak := range []string{hookSecret, "second-source-webhook-secret-abcdef", "leaf-01", "updated"} {
+			if strings.Contains(w.Body.String(), leak) {
+				t.Fatalf("%s answered %q: %s", path, leak, w.Body)
+			}
+		}
+	}
+	for _, src := range []string{"netbox_prod", "nautobot_dc2"} {
+		p := "/v1/webhook/" + src
+		secret := string(rig.h.Secrets[src])
+		send(p, good, sign(good, secret), "application/json")
+		send(p, good, sign(good, secret), "application/json")
+		send(p, good, sign(good, "a-different-secret-of-thirty-two-chars"), "application/json")
+		send(p, good, "", "application/json")
+		send(p, good, sign(good, secret), "text/plain")
+		send(p, stale, sign(stale, secret), "application/json")
+		send(p, noTS, sign(noTS, secret), "application/json")
+		send(p, notJSON, sign(notJSON, secret), "application/json")
+	}
+	send("/v1/webhook/leaf-01", good, sign(good, hookSecret), "application/json")
+	send("/v1/leaf-01", good, sign(good, hookSecret), "application/json")
+	l := WebhookErrorLog(rig.h.Metrics, rig.out)
+	l.Printf("http: TLS handshake error from 10.0.0.1:5000: tls: first record does not look like a TLS handshake")
+	log := rig.out.String()
+	if log == "" {
+		t.Fatal("nothing was said")
+	}
+	leaks := []string{hookSecret, "second-source-webhook-secret-abcdef", "leaf-01", "updated", "event="}
+	for _, s := range sigs {
+		if s != "" {
+			leaks = append(leaks, s, s[:32])
+		}
+	}
+	for _, leak := range leaks {
+		if strings.Contains(log, leak) {
+			t.Fatalf("the log holds %q: %s", leak, log)
+		}
+	}
+	if len(rig.notified) != 2 {
+		t.Fatalf("%v", rig.notified)
+	}
+}
+
+// Deliveries arriving at once from two sources are each taken once (run
+// with -race).
+func TestConcurrentDeliveriesAreTakenOnce(t *testing.T) {
+	rig := newHookRig(time.Date(2026, 10, 1, 2, 0, 0, 0, time.UTC))
+	var mu sync.Mutex
+	rig.h.Notify = func(s string) { mu.Lock(); rig.notified = append(rig.notified, s); mu.Unlock() }
+	rig.h.Log = &syncBuffer{}
+	h := rig.h.Handler()
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		for j := 0; j < 16; j++ {
+			wg.Add(1)
+			go func(i, j int) {
+				defer wg.Done()
+				b := body(fmt.Sprintf("2026-10-01T02:00:00.%02d+00:00", i))
+				sig := sign(b, hookSecret)
+				if j%4 == 3 {
+					sig = ""
+				}
+				req := httptest.NewRequest(http.MethodPost, "/v1/webhook/netbox_prod", bytes.NewReader(b))
+				req.RemoteAddr = "10.0.0.9:51000"
+				req.Header.Set("Content-Type", "application/json")
+				if sig != "" {
+					req.Header.Set("X-Hook-Signature", sig)
+				}
+				h.ServeHTTP(httptest.NewRecorder(), req)
+			}(i, j)
+		}
+	}
+	wg.Wait()
+	if len(rig.notified) != 8 || rig.count("netbox_prod", HookAccepted) != 8 || rig.count("netbox_prod", HookUnsigned) != 32 {
+		t.Fatalf("%d notified, %v accepted", len(rig.notified), rig.count("netbox_prod", HookAccepted))
+	}
+}
+
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
