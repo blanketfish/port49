@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1132,5 +1133,74 @@ func TestARemovalIsConfirmedAgainstTheBundleInForce(t *testing.T) {
 	rig.sync(t)
 	if got := other.against[0]; got == nil || len(got) != 0 {
 		t.Fatalf("a new source confirmed against %q", got)
+	}
+}
+
+// baselineSource keeps its own baseline as sot.Source does: ConfirmAgainst
+// sets it, and a Fetch that returns replaces it with the names it read. Its
+// first Fetch after hold is set waits for release. seen is the baseline each
+// Fetch began with.
+type baselineSource struct {
+	mu      sync.Mutex
+	inv     admission.Inventory
+	last    []string
+	seen    [][]string
+	hold    bool
+	release chan struct{}
+}
+
+func (b *baselineSource) Name() string { return "a" }
+func (b *baselineSource) ConfirmAgainst(names []string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.last = slices.Clone(names)
+}
+func (b *baselineSource) Fetch(context.Context) (admission.Inventory, error) {
+	b.mu.Lock()
+	b.seen = append(b.seen, slices.Clone(b.last))
+	hold, inv := b.hold, b.inv
+	b.hold = false
+	b.mu.Unlock()
+	if hold {
+		<-b.release
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.last = nil
+	for _, d := range inv.Devices {
+		b.last = append(b.last, d.Name)
+	}
+	return inv, nil
+}
+
+// Final re-review N1: the bundle's names are handed over after the syncer
+// has waited for a fetch an earlier sync cut short, so that call's return,
+// which replaces the source's baseline with what it read, cannot overwrite
+// them.
+func TestTheBaselineIsGivenAfterACutShortFetchReturns(t *testing.T) {
+	rig := newSyncRig(t, syncPolicy, devices(3))
+	src := &baselineSource{inv: devices(3), release: make(chan struct{})}
+	rig.s.Sources, rig.s.Timeout = []Source{src}, 5*time.Second
+	if res := rig.sync(t); res.Outcome != OutcomePublished {
+		t.Fatalf("%+v", res)
+	}
+	// Cut short by its caller: the call stays out, and will read one device.
+	src.mu.Lock()
+	src.hold, src.inv = true, devices(1)
+	src.mu.Unlock()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	rig.s.Sync(ctx, "schedule")
+	done := make(chan Result)
+	go func() { done <- rig.s.Sync(context.Background(), "schedule") }()
+	// The next sync is waiting for the call cut short; let it return.
+	time.Sleep(50 * time.Millisecond)
+	close(src.release)
+	<-done
+	src.mu.Lock()
+	defer src.mu.Unlock()
+	want := []string{"leaf-01", "leaf-02", "leaf-03"}
+	if got := src.seen[len(src.seen)-1]; !slices.Equal(got, want) {
+		t.Fatalf("the fetch after the cut-short call began from %q, want the bundle's %q", got, want)
 	}
 }

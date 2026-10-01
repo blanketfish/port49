@@ -168,8 +168,11 @@ type fetchOut struct {
 // not one per sync. A sync that caller's end cuts short — a shutdown, a
 // client's hang-up — stops waiting at once, without marking the source
 // hung: the next fetch of it waits for that call within its own bound, and
-// abandons it if it is still out at the end. Called under mu.
-func (s *Syncer) fetch(ctx, caller context.Context, src Source) (admission.Inventory, error) {
+// abandons it if it is still out at the end. A Confirmer is given the names
+// prev, the bundle in force, holds for it just before the new call, after
+// any call still out has returned, since that call's return replaces its
+// baseline with what it read (final re-review N1). Called under mu.
+func (s *Syncer) fetch(ctx, caller context.Context, src Source, prev *Published) (admission.Inventory, error) {
 	name := src.Name()
 	if o := s.out[name]; o != nil {
 		if !o.abandoned {
@@ -197,6 +200,9 @@ func (s *Syncer) fetch(ctx, caller context.Context, src Source) (admission.Inven
 	type got struct {
 		inv admission.Inventory
 		err error
+	}
+	if c, ok := src.(Confirmer); ok && prev != nil {
+		c.ConfirmAgainst(append([]string{}, prev.Doc.Sources[name]...))
 	}
 	ch, done := make(chan got, 1), make(chan struct{})
 	go func() {
@@ -478,11 +484,8 @@ func (s *Syncer) sync(ctx, caller context.Context, only []string) Result {
 	for _, src := range s.Sources {
 		got, cached := s.fetched[src.Name()]
 		if !cached || len(only) == 0 || slices.Contains(only, src.Name()) {
-			if c, ok := src.(Confirmer); ok && prev != nil {
-				c.ConfirmAgainst(append([]string{}, prev.Doc.Sources[src.Name()]...))
-			}
 			var err error
-			if got, err = s.fetch(ctx, caller, src); err != nil {
+			if got, err = s.fetch(ctx, caller, src, prev); err != nil {
 				if caller.Err() == nil {
 					s.Metrics.SourceErrors.WithLabelValues(src.Name()).Inc()
 				}
