@@ -390,3 +390,164 @@ func TestARevocationBehindAHungWriteIsReportedUnsaved(t *testing.T) {
 	}
 	settle(t, release, brk.Persist)
 }
+
+// holdWrites makes every revocations file write say so on entered, then
+// block until gate is closed; persistHook is reset at cleanup.
+func holdWrites(t *testing.T) (entered chan struct{}, gate chan struct{}) {
+	t.Helper()
+	entered, gate = make(chan struct{}, 16), make(chan struct{})
+	w, pd, h := writeRevocations, persistDeadline, persistHook
+	writeRevocations = func(path string, rs []store.Revocation) error {
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
+		<-gate
+		return saveRevocations(path, rs)
+	}
+	t.Cleanup(func() {
+		select {
+		case <-gate:
+		default:
+			close(gate)
+		}
+		writeRevocations, persistDeadline, persistHook = w, pd, h
+	})
+	return entered, gate
+}
+
+// holdAt makes persistHook stop at point: it says so on reached and waits
+// for proceed to be closed.
+func holdAt(point string) (reached, proceed chan struct{}) {
+	reached, proceed = make(chan struct{}), make(chan struct{})
+	persistHook = func(p string) {
+		if p == point {
+			close(reached)
+			<-proceed
+		}
+	}
+	return reached, proceed
+}
+
+// waitUntil polls cond for up to five seconds.
+func waitUntil(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); !cond(); time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("waited for %s", what)
+		}
+	}
+}
+
+func fileHolds(path, key string) func() bool {
+	return func() bool { raw, _ := os.ReadFile(path); return strings.Contains(string(raw), key) }
+}
+
+// A call that gives up waiting for the slot just after the pass it waited
+// behind took its last look starts the catch-up itself: otherwise the mark
+// put during that pass would wait for the next revocation to reach the
+// file, under an alarm a restart would answer by losing it (Task 9
+// re-review R1, variant a).
+func TestACallThatGivesUpAsThePassEndsCatchesTheFileUp(t *testing.T) {
+	ctx := context.Background()
+	m := newMetrics()
+	st := memory.New(time.Now)
+	path := filepath.Join(safeDir(t), "revocations.json")
+	persist := persister(st, path, m)
+	entered, gate := holdWrites(t)
+	put := func(key string) {
+		if err := st.PutRevocation(ctx, store.Revocation{Kind: store.RevocationPrincipal, Key: key, At: time.Now(),
+			Origin: "test"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	put("user:alice@example.com")
+	persistDeadline = 5 * time.Second
+	first := make(chan error, 1)
+	go func() { first <- persist(ctx) }()
+	<-entered // the first call's pass has listed alice alone and is writing
+	put("user:bob@example.com")
+	persistDeadline = 50 * time.Millisecond
+	reached, proceed := holdAt("slot_wait_gave_up")
+	second := make(chan error, 1)
+	go func() { second <- persist(ctx) }()
+	<-reached // the second call has given up waiting, and not yet said so
+
+	close(gate)
+	if err := <-first; err != nil {
+		t.Fatal(err)
+	}
+	if fileHolds(path, "user:bob@example.com")() {
+		t.Fatal("the first pass listed bob")
+	}
+	close(proceed)
+	if err := <-second; err == nil || !strings.Contains(err.Error(), "an earlier write has not returned") {
+		t.Fatalf("the second call: %v", err)
+	}
+	waitUntil(t, "the file to hold bob with no further call", fileHolds(path, "user:bob@example.com"))
+	waitUntil(t, "the alarm to clear", func() bool { return testutil.ToFloat64(m.RevocationsFileFailed) == 0 })
+	persistDeadline = 5 * time.Second
+	if err := persist(ctx); err != nil { // settles: the slot is free once the catch-up has returned
+		t.Fatal(err)
+	}
+}
+
+// A call whose deadline strikes during its own write: if the pass answers
+// before the call gives up, the answer stands and no alarm is left up; if
+// the call gives up first, the pass sees it and writes again, so a mark put
+// after the call returned reaches the file and the alarm clears (Task 9
+// re-review R1, variant b).
+func TestACallWhoseWriteAnswersAsItGivesUp(t *testing.T) {
+	for _, answersFirst := range []bool{true, false} {
+		ctx := context.Background()
+		m := newMetrics()
+		st := memory.New(time.Now)
+		path := filepath.Join(safeDir(t), "revocations.json")
+		persist := persister(st, path, m)
+		entered, gate := holdWrites(t)
+		if err := st.PutRevocation(ctx, store.Revocation{Kind: store.RevocationPrincipal,
+			Key: "user:alice@example.com", At: time.Now(), Origin: "test"}); err != nil {
+			t.Fatal(err)
+		}
+		m.RevocationsFileFailed.Set(1) // an earlier failure, for the pass to clear
+		persistDeadline = 50 * time.Millisecond
+		reached, proceed := holdAt("write_wait_gave_up")
+		call := make(chan error, 1)
+		go func() { call <- persist(ctx) }()
+		<-entered
+		<-reached // the deadline has struck; the call has not yet looked for an answer
+
+		if answersFirst {
+			close(gate)
+			waitUntil(t, "the pass to answer", func() bool { return testutil.ToFloat64(m.RevocationsFileFailed) == 0 })
+			close(proceed)
+			if err := <-call; err != nil {
+				t.Fatalf("a pass that answered as the deadline struck was reported failed: %v", err)
+			}
+			if testutil.ToFloat64(m.RevocationsFileFailed) != 0 {
+				t.Fatal("a false alarm was left up")
+			}
+		} else {
+			close(proceed)
+			if err := <-call; err == nil || !strings.Contains(err.Error(), "the write did not return") {
+				t.Fatalf("the call: %v", err)
+			}
+			if testutil.ToFloat64(m.RevocationsFileFailed) != 1 {
+				t.Fatal("not alarmed")
+			}
+			if err := st.PutRevocation(ctx, store.Revocation{Kind: store.RevocationPrincipal,
+				Key: "user:bob@example.com", At: time.Now(), Origin: "test"}); err != nil {
+				t.Fatal(err)
+			}
+			close(gate)
+			waitUntil(t, "the file to hold bob", fileHolds(path, "user:bob@example.com"))
+			waitUntil(t, "the alarm to clear", func() bool { return testutil.ToFloat64(m.RevocationsFileFailed) == 0 })
+		}
+		persistHook = func(string) {}
+		persistDeadline = 5 * time.Second
+		if err := persist(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+}

@@ -162,10 +162,12 @@ func restoreRevocations(ctx context.Context, st store.Store, path string, m *met
 }
 
 // writeRevocations is persister's write, swapped in tests; persistDeadline
-// bounds one call of it.
+// bounds one call of it. persistHook is called at the named points where a
+// call gives up, so a test can hold it there; it does nothing in port49d.
 var (
 	writeRevocations = saveRevocations
 	persistDeadline  = 5 * time.Second
+	persistHook      = func(point string) {}
 )
 
 // persister is Broker.Persist: it lists every mark in force and writes the
@@ -181,72 +183,91 @@ var (
 // under its own deadline, so a write abandoned by one call can never land
 // after a newer one and drop a mark.
 //
-// A call that gives up leaves the file behind the store (dirty). The
-// goroutine holding the slot lists and writes again until a pass ends with
-// nothing behind it, so once a hung write returns the file catches up with
-// every mark put during the hang, with no further revocation; the alarm is
-// lowered only by a pass that leaves the file holding them all. It never
-// calls Revoke or Lift, which hold the semaphore this is called under.
+// A call that gives up leaves the file behind the store (dirty), and the
+// file is caught up without another revocation. Two steps are each taken
+// under mu, so neither can fall between the other's parts: a pass's last
+// look at dirty together with its giving back the slot and its answer, and
+// a call's giving up together with its marking dirty and trying the slot.
+// So a call that gives up either finds a pass yet to look, which then lists
+// and writes again, or finds the slot free and starts that pass itself.
+// The alarm is lowered only by a pass that wrote every mark in force and
+// found nothing behind it; a call whose pass answered as its deadline
+// struck takes the answer, not the timeout. It never calls Revoke or Lift,
+// which hold the semaphore this is called under.
 func persister(st store.Store, path string, m *metrics.Metrics) func(context.Context) error {
 	slot := make(chan struct{}, 1)
-	var mu sync.Mutex // dirty and the alarm
+	var mu sync.Mutex // dirty, the alarm, and a pass's last look and release
 	dirty := false
-	behind := func() {
-		mu.Lock()
-		dirty = true
-		m.RevocationsFileFailed.Set(1)
-		mu.Unlock()
+	// pass lists and writes, holding the slot, until a pass leaves nothing
+	// behind, or one fails; then it gives back the slot and answers done.
+	pass := func(ctx context.Context, deadline time.Duration, write func(string, []store.Revocation) error,
+		done chan<- error) {
+		for {
+			mu.Lock()
+			dirty = false
+			mu.Unlock()
+			pctx, cancel := context.WithTimeout(ctx, deadline)
+			rs, err := st.ListRevocations(pctx)
+			cancel()
+			if err == nil {
+				countRevocations(rs, m)
+				err = write(path, rs)
+			}
+			mu.Lock()
+			if err == nil && dirty {
+				mu.Unlock()
+				continue
+			}
+			if err != nil {
+				m.RevocationsFileFailed.Set(1)
+			} else {
+				m.RevocationsFileFailed.Set(0)
+			}
+			<-slot
+			done <- err // buffered: never blocks
+			mu.Unlock()
+			return
+		}
 	}
 	return func(ctx context.Context) error {
-		deadline := persistDeadline
+		deadline, write, hook := persistDeadline, writeRevocations, persistHook // read before any goroutine: tests swap them
 		ctx, cancel := context.WithTimeout(ctx, deadline)
 		defer cancel()
+		// A pass may outlive this call, so each is bounded on its own.
+		detached := context.WithoutCancel(ctx)
 		select {
 		case slot <- struct{}{}:
 		case <-ctx.Done():
-			behind()
+			hook("slot_wait_gave_up")
+			mu.Lock()
+			dirty = true
+			m.RevocationsFileFailed.Set(1)
+			select {
+			case slot <- struct{}{}:
+				// The pass this call waited behind has finished: nothing
+				// else will catch the file up, so this starts it.
+				go pass(detached, deadline, write, make(chan error, 1))
+			default:
+			}
+			mu.Unlock()
 			return fmt.Errorf("%s: an earlier write has not returned (%w)", path, ctx.Err())
 		}
-		write := writeRevocations // read before the goroutine: a test swaps the variable back while it blocks
-		// A pass may outlive this call, so each is bounded on its own.
-		detached := context.WithoutCancel(ctx)
 		done := make(chan error, 1)
-		go func() {
-			defer func() { <-slot }()
-			for {
-				mu.Lock()
-				dirty = false
-				mu.Unlock()
-				pctx, cancel := context.WithTimeout(detached, deadline)
-				rs, err := st.ListRevocations(pctx)
-				cancel()
-				if err == nil {
-					countRevocations(rs, m)
-					err = write(path, rs)
-				}
-				mu.Lock()
-				switch {
-				case err != nil:
-					m.RevocationsFileFailed.Set(1)
-				case !dirty:
-					m.RevocationsFileFailed.Set(0)
-				default:
-					mu.Unlock()
-					continue
-				}
-				mu.Unlock()
-				done <- err
-				return
-			}
-		}()
+		go pass(detached, deadline, write, done)
 		var err error
 		select {
 		case err = <-done:
 		case <-ctx.Done():
+			hook("write_wait_gave_up")
+			mu.Lock()
 			select {
-			case err = <-done: // it returned as the deadline struck: its answer stands
+			case err = <-done: // it answered as the deadline struck: its answer stands
+				mu.Unlock()
 			default:
-				behind()
+				// The pass has yet to take its last look, so it sees this.
+				dirty = true
+				m.RevocationsFileFailed.Set(1)
+				mu.Unlock()
 				return fmt.Errorf("%s: the write did not return (%w)", path, ctx.Err())
 			}
 		}
