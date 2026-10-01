@@ -1888,8 +1888,8 @@ required with `disabled: true` as the opt-out.
 **Lab (Task 12)**, all five images on beehive, 2026-10-01 (`tests/lab/results/L34-*.md`, `L2-*.md`,
 `session-*.md`; captures `tests/lab/evidence/session-<platform>.pcap`):
 
-- **IOS-XE 17.13.01a.** L34: the warning shown before the prompt and with each permitted command's
-  output; still a permit. L2: a denial shown in full, 64–1000 bytes. Session: the ceiling denial,
+- **IOS-XE 17.13.01a.** L34: the warning shown before the prompt at login and with `show version`'s
+  output, inside a 2m warning window; still a permit. L2: a denial shown in full, 64–1000 bytes. Session: the ceiling denial,
   the grace-window refresh that resumed, and "session ended" after it, each printed as port49 wrote
   it.
 - **vEOS-lab 4.31.2F (image tagged 4.32.2F).** L34: not shown; still a permit. L2: shown in full,
@@ -1959,15 +1959,16 @@ notes", amended):
   window (log in again there), not extended this time (run it again), or not reached (Junos keeps
   its own session). One refresh per connection per 10s.
   - `port49 login` with an agent already running for the same broker and certificate says
-    `already logged in to <broker>; refreshing` and refreshes. With another broker or certificate it
+    `port49: already logged in to <broker>; refreshing` and refreshes. With another broker or certificate it
     exits 1 naming the running agent's broker.
   - With today's PEM key files a refresh proves you hold the key file, not that you are at the
     keyboard; a script running `port49 refresh` in a loop keeps sessions alive indefinitely. Keep
     key files readable only by their owner; a hardware key (plan 9) adds the touch.
 - **The warning.** Within `session.ceiling_warning` (default 30m) of the end:
-  - On IOS-XE, permitted commands print `port49: session ends in Nm - run 'port49 refresh'` after
-    their output, and the login prints it before the prompt. A script that reads command output on
-    IOS-XE sees that line in a session's last 30m.
+  - On IOS-XE port49 adds `port49: session ends in Nm - run 'port49 refresh'` to every permitted
+    reply in that window. The lab (a 2m window) saw IOS-XE print it before the prompt at login and
+    with `show version`'s output, so a script that reads command output on IOS-XE should expect
+    that line near a session's end.
   - EOS, NX-OS and Junos show nothing (L34). There, `port49 token` is the warning: `port49: your
     session on <device> ends at <time> (in Nm); run 'port49 refresh'` on stderr, `--json` included.
     It does so on every platform.

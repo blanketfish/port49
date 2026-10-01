@@ -12,8 +12,8 @@ import "slices"
 // session.ceiling_warning_platforms. A table in code, not in a platform
 // set: a released set is never edited.
 var ceilingWarningOn = map[string]bool{
-	// Shown before the prompt at login and after a permitted command's
-	// output, which still ran (tests/lab/results/L34-cisco_iosxe.md).
+	// Shown before the prompt at login and with show version's output, which
+	// still ran (tests/lab/results/L34-cisco_iosxe.md).
 	"cisco_iosxe": true,
 }
 

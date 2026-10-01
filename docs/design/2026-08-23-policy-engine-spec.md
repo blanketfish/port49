@@ -1575,8 +1575,8 @@ strength of one authentication event.*
 A session approaching the ceiling is **warned in the session** where the device allows it. The
 authorization REPLY carries `server_msg`, so the operator is told on the device before anything
 stops working; of the measured images only IOS-XE shows it on a permit (L34, closed), and
-everywhere else the warning is `port49 token`'s (as built, below) — and re-authentication does not require reconnecting, because the
-broker can refresh live context (§5.1.3) through the `contexts_by_principal` index
+everywhere else the warning is `port49 token`'s (as built, below) — and re-authentication does
+not require reconnecting, because the broker can refresh live context (§5.1.3) through the `contexts_by_principal` index
 (illustrative; as built below):
 
 ```
@@ -1644,9 +1644,10 @@ forcing a reconnect. Requirements:
   - It rides on the `server_msg` of permitted session and command authorization replies, within
     `session.ceiling_warning` (default 30m) of `session_expires`, to the platforms §15 L34 found
     show it and still permit, and to any an operator lists in `session.ceiling_warning_platforms`.
-  - L34 found one: `cisco_iosxe`. IOS-XE shows `port49: session ends in Nm - run 'port49
-    refresh'` before the prompt at login and with each permitted command's output, and the
-    command still runs (`tests/lab/results/L34-cisco_iosxe.md`).
+  - L34 found one: `cisco_iosxe`. In a run with a 2m `session.ceiling_warning`, IOS-XE showed
+    `port49: session ends in Nm - run 'port49 refresh'` before the prompt at login and with the
+    output of `show version`, the one command the run checked, and the command still ran
+    (`tests/lab/results/L34-cisco_iosxe.md`).
   - EOS, NX-OS and Junos showed nothing and are off the list
     (`tests/lab/results/L34-arista_eos.md`, `L34-cisco_nxos.md`, `L34-juniper_vjunos-router.md`,
     `L34-juniper_vsrx.md`). Their operators are warned of the ceiling only by the agent: `port49
@@ -5568,7 +5569,8 @@ rights, is plan 7c's.
 policy in force still grants (§5.6). The agent signs the broker's nonce with the certificate's key
 over the held connection, and prints one line per device: extended to when, revoked by the policy,
 past its grace window, not judged, or on a platform the extension cannot reach. `port49 login` does
-the same while a session is held, and once after a new one connects. `port49 token` warns on stderr
+the same while a session is held for the same broker and certificate, and exits 1 naming the running
+agent's broker otherwise; it also refreshes once after a new one connects. `port49 token` warns on stderr
 when the device's session ends within `session.ceiling_warning`. `port49 explain` prints a subject's
 ceiling on a device.
 
@@ -6755,7 +6757,7 @@ implemented against a guess. This section is the one place the distinction is ke
 | **L31** | What break-glass costs on IOS-XE and NX-OS with single-connection on, when port49d resets a de-admitted device's connection after the device has written its request: a device removed from inventory (unadmitted), refused admission, or quarantined. For each: break-glass login plus three commands against port49d stopped, and whether the device's retries after the reset are refused at Accept before it writes. | That a de-admitted or quarantined device costs the device what a refused connection does, and falls to its local method at once (§10, "A quarantined device gets silence, not FAIL"; the reload paragraph under "How a daemon refreshes its snapshot"; §15 L29) | IOS-XE, NX-OS (single-connection on) | closed — measured 2026-09-30; tests/lab/results/L31-cisco_iosxe.md, L31-cisco_nxos.md, L31-arista_eos.md. With `fix/breakglass-reset` and single-connection on, break-glass login plus three commands took, removed, refused and quarantined, 1.28 s, 1.78 s and 1.78 s on the C8000V and 2.62 s, 2.58 s and 2.61 s on the N9Kv, against the rekeyed control's 1.28 s and 2.61 s and port49d stopped's 1.31 s and 2.66 s; every declined phase's retries were refused at Accept before the device wrote; vEOS, the no-regression check, took 0.33 s, 0.32 s and 0.32 s against 0.34 s and 0.37 s. Before the fix (observed 2026-09-30, cause analysed; tests/lab/results/L31-breakglass-cisco-singleconnection.md): Catalyst 8000V 17.13.01a and Nexus 9300v 10.4(2)F, from plan 6b's L29 and quarantine-sync captures (header flag `0x04`), break-glass took 30.1 s and 40.9 s removed, 20.6 s and 17.6 s refused, 20.3 s and 16.7 s quarantined, against 1.28 s and 2.62 s stopped, and 1.53 s and 2.6 s re-keyed, where a key miss's retries are refused at Accept |
 | **L32** | What the inventory service's NetBox and Nautobot connectors read as built (plan 6c), from each measured release: the GraphQL list query with every field the connector asks for (`status`, `primary_ip4`, `primary_ip6`, the map's paths, every interface address), paged as the profile pages it, returning every device once and matching REST's `count`; the REST fallback (`?depth=1` under the `nautobot_2` profile) to a null `next`; and both through a TLS-terminating reverse proxy that sends the client's host as `Host` alone, and through one that sends the upstream's name as `Host` and the client's as `X-Forwarded-Host`: which header each release builds `next` from, and whether the connector reads every device through each, following `next` or rebuilding it on its `url`. | Plan 6c's connectors: the query per profile, the count check, following or rebuilding `next` (§10, "Connectors and sync cadence"; §13, decision 31) | NetBox 3.7 and 4.x; Nautobot 1.6, 2.x and 3.x | closed — measured 2026-10-01; tests/lab/results/L32-netbox.md, L32-nautobot.md. NetBox 3.7.8 and 4.7.1 build `next` from `X-Forwarded-Host` when the proxy sends it and from `Host` otherwise, and take `https` only from `X-Forwarded-Proto`; behind a proxy that sends neither, both named their own `http://netbox:8080`. Nautobot 1.6.32, 2.4.43 and 3.2.6 do the same, naming `http://nautobot:8080`. The connector as built read all 120 devices of each stack, once each, through all three TLS-terminating nginx 1.27 proxies (the client's host as `Host`; the upstream's as `Host` and the client's as `X-Forwarded-Host`; a bare `proxy_pass`), over GraphQL and over REST, 50 to a page; through the bare proxy it rebuilt every REST `next` on its `url`, said so once, and read all 120 on all five. Every release's GraphQL device list gives `id`, a string, which the connector keys the list by. *Unmeasured:* a proxy sending `X-Forwarded-Host` without `X-Forwarded-Proto`, a `next` naming another path, a GraphQL list above a server cap, and a list changing between pages; see below |
 | **L33** | What NetBox and Nautobot do delivering a webhook to port49-inventory's `webhook_listen`, per measured release: whether each delivers to an `https` payload URL whose certificate a private CA issued (`ca_file_path`, `ssl_verification` on); whether port49-inventory authenticates every delivery as it arrives (HMAC-SHA512 of the body, `X-Hook-Signature`) and finds its `timestamp` inside the 5-minute window; how long a change takes from the API write to the published bundle; whether a delivery port49-inventory refuses (HTTP 401) is sent again; and, end to end on one device, how long a NetBox and a Nautobot change takes to reach port49d's admission through the webhook. | Plan 6c's webhook trigger: TLS on the webhook listener, the freshness window, the 401 answer (§10; §13, decision 31) | NetBox 3.7 and 4.x; Nautobot 1.6, 2.x and 3.x; vEOS-lab for the device run | closed — measured 2026-10-01; tests/lab/results/L33-netbox.md, L33-nautobot.md, L33-e2e-netbox-arista_eos.md, L33-e2e-nautobot-arista_eos.md. NetBox 3.7.8 and 4.7.1 and Nautobot 1.6.32, 2.4.43 and 3.2.6 each delivered to an `https` payload URL under a private CA's certificate, `ssl_verification` on, from the first change; port49-inventory authenticated every delivery, and none was stale. From the API write to the published bundle, the 2 s settle included, took 2.43–2.73 s on NetBox and 3.57–4.07 s on Nautobot. A delivery refused 401 was not sent again within 120 s on any release, nor one a stand-in listener answered 503 (port49-inventory itself never answers a delivery 503; final review M1): at their defaults neither product retries a webhook (NetBox's `RQ_RETRY_MAX` is 0; Nautobot's `process_webhook` has no retry). End to end on vEOS-lab 4.31.2F (image tagged 4.32.2F), a NetBox 4.7.1 change reached port49d's reload in 2.53–4.95 s and a Nautobot 3.2.6 change in 4.49–6.98 s; a status the default filter removes left the device with no grant, break-glass logged in, and the status restored let token logins in again. *Unmeasured:* a certificate from the worker's default trust store, a burst inside the 30 s gap, NetBox with `RQ_RETRY_MAX` set, and a delivery while port49-inventory shuts down or is down, which the next start's sync covers; see below |
-| **L34** | Whether a device shows the `server_msg` port49 puts on a **permitted** authorization reply — the session reply at login, and a per-command reply — and still treats the reply as a permit: the command's output appears and the session goes on. | The session-ceiling warning (§5.6, plan 7b; decision 33): sent only to the platforms this row finds show it and still permit (`platform.CeilingWarning`, an allow-list), or that an operator lists | EOS, NX-OS, IOS-XE, Junos | closed — measured 2026-10-01; tests/lab/results/L34-cisco_iosxe.md, L34-arista_eos.md, L34-cisco_nxos.md, L34-juniper_vjunos-router.md, L34-juniper_vsrx.md. Inside a 2m `session.ceiling_warning`, the session permit at login and each command permit carried the warning (the records), and every image still treated the reply as a permit: the login reached a prompt and `show version`'s output appeared. **IOS-XE 17.13.01a: shown**, before the prompt at login and with the permitted command's output; on the allow-list. **vEOS-lab 4.31.2F (image tagged 4.32.2F): not shown**, at login or on a command. **NX-OS 10.4(2)F: not shown**, at login or on a command. **vJunos-router 23.4R2-S2.1 and vSRX 21.4R3.15: not shown** at login, and there is no per-command reply to show it (decision 21). EOS, NX-OS and Junos stay off the allow-list, and their operators are warned by `port49 token` (§5.6); see below |
+| **L34** | Whether a device shows the `server_msg` port49 puts on a **permitted** authorization reply — the session reply at login, and a per-command reply — and still treats the reply as a permit: the command's output appears and the session goes on. | The session-ceiling warning (§5.6, plan 7b; decision 33): sent only to the platforms this row finds show it and still permit (`platform.CeilingWarning`, an allow-list), or that an operator lists | EOS, NX-OS, IOS-XE, Junos | closed — measured 2026-10-01; tests/lab/results/L34-cisco_iosxe.md, L34-arista_eos.md, L34-cisco_nxos.md, L34-juniper_vjunos-router.md, L34-juniper_vsrx.md. Inside a 2m `session.ceiling_warning`, the session permit at login and each command permit carried the warning (the records), and every image still treated the reply as a permit: the login reached a prompt and `show version`'s output appeared. **IOS-XE 17.13.01a: shown**, before the prompt at login and with `show version`'s output, the one command checked; on the allow-list. **vEOS-lab 4.31.2F (image tagged 4.32.2F): not shown**, at login or on a command. **NX-OS 10.4(2)F: not shown**, at login or on a command. **vJunos-router 23.4R2-S2.1 and vSRX 21.4R3.15: not shown** at login, and there is no per-command reply to show it (decision 21). EOS, NX-OS and Junos stay off the allow-list, and their operators are warned by `port49 token` (§5.6); see below |
 
 **What has been measured so far, per row.** The measurements exist and the notes are in the
 repository. NX-OS was measured on 2026-09-20 and is no longer outstanding; **IOS-XE was
@@ -6876,6 +6878,12 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
 
   *Unmeasured until 2026-10-01:* the truncation length on any platform — EOS, NX-OS and IOS-XE all
   authorize the command word alone, so no long `server_msg` was ever built.
+
+  The notes these paragraphs cite were replaced by the 2026-10-01 run; their earlier text is at
+  `git show 52a81e7^:tests/lab/results/L2-<platform>.md` (the 61-character runs, and the output
+  modifiers). The IOS-XE exec-channel finding is in commit b825b52's message, and the first IOS-XE
+  note, which read the exec channels as "NOT displayed", is at `git show
+  bfe59f1:tests/lab/results/L2-cisco_iosxe.md`.
 
   **Measured 2026-10-01 by plan 7b Task 12, on all five images.** The lab built the long message
   itself: `lab.deny_message_length: N` pads the denial of `show clock` with `0123456789` repeated
@@ -8598,7 +8606,7 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
 
   | Image | Session permit at login | Command permit | Still a permit |
   |---|---|---|---|
-  | IOS-XE 17.13.01a | shown before the prompt | shown with the output | yes |
+  | IOS-XE 17.13.01a | shown before the prompt | shown with `show version`'s output | yes |
   | vEOS-lab 4.31.2F (image tagged 4.32.2F) | not shown | not shown | yes |
   | NX-OS 10.4(2)F | not shown | not shown | yes |
   | vJunos-router 23.4R2-S2.1 | not shown | none sent (decision 21) | yes |
@@ -8608,8 +8616,9 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
   `L34-juniper_vjunos-router.md`, `L34-juniper_vsrx.md`; captures
   `tests/lab/evidence/session-<platform>.pcap`. NX-OS ran at `4bd3100`, vJunos-router at
   `6dece62`, the rest at `ec50053`. So `cisco_iosxe` alone is on `platform.CeilingWarning`'s
-  list. On IOS-XE the line follows each permitted command's output for the last
-  `session.ceiling_warning` of a session, which a script reading command output sees too.
+  list. On IOS-XE the line was among `show version`'s output inside the 2m window, so a script
+  reading command output there sees it too; that every command shows it over a full 30m window,
+  and where the line falls relative to the output, were not measured.
 
 Entries are added when a new claim is made, never removed. A closed entry keeps its row so a
 later reader can find the evidence.
