@@ -1005,4 +1005,28 @@ func TestTheSessionAgeIsTheLeastOfTheRoles(t *testing.T) {
 			t.Errorf("%v with default %s: %s, want %s", tc.ages, tc.def, got, tc.want)
 		}
 	}
+	// A role a scope attaches composes too: its shorter ceiling applies.
+	p := mustParse(t, "scopes: [{name: all_devices, match: {}, attached_roles: {humans: [r1]}}]\nroles:\n"+
+		"  - {name: r0, privilege: admin, permit: [\"**\"], max_session_age: 8h}\n"+
+		"  - {name: r1, deny: [reload **], max_session_age: 1h}\n"+
+		"subjects: [{name: s, identity: [\"user:a@example.com\"], username: a, token_ttl: 60s}]\n"+
+		"grants: [{subject: s, scope: all_devices, roles: [r0]}]\n")
+	res, err := p.Resolve("user:a@example.com", deviceNamed(t, "leaf-01"), noon)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := res.Attached["r1"]; !ok {
+		t.Fatalf("r1 was not attached: %+v", res.Roles)
+	}
+	if got := res.SessionAge.Of(12 * time.Hour); got != time.Hour {
+		t.Errorf("an attached role's 1h: %s, want 1h", got)
+	}
+}
+
+// A SessionAge no composition filled is not never: it takes the finite
+// default, so a Resolution built by hand fails closed.
+func TestAZeroSessionAgeTakesTheDefault(t *testing.T) {
+	if got := (Resolution{}).SessionAge.Of(12 * time.Hour); got != 12*time.Hour {
+		t.Errorf("a zero Resolution's ceiling: %s, want the 12h default", got)
+	}
 }

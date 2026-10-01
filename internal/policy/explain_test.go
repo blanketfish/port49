@@ -278,7 +278,7 @@ func TestExplainSaysTheSessionAge(t *testing.T) {
 	}{
 		{[]string{"2h", ""}, "session     max_session_age the lesser of 2h0m0s and session.max_session_age_default"},
 		{[]string{"2h", "8h"}, "session     max_session_age 2h0m0s (the least of its roles')"},
-		{[]string{"never", ""}, "session     max_session_age session.max_session_age_default (no role names one)"},
+		{[]string{"never", ""}, "session     max_session_age session.max_session_age_default (no role names a finite one)"},
 		{[]string{"never"}, "session     max_session_age never (every role says never)"},
 	} {
 		_, out := explained(t, sessionAgePolicy(t, tc.ages...), "s", "", "leaf-01", "", false)

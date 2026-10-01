@@ -401,10 +401,10 @@ func (e Explanation) Render(w io.Writer, showAttributes bool) {
 	}
 	fmt.Fprintf(w, "  level       %s; max_privilege %s\n", level, ceiling)
 	switch a := r.SessionAge; {
-	case a.Least == 0 && !a.Unset:
+	case a.Never:
 		fmt.Fprintf(w, "  session     max_session_age never (every role says never)\n")
 	case a.Least == 0:
-		fmt.Fprintf(w, "  session     max_session_age session.max_session_age_default (no role names one)\n")
+		fmt.Fprintf(w, "  session     max_session_age session.max_session_age_default (no role names a finite one)\n")
 	case a.Unset:
 		fmt.Fprintf(w, "  session     max_session_age the lesser of %s and session.max_session_age_default\n", a.Least)
 	default:

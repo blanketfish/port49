@@ -62,21 +62,25 @@ type Resolution struct {
 // SessionAge is the max_session_age the roles composing on a device declare
 // (spec §5.6): Least is the least finite one, zero when none declares a
 // finite one; Unset is whether some role declares none and takes the
-// default.
+// default; Never is whether every role says never. The zero value takes the
+// default, so a SessionAge no composition filled fails closed.
 type SessionAge struct {
 	Least time.Duration
 	Unset bool
+	Never bool
 }
 
 // Of is the ceiling given port49d's default: the least across the roles, a
 // role declaring none taking def; zero, never, only when every role says
 // never.
 func (a SessionAge) Of(def time.Duration) time.Duration {
-	age := a.Least
-	if a.Unset && (age == 0 || def < age) {
-		age = def
+	switch {
+	case a.Never:
+		return 0
+	case a.Least == 0 || a.Unset && def < a.Least:
+		return def
 	}
-	return age
+	return a.Least
 }
 
 // AttributeSource is one attribute of the session reply and its provenance:
@@ -163,6 +167,7 @@ func (p *Policy) resolved(sub *Subject, d admission.Device, c composition) (Reso
 			res.SessionAge.Least = *age
 		}
 	}
+	res.SessionAge.Never = len(c.roles) > 0 && res.SessionAge.Least == 0 && !res.SessionAge.Unset
 	dialect := p.dialect(d.Platform)
 	res.LeftOff = p.leftOffAttributes(c, dialect)
 	if c.ceiling != "" {
