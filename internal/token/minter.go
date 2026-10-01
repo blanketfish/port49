@@ -339,6 +339,20 @@ func (m *Minter) Mint(ctx context.Context, r Request) (Result, error) {
 		return Result{}, &ErrTooManyOutstanding{Device: r.Device, Username: r.Subject.Username, Count: len(cands), Cap: m.cap}
 	}
 
+	// Indexed before it is written: a token no index names is one no
+	// revocation can find, so a failed index write refuses the mint (plan
+	// 7a). The entry is stamped by the store's clock before the token's
+	// expiry is computed, a remote store's later still, so it is given a
+	// minute past the token's TTL: an index that expires a moment before its
+	// token would hide that token from a revocation (pre-flight M6).
+	certKey := ""
+	if c := r.Subject.Credential; c.Issuer != "" && c.Serial != "" {
+		certKey = store.CertKey(c.Issuer, c.Serial)
+	}
+	if err := m.store.IndexToken(ctx, r.Subject.Principal, certKey, key, ttl+time.Minute); err != nil {
+		return Result{}, fmt.Errorf("token: indexing the token for revocation: %w", err)
+	}
+
 	mintedAt := m.now()
 	expires := mintedAt.Add(ttl)
 	out := Result{ExpiresAt: expires, Username: r.Subject.Username, MintedAt: mintedAt}

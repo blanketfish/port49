@@ -3,7 +3,8 @@
 // reach any backend, under a current key with one previous key accepted.
 //
 // What is NOT sealed is deliberate and is argued in plan 2 Task 5: blobs (no
-// identity) and the four indexes. A dump of the index reveals principal, device
+// identity) and the indexes: the four of plan 2 and the two token indexes of
+// plan 7a. A dump of the index reveals principal, device
 // and login name; every credential-bearing record (token, receipt, context
 // body) stays sealed; the index is protected by store access control rather
 // than by encryption, because revocation is the path needed most on a bad day
@@ -450,6 +451,21 @@ func (w *wrapped) ReindexSid(ctx context.Context, oldSid, newSid string, ref sto
 // ActivePrincipals reads the plaintext principal index.
 func (w *wrapped) ActivePrincipals(ctx context.Context) ([]string, error) {
 	return w.inner.ActivePrincipals(ctx)
+}
+
+// IndexToken, TokensByPrincipal and TokensByCert are plaintext indexes, as
+// the context indexes are (the package comment): revocation must not depend
+// on the encryption key.
+func (w *wrapped) IndexToken(ctx context.Context, principal, certKey string, k store.TokenKey, ttl time.Duration) error {
+	return w.inner.IndexToken(ctx, principal, certKey, k, ttl)
+}
+
+func (w *wrapped) TokensByPrincipal(ctx context.Context, principal string) ([]store.TokenKey, error) {
+	return w.inner.TokensByPrincipal(ctx, principal)
+}
+
+func (w *wrapped) TokensByCert(ctx context.Context, certKey string) ([]store.TokenKey, error) {
+	return w.inner.TokensByCert(ctx, certKey)
 }
 
 func (w *wrapped) PutIdempotency(ctx context.Context, principal, key string, rec store.Idempotency) error {

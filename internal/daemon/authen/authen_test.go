@@ -441,6 +441,15 @@ func (noStore) ReindexSid(context.Context, string, string, store.ContextRef, tim
 func (noStore) ActivePrincipals(context.Context) ([]string, error) {
 	panic("store called")
 }
+func (noStore) IndexToken(context.Context, string, string, store.TokenKey, time.Duration) error {
+	panic("store called")
+}
+func (noStore) TokensByPrincipal(context.Context, string) ([]store.TokenKey, error) {
+	panic("store called")
+}
+func (noStore) TokensByCert(context.Context, string) ([]store.TokenKey, error) {
+	panic("store called")
+}
 func (noStore) PutIdempotency(context.Context, string, string, store.Idempotency) error {
 	panic("store called")
 }

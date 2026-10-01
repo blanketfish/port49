@@ -446,3 +446,50 @@ func IdempotencyLeaseExpires(t *testing.T, newStore func() (store.Store, func(ti
 		t.Fatalf("the dead holder released the retry's reservation: %+v %v", cur, ok)
 	}
 }
+
+// TokenIndex is what a revocation needs to find a principal's, or a
+// certificate's, unspent tokens without a keyspace scan (plan 7a): keys come
+// back sorted, one entry per key however often it is indexed, an empty
+// principal or certificate is never an index key, and one principal's or
+// certificate's keys are its own.
+func TokenIndex(t *testing.T, newStore func() store.Store, now time.Time) {
+	t.Helper()
+	ctx := context.Background()
+	s := newStore()
+	const alice, bob = "user:alice@example.com", "user:bob@example.com"
+	certA := store.CertKey("CN=Corp CA", "3f9a01")
+	leaf2 := store.TokenKey{NAS: "leaf-02", Username: "alice"}
+	leaf1 := store.TokenKey{NAS: "leaf-01", Username: "alice"}
+	for _, k := range []store.TokenKey{leaf2, leaf1, leaf2} {
+		if err := s.IndexToken(ctx, alice, certA, k, time.Minute); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.IndexToken(ctx, bob, "", store.TokenKey{NAS: "leaf-01", Username: "bob"}, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.TokensByPrincipal(ctx, alice)
+	if err != nil || len(got) != 2 || got[0] != leaf1 || got[1] != leaf2 {
+		t.Fatalf("alice's keys: %v %v", got, err)
+	}
+	if got, err := s.TokensByCert(ctx, certA); err != nil || len(got) != 2 {
+		t.Fatalf("the certificate's keys: %v %v", got, err)
+	}
+	if got, err := s.TokensByCert(ctx, ""); err != nil || len(got) != 0 {
+		t.Fatalf("an empty certificate key indexed %v (%v): every certificate-less login would share it", got, err)
+	}
+	if got, _ := s.TokensByPrincipal(ctx, "user:carol@example.com"); len(got) != 0 {
+		t.Fatalf("a principal with no token: %v", got)
+	}
+
+	// A certificate key with no issuer or no serial names no certificate,
+	// as IndexContext reads it: indexed, every such login would share it.
+	for _, blank := range []string{store.CertKey("", ""), store.CertKey("CN=Corp CA", ""), store.CertKey("", "3f9a01")} {
+		if err := s.IndexToken(ctx, bob, blank, store.TokenKey{NAS: "leaf-02", Username: "bob"}, time.Minute); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := s.TokensByCert(ctx, blank); err != nil || len(got) != 0 {
+			t.Fatalf("the blank certificate key %q indexed %v (%v)", blank, got, err)
+		}
+	}
+}

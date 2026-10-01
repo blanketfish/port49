@@ -585,3 +585,39 @@ func TestALongBatchRenewsEachDevicesHoldBeforeMintingIt(t *testing.T) {
 		}
 	}
 }
+
+// indexFailingStore fails IndexToken.
+type indexFailingStore struct{ *memory.Store }
+
+func (indexFailingStore) IndexToken(context.Context, string, string, store.TokenKey, time.Duration) error {
+	return errors.New("store: connection refused")
+}
+
+// A token is indexed before it is written, so none exists that a
+// revocation cannot find; an index that cannot be written refuses the mint
+// and writes no token (plan 7a).
+func TestEveryTokenIsIndexedBeforeItIsWritten(t *testing.T) {
+	m, st, _ := minter(t)
+	ctx := context.Background()
+	sub := subject()
+	sub.Credential = store.Credential{Method: "cert", Issuer: "CN=Corp CA", Serial: "3f9a01"}
+	if _, err := m.Mint(ctx, Request{Subject: sub, Device: "leaf-01", TTL: time.Minute}); err != nil {
+		t.Fatal(err)
+	}
+	k := store.TokenKey{NAS: "leaf-01", Username: sub.Username}
+	if got, _ := st.TokensByPrincipal(ctx, sub.Principal); len(got) != 1 || got[0] != k {
+		t.Fatalf("by principal: %v", got)
+	}
+	if got, _ := st.TokensByCert(ctx, store.CertKey("CN=Corp CA", "3f9a01")); len(got) != 1 || got[0] != k {
+		t.Fatalf("by certificate: %v", got)
+	}
+
+	bad := indexFailingStore{memory.New(time.Now)}
+	m2 := NewMinter(bad, decision.NewJSONLines(&bytes.Buffer{}), rand.Reader, TagKey([]byte("k")), time.Now, 3)
+	if _, err := m2.Mint(ctx, Request{Subject: sub, Device: "leaf-01", TTL: time.Minute}); err == nil {
+		t.Fatal("a mint whose index failed was not refused")
+	}
+	if c, _ := bad.Candidates(ctx, k); len(c) != 0 {
+		t.Fatalf("an unindexed token was written: %d", len(c))
+	}
+}

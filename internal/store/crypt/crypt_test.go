@@ -526,3 +526,10 @@ func TestSetContextPolicyThroughTheSealingLayer(t *testing.T) {
 		t.Fatalf("%+v %v", after, err)
 	}
 }
+
+func TestTokenIndexThroughTheSealingLayer(t *testing.T) {
+	now := time.Unix(1_757_041_495, 0)
+	storetest.TokenIndex(t, func() store.Store {
+		return Wrap(memory.New(func() time.Time { return now }), keys(), nil)
+	}, now)
+}

@@ -1361,3 +1361,27 @@ func TestIdempotencyLeaseExpires(t *testing.T) {
 		return New(func() time.Time { return now }), func(d time.Duration) { now = now.Add(d) }
 	}, now)
 }
+
+func TestTokenIndex(t *testing.T) {
+	now := time.Unix(1_757_041_495, 0)
+	storetest.TokenIndex(t, func() store.Store { return New(func() time.Time { return now }) }, now)
+}
+
+// An index entry lives as long as the longest token written under it, and
+// then drops out: a principal's keys do not accumulate for good.
+func TestATokenIndexEntryExpiresWithItsLongestToken(t *testing.T) {
+	now := time.Unix(1_757_041_495, 0)
+	s := New(func() time.Time { return now })
+	ctx := context.Background()
+	k := store.TokenKey{NAS: "leaf-01", Username: "alice"}
+	_ = s.IndexToken(ctx, "user:alice", "", k, 10*time.Minute)
+	_ = s.IndexToken(ctx, "user:alice", "", k, time.Minute) // never shortens it
+	now = now.Add(5 * time.Minute)
+	if got, _ := s.TokensByPrincipal(ctx, "user:alice"); len(got) != 1 {
+		t.Fatalf("at 5m: %v", got)
+	}
+	now = now.Add(5 * time.Minute)
+	if got, _ := s.TokensByPrincipal(ctx, "user:alice"); len(got) != 0 {
+		t.Fatalf("at 10m: %v", got)
+	}
+}

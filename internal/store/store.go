@@ -602,6 +602,20 @@ type Store interface {
 	ContextsByCert(ctx context.Context, certKey string) ([]ContextRef, error)
 	ReindexSid(ctx context.Context, oldSid, newSid string, ref ContextRef, ttl time.Duration) error
 	ActivePrincipals(ctx context.Context) ([]string, error)
+	// IndexToken records that principal, and the certificate certKey
+	// (CertKey), hold an unspent token under k, until ttl from now, keeping
+	// the later expiry where one is already recorded. The minter writes it
+	// before the token, so no token exists that a revocation cannot find
+	// (plan 7a). An empty principal or certKey skips that index, as
+	// IndexContext does, and so does a certKey with no issuer or no serial.
+	// An entry outliving its token costs a revocation one DeleteTokens on an
+	// empty key.
+	IndexToken(ctx context.Context, principal, certKey string, k TokenKey, ttl time.Duration) error
+	// TokensByPrincipal and TokensByCert are the keys under which the
+	// principal, or the certificate, holds or held an unspent token, sorted
+	// by (NAS, Username).
+	TokensByPrincipal(ctx context.Context, principal string) ([]TokenKey, error)
+	TokensByCert(ctx context.Context, certKey string) ([]TokenKey, error)
 
 	PutIdempotency(ctx context.Context, principal, key string, rec Idempotency) error
 	GetIdempotency(ctx context.Context, principal, key string) (Idempotency, error)

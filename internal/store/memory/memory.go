@@ -46,6 +46,12 @@ type Store struct {
 	indexedAs map[store.ContextRef]indexKeys
 	idem      map[string]store.Idempotency
 
+	// tokensByPrincipal and tokensByCert are the token indexes (plan 7a):
+	// each key's set of TokenKeys, each with the expiry of the longest token
+	// indexed under it. Plaintext, as the context indexes are.
+	tokensByPrincipal map[string]map[store.TokenKey]time.Time
+	tokensByCert      map[string]map[store.TokenKey]time.Time
+
 	writes int // incremented on every write; triggers sweep at sweepEvery
 	// revs is the last context revision handed out. It is store-wide rather
 	// than per key so a context that is deleted and written again never
@@ -142,6 +148,8 @@ func New(now func() time.Time) *Store {
 		byCert:              make(map[string]map[store.ContextRef]time.Time),
 		indexedAs:           make(map[store.ContextRef]indexKeys),
 		idem:                make(map[string]store.Idempotency),
+		tokensByPrincipal:   make(map[string]map[store.TokenKey]time.Time),
+		tokensByCert:        make(map[string]map[store.TokenKey]time.Time),
 	}
 }
 
@@ -249,6 +257,8 @@ func (s *Store) sweepLocked() {
 	sweepIndex(s.byPrincipal, now)
 	sweepIndex(s.bySid, now)
 	sweepIndex(s.byCert, now)
+	sweepTokenIndex(s.tokensByPrincipal, now)
+	sweepTokenIndex(s.tokensByCert, now)
 
 	// Sweep the reverse record last, once the three indexes above have
 	// dropped what expired: a ref no index still names has nothing left to
@@ -1036,6 +1046,79 @@ func (s *Store) ActivePrincipals(_ context.Context) ([]string, error) {
 	}
 	sort.Strings(out)
 	return out, nil
+}
+
+// IndexToken adds k under principal and certKey, each skipped when empty,
+// and a certificate key with no issuer or no serial the same way
+// (blankCertKey).
+func (s *Store) IndexToken(_ context.Context, principal, certKey string, k store.TokenKey, ttl time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if blankCertKey(certKey) {
+		certKey = ""
+	}
+	exp := s.now().Add(ttl)
+	for _, idx := range []struct {
+		m   map[string]map[store.TokenKey]time.Time
+		key string
+	}{{s.tokensByPrincipal, principal}, {s.tokensByCert, certKey}} {
+		if idx.key == "" {
+			continue
+		}
+		set := idx.m[idx.key]
+		if set == nil {
+			set = make(map[store.TokenKey]time.Time)
+			idx.m[idx.key] = set
+		}
+		if exp.After(set[k]) {
+			set[k] = exp
+		}
+	}
+	s.wroteLocked()
+	return nil
+}
+
+func (s *Store) TokensByPrincipal(_ context.Context, principal string) ([]store.TokenKey, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return liveTokenKeys(s.tokensByPrincipal[principal], s.now()), nil
+}
+
+func (s *Store) TokensByCert(_ context.Context, certKey string) ([]store.TokenKey, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return liveTokenKeys(s.tokensByCert[certKey], s.now()), nil
+}
+
+// liveTokenKeys is set's unexpired keys, sorted by (NAS, Username).
+func liveTokenKeys(set map[store.TokenKey]time.Time, now time.Time) []store.TokenKey {
+	var out []store.TokenKey
+	for k, exp := range set {
+		if exp.After(now) {
+			out = append(out, k)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].NAS != out[j].NAS {
+			return out[i].NAS < out[j].NAS
+		}
+		return out[i].Username < out[j].Username
+	})
+	return out
+}
+
+// sweepTokenIndex is sweepIndex for the token indexes.
+func sweepTokenIndex(idx map[string]map[store.TokenKey]time.Time, now time.Time) {
+	for k, set := range idx {
+		for tk, exp := range set {
+			if !exp.After(now) {
+				delete(set, tk)
+			}
+		}
+		if len(set) == 0 {
+			delete(idx, k)
+		}
+	}
 }
 
 // idemKey joins principal and key so idempotency is scoped per principal:
