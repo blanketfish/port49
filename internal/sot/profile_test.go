@@ -132,4 +132,8 @@ func TestTheVocabularyIsWhatWasRecorded(t *testing.T) {
 	if !KnownProfile("nautobot", Nautobot2) || KnownProfile("netbox", Nautobot2) || KnownProfile("netbox", "netbox_5") {
 		t.Fatal("KnownProfile")
 	}
+	if strings.Join(ProfilesOf("netbox"), ",") != "netbox_3_7,netbox_4" ||
+		strings.Join(ProfilesOf("nautobot"), ",") != "nautobot_1_6,nautobot_2" {
+		t.Fatalf("ProfilesOf: %v %v", ProfilesOf("netbox"), ProfilesOf("nautobot"))
+	}
 }

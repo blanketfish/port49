@@ -428,10 +428,7 @@ func sotSource(i int, s sourceYAML) (SourceConfig, error) {
 		}
 	}
 	if c.Profile != "" && !sot.KnownProfile(s.Type, c.Profile) {
-		if s.Type == "netbox" {
-			return fail("profile must be one of netbox_3_7, netbox_4")
-		}
-		return fail("profile must be one of nautobot_1_6, nautobot_2")
+		return fail("profile must be one of %s", strings.Join(sot.ProfilesOf(s.Type), ", "))
 	}
 	switch c.API {
 	case "":
@@ -449,6 +446,11 @@ func sotSource(i int, s sourceYAML) (SourceConfig, error) {
 	m := sot.Mapping{Filter: sot.Filter{Status: []string{"active"}}, Addresses: sot.Addresses{Primary: true}}
 	if f := s.Filter; f != nil {
 		if f.Status != nil {
+			// Empty would keep every status, decommissioned and planned
+			// included: whoever wants that lists them.
+			if len(*f.Status) == 0 {
+				return fail("filter.status is empty; name the statuses kept")
+			}
 			m.Filter.Status = nil
 			for j, st := range *f.Status {
 				if st = strings.ToLower(st); !statusShape.MatchString(st) {
@@ -514,6 +516,11 @@ func sotSource(i int, s sourceYAML) (SourceConfig, error) {
 		if m.Aliases == nil {
 			m.Aliases = map[string]string{}
 		}
+		// Two keys alike in lower case would land on one alias, and map
+		// order would pick which, start to start.
+		if _, dup := m.Aliases[strings.ToLower(slug)]; dup {
+			return fail("platform_aliases has two entries for one slug, compared in lower case")
+		}
 		m.Aliases[strings.ToLower(slug)] = name
 	}
 	c.Mapping = m
@@ -533,7 +540,8 @@ func (c Config) WebhookSources() []string {
 }
 
 // WebhookSecrets is each webhook source's secret, the HMAC key its
-// deliveries are checked with.
+// deliveries are checked with. Never print or log the map: it is the
+// secrets themselves, without Secret's redaction.
 func (c Config) WebhookSecrets() map[string][]byte {
 	out := map[string][]byte{}
 	for _, s := range c.Sync {

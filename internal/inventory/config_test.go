@@ -304,9 +304,16 @@ func TestWhatANetboxSourceCannotHave(t *testing.T) {
 		"map key name":         {"token_secret_env:", "map: {platform: platform.slug, name: site.slug}\n    token_secret_env:", "map has a key that is not an attribute name"},
 		"both interface rules": {"token_secret_env:", "addresses: {interfaces: [Loopback0], all_interfaces: true}\n    token_secret_env:", "one or the other"},
 		"no address":           {"token_secret_env:", "addresses: {primary: false}\n    token_secret_env:", "addresses gives no address"},
-		"rest and interfaces":  {"token_secret_env:", "api: rest\n    addresses: {all_interfaces: true}\n    token_secret_env:", "REST does not give"},
-		"an alias":             {"token_secret_env:", "platform_aliases: {eos: Arista EOS}\n    token_secret_env:", "platform_aliases has an entry"},
-		"a status":             {"token_secret_env:", "filter: {status: [\"act\\u001bive\"]}\n    token_secret_env:", "filter.status[0] is not a status name"},
+		"a status list that keeps nothing named": {"token_secret_env:", "filter: {status: []}\n    token_secret_env:",
+			"filter.status is empty"},
+		"two aliases alike in lower case": {"token_secret_env:",
+			"platform_aliases: {EOS: arista_eos, eos: arista_eos}\n    token_secret_env:", "two entries for one slug"},
+		"a pasted token": {"token_secret_env:", "token: " + testToken + "\n    token_secret_env:", "an unknown field"},
+		"a netbox profile on nautobot": {"type: netbox", "type: nautobot\n    profile: netbox_4",
+			"profile must be one of nautobot_1_6, nautobot_2"},
+		"rest and interfaces": {"token_secret_env:", "api: rest\n    addresses: {all_interfaces: true}\n    token_secret_env:", "REST does not give"},
+		"an alias":            {"token_secret_env:", "platform_aliases: {eos: Arista EOS}\n    token_secret_env:", "platform_aliases has an entry"},
+		"a status":            {"token_secret_env:", "filter: {status: [\"act\\u001bive\"]}\n    token_secret_env:", "filter.status[0] is not a status name"},
 	} {
 		_, err := loadString(t, minimalConfig+strings.Replace(netboxSource, c.from, c.to, 1))
 		if err == nil || !strings.Contains(err.Error(), c.want) || strings.Contains(err.Error(), testToken) {
@@ -334,5 +341,53 @@ func TestTheSpecExamplesFilterLoads(t *testing.T) {
 	if strings.Join(m.Filter.Status, ",") != "active" || !m.Filter.HasPrimaryIP || m.Map["os_version"] != "custom_fields.os_version" ||
 		!m.Addresses.Primary || m.Addresses.Interfaces[0] != "Loopback0" || m.Aliases["eos-lab"] != "arista_eos" {
 		t.Fatalf("%+v", m)
+	}
+}
+
+func TestANautobotSourceLoads(t *testing.T) {
+	t.Setenv("PORT49_TEST_NETBOX_TOKEN", testToken)
+	c, err := loadString(t, minimalConfig+strings.Replace(netboxSource, "type: netbox",
+		"type: nautobot\n    profile: nautobot_2", 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s := c.Sync[1]; s.Type != "nautobot" || s.Profile != "nautobot_2" || s.API != "auto" ||
+		!s.Mapping.Addresses.Primary || strings.Join(s.Mapping.Filter.Status, ",") != "active" {
+		t.Fatalf("%+v", s)
+	}
+}
+
+func TestWhatAWebhookListenerCannotHave(t *testing.T) {
+	t.Setenv("PORT49_TEST_NETBOX_TOKEN", testToken)
+	t.Setenv("PORT49_TEST_NETBOX_HOOK", testHookSecret)
+	hooked := minimalConfig + netboxSource + "    webhook_secret_env: PORT49_TEST_NETBOX_HOOK\n"
+	listen := "webhook_listen: 127.0.0.1:8444\n"
+	cert, key := "webhook_tls_cert_file: /etc/i/hook.pem\n", "webhook_tls_key_file: /etc/i/hook-key.pem\n"
+	for name, c := range map[string]struct{ body, want string }{
+		"a cert without its key": {listen + cert + hooked, "webhook_tls_cert_file and webhook_tls_key_file go together"},
+		"a relative cert": {listen + "webhook_tls_cert_file: hook.pem\n" + key + hooked,
+			"webhook_tls_cert_file must be an absolute path"},
+		"a cert without a listener": {cert + key + minimalConfig + netboxSource,
+			"webhook_tls_cert_file is set, and webhook_listen is not"},
+		"a listener that is not host:port": {"webhook_listen: \"8444\"\n" + hooked, "webhook_listen must be host:port"},
+	} {
+		if _, err := loadString(t, c.body); err == nil || !strings.Contains(err.Error(), c.want) ||
+			strings.Contains(err.Error(), testHookSecret) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if _, err := loadString(t, listen+cert+key+hooked); err != nil {
+		t.Fatalf("its own cert and key: %v", err)
+	}
+	// 255 is the products' secret field (L27, L30); one past it is refused.
+	long := strings.Repeat("s", 255)
+	t.Setenv("PORT49_TEST_NETBOX_HOOK", long)
+	if _, err := loadString(t, listen+hooked); err != nil {
+		t.Fatalf("255: %v", err)
+	}
+	t.Setenv("PORT49_TEST_NETBOX_HOOK", long+"s")
+	if _, err := loadString(t, listen+hooked); err == nil || !strings.Contains(err.Error(), "not 32 to 255") ||
+		strings.Contains(err.Error(), long) {
+		t.Fatalf("256: %v", err)
 	}
 }

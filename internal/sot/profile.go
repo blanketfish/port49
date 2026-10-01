@@ -144,6 +144,19 @@ func KnownProfile(product, name string) bool {
 	return ok && p.Product == product
 }
 
+// ProfilesOf is product's profiles by name, sorted, for an error that lists
+// them.
+func ProfilesOf(product string) []string {
+	var out []string
+	for name, p := range profiles {
+		if p.Product == product {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 // Version is a product's release, as /api/status/ gives it.
 type Version struct {
 	Product, Text string
