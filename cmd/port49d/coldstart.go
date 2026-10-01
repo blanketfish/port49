@@ -205,13 +205,14 @@ func coldCopies(ctx context.Context, svc *config.InventoryServiceConfig, keys []
 	// service's word clears.
 	var ahead []coldCopy
 	refusedOther := false
-	// judge reads cp, opens it, and holds it to the clock; a copy it cannot
-	// use is said, with why, and alarmed if a document was read. again is a
-	// copy judged again for the clock, whose still being ahead was said.
-	judge := func(cp coldCopy, again bool) *inventory.Published {
+	// judge reads cp, opens it, and holds it to the clock reading now; a
+	// copy it cannot use is said, with why, and alarmed if a document was
+	// read. again is a copy judged again for the clock, whose still being
+	// ahead was said.
+	judge := func(cp coldCopy, again bool, now time.Time) *inventory.Published {
 		p, err := cp.read()
 		if err == nil && p != nil {
-			if ferr := publishedInFuture(p, coldNow()); ferr != nil {
+			if ferr := publishedInFuture(p, now); ferr != nil {
 				p, err = nil, inventory.NotOpened(filepath.Join(cp.dir, persistedName), ferr)
 			}
 		}
@@ -244,9 +245,13 @@ func coldCopies(ctx context.Context, svc *config.InventoryServiceConfig, keys []
 	}
 	var picks []coldPick
 	// choose keeps what judge made of cps, newer first, the earlier on a tie.
+	// Every copy of a pass is held to one reading of the clock: a clock
+	// stepped mid-pass would otherwise refuse the newer copy and take the
+	// older one, judged a moment later.
 	choose := func(cps []coldCopy, again bool) {
+		now := coldNow()
 		for _, cp := range cps {
-			p := judge(cp, again)
+			p := judge(cp, again, now)
 			if p == nil {
 				continue
 			}

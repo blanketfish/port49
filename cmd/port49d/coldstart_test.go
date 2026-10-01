@@ -457,16 +457,25 @@ func TestADocumentFromTheServicePublishedInTheFutureIsRefused(t *testing.T) {
 // genuine copies as published ahead of it, and serves nothing; once its
 // clock is put right the next pass of the wait judges them again and starts
 // from the persisted copy, clearing the alarm (spec §10: a restart in place
-// needs nothing).
+// needs nothing). NTP steps the clock right after the next pass's first
+// reading of it: every copy of a pass is held to one reading, so the step
+// does not refuse the newer copy and take the older one judged after it.
 func TestACopyRefusedForTheClockIsTakenOnceTheClockCatchesUp(t *testing.T) {
 	svc, key, keys := coldRig(t)
 	published := time.Now().Truncate(time.Second)
 	mustPersist(t, svc.StateDir, sealedDocAt(t, key, 8, 1, published))
 	mustMirror(t, svc.MirrorDir, sealedDocAt(t, key, 7, 1, published.Add(-time.Minute)))
 	var clock atomic.Int64
+	var step atomic.Bool
 	clock.Store(published.Add(-time.Hour).UnixNano()) // booted an hour behind
 	defer func(c func() time.Time) { coldNow = c }(coldNow)
-	coldNow = func() time.Time { return time.Unix(0, clock.Load()) }
+	coldNow = func() time.Time {
+		now := time.Unix(0, clock.Load())
+		if step.CompareAndSwap(true, false) {
+			clock.Store(published.UnixNano()) // NTP puts it right, just after this reading
+		}
+		return now
+	}
 	var out syncBuffer
 	e := stderr
 	defer func() { stderr = e }()
@@ -492,7 +501,7 @@ func TestACopyRefusedForTheClockIsTakenOnceTheClockCatchesUp(t *testing.T) {
 		testutil.ToFloat64(m.InventoryBundleRefused) != 1 {
 		t.Fatalf("refused %d times, alarm %v: %s", n, testutil.ToFloat64(m.InventoryBundleRefused), out.String())
 	}
-	clock.Store(published.UnixNano()) // NTP puts it right
+	step.Store(true)
 	select {
 	case r := <-done:
 		if r.err != nil || r.from != "the persisted copy" || seqOf(r.p) != 8 {
