@@ -174,6 +174,9 @@ func TestOCSP(t *testing.T) {
 		expired, expiredKey := delegate(t, ca, true, t0.Add(-2*time.Hour), t0.Add(-time.Hour))
 		early, earlyKey := delegate(t, ca, true, t0.Add(time.Hour), t0.Add(2*time.Hour))
 		foreign, foreignKey := delegate(t, stranger, true, t0.Add(-time.Hour), t0.Add(time.Hour))
+		// ca's own key under another name: the CertID's key hash is ca's,
+		// its name hash is not (review N1).
+		renamed := aliasCA(t, ca, &x509.Certificate{Subject: pkix.Name{CommonName: "another CA"}})
 		for _, tc := range []struct {
 			name, want string
 			ans        answer
@@ -189,6 +192,8 @@ func TestOCSP(t *testing.T) {
 				ans: answer{certIDFor: stranger.Cert}},
 			{name: "a SHA-1 signature", want: "ECDSA-SHA1",
 				ans: answer{sigAlg: x509.ECDSAWithSHA1}},
+			{name: "a CertID naming the issuer's key under another name", want: "its answer is for another certificate",
+				ans: answer{certIDFor: renamed}},
 			{name: "an unknown status", want: "answered unknown", ans: answer{status: ocsp.Unknown}},
 			{name: "a delegate another CA issued", want: "this issuer did not sign",
 				ans: answer{signerCert: foreign, signerKey: foreignKey, embed: foreign}},

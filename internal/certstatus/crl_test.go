@@ -356,22 +356,17 @@ func TestCRL(t *testing.T) {
 			name, want string
 			tmpl       *x509.Certificate
 		}{
-			{"another name", "names its issuer", &x509.Certificate{Subject: pkix.Name{CommonName: "another CA"}}},
+			{"another name", `names its issuer "CN=another CA", not`,
+				&x509.Certificate{Subject: pkix.Name{CommonName: "another CA"}}},
 			{"another key identifier", "authority key identifier",
 				&x509.Certificate{Subject: ca.Cert.Subject, SubjectKeyId: []byte{1, 2, 3, 4}}},
+			// The same name as UTF8String; ca's subject is a PrintableString.
+			// It prints the same, so the refusal says what differs (review N2).
+			{"the same name encoded differently", "encoded differently",
+				&x509.Certificate{RawSubject: utf8Name(t, "issuing CA")}},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
-				// A CA certificate for ca's own key, so the list's signature verifies.
-				tc.tmpl.SerialNumber, tc.tmpl.NotBefore, tc.tmpl.NotAfter = big.NewInt(9), t0.Add(-time.Hour), t0.Add(time.Hour)
-				tc.tmpl.IsCA, tc.tmpl.BasicConstraintsValid, tc.tmpl.KeyUsage = true, true, x509.KeyUsageCertSign|x509.KeyUsageCRLSign
-				der, err := x509.CreateCertificate(rand.Reader, tc.tmpl, tc.tmpl, &ca.Key.PublicKey, ca.Key)
-				if err != nil {
-					t.Fatal(err)
-				}
-				alias, err := x509.ParseCertificate(der)
-				if err != nil {
-					t.Fatal(err)
-				}
+				alias := aliasCA(t, ca, tc.tmpl)
 				c, m, _, srv, _, _ := one(t, ca)
 				srv.serve(signCRL(t, &testpki.CA{Cert: alias, Key: ca.Key}, crlSpec{number: 1}), 200)
 				errs := c.LoadAll(ctx)
@@ -903,6 +898,35 @@ func crlWithoutNextUpdate(t *testing.T, ca *testpki.CA, this time.Time) []byte {
 	}
 	if l, err := x509.ParseRevocationList(der); err != nil || !l.NextUpdate.IsZero() {
 		t.Fatalf("the hand-built list: %v", err)
+	}
+	return der
+}
+
+// aliasCA is a self-signed CA certificate from tmpl for ca's own key, so
+// what ca signs verifies under it whatever name it carries.
+func aliasCA(t *testing.T, ca *testpki.CA, tmpl *x509.Certificate) *x509.Certificate {
+	t.Helper()
+	tmpl.SerialNumber, tmpl.NotBefore, tmpl.NotAfter = big.NewInt(9), t0.Add(-time.Hour), t0.Add(time.Hour)
+	tmpl.IsCA, tmpl.BasicConstraintsValid, tmpl.KeyUsage = true, true, x509.KeyUsageCertSign|x509.KeyUsageCRLSign
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &ca.Key.PublicKey, ca.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cert
+}
+
+// utf8Name is the DER name CN=cn with cn a UTF8String; Go writes a
+// PrintableString where it can.
+func utf8Name(t *testing.T, cn string) []byte {
+	t.Helper()
+	der, err := asn1.Marshal(pkix.RDNSequence{{{Type: asn1.ObjectIdentifier{2, 5, 4, 3},
+		Value: asn1.RawValue{Tag: asn1.TagUTF8String, Bytes: []byte(cn)}}}})
+	if err != nil {
+		t.Fatal(err)
 	}
 	return der
 }

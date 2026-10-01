@@ -77,8 +77,14 @@ func (c *Checker) accept(src CRLSource, raw []byte) (*loadedCRL, error) {
 	// The key alone is not the issuer: a CA's key under another CA's name
 	// would put its list on that name's certificates (RFC 5280 §6.3.3(b)).
 	if !bytes.Equal(list.RawIssuer, src.Issuer.RawSubject) {
+		listName, fileName := list.Issuer.String(), src.Issuer.Subject.String()
+		if listName == fileName {
+			return nil, fmt.Errorf("names its issuer %q as issuer_file's subject does, but encoded differently "+
+				"(the same name, other bytes, such as a UTF8String against a PrintableString); the CA must "+
+				"encode its CRL's issuer exactly as its certificate's subject", printsafe.Line(listName, 200))
+		}
 		return nil, fmt.Errorf("names its issuer %q, not issuer_file's %q",
-			printsafe.Line(list.Issuer.String(), 200), printsafe.Line(src.Issuer.Subject.String(), 200))
+			printsafe.Line(listName, 200), printsafe.Line(fileName, 200))
 	}
 	if len(list.AuthorityKeyId) > 0 && len(src.Issuer.SubjectKeyId) > 0 &&
 		!bytes.Equal(list.AuthorityKeyId, src.Issuer.SubjectKeyId) {
