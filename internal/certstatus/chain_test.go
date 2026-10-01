@@ -90,6 +90,17 @@ func TestChain(t *testing.T) {
 		}
 	})
 
+	t.Run("a user-certificates list does not cover a CA certificate at depth 0", func(t *testing.T) {
+		c := withLists(t, nil, signCRL(t, root, crlSpec{number: 1, ext: []pkix.Extension{userOnly}}))
+		if r := check(t, c, inter.Cert, root.Cert); r.Verdict != Unknown || r.Depth != 0 {
+			t.Errorf("%+v, want unknown at depth 0", r)
+		}
+		c = withLists(t, nil, signCRL(t, root, crlSpec{number: 1}))
+		if r := check(t, c, inter.Cert, root.Cert); r.Verdict != Good {
+			t.Errorf("under a full list: %+v, want good", r)
+		}
+	})
+
 	t.Run("only the issuing CA's list leaves the intermediate unknown", func(t *testing.T) {
 		c := withLists(t, signCRL(t, inter, crlSpec{number: 1}), nil)
 		r := check(t, c, chain...)

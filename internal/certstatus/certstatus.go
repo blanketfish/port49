@@ -87,7 +87,7 @@ type Checker struct {
 	crls         map[string]*loadedCRL
 	onNew        func(issuer, serial, source string)
 	ocsp         map[string]ocspEntry
-	ocspInflight map[string]chan struct{}
+	ocspInflight map[string]*ocspCall
 	said         map[string]time.Time
 }
 
@@ -114,7 +114,7 @@ func New(cfg Config, now func() time.Time, m *metrics.Metrics, logf func(string,
 		http: &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
 			return errors.New("a status source does not redirect")
 		}},
-		crls: map[string]*loadedCRL{}, ocsp: map[string]ocspEntry{}, ocspInflight: map[string]chan struct{}{},
+		crls: map[string]*loadedCRL{}, ocsp: map[string]ocspEntry{}, ocspInflight: map[string]*ocspCall{},
 		said: map[string]time.Time{}}
 }
 
@@ -201,7 +201,7 @@ func (c *Checker) Describe() string {
 	}
 	if o := c.cfg.OCSP; o != nil {
 		if o.Responder != "" {
-			parts = append(parts, "OCSP "+o.Responder)
+			parts = append(parts, "OCSP "+printsafe.Line(redactURL(o.Responder), 120))
 		} else {
 			parts = append(parts, "OCSP at each certificate's own responder (use_aia)")
 		}

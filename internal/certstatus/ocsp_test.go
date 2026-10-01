@@ -33,7 +33,9 @@ type answer struct {
 	serial     *big.Int
 	revokedAt  time.Time
 	reason     int
-	garbage    bool // an unsigned body, not an OCSP response
+	garbage    bool              // an unsigned body, not an OCSP response
+	certIDFor  *x509.Certificate // the CA the CertID names, when not the responder's issuer
+	sigAlg     x509.SignatureAlgorithm
 }
 
 // responder is an OCSP responder for issuer that counts calls and can hang.
@@ -117,9 +119,13 @@ func (r *responder) serve(w http.ResponseWriter, req *http.Request) {
 	if serial == nil {
 		serial = q.SerialNumber
 	}
-	der, err := ocsp.CreateResponse(r.issuer.Cert, signerCert, ocsp.Response{Status: ans.status, SerialNumber: serial,
+	certIDFor := r.issuer.Cert
+	if ans.certIDFor != nil {
+		certIDFor = ans.certIDFor
+	}
+	der, err := ocsp.CreateResponse(certIDFor, signerCert, ocsp.Response{Status: ans.status, SerialNumber: serial,
 		ThisUpdate: ans.this, NextUpdate: ans.next, RevokedAt: ans.revokedAt, RevocationReason: ans.reason,
-		Certificate: ans.embed, IssuerHash: q.HashAlgorithm}, signerKey)
+		Certificate: ans.embed, IssuerHash: q.HashAlgorithm, SignatureAlgorithm: ans.sigAlg}, signerKey)
 	if err != nil {
 		r.t.Errorf("CreateResponse: %v", err)
 		w.WriteHeader(http.StatusInternalServerError)
@@ -166,6 +172,7 @@ func TestOCSP(t *testing.T) {
 		stranger := newCA(t, "issuing CA")
 		noEKU, noEKUKey := delegate(t, ca, false, t0.Add(-time.Hour), t0.Add(time.Hour))
 		expired, expiredKey := delegate(t, ca, true, t0.Add(-2*time.Hour), t0.Add(-time.Hour))
+		early, earlyKey := delegate(t, ca, true, t0.Add(time.Hour), t0.Add(2*time.Hour))
 		foreign, foreignKey := delegate(t, stranger, true, t0.Add(-time.Hour), t0.Add(time.Hour))
 		for _, tc := range []struct {
 			name, want string
@@ -176,6 +183,13 @@ func TestOCSP(t *testing.T) {
 				ans: answer{signerCert: noEKU, signerKey: noEKUKey, embed: noEKU}},
 			{name: "a delegate past its NotAfter", want: "out of validity",
 				ans: answer{signerCert: expired, signerKey: expiredKey, embed: expired}},
+			{name: "a delegate not yet valid", want: "out of validity",
+				ans: answer{signerCert: early, signerKey: earlyKey, embed: early}},
+			{name: "a CertID naming another CA under the same serial", want: "its answer is for another certificate",
+				ans: answer{certIDFor: stranger.Cert}},
+			{name: "a SHA-1 signature", want: "ECDSA-SHA1",
+				ans: answer{sigAlg: x509.ECDSAWithSHA1}},
+			{name: "an unknown status", want: "answered unknown", ans: answer{status: ocsp.Unknown}},
 			{name: "a delegate another CA issued", want: "this issuer did not sign",
 				ans: answer{signerCert: foreign, signerKey: foreignKey, embed: foreign}},
 			{name: "signed by another key under the issuer's name", want: "does not verify for this issuer",
@@ -193,7 +207,6 @@ func TestOCSP(t *testing.T) {
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				resp := newResponder(t, ca)
-				tc.ans.status = ocsp.Good
 				if tc.ans.this.IsZero() {
 					tc.ans.this, tc.ans.next = t0, t0.Add(30*time.Minute)
 				}
@@ -256,6 +269,71 @@ func TestOCSP(t *testing.T) {
 		clk.advance(2 * time.Minute)
 		if check(t, c, user, ca.Cert); resp.count() != 2 {
 			t.Errorf("calls past the hour = %d, want 2", resp.count())
+		}
+	})
+
+	t.Run("an answer with no NextUpdate is reused only within refresh_interval of its ThisUpdate", func(t *testing.T) {
+		resp := newResponder(t, ca)
+		resp.set(func(r *responder) { r.ans.this, r.ans.next = t0.Add(-9*time.Minute), time.Time{} })
+		c, clk := ocspChecker(t, OCSPConfig{Responder: resp.URL})
+		if r := check(t, c, user, ca.Cert); r.Verdict != Good {
+			t.Fatalf("%+v, want good", r)
+		}
+		clk.advance(30 * time.Second)
+		if check(t, c, user, ca.Cert); resp.count() != 1 {
+			t.Errorf("calls while fresh = %d, want 1", resp.count())
+		}
+		clk.advance(time.Minute)
+		resp.set(func(r *responder) { r.ans.this = clk.now() })
+		if check(t, c, user, ca.Cert); resp.count() != 2 {
+			t.Errorf("calls past refresh_interval from its ThisUpdate = %d, want 2", resp.count())
+		}
+	})
+
+	// A caller that hangs up mid-question stops waiting; the question runs
+	// on to its own timeout, and its real answer is what the next caller
+	// gets, never the hang-up as a failure (review I3).
+	t.Run("a caller hanging up leaves the others the real answer", func(t *testing.T) {
+		resp := newResponder(t, ca)
+		gate := make(chan struct{})
+		resp.set(func(r *responder) { r.gate = gate })
+		c, _ := ocspChecker(t, OCSPConfig{Responder: resp.URL, Timeout: 5 * time.Second})
+		ctx, cancel := context.WithCancel(context.Background())
+		gone := make(chan Result)
+		go func() { gone <- c.Check(ctx, []*x509.Certificate{user, ca.Cert}) }()
+		for resp.count() == 0 {
+			time.Sleep(5 * time.Millisecond)
+		}
+		cancel()
+		if r := <-gone; r.Verdict != Unknown || !strings.Contains(r.Detail, "abandoned") {
+			t.Errorf("the caller that hung up: %+v, want unknown, abandoned", r)
+		}
+		close(gate)
+		if r := check(t, c, user, ca.Cert); r.Verdict != Good {
+			t.Errorf("the next caller: %+v, want the responder's good", r)
+		}
+		if resp.count() != 1 {
+			t.Errorf("calls = %d, want 1: the next caller shares the question or its answer", resp.count())
+		}
+	})
+
+	// A credential in a responder's url reaches no Result and no line.
+	t.Run("a responder url is redacted", func(t *testing.T) {
+		resp := newResponder(t, ca)
+		resp.set(func(r *responder) { r.status = http.StatusInternalServerError })
+		u := strings.Replace(resp.URL, "http://", "http://ocspuser:hunter2@", 1) + "/?token=hunter2"
+		c, _ := ocspChecker(t, OCSPConfig{Responder: u})
+		r := check(t, c, user, ca.Cert)
+		resp.set(func(r *responder) { r.status = 0 })
+		c2, _ := ocspChecker(t, OCSPConfig{Responder: u})
+		good := check(t, c2, user, ca.Cert)
+		for what, text := range map[string]string{"Detail": r.Detail, "Name": good.Name, "Describe": c.Describe()} {
+			if strings.Contains(text, "hunter2") || strings.Contains(text, "ocspuser") {
+				t.Errorf("%s carries the credential: %q", what, text)
+			}
+		}
+		if good.Verdict != Good || !strings.Contains(good.Name, "redacted") {
+			t.Errorf("%+v, want good, its name redacted", good)
 		}
 	})
 

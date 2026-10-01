@@ -104,6 +104,7 @@ type crlSpec struct {
 	this, next time.Time
 	revoked    []x509.RevocationListEntry
 	ext        []pkix.Extension
+	sigAlg     x509.SignatureAlgorithm
 }
 
 // signCRL is ca's list. A zero this is t0; a zero next is an hour after this.
@@ -116,7 +117,8 @@ func signCRL(t *testing.T, ca *testpki.CA, s crlSpec) []byte {
 		s.next = s.this.Add(time.Hour)
 	}
 	der, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{Number: big.NewInt(s.number),
-		ThisUpdate: s.this, NextUpdate: s.next, RevokedCertificateEntries: s.revoked, ExtraExtensions: s.ext},
+		ThisUpdate: s.this, NextUpdate: s.next, RevokedCertificateEntries: s.revoked, ExtraExtensions: s.ext,
+		SignatureAlgorithm: s.sigAlg},
 		ca.Cert, ca.Key)
 	if err != nil {
 		t.Fatal(err)
@@ -345,6 +347,82 @@ func TestCRL(t *testing.T) {
 		}
 		if got := loads(m, "issuing", "loaded"); got != 2 {
 			t.Errorf("loaded = %v, want 2", got)
+		}
+	})
+
+	t.Run("the issuer's key under another name or key identifier", func(t *testing.T) {
+		ca := newCA(t, "issuing CA")
+		for _, tc := range []struct {
+			name, want string
+			tmpl       *x509.Certificate
+		}{
+			{"another name", "names its issuer", &x509.Certificate{Subject: pkix.Name{CommonName: "another CA"}}},
+			{"another key identifier", "authority key identifier",
+				&x509.Certificate{Subject: ca.Cert.Subject, SubjectKeyId: []byte{1, 2, 3, 4}}},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				// A CA certificate for ca's own key, so the list's signature verifies.
+				tc.tmpl.SerialNumber, tc.tmpl.NotBefore, tc.tmpl.NotAfter = big.NewInt(9), t0.Add(-time.Hour), t0.Add(time.Hour)
+				tc.tmpl.IsCA, tc.tmpl.BasicConstraintsValid, tc.tmpl.KeyUsage = true, true, x509.KeyUsageCertSign|x509.KeyUsageCRLSign
+				der, err := x509.CreateCertificate(rand.Reader, tc.tmpl, tc.tmpl, &ca.Key.PublicKey, ca.Key)
+				if err != nil {
+					t.Fatal(err)
+				}
+				alias, err := x509.ParseCertificate(der)
+				if err != nil {
+					t.Fatal(err)
+				}
+				c, m, _, srv, _, _ := one(t, ca)
+				srv.serve(signCRL(t, &testpki.CA{Cert: alias, Key: ca.Key}, crlSpec{number: 1}), 200)
+				errs := c.LoadAll(ctx)
+				if len(errs) != 1 || !strings.Contains(errs[0].Error(), tc.want) {
+					t.Fatalf("errs = %v, want one naming %q", errs, tc.want)
+				}
+				if got := loads(m, "issuing", "refused"); got != 1 {
+					t.Errorf("refused = %v, want 1", got)
+				}
+			})
+		}
+	})
+
+	t.Run("a list dated in the future is refused", func(t *testing.T) {
+		ca := newCA(t, "issuing CA")
+		c, _, _, srv, _, _ := one(t, ca)
+		srv.serve(signCRL(t, ca, crlSpec{number: 9, this: t0.Add(10 * time.Minute)}), 200)
+		if errs := c.LoadAll(ctx); len(errs) != 1 || !strings.Contains(errs[0].Error(), "in the future") {
+			t.Fatalf("errs = %v, want refused as dated in the future", errs)
+		}
+		// Within the skew it loads, and the current list is not refused by it.
+		srv.serve(signCRL(t, ca, crlSpec{number: 1, this: t0.Add(4 * time.Minute)}), 200)
+		if errs := c.LoadAll(ctx); len(errs) != 0 {
+			t.Fatal(errs)
+		}
+	})
+
+	t.Run("a SHA-1 signature is refused", func(t *testing.T) {
+		ca := newCA(t, "issuing CA")
+		c, m, _, srv, _, _ := one(t, ca)
+		srv.serve(signCRL(t, ca, crlSpec{number: 1, sigAlg: x509.ECDSAWithSHA1}), 200)
+		if errs := c.LoadAll(ctx); len(errs) != 1 || !strings.Contains(errs[0].Error(), "ECDSA-SHA1") {
+			t.Fatalf("errs = %v, want refused as signed with SHA-1", errs)
+		}
+		if got := loads(m, "issuing", "refused"); got != 1 {
+			t.Errorf("refused = %v, want 1", got)
+		}
+	})
+
+	t.Run("a url with a credential is redacted in its error", func(t *testing.T) {
+		ca := newCA(t, "issuing CA")
+		srv := newCRLServer(t)
+		down := newCRLServer(t)
+		down.Close() // its address now refuses: net/http's error repeats the url
+		for _, base := range []string{srv.URL + "/moved", down.URL + "/crl"} {
+			u := strings.Replace(base, "http://", "http://crluser:hunter2@", 1) + "?token=hunter2"
+			c, _, _ := newChecker(t, Config{CRLs: []CRLSource{{Name: "issuing", URL: u, Issuer: ca.Cert}}}, newClock())
+			errs := c.LoadAll(ctx)
+			if len(errs) != 1 || strings.Contains(errs[0].Error(), "hunter2") || strings.Contains(errs[0].Error(), "crluser") {
+				t.Fatalf("errs = %v, want one failure without the credential", errs)
+			}
 		}
 	})
 
@@ -647,6 +725,41 @@ func TestCRL(t *testing.T) {
 		if r := check(t, restarted, leaf(t, ca, 5), ca.Cert); r.Verdict != Revoked {
 			t.Errorf("after a restart with the server down: %+v, want revoked", r)
 		}
+
+		t.Run("a source name is confined to the state directory", func(t *testing.T) {
+			kept := stateDir(t)
+			for _, name := range []string{"../escape", "a/b", "UPPER", "issuing"} {
+				srv := newCRLServer(t)
+				srv.serve(der, 200)
+				cfg := Config{CRLs: []CRLSource{{Name: name, URL: srv.URL + "/crl", Issuer: ca.Cert}}, StateDir: kept}
+				c, _, _ := newChecker(t, cfg, clk)
+				if errs := c.LoadAll(ctx); len(errs) != 0 {
+					t.Fatal(errs)
+				}
+				restarted, _, _ := newChecker(t, cfg, clk)
+				if errs := restarted.LoadPersisted(); len(errs) != 0 {
+					t.Fatalf("%q: %v", name, errs)
+				}
+				if r := check(t, restarted, leaf(t, ca, 5), ca.Cert); r.Verdict != Revoked {
+					t.Errorf("%q: %+v, want revoked from its kept list", name, r)
+				}
+			}
+			entries, _ := os.ReadDir(kept)
+			if len(entries) != 4 {
+				t.Errorf("state dir holds %d files, want 4", len(entries))
+			}
+			for _, e := range entries {
+				if !strings.HasPrefix(e.Name(), "crl-") || !strings.HasSuffix(e.Name(), ".der") {
+					t.Errorf("kept as %q", e.Name())
+				}
+			}
+			if outside, _ := os.ReadDir(filepath.Dir(kept)); len(outside) != 1 {
+				t.Errorf("the state directory's parent holds %d entries, want the directory alone", len(outside))
+			}
+			if _, err := os.Stat(filepath.Join(kept, "crl-issuing.der")); err != nil {
+				t.Errorf("a safe name is not kept as crl-<name>.der: %v", err)
+			}
+		})
 
 		t.Run("a kept list that does not verify", func(t *testing.T) {
 			forger := newCA(t, "issuing CA")

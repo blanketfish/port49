@@ -3,8 +3,10 @@ package certstatus
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/asn1"
+	"encoding/hex"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -14,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -41,6 +44,9 @@ const (
 	crlMax       = 16 << 20
 	crlFetchTime = 30 * time.Second
 	retryFirst   = 30 * time.Second
+	// crlFutureSkew is how far ahead a list's ThisUpdate may be, as an OCSP
+	// answer's may.
+	crlFutureSkew = 5 * time.Minute
 )
 
 var (
@@ -62,8 +68,26 @@ func (c *Checker) accept(src CRLSource, raw []byte) (*loadedCRL, error) {
 	if err != nil {
 		return nil, fmt.Errorf("does not parse as a CRL: %w", err)
 	}
+	if weakSignature(list.SignatureAlgorithm) {
+		return nil, fmt.Errorf("is signed with %s, which port49 does not trust", list.SignatureAlgorithm)
+	}
 	if err := list.CheckSignatureFrom(src.Issuer); err != nil {
 		return nil, fmt.Errorf("is not signed by issuer_file's certificate (%v)", err)
+	}
+	// The key alone is not the issuer: a CA's key under another CA's name
+	// would put its list on that name's certificates (RFC 5280 §6.3.3(b)).
+	if !bytes.Equal(list.RawIssuer, src.Issuer.RawSubject) {
+		return nil, fmt.Errorf("names its issuer %q, not issuer_file's %q",
+			printsafe.Line(list.Issuer.String(), 200), printsafe.Line(src.Issuer.Subject.String(), 200))
+	}
+	if len(list.AuthorityKeyId) > 0 && len(src.Issuer.SubjectKeyId) > 0 &&
+		!bytes.Equal(list.AuthorityKeyId, src.Issuer.SubjectKeyId) {
+		return nil, errors.New("names an authority key identifier other than issuer_file's subject key identifier")
+	}
+	// A list from the future, served early, would refuse the current one
+	// as a rollback until its own dates pass.
+	if list.ThisUpdate.After(c.now().Add(crlFutureSkew)) {
+		return nil, fmt.Errorf("is dated %s, in the future", list.ThisUpdate.UTC().Format(time.RFC3339))
 	}
 	l := &loadedCRL{name: src.Name, issuer: src.Issuer, list: list, revoked: map[string]revokedEntry{}}
 	for _, ext := range list.Extensions {
@@ -146,7 +170,7 @@ func (c *Checker) install(src CRLSource, l *loadedCRL, persist bool) error {
 	c.mu.Unlock()
 	c.gaugeOne(l)
 	if persist && c.cfg.StateDir != "" {
-		if err := inventory.WriteAtomic(c.cfg.StateDir, "crl-"+src.Name+".der", l.list.Raw, 0o600); err != nil {
+		if err := inventory.WriteAtomic(c.cfg.StateDir, stateFile(src.Name), l.list.Raw, 0o600); err != nil {
 			c.say("persist "+src.Name, "port49d: broker: certificate status: CRL %s could not be kept in %s (%v); "+
 				"a restart will fetch it again", src.Name, c.cfg.StateDir, err)
 		}
@@ -203,7 +227,7 @@ func (c *Checker) LoadPersisted() []error {
 		return nil
 	}
 	for _, src := range c.cfg.CRLs {
-		path := filepath.Join(c.cfg.StateDir, "crl-"+src.Name+".der")
+		path := filepath.Join(c.cfg.StateDir, stateFile(src.Name))
 		raw, err := fence.ReadNoLink(path, crlMax, "kept CRL")
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
@@ -288,7 +312,11 @@ func (c *Checker) fetch(ctx context.Context, src CRLSource) ([]byte, error) {
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("could not be fetched (%v)", err)
+		var uerr *url.Error
+		if errors.As(err, &uerr) {
+			err = uerr.Err // its message repeats the url as written, credentials and all
+		}
+		return nil, fmt.Errorf("could not be fetched from %s (%v)", printsafe.Line(redactURL(src.URL), 120), err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -351,6 +379,36 @@ func httpURL(s string) bool {
 	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
 }
 
+// redactURL is s for a log line or a Result: its userinfo and query, which
+// may carry a credential, are replaced.
+func redactURL(s string) string {
+	u, err := url.Parse(s)
+	if err != nil {
+		return "a url that does not parse"
+	}
+	if u.User != nil {
+		u.User = url.User("redacted")
+	}
+	if u.RawQuery != "" || u.ForceQuery {
+		u.RawQuery, u.ForceQuery = "redacted", false
+	}
+	u.Fragment, u.RawFragment = "", ""
+	return u.String()
+}
+
+var safeName = regexp.MustCompile(`^[a-z0-9_-]{1,64}$`)
+
+// stateFile is the name a source's list is kept under in StateDir:
+// crl-<name>.der, or for a name outside [a-z0-9_-] its SHA-256, so no name
+// reaches outside the directory or another source's file.
+func stateFile(name string) string {
+	if !safeName.MatchString(name) {
+		sum := sha256.Sum256([]byte(name))
+		name = "sha256-" + hex.EncodeToString(sum[:])
+	}
+	return "crl-" + name + ".der"
+}
+
 func minTime(a, b time.Time) time.Time {
 	if b.Before(a) {
 		return b
@@ -360,7 +418,7 @@ func minTime(a, b time.Time) time.Time {
 
 // checkCRLs reads every list in force whose issuer certificate is,
 // byte for byte, the certificate that verified cert (pre-flight C1); a
-// list scoped to user certificates covers depth 0 alone.
+// list scoped to user certificates covers a leaf that is not itself a CA.
 func (c *Checker) checkCRLs(cert, issuer *x509.Certificate, depth int) Result {
 	now := c.now()
 	c.mu.Lock()
@@ -369,7 +427,7 @@ func (c *Checker) checkCRLs(cert, issuer *x509.Certificate, depth int) Result {
 	var fresh *loadedCRL
 	var stale []string
 	for _, l := range c.crls {
-		if !bytes.Equal(l.issuer.Raw, issuer.Raw) || (l.userOnly && depth > 0) {
+		if !bytes.Equal(l.issuer.Raw, issuer.Raw) || (l.userOnly && (depth > 0 || cert.IsCA)) {
 			continue
 		}
 		if e, revoked := l.revoked[serial]; revoked {
