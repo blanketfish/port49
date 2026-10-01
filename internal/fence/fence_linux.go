@@ -110,6 +110,28 @@ func ReadNoLink(path string, max int64, what string) ([]byte, error) {
 	return raw, err
 }
 
+// CheckDir asks Read's question of the directory that holds, or will hold,
+// path: it exists, every link on the way to it passes the fence, and it is
+// writable by this process's user or root alone. It is asked whether or not
+// the file is there, so a missing file in a directory others can write is
+// refused rather than read as "nothing yet" (plan 7a, pre-flight C1).
+func CheckDir(path, what string) error {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return err
+	}
+	dir, err := resolvePolicyPath(filepath.Dir(abs))
+	if err != nil {
+		return err
+	}
+	d, di, err := openDir(dir)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	return writableByUsAlone("the directory "+dir+", holding the "+what, di)
+}
+
 // linkRefused is the refusal of a link in a file's own name, wrapping err so
 // errors.Is(err, syscall.ELOOP) still holds.
 func linkRefused(path, what string, err error) error {

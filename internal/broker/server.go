@@ -22,8 +22,10 @@ import (
 // answers device AAA with (pre-flight F1).
 const MaxConns = 256
 
-// Server serves the broker over mutual TLS on addr; call
-// ServeTLS(Limit(ln, MaxConns), "", "").
+// Server serves the broker over mutual TLS on addr; serve it with
+// srv.Serve(NewListener(Limit(ln, MaxConns), srv.TLSConfig, limits, …)), which
+// completes each handshake itself and bounds each source and each principal
+// (spec §13 decision 32). ServeTLS still works and bounds neither.
 //
 // The client certificate is requested and, when given, verified against the
 // one anchor at the handshake (VerifyClientCertIfGiven): /v1/config is
@@ -36,7 +38,8 @@ const MaxConns = 256
 // max_session_age: an operator who mints at 09:00 and again at 15:00 is on one
 // handshake. A connection with no certificate is closed as soon as it goes
 // idle (closeIdleWithoutCertificate). ConnContext stamps each connection's
-// auth_time at accept, before its handshake (Decided 2; pre-flight F3).
+// auth_time at accept, before its handshake (Decided 2; pre-flight F3): the
+// Listener's accept time, read through the connection (acceptedAt).
 //
 // Session tickets are off: a resumed TLS 1.3 session proves nothing about the
 // key, and every connection must be a handshake that uses it — which is what
@@ -88,7 +91,7 @@ func (b *Broker) Server(addr string, cert tls.Certificate, anchor *x509.CertPool
 			},
 		},
 		TLSNextProto:      map[string]func(*http.Server, *tls.Conn, http.Handler){},
-		ConnContext:       func(ctx context.Context, _ net.Conn) context.Context { return withHeldConn(ctx, b.Now()) },
+		ConnContext:       func(ctx context.Context, c net.Conn) context.Context { return withHeldConn(ctx, acceptedAt(c, b.Now)) },
 		ConnState:         closeIdleWithoutCertificate,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       readTimeout,
@@ -153,6 +156,9 @@ type limitedConn struct {
 	once sync.Once
 	free func()
 }
+
+// NetConn is the connection under the slot, for reset's SetLinger.
+func (c *limitedConn) NetConn() net.Conn { return c.Conn }
 
 func (c *limitedConn) Close() error {
 	err := c.Conn.Close()

@@ -35,14 +35,33 @@ func TestPrivatePolicyCopiesABrokerConfigsInventory(t *testing.T) {
 	if err := os.WriteFile(pol, []byte("version: 1\n"), 0o664); err != nil {
 		t.Fatal(err)
 	}
-	got, err := privatePolicy(standing+"\nbroker:\n  policy_file: "+pol+"\n", dir)
+	// A revocations file a previous run left, and its marker, would refuse
+	// this run's mints or, the marker alone, its start (plan 7a, pre-flight
+	// I6): neither outlives the derivation.
+	rev := filepath.Join(dir, "revocations.json")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{rev, rev + ".created"} {
+		if err := os.WriteFile(p, []byte("stale\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := privatePolicy(standing+"\nbroker:\n  policy_file: "+pol+"\n"+
+		"  revocations_file: tests/lab/logs/revocations-slice.json\n", dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	inv := filepath.Join(dir, "inventory.yaml")
 	if !strings.Contains(got, "\ninventory_file: "+inv+"\n") ||
-		!strings.Contains(got, "\n  policy_file: "+filepath.Join(dir, "policy.yaml")+"\n") {
+		!strings.Contains(got, "\n  policy_file: "+filepath.Join(dir, "policy.yaml")+"\n") ||
+		!strings.Contains(got, "\n  revocations_file: "+rev+"\n") {
 		t.Fatalf("the lines were not pointed at the copies:\n%s", got)
+	}
+	for _, p := range []string{rev, rev + ".created"} {
+		if _, err := os.Lstat(p); !os.IsNotExist(err) {
+			t.Errorf("%s outlived the derivation: %v", p, err)
+		}
 	}
 	want, err := os.ReadFile(filepath.Join(r, "tests", "lab", "inventory-lab.yaml"))
 	if err != nil {

@@ -13,10 +13,11 @@ import (
 
 var ErrNotFound = errors.New("store: not found")
 
-// ErrConflict is SwapContext refusing a write because the context is no longer
-// the one the caller read: another writer landed in between, or the record
-// expired, or one appeared where none was. Nothing was written. The caller
-// reads again and decides again; JoinContext is the loop that does.
+// ErrConflict is a compare-and-set refused because the record is no longer
+// the one the caller read: SwapContext's context, written by another writer
+// since, expired, or appeared where none was; or CompleteIdempotency's
+// record, no longer held by the caller (plan 7a). Nothing was written. The
+// caller reads again and decides again; JoinContext is the loop that does.
 var ErrConflict = errors.New("store: context changed since it was read")
 
 // UnreadableContextError is a context record the store returned and the
@@ -348,6 +349,14 @@ type Idempotency struct {
 	Response  []byte // sealed — it contains the minted tokens (design §17)
 	ExpiresAt time.Time
 	Sealed    []byte
+	// Holder is the request that reserved the record (ReserveIdempotency):
+	// random, never logged, and kept when the record is completed, so a
+	// completion is a compare-and-set on it (CompleteIdempotency).
+	Holder string
+	// Pending is a reservation whose mint has not finished. It carries no
+	// Response; a request that finds it is told to retry, and nothing is
+	// minted for it (design §17).
+	Pending bool
 }
 
 type Store interface {
@@ -593,13 +602,76 @@ type Store interface {
 	ContextsByCert(ctx context.Context, certKey string) ([]ContextRef, error)
 	ReindexSid(ctx context.Context, oldSid, newSid string, ref ContextRef, ttl time.Duration) error
 	ActivePrincipals(ctx context.Context) ([]string, error)
+	// IndexToken records that principal, and the certificate certKey
+	// (CertKey), hold an unspent token under k, until ttl from now, keeping
+	// the later expiry where one is already recorded. The minter writes it
+	// before the token, so no token exists that a revocation cannot find
+	// (plan 7a). An empty principal or certKey skips that index, as
+	// IndexContext does, and so does a certKey with no issuer or no serial,
+	// or that is not a CertKey at all.
+	// An entry outliving its token costs a revocation one DeleteTokens on an
+	// empty key.
+	IndexToken(ctx context.Context, principal, certKey string, k TokenKey, ttl time.Duration) error
+	// TokensByPrincipal and TokensByCert are the keys under which the
+	// principal, or the certificate, holds or held an unspent token, sorted
+	// by (NAS, Username).
+	TokensByPrincipal(ctx context.Context, principal string) ([]TokenKey, error)
+	TokensByCert(ctx context.Context, certKey string) ([]TokenKey, error)
 
-	PutIdempotency(ctx context.Context, principal, key string, rec Idempotency) error
-	GetIdempotency(ctx context.Context, principal, key string) (Idempotency, error)
+	// ReserveIdempotency writes rec under (principal, key) when no live
+	// record is there, in one atomic step, and reports true. When one is, it
+	// writes nothing and returns that record and false. Two concurrent
+	// requests under one key therefore cannot both pass (design §17). A
+	// record without a Holder is refused: the empty holder is anyone's.
+	ReserveIdempotency(ctx context.Context, principal, key string, rec Idempotency) (Idempotency, bool, error)
+	// CompleteIdempotency replaces the live record under (principal, key)
+	// with rec only while that record's Holder is expect; otherwise it writes
+	// nothing and returns ErrConflict. An expired reservation, or one another
+	// request has taken since, is never overwritten. An empty expect is
+	// ErrConflict, and a rec without a Holder is refused.
+	CompleteIdempotency(ctx context.Context, principal, key, expect string, rec Idempotency) error
+	// ReleaseIdempotency deletes the record under (principal, key) only
+	// while it is a pending reservation held by holder; anything else stays.
+	ReleaseIdempotency(ctx context.Context, principal, key, holder string) error
+
+	// PutRevocation puts r in force. An existing mark for (r.Kind, r.Key) is
+	// kept whole: a repeat never moves its time or origin, and never lifts.
+	// A mark that could match nothing is refused: a Kind that is neither
+	// RevocationPrincipal nor RevocationCert, an empty Key, or a certificate
+	// Key that is not a CertKey or has no issuer or no serial, which
+	// IndexToken never indexes.
+	PutRevocation(ctx context.Context, r Revocation) error
+	// GetRevocation is the mark in force for (kind, key), or ErrNotFound.
+	GetRevocation(ctx context.Context, kind, key string) (Revocation, error)
+	// DeleteRevocation lifts the mark for (kind, key); none is not an error.
+	DeleteRevocation(ctx context.Context, kind, key string) error
+	// ListRevocations is every mark in force, sorted by (Kind, Key).
+	ListRevocations(ctx context.Context) ([]Revocation, error)
 }
 
 // CertKey is the index key a CRL or OCSP response names (spec §5.1.4).
 func CertKey(issuer, serial string) string { return issuer + "|" + serial }
+
+// Revocation kinds (spec §5.1.4; plan 7a).
+const (
+	RevocationPrincipal = "principal"
+	RevocationCert      = "cert"
+)
+
+// Revocation is a standing refusal of a principal, or of one certificate
+// by CertKey(issuer, serial): every mint it names is refused until an
+// operator deletes it (spec §5.1.4, §13 decision 32). It never expires. It
+// is plaintext, as the indexes are: it names identity and holds no
+// credential, and revocation must not depend on the encryption key.
+type Revocation struct {
+	Kind string
+	Key  string
+	// At is when the mark took force. A second put of the same key keeps the
+	// first mark whole: the refusal has stood since then.
+	At time.Time
+	// Origin says who asked: "admin_socket uid 0".
+	Origin string
+}
 
 // HasCeiling reports whether this context carries a session ceiling.
 func (c Context) HasCeiling() bool { return !c.SessionExpires.IsZero() && !c.AuthTime.IsZero() }

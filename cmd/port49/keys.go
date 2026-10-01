@@ -1,11 +1,9 @@
 package main
 
 import (
-	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
-	"net"
 	"os"
 	"sort"
 	"time"
@@ -211,20 +209,8 @@ func keysDiagnose(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stderr, usage)
 		return 2
 	}
-	c, err := net.DialTimeout("unix", *socket, 5*time.Second)
+	resp, err := askAdmin(*socket, admin.Request{Op: "keys_diagnose", Device: fs.Arg(0)}, 10*time.Second)
 	if err != nil {
-		fmt.Fprintf(stderr, "port49 keys diagnose: %v (is admin_socket set in port49d.yaml, and are you port49d's "+
-			"user or root?)\n", err)
-		return 1
-	}
-	defer c.Close()
-	_ = c.SetDeadline(time.Now().Add(10 * time.Second))
-	if err := json.NewEncoder(c).Encode(admin.Request{Op: "keys_diagnose", Device: fs.Arg(0)}); err != nil {
-		fmt.Fprintln(stderr, "port49 keys diagnose:", err)
-		return 1
-	}
-	var resp admin.Response
-	if err := json.NewDecoder(c).Decode(&resp); err != nil {
 		fmt.Fprintln(stderr, "port49 keys diagnose:", err)
 		return 1
 	}

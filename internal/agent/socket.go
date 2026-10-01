@@ -158,9 +158,13 @@ func (c *Client) Token(ctx context.Context, r TokenRequest) (api.MintItem, error
 		return item, nil
 	case http.StatusGone:
 		// Detail is the agent's ErrSessionOver with why the session ended
-		// after it; the caller still matches it with errors.Is.
+		// after it, or, for a revocation, the broker's detail alone; the
+		// caller still matches either with errors.Is.
 		var e api.Error
 		_ = json.NewDecoder(resp.Body).Decode(&e)
+		if e.Error == "credential_revoked" {
+			return api.MintItem{}, &RevokedError{Detail: e.Detail}
+		}
 		return api.MintItem{}, fmt.Errorf("%w%s", ErrSessionOver, strings.TrimPrefix(e.Detail, ErrSessionOver.Error()))
 	default:
 		var e api.Error

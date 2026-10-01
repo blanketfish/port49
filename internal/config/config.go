@@ -148,7 +148,9 @@ type TokenConfig struct {
 // command is denied on a platform that authorizes commands. On one that does
 // not (Junos, spec §13 decision 21) the live shell keeps its access until
 // logout: the refresh line counts those and the process log names each
-// ctx_id, so close them on the device. Certificate revocation is plan 7.
+// ctx_id, so close them on the device. To end a principal's or a
+// certificate's sessions at once, use `port49 revoke` over `admin_socket`
+// (plan 7a).
 //
 // A relative path resolves against port49d's working directory, not the
 // config file's, as inventory_file does.
@@ -178,6 +180,23 @@ type BrokerConfig struct {
 	// there. The file and its directory must be writable by port49d's user or
 	// root alone, or it is refused (spec §5.1.3).
 	PolicyWatchInterval time.Duration `yaml:"policy_watch_interval"`
+	// RevocationsFile is where port49d keeps the revocations `port49 revoke`
+	// puts in force (plan 7a), so a restart forgets none. Required. Its
+	// directory must exist and be writable by port49d's user or root alone,
+	// and the file's own name may not be a link. port49d creates it at the
+	// first start, with a marker beside it (<file>.created); after that a
+	// missing file, or one that does not load, refuses the start, and so does
+	// a directory others can write (spec §13 decision 32). port49d writes it,
+	// 0600 and atomically, after every revocation and lift.
+	RevocationsFile string `yaml:"revocations_file"`
+	// MaxConnsPerPrincipal caps one principal's held broker connections; a
+	// new one closes the oldest of its certificate, else the principal's
+	// oldest (spec §13 decision 32). Default 4; 1 to 64.
+	MaxConnsPerPrincipal int `yaml:"max_conns_per_principal"`
+	// MaxPendingConnsPerSource caps the broker connections one address holds
+	// that are not bound to a principal; the next is reset. Default 16; 1 to
+	// 256.
+	MaxPendingConnsPerSource int `yaml:"max_pending_conns_per_source"`
 }
 
 // encKeyYAML names one encryption-at-rest key: the id that travels with every
@@ -577,6 +596,7 @@ func Load(path string) (Config, error) {
 		for _, req := range []struct{ key, v string }{
 			{"broker.listen", b.Listen}, {"broker.tls_cert_file", b.TLSCertFile}, {"broker.tls_key_file", b.TLSKeyFile},
 			{"broker.client_ca_file", b.ClientCAFile}, {"broker.policy_file", b.PolicyFile},
+			{"broker.revocations_file", b.RevocationsFile},
 		} {
 			if req.v == "" {
 				return Config{}, fmt.Errorf("config: %s is required when broker: is present; remove the block to run "+
@@ -591,6 +611,21 @@ func Load(path string) (Config, error) {
 		if b.PolicyWatchInterval < time.Second || b.PolicyWatchInterval > 5*time.Minute {
 			return Config{}, fmt.Errorf("config: broker.policy_watch_interval must be between 1s and 5m; got %s",
 				b.PolicyWatchInterval)
+		}
+		// orI maps 0 alone to the default, so a negative value reaches the
+		// bound and is refused.
+		b.MaxConnsPerPrincipal = orI(b.MaxConnsPerPrincipal, 4)
+		if b.MaxConnsPerPrincipal < 1 || b.MaxConnsPerPrincipal > 64 {
+			return Config{}, fmt.Errorf("config: broker.max_conns_per_principal must be between 1 and 64; got %d",
+				b.MaxConnsPerPrincipal)
+		}
+		b.MaxPendingConnsPerSource = orI(b.MaxPendingConnsPerSource, 16)
+		if b.MaxPendingConnsPerSource < 1 || b.MaxPendingConnsPerSource > 256 {
+			return Config{}, fmt.Errorf("config: broker.max_pending_conns_per_source must be between 1 and 256; got %d",
+				b.MaxPendingConnsPerSource)
+		}
+		if err := ownRevocationsFile(c, b); err != nil {
+			return Config{}, err
 		}
 		c.Broker = &b
 	}
@@ -1006,6 +1041,64 @@ func checkService(s InventoryServiceConfig) (*InventoryServiceConfig, error) {
 			s.PollInterval)
 	}
 	return &s, nil
+}
+
+// ownRevocationsFile refuses a broker.revocations_file that is another path
+// port49d reads or writes, compared as absolute paths (pre-flight M13):
+// written over the policy or a key it would destroy it, and a file shared
+// with another writer is not the record of revocations. Its marker
+// (<file>.created), which port49d writes too, is held to the same. Nor may it
+// sit in the inventory service's state or mirror directory, whose files the
+// service and port49d rewrite.
+func ownRevocationsFile(c Config, b BrokerConfig) error {
+	revAbs, err := filepath.Abs(b.RevocationsFile)
+	if err != nil {
+		return fmt.Errorf("config: broker.revocations_file: %w", err)
+	}
+	others := []struct{ key, path string }{
+		{"broker.policy_file", b.PolicyFile}, {"broker.tls_cert_file", b.TLSCertFile},
+		{"broker.tls_key_file", b.TLSKeyFile}, {"broker.client_ca_file", b.ClientCAFile},
+		{"inventory_file", c.InventoryFile}, {"accounting.spool_path", c.Accounting.SpoolPath},
+		{"admin_socket", c.AdminSocket},
+	}
+	if c.Lab != nil {
+		others = append(others, struct{ key, path string }{"lab.seed_token_file", c.Lab.SeedTokenFile},
+			struct{ key, path string }{"lab.fault_file", c.Lab.FaultFile})
+	}
+	if s := c.InventoryService; s != nil {
+		others = append(others, struct{ key, path string }{"inventory.service.ca_file", s.CAFile},
+			struct{ key, path string }{"inventory.service.tls_cert_file", s.TLSCertFile},
+			struct{ key, path string }{"inventory.service.tls_key_file", s.TLSKeyFile})
+		for i, f := range s.VerifyKeyFiles {
+			others = append(others, struct{ key, path string }{fmt.Sprintf("inventory.service.verify_key_files[%d]", i), f})
+		}
+	}
+	for _, o := range others {
+		if o.path == "" {
+			continue
+		}
+		oAbs, err := filepath.Abs(o.path)
+		if err != nil {
+			continue
+		}
+		switch oAbs {
+		case revAbs:
+			return fmt.Errorf("config: broker.revocations_file is port49d's own state and may not be %s", o.key)
+		case revAbs + ".created":
+			return fmt.Errorf("config: broker.revocations_file's marker (%s.created) is port49d's own state and "+
+				"may not be %s", filepath.Base(revAbs), o.key)
+		}
+	}
+	if s := c.InventoryService; s != nil {
+		for _, d := range []struct{ key, dir string }{{"inventory.service.state_dir", s.StateDir},
+			{"inventory.service.mirror_dir", s.MirrorDir}} {
+			if d.dir != "" && within(d.dir, revAbs) {
+				return fmt.Errorf("config: broker.revocations_file is port49d's own state and may not be inside %s",
+					d.key)
+			}
+		}
+	}
+	return nil
 }
 
 // within reports whether dir is base or a directory under it.

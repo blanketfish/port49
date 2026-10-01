@@ -15,6 +15,35 @@ import (
 	"github.com/rhwendt/port49/internal/store"
 )
 
+// Planter is a store a test can write an idempotency record into whole,
+// bypassing the holder checks every store.Store method makes, as an older
+// port49's record or a corrupted one would sit there. IdempotencyReservesOnce
+// checks that such a record is nobody's on a store that is one.
+type Planter interface {
+	PlantIdempotency(ctx context.Context, principal, key string, rec store.Idempotency) error
+}
+
+// Peek is the live idempotency record under (principal, key), and whether
+// there is one, read through ReserveIdempotency, which returns a live record
+// untouched: store.Store has no plain read, since nothing but a reservation
+// reads one. A probe reservation it writes when there is none is released.
+func Peek(t *testing.T, s store.Store, principal, key string) (store.Idempotency, bool) {
+	t.Helper()
+	ctx := context.Background()
+	cur, ok, err := s.ReserveIdempotency(ctx, principal, key, store.Idempotency{BodyHash: "peek", Holder: "storetest-peek",
+		Pending: true, ExpiresAt: time.Now().Add(time.Hour)})
+	if err != nil {
+		t.Fatalf("peeking at the idempotency record %q: %v", key, err)
+	}
+	if ok {
+		if err := s.ReleaseIdempotency(ctx, principal, key, "storetest-peek"); err != nil {
+			t.Fatal(err)
+		}
+		return store.Idempotency{}, false
+	}
+	return cur, true
+}
+
 // JoinRacesRevocation runs logins joining one live context concurrently with a
 // revocation of it, many rounds over, and checks that nothing is lost: the
 // revocation stands, because every token was minted before it; every login
@@ -292,5 +321,281 @@ func RevocationIsMonotonic(t *testing.T, newStore func() store.Store, now time.T
 	}
 	if got := marked(); !got.Equal(now) {
 		t.Fatalf("a later mark must replace an earlier one: %v, want %v", got, now)
+	}
+}
+
+// IdempotencyReservesOnce is design §17's "a retry that reaches a different
+// replica MUST behave identically" made a store property (plan 7a): of many
+// concurrent reservations under one key exactly one wins, and every loser
+// sees the winner's pending record; a completion is a compare-and-set on the
+// holder; a release takes only its own pending reservation; and a key is
+// scoped to its principal.
+//
+// newStore returns a fresh store whose clock returns now.
+func IdempotencyReservesOnce(t *testing.T, newStore func() store.Store, now time.Time) {
+	t.Helper()
+	const principal, key, racers = "user:alice@example.com", "01J\x00leaf-01", 32
+	ctx := context.Background()
+	s := newStore()
+	pending := func(holder string) store.Idempotency {
+		return store.Idempotency{BodyHash: "h1", Holder: holder, Pending: true, ExpiresAt: now.Add(time.Minute)}
+	}
+	start := make(chan struct{})
+	won := make(chan string, racers)
+	var wg sync.WaitGroup
+	for i := 0; i < racers; i++ {
+		holder := fmt.Sprintf("holder-%02d", i)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			cur, ok, err := s.ReserveIdempotency(ctx, principal, key, pending(holder))
+			switch {
+			case err != nil:
+				t.Error(err)
+			case ok:
+				won <- holder
+			case !cur.Pending || cur.BodyHash != "h1" || cur.Holder == "":
+				t.Errorf("a losing reservation must see the winner's pending record: %+v", cur)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(won)
+	var winners []string
+	for h := range won {
+		winners = append(winners, h)
+	}
+	if len(winners) != 1 {
+		t.Fatalf("%d concurrent reservations of one key won: %v", len(winners), winners)
+	}
+	winner := winners[0]
+
+	if err := s.ReleaseIdempotency(ctx, principal, key, "someone-else"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, _ := s.ReserveIdempotency(ctx, principal, key, pending("late")); ok {
+		t.Fatal("a release by another holder removed the reservation")
+	}
+	done := store.Idempotency{BodyHash: "h1", Holder: winner, Response: []byte(`{"login":"x"}`),
+		ExpiresAt: now.Add(time.Hour)}
+	if err := s.CompleteIdempotency(ctx, principal, key, "someone-else", done); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("a completion by another holder: %v, want ErrConflict", err)
+	}
+	if err := s.CompleteIdempotency(ctx, principal, key, winner, done); err != nil {
+		t.Fatal(err)
+	}
+	cur, ok, err := s.ReserveIdempotency(ctx, principal, key, pending("after"))
+	if err != nil || ok || cur.Pending || cur.Holder != winner || string(cur.Response) != `{"login":"x"}` {
+		t.Fatalf("after completion a reservation must find the completed record: %+v %v %v", cur, ok, err)
+	}
+	if err := s.ReleaseIdempotency(ctx, principal, key, winner); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, _ := s.ReserveIdempotency(ctx, principal, key, pending("after-release")); ok {
+		t.Fatal("a release removed a completed record")
+	}
+	// Taking over a completed record (a replay the minter abandons) is a
+	// compare-and-set on the old holder too.
+	again := done
+	again.Holder, again.Response = "next", []byte(`{"login":"y"}`)
+	if err := s.CompleteIdempotency(ctx, principal, key, winner, again); err != nil {
+		t.Fatalf("replacing a completed record by its holder: %v", err)
+	}
+	if err := s.CompleteIdempotency(ctx, principal, "never-reserved", "", done); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("completing a key nobody reserved: %v, want ErrConflict", err)
+	}
+	if _, ok, err := s.ReserveIdempotency(ctx, "user:bob@example.com", key, pending("bob")); err != nil || !ok {
+		t.Fatalf("another principal under the same key is its own record: %v %v", ok, err)
+	}
+
+	// The empty holder is one anyone can name, so the store refuses it on
+	// every side: no reservation or completion carries it, and no completion
+	// expects it.
+	if _, ok, err := s.ReserveIdempotency(ctx, principal, "anon", pending("")); err == nil || ok {
+		t.Fatalf("a reservation without a holder: %v %v, want refused", ok, err)
+	}
+	if _, ok, err := s.ReserveIdempotency(ctx, principal, "anon", pending("anon-holder")); err != nil || !ok {
+		t.Fatalf("a refused reservation wrote a record: %v %v", ok, err)
+	}
+	anon := done
+	anon.Holder = ""
+	if err := s.CompleteIdempotency(ctx, principal, "anon", "anon-holder", anon); err == nil {
+		t.Fatal("a completion without a holder was written")
+	}
+	if err := s.CompleteIdempotency(ctx, principal, "anon", "", done); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("a completion expecting the empty holder: %v, want ErrConflict", err)
+	}
+	// A record with no holder at all is still nobody's: expecting the empty
+	// holder does not match it. No store.Store method writes one, so it is
+	// planted where the backend can (Planter).
+	if p, ok := s.(Planter); ok {
+		if err := p.PlantIdempotency(ctx, principal, "planted",
+			store.Idempotency{BodyHash: "h1", Response: []byte("x"), ExpiresAt: now.Add(time.Hour)}); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.CompleteIdempotency(ctx, principal, "planted", "", done); !errors.Is(err, store.ErrConflict) {
+			t.Fatalf("a completion expecting the empty holder of a holderless record: %v, want ErrConflict", err)
+		}
+	}
+	if cur, ok, _ := s.ReserveIdempotency(ctx, principal, "anon", pending("late")); ok || !cur.Pending || cur.Holder != "anon-holder" {
+		t.Fatalf("a refused completion changed the reservation: %+v %v", cur, ok)
+	}
+}
+
+// IdempotencyLeaseExpires is the reservation's lease (plan 7a): a
+// reservation a dead broker left behind expires, past it a retry reserves
+// afresh, and the dead holder can no longer complete or release what is now
+// someone else's.
+//
+// newStore returns a fresh store whose clock reads now, and a func that moves
+// that clock forward; a backend whose expiry is server-side advances it by
+// its own means.
+func IdempotencyLeaseExpires(t *testing.T, newStore func() (store.Store, func(time.Duration)), now time.Time) {
+	t.Helper()
+	ctx := context.Background()
+	s, advance := newStore()
+	res := func(h string) store.Idempotency {
+		return store.Idempotency{BodyHash: "h1", Holder: h, Pending: true, ExpiresAt: now.Add(time.Minute)}
+	}
+	if _, ok, err := s.ReserveIdempotency(ctx, "user:alice", "k", res("dead")); err != nil || !ok {
+		t.Fatalf("first reservation: %v %v", ok, err)
+	}
+	advance(time.Minute)
+	now = now.Add(time.Minute)
+	if _, ok, err := s.ReserveIdempotency(ctx, "user:alice", "k", res("retry")); err != nil || !ok {
+		t.Fatalf("a reservation past its expiry must not stand: %v %v", ok, err)
+	}
+	if err := s.CompleteIdempotency(ctx, "user:alice", "k", "dead",
+		store.Idempotency{BodyHash: "h1", Holder: "dead", ExpiresAt: now.Add(time.Hour)}); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("the dead holder completed the retry's reservation: %v", err)
+	}
+	if err := s.ReleaseIdempotency(ctx, "user:alice", "k", "dead"); err != nil {
+		t.Fatal(err)
+	}
+	if cur, ok, _ := s.ReserveIdempotency(ctx, "user:alice", "k", res("third")); ok || cur.Holder != "retry" {
+		t.Fatalf("the dead holder released the retry's reservation: %+v %v", cur, ok)
+	}
+}
+
+// TokenIndex is what a revocation needs to find a principal's, or a
+// certificate's, unspent tokens without a keyspace scan (plan 7a): keys come
+// back sorted, one entry per key however often it is indexed, an empty
+// principal or certificate is never an index key, and one principal's or
+// certificate's keys are its own.
+func TokenIndex(t *testing.T, newStore func() store.Store, now time.Time) {
+	t.Helper()
+	ctx := context.Background()
+	s := newStore()
+	const alice, bob = "user:alice@example.com", "user:bob@example.com"
+	certA := store.CertKey("CN=Corp CA", "3f9a01")
+	leaf2 := store.TokenKey{NAS: "leaf-02", Username: "alice"}
+	leaf1 := store.TokenKey{NAS: "leaf-01", Username: "alice"}
+	for _, k := range []store.TokenKey{leaf2, leaf1, leaf2} {
+		if err := s.IndexToken(ctx, alice, certA, k, time.Minute); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.IndexToken(ctx, bob, "", store.TokenKey{NAS: "leaf-01", Username: "bob"}, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.TokensByPrincipal(ctx, alice)
+	if err != nil || len(got) != 2 || got[0] != leaf1 || got[1] != leaf2 {
+		t.Fatalf("alice's keys: %v %v", got, err)
+	}
+	if got, err := s.TokensByCert(ctx, certA); err != nil || len(got) != 2 {
+		t.Fatalf("the certificate's keys: %v %v", got, err)
+	}
+	if got, err := s.TokensByCert(ctx, ""); err != nil || len(got) != 0 {
+		t.Fatalf("an empty certificate key indexed %v (%v): every certificate-less login would share it", got, err)
+	}
+	if got, _ := s.TokensByPrincipal(ctx, "user:carol@example.com"); len(got) != 0 {
+		t.Fatalf("a principal with no token: %v", got)
+	}
+
+	// A certificate key with no issuer or no serial names no certificate,
+	// as IndexContext reads it: indexed, every such login would share it. A
+	// key that is not a CertKey at all names none either.
+	for _, blank := range []string{store.CertKey("", ""), store.CertKey("CN=Corp CA", ""), store.CertKey("", "3f9a01"),
+		"3f9a01"} {
+		if err := s.IndexToken(ctx, bob, blank, store.TokenKey{NAS: "leaf-02", Username: "bob"}, time.Minute); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := s.TokensByCert(ctx, blank); err != nil || len(got) != 0 {
+			t.Fatalf("the blank certificate key %q indexed %v (%v)", blank, got, err)
+		}
+	}
+}
+
+// RevocationMarks is the mark a revocation leaves (spec §5.1.4; plan 7a): it
+// stands until it is deleted; a second put of the same key keeps the first
+// whole, so a repeat neither moves its time nor its origin; a principal's
+// and a certificate's marks are kept apart; and the list is sorted. A mark
+// that could match nothing — an unknown kind, an empty key, a certificate
+// key with no issuer, no serial or no "|", which the token and context indexes
+// never hold — is refused, so a revocation never reports a mark that
+// revokes nothing.
+func RevocationMarks(t *testing.T, newStore func() store.Store, now time.Time) {
+	t.Helper()
+	ctx := context.Background()
+	s := newStore()
+	alice := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:alice@example.com", At: now,
+		Origin: "admin_socket uid 0"}
+	cert := store.Revocation{Kind: store.RevocationCert, Key: store.CertKey("CN=Corp CA", "3f9a01"),
+		At: now.Add(time.Second), Origin: "admin_socket uid 0"}
+	// bob sorts after alice within the principal kind, and is put first, so
+	// the list's order within a kind is the store's, not the order of puts.
+	bob := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:bob@example.com", At: now,
+		Origin: "admin_socket uid 0"}
+	if _, err := s.GetRevocation(ctx, alice.Kind, alice.Key); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("no mark yet: %v", err)
+	}
+	for _, r := range []store.Revocation{bob, cert, alice} {
+		if err := s.PutRevocation(ctx, r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	again := alice
+	again.At, again.Origin = now.Add(time.Hour), "admin_socket uid 1000"
+	if err := s.PutRevocation(ctx, again); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetRevocation(ctx, alice.Kind, alice.Key)
+	if err != nil || !got.At.Equal(now) || got.Origin != alice.Origin {
+		t.Fatalf("a repeat revocation moved the mark: %+v %v", got, err)
+	}
+	if _, err := s.GetRevocation(ctx, store.RevocationCert, alice.Key); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("a principal's mark answered for a certificate: %v", err)
+	}
+	for _, r := range []store.Revocation{
+		{Kind: "", Key: "user:bob@example.com", At: now},
+		{Kind: "device", Key: "user:bob@example.com", At: now},
+		{Kind: store.RevocationPrincipal, Key: "", At: now},
+		{Kind: store.RevocationCert, Key: "", At: now},
+		{Kind: store.RevocationCert, Key: store.CertKey("", "3f9a01"), At: now},
+		{Kind: store.RevocationCert, Key: store.CertKey("CN=Corp CA", ""), At: now},
+		{Kind: store.RevocationCert, Key: "3f9a01", At: now},
+	} {
+		if err := s.PutRevocation(ctx, r); err == nil {
+			t.Fatalf("an incomplete mark was taken: %+v", r)
+		}
+	}
+	list, err := s.ListRevocations(ctx)
+	if err != nil || len(list) != 3 || list[0].Kind != store.RevocationCert || list[1].Key != alice.Key ||
+		list[2].Key != bob.Key {
+		t.Fatalf("list: %+v %v", list, err)
+	}
+	if err := s.DeleteRevocation(ctx, alice.Kind, alice.Key); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.GetRevocation(ctx, alice.Kind, alice.Key); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("a lifted mark stands: %v", err)
+	}
+	if err := s.DeleteRevocation(ctx, alice.Kind, alice.Key); err != nil {
+		t.Fatalf("lifting a mark twice: %v", err)
+	}
+	if got, err := s.GetRevocation(ctx, cert.Kind, cert.Key); err != nil || !got.At.Equal(cert.At) {
+		t.Fatalf("lifting a principal's mark lifted the certificate's: %+v %v", got, err)
 	}
 }

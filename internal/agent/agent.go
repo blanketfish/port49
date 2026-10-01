@@ -26,6 +26,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptrace"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -52,12 +53,46 @@ type Config struct {
 // trusts. The answer is `port49 login`.
 var ErrSessionOver = errors.New("agent: the session is over; run `port49 login`")
 
+// RevokedError is a session an operator's revocation ended (spec §5.1.4).
+// It is ErrSessionOver to errors.Is, but its text does not say to log in:
+// a login is refused the same way until the revocation is lifted. Detail is
+// the broker's, which says since when and who lifts it.
+type RevokedError struct{ Detail string }
+
+func (e *RevokedError) Error() string { return "agent: the session is over: " + e.Detail }
+
+// Is makes a revocation ErrSessionOver, so every caller ends the session.
+func (e *RevokedError) Is(target error) bool { return target == ErrSessionOver }
+
 // connectTimeout bounds Connect: the dial and the handshake that is the
 // session's one use of the key. It is inside `port49 login`'s 15-second wait,
 // so a broker that never answers is reported through the agent's own log
 // rather than by login giving up on a silent agent (pre-flight F9). A var so
 // a test can shorten it.
 var connectTimeout = 10 * time.Second
+
+// inProgressRetries and inProgressDelay bound how long Mint waits for a
+// first try still minting under its key: fifteen seconds, past the
+// broker's ten-second bound on a mint's store calls. The broker's
+// Retry-After, when it sends one, replaces inProgressDelay up to
+// inProgressDelayMax, so a broker that asks for an hour cannot park a
+// login for one. Vars so a test can shorten them.
+var (
+	inProgressRetries  = 15
+	inProgressDelay    = time.Second
+	inProgressDelayMax = 5 * time.Second
+)
+
+// retryAfter is how long to wait before asking again: the broker's
+// Retry-After in whole seconds, capped at inProgressDelayMax, or
+// inProgressDelay when it sends none the agent can read.
+func retryAfter(h http.Header) time.Duration {
+	n, err := strconv.Atoi(h.Get("Retry-After"))
+	if err != nil || n <= 0 {
+		return min(inProgressDelay, inProgressDelayMax)
+	}
+	return min(time.Duration(n)*time.Second, inProgressDelayMax)
+}
 
 // Agent is one operator session.
 type Agent struct {
@@ -142,7 +177,14 @@ func (a *Agent) Connect(ctx context.Context) (api.Config, error) {
 	}
 	defer drain(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return api.Config{}, fmt.Errorf("agent: %s/v1/config answered %s", a.broker, resp.Status)
+		var e api.Error
+		_ = json.NewDecoder(resp.Body).Decode(&e)
+		if over := sessionOver(resp.StatusCode, e); over != nil {
+			// A revoked principal or certificate is answered so as its
+			// connection binds (spec §5.1.4): say why, and since when.
+			return api.Config{}, over
+		}
+		return api.Config{}, fmt.Errorf("agent: %s/v1/config answered %s: %s %s", a.broker, resp.Status, e.Error, e.Detail)
 	}
 	var c api.Config
 	if err := json.NewDecoder(resp.Body).Decode(&c); err != nil {
@@ -168,9 +210,10 @@ func (a *Agent) SessionEndsAt() time.Time {
 func (a *Agent) Handshakes() int64 { return a.handshakes.Load() }
 
 // Done is closed when the broker ends the session — it answered
-// session_expired, or it no longer trusts the certificate. The agent process
-// exits on it, so the next `port49 login` starts a new session instead of
-// finding this one "already logged in" (pre-flight F10).
+// session_expired or credential_revoked, or it no longer trusts the
+// certificate. The agent process exits on it, so the next `port49 login`
+// starts a new session instead of finding this one "already logged in"
+// (pre-flight F10).
 func (a *Agent) Done() <-chan struct{} { return a.done }
 
 // end records why the broker ended the session and closes Done, once.
@@ -184,9 +227,12 @@ func (a *Agent) end(why error) {
 // Mint asks the broker for a fresh token for one device. A transport failure
 // is retried once, on a new connection, under the same Idempotency-Key, so a
 // mint whose response was lost is replayed rather than cut again (design
-// §17). A 401 session_expired or trust_domain_unresolved ends the session,
-// and so does a reconnect whose handshake the broker refuses. An item the
-// broker could not decide is returned with an *ItemError, never alone.
+// §17); a 409 idempotency_in_progress, that first try still minting, is
+// waited out under the same key. A 401 session_expired or
+// trust_domain_unresolved ends the session, and so does a reconnect whose
+// handshake the broker refuses. A 401 credential_revoked ends it too. An
+// item the broker could not decide is returned with an *ItemError, never
+// alone.
 func (a *Agent) Mint(ctx context.Context, device string, enable bool, ttl time.Duration) (api.MintItem, error) {
 	select {
 	case <-a.done:
@@ -205,66 +251,35 @@ func (a *Agent) Mint(ctx context.Context, device string, enable bool, ttl time.D
 		return api.MintItem{}, err
 	}
 	var resp *http.Response
-	for attempt := 1; ; attempt++ {
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.broker+"/v1/tokens", bytes.NewReader(body))
-		if err != nil {
+	for wait := 0; ; wait++ {
+		if resp, err = a.post(ctx, body, key); err != nil {
 			return api.MintItem{}, err
 		}
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Idempotency-Key", key)
-		resp, err = a.do(req)
-		if err == nil {
+		if resp.StatusCode != http.StatusConflict {
 			break
 		}
-		a.client.CloseIdleConnections()
-		if refused := a.refusal(err); refused != nil {
-			// A reconnect whose handshake failed: the certificate expired
-			// or the trust changed under the session, and no retry will
-			// mint (Ruling Q1; pre-flight F10).
-			over := fmt.Errorf("%w: %s", ErrSessionOver, strings.TrimPrefix(refused.Error(), "agent: "))
-			a.end(over)
-			return api.MintItem{}, over
+		var e api.Error
+		_ = json.NewDecoder(resp.Body).Decode(&e)
+		drain(resp.Body)
+		if e.Error != "idempotency_in_progress" || wait >= inProgressRetries {
+			return api.MintItem{}, fmt.Errorf("agent: the broker answered %s: %s %s", resp.Status, e.Error, e.Detail)
 		}
-		// A hang-up with a certificate past its NotAfter is that refusal
-		// with its alert lost, which over a real network the RST can
-		// discard: nothing this session holds will mint again, so it ends
-		// as the alert would have (pre-flight F10).
-		if hup := (*hangUpError)(nil); errors.As(err, &hup) && !hup.expired.IsZero() {
-			over := fmt.Errorf("%w: %s", ErrSessionOver, strings.TrimPrefix(hup.Error(), "agent: "))
-			a.end(over)
-			return api.MintItem{}, over
-		}
-		if attempt == 2 {
-			// A hang-up right after the handshake with a certificate still
-			// in date is a refusal whose alert was lost or a broker that
-			// restarted, and says so; it does not end the session, since
-			// only an alert or the expiry says for certain.
-			var hup *hangUpError
-			if errors.As(err, &hup) {
-				return api.MintItem{}, hup
-			}
-			return api.MintItem{}, fmt.Errorf("agent: the broker at %s is unreachable: %w", a.broker, err)
+		// The first try under this key is still minting at the broker (a
+		// lost response, retried by post): wait for it and be answered
+		// from it, under the same key (design §17).
+		select {
+		case <-ctx.Done():
+			return api.MintItem{}, ctx.Err()
+		case <-time.After(retryAfter(resp.Header)):
 		}
 	}
 	defer drain(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		var e api.Error
 		_ = json.NewDecoder(resp.Body).Decode(&e)
-		if resp.StatusCode == http.StatusUnauthorized {
-			var over error
-			switch e.Error {
-			case "session_expired":
-				over = ErrSessionOver
-			case "trust_domain_unresolved":
-				// The certificate expired, or stopped verifying, under the
-				// held connection: nothing this session can do will mint
-				// again (spec §13, decision 12).
-				over = fmt.Errorf("%w: the broker no longer trusts this certificate (%s)", ErrSessionOver, e.Detail)
-			}
-			if over != nil {
-				a.end(over)
-				return api.MintItem{}, over
-			}
+		if over := sessionOver(resp.StatusCode, e); over != nil {
+			a.end(over)
+			return api.MintItem{}, over
 		}
 		return api.MintItem{}, fmt.Errorf("agent: the broker answered %s: %s %s", resp.Status, e.Error, e.Detail)
 	}
@@ -285,6 +300,76 @@ func (a *Agent) Mint(ctx context.Context, device string, enable bool, ttl time.D
 	return item, nil
 }
 
+// post sends one mint request under key, retrying a transport failure once
+// on a new connection, exactly as Mint did before plan 7a; the refusals
+// that end the session end it here.
+func (a *Agent) post(ctx context.Context, body []byte, key string) (*http.Response, error) {
+	for attempt := 1; ; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.broker+"/v1/tokens", bytes.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Idempotency-Key", key)
+		resp, err := a.do(req)
+		if err == nil {
+			return resp, nil
+		}
+		a.client.CloseIdleConnections()
+		if refused := a.refusal(err); refused != nil {
+			// A reconnect whose handshake failed: the certificate expired
+			// or the trust changed under the session, and no retry will
+			// mint (Ruling Q1; pre-flight F10).
+			over := fmt.Errorf("%w: %s", ErrSessionOver, strings.TrimPrefix(refused.Error(), "agent: "))
+			a.end(over)
+			return nil, over
+		}
+		// A hang-up with a certificate past its NotAfter is that refusal
+		// with its alert lost, which over a real network the RST can
+		// discard: nothing this session holds will mint again, so it ends
+		// as the alert would have (pre-flight F10).
+		if hup := (*hangUpError)(nil); errors.As(err, &hup) && !hup.expired.IsZero() {
+			over := fmt.Errorf("%w: %s", ErrSessionOver, strings.TrimPrefix(hup.Error(), "agent: "))
+			a.end(over)
+			return nil, over
+		}
+		if attempt == 2 {
+			// A hang-up right after the handshake with a certificate still
+			// in date is a refusal whose alert was lost or a broker that
+			// restarted, and says so; it does not end the session, since
+			// only an alert or the expiry says for certain.
+			var hup *hangUpError
+			if errors.As(err, &hup) {
+				return nil, hup
+			}
+			return nil, fmt.Errorf("agent: the broker at %s is unreachable: %w", a.broker, err)
+		}
+	}
+}
+
+// sessionOver is the ErrSessionOver a broker's answer means, or nil: a 401
+// that nothing this session holds will get past.
+func sessionOver(status int, e api.Error) error {
+	if status != http.StatusUnauthorized {
+		return nil
+	}
+	switch e.Error {
+	case "session_expired":
+		return ErrSessionOver
+	case "trust_domain_unresolved":
+		// The certificate expired, or stopped verifying, under the held
+		// connection: nothing this session can do will mint again (spec
+		// §13, decision 12).
+		return fmt.Errorf("%w: the broker no longer trusts this certificate (%s)", ErrSessionOver, e.Detail)
+	case "credential_revoked":
+		// An operator revoked this principal or this certificate (spec
+		// §5.1.4): nothing this session holds will mint again, and no new
+		// one until the lift.
+		return &RevokedError{Detail: e.Detail}
+	}
+	return nil
+}
+
 // ItemError is a device the broker could not decide: a fault on its side or
 // in its inventory, not a refusal of the operator (design §17). It carries
 // the broker's code and detail; the operator's answer is usually to tell
@@ -295,12 +380,13 @@ type ItemError struct {
 
 func (e *ItemError) Error() string {
 	what := map[string]string{
-		"device_unconfigured":  "the broker's inventory does not configure this device",
-		"broker_error":         "the broker failed",
-		"attribute_too_long":   "a session attribute for this device is too long once filled in",
-		"attribute_unsafe":     "a session attribute for this device would contain a character port49 refuses (= or *, a control character, or invalid UTF-8) once filled in",
-		"bad_request":          "the broker refused the request",
-		"idempotency_conflict": "the broker holds a different request under this request's key",
+		"device_unconfigured":     "the broker's inventory does not configure this device",
+		"broker_error":            "the broker failed",
+		"idempotency_in_progress": "the broker is still minting an earlier try of this request",
+		"attribute_too_long":      "a session attribute for this device is too long once filled in",
+		"attribute_unsafe":        "a session attribute for this device would contain a character port49 refuses (= or *, a control character, or invalid UTF-8) once filled in",
+		"bad_request":             "the broker refused the request",
+		"idempotency_conflict":    "the broker holds a different request under this request's key",
 	}[e.Code]
 	if what == "" {
 		what = "the broker could not answer"
@@ -465,11 +551,16 @@ func (a *Agent) Handler() http.Handler {
 		}
 		item, err := a.Mint(r.Context(), req.Device, req.Enable, time.Duration(req.TTLSeconds)*time.Second)
 		var ie *ItemError
+		var revoked *RevokedError
 		switch {
 		case errors.As(err, &ie):
 			// The item as the broker sent it: its error is the client's to
 			// report, and Client.Token turns it back into an ItemError.
 			writeJSON(w, http.StatusOK, item)
+		case errors.As(err, &revoked):
+			// Its own code, so the client rebuilds it without the
+			// ErrSessionOver text that says to log in.
+			writeJSON(w, http.StatusGone, api.Error{Error: "credential_revoked", Detail: revoked.Detail})
 		case errors.Is(err, ErrSessionOver):
 			writeJSON(w, http.StatusGone, api.Error{Error: "session_over", Detail: err.Error()})
 		case err != nil:

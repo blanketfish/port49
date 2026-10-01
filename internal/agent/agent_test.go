@@ -29,15 +29,21 @@ import (
 // mint 401 trust_domain_unresolved, as the broker does once the certificate
 // has expired under the held connection. itemError answers a 200 whose one
 // item carries that error code and no verdict, as the broker does for a fault
-// on its own side; hollow answers an item with neither.
+// on its own side; hollow answers an item with neither. inProgress answers
+// that many mints 409 idempotency_in_progress first, as the broker does while
+// an earlier try under the key is still minting. revoked answers every mint
+// 401 credential_revoked, as the broker does once an operator revokes the
+// principal or the certificate.
 type fakeBroker struct {
-	mu        sync.Mutex
-	keys      []string
-	dropFirst bool
-	expired   bool
-	untrusted bool
-	itemError string
-	hollow    bool
+	mu         sync.Mutex
+	keys       []string
+	dropFirst  bool
+	expired    bool
+	untrusted  bool
+	itemError  string
+	hollow     bool
+	inProgress int
+	revoked    bool
 }
 
 func (fb *fakeBroker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -48,7 +54,9 @@ func (fb *fakeBroker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fb.mu.Lock()
 		fb.keys = append(fb.keys, r.Header.Get("Idempotency-Key"))
 		n, drop, expired, untrusted := len(fb.keys), fb.dropFirst && len(fb.keys) == 1, fb.expired, fb.untrusted
+		revoked := fb.revoked
 		itemError, hollow := fb.itemError, fb.hollow
+		busy := n <= fb.inProgress
 		fb.mu.Unlock()
 		if drop {
 			c, _, _ := w.(http.Hijacker).Hijack()
@@ -62,6 +70,17 @@ func (fb *fakeBroker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if untrusted {
 			writeJSON(w, 401, api.Error{Error: "trust_domain_unresolved",
 				Detail: "broker: no trusted client certificate: the certificate is valid 2026-09-22T00:00:00Z to 2026-09-23T00:00:00Z"})
+			return
+		}
+		if revoked {
+			w.Header().Set("Connection", "close")
+			writeJSON(w, 401, api.Error{Error: "credential_revoked",
+				Detail: "this principal was revoked at 2026-10-01T00:00:00Z; nothing is minted for it until an operator lifts the revocation (port49 revoke --lift)"})
+			return
+		}
+		if busy {
+			w.Header().Set("Retry-After", "1")
+			writeJSON(w, 409, api.Error{Error: "idempotency_in_progress"})
 			return
 		}
 		var req api.MintRequest
@@ -260,6 +279,85 @@ func TestALostResponseIsRetriedUnderTheSameKey(t *testing.T) {
 	}
 }
 
+// A 409 idempotency_in_progress is an earlier try under the key still
+// minting at the broker: Mint waits and asks again under the SAME key, so it
+// is answered from that try rather than cutting a second pair (design §17),
+// and gives up, naming the code, once the wait is past the broker's bound.
+func TestAnInProgressAnswerIsWaitedOutUnderTheSameKey(t *testing.T) {
+	defer func(d, m time.Duration) { inProgressDelay, inProgressDelayMax = d, m }(inProgressDelay, inProgressDelayMax)
+	inProgressDelay, inProgressDelayMax = 10*time.Millisecond, 10*time.Millisecond // the stub asks for 1s
+	r := newRig(t)
+	r.fb.mu.Lock()
+	r.fb.inProgress = 2
+	r.fb.mu.Unlock()
+	item, err := r.a.Mint(context.Background(), "leaf1", false, 0)
+	if err != nil || item.Verdict != "permit" || item.Device != "leaf1" {
+		t.Fatalf("Mint: %+v %v", item, err)
+	}
+	keys := r.fb.seen()
+	if len(keys) != 3 || keys[0] == "" || keys[0] != keys[1] || keys[1] != keys[2] {
+		t.Fatalf("three requests under one key: %q", keys)
+	}
+
+	r = newRig(t)
+	r.fb.mu.Lock()
+	r.fb.inProgress = 1 << 30
+	r.fb.mu.Unlock()
+	if _, err := r.a.Mint(context.Background(), "leaf1", false, 0); err == nil ||
+		!strings.Contains(err.Error(), "idempotency_in_progress") {
+		t.Fatalf("a mint still in progress past the wait: %v", err)
+	}
+	if n := len(r.fb.seen()); n != inProgressRetries+1 {
+		t.Fatalf("%d requests, want %d", n, inProgressRetries+1)
+	}
+}
+
+// Mint waits out an in-progress answer by the broker's Retry-After, not
+// its own delay: the stub asks for 1s, and the agent's own is 10s (Task 3
+// review M7).
+func TestMintWaitsByTheBrokersRetryAfter(t *testing.T) {
+	defer func(d, m time.Duration) { inProgressDelay, inProgressDelayMax = d, m }(inProgressDelay, inProgressDelayMax)
+	inProgressDelay, inProgressDelayMax = 10*time.Second, 10*time.Second
+	r := newRig(t)
+	r.fb.mu.Lock()
+	r.fb.inProgress = 1
+	r.fb.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	start := time.Now()
+	if item, err := r.a.Mint(ctx, "leaf1", false, 0); err != nil || item.Verdict != "permit" {
+		t.Fatalf("Mint (waited %v): %+v %v", time.Since(start), item, err)
+	}
+	if waited := time.Since(start); waited < 900*time.Millisecond {
+		t.Fatalf("waited %v; the broker asked for 1s", waited)
+	}
+}
+
+// The broker's Retry-After sets the wait, capped so no answer parks a login
+// for long; without one the agent can read, it waits its own delay.
+func TestRetryAfterIsHonouredUpToACap(t *testing.T) {
+	for _, tc := range []struct {
+		header string
+		want   time.Duration
+	}{
+		{"1", time.Second},
+		{"3", 3 * time.Second},
+		{"3600", inProgressDelayMax},
+		{"", inProgressDelay},
+		{"0", inProgressDelay},
+		{"-2", inProgressDelay},
+		{"Wed, 21 Oct 2026 07:28:00 GMT", inProgressDelay},
+	} {
+		h := http.Header{}
+		if tc.header != "" {
+			h.Set("Retry-After", tc.header)
+		}
+		if got := retryAfter(h); got != tc.want {
+			t.Errorf("Retry-After %q: %v, want %v", tc.header, got, tc.want)
+		}
+	}
+}
+
 // The session ends at the first handshake plus max_session_age, whatever
 // happened in between; the broker is not asked (plan 3, Decided 11).
 func TestTheSessionEndsAtTheCeiling(t *testing.T) {
@@ -301,6 +399,36 @@ func TestAnUntrustedAnswerEndsTheSession(t *testing.T) {
 	_, err := r.a.Mint(context.Background(), "leaf1", false, 0)
 	if !errors.Is(err, ErrSessionOver) || !strings.Contains(err.Error(), "no longer trusts") {
 		t.Fatalf("401 trust_domain_unresolved: %v", err)
+	}
+	select {
+	case <-r.a.Done():
+	default:
+		t.Fatal("Done must close")
+	}
+	if _, err := r.a.Mint(context.Background(), "leaf1", false, 0); !errors.Is(err, ErrSessionOver) {
+		t.Fatalf("an ended session: %v", err)
+	}
+	if n := len(r.fb.seen()); n != 1 {
+		t.Fatalf("an ended session must not reach the broker again: %d asks", n)
+	}
+}
+
+// An operator's revocation ends the session: the agent answers
+// ErrSessionOver carrying the broker's detail, Done closes, and the next
+// Mint asks the broker nothing (spec §5.1.4).
+func TestARevocationEndsTheSession(t *testing.T) {
+	r := newRig(t)
+	r.fb.mu.Lock()
+	r.fb.revoked = true
+	r.fb.mu.Unlock()
+	_, err := r.a.Mint(context.Background(), "leaf1", false, 0)
+	if !errors.Is(err, ErrSessionOver) || !strings.Contains(err.Error(), "this principal was revoked at") {
+		t.Fatalf("401 credential_revoked: %v", err)
+	}
+	// A login is refused the same way until the lift: telling the operator
+	// to run it sends them round in a circle (final review M9).
+	if strings.Contains(err.Error(), "port49 login") {
+		t.Fatalf("a revoked session says to log in: %v", err)
 	}
 	select {
 	case <-r.a.Done():
@@ -639,6 +767,29 @@ func TestTheSocketSaysWhyTheSessionEnded(t *testing.T) {
 	t.Cleanup(func() { _ = srv.Close() })
 	_, err = NewClient(p).Token(context.Background(), TokenRequest{Device: "leaf1"})
 	if !errors.Is(err, ErrSessionOver) || !strings.Contains(err.Error(), "no longer trusts") {
+		t.Fatalf("through the socket: %v", err)
+	}
+}
+
+// A revocation reaches `port49 token` through the socket still
+// ErrSessionOver, saying who lifts it and not to log in (final review M9).
+func TestTheSocketSaysARevocationWithoutSayingToLogIn(t *testing.T) {
+	r := newRig(t)
+	r.fb.mu.Lock()
+	r.fb.revoked = true
+	r.fb.mu.Unlock()
+	base := shortDir(t)
+	p := filepath.Join(base, "s", "agent.sock")
+	ln, err := Listen(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &http.Server{Handler: r.a.Handler()}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+	_, err = NewClient(p).Token(context.Background(), TokenRequest{Device: "leaf1"})
+	if !errors.Is(err, ErrSessionOver) || err.Error() != "agent: the session is over: this principal was revoked at "+
+		"2026-10-01T00:00:00Z; nothing is minted for it until an operator lifts the revocation (port49 revoke --lift)" {
 		t.Fatalf("through the socket: %v", err)
 	}
 }

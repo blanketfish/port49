@@ -47,7 +47,13 @@ func startServerLogging(t *testing.T, f *fixture, errLog *log.Logger) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	go func() { _ = srv.ServeTLS(ln, "", "") }()
+	logf := func(string, ...any) {}
+	if errLog != nil {
+		logf = errLog.Printf
+	}
+	go func() {
+		_ = srv.Serve(NewListener(Limit(ln, MaxConns), srv.TLSConfig, DefaultListenerLimits, f.b.Metrics, f.b.Now, logf))
+	}()
 	t.Cleanup(func() { _ = srv.Close() })
 	return "https://" + ln.Addr().String()
 }
@@ -512,6 +518,12 @@ func (b *lockedBuffer) Write(p []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
 
 // waitFor waits for want in the log: the server logs a failed handshake from

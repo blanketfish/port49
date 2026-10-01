@@ -58,6 +58,9 @@ const usage = `usage:
   port49 keys status --policy FILE --inventory FILE --config PORT49D_YAML [--since DURATION] LOGFILE...|-
   port49 keys show --policy FILE --inventory FILE [--config PORT49D_YAML] DEVICE
   port49 keys diagnose [--socket PATH] DEVICE
+  port49 revoke [--socket PATH] (--principal PRINCIPAL | --cert FILE | --cert-issuer DN --cert-serial HEX) [--lift]
+  port49 revoke [--socket PATH] --list
+                (exits 3 when the revocation is in force but incomplete or not saved)
 `
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
@@ -100,6 +103,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 	case "keys":
 		return keysCmd(args[1:], stdout, stderr)
+	case "revoke":
+		return revokeCmd(args[1:], stdout, stderr)
 	}
 	fmt.Fprint(stderr, usage)
 	return 2
@@ -297,6 +302,7 @@ func tokenCmd(args []string, stdout, stderr io.Writer) int {
 	case errors.Is(err, agent.ErrSessionOver):
 		// The error says to log in and then why the session ended: an
 		// expired certificate has to be renewed before a login will work.
+		// A revocation says since when and who lifts it instead.
 		fmt.Fprintf(stderr, "port49 token: %s\n", unprefixed(err))
 		return 1
 	case err != nil:

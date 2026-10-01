@@ -874,7 +874,7 @@ func TestWithABrokerAnOrphanIsTheDevicesProblemNotTheDaemons(t *testing.T) {
 	setKeyEnv(t)
 	orphan := write(t, "orphan.yaml", "devices:\n  - {name: orphan, addresses: [10.99.99.1]}\n")
 	body := fmt.Sprintf(sample, orphan) + "broker: {listen: \"127.0.0.1:0\", tls_cert_file: c, tls_key_file: k, " +
-		"client_ca_file: ca, policy_file: p}\n"
+		"client_ca_file: ca, policy_file: p, revocations_file: r}\n"
 	cfg, err := Load(write(t, "f.yaml", body))
 	if err != nil {
 		t.Fatalf("a broker config refused an orphan device: %v", err)
@@ -896,7 +896,7 @@ func TestWithABrokerLoadDoesNotReadTheInventory(t *testing.T) {
 	setKeyEnv(t)
 	missing := filepath.Join(t.TempDir(), "never-read.yaml")
 	body := fmt.Sprintf(sample, missing) + "broker: {listen: \"127.0.0.1:0\", tls_cert_file: c, tls_key_file: k, " +
-		"client_ca_file: ca, policy_file: p}\n"
+		"client_ca_file: ca, policy_file: p, revocations_file: r}\n"
 	cfg, err := Load(write(t, "f.yaml", body))
 	if err != nil {
 		t.Fatalf("a broker config read inventory_file: %v", err)

@@ -184,13 +184,18 @@ func TestWrappedStoreHoldsNoPlaintext(t *testing.T) {
 		t.Fatalf("a narrow write must leave the sealed fields readable: %+v", c)
 	}
 
-	if err := s.PutIdempotency(ctx, "user:alice", "k", store.Idempotency{BodyHash: "b", Response: []byte(`{"login":"p49_x"}`), ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
+	if _, ok, err := s.ReserveIdempotency(ctx, "user:alice", "k", store.Idempotency{BodyHash: "b", Holder: "h",
+		Pending: true, ExpiresAt: time.Now().Add(time.Minute)}); err != nil || !ok {
+		t.Fatalf("%v %v", ok, err)
+	}
+	if err := s.CompleteIdempotency(ctx, "user:alice", "k", "h", store.Idempotency{BodyHash: "b", Holder: "h",
+		Response: []byte(`{"login":"p49_x"}`), ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
-	if r, _ := inner.GetIdempotency(ctx, "user:alice", "k"); r.Response != nil || r.BodyHash != "b" {
+	if r, _ := storetest.Peek(t, inner, "user:alice", "k"); r.Response != nil || r.BodyHash != "b" {
 		t.Fatalf("idempotency plaintext: %+v", r)
 	}
-	if r, _ := s.GetIdempotency(ctx, "user:alice", "k"); string(r.Response) != `{"login":"p49_x"}` {
+	if r, _ := storetest.Peek(t, s, "user:alice", "k"); string(r.Response) != `{"login":"p49_x"}` {
 		t.Fatalf("idempotency read: %+v", r)
 	}
 
@@ -346,6 +351,96 @@ func TestJoinRacesRevocationThroughTheSealingLayer(t *testing.T) {
 	}, now)
 }
 
+func TestIdempotencyReservesOnceThroughTheSealingLayer(t *testing.T) {
+	now := time.Unix(1_757_041_495, 0)
+	storetest.IdempotencyReservesOnce(t, func() store.Store {
+		return Wrap(memory.New(func() time.Time { return now }), keys(), nil)
+	}, now)
+}
+
+func TestIdempotencyLeaseExpiresThroughTheSealingLayer(t *testing.T) {
+	now := time.Unix(1_757_041_495, 0)
+	storetest.IdempotencyLeaseExpires(t, func() (store.Store, func(time.Duration)) {
+		return Wrap(memory.New(func() time.Time { return now }), keys(), nil),
+			func(d time.Duration) { now = now.Add(d) }
+	}, now)
+}
+
+// A pending reservation has nothing sealed in it, so reading one back is
+// not a record that will not open: no open failure is counted, and no
+// decryption error reaches the caller.
+func TestAPendingReservationReadsBackWithoutOpening(t *testing.T) {
+	ctx := context.Background()
+	failures := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "t"}, []string{"record"})
+	s := Wrap(memory.New(time.Now), keys(), failures)
+	if _, ok, err := s.ReserveIdempotency(ctx, "user:alice", "k",
+		store.Idempotency{BodyHash: "b", Holder: "h", Pending: true, ExpiresAt: time.Now().Add(time.Minute)}); err != nil || !ok {
+		t.Fatalf("%v %v", ok, err)
+	}
+	r, ok := storetest.Peek(t, s, "user:alice", "k")
+	if !ok || !r.Pending || r.Holder != "h" {
+		t.Fatalf("reading a pending reservation: %+v %v", r, ok)
+	}
+	if n := testutil.ToFloat64(failures.WithLabelValues("idempotency")); n != 0 {
+		t.Fatalf("a pending reservation counted %v open failures", n)
+	}
+}
+
+// A completed record holds the minted tokens, so the inner store sees it
+// sealed; a reservation holds no response, and one that tries to carry one
+// is refused rather than written in clear.
+func TestACompletedReservationIsSealed(t *testing.T) {
+	ctx := context.Background()
+	inner := memory.New(time.Now)
+	s := Wrap(inner, keys(), nil)
+	exp := time.Now().Add(time.Hour)
+	if _, ok, err := s.ReserveIdempotency(ctx, "user:alice", "k",
+		store.Idempotency{BodyHash: "b", Holder: "h", Pending: true, ExpiresAt: exp}); err != nil || !ok {
+		t.Fatalf("%v %v", ok, err)
+	}
+	if err := s.CompleteIdempotency(ctx, "user:alice", "k", "h",
+		store.Idempotency{BodyHash: "b", Holder: "h", Response: []byte(`{"login":"p49_x"}`), ExpiresAt: exp}); err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := storetest.Peek(t, inner, "user:alice", "k"); r.Response != nil || len(r.Sealed) == 0 {
+		t.Fatalf("the inner store holds the response in clear: %+v", r)
+	}
+	cur, ok, err := s.ReserveIdempotency(ctx, "user:alice", "k",
+		store.Idempotency{BodyHash: "b", Holder: "h2", Pending: true, ExpiresAt: exp})
+	if err != nil || ok || string(cur.Response) != `{"login":"p49_x"}` {
+		t.Fatalf("a reservation must find the completed record opened: %+v %v %v", cur, ok, err)
+	}
+	if _, _, err := s.ReserveIdempotency(ctx, "user:alice", "k2",
+		store.Idempotency{BodyHash: "b", Holder: "h", Pending: true, Response: []byte("x"), ExpiresAt: exp}); err == nil {
+		t.Fatal("a reservation carrying a response was written")
+	}
+}
+
+// A renewal of a pending hold is a pending record: nothing is sealed into
+// it, so it reads back without opening, and one carrying a response is
+// refused rather than written in clear.
+func TestARenewedHoldIsNotSealed(t *testing.T) {
+	ctx := context.Background()
+	inner := memory.New(time.Now)
+	s := Wrap(inner, keys(), nil)
+	exp := time.Now().Add(time.Minute)
+	if _, ok, err := s.ReserveIdempotency(ctx, "user:alice", "k",
+		store.Idempotency{BodyHash: "b", Holder: "h", Pending: true, ExpiresAt: exp}); err != nil || !ok {
+		t.Fatalf("%v %v", ok, err)
+	}
+	if err := s.CompleteIdempotency(ctx, "user:alice", "k", "h",
+		store.Idempotency{BodyHash: "b", Holder: "h", Pending: true, ExpiresAt: exp.Add(time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := storetest.Peek(t, inner, "user:alice", "k"); !r.Pending || len(r.Sealed) != 0 || !r.ExpiresAt.Equal(exp.Add(time.Minute)) {
+		t.Fatalf("the renewed hold: %+v", r)
+	}
+	if err := s.CompleteIdempotency(ctx, "user:alice", "k", "h",
+		store.Idempotency{BodyHash: "b", Holder: "h", Pending: true, Response: []byte("x"), ExpiresAt: exp}); err == nil {
+		t.Fatal("a pending record carrying a response was written")
+	}
+}
+
 // Ruling R1 through the real sealing layer: a context sealed under a key that
 // has left the two-key window, and revoked, is replaced by the next login
 // rather than refusing it, and the revocation carries. What makes it possible
@@ -435,4 +530,18 @@ func TestSetContextPolicyThroughTheSealingLayer(t *testing.T) {
 		after.BlobHash != "sha256:new" || after.PrivLvl != 1 {
 		t.Fatalf("%+v %v", after, err)
 	}
+}
+
+func TestTokenIndexThroughTheSealingLayer(t *testing.T) {
+	now := time.Unix(1_757_041_495, 0)
+	storetest.TokenIndex(t, func() store.Store {
+		return Wrap(memory.New(func() time.Time { return now }), keys(), nil)
+	}, now)
+}
+
+func TestRevocationMarksThroughTheSealingLayer(t *testing.T) {
+	now := time.Unix(1_757_041_495, 0)
+	storetest.RevocationMarks(t, func() store.Store {
+		return Wrap(memory.New(func() time.Time { return now }), keys(), nil)
+	}, now)
 }

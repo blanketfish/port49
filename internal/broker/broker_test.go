@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"slices"
 	"strings"
@@ -375,5 +376,180 @@ func TestConfigIsDiscoveryOnly(t *testing.T) {
 	}
 	if strings.Contains(w.Body.String(), "leaf1") {
 		t.Fatal("discovery must not name a device")
+	}
+}
+
+// gatedStore holds every PutToken until gate is closed, so two requests can
+// be made to overlap at the mint.
+type gatedStore struct {
+	store.Store
+	entered chan struct{}
+	gate    chan struct{}
+}
+
+func (g *gatedStore) PutToken(ctx context.Context, k store.TokenKey, t store.Token) (int, error) {
+	select {
+	case g.entered <- struct{}{}:
+	default:
+	}
+	<-g.gate
+	return g.Store.PutToken(ctx, k, t)
+}
+
+// gate puts the fixture's minter over a gatedStore and returns it.
+func (f *fixture) gate() *gatedStore {
+	g := &gatedStore{Store: f.st, entered: make(chan struct{}, 1), gate: make(chan struct{})}
+	f.b.Minter = token.NewMinter(g, decision.NewJSONLines(f.log), rand.Reader, token.TagKey([]byte("k")), f.b.Now, 8)
+	return g
+}
+
+// Design §17: two requests under one key cannot both mint. Under the same
+// body the second is told the first is in progress, and a retry after it
+// completes is its replay; under another body it is a conflict. Exactly one
+// mint is made either way.
+func TestTwoRequestsUnderOneKeyMintOnce(t *testing.T) {
+	for _, tc := range []struct{ second, wantErr string }{
+		{`{"devices":["leaf1"]}`, "idempotency_in_progress"},
+		{`{"devices":["leaf1"],"enable":true}`, "idempotency_conflict"},
+	} {
+		t.Run(tc.wantErr, func(t *testing.T) {
+			f := newFixture(t, 8)
+			g := f.gate()
+			first := make(chan *httptest.ResponseRecorder, 1)
+			go func() { first <- f.post(context.Background(), f.state(f.alice), `{"devices":["leaf1"]}`, "01J") }()
+			<-g.entered
+			w := f.post(context.Background(), f.state(f.alice), tc.second, "01J")
+			if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), tc.wantErr) {
+				t.Fatalf("the overlapping request: %d %s", w.Code, w.Body.String())
+			}
+			if tc.wantErr == "idempotency_in_progress" && w.Header().Get("Retry-After") != "1" {
+				t.Fatalf("Retry-After: %q", w.Header().Get("Retry-After"))
+			}
+			close(g.gate)
+			a := decodeMint(t, <-first)
+			toks, _ := f.st.Candidates(context.Background(), store.TokenKey{NAS: "leaf1", Username: "alice"})
+			if len(toks) != 1 { // the first request asks no enable token
+				t.Fatalf("%d tokens stand for leaf1; one mint makes one login token", len(toks))
+			}
+			if tc.wantErr == "idempotency_in_progress" {
+				b := decodeMint(t, f.post(context.Background(), f.state(f.alice), tc.second, "01J"))
+				if b.Results[0].Login != a.Results[0].Login {
+					t.Fatal("the retry after completion must be the first request's replay")
+				}
+			}
+		})
+	}
+	// A replay abandoned because its tokens were superseded is taken over
+	// before it mints, so of two retries one mints and the other is told it
+	// is in progress (pre-flight M5).
+	t.Run("abandoned_replay", func(t *testing.T) {
+		f := newFixture(t, 8)
+		body := `{"devices":["leaf1"]}`
+		decodeMint(t, f.post(context.Background(), f.state(f.alice), body, "01S"))
+		f.b.mu.Lock()
+		f.b.superseded = map[store.TokenKey]time.Time{{NAS: "leaf1", Username: "alice"}: f.now.Add(time.Second)}
+		f.b.mu.Unlock()
+		g := f.gate()
+		first := make(chan *httptest.ResponseRecorder, 1)
+		go func() { first <- f.post(context.Background(), f.state(f.alice), body, "01S") }()
+		<-g.entered
+		w := f.post(context.Background(), f.state(f.alice), body, "01S")
+		if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "idempotency_in_progress") {
+			t.Fatalf("the second abandoned replay: %d %s", w.Code, w.Body.String())
+		}
+		close(g.gate)
+		if r := decodeMint(t, <-first); r.Results[0].Verdict != "permit" {
+			t.Fatalf("the first abandoned replay: %+v", r)
+		}
+		if toks, _ := f.st.Candidates(context.Background(), store.TokenKey{NAS: "leaf1", Username: "alice"}); len(toks) != 2 {
+			t.Fatalf("%d tokens: the first mint and one re-mint, not two", len(toks))
+		}
+	})
+}
+
+// steppedStore holds every PutBlob and PutToken, announcing each on entered,
+// until a step is sent on gate: a test can move the clock between the
+// moments of one device's mint.
+type steppedStore struct {
+	store.Store
+	entered chan string
+	gate    chan struct{}
+}
+
+func (s *steppedStore) PutBlob(ctx context.Context, hash string, body []byte, ttl time.Duration) error {
+	s.entered <- "put_blob"
+	<-s.gate
+	return s.Store.PutBlob(ctx, hash, body, ttl)
+}
+
+func (s *steppedStore) PutToken(ctx context.Context, k store.TokenKey, t store.Token) (int, error) {
+	s.entered <- "put_token"
+	<-s.gate
+	return s.Store.PutToken(ctx, k, t)
+}
+
+// A batch can outlast the reservation it took at the start: a hundred
+// devices at up to ten seconds of store calls each. Each device's hold is
+// renewed just before it is minted, so a retry arriving after the first
+// minute, while that device is being minted, is told it is in progress
+// rather than reserving the lapsed record and minting the device again
+// (design §17).
+func TestAHoldIsRenewedBeforeEachMintSoARetryMintsNothing(t *testing.T) {
+	f := newFixture(t, 8)
+	s := &steppedStore{Store: f.st, entered: make(chan string), gate: make(chan struct{})}
+	f.b.Store = s
+	f.b.Minter = token.NewMinter(s, decision.NewJSONLines(f.log), rand.Reader, token.TagKey([]byte("k")), f.b.Now, 8)
+	body := `{"devices":["leaf1"]}`
+	first := make(chan *httptest.ResponseRecorder, 1)
+	go func() { first <- f.post(context.Background(), f.state(f.alice), body, "01T") }()
+	if op := <-s.entered; op != "put_blob" {
+		t.Fatalf("the first request's first store write: %s", op)
+	}
+	f.advance(50 * time.Second) // the batch's earlier devices took this long
+	s.gate <- struct{}{}
+	if op := <-s.entered; op != "put_token" {
+		t.Fatalf("the first request's next store write: %s", op)
+	}
+	f.advance(20 * time.Second) // leaf1's mint runs past the minute the batch reserved it for
+	second := make(chan *httptest.ResponseRecorder, 1)
+	go func() { second <- f.post(context.Background(), f.state(f.alice), body, "01T") }()
+	select {
+	case w := <-second:
+		if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "idempotency_in_progress") {
+			t.Fatalf("the retry: %d %s", w.Code, w.Body.String())
+		}
+	case op := <-s.entered:
+		t.Fatalf("the retry reached %s while the first request was minting leaf1", op)
+	}
+	s.gate <- struct{}{}
+	if r := decodeMint(t, <-first); r.Results[0].Verdict != "permit" {
+		t.Fatalf("the first request: %+v", r)
+	}
+	if toks, _ := f.st.Candidates(context.Background(), store.TokenKey{NAS: "leaf1", Username: "alice"}); len(toks) != 1 {
+		t.Fatalf("%d tokens stand for leaf1; it was minted once", len(toks))
+	}
+}
+
+// A device refused by policy gives its reservation back: the same key and
+// body, retried after the grant is added, mints rather than being answered
+// in progress for a minute.
+func TestARefusedDeviceReleasesItsReservation(t *testing.T) {
+	f := newFixture(t, 8)
+	carol := f.client(t, "carol@example.com", f.now.Add(time.Hour))
+	if r := decodeMint(t, f.post(context.Background(), f.state(carol), `{"devices":["leaf1"]}`, "01K")); r.Results[0].Verdict != "deny" {
+		t.Fatalf("carol has no grant: %+v", r)
+	}
+	if _, ok, err := f.st.ReserveIdempotency(context.Background(), "user:carol@example.com", "01K\x00leaf1",
+		store.Idempotency{BodyHash: "x", Holder: "probe", Pending: true, ExpiresAt: f.now.Add(time.Minute)}); err != nil || !ok {
+		t.Fatalf("the denied device's reservation is still held: %v %v", ok, err)
+	}
+}
+
+// A batch that names a device twice is refused before anything is reserved.
+func TestABatchNamingADeviceTwiceIsRefused(t *testing.T) {
+	f := newFixture(t, 8)
+	w := f.post(context.Background(), f.state(f.alice), `{"devices":["leaf1","leaf1"]}`, "01L")
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "twice") {
+		t.Fatalf("%d %s", w.Code, w.Body.String())
 	}
 }

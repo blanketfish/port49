@@ -300,12 +300,7 @@ func (b *Broker) supersedeTokens(ctx context.Context, cur *policy.Policy, now ti
 		if err := b.Store.DeleteTokens(ctx, k); err != nil {
 			return err
 		}
-		b.mu.Lock()
-		if b.superseded == nil {
-			b.superseded = map[store.TokenKey]time.Time{}
-		}
-		b.superseded[k] = b.Now()
-		b.mu.Unlock()
+		b.supersede(k, b.Now())
 		if len(toks) > 0 {
 			rep.TokenKeys++
 			b.Metrics.TokensSuperseded.Inc()

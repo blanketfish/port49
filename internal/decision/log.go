@@ -37,6 +37,8 @@ type Record struct {
 	Gap         *Gap         `json:"gap,omitempty"`
 	// Change is the inventory_change record's body (spec §5.7, §10).
 	Change *Change `json:"change,omitempty"`
+	// Revocation is the revoke record's body (spec §5.7).
+	Revocation *Revocation `json:"revocation,omitempty"`
 	// IndexError names what a failed index write cost, on the record for the
 	// session that lost it. Revocation must report the contexts it could not
 	// reach (spec §5.6), and this is the only place that says which they are.
@@ -242,6 +244,28 @@ type Change struct {
 	To         string `json:"to,omitempty"`
 	FromBundle string `json:"from_bundle"`
 	ToBundle   string `json:"to_bundle"`
+}
+
+// Revocation is what a revocation reached (spec §5.7): identity, never a
+// credential. A count of zero is absent.
+type Revocation struct {
+	By          string       `json:"by"`
+	Issuer      string       `json:"issuer,omitempty"`
+	Serial      string       `json:"serial,omitempty"`
+	At          string       `json:"at"`
+	Origin      string       `json:"origin,omitempty"`
+	Contexts    int          `json:"contexts,omitempty"`
+	TokenKeys   int          `json:"token_keys,omitempty"`
+	Connections int          `json:"connections,omitempty"`
+	Unreached   []ContextRef `json:"unreached,omitempty"`
+	Saved       bool         `json:"saved"`
+	Error       string       `json:"error,omitempty"`
+}
+
+// ContextRef names a live context without its ctx_id, which is sealed.
+type ContextRef struct {
+	Device   string `json:"device"`
+	Username string `json:"username"`
 }
 
 // Unvalidated is what is recorded for a packet no key validated: cleartext header

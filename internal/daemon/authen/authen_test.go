@@ -441,10 +441,34 @@ func (noStore) ReindexSid(context.Context, string, string, store.ContextRef, tim
 func (noStore) ActivePrincipals(context.Context) ([]string, error) {
 	panic("store called")
 }
-func (noStore) PutIdempotency(context.Context, string, string, store.Idempotency) error {
+func (noStore) IndexToken(context.Context, string, string, store.TokenKey, time.Duration) error {
 	panic("store called")
 }
-func (noStore) GetIdempotency(context.Context, string, string) (store.Idempotency, error) {
+func (noStore) TokensByPrincipal(context.Context, string) ([]store.TokenKey, error) {
+	panic("store called")
+}
+func (noStore) TokensByCert(context.Context, string) ([]store.TokenKey, error) {
+	panic("store called")
+}
+func (noStore) ReserveIdempotency(context.Context, string, string, store.Idempotency) (store.Idempotency, bool, error) {
+	panic("store called")
+}
+func (noStore) CompleteIdempotency(context.Context, string, string, string, store.Idempotency) error {
+	panic("store called")
+}
+func (noStore) ReleaseIdempotency(context.Context, string, string, string) error {
+	panic("store called")
+}
+func (noStore) PutRevocation(context.Context, store.Revocation) error {
+	panic("store called")
+}
+func (noStore) GetRevocation(context.Context, string, string) (store.Revocation, error) {
+	panic("store called")
+}
+func (noStore) DeleteRevocation(context.Context, string, string) error {
+	panic("store called")
+}
+func (noStore) ListRevocations(context.Context) ([]store.Revocation, error) {
 	panic("store called")
 }
 

@@ -3,7 +3,8 @@
 // reach any backend, under a current key with one previous key accepted.
 //
 // What is NOT sealed is deliberate and is argued in plan 2 Task 5: blobs (no
-// identity) and the four indexes. A dump of the index reveals principal, device
+// identity) and the indexes: the four of plan 2 and the two token indexes of
+// plan 7a. A dump of the index reveals principal, device
 // and login name; every credential-bearing record (token, receipt, context
 // body) stays sealed; the index is protected by store access control rather
 // than by encryption, because revocation is the path needed most on a bad day
@@ -452,26 +453,83 @@ func (w *wrapped) ActivePrincipals(ctx context.Context) ([]string, error) {
 	return w.inner.ActivePrincipals(ctx)
 }
 
-func (w *wrapped) PutIdempotency(ctx context.Context, principal, key string, rec store.Idempotency) error {
+// IndexToken, TokensByPrincipal and TokensByCert are plaintext indexes, as
+// the context indexes are (the package comment): revocation must not depend
+// on the encryption key.
+func (w *wrapped) IndexToken(ctx context.Context, principal, certKey string, k store.TokenKey, ttl time.Duration) error {
+	return w.inner.IndexToken(ctx, principal, certKey, k, ttl)
+}
+
+func (w *wrapped) TokensByPrincipal(ctx context.Context, principal string) ([]store.TokenKey, error) {
+	return w.inner.TokensByPrincipal(ctx, principal)
+}
+
+func (w *wrapped) TokensByCert(ctx context.Context, certKey string) ([]store.TokenKey, error) {
+	return w.inner.TokensByCert(ctx, certKey)
+}
+
+// ReserveIdempotency passes a reservation through: it holds no response, so
+// there is nothing to seal, and one that tries to carry a response is
+// refused rather than written in clear. A completed record it finds is
+// opened; a pending one has nothing sealed, and opening it would count a
+// decryption failure that is not one.
+func (w *wrapped) ReserveIdempotency(ctx context.Context, principal, key string, rec store.Idempotency) (store.Idempotency, bool, error) {
+	if len(rec.Response) != 0 {
+		return store.Idempotency{}, false, errors.New("crypt: a reservation carries no response")
+	}
+	cur, ok, err := w.inner.ReserveIdempotency(ctx, principal, key, rec)
+	if err != nil || ok || cur.Pending {
+		return cur, ok, err
+	}
+	resp, err := w.keys.Open(cur.Sealed)
+	if err != nil {
+		return store.Idempotency{}, false, w.openErr("idempotency", err)
+	}
+	cur.Response, cur.Sealed = resp, nil
+	return cur, false, nil
+}
+
+// CompleteIdempotency seals the response, which holds the minted tokens
+// (design §17), before the compare-and-set below. A pending record (Mint's
+// renewal of its hold) holds no response and passes through unsealed, as a
+// reservation does; one that tries to carry a response is refused rather
+// than written in clear.
+func (w *wrapped) CompleteIdempotency(ctx context.Context, principal, key, expect string, rec store.Idempotency) error {
+	if rec.Pending {
+		if len(rec.Response) != 0 {
+			return errors.New("crypt: a pending record carries no response")
+		}
+		return w.inner.CompleteIdempotency(ctx, principal, key, expect, rec)
+	}
 	s, err := w.keys.Seal(rec.Response)
 	if err != nil {
 		return err
 	}
 	rec.Response, rec.Sealed = nil, s
-	return w.inner.PutIdempotency(ctx, principal, key, rec)
+	return w.inner.CompleteIdempotency(ctx, principal, key, expect, rec)
 }
 
-func (w *wrapped) GetIdempotency(ctx context.Context, principal, key string) (store.Idempotency, error) {
-	rec, err := w.inner.GetIdempotency(ctx, principal, key)
-	if err != nil {
-		return store.Idempotency{}, err
-	}
-	resp, err := w.keys.Open(rec.Sealed)
-	if err != nil {
-		return store.Idempotency{}, w.openErr("idempotency", err)
-	}
-	rec.Response, rec.Sealed = resp, nil
-	return rec, nil
+// ReleaseIdempotency touches no sealed field.
+func (w *wrapped) ReleaseIdempotency(ctx context.Context, principal, key, holder string) error {
+	return w.inner.ReleaseIdempotency(ctx, principal, key, holder)
+}
+
+// Revocation marks are plaintext: identity, no credential, and revocation
+// must not depend on the encryption key.
+func (w *wrapped) PutRevocation(ctx context.Context, r store.Revocation) error {
+	return w.inner.PutRevocation(ctx, r)
+}
+
+func (w *wrapped) GetRevocation(ctx context.Context, kind, key string) (store.Revocation, error) {
+	return w.inner.GetRevocation(ctx, kind, key)
+}
+
+func (w *wrapped) DeleteRevocation(ctx context.Context, kind, key string) error {
+	return w.inner.DeleteRevocation(ctx, kind, key)
+}
+
+func (w *wrapped) ListRevocations(ctx context.Context) ([]store.Revocation, error) {
+	return w.inner.ListRevocations(ctx)
 }
 
 var _ store.Store = (*wrapped)(nil)

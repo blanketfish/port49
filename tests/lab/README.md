@@ -218,8 +218,9 @@ do sleep 10; done
 # the daemon config: the lab file, plus the broker block where the run needs a broker
 cat tests/lab/port49d-lab.yaml tests/lab/slice/broker.yaml > tests/lab/logs/port49d-byhand.yaml
 # a broker run only: port49d refuses a policy file, or a directory holding one, that others could
-# write (spec §5.1.3), and a checkout under a umask of 002 is group-writable
-chmod go-w tests/lab/slice tests/lab/slice/policy.yaml tests/lab/quarantine tests/lab/quarantine/policy.yaml
+# write (spec §5.1.3), and the same of broker.revocations_file's directory (tests/lab/logs, in
+# slice/broker.yaml); a checkout under a umask of 002 is group-writable
+chmod go-w tests/lab/slice tests/lab/slice/policy.yaml tests/lab/quarantine tests/lab/quarantine/policy.yaml tests/lab/logs
 # a broker run only: its certificates, written before the daemon that loads them at start
 go run ./tests/lab/cmd/slice-pki
 PORT49_LAB_KEY=labsecret PORT49_LAB_ENC_KEY=port49-lab-encryption-key-32byte \

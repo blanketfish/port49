@@ -32,6 +32,7 @@ import (
 	"github.com/rhwendt/port49/internal/engine"
 	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/policy"
+	"github.com/rhwendt/port49/internal/session"
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/token"
 )
@@ -48,7 +49,9 @@ const (
 	maxIdempotencyKey = 128
 )
 
-// Broker is the slice's broker. Every field is required.
+// Broker is the slice's broker. Every field is required but Redact, Sessions
+// (which only Revoke needs, and refuses without), Conns, Persist and
+// RevokeTimeout.
 type Broker struct {
 	// Policy is the policy in force. port49d swaps it when the file changes
 	// (plan 4b), and a request resolves against the one version it held from
@@ -63,8 +66,27 @@ type Broker struct {
 	BatchMax      int
 	// Redact is the redaction the blob event's rule text passes through
 	// before it is logged (spec §5.8): port49d passes the policy in force's.
-	// It is the one optional field; nil is the built-in patterns.
+	// Nil is the built-in patterns.
 	Redact platform.Redactor
+	// Sessions marks a revoked principal's or certificate's live contexts
+	// and deletes their receipts (Revoke). Required for Revoke.
+	Sessions *session.Manager
+	// Conns closes a revoked principal's or certificate's held connections:
+	// the Listener this broker is served through. Nil closes none.
+	Conns ConnCloser
+	// Persist writes the marks in force to broker.revocations_file after
+	// every change. Nil keeps them in the store alone.
+	Persist func(context.Context) error
+
+	// RevokeTimeout bounds a revocation's or lift's steps once it holds
+	// revokeSem, which run detached from the caller (Revoke). Zero is
+	// DefaultRevokeTimeout.
+	RevokeTimeout time.Duration
+
+	// revokeSem is a one-slot semaphore serialising Revoke and Lift (M5),
+	// made lazily under mu. A channel, not a mutex, so a caller waiting
+	// behind a hung store call or Persist gives up when its ctx ends.
+	revokeSem chan struct{}
 
 	mu        sync.Mutex
 	blobsSeen map[string]bool
@@ -72,10 +94,11 @@ type Broker struct {
 	// recorded the context left for a quarantine: one record per context per
 	// policy, not one per pass (refreshContext).
 	quarantineRecorded map[string]string
-	// superseded is, by (device, username), when a refresh last deleted its
-	// unspent tokens: an idempotent retry of a mint from before then is not
-	// replayed with a token that no longer exists (token.Request). It holds
-	// at most one entry per key the policy has ever minted for.
+	// superseded is, by (device, username), when a refresh or a revocation
+	// last deleted its unspent tokens: an idempotent retry of a mint from
+	// before then is not replayed with a token that no longer exists
+	// (token.Request). It holds at most one entry per key the policy has
+	// ever minted for.
 	superseded map[store.TokenKey]time.Time
 }
 
@@ -156,6 +179,24 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
 			authTime.UTC().Format(time.RFC3339), b.MaxSessionAge))
 		return
 	}
+	// A revocation stands against the principal, or this certificate, until
+	// an operator lifts it (spec §5.1.4). It is read before anything else, so
+	// a revoked caller is told nothing more, and again after the last token
+	// write, below. Marks that cannot be read mint for no one.
+	checkCtx, cancelCheck := context.WithTimeout(r.Context(), holdTimeout)
+	rv, revoked, err := b.revocation(checkCtx, principal, cred)
+	cancelCheck()
+	switch {
+	case err != nil:
+		b.emit(decision.Record{TS: now, Event: decision.EventMint, Verdict: decision.VerdictDeny,
+			Reason: decision.StoreUnavailable, Principal: principal, Auth: &decision.Auth{Method: cred.Method}})
+		writeError(w, http.StatusServiceUnavailable, string(decision.StoreUnavailable),
+			"the broker could not read the revocations in force, so it minted nothing; try again")
+		return
+	case revoked:
+		b.refuseRevoked(w, now, principal, cred, rv)
+		return
+	}
 
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxBody+1))
 	if err != nil || len(body) > maxBody {
@@ -174,12 +215,20 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
 			"name between 1 and %d devices per request; page a larger sweep (design §17)", b.BatchMax))
 		return
 	}
+	seen := make(map[string]bool, len(req.Devices))
 	for _, name := range req.Devices {
 		if !deviceName(name) {
 			writeError(w, http.StatusBadRequest, "bad_request", fmt.Sprintf(
 				"a device name is 1 to %d printable ASCII characters, as the inventory names it", maxDeviceName))
 			return
 		}
+		if seen[name] {
+			// One record per device under the key: a second mention would
+			// find this request's own reservation and refuse the batch.
+			writeError(w, http.StatusBadRequest, "bad_request", "a device is named twice in one request")
+			return
+		}
+		seen[name] = true
 	}
 	key := r.Header.Get("Idempotency-Key")
 	if len(key) > maxIdempotencyKey {
@@ -190,16 +239,40 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
 	sum := sha256.Sum256(body)
 	bodyHash := hex.EncodeToString(sum[:])
 
-	// A conflict on any device refuses the whole batch, so it is looked for
-	// before the first mint: found on the second device, the first would
-	// already hold a stored token, a permit record and a candidate-cap slot
-	// for a pair the 409 never returns. A record exists only where this
-	// principal has minted, so the check tells it nothing about inventory.
-	for _, name := range req.Devices {
-		if b.Minter.Conflict(r.Context(), principal, key, name, bodyHash) {
-			writeConflict(w)
-			return
-		}
+	// Every device's record is reserved before the first is minted (design
+	// §17; plan 7a), atomically: two requests under one key cannot both pass,
+	// and a conflict on any device refuses the whole batch before a token, a
+	// permit record or a candidate-cap slot exists for a pair it never
+	// returns. A record exists only where this principal has minted, so the
+	// answer tells it nothing about inventory.
+	reserveCtx, cancelReserve := context.WithTimeout(r.Context(), holdTimeout)
+	res, err := b.Minter.Reserve(reserveCtx, principal, key, req.Devices, bodyHash)
+	cancelReserve()
+	switch {
+	case errors.Is(err, token.ErrIdempotencyConflict):
+		b.Metrics.BrokerIdempotency.WithLabelValues("conflict").Inc()
+		writeConflict(w)
+		return
+	case errors.Is(err, token.ErrIdempotencyInProgress):
+		b.writeInProgress(w)
+		return
+	case err != nil:
+		b.Metrics.BrokerIdempotency.WithLabelValues("store_error").Inc()
+		b.emit(decision.Record{TS: now, Event: decision.EventMint, Verdict: decision.VerdictDeny,
+			Reason: decision.StoreUnavailable, Principal: principal, Auth: &decision.Auth{Method: cred.Method}})
+		writeError(w, http.StatusServiceUnavailable, string(decision.StoreUnavailable),
+			"the broker could not reserve the Idempotency-Key, so it minted nothing; retry under the same key")
+		return
+	}
+	// Whatever this request does not complete is given back, so a retry is
+	// not answered "in progress" by its own leftovers. Its own deadline: the
+	// caller may have hung up.
+	if res != nil {
+		defer func() {
+			ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), holdTimeout)
+			defer cancel()
+			b.Minter.Release(ctx, principal, res)
+		}()
 	}
 	// Held from the first resolution to the last token write, so a reload's
 	// swap waits for this request's mints and the refresh after it sees every
@@ -224,24 +297,197 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
 	resp := api.MintResponse{Principal: principal}
 	resp.Subject, _ = pol.SubjectOf(principal)
 	for _, name := range req.Devices {
-		item, err := b.mintOne(ctx, pol, principal, cred, authTime, name, req, key, bodyHash)
-		if errors.Is(err, token.ErrIdempotencyConflict) {
-			// Only a concurrent request on the same key, between the check
-			// above and this mint, reaches here.
+		item, err := b.mintOne(ctx, pol, principal, cred, authTime, name, req, res, bodyHash)
+		if errors.Is(err, token.ErrIdempotencyInProgress) {
+			// This device's hold was taken by another request under the
+			// key, or lapsed before its turn: two retries that both
+			// abandoned a replay, or a batch that outlasted its
+			// reservation. Nothing is minted for it, and the devices
+			// already minted are completed records a retry replays — unless
+			// a revocation landed while they were written.
 			release()
-			writeConflict(w)
+			if b.revokedSince(w, r, principal, cred, resp.Results) {
+				return
+			}
+			b.writeInProgress(w)
 			return
 		}
 		resp.Results = append(resp.Results, item)
 	}
 	release()
+	if b.revokedSince(w, r, principal, cred, resp.Results) {
+		return
+	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// mintOne answers one device. The only error it returns is an idempotency
-// conflict, which is the whole request's; every other refusal is an item.
+// revokedSince reads the marks again after a request's last token write,
+// and answers the request when one stands. A revocation that landed while
+// this request minted may have read the token index before these tokens
+// were indexed; reading the marks now closes that: whichever of the two
+// read the other's write, no token survives (spec §5.1.4; decision 32). A
+// mark deletes what the request wrote and refuses it credential_revoked.
+//
+// Marks that cannot be read refuse it store_unavailable and leave the
+// tokens. A revocation's index pass finds them unless it read the index
+// before this request wrote it, and then the read that just failed was the
+// only guard. They are never returned, though, so they are reachable only
+// by a replay of this request, and its keys are superseded: a replay here
+// mints afresh, and anywhere is refused at its first read while a mark
+// stands. Deleting them would take an earlier mint's tokens under the same
+// key with them (pre-flight M7).
+//
+// It runs on its own deadline, without the caller's cancel: a caller that
+// hung up must not leave its tokens behind.
+func (b *Broker) revokedSince(w http.ResponseWriter, r *http.Request, principal string, cred store.Credential,
+	items []api.MintItem) bool {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), holdTimeout)
+	defer cancel()
+	rv, revoked, err := b.revocation(ctx, principal, cred)
+	switch {
+	case err != nil:
+		now := b.Now()
+		for _, it := range items {
+			if it.Verdict == decision.VerdictPermit {
+				b.supersede(store.TokenKey{NAS: it.Device, Username: it.Username}, now)
+			}
+		}
+		b.emit(decision.Record{TS: now, Event: decision.EventMint, Verdict: decision.VerdictDeny,
+			Reason: decision.StoreUnavailable, Principal: principal, Auth: &decision.Auth{Method: cred.Method}})
+		writeError(w, http.StatusServiceUnavailable, string(decision.StoreUnavailable), "the broker could not "+
+			"confirm that no revocation landed during this mint, so it returns nothing; try again")
+		return true
+	case revoked:
+		if b.unmint(ctx, principal, cred, items) == 0 {
+			b.emit(revokedRecord(b.Now(), principal, cred))
+		}
+		answerRevoked(w, rv)
+		return true
+	}
+	return false
+}
+
+// revocation is the mark refusing this caller, if any: one on the
+// principal, then one on the certificate (spec §5.1.4). A certificate with
+// no issuer or serial is never a mark's key.
+func (b *Broker) revocation(ctx context.Context, principal string, cred store.Credential) (store.Revocation, bool, error) {
+	keys := [][2]string{{store.RevocationPrincipal, principal}}
+	if cred.Issuer != "" && cred.Serial != "" {
+		keys = append(keys, [2]string{store.RevocationCert, store.CertKey(cred.Issuer, cred.Serial)})
+	}
+	for _, k := range keys {
+		rv, err := b.Store.GetRevocation(ctx, k[0], k[1])
+		switch {
+		case err == nil:
+			return rv, true, nil
+		case !errors.Is(err, store.ErrNotFound):
+			return store.Revocation{}, false, err
+		}
+	}
+	return store.Revocation{}, false, nil
+}
+
+// refuseRevoked answers a caller a revocation stands against before it
+// minted anything: one mint record naming whose credential it was (spec
+// §5.7), and answerRevoked.
+func (b *Broker) refuseRevoked(w http.ResponseWriter, now time.Time, principal string, cred store.Credential,
+	rv store.Revocation) {
+	b.emit(revokedRecord(now, principal, cred))
+	answerRevoked(w, rv)
+}
+
+// revokedRecord is a mint refused credential_revoked: it names whose
+// credential it was as trust_domain_unresolved does (spec §5.7).
+func revokedRecord(now time.Time, principal string, cred store.Credential) decision.Record {
+	return decision.Record{TS: now, Event: decision.EventMint, Verdict: decision.VerdictDeny,
+		Reason: decision.CredentialRevoked, Principal: principal,
+		Auth: &decision.Auth{Method: cred.Method, Fingerprint: cred.Fingerprint}}
+}
+
+// RefusedAtBind records a request the broker's listener refused
+// credential_revoked, its connection's principal or certificate marked
+// (Listener.Refused): the same one mint deny record a mint under the mark
+// writes, counted in port49_decisions (spec §5.7).
+func (b *Broker) RefusedAtBind(principal string, cred store.Credential) {
+	b.emit(revokedRecord(b.Now(), principal, cred))
+}
+
+// answerRevoked is the 401 credential_revoked, with the connection closed
+// so nothing more rides it.
+func answerRevoked(w http.ResponseWriter, rv store.Revocation) {
+	w.Header().Set("Connection", "close")
+	writeJSON(w, http.StatusUnauthorized, revokedError(rv))
+}
+
+// revokedError is credential_revoked's body, the same from a mint and from
+// the listener's answer to a marked connection (Listener.answerRevoked).
+func revokedError(rv store.Revocation) api.Error {
+	what := "this principal"
+	if rv.Kind == store.RevocationCert {
+		what = "this certificate"
+	}
+	return api.Error{Error: string(decision.CredentialRevoked), Detail: fmt.Sprintf(
+		"%s was revoked at %s; nothing is minted for it until an operator lifts the revocation "+
+			"(port49 revoke --lift)", what, rv.At.UTC().Format(time.RFC3339))}
+}
+
+// unmint deletes the unspent tokens under every key a refused request
+// minted under, and marks each key superseded, so a replay of the request
+// is minted afresh rather than handed a token that no longer exists. Each
+// device's permit, already recorded, is followed by a deny
+// credential_revoked naming it, with index_error when its tokens could not
+// be deleted (spec §5.7). It returns how many it recorded.
+//
+// A replayed item's tokens are deleted too, but it gets no deny: this
+// request recorded no permit for it, and the permit a device deny would
+// follow is the original mint's, whose tokens were returned then and so
+// were issued (port49 capability; Task 7 review N1).
+func (b *Broker) unmint(ctx context.Context, principal string, cred store.Credential, items []api.MintItem) int {
+	now := b.Now()
+	n := 0
+	for _, it := range items {
+		if it.Verdict != decision.VerdictPermit {
+			continue
+		}
+		k := store.TokenKey{NAS: it.Device, Username: it.Username}
+		err := b.Store.DeleteTokens(ctx, k)
+		if err != nil {
+			b.logf("broker: deleting the tokens a revoked mint wrote under %q on %q: %v; they expire at their TTL",
+				it.Username, it.Device, err)
+		}
+		b.supersede(k, now)
+		if it.Replayed {
+			continue
+		}
+		rec := revokedRecord(now, principal, cred)
+		rec.Device = &decision.Device{Name: it.Device, Platform: it.Platform}
+		if err != nil {
+			rec.IndexError = fmt.Sprintf("tokens not deleted: %v; they expire at their TTL", err)
+		}
+		b.emit(rec)
+		n++
+	}
+	return n
+}
+
+// supersede records that k's unspent tokens were deleted at at, keeping
+// the later of two (token.Request.SupersededAt).
+func (b *Broker) supersede(k store.TokenKey, at time.Time) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.superseded == nil {
+		b.superseded = map[store.TokenKey]time.Time{}
+	}
+	if at.After(b.superseded[k]) {
+		b.superseded[k] = at
+	}
+}
+
+// mintOne answers one device. The only error it returns is
+// ErrIdempotencyInProgress, which is the whole request's; every other refusal
+// is an item.
 func (b *Broker) mintOne(ctx context.Context, pol *policy.Policy, principal string, cred store.Credential,
-	authTime time.Time, name string, req api.MintRequest, key, bodyHash string) (api.MintItem, error) {
+	authTime time.Time, name string, req api.MintRequest, hold *token.Reservation, bodyHash string) (api.MintItem, error) {
 	deny := func(reason decision.Reason, platform string) api.MintItem {
 		b.emit(decision.Record{TS: b.Now(), Event: decision.EventMint, Verdict: decision.VerdictDeny, Reason: reason,
 			Principal: principal, Auth: &decision.Auth{Method: cred.Method},
@@ -331,12 +577,12 @@ func (b *Broker) mintOne(ctx context.Context, pol *policy.Policy, principal stri
 			Enable: res.Enable, MaxPrivilege: res.MaxPrivilege, MaxSessionAge: b.MaxSessionAge,
 			Credential: cred, AuthTime: authTime},
 		Device: name, Platform: dev.Platform, BlobHash: hash, WithEnable: req.Enable,
-		TTL:            time.Duration(req.TTLSeconds) * time.Second,
-		IdempotencyKey: key, BodyHash: bodyHash, SupersededAt: supersededAt,
+		TTL:         time.Duration(req.TTLSeconds) * time.Second,
+		Reservation: hold, BodyHash: bodyHash, SupersededAt: supersededAt,
 		Policy: &decision.Policy{Bundle: pol.Bundle, Subject: res.Subject, Grants: res.Grants}})
 	var capped *token.ErrTooManyOutstanding
 	switch {
-	case errors.Is(err, token.ErrIdempotencyConflict):
+	case errors.Is(err, token.ErrIdempotencyInProgress):
 		return api.MintItem{}, err
 	case errors.As(err, &capped):
 		return deny(decision.CandidateCapReached, dev.Platform), nil
@@ -347,7 +593,8 @@ func (b *Broker) mintOne(ctx context.Context, pol *policy.Policy, principal stri
 	// idempotent replay is counted again: it is a permit answered.
 	b.Metrics.Decisions.WithLabelValues(decision.EventMint, decision.VerdictPermit, string(decision.GrantsMatched)).Inc()
 	item := api.MintItem{Device: name, Verdict: decision.VerdictPermit, Platform: dev.Platform,
-		Username: out.Username, Login: out.Login, Enable: out.Enable, ExpiresAt: out.ExpiresAt.UTC().Format(time.RFC3339)}
+		Username: out.Username, Login: out.Login, Enable: out.Enable, ExpiresAt: out.ExpiresAt.UTC().Format(time.RFC3339),
+		Replayed: out.Replayed}
 	if len(dev.Addresses) > 0 {
 		// A fact from the source of truth; the client must not trust it
 		// further than an SSH host key (design §17).
@@ -490,6 +737,17 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 func writeConflict(w http.ResponseWriter) {
 	writeError(w, http.StatusConflict, "idempotency_conflict",
 		"this Idempotency-Key was used with a different body; the first request's result stands (design §17)")
+}
+
+// writeInProgress answers a request whose key another request under the
+// same body is still minting (design §17; plan 7a). It is the API's own
+// code, as idempotency_conflict is, and no decision record carries it.
+func (b *Broker) writeInProgress(w http.ResponseWriter) {
+	b.Metrics.BrokerIdempotency.WithLabelValues("in_progress").Inc()
+	w.Header().Set("Retry-After", "1")
+	writeError(w, http.StatusConflict, "idempotency_in_progress", "a request under this Idempotency-Key "+
+		"is still being minted; retry it under the same key, and it is answered from that request's result "+
+		"(design §17)")
 }
 
 func writeError(w http.ResponseWriter, code int, errCode, detail string) {

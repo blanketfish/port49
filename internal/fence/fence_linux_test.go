@@ -585,3 +585,26 @@ func TestNoVerifyKeysIsAnEmptyList(t *testing.T) {
 		t.Fatalf("%v %v", keys, err)
 	}
 }
+
+// CheckDir asks the directory's question whether or not the file is there:
+// a missing file must not skip it (plan 7a, pre-flight C1).
+func TestCheckDirAsksOfTheDirectoryAlone(t *testing.T) {
+	dir := safeDir(t) // t.TempDir() is group-writable under a 002 umask
+	if err := CheckDir(filepath.Join(dir, "absent.json"), "revocations file"); err != nil {
+		t.Fatalf("a private directory with no file yet: %v", err)
+	}
+	if err := CheckDir(filepath.Join(dir, "missing", "absent.json"), "revocations file"); err == nil {
+		t.Fatal("a missing directory passed")
+	}
+	open := filepath.Join(dir, "open")
+	if err := os.Mkdir(open, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(open, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckDir(filepath.Join(open, "absent.json"), "revocations file"); err == nil ||
+		!strings.Contains(err.Error(), "writable by others") {
+		t.Fatalf("a directory others can write: %v", err)
+	}
+}

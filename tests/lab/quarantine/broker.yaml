@@ -6,3 +6,4 @@ broker:
   tls_key_file: tests/lab/logs/slice-pki/broker-key.pem
   client_ca_file: tests/lab/logs/slice-pki/broker-ca.pem
   policy_file: tests/lab/quarantine/policy.yaml
+  revocations_file: tests/lab/logs/revocations.json

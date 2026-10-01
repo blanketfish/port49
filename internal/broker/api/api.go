@@ -36,6 +36,9 @@ type MintItem struct {
 	ExpiresAt string `json:"expires_at,omitempty"`
 	Error     string `json:"error,omitempty"`
 	Detail    string `json:"detail,omitempty"`
+	// Replayed is the broker's own, never on the wire: this permit is an
+	// idempotent replay, which recorded no permit of its own.
+	Replayed bool `json:"-"`
 }
 
 // MintResponse is POST /v1/tokens' 200: partial failure is per item, never at

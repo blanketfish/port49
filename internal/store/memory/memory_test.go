@@ -140,7 +140,7 @@ func TestSweepDropsExpiredKeys(t *testing.T) {
 	// Write tokens, receipts, contexts, blobs, idempotency records, and
 	// context-index entries under distinct keys with short TTLs. These are
 	// written straight into the maps, as the receipt index above already
-	// does, because every getter (GetBlob, GetIdempotency, the Contexts*
+	// does, because every getter (GetBlob, ReserveIdempotency, the Contexts*
 	// readers) self-checks expiry and so cannot tell a swept map from an
 	// unswept one whose entry it happens to skip: only reaching the map
 	// directly, after sweepLocked, catches a sweep branch that was never
@@ -164,14 +164,19 @@ func TestSweepDropsExpiredKeys(t *testing.T) {
 		s.byPrincipal["user:u"+string(rune(i))] = map[store.ContextRef]time.Time{ref: exp}
 		s.bySid["sid"+string(rune(i))] = map[store.ContextRef]time.Time{ref: exp}
 		s.byCert["cert"+string(rune(i))] = map[store.ContextRef]time.Time{ref: exp}
+
+		s.tokensByPrincipal["user:u"+string(rune(i))] = map[store.TokenKey]time.Time{tk: exp}
+		s.tokensByCert["cert"+string(rune(i))] = map[store.TokenKey]time.Time{tk: exp}
 	}
 
 	// Verify entries exist
 	if len(s.tokens) != 3 || len(s.receipts) != 3 || len(s.contexts) != 3 || len(s.receiptsByPrincipal) != 3 ||
-		len(s.blobs) != 3 || len(s.idem) != 3 || len(s.byPrincipal) != 3 || len(s.bySid) != 3 || len(s.byCert) != 3 {
-		t.Fatalf("setup failed: tokens=%d receipts=%d contexts=%d index=%d blobs=%d idem=%d byPrincipal=%d bySid=%d byCert=%d",
+		len(s.blobs) != 3 || len(s.idem) != 3 || len(s.byPrincipal) != 3 || len(s.bySid) != 3 || len(s.byCert) != 3 ||
+		len(s.tokensByPrincipal) != 3 || len(s.tokensByCert) != 3 {
+		t.Fatalf("setup failed: tokens=%d receipts=%d contexts=%d index=%d blobs=%d idem=%d byPrincipal=%d bySid=%d byCert=%d tokensByPrincipal=%d tokensByCert=%d",
 			len(s.tokens), len(s.receipts), len(s.contexts), len(s.receiptsByPrincipal),
-			len(s.blobs), len(s.idem), len(s.byPrincipal), len(s.bySid), len(s.byCert))
+			len(s.blobs), len(s.idem), len(s.byPrincipal), len(s.bySid), len(s.byCert),
+			len(s.tokensByPrincipal), len(s.tokensByCert))
 	}
 
 	// Advance time past expiry
@@ -185,12 +190,15 @@ func TestSweepDropsExpiredKeys(t *testing.T) {
 	// Verify all expired entries are gone. The principal index matters as much
 	// as the records: a daemon that sweeps records but keeps their index
 	// entries grows one map entry per login for as long as it runs. Same for
-	// the blob, idempotency, and context-index maps Task 3 added.
+	// the blob, idempotency, and context-index maps Task 3 added, and the
+	// token indexes of plan 7a.
 	if len(s.tokens) != 0 || len(s.receipts) != 0 || len(s.contexts) != 0 || len(s.receiptsByPrincipal) != 0 ||
-		len(s.blobs) != 0 || len(s.idem) != 0 || len(s.byPrincipal) != 0 || len(s.bySid) != 0 || len(s.byCert) != 0 {
-		t.Fatalf("sweep failed: tokens=%d receipts=%d contexts=%d index=%d blobs=%d idem=%d byPrincipal=%d bySid=%d byCert=%d",
+		len(s.blobs) != 0 || len(s.idem) != 0 || len(s.byPrincipal) != 0 || len(s.bySid) != 0 || len(s.byCert) != 0 ||
+		len(s.tokensByPrincipal) != 0 || len(s.tokensByCert) != 0 {
+		t.Fatalf("sweep failed: tokens=%d receipts=%d contexts=%d index=%d blobs=%d idem=%d byPrincipal=%d bySid=%d byCert=%d tokensByPrincipal=%d tokensByCert=%d",
 			len(s.tokens), len(s.receipts), len(s.contexts), len(s.receiptsByPrincipal),
-			len(s.blobs), len(s.idem), len(s.byPrincipal), len(s.bySid), len(s.byCert))
+			len(s.blobs), len(s.idem), len(s.byPrincipal), len(s.bySid), len(s.byCert),
+			len(s.tokensByPrincipal), len(s.tokensByCert))
 	}
 }
 
@@ -976,14 +984,32 @@ func TestIndexes(t *testing.T) {
 func TestIdempotency(t *testing.T) {
 	s := New(time.Now)
 	ctx := context.Background()
-	s.PutIdempotency(ctx, "user:alice", "k1", store.Idempotency{BodyHash: "h", Response: []byte("resp"), ExpiresAt: time.Now().Add(time.Minute)})
-	r, err := s.GetIdempotency(ctx, "user:alice", "k1")
-	if err != nil || string(r.Response) != "resp" {
-		t.Fatalf("%+v %v", r, err)
+	if _, ok, err := s.ReserveIdempotency(ctx, "user:alice", "k1", store.Idempotency{BodyHash: "h", Holder: "x",
+		Pending: true, ExpiresAt: time.Now().Add(time.Minute)}); err != nil || !ok {
+		t.Fatalf("%v %v", ok, err)
 	}
-	if _, err := s.GetIdempotency(ctx, "user:bob", "k1"); !errors.Is(err, store.ErrNotFound) {
+	if err := s.CompleteIdempotency(ctx, "user:alice", "k1", "x", store.Idempotency{BodyHash: "h", Holder: "x",
+		Response: []byte("resp"), ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	if r, ok := storetest.Peek(t, s, "user:alice", "k1"); !ok || string(r.Response) != "resp" {
+		t.Fatalf("%+v %v", r, ok)
+	}
+	if _, ok := storetest.Peek(t, s, "user:bob", "k1"); ok {
 		t.Fatal("idempotency is per principal")
 	}
+}
+
+// planting is the memory store with a way to write an idempotency record
+// whole, which no store.Store method has: storetest.IdempotencyReservesOnce
+// plants a holderless one through it.
+type planting struct{ *Store }
+
+func (p planting) PlantIdempotency(_ context.Context, principal, key string, rec store.Idempotency) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.idem[idemKey(principal, key)] = rec
+	return nil
 }
 
 // SwapContext is a compare-and-set, and each of its refusals is a state a
@@ -1348,4 +1374,63 @@ func TestPolicyRevisionOnTheMemoryStore(t *testing.T) {
 func TestRevocationIsMonotonicOnTheMemoryStore(t *testing.T) {
 	now := time.Unix(1_757_041_495, 0)
 	storetest.RevocationIsMonotonic(t, func() store.Store { return New(func() time.Time { return now }) }, now)
+}
+
+func TestIdempotencyReservesOnce(t *testing.T) {
+	now := time.Unix(1_757_041_495, 0)
+	storetest.IdempotencyReservesOnce(t, func() store.Store { return planting{New(func() time.Time { return now })} }, now)
+}
+
+func TestIdempotencyLeaseExpires(t *testing.T) {
+	now := time.Unix(1_757_041_495, 0)
+	storetest.IdempotencyLeaseExpires(t, func() (store.Store, func(time.Duration)) {
+		return New(func() time.Time { return now }), func(d time.Duration) { now = now.Add(d) }
+	}, now)
+}
+
+func TestTokenIndex(t *testing.T) {
+	now := time.Unix(1_757_041_495, 0)
+	storetest.TokenIndex(t, func() store.Store { return New(func() time.Time { return now }) }, now)
+}
+
+// An index entry lives as long as the longest token written under it, and
+// then drops out: a principal's keys do not accumulate for good.
+func TestATokenIndexEntryExpiresWithItsLongestToken(t *testing.T) {
+	now := time.Unix(1_757_041_495, 0)
+	s := New(func() time.Time { return now })
+	ctx := context.Background()
+	k := store.TokenKey{NAS: "leaf-01", Username: "alice"}
+	_ = s.IndexToken(ctx, "user:alice", "", k, 10*time.Minute)
+	_ = s.IndexToken(ctx, "user:alice", "", k, time.Minute) // never shortens it
+	now = now.Add(5 * time.Minute)
+	if got, _ := s.TokensByPrincipal(ctx, "user:alice"); len(got) != 1 {
+		t.Fatalf("at 5m: %v", got)
+	}
+	now = now.Add(5 * time.Minute)
+	if got, _ := s.TokensByPrincipal(ctx, "user:alice"); len(got) != 0 {
+		t.Fatalf("at 10m: %v", got)
+	}
+}
+
+func TestRevocationMarks(t *testing.T) {
+	now := time.Unix(1_757_041_495, 0)
+	storetest.RevocationMarks(t, func() store.Store { return New(func() time.Time { return now }) }, now)
+}
+
+// A mark does not expire however far the clock moves: only a delete lifts
+// it (spec §13, decision 32).
+func TestARevocationMarkNeverExpires(t *testing.T) {
+	now := time.Unix(1_757_041_495, 0)
+	s := New(func() time.Time { return now })
+	ctx := context.Background()
+	if err := s.PutRevocation(ctx, store.Revocation{Kind: store.RevocationPrincipal, Key: "user:alice", At: now}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < sweepEvery; i++ { // through a sweep
+		_ = s.PutBlob(ctx, fmt.Sprintf("b%d", i), []byte("x"), time.Second)
+	}
+	now = now.Add(10 * 365 * 24 * time.Hour)
+	if _, err := s.GetRevocation(ctx, store.RevocationPrincipal, "user:alice"); err != nil {
+		t.Fatalf("a mark expired: %v", err)
+	}
 }

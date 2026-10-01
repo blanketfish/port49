@@ -46,6 +46,16 @@ type Store struct {
 	indexedAs map[store.ContextRef]indexKeys
 	idem      map[string]store.Idempotency
 
+	// tokensByPrincipal and tokensByCert are the token indexes (plan 7a):
+	// each key's set of TokenKeys, each with the expiry of the longest token
+	// indexed under it. Plaintext, as the context indexes are.
+	tokensByPrincipal map[string]map[store.TokenKey]time.Time
+	tokensByCert      map[string]map[store.TokenKey]time.Time
+
+	// revocations are the standing marks (plan 7a), by (Kind, Key). The
+	// sweep never touches them: only DeleteRevocation lifts one.
+	revocations map[[2]string]store.Revocation
+
 	writes int // incremented on every write; triggers sweep at sweepEvery
 	// revs is the last context revision handed out. It is store-wide rather
 	// than per key so a context that is deleted and written again never
@@ -142,6 +152,9 @@ func New(now func() time.Time) *Store {
 		byCert:              make(map[string]map[store.ContextRef]time.Time),
 		indexedAs:           make(map[store.ContextRef]indexKeys),
 		idem:                make(map[string]store.Idempotency),
+		tokensByPrincipal:   make(map[string]map[store.TokenKey]time.Time),
+		tokensByCert:        make(map[string]map[store.TokenKey]time.Time),
+		revocations:         make(map[[2]string]store.Revocation),
 	}
 }
 
@@ -249,6 +262,8 @@ func (s *Store) sweepLocked() {
 	sweepIndex(s.byPrincipal, now)
 	sweepIndex(s.bySid, now)
 	sweepIndex(s.byCert, now)
+	sweepTokenIndex(s.tokensByPrincipal, now)
+	sweepTokenIndex(s.tokensByCert, now)
 
 	// Sweep the reverse record last, once the three indexes above have
 	// dropped what expired: a ref no index still names has nothing left to
@@ -871,12 +886,13 @@ func listRefs(idx map[string]map[store.ContextRef]time.Time, key string, now tim
 }
 
 // blankCertKey reports whether certKey is store.CertKey of an empty issuer or
-// an empty serial. It names no certificate: every OIDC login's credential has
-// neither, so "|" would be one index entry holding every OIDC operator's
-// context on the fleet, and a revocation by it would revoke them all. It is
-// treated as "" — never indexed — as the empty sid is (ruling P8).
+// an empty serial, or is not a CertKey at all (no "|"). It names no
+// certificate: every OIDC login's credential has neither, so "|" would be one
+// index entry holding every OIDC operator's context on the fleet, and a
+// revocation by it would revoke them all. It is treated as "" — never
+// indexed — as the empty sid is (ruling P8).
 func blankCertKey(certKey string) bool {
-	return certKey == "" || strings.HasPrefix(certKey, "|") || strings.HasSuffix(certKey, "|")
+	return !strings.Contains(certKey, "|") || strings.HasPrefix(certKey, "|") || strings.HasSuffix(certKey, "|")
 }
 
 // IndexContext adds ref to each non-empty index — principal, sid, and cert —
@@ -1038,37 +1054,219 @@ func (s *Store) ActivePrincipals(_ context.Context) ([]string, error) {
 	return out, nil
 }
 
+// IndexToken adds k under principal and certKey, each skipped when empty,
+// and a certificate key with no issuer or no serial the same way
+// (blankCertKey).
+func (s *Store) IndexToken(_ context.Context, principal, certKey string, k store.TokenKey, ttl time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if blankCertKey(certKey) {
+		certKey = ""
+	}
+	exp := s.now().Add(ttl)
+	for _, idx := range []struct {
+		m   map[string]map[store.TokenKey]time.Time
+		key string
+	}{{s.tokensByPrincipal, principal}, {s.tokensByCert, certKey}} {
+		if idx.key == "" {
+			continue
+		}
+		set := idx.m[idx.key]
+		if set == nil {
+			set = make(map[store.TokenKey]time.Time)
+			idx.m[idx.key] = set
+		}
+		if exp.After(set[k]) {
+			set[k] = exp
+		}
+	}
+	s.wroteLocked()
+	return nil
+}
+
+func (s *Store) TokensByPrincipal(_ context.Context, principal string) ([]store.TokenKey, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return liveTokenKeys(s.tokensByPrincipal[principal], s.now()), nil
+}
+
+func (s *Store) TokensByCert(_ context.Context, certKey string) ([]store.TokenKey, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return liveTokenKeys(s.tokensByCert[certKey], s.now()), nil
+}
+
+// liveTokenKeys is set's unexpired keys, sorted by (NAS, Username).
+func liveTokenKeys(set map[store.TokenKey]time.Time, now time.Time) []store.TokenKey {
+	var out []store.TokenKey
+	for k, exp := range set {
+		if exp.After(now) {
+			out = append(out, k)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].NAS != out[j].NAS {
+			return out[i].NAS < out[j].NAS
+		}
+		return out[i].Username < out[j].Username
+	})
+	return out
+}
+
+// sweepTokenIndex is sweepIndex for the token indexes.
+func sweepTokenIndex(idx map[string]map[store.TokenKey]time.Time, now time.Time) {
+	for k, set := range idx {
+		for tk, exp := range set {
+			if !exp.After(now) {
+				delete(set, tk)
+			}
+		}
+		if len(set) == 0 {
+			delete(idx, k)
+		}
+	}
+}
+
 // idemKey joins principal and key so idempotency is scoped per principal:
 // one principal's replay must not answer another's request.
 func idemKey(principal, key string) string {
 	return principal + "\x00" + key
 }
 
-// PutIdempotency records rec under (principal, key), expiring on rec.ExpiresAt.
-func (s *Store) PutIdempotency(_ context.Context, principal, key string, rec store.Idempotency) error {
+// liveIdemLocked is the live record under k, deleting one past its expiry.
+func (s *Store) liveIdemLocked(k string) (store.Idempotency, bool) {
+	r, ok := s.idem[k]
+	if !ok {
+		return store.Idempotency{}, false
+	}
+	if !r.ExpiresAt.After(s.now()) {
+		delete(s.idem, k)
+		return store.Idempotency{}, false
+	}
+	return r, true
+}
+
+// errNoHolder refuses an idempotency record without a holder: the empty
+// holder is one any request can name, so it would hand a reservation's
+// rights to everyone.
+var errNoHolder = errors.New("store: an idempotency record must name its holder")
+
+// ReserveIdempotency is design §17's put-if-absent: under the one lock, a
+// live record is returned untouched and only its absence is written.
+func (s *Store) ReserveIdempotency(_ context.Context, principal, key string, rec store.Idempotency) (store.Idempotency, bool, error) {
+	if rec.Holder == "" {
+		return store.Idempotency{}, false, errNoHolder
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.idem[idemKey(principal, key)] = rec
-	s.writes++
-	if s.writes%sweepEvery == 0 {
-		s.sweepLocked()
+	k := idemKey(principal, key)
+	if cur, ok := s.liveIdemLocked(k); ok {
+		return cur, false, nil
+	}
+	s.idem[k] = rec
+	s.wroteLocked()
+	return store.Idempotency{}, true, nil
+}
+
+// CompleteIdempotency writes rec over the live record only while that
+// record's holder is expect. Nobody holds the empty holder.
+func (s *Store) CompleteIdempotency(_ context.Context, principal, key, expect string, rec store.Idempotency) error {
+	if rec.Holder == "" {
+		return errNoHolder
+	}
+	if expect == "" {
+		return store.ErrConflict
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	k := idemKey(principal, key)
+	if cur, ok := s.liveIdemLocked(k); !ok || cur.Holder != expect {
+		return store.ErrConflict
+	}
+	s.idem[k] = rec
+	s.wroteLocked()
+	return nil
+}
+
+// ReleaseIdempotency deletes holder's own pending reservation and nothing
+// else.
+func (s *Store) ReleaseIdempotency(_ context.Context, principal, key, holder string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	k := idemKey(principal, key)
+	if cur, ok := s.liveIdemLocked(k); ok && cur.Pending && cur.Holder == holder {
+		delete(s.idem, k)
 	}
 	return nil
 }
 
-// GetIdempotency returns the record written under (principal, key), or
-// ErrNotFound if it is absent, expired, or was written under a different
-// principal.
-func (s *Store) GetIdempotency(_ context.Context, principal, key string) (store.Idempotency, error) {
+// errIncompleteMark refuses a revocation mark that could match nothing: it
+// would be reported as in force and revoke nothing.
+var errIncompleteMark = errors.New("store: a revocation mark must name a principal, or a certificate by issuer and serial")
+
+// PutRevocation writes r unless a mark for its key already stands.
+func (s *Store) PutRevocation(_ context.Context, r store.Revocation) error {
+	switch r.Kind {
+	case store.RevocationPrincipal:
+		if r.Key == "" {
+			return errIncompleteMark
+		}
+	case store.RevocationCert:
+		if blankCertKey(r.Key) {
+			return errIncompleteMark
+		}
+	default:
+		return errIncompleteMark
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	k := idemKey(principal, key)
-	r, ok := s.idem[k]
-	if !ok || !r.ExpiresAt.After(s.now()) {
-		delete(s.idem, k)
-		return store.Idempotency{}, store.ErrNotFound
+	k := [2]string{r.Kind, r.Key}
+	if _, ok := s.revocations[k]; !ok {
+		s.revocations[k] = r
 	}
-	return r, nil
+	s.wroteLocked()
+	return nil
+}
+
+func (s *Store) GetRevocation(_ context.Context, kind, key string) (store.Revocation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if r, ok := s.revocations[[2]string{kind, key}]; ok {
+		return r, nil
+	}
+	return store.Revocation{}, store.ErrNotFound
+}
+
+func (s *Store) DeleteRevocation(_ context.Context, kind, key string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.revocations, [2]string{kind, key})
+	return nil
+}
+
+func (s *Store) ListRevocations(_ context.Context) ([]store.Revocation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]store.Revocation, 0, len(s.revocations))
+	for _, r := range s.revocations {
+		out = append(out, r)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Kind != out[j].Kind {
+			return out[i].Kind < out[j].Kind
+		}
+		return out[i].Key < out[j].Key
+	})
+	return out, nil
+}
+
+// wroteLocked counts a write and sweeps every sweepEvery writes, as every
+// writer here does.
+func (s *Store) wroteLocked() {
+	s.writes++
+	if s.writes%sweepEvery == 0 {
+		s.sweepLocked()
+	}
 }
 
 var _ store.Store = (*Store)(nil)

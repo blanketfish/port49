@@ -78,6 +78,26 @@ type Metrics struct {
 	// character or invalid UTF-8). None is a decision, so none is in port49_decisions_total.
 	// The label is the code only.
 	BrokerItemErrors *prometheus.CounterVec
+	// port49_broker_idempotency_refusals_total{outcome}: mint requests refused
+	// whole at their Idempotency-Key (design §17; plan 7a): "conflict" (another
+	// body under the key), "in_progress" (the same body still minting), and
+	// "store_error" (the reservation could not be read or written).
+	BrokerIdempotency *prometheus.CounterVec
+	// port49_broker_tls_handshake_failures_total{reason}: handshakes the
+	// broker's listener did not complete (spec §13 decision 32): reason is
+	// untrusted_chain, identity_refused, server_cert_refused, timeout,
+	// client_closed or protocol.
+	BrokerHandshakeFailures *prometheus.CounterVec
+	// port49_broker_connection_events_total{event}: source_cap_refused (reset
+	// at accept, its source holding max_pending_conns_per_source),
+	// principal_cap_evicted (a principal's oldest held connection closed for
+	// its newest), revoked_closed (closed by a revocation), revoked_refused
+	// (answered credential_revoked and closed at bind: its certificate or
+	// principal is marked).
+	BrokerConnectionEvents *prometheus.CounterVec
+	// port49_broker_connections{state}: pending (not yet bound to a
+	// principal: handshaking, or certificate-less) and held.
+	BrokerConnections *prometheus.GaugeVec
 	// port49_blob_cache_lookups_total{outcome}: the authorizer's per-replica
 	// blob cache, "hit" or "miss" (spec §5.1.1). A miss is one store read,
 	// counted again in port49_store_operations_total{op="get_blob"}; a hit
@@ -113,6 +133,15 @@ type Metrics struct {
 	// not mint what they carry. Each is one operator's `port49 token` to run
 	// again; none is a session ended.
 	TokensSuperseded prometheus.Counter
+	// port49_revocations_total{by, outcome}: revocations by principal or by
+	// cert, applied, partial (the mark in force, a later step failed) or
+	// lifted (spec §5.1.4).
+	Revocations *prometheus.CounterVec
+	// port49_revocations_in_force{by}: marks standing now.
+	RevocationsInForce *prometheus.GaugeVec
+	// port49_revocations_file_failed: 1 while the last write of
+	// broker.revocations_file failed, so a restart would forget a mark.
+	RevocationsFileFailed prometheus.Gauge
 	// port49_policy_reloads_total{outcome}: attempts to put a changed policy
 	// file in force (plan 4b) — "applied", "unchanged" (a SIGHUP with nothing
 	// new), or "refused" (the file does not load; the policy in force keeps
@@ -294,12 +323,26 @@ func New(reg prometheus.Registerer) *Metrics {
 			Help: "Accounting records accepted, by attribution."}, []string{"attribution"}),
 		BrokerItemErrors: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_broker_item_errors_total",
 			Help: "Mint items the broker could not decide, by API error code."}, []string{"error"}),
+		BrokerIdempotency: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_broker_idempotency_refusals_total",
+			Help: "Mint requests refused whole at their Idempotency-Key, by outcome."}, []string{"outcome"}),
+		BrokerHandshakeFailures: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_broker_tls_handshake_failures_total",
+			Help: "TLS handshakes the broker's listener did not complete, by reason."}, []string{"reason"}),
+		BrokerConnectionEvents: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_broker_connection_events_total",
+			Help: "Broker connections refused at accept or closed by the broker, by event."}, []string{"event"}),
+		BrokerConnections: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "port49_broker_connections",
+			Help: "Broker connections open now: pending (not yet bound to a principal) and held."}, []string{"state"}),
 		BlobCache: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_blob_cache_lookups_total",
 			Help: "Compiled-blob cache lookups by the authorizer, by outcome."}, []string{"outcome"}),
 		ContextRefreshes: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_context_refreshes_total",
 			Help: "Live login contexts a policy refresh visited, by outcome."}, []string{"outcome"}),
 		TokensSuperseded: prometheus.NewCounter(prometheus.CounterOpts{Name: "port49_tokens_superseded_total",
 			Help: "(device, username) keys whose unspent tokens a policy change deleted."}),
+		Revocations: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_revocations_total",
+			Help: "Revocations by principal or certificate, by outcome."}, []string{"by", "outcome"}),
+		RevocationsInForce: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "port49_revocations_in_force",
+			Help: "Revocation marks in force now."}, []string{"by"}),
+		RevocationsFileFailed: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_revocations_file_failed",
+			Help: "1 while broker.revocations_file could not be written; a restart would forget a revocation."}),
 		PolicyReloads: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_policy_reloads_total",
 			Help: "Attempts to put a changed policy file in force, by outcome."}, []string{"outcome"}),
 		PolicyFileRefused: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_policy_file_refused",
@@ -353,8 +396,10 @@ func New(reg prometheus.Registerer) *Metrics {
 	})
 	reg.MustRegister(m.Requests, m.Latency, m.Decisions, m.Unvalidated, m.KeyValidations,
 		m.Connections, m.ConnectionEvents, m.AuthFailures, m.SpoolDepth, m.SpoolDrops, m.SpoolQuarantines,
-		m.StoreOps, m.DecisionLogWriteFailures, m.CryptOpenFailures, m.Attributions, m.BrokerItemErrors, m.BlobCache,
-		m.DevicesQuarantined, m.DevicesAdmissionRefused, m.ContextRefreshes, m.TokensSuperseded, m.PolicyReloads, m.PolicyFileRefused,
+		m.StoreOps, m.DecisionLogWriteFailures, m.CryptOpenFailures, m.Attributions, m.BrokerItemErrors, m.BrokerIdempotency,
+		m.BrokerHandshakeFailures, m.BrokerConnectionEvents, m.BrokerConnections, m.BlobCache,
+		m.DevicesQuarantined, m.DevicesAdmissionRefused, m.ContextRefreshes, m.TokensSuperseded,
+		m.Revocations, m.RevocationsInForce, m.RevocationsFileFailed, m.PolicyReloads, m.PolicyFileRefused,
 		m.PolicyRefreshPending, m.InventoryReloads, m.InventoryFileRefused, m.InventorySnapshotAge,
 		m.InventoryChanges, m.InventoryBundleSequence, m.InventoryPersistFailed, m.InventoryBundleRefused,
 		m.InventoryPolicyMismatch, m.InventoryMirrorUnreadable, m.InventoryFetches)

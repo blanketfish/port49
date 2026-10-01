@@ -23,6 +23,8 @@ import (
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/policy"
+	"github.com/rhwendt/port49/internal/session"
+	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/store/memory"
 	"github.com/rhwendt/port49/internal/testpki"
 	"github.com/rhwendt/port49/internal/token"
@@ -88,8 +90,29 @@ func newFixture(t *testing.T, candidateCap int) *fixture {
 	f.b = &Broker{Policy: policy.NewLive(pol),
 		Minter: token.NewMinter(f.st, log, rand.Reader, token.TagKey([]byte("k")), clock, candidateCap),
 		Store:  f.st, Log: log, Metrics: metrics.New(prometheus.NewRegistry()), Now: clock,
-		MaxSessionAge: 12 * time.Hour, BatchMax: 4}
+		MaxSessionAge: 12 * time.Hour, BatchMax: 4, Sessions: session.New(f.st, clock, time.Hour, time.Hour)}
 	return f
+}
+
+// liveContext writes a live context for principal under (device, username),
+// indexed by principal and certificate, as a redemption would.
+func (f *fixture) liveContext(t *testing.T, device, username, principal, certKey string) {
+	t.Helper()
+	ctx := context.Background()
+	k := store.ContextKey{NAS: device, Username: username}
+	if err := f.st.PutContext(ctx, k, store.Context{CtxID: "ctx_" + device, Principal: principal, Username: username,
+		PrivLvl: 1, AuthTime: f.now, RefreshedAt: f.now}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.IndexContext(ctx, principal, "", certKey, store.ContextRef{NAS: device, Username: username},
+		time.Hour); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// certKey is the mark key of c, as Identity names its credential.
+func certKey(c tls.Certificate) string {
+	return store.CertKey(c.Leaf.Issuer.String(), c.Leaf.SerialNumber.Text(16))
 }
 
 // advance moves the clock under the lock, for tests where a server goroutine
