@@ -83,13 +83,16 @@ func (b *Broker) refresh(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", "the body is not a refresh request")
 		return
 	}
-	// Every consumed nonce is paced, whether its answer verifies or not: a
-	// caller looping challenge and bad answer is held to one per refreshEvery
-	// as a good one is (pre-flight M17).
+	// A live nonce consumed is paced, whether its answer verifies or not: a
+	// caller looping challenge and wrong nonce or bad signature is held to
+	// one per refreshEvery as a good one is (pre-flight M17). An expired one
+	// is not, so the agent's one retry after refresh_challenge_missing gets
+	// its new challenge; it can come only once per refreshNonceTTL anyway.
 	h.mu.Lock()
 	nonce, exp := h.nonce, h.nonceExp
-	if nonce != nil {
-		h.nonce, h.lastRefresh = nil, now
+	h.nonce = nil
+	if nonce != nil && now.Before(exp) {
+		h.lastRefresh = now
 	}
 	h.mu.Unlock()
 	got, _ := base64.RawURLEncoding.DecodeString(req.Nonce)
@@ -112,7 +115,7 @@ func (b *Broker) refresh(w http.ResponseWriter, r *http.Request) {
 	rv, revoked, err := b.revocation(ctx, principal, cred)
 	switch {
 	case err != nil:
-		b.refreshStoreError(w, now, principal, cred, 0,
+		b.refreshStoreError(w, now, principal, cred, refreshEvery,
 			"the broker could not read the revocations in force, so it extended nothing; try again")
 		return
 	case revoked:

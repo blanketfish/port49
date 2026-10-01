@@ -217,9 +217,8 @@ func TestARefreshIsBoundToItsConnectionAndItsKey(t *testing.T) {
 		t.Fatalf("an answer at 61s: %d", s)
 	}
 
-	// Another key, the same principal: refused. (The 61s answer consumed its
-	// nonce, so it is paced as any answer is.)
-	f.advance(11 * time.Second)
+	// Another key, the same principal: refused. (The 61s answer's nonce had
+	// expired, so it is not paced: the agent's retry gets its challenge.)
 	nonce, text = challengeOn(t, c, br)
 	renewed := f.client(t, "alice@example.com", f.now.Add(time.Hour))
 	if s, _ := answerOn(t, c, br, c, renewed, nonce, text); s != 401 {
@@ -253,7 +252,7 @@ func TestARefreshIsRateLimited(t *testing.T) {
 		t.Fatal(s)
 	}
 	if r := postOn(t, c, br, "/v1/refresh/challenge", ""); r.status != 429 || !strings.Contains(r.body, "refresh_too_soon") {
-		t.Fatalf("a second refresh inside 10s: %d %s", r.status, r.body)
+		t.Fatalf("a second refresh inside 10s: %d (body withheld: a 200 carries a challenge)", r.status)
 	}
 	f.advance(11 * time.Second)
 	nonce, text := challengeOn(t, c, br)
@@ -262,7 +261,31 @@ func TestARefreshIsRateLimited(t *testing.T) {
 		t.Fatalf("a bad answer: %d", s)
 	}
 	if r := postOn(t, c, br, "/v1/refresh/challenge", ""); r.status != 429 || !strings.Contains(r.body, "refresh_too_soon") {
-		t.Fatalf("a challenge inside 10s of a bad answer: %d %s", r.status, r.body)
+		t.Fatalf("a challenge inside 10s of a bad answer: %d (body withheld: a 200 carries a challenge)", r.status)
+	}
+
+	// A wrong nonce while a live one is outstanding consumes it and is paced.
+	f.advance(11 * time.Second)
+	_, _ = challengeOn(t, c, br)
+	wrong := base64.RawURLEncoding.EncodeToString(make([]byte, api.RefreshNonceLen))
+	if s, body := answerOn(t, c, br, c, f.alice, make([]byte, api.RefreshNonceLen), wrong); s != 401 ||
+		!strings.Contains(body, "refresh_challenge_missing") {
+		t.Fatalf("a mismatched nonce: %d %s", s, body)
+	}
+	if r := postOn(t, c, br, "/v1/refresh/challenge", ""); r.status != 429 {
+		t.Fatalf("a challenge at once after a mismatched nonce: %d (body withheld: a 200 carries a challenge)", r.status)
+	}
+
+	// A stale nonce is not paced: the agent's one retry after
+	// refresh_challenge_missing gets a new challenge at once.
+	f.advance(11 * time.Second)
+	nonce, text = challengeOn(t, c, br)
+	f.advance(61 * time.Second)
+	if s, body := answerOn(t, c, br, c, f.alice, nonce, text); s != 401 || !strings.Contains(body, "refresh_challenge_missing") {
+		t.Fatalf("a stale nonce: %d %s", s, body)
+	}
+	if r := postOn(t, c, br, "/v1/refresh/challenge", ""); r.status != 200 {
+		t.Fatalf("a challenge at once after a stale nonce: %d %s", r.status, r.body)
 	}
 }
 
@@ -312,7 +335,7 @@ func TestARefreshTheStoreFailsIsRecorded(t *testing.T) {
 		retry string
 	}{
 		{"marks", func(s store.Store) store.Store { return &revocationFailingStore{Store: s} },
-			"could not read the revocations in force, so it extended nothing", ""},
+			"could not read the revocations in force, so it extended nothing", "10"},
 		{"sessions", func(s store.Store) store.Store { return indexUnreadableStore{s} },
 			"some may have been extended", "10"},
 		{"marks_after", func(s store.Store) store.Store { return &revocationFailingStore{Store: s, ok: 2} },
