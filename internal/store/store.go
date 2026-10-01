@@ -16,10 +16,10 @@ var ErrNotFound = errors.New("store: not found")
 // ErrConflict is a compare-and-set refused because the record is no longer
 // the one the caller read: SwapContext's context, written by another writer
 // since, expired, or appeared where none was; or CompleteIdempotency's
-// record, no longer held by the caller (plan 7a); or a RefreshContext with an
-// ExpectRev, or a DeleteContextIf, whose revision moved (plan 7b). Nothing was
-// written. The
-// caller reads again and decides again; JoinContext is the loop that does.
+// record, no longer held by the caller (plan 7a); or a RefreshContext with
+// an ExpectRev, or a DeleteContextIf, whose revision moved (plan 7b).
+// Nothing was written. The caller reads again and decides again;
+// JoinContext is the loop that does.
 var ErrConflict = errors.New("store: context changed since it was read")
 
 // ErrPastGrace is RefreshContext refusing a context whose ceiling is
@@ -327,13 +327,18 @@ type ContextRefresh struct {
 	// context: SessionExpires becomes AuthTime plus it, and zero clears it
 	// (never). A refresh is a fresh authentication event, so it may lengthen
 	// a ceiling (spec §5.6; decision 33). Nil keeps the window the record's
-	// own pair described, as before.
+	// own pair described, as before. A caller passing SessionAge passes
+	// GraceCutoff with it: without one, nothing stops the refresh carrying
+	// a session already past its window forward.
 	SessionAge *time.Duration
 	// GraceCutoff, when non-zero, is the earliest ceiling a refresh may
-	// extend: the refresh time less the grace window. A context with a
-	// ceiling before it is ErrPastGrace and is not written. It is checked
-	// under the store's lock, so a refresh racing the window's end cannot
-	// resume a session the window closed.
+	// extend: the refresh time less the grace window. A context whose
+	// SessionExpires is non-zero and before it is ErrPastGrace and is not
+	// written; that is the authorizer's reading of a ceiling, so a context it
+	// denies session_expired is one no refresh resumes. A context with none
+	// (never) has no window to be past and is refreshed. It is checked under
+	// the store's lock, so a refresh racing the window's end cannot resume a
+	// session the window closed. Zero checks nothing.
 	GraceCutoff time.Time
 	// ExpectRev, when non-zero, is the revision the caller read: the write
 	// lands only on that record, else ErrConflict, so a context another
@@ -365,7 +370,10 @@ type ContextPolicy struct {
 	// device, zero for never (spec §5.6). SessionExpires becomes AuthTime
 	// plus it only when that is earlier, or the context has none: a policy
 	// edit shortens a session, and only a fresh authentication event
-	// lengthens one (decision 33). Zero changes nothing.
+	// lengthens one (decision 33). Zero changes nothing. A context with no
+	// AuthTime to anchor the ceiling to is given one in the distant past,
+	// as a login gives a token with none: it denies, loudly, rather than
+	// passing for a legitimate never.
 	MaxSessionAge time.Duration
 }
 
@@ -588,16 +596,18 @@ type Store interface {
 	// SessionExpires follows the same one-way rule: a MaxSessionAge whose
 	// AuthTime plus it is earlier than the ceiling, or a context with none,
 	// moves it to that; a later one, or zero, leaves it (decision 33). A
-	// policy edit shortens a session and never lengthens or removes a ceiling.
+	// policy edit shortens a session and never lengthens or removes a
+	// ceiling. A context with a zero AuthTime is given a ceiling in the
+	// distant past, which denies (ContextPolicy.MaxSessionAge).
 	//
 	// It does not extend the expiry or stamp LastTouchedAt: a policy edit is
 	// not activity, or every reload would keep every idle context alive. It
 	// does not touch AuthTime or RefreshedAt, nor lengthen SessionExpires:
 	// nothing about the operator's authentication or the directory was
-	// re-verified. And it
-	// never clears RevokedAt, for the reason RefreshContext never does, nor
-	// moves it earlier: a revoking write onto a context already revoked later
-	// keeps the later mark, so no token minted between the two can lift it.
+	// re-verified. And it never clears RevokedAt, for the reason
+	// RefreshContext never does, nor moves it earlier: a revoking write onto
+	// a context already revoked later keeps the later mark, so no token
+	// minted between the two can lift it.
 	//
 	// ErrNotFound if the key is absent or already expired.
 	SetContextPolicy(ctx context.Context, k ContextKey, policyRev uint64, p ContextPolicy) error

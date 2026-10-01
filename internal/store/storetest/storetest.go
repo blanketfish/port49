@@ -602,7 +602,10 @@ func RevocationMarks(t *testing.T, newStore func() store.Store, now time.Time) {
 
 // CeilingShortensOnly is decision 33's rule for a policy edit: a policy
 // write shortens a context's ceiling, gives one to a context with none, and
-// never lengthens or removes one.
+// never lengthens or removes one. A context with no AuthTime to anchor a
+// ceiling is given one in the distant past, as a login gives a token with
+// none (authen's loginContext): it denies, loudly, rather than staying an
+// unbounded session that looks like a legitimate `never`.
 func CeilingShortensOnly(t *testing.T, newStore func() store.Store, now time.Time) {
 	t.Helper()
 	ctx := context.Background()
@@ -631,6 +634,18 @@ func CeilingShortensOnly(t *testing.T, newStore func() store.Store, now time.Tim
 		if c, _ := s.GetContext(ctx, k); !c.SessionExpires.Equal(tc.want) {
 			t.Errorf("%s: session_expires %v, want %v", tc.name, c.SessionExpires, tc.want)
 		}
+	}
+	s := newStore()
+	if err := s.PutContext(ctx, k, store.Context{CtxID: "c", Principal: "user:a", Username: "alice", BlobHash: "b1",
+		RefreshedAt: auth}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	c, _ := s.GetContext(ctx, k)
+	if err := s.SetContextPolicy(ctx, k, c.PolicyRev, store.ContextPolicy{BlobHash: "b2", MaxSessionAge: 2 * time.Hour}); err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := s.GetContext(ctx, k); c.SessionExpires.IsZero() || !c.SessionExpires.Before(now) {
+		t.Errorf("no auth_time: session_expires %v, want a ceiling already past", c.SessionExpires)
 	}
 }
 
@@ -669,7 +684,8 @@ func RefreshSetsTheCeiling(t *testing.T, newStore func() store.Store, now time.T
 
 // RefreshStopsAtGrace: a refresh whose GraceCutoff is after the context's
 // ceiling writes nothing and says so (spec §5.6, teardown row 3); one inside
-// the window resumes the context.
+// the window resumes the context, and so does one of a context with no
+// ceiling (`never`), which has no window to be past.
 func RefreshStopsAtGrace(t *testing.T, newStore func() store.Store, now time.Time) {
 	t.Helper()
 	ctx := context.Background()
@@ -692,6 +708,19 @@ func RefreshStopsAtGrace(t *testing.T, newStore func() store.Store, now time.Tim
 		GraceCutoff: now.Add(-2 * time.Hour)}, time.Hour); err != nil {
 		t.Fatalf("inside the window: %v", err)
 	}
+
+	s = newStore()
+	if err := s.PutContext(ctx, k, store.Context{CtxID: "c", Principal: "user:a", Username: "alice", BlobHash: "b",
+		AuthTime: auth, RefreshedAt: auth}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RefreshContext(ctx, k, store.ContextRefresh{AuthTime: now, RefreshedAt: now,
+		GraceCutoff: now.Add(-10 * time.Minute)}, time.Hour); err != nil {
+		t.Fatalf("a context with no ceiling: %v", err)
+	}
+	if c, _ := s.GetContext(ctx, k); !c.AuthTime.Equal(now) || !c.SessionExpires.IsZero() {
+		t.Fatalf("a context with no ceiling was not refreshed as one: %+v", c)
+	}
 }
 
 // WritesBindToTheRevision: a refresh with ExpectRev, and DeleteContextIf,
@@ -710,15 +739,19 @@ func WritesBindToTheRevision(t *testing.T, newStore func() store.Store, now time
 	if err := s.SetPrivilege(ctx, k, 15); err != nil { // another writer lands
 		t.Fatal(err)
 	}
-	if err := s.RefreshContext(ctx, k, store.ContextRefresh{AuthTime: now, RefreshedAt: now, ExpectRev: read.Rev},
+	landed, _ := s.GetContext(ctx, k)
+	later := now.Add(time.Minute)
+	if err := s.RefreshContext(ctx, k, store.ContextRefresh{AuthTime: later, RefreshedAt: later, ExpectRev: read.Rev},
 		time.Hour); !errors.Is(err, store.ErrConflict) {
 		t.Fatalf("a refresh against a stale revision: %v", err)
+	}
+	if c, _ := s.GetContext(ctx, k); c.Rev != landed.Rev || !c.AuthTime.Equal(landed.AuthTime) {
+		t.Fatal("a refused refresh wrote")
 	}
 	if err := s.DeleteContextIf(ctx, k, read.Rev); !errors.Is(err, store.ErrConflict) {
 		t.Fatalf("a delete against a stale revision: %v", err)
 	}
-	cur, _ := s.GetContext(ctx, k)
-	if err := s.DeleteContextIf(ctx, k, cur.Rev); err != nil {
+	if err := s.DeleteContextIf(ctx, k, landed.Rev); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.GetContext(ctx, k); !errors.Is(err, store.ErrNotFound) {

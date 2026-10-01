@@ -362,11 +362,12 @@ func (w *wrapped) AnnotateContext(ctx context.Context, k store.ContextKey, discH
 // timestamps, a policy blob hash, a session age, a grace cutoff and a
 // revision -- and the window it recomputes, and the ceiling GraceCutoff is
 // compared with, are read from SessionExpires and AuthTime, which PutContext
-// also leaves in the clear. The credential's sid is the field a refresh would otherwise want to write,
-// and it lives inside the sealed Credential; writing it here could only be a
-// read-unseal-modify-reseal-write, which is the read-modify-write the setters
-// exist to avoid (AnnotateContext above). A rotated sid moves in the plaintext
-// index instead, through ReindexSid, which is what revocation by sid reads.
+// also leaves in the clear. The credential's sid is the field a refresh would
+// otherwise want to write, and it lives inside the sealed Credential; writing
+// it here could only be a read-unseal-modify-reseal-write, which is the
+// read-modify-write the setters exist to avoid (AnnotateContext above). A
+// rotated sid moves in the plaintext index instead, through ReindexSid, which
+// is what revocation by sid reads.
 func (w *wrapped) RefreshContext(ctx context.Context, k store.ContextKey, r store.ContextRefresh, ttl time.Duration) error {
 	return w.inner.RefreshContext(ctx, k, r, ttl)
 }

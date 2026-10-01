@@ -653,7 +653,10 @@ func (s *Store) RefreshContext(_ context.Context, k store.ContextKey, r store.Co
 	if r.ExpectRev != 0 && e.rev != r.ExpectRev {
 		return store.ErrConflict
 	}
-	if !r.GraceCutoff.IsZero() && e.c.HasCeiling() && e.c.SessionExpires.Before(r.GraceCutoff) {
+	// "Has a ceiling" is read as the authorizer reads it, a non-zero
+	// SessionExpires, so a context it denies session_expired is one no
+	// refresh resumes.
+	if !r.GraceCutoff.IsZero() && !e.c.SessionExpires.IsZero() && e.c.SessionExpires.Before(r.GraceCutoff) {
 		return store.ErrPastGrace
 	}
 	// The window is read here, under the lock, from the pair this call is
@@ -747,9 +750,12 @@ func (s *Store) SetContextPolicy(_ context.Context, k store.ContextKey, policyRe
 		if ceiling, ok := e.c.PrivilegeCeiling(); ok && e.c.PrivLvl > ceiling {
 			e.c.PrivLvl = ceiling
 		}
-		// A context with a zero AuthTime is the lab's instrument's and has
-		// no ceiling to measure from.
-		if p.MaxSessionAge > 0 && !e.c.AuthTime.IsZero() {
+		// A context with a zero AuthTime has no instant to anchor a ceiling
+		// to, and is given one in the distant past, as a login gives a token
+		// with none (authen's loginContext): it denies, loudly, where dropping
+		// the ceiling would leave an unbounded session that looks exactly like
+		// a legitimate `never`.
+		if p.MaxSessionAge > 0 {
 			if ceiling := e.c.AuthTime.Add(p.MaxSessionAge); e.c.SessionExpires.IsZero() || ceiling.Before(e.c.SessionExpires) {
 				e.c.SessionExpires = ceiling
 			}
