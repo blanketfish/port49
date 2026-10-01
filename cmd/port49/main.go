@@ -43,6 +43,8 @@ const usage = `usage:
                         (waits up to 1 minute for the service's answer)
   port49 inventory sync --service URL --ca FILE --cert FILE --key FILE
                         (waits up to 6 minutes for the service's answer)
+  port49 inventory export --service URL --ca FILE --cert FILE --key FILE --verify-key FILE [--from SEQUENCE] [--out FILE]
+                        (--out is written 0600, never over an existing file)
   port49 inventory keygen --dir DIR
   port49 access review --policy FILE --inventory FILE --subject NAME
   port49 grants remove --policy FILE --inventory FILE --subject NAME [--write | --pr [--remote R] [--base B]]

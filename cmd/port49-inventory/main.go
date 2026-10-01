@@ -54,6 +54,18 @@ var stderr io.Writer = os.Stderr
 // onListening is told the bound addresses; a test's hook, nil otherwise.
 var onListening func(api, metrics string)
 
+// onWebhook is told the webhook listener's address; a test's hook.
+var onWebhook func(addr string)
+
+// webhookSettle and webhookGap are the debouncer's (decision 31): a burst is
+// one sync 2s after its first delivery, and a source is synced from webhooks
+// at most once per 30s. Variables for the tests.
+var webhookSettle, webhookGap = 2 * time.Second, 30 * time.Second
+
+// maxWebhookConns caps the webhook listener's connections: its callers are a
+// source of truth's few workers.
+const maxWebhookConns = 64
+
 // newSources builds the configured sources; a test swaps it.
 var newSources = inventory.NewSources
 
@@ -84,7 +96,16 @@ func run(ctx context.Context, cfgPath string, hup <-chan os.Signal) error {
 		// LoadTLS's errors name the file at fault; its prefix is the broker's.
 		return fmt.Errorf("TLS: %s", strings.TrimPrefix(err.Error(), "broker: "))
 	}
-	sources, err := newSources(cfg.Sync)
+	// The webhook's certificate: the API's, or its own (decision 31), read
+	// before any listener opens.
+	wcert := cert
+	if cfg.WebhookTLSCertFile != "" {
+		if wcert, err = keyfile.LoadX509KeyPair(cfg.WebhookTLSCertFile, cfg.WebhookTLSKeyFile); err != nil {
+			return fmt.Errorf("webhook_tls_cert_file %s, webhook_tls_key_file %s: %w", cfg.WebhookTLSCertFile,
+				cfg.WebhookTLSKeyFile, err)
+		}
+	}
+	sources, err := newSources(cfg.Sync, stderr)
 	if err != nil {
 		return err
 	}
@@ -119,6 +140,12 @@ func run(ctx context.Context, cfgPath string, hup <-chan os.Signal) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	srv.BaseContext = func(net.Listener) context.Context { return ctx }
+	// A sync is never started once a shutdown has begun.
+	syncNow := func(trigger string, only ...string) {
+		if ctx.Err() == nil {
+			s.Sync(ctx, trigger, only...)
+		}
+	}
 
 	// The metrics listener binds before Restore, which reads the mirror: a
 	// mount that hangs holds the start up to its deadline, and meanwhile
@@ -161,6 +188,9 @@ func run(ctx context.Context, cfgPath string, hup <-chan os.Signal) error {
 		}
 		return err
 	}
+	// Every ticker and debouncer stops with ctx, and is joined, before run
+	// returns.
+	var tickers sync.WaitGroup
 	ln, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
 		stopMetrics()
@@ -169,12 +199,40 @@ func run(ctx context.Context, cfgPath string, hup <-chan os.Signal) error {
 	apiErr := make(chan error, 1)
 	go func() { apiErr <- srv.ServeTLS(broker.Limit(ln, maxConns), "", "") }()
 
-	// Every ticker stops with ctx, and is joined, before run returns.
-	var tickers sync.WaitGroup
-	// shutdown closes both listeners, waits for the API's requests, and
-	// joins every goroutine run started. apiDone and metricsDone say whether
-	// that server's Serve has already returned.
-	shutdown := func(apiDone, metricsDone bool) {
+	// Webhooks (decision 31): a TLS listener of their own, asking no client
+	// certificate, and a debouncer per source, joined with the tickers.
+	var webhookErr chan error // nil, so never ready, with no webhook source
+	var wsrv *http.Server
+	// The webhook's handlers are joined at shutdown as the API's are: one
+	// past the grace would otherwise count and say after run returns.
+	var hookReqs inflight
+	webhooks := ""
+	if cfg.WebhookListen != "" {
+		wln, err := net.Listen("tcp", cfg.WebhookListen)
+		if err != nil {
+			srv.Close()
+			<-apiErr
+			stopMetrics()
+			return fmt.Errorf("webhook_listen %s: %w", cfg.WebhookListen, err)
+		}
+		deb := inventory.NewDebouncer(cfg.WebhookSources(), webhookSettle, webhookGap,
+			func(_ context.Context, name string) { syncNow("webhook", name) })
+		hooks := &inventory.Webhooks{Secrets: cfg.WebhookSecrets(), Notify: deb.Notify, Now: time.Now, Log: stderr,
+			Metrics: m}
+		wsrv = inventory.WebhookServer(cfg.WebhookListen, wcert, hookReqs.wrap(hooks.Handler()), inventory.WebhookErrorLog(m, stderr))
+		webhookErr = make(chan error, 1)
+		go func() { webhookErr <- wsrv.ServeTLS(broker.Limit(wln, maxWebhookConns), "", "") }()
+		deb.Run(ctx, &tickers)
+		webhooks = fmt.Sprintf("; webhooks on %s for %s", wln.Addr(), strings.Join(cfg.WebhookSources(), ", "))
+		if onWebhook != nil {
+			onWebhook(wln.Addr().String())
+		}
+	}
+
+	// shutdown closes every listener, waits for the API's and the webhook's
+	// requests, and joins every goroutine run started. apiDone, metricsDone
+	// and webhookDone say whether that server's Serve has already returned.
+	shutdown := func(apiDone, metricsDone, webhookDone bool) {
 		cancel()
 		shut, done := context.WithTimeout(context.Background(), grace)
 		defer done()
@@ -186,12 +244,21 @@ func run(ctx context.Context, cfgPath string, hup <-chan os.Signal) error {
 		if err := msrv.Shutdown(shut); err != nil {
 			msrv.Close()
 		}
+		if wsrv != nil {
+			if err := wsrv.Shutdown(shut); err != nil {
+				wsrv.Close()
+			}
+		}
 		reqs.wait()
+		hookReqs.wait()
 		if !apiDone {
 			<-apiErr
 		}
 		if !metricsDone {
 			<-metricsErr
+		}
+		if wsrv != nil && !webhookDone {
+			<-webhookErr
 		}
 		tickers.Wait()
 	}
@@ -201,18 +268,12 @@ func run(ctx context.Context, cfgPath string, hup <-chan os.Signal) error {
 		names[i] = c.Name + " (" + c.Type + ")"
 	}
 	fmt.Fprintf(stderr, prefix+"API on %s (mutual TLS; %d reader(s), %d syncer(s)), metrics on %s; "+
-		"signing key %s; %d source(s): %s\n", ln.Addr(), len(cfg.Readers), len(cfg.Syncers), mln.Addr(),
-		keyfile.Ed25519KeyID(key.Public().(ed25519.PublicKey)), len(sources), strings.Join(names, ", "))
+		"signing key %s; %d source(s): %s%s\n", ln.Addr(), len(cfg.Readers), len(cfg.Syncers), mln.Addr(),
+		keyfile.Ed25519KeyID(key.Public().(ed25519.PublicKey)), len(sources), strings.Join(names, ", "), webhooks)
 	if onListening != nil {
 		onListening(ln.Addr().String(), mln.Addr().String())
 	}
 
-	// A sync is never started once a shutdown has begun.
-	syncNow := func(trigger string, only ...string) {
-		if ctx.Err() == nil {
-			s.Sync(ctx, trigger, only...)
-		}
-	}
 	syncNow("startup")
 	// Each source on its own interval (spec §10): a ticker per source names
 	// the source due, and that sync rebuilds the bundle with every other
@@ -241,15 +302,18 @@ func run(ctx context.Context, cfgPath string, hup <-chan os.Signal) error {
 	for {
 		select {
 		case <-ctx.Done():
-			shutdown(false, false)
+			shutdown(false, false, false)
 			fmt.Fprintln(stderr, prefix+"signal received, exiting")
 			return nil
 		case err := <-apiErr:
-			shutdown(true, false)
+			shutdown(true, false, false)
 			return fmt.Errorf("listen %s: %w", cfg.Listen, err)
 		case err := <-metricsErr:
-			shutdown(false, true)
+			shutdown(false, true, false)
 			return fmt.Errorf("metrics_listen %s: %w", cfg.MetricsListen, err)
+		case err := <-webhookErr:
+			shutdown(false, false, true)
+			return fmt.Errorf("webhook_listen %s: %w", cfg.WebhookListen, err)
 		case name := <-due:
 			syncNow("schedule", name)
 		case <-hup:

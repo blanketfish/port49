@@ -35,11 +35,10 @@ type labInventory struct {
 	done                     chan struct{}
 }
 
-// startInventory starts the service with source as its file source's
-// content and a copy of policyPath as its policy. It refuses to start beside
-// a service this run does not own. The service syncs at start, so it is
-// ready — /readyz 200 — once it has published bundle 1.
-func (l *lab) startInventory(t *testing.T, source, policyPath string) *labInventory {
+// newLabInventory is a labInventory's directories, the inventory lab PKI and
+// a signing key `port49 inventory keygen` wrote, named for name. Nothing is
+// started. It refuses to go on beside a service this run does not own.
+func newLabInventory(t *testing.T, name string) *labInventory {
 	t.Helper()
 	if c, err := net.DialTimeout("tcp", inventoryAddr, 2*time.Second); err == nil {
 		c.Close()
@@ -47,8 +46,8 @@ func (l *lab) startInventory(t *testing.T, source, policyPath string) *labInvent
 			"stop it: pkill -f bin/port49-inventory", inventoryAddr)
 	}
 	logs := filepath.Join(root, "tests", "lab", "logs")
-	li := &labInventory{dir: filepath.Join(logs, "inventory-"+l.p.name), pki: filepath.Join(logs, "inventory-pki"),
-		errPath: filepath.Join(logs, "port49-inventory-"+l.p.name+".log"), done: make(chan struct{})}
+	li := &labInventory{dir: filepath.Join(logs, "inventory-"+name), pki: filepath.Join(logs, "inventory-pki"),
+		errPath: filepath.Join(logs, "port49-inventory-"+name+".log"), done: make(chan struct{})}
 	if err := os.RemoveAll(li.dir); err != nil {
 		t.Fatal(err)
 	}
@@ -79,8 +78,28 @@ func (l *lab) startInventory(t *testing.T, source, policyPath string) *labInvent
 	}
 	li.pubFile = filepath.Join(keys, "signing.pub")
 	li.source, li.policy = filepath.Join(li.dir, "src", "inventory.yaml"), filepath.Join(li.dir, "policy.yaml")
+	return li
+}
+
+// startInventory starts the service with source as its file source's
+// content and a copy of policyPath as its policy. The service syncs at
+// start, so it is ready — /readyz 200 — once it has published bundle 1.
+func (l *lab) startInventory(t *testing.T, source, policyPath string) *labInventory {
+	t.Helper()
+	li := newLabInventory(t, l.p.name)
 	li.writeSource(t, source)
+	return startInventoryWith(t, li, policyPath,
+		fmt.Sprintf("sync: [{name: lab_file, type: file, path: %s}]\n", li.source), nil)
+}
+
+// startInventoryWith starts li's service with a copy of policyPath as its
+// policy and syncYAML as the end of its configuration (its sync: block, and
+// any webhook keys), with env added to its environment (a webhook secret's
+// variable; never logged), and waits until it is ready.
+func startInventoryWith(t *testing.T, li *labInventory, policyPath, syncYAML string, env []string) *labInventory {
+	t.Helper()
 	li.writePolicy(t, policyPath)
+	keys := filepath.Dir(li.pubFile)
 	cfg := filepath.Join(li.dir, "port49-inventory.yaml")
 	body := fmt.Sprintf(`listen: %s
 metrics_listen: %s
@@ -92,9 +111,8 @@ syncers: ["user:alice@slice.port49.test"]
 signing_key_file: %s/signing.key
 policy_file: %s
 state_dir: %s/state
-sync: [{name: lab_file, type: file, path: %s}]
 `, inventoryAddr, inventoryMetricsAddr, li.pki, testpki.InvServerCert, li.pki, testpki.InvServerKey, li.pki,
-		testpki.InvCA, testpki.InvDaemonID, keys, li.policy, li.dir, li.source)
+		testpki.InvCA, testpki.InvDaemonID, keys, li.policy, li.dir) + syncYAML
 	if err := os.WriteFile(cfg, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -104,6 +122,9 @@ sync: [{name: lab_file, type: file, path: %s}]
 	}
 	li.cmd = exec.Command(filepath.Join(root, "bin", "port49-inventory"), "-config", cfg)
 	li.cmd.Dir, li.cmd.Stdout, li.cmd.Stderr = root, errFile, errFile
+	if env != nil {
+		li.cmd.Env = append(os.Environ(), env...)
+	}
 	if err := li.cmd.Start(); err != nil {
 		errFile.Close()
 		t.Fatal(err)
@@ -111,12 +132,12 @@ sync: [{name: lab_file, type: file, path: %s}]
 	go func() { li.cmd.Wait(); errFile.Close(); close(li.done) }()
 	t.Cleanup(li.stop)
 	probe := &http.Client{Timeout: 2 * time.Second}
-	deadline := time.Now().Add(30 * time.Second)
+	deadline := time.Now().Add(2 * time.Minute)
 	for {
 		if resp, err := probe.Get("http://" + inventoryMetricsAddr + "/readyz"); err == nil {
 			resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
-				t.Logf("l29: port49-inventory ready on %s (log %s)", inventoryAddr, li.errPath)
+				t.Logf("port49-inventory ready on %s (log %s)", inventoryAddr, li.errPath)
 				return li
 			}
 		}
@@ -128,10 +149,32 @@ sync: [{name: lab_file, type: file, path: %s}]
 		}
 		if time.Now().After(deadline) {
 			raw, _ := os.ReadFile(li.errPath)
-			t.Fatalf("port49-inventory not ready in 30s:\n%s", raw)
+			t.Fatalf("port49-inventory not ready in 2m:\n%s", raw)
 		}
 		time.Sleep(250 * time.Millisecond)
 	}
+}
+
+// mark is the end of the service's log now, for waitLine.
+func (li *labInventory) mark() int64 {
+	fi, err := os.Stat(li.errPath)
+	if err != nil {
+		return 0
+	}
+	return fi.Size()
+}
+
+// waitLine polls the service's log, after from, for a line containing want.
+func (li *labInventory) waitLine(t *testing.T, from int64, want string, within time.Duration) (time.Time, bool) {
+	t.Helper()
+	for deadline := time.Now().Add(within); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+		if raw, err := os.ReadFile(li.errPath); err == nil && int64(len(raw)) >= from &&
+			strings.Contains(string(raw[from:]), want) {
+			return time.Now(), true
+		}
+	}
+	t.Logf("port49-inventory did not say %q within %s", want, within)
+	return time.Time{}, false
 }
 
 // writeSource writes the file source as a deployment would: 0644 under a

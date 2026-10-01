@@ -253,3 +253,83 @@ func checkPair(t *testing.T, before, after int) (*policy.Policy, *policy.Policy)
 	}
 	return mustBundle(t, devs...), mustBundle(t, devs[:after]...)
 }
+
+// Pre-flight I2: port49d's bound counts a device left with no address, as
+// the service's does, and names it.
+func TestCheckCountsADeviceLeftWithNoAddress(t *testing.T) {
+	pol := []byte(`
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: r, privilege: admin, permit: ["**"]}]
+subjects: [{name: s, identity: ["user:alice@example.com"], username: alice, token_ttl: 60s}]
+grants: [{subject: s, scope: all_devices, roles: [r]}]
+key_groups: [{match: {attributes: {site: dc1}}, key_ref: lab_key}]
+`)
+	inv := func(addressed bool) admission.Inventory {
+		var out admission.Inventory
+		for i := 1; i <= 3; i++ {
+			d := admission.Device{Name: fmt.Sprintf("leaf-%02d", i), Platform: "arista_eos",
+				Attributes: map[string]string{"site": "dc1"}, Transport: admission.TransportTCP}
+			if addressed {
+				d.Addresses = []netip.Addr{netip.AddrFrom4([4]byte{10, 0, 0, byte(i)})}
+			}
+			out.Devices = append(out.Devices, d)
+		}
+		return out
+	}
+	env := policy.Env{KeyRefs: []string{"lab_key"}}
+	old, err := Parse(pol, inv(true), env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bare, err := Parse(pol, inv(false), env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(Unaddressed(old, bare), ","); got != "leaf-01,leaf-02,leaf-03" {
+		t.Fatalf("Unaddressed: %q", got)
+	}
+	err = CheckFrom(old, bare, 10, "fix the source of truth")
+	if err == nil || !strings.Contains(err.Error(), "removes 0 of 3 devices and refuses 0 more and leaves 3 more with "+
+		"no address (100%)") || !strings.Contains(err.Error(), "left with no address: leaf-01, leaf-02, leaf-03") {
+		t.Fatalf("got %v", err)
+	}
+	if err := CheckFrom(old, bare, 100, "fix the source of truth"); err != nil {
+		t.Fatalf("a bound of 100 is off: %v", err)
+	}
+	if got := Unaddressed(bare, old); len(got) != 0 {
+		t.Fatalf("gaining addresses is not losing them: %v", got)
+	}
+	if got := Unaddressed(bare, bare); len(got) != 0 {
+		t.Fatalf("a device that never had an address did not lose one: %v", got)
+	}
+
+	// A device newly refused and stripped too counts once, as refused.
+	moved := inv(true)
+	moved.Devices[0].Attributes = map[string]string{"site": "dc2"}
+	moved.Devices[0].Addresses = nil
+	next, err := Parse(pol, moved, env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := NewlyRefused(old, next); len(r) != 1 || r[0].Device.Name != "leaf-01" {
+		t.Fatalf("NewlyRefused: %v", r)
+	}
+	if got := Unaddressed(old, next); len(got) != 0 {
+		t.Fatalf("a newly refused device is counted twice: %v", got)
+	}
+
+	// A device old already refuses was out of service before it lost its
+	// address: it is not counted again (review M3).
+	was := inv(true)
+	was.Devices[0].Attributes = map[string]string{"site": "dc2"}
+	before, err := Parse(pol, was, env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := Unaddressed(before, next); len(got) != 0 {
+		t.Fatalf("an already refused device is counted: %v", got)
+	}
+	if err := CheckFrom(before, next, 10, "fix the source of truth"); err != nil {
+		t.Fatalf("stripping an already refused device: %v", err)
+	}
+}

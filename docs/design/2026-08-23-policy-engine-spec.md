@@ -3868,10 +3868,13 @@ Three properties justify the separate component:
 
 ```
 GET  /v1/bundle                      full bundle; ETag for cheap no-op refresh
+GET  /v1/bundle?sequence=<n>         bundle n from the service's history, for `port49 inventory export`
 GET  /v1/bundle/version              current version, for polling
 GET  /v1/bundle/diff?from=<ver>      for CI and `port49 inventory diff`
 POST /v1/sync                        on-demand trigger
 GET  /v1/devices/{address}           diagnostic only — MUST NOT be used on the hot path
+
+POST /v1/webhook/{source}            not the API: webhook_listen, TLS without a client certificate (below)
 ```
 
 **Consumers pull and cache; they never query per request.** A daemon calling this API per
@@ -3889,10 +3892,36 @@ its version, a diff and one device; `syncers` may do all of that and `POST /v1/s
 
 **Four triggers are built in two plans.** The schedule (each source's `interval`, default the
 top-level `interval`, default 10 minutes; a sync of one source rebuilds the merged bundle from every
-source's latest fetch), startup,
-and `port49 inventory sync` are plan 6b's, with the file connector; the NetBox and Nautobot
-connectors and their authenticated webhooks are plan 6c's, written against the fixtures L27 and
-L30 recorded.
+source's latest fetch), startup, and `port49 inventory sync` are plan 6b's, with the file connector;
+the NetBox and Nautobot connectors and their webhooks are plan 6c's, written against the fixtures
+L27 and L30 recorded (§13, decision 31).
+
+**A webhook is authenticated by its signature, and only triggers a sync.** No product can present
+a client certificate (the webhook L27 and L30 recorded has `ssl_verification` and `ca_file_path`,
+nothing that holds one), so deliveries arrive on a listener of their own, `webhook_listen`: TLS
+under the service's certificate, or `webhook_tls_cert_file`, and no client certificate; the API
+stays mutual TLS on every path. Its one route is `POST /v1/webhook/<source>`. A delivery is taken
+only for a source configured with `webhook_secret_env`, as `application/json`, at most 1 MiB, with
+an `X-Hook-Signature` equal to HMAC-SHA512 of the body under that secret (L27, L30), and with a
+`timestamp` within 5 minutes of the service's clock either way; one whose signature was taken in
+the last 10 minutes triggers nothing. Anything else is refused (401, 413, 415 or 400; every 401
+with the one body `{"error":"unauthorized"}`, so a caller cannot tell a configured source name from
+another), counted (`port49_inventory_webhooks_total{source, outcome}`) and said once per source and
+outcome, naming the sender's address and never the body, the signature or the secret; a failed TLS
+handshake is counted (`outcome="tls_handshake"`), not logged. A taken delivery triggers a
+sync of its source 2 s later, coalescing a burst; a source is synced from webhooks at most once
+per 30 s, with at most one sync pending. Nothing in a delivery reaches the bundle: the sync reads
+the source's API, so delivery order, which is not change order on Nautobot (L27, L30), orders
+nothing, and the body's `timestamp` is read only for freshness. A refused or lost delivery costs at
+most the source's `interval`, which still runs. Every measured release (NetBox 3.7.8 and 4.7.1,
+Nautobot 1.6.32, 2.4.43 and 3.2.6) delivered to the listener under a private CA's certificate with
+verification on, and a change reached the published bundle in 2.4–2.7 s from NetBox and 3.6–4.1 s
+from Nautobot. None sends a delivery answered 401 or 503 again at its defaults (NetBox's
+`RQ_RETRY_MAX` is 0; Nautobot's webhook task has no retry), so a refused delivery is covered by
+the `interval` alone (§15 L33; `tests/lab/results/L33-netbox.md`, `L33-nautobot.md`). A delivery
+that arrives as the service shuts down is accepted and triggers nothing, or is refused at connect;
+by those settings it is not sent again either, which no run measured, and the next start's sync,
+which reads every source, covers it.
 
 ### One versioned bundle
 
@@ -4510,35 +4539,102 @@ Four triggers, not one (the webhook is plan 6c's, with the connectors):
 - **`port49 inventory sync`** on demand.
 - **Full sync at startup**, refusing to serve with no snapshot at all.
 
-Four requirements:
+Four requirements, as plan 6c builds them (§13, decision 31):
 
 **Version detection.** NetBox 4.x renamed `device_role` to `role`; Nautobot 2.0 did the same
-and dropped `slug` from most models. The connector selects a mapping profile from the API
-root version, with an explicit override available.
+and dropped `slug` from most models. The connector reads the release from `/api/status/`
+(`netbox-version`, `nautobot-version`), never `Api-Version` alone, which Nautobot 1.6 sets to `1.2`
+(L27), at every sync, and selects a mapping profile by it: NetBox 3.7 is `netbox_3_7`, NetBox 4.x
+`netbox_4`, Nautobot 1.6 `nautobot_1_6`, Nautobot 2.x and 3.x `nautobot_2` (L30: 3.2.6 answered every
+L27 question as 2.4.43 did, less the device fields `cluster` and `software_image_files`, which no
+profile reads). A release whose minor no lab run measured is read with its major's profile and
+said; a major no lab run measured is refused unless the source names a `profile`, the explicit
+override. A status naming the other product refuses the sync.
 
 **GraphQL first.** At 10,000 devices, REST pagination is hundreds of round trips per sync.
 Both products expose GraphQL; one query returns devices, addresses, platform, site, role,
-and tags. REST remains a fallback for older installations.
+and tags (L27). The connector asks for what its map, filter and address rule read, and reads
+GraphQL's `errors` before its `data`, whatever the HTTP status: NetBox 4.7.1 refuses an unknown
+argument with HTTP 200 and an `errors` list (L30). It pages by `pagination: {offset, limit}`, as
+NetBox 4.7.1 took (L30), by `limit` and `offset`, as Nautobot 1.6.32, 2.4.43 and 3.2.6 took, and not
+at all for NetBox 3.7, whose 3.7.8 took no paging shape tried and returned the whole list (L30); each
+profile reads the other minors of its major the same way, and says such a release is unmeasured. A
+GraphQL list is taken only when its length equals REST's `count` read before it and read after it,
+and no device appears in it twice: a server cap, or a page boundary lost to a concurrent delete,
+would otherwise look like devices removed. A page longer than the page size asked for, or a fetch
+past 256 MiB, fails the sync. REST remains a fallback, taken when GraphQL answers 404 or the source
+says `api: rest`: it reads `?depth=1` under the `nautobot_2` profile, since Nautobot 2.4.43 and 3.2.6
+at default depth named no related object (L27, L30), and follows `next` (below); every page must
+give the same `count`, and the total must equal it, with no device twice. REST does not
+give interface addresses in the device list, so a source that asks for them reads GraphQL only:
+`api: rest` with interfaces is refused at load, and a GraphQL 404 fails the sync rather than
+falling back. The connector's own query read every device once on each measured release, over
+GraphQL and REST, and every release's GraphQL list gives each device's `id`, a string, by which the
+connector keys it, as it keys REST's (§15 L32; `tests/lab/results/L32-netbox.md`,
+`L32-nautobot.md`).
+
+**`next` is followed only on the configured base.** Every product builds `next` from the host the
+request arrived under (L30), so behind a proxy that rewrites `Host` it can name another origin. A `next`
+whose scheme, host and port are the source `url`'s is followed; one on another origin is rebuilt on
+the `url`, its path and query kept, and said once; one whose path is not the `url`'s device list is
+refused. No redirect is followed: the source's token is sent to `url` and nowhere else. A REST read
+whose total differs from its last page's `count` fails the sync. Every measured release builds
+`next` from `X-Forwarded-Host` when the proxy sends it and from `Host` otherwise, and takes `https`
+only from `X-Forwarded-Proto`; behind a proxy that sends neither, each named its own
+`http://<service>:8080`, and the connector rebuilt it on the `url`, said so once, and read every
+device (§15 L32; `tests/lab/results/L32-netbox.md`, `L32-nautobot.md`).
 
 **Bounded change per sync.** A sync in which a source takes more than its
 `safety.max_removed_percent` of the devices it gave the last published bundle out of service —
-removed, or kept and newly refused admission under the service's policy — MUST refuse, retain the
+removed, kept and newly refused admission under the service's policy, or kept with an address in
+the bundle in force and none now (plan 6c: port49d admits by source address, so under an attribute
+key group such a device stays "admitted" and is unreachable) — MUST refuse, retain the
 last good snapshot, and alarm (`port49_inventory_sync_refused`). A source's bound defaults to the
 top-level `safety.max_removed_percent`, default 10. An empty result, and one the service's policy
 admits none of, are refused whatever the bound. A partially-available source of truth or a
 mistyped filter would otherwise silently deauthorize the fleet. Each port49d bounds the document
-again by its own `inventory.max_removed_percent`: a deliberate large removal raises both.
+again by its own `inventory.max_removed_percent`, counting the same three: a deliberate large
+removal raises both.
 
 **Platform slug translation.** Real installations say `eos`, `arista-eos`, `arista_eos`, or
-`veos`. Ship an alias table, allow overrides, and warn on unrecognized slugs rather than
-falling back to generic in silence.
+`veos`. The connector ships an alias table (those, and the netutils drivers Nautobot reports in
+`platform.network_driver`, such as `cisco_xe`), a source's `platform_aliases` adds to or overrides
+it, and a slug neither knows is kept as the device's platform: the device is admitted and served by
+the generic adapter (§8, "Unknown platforms"); each publication that changes the set of such
+platforms says so, and `port49_inventory_generic_platform_devices` holds their devices' count
+always, whatever the source, rather than falling back to generic in silence.
+
+**Filters, maps and addresses run in the service.** A source's `filter` (`status`, default
+`[active]`, compared in lower case so each recorded spelling matches — `"ACTIVE"` on NetBox 3.7.8,
+`"active"` on 4.7.1, `{"name": "Active"}` on every Nautobot measured, L30; `tags`, every one named;
+`has_primary_ip`) is applied to what was read, since the products' filter arguments differ per
+release and L27 measured only `name`'s. Its `map` names, per attribute, a path the profile reads
+(L27, L30): on NetBox `site.slug`, `role.slug`, `platform.slug`; on Nautobot 1.6 those and
+`platform.network_driver`; on Nautobot 2.x and 3.x `location.name`, `role.name`, `platform.name`,
+`platform.network_driver`; on every profile `status` and `custom_fields.<key>`. `platform` names the
+device's platform. A device's addresses are its primary addresses (`primary_ip4`, `primary_ip6`;
+`addresses.primary`, default true) and, where `addresses.interfaces` names interfaces or
+`addresses.all_interfaces` asks for every one, those interfaces' addresses too; `primary: false` is
+taken only beside interfaces. Interface addresses are opt-in, since every address listed admits its
+source and an address on two devices refuses the sync; an interface's loopback, link-local,
+multicast or unspecified address is left out, since it cannot source TACACS+ and repeats across
+devices. An attribute a device does not give — a null custom field, or one that is an object or a
+list — is left unset, never invented, and §5.5's `on_missing` decides what that means. A connector
+returns no key assignment: nothing it reads can carry one (§13, decision 30).
+
+**Every `Fetch` returns within `sync_timeout`.** Each request is under the sync's deadline, and a
+connector that has not returned 5 s past it is abandoned: the sync fails, the source is marked
+(`port49_inventory_source_hung{source}`), and it is not asked again until the abandoned call
+returns.
 
 ```yaml
-# port49-inventory.yaml (plan 6b: the file source; netbox and nautobot are plan 6c's)
+# port49-inventory.yaml
 listen: ":8443"
 metrics_listen: ":9050"
+webhook_listen: ":8444"           # plan 6c: needed when a source has webhook_secret_env
 tls_cert_file: /etc/port49-inventory/server.pem
 tls_key_file: /etc/port49-inventory/server-key.pem
+# webhook_tls_cert_file, webhook_tls_key_file: the webhook's own; default the API's
 client_ca_file: /etc/port49-inventory/clients-ca.pem
 readers: ["spiffe://example.com/port49d"]
 syncers: ["user:alice@example.com", "spiffe://example.com/policy-ci"]
@@ -4552,16 +4648,21 @@ sync:
   - name: lab_file
     type: file
     path: /etc/port49-inventory/inventory.yaml
+  - name: netbox_prod
+    type: netbox                  # or nautobot
+    url: https://netbox.example.com
+    ca_file: /etc/ssl/certs/ca-certificates.crt   # required; the CA that issues the source's certificate
+    token_secret_env: PORT49_NETBOX_TOKEN         # read at start, never printed; secret_ref waits for plan 12
+    webhook_secret_env: PORT49_NETBOX_WEBHOOK     # optional: turns the source's webhooks on
+    # profile: netbox_4           # optional override of the detected profile
+    # api: auto                   # auto (GraphQL, REST on a 404), graphql, rest
+    # page_size: 500
     interval: 10m
     safety: {max_removed_percent: 10}
-  # plan 6c:
-  # - name: netbox_prod
-  #   type: netbox
-  #   url: https://netbox.example.com
-  #   token_secret_ref: vault:port49/prod/netbox   # resolved like a key secret_ref, never inline
-  #   interval: 10m
-  #   filter: {status: active, has_primary_ip: true}
-  #   map: {site: site.slug, role: role.slug, platform: platform.slug, os_version: custom_fields.os_version}  # NetBox 4.x profile; 3.7 uses device_role
+    filter: {status: [active], tags: [port49], has_primary_ip: true}
+    map: {platform: platform.slug, site: site.slug, role: role.slug, os_version: custom_fields.os_version}
+    addresses: {primary: true, interfaces: [Loopback0]}
+    platform_aliases: {eos-lab: arista_eos}
 ```
 
 A device whose name is not 1–255 bytes of printable ASCII without a space, or whose platform or
@@ -4773,6 +4874,11 @@ Mitigations, designed in rather than documented afterward:
   and alerted as security events rather than routine inventory churn.
 - Attributes used for security scoping SHOULD come from an attested path rather than a
   hand-editable field.
+- A connector's token MUST be able to read devices and nothing more. The service never writes
+  to a source, and a token that can write turns a compromise of the service into one of the source
+  of truth. A webhook's secret is readable by anyone the product lets read its webhooks (both
+  products return `secret` from their webhook API, `tests/lab/sot/l30/*/webhooks.json`): it lets
+  its holder trigger a sync, which is bounded and reads only the source, and nothing more.
 
 > **Principle.** The source of truth supplies facts about devices; the policy repository
 > supplies intent. The moment a source-of-truth tag can grant a permission, authorization has
@@ -5316,6 +5422,16 @@ inventory's change judged under the policy the service holds now; the service ke
 **`port49 inventory keygen --dir <dir>`** writes the service's signing key (`signing.key`, 0600)
 and its public half (`signing.pub`), refuses to overwrite either, and prints the `key_id`.
 
+**`port49 inventory export --service <url> --ca <file> --cert <file> --key <file> --verify-key
+<file> [--verify-key <file>] [--from <sequence>] [--out <file>]`** reads the bundle the service
+publishes, or bundle `<sequence>` from its history (`GET /v1/bundle?sequence=<n>`, the read right;
+the service keeps the last 64), opens it against the verify keys as port49d does, and writes its
+inventory in `inventory_file`'s schema to `--out`, written 0600 and never overwritten, or to
+standard output, so the offline tools (`policy test`, `policy diff`, `inventory diff`, `explain`)
+keep an `--inventory` when no source is a file. The file carries no key assignment, since no
+document can. A document that does not open, or whose sequence is not `<sequence>`, is refused and
+nothing is written.
+
 **`port49 policy test --config <port49d.yaml>`** adds the key checks §10 requires of CI: it fails
 on a key group naming a `key_ref` the file does not define, and on a device assigned one. It
 reads §10's "a policy whose `accept` set is empty for a `key_ref` still assigned by a key group"
@@ -5821,6 +5937,23 @@ The mirror is a directory the deployment mounts (`mirror_dir`), not an object-st
 object-store credential sits beside port49d, and the signature is what makes a shared mount safe to
 read.
 
+**31. A connector reads what the lab measured, and a webhook only says "look again".** *Plan 6c,
+2026-10-01, rulings where §10 was silent, each the option that denies more.* The connectors select
+a profile from `/api/status/` by the releases L27 and L30 measured, refuse a major none measured
+unless a profile is named, read only the fields those runs recorded, read GraphQL's `errors`
+before its `data`, take a list only when it equals REST's `count` before and after it with no
+device twice, follow `next` only on the source's `url` (rebuilding it there otherwise) and no
+redirect at all, filter in the service, take primary addresses, and interface addresses only where
+named, leave an attribute a device does not give unset, and pass an unrecognized platform through,
+said. A device left with no address counts against the bound in
+the service and in port49d. A source of truth is `https` with a named CA, its token and
+webhook secret named by `secret_env`-style keys until plan 12's `secret_ref`, and never printed.
+A webhook arrives on its own TLS listener, since no product can present a client certificate, and
+is authenticated by HMAC-SHA512 of its body; it carries nothing into the bundle and only triggers a
+debounced sync of its source, so its order is irrelevant and its `timestamp` is read for freshness
+alone. A `Fetch` past `sync_timeout` is abandoned and its source not asked again until it returns.
+`port49 inventory export` verifies the bundle's signature before it writes.
+
 ### Deferred, with reasons
 
 Neither of these is an open question about the design. Both are closed for v1 on the
@@ -6185,6 +6318,25 @@ Beyond those already listed in the design document's §14:
   attribute group and over every address's CIDR group; two name groups for one device refuse the
   policy.
 - **One rule for a usable device**: whatever the service publishes, port49d opens.
+- **Connectors read what was measured**: the profile is chosen from `/api/status/`, and a major no
+  lab run measured is refused unless a profile is named; GraphQL `errors` fail a fetch even on HTTP
+  200; a GraphQL list whose length is not REST's `count` both before and after, a REST page whose
+  `count` moved, or a list naming a device twice fails the sync and de-admits nothing; a sync that
+  leaves more than the bound's share of a source's devices with no address is refused, by the
+  service and by port49d; `next` is
+  followed only on the source's `url` and otherwise rebuilt there, and no redirect is followed, so
+  the token reaches no other host; a filter, a map path and an address rule each take the
+  product's recorded spelling; the token appears in no line and no error.
+- **A webhook only triggers**: an unsigned, mis-signed, stale (more than 5 minutes either way),
+  oversized, non-JSON or repeated delivery, or one for a source without a webhook secret, triggers
+  nothing and is said without its body, signature or secret; an authentic one triggers one sync of
+  its source, a burst one sync, and a flood one sync per 30 s.
+- **Every `Fetch` returns within `sync_timeout`**: a source that ignores its context is abandoned 5 s
+  past the deadline, the sync fails and the bundle in force keeps serving, and the source is not
+  asked again until the abandoned call returns.
+- **Export verifies**: a bundle that does not open under the verify keys writes nothing, nor one
+  whose sequence is not the one `--from` asked for; one that does writes a file `--inventory` loads
+  to the same bundle.
 - **Unresolvable `key_ref`** fails that device closed, not the daemon.
 - **A device no key group admits**, and one two groups tie on, is refused admission on its own
   and its packets closed after the header as `admission_refused`; the rest of the fleet loads.
@@ -6346,6 +6498,8 @@ implemented against a guess. This section is the one place the distinction is ke
 | **L29** | What a device does when port49d resets a connection it holds open mid-session, at its first packet after a reload refused, removed, renamed, re-keyed or re-platformed its device (§10, "How a daemon refreshes its snapshot"): whether the session survives; whether the command in flight fails or falls to the local method, and how long it takes; whether the next command runs; and whether the next token login is refused and break-glass logs in, and how long each takes. The same reset, with a strike, ends an open connection at its first packet past its key version's `retire_after` (§10, "Version sets, and no cutover"). The device sees the same reset either way, so this row measures the device's side of both through the reload case (owner's ruling, 2026-09-30); that port49d resets an open connection at `retire_after` is tested in code with an injected clock (`internal/daemon/server/server_test.go`, `TestAnOpenConnectionDoesNotOutliveItsVersionsDate`, `TestAPacketPastItsDateIsClosedWithAReset`), and the strike's backoff that follows is L28's. | That ending a key version at `retire_after` on an open connection costs the device what a first-packet key miss does (§10; plan 6a Decided 7, amended in its Task 14), and that ending an open connection on a reload costs it what a quarantine's close does (§10; plan 6a final review I1) | EOS, NX-OS, IOS-XE, Junos | closed — measured 2026-09-30; tests/lab/results/L29-reload-arista_eos.md, L29-reload-cisco_nxos.md, L29-reload-cisco_iosxe.md, L29-reload-juniper_vjunos-router.md. vEOS-lab 4.31.2F, Nexus 9300v 10.4(2)F, Catalyst 8000V 17.13.01a and vJunos-router 23.4R2-S2.1, each reload a `port49 inventory sync` but the re-key, a policy edit; captures `tests/lab/evidence/L29-reload-<phase>-<platform>.pcap`. The session survived the reset on all four. Where port49d could no longer serve the device (removed, refused, or re-keyed onto a key it does not hold), the next token login was refused and break-glass logged in, in up to 2.1 s on vEOS and vJunos-router and up to 30 s on the C8000V and 41 s on the N9Kv (why: L31, since fixed by `fix/breakglass-reset`); where port49d still served the device (renamed, re-platformed), its FAIL is final on EOS, NX-OS and IOS-XE and break-glass was not let in (L4). vJunos-router held a connection open across some changes and not others: its note measures removed and refused, and its banner marks the three phases in which no connection was open, so no session could be affected. The midnight run was dropped by the same ruling; see below |
 | **L30** | How NetBox and Nautobot page a device list that does not fit one page, and what Nautobot 3.x returns: for NetBox 3.7 and 4.x and Nautobot 1.6 and 2.x, a REST list holding more devices than its `limit`, whether `next` is an absolute URL, which host and scheme it carries behind a proxy, whether following it to the end returns every device once, and how GraphQL pages the same list, if at all; and for Nautobot 3.x, every L27 question (version source, field names, GraphQL shape, pagination, webhook body and signature). | Plan 6c's connectors: following `next` rather than building offsets, and whether Nautobot 3.x needs its own profile (§10, "Connectors and sync cadence") | NetBox 3.7 and 4.x; Nautobot 1.6, 2.x and 3.x | closed — measured 2026-09-30; tests/lab/results/L30-netbox.md, L30-nautobot.md. NetBox 3.7.8 and 4.7.1, Nautobot 1.6.32, 2.4.43 and 3.2.6, 120 devices paged 50 at a time, behind an nginx 1.27 reverse proxy as well as directly; fixtures in `tests/lab/sot/l30/`, checked by `TestL30FixturesAreWhatTheNotesSay`. On all five, `next` is absolute and names the host, port and scheme the request came in on (behind the proxy, the proxy's host and port and `X-Forwarded-Proto`'s scheme), and following it to `null` returned all 120 once. GraphQL returned all 120 unpaged on all five; it pages by `pagination: {offset, limit}` on NetBox 4.7.1, which answers `limit`/`offset` with HTTP 200 and an `errors` list, by `limit`/`offset` on every Nautobot, and by no shape tried on NetBox 3.7.8. Nautobot 3.2.6 answered every L27 question as 2.4.43 did, less the device fields `cluster` and `software_image_files`. *Unmeasured, outside the row's question:* which of `Host` and `X-Forwarded-Host` the products read (the proxy sent the same value in both), and following a proxied `next`; see below |
 | **L31** | What break-glass costs on IOS-XE and NX-OS with single-connection on, when port49d resets a de-admitted device's connection after the device has written its request: a device removed from inventory (unadmitted), refused admission, or quarantined. For each: break-glass login plus three commands against port49d stopped, and whether the device's retries after the reset are refused at Accept before it writes. | That a de-admitted or quarantined device costs the device what a refused connection does, and falls to its local method at once (§10, "A quarantined device gets silence, not FAIL"; the reload paragraph under "How a daemon refreshes its snapshot"; §15 L29) | IOS-XE, NX-OS (single-connection on) | closed — measured 2026-09-30; tests/lab/results/L31-cisco_iosxe.md, L31-cisco_nxos.md, L31-arista_eos.md. With `fix/breakglass-reset` and single-connection on, break-glass login plus three commands took, removed, refused and quarantined, 1.28 s, 1.78 s and 1.78 s on the C8000V and 2.62 s, 2.58 s and 2.61 s on the N9Kv, against the rekeyed control's 1.28 s and 2.61 s and port49d stopped's 1.31 s and 2.66 s; every declined phase's retries were refused at Accept before the device wrote; vEOS, the no-regression check, took 0.33 s, 0.32 s and 0.32 s against 0.34 s and 0.37 s. Before the fix (observed 2026-09-30, cause analysed; tests/lab/results/L31-breakglass-cisco-singleconnection.md): Catalyst 8000V 17.13.01a and Nexus 9300v 10.4(2)F, from plan 6b's L29 and quarantine-sync captures (header flag `0x04`), break-glass took 30.1 s and 40.9 s removed, 20.6 s and 17.6 s refused, 20.3 s and 16.7 s quarantined, against 1.28 s and 2.62 s stopped, and 1.53 s and 2.6 s re-keyed, where a key miss's retries are refused at Accept |
+| **L32** | What the inventory service's NetBox and Nautobot connectors read as built (plan 6c), from each measured release: the GraphQL list query with every field the connector asks for (`status`, `primary_ip4`, `primary_ip6`, the map's paths, every interface address), paged as the profile pages it, returning every device once and matching REST's `count`; the REST fallback (`?depth=1` under the `nautobot_2` profile) to a null `next`; and both through a TLS-terminating reverse proxy that sends the client's host as `Host` alone, and through one that sends the upstream's name as `Host` and the client's as `X-Forwarded-Host`: which header each release builds `next` from, and whether the connector reads every device through each, following `next` or rebuilding it on its `url`. | Plan 6c's connectors: the query per profile, the count check, following or rebuilding `next` (§10, "Connectors and sync cadence"; §13, decision 31) | NetBox 3.7 and 4.x; Nautobot 1.6, 2.x and 3.x | closed — measured 2026-10-01; tests/lab/results/L32-netbox.md, L32-nautobot.md. NetBox 3.7.8 and 4.7.1 build `next` from `X-Forwarded-Host` when the proxy sends it and from `Host` otherwise, and take `https` only from `X-Forwarded-Proto`; behind a proxy that sends neither, both named their own `http://netbox:8080`. Nautobot 1.6.32, 2.4.43 and 3.2.6 do the same, naming `http://nautobot:8080`. The connector as built read all 120 devices of each stack, once each, through all three TLS-terminating nginx 1.27 proxies (the client's host as `Host`; the upstream's as `Host` and the client's as `X-Forwarded-Host`; a bare `proxy_pass`), over GraphQL and over REST, 50 to a page; through the bare proxy it rebuilt every REST `next` on its `url`, said so once, and read all 120 on all five. Every release's GraphQL device list gives `id`, a string, which the connector keys the list by. *Unmeasured:* a proxy sending `X-Forwarded-Host` without `X-Forwarded-Proto`, a `next` naming another path, a GraphQL list above a server cap, and a list changing between pages; see below |
+| **L33** | What NetBox and Nautobot do delivering a webhook to port49-inventory's `webhook_listen`, per measured release: whether each delivers to an `https` payload URL whose certificate a private CA issued (`ca_file_path`, `ssl_verification` on); whether port49-inventory authenticates every delivery as it arrives (HMAC-SHA512 of the body, `X-Hook-Signature`) and finds its `timestamp` inside the 5-minute window; how long a change takes from the API write to the published bundle; whether a delivery port49-inventory refuses (HTTP 401) is sent again; and, end to end on one device, how long a NetBox and a Nautobot change takes to reach port49d's admission through the webhook. | Plan 6c's webhook trigger: TLS on the webhook listener, the freshness window, the 401 answer (§10; §13, decision 31) | NetBox 3.7 and 4.x; Nautobot 1.6, 2.x and 3.x; vEOS-lab for the device run | closed — measured 2026-10-01; tests/lab/results/L33-netbox.md, L33-nautobot.md, L33-e2e-netbox-arista_eos.md, L33-e2e-nautobot-arista_eos.md. NetBox 3.7.8 and 4.7.1 and Nautobot 1.6.32, 2.4.43 and 3.2.6 each delivered to an `https` payload URL under a private CA's certificate, `ssl_verification` on, from the first change; port49-inventory authenticated every delivery, and none was stale. From the API write to the published bundle, the 2 s settle included, took 2.43–2.73 s on NetBox and 3.57–4.07 s on Nautobot. A delivery refused 401 was not sent again within 120 s on any release, nor one a stand-in listener answered 503 (port49-inventory itself never answers a delivery 503; final review M1): at their defaults neither product retries a webhook (NetBox's `RQ_RETRY_MAX` is 0; Nautobot's `process_webhook` has no retry). End to end on vEOS-lab 4.31.2F (image tagged 4.32.2F), a NetBox 4.7.1 change reached port49d's reload in 2.53–4.95 s and a Nautobot 3.2.6 change in 4.49–6.98 s; a status the default filter removes left the device with no grant, break-glass logged in, and the status restored let token logins in again. *Unmeasured:* a certificate from the worker's default trust store, a burst inside the 30 s gap, NetBox with `RQ_RETRY_MAX` set, and a delivery while port49-inventory shuts down or is down, which the next start's sync covers; see below |
 
 **What has been measured so far, per row.** The measurements exist and the notes are in the
 repository. NX-OS was measured on 2026-09-20 and is no longer outstanding; **IOS-XE was
@@ -8068,6 +8222,92 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
   refused and quarantined times are 0.5 s over it, inside the bar, because IOS-XE retries 100–200 ms
   after a reset against a first window of 100 ms. A declined device now costs break-glass about
   what a refused connection does, where it cost 16–41 s.
+- **L32** — added 2026-10-01 by plan 6c, for what L30 left unmeasured outside its question (which of
+  `Host` and `X-Forwarded-Host` the products read; following a proxied `next`) and for the
+  connector's own query, which asks for fields no L27 or L30 query asked together (`primary_ip6`
+  and `status` beside the map's paths). The code does not depend on which header a release reads:
+  it follows `next` on its `url` and rebuilds it otherwise (§10). Owned by plan 6c, Task 14.
+
+  **Measured 2026-10-01** by plan 6c Task 14 on beehive (`tests/lab/l32_test.go`,
+  `TestL32Connector`; `tests/lab/results/L32-netbox.md`, `L32-nautobot.md`; records in
+  `tests/lab/sot/l32/<stack>/connector.json`), each release in its own Compose stack with 120
+  devices, read by `sot.New` and `Fetch` as built at `eb862a4` (`page_size` 50, `filter: {status:
+  [active]}`, primary addresses, and over GraphQL every interface's addresses), through three
+  TLS-terminating nginx 1.27 proxies: `proxy_host` (the client's host as `Host`, no
+  `X-Forwarded-Host`), `proxy_xfh` (`Host` the upstream's, `X-Forwarded-Host` the client's) and
+  `proxy_plain` (a bare `proxy_pass`: `Host` the upstream's, no `X-Forwarded-*`); every proxy but
+  the last sent `X-Forwarded-Proto: https`.
+
+  | release | `next` via `proxy_host` | via `proxy_xfh` | via `proxy_plain` | GraphQL, 3 proxies | REST, 3 proxies | GraphQL `id` |
+  |---|---|---|---|---|---|---|
+  | NetBox 3.7.8 | the client's host (`Host`), `https` | the client's host (`X-Forwarded-Host`), `https` | `http://netbox:8080`, rebuilt on `url` and said | 120 each, 0.23–0.25 s | 120 each, 0.21–1.68 s | selectable, a string |
+  | NetBox 4.7.1 | as 3.7.8 | as 3.7.8 | as 3.7.8 | 120 each, 0.26–0.81 s | 120 each, 0.29–0.46 s | selectable, a string |
+  | Nautobot 1.6.32 | as NetBox | as NetBox | `http://nautobot:8080`, rebuilt on `url` and said | 120 each, 3.04–4.24 s | 120 each, 1.48–1.49 s | selectable, a string |
+  | Nautobot 2.4.43 | as NetBox | as NetBox | as 1.6.32 | 120 each, 1.60–1.82 s | 120 each, 2.18–2.19 s | selectable, a string |
+  | Nautobot 3.2.6 | as NetBox | as NetBox | as 1.6.32 | 120 each, 1.57–2.73 s | 120 each, 2.08–2.28 s | selectable, a string |
+
+  So every release builds `next` from `X-Forwarded-Host` when sent, from `Host` otherwise, and takes
+  `https` only from `X-Forwarded-Proto`. Where `next` named `url`'s origin the connector followed it;
+  through `proxy_plain` it rebuilt every REST `next` on `url`, said so once, and read all 120, where
+  a followed `next` would have failed (`netbox:8080` and `nautobot:8080` do not resolve on the host).
+  GraphQL gave `leaf-01` its primary and interface addresses, REST its primary alone, as §10 says.
+  Since every release gives `id`, the connector keys the GraphQL list by it, as REST's is (plan 6c
+  Task 14's fix round, `e8bbe15`), so a device renamed between pages is caught as a repeat. *Not
+  observed:* a proxy that sends `X-Forwarded-Host` but no `X-Forwarded-Proto`, or a `next` naming
+  another path; a GraphQL list above any server cap; a list changing between pages, and a removal
+  (each read was a new source, with nothing to confirm against); the `id` key's catch of a rename
+  is replayed in `internal/sot/sottest`, not measured.
+- **L33** — added 2026-10-01 by plan 6c. L27 and L30 recorded deliveries to a plain-HTTP listener;
+  port49-inventory takes them only over TLS, so whether each release delivers to a private CA's
+  certificate is unmeasured, and so is what a release does with a refused delivery. Owned by plan
+  6c, Task 15, with the device run end to end.
+
+  **Measured 2026-10-01** by plan 6c Task 15 on beehive (`tests/lab/l33_test.go`,
+  `TestL33Webhooks`; `tests/lab/results/L33-netbox.md`, `L33-nautobot.md`; records in
+  `tests/lab/sot/l33/<stack>/webhooks.json`), port49-inventory built from `c8a63d8` with the stack
+  as its one source (`interval: 24h`, so every publication after the first is a webhook's) and
+  `webhook_listen` under a certificate from the run's lab CA. Each release got a webhook to
+  `https://port49-inventory.lab:18444/v1/webhook/l33` with `ssl_verification: true` and the CA as
+  `ca_file_path`, three device changes 35 s apart, then one change delivered to two more webhooks:
+  one under a wrong secret, and one to a stand-in listener answering every request `503
+  {"error":"shutting_down"}`, a stand-in for a service going away. (This note first said
+  port49-inventory answers so during shutdown; it never does: early in a shutdown it accepts a
+  delivery that then triggers nothing, and after that refuses the connection. Corrected by plan 6c's
+  final review, M1.) Seconds run from the API
+  write to the service's `sync (webhook): published bundle` line, the 2 s settle included.
+
+  | release | delivered over TLS, private CA | update | create | delete | 401 sent again | 503 sent again | retry setting |
+  |---|---|---|---|---|---|---|---|
+  | NetBox 3.7.8 | yes, from the first change | 2.44 s | 2.43 s | 2.65 s | no, in 120 s | no, in 120 s | `RQ_RETRY_MAX` unset, default 0 |
+  | NetBox 4.7.1 | yes | 2.50 s | 2.60 s | 2.73 s | no | no | as 3.7.8 |
+  | Nautobot 1.6.32 | yes | 3.57 s | 3.70 s | 4.01 s | no | no | none: `process_webhook` has no retry |
+  | Nautobot 2.4.43 | yes | 4.07 s | 3.81 s | 3.78 s | no | no | as 1.6.32 |
+  | Nautobot 3.2.6 | yes | 4.04 s | 3.76 s | 3.73 s | no | no | as 1.6.32 |
+
+  Every delivery authenticated, none was stale, each change was one accepted delivery and one
+  publication, and the wrong secret's was refused 401, counted and said once (`bad_signature`). So a
+  delivery refused, or answered 503 (by the stand-in), is lost at the products' defaults, and the
+  source's `interval` is what covers it, or, across a restart, the next start's sync (§10). End to end on vEOS-lab 4.31.2F (image tagged 4.32.2F; port49d, port49 and
+  port49-inventory built from `1c0b8d1`; `tests/lab/sot_e2e_test.go`, `TestSoTDeviceEndToEnd`;
+  `tests/lab/results/L33-e2e-netbox-arista_eos.md`,
+  `L33-e2e-nautobot-arista_eos.md`; captures `tests/lab/evidence/L33-e2e-<product>-arista_eos.pcap`),
+  the device in the source admitted a token login at start, and then:
+
+  | source | change | to the publication | to port49d's reload | token login after | break-glass |
+  |---|---|---|---|---|---|
+  | NetBox 4.7.1 | `os_version` | 2.52 s | 4.49 s | logged in | not tried |
+  | NetBox 4.7.1 | status `offline` (filtered out) | 2.55 s | 4.95 s | no token: the mint answered `no_grants_matched` | logged in |
+  | NetBox 4.7.1 | status `active` again | 2.43 s | 2.53 s | logged in | not tried |
+  | Nautobot 3.2.6 | `os_version` | 3.78 s | 4.49 s | logged in | not tried |
+  | Nautobot 3.2.6 | status `offline` (filtered out) | 3.74 s | 4.92 s | no token: the mint answered `no_grants_matched` | logged in |
+  | Nautobot 3.2.6 | status `active` again | 3.74 s | 6.98 s | logged in | not tried |
+
+  The removed device's refusal was measured at the mint; what a device does on a connection after
+  its removal is L29's. *Not observed:* a webhook certificate the worker's default trust store holds;
+  a burst of changes inside the 30 s gap; NetBox with `RQ_RETRY_MAX` set; a delivery during
+  port49-inventory's shutdown (accepted and not synced, or refused at connect) or while it is down,
+  the common restart case, which the retry settings above say is not sent again and the next
+  start's sync covers; the device run on NetBox 3.7, Nautobot 1.6 or 2.x.
 
 Entries are added when a new claim is made, never removed. A closed entry keeps its row so a
 later reader can find the evidence.

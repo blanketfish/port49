@@ -1,0 +1,167 @@
+{
+  "stack": "netbox-3.7",
+  "at": "2026-10-01T08:48:58.352093032Z",
+  "built": "internal/sot as compiled by go test at `eb862a4`",
+  "probes": [
+    {
+      "proxy": "host",
+      "status": 200,
+      "next_scheme": "https",
+      "next_host": "127.0.0.1:20037",
+      "result_host": "127.0.0.1:20037"
+    },
+    {
+      "proxy": "xfh",
+      "status": 200,
+      "next_scheme": "https",
+      "next_host": "127.0.0.1:21037",
+      "result_host": "127.0.0.1:21037"
+    },
+    {
+      "proxy": "plain",
+      "status": 200,
+      "next_scheme": "http",
+      "next_host": "netbox:8080",
+      "result_host": "netbox:8080"
+    }
+  ],
+  "reads": [
+    {
+      "proxy": "host",
+      "url": "https://127.0.0.1:20037",
+      "api": "graphql",
+      "seconds": 0.237709745,
+      "devices": 120,
+      "said": [
+        "port49-inventory: source l32: NetBox 3.7.8, profile netbox_3_7, over GraphQL"
+      ],
+      "leaf_01": {
+        "addresses": [
+          "10.0.1.5",
+          "10.0.1.6"
+        ],
+        "attributes": {
+          "os_version": "4.32.2F",
+          "role": "leaf",
+          "site": "dc1"
+        },
+        "platform": "arista_eos"
+      }
+    },
+    {
+      "proxy": "host",
+      "url": "https://127.0.0.1:20037",
+      "api": "rest",
+      "seconds": 0.349879349,
+      "devices": 120,
+      "said": [
+        "port49-inventory: source l32: NetBox 3.7.8, profile netbox_3_7, over REST"
+      ],
+      "leaf_01": {
+        "addresses": [
+          "10.0.1.5"
+        ],
+        "attributes": {
+          "os_version": "4.32.2F",
+          "role": "leaf",
+          "site": "dc1"
+        },
+        "platform": "arista_eos"
+      }
+    },
+    {
+      "proxy": "xfh",
+      "url": "https://127.0.0.1:21037",
+      "api": "graphql",
+      "seconds": 0.23121799,
+      "devices": 120,
+      "said": [
+        "port49-inventory: source l32: NetBox 3.7.8, profile netbox_3_7, over GraphQL"
+      ],
+      "leaf_01": {
+        "addresses": [
+          "10.0.1.5",
+          "10.0.1.6"
+        ],
+        "attributes": {
+          "os_version": "4.32.2F",
+          "role": "leaf",
+          "site": "dc1"
+        },
+        "platform": "arista_eos"
+      }
+    },
+    {
+      "proxy": "xfh",
+      "url": "https://127.0.0.1:21037",
+      "api": "rest",
+      "seconds": 0.21139489,
+      "devices": 120,
+      "said": [
+        "port49-inventory: source l32: NetBox 3.7.8, profile netbox_3_7, over REST"
+      ],
+      "leaf_01": {
+        "addresses": [
+          "10.0.1.5"
+        ],
+        "attributes": {
+          "os_version": "4.32.2F",
+          "role": "leaf",
+          "site": "dc1"
+        },
+        "platform": "arista_eos"
+      }
+    },
+    {
+      "proxy": "plain",
+      "url": "https://127.0.0.1:22037",
+      "api": "graphql",
+      "seconds": 0.253384796,
+      "devices": 120,
+      "said": [
+        "port49-inventory: source l32: NetBox 3.7.8, profile netbox_3_7, over GraphQL"
+      ],
+      "leaf_01": {
+        "addresses": [
+          "10.0.1.5",
+          "10.0.1.6"
+        ],
+        "attributes": {
+          "os_version": "4.32.2F",
+          "role": "leaf",
+          "site": "dc1"
+        },
+        "platform": "arista_eos"
+      }
+    },
+    {
+      "proxy": "plain",
+      "url": "https://127.0.0.1:22037",
+      "api": "rest",
+      "seconds": 1.677989249,
+      "devices": 120,
+      "said": [
+        "port49-inventory: source l32: a page's next names another scheme, host or port than url; it is rebuilt on url, and the token is sent nowhere else: check the proxy's Host and X-Forwarded-Proto headers",
+        "port49-inventory: source l32: NetBox 3.7.8, profile netbox_3_7, over REST"
+      ],
+      "leaf_01": {
+        "addresses": [
+          "10.0.1.5"
+        ],
+        "attributes": {
+          "os_version": "4.32.2F",
+          "role": "leaf",
+          "site": "dc1"
+        },
+        "platform": "arista_eos"
+      }
+    }
+  ],
+  "graphql_id": {
+    "query": "{ device_list { id name } }",
+    "status": 200,
+    "errors": 0,
+    "selectable": true,
+    "kind": "string"
+  }
+}

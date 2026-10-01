@@ -102,7 +102,8 @@ without touching the others.
    checks its own total against the last page's `count`. Tasks 5, 6, 8.
 7. **`next` is followed only on the configured base; otherwise it is rebuilt on it, and never
    followed elsewhere.** Every product builds `next` from the host the request arrived under (L30),
-   so a proxy that rewrites `Host` sends the connector somewhere else. A `next` whose scheme, host
+   so a proxy that rewrites `Host` can send the connector somewhere else (which header each release
+   reads is L32's). A `next` whose scheme, host
    and port are the base's is followed; one on another origin is rebuilt on the base (its path and
    query kept) and said once; one whose path is not the base's device list is refused. No redirect is
    followed. The token is sent to the configured base and nowhere else. Task 6.
@@ -118,9 +119,10 @@ without touching the others.
    `status` (default `[active]`, so a decommissioned device is not admitted), `tags` (every one
    named), `has_primary_ip`. Status is compared in lower case, which takes each recorded spelling
    (`"ACTIVE"`, `"active"`, `{"name": "Active"}`, `{"value": "active"}`). Task 7.
-10. **A device's addresses are its primary addresses unless the source says which interfaces.**
-    Interface addresses are read only when `addresses.interfaces` (exact names) or
-    `addresses.all_interfaces` asks, since every address listed admits its source and an address on
+10. **A device's addresses are its primary addresses, and interface addresses only where named.**
+    `addresses.primary` defaults to true; `primary: false` is taken only beside interfaces.
+    Interface addresses are added to the primary addresses, not used in place of them, and are read
+    only when `addresses.interfaces` (exact names) or `addresses.all_interfaces` asks, since every address listed admits its source and an address on
     two devices refuses the sync (spec §10, "Addresses must resolve to one device"): a VRRP address
     or a reused management address in another VRF would otherwise stop every sync. REST does not give
     interface addresses in the device list (L27), so a REST read with interfaces configured fails,
@@ -345,7 +347,7 @@ controller still watches the log: a run that has not written a line in 10 minute
 stalled run is never read as a result.
 
 **The device run** (Task 15, Step 8) follows plan 5b's "Running the lab": vEOS only
-(`PORT49_LAB_PLATFORMS=arista_eos`), the harness's boot budget (6 min) plus up to 8 min for TACACS+
+(`PORT49_LAB_PLATFORMS=eos`), the harness's boot budget (6 min) plus up to 8 min for TACACS+
 readiness, a deadline on every read, and **a stall watchdog run by the controller for the whole
 run** (`STALL=25` minutes), which on a stall destroys the topology and kills `bin/port49d`,
 `bin/port49-inventory` and any `tcpdump` on `tests/lab/captures`, and runs `run.sh`'s cleanup
@@ -430,7 +432,7 @@ measure is written as their open rows, and cited to them.
   POST /v1/sync                        on-demand trigger
   GET  /v1/devices/{address}           diagnostic only — MUST NOT be used on the hot path
 
-  POST /v1/webhook/{source}            on webhook_listen, a listener of its own (below)
+  POST /v1/webhook/{source}            not the API: webhook_listen, TLS without a client certificate (below)
   ```
 
 - [ ] **Step 2: §10, "The inventory service", the triggers.** Replace the paragraph beginning
@@ -496,11 +498,12 @@ measure is written as their open rows, and cited to them.
   says `api: rest`: it reads `?depth=1` under the `nautobot_2` profile, since Nautobot 2.4.43 and 3.2.6
   at default depth named no related object (L27, L30), and follows `next` (below); every page must
   give the same `count`, and the total must equal it, with no device twice. REST does not
-  give interface addresses in the device list, so a source that asks for them reads GraphQL. The
-  connector's own query, on each measured release, is §15 L32's.
+  give interface addresses in the device list, so a source that asks for them reads GraphQL only:
+  `api: rest` with interfaces is refused at load, and a GraphQL 404 fails the sync rather than
+  falling back. The connector's own query, on each measured release, is §15 L32's.
 
   **`next` is followed only on the configured base.** Every product builds `next` from the host the
-  request arrived under (L30), so behind a proxy that rewrites `Host` it names another origin. A `next`
+  request arrived under (L30), so behind a proxy that rewrites `Host` it can name another origin. A `next`
   whose scheme, host and port are the source `url`'s is followed; one on another origin is rebuilt on
   the `url`, its path and query kept, and said once; one whose path is not the `url`'s device list is
   refused. No redirect is followed: the source's token is sent to `url` and nowhere else. A REST read
@@ -531,19 +534,20 @@ measure is written as their open rows, and cited to them.
   **Filters, maps and addresses run in the service.** A source's `filter` (`status`, default
   `[active]`, compared in lower case so each recorded spelling matches — `"ACTIVE"` on NetBox 3.7.8,
   `"active"` on 4.7.1, `{"name": "Active"}` on every Nautobot measured, L30; `tags`, every one named;
-  `has_primary_ip`)
-  is applied to what was read, since the products' filter arguments differ per release and L27
-  measured only `name`'s. Its `map` names, per attribute, a path the profile reads (L27, L30): on
-  NetBox `site.slug`, `role.slug`, `platform.slug`; on Nautobot 1.6 those and
+  `has_primary_ip`) is applied to what was read, since the products' filter arguments differ per
+  release and L27 measured only `name`'s. Its `map` names, per attribute, a path the profile reads
+  (L27, L30): on NetBox `site.slug`, `role.slug`, `platform.slug`; on Nautobot 1.6 those and
   `platform.network_driver`; on Nautobot 2.x and 3.x `location.name`, `role.name`, `platform.name`,
   `platform.network_driver`; on every profile `status` and `custom_fields.<key>`. `platform` names the
-  device's platform. A device's addresses are its primary addresses (`primary_ip4`, `primary_ip6`)
-  unless `addresses.interfaces` names interfaces, or `addresses.all_interfaces` asks for every one,
-  since every address listed admits its source and an address on two devices refuses the sync; an
-  interface's loopback, link-local, multicast or unspecified address is left out, since it cannot
-  source TACACS+ and repeats across devices. An attribute a device does not give — a null custom field, or one that is an object or a list — is
-  left unset, never invented, and §5.5's `on_missing` decides what that means. A connector returns no
-  key assignment: nothing it reads can carry one (§13, decision 30).
+  device's platform. A device's addresses are its primary addresses (`primary_ip4`, `primary_ip6`;
+  `addresses.primary`, default true) and, where `addresses.interfaces` names interfaces or
+  `addresses.all_interfaces` asks for every one, those interfaces' addresses too; `primary: false` is
+  taken only beside interfaces. Interface addresses are opt-in, since every address listed admits its
+  source and an address on two devices refuses the sync; an interface's loopback, link-local,
+  multicast or unspecified address is left out, since it cannot source TACACS+ and repeats across
+  devices. An attribute a device does not give — a null custom field, or one that is an object or a
+  list — is left unset, never invented, and §5.5's `on_missing` decides what that means. A connector
+  returns no key assignment: nothing it reads can carry one (§13, decision 30).
 
   **Every `Fetch` returns within `sync_timeout`.** Each request is under the sync's deadline, and a
   connector that has not returned 5 s past it is abandoned: the sync fails, the source is marked
@@ -607,10 +611,11 @@ measure is written as their open rows, and cited to them.
   <file> [--verify-key <file>] [--from <sequence>] [--out <file>]`** reads the bundle the service
   publishes, or bundle `<sequence>` from its history (`GET /v1/bundle?sequence=<n>`, the read right;
   the service keeps the last 64), opens it against the verify keys as port49d does, and writes its
-  inventory in `inventory_file`'s schema to `--out`, which it never overwrites, or to standard
-  output, so the offline tools (`policy test`, `policy diff`, `inventory diff`, `explain`) keep an
-  `--inventory` when no source is a file. The file carries no key assignment, since no document can.
-  A document that does not open is refused and nothing is written.
+  inventory in `inventory_file`'s schema to `--out`, written 0600 and never overwritten, or to
+  standard output, so the offline tools (`policy test`, `policy diff`, `inventory diff`, `explain`)
+  keep an `--inventory` when no source is a file. The file carries no key assignment, since no
+  document can. A document that does not open, or whose sequence is not `<sequence>`, is refused and
+  nothing is written.
   ```
 
 - [ ] **Step 6: §13, after decision 30.** Add:
@@ -621,10 +626,10 @@ measure is written as their open rows, and cited to them.
   a profile from `/api/status/` by the releases L27 and L30 measured, refuse a major none measured
   unless a profile is named, read only the fields those runs recorded, read GraphQL's `errors`
   before its `data`, take a list only when it equals REST's `count` before and after it with no
-  device twice, follow `next` only on the source's
-  `url` (rebuilding it there otherwise) and no redirect at all, filter in the service, take primary
-  addresses unless interfaces are named, leave an attribute a device does not give unset, and pass an
-  unrecognized platform through, said. A device left with no address counts against the bound in
+  device twice, follow `next` only on the source's `url` (rebuilding it there otherwise) and no
+  redirect at all, filter in the service, take primary addresses, and interface addresses only where
+  named, leave an attribute a device does not give unset, and pass an unrecognized platform through,
+  said. A device left with no address counts against the bound in
   the service and in port49d. A source of truth is `https` with a named CA, its token and
   webhook secret named by `secret_env`-style keys until plan 12's `secret_ref`, and never printed.
   A webhook arrives on its own TLS listener, since no product can present a client certificate, and
@@ -698,12 +703,17 @@ measure is written as their open rows, and cited to them.
 
   and replace the connector row's Permitted cell `read devices` with `read devices, with a read-only
   token: the service never writes`. After the table's paragraph
-  "**Reading a snapshot is not the same right as triggering a sync.**…", add:
+  "**Reading a snapshot is not the same right as triggering a sync.**…", add the paragraph below,
+  and change the lead-in "Two consequences worth stating:" to "Three":
 
   ```markdown
-  **A webhook secret is not a bearer token.** It never travels: it signs the delivery's body, and
-  the service checks the signature in constant time. Its holder can make the service sync one
-  source, which is bounded and reads only that source, and nothing else.
+  **A webhook is the one inbound call without a workload identity, and its secret is not a bearer
+  token.** No source of truth can present a client certificate (policy engine spec §10), so a
+  delivery is authenticated by HMAC-SHA512 of its body. The secret is never sent with a delivery,
+  and the service checks the signature in constant time. A host on the network without the secret
+  can trigger nothing. A holder of the secret, which includes anyone the product lets read its
+  webhooks, can make the service sync one source, which is bounded and reads only that source, and
+  nothing else.
   ```
 
 - [ ] **Step 12: Check and commit.** `make test && make vet` (unchanged; report the output). Then:
@@ -3699,7 +3709,8 @@ git commit -m "feat(sot): the mapping: filter, attribute map, address rule, and 
 
 Filters run on what was read, status in lower case so every recorded
 spelling matches (L30), default active; the map's paths are the profile's
-recorded fields; primary addresses unless interfaces are named; a custom
+recorded fields; primary addresses, and interface addresses only where
+named; a custom
 field that is not a scalar is left unset and said; an unrecognized
 platform slug is kept (decision 31).
 
@@ -7224,7 +7235,7 @@ if [ "$rc" = 0 ] && [ -n "$test" ]; then
 	# port49-inventory.lab.
 	bridge=$(docker network inspect bridge --format '{{(index .IPAM.Config 0).Gateway}}')
 	extra=()
-	[ "$legacy" = e2e ] && extra=(PORT49_LAB_PLATFORMS=arista_eos)
+	[ "$legacy" = e2e ] && extra=(PORT49_LAB_PLATFORMS=eos)
 	env "${extra[@]}" L32_STACK="$stack" L32_PRODUCT="$product" L32_CA="$pki/ca.pem" \
 		L32_HOST_URL="https://127.0.0.1:$L32_HOST_PORT" L32_XFH_URL="https://127.0.0.1:$L32_XFH_PORT" \
 		L33_DIRECT_URL="http://127.0.0.1:$port" L33_PKI="$pki" L33_HOOK_BIND="$bridge:18444" \
@@ -8310,7 +8321,7 @@ const sotE2EClaim = "A change in a source of truth reaches a device's admission 
 	"the device is removed."
 
 // TestSoTDeviceEndToEnd runs one stack (run.sh <netbox-4|nautobot-3> e2e,
-// with PORT49_LAB_PLATFORMS=arista_eos) to vEOS.
+// with PORT49_LAB_PLATFORMS=eos) to vEOS.
 func TestSoTDeviceEndToEnd(t *testing.T) {
 	stack := os.Getenv("L32_STACK")
 	if stack == "" || os.Getenv("L33_HOOK_BIND") == "" {

@@ -1,13 +1,22 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha512"
 	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/hex"
+	"encoding/pem"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"net/netip"
@@ -24,6 +33,7 @@ import (
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/inventory"
 	"github.com/rhwendt/port49/internal/keyfile"
+	"github.com/rhwendt/port49/internal/sot/sottest"
 	"github.com/rhwendt/port49/internal/testpki"
 )
 
@@ -348,7 +358,9 @@ func TestShutdownEndsAnAPISyncInFlight(t *testing.T) {
 	src := &heldSource{held: make(chan struct{}, 1)}
 	orig := newSources
 	defer func() { newSources = orig }()
-	newSources = func([]inventory.SourceConfig) ([]inventory.Source, error) { return []inventory.Source{src}, nil }
+	newSources = func([]inventory.SourceConfig, io.Writer) ([]inventory.Source, error) {
+		return []inventory.Source{src}, nil
+	}
 	var out syncBuffer
 	e := stderr
 	defer func() { stderr = e; onListening = nil }()
@@ -465,4 +477,355 @@ func TestAStartHeldUpByTheMirrorIsVisibleAndStopsOnSIGTERM(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatalf("SIGTERM did not stop a service held up in Restore: %s", &out)
 	}
+}
+
+const (
+	testHookSecret  = "l33-unit-test-webhook-secret-0123456789"
+	testNetboxToken = "nbt_abcdefabcdef.0123456789abcdef0123456789abcdef01234567"
+)
+
+func signHook(body []byte) string {
+	mac := hmac.New(sha512.New, []byte(testHookSecret))
+	mac.Write(body)
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// hookFixture is newFixture with a NetBox source taking webhooks on
+// listen in place of the file source, and the debouncer's settle and gap.
+func hookFixture(t *testing.T, listen string, settle, gap time.Duration) (fixture, *sottest.Server) {
+	t.Helper()
+	s, g := webhookSettle, webhookGap
+	t.Cleanup(func() { webhookSettle, webhookGap = s, g })
+	webhookSettle, webhookGap = settle, gap
+	t.Setenv("PORT49_TEST_NETBOX_TOKEN", testNetboxToken)
+	t.Setenv("PORT49_TEST_NETBOX_HOOK", testHookSecret)
+	nb := sottest.New(t, "netbox-4", 3)
+	nb.Auth = "Bearer " + testNetboxToken
+	f := newFixture(t, 0o600)
+	raw, err := os.ReadFile(f.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := strings.Replace(string(raw), "sync: [{name: lab_file, type: file, path: "+f.source+"}]",
+		fmt.Sprintf("webhook_listen: %s\nsync:\n  - {name: netbox_prod, type: netbox, url: %q, ca_file: %s, "+
+			"token_secret_env: PORT49_TEST_NETBOX_TOKEN, webhook_secret_env: PORT49_TEST_NETBOX_HOOK}\n", listen,
+			nb.URL, nb.CAFile), 1)
+	if cfg == string(raw) {
+		t.Fatal("the fixture's sync line moved; update this test")
+	}
+	if err := os.WriteFile(f.cfg, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return f, nb
+}
+
+// startHooked starts the service and returns the webhook listener's
+// address once the startup sync has published.
+func startHooked(t *testing.T, f fixture, out *syncBuffer, hup chan os.Signal) (string, string) {
+	t.Helper()
+	hooks := make(chan string, 1)
+	onWebhook = func(addr string) { hooks <- addr }
+	t.Cleanup(func() { onWebhook = nil })
+	_, metrics, _ := start(t, f, out, hup)
+	addr := <-hooks
+	waitFor(t, out, "sync (startup): published bundle 1")
+	waitFor(t, out, "webhooks on "+addr+" for netbox_prod")
+	return addr, metrics
+}
+
+// postHook posts a delivery stamped now, signed by sig or, when sig is "",
+// by testHookSecret, and returns the status code.
+func postHook(t *testing.T, c *http.Client, addr, sig string) int {
+	t.Helper()
+	b := []byte(`{"event": "created", "timestamp": "` +
+		time.Now().UTC().Format("2006-01-02T15:04:05.000000-07:00") + `", "object_type": "dcim.device"}`)
+	if sig == "" {
+		sig = signHook(b)
+	}
+	req, _ := http.NewRequest(http.MethodPost, "https://"+addr+"/v1/webhook/netbox_prod", bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Hook-Signature", sig)
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Error(err)
+		return 0
+	}
+	resp.Body.Close()
+	return resp.StatusCode
+}
+
+// Spec §10, decision 31: a NetBox source, its webhook on a TLS listener of
+// its own, and an authentic delivery that syncs the source; a mis-signed one
+// syncs nothing.
+func TestAWebhookTriggersASyncOfItsSource(t *testing.T) {
+	f, nb := hookFixture(t, "127.0.0.1:0", 10*time.Millisecond, 10*time.Millisecond)
+	var out syncBuffer
+	addr, metrics := startHooked(t, f, &out, make(chan os.Signal, 1))
+	nb.SetDevices(4)
+	c := f.client(t, testpki.InvOperatorCert, testpki.InvOperatorKey)
+	if code := postHook(t, c, addr, strings.Repeat("ab", 64)); code != http.StatusUnauthorized {
+		t.Fatalf("mis-signed: %d", code)
+	}
+	// The refusal is counted before this looks, and a Notify it made would
+	// sync 10ms (the settle) later. The handler's tests pin that a 401
+	// notifies no one; this is the end-to-end smoke check.
+	waitForMetric(t, metrics, `port49_inventory_webhooks_total{outcome="bad_signature",source="netbox_prod"} 1`)
+	time.Sleep(100 * time.Millisecond)
+	if strings.Contains(out.String(), "sync (webhook)") {
+		t.Fatalf("a mis-signed delivery synced: %s", &out)
+	}
+	if code := postHook(t, c, addr, ""); code != http.StatusAccepted {
+		t.Fatalf("signed: %d", code)
+	}
+	waitFor(t, &out, "sync (webhook): published bundle 2")
+	for _, leak := range []string{testNetboxToken, testHookSecret} {
+		if strings.Contains(out.String(), leak) {
+			t.Fatalf("the log holds a secret: %s", &out)
+		}
+	}
+}
+
+// A webhook_listen already taken refuses the start, naming the key.
+func TestAWebhookListenInUseRefusesTheStart(t *testing.T) {
+	taken, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer taken.Close()
+	f, _ := hookFixture(t, taken.Addr().String(), time.Hour, time.Hour)
+	var out syncBuffer
+	e := stderr
+	defer func() { stderr = e }()
+	stderr = &out
+	err = run(context.Background(), f.cfg, make(chan os.Signal))
+	if err == nil || !strings.HasPrefix(err.Error(), "webhook_listen "+taken.Addr().String()+": ") {
+		t.Fatalf("run: %v", err)
+	}
+}
+
+// A shutdown with a webhook sync pending drops it: run returns at once,
+// starts no sync, and says nothing false.
+func TestShutdownWithAWebhookSyncPending(t *testing.T) {
+	f, nb := hookFixture(t, "127.0.0.1:0", time.Hour, time.Hour)
+	var out syncBuffer
+	hooks := make(chan string, 1)
+	onWebhook = func(addr string) { hooks <- addr }
+	defer func() { onWebhook = nil }()
+	e := stderr
+	defer func() { stderr = e }()
+	stderr = &out
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- run(ctx, f.cfg, make(chan os.Signal)) }()
+	var addr string
+	select {
+	case addr = <-hooks:
+	case err := <-done:
+		t.Fatalf("run: %v; %s", err, &out)
+	case <-time.After(10 * time.Second):
+		t.Fatalf("no webhook listener: %s", &out)
+	}
+	waitFor(t, &out, "sync (startup): published bundle 1 ")
+	nb.SetDevices(4)
+	c := f.client(t, testpki.InvOperatorCert, testpki.InvOperatorKey)
+	if code := postHook(t, c, addr, ""); code != http.StatusAccepted {
+		t.Fatalf("signed: %d", code)
+	}
+	began := time.Now()
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatalf("run did not return: %s", &out)
+	}
+	if d := time.Since(began); d >= grace {
+		t.Fatalf("shutdown took %v", d)
+	}
+	said := out.String()
+	if strings.Contains(said, "sync (webhook)") || strings.Contains(said, "failed") ||
+		strings.Contains(said, "context canceled") {
+		t.Fatalf("a pending webhook sync was run or said at shutdown: %s", said)
+	}
+	if !strings.HasSuffix(said, "port49-inventory: signal received, exiting\n") {
+		t.Fatalf("last line: %s", said)
+	}
+	if conn, err := net.DialTimeout("tcp", addr, 2*time.Second); err == nil {
+		conn.Close()
+		t.Fatal("the webhook listener is still open")
+	}
+}
+
+// gated holds a source's second Fetch (the webhook's) until release, and
+// counts fetches in flight.
+type gated struct {
+	inventory.Source
+	calls, in, maxIn *int32
+	entered, release chan struct{}
+}
+
+func (g gated) Fetch(ctx context.Context) (admission.Inventory, error) {
+	n := atomic.AddInt32(g.calls, 1)
+	cur := atomic.AddInt32(g.in, 1)
+	for m := atomic.LoadInt32(g.maxIn); cur > m && !atomic.CompareAndSwapInt32(g.maxIn, m, cur); m = atomic.LoadInt32(g.maxIn) {
+	}
+	defer atomic.AddInt32(g.in, -1)
+	if n == 2 {
+		g.entered <- struct{}{}
+		<-g.release
+	}
+	return g.Source.Fetch(ctx)
+}
+
+// A SIGHUP taken while a webhook's sync is inside its Fetch: the signal's
+// sync waits for it, never fetching beside it, then runs.
+func TestASIGHUPRacingAWebhookSync(t *testing.T) {
+	f, nb := hookFixture(t, "127.0.0.1:0", time.Millisecond, time.Millisecond)
+	var calls, in, maxIn int32
+	entered, release := make(chan struct{}, 1), make(chan struct{})
+	orig := newSources
+	t.Cleanup(func() { newSources = orig })
+	newSources = func(c []inventory.SourceConfig, w io.Writer) ([]inventory.Source, error) {
+		ss, err := orig(c, w)
+		for i := range ss {
+			ss[i] = gated{ss[i], &calls, &in, &maxIn, entered, release}
+		}
+		return ss, err
+	}
+	var out syncBuffer
+	hup := make(chan os.Signal) // unbuffered: the send returns once the main loop has it
+	addr, metrics := startHooked(t, f, &out, hup)
+	nb.SetDevices(4)
+	c := f.client(t, testpki.InvOperatorCert, testpki.InvOperatorKey)
+	if code := postHook(t, c, addr, ""); code != http.StatusAccepted {
+		t.Fatalf("signed: %d", code)
+	}
+	<-entered
+	hup <- syscall.SIGHUP
+	close(release)
+	waitFor(t, &out, "sync (webhook): published bundle 2")
+	waitForMetric(t, metrics, `trigger="signal"}`)
+	if n := atomic.LoadInt32(&calls); n != 3 {
+		t.Fatalf("%d fetches", n)
+	}
+	if m := atomic.LoadInt32(&maxIn); m != 1 {
+		t.Fatalf("%d fetches at once", m)
+	}
+	if strings.Contains(out.String(), "failed") {
+		t.Fatalf("%s", &out)
+	}
+}
+
+// waitForMetric polls the metrics listener until its text holds want. An
+// unchanged sync logs nothing, so a metric is how a test sees it.
+func waitForMetric(t *testing.T, metrics, want string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		_, body := get(t, http.DefaultClient, "http://"+metrics+"/metrics")
+		if strings.Contains(body, want) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("waited for %q in %s", want, body)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// writeSelfSigned writes a P-256 certificate for 127.0.0.1 named cn, and
+// its key, mode 0600, into dir.
+func writeSelfSigned(t *testing.T, dir, cn string) (string, string) {
+	t.Helper()
+	k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(7), Subject: pkix.Name{CommonName: cn},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
+		IPAddresses: []net.IP{net.ParseIP("127.0.0.1")}, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &k.PublicKey, k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kd, err := x509.MarshalPKCS8PrivateKey(k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cf, kf := filepath.Join(dir, "webhook.pem"), filepath.Join(dir, "webhook-key.pem")
+	if err := os.WriteFile(cf, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(kf, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: kd}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return cf, kf
+}
+
+// Decision 31: the webhook listener presents webhook_tls_cert_file's
+// certificate, not the API's; answers plain HTTP with 400 before any
+// handler; and holds at most maxWebhookConns connections, counted before
+// the handshake, so no caller holds more pre-auth reads than that.
+func TestTheWebhookListenerHasItsOwnCertificateAndACap(t *testing.T) {
+	f, _ := hookFixture(t, "127.0.0.1:0", time.Hour, time.Hour)
+	cf, kf := writeSelfSigned(t, f.dir, "webhook-own")
+	raw, err := os.ReadFile(f.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := strings.Replace(string(raw), "webhook_listen:",
+		"webhook_tls_cert_file: "+cf+"\nwebhook_tls_key_file: "+kf+"\nwebhook_listen:", 1)
+	if err := os.WriteFile(f.cfg, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out syncBuffer
+	addr, _ := startHooked(t, f, &out, make(chan os.Signal, 1))
+	insecure := &tls.Config{InsecureSkipVerify: true}
+
+	conn, err := tls.Dial("tcp", addr, insecure)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cn := conn.ConnectionState().PeerCertificates[0].Subject.CommonName; cn != "webhook-own" {
+		t.Fatalf("the webhook listener presented %q", cn)
+	}
+	conn.Close()
+
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Post("http://"+addr+"/v1/webhook/netbox_prod",
+		"application/json", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatalf("plain HTTP: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("plain HTTP answered %d", resp.StatusCode)
+	}
+
+	// maxWebhookConns raw connections that never handshake hold every slot.
+	held := make([]net.Conn, 0, maxWebhookConns)
+	defer func() {
+		for _, c := range held {
+			c.Close()
+		}
+	}()
+	for i := 0; i < maxWebhookConns; i++ {
+		c, err := net.Dial("tcp", addr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		held = append(held, c)
+	}
+	if c, err := tls.DialWithDialer(&net.Dialer{Timeout: time.Second}, "tcp", addr, insecure); err == nil {
+		c.Close()
+		t.Fatalf("connection %d completed a handshake", maxWebhookConns+1)
+	}
+	held[0].Close()
+	held = held[1:]
+	c, err := tls.DialWithDialer(&net.Dialer{Timeout: 5 * time.Second}, "tcp", addr, insecure)
+	if err != nil {
+		t.Fatalf("after a slot was freed: %v", err)
+	}
+	c.Close()
 }

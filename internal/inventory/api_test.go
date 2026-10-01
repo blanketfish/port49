@@ -513,3 +513,52 @@ func TestADeviceIsDescribedByAnyOfItsAddresses(t *testing.T) {
 		t.Fatalf("unknown: %d", resp.StatusCode)
 	}
 }
+
+// Spec §12: inventory export --from reads a bundle from the history, with
+// the read right.
+func TestABundleFromTheHistoryIsServedToAReader(t *testing.T) {
+	rig := newAPIRig(t)
+	rig.sync(t)
+	rig.src.inv = devices(4)
+	rig.sync(t)
+	resp, body := rig.do(t, rig.reader, "GET", "/v1/bundle?sequence=1", nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("%d %s", resp.StatusCode, body)
+	}
+	if doc, inv, err := bundle.Open(body, rig.pubs()); err != nil || doc.Sequence != 1 || len(inv.Devices) != 3 {
+		t.Fatalf("%v %v", doc.Sequence, err)
+	}
+	for path, code := range map[string]int{"/v1/bundle?sequence=2": 200, "/v1/bundle?sequence=99": 404,
+		"/v1/bundle?sequence=x": 400, "/v1/bundle?sequence=0": 400, "/v1/bundle?sequence=1&x=2": 400} {
+		if resp, body := rig.do(t, rig.reader, "GET", path, nil); resp.StatusCode != code {
+			t.Errorf("%s: %d %s", path, resp.StatusCode, body)
+		}
+	}
+	if resp, _ := rig.do(t, rig.nobody, "GET", "/v1/bundle?sequence=1", nil); resp.StatusCode != 403 {
+		t.Fatalf("nobody: %d", resp.StatusCode)
+	}
+}
+
+// The query is bounded: sequence alone, once, a positive int64. Nothing
+// else widens what a reader may ask for, and before the first bundle a
+// history read is no_bundle.
+func TestTheBundleQueryTakesOnlyOneSequence(t *testing.T) {
+	rig := newAPIRig(t)
+	if resp, body := rig.do(t, rig.reader, "GET", "/v1/bundle?sequence=1", nil); resp.StatusCode != 503 ||
+		!strings.Contains(string(body), "no_bundle") {
+		t.Fatalf("before the first: %d %s", resp.StatusCode, body)
+	}
+	rig.sync(t)
+	for _, path := range []string{"/v1/bundle?sequence=", "/v1/bundle?sequence=-1",
+		"/v1/bundle?sequence=9223372036854775808", "/v1/bundle?sequence=1&sequence=1", "/v1/bundle?seq=1",
+		"/v1/bundle?sequence=1.0", "/v1/bundle?sequence=0x1", "/v1/bundle?sequence=%2e%2e%2f1",
+		"/v1/bundle?sequence=%2B1", "/v1/bundle?sequence=01"} {
+		if resp, body := rig.do(t, rig.reader, "GET", path, nil); resp.StatusCode != 400 ||
+			!strings.Contains(string(body), "not_a_sequence") {
+			t.Errorf("%s: %d %s", path, resp.StatusCode, body)
+		}
+	}
+	if resp, body := rig.do(t, rig.reader, "GET", "/v1/bundle?sequence=9223372036854775807", nil); resp.StatusCode != 404 {
+		t.Errorf("max int64: %d %s", resp.StatusCode, body)
+	}
+}

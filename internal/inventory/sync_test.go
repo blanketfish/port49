@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/bundle"
+	"github.com/rhwendt/port49/internal/policy"
 )
 
 const syncPolicy = `
@@ -661,8 +663,8 @@ func TestASyncPastItsOwnDeadlineIsAFailure(t *testing.T) {
 	if res := rig.s.Sync(context.Background(), "schedule"); res.Outcome != OutcomeFailed || res.Sequence != 1 {
 		t.Fatalf("%+v", res)
 	}
-	if !strings.Contains(rig.out.String(), "sync (schedule) failed; still publishing bundle 1: source a: fetch: "+
-		"context deadline exceeded") {
+	if !strings.Contains(rig.out.String(), "sync (schedule) failed; still publishing bundle 1: source a: did not "+
+		"finish within sync_timeout (20ms): fetch: context deadline exceeded") {
 		t.Fatalf("not said: %s", rig.out)
 	}
 	if testutil.ToFloat64(rig.s.Metrics.SyncFailing) != 1 {
@@ -729,5 +731,476 @@ func TestAClockThatSteppedBackStillPublishesLater(t *testing.T) {
 	if !strings.Contains(rig.out.String(), "this host's clock ") ||
 		!strings.Contains(rig.out.String(), "is not after bundle 1's published_at") {
 		t.Fatalf("not said: %s", rig.out)
+	}
+}
+
+// stuckSource ignores its context until released, as a connector with a
+// bug would.
+type stuckSource struct {
+	name    string
+	release chan struct{}
+	inv     admission.Inventory
+}
+
+func (s *stuckSource) Name() string { return s.name }
+func (s *stuckSource) Fetch(context.Context) (admission.Inventory, error) {
+	<-s.release
+	return s.inv, nil
+}
+
+// Spec §10: every Fetch returns within sync_timeout. One that does not is
+// abandoned fetchGrace later, the source is marked hung, and it is not asked
+// again until the abandoned call returns.
+func TestAFetchPastSyncTimeoutIsAbandoned(t *testing.T) {
+	defer func(g time.Duration) { fetchGrace = g }(fetchGrace)
+	fetchGrace = 20 * time.Millisecond
+	rig := newSyncRig(t, syncPolicy, devices(3))
+	stuck := &stuckSource{name: "a", release: make(chan struct{}), inv: devices(3)}
+	rig.s.Sources, rig.s.Timeout = []Source{stuck}, 50*time.Millisecond
+	start := time.Now()
+	res := rig.sync(t)
+	if res.Outcome != OutcomeFailed || !strings.Contains(res.Reason, "source a: did not return within sync_timeout") ||
+		time.Since(start) > 2*time.Second {
+		t.Fatalf("%+v after %s", res, time.Since(start))
+	}
+	if testutil.ToFloat64(rig.s.Metrics.SourceHung.WithLabelValues("a")) != 1 {
+		t.Fatal("source_hung")
+	}
+	if res := rig.sync(t); res.Outcome != OutcomeFailed ||
+		!strings.Contains(res.Reason, "its fetch abandoned at an earlier sync has not returned") {
+		t.Fatalf("asked again while out: %+v", res)
+	}
+	close(stuck.release)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		res := rig.sync(t)
+		if res.Outcome == OutcomePublished {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("never published once released: %+v", res)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if testutil.ToFloat64(rig.s.Metrics.SourceHung.WithLabelValues("a")) != 0 {
+		t.Fatal("source_hung stayed 1")
+	}
+}
+
+// A source that honours its context and runs out of time says so.
+func TestAFetchThatRunsOutOfTimeSaysSo(t *testing.T) {
+	rig := newSyncRig(t, syncPolicy, devices(3))
+	rig.s.Sources = []Source{fetchFunc(func(ctx context.Context) (admission.Inventory, error) {
+		<-ctx.Done()
+		return admission.Inventory{}, ctx.Err()
+	})}
+	rig.s.Timeout = 30 * time.Millisecond
+	if res := rig.sync(t); res.Outcome != OutcomeFailed ||
+		!strings.Contains(res.Reason, "did not finish within sync_timeout (30ms): context deadline exceeded") {
+		t.Fatalf("%+v", res)
+	}
+}
+
+type fetchFunc func(context.Context) (admission.Inventory, error)
+
+func (fetchFunc) Name() string                                             { return "a" }
+func (f fetchFunc) Fetch(ctx context.Context) (admission.Inventory, error) { return f(ctx) }
+
+// Spec §8, §10: a platform with no adapter is served by the generic one,
+// and that is said, never silent — whatever the source.
+func TestAGenericPlatformIsSaidAndCounted(t *testing.T) {
+	inv := devices(3)
+	inv.Devices[0].Platform, inv.Devices[1].Platform = "eos-lab", "eos-lab"
+	rig := newSyncRig(t, syncPolicy, inv)
+	res := rig.sync(t)
+	if res.Outcome != OutcomePublished || len(res.Generic) != 1 || res.Generic[0] != (GenericPlatform{"eos-lab", 2}) {
+		t.Fatalf("%+v %s", res, rig.out)
+	}
+	if !strings.Contains(rig.out.String(), "port49-inventory: bundle 1: platform eos-lab (2 device(s)) has no adapter "+
+		"in the policy and is served by the generic one, priv-lvl only (spec §8): name it in the source's "+
+		"platform_aliases (a policy platforms: block cannot be named eos-lab)") {
+		t.Fatalf("%s", rig.out)
+	}
+	if testutil.ToFloat64(rig.s.Metrics.GenericDevices) != 2 {
+		t.Fatal("generic_platform_devices")
+	}
+	rig.out.Reset()
+	if res := rig.sync(t); res.Outcome != OutcomeUnchanged || len(res.Generic) != 1 || rig.out.Len() != 0 {
+		t.Fatalf("an unchanged sync said it again: %+v %q", res, rig.out)
+	}
+	rig.src.inv = devices(3)
+	rig.sync(t)
+	if testutil.ToFloat64(rig.s.Metrics.GenericDevices) != 0 {
+		t.Fatal("the gauge did not fall")
+	}
+}
+
+// Review I1: the hung gauge falls when the abandoned call returns, not at
+// that source's next fetch, which may be an interval away.
+func TestTheHungGaugeFallsWhenTheCallReturns(t *testing.T) {
+	defer func(g time.Duration) { fetchGrace = g }(fetchGrace)
+	fetchGrace = 20 * time.Millisecond
+	rig := newSyncRig(t, syncPolicy, devices(3))
+	stuck := &stuckSource{name: "a", release: make(chan struct{}), inv: devices(3)}
+	rig.s.Sources, rig.s.Timeout = []Source{stuck}, 50*time.Millisecond
+	if res := rig.sync(t); res.Outcome != OutcomeFailed {
+		t.Fatalf("%+v", res)
+	}
+	close(stuck.release)
+	deadline := time.Now().Add(2 * time.Second)
+	for testutil.ToFloat64(rig.s.Metrics.SourceHung.WithLabelValues("a")) != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("source_hung stayed 1 once the call returned")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// Review M2, M3: a shutdown with a source that ignores its context returns
+// at once and quietly; the source is not marked hung, since no sync_timeout
+// passed, and the next sync waits for the call cut short, within its own
+// bound, before asking again.
+func TestAShutdownWithAStuckSourceReturnsQuietly(t *testing.T) {
+	defer func(g time.Duration) { fetchGrace = g }(fetchGrace)
+	fetchGrace = time.Minute // a wait for the grace would show
+	rig := newSyncRig(t, syncPolicy, devices(3))
+	rig.sync(t)
+	rig.out.Reset()
+	stuck := &stuckSource{name: "a", release: make(chan struct{}), inv: devices(4)}
+	rig.s.Sources = []Source{stuck}
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(10*time.Millisecond, cancel)
+	start := time.Now()
+	res := rig.s.Sync(ctx, "schedule")
+	if res.Outcome != OutcomeFailed || time.Since(start) > time.Second || rig.out.Len() != 0 {
+		t.Fatalf("%+v after %s: %q", res, time.Since(start), rig.out)
+	}
+	if testutil.ToFloat64(rig.s.Metrics.SourceHung.WithLabelValues("a")) != 0 ||
+		testutil.ToFloat64(rig.s.Metrics.SourceErrors.WithLabelValues("a")) != 0 ||
+		testutil.ToFloat64(rig.s.Metrics.Syncs.WithLabelValues("schedule", OutcomeFailed)) != 0 {
+		t.Fatal("a shutdown was counted")
+	}
+	// The call cut short returns during the next sync, which then asks again.
+	time.AfterFunc(20*time.Millisecond, func() { close(stuck.release) })
+	if res := rig.sync(t); res.Outcome != OutcomePublished || res.Sequence != 2 {
+		t.Fatalf("%+v %s", res, rig.out)
+	}
+}
+
+// Review M4: spec §10 abandons only a source that has not returned 5 s past
+// the deadline, so a whole answer inside the grace is used, and the source
+// is not marked hung.
+func TestALateAnswerInsideTheGraceIsUsed(t *testing.T) {
+	defer func(g time.Duration) { fetchGrace = g }(fetchGrace)
+	fetchGrace = time.Second
+	rig := newSyncRig(t, syncPolicy, devices(3))
+	rig.sync(t)
+	rig.s.Sources = []Source{fetchFunc(func(ctx context.Context) (admission.Inventory, error) {
+		<-ctx.Done()
+		time.Sleep(10 * time.Millisecond)
+		return devices(4), nil
+	})}
+	rig.s.Timeout = 30 * time.Millisecond
+	if res := rig.sync(t); res.Outcome != OutcomePublished || res.Sequence != 2 {
+		t.Fatalf("%+v", res)
+	}
+	if testutil.ToFloat64(rig.s.Metrics.SourceHung.WithLabelValues("a")) != 0 {
+		t.Fatal("a source that returned inside the grace was marked hung")
+	}
+}
+
+// Review M1: the generic gauge is the bundle in force's, so a sync that
+// fails to keep its bundle leaves it as it was.
+func TestTheGenericGaugeIsTheBundleInForces(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root writes a read-only directory")
+	}
+	rig := newSyncRig(t, syncPolicy, devices(3))
+	rig.sync(t)
+	if err := os.Chmod(rig.s.State.Dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(rig.s.State.Dir, 0o700) })
+	inv := devices(4)
+	inv.Devices[3].Platform = "eos-lab"
+	rig.src.inv = inv
+	if res := rig.sync(t); res.Outcome != OutcomeFailed {
+		t.Fatalf("%+v", res)
+	}
+	if testutil.ToFloat64(rig.s.Metrics.GenericDevices) != 0 {
+		t.Fatal("the gauge counts a bundle not published")
+	}
+}
+
+// A call a shutdown cut short that is still out at the end of the next
+// sync's bound is abandoned then, and marked hung until it returns.
+func TestACallCutShortAndStillOutIsAbandonedAtTheNextBound(t *testing.T) {
+	rig := newSyncRig(t, syncPolicy, devices(3))
+	stuck := &stuckSource{name: "a", release: make(chan struct{}), inv: devices(3)}
+	rig.s.Sources, rig.s.Timeout = []Source{stuck}, 30*time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	rig.s.Sync(ctx, "schedule")
+	if res := rig.sync(t); res.Outcome != OutcomeFailed || !strings.Contains(res.Reason,
+		"source a: its fetch cut short at an earlier sync did not return within sync_timeout (30ms); it is abandoned") {
+		t.Fatalf("%+v", res)
+	}
+	if testutil.ToFloat64(rig.s.Metrics.SourceHung.WithLabelValues("a")) != 1 {
+		t.Fatal("source_hung")
+	}
+	close(stuck.release)
+	deadline := time.Now().Add(2 * time.Second)
+	for testutil.ToFloat64(rig.s.Metrics.SourceHung.WithLabelValues("a")) != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("source_hung stayed 1 once the call returned")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if res := rig.sync(t); res.Outcome != OutcomePublished {
+		t.Fatalf("%+v", res)
+	}
+}
+
+// attrPolicy admits by attribute: an address-less device stays admitted.
+const attrPolicy = `
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: r, privilege: admin, permit: ["**"]}]
+subjects: [{name: s, identity: ["user:alice@example.com"], username: alice, token_ttl: 60s}]
+grants: [{subject: s, scope: all_devices, roles: [r]}]
+key_groups: [{match: {attributes: {site: dc1}}, key_ref: lab_key}]
+`
+
+func sited(inv admission.Inventory, addressed bool) admission.Inventory {
+	for i := range inv.Devices {
+		inv.Devices[i].Attributes = map[string]string{"site": "dc1"}
+		if !addressed {
+			inv.Devices[i].Addresses = nil
+		}
+	}
+	return inv
+}
+
+// Pre-flight I2: a source that strips every device's address, the names
+// and the key group's attribute kept, is refused by its bound.
+func TestASourceThatStripsEveryAddressIsRefused(t *testing.T) {
+	rig := newSyncRig(t, attrPolicy, sited(devices(20), true))
+	if res := rig.sync(t); res.Outcome != OutcomePublished {
+		t.Fatalf("%+v", res)
+	}
+	rig.src.inv = sited(devices(20), false)
+	res := rig.sync(t)
+	if res.Outcome != OutcomeRefused || !strings.Contains(res.Reason,
+		"source a removes 0 of 20 devices and refuses 0 more and leaves 20 more with no address (100%)") {
+		t.Fatalf("%+v", res)
+	}
+	// One device of twenty is under the 10% bound.
+	one := sited(devices(20), true)
+	one.Devices[0].Addresses = nil
+	rig.src.inv = one
+	if res := rig.sync(t); res.Outcome != OutcomePublished {
+		t.Fatalf("one device: %+v", res)
+	}
+}
+
+// Pre-flight I2: the service's bound and port49d's count the same devices
+// out of service, so a bundle the service publishes is never refused by
+// port49d's bound for a reason the service could not see, nor the other way
+// round. Each side parses as it does in production: the service with no
+// key_refs, port49d with its own.
+func TestTheServicesBoundAndPort49dsAgree(t *testing.T) {
+	const n, bound = 20, 10
+	prevInv := sited(devices(n), true)
+	// The last device never had an address, and the one before it is
+	// already refused: neither is newly out of service when it has none.
+	prevInv.Devices[n-1].Addresses = nil
+	prevInv.Devices[n-2].Attributes = map[string]string{"site": "dc2"}
+	names := make([]string, n)
+	for i, d := range prevInv.Devices {
+		names[i] = d.Name
+	}
+	prev := &Published{Doc: bundle.Document{Sources: map[string][]string{"a": names}}, Inv: prevInv}
+	parse := func(inv admission.Inventory, env policy.Env) *policy.Policy {
+		p, err := bundle.Parse([]byte(attrPolicy), inv, env)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	daemon := policy.Env{KeyRefs: []string{"lab_key"}}
+	for removed := 0; removed <= 3; removed++ {
+		for refused := 0; refused <= 3; refused++ {
+			for bare := 0; bare <= 3; bare++ {
+				// Devices 0.. are removed, then refused (the key group's
+				// attribute gone), then left with no address.
+				next := sited(devices(n), true)
+				next.Devices[n-1].Addresses = nil
+				next.Devices[n-2].Attributes = map[string]string{"site": "dc2"}
+				next.Devices[n-2].Addresses = nil
+				for i := removed; i < removed+refused; i++ {
+					next.Devices[i].Attributes = map[string]string{"site": "dc2"}
+				}
+				for i := removed + refused; i < removed+refused+bare; i++ {
+					next.Devices[i].Addresses = nil
+				}
+				// A refused device left bare too counts once, as refused.
+				if refused > 0 {
+					next.Devices[removed].Addresses = nil
+				}
+				next.Devices = next.Devices[removed:]
+				now := map[string]bool{}
+				for _, d := range next.Devices {
+					now[d.Name] = true
+				}
+				service := checkSafety(prev, parse(prevInv, policy.Env{}), parse(next, policy.Env{}), now,
+					map[string]int{"a": bound}, bound, "policy.yaml")
+				port49d := bundle.CheckFrom(parse(prevInv, daemon), parse(next, daemon), bound, "fix the source of truth")
+				if (service == nil) != (port49d == nil) {
+					t.Fatalf("removed %d refused %d bare %d: the service says %v, port49d says %v", removed, refused,
+						bare, service, port49d)
+				}
+				if want := (removed+refused+bare)*100 > n*bound; want != (service != nil) {
+					t.Fatalf("removed %d refused %d bare %d: refused is %v, want %v (%v)", removed, refused, bare,
+						service != nil, want, service)
+				}
+			}
+		}
+	}
+}
+
+// confirmSource is a memSource that records the names it is given to
+// confirm a removal against before each Fetch.
+type confirmSource struct {
+	memSource
+	against [][]string // one per Fetch: nil when none was given
+	given   []string
+	isGiven bool
+}
+
+func (c *confirmSource) ConfirmAgainst(names []string) {
+	c.given, c.isGiven = slices.Clone(names), true
+}
+func (c *confirmSource) Fetch(ctx context.Context) (admission.Inventory, error) {
+	if c.isGiven {
+		c.against = append(c.against, c.given)
+	} else {
+		c.against = append(c.against, nil)
+	}
+	c.given, c.isGiven = nil, false
+	return c.memSource.Fetch(ctx)
+}
+
+// Final review M2: a source confirms a removal against the names the bundle
+// in force holds for it, not against its own last read, which a refused sync
+// discards; so a refusal, and a restart that restores the bundle, leave the
+// baseline where the devices are.
+func TestARemovalIsConfirmedAgainstTheBundleInForce(t *testing.T) {
+	rig := newSyncRig(t, syncPolicy, devices(3))
+	src := &confirmSource{memSource: memSource{name: "a", inv: devices(3)}}
+	rig.s.Sources = []Source{src}
+	want := []string{"leaf-01", "leaf-02", "leaf-03"}
+	if res := rig.sync(t); res.Outcome != "published" {
+		t.Fatalf("%+v", res)
+	}
+	src.inv = devices(1)
+	if res := rig.sync(t); res.Outcome != "refused" {
+		t.Fatalf("%+v", res)
+	}
+	if res := rig.sync(t); res.Outcome != "refused" {
+		t.Fatalf("%+v", res)
+	}
+	// No bundle before the first: nothing to confirm against. Then the
+	// bundle's names, refusal or not.
+	if src.against[0] != nil || !slices.Equal(src.against[1], want) || !slices.Equal(src.against[2], want) {
+		t.Fatalf("confirmed against %q", src.against)
+	}
+	restarted := rig.syncer(nil)
+	restarted.Key = rig.s.Key
+	restarted.VerifyKeys = rig.pubs()
+	fresh := &confirmSource{memSource: memSource{name: "a", inv: devices(1)}}
+	restarted.Sources = []Source{fresh}
+	if err := restarted.Restore(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if res := restarted.Sync(context.Background(), "startup"); res.Outcome != "refused" ||
+		len(fresh.against) != 1 || !slices.Equal(fresh.against[0], want) {
+		t.Fatalf("after a restart: %+v, confirmed against %q", res, fresh.against)
+	}
+	// A source the bundle in force does not name confirms against nothing.
+	rig.src.inv = devices(3)
+	other := &confirmSource{memSource: memSource{name: "b", inv: admission.Inventory{}}}
+	rig.s.Sources = []Source{src, other}
+	src.inv = devices(3)
+	rig.sync(t)
+	if got := other.against[0]; got == nil || len(got) != 0 {
+		t.Fatalf("a new source confirmed against %q", got)
+	}
+}
+
+// baselineSource keeps its own baseline as sot.Source does: ConfirmAgainst
+// sets it, and a Fetch that returns replaces it with the names it read. Its
+// first Fetch after hold is set waits for release. seen is the baseline each
+// Fetch began with.
+type baselineSource struct {
+	mu      sync.Mutex
+	inv     admission.Inventory
+	last    []string
+	seen    [][]string
+	hold    bool
+	release chan struct{}
+}
+
+func (b *baselineSource) Name() string { return "a" }
+func (b *baselineSource) ConfirmAgainst(names []string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.last = slices.Clone(names)
+}
+func (b *baselineSource) Fetch(context.Context) (admission.Inventory, error) {
+	b.mu.Lock()
+	b.seen = append(b.seen, slices.Clone(b.last))
+	hold, inv := b.hold, b.inv
+	b.hold = false
+	b.mu.Unlock()
+	if hold {
+		<-b.release
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.last = nil
+	for _, d := range inv.Devices {
+		b.last = append(b.last, d.Name)
+	}
+	return inv, nil
+}
+
+// Final re-review N1: the bundle's names are handed over after the syncer
+// has waited for a fetch an earlier sync cut short, so that call's return,
+// which replaces the source's baseline with what it read, cannot overwrite
+// them.
+func TestTheBaselineIsGivenAfterACutShortFetchReturns(t *testing.T) {
+	rig := newSyncRig(t, syncPolicy, devices(3))
+	src := &baselineSource{inv: devices(3), release: make(chan struct{})}
+	rig.s.Sources, rig.s.Timeout = []Source{src}, 5*time.Second
+	if res := rig.sync(t); res.Outcome != OutcomePublished {
+		t.Fatalf("%+v", res)
+	}
+	// Cut short by its caller: the call stays out, and will read one device.
+	src.mu.Lock()
+	src.hold, src.inv = true, devices(1)
+	src.mu.Unlock()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	rig.s.Sync(ctx, "schedule")
+	done := make(chan Result)
+	go func() { done <- rig.s.Sync(context.Background(), "schedule") }()
+	// The next sync is waiting for the call cut short; let it return.
+	time.Sleep(50 * time.Millisecond)
+	close(src.release)
+	<-done
+	src.mu.Lock()
+	defer src.mu.Unlock()
+	want := []string{"leaf-01", "leaf-02", "leaf-03"}
+	if got := src.seen[len(src.seen)-1]; !slices.Equal(got, want) {
+		t.Fatalf("the fetch after the cut-short call began from %q, want the bundle's %q", got, want)
 	}
 }

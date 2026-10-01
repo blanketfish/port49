@@ -1,0 +1,167 @@
+{
+  "stack": "nautobot-2",
+  "at": "2026-10-01T08:57:33.309704034Z",
+  "built": "internal/sot as compiled by go test at `eb862a4`",
+  "probes": [
+    {
+      "proxy": "host",
+      "status": 200,
+      "next_scheme": "https",
+      "next_host": "127.0.0.1:20020",
+      "result_host": "127.0.0.1:20020"
+    },
+    {
+      "proxy": "xfh",
+      "status": 200,
+      "next_scheme": "https",
+      "next_host": "127.0.0.1:21020",
+      "result_host": "127.0.0.1:21020"
+    },
+    {
+      "proxy": "plain",
+      "status": 200,
+      "next_scheme": "http",
+      "next_host": "nautobot:8080",
+      "result_host": "nautobot:8080"
+    }
+  ],
+  "reads": [
+    {
+      "proxy": "host",
+      "url": "https://127.0.0.1:20020",
+      "api": "graphql",
+      "seconds": 1.815732559,
+      "devices": 120,
+      "said": [
+        "port49-inventory: source l32: Nautobot 2.4.43, profile nautobot_2, over GraphQL"
+      ],
+      "leaf_01": {
+        "addresses": [
+          "10.0.1.5",
+          "10.0.1.6"
+        ],
+        "attributes": {
+          "os_version": "4.32.2F",
+          "role": "leaf",
+          "site": "dc1"
+        },
+        "platform": "arista_eos"
+      }
+    },
+    {
+      "proxy": "host",
+      "url": "https://127.0.0.1:20020",
+      "api": "rest",
+      "seconds": 2.182389756,
+      "devices": 120,
+      "said": [
+        "port49-inventory: source l32: Nautobot 2.4.43, profile nautobot_2, over REST"
+      ],
+      "leaf_01": {
+        "addresses": [
+          "10.0.1.5"
+        ],
+        "attributes": {
+          "os_version": "4.32.2F",
+          "role": "leaf",
+          "site": "dc1"
+        },
+        "platform": "arista_eos"
+      }
+    },
+    {
+      "proxy": "xfh",
+      "url": "https://127.0.0.1:21020",
+      "api": "graphql",
+      "seconds": 1.599738672,
+      "devices": 120,
+      "said": [
+        "port49-inventory: source l32: Nautobot 2.4.43, profile nautobot_2, over GraphQL"
+      ],
+      "leaf_01": {
+        "addresses": [
+          "10.0.1.5",
+          "10.0.1.6"
+        ],
+        "attributes": {
+          "os_version": "4.32.2F",
+          "role": "leaf",
+          "site": "dc1"
+        },
+        "platform": "arista_eos"
+      }
+    },
+    {
+      "proxy": "xfh",
+      "url": "https://127.0.0.1:21020",
+      "api": "rest",
+      "seconds": 2.192698014,
+      "devices": 120,
+      "said": [
+        "port49-inventory: source l32: Nautobot 2.4.43, profile nautobot_2, over REST"
+      ],
+      "leaf_01": {
+        "addresses": [
+          "10.0.1.5"
+        ],
+        "attributes": {
+          "os_version": "4.32.2F",
+          "role": "leaf",
+          "site": "dc1"
+        },
+        "platform": "arista_eos"
+      }
+    },
+    {
+      "proxy": "plain",
+      "url": "https://127.0.0.1:22020",
+      "api": "graphql",
+      "seconds": 1.613816938,
+      "devices": 120,
+      "said": [
+        "port49-inventory: source l32: Nautobot 2.4.43, profile nautobot_2, over GraphQL"
+      ],
+      "leaf_01": {
+        "addresses": [
+          "10.0.1.5",
+          "10.0.1.6"
+        ],
+        "attributes": {
+          "os_version": "4.32.2F",
+          "role": "leaf",
+          "site": "dc1"
+        },
+        "platform": "arista_eos"
+      }
+    },
+    {
+      "proxy": "plain",
+      "url": "https://127.0.0.1:22020",
+      "api": "rest",
+      "seconds": 2.1900255570000002,
+      "devices": 120,
+      "said": [
+        "port49-inventory: source l32: a page's next names another scheme, host or port than url; it is rebuilt on url, and the token is sent nowhere else: check the proxy's Host and X-Forwarded-Proto headers",
+        "port49-inventory: source l32: Nautobot 2.4.43, profile nautobot_2, over REST"
+      ],
+      "leaf_01": {
+        "addresses": [
+          "10.0.1.5"
+        ],
+        "attributes": {
+          "os_version": "4.32.2F",
+          "role": "leaf",
+          "site": "dc1"
+        },
+        "platform": "arista_eos"
+      }
+    }
+  ],
+  "graphql_id": {
+    "query": "{ devices(limit: 1, offset: 0) { id name } }",
+    "status": 200,
+    "errors": 0,
+    "selectable": true,
+    "kind": "string"
+  }
+}

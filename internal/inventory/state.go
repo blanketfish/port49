@@ -183,13 +183,19 @@ func (s State) Latest(keys []ed25519.PublicKey) (*Published, error) {
 // ErrNotKept is At's error for a sequence the history does not hold.
 var ErrNotKept = errors.New("not kept")
 
-// At is bundle seq from the history.
+// At is bundle seq from the history. A file there that opens to another
+// bundle — a restore or a hand copy under the wrong name — is refused, not
+// served or diffed as bundle seq.
 func (s State) At(seq int64, keys []ed25519.PublicKey) (*Published, error) {
-	p, err := openIfPresent(fence.ReadNoLink, filepath.Join(s.Dir, historyDir, strconv.FormatInt(seq, 10)+".json"),
-		keys)
+	path := filepath.Join(s.Dir, historyDir, strconv.FormatInt(seq, 10)+".json")
+	p, err := openIfPresent(fence.ReadNoLink, path, keys)
 	if err == nil && p == nil {
 		return nil, fmt.Errorf("bundle %d is no longer kept; the service keeps the last %d: %w", seq, max(s.Keep, 1),
 			ErrNotKept)
+	}
+	if err == nil && p.Doc.Sequence != seq {
+		return nil, fmt.Errorf("%s holds bundle %d, not bundle %d: a history file is named for the bundle it holds",
+			path, p.Doc.Sequence, seq)
 	}
 	return p, err
 }

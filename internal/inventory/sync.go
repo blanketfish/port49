@@ -20,6 +20,7 @@ import (
 	"github.com/rhwendt/port49/internal/fence"
 	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/policy"
+	"github.com/rhwendt/port49/internal/sot"
 )
 
 // Outcomes of a sync.
@@ -40,7 +41,10 @@ type Result struct {
 	Changes     []bundle.Change     `json:"changes,omitempty"`
 	Quarantined []QuarantinedDevice `json:"quarantined,omitempty"`
 	LeftOut     []string            `json:"left_out,omitempty"`
-	Reason      string              `json:"reason,omitempty"`
+	// Generic is each platform the service's policy has no adapter for, with
+	// how many devices it serves with the generic one (spec §8, §10).
+	Generic []GenericPlatform `json:"generic,omitempty"`
+	Reason  string            `json:"reason,omitempty"`
 }
 
 // QuarantinedDevice is a device the service's policy quarantines in the
@@ -50,6 +54,30 @@ type QuarantinedDevice struct {
 	Device   string `json:"device"`
 	Platform string `json:"platform"`
 	Cause    string `json:"cause"`
+}
+
+// GenericPlatform is a platform no adapter in the service's policy renders:
+// its devices are admitted and served by the set's generic adapter, priv-lvl
+// only (spec §8, "Unknown platforms"), which spec §10 says is never silent.
+type GenericPlatform struct {
+	Platform string `json:"platform"`
+	Devices  int    `json:"devices"`
+}
+
+// genericIn is every generic platform in p, by name.
+func genericIn(p *policy.Policy) []GenericPlatform {
+	count := map[string]int{}
+	for _, d := range p.Devices() {
+		if p.PlatformSource(d.Platform) == "generic" {
+			count[d.Platform]++
+		}
+	}
+	out := make([]GenericPlatform, 0, len(count))
+	for name, n := range count {
+		out = append(out, GenericPlatform{Platform: name, Devices: n})
+	}
+	slices.SortFunc(out, func(a, b GenericPlatform) int { return strings.Compare(a.Platform, b.Platform) })
+	return out
 }
 
 // Syncer runs one sync at a time: every source, merged and validated, parsed
@@ -93,6 +121,12 @@ type Syncer struct {
 	// fetched is each source's latest fetch, which a sync of another source
 	// merges with (spec §10: each source on its own interval).
 	fetched map[string]admission.Inventory
+	// out is each source whose last fetch the sync it ran in stopped
+	// waiting for, by name, until that call returns. Guarded by mu.
+	out map[string]*fetchOut
+	// genericSaid is the generic platforms as last said, so each is said
+	// when it changes.
+	genericSaid string
 }
 
 // maxPolicy bounds the service's read of its policy copy, as port49d bounds
@@ -103,6 +137,147 @@ const maxPolicy = 1 << 20
 // port49d reads its own (final review Minor 1): whoever can write it decides
 // what the service's bound refuses.
 func readPolicy(path string) ([]byte, error) { return fence.Read(path, maxPolicy, "policy file") }
+
+// fetchGrace is how long a source has, once its sync's deadline passes, to
+// return before it is abandoned (spec §10: every Fetch returns within
+// sync_timeout). A variable for the tests.
+var fetchGrace = 5 * time.Second
+
+// timeout is one sync's bound: Timeout, or 5m.
+func (s *Syncer) timeout() time.Duration {
+	if s.Timeout == 0 {
+		return 5 * time.Minute
+	}
+	return s.Timeout
+}
+
+// fetchOut is a fetch a sync stopped waiting for: done is closed when the
+// call returns. abandoned is one that ran past sync_timeout and fetchGrace
+// (port49_inventory_source_hung is 1); otherwise a shutdown or a client's
+// hang-up cut its sync short. Guarded by mu.
+type fetchOut struct {
+	done      chan struct{}
+	abandoned bool
+}
+
+// fetch is src.Fetch under ctx, the sync's bounded context, returning
+// within the bound and fetchGrace after it whatever src does (decision 31).
+// A source that has not returned by then is abandoned: the sync fails, the
+// source is marked hung until the call returns, and it is not asked again
+// meanwhile, so a connector that ignores its context costs one goroutine,
+// not one per sync. A sync that caller's end cuts short — a shutdown, a
+// client's hang-up — stops waiting at once, without marking the source
+// hung: the next fetch of it waits for that call within its own bound, and
+// abandons it if it is still out at the end. A Confirmer is given the names
+// prev, the bundle in force, holds for it just before the new call, after
+// any call still out has returned, since that call's return replaces its
+// baseline with what it read (final re-review N1). Called under mu.
+func (s *Syncer) fetch(ctx, caller context.Context, src Source, prev *Published) (admission.Inventory, error) {
+	name := src.Name()
+	if o := s.out[name]; o != nil {
+		if !o.abandoned {
+			select {
+			case <-o.done:
+			case <-ctx.Done():
+			}
+		}
+		select {
+		case <-o.done:
+			s.settle(name, o)
+		default:
+			switch {
+			case o.abandoned:
+				return admission.Inventory{}, errors.New("its fetch abandoned at an earlier sync has not returned; " +
+					"it is not asked again until it does")
+			case caller.Err() != nil:
+				return admission.Inventory{}, caller.Err()
+			}
+			s.abandon(name, o)
+			return admission.Inventory{}, fmt.Errorf("its fetch cut short at an earlier sync did not return within "+
+				"sync_timeout (%s); it is abandoned, and asked again once it returns", s.timeout())
+		}
+	}
+	type got struct {
+		inv admission.Inventory
+		err error
+	}
+	if c, ok := src.(Confirmer); ok && prev != nil {
+		c.ConfirmAgainst(append([]string{}, prev.Doc.Sources[name]...))
+	}
+	ch, done := make(chan got, 1), make(chan struct{})
+	go func() {
+		inv, err := src.Fetch(ctx)
+		ch <- got{inv, err}
+		close(done)
+	}()
+	select {
+	case g := <-ch:
+		if g.err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return g.inv, fmt.Errorf("did not finish within sync_timeout (%s): %w", s.timeout(), g.err)
+		}
+		return g.inv, g.err
+	case <-ctx.Done():
+	}
+	if caller.Err() != nil {
+		// No sync_timeout passed: not hung, and not waited for.
+		s.track(name, &fetchOut{done: done})
+		return admission.Inventory{}, caller.Err()
+	}
+	grace := time.NewTimer(fetchGrace)
+	defer grace.Stop()
+	select {
+	case g := <-ch:
+		// Deliberate: spec §10 abandons only a connector that has not
+		// returned 5 s past the deadline, so a whole answer inside the grace
+		// is used, and the sync may publish it past sync_timeout (review M4).
+		if g.err != nil {
+			return g.inv, fmt.Errorf("did not finish within sync_timeout (%s): %w", s.timeout(), g.err)
+		}
+		return g.inv, nil
+	case <-grace.C:
+	}
+	o := &fetchOut{done: done}
+	s.track(name, o)
+	s.abandon(name, o)
+	return admission.Inventory{}, fmt.Errorf("did not return within sync_timeout (%s) and %s after; it is abandoned, "+
+		"and asked again once it returns", s.timeout(), fetchGrace)
+}
+
+// track keeps o as name's fetch out, and settles it when the call returns,
+// whenever that is: the hung gauge falls then, or, when a sync is running
+// then and holds mu, when that sync ends (at most sync_timeout and
+// fetchGrace later); not at the source's next fetch, which may be an
+// interval away (review I1; final review M4). Called under mu.
+func (s *Syncer) track(name string, o *fetchOut) {
+	if s.out == nil {
+		s.out = map[string]*fetchOut{}
+	}
+	s.out[name] = o
+	go func() {
+		<-o.done
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		s.settle(name, o)
+	}()
+}
+
+// abandon marks name's fetch out, o, hung. Called under mu.
+func (s *Syncer) abandon(name string, o *fetchOut) {
+	o.abandoned = true
+	s.Metrics.SourceHung.WithLabelValues(name).Set(1)
+}
+
+// settle forgets o, name's fetch out, once it has returned, unless a later
+// one has taken its place. Called under mu.
+func (s *Syncer) settle(name string, o *fetchOut) {
+	if s.out[name] != o {
+		return
+	}
+	delete(s.out, name)
+	if o.abandoned {
+		s.Metrics.SourceHung.WithLabelValues(name).Set(0)
+	}
+}
 
 // Current is the bundle published, or nil before the first.
 func (s *Syncer) Current() *Published { return s.current.Load() }
@@ -253,11 +428,7 @@ func (s *Syncer) Sync(ctx context.Context, trigger string, only ...string) Resul
 func (s *Syncer) syncLocked(ctx context.Context, trigger string, only []string) (Result, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	timeout := s.Timeout
-	if timeout == 0 {
-		timeout = 5 * time.Minute
-	}
-	bounded, cancel := context.WithTimeout(ctx, timeout)
+	bounded, cancel := context.WithTimeout(ctx, s.timeout())
 	defer cancel()
 	res := s.sync(bounded, ctx, only)
 	if res.Outcome == OutcomeFailed && ctx.Err() != nil {
@@ -314,7 +485,7 @@ func (s *Syncer) sync(ctx, caller context.Context, only []string) Result {
 		got, cached := s.fetched[src.Name()]
 		if !cached || len(only) == 0 || slices.Contains(only, src.Name()) {
 			var err error
-			if got, err = src.Fetch(ctx); err != nil {
+			if got, err = s.fetch(ctx, caller, src, prev); err != nil {
 				if caller.Err() == nil {
 					s.Metrics.SourceErrors.WithLabelValues(src.Name()).Inc()
 				}
@@ -373,8 +544,19 @@ func (s *Syncer) sync(ctx, caller context.Context, only []string) Result {
 	}
 	now := s.Now()
 	quarantined := quarantinedIn(next, now)
+	generic := genericIn(next)
+	// Counted where the bundle in force is next's: unchanged, or published
+	// (review M1).
+	countGeneric := func() {
+		total := 0
+		for _, g := range generic {
+			total += g.Devices
+		}
+		s.Metrics.GenericDevices.Set(float64(total))
+	}
 	if prev != nil && prev.Doc.Bundle == next.Bundle && maps.EqualFunc(prev.Doc.Sources, sources, slices.Equal[[]string]) {
-		return held(Result{Outcome: OutcomeUnchanged, Quarantined: quarantined, LeftOut: leftOut})
+		countGeneric()
+		return held(Result{Outcome: OutcomeUnchanged, Quarantined: quarantined, LeftOut: leftOut, Generic: generic})
 	}
 	seq, err := s.nextSequence(prev)
 	if err != nil {
@@ -392,13 +574,15 @@ func (s *Syncer) sync(ctx, caller context.Context, only []string) Result {
 		return held(Result{Outcome: OutcomeFailed, Reason: "state_dir " + s.State.Dir + ": " + oneLine(err)})
 	}
 	s.publish(p)
+	countGeneric()
 	if prevPol == nil {
 		return Result{Outcome: OutcomePublished, Sequence: seq, Bundle: next.Bundle,
-			Summary: fmt.Sprintf("first bundle: +%d device(s)", len(inv.Devices)), Quarantined: quarantined, LeftOut: leftOut}
+			Summary: fmt.Sprintf("first bundle: +%d device(s)", len(inv.Devices)), Quarantined: quarantined, LeftOut: leftOut,
+			Generic: generic}
 	}
 	rep := bundle.Diff(prevPol, next, now)
 	return Result{Outcome: OutcomePublished, Sequence: seq, Bundle: next.Bundle, Summary: rep.Summary(), Changes: rep.Changes,
-		Quarantined: quarantined, LeftOut: leftOut}
+		Quarantined: quarantined, LeftOut: leftOut, Generic: generic}
 }
 
 // nextSequence is the sequence the next bundle is published as: above the
@@ -589,6 +773,7 @@ func (s *Syncer) say(trigger string, res Result) {
 			fmt.Fprintf(s.Log, "port49-inventory: bundle %d: left out: %s\n", res.Sequence, l)
 		}
 		s.leftOutSaid = res.LeftOut
+		s.sayGeneric(res)
 	case OutcomeUnchanged:
 		if s.said != "" {
 			s.said = ""
@@ -603,6 +788,7 @@ func (s *Syncer) say(trigger string, res Result) {
 			}
 		}
 		s.leftOutSaid = res.LeftOut
+		s.sayGeneric(res)
 	default:
 		if key := res.Outcome + "\x00" + res.Reason; key != s.said {
 			s.said = key
@@ -612,6 +798,26 @@ func (s *Syncer) say(trigger string, res Result) {
 			}
 			fmt.Fprintf(s.Log, "port49-inventory: sync (%s) %s; %s: %s\n", trigger, res.Outcome, still, res.Reason)
 		}
+	}
+}
+
+// sayGeneric says each generic platform when the set of them changes.
+func (s *Syncer) sayGeneric(res Result) {
+	key := fmt.Sprint(res.Generic)
+	if key == s.genericSaid {
+		return
+	}
+	s.genericSaid = key
+	for _, g := range res.Generic {
+		// A policy platforms: block is named as a policy platform is
+		// (^[a-z][a-z0-9_]*$); most slugs are hyphenated, and the hint must
+		// not send an operator to a policy load error (pre-flight M5).
+		fix := "name it in the source's platform_aliases, or give it a platforms: block in the policy"
+		if !sot.PlatformNameShape.MatchString(g.Platform) {
+			fix = "name it in the source's platform_aliases (a policy platforms: block cannot be named " + g.Platform + ")"
+		}
+		fmt.Fprintf(s.Log, "port49-inventory: bundle %d: platform %s (%d device(s)) has no adapter in the policy and is "+
+			"served by the generic one, priv-lvl only (spec §8): %s\n", res.Sequence, g.Platform, g.Devices, fix)
 	}
 }
 
@@ -645,6 +851,20 @@ func (s *Syncer) Diff(from int64) (bundle.Report, int64, error) {
 		return bundle.Report{}, 0, err
 	}
 	return bundle.Diff(o, n, s.Now()), cur.Doc.Sequence, nil
+}
+
+// At is bundle seq: the one published, or one state_dir's history keeps,
+// opened against the service's own keys (spec §12, `inventory export
+// --from`). ErrNoBundle before the first; ErrNotKept for one not kept.
+func (s *Syncer) At(seq int64) (*Published, error) {
+	cur := s.current.Load()
+	if cur == nil {
+		return nil, ErrNoBundle
+	}
+	if cur.Doc.Sequence == seq {
+		return cur, nil
+	}
+	return s.State.At(seq, s.keys())
 }
 
 // DeviceView is one device as GET /v1/devices/{address} shows it: a

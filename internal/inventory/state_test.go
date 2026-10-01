@@ -427,3 +427,26 @@ func TestTheMirrorIsNeverWrittenBelowWhatItHolds(t *testing.T) {
 		t.Fatalf("bundle 3: %v", err)
 	}
 }
+
+// Fix round 1 (M4): a history file that opens to another bundle than its
+// name says is refused, not served or diffed as that bundle.
+func TestAHistoryFileHoldingAnotherBundleIsRefused(t *testing.T) {
+	pub, key, _ := ed25519.GenerateKey(rand.Reader)
+	s := State{Dir: stateDir(t), Keep: 4}
+	for seq := int64(1); seq <= 2; seq++ {
+		if err := s.Save(published(t, key, seq, "leaf-01")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	two, err := os.ReadFile(filepath.Join(s.Dir, historyDir, "2.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(s.Dir, historyDir, "1.json"), two, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if p, err := s.At(1, []ed25519.PublicKey{pub}); err == nil || errors.Is(err, ErrNotKept) ||
+		!strings.Contains(err.Error(), "holds bundle 2, not bundle 1") {
+		t.Fatalf("%v %v", p, err)
+	}
+}

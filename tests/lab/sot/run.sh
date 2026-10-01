@@ -1,12 +1,16 @@
 #!/bin/bash
 # run.sh: record one L27 stack (spec §15 L27, plan 6a Task 2). See README.md.
 #
-#   tests/lab/sot/run.sh <stack> [legacy|l30]
+#   tests/lab/sot/run.sh <stack> [legacy|l30|l32|l33|e2e]
 #   stack: netbox-3.7 | netbox-4 | nautobot-1.6 | nautobot-2 | nautobot-3
 #
 # l30 (spec §15 L30, plan 6b Task 2) also seeds 120 devices, reads the list
 # 50 at a time to its end, reads one page through an nginx reverse proxy
 # (the compose files' l30 profile), and writes tests/lab/sot/l30/<stack>/.
+#
+# l32, l33 and e2e (plan 6c) seed 120 devices into tests/lab/logs, bring up
+# the l32 profile's three TLS proxies, and run one Go test against the stack:
+# TestL32Connector, TestL33Webhooks or TestSoTDeviceEndToEnd.
 #
 # Generates fresh random lab credentials into a 0600 env file outside the
 # repository, brings the stack up, waits (10 minute deadline) for
@@ -17,7 +21,7 @@
 # (or under `sg docker -c`).
 set -euo pipefail
 
-stack=${1:?usage: run.sh <netbox-3.7|netbox-4|nautobot-1.6|nautobot-2|nautobot-3> [legacy|l30]}
+stack=${1:?usage: run.sh <netbox-3.7|netbox-4|nautobot-1.6|nautobot-2|nautobot-3> [legacy|l30|l32|l33|e2e]}
 legacy=${2:-}
 case $stack in
 netbox-3.7) product=netbox port=18037 project=port49-l27-netbox37 ;;
@@ -27,8 +31,10 @@ nautobot-2) product=nautobot port=18020 project=port49-l27-nautobot2 ;;
 nautobot-3) product=nautobot port=18030 project=port49-l27-nautobot3 ;;
 *) echo "run.sh: unknown stack $stack" >&2; exit 64 ;;
 esac
-[ -z "$legacy" ] || [ "$legacy" = legacy ] || [ "$legacy" = l30 ] ||
-	{ echo "run.sh: second argument is 'legacy', 'l30' or nothing" >&2; exit 64; }
+case $legacy in
+"" | legacy | l30 | l32 | l33 | e2e) ;;
+*) echo "run.sh: second argument is 'legacy', 'l30', 'l32', 'l33', 'e2e' or nothing" >&2; exit 64 ;;
+esac
 
 root=$(pwd)
 compose=$root/tests/lab/sot/compose/$stack.yml
@@ -77,6 +83,17 @@ if [ "$legacy" = l30 ]; then
 	[ "$stack" = nautobot-1.6 ] && flags+=(-prefer-legacy)
 	profile=(--profile l30)
 fi
+case $legacy in
+l32 | l33 | e2e)
+	# The recorder seeds 120 devices and records into logs, never into the
+	# committed fixtures; the Go test after it is the run's measurement.
+	out=$root/tests/lab/logs/$legacy-$stack-seed
+	log=$root/tests/lab/logs/$legacy-$stack.log
+	flags+=(-devices 120 -page-limit 50)
+	[ "$stack" = nautobot-1.6 ] && flags+=(-prefer-legacy)
+	profile=(--profile l32)
+	;;
+esac
 
 dc() { docker compose --env-file "$envf" -f "$compose" "${profile[@]}" "$@"; }
 cleanup() {
@@ -101,6 +118,17 @@ cleanup() {
 # Set before any credential exists, so every exit removes what was written.
 trap cleanup EXIT
 trap 'exit 3' TERM INT
+
+# L32 and L33 (plan 6c): three TLS proxies in the l32 profile, and the lab PKI
+# they and port49-inventory's webhook present. Set on every run, as L30's are.
+pki=$tmp/pki
+go run ./tests/lab/cmd/sot-pki -dir "$pki"
+export L32_PKI=$pki L32_HOST_PORT=$((port + 2000)) L32_XFH_PORT=$((port + 3000)) L32_PLAIN_PORT=$((port + 4000))
+export L32_HOST_CONF=$tmp/l32-proxy-host.conf L32_XFH_CONF=$tmp/l32-proxy-xfh.conf L32_PLAIN_CONF=$tmp/l32-proxy-plain.conf
+for c in host xfh plain; do
+	sed "s/netbox:8080/$upstream:8080/g" "$root/tests/lab/sot/compose/l32-proxy-$c.conf" >"$tmp/l32-proxy-$c.conf"
+	chmod 644 "$tmp/l32-proxy-$c.conf"
+done
 
 rnd() { LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c "$1" || true; }
 umask 077
@@ -153,4 +181,18 @@ timeout 600 "$bin" -product "$product" -url "http://127.0.0.1:$port" -out "$out"
 	-webhook-listen "$gw:18999" -auth-scheme "$scheme" "${flags[@]}" >>"$log" 2>&1 || rc=$?
 echo "run.sh: recorder exit $rc at $(date -u +%FT%TZ)" | tee -a "$log"
 grep -E '^sot-record: (netbox|nautobot) at ' "$log" || true
+case $legacy in l32) test=TestL32Connector ;; l33) test=TestL33Webhooks ;; e2e) test=TestSoTDeviceEndToEnd ;; *) test="" ;; esac
+if [ "$rc" = 0 ] && [ -n "$test" ]; then
+	# The host's docker0 address: host-gateway, as the worker resolves
+	# port49-inventory.lab.
+	bridge=$(docker network inspect bridge --format '{{(index .IPAM.Config 0).Gateway}}')
+	extra=()
+	[ "$legacy" = e2e ] && extra=(PORT49_LAB_PLATFORMS=eos)
+	env "${extra[@]}" L32_STACK="$stack" L32_PRODUCT="$product" L32_CA="$pki/ca.pem" \
+		L32_HOST_URL="https://127.0.0.1:$L32_HOST_PORT" L32_XFH_URL="https://127.0.0.1:$L32_XFH_PORT" \
+		L32_PLAIN_URL="https://127.0.0.1:$L32_PLAIN_PORT" \
+		L33_DIRECT_URL="http://127.0.0.1:$port" L33_PKI="$pki" L33_HOOK_BIND="$bridge:18444" \
+		timeout 3600 go test -tags lab ./tests/lab/ -run "^$test\$" -count=1 -timeout 55m -v >>"$log" 2>&1 || rc=$?
+	echo "run.sh: $test exit $rc at $(date -u +%FT%TZ)" | tee -a "$log"
+fi
 exit "$rc"
