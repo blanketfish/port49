@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -79,11 +80,17 @@ type Handler struct {
 	// refreshing RefreshedAt must pass.
 	stalenessCeiling time.Duration
 	// graceWindow is how long past session_expires a context is retained so a
-	// late `port49 login` can resume the session (spec §5.6). It is a
-	// retention decision, not a denial one: this package denies at the ceiling
-	// and deletes nothing, so nothing here reads it. Plan 7's idle sweep is
-	// the reader.
+	// `port49 refresh` or a late `port49 login` can resume the session (spec
+	// §5.6). The authorizer reads it: inside it a request is denied and the
+	// context kept; past it the context is deleted at its next authorization
+	// (teardown row 3).
 	graceWindow time.Duration
+	// ceilingWarning is how long before session_expires a permit's reply
+	// carries the warning in server_msg; zero is none (spec §5.6; decision
+	// 33). warnPlatforms are the platforms the operator added to the
+	// warning's allow-list (platform.CeilingWarning).
+	ceilingWarning time.Duration
+	warnPlatforms  []string
 	// contextIdleTTL is the idle lifetime a permitted request extends a
 	// context to. It is an idle clock, not a session clock — session_expires
 	// is the session clock — so activity slides it forward (spec §5.6).
@@ -98,6 +105,13 @@ type Handler struct {
 // patterns reach the log. Without it the built-in patterns apply.
 func (h *Handler) WithRedactor(r platform.Redactor) *Handler {
 	h.redact = r
+	return h
+}
+
+// WithCeilingWarning sets session.ceiling_warning and the platforms the
+// operator added to the warning's allow-list.
+func (h *Handler) WithCeilingWarning(d time.Duration, added []string) *Handler {
+	h.ceilingWarning, h.warnPlatforms = d, added
 	return h
 }
 
@@ -233,9 +247,21 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AuthorR
 		return h.deny(rec, decision.CredentialRevoked, "port49: this session was revoked - log in again")
 	}
 	if !c.SessionExpires.IsZero() && now.After(c.SessionExpires) {
-		// Denial at the ceiling is FAIL, not ERROR, and the context is
-		// retained: the grace window is plan 7's sweep, not a check here.
-		return h.deny(rec, decision.SessionExpired, "port49: session expired - run `port49 login` to resume")
+		// Denial at the ceiling is FAIL, not ERROR. Inside the grace window
+		// the context is kept, so `port49 refresh` resumes it; past the window
+		// it is deleted (teardown row 3), and only a new login answers.
+		left := c.SessionExpires.Add(h.graceWindow).Sub(now)
+		if left > 0 {
+			return h.deny(rec, decision.SessionExpired, fmt.Sprintf(
+				"port49: session expired - run 'port49 refresh' (or 'port49 login') within %dm to resume", ceilMinutes(left)))
+		}
+		// Bound to the revision read: a login that replaced this context
+		// since is not deleted (pre-flight M4), and a refresh cannot have
+		// extended it, since the store refuses one past the window.
+		err := h.store.DeleteContextIf(ctx, store.ContextKey{NAS: peer.NAS, Username: user}, c.Rev)
+		h.metrics.StoreOps.WithLabelValues("delete_context", storeOutcome(err)).Inc()
+		return h.deny(rec, decision.SessionExpired,
+			"port49: session ended - get a new token ('port49 token') and log in again")
 	}
 	// A non-positive ceiling is "no staleness check", the same shape as the
 	// zero SessionExpires four lines above. It is what a daemon with nothing
@@ -286,6 +312,18 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AuthorR
 	// re-derive a session's attributes and compare (spec §5.7).
 	if len(d.Attributes) > 0 {
 		rec.Reply = &decision.Reply{Attributes: d.Attributes}
+	}
+	// The warning rides on a permit within ceiling_warning of the ceiling
+	// (spec §5.6; decision 33). Whether the device shows it is L34's; the
+	// record says it was sent. A denial never carries it: its server_msg
+	// says why it was denied.
+	var warning string
+	if h.ceilingWarning > 0 && c.HasCeiling() && platform.CeilingWarning(peer.Platform, h.warnPlatforms) {
+		if left := c.SessionExpires.Sub(now); left <= h.ceilingWarning {
+			warning = fmt.Sprintf("port49: session ends in %dm - run 'port49 refresh'", ceilMinutes(left))
+			rec.ServerMsg = warning
+			h.metrics.CeilingWarnings.Inc()
+		}
 	}
 	h.emit(rec)
 
@@ -355,8 +393,21 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AuthorR
 		// there is nothing to do here but count it.
 		h.metrics.StoreOps.WithLabelValues("touch_context", storeOutcome(err)).Inc()
 	}
+	// The context's blob lives as long as the context (decision 19): a
+	// session with no ceiling outlives the TTL it was minted with. Every
+	// permit, not only the touch above: a refresh may write the blob with a
+	// shorter TTL than the context it stamps, and the next touch is half an
+	// idle TTL away. A context's expiry is never past now+contextIdleTTL, so
+	// this keeps its blob at least as long.
+	if c.BlobHash != "" {
+		err := h.store.BumpBlob(ctx, c.BlobHash, h.contextIdleTTL)
+		h.metrics.StoreOps.WithLabelValues("bump_blob", storeOutcome(err)).Inc()
+	}
 
 	resp := wire.AuthorResponse{Status: wire.AuthorStatusPassAdd}
+	if warning != "" {
+		resp.ServerMsg = []byte(warning)
+	}
 	for _, a := range d.Attributes {
 		resp.Args = append(resp.Args, []byte(a))
 	}
@@ -428,6 +479,12 @@ func redactPolicy(rules []platform.Redaction, pol *decision.Policy) (*decision.P
 	return &out, redacted
 }
 
+// ceilMinutes is d in whole minutes, rounded up, at least one: an operator
+// told "0m" reads it as already over.
+func ceilMinutes(d time.Duration) int {
+	return max(1, int((d+time.Minute-1)/time.Minute))
+}
+
 // storeOutcome maps a store error to the StoreOps metric's outcome label.
 func storeOutcome(err error) string {
 	switch {
@@ -435,6 +492,10 @@ func storeOutcome(err error) string {
 		return "ok"
 	case errors.Is(err, store.ErrNotFound):
 		return "not_found"
+	case errors.Is(err, store.ErrConflict):
+		// A compare-and-set lost to a write that landed since the read:
+		// the store answered, and nothing is wrong with it.
+		return "conflict"
 	case errors.As(err, new(*store.UnreadableContextError)):
 		// The record is there and the store answered; the sealing layer
 		// could not open it. Counted apart from "error" so a key rotation

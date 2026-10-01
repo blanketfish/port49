@@ -526,10 +526,9 @@ func TestStaleContextDenies(t *testing.T) {
 	}
 }
 
-// The name says what it asserts: the context is still there afterwards.
-// `graceWindow` is carried but unread — nothing in this plan deletes a context
-// on expiry, with or without a window — so this test would pass either way, and
-// plan 7's author must not read it as evidence that the window is exercised.
+// The name says what it asserts: the context is still there afterwards,
+// a minute into a 10m grace window. TestTheGraceWindowKeepsThenDeletes is the
+// one that crosses the window.
 func TestExpiredSessionDeniesAndDoesNotDeleteTheContext(t *testing.T) {
 	h, st, log := setupClock(t, time.Now, time.Hour, 10*time.Minute, time.Hour)
 	st.PutContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"},
@@ -539,7 +538,7 @@ func TestExpiredSessionDeniesAndDoesNotDeleteTheContext(t *testing.T) {
 		t.Fatalf("%+v %v", resp, lastRecord(t, log))
 	}
 	if _, err := st.GetContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"}); err != nil {
-		t.Fatal("context must be retained through the grace window so a late `port49 login` resumes it")
+		t.Fatal("context must be retained through the grace window so `port49 refresh` resumes it")
 	}
 }
 
@@ -1064,5 +1063,320 @@ func TestAVariantIsAuthorizedAsItsBase(t *testing.T) {
 	}
 	if r := lastRecord(t, log); r["reason"] != "context_matched" {
 		t.Fatalf("%v", r)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// The session ceiling: the warning, the grace window, the blob's lifetime
+// (spec §5.6; decision 33; plan 7b).
+// ---------------------------------------------------------------------------
+
+var aliceKey = store.ContextKey{NAS: "leaf-01", Username: "alice"}
+
+// authorFixture is a Handler over a memory store whose clock the test moves,
+// with a 10m grace window, a 24h idle TTL, no staleness ceiling, and a blob
+// its contexts name. The Lab permits `show version`.
+type authorFixture struct {
+	h     *Handler
+	st    *memory.Store
+	clock *time.Time
+	now   time.Time
+	log   *bytes.Buffer
+	reg   *prometheus.Registry
+}
+
+const fixtureBlob = "blob-alice"
+
+func newAuthorFixture(t *testing.T) *authorFixture {
+	t.Helper()
+	now := time.Unix(2_000_000, 0)
+	f := &authorFixture{clock: &now, now: now, log: &bytes.Buffer{}, reg: prometheus.NewRegistry()}
+	clock := func() time.Time { return *f.clock }
+	f.st = memory.New(clock)
+	if err := f.st.PutBlob(context.Background(), fixtureBlob, []byte("{}"), time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	f.h = New(f.st, &Lab{DenyPrefixes: []string{"reload"}}, decision.NewJSONLines(f.log), metrics.New(f.reg), clock,
+		platform.Defaults(), 0, 10*time.Minute, 24*time.Hour)
+	return f
+}
+
+// putContext writes alice's context with this auth_time and session_expires,
+// touched now.
+func (f *authorFixture) putContext(t *testing.T, authTime, expires time.Time) {
+	t.Helper()
+	f.put(t, store.Context{AuthTime: authTime, SessionExpires: expires, LastTouchedAt: f.now})
+}
+
+func (f *authorFixture) put(t *testing.T, c store.Context) {
+	t.Helper()
+	c.CtxID, c.Username, c.PrivLvl, c.BlobHash = "ctx1", "alice", 15, fixtureBlob
+	if err := f.st.PutContext(context.Background(), aliceKey, c, 24*time.Hour); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (f *authorFixture) authorize(t *testing.T, args ...string) (wire.AuthorResponse, map[string]any) {
+	t.Helper()
+	resp := f.h.Handle(context.Background(), peer, req("alice", "vty0", append([]string{"service=shell"}, args...)...))
+	return resp, lastRecord(t, f.log)
+}
+
+// blobLiveAt reports whether the fixture's blob is still in the store at at.
+func (f *authorFixture) blobLiveAt(t *testing.T, at time.Time) bool {
+	t.Helper()
+	saved := *f.clock
+	defer func() { *f.clock = saved }()
+	*f.clock = at
+	_, err := f.st.GetBlob(context.Background(), fixtureBlob)
+	return err == nil
+}
+
+func nilIfEmpty(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
+// Inside ceiling_warning, a permitted reply carries the warning in
+// server_msg, and the record says so; outside it, nothing (spec §5.6;
+// decision 33, provisional on L34).
+func TestAPermitNearTheCeilingWarns(t *testing.T) {
+	for _, tc := range []struct {
+		left time.Duration
+		want string
+	}{{29*time.Minute + time.Second, "port49: session ends in 30m - run 'port49 refresh'"}, {31 * time.Minute, ""},
+		{30 * time.Minute, "port49: session ends in 30m - run 'port49 refresh'"},
+		{10 * time.Second, "port49: session ends in 1m - run 'port49 refresh'"}} {
+		f := newAuthorFixture(t) // its peer is arista_eos
+		f.h.WithCeilingWarning(30*time.Minute, []string{"arista_eos"})
+		f.putContext(t, f.now.Add(-time.Hour), f.now.Add(tc.left))
+		resp, rec := f.authorize(t, "cmd=show", "cmd-arg=version")
+		if resp.Status != wire.AuthorStatusPassAdd || string(resp.ServerMsg) != tc.want || rec["server_msg"] != nilIfEmpty(tc.want) {
+			t.Errorf("%s left: %v %q %v", tc.left, resp.Status, resp.ServerMsg, rec["server_msg"])
+		}
+		want := 0.0
+		if tc.want != "" {
+			want = 1
+		}
+		if got := testutil.ToFloat64(f.h.metrics.CeilingWarnings); got != want {
+			t.Errorf("%s left: port49_ceiling_warnings_total %v, want %v", tc.left, got, want)
+		}
+	}
+}
+
+// The session authorization's permit carries it too: it is the reply a
+// device answers at login (spec §5.6).
+func TestASessionPermitNearTheCeilingWarns(t *testing.T) {
+	f := newAuthorFixture(t)
+	f.h.WithCeilingWarning(30*time.Minute, []string{"arista_eos"})
+	f.putContext(t, f.now.Add(-time.Hour), f.now.Add(5*time.Minute))
+	if resp, _ := f.authorize(t); resp.Status != wire.AuthorStatusPassAdd ||
+		string(resp.ServerMsg) != "port49: session ends in 5m - run 'port49 refresh'" {
+		t.Fatalf("%v %q", resp.Status, resp.ServerMsg)
+	}
+}
+
+// A denial never carries the warning: its server_msg says why it was denied.
+// Nor does a context with no ceiling, nor a zero ceiling_warning.
+func TestTheWarningRidesOnlyOnACeilingedPermit(t *testing.T) {
+	f := newAuthorFixture(t)
+	f.h.WithCeilingWarning(30*time.Minute, []string{"arista_eos"})
+	f.putContext(t, f.now.Add(-time.Hour), f.now.Add(5*time.Minute))
+	if resp, _ := f.authorize(t, "cmd=reload"); resp.Status != wire.AuthorStatusFail ||
+		strings.Contains(string(resp.ServerMsg), "session ends") {
+		t.Fatalf("a denial: %v %q", resp.Status, resp.ServerMsg)
+	}
+	f.put(t, store.Context{LastTouchedAt: f.now}) // never: no ceiling
+	if resp, _ := f.authorize(t, "cmd=show"); resp.Status != wire.AuthorStatusPassAdd || len(resp.ServerMsg) != 0 {
+		t.Fatalf("no ceiling: %v %q", resp.Status, resp.ServerMsg)
+	}
+	f.h.WithCeilingWarning(0, []string{"arista_eos"})
+	f.putContext(t, f.now.Add(-time.Hour), f.now.Add(time.Minute))
+	if resp, _ := f.authorize(t, "cmd=show"); resp.Status != wire.AuthorStatusPassAdd || len(resp.ServerMsg) != 0 {
+		t.Fatalf("ceiling_warning 0s: %v %q", resp.Status, resp.ServerMsg)
+	}
+	if got := testutil.ToFloat64(f.h.metrics.CeilingWarnings); got != 0 {
+		t.Fatalf("port49_ceiling_warnings_total %v", got)
+	}
+}
+
+// A platform neither L34 nor the operator lists gets no server_msg on a
+// permit, however close the ceiling (pre-flight M10).
+func TestAnUnlistedPlatformGetsNoWarning(t *testing.T) {
+	f := newAuthorFixture(t)
+	f.h.WithCeilingWarning(30*time.Minute, nil)
+	f.putContext(t, f.now.Add(-time.Hour), f.now.Add(time.Minute))
+	if resp, _ := f.authorize(t, "cmd=show", "cmd-arg=version"); resp.Status != wire.AuthorStatusPassAdd || len(resp.ServerMsg) != 0 {
+		t.Fatalf("%v %q", resp.Status, resp.ServerMsg)
+	}
+}
+
+// Past the ceiling and inside the grace window: denied, the context kept,
+// the message naming port49 refresh. Past the window: denied, the context
+// deleted (teardown row 3).
+func TestTheGraceWindowKeepsThenDeletes(t *testing.T) {
+	f := newAuthorFixture(t) // grace window 10m
+	f.putContext(t, f.now.Add(-2*time.Hour), f.now.Add(-5*time.Minute))
+	resp, rec := f.authorize(t, "cmd=show", "cmd-arg=version")
+	if resp.Status != wire.AuthorStatusFail || !strings.Contains(string(resp.ServerMsg), "within 5m to resume") ||
+		!strings.Contains(string(resp.ServerMsg), "port49 refresh") || !strings.Contains(string(resp.ServerMsg), "port49 login") ||
+		rec["reason"] != "session_expired" {
+		t.Fatalf("inside the window: %v %q %v", resp.Status, resp.ServerMsg, rec)
+	}
+	if _, err := f.st.GetContext(context.Background(), aliceKey); err != nil {
+		t.Fatal("the context was not kept inside the window")
+	}
+	f.putContext(t, f.now.Add(-2*time.Hour), f.now.Add(-11*time.Minute))
+	resp, rec = f.authorize(t, "cmd=show", "cmd-arg=version")
+	if resp.Status != wire.AuthorStatusFail || !strings.Contains(string(resp.ServerMsg), "log in again") ||
+		rec["reason"] != "session_expired" {
+		t.Fatalf("past the window: %v %q %v", resp.Status, resp.ServerMsg, rec)
+	}
+	if _, err := f.st.GetContext(context.Background(), aliceKey); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("the context outlived its grace window: %v", err)
+	}
+	if got := testutil.ToFloat64(f.h.metrics.StoreOps.WithLabelValues("delete_context", "ok")); got != 1 {
+		t.Fatalf("delete_context ok %v", got)
+	}
+}
+
+// A context with a ceiling and no auth_time is past nothing it can show, so
+// the ceiling it carries still governs: it is denied at it like any other
+// (a zero auth_time fails closed, plan 7b Task 2).
+func TestACeilingWithNoAuthTimeStillExpires(t *testing.T) {
+	f := newAuthorFixture(t)
+	f.putContext(t, time.Time{}, f.now.Add(-time.Minute))
+	if resp, rec := f.authorize(t, "cmd=show"); resp.Status != wire.AuthorStatusFail || rec["reason"] != "session_expired" {
+		t.Fatalf("%v %v", resp.Status, rec)
+	}
+}
+
+// deleteRaceStore replaces the context between the authorizer's read and its
+// delete, as a login landing in that gap does.
+type deleteRaceStore struct {
+	*memory.Store
+	replace func()
+}
+
+func (d *deleteRaceStore) DeleteContextIf(ctx context.Context, k store.ContextKey, rev uint64) error {
+	d.replace()
+	return d.Store.DeleteContextIf(ctx, k, rev)
+}
+
+// The delete past the window is bound to the revision read: a context a
+// login or a refresh wrote since is not deleted with the one it replaced
+// (pre-flight M4).
+func TestTheGraceDeleteSparesAContextWrittenSince(t *testing.T) {
+	f := newAuthorFixture(t)
+	f.putContext(t, f.now.Add(-2*time.Hour), f.now.Add(-11*time.Minute))
+	race := &deleteRaceStore{Store: f.st, replace: func() { f.putContext(t, f.now, f.now.Add(time.Hour)) }}
+	f.h.store = race
+	resp, _ := f.authorize(t, "cmd=show")
+	if resp.Status != wire.AuthorStatusFail {
+		t.Fatalf("%+v", resp)
+	}
+	c, err := f.st.GetContext(context.Background(), aliceKey)
+	if err != nil || !c.SessionExpires.Equal(f.now.Add(time.Hour)) {
+		t.Fatalf("the sweep deleted the context a login wrote since: %v %+v", err, c)
+	}
+	if got := testutil.ToFloat64(f.h.metrics.StoreOps.WithLabelValues("delete_context", "conflict")); got != 1 {
+		t.Fatalf("delete_context conflict %v", got)
+	}
+	if resp, _ := f.authorize(t, "cmd=show"); resp.Status != wire.AuthorStatusPassAdd {
+		t.Fatalf("the new login's context was not usable: %+v", resp)
+	}
+}
+
+// A permit that extends a context's idle TTL bumps its blob too, so a
+// `never` session's blob outlives the TTL it was minted with (decision 19).
+func TestATouchBumpsTheBlob(t *testing.T) {
+	f := newAuthorFixture(t)
+	f.put(t, store.Context{LastTouchedAt: f.now.Add(-13 * time.Hour)}) // older than half the idle TTL
+	if resp, _ := f.authorize(t, "cmd=show", "cmd-arg=version"); resp.Status != wire.AuthorStatusPassAdd {
+		t.Fatalf("%+v", resp)
+	}
+	if !f.blobLiveAt(t, f.now.Add(11*time.Hour)) {
+		t.Fatal("the blob was not bumped with the context")
+	}
+}
+
+// Every permit bumps the blob, not only one that touches the context: a
+// refresh can write a blob with a shorter TTL than the context it stamps, and
+// the next touch is half an idle TTL away, so a bump only on touch leaves the
+// blob to expire under a live context (Task 3 review, M-2). A live context's
+// blob never expires before it.
+func TestEveryPermitBumpsTheBlob(t *testing.T) {
+	f := newAuthorFixture(t)
+	f.put(t, store.Context{LastTouchedAt: f.now}) // just touched: no TouchContext on this permit
+	*f.clock = f.now.Add(30 * time.Minute)        // the blob has 30m left; the context, 23h30m
+	if resp, _ := f.authorize(t, "cmd=show", "cmd-arg=version"); resp.Status != wire.AuthorStatusPassAdd {
+		t.Fatalf("%+v", resp)
+	}
+	c, err := f.st.GetContext(context.Background(), aliceKey)
+	if err != nil || !c.LastTouchedAt.Equal(f.now) {
+		t.Fatalf("this permit touched the context, so it proves nothing: %v %+v", err, c)
+	}
+	// The context expires at f.now+24h; its blob must still be there just
+	// before.
+	if !f.blobLiveAt(t, f.now.Add(24*time.Hour-time.Second)) {
+		t.Fatal("the blob expires before the live context that names it")
+	}
+	if got := testutil.ToFloat64(f.h.metrics.StoreOps.WithLabelValues("bump_blob", "ok")); got != 1 {
+		t.Fatalf("bump_blob ok %v", got)
+	}
+}
+
+// A denial bumps nothing: the blob's lifetime follows authorized activity,
+// as the context's does.
+func TestADenialDoesNotBumpTheBlob(t *testing.T) {
+	f := newAuthorFixture(t)
+	f.put(t, store.Context{LastTouchedAt: f.now})
+	if resp, _ := f.authorize(t, "cmd=reload"); resp.Status != wire.AuthorStatusFail {
+		t.Fatalf("%+v", resp)
+	}
+	if f.blobLiveAt(t, f.now.Add(time.Hour+time.Second)) {
+		t.Fatal("a denial bumped the blob")
+	}
+}
+
+// With lab.deny_session the lab instrument fails the session authorization
+// with its padded message: L2's truncation on a platform that never
+// authorizes a command (pre-flight I12).
+func TestTheLabCanDenyTheSession(t *testing.T) {
+	lab := &Lab{DenySession: true, DenyMessageLength: 64}
+	d := lab.Session(context.Background(), Request{})
+	if d.Permit || len(d.ServerMsg) != 64 || d.Reason == "" {
+		t.Fatalf("%+v", d)
+	}
+	if d := (&Lab{}).Session(context.Background(), Request{}); !d.Permit {
+		t.Fatalf("without deny_session: %+v", d)
+	}
+}
+
+// The lab's command denial is padded too, and left alone at zero.
+func TestTheLabCommandDenialIsPadded(t *testing.T) {
+	r := Request{Vector: []string{"show", "clock"}}
+	d := (&Lab{DenyPrefixes: []string{"show clock"}, DenyMessageLength: 200}).Command(context.Background(), r)
+	if d.Permit || len(d.ServerMsg) != 200 || !strings.HasPrefix(d.ServerMsg, "port49: denied by lab_deny (show clock)") {
+		t.Fatalf("%q", d.ServerMsg)
+	}
+	d = (&Lab{DenyPrefixes: []string{"show clock"}}).Command(context.Background(), r)
+	if d.ServerMsg != "port49: denied by lab_deny (show clock); see 'port49 explain'" {
+		t.Fatalf("%q", d.ServerMsg)
+	}
+}
+
+// The lab's deny message is padded to deny_message_length with a counting
+// pattern, so the device's cut is readable (L2's truncation length).
+func TestTheLabDenyMessageIsPadded(t *testing.T) {
+	msg := padLabMessage("port49: denied by lab_deny (show clock)", 64)
+	if len(msg) != 64 || !strings.HasPrefix(msg, "port49: denied by lab_deny (show clock) ") ||
+		strings.IndexFunc(msg, func(r rune) bool { return r < 0x20 || r > 0x7e }) >= 0 {
+		t.Fatalf("%q (%d)", msg, len(msg))
+	}
+	if got := padLabMessage("abc", 4); got != "abc" {
+		t.Fatalf("%q", got)
 	}
 }

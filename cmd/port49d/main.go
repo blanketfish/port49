@@ -231,7 +231,8 @@ func buildBroker(cfg config.Config, inventoryFrom string, st store.Store, minter
 		}
 	}
 	b := &broker.Broker{Policy: policy.NewLive(pol), Minter: minter, Store: st, Log: log, Metrics: m, Now: time.Now,
-		MaxSessionAge: cfg.Session.MaxSessionAgeDefault, BatchMax: cfg.Broker.BatchMax}
+		MaxSessionAge: cfg.Session.MaxSessionAgeDefault, BatchMax: cfg.Broker.BatchMax,
+		CeilingWarning: cfg.Session.CeilingWarning}
 	// The blob event's rule text is redacted as the daemon's records are,
 	// with the policy in force's patterns (spec §5.8).
 	b.Redact = redactorFor(b.Policy)
@@ -626,6 +627,8 @@ func run(parent context.Context, cfgPath string) error {
 			CommandAttributes: cfg.Lab.CommandAttributes,
 			DenyPrefixes:      cfg.Lab.DenyPrefixes,
 			Fault:             fault,
+			DenyMessageLength: cfg.Lab.DenyMessageLength,
+			DenySession:       cfg.Lab.DenySession,
 		}
 	}
 	// The request handlers see the store through the lab's fault switch; the
@@ -736,10 +739,13 @@ func run(parent context.Context, cfgPath string) error {
 		// not any broker exists to refresh from. It is worth setting only once
 		// something is calling session.Manager.Refresh on a schedule.
 		//
-		// The grace window is carried for plan 7's sweep and read by nothing
-		// today.
+		// The grace window is how long past the ceiling a context is denied
+		// and kept before the authorizer deletes it (plan 7b). The ceiling
+		// warning rides on permits to the platforms L34 found show it, and
+		// to the operator's own list.
 		Author: author.New(handlerStore, authz, log, m, time.Now, cfg.SessionServices,
-			cfg.Session.StalenessCeiling, cfg.Session.GraceWindow, cfg.ContextIdleTTL).WithRedactor(redactorFor(live)),
+			cfg.Session.StalenessCeiling, cfg.Session.GraceWindow, cfg.ContextIdleTTL).WithRedactor(redactorFor(live)).
+			WithCeilingWarning(cfg.Session.CeilingWarning, cfg.Session.CeilingWarningPlatforms),
 		// The system-user table is injected rather than looked up through a
 		// package global, so nothing can mutate a security rule at run time.
 		// It carries `root` for juniper_junos and nothing else

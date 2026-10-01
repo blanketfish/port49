@@ -38,6 +38,7 @@ func TestNewRegistersEveryMetric(t *testing.T) {
 	m.CountQuarantined(func() int { return 1 })
 	m.ContextRefreshes.WithLabelValues("updated").Inc()
 	m.TokensSuperseded.Inc()
+	m.CeilingWarnings.Inc()
 	m.Revocations.WithLabelValues("principal", "applied").Inc()
 	m.RevocationsInForce.WithLabelValues("cert").Set(1)
 	m.RevocationsFileFailed.Set(0)
@@ -80,6 +81,7 @@ func TestNewRegistersEveryMetric(t *testing.T) {
 		"port49_devices_quarantined":                 false,
 		"port49_context_refreshes_total":             false,
 		"port49_tokens_superseded_total":             false,
+		"port49_ceiling_warnings_total":              false,
 		"port49_revocations_total":                   false,
 		"port49_revocations_in_force":                false,
 		"port49_revocations_file_failed":             false,

@@ -133,6 +133,10 @@ type Metrics struct {
 	// not mint what they carry. Each is one operator's `port49 token` to run
 	// again; none is a session ended.
 	TokensSuperseded prometheus.Counter
+	// port49_ceiling_warnings_total: permitted authorization replies that
+	// carried the session ceiling warning in server_msg (spec §5.6; decision
+	// 33). No labels.
+	CeilingWarnings prometheus.Counter
 	// port49_revocations_total{by, outcome}: revocations by principal or by
 	// cert, applied, partial (the mark in force, a later step failed) or
 	// lifted (spec §5.1.4).
@@ -337,6 +341,8 @@ func New(reg prometheus.Registerer) *Metrics {
 			Help: "Live login contexts a policy refresh visited, by outcome."}, []string{"outcome"}),
 		TokensSuperseded: prometheus.NewCounter(prometheus.CounterOpts{Name: "port49_tokens_superseded_total",
 			Help: "(device, username) keys whose unspent tokens a policy change deleted."}),
+		CeilingWarnings: prometheus.NewCounter(prometheus.CounterOpts{Name: "port49_ceiling_warnings_total",
+			Help: "Permitted authorization replies that carried the session ceiling warning."}),
 		Revocations: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_revocations_total",
 			Help: "Revocations by principal or certificate, by outcome."}, []string{"by", "outcome"}),
 		RevocationsInForce: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "port49_revocations_in_force",
@@ -398,7 +404,7 @@ func New(reg prometheus.Registerer) *Metrics {
 		m.Connections, m.ConnectionEvents, m.AuthFailures, m.SpoolDepth, m.SpoolDrops, m.SpoolQuarantines,
 		m.StoreOps, m.DecisionLogWriteFailures, m.CryptOpenFailures, m.Attributions, m.BrokerItemErrors, m.BrokerIdempotency,
 		m.BrokerHandshakeFailures, m.BrokerConnectionEvents, m.BrokerConnections, m.BlobCache,
-		m.DevicesQuarantined, m.DevicesAdmissionRefused, m.ContextRefreshes, m.TokensSuperseded,
+		m.DevicesQuarantined, m.DevicesAdmissionRefused, m.ContextRefreshes, m.TokensSuperseded, m.CeilingWarnings,
 		m.Revocations, m.RevocationsInForce, m.RevocationsFileFailed, m.PolicyReloads, m.PolicyFileRefused,
 		m.PolicyRefreshPending, m.InventoryReloads, m.InventoryFileRefused, m.InventorySnapshotAge,
 		m.InventoryChanges, m.InventoryBundleSequence, m.InventoryPersistFailed, m.InventoryBundleRefused,

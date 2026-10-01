@@ -96,6 +96,16 @@ type LabConfig struct {
 	// the credential or prints it into the journal the decision log ships to.
 	SeedTokenFile string      `yaml:"seed_token_file"`
 	SeedTokens    []SeedToken `yaml:"seed_tokens"`
+
+	// DenyMessageLength pads the lab's deny server_msg to this many bytes
+	// with a counting pattern, so the last digit a device prints says where
+	// it cut (spec §15, L2's truncation length). 0 leaves it; otherwise
+	// 16 to 4096.
+	DenyMessageLength int `yaml:"deny_message_length"`
+	// DenySession fails every session authorization of a seeded context with
+	// the (padded) deny message: L2 on Junos, which never authorizes a
+	// command (plan 7b; pre-flight I12).
+	DenySession bool `yaml:"deny_session"`
 }
 
 // SessionConfig is the set of clocks a context lives by (spec §5.6).
@@ -110,9 +120,21 @@ type SessionConfig struct {
 	// this key; set, it must be at least a minute.
 	StalenessCeiling time.Duration `yaml:"staleness_ceiling"`
 
-	// GraceWindow is how long past `session_expires` a context is kept for
-	// diagnosis before plan 7's sweep reclaims it. Nothing reads it today.
+	// GraceWindow is how long past `session_expires` a context is kept: the
+	// authorizer denies through it and then deletes the context (plan 7b);
+	// the broker's refresh resumes inside it.
 	GraceWindow time.Duration `yaml:"grace_window"`
+
+	// CeilingWarning is how long before session_expires a permitted reply
+	// carries the warning in server_msg (spec §5.6; decision 33). Default
+	// 30m, long enough to finish a change; 0s turns it off; at most 24h. It
+	// is read through sessionYAML, so an explicit 0s is told from absent.
+	CeilingWarning time.Duration `yaml:"-"`
+	// CeilingWarningPlatforms are platforms the operator adds to the
+	// warning's allow-list (platform.CeilingWarning), unmeasured by L34.
+	// Each is a platform name's shape, unchecked against the set: an
+	// operator may name a variant.
+	CeilingWarningPlatforms []string `yaml:"ceiling_warning_platforms"`
 
 	// IndexTTL is how long the context indexes (principal, sid, cert) outlive
 	// a write. They exist so revocation can reach a live context, so they are
@@ -247,6 +269,14 @@ type limitsYAML struct {
 	AuthFailureWindow    *time.Duration `yaml:"auth_failure_window"`
 }
 
+// sessionYAML mirrors the session block. ceiling_warning is a pointer so an
+// absent key (take the 30m default) is told from an explicit 0s (off), as
+// limitsYAML does for its windows.
+type sessionYAML struct {
+	SessionConfig  `yaml:",inline"`
+	CeilingWarning *time.Duration `yaml:"ceiling_warning"`
+}
+
 type fileConfig struct {
 	Listen        string            `yaml:"listen"`
 	MetricsListen string            `yaml:"metrics_listen"`
@@ -264,7 +294,7 @@ type fileConfig struct {
 	Accounting     AccountingConfig          `yaml:"accounting"`
 	Platforms      map[string]PlatformConfig `yaml:"platforms"`
 	Encryption     encryptionYAML            `yaml:"encryption"`
-	Session        SessionConfig             `yaml:"session"`
+	Session        sessionYAML               `yaml:"session"`
 	Token          TokenConfig               `yaml:"token"`
 	Broker         *BrokerConfig             `yaml:"broker"`
 	Lab            *LabConfig                `yaml:"lab"`
@@ -370,6 +400,17 @@ type Config struct {
 }
 
 const defaultWindow = 10 * time.Minute
+
+// defaultCeilingWarning and maxCeilingWarning bound session.ceiling_warning
+// (spec §5.6; decision 33).
+const (
+	defaultCeilingWarning = 30 * time.Minute
+	maxCeilingWarning     = 24 * time.Hour
+)
+
+// platformNameShape is how an inventory writes a platform, as the policy
+// loader checks it (policy.platformNameShape).
+var platformNameShape = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
 // DefaultMaxSessionAge is session.max_session_age_default where the file
 // sets none (spec §5.6: "The default is 12h").
@@ -513,10 +554,12 @@ func Load(path string) (Config, error) {
 		// staleness_ceiling has no default: 0 means the check is off, which is
 		// what SessionConfig.StalenessCeiling argues for.
 		Session: SessionConfig{
-			StalenessCeiling:     f.Session.StalenessCeiling,
-			GraceWindow:          orD(f.Session.GraceWindow, 10*time.Minute),
-			IndexTTL:             orD(f.Session.IndexTTL, 12*time.Hour),
-			MaxSessionAgeDefault: orD(f.Session.MaxSessionAgeDefault, DefaultMaxSessionAge),
+			StalenessCeiling:        f.Session.StalenessCeiling,
+			GraceWindow:             orD(f.Session.GraceWindow, 10*time.Minute),
+			IndexTTL:                orD(f.Session.IndexTTL, 12*time.Hour),
+			MaxSessionAgeDefault:    orD(f.Session.MaxSessionAgeDefault, DefaultMaxSessionAge),
+			CeilingWarning:          defaultCeilingWarning,
+			CeilingWarningPlatforms: f.Session.CeilingWarningPlatforms,
 		},
 		Token:       TokenConfig{CandidateCap: orI(f.Token.CandidateCap, 8)},
 		encCurrent:  f.Encryption.Current,
@@ -566,6 +609,19 @@ func Load(path string) (Config, error) {
 	if c.MaxRemovedPercent, err = inventoryBound(f.InventoryOpts); err != nil {
 		return Config{}, err
 	}
+	if f.Session.CeilingWarning != nil {
+		c.Session.CeilingWarning = *f.Session.CeilingWarning
+	}
+	if c.Session.CeilingWarning < 0 || c.Session.CeilingWarning > maxCeilingWarning {
+		return Config{}, fmt.Errorf("config: session.ceiling_warning is %s: set 0s to turn the warning off, or up to %s",
+			c.Session.CeilingWarning, maxCeilingWarning)
+	}
+	for i, p := range c.Session.CeilingWarningPlatforms {
+		if !platformNameShape.MatchString(p) {
+			return Config{}, fmt.Errorf("config: session.ceiling_warning_platforms[%d] is %q: a platform name is lowercase "+
+				"letters, digits and underscores, beginning with a letter", i, p)
+		}
+	}
 	if err := checkPositive(c); err != nil {
 		return Config{}, err
 	}
@@ -583,6 +639,10 @@ func Load(path string) (Config, error) {
 			if t.NAS == "" || t.Username == "" {
 				return Config{}, fmt.Errorf("config: lab.seed_tokens[%d]: nas and username are both required", i)
 			}
+		}
+		if n := c.Lab.DenyMessageLength; n != 0 && (n < 16 || n > 4096) {
+			return Config{}, fmt.Errorf("config: lab.deny_message_length is %d: set 0 to leave the deny message "+
+				"as it is, or 16 to 4096", n)
 		}
 		if len(c.Lab.SeedTokens) > 0 && c.Lab.SeedTokenFile == "" {
 			return Config{}, fmt.Errorf("config: lab.seed_token_file is required when lab.seed_tokens is non-empty: " +
