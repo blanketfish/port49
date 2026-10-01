@@ -212,3 +212,15 @@ func TestPrintResultPrintsNoControlCharacters(t *testing.T) {
 		t.Fatalf("exit %d: %q", code, out.String())
 	}
 }
+
+func TestInventorySyncPrintsAGenericPlatform(t *testing.T) {
+	svc := startService(t)
+	svc.writeSource(t, "  - {name: leaf-01, platform: eos-lab, addresses: [10.0.0.1]}\n")
+	var out, errOut bytes.Buffer
+	args := []string{"inventory", "sync", "--service", svc.url, "--ca", svc.ca, "--cert", svc.cert, "--key", svc.key}
+	if code := run(args, &out, &errOut); code != 0 ||
+		!strings.Contains(out.String(), "  platform eos-lab (1 device(s)) has no adapter in the policy and is served "+
+			"by the generic one, priv-lvl only (spec §8)") {
+		t.Fatalf("exit %d: %s %s", code, out.String(), errOut.String())
+	}
+}

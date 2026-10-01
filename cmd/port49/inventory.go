@@ -470,12 +470,20 @@ func printResult(w io.Writer, res inventory.Result) int {
 			fmt.Fprintf(w, "  device %s (%s) is quarantined against the service's policy: %s\n", inventory.Printable(q.Device),
 				inventory.Printable(q.Platform), inventory.Printable(q.Cause))
 		}
+		for _, g := range res.Generic {
+			fmt.Fprintf(w, "  platform %s (%d device(s)) has no adapter in the policy and is served by the generic "+
+				"one, priv-lvl only (spec §8)\n", inventory.Printable(g.Platform), g.Devices)
+		}
 		for _, l := range res.LeftOut {
 			fmt.Fprintf(w, "  left out: %s\n", inventory.Printable(l))
 		}
 		return 0
 	case "unchanged":
 		fmt.Fprintf(w, "unchanged: bundle %d is current\n", res.Sequence)
+		for _, g := range res.Generic {
+			fmt.Fprintf(w, "  platform %s (%d device(s)) has no adapter in the policy and is served by the generic "+
+				"one, priv-lvl only (spec §8)\n", inventory.Printable(g.Platform), g.Devices)
+		}
 		return 0
 	}
 	still := "no bundle is published yet"

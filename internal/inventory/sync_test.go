@@ -661,8 +661,8 @@ func TestASyncPastItsOwnDeadlineIsAFailure(t *testing.T) {
 	if res := rig.s.Sync(context.Background(), "schedule"); res.Outcome != OutcomeFailed || res.Sequence != 1 {
 		t.Fatalf("%+v", res)
 	}
-	if !strings.Contains(rig.out.String(), "sync (schedule) failed; still publishing bundle 1: source a: fetch: "+
-		"context deadline exceeded") {
+	if !strings.Contains(rig.out.String(), "sync (schedule) failed; still publishing bundle 1: source a: did not "+
+		"finish within sync_timeout (20ms): fetch: context deadline exceeded") {
 		t.Fatalf("not said: %s", rig.out)
 	}
 	if testutil.ToFloat64(rig.s.Metrics.SyncFailing) != 1 {
@@ -729,5 +729,106 @@ func TestAClockThatSteppedBackStillPublishesLater(t *testing.T) {
 	if !strings.Contains(rig.out.String(), "this host's clock ") ||
 		!strings.Contains(rig.out.String(), "is not after bundle 1's published_at") {
 		t.Fatalf("not said: %s", rig.out)
+	}
+}
+
+// stuckSource ignores its context until released, as a connector with a
+// bug would.
+type stuckSource struct {
+	name    string
+	release chan struct{}
+	inv     admission.Inventory
+}
+
+func (s *stuckSource) Name() string { return s.name }
+func (s *stuckSource) Fetch(context.Context) (admission.Inventory, error) {
+	<-s.release
+	return s.inv, nil
+}
+
+// Spec §10: every Fetch returns within sync_timeout. One that does not is
+// abandoned fetchGrace later, the source is marked hung, and it is not asked
+// again until the abandoned call returns.
+func TestAFetchPastSyncTimeoutIsAbandoned(t *testing.T) {
+	defer func(g time.Duration) { fetchGrace = g }(fetchGrace)
+	fetchGrace = 20 * time.Millisecond
+	rig := newSyncRig(t, syncPolicy, devices(3))
+	stuck := &stuckSource{name: "a", release: make(chan struct{}), inv: devices(3)}
+	rig.s.Sources, rig.s.Timeout = []Source{stuck}, 50*time.Millisecond
+	start := time.Now()
+	res := rig.sync(t)
+	if res.Outcome != OutcomeFailed || !strings.Contains(res.Reason, "source a: did not return within sync_timeout") ||
+		time.Since(start) > 2*time.Second {
+		t.Fatalf("%+v after %s", res, time.Since(start))
+	}
+	if testutil.ToFloat64(rig.s.Metrics.SourceHung.WithLabelValues("a")) != 1 {
+		t.Fatal("source_hung")
+	}
+	if res := rig.sync(t); res.Outcome != OutcomeFailed ||
+		!strings.Contains(res.Reason, "its fetch abandoned at an earlier sync has not returned") {
+		t.Fatalf("asked again while out: %+v", res)
+	}
+	close(stuck.release)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		res := rig.sync(t)
+		if res.Outcome == OutcomePublished {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("never published once released: %+v", res)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if testutil.ToFloat64(rig.s.Metrics.SourceHung.WithLabelValues("a")) != 0 {
+		t.Fatal("source_hung stayed 1")
+	}
+}
+
+// A source that honours its context and runs out of time says so.
+func TestAFetchThatRunsOutOfTimeSaysSo(t *testing.T) {
+	rig := newSyncRig(t, syncPolicy, devices(3))
+	rig.s.Sources = []Source{fetchFunc(func(ctx context.Context) (admission.Inventory, error) {
+		<-ctx.Done()
+		return admission.Inventory{}, ctx.Err()
+	})}
+	rig.s.Timeout = 30 * time.Millisecond
+	if res := rig.sync(t); res.Outcome != OutcomeFailed ||
+		!strings.Contains(res.Reason, "did not finish within sync_timeout (30ms): context deadline exceeded") {
+		t.Fatalf("%+v", res)
+	}
+}
+
+type fetchFunc func(context.Context) (admission.Inventory, error)
+
+func (fetchFunc) Name() string                                             { return "a" }
+func (f fetchFunc) Fetch(ctx context.Context) (admission.Inventory, error) { return f(ctx) }
+
+// Spec §8, §10: a platform with no adapter is served by the generic one,
+// and that is said, never silent — whatever the source.
+func TestAGenericPlatformIsSaidAndCounted(t *testing.T) {
+	inv := devices(3)
+	inv.Devices[0].Platform, inv.Devices[1].Platform = "eos-lab", "eos-lab"
+	rig := newSyncRig(t, syncPolicy, inv)
+	res := rig.sync(t)
+	if res.Outcome != OutcomePublished || len(res.Generic) != 1 || res.Generic[0] != (GenericPlatform{"eos-lab", 2}) {
+		t.Fatalf("%+v %s", res, rig.out)
+	}
+	if !strings.Contains(rig.out.String(), "port49-inventory: bundle 1: platform eos-lab (2 device(s)) has no adapter "+
+		"in the policy and is served by the generic one, priv-lvl only (spec §8): name it in the source's "+
+		"platform_aliases (a policy platforms: block cannot be named eos-lab)") {
+		t.Fatalf("%s", rig.out)
+	}
+	if testutil.ToFloat64(rig.s.Metrics.GenericDevices) != 2 {
+		t.Fatal("generic_platform_devices")
+	}
+	rig.out.Reset()
+	if res := rig.sync(t); res.Outcome != OutcomeUnchanged || len(res.Generic) != 1 || rig.out.Len() != 0 {
+		t.Fatalf("an unchanged sync said it again: %+v %q", res, rig.out)
+	}
+	rig.src.inv = devices(3)
+	rig.sync(t)
+	if testutil.ToFloat64(rig.s.Metrics.GenericDevices) != 0 {
+		t.Fatal("the gauge did not fall")
 	}
 }

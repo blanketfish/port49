@@ -30,6 +30,12 @@ type Metrics struct {
 	// published: a fresh pod with the service down would start from it.
 	MirrorBehind prometheus.Gauge
 	APIRefused   *prometheus.CounterVec
+	// SourceHung is 1 while a source's fetch, abandoned past sync_timeout,
+	// has not returned (spec §10): that source is not asked meanwhile.
+	SourceHung *prometheus.GaugeVec
+	// GenericDevices is how many devices the last good sync's bundle serves
+	// with the generic adapter (spec §8, "Unknown platforms").
+	GenericDevices prometheus.Gauge
 }
 
 func NewMetrics(reg prometheus.Registerer) *Metrics {
@@ -59,7 +65,11 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		APIRefused: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_inventory_api_refused_total",
 			Help: "API requests refused, by reason (untrusted, forbidden, bad_path)."}, []string{"reason"}),
 	}
+	m.SourceHung = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "port49_inventory_source_hung",
+		Help: "1 while a source's fetch, abandoned past sync_timeout, has not returned."}, []string{"source"})
+	m.GenericDevices = prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_inventory_generic_platform_devices",
+		Help: "Devices in the last good sync whose platform has no adapter in the policy."})
 	reg.MustRegister(m.Syncs, m.SyncRefused, m.SyncFailing, m.SourceErrors, m.LeftOut, m.Published, m.PublishedAt,
-		m.Devices, m.LastGood, m.MirrorFailures, m.MirrorBehind, m.APIRefused)
+		m.Devices, m.LastGood, m.MirrorFailures, m.MirrorBehind, m.APIRefused, m.SourceHung, m.GenericDevices)
 	return m
 }
