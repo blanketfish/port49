@@ -1572,9 +1572,10 @@ composed as the **minimum** across a principal's roles, carried in the token rec
 and defaulting long. It is the compliance-relevant clock: *how long may a session run on the
 strength of one authentication event.*
 
-A session approaching the ceiling is **warned in the session**. The authorization REPLY
-carries `server_msg`, which devices display, so the operator is told on the device before
-anything stops working — and re-authentication does not require reconnecting, because the
+A session approaching the ceiling is **warned in the session** where the device allows it. The
+authorization REPLY carries `server_msg`, so the operator is told on the device before anything
+stops working; of the measured images only IOS-XE shows it on a permit (L34, closed), and
+everywhere else the warning is `port49 token`'s (as built, below) — and re-authentication does not require reconnecting, because the
 broker can refresh live context (§5.1.3) through the `contexts_by_principal` index
 (illustrative; as built below):
 
@@ -1641,8 +1642,15 @@ forcing a reconnect. Requirements:
   lengthened ceiling or `never` takes effect at the next refresh or login.
 - **The warning.**
   - It rides on the `server_msg` of permitted session and command authorization replies, within
-    `session.ceiling_warning` (default 30m) of `session_expires`, to the platforms §15 L34 finds
+    `session.ceiling_warning` (default 30m) of `session_expires`, to the platforms §15 L34 found
     show it and still permit, and to any an operator lists in `session.ceiling_warning_platforms`.
+  - L34 found one: `cisco_iosxe`. IOS-XE shows `port49: session ends in Nm - run 'port49
+    refresh'` before the prompt at login and with each permitted command's output, and the
+    command still runs (`tests/lab/results/L34-cisco_iosxe.md`).
+  - EOS, NX-OS and Junos showed nothing and are off the list
+    (`tests/lab/results/L34-arista_eos.md`, `L34-cisco_nxos.md`, `L34-juniper_vjunos-router.md`,
+    `L34-juniper_vsrx.md`). Their operators are warned of the ceiling only by the agent: `port49
+    token`'s stderr, and each device's new end in `port49 refresh`'s output.
   - It also goes on `port49 token`'s stderr, from the mint's `session_expires_at`, on every
     platform.
 - **Past the ceiling.** A context is denied `session_expired` and kept until the grace window
@@ -6171,7 +6179,9 @@ spec was silent, each the option that denies more; revised after its pre-flight 
   policy in force gives.
 - **The warning.** It rides on permits within `session.ceiling_warning` (30m), to the platforms L34
   finds show it (an allow-list) and any an operator lists (`session.ceiling_warning_platforms`),
-  and on `port49 token`'s stderr everywhere.
+  and on `port49 token`'s stderr everywhere. L34 closed 2026-10-01 with one platform on the list,
+  `cisco_iosxe`; EOS, NX-OS and Junos showed nothing and are warned by `port49 token` alone
+  (`tests/lab/results/L34-*.md`). The ruling stands as made: the list is what L34 fed.
 - **Past the ceiling.** A context is kept through the grace window and deleted at its first
   authorization after it, by compare-and-set, and the store refuses to extend one past it.
 - **The refresh.** On the certificate path it is a single-use 60s nonce, signed by the certificate's
