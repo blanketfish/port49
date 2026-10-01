@@ -121,9 +121,9 @@ type Syncer struct {
 	// fetched is each source's latest fetch, which a sync of another source
 	// merges with (spec §10: each source on its own interval).
 	fetched map[string]admission.Inventory
-	// hung is each source whose fetch was abandoned past sync_timeout, by
-	// name: closed when that call returns. Guarded by mu.
-	hung map[string]chan struct{}
+	// out is each source whose last fetch the sync it ran in stopped
+	// waiting for, by name, until that call returns. Guarded by mu.
+	out map[string]*fetchOut
 	// genericSaid is the generic platforms as last said, so each is said
 	// when it changes.
 	genericSaid string
@@ -151,22 +151,47 @@ func (s *Syncer) timeout() time.Duration {
 	return s.Timeout
 }
 
+// fetchOut is a fetch a sync stopped waiting for: done is closed when the
+// call returns. abandoned is one that ran past sync_timeout and fetchGrace
+// (port49_inventory_source_hung is 1); otherwise a shutdown or a client's
+// hang-up cut its sync short. Guarded by mu.
+type fetchOut struct {
+	done      chan struct{}
+	abandoned bool
+}
+
 // fetch is src.Fetch under ctx, the sync's bounded context, returning
 // within the bound and fetchGrace after it whatever src does (decision 31).
 // A source that has not returned by then is abandoned: the sync fails, the
-// source is marked hung, and it is not asked again until the abandoned call
-// returns, so a connector that ignores its context costs one goroutine, not
-// one per sync. Called under mu.
-func (s *Syncer) fetch(ctx context.Context, src Source) (admission.Inventory, error) {
+// source is marked hung until the call returns, and it is not asked again
+// meanwhile, so a connector that ignores its context costs one goroutine,
+// not one per sync. A sync that caller's end cuts short — a shutdown, a
+// client's hang-up — stops waiting at once, without marking the source
+// hung: the next fetch of it waits for that call within its own bound, and
+// abandons it if it is still out at the end. Called under mu.
+func (s *Syncer) fetch(ctx, caller context.Context, src Source) (admission.Inventory, error) {
 	name := src.Name()
-	if out := s.hung[name]; out != nil {
+	if o := s.out[name]; o != nil {
+		if !o.abandoned {
+			select {
+			case <-o.done:
+			case <-ctx.Done():
+			}
+		}
 		select {
-		case <-out:
-			delete(s.hung, name)
-			s.Metrics.SourceHung.WithLabelValues(name).Set(0)
+		case <-o.done:
+			s.settle(name, o)
 		default:
-			return admission.Inventory{}, errors.New("its fetch abandoned at an earlier sync has not returned; it is " +
-				"not asked again until it does")
+			switch {
+			case o.abandoned:
+				return admission.Inventory{}, errors.New("its fetch abandoned at an earlier sync has not returned; " +
+					"it is not asked again until it does")
+			case caller.Err() != nil:
+				return admission.Inventory{}, caller.Err()
+			}
+			s.abandon(name, o)
+			return admission.Inventory{}, fmt.Errorf("its fetch cut short at an earlier sync did not return within "+
+				"sync_timeout (%s); it is abandoned, and asked again once it returns", s.timeout())
 		}
 	}
 	type got struct {
@@ -179,31 +204,71 @@ func (s *Syncer) fetch(ctx context.Context, src Source) (admission.Inventory, er
 		ch <- got{inv, err}
 		close(done)
 	}()
-	answer := func(g got) (admission.Inventory, error) {
+	select {
+	case g := <-ch:
 		if g.err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			return g.inv, fmt.Errorf("did not finish within sync_timeout (%s): %w", s.timeout(), g.err)
 		}
 		return g.inv, g.err
-	}
-	select {
-	case g := <-ch:
-		return answer(g)
 	case <-ctx.Done():
+	}
+	if caller.Err() != nil {
+		// No sync_timeout passed: not hung, and not waited for.
+		s.track(name, &fetchOut{done: done})
+		return admission.Inventory{}, caller.Err()
 	}
 	grace := time.NewTimer(fetchGrace)
 	defer grace.Stop()
 	select {
 	case g := <-ch:
-		return answer(g)
+		// Spec §10: every Fetch returns within sync_timeout. An answer in
+		// the grace is late, and a sync never publishes one (review M4).
+		if g.err != nil {
+			return g.inv, fmt.Errorf("did not finish within sync_timeout (%s): %w", s.timeout(), g.err)
+		}
+		return admission.Inventory{}, fmt.Errorf("returned after sync_timeout (%s); its answer is not used",
+			s.timeout())
 	case <-grace.C:
 	}
-	if s.hung == nil {
-		s.hung = map[string]chan struct{}{}
-	}
-	s.hung[name] = done
-	s.Metrics.SourceHung.WithLabelValues(name).Set(1)
+	o := &fetchOut{done: done}
+	s.track(name, o)
+	s.abandon(name, o)
 	return admission.Inventory{}, fmt.Errorf("did not return within sync_timeout (%s) and %s after; it is abandoned, "+
 		"and asked again once it returns", s.timeout(), fetchGrace)
+}
+
+// track keeps o as name's fetch out, and settles it when the call returns,
+// whenever that is: the hung gauge falls then, not at the source's next
+// fetch, which may be an interval away (review I1). Called under mu.
+func (s *Syncer) track(name string, o *fetchOut) {
+	if s.out == nil {
+		s.out = map[string]*fetchOut{}
+	}
+	s.out[name] = o
+	go func() {
+		<-o.done
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		s.settle(name, o)
+	}()
+}
+
+// abandon marks name's fetch out, o, hung. Called under mu.
+func (s *Syncer) abandon(name string, o *fetchOut) {
+	o.abandoned = true
+	s.Metrics.SourceHung.WithLabelValues(name).Set(1)
+}
+
+// settle forgets o, name's fetch out, once it has returned, unless a later
+// one has taken its place. Called under mu.
+func (s *Syncer) settle(name string, o *fetchOut) {
+	if s.out[name] != o {
+		return
+	}
+	delete(s.out, name)
+	if o.abandoned {
+		s.Metrics.SourceHung.WithLabelValues(name).Set(0)
+	}
 }
 
 // Current is the bundle published, or nil before the first.
@@ -412,7 +477,7 @@ func (s *Syncer) sync(ctx, caller context.Context, only []string) Result {
 		got, cached := s.fetched[src.Name()]
 		if !cached || len(only) == 0 || slices.Contains(only, src.Name()) {
 			var err error
-			if got, err = s.fetch(ctx, src); err != nil {
+			if got, err = s.fetch(ctx, caller, src); err != nil {
 				if caller.Err() == nil {
 					s.Metrics.SourceErrors.WithLabelValues(src.Name()).Inc()
 				}
@@ -472,12 +537,17 @@ func (s *Syncer) sync(ctx, caller context.Context, only []string) Result {
 	now := s.Now()
 	quarantined := quarantinedIn(next, now)
 	generic := genericIn(next)
-	total := 0
-	for _, g := range generic {
-		total += g.Devices
+	// Counted where the bundle in force is next's: unchanged, or published
+	// (review M1).
+	countGeneric := func() {
+		total := 0
+		for _, g := range generic {
+			total += g.Devices
+		}
+		s.Metrics.GenericDevices.Set(float64(total))
 	}
-	s.Metrics.GenericDevices.Set(float64(total))
 	if prev != nil && prev.Doc.Bundle == next.Bundle && maps.EqualFunc(prev.Doc.Sources, sources, slices.Equal[[]string]) {
+		countGeneric()
 		return held(Result{Outcome: OutcomeUnchanged, Quarantined: quarantined, LeftOut: leftOut, Generic: generic})
 	}
 	seq, err := s.nextSequence(prev)
@@ -496,6 +566,7 @@ func (s *Syncer) sync(ctx, caller context.Context, only []string) Result {
 		return held(Result{Outcome: OutcomeFailed, Reason: "state_dir " + s.State.Dir + ": " + oneLine(err)})
 	}
 	s.publish(p)
+	countGeneric()
 	if prevPol == nil {
 		return Result{Outcome: OutcomePublished, Sequence: seq, Bundle: next.Bundle,
 			Summary: fmt.Sprintf("first bundle: +%d device(s)", len(inv.Devices)), Quarantined: quarantined, LeftOut: leftOut,

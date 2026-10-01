@@ -832,3 +832,130 @@ func TestAGenericPlatformIsSaidAndCounted(t *testing.T) {
 		t.Fatal("the gauge did not fall")
 	}
 }
+
+// Review I1: the hung gauge falls when the abandoned call returns, not at
+// that source's next fetch, which may be an interval away.
+func TestTheHungGaugeFallsWhenTheCallReturns(t *testing.T) {
+	defer func(g time.Duration) { fetchGrace = g }(fetchGrace)
+	fetchGrace = 20 * time.Millisecond
+	rig := newSyncRig(t, syncPolicy, devices(3))
+	stuck := &stuckSource{name: "a", release: make(chan struct{}), inv: devices(3)}
+	rig.s.Sources, rig.s.Timeout = []Source{stuck}, 50*time.Millisecond
+	if res := rig.sync(t); res.Outcome != OutcomeFailed {
+		t.Fatalf("%+v", res)
+	}
+	close(stuck.release)
+	deadline := time.Now().Add(2 * time.Second)
+	for testutil.ToFloat64(rig.s.Metrics.SourceHung.WithLabelValues("a")) != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("source_hung stayed 1 once the call returned")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// Review M2, M3: a shutdown with a source that ignores its context returns
+// at once and quietly; the source is not marked hung, since no sync_timeout
+// passed, and the next sync waits for the call cut short, within its own
+// bound, before asking again.
+func TestAShutdownWithAStuckSourceReturnsQuietly(t *testing.T) {
+	defer func(g time.Duration) { fetchGrace = g }(fetchGrace)
+	fetchGrace = time.Minute // a wait for the grace would show
+	rig := newSyncRig(t, syncPolicy, devices(3))
+	rig.sync(t)
+	rig.out.Reset()
+	stuck := &stuckSource{name: "a", release: make(chan struct{}), inv: devices(4)}
+	rig.s.Sources = []Source{stuck}
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(10*time.Millisecond, cancel)
+	start := time.Now()
+	res := rig.s.Sync(ctx, "schedule")
+	if res.Outcome != OutcomeFailed || time.Since(start) > time.Second || rig.out.Len() != 0 {
+		t.Fatalf("%+v after %s: %q", res, time.Since(start), rig.out)
+	}
+	if testutil.ToFloat64(rig.s.Metrics.SourceHung.WithLabelValues("a")) != 0 ||
+		testutil.ToFloat64(rig.s.Metrics.SourceErrors.WithLabelValues("a")) != 0 ||
+		testutil.ToFloat64(rig.s.Metrics.Syncs.WithLabelValues("schedule", OutcomeFailed)) != 0 {
+		t.Fatal("a shutdown was counted")
+	}
+	// The call cut short returns during the next sync, which then asks again.
+	time.AfterFunc(20*time.Millisecond, func() { close(stuck.release) })
+	if res := rig.sync(t); res.Outcome != OutcomePublished || res.Sequence != 2 {
+		t.Fatalf("%+v %s", res, rig.out)
+	}
+}
+
+// Review M4: spec §10, every Fetch returns within sync_timeout. An answer
+// that arrives inside the grace is late, and is not published.
+func TestALateAnswerIsNotPublished(t *testing.T) {
+	defer func(g time.Duration) { fetchGrace = g }(fetchGrace)
+	fetchGrace = time.Second
+	rig := newSyncRig(t, syncPolicy, devices(3))
+	rig.sync(t)
+	rig.s.Sources = []Source{fetchFunc(func(ctx context.Context) (admission.Inventory, error) {
+		<-ctx.Done()
+		time.Sleep(10 * time.Millisecond)
+		return devices(4), nil
+	})}
+	rig.s.Timeout = 30 * time.Millisecond
+	res := rig.sync(t)
+	if res.Outcome != OutcomeFailed || res.Sequence != 1 ||
+		!strings.Contains(res.Reason, "source a: returned after sync_timeout (30ms); its answer is not used") {
+		t.Fatalf("%+v", res)
+	}
+	if testutil.ToFloat64(rig.s.Metrics.SourceHung.WithLabelValues("a")) != 0 || rig.s.Current().Doc.Sequence != 1 {
+		t.Fatal("a late answer was published or marked hung")
+	}
+}
+
+// Review M1: the generic gauge is the bundle in force's, so a sync that
+// fails to keep its bundle leaves it as it was.
+func TestTheGenericGaugeIsTheBundleInForces(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root writes a read-only directory")
+	}
+	rig := newSyncRig(t, syncPolicy, devices(3))
+	rig.sync(t)
+	if err := os.Chmod(rig.s.State.Dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(rig.s.State.Dir, 0o700) })
+	inv := devices(4)
+	inv.Devices[3].Platform = "eos-lab"
+	rig.src.inv = inv
+	if res := rig.sync(t); res.Outcome != OutcomeFailed {
+		t.Fatalf("%+v", res)
+	}
+	if testutil.ToFloat64(rig.s.Metrics.GenericDevices) != 0 {
+		t.Fatal("the gauge counts a bundle not published")
+	}
+}
+
+// A call a shutdown cut short that is still out at the end of the next
+// sync's bound is abandoned then, and marked hung until it returns.
+func TestACallCutShortAndStillOutIsAbandonedAtTheNextBound(t *testing.T) {
+	rig := newSyncRig(t, syncPolicy, devices(3))
+	stuck := &stuckSource{name: "a", release: make(chan struct{}), inv: devices(3)}
+	rig.s.Sources, rig.s.Timeout = []Source{stuck}, 30*time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	rig.s.Sync(ctx, "schedule")
+	if res := rig.sync(t); res.Outcome != OutcomeFailed || !strings.Contains(res.Reason,
+		"source a: its fetch cut short at an earlier sync did not return within sync_timeout (30ms); it is abandoned") {
+		t.Fatalf("%+v", res)
+	}
+	if testutil.ToFloat64(rig.s.Metrics.SourceHung.WithLabelValues("a")) != 1 {
+		t.Fatal("source_hung")
+	}
+	close(stuck.release)
+	deadline := time.Now().Add(2 * time.Second)
+	for testutil.ToFloat64(rig.s.Metrics.SourceHung.WithLabelValues("a")) != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("source_hung stayed 1 once the call returned")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if res := rig.sync(t); res.Outcome != OutcomePublished {
+		t.Fatalf("%+v", res)
+	}
+}
