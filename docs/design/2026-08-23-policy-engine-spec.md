@@ -1828,7 +1828,10 @@ responder knows which sessions to close on the device (§5.6, "Where these contr
 reach"); `saved` whether `broker.revocations_file` was written; and `error` the first step that
 did not finish, while the mark stands. A count of zero is absent. A `mint deny
 credential_revoked` names whose credential it was as `trust_domain_unresolved` does: `principal`,
-and `auth.fingerprint`.
+and `auth.fingerprint`. A mint that the check after its writes refuses has already recorded a
+permit for each device it minted; each is followed by a `deny credential_revoked` naming that
+device, with `index_error` when its tokens could not be deleted, and the tokens that permit names
+were never returned, so they are not counted as minted (`port49 capability`).
 
 #### Reason codes
 
