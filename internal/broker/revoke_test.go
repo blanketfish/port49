@@ -173,8 +173,9 @@ func TestRevokingACertificateReachesThatCertificateAlone(t *testing.T) {
 	if err != nil || rep2.Mark.Key != rep.Mark.Key || !rep2.Mark.At.Equal(rep.Mark.At) {
 		t.Fatalf("the same certificate in another spelling: %+v %v", rep2.Mark, err)
 	}
-	if !strings.Contains(rep.Text(), "--cert-serial "+req.Serial) {
-		t.Fatalf("the lift command names the serial as compared:\n%s", rep.Text())
+	if !strings.Contains(rep.Text(), "--cert-serial "+req.Serial) ||
+		!strings.Contains(rep.Text(), "other certificates lost theirs on those devices too") {
+		t.Fatalf("the lift command names the serial as compared, and the text the key-wide delete:\n%s", rep.Text())
 	}
 }
 
@@ -204,7 +205,10 @@ func TestRevokingDeletesTheReceipts(t *testing.T) {
 			if by == store.RevocationCert {
 				req = RevokeRequest{Issuer: f.alice.Leaf.Issuer.String(), Serial: f.alice.Leaf.SerialNumber.Text(16)}
 			}
-			if rep, err := f.b.Revoke(ctx, req); err != nil || rep.Err != nil || len(rep.Contexts) != 1 {
+			// The index still names leaf1, whose token was redeemed: it
+			// empties nothing and is not counted (M7).
+			if rep, err := f.b.Revoke(ctx, req); err != nil || rep.Err != nil || len(rep.Contexts) != 1 ||
+				rep.TokenKeys != 0 {
 				t.Fatalf("%+v %v", rep, err)
 			}
 			if _, err := f.st.GetReceipt(ctx, rk); !errors.Is(err, store.ErrNotFound) {
@@ -314,7 +318,8 @@ func TestAPartialRevocationSaysWhatItMissed(t *testing.T) {
 	if got := testutil.ToFloat64(f.b.Metrics.Revocations.WithLabelValues("principal", "partial")); got != 1 {
 		t.Fatalf("partial: %v", got)
 	}
-	if !strings.Contains(rep.Text(), "incomplete:") || !strings.Contains(rep.Text(), "run the same command again") {
+	if !strings.Contains(rep.Text(), "incomplete:") || !strings.Contains(rep.Text(), "run the same command again") ||
+		!strings.Contains(rep.Text(), "unspent tokens may still log in") {
 		t.Fatal(rep.Text())
 	}
 }
@@ -351,7 +356,7 @@ func TestLiftingARevocation(t *testing.T) {
 	}
 	f.advance(time.Minute)
 	rep, err := f.b.Lift(ctx, RevokeRequest{Principal: "user:ALICE@example.com", Origin: "admin_socket uid 0"})
-	if err != nil || !strings.Contains(rep.LiftedText(), "lifted") || !rep.Saved || saved != 2 {
+	if err != nil || !strings.Contains(rep.LiftedText(), "unless another revocation stands") || !rep.Saved || saved != 2 {
 		t.Fatalf("%+v %v (saved %d)", rep, err, saved)
 	}
 	if on, told := conns.marked[[2]string{store.RevocationPrincipal, alice}]; !told || on {
@@ -411,6 +416,9 @@ func TestABadRevocationIsRefused(t *testing.T) {
 		{Principal: "user:alice\n@example.com"},
 		{Issuer: "CN=x", Serial: "not-hex"},
 		{Issuer: "CN=x\x00", Serial: "1"},
+		{Issuer: "CN=x\u0085", Serial: "1"}, // C1 (M2)
+		{Issuer: "CN=\u202ex", Serial: "1"}, // a bidi override
+		{Issuer: "CN=x\u200b", Serial: "1"}, // a format character
 		{Issuer: "CN=x", Serial: "0x"},
 		{Issuer: "CN=x", Serial: "--1"},
 		{Principal: "alice@example.com"}, // no prefix (pre-flight I2)
@@ -697,5 +705,78 @@ func TestRevocationsTextNamesEachMark(t *testing.T) {
 	}
 	if RevocationsText(nil) != "no revocation is in force" {
 		t.Fatal(RevocationsText(nil))
+	}
+}
+
+// A serial typed in decimal digits alone is read as hex, and the text says
+// so: openssl prints a small serial in decimal (M1).
+func TestADecimalLookingSerialIsFlagged(t *testing.T) {
+	f := newFixture(t, 8)
+	rep, err := f.b.Revoke(context.Background(), RevokeRequest{Issuer: "CN=x", Serial: "4096"})
+	if err != nil || !strings.Contains(rep.Text(), "the serial 4096 was read as hexadecimal") ||
+		!strings.Contains(rep.Text(), "--cert FILE") {
+		t.Fatalf("%v\n%s", err, rep.Text())
+	}
+	rep, err = f.b.Revoke(context.Background(), RevokeRequest{Issuer: "CN=x", Serial: "0x4097"})
+	if err != nil || strings.Contains(rep.Text(), "read as hexadecimal") {
+		t.Fatalf("a serial written as hex is not flagged: %v\n%s", err, rep.Text())
+	}
+}
+
+// liftRacedStore holds Revoke after its mark is written, until gate
+// closes, so a Lift of the same key can try to land in between.
+type liftRacedStore struct {
+	store.Store
+	once    sync.Once
+	entered chan struct{}
+	gate    chan struct{}
+}
+
+func (s *liftRacedStore) PutRevocation(ctx context.Context, r store.Revocation) error {
+	err := s.Store.PutRevocation(ctx, r)
+	s.once.Do(func() {
+		close(s.entered)
+		<-s.gate
+	})
+	return err
+}
+
+// A Lift that arrives while a Revoke of the same key runs waits for it, so
+// the listener's copy of the marks ends as the store's does: lifted in
+// both. Unserialised, the lift would clear the listener and the revocation
+// set it again, refusing handshakes `--list` says nothing refuses (M5).
+func TestARevokeAndALiftOfOneKeyDoNotInterleave(t *testing.T) {
+	f := newFixture(t, 8)
+	ctx := context.Background()
+	conns := &fakeConns{}
+	f.b.Conns = conns
+	raced := &liftRacedStore{Store: f.st, entered: make(chan struct{}), gate: make(chan struct{})}
+	f.b.Store = raced
+	revoked := make(chan error, 1)
+	go func() {
+		_, err := f.b.Revoke(ctx, RevokeRequest{Principal: alice})
+		revoked <- err
+	}()
+	<-raced.entered
+	lifted := make(chan error, 1)
+	go func() {
+		_, err := f.b.Lift(ctx, RevokeRequest{Principal: alice})
+		lifted <- err
+	}()
+	select {
+	case err := <-lifted:
+		t.Fatalf("the lift ran inside the revocation: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(raced.gate)
+	if err := <-revoked; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-lifted; err != nil {
+		t.Fatal(err)
+	}
+	_, err := f.st.GetRevocation(ctx, store.RevocationPrincipal, alice)
+	if on := conns.marked[[2]string{store.RevocationPrincipal, alice}]; on || !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("the listener holds the mark %v, the store %v: they must agree", on, err)
 	}
 }

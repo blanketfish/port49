@@ -77,6 +77,9 @@ type Broker struct {
 	// every change. Nil keeps them in the store alone.
 	Persist func(context.Context) error
 
+	// revokeMu serialises Revoke and Lift (M5).
+	revokeMu sync.Mutex
+
 	mu        sync.Mutex
 	blobsSeen map[string]bool
 	// quarantineRecorded is, by ctx_id, the bundle under which a refresh last

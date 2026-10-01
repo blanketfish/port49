@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/rhwendt/port49/internal/decision"
@@ -44,6 +45,9 @@ type RevokeReport struct {
 	SaveErr     error
 	Err         error
 	Unnamed     bool
+	// decimal is set when the serial was typed in decimal digits alone,
+	// which is read as hex: openssl prints a small serial in decimal (M1).
+	decimal bool
 }
 
 // principalPrefixes are the forms Identity and the policy give a principal
@@ -55,7 +59,8 @@ var principalPrefixes = []string{"user:"}
 // M16, M17): a principal as Identity spells it, user: and the lower-cased
 // email (the mapping is case-insensitive by construction), refusing one
 // without that prefix or with nothing after it; an issuer of valid UTF-8
-// with no control character; a serial in lower-case hex as big.Int.Text(16)
+// with no control or format character (C0, C1, a bidi override), which the
+// log would carry raw; a serial in lower-case hex as big.Int.Text(16)
 // prints it, which is what Identity records: colons, a 0x and leading zeros
 // are dropped, and a leading - (a negative serial, which Go 1.22 still
 // accepts) is kept. It returns the mark's kind and key.
@@ -80,8 +85,8 @@ func (req RevokeRequest) normal() (RevokeRequest, string, string, error) {
 		return req, "", "", fmt.Errorf("%w: a certificate is named by its issuer and its serial, both", ErrBadRevocation)
 	}
 	if len(req.Issuer) > 2048 || !utf8.ValidString(req.Issuer) ||
-		strings.IndexFunc(req.Issuer, func(r rune) bool { return r < 0x20 || r == 0x7f }) >= 0 {
-		return req, "", "", fmt.Errorf("%w: the issuer has a control character or is not UTF-8", ErrBadRevocation)
+		strings.IndexFunc(req.Issuer, func(r rune) bool { return unicode.IsControl(r) || unicode.Is(unicode.Cf, r) }) >= 0 {
+		return req, "", "", fmt.Errorf("%w: the issuer has a control or format character or is not UTF-8", ErrBadRevocation)
 	}
 	s := strings.ReplaceAll(strings.ToLower(req.Serial), ":", "")
 	neg := strings.HasPrefix(s, "-")
@@ -105,7 +110,8 @@ func (req RevokeRequest) normal() (RevokeRequest, string, string, error) {
 // reads it again after its last token write (tokens). A mark that cannot be
 // written revokes nothing and is the error, naming the fallback. Then, in
 // order (pre-flight I1): the listener is told of the mark and the held
-// connections it names are closed; its unspent tokens are deleted, key by
+// connections it names are closed, both in memory; the marks are written to
+// broker.revocations_file (Persist); its unspent tokens are deleted, key by
 // key, through the token index, and each key is superseded so no idempotent
 // retry replays a deleted token; its live contexts are marked and its
 // principals' receipts deleted (session.Manager); and the context index is
@@ -115,11 +121,16 @@ func (req RevokeRequest) normal() (RevokeRequest, string, string, error) {
 // A failure after the mark is the report's Err, the mark standing, and the
 // steps after it still run.
 //
+// Revoke and Lift hold revokeMu, so a revocation and a lift of one key
+// cannot interleave and leave the listener's copy disagreeing with the
+// store's (M5).
+//
 // A revocation by certificate that finds no live context deletes no
 // receipt (session.Manager reads the principals off the contexts). That
 // replays nothing: with no live context a retransmission is answered
 // token_spent, not from its receipt (spec §5.6).
 func (b *Broker) Revoke(ctx context.Context, req RevokeRequest) (RevokeReport, error) {
+	decimal := req.Serial != "" && strings.Trim(req.Serial, "0123456789") == ""
 	req, kind, key, err := req.normal()
 	if err != nil {
 		return RevokeReport{}, err
@@ -129,6 +140,8 @@ func (b *Broker) Revoke(ctx context.Context, req RevokeRequest) (RevokeReport, e
 		// goroutine shares the process with TACACS+ (M12).
 		return RevokeReport{}, errors.New("broker: revocation is not wired (no session manager); nothing was revoked")
 	}
+	b.revokeMu.Lock()
+	defer b.revokeMu.Unlock()
 	now := b.Now()
 	mark := store.Revocation{Kind: kind, Key: key, At: now, Origin: req.Origin}
 	if err := b.Store.PutRevocation(ctx, mark); err != nil {
@@ -136,7 +149,7 @@ func (b *Broker) Revoke(ctx context.Context, req RevokeRequest) (RevokeReport, e
 			"cut access another way: remove the principal's grants from broker.policy_file (live within two watch "+
 			"intervals), or stop port49d", err)
 	}
-	rep := RevokeReport{Request: req, Mark: mark}
+	rep := RevokeReport{Request: req, Mark: mark, decimal: decimal}
 	if got, err := b.Store.GetRevocation(ctx, kind, key); err == nil {
 		rep.Mark = got // an earlier mark stands, with its own time
 	}
@@ -149,7 +162,6 @@ func (b *Broker) Revoke(ctx context.Context, req RevokeRequest) (RevokeReport, e
 			rep.Err = err
 		}
 	}
-	rep.Saved, rep.SaveErr = b.persist(ctx)
 	if b.Conns != nil {
 		b.Conns.Revoked(kind, key, true)
 		rep.Connections = b.Conns.CloseHeld(func(principal, certKey string) bool {
@@ -159,6 +171,7 @@ func (b *Broker) Revoke(ctx context.Context, req RevokeRequest) (RevokeReport, e
 			return certKey == key
 		})
 	}
+	rep.Saved, rep.SaveErr = b.persist(ctx)
 	var tokenKeys []store.TokenKey
 	if kind == store.RevocationPrincipal {
 		tokenKeys, err = b.Store.TokensByPrincipal(ctx, key)
@@ -167,12 +180,19 @@ func (b *Broker) Revoke(ctx context.Context, req RevokeRequest) (RevokeReport, e
 	}
 	note(err)
 	for _, k := range tokenKeys {
+		// Read first only to count, as the refresh does: an index entry
+		// outliving its tokens empties nothing. A read that fails counts.
+		toks, cerr := b.Store.Candidates(ctx, k)
 		if err := b.Store.DeleteTokens(ctx, k); err != nil {
 			note(err)
 			continue
 		}
-		b.supersede(k, now)
-		rep.TokenKeys++
+		// The delete's own time, not the revocation's start: a mint that
+		// stamped its record in between is superseded too (M3).
+		b.supersede(k, b.Now())
+		if cerr != nil || len(toks) > 0 {
+			rep.TokenKeys++
+		}
 	}
 	seen := map[store.ContextRef]bool{}
 	for pass := 0; pass < 2; pass++ {
@@ -215,6 +235,8 @@ func (b *Broker) Lift(ctx context.Context, req RevokeRequest) (RevokeReport, err
 	if err != nil {
 		return RevokeReport{}, err
 	}
+	b.revokeMu.Lock()
+	defer b.revokeMu.Unlock()
 	cur, err := b.Store.GetRevocation(ctx, kind, key)
 	switch {
 	case errors.Is(err, store.ErrNotFound):
@@ -310,6 +332,14 @@ func (r RevokeReport) Text() string {
 	fmt.Fprintf(&b, "revoked %s at %s: %d live context(s) marked, the unspent tokens under %d (device, username) "+
 		"key(s) deleted, %d held broker connection(s) closed; every mint %s is refused until `port49 revoke --lift %s`",
 		r.what(), r.Mark.At.UTC().Format(time.RFC3339), len(r.Contexts), r.TokenKeys, r.Connections, mints, r.flags())
+	if r.Mark.Kind == store.RevocationCert && r.decimal {
+		fmt.Fprintf(&b, "\nthe serial %s was read as hexadecimal; if you copied a decimal serial (openssl prints a "+
+			"small one as 4096 (0x1000)), lift this and use --cert FILE", r.Request.Serial)
+	}
+	if r.Mark.Kind == store.RevocationCert && r.TokenKeys > 0 {
+		b.WriteString("\nunspent tokens are deleted by (device, username): the same principal's other certificates " +
+			"lost theirs on those devices too; they can mint again")
+	}
 	if r.Mark.Kind == store.RevocationCert && nothing {
 		b.WriteString("\nnothing was found under this certificate; if it is in use, its issuer is likely spelled " +
 			"differently from the broker's (RFC 2253, as Go prints it: CN=Corp Issuing CA,O=Example): use --cert FILE")
@@ -327,8 +357,9 @@ func (r RevokeReport) Text() string {
 			"port49d forgets it", r.SaveErr)
 	}
 	if r.Err != nil {
-		fmt.Fprintf(&b, "\nincomplete: %v; the mark is in force — run the same command again, which repeats every "+
-			"step", r.Err)
+		fmt.Fprintf(&b, "\nincomplete: %v; the mark is in force and refuses every new mint, but until a run "+
+			"finishes, unspent tokens may still log in on a device (up to their TTL) and unmarked contexts keep "+
+			"authorizing — run the same command again, which repeats every step", r.Err)
 	}
 	return b.String()
 }
@@ -337,8 +368,8 @@ func (r RevokeReport) Text() string {
 // reverse of an unsaved revocation: a restart puts the revocation back (M9).
 func (r RevokeReport) LiftedText() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "lifted the revocation of %s (in force since %s); mints are made for it again. Contexts it "+
-		"marked stay revoked until a login with a token minted from now joins them", r.what(),
+	fmt.Fprintf(&b, "lifted the revocation of %s (in force since %s); mints are made for it again unless another "+
+		"revocation stands (port49 revoke --list). Contexts it marked stay revoked until a login with a token minted from now joins them", r.what(),
 		r.Mark.At.UTC().Format(time.RFC3339))
 	if r.SaveErr != nil {
 		fmt.Fprintf(&b, "\nNOT saved to broker.revocations_file (%v): the lift is in force now, and a restart of "+
