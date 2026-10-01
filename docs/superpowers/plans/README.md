@@ -44,7 +44,7 @@ top. **Executed 2026-09-30** on `feature/inventory-service`, reviewed per task a
 with a fix wave; Task 20's midnight nights were dropped by the owner's ruling. It closed L29 and
 L30, and spec §14's quarantine through a sync passed on four images; it opened L31, slow Cisco
 break-glass with single-connection on (Plan 6b — As built, below); **merged 2026-09-30 (PR #17)**. Next,
-`fix/breakglass-reset`, which closes L31: **written 2026-09-30** (`2026-09-30-06b1-breakglass-reset.md`, seven tasks: one docs, three code, one lab harness, one lab run, one lab-and-docs; no owner decisions); **executed 2026-09-30** on `fix/breakglass-reset`, closing L31 (Fix `fix/breakglass-reset` — As built, below); **merged 2026-09-30 (PR #18)**. **6c written 2026-10-01** (`2026-10-01-06c-inventory-connectors.md`, seventeen tasks after its pre-flight review the same day: one docs, thirteen code, two lab, one lab-and-docs; no owner decisions, fourteen rulings where spec §10 was silent, recorded as decision 31; it opens L32 and L33). 7–13 not yet.
+`fix/breakglass-reset`, which closes L31: **written 2026-09-30** (`2026-09-30-06b1-breakglass-reset.md`, seven tasks: one docs, three code, one lab harness, one lab run, one lab-and-docs; no owner decisions); **executed 2026-09-30** on `fix/breakglass-reset`, closing L31 (Fix `fix/breakglass-reset` — As built, below); **merged 2026-09-30 (PR #18)**. **6c written 2026-10-01** (`2026-10-01-06c-inventory-connectors.md`, seventeen tasks after its pre-flight review the same day: one docs, thirteen code, two lab, one lab-and-docs; no owner decisions, fourteen rulings where spec §10 was silent, recorded as decision 31; it opens L32 and L33); **executed 2026-10-01** on `feature/inventory-connectors`, reviewed per task, closing L32 and L33 (Plan 6c — As built, below). 7–13 not yet.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -989,7 +989,8 @@ commands and the system users by platform name, so 5a refuses `based_on: juniper
   re-checked at every Accept against the admission and policy in force, which covers a quarantine
   that ends without a reload too; the lab bar is the rekeyed control (a key miss) plus 1.5 s, with
   port49d stopped measured beside it; and vEOS ran as a no-regression check.
-- **Plan 6c — `2026-10-01-06c-inventory-connectors.md`. Written 2026-10-01**, after 6b and
+- **Plan 6c — `2026-10-01-06c-inventory-connectors.md`. Written 2026-10-01; executed 2026-10-01
+  (as built, below).** Written after 6b and
   `fix/breakglass-reset` merged, against L27's and L30's fixtures; the rulings it made where spec §10
   is silent are at its top and become spec §13 decision 31, and it opens L32 (the connectors as
   built, through two kinds of TLS proxy) and L33 (webhooks to port49-inventory over TLS, and a NetBox
@@ -1295,6 +1296,122 @@ this branch and is not a regression. A FIN that comes before the device writes i
 IOS-XE and NX-OS with single-connection on, and L28 found the C8000V waits out a FIN that follows
 its request. The default cap of 32 makes it unlikely for one device. Either reset before the close
 at the cap, or add a lab register row and measure it first.
+
+### Plan 6c — As built
+
+Executed 2026-10-01 on `feature/inventory-connectors`, seventeen tasks, each reviewed; the ledger is
+`.superpowers/sdd/2026-10-01-06c-inventory-connectors/progress.md`, with each task's brief, report
+and review beside it. A pre-flight review revised the plan first (three important, seventeen minor;
+the plan's "Revised after the pre-flight review"). What differs from the plan's text, task by task:
+
+- **Task 1 (docs; e8ec237, 81c5b65).** Interface addresses are added to the primary addresses, never
+  used in place of them, and `addresses.primary` defaults to true (review I1; ruling 10, spec §10
+  and decision 31 amended). Design §17 names the webhook as the one inbound call without a workload
+  identity, and says the secret is never sent with a delivery.
+- **Task 2 (`internal/sot` client; d0bedc0, d9fe335).** The client refuses any request whose scheme
+  or host is not the base's, so the token reaches `url` alone; a transport error keeps its cause and
+  never prints the query; idle connections expire at 90 s.
+- **Task 3 (profiles; 167127f, 0c2e60e).** Under a `profile:` override a release reads as measured
+  only when the override is the profile detection would pick, and the said line names the override.
+- **Task 4 (`sottest.Server`; 68664e9, 4d37cb9, b9c18eb, b1407e5).** The replay answers only the
+  fields a query selects, each stack's ids in its own form (Nautobot UUIDs, NetBox numbers), L30's
+  refusal texts word for word, and the recorded `name` filters over GraphQL and REST `?name=`; every
+  shape no run recorded is marked so.
+- **Task 5 (GraphQL; 1337890, ef45646).** A status error names the request under the `url`'s path
+  prefix; `page_size` below 1 is refused; a page that begins with the device the page before began
+  with fails as "ignored the offset", and a repeat fails at the page that holds it.
+- **Task 6 (REST; fcd48cd, bd89f94).** `next` is always rebuilt on the base, its path and query kept,
+  and said only when its origin differed; a `next` on another path is refused; a `next` dropping
+  `depth=1` where the profile needs it is refused; the loop check compares the path and the sorted
+  query.
+- **Task 7 (mapping; db11f8e, e92fc6f).** `addrOf` drops no address for its prefix length (a
+  `10.255.0.0/16` loopback is a real device's address); it refuses only a zone, and unmaps
+  IPv4-mapped IPv6.
+- **Task 8 (`sot.Source`; 94c1a17, 2b9582a).** Every removal is confirmed (ruling on Task 5's I-1):
+  at most 256 names gone from a source's last read are each asked for by REST `?name=`, and one
+  still there and in scope makes the read inconsistent; past 256, the list is read once more, whole,
+  and taken only when both reads list the same names, else the sync fails ("the list changed between
+  two reads"), and a failure keeps the last read. A `?name=` answer naming another device fails the
+  read (an ignored filter cannot confirm anything). The detect note names a `profile:` override.
+- **Task 9 (config; 42ed46f, 6d334b8).** `platform_aliases` refuses two keys equal in lower case, and
+  `filter: {status: []}` is refused; `sot.ProfilesOf` lists the profiles a product takes.
+- **Task 10 (`Fetch` within `sync_timeout`; 6642ce7, 631258a, ea40177).** A fetch is abandoned 5 s
+  past `sync_timeout`; `port49_inventory_source_hung` clears when the abandoned call returns, not at
+  the next sync; a caller's cancel (shutdown) is not a hang and waits for nothing; a complete answer
+  inside the 5 s grace is used, as spec §10 allows. `port49_inventory_generic_platform_devices`
+  counts the bundle in force.
+- **Task 10a (bounds; 29eab03, c3dad62).** Both removal bounds, the service's and port49d's, count a
+  device left with no address only if the old inventory admitted it, and a test holds the two to the
+  same count.
+- **Task 11 (the webhook handler; ea9c93a, 9b23238, 79d59cf).** A known and an unknown source name
+  are answered alike up to the HMAC compare, the unknown one checked against a random decoy key, so
+  neither the answer nor the bytes read tell them apart; a declared length over 1 MiB gets
+  413 before any read; a replay entry lives until its timestamp plus 5 minutes, in wall time; a
+  refusal line is re-armed by an accepted delivery at most once per 5-minute window, with an owed
+  re-arm so a refusal after a deferred re-arm is still said once.
+- **Task 12 (the listener; 0e0364d, 89eed09).** The webhook listener is capped at 64 connections, a
+  bind error names `webhook_listen`, and a request open at shutdown is answered
+  `503 {"error":"shutting_down"}` and waited for.
+- **Task 13 (`inventory export`; a238518, afe4b5e).** It verifies before it writes; `?sequence=`
+  takes canonical decimal only; `State.At` refuses a history file holding another sequence; a
+  failed write to standard output exits 1; a symlinked `--out` is said as one; the header names the
+  service's scheme and host only. `--from 0` is a usage error.
+- **Task 14 (lab, L32; a50c993, 0f7cd70, e8bbe15, eb862a4, f2c43b6).** A third proxy,
+  `proxy_plain` (a bare `proxy_pass`), was added in review, since neither planned proxy made any
+  release name another origin; through it every release named its internal `http://<svc>:8080`, and
+  the connector rebuilt `next` on `url` and said so. L32 found GraphQL's `id` selectable, a string,
+  on all five releases, so the GraphQL list is keyed by `id` (e8bbe15), as REST's is, and the run was
+  repeated; the name-based offset-ignored check is kept.
+- **Task 15 (lab, L33; c8a63d8, 76de80e, 1c0b8d1, 6f96ab2, 0b4886f).** Beside the 401, a delivery
+  answered 503 by a stand-in listener was measured, and each release's retry setting read from its
+  source. `run.sh`'s e2e mode selected no platform and both device runs wrote one capture name; both
+  were fixed and the device runs repeated.
+- **Task 16 (docs).** L32 and L33 closed; spec §10's three "§15 L32's/L33's" sentences replaced by
+  the measured answers; this section.
+
+**Rulings, as made** (spec §13, decision 31; the plan's "Rulings where the spec is silent"): all
+fourteen stand, with these amendments, each the option that denies more. Ruling 6: a list must
+equal REST's `count` before and after it (pre-flight I1), and every removal is confirmed or read
+twice (Task 8). Ruling 7: `next` is always built on the base (Task 6). Ruling 3: every 401 has one
+body and a known source name is not told from an unknown one (pre-flight M9, Task 11). Ruling 10:
+interface addresses are additive (Task 1). Ruling 12: the generic-platform line is said at each
+publication that changes the set (pre-flight M6). Ruling 13: a complete answer inside the grace is
+used (Task 10).
+
+**Rows:** **L32 closed** 2026-10-01 (`L32-netbox.md`, `L32-nautobot.md`): every release builds `next`
+from `X-Forwarded-Host` when sent, from `Host` otherwise, and takes `https` only from
+`X-Forwarded-Proto`; the connector as built read all 120 devices through three proxies over GraphQL
+and REST on all five releases, rebuilding `next` on `url` where a bare proxy left it naming the
+upstream. **L33 closed** 2026-10-01 (`L33-netbox.md`, `L33-nautobot.md`,
+`L33-e2e-netbox-arista_eos.md`, `L33-e2e-nautobot-arista_eos.md`): every release delivered over TLS
+under a private CA; a change published in 2.4–2.7 s from NetBox and 3.6–4.1 s from Nautobot, and
+reached port49d's reload on vEOS in 2.5–5.0 s and 4.5–7.0 s; no release sends a delivery refused 401
+or answered 503 again by default.
+
+**Operator notes** (for plan 13's docs, beside the plan's "Operator-facing notes"):
+
+- `HTTPS_PROXY` is ignored by design: the service dials each source directly, so a source reachable
+  only through an egress proxy is unsupported until plan 12.
+- A webhook lost to a refusal or a service restart is not sent again by any measured release at its
+  defaults (NetBox `RQ_RETRY_MAX` 0; Nautobot none). The source's `interval` sync is the backstop:
+  size it to how long a change may wait.
+- `port49 inventory export` without `--from` accepts an older genuine bundle; the header names its
+  sequence.
+
+**Carried, for later plans:**
+
+- **Plan 12:** `token_secret_ref:` and `webhook_secret_ref:` with the `secret_ref:` resolvers; the
+  service honouring an outbound HTTP proxy for its sources (it dials each source directly).
+- **Later, unassigned:** tags as an attribute, once the spec gives a multi-valued attribute a shape;
+  server-side GraphQL filters, once a lab run records each release's filter arguments; a GraphQL list
+  above a server cap and a list changing between pages, which the count check turns into a failed
+  sync rather than a silent loss but no run measured; further connectors (Infrahub, Ansible
+  inventory), which take the same `inventory.Source`.
+
+**Follow-ups, unassigned (not blocking):** plain HTTP on `webhook_listen` is refused (400) but
+counted on no metric (Task 12 review M3); a `SIGTERM` during the 5 s fetch grace of a sync already
+past its deadline waits it out, at most 5 s (Task 10 N1); L32's record could hold whether `next`'s
+host resolves, so the note quotes it rather than the controller's reading (Task 14 M-R1).
 
 ## Plan 7 — Broker in full (§19 step 7)
 
