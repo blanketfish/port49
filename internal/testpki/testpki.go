@@ -61,6 +61,7 @@ func NewCA(cn string, notBefore, notAfter time.Time) (*CA, error) {
 type Leaf struct {
 	CommonName          string
 	Emails              []string
+	DNSNames            []string
 	IPs                 []net.IP
 	URIs                []*url.URL
 	Client              bool
@@ -83,7 +84,7 @@ func (ca *CA) Issue(l Leaf) (tls.Certificate, error) {
 		eku = x509.ExtKeyUsageClientAuth
 	}
 	tmpl := &x509.Certificate{SerialNumber: sn, Subject: pkix.Name{CommonName: l.CommonName},
-		EmailAddresses: l.Emails, IPAddresses: l.IPs, URIs: l.URIs, NotBefore: l.NotBefore, NotAfter: l.NotAfter,
+		EmailAddresses: l.Emails, DNSNames: l.DNSNames, IPAddresses: l.IPs, URIs: l.URIs, NotBefore: l.NotBefore, NotAfter: l.NotAfter,
 		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{eku}}
 	if l.NoExtKeyUsage {
 		tmpl.ExtKeyUsage = nil
