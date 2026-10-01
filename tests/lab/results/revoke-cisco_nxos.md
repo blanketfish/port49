@@ -7,7 +7,7 @@
 - **Run:** at commit 5ccd2ef, from a detached worktree pinned to it (`make build` there), on beehive: `PORT49_LAB_PLATFORMS=nxos go test -tags lab ./tests/lab/ -run TestRevokeEndToEnd -count=1 -timeout 45m -v` (under `sg docker -c`)
 - **Credentials:** no token, password or key appears in this note; tokens are named only by the decision log's `credential_sha256`, and the capture's credential fields are redacted
 - **Topology:** `tests/lab/topologies/nxos.clab.yml`
-- **Capture:** `tests/lab/evidence/revoke-cisco_nxos.pcap` — 380 packets to or from the device, countable with `tcpdump -r tests/lab/evidence/revoke-cisco_nxos.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
+- **Capture:** `tests/lab/evidence/revoke-cisco_nxos.pcap` — 400 packets to or from the device, countable with `tcpdump -r tests/lab/evidence/revoke-cisco_nxos.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`). The run's own count was 380: the last 20 packets are the TACACS+ accounting connection the device opened when the test closed the SSH session, which happened after the test had counted the capture and written this note (fix round 1 corrects the count; the evidence is unchanged).
 - **Transport:** SSH
 
 ## Claim

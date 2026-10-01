@@ -44,8 +44,21 @@ const revokeRefusedLine = " as it bound"
 // not tell this refusal from output there.
 const revokedMsg = "port49: this session was revoked"
 
+// revokeVersion is a line every platform's `show version` prints, as
+// measured on these images (tests/lab/results/): EOS L16-arista_eos.md,
+// NX-OS L16-cisco_nxos.md, IOS-XE L18-cisco_iosxe.md, Junos
+// L26c-juniper_vjunos-router.md. Output without it is not the command's.
+var revokeVersion = map[string]string{
+	"arista_eos":            "Arista vEOS",
+	"cisco_nxos":            "Cisco Nexus Operating System (NX-OS) Software",
+	"cisco_iosxe":           "Cisco IOS XE Software",
+	"juniper_vjunos-router": "Junos:",
+}
+
 // revokeOutcome is l29Outcome that also counts the device printing
-// revokedMsg, the FAIL's own text, as a refusal.
+// revokedMsg, the FAIL's own text, as a refusal, and quotes the line of
+// output that shows `show version` ran (revokeVersion), or says it is
+// missing.
 func revokeOutcome(platform string, sh *labShell, cmd string, fail func(string, ...any), what string) string {
 	out, took, ended, err := sh.runOrEnd(cmd, 60*time.Second)
 	if err == nil && !ended && !l29Refused(platform, out) && strings.Contains(out, revokedMsg) {
@@ -65,7 +78,14 @@ func revokeOutcome(platform string, sh *labShell, cmd string, fail func(string, 
 	case l29Refused(platform, out):
 		return fmt.Sprintf("refused in %s: %s", took.Round(10*time.Millisecond), l29Cell(l29RefusalLine(platform, out)))
 	}
-	return fmt.Sprintf("printed its output in %s: %s", took.Round(10*time.Millisecond), l29Cell(firstLine(out)))
+	for _, line := range strings.Split(out, "\n") {
+		if m := revokeVersion[platform]; m != "" && strings.Contains(line, m) {
+			return fmt.Sprintf("printed its output in %s: %s", took.Round(10*time.Millisecond),
+				l29Cell(strings.TrimSpace(line)))
+		}
+	}
+	return fmt.Sprintf("printed something in %s, without %q: %s", took.Round(10*time.Millisecond),
+		revokeVersion[platform], l29Cell(firstLine(out)))
 }
 
 // revokeCLI runs bin/port49 revoke with args against socket and returns
@@ -174,6 +194,55 @@ func (l *lab) errLinesSince(off int64, s string) []string {
 		}
 	}
 	return out
+}
+
+// revokeReport checks a revocation's report: it closed the one held broker
+// connection the agent had, and on Junos it names this session (node, as
+// sliceUser) as not reached, as no other platform's report does.
+func revokeReport(text, node string, sessionOnly bool, what string, fail func(string, ...any)) {
+	if !strings.Contains(text, "1 held broker connection(s) closed") {
+		fail("%s revocation did not report closing the agent's held broker connection: %q", what, text)
+	}
+	session := node + " (" + sliceUser + ")"
+	switch {
+	case sessionOnly && !(strings.Contains(text, "not reached") && strings.Contains(text, session)):
+		fail("%s revocation did not name %s as not reached: %q", what, session, text)
+	case !sessionOnly && strings.Contains(text, "not reached"):
+		fail("%s revocation named a session as not reached: %q", what, text)
+	}
+}
+
+// revokedLogin runs `port49 login` while the principal is revoked: it must
+// fail, saying the principal was revoked, and leave no agent. It returns
+// what it said, for a table cell.
+func revokedLogin(t *testing.T, fail func(string, ...any)) string {
+	t.Helper()
+	pki := filepath.Join(root, slicePKIDir)
+	dir, err := os.MkdirTemp("", "p49revoke")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, filepath.Join(root, "bin", "port49"), "login", "--broker", sliceBrokerURL,
+		"--cert", filepath.Join(pki, testpki.LabClientCert), "--key", filepath.Join(pki, testpki.LabClientKey),
+		"--broker-ca", filepath.Join(pki, testpki.LabCA), "--socket", filepath.Join(dir, "a", "agent.sock")).CombinedOutput()
+	if m := agentPID.FindSubmatch(out); m != nil {
+		pid, _ := strconv.Atoi(string(m[1]))
+		_ = syscall.Kill(pid, syscall.SIGTERM)
+	}
+	said := strings.TrimSpace(string(out))
+	if err == nil || !strings.Contains(said, "this principal was revoked at ") {
+		fail("port49 login while the principal is revoked: %v: %q", err, said)
+		return "**" + l29Cell(said) + "**"
+	}
+	for _, line := range strings.Split(said, "\n") {
+		if strings.Contains(line, "this principal was revoked at ") {
+			return "refused: " + l29Cell(strings.TrimSpace(line))
+		}
+	}
+	return "refused"
 }
 
 // revokedMint asks the agent at sock (pid) for a token after a
@@ -313,15 +382,16 @@ func TestRevokeEndToEnd(t *testing.T) {
 		}
 		defer sh.Close()
 		before := revokeOutcome(l.p.name, sh, "show version", fail, "before the revocation")
+		if !strings.HasPrefix(before, "printed its output") {
+			fail("show version did not run before the revocation: %s", before)
+		}
 
 		// 2. Revoke the principal.
 		revokedText, revokedOK := revokeCLI(socket, "--principal", slicePrincipal)
 		if !revokedOK {
 			fail("port49 revoke --principal: %s", revokedText)
 		}
-		if sessionOnly != strings.Contains(revokedText, "not reached") {
-			fail("the revocation's not-reached line: %q", revokedText)
-		}
+		revokeReport(revokedText, l.p.node, sessionOnly, "the principal's", fail)
 		after := revokeOutcome(l.p.name, sh, "show version", fail, "after the revocation")
 		switch {
 		case sessionOnly && !strings.HasPrefix(after, "printed its output"):
@@ -347,6 +417,10 @@ func TestRevokeEndToEnd(t *testing.T) {
 		// 401 credential_revoked as it binds, and the agent ends.
 		offP := l.mark()
 		agentSaid, agentGone, agentAfter := revokedMint(sock, pid, l.p.node, "the principal's", fail)
+		// A new login while the mark stands is refused at the agent's first
+		// request, and says so (spec §5.1.4).
+		offL := l.mark()
+		loginSaid := revokedLogin(t, fail)
 
 		// 3. Lift, and a new login works.
 		liftText, ok := revokeCLI(socket, "--lift", "--principal", slicePrincipal)
@@ -374,6 +448,7 @@ func TestRevokeEndToEnd(t *testing.T) {
 		if !ok {
 			fail("port49 revoke --cert: %s", certText)
 		}
+		revokeReport(certText, l.p.node, sessionOnly, "the certificate's", fail)
 		offC := l.mark()
 		certSaid, agent2Gone, agent2After := revokedMint(sock2, pid2, l.p.node, "the certificate's", fail)
 		certLift, ok := revokeCLI(socket, "--lift", "--cert", filepath.Join(slicePKIDir, testpki.LabClientCert))
@@ -414,12 +489,14 @@ func TestRevokeEndToEnd(t *testing.T) {
 			t.Fatal(err)
 		}
 		mintRevoked := len(sliceRecords(recs, "mint", "credential_revoked"))
-		principalDenies := revokedMints(l.recordsBetween(offP, offC))
+		principalDenies := revokedMints(l.recordsBetween(offP, offL))
+		loginDenies := revokedMints(l.recordsBetween(offL, offC))
 		certDenies := revokedMints(l.recordsSince(offC))
 		for _, step := range []struct {
 			what string
 			got  []map[string]any
-		}{{"the principal's", principalDenies}, {"the certificate's", certDenies}} {
+		}{{"the principal's", principalDenies}, {"the principal's (a new login)", loginDenies},
+			{"the certificate's", certDenies}} {
 			if len(step.got) != 1 {
 				fail("%d mint deny credential_revoked records for the agent refused after %s revocation, not one",
 					len(step.got), step.what)
@@ -440,6 +517,7 @@ func TestRevokeEndToEnd(t *testing.T) {
 			"| `show version` in the same session after it | %s |\n"+
 			"| a login with a token minted before it, unspent | refused, `%s` |\n"+
 			"| the agent's next mint | %s: %s; the agent %s; a second `port49 token`: %s |\n"+
+			"| `port49 login` before the lift | %s |\n"+
 			"| `port49 revoke --lift`, then a new agent, a mint and a login | %s |\n"+
 			"| `port49 revoke --cert` (the agent's certificate), then the agent's mint | %s: %s; the agent %s; a "+
 			"second `port49 token`: %s |\n\n"+
@@ -449,13 +527,28 @@ func TestRevokeEndToEnd(t *testing.T) {
 			"The principal's revocation report, as `port49 revoke` printed it:\n\n```\n%s\n```\n\n"+
 			"The certificate's:\n\n```\n%s\n```\n",
 			before, slicePrincipal, map[bool]string{true: "0", false: "non-zero"}[revokedOK],
-			after, tok2Reason, mintRefusal(agentSaid), l29Cell(agentSaid), gone[agentGone], l29Cell(agentAfter), liftLogin,
+			after, tok2Reason, mintRefusal(agentSaid), l29Cell(agentSaid), gone[agentGone], l29Cell(agentAfter), loginSaid, liftLogin,
 			mintRefusal(certSaid), l29Cell(certSaid), gone[agent2Gone], l29Cell(agent2After),
 			len(sliceRecords(recs, "revoke", "")), certRevokes,
 			len(sliceRecords(recs, "authorize_command", "credential_revoked")), mintRevoked, len(refusedLines),
 			revokedText, certText)
 		if len(failed) > 0 {
 			obs += "\n**Not as the claim says:**\n\n- " + strings.Join(failed, "\n- ") + "\n"
+		}
+		// Closing the session sends its accounting stop on the per-command
+		// platforms; it must be in the capture before the note counts it
+		// (fix round 1, I1: the 5ccd2ef notes' counts are 20 short).
+		offEnd := l.mark()
+		sh.Close()
+		if !sessionOnly {
+			l.waitForRecords(offEnd, 15*time.Second, func(rs []map[string]any) bool {
+				for _, r := range rs {
+					if str(r, "event") == "account" && str(sub(r, "session"), "username") == sliceUser {
+						return true
+					}
+				}
+				return false
+			})
 		}
 		l.result(t, "revoke", revokeClaim, obs)
 		if len(failed) > 0 {
