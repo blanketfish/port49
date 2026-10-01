@@ -634,12 +634,9 @@ func run(parent context.Context, cfgPath string) error {
 	// the store itself.
 	handlerStore := labHandlerStore(st, fault)
 	minter := token.NewMinter(st, log, rand.Reader, tagKey, time.Now, cfg.Token.CandidateCap)
-	// Plan 7's broker exposes Refresh, RevokeByPrincipal and RevokeBySID over
-	// HTTP; plan 3's serves /v1/tokens and /v1/config only, so nothing in this
-	// binary calls them yet. The Manager is built here so the wiring is proven
-	// by the compiler rather than by plan 7 discovering it.
+	// The broker marks a revoked principal's or certificate's live contexts
+	// through the Manager (plan 7a); Refresh behind /v1/refresh is plan 7b's.
 	sessions := session.New(st, time.Now, cfg.ContextIdleTTL, cfg.Session.IndexTTL)
-	_ = sessions
 
 	brokerSrv, brk, err := buildBroker(cfg, inventoryFrom, st, minter, log, m)
 	if err != nil {
@@ -649,6 +646,28 @@ func run(parent context.Context, cfgPath string) error {
 	}
 	if startDoc != nil {
 		persistStart(cfg.InventoryService, coldPick{startDoc, startFrom}, m)
+	}
+	var marks []store.Revocation
+	if brk != nil {
+		brk.Sessions = sessions
+		// Every mark in the file is in force before the broker serves a
+		// request: a port49d that forgot a revocation would mint for a stolen
+		// certificate again (spec §13 decision 32).
+		var created bool
+		marks, created, err = restoreRevocations(ctx, st, cfg.Broker.RevocationsFile, m)
+		if err != nil {
+			stopSpool()
+			<-spoolDone
+			return fmt.Errorf("broker.revocations_file %s: %w", cfg.Broker.RevocationsFile, err)
+		}
+		brk.Persist = persister(st, cfg.Broker.RevocationsFile, m)
+		if created {
+			fmt.Fprintf(stderr, "port49d: broker: created %s (no revocations); if this is not a first install, "+
+				"stop port49d and restore the file\n", cfg.Broker.RevocationsFile)
+		} else {
+			fmt.Fprintf(stderr, "port49d: broker: %d revocation(s) in force from %s\n", len(marks),
+				cfg.Broker.RevocationsFile)
+		}
 	}
 
 	// The seeded pair is a credential. It goes to a file the operator named, at
@@ -738,6 +757,7 @@ func run(parent context.Context, cfgPath string) error {
 	// TACACS+ is up, followed by an exit, reads at 3am as a daemon that is up —
 	// and a supervisor restarting it repeats that every few seconds.
 	var bln net.Listener
+	var bl *broker.Listener
 	if brokerSrv != nil {
 		if bln, err = net.Listen("tcp", brokerSrv.Addr); err != nil {
 			ln.Close()
@@ -746,6 +766,22 @@ func run(parent context.Context, cfgPath string) error {
 			<-spoolDone
 			return fmt.Errorf("broker listener on %s: %w", brokerSrv.Addr, err)
 		}
+		// Capped globally, so connections to the broker cannot take the file
+		// descriptors the TACACS+ listener needs (pre-flight F1), and per
+		// source and per principal before that (spec §13 decision 32). It
+		// accepts nothing until Serve's first Accept, so the marks restored
+		// above, given to it here, are in place before any connection can
+		// bind: a revoked principal or certificate is closed as it binds,
+		// from the first connection on.
+		bl = broker.NewListener(broker.Limit(bln, broker.MaxConns), brokerSrv.TLSConfig,
+			broker.ListenerLimits{MaxPendingPerSource: cfg.Broker.MaxPendingConnsPerSource,
+				MaxPerPrincipal:  cfg.Broker.MaxConnsPerPrincipal,
+				HandshakeTimeout: broker.DefaultListenerLimits.HandshakeTimeout},
+			m, time.Now, func(format string, args ...any) { fmt.Fprintf(stderr, format+"\n", args...) })
+		for _, r := range marks {
+			bl.Revoked(r.Kind, r.Key, true)
+		}
+		brk.Conns = bl
 	}
 	// The admin socket binds before anything says "listening", as the broker
 	// does, and a failure lets go of every listener already bound (pre-flight
@@ -781,9 +817,7 @@ func run(parent context.Context, cfgPath string) error {
 
 	brokerErr := make(chan error, 1)
 	if brokerSrv != nil {
-		// Capped, so connections to the broker cannot take the file
-		// descriptors the TACACS+ listener beside it needs (pre-flight F1).
-		go func() { brokerErr <- brokerSrv.ServeTLS(broker.Limit(bln, broker.MaxConns), "", "") }()
+		go func() { brokerErr <- brokerSrv.Serve(bl) }()
 		fmt.Fprintf(stderr, "port49d: broker listening on %s\n", bln.Addr())
 	}
 

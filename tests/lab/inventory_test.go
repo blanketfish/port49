@@ -324,6 +324,7 @@ func (l *lab) serviceConfig(t *testing.T, li *labInventory, policy string) strin
   tls_key_file: %[1]s/%[3]s
   client_ca_file: %[1]s/%[4]s
   policy_file: %[5]s
+  revocations_file: %[13]s
   policy_watch_interval: 1s
 inventory:
   service:
@@ -335,7 +336,7 @@ inventory:
     poll_interval: 5s
     state_dir: %[12]s
 `, pki, testpki.LabServerCert, testpki.LabServerKey, testpki.LabCA, policy, inventoryAddr, li.pki, testpki.InvCA,
-		testpki.InvDaemonCert, testpki.InvDaemonKey, li.pubFile, state)
+		testpki.InvDaemonCert, testpki.InvDaemonKey, li.pubFile, state, filepath.Join(filepath.Dir(policy), "revocations.json"))
 	path := filepath.Join(root, "tests", "lab", "logs", "port49d-lab-"+l.p.name+"-service.yaml")
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)

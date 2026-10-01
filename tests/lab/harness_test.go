@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"os"
@@ -867,7 +868,28 @@ func privatePolicy(cfg, dir string) (string, error) {
 	if err == nil && !found {
 		err = errors.New("a broker config has no top-level `inventory_file:` line to give a private copy")
 	}
-	return cfg, err
+	if err != nil {
+		return cfg, err
+	}
+	// The revocations file is port49d's own state behind the same fence
+	// (plan 7a): tests/lab/logs is 0775 under the desktop umask and would
+	// refuse the start, and a mark one run left would refuse the next run's
+	// mints. It goes in the private directory, fresh at every derived
+	// config: the first start creates it (pre-flight I6).
+	if i := strings.Index(cfg, "  revocations_file: "); i >= 0 {
+		j := strings.Index(cfg[i:], "\n")
+		if j < 0 {
+			j = len(cfg) - i
+		}
+		dst := filepath.Join(dir, "revocations.json")
+		for _, p := range []string{dst, dst + ".created"} {
+			if err := os.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return "", err
+			}
+		}
+		cfg = cfg[:i] + "  revocations_file: " + dst + cfg[i+j:]
+	}
+	return cfg, nil
 }
 
 // privateCopy copies the file the line starting at anchor names to name in

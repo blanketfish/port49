@@ -17,3 +17,8 @@ func ReadNoLink(path string, max int64, what string) ([]byte, error) { return Re
 
 // ReadSigned refuses off Linux, as Read does: O_NOFOLLOW is not everywhere.
 func ReadSigned(path string, max int64, what string) ([]byte, error) { return Read(path, max, what) }
+
+// CheckDir refuses off Linux, as Read does.
+func CheckDir(_ string, what string) error {
+	return errors.New("port49 keeps " + what + " on Linux only: the check of who could write it is Linux's")
+}

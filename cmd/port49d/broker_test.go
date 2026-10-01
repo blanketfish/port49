@@ -4,13 +4,16 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"net/netip"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -26,6 +29,7 @@ import (
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/engine"
 	"github.com/rhwendt/port49/internal/policy"
+	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/store/memory"
 	"github.com/rhwendt/port49/internal/testpki"
 )
@@ -46,7 +50,8 @@ func brokerConfig(t *testing.T, policyBody string) config.Config {
 		Inventory: admission.Inventory{Devices: []admission.Device{{Name: "leaf1", Platform: "arista_eos", KeyRef: "lab_key"}}},
 		Broker: &config.BrokerConfig{Listen: "127.0.0.1:0", TLSCertFile: filepath.Join(dir, testpki.LabServerCert),
 			TLSKeyFile: filepath.Join(dir, testpki.LabServerKey), ClientCAFile: filepath.Join(dir, testpki.LabCA),
-			PolicyFile: pol, BatchMax: 10},
+			PolicyFile: pol, BatchMax: 10, RevocationsFile: filepath.Join(dir, "revocations.json"),
+			MaxConnsPerPrincipal: 4, MaxPendingConnsPerSource: 16},
 	}
 }
 
@@ -437,9 +442,10 @@ broker:
   tls_key_file: %s
   client_ca_file: %s
   policy_file: %s
+  revocations_file: %s
   policy_watch_interval: 1s
 `, inv, filepath.Join(dir, "acct.jsonl"), b.Listen, b.TLSCertFile, b.TLSKeyFile, b.ClientCAFile,
-		b.PolicyFile)), 0o600); err != nil {
+		b.PolicyFile, b.RevocationsFile)), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return cfgPath
@@ -615,5 +621,188 @@ func TestRunRefusesAnInventoryFileOthersCouldWrite(t *testing.T) {
 	if _, err := runExpectingRefusal(t, cfgPath); err == nil || !strings.Contains(err.Error(), "inventory_file "+inv) ||
 		!strings.Contains(err.Error(), "writable by others") {
 		t.Fatalf("run: %v", err)
+	}
+}
+
+// postAsAlice asks the broker at addr for a token on leaf1 over the lab
+// client certificate in pkiDir, and returns the status and the body; the
+// caller judges them. It never prints a token.
+func postAsAlice(pkiDir, addr string) (int, string, error) {
+	cert, err := tls.LoadX509KeyPair(filepath.Join(pkiDir, testpki.LabClientCert), filepath.Join(pkiDir, testpki.LabClientKey))
+	if err != nil {
+		return 0, "", err
+	}
+	caPEM, err := os.ReadFile(filepath.Join(pkiDir, testpki.LabCA))
+	if err != nil {
+		return 0, "", err
+	}
+	roots := x509.NewCertPool()
+	roots.AppendCertsFromPEM(caPEM)
+	c := &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{
+		Certificates: []tls.Certificate{cert}, RootCAs: roots, MinVersion: tls.VersionTLS13}}}
+	resp, err := c.Post("https://"+addr+"/v1/tokens", "application/json", strings.NewReader(`{"devices":["leaf1"]}`))
+	if err != nil {
+		return 0, "", err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(body), err
+}
+
+// aliceCertKey is the mark key of the lab client certificate, as Identity
+// spells it.
+func aliceCertKey(t *testing.T, pkiDir string) string {
+	t.Helper()
+	cert, err := tls.LoadX509KeyPair(filepath.Join(pkiDir, testpki.LabClientCert), filepath.Join(pkiDir, testpki.LabClientKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return store.CertKey(leaf.Issuer.String(), leaf.SerialNumber.Text(16))
+}
+
+// run restores the marks before the broker serves a request, and refuses
+// to start on a file it cannot load or a directory others can write: the
+// wiring is the point of the file, and a unit test of loadRevocations
+// would pass with the restore moved after Serve (pre-flight I7).
+func TestRunRestoresRevocationsBeforeTheBrokerServes(t *testing.T) {
+	// port49d is started three times on one config: the first start
+	// creates the file and alice mints; each restart finds one mark in the
+	// file, as Revoke's Persist leaves it, and alice's first connection is
+	// closed as it binds, by certificate and then by principal. The
+	// listener's copy refuses before any mint can read the store's; the
+	// store's copy is the next subtest's.
+	t.Run("a mark in the file holds across a restart", func(t *testing.T) {
+		var out syncBuffer
+		e, o := stderr, stdout
+		t.Cleanup(func() { stderr, stdout = e, o })
+		stderr, stdout = &out, io.Discard
+		b := brokerConfig(t, minimalPolicy).Broker
+		pki := filepath.Dir(b.ClientCAFile)
+		cfgPath := writeRunConfig(t, b)
+		start := func() (addr string, stop func()) {
+			n := strings.Count(out.String(), "port49d: broker listening on ")
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan error, 1)
+			go func() { done <- run(ctx, cfgPath) }()
+			stop = func() {
+				cancel()
+				select {
+				case err := <-done:
+					if err != nil {
+						t.Errorf("run: %v", err)
+					}
+				case <-time.After(10 * time.Second):
+					t.Fatal("run did not return")
+				}
+			}
+			waitForCount(t, &out, "port49d: broker listening on ", n+1)
+			all := regexp.MustCompile(`port49d: broker listening on (\S+)`).FindAllStringSubmatch(out.String(), -1)
+			return all[len(all)-1][1], stop
+		}
+
+		addr, stop := start()
+		waitFor(t, &out, "port49d: broker: created "+b.RevocationsFile+" (no revocations)")
+		if status, _, err := postAsAlice(pki, addr); err != nil || status != http.StatusOK {
+			t.Fatalf("the first start's mint: %d %v", status, err)
+		}
+		stop()
+
+		at := time.Date(2026, 10, 2, 3, 12, 9, 0, time.UTC)
+		for i, mark := range []store.Revocation{
+			{Kind: store.RevocationCert, Key: aliceCertKey(t, pki), At: at, Origin: "admin_socket uid 0"},
+			{Kind: store.RevocationPrincipal, Key: "user:alice@example.com", At: at, Origin: "admin_socket uid 0"},
+		} {
+			held := memory.New(time.Now)
+			if err := held.PutRevocation(context.Background(), mark); err != nil {
+				t.Fatal(err)
+			}
+			if err := persister(held, b.RevocationsFile, newMetrics())(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			addr, stop := start()
+			waitForCount(t, &out, "port49d: broker: 1 revocation(s) in force from "+b.RevocationsFile, i+1)
+			if status, body, err := postAsAlice(pki, addr); err == nil {
+				t.Fatalf("by %s: alice's connection was served: %d %s", mark.Kind, status, body)
+			}
+			waitForCount(t, &out, "as it bound: user:alice@example.com or its certificate is revoked", i+1)
+			stop()
+		}
+	})
+
+	// The store's copy: the marks restoreRevocations put in the store are
+	// the ones every mint reads, so a connection that bound before the
+	// listener heard of a mark is still refused at its first mint.
+	t.Run("a restored mark refuses the mint", func(t *testing.T) {
+		cfg := brokerConfig(t, minimalPolicy)
+		if err := os.WriteFile(cfg.Broker.RevocationsFile+".created", []byte("x\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(cfg.Broker.RevocationsFile, []byte(`{"revocations":[{"kind":"principal",`+
+			`"key":"user:alice@example.com","at":"2026-10-02T03:12:09Z","origin":"admin_socket uid 0"}]}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		st := memory.New(time.Now)
+		if _, _, err := restoreRevocations(context.Background(), st, cfg.Broker.RevocationsFile, newMetrics()); err != nil {
+			t.Fatal(err)
+		}
+		srv, _, err := buildBroker(cfg, "inventory_file "+cfg.InventoryFile, st, seedMinter(),
+			decision.NewJSONLines(io.Discard), newMetrics())
+		if err != nil {
+			t.Fatal(err)
+		}
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		go srv.ServeTLS(ln, "", "")
+		t.Cleanup(func() { srv.Close() })
+		status, body, err := postAsAlice(filepath.Dir(cfg.Broker.ClientCAFile), ln.Addr().String())
+		if err != nil || status != http.StatusUnauthorized || !strings.Contains(body, "credential_revoked") {
+			t.Fatalf("the first mint after a restore with alice revoked: %d %s %v", status, body, err)
+		}
+	})
+
+	for name, prepare := range map[string]func(t *testing.T, b *config.BrokerConfig){
+		"a file that does not parse": func(t *testing.T, b *config.BrokerConfig) {
+			if err := os.WriteFile(b.RevocationsFile+".created", []byte("x\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(b.RevocationsFile, []byte("{"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"a file deleted after the first start": func(t *testing.T, b *config.BrokerConfig) {
+			if err := os.WriteFile(b.RevocationsFile+".created", []byte("x\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"a directory its group can write": func(t *testing.T, b *config.BrokerConfig) {
+			if err := os.Chmod(filepath.Dir(b.RevocationsFile), 0o770); err != nil {
+				t.Fatal(err)
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			b := brokerConfig(t, minimalPolicy).Broker
+			// Its own directory, so the chmod case does not loosen the
+			// directory holding the policy and the PKI.
+			own := safeDir(t)
+			b.RevocationsFile = filepath.Join(own, "revocations.json")
+			prepare(t, b)
+			out, err := runExpectingRefusal(t, writeRunConfig(t, b))
+			if err == nil || !strings.Contains(err.Error(), "broker.revocations_file "+b.RevocationsFile) {
+				t.Fatalf("run: %v", err)
+			}
+			if strings.Contains(out, "listening") {
+				t.Fatalf("stderr claims a listener is up: %q", out)
+			}
+			if _, err := os.Lstat(b.RevocationsFile); name != "a file that does not parse" && !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("a refused start wrote the file: %v", err)
+			}
+		})
 	}
 }
