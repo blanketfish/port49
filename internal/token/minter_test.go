@@ -621,3 +621,42 @@ func TestEveryTokenIsIndexedBeforeItIsWritten(t *testing.T) {
 		t.Fatalf("an unindexed token was written: %d", len(c))
 	}
 }
+
+// A subject with no principal mints nothing: the token index skips an
+// empty principal, so no revocation by principal could find its tokens.
+func TestAMintWithoutAPrincipalIsRefused(t *testing.T) {
+	m, st, _ := minter(t)
+	ctx := context.Background()
+	sub := subject()
+	sub.Principal = ""
+	if _, err := m.Mint(ctx, Request{Subject: sub, Device: "leaf-01", TTL: time.Minute}); !errors.Is(err, ErrNoPrincipal) {
+		t.Fatalf("a mint without a principal: %v", err)
+	}
+	if c, _ := st.Candidates(ctx, store.TokenKey{NAS: "leaf-01", Username: sub.Username}); len(c) != 0 {
+		t.Fatalf("a token was written for no principal: %d", len(c))
+	}
+}
+
+// The index entry outlives the token when the minter's clock runs ahead of
+// the store's: the entry is stamped by the store, the token's expiry by the
+// minter, so without the minute's margin the index would drop a token the
+// store still holds (pre-flight M6).
+func TestATokenIndexOutlivesItsTokenUnderClockSkew(t *testing.T) {
+	storeNow := time.Unix(1_757_041_495, 0)
+	st := memory.New(func() time.Time { return storeNow })
+	m := NewMinter(st, decision.NewJSONLines(&bytes.Buffer{}), rand.Reader, TagKey([]byte("k")),
+		func() time.Time { return storeNow.Add(30 * time.Second) }, 3)
+	ctx := context.Background()
+	sub := subject()
+	if _, err := m.Mint(ctx, Request{Subject: sub, Device: "leaf-01", TTL: time.Minute}); err != nil {
+		t.Fatal(err)
+	}
+	storeNow = storeNow.Add(70 * time.Second)
+	k := store.TokenKey{NAS: "leaf-01", Username: sub.Username}
+	if c, _ := st.Candidates(ctx, k); len(c) == 0 {
+		t.Fatal("the token is gone already; the test proves nothing")
+	}
+	if got, _ := st.TokensByPrincipal(ctx, sub.Principal); len(got) != 1 || got[0] != k {
+		t.Fatalf("a token the store still holds is not indexed: %v", got)
+	}
+}

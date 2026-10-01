@@ -72,6 +72,11 @@ var ErrUsernameNotCanonical = errors.New("token: device-facing username must be 
 // Policy load refuses a declared one; this catches one a directory derives.
 var ErrUsernameReserved = errors.New("token: device-facing username is reserved for a device account (remote, p49-*, a system user)")
 
+// ErrNoPrincipal refuses a mint for a subject with no principal. The token
+// index skips an empty principal, so its tokens would be ones no revocation
+// by principal can find (plan 7a).
+var ErrNoPrincipal = errors.New("token: a mint needs a principal to index its tokens under")
+
 // ReservedUsername reports whether u is `remote`, a p49-* name, or a
 // platform's system user (platform.ReservedUsername).
 func ReservedUsername(u string) bool { return platform.ReservedUsername(u) }
@@ -264,6 +269,9 @@ func (m *Minter) Mint(ctx context.Context, r Request) (Result, error) {
 	}
 	if ReservedUsername(r.Subject.Username) {
 		return Result{}, ErrUsernameReserved
+	}
+	if r.Subject.Principal == "" {
+		return Result{}, ErrNoPrincipal
 	}
 	// idemErr names what a lost idempotency record cost, carried onto the mint
 	// record that is emitted anyway. It is Record.IndexError's idiom: the
