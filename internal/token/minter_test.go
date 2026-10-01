@@ -14,6 +14,7 @@ import (
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/store/memory"
+	"github.com/rhwendt/port49/internal/store/storetest"
 	"github.com/rhwendt/port49/internal/username"
 )
 
@@ -286,7 +287,11 @@ func TestUnwrittenIdempotencyRecordIsNamedOnTheMintRecord(t *testing.T) {
 func TestUndecodableIdempotencyRecordIsNamedOnTheMintRecord(t *testing.T) {
 	m, st, log := failingMinter(t, nil, nil)
 	req := Request{Subject: subject(), Device: "leaf-01", TTL: time.Minute, BodyHash: "h1"}
-	if err := st.Store.PutIdempotency(context.Background(), req.Subject.Principal, idemScope("01J", req.Device),
+	if _, ok, err := st.Store.ReserveIdempotency(context.Background(), req.Subject.Principal, idemScope("01J", req.Device),
+		store.Idempotency{BodyHash: "h1", Holder: "earlier", Pending: true, ExpiresAt: time.Now().Add(time.Hour)}); err != nil || !ok {
+		t.Fatalf("%v %v", ok, err)
+	}
+	if err := st.Store.CompleteIdempotency(context.Background(), req.Subject.Principal, idemScope("01J", req.Device), "earlier",
 		store.Idempotency{BodyHash: "h1", Response: []byte("{not json"), ExpiresAt: time.Now().Add(time.Hour),
 			Holder: "earlier"}); err != nil {
 		t.Fatal(err)
@@ -432,11 +437,11 @@ func TestReleaseGivesBackOnlyWhatDidNotComplete(t *testing.T) {
 		t.Fatal(err)
 	}
 	m.Release(ctx, req.Subject.Principal, res)
-	if cur, err := st.GetIdempotency(ctx, req.Subject.Principal, idemScope("01J", "leaf-01")); err != nil || cur.Pending {
-		t.Fatalf("the minted device's record: %+v %v", cur, err)
+	if cur, ok := storetest.Peek(t, st, req.Subject.Principal, idemScope("01J", "leaf-01")); !ok || cur.Pending {
+		t.Fatalf("the minted device's record: %+v %v", cur, ok)
 	}
-	if _, err := st.GetIdempotency(ctx, req.Subject.Principal, idemScope("01J", "leaf-02")); !errors.Is(err, store.ErrNotFound) {
-		t.Fatalf("the unminted device's reservation was not released: %v", err)
+	if cur, ok := storetest.Peek(t, st, req.Subject.Principal, idemScope("01J", "leaf-02")); ok {
+		t.Fatalf("the unminted device's reservation was not released: %+v", cur)
 	}
 }
 

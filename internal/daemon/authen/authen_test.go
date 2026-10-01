@@ -450,12 +450,6 @@ func (noStore) TokensByPrincipal(context.Context, string) ([]store.TokenKey, err
 func (noStore) TokensByCert(context.Context, string) ([]store.TokenKey, error) {
 	panic("store called")
 }
-func (noStore) PutIdempotency(context.Context, string, string, store.Idempotency) error {
-	panic("store called")
-}
-func (noStore) GetIdempotency(context.Context, string, string) (store.Idempotency, error) {
-	panic("store called")
-}
 func (noStore) ReserveIdempotency(context.Context, string, string, store.Idempotency) (store.Idempotency, bool, error) {
 	panic("store called")
 }

@@ -468,37 +468,11 @@ func (w *wrapped) TokensByCert(ctx context.Context, certKey string) ([]store.Tok
 	return w.inner.TokensByCert(ctx, certKey)
 }
 
-func (w *wrapped) PutIdempotency(ctx context.Context, principal, key string, rec store.Idempotency) error {
-	s, err := w.keys.Seal(rec.Response)
-	if err != nil {
-		return err
-	}
-	rec.Response, rec.Sealed = nil, s
-	return w.inner.PutIdempotency(ctx, principal, key, rec)
-}
-
-func (w *wrapped) GetIdempotency(ctx context.Context, principal, key string) (store.Idempotency, error) {
-	rec, err := w.inner.GetIdempotency(ctx, principal, key)
-	if err != nil {
-		return store.Idempotency{}, err
-	}
-	// A pending reservation has nothing sealed: opening it would count a
-	// decryption failure that is not one.
-	if rec.Pending {
-		return rec, nil
-	}
-	resp, err := w.keys.Open(rec.Sealed)
-	if err != nil {
-		return store.Idempotency{}, w.openErr("idempotency", err)
-	}
-	rec.Response, rec.Sealed = resp, nil
-	return rec, nil
-}
-
 // ReserveIdempotency passes a reservation through: it holds no response, so
 // there is nothing to seal, and one that tries to carry a response is
 // refused rather than written in clear. A completed record it finds is
-// opened, as GetIdempotency opens one.
+// opened; a pending one has nothing sealed, and opening it would count a
+// decryption failure that is not one.
 func (w *wrapped) ReserveIdempotency(ctx context.Context, principal, key string, rec store.Idempotency) (store.Idempotency, bool, error) {
 	if len(rec.Response) != 0 {
 		return store.Idempotency{}, false, errors.New("crypt: a reservation carries no response")

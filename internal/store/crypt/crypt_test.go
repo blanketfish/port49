@@ -184,13 +184,18 @@ func TestWrappedStoreHoldsNoPlaintext(t *testing.T) {
 		t.Fatalf("a narrow write must leave the sealed fields readable: %+v", c)
 	}
 
-	if err := s.PutIdempotency(ctx, "user:alice", "k", store.Idempotency{BodyHash: "b", Response: []byte(`{"login":"p49_x"}`), ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
+	if _, ok, err := s.ReserveIdempotency(ctx, "user:alice", "k", store.Idempotency{BodyHash: "b", Holder: "h",
+		Pending: true, ExpiresAt: time.Now().Add(time.Minute)}); err != nil || !ok {
+		t.Fatalf("%v %v", ok, err)
+	}
+	if err := s.CompleteIdempotency(ctx, "user:alice", "k", "h", store.Idempotency{BodyHash: "b", Holder: "h",
+		Response: []byte(`{"login":"p49_x"}`), ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
-	if r, _ := inner.GetIdempotency(ctx, "user:alice", "k"); r.Response != nil || r.BodyHash != "b" {
+	if r, _ := storetest.Peek(t, inner, "user:alice", "k"); r.Response != nil || r.BodyHash != "b" {
 		t.Fatalf("idempotency plaintext: %+v", r)
 	}
-	if r, _ := s.GetIdempotency(ctx, "user:alice", "k"); string(r.Response) != `{"login":"p49_x"}` {
+	if r, _ := storetest.Peek(t, s, "user:alice", "k"); string(r.Response) != `{"login":"p49_x"}` {
 		t.Fatalf("idempotency read: %+v", r)
 	}
 
@@ -372,9 +377,9 @@ func TestAPendingReservationReadsBackWithoutOpening(t *testing.T) {
 		store.Idempotency{BodyHash: "b", Holder: "h", Pending: true, ExpiresAt: time.Now().Add(time.Minute)}); err != nil || !ok {
 		t.Fatalf("%v %v", ok, err)
 	}
-	r, err := s.GetIdempotency(ctx, "user:alice", "k")
-	if err != nil || !r.Pending || r.Holder != "h" {
-		t.Fatalf("reading a pending reservation: %+v %v", r, err)
+	r, ok := storetest.Peek(t, s, "user:alice", "k")
+	if !ok || !r.Pending || r.Holder != "h" {
+		t.Fatalf("reading a pending reservation: %+v %v", r, ok)
 	}
 	if n := testutil.ToFloat64(failures.WithLabelValues("idempotency")); n != 0 {
 		t.Fatalf("a pending reservation counted %v open failures", n)
@@ -397,7 +402,7 @@ func TestACompletedReservationIsSealed(t *testing.T) {
 		store.Idempotency{BodyHash: "b", Holder: "h", Response: []byte(`{"login":"p49_x"}`), ExpiresAt: exp}); err != nil {
 		t.Fatal(err)
 	}
-	if r, _ := inner.GetIdempotency(ctx, "user:alice", "k"); r.Response != nil || len(r.Sealed) == 0 {
+	if r, _ := storetest.Peek(t, inner, "user:alice", "k"); r.Response != nil || len(r.Sealed) == 0 {
 		t.Fatalf("the inner store holds the response in clear: %+v", r)
 	}
 	cur, ok, err := s.ReserveIdempotency(ctx, "user:alice", "k",
@@ -427,7 +432,7 @@ func TestARenewedHoldIsNotSealed(t *testing.T) {
 		store.Idempotency{BodyHash: "b", Holder: "h", Pending: true, ExpiresAt: exp.Add(time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
-	if r, _ := inner.GetIdempotency(ctx, "user:alice", "k"); !r.Pending || len(r.Sealed) != 0 || !r.ExpiresAt.Equal(exp.Add(time.Minute)) {
+	if r, _ := storetest.Peek(t, inner, "user:alice", "k"); !r.Pending || len(r.Sealed) != 0 || !r.ExpiresAt.Equal(exp.Add(time.Minute)) {
 		t.Fatalf("the renewed hold: %+v", r)
 	}
 	if err := s.CompleteIdempotency(ctx, "user:alice", "k", "h",

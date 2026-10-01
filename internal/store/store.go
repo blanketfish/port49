@@ -618,8 +618,6 @@ type Store interface {
 	TokensByPrincipal(ctx context.Context, principal string) ([]TokenKey, error)
 	TokensByCert(ctx context.Context, certKey string) ([]TokenKey, error)
 
-	PutIdempotency(ctx context.Context, principal, key string, rec Idempotency) error
-	GetIdempotency(ctx context.Context, principal, key string) (Idempotency, error)
 	// ReserveIdempotency writes rec under (principal, key) when no live
 	// record is there, in one atomic step, and reports true. When one is, it
 	// writes nothing and returns that record and false. Two concurrent

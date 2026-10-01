@@ -15,6 +15,35 @@ import (
 	"github.com/rhwendt/port49/internal/store"
 )
 
+// Planter is a store a test can write an idempotency record into whole,
+// bypassing the holder checks every store.Store method makes, as an older
+// port49's record or a corrupted one would sit there. IdempotencyReservesOnce
+// checks that such a record is nobody's on a store that is one.
+type Planter interface {
+	PlantIdempotency(ctx context.Context, principal, key string, rec store.Idempotency) error
+}
+
+// Peek is the live idempotency record under (principal, key), and whether
+// there is one, read through ReserveIdempotency, which returns a live record
+// untouched: store.Store has no plain read, since nothing but a reservation
+// reads one. A probe reservation it writes when there is none is released.
+func Peek(t *testing.T, s store.Store, principal, key string) (store.Idempotency, bool) {
+	t.Helper()
+	ctx := context.Background()
+	cur, ok, err := s.ReserveIdempotency(ctx, principal, key, store.Idempotency{BodyHash: "peek", Holder: "storetest-peek",
+		Pending: true, ExpiresAt: time.Now().Add(time.Hour)})
+	if err != nil {
+		t.Fatalf("peeking at the idempotency record %q: %v", key, err)
+	}
+	if ok {
+		if err := s.ReleaseIdempotency(ctx, principal, key, "storetest-peek"); err != nil {
+			t.Fatal(err)
+		}
+		return store.Idempotency{}, false
+	}
+	return cur, true
+}
+
 // JoinRacesRevocation runs logins joining one live context concurrently with a
 // revocation of it, many rounds over, and checks that nothing is lost: the
 // revocation stands, because every token was minted before it; every login
@@ -398,14 +427,17 @@ func IdempotencyReservesOnce(t *testing.T, newStore func() store.Store, now time
 	if err := s.CompleteIdempotency(ctx, principal, "anon", "", done); !errors.Is(err, store.ErrConflict) {
 		t.Fatalf("a completion expecting the empty holder: %v, want ErrConflict", err)
 	}
-	// A record with no holder at all (one PutIdempotency wrote) is still
-	// nobody's: expecting the empty holder does not match it.
-	if err := s.PutIdempotency(ctx, principal, "planted",
-		store.Idempotency{BodyHash: "h1", Response: []byte("x"), ExpiresAt: now.Add(time.Hour)}); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.CompleteIdempotency(ctx, principal, "planted", "", done); !errors.Is(err, store.ErrConflict) {
-		t.Fatalf("a completion expecting the empty holder of a holderless record: %v, want ErrConflict", err)
+	// A record with no holder at all is still nobody's: expecting the empty
+	// holder does not match it. No store.Store method writes one, so it is
+	// planted where the backend can (Planter).
+	if p, ok := s.(Planter); ok {
+		if err := p.PlantIdempotency(ctx, principal, "planted",
+			store.Idempotency{BodyHash: "h1", Response: []byte("x"), ExpiresAt: now.Add(time.Hour)}); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.CompleteIdempotency(ctx, principal, "planted", "", done); !errors.Is(err, store.ErrConflict) {
+			t.Fatalf("a completion expecting the empty holder of a holderless record: %v, want ErrConflict", err)
+		}
 	}
 	if cur, ok, _ := s.ReserveIdempotency(ctx, principal, "anon", pending("late")); ok || !cur.Pending || cur.Holder != "anon-holder" {
 		t.Fatalf("a refused completion changed the reservation: %+v %v", cur, ok)

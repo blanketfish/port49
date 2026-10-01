@@ -1133,18 +1133,6 @@ func idemKey(principal, key string) string {
 	return principal + "\x00" + key
 }
 
-// PutIdempotency records rec under (principal, key), expiring on rec.ExpiresAt.
-func (s *Store) PutIdempotency(_ context.Context, principal, key string, rec store.Idempotency) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.idem[idemKey(principal, key)] = rec
-	s.writes++
-	if s.writes%sweepEvery == 0 {
-		s.sweepLocked()
-	}
-	return nil
-}
-
 // liveIdemLocked is the live record under k, deleting one past its expiry.
 func (s *Store) liveIdemLocked(k string) (store.Idempotency, bool) {
 	r, ok := s.idem[k]
@@ -1156,18 +1144,6 @@ func (s *Store) liveIdemLocked(k string) (store.Idempotency, bool) {
 		return store.Idempotency{}, false
 	}
 	return r, true
-}
-
-// GetIdempotency returns the record written under (principal, key), or
-// ErrNotFound if it is absent, expired, or was written under a different
-// principal.
-func (s *Store) GetIdempotency(_ context.Context, principal, key string) (store.Idempotency, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if r, ok := s.liveIdemLocked(idemKey(principal, key)); ok {
-		return r, nil
-	}
-	return store.Idempotency{}, store.ErrNotFound
 }
 
 // errNoHolder refuses an idempotency record without a holder: the empty

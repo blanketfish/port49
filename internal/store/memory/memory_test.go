@@ -140,7 +140,7 @@ func TestSweepDropsExpiredKeys(t *testing.T) {
 	// Write tokens, receipts, contexts, blobs, idempotency records, and
 	// context-index entries under distinct keys with short TTLs. These are
 	// written straight into the maps, as the receipt index above already
-	// does, because every getter (GetBlob, GetIdempotency, the Contexts*
+	// does, because every getter (GetBlob, ReserveIdempotency, the Contexts*
 	// readers) self-checks expiry and so cannot tell a swept map from an
 	// unswept one whose entry it happens to skip: only reaching the map
 	// directly, after sweepLocked, catches a sweep branch that was never
@@ -984,14 +984,32 @@ func TestIndexes(t *testing.T) {
 func TestIdempotency(t *testing.T) {
 	s := New(time.Now)
 	ctx := context.Background()
-	s.PutIdempotency(ctx, "user:alice", "k1", store.Idempotency{BodyHash: "h", Response: []byte("resp"), ExpiresAt: time.Now().Add(time.Minute)})
-	r, err := s.GetIdempotency(ctx, "user:alice", "k1")
-	if err != nil || string(r.Response) != "resp" {
-		t.Fatalf("%+v %v", r, err)
+	if _, ok, err := s.ReserveIdempotency(ctx, "user:alice", "k1", store.Idempotency{BodyHash: "h", Holder: "x",
+		Pending: true, ExpiresAt: time.Now().Add(time.Minute)}); err != nil || !ok {
+		t.Fatalf("%v %v", ok, err)
 	}
-	if _, err := s.GetIdempotency(ctx, "user:bob", "k1"); !errors.Is(err, store.ErrNotFound) {
+	if err := s.CompleteIdempotency(ctx, "user:alice", "k1", "x", store.Idempotency{BodyHash: "h", Holder: "x",
+		Response: []byte("resp"), ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	if r, ok := storetest.Peek(t, s, "user:alice", "k1"); !ok || string(r.Response) != "resp" {
+		t.Fatalf("%+v %v", r, ok)
+	}
+	if _, ok := storetest.Peek(t, s, "user:bob", "k1"); ok {
 		t.Fatal("idempotency is per principal")
 	}
+}
+
+// planting is the memory store with a way to write an idempotency record
+// whole, which no store.Store method has: storetest.IdempotencyReservesOnce
+// plants a holderless one through it.
+type planting struct{ *Store }
+
+func (p planting) PlantIdempotency(_ context.Context, principal, key string, rec store.Idempotency) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.idem[idemKey(principal, key)] = rec
+	return nil
 }
 
 // SwapContext is a compare-and-set, and each of its refusals is a state a
@@ -1360,7 +1378,7 @@ func TestRevocationIsMonotonicOnTheMemoryStore(t *testing.T) {
 
 func TestIdempotencyReservesOnce(t *testing.T) {
 	now := time.Unix(1_757_041_495, 0)
-	storetest.IdempotencyReservesOnce(t, func() store.Store { return New(func() time.Time { return now }) }, now)
+	storetest.IdempotencyReservesOnce(t, func() store.Store { return planting{New(func() time.Time { return now })} }, now)
 }
 
 func TestIdempotencyLeaseExpires(t *testing.T) {
