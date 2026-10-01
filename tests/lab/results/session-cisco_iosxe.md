@@ -36,14 +36,14 @@ refreshed at 2026-10-01T23:09:01Z; this login lasts until 2026-10-02T11:09:01Z
   xe1 (slice01)  extended to 2026-10-01T23:15:01Z
 ```
 
-At step 7:
+At step 7 (reconstructed: the table cell as recorded, plus printRefresh's fixed suffix; the raw output was not retained):
 
 ```
 refreshed at 2026-10-01T23:15:11Z; this login lasts until 2026-10-02T11:15:11Z
   xe1 (slice01)  extended to 2026-10-01T23:21:11Z
 ```
 
-At step 8:
+At step 8 (reconstructed: the table cell as recorded, plus printRefresh's fixed suffix; the raw output was not retained):
 
 ```
 refreshed at 2026-10-01T23:23:21Z; this login lasts until 2026-10-02T11:23:21Z

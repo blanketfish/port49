@@ -513,8 +513,16 @@ func TestSessionLifetime(t *testing.T) {
 		if !sessionOnly {
 			sessObs += fmt.Sprintf("| 8. `show version` once more | %s |\n", sessionCmdCell(goneAgain, goneAgainRec))
 		}
-		sessObs += fmt.Sprintf("\n`port49 refresh`'s output in full, at step 5:\n\n```\n%s\n```\n\nAt step 7:\n\n"+
-			"```\n%s\n```\n\nAt step 8:\n\n```\n%s\n```\n", refreshed, resumed, late)
+		// The raw output goes beside the capture, so a note's quotes can be
+		// checked against what the tool printed (Task 12 fix round 2).
+		raw := filepath.Join("tests", "lab", "evidence", "session-refresh-"+l.p.name+".txt")
+		rawText := fmt.Sprintf("# port49 refresh, as printed, in TestSessionLifetime on %s\n\n## step 5\n%s\n\n"+
+			"## step 7\n%s\n\n## step 8\n%s\n", l.p.name, refreshed, resumed, late)
+		if err := os.WriteFile(filepath.Join(root, raw), []byte(labcreds.RedactNote(rawText)), 0o644); err != nil {
+			t.Errorf("write %s: %v", raw, err)
+		}
+		sessObs += fmt.Sprintf("\n`port49 refresh`'s output in full (raw: `%s`), at step 5:\n\n```\n%s\n```\n\n"+
+			"At step 7:\n\n```\n%s\n```\n\nAt step 8:\n\n```\n%s\n```\n", raw, refreshed, resumed, late)
 		sessObs += "\n**Not exercised here:** a nonce used twice, a challenge answered on another connection, the " +
 			"10 s rate limit, and a refresh triggered by anything but an operator's `port49 refresh`. Those clauses " +
 			"are unit-tested (plan 7b, Tasks 6–8); these notes are not evidence for them.\n"

@@ -35,14 +35,14 @@ refreshed at 2026-10-01T22:27:43Z; this login lasts until 2026-10-02T10:27:43Z
   vsrx1 (slice01)  extended to 2026-10-01T22:33:43Z, not reached: the device keeps its own session
 ```
 
-At step 7:
+At step 7 (reconstructed: the table cell as recorded, plus printRefresh's fixed suffix; the raw output was not retained):
 
 ```
 refreshed at 2026-10-01T22:33:53Z; this login lasts until 2026-10-02T10:33:53Z
   vsrx1 (slice01)  extended to 2026-10-01T22:39:53Z, not reached: the device keeps its own session
 ```
 
-At step 8:
+At step 8 (reconstructed: the table cell as recorded, plus printRefresh's fixed suffix; the raw output was not retained):
 
 ```
 refreshed at 2026-10-01T22:42:03Z; this login lasts until 2026-10-02T10:42:03Z
