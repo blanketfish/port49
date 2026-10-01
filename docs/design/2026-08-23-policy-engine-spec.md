@@ -881,6 +881,47 @@ asks about a command (§13, decision 21) or on a device the inventory gives no p
 by an OIDC `sid` or `sub` arrives with plan 7h, and from a CRL or an OCSP response with plan 7b,
 each as a mark of this kind.
 
+**Certificate status, as built (plan 7b; §13, decision 33).** The broker checks every client
+certificate, and every certificate above it in its verified chain but the anchor, against the
+sources `broker.certificate_status` names.
+
+- **CRLs.** Each is read from a file or fetched over HTTP(S), polled every `refresh_interval`, and
+  retried with backoff from 30s when a load fails. Each source names the CA certificate that signs
+  it (`issuer_file`), which must be the trust anchor or signed by it.
+- **Verified before use.** A list is verified against that certificate before anything uses it: an
+  unverified list never replaces the last good one, never moves its CRL number, and is never acted
+  on.
+- **What is refused.** A list older than the last good one (by number or by `ThisUpdate`); a delta
+  list; one carrying a critical extension other than its authority key identifier, its number, or
+  an issuing distribution point that says only `onlyContainsUserCerts`; one with an entry carrying a
+  critical extension.
+- **Which list applies.** It applies to a certificate when its issuer certificate is the one that
+  verified it, and only until its `NextUpdate`.
+- **Persistence.** The last good list of each source is kept beside `broker.revocations_file`, so a
+  restart keeps it.
+- **OCSP.** An answer is taken only when it verifies for the issuer, and its signer is the issuer or
+  a delegate the issuer signed carrying `id-kp-OCSPSigning` inside its validity. Its serial must be
+  the certificate's, its `ThisUpdate` no more than five minutes ahead, and its `NextUpdate`, when
+  set, still to come. It is cached until the earlier of its `NextUpdate` and an hour.
+- **Precedence.** A list that names the serial is final; otherwise a fresh list covering the issuer
+  decides, and then OCSP.
+
+A certificate a source revokes is answered `credential_revoked` before its connection binds, as a
+marked one is, and refused at every mint and refresh; so is every certificate under a revoked
+intermediate.
+
+When a list newly names a certificate something still holds (a held connection, a live context
+indexed under it, an unspent token), the broker revokes it as `port49 revoke --cert` does, its
+origin `crl <name>`. Everything it reaches is reached, and the mark outlives a list that later goes
+stale. A `certificateHold` entry, a revoked intermediate, and an entry nothing holds write no mark:
+each is refused at every use.
+
+A status that cannot be established (a stale list, a responder that does not answer, an issuer no
+source covers) is refused unless `on_unavailable: allow`. The refusal is answered as unavailable
+(HTTP 503, retried), never as a final verdict, so it ends no agent's session. Live sessions are
+never affected: the daemon never reads certificate status (decision 13). The configuration is
+required with a broker, and `disabled: true` is the explicit choice not to check.
+
 ### 5.2 Session authorization (daemon)
 
 On a session authorization — an empty `cmd`, carrying the platform's own session `service` —
@@ -1439,7 +1480,7 @@ did not generate and cannot verify MUST NOT delete state.
 |---|---|---|
 | 1 | **Login redemption** on the same `(nas, username)` | port49 performed it — joins the same principal's live context and replaces another principal's, logging the replace (above). An `enable` redemption is not this: it updates `privilege` in place and keeps `ctx_id` (§7). **That is a requirement on plan 2's escalate path, not a description of the tree** — see below |
 | 2 | **Revocation** — an operator's `port49 revoke`, by principal or by certificate (§5.1.4); OIDC back-channel logout by `sid` or `sub`; a certificate appearing on a CRL or OCSP response by issuer and serial; a policy change withdrawing every grant on the device, or leaving a policy in force that cannot be resolved or compiled for the context, or a refresh finding a context it cannot open (§5.1.3, "Policy reload") | authoritative: from an operator or the identity layer (§5.1.4), or, for a policy change, from the policy in force, with a `refresh` record saying which (§5.7). Sets `revoked_at` rather than deleting, so the next command is denied `credential_revoked` with a `server_msg` saying so — distinguishable from a session port49 never saw. Row 6 reclaims the state |
-| 3 | **Session ceiling** — `session_expires` reached and the grace window elapsed | local, needs no external signal |
+| 3 | **Session ceiling** — `session_expires` reached and the grace window elapsed | local, needs no external signal: the daemon deletes the context at its first authorization past the window, and a refresh past it extends nothing (plan 7b) |
 | 3a | **Staleness ceiling** — `now - refreshed_at` beyond `staleness_ceiling` because the broker has been unreachable that long (design document §9) | local; denies `context_stale` with a `server_msg` naming the broker outage, retains the context so recovery resumes it |
 | 4 | **Username mismatch** on an enable exchange resolved through `(nas, rem_addr)` | a genuine conflict — denies and invalidates. On the command path this cannot arise: the username is the key |
 | 5 | — | **withdrawn 2026-09-20.** It read "authentication START on the same `(nas, port)` under a different username, including one port49 rejects". Under `(nas, username)` a START under a different username addresses a different context and is evidence of nothing about this one, so the row had no content left to carry. Deleting a live operator's context because someone else mistyped a name on the same device is exactly the mutual lockout the re-key removed |
@@ -1581,6 +1622,39 @@ forcing a reconnect. Requirements:
   touch where the key is on a token, and `auth_time` is the broker's verification time. That
   is the one place the broker's clock is the source, and it is a time at which possession was
   just proven.
+
+**As built (plan 7b; §13, decision 33).**
+
+- **The ceiling.** A role's `max_session_age` is a duration of at least 1m or `never`. The ceiling
+  on a device is the least across the roles composing there, a role naming none taking
+  `session.max_session_age_default`, and `never` only when every role says so. A device whose
+  ceiling has passed since the connection authenticated is refused per item at mint,
+  `session_expired`.
+- **A policy edit.** It shortens a live context's ceiling and never lengthens it.
+- **A refresh.** It sets the ceiling the policy in force gives, from the new `auth_time`, so a
+  lengthened ceiling or `never` takes effect at the next refresh or login.
+- **The warning.**
+  - It rides on the `server_msg` of permitted session and command authorization replies, within
+    `session.ceiling_warning` (default 30m) of `session_expires`, to the platforms §15 L34 finds
+    show it and still permit, and to any an operator lists.
+  - It also goes on `port49 token`'s stderr, from the mint's `session_expires_at`, on every
+    platform.
+- **Past the ceiling.** A context is denied `session_expired` and kept until the grace window
+  (`session.grace_window`, default 10m) passes. Then it is deleted at its next authorization
+  (teardown row 3), and no refresh resumes it. The delete and the refresh are compare-and-sets on
+  the context's revision.
+- **The refresh on the certificate path.** It is `POST /v1/refresh/challenge` and `POST
+  /v1/refresh`:
+  - **The nonce.** 32 random bytes, good for 60s, once, on the connection that asked, signed by the
+    certificate's key over the connection's TLS exporter value, so it cannot be answered on another
+    connection. A connection may refresh once per 10s.
+  - **The clock.** `auth_time` is the broker's verification time, and the held connection's session
+    clock moves with it.
+  - **What it extends.** Each of the principal's live contexts first takes the policy in force: a
+    withdrawn grant is revoked, and only a context the policy has just judged and kept is extended,
+    inside its grace window, each a `refresh` record.
+  - **Who triggers it.** `port49 refresh` and `port49 login` run it; the agent never runs it on its
+    own.
 
 #### Why `enable: auto` is restricted
 
@@ -1748,7 +1822,7 @@ events (`account`, `account_gap`, `blob`, `inventory_change`) that share the env
 | `authorize_session` | daemon | the session and its returned attributes (§6) |
 | `authorize_command` | daemon | one command vector |
 | `escalate` | daemon | an `enable` exchange, attributed to the principal (§7) |
-| `refresh` | broker | whether a live context takes the policy now in force, or is revoked (§5.1.3) |
+| `refresh` | broker | whether a live context takes the policy now in force, or is revoked (§5.1.3); or, on a session refresh (`/v1/refresh`), whether it is extended, with `session.auth_time` and `session.session_expires` (§5.6). A context on a platform that never asks about a command carries `session.unreached: true` (decision 21) |
 | `revoke` | broker | a revocation by principal or by certificate (§5.1.4): what it reached, and the live contexts it could not; or a revocation lifted |
 | `blob` | broker | not a decision: the full compiled blob, emitted once per hash so replay depends on the log alone (§5.1.1) |
 
@@ -1849,10 +1923,10 @@ device minted afresh writes one `deny credential_revoked` naming no device.
 
 | `reason` | Meaning |
 |---|---|
-| `grants_matched` | `mint`: at least one declared grant selected the device; blob written. `refresh`: the policy in force was written into the live context |
+| `grants_matched` | `mint`: at least one declared grant selected the device; blob written. `refresh`: the policy in force was written into the live context; or, on a session refresh, the context was extended |
 | `no_grants_matched` | `mint`: no declared grant for this principal selects the device. `refresh`: none does any more, and the live context is revoked |
 | `username_collision` | `mint`: the derived username is already held by a subject in another trust domain (§2) |
-| `trust_domain_unresolved` | `mint`: no configured verifier accepted the credential (design document §7) |
+| `trust_domain_unresolved` | `mint`: no configured verifier accepted the credential (design document §7); or the revocation status of the certificate or one above it could not be established (a stale CRL, an OCSP responder that did not answer, an issuer no configured source covers) and `broker.certificate_status.on_unavailable` is `refuse` (§5.1.4). The API then answers 503 `certificate_status_unavailable`, to be retried, never a final 401. On `refresh`, also a refresh challenge not answered by the connection's key |
 | `candidate_cap_reached` | `mint`: `token.candidate_cap` unspent tokens already stand for this `(device, username)`; the mint is refused, never a redemption, and every token already issued stays usable (design document §8) |
 | `context_matched` | `authorize_session`: context found, attributes returned |
 | `escalation_granted` | `escalate`: the level was within `max_privilege` and the mechanism succeeded |
@@ -1875,9 +1949,9 @@ device minted afresh writes one `deny credential_revoked` naming no device.
 | `username_mismatch` | the request's username differs from the one bound at redemption (§5.6). Reachable two ways, and a request under a name port49 never authenticated is neither of them — that is `context_missing`, because the username is the key. First, wherever the username is resolved from context rather than read off the wire: the `$enab{level}$` enable path through the `(nas, rem_addr)` index. Second, as a **store-fault guard** — the context lookup selects on the username, so a store answering with another principal's record fails the re-check that follows it and is denied rather than authorized. A correct store never produces the second |
 | `rem_addr_mismatch` | enable arrived from a different address than the bound one |
 | `privilege_exceeded` | the request is above the session's granted level |
-| `session_expired` | the session ceiling was reached; context retained through the grace window (§5.6). On `mint`: the held connection's authentication is older than `max_session_age`, and the caller must authenticate again (§13, decision 17) |
+| `session_expired` | the session ceiling was reached; context retained through the grace window (§5.6). On `mint`: the held connection's authentication is older than `max_session_age`, and the caller must authenticate again (§13, decision 17). Per item on `mint`: the device's ceiling (the least `max_session_age` of its roles, §5.6) has passed since the connection authenticated; run `port49 refresh`. On `refresh`: the context is past its grace window and is not extended. |
 | `context_stale` | the broker has been unreachable past `staleness_ceiling`; context retained, denies until refreshed (§5.1.1, design document §9) |
-| `credential_revoked` | the context's `revoked_at` is set — CRL, OCSP, back-channel logout, every grant on the device withdrawn, a subject's username changed, the policy in force not compiling for the context, or a refresh finding a context it could not open, where the `refresh` record before it says which (§5.1.3, §5.6); on `redeem`, a login whose resulting context is revoked because its token was not minted after the revocation, or a retransmission answered while the context it names is revoked (§5.6); on `mint`, a revocation by principal or by this certificate stands (§5.1.4), so nothing is minted and the connection is closed; on `revoke`, a revocation's own record |
+| `credential_revoked` | the context's `revoked_at` is set — CRL, OCSP, back-channel logout, every grant on the device withdrawn, a subject's username changed, the policy in force not compiling for the context, or a refresh finding a context it could not open, where the `refresh` record before it says which (§5.1.3, §5.6); on `redeem`, a login whose resulting context is revoked because its token was not minted after the revocation, or a retransmission answered while the context it names is revoked (§5.6); on `mint`, a revocation by principal or by this certificate stands (§5.1.4) or a CRL or OCSP response names the certificate or an intermediate above it, so nothing is minted and the connection is closed; on `revoke`, a revocation's own record |
 | `revocation_lifted` | `revoke`: an operator lifted a revocation (§5.1.4). Mints by the principal or certificate are made again; a context the revocation marked stays revoked until a login whose token was minted after the revocation joins it (§5.6; §13, decision 15): for a principal's mark, after the lift; for a certificate's, by any of the principal's other certificates at any time |
 | `device_unknown` | the source address is not in the admission trie (§10). On an `unvalidated` record: a reload refused, removed, renamed, re-keyed or re-platformed the device an open connection was admitted as, so that admission is no longer one port49d knows, and the connection is reset with no strike (§10, "How a daemon refreshes its snapshot"). On `mint` and `refresh`: the device is in inventory and admission refuses it — no key group admits it, two tie on it, or its `key_ref` is one port49d holds no key for (§10) — so no token is minted for it and its live contexts are revoked: it cannot reach port49d, and a token for it would only be a login that falls to the device's local method (`tests/lab/results/quarantine-*.md`). As with a quarantine, a subject with no grant on the device is answered `no_grants_matched` first, so the API tells no caller which devices exist |
 | `platform_unknown` | the device's platform has no adapter; generic fallback applied |
@@ -5476,6 +5550,14 @@ revocation prints what it reached and names each live context on a platform it c
 compares, which is safer than typing a distinguished name. The HTTP revocation, under `api:`
 rights, is plan 7c's.
 
+**`port49 refresh`** re-authenticates the session the agent holds and extends every live context the
+policy in force still grants (§5.6). The agent signs the broker's nonce with the certificate's key
+over the held connection, and prints one line per device: extended to when, revoked by the policy,
+past its grace window, not judged, or on a platform the extension cannot reach. `port49 login` does
+the same while a session is held, and once after a new one connects. `port49 token` warns on stderr
+when the device's session ends within `session.ceiling_warning`. `port49 explain` prints a subject's
+ceiling on a device.
+
 **`port49 inventory diff --policy <file> [--new-policy <file>] <old-inventory> <new-inventory>`**
 prints what a change to the inventory does to the bundle: devices added, removed and changed,
 addresses added to existing devices, `key_ref` and admission changes, and every scope membership
@@ -6072,6 +6154,42 @@ the HTTP one, under `api:` rights, is plan 7c's. The store's marks are read at m
 handshake, so `port49 login` still touches no store; a revoked operator's login is refused at the
 agent's first request, from the listener's copy. (§5.1.4, §5.7, §12; design document §11, §12, §17)
 
+**33. A session ends where its roles say, warns before, refreshes by a signed nonce, and every
+certificate's revocation status is checked at every use.** *Plan 7b, 2026-10-01, rulings where the
+spec was silent, each the option that denies more; revised after its pre-flight review.*
+
+- **The ceiling.** A role's `max_session_age` is a duration of at least 1m or `never`, the least
+  across a device's roles governing, the default staying finite. A device whose ceiling has passed
+  is refused per item at mint. A policy edit shortens a live ceiling and never lengthens one; a
+  refresh sets the ceiling the policy in force gives.
+- **The warning.** It rides on permits within `session.ceiling_warning` (30m), to the platforms L34
+  finds show it (an allow-list) and any an operator lists, and on `port49 token`'s stderr
+  everywhere.
+- **Past the ceiling.** A context is kept through the grace window and deleted at its first
+  authorization after it, by compare-and-set, and the store refuses to extend one past it.
+- **The refresh.** On the certificate path it is a single-use 60s nonce, signed by the certificate's
+  key over the connection's TLS exporter value, at most one per connection per 10s, with `auth_time`
+  the broker's verification time. It extends only contexts the policy in force has just judged and
+  kept, and only an operator's `port49 refresh` or `port49 login` triggers it.
+- **Certificate status.**
+  - **Configuration.** Required with a broker (`disabled: true` an explicit choice), every CRL
+    source naming its signing CA (`issuer_file`), which the anchor must vouch for.
+  - **CRLs.** A list is verified at load, before it may replace the last good one, move its number,
+    or be acted on. A rollback, a delta, an unknown critical extension and a partitioned scope are
+    refused. A list applies to a certificate whose verifying issuer is that source's issuer
+    certificate, until its next update. It is persisted, and retried with backoff.
+  - **The chain.** Every certificate but the anchor is checked.
+  - **OCSP.** It is taken only from the issuer or an in-validity delegate with the OCSP-signing
+    usage, for the right serial, fresh within five minutes' skew, and cached to its next update, at
+    most an hour.
+  - **Unknown.** A status that cannot be established is refused as unavailable (503, retried, no
+    session ended) unless `on_unavailable: allow` (the owner to confirm, plan 7b D-7b-1).
+  - **Revoked.** A revoked certificate is refused before it binds, at mint and at refresh. One a CRL
+    newly names is revoked through decision 32's marks wherever it is still present, from a bounded
+    queue, a store error deferring rather than marking.
+
+(§5.1.4, §5.6, §5.7, §12; design document §7, §12, §17)
+
 ### Deferred, with reasons
 
 Neither of these is an open question about the design. Both are closed for v1 on the
@@ -6585,7 +6703,7 @@ implemented against a guess. This section is the one place the distinction is ke
 | ID | Claim to measure | What rests on it | Platforms | Status |
 |---|---|---|---|---|
 | **L1** | What the `port` field contains, per platform **and per transport** — SSH, console, eAPI, NX-API, NETCONF. Whether it is unique per concurrent session and stable for its life. | The login context key (§5.1.1, §5.6) — this row is what re-cut it to `(nas, username)` on 2026-09-20, and `port` is now a recorded attribute rather than part of any key (§13, decision 15); reusable-token API sessions (§13, decision 15) | EOS, NX-OS, IOS-XE, Junos | open — SSH measured on EOS, Junos and NX-OS, and on **no platform is `port` the same value at authentication and at authorization**; eAPI, NX-API and NETCONF measured on EOS and NX-OS; IOS-XE's RESTCONF measured 2026-09-23 (`tests/lab/results/L1-restconf-cisco_iosxe.md`); the console and IOS-XE's NETCONF unmeasured; see below |
-| **L2** | Whether `server_msg` on an authorization REPLY is displayed to the operator, and at what length it truncates. | The session-ceiling warning (§5.6); denial messages | all | open — displayed in full on EOS; **not measurable on the N9Kv today**, because every command is denied before the authorizer runs (L1); truncation length and IOS-XE unmeasured; see below. **Output modifiers (recorded 2026-09-23, plan 4):** in the truncation runs a typed `show clock \| include …` reached port49 as `show clock` alone on vEOS 4.31.2F, NX-OS 10.4(2)F and IOS-XE 17.13.01a (`tests/lab/results/L2-arista_eos.md`, `L2-cisco_nxos.md`, `L2-cisco_iosxe.md`, "Truncation length"), which is why no built-in platform's `pipe_authorized` is true (§8); whether any modifier reaches port49 anywhere is unmeasured |
+| **L2** | Whether `server_msg` on an authorization REPLY is displayed to the operator, and at what length it truncates. | The session-ceiling warning (§5.6); denial messages | all | open — displayed in full on EOS; **not measurable on the N9Kv today**, because every command is denied before the authorizer runs (L1); truncation length and IOS-XE unmeasured; plan 7b's lab run measures truncation on every image through `lab.deny_message_length`. That is a per-command denial on EOS, NX-OS and IOS-XE, and a session-authorization denial on Junos (`lab.deny_session`); see below. **Output modifiers (recorded 2026-09-23, plan 4):** in the truncation runs a typed `show clock \| include …` reached port49 as `show clock` alone on vEOS 4.31.2F, NX-OS 10.4(2)F and IOS-XE 17.13.01a (`tests/lab/results/L2-arista_eos.md`, `L2-cisco_nxos.md`, `L2-cisco_iosxe.md`, "Truncation length"), which is why no built-in platform's `pipe_authorized` is true (§8); whether any modifier reaches port49 anywhere is unmeasured |
 | **L3** | Whether the enable START carries `rem_addr`, and what it contains — bare address, or address and source port. | `rem_addr` binding on `$enab{level}$` platforms (§5.6); the login context key, because an enable that carries a fixed username collapses `(nas, username)` to one context per device | EOS, NX-OS, IOS-XE | closed — measured 2026-09-21; `tests/lab/results/L3-arista_eos.md`, `L3-cisco_iosxe.md`, `L3-nxos-cisco_nxos.md`. Scope: NX-OS 10.x has no enable exchange (`feature privilege` was removed in 10.x; the owner confirmed the same on production Nexus 9000 hardware running 10.3(5)); NX-OS 9.x and earlier are unmeasured and out of scope. No measured image sends `$enab{level}$`. History: closed in error 2026-09-20 on a note with no transcript, reopened 2026-09-21. Measured: vEOS-lab 4.31.2F (image tagged 4.32.2F) and IOS-XE 17.13.01a both send the operator's own username with `service=enable` and a bare-address `rem_addr` (`tests/lab/results/L3-arista_eos.md`, re-measured 2026-09-22, which is where the image tag was found to overstate the running version; the image under the tag is `sha256:8ef33020ece8871b19ddfdddf7f3585b04d2ac3672845b0db88debe8e96ff9c9`, created 2026-09-15, the only one on the lab host; `L3-cisco_iosxe.md`). **NX-OS re-measured 2026-09-21 with the transcript it was missing** (`tests/lab/results/L3-nxos-cisco_nxos.md`): `disable`, `enable` and `enable 15` were each typed separately and each answered `% Invalid command at '^' marker.`, and `feature privilege` is itself refused by this image, so the conclusion the reopened note reached without evidence is confirmed with it |
 | **L4** | Whether any method-list configuration falls through to local on FAIL rather than only on ERROR — specifically Junos `authentication-order` with `password` listed — and `deadtime` behavior. | The `enable: auto` exposure argument and "denial is FAIL, so no fall-through" (§5.6); the reference AAA configuration | Junos first; then all | open — measured 2026-09-20 on vJunos-router, vSRX, vEOS, the N9Kv and IOS-XE over SSH: both Junos images fall through on a FAIL when `password` is listed; vEOS, the N9Kv and IOS-XE never do (`tests/lab/results/L4-cisco_iosxe.md`, which this cell omitted until 2026-09-23); `deadtime`, other transports and authorization fall-through unmeasured. **2026-09-21 (L17):** committing `tacplus-options strict-authorization` on both Junos images changes none of the unreachable-server cells — break-glass still logged in under both orders with port49d down — so making a port49 denial binding does not cost the fall-through this row measures. **2026-09-24, ERROR and `deadtime`, all five images** (`tests/lab/results/L4-error-*.md`): an authentication ERROR is final on IOS-XE and on Junos with `tacplus` alone and falls through elsewhere, but on vEOS and the N9Kv port49's authorization FAIL during a store outage then leaves break-glass useless; a per-command ERROR is final on vEOS, falls through to local RBAC on the N9Kv, and under IOS-XE's `if-authenticated` permits every command; a silent server costs 5s per command on the Cisco and Arista images and nothing on Junos; only the N9Kv offers a dead time, and `deadtime 1` locks token logins out for its minute after the server returns. Plan 4 answers an authorization `store_unavailable` `FAIL`, never `ERROR`, for this reason (§5.7). Still open: other transports, a second server, the console; see below |
 | **L5** | Which platforms send accounting WATCHDOG, how often, and with or without arguments. | §5.8 record handling | all | closed — measured 2026-09-20; `tests/lab/results/L5-arista_eos.md`, `L5-juniper_vjunos-router.md`, `L5-juniper_vsrx.md`, `L5-cisco_nxos.md`, `L5-cisco_iosxe.md`. No image sends a WATCHDOG over a 2m30s idle interactive session under the lab's accounting config, which sets no periodic update; a device configured for periodic updates is outside what was measured |
@@ -6619,6 +6737,7 @@ implemented against a guess. This section is the one place the distinction is ke
 | **L31** | What break-glass costs on IOS-XE and NX-OS with single-connection on, when port49d resets a de-admitted device's connection after the device has written its request: a device removed from inventory (unadmitted), refused admission, or quarantined. For each: break-glass login plus three commands against port49d stopped, and whether the device's retries after the reset are refused at Accept before it writes. | That a de-admitted or quarantined device costs the device what a refused connection does, and falls to its local method at once (§10, "A quarantined device gets silence, not FAIL"; the reload paragraph under "How a daemon refreshes its snapshot"; §15 L29) | IOS-XE, NX-OS (single-connection on) | closed — measured 2026-09-30; tests/lab/results/L31-cisco_iosxe.md, L31-cisco_nxos.md, L31-arista_eos.md. With `fix/breakglass-reset` and single-connection on, break-glass login plus three commands took, removed, refused and quarantined, 1.28 s, 1.78 s and 1.78 s on the C8000V and 2.62 s, 2.58 s and 2.61 s on the N9Kv, against the rekeyed control's 1.28 s and 2.61 s and port49d stopped's 1.31 s and 2.66 s; every declined phase's retries were refused at Accept before the device wrote; vEOS, the no-regression check, took 0.33 s, 0.32 s and 0.32 s against 0.34 s and 0.37 s. Before the fix (observed 2026-09-30, cause analysed; tests/lab/results/L31-breakglass-cisco-singleconnection.md): Catalyst 8000V 17.13.01a and Nexus 9300v 10.4(2)F, from plan 6b's L29 and quarantine-sync captures (header flag `0x04`), break-glass took 30.1 s and 40.9 s removed, 20.6 s and 17.6 s refused, 20.3 s and 16.7 s quarantined, against 1.28 s and 2.62 s stopped, and 1.53 s and 2.6 s re-keyed, where a key miss's retries are refused at Accept |
 | **L32** | What the inventory service's NetBox and Nautobot connectors read as built (plan 6c), from each measured release: the GraphQL list query with every field the connector asks for (`status`, `primary_ip4`, `primary_ip6`, the map's paths, every interface address), paged as the profile pages it, returning every device once and matching REST's `count`; the REST fallback (`?depth=1` under the `nautobot_2` profile) to a null `next`; and both through a TLS-terminating reverse proxy that sends the client's host as `Host` alone, and through one that sends the upstream's name as `Host` and the client's as `X-Forwarded-Host`: which header each release builds `next` from, and whether the connector reads every device through each, following `next` or rebuilding it on its `url`. | Plan 6c's connectors: the query per profile, the count check, following or rebuilding `next` (§10, "Connectors and sync cadence"; §13, decision 31) | NetBox 3.7 and 4.x; Nautobot 1.6, 2.x and 3.x | closed — measured 2026-10-01; tests/lab/results/L32-netbox.md, L32-nautobot.md. NetBox 3.7.8 and 4.7.1 build `next` from `X-Forwarded-Host` when the proxy sends it and from `Host` otherwise, and take `https` only from `X-Forwarded-Proto`; behind a proxy that sends neither, both named their own `http://netbox:8080`. Nautobot 1.6.32, 2.4.43 and 3.2.6 do the same, naming `http://nautobot:8080`. The connector as built read all 120 devices of each stack, once each, through all three TLS-terminating nginx 1.27 proxies (the client's host as `Host`; the upstream's as `Host` and the client's as `X-Forwarded-Host`; a bare `proxy_pass`), over GraphQL and over REST, 50 to a page; through the bare proxy it rebuilt every REST `next` on its `url`, said so once, and read all 120 on all five. Every release's GraphQL device list gives `id`, a string, which the connector keys the list by. *Unmeasured:* a proxy sending `X-Forwarded-Host` without `X-Forwarded-Proto`, a `next` naming another path, a GraphQL list above a server cap, and a list changing between pages; see below |
 | **L33** | What NetBox and Nautobot do delivering a webhook to port49-inventory's `webhook_listen`, per measured release: whether each delivers to an `https` payload URL whose certificate a private CA issued (`ca_file_path`, `ssl_verification` on); whether port49-inventory authenticates every delivery as it arrives (HMAC-SHA512 of the body, `X-Hook-Signature`) and finds its `timestamp` inside the 5-minute window; how long a change takes from the API write to the published bundle; whether a delivery port49-inventory refuses (HTTP 401) is sent again; and, end to end on one device, how long a NetBox and a Nautobot change takes to reach port49d's admission through the webhook. | Plan 6c's webhook trigger: TLS on the webhook listener, the freshness window, the 401 answer (§10; §13, decision 31) | NetBox 3.7 and 4.x; Nautobot 1.6, 2.x and 3.x; vEOS-lab for the device run | closed — measured 2026-10-01; tests/lab/results/L33-netbox.md, L33-nautobot.md, L33-e2e-netbox-arista_eos.md, L33-e2e-nautobot-arista_eos.md. NetBox 3.7.8 and 4.7.1 and Nautobot 1.6.32, 2.4.43 and 3.2.6 each delivered to an `https` payload URL under a private CA's certificate, `ssl_verification` on, from the first change; port49-inventory authenticated every delivery, and none was stale. From the API write to the published bundle, the 2 s settle included, took 2.43–2.73 s on NetBox and 3.57–4.07 s on Nautobot. A delivery refused 401 was not sent again within 120 s on any release, nor one a stand-in listener answered 503 (port49-inventory itself never answers a delivery 503; final review M1): at their defaults neither product retries a webhook (NetBox's `RQ_RETRY_MAX` is 0; Nautobot's `process_webhook` has no retry). End to end on vEOS-lab 4.31.2F (image tagged 4.32.2F), a NetBox 4.7.1 change reached port49d's reload in 2.53–4.95 s and a Nautobot 3.2.6 change in 4.49–6.98 s; a status the default filter removes left the device with no grant, break-glass logged in, and the status restored let token logins in again. *Unmeasured:* a certificate from the worker's default trust store, a burst inside the 30 s gap, NetBox with `RQ_RETRY_MAX` set, and a delivery while port49-inventory shuts down or is down, which the next start's sync covers; see below |
+| **L34** | Whether a device shows the `server_msg` port49 puts on a **permitted** authorization reply — the session reply at login, and a per-command reply — and still treats the reply as a permit: the command's output appears and the session goes on. | The session-ceiling warning (§5.6, plan 7b; decision 33): sent only to the platforms this row finds show it and still permit (`platform.CeilingWarning`, an allow-list), or that an operator lists | EOS, NX-OS, IOS-XE, Junos | open — added 2026-10-01 by plan 7b; measured by its Task 12 |
 
 **What has been measured so far, per row.** The measurements exist and the notes are in the
 repository. NX-OS was measured on 2026-09-20 and is no longer outstanding; **IOS-XE was
