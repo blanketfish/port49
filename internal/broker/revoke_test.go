@@ -780,3 +780,49 @@ func TestARevokeAndALiftOfOneKeyDoNotInterleave(t *testing.T) {
 		t.Fatalf("the listener holds the mark %v, the store %v: they must agree", on, err)
 	}
 }
+
+// A Revoke or Lift waiting behind one held by a hung store call gives up
+// when its ctx ends, saying nothing was done and, for a revocation, how to
+// cut access another way (I1).
+func TestARevokeOrLiftBehindAHungOneGivesUpAtItsDeadline(t *testing.T) {
+	for _, lift := range []bool{false, true} {
+		f := newFixture(t, 8)
+		raced := &liftRacedStore{Store: f.st, entered: make(chan struct{}), gate: make(chan struct{})}
+		f.b.Store = raced
+		first := make(chan error, 1)
+		go func() {
+			_, err := f.b.Revoke(context.Background(), RevokeRequest{Principal: alice})
+			first <- err
+		}()
+		<-raced.entered
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		var err error
+		want := []string{"another revocation or lift is still running", "nothing was revoked", "cut access another way"}
+		if lift {
+			_, err = f.b.Lift(ctx, RevokeRequest{Principal: alice})
+			want = []string{"another revocation or lift is still running", "nothing was lifted"}
+		} else {
+			_, err = f.b.Revoke(ctx, RevokeRequest{Principal: "user:carol@example.com"})
+		}
+		cancel()
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("lift %v: %v", lift, err)
+		}
+		for _, w := range want {
+			if !strings.Contains(err.Error(), w) {
+				t.Fatalf("lift %v: the error lacks %q: %v", lift, w, err)
+			}
+		}
+		close(raced.gate)
+		if err := <-first; err != nil {
+			t.Fatal(err)
+		}
+		if !lift {
+			if _, err := f.st.GetRevocation(context.Background(), store.RevocationPrincipal, "user:carol@example.com"); !errors.Is(err, store.ErrNotFound) {
+				t.Fatalf("the revocation that gave up wrote its mark: %v", err)
+			}
+		} else if _, err := f.st.GetRevocation(context.Background(), store.RevocationPrincipal, alice); err != nil {
+			t.Fatalf("the lift that gave up lifted: %v", err)
+		}
+	}
+}

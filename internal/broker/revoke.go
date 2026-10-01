@@ -121,9 +121,10 @@ func (req RevokeRequest) normal() (RevokeRequest, string, string, error) {
 // A failure after the mark is the report's Err, the mark standing, and the
 // steps after it still run.
 //
-// Revoke and Lift hold revokeMu, so a revocation and a lift of one key
+// Revoke and Lift hold revokeSem, so a revocation and a lift of one key
 // cannot interleave and leave the listener's copy disagreeing with the
-// store's (M5).
+// store's (M5). One that cannot take it before ctx ends does nothing and
+// says so.
 //
 // A revocation by certificate that finds no live context deletes no
 // receipt (session.Manager reads the principals off the contexts). That
@@ -140,14 +141,17 @@ func (b *Broker) Revoke(ctx context.Context, req RevokeRequest) (RevokeReport, e
 		// goroutine shares the process with TACACS+ (M12).
 		return RevokeReport{}, errors.New("broker: revocation is not wired (no session manager); nothing was revoked")
 	}
-	b.revokeMu.Lock()
-	defer b.revokeMu.Unlock()
+	release, err := b.acquireRevoke(ctx)
+	if err != nil {
+		return RevokeReport{}, fmt.Errorf("broker: another revocation or lift is still running, so nothing was "+
+			"revoked by this one (%w); "+fallback, err)
+	}
+	defer release()
 	now := b.Now()
 	mark := store.Revocation{Kind: kind, Key: key, At: now, Origin: req.Origin}
 	if err := b.Store.PutRevocation(ctx, mark); err != nil {
 		return RevokeReport{}, fmt.Errorf("broker: the revocation could not be recorded, so nothing was revoked (%w); "+
-			"cut access another way: remove the principal's grants from broker.policy_file (live within two watch "+
-			"intervals), or stop port49d", err)
+			fallback, err)
 	}
 	rep := RevokeReport{Request: req, Mark: mark, decimal: decimal}
 	if got, err := b.Store.GetRevocation(ctx, kind, key); err == nil {
@@ -235,8 +239,12 @@ func (b *Broker) Lift(ctx context.Context, req RevokeRequest) (RevokeReport, err
 	if err != nil {
 		return RevokeReport{}, err
 	}
-	b.revokeMu.Lock()
-	defer b.revokeMu.Unlock()
+	release, err := b.acquireRevoke(ctx)
+	if err != nil {
+		return RevokeReport{}, fmt.Errorf("broker: another revocation or lift is still running, so nothing was "+
+			"lifted (%w)", err)
+	}
+	defer release()
 	cur, err := b.Store.GetRevocation(ctx, kind, key)
 	switch {
 	case errors.Is(err, store.ErrNotFound):
@@ -254,6 +262,26 @@ func (b *Broker) Lift(ctx context.Context, req RevokeRequest) (RevokeReport, err
 	rep.Saved, rep.SaveErr = b.persist(ctx)
 	b.recordRevocation(b.Now(), rep, decision.VerdictPermit, decision.RevocationLifted, "lifted")
 	return rep, nil
+}
+
+// fallback is how to cut access when a revocation cannot be made.
+const fallback = "cut access another way: remove the principal's grants from broker.policy_file (live within " +
+	"two watch intervals), or stop port49d"
+
+// acquireRevoke takes revokeSem, or gives up when ctx ends first.
+func (b *Broker) acquireRevoke(ctx context.Context) (func(), error) {
+	b.mu.Lock()
+	if b.revokeSem == nil {
+		b.revokeSem = make(chan struct{}, 1)
+	}
+	sem := b.revokeSem
+	b.mu.Unlock()
+	select {
+	case sem <- struct{}{}:
+		return func() { <-sem }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 // persist writes the marks in force to broker.revocations_file.

@@ -77,8 +77,10 @@ type Broker struct {
 	// every change. Nil keeps them in the store alone.
 	Persist func(context.Context) error
 
-	// revokeMu serialises Revoke and Lift (M5).
-	revokeMu sync.Mutex
+	// revokeSem is a one-slot semaphore serialising Revoke and Lift (M5),
+	// made lazily under mu. A channel, not a mutex, so a caller waiting
+	// behind a hung store call or Persist gives up when its ctx ends.
+	revokeSem chan struct{}
 
 	mu        sync.Mutex
 	blobsSeen map[string]bool
