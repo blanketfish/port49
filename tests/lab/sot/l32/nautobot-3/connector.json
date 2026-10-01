@@ -1,7 +1,7 @@
 {
   "stack": "nautobot-3",
-  "at": "2026-10-01T08:32:38.78920599Z",
-  "built": "port49d, port49 and port49-inventory built from `a50c993` (`make build`).",
+  "at": "2026-10-01T09:01:29.880836032Z",
+  "built": "internal/sot as compiled by go test at `eb862a4`",
   "probes": [
     {
       "proxy": "host",
@@ -16,13 +16,21 @@
       "next_scheme": "https",
       "next_host": "127.0.0.1:21030",
       "result_host": "127.0.0.1:21030"
+    },
+    {
+      "proxy": "plain",
+      "status": 200,
+      "next_scheme": "http",
+      "next_host": "nautobot:8080",
+      "result_host": "nautobot:8080"
     }
   ],
   "reads": [
     {
       "proxy": "host",
+      "url": "https://127.0.0.1:20030",
       "api": "graphql",
-      "seconds": 2.892162473,
+      "seconds": 2.733986624,
       "devices": 120,
       "said": [
         "port49-inventory: source l32: Nautobot 3.2.6, profile nautobot_2, over GraphQL"
@@ -42,8 +50,9 @@
     },
     {
       "proxy": "host",
+      "url": "https://127.0.0.1:20030",
       "api": "rest",
-      "seconds": 2.289540175,
+      "seconds": 2.281033549,
       "devices": 120,
       "said": [
         "port49-inventory: source l32: Nautobot 3.2.6, profile nautobot_2, over REST"
@@ -62,8 +71,9 @@
     },
     {
       "proxy": "xfh",
+      "url": "https://127.0.0.1:21030",
       "api": "graphql",
-      "seconds": 1.575940223,
+      "seconds": 1.57156585,
       "devices": 120,
       "said": [
         "port49-inventory: source l32: Nautobot 3.2.6, profile nautobot_2, over GraphQL"
@@ -83,10 +93,55 @@
     },
     {
       "proxy": "xfh",
+      "url": "https://127.0.0.1:21030",
       "api": "rest",
-      "seconds": 2.085323332,
+      "seconds": 2.082672099,
       "devices": 120,
       "said": [
+        "port49-inventory: source l32: Nautobot 3.2.6, profile nautobot_2, over REST"
+      ],
+      "leaf_01": {
+        "addresses": [
+          "10.0.1.5"
+        ],
+        "attributes": {
+          "os_version": "4.32.2F",
+          "role": "leaf",
+          "site": "dc1"
+        },
+        "platform": "arista_eos"
+      }
+    },
+    {
+      "proxy": "plain",
+      "url": "https://127.0.0.1:22030",
+      "api": "graphql",
+      "seconds": 1.56941476,
+      "devices": 120,
+      "said": [
+        "port49-inventory: source l32: Nautobot 3.2.6, profile nautobot_2, over GraphQL"
+      ],
+      "leaf_01": {
+        "addresses": [
+          "10.0.1.5",
+          "10.0.1.6"
+        ],
+        "attributes": {
+          "os_version": "4.32.2F",
+          "role": "leaf",
+          "site": "dc1"
+        },
+        "platform": "arista_eos"
+      }
+    },
+    {
+      "proxy": "plain",
+      "url": "https://127.0.0.1:22030",
+      "api": "rest",
+      "seconds": 2.084095392,
+      "devices": 120,
+      "said": [
+        "port49-inventory: source l32: a page's next names another scheme, host or port than url; it is rebuilt on url, and the token is sent nowhere else: check the proxy's Host and X-Forwarded-Proto headers",
         "port49-inventory: source l32: Nautobot 3.2.6, profile nautobot_2, over REST"
       ],
       "leaf_01": {

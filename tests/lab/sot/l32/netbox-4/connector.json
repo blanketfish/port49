@@ -1,7 +1,7 @@
 {
   "stack": "netbox-4",
-  "at": "2026-10-01T08:24:09.747450451Z",
-  "built": "port49d, port49 and port49-inventory built from `a50c993` (`make build`).",
+  "at": "2026-10-01T08:52:50.250082642Z",
+  "built": "internal/sot as compiled by go test at `eb862a4`",
   "probes": [
     {
       "proxy": "host",
@@ -16,13 +16,21 @@
       "next_scheme": "https",
       "next_host": "127.0.0.1:21080",
       "result_host": "127.0.0.1:21080"
+    },
+    {
+      "proxy": "plain",
+      "status": 200,
+      "next_scheme": "http",
+      "next_host": "netbox:8080",
+      "result_host": "netbox:8080"
     }
   ],
   "reads": [
     {
       "proxy": "host",
+      "url": "https://127.0.0.1:20080",
       "api": "graphql",
-      "seconds": 0.924973653,
+      "seconds": 0.731911786,
       "devices": 120,
       "said": [
         "port49-inventory: source l32: NetBox 4.7.1, profile netbox_4, over GraphQL"
@@ -42,8 +50,9 @@
     },
     {
       "proxy": "host",
+      "url": "https://127.0.0.1:20080",
       "api": "rest",
-      "seconds": 0.302620537,
+      "seconds": 0.320330459,
       "devices": 120,
       "said": [
         "port49-inventory: source l32: NetBox 4.7.1, profile netbox_4, over REST"
@@ -62,8 +71,9 @@
     },
     {
       "proxy": "xfh",
+      "url": "https://127.0.0.1:21080",
       "api": "graphql",
-      "seconds": 0.286553832,
+      "seconds": 0.814210224,
       "devices": 120,
       "said": [
         "port49-inventory: source l32: NetBox 4.7.1, profile netbox_4, over GraphQL"
@@ -83,10 +93,55 @@
     },
     {
       "proxy": "xfh",
+      "url": "https://127.0.0.1:21080",
       "api": "rest",
-      "seconds": 0.328738655,
+      "seconds": 0.456434721,
       "devices": 120,
       "said": [
+        "port49-inventory: source l32: NetBox 4.7.1, profile netbox_4, over REST"
+      ],
+      "leaf_01": {
+        "addresses": [
+          "10.0.1.5"
+        ],
+        "attributes": {
+          "os_version": "4.32.2F",
+          "role": "leaf",
+          "site": "dc1"
+        },
+        "platform": "arista_eos"
+      }
+    },
+    {
+      "proxy": "plain",
+      "url": "https://127.0.0.1:22080",
+      "api": "graphql",
+      "seconds": 0.260104022,
+      "devices": 120,
+      "said": [
+        "port49-inventory: source l32: NetBox 4.7.1, profile netbox_4, over GraphQL"
+      ],
+      "leaf_01": {
+        "addresses": [
+          "10.0.1.5",
+          "10.0.1.6"
+        ],
+        "attributes": {
+          "os_version": "4.32.2F",
+          "role": "leaf",
+          "site": "dc1"
+        },
+        "platform": "arista_eos"
+      }
+    },
+    {
+      "proxy": "plain",
+      "url": "https://127.0.0.1:22080",
+      "api": "rest",
+      "seconds": 0.288419037,
+      "devices": 120,
+      "said": [
+        "port49-inventory: source l32: a page's next names another scheme, host or port than url; it is rebuilt on url, and the token is sent nowhere else: check the proxy's Host and X-Forwarded-Proto headers",
         "port49-inventory: source l32: NetBox 4.7.1, profile netbox_4, over REST"
       ],
       "leaf_01": {
