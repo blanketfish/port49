@@ -1,0 +1,112 @@
+{
+  "stack": "nautobot-3",
+  "at": "2026-10-01T08:32:38.78920599Z",
+  "built": "port49d, port49 and port49-inventory built from `a50c993` (`make build`).",
+  "probes": [
+    {
+      "proxy": "host",
+      "status": 200,
+      "next_scheme": "https",
+      "next_host": "127.0.0.1:20030",
+      "result_host": "127.0.0.1:20030"
+    },
+    {
+      "proxy": "xfh",
+      "status": 200,
+      "next_scheme": "https",
+      "next_host": "127.0.0.1:21030",
+      "result_host": "127.0.0.1:21030"
+    }
+  ],
+  "reads": [
+    {
+      "proxy": "host",
+      "api": "graphql",
+      "seconds": 2.892162473,
+      "devices": 120,
+      "said": [
+        "port49-inventory: source l32: Nautobot 3.2.6, profile nautobot_2, over GraphQL"
+      ],
+      "leaf_01": {
+        "addresses": [
+          "10.0.1.5",
+          "10.0.1.6"
+        ],
+        "attributes": {
+          "os_version": "4.32.2F",
+          "role": "leaf",
+          "site": "dc1"
+        },
+        "platform": "arista_eos"
+      }
+    },
+    {
+      "proxy": "host",
+      "api": "rest",
+      "seconds": 2.289540175,
+      "devices": 120,
+      "said": [
+        "port49-inventory: source l32: Nautobot 3.2.6, profile nautobot_2, over REST"
+      ],
+      "leaf_01": {
+        "addresses": [
+          "10.0.1.5"
+        ],
+        "attributes": {
+          "os_version": "4.32.2F",
+          "role": "leaf",
+          "site": "dc1"
+        },
+        "platform": "arista_eos"
+      }
+    },
+    {
+      "proxy": "xfh",
+      "api": "graphql",
+      "seconds": 1.575940223,
+      "devices": 120,
+      "said": [
+        "port49-inventory: source l32: Nautobot 3.2.6, profile nautobot_2, over GraphQL"
+      ],
+      "leaf_01": {
+        "addresses": [
+          "10.0.1.5",
+          "10.0.1.6"
+        ],
+        "attributes": {
+          "os_version": "4.32.2F",
+          "role": "leaf",
+          "site": "dc1"
+        },
+        "platform": "arista_eos"
+      }
+    },
+    {
+      "proxy": "xfh",
+      "api": "rest",
+      "seconds": 2.085323332,
+      "devices": 120,
+      "said": [
+        "port49-inventory: source l32: Nautobot 3.2.6, profile nautobot_2, over REST"
+      ],
+      "leaf_01": {
+        "addresses": [
+          "10.0.1.5"
+        ],
+        "attributes": {
+          "os_version": "4.32.2F",
+          "role": "leaf",
+          "site": "dc1"
+        },
+        "platform": "arista_eos"
+      }
+    }
+  ],
+  "graphql_id": {
+    "query": "{ devices(limit: 1, offset: 0) { id name } }",
+    "status": 200,
+    "errors": 0,
+    "selectable": true,
+    "kind": "string"
+  }
+}

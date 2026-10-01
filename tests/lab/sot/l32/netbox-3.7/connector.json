@@ -1,0 +1,112 @@
+{
+  "stack": "netbox-3.7",
+  "at": "2026-10-01T08:19:35.791723175Z",
+  "built": "port49d, port49 and port49-inventory built from `a50c993` (`make build`).",
+  "probes": [
+    {
+      "proxy": "host",
+      "status": 200,
+      "next_scheme": "https",
+      "next_host": "127.0.0.1:20037",
+      "result_host": "127.0.0.1:20037"
+    },
+    {
+      "proxy": "xfh",
+      "status": 200,
+      "next_scheme": "https",
+      "next_host": "127.0.0.1:21037",
+      "result_host": "127.0.0.1:21037"
+    }
+  ],
+  "reads": [
+    {
+      "proxy": "host",
+      "api": "graphql",
+      "seconds": 0.246495293,
+      "devices": 120,
+      "said": [
+        "port49-inventory: source l32: NetBox 3.7.8, profile netbox_3_7, over GraphQL"
+      ],
+      "leaf_01": {
+        "addresses": [
+          "10.0.1.5",
+          "10.0.1.6"
+        ],
+        "attributes": {
+          "os_version": "4.32.2F",
+          "role": "leaf",
+          "site": "dc1"
+        },
+        "platform": "arista_eos"
+      }
+    },
+    {
+      "proxy": "host",
+      "api": "rest",
+      "seconds": 0.202859895,
+      "devices": 120,
+      "said": [
+        "port49-inventory: source l32: NetBox 3.7.8, profile netbox_3_7, over REST"
+      ],
+      "leaf_01": {
+        "addresses": [
+          "10.0.1.5"
+        ],
+        "attributes": {
+          "os_version": "4.32.2F",
+          "role": "leaf",
+          "site": "dc1"
+        },
+        "platform": "arista_eos"
+      }
+    },
+    {
+      "proxy": "xfh",
+      "api": "graphql",
+      "seconds": 0.394869418,
+      "devices": 120,
+      "said": [
+        "port49-inventory: source l32: NetBox 3.7.8, profile netbox_3_7, over GraphQL"
+      ],
+      "leaf_01": {
+        "addresses": [
+          "10.0.1.5",
+          "10.0.1.6"
+        ],
+        "attributes": {
+          "os_version": "4.32.2F",
+          "role": "leaf",
+          "site": "dc1"
+        },
+        "platform": "arista_eos"
+      }
+    },
+    {
+      "proxy": "xfh",
+      "api": "rest",
+      "seconds": 0.203652492,
+      "devices": 120,
+      "said": [
+        "port49-inventory: source l32: NetBox 3.7.8, profile netbox_3_7, over REST"
+      ],
+      "leaf_01": {
+        "addresses": [
+          "10.0.1.5"
+        ],
+        "attributes": {
+          "os_version": "4.32.2F",
+          "role": "leaf",
+          "site": "dc1"
+        },
+        "platform": "arista_eos"
+      }
+    }
+  ],
+  "graphql_id": {
+    "query": "{ device_list { id name } }",
+    "status": 200,
+    "errors": 0,
+    "selectable": true,
+    "kind": "string"
+  }
+}
