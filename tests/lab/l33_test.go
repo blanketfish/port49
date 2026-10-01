@@ -34,8 +34,9 @@ type l33Record struct {
 	// Refused is the run of two more webhooks on one change: one under the
 	// wrong secret, its bad_signature deliveries counted in the 120s after
 	// the change, so 1 is "not sent again"; and one to a stand-in listener
-	// that answers every delivery 503, as port49-inventory does while it
-	// shuts down, its deliveries counted and timed in the same 120s.
+	// that answers every delivery 503, a stand-in for a service going away
+	// (port49-inventory itself never answers a delivery 503: final review
+	// M1), its deliveries counted and timed in the same 120s.
 	RefusedChange string    `json:"refused_change"`
 	BadSignature  int       `json:"bad_signature"`
 	Unavailable   int       `json:"unavailable"`
@@ -104,8 +105,9 @@ sync:
 const l33UnavailablePort = "18445"
 
 // l33Unavailable listens on host:l33UnavailablePort over TLS under the
-// webhook certificate and answers every request 503 shutting_down, as
-// port49-inventory's webhook listener does during shutdown. arrivals is when
+// webhook certificate and answers every request 503 shutting_down, a
+// stand-in for a service going away; port49-inventory's webhook listener
+// never answers so (final review M1). arrivals is when
 // each request came; nothing of a request is kept.
 func l33Unavailable(t *testing.T, host string) (arrivals func() []time.Time) {
 	t.Helper()
