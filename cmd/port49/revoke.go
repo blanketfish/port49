@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"os"
 	"strings"
@@ -78,7 +79,11 @@ func revokeCmd(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stderr, "port49 revoke:", err)
 			return 1
 		}
-		req.CertIssuer, req.CertSerial = c.Issuer.String(), c.SerialNumber.Text(16)
+		// The serial goes as explicit hex, 0x after any sign: one of digits
+		// alone (sequential CAs issue 10, 11, …) is otherwise taken for a
+		// decimal copied by hand, and the report advises against a correct
+		// revocation (final review I1).
+		req.CertIssuer, req.CertSerial = c.Issuer.String(), hexSerial(c.SerialNumber)
 		// The broker's report names the issuer and serial, not whose
 		// certificate it is; this says, before anything is sent. Quoted as
 		// the broker quotes an issuer: a hostile certificate's names must
@@ -119,6 +124,16 @@ func askRevoke(socket string, req admin.Request, wait time.Duration, stdout, std
 		return 3
 	}
 	return 0
+}
+
+// hexSerial is a serial as the broker reads it, hex with a 0x prefix and
+// any minus sign kept in front (Go 1.22 still parses a negative serial).
+func hexSerial(n *big.Int) string {
+	s := n.Text(16)
+	if strings.HasPrefix(s, "-") {
+		return "-0x" + s[1:]
+	}
+	return "0x" + s
 }
 
 // readCertificate is the one certificate in a file, PEM or DER. A

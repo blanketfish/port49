@@ -391,7 +391,7 @@ func (r RevokeReport) Text() string {
 		r.what(), r.Mark.At.UTC().Format(time.RFC3339), len(r.Contexts), r.TokenKeys, r.Connections, mints, r.flags())
 	if r.Mark.Kind == store.RevocationCert && r.decimal {
 		fmt.Fprintf(&b, "\nthe serial %s was read as hexadecimal; if you copied a decimal serial (openssl prints a "+
-			"small one as 4096 (0x1000)), lift this and use --cert FILE", r.Request.Serial)
+			"small one as 4096 (0x1000)), revoke it again with --cert FILE, then lift this one", r.Request.Serial)
 	}
 	if r.Mark.Kind == store.RevocationCert && r.TokenKeys > 0 {
 		b.WriteString("\nunspent tokens are deleted by (device, username): the same principal's other certificates " +

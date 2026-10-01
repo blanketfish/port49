@@ -57,7 +57,8 @@ func NewCA(cn string, notBefore, notAfter time.Time) (*CA, error) {
 // Leaf describes one certificate to issue. Client selects the clientAuth
 // extended key usage; otherwise it is serverAuth. NoExtKeyUsage issues one
 // with no extended key usage at all, which RFC 5280 reads as any purpose, as
-// many enterprise user certificates are.
+// many enterprise user certificates are. Serial, when set, is the
+// certificate's serial; nil is a random one.
 type Leaf struct {
 	CommonName          string
 	Emails              []string
@@ -67,6 +68,7 @@ type Leaf struct {
 	Client              bool
 	NoExtKeyUsage       bool
 	NotBefore, NotAfter time.Time
+	Serial              *big.Int
 }
 
 // Issue signs a leaf and returns it ready for crypto/tls, Leaf set.
@@ -78,6 +80,9 @@ func (ca *CA) Issue(l Leaf) (tls.Certificate, error) {
 	sn, err := serial()
 	if err != nil {
 		return tls.Certificate{}, err
+	}
+	if l.Serial != nil {
+		sn = l.Serial
 	}
 	eku := x509.ExtKeyUsageServerAuth
 	if l.Client {

@@ -715,7 +715,7 @@ func TestADecimalLookingSerialIsFlagged(t *testing.T) {
 	f := newFixture(t, 8)
 	rep, err := f.b.Revoke(context.Background(), RevokeRequest{Issuer: "CN=x", Serial: "4096"})
 	if err != nil || !strings.Contains(rep.Text(), "the serial 4096 was read as hexadecimal") ||
-		!strings.Contains(rep.Text(), "--cert FILE") {
+		!strings.Contains(rep.Text(), "revoke it again with --cert FILE, then lift this one") {
 		t.Fatalf("%v\n%s", err, rep.Text())
 	}
 	rep, err = f.b.Revoke(context.Background(), RevokeRequest{Issuer: "CN=x", Serial: "0x4097"})
