@@ -52,8 +52,12 @@ pre-flight review: one critical, seven important and twenty-two minor fixed, one
 **executed 2026-10-01** on `feature/revocation-and-broker-limits`, reviewed per task and
 whole-branch (FIX FIRST 0/1/9, then a fix wave and a MERGE re-review), with a lab-driven fix: the first lab run found the
 agent surviving a revocation, and the listener now answers a revoked caller `credential_revoked`
-(Plan 7a — As built, below); **merged 2026-10-01 (PR #20)**. Next, plan 7b.
-7b–7h and 8–13 not yet.
+(Plan 7a — As built, below); **merged 2026-10-01 (PR #20)**. **7b written 2026-10-01**
+(`2026-10-01-07b-session-lifetime-and-cert-status.md`, thirteen tasks: one docs, ten code, one lab,
+one lab-and-docs; eleven rulings recorded as decision 33; one owner decision, D-7b-1, whether a
+certificate whose revocation status cannot be established is refused (ruled refuse) and whether
+certificate status is required (ruled required, with an explicit `disabled`); it opens L34).
+7c–7h and 8–13 not yet.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
