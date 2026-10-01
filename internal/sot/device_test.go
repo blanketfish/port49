@@ -239,11 +239,11 @@ func TestTheAliasTable(t *testing.T) {
 	}
 }
 
-// An address is one host, never a range: a prefix length is dropped, an
-// IPv4-mapped IPv6 address is its IPv4 address (port49d unmaps a source the
-// same way, and two devices sharing one must collide), and a zoned address,
-// or one written as its prefix's network or broadcast address, is left out
-// and said, since no device sources TACACS+ from it.
+// An address is one host, never a range: a prefix length is dropped and
+// never refuses it (it is whatever the operator typed: a loopback recorded
+// with its pool's mask is still the device's), an IPv4-mapped IPv6 address
+// is its IPv4 address (port49d unmaps a source the same way, and two devices
+// sharing one must collide), and a zoned address is left out and said.
 func TestAnAddressIsOneHostAndNeverARange(t *testing.T) {
 	for _, c := range []struct {
 		addr, want string
@@ -256,11 +256,11 @@ func TestAnAddressIsOneHostAndNeverARange(t *testing.T) {
 		{"::ffff:10.0.1.5/120", "10.0.1.5", false},
 		{"10.0.1.6/31", "10.0.1.5,10.0.1.6", false},
 		{"10.0.1.7/31", "10.0.1.5,10.0.1.7", false},
-		{"10.0.1.0/24", "10.0.1.5", true},
-		{"10.0.1.255/24", "10.0.1.5", true},
-		{"::ffff:10.0.1.0/120", "10.0.1.5", true},
-		{"10.0.1.0/0", "10.0.1.5", true},
-		{"2001:db8::/64", "10.0.1.5", true},
+		{"10.0.1.0/24", "10.0.1.0,10.0.1.5", false},
+		{"10.0.1.255/24", "10.0.1.5,10.0.1.255", false},
+		{"::ffff:10.0.1.0/120", "10.0.1.0,10.0.1.5", false},
+		{"10.0.1.0/0", "10.0.1.0,10.0.1.5", false},
+		{"2001:db8::/64", "10.0.1.5,2001:db8::", false},
 		{"2001:db8::/127", "10.0.1.5,2001:db8::", false},
 		{"2001:db8::6%eth0", "10.0.1.5", true},
 		{"2001:db8::6%eth0/64", "10.0.1.5", true},
@@ -279,17 +279,24 @@ func TestAnAddressIsOneHostAndNeverARange(t *testing.T) {
 			}
 		}
 	}
-	for _, primary := range []string{"10.0.1.0/24", "2001:db8::5%eth0", "::ffff:10.0.1.0/120"} {
+	for primary, want := range map[string]string{"10.0.1.0/24": "10.0.1.0", "::ffff:10.0.1.0/120": "10.0.1.0",
+		"10.255.0.0/16": "10.255.0.0", "10.0.1.5/0": "10.0.1.5"} {
 		body := strings.Replace(netbox4GraphQL, `"primary_ip4": {"address": "10.0.1.5/32"}`,
 			`"primary_ip4": {"address": "`+primary+`"}`, 1)
 		d, _, notes := (Mapping{Addresses: Addresses{Primary: true}}).device(profiles[NetBox4], "graphql", raw(t, body))
-		if len(d.Addresses) != 0 || len(notes) != 1 || !strings.Contains(notes[0], "device leaf-01: primary_ip4 is not") {
+		if addrs(d.Addresses) != want || len(notes) != 0 {
 			t.Errorf("%s: %s %v", primary, addrs(d.Addresses), notes)
 		}
 	}
+	body := strings.Replace(netbox4GraphQL, `"primary_ip4": {"address": "10.0.1.5/32"}`,
+		`"primary_ip4": {"address": "2001:db8::5%eth0"}`, 1)
+	d, _, notes := (Mapping{Addresses: Addresses{Primary: true}}).device(profiles[NetBox4], "graphql", raw(t, body))
+	if len(d.Addresses) != 0 || len(notes) != 1 || !strings.Contains(notes[0], "device leaf-01: primary_ip4 has a zone") {
+		t.Errorf("a zoned primary: %s %v", addrs(d.Addresses), notes)
+	}
 	// A zoned link-local is one of the addresses that cannot source TACACS+,
 	// said once for every device, not a note naming this one.
-	body := strings.Replace(netbox4GraphQL, `{"address": "10.0.1.6/32"}`, `{"address": "fe80::1%eth0"}`, 1)
+	body = strings.Replace(netbox4GraphQL, `{"address": "10.0.1.6/32"}`, `{"address": "fe80::1%eth0"}`, 1)
 	if _, _, notes := (Mapping{Addresses: Addresses{Primary: true, AllInterfaces: true}}).device(profiles[NetBox4],
 		"graphql", raw(t, body)); len(notes) != 1 || !strings.Contains(notes[0], "cannot source TACACS+") {
 		t.Fatalf("a zoned link-local: %v", notes)

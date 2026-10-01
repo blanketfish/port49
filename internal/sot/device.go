@@ -1,7 +1,6 @@
 package sot
 
 import (
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -232,47 +231,28 @@ func sourceable(a netip.Addr) bool {
 }
 
 var (
-	errNotIP   = errors.New("is not an IP address")
-	errNotHost = errors.New("is not a host address (a zone, a /0, or its prefix's network or broadcast address)")
+	errNotIP = errors.New("is not an IP address")
+	errZoned = errors.New("has a zone, which no source carries")
 )
 
 // addrOf is an address as the products write one, with or without its
 // prefix length (L27: "10.0.1.5/32"), as the one host it names: the prefix
-// length never widens it to a range. An IPv4-mapped address is its IPv4
-// address, as port49d unmaps a source, so two devices sharing one collide.
-// A zone (free text to netip, "/64" included), a /0, and an address written
-// as its prefix's network or broadcast address are not a host any device
-// sources from, and are refused.
+// length is whatever the operator typed, and never widens it to a range or
+// refuses it. An IPv4-mapped address is its IPv4 address, as port49d unmaps
+// a source, so two devices sharing one collide. A zone (free text to netip,
+// "/64" included) is the one thing refused.
 func addrOf(s string) (netip.Addr, error) {
 	if strings.Contains(s, "%") {
-		return netip.Addr{}, errNotHost
+		return netip.Addr{}, errZoned
 	}
-	p, err := netip.ParsePrefix(s)
+	if p, err := netip.ParsePrefix(s); err == nil {
+		return p.Addr().Unmap(), nil
+	}
+	a, err := netip.ParseAddr(s)
 	if err != nil {
-		a, err := netip.ParseAddr(s)
-		if err != nil {
-			return netip.Addr{}, errNotIP
-		}
-		return a.Unmap(), nil
+		return netip.Addr{}, errNotIP
 	}
-	a, bits := p.Addr(), p.Bits()
-	if a.Is4In6() {
-		if bits < 96 {
-			return netip.Addr{}, errNotHost
-		}
-		a, bits = a.Unmap(), bits-96
-	}
-	if bits == 0 {
-		return netip.Addr{}, errNotHost
-	}
-	// A /31 or /127 is a point-to-point link: both its addresses are hosts.
-	if bits < a.BitLen()-1 {
-		network := netip.PrefixFrom(a, bits).Masked().Addr()
-		if a == network || (a.Is4() && a == lastOf(network, bits)) {
-			return netip.Addr{}, errNotHost
-		}
-	}
-	return a, nil
+	return a.Unmap(), nil
 }
 
 // unzoned is s without its zone, its prefix length kept.
@@ -285,14 +265,6 @@ func unzoned(s string) string {
 		return s[:i] + s[i+j:]
 	}
 	return s[:i]
-}
-
-// lastOf is the IPv4 broadcast address of net/bits.
-func lastOf(net netip.Addr, bits int) netip.Addr {
-	b := net.As4()
-	v := binary.BigEndian.Uint32(b[:]) | (1<<(32-bits) - 1)
-	binary.BigEndian.PutUint32(b[:], v)
-	return netip.AddrFrom4(b)
 }
 
 func lookup(v any, path []string) any {
