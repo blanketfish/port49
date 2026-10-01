@@ -112,7 +112,7 @@ func (b *Broker) BindStatus(cs tls.ConnectionState, principal string, cred store
 // queueRevoke queues the revocation ref carries, if any.
 func (b *Broker) queueRevoke(ref *BindRefusal) {
 	if ref != nil && ref.revoke != nil {
-		b.enqueueRevoke(ref.revoke.issuer, ref.revoke.serial, ref.revoke.origin)
+		b.enqueueRevoke(ref.revoke.issuer, ref.revoke.serial, ref.revoke.origin, false)
 	}
 }
 
@@ -167,13 +167,18 @@ func (q queuedRevoke) key() [2]string { return [2]string{q.issuer, q.serial} }
 // names every entry of each list again (certstatus.LoadPersisted): one
 // already marked is passed over at its turn, so a replay revokes and
 // records nothing twice.
-func (b *Broker) OnCRLEntry(issuer, serial, source string) {
-	b.enqueueRevoke(issuer, serial, "crl "+source)
+//
+// replay is a restart's: its load is not said, since nearly every entry is
+// one passed over, and a line saying N are revoked in turn would read as a
+// revocation storm.
+func (b *Broker) OnCRLEntry(issuer, serial, source string, replay bool) {
+	b.enqueueRevoke(issuer, serial, "crl "+source, replay)
 }
 
 // enqueueRevoke queues q once: a certificate already waiting, refused at
-// every bind meanwhile, is not queued again.
-func (b *Broker) enqueueRevoke(issuer, serial, origin string) {
+// every bind meanwhile, is not queued again. quiet does not say the queue's
+// load.
+func (b *Broker) enqueueRevoke(issuer, serial, origin string, quiet bool) {
 	q := queuedRevoke{issuer, serial, origin}
 	b.queueOnce.Do(func() { b.revokeQueue = make(chan queuedRevoke, revokeQueueLen) })
 	b.mu.Lock()
@@ -188,7 +193,7 @@ func (b *Broker) enqueueRevoke(issuer, serial, origin string) {
 	b.mu.Unlock()
 	select {
 	case b.revokeQueue <- q:
-		if n := len(b.revokeQueue); n >= queueWarn {
+		if n := len(b.revokeQueue); n >= queueWarn && !quiet {
 			b.sayOnce("queue", 10*time.Minute, "broker: %d CRL revocations are queued; each is revoked in turn, "+
 				"and each certificate is refused at every use meanwhile", n)
 		}
@@ -279,7 +284,7 @@ func (b *Broker) RetryPending() {
 	b.pending = nil
 	b.mu.Unlock()
 	for _, q := range pending {
-		b.enqueueRevoke(q.issuer, q.serial, q.origin)
+		b.enqueueRevoke(q.issuer, q.serial, q.origin, false)
 	}
 }
 

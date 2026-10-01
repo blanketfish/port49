@@ -83,9 +83,12 @@ type Checker struct {
 	http  *http.Client
 	after func(time.Duration) <-chan time.Time
 
-	mu           sync.Mutex
-	crls         map[string]*loadedCRL
-	onNew        func(issuer, serial, source string)
+	mu    sync.Mutex
+	crls  map[string]*loadedCRL
+	onNew func(issuer, serial, source string, replay bool)
+	// failing is, by source, whether its last load failed: the next good
+	// one is said (loaded).
+	failing      map[string]bool
 	ocsp         map[string]ocspEntry
 	ocspInflight map[string]*ocspCall
 	said         map[string]time.Time
@@ -114,13 +117,15 @@ func New(cfg Config, now func() time.Time, m *metrics.Metrics, logf func(string,
 		http: &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
 			return errors.New("a status source does not redirect")
 		}},
-		crls: map[string]*loadedCRL{}, ocsp: map[string]ocspEntry{}, ocspInflight: map[string]*ocspCall{},
+		crls: map[string]*loadedCRL{}, failing: map[string]bool{}, ocsp: map[string]ocspEntry{}, ocspInflight: map[string]*ocspCall{},
 		said: map[string]time.Time{}}
 }
 
 // OnNewEntry sets f to be told of each serial a verified list newly names
 // over its source's last good list, a certificateHold entry excepted.
-func (c *Checker) OnNewEntry(f func(issuer, serial, source string)) {
+// replay is true for a kept list put in force again at start
+// (LoadPersisted), whose entries were each told before.
+func (c *Checker) OnNewEntry(f func(issuer, serial, source string, replay bool)) {
 	c.mu.Lock()
 	c.onNew = f
 	c.mu.Unlock()

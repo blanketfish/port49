@@ -191,7 +191,7 @@ func (c *Checker) install(src CRLSource, l *loadedCRL, persist bool) error {
 					continue
 				}
 			}
-			onNew(l.list.Issuer.String(), serial, src.Name)
+			onNew(l.list.Issuer.String(), serial, src.Name, !persist)
 		}
 	}
 	return nil
@@ -202,6 +202,7 @@ func (c *Checker) load(ctx context.Context, src CRLSource) error {
 	raw, err := c.fetch(ctx, src)
 	if err != nil {
 		c.m.CRLLoads.WithLabelValues(src.Name, "failed").Inc()
+		c.setFailing(src.Name)
 		return err
 	}
 	l, err := c.accept(src, raw)
@@ -212,16 +213,52 @@ func (c *Checker) load(ctx context.Context, src CRLSource) error {
 		if prev != nil && bytes.Equal(prev.list.Raw, l.list.Raw) {
 			c.gaugeOne(prev)
 			c.m.CRLLoads.WithLabelValues(src.Name, "unchanged").Inc()
+			c.loaded(src, prev, false)
 			return nil
 		}
-		err = c.install(src, l, true)
+		if err = c.install(src, l, true); err == nil {
+			c.loaded(src, l, prev == nil || !c.now().Before(c.nextUpdate(prev)))
+		}
 	}
 	if err != nil {
 		c.m.CRLLoads.WithLabelValues(src.Name, "refused").Inc()
+		c.setFailing(src.Name)
 		return err
 	}
 	c.m.CRLLoads.WithLabelValues(src.Name, "loaded").Inc()
 	return nil
+}
+
+func (c *Checker) setFailing(name string) {
+	c.mu.Lock()
+	c.failing[name] = true
+	c.mu.Unlock()
+}
+
+// loaded says a source's list is in force when it comes into force from
+// none or from a stale one (fresh), or after a failed load, so the silence
+// after "not loaded yet" or a failure line is never all an operator has. A
+// steady reload says nothing. The failure line's limit is reset, so the
+// next failure is said at once.
+func (c *Checker) loaded(src CRLSource, l *loadedCRL, fresh bool) {
+	c.mu.Lock()
+	say := fresh || c.failing[src.Name]
+	delete(c.failing, src.Name)
+	if say {
+		delete(c.said, "load "+src.Name)
+	}
+	c.mu.Unlock()
+	if !say {
+		return
+	}
+	next := c.nextUpdate(l)
+	if !c.now().Before(next) {
+		c.logf("port49d: broker: certificate status: CRL %s loaded, but its next update, %s, has passed: "+
+			"it establishes nothing until the CA publishes a newer list", src.Name, next.UTC().Format(time.RFC3339))
+		return
+	}
+	c.logf("port49d: broker: certificate status: CRL %s loaded (next update %s)", src.Name,
+		next.UTC().Format(time.RFC3339))
 }
 
 // LoadPersisted puts each source's kept list in force at start, read

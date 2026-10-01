@@ -1220,9 +1220,21 @@ var crlName = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 func checkCertificateStatus(cs *CertificateStatusConfig, b BrokerConfig) error {
 	const key = "broker.certificate_status"
 	if cs.Disabled {
-		if len(cs.CRLs) > 0 || cs.OCSP != nil {
-			return fmt.Errorf("config: %s.disabled is true beside a CRL or OCSP source: remove the sources, or "+
-				"disabled", key)
+		// Every other key does nothing beside it, and one an operator reads
+		// as meaningful (on_unavailable: allow, say) is refused, not ignored.
+		var dead []string
+		for _, k := range []struct {
+			name string
+			set  bool
+		}{{"crls", cs.CRLs != nil}, {"ocsp", cs.OCSP != nil}, {"refresh_interval", cs.RefreshInterval != 0},
+			{"on_unavailable", cs.OnUnavailable != ""}} {
+			if k.set {
+				dead = append(dead, key+"."+k.name)
+			}
+		}
+		if len(dead) > 0 {
+			return fmt.Errorf("config: %s.disabled is true beside %s, which then do nothing: remove them, or "+
+				"disabled", key, strings.Join(dead, ", "))
 		}
 		return nil
 	}

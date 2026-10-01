@@ -33,6 +33,9 @@ func certStatusYAML(t *testing.T, cs *config.CertificateStatusConfig) string {
 	if cs == nil {
 		return ""
 	}
+	if cs.Disabled {
+		return "    disabled: true\n" // alone: Load refuses it beside any other key
+	}
 	raw, err := yaml.Marshal(cs)
 	if err != nil {
 		t.Fatal(err)
@@ -402,6 +405,9 @@ func TestRunFetchesAfterListeningAndKeepsTheList(t *testing.T) {
 		!strings.Contains(body, "at its CA (crl lab_ca") {
 		t.Fatalf("alice on the fetched CRL: %d %s", status, body)
 	}
+	// The first list in force is said (Task 11 review I1).
+	const loaded = "port49d: broker: certificate status: CRL lab_ca loaded (next update "
+	waitFor(t, out, loaded)
 	stop()
 
 	srv.Close()
@@ -410,6 +416,49 @@ func TestRunFetchesAfterListeningAndKeepsTheList(t *testing.T) {
 	if status, body, err := postAsAlice(pki, addr); err != nil || status != http.StatusUnauthorized ||
 		!strings.Contains(body, "at its CA (crl lab_ca") {
 		t.Fatalf("alice with the URL down: %d %s %v", status, body, err)
+	}
+	if n := strings.Count(out.String(), loaded); n != 1 {
+		t.Fatalf("the kept list, or the URL down, was said as loaded: %d lines", n)
+	}
+}
+
+// A list that newly names a certificate in use revokes it: under
+// on_unavailable: allow, alice mints while the URL hangs, and once it
+// answers with her serial her mark is in revocations_file. That is the
+// CRL's path to her token and live contexts (spec §5.1.4; pre-flight I9):
+// the new-entry callback, the queue, and revokeIfPresent (Task 11 review
+// I2).
+func TestRunRevokesACertificateANewListNames(t *testing.T) {
+	out := captureStderr(t)
+	b := brokerConfig(t, minimalPolicy).Broker
+	ca := statusPKI(t, b)
+	pki := filepath.Dir(b.ClientCAFile)
+	now := time.Now()
+	list := crl(t, ca, now.Add(-time.Minute), now.Add(time.Hour), aliceSerial)
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-release:
+			_, _ = w.Write(list)
+		case <-r.Context().Done():
+		}
+	}))
+	t.Cleanup(srv.Close)
+	b.CertificateStatus = &config.CertificateStatusConfig{CRLs: []config.CertificateStatusCRL{{Name: "lab_ca",
+		URL: srv.URL + "/lab.crl", IssuerFile: b.ClientCAFile}}, OnUnavailable: "allow"}
+	addr, stop := startDaemon(t, writeRunConfig(t, b), out)
+	defer stop()
+	if status, body, err := postAsAlice(pki, addr); err != nil || status != http.StatusOK {
+		t.Fatalf("alice with no list in force, under allow: %d %s %v", status, body, err)
+	}
+	close(release)
+	waitUntil(t, "alice's mark in revocations_file", fileHolds(b.RevocationsFile, `"kind": "cert"`))
+	raw, err := os.ReadFile(b.RevocationsFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), aliceSerial.Text(16)) || !strings.Contains(string(raw), `"origin": "crl lab_ca"`) {
+		t.Fatalf("revocations_file: %s", raw)
 	}
 }
 

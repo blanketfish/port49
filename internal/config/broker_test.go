@@ -179,6 +179,11 @@ func TestTheCertificateStatusBlockIsChecked(t *testing.T) {
 			"issuer_file: /a.pem}]\n", "broker.certificate_status.disabled"},
 		{"disabled beside OCSP", "  certificate_status: {disabled: true, ocsp: {use_aia: true}}\n",
 			"broker.certificate_status.disabled"},
+		{"disabled beside on_unavailable", "  certificate_status: {disabled: true, on_unavailable: allow}\n",
+			"beside broker.certificate_status.on_unavailable,"},
+		{"disabled beside refresh_interval and an empty crls", "  certificate_status: {disabled: true, " +
+			"refresh_interval: 1h, crls: []}\n", "beside broker.certificate_status.crls, " +
+			"broker.certificate_status.refresh_interval,"},
 		{"no source", "  certificate_status: {refresh_interval: 10m}\n", "broker.certificate_status:"},
 		{"file and url", crl("{name: a, file: /a.crl, url: http://x/a.crl, issuer_file: /a.pem}"),
 			"broker.certificate_status.crls[0]"},

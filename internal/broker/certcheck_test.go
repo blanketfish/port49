@@ -524,7 +524,7 @@ func TestACRLEntryRevokesWhatIsPresent(t *testing.T) {
 		withStatus(t, f, "refuse", nil)
 		addr, _ := serveWithStatus(t, f, DefaultListenerLimits)
 		c, _ := held(t, f, addr, f.alice)
-		f.b.OnCRLEntry(issuer(f.alice), serial(f.alice), "corp")
+		f.b.OnCRLEntry(issuer(f.alice), serial(f.alice), "corp", false)
 		eventually(t, "the revocation", func() bool { return certRevocations(f) == 1 })
 		waitMark(t, f, f.alice, "crl corp")
 		if !closedByPeer(c) {
@@ -536,7 +536,7 @@ func TestACRLEntryRevokesWhatIsPresent(t *testing.T) {
 		f := newFixture(t, 8)
 		withStatus(t, f, "refuse", nil)
 		f.liveContext(t, "leaf1", "alice", alicePrincipal, certKey(f.alice))
-		f.b.OnCRLEntry(issuer(f.alice), serial(f.alice), "corp")
+		f.b.OnCRLEntry(issuer(f.alice), serial(f.alice), "corp", false)
 		eventually(t, "the revocation", func() bool { return certRevocations(f) == 1 })
 		waitMark(t, f, f.alice, "crl corp")
 	})
@@ -547,7 +547,7 @@ func TestACRLEntryRevokesWhatIsPresent(t *testing.T) {
 		if w := f.post(context.Background(), f.state(f.alice), mintBody, "k1"); w.Code != 200 {
 			t.Fatal(answer(w))
 		}
-		f.b.OnCRLEntry(issuer(f.alice), serial(f.alice), "corp")
+		f.b.OnCRLEntry(issuer(f.alice), serial(f.alice), "corp", false)
 		eventually(t, "the revocation", func() bool { return certRevocations(f) == 1 })
 		waitMark(t, f, f.alice, "crl corp")
 		if f.live(t, "leaf1") != 0 {
@@ -562,8 +562,8 @@ func TestACRLEntryRevokesWhatIsPresent(t *testing.T) {
 		withStatus(t, f, "refuse", nil)
 		other := f.client(t, "alice@example.com", f.now.Add(24*time.Hour))
 		f.liveContext(t, "leaf1", "alice", alicePrincipal, certKey(f.alice))
-		f.b.OnCRLEntry(issuer(other), serial(other), "corp")
-		f.b.OnCRLEntry(issuer(f.alice), serial(f.alice), "corp")
+		f.b.OnCRLEntry(issuer(other), serial(other), "corp", false)
+		f.b.OnCRLEntry(issuer(f.alice), serial(f.alice), "corp", false)
 		eventually(t, "the revocation", func() bool { return certRevocations(f) == 1 })
 		if _, ok := markOn(t, f, other); ok {
 			t.Fatal("a certificate with nothing present was marked")
@@ -577,7 +577,7 @@ func TestACRLEntryRevokesWhatIsPresent(t *testing.T) {
 		f.b.Store = failing
 		withStatus(t, f, "refuse", nil)
 		f.liveContext(t, "leaf1", "alice", alicePrincipal, certKey(f.alice))
-		f.b.OnCRLEntry(issuer(f.alice), serial(f.alice), "corp")
+		f.b.OnCRLEntry(issuer(f.alice), serial(f.alice), "corp", false)
 		eventually(t, "the entry pending", func() bool { return f.b.pendingLen() == 1 })
 		if _, ok := markOn(t, f, f.alice); ok {
 			t.Fatal("a store error marked the certificate")
@@ -600,7 +600,7 @@ func TestACRLEntryRevokesWhatIsPresent(t *testing.T) {
 		f.b.Store = failing
 		withStatus(t, f, "refuse", nil)
 		f.liveContext(t, "leaf1", "alice", alicePrincipal, certKey(f.alice))
-		f.b.OnCRLEntry(issuer(f.alice), serial(f.alice), "corp")
+		f.b.OnCRLEntry(issuer(f.alice), serial(f.alice), "corp", false)
 		eventually(t, "the entry pending", func() bool { return f.b.pendingLen() == 1 })
 		if _, ok := markOn(t, f, f.alice); ok {
 			t.Fatal("a store error marked the certificate")
@@ -619,14 +619,14 @@ func TestACRLEntryRevokesWhatIsPresent(t *testing.T) {
 		withStatus(t, f, "refuse", logs)
 		f.liveContext(t, "leaf1", "alice", alicePrincipal, certKey(f.alice))
 		sentinel := f.client(t, "alice@example.com", f.now.Add(24*time.Hour))
-		f.b.OnCRLEntry(issuer(f.alice), serial(f.alice), "corp")
+		f.b.OnCRLEntry(issuer(f.alice), serial(f.alice), "corp", false)
 		eventually(t, "the revocation", func() bool { return certRevocations(f) == 1 })
 		before := len(eventsOf(f.records(t), "revoke"))
 		f.liveContext(t, "nx1", "alice", alicePrincipal, certKey(sentinel))
 		for i := 0; i < 3; i++ {
-			f.b.OnCRLEntry(issuer(f.alice), serial(f.alice), "corp")
+			f.b.OnCRLEntry(issuer(f.alice), serial(f.alice), "corp", false)
 		}
-		f.b.OnCRLEntry(issuer(sentinel), serial(sentinel), "corp")
+		f.b.OnCRLEntry(issuer(sentinel), serial(sentinel), "corp", false)
 		eventually(t, "the sentinel's revocation", func() bool { return certRevocations(f) == 2 })
 		if n := len(eventsOf(f.records(t), "revoke")); n != before+1 {
 			t.Fatalf("revoke records: %d, want %d", n, before+1)
@@ -657,7 +657,7 @@ func TestAQueueOfCRLEntriesYieldsToAnOperator(t *testing.T) {
 	f.b.Persist = func(context.Context) error { time.Sleep(10 * time.Millisecond); return nil }
 	iss := f.alice.Leaf.Issuer.String()
 	for i := 0; i < 150; i++ {
-		f.b.OnCRLEntry(iss, fmt.Sprintf("a%03x", i), "corp")
+		f.b.OnCRLEntry(iss, fmt.Sprintf("a%03x", i), "corp", false)
 	}
 	runQueue(t, f)
 	eventually(t, "the first queued revocation", func() bool { return certRevocations(f) >= 1 })
@@ -670,6 +670,24 @@ func TestAQueueOfCRLEntriesYieldsToAnOperator(t *testing.T) {
 	eventually(t, "every queued revocation", func() bool { return certRevocations(f) == 150 })
 	if n := strings.Count(logs.String(), "CRL revocations are queued"); n != 1 {
 		t.Fatalf("the load was said %d times: %q", n, logs.String())
+	}
+}
+
+// A restart's replay of a kept list does not say the queue's load: nearly
+// every entry is passed over, and "N are revoked in turn" would read as a
+// storm (Task 11 review M3).
+func TestAReplayDoesNotSayTheQueuesLoad(t *testing.T) {
+	f := newFixture(t, 8)
+	logs := &lockedBuffer{}
+	prev := log.Writer()
+	log.SetOutput(logs)
+	t.Cleanup(func() { log.SetOutput(prev) })
+	iss := f.alice.Leaf.Issuer.String()
+	for i := 0; i < 150; i++ {
+		f.b.OnCRLEntry(iss, fmt.Sprintf("b%03x", i), "corp", true)
+	}
+	if strings.Contains(logs.String(), "CRL revocations are queued") {
+		t.Fatalf("a replay said the load: %q", logs.String())
 	}
 }
 

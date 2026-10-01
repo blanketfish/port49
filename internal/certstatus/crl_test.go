@@ -210,7 +210,7 @@ type entries struct {
 	calls []string
 }
 
-func (e *entries) record(issuer, serial, source string) {
+func (e *entries) record(issuer, serial, source string, _ bool) {
 	e.mu.Lock()
 	e.calls = append(e.calls, issuer+"|"+serial+"|"+source)
 	e.mu.Unlock()
@@ -621,6 +621,110 @@ func TestCRL(t *testing.T) {
 		}
 	})
 
+	// A list coming into force from none, from a stale one, or after a
+	// failure is said once; a steady reload is not (Task 11 review I1).
+	t.Run("a list coming into force is said", func(t *testing.T) {
+		ca := newCA(t, "issuing CA")
+		c, _, lg, srv, clk, _ := one(t, ca)
+		said := func() int {
+			n := 0
+			for _, l := range lg.all() {
+				if strings.Contains(l, "CRL issuing loaded (next update ") {
+					n++
+				}
+			}
+			return n
+		}
+		srv.serve(signCRL(t, ca, crlSpec{number: 1}), 200)
+		if errs := c.LoadAll(ctx); len(errs) != 0 {
+			t.Fatal(errs)
+		}
+		if n := said(); n != 1 {
+			t.Fatalf("the first load said %d times: %q", n, lg.all())
+		}
+		if got := lg.all()[0]; got != "port49d: broker: certificate status: CRL issuing loaded (next update "+
+			t0.Add(time.Hour).Format(time.RFC3339)+")" {
+			t.Fatalf("the line: %q", got)
+		}
+		srv.serve(signCRL(t, ca, crlSpec{number: 2}), 200)
+		if errs := c.LoadAll(ctx); len(errs) != 0 {
+			t.Fatal(errs)
+		}
+		if n := said(); n != 1 {
+			t.Fatalf("a steady reload was said: %q", lg.all())
+		}
+
+		srv.serve([]byte("down"), http.StatusServiceUnavailable)
+		c.say("load issuing", "a failure line") // as Run says one
+		if errs := c.LoadAll(ctx); len(errs) != 1 {
+			t.Fatalf("errs = %v", errs)
+		}
+		srv.serve(signCRL(t, ca, crlSpec{number: 3}), 200)
+		if errs := c.LoadAll(ctx); len(errs) != 0 {
+			t.Fatal(errs)
+		}
+		if n := said(); n != 2 {
+			t.Fatalf("the recovery said %d times: %q", n, lg.all())
+		}
+		c.mu.Lock()
+		_, limited := c.said["load issuing"]
+		c.mu.Unlock()
+		if limited {
+			t.Error("the failure line's limit outlived the recovery: the next failure would be silent")
+		}
+		if errs := c.LoadAll(ctx); len(errs) != 0 { // unchanged
+			t.Fatal(errs)
+		}
+		srv.serve(signCRL(t, ca, crlSpec{number: 4}), 200)
+		if errs := c.LoadAll(ctx); len(errs) != 0 {
+			t.Fatal(errs)
+		}
+		if n := said(); n != 2 {
+			t.Fatalf("a reload after the recovery was said: %q", lg.all())
+		}
+
+		// The list in force goes stale; the next one is said.
+		clk.advance(2 * time.Hour)
+		srv.serve(signCRL(t, ca, crlSpec{number: 5, this: t0.Add(2 * time.Hour)}), 200)
+		if errs := c.LoadAll(ctx); len(errs) != 0 {
+			t.Fatal(errs)
+		}
+		if n := said(); n != 3 {
+			t.Fatalf("a list after a stale one said %d times: %q", n, lg.all())
+		}
+	})
+
+	// A kept list put in force again at start tells each entry as a replay;
+	// a fetched one does not.
+	t.Run("OnNewEntry says a replay", func(t *testing.T) {
+		ca := newCA(t, "issuing CA")
+		c, _, _, srv, clk, dir := one(t, ca)
+		var replays, fresh int
+		c.OnNewEntry(func(_, _, _ string, replay bool) {
+			if replay {
+				replays++
+			} else {
+				fresh++
+			}
+		})
+		srv.serve(signCRL(t, ca, crlSpec{number: 1, revoked: []x509.RevocationListEntry{revoked(7, t0)}}), 200)
+		if errs := c.LoadAll(ctx); len(errs) != 0 || fresh != 1 || replays != 0 {
+			t.Fatalf("a fetch: fresh %d replays %d %v", fresh, replays, errs)
+		}
+		restarted, _, _ := newChecker(t, Config{CRLs: []CRLSource{{Name: "issuing", URL: srv.URL + "/crl",
+			Issuer: ca.Cert}}, RefreshInterval: 10 * time.Minute, StateDir: dir}, clk)
+		restarted.OnNewEntry(func(_, _, _ string, replay bool) {
+			if replay {
+				replays++
+			} else {
+				fresh++
+			}
+		})
+		if errs := restarted.LoadPersisted(); len(errs) != 0 || fresh != 1 || replays != 1 {
+			t.Fatalf("a restart: fresh %d replays %d %v", fresh, replays, errs)
+		}
+	})
+
 	t.Run("fetching", func(t *testing.T) {
 		ca := newCA(t, "issuing CA")
 		for _, tc := range []struct{ path, want string }{
@@ -674,7 +778,7 @@ func TestCRL(t *testing.T) {
 			}
 			var said int
 			for _, l := range lg.all() {
-				if strings.Contains(l, "CRL issuing") {
+				if strings.Contains(l, "CRL issuing: ") { // the failure, not the first load's line
 					said++
 				}
 			}
