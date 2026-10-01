@@ -3,9 +3,15 @@
 package lab
 
 import (
+	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -129,8 +135,9 @@ func redeemReason(recs []map[string]any, sum string) string {
 }
 
 // mintRefusal says how a refused mint was refused, from what `port49
-// token` printed: the broker's 401, or the listener closing the agent's new
-// connection as it bound.
+// token` printed: the broker's 401 credential_revoked, or, a regression
+// to the listener before bfd482a, the agent's new connection closed
+// unanswered as it bound.
 func mintRefusal(said string) string {
 	switch {
 	case strings.Contains(said, "credential_revoked"):
@@ -191,6 +198,56 @@ func revokedMint(sock string, pid int, device, what string, fail func(string, ..
 		fail("a second `port49 token` after %s revocation found an agent: %q (a token: %v)", what, again, tok != "")
 	}
 	return said, gone, again
+}
+
+// certFingerprint is the broker's fingerprint of the certificate in the
+// PEM file at path: sha256: and the hex sha256 of its DER
+// (internal/broker/identity.go).
+func certFingerprint(path string) (string, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	b, _ := pem.Decode(raw)
+	if b == nil {
+		return "", fmt.Errorf("%s holds no PEM block", path)
+	}
+	sum := sha256.Sum256(b.Bytes)
+	return "sha256:" + hex.EncodeToString(sum[:]), nil
+}
+
+// recordsBetween are the decision log's records from offset from up to
+// offset to, two marks.
+func (l *lab) recordsBetween(from, to int64) []map[string]any {
+	f, err := os.Open(l.logPath)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	if _, err := f.Seek(from, io.SeekStart); err != nil {
+		return nil
+	}
+	var out []map[string]any
+	sc := bufio.NewScanner(io.LimitReader(f, to-from))
+	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+	for sc.Scan() {
+		var m map[string]any
+		if json.Unmarshal(sc.Bytes(), &m) == nil {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// revokedMints are recs' mint deny credential_revoked records.
+func revokedMints(recs []map[string]any) []map[string]any {
+	var out []map[string]any
+	for _, r := range recs {
+		if str(r, "event") == "mint" && str(r, "reason") == "credential_revoked" {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 func TestRevokeEndToEnd(t *testing.T) {
@@ -288,6 +345,7 @@ func TestRevokeEndToEnd(t *testing.T) {
 		// The revocation closed the agent's held connection, so its next
 		// mint dials anew; the listener answers that connection's request
 		// 401 credential_revoked as it binds, and the agent ends.
+		offP := l.mark()
 		agentSaid, agentGone, agentAfter := revokedMint(sock, pid, l.p.node, "the principal's", fail)
 
 		// 3. Lift, and a new login works.
@@ -316,6 +374,7 @@ func TestRevokeEndToEnd(t *testing.T) {
 		if !ok {
 			fail("port49 revoke --cert: %s", certText)
 		}
+		offC := l.mark()
 		certSaid, agent2Gone, agent2After := revokedMint(sock2, pid2, l.p.node, "the certificate's", fail)
 		certLift, ok := revokeCLI(socket, "--lift", "--cert", filepath.Join(slicePKIDir, testpki.LabClientCert))
 		if !ok {
@@ -342,14 +401,37 @@ func TestRevokeEndToEnd(t *testing.T) {
 		if !sessionOnly && len(sliceRecords(recs, "authorize_command", "credential_revoked")) == 0 {
 			fail("no authorize_command deny credential_revoked")
 		}
-		// Each refused mint is refused at the listener (a stderr line, at
-		// most one per 10 s; a held one is counted on the next) or, a
-		// connection that bound before the mark, at the mint (a record).
+		// Each refused mint is refused at the listener as it binds: a stderr
+		// line (at most one per 10 s; a held one is counted on the next),
+		// and one mint deny credential_revoked naming the principal and the
+		// certificate's fingerprint, per refused agent.
 		refusedLines := l.errLinesSince(errOff, revokeRefusedLine)
+		if len(refusedLines) == 0 {
+			fail("no line of the listener refusing a revoked connection as it bound")
+		}
+		fp, err := certFingerprint(filepath.Join(pki, testpki.LabClientCert))
+		if err != nil {
+			t.Fatal(err)
+		}
 		mintRevoked := len(sliceRecords(recs, "mint", "credential_revoked"))
-		if len(refusedLines)+mintRevoked < 2 {
-			fail("%d listener refusal lines and %d mint deny credential_revoked records, for two refused mints",
-				len(refusedLines), mintRevoked)
+		principalDenies := revokedMints(l.recordsBetween(offP, offC))
+		certDenies := revokedMints(l.recordsSince(offC))
+		for _, step := range []struct {
+			what string
+			got  []map[string]any
+		}{{"the principal's", principalDenies}, {"the certificate's", certDenies}} {
+			if len(step.got) != 1 {
+				fail("%d mint deny credential_revoked records for the agent refused after %s revocation, not one",
+					len(step.got), step.what)
+				continue
+			}
+			r := step.got[0]
+			if str(r, "principal") != slicePrincipal || str(sub(r, "auth"), "fingerprint") != fp ||
+				str(sub(r, "auth"), "method") != "cert" {
+				fail("the mint deny credential_revoked after %s revocation names principal %q, method %q, "+
+					"fingerprint %q; want %q, cert, %q", step.what, str(r, "principal"), str(sub(r, "auth"), "method"),
+					str(sub(r, "auth"), "fingerprint"), slicePrincipal, fp)
+			}
 		}
 		gone := map[bool]string{true: "exited", false: "**kept running** (stopped by the test)"}
 		obs := fmt.Sprintf("| Step | What happened |\n|---|---|\n"+
