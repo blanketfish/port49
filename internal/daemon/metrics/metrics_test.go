@@ -30,6 +30,7 @@ func TestNewRegistersEveryMetric(t *testing.T) {
 	m.CryptOpenFailures.WithLabelValues("context").Inc()
 	m.Attributions.WithLabelValues("foreign").Inc()
 	m.BrokerItemErrors.WithLabelValues("device_unconfigured").Inc()
+	m.BrokerIdempotency.WithLabelValues("conflict").Inc()
 	m.BlobCache.WithLabelValues("hit").Inc()
 	m.CountQuarantined(func() int { return 1 })
 	m.ContextRefreshes.WithLabelValues("updated").Inc()
@@ -65,6 +66,7 @@ func TestNewRegistersEveryMetric(t *testing.T) {
 		"port49_crypt_open_failures_total":         false,
 		"port49_accounting_attributions_total":     false,
 		"port49_broker_item_errors_total":          false,
+		"port49_broker_idempotency_refusals_total": false,
 		"port49_blob_cache_lookups_total":          false,
 		"port49_devices_quarantined":               false,
 		"port49_context_refreshes_total":           false,

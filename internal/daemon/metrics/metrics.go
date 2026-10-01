@@ -78,6 +78,11 @@ type Metrics struct {
 	// character or invalid UTF-8). None is a decision, so none is in port49_decisions_total.
 	// The label is the code only.
 	BrokerItemErrors *prometheus.CounterVec
+	// port49_broker_idempotency_refusals_total{outcome}: mint requests refused
+	// whole at their Idempotency-Key (design §17; plan 7a): "conflict" (another
+	// body under the key), "in_progress" (the same body still minting), and
+	// "store_error" (the reservation could not be read or written).
+	BrokerIdempotency *prometheus.CounterVec
 	// port49_blob_cache_lookups_total{outcome}: the authorizer's per-replica
 	// blob cache, "hit" or "miss" (spec §5.1.1). A miss is one store read,
 	// counted again in port49_store_operations_total{op="get_blob"}; a hit
@@ -294,6 +299,8 @@ func New(reg prometheus.Registerer) *Metrics {
 			Help: "Accounting records accepted, by attribution."}, []string{"attribution"}),
 		BrokerItemErrors: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_broker_item_errors_total",
 			Help: "Mint items the broker could not decide, by API error code."}, []string{"error"}),
+		BrokerIdempotency: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_broker_idempotency_refusals_total",
+			Help: "Mint requests refused whole at their Idempotency-Key, by outcome."}, []string{"outcome"}),
 		BlobCache: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_blob_cache_lookups_total",
 			Help: "Compiled-blob cache lookups by the authorizer, by outcome."}, []string{"outcome"}),
 		ContextRefreshes: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_context_refreshes_total",
@@ -353,7 +360,7 @@ func New(reg prometheus.Registerer) *Metrics {
 	})
 	reg.MustRegister(m.Requests, m.Latency, m.Decisions, m.Unvalidated, m.KeyValidations,
 		m.Connections, m.ConnectionEvents, m.AuthFailures, m.SpoolDepth, m.SpoolDrops, m.SpoolQuarantines,
-		m.StoreOps, m.DecisionLogWriteFailures, m.CryptOpenFailures, m.Attributions, m.BrokerItemErrors, m.BlobCache,
+		m.StoreOps, m.DecisionLogWriteFailures, m.CryptOpenFailures, m.Attributions, m.BrokerItemErrors, m.BrokerIdempotency, m.BlobCache,
 		m.DevicesQuarantined, m.DevicesAdmissionRefused, m.ContextRefreshes, m.TokensSuperseded, m.PolicyReloads, m.PolicyFileRefused,
 		m.PolicyRefreshPending, m.InventoryReloads, m.InventoryFileRefused, m.InventorySnapshotAge,
 		m.InventoryChanges, m.InventoryBundleSequence, m.InventoryPersistFailed, m.InventoryBundleRefused,

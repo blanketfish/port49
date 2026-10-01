@@ -29,15 +29,18 @@ import (
 // mint 401 trust_domain_unresolved, as the broker does once the certificate
 // has expired under the held connection. itemError answers a 200 whose one
 // item carries that error code and no verdict, as the broker does for a fault
-// on its own side; hollow answers an item with neither.
+// on its own side; hollow answers an item with neither. inProgress answers
+// that many mints 409 idempotency_in_progress first, as the broker does while
+// an earlier try under the key is still minting.
 type fakeBroker struct {
-	mu        sync.Mutex
-	keys      []string
-	dropFirst bool
-	expired   bool
-	untrusted bool
-	itemError string
-	hollow    bool
+	mu         sync.Mutex
+	keys       []string
+	dropFirst  bool
+	expired    bool
+	untrusted  bool
+	itemError  string
+	hollow     bool
+	inProgress int
 }
 
 func (fb *fakeBroker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -49,6 +52,7 @@ func (fb *fakeBroker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fb.keys = append(fb.keys, r.Header.Get("Idempotency-Key"))
 		n, drop, expired, untrusted := len(fb.keys), fb.dropFirst && len(fb.keys) == 1, fb.expired, fb.untrusted
 		itemError, hollow := fb.itemError, fb.hollow
+		busy := n <= fb.inProgress
 		fb.mu.Unlock()
 		if drop {
 			c, _, _ := w.(http.Hijacker).Hijack()
@@ -62,6 +66,11 @@ func (fb *fakeBroker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if untrusted {
 			writeJSON(w, 401, api.Error{Error: "trust_domain_unresolved",
 				Detail: "broker: no trusted client certificate: the certificate is valid 2026-09-22T00:00:00Z to 2026-09-23T00:00:00Z"})
+			return
+		}
+		if busy {
+			w.Header().Set("Retry-After", "1")
+			writeJSON(w, 409, api.Error{Error: "idempotency_in_progress"})
 			return
 		}
 		var req api.MintRequest
@@ -257,6 +266,39 @@ func TestALostResponseIsRetriedUnderTheSameKey(t *testing.T) {
 	keys := r.fb.seen()
 	if len(keys) != 2 || keys[0] != keys[1] || item.Login != "login-02" {
 		t.Fatalf("keys %q item %+v", keys, item)
+	}
+}
+
+// A 409 idempotency_in_progress is an earlier try under the key still
+// minting at the broker: Mint waits and asks again under the SAME key, so it
+// is answered from that try rather than cutting a second pair (design §17),
+// and gives up, naming the code, once the wait is past the broker's bound.
+func TestAnInProgressAnswerIsWaitedOutUnderTheSameKey(t *testing.T) {
+	defer func(d time.Duration) { inProgressDelay = d }(inProgressDelay)
+	inProgressDelay = 10 * time.Millisecond
+	r := newRig(t)
+	r.fb.mu.Lock()
+	r.fb.inProgress = 2
+	r.fb.mu.Unlock()
+	item, err := r.a.Mint(context.Background(), "leaf1", false, 0)
+	if err != nil || item.Verdict != "permit" || item.Device != "leaf1" {
+		t.Fatalf("Mint: %+v %v", item, err)
+	}
+	keys := r.fb.seen()
+	if len(keys) != 3 || keys[0] == "" || keys[0] != keys[1] || keys[1] != keys[2] {
+		t.Fatalf("three requests under one key: %q", keys)
+	}
+
+	r = newRig(t)
+	r.fb.mu.Lock()
+	r.fb.inProgress = 1 << 30
+	r.fb.mu.Unlock()
+	if _, err := r.a.Mint(context.Background(), "leaf1", false, 0); err == nil ||
+		!strings.Contains(err.Error(), "idempotency_in_progress") {
+		t.Fatalf("a mint still in progress past the wait: %v", err)
+	}
+	if n := len(r.fb.seen()); n != inProgressRetries+1 {
+		t.Fatalf("%d requests, want %d", n, inProgressRetries+1)
 	}
 }
 

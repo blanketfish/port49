@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -33,6 +34,18 @@ func subject() Subject {
 	return Subject{Principal: "user:alice@example.com", Username: "alice", TokenTTL: 900 * time.Second,
 		Enable: "token", MaxPrivilege: 15, MaxSessionAge: 8 * time.Hour,
 		Credential: store.Credential{Method: "oidc", Sub: "a7f3", Sid: "s1"}}
+}
+
+// reserved is req with a fresh reservation of key for its device, as the
+// broker takes one per request before it mints.
+func reserved(t *testing.T, m *Minter, req Request, key string) Request {
+	t.Helper()
+	res, err := m.Reserve(context.Background(), req.Subject.Principal, key, []string{req.Device}, req.BodyHash)
+	if err != nil {
+		t.Fatalf("reserving %q for %s: %v", key, req.Device, err)
+	}
+	req.Reservation = res
+	return req
 }
 
 // sameResult compares two Results field-wise, with ExpiresAt by Equal rather
@@ -119,49 +132,20 @@ func TestCapRefusesMintNotRedemption(t *testing.T) {
 
 func TestIdempotentReplay(t *testing.T) {
 	m, st, _ := minter(t)
-	req := Request{Subject: subject(), Device: "leaf-01", TTL: time.Minute, IdempotencyKey: "01J", BodyHash: "h1"}
-	a, err := m.Mint(context.Background(), req)
+	req := Request{Subject: subject(), Device: "leaf-01", TTL: time.Minute, BodyHash: "h1"}
+	a, err := m.Mint(context.Background(), reserved(t, m, req, "01J"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := m.Mint(context.Background(), req)
+	b, err := m.Mint(context.Background(), reserved(t, m, req, "01J"))
 	if err != nil || !sameResult(a, b) {
 		t.Fatalf("%+v %+v %v", a, b, err)
 	}
 	if c, _ := st.Candidates(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"}); len(c) != 1 {
 		t.Fatal("replay minted again")
 	}
-	req.BodyHash = "h2"
-	if _, err := m.Mint(context.Background(), req); !errors.Is(err, ErrIdempotencyConflict) {
+	if _, err := m.Reserve(context.Background(), req.Subject.Principal, "01J", []string{req.Device}, "h2"); !errors.Is(err, ErrIdempotencyConflict) {
 		t.Fatalf("%v", err)
-	}
-}
-
-// Conflict answers the question Mint would refuse on, without minting, so a
-// batch can be refused before its first device is minted.
-func TestConflictIsReadOnly(t *testing.T) {
-	m, st, _ := minter(t)
-	req := Request{Subject: subject(), Device: "leaf-01", TTL: time.Minute, IdempotencyKey: "01J", BodyHash: "h1"}
-	p := req.Subject.Principal
-	if m.Conflict(context.Background(), p, "01J", "leaf-01", "h1") {
-		t.Fatal("no record is no conflict")
-	}
-	if _, err := m.Mint(context.Background(), req); err != nil {
-		t.Fatal(err)
-	}
-	for _, tt := range []struct {
-		device, body string
-		want         bool
-	}{{"leaf-01", "h1", false}, {"leaf-01", "h2", true}, {"leaf-02", "h2", false}} {
-		if got := m.Conflict(context.Background(), p, "01J", tt.device, tt.body); got != tt.want {
-			t.Errorf("%s %s: %v", tt.device, tt.body, got)
-		}
-	}
-	if m.Conflict(context.Background(), "user:mallory@example.com", "01J", "leaf-01", "h2") {
-		t.Fatal("a key is one principal's")
-	}
-	if c, _ := st.Candidates(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"}); len(c) != 1 {
-		t.Fatal("Conflict minted")
 	}
 }
 
@@ -171,14 +155,14 @@ func TestConflictIsReadOnly(t *testing.T) {
 // token tagged for a device that is not the one they asked for.
 func TestOneIdempotencyKeyAcrossDevicesDoesNotCross(t *testing.T) {
 	m, st, _ := minter(t)
-	req := Request{Subject: subject(), TTL: time.Minute, IdempotencyKey: "01J9F4B2QK7X", BodyHash: "body"}
+	req := Request{Subject: subject(), TTL: time.Minute, BodyHash: "body"}
 	req.Device = "core-sw01"
-	a, err := m.Mint(context.Background(), req)
+	a, err := m.Mint(context.Background(), reserved(t, m, req, "01J9F4B2QK7X"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	req.Device = "leaf-04"
-	b, err := m.Mint(context.Background(), req)
+	b, err := m.Mint(context.Background(), reserved(t, m, req, "01J9F4B2QK7X"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +177,7 @@ func TestOneIdempotencyKeyAcrossDevicesDoesNotCross(t *testing.T) {
 	// And the scoping must not cost the replay: the same key on the same
 	// device still replays rather than minting again.
 	req.Device = "core-sw01"
-	again, err := m.Mint(context.Background(), req)
+	again, err := m.Mint(context.Background(), reserved(t, m, req, "01J9F4B2QK7X"))
 	if err != nil || !sameResult(a, again) {
 		t.Fatalf("same key, same device must replay: %+v %+v %v", a, again, err)
 	}
@@ -207,18 +191,21 @@ type failingStore struct {
 	getErr, putErr error
 }
 
-func (f *failingStore) GetIdempotency(ctx context.Context, principal, key string) (store.Idempotency, error) {
+func (f *failingStore) ReserveIdempotency(ctx context.Context, principal, key string, rec store.Idempotency) (store.Idempotency, bool, error) {
 	if f.getErr != nil {
-		return store.Idempotency{}, f.getErr
+		return store.Idempotency{}, false, f.getErr
 	}
-	return f.Store.GetIdempotency(ctx, principal, key)
+	return f.Store.ReserveIdempotency(ctx, principal, key, rec)
 }
 
-func (f *failingStore) PutIdempotency(ctx context.Context, principal, key string, rec store.Idempotency) error {
-	if f.putErr != nil {
+// CompleteIdempotency fails the completion alone. Mint renews its pending
+// hold through the same call before minting, and a failure there is a
+// refusal; putErr stands for the write after the tokens exist.
+func (f *failingStore) CompleteIdempotency(ctx context.Context, principal, key, expect string, rec store.Idempotency) error {
+	if f.putErr != nil && !rec.Pending {
 		return f.putErr
 	}
-	return f.Store.PutIdempotency(ctx, principal, key, rec)
+	return f.Store.CompleteIdempotency(ctx, principal, key, expect, rec)
 }
 
 func failingMinter(t *testing.T, get, put error) (*Minter, *failingStore, *bytes.Buffer) {
@@ -235,8 +222,8 @@ func failingMinter(t *testing.T, get, put error) (*Minter, *failingStore, *bytes
 // the real fault is the store.
 func TestIdempotencyStoreFailureIsNotAMiss(t *testing.T) {
 	m, st, log := failingMinter(t, errors.New("dial tcp 10.0.0.9:6379: i/o timeout"), nil)
-	req := Request{Subject: subject(), Device: "leaf-01", TTL: time.Minute, IdempotencyKey: "01J", BodyHash: "h1"}
-	_, err := m.Mint(context.Background(), req)
+	req := Request{Subject: subject(), Device: "leaf-01", TTL: time.Minute, BodyHash: "h1"}
+	_, err := m.Reserve(context.Background(), req.Subject.Principal, "01J", []string{req.Device}, req.BodyHash)
 	if err == nil || errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("a failing store must be returned, not swallowed: %v", err)
 	}
@@ -248,7 +235,7 @@ func TestIdempotencyStoreFailureIsNotAMiss(t *testing.T) {
 	}
 	// The miss itself still mints: ErrNotFound is the normal path.
 	st.getErr = nil
-	if _, err := m.Mint(context.Background(), req); err != nil {
+	if _, err := m.Mint(context.Background(), reserved(t, m, req, "01J")); err != nil {
 		t.Fatalf("a miss must mint: %v", err)
 	}
 }
@@ -275,8 +262,8 @@ func mintRecord(t *testing.T, log *bytes.Buffer) decision.Record {
 // be a replay.
 func TestUnwrittenIdempotencyRecordIsNamedOnTheMintRecord(t *testing.T) {
 	m, _, log := failingMinter(t, nil, errors.New("write: no space left on device"))
-	res, err := m.Mint(context.Background(), Request{Subject: subject(), Device: "leaf-01",
-		TTL: time.Minute, IdempotencyKey: "01J", BodyHash: "h1"})
+	res, err := m.Mint(context.Background(), reserved(t, m, Request{Subject: subject(), Device: "leaf-01",
+		TTL: time.Minute, BodyHash: "h1"}, "01J"))
 	if err != nil || len(res.Login) != Len {
 		t.Fatalf("the tokens are already minted; the write failure must not refuse them: %+v %v", res, err)
 	}
@@ -293,13 +280,13 @@ func TestUnwrittenIdempotencyRecordIsNamedOnTheMintRecord(t *testing.T) {
 // gets working tokens, and the mint record says the replay was abandoned.
 func TestUndecodableIdempotencyRecordIsNamedOnTheMintRecord(t *testing.T) {
 	m, st, log := failingMinter(t, nil, nil)
-	req := Request{Subject: subject(), Device: "leaf-01", TTL: time.Minute, IdempotencyKey: "01J", BodyHash: "h1"}
-	if err := st.Store.PutIdempotency(context.Background(), req.Subject.Principal,
-		idemScope(req.IdempotencyKey, req.Device),
-		store.Idempotency{BodyHash: "h1", Response: []byte("{not json"), ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+	req := Request{Subject: subject(), Device: "leaf-01", TTL: time.Minute, BodyHash: "h1"}
+	if err := st.Store.PutIdempotency(context.Background(), req.Subject.Principal, idemScope("01J", req.Device),
+		store.Idempotency{BodyHash: "h1", Response: []byte("{not json"), ExpiresAt: time.Now().Add(time.Hour),
+			Holder: "earlier"}); err != nil {
 		t.Fatal(err)
 	}
-	res, err := m.Mint(context.Background(), req)
+	res, err := m.Mint(context.Background(), reserved(t, m, req, "01J"))
 	if err != nil || len(res.Login) != Len {
 		t.Fatalf("%+v %v", res, err)
 	}
@@ -312,8 +299,8 @@ func TestUndecodableIdempotencyRecordIsNamedOnTheMintRecord(t *testing.T) {
 // be absent rather than present and blank on the ordinary path.
 func TestAHealthyMintCarriesNoIndexError(t *testing.T) {
 	m, _, log := minter(t)
-	if _, err := m.Mint(context.Background(), Request{Subject: subject(), Device: "leaf-01",
-		TTL: time.Minute, IdempotencyKey: "01J", BodyHash: "h1"}); err != nil {
+	if _, err := m.Mint(context.Background(), reserved(t, m, Request{Subject: subject(), Device: "leaf-01",
+		TTL: time.Minute, BodyHash: "h1"}, "01J")); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(log.String(), "index_error") {
@@ -393,6 +380,165 @@ func TestMintRefusesATemplateUsername(t *testing.T) {
 		s.Username = u
 		if _, err := m.Mint(context.Background(), Request{Subject: s, Device: "leaf-01", TTL: time.Minute}); !errors.Is(err, ErrUsernameReserved) {
 			t.Fatalf("%q: %v", u, err)
+		}
+	}
+}
+
+// A batch reserves every device before the first is minted: a record under
+// another body on any device refuses the whole batch, and one still being
+// minted refuses it as in progress. Either way what this call reserved is
+// given back, so a corrected retry is not refused by its own leftovers.
+func TestReserveRefusesTheWholeBatchAndGivesBackWhatItTook(t *testing.T) {
+	m, st, _ := minter(t)
+	ctx := context.Background()
+	p := subject().Principal
+	if _, ok, err := st.ReserveIdempotency(ctx, p, idemScope("01J", "leaf-02"),
+		store.Idempotency{BodyHash: "other", Holder: "x", ExpiresAt: time.Now().Add(time.Hour)}); err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	if _, err := m.Reserve(ctx, p, "01J", []string{"leaf-01", "leaf-02"}, "h1"); !errors.Is(err, ErrIdempotencyConflict) {
+		t.Fatalf("another body on the second device: %v", err)
+	}
+	if _, ok, _ := st.ReserveIdempotency(ctx, p, idemScope("01J", "leaf-01"),
+		store.Idempotency{BodyHash: "h1", Holder: "y", Pending: true, ExpiresAt: time.Now().Add(time.Minute)}); !ok {
+		t.Fatal("the refused batch kept its reservation of the first device")
+	}
+	// leaf-01 is now pending under "y": the same body is in progress.
+	if _, err := m.Reserve(ctx, p, "01J", []string{"leaf-01"}, "h1"); !errors.Is(err, ErrIdempotencyInProgress) {
+		t.Fatalf("a pending record under the same body: %v", err)
+	}
+	if res, err := m.Reserve(ctx, p, "", []string{"leaf-01"}, "h1"); res != nil || err != nil {
+		t.Fatalf("no key reserves nothing: %+v %v", res, err)
+	}
+}
+
+// A device refused after it was reserved is released, so a retry once the
+// refusal is fixed is not answered "in progress"; a completed one is not.
+func TestReleaseGivesBackOnlyWhatDidNotComplete(t *testing.T) {
+	m, st, _ := minter(t)
+	ctx := context.Background()
+	req := Request{Subject: subject(), Device: "leaf-01", TTL: time.Minute, BodyHash: "h1"}
+	res, err := m.Reserve(ctx, req.Subject.Principal, "01J", []string{"leaf-01", "leaf-02"}, "h1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Reservation = res
+	if _, err := m.Mint(ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	m.Release(ctx, req.Subject.Principal, res)
+	if cur, err := st.GetIdempotency(ctx, req.Subject.Principal, idemScope("01J", "leaf-01")); err != nil || cur.Pending {
+		t.Fatalf("the minted device's record: %+v %v", cur, err)
+	}
+	if _, err := st.GetIdempotency(ctx, req.Subject.Principal, idemScope("01J", "leaf-02")); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("the unminted device's reservation was not released: %v", err)
+	}
+}
+
+// A replay the minter abandons (its tokens superseded) is taken over by a
+// compare-and-set before anything is minted, so two such retries cannot
+// both mint: the second is told the first is in progress (pre-flight M5).
+func TestAnAbandonedReplayIsTakenOverBeforeItMints(t *testing.T) {
+	m, st, _ := minter(t)
+	ctx := context.Background()
+	req := Request{Subject: subject(), Device: "leaf-01", TTL: time.Minute, BodyHash: "h1"}
+	if _, err := m.Mint(ctx, reserved(t, m, req, "01J")); err != nil {
+		t.Fatal(err)
+	}
+	req.SupersededAt = time.Now().Add(time.Second)                 // a refresh deleted those tokens
+	a, b := reserved(t, m, req, "01J"), reserved(t, m, req, "01J") // both found the completed record
+	if _, err := m.Mint(ctx, a); err != nil {
+		t.Fatalf("the first abandoned replay: %v", err)
+	}
+	if _, err := m.Mint(ctx, b); !errors.Is(err, ErrIdempotencyInProgress) && !errors.Is(err, ErrIdempotencyConflict) {
+		t.Fatalf("the second abandoned replay minted: %v", err)
+	}
+	if c, _ := st.Candidates(ctx, store.TokenKey{NAS: "leaf-01", Username: subject().Username}); len(c) != 2 {
+		t.Fatalf("%d tokens: the first mint and one re-mint, not two", len(c))
+	}
+}
+
+// An idempotent mint without a reservation is a broker bug, refused.
+func TestMintRefusesAKeyWithoutAReservation(t *testing.T) {
+	m, _, _ := minter(t)
+	req := Request{Subject: subject(), Device: "leaf-01", TTL: time.Minute, BodyHash: "h1",
+		Reservation: &Reservation{Key: "01J"}}
+	if _, err := m.Mint(context.Background(), req); err == nil {
+		t.Fatal("a reservation with no holder minted")
+	}
+}
+
+// slowStore runs onPut inside the first PutToken, standing in for a mint
+// that is slow at the store.
+type slowStore struct {
+	store.Store
+	once  sync.Once
+	onPut func()
+}
+
+func (s *slowStore) PutToken(ctx context.Context, k store.TokenKey, t store.Token) (int, error) {
+	s.once.Do(s.onPut)
+	return s.Store.PutToken(ctx, k, t)
+}
+
+// A batch's devices are reserved together and minted one after another, so
+// a long batch outlasts ReservationTTL. Each device's hold is renewed just
+// before it is minted: a retry arriving while it is minted is told it is in
+// progress, where a lapsed reservation would let the retry reserve the
+// device and mint it a second time (design §17). A device whose hold lapsed
+// before its turn mints nothing, and the retry mints it once.
+func TestALongBatchRenewsEachDevicesHoldBeforeMintingIt(t *testing.T) {
+	var mu sync.Mutex
+	now := time.Now()
+	clock := func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		return now
+	}
+	advance := func(d time.Duration) {
+		mu.Lock()
+		now = now.Add(d)
+		mu.Unlock()
+	}
+	st := &slowStore{Store: memory.New(clock)}
+	m := NewMinter(st, decision.NewJSONLines(&bytes.Buffer{}), rand.Reader, TagKey([]byte("k")), clock, 3)
+	ctx := context.Background()
+	p := subject().Principal
+	devices := []string{"leaf-01", "leaf-02"}
+	res, err := m.Reserve(ctx, p, "01J", devices, "h1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	advance(50 * time.Second) // the batch's earlier devices took this long
+	var retryErr error
+	st.onPut = func() {
+		advance(20 * time.Second) // leaf-01's mint runs past the first minute
+		_, retryErr = m.Reserve(ctx, p, "01J", devices, "h1")
+	}
+	req := Request{Subject: subject(), Device: "leaf-01", TTL: 10 * time.Minute, BodyHash: "h1", Reservation: res}
+	if _, err := m.Mint(ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	if !errors.Is(retryErr, ErrIdempotencyInProgress) {
+		t.Fatalf("a retry during leaf-01's mint must be told it is in progress: %v", retryErr)
+	}
+	req.Device = "leaf-02" // its hold lapsed at the minute, before its turn
+	if _, err := m.Mint(ctx, req); !errors.Is(err, ErrIdempotencyInProgress) {
+		t.Fatalf("a lapsed hold minted: %v", err)
+	}
+	m.Release(ctx, p, res)
+
+	retry, err := m.Reserve(ctx, p, "01J", devices, "h1")
+	if err != nil || len(retry.Found) != 1 {
+		t.Fatalf("the retry finds leaf-01 completed: %+v %v", retry, err)
+	}
+	for _, d := range devices {
+		if _, err := m.Mint(ctx, Request{Subject: subject(), Device: d, TTL: 10 * time.Minute, BodyHash: "h1",
+			Reservation: retry}); err != nil {
+			t.Fatalf("%s: %v", d, err)
+		}
+		if c, _ := st.Candidates(ctx, store.TokenKey{NAS: d, Username: "alice"}); len(c) != 1 {
+			t.Fatalf("%s has %d tokens; each device is minted once", d, len(c))
 		}
 	}
 }

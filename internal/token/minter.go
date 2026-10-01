@@ -21,6 +21,33 @@ import (
 // minted.
 var ErrIdempotencyConflict = errors.New("token: idempotency key reused with a different body")
 
+// ErrIdempotencyInProgress is a request under an idempotency key that
+// another request, under the same body, is still minting (design §17).
+// Nothing is minted; the caller retries and is answered from the first
+// request's record once it completes.
+var ErrIdempotencyInProgress = errors.New("token: a request under this idempotency key is still being minted")
+
+// ReservationTTL is how long a reservation stands with its mint unfinished.
+// A broker that dies mid-mint leaves one behind; past this a retry mints
+// afresh, and the record says the first attempt's tokens went unrecorded.
+// Mint renews a device's reservation for this long just before minting it,
+// so the lease covers one device's mint, not a whole batch: a mint's store
+// calls are bounded at ten seconds (the broker's holdTimeout), so a minute is
+// long for a live mint and short for a retry.
+const ReservationTTL = time.Minute
+
+// Reservation is a request's hold on its idempotency key, one record per
+// device (idemScope), taken for the whole batch before any device is minted
+// (Reserve).
+type Reservation struct {
+	Key, Holder string
+	// Found is, by device, a completed record under the key and this body:
+	// Mint replays it, unless a policy change or a revocation deleted its
+	// tokens since.
+	Found    map[string]store.Idempotency
+	reserved []string
+}
+
 // ErrUsernameNotCanonical refuses a device-facing username that
 // canonicalization would change. username.Canonical lowercases, strips a
 // DOMAIN\ prefix and truncates at '@', and Go's simple case mapping folds
@@ -97,23 +124,25 @@ type Subject struct {
 
 // Request is one mint: a Subject, the device the tokens are cut for, and the
 // caller's asks — an enable token alongside the login one, a TTL no longer
-// than the subject's, and an optional idempotency key with the hash of the
-// body it was sent with.
+// than the subject's, and an optional reservation of an idempotency key with
+// the hash of the body it was sent with.
 type Request struct {
 	Subject          Subject
 	Device, Platform string
 	BlobHash         string
 	WithEnable       bool
 	TTL              time.Duration
-	// IdempotencyKey is scoped per device, not per key alone — see idemScope.
-	// A caller may send one key for a whole batch, which is what design §17's
-	// POST /v1/tokens does, and each device still gets its own record.
-	IdempotencyKey, BodyHash string
-	// SupersededAt is when a policy refresh last deleted this (device,
-	// username)'s unspent tokens, zero for never. A replay of tokens minted
-	// no later than that would hand back a token that no longer exists, so
-	// it is not replayed: the mint is made afresh, as for a record that will
-	// not decode, and the record says why.
+	// Reservation is the request's hold on its idempotency key (Reserve),
+	// nil for a request without one. The key is scoped per device, not per
+	// key alone — see idemScope: design §17 sends one key for a whole batch,
+	// and each device gets its own record. BodyHash is the request body's.
+	Reservation *Reservation
+	BodyHash    string
+	// SupersededAt is when a policy refresh or a revocation last deleted
+	// this (device, username)'s unspent tokens, zero for never. A replay of
+	// tokens minted no later than that would hand back a token that no
+	// longer exists, so it is not replayed: the mint is made afresh, as for
+	// a record that will not decode, and the record says why.
 	SupersededAt time.Time
 	// Policy is the subject and grants that allowed this mint. The minter
 	// judges none of it and copies it onto the mint record (spec §5.7).
@@ -128,16 +157,55 @@ type Request struct {
 // convention (internal/store/memory/memory.go, idemKey).
 func idemScope(key, device string) string { return key + "\x00" + device }
 
-// Conflict reports whether Mint would refuse this key on this device with
-// ErrIdempotencyConflict: a record exists under it for another body. It mints
-// nothing, so a batch can be refused whole before its first device is minted.
-// A store failure is not a conflict; Mint will meet it and refuse that device.
-func (m *Minter) Conflict(ctx context.Context, principal, key, device, bodyHash string) bool {
+// Reserve takes key for every device in one pass, before any is minted
+// (design §17; plan 7a): a record under another body is
+// ErrIdempotencyConflict, one still pending under this body is
+// ErrIdempotencyInProgress, and either gives back what this call reserved
+// and refuses the whole batch. A store failure does the same and is
+// returned wrapped. A completed record under this body is kept in Found for
+// Mint to replay. An empty key reserves nothing and returns nil.
+func (m *Minter) Reserve(ctx context.Context, principal, key string, devices []string, bodyHash string) (*Reservation, error) {
 	if key == "" {
-		return false
+		return nil, nil
 	}
-	rec, err := m.store.GetIdempotency(ctx, principal, idemScope(key, device))
-	return err == nil && rec.BodyHash != bodyHash
+	var b [16]byte
+	if _, err := io.ReadFull(m.rand, b[:]); err != nil {
+		return nil, err
+	}
+	res := &Reservation{Key: key, Holder: hex.EncodeToString(b[:]), Found: map[string]store.Idempotency{}}
+	rec := store.Idempotency{BodyHash: bodyHash, Holder: res.Holder, Pending: true,
+		ExpiresAt: m.now().Add(ReservationTTL)}
+	for _, device := range devices {
+		cur, ok, err := m.store.ReserveIdempotency(ctx, principal, idemScope(key, device), rec)
+		switch {
+		case err != nil:
+			m.Release(ctx, principal, res)
+			return nil, fmt.Errorf("token: reserving the idempotency key: %w", err)
+		case ok:
+			res.reserved = append(res.reserved, device)
+		case cur.BodyHash != bodyHash:
+			m.Release(ctx, principal, res)
+			return nil, ErrIdempotencyConflict
+		case cur.Pending:
+			m.Release(ctx, principal, res)
+			return nil, ErrIdempotencyInProgress
+		default:
+			res.Found[device] = cur
+		}
+	}
+	return res, nil
+}
+
+// Release gives back every reservation res took whose mint did not
+// complete. A completed one is no longer pending and is left alone, so the
+// broker calls this for the whole batch once the batch is answered.
+func (m *Minter) Release(ctx context.Context, principal string, res *Reservation) {
+	if res == nil {
+		return
+	}
+	for _, device := range res.reserved {
+		_ = m.store.ReleaseIdempotency(ctx, principal, idemScope(res.Key, device), res.Holder)
+	}
 }
 
 // Result is the minted pair and what the caller must tell the operator:
@@ -187,37 +255,54 @@ func (m *Minter) Mint(ctx context.Context, r Request) (Result, error) {
 	// failure does not fail the mint, so the only place it can be said is the
 	// record for the mint that lost it.
 	var idemErr string
-	if r.IdempotencyKey != "" {
-		rec, err := m.store.GetIdempotency(ctx, r.Subject.Principal, idemScope(r.IdempotencyKey, r.Device))
-		switch {
-		case err == nil:
-			if rec.BodyHash != r.BodyHash {
-				return Result{}, ErrIdempotencyConflict
-			}
-			var res Result
-			uerr := json.Unmarshal(rec.Response, &res)
+	if res := r.Reservation; res != nil {
+		if res.Holder == "" {
+			return Result{}, errors.New("token: an idempotent mint without a reservation (Minter.Reserve)")
+		}
+		// expect is the holder the record stands under now: this request's
+		// reservation, or, for a replay abandoned below, the holder of the
+		// completed record read, which the new hold replaces and nothing
+		// else may.
+		expect := res.Holder
+		if rec, ok := res.Found[r.Device]; ok {
+			var prev Result
+			uerr := json.Unmarshal(rec.Response, &prev)
 			switch {
 			case uerr != nil:
 				// A record that will not decode is a mint that cannot be
-				// replayed. Fall through and mint — the caller gets working
-				// tokens — but the record must say the replay was abandoned,
-				// or this is silent.
+				// replayed. Mint — the caller gets working tokens — and say
+				// the replay was abandoned, or this is silent.
 				idemErr = "idempotency record did not decode; minted again rather than replayed"
-			case !r.SupersededAt.IsZero() && !res.MintedAt.After(r.SupersededAt):
-				// Its tokens were deleted as superseded by a policy change:
-				// replayed, the caller would hold a token no device accepts.
-				// A record from before MintedAt was kept has a zero one, and
-				// is not replayed either.
-				idemErr = "idempotency record names tokens a policy change superseded; minted again rather than replayed"
+			case !r.SupersededAt.IsZero() && !prev.MintedAt.After(r.SupersededAt):
+				// Its tokens were deleted since, by a policy change or a
+				// revocation: replayed, the caller would hold a token no
+				// device accepts. A record from before MintedAt was kept has
+				// a zero one, and is not replayed either.
+				idemErr = "idempotency record names tokens a policy change or a revocation deleted; minted again rather than replayed"
 			default:
-				return res, nil
+				return prev, nil
 			}
-		case !errors.Is(err, store.ErrNotFound):
-			// Not a miss: the store failed. Minting here is the one thing §17
-			// forbids, because the caller cannot tell a retry from a first try
-			// and a retried batch burns a pair per device it never learns
-			// about. The cap would eventually fire and blame the client.
-			return Result{}, fmt.Errorf("token: reading the idempotency record: %w", err)
+			expect = rec.Holder
+		}
+		// Hold the record, by compare-and-set, for a fresh ReservationTTL
+		// before minting. Renewed, a reservation taken at the start of a
+		// long batch cannot lapse while this device is minted, which would
+		// let a retry reserve and mint it too (design §17). Taking over an
+		// abandoned replay is the same write: of two retries that both
+		// abandon it, one takes it and the other is told it is in progress,
+		// so they cannot both mint (pre-flight M5). A reservation that has
+		// lapsed or been taken already mints nothing here.
+		if err := m.store.CompleteIdempotency(ctx, r.Subject.Principal, idemScope(res.Key, r.Device), expect,
+			store.Idempotency{BodyHash: r.BodyHash, Holder: res.Holder, Pending: true,
+				ExpiresAt: m.now().Add(ReservationTTL)}); err != nil {
+			if errors.Is(err, store.ErrConflict) {
+				return Result{}, ErrIdempotencyInProgress
+			}
+			return Result{}, fmt.Errorf("token: holding the idempotency record: %w", err)
+		}
+		if expect != res.Holder {
+			// Taken over: give it back with the rest if this mint fails.
+			res.reserved = append(res.reserved, r.Device)
 		}
 	}
 
@@ -241,7 +326,7 @@ func (m *Minter) Mint(ctx context.Context, r Request) (Result, error) {
 
 	mintedAt := m.now()
 	expires := mintedAt.Add(ttl)
-	res := Result{ExpiresAt: expires, Username: r.Subject.Username, MintedAt: mintedAt}
+	out := Result{ExpiresAt: expires, Username: r.Subject.Username, MintedAt: mintedAt}
 	var hashes []string
 
 	mint := func(kind string) (string, error) {
@@ -266,22 +351,22 @@ func (m *Minter) Mint(ctx context.Context, r Request) (Result, error) {
 		return secret, nil
 	}
 
-	if res.Login, err = mint(store.KindLogin); err != nil {
+	if out.Login, err = mint(store.KindLogin); err != nil {
 		return Result{}, err
 	}
 	if r.WithEnable && r.Subject.Enable == "token" {
-		if res.Enable, err = mint(store.KindEnable); err != nil {
+		if out.Enable, err = mint(store.KindEnable); err != nil {
 			return Result{}, err
 		}
 	}
 
-	if r.IdempotencyKey != "" {
-		body, _ := json.Marshal(res)
-		// The tokens are minted and about to be returned, so this cannot become
-		// a refusal. It is the moment the caller's next retry stops being safe,
-		// and the only moment anything knows.
-		if perr := m.store.PutIdempotency(ctx, r.Subject.Principal, idemScope(r.IdempotencyKey, r.Device),
-			store.Idempotency{BodyHash: r.BodyHash, Response: body, ExpiresAt: expires}); perr != nil {
+	if res := r.Reservation; res != nil {
+		body, _ := json.Marshal(out)
+		// The tokens are minted and about to be returned, so this cannot
+		// become a refusal. It is the moment the caller's next retry stops
+		// being safe, and the only moment anything knows.
+		if perr := m.store.CompleteIdempotency(ctx, r.Subject.Principal, idemScope(res.Key, r.Device), res.Holder,
+			store.Idempotency{BodyHash: r.BodyHash, Response: body, ExpiresAt: expires, Holder: res.Holder}); perr != nil {
 			idemErr = "idempotency record not written; a retry on this key will mint again"
 		}
 	}
@@ -293,5 +378,5 @@ func (m *Minter) Mint(ctx context.Context, r Request) (Result, error) {
 		Mint:       &decision.Mint{TokenSHA256: hashes, TTLSeconds: int(ttl.Seconds()), BlobHash: r.BlobHash},
 		Policy:     r.Policy,
 		IndexError: idemErr})
-	return res, nil
+	return out, nil
 }

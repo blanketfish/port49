@@ -1023,7 +1023,7 @@ func TestARetryAfterASupersedeIsNotAnsweredWithTheDeletedToken(t *testing.T) {
 		t.Fatalf("the token answered is the one standing: %d standing", len(toks))
 	}
 	mints := eventsOf(f.records(t), "mint")
-	if len(mints) != 1 || !strings.Contains(mints[0]["index_error"].(string), "superseded") {
+	if len(mints) != 1 || !strings.Contains(mints[0]["index_error"].(string), "a policy change or a revocation deleted") {
 		t.Fatalf("the mint record says the replay was abandoned: %v", mints)
 	}
 	if replay := decodeMint(t, f.post(bg, f.state(f.alice), body, "retry-1")).Results[0]; replay.Login != again.Login {
