@@ -430,7 +430,13 @@ func unavailable(resp *http.Response, e api.Error) error {
 		return nil
 	}
 	if e.Error == "certificate_status_unavailable" {
-		return fmt.Errorf("agent: the broker cannot establish your certificate's revocation status just now (%s); try again", e.Detail)
+		// The broker's detail says what it could not establish, and to try
+		// again: said as it is, not wrapped in the same sentence again.
+		if e.Detail != "" {
+			return fmt.Errorf("agent: %s%s", e.Detail, retryHint(resp.Header))
+		}
+		return fmt.Errorf("agent: the broker cannot establish your certificate's revocation status just now; try again%s",
+			retryHint(resp.Header))
 	}
 	return fmt.Errorf("agent: the broker is unavailable just now (%s): %s%s", e.Error, e.Detail, retryHint(resp.Header))
 }

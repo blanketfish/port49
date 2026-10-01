@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/rhwendt/port49/internal/broker/api"
@@ -67,8 +68,11 @@ func (b *Broker) certRefusal(ctx context.Context, cs *tls.ConnectionState, cred 
 		return ref
 	case certstatus.Unknown:
 		if b.OnUnavailable == "allow" {
-			b.sayOnce("allow "+res.Detail, 10*time.Minute, "broker: admitting a certificate whose revocation "+
-				"status cannot be established (%s); broker.certificate_status.on_unavailable is allow", res.Detail)
+			// Limited by a fixed class, never by the detail's text, which an
+			// OCSP responder's answer can vary at will.
+			b.sayOnce("allow "+unknownClass(res.Detail), 10*time.Minute, "broker: admitting a certificate whose "+
+				"revocation status cannot be established (%s); broker.certificate_status.on_unavailable is allow",
+				printsafe.Line(res.Detail, 300))
 			return nil
 		}
 		return &BindRefusal{Status: http.StatusServiceUnavailable, Reason: decision.TrustDomainUnresolved,
@@ -76,6 +80,22 @@ func (b *Broker) certRefusal(ctx context.Context, cs *tls.ConnectionState, cred 
 			Detail: "the broker cannot establish this certificate's revocation status (" + res.Detail + "); try again"}
 	}
 	return nil
+}
+
+// unknownClass is which kind of source left a status unestablished, from
+// the fixed start certstatus gives each Unknown's detail: "crl" (a list past
+// its next update), "ocsp" (a responder), "uncovered" (no source covers the
+// issuer), or "other".
+func unknownClass(detail string) string {
+	switch {
+	case strings.HasPrefix(detail, "CRL "):
+		return "crl"
+	case strings.HasPrefix(detail, "OCSP"):
+		return "ocsp"
+	case strings.HasPrefix(detail, "no fresh CRL or OCSP answer covers"):
+		return "uncovered"
+	}
+	return "other"
 }
 
 // BindStatus is Listener.Status: the check before a connection binds. The

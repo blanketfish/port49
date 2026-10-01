@@ -349,6 +349,32 @@ func TestAMarkOutranksAStatusOutageAtBind(t *testing.T) {
 	wantDeny(t, lastRecord(t, f, "mint"), "credential_revoked")
 }
 
+// A mark lifted while the status is asked leaves no connection held
+// unchecked (review M1): bind takes the status's refusal under the same lock
+// it reads the marks under, so the revoked certificate is answered and holds
+// no slot.
+func TestAMarkLiftedDuringTheStatusCheckStillRefuses(t *testing.T) {
+	f := newFixture(t, 8)
+	fs := withStatus(t, f, "refuse", nil)
+	mark := store.Revocation{Kind: store.RevocationCert, Key: certKey(f.alice), At: f.now}
+	addr, bl := serveThroughWith(t, f, DefaultListenerLimits, nil, func(l *Listener) {
+		l.Status = func(cs tls.ConnectionState, principal string, cred store.Credential) *BindRefusal {
+			l.Revoked(mark, false) // the lift lands mid-check
+			return f.b.BindStatus(cs, principal, cred)
+		}
+	})
+	f.b.Conns = bl
+	bl.Revoked(mark, true)
+	fs.set(f.alice, revokedByCRL)
+	a := boundAnswer(t, f, addr, f.alice)
+	if a.status != 401 || !strings.Contains(a.body, "was revoked at its CA") {
+		t.Fatalf("%d %s", a.status, a.body)
+	}
+	if n := testutil.ToFloat64(f.b.Metrics.BrokerConnections.WithLabelValues("held")); n != 0 {
+		t.Fatalf("held gauge: %v", n)
+	}
+}
+
 // A status that cannot be established is 503 certificate_status_unavailable
 // with Retry-After 60, recorded trust_domain_unresolved, at mint, at bind and
 // at refresh; it ends no session (pre-flight I7). The bind is counted
@@ -411,7 +437,16 @@ func TestAnUnknownStatusIsUnavailable(t *testing.T) {
 		if !got.AuthTime.Equal(auth) {
 			t.Fatalf("the context was extended: auth_time %v", got.AuthTime)
 		}
-		ask(t, c, br) // the connection is kept
+		// The connection is kept, and its own clock did not move: its next
+		// mint carries the handshake's auth_time (review M4).
+		fs.set(f.alice, certstatus.Result{Verdict: certstatus.Good, Source: "crl", Name: "corp"})
+		if a := postOn(t, c, br, "/v1/tokens", mintBody); a.status != 200 {
+			t.Fatalf("the mint after the 503: %d", a.status)
+		}
+		toks, _ := f.st.Candidates(context.Background(), store.TokenKey{NAS: "leaf1", Username: "alice"})
+		if len(toks) != 1 || !toks[0].AuthTime.Equal(auth) {
+			t.Fatalf("a refused refresh moved the connection's auth_time: %d token(s), %v", len(toks), toks[0].AuthTime)
+		}
 	})
 
 	// on_unavailable: allow admits, and says so once per source per ten
@@ -430,6 +465,18 @@ func TestAnUnknownStatusIsUnavailable(t *testing.T) {
 		if n := strings.Count(logs.String(), "admitting a certificate whose revocation status cannot be established"); n != 1 {
 			t.Fatalf("said %d times: %q", n, logs.String())
 		}
+		// A responder that varies its answer's text at will is still one
+		// line per window (review M2).
+		for i, key := range []string{"k3", "k4", "k5"} {
+			fs.set(f.alice, certstatus.Result{Verdict: certstatus.Unknown, Source: "none",
+				Detail: fmt.Sprintf("OCSP http://ocsp.example.com: answered 500 reason %d", i)})
+			if w := f.post(context.Background(), f.state(f.alice), mintBody, key); w.Code != 200 {
+				t.Fatalf("mint %s: %s", key, answer(w))
+			}
+		}
+		if n := strings.Count(logs.String(), "admitting a certificate whose revocation status cannot be established"); n != 2 {
+			t.Fatalf("said %d times: %q", n, logs.String())
+		}
 	})
 }
 
@@ -444,6 +491,19 @@ func (s *certIndexFailing) ContextsByCert(ctx context.Context, certKey string) (
 		return nil, errors.New("store: connection refused")
 	}
 	return s.Store.ContextsByCert(ctx, certKey)
+}
+
+// markUnreadable fails GetRevocation while fail is set.
+type markUnreadable struct {
+	store.Store
+	fail atomic.Bool
+}
+
+func (s *markUnreadable) GetRevocation(ctx context.Context, kind, key string) (store.Revocation, error) {
+	if s.fail.Load() {
+		return store.Revocation{}, errors.New("store: connection refused")
+	}
+	return s.Store.GetRevocation(ctx, kind, key)
 }
 
 func (b *Broker) pendingLen() int {
@@ -529,6 +589,26 @@ func TestACRLEntryRevokesWhatIsPresent(t *testing.T) {
 		if n := f.b.pendingLen(); n != 0 {
 			t.Fatalf("%d still pending", n)
 		}
+	})
+
+	// A mark that cannot be read is a store error too: pending, never
+	// marked, never passed over as already revoked (review M3).
+	t.Run("mark unreadable", func(t *testing.T) {
+		f := newFixture(t, 8)
+		failing := &markUnreadable{Store: f.st}
+		failing.fail.Store(true)
+		f.b.Store = failing
+		withStatus(t, f, "refuse", nil)
+		f.liveContext(t, "leaf1", "alice", alicePrincipal, certKey(f.alice))
+		f.b.OnCRLEntry(issuer(f.alice), serial(f.alice), "corp")
+		eventually(t, "the entry pending", func() bool { return f.b.pendingLen() == 1 })
+		if _, ok := markOn(t, f, f.alice); ok {
+			t.Fatal("a store error marked the certificate")
+		}
+		failing.fail.Store(false)
+		f.b.RetryPending()
+		eventually(t, "the revocation", func() bool { return certRevocations(f) == 1 })
+		waitMark(t, f, f.alice, "crl corp")
 	})
 
 	// A restart names every entry of each list again (LoadPersisted): one
@@ -623,8 +703,8 @@ func TestAnAgentConnectingDuringAStatusOutageIsToldToTryAgain(t *testing.T) {
 	fs.set(f.alice, unknownStatus)
 	a := agent.New(agent.Config{BrokerURL: "https://" + addr, Cert: f.alice, BrokerCA: f.ca.Pool(), Now: f.b.Now})
 	_, err := a.Connect(context.Background())
-	if err == nil || errors.Is(err, agent.ErrSessionOver) || !strings.Contains(err.Error(), "try again") ||
-		!strings.Contains(err.Error(), "revocation status") {
+	if err == nil || errors.Is(err, agent.ErrSessionOver) || strings.Count(err.Error(), "try again") != 1 ||
+		strings.Count(err.Error(), "revocation status") != 1 || !strings.HasSuffix(err.Error(), "retry in 60s") {
 		t.Fatalf("Connect during the outage: %v", err)
 	}
 	select {

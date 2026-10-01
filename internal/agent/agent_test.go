@@ -101,7 +101,8 @@ func (fb *fakeBroker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if certStatus && r.URL.Path != "/v1/refresh/challenge" {
 		w.Header().Set("Retry-After", "60") // as the broker's writeRefusal answers it
 		writeJSON(w, 503, api.Error{Error: "certificate_status_unavailable",
-			Detail: "the broker cannot reach the certificate's OCSP responder"})
+			Detail: "the broker cannot establish this certificate's revocation status (OCSP http://ocsp.example.com: " +
+				"no answer within 2s); try again"})
 		return
 	}
 	switch r.URL.Path {
@@ -1436,8 +1437,8 @@ func TestABrokerUnableToAnswerEndsNothing(t *testing.T) {
 	r.fb.mu.Lock()
 	r.fb.certStatus = true
 	r.fb.mu.Unlock()
-	const certText = "cannot establish your certificate's revocation status just now " +
-		"(the broker cannot reach the certificate's OCSP responder); try again"
+	const certText = "agent: the broker cannot establish this certificate's revocation status " +
+		"(OCSP http://ocsp.example.com: no answer within 2s); try again; retry in 60s"
 	if _, err := r.a.Mint(context.Background(), "leaf1", false, 0); err == nil || !strings.Contains(err.Error(), certText) {
 		t.Fatalf("a mint: %v", err)
 	}

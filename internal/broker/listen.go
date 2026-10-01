@@ -288,33 +288,35 @@ func (l *Listener) handshake(c *trackedConn) {
 			l.refuse(c, tc, "identity_refused", err)
 			return
 		}
-		// A marked connection skips the status check: bind answers it
-		// credential_revoked, which a CA outage must not turn into a 503 the
-		// agent keeps its session on.
-		certKey := store.CertKey(cred.Issuer, cred.Serial)
-		if l.Status != nil && !l.isMarked(principal, certKey) {
-			if ref := l.Status(cs, principal, cred); ref != nil {
-				// A CA outage is not a revocation on the dashboard (re-check R6).
-				event := "revoked_refused"
-				if ref.RetryAfter > 0 {
-					event = "status_unavailable_refused"
-				}
-				l.m.BrokerConnectionEvents.WithLabelValues(event).Inc()
-				l.say(event, "port49d: broker: answering a connection from %s %s and closing it before it "+
-					"bound: %s", c.src, ref.Error, printsafe.Line(ref.Detail, 300))
-				l.answerRefused(tc, ref.Status, api.Error{Error: ref.Error, Detail: ref.Detail}, ref.RetryAfter,
-					principal, cred, ref.Reason)
-				return
-			}
+		// The status is asked first, and bind decides under one lock: a
+		// mark, then the status's refusal, then the hold. A mark lifted while
+		// the status was asked leaves no connection held unchecked, and a
+		// mark in force is answered credential_revoked, which a CA outage
+		// must not turn into a 503 the agent keeps its session on.
+		var ref *BindRefusal
+		if l.Status != nil {
+			ref = l.Status(cs, principal, cred)
 		}
-		rv, ok := l.bind(c, principal, certKey)
-		if !ok {
+		rv, ok := l.bind(c, principal, store.CertKey(cred.Issuer, cred.Serial), ref != nil)
+		switch {
+		case !ok:
 			_ = tc.Close()
 			return
-		}
-		if rv != nil {
+		case rv != nil:
 			l.answerRefused(tc, http.StatusUnauthorized, revokedError(*rv), 0, principal, cred,
 				decision.CredentialRevoked)
+			return
+		case ref != nil:
+			// A CA outage is not a revocation on the dashboard (re-check R6).
+			event := "revoked_refused"
+			if ref.RetryAfter > 0 {
+				event = "status_unavailable_refused"
+			}
+			l.m.BrokerConnectionEvents.WithLabelValues(event).Inc()
+			l.say(event, "port49d: broker: answering a connection from %s %s and closing it before it "+
+				"bound: %s", c.src, ref.Error, printsafe.Line(ref.Detail, 300))
+			l.answerRefused(tc, ref.Status, api.Error{Error: ref.Error, Detail: ref.Detail}, ref.RetryAfter,
+				principal, cred, ref.Reason)
 			return
 		}
 	}
@@ -375,8 +377,9 @@ func handshakeReason(err error) string {
 // connections, closing the principal's oldest past MaxPerPrincipal. It
 // reports false when c was closed under it, and the mark when one names c's
 // principal or certificate: c is then left charged to its source, never
-// held, for answerRefused to answer and close.
-func (l *Listener) bind(c *trackedConn, principal, certKey string) (*store.Revocation, bool) {
+// held, for answerRefused to answer and close. refused (Status refused c)
+// leaves c the same way once no mark names it, and bind returns nil, true.
+func (l *Listener) bind(c *trackedConn, principal, certKey string, refused bool) (*store.Revocation, bool) {
 	l.mu.Lock()
 	if c.gone {
 		l.mu.Unlock()
@@ -399,6 +402,10 @@ func (l *Listener) bind(c *trackedConn, principal, certKey string) (*store.Revoc
 		l.say("revoked_refused", "port49d: broker: answering a connection from %s credential_revoked and "+
 			"closing it as it bound: %s or its certificate is revoked", c.src, principal)
 		return &store.Revocation{Kind: k[0], Key: k[1], At: at}, true
+	}
+	if refused {
+		l.mu.Unlock()
+		return nil, true
 	}
 	l.unpendLocked(c.src)
 	c.principal, c.certKey = principal, certKey
@@ -495,15 +502,6 @@ func (l *Listener) CloseHeld(match func(principal, certKey string) bool) int {
 		l.m.BrokerConnectionEvents.WithLabelValues("revoked_closed").Add(float64(len(hit)))
 	}
 	return len(hit)
-}
-
-// isMarked reports whether a mark names principal or certKey.
-func (l *Listener) isMarked(principal, certKey string) bool {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	_, p := l.marked[[2]string{store.RevocationPrincipal, principal}]
-	_, c := l.marked[[2]string{store.RevocationCert, certKey}]
-	return p || c
 }
 
 // HoldsCert reports whether a held connection was made with certKey.
