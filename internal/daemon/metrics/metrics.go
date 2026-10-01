@@ -92,7 +92,8 @@ type Metrics struct {
 	// at accept, its source holding max_pending_conns_per_source),
 	// principal_cap_evicted (a principal's oldest held connection closed for
 	// its newest), revoked_closed (closed by a revocation), revoked_refused
-	// (closed at bind: its certificate or principal is marked).
+	// (answered credential_revoked and closed at bind: its certificate or
+	// principal is marked).
 	BrokerConnectionEvents *prometheus.CounterVec
 	// port49_broker_connections{state}: pending (not yet bound to a
 	// principal: handshaking, or certificate-less) and held.

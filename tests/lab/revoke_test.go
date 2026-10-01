@@ -30,13 +30,48 @@ const revokeClaim = "A revocation by principal or by certificate (`port49 revoke
 // revoked principal's or certificate's new connection as it binds.
 const revokeRefusedLine = "as it bound: "
 
+// revokedMsg is the server_msg of an authorize_command deny
+// credential_revoked (internal/daemon/author). IOS-XE prints a FAIL's
+// server_msg and nothing else (tests/lab/results/slice-cisco_iosxe.md), so
+// l29Refusals' `% Authorization failed.`, measured on an ERROR (L4), does
+// not tell this refusal from output there.
+const revokedMsg = "port49: this session was revoked"
+
+// revokeOutcome is l29Outcome that also counts the device printing
+// revokedMsg, the FAIL's own text, as a refusal.
+func revokeOutcome(platform string, sh *labShell, cmd string, fail func(string, ...any), what string) string {
+	out, took, ended, err := sh.runOrEnd(cmd, 60*time.Second)
+	if err == nil && !ended && !l29Refused(platform, out) && strings.Contains(out, revokedMsg) {
+		for _, line := range strings.Split(out, "\n") {
+			if strings.Contains(line, revokedMsg) {
+				return fmt.Sprintf("refused in %s: %s", took.Round(10*time.Millisecond), l29Cell(strings.TrimSpace(line)))
+			}
+		}
+	}
+	switch {
+	case err != nil:
+		fail("%s: not observed: %v", what, err)
+		return "**not observed in 60s**: " + l29Cell(out)
+	case ended:
+		return fmt.Sprintf("the device ended the session after %s; it printed %s", took.Round(10*time.Millisecond),
+			l29Cell(out))
+	case l29Refused(platform, out):
+		return fmt.Sprintf("refused in %s: %s", took.Round(10*time.Millisecond), l29Cell(l29RefusalLine(platform, out)))
+	}
+	return fmt.Sprintf("printed its output in %s: %s", took.Round(10*time.Millisecond), l29Cell(firstLine(out)))
+}
+
 // revokeCLI runs bin/port49 revoke with args against socket and returns
 // its output and whether it exited 0.
 func revokeCLI(socket string, args ...string) (string, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, filepath.Join(root, "bin", "port49"),
-		append([]string{"revoke", "--socket", socket}, args...)...).CombinedOutput()
+	cmd := exec.CommandContext(ctx, filepath.Join(root, "bin", "port49"),
+		append([]string{"revoke", "--socket", socket}, args...)...)
+	// From the repository root, so a --cert path relative to it is what the
+	// note quotes, not this machine's checkout.
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
 	return strings.TrimSpace(string(out)), err == nil
 }
 
@@ -192,7 +227,7 @@ func TestRevokeEndToEnd(t *testing.T) {
 			t.Fatalf("SSH login with the first token: %v\nrecords:%s", err, summarize(l.recordsSince(off)))
 		}
 		defer sh.Close()
-		before := l29Outcome(l.p.name, sh, "show version", fail, "before the revocation")
+		before := revokeOutcome(l.p.name, sh, "show version", fail, "before the revocation")
 
 		// 2. Revoke the principal.
 		revokedText, revokedOK := revokeCLI(socket, "--principal", slicePrincipal)
@@ -202,7 +237,7 @@ func TestRevokeEndToEnd(t *testing.T) {
 		if sessionOnly != strings.Contains(revokedText, "not reached") {
 			fail("the revocation's not-reached line: %q", revokedText)
 		}
-		after := l29Outcome(l.p.name, sh, "show version", fail, "after the revocation")
+		after := revokeOutcome(l.p.name, sh, "show version", fail, "after the revocation")
 		switch {
 		case sessionOnly && !strings.HasPrefix(after, "printed its output"):
 			fail("Junos: the open session did not keep what it had at login: %s", after)
@@ -258,7 +293,7 @@ func TestRevokeEndToEnd(t *testing.T) {
 
 		// 4. Revoke the certificate the agent holds: its next mint is refused,
 		// and the agent ends.
-		certText, ok := revokeCLI(socket, "--cert", filepath.Join(pki, testpki.LabClientCert))
+		certText, ok := revokeCLI(socket, "--cert", filepath.Join(slicePKIDir, testpki.LabClientCert))
 		if !ok {
 			fail("port49 revoke --cert: %s", certText)
 		}
@@ -271,7 +306,7 @@ func TestRevokeEndToEnd(t *testing.T) {
 			fail("the agent (pid %d) was still running 10 s after the certificate's revocation (%s)", pid2,
 				mintRefusal(certSaid))
 		}
-		certLift, ok := revokeCLI(socket, "--lift", "--cert", filepath.Join(pki, testpki.LabClientCert))
+		certLift, ok := revokeCLI(socket, "--lift", "--cert", filepath.Join(slicePKIDir, testpki.LabClientCert))
 		if !ok {
 			fail("lifting the certificate: %s", certLift)
 		}

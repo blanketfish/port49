@@ -172,7 +172,7 @@ func (b *Broker) Revoke(ctx context.Context, req RevokeRequest) (RevokeReport, e
 		}
 	}
 	if b.Conns != nil {
-		b.Conns.Revoked(kind, key, true)
+		b.Conns.Revoked(rep.Mark, true)
 		rep.Connections = b.Conns.CloseHeld(func(principal, certKey string) bool {
 			if kind == store.RevocationPrincipal {
 				return principal == key
@@ -264,7 +264,7 @@ func (b *Broker) Lift(ctx context.Context, req RevokeRequest) (RevokeReport, err
 		return RevokeReport{}, fmt.Errorf("broker: the revocation could not be lifted, and stands: %w", err)
 	}
 	if b.Conns != nil {
-		b.Conns.Revoked(kind, key, false)
+		b.Conns.Revoked(cur, false)
 	}
 	rep := RevokeReport{Request: req, Mark: cur}
 	rep.Saved, rep.SaveErr = b.persist(ctx)

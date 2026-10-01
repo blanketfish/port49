@@ -1,12 +1,16 @@
 package broker
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"net/netip"
 	"sync"
 	"syscall"
@@ -42,11 +46,20 @@ var DefaultListenerLimits = ListenerLimits{MaxPendingPerSource: 16, MaxPerPrinci
 // ConnCloser is the listener as a revocation sees it (Broker.Conns):
 // CloseHeld closes the held connections a mark names, and Revoked keeps the
 // listener's in-memory copy of the marks, by (store.Revocation kind, key),
-// which refuses a marked connection as it binds.
+// which answers a marked connection credential_revoked as it binds.
 type ConnCloser interface {
 	CloseHeld(match func(principal, certKey string) bool) int
-	Revoked(kind, key string, on bool)
+	Revoked(mark store.Revocation, on bool)
 }
+
+// revokedAnswerTimeout bounds a marked connection's one request and its
+// answer: a client that sends nothing is closed at it. Swapped in tests.
+var revokedAnswerTimeout = 5 * time.Second
+
+// revokedRequestMax bounds the bytes a marked connection's request is read
+// for, its headers and body together: an agent's mint is well under it, and
+// a longer request is cut off unanswered.
+const revokedRequestMax = 4 << 10
 
 // sayEvery is how often one reason's line is said: a flood is one line and
 // a count, never a flood of lines.
@@ -79,20 +92,21 @@ type Listener struct {
 	open map[*trackedConn]bool
 	// held is, by principal, its bound connections, oldest first.
 	held map[string][]*trackedConn
-	// marked is the broker's marks, by (kind, key), kept by Revoked.
-	marked map[[2]string]bool
+	// marked is the broker's marks, by (kind, key), each with when it took
+	// force, kept by Revoked.
+	marked map[[2]string]time.Time
 	lines  map[string]*lineLimit
 }
 
 // Revoked puts a mark in the listener's copy, or takes it out (on false):
 // Broker.Revoke, Broker.Lift and port49d's start-up restore call it.
-func (l *Listener) Revoked(kind, key string, on bool) {
+func (l *Listener) Revoked(mark store.Revocation, on bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if on {
-		l.marked[[2]string{kind, key}] = true
+		l.marked[[2]string{mark.Kind, mark.Key}] = mark.At
 	} else {
-		delete(l.marked, [2]string{kind, key})
+		delete(l.marked, [2]string{mark.Kind, mark.Key})
 	}
 }
 
@@ -128,7 +142,7 @@ func NewListener(inner net.Listener, cfg *tls.Config, lim ListenerLimits, m *met
 	l := &Listener{inner: inner, cfg: cfg, lim: lim, m: m, now: now, logf: logf,
 		ready: make(chan *tls.Conn), done: make(chan struct{}),
 		pending: map[netip.Addr]int{}, open: map[*trackedConn]bool{}, held: map[string][]*trackedConn{},
-		marked: map[[2]string]bool{}, lines: map[string]*lineLimit{}}
+		marked: map[[2]string]time.Time{}, lines: map[string]*lineLimit{}}
 	return l
 }
 
@@ -247,8 +261,13 @@ func (l *Listener) handshake(c *trackedConn) {
 			l.refuse(c, tc, "identity_refused", err)
 			return
 		}
-		if !l.bind(c, principal, store.CertKey(cred.Issuer, cred.Serial)) {
+		rv, ok := l.bind(c, principal, store.CertKey(cred.Issuer, cred.Serial))
+		if !ok {
 			_ = tc.Close()
+			return
+		}
+		if rv != nil {
+			l.answerRevoked(tc, *rv)
 			return
 		}
 	}
@@ -305,31 +324,35 @@ func handshakeReason(err error) string {
 
 // bind moves c from its source's pending count to its principal's held
 // connections, closing the principal's oldest past MaxPerPrincipal. It
-// reports false when c was closed under it.
-func (l *Listener) bind(c *trackedConn, principal, certKey string) bool {
+// reports false when c was closed under it, and the mark when one names c's
+// principal or certificate: c is then left charged to its source, never
+// held, for answerRevoked to answer and close.
+func (l *Listener) bind(c *trackedConn, principal, certKey string) (*store.Revocation, bool) {
 	l.mu.Lock()
 	if c.gone {
 		l.mu.Unlock()
-		return false
+		return nil, false
 	}
-	l.unpendLocked(c.src)
-	c.principal, c.certKey = principal, certKey
-	if l.marked[[2]string{store.RevocationPrincipal, principal}] || l.marked[[2]string{store.RevocationCert, certKey}] {
+	for _, k := range [][2]string{{store.RevocationPrincipal, principal}, {store.RevocationCert, certKey}} {
+		at, marked := l.marked[k]
+		if !marked {
+			continue
+		}
 		// A revoked principal or certificate is refused here, from the
 		// broker's in-memory copy of the marks (Revoked): no store read at
 		// the handshake (spec §13 decision 32), and a revoked certificate
 		// never gets to close its owner's connections (pre-flight I3). It
-		// was never added to held, so forget, at the Close below, has
-		// nothing to take back from the principal.
-		c.gone = true
-		delete(l.open, c)
+		// stays pending, so a source's flood of them meets
+		// MaxPendingPerSource, and forget, at its Close, gives back only
+		// that.
 		l.mu.Unlock()
 		l.m.BrokerConnectionEvents.WithLabelValues("revoked_refused").Inc()
-		l.say("revoked_refused", "port49d: broker: closed a connection from %s as it bound: %s or its "+
-			"certificate is revoked", c.src, principal)
-		l.gauge()
-		return false
+		l.say("revoked_refused", "port49d: broker: refused a connection from %s as it bound, answering its "+
+			"request credential_revoked: %s or its certificate is revoked", c.src, principal)
+		return &store.Revocation{Kind: k[0], Key: k[1], At: at}, true
 	}
+	l.unpendLocked(c.src)
+	c.principal, c.certKey = principal, certKey
 	held := append(l.held[principal], c)
 	var evicted *trackedConn
 	if len(held) > l.lim.MaxPerPrincipal {
@@ -356,7 +379,32 @@ func (l *Listener) bind(c *trackedConn, principal, certKey string) bool {
 		_ = evicted.Close()
 	}
 	l.gauge()
-	return true
+	return nil, true
+}
+
+// answerRevoked reads one request from a marked connection, bounded by
+// revokedRequestMax and revokedAnswerTimeout, answers it the 401
+// credential_revoked a mint under the mark is answered, and closes it. The
+// agent ends its session on that answer (spec §5.1.4), where a bare close
+// reads as a broker that restarted. The request reaches no handler and no
+// store, and is never logged.
+func (l *Listener) answerRevoked(tc *tls.Conn, rv store.Revocation) {
+	defer tc.Close()
+	_ = tc.SetDeadline(time.Now().Add(revokedAnswerTimeout))
+	req, err := http.ReadRequest(bufio.NewReader(&io.LimitedReader{R: tc, N: revokedRequestMax}))
+	if err != nil {
+		return
+	}
+	// Read to its end, so the close is not a reset the answer is lost to.
+	if _, err := io.Copy(io.Discard, req.Body); err != nil {
+		return
+	}
+	var body bytes.Buffer
+	_ = json.NewEncoder(&body).Encode(revokedError(rv))
+	resp := &http.Response{StatusCode: http.StatusUnauthorized, ProtoMajor: 1, ProtoMinor: 1, Request: req,
+		Header: http.Header{"Content-Type": {"application/json"}}, ContentLength: int64(body.Len()),
+		Body: io.NopCloser(&body), Close: true}
+	_ = resp.Write(tc)
 }
 
 // CloseHeld closes every held connection match names, and returns how many

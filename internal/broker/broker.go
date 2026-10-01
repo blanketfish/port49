@@ -406,14 +406,20 @@ func revokedRecord(now time.Time, principal string, cred store.Credential) decis
 // answerRevoked is the 401 credential_revoked, with the connection closed
 // so nothing more rides it.
 func answerRevoked(w http.ResponseWriter, rv store.Revocation) {
+	w.Header().Set("Connection", "close")
+	writeJSON(w, http.StatusUnauthorized, revokedError(rv))
+}
+
+// revokedError is credential_revoked's body, the same from a mint and from
+// the listener's answer to a marked connection (Listener.answerRevoked).
+func revokedError(rv store.Revocation) api.Error {
 	what := "this principal"
 	if rv.Kind == store.RevocationCert {
 		what = "this certificate"
 	}
-	w.Header().Set("Connection", "close")
-	writeError(w, http.StatusUnauthorized, string(decision.CredentialRevoked), fmt.Sprintf(
+	return api.Error{Error: string(decision.CredentialRevoked), Detail: fmt.Sprintf(
 		"%s was revoked at %s; nothing is minted for it until an operator lifts the revocation "+
-			"(port49 revoke --lift)", what, rv.At.UTC().Format(time.RFC3339)))
+			"(port49 revoke --lift)", what, rv.At.UTC().Format(time.RFC3339))}
 }
 
 // unmint deletes the unspent tokens under every key a refused request

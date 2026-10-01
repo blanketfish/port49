@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"syscall"
 	"testing"
@@ -101,6 +102,35 @@ func closedByPeer(c net.Conn) bool {
 	_, err := c.Read(make([]byte, 1))
 	var ne net.Error
 	return err != nil && !(errors.As(err, &ne) && ne.Timeout())
+}
+
+// mintRequest is an agent's mint for one device, as it goes on the wire.
+const mintRequest = "POST /v1/tokens HTTP/1.1\r\nHost: broker\r\nContent-Type: application/json\r\n" +
+	"Idempotency-Key: k1\r\nContent-Length: 21\r\n\r\n{\"devices\":[\"leaf1\"]}"
+
+// answeredRevoked sends a mint on c and wants the 401 credential_revoked a
+// mint under rv is answered, byte for byte, with Connection: close, and then
+// the broker's close (spec §5.1.4).
+func answeredRevoked(t *testing.T, c *tls.Conn, rv store.Revocation) {
+	t.Helper()
+	if _, err := io.WriteString(c, mintRequest); err != nil {
+		t.Fatalf("writing a mint to a marked connection: %v", err)
+	}
+	_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
+	resp, err := http.ReadResponse(bufio.NewReader(c), nil)
+	if err != nil {
+		t.Fatalf("a marked connection was not answered: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	want := httptest.NewRecorder()
+	answerRevoked(want, rv)
+	if resp.StatusCode != http.StatusUnauthorized || string(body) != want.Body.String() || !resp.Close ||
+		resp.Header.Get("Content-Type") != "application/json" {
+		t.Fatalf("a marked connection's answer: %s %v %q, want 401 %q", resp.Status, resp.Header, body, want.Body)
+	}
+	if !closedByPeer(c) {
+		t.Fatal("a marked connection was held after its answer")
+	}
 }
 
 func (f *fixture) gauge(state string) float64 {
@@ -288,14 +318,12 @@ func TestARevokedCertificateNeverEvictsItsOwner(t *testing.T) {
 	}
 	ask(t, rc, rbr)
 	stolenKey := certKey(f.alice)
-	bl.Revoked(store.RevocationCert, stolenKey, true)
+	bl.Revoked(store.Revocation{Kind: store.RevocationCert, Key: stolenKey, At: f.now}, true)
 	for i := 0; i < 10; i++ {
 		c, err := tls.Dial("tcp", addr, &tls.Config{Certificates: []tls.Certificate{f.alice}, RootCAs: f.ca.Pool(),
 			MinVersion: tls.VersionTLS13})
 		if err == nil {
-			if !closedByPeer(c) {
-				t.Fatal("a revoked certificate's connection was held")
-			}
+			answeredRevoked(t, c, store.Revocation{Kind: store.RevocationCert, At: f.now})
 			c.Close()
 		}
 	}
@@ -303,7 +331,7 @@ func TestARevokedCertificateNeverEvictsItsOwner(t *testing.T) {
 	if got := testutil.ToFloat64(f.b.Metrics.BrokerConnectionEvents.WithLabelValues("revoked_refused")); got != 10 {
 		t.Fatalf("revoked_refused %v", got)
 	}
-	bl.Revoked(store.RevocationCert, stolenKey, false)
+	bl.Revoked(store.Revocation{Kind: store.RevocationCert, Key: stolenKey}, false)
 	c, br := held(t, f, addr, f.alice) // lifted: it binds again
 	ask(t, c, br)
 }
@@ -477,14 +505,12 @@ func TestACertificateMarkedBeforeServeNeverBinds(t *testing.T) {
 	if f.gauge("pending") != 0 || f.gauge("held") != 0 {
 		t.Fatalf("accepted before the first Accept: pending %v held %v", f.gauge("pending"), f.gauge("held"))
 	}
-	bl.Revoked(store.RevocationCert, store.CertKey(f.alice.Leaf.Issuer.String(), f.alice.Leaf.SerialNumber.Text(16)), true)
+	bl.Revoked(store.Revocation{Kind: store.RevocationCert, Key: certKey(f.alice), At: f.now}, true)
 	go func() { _ = srv.Serve(bl) }()
 	d := <-got
 	if d.err == nil {
 		defer d.c.Close()
-		if !closedByPeer(d.c) {
-			t.Fatal("a certificate marked before Serve was held")
-		}
+		answeredRevoked(t, d.c, store.Revocation{Kind: store.RevocationCert, At: f.now})
 	}
 	eventually(t, "revoked_refused counted", func() bool {
 		return testutil.ToFloat64(f.b.Metrics.BrokerConnectionEvents.WithLabelValues("revoked_refused")) == 1
@@ -522,14 +548,12 @@ func TestAMarkMidHandshakeIsRefusedAtBind(t *testing.T) {
 	if f.gauge("pending") != 1 {
 		t.Fatalf("pending mid-handshake %v", f.gauge("pending"))
 	}
-	bl.Revoked(store.RevocationCert, store.CertKey(f.alice.Leaf.Issuer.String(), f.alice.Leaf.SerialNumber.Text(16)), true)
+	bl.Revoked(store.Revocation{Kind: store.RevocationCert, Key: certKey(f.alice), At: f.now}, true)
 	close(release)
 	d := <-got
 	if d.err == nil {
 		defer d.c.Close()
-		if !closedByPeer(d.c) {
-			t.Fatal("a certificate marked mid-handshake was held")
-		}
+		answeredRevoked(t, d.c, store.Revocation{Kind: store.RevocationCert, At: f.now})
 	}
 	eventually(t, "revoked_refused counted", func() bool {
 		return testutil.ToFloat64(f.b.Metrics.BrokerConnectionEvents.WithLabelValues("revoked_refused")) == 1
@@ -540,4 +564,121 @@ func TestAMarkMidHandshakeIsRefusedAtBind(t *testing.T) {
 		bl.mu.Unlock()
 		return open == 0 && pending == 0 && held == 0 && f.gauge("pending") == 0 && f.gauge("held") == 0
 	})
+}
+
+// dialAs opens a TLS connection to addr presenting cert.
+func dialAs(t *testing.T, f *fixture, addr string, cert tls.Certificate) *tls.Conn {
+	t.Helper()
+	c, err := tls.Dial("tcp", addr, &tls.Config{Certificates: []tls.Certificate{cert}, RootCAs: f.ca.Pool(),
+		MinVersion: tls.VersionTLS13})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { c.Close() })
+	return c
+}
+
+// A marked certificate's new connection is answered the 401
+// credential_revoked a mint under the mark is answered, and closed: a bare
+// close reads to the agent as a broker that restarted, and leaves its
+// session up (spec §5.1.4; the vEOS lab, plan 7a). The request reaches no
+// handler: nothing is recorded, nothing minted.
+func TestAMarkedCertificateIsAnsweredCredentialRevoked(t *testing.T) {
+	f := newFixture(t, 8)
+	addr, bl := serveThrough(t, f, DefaultListenerLimits, nil)
+	at := f.now.Add(-time.Minute)
+	bl.Revoked(store.Revocation{Kind: store.RevocationCert, Key: certKey(f.alice), At: at}, true)
+	answeredRevoked(t, dialAs(t, f, addr, f.alice), store.Revocation{Kind: store.RevocationCert, At: at})
+	if got := testutil.ToFloat64(f.b.Metrics.BrokerConnectionEvents.WithLabelValues("revoked_refused")); got != 1 {
+		t.Fatalf("revoked_refused %v", got)
+	}
+	if f.log.Len() != 0 {
+		t.Fatalf("a marked connection reached the handler: %s", f.log)
+	}
+	eventually(t, "nothing charged", func() bool { return f.gauge("pending") == 0 && f.gauge("held") == 0 })
+}
+
+// A marked principal's is answered the same, naming the principal: every
+// certificate it holds is refused so.
+func TestAMarkedPrincipalIsAnsweredCredentialRevoked(t *testing.T) {
+	f := newFixture(t, 8)
+	addr, bl := serveThrough(t, f, DefaultListenerLimits, nil)
+	at := f.now.Add(-time.Minute)
+	bl.Revoked(store.Revocation{Kind: store.RevocationPrincipal, Key: "user:alice@example.com", At: at}, true)
+	renewed := f.client(t, "alice@example.com", f.now.Add(2*time.Hour))
+	for _, cert := range []tls.Certificate{f.alice, renewed} {
+		answeredRevoked(t, dialAs(t, f, addr, cert), store.Revocation{Kind: store.RevocationPrincipal, At: at})
+	}
+	if got := testutil.ToFloat64(f.b.Metrics.BrokerConnectionEvents.WithLabelValues("revoked_refused")); got != 2 {
+		t.Fatalf("revoked_refused %v", got)
+	}
+	if f.log.Len() != 0 {
+		t.Fatalf("a marked connection reached the handler: %s", f.log)
+	}
+	carol := f.client(t, "carol@example.com", f.now.Add(time.Hour))
+	held(t, f, addr, carol) // anyone else binds as before
+}
+
+// A marked connection that sends nothing stays charged to its source, never
+// held, until revokedAnswerTimeout, and is then closed: it is counted once,
+// and gives back its charge.
+func TestASilentMarkedConnectionIsClosedAtTheDeadline(t *testing.T) {
+	defer func(d time.Duration) { revokedAnswerTimeout = d }(revokedAnswerTimeout)
+	revokedAnswerTimeout = 600 * time.Millisecond
+	f := newFixture(t, 8)
+	errs := &lockedBuffer{}
+	addr, bl := serveThrough(t, f, DefaultListenerLimits, logTo(errs))
+	bl.Revoked(store.Revocation{Kind: store.RevocationCert, Key: certKey(f.alice), At: f.now}, true)
+	start := time.Now()
+	c := dialAs(t, f, addr, f.alice)
+	eventually(t, "revoked_refused counted", func() bool {
+		return testutil.ToFloat64(f.b.Metrics.BrokerConnectionEvents.WithLabelValues("revoked_refused")) == 1
+	})
+	if f.gauge("pending") != 1 || f.gauge("held") != 0 {
+		t.Fatalf("while it is answered: pending %v held %v", f.gauge("pending"), f.gauge("held"))
+	}
+	_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
+	n, err := c.Read(make([]byte, 1))
+	if err == nil || n != 0 {
+		t.Fatalf("a silent marked connection was sent %d bytes: %v", n, err)
+	}
+	if took := time.Since(start); took < 500*time.Millisecond {
+		t.Fatalf("closed after %s, before the deadline", took)
+	}
+	eventually(t, "nothing charged", func() bool { return f.gauge("pending") == 0 && f.gauge("held") == 0 })
+	if !strings.Contains(errs.String(), "credential_revoked") {
+		t.Fatalf("the line: %q", errs.String())
+	}
+}
+
+// A marked connection's request is read for at most revokedRequestMax bytes:
+// one just under it is answered, and one over it is cut off unanswered.
+func TestAnOversizedRequestOnAMarkedConnectionIsCutOff(t *testing.T) {
+	f := newFixture(t, 8)
+	addr, bl := serveThrough(t, f, DefaultListenerLimits, nil)
+	bl.Revoked(store.Revocation{Kind: store.RevocationCert, Key: certKey(f.alice), At: f.now}, true)
+	request := func(pad int) string {
+		return "POST /v1/tokens HTTP/1.1\r\nHost: broker\r\nX-Pad: " + strings.Repeat("a", pad) +
+			"\r\nContent-Length: 0\r\n\r\n"
+	}
+	under := request(revokedRequestMax - len(request(0)))
+	if len(under) != revokedRequestMax {
+		t.Fatalf("under is %d bytes", len(under))
+	}
+	c := dialAs(t, f, addr, f.alice)
+	if _, err := io.WriteString(c, under); err != nil {
+		t.Fatal(err)
+	}
+	_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if resp, err := http.ReadResponse(bufio.NewReader(c), nil); err != nil || resp.StatusCode != 401 {
+		t.Fatalf("a request of exactly revokedRequestMax bytes: %v %v", resp, err)
+	}
+	c = dialAs(t, f, addr, f.alice)
+	go func() { _, _ = io.WriteString(c, request(revokedRequestMax)) }()
+	_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if resp, err := http.ReadResponse(bufio.NewReader(c), nil); err == nil {
+		t.Fatalf("an oversized request was answered: %s", resp.Status)
+	} else if ne := net.Error(nil); errors.As(err, &ne) && ne.Timeout() {
+		t.Fatal("an oversized request was held to the deadline")
+	}
 }

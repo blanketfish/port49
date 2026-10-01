@@ -773,15 +773,16 @@ func run(parent context.Context, cfgPath string) error {
 		// source and per principal before that (spec §13 decision 32). It
 		// accepts nothing until Serve's first Accept, so the marks restored
 		// above, given to it here, are in place before any connection can
-		// bind: a revoked principal or certificate is closed as it binds,
-		// from the first connection on.
+		// bind: a revoked principal or certificate is answered
+		// credential_revoked and closed as it binds, from the first
+		// connection on.
 		bl = broker.NewListener(broker.Limit(bln, broker.MaxConns), brokerSrv.TLSConfig,
 			broker.ListenerLimits{MaxPendingPerSource: cfg.Broker.MaxPendingConnsPerSource,
 				MaxPerPrincipal:  cfg.Broker.MaxConnsPerPrincipal,
 				HandshakeTimeout: broker.DefaultListenerLimits.HandshakeTimeout},
 			m, time.Now, func(format string, args ...any) { fmt.Fprintf(stderr, format+"\n", args...) })
 		for _, r := range marks {
-			bl.Revoked(r.Kind, r.Key, true)
+			bl.Revoked(r, true)
 		}
 		brk.Conns = bl
 	}

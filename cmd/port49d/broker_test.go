@@ -672,7 +672,8 @@ func TestRunRestoresRevocationsBeforeTheBrokerServes(t *testing.T) {
 	// port49d is started three times on one config: the first start
 	// creates the file and alice mints; each restart finds one mark in the
 	// file, as Revoke's Persist leaves it, and alice's first connection is
-	// closed as it binds, by certificate and then by principal. The
+	// answered credential_revoked as it binds, by certificate and then by
+	// principal. The
 	// listener's copy refuses before any mint can read the store's; the
 	// store's copy is the next subtest's.
 	t.Run("a mark in the file holds across a restart", func(t *testing.T) {
@@ -725,10 +726,14 @@ func TestRunRestoresRevocationsBeforeTheBrokerServes(t *testing.T) {
 			}
 			addr, stop := start()
 			waitForCount(t, &out, "port49d: broker: 1 revocation(s) in force from "+b.RevocationsFile, i+1)
-			if status, body, err := postAsAlice(pki, addr); err == nil {
-				t.Fatalf("by %s: alice's connection was served: %d %s", mark.Kind, status, body)
+			// Refused by the listener, the restored mark's time and all:
+			// the request reaches no handler.
+			status, body, err := postAsAlice(pki, addr)
+			if err != nil || status != http.StatusUnauthorized || !strings.Contains(body, `"credential_revoked"`) ||
+				!strings.Contains(body, "revoked at 2026-10-02T03:12:09Z") {
+				t.Fatalf("by %s: alice's connection: %d %s %v", mark.Kind, status, body, err)
 			}
-			waitForCount(t, &out, "as it bound: user:alice@example.com or its certificate is revoked", i+1)
+			waitForCount(t, &out, "credential_revoked: user:alice@example.com or its certificate is revoked", i+1)
 			stop()
 		}
 	})

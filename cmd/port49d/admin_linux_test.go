@@ -238,15 +238,16 @@ func TestRunRevokesListsAndLiftsOverTheAdminSocket(t *testing.T) {
 	if code := mint(heldConn); code != 0 {
 		t.Fatalf("the held connection still answered after the revocation: %d", code)
 	}
-	// A new connection is closed as it binds, from the listener's copy of
-	// the marks (Task 6), before any mint can be asked: no 401, no answer.
-	// The handshake may fail outright when the close races it.
-	if c, err := tls.Dial("tcp", brokerAddr, &tls.Config{Certificates: []tls.Certificate{alice}, RootCAs: pool,
-		MinVersion: tls.VersionTLS13, ServerName: "127.0.0.1"}); err == nil {
-		t.Cleanup(func() { c.Close() })
-		if code := mint(c); code != 0 {
-			t.Fatalf("a new connection after the revocation: %d", code)
-		}
+	// A new connection is refused as it binds, from the listener's copy of
+	// the marks (Task 6): its one request, which reaches no handler, is
+	// answered 401 credential_revoked, so the agent ends its session, and
+	// the connection is closed.
+	c := dial()
+	if code := mint(c); code != http.StatusUnauthorized {
+		t.Fatalf("a new connection after the revocation: %d", code)
+	}
+	if code := mint(c); code != 0 {
+		t.Fatalf("a refused connection answered a second request: %d", code)
 	}
 	waitFor(t, &out, "is revoked")
 	raw, err := os.ReadFile(b.RevocationsFile)

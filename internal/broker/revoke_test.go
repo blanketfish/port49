@@ -28,11 +28,11 @@ type fakeConns struct {
 	marked map[[2]string]bool
 }
 
-func (c *fakeConns) Revoked(kind, key string, on bool) {
+func (c *fakeConns) Revoked(mark store.Revocation, on bool) {
 	if c.marked == nil {
 		c.marked = map[[2]string]bool{}
 	}
-	c.marked[[2]string{kind, key}] = on
+	c.marked[[2]string{mark.Kind, mark.Key}] = on
 }
 
 func (c *fakeConns) CloseHeld(match func(principal, certKey string) bool) int {
