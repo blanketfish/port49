@@ -173,6 +173,48 @@ func (c *Client) Token(ctx context.Context, r TokenRequest) (api.MintItem, error
 	}
 }
 
+// Refresh asks the agent to refresh the session it holds and answers what
+// the broker extended.
+func (c *Client) Refresh(ctx context.Context) (api.RefreshResponse, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://agent/refresh", http.NoBody)
+	if err != nil {
+		return api.RefreshResponse{}, err
+	}
+	if err := c.checkDir(); err != nil {
+		return api.RefreshResponse{}, err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return api.RefreshResponse{}, fmt.Errorf("%w at %s: %v", ErrNoAgent, c.socket, err)
+	}
+	defer resp.Body.Close()
+	var e api.Error
+	switch resp.StatusCode {
+	case http.StatusOK:
+		var out api.RefreshResponse
+		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+			return api.RefreshResponse{}, err
+		}
+		return out, nil
+	case http.StatusGone:
+		// As Token's: a revocation is rebuilt without the text that says to
+		// log in.
+		_ = json.NewDecoder(resp.Body).Decode(&e)
+		if e.Error == "credential_revoked" {
+			return api.RefreshResponse{}, &RevokedError{Detail: e.Detail}
+		}
+		return api.RefreshResponse{}, fmt.Errorf("%w%s", ErrSessionOver, strings.TrimPrefix(e.Detail, ErrSessionOver.Error()))
+	default:
+		// refresh_failed's detail is the agent's own error, already saying
+		// what the broker answered.
+		_ = json.NewDecoder(resp.Body).Decode(&e)
+		if e.Error == "refresh_failed" {
+			return api.RefreshResponse{}, errors.New(e.Detail)
+		}
+		return api.RefreshResponse{}, fmt.Errorf("agent: %s: %s", e.Error, e.Detail)
+	}
+}
+
 // Status asks the agent whose session it holds.
 func (c *Client) Status(ctx context.Context) (Status, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://agent/status", nil)

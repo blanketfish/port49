@@ -15,9 +15,11 @@ package agent
 import (
 	"bytes"
 	"context"
+	"crypto"
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -105,6 +107,16 @@ type Agent struct {
 
 	mu       sync.Mutex
 	deadline time.Time
+	// ceilingWarning is /v1/config's ceiling_warning_seconds: how near a
+	// device's own ceiling `port49 token` warns.
+	ceilingWarning time.Duration
+
+	// refreshMu runs one refresh at a time: a second challenge on the
+	// connection would replace the first one's nonce under it.
+	refreshMu sync.Mutex
+	// deadlineChanged is signalled when a refresh moves the deadline, so
+	// the agent process re-arms its timer.
+	deadlineChanged chan struct{}
 
 	// done is closed when the broker ends the session (end).
 	done    chan struct{}
@@ -117,7 +129,8 @@ type Agent struct {
 // concurrent asks queue on it rather than opening a second handshake. When it
 // drops, the next ask dials again, which is one more use of the key.
 func New(c Config) *Agent {
-	a := &Agent{broker: strings.TrimRight(c.BrokerURL, "/"), now: c.Now, log: c.Log, done: make(chan struct{})}
+	a := &Agent{broker: strings.TrimRight(c.BrokerURL, "/"), now: c.Now, log: c.Log, done: make(chan struct{}),
+		deadlineChanged: make(chan struct{}, 1)}
 	if a.now == nil {
 		a.now = time.Now
 	}
@@ -184,6 +197,9 @@ func (a *Agent) Connect(ctx context.Context) (api.Config, error) {
 			// connection binds (spec §5.1.4): say why, and since when.
 			return api.Config{}, over
 		}
+		if busy := unavailable(resp, e); busy != nil {
+			return api.Config{}, busy
+		}
 		return api.Config{}, fmt.Errorf("agent: %s/v1/config answered %s: %s %s", a.broker, resp.Status, e.Error, e.Detail)
 	}
 	var c api.Config
@@ -195,6 +211,7 @@ func (a *Agent) Connect(ctx context.Context) (api.Config, error) {
 	}
 	a.mu.Lock()
 	a.deadline = a.now().Add(time.Duration(c.MaxSessionAgeSeconds) * time.Second)
+	a.ceilingWarning = time.Duration(c.CeilingWarningSeconds) * time.Second
 	a.mu.Unlock()
 	return c, nil
 }
@@ -205,6 +222,11 @@ func (a *Agent) SessionEndsAt() time.Time {
 	defer a.mu.Unlock()
 	return a.deadline
 }
+
+// DeadlineChanged is signalled when a refresh moves SessionEndsAt, so the
+// agent process re-arms the timer that ends it (pre-flight I6). It holds one
+// signal; a second refresh before the first is read is the same news.
+func (a *Agent) DeadlineChanged() <-chan struct{} { return a.deadlineChanged }
 
 // Handshakes is how many connections this session has opened.
 func (a *Agent) Handshakes() int64 { return a.handshakes.Load() }
@@ -280,6 +302,9 @@ func (a *Agent) Mint(ctx context.Context, device string, enable bool, ttl time.D
 		if over := sessionOver(resp.StatusCode, e); over != nil {
 			a.end(over)
 			return api.MintItem{}, over
+		}
+		if busy := unavailable(resp, e); busy != nil {
+			return api.MintItem{}, busy
 		}
 		return api.MintItem{}, fmt.Errorf("agent: the broker answered %s: %s %s", resp.Status, e.Error, e.Detail)
 	}
@@ -370,6 +395,167 @@ func sessionOver(status int, e api.Error) error {
 	return nil
 }
 
+// unavailable is the error a 503 means, or nil for any other answer. A 503
+// is the broker unable to answer just now: it never ends the session, and
+// the operator asks again (pre-flight I7). Only the broker's code and its
+// fixed detail are said, and its Retry-After when it sends one.
+func unavailable(resp *http.Response, e api.Error) error {
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		return nil
+	}
+	if e.Error == "certificate_status_unavailable" {
+		return fmt.Errorf("agent: the broker cannot establish your certificate's revocation status just now (%s); try again", e.Detail)
+	}
+	return fmt.Errorf("agent: the broker is unavailable just now (%s): %s%s", e.Error, e.Detail, retryHint(resp.Header))
+}
+
+// retryHint is "; retry in Ns" for a Retry-After in whole seconds, or "".
+func retryHint(h http.Header) string {
+	if n, err := strconv.Atoi(h.Get("Retry-After")); err == nil && n > 0 {
+		return fmt.Sprintf("; retry in %ds", n)
+	}
+	return ""
+}
+
+// Refresh re-authenticates the session on the held connection (spec §5.6;
+// decision 33): it asks the broker for a challenge, signs it with the
+// session's key over the connection's TLS exporter value, and sends the
+// signature. It is run by `port49 refresh` and `port49 login` alone, never
+// on the agent's own initiative: the ceiling measures time since a person
+// authenticated. A refusal that names the challenge, a connection dropped
+// between the two requests or a hardware touch slower than the challenge's
+// minute, is tried once more.
+//
+// credential_revoked ends the session, as a mint's does. Anything else the
+// broker refuses (refresh_too_soon, a 503) is returned and ends nothing, and
+// the deadline moves only on a refresh the broker answered 200.
+func (a *Agent) Refresh(ctx context.Context) (api.RefreshResponse, error) {
+	a.refreshMu.Lock()
+	defer a.refreshMu.Unlock()
+	select {
+	case <-a.done:
+		return api.RefreshResponse{}, ErrSessionOver
+	default:
+	}
+	if ends := a.SessionEndsAt(); ends.IsZero() || !a.now().Before(ends) {
+		return api.RefreshResponse{}, ErrSessionOver
+	}
+	signer, ok := a.cert.PrivateKey.(crypto.Signer)
+	if !ok {
+		return api.RefreshResponse{}, errors.New("agent: the session's key cannot sign a refresh")
+	}
+	for attempt := 1; ; attempt++ {
+		out, retry, err := a.refreshOnce(ctx, signer)
+		if err == nil || !retry || attempt == 2 {
+			return out, err
+		}
+	}
+}
+
+// refreshOnce is one challenge and its answer. retry says the broker found
+// no live challenge for the answer: a new challenge may succeed.
+func (a *Agent) refreshOnce(ctx context.Context, signer crypto.Signer) (api.RefreshResponse, bool, error) {
+	var conn *watchedConn
+	trace := &httptrace.ClientTrace{GotConn: func(i httptrace.GotConnInfo) { conn, _ = i.Conn.(*watchedConn) }}
+	req, err := http.NewRequestWithContext(httptrace.WithClientTrace(ctx, trace), http.MethodPost,
+		a.broker+"/v1/refresh/challenge", http.NoBody)
+	if err != nil {
+		return api.RefreshResponse{}, false, err
+	}
+	resp, err := a.do(req)
+	if err != nil {
+		return api.RefreshResponse{}, false, fmt.Errorf("agent: the broker at %s is unreachable: %w", a.broker, err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		defer drain(resp.Body)
+		_, _, err := a.refreshRefused(resp, "a refresh challenge")
+		return api.RefreshResponse{}, false, err
+	}
+	var ch api.RefreshChallenge
+	derr := json.NewDecoder(io.LimitReader(resp.Body, 4<<10)).Decode(&ch)
+	drain(resp.Body)
+	if derr != nil {
+		return api.RefreshResponse{}, false, errors.New("agent: the broker's refresh challenge is malformed")
+	}
+	nonce, err := base64.RawURLEncoding.DecodeString(ch.Nonce)
+	if err != nil || len(nonce) != api.RefreshNonceLen {
+		return api.RefreshResponse{}, false, errors.New("agent: the broker's refresh challenge is malformed")
+	}
+	// The exporter value of the connection the challenge came on: the
+	// answer verifies only there, so a nonce carried to another connection
+	// proves nothing (decision 33).
+	if conn == nil {
+		return api.RefreshResponse{}, false, errors.New("agent: the refresh challenge came on no TLS connection")
+	}
+	cs, ok := conn.tlsState()
+	if !ok {
+		return api.RefreshResponse{}, false, errors.New("agent: the refresh challenge came on no TLS connection")
+	}
+	ekm, err := cs.ExportKeyingMaterial(api.RefreshExporterLabel, nil, 32)
+	if err != nil {
+		return api.RefreshResponse{}, false, fmt.Errorf("agent: the connection's exporter value: %w", err)
+	}
+	sig, err := api.SignRefresh(signer, api.RefreshMessage(nonce, ekm))
+	if err != nil {
+		return api.RefreshResponse{}, false, fmt.Errorf("agent: signing the refresh: %w", err)
+	}
+	body, err := json.Marshal(api.RefreshRequest{Nonce: ch.Nonce, Signature: base64.RawURLEncoding.EncodeToString(sig)})
+	if err != nil {
+		return api.RefreshResponse{}, false, err
+	}
+	req, err = http.NewRequestWithContext(ctx, http.MethodPost, a.broker+"/v1/refresh", bytes.NewReader(body))
+	if err != nil {
+		return api.RefreshResponse{}, false, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err = a.do(req)
+	if err != nil {
+		return api.RefreshResponse{}, true, fmt.Errorf("agent: the broker at %s is unreachable: %w", a.broker, err)
+	}
+	defer drain(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return a.refreshRefused(resp, "the refresh")
+	}
+	var out api.RefreshResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return api.RefreshResponse{}, false, fmt.Errorf("agent: the broker's answer to the refresh: %w", err)
+	}
+	ends, err := time.Parse(time.RFC3339, out.SessionEndsAt)
+	if err != nil {
+		return api.RefreshResponse{}, false, fmt.Errorf("agent: the broker's answer to the refresh names no session_ends_at: %w", err)
+	}
+	a.mu.Lock()
+	a.deadline = ends
+	a.mu.Unlock()
+	select {
+	case a.deadlineChanged <- struct{}{}:
+	default:
+	}
+	return out, false, nil
+}
+
+// refreshRefused is the error a refused challenge or refresh means. The
+// code decides, never the detail text: credential_revoked ends the session,
+// refresh_challenge_missing is worth one new challenge, and the rest end
+// nothing.
+func (a *Agent) refreshRefused(resp *http.Response, what string) (api.RefreshResponse, bool, error) {
+	var e api.Error
+	_ = json.NewDecoder(io.LimitReader(resp.Body, 4<<10)).Decode(&e)
+	if over := sessionOver(resp.StatusCode, e); over != nil && e.Error == "credential_revoked" {
+		a.end(over)
+		return api.RefreshResponse{}, false, over
+	}
+	if busy := unavailable(resp, e); busy != nil {
+		return api.RefreshResponse{}, false, busy
+	}
+	hint := ""
+	if resp.StatusCode == http.StatusTooManyRequests {
+		hint = retryHint(resp.Header)
+	}
+	return api.RefreshResponse{}, e.Error == "refresh_challenge_missing",
+		fmt.Errorf("agent: the broker refused %s: %s (%s)%s", what, e.Detail, e.Error, hint)
+}
+
 // ItemError is a device the broker could not decide: a fault on its side or
 // in its inventory, not a refusal of the operator (design §17). It carries
 // the broker's code and detail; the operator's answer is usually to tell
@@ -426,6 +612,16 @@ func (a *Agent) refusal(err error) error {
 type watchedConn struct {
 	net.Conn
 	answered atomic.Bool
+}
+
+// tlsState is the TLS connection's state. The transport fills
+// http.Response.TLS only for a bare *tls.Conn, which this is not.
+func (c *watchedConn) tlsState() (tls.ConnectionState, bool) {
+	tc, ok := c.Conn.(*tls.Conn)
+	if !ok {
+		return tls.ConnectionState{}, false
+	}
+	return tc.ConnectionState(), true
 }
 
 func (c *watchedConn) Read(p []byte) (int, error) {
@@ -530,15 +726,19 @@ type TokenRequest struct {
 	TTLSeconds int    `json:"ttl_seconds"`
 }
 
-// Status is GET /status on the agent's socket.
+// Status is GET /status on the agent's socket. CeilingWarningSeconds is the
+// broker's session.ceiling_warning: how near a device's own ceiling
+// `port49 token` warns.
 type Status struct {
-	Broker        string `json:"broker"`
-	SessionEndsAt string `json:"session_ends_at"`
-	Handshakes    int64  `json:"handshakes"`
+	Broker                string `json:"broker"`
+	SessionEndsAt         string `json:"session_ends_at"`
+	Handshakes            int64  `json:"handshakes"`
+	CeilingWarningSeconds int    `json:"ceiling_warning_seconds"`
 }
 
 // Handler is the agent's socket: POST /token mints one device and answers the
-// broker's item; GET /status says whose session this is and when it ends.
+// broker's item; POST /refresh refreshes the session and answers what the
+// broker extended; GET /status says whose session this is and when it ends.
 func (a *Agent) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /token", func(w http.ResponseWriter, r *http.Request) {
@@ -569,9 +769,27 @@ func (a *Agent) Handler() http.Handler {
 			writeJSON(w, http.StatusOK, item)
 		}
 	})
+	mux.HandleFunc("POST /refresh", func(w http.ResponseWriter, r *http.Request) {
+		out, err := a.Refresh(r.Context())
+		var revoked *RevokedError
+		switch {
+		case errors.As(err, &revoked):
+			writeJSON(w, http.StatusGone, api.Error{Error: "credential_revoked", Detail: revoked.Detail})
+		case errors.Is(err, ErrSessionOver):
+			writeJSON(w, http.StatusGone, api.Error{Error: "session_over", Detail: err.Error()})
+		case err != nil:
+			writeJSON(w, http.StatusBadGateway, api.Error{Error: "refresh_failed", Detail: err.Error()})
+		default:
+			writeJSON(w, http.StatusOK, out)
+		}
+	})
 	mux.HandleFunc("GET /status", func(w http.ResponseWriter, r *http.Request) {
+		a.mu.Lock()
+		warn := a.ceilingWarning
+		a.mu.Unlock()
 		writeJSON(w, http.StatusOK, Status{Broker: a.broker,
-			SessionEndsAt: a.SessionEndsAt().UTC().Format(time.RFC3339), Handshakes: a.Handshakes()})
+			SessionEndsAt: a.SessionEndsAt().UTC().Format(time.RFC3339), Handshakes: a.Handshakes(),
+			CeilingWarningSeconds: int(warn / time.Second)})
 	})
 	return mux
 }

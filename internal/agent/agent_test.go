@@ -2,8 +2,11 @@ package agent
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,8 +23,20 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
+	"github.com/rhwendt/port49/internal/admission"
+	"github.com/rhwendt/port49/internal/broker"
 	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/rhwendt/port49/internal/daemon/metrics"
+	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/engine"
+	"github.com/rhwendt/port49/internal/policy"
+	"github.com/rhwendt/port49/internal/session"
+	"github.com/rhwendt/port49/internal/store"
+	"github.com/rhwendt/port49/internal/store/memory"
 	"github.com/rhwendt/port49/internal/testpki"
+	"github.com/rhwendt/port49/internal/token"
 )
 
 // fakeBroker speaks the broker's wire format and records every mint's
@@ -34,6 +50,14 @@ import (
 // an earlier try under the key is still minting. revoked answers every mint
 // 401 credential_revoked, as the broker does once an operator revokes the
 // principal or the certificate.
+//
+// For a refresh it issues a challenge and verifies the answer as the broker
+// does, over the connection's exporter value, recording the remote address
+// each refresh path was asked on. refreshRefusals answers that many
+// refreshes with their refusal first, in order; tooSoon answers every
+// challenge 429 refresh_too_soon. certStatus answers /v1/config, every mint
+// and every refresh 503 certificate_status_unavailable, as the broker does
+// when it cannot establish the certificate's status (Task 10).
 type fakeBroker struct {
 	mu         sync.Mutex
 	keys       []string
@@ -44,12 +68,84 @@ type fakeBroker struct {
 	hollow     bool
 	inProgress int
 	revoked    bool
+
+	addrs           map[string][]string
+	nonce           []byte
+	refreshRefusals []refusal
+	tooSoon         bool
+	certStatus      bool
+}
+
+// refusal is one scripted answer: a status, an api.Error, a Retry-After.
+type refusal struct {
+	status     int
+	e          api.Error
+	retryAfter string
 }
 
 func (fb *fakeBroker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	fb.mu.Lock()
+	certStatus := fb.certStatus
+	if fb.addrs == nil {
+		fb.addrs = map[string][]string{}
+	}
+	fb.addrs[r.URL.Path] = append(fb.addrs[r.URL.Path], r.RemoteAddr)
+	fb.mu.Unlock()
+	if certStatus && r.URL.Path != "/v1/refresh/challenge" {
+		writeJSON(w, 503, api.Error{Error: "certificate_status_unavailable",
+			Detail: "the broker cannot reach the certificate's OCSP responder"})
+		return
+	}
 	switch r.URL.Path {
 	case "/v1/config":
-		writeJSON(w, 200, api.Config{Methods: []string{"x509"}, MaxSessionAgeSeconds: 60, BatchMax: 10})
+		writeJSON(w, 200, api.Config{Methods: []string{"x509"}, MaxSessionAgeSeconds: 60, BatchMax: 10,
+			CeilingWarningSeconds: 1800})
+	case "/v1/refresh/challenge":
+		fb.mu.Lock()
+		defer fb.mu.Unlock()
+		if fb.tooSoon {
+			w.Header().Set("Retry-After", "7")
+			writeJSON(w, 429, api.Error{Error: "refresh_too_soon", Detail: "this connection refreshed moments ago; wait and retry"})
+			return
+		}
+		fb.nonce = make([]byte, api.RefreshNonceLen)
+		_, _ = rand.Read(fb.nonce)
+		writeJSON(w, 200, api.RefreshChallenge{Nonce: base64.RawURLEncoding.EncodeToString(fb.nonce)})
+	case "/v1/refresh":
+		fb.mu.Lock()
+		nonce := fb.nonce
+		fb.nonce = nil
+		var ref *refusal
+		if len(fb.refreshRefusals) > 0 {
+			ref = &fb.refreshRefusals[0]
+			fb.refreshRefusals = fb.refreshRefusals[1:]
+		}
+		fb.mu.Unlock()
+		if ref != nil {
+			if ref.retryAfter != "" {
+				w.Header().Set("Retry-After", ref.retryAfter)
+			}
+			writeJSON(w, ref.status, ref.e)
+			return
+		}
+		var req api.RefreshRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		got, _ := base64.RawURLEncoding.DecodeString(req.Nonce)
+		sig, _ := base64.RawURLEncoding.DecodeString(req.Signature)
+		if nonce == nil || !bytes.Equal(got, nonce) {
+			writeJSON(w, 401, api.Error{Error: "refresh_challenge_missing"})
+			return
+		}
+		ekm, err := r.TLS.ExportKeyingMaterial(api.RefreshExporterLabel, nil, 32)
+		leaf := r.TLS.PeerCertificates[0]
+		alg, _ := api.RefreshAlgorithm(leaf.PublicKey)
+		if err != nil || leaf.CheckSignature(alg, api.RefreshMessage(nonce, ekm), sig) != nil {
+			writeJSON(w, 401, api.Error{Error: "trust_domain_unresolved"})
+			return
+		}
+		at := time.Now().UTC().Truncate(time.Second)
+		writeJSON(w, 200, api.RefreshResponse{AuthTime: at.Format(time.RFC3339),
+			SessionEndsAt: at.Add(time.Hour).Format(time.RFC3339), Sessions: []api.RefreshedSession{}})
 	case "/v1/tokens":
 		fb.mu.Lock()
 		fb.keys = append(fb.keys, r.Header.Get("Idempotency-Key"))
@@ -1058,5 +1154,362 @@ func TestAHangUpWithAnExpiredCertificateEndsTheSession(t *testing.T) {
 	case <-a.Done():
 	default:
 		t.Fatal("Done must close")
+	}
+}
+
+// realRig is the agent on a real broker behind its own Listener, as port49d
+// serves it, with one live context for alice on leaf1 that has 1h left. The
+// broker and the agent share a clock the test moves.
+type realRig struct {
+	a     *Agent
+	b     *broker.Broker
+	st    *memory.Store
+	alice tls.Certificate
+	mu    sync.Mutex
+	now   time.Time
+}
+
+func (r *realRig) clock() time.Time {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.now
+}
+
+func (r *realRig) advance(d time.Duration) {
+	r.mu.Lock()
+	r.now = r.now.Add(d)
+	r.mu.Unlock()
+}
+
+const realPolicy = `
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: r, privilege: admin, permit: ["**"]}]
+subjects: [{name: s, identity: ["user:alice@example.com"], username: alice, token_ttl: 60s}]
+grants: [{subject: s, scope: all_devices, roles: [r]}]
+`
+
+func newRealRig(t *testing.T) *realRig {
+	t.Helper()
+	r := &realRig{now: time.Now().Truncate(time.Second)}
+	path := filepath.Join(t.TempDir(), "policy.yaml")
+	if err := os.WriteFile(path, []byte(realPolicy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	leaf1 := admission.Device{Name: "leaf1", Platform: "arista_eos", Addresses: []netip.Addr{netip.MustParseAddr("172.100.100.11")}}
+	pol, err := policy.Load(path, policy.Env{Devices: []admission.Device{leaf1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ca, err := testpki.NewCA("agent test ca", r.now.Add(-time.Hour), r.now.Add(48*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	srvCert, err := ca.Issue(testpki.Leaf{CommonName: "broker", IPs: []net.IP{net.ParseIP("127.0.0.1")},
+		NotBefore: r.now.Add(-time.Hour), NotAfter: r.now.Add(48 * time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.alice, err = ca.Issue(testpki.Leaf{CommonName: "alice", Emails: []string{"alice@example.com"}, Client: true,
+		NotBefore: r.now.Add(-time.Hour), NotAfter: r.now.Add(48 * time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	r.st = memory.New(r.clock)
+	log := decision.NewJSONLines(io.Discard)
+	r.b = &broker.Broker{Policy: policy.NewLive(pol),
+		Minter: token.NewMinter(r.st, log, rand.Reader, token.TagKey([]byte("k")), r.clock, 8),
+		Store:  r.st, Log: log, Metrics: metrics.New(prometheus.NewRegistry()), Now: r.clock,
+		MaxSessionAge: time.Hour, BatchMax: 4, Sessions: session.New(r.st, r.clock, time.Hour, time.Hour),
+		ContextIdleTTL: time.Hour, CeilingWarning: 30 * time.Minute, GraceWindow: 5 * time.Minute}
+
+	// alice's live context on leaf1, as a device login with her token left
+	// it: authenticated now, its ceiling an hour out.
+	ctx := context.Background()
+	res, err := pol.Resolve("user:alice@example.com", leaf1, r.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, hash, err := engine.Encode(res.Blob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.st.PutBlob(ctx, hash, body, 24*time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	k := store.ContextKey{NAS: "leaf1", Username: "alice"}
+	if err := r.st.PutContext(ctx, k, store.Context{CtxID: "ctx_leaf1", Principal: "user:alice@example.com",
+		Username: "alice", PrivLvl: 1, BlobHash: hash, AuthTime: r.now, SessionExpires: r.now.Add(time.Hour),
+		RefreshedAt: r.now, LastTouchedAt: r.now}, 24*time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.st.IndexContext(ctx, "user:alice@example.com", "", aliceCertKey(r.alice),
+		store.ContextRef{NAS: "leaf1", Username: "alice"}, 24*time.Hour); err != nil {
+		t.Fatal(err)
+	}
+
+	srv, err := r.b.Server("127.0.0.1:0", srvCert, ca.Pool())
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bl := broker.NewListener(broker.Limit(raw, broker.MaxConns), srv.TLSConfig, broker.DefaultListenerLimits,
+		r.b.Metrics, r.b.Now, nil)
+	bl.Refused = r.b.RefusedAtBind
+	go func() { _ = srv.Serve(bl) }()
+	t.Cleanup(func() { _ = srv.Close() })
+	r.a = New(Config{BrokerURL: "https://" + raw.Addr().String(), Cert: r.alice, BrokerCA: ca.Pool(), Now: r.clock})
+	if _, err := r.a.Connect(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+func aliceCertKey(c tls.Certificate) string {
+	return store.CertKey(c.Leaf.Issuer.String(), c.Leaf.SerialNumber.Text(16))
+}
+
+// A refresh signs the broker's challenge on the held connection, and the
+// broker extends the live context and the connection's own session: the
+// agent's deadline becomes the broker's session_ends_at, DeadlineChanged is
+// signalled so the agent process re-arms, and a mint past the first
+// deadline goes through (spec §5.6; decision 33; pre-flight I6).
+func TestARefreshMovesTheDeadlineToTheBrokers(t *testing.T) {
+	r := newRealRig(t)
+	first := r.a.SessionEndsAt()
+	select {
+	case <-r.a.DeadlineChanged():
+		t.Fatal("DeadlineChanged before any refresh")
+	default:
+	}
+	r.advance(30 * time.Minute)
+	out, err := r.a.Refresh(context.Background())
+	if err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	if len(out.Sessions) != 1 || out.Sessions[0].Device != "leaf1" || out.Sessions[0].Outcome != "extended" ||
+		out.Sessions[0].SessionExpires != r.clock().Add(time.Hour).UTC().Format(time.RFC3339) {
+		t.Fatalf("the broker's answer: %+v", out)
+	}
+	if got := r.a.SessionEndsAt().UTC().Format(time.RFC3339); got != out.SessionEndsAt || !r.a.SessionEndsAt().After(first) {
+		t.Fatalf("SessionEndsAt %s, the broker said %s (first %s)", got, out.SessionEndsAt, first)
+	}
+	select {
+	case <-r.a.DeadlineChanged():
+	default:
+		t.Fatal("a refresh must signal DeadlineChanged")
+	}
+	r.advance(40 * time.Minute) // past the first deadline, inside the new one
+	if item, err := r.a.Mint(context.Background(), "leaf1", false, 0); err != nil || item.Verdict != "permit" {
+		t.Fatalf("a mint past the first deadline: %+v %v", item.Verdict, err)
+	}
+	if n := r.a.Handshakes(); n != 1 {
+		t.Fatalf("a refresh is made on the held connection: %d handshakes", n)
+	}
+}
+
+// A refresh the broker refuses credential_revoked ends the session, as a
+// mint's refusal does (spec §5.1.4).
+func TestARevokedRefreshEndsTheSession(t *testing.T) {
+	r := newRealRig(t)
+	first := r.a.SessionEndsAt()
+	if err := r.st.PutRevocation(context.Background(), store.Revocation{Kind: store.RevocationPrincipal,
+		Key: "user:alice@example.com", At: r.clock(), Origin: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := r.a.Refresh(context.Background())
+	var revoked *RevokedError
+	if !errors.As(err, &revoked) || !errors.Is(err, ErrSessionOver) {
+		t.Fatalf("a revoked refresh: %v", err)
+	}
+	select {
+	case <-r.a.Done():
+	default:
+		t.Fatal("Done must close")
+	}
+	if !r.a.SessionEndsAt().Equal(first) {
+		t.Fatal("a refused refresh moved the deadline")
+	}
+	if _, err := r.a.Refresh(context.Background()); !errors.Is(err, ErrSessionOver) {
+		t.Fatalf("a refresh of an ended session: %v", err)
+	}
+}
+
+// The challenge and its answer travel the one held connection: the answer
+// is signed over that connection's exporter value and verifies nowhere
+// else (decision 33).
+func TestTheChallengeAndTheAnswerShareTheConnection(t *testing.T) {
+	r := newRig(t)
+	if _, err := r.a.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	r.fb.mu.Lock()
+	ch, ans := r.fb.addrs["/v1/refresh/challenge"], r.fb.addrs["/v1/refresh"]
+	r.fb.mu.Unlock()
+	if len(ch) != 1 || len(ans) != 1 || ch[0] != ans[0] {
+		t.Fatalf("challenge from %q, answer from %q", ch, ans)
+	}
+	if n := r.a.Handshakes(); n != 1 {
+		t.Fatalf("%d handshakes", n)
+	}
+}
+
+// refresh_challenge_missing, a connection dropped between the two requests
+// or a hardware touch past the challenge's minute, is tried once with a new
+// challenge, and only once.
+func TestAMissingChallengeIsTriedOnce(t *testing.T) {
+	missing := refusal{status: 401, e: api.Error{Error: "refresh_challenge_missing",
+		Detail: "no live refresh challenge on this connection; ask for one and answer it within 60s"}}
+	r := newRig(t)
+	r.fb.mu.Lock()
+	r.fb.refreshRefusals = []refusal{missing}
+	r.fb.mu.Unlock()
+	if _, err := r.a.Refresh(context.Background()); err != nil {
+		t.Fatalf("one missing challenge, then a good one: %v", err)
+	}
+
+	r = newRig(t)
+	first := r.a.SessionEndsAt()
+	r.fb.mu.Lock()
+	r.fb.refreshRefusals = []refusal{missing, missing, missing}
+	r.fb.mu.Unlock()
+	if _, err := r.a.Refresh(context.Background()); err == nil || !strings.Contains(err.Error(), "refresh_challenge_missing") {
+		t.Fatalf("two missing challenges: %v", err)
+	}
+	r.fb.mu.Lock()
+	n := len(r.fb.addrs["/v1/refresh/challenge"])
+	r.fb.mu.Unlock()
+	if n != 2 {
+		t.Fatalf("%d challenges, want 2", n)
+	}
+	select {
+	case <-r.a.Done():
+		t.Fatal("a missing challenge ended the session")
+	default:
+	}
+	if !r.a.SessionEndsAt().Equal(first) {
+		t.Fatal("a failed refresh moved the deadline")
+	}
+}
+
+// What the broker cannot answer just now ends nothing and moves nothing: a
+// 503 at Connect, a mint or a refresh, and a refresh paced 429, return an
+// error that says so and leave Done open (pre-flight I7). A refresh's 503
+// says the broker's fixed text and its Retry-After.
+func TestABrokerUnableToAnswerEndsNothing(t *testing.T) {
+	open := func(t *testing.T, r *rig) {
+		t.Helper()
+		select {
+		case <-r.a.Done():
+			t.Fatal("Done closed")
+		default:
+		}
+		select {
+		case <-r.a.DeadlineChanged():
+			t.Fatal("DeadlineChanged signalled")
+		default:
+		}
+	}
+	r := newRig(t)
+	first := r.a.SessionEndsAt()
+	r.fb.mu.Lock()
+	r.fb.certStatus = true
+	r.fb.mu.Unlock()
+	const certText = "cannot establish your certificate's revocation status just now " +
+		"(the broker cannot reach the certificate's OCSP responder); try again"
+	if _, err := r.a.Mint(context.Background(), "leaf1", false, 0); err == nil || !strings.Contains(err.Error(), certText) {
+		t.Fatalf("a mint: %v", err)
+	}
+	if _, err := r.a.Refresh(context.Background()); err == nil || !strings.Contains(err.Error(), certText) {
+		t.Fatalf("a refresh: %v", err)
+	}
+	open(t, r)
+	if _, err := r.a.Connect(context.Background()); err == nil || !strings.Contains(err.Error(), certText) {
+		t.Fatalf("Connect: %v", err)
+	}
+	open(t, r)
+	if !r.a.SessionEndsAt().Equal(first) {
+		t.Fatal("a 503 moved the deadline")
+	}
+
+	for name, ref := range map[string]refusal{
+		"before any extension": {status: 503, retryAfter: "10", e: api.Error{Error: "store_unavailable",
+			Detail: "the broker could not read the revocations in force, so it extended nothing; try again"}},
+		"part way": {status: 503, retryAfter: "10", e: api.Error{Error: "store_unavailable",
+			Detail: "the broker could not finish extending your live sessions; some may have been extended; " +
+				"retry after Retry-After and the retry reports them all"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newRig(t)
+			first := r.a.SessionEndsAt()
+			r.fb.mu.Lock()
+			r.fb.refreshRefusals = []refusal{ref}
+			r.fb.mu.Unlock()
+			_, err := r.a.Refresh(context.Background())
+			if err == nil || !strings.Contains(err.Error(), ref.e.Detail) || !strings.Contains(err.Error(), "store_unavailable") ||
+				!strings.Contains(err.Error(), "retry in 10s") {
+				t.Fatalf("%v", err)
+			}
+			open(t, r)
+			if !r.a.SessionEndsAt().Equal(first) {
+				t.Fatal("a 503 moved the deadline")
+			}
+		})
+	}
+
+	r = newRig(t)
+	r.fb.mu.Lock()
+	r.fb.tooSoon = true
+	r.fb.mu.Unlock()
+	if _, err := r.a.Refresh(context.Background()); err == nil || !strings.Contains(err.Error(), "refresh_too_soon") ||
+		!strings.Contains(err.Error(), "retry in 7s") {
+		t.Fatalf("a paced refresh: %v", err)
+	}
+	open(t, r)
+}
+
+// The socket carries a refresh and its refusals: POST /refresh answers what
+// the broker extended, a revocation comes back a *RevokedError, and /status
+// says the broker's ceiling_warning.
+func TestTheClientRefreshesOverTheSocket(t *testing.T) {
+	r := newRig(t)
+	p := filepath.Join(shortDir(t), "s", "agent.sock")
+	ln, err := Listen(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &http.Server{Handler: r.a.Handler()}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+
+	c := NewClient(p)
+	if st, err := c.Status(context.Background()); err != nil || st.CeilingWarningSeconds != 1800 {
+		t.Fatalf("status %+v %v", st, err)
+	}
+	out, err := c.Refresh(context.Background())
+	if err != nil || out.SessionEndsAt == "" {
+		t.Fatalf("%+v %v", out, err)
+	}
+	if st, _ := c.Status(context.Background()); st.SessionEndsAt != out.SessionEndsAt {
+		t.Fatalf("status says %s, the refresh %s", st.SessionEndsAt, out.SessionEndsAt)
+	}
+
+	r.fb.mu.Lock()
+	r.fb.tooSoon = true
+	r.fb.mu.Unlock()
+	if _, err := c.Refresh(context.Background()); err == nil || errors.Is(err, ErrSessionOver) ||
+		!strings.HasPrefix(err.Error(), "agent: the broker refused a refresh challenge:") {
+		t.Fatalf("a paced refresh through the socket: %v", err)
+	}
+	r.fb.mu.Lock()
+	r.fb.tooSoon = false
+	r.fb.refreshRefusals = []refusal{{status: 401, e: api.Error{Error: "credential_revoked",
+		Detail: "this principal was revoked at 2026-10-01T00:00:00Z"}}}
+	r.fb.mu.Unlock()
+	_, err = c.Refresh(context.Background())
+	var revoked *RevokedError
+	if !errors.As(err, &revoked) || strings.Contains(err.Error(), "port49 login") {
+		t.Fatalf("a revoked refresh through the socket: %v", err)
 	}
 }
