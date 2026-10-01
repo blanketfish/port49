@@ -124,7 +124,10 @@ func (req RevokeRequest) normal() (RevokeRequest, string, string, error) {
 // Revoke and Lift hold revokeSem, so a revocation and a lift of one key
 // cannot interleave and leave the listener's copy disagreeing with the
 // store's (M5). One that cannot take it before ctx ends does nothing and
-// says so.
+// says so. That wait is all ctx's end cancels: once it holds revokeSem a
+// revocation runs to the end on a ctx detached from the caller and bounded
+// by RevokeTimeout, so one the operator started is never left half-done
+// because their SSH session dropped.
 //
 // A revocation by certificate that finds no live context deletes no
 // receipt (session.Manager reads the principals off the contexts). That
@@ -147,6 +150,8 @@ func (b *Broker) Revoke(ctx context.Context, req RevokeRequest) (RevokeReport, e
 			"revoked by this one (%w); "+fallback, err)
 	}
 	defer release()
+	ctx, cancel := b.detach(ctx)
+	defer cancel()
 	now := b.Now()
 	mark := store.Revocation{Kind: kind, Key: key, At: now, Origin: req.Origin}
 	if err := b.Store.PutRevocation(ctx, mark); err != nil {
@@ -234,6 +239,7 @@ func (b *Broker) Revoke(ctx context.Context, req RevokeRequest) (RevokeReport, e
 // Lift removes a mark, from the store and the listener. It restores no
 // token and un-marks no context: the contexts it marked stay revoked until
 // a login whose token was minted after the lift joins them (spec §5.6).
+// As with Revoke, ctx's end cancels only the wait for revokeSem.
 func (b *Broker) Lift(ctx context.Context, req RevokeRequest) (RevokeReport, error) {
 	req, kind, key, err := req.normal()
 	if err != nil {
@@ -245,6 +251,8 @@ func (b *Broker) Lift(ctx context.Context, req RevokeRequest) (RevokeReport, err
 			"lifted (%w)", err)
 	}
 	defer release()
+	ctx, cancel := b.detach(ctx)
+	defer cancel()
 	cur, err := b.Store.GetRevocation(ctx, kind, key)
 	switch {
 	case errors.Is(err, store.ErrNotFound):
@@ -282,6 +290,20 @@ func (b *Broker) acquireRevoke(ctx context.Context) (func(), error) {
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
+}
+
+// DefaultRevokeTimeout is RevokeTimeout's zero value: the admin socket's
+// own bound on an op.
+const DefaultRevokeTimeout = 60 * time.Second
+
+// detach is the ctx a revocation or lift runs on once it holds revokeSem:
+// ctx's values, none of its cancellation, and a deadline RevokeTimeout away.
+func (b *Broker) detach(ctx context.Context) (context.Context, context.CancelFunc) {
+	d := b.RevokeTimeout
+	if d <= 0 {
+		d = DefaultRevokeTimeout
+	}
+	return context.WithTimeout(context.WithoutCancel(ctx), d)
 }
 
 // persist writes the marks in force to broker.revocations_file.

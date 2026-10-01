@@ -77,6 +77,11 @@ type Broker struct {
 	// every change. Nil keeps them in the store alone.
 	Persist func(context.Context) error
 
+	// RevokeTimeout bounds a revocation's or lift's steps once it holds
+	// revokeSem, which run detached from the caller (Revoke). Zero is
+	// DefaultRevokeTimeout.
+	RevokeTimeout time.Duration
+
 	// revokeSem is a one-slot semaphore serialising Revoke and Lift (M5),
 	// made lazily under mu. A channel, not a mutex, so a caller waiting
 	// behind a hung store call or Persist gives up when its ctx ends.

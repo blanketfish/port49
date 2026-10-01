@@ -3,6 +3,7 @@ package broker
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/netip"
 	"sort"
@@ -825,4 +826,95 @@ func TestARevokeOrLiftBehindAHungOneGivesUpAtItsDeadline(t *testing.T) {
 			t.Fatalf("the lift that gave up lifted: %v", err)
 		}
 	}
+}
+
+// A caller whose ctx ends after the mark is written, as when the operator's
+// SSH session drops, does not leave the revocation half-done: the held
+// connection is closed, the tokens deleted, the contexts marked and the
+// file saved, each on a ctx the caller's end does not reach. A lift whose
+// caller goes the same way is lifted and saved too.
+func TestARevocationWhoseCallerGoesFinishes(t *testing.T) {
+	f := newFixture(t, 8)
+	conns := &fakeConns{held: [][2]string{{alice, certKey(f.alice)}}}
+	f.b.Conns = conns
+	var persisted []error
+	f.b.Persist = func(ctx context.Context) error { persisted = append(persisted, ctx.Err()); return ctx.Err() }
+	decodeMint(t, f.post(context.Background(), f.state(f.alice), `{"devices":["leaf1","nx1"]}`, ""))
+	f.liveContext(t, "leaf1", "alice", alice, certKey(f.alice))
+	raced := &liftRacedStore{Store: f.st, entered: make(chan struct{}), gate: make(chan struct{})}
+	f.b.Store = raced
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan RevokeReport, 1)
+	go func() {
+		rep, err := f.b.Revoke(ctx, RevokeRequest{Principal: alice})
+		if err != nil {
+			t.Error(err)
+		}
+		done <- rep
+	}()
+	<-raced.entered // the mark is written
+	cancel()
+	close(raced.gate)
+	rep := <-done
+	if rep.Err != nil || rep.SaveErr != nil || !rep.Saved || rep.Partial() || rep.TokenKeys != 2 ||
+		len(rep.Contexts) != 1 || rep.Connections != 1 {
+		t.Fatalf("%+v", rep)
+	}
+	if len(persisted) != 1 || persisted[0] != nil {
+		t.Fatalf("Persist ran on an ended ctx: %v", persisted)
+	}
+	bg := context.Background()
+	for _, dev := range []string{"leaf1", "nx1"} {
+		if toks, _ := f.st.Candidates(bg, store.TokenKey{NAS: dev, Username: "alice"}); len(toks) != 0 {
+			t.Fatalf("%d unspent token(s) on %s survived", len(toks), dev)
+		}
+	}
+	if c, err := f.st.GetContext(bg, store.ContextKey{NAS: "leaf1", Username: "alice"}); err != nil || c.RevokedAt.IsZero() {
+		t.Fatalf("leaf1's context: %+v %v", c, err)
+	}
+
+	lifting := &liftGatedStore{Store: f.st, entered: make(chan struct{}), gate: make(chan struct{})}
+	f.b.Store = lifting
+	ctx, cancel = context.WithCancel(context.Background())
+	lifted := make(chan error, 1)
+	go func() {
+		rep, err := f.b.Lift(ctx, RevokeRequest{Principal: alice})
+		if err == nil && (!rep.Saved || rep.SaveErr != nil) {
+			err = fmt.Errorf("unsaved: %+v", rep)
+		}
+		lifted <- err
+	}()
+	<-lifting.entered // the lift holds the semaphore
+	cancel()
+	close(lifting.gate)
+	if err := <-lifted; err != nil {
+		t.Fatal(err)
+	}
+	if len(persisted) != 2 || persisted[1] != nil {
+		t.Fatalf("Persist ran on an ended ctx: %v", persisted)
+	}
+	if _, err := f.st.GetRevocation(bg, store.RevocationPrincipal, alice); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("the lift did not land: %v", err)
+	}
+	if conns.marked[[2]string{store.RevocationPrincipal, alice}] {
+		t.Fatal("the listener still holds the lifted mark")
+	}
+}
+
+// liftGatedStore holds a Lift at its first read of the mark, after it took
+// the semaphore, until gate closes.
+type liftGatedStore struct {
+	store.Store
+	once    sync.Once
+	entered chan struct{}
+	gate    chan struct{}
+}
+
+func (s *liftGatedStore) GetRevocation(ctx context.Context, kind, key string) (store.Revocation, error) {
+	s.once.Do(func() {
+		close(s.entered)
+		<-s.gate
+	})
+	return s.Store.GetRevocation(ctx, kind, key)
 }

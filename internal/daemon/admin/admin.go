@@ -135,9 +135,12 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 //
 // A revoke or revocations runs under a ctx that ends at the op's deadline
 // or when the caller hangs up, whichever is first: a caller that gave up
-// leaves nothing waiting on its behalf behind a hung revocation. The
-// caller's end is seen as a read that fails, so a client keeps its write
-// side open until it has the answer (no half-close).
+// leaves nothing waiting on its behalf behind a hung revocation. The broker
+// honours that end only while it waits its turn; a revocation under way
+// finishes, under its own bound of the same length (Broker.RevokeTimeout),
+// so the connection is given both. The caller's end is seen as a read that
+// fails, so a client keeps its write side open until it has the answer (no
+// half-close).
 func (s *Server) handle(c net.Conn) {
 	defer c.Close()
 	_ = c.SetDeadline(time.Now().Add(5 * time.Second))
@@ -155,7 +158,7 @@ func (s *Server) handle(c net.Conn) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	if req.Op == "revoke" || req.Op == "revocations" {
-		_ = c.SetDeadline(time.Now().Add(s.opTimeout() + 5*time.Second))
+		_ = c.SetDeadline(time.Now().Add(2*s.opTimeout() + 5*time.Second))
 		go func() {
 			defer cancel()
 			var b [64]byte

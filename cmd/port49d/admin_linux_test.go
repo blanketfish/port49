@@ -295,7 +295,8 @@ func TestRunWithABrokerAndNoAdminSocketSaysRevokeIsUnavailable(t *testing.T) {
 }
 
 // hungStore hangs PutRevocation while hang is open, until its ctx ends,
-// as a store behind a dead network does; ended gets each ctx's error.
+// as a store behind a dead network does; ended gets the ctx's error. One
+// hung when hang closes goes on.
 type hungStore struct {
 	store.Store
 	hang    chan struct{}
@@ -310,7 +311,11 @@ func (h *hungStore) PutRevocation(ctx context.Context, r store.Revocation) error
 	default:
 	}
 	h.entered <- struct{}{}
-	<-ctx.Done()
+	select {
+	case <-h.hang:
+		return h.Store.PutRevocation(ctx, r)
+	case <-ctx.Done():
+	}
 	h.ended <- ctx.Err()
 	return ctx.Err()
 }
@@ -329,6 +334,7 @@ func adminOverBroker(t *testing.T, st store.Store, opTimeout time.Duration) stri
 	}
 	brk.Sessions = session.New(st, time.Now, time.Hour, time.Hour)
 	brk.Persist = persister(st, filepath.Join(safeDir(t), "revocations.json"), m)
+	brk.RevokeTimeout = opTimeout
 	p := filepath.Join(t.TempDir(), "port49d.sock")
 	ln, err := admin.Listen(p)
 	if err != nil {
@@ -373,31 +379,39 @@ func TestARevocationOnAHungStoreGivesUpAtTheDeadlineAndSaysSo(t *testing.T) {
 	}
 }
 
-// A caller that hangs up mid-revocation ends it, so the next one is not
-// left waiting behind it for the semaphore; that one is answered in full.
-func TestACallerThatHangsUpMidRevocationFreesTheNext(t *testing.T) {
+// A caller that hangs up while its revocation waits behind a hung one
+// writes no mark, and the hung one, once its store answers, finishes and
+// is answered in full.
+func TestACallerThatHangsUpWhileWaitingWritesNoMark(t *testing.T) {
 	st := &hungStore{Store: memory.New(time.Now), hang: make(chan struct{}), entered: make(chan struct{}, 1),
 		ended: make(chan error, 1)}
 	p := adminOverBroker(t, st, time.Minute)
+	first := make(chan admin.Response, 1)
+	go func() {
+		r, _ := ask(p, admin.Request{Op: "revoke", Principal: "user:alice@example.com"})
+		first <- r
+	}()
+	<-st.entered
 	c, err := net.Dial("unix", p)
 	if err != nil {
 		t.Fatal(err)
 	}
-	json.NewEncoder(c).Encode(admin.Request{Op: "revoke", Principal: "user:alice@example.com"})
-	<-st.entered
+	json.NewEncoder(c).Encode(admin.Request{Op: "revoke", Principal: "user:carol@example.com"})
+	time.Sleep(50 * time.Millisecond) // into its wait for the semaphore
 	c.Close()
+	time.Sleep(50 * time.Millisecond)
+	close(st.hang)
 	select {
-	case err := <-st.ended:
-		if err != context.Canceled {
-			t.Fatalf("the hung write ended by %v, not the hang-up", err)
+	case r := <-first:
+		if r.Error != "" || !strings.Contains(r.Text, "revoked user:alice@example.com") {
+			t.Fatalf("%+v", r)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("the revocation went on after its caller hung up")
+		t.Fatal("the first revocation was not answered")
 	}
-	close(st.hang)
-	r, err := ask(p, admin.Request{Op: "revoke", Principal: "user:alice@example.com"})
-	if err != nil || r.Error != "" || r.Partial || !strings.Contains(r.Text, "revoked user:alice@example.com") {
-		t.Fatalf("%+v, %v", r, err)
+	r, err := ask(p, admin.Request{Op: "revocations"})
+	if err != nil || strings.Contains(r.Text, "carol") || !strings.Contains(r.Text, "alice") {
+		t.Fatalf("%+v %v", r, err)
 	}
 }
 
