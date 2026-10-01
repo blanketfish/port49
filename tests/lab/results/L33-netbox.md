@@ -20,8 +20,10 @@
   /etc/port49-lab/ca.pem`, its secret 48 random characters per run, and an event rule for device create, update and
   delete in the release's spelling; made three changes 35 s apart; then replaced it with two webhooks on one more
   change: one under a wrong secret, and one to a stand-in listener (`l33Unavailable`, port 18445, the same
-  certificate) that answers every request `503 {"error":"shutting_down"}`, as port49-inventory's webhook listener
-  does during shutdown
+  certificate) that answers every request `503 {"error":"shutting_down"}`, a stand-in for a service going away.
+  Corrected 2026-10-01 (plan 6c final review M1): this note first said port49-inventory's webhook listener answers
+  so during shutdown. It never does: early in a shutdown it accepts a delivery (202) that then triggers nothing, and
+  after that the connection is refused; the next start's sync reads every source
 - **Capture pointer (the records):** `tests/lab/sot/l33/netbox-3.7/`, `tests/lab/sot/l33/netbox-4/` (`webhooks.json`)
 - **Credentials:** every password, secret key, pepper, API token and webhook secret was random per run, passed by
   environment, and is in no committed file; the test fails if the service's log holds the webhook secret, and the
@@ -81,5 +83,6 @@ not be seen here, but at the default the job is not retried at all.
 - A delivery whose certificate the worker's default trust store holds (only the private CA was tried).
 - A burst of changes inside the debouncer's 30 s gap (each change here was 35 s after the last).
 - A release with `RQ_RETRY_MAX` set.
-- A 503 from port49-inventory itself (it answers 503 only on a connection open when shutdown began), and a
-  delivery while port49-inventory is down (connection refused), the common restart case.
+- A delivery during port49-inventory's shutdown (accepted and not synced, or refused at connect) or while it is
+  down (connection refused), the common restart case. That neither is sent again follows from the retry setting
+  above; no run measured it.

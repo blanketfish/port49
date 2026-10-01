@@ -21,8 +21,10 @@
   `dcim.device` create, update and delete, with `ssl_verification: true` and `ca_file_path: /etc/port49-lab/ca.pem`,
   its secret 48 random characters per run; made three changes 35 s apart; then replaced it with two webhooks on one
   more change: one under a wrong secret, and one to a stand-in listener (`l33Unavailable`, port 18445, the same
-  certificate) that answers every request `503 {"error":"shutting_down"}`, as port49-inventory's webhook listener
-  does during shutdown
+  certificate) that answers every request `503 {"error":"shutting_down"}`, a stand-in for a service going away.
+  Corrected 2026-10-01 (plan 6c final review M1): this note first said port49-inventory's webhook listener answers
+  so during shutdown. It never does: early in a shutdown it accepts a delivery (202) that then triggers nothing, and
+  after that the connection is refused; the next start's sync reads every source
 - **Capture pointer (the records):** `tests/lab/sot/l33/nautobot-1.6/`, `tests/lab/sot/l33/nautobot-2/`,
   `tests/lab/sot/l33/nautobot-3/` (`webhooks.json`)
 - **Credentials:** every password, secret key, API token and webhook secret was random per run, passed by
@@ -91,5 +93,6 @@ refused 401, or answered 503 (here by the stand-in listener), is lost; the sched
 
 - A delivery whose certificate the worker's default trust store holds (only the private CA was tried).
 - A burst of changes inside the debouncer's 30 s gap (each change here was 35 s after the last).
-- A 503 from port49-inventory itself (it answers 503 only on a connection open when shutdown began), and a
-  delivery while port49-inventory is down (connection refused), the common restart case.
+- A delivery during port49-inventory's shutdown (accepted and not synced, or refused at connect) or while it is
+  down (connection refused), the common restart case. That neither is sent again follows from `process_webhook`
+  having no retry; no run measured it.

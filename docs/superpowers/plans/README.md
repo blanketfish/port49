@@ -44,7 +44,7 @@ top. **Executed 2026-09-30** on `feature/inventory-service`, reviewed per task a
 with a fix wave; Task 20's midnight nights were dropped by the owner's ruling. It closed L29 and
 L30, and spec §14's quarantine through a sync passed on four images; it opened L31, slow Cisco
 break-glass with single-connection on (Plan 6b — As built, below); **merged 2026-09-30 (PR #17)**. Next,
-`fix/breakglass-reset`, which closes L31: **written 2026-09-30** (`2026-09-30-06b1-breakglass-reset.md`, seven tasks: one docs, three code, one lab harness, one lab run, one lab-and-docs; no owner decisions); **executed 2026-09-30** on `fix/breakglass-reset`, closing L31 (Fix `fix/breakglass-reset` — As built, below); **merged 2026-09-30 (PR #18)**. **6c written 2026-10-01** (`2026-10-01-06c-inventory-connectors.md`, seventeen tasks after its pre-flight review the same day: one docs, thirteen code, two lab, one lab-and-docs; no owner decisions, fourteen rulings where spec §10 was silent, recorded as decision 31; it opens L32 and L33); **executed 2026-10-01** on `feature/inventory-connectors`, reviewed per task, closing L32 and L33 (Plan 6c — As built, below). 7–13 not yet.
+`fix/breakglass-reset`, which closes L31: **written 2026-09-30** (`2026-09-30-06b1-breakglass-reset.md`, seven tasks: one docs, three code, one lab harness, one lab run, one lab-and-docs; no owner decisions); **executed 2026-09-30** on `fix/breakglass-reset`, closing L31 (Fix `fix/breakglass-reset` — As built, below); **merged 2026-09-30 (PR #18)**. **6c written 2026-10-01** (`2026-10-01-06c-inventory-connectors.md`, seventeen tasks after its pre-flight review the same day: one docs, thirteen code, two lab, one lab-and-docs; no owner decisions, fourteen rulings where spec §10 was silent, recorded as decision 31; it opens L32 and L33); **executed 2026-10-01** on `feature/inventory-connectors`, reviewed per task and whole-branch (MERGE, 0/0/8), with a fix wave, closing L32 and L33 (Plan 6c — As built, below). 7–13 not yet.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -1350,8 +1350,10 @@ the plan's "Revised after the pre-flight review"). What differs from the plan's 
   refusal line is re-armed by an accepted delivery at most once per 5-minute window, with an owed
   re-arm so a refusal after a deferred re-arm is still said once.
 - **Task 12 (the listener; 0e0364d, 89eed09).** The webhook listener is capped at 64 connections, a
-  bind error names `webhook_listen`, and a request open at shutdown is answered
-  `503 {"error":"shutting_down"}` and waited for.
+  bind error names `webhook_listen`, and a request in flight at shutdown is waited for. A delivery
+  that arrives as shutdown begins is accepted and triggers nothing, and after that the connection is
+  refused; the `503 {"error":"shutting_down"}` the handler holds is never sent (final review M1, which
+  corrected this line, L33's notes and spec §15).
 - **Task 13 (`inventory export`; a238518, afe4b5e).** It verifies before it writes; `?sequence=`
   takes canonical decimal only; `State.At` refuses a history file holding another sequence; a
   failed write to standard output exits 1; a symlinked `--out` is said as one; the header names the
@@ -1363,11 +1365,27 @@ the plan's "Revised after the pre-flight review"). What differs from the plan's 
   on all five releases, so the GraphQL list is keyed by `id` (e8bbe15), as REST's is, and the run was
   repeated; the name-based offset-ignored check is kept.
 - **Task 15 (lab, L33; c8a63d8, 76de80e, 1c0b8d1, 6f96ab2, 0b4886f).** Beside the 401, a delivery
-  answered 503 by a stand-in listener was measured, and each release's retry setting read from its
-  source. `run.sh`'s e2e mode selected no platform and both device runs wrote one capture name; both
+  answered 503 by a stand-in listener (port49-inventory itself never answers a delivery 503) was
+  measured, and each release's retry setting read from its source. `run.sh`'s e2e mode selected no platform and both device runs wrote one capture name; both
   were fixed and the device runs repeated.
-- **Task 16 (docs).** L32 and L33 closed; spec §10's three "§15 L32's/L33's" sentences replaced by
-  the measured answers; this section.
+- **Task 16 (docs; e60f6a3, 101ce68).** L32 and L33 closed; spec §10's three "§15 L32's/L33's"
+  sentences replaced by the measured answers; this section.
+- **Final review** (MERGE: 0 critical, 0 important, 8 minor) **and fix wave**:
+  - **M1:** port49-inventory never answers a delivery 503 at shutdown (above, Task 12); the as-built,
+    spec §10 and §15 and L33's notes said it did, and were corrected (lab rule 4).
+  - **M2:** a source confirms a removal against the names the bundle in force holds for it, given by
+    the syncer before each fetch (`inventory.Confirmer`), not its own last read: a refused or
+    abandoned read is no baseline, and a restart confirms against the restored bundle (71969a5).
+  - **M3:** notes of single devices are bounded apart from the source's own, so they cannot silence
+    a rebuilt `next` or a fallback; **M4:** the hung gauge's comment says it falls when a running
+    sync ends (71969a5).
+  - **M5:** `Webhooks.Secrets` holds `sot.Secret`, redacted however printed (89068bb).
+  - **M6:** the L33 runs check the service's log for the API token as well as the webhook secret
+    (d16d501).
+  - **M7:** `internal/printsafe.Line` replaces the two printable-line copies, and `bundle.names`
+    builds on `nameList` (8fa9637).
+  - **M8:** the raw L33 captures are copied to the main checkout before the worktree is removed
+    (the controller's step).
 
 **Rulings, as made** (spec §13, decision 31; the plan's "Rulings where the spec is silent"): all
 fourteen stand, with these amendments, each the option that denies more. Ruling 6: a list must
@@ -1385,16 +1403,20 @@ and REST on all five releases, rebuilding `next` on `url` where a bare proxy lef
 upstream. **L33 closed** 2026-10-01 (`L33-netbox.md`, `L33-nautobot.md`,
 `L33-e2e-netbox-arista_eos.md`, `L33-e2e-nautobot-arista_eos.md`): every release delivered over TLS
 under a private CA; a change published in 2.4–2.7 s from NetBox and 3.6–4.1 s from Nautobot, and
-reached port49d's reload on vEOS in 2.5–5.0 s and 4.5–7.0 s; no release sends a delivery refused 401
-or answered 503 again by default.
+reached port49d's reload on vEOS in 2.5–5.0 s and 4.5–7.0 s; no release sends a delivery refused 401,
+or answered 503 by a stand-in listener, again by default.
 
 **Operator notes** (for plan 13's docs, beside the plan's "Operator-facing notes"):
 
 - `HTTPS_PROXY` is ignored by design: the service dials each source directly, so a source reachable
   only through an egress proxy is unsupported until plan 12.
-- A webhook lost to a refusal or a service restart is not sent again by any measured release at its
-  defaults (NetBox `RQ_RETRY_MAX` 0; Nautobot none). The source's `interval` sync is the backstop:
-  size it to how long a change may wait.
+- A webhook refused is not sent again by any measured release at its defaults (NetBox
+  `RQ_RETRY_MAX` 0; Nautobot none). The source's `interval` sync is the backstop: size it to how long
+  a change may wait.
+- A webhook that arrives as port49-inventory shuts down is accepted and triggers nothing, or is
+  refused at connect; it is never answered 503. By the same retry settings it is not sent again
+  (the restart case follows from those settings; no run measured it). The startup sync, which reads
+  every source, covers it.
 - `port49 inventory export` without `--from` accepts an older genuine bundle; the header names its
   sequence.
 
