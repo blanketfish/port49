@@ -370,8 +370,9 @@ func (b *Broker) refreshContexts(ctx context.Context, cur *policy.Policy, priors
 // and deciding again when a write landed between its read and its own, up to
 // store.MaxJoinAttempts times. quarantined collects the ctx_ids the pass
 // leaves for a quarantine. sameSource is an inventory-only swap (Refresh).
-// outcome is what it counted the context, or "skipped" for one it left
-// without judging: gone, another principal's, the lab's, or revoked already.
+// outcome is what it counted the context, "skipped" for one it left without
+// judging (gone, another principal's, the lab's, or revoked already), and ""
+// with a store error.
 func (b *Broker) refreshContext(ctx context.Context, cur *policy.Policy, priors []Prior, now time.Time,
 	principal string, ref store.ContextRef, rep *RefreshReport, quarantined map[string]bool,
 	sameSource bool) (outcome string, err error) {
@@ -680,10 +681,10 @@ func (b *Broker) decideRefresh(cur *policy.Policy, now time.Time, principal stri
 	// shortens is a ceiling the policy in force puts earlier than the
 	// context's, or on a context with none: a policy edit shortens a live
 	// session, and only a fresh authentication lengthens one (decision 33).
-	// A context with no AuthTime is the store's to fail closed.
+	// A context with no AuthTime is written too, and the store gives it a
+	// ceiling in the distant past, failing it closed (store.ContextPolicy).
 	age := res.SessionAge.Of(b.MaxSessionAge)
-	shortens := age > 0 && !c.AuthTime.IsZero() &&
-		(c.SessionExpires.IsZero() || c.AuthTime.Add(age).Before(c.SessionExpires))
+	shortens := age > 0 && (c.SessionExpires.IsZero() || c.AuthTime.Add(age).Before(c.SessionExpires))
 	if hash == c.BlobHash && res.MaxPrivilege == c.MaxPrivilege && res.Enable == c.Enable && !clamp && !shortens {
 		return refreshStep{outcome: "unchanged", age: age}
 	}

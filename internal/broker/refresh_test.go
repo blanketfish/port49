@@ -1359,6 +1359,7 @@ func TestARefreshRecordNamesAnUnreachedContext(t *testing.T) {
 	if len(recs) != 2 {
 		t.Fatalf("one record per context: %v", recs)
 	}
+	// leaf1 is arista_eos, which authorizes commands: its record is reached.
 	for _, rec := range recs {
 		s := rec["session"].(map[string]any)
 		if (rec["device"].(map[string]any)["name"] == "bare") != (s["unreached"] == true) {
@@ -1380,5 +1381,25 @@ func TestAnUnchangedContextDoesNotPanic(t *testing.T) {
 	}
 	if recs := eventsOf(f.records(t), "refresh"); len(recs) != 0 {
 		t.Fatalf("an unchanged context is recorded: %v", recs)
+	}
+}
+
+// A context with no AuthTime to anchor a ceiling to is written at the next
+// refresh even when nothing else changed, so the store fails it closed with a
+// ceiling in the distant past (review M-1).
+func TestAContextWithNoAuthTimeIsFailedClosed(t *testing.T) {
+	f := newFixture(t, 8)
+	c := f.login(t, alice, "leaf1", "alice")
+	c.AuthTime, c.SessionExpires = time.Time{}, time.Time{}
+	if err := f.st.PutContext(context.Background(), store.ContextKey{NAS: "leaf1", Username: "alice"}, c,
+		12*time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := f.b.Refresh(context.Background(), f.reload(t, testPolicy))
+	if err != nil || rep.Updated != 1 {
+		t.Fatalf("%+v %v", rep, err)
+	}
+	if got := f.context(t, "leaf1", "alice"); got.SessionExpires.IsZero() || got.SessionExpires.After(f.now) {
+		t.Fatalf("session_expires %v: not failed closed", got.SessionExpires)
 	}
 }
