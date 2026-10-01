@@ -168,7 +168,7 @@ func restoreRevocations(ctx context.Context, st store.Store, path string, m *met
 // call gives up, so a test can hold it there; it does nothing in port49d.
 var (
 	writeRevocations = saveRevocations
-	persistDeadline  = 5 * time.Second
+	persistDeadline  = admin.PersistTimeout // the admin socket holds a revoke open for it
 	persistHook      = func(point string) {}
 )
 

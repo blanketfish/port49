@@ -114,3 +114,15 @@ func TestRevokeOpsReachTheBroker(t *testing.T) {
 		t.Fatalf("%+v", r)
 	}
 }
+
+// A revoke's connection outlasts its wait for its turn, its run and the save
+// it waits on; a list's, its one bound. The exported waits are the defaults.
+func TestConnTimeoutCoversTheOpsWorstCase(t *testing.T) {
+	s := &Server{}
+	if got := s.connTimeout("revoke"); got != RevokeWait || got <= 2*OpTimeout+PersistTimeout {
+		t.Fatalf("revoke: %v", got)
+	}
+	if got := s.connTimeout("revocations"); got != ListWait || got <= OpTimeout {
+		t.Fatalf("revocations: %v", got)
+	}
+}

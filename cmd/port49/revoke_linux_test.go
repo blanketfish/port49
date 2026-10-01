@@ -3,9 +3,11 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/pem"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -170,5 +172,151 @@ func TestRevokeDoesNotHangUpWhileTheOpRuns(t *testing.T) {
 	if code := run([]string{"revoke", "--socket", socket, "--principal", "user:alice@example.com"}, &out, &errb); code != 0 ||
 		strings.TrimSpace(out.String()) != "revoked it" {
 		t.Fatalf("exit %d: %q %q", code, out.String(), errb.String())
+	}
+}
+
+// A revocation whose answer never comes may still be in force: port49d
+// marks first. The operator is told to look before retrying; a list that
+// goes unanswered changed nothing and says only what failed.
+func TestRevokeUnansweredMayBeInForce(t *testing.T) {
+	if revokeWait <= admin.RevokeWait || listWait <= admin.ListWait {
+		t.Fatalf("the client must outwait port49d: %v/%v, %v/%v", revokeWait, admin.RevokeWait, listWait, admin.ListWait)
+	}
+	socket := filepath.Join(t.TempDir(), "port49d.sock")
+	ln, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	// port49d restarting mid-op: the request is read, the conn closed.
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			_, _ = bufio.NewReader(c).ReadString('\n')
+			c.Close()
+		}
+	}()
+	var out, errb bytes.Buffer
+	if code := run([]string{"revoke", "--socket", socket, "--principal", "user:alice@example.com"}, &out, &errb); code != 1 ||
+		!strings.Contains(errb.String(), "port49d did not answer (EOF); the revocation may be in force") ||
+		!strings.Contains(errb.String(), "port49 revoke --list") {
+		t.Fatalf("exit %d: %q", code, errb.String())
+	}
+	errb.Reset()
+	if code := run([]string{"revoke", "--socket", socket, "--principal", "user:alice@example.com", "--lift"}, &out, &errb); code != 1 ||
+		!strings.Contains(errb.String(), "the lift may be in force") {
+		t.Fatalf("exit %d: %q", code, errb.String())
+	}
+	errb.Reset()
+	if code := run([]string{"revoke", "--socket", socket, "--list"}, &out, &errb); code != 1 ||
+		strings.TrimSpace(errb.String()) != "port49 revoke: EOF" {
+		t.Fatalf("exit %d: %q", code, errb.String())
+	}
+}
+
+// --cert takes one certificate, PEM or DER, and names its subject before
+// anything is sent; a chain, an oversized file, or flags that conflict are
+// refused before the dial.
+func TestRevokeCertFileForms(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), "port49d.sock")
+	ln, err := admin.Listen(socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var mu sync.Mutex
+	var got []admin.RevokeOp
+	sent := func() []admin.RevokeOp {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]admin.RevokeOp(nil), got...)
+	}
+	srv := &admin.Server{Held: &keyring.Held{}, Now: time.Now,
+		Revoke: func(_ context.Context, op admin.RevokeOp) (string, bool, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			got = append(got, op)
+			return "revoked it", false, nil
+		},
+		Revocations: func(context.Context) (string, error) { return "", nil }}
+	go srv.Serve(ctx, ln)
+
+	now := time.Now()
+	ca, err := testpki.NewCA("Corp Issuing CA", now.Add(-time.Hour), now.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf, err := ca.Issue(testpki.Leaf{CommonName: "alice", Client: true, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	certPEM, keyPEM, err := testpki.PEMs(leaf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyBlock, _ := pem.Decode(keyPEM)
+	dir := t.TempDir()
+	write := func(name string, body []byte) string {
+		f := filepath.Join(dir, name)
+		if err := os.WriteFile(f, body, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return f
+	}
+
+	// DER: the same issuer and serial as PEM, and the subject on stderr.
+	var out, errb bytes.Buffer
+	der := write("alice.der", leaf.Leaf.Raw)
+	if code := run([]string{"revoke", "--socket", socket, "--cert", der}, &out, &errb); code != 0 ||
+		!strings.Contains(errb.String(), "subject CN=alice, issuer CN=Corp Issuing CA, serial "+leaf.Leaf.SerialNumber.Text(16)) {
+		t.Fatalf("exit %d: %q", code, errb.String())
+	}
+	if ops := sent(); len(ops) != 1 || ops[0].Issuer != leaf.Leaf.Issuer.String() || ops[0].Serial != leaf.Leaf.SerialNumber.Text(16) {
+		t.Fatalf("%+v", ops)
+	}
+
+	for name, c := range map[string]struct {
+		body []byte
+		want string
+	}{
+		"chain.pem":     {append(append([]byte{}, certPEM...), ca.PEM()...), "holds 2 certificates; give the leaf alone"},
+		"bundle.pem":    {append(append([]byte{}, ca.PEM()...), certPEM...), "holds 2 certificates; give the leaf alone"},
+		"key.der":       {keyBlock.Bytes, "holds a private key"},
+		"garbage.txt":   {[]byte("not a certificate\n"), "holds no certificate, PEM or DER"},
+		"pubkey.pem":    {pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: []byte{1}}), "holds no certificate"},
+		"oversized.pem": {bytes.Repeat([]byte{'a'}, maxCertFile+1), "larger than 1 MiB"},
+		"/dev/zero":     {nil, "larger than 1 MiB"},
+	} {
+		f := name
+		if c.body != nil {
+			f = write(name, c.body)
+		}
+		errb.Reset()
+		if code := run([]string{"revoke", "--socket", socket, "--cert", f}, &out, &errb); code != 1 ||
+			!strings.Contains(errb.String(), c.want) {
+			t.Errorf("%s: exit %d: %q", name, code, errb.String())
+		}
+		if bytes.Contains(errb.Bytes(), keyBlock.Bytes) {
+			t.Errorf("%s: key material printed", name)
+		}
+	}
+	if n := len(sent()); n != 1 {
+		t.Fatalf("a refused file sent a revocation: %d sent", n)
+	}
+
+	// A usage error is exit 2 whatever the file holds, or if it is missing.
+	for _, bad := range [][]string{
+		{"revoke", "--socket", socket, "--list", "--cert", filepath.Join(dir, "missing.pem")},
+		{"revoke", "--socket", socket, "--list", "--cert", write("key.pem", keyPEM)},
+		{"revoke", "--socket", socket, "--list", "--cert-issuer", "CN=x"},
+		{"revoke", "--socket", socket, "--principal", "user:a@b", "--cert", filepath.Join(dir, "missing.pem")},
+	} {
+		if code := run(bad, &out, &errb); code != 2 {
+			t.Errorf("%v: exit %d", bad, code)
+		}
 	}
 }

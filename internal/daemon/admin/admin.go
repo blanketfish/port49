@@ -49,6 +49,24 @@ type RevokeOp struct {
 // which port49d sets to this, so the connection's deadline covers both.
 const OpTimeout = 60 * time.Second
 
+// PersistTimeout bounds the revocations_file write a revocation or lift
+// waits on; port49d's persister gives up on the file at it.
+const PersistTimeout = 5 * time.Second
+
+// answerMargin is the time the connection is given past an op's bounds to
+// write its answer.
+const answerMargin = 10 * time.Second
+
+// RevokeWait is how long port49d holds a revoke's or lift's connection open
+// at the default OpTimeout: its wait for its turn, its run (Broker.
+// RevokeTimeout, which port49d sets to OpTimeout), the revocations_file
+// save it waits on, and the answer. A client waits longer, so it is never
+// the side that gives up first on a revocation that goes on to finish.
+const RevokeWait = 2*OpTimeout + PersistTimeout + answerMargin
+
+// ListWait is RevokeWait for a list, which takes no turn.
+const ListWait = OpTimeout + answerMargin
+
 // Response is the one line port49d answers.
 type Response struct {
 	Error   string           `json:"error,omitempty"`
@@ -139,7 +157,7 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 // leaves nothing waiting on its behalf behind a hung revocation. The broker
 // honours that end only while it waits its turn; a revocation under way
 // finishes, under its own bound of the same length (Broker.RevokeTimeout),
-// so the connection is given both. The caller's end is seen as a read that
+// so the connection is given both, and the save (RevokeWait). The caller's end is seen as a read that
 // fails, so a client keeps its write side open until it has the answer (no
 // half-close).
 func (s *Server) handle(c net.Conn) {
@@ -163,7 +181,7 @@ func (s *Server) handle(c net.Conn) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	if req.Op == "revoke" || req.Op == "revocations" {
-		_ = c.SetDeadline(time.Now().Add(2*s.opTimeout() + 5*time.Second))
+		_ = c.SetDeadline(time.Now().Add(s.connTimeout(req.Op)))
 		go func() {
 			defer cancel()
 			var b [64]byte
@@ -175,6 +193,15 @@ func (s *Server) handle(c net.Conn) {
 		}()
 	}
 	_ = enc.Encode(s.answer(ctx, req, uid))
+}
+
+// connTimeout is how long a revoke's or revocations' connection is held
+// open: RevokeWait or ListWait, at the Server's OpTimeout.
+func (s *Server) connTimeout(op string) time.Duration {
+	if op == "revocations" {
+		return s.opTimeout() + answerMargin
+	}
+	return 2*s.opTimeout() + PersistTimeout + answerMargin
 }
 
 func (s *Server) opTimeout() time.Duration {
