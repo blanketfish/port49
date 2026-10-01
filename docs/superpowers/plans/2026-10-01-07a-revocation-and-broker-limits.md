@@ -155,11 +155,17 @@ Each takes the option that denies more, is written into the tasks named, and is 
    power. The record names the uid that asked. The admin socket stays off by default (plan 6a owner
    decision 2); with a `broker:` block and no `admin_socket`, port49d says at start that `port49
    revoke` is unavailable and names the live fallback (M20). Tasks 10, 11.
-10. **The marks are read at mint, not at the TLS handshake.** `port49 login` touches no store
-    (design §12's failure matrix: "Token store unavailable — New session ✓"), so a revoked
-    operator's login succeeds and the first mint is refused `401 credential_revoked`, which ends the
-    agent's session with the broker's detail. The listener holds an in-memory copy of the marks
-    (Ruling 5), so a revoked certificate's connection is closed at bind without a store read. Task 7.
+10. **The store's marks are read at mint, not at the TLS handshake.** `port49 login` touches no
+    store (design §12's failure matrix: "Token store unavailable — New session ✓"). The listener
+    holds an in-memory copy of the marks (Ruling 5), so a revoked operator's `port49 login` is
+    refused at the agent's first request: the listener completes the handshake, answers `401
+    credential_revoked` with the mark's time, records a `mint deny credential_revoked`, and closes,
+    which ends the agent's session with the broker's detail. A mark that lands after the agent's
+    connection bound refuses its next mint the same way. Task 7; fixA.
+    *Revised 2026-10-01 after the Task 12 lab (fixA; spec §13 decision 32 amended, citing
+    `tests/lab/results/revoke-*.md`). As first written, a revoked operator's login succeeded and was
+    refused at its first mint, and the listener closed a marked connection at bind unanswered (Ruling
+    5), which on three of four images left the agent running.*
 
 **One event and one reason are added** (spec §5.7, by Task 1 before any code): the event
 `revoke`, `deny credential_revoked` for a revocation and `permit revocation_lifted` for a lift; and
@@ -231,7 +237,8 @@ The owner's rule is to trace a mechanism on a bad day first.
 
   Her next command on an EOS, NX-OS or IOS-XE session is refused (`credential_revoked`, `port49:
   this session was revoked - log in again`). The Junos shell keeps what it had at login, which is
-  why the line names it. The thief's agent reconnects and is refused at its first mint. In the
+  why the line names it. The thief's agent reconnects and is answered `credential_revoked` as its
+  connection binds, which ends it (Ruling 10, revised). In the
   morning, once her CA has revoked the stolen certificate and issued a new one: `port49 revoke
   --cert stolen.pem` (or `--cert-issuer` and `--cert-serial`), then `port49 revoke --lift --principal
   user:alice@example.com`, and she logs in with the new certificate.
@@ -432,9 +439,10 @@ and what a device does with a `credential_revoked` FAIL is already cited where t
   certificate is closed as it binds, and cannot close its owner's other connections. A mint reads the marks before
   anything else and again after its last token write, and deletes what it wrote if a mark appeared:
   whichever of a mint and a revocation reads the other's write, no token minted under a revoked
-  credential survives. The marks are read at mint, not at the TLS handshake: `port49 login` touches
-  no store (design document §12), so a revoked operator's login succeeds and the first mint is
-  refused `credential_revoked`, which ends the agent's session. Each revocation is one `revoke`
+  credential survives. The store's marks are read at mint, not at the TLS handshake: `port49 login`
+  touches no store (design document §12). A revoked operator's `port49 login` is refused
+  `credential_revoked` at the agent's first request, from the listener's copy, which ends the
+  agent's session (Ruling 10, revised; Task 1 wrote the first version). Each revocation is one `revoke`
   record (§5.7) naming what it reached and the live contexts it could not, on a platform that never
   asks about a command (§13, decision 21). Revocation by an OIDC `sid` or `sub` arrives with plan 7h,
   and from a CRL or an OCSP response with plan 7b, each as a mark of this kind.

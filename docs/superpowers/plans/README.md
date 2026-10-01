@@ -1611,10 +1611,15 @@ task by task:
   it expires (bounded, fails safe).
 - **Task 4 (token index; 8d4685a, 0576543).** A blank certificate key (no issuer, no serial, no
   `|`) is never indexed; a mint with no principal is refused (`ErrNoPrincipal`); the index outlives
-  its token by a minute so a skewed clock cannot drop it first.
-- **Task 5 (marks; 333548d, 2120e54).** `PutRevocation` refuses a mark that could match nothing (an
-  unknown kind, an empty key, a blank certificate key), a deviation accepted in review and a
-  `storetest` property; a list's order within a kind is pinned.
+  its token by a minute so a skewed clock cannot drop it first. Controller ruling: fix round 1
+  (tests and a one-line guard, each mutation-checked by the implementer) was accepted on the
+  report without a reviewer re-review; cost if wrong, a gap the final review would catch.
+- **Task 5 (marks; 333548d, 2120e54).** `PutRevocation` refuses a malformed mark (an unknown kind,
+  an empty key, a certificate key missing its issuer or serial), a deviation accepted in review and
+  a `storetest` property; a well-formed mark that nothing names is still written, with Ruling 4's
+  warning. A list's order within a kind is pinned. Controller ruling: the minors were accepted on
+  the implementer's report (tests only, and one shared blank-key helper); cost if wrong, a test
+  that measures less than it says.
 - **Task 6 (the listener; b6a9b33, df8c834, 3381730).** The accept loop starts at the first `Accept`,
   so marks fed before `Serve` are in place before any connection binds; a mark that lands
   mid-handshake is refused at bind; the per-source isolation is a committed test (a second loopback
@@ -1642,6 +1647,8 @@ task by task:
   cancels only the wait for the revocation slot; once a revocation or lift holds it, every step runs
   detached under `Broker.RevokeTimeout` (= `admin.OpTimeout`, 60 s), so a dropped SSH session never
   leaves a revocation half done. Unknown request keys are refused; a failed list names what failed.
+  Controller ruling: the review's five minors were accepted on the implementer's report (#4
+  mutation-checked); cost if wrong, a fix that does less than its report says.
 - **Task 11 (`port49 revoke`; 021d408, eaa735c, 616bb5c).** Controller ruling: the client waits
   `RevokeWait + 5s` (140 s) for a revoke or lift, longer than the plan's 70 s, so the operator sees
   the report of a revocation still running. A failure after the request was sent prints "port49d did
@@ -1657,6 +1664,9 @@ task by task:
   `server_msg`; the test was taught that (9e257ae). The review's tightenings (each report names one
   held connection closed, and on Junos the session not reached; the `show version` line quoted; a
   revoked operator's `port49 login` refused) were measured in a full rerun at e4326e6 (64a9996).
+  Controller ruling: the rerun was not re-reviewed, since the harness was reviewed and approved and
+  the rerun only produced the evidence its tightened checks gate; cost if wrong, a note that says
+  more than its run showed, which the final review re-read.
 - **fixA (bfd482a, fe556d3, 504cb53, 1b46f56; most of its broker code in 9e257ae).** The listener
   completes the handshake of a marked certificate or principal, reads one bounded request (4 KiB of
   headers, the body drained, 5 s), answers `401 credential_revoked` with the mint path's body and the
@@ -1672,13 +1682,37 @@ task by task:
   exception; decision 32 amended (below); `tests/lab/README.md`'s `chmod go-w` covers
   `tests/lab/logs`, the lab's `revocations_file` directory, which the fence refuses group-writable;
   the plan's operator notes no longer say a revoked operator's login succeeds.
-- **Final review and fix wave:** not yet run. Parked for the fix wave: Task 3 M7 (no test that the
-  agent waits by `Retry-After` rather than its default); Task 7 N1 (a replay refused by the after-write
-  check is recorded as a device deny and subtracted in `capability`, though the replay wrote nothing;
-  the §5.7 sentence is not literally true for a replay) and N2 (no test for a re-permit after a deny
-  in `capability`); fixA N1 (`TestAReasonIsSaidOncePerTenSeconds` flakes: `refuse` counts before it
-  says). Accepted, not to be fixed: Task 8/9 M2 (a hung disk keeps minted tokens redeemable up to 5 s
-  longer, behind the save deadline); Task 10 N1 (noted).
+- **Final review and fix wave.** The whole-branch review of 1ac1665..6279776 ran: FIX FIRST, 0
+  Critical, 1 Important, 9 Minor (`final-review.md` in the ledger's directory). It found no path by
+  which a revoked principal or certificate keeps access beyond the residuals the spec names. The
+  fix wave:
+  - **I1 (8776e1b).** `port49 revoke --cert` sent the serial as bare hex, so a certificate whose hex
+    serial is all digits (sequential CAs issue 10, 11, …) was flagged as a decimal copied by hand,
+    and the report told the operator to lift a correct revocation. `--cert` now sends `0x<hex>`
+    (a minus sign kept in front), and the hint for a hand-typed all-digit serial says to revoke
+    again with `--cert FILE` first and only then lift, so no gap is left without a mark.
+  - **fixA N1 (abee45d).** `refuse` says (or holds back) the line before it counts the failure.
+  - **Task 3 M7 (8f19fa3).** A test that `Mint` waits by the broker's `Retry-After`.
+  - **Task 7 N1 and N2 (c0b914c).** A replay the after-write check refuses writes no device deny:
+    `token.Result.Replayed` (never stored) marks it, and `unmint` deletes and supersedes its key
+    without one; §5.7 says so. A test pins `capability`'s re-permit after a double deny.
+  - **M9 (e75c462, cbed56a, df086a7).** A revoked session's error no longer says to run `port49
+    login` ("the session is over: this principal was revoked at …; … (port49 revoke --lift)",
+    through the agent socket too; the lab notes, run at e4326e6, show the old text, and the lab
+    test's match, "the session is over" and " was revoked at ", holds for both). `PutIdempotency` and `GetIdempotency` leave `store.Store`:
+    tests read a record with `storetest.Peek` and write one by reserving and completing it, and
+    the holderless-record case runs on a store that is a `storetest.Planter` (the memory store's
+    test is one). The `Broker` comment names every optional field.
+  - **M5–M8 and the rest of M9 (docs).** "Task 10 N1" is struck from this entry (a controller
+    error; there was no such item); Ruling 4 is restated below; the omitted controller rulings are
+    added above; §5.7 says a `revoke` record is written per revocation or lift that takes force
+    and a failed or refused one writes none (rewording, as the review recommends); the plan's
+    Ruling 10, its "What the operator sees" and its §5.1.4 text say a revoked login is refused,
+    marked revised.
+
+  Accepted, not to be fixed: Task 8/9 M2 (a hung disk keeps minted tokens redeemable up to 5 s
+  longer, behind the save deadline). Left for Ryan: Task 9 M1 and decision 15's cost on a
+  certificate's mark (below).
 
 **Rulings, as made** (spec §13, decision 32; the plan's ten rulings): all stand, with these
 amendments, each the option that denies more. Ruling 5 and ruling 10: a marked connection is
@@ -1687,8 +1721,10 @@ operator's `port49 login` is refused at its first request, not admitted until it
 fixA; decision 32 amended in this task, citing `tests/lab/results/revoke-*.md`). Ruling 6: when the
 second mark read fails, the written keys are superseded (Task 7). Ruling 8: a hand-laid file is
 given its marker; a save runs under a deadline and catches up (Task 9). Ruling 9: a hang-up cancels
-only the wait for the slot (Task 10). Ruling 4: a mark that could match nothing is refused, not
-written (Task 5).
+only the wait for the slot (Task 10). Ruling 4 stands as written: a well-formed mark that no
+subject names is still written, with a warning to check the spelling; the store refuses only a
+malformed one (an unknown kind, an empty key, a certificate key missing its issuer or serial;
+Task 5).
 
 **Lab (Task 12).** No register row: the device behaviours rest on the slice, L4 and L17 notes.
 Revocation end to end at e4326e6, all four PASS (`tests/lab/results/revoke-<platform>.md`, captures
@@ -1712,9 +1748,12 @@ for the revoked login):
   raised, or the restart forgets the unsaved mark.
 - A revocations file laid down by hand on a read-only volume refuses the start (port49d cannot write
   its marker).
-- `port49 revoke --cert FILE` takes the leaf alone (it refuses a bundle), PEM or DER, refuses a file
-  holding a private key, and warns on an all-digit serial: use `--cert`, not a decimal serial copied
-  from `openssl x509 -text`.
+- `port49 revoke --cert FILE` takes the leaf alone (it refuses a bundle), PEM or DER, and refuses a
+  file holding a private key. Prefer it to `--cert-serial`: an all-digit `--cert-serial` is read as
+  hex and the report warns that it may be a decimal copied from `openssl x509 -text`; if so, revoke
+  again with `--cert FILE`, then lift the first. `--cert` never draws that warning.
+- A revoked operator sees "the session is over: this principal was revoked at …" from `port49
+  login` and `port49 token`; logging in again does not help until an operator lifts it.
 - Exit codes: 0 done, 1 refused or unreachable, 2 usage, 3 in force but incomplete or unsaved. "port49d
   did not answer — the revocation may be in force" means check `port49 revoke --list` before
   retrying.

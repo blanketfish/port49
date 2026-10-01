@@ -1818,9 +1818,12 @@ SAN — says whose certificate it was: `auth.fingerprint` (the certificate's `sh
 always, and `principal` when the one email SAN maps to one. Those fields are anchor-vouched,
 not an unvalidated body. A connection with no verified chain names no one.
 
-A `revoke` record (plan 7a) is written once per `port49 revoke`: `deny credential_revoked` for a
-revocation, `permit revocation_lifted` for a lift. Its `principal` is the revoked principal when
-the revocation is by principal. Its body is `"revocation": {"by", "issuer", "serial", "at",
+A `revoke` record (plan 7a) is written once per revocation or lift that takes force: `deny
+credential_revoked` for a revocation, `permit revocation_lifted` for a lift. A revocation that took
+force but did not finish is recorded too, with `error`. One that did not take force writes none (a
+mark that could not be written, a lift that found no mark or could not delete it, a malformed
+request, one that gave up waiting behind another): `port49 revoke` reports it and exits 1. Its
+`principal` is the revoked principal when the revocation is by principal. Its body is `"revocation": {"by", "issuer", "serial", "at",
 "origin", "contexts", "token_keys", "connections", "unreached", "saved", "error"}`: `by` is
 `principal` or `cert`; `issuer` and `serial` name a certificate (the serial in lower-case hex);
 `at` is when the mark took force, an earlier mark's time when one already stood; `origin` is who
@@ -1833,9 +1836,12 @@ reach"); `saved` whether `broker.revocations_file` was written; and `error` the 
 did not finish, while the mark stands. A count of zero is absent. A `mint deny
 credential_revoked` names whose credential it was as `trust_domain_unresolved` does: `principal`,
 and `auth.fingerprint`. A mint that the check after its writes refuses has already recorded a
-permit for each device it minted; each is followed by a `deny credential_revoked` naming that
+permit for each device it minted afresh; each is followed by a `deny credential_revoked` naming that
 device, with `index_error` when its tokens could not be deleted, and the tokens that permit names
-were never returned, so they are not counted as minted (`port49 capability`).
+were never returned, so they are not counted as minted (`port49 capability`). A device it answered
+by replaying an earlier mint recorded no permit in this request, so it gets no deny: its tokens are
+deleted, and the earlier mint, whose tokens were returned, stays counted. A refused request with no
+device minted afresh writes one `deny credential_revoked` naming no device.
 
 #### Reason codes
 
