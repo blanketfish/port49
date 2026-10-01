@@ -843,8 +843,10 @@ revokes with `port49 revoke` over port49d's admin socket (§12), naming a princi
 certificate by its issuer and serial. A revocation is a **standing mark**, kept in the store and
 in `broker.revocations_file`, so a restart forgets none, and it stands until an operator lifts it
 (`port49 revoke --lift`). A principal's mark refuses every mint by that principal, on any
-connection and with any certificate; a certificate's refuses every mint made with it. It does not
-expire, because the agent reconnects with the same key on its own, and a mark a fresh handshake
+connection and with any certificate; a certificate's refuses every mint made with it, but does not
+keep a context revoked: a login on the device whose token another of the principal's certificates
+minted after the revocation joins the context and lifts `revoked_at` (§13, decision 15). A mark
+does not expire, because the agent reconnects with the same key on its own, and a mark a fresh handshake
 could outlive would be undone without anyone acting.
 
 The mark is written first, and then the revocation reaches everything it names, in this order:
@@ -854,7 +856,10 @@ token exists that a revocation cannot find; every live context indexed under the
 certificate is marked `revoked_at` (§5.6, teardown row 2) and the receipts of the principals behind
 them are deleted; and the context index is read and marked a second time. Tokens go before
 contexts because a token redeemed on a device with no live context writes a fresh context the
-revocation never saw; the second pass catches a redemption that was in flight. A redemption that
+revocation never saw; the second pass catches a redemption that was in flight. With the receipt
+deleted and the token spent, a device's retransmission of a login made before the revocation is
+answered `token_not_found`, not replayed and not `credential_revoked` (§5.6); deleting the receipt
+also closes the one unchecked replay, the concurrent duplicate's (§5.6). A redemption that
 removed its token before the delete and writes its context after the second pass is a window of one
 store round trip, which the shared store (plan 7d) closes atomically. Deleting by certificate
 deletes every unspent token under each `(device, username)` key that certificate minted under, the
@@ -868,8 +873,9 @@ credential survives. The marks are read at mint, not at the TLS handshake: `port
 no store (design document §12), so a revoked operator's login succeeds and the first mint is
 refused `credential_revoked`, which ends the agent's session. Each revocation is one `revoke`
 record (§5.7) naming what it reached and the live contexts it could not, on a platform that never
-asks about a command (§13, decision 21). Revocation by an OIDC `sid` or `sub` arrives with plan 7h,
-and from a CRL or an OCSP response with plan 7b, each as a mark of this kind.
+asks about a command (§13, decision 21) or on a device the inventory gives no platform. Revocation
+by an OIDC `sid` or `sub` arrives with plan 7h, and from a CRL or an OCSP response with plan 7b,
+each as a mark of this kind.
 
 ### 5.2 Session authorization (daemon)
 
@@ -1369,7 +1375,8 @@ such a record counts `port49_store_operations_total{outcome="unreadable"}`, not 
 the store answered, and a key rotation must not read as a store outage.
 
 A retransmitted login or `enable` replays its receipt only while the receipt's `ctx_id` is the live
-context's, and, while that context is revoked, is refused `credential_revoked` instead (above). The
+context's, and, while that context is revoked, is refused `credential_revoked` instead (above),
+unless an operator's revocation deleted the receipt, when it is `token_not_found` (§5.1.4). The
 join keeps `ctx_id` across one principal's logins, so a match is exactly "the same
 context"; after a replace or a reclaim the receipt names a context that no longer exists, and the
 retransmission is answered `token_spent`, as a spent token is, without sliding the receipt. The
@@ -1741,9 +1748,9 @@ events (`account`, `account_gap`, `blob`, `inventory_change`) that share the env
 | `revoke` | broker | a revocation by principal or by certificate (§5.1.4): what it reached, and the live contexts it could not; or a revocation lifted |
 | `blob` | broker | not a decision: the full compiled blob, emitted once per hash so replay depends on the log alone (§5.1.1) |
 
-Device accounting shares this envelope as the eighth event, `account`, and is specified in
+Device accounting shares this envelope as the ninth event, `account`, and is specified in
 §5.8. It is not a decision — it is a report — so it carries no `policy` block and no verdict.
-A ninth, `account_gap`, is a report too: accounting records port49 received and did not write,
+A tenth, `account_gap`, is a report too: accounting records port49 received and did not write,
 `{"gap": {"stage": ..., "records": N, "since": ...}}`, one record per spool drop stage —
 `offer_refused` (answered `ERROR`; the device may send the record again), `drain_unparseable`
 and `drain_set_aside` (answered `SUCCESS`, and not in the log). An `offer_refused` drop is written
@@ -1760,7 +1767,7 @@ yet written, and port49d logs the held counts by stage when it shuts down;
 `port49_accounting_spool_drops_total{stage}`
 is the alarm, and this record is the log's own witness.
 
-A tenth, `inventory_change`, is a report too: one record per security-relevant change a bundle
+An eleventh, `inventory_change`, is a report too: one record per security-relevant change a bundle
 swap made — `{"change": {"kind": "address_added", "address": ..., "from_bundle": ...,
 "to_bundle": ...}}` for an address added to a device already in inventory, and `scope_joined`
 or `scope_left` with `"scope"` for a device entering or leaving a scope with `security_log:
@@ -1813,7 +1820,7 @@ the revocation is by principal. Its body is `"revocation": {"by", "issuer", "ser
 "origin", "contexts", "token_keys", "connections", "unreached", "saved", "error"}`: `by` is
 `principal` or `cert`; `issuer` and `serial` name a certificate (the serial in lower-case hex);
 `at` is when the mark took force, an earlier mark's time when one already stood; `origin` is who
-asked (`admin_socket uid 0`); `contexts` how many live contexts were marked; `token_keys` how many
+asked (`admin_socket uid <n>`, e.g. `admin_socket uid 0`); `contexts` how many live contexts were marked; `token_keys` how many
 `(device, username)` keys had their unspent tokens deleted; `connections` how many held broker
 connections were closed; `unreached` each marked context, `{"device", "username"}`, on a platform
 that never asks about a command, or on a device the inventory gives no platform, so an incident
@@ -1841,7 +1848,7 @@ and `auth.fingerprint`.
 | `service_unsupported` | the authorization `service` is not one the platform authorizes; on `redeem`, the authentication action or type is not one port49 serves (only `login` with ASCII, PAP, or CHAP) and the reply is `ERROR` |
 | `store_unavailable` | any event: the store did not answer or returned an error. On `redeem` and on accounting the reply is `ERROR`; on an authorization it is `FAIL` — fail closed, a break-glass account's commands included (plan 4, owner's ruling 2026-09-24), because an authorization `ERROR` hands the N9Kv's command to its local role checks and permits every command under IOS-XE's `if-authenticated` (§15, L4). Whether the device then falls through to its next method is per platform and is not what this reason promises: an authentication `ERROR` is final on IOS-XE and on Junos with `tacplus` alone, and where it does fall through (vEOS, the N9Kv) the authorization `FAIL` that follows leaves break-glass logged in and unable to run a command (§15, L4; `tests/lab/results/L4-error-*.md`). So a store outage is not the break-glass case; an unreachable port49 is. The operator's escape is to stop port49d, or reject TCP 49 with a reset, so each device finds the connection refused and treats the server as down. A break-glass account then logs in with its local password, under a method list that ends in `local` (measured over SSH on all five images, §15 L4 and L17). A firewall that drops TCP 49 silently is unmeasured as an escape (a silent server costs 5s per command on the Cisco and Arista images, L4), and so is whether commands in a session already open fall to local authorization. port49d will do this itself by closing its TACACS+ listener while the store is unhealthy (owner's ruling 2026-09-24; arrives with the remote store, plan 7). The log line is the evidence an operator needs at 3am |
 | `token_redeemed` | `redeem`: a presented credential matched an unspent token |
-| `token_not_found` | `redeem`: the device tag matched but no unspent token for `(nas, username)` did — expired, spent, or mistyped |
+| `token_not_found` | `redeem`: the device tag matched but no unspent token for `(nas, username)` did — expired, spent, or mistyped, or its receipt deleted by an operator's revocation (§5.1.4) |
 | `token_spent` | `redeem`/`escalate`: the credential matched a receipt whose sliding window (`receipt_idle_ttl`) or absolute cap (`receipt_max_age`) had passed, or whose `ctx_id` is no longer the live context's — the context was replaced or reclaimed since, so the stored decision describes nothing that exists (§5.6); FAIL on the wire, distinguishable only in the log |
 | `device_mismatch` | `redeem`: the presented token's device tag is not this device's (design document §8) — PAP and ASCII only; under CHAP the tag is not visible and the outcome is `token_not_found` |
 | `credential_mismatch` | `redeem`: the receipt the store returned does not carry the credential hash the lookup asked for. Since 2026-09-20 the hash is *in* the receipt key (§13, decision 15), so a differing credential finds no receipt and redeems normally instead; this reason now covers only a store that answered with a record it was not asked for, which is a store fault and never a normal outcome |
@@ -1858,7 +1865,7 @@ and `auth.fingerprint`.
 | `session_expired` | the session ceiling was reached; context retained through the grace window (§5.6). On `mint`: the held connection's authentication is older than `max_session_age`, and the caller must authenticate again (§13, decision 17) |
 | `context_stale` | the broker has been unreachable past `staleness_ceiling`; context retained, denies until refreshed (§5.1.1, design document §9) |
 | `credential_revoked` | the context's `revoked_at` is set — CRL, OCSP, back-channel logout, every grant on the device withdrawn, a subject's username changed, the policy in force not compiling for the context, or a refresh finding a context it could not open, where the `refresh` record before it says which (§5.1.3, §5.6); on `redeem`, a login whose resulting context is revoked because its token was not minted after the revocation, or a retransmission answered while the context it names is revoked (§5.6); on `mint`, a revocation by principal or by this certificate stands (§5.1.4), so nothing is minted and the connection is closed; on `revoke`, a revocation's own record |
-| `revocation_lifted` | `revoke`: an operator lifted a revocation (§5.1.4). Mints by the principal or certificate are made again; a context the revocation marked stays revoked until a login whose token was minted after the lift joins it (§5.6) |
+| `revocation_lifted` | `revoke`: an operator lifted a revocation (§5.1.4). Mints by the principal or certificate are made again; a context the revocation marked stays revoked until a login whose token was minted after the revocation joins it (§5.6; §13, decision 15): for a principal's mark, after the lift; for a certificate's, by any of the principal's other certificates at any time |
 | `device_unknown` | the source address is not in the admission trie (§10). On an `unvalidated` record: a reload refused, removed, renamed, re-keyed or re-platformed the device an open connection was admitted as, so that admission is no longer one port49d knows, and the connection is reset with no strike (§10, "How a daemon refreshes its snapshot"). On `mint` and `refresh`: the device is in inventory and admission refuses it — no key group admits it, two tie on it, or its `key_ref` is one port49d holds no key for (§10) — so no token is minted for it and its live contexts are revoked: it cannot reach port49d, and a token for it would only be a login that falls to the device's local method (`tests/lab/results/quarantine-*.md`). As with a quarantine, a subject with no grant on the device is answered `no_grants_matched` first, so the API tells no caller which devices exist |
 | `platform_unknown` | the device's platform has no adapter; generic fallback applied |
 | `blob_unavailable` | the referenced blob could not be resolved from the store or any cache — a store fault, alarmed (§5.1.1) — or the context no longer fits the blob: a session attribute filled from it exceeds 255 bytes, or a filled-in value carries a separator (`=`, `*`) or a control character, either of which the broker refused at mint (§6), or the reply would send a `priv-lvl` above the context's `max_privilege`, a `priv-lvl` that is not a level 0 to 15, or an attribute the blob's `accepted_attributes` does not take — compositions the load quarantines (§6, §7). On `refresh`: the policy in force could not be resolved or compiled for this context — an unexpected broker fault, since the reload's load (§5.1.3 step 1) compiled every subject on every device, and what failed quarantined its device or refused the policy under the joint check (§10) — so the context is revoked, failing closed; the process log names the `ctx_id` and the fault, and it is counted `failed`. Also on `refresh`: the context could not be opened — sealed under a key that has left the two-key window, or failing authentication — so it is revoked through the monotonic revocation mark, the record names the device and the username its key holds and no principal (the owner and `ctx_id` are sealed, and the index entry that led to it may be stale), and it is counted `failed` |
@@ -5855,7 +5862,8 @@ the enforced approximation, and revocation records name the contexts they could 
 ends an idle session: at 1m0s for `idle-timeout 1`, through `local-user-name` and the `remote`
 template, on both Junos images (L24, closed; `tests/lab/results/L24-juniper_*.md`); the largest
 value the device takes is unmeasured. Revocation
-records naming contexts are plan 7's.
+records naming contexts are plan 7a's (`unreached` on the `revoke` record, §5.7); a refresh's are
+plan 7b's.
 
 **22. Session-only projection is bits first, regexes second, chosen per grant, with one
 shape refused.** *Measured: L9 and L12 closed 2026-09-29 (`L12-projection-juniper_*.md`).* The generator picks the smallest permission-bit set
@@ -6030,8 +6038,11 @@ flood from one certificate churns only its own slots. A source is one address (a
 one source), and the global cap is taken before the per-source check, so at global saturation
 connections wait in the backlog; plan 12 owns the global cap. A revocation by principal or by
 certificate is a mark that stands until an operator lifts it, because the agent reconnects on its
-own. A principal is compared as the broker spells it (`user:` and the lower-cased email), and a
-mark no subject names is written with a warning. The mark is written first; then held connections
+own. A principal is compared as the broker spells it (`user:` and the lower-cased email), one
+without a known prefix is refused, and a mark no subject names is written with a warning. The mark
+is written first, and a mark that cannot be written revokes nothing and says so, naming the
+fallback (remove the principal's grants from `broker.policy_file`, live within two watch
+intervals, or stop port49d); then held connections
 are closed, unspent tokens deleted, contexts marked and receipts deleted, and the contexts read and
 marked a second time, catching a redemption in flight; the broker's listener holds the marks in
 memory and closes a marked certificate's or principal's connection as it binds. A mint reads the
@@ -6196,13 +6207,14 @@ Beyond those already listed in the design document's §14:
 
 **Decision log**
 
-- **One record per evaluation**, at each of the six decision events, permits included — a corpus
+- **One record per evaluation**, at each of the seven decision events, permits included — a corpus
   exercising the matcher produces exactly as many records as decisions. The two `refresh`
   carve-outs (§5.7) hold: a refresh that finds a context already on the answer the policy in
   force gives writes no record, and nor does a pass a store error stops, for the context it
   stopped at. Every revocation a refresh makes has its record.
 - **Replay agreement**: every record in the corpus replays against its named blob and
-  reproduces the logged verdict and reason.
+  reproduces the logged verdict and reason. A `revoke` record names no blob, and is checked
+  against the marks it reports instead.
 - **Replay divergence is detected**: a record whose blob is substituted, or whose verdict is
   edited, is reported as divergent rather than silently accepted.
 - **Raw arguments survive normalization**: a record's `raw` reproduces the arguments as
