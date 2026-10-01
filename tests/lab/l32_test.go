@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -19,8 +20,9 @@ import (
 	"github.com/rhwendt/port49/internal/sot"
 )
 
-// l32Record is one stack's L32 run: what `next` named through each proxy,
-// and what the connector, as built, read through each, over GraphQL and REST.
+// l32Record is one stack's L32 run: what `next` named through each of the
+// three proxies, and what the connector, as built, read through each, over
+// GraphQL and REST.
 type l32Record struct {
 	Stack     string     `json:"stack"`
 	At        time.Time  `json:"at"`
@@ -40,9 +42,10 @@ type l32Probe struct {
 	ResultHost string `json:"result_host"`
 }
 
-// l32Read is one Fetch by the connector as built.
+// l32Read is one Fetch by the connector as built, of URL (the proxy's).
 type l32Read struct {
 	Proxy   string         `json:"proxy"`
+	URL     string         `json:"url"`
 	API     string         `json:"api"`
 	Seconds float64        `json:"seconds"`
 	Devices int            `json:"devices"`
@@ -52,8 +55,8 @@ type l32Read struct {
 }
 
 // l32IDProbe is whether the release's GraphQL device list lets a query
-// select id beside name (recorded only: the connector keys GraphQL by name).
-// Kind is the JSON type the first device's id came back as.
+// select id beside name, which the connector keys the list by. Kind is the
+// JSON type the first device's id came back as.
 type l32IDProbe struct {
 	Query      string `json:"query"`
 	Status     int    `json:"status"`
@@ -73,6 +76,41 @@ func l32Map(stack string) map[string]string {
 	}
 	return map[string]string{"platform": "platform.slug", "site": "site.slug", "role": "role.slug",
 		"os_version": "custom_fields.os_version"}
+}
+
+// l32IDVerdict is what an id probe measured: "id selectable", "id refused"
+// (HTTP 200 with errors), or "id unmeasured" (any other answer).
+func l32IDVerdict(p l32IDProbe) string {
+	switch {
+	case p.Selectable:
+		return "id selectable"
+	case p.Status == http.StatusOK && p.Errors > 0:
+		return "id refused"
+	}
+	return "id unmeasured"
+}
+
+// l32Said is whether a read said it rebuilt a next on url.
+func l32Said(r l32Read) bool {
+	for _, line := range r.Said {
+		if strings.Contains(line, "rebuilt on url") {
+			return true
+		}
+	}
+	return false
+}
+
+// l32Built names what the reads ran: internal/sot as go test compiled it,
+// at the checkout's commit, -dirty when the checkout has changes.
+func l32Built(top string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	rev, _ := exec.CommandContext(ctx, "git", "-C", top, "rev-parse", "--short", "HEAD").Output()
+	sha := strings.TrimSpace(string(rev))
+	if st, _ := exec.CommandContext(ctx, "git", "-C", top, "status", "--porcelain").Output(); len(st) > 0 {
+		sha += "-dirty"
+	}
+	return "internal/sot as compiled by go test at `" + sha + "`"
 }
 
 // l32Client trusts the run's lab CA alone.
@@ -171,11 +209,13 @@ func l32ProbeID(t *testing.T, stack, base string) l32IDProbe {
 }
 
 // TestL32Connector reads one running stack (run.sh <stack> l32) through
-// both proxies, over GraphQL (every interface address asked for) and over
-// REST, 50 to a page, with the connector as built, and writes
-// tests/lab/sot/l32/<stack>/connector.json. A read that fails, or reads
-// other than the 120 devices the run seeded, fails the test: the claim the
-// code rests on is then wrong (CLAUDE.md lab rule 4).
+// the three proxies, over GraphQL (every interface address asked for) and
+// over REST, 50 to a page, with the connector as built, and writes
+// tests/lab/sot/l32/<stack>/connector.json. A read that fails, reads other
+// than the 120 devices the run seeded, or says a rebuilt next where the
+// proxy's probe named url's own origin (or does not where it named another)
+// fails the test: the claim the code rests on is then wrong (CLAUDE.md lab
+// rule 4).
 func TestL32Connector(t *testing.T) {
 	stack := os.Getenv("L32_STACK")
 	if stack == "" {
@@ -187,9 +227,20 @@ func TestL32Connector(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rec := l32Record{Stack: stack, At: time.Now().UTC(), Built: l29Built()}
-	for _, px := range []struct{ name, url string }{{"host", os.Getenv("L32_HOST_URL")}, {"xfh", os.Getenv("L32_XFH_URL")}} {
-		rec.Probes = append(rec.Probes, l32ProbeNext(t, px.name, px.url))
+	rec := l32Record{Stack: stack, At: time.Now().UTC(), Built: l32Built(top)}
+	for _, px := range []struct{ name, url string }{{"host", os.Getenv("L32_HOST_URL")}, {"xfh", os.Getenv("L32_XFH_URL")},
+		{"plain", os.Getenv("L32_PLAIN_URL")}} {
+		probe := l32ProbeNext(t, px.name, px.url)
+		rec.Probes = append(rec.Probes, probe)
+		if probe.Status != http.StatusOK || probe.NextHost == "" {
+			t.Errorf("%s: the %s probe answered %d with next host %q: it measured nothing", stack, px.name,
+				probe.Status, probe.NextHost)
+		}
+		base, err := url.Parse(px.url)
+		if err != nil {
+			t.Fatal(err)
+		}
+		foreign := probe.NextScheme+"://"+probe.NextHost != base.Scheme+"://"+base.Host
 		for _, api := range []string{"graphql", "rest"} {
 			var said bytes.Buffer
 			src, err := sot.New(sot.Config{Name: "l32", Product: os.Getenv("L32_PRODUCT"), URL: px.url,
@@ -203,8 +254,14 @@ func TestL32Connector(t *testing.T) {
 			t0 := time.Now()
 			inv, err := src.Fetch(ctx)
 			cancel()
-			r := l32Read{Proxy: px.name, API: api, Seconds: time.Since(t0).Seconds(),
+			r := l32Read{Proxy: px.name, URL: px.url, API: api, Seconds: time.Since(t0).Seconds(),
 				Said: strings.Split(strings.TrimSpace(said.String()), "\n")}
+			// Only REST follows next: it says a rebuild exactly when the
+			// probe's next named another origin than url.
+			if want := api == "rest" && foreign; l32Said(r) != want {
+				t.Errorf("%s through %s over %s: rebuilt next said %v, want %v (next %s://%s)", stack, px.name, api,
+					l32Said(r), want, probe.NextScheme, probe.NextHost)
+			}
 			if err != nil {
 				r.Error = err.Error()
 				t.Errorf("%s through %s over %s: %v", stack, px.name, api, err)
@@ -232,6 +289,9 @@ func TestL32Connector(t *testing.T) {
 		}
 	}
 	rec.GraphQLID = l32ProbeID(t, stack, os.Getenv("L32_HOST_URL"))
+	if rec.GraphQLID.Status != http.StatusOK {
+		t.Errorf("%s: the id probe answered HTTP %d: %s", stack, rec.GraphQLID.Status, l32IDVerdict(rec.GraphQLID))
+	}
 	dir := filepath.Join(top, "tests", "lab", "sot", "l32", stack)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)

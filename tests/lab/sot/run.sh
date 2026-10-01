@@ -9,7 +9,7 @@
 # (the compose files' l30 profile), and writes tests/lab/sot/l30/<stack>/.
 #
 # l32, l33 and e2e (plan 6c) seed 120 devices into tests/lab/logs, bring up
-# the l32 profile's two TLS proxies, and run one Go test against the stack:
+# the l32 profile's three TLS proxies, and run one Go test against the stack:
 # TestL32Connector, TestL33Webhooks or TestSoTDeviceEndToEnd.
 #
 # Generates fresh random lab credentials into a 0600 env file outside the
@@ -119,15 +119,16 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 3' TERM INT
 
-# L32 and L33 (plan 6c): two TLS proxies in the l32 profile, and the lab PKI they
-# and port49-inventory's webhook present. Set on every run, as L30's are.
+# L32 and L33 (plan 6c): three TLS proxies in the l32 profile, and the lab PKI
+# they and port49-inventory's webhook present. Set on every run, as L30's are.
 pki=$tmp/pki
 go run ./tests/lab/cmd/sot-pki -dir "$pki"
-export L32_PKI=$pki L32_HOST_PORT=$((port + 2000)) L32_XFH_PORT=$((port + 3000))
-export L32_HOST_CONF=$tmp/l32-proxy-host.conf L32_XFH_CONF=$tmp/l32-proxy-xfh.conf
-sed "s/netbox:8080/$upstream:8080/g" "$root/tests/lab/sot/compose/l32-proxy-host.conf" >"$L32_HOST_CONF"
-sed "s/netbox:8080/$upstream:8080/g" "$root/tests/lab/sot/compose/l32-proxy-xfh.conf" >"$L32_XFH_CONF"
-chmod 644 "$L32_HOST_CONF" "$L32_XFH_CONF"
+export L32_PKI=$pki L32_HOST_PORT=$((port + 2000)) L32_XFH_PORT=$((port + 3000)) L32_PLAIN_PORT=$((port + 4000))
+export L32_HOST_CONF=$tmp/l32-proxy-host.conf L32_XFH_CONF=$tmp/l32-proxy-xfh.conf L32_PLAIN_CONF=$tmp/l32-proxy-plain.conf
+for c in host xfh plain; do
+	sed "s/netbox:8080/$upstream:8080/g" "$root/tests/lab/sot/compose/l32-proxy-$c.conf" >"$tmp/l32-proxy-$c.conf"
+	chmod 644 "$tmp/l32-proxy-$c.conf"
+done
 
 rnd() { LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c "$1" || true; }
 umask 077
@@ -189,6 +190,7 @@ if [ "$rc" = 0 ] && [ -n "$test" ]; then
 	[ "$legacy" = e2e ] && extra=(PORT49_LAB_PLATFORMS=arista_eos)
 	env "${extra[@]}" L32_STACK="$stack" L32_PRODUCT="$product" L32_CA="$pki/ca.pem" \
 		L32_HOST_URL="https://127.0.0.1:$L32_HOST_PORT" L32_XFH_URL="https://127.0.0.1:$L32_XFH_PORT" \
+		L32_PLAIN_URL="https://127.0.0.1:$L32_PLAIN_PORT" \
 		L33_DIRECT_URL="http://127.0.0.1:$port" L33_PKI="$pki" L33_HOOK_BIND="$bridge:18444" \
 		timeout 3600 go test -tags lab ./tests/lab/ -run "^$test\$" -count=1 -timeout 55m -v >>"$log" 2>&1 || rc=$?
 	echo "run.sh: $test exit $rc at $(date -u +%FT%TZ)" | tee -a "$log"

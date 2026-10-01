@@ -9,9 +9,9 @@ plan 6a Task 2), and how their device lists page, with Nautobot 3.x's answers to
 |---|---|
 | `compose/<stack>.yml` | one product at one version, its Postgres and Valkey, images pinned by digest, API on `127.0.0.1`; an nginx reverse proxy in the `l30` profile on `127.0.0.1:<port+1000>` |
 | `compose/l30-proxy.conf` | the proxy's config: forwards the client's `Host` and sets `X-Forwarded-Proto: https` (`run.sh` points it at the stack's product) |
-| `compose/l32-proxy-host.conf`, `compose/l32-proxy-xfh.conf` | the `l32` profile's two TLS proxies (`proxy_host` on `127.0.0.1:<port+2000>`, `proxy_xfh` on `<port+3000>`): one forwards the client's `Host`, the other sends the upstream's name as `Host` and the client's as `X-Forwarded-Host`; both set `X-Forwarded-Proto: https` |
+| `compose/l32-proxy-host.conf`, `l32-proxy-xfh.conf`, `l32-proxy-plain.conf` | the `l32` profile's three TLS proxies: `proxy_host` (`127.0.0.1:<port+2000>`) forwards the client's `Host`; `proxy_xfh` (`<port+3000>`) sends the upstream's name as `Host` and the client's as `X-Forwarded-Host`, both with `X-Forwarded-Proto: https`; `proxy_plain` (`<port+4000>`) is `proxy_pass` alone, so the upstream's name is `Host` and no `X-Forwarded-*` is sent |
 | `../cmd/sot-pki/` | the run's throwaway PKI: a CA, the proxies' certificate, port49-inventory's webhook certificate (in the run's temporary directory, removed on exit) |
-| `l32/<stack>/` | L32: `connector.json`, what `next` named through each proxy and what the connector as built read through each |
+| `l32/<stack>/` | L32: `connector.json`, what `next` named through each of the three proxies and what the connector as built read through each |
 | `run.sh` | records one stack end to end: credentials, up, wait, record, `down -v` |
 | `../cmd/sot-record/` | the recorder: seeds leaf-01, reads it over REST and GraphQL, round-trips a webhook; with `-devices`, bulk-creates more, follows the REST list's `next` to its end, reads one page through the proxy, and lists over GraphQL |
 | `fixtures/<stack>[-legacy]/` | L27: the recorded exchanges, one JSON file per read |
@@ -41,7 +41,7 @@ make lab-unit                              # the notes still name every recorded
 ```
 
 `l32`, `l33` and `e2e` (plan 6c) seed 120 devices into `tests/lab/logs/<mode>-<stack>-seed/`, which
-is never committed, bring up the `l32` profile's two TLS proxies, and run one Go test against the
+is never committed, bring up the `l32` profile's three TLS proxies, and run one Go test against the
 stack: `TestL32Connector` writes `tests/lab/sot/l32/<stack>/connector.json`, `TestL33Webhooks` writes
 `tests/lab/sot/l33/<stack>/webhooks.json`, and `TestSoTDeviceEndToEnd` (with the vEOS topology)
 writes its results note.
