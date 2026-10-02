@@ -171,6 +171,20 @@ func (c *limitedConn) Close() error {
 // certificate: one anchor is what pins the issuer of the email mapping
 // (Identity), and a bundle would widen it without anyone deciding to.
 func LoadTLS(certFile, keyFile, anchorFile string) (tls.Certificate, *x509.CertPool, error) {
+	cert, anchor, err := LoadTLSAnchor(certFile, keyFile, anchorFile)
+	if err != nil {
+		return tls.Certificate{}, nil, err
+	}
+	pool := x509.NewCertPool()
+	pool.AddCert(anchor)
+	return cert, pool, nil
+}
+
+// LoadTLSAnchor is LoadTLS with the anchor as the certificate it read, for
+// a caller that checks other certificates against the very one it trusts
+// (port49d's certificate_status issuers) rather than a second read of the
+// file.
+func LoadTLSAnchor(certFile, keyFile, anchorFile string) (tls.Certificate, *x509.Certificate, error) {
 	// The server key is refused if it is a symlink or readable by anyone but
 	// its owner (keyfile; pre-flight F14).
 	cert, err := keyfile.LoadX509KeyPair(certFile, keyFile)
@@ -202,9 +216,7 @@ func LoadTLS(certFile, keyFile, anchorFile string) (tls.Certificate, *x509.CertP
 		return tls.Certificate{}, nil, fmt.Errorf("broker: client_ca_file %s holds %d certificates; exactly one "+
 			"trust anchor is accepted (design §19 step 3)", anchorFile, len(anchors))
 	}
-	pool := x509.NewCertPool()
-	pool.AddCert(anchors[0])
-	return cert, pool, nil
+	return cert, anchors[0], nil
 }
 
 // readTimeout is Server's ReadTimeout, swapped in tests. A mint request is a

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/md5"
+	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -406,6 +407,9 @@ func (noStore) SetPrivilege(context.Context, store.ContextKey, uint8) error {
 	panic("store called")
 }
 func (noStore) DeleteContext(context.Context, store.ContextKey) error {
+	panic("store called")
+}
+func (noStore) DeleteContextIf(context.Context, store.ContextKey, uint64) error {
 	panic("store called")
 }
 func (noStore) PutBlob(context.Context, string, []byte, time.Duration) error {
@@ -880,8 +884,9 @@ func TestNoMaxSessionAgeLeavesNoCeiling(t *testing.T) {
 // a dropped ceiling leaves SessionExpires zero, which Task 10 reads as
 // `max_session_age: never`, so an 8h token becomes an unbounded one that looks
 // exactly like a legitimate one. A ceiling with no AuthTime to anchor it is
-// therefore still computed: it lands in the distant past and denies, which is
-// wrong but loud, rather than permitting forever quietly.
+// therefore still computed: it lands in the distant past, and the login is
+// refused session_expired at redeem, with no context written — loud, rather
+// than permitting forever quietly.
 func TestACeilingIsNeverSilentlyDropped(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -904,6 +909,12 @@ func TestACeilingIsNeverSilentlyDropped(t *testing.T) {
 				AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceLogin, User: []byte("alice"),
 				Port: []byte("vty0"), Data: []byte(secret)})
 			c, err := f.st.GetContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"})
+			if tc.authTime.IsZero() {
+				if r := f.records(t)[0]; !errors.Is(err, store.ErrNotFound) || r["reason"] != "session_expired" {
+					t.Fatalf("a ceiling with no anchor opened a session: %v %v", err, r)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -2438,5 +2449,82 @@ func TestALostFailReceiptStillRefusesAndSaysSo(t *testing.T) {
 	ie, _ := rec["index_error"].(string)
 	if reply.Status != wire.AuthenStatusFail || rec["reason"] != "credential_revoked" || !strings.Contains(ie, "receipt") {
 		t.Fatalf("a lost FailReceipt must still refuse, and say what it cost: %+v %v", reply, rec)
+	}
+}
+
+// A token whose session ceiling has passed opens nothing, even one still
+// inside its own TTL: FAIL session_expired, with the record, and no context
+// and no receipt written (plan 7b final review I-1). The token here is put
+// with the full TTL the minter no longer gives, so this is the redeem check
+// alone. Junos keeps a session whose authorization is refused and never asks
+// again (decision 21), so on Junos this FAIL is the gate.
+func TestARedeemPastTheSessionCeilingFails(t *testing.T) {
+	f := setup(t)
+	secret := f.tag() + "ceil1ceil1ceil1ceil1ceil"
+	authTime := f.now.Add(-61 * time.Minute)
+	if _, err := f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "bob"},
+		store.Token{ID: "t9", Secret: []byte(secret), Kind: store.KindLogin, Username: "bob",
+			Principal: "user:bob@example.com", Enable: "token", MaxPrivilege: 15,
+			MaxSessionAge: time.Hour, AuthTime: authTime, MintedAt: f.now.Add(-2 * time.Minute),
+			ExpiresAt: f.now.Add(13 * time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	start := wire.AuthenStart{Action: wire.AuthenActionLogin, PrivLvl: 1, AuthenType: wire.AuthenTypePAP,
+		Service: wire.AuthenServiceLogin, User: []byte("bob"), Port: []byte("vty0"), Data: []byte(secret)}
+	for i := 0; i < 2; i++ {
+		// The second is a retransmission: no receipt was written, so it is
+		// refused the same way rather than replayed.
+		reply, done := f.h.NewSession(f.peer).Start(context.Background(), start)
+		if !done || reply.Status != wire.AuthenStatusFail {
+			t.Fatalf("presentation %d past the ceiling: status %d done %v", i, reply.Status, done)
+		}
+		r := f.records(t)[i]
+		sess := r["session"].(map[string]any)
+		if r["event"] != "redeem" || r["verdict"] != "deny" || r["reason"] != "session_expired" ||
+			r["principal"] != "user:bob@example.com" ||
+			sess["session_expires"] != decision.FormatTime(authTime.Add(time.Hour)) {
+			t.Fatalf("record %d: %v", i, r)
+		}
+	}
+	if _, err := f.st.GetContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "bob"}); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("a context was written past the ceiling: %v", err)
+	}
+	if c, _ := f.st.Candidates(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "bob"}); len(c) != 1 {
+		t.Fatalf("the refused token was spent: %d left", len(c))
+	}
+	if strings.Contains(f.log.String(), secret) {
+		t.Fatal("token leaked into the log")
+	}
+	// A minute before the ceiling the same token opens a session.
+	f.now = authTime.Add(59 * time.Minute)
+	if reply, _ := f.h.NewSession(f.peer).Start(context.Background(), start); reply.Status != wire.AuthenStatusPass {
+		t.Fatalf("inside the ceiling: status %d", reply.Status)
+	}
+}
+
+// The reviewer's case end to end, through the real minter: with a 1h
+// ceiling, a token minted at 59m does not redeem at 1h01m (plan 7b final
+// review I-1).
+func TestATokenMintedBeforeTheCeilingDoesNotRedeemAfterIt(t *testing.T) {
+	f := setup(t)
+	authTime := f.now
+	f.now = authTime.Add(59 * time.Minute)
+	m := token.NewMinter(f.st, decision.NewJSONLines(&bytes.Buffer{}), rand.Reader, labTagKey,
+		func() time.Time { return f.now }, 8)
+	res, err := m.Mint(context.Background(), token.Request{Device: "leaf-01", Platform: "juniper_vsrx",
+		Subject: token.Subject{Principal: "user:bob@example.com", Username: "bob", TokenTTL: 15 * time.Minute,
+			Enable: "token", MaxPrivilege: 15, MaxSessionAge: time.Hour, AuthTime: authTime}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.now = authTime.Add(61 * time.Minute)
+	reply, _ := f.h.NewSession(f.peer).Start(context.Background(), wire.AuthenStart{Action: wire.AuthenActionLogin,
+		PrivLvl: 1, AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceLogin, User: []byte("bob"),
+		Port: []byte("vty0"), Data: []byte(res.Login)})
+	if reply.Status != wire.AuthenStatusFail {
+		t.Fatalf("a token minted at 59m redeemed at 1h01m: status %d", reply.Status)
+	}
+	if _, err := f.st.GetContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "bob"}); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("a context was written past the ceiling: %v", err)
 	}
 }

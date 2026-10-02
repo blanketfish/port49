@@ -24,7 +24,9 @@ import (
 	"net/netip"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -35,6 +37,7 @@ import (
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/broker"
 	"github.com/rhwendt/port49/internal/bundle"
+	"github.com/rhwendt/port49/internal/certstatus"
 	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/daemon/acct"
 	"github.com/rhwendt/port49/internal/daemon/admin"
@@ -49,6 +52,7 @@ import (
 	"github.com/rhwendt/port49/internal/keyring"
 	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/policy"
+	"github.com/rhwendt/port49/internal/printsafe"
 	"github.com/rhwendt/port49/internal/session"
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/store/crypt"
@@ -203,18 +207,27 @@ var (
 // fix.
 func buildBroker(cfg config.Config, inventoryFrom string, st store.Store, minter *token.Minter, log decision.Emitter,
 	m *metrics.Metrics) (*http.Server, *broker.Broker, error) {
+	srv, b, _, err := buildBrokerAnchor(cfg, inventoryFrom, st, minter, log, m)
+	return srv, b, err
+}
+
+// buildBrokerAnchor is buildBroker with the one trust anchor it read from
+// client_ca_file, which broker.certificate_status's issuers are checked
+// against (certStatusConfig).
+func buildBrokerAnchor(cfg config.Config, inventoryFrom string, st store.Store, minter *token.Minter,
+	log decision.Emitter, m *metrics.Metrics) (*http.Server, *broker.Broker, *x509.Certificate, error) {
 	if cfg.Broker == nil {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	pol, err := loadPolicy(cfg, inventoryFrom)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	now := time.Now()
 	sayPolicy(pol, now)
-	cert, anchor, err := broker.LoadTLS(cfg.Broker.TLSCertFile, cfg.Broker.TLSKeyFile, cfg.Broker.ClientCAFile)
+	cert, anchorCert, err := broker.LoadTLSAnchor(cfg.Broker.TLSCertFile, cfg.Broker.TLSKeyFile, cfg.Broker.ClientCAFile)
 	if err != nil {
-		return nil, nil, fmt.Errorf("broker TLS files (tls_cert_file %s, tls_key_file %s, client_ca_file %s): %w",
+		return nil, nil, nil, fmt.Errorf("broker TLS files (tls_cert_file %s, tls_key_file %s, client_ca_file %s): %w",
 			cfg.Broker.TLSCertFile, cfg.Broker.TLSKeyFile, cfg.Broker.ClientCAFile, err)
 	}
 	// A server certificate outside its validity does not stop the start:
@@ -231,20 +244,24 @@ func buildBroker(cfg config.Config, inventoryFrom string, st store.Store, minter
 		}
 	}
 	b := &broker.Broker{Policy: policy.NewLive(pol), Minter: minter, Store: st, Log: log, Metrics: m, Now: time.Now,
-		MaxSessionAge: cfg.Session.MaxSessionAgeDefault, BatchMax: cfg.Broker.BatchMax}
+		MaxSessionAge: cfg.Session.MaxSessionAgeDefault, BatchMax: cfg.Broker.BatchMax,
+		CeilingWarning: cfg.Session.CeilingWarning, ContextIdleTTL: cfg.ContextIdleTTL,
+		GraceWindow: cfg.Session.GraceWindow}
 	// The blob event's rule text is redacted as the daemon's records are,
 	// with the policy in force's patterns (spec §5.8).
 	b.Redact = redactorFor(b.Policy)
+	anchor := x509.NewCertPool()
+	anchor.AddCert(anchorCert)
 	srv, err := b.Server(cfg.Broker.Listen, cert, anchor)
 	if err != nil {
-		return nil, nil, fmt.Errorf("broker.client_ca_file %s: %w", cfg.Broker.ClientCAFile, err)
+		return nil, nil, nil, fmt.Errorf("broker.client_ca_file %s: %w", cfg.Broker.ClientCAFile, err)
 	}
 	// net/http logs what no handler sees — a handshake refused for an expired
 	// or untrusted certificate — through ErrorLog. Left nil it goes to the
 	// standard library's default logger; routed here it lands beside
 	// port49d's other lines, where an operator is already looking.
 	srv.ErrorLog = stdlog.New(stderr, "port49d: broker: ", 0)
-	return srv, b, nil
+	return srv, b, anchorCert, nil
 }
 
 // loadPolicy reads broker.policy_file and checks it against the inventory the
@@ -626,6 +643,8 @@ func run(parent context.Context, cfgPath string) error {
 			CommandAttributes: cfg.Lab.CommandAttributes,
 			DenyPrefixes:      cfg.Lab.DenyPrefixes,
 			Fault:             fault,
+			DenyMessageLength: cfg.Lab.DenyMessageLength,
+			DenySession:       cfg.Lab.DenySession,
 		}
 	}
 	// The request handlers see the store through the lab's fault switch; the
@@ -638,7 +657,7 @@ func run(parent context.Context, cfgPath string) error {
 	// through the Manager (plan 7a); Refresh behind /v1/refresh is plan 7b's.
 	sessions := session.New(st, time.Now, cfg.ContextIdleTTL, cfg.Session.IndexTTL)
 
-	brokerSrv, brk, err := buildBroker(cfg, inventoryFrom, st, minter, log, m)
+	brokerSrv, brk, anchorCert, err := buildBrokerAnchor(cfg, inventoryFrom, st, minter, log, m)
 	if err != nil {
 		stopSpool()
 		<-spoolDone
@@ -669,6 +688,38 @@ func run(parent context.Context, cfgPath string) error {
 		} else {
 			fmt.Fprintf(stderr, "port49d: broker: %d revocation(s) in force from %s\n", len(marks),
 				cfg.Broker.RevocationsFile)
+		}
+	}
+	// Certificate status (spec §5.1.4; decision 33): the kept lists are put
+	// in force now, after the marks and before any listener binds. That is
+	// local and fast, so it never delays device AAA; nothing is fetched
+	// until the listeners are up (pre-flight I8). A source that fails here
+	// is said and never stops the start.
+	var checker *certstatus.Checker
+	if brk != nil {
+		cs := cfg.Broker.CertificateStatus
+		if cs.Disabled {
+			fmt.Fprintln(stderr, "port49d: broker: certificate status checking is disabled "+
+				"(broker.certificate_status.disabled): a certificate revoked at its CA keeps minting until "+
+				"`port49 revoke --cert`")
+		} else {
+			ccfg, err := certStatusConfig(*cs, anchorCert, filepath.Dir(cfg.Broker.RevocationsFile))
+			if err != nil {
+				stopSpool()
+				<-spoolDone
+				return fmt.Errorf("broker.certificate_status.%w", err)
+			}
+			checker = certstatus.New(ccfg, time.Now, m,
+				func(format string, args ...any) { fmt.Fprintf(stderr, format+"\n", args...) })
+			checker.OnNewEntry(brk.OnCRLEntry)
+			for _, err := range checker.LoadPersisted() {
+				fmt.Fprintf(stderr, "port49d: broker: certificate status: %s\n", printsafe.Line(err.Error(), 300))
+			}
+			for _, subject := range uncoveredIssuers(ccfg, anchorCert) { // re-check R3
+				fmt.Fprintf(stderr, "port49d: broker: certificate status: certificates issued by %s will be refused: "+
+					"nothing covers %s itself; name the root CA's CRL\n", subject, subject)
+			}
+			brk.CertStatus, brk.OnUnavailable = checker, cs.OnUnavailable
 		}
 	}
 
@@ -736,10 +787,13 @@ func run(parent context.Context, cfgPath string) error {
 		// not any broker exists to refresh from. It is worth setting only once
 		// something is calling session.Manager.Refresh on a schedule.
 		//
-		// The grace window is carried for plan 7's sweep and read by nothing
-		// today.
+		// The grace window is how long past the ceiling a context is denied
+		// and kept before the authorizer deletes it (plan 7b). The ceiling
+		// warning rides on permits to the platforms L34 found show it, and
+		// to the operator's own list.
 		Author: author.New(handlerStore, authz, log, m, time.Now, cfg.SessionServices,
-			cfg.Session.StalenessCeiling, cfg.Session.GraceWindow, cfg.ContextIdleTTL).WithRedactor(redactorFor(live)),
+			cfg.Session.StalenessCeiling, cfg.Session.GraceWindow, cfg.ContextIdleTTL).WithRedactor(redactorFor(live)).
+			WithCeilingWarning(cfg.Session.CeilingWarning, cfg.Session.CeilingWarningPlatforms),
 		// The system-user table is injected rather than looked up through a
 		// package global, so nothing can mutate a security rule at run time.
 		// It carries `root` for juniper_junos and nothing else
@@ -785,6 +839,7 @@ func run(parent context.Context, cfgPath string) error {
 			bl.Revoked(r, true)
 		}
 		bl.Refused = brk.RefusedAtBind
+		bl.Status = brk.BindStatus
 		brk.Conns = bl
 	}
 	// The admin socket binds before anything says "listening", as the broker
@@ -833,6 +888,34 @@ func run(parent context.Context, cfgPath string) error {
 	if brokerSrv != nil {
 		go func() { brokerErr <- brokerSrv.Serve(bl) }()
 		fmt.Fprintf(stderr, "port49d: broker listening on %s\n", bln.Addr())
+	}
+
+	// The network side of certificate status starts only now that device
+	// AAA is up, and is joined at shutdown as the fetcher is (plan 6b, F8).
+	// The start line is said first, so it names the state the kept lists
+	// left, not a race with the first fetch.
+	var statusDone sync.WaitGroup
+	if checker != nil {
+		unavailable := map[string]string{"refuse": "refused (503, retried)", "allow": "allowed, alarmed"}
+		fmt.Fprintf(stderr, "port49d: broker: certificate status from %s; a status that cannot be established is %s\n",
+			checker.Describe(), unavailable[cfg.Broker.CertificateStatus.OnUnavailable])
+		statusDone.Add(3)
+		go func() { defer statusDone.Done(); brk.RunRevocationQueue(ctx) }()
+		go func() { defer statusDone.Done(); checker.Run(ctx) }() // the first fetch happens now
+		// Pending CRL revocations, retried each interval (pre-flight I9).
+		go func() {
+			defer statusDone.Done()
+			t := time.NewTicker(cfg.Broker.CertificateStatus.RefreshInterval)
+			defer t.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-t.C:
+					brk.RetryPending()
+				}
+			}
+		}()
 	}
 
 	// The policy file is watched and SIGHUP reloads it (plan 4b); hup was
@@ -894,6 +977,7 @@ func run(parent context.Context, cfgPath string) error {
 	}
 	cancel()
 	<-reloadDone
+	statusDone.Wait()
 	if brokerSrv != nil {
 		shutdownCtx, done := context.WithTimeout(context.Background(), 5*time.Second)
 		_ = brokerSrv.Shutdown(shutdownCtx)

@@ -874,7 +874,8 @@ func TestWithABrokerAnOrphanIsTheDevicesProblemNotTheDaemons(t *testing.T) {
 	setKeyEnv(t)
 	orphan := write(t, "orphan.yaml", "devices:\n  - {name: orphan, addresses: [10.99.99.1]}\n")
 	body := fmt.Sprintf(sample, orphan) + "broker: {listen: \"127.0.0.1:0\", tls_cert_file: c, tls_key_file: k, " +
-		"client_ca_file: ca, policy_file: p, revocations_file: r}\n"
+		"client_ca_file: ca, policy_file: p, revocations_file: r, " +
+		"certificate_status: {disabled: true}}\n"
 	cfg, err := Load(write(t, "f.yaml", body))
 	if err != nil {
 		t.Fatalf("a broker config refused an orphan device: %v", err)
@@ -896,7 +897,8 @@ func TestWithABrokerLoadDoesNotReadTheInventory(t *testing.T) {
 	setKeyEnv(t)
 	missing := filepath.Join(t.TempDir(), "never-read.yaml")
 	body := fmt.Sprintf(sample, missing) + "broker: {listen: \"127.0.0.1:0\", tls_cert_file: c, tls_key_file: k, " +
-		"client_ca_file: ca, policy_file: p, revocations_file: r}\n"
+		"client_ca_file: ca, policy_file: p, revocations_file: r, " +
+		"certificate_status: {disabled: true}}\n"
 	cfg, err := Load(write(t, "f.yaml", body))
 	if err != nil {
 		t.Fatalf("a broker config read inventory_file: %v", err)
@@ -1144,5 +1146,63 @@ func TestLoadCarriesAdminSocketOffByDefault(t *testing.T) {
 	c, err = Load(write(t, "admin.yaml", "admin_socket: /run/port49/port49d.sock\n"+fmt.Sprintf(sample, invPath)))
 	if err != nil || c.AdminSocket != "/run/port49/port49d.sock" {
 		t.Fatalf("%q, %v", c.AdminSocket, err)
+	}
+}
+
+// session.ceiling_warning defaults to 30m, an explicit 0s turns it off, and
+// above 24h is refused by name (spec §5.6; decision 33).
+func TestCeilingWarning(t *testing.T) {
+	setKeyEnv(t)
+	invPath := write(t, "inventory.yaml", inv)
+	c, err := Load(write(t, "a.yaml", fmt.Sprintf(sample, invPath)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Session.CeilingWarning != 30*time.Minute || c.Session.CeilingWarningPlatforms != nil {
+		t.Fatalf("default: %s %v", c.Session.CeilingWarning, c.Session.CeilingWarningPlatforms)
+	}
+	body := fmt.Sprintf(sample, invPath) + "\nsession: {ceiling_warning: 0s, ceiling_warning_platforms: [arista_eos, cisco_nxos]}\n"
+	if c, err = Load(write(t, "b.yaml", body)); err != nil || c.Session.CeilingWarning != 0 ||
+		len(c.Session.CeilingWarningPlatforms) != 2 {
+		t.Fatalf("0s: %v %s %v", err, c.Session.CeilingWarning, c.Session.CeilingWarningPlatforms)
+	}
+	body = fmt.Sprintf(sample, invPath) + "\nsession: {ceiling_warning: 45m, grace_window: 5m}\n"
+	if c, err = Load(write(t, "c.yaml", body)); err != nil || c.Session.CeilingWarning != 45*time.Minute ||
+		c.Session.GraceWindow != 5*time.Minute {
+		t.Fatalf("45m: %v %s %s", err, c.Session.CeilingWarning, c.Session.GraceWindow)
+	}
+	for _, bad := range []string{"{ceiling_warning: 25h}", "{ceiling_warning: -1m}"} {
+		body = fmt.Sprintf(sample, invPath) + "\nsession: " + bad + "\n"
+		if _, err := Load(write(t, "d.yaml", body)); err == nil || !strings.Contains(err.Error(), "session.ceiling_warning") {
+			t.Fatalf("%s must be refused naming the key: %v", bad, err)
+		}
+	}
+	for _, bad := range []string{"{ceiling_warning_platforms: [\"\"]}", "{ceiling_warning_platforms: [\"Arista EOS\"]}"} {
+		body = fmt.Sprintf(sample, invPath) + "\nsession: " + bad + "\n"
+		if _, err := Load(write(t, "e.yaml", body)); err == nil || !strings.Contains(err.Error(), "session.ceiling_warning_platforms") {
+			t.Fatalf("%s must be refused naming the key: %v", bad, err)
+		}
+	}
+	// MaxSessionAge decodes the same file shape, so the key is known there too.
+	if _, err := MaxSessionAge([]byte("session: {ceiling_warning: 10m}\n")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// lab.deny_message_length is 0 or 16 to 4096; lab.deny_session is read
+// (spec §15, L2; plan 7b).
+func TestLabDenyMessageLength(t *testing.T) {
+	setKeyEnv(t)
+	invPath := write(t, "inventory.yaml", inv)
+	body := fmt.Sprintf(sample, invPath) + "  deny_message_length: 300\n  deny_session: true\n"
+	c, err := Load(write(t, "a.yaml", body))
+	if err != nil || c.Lab.DenyMessageLength != 300 || !c.Lab.DenySession {
+		t.Fatalf("%v %+v", err, c.Lab)
+	}
+	for _, n := range []string{"8", "5000", "-1"} {
+		body := fmt.Sprintf(sample, invPath) + "  deny_message_length: " + n + "\n"
+		if _, err := Load(write(t, "b.yaml", body)); err == nil || !strings.Contains(err.Error(), "lab.deny_message_length") {
+			t.Fatalf("%s must be refused naming the key: %v", n, err)
+		}
 	}
 }

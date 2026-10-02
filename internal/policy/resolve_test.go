@@ -2,6 +2,7 @@ package policy
 
 import (
 	"errors"
+	"fmt"
 	"reflect"
 	"slices"
 	"strings"
@@ -958,5 +959,74 @@ grants: [{subject: s, scope: all_devices, roles: [r], max_privilege: readonly}]`
 	if err == nil || !strings.Contains(err.Error(), "platforms.f5_bigip.accepted_attributes") ||
 		!strings.Contains(err.Error(), "F5-LTM-User-Role") || !strings.Contains(err.Error(), "f5-ltm-user-role") {
 		t.Errorf("%v", err)
+	}
+}
+
+// sessionAgePolicy is a policy granting subject s every role ages names, one
+// role per entry; "" names no max_session_age.
+func sessionAgePolicy(t *testing.T, ages ...string) *Policy {
+	t.Helper()
+	var roles, names []string
+	for i, a := range ages {
+		name := fmt.Sprintf("r%d", i)
+		line := fmt.Sprintf("  - {name: %s, privilege: admin, permit: [\"**\"]", name)
+		if a != "" {
+			line += ", max_session_age: " + a
+		}
+		roles, names = append(roles, line+"}"), append(names, name)
+	}
+	return mustParse(t, "scopes: [{name: all_devices, match: {}}]\nroles:\n"+strings.Join(roles, "\n")+"\n"+
+		"subjects: [{name: s, identity: [\"user:a@example.com\"], username: a, token_ttl: 60s}]\n"+
+		"grants: [{subject: s, scope: all_devices, roles: ["+strings.Join(names, ", ")+"]}]\n")
+}
+
+// The ceiling is the least across the roles that compose on the device; a
+// role naming none takes port49d's default; never only when every role
+// says never (spec §5.6).
+func TestTheSessionAgeIsTheLeastOfTheRoles(t *testing.T) {
+	for _, tc := range []struct {
+		ages []string // one role per entry; "" names none
+		def  time.Duration
+		want time.Duration
+	}{
+		{[]string{"8h", "2h"}, 12 * time.Hour, 2 * time.Hour},
+		{[]string{"8h", ""}, 12 * time.Hour, 8 * time.Hour},
+		{[]string{"8h", ""}, 4 * time.Hour, 4 * time.Hour},
+		{[]string{"never", "never"}, 12 * time.Hour, 0},
+		{[]string{"never", ""}, 12 * time.Hour, 12 * time.Hour},
+		{[]string{"never", "3h"}, 12 * time.Hour, 3 * time.Hour},
+		{[]string{""}, 12 * time.Hour, 12 * time.Hour},
+	} {
+		res, err := sessionAgePolicy(t, tc.ages...).Resolve("user:a@example.com", deviceNamed(t, "leaf-01"), noon)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := res.SessionAge.Of(tc.def); got != tc.want {
+			t.Errorf("%v with default %s: %s, want %s", tc.ages, tc.def, got, tc.want)
+		}
+	}
+	// A role a scope attaches composes too: its shorter ceiling applies.
+	p := mustParse(t, "scopes: [{name: all_devices, match: {}, attached_roles: {humans: [r1]}}]\nroles:\n"+
+		"  - {name: r0, privilege: admin, permit: [\"**\"], max_session_age: 8h}\n"+
+		"  - {name: r1, deny: [reload **], max_session_age: 1h}\n"+
+		"subjects: [{name: s, identity: [\"user:a@example.com\"], username: a, token_ttl: 60s}]\n"+
+		"grants: [{subject: s, scope: all_devices, roles: [r0]}]\n")
+	res, err := p.Resolve("user:a@example.com", deviceNamed(t, "leaf-01"), noon)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := res.Attached["r1"]; !ok {
+		t.Fatalf("r1 was not attached: %+v", res.Roles)
+	}
+	if got := res.SessionAge.Of(12 * time.Hour); got != time.Hour {
+		t.Errorf("an attached role's 1h: %s, want 1h", got)
+	}
+}
+
+// A SessionAge no composition filled is not never: it takes the finite
+// default, so a Resolution built by hand fails closed.
+func TestAZeroSessionAgeTakesTheDefault(t *testing.T) {
+	if got := (Resolution{}).SessionAge.Of(12 * time.Hour); got != 12*time.Hour {
+		t.Errorf("a zero Resolution's ceiling: %s, want the 12h default", got)
 	}
 }

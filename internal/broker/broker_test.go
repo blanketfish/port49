@@ -162,7 +162,7 @@ func TestAnUntrustedCallerIsRefused(t *testing.T) {
 		var e api.Error
 		_ = json.Unmarshal(w.Body.Bytes(), &e)
 		if w.Code != 401 || e.Error != "trust_domain_unresolved" {
-			t.Fatalf("%s: %d %s", tt.name, w.Code, w.Body.String())
+			t.Fatalf("%s: %s", tt.name, answer(w))
 		}
 	}
 	mints := eventsOf(f.records(t), "mint")
@@ -207,11 +207,99 @@ func TestAConnectionPastTheCeilingIsRefused(t *testing.T) {
 	var e api.Error
 	_ = json.Unmarshal(w.Body.Bytes(), &e)
 	if w.Code != 401 || e.Error != "session_expired" || w.Header().Get("Connection") != "close" {
-		t.Fatalf("%d %v %s", w.Code, w.Header(), w.Body.String())
+		t.Fatalf("%s %v", answer(w), w.Header())
 	}
 	last := f.records(t)[len(f.records(t))-1]
 	if last["event"] != "mint" || last["reason"] != "session_expired" || last["principal"] != "user:alice@example.com" {
 		t.Fatalf("record: %v", last)
+	}
+}
+
+// A device's ceiling is its roles', on the token and on the item; a device
+// whose ceiling has passed since the connection authenticated is refused
+// per item, session_expired, and another device on the same connection is
+// not (spec §5.6; decision 33).
+func TestTheMintCarriesEachDevicesCeiling(t *testing.T) {
+	f := newFixtureWithPolicy(t, 8, shortLeaf1Policy)
+	ctx := context.Background()
+	auth := f.now
+	check := func(r api.MintResponse, leaf1Denied bool) {
+		t.Helper()
+		got := map[string]api.MintItem{}
+		for _, it := range r.Results {
+			got[it.Device] = it
+		}
+		if l := got["leaf1"]; leaf1Denied {
+			if l.Verdict != "deny" || l.Reason != "session_expired" || !strings.Contains(l.Detail, "port49 refresh") {
+				t.Fatalf("a device past its ceiling: %+v", l)
+			}
+		} else if l.Verdict != "permit" || l.SessionExpiresAt != auth.Add(time.Hour).UTC().Format(time.RFC3339) {
+			t.Fatalf("leaf1's session_expires_at: %+v", l)
+		}
+		if n := got["nx1"]; n.Verdict != "permit" ||
+			n.SessionExpiresAt != auth.Add(12*time.Hour).UTC().Format(time.RFC3339) {
+			t.Fatalf("nx1 keeps the default ceiling: %+v", n)
+		}
+	}
+	check(decodeMint(t, f.post(ctx, f.state(f.alice), `{"devices":["leaf1","nx1"]}`, "")), false)
+	for nas, want := range map[string]time.Duration{"leaf1": time.Hour, "nx1": 12 * time.Hour} {
+		toks, _ := f.st.Candidates(ctx, store.TokenKey{NAS: nas, Username: "alice"})
+		if len(toks) != 1 || toks[0].MaxSessionAge != want {
+			t.Fatalf("%s's token max_session_age: %+v", nas, toks)
+		}
+	}
+	// An hour on, on a connection that authenticated at auth: leaf1 is
+	// refused per item, nx1 is not.
+	f.advance(time.Hour)
+	check(decodeMint(t, f.postAt(ctx, f.state(f.alice), `{"devices":["leaf1","nx1"]}`, "", auth)), true)
+}
+
+// shortLeaf1Policy gives leaf1, through an eos scope, a 1h ceiling and alice
+// a 15m token_ttl; nx1 keeps port49d's 12h default.
+var shortLeaf1Policy = strings.NewReplacer(
+	"  - {name: all_devices, match: {}}\n",
+	"  - {name: all_devices, match: {}}\n  - {name: eos, match: {platform: arista_eos}, on_missing: exclude}\n",
+	"  - {name: no_reload, deny: [\"reload **\"]}\n",
+	"  - {name: no_reload, deny: [\"reload **\"]}\n  - {name: short_session, max_session_age: 1h}\n",
+	"max_privilege: admin}\n",
+	"max_privilege: admin}\n  - {subject: netops, scope: eos, roles: [short_session]}\n",
+	"enable: token, token_ttl: 60s}",
+	"enable: token, token_ttl: 15m}",
+).Replace(testPolicy)
+
+// A replay answers with the token it minted, so with that token's ceiling,
+// not the new connection's; and a token whose ceiling has passed is never
+// replayed: the mint is made again under the connection asking, whose
+// ceiling the broker has just checked.
+func TestAReplayKeepsItsTokensCeiling(t *testing.T) {
+	f := newFixtureWithPolicy(t, 8, shortLeaf1Policy)
+	ctx := context.Background()
+	auth := f.now
+	body := `{"devices":["leaf1"]}`
+	f.advance(55 * time.Minute)
+	first := decodeMint(t, f.postAt(ctx, f.state(f.alice), body, "k1", auth)).Results[0]
+	if first.Verdict != "permit" || first.SessionExpiresAt != auth.Add(time.Hour).UTC().Format(time.RFC3339) {
+		t.Fatalf("the first mint: %+v", first)
+	}
+	// Minted 5m before a 1h ceiling with a 15m token_ttl, the token expires
+	// at the ceiling (final review I-1).
+	if first.ExpiresAt != first.SessionExpiresAt {
+		t.Fatalf("the token outlives its ceiling: expires_at %s, session_expires_at %s",
+			first.ExpiresAt, first.SessionExpiresAt)
+	}
+	// A fresh connection before the ceiling: the same token, its own ceiling.
+	f.advance(3 * time.Minute)
+	again := decodeMint(t, f.postAt(ctx, f.state(f.alice), body, "k1", f.now)).Results[0]
+	if again.Login != first.Login || again.SessionExpiresAt != first.SessionExpiresAt {
+		t.Fatalf("a replay reports the ceiling of the token it returns: %+v, first %+v", again, first)
+	}
+	// Past it: minted again, under the new connection.
+	f.advance(3 * time.Minute)
+	now := f.now
+	fresh := decodeMint(t, f.postAt(ctx, f.state(f.alice), body, "k1", now)).Results[0]
+	if fresh.Verdict != "permit" || fresh.Login == first.Login ||
+		fresh.SessionExpiresAt != now.Add(time.Hour).UTC().Format(time.RFC3339) {
+		t.Fatalf("a token past its ceiling is not replayed: %+v, first %+v", fresh, first)
 	}
 }
 
@@ -224,13 +312,13 @@ func TestIdempotency(t *testing.T) {
 	a := decodeMint(t, f.post(context.Background(), f.state(f.alice), body, "k1"))
 	b := decodeMint(t, f.post(context.Background(), f.state(f.alice), body, "k1"))
 	if a.Results[0].Login != b.Results[0].Login {
-		t.Fatalf("a retry must replay, not mint again: %q vs %q", a.Results[0].Login, b.Results[0].Login)
+		t.Fatal("a retry must replay, not mint again: the two logins differ")
 	}
 	if c, _ := f.st.Candidates(context.Background(), store.TokenKey{NAS: "leaf1", Username: "alice"}); len(c) != 1 {
 		t.Fatalf("one token minted, %d in the store", len(c))
 	}
 	if w := f.post(context.Background(), f.state(f.alice), `{"devices":["leaf1"],"enable":true}`, "k1"); w.Code != 409 {
-		t.Fatalf("same key, different body: %d %s", w.Code, w.Body.String())
+		t.Fatalf("same key, different body: %s", answer(w))
 	}
 	mallory := f.client(t, "mallory@example.com", f.now.Add(time.Hour))
 	m := decodeMint(t, f.post(context.Background(), f.state(mallory), body, "k1"))
@@ -301,7 +389,7 @@ func TestAConflictLaterInTheBatchMintsNothing(t *testing.T) {
 	decodeMint(t, f.post(context.Background(), f.state(f.alice), `{"devices":["leaf1"]}`, "k1"))
 	before := len(eventsOf(f.records(t), "mint"))
 	if w := f.post(context.Background(), f.state(f.alice), `{"devices":["nx1","leaf1"]}`, "k1"); w.Code != 409 {
-		t.Fatalf("%d %s", w.Code, w.Body.String())
+		t.Fatalf("%s", answer(w))
 	}
 	if c, _ := f.st.Candidates(context.Background(), store.TokenKey{NAS: "nx1", Username: "alice"}); len(c) != 0 {
 		t.Fatalf("nx1 minted %d tokens into a refused batch", len(c))
@@ -353,11 +441,11 @@ func TestMalformedBatchesAreRefusedWhole(t *testing.T) {
 		"a space":             `{"devices":["leaf 1"]}`,
 	} {
 		if w := f.post(context.Background(), f.state(f.alice), body, ""); w.Code != 400 {
-			t.Errorf("%s: %d %s", name, w.Code, w.Body.String())
+			t.Errorf("%s: %s", name, answer(w))
 		}
 	}
 	if w := f.post(context.Background(), f.state(f.alice), `{"devices":["leaf1"]}`, strings.Repeat("k", 129)); w.Code != 400 {
-		t.Errorf("a 129-byte Idempotency-Key: %d %s", w.Code, w.Body.String())
+		t.Errorf("a 129-byte Idempotency-Key: %s", answer(w))
 	}
 	if recs := f.records(t); len(recs) != 0 {
 		t.Fatalf("a malformed batch writes no record: %v", recs)
@@ -372,7 +460,7 @@ func TestConfigIsDiscoveryOnly(t *testing.T) {
 	var c api.Config
 	if err := json.Unmarshal(w.Body.Bytes(), &c); err != nil || w.Code != 200 ||
 		len(c.Methods) != 1 || c.Methods[0] != "x509" || c.MaxSessionAgeSeconds != 43200 || c.BatchMax != 4 {
-		t.Fatalf("%d %s", w.Code, w.Body.String())
+		t.Fatalf("%s", answer(w))
 	}
 	if strings.Contains(w.Body.String(), "leaf1") {
 		t.Fatal("discovery must not name a device")
@@ -420,7 +508,7 @@ func TestTwoRequestsUnderOneKeyMintOnce(t *testing.T) {
 			<-g.entered
 			w := f.post(context.Background(), f.state(f.alice), tc.second, "01J")
 			if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), tc.wantErr) {
-				t.Fatalf("the overlapping request: %d %s", w.Code, w.Body.String())
+				t.Fatalf("the overlapping request: %s", answer(w))
 			}
 			if tc.wantErr == "idempotency_in_progress" && w.Header().Get("Retry-After") != "1" {
 				t.Fatalf("Retry-After: %q", w.Header().Get("Retry-After"))
@@ -455,7 +543,7 @@ func TestTwoRequestsUnderOneKeyMintOnce(t *testing.T) {
 		<-g.entered
 		w := f.post(context.Background(), f.state(f.alice), body, "01S")
 		if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "idempotency_in_progress") {
-			t.Fatalf("the second abandoned replay: %d %s", w.Code, w.Body.String())
+			t.Fatalf("the second abandoned replay: %s", answer(w))
 		}
 		close(g.gate)
 		if r := decodeMint(t, <-first); r.Results[0].Verdict != "permit" {
@@ -516,7 +604,7 @@ func TestAHoldIsRenewedBeforeEachMintSoARetryMintsNothing(t *testing.T) {
 	select {
 	case w := <-second:
 		if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "idempotency_in_progress") {
-			t.Fatalf("the retry: %d %s", w.Code, w.Body.String())
+			t.Fatalf("the retry: %s", answer(w))
 		}
 	case op := <-s.entered:
 		t.Fatalf("the retry reached %s while the first request was minting leaf1", op)
@@ -550,6 +638,6 @@ func TestABatchNamingADeviceTwiceIsRefused(t *testing.T) {
 	f := newFixture(t, 8)
 	w := f.post(context.Background(), f.state(f.alice), `{"devices":["leaf1","leaf1"]}`, "01L")
 	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "twice") {
-		t.Fatalf("%d %s", w.Code, w.Body.String())
+		t.Fatalf("%s", answer(w))
 	}
 }

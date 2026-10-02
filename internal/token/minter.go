@@ -77,6 +77,19 @@ var ErrUsernameReserved = errors.New("token: device-facing username is reserved 
 // by principal can find (plan 7a).
 var ErrNoPrincipal = errors.New("token: a mint needs a principal to index its tokens under")
 
+// ErrNoAuthTime refuses a mint for a subject with a session ceiling and no
+// AuthTime to anchor it. The ceiling would be measured from the epoch: the
+// login would be refused session_expired with nothing saying why, or, read
+// by a caller that took a zero time as "no ceiling", run unbounded. A
+// `never` subject (MaxSessionAge zero) needs no AuthTime (spec §5.6).
+var ErrNoAuthTime = errors.New("token: a mint with a session ceiling needs the subject's auth_time")
+
+// ErrSessionExpired refuses a mint for a subject whose session ceiling has
+// passed: its token would open a context born expired (spec §5.6). The
+// broker refuses such a device per item before it mints; this is the
+// minter's own floor under that check.
+var ErrSessionExpired = errors.New("token: the subject's session ceiling has passed")
+
 // ReservedUsername reports whether u is `remote`, a p49-* name, or a
 // platform's system user (platform.ReservedUsername).
 func ReservedUsername(u string) bool { return platform.ReservedUsername(u) }
@@ -239,10 +252,32 @@ type Result struct {
 	// MintedAt is when the tokens were minted, kept in the idempotency
 	// record so a replay can be judged against Request.SupersededAt.
 	MintedAt time.Time
+	// SessionExpiresAt is when a login with these tokens stops being
+	// authorized: the subject's AuthTime plus its MaxSessionAge, zero for
+	// never. Kept in the idempotency record so a replay answers with the
+	// ceiling of the tokens it returns, and is not made past it.
+	SessionExpiresAt time.Time
 	// Replayed is set on a result answered from the idempotency record,
 	// for which no token was minted and no permit recorded. Never stored.
 	Replayed bool `json:"-"`
 }
+
+// String is the result with its tokens withheld, so that a %v anywhere —
+// a test's failure message, a debug line — never prints one (plan 7b final
+// review M-1). The idempotency record is JSON and is untouched.
+func (r Result) String() string {
+	type plain Result
+	p := plain(r)
+	for _, t := range []*string{&p.Login, &p.Enable} {
+		if *t != "" {
+			*t = "<withheld>"
+		}
+	}
+	return fmt.Sprintf("%+v", p)
+}
+
+// GoString is String, for %#v.
+func (r Result) GoString() string { return r.String() }
 
 // Minter issues device tokens. It is in-process and knows nothing of HTTP;
 // plan 3's broker wraps it behind /v1/tokens.
@@ -264,8 +299,10 @@ func NewMinter(s store.Store, e decision.Emitter, r io.Reader, tagKey []byte, no
 // Mint issues a login token, and an enable token beside it when the caller
 // asks and the subject's mechanism is `token`. It refuses a username
 // canonicalization would change, replays an idempotent request without
-// minting, clamps the TTL to the subject's maximum, and emits one `mint`
-// record naming each token by hash alone.
+// minting, clamps the TTL to the subject's maximum and the token's expiry to
+// its session ceiling, refuses a subject whose ceiling has passed or has no
+// AuthTime to anchor it, and emits one `mint` record naming each token by
+// hash alone.
 func (m *Minter) Mint(ctx context.Context, r Request) (Result, error) {
 	if !CanonicalUsername(r.Subject.Username) {
 		return Result{}, ErrUsernameNotCanonical
@@ -275,6 +312,14 @@ func (m *Minter) Mint(ctx context.Context, r Request) (Result, error) {
 	}
 	if r.Subject.Principal == "" {
 		return Result{}, ErrNoPrincipal
+	}
+	if r.Subject.MaxSessionAge > 0 {
+		if r.Subject.AuthTime.IsZero() {
+			return Result{}, ErrNoAuthTime
+		}
+		if !m.now().Before(r.Subject.AuthTime.Add(r.Subject.MaxSessionAge)) {
+			return Result{}, ErrSessionExpired
+		}
 	}
 	// idemErr names what a lost idempotency record cost, carried onto the mint
 	// record that is emitted anyway. It is Record.IndexError's idiom: the
@@ -305,6 +350,11 @@ func (m *Minter) Mint(ctx context.Context, r Request) (Result, error) {
 				// device accepts. A record from before MintedAt was kept has
 				// a zero one, and is not replayed either.
 				idemErr = "idempotency record names tokens a policy change or a revocation deleted; minted again rather than replayed"
+			case !prev.SessionExpiresAt.IsZero() && !m.now().Before(prev.SessionExpiresAt):
+				// Its tokens' ceiling has passed: replayed, the caller would
+				// hold a token for a context born expired. Minted again under
+				// this request's subject, whose ceiling the broker checked.
+				idemErr = "idempotency record names tokens past their session ceiling; minted again rather than replayed"
 			default:
 				prev.Replayed = true
 				return prev, nil
@@ -365,9 +415,24 @@ func (m *Minter) Mint(ctx context.Context, r Request) (Result, error) {
 		return Result{}, fmt.Errorf("token: indexing the token for revocation: %w", err)
 	}
 
+	// A token never outlives its session ceiling. Given its full TTL, a token
+	// minted just before the ceiling would open a session just after it on
+	// the strength of the last proof, and on Junos, which asks once at login
+	// and keeps a session whose authorization is refused, that session would
+	// run until logout (plan 7b final review I-1). The clamp only shortens,
+	// so the index entry written above with the full TTL still outlives it.
 	mintedAt := m.now()
 	expires := mintedAt.Add(ttl)
-	out := Result{ExpiresAt: expires, Username: r.Subject.Username, MintedAt: mintedAt}
+	var sessionExpires time.Time
+	if r.Subject.MaxSessionAge > 0 {
+		sessionExpires = r.Subject.AuthTime.Add(r.Subject.MaxSessionAge)
+		if sessionExpires.Before(expires) {
+			expires = sessionExpires
+			ttl = expires.Sub(mintedAt)
+		}
+	}
+	out := Result{ExpiresAt: expires, Username: r.Subject.Username, MintedAt: mintedAt,
+		SessionExpiresAt: sessionExpires}
 	var hashes []string
 
 	mint := func(kind string) (string, error) {

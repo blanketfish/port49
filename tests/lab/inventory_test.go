@@ -325,6 +325,7 @@ func (l *lab) serviceConfig(t *testing.T, li *labInventory, policy string) strin
   client_ca_file: %[1]s/%[4]s
   policy_file: %[5]s
   revocations_file: %[13]s
+  certificate_status: {disabled: true}
   policy_watch_interval: 1s
 inventory:
   service:

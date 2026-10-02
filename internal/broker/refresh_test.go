@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -83,6 +84,9 @@ func (f *fixture) login(t *testing.T, principal, device, username string) store.
 	c := store.Context{CtxID: "ctx-" + device + "-" + username, Principal: principal, Username: username, PrivLvl: 15,
 		BlobHash: tok.BlobHash, MaxPrivilege: tok.MaxPrivilege, Enable: tok.Enable, AuthTime: f.now,
 		CreatedAt: f.now, RefreshedAt: f.now}
+	if tok.MaxSessionAge > 0 { // the token's ceiling, as the daemon's redeem writes it
+		c.SessionExpires = c.AuthTime.Add(tok.MaxSessionAge)
+	}
 	if err := f.st.PutContext(ctx, k, c, 12*time.Hour); err != nil {
 		t.Fatal(err)
 	}
@@ -801,6 +805,20 @@ func TestAShortenedTokenTTLSupersedesTokens(t *testing.T) {
 	}
 }
 
+// A role whose ceiling was shortened supersedes the tokens minted under the
+// longer one; a lengthened one does not (decision 33's shorten-only rule,
+// carried to tokens as token_ttl's is).
+func TestAShortenedCeilingSupersedesTokens(t *testing.T) {
+	long := minted{username: "a", ttl: time.Minute, age: 8 * time.Hour}
+	short := long
+	short.age = time.Hour
+	never := long
+	never.age = 0
+	if long.keeps(short) || !short.keeps(long) || never.keeps(long) || !long.keeps(never) {
+		t.Fatal("keeps must refuse a token whose ceiling is longer than the policy in force allows")
+	}
+}
+
 // A subject whose username changed can no longer mint under the name the
 // context is keyed by, so the context is revoked, and the record names no
 // grant: none selects this key any more.
@@ -896,9 +914,10 @@ func TestASettlePassComparesNoPolicyWithItself(t *testing.T) {
 	f := newFixture(t, 8)
 	mints := 0
 	was := mintedFor
-	mintedFor = func(p *policy.Policy, principal string, d admission.Device, at time.Time) (minted, bool) {
+	mintedFor = func(p *policy.Policy, principal string, d admission.Device, at time.Time,
+		def time.Duration) (minted, bool) {
 		mints++
-		return was(p, principal, d, at)
+		return was(p, principal, d, at, def)
 	}
 	t.Cleanup(func() { mintedFor = was })
 	if _, err := f.b.Refresh(context.Background(), []Prior{{Policy: f.b.Policy.Load(), At: f.now}}); err != nil {
@@ -1275,5 +1294,147 @@ func TestARefusedDeviceIsNoGrantsMatchedToACallerWithNoGrant(t *testing.T) {
 		if it.Verdict != "deny" || it.Reason != "no_grants_matched" {
 			t.Fatalf("%s: %+v", dev, it)
 		}
+	}
+}
+
+// A role shortened in the policy shortens every live context's ceiling at
+// the next refresh, and says so on the record; one lengthened does not
+// (decision 33).
+func TestAPolicyRefreshShortensALiveCeiling(t *testing.T) {
+	f := newFixture(t, 8) // alice's login on leaf1 carries the 12h default
+	before := f.login(t, alice, "leaf1", "alice")
+	f.log.Reset()
+	// The edit rewrites the context (its bundle is new), but not its ceiling.
+	priors := f.reload(t, edit(t, `permit: ["**"]}`, `permit: ["**"], max_session_age: 24h}`,
+		`deny: ["reload **"]}`, `deny: ["reload **"], max_session_age: 24h}`))
+	if _, err := f.b.Refresh(context.Background(), priors); err != nil {
+		t.Fatal(err)
+	}
+	recs := eventsOf(f.records(t), "refresh")
+	if c := f.context(t, "leaf1", "alice"); !c.SessionExpires.Equal(before.SessionExpires) || len(recs) != 1 ||
+		recs[0]["session"].(map[string]any)["session_expires"] != nil {
+		t.Fatalf("a lengthened ceiling waits for a fresh authentication: %v, %v", c.SessionExpires, recs)
+	}
+	f.log.Reset()
+	priors = f.reload(t, edit(t, `permit: ["**"]}`, `permit: ["**"], max_session_age: 1h}`))
+	rep, err := f.b.Refresh(context.Background(), priors)
+	if err != nil || rep.Updated != 1 {
+		t.Fatalf("%+v %v", rep, err)
+	}
+	c := f.context(t, "leaf1", "alice")
+	if !c.SessionExpires.Equal(c.AuthTime.Add(time.Hour)) {
+		t.Fatalf("session_expires %v, auth_time %v", c.SessionExpires, c.AuthTime)
+	}
+	recs = eventsOf(f.records(t), "refresh")
+	if len(recs) != 1 || recs[0]["session"].(map[string]any)["session_expires"] == nil {
+		t.Fatalf("the record does not say the ceiling moved: %v", recs)
+	}
+}
+
+// liveContextOn writes alice's leaf1 context under device too, indexed under
+// her: a context the mint would refuse, as on a device with no platform.
+func (f *fixture) liveContextOn(t *testing.T, device, username string) {
+	t.Helper()
+	ctx := context.Background()
+	c := f.context(t, "leaf1", username)
+	c.CtxID = "ctx-" + device + "-" + username
+	if err := f.st.PutContext(ctx, store.ContextKey{NAS: device, Username: username}, c, 12*time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.IndexContext(ctx, c.Principal, "", "", store.ContextRef{NAS: device, Username: username},
+		12*time.Hour); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A refresh record for a context on a platform that never asks about a
+// command says unreached (decision 21; carried from plan 7a).
+func TestARefreshRecordNamesAnUnreachedContext(t *testing.T) {
+	f := newFixture(t, 8)
+	f.login(t, alice, "leaf1", "alice")
+	f.liveContextOn(t, "bare", "alice") // no platform: assumed out of reach, as the revocation assumes
+	if _, err := f.b.Refresh(context.Background(), f.reload(t, edit(t, `permit: ["**"]`, `permit: ["show **"]`))); err != nil {
+		t.Fatal(err)
+	}
+	recs := eventsOf(f.records(t), "refresh")
+	if len(recs) != 2 {
+		t.Fatalf("one record per context: %v", recs)
+	}
+	// leaf1 is arista_eos, which authorizes commands: its record is reached.
+	for _, rec := range recs {
+		s := rec["session"].(map[string]any)
+		if (rec["device"].(map[string]any)["name"] == "bare") != (s["unreached"] == true) {
+			t.Fatalf("unreached on the wrong record: %v", rec)
+		}
+	}
+}
+
+// A context the policy in force leaves as it is has no record to mark
+// unreached, on a platform that never asks about a command or any other
+// (pre-flight I13).
+func TestAnUnchangedContextDoesNotPanic(t *testing.T) {
+	f := newFixture(t, 8)
+	f.login(t, alice, "leaf1", "alice")
+	f.log.Reset()
+	rep, err := f.b.Refresh(context.Background(), f.reload(t, testPolicy))
+	if err != nil || rep.Unchanged != 1 || rep.Updated != 0 {
+		t.Fatalf("%+v %v", rep, err)
+	}
+	if recs := eventsOf(f.records(t), "refresh"); len(recs) != 0 {
+		t.Fatalf("an unchanged context is recorded: %v", recs)
+	}
+}
+
+// A context with no AuthTime to anchor a ceiling to is written at the next
+// refresh even when nothing else changed, so the store fails it closed with a
+// ceiling in the distant past (review M-1).
+func TestAContextWithNoAuthTimeIsFailedClosed(t *testing.T) {
+	f := newFixture(t, 8)
+	c := f.login(t, alice, "leaf1", "alice")
+	c.AuthTime, c.SessionExpires = time.Time{}, time.Time{}
+	if err := f.st.PutContext(context.Background(), store.ContextKey{NAS: "leaf1", Username: "alice"}, c,
+		12*time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := f.b.Refresh(context.Background(), f.reload(t, testPolicy))
+	if err != nil || rep.Updated != 1 {
+		t.Fatalf("%+v %v", rep, err)
+	}
+	if got := f.context(t, "leaf1", "alice"); got.SessionExpires.IsZero() || got.SessionExpires.After(f.now) {
+		t.Fatalf("session_expires %v: not failed closed", got.SessionExpires)
+	}
+}
+
+// blobTTLStore records the TTL of every blob written.
+type blobTTLStore struct {
+	store.Store
+	mu   sync.Mutex
+	ttls map[string]time.Duration
+}
+
+func (s *blobTTLStore) PutBlob(ctx context.Context, hash string, body []byte, ttl time.Duration) error {
+	s.mu.Lock()
+	s.ttls[hash] = ttl
+	s.mu.Unlock()
+	return s.Store.PutBlob(ctx, hash, body, ttl)
+}
+
+// A refresh keeps the blob it writes as long as the context naming it can
+// live, as a mint does: with context_idle_ttl above max_session_age_default,
+// an idle context must not outlive its blob and be denied blob_unavailable
+// (final review M-4).
+func TestARefreshKeepsItsBlobAsLongAsTheContext(t *testing.T) {
+	f := newFixture(t, 8)
+	f.login(t, alice, "leaf1", "alice")
+	f.b.ContextIdleTTL = 48 * time.Hour
+	rec := &blobTTLStore{Store: f.st, ttls: map[string]time.Duration{}}
+	f.b.Store = rec
+	priors := f.reload(t, edit(t, roleList, readOnly, aliceGrant, "roles: [read_only], max_privilege: admin"))
+	if rep, err := f.b.Refresh(context.Background(), priors); err != nil || rep.Updated != 1 {
+		t.Fatalf("report %+v err %v", rep, err)
+	}
+	after := f.context(t, "leaf1", "alice")
+	if ttl := rec.ttls[after.BlobHash]; ttl < f.b.ContextIdleTTL {
+		t.Fatalf("the refreshed blob is kept %v, under context_idle_ttl %v", ttl, f.b.ContextIdleTTL)
 	}
 }

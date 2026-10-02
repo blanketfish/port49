@@ -54,6 +54,33 @@ type Resolution struct {
 	// Projection is the session reply's projection of the rules on a
 	// projected platform (spec §8), and what it reports: nil elsewhere.
 	Projection *projection.Result
+	// SessionAge is the roles' max_session_age, which the broker reads with
+	// port49d's default (SessionAge.Of).
+	SessionAge SessionAge
+}
+
+// SessionAge is the max_session_age the roles composing on a device declare
+// (spec §5.6): Least is the least finite one, zero when none declares a
+// finite one; Unset is whether some role declares none and takes the
+// default; Never is whether every role says never. The zero value takes the
+// default, so a SessionAge no composition filled fails closed.
+type SessionAge struct {
+	Least time.Duration
+	Unset bool
+	Never bool
+}
+
+// Of is the ceiling given port49d's default: the least across the roles, a
+// role declaring none taking def; zero, never, only when every role says
+// never.
+func (a SessionAge) Of(def time.Duration) time.Duration {
+	switch {
+	case a.Never:
+		return 0
+	case a.Least == 0 || a.Unset && def < a.Least:
+		return def
+	}
+	return a.Least
 }
 
 // AttributeSource is one attribute of the session reply and its provenance:
@@ -132,6 +159,15 @@ func (p *Policy) resolved(sub *Subject, d admission.Device, c composition) (Reso
 		}
 		res.Grants = append(res.Grants, pg)
 	}
+	for _, name := range c.roles {
+		switch age := p.roles[name].MaxSessionAge; {
+		case age == nil:
+			res.SessionAge.Unset = true
+		case *age > 0 && (res.SessionAge.Least == 0 || *age < res.SessionAge.Least):
+			res.SessionAge.Least = *age
+		}
+	}
+	res.SessionAge.Never = len(c.roles) > 0 && res.SessionAge.Least == 0 && !res.SessionAge.Unset
 	dialect := p.dialect(d.Platform)
 	res.LeftOff = p.leftOffAttributes(c, dialect)
 	if c.ceiling != "" {

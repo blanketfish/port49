@@ -126,12 +126,30 @@ const scopeOK = "scopes:\n  - {name: all_devices, match: {}}\n"
 const subjOK = "subjects:\n  - {name: s, identity: [\"user:a@example.com\"], username: a, token_ttl: 60s}\n"
 const grantOK = "grants:\n  - {subject: s, scope: all_devices, roles: [r]}\n"
 
+// A role's max_session_age is a duration of at least a minute, or never;
+// anything else refuses the policy, naming the role (spec §5.6; decision 33).
+func TestARolesMaxSessionAgeIsADurationOrNever(t *testing.T) {
+	base := "scopes: [{name: all_devices, match: {}}]\n" +
+		"subjects: [{name: s, identity: [\"user:a@example.com\"], username: a, token_ttl: 60s}]\n" +
+		"grants: [{subject: s, scope: all_devices, roles: [r]}]\n"
+	for value, ok := range map[string]bool{"8h": true, "never": true, "1m": true, "30s": false, "soon": false,
+		"\"\"": false, "-1h": false} {
+		_, err := Parse([]byte(base+"roles: [{name: r, privilege: admin, permit: [\"**\"], max_session_age: "+value+"}]\n"), env())
+		if ok != (err == nil) {
+			t.Errorf("max_session_age %s: %v", value, err)
+		}
+		if err != nil && !strings.Contains(err.Error(), `role "r"`) {
+			t.Errorf("%s: the refusal names no role: %v", value, err)
+		}
+	}
+}
+
 // Every refusal names what is wrong and, where another plan owns the key, which
 // plan lifts it.
 func TestLoadRefusesByName(t *testing.T) {
 	for _, tt := range []struct{ name, yaml, want string }{
 		{"a platform set this binary does not ship", "platform_set: 1.4.0\n" + roleOK + subjOK, "it ships 1.0.0"},
-		{"a role's max_session_age", "roles:\n  - {name: r, max_session_age: 8h}\n" + subjOK, "plan 7"},
+		{"a null max_session_age", "roles:\n  - {name: r, max_session_age: null}\n" + subjOK, `role "r": max_session_age is null`},
 		{"an unknown key", scopeOK + roleOK + subjOK + "gratns: []\n", "line 7: an unknown field in type policy.file"},
 		{"an acknowledgment of two shapes", scopeOK + roleOK + subjOK +
 			"acknowledge: [{role: r, rule: x, platform: arista_eos, field: supports, reason: y}]\n", "one of the two"},
@@ -219,7 +237,7 @@ func TestLoadRefusesByName(t *testing.T) {
 			"grants[1] (subject s, scope all_devices) repeats grants[0]"},
 		{"a role twice in one grant", scopeOK + roleOK + subjOK + "grants:\n  - {subject: s, scope: all_devices, roles: [r, r]}\n", "listed twice"},
 		{"a null match value", "scopes:\n  - {name: x, match: {site: null}}\n" + subjOK, "a match value is a string"},
-		{"an unnamed role's max_session_age", "roles:\n  - {max_session_age: 8h}\n" + subjOK, "roles[0]: max_session_age"},
+		{"an unnamed role's null max_session_age", "roles:\n  - {max_session_age: }\n" + subjOK, "roles[0]: max_session_age is null"},
 		{"the reserved levels reordered", "privilege_levels: [{name: admin}, {name: operator}, {name: readonly}]\n" + subjOK, "keep their order: readonly, then operator, then admin"},
 		{"two reserved levels swapped", "privilege_levels: [{name: readonly}, {name: admin}, {name: x}, {name: operator}]\n" + subjOK, "keep their order"},
 		{"a level ordered before its parent", "privilege_levels: [{name: readonly}, {name: x, parent: operator}, {name: operator}, {name: admin}]\n" + subjOK, "after its parent"},

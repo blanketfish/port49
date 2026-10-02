@@ -54,10 +54,17 @@ func (f *fixture) live(t *testing.T, device string) int {
 // answer is a response for a failure message: its status, and its body
 // unless that is a 200's, which carries tokens test output never prints.
 func answer(w *httptest.ResponseRecorder) string {
-	if w.Code == http.StatusOK {
-		return "200 (body withheld: it carries tokens)"
+	return reply(w.Code, w.Body.String())
+}
+
+// reply is answer for a status and body read off a connection. A 200 is a
+// mint's tokens or a refresh challenge's nonce, and neither is printed
+// (plan 7b final review M-1).
+func reply(status int, body string) string {
+	if status == http.StatusOK {
+		return "200 (body withheld: it carries tokens or a challenge)"
 	}
-	return fmt.Sprintf("%d %s", w.Code, w.Body.String())
+	return fmt.Sprintf("%d %s", status, body)
 }
 
 // pausedStore holds the first call to one store method — PutToken on one

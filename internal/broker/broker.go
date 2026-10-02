@@ -50,8 +50,8 @@ const (
 )
 
 // Broker is the slice's broker. Every field is required but Redact, Sessions
-// (which only Revoke needs, and refuses without), Conns, Persist and
-// RevokeTimeout.
+// (which only Revoke needs, and refuses without), Conns, Persist,
+// RevokeTimeout, CertStatus and OnUnavailable.
 type Broker struct {
 	// Policy is the policy in force. port49d swaps it when the file changes
 	// (plan 4b), and a request resolves against the one version it held from
@@ -64,6 +64,14 @@ type Broker struct {
 	Now           func() time.Time
 	MaxSessionAge time.Duration
 	BatchMax      int
+	// CeilingWarning is session.ceiling_warning, told to the agent by
+	// /v1/config so `port49 token` warns too (plan 7b).
+	CeilingWarning time.Duration
+	// ContextIdleTTL is the idle lifetime a refreshed context is extended to,
+	// and GraceWindow how long past its ceiling a refresh may still resume
+	// one (spec §5.6): port49d's context_idle_ttl and session.grace_window.
+	ContextIdleTTL time.Duration
+	GraceWindow    time.Duration
 	// Redact is the redaction the blob event's rule text passes through
 	// before it is logged (spec §5.8): port49d passes the policy in force's.
 	// Nil is the built-in patterns.
@@ -83,6 +91,17 @@ type Broker struct {
 	// DefaultRevokeTimeout.
 	RevokeTimeout time.Duration
 
+	// CertStatus answers a certificate chain's revocation status (spec
+	// §5.1.4; decision 33): nil checks nothing, port49d's `disabled: true`.
+	// OnUnavailable is "refuse" or "allow", for a status it cannot establish.
+	CertStatus    StatusChecker
+	OnUnavailable string
+
+	// queueOnce makes revokeQueue, the certificates a CRL or a refusal
+	// named, waiting for RunRevocationQueue (OnCRLEntry).
+	queueOnce   sync.Once
+	revokeQueue chan queuedRevoke
+
 	// revokeSem is a one-slot semaphore serialising Revoke and Lift (M5),
 	// made lazily under mu. A channel, not a mutex, so a caller waiting
 	// behind a hung store call or Persist gives up when its ctx ends.
@@ -100,24 +119,42 @@ type Broker struct {
 	// (token.Request). It holds at most one entry per key the policy has
 	// ever minted for.
 	superseded map[store.TokenKey]time.Time
+	// queued is, by (issuer, serial), each certificate in revokeQueue, and
+	// pending each one a store error or a full queue left for RetryPending.
+	queued  map[[2]string]bool
+	pending map[[2]string]queuedRevoke
+	// said is, by key, when sayOnce last said it.
+	said map[string]time.Time
 }
 
-// Handler routes the two endpoints the slice serves.
+// Handler routes the endpoints the broker serves.
 func (b *Broker) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/config", b.config)
 	mux.HandleFunc("POST /v1/tokens", b.tokens)
+	mux.HandleFunc("POST /v1/refresh/challenge", b.refreshChallenge)
+	mux.HandleFunc("POST /v1/refresh", b.refresh)
 	return mux
 }
 
 // heldConn is one connection's session state (design §7: on the certificate
-// path the agent's session IS the connection). at is when the broker accepted
-// the connection: stamped before the handshake that follows, so never later
-// than the key's use, and it never moves. A first request's time would let a
-// client handshake, idle, and start its session's clock later (plan 3,
-// Decided 2; pre-flight F3).
+// path the agent's session IS the connection). at is when it authenticated:
+// stamped at accept, before the handshake (plan 3, Decided 2), and moved
+// only by a refresh that verified (spec §5.6; decision 33). nonce is the
+// refresh challenge outstanding on it, single use; lastRefresh paces
+// refreshes to one per refreshEvery.
 type heldConn struct {
-	at time.Time
+	mu          sync.Mutex
+	at          time.Time
+	nonce       []byte
+	nonceExp    time.Time
+	lastRefresh time.Time
+}
+
+func (h *heldConn) authAt() time.Time {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.at
 }
 
 type heldConnKey struct{}
@@ -133,15 +170,23 @@ func withHeldConn(ctx context.Context, at time.Time) context.Context {
 // no held-connection state — a handler driven without Server — authenticated
 // now.
 func (b *Broker) authTime(r *http.Request) time.Time {
-	if h, ok := r.Context().Value(heldConnKey{}).(*heldConn); ok {
-		return h.at
+	if h := heldOf(r); h != nil {
+		return h.authAt()
 	}
 	return b.Now()
 }
 
+// heldOf is r's connection's session state, nil for a request driven without
+// Server.
+func heldOf(r *http.Request) *heldConn {
+	h, _ := r.Context().Value(heldConnKey{}).(*heldConn)
+	return h
+}
+
 func (b *Broker) config(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, api.Config{Methods: []string{"x509"},
-		MaxSessionAgeSeconds: int(b.MaxSessionAge / time.Second), BatchMax: b.BatchMax})
+		MaxSessionAgeSeconds: int(b.MaxSessionAge / time.Second), BatchMax: b.BatchMax,
+		CeilingWarningSeconds: int(b.CeilingWarning / time.Second)})
 }
 
 // deviceName reports whether name can be an inventory name: 1 to
@@ -195,6 +240,15 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
 		return
 	case revoked:
 		b.refuseRevoked(w, now, principal, cred, rv)
+		return
+	}
+	statusCtx, cancelStatus := context.WithTimeout(r.Context(), holdTimeout)
+	ref := b.certRefusal(statusCtx, r.TLS, cred)
+	cancelStatus()
+	if ref != nil {
+		b.emit(decision.Record{TS: now, Event: decision.EventMint, Verdict: decision.VerdictDeny, Reason: ref.Reason,
+			Principal: principal, Auth: &decision.Auth{Method: cred.Method, Fingerprint: cred.Fingerprint}})
+		b.answerRefusal(w, r, ref)
 		return
 	}
 
@@ -392,7 +446,16 @@ func (b *Broker) revocation(ctx context.Context, principal string, cred store.Cr
 // §5.7), and answerRevoked.
 func (b *Broker) refuseRevoked(w http.ResponseWriter, now time.Time, principal string, cred store.Credential,
 	rv store.Revocation) {
-	b.emit(revokedRecord(now, principal, cred))
+	b.refuseRevokedAs(w, decision.EventMint, now, principal, cred, rv)
+}
+
+// refuseRevokedAs is refuseRevoked with the record's event given: a refresh
+// under a mark is recorded as a refresh (pre-flight M2).
+func (b *Broker) refuseRevokedAs(w http.ResponseWriter, event string, now time.Time, principal string,
+	cred store.Credential, rv store.Revocation) {
+	rec := revokedRecord(now, principal, cred)
+	rec.Event = event
+	b.emit(rec)
 	answerRevoked(w, rv)
 }
 
@@ -404,12 +467,15 @@ func revokedRecord(now time.Time, principal string, cred store.Credential) decis
 		Auth: &decision.Auth{Method: cred.Method, Fingerprint: cred.Fingerprint}}
 }
 
-// RefusedAtBind records a request the broker's listener refused
-// credential_revoked, its connection's principal or certificate marked
-// (Listener.Refused): the same one mint deny record a mint under the mark
-// writes, counted in port49_decisions (spec §5.7).
-func (b *Broker) RefusedAtBind(principal string, cred store.Credential) {
-	b.emit(revokedRecord(b.Now(), principal, cred))
+// RefusedAtBind records a request the broker's listener refused as its
+// connection bound (Listener.Refused): credential_revoked for a mark on its
+// principal or certificate, or the reason its certificate's status gave.
+// It is the same one mint deny record a mint refused so writes, counted in
+// port49_decisions (spec §5.7).
+func (b *Broker) RefusedAtBind(principal string, cred store.Credential, reason decision.Reason) {
+	rec := revokedRecord(b.Now(), principal, cred)
+	rec.Reason = reason
+	b.emit(rec)
 }
 
 // answerRevoked is the 401 credential_revoked, with the connection closed
@@ -561,12 +627,22 @@ func (b *Broker) mintOne(ctx context.Context, pol *policy.Policy, principal stri
 		b.logf("broker: the policy for %s on %q compiled to a blob the daemon would refuse: %s", principal, name, detail)
 		return b.fault(name, "broker_error", "the broker could not compile this device's policy; tell the operator"), nil
 	}
+	// The device's ceiling is the least of its roles' (spec §5.6). One that
+	// has passed since this connection authenticated would mint a token for a
+	// context born expired: refused for this device alone, and `port49
+	// refresh` resumes it (decision 33).
+	age := res.SessionAge.Of(b.MaxSessionAge)
+	if age > 0 && !b.Now().Before(authTime.Add(age)) {
+		item := deny(decision.SessionExpired, dev.Platform)
+		item.Detail = "this device's session ceiling has passed since you authenticated; run 'port49 refresh'"
+		return item, nil
+	}
 	body, hash, err := engine.Encode(res.Blob)
 	if err != nil {
 		b.logf("broker: the policy for %s on %q compiled to a blob the daemon would refuse: %v", principal, name, err)
 		return b.fault(name, "broker_error", "the broker could not compile this device's policy; tell the operator"), nil
 	}
-	if err := b.putBlob(ctx, hash, body); err != nil {
+	if err := b.putBlob(ctx, hash, body, blobTTL(age, b.MaxSessionAge)); err != nil {
 		return deny(decision.StoreUnavailable, dev.Platform), nil
 	}
 	b.mu.Lock()
@@ -574,7 +650,7 @@ func (b *Broker) mintOne(ctx context.Context, pol *policy.Policy, principal stri
 	b.mu.Unlock()
 	out, err := b.Minter.Mint(ctx, token.Request{
 		Subject: token.Subject{Principal: principal, Username: res.Username, TokenTTL: res.TokenTTL,
-			Enable: res.Enable, MaxPrivilege: res.MaxPrivilege, MaxSessionAge: b.MaxSessionAge,
+			Enable: res.Enable, MaxPrivilege: res.MaxPrivilege, MaxSessionAge: age,
 			Credential: cred, AuthTime: authTime},
 		Device: name, Platform: dev.Platform, BlobHash: hash, WithEnable: req.Enable,
 		TTL:         time.Duration(req.TTLSeconds) * time.Second,
@@ -586,6 +662,14 @@ func (b *Broker) mintOne(ctx context.Context, pol *policy.Policy, principal stri
 		return api.MintItem{}, err
 	case errors.As(err, &capped):
 		return deny(decision.CandidateCapReached, dev.Platform), nil
+	case errors.Is(err, token.ErrSessionExpired):
+		// The ceiling passed between the check above and the mint.
+		item := deny(decision.SessionExpired, dev.Platform)
+		item.Detail = "this device's session ceiling has passed since you authenticated; run 'port49 refresh'"
+		return item, nil
+	case errors.Is(err, token.ErrNoAuthTime):
+		b.logf("broker: minting for %s on %q: %v", principal, name, err)
+		return b.fault(name, "broker_error", "the broker could not mint for this device; tell the operator"), nil
 	case err != nil:
 		return deny(decision.StoreUnavailable, dev.Platform), nil
 	}
@@ -595,12 +679,28 @@ func (b *Broker) mintOne(ctx context.Context, pol *policy.Policy, principal stri
 	item := api.MintItem{Device: name, Verdict: decision.VerdictPermit, Platform: dev.Platform,
 		Username: out.Username, Login: out.Login, Enable: out.Enable, ExpiresAt: out.ExpiresAt.UTC().Format(time.RFC3339),
 		Replayed: out.Replayed}
+	// A replay answers with the ceiling of the tokens it returns, which
+	// their connection's authentication set. A record written before the
+	// minter kept it has none, and is answered with this connection's.
+	switch {
+	case !out.SessionExpiresAt.IsZero():
+		item.SessionExpiresAt = out.SessionExpiresAt.UTC().Format(time.RFC3339)
+	case age > 0:
+		item.SessionExpiresAt = authTime.Add(age).UTC().Format(time.RFC3339)
+	}
 	if len(dev.Addresses) > 0 {
 		// A fact from the source of truth; the client must not trust it
 		// further than an SSH host key (design §17).
 		item.Address = dev.Addresses[0].String()
 	}
 	return item, nil
+}
+
+// blobTTL is how long a minted blob is kept: as long as the longest context
+// it can back at mint (decision 19). A `never` context keeps it alive by
+// the daemon's bump on activity (plan 7b, Task 6).
+func blobTTL(age, def time.Duration) time.Duration {
+	return max(age, def)
 }
 
 // fault is an item the broker could not decide: its own error, not a
@@ -613,12 +713,12 @@ func (b *Broker) fault(name, code, detail string) api.MintItem {
 
 // putBlob writes an encoded blob under its hash and emits it into the log the
 // first time this process writes it (spec §5.1.1; §13, decision 19). Its store
-// TTL is max_session_age: a context's session_expires is its auth_time plus
-// that, and auth_time is never later than the mint, so no context this blob
-// backs can outlive it. PutBlob keeps the later expiry, so a re-put never
-// shortens it. A blob is emitted once per process, and the log's first copy
-// serves every later re-put, including one after the store's copy expired
-// (plan 3, Decided 8).
+// TTL is ttl, at least the ceiling of any context it backs (blobTTL): a
+// context's session_expires is its auth_time plus that, and auth_time is never
+// later than the mint, so no context this blob backs can outlive it. PutBlob
+// keeps the later expiry, so a re-put never shortens it. A blob is emitted
+// once per process, and the log's first copy serves every later re-put,
+// including one after the store's copy expired (plan 3, Decided 8).
 //
 // The emit happens under b.mu, so a second request for the same hash cannot
 // return from putBlob, and so cannot reach Mint, until the blob record is
@@ -631,8 +731,8 @@ func (b *Broker) fault(name, code, detail string) api.MintItem {
 // and a mint record naming a blob the log never carried cannot be replayed.
 // The refusal is counted by port49_decision_log_write_failures_total. An
 // Emitter that cannot report a refusal is trusted, as before.
-func (b *Broker) putBlob(ctx context.Context, hash string, body []byte) error {
-	if err := b.Store.PutBlob(ctx, hash, body, b.MaxSessionAge); err != nil {
+func (b *Broker) putBlob(ctx context.Context, hash string, body []byte, ttl time.Duration) error {
+	if err := b.Store.PutBlob(ctx, hash, body, ttl); err != nil {
 		return err
 	}
 	b.mu.Lock()

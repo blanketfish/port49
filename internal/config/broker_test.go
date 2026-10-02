@@ -15,6 +15,7 @@ const brokerBlock = `broker:
   client_ca_file: /etc/port49/clients-ca.pem
   policy_file: /etc/port49/policy.yaml
   revocations_file: /var/lib/port49/revocations.json
+  certificate_status: {disabled: true}
 `
 
 func loadWith(t *testing.T, extra string) (Config, error) {
@@ -151,5 +152,123 @@ func TestTheRevocationsFileIsNotAServiceTrustFile(t *testing.T) {
 	if _, err := loadService(t, false, false, b+strings.Replace(block, "/etc/port49/port49d.pem",
 		"/etc/port49/port49d.created", 1)); err == nil || !strings.Contains(err.Error(), "marker") {
 		t.Errorf("a marker that is the service's certificate: %v", err)
+	}
+}
+
+// withStatus is brokerBlock with block in place of its certificate_status.
+func withStatus(block string) string {
+	return strings.Replace(brokerBlock, "  certificate_status: {disabled: true}\n", block, 1)
+}
+
+const goodStatus = `  certificate_status:
+    crls:
+      - {name: corp_issuing, url: http://pki.example.com/corp.crl, issuer_file: /etc/port49/corp-issuing-ca.pem}
+      - {name: corp_root, file: /etc/port49/root.crl, issuer_file: /etc/port49/clients-ca.pem}
+    ocsp: {responder: http://ocsp.example.com}
+`
+
+// broker.certificate_status is required with a broker, and each refusal
+// names its key (plan 7b; spec §5.1.4).
+func TestTheCertificateStatusBlockIsChecked(t *testing.T) {
+	crl := func(entry string) string {
+		return "  certificate_status:\n    crls:\n      - " + entry + "\n"
+	}
+	for _, c := range []struct{ name, block, key string }{
+		{"absent", "", "broker.certificate_status is required"},
+		{"disabled beside a CRL", "  certificate_status:\n    disabled: true\n    crls: [{name: a, file: /a.crl, " +
+			"issuer_file: /a.pem}]\n", "broker.certificate_status.disabled"},
+		{"disabled beside OCSP", "  certificate_status: {disabled: true, ocsp: {use_aia: true}}\n",
+			"broker.certificate_status.disabled"},
+		{"disabled beside on_unavailable", "  certificate_status: {disabled: true, on_unavailable: allow}\n",
+			"beside broker.certificate_status.on_unavailable,"},
+		{"disabled beside refresh_interval and an empty crls", "  certificate_status: {disabled: true, " +
+			"refresh_interval: 1h, crls: []}\n", "beside broker.certificate_status.crls, " +
+			"broker.certificate_status.refresh_interval,"},
+		{"no source", "  certificate_status: {refresh_interval: 10m}\n", "broker.certificate_status:"},
+		{"file and url", crl("{name: a, file: /a.crl, url: http://x/a.crl, issuer_file: /a.pem}"),
+			"broker.certificate_status.crls[0]"},
+		{"neither file nor url", crl("{name: a, issuer_file: /a.pem}"), "broker.certificate_status.crls[0]"},
+		{"no issuer_file", crl("{name: a, file: /a.crl}"), "broker.certificate_status.crls[0].issuer_file"},
+		{"ftp url", crl("{name: a, url: ftp://x/a.crl, issuer_file: /a.pem}"), "broker.certificate_status.crls[0].url"},
+		{"file url", crl("{name: a, url: 'file:///a.crl', issuer_file: /a.pem}"),
+			"broker.certificate_status.crls[0].url"},
+		{"url without a host", crl("{name: a, url: 'http:///a.crl', issuer_file: /a.pem}"),
+			"broker.certificate_status.crls[0].url"},
+		{"no name", crl("{file: /a.crl, issuer_file: /a.pem}"), "broker.certificate_status.crls[0].name"},
+		{"upper case name", crl("{name: Corp, file: /a.crl, issuer_file: /a.pem}"),
+			"broker.certificate_status.crls[0].name"},
+		{"name with a slash", crl("{name: a/../b, file: /a.crl, issuer_file: /a.pem}"),
+			"broker.certificate_status.crls[0].name"},
+		{"name starting with a digit", crl("{name: 1a, file: /a.crl, issuer_file: /a.pem}"),
+			"broker.certificate_status.crls[0].name"},
+		{"name too long", crl("{name: a" + strings.Repeat("b", 64) + ", file: /a.crl, issuer_file: /a.pem}"),
+			"broker.certificate_status.crls[0].name"},
+		{"duplicate name", "  certificate_status:\n    crls:\n      - {name: a, file: /a.crl, issuer_file: /a.pem}\n" +
+			"      - {name: a, file: /b.crl, issuer_file: /b.pem}\n", "broker.certificate_status.crls[1].name"},
+		{"md5", "  certificate_status: {ocsp: {use_aia: true, hash: md5}}\n", "broker.certificate_status.ocsp.hash"},
+		{"refresh 30s", "  certificate_status: {ocsp: {use_aia: true}, refresh_interval: 30s}\n",
+			"broker.certificate_status.refresh_interval"},
+		{"refresh 25h", "  certificate_status: {ocsp: {use_aia: true}, refresh_interval: 25h}\n",
+			"broker.certificate_status.refresh_interval"},
+		{"timeout 50ms", "  certificate_status: {ocsp: {use_aia: true, timeout: 50ms}}\n",
+			"broker.certificate_status.ocsp.timeout"},
+		{"timeout 11s", "  certificate_status: {ocsp: {use_aia: true, timeout: 11s}}\n",
+			"broker.certificate_status.ocsp.timeout"},
+		{"OCSP with no responder", "  certificate_status: {ocsp: {timeout: 2s}}\n", "broker.certificate_status.ocsp"},
+		{"responder not http", "  certificate_status: {ocsp: {responder: 'ldap://x'}}\n",
+			"broker.certificate_status.ocsp.responder"},
+		{"on_unavailable maybe", "  certificate_status: {ocsp: {use_aia: true}, on_unavailable: maybe}\n",
+			"broker.certificate_status.on_unavailable"},
+		{"a kept list over revocations_file", crl("{name: x, file: /a.crl, issuer_file: /a.pem}"),
+			"broker.certificate_status.crls[0].name"},
+	} {
+		block := withStatus(c.block)
+		if c.name == "a kept list over revocations_file" {
+			block = strings.Replace(block, "/var/lib/port49/revocations.json", "/var/lib/port49/crl-x.der", 1)
+		}
+		if _, err := loadWith(t, block); err == nil || !strings.Contains(err.Error(), c.key) {
+			t.Errorf("%s: got %v, want %q", c.name, err, c.key)
+		}
+	}
+}
+
+// A configuration error never repeats a URL, which may carry a credential.
+func TestACertificateStatusRefusalDoesNotEchoTheURL(t *testing.T) {
+	_, err := loadWith(t, withStatus("  certificate_status:\n    crls:\n      - {name: a, "+
+		"url: 'ftp://user:hunter2@x/a.crl?token=s3cret', issuer_file: /a.pem}\n"))
+	if err == nil || strings.Contains(err.Error(), "hunter2") || strings.Contains(err.Error(), "s3cret") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestAWellFormedCertificateStatusLoadsWithItsDefaults(t *testing.T) {
+	c, err := loadWith(t, withStatus(goodStatus))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cs := c.Broker.CertificateStatus
+	if cs == nil || cs.Disabled || len(cs.CRLs) != 2 || cs.CRLs[0].Name != "corp_issuing" ||
+		cs.CRLs[0].URL != "http://pki.example.com/corp.crl" || cs.CRLs[0].IssuerFile != "/etc/port49/corp-issuing-ca.pem" ||
+		cs.CRLs[1].File != "/etc/port49/root.crl" {
+		t.Fatalf("certificate_status: %+v", cs)
+	}
+	if cs.RefreshInterval != 10*time.Minute || cs.OnUnavailable != "refuse" || cs.OCSP == nil ||
+		cs.OCSP.Timeout != 2*time.Second || cs.OCSP.Hash != "sha256" || cs.OCSP.Responder != "http://ocsp.example.com" {
+		t.Fatalf("defaults: %+v %+v", cs, cs.OCSP)
+	}
+	for _, extra := range []string{"    on_unavailable: allow\n", "    refresh_interval: 1m\n", "    refresh_interval: 24h\n"} {
+		if _, err := loadWith(t, withStatus(goodStatus+extra)); err != nil {
+			t.Errorf("%q: %v", extra, err)
+		}
+	}
+	for _, ocsp := range []string{"{use_aia: true, hash: sha1}", "{use_aia: true, timeout: 100ms}",
+		"{responder: 'https://ocsp.example.com/x', timeout: 10s}"} {
+		if _, err := loadWith(t, withStatus("  certificate_status: {ocsp: "+ocsp+"}\n")); err != nil {
+			t.Errorf("ocsp %s: %v", ocsp, err)
+		}
+	}
+	c, err = loadWith(t, brokerBlock)
+	if err != nil || !c.Broker.CertificateStatus.Disabled {
+		t.Fatalf("disabled: %+v %v", c.Broker.CertificateStatus, err)
 	}
 }

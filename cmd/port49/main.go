@@ -32,6 +32,7 @@ import (
 const usage = `usage:
   port49 login --broker URL --cert FILE --key FILE --broker-ca FILE [--socket PATH]
   port49 token [--enable] [--ttl DURATION] [--json] [--socket PATH] DEVICE
+  port49 refresh [--socket PATH]
   port49 explain --policy FILE --inventory FILE (--subject NAME | --principal ID) --device NAME
                  [--command "LINE"] [--show-attributes]
   port49 policy test --policy FILE --inventory FILE [--config PORT49D_YAML]
@@ -75,6 +76,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return login(args[1:], stdout, stderr)
 	case "token":
 		return tokenCmd(args[1:], stdout, stderr)
+	case "refresh":
+		return refreshCmd(args[1:], stdout, stderr)
 	case "agent":
 		// What login starts; not for typing.
 		return agentMain(args[1:], stderr)
@@ -157,6 +160,9 @@ func (s *sessionFlags) config(log io.Writer) (agent.Config, error) {
 // login starts the agent in its own session, detached, and waits until its
 // socket answers. The handshake happens in the agent, so an untrusted
 // certificate fails here (plan 3, Decided 3) and the agent's log says why.
+// With an agent already running it refreshes that agent's session instead
+// (spec §5.6; decision 33), and a new agent refreshes once it answers, so
+// the device sessions an earlier login left are extended either way.
 func login(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("port49 login", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -165,13 +171,36 @@ func login(args []string, stdout, stderr io.Writer) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	if _, err := sf.config(stderr); err != nil {
+	cfg, err := sf.config(stderr)
+	if err != nil {
 		fmt.Fprintln(stderr, "port49 login:", err)
 		return 2
 	}
 	ctx := context.Background()
 	if st, err := agent.NewClient(sf.socket).Status(ctx); err == nil {
-		fmt.Fprintf(stdout, "port49: already logged in to %s; the session ends at %s\n", st.Broker, st.SessionEndsAt)
+		// Only the session these flags name is refreshed. Another broker's,
+		// or another certificate's, is someone else's identity: refreshing
+		// it would extend that identity's device sessions while the
+		// operator believes they switched (anti-escalation).
+		var other string
+		switch {
+		case strings.TrimRight(sf.broker, "/") != st.Broker:
+			other = fmt.Sprintf("an agent logged in to %s", st.Broker)
+		case agent.CertFingerprint(cfg.Cert) != st.CertFingerprint:
+			other = fmt.Sprintf("an agent for %s with another certificate", st.Broker)
+		}
+		if other != "" {
+			fmt.Fprintf(stderr, "port49 login: %s already holds %s; run 'port49 refresh' to extend that session, "+
+				"stop that agent first, or use --socket\n", other, sf.socket)
+			return 1
+		}
+		fmt.Fprintf(stdout, "port49: already logged in to %s; refreshing\n", st.Broker)
+		out, err := agent.NewClient(sf.socket).Refresh(ctx)
+		if err != nil {
+			fmt.Fprintln(stderr, "port49 login: refreshing the running agent's session:", unprefixed(err))
+			return 1
+		}
+		printRefresh(stdout, out)
 		return 0
 	}
 	dir := filepath.Dir(sf.socket)
@@ -211,6 +240,14 @@ func login(args []string, stdout, stderr io.Writer) int {
 		if st, err := agent.NewClient(sf.socket).Status(ctx); err == nil {
 			fmt.Fprintf(stdout, "port49: logged in to %s; the session ends at %s (agent pid %d, log %s)\n",
 				st.Broker, st.SessionEndsAt, cmd.Process.Pid, logPath)
+			// The session is up whatever the refresh does: a failure is
+			// said, and the login still succeeds.
+			if out, err := agent.NewClient(sf.socket).Refresh(ctx); err != nil {
+				fmt.Fprintln(stderr, "port49 login: logged in, but the refresh of your live device sessions failed:",
+					unprefixed(err))
+			} else {
+				printRefresh(stdout, out)
+			}
 			return 0
 		}
 	}
@@ -254,16 +291,27 @@ func agentMain(args []string, stderr io.Writer) int {
 	go func() { _ = srv.Serve(ln) }()
 	fmt.Fprintf(stderr, "port49 agent: connected to %s; the session ends at %s (max_session_age %ds)\n",
 		sf.broker, a.SessionEndsAt().UTC().Format(time.RFC3339), conf.MaxSessionAgeSeconds)
-	timer := time.NewTimer(time.Until(a.SessionEndsAt()))
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		fmt.Fprintln(stderr, "port49 agent: signal received; exiting")
-	case <-timer.C:
-		fmt.Fprintln(stderr, "port49 agent: the session reached max_session_age; exiting - run `port49 login` to start another")
-	case <-a.Done():
-		// The agent logged the broker's reason on the line before this one.
-		fmt.Fprintln(stderr, "port49 agent: exiting - run `port49 login` to start another session")
+	// A refresh moves the deadline, so the timer is re-armed on each one
+	// (pre-flight I6).
+	for {
+		timer := time.NewTimer(time.Until(a.SessionEndsAt()))
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			fmt.Fprintln(stderr, "port49 agent: signal received; exiting")
+		case <-a.DeadlineChanged():
+			timer.Stop()
+			fmt.Fprintf(stderr, "port49 agent: refreshed; the session now ends at %s\n",
+				a.SessionEndsAt().UTC().Format(time.RFC3339))
+			continue
+		case <-timer.C:
+			fmt.Fprintln(stderr, "port49 agent: the session reached max_session_age; exiting - run `port49 login` to start another")
+		case <-a.Done():
+			timer.Stop()
+			// The agent logged the broker's reason on the line before this one.
+			fmt.Fprintln(stderr, "port49 agent: exiting - run `port49 login` to start another session")
+		}
+		break
 	}
 	_ = srv.Close()
 	return 0
@@ -310,7 +358,13 @@ func tokenCmd(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	if item.Verdict != "permit" {
-		fmt.Fprintf(stderr, "port49 token: %s: %s %s\n", device, item.Verdict, item.Reason)
+		// The item's detail, when it has one, says what to do: a session
+		// past its ceiling is told to refresh (pre-flight M12).
+		detail := ""
+		if item.Detail != "" {
+			detail = ": " + item.Detail
+		}
+		fmt.Fprintf(stderr, "port49 token: %s: %s %s%s\n", device, item.Verdict, item.Reason, detail)
 		return 1
 	}
 	if item.Login == "" {
@@ -318,12 +372,37 @@ func tokenCmd(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "port49 token: %s: the broker answered permit with no token\n", device)
 		return 1
 	}
+	// The device's own ceiling, said where the operator is looking, for a
+	// platform that does not show the server_msg warning (decision 33). On
+	// stderr, so --json's stdout stays one object (pre-flight M12). Placed
+	// before the --json and plain prints, so both get it.
+	if exp, err := time.Parse(time.RFC3339, item.SessionExpiresAt); err == nil {
+		if st, err := agent.NewClient(*socket).Status(context.Background()); err == nil && st.CeilingWarningSeconds > 0 {
+			if left := time.Until(exp); left <= time.Duration(st.CeilingWarningSeconds)*time.Second {
+				fmt.Fprintf(stderr, "port49: your session on %s ends at %s (%s); run 'port49 refresh'\n",
+					device, item.SessionExpiresAt, timeLeft(left))
+			}
+		}
+	}
 	if *asJSON {
 		_ = json.NewEncoder(stdout).Encode(item)
 		return 0
 	}
 	fmt.Fprintln(stdout, item.Login)
 	return 0
+}
+
+// timeLeft is d to the minute as the operator reads it: "in 29m", "in 1h5m".
+// An expiry already past, as a permit inside the grace window can carry, is
+// said so.
+func timeLeft(d time.Duration) string {
+	switch {
+	case d <= 0:
+		return "already past"
+	case d < time.Minute:
+		return "in under a minute"
+	}
+	return "in " + strings.TrimSuffix(d.Round(time.Minute).String(), "0s")
 }
 
 func lastLines(s string, n int) string {

@@ -101,6 +101,17 @@ type Session struct {
 	// line that says why (spec §5.3). Privilege above is the START level,
 	// not the context's.
 	PrivilegeClamped *PrivilegeClamp `json:"privilege_clamped,omitempty"`
+	// AuthTime and SessionExpires are on a refresh record that moved them:
+	// a session refresh's new authentication and ceiling, or a policy
+	// refresh's shortened ceiling (spec §5.6, §5.7). SessionExpires is also
+	// on a redeem refused `session_expired`: the ceiling that refused it.
+	// Rendered as ts is.
+	AuthTime       string `json:"auth_time,omitempty"`
+	SessionExpires string `json:"session_expires,omitempty"`
+	// Unreached is a refresh record's context on a platform that never asks
+	// about a command, or on a device the inventory gives no platform: the
+	// live session keeps what it had (spec §13, decision 21).
+	Unreached bool `json:"unreached,omitempty"`
 	// Port and RemAddr are as seen on this exchange, which is not necessarily
 	// what the context recorded: they are part of no key (spec §13,
 	// decision 15).

@@ -1,0 +1,25 @@
+# Plan 7b's session run: a ceiling short enough to wait out, with room either side of a 2m
+# warning. This is tests/lab/slice/policy.yaml with `max_session_age: 6m` on `network_admin`;
+# TestSessionLifetime (tests/lab/session_test.go) points the slice's broker block at it.
+#
+# The vertical slice's lab policy (plan 3). One subject: the client certificate
+# `go run ./tests/lab/cmd/slice-pki` cuts. It may do everything on every device
+# except one command, so the end-to-end run can show a permit and a denial that
+# only the compiled blob could have made: `show hostname` (and `show users`, the
+# IOS-XE stand-in, which has no `show hostname`) is in no deny list in
+# port49d-lab.yaml, so a denial of it cannot have come from the lab authorizer.
+#
+# `slice01` is a username no seed uses, so nothing but a broker-minted token can
+# log in under it.
+#
+# `all_devices` is declared: since plan 4 it is an ordinary scope (spec §5.5).
+scopes:
+  - {name: all_devices, match: {}}
+roles:
+  - {name: network_admin, privilege: admin, permit: ["**"], max_session_age: 6m}
+  - {name: slice_denies, deny: ["show hostname", "show users"]}
+subjects:
+  - {name: slice_operator, identity: ["user:alice@slice.port49.test"], username: slice01,
+     enable: token, token_ttl: 60s}
+grants:
+  - {subject: slice_operator, scope: all_devices, roles: [network_admin, slice_denies], max_privilege: admin}

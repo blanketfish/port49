@@ -9,3 +9,5 @@ broker:
   client_ca_file: tests/lab/logs/slice-pki/broker-ca.pem
   policy_file: tests/lab/slice/policy.yaml
   revocations_file: tests/lab/logs/revocations.json
+  # The lab checks no certificate status: its throwaway CA publishes no CRL.
+  certificate_status: {disabled: true}

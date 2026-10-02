@@ -1,16 +1,21 @@
 package broker
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
 	"net/http/httptest"
 	"net/netip"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -22,6 +27,7 @@ import (
 	"github.com/rhwendt/port49/internal/broker/api"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/engine"
 	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/session"
 	"github.com/rhwendt/port49/internal/store"
@@ -56,10 +62,31 @@ type fixture struct {
 	devices map[string]admission.Device
 }
 
+// alicePrincipal is the principal f.alice's certificate maps to.
+const alicePrincipal = "user:alice@example.com"
+
 // newFixture's clock starts at the real time: Task 10's handshakes verify
 // certificates against it, and the fixture's certificates are cut around it.
 // "bare" is in inventory with no platform, which admission.LoadFile allows.
 func newFixture(t *testing.T, candidateCap int) *fixture {
+	t.Helper()
+	return newFixtureWithPolicy(t, candidateCap, testPolicy)
+}
+
+// newFixtureWithDevices is newFixture with extra added to the inventory the
+// policy loads against.
+func newFixtureWithDevices(t *testing.T, candidateCap int, extra ...admission.Device) *fixture {
+	t.Helper()
+	return newFixtureWith(t, candidateCap, testPolicy, extra...)
+}
+
+// newFixtureWithPolicy is newFixture with policyText in place of testPolicy.
+func newFixtureWithPolicy(t *testing.T, candidateCap int, policyText string) *fixture {
+	t.Helper()
+	return newFixtureWith(t, candidateCap, policyText)
+}
+
+func newFixtureWith(t *testing.T, candidateCap int, policyText string, extra ...admission.Device) *fixture {
 	t.Helper()
 	f := &fixture{log: &bytes.Buffer{}, now: time.Now().Truncate(time.Second)}
 	clock := func() time.Time {
@@ -69,7 +96,7 @@ func newFixture(t *testing.T, candidateCap int) *fixture {
 	}
 	f.st = memory.New(clock)
 	path := filepath.Join(t.TempDir(), "policy.yaml")
-	if err := os.WriteFile(path, []byte(testPolicy), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(policyText), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	devices := map[string]admission.Device{
@@ -77,11 +104,14 @@ func newFixture(t *testing.T, candidateCap int) *fixture {
 		"nx1":   {Name: "nx1", Platform: "cisco_nxos", Addresses: []netip.Addr{netip.MustParseAddr("172.100.100.31")}},
 		"bare":  {Name: "bare", Addresses: []netip.Addr{netip.MustParseAddr("172.100.100.41")}},
 	}
-	pol, err := policy.Load(path, policy.Env{Devices: []admission.Device{devices["leaf1"], devices["nx1"], devices["bare"]}})
+	for _, d := range extra {
+		devices[d.Name] = d
+	}
+	f.devices = devices
+	pol, err := policy.Load(path, policy.Env{Devices: f.inventory()})
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.devices = devices
 	if f.ca, err = testpki.NewCA("port49 test ca", f.now.Add(-time.Hour), f.now.Add(48*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
@@ -90,8 +120,40 @@ func newFixture(t *testing.T, candidateCap int) *fixture {
 	f.b = &Broker{Policy: policy.NewLive(pol),
 		Minter: token.NewMinter(f.st, log, rand.Reader, token.TagKey([]byte("k")), clock, candidateCap),
 		Store:  f.st, Log: log, Metrics: metrics.New(prometheus.NewRegistry()), Now: clock,
-		MaxSessionAge: 12 * time.Hour, BatchMax: 4, Sessions: session.New(f.st, clock, time.Hour, time.Hour)}
+		MaxSessionAge: 12 * time.Hour, BatchMax: 4, Sessions: session.New(f.st, clock, time.Hour, time.Hour),
+		ContextIdleTTL: time.Hour}
 	return f
+}
+
+// inventory is f.devices as a list: leaf1, nx1 and bare, then the rest in
+// name order.
+func (f *fixture) inventory() []admission.Device {
+	out := []admission.Device{f.devices["leaf1"], f.devices["nx1"], f.devices["bare"]}
+	var rest []string
+	for name := range f.devices {
+		if name != "leaf1" && name != "nx1" && name != "bare" {
+			rest = append(rest, name)
+		}
+	}
+	sort.Strings(rest)
+	for _, name := range rest {
+		out = append(out, f.devices[name])
+	}
+	return out
+}
+
+// loadPolicy swaps f.b.Policy to a policy loaded from text over f.devices.
+func (f *fixture) loadPolicy(t *testing.T, text string) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "policy.yaml")
+	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pol, err := policy.Load(path, policy.Env{Devices: f.inventory()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.b.Policy.Swap(pol)
 }
 
 // liveContext writes a live context for principal under (device, username),
@@ -106,6 +168,45 @@ func (f *fixture) liveContext(t *testing.T, device, username, principal, certKey
 	}
 	if err := f.st.IndexContext(ctx, principal, "", certKey, store.ContextRef{NAS: device, Username: username},
 		time.Hour); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// liveContextAt writes a live context for principal on device under
+// username, authenticated at auth with the given ceiling (zero: none), as a
+// redemption of a token the policy in force minted would: its blob is that
+// policy's compiled blob for principal on device, written through putBlob;
+// its store TTL is a day, so a test may advance the clock by hours; it is
+// indexed by principal and by certificate.
+func (f *fixture) liveContextAt(t *testing.T, device, username, principal, certKey string, auth, expires time.Time) {
+	t.Helper()
+	ctx := context.Background()
+	pol := f.b.Policy.Load()
+	dev, ok := pol.Device(device)
+	if !ok {
+		t.Fatalf("no device %s", device)
+	}
+	var hash string
+	if res, err := pol.Resolve(principal, dev, f.b.Now()); err == nil {
+		body, h, err := engine.Encode(res.Blob)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := f.b.putBlob(ctx, h, body, 24*time.Hour); err != nil {
+			t.Fatal(err)
+		}
+		hash = h
+	} else {
+		hash = "sha256:" + strings.Repeat("0", 64) // a device with no platform: no blob compiles
+	}
+	k := store.ContextKey{NAS: device, Username: username}
+	if err := f.st.PutContext(ctx, k, store.Context{CtxID: "ctx_" + device, Principal: principal, Username: username,
+		PrivLvl: 1, BlobHash: hash, AuthTime: auth, SessionExpires: expires, RefreshedAt: auth,
+		LastTouchedAt: auth}, 24*time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.IndexContext(ctx, principal, "", certKey, store.ContextRef{NAS: device, Username: username},
+		24*time.Hour); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -146,6 +247,41 @@ func (f *fixture) post(ctx context.Context, cs *tls.ConnectionState, body, key s
 	w := httptest.NewRecorder()
 	f.b.Handler().ServeHTTP(w, r)
 	return w
+}
+
+// postAt is post on a connection that authenticated at at, as Server's
+// ConnContext gives every request on one connection.
+func (f *fixture) postAt(ctx context.Context, cs *tls.ConnectionState, body, key string,
+	at time.Time) *httptest.ResponseRecorder {
+	return f.post(withHeldConn(ctx, at), cs, body, key)
+}
+
+// heldAnswer is one response on a held connection.
+type heldAnswer struct {
+	status     int
+	body       string
+	retryAfter string
+}
+
+// postOn writes one POST to path with body on the held connection c and
+// reads its whole response.
+func postOn(t *testing.T, c *tls.Conn, br *bufio.Reader, path, body string) heldAnswer {
+	t.Helper()
+	if _, err := fmt.Fprintf(c, "POST %s HTTP/1.1\r\nHost: broker\r\nContent-Type: application/json\r\n"+
+		"Content-Length: %d\r\n\r\n%s", path, len(body), body); err != nil {
+		t.Fatal(err)
+	}
+	_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
+	resp, err := http.ReadResponse(br, nil)
+	if err != nil {
+		t.Fatalf("POST %s on a held connection: %v", path, err)
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return heldAnswer{status: resp.StatusCode, body: string(raw), retryAfter: resp.Header.Get("Retry-After")}
 }
 
 func (f *fixture) records(t *testing.T) []map[string]any {
@@ -190,7 +326,7 @@ func (f *fixture) blobRecords(t *testing.T) []decision.Blob {
 func decodeMint(t *testing.T, w *httptest.ResponseRecorder) api.MintResponse {
 	t.Helper()
 	if w.Code != 200 {
-		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+		t.Fatalf("status %s", answer(w))
 	}
 	var r api.MintResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &r); err != nil {

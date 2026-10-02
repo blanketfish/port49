@@ -545,3 +545,34 @@ func TestRevocationMarksThroughTheSealingLayer(t *testing.T) {
 		return Wrap(memory.New(func() time.Time { return now }), keys(), nil)
 	}, now)
 }
+
+// SessionExpires, AuthTime and Rev are plaintext bookkeeping, so the ceiling,
+// the grace window and the revision binding are all held below the sealing
+// layer, and each property has to hold through it.
+func TestCeilingShortensOnlyThroughTheSealingLayer(t *testing.T) {
+	now := time.Unix(1_757_041_495, 0)
+	storetest.CeilingShortensOnly(t, func() store.Store {
+		return Wrap(memory.New(func() time.Time { return now }), keys(), nil)
+	}, now)
+}
+
+func TestRefreshSetsTheCeilingThroughTheSealingLayer(t *testing.T) {
+	now := time.Unix(1_757_041_495, 0)
+	storetest.RefreshSetsTheCeiling(t, func() store.Store {
+		return Wrap(memory.New(func() time.Time { return now }), keys(), nil)
+	}, now)
+}
+
+func TestRefreshStopsAtGraceThroughTheSealingLayer(t *testing.T) {
+	now := time.Unix(1_757_041_495, 0)
+	storetest.RefreshStopsAtGrace(t, func() store.Store {
+		return Wrap(memory.New(func() time.Time { return now }), keys(), nil)
+	}, now)
+}
+
+func TestWritesBindToTheRevisionThroughTheSealingLayer(t *testing.T) {
+	now := time.Unix(1_757_041_495, 0)
+	storetest.WritesBindToTheRevision(t, func() store.Store {
+		return Wrap(memory.New(func() time.Time { return now }), keys(), nil)
+	}, now)
+}

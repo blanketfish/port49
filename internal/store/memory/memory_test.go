@@ -119,7 +119,7 @@ func TestSecretsAreNotAliased(t *testing.T) {
 	// Candidates should still return the original secret
 	c, _ := s.Candidates(ctx, k)
 	if len(c) != 1 || !bytes.Equal(c[0].Secret, []byte("mysecret")) {
-		t.Fatalf("secret was aliased, got %q", c[0].Secret)
+		t.Fatal("secret was aliased: Candidates returned another secret")
 	}
 
 	// Mutate the returned secret
@@ -128,7 +128,7 @@ func TestSecretsAreNotAliased(t *testing.T) {
 	// A second Candidates call should return the original secret unchanged
 	c2, _ := s.Candidates(ctx, k)
 	if len(c2) != 1 || !bytes.Equal(c2[0].Secret, []byte("mysecret")) {
-		t.Fatalf("returned secret was not copied, got %q", c2[0].Secret)
+		t.Fatal("returned secret was not copied: a caller's write reached the store")
 	}
 }
 
@@ -264,7 +264,7 @@ func TestCompactionZeroesTheTail(t *testing.T) {
 	set := s.tokens[k]
 	for i, tok := range set[len(set):cap(set)] {
 		if tok.Secret != nil {
-			t.Fatalf("tail entry %d still holds an evicted token's secret: %q", i, tok.Secret)
+			t.Fatalf("tail entry %d still holds an evicted token's secret (%d bytes)", i, len(tok.Secret))
 		}
 	}
 }
@@ -911,7 +911,7 @@ func TestRedeemZeroesTheSpentToken(t *testing.T) {
 	for i, tok := range arr {
 		if tok.ID == "spend" || bytes.Equal(tok.Secret, []byte("p49_spent")) {
 			s.mu.Unlock()
-			t.Fatalf("backing array entry %d still holds the spent token: id=%q secret=%q", i, tok.ID, tok.Secret)
+			t.Fatalf("backing array entry %d still holds the spent token: id=%q, %d secret bytes", i, tok.ID, len(tok.Secret))
 		}
 	}
 	s.mu.Unlock()
@@ -1433,4 +1433,24 @@ func TestARevocationMarkNeverExpires(t *testing.T) {
 	if _, err := s.GetRevocation(ctx, store.RevocationPrincipal, "user:alice"); err != nil {
 		t.Fatalf("a mark expired: %v", err)
 	}
+}
+
+func TestCeilingShortensOnly(t *testing.T) {
+	now := time.Unix(1_757_041_495, 0)
+	storetest.CeilingShortensOnly(t, func() store.Store { return New(func() time.Time { return now }) }, now)
+}
+
+func TestRefreshSetsTheCeiling(t *testing.T) {
+	now := time.Unix(1_757_041_495, 0)
+	storetest.RefreshSetsTheCeiling(t, func() store.Store { return New(func() time.Time { return now }) }, now)
+}
+
+func TestRefreshStopsAtGrace(t *testing.T) {
+	now := time.Unix(1_757_041_495, 0)
+	storetest.RefreshStopsAtGrace(t, func() store.Store { return New(func() time.Time { return now }) }, now)
+}
+
+func TestWritesBindToTheRevision(t *testing.T) {
+	now := time.Unix(1_757_041_495, 0)
+	storetest.WritesBindToTheRevision(t, func() store.Store { return New(func() time.Time { return now }) }, now)
 }

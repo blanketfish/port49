@@ -39,9 +39,19 @@ type Lab struct {
 	// Fault is the lab's fault switch; see LabFault. The zero value is no
 	// fault.
 	Fault LabFault
+	// DenyMessageLength pads the lab's deny server_msg to this many bytes
+	// with a counting pattern, for L2's truncation length; zero leaves it.
+	DenyMessageLength int
+	// DenySession fails every session authorization with the deny message:
+	// L2 on Junos, which never authorizes a command (plan 7b).
+	DenySession bool
 }
 
 func (l *Lab) Session(_ context.Context, _ Request) Decision {
+	if l.DenySession {
+		return Decision{Permit: false, Reason: decision.NoPermitDominatesDeny,
+			ServerMsg: padLabMessage("port49: denied by lab deny_session; see 'port49 explain'", l.DenyMessageLength)}
+	}
 	return Decision{Permit: true, Reason: decision.ContextMatched, Attributes: l.SessionAttributes}
 }
 
@@ -59,10 +69,24 @@ func (l *Lab) Command(_ context.Context, r Request) Decision {
 		// behaviour invented in order to measure protocol behaviour.
 		if line == p || strings.HasPrefix(line, p+" ") {
 			return Decision{Permit: false, Reason: decision.NoPermitDominatesDeny,
-				ServerMsg: "port49: denied by lab_deny (" + p + "); see 'port49 explain'"}
+				ServerMsg: padLabMessage("port49: denied by lab_deny ("+p+"); see 'port49 explain'", l.DenyMessageLength)}
 		}
 	}
 	return Decision{Permit: true, Reason: decision.PermitDominates, Attributes: l.CommandAttributes}
+}
+
+// padLabMessage pads msg with a space and then "0123456789" repeated, to
+// exactly n bytes, so the last digit a device prints says where it cut.
+func padLabMessage(msg string, n int) string {
+	if n <= len(msg)+1 {
+		return msg
+	}
+	var b strings.Builder
+	b.WriteString(msg + " ")
+	for i := 0; b.Len() < n; i++ {
+		b.WriteByte('0' + byte(i%10))
+	}
+	return b.String()
 }
 
 // LabFault is the lab's fault switch (spec §15, L4): a file whose trimmed

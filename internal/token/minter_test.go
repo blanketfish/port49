@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -33,7 +34,7 @@ func minter(t *testing.T) (*Minter, *memory.Store, *bytes.Buffer) {
 
 func subject() Subject {
 	return Subject{Principal: "user:alice@example.com", Username: "alice", TokenTTL: 900 * time.Second,
-		Enable: "token", MaxPrivilege: 15, MaxSessionAge: 8 * time.Hour,
+		Enable: "token", MaxPrivilege: 15, MaxSessionAge: 8 * time.Hour, AuthTime: time.Now(),
 		Credential: store.Credential{Method: "oidc", Sub: "a7f3", Sid: "s1"}}
 }
 
@@ -173,7 +174,8 @@ func TestOneIdempotencyKeyAcrossDevicesDoesNotCross(t *testing.T) {
 		t.Fatal(err)
 	}
 	if a.Login == b.Login || !strings.HasPrefix(b.Login, Tag(TagKey([]byte("k")), "leaf-04")) {
-		t.Fatalf("leaf-04 was handed core-sw01's token: %q %q", a.Login, b.Login)
+		t.Fatalf("leaf-04 was handed core-sw01's token: logins equal %v, leaf-04's tag %v", a.Login == b.Login,
+			strings.HasPrefix(b.Login, Tag(TagKey([]byte("k")), "leaf-04")))
 	}
 	for _, d := range []string{"core-sw01", "leaf-04"} {
 		if c, _ := st.Candidates(context.Background(), store.TokenKey{NAS: d, Username: "alice"}); len(c) != 1 {
@@ -668,5 +670,109 @@ func TestATokenIndexOutlivesItsTokenUnderClockSkew(t *testing.T) {
 	}
 	if got, _ := st.TokensByPrincipal(ctx, sub.Principal); len(got) != 1 || got[0] != k {
 		t.Fatalf("a token the store still holds is not indexed: %v", got)
+	}
+}
+
+// clockMinter is minter on a clock the test moves.
+func clockMinter(now *time.Time) (*Minter, *memory.Store) {
+	st := memory.New(func() time.Time { return *now })
+	return NewMinter(st, decision.NewJSONLines(&bytes.Buffer{}), rand.Reader, TagKey([]byte("k")),
+		func() time.Time { return *now }, 8), st
+}
+
+// A token never outlives its session ceiling: with a 1h ceiling and a 15m
+// token_ttl, a mint at 59m expires at the ceiling, not at 1h14m, in the
+// result, in the store and in the idempotency record a replay answers from
+// (plan 7b final review I-1). A `never` subject keeps its full TTL.
+func TestATokenNeverOutlivesItsSessionCeiling(t *testing.T) {
+	auth := time.Unix(1_757_041_495, 0)
+	now := auth.Add(59 * time.Minute)
+	m, st := clockMinter(&now)
+	s := subject()
+	s.TokenTTL, s.MaxSessionAge, s.AuthTime = 15*time.Minute, time.Hour, auth
+	ceiling := auth.Add(time.Hour)
+	req := Request{Subject: s, Device: "leaf-01", WithEnable: true, BodyHash: "h1"}
+	res, err := m.Mint(context.Background(), reserved(t, m, req, "01K"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.ExpiresAt.Equal(ceiling) || !res.SessionExpiresAt.Equal(ceiling) {
+		t.Fatalf("expires_at %v, session_expires_at %v, want both %v", res.ExpiresAt, res.SessionExpiresAt, ceiling)
+	}
+	c, _ := st.Candidates(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"})
+	if len(c) != 2 || !c[0].ExpiresAt.Equal(ceiling) || !c[1].ExpiresAt.Equal(ceiling) {
+		t.Fatalf("stored tokens outlive the ceiling: %d", len(c))
+	}
+	for i := range c {
+		if c[i].ExpiresAt.After(ceiling) {
+			t.Fatalf("stored token %d expires %v, past the ceiling %v", i, c[i].ExpiresAt, ceiling)
+		}
+	}
+	now = auth.Add(59*time.Minute + 30*time.Second)
+	again, err := m.Mint(context.Background(), reserved(t, m, req, "01K"))
+	if err != nil || !again.Replayed || !again.ExpiresAt.Equal(ceiling) {
+		t.Fatalf("the replay: replayed %v, expires_at %v, err %v", again.Replayed, again.ExpiresAt, err)
+	}
+
+	// A replay past the ceiling mints again under the new authentication,
+	// and that token is clamped the same way.
+	now = auth.Add(time.Hour + time.Minute)
+	req.Subject.AuthTime = now.Add(-50 * time.Minute)
+	fresh, err := m.Mint(context.Background(), reserved(t, m, req, "01K"))
+	newCeiling := req.Subject.AuthTime.Add(time.Hour)
+	if err != nil || fresh.Replayed || !fresh.ExpiresAt.Equal(newCeiling) {
+		t.Fatalf("the re-mint: replayed %v, expires_at %v (want %v), err %v", fresh.Replayed, fresh.ExpiresAt, newCeiling, err)
+	}
+
+	// never: the full TTL.
+	s.MaxSessionAge = 0
+	never, err := m.Mint(context.Background(), Request{Subject: s, Device: "leaf-02"})
+	if err != nil || !never.ExpiresAt.Equal(now.Add(15*time.Minute)) || !never.SessionExpiresAt.IsZero() {
+		t.Fatalf("never: expires_at %v, session_expires_at %v, err %v", never.ExpiresAt, never.SessionExpiresAt, err)
+	}
+}
+
+// A subject past its ceiling is refused, and so is a ceiling with no AuthTime
+// to anchor it: measured from the epoch, it would be refused at login with
+// nothing saying why (plan 7b, Task 3 review M-3). Neither writes a token. A
+// `never` subject needs no AuthTime.
+func TestMintRefusesAPassedOrUnanchoredCeiling(t *testing.T) {
+	now := time.Unix(1_757_041_495, 0)
+	m, st := clockMinter(&now)
+	for name, tc := range map[string]struct {
+		age  time.Duration
+		auth time.Time
+		want error
+	}{
+		"no auth_time":   {time.Hour, time.Time{}, ErrNoAuthTime},
+		"at the ceiling": {time.Hour, now.Add(-time.Hour), ErrSessionExpired},
+		"past it":        {time.Hour, now.Add(-2 * time.Hour), ErrSessionExpired},
+	} {
+		s := subject()
+		s.MaxSessionAge, s.AuthTime = tc.age, tc.auth
+		if _, err := m.Mint(context.Background(), Request{Subject: s, Device: "leaf-01"}); !errors.Is(err, tc.want) {
+			t.Fatalf("%s: %v, want %v", name, err, tc.want)
+		}
+	}
+	if c, _ := st.Candidates(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"}); len(c) != 0 {
+		t.Fatalf("a refused mint wrote %d tokens", len(c))
+	}
+	s := subject()
+	s.MaxSessionAge, s.AuthTime = 0, time.Time{}
+	if _, err := m.Mint(context.Background(), Request{Subject: s, Device: "leaf-01"}); err != nil {
+		t.Fatalf("never with no auth_time: %v", err)
+	}
+}
+
+// A result printed with any verb withholds its tokens (plan 7b final review
+// M-1).
+func TestAResultPrintsNoToken(t *testing.T) {
+	r := Result{Login: "LOGINSECRET", Enable: "ENABLESECRET", Username: "alice"}
+	for _, verb := range []string{"%v", "%+v", "%#v", "%s"} {
+		for _, v := range []any{r, &r} {
+			if got := fmt.Sprintf(verb, v); strings.Contains(got, "SECRET") || !strings.Contains(got, "alice") {
+				t.Fatalf("%s of %T printed a token, or nothing: %d bytes", verb, v, len(got))
+			}
+		}
 	}
 }
