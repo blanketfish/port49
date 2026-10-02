@@ -2151,15 +2151,25 @@ scan (M14's side effect, below). What differs from the plan's text, task by task
 - **Task 14 (this section).** No lab note contradicts §5.1.4's "Over HTTP, as built" or decision 34,
   so no doc is corrected under lab rule 4. Spec §10's reload-bound paragraphs, over-wide since
   d0b0cbb, are rewrapped.
+- **Final review (b5e0317, 8ea6131, 5590f4b, and the docs after them).** I1: the agent waited 30 s
+  on a revocation and resent it on any transport failure, so a slow store turned a mark that
+  stood into `revocation_busy`, "nothing was revoked". It now waits past the broker's worst case
+  (`api.RevokeSlotWait` + `admin.OpTimeout` + `admin.PersistTimeout` + 10 s), never resends a
+  revocation once its writing began, and says an unanswered one may be in force. M1: `--mine`
+  with a key reads only the caller's own indexes, so its time says nothing of another's session.
+  M2: naming your own principal says first that no mark was made. M4: `/readyz`'s `503
+  starting` is not seen in practice (below). M5: design §17 lists explain's `500 broker_error`.
+  M3 is carried: spec §5.7 says a mark that could not be written writes no `revoke` record, and a
+  record for it is a spec change, not a fix.
 
 **Rulings, as made** (spec §13, decision 34; the plan's ten rulings): Rulings 1, 5 and 7 stand as
 written. Ruling 2 stands, its retransmission answered `token_not_found` (I3-carry). Ruling 3 gains
 the per-caller bound on self and key revocations (Task 8). Ruling 4 stands, with one exception
-made in Task 8: neither busy answer writes a record. Ruling 6 gains: session attributes are never returned, and a no-grant
-answer works out nothing a granted one does (Task 9). Ruling 8 is amended by the conflict scan
-(padding never offsets) and by Task 10's I1, I2, M1 and R1 above. Ruling 9 is amended by Task 2:
-the file before the marker, a relative path refused, a raced init refused. Ruling 10 stands: no
-register row opens or closes.
+made in Task 8: neither busy answer writes a record. Ruling 6 gains: session attributes are never
+returned, and a no-grant answer works out nothing a granted one does (Task 9). Ruling 8 is
+amended by the conflict scan (padding never offsets) and by Task 10's I1, I2, M1 and R1 above.
+Ruling 9 is amended by Task 2: the file before the marker, a relative path refused, a raced init
+refused. Ruling 10 stands: no register row opens or closes.
 
 **Lab (Task 13)**, four images on beehive, 2026-10-02, run at 9bfb710
 (`tests/lab/results/api-revoke-*.md`; captures `tests/lab/evidence/api-revoke-<platform>.pcap`,
@@ -2233,8 +2243,8 @@ notes", amended by what was built):
 - **Upgrade: agents and brokers older than this release.** An agent lives for `max_session_age`,
   and one started by the old `port49` has no `identity`, `explain` or `revoke` route; the new CLI
   says ``your agent (started before this port49) does not carry this command; run `port49
-  login` again``. A new CLI against an old port49d gets `not_supported: the broker at <url> does not serve
-  /v1/…: it runs a port49d older than this port49`.
+  login` again``. A new CLI against an old port49d gets `not_supported: the broker at <url> does
+  not serve /v1/…: it runs a port49d older than this port49`.
 - **New: `port49 identity [--json] [--socket PATH]`.** It prints whom the broker resolves you to:
   principal, subject, groups, unexpired grants by scope, `api:` rights, and until when this
   connection lasts (`connection_ends_at`, from `max_session_age` at authentication); a device's
@@ -2273,6 +2283,10 @@ notes", amended by what was built):
     a usage error with any other form. Off a terminal (cron, `</dev/null`) it does not ask. It then
     prints `target: P (subject S)`, or `(no subject in the policy in force names it)`, so a typo of
     a real colleague's address is seen at once.
+  - **Your own principal makes no mark.** Named as P, it is `--mine`: your sessions end, and
+    nothing stands against you. The report's first line says `this is your own principal: no mark
+    was made; to lock it, ask an operator to use port49d's admin socket (<path>)`. If your own
+    certificate leaked, that is the step: an operator runs `port49 revoke --principal P` there.
   - **The record.** `port49 revoke --list` and the `revoke` record name you as `origin: api <you>`.
   - **Lifting** stays the admin socket's, as does `--cert`; the report names the socket. With no
     `admin_socket` configured, the mark is still made, and the report and port49d's start line
@@ -2306,15 +2320,25 @@ notes", amended by what was built):
     own session there, use --mine --device D --username U`, exit 1.
   - **Not in `--list`.** A self or key revocation leaves no mark; `--list` says so on stderr, and
     the decision log's `revoke` records (`revocation.by` `self` or `key`) name each.
-- **What the agent forms exit with, and what each error means.** 0 done; 1 refused or unreachable
-  (nothing revoked); 3 in force but incomplete, or a standing mark not saved; 2 usage. Over the
+- **What the agent forms exit with, and what each error means.** 0 done; 1 refused, unreachable
+  (nothing revoked) or unanswered (it may be in force, below); 3 in force but incomplete, or a
+  standing mark not saved; 2 usage. Over the
   agent `--agent-socket` names your agent; `--socket` (port49d's admin socket) is a usage error
   there.
   - `refused: revoking another principal needs the api: revoke_others right`: your subject does
     not declare it. Ask for it, or ask an operator to use the admin socket.
+  - ``the broker at <url> did not answer the revocation (…); it may be in force — check `port49
+    revoke --list` (on port49d's host) and port49d's log before retrying``: the request was sent
+    and no answer came within the broker's worst case (85 s: the 10 s wait for the slot, the 60 s
+    run, the 5 s save, a margin), or the connection dropped after it was sent. The agent never
+    sends a revocation twice. For `--mine` or a key it says `it may have run — check port49d's
+    decision log (event revoke)`, since neither leaves a mark for `--list`. `your agent at
+    <socket> did not answer …` is the same for an agent that dropped the request. Look before you
+    run it again: a second run behind a slow first one is `revocation_busy`.
   - `the broker is unavailable just now: revocation_busy: …; retry in 5s`: another revocation or
-    lift held the slot for 10 s, or your own `--mine` or key revocation is still running. Nothing
-    was revoked; run it again.
+    lift held the slot for 10 s, or your own `--mine` or key revocation is still running. This
+    request revoked nothing. If an earlier run of yours went unanswered, it may be the one
+    running: check as above before you run it again.
   - `the broker is unavailable just now: store_unavailable: the revocation could not be recorded,
     so nothing was revoked; …; retry in 10s`: the store refused the mark. Retry; the text names
     the admin socket, or, with none configured, says to remove the principal's grants from
@@ -2352,10 +2376,12 @@ notes", amended by what was built):
 - **New broker endpoints.**
   - `GET /v1/identity`, `POST /v1/explain` and `POST /v1/tokens/revoke`, each authenticated as
     `/v1/tokens` is.
-  - `GET /healthz` (`200 ok`) and `GET /readyz` (`200 serving`; `503 starting: …` before the
-    broker serves, `503 draining: port49d is shutting down` from the signal on), with no
-    certificate and no record. `/readyz` stays 200 through a store outage, by design (design §12);
-    watch the alarms instead.
+  - `GET /healthz` (`200 ok`) and `GET /readyz` (`200 serving`; `503 draining: port49d is
+    shutting down` from the signal on), with no certificate and no record. Before the broker
+    serves there is no answer: the connection is refused until port49d binds `broker.listen`, and
+    waits in the moment between the bind and serving. The code's `503 starting` is not seen in
+    practice. `/readyz` stays 200 through a store outage, by design (design §12); watch the alarms
+    instead.
   - **Probe them over HTTPS with no client certificate** on `broker.listen` (kubelet `scheme:
     HTTPS`). A plain-HTTP or TCP probe fails the TLS handshake and logs a `handshake_*` line and
     counts `port49_broker_tls_handshake_failures_total` every period. They are not the TACACS+

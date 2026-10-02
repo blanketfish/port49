@@ -913,12 +913,15 @@ principal, a `sid` until plan 7h, an unknown field):
   revision read, so a context another principal's login replaced is never marked, and they are
   marked twice. Its receipts are deleted everywhere, even with a key named: the store has no
   finer cut, so a retransmission in flight on another device is answered `token_not_found`. With
-  `device` and `username` beside `mine` it does that on that key alone. Nothing stands after it:
+  `device` and `username` beside `mine` it does that on that key alone, and only where the
+  caller's own records name the key: it reads nothing of another principal's there, so its cost
+  says nothing of who holds the key (design §17). Nothing stands after it:
   a token minted later joins the context and lifts the mark (decision 15), for every session
   open under that `(device, username)`. So if anyone else used the caller's token, the caller's
   next login on that device re-admits their session too: the response says to close such a
   session on the device, or ask an operator to revoke the principal, before logging in there
-  again.
+  again. A principal equal to the caller's is answered with a first line that says no mark was
+  made, and that locking it takes an operator on the admin socket.
 - **`{"principal": …}` naming another principal**, under `revoke_others`, is the revocation
   above, a standing mark, with origin `api <caller>`; without the right it is refused 403
   `api_right_missing` and recorded. The response names the target's subject. A lift is made on
@@ -937,7 +940,10 @@ revocation takes no slot, and one caller has one in flight at a time: a caller's
 key revocation, while its first is still running, is answered `503 revocation_busy` at once,
 with `Retry-After`, nothing revoked. Neither busy answer writes a record. The response
 says what was reached, names the contexts on a platform that never asks about a command, and
-repeats the text `port49 revoke` prints.
+repeats the text `port49 revoke` prints. The agent waits on a revocation past these bounds (the
+slot's 10 s, the run's `RevokeTimeout`, the file's save) and never sends one twice once it began
+writing it: one it sent and got no answer to may be in force, and `port49 revoke` says to check
+`--list` or the decision log before running it again.
 
 **Certificate status, as built (plan 7b; §13, decision 33).** The broker checks every client
 certificate, and every certificate above it in its verified chain but the anchor, against the
@@ -5669,14 +5675,18 @@ finish or was not saved, the mark standing; and 2 on usage.
 the broker through the operator's own agent (`POST /v1/tokens/revoke`, §5.1.4), under the
 caller's `api:` rights (§2): `--mine` ends the caller's own sessions, or its session on one key,
 and leaves no mark; `--via-agent --principal` revokes another principal as the admin socket
-does, and needs `revoke_others`; `--via-agent --device --username` ends whatever holds that key,
-and needs `revoke_others` too. `--via-agent --principal` asks `y/N` on a terminal first
-(`--yes` skips it; off a terminal it does not ask), and prints the target's subject from the
-answer. A lift, a certificate and `--list` stay the admin socket's; `--list` shows marks only,
-and says on stderr that a self or key revocation, which leaves none, is named in the decision
-log. It exits as the admin-socket form does: 0 done; 1 refused (`api_right_missing`,
-`revocation_busy`, declined at the prompt, no agent); 3 in force but not finished or, for a
-standing mark, not saved; 2 on usage.
+does, and needs `revoke_others` (naming the caller's own principal is `--mine`, and the answer's
+first line says no mark was made and to ask an operator to use the admin socket);
+`--via-agent --device --username` ends whatever holds that key, and needs `revoke_others` too.
+`--via-agent --principal` asks `y/N` on a terminal first (`--yes` skips it; off a terminal it
+does not ask), and prints the target's subject from the answer. A lift, a certificate and
+`--list` stay the admin socket's; `--list` shows marks only, and says on stderr that a self or
+key revocation, which leaves none, is named in the decision log. It exits as the admin-socket
+form does: 0 done; 1 refused (`api_right_missing`, `revocation_busy`, declined at the prompt, no
+agent), or sent and not answered by the broker or the agent, the revocation then possibly in
+force (`--list`, or for a self or key revocation the decision log, says), since the agent waits
+past the broker's own bounds and never sends a revocation twice; 3 in force but not finished or,
+for a standing mark, not saved; 2 on usage.
 
 **`port49 identity [--json]`** prints what the broker resolves the agent's principal to (`GET
 /v1/identity`): subject, grants unexpired now, `api:` rights, and until when this connection
