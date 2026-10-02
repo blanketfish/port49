@@ -5767,8 +5767,10 @@ port49's two etcd roles and grant them, for the keyspace `store.etcd.prefix` nam
   also hide a context from the index until the next sweep re-indexes it, and deny by deleting.
   It cannot write a revocation mark, so it cannot lift a revocation by principal or
   certificate: this role is what makes that true, since a credential holding the whole
-  keyspace could delete the marks. The broker's role holds the whole keyspace until plan 7e
-  splits the broker out.
+  keyspace could delete the marks. That holds for the daemon's credential taken alone: until plan 7e port49d also holds the
+  broker's, whose role is the whole keyspace, marks included, and under
+  `store.etcd.roles: unenforced` the daemon's is too.
+  The broker's role holds the whole keyspace until plan 7e splits the broker out.
 - **The command itself.** It reads the config and those certificates, holds no etcd
   credential, and changes nothing. It refuses a CN or prefix holding a character outside
   `[A-Za-z0-9._@/-]`, printing nothing. It exits 0, 1 naming what it could not read or
@@ -6585,6 +6587,9 @@ review (the owner may override them).*
   move a token, receipt or context, raise a privilege past what port49 wrote, or, under the
   daemon's etcd role (below; §12, `port49d store-roles`), lift a revocation by principal or
   certificate: before that role a daemon credential can write the marks themselves.
+  That holds for the daemon's credential taken alone: until plan 7e port49d also holds the
+  broker's, whose role is the whole keyspace, marks included, and under
+  `store.etcd.roles: unenforced` the daemon's is too.
   Deleting a record, or making a write conflict, is a denial. What it can do is replay:
   - **a context** port49 sealed earlier for the same key. While port49d runs, the ledger
     admits only an earlier version of the context the key holds now (the same `ctx_id`, so
@@ -6597,7 +6602,8 @@ review (the owner may override them).*
   - **a token** port49 minted for the same key and ID, deleted since, which a holder of its
     secret can redeem until its sealed expiry;
   - **a receipt's sliding bound**, up to its sealed cap, or its refusal flag, which replays
-    PASS only onto the live context that receipt's own principal holds unrevoked;
+    PASS only onto the live context that receipt's own principal holds unrevoked, and only
+    for a login that context witnesses and the index still reaches it under (§5.6);
   - **the idle clock**: a context kept alive past its idle TTL, to its sealed ceiling if it
     has one, and indefinitely under `max_session_age: never`;
   - **accounting's annotations**: a context's session discriminators cleared, which
@@ -6662,7 +6668,9 @@ review (the owner may override them).*
   - **The daemon's role cannot** read idempotency records, write the token indexes, write
     revocation marks, or write `meta/` (the keyspace hold and the seal-key record). That role
     is what makes "cannot lift a revocation by principal or certificate" (above) true: before
-    it, a daemon credential is the whole keyspace's.
+    it, a daemon credential is the whole keyspace's. That holds for the daemon's credential
+    taken alone: until plan 7e port49d also holds the broker's, whose role is the whole
+    keyspace, marks included, and under `store.etcd.roles: unenforced` the daemon's is too.
   - **The start check.** port49d refuses to start when its daemon identity can do any of
     those, probing reads and never-true writes, unless `store.etcd.roles: unenforced`, said at
     every start.
@@ -6676,9 +6684,10 @@ review (the owner may override them).*
     remaining TTL. It counts the hold lost when the key is gone or on another lease, the lease
     has expired, or its estimate of the lease (each answer's send time plus its TTL) has half
     of `hold_ttl` or less left, whether etcd answered with that TTL or has not answered since.
-    That is before etcd can expire the lease and let another take the keyspace: 2.5s before
-    at the default 15s, less at a shorter `hold_ttl`, since etcd reports the TTL in whole
-    seconds.
+    Reads are at most a third of `hold_ttl` apart, so that is at least a sixth of `hold_ttl`
+    before etcd can expire the lease and let another take the keyspace (2.5s at the default
+    15s). etcd reports the TTL in whole seconds, rounded down, which only moves the estimate
+    earlier. `hold_ttl` is 5s or more, where a healthy lease still reports 3s, above the line.
 - **A start on etcd.** port49d waits for the store with every listener closed (up to
   `store.etcd.start_timeout`, 30s, then exits 1; `0` waits forever; after a store gone, no
   deadline), and then, retrying while the store errs:
@@ -6696,7 +6705,10 @@ review (the owner may override them).*
   6. carries the policy in force into every live context the store kept. A context it leaves
      unjudged (still changing after every attempt, or sealed under a key this port49d does not
      hold) keeps `port49_policy_refresh_pending` at 1 and is judged by a later pass (§5.1.3); it
-     never stops the start;
+     never stops the start. A principal whose contexts could not be looked up holds the start,
+     retried as an outage is: those contexts open, so left unjudged they could serve a grant
+     the policy in force withdrew. On etcd that lookup fails only as the store being
+     unavailable;
   7. seals the ledger, the start having read every kept context;
   8. binds TACACS+.
 
