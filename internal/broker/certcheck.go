@@ -35,6 +35,9 @@ type BindRefusal struct {
 	RetryAfter    int
 	// revoke is the revocation a revoked leaf queues once it is answered.
 	revoke *queuedRevoke
+	// queue queues revoke; BindStatus sets it for the listener to run once
+	// bind has chosen this refusal (BindStatus).
+	queue func()
 }
 
 // certRefusal is the chain's status as a refusal, or nil to go on (spec
@@ -98,14 +101,20 @@ func unknownClass(detail string) string {
 	return "other"
 }
 
-// BindStatus is Listener.Status: the check before a connection binds. The
-// connection is not held yet, so the revocation it queues closes the
+// BindStatus is Listener.Status: the check before a connection binds. Its
+// revocation is not queued here but by the listener, through the refusal's
+// queue, once bind has chosen the refusal's answer: queued here, the
+// queue's mark could land before bind, which would answer the mark ("an
+// operator lifts the revocation") where the CA revoked it, and count no
+// revoked_refused. The connection is not held, so the revocation closes the
 // certificate's other connections and never this one's answer.
 func (b *Broker) BindStatus(cs tls.ConnectionState, principal string, cred store.Credential) *BindRefusal {
 	ctx, cancel := context.WithTimeout(context.Background(), holdTimeout)
 	defer cancel()
 	ref := b.certRefusal(ctx, &cs, cred)
-	b.queueRevoke(ref)
+	if ref != nil {
+		ref.queue = func() { b.queueRevoke(ref) }
+	}
 	return ref
 }
 

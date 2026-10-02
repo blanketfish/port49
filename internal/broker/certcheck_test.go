@@ -195,6 +195,41 @@ func TestARevokedLeafIsRefusedAndRevoked(t *testing.T) {
 		}
 	})
 
+	// The revocation a bind's refusal carries is queued only once bind has
+	// chosen that refusal: queued sooner, the queue's mark could land
+	// between the status check and bind, and the answer would be the mark's
+	// ("an operator lifts the revocation") rather than the CA's, with
+	// revoked_refused never counted. The status check here gives the queue
+	// every chance to mark first.
+	t.Run("bind answers the CA before the queue's mark", func(t *testing.T) {
+		f := newFixture(t, 8)
+		fs := withStatus(t, f, "refuse", nil)
+		addr, bl := serveThroughWith(t, f, DefaultListenerLimits, nil, func(l *Listener) {
+			l.Status = func(cs tls.ConnectionState, principal string, cred store.Credential) *BindRefusal {
+				ref := f.b.BindStatus(cs, principal, cred)
+				deadline := time.Now().Add(250 * time.Millisecond)
+				for time.Now().Before(deadline) {
+					if _, ok := markOn(t, f, f.alice); ok {
+						break
+					}
+					time.Sleep(5 * time.Millisecond)
+				}
+				return ref
+			}
+		})
+		f.b.Conns = bl // as serveWithStatus wires it: Revoke marks the listener
+		f.liveContext(t, "leaf1", "alice", alicePrincipal, certKey(f.alice))
+		fs.set(f.alice, revokedByCRL)
+		a := boundAnswer(t, f, addr, f.alice)
+		if a.status != 401 || !strings.Contains(a.body, "was revoked at its CA (crl corp, 2026-09-30T12:00:00Z)") {
+			t.Fatalf("%s", reply(a.status, a.body))
+		}
+		waitMark(t, f, f.alice, "crl corp")
+		if n := testutil.ToFloat64(f.b.Metrics.BrokerConnectionEvents.WithLabelValues("revoked_refused")); n != 1 {
+			t.Fatalf("revoked_refused: %v", n)
+		}
+	})
+
 	// A revoked certificate never takes a slot or evicts its owner's
 	// renewed certificate's connections (pre-flight I1).
 	t.Run("bind holds no slot", func(t *testing.T) {

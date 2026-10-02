@@ -299,6 +299,13 @@ func (l *Listener) handshake(c *trackedConn) {
 			ref = l.Status(cs, principal, cred)
 		}
 		rv, ok := l.bind(c, principal, store.CertKey(cred.Issuer, cred.Serial), ref != nil)
+		// Bind has chosen the answer, so the revocation the refusal carries
+		// is queued now and its mark cannot change it (BindStatus); every
+		// branch queues it, as the status named the certificate whatever
+		// this connection is answered.
+		if ref != nil && ref.queue != nil {
+			ref.queue()
+		}
 		switch {
 		case !ok:
 			_ = tc.Close()
