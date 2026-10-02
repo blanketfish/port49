@@ -10,6 +10,12 @@ import (
 	"github.com/rhwendt/port49/internal/store"
 )
 
+// A record under id/ that does not decode is an error on every
+// reservation and release of its (principal, key) until its lease ends,
+// never overwritten: it fails closed, only the broker's role or root can
+// write id/, and a client retrying with a new key is not refused (Task 8
+// review m-5).
+
 // errNoHolder refuses a record without a holder: the empty holder is one
 // any request can name (the memory store's).
 var errNoHolder = errors.New("store: an idempotency record must name its holder")

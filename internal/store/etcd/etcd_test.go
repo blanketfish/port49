@@ -64,6 +64,7 @@ func (p planting) PlantIdempotency(ctx context.Context, principal, key string, r
 
 // Every storetest property against etcd (plan 7d).
 func TestTheEtcdStoreHoldsEveryProperty(t *testing.T) {
+	t.Parallel()
 	storetest.Run(t, backend)
 }
 
@@ -72,6 +73,7 @@ func TestTheEtcdStoreHoldsEveryProperty(t *testing.T) {
 // work to each write, and the races must still meet their window (Task 6
 // review C-1).
 func TestTheSealingLayerOverEtcdHoldsEveryProperty(t *testing.T) {
+	t.Parallel()
 	storetest.Run(t, storetest.Backend{New: func(t *testing.T, clock func() time.Time) store.Store {
 		return crypt.Wrap(onShared(t, clock), sealKeys, nil)
 	}, RaceRounds: backend.RaceRounds, Stagger: backend.Stagger})
@@ -83,6 +85,7 @@ var sealKeys = crypt.Keys{Current: crypt.Key{ID: "k1", Bytes: [32]byte{1}}}
 // their deadline as store.ErrUnavailable: never a stale answer (Ruling 4;
 // spec §14, "Quorum lost").
 func TestALostQuorumIsUnavailableNeverStale(t *testing.T) {
+	t.Parallel()
 	c := etcdtest.StartCluster(t)
 	s, err := Open(Config{Endpoints: c.Endpoints, Prefix: etcdtest.Prefix(), Now: func() time.Time { return t0 }})
 	if err != nil {
@@ -154,12 +157,14 @@ func TestThePlaintextBesideASealIsNeverRead(t *testing.T) {
 	edit(inner.k.context(ck), &cr, func() {
 		cr.Logins = append(cr.Logins, store.LoginWitness(forged))
 		cr.Principal = "user:mallory"
+		cr.PrivLvl, cr.MaxPrivilege, cr.Enable, cr.CtxID = 15, 15, "token", "ctx-m"
 	})
 	if cr.Logins[0] != store.LoginWitness(forged) {
 		t.Fatalf("the sealed context held a plaintext witness: %v", cr.Logins)
 	}
 	c, err := s.GetContext(ctx, ck)
-	if err != nil || c.Principal != "user:alice" || !slices.Equal(c.Logins, []string{store.LoginWitness(h)}) {
+	if err != nil || c.Principal != "user:alice" || !slices.Equal(c.Logins, []string{store.LoginWitness(h)}) ||
+		c.PrivLvl != 1 || c.MaxPrivilege != 0 || c.Enable != "" || c.CtxID != "ctx1" {
 		t.Fatalf("a context read through the seal after a plaintext edit: %+v %v", c, err)
 	}
 
@@ -183,6 +188,31 @@ func TestThePlaintextBesideASealIsNeverRead(t *testing.T) {
 	if err != nil || r.Principal != "user:alice" || r.Sid != "sid-1" || r.CertKey != store.CertKey("ca", "0a") {
 		t.Fatalf("a receipt read through the seal after a plaintext edit: %+v %v", r, err)
 	}
+}
+
+// An idempotency record is on a lease, reserved and completed alike: one
+// written with none would sit in etcd forever, hidden by its expiry
+// (Task 8 review m-2).
+func TestAnIdempotencyRecordIsOnALease(t *testing.T) {
+	ctx := context.Background()
+	s := onShared(t, func() time.Time { return t0 })
+	leased := func(what string) {
+		t.Helper()
+		resp, err := s.tok.Get(ctx, s.k.idem("user:alice", "k"))
+		if err != nil || len(resp.Kvs) != 1 || resp.Kvs[0].Lease == 0 {
+			t.Fatalf("%s: the record has no lease: %v %v", what, resp, err)
+		}
+	}
+	if _, ok, err := s.ReserveIdempotency(ctx, "user:alice", "k", store.Idempotency{BodyHash: "h", Holder: "a",
+		Pending: true, ExpiresAt: t0.Add(time.Minute)}); err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	leased("a reservation")
+	if err := s.CompleteIdempotency(ctx, "user:alice", "k", "a", store.Idempotency{BodyHash: "h", Holder: "a",
+		Response: []byte("resp"), ExpiresAt: t0.Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	leased("a completion")
 }
 
 // A completion and a release each write only the record they read: a
@@ -289,7 +319,10 @@ func TestALoginAfterAnEtcdRestoreIsTheLast(t *testing.T) {
 		t.Fatal(err)
 	}
 	bobSealed := raw()
-	last, _ := s.GetContext(ctx, k)
+	last, err := s.GetContext(ctx, k)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	srv := etcdtest.Start(t, etcdtest.Options{}) // the restore
 	cliB := srv.Client(t, "")
