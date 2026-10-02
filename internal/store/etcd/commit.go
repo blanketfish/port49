@@ -32,6 +32,15 @@ type del struct {
 // that expired while port49d was paused, or an operator revoked) costs one
 // retry on fresh leases (Review Focus 2).
 func commit(ctx context.Context, cli *clientv3.Client, ls *leases, cmps []clientv3.Cmp, puts []put, dels ...del) (bool, error) {
+	ok, _, err := commitRev(ctx, cli, ls, cmps, puts, dels...)
+	return ok, err
+}
+
+// commitRev is commit, also returning the store revision the transaction
+// ran at: when the cmps held, the revision its writes committed at, which
+// is every written key's mod_revision.
+func commitRev(ctx context.Context, cli *clientv3.Client, ls *leases, cmps []clientv3.Cmp, puts []put,
+	dels ...del) (bool, int64, error) {
 	for attempt := 0; ; attempt++ {
 		ops := make([]clientv3.Op, 0, len(puts)+len(dels))
 		for _, p := range puts {
@@ -43,7 +52,7 @@ func commit(ctx context.Context, cli *clientv3.Client, ls *leases, cmps []client
 			default:
 				id, err := ls.For(ctx, p.exp)
 				if err != nil {
-					return false, unavailable(err)
+					return false, 0, unavailable(err)
 				}
 				ops = append(ops, clientv3.OpPut(p.key, string(p.val), clientv3.WithLease(id)))
 			}
@@ -61,9 +70,9 @@ func commit(ctx context.Context, cli *clientv3.Client, ls *leases, cmps []client
 			continue
 		}
 		if err != nil {
-			return false, unavailable(err)
+			return false, 0, unavailable(err)
 		}
-		return resp.Succeeded, nil
+		return resp.Succeeded, resp.Header.Revision, nil
 	}
 }
 

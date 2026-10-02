@@ -270,3 +270,33 @@ func TestARewriteAfterAReadComparesTheRevision(t *testing.T) {
 		t.Fatalf("a rewrite after a read: %+v", got)
 	}
 }
+
+// Each sealed context write keeps at hand the revision it committed at,
+// and that revision is the Rev the next read sees: the order a caller can
+// place its own writes in (the crypt ledger's follow-up).
+func TestAContextWriteReturnsItsRevision(t *testing.T) {
+	ctx := context.Background()
+	s := onShared(t, func() time.Time { return t0 })
+	k := store.ContextKey{NAS: "leaf-01", Username: "alice"}
+	c := store.Context{CtxID: "c", Principal: "p", Username: "alice", PrivLvl: 1}
+	check := func(what string, mod int64, err error) store.Context {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("%s: %v", what, err)
+		}
+		got, err := s.GetContext(ctx, k)
+		if err != nil || got.Rev != uint64(mod) || mod == 0 {
+			t.Fatalf("%s committed at %d, and a read sees Rev %d (%v)", what, mod, got.Rev, err)
+		}
+		return got
+	}
+	mod, err := s.putContext(ctx, k, c, time.Hour)
+	got := check("a put", mod, err)
+	mod, err = s.swapLogin(ctx, k, got.Rev, c, time.Hour, store.LoginWrite{Principal: "p", Sid: "s", IndexTTL: time.Hour})
+	got = check("a login", mod, err)
+	got.PrivLvl = 7
+	mod, err = s.rewriteContext(ctx, k, got.Rev, got, 0, true) // the cached path: GetContext just read it
+	got = check("a rewrite after a read", mod, err)
+	mod, err = s.rewriteContext(ctx, k, got.Rev, got, time.Hour, false) // a ttl reads again
+	check("a rewrite with a ttl", mod, err)
+}
