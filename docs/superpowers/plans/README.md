@@ -65,7 +65,9 @@ review done 2026-10-02 (one important: a token outlived its ceiling, fixed in th
 **merged 2026-10-02 (PR #21)**. **7c written 2026-10-02**
 (`2026-10-02-07c-api-and-authorization.md`, fourteen tasks: one docs, eleven code, one lab, one
 docs; no owner decision, ten rulings recorded as decision 34, decision 32 amended first by the
-owner's answer on the revocations volume; no register row).
+owner's answer on the revocations volume; no register row); **executed 2026-10-02** on
+`feature/api-and-authorization`, reviewed per task, the HTTP revocation's shapes measured on vEOS,
+the N9Kv, the C8000V and vJunos-router (Plan 7c — As built, below).
 7d–7h and 8–13 not yet.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
@@ -1539,7 +1541,7 @@ until 7c merges to be made. Every sub-plan is separately mergeable and leaves `m
   service is refused); `port49d init-revocations`, a start never creating the file (decision 32
   amended); `port49 identity`, `port49 explain` and `port49 revoke --mine`/`--via-agent` over the
   agent; a new `store.DeleteToken` with a `storetest` property. Lab: the HTTP revocation's shapes on
-  the four images 7a measured.
+  the four images 7a measured. **As built:** "Plan 7c — As built", below.
 - **Plan 7d — the shared store (D1).** The backend D1 chooses, implementing every store method
   with its atomicity and passing every `storetest` property, 7a's included; store-native mutual-TLS
   authentication per component (design §17); a hard timeout and a circuit breaker on every store
@@ -2053,6 +2055,353 @@ audit fails.
 - **9:** the hardware key's touch on refresh, and a PKCS#1 v1.5 mapping for tokens without PSS.
 - **12:** the Junos `idle-timeout` classes rendered from a per-role ceiling rather than the default,
   and `port49 policy diff` reporting a changed ceiling (pre-flight M11).
+
+### Plan 7c — As built
+
+Executed 2026-10-02 on `feature/api-and-authorization` (base 7c0ce7c), fourteen tasks, each
+reviewed per task; the ledger is
+`.superpowers/sdd/2026-10-02-07c-api-and-authorization/progress.md`, with each task's brief,
+report and review beside it. A pre-flight review revised the plan first
+(nine important and twenty minor, fixed at 7c0ce7c); one further ruling came out of the conflict
+scan (M14's side effect, below). What differs from the plan's text, task by task:
+
+- **Task 1 (docs; a65aedd, 28c3832, 6c89938).** The conflict scan's ruling went into decision 34
+  and §5.1.3 both: the net exemption counts only devices the inventory held before the reload, so
+  padding the inventory cannot pass the guard. From the review: §12's admin-socket `port49 revoke`
+  states its exit codes (0 done; 1 not in force, or no answer; 3 in force but unfinished or
+  unsaved; 2 usage), and the HTTP forms spell out the same four; §10's policy-reload bound counts
+  new refusals and new quarantines together; §5.1.4 says a retransmission after a
+  self-revocation is answered `token_not_found` (the plan says `token_spent` at its lines 177,
+  681 and 3264; the code, the spec and the tests say `token_not_found`, ruling I3-carry); §14 says
+  nine decision events, and its replay agreement checks only a principal or certificate `revoke`.
+- **Task 2 (init-revocations; bc0e90f, e413948, 65c817a, 6bd75ba, ca4c215, 088fc57).** Three
+  drifts from the plan's text, each in spec §12 and decision 32 (088fc57):
+  - **File before marker.** Init writes the empty file, then its marker (the plan says the marker
+    first). A crash between the two leaves a file with no marker, which the next start loads and
+    marks; the reverse order would leave a false "revocations were lost".
+  - **A relative path is refused**, exit 1 (the plan says it warns): it would resolve against the
+    shell's directory, not port49d's. A start still takes a relative path, as before.
+  - **A raced init says so**: a file that appears while init runs is refused, exit 1, "another
+    init-revocations is running or has just run; nothing written".
+  - A directory root owns, asked by anyone else, gets "if a volume should be mounted there, it is
+    not; mount it", never a `sudo -u root` line (e413948). The lab harness writes
+    `{"revocations": []}` only when no file is there, so it never truncates one a running port49d
+    holds (ca4c215).
+- **Task 3 (vocabulary; 5010a3f, ed06f3d).** As planned. `HasRight`'s test pins a misspelt right,
+  an empty one, an unknown one and a group subject, each refused.
+- **Task 4 (`/v1/identity`; e9a9c73, d524ecd).** `refuseRevoked`, left with no caller, was folded
+  into `refuseRevokedAs`. A test pins that identity lists only unexpired grants.
+- **Task 5 (`/healthz`, `/readyz`; 7252a2c, 3a43135).** The test mints on a store that fails and
+  sees `503 store_unavailable` while `/readyz` stays `200 serving`, and runs both probes over a nil
+  store. `TestRunAnswersDrainingBeforeTheBrokerCloses` pins `503 draining` on the broker listener
+  before shutdown. The probes are HTTPS on `broker.listen` with no client certificate, separate
+  from the TACACS+ `/readyz` on the metrics listener (review note, operator notes below).
+- **Task 6 (`store.DeleteToken`; dcfc675, 477217a, d3daca6, 7c88ca6).** Controller ruling: it keeps
+  7a's token index entries. The index maps a principal to a `(device, username)` key, not to a
+  token, so pruning could hide a second live token under the same key from a revocation; a stale
+  entry costs one `DeleteTokens` on that key. A new property, `DeleteTokenRacesRedeem`, races it
+  against a redeem and a put, 200 rounds, with no resurrection.
+- **Task 7 (`RevokeOwn`, `RevokeKey`; 72972e6, 44fb23e).** `RevokeKey` deletes the receipts of every
+  owner it read across its two passes, not only the last (kept by the review). A key where nothing
+  was found says so. `RevokeOwn`'s comment says `token_not_found`, as above.
+- **Task 8 (`POST /v1/tokens/revoke`; 4409fc2, 9f22972, 6753049).** Controller ruling (from Task 7
+  M4): one self or key revocation in flight per caller principal (`holdOwnRevoke`); a second is
+  `503 revocation_busy` at once, with `Retry-After: 5`, nothing revoked and no record (spec
+  §5.1.4, design §17, 9f22972). Trailing bytes after the body are 400. A mark that cannot be
+  written is `503 store_unavailable` with `Retry-After: 10`, and its text says what to do with no
+  `admin_socket` (remove the grants from `broker.policy_file`) or with one (the socket's path).
+- **Task 9 (`POST /v1/explain`; c810410, 384aabe, d701522).** The review found a timing oracle: the
+  hidden values were worked out before the no-grant check, 1.14 ms against 28 ns, so an unknown
+  device could be told from a known one with no grant. They are now worked out after it and
+  memoized per policy; the remaining gap (380 ns against 27 ns) cannot be told apart over HTTP.
+  Beyond the brief: `RenderWithoutAttributes`, so a session explain never returns attributes; a
+  revoked target is answered from the mark, without reading the policy; a policy fault writes the
+  `explain` record with `mint_error: broker_error`; a body over 16 KiB is 400.
+- **Task 10 (the reload guard; 604eade, 83ea48e, d0b0cbb, 82099cd, 6b91cd8).** Four rulings from
+  two review rounds, each in §5.1.3, §10 and decision 34:
+  - **A combined reload is judged on its policy's effect** (I1): against the policy in force over
+    the new inventory, so an inventory change's own quarantines stay decision 20's; a policy in
+    force that does not parse over the new inventory counts every device (fail closed).
+  - **The numerator counts only devices in service under the policy in force** (I2).
+  - **A release never offsets a refusal** (M1): newly refused devices over the bound are refused
+    whatever the reload releases, since a refusal deletes tokens a revert does not bring back.
+  - **That refusal bound is plan 6a's**, over the devices admitted, quarantined ones included
+    (R1), so a policy that refuses quarantined devices is still bounded.
+  - Shares print rounded up, so 1 of 3 prints 34% (M2, R2, `CheckFrom` too). The restart warning
+    is added only to a bound's refusal, not to the admit-none one, which a start also refuses.
+  - The L31 harness edit (`max_removed_percent: 100` in its quarantined phase) was only checked by
+    `go vet -tags lab`, not run in the lab; the next L31 run confirms it.
+- **Task 11 (the agent; b7560c6, d6f9070).** Every coded 503 (`revocation_busy`,
+  `store_unavailable`, `certificate_status_unavailable`) becomes an `agent.APIError` carrying its
+  code, detail and `RetryAfter`, and reaches the CLI as `…; retry in Ns`; the plan's
+  `unavailable` path would have turned `revocation_busy` into a 502. A broker 410 relayed through
+  the socket is clamped to 502, since 410 is the agent's own session end. A broker 404 with no API
+  code is `not_supported`, naming the broker as older. The socket refuses trailing data. Mint and
+  refresh are unchanged.
+- **Task 12 (the CLI; 7c6368d, 5c2025e).** Controller rulings: a terminal is detected by the
+  `TCGETS` ioctl on Linux (`golang.org/x/sys` becomes a direct dependency), not by
+  `ModeCharDevice`, under which `/dev/null` counts as a terminal and a cron job would be asked
+  `[y/N]`, read EOF and revoke nothing; other systems keep the mode check. The question names the
+  principal; the subject is printed on the `target:` line after the broker answers, since it is
+  not known before. `--yes` outside `--via-agent --principal`, and `--socket` in an agent form, are
+  usage errors (exit 2).
+- **Task 13 (lab; 0529b92, 1af6f72, 9bfb710, 4a6a769).** All four images pass, run at 9bfb710.
+  From the review: a row for the re-login session's next command after the key revocation, the
+  Junos rows worded as measured, and the reach of the key and principal reports checked both ways.
+- **Task 14 (this section).** No lab note contradicts §5.1.4's "Over HTTP, as built" or decision 34,
+  so no doc is corrected under lab rule 4. Spec §10's reload-bound paragraphs, over-wide since
+  d0b0cbb, are rewrapped.
+
+**Rulings, as made** (spec §13, decision 34; the plan's ten rulings): Rulings 1, 5 and 7 stand as
+written. Ruling 2 stands, its retransmission answered `token_not_found` (I3-carry). Ruling 3 gains
+the per-caller bound on self and key revocations (Task 8). Ruling 4 stands, and neither busy
+answer writes a record. Ruling 6 gains: session attributes are never returned, and a no-grant
+answer works out nothing a granted one does (Task 9). Ruling 8 is amended by the conflict scan
+(padding never offsets) and by Task 10's I1, I2, M1 and R1 above. Ruling 9 is amended by Task 2:
+the file before the marker, a relative path refused, a raced init refused. Ruling 10 stands: no
+register row opens or closes.
+
+**Lab (Task 13)**, four images on beehive, 2026-10-02, run at 9bfb710
+(`tests/lab/results/api-revoke-*.md`; captures `tests/lab/evidence/api-revoke-<platform>.pcap`,
+the redacted copies passing the labpcap audit on the branch). On every image: carol, with no right,
+was refused 403 by principal and by key, and alice's next command ran; `--mine`'s unspent token
+was refused `token_not_found`, the agent kept running, and a token minted after it logged in at
+once; bob's key revocation ended alice's re-login, and she logged in again at once; bob's
+principal revocation was listed `api user:bob@slice.port49.test`, ended alice's agent on `401
+credential_revoked`, and a lift on the admin socket let her back; all six `revoke` records (by
+`self`, `key`, `principal` × reason) were written.
+
+- **vEOS-lab 4.31.2F (image tagged 4.32.2F)** (`api-revoke-arista_eos.md`). `--mine` and the key
+  revocation each refused the next command: `% Authorization denied for command 'show version':
+  port49: this session was revoked - log in again`. Pre-flight I1, measured: the session `--mine`
+  refused ran `show version` again after alice's re-login (decision 15's join).
+- **N9Kv 10.4(2)F** (`api-revoke-cisco_nxos.md`). As vEOS; the device printed only `Error: AAA
+  authorization failed AAA_AUTHOR_STATUS_METHOD=16(0x10)`. I1 re-admission measured.
+- **C8000V 17.13.01a** (`api-revoke-cisco_iosxe.md`). As vEOS; the device printed `port49: this
+  session was revoked - log in again`. I1 re-admission measured.
+- **vJunos-router 23.4R2-S2.1** (`api-revoke-juniper_vjunos-router.md`). Not reached per command,
+  as 7a found: every open session ran `show version` throughout, and the `--mine`, key and
+  principal reports each named `srx1 (slice01)` not reached. The re-admission is not observable
+  there. The capture is 1768 packets against the first run's 568: the device and SSH client
+  retried TACACS+ around the refused old-token login (task 13 review M5); no claim rests on the
+  count.
+
+**Operator notes** (for the pull request body and plan 13's docs; the plan's "Operator-facing
+notes", amended by what was built):
+
+- **Breaking: port49d no longer creates `broker.revocations_file`.**
+  - **First install.** Run, once, as the user port49d runs as (the owner of the file's directory):
+
+    ```
+    sudo -u port49 port49d init-revocations --config /etc/port49/port49d.yaml
+    ```
+
+    The subcommand comes first (`port49d --config X init-revocations` is a usage error, exit 2).
+    It reads only `broker.revocations_file` from the config, so no secret needs to be in the
+    environment, and it refuses a path that is another file port49d uses. It prints `port49d:
+    created broker.revocations_file <path> with no revocations, and its marker <path>; …` and
+    exits 0.
+  - **What its exit 1 means.**
+    - `… belongs to <user>, and this runs as uid N: … run as <user>, e.g. sudo -u <user> port49d
+      init-revocations --config <cfg>`: run it as that user. Root is refused too: a root-written
+      0600 file is one port49d cannot read. It never chowns.
+    - `… belongs to root, and this runs as uid N: if a volume should be mounted there, it is not;
+      mount it`: the volume did not mount, or the directory must be given to port49d's user.
+    - `broker.revocations_file "<p>" is relative: it must be absolute`: give an absolute path in
+      `port49d.yaml`. A start still accepts a relative one, resolved against port49d's directory.
+    - `… exists and does not load (…); init never replaces it`: restore it, or fix it by hand.
+    - `… is missing, and its marker <path> says port49d held revocations here: init never
+      re-creates a lost file`: restore it from backup (below).
+    - `… appeared while this ran: another init-revocations is running or has just run; nothing
+      written`: run it once more to see `already initialized`.
+  - **Once, at install, never on a start path.** By hand or as a one-off job. Never in an init
+    container or an `ExecStartPre=`: wrapped to tolerate its refusal there, it would re-create the
+    file on the next empty volume, the hazard this change removes. Run again, it prints `…is
+    already initialized; nothing written` and exits 0, so an idempotent provisioning step needs no
+    `|| true`.
+  - **What a start does.** A missing file refuses every start: `broker.revocations_file <path>:
+    does not exist: if port49d has run here before, the volume holding it is missing or empty:
+    mount it or restore the file; only on a first install, run 'port49d init-revocations' once`.
+    So an unmounted or empty volume never starts port49d with no revocations.
+  - **Upgrading.** An install that already has the file changes nothing; a start writes the marker
+    beside it if it has none.
+  - **After a loss.** Restore the file from backup. With its marker there, a start says `is
+    missing, and its marker says port49d held revocations here`. Writing `{"revocations": []}` by
+    hand (0600, port49d's user) is the deliberate way to start empty.
+- **Upgrade: agents and brokers older than this release.** An agent lives for `max_session_age`,
+  and one started by the old `port49` has no `identity`, `explain` or `revoke` route; the new CLI
+  says `your agent (started before this port49) does not carry this command; run `port49 login`
+  again`. A new CLI against an old port49d gets `not_supported: the broker at <url> does not serve
+  /v1/…: it runs a port49d older than this port49`.
+- **New: `port49 identity [--json] [--socket PATH]`.** It prints whom the broker resolves you to:
+  principal, subject, groups, unexpired grants by scope, `api:` rights, and until when this
+  connection lasts (`connection_ends_at`, from `max_session_age` at authentication); a device's
+  own session ceiling may end a session sooner. `--json` prints the broker's answer. Exit 0, or 1
+  with `no agent at <socket>; run 'port49 login'` or the broker's refusal. Each call writes an
+  `identity` record, so do not put it in a shell prompt.
+- **New: `port49 explain --device D [--command "LINE"] [--principal P]`**, with no
+  `--policy`/`--inventory`.
+  - **What it does.** It asks the broker through your agent, from the policy in force, and prints
+    what the offline form prints, redacted, with no session attributes. For a denied command it
+    names every role in the policy whose permits would match (what to ask for), never who holds
+    one. A device the inventory lacks is answered exactly as one with no grant.
+  - **Another principal.** `--principal` naming someone else needs `api: [explain_others]`;
+    without it: `refused: explaining another principal needs the api: explain_others right`, exit
+    1.
+  - **Offline only.** `--subject` and `--show-attributes` are usage errors (exit 2) over the
+    broker.
+  - **Dashboards.** `explain` records carry hypothetical verdicts: a panel of denials, or of
+    `port49_decisions_total{verdict="deny"}`, should filter `event!="explain"`.
+- **New: `port49 revoke --mine [--device D --username U]`.**
+  - **What it does.** It ends your own live sessions and deletes your unspent tokens (one device
+    with `--device` and `--username`), and your receipts everywhere, so a client retransmitting a
+    spent token anywhere is refused `token_not_found`.
+  - **No lock.** It leaves no mark and closes no agent: `port49 token` and a login work at once
+    after it (measured on four images). Use it when a token leaked.
+  - **Close a stranger's session first.** Your next login on a device re-admits every session open
+    there under your username, a stranger's on your leaked token included (measured on vEOS, the
+    N9Kv and the C8000V). If anyone else used your token, close their session on the device, or
+    ask an operator to revoke your principal, before you log in there again. The report says so.
+  - **Junos sessions** keep what they had at login and are named `not reached` in the report;
+    close them on the device.
+- **New: `port49 revoke --via-agent --principal P [--yes]`** (needs `api: [revoke_others]`).
+  - **What it does.** The admin socket's standing mark, from your laptop, through your agent. On a
+    terminal it asks `revoke P everywhere? It is a standing mark: … [y/N]` first; anything but `y`
+    or `yes`, EOF included, exits 1 with `nothing was revoked`. `--yes` skips the question, and is
+    a usage error with any other form. Off a terminal (cron, `</dev/null`) it does not ask. It then
+    prints `target: P (subject S)`, or `(no subject in the policy in force names it)`, so a typo of
+    a real colleague's address is seen at once.
+  - **The record.** `port49 revoke --list` and the `revoke` record name you as `origin: api <you>`.
+  - **Lifting** stays the admin socket's, as does `--cert`; the report names the socket. With no
+    `admin_socket` configured, the mark is still made, and the report and port49d's start line
+    (`port49d: broker: no admin_socket: …`) say lifting it needs port49d stopped, the entry
+    removed from `broker.revocations_file`, and a start.
+  - **Watch for a burst.** Alert on
+    `rate(port49_revocations_total{by="principal",outcome="applied"}[5m])` above your normal: a
+    compromised `revoke_others` certificate can mark every human. Revoke that certificate on the
+    admin socket, then lift its marks; until a bulk lift exists:
+
+    ```
+    port49 revoke --list | awk '$1 == "principal" && /\(api user:oncall@example\.com\)$/ {print $2}' |
+      while read -r p; do port49 revoke --lift --principal "$p"; done
+    ```
+- **New: `port49 revoke --via-agent --device D --username U`** (needs `api: [revoke_others]`).
+  - **What it does.** It ends whatever holds that key, with no mark, so the owner can log in again;
+    revoke the principal to stop that. It prints `target:` with the owner it found. The owner's
+    next login there re-admits any session still open on it: close it on the device. A key where
+    nothing was found says `nothing was found under D (U)`.
+  - **Without the right** it is refused 403, never narrowed to your own sessions there: `refused:
+    ending a (device, username) whoever holds it needs the api: revoke_others right, …; for your
+    own session there, use --mine --device D --username U`, exit 1.
+  - **Not in `--list`.** A self or key revocation leaves no mark; `--list` says so on stderr, and
+    the decision log's `revoke` records (`revocation.by` `self` or `key`) name each.
+- **What the agent forms exit with, and what each error means.** 0 done; 1 refused or unreachable
+  (nothing revoked); 3 in force but incomplete, or a standing mark not saved; 2 usage. Over the
+  agent `--agent-socket` names your agent; `--socket` (port49d's admin socket) is a usage error
+  there.
+  - `refused: revoking another principal needs the api: revoke_others right`: your subject does
+    not declare it. Ask for it, or ask an operator to use the admin socket.
+  - `the broker is unavailable just now: revocation_busy: …; retry in 5s`: another revocation or
+    lift held the slot for 10 s, or your own `--mine` or key revocation is still running. Nothing
+    was revoked; run it again.
+  - `the broker is unavailable just now: store_unavailable: the revocation could not be recorded,
+    so nothing was revoked; …; retry in 10s`: the store refused the mark. Retry; the text names
+    the admin socket, or, with none configured, says to remove the principal's grants from
+    `broker.policy_file` meanwhile.
+  - `no agent at <socket>; run 'port49 login'`, and the session-over lines, as for `port49 token`.
+- **`api:` rights now mean something.**
+  - **What they unlock.** `revoke_others` and `explain_others` act on other people. `sync`,
+    `keys_show` and `replay` are reserved and grant nothing yet.
+  - **What no right does.** No right lets anyone mint or refresh for another principal.
+  - **The gate.** A right gained fails `port49 policy diff` unless a test asserts the subject's
+    whole `api:` list, as before. Every subject with `api:` is in the CI report.
+- **New: the policy reload guard.**
+  - **What is refused.** A policy edit that would take more than `inventory.max_removed_percent`
+    (default 10) of the devices in service out of service, by refusing admission or by
+    quarantining, is refused. So is one that newly refuses admission to more than that share of the
+    devices admitted, whatever it releases elsewhere. `port49_policy_file_refused` goes to 1, and
+    the policy in force keeps serving. The line names each device and cause, redacted, with the
+    share rounded up (`the new policy takes 5 of 20 devices in service out of it (25%), more than
+    inventory.max_removed_percent (10%): …`).
+  - **The refused file is still on disk.** The line ends `the refused file is still on disk and is
+    NOT what is serving: a restart of port49d would load it with no such bound, so revert or fix
+    it now`. A pod rescheduled, a crash or the next deploy loads it and takes those devices out of
+    service. Revert or fix it at once.
+  - **A combined policy-and-inventory reload** is judged on the policy's effect alone: devices the
+    inventory change moves into a quarantined scope are the inventory's, as before. When the guard
+    fires on the policy, the line begins `broker.policy_file <path>:`; with both read from files,
+    it ends `the refused files are still on disk …`.
+  - **Small fleets.** One quarantined device of three is 34%. Raise the bound and send `SIGHUP`
+    for a deliberate change, then lower it again: the same bound holds inventory syncs.
+  - **A refused edit keeps any grant it withdrew.** `port49 revoke` cuts a principal off whatever
+    the file says.
+  - **What is never refused** on the combined count: a reload after which at least as many of the
+    devices the inventory already held are in service as before, such as an incident fix that
+    releases many and quarantines a few. Devices the same reload adds never count toward that.
+- **New broker endpoints.**
+  - `GET /v1/identity`, `POST /v1/explain` and `POST /v1/tokens/revoke`, each authenticated as
+    `/v1/tokens` is.
+  - `GET /healthz` (`200 ok`) and `GET /readyz` (`200 serving`; `503 starting: …` before the
+    broker serves, `503 draining: port49d is shutting down` from the signal on), with no
+    certificate and no record. `/readyz` stays 200 through a store outage, by design (design §12);
+    watch the alarms instead.
+  - **Probe them over HTTPS with no client certificate** on `broker.listen` (kubelet `scheme:
+    HTTPS`). A plain-HTTP or TCP probe fails the TLS handshake and logs a `handshake_*` line and
+    counts `port49_broker_tls_handshake_failures_total` every period. They are not the TACACS+
+    `/readyz` on the metrics listener.
+  - **New API errors:** `403 api_right_missing`; `503 revocation_busy` (`Retry-After: 5`); `400
+    bad_request` for a `sid` (until plan 7h), trailing bytes, or an explain body over 16 KiB.
+- **New records.**
+  - `identity permit grants_matched` and `identity deny no_grants_matched`.
+  - `explain <the answer>`, with `explain.asked_by` and `explain.asked_by_fingerprint`, the
+    `policy.bundle` that answered, `explain.command: true` when one was asked and never the
+    command; on a broker fault, `explain.mint_error: broker_error` with no verdict.
+  - `revoke deny api_right_missing`, naming the target (or the key) and the caller in `origin`.
+  - `revoke` with `by: self` or `by: key`, `device` and `username`, and `origin: api <principal>`;
+    `saved` only on a standing mark.
+  - A record about someone other than the caller carries no `auth`: `auth` and `principal` always
+    describe one credential, so a join of fingerprint to principal stays true.
+  - A call refused before it is read, or as its connection binds, is recorded under its own
+    event, with the mint's reasons. A busy answer writes no record.
+- **Metrics.** `port49_revocations_total{by}` gains `self` and `key`.
+  `port49_decisions_total{event}` counts `identity` and `explain`.
+
+**Unassigned follow-ups:**
+
+- A bulk lift, `port49 revoke --lift --origin "api <principal>"`, so recovery from a mass
+  revocation by a compromised `revoke_others` certificate is one command, not one lift per victim
+  (pre-flight M19; the shell loop above until then).
+- `internal/agent`'s `TestAnExpiredHangUpDuringARefreshEndsTheSession` (7b code) failed once in a
+  Task 10 mutation run across `./...`; 200 plain runs and 15 package runs under `-race` did not
+  reproduce it. Task 11's first `make test` also reported one failure it could not attribute,
+  not seen in five reruns. Watch for it.
+- The next L31 run confirms the quarantined phase's reload applies under
+  `max_removed_percent: 100` (Task 10's harness edit, vet-checked only).
+
+**After the merge:** main's `tests/lab/labpcap` test fails until this branch merges: the raw
+captures are already in main's `tests/lab/captures/`, and their redacted evidence arrives with the
+merge. Run `make test` on main after the merge to see it pass.
+
+**Carried, for later plans:**
+
+- **7d:** `storetest.DeleteTokenRemovesOne` and `DeleteTokenRacesRedeem` on the etcd backend. Its
+  M-2 case puts a token already expired; etcd may refuse that put, in which case use a
+  clock-advancing constructor. `DeleteToken` keeps 7a's index entries (Task 6 ruling); the
+  property does not assert whether a deleted token's stale entry stays, so a backend may prune it
+  only where that cannot hide a second live token under the key. The self-revocation's
+  compare-and-set on the backend's `SetContextPolicy`.
+- **7e:** `/healthz` and `/readyz` on the broker's own process. The revocations file's init in the
+  broker's deployment, run once at install and never on a start path. A reload guard at start,
+  against the last bundle in force, so a restart cannot load a file the guard refused (pre-flight
+  I4). The per-caller self/key bound (`holdOwnRevoke`) and the revocation slot are per process;
+  with replicas, a caller holds one per replica.
+- **7g:** rights held through a group subject (`HasRight` refuses one today, pinned by ed06f3d).
+- **7h:** `/v1/tokens/revoke` by `sid` (400 today); `/v1/logout`.
+- **12:** the deployment's `port49d init-revocations` step: once, at install, by hand or as a
+  one-off job, as port49d's user, and never in an init container or `ExecStartPre=` (a tolerated
+  failure there re-creates the file on the next empty volume, the hazard decision 32's amendment
+  removes); the small-fleet note on the reload guard; the guard at start, as for 7e; the broker's
+  readiness probe as HTTPS with no client certificate.
 
 ## Plan 8 — Workload certificates (§19 step 8)
 

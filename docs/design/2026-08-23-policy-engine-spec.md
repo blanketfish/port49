@@ -5072,8 +5072,9 @@ force over the new inventory, so a device the inventory change takes out of serv
 inventory's, quarantined as decision 20 says, and the line names the policy file only when the
 policy is the cause (if the policy in force does not parse over the new inventory, every device
 is counted as the policy's). It passes and one swap applies both; it fails and neither is
-applied, one line naming both. A whole-fleet re-address with its key group — where each file alone admits none —
-then loads, and no bundle between the two revokes a context the final one keeps.
+applied, one line naming both. A whole-fleet re-address with its key group — where each file
+alone admits none — then loads, and no bundle between the two revokes a context the final one
+keeps.
 
 **A policy reload is held to the same bound.** Key groups are policy, and a refused device's live
 contexts are revoked and its tokens deleted, so a `key_groups` edit that misses the fleet would
@@ -5084,13 +5085,13 @@ and not quarantined) is refused, naming them, unless at least as many of the dev
 inventory held before it are in service after it (a net release; a device the reload adds never
 offsets one it takes out; §13 decision 34). The net release never covers refusals: one that
 newly refuses admission to more than the bound of the devices the policy in force admits,
-quarantined ones included, is refused whatever it releases, as plan 6a's bound refused it, since the tokens a refusal deletes do not come back on a
-revert. Either way the policy in force keeps serving and
-`port49_policy_file_refused` is 1, and raising the bound and sending `SIGHUP` applies a deliberate
-change. A policy reload whose bundle admits no device of a non-empty inventory is refused
-whatever the bound, as a start is (above): the policy in force keeps serving, the refusal is
-said once, and its line names the deliberate path to take the whole fleet off, which is to stop
-port49d.
+quarantined ones included, is refused whatever it releases, as plan 6a's bound refused it,
+since the tokens a refusal deletes do not come back on a revert. Either way the policy in force
+keeps serving and `port49_policy_file_refused` is 1, and raising the bound and sending `SIGHUP`
+applies a deliberate change. A policy reload whose bundle admits no device of a non-empty
+inventory is refused whatever the bound, as a start is (above): the policy in force keeps
+serving, the refusal is said once, and its line names the deliberate path to take the whole
+fleet off, which is to stop port49d.
 
 **The inventory file is privilege-granting, and read as the policy file is.** Its attributes and
 names decide scope membership, its addresses are handed to SSH clients by the mint, and a
