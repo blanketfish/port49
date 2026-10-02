@@ -127,7 +127,14 @@ func (b *Broker) tokensRevoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if target == caller {
-		b.revokeOwnOrKey(w, pol, caller, origin, own)
+		// The caller's own, named as another's would be: a self
+		// revocation, no mark (decision 34). The answer says so first,
+		// since the CLI asked about a standing mark (final review M2).
+		b.revokeOwnOrKey(w, pol, caller, origin, func() RevokeReport {
+			rep := own()
+			rep.OwnNote = b.ownNote()
+			return rep
+		})
 		return
 	}
 	if !mayOthers {
@@ -221,6 +228,17 @@ func (b *Broker) unrecordedNote() string {
 			"principal's grants from broker.policy_file"
 	}
 	return "try again, or ask an operator to run `port49 revoke` on port49d's admin socket (" + b.AdminSocket + ")"
+}
+
+// ownNote is the first line of a self revocation asked by the caller's own
+// principal's name: no mark was made, and who can make one.
+func (b *Broker) ownNote() string {
+	if b.AdminSocket == "" {
+		return "this is your own principal: no mark was made; to lock it, port49d needs an admin_socket, or an " +
+			"operator removes your grants from broker.policy_file"
+	}
+	return "this is your own principal: no mark was made; to lock it, ask an operator to use port49d's admin " +
+		"socket (" + b.AdminSocket + ")"
 }
 
 // liftNote says where a standing mark made over HTTP is lifted: port49d's

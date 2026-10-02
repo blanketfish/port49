@@ -72,6 +72,34 @@ func TestARevocationIsComparedAsTheBrokerSpellsIt(t *testing.T) {
 	}
 }
 
+// The caller's own principal, named as another's would be, is a self
+// revocation, and the answer's first line says so before anything else:
+// the CLI asked about a standing mark, and none was made (final review
+// M2). mine is not told.
+func TestTheCallersOwnPrincipalByNameSaysNoMarkWasMade(t *testing.T) {
+	f := newFixtureWithPolicy(t, 8, sharedPolicy)
+	f.b.AdminSocket = "/run/port49/port49d.sock"
+	const first = "this is your own principal: no mark was made; to lock it, ask an operator to use port49d's " +
+		"admin socket (/run/port49/port49d.sock)\n"
+	r := decodeRevoke(t, f.revokeAs(t, "alice@example.com", `{"principal":"user:alice@example.com"}`))
+	if r.By != "self" || r.Standing || !strings.HasPrefix(r.Text, first) ||
+		!strings.Contains(r.Text, "nothing stands against user:alice@example.com") {
+		t.Fatalf("%+v", r)
+	}
+	if _, err := f.st.GetRevocation(context.Background(), store.RevocationPrincipal, alicePrincipal); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("a mark was made: %v", err)
+	}
+	if r := decodeRevoke(t, f.revokeAs(t, "alice@example.com", `{"mine":true}`)); strings.Contains(r.Text, "your own principal") {
+		t.Fatalf("mine: %q", r.Text)
+	}
+	f.b.AdminSocket = ""
+	r = decodeRevoke(t, f.revokeAs(t, "alice@example.com", `{"principal":"user:alice@example.com"}`))
+	if !strings.HasPrefix(r.Text, "this is your own principal: no mark was made; to lock it, port49d needs an "+
+		"admin_socket, or an operator removes your grants from broker.policy_file\n") {
+		t.Fatalf("with no admin socket: %q", r.Text)
+	}
+}
+
 // {"mine": true}, or the caller's own principal, is a self-revocation: no
 // mark, and the caller mints at once after it.
 func TestMineIsASelfRevocation(t *testing.T) {

@@ -61,7 +61,11 @@ type RevokeReport struct {
 	// endpoint sets it from Broker.AdminSocket (decision 34), and Text prints
 	// it after the mark's own text. Empty from the admin socket, whose
 	// caller is already there.
-	LiftNote    string
+	LiftNote string
+	// OwnNote is the first line of a self revocation the request named by
+	// the caller's own principal, as it would another's: no mark was made,
+	// and who can make one. The endpoint sets it (ownNote); empty otherwise.
+	OwnNote     string
 	Mark        store.Revocation
 	Contexts    []store.ContextRef
 	Unreached   []store.ContextRef
@@ -433,6 +437,9 @@ func (r RevokeReport) Text() string {
 	at := r.Mark.At.UTC().Format(time.RFC3339)
 	switch r.By {
 	case ByOwn:
+		if r.OwnNote != "" {
+			b.WriteString(r.OwnNote + "\n")
+		}
 		where := "everywhere"
 		if r.Key != (store.TokenKey{}) {
 			where = fmt.Sprintf("on %s (%s)", r.Key.NAS, r.Key.Username)
