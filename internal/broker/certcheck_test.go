@@ -230,6 +230,25 @@ func TestARevokedLeafIsRefusedAndRevoked(t *testing.T) {
 		}
 	})
 
+	// Once the queue has marked it, the certificate's next connection is
+	// answered from the mark, and the mark a CA's revocation wrote says so:
+	// it never offers an operator's lift, which the CA's list would undo at
+	// the next bind.
+	t.Run("a CA's mark offers no lift", func(t *testing.T) {
+		f := newFixture(t, 8)
+		fs := withStatus(t, f, "refuse", nil)
+		addr, _ := serveWithStatus(t, f, DefaultListenerLimits)
+		f.liveContext(t, "leaf1", "alice", alicePrincipal, certKey(f.alice))
+		fs.set(f.alice, revokedByCRL)
+		boundAnswer(t, f, addr, f.alice)
+		waitMark(t, f, f.alice, "crl corp")
+		a := boundAnswer(t, f, addr, f.alice)
+		if a.status != 401 || !strings.Contains(a.body, `"credential_revoked"`) ||
+			!strings.Contains(a.body, "was revoked at its CA (crl corp)") || strings.Contains(a.body, "lift") {
+			t.Fatalf("%s", reply(a.status, a.body))
+		}
+	})
+
 	// A revoked certificate never takes a slot or evicts its owner's
 	// renewed certificate's connections (pre-flight I1).
 	t.Run("bind holds no slot", func(t *testing.T) {

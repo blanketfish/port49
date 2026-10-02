@@ -120,9 +120,10 @@ type Listener struct {
 	open map[*trackedConn]bool
 	// held is, by principal, its bound connections, oldest first.
 	held map[string][]*trackedConn
-	// marked is the broker's marks, by (kind, key), each with when it took
-	// force, kept by Revoked.
-	marked map[[2]string]time.Time
+	// marked is the broker's marks, by (kind, key), each as Revoked was
+	// given it: its origin decides how a refusal from it reads
+	// (revokedError).
+	marked map[[2]string]store.Revocation
 	lines  map[string]*lineLimit
 }
 
@@ -132,7 +133,7 @@ func (l *Listener) Revoked(mark store.Revocation, on bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if on {
-		l.marked[[2]string{mark.Kind, mark.Key}] = mark.At
+		l.marked[[2]string{mark.Kind, mark.Key}] = mark
 	} else {
 		delete(l.marked, [2]string{mark.Kind, mark.Key})
 	}
@@ -170,7 +171,7 @@ func NewListener(inner net.Listener, cfg *tls.Config, lim ListenerLimits, m *met
 	l := &Listener{inner: inner, cfg: cfg, lim: lim, m: m, now: now, logf: logf,
 		ready: make(chan *tls.Conn), done: make(chan struct{}),
 		pending: map[netip.Addr]int{}, open: map[*trackedConn]bool{}, held: map[string][]*trackedConn{},
-		marked: map[[2]string]time.Time{}, lines: map[string]*lineLimit{}}
+		marked: map[[2]string]store.Revocation{}, lines: map[string]*lineLimit{}}
 	return l
 }
 
@@ -394,7 +395,7 @@ func (l *Listener) bind(c *trackedConn, principal, certKey string, refused bool)
 		return nil, false
 	}
 	for _, k := range [][2]string{{store.RevocationPrincipal, principal}, {store.RevocationCert, certKey}} {
-		at, marked := l.marked[k]
+		rv, marked := l.marked[k]
 		if !marked {
 			continue
 		}
@@ -409,7 +410,7 @@ func (l *Listener) bind(c *trackedConn, principal, certKey string, refused bool)
 		l.m.BrokerConnectionEvents.WithLabelValues("revoked_refused").Inc()
 		l.say("revoked_refused", "port49d: broker: answering a connection from %s credential_revoked and "+
 			"closing it as it bound: %s or its certificate is revoked", c.src, principal)
-		return &store.Revocation{Kind: k[0], Key: k[1], At: at}, true
+		return &rv, true
 	}
 	if refused {
 		l.mu.Unlock()

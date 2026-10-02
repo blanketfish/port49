@@ -33,6 +33,7 @@ import (
 	"github.com/rhwendt/port49/internal/engine"
 	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/policy"
+	"github.com/rhwendt/port49/internal/printsafe"
 	"github.com/rhwendt/port49/internal/session"
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/token"
@@ -536,10 +537,20 @@ func answerRevoked(w http.ResponseWriter, rv store.Revocation) {
 
 // revokedError is credential_revoked's body, the same from a mint and from
 // the listener's answer to a marked connection (Listener.answerRevoked).
+//
+// A mark a CA's revocation wrote, its origin a source's ("crl <name>",
+// "ocsp <responder>"; spec §5.1.4), says the CA revoked it and offers no
+// lift: the CA's list or responder would refuse the certificate again at
+// its next bind and mark it again, so a lift only sends the user round.
 func revokedError(rv store.Revocation) api.Error {
 	what := "this principal"
 	if rv.Kind == store.RevocationCert {
 		what = "this certificate"
+		if strings.HasPrefix(rv.Origin, "crl ") || strings.HasPrefix(rv.Origin, "ocsp ") {
+			return api.Error{Error: string(decision.CredentialRevoked), Detail: fmt.Sprintf(
+				"%s was revoked at its CA (%s) and marked at %s; nothing is minted for it", what,
+				printsafe.Line(rv.Origin, 160), rv.At.UTC().Format(time.RFC3339))}
+		}
 	}
 	return api.Error{Error: string(decision.CredentialRevoked), Detail: fmt.Sprintf(
 		"%s was revoked at %s; nothing is minted for it until an operator lifts the revocation "+
