@@ -6689,8 +6689,14 @@ review (the owner may override them).*
     Reads are at most a third of `hold_ttl` apart, so that is at least a sixth of `hold_ttl`
     before etcd can expire the lease and let another take the keyspace (2.5s at the default
     15s). etcd reports the TTL in whole seconds, rounded down, which only moves the estimate
-    earlier. `hold_ttl` is 5s or more, where a healthy lease still reports 3s, above the line,
-    since a slow read is judged at its send and its time is not counted against it.
+    earlier. A slow read is judged at its send, so its time is not counted against it.
+  - **`hold_ttl` is 10s to 60s**, and a shorter one is refused at config load. etcd's client
+    sends the next keepalive a third of the TTL after a response but checks only every
+    500ms, so a healthy lease can report as little as ⌊2·`hold_ttl`/3 − 0.5s − a round
+    trip⌋. That must stay above half of `hold_ttl`: at 10s it is 6s, above 5s, while the
+    round trip is under about 0.17s; at the default 15s it is 8s, above 7.5s, while the
+    round trip is under about 1.5s. Below 10s a healthy lease can report half or less, and
+    the fence would drop the hold on a store that is up.
 - **A start on etcd.** port49d waits for the store with every listener closed (up to
   `store.etcd.start_timeout`, 30s, then exits 1; `0` waits forever; after a store gone, no
   deadline), and then, retrying while the store errs:
