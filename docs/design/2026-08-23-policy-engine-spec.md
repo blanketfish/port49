@@ -6702,13 +6702,15 @@ review (the owner may override them).*
      start;
   5. deletes every unspent token, as a restart always did, and marks every key superseded,
      so an idempotent replay mints again;
-  6. carries the policy in force into every live context the store kept. A context it leaves
-     unjudged (still changing after every attempt, or sealed under a key this port49d does not
-     hold) keeps `port49_policy_refresh_pending` at 1 and is judged by a later pass (§5.1.3); it
-     never stops the start. A principal whose contexts could not be looked up holds the start,
-     retried as an outage is: those contexts open, so left unjudged they could serve a grant
-     the policy in force withdrew. On etcd that lookup fails only as the store being
-     unavailable;
+  6. carries the policy in force into every live context the store kept. A context sealed
+     under a key this port49d does not hold, which every path denies anyway, is left unjudged:
+     it keeps `port49_policy_refresh_pending` at 1, is judged by a later pass (§5.1.3), and
+     never stops the start. Any other context left unjudged holds the start exactly as an
+     outage does, said, counted and retried with the listeners closed: a principal whose
+     contexts could not be looked up, or a context still changing after every attempt. Those
+     contexts open, so left unjudged they could serve a grant the policy in force withdrew. On
+     etcd that lookup fails only as the store being unavailable, and nothing else writes a
+     context before the listeners open;
   7. seals the ledger, the start having read every kept context;
   8. binds TACACS+.
 
