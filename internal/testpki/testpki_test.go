@@ -149,3 +149,27 @@ func TestWriteInventoryLabWritesAUsableSet(t *testing.T) {
 		}
 	}
 }
+
+// WriteLabWith writes one client certificate per extra email beside the
+// first's, under LabClientFiles' names, from the same CA.
+func TestWriteLabWithWritesEachPerson(t *testing.T) {
+	dir := t.TempDir()
+	if err := WriteLabWith(dir, "alice@lab.test", []string{"bob@lab.test"}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	cert, key := LabClientFiles("bob@lab.test")
+	if cert != "client-bob.pem" || key != "client-bob-key.pem" {
+		t.Fatalf("%s %s", cert, key)
+	}
+	pair, err := tls.LoadX509KeyPair(filepath.Join(dir, cert), filepath.Join(dir, key))
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf, err := x509.ParseCertificate(pair.Certificate[0])
+	if err != nil || len(leaf.EmailAddresses) != 1 || leaf.EmailAddresses[0] != "bob@lab.test" {
+		t.Fatalf("%v %v", leaf.EmailAddresses, err)
+	}
+	if fi, err := os.Stat(filepath.Join(dir, key)); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("key mode: %v %v", fi, err)
+	}
+}
