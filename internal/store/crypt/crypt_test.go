@@ -428,7 +428,7 @@ func TestAContextUnderARetiredKeyIsReplacedCarryingItsRevocation(t *testing.T) {
 		t.Fatalf("an unopenable context must hand up its plaintext revision and revocation: %v", err)
 	}
 	login := store.Context{CtxID: "ctx_new", Principal: "user:alice@example.com", Username: "alice", PrivLvl: 1}
-	res, err := store.JoinContext(ctx, s, ck, login, now.Add(-2*time.Minute), now, time.Hour)
+	res, err := store.JoinContext(ctx, s, ck, login, now.Add(-2*time.Minute), now, time.Hour, store.LoginIndex{})
 	if err != nil || !res.ReplacedUnreadable || res.Joined {
 		t.Fatalf("%+v %v", res, err)
 	}

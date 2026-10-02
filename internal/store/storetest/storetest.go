@@ -82,7 +82,7 @@ func JoinRacesRevocation(t *testing.T, newStore func() store.Store, now time.Tim
 			go func() {
 				defer wg.Done()
 				<-start
-				_, err := store.JoinContext(ctx, s, k, login, mintedAt, now, time.Hour)
+				_, err := store.JoinContext(ctx, s, k, login, mintedAt, now, time.Hour, store.LoginIndex{})
 				errs <- err
 			}()
 		}
@@ -196,7 +196,7 @@ func PolicyRevision(t *testing.T, newStore func() store.Store, now time.Time) {
 		write func(store.Store) error
 	}{
 		{"JoinContext", func(s store.Store) error {
-			_, err := store.JoinContext(ctx, s, k, login, now, now, time.Hour)
+			_, err := store.JoinContext(ctx, s, k, login, now, now, time.Hour, store.LoginIndex{})
 			return err
 		}},
 		{"PutContext", func(s store.Store) error { return s.PutContext(ctx, k, seed, time.Hour) }},
@@ -264,7 +264,7 @@ func PolicyRevision(t *testing.T, newStore func() store.Store, now time.Time) {
 	if got := read(s); !got.RevokedAt.Equal(revokedAt) {
 		t.Fatalf("a revoking refresh moved a later revocation earlier: %+v", got)
 	}
-	if _, err := store.JoinContext(ctx, s, k, login, now.Add(-30*time.Minute), now, time.Hour); err != nil {
+	if _, err := store.JoinContext(ctx, s, k, login, now.Add(-30*time.Minute), now, time.Hour, store.LoginIndex{}); err != nil {
 		t.Fatal(err)
 	}
 	if got := read(s); !got.RevokedAt.Equal(revokedAt) {
@@ -311,7 +311,7 @@ func RevocationIsMonotonic(t *testing.T, newStore func() store.Store, now time.T
 	// two does not lift the revocation.
 	login := store.Context{CtxID: "ctx_login", Principal: principal, Username: "alice", PrivLvl: 1,
 		AuthTime: now, RefreshedAt: now}
-	if _, err := store.JoinContext(ctx, s, k, login, now.Add(-30*time.Minute), now, time.Hour); err != nil {
+	if _, err := store.JoinContext(ctx, s, k, login, now.Add(-30*time.Minute), now, time.Hour, store.LoginIndex{}); err != nil {
 		t.Fatal(err)
 	}
 	if got := marked(); !got.Equal(later) {
@@ -731,7 +731,8 @@ func DeleteTokenRacesRedeem(t *testing.T, newStore func() store.Store, now time.
 // that could match nothing — an unknown kind, an empty key, a certificate
 // key with no issuer, no serial or no "|", which the token and context indexes
 // never hold — is refused, so a revocation never reports a mark that
-// revokes nothing.
+// revokes nothing; and so is a mark with no time, which a login would read
+// as no mark at all (store.CheckRevocation).
 func RevocationMarks(t *testing.T, newStore func() store.Store, now time.Time) {
 	t.Helper()
 	ctx := context.Background()
@@ -772,9 +773,10 @@ func RevocationMarks(t *testing.T, newStore func() store.Store, now time.Time) {
 		{Kind: store.RevocationCert, Key: store.CertKey("", "3f9a01"), At: now},
 		{Kind: store.RevocationCert, Key: store.CertKey("CN=Corp CA", ""), At: now},
 		{Kind: store.RevocationCert, Key: "3f9a01", At: now},
+		{Kind: store.RevocationPrincipal, Key: "user:carol@example.com"},
 	} {
-		if err := s.PutRevocation(ctx, r); err == nil {
-			t.Fatalf("an incomplete mark was taken: %+v", r)
+		if err := s.PutRevocation(ctx, r); !errors.Is(err, store.ErrIncompleteMark) {
+			t.Fatalf("an incomplete mark was taken: %+v %v", r, err)
 		}
 	}
 	list, err := s.ListRevocations(ctx)
@@ -1001,6 +1003,19 @@ func Run(t *testing.T, b Backend) {
 		t.Run(p.name, p.run)
 	}
 	for _, p := range lifted {
+		p := p
+		t.Run(p.name, func(t *testing.T) { p.run(t, b) })
+	}
+	for _, p := range []struct {
+		name string
+		run  func(*testing.T, Backend)
+	}{
+		{"SwapLoginIsOneStep", SwapLoginIsOneStep},
+		{"LoginsRaceToOneIndex", LoginsRaceToOneIndex},
+		{"JoinHonoursAStandingMark", JoinHonoursAStandingMark},
+		{"PurgeTakesEveryToken", PurgeTakesEveryToken},
+		{"SelfRevocationBindsToTheRead", SelfRevocationBindsToTheRead},
+	} {
 		p := p
 		t.Run(p.name, func(t *testing.T) { p.run(t, b) })
 	}

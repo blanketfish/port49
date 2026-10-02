@@ -577,7 +577,7 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 	// because its ctx_id is sealed. JoinContext reads, merges and swaps on the
 	// revision it read, so a revocation or annotation landing mid-login is
 	// merged rather than erased, and two simultaneous logins both land.
-	out, err := store.JoinContext(ctx, s.h.store, ck, login, winner.MintedAt, s.h.now(), s.h.contextTTL)
+	out, err := store.JoinContext(ctx, s.h.store, ck, login, winner.MintedAt, s.h.now(), s.h.contextTTL, store.LoginIndex{})
 	s.h.metrics.StoreOps.WithLabelValues("join_context", storeOutcome(err)).Inc()
 	if err != nil {
 		// The token is already redeemed, but without a context a later authorization

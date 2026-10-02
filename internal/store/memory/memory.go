@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
@@ -421,6 +420,26 @@ func (s *Store) DeleteToken(_ context.Context, k store.TokenKey, id string) erro
 	return store.ErrNotFound
 }
 
+// PurgeTokens drops every token, clearing each set's entries so no
+// secret stays reachable from a backing array (clearTail), and counts
+// the live ones.
+func (s *Store) PurgeTokens(context.Context) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	n := 0
+	for k, set := range s.tokens {
+		for _, t := range set {
+			if t.ExpiresAt.After(now) {
+				n++
+			}
+		}
+		clearTail(set, 0)
+		delete(s.tokens, k)
+	}
+	return n, nil
+}
+
 func (s *Store) GetReceipt(_ context.Context, rk store.ReceiptKey) (store.Receipt, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -533,11 +552,17 @@ func (s *Store) GetContext(_ context.Context, k store.ContextKey) (store.Context
 	return c, nil
 }
 
-// SwapContext writes c only if the record at k still carries revision rev, or,
-// for rev zero, only if there is no live record (store.Store). The comparison
-// and the write are one critical section, which is the whole of what makes it
-// a compare-and-set.
-func (s *Store) SwapContext(_ context.Context, k store.ContextKey, rev uint64, c store.Context, ttl time.Duration) error {
+// SwapContext is SwapLogin with no index change and no mark to check.
+func (s *Store) SwapContext(ctx context.Context, k store.ContextKey, rev uint64, c store.Context, ttl time.Duration) error {
+	return s.SwapLogin(ctx, k, rev, c, ttl, store.LoginWrite{})
+}
+
+// SwapLogin writes c only if the record at k still carries revision rev
+// (for rev zero, only if there is no live record) and every mark in
+// w.Marks is still as read; then the index change, all under the one
+// lock, which is what makes the three one step (store.Store).
+func (s *Store) SwapLogin(_ context.Context, k store.ContextKey, rev uint64, c store.Context, ttl time.Duration,
+	w store.LoginWrite) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now()
@@ -546,7 +571,23 @@ func (s *Store) SwapContext(_ context.Context, k store.ContextKey, rev uint64, c
 	if live && e.rev != rev || !live && rev != 0 {
 		return store.ErrConflict
 	}
+	for _, m := range w.Marks {
+		cur, ok := s.revocations[[2]string{m.Kind, m.Key}]
+		if ok == m.At.IsZero() || ok && !cur.At.Equal(m.At) {
+			return store.ErrConflict
+		}
+	}
 	s.writeContextLocked(k, c, now, ttl)
+	ref := store.ContextRef{NAS: k.NAS, Username: k.Username}
+	if w.ClearRef {
+		s.unindexRefLocked(ref)
+	}
+	if w.DropSid != "" || w.DropCertKey != "" {
+		s.unindexLocked("", w.DropSid, w.DropCertKey, ref)
+	}
+	if w.Principal != "" || w.Sid != "" || w.CertKey != "" {
+		s.indexLocked(w.Principal, w.Sid, w.CertKey, ref, w.IndexTTL)
+	}
 	return nil
 }
 
@@ -953,14 +994,9 @@ func listRefs(idx map[string]map[store.ContextRef]time.Time, key string, now tim
 	return out
 }
 
-// blankCertKey reports whether certKey is store.CertKey of an empty issuer or
-// an empty serial, or is not a CertKey at all (no "|"). It names no
-// certificate: every OIDC login's credential has neither, so "|" would be one
-// index entry holding every OIDC operator's context on the fleet, and a
-// revocation by it would revoke them all. It is treated as "" — never
-// indexed — as the empty sid is (ruling P8).
+// blankCertKey is store.BlankCertKey.
 func blankCertKey(certKey string) bool {
-	return !strings.Contains(certKey, "|") || strings.HasPrefix(certKey, "|") || strings.HasSuffix(certKey, "|")
+	return store.BlankCertKey(certKey)
 }
 
 // IndexContext adds ref to each non-empty index — principal, sid, and cert —
@@ -971,6 +1007,11 @@ func blankCertKey(certKey string) bool {
 func (s *Store) IndexContext(_ context.Context, principal, sid, certKey string, ref store.ContextRef, ttl time.Duration) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.indexLocked(principal, sid, certKey, ref, ttl)
+	return nil
+}
+
+func (s *Store) indexLocked(principal, sid, certKey string, ref store.ContextRef, ttl time.Duration) {
 	if blankCertKey(certKey) {
 		certKey = ""
 	}
@@ -995,7 +1036,6 @@ func (s *Store) IndexContext(_ context.Context, principal, sid, certKey string, 
 	if s.writes%sweepEvery == 0 {
 		s.sweepLocked()
 	}
-	return nil
 }
 
 // UnindexContext removes ref from each of the three indexes it was written
@@ -1003,6 +1043,11 @@ func (s *Store) IndexContext(_ context.Context, principal, sid, certKey string, 
 func (s *Store) UnindexContext(_ context.Context, principal, sid, certKey string, ref store.ContextRef) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.unindexLocked(principal, sid, certKey, ref)
+	return nil
+}
+
+func (s *Store) unindexLocked(principal, sid, certKey string, ref store.ContextRef) {
 	if blankCertKey(certKey) {
 		certKey = ""
 	}
@@ -1024,7 +1069,6 @@ func (s *Store) UnindexContext(_ context.Context, principal, sid, certKey string
 			s.indexedAs[ref] = rec
 		}
 	}
-	return nil
 }
 
 // UnindexRef removes ref from every entry recorded for it in indexedAs — its
@@ -1033,9 +1077,14 @@ func (s *Store) UnindexContext(_ context.Context, principal, sid, certKey string
 func (s *Store) UnindexRef(_ context.Context, ref store.ContextRef) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.unindexRefLocked(ref)
+	return nil
+}
+
+func (s *Store) unindexRefLocked(ref store.ContextRef) {
 	rec, ok := s.indexedAs[ref]
 	if !ok {
-		return nil
+		return
 	}
 	removeRef(s.byPrincipal, rec.principal, ref)
 	for _, sid := range rec.sids {
@@ -1045,7 +1094,6 @@ func (s *Store) UnindexRef(_ context.Context, ref store.ContextRef) error {
 		removeRef(s.byCert, certKey, ref)
 	}
 	delete(s.indexedAs, ref)
-	return nil
 }
 
 // ContextsByPrincipal returns the live context refs indexed under principal.
@@ -1268,23 +1316,10 @@ func (s *Store) ReleaseIdempotency(_ context.Context, principal, key, holder str
 	return nil
 }
 
-// errIncompleteMark refuses a revocation mark that could match nothing: it
-// would be reported as in force and revoke nothing.
-var errIncompleteMark = errors.New("store: a revocation mark must name a principal, or a certificate by issuer and serial")
-
 // PutRevocation writes r unless a mark for its key already stands.
 func (s *Store) PutRevocation(_ context.Context, r store.Revocation) error {
-	switch r.Kind {
-	case store.RevocationPrincipal:
-		if r.Key == "" {
-			return errIncompleteMark
-		}
-	case store.RevocationCert:
-		if blankCertKey(r.Key) {
-			return errIncompleteMark
-		}
-	default:
-		return errIncompleteMark
+	if err := store.CheckRevocation(r); err != nil {
+		return err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()

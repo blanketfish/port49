@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -28,6 +29,21 @@ var ErrConflict = errors.New("store: context changed since it was read")
 // is over and no refresh resumes it (spec §5.6, teardown row 3). Nothing
 // was written.
 var ErrPastGrace = errors.New("store: context is past its grace window")
+
+// ErrUnavailable is a store that did not answer, or answered with an
+// error that is not about the record: a network backend that timed out,
+// lost its quorum, or is unreachable. The guard (internal/store/guard)
+// counts it toward a pool's circuit, and every handler answers it
+// store_unavailable, as any error that is not ErrNotFound (spec §5.7).
+var ErrUnavailable = errors.New("store: unavailable")
+
+// ErrRefused is a backend refusing this identity an operation by its own
+// access control: an etcd role that does not grant it, or authentication
+// that failed. It is configuration, not an outage: never ErrUnavailable,
+// so it opens no circuit, and the guard (internal/store/guard) stops
+// port49d's service when every call is refused for store.etcd.hold_ttl
+// (plan 7d; pre-flight I10). Handlers answer it store_unavailable.
+var ErrRefused = errors.New("store: refused this identity")
 
 // UnreadableContextError is a context record the store returned and the
 // sealing layer could not open: sealed under a key that has left the two-key
@@ -399,6 +415,31 @@ type ContextRef struct {
 	Username string
 }
 
+// MarkRead is a revocation mark as a login read it: At is the mark's, or
+// zero when none stood (plan 7d).
+type MarkRead struct {
+	Kind, Key string
+	At        time.Time
+}
+
+// LoginWrite is what a login's SwapLogin carries beside the context: the
+// index change its join decided, and the marks it read (spec §13,
+// decision 35). The zero value changes no index and checks no mark,
+// which is SwapContext.
+type LoginWrite struct {
+	// ClearRef unindexes the ref from every key it was indexed under: a
+	// replace by another principal, or of a record that would not open.
+	ClearRef bool
+	// DropSid and DropCertKey are a same-principal replace's displaced
+	// credential, unindexed where this login does not share it.
+	DropSid, DropCertKey string
+	// Principal, Sid and CertKey index the ref for IndexTTL.
+	Principal, Sid, CertKey string
+	IndexTTL                time.Duration
+	// Marks must still be as read for the write to land.
+	Marks []MarkRead
+}
+
 type Idempotency struct {
 	BodyHash  string
 	Response  []byte // sealed — it contains the minted tokens (design §17)
@@ -434,6 +475,13 @@ type Store interface {
 	// DeleteTokens on k, which, as for a live entry, also ends any other
 	// principal's tokens there.
 	DeleteToken(ctx context.Context, k TokenKey, id string) error
+	// PurgeTokens deletes every token record, live or expired, under every
+	// key, and reports how many were live. It is a start on a store that
+	// persists (plan 7d): no policy this port49d loaded minted them, so none
+	// is redeemable after it, as none was after a restart of the memory
+	// store. The token indexes stay; an entry that outlives its token costs
+	// a revocation one DeleteTokens on an empty key (IndexToken).
+	PurgeTokens(ctx context.Context) (int, error)
 	GetReceipt(ctx context.Context, rk ReceiptKey) (Receipt, error)
 	// ExtendReceipt pushes the sliding bound out. It never moves RetainUntil or
 	// FirstRedeemedAt, so the absolute cap cannot be slid.
@@ -465,6 +513,19 @@ type Store interface {
 	// On success it behaves as PutContext does: the expiry is now+ttl,
 	// LastTouchedAt is stamped, and the context's index entries are extended.
 	SwapContext(ctx context.Context, k ContextKey, rev uint64, c Context, ttl time.Duration) error
+	// SwapLogin is SwapContext with a login's index bookkeeping and its
+	// revocation check in the same atomic step (plan 7d; spec §13, decision
+	// 35). It writes c only if the record at k is still the one the caller
+	// read (rev, as SwapContext reads it) and each mark in w.Marks is still
+	// as the caller read it: present at that At, or absent for a zero At.
+	// Otherwise ErrConflict, and nothing — context or index — is written.
+	// On success, after the context is written and its existing index
+	// entries extended as SwapContext extends them, the ref is unindexed
+	// wholly when w.ClearRef (UnindexRef), then from w.DropSid and
+	// w.DropCertKey (UnindexContext, no principal), then indexed under
+	// w.Principal, w.Sid and w.CertKey for w.IndexTTL (IndexContext), each
+	// empty or blank key skipped.
+	SwapLogin(ctx context.Context, k ContextKey, rev uint64, c Context, ttl time.Duration, w LoginWrite) error
 	// TouchContext extends this context's expiry to now+ttl. It writes exactly
 	// two things, both plaintext bookkeeping about the extension itself: the
 	// expiry, and LastTouchedAt. It never takes a Context from the caller.
@@ -739,6 +800,41 @@ type Store interface {
 
 // CertKey is the index key a CRL or OCSP response names (spec §5.1.4).
 func CertKey(issuer, serial string) string { return issuer + "|" + serial }
+
+// BlankCertKey reports whether certKey is CertKey of an empty issuer or an
+// empty serial, or is not a CertKey at all (no "|"). It names no
+// certificate: every OIDC login's credential has neither, so "|" would be
+// one index entry holding every OIDC operator's context on the fleet, and
+// a revocation by it would revoke them all. Every backend treats it as ""
+// — never indexed, never marked (ruling P8).
+func BlankCertKey(certKey string) bool {
+	return !strings.Contains(certKey, "|") || strings.HasPrefix(certKey, "|") || strings.HasSuffix(certKey, "|")
+}
+
+// ErrIncompleteMark refuses a revocation mark that could match nothing: it
+// would be reported as in force and revoke nothing.
+var ErrIncompleteMark = errors.New("store: a revocation mark must name a principal, or a certificate by issuer and serial, and when it was made")
+
+// CheckRevocation is PutRevocation's refusal, shared by every backend: a
+// kind that is neither RevocationPrincipal nor RevocationCert, an empty
+// key, a certificate key that is blank (BlankCertKey), or a zero At. A
+// zero At is how a login reads "no mark stands" (MarkRead), so a mark
+// written with one would be compared as absent: the memory store would
+// refuse every login under it ErrConflict and etcd would land them
+// unrevoked (pre-flight M10). The revocations file reaches every backend
+// through PutRevocation, so a file mark with no time is refused at start.
+func CheckRevocation(r Revocation) error {
+	if r.At.IsZero() {
+		return ErrIncompleteMark
+	}
+	switch {
+	case r.Kind == RevocationPrincipal && r.Key != "":
+		return nil
+	case r.Kind == RevocationCert && !BlankCertKey(r.Key):
+		return nil
+	}
+	return ErrIncompleteMark
+}
 
 // Revocation kinds (spec §5.1.4; plan 7a).
 const (

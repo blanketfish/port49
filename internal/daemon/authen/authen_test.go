@@ -382,6 +382,9 @@ func (noStore) DeleteTokens(context.Context, store.TokenKey) error {
 func (noStore) DeleteToken(context.Context, store.TokenKey, string) error {
 	panic("store called")
 }
+func (noStore) PurgeTokens(context.Context) (int, error) {
+	panic("store called")
+}
 func (noStore) GetReceipt(context.Context, store.ReceiptKey) (store.Receipt, error) {
 	panic("store called")
 }
@@ -398,6 +401,9 @@ func (noStore) PutContext(context.Context, store.ContextKey, store.Context, time
 	panic("store called")
 }
 func (noStore) SwapContext(context.Context, store.ContextKey, uint64, store.Context, time.Duration) error {
+	panic("store called")
+}
+func (noStore) SwapLogin(context.Context, store.ContextKey, uint64, store.Context, time.Duration, store.LoginWrite) error {
 	panic("store called")
 }
 func (noStore) GetContext(context.Context, store.ContextKey) (store.Context, error) {
@@ -941,6 +947,12 @@ type capturingStore struct {
 func (c *capturingStore) SwapContext(ctx context.Context, k store.ContextKey, rev uint64, v store.Context, ttl time.Duration) error {
 	c.got = v
 	return c.Store.SwapContext(ctx, k, rev, v, ttl)
+}
+
+func (c *capturingStore) SwapLogin(ctx context.Context, k store.ContextKey, rev uint64, v store.Context, ttl time.Duration,
+	w store.LoginWrite) error {
+	c.got = v
+	return c.Store.SwapLogin(ctx, k, rev, v, ttl, w)
 }
 
 // memory.SwapContext stamps LastTouchedAt itself, so reading the context back
@@ -1876,6 +1888,13 @@ func (c *certReachStore) check(ctx context.Context, after string) {
 func (c *certReachStore) SwapContext(ctx context.Context, k store.ContextKey, rev uint64, v store.Context, ttl time.Duration) error {
 	err := c.Store.SwapContext(ctx, k, rev, v, ttl)
 	c.check(ctx, "swap_context")
+	return err
+}
+
+func (c *certReachStore) SwapLogin(ctx context.Context, k store.ContextKey, rev uint64, v store.Context,
+	ttl time.Duration, w store.LoginWrite) error {
+	err := c.Store.SwapLogin(ctx, k, rev, v, ttl, w)
+	c.check(ctx, "swap_login")
 	return err
 }
 

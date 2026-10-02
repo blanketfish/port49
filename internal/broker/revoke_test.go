@@ -535,7 +535,7 @@ func TestAContextARedemptionWritesMidRevocationIsMarked(t *testing.T) {
 	k := store.ContextKey{NAS: "nx1", Username: "alice"}
 	login := store.Context{CtxID: "ctx_mid", Principal: alice, Username: "alice", PrivLvl: 1,
 		AuthTime: f.now, RefreshedAt: f.now}
-	if _, err := store.JoinContext(ctx, f.st, k, login, f.now.Add(-time.Minute), f.now, time.Hour); err != nil {
+	if _, err := store.JoinContext(ctx, f.st, k, login, f.now.Add(-time.Minute), f.now, time.Hour, store.LoginIndex{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.st.IndexContext(ctx, alice, "", certKey(f.alice), store.ContextRef{NAS: "nx1", Username: "alice"},
@@ -577,7 +577,7 @@ func TestTheSecondContextPassMarksALateContext(t *testing.T) {
 	raced := &contextRacedStore{Store: f.st, late: func() {
 		login := store.Context{CtxID: "ctx_late", Principal: alice, Username: "alice", PrivLvl: 1,
 			AuthTime: f.now, RefreshedAt: f.now}
-		if _, err := store.JoinContext(ctx, f.st, k, login, f.now.Add(-time.Minute), f.now, time.Hour); err != nil {
+		if _, err := store.JoinContext(ctx, f.st, k, login, f.now.Add(-time.Minute), f.now, time.Hour, store.LoginIndex{}); err != nil {
 			t.Error(err)
 		}
 		if err := f.st.IndexContext(ctx, alice, "", certKey(f.alice), store.ContextRef{NAS: "nx1", Username: "alice"},

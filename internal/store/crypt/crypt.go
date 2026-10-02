@@ -252,6 +252,9 @@ func (w *wrapped) DeleteToken(ctx context.Context, k store.TokenKey, id string) 
 	return w.inner.DeleteToken(ctx, k, id)
 }
 
+// PurgeTokens reads nothing sealed: the backend deletes by key.
+func (w *wrapped) PurgeTokens(ctx context.Context) (int, error) { return w.inner.PurgeTokens(ctx) }
+
 func (w *wrapped) GetReceipt(ctx context.Context, rk store.ReceiptKey) (store.Receipt, error) {
 	r, err := w.inner.GetReceipt(ctx, rk)
 	if err != nil {
@@ -313,6 +316,19 @@ func (w *wrapped) SwapContext(ctx context.Context, k store.ContextKey, rev uint6
 		return err
 	}
 	return w.inner.SwapContext(ctx, k, rev, sc, ttl)
+}
+
+// SwapLogin seals as SwapContext does, and passes the index change and the
+// marks through: both are plaintext, as the indexes and the marks are (the
+// package comment), so the inner store compares and writes them under the
+// same step as the sealed context.
+func (w *wrapped) SwapLogin(ctx context.Context, k store.ContextKey, rev uint64, c store.Context, ttl time.Duration,
+	lw store.LoginWrite) error {
+	sc, err := w.sealContext(c)
+	if err != nil {
+		return err
+	}
+	return w.inner.SwapLogin(ctx, k, rev, sc, ttl, lw)
 }
 
 func (w *wrapped) GetContext(ctx context.Context, k store.ContextKey) (store.Context, error) {

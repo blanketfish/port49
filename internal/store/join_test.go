@@ -154,7 +154,7 @@ var ck = store.ContextKey{NAS: "leaf-01", Username: "alice"}
 
 func TestJoinContextOnAnEmptyKeyWritesTheLogin(t *testing.T) {
 	s := newMemory()
-	res, err := store.JoinContext(context.Background(), s, ck, login(), t0, t0, time.Hour)
+	res, err := store.JoinContext(context.Background(), s, ck, login(), t0, t0, time.Hour, store.LoginIndex{})
 	if err != nil || res.Joined || res.Replaced != "" || res.Context.CtxID != "ctxB" {
 		t.Fatalf("%+v %v", res, err)
 	}
@@ -166,7 +166,7 @@ func TestJoinContextOnAnEmptyKeyWritesTheLogin(t *testing.T) {
 func TestJoinContextJoinsTheSamePrincipal(t *testing.T) {
 	s := newMemory()
 	s.PutContext(context.Background(), ck, live(), time.Hour)
-	res, err := store.JoinContext(context.Background(), s, ck, login(), t0, t0, time.Hour)
+	res, err := store.JoinContext(context.Background(), s, ck, login(), t0, t0, time.Hour, store.LoginIndex{})
 	if err != nil || !res.Joined || res.Replaced != "" || res.Context.CtxID != "ctxA" || res.Prior.CtxID != "" {
 		t.Fatalf("%+v %v", res, err)
 	}
@@ -193,7 +193,7 @@ func TestJoinContextReportsAClampedLevel(t *testing.T) {
 			s.PutContext(context.Background(), ck, live(), time.Hour)
 			n := login()
 			n.MaxPrivilege = tt.ceiling
-			res, err := store.JoinContext(context.Background(), s, ck, n, t0, t0, time.Hour)
+			res, err := store.JoinContext(context.Background(), s, ck, n, t0, t0, time.Hour, store.LoginIndex{})
 			if err != nil || !res.Joined || res.ClampedFrom != tt.want {
 				t.Fatalf("ClampedFrom = %d, want %d: %+v %v", res.ClampedFrom, tt.want, res, err)
 			}
@@ -210,7 +210,7 @@ func TestJoinContextReplacesAnotherPrincipal(t *testing.T) {
 	s.PutContext(context.Background(), ck, l, time.Hour)
 	n := login()
 	n.Principal = "user:alice@corp.example"
-	res, err := store.JoinContext(context.Background(), s, ck, n, time.Time{}, t0, time.Hour)
+	res, err := store.JoinContext(context.Background(), s, ck, n, time.Time{}, t0, time.Hour, store.LoginIndex{})
 	if err != nil || res.Joined || res.Replaced != "ctxA" || res.ReplacedUnreadable {
 		t.Fatalf("%+v %v", res, err)
 	}
@@ -236,7 +236,7 @@ func TestJoinContextReplacesPastTheCeilingAndCarriesTheRevocation(t *testing.T) 
 	l.SessionExpires = t0.Add(-time.Second)
 	l.RevokedAt = t0.Add(-time.Minute)
 	s.PutContext(context.Background(), ck, l, time.Hour)
-	res, err := store.JoinContext(context.Background(), s, ck, login(), t0.Add(-2*time.Minute), t0, time.Hour)
+	res, err := store.JoinContext(context.Background(), s, ck, login(), t0.Add(-2*time.Minute), t0, time.Hour, store.LoginIndex{})
 	if err != nil || res.Joined || res.Replaced != "ctxA" || res.Prior.CtxID != "ctxA" {
 		t.Fatalf("%+v %v", res, err)
 	}
@@ -258,9 +258,15 @@ func (a *alwaysConflicts) SwapContext(context.Context, store.ContextKey, uint64,
 	return store.ErrConflict
 }
 
+func (a *alwaysConflicts) SwapLogin(context.Context, store.ContextKey, uint64, store.Context, time.Duration,
+	store.LoginWrite) error {
+	a.swaps++
+	return store.ErrConflict
+}
+
 func TestJoinContextGivesUpAfterMaxJoinAttempts(t *testing.T) {
 	s := &alwaysConflicts{Store: newMemory()}
-	_, err := store.JoinContext(context.Background(), s, ck, login(), t0, t0, time.Hour)
+	_, err := store.JoinContext(context.Background(), s, ck, login(), t0, t0, time.Hour, store.LoginIndex{})
 	if !errors.Is(err, store.ErrConflict) || s.swaps != store.MaxJoinAttempts {
 		t.Fatalf("want ErrConflict after %d swaps, got %v after %d", store.MaxJoinAttempts, err, s.swaps)
 	}
@@ -279,7 +285,7 @@ func (storeFails) GetContext(context.Context, store.ContextKey) (store.Context, 
 func TestJoinContextDoesNotWriteBlindOverAReadError(t *testing.T) {
 	s := storeFails{newMemory()}
 	s.Store.PutContext(context.Background(), ck, live(), time.Hour)
-	if _, err := store.JoinContext(context.Background(), s, ck, login(), t0, t0, time.Hour); err == nil {
+	if _, err := store.JoinContext(context.Background(), s, ck, login(), t0, t0, time.Hour, store.LoginIndex{}); err == nil {
 		t.Fatal("a context that cannot be read must not be replaced")
 	}
 	if got, _ := s.Store.GetContext(context.Background(), ck); got.CtxID != "ctxA" {
@@ -336,7 +342,7 @@ func TestJoinContextReplacesAnUnreadableContextCarryingItsRevocation(t *testing.
 			s.Store.PutContext(context.Background(), ck, l, time.Hour)
 			n := login()
 			n.Principal = "user:alice@corp.example"
-			res, err := store.JoinContext(context.Background(), s, ck, n, tt.mintedAt, t0, time.Hour)
+			res, err := store.JoinContext(context.Background(), s, ck, n, tt.mintedAt, t0, time.Hour, store.LoginIndex{})
 			if err != nil || res.Joined || !res.ReplacedUnreadable || res.Replaced != "" || res.Prior.CtxID != "" {
 				t.Fatalf("%+v %v", res, err)
 			}
@@ -364,7 +370,7 @@ func TestJoinContextReplacingAnUnreadableContextStillComparesTheRevision(t *test
 			t.Fatal(err)
 		}
 	}
-	res, err := store.JoinContext(context.Background(), s, ck, login(), t0.Add(-time.Minute), t0, time.Hour)
+	res, err := store.JoinContext(context.Background(), s, ck, login(), t0.Add(-time.Minute), t0, time.Hour, store.LoginIndex{})
 	if err != nil || !res.ReplacedUnreadable || reads != 2 {
 		t.Fatalf("%+v %v after %d reads", res, err, reads)
 	}
@@ -404,7 +410,7 @@ func TestJoinContextKeepsARevocationThatLandsMidJoin(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	res, err := store.JoinContext(context.Background(), s, ck, login(), t0.Add(-time.Minute), t0, time.Hour)
+	res, err := store.JoinContext(context.Background(), s, ck, login(), t0.Add(-time.Minute), t0, time.Hour, store.LoginIndex{})
 	if err != nil || !res.Joined {
 		t.Fatalf("%+v %v", res, err)
 	}
