@@ -68,6 +68,8 @@ type Store struct {
 	idxUndecodable       prometheus.Counter // nil counts nothing
 }
 
+var _ store.Store = (*Store)(nil)
+
 // ErrRefused is etcd refusing this identity an operation: a role that
 // does not grant it, or authentication that failed. It is store.ErrRefused,
 // so the guard, which imports no backend, tells it from an outage: it trips

@@ -2,6 +2,7 @@ package etcd
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/rhwendt/port49/internal/session"
 	"github.com/rhwendt/port49/internal/store"
+	"github.com/rhwendt/port49/internal/store/crypt"
 	"github.com/rhwendt/port49/internal/store/etcd/etcdtest"
 	"github.com/rhwendt/port49/internal/store/storetest"
 )
@@ -31,55 +33,138 @@ func onShared(t *testing.T, clock func() time.Time) *Store {
 	return newStore(cli, cli, Config{Prefix: etcdtest.Prefix(), Now: clock})
 }
 
-// backend runs LoginRacesARevocationByMark for 200 rounds, each a few
-// round trips to the member, not memory's 10000, its revocation staggered
-// across the login (storetest.Backend.Stagger). Plan 7d R1's proof, Task
-// 6: a SwapLogin that leaves the marks out of its transaction's compare,
-// or reads them in Gets of their own before it, was caught in 10 runs of
-// 10 each, the first catch by round 30; unstaggered, in none of 10000.
+// backend runs LoginRacesARevocationByMark, the token family's races and
+// the login's for 200 rounds, each a few round trips to the member, not
+// memory's 10000, each race's short side staggered across the login
+// (storetest.Backend.Stagger): they are what guards the mark compare and
+// the index compare in the login's transaction (Task 6 review C-1). Plan
+// 7d R1's proof, Task 6: a SwapLogin that leaves the marks out of its
+// transaction's compare, or reads them in Gets of their own before it, was
+// caught in 10 runs of 10 each, the first catch by round 30; unstaggered,
+// in none of 10000.
 var backend = storetest.Backend{New: func(t *testing.T, clock func() time.Time) store.Store {
-	return onShared(t, clock)
+	return planting{onShared(t, clock)}
 }, RaceRounds: 200, Stagger: true}
-
-// run runs the named properties against etcd. Task 8 replaces every call
-// with storetest.Run.
-func run(t *testing.T, props map[string]func(*testing.T)) {
-	for name, p := range props {
-		t.Run(name, p)
-	}
-}
 
 var t0 = time.Unix(1_000_000, 0).UTC()
 
-func fixed(t *testing.T) func() store.Store {
-	return func() store.Store { return onShared(t, func() time.Time { return t0 }) }
+// planting is a store with a way to write an idempotency record whole,
+// as an older port49's or a corrupted one would sit there, which no
+// store.Store method can (storetest.Planter).
+type planting struct{ *Store }
+
+func (p planting) PlantIdempotency(ctx context.Context, principal, key string, rec store.Idempotency) error {
+	body, err := json.Marshal(idemRecOf(rec))
+	if err != nil {
+		return err
+	}
+	_, err = p.tok.Put(ctx, p.k.idem(principal, key), string(body))
+	return err
 }
 
-// The token family: tokens, receipts, the token index, the delete by ID
-// and its race, and the marks (plan 7d Task 5).
-func TestTokensOnEtcd(t *testing.T) {
-	run(t, map[string]func(*testing.T){
-		"TokenLifecycle":                     func(t *testing.T) { storetest.TokenLifecycle(t, backend) },
-		"RedeemIsAtomic":                     func(t *testing.T) { storetest.RedeemIsAtomic(t, backend) },
-		"SecretsAreNotAliased":               func(t *testing.T) { storetest.SecretsAreNotAliased(t, backend) },
-		"RedeemByID":                         func(t *testing.T) { storetest.RedeemByID(t, backend) },
-		"ReceiptRetainedPastItsSlidingBound": func(t *testing.T) { storetest.ReceiptRetainedPastItsSlidingBound(t, backend) },
-		"FailReceiptMarksOnly":               func(t *testing.T) { storetest.FailReceiptMarksOnly(t, backend) },
-		"DeleteReceiptsByPrincipal":          func(t *testing.T) { storetest.DeleteReceiptsByPrincipal(t, backend) },
-		"TokenIndexExpiresWithItsLongestToken": func(t *testing.T) {
-			storetest.TokenIndexExpiresWithItsLongestToken(t, backend)
-		},
-		"TokenIndex":                 func(t *testing.T) { storetest.TokenIndex(t, fixed(t), t0) },
-		"DeleteTokenRemovesOne":      func(t *testing.T) { storetest.DeleteTokenRemovesOne(t, fixed(t), t0) },
-		"DeleteTokenRacesRedeem":     func(t *testing.T) { storetest.DeleteTokenRacesRedeem(t, fixed(t), t0) },
-		"RevocationMarks":            func(t *testing.T) { storetest.RevocationMarks(t, fixed(t), t0) },
-		"RevocationMarkNeverExpires": func(t *testing.T) { storetest.RevocationMarkNeverExpires(t, backend) },
-		"IndexTokenKeepsTheLongestUnderARace": func(t *testing.T) {
-			storetest.IndexTokenKeepsTheLongestUnderARace(t, backend)
-		},
-		"FailReceiptSurvivesARacingExtend": func(t *testing.T) { storetest.FailReceiptSurvivesARacingExtend(t, backend) },
-		"RedeemOrDeleteNotBoth":            func(t *testing.T) { storetest.RedeemOrDeleteNotBoth(t, backend) },
+// Every storetest property against etcd (plan 7d).
+func TestTheEtcdStoreHoldsEveryProperty(t *testing.T) {
+	storetest.Run(t, backend)
+}
+
+// And through the sealing layer over etcd, which is what port49d runs,
+// with bare etcd's rounds and stagger: the layer adds a round of its own
+// work to each write, and the races must still meet their window (Task 6
+// review C-1).
+func TestTheSealingLayerOverEtcdHoldsEveryProperty(t *testing.T) {
+	storetest.Run(t, storetest.Backend{New: func(t *testing.T, clock func() time.Time) store.Store {
+		return crypt.Wrap(onShared(t, clock), sealKeys, nil)
+	}, RaceRounds: backend.RaceRounds, Stagger: backend.Stagger})
+}
+
+var sealKeys = crypt.Keys{Current: crypt.Key{ID: "k1", Bytes: [32]byte{1}}}
+
+// With two of three members stopped, a write and a read each fail within
+// their deadline as store.ErrUnavailable: never a stale answer (Ruling 4;
+// spec §14, "Quorum lost").
+func TestALostQuorumIsUnavailableNeverStale(t *testing.T) {
+	c := etcdtest.StartCluster(t)
+	s, err := Open(Config{Endpoints: c.Endpoints, Prefix: etcdtest.Prefix(), Now: func() time.Time { return t0 }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	k := store.ContextKey{NAS: "leaf-01", Username: "alice"}
+	if err := s.PutContext(ctx, k, store.Context{CtxID: "c", Principal: "p", Username: "alice"}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	c.Stop(1)
+	c.Stop(2)
+	for name, call := range map[string]func(context.Context) error{
+		"read":  func(ctx context.Context) error { _, err := s.GetContext(ctx, k); return err },
+		"write": func(ctx context.Context) error { return s.SetRevokedAt(ctx, k, t0) },
+	} {
+		cctx, cancel := context.WithTimeout(ctx, time.Second)
+		start := time.Now()
+		err := call(cctx)
+		cancel()
+		elapsed := time.Since(start)
+		if !errors.Is(err, store.ErrUnavailable) || elapsed > 3*time.Second {
+			t.Fatalf("%s without quorum: %v after %v", name, err, elapsed)
+		}
+		t.Logf("%s without quorum: %v after %v", name, err, elapsed)
+	}
+}
+
+// A completion and a release each write only the record they read: a
+// write that lands between the read and the commit (here at the clock read
+// that tells whether the record is live) makes the commit's compare fail
+// and the call read again. A release that deleted without that compare
+// would take the record a completion just wrote; a completion without it
+// would write over a reservation another request took after the read.
+func TestIdempotencyWritesCompareTheirRead(t *testing.T) {
+	ctx := context.Background()
+	var race func() // run once at the next clock read
+	s := onShared(t, func() time.Time {
+		if f := race; f != nil {
+			race = nil
+			f()
+		}
+		return t0
 	})
+	pending := func(holder string) store.Idempotency {
+		return store.Idempotency{BodyHash: "h", Holder: holder, Pending: true, ExpiresAt: t0.Add(time.Minute)}
+	}
+	done := store.Idempotency{BodyHash: "h", Holder: "a", Response: []byte("resp"), ExpiresAt: t0.Add(time.Hour)}
+	if _, ok, err := s.ReserveIdempotency(ctx, "user:alice", "k", pending("a")); err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	race = func() {
+		if err := s.CompleteIdempotency(ctx, "user:alice", "k", "a", done); err != nil {
+			t.Error(err)
+		}
+	}
+	if err := s.ReleaseIdempotency(ctx, "user:alice", "k", "a"); err != nil {
+		t.Fatal(err)
+	}
+	if race != nil {
+		t.Fatal("the completion did not race the release")
+	}
+	if cur, ok, err := s.ReserveIdempotency(ctx, "user:alice", "k", pending("b")); err != nil || ok ||
+		string(cur.Response) != "resp" {
+		t.Fatalf("a release that raced a completion took the completed record: %+v %v %v", cur, ok, err)
+	}
+
+	if _, ok, err := s.ReserveIdempotency(ctx, "user:alice", "k2", pending("a")); err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	race = func() { // a hands the record over: b's reservation is now the live one
+		if err := s.CompleteIdempotency(ctx, "user:alice", "k2", "a", pending("b")); err != nil {
+			t.Error(err)
+		}
+	}
+	if err := s.CompleteIdempotency(ctx, "user:alice", "k2", "a", done); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("a completion over a record taken over since its read: %v, want ErrConflict", err)
+	}
+	if cur, ok, err := s.ReserveIdempotency(ctx, "user:alice", "k2", pending("c")); err != nil || ok || cur.Holder != "b" {
+		t.Fatalf("after the refused completion: %+v %v %v", cur, ok, err)
+	}
 }
 
 // A lease etcd no longer knows (expired while port49d was paused, or
@@ -174,42 +259,6 @@ func TestScannedKeysEndWithASlash(t *testing.T) {
 			t.Errorf("%q scans %q", pair[0], pair[1])
 		}
 	}
-}
-
-// The context family: every context property, the revisions, the narrow
-// setters, the join with its marks, the blobs (plan 7d Task 6). The index
-// properties that read lookups are Task 7's.
-func TestContextsOnEtcd(t *testing.T) {
-	run(t, map[string]func(*testing.T){
-		"JoinRacesRevocation":           func(t *testing.T) { storetest.JoinRacesRevocation(t, fixed(t), t0) },
-		"PolicyRevision":                func(t *testing.T) { storetest.PolicyRevision(t, fixed(t), t0) },
-		"RevocationIsMonotonic":         func(t *testing.T) { storetest.RevocationIsMonotonic(t, fixed(t), t0) },
-		"CeilingShortensOnly":           func(t *testing.T) { storetest.CeilingShortensOnly(t, fixed(t), t0) },
-		"RefreshSetsTheCeiling":         func(t *testing.T) { storetest.RefreshSetsTheCeiling(t, fixed(t), t0) },
-		"RefreshStopsAtGrace":           func(t *testing.T) { storetest.RefreshStopsAtGrace(t, fixed(t), t0) },
-		"WritesBindToTheRevision":       func(t *testing.T) { storetest.WritesBindToTheRevision(t, fixed(t), t0) },
-		"ContextExpires":                func(t *testing.T) { storetest.ContextExpires(t, backend) },
-		"DeleteContextRemovesIt":        func(t *testing.T) { storetest.DeleteContextRemovesIt(t, backend) },
-		"TouchExtendsWithoutClobbering": func(t *testing.T) { storetest.TouchExtendsWithoutClobbering(t, backend) },
-		"AnnotateKeepsARacingRevocation": func(t *testing.T) {
-			storetest.AnnotateKeepsARacingRevocation(t, backend)
-		},
-		"SetRevokedAtMarksOneField": func(t *testing.T) { storetest.SetRevokedAtMarksOneField(t, backend) },
-		"RefreshMovesTheWindow":     func(t *testing.T) { storetest.RefreshMovesTheWindow(t, backend) },
-		"RefreshWithoutCeiling":     func(t *testing.T) { storetest.RefreshWithoutCeiling(t, backend) },
-		"AnnotateSetRules":          func(t *testing.T) { storetest.AnnotateSetRules(t, backend) },
-		"AnnotateDoesNotEditAReadersSlice": func(t *testing.T) {
-			storetest.AnnotateDoesNotEditAReadersSlice(t, backend)
-		},
-		"BlobBump":                       func(t *testing.T) { storetest.BlobBump(t, backend) },
-		"SwapIsACompareAndSet":           func(t *testing.T) { storetest.SwapIsACompareAndSet(t, backend) },
-		"EveryWriteMovesTheRevision":     func(t *testing.T) { storetest.EveryWriteMovesTheRevision(t, backend) },
-		"SetPrivilegeIsRaiseOnly":        func(t *testing.T) { storetest.SetPrivilegeIsRaiseOnly(t, backend) },
-		"SetContextPolicyBindsToTheRead": func(t *testing.T) { storetest.SetContextPolicyBindsToTheRead(t, backend) },
-		"SelfRevocationBindsToTheRead":   func(t *testing.T) { storetest.SelfRevocationBindsToTheRead(t, backend) },
-		"PurgeTakesEveryToken":           func(t *testing.T) { storetest.PurgeTakesEveryToken(t, backend) },
-		"RewriteBindsToTheRevision":      func(t *testing.T) { storetest.RewriteBindsToTheRevision(t, backend) },
-	})
 }
 
 // PolicyRev comes from etcd's revision counter through policy_moved: a
@@ -336,34 +385,6 @@ func TestAContextWriteReturnsItsRevision(t *testing.T) {
 	if refs, err := s.ContextsByPrincipal(ctx, "q"); err != nil || len(refs) != 1 {
 		t.Fatalf("the racing index write: %v %v", refs, err)
 	}
-}
-
-// The index family: lookups, extension, the login's one step read back
-// through them, active principals (plan 7d Task 7). The login's races run
-// here with backend's RaceRounds and Stagger: they are what guards the
-// mark compare and the index compare in the login's transaction (Task 6
-// review C-1).
-func TestIndexesOnEtcd(t *testing.T) {
-	run(t, map[string]func(*testing.T){
-		"Indexes":                         func(t *testing.T) { storetest.Indexes(t, backend) },
-		"ExtendingCarriesIndexEntries":    func(t *testing.T) { storetest.ExtendingCarriesIndexEntries(t, backend) },
-		"ExtendingNeverShortensOrCreates": func(t *testing.T) { storetest.ExtendingNeverShortensOrCreates(t, backend) },
-		"ExtendingFollowsARotatedSid":     func(t *testing.T) { storetest.ExtendingFollowsARotatedSid(t, backend) },
-		"ExtendingCarriesEveryJoinedCredential": func(t *testing.T) {
-			storetest.ExtendingCarriesEveryJoinedCredential(t, backend)
-		},
-		"BlankKeysAreNeverIndexed": func(t *testing.T) { storetest.BlankKeysAreNeverIndexed(t, backend) },
-		"UnindexRefClearsEveryKey": func(t *testing.T) { storetest.UnindexRefClearsEveryKey(t, backend) },
-		"SwapLoginIsOneStep":       func(t *testing.T) { storetest.SwapLoginIsOneStep(t, backend) },
-		"LoginsRaceToOneIndex":     func(t *testing.T) { storetest.LoginsRaceToOneIndex(t, backend) },
-		"LoginsRaceToAnEmptyKey":   func(t *testing.T) { storetest.LoginsRaceToAnEmptyKey(t, backend) },
-		"JoinHonoursAStandingMark": func(t *testing.T) { storetest.JoinHonoursAStandingMark(t, backend) },
-		"IndexKeysAreExact":        func(t *testing.T) { storetest.IndexKeysAreExact(t, backend) },
-		"LoginRacesARevocationByMark": func(t *testing.T) {
-			storetest.LoginRacesARevocationByMark(t, backend)
-		},
-		"IndexWritesRaceAContextWrite": func(t *testing.T) { storetest.IndexWritesRaceAContextWrite(t, backend) },
-	})
 }
 
 // The sweep prunes an index record's expired entries and removes the

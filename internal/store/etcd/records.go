@@ -295,3 +295,22 @@ func (x *idxRec) prune(now time.Time) {
 		*l = out
 	}
 }
+
+type idemRec struct {
+	BodyHash  string    `json:"body_hash"`
+	Response  []byte    `json:"response,omitempty"` // empty once sealed: the sealing layer seals it
+	ExpiresAt time.Time `json:"expires_at"`
+	Sealed    []byte    `json:"sealed,omitempty"`
+	Holder    string    `json:"holder,omitempty"`
+	Pending   bool      `json:"pending"`
+}
+
+func idemRecOf(r store.Idempotency) idemRec {
+	return idemRec{BodyHash: r.BodyHash, Response: r.Response, ExpiresAt: r.ExpiresAt, Sealed: r.Sealed,
+		Holder: r.Holder, Pending: r.Pending}
+}
+
+func (r idemRec) idempotency() store.Idempotency {
+	return store.Idempotency{BodyHash: r.BodyHash, Response: r.Response, ExpiresAt: r.ExpiresAt, Sealed: r.Sealed,
+		Holder: r.Holder, Pending: r.Pending}
+}
