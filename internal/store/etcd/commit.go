@@ -105,7 +105,7 @@ func cas[R any](ctx context.Context, cli *clientv3.Client, ls *leases, key strin
 		found := false
 		if len(resp.Kvs) == 1 {
 			if err := json.Unmarshal(resp.Kvs[0].Value, &r); err != nil {
-				return fmt.Errorf("etcd: %s does not decode: %w", key, err)
+				return notDecoded(key)
 			}
 			mod, found = resp.Kvs[0].ModRevision, live(r)
 			if !found {
@@ -128,6 +128,11 @@ func cas[R any](ctx context.Context, cli *clientv3.Client, ls *leases, key strin
 	}
 }
 
+// notDecoded is a record that does not decode, said by what it is alone:
+// the decoder's error quotes the stored bytes, and an unvalidated body is
+// never logged (Task 7b review).
+func notDecoded(what string) error { return fmt.Errorf("etcd: %s does not decode", what) }
+
 // getJSON reads key into v; false when it is absent.
 func getJSON(ctx context.Context, cli *clientv3.Client, key string, v any) (mod int64, ok bool, err error) {
 	resp, err := cli.Get(ctx, key)
@@ -138,7 +143,7 @@ func getJSON(ctx context.Context, cli *clientv3.Client, key string, v any) (mod 
 		return 0, false, nil
 	}
 	if err := json.Unmarshal(resp.Kvs[0].Value, v); err != nil {
-		return 0, false, fmt.Errorf("etcd: %s does not decode: %w", key, err)
+		return 0, false, notDecoded(key)
 	}
 	return resp.Kvs[0].ModRevision, true, nil
 }

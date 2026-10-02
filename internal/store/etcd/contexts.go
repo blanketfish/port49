@@ -52,9 +52,9 @@ func refOf(k store.ContextKey) store.ContextRef {
 // replace keeps none: that lifts no more than deleting the record, which
 // the writer that garbled it could do as well, and the marks a login
 // compares still stand. The narrow setters refuse it with this error.
-func undecodable(k store.ContextKey, mod int64, err error) error {
+func undecodable(k store.ContextKey, mod int64) error {
 	return &store.UnreadableContextError{Rev: uint64(mod),
-		Err: fmt.Errorf("etcd: context %v does not decode: %w", k, err)}
+		Err: notDecoded(fmt.Sprintf("context %v", k))}
 }
 
 func (s *Store) readCtx(ctx context.Context, k store.ContextKey, marks ...[2]string) (ctxSnap, error) {
@@ -70,14 +70,14 @@ func (s *Store) readCtx(ctx context.Context, k store.ContextKey, marks ...[2]str
 	if kvs := resp.Responses[0].GetResponseRange().Kvs; len(kvs) == 1 {
 		snap.mod = kvs[0].ModRevision
 		if err := json.Unmarshal(kvs[0].Value, &snap.rec); err != nil {
-			snap.rec, snap.found, snap.bad = ctxRec{}, true, undecodable(k, snap.mod, err)
+			snap.rec, snap.found, snap.bad = ctxRec{}, true, undecodable(k, snap.mod)
 		} else {
 			snap.found = snap.rec.ExpiresAt.After(s.now())
 		}
 	}
 	if kvs := resp.Responses[1].GetResponseRange().Kvs; len(kvs) == 1 {
 		if err := json.Unmarshal(kvs[0].Value, &snap.idx); err != nil {
-			snap.idx, snap.idxBad = idxRec{}, fmt.Errorf("etcd: index record of %v does not decode: %w", k, err)
+			snap.idx, snap.idxBad = idxRec{}, notDecoded(fmt.Sprintf("index record of %v", k))
 		}
 		snap.idxMod = kvs[0].ModRevision
 	}
@@ -87,7 +87,7 @@ func (s *Store) readCtx(ctx context.Context, k store.ContextKey, marks ...[2]str
 		if kvs := resp.Responses[2+i].GetResponseRange().Kvs; len(kvs) == 1 {
 			var r markRec
 			if err := json.Unmarshal(kvs[0].Value, &r); err != nil {
-				return ctxSnap{}, fmt.Errorf("etcd: mark %v does not decode: %w", m, err)
+				return ctxSnap{}, notDecoded(fmt.Sprintf("mark %v", m))
 			}
 			ms = markSnap{at: r.At, mod: kvs[0].ModRevision}
 		}
@@ -184,8 +184,8 @@ func (s *Store) GetContext(ctx context.Context, k store.ContextKey) (store.Conte
 	}
 	var r ctxRec
 	mod := resp.Kvs[0].ModRevision
-	if err := json.Unmarshal(resp.Kvs[0].Value, &r); err != nil {
-		return store.Context{}, undecodable(k, mod, err)
+	if json.Unmarshal(resp.Kvs[0].Value, &r) != nil {
+		return store.Context{}, undecodable(k, mod)
 	}
 	if !r.ExpiresAt.After(s.now()) {
 		return store.Context{}, store.ErrNotFound
@@ -645,7 +645,11 @@ func (s *Store) BumpBlob(ctx context.Context, hash string, ttl time.Duration) er
 }
 
 // indexOp is a write to the ref's index record alone: f changes it and
-// returns the lookup entries to put with it.
+// returns the lookup entries to put with it. One that does not decode is
+// written whole from what f indexes (ctxSnap.idxBad), so a ReindexSid over
+// it leaves the new sid alone listed: the principal and certificate are
+// back at the next re-index, which compares them (Task 7b review m-5), as
+// for a deleted record.
 func (s *Store) indexOp(ctx context.Context, ref store.ContextRef, f func(x *idxRec, now time.Time) []string) error {
 	k := store.ContextKey{NAS: ref.NAS, Username: ref.Username}
 	for {

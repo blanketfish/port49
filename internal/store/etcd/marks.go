@@ -63,7 +63,7 @@ func (s *Store) ListRevocations(ctx context.Context) ([]store.Revocation, error)
 		for _, kv := range resp.Kvs {
 			var r markRec
 			if err := json.Unmarshal(kv.Value, &r); err != nil {
-				return nil, fmt.Errorf("etcd: mark %q does not decode: %w", kv.Key, err)
+				return nil, notDecoded(fmt.Sprintf("mark %q", kv.Key))
 			}
 			out = append(out, r.revocation())
 		}

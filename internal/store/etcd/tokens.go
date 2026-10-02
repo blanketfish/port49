@@ -304,7 +304,7 @@ func (s *Store) tokenKeys(ctx context.Context, fam, key string) ([]store.TokenKe
 			return nil, fmt.Errorf("etcd: token index entry %q does not parse", kv.Key)
 		}
 		if err := json.Unmarshal(kv.Value, &r); err != nil {
-			return nil, fmt.Errorf("etcd: token index entry %q does not decode: %w", kv.Key, err)
+			return nil, notDecoded(fmt.Sprintf("token index entry %q", kv.Key))
 		}
 		if !r.ExpiresAt.After(now) {
 			continue
