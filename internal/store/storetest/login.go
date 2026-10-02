@@ -105,16 +105,27 @@ func SwapLoginIsOneStep(t *testing.T, b Backend) {
 // carol's context. No two logins replace the same context: each write is
 // on the revision it read, so a second replace of one record is a lost
 // update.
-func LoginsRaceToOneIndex(t *testing.T, b Backend) {
+func LoginsRaceToOneIndex(t *testing.T, b Backend) { loginsRace(t, b, true) }
+
+// LoginsRaceToAnEmptyKey is LoginsRaceToOneIndex on a key no context
+// holds: the first logins to a device and username, or after a context
+// expired. It is not in Run: the sealing layer denies the record it
+// stands on (crypt's TestKnownGapFirstLoginsRacingOnAnEmptyKey) until
+// writes report the revision they committed at.
+func LoginsRaceToAnEmptyKey(t *testing.T, b Backend) { loginsRace(t, b, false) }
+
+func loginsRace(t *testing.T, b Backend, seeded bool) {
 	const rounds = 100
 	k := store.ContextKey{NAS: "leaf-01", Username: "svc"}
 	const alice, bob, carol = "spiffe://example.com/alice", "spiffe://example.com/bob", "spiffe://example.com/carol"
 	for round := 0; round < rounds; round++ {
 		s := b.New(t, func() time.Time { return t0 })
 		ctx := context.Background()
-		c0, ix0 := loginOf(carol, "sid-c", "0c", t0)
-		if _, err := store.JoinContext(ctx, s, k, c0, t0, t0, time.Hour, ix0); err != nil {
-			t.Fatal(err)
+		if seeded {
+			c0, ix0 := loginOf(carol, "sid-c", "0c", t0)
+			if _, err := store.JoinContext(ctx, s, k, c0, t0, t0, time.Hour, ix0); err != nil {
+				t.Fatal(err)
+			}
 		}
 		start := make(chan struct{})
 		var wg sync.WaitGroup

@@ -40,14 +40,15 @@ var ErrNotLastWritten = errors.New("crypt: not the context this port49d last wro
 // holds the one it committed last, not the one that ended last (Task 4b
 // defect: a login that read another's write in flight and swapped on it).
 // Revisions only grow (store.Context.Rev), so a write that compared on a
-// nonzero revision and landed committed before the last when it compared
-// on a revision below one the store held the last at, or was sent before
-// the last was: had the last committed first, the revision it compared
-// would be one it read after the last was sent. Such a write does not
-// replace the last (earlier). A write that compared on no record (zero),
-// or on none (PutContext), is not placed: it replaces the last when it
-// ends, so one that ends after a write committed over it leaves that
-// write denied, which fails closed.
+// nonzero revision and was sent before the last was committed before it,
+// if it landed at all: had the last committed first, the revision it
+// compared would be one it read after the last was sent. Such a write
+// does not replace the last, and is not admitted as one whose outcome is
+// unknown (earlier). A write that compared on no record (zero), or on none
+// (PutContext), is not placed: it replaces the last when it ends, so one
+// that ends after a write committed over it leaves that write denied,
+// which fails closed. Two first logins racing on an empty key do that
+// (TestKnownGapFirstLoginsRacingOnAnEmptyKey).
 //
 // A read racing a login's replace can return the replaced record after
 // the replace landed; that one request is denied, which fails closed.
@@ -67,7 +68,6 @@ type Ledger struct {
 type ledgerEntry struct {
 	last     string          // the last write that landed, or the first read
 	known    bool            // last is set: false for a key whose first write is in flight
-	held     uint64          // a revision the store held last at, or zero (earlier)
 	lastSeq  uint64          // seq of the write that set last; zero when a read did
 	inFlight map[string]int  // writes sent and not yet ended, by ctx_id; nil until one is
 	unknown  map[string]bool // writes that ended with neither a landing nor a refusal; nil until one does
@@ -84,15 +84,15 @@ type ledgerWrite struct {
 	seq uint64
 }
 
-// earlier reports whether w, which landed, committed before the write or
-// the read that set last, so the store holds last and not w (Ledger).
+// earlier reports whether w, had it landed, committed before the write
+// that set last, so the store does not hold w (Ledger).
 func (e *ledgerEntry) earlier(w ledgerWrite) bool {
-	return e.known && w.rev > 0 && (w.rev < e.held || w.seq < e.lastSeq)
+	return e.known && w.rev > 0 && w.seq < e.lastSeq
 }
 
-// settle makes id, read at rev, the last.
-func (e *ledgerEntry) settle(id string, rev uint64) {
-	e.last, e.known, e.held, e.lastSeq = id, true, rev, 0
+// settle makes id, read back, the last.
+func (e *ledgerEntry) settle(id string) {
+	e.last, e.known, e.lastSeq = id, true, 0
 }
 
 // NewLedger is an empty ledger, not yet sealed.
@@ -137,9 +137,8 @@ func (l *Ledger) forget(k store.ContextKey, at uint64, sealedOnly bool) {
 	delete(l.m, k)
 }
 
-// admits reports whether a record holding id, read at rev, may be read at
-// k.
-func (l *Ledger) admits(k store.ContextKey, id string, rev uint64) bool {
+// admits reports whether a record holding id may be read at k.
+func (l *Ledger) admits(k store.ContextKey, id string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	e, ok := l.m[k]
@@ -147,7 +146,7 @@ func (l *Ledger) admits(k store.ContextKey, id string, rev uint64) bool {
 		if l.sealed {
 			return false // and seeds nothing: the next read is denied too
 		}
-		l.entry(k).settle(id, rev)
+		l.entry(k).settle(id)
 		return true
 	}
 	switch {
@@ -156,7 +155,7 @@ func (l *Ledger) admits(k store.ContextKey, id string, rev uint64) bool {
 	case e.unknown[id]:
 		// Read back, so it landed: it is the last now, and the writes it
 		// replaced are not admitted again.
-		e.settle(id, rev)
+		e.settle(id)
 		clear(e.unknown)
 		return true
 	}
@@ -186,15 +185,11 @@ func (l *Ledger) end(w ledgerWrite, err error) {
 		delete(e.inFlight, w.id)
 	}
 	switch {
-	case err == nil && e.earlier(w):
-		// Landed, and replaced since: the store holds the last.
+	case e.earlier(w):
+		// Landed and replaced since, or never landed: the store holds the
+		// last, whatever the error.
 	case err == nil:
-		// It landed on a record at w.rev, so the store held it above that.
 		e.last, e.known, e.lastSeq = w.id, true, w.seq
-		e.held = 0
-		if w.rev > 0 {
-			e.held = w.rev + 1
-		}
 		clear(e.unknown)
 	case errors.Is(err, store.ErrConflict), errors.Is(err, store.ErrNotFound):
 	default:

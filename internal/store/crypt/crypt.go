@@ -549,7 +549,7 @@ func (w *wrapped) GetContext(ctx context.Context, k store.ContextKey) (store.Con
 	// the one this process last wrote here, or first read here, is another
 	// login's written back. It opens, since it is bound to this key, and so
 	// it is denied as one that does not.
-	if !w.ledger.admits(k, oc.CtxID, c.Rev) {
+	if !w.ledger.admits(k, oc.CtxID) {
 		return store.Context{}, &store.UnreadableContextError{Rev: c.Rev, RevokedAt: c.RevokedAt,
 			Err: w.openErr("context", ErrNotLastWritten)}
 	}
