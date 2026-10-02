@@ -630,8 +630,9 @@ read on a timer and on `SIGHUP`, and a change is handled in four steps:
    it held, is not refused for the two together (a net release): a device the same reload adds
    never offsets one it takes out of service, so padding the inventory cannot pass the bound. A
    release never offsets a refusal: a file that newly refuses admission to more than the bound of
-   the devices in service is refused whatever it releases, since a refused device's tokens are
-   deleted and a revert does not bring them back. A quarantine a grant
+   the devices the policy in force admits, quarantined ones included, is refused whatever it
+   releases (plan 6a's bound), since a refused device's tokens and contexts are deleted and a
+   revert does not bring them back. A quarantine a grant
    expiry brings on later is not judged at the reload (`port49 policy diff` fails on it). A refused
    file also keeps any grant it withdrew: `port49 revoke` cuts a principal off whatever the file. A
    refused file stays on disk, and a start has no policy in force to bound against, so a restart
@@ -5082,8 +5083,8 @@ policy reload that newly refuses admission to, or newly quarantines, together mo
 and not quarantined) is refused, naming them, unless at least as many of the devices the
 inventory held before it are in service after it (a net release; a device the reload adds never
 offsets one it takes out; §13 decision 34). The net release never covers refusals: one that
-newly refuses admission to more than the bound of the devices in service is refused whatever it
-releases, as plan 6a's bound refused it, since the tokens a refusal deletes do not come back on a
+newly refuses admission to more than the bound of the devices the policy in force admits,
+quarantined ones included, is refused whatever it releases, as plan 6a's bound refused it, since the tokens a refusal deletes do not come back on a
 revert. Either way the policy in force keeps serving and
 `port49_policy_file_refused` is 1, and raising the bound and sending `SIGHUP` applies a deliberate
 change. A policy reload whose bundle admits no device of a non-empty inventory is refused
@@ -6408,8 +6409,9 @@ the design was silent, each the option that denies more.*
   (a net release, which an incident fix often is). The net exemption counts only devices present
   in the inventory before the reload: a device the same reload adds never offsets a device it
   newly quarantines or refuses, so padding the inventory cannot bypass the guard. The net
-  exemption never exempts refusals: newly refused devices alone over the bound are refused
-  whatever the reload releases (plan 6a's bound, unchanged), since a refusal deletes tokens a
+  exemption never exempts refusals: newly refused devices alone over the bound of the devices
+  admitted, quarantined ones included, are refused whatever the reload releases (plan 6a's
+  bound, unchanged), since a refusal deletes tokens a
   revert does not restore; the exemption applies only to the combined count. On a combined
   policy-and-inventory reload the guard judges the policy's effect alone, against the policy in
   force over the new inventory; a quarantine the inventory change causes stays decision 20's
