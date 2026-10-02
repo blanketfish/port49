@@ -122,11 +122,15 @@ func (fb *fakeBroker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			// A revocation slow behind a slow store: it answers after
 			// delay, or not at all once the caller has gone. The body is
 			// read first: only then does the server see the caller go.
+			// "Not at all" is an abort: a handler that returned would
+			// answer an empty 200, which can still reach an agent whose
+			// close was under way (its transport takes a response that
+			// raced the cancel), and the broker never answers that.
 			_, _ = io.Copy(io.Discard, r.Body)
 			select {
 			case <-time.After(delay):
 			case <-r.Context().Done():
-				return
+				panic(http.ErrAbortHandler)
 			}
 		}
 		if !ok {
@@ -1732,6 +1736,13 @@ func TestAnExpiredHangUpDuringARefreshEndsTheSession(t *testing.T) {
 			if _, err := a.Connect(context.Background()); err != nil {
 				t.Fatal(err)
 			}
+			// The broker has closed Connect's connection; drop it here too,
+			// so the challenge goes out on a new one rather than racing that
+			// close (TestAResetOnTheHeldConnectionDuringARefreshIsTriedOnANewOne
+			// is that race). Otherwise both retries a refresh has can be
+			// spent on it and on the answer leg's close, and the reconnect
+			// under test is never reached.
+			a.client.CloseIdleConnections()
 			mu.Lock()
 			now = now.Add(25 * time.Hour) // the client certificate is good for a day
 			mu.Unlock()
