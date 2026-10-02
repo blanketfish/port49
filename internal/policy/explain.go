@@ -76,8 +76,7 @@ func (p *Policy) Explain(subject, principal, device, line string, now time.Time)
 	if _, ok := p.subs[subject]; !ok {
 		return Explanation{}, fmt.Errorf("subject %q is not declared", subject)
 	}
-	e := Explanation{Subject: subject, Device: device, Platform: d.Platform, Command: line,
-		hidden: append(platform.HiddenValues(p.Redactions(), strings.Fields(line)), p.HiddenValues()...)}
+	e := Explanation{Subject: subject, Device: device, Platform: d.Platform, Command: line}
 	dialect := p.dialect(d.Platform)
 	var res Resolution
 	var o engine.Outcome
@@ -110,6 +109,11 @@ func (p *Policy) Explain(subject, principal, device, line string, now time.Time)
 	case err != nil:
 		return e, err
 	}
+	// What a rendered line hides is worked out only for an answer that
+	// quotes one: a no-grant answer, an unknown device's, must cost what the
+	// broker's does, or the time it takes says which devices exist (design
+	// §17; plan 7c review C1).
+	e.hidden = append(platform.HiddenValues(p.Redactions(), strings.Fields(line)), p.HiddenValues()...)
 	// A quarantine an expiry will bring on has not failed yet: the device
 	// answers now, and the note says from when it will not.
 	_, e.Caveats = p.quarantineAt(d.Name, now)

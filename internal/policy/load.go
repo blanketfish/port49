@@ -95,6 +95,12 @@ type Policy struct {
 	// compiles nothing (spec §13 decision 34). The key is a device's
 	// platform, a set the inventory bounds, never a caller's text.
 	permitsAlone sync.Map
+	// hiddenOnce and hiddenValues memoize HiddenValues, which runs every
+	// redaction pattern over every rule: constant per policy, and read on
+	// every explain that quotes a line (plan 7c review C1). It is first
+	// read once roles and platforms are set.
+	hiddenOnce   sync.Once
+	hiddenValues []string
 
 	levels  []string          // the declared ordering, lowest first
 	parents map[string]string // level → parent, for rendering

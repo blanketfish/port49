@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"net/netip"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -340,6 +341,38 @@ grants: [{subject: s, scope: all_devices, roles: [ro]}]`)
 	p.permitsAlone.Range(func(any, any) bool { n++; return true })
 	if err != nil || strings.Join(second, " ") != "ops" || n != 1 {
 		t.Fatalf("%v %v; %d platform(s) compiled", second, err, n)
+	}
+	// The second call hands back the very programs the first compiled.
+	m1, err1 := p.permitPrograms("arista_eos")
+	m2, err2 := p.permitPrograms("arista_eos")
+	if err1 != nil || err2 != nil || m1["ops"] == nil || m1["ops"] != m2["ops"] || m1["ro"] != m2["ro"] {
+		t.Fatalf("permitPrograms compiled again: %v %v", err1, err2)
+	}
+}
+
+// A no-grant answer does no per-policy work past the grants: it works out
+// no hidden values, so it costs what an unknown device's does and its time
+// says nothing of which devices exist (plan 7c review C1). An answer that
+// quotes the line does, from HiddenValues, which is worked out once per
+// policy.
+func TestANoGrantExplainWorksOutNoHiddenValues(t *testing.T) {
+	p := mustParse(t, `
+scopes: [{name: lab, match: {site: lab}, on_missing: exclude}]
+roles: [{name: r, permit: ["show **"], deny: ["snmp-server community public **"]}]
+subjects: [{name: s, identity: ["user:alice@example.com"], username: alice, token_ttl: 60s}]
+grants: [{subject: s, scope: lab, roles: [r]}]`)
+	ng, err := p.Explain("s", "", "srx-fw-22", "show version", noon)
+	if err != nil || !ng.NoGrants || ng.hidden != nil {
+		t.Fatalf("no grant: %+v %v", ng, err)
+	}
+	granted, err := p.Explain("s", "", "srx-lab-01", "show version", noon)
+	if err != nil || !slices.Contains(granted.hidden, "public") {
+		t.Fatalf("granted: hidden %v %v", granted.hidden, err)
+	}
+	// Memoized: a second read is the first's value, not worked out again.
+	p.hiddenValues = []string{"sentinel"}
+	if got := p.HiddenValues(); len(got) != 1 || got[0] != "sentinel" {
+		t.Fatalf("HiddenValues worked out again: %v", got)
 	}
 }
 
