@@ -1075,6 +1075,23 @@ func twoLoginsEndOutOfOrder(t *testing.T, seeded bool) (store.Store, store.Store
 	return s, inner, k, aliceSealed
 }
 
+// A write W begun after the last write L began, but before L ended, that
+// lands at a lower revision committed before L, not after a restore: only
+// a write sent after the last ended can be read as the store's revisions
+// going back. L is admitted and W is not (final review m-1).
+func TestAWriteBegunBeforeTheLastEndedIsNotARestore(t *testing.T) {
+	k := store.ContextKey{NAS: "leaf-01", Username: "netops"}
+	l := NewLedger()
+	l.admits(k, "a")
+	last := l.begin(k, "L", 5)
+	w := l.begin(k, "W", 0)
+	l.end(last, 10, nil)
+	l.end(w, 9, nil)
+	if !l.admits(k, "L") || l.admits(k, "W") {
+		t.Fatal("a write begun before the last ended, landing below it, was taken for a restore")
+	}
+}
+
 // Each landed write is placed by the revision it committed at, whatever
 // order the writes end in. A write that compared on a revision below the
 // last's committed before it, if it landed: ending with an unknown outcome
