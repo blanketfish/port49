@@ -169,7 +169,13 @@ func TestCheckAdmissionBoundsAPolicyThatRefusesTheFleet(t *testing.T) {
 // arista_eos, so every device those scopes select is quarantined.
 func quarantineOn(t *testing.T, devs []admission.Device, scopes ...string) *policy.Policy {
 	t.Helper()
-	text := strings.Replace(withScopes, "roles: [{name: r, privilege: readonly, permit: [show **]}]",
+	return quarantineIn(t, withScopes, devs, scopes...)
+}
+
+// quarantineIn is quarantineOn over policy text, a variant of withScopes.
+func quarantineIn(t *testing.T, text string, devs []admission.Device, scopes ...string) *policy.Policy {
+	t.Helper()
+	text = strings.Replace(text, "roles: [{name: r, privilege: readonly, permit: [show **]}]",
 		"roles: [{name: r, privilege: readonly, permit: [show **]}, {name: big, privilege: admin, permit: [show **]}]", 1)
 	for _, sc := range scopes {
 		text = strings.Replace(text, "scope: "+sc+", roles: [r]}", "scope: "+sc+", roles: [big], max_privilege: operator}", 1)
@@ -187,9 +193,9 @@ func quarantineOn(t *testing.T, devs []admission.Device, scopes ...string) *poli
 // candidate guard; spec §13 decision 34). Against a fleet that already has
 // a quarantine (Review Focus 4; pre-flight M6): a release passes; the
 // policy in force reloaded passes; one more of the three in service
-// quarantined is 33% and refused; and a reload that releases one and
-// quarantines another, leaving as many in service as before, passes
-// (pre-flight M14).
+// quarantined is 34%, the share rounded up, and refused; and a reload that
+// releases one and quarantines another, leaving as many in service as
+// before, passes (pre-flight M14).
 func TestCheckAdmissionBoundsAPolicyThatQuarantinesTheFleet(t *testing.T) {
 	now := time.Now()
 	devs := []admission.Device{dev("a", "10.0.3.1", nil), dev("b", "10.0.3.2", nil),
@@ -233,7 +239,7 @@ func TestCheckAdmissionBoundsAPolicyThatQuarantinesTheFleet(t *testing.T) {
 		t.Fatalf("(b) the policy in force again, three of four in service: %v", err)
 	}
 	err = CheckAdmission(dc, dcCampus, 10, now)
-	if err == nil || !strings.Contains(err.Error(), "takes 1 of 3 devices in service out of it (33%)") ||
+	if err == nil || !strings.Contains(err.Error(), "takes 1 of 3 devices in service out of it (34%)") ||
 		!strings.Contains(err.Error(), "it quarantines 1: c (") {
 		t.Fatalf("(c) one more of the three in service: %v", err)
 	}
@@ -242,6 +248,131 @@ func TestCheckAdmissionBoundsAPolicyThatQuarantinesTheFleet(t *testing.T) {
 	}
 	if got := NewlyQuarantined(good, all, now); len(got) != 4 || got[0].Device != "a" || got[0].Cause == "" {
 		t.Fatalf("NewlyQuarantined: %+v", got)
+	}
+}
+
+// A combined reload is judged on what its policy does: against the policy in
+// force over the new inventory (base), a device the inventory moves into a
+// capped scope is the inventory's, quarantined as decision 20 says, and the
+// same policy text passes. A nil base, one that did not parse, counts it as
+// the policy's (fail closed); and a policy that caps the scope the
+// inventory moves devices into is still refused (task 10 review I1).
+func TestCheckAdmissionOverJudgesThePolicysEffectAlone(t *testing.T) {
+	now := time.Now()
+	var before, after []admission.Device
+	for i := range 10 {
+		before = append(before, dev(fmt.Sprintf("d%02d", i), fmt.Sprintf("10.0.6.%d", i+1), nil))
+		var attrs map[string]string
+		if i < 2 {
+			attrs = map[string]string{"site": "dc1"}
+		}
+		after = append(after, dev(fmt.Sprintf("d%02d", i), fmt.Sprintf("10.0.6.%d", i+1), attrs))
+	}
+	old := quarantineOn(t, before, "dc")
+	base := quarantineOn(t, after, "dc")
+	combined := quarantineOn(t, after, "dc")
+	if n := len(NewlyQuarantined(old, combined, now)); n != 2 {
+		t.Fatalf("the fixture: the inventory quarantines %d, not 2", n)
+	}
+	if err := Check(old, combined, 10); err != nil {
+		t.Fatalf("the inventory's bound: %v", err)
+	}
+	if err := CheckAdmissionOver(old, base, combined, 10, now); err != nil {
+		t.Fatalf("the same policy, the inventory's quarantine: %v", err)
+	}
+	if err := CheckAdmissionOver(old, nil, combined, 10, now); err == nil ||
+		!strings.Contains(err.Error(), "takes 2 of 10 devices in service out of it (20%)") {
+		t.Fatalf("no base counts every device: %v", err)
+	}
+	uncapped := mustBundle(t, before...)
+	if err := CheckAdmissionOver(uncapped, mustBundle(t, after...), combined, 10, now); err == nil ||
+		!strings.Contains(err.Error(), "it quarantines 2: d00 (") {
+		t.Fatalf("the policy caps the scope the inventory moves devices into: %v", err)
+	}
+}
+
+// The share is of one population: a device the policy in force quarantines
+// is not in service, so its refusal is not counted. Two of twenty
+// quarantined and then refused, and one more quarantined, is 1 of 18, and
+// passes (task 10 review I2).
+func TestCheckAdmissionCountsOnlyDevicesInService(t *testing.T) {
+	now := time.Now()
+	var devs []admission.Device
+	for i := range 20 {
+		addr, attrs := fmt.Sprintf("10.1.0.%d", i+1), map[string]string(nil)
+		switch {
+		case i < 2:
+			addr, attrs = fmt.Sprintf("10.2.0.%d", i+1), map[string]string{"site": "dc1"}
+		case i == 2:
+			attrs = map[string]string{"site": "campus"}
+		}
+		devs = append(devs, dev(fmt.Sprintf("d%02d", i), addr, attrs))
+	}
+	old := quarantineOn(t, devs, "dc")
+	narrowed := quarantineIn(t, strings.Replace(withScopes, "cidr: 10.0.0.0/8", "cidr: 10.1.0.0/16", 1), devs,
+		"dc", "campus")
+	if inServiceCount(old, now) != 18 || len(NewlyRefused(old, narrowed)) != 2 ||
+		len(NewlyQuarantined(old, narrowed, now)) != 1 {
+		t.Fatalf("the fixture: %d in service, %d refused, %d quarantined", inServiceCount(old, now),
+			len(NewlyRefused(old, narrowed)), len(NewlyQuarantined(old, narrowed, now)))
+	}
+	if err := CheckAdmission(old, narrowed, 10, now); err != nil {
+		t.Fatalf("1 of 18 in service: %v", err)
+	}
+	if err := CheckAdmissionOver(old, nil, narrowed, 10, now); err != nil {
+		t.Fatalf("1 of 18 in service, with no base: %v", err)
+	}
+}
+
+// A release never offsets a refusal, which deletes tokens a revert does not
+// bring back: fifty quarantined devices released and twenty in service
+// refused by a key_groups typo is refused, though more are in service after
+// it than before (decision 34, amended). And the share prints rounded up, so
+// 21 of 200 over a bound of 10 never reads "(10%)" (task 10 review M1, M2).
+func TestCheckAdmissionNeverExemptsARefusal(t *testing.T) {
+	now := time.Now()
+	var devs []admission.Device
+	for i := range 100 {
+		addr, attrs := fmt.Sprintf("10.1.0.%d", i+1), map[string]string(nil)
+		switch {
+		case i < 50:
+			attrs = map[string]string{"site": "dc1"}
+		case i < 70:
+			addr = fmt.Sprintf("10.2.0.%d", i+1)
+		}
+		devs = append(devs, dev(fmt.Sprintf("d%02d", i), addr, attrs))
+	}
+	old := quarantineOn(t, devs, "dc")
+	typo, err := Parse([]byte(strings.Replace(withScopes, "cidr: 10.0.0.0/8", "cidr: 10.1.0.0/16", 1)),
+		admission.Inventory{Devices: devs}, policy.Env{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inServiceCount(old, now) != 50 || keptInService(old, typo, now) != 80 {
+		t.Fatalf("the fixture: %d in service before, %d after", inServiceCount(old, now), keptInService(old, typo, now))
+	}
+	if err := CheckAdmission(old, typo, 10, now); err == nil ||
+		!strings.Contains(err.Error(), "refuses admission to 20 of 50 devices (40%)") {
+		t.Fatalf("a release offset a refusal: %v", err)
+	}
+
+	devs = devs[:0]
+	for i := range 200 {
+		addr := fmt.Sprintf("10.1.%d.%d", i/200, i%200+1)
+		if i < 21 {
+			addr = fmt.Sprintf("10.2.0.%d", i+1)
+		}
+		devs = append(devs, dev(fmt.Sprintf("e%03d", i), addr, nil))
+	}
+	old = mustBundle(t, devs...)
+	typo, err = Parse([]byte(strings.Replace(withScopes, "cidr: 10.0.0.0/8", "cidr: 10.1.0.0/16", 1)),
+		admission.Inventory{Devices: devs}, policy.Env{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckAdmission(old, typo, 10, now); err == nil ||
+		!strings.Contains(err.Error(), "refuses admission to 21 of 200 devices (11%)") {
+		t.Fatalf("21 of 200: %v", err)
 	}
 }
 

@@ -22,6 +22,7 @@ import (
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/engine"
+	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/store/memory"
 )
@@ -720,10 +721,16 @@ func TestAReloadThatQuarantinesTheFleetIsRefused(t *testing.T) {
 // policy in force and the refused one before it reaches stderr, a log, and
 // only then are its quoted values cut, so a cut never leaves a secret's
 // head (spec §5.8; pre-flight I3): a quarantine's cause quotes policy text.
+// The value is a Junos community, `community <c> {`: the pattern needs the
+// brace past the cut, so a value cut first no longer matches and its
+// secret's head would print (task 10 review M3).
 func TestARefusedReloadsLineIsRedacted(t *testing.T) {
 	pol := newReloadRig(t, minimalPolicy).b.Policy.Load()
-	err := errors.New(`it quarantines 1: leaf1 (role r: "username bob secret Hunter2Hunter2Hunter2Hunter2Hunter2Hunter2Hunter2")`)
-	if line := refusalLine(err, pol, nil); strings.Contains(line, "Hunter2") || !strings.Contains(line, "leaf1") {
+	err := errors.New(`it quarantines 1: leaf1 (role r: "community ` + strings.Repeat("Hunter2", 9) + ` {")`)
+	if cutFirst := platform.RedactQuoted(pol.Redactions(), oneLine(quotesCut{err})); !strings.Contains(cutFirst, "Hunter2") {
+		t.Fatalf("the fixture does not tell the order apart: %s", cutFirst)
+	}
+	if line := refusalLine(err, false, pol, nil); strings.Contains(line, "Hunter2") || !strings.Contains(line, "leaf1") {
 		t.Fatalf("%s", line)
 	}
 }

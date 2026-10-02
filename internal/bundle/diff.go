@@ -303,20 +303,39 @@ func keptInService(old, new *policy.Policy, now time.Time) int {
 // would take out of service by its joint check (spec §10; plan 4b's
 // candidate guard, decision 34). A device new refuses is NewlyRefused's.
 func NewlyQuarantined(old, new *policy.Policy, now time.Time) []Quarantined {
-	var out []Quarantined
+	_, q := takenOut(old, old, new, now)
+	return q
+}
+
+// takenOut is what new's policy takes out of service at now: every device
+// old serves and base serves too that new refuses or admits and
+// quarantines. base is old's policy over new's inventory, what the
+// inventory alone would put in force, so a device the inventory change
+// takes out is not the policy's: it is Check's, and quarantines as decision
+// 20 says. A nil base, a policy in force that does not parse over the new
+// inventory, counts every one (fail closed).
+func takenOut(old, base, new *policy.Policy, now time.Time) ([]admission.Resolved, []Quarantined) {
+	var refused []admission.Resolved
+	var quarantined []Quarantined
 	for _, d := range new.Devices() {
-		if _, inOld := old.Admitted(d.Name); !inOld || !inService(old, d.Name, now) {
+		if _, inOld := old.Admitted(d.Name); !inOld || !inService(old, d.Name, now) ||
+			base != nil && !inService(base, d.Name, now) {
 			continue
 		}
-		if r, _ := new.Admitted(d.Name); r.Refused != "" && new.AdmissionAssessed() {
+		r, _ := new.Admitted(d.Name)
+		if r.Refused != "" {
+			// As NewlyRefused reads it: an unassessed policy refuses what
+			// no group admits and no pin assigns (I1).
+			refused = append(refused, r)
 			continue
 		}
 		if cause, q := new.Quarantined(d.Name, now); q {
-			out = append(out, Quarantined{Device: d.Name, Cause: cause})
+			quarantined = append(quarantined, Quarantined{Device: d.Name, Cause: cause})
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Device < out[j].Device })
-	return out
+	sort.Slice(refused, func(i, j int) bool { return refused[i].Device.Name < refused[j].Device.Name })
+	sort.Slice(quarantined, func(i, j int) bool { return quarantined[i].Device < quarantined[j].Device })
+	return refused, quarantined
 }
 
 // OverBound is CheckAdmission's refusal for the bound, as against its
@@ -333,40 +352,57 @@ func (e *OverBound) Error() string { return e.msg }
 const reloadRemedy = "if the change is meant, raise inventory.max_removed_percent in port49d.yaml and send " +
 	"SIGHUP, which re-reads it with the reload, then lower it again, since it bounds inventory syncs too"
 
+// share is n of was as a percentage rounded up, so a share over the bound
+// never prints as the bound.
+func share(n, was int) int { return (n*100 + was - 1) / was }
+
 // CheckAdmission is a policy reload's bound (plan 6a, N1; plan 4b's
-// candidate guard, decision 34). Key groups and the joint check are policy,
+// candidate guard, decision 34), for a reload of the policy alone:
+// CheckAdmissionOver with the policy in force as its own base.
+func CheckAdmission(old, new *policy.Policy, maxRemovedPercent int, now time.Time) error {
+	return CheckAdmissionOver(old, old, new, maxRemovedPercent, now)
+}
+
+// CheckAdmissionOver is the policy's bound on a reload of new against old,
+// where base is old's policy over new's inventory (takenOut; nil counts
+// every device as the policy's). Key groups and the joint check are policy,
 // so one edit can take the fleet out of service: a refused device's
 // contexts are revoked and its tokens deleted (I2), and a quarantined
 // device's connections are closed, so it falls to its local method
 // (tests/lab/results/quarantine-*.md). Unbounded, one bad edit puts the
-// fleet on break-glass. It refuses a policy that newly refuses and newly
-// quarantines, together, more than maxRemovedPercent of the devices old
-// serves at now, naming them, unless new serves at now at least as many of
-// the devices old's inventory holds as old does: a net release, as an
-// incident fix that releases fifty and quarantines five is, is never
-// refused (pre-flight M14), and a device the reload adds never counts
-// toward it. A quarantine an expiry brings on later is not judged here
-// (port49 policy diff fails on it). An inventory-only reload is Check's,
-// and quarantines as decision 20 says. A cause quotes policy text: whoever
-// prints the error redacts it (spec §5.8).
-func CheckAdmission(old, new *policy.Policy, maxRemovedPercent int, now time.Time) error {
+// fleet on break-glass. Of the devices old serves at now, it refuses a
+// policy that newly refuses more than maxRemovedPercent, always: a refusal
+// deletes tokens a revert does not bring back. And it refuses one that
+// newly refuses and newly quarantines, together, more than
+// maxRemovedPercent, naming them, unless new serves at now at least as many
+// of the devices old's inventory holds as old does: a net release, as an
+// incident fix that releases fifty and quarantines five is, passes
+// (pre-flight M14), and a device the reload adds never counts toward it. A
+// quarantine an expiry brings on later is not judged here (port49 policy
+// diff fails on it). An inventory-only reload is Check's, and quarantines
+// as decision 20 says. A cause quotes policy text: whoever prints the error
+// redacts it (spec §5.8).
+func CheckAdmissionOver(old, base, new *policy.Policy, maxRemovedPercent int, now time.Time) error {
 	if err := admitsNone("policy", new, false); err != nil {
 		return err
 	}
 	was := inServiceCount(old, now)
-	refused := NewlyRefused(old, new)
-	quarantined := NewlyQuarantined(old, new, now)
+	if was == 0 || maxRemovedPercent >= 100 {
+		return nil
+	}
+	refused, quarantined := takenOut(old, base, new, now)
 	gone := len(refused) + len(quarantined)
-	if was == 0 || maxRemovedPercent >= 100 || gone*100 <= was*maxRemovedPercent || keptInService(old, new, now) >= was {
+	refusedOver := len(refused)*100 > was*maxRemovedPercent
+	if !refusedOver && (gone*100 <= was*maxRemovedPercent || keptInService(old, new, now) >= was) {
 		return nil
 	}
 	if len(quarantined) == 0 {
 		return &OverBound{fmt.Sprintf("the new policy refuses admission to %d of %d devices (%d%%), more than "+
 			"inventory.max_removed_percent (%d%%): %s; check key_groups, or, %s",
-			len(refused), was, len(refused)*100/was, maxRemovedPercent, names(refused), reloadRemedy)}
+			len(refused), was, share(len(refused), was), maxRemovedPercent, names(refused), reloadRemedy)}
 	}
 	msg := fmt.Sprintf("the new policy takes %d of %d devices in service out of it (%d%%), more than "+
-		"inventory.max_removed_percent (%d%%):", gone, was, gone*100/was, maxRemovedPercent)
+		"inventory.max_removed_percent (%d%%):", gone, was, share(gone, was), maxRemovedPercent)
 	if len(refused) > 0 {
 		msg += fmt.Sprintf(" it refuses admission to %d: %s (check key_groups);", len(refused), names(refused))
 	}
@@ -375,6 +411,10 @@ func CheckAdmission(old, new *policy.Policy, maxRemovedPercent int, now time.Tim
 		q[i] = fmt.Sprintf("%s (%s)", d.Device, d.Cause)
 	}
 	msg += fmt.Sprintf(" it quarantines %d: %s; `port49 policy diff` names each cause", len(quarantined), nameList(q))
+	if refusedOver {
+		msg += fmt.Sprintf("; the refusals alone are %d%%, and a release elsewhere never offsets a refusal, "+
+			"since it deletes tokens a revert does not bring back", share(len(refused), was))
+	}
 	return &OverBound{msg + "; the policy in force keeps serving (to cut someone off now, use `port49 revoke`); " +
 		reloadRemedy}
 }
