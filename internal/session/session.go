@@ -179,6 +179,18 @@ func (m *Manager) RevokeByCert(ctx context.Context, issuer, serial string) ([]st
 	return m.mark(ctx, refs, "")
 }
 
+// Reindex indexes ref again under c's principal, sid and certificate,
+// for the index TTL: a context whose index record was deleted, rewritten
+// or garbled in the store (plan 7d; re-check IA2 and I2). Revocation and
+// the refresh read the index, so a context left out of it is reached by
+// neither. It writes with no compare against the context it read, so a
+// login racing it can have the old principal listed again beside its own:
+// that over-reaches, which is a denial (re-check M-B3).
+func (m *Manager) Reindex(ctx context.Context, ref store.ContextRef, c store.Context) error {
+	return m.store.IndexContext(ctx, c.Principal, c.Credential.Sid,
+		store.CertKey(c.Credential.Issuer, c.Credential.Serial), ref, m.indexTTL)
+}
+
 // mark sets revoked_at on every ref and deletes the receipts of every
 // principal behind them, returning the refs it touched.
 //

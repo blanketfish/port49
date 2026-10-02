@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 
@@ -367,11 +368,91 @@ func (s *Store) parseLookup(fam, key string) (string, store.ContextRef, bool) {
 	return indexed, store.ContextRef{NAS: nas, Username: user}, true
 }
 
+// Unindexed is the ref of every context, with the keys its index record
+// lists live, for the broker's ReindexContexts to compare with the
+// context's own (plan 7d; Ruling 6; re-check IA2 and I2). A login writes a
+// context and its index record in one step and every extension carries
+// both, so a live context whose record is gone, lists no live principal,
+// or lists another principal than its own was hidden by a store write:
+// from the refresh, which walks the index, and from a revocation by sid or
+// by --mine. This store cannot open a context to read whose it is, so it
+// names every one, and the re-index, reading through the sealing layer,
+// decides. It pages the context family keys-only and reads each page's
+// index records in batched transactions, as the sweep does. A context past
+// its expiry and not yet reclaimed may be named; ReindexContexts reads it
+// and finds nothing.
+//
+// An index record that does not decode lists nothing, so the re-index
+// writes it whole again; it is said by its key alone and counted
+// (undecodableIndex). A context key that does not parse names no ref, and
+// is said and skipped. Neither stops the scan: one bad record must not
+// stop the start or the re-index of every other (re-check I3; Task 7
+// review K-2).
+func (s *Store) Unindexed(ctx context.Context) ([]store.IndexedRef, error) {
+	prefix := s.k.family(famContext)
+	end := clientv3.GetPrefixRangeEnd(prefix)
+	from := prefix
+	now := s.now()
+	var out []store.IndexedRef
+	for {
+		resp, err := s.ctx.Get(ctx, from, clientv3.WithRange(end), clientv3.WithLimit(500), clientv3.WithKeysOnly())
+		if err != nil {
+			return out, unavailable(err)
+		}
+		refs := make([]store.ContextRef, 0, len(resp.Kvs))
+		gets := make([]clientv3.Op, 0, len(resp.Kvs))
+		for _, kv := range resp.Kvs {
+			nas, user, ok := lastTwo(string(kv.Key))
+			if !ok || strings.Count(strings.TrimPrefix(string(kv.Key), prefix), "/") != 1 {
+				s.logf("etcd: context key %q does not parse; the re-index skips it", kv.Key)
+				continue
+			}
+			ref := store.ContextRef{NAS: nas, Username: user}
+			refs = append(refs, ref)
+			gets = append(gets, clientv3.OpGet(s.k.indexed(ref)))
+		}
+		i := 0
+		if err := chunked(ctx, s.ctx, gets, func(t *clientv3.TxnResponse) {
+			for _, op := range t.Responses {
+				r := store.IndexedRef{ContextRef: refs[i]}
+				i++
+				for _, kv := range op.GetResponseRange().Kvs {
+					var x idxRec
+					if err := json.Unmarshal(kv.Value, &x); err != nil {
+						s.undecodableIndex(kv.Key, "the re-index writes it whole again")
+						continue
+					}
+					r.Principals, r.Sids, r.Certs = liveKeys(x.Principals, now), liveKeys(x.Sids, now),
+						liveKeys(x.Certs, now)
+				}
+				out = append(out, r)
+			}
+		}); err != nil {
+			return out, err
+		}
+		if !resp.More || len(resp.Kvs) == 0 {
+			return out, nil
+		}
+		from = string(resp.Kvs[len(resp.Kvs)-1].Key) + "\x00"
+	}
+}
+
+// liveKeys is the key of every entry live at now.
+func liveKeys(l []idxEntry, now time.Time) []string {
+	var out []string
+	for _, e := range l {
+		if e.ExpiresAt.After(now) {
+			out = append(out, e.Key)
+		}
+	}
+	return out
+}
+
 // undecodableIndex says an index record that does not decode, by its key
 // alone (its value is never logged, whatever a writer put there), and
 // counts it (metrics.IndexRecordsUndecodable). Only a store writer makes
-// one. Deleting the key is the operator's fix until Task 7b lets a login
-// and the re-index write it whole again (Task 7 review K-2).
+// one. A login and the re-index write it whole again, each compared on its
+// revision (readCtx; Task 7 review K-2).
 func (s *Store) undecodableIndex(key []byte, what string) {
 	s.logf("etcd: index record %q does not decode; %s", key, what)
 	if s.idxUndecodable != nil {

@@ -470,6 +470,16 @@ type ContextRef struct {
 	Username string
 }
 
+// IndexedRef is a context's ref and the keys its index record lists live,
+// as the etcd backend's re-index scan reads them (plan 7d; re-check IA2
+// and I2). The record is plaintext, so the re-index compares it with the
+// context's own principal, sid and certificate, read sealed. A record that
+// is gone, lists nothing live, or does not decode lists nothing.
+type IndexedRef struct {
+	ContextRef
+	Principals, Sids, Certs []string
+}
+
 // MarkRead is a revocation mark as a login read it: At is the mark's, or
 // zero when none stood (plan 7d).
 type MarkRead struct {

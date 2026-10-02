@@ -23,11 +23,14 @@ type ctxSnap struct {
 	mod    int64
 	idx    idxRec
 	idxMod int64
-	// idxBad is an index record there that does not decode: idx is empty,
-	// and every write that would change or carry it returns this. One
-	// that leaves it alone (a revocation, any setter that does not extend)
-	// lands, compared on idxMod (Task 7 review I-1; K-2 makes it
-	// replaceable in Task 7b).
+	// idxBad is an index record there that does not decode: idx is empty.
+	// A login and an index write replace it whole, from what they index,
+	// compared on idxMod, so it locks nobody out and the re-index can
+	// repair it (Task 7 review K-2): that lifts no more than deleting it,
+	// which the writer that garbled it could do as well. Every other write
+	// that would carry it returns this; one that leaves it alone (a
+	// revocation, any setter that does not extend) lands, compared on
+	// idxMod (Task 7 review I-1).
 	idxBad error
 	marks  map[[2]string]markSnap
 }
@@ -282,7 +285,7 @@ func (s *Store) SwapLoginRev(ctx context.Context, k store.ContextKey, rev uint64
 			}
 		}
 		if snap.idxBad != nil {
-			return 0, snap.idxBad
+			s.undecodableIndex([]byte(s.k.indexed(ref)), "a login writes it whole again")
 		}
 		now := s.now()
 		r := whole(c, now, ttl)
@@ -651,7 +654,7 @@ func (s *Store) indexOp(ctx context.Context, ref store.ContextRef, f func(x *idx
 			return err
 		}
 		if snap.idxBad != nil {
-			return snap.idxBad
+			s.undecodableIndex([]byte(s.k.indexed(ref)), "an index write writes it whole again")
 		}
 		x := snap.idx
 		x.prune(s.now())

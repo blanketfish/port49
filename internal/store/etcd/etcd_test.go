@@ -621,3 +621,166 @@ func TestAGarbledIndexRecordKeepsItsPrincipalActive(t *testing.T) {
 		t.Fatalf("active principals with user:victim's index record garbled: %v %v", ps, err)
 	}
 }
+
+// Every context is named with what its index record lists live: one
+// whose record is gone, or lists no live principal, lists none, and one
+// whose record was rewritten to list another principal lists that one,
+// for the re-index to compare with the context's own (re-check IA2, I2).
+func TestUnindexedFindsAContextItsIndexLost(t *testing.T) {
+	ctx := context.Background()
+	now := t0
+	s := onShared(t, func() time.Time { return now })
+	kept := store.ContextRef{NAS: "leaf-01", Username: "kept"}
+	lost := store.ContextRef{NAS: "leaf-01", Username: "lost"}
+	stale := store.ContextRef{NAS: "rack/1%2Fleaf", Username: "stale"}
+	moved := store.ContextRef{NAS: "leaf-02", Username: "moved"}
+	for _, r := range []store.ContextRef{kept, lost, stale, moved} {
+		if err := s.PutContext(ctx, store.ContextKey{NAS: r.NAS, Username: r.Username},
+			store.Context{CtxID: "c", Principal: "user:a", Username: r.Username}, 2*time.Hour); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.IndexContext(ctx, "user:a", "sid-k", "", kept, 2*time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.IndexContext(ctx, "user:a", "", "", lost, 2*time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.IndexContext(ctx, "user:a", "sid-1", "", stale, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ctx.Delete(ctx, s.k.indexed(lost)); err != nil { // a store write hides it
+		t.Fatal(err)
+	}
+	if _, err := s.ctx.Put(ctx, s.k.indexed(moved), // and one rewritten to name another
+		`{"principals":[{"key":"user:b","expires_at":"`+t0.Add(2*time.Hour).Format(time.RFC3339)+`"}]}`); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(2 * time.Minute) // stale's entries have expired; its context has not
+	got, err := s.Unindexed(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[store.ContextRef]store.IndexedRef{
+		kept:  {ContextRef: kept, Principals: []string{"user:a"}, Sids: []string{"sid-k"}},
+		lost:  {ContextRef: lost},
+		stale: {ContextRef: stale},
+		moved: {ContextRef: moved, Principals: []string{"user:b"}},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("Unindexed = %+v, want %+v", got, want)
+	}
+	for _, r := range got {
+		w := want[r.ContextRef]
+		if !slices.Equal(r.Principals, w.Principals) || !slices.Equal(r.Sids, w.Sids) || !slices.Equal(r.Certs, w.Certs) {
+			t.Fatalf("Unindexed names %+v, want %+v", r, w)
+		}
+	}
+}
+
+// A garbled index record is named as listing nothing, said by its key
+// alone and counted, and never stops the scan. The re-index then writes it
+// whole again from the context, and a login over one lands, so it locks
+// nobody out (re-check I3; Task 7 review K-2).
+func TestAGarbledIndexRecordIsWrittenWholeAgain(t *testing.T) {
+	ctx := context.Background()
+	var mu sync.Mutex
+	var logged []string
+	undecodable := prometheus.NewCounter(prometheus.CounterOpts{Name: "undecodable"})
+	cli := etcdtest.Client(t)
+	s := newStore(cli, cli, Config{Prefix: etcdtest.Prefix(), Now: func() time.Time { return t0 },
+		Logf: func(format string, args ...any) {
+			mu.Lock()
+			defer mu.Unlock()
+			logged = append(logged, fmt.Sprintf(format, args...))
+		}, IndexUndecodable: undecodable})
+	alice := store.ContextRef{NAS: "leaf-01", Username: "alice"}
+	bob := store.ContextRef{NAS: "leaf-02", Username: "bob"}
+	for _, r := range []store.ContextRef{alice, bob} {
+		if err := s.PutContext(ctx, store.ContextKey{NAS: r.NAS, Username: r.Username},
+			store.Context{CtxID: "c", Principal: "user:" + r.Username, Username: r.Username}, time.Hour); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.IndexContext(ctx, "user:"+r.Username, "sid-"+r.Username, "", r, time.Hour); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.ctx.Put(ctx, s.k.indexed(r), "not json"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.ctx.Put(ctx, s.k.family(famContext)+"no-ref", "{}"); err != nil { // a key that names no ref
+		t.Fatal(err)
+	}
+	got, err := s.Unindexed(ctx)
+	if err != nil || len(got) != 2 || got[0].ContextRef != alice || got[1].ContextRef != bob ||
+		len(got[0].Principals)+len(got[1].Principals) != 0 {
+		t.Fatalf("Unindexed over garbled records = %+v, %v", got, err)
+	}
+	if n := testutil.ToFloat64(undecodable); n != 2 {
+		t.Fatalf("port49_store_index_records_undecodable_total = %v, want 2", n)
+	}
+	m := session.New(s, func() time.Time { return t0 }, time.Hour, time.Hour)
+	c := store.Context{Principal: "user:alice", Credential: store.Credential{Sid: "sid-alice"}}
+	if err := m.Reindex(ctx, alice, c); err != nil {
+		t.Fatalf("a re-index over a garbled record: %v", err)
+	}
+	if refs, err := s.ContextsByPrincipal(ctx, "user:alice"); err != nil || len(refs) != 1 || refs[0] != alice {
+		t.Fatalf("after the re-index, user:alice's lookup = %v %v", refs, err)
+	}
+	if refs, err := s.ContextsBySid(ctx, "sid-alice"); err != nil || len(refs) != 1 || refs[0] != alice {
+		t.Fatalf("after the re-index, sid-alice's lookup = %v %v", refs, err)
+	}
+	k := store.ContextKey{NAS: bob.NAS, Username: bob.Username}
+	live, err := s.GetContext(ctx, k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	login := store.Context{CtxID: "c", Principal: "user:bob", Username: "bob", PrivLvl: 1, AuthTime: t0,
+		RefreshedAt: t0, Credential: store.Credential{Method: "oidc", Sid: "sid-new"}}
+	if err := s.SwapLogin(ctx, k, live.Rev, login, time.Hour, store.LoginWrite{Principal: "user:bob",
+		Sid: "sid-new", IndexTTL: time.Hour}); err != nil {
+		t.Fatalf("a login over a garbled record: %v", err)
+	}
+	if refs, err := s.ContextsBySid(ctx, "sid-new"); err != nil || len(refs) != 1 || refs[0] != bob {
+		t.Fatalf("after the login, sid-new's lookup = %v %v", refs, err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for _, line := range logged {
+		if strings.Contains(line, "not json") {
+			t.Fatalf("a log line quotes a record's value: %q", line)
+		}
+	}
+}
+
+// A garbled index record is written whole again only while it is as
+// read: two index writes over one, racing, both land, the loser reading
+// again the winner's record. Written with no compare, one would erase the
+// other's keys (Task 7 review K-2).
+func TestARebuiltIndexRecordComparesItsRevision(t *testing.T) {
+	ctx := context.Background()
+	s := onShared(t, func() time.Time { return t0 })
+	ref := store.ContextRef{NAS: "leaf-01", Username: "alice"}
+	for round := range 50 {
+		if _, err := s.ctx.Put(ctx, s.k.indexed(ref), "not json"); err != nil {
+			t.Fatal(err)
+		}
+		sid := fmt.Sprintf("sid-%d", round)
+		var wg sync.WaitGroup
+		var errs [2]error
+		start := make(chan struct{})
+		wg.Add(2)
+		go func() { defer wg.Done(); <-start; errs[0] = s.IndexContext(ctx, "user:a", "", "", ref, time.Hour) }()
+		go func() { defer wg.Done(); <-start; errs[1] = s.IndexContext(ctx, "", sid, "", ref, time.Hour) }()
+		close(start)
+		wg.Wait()
+		if errs[0] != nil || errs[1] != nil {
+			t.Fatal(errs)
+		}
+		p, err1 := s.ContextsByPrincipal(ctx, "user:a")
+		q, err2 := s.ContextsBySid(ctx, sid)
+		if err1 != nil || err2 != nil || len(p) != 1 || len(q) != 1 {
+			t.Fatalf("round %d: a racing rebuild lost a key: by principal %v, by sid %v (%v %v)", round, p, q, err1, err2)
+		}
+	}
+}
