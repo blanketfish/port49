@@ -66,8 +66,8 @@ review done 2026-10-02 (one important: a token outlived its ceiling, fixed in th
 (`2026-10-02-07c-api-and-authorization.md`, fourteen tasks: one docs, eleven code, one lab, one
 docs; no owner decision, ten rulings recorded as decision 34, decision 32 amended first by the
 owner's answer on the revocations volume; no register row); **executed 2026-10-02** on
-`feature/api-and-authorization`, reviewed per task, the HTTP revocation's shapes measured on vEOS,
-the N9Kv, the C8000V and vJunos-router (Plan 7c — As built, below).
+`feature/api-and-authorization`, reviewed per task and as a whole branch, the HTTP revocation's
+shapes measured on vEOS, the N9Kv, the C8000V and vJunos-router (Plan 7c — As built, below).
 7d–7h and 8–13 not yet.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
@@ -2427,7 +2427,13 @@ merge. Run `make test` on main after the merge to see it pass.
   clock-advancing constructor. `DeleteToken` keeps 7a's index entries (Task 6 ruling); the
   property does not assert whether a deleted token's stale entry stays, so a backend may prune it
   only where that cannot hide a second live token under the key. The self-revocation's
-  compare-and-set on the backend's `SetContextPolicy`.
+  compare-and-set on the backend's `SetContextPolicy`. The agent's single held connection (final
+  review): a `port49 token` started behind a slow revocation (up to 85 s) still gives up at 30 s
+  and says the broker is unreachable; a second connection for revocations is a design change. It
+  fails safe and predates 7c, but a remote store makes it likely.
+- **Spec, unassigned:** a `revoke` record for a mark that could not be written (final review M3).
+  Spec §5.7 says such a mark writes none today, so only port49d's stderr shows it during a store
+  outage.
 - **7e:** `/healthz` and `/readyz` on the broker's own process. The revocations file's init in the
   broker's deployment, run once at install and never on a start path. A reload guard at start,
   against the last bundle in force, so a restart cannot load a file the guard refused (pre-flight
