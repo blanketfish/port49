@@ -310,8 +310,11 @@ type Context struct {
 	// passes, and every write to the record — each narrow setter included —
 	// moves it. That last part is the point: a read-merge-write that lost a
 	// race to SetRevokedAt finds the revision moved and reads again, rather
-	// than putting back a copy whose RevokedAt is zero. It is plaintext
-	// bookkeeping, like the expiry.
+	// than putting back a copy whose RevokedAt is zero. It only grows, across
+	// every key: a write takes a revision above any context has held (etcd's
+	// mod_revision), so of two writes the later holds the larger, which is
+	// how the sealing layer's ledger orders writes that end out of order
+	// (crypt.Ledger). It is plaintext bookkeeping, like the expiry.
 	Rev uint64
 	// PolicyRev is the store's revision of what a policy refresh decides
 	// (spec §5.1.3): GetContext sets it and SetContextPolicy compares it.

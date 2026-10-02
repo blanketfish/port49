@@ -483,12 +483,12 @@ func (w *wrapped) openContext(k store.ContextKey, c store.Context) (store.Contex
 		Rev: c.Rev, PolicyRev: c.PolicyRev}, nil
 }
 
-// sent sends one sealed write of the context id at k, telling the ledger
-// before and after (re-check IA1).
-func (w *wrapped) sent(k store.ContextKey, id string, send func() error) error {
-	w.ledger.begin(k, id)
+// sent sends one sealed write of the context id at k, compared on rev
+// (zero for none), telling the ledger before and after (re-check IA1).
+func (w *wrapped) sent(k store.ContextKey, id string, rev uint64, send func() error) error {
+	lw := w.ledger.begin(k, id, rev)
 	err := send()
-	w.ledger.end(k, id, err)
+	w.ledger.end(lw, err)
 	return err
 }
 
@@ -497,7 +497,7 @@ func (w *wrapped) PutContext(ctx context.Context, k store.ContextKey, c store.Co
 	if err != nil {
 		return err
 	}
-	return w.sent(k, c.CtxID, func() error { return w.inner.PutContext(ctx, k, sc, ttl) })
+	return w.sent(k, c.CtxID, 0, func() error { return w.inner.PutContext(ctx, k, sc, ttl) })
 }
 
 // SwapContext seals as PutContext does and hands the revision through
@@ -510,7 +510,7 @@ func (w *wrapped) SwapContext(ctx context.Context, k store.ContextKey, rev uint6
 	if err != nil {
 		return err
 	}
-	return w.sent(k, c.CtxID, func() error { return w.inner.SwapContext(ctx, k, rev, sc, ttl) })
+	return w.sent(k, c.CtxID, rev, func() error { return w.inner.SwapContext(ctx, k, rev, sc, ttl) })
 }
 
 // SwapLogin seals as SwapContext does, and passes the index change and the
@@ -523,7 +523,7 @@ func (w *wrapped) SwapLogin(ctx context.Context, k store.ContextKey, rev uint64,
 	if err != nil {
 		return err
 	}
-	return w.sent(k, c.CtxID, func() error { return w.inner.SwapLogin(ctx, k, rev, sc, ttl, lw) })
+	return w.sent(k, c.CtxID, rev, func() error { return w.inner.SwapLogin(ctx, k, rev, sc, ttl, lw) })
 }
 
 func (w *wrapped) GetContext(ctx context.Context, k store.ContextKey) (store.Context, error) {
@@ -549,7 +549,7 @@ func (w *wrapped) GetContext(ctx context.Context, k store.ContextKey) (store.Con
 	// the one this process last wrote here, or first read here, is another
 	// login's written back. It opens, since it is bound to this key, and so
 	// it is denied as one that does not.
-	if !w.ledger.admits(k, oc.CtxID) {
+	if !w.ledger.admits(k, oc.CtxID, c.Rev) {
 		return store.Context{}, &store.UnreadableContextError{Rev: c.Rev, RevokedAt: c.RevokedAt,
 			Err: w.openErr("context", ErrNotLastWritten)}
 	}
@@ -587,7 +587,7 @@ func (w *wrapped) rewrite(ctx context.Context, k store.ContextKey, ttl time.Dura
 		if err != nil {
 			return err
 		}
-		switch err := w.sent(k, c.CtxID, func() error { return w.inner.RewriteContext(ctx, k, rev, sc, ttl, moved) }); {
+		switch err := w.sent(k, c.CtxID, rev, func() error { return w.inner.RewriteContext(ctx, k, rev, sc, ttl, moved) }); {
 		case err == nil:
 			return nil
 		case !errors.Is(err, store.ErrConflict):
@@ -702,7 +702,7 @@ func (w *wrapped) RewriteContext(ctx context.Context, k store.ContextKey, rev ui
 	if err != nil {
 		return err
 	}
-	return w.sent(k, c.CtxID, func() error { return w.inner.RewriteContext(ctx, k, rev, sc, ttl, policyMoved) })
+	return w.sent(k, c.CtxID, rev, func() error { return w.inner.RewriteContext(ctx, k, rev, sc, ttl, policyMoved) })
 }
 
 // DeleteContext is addressed by key alone. One that lands takes the key
