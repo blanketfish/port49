@@ -550,7 +550,8 @@ func revokedError(rv store.Revocation) api.Error {
 		what = "this certificate"
 		if strings.HasPrefix(rv.Origin, "crl ") || strings.HasPrefix(rv.Origin, "ocsp ") {
 			return api.Error{Error: string(decision.CredentialRevoked), Detail: fmt.Sprintf(
-				"%s was revoked at its CA (%s) and marked at %s; nothing is minted for it", what,
+				"%s was revoked at its CA (%s) and marked at %s; nothing is minted for it; "+
+					"request a new certificate", what,
 				printsafe.Line(rv.Origin, 160), rv.At.UTC().Format(time.RFC3339))}
 		}
 	}

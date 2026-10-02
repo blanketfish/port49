@@ -450,9 +450,9 @@ func TestARevocationBeforeABatchIsCutShortDeletesWhatItWrote(t *testing.T) {
 }
 
 // A mark a CA's revocation wrote (origin "crl <name>" or "ocsp <responder>")
-// is answered as the CA's: an operator's lift would be undone by the CA's
-// list or responder at the next bind, so the answer never offers one. An
-// operator's mark still names its lift.
+// is answered as the CA's: the user cannot lift it and the CA has revoked
+// the certificate, so the answer never offers a lift and sends the user for
+// a new certificate. An operator's mark still names its lift.
 func TestACAMarkIsAnsweredAsTheCAsAndOffersNoLift(t *testing.T) {
 	at := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 	for _, tc := range []struct {
@@ -460,8 +460,8 @@ func TestACAMarkIsAnsweredAsTheCAsAndOffersNoLift(t *testing.T) {
 		want         string
 		lift         bool
 	}{
-		{store.RevocationCert, "crl corp", "this certificate was revoked at its CA (crl corp) and marked at 2026-10-01T00:00:00Z", false},
-		{store.RevocationCert, "ocsp http://ocsp.example.com", "this certificate was revoked at its CA (ocsp http://ocsp.example.com)", false},
+		{store.RevocationCert, "crl corp", "this certificate was revoked at its CA (crl corp) and marked at 2026-10-01T00:00:00Z; nothing is minted for it; request a new certificate", false},
+		{store.RevocationCert, "ocsp http://ocsp.example.com", "this certificate was revoked at its CA (ocsp http://ocsp.example.com) and marked at 2026-10-01T00:00:00Z; nothing is minted for it; request a new certificate", false},
 		{store.RevocationCert, "admin_socket uid 0", "this certificate was revoked at 2026-10-01T00:00:00Z", true},
 		{store.RevocationPrincipal, "admin_socket uid 0", "this principal was revoked at 2026-10-01T00:00:00Z", true},
 	} {
