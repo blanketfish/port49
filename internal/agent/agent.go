@@ -375,6 +375,124 @@ func (a *Agent) post(ctx context.Context, body []byte, key string) (*http.Respon
 	}
 }
 
+// APIError is a broker answer that is neither a 200 nor a refusal that ends
+// the session (sessionOver): its status, the API's code (design §17's
+// Errors) and the broker's detail. A 503 is one too, revocation_busy among
+// them: it ends nothing, and the operator asks again.
+type APIError struct {
+	Status int
+	Code   string
+	Detail string
+}
+
+func (e *APIError) Error() string {
+	if e.Status == http.StatusServiceUnavailable {
+		return "agent: the broker is unavailable just now: " + e.Code + ": " + e.Detail
+	}
+	return "agent: the broker refused: " + e.Code + ": " + e.Detail
+}
+
+// call sends one request on the held connection and decodes a 200 into out.
+// A refusal that ends the session ends it here, as a mint's does; anything
+// else, a 503 included, is an *APIError, so a caller can tell
+// revocation_busy from api_right_missing by its code. A transport failure
+// is tried once more on a new connection, as post does: every call made
+// through it is safe to repeat (identity and explain read; a revocation
+// made again reaches what the first did not, and stands as before).
+func (a *Agent) call(ctx context.Context, method, path string, in, out any) error {
+	select {
+	case <-a.done:
+		return ErrSessionOver
+	default:
+	}
+	if ends := a.SessionEndsAt(); ends.IsZero() || !a.now().Before(ends) {
+		return ErrSessionOver
+	}
+	var body []byte
+	if in != nil {
+		var err error
+		if body, err = json.Marshal(in); err != nil {
+			return err
+		}
+	}
+	var resp *http.Response
+	for attempt := 1; ; attempt++ {
+		var rd io.Reader = http.NoBody
+		if in != nil {
+			rd = bytes.NewReader(body)
+		}
+		req, err := http.NewRequestWithContext(ctx, method, a.broker+path, rd)
+		if err != nil {
+			return err
+		}
+		if in != nil {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		if resp, err = a.do(req); err == nil {
+			break
+		}
+		a.client.CloseIdleConnections()
+		if over := a.refusedReconnect(err); over != nil {
+			return over
+		}
+		if attempt == 2 {
+			var hup *hangUpError
+			if errors.As(err, &hup) {
+				return hup
+			}
+			return fmt.Errorf("agent: the broker at %s is unreachable: %w", a.broker, err)
+		}
+	}
+	defer drain(resp.Body)
+	if resp.StatusCode == http.StatusOK {
+		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+			return fmt.Errorf("agent: the broker's answer: %w", err)
+		}
+		return nil
+	}
+	var e api.Error
+	_ = json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&e)
+	if over := sessionOver(resp.StatusCode, e); over != nil {
+		a.end(over)
+		return over
+	}
+	if resp.StatusCode == http.StatusNotFound && e.Error == "" {
+		// The broker's mux has no such route: a port49d older than this
+		// agent (pre-flight I9).
+		return &APIError{Status: http.StatusNotFound, Code: "not_supported", Detail: fmt.Sprintf(
+			"the broker at %s does not serve %s: it runs a port49d older than this port49", a.broker, path)}
+	}
+	if e.Error == "" {
+		// Not the broker's API answering: a proxy, or a body cut short.
+		return fmt.Errorf("agent: %s%s answered %s with no API error", a.broker, path, resp.Status)
+	}
+	return &APIError{Status: resp.StatusCode, Code: e.Error, Detail: e.Detail}
+}
+
+// Identity is GET /v1/identity: what the broker resolves this session's
+// principal to (design §17).
+func (a *Agent) Identity(ctx context.Context) (api.Identity, error) {
+	var out api.Identity
+	return out, a.call(ctx, http.MethodGet, "/v1/identity", nil, &out)
+}
+
+// Explain is POST /v1/explain: a hypothetical decision from the broker's
+// policy in force (design §17).
+func (a *Agent) Explain(ctx context.Context, req api.ExplainRequest) (api.ExplainResponse, error) {
+	var out api.ExplainResponse
+	return out, a.call(ctx, http.MethodPost, "/v1/explain", req, &out)
+}
+
+// Revoke is POST /v1/tokens/revoke under this session's principal's rights
+// (spec §5.1.4). A self-revocation leaves no mark, so the session goes on;
+// a revocation of this session's own principal by another is answered
+// credential_revoked at the next call, which ends it. A 503
+// revocation_busy revoked nothing and ends nothing.
+func (a *Agent) Revoke(ctx context.Context, req api.RevokeRequest) (api.RevokeResponse, error) {
+	var out api.RevokeResponse
+	return out, a.call(ctx, http.MethodPost, "/v1/tokens/revoke", req, &out)
+}
+
 // refusedReconnect ends the session on a transport error that means no
 // reconnect will be accepted, and returns why; nil for any other error.
 func (a *Agent) refusedReconnect(err error) error {
@@ -781,6 +899,8 @@ type Status struct {
 // Handler is the agent's socket: POST /token mints one device and answers the
 // broker's item; POST /refresh refreshes the session and answers what the
 // broker extended; GET /status says whose session this is and when it ends.
+// GET /identity, POST /explain and POST /revoke carry the API's
+// /v1/identity, /v1/explain and /v1/tokens/revoke over the held connection.
 func (a *Agent) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /token", func(w http.ResponseWriter, r *http.Request) {
@@ -833,7 +953,55 @@ func (a *Agent) Handler() http.Handler {
 			SessionEndsAt: a.SessionEndsAt().UTC().Format(time.RFC3339), Handshakes: a.Handshakes(),
 			CeilingWarningSeconds: int(warn / time.Second)})
 	})
+	mux.HandleFunc("GET /identity", func(w http.ResponseWriter, r *http.Request) {
+		out, err := a.Identity(r.Context())
+		answer(w, out, err)
+	})
+	mux.HandleFunc("POST /explain", func(w http.ResponseWriter, r *http.Request) {
+		var req api.ExplainRequest
+		dec := json.NewDecoder(io.LimitReader(r.Body, 1<<16))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, api.Error{Error: "bad_request", Detail: "not an explain request"})
+			return
+		}
+		out, err := a.Explain(r.Context(), req)
+		answer(w, out, err)
+	})
+	mux.HandleFunc("POST /revoke", func(w http.ResponseWriter, r *http.Request) {
+		var req api.RevokeRequest
+		dec := json.NewDecoder(io.LimitReader(r.Body, 1<<16))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, api.Error{Error: "bad_request", Detail: "not a revocation request"})
+			return
+		}
+		out, err := a.Revoke(r.Context(), req)
+		answer(w, out, err)
+	})
 	return mux
+}
+
+// answer writes one API call's result to the socket: out on success; a
+// session that is over as POST /token says it (410, the revocation's own
+// code kept); a broker refusal, a 503 included, with its own status and
+// body, so the client rebuilds the *APIError; anything else 502 with the
+// agent's error.
+func answer(w http.ResponseWriter, out any, err error) {
+	var revoked *RevokedError
+	var refused *APIError
+	switch {
+	case err == nil:
+		writeJSON(w, http.StatusOK, out)
+	case errors.As(err, &revoked):
+		writeJSON(w, http.StatusGone, api.Error{Error: "credential_revoked", Detail: revoked.Detail})
+	case errors.Is(err, ErrSessionOver):
+		writeJSON(w, http.StatusGone, api.Error{Error: "session_over", Detail: err.Error()})
+	case errors.As(err, &refused):
+		writeJSON(w, refused.Status, api.Error{Error: refused.Code, Detail: refused.Detail})
+	default:
+		writeJSON(w, http.StatusBadGateway, api.Error{Error: "broker_error", Detail: err.Error()})
+	}
 }
 
 // drain reads a response to its end before closing it. A body closed unread

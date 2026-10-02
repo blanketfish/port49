@@ -60,6 +60,10 @@ import (
 // answers without a reply. order is every refresh path, in arrival order. certStatus answers /v1/config, every mint
 // and every refresh 503 certificate_status_unavailable, as the broker does
 // when it cannot establish the certificate's status (Task 10).
+//
+// The API's routes (/v1/identity, /v1/explain, /v1/tokens/revoke) answer
+// their entry in answers, and a plain-text 404 without one, as a port49d
+// older than plan 7c does.
 type fakeBroker struct {
 	mu         sync.Mutex
 	keys       []string
@@ -78,6 +82,7 @@ type fakeBroker struct {
 	refreshRefusals []refusal
 	tooSoon         bool
 	certStatus      bool
+	answers         map[string]refusal
 }
 
 // refusal is one scripted answer: a status, an api.Error, a Retry-After.
@@ -106,6 +111,18 @@ func (fb *fakeBroker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch r.URL.Path {
+	case "/v1/identity", "/v1/explain", "/v1/tokens/revoke":
+		fb.mu.Lock()
+		ref, ok := fb.answers[r.URL.Path]
+		fb.mu.Unlock()
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		if ref.retryAfter != "" {
+			w.Header().Set("Retry-After", ref.retryAfter)
+		}
+		writeJSON(w, ref.status, ref.e)
 	case "/v1/config":
 		writeJSON(w, 200, api.Config{Methods: []string{"x509"}, MaxSessionAgeSeconds: 60, BatchMax: 10,
 			CeilingWarningSeconds: 1800})
@@ -1721,5 +1738,128 @@ func TestAnExpiredHangUpDuringARefreshEndsTheSession(t *testing.T) {
 				t.Fatalf("%d connections, want %d: an ended session was tried again", n, want)
 			}
 		})
+	}
+}
+
+// socketFor serves r's agent on a private socket and returns a Client on
+// it, as TestTheClientRefreshesOverTheSocket does.
+func socketFor(t *testing.T, a *Agent) *Client {
+	t.Helper()
+	p := filepath.Join(shortDir(t), "s", "agent.sock")
+	ln, err := Listen(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &http.Server{Handler: a.Handler()}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+	return NewClient(p)
+}
+
+// The agent carries identity, explain and revoke over the session's held
+// connection, through its socket, and hands a broker refusal back as it
+// came: 403 api_right_missing is an *APIError the CLI can name, and a
+// credential_revoked ends the session as a mint's does.
+func TestTheAgentCarriesTheAPI(t *testing.T) {
+	r := newRealRig(t)
+	ctx := context.Background()
+	c := socketFor(t, r.a)
+	id, err := c.Identity(ctx)
+	if err != nil || id.Principal != "user:alice@example.com" {
+		t.Fatalf("identity: %+v %v", id, err)
+	}
+	ex, err := c.Explain(ctx, api.ExplainRequest{Device: "leaf1"})
+	if err != nil || ex.Verdict == "" || ex.Text == "" {
+		t.Fatalf("explain: %+v %v", ex, err)
+	}
+	_, err = c.Explain(ctx, api.ExplainRequest{Device: "leaf1", Principal: "user:carol@example.com"})
+	var ae *APIError
+	if !errors.As(err, &ae) || ae.Status != 403 || ae.Code != "api_right_missing" {
+		t.Fatalf("explaining another without the right: %v", err)
+	}
+	rv, err := c.Revoke(ctx, api.RevokeRequest{Mine: true})
+	if err != nil || rv.By != "self" || rv.Standing {
+		t.Fatalf("revoke mine: %+v %v", rv, err)
+	}
+	if _, err := c.Identity(ctx); err != nil {
+		t.Fatalf("the session after a self-revocation: %v", err) // no mark: it goes on
+	}
+	if err := r.st.PutRevocation(ctx, store.Revocation{Kind: store.RevocationPrincipal,
+		Key: "user:alice@example.com", At: r.clock(), Origin: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = c.Identity(ctx)
+	var revoked *RevokedError
+	if !errors.As(err, &revoked) || !errors.Is(err, ErrSessionOver) {
+		t.Fatalf("identity under a mark: %v", err)
+	}
+}
+
+// A CLI newer than the running agent: the agent's mux has no route for the
+// call, and the client says to log in again, never "the broker refused"
+// (pre-flight I9).
+func TestAnOlderAgentIsNamedNotBlamedOnTheBroker(t *testing.T) {
+	p := filepath.Join(shortDir(t), "s", "agent.sock")
+	ln, err := Listen(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &http.Server{Handler: http.NewServeMux()} // an agent with none of the new routes
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+	_, err = NewClient(p).Identity(context.Background())
+	var ae *APIError
+	if !errors.Is(err, ErrAgentTooOld) || errors.As(err, &ae) || !strings.Contains(err.Error(), "port49 login") {
+		t.Fatalf("%v", err)
+	}
+}
+
+// A broker older than the agent has no route for the call: the client gets
+// an *APIError naming the broker, not ErrAgentTooOld, so the two upgrade
+// orders read differently (pre-flight I9). The session goes on.
+func TestAnOlderBrokerIsNamedAsTheBroker(t *testing.T) {
+	r := newRig(t)
+	_, err := socketFor(t, r.a).Identity(context.Background())
+	var ae *APIError
+	if !errors.As(err, &ae) || ae.Status != 404 || ae.Code != "not_supported" || errors.Is(err, ErrAgentTooOld) ||
+		!strings.Contains(ae.Detail, "older than this port49") {
+		t.Fatalf("%v", err)
+	}
+	select {
+	case <-r.a.Done():
+		t.Fatal("an older broker ended the session")
+	default:
+	}
+}
+
+// A 503 revocation_busy, another revocation still running or the caller's
+// own one still in flight, reaches the CLI as an *APIError with the broker's
+// status, code and detail, and ends nothing: the operator asks again.
+func TestABusyRevocationIsAnAPIErrorAndEndsNothing(t *testing.T) {
+	r := newRig(t)
+	busy := refusal{status: 503, retryAfter: "5", e: api.Error{Error: "revocation_busy",
+		Detail: "another revocation of yours is still running, so nothing was revoked by this one; try again once it finishes"}}
+	r.fb.mu.Lock()
+	r.fb.answers = map[string]refusal{"/v1/tokens/revoke": busy}
+	r.fb.mu.Unlock()
+	check := func(what string, err error) {
+		t.Helper()
+		var ae *APIError
+		if !errors.As(err, &ae) || ae.Status != 503 || ae.Code != "revocation_busy" || ae.Detail != busy.e.Detail ||
+			errors.Is(err, ErrSessionOver) {
+			t.Fatalf("%s: %v", what, err)
+		}
+		select {
+		case <-r.a.Done():
+			t.Fatalf("%s: a busy revocation ended the session", what)
+		default:
+		}
+	}
+	_, err := r.a.Revoke(context.Background(), api.RevokeRequest{Mine: true})
+	check("the agent", err)
+	_, err = socketFor(t, r.a).Revoke(context.Background(), api.RevokeRequest{Mine: true})
+	check("through the socket", err)
+	if _, err := r.a.Mint(context.Background(), "leaf1", false, 0); err != nil {
+		t.Fatalf("a mint after a busy revocation: %v", err)
 	}
 }
