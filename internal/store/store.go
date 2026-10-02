@@ -427,6 +427,10 @@ type Store interface {
 	// §5.1.4; decision 34). ErrNotFound when no live token under k has that
 	// ID. The ID is plaintext (Token.ID), so the sealing layer passes it
 	// through.
+	// It leaves the token index (IndexToken) as it is. That index is by key,
+	// not by ID, and the same principal or certificate can hold a second live
+	// token under k: pruning its entry would let a revocation miss that
+	// token, where a stale entry costs only a DeleteTokens on an empty key.
 	DeleteToken(ctx context.Context, k TokenKey, id string) error
 	GetReceipt(ctx context.Context, rk ReceiptKey) (Receipt, error)
 	// ExtendReceipt pushes the sliding bound out. It never moves RetainUntil or
