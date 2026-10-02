@@ -61,8 +61,8 @@ twenty-two minor fixed, one minor rebutted in part; its re-check's three importa
 fixed the same day); **executed 2026-10-01** on `feature/session-lifetime-and-cert-status`,
 reviewed per task, closing L34 with `cisco_iosxe` the one platform that shows the ceiling warning,
 and measuring L2 on five images (open: Junos cannot show it) (Plan 7b — As built, below); final
-review done 2026-10-02 (one important: a token outlived its ceiling, fixed in the fix wave); merge
-pending.
+review done 2026-10-02 (one important: a token outlived its ceiling, fixed in the fix wave);
+**merged 2026-10-02 (PR #21)**.
 7c–7h and 8–13 not yet.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
@@ -1885,7 +1885,9 @@ important and five minor fixed at 0fc2761). What differs from the plan's text, t
   use"; `session.Manager.Refresh` takes a grace cutoff and never resumes a context past it. Handed
   to it and done: `Mint` refuses a finite ceiling with a zero `AuthTime` (Task 3 M-3), the stale
   comment on `TestARefreshIsRateLimited`, and the over-long lines and §17 wording from Task 13's
-  re-review.
+  re-review. The re-review said MERGE with nothing open; merged 2026-10-02 (PR #21, merge
+  513e4bd). The ten raw captures were copied into main's `tests/lab/captures/` after the merge,
+  and `make test` (with the labpcap audit) passes on main.
 
 **Rulings, as made** (spec §13, decision 33; the plan's twelve rulings): all stand. Ruling 4's
 allow-list holds `cisco_iosxe` alone, from L34. Ruling 6 is amended by Task 7 (an expired nonce is
