@@ -9,7 +9,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rhwendt/port49/internal/admission"
+	"github.com/rhwendt/port49/internal/bundle"
 	"github.com/rhwendt/port49/internal/keyfile"
+	"github.com/rhwendt/port49/internal/policy"
 )
 
 const diffPolicy = `
@@ -438,5 +441,22 @@ func TestInventoryKeygenRemovesThePairWhenTheDirectoryWontSync(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
 			t.Errorf("%s was left", name)
 		}
+	}
+}
+
+// The reload guard's refusal quotes policy text, and the diff's output is a
+// CI log: a value a built-in rule marks secret is redacted in it (spec §5.8;
+// pre-flight I3), and a nil error stays nil.
+func TestTheDiffRedactsTheGuardsRefusal(t *testing.T) {
+	pol, err := bundle.Parse([]byte(diffPolicy), admission.Inventory{}, policy.Env{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := redacted(errors.New(`it quarantines 1: leaf1 (role r: "username bob secret Hunter2Hunter2")`), pol, pol)
+	if strings.Contains(got.Error(), "Hunter2") || !strings.Contains(got.Error(), "leaf1") {
+		t.Fatalf("%v", got)
+	}
+	if redacted(nil, pol) != nil {
+		t.Fatal("a nil error")
 	}
 }

@@ -3,6 +3,7 @@ package bundle
 import (
 	"fmt"
 	"net/netip"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -151,15 +152,127 @@ func TestCheckAdmissionBoundsAPolicyThatRefusesTheFleet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = CheckAdmission(old, typo, 10)
+	err = CheckAdmission(old, typo, 10, time.Now())
 	if err == nil || !strings.Contains(err.Error(), "refuses admission to 2 of 2 devices") || !strings.Contains(err.Error(), "a, b") {
 		t.Fatalf("%v", err)
 	}
-	if err := CheckAdmission(old, typo, 100); err != nil {
+	if err := CheckAdmission(old, typo, 100, time.Now()); err != nil {
 		t.Fatalf("the bound off: %v", err)
 	}
-	if err := CheckAdmission(old, old, 10); err != nil {
+	if err := CheckAdmission(old, old, 10, time.Now()); err != nil {
 		t.Fatalf("no change: %v", err)
+	}
+}
+
+// quarantineOn is withScopes over devs with an admin role capped at operator
+// on the named scopes' grants: it lands above its ceiling's level on
+// arista_eos, so every device those scopes select is quarantined.
+func quarantineOn(t *testing.T, devs []admission.Device, scopes ...string) *policy.Policy {
+	t.Helper()
+	text := strings.Replace(withScopes, "roles: [{name: r, privilege: readonly, permit: [show **]}]",
+		"roles: [{name: r, privilege: readonly, permit: [show **]}, {name: big, privilege: admin, permit: [show **]}]", 1)
+	for _, sc := range scopes {
+		text = strings.Replace(text, "scope: "+sc+", roles: [r]}", "scope: "+sc+", roles: [big], max_privilege: operator}", 1)
+	}
+	p, err := Parse([]byte(text), admission.Inventory{Devices: devs}, policy.Env{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// A policy that takes more than the bound of the devices in service out of
+// service, by quarantining them, is refused, naming each, the remedy, and
+// the knob's other use, as one that refuses admission is (plan 4b's
+// candidate guard; spec §13 decision 34). Against a fleet that already has
+// a quarantine (Review Focus 4; pre-flight M6): a release passes; the
+// policy in force reloaded passes; one more of the three in service
+// quarantined is 33% and refused; and a reload that releases one and
+// quarantines another, leaving as many in service as before, passes
+// (pre-flight M14).
+func TestCheckAdmissionBoundsAPolicyThatQuarantinesTheFleet(t *testing.T) {
+	now := time.Now()
+	devs := []admission.Device{dev("a", "10.0.3.1", nil), dev("b", "10.0.3.2", nil),
+		dev("c", "10.0.3.3", map[string]string{"site": "campus"}), dev("d", "10.0.3.4", map[string]string{"site": "dc1"})}
+	good := mustBundle(t, devs...)
+	all := quarantineOn(t, devs, "all_devices", "campus", "dc")
+	dc := quarantineOn(t, devs, "dc")                 // d out: a, b, c in service
+	dcCampus := quarantineOn(t, devs, "dc", "campus") // c and d out: a, b in service
+	campus := quarantineOn(t, devs, "campus")         // c out: a, b, d in service
+	for name, c := range map[string]struct {
+		p   *policy.Policy
+		out string
+	}{"all": {all, "a b c d"}, "dc": {dc, "d"}, "dc and campus": {dcCampus, "c d"}, "campus": {campus, "c"}} {
+		var out []string
+		for _, d := range devs {
+			if _, q := c.p.Quarantined(d.Name, now); q {
+				out = append(out, d.Name)
+			}
+		}
+		if strings.Join(out, " ") != c.out {
+			t.Fatalf("the %s fixture quarantines %v, not %s", name, out, c.out)
+		}
+	}
+	err := CheckAdmission(good, all, 10, now)
+	if err == nil || !strings.Contains(err.Error(), "takes 4 of 4 devices in service out of it") ||
+		!strings.Contains(err.Error(), "it quarantines 4: a (") || !strings.Contains(err.Error(), "port49 revoke") ||
+		!strings.Contains(err.Error(), "raise inventory.max_removed_percent") ||
+		!strings.Contains(err.Error(), "then lower it again, since it bounds inventory syncs too") {
+		t.Fatalf("the whole fleet: %v", err)
+	}
+	if err := CheckAdmission(good, all, 100, now); err != nil {
+		t.Fatalf("the bound off: %v", err)
+	}
+	if err := CheckAdmission(dc, good, 10, now); err != nil {
+		t.Fatalf("(a) a reload that releases the quarantine and quarantines nothing: %v", err)
+	}
+	if was := inServiceCount(dc, now); was != 3 {
+		t.Fatalf("(b) the policy in force has %d devices in service, not 3", was)
+	}
+	if err := CheckAdmission(dc, dc, 10, now); err != nil || len(NewlyQuarantined(dc, dc, now)) != 0 {
+		t.Fatalf("(b) the policy in force again, three of four in service: %v", err)
+	}
+	err = CheckAdmission(dc, dcCampus, 10, now)
+	if err == nil || !strings.Contains(err.Error(), "takes 1 of 3 devices in service out of it (33%)") ||
+		!strings.Contains(err.Error(), "it quarantines 1: c (") {
+		t.Fatalf("(c) one more of the three in service: %v", err)
+	}
+	if err := CheckAdmission(campus, dc, 10, now); err != nil {
+		t.Fatalf("(d) c released and d quarantined, three in service before and after: %v", err)
+	}
+	if got := NewlyQuarantined(good, all, now); len(got) != 4 || got[0].Device != "a" || got[0].Cause == "" {
+		t.Fatalf("NewlyQuarantined: %+v", got)
+	}
+}
+
+// The net exemption counts only the devices the inventory before the reload
+// held: a combined policy-and-inventory reload that adds five devices and
+// quarantines five of the twenty in service has as many in service after it
+// as before, but is refused, 25% against 10%, so padding the inventory
+// cannot pass the bound (spec §10; §13 decision 34).
+func TestCheckAdmissionIsNotOffsetByTheDevicesAReloadAdds(t *testing.T) {
+	now := time.Now()
+	var before []admission.Device
+	for i := range 20 {
+		var attrs map[string]string
+		if i < 5 {
+			attrs = map[string]string{"site": "dc1"}
+		}
+		before = append(before, dev(fmt.Sprintf("old-%02d", i), fmt.Sprintf("10.0.4.%d", i+1), attrs))
+	}
+	after := slices.Clone(before)
+	for i := range 5 {
+		after = append(after, dev(fmt.Sprintf("new-%02d", i), fmt.Sprintf("10.0.5.%d", i+1), nil))
+	}
+	old := mustBundle(t, before...)
+	padded := quarantineOn(t, after, "dc")
+	if got := inServiceCount(padded, now); got != 20 {
+		t.Fatalf("the padded bundle has %d devices in service, not 20", got)
+	}
+	err := CheckAdmission(old, padded, 10, now)
+	if err == nil || !strings.Contains(err.Error(), "takes 5 of 20 devices in service out of it (25%)") ||
+		!strings.Contains(err.Error(), "it quarantines 5: old-00 (") {
+		t.Fatalf("five added offset five quarantined: %v", err)
 	}
 }
 
@@ -174,7 +287,7 @@ func TestASwapThatAdmitsNoDeviceIsRefusedWhateverTheBound(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := CheckAdmission(old, typo, 100); err == nil || !strings.Contains(err.Error(), "admits none of the 2 device(s)") ||
+	if err := CheckAdmission(old, typo, 100, time.Now()); err == nil || !strings.Contains(err.Error(), "admits none of the 2 device(s)") ||
 		!strings.Contains(err.Error(), "stop port49d") {
 		t.Fatalf("policy reload admitting nothing: %v", err)
 	}

@@ -364,7 +364,9 @@ func (q quotesCut) Error() string {
 	var out strings.Builder
 	// A load error quotes no rule text and no term (policy.Parse names a rule
 	// by role, list and position), so there is nothing here to redact: a
-	// refused file's own redaction patterns never loaded (spec §5.8).
+	// refused file's own redaction patterns never loaded (spec §5.8). The
+	// reload guard's causes do quote rule text: refusalLine redacts them
+	// before they are cut.
 	s := []rune(q.err.Error())
 	for i := 0; i < len(s); i++ {
 		out.WriteRune(s[i])

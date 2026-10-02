@@ -114,7 +114,7 @@ func TestL29EditsOnTheRealLabInventory(t *testing.T) {
 		if n := strings.Count(l29Pin(string(pol), node), "key_ref:"); n != 3 {
 			t.Fatalf("%s rekeyed: %d key groups", node, n)
 		}
-		if err := bundle.CheckAdmission(base, pinned, 10); err != nil {
+		if err := bundle.CheckAdmission(base, pinned, 10, time.Now()); err != nil {
 			t.Fatalf("%s rekeyed: port49d's policy reload refuses it: %v", node, err)
 		}
 		for _, r := range l29Admitted(t, pinned, src) {
