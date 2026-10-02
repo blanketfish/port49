@@ -9628,7 +9628,7 @@ store:
     max_in_flight: {token: 64, context: 128, bulk: 4}  # 1 to 4096 each
     lease_grace: 5m             # 1m to 1h
     start_timeout: 30s          # 0 (wait forever), or 5s to 10m
-    hold_ttl: 15s               # 5s to 60s
+    hold_ttl: 15s               # 10s to 60s
     sweep_interval: 10m         # 1m to 24h
 ```
 
@@ -9740,6 +9740,11 @@ store:
   		}, true, true, "at least store.etcd.call_timeout"},
   		{"a prefix not absolute", func(s *storeYAML) { s.Etcd.Prefix = "port49/" }, true, true, "store.etcd.prefix"},
   		{"a hold too short", func(s *storeYAML) { s.Etcd.HoldTTL = time.Second }, true, true, "store.etcd.hold_ttl"},
+  		// The floor (8b re-review 2 R2-I1): clientv3's keepalive loop checks
+  		// every 500ms, so under 10s a healthy lease can report ttl/2 or less
+  		// and the fence drops the hold.
+  		{"a hold under 10s", func(s *storeYAML) { s.Etcd.HoldTTL = 9 * time.Second }, true, true,
+  			"store.etcd.hold_ttl 9s: must be 10s to 1m0s"},
   		{"a start timeout too short", func(s *storeYAML) { d := time.Second; s.Etcd.StartTimeoutSet = &d }, true, true,
   			"store.etcd.start_timeout"},
   	} {
@@ -10000,7 +10005,7 @@ store:
      		{"store.etcd.bulk_timeout", &e.BulkTimeout, 30 * time.Second, time.Second, 5 * time.Minute},
      		{"store.etcd.breaker.open_for", &e.Breaker.OpenFor, 5 * time.Second, time.Second, 5 * time.Minute},
      		{"store.etcd.lease_grace", &e.LeaseGrace, 5 * time.Minute, time.Minute, time.Hour},
-     		{"store.etcd.hold_ttl", &e.HoldTTL, 15 * time.Second, 5 * time.Second, time.Minute},
+     		{"store.etcd.hold_ttl", &e.HoldTTL, 15 * time.Second, 10 * time.Second, time.Minute},
      		{"store.etcd.sweep_interval", &e.SweepInterval, 10 * time.Minute, time.Minute, 24 * time.Hour},
      	} {
      		*d.v = orD(*d.v, d.def)
@@ -10842,7 +10847,8 @@ store:
   // until the first lets go; and a hold whose store stops answering is lost
   // at least a sixth of its TTL before etcd can expire the lease and the
   // second take it (Ruling 11; pre-flight I15; re-check R-I4; Review Focus
-  // 4). That margin, 0.83s at a 5s TTL, plus etcd's own lease-expiry
+  // 4). That margin, 1.67s at a 10s TTL (the floor; a shorter one can drop
+  // a healthy hold, 8b re-review 2 R2-I1), plus etcd's own lease-expiry
   // granularity, is what keeps the ordering assertion below from racing.
   func TestHoldIsOnePerKeyspaceAndLapses(t *testing.T) {
   	srv := etcdtest.Start(t, etcdtest.Options{})
@@ -10859,7 +10865,7 @@ store:
   	first, second := open("http://"+proxy.Addr()), open(srv.Endpoint)
   	ctx, cancel := context.WithCancel(context.Background())
   	defer cancel()
-  	lost, release, err := first.Hold(ctx, 5*time.Second, "port49d one", func(string) {})
+  	lost, release, err := first.Hold(ctx, 10*time.Second, "port49d one", func(string) {})
   	if err != nil {
   		t.Fatal(err)
   	}
@@ -10867,7 +10873,7 @@ store:
   	got := make(chan error, 1)
   	tookAt := make(chan time.Time, 1)
   	go func() {
-  		_, rel, err := second.Hold(ctx, 5*time.Second, "port49d two", func(h string) { waited <- h })
+  		_, rel, err := second.Hold(ctx, 10*time.Second, "port49d two", func(h string) { waited <- h })
   		tookAt <- time.Now()
   		if err == nil {
   			defer rel()
@@ -10889,7 +10895,7 @@ store:
   	select {
   	case <-lost:
   		lostAt = time.Now()
-  	case <-time.After(15 * time.Second):
+  	case <-time.After(20 * time.Second):
   		t.Fatal("the first's hold did not lapse")
   	}
   	select { // pre-flight M38: never an unbounded receive
@@ -10897,7 +10903,7 @@ store:
   		if err != nil {
   			t.Fatalf("the second, once the first lapsed: %v", err)
   		}
-  	case <-time.After(20 * time.Second):
+  	case <-time.After(30 * time.Second):
   		t.Fatal("the second never took the keyspace")
   	}
   	if took := <-tookAt; took.Before(lostAt) {
@@ -10913,7 +10919,7 @@ store:
   func TestTheHoldIsLostWhenItsKeyIsDeleted(t *testing.T) {
   	s := onShared(t, func() time.Time { return t0 })
   	ctx := context.Background()
-  	lost, release, err := s.Hold(ctx, 6*time.Second, "port49d one", func(string) {})
+  	lost, release, err := s.Hold(ctx, 10*time.Second, "port49d one", func(string) {})
   	if err != nil {
   		t.Fatal(err)
   	}
@@ -10931,8 +10937,12 @@ store:
   // A slow but healthy store keeps the hold: each fence read answers late,
   // inside its ttl/6 deadline, and the lease's keepalives land, so the
   // TTL each read reports is above ttl/2 at its send (8b re-review R-M2).
-  // Judged when the read returns instead, a read slower than
-  // floor(2*ttl/3) - ttl/2 (0.5s at 5s) would drop the hold.
+  // Judged when the read returns instead, a read slower than about
+  // floor(2*ttl/3) - ttl/2 would drop the hold. It runs at the 15s
+  // default, not the 10s floor: the proxy's delay slows the keepalives
+  // too, and at 10s a healthy lease stays above ttl/2 only while their
+  // round trip is under about 0.17s, too little for a read slow enough
+  // to fail the mutation (8b re-review 2 R2-I1).
   func TestASlowAnsweredReadKeepsTheHold(t *testing.T) {
   	srv := etcdtest.Start(t, etcdtest.Options{})
   	proxy := etcdtest.NewProxy(t, strings.TrimPrefix(srv.Endpoint, "http://"))
@@ -10943,19 +10953,21 @@ store:
   	defer s.Close()
   	ctx, cancel := context.WithCancel(context.Background())
   	defer cancel()
-  	lost, release, err := s.Hold(ctx, 5*time.Second, "port49d one", func(string) {})
+  	lost, release, err := s.Hold(ctx, 15*time.Second, "port49d one", func(string) {})
   	if err != nil {
   		t.Fatal(err)
   	}
   	defer release()
-  	// Each fence read (a Get and a TimeToLive) then answers in about 0.6s:
-  	// over the 0.5s that judging at the return would allow, under the
-  	// read's 0.83s deadline.
-  	proxy.Delay(150 * time.Millisecond)
+  	// Each fence read (a Get and a TimeToLive) then answers in about 1.2s
+  	// to 1.5s: over the 0.5s to 1s that judging at the return allows at
+  	// the lowest healthy TTL, under the read's 2.5s deadline. A keepalive's
+  	// round trip is about 0.6s, so a healthy lease still reports 8s or
+  	// more (floor(10 - 0.5 - 0.6)), above the 7.5s line.
+  	proxy.Delay(300 * time.Millisecond)
   	select {
   	case <-lost:
   		t.Fatal("a slow but healthy store lost the hold")
-  	case <-time.After(15 * time.Second):
+  	case <-time.After(45 * time.Second):
   	}
   }
 
@@ -10964,12 +10976,12 @@ store:
   func TestTheDaemonCannotTakeTheHold(t *testing.T) {
   	const prefix = "/port49/"
   	srv := provisioned(t, prefix)
-  	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+  	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
   	defer cancel()
-  	if _, _, err := openAs(t, srv, "port49-daemon", prefix).Hold(ctx, 5*time.Second, "x", func(string) {}); !errors.Is(err, ErrRefused) {
+  	if _, _, err := openAs(t, srv, "port49-daemon", prefix).Hold(ctx, 10*time.Second, "x", func(string) {}); !errors.Is(err, ErrRefused) {
   		t.Fatalf("the daemon took the hold: %v", err)
   	}
-  	lost, release, err := openAs(t, srv, "port49-broker", prefix).Hold(ctx, 5*time.Second, "x", func(string) {})
+  	lost, release, err := openAs(t, srv, "port49-broker", prefix).Hold(ctx, 10*time.Second, "x", func(string) {})
   	if err != nil {
   		t.Fatalf("the broker could not take the hold: %v", err)
   	}
@@ -10981,8 +10993,9 @@ store:
   Run: `go test ./internal/store/etcd/ -run 'TestHold|TestTheHold|TestASlowAnsweredReadKeepsTheHold|TestTheDaemonCannotTakeTheHold' -count=1`
   Expected: FAIL to build (`Hold` undefined).
 
-  In `TestASlowAnsweredReadKeepsTheHold`, measure the fence's read time once under the delay and
-  tune `Delay` until each read answers between 0.5s and 0.8s. Report the value you used.
+  In `TestASlowAnsweredReadKeepsTheHold`, measure the fence's read time and the keepalive's
+  round trip once under the delay. Tune `Delay` until each read answers between 1s and 2s, with
+  the keepalive's round trip under 1.5s. Report the values you used.
 
 - [ ] **Step 2: The hold and its fence.** Create `internal/store/etcd/meta.go`:
 
@@ -11146,8 +11159,14 @@ store:
   ```
 
   `TimeToLive`'s `TTL` is whole seconds, rounded down, which only moves the estimate earlier.
-  At the smallest `hold_ttl` (5 s) a healthy lease reports at least 3 s, above the 2.5 s line,
-  however long the read took to answer, since an answered read is judged at its send.
+  clientv3's keepalive loop sends the next keepalive ttl/3 after a response but checks only
+  every 500ms (`retryConnWait`, lease.go), so etcd renews at most ttl/3 + 0.5s + a round trip
+  apart. A healthy lease therefore reports at least floor(2·ttl/3 − 0.5s − RTT), which must
+  stay above ttl/2. At the smallest `hold_ttl` (10 s, the config floor; 8b re-review 2 R2-I1)
+  that is 6 s, above the 5 s line, while the round trip is under about 0.17 s; at the 15 s
+  default it is 8 s or more, above 7.5 s, while it is under about 1.5 s. Below 10 s a healthy
+  lease reports ttl/2 or less and the hold drops. That holds however long the read took,
+  since an answered read is judged at its send.
 
   Check `concurrency.WithContext` and `Session.Orphan` in v3.6.15's `concurrency` package (the
   pre-flight review compiled `WithContext`). If a name differs, use what the package offers, as
@@ -12056,7 +12075,7 @@ store:
   	}
   	raw = append(raw, []byte(fmt.Sprintf("\nstore:\n  backend: etcd\n  packet_deadline: 1s\n  etcd:\n"+
   		"    endpoints: [https://%s]\n    ca_file: %s\n    daemon: {cert_file: %s, key_file: %s}\n"+
-  		"    broker: {cert_file: %s, key_file: %s}\n    call_timeout: 200ms\n    hold_ttl: 5s\n"+
+  		"    broker: {cert_file: %s, key_file: %s}\n    call_timeout: 200ms\n    hold_ttl: 10s\n"+
   		"    breaker: {failures: 3, open_for: 2s}\nadmin_socket: %s\n",
   		proxy.Addr(), filepath.Join(srv.Dir, "ca.pem"), dc, dk, bc, bk, filepath.Join(t.TempDir(), "a.sock")))...)
   	if err := os.WriteFile(cfgPath, raw, 0o600); err != nil {
@@ -12257,7 +12276,7 @@ store:
   	if st := dev.login("alice", tok); st != wire.AuthenStatusError || time.Since(start) > 1500*time.Millisecond {
   		t.Fatalf("a login on a hung store: status %d after %v", st, time.Since(start))
   	}
-  	waitWithin(t, &out, "closing every listener so that devices use their local method", 1, 20*time.Second)
+  	waitWithin(t, &out, "closing every listener so that devices use their local method", 1, 30*time.Second)
   	// Reset, not closed with a FIN: L28 measured the fast fall to local on
   	// a reset.
   	held.SetReadDeadline(time.Now().Add(5 * time.Second))
@@ -14021,7 +14040,8 @@ measurement on a hang of its own, the store returned between them. On each image
     - `packet_deadline` 2s (at most 2s: Junos times out at about 3s, L13);
     - `breaker` 5 failures and 5s open;
     - `max_in_flight` 64 token, 128 context, 4 bulk;
-    - `lease_grace` 5m, `start_timeout` 30s (`0` waits forever), `hold_ttl` 15s, `sweep_interval`
+    - `lease_grace` 5m, `start_timeout` 30s (`0` waits forever), `hold_ttl` 15s (10s to 60s; a
+      shorter hold can drop on a healthy etcd, so it is refused), `sweep_interval`
       10m.
 - **etcd itself.** Run three or five members in the devices' region, with:
   - client-certificate auth and auth enabled;
