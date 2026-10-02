@@ -14,7 +14,9 @@ type ExplainRequest struct {
 // no token; and Text, as port49 explain renders it, redacted and with no
 // session attributes, a session's included. Platform is
 // empty where the answer is no_grants_matched, so no answer says which
-// devices exist.
+// devices exist. Subject is empty on a credential_revoked answer, since the
+// mark is on Principal and no subject was resolved; for a principal no
+// subject names, it is the principal, as port49 explain says.
 type ExplainResponse struct {
 	Principal string `json:"principal"`
 	Subject   string `json:"subject,omitempty"`

@@ -35,7 +35,9 @@ func (b *Broker) explain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req api.ExplainRequest
-	dec := json.NewDecoder(io.LimitReader(r.Body, 16<<10))
+	// Past the bound the body is refused, not read in part: a trailing byte
+	// beyond it would otherwise go unseen.
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10))
 	dec.DisallowUnknownFields()
 	err := dec.Decode(&req)
 	if err == nil {
@@ -82,15 +84,22 @@ func (b *Broker) explain(w http.ResponseWriter, r *http.Request) {
 			"the broker could not read the revocations in force, so it explained nothing; try again")
 		return
 	}
-	e, err := explanationOf(pol, about, req.Device, req.Command, now)
-	if err != nil {
+	// A principal under a mark is answered from the mark alone: nothing
+	// would be minted for it, so the policy is not asked, and a fault there
+	// is not its answer.
+	var e policy.Explanation
+	if revoked {
+		e = policy.Explanation{Subject: about, Device: req.Device, Command: req.Command, Revoked: rv.At}
+	} else if e, err = explanationOf(pol, about, req.Device, req.Command, now); err != nil {
+		// The mint refuses the same fault with this item error, which is no
+		// decision; the call is still recorded (decision 34).
+		rec.Device.Platform = e.Platform
+		rec.Explain.MintError = "broker_error"
+		b.Log.Emit(rec)
 		b.logf("broker: explaining %s on %q: %v", about, req.Device, err)
 		writeError(w, http.StatusInternalServerError, "broker_error",
 			"the broker could not explain this; tell the operator")
 		return
-	}
-	if revoked {
-		e = policy.Explanation{Subject: about, Device: req.Device, Command: req.Command, Revoked: rv.At}
 	}
 	verdict, reason, mintErr := e.Answer()
 	rec.Verdict, rec.Reason = verdict, reason
@@ -103,15 +112,23 @@ func (b *Broker) explain(w http.ResponseWriter, r *http.Request) {
 	}
 	var text strings.Builder
 	e.Redacted(pol.Redactions()).RenderWithoutAttributes(&text)
-	writeJSON(w, http.StatusOK, api.ExplainResponse{Principal: about, Subject: e.Subject, Device: req.Device,
-		Platform: e.Platform, Verdict: verdict, Reason: string(reason), MintError: mintErr, Text: text.String()})
+	out := api.ExplainResponse{Principal: about, Subject: e.Subject, Device: req.Device,
+		Platform: e.Platform, Verdict: verdict, Reason: string(reason), MintError: mintErr, Text: text.String()}
+	if revoked {
+		out.Subject = "" // the mark is on the principal; no subject was resolved
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
-// explanationOf is pol's answer for principal on device. A device the
+// explanationOf is explanationIn, swapped in tests for a policy fault no
+// loaded policy can be made to have.
+var explanationOf = explanationIn
+
+// explanationIn is pol's answer for principal on device. A device the
 // inventory does not name is no_grants_matched, built here because
 // policy.Explain names a missing device (an offline tool's operator holds
 // the inventory); a no-grant answer carries no platform.
-func explanationOf(pol *policy.Policy, principal, device, line string, now time.Time) (policy.Explanation, error) {
+func explanationIn(pol *policy.Policy, principal, device, line string, now time.Time) (policy.Explanation, error) {
 	subject, ok := pol.SubjectOf(principal)
 	if !ok {
 		subject = principal

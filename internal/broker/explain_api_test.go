@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -176,8 +177,40 @@ func TestExplainingAnotherNeedsTheRight(t *testing.T) {
 		Key: alicePrincipal, At: f.now, Origin: "test"}); err != nil {
 		t.Fatal(err)
 	}
-	if r := decodeExplain(t, f.explainAs(t, "bob@example.com", `{"device":"leaf1","principal":"user:alice@example.com"}`)); r.Verdict != "deny" || r.Reason != "credential_revoked" {
+	if r := decodeExplain(t, f.explainAs(t, "bob@example.com", `{"device":"leaf1","principal":"user:alice@example.com"}`)); r.Verdict != "deny" || r.Reason != "credential_revoked" || r.Subject != "" {
 		t.Fatalf("explaining a revoked principal: %+v", r)
+	}
+}
+
+// A policy fault on a granted device is answered 500 broker_error and still
+// recorded, as the mint's item error, with no verdict (decision 34); a
+// principal under a mark is answered credential_revoked from the mark
+// alone, whatever the policy would have done.
+func TestAnExplainFaultIsRecordedAndARevokedTargetSkipsThePolicy(t *testing.T) {
+	f := newFixtureWithPolicy(t, 8, explainPolicy)
+	defer func(of func(*policy.Policy, string, string, string, time.Time) (policy.Explanation, error)) {
+		explanationOf = of
+	}(explanationOf)
+	explanationOf = func(*policy.Policy, string, string, string, time.Time) (policy.Explanation, error) {
+		return policy.Explanation{Platform: "arista_eos"}, errors.New("a compile defect")
+	}
+	if w := f.explainAs(t, "alice@example.com", `{"device":"leaf1","command":"show version"}`); w.Code != 500 ||
+		!strings.Contains(w.Body.String(), "broker_error") {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	recs := eventsOf(f.records(t), "explain")
+	if len(recs) != 1 || recs[0]["verdict"] != nil || recs[0]["reason"] != nil || recs[0]["principal"] != alicePrincipal {
+		t.Fatalf("%v", recs)
+	}
+	if ex := recs[0]["explain"].(map[string]any); ex["mint_error"] != "broker_error" || ex["command"] != true {
+		t.Fatalf("%v", recs[0])
+	}
+	if err := f.st.PutRevocation(context.Background(), store.Revocation{Kind: store.RevocationPrincipal,
+		Key: alicePrincipal, At: f.now, Origin: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	if r := decodeExplain(t, f.explainAs(t, "bob@example.com", `{"device":"leaf1","principal":"user:alice@example.com"}`)); r.Reason != "credential_revoked" {
+		t.Fatalf("a revoked target answered from the policy: %+v", r)
 	}
 }
 
@@ -187,7 +220,9 @@ func TestExplainBoundsAndRedactsTheCommand(t *testing.T) {
 	f := newFixtureWithPolicy(t, 8, explainPolicy)
 	for _, body := range []string{`{"device":"leaf1","command":"show\u0007version"}`,
 		`{"device":"leaf1","command":"` + strings.Repeat("a", 1025) + `"}`, `{"device":""}`, `{"device":"leaf1","x":1}`,
-		`{"device":"leaf1"}{"device":"leaf1","command":"reload now"}`} {
+		`{"device":"leaf1"}{"device":"leaf1","command":"reload now"}`,
+		// Past the body's bound, refused rather than read in part.
+		`{"device":"leaf1"}` + strings.Repeat(" ", 17<<10) + "x"} {
 		if w := f.explainAs(t, "alice@example.com", body); w.Code != 400 {
 			t.Errorf("%.60s: %d %s", body, w.Code, w.Body)
 		}
