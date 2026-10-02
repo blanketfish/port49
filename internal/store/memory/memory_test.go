@@ -229,12 +229,20 @@ func TestTheMemoryStoreHoldsEveryProperty(t *testing.T) {
 
 // Each whole-context write returns the revision it committed at, which is
 // the Rev the next read sees, and a refused one returns zero
-// (store.RevStore; plan 7d Task 6b).
+// (store.RevStore; plan 7d Task 6b). A write to another key comes before
+// each, so the revision written is never the one compared plus one (Task
+// 6b review m1).
 func TestAContextWriteReturnsItsRevision(t *testing.T) {
 	ctx := context.Background()
 	s := New(func() time.Time { return time.Unix(1_000, 0) })
 	k := store.ContextKey{NAS: "leaf-01", Username: "alice"}
 	c := store.Context{CtxID: "c", Principal: "p", Username: "alice", PrivLvl: 1}
+	other := func() {
+		t.Helper()
+		if err := s.PutContext(ctx, store.ContextKey{NAS: "leaf-02", Username: "bob"}, c, time.Hour); err != nil {
+			t.Fatal(err)
+		}
+	}
 	check := func(what string, rev uint64, err error) store.Context {
 		t.Helper()
 		if err != nil {
@@ -246,13 +254,17 @@ func TestAContextWriteReturnsItsRevision(t *testing.T) {
 		}
 		return got
 	}
+	other()
 	rev, err := s.PutContextRev(ctx, k, c, time.Hour)
 	got := check("a put", rev, err)
+	other()
 	rev, err = s.SwapLoginRev(ctx, k, got.Rev, c, time.Hour, store.LoginWrite{Principal: "p", Sid: "s", IndexTTL: time.Hour})
 	got = check("a login", rev, err)
+	other()
 	rev, err = s.SwapContextRev(ctx, k, got.Rev, c, time.Hour)
 	got = check("a swap", rev, err)
 	got.PrivLvl = 7
+	other()
 	rev, err = s.RewriteContextRev(ctx, k, got.Rev, got, 0, true)
 	got = check("a rewrite", rev, err)
 	if rev, err := s.SwapLoginRev(ctx, k, got.Rev-1, c, time.Hour, store.LoginWrite{}); rev != 0 || !errors.Is(err, store.ErrConflict) {
