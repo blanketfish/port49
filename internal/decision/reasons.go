@@ -51,9 +51,14 @@ const (
 	// RevocationLifted: a revoke record for an operator lifting a revocation
 	// (spec §5.1.4, §5.7). A permit.
 	RevocationLifted Reason = "revocation_lifted"
-	DeviceUnknown    Reason = "device_unknown"
-	PlatformUnknown  Reason = "platform_unknown"
-	BlobUnavailable  Reason = "blob_unavailable"
+	// APIRightMissing: an API call asked to act on another principal's
+	// tokens, sessions or decisions, and the caller's subject declares no
+	// api: right that unlocks it (spec §2, §5.7; design §17). A denial; the
+	// API answers 403 and does nothing.
+	APIRightMissing Reason = "api_right_missing"
+	DeviceUnknown   Reason = "device_unknown"
+	PlatformUnknown Reason = "platform_unknown"
+	BlobUnavailable Reason = "blob_unavailable"
 	// BlobPlatformMismatch: the context's blob was compiled for a platform
 	// other than the one the daemon's inventory gives this device. Its
 	// attributes and dialect are another platform's, so it is never answered
@@ -97,6 +102,17 @@ const EventRefresh = "refresh"
 // (spec §5.1.4, §5.7): deny credential_revoked, or permit revocation_lifted.
 const EventRevoke = "revoke"
 
+// EventIdentity is GET /v1/identity: what the broker resolved the caller to
+// (design §17; spec §5.7): permit grants_matched, or deny
+// no_grants_matched.
+const EventIdentity = "identity"
+
+// EventExplain is POST /v1/explain: a hypothetical decision the broker
+// answered, about the caller or, under explain_others, another principal.
+// It authorizes nothing; its verdict and reason are the answer given, or
+// deny api_right_missing. It never carries the command asked (spec §5.7).
+const EventExplain = "explain"
+
 const (
 	VerdictPermit = "permit"
 	VerdictDeny   = "deny"
@@ -111,6 +127,7 @@ var reasons = []Reason{
 	CeilingExceeded, NoRuleMatched, NoPermitDominatesDeny, ContextMissing, UsernameMismatch, RemAddrMismatch,
 	PrivilegeExceeded, SessionExpired, ContextStale, CredentialRevoked, DeviceUnknown, PlatformUnknown,
 	BlobUnavailable, BlobPlatformMismatch, DeviceQuarantined, ProjectionFailClosed, RevocationLifted,
+	APIRightMissing,
 }
 
 // Known reports whether r is in spec §5.7's vocabulary. A policy test's

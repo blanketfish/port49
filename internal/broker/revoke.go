@@ -328,7 +328,9 @@ func (b *Broker) persist(ctx context.Context) (bool, error) {
 // (spec §5.7), and counts it.
 func (b *Broker) recordRevocation(now time.Time, rep RevokeReport, verdict string, reason decision.Reason, outcome string) {
 	body := &decision.Revocation{By: rep.Mark.Kind, At: decision.FormatTime(rep.Mark.At), Origin: rep.Request.Origin,
-		Contexts: len(rep.Contexts), TokenKeys: rep.TokenKeys, Connections: rep.Connections, Saved: rep.Saved}
+		Contexts: len(rep.Contexts), TokenKeys: rep.TokenKeys, Connections: rep.Connections}
+	saved := rep.Saved
+	body.Saved = &saved
 	rec := decision.Record{TS: now, Event: decision.EventRevoke, Verdict: verdict, Reason: reason, Revocation: body}
 	if rep.Mark.Kind == store.RevocationPrincipal {
 		rec.Principal = rep.Request.Principal

@@ -1,9 +1,11 @@
 package decision
 
 import (
+	"bytes"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"strings"
 	"testing"
 )
 
@@ -39,5 +41,34 @@ func TestKnownIsEveryReasonConstant(t *testing.T) {
 	}
 	if Known("no_grant_matched") {
 		t.Error("a typo is not a reason")
+	}
+}
+
+// api_right_missing is in §5.7's vocabulary (plan 7c), so a policy test may
+// expect it and the metrics count it.
+func TestAPIRightMissingIsKnown(t *testing.T) {
+	if !Known(APIRightMissing) || APIRightMissing != "api_right_missing" {
+		t.Fatal("api_right_missing")
+	}
+}
+
+// An explain record carries who asked, by principal and certificate, and
+// whether a command was asked, never the command (spec §5.7); a revoke
+// record's saved is absent unless it is a standing mark's.
+func TestTheAPIRecordsShapes(t *testing.T) {
+	var b bytes.Buffer
+	l := NewJSONLines(&b)
+	l.Emit(Record{Event: EventExplain, Verdict: VerdictDeny, Reason: NoGrantsMatched,
+		Principal: "user:alice@example.com", Explain: &Explain{AskedBy: "user:bob@example.com",
+			AskedByFingerprint: "sha256:ab12", Command: true}})
+	l.Emit(Record{Event: EventRevoke, Verdict: VerdictDeny, Reason: CredentialRevoked,
+		Revocation: &Revocation{By: "key", Device: "leaf-01", Username: "alice", At: "2026-10-02T03:12:09Z"}})
+	lines := strings.Split(strings.TrimSpace(b.String()), "\n")
+	if !strings.Contains(lines[0], `"explain":{"asked_by":"user:bob@example.com","asked_by_fingerprint":"sha256:ab12",`+
+		`"command":true}`) || strings.Contains(lines[0], `"auth"`) {
+		t.Fatalf("explain: %s", lines[0])
+	}
+	if !strings.Contains(lines[1], `"device":"leaf-01","username":"alice"`) || strings.Contains(lines[1], `"saved"`) {
+		t.Fatalf("revoke: %s", lines[1])
 	}
 }
