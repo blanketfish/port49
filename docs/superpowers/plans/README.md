@@ -70,7 +70,21 @@ owner's answer on the revocations volume; no register row); **executed 2026-10-0
 shapes measured on vEOS, the N9Kv, the C8000V and vJunos-router (Plan 7c — As built, below);
 final review: one important fixed (a slow revocation resent and reported as not done), re-review
 clean; **merged 2026-10-02 (PR #22, merge c485e03)**, and `make test` (with the labpcap audit)
-passes on main. **7d written 2026-10-02** (`2026-10-02-07d-shared-store.md`, sixteen tasks in two merges: 7d-1, Tasks 1–8, the etcd backend passing every `storetest` property, the login's one step and the lifted suite; 7d-2, Tasks 9–16, the guard, the config, the identities and roles, port49d on etcd, the crypt alarm, the agent's one connection, the lab and the docs; one owner decision, OD-1, the Go floor to 1.26, recommended accept; sixteen rulings recorded as decision 35; it opens and closes L35). 7e–7h and 8–13 not yet.
+passes on main. **7d written 2026-10-02** (`2026-10-02-07d-shared-store.md`, sixteen tasks in two merges: 7d-1, Tasks 1–8, the etcd backend passing every `storetest` property, the login's one step and the lifted suite; 7d-2, Tasks 9–16, the guard, the config, the identities and roles, port49d on etcd, the crypt alarm, the agent's one connection, the lab and the docs; one owner decision, OD-1, the Go floor to 1.26, recommended accept; sixteen rulings recorded as decision 35; it opens and closes L35). **7d-1 merged 2026-10-02** (PR #24, merge fe23595): Tasks 1–8 plus 4b, 6b and 7b. It delivers:
+- the etcd backend;
+- the crypt sealing layer, with the Logins witness and the revision-ordered Ledger, including the snapshot-restore regression witness;
+- the re-index and sweep;
+- `storetest` across memory, crypt, etcd and crypt-over-etcd.
+
+The final review found two important issues, both fixed:
+- An unparseable lookup key stopped the refresh fleet-wide.
+- A wrong encryption key would have revoked every session; a context under an unknown key is now never revoked.
+
+The re-review also fixed r-m1: a refresh that skips anything keeps `port49_policy_refresh_pending` set. The flake fixes merged first, as PR #23.
+
+Carried to Task 12: `ledger.Seal()` needs a test, and must be called only after the start's re-index. Carried to 7d-2: a `{}` answer on the admin socket to `port49 revoke` still exits 0.
+
+**7d-2 (Tasks 8b–16) next.** 7e–7h and 8–13 not yet.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
