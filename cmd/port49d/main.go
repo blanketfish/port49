@@ -62,8 +62,20 @@ import (
 )
 
 func main() {
+	// The one subcommand, before the daemon's flags: it reads port49d.yaml for
+	// one path and starts nothing (spec §13 decision 32, amended).
+	if len(os.Args) > 1 && os.Args[1] == "init-revocations" {
+		os.Exit(initRevocationsCmd(os.Args[2:], os.Stdout, os.Stderr))
+	}
 	cfgPath := flag.String("config", "/etc/port49/port49d.yaml", "path to port49d.yaml")
 	flag.Parse()
+	// A subcommand after a flag (port49d --config X init-revocations) would
+	// otherwise start the daemon (pre-flight M20).
+	if flag.NArg() != 0 {
+		fmt.Fprintln(os.Stderr, "usage: port49d [--config FILE], or port49d init-revocations [--config FILE] "+
+			"(the subcommand comes first)")
+		os.Exit(2)
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	if err := run(ctx, *cfgPath); err != nil {
@@ -674,21 +686,15 @@ func run(parent context.Context, cfgPath string) error {
 		// certificate again (spec §13 decision 32). Restored into, and saved
 		// from, the broker's own store, the one every mint reads, so the two
 		// cannot drift apart (Task 9 review M6).
-		var created bool
-		marks, created, err = restoreRevocations(ctx, brk.Store, cfg.Broker.RevocationsFile, m)
+		marks, err = restoreRevocations(ctx, brk.Store, cfg.Broker.RevocationsFile, m)
 		if err != nil {
 			stopSpool()
 			<-spoolDone
 			return fmt.Errorf("broker.revocations_file %s: %w", cfg.Broker.RevocationsFile, err)
 		}
 		brk.Persist = persister(brk.Store, cfg.Broker.RevocationsFile, m)
-		if created {
-			fmt.Fprintf(stderr, "port49d: broker: created %s (no revocations); if this is not a first install, "+
-				"stop port49d and restore the file\n", cfg.Broker.RevocationsFile)
-		} else {
-			fmt.Fprintf(stderr, "port49d: broker: %d revocation(s) in force from %s\n", len(marks),
-				cfg.Broker.RevocationsFile)
-		}
+		fmt.Fprintf(stderr, "port49d: broker: %d revocation(s) in force from %s\n", len(marks),
+			cfg.Broker.RevocationsFile)
 	}
 	// Certificate status (spec §5.1.4; decision 33): the kept lists are put
 	// in force now, after the marks and before any listener binds. That is

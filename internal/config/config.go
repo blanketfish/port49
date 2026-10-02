@@ -12,6 +12,7 @@ package config
 import (
 	"bytes"
 	"crypto/ed25519"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -205,11 +206,13 @@ type BrokerConfig struct {
 	// RevocationsFile is where port49d keeps the revocations `port49 revoke`
 	// puts in force (plan 7a), so a restart forgets none. Required. Its
 	// directory must exist and be writable by port49d's user or root alone,
-	// and the file's own name may not be a link. port49d creates it at the
-	// first start, with a marker beside it (<file>.created); after that a
-	// missing file, or one that does not load, refuses the start, and so does
-	// a directory others can write (spec §13 decision 32). port49d writes it,
-	// 0600 and atomically, after every revocation and lift.
+	// and the file's own name may not be a link. port49d never creates it: a
+	// missing file, or one that does not load, refuses every start, and so
+	// does a directory others can write (spec §13 decision 32, amended
+	// 2026-10-02). `port49d init-revocations` creates it once per install, as
+	// port49d's user, beside a marker (<file>.created); a start writes the
+	// marker beside a file that loads with none. port49d writes the file, 0600
+	// and atomically, after every revocation and lift.
 	RevocationsFile string `yaml:"revocations_file"`
 	// MaxConnsPerPrincipal caps one principal's held broker connections; a
 	// new one closes the oldest of its certificate, else the principal's
@@ -505,6 +508,37 @@ func inventoryBound(o inventoryYAML) (int, error) {
 	return *o.MaxRemovedPercent, nil
 }
 
+// RevocationsFile reads broker.revocations_file from a port49d.yaml's bytes,
+// for `port49d init-revocations` (spec §13 decision 32, amended): it resolves
+// no secret, so the command runs where the daemon's environment is not, and
+// decodes as strictly as Load, so a typo is an error, never "no path". It
+// refuses the paths Load refuses (ownRevocationsFile), each read from the
+// same bytes, so init never drops a file where admin_socket, the spool or
+// the policy will be (pre-flight M10).
+func RevocationsFile(raw []byte) (string, error) {
+	var f fileConfig
+	dec := yaml.NewDecoder(bytes.NewReader(raw))
+	dec.KnownFields(true)
+	if err := dec.Decode(&f); err != nil && err != io.EOF {
+		return "", fmt.Errorf("config: %w; check the key spelling against the port49d.yaml schema", decodeFault(err))
+	}
+	if f.Broker == nil || f.Broker.RevocationsFile == "" {
+		return "", errors.New("config: no broker.revocations_file: init-revocations is for a port49d with a broker")
+	}
+	c := Config{InventoryFile: f.InventoryFile, InventoryService: f.InventoryOpts.Service, Accounting: f.Accounting,
+		Lab: f.Lab, AdminSocket: f.AdminSocket}
+	if c.Accounting.SpoolPath == "" {
+		c.Accounting.SpoolPath = defaultSpoolPath
+	}
+	if err := ownRevocationsFile(c, *f.Broker); err != nil {
+		return "", err
+	}
+	return f.Broker.RevocationsFile, nil
+}
+
+// defaultSpoolPath is accounting.spool_path when port49d.yaml names none.
+const defaultSpoolPath = "/var/lib/port49/acct.jsonl"
+
 // MaxConfigSize bounds a read of port49d.yaml, a file of a few kilobytes.
 const MaxConfigSize = 1 << 20
 
@@ -628,7 +662,7 @@ func Load(path string) (Config, error) {
 		c.Accounting.SpoolCapacity = 10000
 	}
 	if c.Accounting.SpoolPath == "" {
-		c.Accounting.SpoolPath = "/var/lib/port49/acct.jsonl"
+		c.Accounting.SpoolPath = defaultSpoolPath
 	}
 	switch svc := f.InventoryOpts.Service; {
 	case svc != nil && c.InventoryFile != "":
@@ -1156,9 +1190,10 @@ func checkService(s InventoryServiceConfig) (*InventoryServiceConfig, error) {
 // port49d reads or writes, compared as absolute paths (pre-flight M13):
 // written over the policy or a key it would destroy it, and a file shared
 // with another writer is not the record of revocations. Its marker
-// (<file>.created), which port49d writes too, is held to the same. Nor may it
-// sit in the inventory service's state or mirror directory, whose files the
-// service and port49d rewrite.
+// (<file>.created), which init-revocations creates and a start writes beside
+// a file that loads, is held to the same. Nor may it sit in the inventory
+// service's state or mirror directory, whose files the service and port49d
+// rewrite.
 func ownRevocationsFile(c Config, b BrokerConfig) error {
 	revAbs, err := filepath.Abs(b.RevocationsFile)
 	if err != nil {

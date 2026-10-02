@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"errors"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"os"
@@ -32,8 +34,8 @@ func newMetrics() *metrics.Metrics { return metrics.New(prometheus.NewRegistry()
 func TestRevocationsSurviveARestart(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(safeDir(t), "revocations.json")
-	if _, created, err := restoreRevocations(ctx, memory.New(time.Now), path, newMetrics()); err != nil || !created {
-		t.Fatalf("first start: %v %v", created, err)
+	if created, err := initRevocations(path); err != nil || !created {
+		t.Fatalf("init: %v %v", created, err)
 	}
 	at := time.Date(2026, 10, 2, 3, 12, 9, 0, time.UTC)
 	before := memory.New(time.Now)
@@ -53,9 +55,9 @@ func TestRevocationsSurviveARestart(t *testing.T) {
 	}
 	after := memory.New(time.Now)
 	m := newMetrics()
-	rs, created, err := restoreRevocations(ctx, after, path, m)
-	if err != nil || created || len(rs) != 2 {
-		t.Fatalf("%d %v %v", len(rs), created, err)
+	rs, err := restoreRevocations(ctx, after, path, m)
+	if err != nil || len(rs) != 2 {
+		t.Fatalf("%d %v", len(rs), err)
 	}
 	got, err := after.GetRevocation(ctx, store.RevocationPrincipal, "user:alice@example.com")
 	if err != nil || !got.At.Equal(at) || got.Origin != "admin_socket uid 0" {
@@ -66,48 +68,172 @@ func TestRevocationsSurviveARestart(t *testing.T) {
 	}
 }
 
-// The first start writes the marker, then an empty file, and says so; a
-// later start that finds the file gone refuses, because "never written" and
-// "deleted" are no longer the same thing (pre-flight C1).
-func TestTheFirstStartCreatesTheFileAndALaterMissingOneRefuses(t *testing.T) {
+// A start never creates the file (spec §13 decision 32, amended
+// 2026-10-02): a fresh directory, or a mounted volume left empty, refuses
+// every start and writes nothing. The refusal leads with the upgrade case,
+// so an operator whose volume did not mount mounts it rather than running
+// the first-install init on an empty mount point (pre-flight M13).
+func TestAStartNeverCreatesTheFile(t *testing.T) {
 	path := filepath.Join(safeDir(t), "revocations.json")
-	rs, created, err := loadRevocations(path)
-	if err != nil || !created || len(rs) != 0 {
-		t.Fatalf("first start: %v %v %v", rs, created, err)
+	for i := 0; i < 2; i++ {
+		_, err := loadRevocations(path)
+		if err == nil || !strings.HasPrefix(err.Error(), "does not exist: if port49d has run here before, the "+
+			"volume holding it is missing or empty") || !strings.Contains(err.Error(), "port49d init-revocations") {
+			t.Fatalf("start %d on an empty directory: %v", i, err)
+		}
 	}
-	for _, p := range []string{path, path + ".created"} {
+	for _, p := range []string{path, markerOf(path)} {
+		if _, err := os.Lstat(p); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("a start wrote %s: %v", p, err)
+		}
+	}
+}
+
+// init writes the marker and an empty file, 0600, and a start loads them.
+// Run again over a file that loads, it writes nothing and says so, so a
+// provisioning step may run it twice (pre-flight I6). Over a file that does
+// not load it refuses and leaves it. Over a lost file (the marker still
+// there) it refuses, so it never papers over revocations that were lost; a
+// start then says they were lost.
+func TestInitRevocationsCreatesOnceAndNeverOverALoss(t *testing.T) {
+	path := filepath.Join(safeDir(t), "revocations.json")
+	if created, err := initRevocations(path); err != nil || !created {
+		t.Fatalf("the first init: %v %v", created, err)
+	}
+	for _, p := range []string{path, markerOf(path)} {
 		if fi, err := os.Stat(p); err != nil || fi.Mode().Perm() != 0o600 {
 			t.Fatalf("%s: %v %v", p, fi, err)
 		}
 	}
-	if _, created, err := loadRevocations(path); err != nil || created {
-		t.Fatalf("second start: %v %v", created, err)
+	if rs, err := loadRevocations(path); err != nil || len(rs) != 0 {
+		t.Fatalf("the start after init: %v %v", rs, err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created, err := initRevocations(path); err != nil || created {
+		t.Fatalf("a second init over a file that loads: %v %v", created, err)
+	}
+	if after, err := os.ReadFile(path); err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("a second init wrote the file: %q %v", after, err)
+	}
+	if err := os.WriteFile(path, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := initRevocations(path); err == nil || !strings.Contains(err.Error(), "does not load") {
+		t.Fatalf("an init over a file that does not load: %v", err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != "{" {
+		t.Fatalf("init replaced a file that does not load: %q", got)
 	}
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := loadRevocations(path); err == nil || !strings.Contains(err.Error(), "is missing") {
-		t.Fatalf("a deleted file after the first start: %v", err)
+	if _, err := initRevocations(path); err == nil || !strings.Contains(err.Error(), "never re-creates a lost file") {
+		t.Fatalf("an init over a lost file: %v", err)
 	}
+	if _, err := loadRevocations(path); err == nil || !strings.Contains(err.Error(), "its marker says") {
+		t.Fatalf("a start after the loss: %v", err)
+	}
+	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a refused init or start wrote the file: %v", err)
+	}
+}
 
-	// A file laid down before the first start (config management, a backup
-	// restored onto a new volume) gets its marker at the first load, so its
-	// later loss refuses the start too (Task 9 review I1).
-	path = filepath.Join(safeDir(t), "revocations.json")
+// A file laid down by hand loads, and the start writes the marker beside
+// it, as 7a's start did (spec §13 decision 32; pre-flight M12): that
+// creates no revocations file, and the file's later loss then refuses the
+// start as a loss, never as a first install.
+func TestAHandLaidFileLoadsAndGetsAMarker(t *testing.T) {
+	path := filepath.Join(safeDir(t), "revocations.json")
 	if err := os.WriteFile(path, []byte(`{"revocations": []}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, created, err := loadRevocations(path); err != nil || created {
-		t.Fatalf("a file laid down by hand: %v %v", created, err)
+	if rs, err := loadRevocations(path); err != nil || len(rs) != 0 {
+		t.Fatalf("%v %v", rs, err)
 	}
-	if fi, err := os.Stat(path + ".created"); err != nil || fi.Mode().Perm() != 0o600 {
-		t.Fatalf("its marker: %v %v", fi, err)
+	if _, err := os.Lstat(markerOf(path)); err != nil {
+		t.Fatalf("no marker beside a file that loaded: %v", err)
 	}
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := loadRevocations(path); err == nil || !strings.Contains(err.Error(), "is missing") {
-		t.Fatalf("a hand-laid file deleted: %v", err)
+	if _, err := loadRevocations(path); err == nil || !strings.Contains(err.Error(), "its marker says") {
+		t.Fatalf("a start after a hand-laid file was lost: %v", err)
+	}
+}
+
+// init is fenced as a start is: a directory others can write is refused
+// and nothing is written.
+func TestInitRevocationsIsFenced(t *testing.T) {
+	open := safeDir(t)
+	if err := os.Chmod(open, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(open, "revocations.json")
+	if _, err := initRevocations(path); err == nil {
+		t.Fatal("init wrote into a directory others can write")
+	}
+	for _, p := range []string{path, markerOf(path)} {
+		if _, err := os.Lstat(p); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("a refused init wrote %s", p)
+		}
+	}
+}
+
+// A file that appears between init's look and its write is never
+// replaced: the create is a link, which fails on an existing name
+// (pre-flight M10).
+func TestCreateExclusiveNeverReplaces(t *testing.T) {
+	path := filepath.Join(safeDir(t), "revocations.json")
+	if err := os.WriteFile(path, []byte("theirs"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := createExclusive(path, []byte("ours")); !errors.Is(err, fs.ErrExist) {
+		t.Fatalf("over an existing file: %v", err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != "theirs" {
+		t.Fatalf("replaced: %q", got)
+	}
+	if left, _ := filepath.Glob(filepath.Join(filepath.Dir(path), ".revocations.json.init-*")); len(left) != 0 {
+		t.Fatalf("temporary files left: %v", left)
+	}
+}
+
+// The command reads broker.revocations_file and nothing else: a config
+// whose secrets are not in the environment still inits, and a second run
+// says the file is already initialized, exit 0. One with no broker block is
+// refused, exit 1; stray arguments are usage, exit 2.
+func TestInitRevocationsCmdReadsOnlyThePath(t *testing.T) {
+	dir := safeDir(t)
+	path := filepath.Join(dir, "revocations.json")
+	cfg := filepath.Join(dir, "port49d.yaml")
+	body := "encryption: {current: {id: k1, secret_env: PORT49_TEST_UNSET_SECRET}}\n" +
+		"broker:\n  revocations_file: " + path + "\n"
+	if err := os.WriteFile(cfg, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := initRevocationsCmd([]string{"--config", cfg}, &out, &errb); code != 0 ||
+		!strings.Contains(out.String(), "created broker.revocations_file "+path) ||
+		!strings.Contains(out.String(), "never on a start path") {
+		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
+	}
+	out.Reset()
+	if code := initRevocationsCmd([]string{"--config", cfg}, &out, &errb); code != 0 ||
+		!strings.Contains(out.String(), path+" is already initialized; nothing written") {
+		t.Fatalf("the second run: code %d stdout %q stderr %q", code, out.String(), errb.String())
+	}
+	if err := os.WriteFile(cfg, []byte("listen: 127.0.0.1:49\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code := initRevocationsCmd([]string{"--config", cfg}, &out, &errb); code != 1 ||
+		!strings.Contains(errb.String(), "no broker.revocations_file") {
+		t.Fatalf("no broker block: code %d stderr %q", code, errb.String())
+	}
+	if code := initRevocationsCmd([]string{"extra"}, &out, &errb); code != 2 {
+		t.Fatalf("usage: %d", code)
 	}
 }
 
@@ -115,14 +241,14 @@ func TestTheFirstStartCreatesTheFileAndALaterMissingOneRefuses(t *testing.T) {
 // directory, or one others can write, refuses the start before "missing"
 // can mean anything (pre-flight C1).
 func TestTheDirectoryIsFencedWithOrWithoutTheFile(t *testing.T) {
-	if _, _, err := loadRevocations(filepath.Join(safeDir(t), "missing", "revocations.json")); err == nil {
+	if _, err := loadRevocations(filepath.Join(safeDir(t), "missing", "revocations.json")); err == nil {
 		t.Fatal("a missing directory read as no revocations")
 	}
 	open := safeDir(t)
 	if err := os.Chmod(open, 0o777); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := loadRevocations(filepath.Join(open, "revocations.json")); err == nil {
+	if _, err := loadRevocations(filepath.Join(open, "revocations.json")); err == nil {
 		t.Fatal("a missing file in a directory others can write read as no revocations")
 	}
 	if _, err := os.Lstat(filepath.Join(open, "revocations.json.created")); !errors.Is(err, os.ErrNotExist) {
@@ -145,7 +271,7 @@ func TestARevocationsFileThatDoesNotLoadRefusesTheStart(t *testing.T) {
 		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if _, _, err := loadRevocations(path); err == nil {
+		if _, err := loadRevocations(path); err == nil {
 			t.Errorf("%s: loaded", name)
 		}
 	}
@@ -160,7 +286,7 @@ func TestAMarkTheStoreRefusesRefusesTheStart(t *testing.T) {
 		`"at":"2026-10-02T03:12:09Z","origin":"o"}]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := restoreRevocations(context.Background(), memory.New(time.Now), path, newMetrics()); err == nil ||
+	if _, err := restoreRevocations(context.Background(), memory.New(time.Now), path, newMetrics()); err == nil ||
 		!strings.Contains(err.Error(), "revocation 0") {
 		t.Fatalf("a certificate mark with no issuer: %v", err)
 	}
@@ -177,14 +303,14 @@ func TestARevocationsFileOthersCouldWriteIsRefused(t *testing.T) {
 	if err := os.Chmod(path, 0o622); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := loadRevocations(path); err == nil {
+	if _, err := loadRevocations(path); err == nil {
 		t.Fatal("a world-writable revocations file loaded")
 	}
 	link := filepath.Join(dir, "linked.json")
 	if err := os.Symlink(path, link); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := loadRevocations(link); err == nil || !strings.Contains(err.Error(), "symbolic link") {
+	if _, err := loadRevocations(link); err == nil || !strings.Contains(err.Error(), "symbolic link") {
 		t.Fatalf("a link: %v", err)
 	}
 }
@@ -281,7 +407,7 @@ func TestAHungWriteGivesUpAtItsDeadline(t *testing.T) {
 		put("user:bob@example.com")
 	}
 	settle(t, release, persist)
-	rs, _, err := loadRevocations(path)
+	rs, err := loadRevocations(path)
 	if err != nil || len(rs) != 2 {
 		t.Fatalf("after the hung write returned: %v %v", rs, err)
 	}
@@ -330,7 +456,7 @@ func TestTheFileCatchesUpAfterAHungWriteReturns(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if rs, _, err := loadRevocations(path); err != nil || len(rs) != 2 {
+	if rs, err := loadRevocations(path); err != nil || len(rs) != 2 {
 		t.Fatalf("%v %v", rs, err)
 	}
 	settle(t, release, persist)

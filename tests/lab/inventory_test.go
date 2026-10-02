@@ -338,6 +338,13 @@ inventory:
     state_dir: %[12]s
 `, pki, testpki.LabServerCert, testpki.LabServerKey, testpki.LabCA, policy, inventoryAddr, li.pki, testpki.InvCA,
 		testpki.InvDaemonCert, testpki.InvDaemonKey, li.pubFile, state, filepath.Join(filepath.Dir(policy), "revocations.json"))
+	// port49d never creates its revocations file (spec §13 decision 32,
+	// amended 2026-10-02): it is written empty on purpose beside the policy,
+	// in the directory privateDir made.
+	if err := os.WriteFile(filepath.Join(filepath.Dir(policy), "revocations.json"), []byte("{\"revocations\": []}\n"),
+		0o600); err != nil {
+		t.Fatal(err)
+	}
 	path := filepath.Join(root, "tests", "lab", "logs", "port49d-lab-"+l.p.name+"-service.yaml")
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)

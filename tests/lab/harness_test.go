@@ -875,7 +875,8 @@ func privatePolicy(cfg, dir string) (string, error) {
 	// (plan 7a): tests/lab/logs is 0775 under the desktop umask and would
 	// refuse the start, and a mark one run left would refuse the next run's
 	// mints. It goes in the private directory, fresh at every derived
-	// config: the first start creates it (pre-flight I6).
+	// config, written empty on purpose: port49d no longer creates it (spec
+	// §13 decision 32, amended 2026-10-02).
 	if i := strings.Index(cfg, "  revocations_file: "); i >= 0 {
 		j := strings.Index(cfg[i:], "\n")
 		if j < 0 {
@@ -886,6 +887,9 @@ func privatePolicy(cfg, dir string) (string, error) {
 			if err := os.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
 				return "", err
 			}
+		}
+		if err := os.WriteFile(dst, []byte("{\"revocations\": []}\n"), 0o600); err != nil {
+			return "", err
 		}
 		cfg = cfg[:i] + "  revocations_file: " + dst + cfg[i+j:]
 	}

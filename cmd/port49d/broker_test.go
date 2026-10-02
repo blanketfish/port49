@@ -44,7 +44,7 @@ func brokerConfig(t *testing.T, policyBody string) config.Config {
 	if err := os.WriteFile(pol, []byte(policyBody), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	return config.Config{
+	cfg := config.Config{
 		Session:   config.SessionConfig{MaxSessionAgeDefault: time.Hour},
 		Keys:      map[string]config.KeySet{"lab_key": {Current: config.KeyVersion{Version: 1, SecretEnv: "UNUSED"}}},
 		Inventory: admission.Inventory{Devices: []admission.Device{{Name: "leaf1", Platform: "arista_eos", KeyRef: "lab_key"}}},
@@ -54,6 +54,10 @@ func brokerConfig(t *testing.T, policyBody string) config.Config {
 			MaxConnsPerPrincipal: 4, MaxPendingConnsPerSource: 16,
 			CertificateStatus: &config.CertificateStatusConfig{Disabled: true}},
 	}
+	if _, err := initRevocations(cfg.Broker.RevocationsFile); err != nil {
+		t.Fatal(err)
+	}
+	return cfg
 }
 
 // port49d names the bundle an offline tool names for the same two files, so a
@@ -717,7 +721,7 @@ func TestRunRestoresRevocationsBeforeTheBrokerServes(t *testing.T) {
 		}
 
 		addr, stop := start()
-		waitFor(t, &out, "port49d: broker: created "+b.RevocationsFile+" (no revocations)")
+		waitFor(t, &out, "port49d: broker: 0 revocation(s) in force from "+b.RevocationsFile)
 		if status, _, err := postAsAlice(pki, addr); err != nil || status != http.StatusOK {
 			t.Fatalf("the first start's mint: %d %v", status, err)
 		}
@@ -762,7 +766,7 @@ func TestRunRestoresRevocationsBeforeTheBrokerServes(t *testing.T) {
 			t.Fatal(err)
 		}
 		st := memory.New(time.Now)
-		if _, _, err := restoreRevocations(context.Background(), st, cfg.Broker.RevocationsFile, newMetrics()); err != nil {
+		if _, err := restoreRevocations(context.Background(), st, cfg.Broker.RevocationsFile, newMetrics()); err != nil {
 			t.Fatal(err)
 		}
 		srv, _, err := buildBroker(cfg, "inventory_file "+cfg.InventoryFile, st, seedMinter(),
