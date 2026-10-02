@@ -13,9 +13,12 @@
 //
 // A store write can then delete, or put back an earlier record sealed for
 // the same key, and nothing else: it cannot zero a revocation, raise a
-// privilege, swap a blob or move a record to another key. The one put-back
-// that would matter, another login's context written over this one's, the
-// Ledger denies while this process runs.
+// privilege, swap a blob or move a record to another key, except by putting
+// back an earlier version of the same context. That residual undoes a
+// revocation that leaves no mark (a self or key revocation) or a policy
+// narrowing, a clamp included, until the next refresh (spec §13, decision
+// 35). The put-back that would be impersonation, another login's context
+// written over this one's, the Ledger denies while this process runs.
 //
 // What is NOT sealed is deliberate and is argued in plan 2 Task 5: blobs (no
 // identity) and the indexes: the four of plan 2 and the two token indexes of
