@@ -6683,20 +6683,23 @@ review (the owner may override them).*
     as the broker. A second port49d waits for it, its listeners closed.
   - **A fence.** Every sixth of `hold_ttl` the holder reads its lock key and its lease's
     remaining TTL. It counts the hold lost when the key is gone or on another lease, the lease
-    has expired, or the lease has half of `hold_ttl` or less left: as an answered read
-    reported it at its send, however long the read took, or, with etcd not answering since,
-    by its estimate (the last answer's send time plus its TTL).
-    Reads are at most a third of `hold_ttl` apart, so that is at least a sixth of `hold_ttl`
-    before etcd can expire the lease and let another take the keyspace (2.5s at the default
-    15s). etcd reports the TTL in whole seconds, rounded down, which only moves the estimate
-    earlier. A slow read is judged at its send, so its time is not counted against it.
+    has expired, an answered read reported under half of `hold_ttl` left (judged at its
+    send, however long the read took), or, with etcd not answering since, its estimate (the
+    last answer's send time plus its TTL) has half of `hold_ttl` or less left. Reads are at
+    most a third of `hold_ttl` apart. A read that kept the hold reported half of `hold_ttl`
+    or more, and etcd's own count is never below the one it reports, rounded down to whole
+    seconds; so the lease then had half or more, and the next decision, within a third,
+    comes with at least a sixth of `hold_ttl` left before etcd can expire the lease and let
+    another take the keyspace (1.67s at 10s, 2.5s at the default 15s).
   - **`hold_ttl` is 10s to 60s**, and a shorter one is refused at config load. etcd's client
     sends the next keepalive a third of the TTL after a response but checks only every
     500ms, so a healthy lease can report as little as ⌊2·`hold_ttl`/3 − 0.5s − a round
-    trip⌋. That must stay above half of `hold_ttl`: at 10s it is 6s, above 5s, while the
-    round trip is under about 0.17s; at the default 15s it is 8s, above 7.5s, while the
-    round trip is under about 1.5s. Below 10s a healthy lease can report half or less, and
-    the fence would drop the hold on a store that is up.
+    trip⌋. That must not fall under half of `hold_ttl`: at 10s it is 5s or more while the
+    round trip is under about 1.17s; at the default 15s it is 8s, above 7.5s, while the
+    round trip is under about 1.5s. Below 10s the round trip tolerated is 0.5s or less.
+  - **The round trip is a deployment bound.** A store whose round trip from port49d passes
+    it drops a healthy hold, and port49d closes every listener: dark, never two port49d on
+    one keyspace (design document §13).
 - **A start on etcd.** port49d waits for the store with every listener closed (up to
   `store.etcd.start_timeout`, 30s, then exits 1; `0` waits forever; after a store gone, no
   deadline), and then, retrying while the store errs:
