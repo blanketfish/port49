@@ -882,8 +882,12 @@ revocation never saw; the second pass catches a redemption that was in flight. W
 deleted and the token spent, a device's retransmission of a login made before the revocation is
 answered `token_not_found`, not replayed and not `credential_revoked` (§5.6); deleting the receipt
 also closes the one unchecked replay, the concurrent duplicate's (§5.6). A redemption that
-removed its token before the delete and writes its context after the second pass is a window of one
-store round trip, which the shared store (plan 7d) closes atomically. Deleting by certificate
+removed its token before the delete and writes its context after the second pass writes it
+revoked: a login's context write checks, in the same atomic step, that no mark stands for its
+principal or its certificate (plan 7d; §13, decision 35), and the mark is written before
+anything else. The daemon also reads the standing marks on every authorization, so a context a
+revocation by principal or certificate never reached is denied anyway. A self or key
+revocation leaves no mark, so for those the window of one store round trip stays. Deleting by certificate
 deletes every unspent token under each `(device, username)` key that certificate minted under, the
 same principal's other certificates' included: the store holds no finer cut, and the error is
 toward denying. A principal is compared as `Identity` spells it, `user:` and the lower-cased email.
@@ -1412,11 +1416,13 @@ context rather than replacing it (ruled 2026-09-23):
 **A login into a revoked context is refused.** A login whose resulting context carries
 `revoked_at` answers FAIL `credential_revoked` — the answer the `enable` gate gives for the same
 state — and its token is spent, so a token the revocation was meant to stop gets no second try
-(ruled 2026-09-23; made one rule in plan 3). There are four ways to get there. The context the login
+(ruled 2026-09-23; made one rule in plan 3). There are five ways to get there. The context the login
 would join is already revoked and the token was not minted after it: refused before anything is
 written. The same principal's context past its ceiling, replaced carrying a revocation the token
-predates; a context the sealing layer cannot open, replaced carrying its plaintext `revoked_at`; and
-a revocation that lands between the login's read and its join, merged by the join: each has already
+predates; a context the sealing layer cannot open, replaced carrying its plaintext `revoked_at`;
+a revocation that lands between the login's read and its join, merged by the join; and a
+revocation mark standing for the login's principal or certificate, on a token minted before it,
+read in the same step as the write (plan 7d; §13, decision 35): each has already
 written the context when it is refused, and that context is revoked, so every authorization against
 it is denied anyway until the idle TTL reclaims it. The `redeem` record carries the principal, the
 `ctx_id` and `session.revoked_at`, the revocation that refused it. A retransmission is answered from
@@ -1440,8 +1446,8 @@ to name. The join is a compare-and-set on the context's revision, so a revocatio
 annotation, a privilege raise or a refresh that lands mid-login is merged rather than erased, and
 two simultaneous logins both land.
 
-**A replace unindexes what it displaced, before the new login is indexed**, so a later revocation
-of the displaced credential does not reach the context that replaced it. What it unindexes
+**A replace unindexes what it displaced, in the same step that writes the new login's context
+and index**, so a later revocation of the displaced credential does not reach the context that replaced it. What it unindexes
 depends on whose context it was:
 
 - **Another principal's**: every key the context was indexed under — its principal and every
@@ -1463,17 +1469,18 @@ An empty `sid` or certificate (no issuer or no serial) is never indexed or unind
 revocation by one is refused rather than run: every certificate login shares the empty `sid`, and
 every OIDC login the empty certificate, so revoking by either would revoke them fleet-wide.
 
-The unindex and the index are not one operation with the context write, and two races follow,
-each needing logins under one username on one device within a few milliseconds. A second window
-of the replacing principal that joins between the replace's write and its whole clear loses its
-`sid` and certificate entries; revocation by principal still reaches the context. And two
-principals replacing each other can leave the survivor indexed under the loser's keys only, so a
-revocation of the loser marks it and one of the survivor misses it; that also needs the
-uniqueness MUST broken.
+The context write, the unindex and the index are one atomic step (plan 7d; §13, decision
+35): it lands only while the context, the ref's index record and the marks the login read
+are as read, and otherwise reads and decides again. So no window leaves a joined login's
+`sid` unindexed, and no replace leaves the survivor under the loser's keys.
 
-A store port49 cannot reach fails the login `store_unavailable`, refused before the token is
-spent. A record the store returns but port49 cannot open — sealed under a key that has left the
-two-key window, or failing authentication — cannot be joined, and is **replaced fresh** through
+A store port49 cannot reach fails the login `store_unavailable`: before the token is spent
+when the redemption fails, and after it when the step that writes the context fails. A
+context and its index that cannot be written together are never written apart, so a login
+is never admitted with a context no revocation can reach. An ERROR whose write timed out
+may still have committed: the context is then indexed, so revocable, and a retransmission
+replays the receipt; if it did not commit, the retransmission is `token_spent`. A record the
+store returns but port49 cannot open — sealed under a key that has left the two-key window, or failing authentication — cannot be joined, and is **replaced fresh** through
 the same compare-and-set: the replace carries the record's plaintext `revoked_at` by the rule in
 the table, whoever its principal was, because the principal is sealed; the `redeem` record carries
 `session.replaced_unreadable: true` and no `replaced_ctx_id`, because that id is sealed too; and
@@ -6436,6 +6443,109 @@ the design was silent, each the option that denies more.*
 
 (§2, §5.1.3, §5.1.4, §5.7, §12, §14; design document §12, §17)
 
+**35. The shared store is etcd, every read is linearizable, a login lands with its index and
+its revocation check in one step, and no field a login or an authorization trusts is written in
+the clear.**
+*Plan 7d, 2026-10-02: D1 answered by the owner (etcd); the rest rulings where the design was
+silent, each the option that denies more, and the controller's rulings on plan 7d's pre-flight
+review (the owner may override them).*
+
+- **Backend.** etcd v3.6. Every acknowledged write survives a leader failover (Raft), so a
+  redeemed token never comes back and a revocation mark is never lost. Every read is
+  linearizable: a member cut off from the quorum answers nothing, never a stale context. The
+  interface stays pluggable; a backend whose replication is asynchronous (Valkey, Redis) is
+  acceptable only with its replay window stated (design document §13).
+- **Expiry.** Each record carries its own expiry and is read against port49d's clock; etcd's
+  leases only reclaim, at least `store.etcd.lease_grace` (5m) later. A revocation mark carries
+  no lease, and never expires. A record that does not decode is an error naming its key, never
+  skipped: a revocation that skipped one would miss a live context. The re-index (below) is the
+  exception: an index record that does not decode, or a ref it fails to re-index, is skipped,
+  logged and counted, and never fails a start or the re-index; the marks still deny by
+  principal or certificate.
+- **The login is one step.** A login's context write, its index entries, and a check that no
+  revocation mark stands for its principal or its certificate that was not there when it
+  read, are one transaction.
+  - **A standing mark.** A mark that stands, for a token not minted after it, is written into
+    the context as its revocation, and the login is refused `credential_revoked`.
+  - **What that closes.** A context is never live and unindexed. A redemption racing a
+    revocation by principal or certificate writes its context revoked, or is reached by the
+    revocation's second pass.
+  - **An index that cannot be written.** The login is refused ERROR `store_unavailable` (it
+    was a PASS with `index_error`). An ERROR whose write may have committed is §5.6's.
+  - **What it leaves.** A self or key revocation leaves no mark, so its window of one round
+    trip stays (§5.1.4).
+- **The context is sealed whole, bound to its key.**
+  - **What is sealed.** Every field the authorizer trusts is sealed with the identity: the
+    privilege, the ceiling, the policy blob, the enable mechanism, the maximum privilege, the
+    clocks, and the revocation.
+  - **Bound to its key.** The cipher's additional data is the context's key, so a record moved
+    to another device or username will not open.
+  - **The revocation in the clear.** `revoked_at` is kept in the clear as well, so revoking
+    needs no key; a read takes the later of the two.
+  - **The setters.** A narrow setter on a sealed field reads, opens, applies its rule, seals
+    and rewrites on the revision it read. The idle clock and accounting's annotations stay
+    plaintext and authorize nothing.
+  - **The token and the receipt.** A token's secret, identity and every field a login trusts
+    (its kind, expiry, policy blob, session age, enable mechanism, maximum privilege and
+    clocks) are sealed, bound to the token's key and ID; a copy of the expiry stays in the
+    clear for the store, and a token whose two expiries differ is dropped. A receipt is
+    sealed, its first redemption included, bound to its whole key, kind and credential hash
+    among it.
+  - **Migration.** A token, receipt or context sealed before this does not open: a token is
+    dropped, a context is denied and replaced at the next login. The memory store loses every
+    record at the restart that installs it, and etcd holds none before plan 7d.
+- **The ledger.** port49d keeps, per context key, the `ctx_id` it last wrote there or first
+  read there. A context that opens at a key under another `ctx_id` (another login's record
+  written back) is denied `store_unavailable`, replaced by the next login and revoked by the
+  refresh.
+  - **Once per process.** port49d builds the ledger once per process, not per run of its
+    start, so a start that waits for the store again keeps what the ledger has seen.
+  - **Sealed after the start's reads.** A start reads every kept context before any listener
+    binds, and then seals the ledger. A sealed ledger denies a context at any key it has not
+    seen, unless this process wrote it. Before the seal, the first record read at an unseen
+    key is admitted.
+- **The standing marks are read on every request.** The daemon holds the marks in memory, with
+  the store as the authority.
+  - **Kept current.** They are loaded at start before any listener binds; a mark is added once
+    its write lands and removed once its lift does.
+  - **What they deny.** An authorization, an `enable` and a receipt's replay are denied
+    `credential_revoked` for a context whose principal or certificate a mark names, whatever
+    the record says.
+  - **The cost** per request is one in-memory lookup.
+- **What store write access still yields.** A stolen daemon store credential cannot forge or
+  move a token, receipt or context, raise a privilege past what port49 wrote, or lift a
+  revocation by principal or certificate. Deleting a record, or making a write conflict, is
+  a denial. What it can do is replay:
+  - **a context** port49 sealed earlier for the same key. While port49d runs, the ledger
+    admits only an earlier version of the context the key holds now (the same `ctx_id`, so
+    the same principal), which undoes a self or key revocation of it (no mark; decision 34)
+    or a policy narrowing until the next refresh judges it. **Across a restart it is
+    impersonation:** the ledger admits the first record read at a key it has not seen until
+    the start's reads seal it, so another login's context put back while port49d was stopped,
+    or before the start read it, is taken as that key's, until its sealed ceiling, if it has
+    one, or the key's next login. A principal or certificate mark still denies it;
+  - **a token** port49 minted for the same key and ID, deleted since, which a holder of its
+    secret can redeem until its sealed expiry;
+  - **a receipt's sliding bound**, up to its sealed cap, or its refusal flag, which replays
+    PASS only onto the live context that receipt's own principal holds unrevoked;
+  - **the idle clock**: a context kept alive past its idle TTL, to its sealed ceiling if it
+    has one, and indefinitely under `max_session_age: never`;
+  - **accounting's annotations**: a context's session discriminators cleared, which
+    suppresses the `foreign` attribution of its accounting records;
+  - **the index**: a context whose index record is deleted is hidden from the refresh and
+    from a revocation by sid or `--mine` until the re-index finds and re-indexes it; a
+    revocation by principal or certificate still denies it through the marks. An index record
+    rewritten to name another principal does not hide it: the re-index compares the record
+    against the context's own sealed principal.
+
+  That residual is carried, unassigned.
+- **The index is plaintext.** The keys revocation reads (principal, device, username,
+  certificate, sid) stay plaintext, because revocation must not depend on the encryption key
+  (owner's ruling 2026-09-21). On a persistent store every snapshot holds them, and is
+  protected as the store is (design document §8).
+
+(§5.1.4, §5.6, §14; design document §8, §12)
+
 ### Deferred, with reasons
 
 Neither of these is an open question about the design. Both are closed for v1 on the
@@ -6922,6 +7032,31 @@ Beyond those already listed in the design document's §14:
   denied command with no policy change.
 - **`on_missing`**: a device lacking the scoped attribute is included for a deny-bearing
   scope and excluded for a permit-bearing one.
+
+**Shared store** (plan 7d; §13, decision 35)
+
+- **Every backend, every property**: each `storetest` property passes against the memory
+  store, the sealing layer over it, the etcd backend, and the sealing layer over etcd.
+- **The login is one step**: a login replacing another principal's context leaves it indexed
+  under the new login's keys alone, whatever lands concurrently; a revocation mark that appears
+  between a login's read and its write makes the write conflict and land revoked.
+- **Quorum lost**: with two of three etcd members stopped, a store call fails with
+  `store.ErrUnavailable` within its deadline, never answers from a stale member.
+- **The seal**: a context record whose `revoked_at` is zeroed, privilege raised, blob swapped
+  or ceiling removed in the store reads back as port49 wrote it, and one moved to another key
+  does not open. A token whose trusted fields are raised in the store reads back as minted,
+  one moved to another key or ID or whose expiry is extended is dropped, and a login receipt
+  copied to the enable key does not open.
+- **The ledger**: another login's context written back at a key is denied; an earlier
+  version of the same context is not (the residual). Once sealed, the ledger denies a context
+  at a key it has not seen.
+- **The index lost**: a context whose index record is deleted, or rewritten to name another
+  principal, is found, re-indexed and judged against the policy in force, and a revocation by
+  principal reaches it again. An index record that does not decode is skipped, logged and
+  counted, and the rest are re-indexed.
+- **The marks**: a context a standing mark names is denied `credential_revoked` at
+  authorization, at `enable` and at a receipt's replay, whatever its record says; a lifted
+  mark denies nothing.
 
 ---
 
