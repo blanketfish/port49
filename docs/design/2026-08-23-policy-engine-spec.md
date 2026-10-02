@@ -5767,10 +5767,9 @@ port49's two etcd roles and grant them, for the keyspace `store.etcd.prefix` nam
   also hide a context from the index until the next sweep re-indexes it, and deny by deleting.
   It cannot write a revocation mark, so it cannot lift a revocation by principal or
   certificate: this role is what makes that true, since a credential holding the whole
-  keyspace could delete the marks. That holds for the daemon's credential taken alone: until plan 7e port49d also holds the
-  broker's, whose role is the whole keyspace, marks included, and under
-  `store.etcd.roles: unenforced` the daemon's is too.
-  The broker's role holds the whole keyspace until plan 7e splits the broker out.
+  keyspace could delete the marks. That holds for the daemon's credential taken alone: until
+  plan 7e port49d also holds the broker's, whose role is the whole keyspace, marks included,
+  and under `store.etcd.roles: unenforced` the daemon's is too.
 - **The command itself.** It reads the config and those certificates, holds no etcd
   credential, and changes nothing. It refuses a CN or prefix holding a character outside
   `[A-Za-z0-9._@/-]`, printing nothing. It exits 0, 1 naming what it could not read or
@@ -6590,11 +6589,13 @@ review (the owner may override them).*
   That holds for the daemon's credential taken alone: until plan 7e port49d also holds the
   broker's, whose role is the whole keyspace, marks included, and under
   `store.etcd.roles: unenforced` the daemon's is too.
-  Deleting a record, or making a write conflict, is a denial. What it can do is replay:
+  Deleting a record, or making a write conflict, is a denial, except that a write conflict
+  on a policy refresh postpones its judgement. What it can do is replay:
   - **a context** port49 sealed earlier for the same key. While port49d runs, the ledger
     admits only an earlier version of the context the key holds now (the same `ctx_id`, so
     the same principal), which undoes a self or key revocation of it (no mark; decision 34)
-    or a policy narrowing until the next refresh judges it. **Across a restart it is
+    or a policy narrowing until the next refresh judges it, which a writer rewriting the
+    context can postpone (`port49_policy_refresh_pending` stays 1). **Across a restart it is
     impersonation:** the ledger admits the first record read at a key it has not seen until
     the start's reads seal it, so another login's context put back while port49d was stopped,
     or before the start read it, is taken as that key's, until its sealed ceiling, if it has
@@ -6682,12 +6683,14 @@ review (the owner may override them).*
     as the broker. A second port49d waits for it, its listeners closed.
   - **A fence.** Every sixth of `hold_ttl` the holder reads its lock key and its lease's
     remaining TTL. It counts the hold lost when the key is gone or on another lease, the lease
-    has expired, or its estimate of the lease (each answer's send time plus its TTL) has half
-    of `hold_ttl` or less left, whether etcd answered with that TTL or has not answered since.
+    has expired, or the lease has half of `hold_ttl` or less left: as an answered read
+    reported it at its send, however long the read took, or, with etcd not answering since,
+    by its estimate (the last answer's send time plus its TTL).
     Reads are at most a third of `hold_ttl` apart, so that is at least a sixth of `hold_ttl`
     before etcd can expire the lease and let another take the keyspace (2.5s at the default
     15s). etcd reports the TTL in whole seconds, rounded down, which only moves the estimate
-    earlier. `hold_ttl` is 5s or more, where a healthy lease still reports 3s, above the line.
+    earlier. `hold_ttl` is 5s or more, where a healthy lease still reports 3s, above the line,
+    since a slow read is judged at its send and its time is not counted against it.
 - **A start on etcd.** port49d waits for the store with every listener closed (up to
   `store.etcd.start_timeout`, 30s, then exits 1; `0` waits forever; after a store gone, no
   deadline), and then, retrying while the store errs:
@@ -6706,13 +6709,16 @@ review (the owner may override them).*
      unjudged keeps `port49_policy_refresh_pending` at 1, and is one of:
      - **a context sealed under a key this port49d does not hold.** Every path denies it
        anyway, so it never stops the start, and a later pass judges it (§5.1.3);
-     - **a context still changing after every attempt.** Another writer is changing it: the
-       broker's mint or session refresh, the sweep, or a process outside the hold. Expect
-       that rarely at the start. It never stops the start, because holding the start on it
-       would let one busy session keep port49d dark without end. A refresh pass retries it
-       at once after the listeners open, not at the next interval. Until then it answers from
-       the policy last carried into it, and the marks are read on every request;
-     - **a principal whose contexts could not be looked up.** Those contexts open and are
+     - **a context still changing after every attempt.** Another writer is changing it: a
+       writer outside this port49d (its own API and TACACS+ listeners are closed at the
+       start, and a touch moves no policy revision). Expect that rarely. It never stops the
+       start, because holding the start on it would hand that writer a way to keep port49d
+       dark. A refresh pass retries it at once after the listeners open, not at the next
+       interval. Until then it answers from the policy last carried into it, and the marks
+       are read on every request. A writer that keeps rewriting it keeps it on the grant last
+       carried into it, through every pass; `port49_policy_refresh_pending` stays 1. That is
+       the exposure such a writer has at runtime too (the residual, above);
+     - **a principal whose contexts could not be looked up.** Those contexts would open
        unjudged, so they could serve a grant the policy in force withdrew. That holds the
        start exactly as an outage does: said, counted, and retried with the listeners closed.
        On etcd that lookup fails only as the store being unavailable;
