@@ -14,6 +14,7 @@ import (
 	"github.com/rhwendt/port49/internal/engine"
 	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/store"
+	"github.com/rhwendt/port49/internal/store/crypt"
 )
 
 // Prior is a policy that has been in force since the last complete refresh,
@@ -409,7 +410,14 @@ func (b *Broker) refreshContext(ctx context.Context, cur *policy.Policy, priors 
 		case errors.Is(err, store.ErrNotFound):
 			return "skipped", nil // the index outlived the context; its own TTL reclaims it
 		case errors.As(err, &unreadable):
-			return b.revokeUnopened(ctx, cur, priors, now, "indexed under "+principal, ref, unreadable, rep)
+			outcome, err := b.revokeUnopened(ctx, cur, priors, now, "indexed under "+principal, ref, unreadable, rep)
+			if errors.Is(err, errKeyNotHeld) {
+				log.Printf("broker: refresh: the context for %q on %q, indexed under %s: %v; left for the next pass",
+					ref.Username, ref.NAS, principal, err)
+				b.count(rep, "failed")
+				return "failed", nil
+			}
+			return outcome, err
 		case err != nil:
 			return "", err
 		}
@@ -537,10 +545,22 @@ func knownPlatform(cur *policy.Policy, priors []Prior, name string) (*policy.Pol
 // authoritative, the device and the username the key holds, and no
 // principal: the index entry that led here may be one another principal's
 // login has made stale, and whose the record is, is sealed.
+//
+// Sealed under a key this port49d does not hold (crypt.ErrUnknownKey), it
+// is not revoked: that is a mis-set or rotated-out PORT49_ENC_V1, and
+// revoking would end every session on the fleet for a key mistake that
+// fixing the key undoes (crypt.openErr; final review I-2). It returns
+// errKeyNotHeld, and the caller says it, counts it a failure and leaves it
+// for the next pass. No login can open it meanwhile, so it is denied
+// anyway. One that fails authentication, or opens and is not the one this
+// port49d last wrote (crypt.ErrNotLastWritten), is tampered, and revoked.
 func (b *Broker) revokeUnopened(ctx context.Context, cur *policy.Policy, priors []Prior, now time.Time, via string,
 	ref store.ContextRef, unreadable *store.UnreadableContextError, rep *RefreshReport) (string, error) {
 	if !unreadable.RevokedAt.IsZero() {
 		return "skipped", nil
+	}
+	if errors.Is(unreadable, crypt.ErrUnknownKey) {
+		return "", fmt.Errorf("%w (%v)", errKeyNotHeld, unreadable)
 	}
 	known, plat := knownPlatform(cur, priors, ref.NAS)
 	log.Printf("broker: refresh: the context for %q on %q, %s, will not open (%v); revoking it",
@@ -553,6 +573,10 @@ func (b *Broker) revokeUnopened(ctx context.Context, cur *policy.Policy, priors 
 	step := refreshStep{revoke: true, rec: rec, outcome: "failed", sessionOnly: sessionOnly(known, plat)}
 	return b.revoke(ctx, store.ContextKey{NAS: ref.NAS, Username: ref.Username}, unreadable.Rev, now, step, rep)
 }
+
+// errKeyNotHeld is a context revokeUnopened left because it is sealed under
+// a key this port49d does not hold.
+var errKeyNotHeld = errors.New("broker: sealed under a key this port49d does not hold; not revoked")
 
 // revoke marks the context revoked at at through SetRevokedAt, the setter that
 // writes the mark alone and keeps the later of two, and records and counts it.

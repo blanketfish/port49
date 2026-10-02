@@ -12,6 +12,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/rhwendt/port49/internal/store"
+	"github.com/rhwendt/port49/internal/store/crypt"
 )
 
 // unreadableAt is a store whose context at k will not open, as one sealed
@@ -320,5 +321,131 @@ func TestReindexContextsRevokesOneListedThatWillNotOpen(t *testing.T) {
 	}
 	if !strings.Contains(f.log.String(), `"reason":"blob_unavailable"`) {
 		t.Fatalf("no refresh record: %q", f.log.String())
+	}
+}
+
+// testKeys is a sealing key set whose one key is id's.
+func testKeys(id string) crypt.Keys {
+	k := crypt.Key{ID: id}
+	copy(k.Bytes[:], id+"-broker-test-context-key-32-bytes")
+	return crypt.Keys{Current: k}
+}
+
+// sealedContext writes alice's live context on leaf1 into f.st sealed under
+// keys, as a port49d holding them writes it, indexed under her principal.
+func sealedContext(t *testing.T, f *fixture, keys crypt.Keys) store.ContextKey {
+	t.Helper()
+	ctx := context.Background()
+	k := store.ContextKey{NAS: "leaf1", Username: "alice"}
+	if err := crypt.Wrap(f.st, keys, nil).PutContext(ctx, k, store.Context{CtxID: "ctx_leaf1",
+		Principal: alicePrincipal, Username: "alice", PrivLvl: 1, AuthTime: f.now, RefreshedAt: f.now,
+		BlobHash: "sha256:from-before"}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.IndexContext(ctx, alicePrincipal, "", "", store.ContextRef{NAS: k.NAS, Username: k.Username},
+		time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	return k
+}
+
+// A context sealed under a key this port49d does not hold is never revoked,
+// by the re-index or by the policy refresh: a mis-set PORT49_ENC_V1 must not
+// end every session on the fleet (crypt.openErr). It is said, counted a
+// failure, and left for the next pass, and once the key is fixed it opens
+// again, live (final review I-2).
+func TestAContextUnderAnUnheldKeyIsNeverRevoked(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		pass func(t *testing.T, f *fixture)
+	}{
+		{"reindex", func(t *testing.T, f *fixture) {
+			n, err := f.b.ReindexContexts(context.Background(), []store.IndexedRef{{ContextRef: store.ContextRef{
+				NAS: "leaf1", Username: "alice"}}})
+			if err != nil || n != 0 {
+				t.Fatalf("ReindexContexts = %d, %v", n, err)
+			}
+			if v := testutil.ToFloat64(f.b.Metrics.ContextsReindexFailures); v != 1 {
+				t.Fatalf("port49_contexts_reindex_failures_total = %v", v)
+			}
+		}},
+		{"refresh", func(t *testing.T, f *fixture) {
+			rep, err := f.b.Refresh(context.Background(), nil)
+			if err != nil || rep.Failed != 1 || rep.Revoked != 0 {
+				t.Fatalf("a refresh: %+v %v", rep, err)
+			}
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFixtureWithPolicy(t, 8, sharedPolicy)
+			ctx := context.Background()
+			k := sealedContext(t, f, testKeys("k1"))
+			f.b.Store = crypt.Wrap(f.st, testKeys("k2"), nil)
+			var buf bytes.Buffer
+			prev := log.Writer()
+			log.SetOutput(&buf)
+			t.Cleanup(func() { log.SetOutput(prev) })
+			c.pass(t, f)
+			if got, err := f.st.GetContext(ctx, k); err != nil || !got.RevokedAt.IsZero() {
+				t.Fatalf("a context under an unheld key was revoked: %v %v", got.RevokedAt, err)
+			}
+			if recs := eventsOf(f.records(t), "refresh"); len(recs) != 0 {
+				t.Fatalf("a refresh record for a context left as it was: %v", recs)
+			}
+			if !strings.Contains(buf.String(), `the context for "alice" on "leaf1"`) {
+				t.Fatalf("the context left was not said: %q", buf.String())
+			}
+			if got, err := crypt.Wrap(f.st, testKeys("k1"), nil).GetContext(ctx, k); err != nil ||
+				!got.RevokedAt.IsZero() {
+				t.Fatalf("under the right key again: %v %v", got.RevokedAt, err)
+			}
+		})
+	}
+}
+
+// A record that opens under no key because its bytes were changed, not its
+// key, is still revoked by the re-index and by the refresh: tampering is
+// not a key mistake (final review I-2).
+func TestATamperedContextIsStillRevoked(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		pass func(t *testing.T, f *fixture)
+	}{
+		{"reindex", func(t *testing.T, f *fixture) {
+			n, err := f.b.ReindexContexts(context.Background(), []store.IndexedRef{{ContextRef: store.ContextRef{
+				NAS: "leaf1", Username: "alice"}}})
+			if err != nil || n != 1 {
+				t.Fatalf("ReindexContexts = %d, %v", n, err)
+			}
+		}},
+		{"refresh", func(t *testing.T, f *fixture) {
+			rep, err := f.b.Refresh(context.Background(), nil)
+			if err != nil || rep.Failed != 1 {
+				t.Fatalf("a refresh: %+v %v", rep, err)
+			}
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFixtureWithPolicy(t, 8, sharedPolicy)
+			ctx := context.Background()
+			k := sealedContext(t, f, testKeys("k1"))
+			raw, err := f.st.GetContext(ctx, k)
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw.Sealed = append([]byte(nil), raw.Sealed...)
+			raw.Sealed[len(raw.Sealed)-1] ^= 1 // the GCM tag: the key id is intact
+			if err := f.st.PutContext(ctx, k, raw, time.Hour); err != nil {
+				t.Fatal(err)
+			}
+			f.b.Store = crypt.Wrap(f.st, testKeys("k1"), nil)
+			if _, err := f.b.Store.GetContext(ctx, k); err == nil || errors.Is(err, crypt.ErrUnknownKey) {
+				t.Fatalf("the tampered record must fail as tampered: %v", err)
+			}
+			c.pass(t, f)
+			if got, _ := f.st.GetContext(ctx, k); got.RevokedAt.IsZero() {
+				t.Fatal("a tampered context was left unrevoked")
+			}
+		})
 	}
 }

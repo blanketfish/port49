@@ -133,9 +133,10 @@ type Metrics struct {
 	// refresh visited, by what it did to each (spec §5.1.3) — "updated" (the
 	// policy in force written into it), "unchanged", "revoked" (no grant left
 	// on that device), "quarantined" (the device is quarantined; the context
-	// is left as it was), or "failed" (a context that could not be opened, or
-	// a policy in force that could not be resolved or compiled for it — both
-	// revoked, failing closed — or a context still changing after every
+	// is left as it was), or "failed" (a context that failed authentication,
+	// or a policy in force that could not be resolved or compiled for it —
+	// both revoked, failing closed — or a context sealed under a key this
+	// port49d does not hold, left unrevoked, or a context still changing after every
 	// compare-and-set attempt, left for the retry, or a principal whose
 	// contexts could not be looked up, counted once and left for the next
 	// pass; the process log says which).
@@ -148,8 +149,9 @@ type Metrics struct {
 	// the store.
 	ContextsReindexed prometheus.Counter
 	// ContextsReindexFailures counts contexts the re-index could not
-	// re-index or judge, each left for its next pass; the process log names
-	// the device and username (plan 7d; re-check I3). No labels.
+	// re-index or judge, each left for its next pass, one sealed under a key
+	// this port49d does not hold among them; the process log names the
+	// device and username (plan 7d; re-check I3; final review I-2). No labels.
 	ContextsReindexFailures prometheus.Counter
 	// port49_session_refreshes_total{outcome}: session refreshes (spec §5.6;
 	// decision 33). Per context a refresh visited: "extended", "revoked" (the

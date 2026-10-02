@@ -28,7 +28,10 @@ import (
 // so it is revoked, which needs no key, as the refresh revokes one, with
 // its blob_unavailable record; one the store cannot revoke because it does
 // not decode is deleted at its own revision, since nothing can use it
-// (revokeOrDelete; Task 7 review K-1). One gone since the scan is skipped.
+// (revokeOrDelete; Task 7 review K-1). One sealed under a key this
+// port49d does not hold is not revoked but left as a failure, below: a
+// mis-set key at the start must not end every session (revokeUnopened;
+// final review I-2). One gone since the scan is skipped.
 // Each re-indexed or revoked is said by its device and username, and
 // counted (port49_contexts_reindexed_total), and the total said: any is
 // an index record deleted or rewritten in the store.
@@ -89,6 +92,8 @@ func (b *Broker) reindexContext(ctx context.Context, cur *policy.Policy, r store
 		// Revoked whether or not a principal lists it: a listing may name
 		// only one whose lookup entry is gone, which no refresh walks
 		// (Task 7b review m-2), and the refresh would revoke it anyway.
+		// One under a key not held is not revoked: revokeUnopened returns
+		// errKeyNotHeld, a failure left for the next pass.
 		outcome, err := b.revokeUnopened(ctx, cur, nil, rep.At, "found by the re-index", r.ContextRef, unreadable, rep)
 		return outcome != "skipped" && err == nil, err
 	case err != nil:
