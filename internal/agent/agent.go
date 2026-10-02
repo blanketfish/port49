@@ -494,6 +494,11 @@ func (a *Agent) exchange(ctx context.Context, c *http.Client, unanswered func(er
 	defer drain(resp.Body)
 	if resp.StatusCode == http.StatusOK {
 		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+			if unanswered != nil {
+				// A 200 with no answer in it, from an intermediary: the
+				// broker may still have acted.
+				return unanswered(fmt.Errorf("its 200 did not decode: %w", err))
+			}
 			return fmt.Errorf("agent: the broker's answer: %w", err)
 		}
 		return nil

@@ -88,10 +88,12 @@ type fakeBroker struct {
 }
 
 // refusal is one scripted answer: a status, an api.Error, a Retry-After.
+// empty answers the status with no body at all, as an intermediary might.
 type refusal struct {
 	status     int
 	e          api.Error
 	retryAfter string
+	empty      bool
 }
 
 func (fb *fakeBroker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -139,6 +141,10 @@ func (fb *fakeBroker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		if ref.retryAfter != "" {
 			w.Header().Set("Retry-After", ref.retryAfter)
+		}
+		if ref.empty {
+			w.WriteHeader(ref.status)
+			return
 		}
 		writeJSON(w, ref.status, ref.e)
 	case "/v1/config":
@@ -1988,6 +1994,38 @@ func TestAnUnansweredRevocationIsSentOnceAndMayBeInForce(t *testing.T) {
 	select {
 	case <-r.a.Done():
 		t.Fatal("an unanswered revocation ended the session")
+	default:
+	}
+}
+
+// A 200 to a revocation whose body does not decode is no answer: the
+// broker may have marked, so the operator is told it may be in force, not
+// handed a decode error (flake review minor 5). No port49 broker answers
+// so; an intermediary could.
+func TestARevocationsUndecodableAnswerMayBeInForce(t *testing.T) {
+	r := newRig(t)
+	r.fb.mu.Lock()
+	r.fb.answers = map[string]refusal{"/v1/tokens/revoke": {status: 200, empty: true}}
+	r.fb.mu.Unlock()
+	req := api.RevokeRequest{Principal: "user:carol@example.com"}
+	_, err := r.a.Revoke(context.Background(), req)
+	var ue *UnansweredRevokeError
+	if !errors.As(err, &ue) || !strings.Contains(err.Error(), "it may be in force") {
+		t.Fatalf("the agent: %v", err)
+	}
+	_, err = socketFor(t, r.a).Revoke(context.Background(), req)
+	if err == nil || !strings.Contains(err.Error(), "it may be in force") {
+		t.Fatalf("through the socket: %v", err)
+	}
+	r.fb.mu.Lock()
+	n := len(r.fb.addrs["/v1/tokens/revoke"])
+	r.fb.mu.Unlock()
+	if n != 2 {
+		t.Fatalf("the broker saw %d revocations, want one per call", n)
+	}
+	select {
+	case <-r.a.Done():
+		t.Fatal("an undecodable revocation answer ended the session")
 	default:
 	}
 }
