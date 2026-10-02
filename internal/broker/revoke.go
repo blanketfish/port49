@@ -442,6 +442,11 @@ func (r RevokeReport) Text() string {
 			"anyone else used your token, close their session on the device (or ask an operator to revoke your " +
 			"principal) before you log in there again")
 	case ByKey:
+		if len(r.Contexts) == 0 && r.TokenKeys == 0 && r.Err == nil {
+			fmt.Fprintf(&b, "nothing was found under %s (%s): check the device and username as the log names them",
+				r.Key.NAS, r.Key.Username)
+			break
+		}
 		owner := ""
 		if r.Request.Principal != "" {
 			owner = ", " + r.Request.Principal + "'s,"

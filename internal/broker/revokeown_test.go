@@ -270,3 +270,103 @@ func TestSelfAndKeyRevocationsSayWhatTheyDid(t *testing.T) {
 		t.Fatalf("mark: %s", got)
 	}
 }
+
+// A self-revocation limited to one key still deletes the caller's receipts
+// on every device: the store holds no finer cut, and a receipt that
+// survived would replay a PASS onto a context the caller's next login
+// re-admits (spec §5.1.4; pre-flight M9).
+func TestRevokeOwnOnOneKeyDeletesTheReceiptsEverywhere(t *testing.T) {
+	f := newFixtureWithPolicy(t, 8, sharedPolicy)
+	ctx := context.Background()
+	f.mintFor(t, "alice@example.com", "nx1")
+	nx := store.TokenKey{NAS: "nx1", Username: "alice"}
+	toks, err := f.st.Candidates(ctx, nx)
+	if err != nil || len(toks) != 1 {
+		t.Fatalf("%d tokens: %v", len(toks), err)
+	}
+	rk := store.ReceiptKey{NAS: "nx1", Username: "alice", Kind: store.KindLogin, CredentialSHA256: [32]byte{1}}
+	if err := f.st.RedeemAndReceipt(ctx, nx, toks[0].ID, store.ReceiptWrite{Key: rk, Principal: alicePrincipal,
+		IndexTTL: time.Hour, Receipt: store.Receipt{FirstRedeemedAt: f.now,
+			IdleExpiresAt: f.now.Add(15 * time.Minute), RetainUntil: f.now.Add(3 * time.Hour)}}); err != nil {
+		t.Fatal(err)
+	}
+	leaf := store.TokenKey{NAS: "leaf1", Username: "alice"}
+	if rep := f.b.RevokeOwn(ctx, alicePrincipal, &leaf, "api "+alicePrincipal); rep.Err != nil {
+		t.Fatalf("%+v", rep)
+	}
+	if _, err := f.st.GetReceipt(ctx, rk); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("the receipt on nx1 survived a self-revocation on leaf1: %v", err)
+	}
+}
+
+// RevokeKey on a key with nothing under it says so, rather than that it
+// ended a session: a mistyped device reads as a miss, not a success.
+func TestRevokeKeyOnNothingSaysNothingWasFound(t *testing.T) {
+	f := newFixtureWithPolicy(t, 8, sharedPolicy)
+	rep := f.b.RevokeKey(context.Background(), store.TokenKey{NAS: "leaf9", Username: "alice"}, "api user:bob@example.com")
+	if want := "nothing was found under leaf9 (alice): check the device and username as the log names them"; rep.Text() != want {
+		t.Fatalf("got\n%s\nwant\n%s", rep.Text(), want)
+	}
+}
+
+// faultStore fails the context reads and writes of one key as told.
+type faultStore struct {
+	store.Store
+	key       store.ContextKey
+	getErr    error
+	policyErr error
+	policies  int
+}
+
+func (s *faultStore) GetContext(ctx context.Context, k store.ContextKey) (store.Context, error) {
+	if k == s.key && s.getErr != nil {
+		return store.Context{}, s.getErr
+	}
+	return s.Store.GetContext(ctx, k)
+}
+
+func (s *faultStore) SetContextPolicy(ctx context.Context, k store.ContextKey, rev uint64, p store.ContextPolicy) error {
+	if k == s.key && s.policyErr != nil {
+		s.policies++
+		return s.policyErr
+	}
+	return s.Store.SetContextPolicy(ctx, k, rev, p)
+}
+
+// A context that will not open is left unmarked, since whose it is cannot
+// be read, and the run is partial.
+func TestRevokeOwnLeavesAnUnreadableContext(t *testing.T) {
+	f := newFixtureWithPolicy(t, 8, sharedPolicy)
+	ctx := context.Background()
+	f.liveContext(t, "leaf1", "alice", alicePrincipal, "")
+	k := store.ContextKey{NAS: "leaf1", Username: "alice"}
+	f.b.Store = &faultStore{Store: f.st, key: k, getErr: &store.UnreadableContextError{Err: errors.New("sealed under a retired key")}}
+	only := store.TokenKey{NAS: "leaf1", Username: "alice"}
+	rep := f.b.RevokeOwn(ctx, alicePrincipal, &only, "api "+alicePrincipal)
+	if rep.Err == nil || len(rep.Contexts) != 0 {
+		t.Fatalf("%+v", rep)
+	}
+	if c, _ := f.st.GetContext(ctx, k); !c.RevokedAt.IsZero() {
+		t.Fatal("an unreadable context was marked")
+	}
+	if n := testutil.ToFloat64(f.b.Metrics.Revocations.WithLabelValues("self", "partial")); n != 1 {
+		t.Fatalf("port49_revocations_total{by=self,outcome=partial} = %v", n)
+	}
+}
+
+// A context whose compare-and-set loses every try is an error, and no mark.
+func TestRevokeOwnContextGivesUpAfterItsTries(t *testing.T) {
+	f := newFixtureWithPolicy(t, 8, sharedPolicy)
+	ctx := context.Background()
+	f.liveContext(t, "leaf1", "alice", alicePrincipal, "")
+	k := store.ContextKey{NAS: "leaf1", Username: "alice"}
+	st := &faultStore{Store: f.st, key: k, policyErr: store.ErrConflict}
+	f.b.Store = st
+	marked, err := f.b.revokeOwnContext(ctx, alicePrincipal, store.ContextRef{NAS: "leaf1", Username: "alice"}, f.now)
+	if marked || err == nil || st.policies != ownRevokeTries {
+		t.Fatalf("marked %v, err %v, after %d tries", marked, err, st.policies)
+	}
+	if c, _ := f.st.GetContext(ctx, k); !c.RevokedAt.IsZero() {
+		t.Fatal("the context was marked")
+	}
+}

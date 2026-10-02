@@ -75,6 +75,9 @@ func (b *Broker) RevokeOwn(ctx context.Context, principal string, only *store.To
 		if deleted {
 			// An idempotent retry of a mint from before now is minted
 			// afresh, not answered with a token that no longer exists.
+			// The supersede is per key, so another principal holding this
+			// (device, username) pays for it too: its retry is minted fresh
+			// beside the token it still holds, nearer the outstanding cap.
 			b.supersede(k, b.Now())
 			rep.TokenKeys++
 		}
@@ -150,12 +153,12 @@ func (b *Broker) revokeOwnContext(ctx context.Context, principal string, ref sto
 // every unspent token under it, its live context marked twice, and the
 // owner's receipts deleted, with no mark (spec §5.1.4; decision 34). It is
 // revoke_others' key form and checks no right itself: the endpoint calls it
-// only for a caller holding revoke_others, and nothing else may. A context that will not open is still marked, as a
-// revocation by certificate marks it (session.Manager): SetRevokedAt needs
-// no key. The owner's receipts are deleted everywhere, the store holding
-// no finer cut, which errs toward denying (session.Manager's mark); when the
-// two passes read different owners, a login having replaced the context in
-// between, both owners' are.
+// only for a caller holding revoke_others, and nothing else may. A context
+// that will not open is still marked, as a revocation by certificate marks
+// it (session.Manager): SetRevokedAt needs no key. The owner's receipts are
+// deleted everywhere, the store holding no finer cut, which errs toward
+// denying (session.Manager's mark); when the two passes read different
+// owners, a login having replaced the context in between, both owners' are.
 func (b *Broker) RevokeKey(ctx context.Context, k store.TokenKey, origin string) RevokeReport {
 	ctx, cancel := b.detach(ctx)
 	defer cancel()
