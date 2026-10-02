@@ -318,6 +318,8 @@ type Proxy struct {
 	cond   *sync.Cond
 	hung   bool
 	delay  time.Duration
+	conns  map[net.Conn]bool // every connection open through the proxy, both ends
+	closed bool
 }
 
 // NewProxy listens on a loopback port, forwarding to target (host:port),
@@ -328,9 +330,9 @@ func NewProxy(t testing.TB, target string) *Proxy {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := &Proxy{ln: ln, target: target}
+	p := &Proxy{ln: ln, target: target, conns: map[net.Conn]bool{}}
 	p.cond = sync.NewCond(&p.mu)
-	t.Cleanup(func() { p.Hang(false); ln.Close() })
+	t.Cleanup(p.close)
 	go p.serve()
 	return p
 }
@@ -353,15 +355,48 @@ func (p *Proxy) Delay(d time.Duration) {
 	p.mu.Unlock()
 }
 
+// close stops the proxy: the listener, and every connection through it,
+// so no pipe outlives the test waiting on its target.
+func (p *Proxy) close() {
+	p.mu.Lock()
+	p.closed, p.hung = true, false
+	for c := range p.conns {
+		c.Close()
+	}
+	p.mu.Unlock()
+	p.cond.Broadcast()
+	p.ln.Close()
+}
+
+// track records c as open through the proxy, or closes it and reports
+// false once the proxy is closed.
+func (p *Proxy) track(c net.Conn) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closed {
+		c.Close()
+		return false
+	}
+	p.conns[c] = true
+	return true
+}
+
 func (p *Proxy) serve() {
 	for {
 		c, err := p.ln.Accept()
 		if err != nil {
 			return
 		}
+		if !p.track(c) {
+			return
+		}
 		go func() {
 			u, err := net.Dial("tcp", p.target)
 			if err != nil {
+				c.Close()
+				return
+			}
+			if !p.track(u) {
 				c.Close()
 				return
 			}
@@ -372,8 +407,14 @@ func (p *Proxy) serve() {
 }
 
 func (p *Proxy) pipe(dst, src net.Conn) {
-	defer dst.Close()
-	defer src.Close()
+	defer func() {
+		p.mu.Lock()
+		delete(p.conns, dst)
+		delete(p.conns, src)
+		p.mu.Unlock()
+		dst.Close()
+		src.Close()
+	}()
 	buf := make([]byte, 32<<10)
 	for {
 		n, err := src.Read(buf)

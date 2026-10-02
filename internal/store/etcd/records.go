@@ -66,10 +66,13 @@ type receiptRec struct {
 	IdleExpiresAt    time.Time `json:"idle_expires_at"`
 	RetainUntil      time.Time `json:"retain_until"`
 	Failed           bool      `json:"failed"`
-	Principal        string    `json:"principal,omitempty"`
-	Sid              string    `json:"sid,omitempty"`
-	CertKey          string    `json:"cert_key,omitempty"`
-	Sealed           []byte    `json:"sealed,omitempty"`
+	// Principal, Sid and CertKey are sealed (store.Receipt): empty under
+	// crypt, which reads its own sealed copy (crypt.GetReceipt). They are
+	// held here only for the plaintext form, and nothing trusts them.
+	Principal string `json:"principal,omitempty"`
+	Sid       string `json:"sid,omitempty"`
+	CertKey   string `json:"cert_key,omitempty"`
+	Sealed    []byte `json:"sealed,omitempty"`
 }
 
 func receiptRecOf(r store.Receipt) receiptRec {
