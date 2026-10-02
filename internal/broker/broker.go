@@ -540,8 +540,10 @@ func answerRevoked(w http.ResponseWriter, rv store.Revocation) {
 //
 // A mark a CA's revocation wrote, its origin a source's ("crl <name>",
 // "ocsp <responder>"; spec §5.1.4), says the CA revoked it and offers no
-// lift: the CA's list or responder would refuse the certificate again at
-// its next bind and mark it again, so a lift only sends the user round.
+// lift: the user cannot lift it, and the CA has revoked the certificate.
+// After a lift the next bind checks the CA again, which refuses it, or,
+// with the list gone stale, answers certificate_status_unavailable (or
+// admits it under on_unavailable: allow); a lift is no fix.
 func revokedError(rv store.Revocation) api.Error {
 	what := "this principal"
 	if rv.Kind == store.RevocationCert {
