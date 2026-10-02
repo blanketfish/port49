@@ -734,12 +734,12 @@ I19) and on its re-check (CA1, IA1, IA2, N1, R-I2 to R-I5). The owner may overri
       | Family | In the clear | What a store write gains |
       |---|---|---|
       | `t/` tokens | `id`; a copy of `expires_at` | **Nothing forged:** every trusted field is sealed and bound. **Replay:** a token port49 minted for the same key and ID, deleted since (redeemed, or by a self or key revocation), can be put back and redeemed by a holder of its secret until its sealed expiry (the TTL it was minted with). An extended plaintext expiry drops it. |
-      | `r/` receipts | `idle_expires_at`, `retain_until`, `failed`, a copy of `first_redeemed_at` | **`idle_expires_at`** stretches the replay window to the sealed cap (`first_redeemed_at` plus `receipt_max_age`), never past it. **`failed`**, zeroed, replays PASS only onto the live context with the receipt's `ctx_id`, whose own revocation and the marks are read again: what that principal's later token already granted. Every replay needs the credential. |
+      | `r/` receipts | `idle_expires_at`, `retain_until`, `failed`, a copy of `first_redeemed_at` | **`idle_expires_at`** stretches the replay window to the sealed cap (`first_redeemed_at` plus `receipt_max_age`), never past it. **`failed`**, zeroed, replays PASS only onto the live context with the receipt's `ctx_id`, whose own revocation and the marks are read again, the marks for the receipt's own sealed principal and certificate too, and only for a login that context's sealed witness (`Logins`) names and the index still reaches under that credential: what that principal's later token already granted. Every replay needs the credential. |
       | `rp/` receipt index | all | **Deleted:** a revocation by principal misses those receipts, and each replay still reads the live context and the marks, so it is denied. **Added:** a revocation deletes more, which is a denial. |
-      | `c/` contexts | `revoked_at` (a read takes the later), the revisions, `last_touched_at`, accounting's annotations | **Nothing forged or moved.** **Replay in a running port49d** (the ledger): an earlier version of the context the key holds now, which has the same `ctx_id`, so the same principal and login. It undoes a self or key revocation of that context, or a policy narrowing, until the next refresh judges it. **Replay across a restart:** a context of any login port49 sealed for that key, put back while port49d was stopped, is taken as the key's at the start. That is impersonation, until that record's sealed ceiling (if it has one) or the key's next login; a principal or certificate mark still denies it. **The idle clock:** a context can be kept alive past its idle TTL, to its sealed ceiling if it has one, and indefinitely under `max_session_age: never` (re-check MA1). The refresh still judges it, and every revocation reaches it. |
-      | `x/` index records; `ip/`, `is/`, `ic/` lookups | all | **Deleted:** the context is hidden from the refresh, `revoke --mine` and a revocation by sid until the next sweep re-indexes it (`sweep_interval`, 10 m; Ruling 6). A revocation by sid in that window never reaches it; one by principal or certificate does, through the marks. **Added:** a revocation reaches a context it should not, which is a denial. |
+      | `c/` contexts | `revoked_at` (a read takes the later), the revisions, `last_touched_at`, accounting's annotations | **Nothing forged or moved.** **Replay in a running port49d** (the ledger): an earlier version of the context the key holds now, which has the same `ctx_id`, so the same principal and login. It undoes a self or key revocation of that context, or a policy narrowing, until the next refresh judges it. **Replay across a restart:** a context of any login port49 sealed for that key, put back while port49d was stopped, or before the start read it, is taken as the key's at the start; once the start seals the ledger, one put back at a key it has not seen is denied, and the ledger is kept across a start after a store gone. That is impersonation, until that record's sealed ceiling (if it has one) or the key's next login; a principal or certificate mark still denies it. **The idle clock:** a context can be kept alive past its idle TTL, to its sealed ceiling if it has one, and indefinitely under `max_session_age: never` (re-check MA1). The refresh still judges it, and every revocation reaches it. **Accounting's annotations:** clearing a context's session discriminators suppresses the `foreign` attribution of its accounting records (re-check 2 M-B2). |
+      | `x/` index records; `ip/`, `is/`, `ic/` lookups | all | **Deleted, or rewritten to name another principal or another sid, or a lookup entry deleted:** the context is hidden from the refresh, `revoke --mine` and a revocation by sid until the re-index finds it, at the start and after each sweep (`sweep_interval`, 10 m; Ruling 6), by comparing the keys listed, each with its lookup entry in place, against the context's own sealed principal, sid and certificate. A revocation by sid in that window never reaches it; one by principal or certificate does, through the marks. **Added:** a revocation reaches a context it should not, which is a denial. |
       | `b/` blobs | all (no identity) | **Nothing:** a blob is checked against its sealed hash (`engine.Decode`), so an altered body is refused, which is a denial. |
-      | `rv/` marks, `meta/` | read-only for the daemon | Nothing. |
+      | `rv/` marks, `meta/` | read-only for the daemon | Nothing, under the daemon's role (Task 11), which is what makes "cannot lift a revocation by principal or certificate" true. Before that role a daemon credential holds the whole keyspace, marks included. |
       | `tp/`, `tc/` token indexes; `id/` idempotency | no access | Nothing. |
 
       Deleting a record, or making a write conflict, is a denial, never a grant. Task 16 carries
@@ -13997,6 +13997,14 @@ measurement on a hang of its own, the store returned between them. On each image
     certificate revocation is denied again at once, by the marks. One ended by `port49 revoke
     --mine`, or by `(device, username)`, is live again until its idle TTL: revoke it again after
     a restore.
+  - **A restore rolls the marks back too:** a revocation added since the snapshot is gone from
+    etcd, and one lifted since is back. Restore with port49d stopped. Its start puts the
+    revocations file's marks back into etcd, applies every mark to the restored sessions, and
+    purges every unspent token, so a token redeemed since the snapshot cannot be redeemed
+    again. Then `port49 revoke --lift` again any revocation lifted since the snapshot.
+  - **Restore with `etcdutl snapshot restore --bump-revision <n> --mark-compacted`** (both in
+    etcdutl v3.6.15), `<n>` above the revisions written since the snapshot, so etcd never
+    reuses a revision port49 has seen for another write.
 - **One port49d per keyspace until plan 7e.** A second one waits and is not ready. On
   Kubernetes use `strategy: Recreate`. Never delete `meta/hold` by hand: stop the port49d that
   holds it.
@@ -14060,9 +14068,19 @@ measurement on a hang of its own, the store returned between them. On each image
   - `port49_crypt_store_key_unknown` 1;
   - any `increase(port49_crypt_open_failures_total{record="token"}[10m])`.
 - **Key rotation across a restart.** Keep `encryption.previous` until the old key's records
-  expire. A start that finds the store last written under a key it does not hold says so, ends
-  those sessions before it serves, and sets `port49_crypt_store_key_unknown` to 1. A record that
-  will not open is named by its key id on stderr, once per 10 minutes.
+  expire. A start that finds the store last written under a key it does not hold says so, and
+  sets `port49_crypt_store_key_unknown` to 1. A record that will not open is named by its key id
+  on stderr, once per 10 minutes.
+- **A wrong `PORT49_ENC_V1` never revokes.** Sessions sealed under a key port49d does not hold
+  are denied `store_unavailable`, and the re-index and the refresh say each by device and
+  username, count it (`port49_contexts_reindex_failures_total`, the refresh's `failed`) and
+  leave it; `port49_policy_refresh_pending` stays 1. Fix the key and restart, and those
+  sessions answer again. A record that fails authentication, or is another login's written
+  back, is tampered and is still revoked.
+- **A session record that does not decode** (a `c/` value garbled in etcd) is unreadable, as
+  one that will not open is: the next login on that device and username replaces it, and the
+  refresh and the re-index delete it at the revision they read, since nothing can revoke or
+  use it. It is said by its key alone, never its value.
 - **A `port49 token`, refresh, identity or explain behind a slow `port49 revoke`** now says `your
   revocation sent at … is still running on the broker; nothing was minted; run port49 token again
   once port49 revoke reports` (exit 1), not `the broker … is unreachable`.
