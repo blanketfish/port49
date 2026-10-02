@@ -1398,6 +1398,11 @@ func TestDeleteTokenRemovesOne(t *testing.T) {
 	storetest.DeleteTokenRemovesOne(t, func() store.Store { return New(func() time.Time { return now }) }, now)
 }
 
+func TestDeleteTokenRacesRedeem(t *testing.T) {
+	now := time.Now()
+	storetest.DeleteTokenRacesRedeem(t, func() store.Store { return New(func() time.Time { return now }) }, now)
+}
+
 // An index entry lives as long as the longest token written under it, and
 // then drops out: a principal's keys do not accumulate for good.
 func TestATokenIndexEntryExpiresWithItsLongestToken(t *testing.T) {
