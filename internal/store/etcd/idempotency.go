@@ -10,12 +10,6 @@ import (
 	"github.com/rhwendt/port49/internal/store"
 )
 
-// A record under id/ that does not decode is an error on every
-// reservation and release of its (principal, key) until its lease ends,
-// never overwritten: it fails closed, only the broker's role or root can
-// write id/, and a client retrying with a new key is not refused (Task 8
-// review m-5).
-
 // errNoHolder refuses a record without a holder: the empty holder is one
 // any request can name (the memory store's).
 var errNoHolder = errors.New("store: an idempotency record must name its holder")
@@ -25,6 +19,12 @@ func (s *Store) liveIdem(r idemRec) bool { return r.ExpiresAt.After(s.now()) }
 // ReserveIdempotency is design §17's put-if-absent: a live record is
 // returned untouched, and only its absence is written, compare-and-set on
 // the key, so of racing reservations exactly one lands.
+//
+// A record under id/ that does not decode is an error on every
+// reservation and release of its (principal, key) until its lease ends,
+// never overwritten: it fails closed, only the broker's role or root can
+// write id/, and a client retrying with a new key is not refused (Task 8
+// review m-5).
 func (s *Store) ReserveIdempotency(ctx context.Context, principal, key string, rec store.Idempotency) (store.Idempotency, bool, error) {
 	if rec.Holder == "" {
 		return store.Idempotency{}, false, errNoHolder
