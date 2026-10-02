@@ -963,11 +963,11 @@ func WritesBindToTheRevision(t *testing.T, newStore func() store.Store, now time
 // IdempotencyReservesOnce's holderless case.
 type Backend struct {
 	New func(t *testing.T, clock func() time.Time) store.Store
-	// RaceRounds is how many rounds LoginRacesARevocationByMark runs; zero
-	// is 10000, what memory's few-instruction window needs. A backend whose
-	// rounds are network round trips sets fewer, and its own tests show a
-	// mutation that splits the mark check from the write is still caught at
-	// that count (plan 7d, R1).
+	// RaceRounds is how many rounds LoginRacesARevocationByMark and the
+	// token family's races (races.go) run; zero is 10000, what memory's
+	// few-instruction window needs. A backend whose rounds are network
+	// round trips sets fewer, and its own tests show a mutation that splits
+	// a check from its write is still caught at that count (plan 7d, R1).
 	RaceRounds int
 }
 
@@ -1030,6 +1030,9 @@ func Run(t *testing.T, b Backend) {
 		{"PurgeTakesEveryToken", PurgeTakesEveryToken},
 		{"SelfRevocationBindsToTheRead", SelfRevocationBindsToTheRead},
 		{"RewriteBindsToTheRevision", RewriteBindsToTheRevision},
+		{"IndexTokenKeepsTheLongestUnderARace", IndexTokenKeepsTheLongestUnderARace},
+		{"FailReceiptSurvivesARacingExtend", FailReceiptSurvivesARacingExtend},
+		{"RedeemOrDeleteNotBoth", RedeemOrDeleteNotBoth},
 	} {
 		p := p
 		t.Run(p.name, func(t *testing.T) { p.run(t, b) })

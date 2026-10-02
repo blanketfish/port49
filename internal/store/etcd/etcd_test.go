@@ -65,6 +65,11 @@ func TestTokensOnEtcd(t *testing.T) {
 		"DeleteTokenRacesRedeem":     func(t *testing.T) { storetest.DeleteTokenRacesRedeem(t, fixed(t), t0) },
 		"RevocationMarks":            func(t *testing.T) { storetest.RevocationMarks(t, fixed(t), t0) },
 		"RevocationMarkNeverExpires": func(t *testing.T) { storetest.RevocationMarkNeverExpires(t, backend) },
+		"IndexTokenKeepsTheLongestUnderARace": func(t *testing.T) {
+			storetest.IndexTokenKeepsTheLongestUnderARace(t, backend)
+		},
+		"FailReceiptSurvivesARacingExtend": func(t *testing.T) { storetest.FailReceiptSurvivesARacingExtend(t, backend) },
+		"RedeemOrDeleteNotBoth":            func(t *testing.T) { storetest.RedeemOrDeleteNotBoth(t, backend) },
 	})
 }
 
