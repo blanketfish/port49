@@ -870,14 +870,17 @@ func run(parent context.Context, cfgPath string) error {
 			// The socket's deadline covers the wait and the run; one bound
 			// for both, so they cannot drift apart.
 			brk.RevokeTimeout = admin.OpTimeout
+			brk.AdminSocket = cfg.AdminSocket
 			srv.Revoke, srv.Revocations = adminRevoke(brk), adminRevocations(brk.Store)
 		}
 		go srv.Serve(ctx, aln)
 		fmt.Fprintf(stderr, "port49d: admin socket on %s (port49 keys diagnose, port49 revoke)\n", cfg.AdminSocket)
 	}
 	if brk != nil && cfg.AdminSocket == "" {
-		fmt.Fprintln(stderr, "port49d: broker: port49 revoke is unavailable: set admin_socket; until then, cut "+
-			"someone off by removing their grants from broker.policy_file")
+		fmt.Fprintln(stderr, "port49d: broker: no admin_socket: a revocation over HTTP (port49 revoke --via-agent, "+
+			"under api: revoke_others) is made, but none can be lifted, nor a certificate revoked, short of stopping "+
+			"port49d and editing broker.revocations_file; set admin_socket. To cut someone off meanwhile, remove "+
+			"their grants from broker.policy_file")
 	}
 
 	// The bound address, not the configured one: `:49` says nothing about

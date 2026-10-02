@@ -92,6 +92,11 @@ type Broker struct {
 	// DefaultRevokeTimeout.
 	RevokeTimeout time.Duration
 
+	// AdminSocket is port49d's admin_socket, where a revocation is lifted;
+	// empty when none is configured. Only the HTTP revocation's answer reads
+	// it, to say where its mark is lifted (decision 34).
+	AdminSocket string
+
 	// CertStatus answers a certificate chain's revocation status (spec
 	// §5.1.4; decision 33): nil checks nothing, port49d's `disabled: true`.
 	// OnUnavailable is "refuse" or "allow", for a status it cannot establish.
@@ -107,6 +112,12 @@ type Broker struct {
 	// made lazily under mu. A channel, not a mutex, so a caller waiting
 	// behind a hung store call or Persist gives up when its ctx ends.
 	revokeSem chan struct{}
+
+	// ownRevoking is, by caller principal, a self or key revocation over
+	// HTTP still running (holdOwnRevoke). Neither takes revokeSem, and both
+	// run detached, so without it one caller's retries would pile up
+	// detached runs against a slow store (ruling M4). Guarded by mu.
+	ownRevoking map[string]bool
 
 	mu        sync.Mutex
 	blobsSeen map[string]bool
@@ -139,6 +150,7 @@ func (b *Broker) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/refresh/challenge", b.refreshChallenge)
 	mux.HandleFunc("POST /v1/refresh", b.refresh)
 	mux.HandleFunc("GET /v1/identity", b.identity)
+	mux.HandleFunc("POST /v1/tokens/revoke", b.tokensRevoke)
 	mux.HandleFunc("GET /healthz", b.healthz)
 	mux.HandleFunc("GET /readyz", b.readyz)
 	return mux
@@ -862,6 +874,20 @@ func (b *Broker) logf(format string, args ...any) {
 func (b *Broker) emit(r decision.Record) {
 	b.Log.Emit(r)
 	b.Metrics.Decisions.WithLabelValues(r.Event, r.Verdict, string(r.Reason)).Inc()
+}
+
+// refuseRight answers a call that would act on another principal, or on a
+// (device, username) whoever holds it, without the api: right that
+// unlocks it: 403 api_right_missing, and rec, the one deny record. rec
+// names whom the call was about and, in origin or explain.asked_by, who
+// asked; it carries no auth, so a record's auth and principal always
+// describe one credential (spec §5.7; decision 34). what says what was
+// asked, for the answer. Nothing is done.
+func (b *Broker) refuseRight(w http.ResponseWriter, rec decision.Record, right, what string) {
+	rec.Verdict, rec.Reason, rec.Auth = decision.VerdictDeny, decision.APIRightMissing, nil
+	b.emit(rec)
+	writeError(w, http.StatusForbidden, string(decision.APIRightMissing), fmt.Sprintf(
+		"%s needs the api: %s right, which your subject does not declare (spec §2)", what, right))
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

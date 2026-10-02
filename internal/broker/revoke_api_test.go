@@ -1,0 +1,279 @@
+package broker
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http/httptest"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/rhwendt/port49/internal/store"
+)
+
+func (f *fixture) revokeAs(t *testing.T, email, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	return f.call(context.Background(), f.state(f.client(t, email, f.now.Add(time.Hour))), "POST",
+		"/v1/tokens/revoke", body)
+}
+
+func decodeRevoke(t *testing.T, w *httptest.ResponseRecorder) api.RevokeResponse {
+	t.Helper()
+	if w.Code != 200 {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	var r api.RevokeResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &r); err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+// A caller with no right cannot revoke another principal: 403
+// api_right_missing, one record naming the target and, in origin, the
+// caller, with no auth (one credential per record; decision 34), and the
+// target untouched (design §17).
+func TestRevokingAnotherNeedsTheRight(t *testing.T) {
+	f := newFixtureWithPolicy(t, 8, sharedPolicy)
+	ctx := context.Background()
+	f.mintFor(t, "alice@example.com", "leaf1")
+	w := f.revokeAs(t, "carol@example.com", `{"principal":"user:alice@example.com"}`)
+	if w.Code != 403 || !strings.Contains(w.Body.String(), `"error":"api_right_missing"`) ||
+		!strings.Contains(w.Body.String(), "revoke_others") {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	recs := eventsOf(f.records(t), "revoke")
+	if len(recs) != 1 || recs[0]["reason"] != "api_right_missing" || recs[0]["principal"] != alicePrincipal ||
+		recs[0]["auth"] != nil || recs[0]["revocation"].(map[string]any)["origin"] != "api user:carol@example.com" {
+		t.Fatalf("%v", recs)
+	}
+	if got := tokensOf(t, f, store.TokenKey{NAS: "leaf1", Username: "alice"}); got[alicePrincipal] != 1 {
+		t.Fatalf("alice's token was taken: %v", got)
+	}
+	if _, err := f.st.GetRevocation(ctx, store.RevocationPrincipal, alicePrincipal); !errors.Is(err, store.ErrNotFound) {
+		t.Fatal("a refused revocation left a mark")
+	}
+}
+
+// The target is spelled as the broker spells it before it is compared with
+// the caller: another principal in capitals is still another, and the
+// caller's own in capitals is still the caller's (Review Focus 1).
+func TestARevocationIsComparedAsTheBrokerSpellsIt(t *testing.T) {
+	f := newFixtureWithPolicy(t, 8, sharedPolicy)
+	if w := f.revokeAs(t, "carol@example.com", `{"principal":"USER:Alice@Example.COM"}`); w.Code != 403 {
+		t.Fatalf("another principal in capitals: %d %s", w.Code, w.Body)
+	}
+	r := decodeRevoke(t, f.revokeAs(t, "alice@example.com", `{"principal":"USER:Alice@Example.COM"}`))
+	if r.By != "self" || r.Standing {
+		t.Fatalf("the caller's own in capitals: %+v", r)
+	}
+}
+
+// {"mine": true}, or the caller's own principal, is a self-revocation: no
+// mark, and the caller mints at once after it.
+func TestMineIsASelfRevocation(t *testing.T) {
+	f := newFixtureWithPolicy(t, 8, sharedPolicy)
+	f.mintFor(t, "alice@example.com", "leaf1")
+	r := decodeRevoke(t, f.revokeAs(t, "alice@example.com", `{"mine":true}`))
+	if r.By != "self" || r.Standing || r.TokenKeys != 1 || r.Saved != nil ||
+		!strings.Contains(r.Text, "nothing stands against user:alice@example.com") ||
+		!strings.Contains(r.Text, "close their session on the device") {
+		t.Fatalf("%+v", r)
+	}
+	f.mintFor(t, "alice@example.com", "leaf1")
+	r = decodeRevoke(t, f.revokeAs(t, "alice@example.com", `{"mine":true,"device":"leaf1","username":"alice"}`))
+	if r.By != "self" || r.Device != "leaf1" || r.Username != "alice" || r.TokenKeys != 1 {
+		t.Fatalf("mine on one key: %+v", r)
+	}
+}
+
+// Under revoke_others, another principal is a standing mark with the caller
+// as its origin, the answer naming the target's subject and where the mark
+// is lifted, and the target's next mint is refused; a key is ended whoever
+// holds it. Without the right a key is refused 403 and recorded with the
+// key, never narrowed to the caller's own there (Review Focus 6;
+// pre-flight I2); the caller's own on one key is mine with the key, which
+// reaches nothing of alice's.
+func TestRevokeOthersMarksAPrincipalAndEndsAKey(t *testing.T) {
+	f := newFixtureWithPolicy(t, 8, sharedPolicy)
+	ctx := context.Background()
+	f.mintFor(t, "alice@example.com", "leaf1")
+	f.liveContext(t, "leaf1", "alice", alicePrincipal, "")
+	if w := f.revokeAs(t, "carol@example.com", `{"device":"leaf1","username":"alice"}`); w.Code != 403 ||
+		!strings.Contains(w.Body.String(), `"error":"api_right_missing"`) {
+		t.Fatalf("a peer's key revocation: %d %s", w.Code, w.Body)
+	}
+	recs := eventsOf(f.records(t), "revoke")
+	if len(recs) != 1 || recs[0]["reason"] != "api_right_missing" || recs[0]["principal"] != nil || recs[0]["auth"] != nil {
+		t.Fatalf("the peer's refusal: %v", recs)
+	}
+	if rv := recs[0]["revocation"].(map[string]any); rv["by"] != "key" || rv["device"] != "leaf1" ||
+		rv["username"] != "alice" || rv["origin"] != "api user:carol@example.com" {
+		t.Fatalf("the peer's refusal: %v", rv)
+	}
+	own := decodeRevoke(t, f.revokeAs(t, "carol@example.com", `{"mine":true,"device":"leaf1","username":"alice"}`))
+	if own.By != "self" || own.TokenKeys != 0 || own.Contexts != 0 {
+		t.Fatalf("the peer's own on alice's key: %+v", own)
+	}
+	if got := tokensOf(t, f, store.TokenKey{NAS: "leaf1", Username: "alice"}); got[alicePrincipal] != 1 {
+		t.Fatalf("the peer reached alice's token: %v", got)
+	}
+	key := decodeRevoke(t, f.revokeAs(t, "bob@example.com", `{"device":"leaf1","username":"alice"}`))
+	if key.By != "key" || key.TokenKeys != 1 || key.Contexts != 1 || key.Standing || key.Principal != alicePrincipal ||
+		key.Subject != "netops" {
+		t.Fatalf("bob's key revocation: %+v", key)
+	}
+	mark := decodeRevoke(t, f.revokeAs(t, "bob@example.com", `{"principal":"user:alice@example.com"}`))
+	if mark.By != "principal" || !mark.Standing || mark.Saved == nil || mark.Subject != "netops" ||
+		!strings.Contains(mark.Text, "port49d has no admin_socket configured: lifting this needs port49d stopped") {
+		t.Fatalf("bob's revocation of alice: %+v", mark)
+	}
+	rv, err := f.st.GetRevocation(ctx, store.RevocationPrincipal, alicePrincipal)
+	if err != nil || rv.Origin != "api user:bob@example.com" {
+		t.Fatalf("the mark: %+v %v", rv, err)
+	}
+	if w := f.post(ctx, f.state(f.alice), `{"devices":["leaf1"]}`, ""); w.Code != 401 ||
+		!strings.Contains(w.Body.String(), "credential_revoked") {
+		t.Fatalf("alice's mint after the mark: %d %s", w.Code, w.Body)
+	}
+	f.b.AdminSocket = "/run/port49/port49d.sock"
+	again := decodeRevoke(t, f.revokeAs(t, "bob@example.com", `{"principal":"`+alice2+`"}`))
+	if !strings.HasSuffix(again.Text, "the lift is made on port49d's admin socket (/run/port49/port49d.sock), "+
+		"by port49d's user or root") {
+		t.Fatalf("a mark with an admin socket: %s", again.Text)
+	}
+}
+
+// A body naming no form, two forms, a sid, a lift, or a malformed device is
+// refused 400, and nothing is revoked or recorded.
+func TestARevocationBodyIsOneForm(t *testing.T) {
+	f := newFixtureWithPolicy(t, 8, sharedPolicy)
+	for body, want := range map[string]string{
+		`{}`: "name", `{"principal":"user:alice@example.com","device":"leaf1","username":"alice"}`: "not both",
+		`{"mine":true,"principal":"user:alice@example.com"}`: "not both",
+		`{"sid":"9c2b"}`: "OIDC", `{"principal":"user:alice@example.com","lift":true}`: "not a revocation request",
+		`{"device":"leaf 1","username":"alice"}`: "printable", `{"device":"leaf1"}`: "name",
+		`{"principal":"alice@example.com"}`: "begins user:",
+	} {
+		w := f.revokeAs(t, "bob@example.com", body)
+		if w.Code != 400 || !strings.Contains(w.Body.String(), want) {
+			t.Errorf("%s: %d %s", body, w.Code, w.Body)
+		}
+	}
+	if n := len(eventsOf(f.records(t), "revoke")); n != 0 {
+		t.Fatalf("%d revoke records for refused bodies", n)
+	}
+}
+
+// A revocation the store cannot record is 503 with a fixed sentence; the
+// store's error goes to the process log, not to the caller.
+func TestAMarkThatCannotBeWrittenIs503(t *testing.T) {
+	f := newFixtureWithPolicy(t, 8, sharedPolicy)
+	f.b.Store = putRevocationFails{f.st}
+	w := f.revokeAs(t, "bob@example.com", `{"principal":"user:alice@example.com"}`)
+	if w.Code != 503 || !strings.Contains(w.Body.String(), "store_unavailable") ||
+		strings.Contains(w.Body.String(), "disk on fire") || w.Header().Get("Retry-After") == "" {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+}
+
+type putRevocationFails struct{ store.Store }
+
+func (putRevocationFails) PutRevocation(context.Context, store.Revocation) error {
+	return errors.New("disk on fire")
+}
+
+// A revocation that waits out its bound behind another revocation or lift
+// is 503 revocation_busy, nothing revoked, never "could not be recorded"
+// (pre-flight M18).
+func TestABusyRevocationIs503(t *testing.T) {
+	f := newFixtureWithPolicy(t, 8, sharedPolicy)
+	defer func(d time.Duration) { holdTimeout = d }(holdTimeout)
+	holdTimeout = 50 * time.Millisecond
+	release, err := f.b.acquireRevoke(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	w := f.revokeAs(t, "bob@example.com", `{"principal":"user:alice@example.com"}`)
+	if w.Code != 503 || !strings.Contains(w.Body.String(), `"error":"revocation_busy"`) ||
+		w.Header().Get("Retry-After") == "" {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	if _, err := f.st.GetRevocation(context.Background(), store.RevocationPrincipal, alicePrincipal); !errors.Is(err, store.ErrNotFound) {
+		t.Fatal("a busy revocation left a mark")
+	}
+}
+
+// tokensByPrincipalHangs holds the first TokensByPrincipal for principal
+// until release closes, saying so on entered: a self-revocation behind a
+// store that stopped answering. Later calls pass, so a run the limiter
+// failed to stop answers rather than hangs.
+type tokensByPrincipalHangs struct {
+	store.Store
+	principal string
+	hung      *atomic.Bool
+	entered   chan struct{}
+	release   chan struct{}
+}
+
+func (s tokensByPrincipalHangs) TokensByPrincipal(ctx context.Context, principal string) ([]store.TokenKey, error) {
+	if principal == s.principal && s.hung.CompareAndSwap(false, true) {
+		close(s.entered)
+		<-s.release
+	}
+	return s.Store.TokensByPrincipal(ctx, principal)
+}
+
+// A self or key revocation takes no revocation slot and runs detached, so
+// one caller may have one in flight, not one per request: a second, in
+// either form, is 503 revocation_busy and revokes nothing, another caller
+// is not held up, and the slot is free again once the first finishes
+// (ruling M4).
+func TestOneSelfOrKeyRevocationInFlightPerCaller(t *testing.T) {
+	f := newFixtureWithPolicy(t, 8, sharedPolicy)
+	f.mintFor(t, "alice@example.com", "leaf1")
+	hang := tokensByPrincipalHangs{Store: f.st, principal: "user:bob@example.com", hung: &atomic.Bool{}, entered: make(chan struct{}),
+		release: make(chan struct{})}
+	f.b.Store = hang
+	bob := f.state(f.client(t, "bob@example.com", f.now.Add(time.Hour)))
+	first := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		first <- f.call(context.Background(), bob, "POST", "/v1/tokens/revoke", `{"mine":true}`)
+	}()
+	select {
+	case <-hang.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("bob's first revocation never reached the store")
+	}
+	for _, body := range []string{`{"mine":true}`, `{"device":"leaf1","username":"alice"}`,
+		`{"principal":"user:bob@example.com"}`} {
+		w := f.revokeAs(t, "bob@example.com", body)
+		if w.Code != 503 || !strings.Contains(w.Body.String(), `"error":"revocation_busy"`) ||
+			w.Header().Get("Retry-After") == "" {
+			t.Fatalf("bob's second, %s: %d %s", body, w.Code, w.Body)
+		}
+	}
+	if got := tokensOf(t, f, store.TokenKey{NAS: "leaf1", Username: "alice"}); got[alicePrincipal] != 1 {
+		t.Fatalf("a busy key revocation reached alice's token: %v", got)
+	}
+	if r := decodeRevoke(t, f.revokeAs(t, "alice@example.com", `{"mine":true}`)); r.TokenKeys != 1 {
+		t.Fatalf("alice behind bob's: %+v", r)
+	}
+	close(hang.release)
+	select {
+	case w := <-first:
+		decodeRevoke(t, w)
+	case <-time.After(5 * time.Second):
+		t.Fatal("bob's first revocation never finished")
+	}
+	if r := decodeRevoke(t, f.revokeAs(t, "bob@example.com", `{"mine":true}`)); r.By != "self" {
+		t.Fatalf("bob's after the first finished: %+v", r)
+	}
+	if n := len(eventsOf(f.records(t), "revoke")); n != 3 {
+		t.Fatalf("%d revoke records, want 3: the busy ones write none", n)
+	}
+}

@@ -18,6 +18,11 @@ import (
 // certificate, or both, or one in a form no mark can hold.
 var ErrBadRevocation = errors.New("broker: a revocation names a principal, or a certificate's issuer and serial; exactly one")
 
+// ErrRevocationBusy is a revocation that could not take revokeSem before
+// its ctx ended: another revocation or lift was running, and this one did
+// nothing (decision 34). The HTTP endpoint answers it 503 revocation_busy.
+var ErrRevocationBusy = errors.New("broker: another revocation or lift is still running")
+
 // ErrNotRevoked is a lift of a revocation that is not in force.
 var ErrNotRevoked = errors.New("broker: no such revocation is in force")
 
@@ -181,8 +186,8 @@ func (b *Broker) Revoke(ctx context.Context, req RevokeRequest) (RevokeReport, e
 	}
 	release, err := b.acquireRevoke(ctx)
 	if err != nil {
-		return RevokeReport{}, fmt.Errorf("broker: another revocation or lift is still running, so nothing was "+
-			"revoked by this one (%w); "+fallback, err)
+		return RevokeReport{}, fmt.Errorf("%w, so nothing was revoked by this one (%w); "+fallback,
+			ErrRevocationBusy, err)
 	}
 	defer release()
 	ctx, cancel := b.detach(ctx)

@@ -178,6 +178,9 @@ func TestRunRevokesListsAndLiftsOverTheAdminSocket(t *testing.T) {
 		}
 	})
 	waitFor(t, &out, "port49d: broker listening on ")
+	if strings.Contains(out.String(), "no admin_socket:") {
+		t.Fatalf("said with an admin socket: %q", out.String())
+	}
 	waitFor(t, &out, "port49d: admin socket on "+socket+" (port49 keys diagnose, port49 revoke)")
 
 	pki := filepath.Dir(b.ClientCAFile) // brokerConfig wrote the lab PKI there (testpki.WriteLab)
@@ -271,9 +274,10 @@ func TestRunRevokesListsAndLiftsOverTheAdminSocket(t *testing.T) {
 	}
 }
 
-// A broker with no admin_socket says once, at start, that port49 revoke is
-// unavailable and how to cut someone off meanwhile (pre-flight M20).
-func TestRunWithABrokerAndNoAdminSocketSaysRevokeIsUnavailable(t *testing.T) {
+// A broker with no admin_socket says once, at start, that an HTTP revocation
+// is made but nothing can lift it, and how to cut someone off meanwhile
+// (pre-flight I7).
+func TestRunWithABrokerAndNoAdminSocketSaysWhatRevocationCanDo(t *testing.T) {
 	var out syncBuffer
 	e := stderr
 	t.Cleanup(func() { stderr = e })
@@ -290,7 +294,8 @@ func TestRunWithABrokerAndNoAdminSocketSaysRevokeIsUnavailable(t *testing.T) {
 		}
 	})
 	waitFor(t, &out, "port49d: broker listening on ")
-	if n := strings.Count(out.String(), "port49 revoke is unavailable: set admin_socket"); n != 1 {
+	if n := strings.Count(out.String(), "port49d: broker: no admin_socket: a revocation over HTTP"); n != 1 ||
+		strings.Contains(out.String(), "port49 revoke is unavailable") {
 		t.Fatalf("said %d times: %q", n, out.String())
 	}
 }
