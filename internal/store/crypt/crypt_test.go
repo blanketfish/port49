@@ -1182,3 +1182,113 @@ func TestAReplayReadBeforeALandedWriteEndsIsDeniedAfter(t *testing.T) {
 		t.Fatal("a replay read before a landed write ended outlived its end")
 	}
 }
+
+// A write sent after the last ended committed after it, so one that
+// reports a lower revision is the store's revisions going back, as an etcd
+// restore from a snapshot does: it is the last (Task 6b review C1).
+func TestTheLedgerPlacesAWriteAfterTheStoresRevisionsWentBack(t *testing.T) {
+	k := store.ContextKey{NAS: "leaf-01", Username: "netops"}
+	l := NewLedger()
+	l.admits(k, "a")
+	l.end(l.begin(k, "x", 0), 1000, nil)
+	l.end(l.begin(k, "w", 4), 5, nil)
+	if l.admits(k, "x") || !l.admits(k, "w") {
+		t.Fatal("a write sent after the last ended, at a lower revision, did not replace it")
+	}
+}
+
+// offsetStore reports every context revision off above the store's, and
+// takes them back on a compare: setting off to zero is an etcd restore,
+// whose revisions go back.
+type offsetStore struct {
+	*memory.Store
+	off uint64
+}
+
+func (o *offsetStore) in(rev uint64) uint64 {
+	if rev == 0 {
+		return 0
+	}
+	return rev - o.off
+}
+
+func (o *offsetStore) out(rev uint64, err error) (uint64, error) {
+	if err != nil {
+		return 0, err
+	}
+	return rev + o.off, nil
+}
+
+func (o *offsetStore) GetContext(ctx context.Context, k store.ContextKey) (store.Context, error) {
+	c, err := o.Store.GetContext(ctx, k)
+	if err == nil {
+		c.Rev += o.off
+	}
+	return c, err
+}
+
+func (o *offsetStore) PutContextRev(ctx context.Context, k store.ContextKey, c store.Context, ttl time.Duration) (uint64, error) {
+	return o.out(o.Store.PutContextRev(ctx, k, c, ttl))
+}
+
+func (o *offsetStore) SwapContextRev(ctx context.Context, k store.ContextKey, rev uint64, c store.Context,
+	ttl time.Duration) (uint64, error) {
+	return o.out(o.Store.SwapContextRev(ctx, k, o.in(rev), c, ttl))
+}
+
+// A port49d running across an etcd restore: Bob's login, made after the
+// snapshot, is the ledger's last at a revision the restored store will not
+// reach for a while. Carol's login after the restore is admitted, and
+// Bob's record, saved and written back over hers, is denied (Task 6b
+// review C1).
+func TestALoginAfterARestoreIsTheLast(t *testing.T) {
+	ctx := context.Background()
+	now := time.Unix(1_000_000, 0).UTC()
+	inner := &offsetStore{Store: memory.New(func() time.Time { return now }), off: 1000}
+	l := NewLedger()
+	s := Wrap(inner, keys(), nil, WithLedger(l))
+	k := store.ContextKey{NAS: "leaf-01", Username: "netops"}
+	l.Seal()
+	login := func(id string, priv uint8) store.Context {
+		return store.Context{CtxID: id, Principal: "user:" + id + "@example.com", Username: "netops", PrivLvl: priv}
+	}
+	if err := s.PutContext(ctx, k, login("alice-1", 1), time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := inner.Store.GetContext(ctx, k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	alice, err := s.GetContext(ctx, k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SwapContext(ctx, k, alice.Rev, login("bob-1", 15), time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	bobSealed, err := inner.Store.GetContext(ctx, k)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	inner.off = 0 // the restore
+	if err := inner.Store.PutContext(ctx, k, snapshot, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	var u *store.UnreadableContextError
+	if _, err := s.GetContext(ctx, k); !errors.As(err, &u) {
+		t.Fatalf("Alice's record, restored: %v", err)
+	}
+	if err := s.SwapContext(ctx, k, u.Rev, login("carol-1", 1), time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.GetContext(ctx, k); err != nil || got.CtxID != "carol-1" {
+		t.Errorf("Carol's login after the restore: %q %v", got.CtxID, err)
+	}
+	if err := inner.Store.PutContext(ctx, k, bobSealed, time.Hour); err != nil { // Bob's, written back
+		t.Fatal(err)
+	}
+	if got, err := s.GetContext(ctx, k); !errors.Is(err, ErrNotLastWritten) {
+		t.Errorf("Bob's record written back over Carol's: %q %v", got.CtxID, err)
+	}
+}

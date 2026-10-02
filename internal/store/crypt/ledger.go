@@ -50,6 +50,17 @@ var ErrNotLastWritten = errors.New("crypt: not the context this port49d last wro
 // another lands, which fails closed. A read sets the last at no revision:
 // any write that lands replaces it (Task 4b fix 2 review I1, N1).
 //
+// Revisions go back when etcd is restored from a snapshot under a running
+// port49d (store.Context.Rev). A write sent after the last ended committed
+// after it, so one that reports a revision below the last's is the
+// store's revisions going back, and it is placed as the last, with its
+// revision (Task 6b review C1): a login after the restore is admitted,
+// and the stale last, replayed, is denied. A key no write lands at after
+// the restore keeps its old last, which is the last as on base. A write
+// whose outcome is unknown, sent after the restore on a low revision, is
+// taken as earlier and not admitted until the next write lands there,
+// which fails closed.
+//
 // A read racing a login's replace can return the replaced record after
 // the replace landed; that one request is denied, which fails closed.
 // It holds one entry per key this process has read or written, until a
@@ -69,18 +80,20 @@ type ledgerEntry struct {
 	last     string          // the last write that landed, or the first read
 	known    bool            // last is set: false for a key whose first write is in flight
 	lastRev  uint64          // the revision the write that set last committed at; zero when a read did
+	lastEnd  uint64          // seq when the write that set last ended
 	inFlight map[string]int  // writes sent and not yet ended, by ctx_id; nil until one is
 	unknown  map[string]bool // writes that ended with neither a landing nor a refusal; nil until one does
 	began    uint64          // seq at the last write sent
 }
 
 // ledgerWrite is a write the ledger was told of (begin), for end: its
-// key, its ctx_id, and the revision it compares (zero for none, or for no
-// record).
+// key, its ctx_id, the revision it compares (zero for none, or for no
+// record), and seq when it was sent.
 type ledgerWrite struct {
 	k   store.ContextKey
 	id  string
 	rev uint64
+	seq uint64
 }
 
 // earlier reports whether w, had it landed, committed before the write
@@ -173,7 +186,7 @@ func (l *Ledger) begin(k store.ContextKey, id string, rev uint64) ledgerWrite {
 	e.inFlight[id]++
 	l.seq++
 	e.began = l.seq
-	return ledgerWrite{k: k, id: id, rev: rev}
+	return ledgerWrite{k: k, id: id, rev: rev, seq: l.seq}
 }
 
 // end is told that w ended with err, and, when it landed, the revision it
@@ -186,6 +199,12 @@ func (l *Ledger) end(w ledgerWrite, committed uint64, err error) {
 		delete(e.inFlight, w.id)
 	}
 	switch {
+	case err == nil && e.known && committed != 0 && committed < e.lastRev && w.seq > e.lastEnd:
+		// Sent after the last ended, so committed after it: the store's
+		// revisions went back (a restore), and it holds this write. Before
+		// earlier, which takes its low compare revision as an earlier write.
+		e.last, e.lastRev, e.lastEnd = w.id, committed, l.seq
+		clear(e.unknown)
 	case e.earlier(w), err == nil && e.known && committed != 0 && committed < e.lastRev:
 		// Landed and replaced since, or never landed: the store holds the
 		// last, whatever the error.
@@ -195,7 +214,7 @@ func (l *Ledger) end(w ledgerWrite, committed uint64, err error) {
 		e.last, e.known, e.lastRev = "", false, 0
 		clear(e.unknown)
 	case err == nil:
-		e.last, e.known, e.lastRev = w.id, true, committed
+		e.last, e.known, e.lastRev, e.lastEnd = w.id, true, committed, l.seq
 		clear(e.unknown)
 	case errors.Is(err, store.ErrConflict), errors.Is(err, store.ErrNotFound):
 	default:
