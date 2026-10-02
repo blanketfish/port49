@@ -490,7 +490,7 @@ func TestAFailedLookupDoesNotStopTheRefresh(t *testing.T) {
 	// alice2 sorts before alice ('2' before '@'), so alice is after it.
 	f.b.Store = lookupFailingStore{Store: f.st, principal: alice2, err: errors.New("test: does not parse")}
 	rep, err := f.b.Refresh(ctx, nil)
-	if err != nil || rep.Failed != 1 || rep.Updated+rep.Unchanged+rep.Revoked != 1 {
+	if !errors.Is(err, store.ErrConflict) || rep.Failed != 1 || rep.Updated+rep.Unchanged+rep.Revoked != 1 {
 		t.Fatalf("a pass past one failed lookup: %+v %v", rep, err)
 	}
 	if !strings.Contains(buf.String(), alice2) {
@@ -499,6 +499,27 @@ func TestAFailedLookupDoesNotStopTheRefresh(t *testing.T) {
 	f.b.Store = lookupFailingStore{Store: f.st, principal: alice2, err: store.ErrUnavailable}
 	if _, err := f.b.Refresh(ctx, nil); !errors.Is(err, store.ErrUnavailable) {
 		t.Fatalf("a pass with the store unavailable = %v", err)
+	}
+}
+
+// A pass that left a principal unjudged is not complete: it returns
+// store.ErrConflict naming what it left, so port49d keeps
+// port49_policy_refresh_pending at 1 and runs it again, and the tokens are
+// still superseded (re-review r-m1).
+func TestAPassThatLeftAPrincipalIsNotComplete(t *testing.T) {
+	f := newFixture(t, 8)
+	ctx := context.Background()
+	f.liveContextAt(t, "leaf1", "alice", alicePrincipal, "", f.now, f.now.Add(time.Hour))
+	tk := store.TokenKey{NAS: "nx1", Username: "alice"}
+	decodeMint(t, f.post(ctx, f.state(f.alice), `{"devices":["nx1"]}`, ""))
+	priors := f.reload(t, edit(t, "token_ttl: 60s}", "token_ttl: 30s}"))
+	f.b.Store = lookupFailingStore{Store: f.st, principal: alicePrincipal, err: errors.New("test: does not parse")}
+	rep, err := f.b.Refresh(ctx, priors)
+	if !errors.Is(err, store.ErrConflict) || !strings.Contains(err.Error(), "a principal could not be looked up") {
+		t.Fatalf("a pass that left a principal = %v, want ErrConflict naming it", err)
+	}
+	if toks, _ := f.st.Candidates(ctx, tk); len(toks) != 0 || rep.TokenKeys != 1 {
+		t.Fatalf("the supersede did not run: %d left, report %+v", len(toks), rep)
 	}
 }
 

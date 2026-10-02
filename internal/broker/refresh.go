@@ -137,7 +137,9 @@ type RefreshReport struct {
 // context, and the caller runs it again. A context still changing after every
 // attempt does not end it: it is counted failed and left for the retry, and
 // the pass goes on and returns store.ErrConflict at the end so the caller
-// runs it again. A cancelled ctx ends the pass at the next principal, in
+// runs it again. So does a context under a key this port49d does not hold,
+// and a principal whose contexts could not be looked up: each is left
+// unjudged (re-review r-m1). A cancelled ctx ends the pass at the next principal, in
 // either half, and is returned: port49d is shutting down.
 func (b *Broker) Refresh(ctx context.Context, priors []Prior) (RefreshReport, error) {
 	cur := b.Policy.Load()
@@ -334,7 +336,9 @@ func (b *Broker) supersedeTokens(ctx context.Context, cur *policy.Policy, now ti
 // and the conflict is returned at the end so the caller runs it again — one
 // busy session must not hold every session after it on the superseded policy.
 // Nor does one principal's lookup failing for any reason but the store being
-// unavailable: it is said, counted failed and left for the next pass.
+// unavailable: it is said, counted failed and left for the next pass, and the
+// pass returns errPrincipalUnvisited, an ErrConflict, so it is not taken as
+// complete (re-review r-m1).
 func (b *Broker) refreshContexts(ctx context.Context, cur *policy.Policy, priors []Prior, now time.Time,
 	rep *RefreshReport, sameSource bool) error {
 	principals, err := b.Store.ActivePrincipals(ctx)
@@ -362,6 +366,9 @@ func (b *Broker) refreshContexts(ctx context.Context, cur *policy.Policy, priors
 				principal, err)
 			b.count(rep, "failed")
 			unvisited = true
+			if busy == nil {
+				busy = errPrincipalUnvisited
+			}
 			continue
 		}
 		for _, ref := range refs {
@@ -415,7 +422,7 @@ func (b *Broker) refreshContext(ctx context.Context, cur *policy.Policy, priors 
 				log.Printf("broker: refresh: the context for %q on %q, indexed under %s: %v; left for the next pass",
 					ref.Username, ref.NAS, principal, err)
 				b.count(rep, "failed")
-				return "failed", nil
+				return "failed", errLeftUnderUnheldKey
 			}
 			return outcome, err
 		case err != nil:
@@ -577,6 +584,17 @@ func (b *Broker) revokeUnopened(ctx context.Context, cur *policy.Policy, priors 
 // errKeyNotHeld is a context revokeUnopened left because it is sealed under
 // a key this port49d does not hold.
 var errKeyNotHeld = errors.New("broker: sealed under a key this port49d does not hold; not revoked")
+
+// errLeftUnderUnheldKey and errPrincipalUnvisited are what a pass left
+// unjudged. Each is store.ErrConflict, as a busy context is: the pass goes
+// on, the tokens are still superseded, and Refresh returns it, so port49d
+// keeps port49_policy_refresh_pending at 1 and runs the pass again, never
+// taking the pass for one that reached every live context (re-review r-m1).
+var (
+	errLeftUnderUnheldKey = fmt.Errorf("broker: a context under an unheld key was left unjudged: %w", store.ErrConflict)
+	errPrincipalUnvisited = fmt.Errorf("broker: a principal could not be looked up, so its contexts were left "+
+		"unjudged: %w", store.ErrConflict)
+)
 
 // revoke marks the context revoked at at through SetRevokedAt, the setter that
 // writes the mark alone and keeps the later of two, and records and counts it.

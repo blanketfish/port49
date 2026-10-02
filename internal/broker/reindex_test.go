@@ -371,7 +371,8 @@ func TestAContextUnderAnUnheldKeyIsNeverRevoked(t *testing.T) {
 		}},
 		{"refresh", func(t *testing.T, f *fixture) {
 			rep, err := f.b.Refresh(context.Background(), nil)
-			if err != nil || rep.Failed != 1 || rep.Revoked != 0 {
+			if !errors.Is(err, store.ErrConflict) || !strings.Contains(err.Error(), "a context under an unheld key") ||
+				rep.Failed != 1 || rep.Revoked != 0 {
 				t.Fatalf("a refresh: %+v %v", rep, err)
 			}
 		}},

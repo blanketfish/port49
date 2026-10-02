@@ -781,8 +781,9 @@ stops at its first store error, says how far it got, and runs again every 30s un
 finishes; a context not yet reached keeps its previous policy until then, and
 `port49_policy_refresh_pending` holds at 1 from the swap, or from a grant's expiry, until the
 settle pass after it completes, reaching every live context and leaving none behind — a
-context skipped as busy, or a pass stopped by a store error, keeps it at 1 until a later pass
-reaches that context — the alert for a policy in force that has not yet reached every live
+context skipped as busy, a context sealed under a key port49d does not hold, a principal whose
+contexts could not be looked up, or a pass stopped by a store error, keeps it at 1 until a later
+pass reaches that context — the alert for a policy in force that has not yet reached every live
 session. It is never 0 while a settle pass is outstanding: until then a login in flight may
 still write the superseded answer. A context revoked for a compile fault is
 done: revoked is its answer under the policy in force, so it does not hold the gauge, and it is
