@@ -17,11 +17,19 @@ every item the roadmap and plans 4b, 7a and 7c hand to 7d.
     second pass;
   - and makes 7c's self-revocation compare-and-set on `SetContextPolicy` a property of every
     backend.
-- **No field authorization trusts is written in the clear.** The sealing layer seals the whole
-  context record (privilege, ceiling, policy, clocks and revocation, beside the identity it
-  sealed already), bound to the record's own key. The daemon also reads the standing revocation
-  marks on every request. So a stolen daemon store credential cannot lift a revocation by
-  principal or certificate, raise a privilege, or move a record to another device (Ruling 17).
+- **No field a login or an authorization trusts is written in the clear.** The sealing layer
+  seals, each bound to the record's own key:
+  - the whole context record (privilege, ceiling, policy, clocks and revocation, beside the
+    identity it sealed already);
+  - every field of a token a login copies into its context (privilege ceiling, policy blob,
+    enable mechanism, session age, the clocks, the kind and the expiry);
+  - and a receipt, its first redemption included.
+
+  The daemon also reads the standing revocation marks on every request, and keeps an
+  in-process ledger of the `ctx_id` it last wrote at each key. So a stolen daemon store
+  credential cannot forge a token or a context, raise a privilege, lift a revocation by
+  principal or certificate, move a record to another device, or, while port49d runs, put
+  another login's context back. What it can still do is replay, stated exactly in Ruling 17.
 - **A store that does not answer is a store that is down.**
   - **Deadlines.** Every store call has a hard timeout, and every TACACS+ packet's store work
     has its own deadline, which never shortens the brute-force delay.
@@ -64,8 +72,10 @@ every item the roadmap and plans 4b, 7a and 7c hand to 7d.
   - **Indexes.** A ref's index record (`x/<nas>/<user>`) is authoritative. The lookup entries
     under a principal, a sid or a certificate only find candidates. They are filtered against
     the index record and cleaned by a sweep.
-- **The seal.** `crypt.Wrap` seals a context whole, with the context key as the cipher's
-  additional data.
+- **The seal.** `crypt.Wrap` seals a context whole, a token's trusted fields and a receipt,
+  each with its record's key as the cipher's additional data.
+  - **The ledger.** `crypt.Ledger` holds the `ctx_id` this process last wrote, or first read, at
+    each context key. A record that opens at a key under another `ctx_id` is denied.
   - **Narrow setters.** A setter that changes a sealed field reads, opens, applies the store's
     rule (`store.Apply*`), seals and rewrites. It rewrites on the revision it read, through a
     new backend primitive, `RewriteContext`.
@@ -78,7 +88,8 @@ every item the roadmap and plans 4b, 7a and 7c hand to 7d.
   - **Errors.** It counts a backend's `store.ErrUnavailable`, its own deadline and a caller's
     deadline as failures. It never counts a caller that went away or a refusal by the store's
     roles.
-  - **Going dark.** It reports a pool that has stayed failed, or stayed refused, for `hold_ttl`.
+  - **Going dark.** It reports a token or context pool that has stayed failed, or stayed
+    refused, for `hold_ttl`. The bulk pool's circuit alarms and never takes port49d dark.
   - **The stack.** Above it, the sealing layer: `crypt.Wrap(guard.Wrap(etcd store))`.
 - **The login.** `store.JoinContext` reads the revocation marks for the login's principal and
   certificate before it decides. It hands the backend one `SwapLogin` carrying:
@@ -92,9 +103,10 @@ every item the roadmap and plans 4b, 7a and 7c hand to 7d.
   - **The start wait.** It waits for etcd with every listener closed. Each attempt loads and
     checks the certificates, probes TLS, pings, and checks the roles.
   - **The hold.** It takes the keyspace hold, as the broker, and runs the index sweep.
-  - **Going dark.** `run` loops: a store gone ends one run and starts the next, so port49d never
-    exits for an outage.
-  - **The broker** gains `ApplyMarksAtStart`, `RefreshAtStart` and `SupersededAll`.
+  - **Going dark.** `run` loops: a store gone ends one run and starts the next, so once it has
+    served port49d never exits for an outage. A start after a store gone retries any error.
+  - **The broker** gains `ApplyMarksAtStart`, `RefreshAtStart`, `ReindexContexts` and
+    `SupersededAll`.
   - **The agent** serialises every send on its held connection and knows when a revocation
     holds it.
 
@@ -157,7 +169,7 @@ finding is skipped.** M29 is applied in part, with the reason in its row.
 | # | Done | Where |
 |---|---|---|
 | C1 | A start applies every standing mark to the kept contexts before it carries the policy, with the listeners closed, retried while the store errs (`Broker.ApplyMarksAtStart`, 7a's two context passes per mark). The authorizer's marks (I12) close it at runtime as well. The CRL queue's first drain, after bind, is noted as a window. | Ruling 12; Task 12 Steps 3, 7; broker test and e2e; spec §14 and d35's start order (Task 8b) |
-| I1 | `packet_deadline` is 100 ms to 2 s, citing L13. The failure delay sleeps on the server's context, which dispatch stashes, never on the packet's. A server test pins it. The worst-case FAIL, the two summed (4 s at the defaults, past Junos's 3 s), is stated for the owner in Ruling 9. | Ruling 9; Task 10 Steps 1, 3; d35 (Task 8b) |
+| I1 | `packet_deadline` is 100 ms to 2 s, citing L13. The failure delay sleeps on the server's context, which dispatch stashes, never on the packet's. A server test pins it. (The worst-case FAIL this row first stated, the two summed, is gone: Re-check 1's N1.) | Ruling 9; Task 10 Steps 1, 3; d35 (Task 8b) |
 | I2 | Task 1 keeps only what 7d-1 builds. Everything else is in Task 8b, the first commit of 7d-2. | Task 1; Task 8b |
 | I3 | §5.6 is rewritten: there are five ways, the unindex is one step with the write, and an ERROR may follow a committed write, so a retransmission replays or is `token_spent`. Review Focus 1 says the same. | Task 1 Step 3; Review Focus 1 |
 | I4 | The failure matrix states port49d's side only, and every device cell cites L35 as open. Task 15 fills them in. | Task 8b Step 7; Task 15 Step 3 |
@@ -171,7 +183,7 @@ finding is skipped.** M29 is applied in part, with the reason in its row.
 | I12 | As ruled: the whole context record is sealed with the context key as AAD. The daemon reads the standing marks on every request (authorizer, enable gate, receipt replay). Tests cover a zeroed `revoked_at`, a raised privilege, a swapped blob, a removed ceiling, a transplanted record, and a replay under a mark. The per-command cost is one in-memory lookup. Migration: memory is wiped by the restart that installs 7d-1, and etcd has no contexts before 7d. The residual (a replay of an unmarked revocation) is stated and carried. | Ruling 17; new Task 4b; Task 6 (`RewriteContext` on etcd); d35 and design §8 (Task 1) |
 | I13 | Store keys load through `keyfile.LoadX509KeyPair` in `openStores`. Config checks presence only. | Task 10 Step 2; Task 12 Step 5 |
 | I14 | A third pool, `bulk` (`ActivePrincipals`, `DeleteReceiptsByPrincipal`, `ListRevocations`, `PurgeTokens`), has its own `bulk_timeout` (30 s), slots and circuit, apart from the hot pools'. The backend pages them. `PurgeTokens` reads and deletes a page at a time. | Ruling 8; Task 5 Step 8–9; Task 9; Task 10 |
-| I15 | The hold is the broker's, and the daemon's role is read-only on `meta/`. The holder reads its lock key every ttl/6 and counts the hold lost when the key is gone or on another lease, or when no read has answered for ⅔ ttl. The waiting line says to stop the holder and never delete `meta/hold`. A test deletes the key. | Ruling 11; Task 11 (roles); Task 12 Steps 1–2 |
+| I15 | The hold is the broker's, and the daemon's role is read-only on `meta/`. The holder reads its lock key every ttl/6 and counts the hold lost when the key is gone or on another lease, or when etcd stops answering in time (the ⅔-ttl rule first written here is replaced by Re-check 1's R-I4). The waiting line says to stop the holder and never delete `meta/hold`. A test deletes the key. | Ruling 11; Task 11 (roles); Task 12 Steps 1–2 |
 | I16 | As ruled: `store.backend: etcd` requires `admin_socket` at config load. | Ruling 13; Task 10 |
 | I17 | The L35 test times each request from the capture (labpcap gains a packet time). It asserts no store-gone line by the end of step 3, or marks the cell invalid. It asserts the `store_unavailable` reasons, and commits itself in a `test(lab):` commit before the run. | Task 15 |
 | I18 | Every send on the held connection takes the wire: `Connect` (agent.go:217), `Mint`'s `post` (:376), both of `refreshOnce`'s (:706, :757) under one hold, and `exchange` (:476). | Ruling 15; Task 14 |
@@ -226,9 +238,43 @@ finding is skipped.** M29 is applied in part, with the reason in its row.
 | M48 | The lab cites CLAUDE.md rule 3. A lowered default is its own `fix(config):` commit, stays ≥ `call_timeout`, and re-runs every image. | Task 15 Step 2 |
 | M49 | On a lost hold, `release` skips `Unlock` and orphans the session. vSRX is added to L35. | Task 12 Step 2; Task 15 |
 
+### Re-check 1
+
+The scoped re-check (the same file, "Re-check 1", on `2913dc7`) found 1 Critical, 7 Important
+and 16 Minor. The controller ruled IA1 yes (an in-process ref→`CtxID` ledger) and every other
+finding "apply the reviewer's fix" (`progress.md`, the Re-check 1 block). One row per finding.
+**None is skipped.**
+
+| # | Done | Where |
+|---|---|---|
+| CA1 | A token's `kind`, `expires_at`, `blob_hash`, `max_session_age`, `enable`, `max_privilege`, `auth_time` and `minted_at` are sealed in `tokenSecret` beside the secret and identity, with additional data = key id + token key + token ID. A token whose plaintext expiry differs from its sealed one is dropped as unopenable. A receipt is sealed with its whole receipt key (device, username, kind, credential hash) as additional data, and its `first_redeemed_at`, which anchors the cap, is sealed too. Every record family the daemon can write is audited in Ruling 17's table: sealed, or why it is safe. Ruling 17, decision 35, design §8, Ruling 10 and §12's store-roles text say what a stolen daemon credential yields. Tests tamper each sealed token field, transplant a token (another key, another ID) and a receipt (another kind), and replay a deleted token. | Ruling 17; Task 4b Steps 1, 4; Task 1 Steps 1, 6; Task 8b Step 4 |
+| IA1 | `crypt.Ledger`: per context key, the `ctx_id` of the last write that landed (or the first read, so a start's reads seed it), plus writes in flight or of unknown outcome. A record that opens under any other `ctx_id` is `UnreadableContextError` wrapping `crypt.ErrNotLastWritten`. One ledger per process, shared by the daemon's and the broker's `Wrap` (`crypt.WithLedger`). The residual, impersonation by a record put back while port49d was stopped, is in Ruling 17, d35 and design §8, and carried. | Ruling 17; Task 4b Steps 1, 4; Task 12 Step 5; Task 13 Step 2; Task 16 |
+| IA2 | New Task 7b. `(*etcd.Store).Unindexed` pages the `c/` family keys-only and names each ref whose `x/` record is gone or lists no live principal. `Broker.ReindexContexts` re-indexes each (`session.Manager.Reindex`), judges it against the policy in force, revokes one that will not open, and counts `port49_contexts_reindexed_total`. port49d runs it at start, before the marks are applied, and after every sweep. The residual (a sid revocation, and the refresh, miss it until the next sweep; the marks deny throughout) is stated. | Ruling 6; Ruling 17; Task 7b; Task 12 Steps 5, 7 |
+| N1 | `dispatch` stashes the packet's arrival with the server's context, and `fail` sleeps until arrival + the delay, so store time is inside the delay, not added to it. The worst case is max(`packet_deadline`, delay), 2 s at the defaults; the throttle is unchanged. The residual is dropped. Test: a store spending 250 ms behind a 300 ms delay answers in under 500 ms. | Ruling 9; Task 10 Steps 1, 3; Task 8b Step 1 |
+| R-I2 | `run`'s loop, once `again` is set, retries every error but a parent cancel, every 5 s, the listeners closed, and says it. `runLoop` is factored out and tested with a fake run. | Ruling 11; Task 12 Step 7 |
+| R-I3 | `ApplyMarksAtStart` skips `UnreadableContextError` and `ErrNotFound` (the plaintext mark landed; unreadable is denied anyway); any other error but `ErrUnavailable` is said, not returned. A test with one unreadable context under a certificate mark. | Ruling 12; Task 12 Step 3 |
+| R-I4 | The fence reads the lock key and the lease's remaining TTL (`TimeToLive`) every `hold_ttl`/6. Its estimate of the lease's expiry is the send time plus that TTL; it counts the hold lost once half of `hold_ttl` or less is left with no newer answer, at least `hold_ttl`/6 before etcd can expire the lease. The test's ordering assertion now has that margin. The window before going dark shrinks to at least `hold_ttl`/6 (10 s at the lab's 60 s), so L35's step 3 takes each measurement on a hang of its own. | Ruling 11; Task 12 Steps 1, 2; Task 15 |
+| R-I5 | Only the token and context pools go dark; the bulk pool's circuit alarms (line and gauge). A refused run needs at least `breaker.failures` refusals with no gap longer than `open_for`; a longer gap starts a new run. Tests for both. | Ruling 8; Task 9 Steps 1, 2 |
+| MA1 | "never past its sealed ceiling, if it has one; under `max_session_age: never`, indefinitely". | Ruling 17; Task 1 Step 1; Task 4b Step 4 |
+| MA2 | crypt `SetRevokedAt`'s seal retries until the caller's deadline (64 attempts with none), and its error says the revocation is in force and the seal pending. | Task 4b Step 4 |
+| MA3 | The etcd `GetContext` remembers the plaintext bookkeeping of the version it read (bounded); `RewriteContext` with no ttl on that revision commits without reading again. A setter's rewrite is two RPCs. A test reads, moves the record, and rewrites the stale version. | Task 6 Step 4b |
+| MA4 | `TestARevocationOfAnUnopenableContextNeedsNoKey` is labelled a regression guard: it passes before 4b. | Task 4b Step 1 |
+| MA5 | `TestTheSealCoversWhatAuthorizationTrusts` gains a flipped sealed byte and a same-key older ciphertext (the ledger's two cases: another login's, denied; the same `ctx_id`'s, admitted, the residual). The "no ceiling" case writes a plaintext ceiling the seal ignores. | Task 4b Step 1 |
+| R-M0 | `server.Deps.Abort`: when it reports true at shutdown (a store gone), each held connection is reset (linger 0), as L28 measured the fast fall to local. The hung-store e2e holds one connection across the hang and reads a reset. | Task 12 Steps 6, 7 |
+| R-M1 | The mark-at-start e2e asserts `(1 context(s) marked revoked)`. Mutation 1 now fails it. | Task 12 Steps 6, 7 |
+| R-M2 | On a store gone the broker listener `bl` is closed before the line, and `brokerSrv.Close()` follows a `Shutdown` that times out. | Task 12 Step 7 |
+| R-M3 | Said in `run`'s comment and the operator notes: between runs `/healthz` and `/readyz` are unbound for the drain and the config load (seconds), and counters restart; a liveness probe's failure window should exceed 30 s. Binding once in `run` would hold a metrics address across a config change. | Task 12 Step 7; operator notes |
+| R-M4 | Ruling 12: "Steps 3 to 7 retry" (the reindex, the marks, the purge, the refresh). | Ruling 12 |
+| R-M5 | Noted beside the gauge: an idle pool with an open circuit never evaluates going dark, which is harmless. | Task 9 Step 3 |
+| R-M6 | 8b's deployment text keeps `Restart=on-failure` for a cold-start failure or a crash. | Task 8b Step 9; operator notes |
+| m1 | `Mint` takes the wire per send and gives it back across its 409 Retry-After sleep. A test sends a revocation during that sleep. | Task 14 Steps 1, 2 |
+| m2 | "Running the lab" names the pinned worktree `.worktrees/lab-7d` and copies captures back to the feature worktree, as `lab-instructions.md` does. | Running the lab |
+| m3 | "It never exits for an outage" becomes "once it has served". | Rulings 11; Decisions; Task 8b Step 1 |
+| m4 | §5.7's text names every call refused for `hold_ttl` among the go-dark causes. | Task 8b Step 3 |
+
 ## The split: two merges, one plan
 
-This plan is **7d-1** (Tasks 1–8, with 4b) and **7d-2** (Tasks 8b–16). Each is its own branch
+This plan is **7d-1** (Tasks 1–8, with 4b and 7b) and **7d-2** (Tasks 8b–16). Each is its own branch
 and pull request, and each leaves `make test` green. Nothing is cut; the split is only where the
 review gate falls.
 
@@ -236,18 +282,22 @@ review gate falls.
   - the docs for what 7d-1 builds, and nothing more (Task 1);
   - the `storetest` suite lifted (Task 2);
   - the interface changes and their callers: the login's one step (Tasks 3–4);
-  - the whole-record seal and the standing marks (Task 4b);
-  - the etcd backend, passing every property (Tasks 5–8).
+  - the whole-record seal, the token's and the receipt's seal, the ledger and the standing
+    marks (Task 4b);
+  - the etcd backend, passing every property (Tasks 5–8), and the unindexed-context finder
+    with the broker's re-index (Task 7b).
   - **What port49d does.** It still runs on the memory store, and the etcd client is linked
     by nothing until Task 12. Three things change on it:
     - an index failure now refuses the login, and a login whose principal or certificate is
       marked writes its context revoked (Tasks 3–4);
-    - a context is sealed whole, and a revocation is read from the marks as well as the record
-      (Task 4b).
+    - a context is sealed whole, a token and a receipt are sealed bound to their keys, a
+      context opening under a `ctx_id` this process did not write there is denied, and a
+      revocation is read from the marks as well as the record (Task 4b).
 
-    Each fails closed.
+    Each fails closed. `ReindexContexts` is built and tested, and called by nothing until Task
+    12.
   - **No device behaviour changes, so no lab.** The restart that installs 7d-1 wipes the memory
-    store, so no context sealed the old way survives it.
+    store, so no token, receipt or context sealed the old way survives it.
 - **7d-2, `feature/shared-store-port49d`, off `main` after 7d-1 merges.**
   - **What 7d-2 lands:**
     - the docs for what it builds (Task 8b, its first commit);
@@ -257,7 +307,7 @@ review gate falls.
   - **Everything an operator meets at 3am lands here,** behind its own review.
 
 **Why split.**
-- **Size.** Eighteen tasks is above 7c's fourteen, and the backend alone is four.
+- **Size.** Nineteen tasks is above 7c's fourteen, and the backend alone is five.
 - **What each half risks.** 7d-1 is correctness against properties, with no operational surface.
   7d-2 is operational behaviour, gated by L35. A reviewer can reject one and approve the other.
 - **Docs follow the code.** Each half's docs land with its code. If 7d-2 slips, main says
@@ -274,6 +324,8 @@ review gate falls.
   - the broker as its own process;
   - one refresh runner across replicas;
   - the listener's marks, and the daemon's (`store.Marks`), shared across replicas;
+  - the ledger (`crypt.Ledger`) across replicas: per process, it would deny another replica's
+    logins, so 7e shares it or replaces it (a sealed write sequence);
   - `b.superseded` and `b.blobsSeen` in the store.
 
   Until then a second port49d against the same keyspace waits (Ruling 11).
@@ -291,18 +343,21 @@ review gate falls.
 - **Spec, unassigned: a `revoke` record for a mark that could not be written** (7c final review
   M3). It is untouched. A store outage is now loud on stderr and in metrics (Task 9), which
   narrows what M3 costs.
-- **Spec, unassigned, new: replay of an unmarked revocation** (Ruling 17's residual). A stolen
-  daemon store credential can put back a context record port49 sealed earlier for the same key.
-  That undoes a self or key revocation, which leaves no mark (decision 34), or a policy
-  narrowing, until the next refresh. Closing it needs a revocation the daemon's role cannot
-  write for every kind, a spec change. Task 16 carries it.
+- **Spec, unassigned, new: replay by a stolen daemon store credential** (Ruling 17's
+  residual, listed there exactly). Within a running port49d it is an earlier version of the
+  context a key holds now (the same `ctx_id`), which undoes a self or key revocation (no mark;
+  decision 34) or a policy narrowing until the next refresh. Across a restart it is
+  impersonation: a context of another login put back while port49d was stopped is taken as the
+  key's at the start. Closing it needs a revocation record the daemon's role cannot write for
+  every kind (a spec change to decision 34) and a sealed freshness counter checked across
+  restarts. Task 16 carries it.
 
 ## Rulings where the design and spec are silent
 
 Each takes the option that denies more, is written into the tasks named, and is recorded in spec
-§13 as decision 35: 7d-1's part by Task 1, 7d-2's by Task 8b. Rulings 7–13 and 17–18 include
+§13 as decision 35: 7d-1's part by Task 1, 7d-2's by Task 8b. Rulings 6–13 and 17–18 include
 the controller's rulings of 2026-10-02 on the pre-flight review's questions (I1, I5, I12, I16,
-I19). The owner may override any of them. The ones the owner should read first are under
+I19) and on its re-check (CA1, IA1, IA2, N1, R-I2 to R-I5). The owner may override any of them. The ones the owner should read first are under
 "Decisions for Ryan".
 
 1. **etcd v3.6.15, and Go 1.26.** D1 is the owner's (2026-10-02). v3.6 is the current stable
@@ -364,6 +419,19 @@ I19). The owner may override any of them. The ones the owner should read first a
    - **Escaping.** Keys escape every part, so `user:al` never matches `user:alice`.
    - **Undecodable records.** A lookup entry or record that does not decode is an error naming
      its key, never skipped: skipped, a revocation would miss a live context (pre-flight M18).
+   - **A context the index lost** (re-check IA2). A login writes a context and its index record
+     in one step, and every extension carries both, so a live context with no live principal
+     in its `x/` record has had that record deleted in the store. The refresh walks the index,
+     so it would never judge that context again, and `revoke --mine` and a revocation by sid
+     would miss it. So `(*etcd.Store).Unindexed` pages the `c/` family keys-only (the daemon's
+     role reads it) and names each such ref. `Broker.ReindexContexts` then:
+     - re-indexes it under its own principal, sid and certificate;
+     - judges it against the policy in force at once;
+     - revokes one that will not open, since nothing can index it;
+     - counts `port49_contexts_reindexed_total` and says how many.
+
+     port49d runs it at start, before the marks are applied, and after every sweep (Task 12).
+     Until then a revocation by principal or certificate still denies it through the marks.
 7. **The login is one step** (`store.SwapLogin`).
    - **What it carries.** It carries:
      - the context write;
@@ -410,9 +478,15 @@ I19). The owner may override any of them. The ones the owner should read first a
 
      Never a failure: `ErrNotFound`, `ErrConflict`, `ErrPastGrace`, `ErrTooLarge`, a refusal by
      etcd's roles (outcome `refused`), or a caller that went away (`canceled`).
-   - **Going dark.** A pool whose circuit has stayed open for `store.etcd.hold_ttl`, or whose
-     every call in that time was refused (a role revoked at runtime), is reported once. port49d
-     then ends the run as on a lost hold (Ruling 11).
+   - **Going dark.** A token or context pool whose circuit has stayed open for
+     `store.etcd.hold_ttl`, or whose every call in that time was refused (a role revoked at
+     runtime), is reported once. port49d then ends the run as on a lost hold (Ruling 11).
+     - **A refused run** is at least `breaker.failures` refusals with no gap between two longer
+       than `breaker.open_for`. A refusal after a longer gap starts a new run, so two refused
+       calls an hour apart are not "refused for `hold_ttl`" (re-check R-I5).
+     - **The bulk pool never takes port49d dark** (re-check R-I5). A slow scan at scale is not
+       a store gone while the token and context pools answer. Its circuit alarms instead: the
+       line, and `port49_store_circuit_open{pool="bulk"}`.
    - **Saying it.** A circuit that opens or closes is one line on stderr and a gauge.
 9. **Every TACACS+ packet's store work has a deadline,** `store.packet_deadline` (2 s; 100 ms to
    **2 s**, and at least `call_timeout`).
@@ -427,10 +501,12 @@ I19). The owner may override any of them. The ones the owner should read first a
      review m3).
    - **The failure delay.** The deadline never shortens it. The delay sleeps on the server's
      context, which dispatch keeps beside the packet's, so `packet_deadline: 100ms` does not
-     turn a 2 s brute-force delay into 100 ms. A FAIL's delay follows its store work, so its
-     worst case is the two summed: 4 s with both at their 2 s defaults, past Junos's 3 s. It
-     needs a store slow enough to spend most of the deadline and still answer. L35 measures the
-     store's side, and the owner may lower either default from it.
+     turn a 2 s brute-force delay into 100 ms.
+   - **The delay counts from the packet's arrival** (re-check N1). dispatch stashes the
+     arrival with the server's context, and a FAIL sleeps until arrival plus the delay. The
+     store work is inside the delay, not added to it, so a FAIL's worst case is
+     max(`packet_deadline`, delay): 2 s at the defaults, under Junos's 3 s. The throttle is
+     unchanged: each failure still costs its sender the whole delay from its send.
    - **4b's other remote-store item,** a deadline on each refresh call, is the guard's
      `call_timeout`.
 10. **Each component has its own identity on etcd** (design §17).
@@ -439,13 +515,13 @@ I19). The owner may override any of them. The ones the owner should read first a
       the `etcdctl` commands that create the two roles and grant them.
     - **The daemon's role cannot** read or write idempotency records, write the token indexes,
       write revocation marks, or write `meta/` (the keyspace hold and the seal-key record). With
-      the seal and the marks (Ruling 17), a compromised daemon credential cannot:
+      the seals, the ledger and the marks (Ruling 17), a compromised daemon credential cannot:
+      - forge a token, a receipt or a context, or raise a privilege past what port49 wrote;
       - lift a revocation by principal or certificate;
       - hide a token from one;
-      - raise a privilege;
       - take the keyspace.
 
-      What it can still do is Ruling 17's residual.
+      What it can still do, record family by record family, is Ruling 17's table.
     - **The start check.** port49d probes that its daemon identity is refused, and its broker
       identity allowed, a read of the idempotency records and a write of each family only the
       broker may write (a transaction whose compare never holds, so it writes nothing). It
@@ -459,12 +535,15 @@ I19). The owner may override any of them. The ones the owner should read first a
 11. **One port49d per keyspace until 7e.**
     - **The hold.** port49d holds `meta/hold` on an etcd session lease of `hold_ttl` (15 s), as
       the broker identity, and writes who holds it.
-    - **A fence** (pre-flight I15). Deleting the lock key does not end a session, so the holder
-      reads the key every `hold_ttl`/6. It counts the hold lost when:
+    - **A fence** (pre-flight I15; re-check R-I4). Deleting the lock key does not end a
+      session, so every `hold_ttl`/6 the holder reads the key and the lease's remaining TTL. Its
+      estimate of when the lease expires is the read's send time plus that TTL, which is never
+      later than etcd's. It counts the hold lost when:
       - the key is gone or on another lease (deleted by hand, or the lease reclaimed);
-      - the session ends;
-      - or no read has answered for ⅔ `hold_ttl`, before etcd can expire the lease and let a
-        second port49d take the keyspace.
+      - the lease has expired, or the session ends;
+      - or, with no newer answer, the estimate has `hold_ttl`/2 or less left. Checks are at most
+        `hold_ttl`/3 apart, so that is at least `hold_ttl`/6 before etcd can expire the lease
+        and let a second port49d take the keyspace (2.5 s at 15 s).
 
       A process paused past that is the residual: its next read finds the key gone.
     - **A second port49d** waits, with every listener closed, naming the holder every 30 s and
@@ -477,8 +556,14 @@ I19). The owner may override any of them. The ones the owner should read first a
          `/readyz` 503, with no deadline, then runs the start (Ruling 12) and serves.
 
       Devices find the connection refused meanwhile and use their local method, as the owner
-      ruled for a store outage (2026-09-24). No service manager is needed (pre-flight I19; the
-      controller's ruling). Plan 7f replaces this with go-dark proper.
+      ruled for a store outage (2026-09-24). No service manager is needed to come back from an
+      outage (pre-flight I19; the controller's ruling). Plan 7f replaces this with go-dark
+      proper.
+    - **A start after a store gone retries every error** (re-check R-I2), not only a store
+      fault: a policy file caught half-written during the outage, the broker's role refused on
+      `meta/`, anything but port49d being stopped. It says the error every 5 s with the
+      listeners closed. So once port49d has served, it never exits for an outage. A cold start
+      still exits 1 on a fault or at `start_timeout`, for a supervisor's `Restart=on-failure`.
 12. **A start on etcd.**
     - **The store.** port49d waits for etcd with every listener closed. Each attempt:
       1. loads the identities (keyfile) and checks their validity windows and the CA's;
@@ -494,17 +579,26 @@ I19). The owner may override any of them. The ones the owner should read first a
       1. it takes the hold;
       2. checks the seal-key record;
       3. restores the revocations file's marks into the store (a mark in either stands);
-      4. **applies every standing mark to the contexts the store kept**, through 7a's two
+      4. re-indexes every kept context the index lost (Ruling 6; re-check IA2);
+      5. **applies every standing mark to the contexts the store kept**, through 7a's two
          context passes (pre-flight C1);
-      5. purges every unspent token (a restart purged them on the memory store too, and no
+      6. purges every unspent token (a restart purged them on the memory store too, and no
          policy port49d loaded judged them);
-      6. carries the policy in force into every kept context (`Broker.RefreshAtStart`).
+      7. carries the policy in force into every kept context (`Broker.RefreshAtStart`).
 
-      Steps 3, 4 and 6 retry every 5 s while the store errs.
+      Steps 3 to 7 retry every 5 s while the store errs (re-check R-M4).
+    - **A kept context that will not open does not stop a start** (re-check R-I3). Applying a
+      certificate mark reads each context it reaches. One sealed under a key this window lacks
+      is still marked, since a revocation needs no key, and is denied as unreadable anyway; so
+      it is skipped, never fatal. Any other error but an outage is said and skipped too: the
+      daemon's marks deny that context on every request regardless.
     - **Replays.** Every key is marked superseded at the start instant (`Broker.SupersededAll`),
       so an idempotent replay re-mints rather than handing back a deleted token.
     - **The marks, at runtime too.** The daemon's in-memory marks (Ruling 17) are loaded before
-      any listener binds, so a context step 4 could not reach is denied anyway.
+      any listener binds, so a context step 5 could not reach is denied anyway.
+    - **The ledger is seeded before any listener binds.** Steps 4, 5 and 7 read every kept
+      context through the sealing layer, so the ledger (Ruling 17) holds each key's `ctx_id`
+      before the first device connects.
     - **One window.** A certificate a kept CRL newly names is marked by the certificate-status
       queue's first drain, which starts after the listeners open (`crl.go:184-196`). Until that
       drain, seconds after bind, its kept contexts answer. A revoked certificate is still
@@ -539,7 +633,7 @@ I19). The owner may override any of them. The ones the owner should read first a
       semaphore, and the agent knows when a revocation holds it. The sends that take it
       (pre-flight I18):
       - `Connect`;
-      - `Mint`, through `post`;
+      - `Mint`, per `post`, given back across a `409`'s Retry-After wait (re-check m1);
       - `Refresh`'s challenge and answer, under one hold since they share a connection;
       - every `exchange` (identity, explain, revoke).
     - **Behind a revocation.** A call arriving then waits within its own 30 s. If the
@@ -558,10 +652,11 @@ I19). The owner may override any of them. The ones the owner should read first a
       - what it sees after the store returns and port49d serves again.
 
       Nothing in the design is asserted about it before the row closes.
-17. **The whole context record is sealed, and the daemon reads the standing marks** (pre-flight
-    I12; the controller's ruling: a stolen daemon store credential must not un-revoke a context
-    or raise its privilege).
-    - **The seal.**
+17. **No field a login or an authorization trusts is written in the clear; the daemon reads the
+    standing marks and keeps a ledger** (pre-flight I12; re-check CA1, IA1; the controller's
+    rulings: a stolen daemon store credential must not un-revoke a context, raise its
+    privilege, or pass for another login).
+    - **The context, sealed whole.**
       - **What is sealed.** Every field the authorizer trusts, under the encryption key: the
         identity and credential, as before, and now `priv_lvl`, `blob_hash`, `max_privilege`,
         `enable`, `auth_time`, `session_expires`, `refreshed_at`, `created_at` and
@@ -572,12 +667,35 @@ I19). The owner may override any of them. The ones the owner should read first a
         is also kept in the clear so a revocation needs no key; a read takes the later of the
         two. Also plaintext, and trusted by nothing: the revisions, the idle clock
         (`last_touched_at`) and accounting's annotations.
+    - **The token, sealed with its key** (re-check CA1). A login copies a token's fields into
+      its context (authen.go:705-724), and the context seal then seals them faithfully, so the
+      token is where they must be sealed first.
+      - **What is sealed** in `tokenSecret`, beside the secret, principal, username and
+        credential: `kind`, `expires_at`, `blob_hash`, `max_session_age`, `enable`,
+        `max_privilege`, `auth_time` and `minted_at`. A redemption reads `kind` and the ceiling
+        (`auth_time` plus `max_session_age`). A login copies the policy fields into its
+        context. The join compares `minted_at` with a revocation (`CarryRevocation`), so a
+        forged later one would leave a self or key revocation behind.
+      - **Bound to its key.** The additional data is the key id, the token key (device,
+        username) and the token ID. A token moved to another key or ID does not open.
+      - **What stays in the clear.** The `id` (the handle the backend deletes by), and a copy of
+        `expires_at`, which the backend expires by. A token whose plaintext expiry differs from
+        its sealed one is dropped as one that will not open. The layer writes them equal, so a
+        difference is a store write, and an extended plaintext expiry would otherwise be
+        redeemable past the sealed one.
+    - **The receipt, sealed with its key** (re-check CA1). The additional data is the key id and
+      the whole receipt key (device, username, kind, credential hash). So a login receipt copied
+      to the enable key does not open; copied, it would replay an escalation with no enable
+      token. `first_redeemed_at`, which anchors the cap, is sealed too. Its plaintext copy stays
+      for the backend and is not read.
     - **The setters.**
       - **Sealed fields.** `SetPrivilege`, `RefreshContext` and `SetContextPolicy` become
         read-open-apply-reseal-rewrite in the sealing layer: on the revision read, through
         `Store.RewriteContext`, with the rules shared as `store.Apply*`.
       - **`SetRevokedAt`** writes the plaintext mark first, keyless and in force at once, then
-        seals it in.
+        seals it in, retrying a lost race until the caller's deadline. If the seal still has
+        not landed, its error says the revocation is in force and the seal pending (re-check
+        MA2).
       - **The rest.** `TouchContext` and `AnnotateContext` stay pass-through, so the
         per-command path costs no extra store call.
     - **The marks.** `store.Marks` is the daemon's in-memory copy, with the store as authority.
@@ -587,20 +705,49 @@ I19). The owner may override any of them. The ones the owner should read first a
         certificate a mark names, whatever the record says.
       - **The cost per command:** one read lock and at most two map lookups, and no store call.
         Its memory is the number of marks in force, as the listener's copy is.
-    - **What a stolen daemon credential can still do** (the residual, said in d35 and design §8):
-      - put back a record port49 sealed earlier for the same key, which undoes a self or key
-        revocation (no mark; decision 34), or a policy narrowing, until the next refresh judges
-        it;
-      - keep a context alive past its idle TTL, never past its sealed ceiling;
-      - delete records, which is an outage.
+    - **The ledger** (re-check IA1; the controller's ruling: yes). Without it, Bob could save
+      Alice's sealed context for leaf-01/netops and, after his own login there, write it back.
+      It opens, since it is bound to that key, and his session authorizes as Alice. The refresh
+      does not help, because it judges Alice, who is still entitled.
+      - **What it holds.** `crypt.Ledger` holds, per context key, the `ctx_id` of the last
+        sealed write that landed there, or of the first record this process read there.
+      - **A mismatch is denied.** A record that opens at a key under any other `ctx_id` is
+        `UnreadableContextError` wrapping `crypt.ErrNotLastWritten`, and is counted as
+        `crypt_open_failures_total{record="context"}`. The authorizer answers it
+        `store_unavailable`, a login replaces it, and the refresh revokes it.
+      - **Writes in flight.** A write in flight is admitted. So is one whose outcome is unknown
+        (a deadline; spec §5.6) until a later write lands. A conflict or a not-found wrote
+        nothing.
+      - **One per process.** One ledger is shared by every `Wrap` (`crypt.WithLedger`), so the
+        broker's reads and the daemon's agree. A start's reads (the re-index, the marks, the
+        refresh) seed it before any listener binds.
+      - **The cost.** One mutex and a map lookup per context read or write, and no store call.
+        Its memory is one entry per key this process has read or written, kept while it runs:
+        about 150 bytes each, 15 MB at 100,000 keys.
+      - **A race.** A read racing a login's replace at the same key can return the replaced
+        record after the replace landed. That one request is denied `store_unavailable`, which
+        fails closed; before the ledger it authorized as the replaced context.
+    - **Every family the daemon's role can write, and what a writer gains** (re-check CA1).
+      This is everything a stolen daemon store credential yields. The broker's role holds the
+      whole keyspace until plan 7e splits it out.
 
-      It cannot forge or move a record, raise a privilege past what port49 wrote, or lift a
-      revocation by principal or certificate. Task 16 carries the replay as an unassigned
-      follow-up.
-    - **Migration.** A context sealed before 7d-1 fails to open under the new additional data,
-      so it is unreadable: denied, and replaced at the next login. None survives in practice.
-      The restart that installs 7d-1 wipes the memory store, and etcd holds no context before
-      7d.
+      | Family | In the clear | What a store write gains |
+      |---|---|---|
+      | `t/` tokens | `id`; a copy of `expires_at` | **Nothing forged:** every trusted field is sealed and bound. **Replay:** a token port49 minted for the same key and ID, deleted since (redeemed, or by a self or key revocation), can be put back and redeemed by a holder of its secret until its sealed expiry (the TTL it was minted with). An extended plaintext expiry drops it. |
+      | `r/` receipts | `idle_expires_at`, `retain_until`, `failed`, a copy of `first_redeemed_at` | **`idle_expires_at`** stretches the replay window to the sealed cap (`first_redeemed_at` plus `receipt_max_age`), never past it. **`failed`**, zeroed, replays PASS only onto the live context with the receipt's `ctx_id`, whose own revocation and the marks are read again: what that principal's later token already granted. Every replay needs the credential. |
+      | `rp/` receipt index | all | **Deleted:** a revocation by principal misses those receipts, and each replay still reads the live context and the marks, so it is denied. **Added:** a revocation deletes more, which is a denial. |
+      | `c/` contexts | `revoked_at` (a read takes the later), the revisions, `last_touched_at`, accounting's annotations | **Nothing forged or moved.** **Replay in a running port49d** (the ledger): an earlier version of the context the key holds now, which has the same `ctx_id`, so the same principal and login. It undoes a self or key revocation of that context, or a policy narrowing, until the next refresh judges it. **Replay across a restart:** a context of any login port49 sealed for that key, put back while port49d was stopped, is taken as the key's at the start. That is impersonation, until that record's sealed ceiling (if it has one) or the key's next login; a principal or certificate mark still denies it. **The idle clock:** a context can be kept alive past its idle TTL, to its sealed ceiling if it has one, and indefinitely under `max_session_age: never` (re-check MA1). The refresh still judges it, and every revocation reaches it. |
+      | `x/` index records; `ip/`, `is/`, `ic/` lookups | all | **Deleted:** the context is hidden from the refresh, `revoke --mine` and a revocation by sid until the next sweep re-indexes it (`sweep_interval`, 10 m; Ruling 6). A revocation by sid in that window never reaches it; one by principal or certificate does, through the marks. **Added:** a revocation reaches a context it should not, which is a denial. |
+      | `b/` blobs | all (no identity) | **Nothing:** a blob is checked against its sealed hash (`engine.Decode`), so an altered body is refused, which is a denial. |
+      | `rv/` marks, `meta/` | read-only for the daemon | Nothing. |
+      | `tp/`, `tc/` token indexes; `id/` idempotency | no access | Nothing. |
+
+      Deleting a record, or making a write conflict, is a denial, never a grant. Task 16 carries
+      the replay cells as an unassigned follow-up.
+    - **Migration.** A token, receipt or context sealed before 7d-1 fails to open under the new
+      additional data: a token is dropped, a receipt or context is denied, and a context is
+      replaced at the next login. None survives in practice. The restart that installs 7d-1
+      wipes the memory store, and etcd holds no record before 7d.
 18. **The index stays plaintext, and an etcd snapshot holds it** (pre-flight I5; the controller's
     ruling). Revocation must not depend on the encryption key or its rotation window (the
     owner's ruling of 2026-09-21; crypt's package comment). So the index keys revocation reads
@@ -625,17 +772,22 @@ I19). The owner may override any of them. The ones the owner should read first a
 - **Ruling 11.** Until 7e, one port49d per keyspace, so etcd gives persistence and the
   foundation, not yet HA. A Kubernetes rollout must use `Recreate`: a surge pod waits for the
   hold and is not ready.
-- **Ruling 11's go-dark (controller, I19).** When etcd is gone for `hold_ttl`, port49d closes
-  every listener and waits in-process for the store. It never exits for an outage, so no
-  `Restart=` policy is needed, and break-glass works meanwhile (L4).
+- **Ruling 11's go-dark (controller, I19, R-I2).** When etcd is gone for `hold_ttl`, port49d
+  closes every listener and waits in-process for the store, retrying any start error after
+  that. Once it has served it never exits for an outage, and break-glass works meanwhile
+  (L4). Keep `Restart=on-failure` for a cold-start failure or a crash.
 - **Ruling 12.** A port49d restart purges every unspent token, as it always did on the memory
   store, so operators run `port49 token` again after a restart. Their sessions survive.
 - **Ruling 7.** A login whose index write fails is now refused (ERROR), not admitted unrevocable.
-- **Ruling 9 (controller, I1).** `packet_deadline` is at most 2 s, and the failure delay is
-  never cut by it. The worst-case FAIL with both at 2 s is 4 s, past Junos's 3 s.
+- **Ruling 9 (controller, I1, N1).** `packet_deadline` is at most 2 s, and the failure delay
+  is never cut by it. The delay counts from the packet's arrival, so a FAIL arrives within 2 s
+  at the defaults, under Junos's 3 s.
 - **Ruling 13 (controller, I16).** etcd requires `admin_socket`.
-- **Ruling 17 (controller, I12).** The seal covers the whole context, and the daemon reads the
-  marks. The residual is a replay that undoes an unmarked revocation.
+- **Ruling 17 (controller, I12, CA1, IA1).** The context, the token's trusted fields and the
+  receipt are sealed, each bound to its key. The daemon reads the marks and keeps a ledger of
+  the `ctx_id` it last wrote at each key. Ruling 17's table is what a stolen daemon credential
+  still yields: replay, which across a restart is impersonation by a context put back while
+  port49d was stopped.
 
 ## What the operator sees
 
@@ -709,24 +861,36 @@ task in this plan, and the tests named pin it.
      refused (L4); port49d closes its listeners if the store is gone for store.etcd.hold_ttl`.
      From then on, refusals are immediate. `port49_store_circuit_open{component,pool}` is 1.
   3. **Within `hold_ttl`, port49d closes every listener:** `port49d: store: lost this port49d's
-     hold on keyspace /port49/ (its lock key is gone, or etcd has not answered for 10s); closing
-     every listener so that devices use their local method`.
+     hold on keyspace /port49/ (its lock key is gone, or etcd stopped answering with half its
+     lease or less left); closing every listener so that devices use their local method`.
+     Held TACACS+ connections are reset, not closed with a FIN (L28's fast fall to local).
      - Then: `port49d: store: …; every listener is closed; waiting for the store again, as at a
        start`.
      - Devices find TACACS+ refused. Open sessions' commands fall to local authorization,
        measured with port49d stopped (`tests/lab/results/quarantine-*.md`; L35 measures this
        case), and break-glass logs in.
-     - `/readyz` is 503 and `port49_store_keyspace_held` is 0. The metrics listener stays up,
-       with its counters restarted.
+     - `/readyz` is 503 and `port49_store_keyspace_held` is 0. The metrics listener is
+       unbound for the drain and the next run's config load (seconds), then up again with its
+       counters restarted (re-check R-M3).
   4. **When etcd returns,** the same process takes the hold and says `port49d: store: purged 3
      unspent token(s) from before this start (run 'port49 token' again)` and `port49d: store: 41
      live context(s) carried onto the policy in force (bundle sha256:…) before serving`. Then it
      listens. Whether an open session's next command is answered from its context again is
      L35's.
+  5. **If that start fails for another reason** (a policy file caught half-written, the
+     broker's role refused on `meta/`): `port49d: starting again after a store gone: …; the
+     listeners stay closed; trying again in 5s`, until it succeeds or port49d is stopped.
 - **3am: etcd is slow, not down.** A call over `call_timeout` fails as above. So does a packet
   whose store work runs past `packet_deadline` mid-call (outcome `deadline`), even if each call
-  is under `call_timeout`. Enough of them open the circuit, and a circuit that stays open
-  through `hold_ttl` closes the listeners as in 3. A store that answers inside both is served.
+  is under `call_timeout`. Enough of them open the circuit, and a token or context circuit that
+  stays open through `hold_ttl` closes the listeners as in 3. A store that answers inside both
+  is served, and a wrong token's FAIL still arrives at the failure delay, the store's time
+  inside it.
+- **3am: the scans are slow at scale** (a refresh's `ActivePrincipals`, a start's purge). The
+  bulk pool's circuit opens: `port49d: store: the broker's bulk pool's circuit is open after 5
+  consecutive failures (…); the scans (the refresh, a revocation by principal, a start's
+  purge) fail until a probe in 5s succeeds; logins and commands are unaffected`, and
+  `port49_store_circuit_open{pool="bulk"}` is 1. port49d keeps serving.
 - **3am: the daemon's etcd role is revoked or changed at runtime.** Every call is refused
   (`port49_store_calls_total{outcome="refused"}`). After `hold_ttl`: `port49d: store: every call
   on the daemon's context pool has been refused by the store for 15s (its role no longer grants
@@ -747,8 +911,16 @@ task in this plan, and the tests named pin it.
   applied to the live contexts the store kept (2 context(s) marked revoked) before serving`. The
   session's next command is denied `credential_revoked`.
 - **A context record edited in etcd** (a stolen daemon key): the record fails authentication.
-  `port49d: crypt: a context failed authentication under key id "enc3": it was altered or is
-  corrupt, and is treated as unreadable`, and the session is denied `store_unavailable`.
+  `port49d: crypt: a context failed authentication under key id "enc3", or is not the one this
+  port49d last wrote there: it was altered or is corrupt, and is treated as unreadable`, and
+  the session is denied `store_unavailable`. A token edited the same way is dropped and the
+  login is `token_not_found`; `crypt_open_failures_total{record}` counts each.
+- **Another login's context written back in etcd** (the ledger): the same line, and the
+  session is denied `store_unavailable` until its next login, which replaces the record.
+- **An index record deleted in etcd:** at the next sweep, `broker: 1 live context(s) were
+  missing from the index (an index record deleted in the store?); re-indexed and judged
+  against the policy in force`, and `port49_contexts_reindexed_total` rises. Alert on any
+  increase.
 - **A key rotation done wrong across a restart** (previous dropped while records it sealed
   live): `port49d: crypt: the store was last written by a port49d whose current key is "enc2",
   which this configuration does not hold (current "enc3", no previous); the live sessions sealed
@@ -796,8 +968,12 @@ Carried from plans 2–7c, and still binding:
 
 New in this plan:
 
-- **No field the authorizer trusts is written in the clear** (Ruling 17). `revoked_at` is the
-  one written both ways, and a read takes the later.
+- **No field a login or the authorizer trusts is written in the clear** (Ruling 17). Context,
+  token and receipt are each sealed with their record's key as additional data. `revoked_at` is
+  written both ways, and a read takes the later; a token's `expires_at` is written both ways,
+  and a token whose two differ is dropped.
+- **Every sealed context write goes through the ledger** (`w.sent`), and every context read is
+  checked against it (Ruling 17; re-check IA1).
 - **Store records are JSON with snake_case keys.** The etcd backend never marshals a `store` type
   whose fields lack tags; it converts to its own `*Rec` types (Task 5).
 - **No metric label names a principal, device, key or endpoint.** The new labels are closed sets:
@@ -840,8 +1016,9 @@ Each has its test in the task named.
    backend, and the schema ends every scanned part with `/`. *Task 5,
    `TestScannedKeysEndWithASlash`; Task 7, `storetest.IndexKeysAreExact`.*
 4. **Two port49d against one keyspace, a port49d whose hold lapses, and a deleted hold key.** The
-   second never binds TACACS+ while the first holds. The first, cut off past ⅔ `hold_ttl`, or
-   finding its key gone, closes its listeners and says why. *Task 12,
+   second never binds TACACS+ while the first holds. The first, cut off until its estimate of
+   the lease has half of `hold_ttl` or less left, or finding its key gone, closes its listeners
+   and says why, at least `hold_ttl`/6 before the second can take the keyspace. *Task 12,
    `TestHoldIsOnePerKeyspaceAndLapses`, `TestTheHoldIsLostWhenItsKeyIsDeleted`,
    `TestASecondPort49dWaitsForTheKeyspace`.*
 5. **A mark that lands between a login's read of the marks and its write.** The write conflicts,
@@ -854,17 +1031,30 @@ Each has its test in the task named.
    connection dropping mid-call is not counted, and its slot is given back. A packet deadline
    striking mid-call is counted. *Task 9, `TestACallerThatGoesAwayIsNotAFailure`,
    `TestASlowStoreGoesDark`.*
-8. **A context record edited in the store.** A zeroed `revoked_at`, a raised privilege, a
-   swapped blob, a removed ceiling, a record moved to another key, and a record put back from
-   before its revocation under a standing mark. None reaches a permit. *Task 4b,
-   `TestTheSealCoversWhatAuthorizationTrusts`, `TestAStandingMarkDeniesAnUnrevokedContext`.*
+8. **A context, token or receipt record edited in the store.** A zeroed `revoked_at`, a raised
+   privilege, a swapped blob, a removed ceiling, a flipped sealed byte, a record moved to
+   another key, a record put back from before its revocation under a standing mark, another
+   login's context written back, every trusted token field raised, a token moved to another
+   key or ID or its expiry extended, and a login receipt copied to the enable key. None
+   reaches a permit. *Task 4b, `TestTheSealCoversWhatAuthorizationTrusts`,
+   `TestTheTokensTrustedFieldsAreSealed`, `TestAReceiptIsBoundToItsKey`,
+   `TestTheLedgerDeniesAnotherLoginsContext`, `TestAStandingMarkDeniesAnUnrevokedContext`.*
 9. **A start after a revocation the kept contexts never saw** (pre-flight C1). *Task 12,
    `TestApplyMarksAtStartRevokesAKeptContext`, `TestAStartAppliesAStandingMarkToAKeptContext`.*
 10. **A store slow but alive, or refusing every call.** The circuit opens, stays open, and the run
-    goes dark; a role refused for `hold_ttl` does the same. *Task 9, `TestASlowStoreGoesDark`,
-    `TestRefusalsGoDark`.*
-11. **A FAIL behind a short packet deadline.** The brute-force delay is served whole. *Task 10,
-    `TestThePacketDeadlineNeverShortensTheFailureDelay`.*
+    goes dark; a role refused for `hold_ttl` does the same. Two refusals far apart, and a bulk
+    circuit open for `hold_ttl`, do not. *Task 9, `TestASlowStoreGoesDark`,
+    `TestRefusalsGoDark`, `TestTheBulkPoolNeverGoesDark`.*
+11. **A FAIL behind a short packet deadline, and one behind a slow store.** The brute-force
+    delay is served whole, and the store's time is inside it, not added. *Task 10,
+    `TestThePacketDeadlineNeverShortensTheFailureDelay`, `TestAFailArrivesAtItsDelay`.*
+12. **An index record deleted in the store.** The context is found, re-indexed, judged, and
+    reached by a revocation again. *Task 7b, `TestUnindexedFindsAContextItsIndexLost`,
+    `TestReindexContextsRestoresRevocationsReach`.*
+13. **A start after a store gone that fails for another reason, and a kept context that will not
+    open under a certificate mark.** Neither ends port49d. *Task 12,
+    `TestAStartAfterAStoreGoneRetriesEveryError`,
+    `TestApplyMarksAtStartSkipsAnUnreadableContext`.*
 
 ## Running the lab (Task 15)
 
@@ -873,7 +1063,8 @@ single-occupant. The controller rewrote `.superpowers/sdd/2026-10-02-07d-shared-
 for 7d with this amendment (pre-flight M45). Task 15 Step 0 checks it before dispatch.
 
 **Every run is made from a detached worktree pinned to a commit:** `git worktree add --detach
-../port49-lab-7d <sha>`, then `make build` there. The commit includes `tests/lab/store_test.go`
+/home/rwendt/git/port49/.worktrees/lab-7d <sha>`, then `make build` there, never in the shared
+feature worktree. The commit includes `tests/lab/store_test.go`
 (Task 15 Step 1 commits it first). Run one platform at a time: `PORT49_LAB_PLATFORMS=eos`, then
 `nxos`, `iosxe`, `vjunos`, `vsrx`.
 
@@ -885,9 +1076,10 @@ binary exactly: `pgrep -f "^/tmp/go-build[^ ]*/lab\.test"`.
 running (`pgrep -f 'port49 agent'`), and that the topology is destroyed. The embedded etcd dies
 with the test process: confirm with `ss -ltnp | grep -c lab.test`, which must print 0.
 
-**Before removing the worktree,** copy the raw captures from its `tests/lab/captures/` to the main
-checkout's `tests/lab/captures/`, then run `make evidence` there. Otherwise main's labpcap audit
-fails.
+**Before removing the pinned worktree,** copy the results and the raw captures from its
+`tests/lab/captures/L35-*` to the feature worktree (the one on 7d-2's branch), then run `make evidence` there: the labpcap and count-only
+audits must pass on the branch that commits them (re-check m2; `lab-instructions.md` says the
+same).
 
 ## File Structure
 
@@ -911,12 +1103,16 @@ internal/store/marks.go, marks_test.go         NEW  Marks (Task 4b)
 internal/store/join.go                         MOD  LoginIndex; JoinContext reads marks and writes through SwapLogin (Task 3)
 internal/store/join_test.go                    MOD  LoginIndex{}; alwaysConflicts.SwapLogin (Task 3)
 internal/store/memory/memory.go                MOD  SwapLogin, PurgeTokens, *Locked index helpers (Task 3); RewriteContext, Apply* (Task 4b)
-internal/store/crypt/crypt.go                  MOD  SwapLogin, PurgeTokens (Task 3); the whole-record seal, rewrite (Task 4b);
-                                                    OnUnopenable, SealedKeyID (Task 13)
+internal/store/crypt/crypt.go                  MOD  SwapLogin, PurgeTokens (Task 3); the whole-record seal, rewrite, the token's
+                                                    and the receipt's seal, Option, WithLedger (Task 4b); OnUnopenable,
+                                                    SealedKeyID (Task 13)
+internal/store/crypt/ledger.go                 NEW  Ledger, NewLedger, ErrNotLastWritten (Task 4b)
 internal/daemon/authen/authen.go               MOD  the join with its index; no separate index calls (Task 4); WithMarks (Task 4b)
 internal/daemon/authen/authen_test.go          MOD  noStore; the fakes; tests of the one step (Tasks 3, 4); marks (Task 4b)
 internal/daemon/author/author.go, _test.go     MOD  WithMarks; the mark check (Task 4b)
 internal/broker/broker.go, revoke.go           MOD  Marks set on revoke and lift (Task 4b); SupersededAll, ApplyMarksAtStart (Task 12)
+internal/broker/reindex.go, reindex_test.go    NEW  ReindexContexts (Task 7b)
+internal/session/session.go, session_test.go   MOD  Manager.Reindex (Task 7b)
 go.mod, go.sum                                 MOD  go 1.26; etcd client, embed (Task 5)
 internal/store/etcd/etcd.go                    NEW  Config, Open, Store, Close, Ping, unavailable, ErrTooLarge (Task 5); two clients (Task 11)
 internal/store/etcd/keys.go                    NEW  the key schema (Task 5)
@@ -925,8 +1121,9 @@ internal/store/etcd/leases.go                  NEW  lease buckets (Task 5)
 internal/store/etcd/commit.go                  NEW  commit, cas (Task 5)
 internal/store/etcd/tokens.go                  NEW  tokens, receipts, token index, PurgeTokens (Task 5)
 internal/store/etcd/marks.go                   NEW  revocation marks (Task 5)
-internal/store/etcd/contexts.go                NEW  contexts, blobs, the index record's writes, SwapLogin, RewriteContext (Task 6)
-internal/store/etcd/indexes.go                 NEW  lookups, active principals, Sweep (Task 7)
+internal/store/etcd/contexts.go                NEW  contexts, blobs, the index record's writes, SwapLogin, RewriteContext, the read's
+                                                    bookkeeping cache (Task 6)
+internal/store/etcd/indexes.go                 NEW  lookups, active principals, Sweep (Task 7); Unindexed (Task 7b)
 internal/store/etcd/idempotency.go             NEW  reservation (Task 8)
 internal/store/etcd/notbuilt.go                NEW→DEL  methods later tasks build (Tasks 5–8)
 internal/store/etcd/etcd_test.go               NEW  TestMain; storetest on etcd; the planting store; backend-only tests (Tasks 5–8)
@@ -935,18 +1132,20 @@ internal/store/etcd/roles.go, roles_test.go    NEW  Roles, CheckIdentity (Task 1
 internal/store/etcd/meta.go, meta_test.go      NEW  Hold and its fence (Task 12); SealKeys (Task 13)
 internal/store/guard/guard.go                  NEW  Wrap, three pools, breaker, StopAfter (Task 9)
 internal/store/guard/guard_test.go             NEW  (Task 9)
-internal/daemon/metrics/metrics.go, _test.go   MOD  store_calls_total, store_circuit_open, store_call_seconds (Task 9);
+internal/daemon/metrics/metrics.go, _test.go   MOD  contexts_reindexed_total (Task 7b);
+                                                    store_calls_total, store_circuit_open, store_call_seconds (Task 9);
                                                     store_keyspace_held, store_client_cert_expiry_timestamp_seconds (Task 12);
                                                     crypt_store_key_unknown (Task 13)
 internal/config/config.go                      MOD  StoreConfig, EtcdConfig, StoreOf; checks (Task 10)
 internal/config/store_test.go                  NEW  (Task 10)
-internal/daemon/server/server.go, conn.go      MOD  Deps.PacketDeadline; the delay's context (Task 10)
-internal/daemon/authen/authen.go               MOD  DelayContext, WithDelayContext; fail sleeps on it (Task 10)
+internal/daemon/server/server.go, conn.go      MOD  Deps.PacketDeadline; the delay's context and the arrival (Task 10);
+                                                    Deps.Abort, a reset on a store gone (Task 12)
+internal/daemon/authen/authen.go               MOD  DelayContext, WithDelayContext; fail sleeps until arrival + delay (Task 10)
 cmd/port49d/store.go                           NEW  openStores, identity, probeTLS, the start wait, storeGone, startOnPersistentStore,
                                                     sweepLoop (Task 12); the crypt line, seal keys (Task 13)
 cmd/port49d/storeroles.go, storeroles_test.go  NEW  port49d store-roles (Task 11)
 cmd/port49d/main.go                            MOD  deps.PacketDeadline (Task 10); store-roles dispatch (Task 11);
-                                                    run's loop, runOnce on the stores, marks (Tasks 4b, 12)
+                                                    run's loop (runLoop), runOnce on the stores, marks, the ledger (Tasks 4b, 12)
 cmd/port49d/store_e2e_test.go                  NEW  (Task 12)
 cmd/port49d/store_test.go                      NEW  identity, probeTLS (Task 12); the crypt line, seal keys (Task 13)
 internal/broker/refresh.go, refresh_test.go    MOD  RefreshAtStart, RefreshReport.Contexts; ApplyMarksAtStart's test (Task 12)
@@ -957,12 +1156,13 @@ tests/lab/results/L35-*.md                     NEW  written by the run (Task 15)
 docs/superpowers/plans/README.md               MOD  plan 7d-1 as built (Task 8 Step 6); plan 7d as built (Task 16)
 ```
 
-Eighteen tasks in two merges:
+Nineteen tasks in two merges:
 - **7d-1:**
   - **Task 1** is docs, and comes first: 7d-1's tasks cite the text it writes.
   - **Tasks 2–4** are the store's contract and its one behaviour change (the login).
-  - **Task 4b** is the seal and the marks.
-  - **Tasks 5–8** are the etcd backend.
+  - **Task 4b** is the seals, the ledger and the marks.
+  - **Tasks 5–8** are the etcd backend; **Task 7b** finds and re-indexes a context its index
+    lost.
 - **7d-2:**
   - **Task 8b** is docs, and comes first: 7d-2's tasks cite the text it writes.
   - **Tasks 9–14** are code: the guard, the config, the identities, port49d on etcd, the crypt
@@ -1006,7 +1206,8 @@ Nothing here asserts what a device does.
 
   ```markdown
   **35. The shared store is etcd, every read is linearizable, a login lands with its index and
-  its revocation check in one step, and no field authorization trusts is written in the clear.**
+  its revocation check in one step, and no field a login or an authorization trusts is written in
+  the clear.**
   *Plan 7d, 2026-10-02: D1 answered by the owner (etcd); the rest rulings where the design was
   silent, each the option that denies more, and the controller's rulings on plan 7d's pre-flight
   review (the owner may override them).*
@@ -1043,9 +1244,19 @@ Nothing here asserts what a device does.
     - **The setters.** A narrow setter on a sealed field reads, opens, applies its rule, seals
       and rewrites on the revision it read. The idle clock and accounting's annotations stay
       plaintext and authorize nothing.
-    - **Migration.** A context sealed before this does not open, so it is denied and replaced at
-      the next login. The memory store loses every context at the restart that installs it, and
-      etcd holds none before plan 7d.
+    - **The token and the receipt.** A token's secret, identity and every field a login trusts
+      (its kind, expiry, policy blob, session age, enable mechanism, maximum privilege and
+      clocks) are sealed, bound to the token's key and ID; a copy of the expiry stays in the
+      clear for the store, and a token whose two expiries differ is dropped. A receipt is
+      sealed, its first redemption included, bound to its whole key, kind and credential hash
+      among it.
+    - **Migration.** A token, receipt or context sealed before this does not open: a token is
+      dropped, a context is denied and replaced at the next login. The memory store loses every
+      record at the restart that installs it, and etcd holds none before plan 7d.
+  - **The ledger.** port49d keeps, per context key, the `ctx_id` it last wrote there or first
+    read there. A context that opens at a key under another `ctx_id` (another login's record
+    written back) is denied `store_unavailable`, replaced by the next login and revoked by the
+    refresh. A start reads every kept context before any listener binds.
   - **The standing marks are read on every request.** The daemon holds the marks in memory, with
     the store as the authority.
     - **Kept current.** They are loaded at start before any listener binds; a mark is added once
@@ -1055,12 +1266,25 @@ Nothing here asserts what a device does.
       the record says.
     - **The cost** per request is one in-memory lookup.
   - **What store write access still yields.** A stolen daemon store credential cannot forge or
-    move a context, raise a privilege past what port49 wrote, or lift a revocation by principal
-    or certificate. It can:
-    - put back a record port49 sealed earlier for the same key, which undoes a self or key
-      revocation (no mark; decision 34), or a policy narrowing, until the next refresh judges it;
-    - keep a context alive past its idle TTL, never past its sealed ceiling;
-    - delete records, which is an outage.
+    move a token, receipt or context, raise a privilege past what port49 wrote, or lift a
+    revocation by principal or certificate. Deleting a record, or making a write conflict, is
+    a denial. What it can do is replay:
+    - **a context** port49 sealed earlier for the same key. While port49d runs, the ledger
+      admits only an earlier version of the context the key holds now (the same `ctx_id`, so
+      the same principal), which undoes a self or key revocation of it (no mark; decision 34)
+      or a policy narrowing until the next refresh judges it. **Across a restart it is
+      impersonation:** another login's context put back while port49d was stopped is taken as
+      that key's at the start, until its sealed ceiling, if it has one, or the key's next login.
+      A principal or certificate mark still denies it;
+    - **a token** port49 minted for the same key and ID, deleted since, which a holder of its
+      secret can redeem until its sealed expiry;
+    - **a receipt's sliding bound**, up to its sealed cap, or its refusal flag, which replays
+      PASS only onto the live context that receipt's own principal holds unrevoked;
+    - **the idle clock**: a context kept alive past its idle TTL, to its sealed ceiling if it
+      has one, and indefinitely under `max_session_age: never`;
+    - **the index**: a context whose index record is deleted is hidden from the refresh and
+      from a revocation by sid or `--mine` until the broker finds and re-indexes it; a
+      revocation by principal or certificate still denies it through the marks.
 
     That residual is carried, unassigned.
   - **The index is plaintext.** The keys revocation reads (principal, device, username,
@@ -1141,7 +1365,13 @@ Nothing here asserts what a device does.
     `store.ErrUnavailable` within its deadline, never answers from a stale member.
   - **The seal**: a context record whose `revoked_at` is zeroed, privilege raised, blob swapped
     or ceiling removed in the store reads back as port49 wrote it, and one moved to another key
-    does not open.
+    does not open. A token whose trusted fields are raised in the store reads back as minted,
+    one moved to another key or ID or whose expiry is extended is dropped, and a login receipt
+    copied to the enable key does not open.
+  - **The ledger**: another login's context written back at a key is denied; an earlier
+    version of the same context is not (the residual).
+  - **The index lost**: a context whose index record is deleted is found, re-indexed and judged
+    against the policy in force, and a revocation by principal reaches it again.
   - **The marks**: a context a standing mark names is denied `credential_revoked` at
     authorization, at `enable` and at a receipt's replay, whatever its record says; a lifted
     mark denies nothing.
@@ -1195,12 +1425,23 @@ Nothing here asserts what a device does.
       record to another device or username.
     - **The revocation in the clear.** `revoked_at` is also kept in the clear, so a revocation
       needs no key; a read takes the later of the two.
+    - **The token and the receipt.** A token's every field a login trusts (kind, expiry, policy
+      blob, session age, enable mechanism, maximum privilege, clocks) is sealed with its secret,
+      bound to the token's key and ID. A receipt is sealed bound to its whole key. A store write
+      therefore cannot raise what a login copies into its context, nor make a login receipt
+      answer an enable.
     - **The marks.** The daemon also reads the standing revocation marks on every request.
-    - **What store write access still yields is replay.** A record port49 sealed earlier for the
-      same key can be put back. That undoes a revocation that leaves no mark (a self or key
-      revocation), or a policy narrowing, until the next refresh. The idle clock and the
+    - **The ledger.** port49d keeps the `ctx_id` it last wrote, or first read, at each key, and
+      denies a context that opens there under another: another login's record written back.
+    - **What store write access still yields is replay** (policy engine spec §13, decision 35,
+      lists it whole). While port49d runs, an earlier version of the context a key holds now
+      can be put back, which undoes a revocation that leaves no mark (a self or key revocation)
+      or a policy narrowing until the next refresh. **Across a restart it is impersonation:**
+      another login's context put back while port49d was stopped is taken as that key's, until
+      its sealed ceiling, if it has one, or the key's next login. A deleted token can be put
+      back for a holder of its secret until its sealed expiry. The idle clock and the
       accounting annotations stay plaintext, so a context can be kept alive to its sealed
-      ceiling.
+      ceiling, if it has one, and indefinitely under `max_session_age: never`.
 
     **The index is the exception to the dump rule above.** The keys revocation reads stay
     plaintext: the principal, device, username, certificate and `sid`. Revocation must not
@@ -1232,8 +1473,11 @@ Nothing here asserts what a device does.
 
   Spec §13 decision 35 records D1 (etcd, the owner's) and what plan
   7d-1 builds: the backend, logical expiry, the login's one step, the
-  whole-record seal bound to its key, the standing marks read on every
-  request, and the plaintext index as the exception. §5.1.4 closes the
+  whole-record seal bound to its key, the token's and the receipt's
+  seals, the ledger, the standing marks read on every request, the
+  plaintext index as the exception, and exactly what a stolen daemon
+  store credential still yields (replay; impersonation across a
+  restart). §5.1.4 closes the
   residual window for marked revocations; §5.6 says the login is one
   step and what an ERROR after the spend means; §14 its assertions.
   Design §8 and §12 follow. CLAUDE.md's Go floor is 1.26 (OD-1).
@@ -2555,7 +2799,7 @@ from Task 5, etcd.
 
 ---
 
-### Task 4b: The context is sealed whole, bound to its key, and the daemon reads the standing marks
+### Task 4b: The context is sealed whole, the token and the receipt are sealed to their keys, a ledger denies another login's context, and the daemon reads the standing marks
 
 **Files:**
 - Modify: `internal/store/store.go` (`RewriteContext` in `Store`)
@@ -2563,7 +2807,9 @@ from Task 5, etcd.
   `CheckContextPolicy`, `ApplyContextPolicy`)
 - Create: `internal/store/marks.go`, `internal/store/marks_test.go` (`Marks`)
 - Modify: `internal/store/memory/memory.go` (`RewriteContext`; the four setters call `Apply*`)
-- Modify: `internal/store/crypt/crypt.go` (the whole-record seal; the rewrite)
+- Modify: `internal/store/crypt/crypt.go` (the whole-record seal; the rewrite; the token's and
+  the receipt's seal; `Option`, `WithLedger`)
+- Create: `internal/store/crypt/ledger.go` (`Ledger`, `NewLedger`, `ErrNotLastWritten`)
 - Modify: `internal/store/crypt/crypt_test.go`
 - Create: `internal/store/storetest/rewrite.go` (`RewriteBindsToTheRevision`); modify
   `storetest.go` (`Run`)
@@ -2589,24 +2835,49 @@ from Task 5, etcd.
     `(*Marks).RevokedAt(c Context) time.Time`; `(*Marks).Len() int` (each nil-safe)
   - `func (k crypt.Keys) SealBound(plaintext, bound []byte) ([]byte, error)`,
     `func (k crypt.Keys) OpenBound(sealed, bound []byte) ([]byte, error)`
+  - `type crypt.Option func(*wrapped)`; `func crypt.WithLedger(l *Ledger) Option`;
+    `func crypt.Wrap(inner store.Store, k Keys, openFailures *prometheus.CounterVec, opts ...Option) store.Store`
+    (variadic, so every existing caller compiles unchanged; Task 13 adds `OnUnopenable`)
+  - `type crypt.Ledger`; `func crypt.NewLedger() *Ledger`; `var crypt.ErrNotLastWritten`
   - `func (h *author.Handler) WithMarks(m *store.Marks) *author.Handler`,
     `func (h *authen.Handler) WithMarks(m *store.Marks) *authen.Handler`
   - `Broker.Marks *store.Marks`
   - storetest: `RewriteBindsToTheRevision(t *testing.T, b Backend)`, in `Run`.
 
-**Why:** Ruling 17, the controller's ruling on pre-flight I12.
+**Why:** Ruling 17, the controller's rulings on pre-flight I12 and on re-check CA1 and IA1.
 - **The gap.** Until now the sealing layer sealed the identity alone. `revoked_at`, the
   privilege, the blob hash and the ceiling were plaintext, and the AEAD's additional data was
   the key id. A stolen daemon store credential could therefore zero a revocation, raise a
   privilege, swap a blob or transplant a record, and the authorizer trusted `RevokedAt` alone.
-- **The fix.** This task seals what authorization trusts, binds it to its key, and makes the
-  daemon read the standing marks.
+- **The token's gap** (re-check CA1). A token's `max_privilege`, `blob_hash`, `enable`,
+  `max_session_age`, `auth_time`, `minted_at`, `kind` and `expires_at` were plaintext too, and
+  the daemon's role writes `t/`.
+  - **The scenario.** Mallory holds a valid `port49 token` and the stolen daemon credential.
+    She edits her own `t/` record: `max_privilege` to 15, `enable` to `auto`,
+    `max_session_age` to 0, and `blob_hash` to another principal's wider blob, which already
+    sits in `b/` and which `engine.Decode` checks only against the hash. She logs in.
+    `loginContext` (authen.go:705-724) copies those fields, and the context seal then seals a
+    level-15 context with no ceiling faithfully.
+  - **A second path.** A forged later `minted_at` makes `CarryRevocation` (authen.go:494)
+    leave a self or key revocation behind at the join.
+  - **The receipt.** It was sealed under the key id alone, so a login receipt copied to the
+    enable key would replay an escalation with no enable token.
+- **The impersonation gap** (re-check IA1). A record sealed for a key opens at that key
+  whoever it was written for. Bob saves Alice's sealed context for leaf-01/netops, logs in
+  there, and writes Alice's record back: his session authorizes as Alice, and the refresh
+  judges Alice, who is still entitled.
+- **The fix.** This task:
+  - seals what a login and an authorization trust, each record bound to its key;
+  - keeps a ledger of the `ctx_id` this process last wrote at each key, and denies another;
+  - makes the daemon read the standing marks.
 - **Why it is 7d-1's.** It closes the gap on every backend, memory included, and the etcd
   backend (Task 6) implements `RewriteContext` against it.
 - **The per-command cost** is unchanged in store calls: `GetContext` opens one sealed blob, as
   it did, and `TouchContext` stays a pass-through. The mark check is one read lock and at most
-  two map lookups. `SetPrivilege` (once per session start) and the broker's refresh and
-  revocation gain one read each.
+  two map lookups, and the ledger's one mutex and one map lookup. `SetPrivilege` (once per
+  session start) and the broker's refresh and revocation gain one read each (on etcd, Task 6's
+  cache keeps a rewrite at two RPCs; re-check MA3). A token or receipt opens one sealed blob,
+  as it did.
 
 - [ ] **Step 1: The failing tests.**
 
@@ -2772,11 +3043,16 @@ from Task 5, etcd.
   		!raw.SessionExpires.IsZero() || !raw.AuthTime.IsZero() || !raw.RevokedAt.Equal(now) {
   		t.Fatalf("the backend holds a trusted field in the clear: %+v", raw)
   	}
+  	// Each edit writes a plaintext value the seal must outrank: a field
+  	// already blank in the clear, set blank, would test nothing (re-check
+  	// MA5).
   	for name, edit := range map[string]func(*store.Context){
   		"a zeroed revoked_at": func(r *store.Context) { r.RevokedAt = time.Time{} },
   		"a raised privilege":  func(r *store.Context) { r.PrivLvl, r.MaxPrivilege = 15, 15 },
   		"a swapped blob":      func(r *store.Context) { r.BlobHash = "sha256:wide" },
-  		"no ceiling":          func(r *store.Context) { r.SessionExpires = time.Time{}; r.AuthTime = now.Add(time.Hour) },
+  		"a later ceiling": func(r *store.Context) {
+  			r.SessionExpires, r.AuthTime = now.Add(100*time.Hour), now.Add(99*time.Hour)
+  		},
   	} {
   		r := raw
   		edit(&r)
@@ -2799,11 +3075,23 @@ from Task 5, etcd.
   	if _, err := s.GetContext(ctx, other); !errors.As(err, &u) {
   		t.Fatalf("a transplanted record opened: %v", err)
   	}
+  	// One sealed byte flipped: the record does not open (re-check MA5).
+  	flipped := raw
+  	flipped.Sealed = append([]byte(nil), raw.Sealed...)
+  	flipped.Sealed[len(flipped.Sealed)-1] ^= 1
+  	if err := inner.PutContext(ctx, k, flipped, time.Hour); err != nil {
+  		t.Fatal(err)
+  	}
+  	if _, err := s.GetContext(ctx, k); !errors.As(err, &u) {
+  		t.Fatalf("a record with a flipped sealed byte opened: %v", err)
+  	}
   }
 
   // A revocation needs no key: on a record the layer cannot open, the
   // plaintext mark still lands, and a read of it is the unreadable error
-  // carrying that mark (plan 7d; Ruling 17).
+  // carrying that mark (plan 7d; Ruling 17). A regression guard, not a
+  // failing test: it passes before this task too, since SetRevokedAt was
+  // already a plaintext pass-through (re-check MA4).
   func TestARevocationOfAnUnopenableContextNeedsNoKey(t *testing.T) {
   	ctx := context.Background()
   	now := time.Unix(1_000_000, 0).UTC()
@@ -2822,7 +3110,244 @@ from Task 5, etcd.
   		t.Fatalf("the unopenable record: %v", err)
   	}
   }
+
+  // A token's every field a redemption or a login trusts is sealed, bound to
+  // its key and ID (plan 7d; Ruling 17; re-check CA1). A store write that
+  // changes one reads back as minted, and the login copies what this layer
+  // returns (authen.go:705-724), so its context carries the minted value. A
+  // token moved to another key or ID, or whose plaintext expiry moved, is
+  // dropped and counted. A deleted token put back opens: the replay Ruling 17
+  // states, bounded by its sealed expiry.
+  func TestTheTokensTrustedFieldsAreSealed(t *testing.T) {
+  	ctx := context.Background()
+  	now := time.Unix(1_000_000, 0).UTC()
+  	inner := memory.New(func() time.Time { return now })
+  	failures := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "t"}, []string{"record"})
+  	s := Wrap(inner, keys(), failures)
+  	k := store.TokenKey{NAS: "leaf-01", Username: "alice"}
+  	minted := store.Token{ID: "t1", Secret: []byte("p49_secret"), Kind: store.KindLogin, ExpiresAt: now.Add(time.Minute),
+  		Principal: "user:alice@example.com", Username: "alice", BlobHash: "sha256:narrow", MaxSessionAge: time.Hour,
+  		Enable: "token", MaxPrivilege: 1, AuthTime: now, MintedAt: now}
+  	if _, err := s.PutToken(ctx, k, minted); err != nil {
+  		t.Fatal(err)
+  	}
+  	raws, err := inner.Candidates(ctx, k)
+  	if err != nil || len(raws) != 1 {
+  		t.Fatalf("%v %v", raws, err)
+  	}
+  	raw := raws[0]
+  	if raw.Kind != "" || raw.BlobHash != "" || raw.MaxSessionAge != 0 || raw.Enable != "" || raw.MaxPrivilege != 0 ||
+  		!raw.AuthTime.IsZero() || !raw.MintedAt.IsZero() || !raw.ExpiresAt.Equal(minted.ExpiresAt) {
+  		t.Fatalf("the backend holds a trusted token field in the clear: %+v", raw)
+  	}
+  	putRaw := func(k store.TokenKey, r store.Token) {
+  		t.Helper()
+  		if err := inner.DeleteTokens(ctx, k); err != nil {
+  			t.Fatal(err)
+  		}
+  		if _, err := inner.PutToken(ctx, k, r); err != nil {
+  			t.Fatal(err)
+  		}
+  	}
+  	asMinted := func(got store.Token) bool {
+  		return got.Kind == minted.Kind && got.BlobHash == minted.BlobHash && got.MaxSessionAge == minted.MaxSessionAge &&
+  			got.Enable == minted.Enable && got.MaxPrivilege == minted.MaxPrivilege && got.AuthTime.Equal(minted.AuthTime) &&
+  			got.MintedAt.Equal(minted.MintedAt) && got.ExpiresAt.Equal(minted.ExpiresAt) &&
+  			got.Principal == minted.Principal && string(got.Secret) == string(minted.Secret)
+  	}
+  	for name, edit := range map[string]func(*store.Token){
+  		"a raised privilege":   func(r *store.Token) { r.MaxPrivilege = 15 },
+  		"enable auto":          func(r *store.Token) { r.Enable = "auto" },
+  		"a longer session age": func(r *store.Token) { r.MaxSessionAge = 1000 * time.Hour },
+  		"another blob":         func(r *store.Token) { r.BlobHash = "sha256:wide" },
+  		"a later auth time":    func(r *store.Token) { r.AuthTime = now.Add(time.Hour) },
+  		"a later mint":         func(r *store.Token) { r.MintedAt = now.Add(time.Hour) },
+  		"the enable kind":      func(r *store.Token) { r.Kind = store.KindEnable },
+  	} {
+  		r := raw
+  		edit(&r)
+  		putRaw(k, r)
+  		got, err := s.Candidates(ctx, k)
+  		if err != nil || len(got) != 1 || !asMinted(got[0]) {
+  			t.Fatalf("%s reached the reader: %+v %v", name, got, err)
+  		}
+  	}
+  	// Dropped and counted: an extended plaintext expiry, another key,
+  	// another ID.
+  	dropped := func(what string, k store.TokenKey) {
+  		t.Helper()
+  		before := testutil.ToFloat64(failures.WithLabelValues("token"))
+  		if got, err := s.Candidates(ctx, k); err != nil || len(got) != 0 {
+  			t.Fatalf("%s opened: %+v %v", what, got, err)
+  		}
+  		if testutil.ToFloat64(failures.WithLabelValues("token")) != before+1 {
+  			t.Fatalf("%s was not counted", what)
+  		}
+  	}
+  	later := raw
+  	later.ExpiresAt = now.Add(time.Hour)
+  	putRaw(k, later)
+  	dropped("an extended plaintext expiry", k)
+  	other := store.TokenKey{NAS: "leaf-02", Username: "alice"}
+  	putRaw(other, raw)
+  	dropped("a token moved to another key", other)
+  	renamed := raw
+  	renamed.ID = "t2"
+  	putRaw(k, renamed)
+  	dropped("a token moved to another ID", k)
+  	// The replay: a deleted token put back opens, until its sealed expiry.
+  	putRaw(k, raw)
+  	if got, err := s.Candidates(ctx, k); err != nil || len(got) != 1 || !asMinted(got[0]) {
+  		t.Fatalf("a token put back as it was: %+v %v (the residual, Ruling 17)", got, err)
+  	}
+  }
+
+  // A receipt is sealed bound to its whole key (re-check CA1): a login
+  // receipt copied to the enable key does not open, so it can never replay
+  // an escalation; and the cap's anchor is the sealed first redemption,
+  // whatever the plaintext copy says.
+  func TestAReceiptIsBoundToItsKey(t *testing.T) {
+  	ctx := context.Background()
+  	now := time.Unix(1_000_000, 0).UTC()
+  	inner := memory.New(func() time.Time { return now })
+  	s := Wrap(inner, keys(), nil)
+  	tk := store.TokenKey{NAS: "leaf-01", Username: "alice"}
+  	spend := func(id string) {
+  		t.Helper()
+  		if _, err := inner.PutToken(ctx, tk, store.Token{ID: id, ExpiresAt: now.Add(time.Minute)}); err != nil {
+  			t.Fatal(err)
+  		}
+  	}
+  	var h [32]byte
+  	copy(h[:], "hash")
+  	login := store.ReceiptKey{NAS: "leaf-01", Username: "alice", Kind: store.KindLogin, CredentialSHA256: h}
+  	spend("t1")
+  	if err := s.RedeemAndReceipt(ctx, tk, "t1", store.ReceiptWrite{Key: login, Principal: "user:alice@example.com",
+  		IndexTTL: time.Hour, Receipt: store.Receipt{CredentialSHA256: h, Status: 1, CtxID: "ctx1", FirstRedeemedAt: now,
+  			IdleExpiresAt: now.Add(time.Minute), RetainUntil: now.Add(time.Hour)}}); err != nil {
+  		t.Fatal(err)
+  	}
+  	raw, err := inner.GetReceipt(ctx, login)
+  	if err != nil {
+  		t.Fatal(err)
+  	}
+  	enable := login
+  	enable.Kind = store.KindEnable
+  	spend("t2")
+  	if err := inner.RedeemAndReceipt(ctx, tk, "t2", store.ReceiptWrite{Key: enable, Principal: "user:alice@example.com",
+  		IndexTTL: time.Hour, Receipt: raw}); err != nil {
+  		t.Fatal(err)
+  	}
+  	if _, err := s.GetReceipt(ctx, enable); err == nil || errors.Is(err, store.ErrNotFound) {
+  		t.Fatalf("a login receipt copied to the enable key opened: %v", err)
+  	}
+  	moved := raw
+  	moved.FirstRedeemedAt = now.Add(time.Hour)
+  	spend("t3")
+  	if err := inner.RedeemAndReceipt(ctx, tk, "t3", store.ReceiptWrite{Key: login, Principal: "user:alice@example.com",
+  		IndexTTL: time.Hour, Receipt: moved}); err != nil {
+  		t.Fatal(err)
+  	}
+  	if got, err := s.GetReceipt(ctx, login); err != nil || !got.FirstRedeemedAt.Equal(now) {
+  		t.Fatalf("the cap's anchor came from the clear: %+v %v", got, err)
+  	}
+  }
+
+  // The ledger (re-check IA1; the controller's ruling): another login's
+  // context written back at a key is denied ErrNotLastWritten, through
+  // either Wrap sharing the ledger. An earlier version of the same context
+  // opens, which is the residual Ruling 17 states. A fresh process takes the
+  // first record it reads as the key's, the restart residual, and denies
+  // another after it.
+  func TestTheLedgerDeniesAnotherLoginsContext(t *testing.T) {
+  	ctx := context.Background()
+  	now := time.Unix(1_000_000, 0).UTC()
+  	inner := memory.New(func() time.Time { return now })
+  	l := NewLedger()
+  	daemon := Wrap(inner, keys(), nil, WithLedger(l))
+  	broker := Wrap(inner, keys(), nil, WithLedger(l))
+  	k := store.ContextKey{NAS: "leaf-01", Username: "netops"}
+  	if err := daemon.PutContext(ctx, k, store.Context{CtxID: "alice-1", Principal: "user:alice@example.com",
+  		Username: "netops", PrivLvl: 15}, time.Hour); err != nil {
+  		t.Fatal(err)
+  	}
+  	alice, _ := inner.GetContext(ctx, k)
+  	if err := daemon.PutContext(ctx, k, store.Context{CtxID: "bob-1", Principal: "user:bob@example.com",
+  		Username: "netops", PrivLvl: 1}, time.Hour); err != nil {
+  		t.Fatal(err)
+  	}
+  	bob, _ := inner.GetContext(ctx, k)
+  	if err := broker.SetPrivilege(ctx, k, 5); err != nil {
+  		t.Fatal(err)
+  	}
+  	if err := inner.PutContext(ctx, k, alice, time.Hour); err != nil { // Alice's, written back
+  		t.Fatal(err)
+  	}
+  	var u *store.UnreadableContextError
+  	for name, s := range map[string]store.Store{"daemon": daemon, "broker": broker} {
+  		if _, err := s.GetContext(ctx, k); !errors.As(err, &u) || !errors.Is(err, ErrNotLastWritten) {
+  			t.Fatalf("%s read another login's context written back: %v", name, err)
+  		}
+  	}
+  	if err := inner.PutContext(ctx, k, bob, time.Hour); err != nil { // Bob's own, before the raise
+  		t.Fatal(err)
+  	}
+  	if got, err := daemon.GetContext(ctx, k); err != nil || got.CtxID != "bob-1" || got.PrivLvl != 1 {
+  		t.Fatalf("an earlier version of the same context: %+v %v (the residual)", got, err)
+  	}
+  	fresh := Wrap(inner, keys(), nil) // a restart: its own, empty ledger
+  	if err := inner.PutContext(ctx, k, alice, time.Hour); err != nil {
+  		t.Fatal(err)
+  	}
+  	if got, err := fresh.GetContext(ctx, k); err != nil || got.CtxID != "alice-1" {
+  		t.Fatalf("a fresh process's first read: %+v %v (the restart residual)", got, err)
+  	}
+  	if err := inner.PutContext(ctx, k, bob, time.Hour); err != nil {
+  		t.Fatal(err)
+  	}
+  	if _, err := fresh.GetContext(ctx, k); !errors.Is(err, ErrNotLastWritten) {
+  		t.Fatalf("after its first read, a fresh process read another login's: %v", err)
+  	}
+  }
+
+  // A write in flight is admitted beside the last one, a write that landed
+  // replaces it, one refused admits nothing, and one whose outcome is
+  // unknown stays admitted until a later write lands (re-check IA1).
+  func TestTheLedgerAdmitsWritesInFlight(t *testing.T) {
+  	l := NewLedger()
+  	k := store.ContextKey{NAS: "leaf-01", Username: "netops"}
+  	if !l.admits(k, "a") {
+  		t.Fatal("a first read is the key's")
+  	}
+  	l.begin(k, "b")
+  	if !l.admits(k, "a") || !l.admits(k, "b") || l.admits(k, "x") {
+  		t.Fatal("a write in flight")
+  	}
+  	l.end(k, "b", nil)
+  	if l.admits(k, "a") || !l.admits(k, "b") {
+  		t.Fatal("a write that landed")
+  	}
+  	l.begin(k, "c")
+  	l.end(k, "c", store.ErrConflict)
+  	if l.admits(k, "c") {
+  		t.Fatal("a conflict wrote nothing")
+  	}
+  	l.begin(k, "d")
+  	l.end(k, "d", store.ErrUnavailable)
+  	if !l.admits(k, "d") || !l.admits(k, "b") {
+  		t.Fatal("a write whose outcome is unknown may have landed")
+  	}
+  	l.begin(k, "e")
+  	l.end(k, "e", nil)
+  	if l.admits(k, "d") || l.admits(k, "b") || !l.admits(k, "e") {
+  		t.Fatal("a later write landed")
+  	}
+  }
   ```
+
+  `crypt_test.go` already imports `prometheus` and `testutil` (`TestTokenUnderRetiredKeyIsDroppedNotReturned`).
+  The memory store's `RedeemAndReceipt` overwrites the receipt at its key (memory.go:372), which
+  is how the test writes the moved copy back under the login key.
 
   In `internal/daemon/author/author_test.go`, add:
 
@@ -2896,8 +3421,8 @@ from Task 5, etcd.
   one 7a's revoke tests set up; read them first.
 
   Run: `go test ./internal/store/... ./internal/daemon/... ./internal/broker/ -count=1`
-  Expected: FAIL to build: `RewriteContext`, `NewMarks`, `WithMarks` and `Broker.Marks` are
-  undefined.
+  Expected: FAIL to build: `RewriteContext`, `NewMarks`, `WithMarks`, `Broker.Marks`,
+  `NewLedger`, `WithLedger` and `ErrNotLastWritten` are undefined.
 
 - [ ] **Step 2: The contract and the rules.** In `internal/store/store.go`, add to the `Store`
   interface, after `SwapLogin`:
@@ -3254,9 +3779,261 @@ from Task 5, etcd.
      }
      ```
 
-     `PutContext`, `SwapContext` and `SwapLogin` call `w.sealContext(k, c)`. `GetContext` calls
-     `w.openContext(k, c)` and, on its error, returns the `UnreadableContextError` it returns
-     today, carrying the plaintext `Rev` and `RevokedAt`.
+     `PutContext`, `SwapContext` and `SwapLogin` call `w.sealContext(k, c)`, and send through
+     `w.sent` (item 5 below), so the ledger is told. `GetContext` calls `w.openContext(k, c)`
+     and, on its error, returns the `UnreadableContextError` it returns today, carrying the
+     plaintext `Rev` and `RevokedAt`. A record that opens (`oc, err := w.openContext(k, c)`)
+     is then checked against the ledger before it is returned:
+
+     ```go
+     	// The ledger (re-check IA1): a record sealed for this key that is not
+     	// the one this process last wrote here, or first read here, is another
+     	// login's written back. It opens, since it is bound to this key, and so
+     	// it is denied as one that does not.
+     	if !w.ledger.admits(k, oc.CtxID) {
+     		return store.Context{}, &store.UnreadableContextError{Rev: c.Rev, RevokedAt: c.RevokedAt,
+     			Err: w.openErr("context", ErrNotLastWritten)}
+     	}
+     ```
+
+  2b. **The token and the receipt, bound to their keys** (re-check CA1). Replace
+     `tokenSecret`, `receiptSecret`, `sealToken` and `openToken`, and add the two additional
+     data functions:
+
+     ```go
+     // tokenSecret is everything of a token a redemption or a login trusts,
+     // sealed (plan 7d; Ruling 17; re-check CA1): the secret and identity, as
+     // before, and the kind, the expiry, the policy, the ceiling and the
+     // clocks, which the login copies into its context (authen.go:705-724)
+     // and the join compares with a revocation (MintedAt). Left in the clear
+     // they would let a store write raise a login's privilege, widen its
+     // blob, drop its ceiling or outlive a self revocation. ExpiresAt is also
+     // written in the clear, for the backend's expiry (openToken).
+     type tokenSecret struct {
+     	Secret        []byte           `json:"secret"`
+     	Principal     string           `json:"principal"`
+     	Username      string           `json:"username"`
+     	Credential    store.Credential `json:"credential"`
+     	Kind          string           `json:"kind"`
+     	ExpiresAt     time.Time        `json:"expires_at"`
+     	BlobHash      string           `json:"blob_hash"`
+     	MaxSessionAge time.Duration    `json:"max_session_age"`
+     	Enable        string           `json:"enable"`
+     	MaxPrivilege  uint8            `json:"max_privilege"`
+     	AuthTime      time.Time        `json:"auth_time"`
+     	MintedAt      time.Time        `json:"minted_at"`
+     }
+
+     // receiptSecret is a receipt's sealed part. FirstRedeemedAt anchors the
+     // cap, so it is sealed too; the plaintext copy stays for the backend and
+     // is never read back (re-check CA1).
+     type receiptSecret struct {
+     	CredentialSHA256 [32]byte  `json:"credential_sha256"`
+     	Status           uint8     `json:"status"`
+     	CtxID            string    `json:"ctx_id"`
+     	FirstRedeemedAt  time.Time `json:"first_redeemed_at"`
+     }
+
+     // tokenAAD binds a sealed token to its key and its ID, each
+     // length-prefixed: a token copied to another (nas, username) or given
+     // another ID does not open (re-check CA1).
+     func tokenAAD(k store.TokenKey, id string) []byte {
+     	return []byte(fmt.Sprintf("|token|%d:%s|%d:%s|%d:%s", len(k.NAS), k.NAS, len(k.Username), k.Username,
+     		len(id), id))
+     }
+
+     // receiptAAD binds a sealed receipt to its whole key: a login receipt
+     // copied to the enable key would otherwise replay an escalation with no
+     // enable token (re-check CA1).
+     func receiptAAD(rk store.ReceiptKey) []byte {
+     	return []byte(fmt.Sprintf("|receipt|%d:%s|%d:%s|%d:%s|%x", len(rk.NAS), rk.NAS, len(rk.Username), rk.Username,
+     		len(rk.Kind), rk.Kind, rk.CredentialSHA256))
+     }
+
+     // errExpiryMoved is a token whose plaintext expiry is not the one sealed
+     // with it. sealToken writes them equal, so a store write moved it, and an
+     // extended one would be redeemable past the sealed one: it is dropped as
+     // a token that will not open.
+     var errExpiryMoved = errors.New("crypt: a token's plaintext expiry differs from its sealed one")
+
+     func (w *wrapped) sealToken(k store.TokenKey, t store.Token) (store.Token, error) {
+     	b, err := json.Marshal(tokenSecret{Secret: t.Secret, Principal: t.Principal, Username: t.Username,
+     		Credential: t.Credential, Kind: t.Kind, ExpiresAt: t.ExpiresAt, BlobHash: t.BlobHash,
+     		MaxSessionAge: t.MaxSessionAge, Enable: t.Enable, MaxPrivilege: t.MaxPrivilege, AuthTime: t.AuthTime,
+     		MintedAt: t.MintedAt})
+     	if err != nil {
+     		return store.Token{}, err
+     	}
+     	s, err := w.keys.SealBound(b, tokenAAD(k, t.ID))
+     	if err != nil {
+     		return store.Token{}, err
+     	}
+     	return store.Token{ID: t.ID, ExpiresAt: t.ExpiresAt, Sealed: s}, nil
+     }
+
+     func (w *wrapped) openToken(k store.TokenKey, t store.Token) (store.Token, error) {
+     	b, err := w.keys.OpenBound(t.Sealed, tokenAAD(k, t.ID))
+     	if err != nil {
+     		return store.Token{}, err
+     	}
+     	var ts tokenSecret
+     	if err := json.Unmarshal(b, &ts); err != nil {
+     		return store.Token{}, err
+     	}
+     	if !ts.ExpiresAt.Equal(t.ExpiresAt) {
+     		return store.Token{}, errExpiryMoved
+     	}
+     	return store.Token{ID: t.ID, Secret: ts.Secret, Kind: ts.Kind, ExpiresAt: ts.ExpiresAt, Principal: ts.Principal,
+     		Username: ts.Username, BlobHash: ts.BlobHash, MaxSessionAge: ts.MaxSessionAge, Enable: ts.Enable,
+     		MaxPrivilege: ts.MaxPrivilege, Credential: ts.Credential, AuthTime: ts.AuthTime, MintedAt: ts.MintedAt}, nil
+     }
+     ```
+
+     - `PutToken` calls `w.sealToken(k, t)`, and `Candidates` `w.openToken(k, t)`; a token
+       either drops is counted through `openErr("token", …)`, as one under a retired key is.
+     - `RedeemAndReceipt` seals the four fields of `receiptSecret` with
+       `w.keys.SealBound(…, receiptAAD(wr.Key))`, and blanks the three it blanked; it leaves the
+       plaintext `FirstRedeemedAt` as it is.
+     - `GetReceipt` opens with `w.keys.OpenBound(r.Sealed, receiptAAD(rk))`, and sets
+       `FirstRedeemedAt` from the sealed copy.
+     - Idempotency responses keep the key id alone as additional data. The daemon's role has no
+       access to `id/` (Ruling 10), so only the broker's credential, which holds the whole
+       keyspace, could move one.
+
+  2c. **The ledger.** Create `internal/store/crypt/ledger.go`:
+
+     ```go
+     package crypt
+
+     import (
+     	"errors"
+     	"sync"
+
+     	"github.com/rhwendt/port49/internal/store"
+     )
+
+     // ErrNotLastWritten is a context that opens at its key but is not the
+     // one this process last wrote there, or first read there: another
+     // login's record, written back by whoever can write the store (plan 7d;
+     // Ruling 17; re-check IA1). GetContext returns it inside an
+     // UnreadableContextError, so every handler treats it as a record that
+     // will not open.
+     var ErrNotLastWritten = errors.New("crypt: not the context this port49d last wrote at its key")
+
+     // Ledger is, per context key, the ctx_id this process last wrote there,
+     // or first read there (plan 7d; Ruling 17; re-check IA1). A sealed
+     // context is bound to its key, not to the login that wrote it, so
+     // without the ledger a record of Alice's saved from leaf-01/netops and
+     // written back over Bob's there would authorize Bob's session as Alice.
+     //
+     // A write is told before it is sent (begin) and when it ends (end): in
+     // flight it is admitted beside the last, landed it replaces the last,
+     // refused (ErrConflict, ErrNotFound) it wrote nothing, and with any other
+     // error it may have committed (spec §5.6), so it stays admitted until a
+     // later write lands. A key with no entry takes the first record read
+     // there, so a start's reads seed it before any listener binds; a record
+     // put back while the process was stopped is the residual.
+     //
+     // A read racing a login's replace can return the replaced record after
+     // the replace landed; that one request is denied, which fails closed.
+     // It holds one entry per key this process has read or written, kept
+     // while it runs. One Ledger is shared by every Wrap in a process
+     // (WithLedger). It is safe for concurrent use.
+     type Ledger struct {
+     	mu sync.Mutex
+     	m  map[store.ContextKey]*ledgerEntry
+     }
+
+     type ledgerEntry struct {
+     	last     string          // the last write that landed, or the first read
+     	known    bool            // last is set: false for a key whose first write is in flight
+     	inFlight map[string]int  // writes sent and not yet ended, by ctx_id
+     	unknown  map[string]bool // writes that ended with neither a landing nor a refusal
+     }
+
+     func NewLedger() *Ledger { return &Ledger{m: map[store.ContextKey]*ledgerEntry{}} }
+
+     func (l *Ledger) entry(k store.ContextKey) *ledgerEntry {
+     	e := l.m[k]
+     	if e == nil {
+     		e = &ledgerEntry{inFlight: map[string]int{}, unknown: map[string]bool{}}
+     		l.m[k] = e
+     	}
+     	return e
+     }
+
+     // admits reports whether a record holding id may be read at k.
+     func (l *Ledger) admits(k store.ContextKey, id string) bool {
+     	l.mu.Lock()
+     	defer l.mu.Unlock()
+     	e, ok := l.m[k]
+     	if !ok {
+     		e = l.entry(k)
+     		e.last, e.known = id, true
+     		return true
+     	}
+     	return (e.known && id == e.last) || e.inFlight[id] > 0 || e.unknown[id]
+     }
+
+     func (l *Ledger) begin(k store.ContextKey, id string) {
+     	l.mu.Lock()
+     	defer l.mu.Unlock()
+     	l.entry(k).inFlight[id]++
+     }
+
+     func (l *Ledger) end(k store.ContextKey, id string, err error) {
+     	l.mu.Lock()
+     	defer l.mu.Unlock()
+     	e := l.entry(k)
+     	if e.inFlight[id]--; e.inFlight[id] <= 0 {
+     		delete(e.inFlight, id)
+     	}
+     	switch {
+     	case err == nil:
+     		e.last, e.known = id, true
+     		clear(e.unknown)
+     	case errors.Is(err, store.ErrConflict), errors.Is(err, store.ErrNotFound):
+     	default:
+     		e.unknown[id] = true
+     	}
+     }
+     ```
+
+     A delete leaves the entry as it is: the record it removed is past its sealed ceiling and
+     grace (author.go, sessionrefresh.go), which deny it if it is put back. A key whose first
+     write is still in flight (`known` false) admits only that write: a record no one in this
+     process wrote or read cannot have appeared there by any other path. An empty `ctx_id` (a
+     test's seed) is an id like any other.
+
+     In `crypt.go`, add the option and give `wrapped` the ledger:
+
+     ```go
+     // Option configures Wrap.
+     type Option func(*wrapped)
+
+     // WithLedger shares l with every other Wrap given it, so the daemon's and
+     // the broker's layers in one process agree on what each key last held
+     // (re-check IA1). Without it each Wrap keeps its own.
+     func WithLedger(l *Ledger) Option { return func(w *wrapped) { w.ledger = l } }
+     ```
+
+     Add `ledger *Ledger` to `wrapped`. Make `Wrap` variadic, set `ledger: NewLedger()` in its
+     literal, then apply each option. Add `sent`, which every sealed context write goes through:
+
+     ```go
+     // sent sends one sealed write of the context id at k, telling the ledger
+     // before and after (re-check IA1).
+     func (w *wrapped) sent(k store.ContextKey, id string, send func() error) error {
+     	w.ledger.begin(k, id)
+     	err := send()
+     	w.ledger.end(k, id, err)
+     	return err
+     }
+     ```
+
+     For example, `PutContext` becomes `return w.sent(k, c.CtxID, func() error { return
+     w.inner.PutContext(ctx, k, sc, ttl) })`. `SwapContext`, `SwapLogin`, `RewriteContext` and
+     `rewrite`'s write do the same.
 
   3. **The rewrite, and the setters on sealed fields.** Add, and replace the four pass-throughs:
 
@@ -3264,12 +4041,13 @@ from Task 5, etcd.
      // rewrite is a narrow setter on a field the seal covers (plan 7d; Ruling
      // 17): read the record, open it, apply the setter's rule, seal it again,
      // and rewrite it on the revision read (store.RewriteContext), reading
-     // again on a lost race up to store.MaxJoinAttempts. apply may refuse
+     // again on a lost race up to attempts times. apply may refuse
      // (ErrConflict, ErrPastGrace), and then nothing is written. A record
-     // this layer cannot open is GetContext's UnreadableContextError.
-     func (w *wrapped) rewrite(ctx context.Context, k store.ContextKey, ttl time.Duration,
+     // this layer cannot open, or the ledger does not admit, is GetContext's
+     // UnreadableContextError.
+     func (w *wrapped) rewrite(ctx context.Context, k store.ContextKey, ttl time.Duration, attempts int,
      	apply func(c *store.Context) (policyMoved bool, err error)) error {
-     	for attempt := 0; attempt < store.MaxJoinAttempts; attempt++ {
+     	for attempt := 0; attempt < attempts; attempt++ {
      		c, err := w.GetContext(ctx, k)
      		if err != nil {
      			return err
@@ -3283,26 +4061,31 @@ from Task 5, etcd.
      		if err != nil {
      			return err
      		}
-     		switch err := w.inner.RewriteContext(ctx, k, rev, sc, ttl, moved); {
+     		switch err := w.sent(k, c.CtxID, func() error { return w.inner.RewriteContext(ctx, k, rev, sc, ttl, moved) }); {
      		case err == nil:
      			return nil
      		case !errors.Is(err, store.ErrConflict):
      			return err
      		}
+     		if err := ctx.Err(); err != nil {
+     			return err
+     		}
      	}
-     	return fmt.Errorf("crypt: context still changing after %d attempts: %w", store.MaxJoinAttempts, store.ErrConflict)
+     	return fmt.Errorf("crypt: context still changing after %d attempts: %w", attempts, store.ErrConflict)
      }
 
      // SetPrivilege is a rewrite: the level is sealed (plan 7d).
      func (w *wrapped) SetPrivilege(ctx context.Context, k store.ContextKey, level uint8) error {
-     	return w.rewrite(ctx, k, 0, func(c *store.Context) (bool, error) { return store.ApplyPrivilege(c, level), nil })
+     	return w.rewrite(ctx, k, 0, store.MaxJoinAttempts, func(c *store.Context) (bool, error) {
+     		return store.ApplyPrivilege(c, level), nil
+     	})
      }
 
      // RefreshContext is a rewrite that extends the record, as the inner
      // store's does; ExpectRev is compared with the revision each attempt
      // reads.
      func (w *wrapped) RefreshContext(ctx context.Context, k store.ContextKey, r store.ContextRefresh, ttl time.Duration) error {
-     	return w.rewrite(ctx, k, ttl, func(c *store.Context) (bool, error) {
+     	return w.rewrite(ctx, k, ttl, store.MaxJoinAttempts, func(c *store.Context) (bool, error) {
      		if r.ExpectRev != 0 && c.Rev != r.ExpectRev {
      			return false, store.ErrConflict
      		}
@@ -3317,20 +4100,34 @@ from Task 5, etcd.
      // second policy write: the plaintext one already moved PolicyRev. A
      // record this layer cannot open keeps the plaintext mark alone, and is
      // denied as unreadable anyway; a record gone since is nothing to seal.
+     //
+     // A busy session can win the seal's race many times, so it retries until
+     // the caller's deadline, and sealAttempts times when the caller set none.
+     // The revocation is in force from the first write either way, so an error
+     // after it says so, and that only the seal is pending (re-check MA2).
      func (w *wrapped) SetRevokedAt(ctx context.Context, k store.ContextKey, at time.Time) error {
      	if err := w.inner.SetRevokedAt(ctx, k, at); err != nil {
      		return err
      	}
-     	err := w.rewrite(ctx, k, 0, func(c *store.Context) (bool, error) {
+     	attempts := sealAttempts
+     	if _, ok := ctx.Deadline(); ok {
+     		attempts = math.MaxInt
+     	}
+     	err := w.rewrite(ctx, k, 0, attempts, func(c *store.Context) (bool, error) {
      		store.ApplyRevokedAt(c, at)
      		return false, nil
      	})
      	var u *store.UnreadableContextError
-     	if errors.As(err, &u) || errors.Is(err, store.ErrNotFound) {
+     	switch {
+     	case err == nil, errors.As(err, &u), errors.Is(err, store.ErrNotFound):
      		return nil
      	}
-     	return err
+     	return fmt.Errorf("crypt: revoked (the plaintext mark is in force); sealing it into the record is pending: %w", err)
      }
+
+     // sealAttempts bounds SetRevokedAt's seal when its caller set no
+     // deadline: 64 lost races in a row is a store that never holds still.
+     const sealAttempts = 64
 
      // SetContextPolicy is a rewrite compared on the policy revision each
      // attempt reads. A revoking write on a record this layer cannot open
@@ -3340,7 +4137,7 @@ from Task 5, etcd.
      	if err := store.CheckContextPolicy(p); err != nil {
      		return err
      	}
-     	err := w.rewrite(ctx, k, 0, func(c *store.Context) (bool, error) {
+     	err := w.rewrite(ctx, k, 0, store.MaxJoinAttempts, func(c *store.Context) (bool, error) {
      		if c.PolicyRev != policyRev {
      			return false, store.ErrConflict
      		}
@@ -3354,28 +4151,39 @@ from Task 5, etcd.
      	return err
      }
 
-     // RewriteContext seals c for k and passes the write through.
+     // RewriteContext seals c for k and passes the write through, telling
+     // the ledger.
      func (w *wrapped) RewriteContext(ctx context.Context, k store.ContextKey, rev uint64, c store.Context, ttl time.Duration,
      	policyMoved bool) error {
      	sc, err := w.sealContext(k, c)
      	if err != nil {
      		return err
      	}
-     	return w.inner.RewriteContext(ctx, k, rev, sc, ttl, policyMoved)
+     	return w.sent(k, c.CtxID, func() error { return w.inner.RewriteContext(ctx, k, rev, sc, ttl, policyMoved) })
      }
      ```
 
-     `TouchContext` and `AnnotateContext` stay pass-throughs: they write the idle clock and
-     accounting's annotations, which the seal does not cover and nothing authorizes on. Rewrite
-     the comments on the old pass-throughs, and the package comment, to say what is sealed now
-     and why the idle clock is not: a context kept alive past its idle TTL is still bounded by
-     its sealed ceiling.
+     Add `"math"` to the imports. `TouchContext` and `AnnotateContext` stay pass-throughs: they
+     write the idle clock and accounting's annotations, which the seal does not cover and
+     nothing authorizes on. Rewrite the comments on the old pass-throughs, and the package
+     comment, to say what is sealed now (the context whole, the token's trusted fields, the
+     receipt, each bound to its key), what the ledger denies, and why the idle clock is not
+     sealed: a context kept alive past its idle TTL is still bounded by its sealed ceiling, if
+     it has one, and under `max_session_age: never` by nothing but the refresh and revocation
+     (re-check MA1).
   4. Existing crypt tests that assert a now-sealed field sits in the clear in the inner record,
      or that a now-rewritten setter is a single pass-through, encode the old design. Change each
      to assert the new one, and name each in the report and the commit. This is the ruling's
-     change, not a weakened test. `TestAContextUnderARetiredKeyIsReplacedCarryingItsRevocation`
-     builds its unopenable record its own way: make it build one through a `Wrap` under the
-     retired key, as `TestARevocationOfAnUnopenableContextNeedsNoKey` above does.
+     change, not a weakened test.
+     - `TestWrappedStoreHoldsNoPlaintext` asserts `raw[0].Kind` and `raw[0].BlobHash` stay in
+       the clear ("keying fields must stay plaintext"). They are sealed now: assert the `ID`
+       and `ExpiresAt` alone are in the clear and the rest blank.
+     - `TestAContextUnderARetiredKeyIsReplacedCarryingItsRevocation` builds its unopenable
+       record its own way: make it build one through a `Wrap` under the retired key, as
+       `TestARevocationOfAnUnopenableContextNeedsNoKey` above does.
+     - A test anywhere (crypt, authen, author, broker) that writes a context straight to the
+       inner store, at a key the sealing layer has already read or written, now meets the
+       ledger. Write through the layer, or give that phase its own `Wrap`, and name each.
 
 - [ ] **Step 5: The daemon reads the marks.**
   - `internal/daemon/author/author.go`: add `marks *store.Marks` to `Handler`, and
@@ -3412,6 +4220,9 @@ from Task 5, etcd.
     authMarks`. Give `authen.New(…)` `.WithMarks(authMarks)` and `author.New(…)…`
     `.WithMarks(authMarks)` in `deps`. With no broker there are no marks, and the set stays
     empty.
+  - The ledger needs nothing in `main.go` on 7d-1: the one `crypt.Wrap` there serves the daemon
+    and the broker, and keeps its own ledger. Task 12 shares one across the two `Wrap`s etcd
+    needs.
 
 - [ ] **Step 6: Run.**
 
@@ -3419,10 +4230,15 @@ from Task 5, etcd.
   Expected: PASS, including:
   - `TestTheMemoryStoreHoldsEveryProperty/RewriteBindsToTheRevision` and
     `TestTheSealingLayerHoldsEveryProperty/<every property>`. The sealing layer's narrow
-    setters now run the shared rules, and every property pins that they mean what memory's do.
+    setters now run the shared rules, and every property pins that they mean what memory's do;
+    every property's contexts pass the ledger.
   - `TestTheSealCoversWhatAuthorizationTrusts`, `TestARevocationOfAnUnopenableContextNeedsNoKey`,
+    `TestTheTokensTrustedFieldsAreSealed`, `TestAReceiptIsBoundToItsKey`,
+    `TestTheLedgerDeniesAnotherLoginsContext`, `TestTheLedgerAdmitsWritesInFlight`,
     `TestMarksNameAContextByPrincipalOrCertificate`, `TestAStandingMarkDeniesAnUnrevokedContext`,
     the two authen tests and `TestRevokeAndLiftKeepTheDaemonsMarks`.
+  - Every existing authen test that redeems a token, through whatever store its fixture uses:
+    the token's fields now come from the seal.
 
   Mutation checks (do them, report them, revert them):
   1. In `openContext`, take the plaintext `RevokedAt` instead of the later of the two.
@@ -3432,6 +4248,15 @@ from Task 5, etcd.
      `SetPrivilegeIsRaiseOnly` through the sealing layer must fail.
   4. In `author.go`, read `c.RevokedAt` instead of `h.marks.RevokedAt(c)`.
      `TestAStandingMarkDeniesAnUnrevokedContext` must fail.
+  5. In `openToken`, take `MaxPrivilege` from the plaintext record `t` instead of `ts`.
+     `TestTheTokensTrustedFieldsAreSealed` must fail ("a raised privilege").
+  6. In `openToken`, drop the expiry comparison. `TestTheTokensTrustedFieldsAreSealed` must fail
+     ("an extended plaintext expiry").
+  7. In `receiptAAD`, leave out `rk.Kind`. `TestAReceiptIsBoundToItsKey` must fail.
+  8. In `GetContext`, skip the ledger check. `TestTheLedgerDeniesAnotherLoginsContext` must
+     fail.
+  9. In `Ledger.end`, treat an unknown outcome as a refusal. `TestTheLedgerAdmitsWritesInFlight`
+     must fail.
 
 - [ ] **Step 7: Commit.**
 
@@ -3439,24 +4264,31 @@ from Task 5, etcd.
   gofmt -w internal/store internal/daemon/author internal/daemon/authen internal/broker cmd/port49d
   make build && make test && make vet
   git add internal/store/store.go internal/store/apply.go internal/store/marks.go internal/store/marks_test.go \
-    internal/store/memory/memory.go internal/store/crypt/crypt.go internal/store/crypt/crypt_test.go \
+    internal/store/memory/memory.go internal/store/crypt/crypt.go internal/store/crypt/ledger.go \
+    internal/store/crypt/crypt_test.go \
     internal/store/storetest/rewrite.go internal/store/storetest/storetest.go \
     internal/daemon/author/author.go internal/daemon/author/author_test.go \
     internal/daemon/authen/authen.go internal/daemon/authen/authen_test.go \
     internal/broker/broker.go internal/broker/revoke.go internal/broker/revoke_test.go cmd/port49d/main.go
-  git commit -m "feat(store): the context is sealed whole, bound to its key; the daemon reads the marks
+  git commit -m "feat(store): seal what a login and an authorization trust, a ledger, and the marks
 
   Every field the authorizer trusts is now sealed with the identity,
   under the context key as additional data, so a store write cannot
   zero a revocation, raise a privilege, swap a blob or move a record to
   another key; revoked_at is kept in the clear too, so revoking needs no
-  key, and a read takes the later. A narrow setter on a sealed field is
-  a read, the shared rule (store.Apply*), a reseal and a RewriteContext
-  on the revision read. The daemon holds the standing marks in memory,
-  the store their authority, and the authorizer, the enable gate and a
-  receipt's replay deny any context they name (plan 7d, Ruling 17; the
-  controller's ruling on pre-flight I12). A context sealed the old way
-  does not open, and is replaced at its next login.
+  key, and a read takes the later. A token's kind, expiry, policy blob,
+  session age, enable mechanism, maximum privilege and clocks are sealed
+  with its secret, bound to its key and ID, so a login copies only what
+  the broker minted; a token whose plaintext expiry moved is dropped. A
+  receipt is bound to its whole key, so a login receipt cannot answer an
+  enable. A ledger of the ctx_id this process last wrote at each key
+  denies another login's context written back. A narrow setter on a
+  sealed field is a read, the shared rule (store.Apply*), a reseal and a
+  RewriteContext on the revision read. The daemon holds the standing
+  marks in memory, the store their authority, and the authorizer, the
+  enable gate and a receipt's replay deny any context they name (plan
+  7d, Ruling 17; the controller's rulings on pre-flight I12 and re-check
+  CA1, IA1). A record sealed the old way does not open.
 
   Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
@@ -6159,17 +6991,136 @@ from Task 5, etcd.
   `ContextsByCert`, `ActivePrincipals`, `ReserveIdempotency`, `CompleteIdempotency` and
   `ReleaseIdempotency`.
 
+- [ ] **Step 4b: A rewrite after a read is one transaction** (re-check MA3). The sealing
+  layer's setter reads the record (`GetContext`), then rewrites it on that revision
+  (`RewriteContext`), which read it again: three RPCs on the refresh path and at a session's
+  first `SetPrivilege`. The second read only recovers the plaintext bookkeeping the first one
+  had. So `GetContext` keeps it, and `RewriteContext` with no ttl on that revision commits
+  without reading. In `contexts.go` add:
+
+  ```go
+  // seenCache is the plaintext bookkeeping of the last version GetContext
+  // read at each context key: its mod_revision and its record. RewriteContext
+  // takes it instead of reading again when it is asked to rewrite exactly
+  // that version with no ttl, so the sealing layer's narrow setter is two
+  // RPCs, its read and its transaction (re-check MA3). The transaction still
+  // compares the key's mod_revision, so a stale entry is a conflict, never a
+  // lost write. It holds at most seenMax entries and forgets them all past
+  // that: the cost of forgetting is one read.
+  type seenCache struct {
+  	mu sync.Mutex
+  	m  map[string]seenRec
+  }
+
+  type seenRec struct {
+  	mod int64
+  	rec ctxRec
+  }
+
+  const seenMax = 4096
+
+  func (c *seenCache) put(key string, mod int64, r ctxRec) {
+  	c.mu.Lock()
+  	defer c.mu.Unlock()
+  	if c.m == nil || len(c.m) >= seenMax {
+  		c.m = map[string]seenRec{}
+  	}
+  	c.m[key] = seenRec{mod: mod, rec: r}
+  }
+
+  // take is the entry for key at mod, removed either way.
+  func (c *seenCache) take(key string, mod int64) (ctxRec, bool) {
+  	c.mu.Lock()
+  	defer c.mu.Unlock()
+  	e, ok := c.m[key]
+  	delete(c.m, key)
+  	return e.rec, ok && e.mod == mod
+  }
+  ```
+
+  - Add `seen seenCache` to `Store` (its zero value is ready), and `"sync"` to the imports.
+  - In `GetContext`, after the expiry check, `s.seen.put(s.k.context(k), mod, r)`.
+  - At the top of `RewriteContext`, before `readCtx`:
+
+    ```go
+    	if r0, ok := s.seen.take(s.k.context(k), int64(rev)); ok && ttl == 0 {
+    		if !r0.ExpiresAt.After(s.now()) {
+    			return store.ErrNotFound
+    		}
+    		r := ctxRecOf(c)
+    		r.ExpiresAt, r.LastTouchedAt = r0.ExpiresAt, r0.LastTouchedAt
+    		r.PolicyRev, r.PolicyMoved = r0.policyRev(int64(rev)), policyMoved
+    		body, err := json.Marshal(r)
+    		if err != nil {
+    			return err
+    		}
+    		ck := s.k.context(k)
+    		ok, err := commit(ctx, s.ctx, s.ctxLeases, []clientv3.Cmp{unchanged(ck, int64(rev))},
+    			[]put{{key: ck, val: body, exp: r.ExpiresAt}})
+    		switch {
+    		case err != nil:
+    			return err
+    		case !ok:
+    			return store.ErrConflict // moved, or gone, since the read: the caller reads again
+    		}
+    		return nil
+    	}
+    ```
+
+    A rewrite with a ttl still reads, since it restamps the index record and compares it. A
+    rewrite with no ttl touches no index record, so comparing the context key alone is the
+    whole precondition.
+  - Append to `etcd_test.go`:
+
+    ```go
+    // A rewrite on the revision a read saw commits without reading again,
+    // and is still refused once the record has moved since that read
+    // (re-check MA3).
+    func TestARewriteAfterAReadComparesTheRevision(t *testing.T) {
+    	ctx := context.Background()
+    	s := onShared(t, func() time.Time { return t0 })
+    	k := store.ContextKey{NAS: "leaf-01", Username: "alice"}
+    	if err := s.PutContext(ctx, k, store.Context{CtxID: "c", Principal: "p", Username: "alice", PrivLvl: 1},
+    		time.Hour); err != nil {
+    		t.Fatal(err)
+    	}
+    	read, err := s.GetContext(ctx, k)
+    	if err != nil {
+    		t.Fatal(err)
+    	}
+    	if err := s.TouchContext(ctx, k, time.Hour); err != nil { // the record moves after the read
+    		t.Fatal(err)
+    	}
+    	stale := read
+    	stale.PrivLvl = 15
+    	if err := s.RewriteContext(ctx, k, read.Rev, stale, 0, false); !errors.Is(err, store.ErrConflict) {
+    		t.Fatalf("a rewrite of a version read and since moved: %v", err)
+    	}
+    	read, _ = s.GetContext(ctx, k)
+    	next := read
+    	next.PrivLvl = 7
+    	if err := s.RewriteContext(ctx, k, read.Rev, next, 0, false); err != nil {
+    		t.Fatal(err)
+    	}
+    	if got, _ := s.GetContext(ctx, k); got.PrivLvl != 7 || !got.LastTouchedAt.Equal(read.LastTouchedAt) {
+    		t.Fatalf("a rewrite after a read: %+v", got)
+    	}
+    }
+    ```
+
 - [ ] **Step 5: Run.**
 
   Run: `go test ./internal/store/etcd/ -count=1`
-  Expected: PASS: `TestTokensOnEtcd`, `TestContextsOnEtcd/<24>`, and
-  `TestPolicyRevIsTheLastPolicyWritesRevision`.
+  Expected: PASS: `TestTokensOnEtcd`, `TestContextsOnEtcd/<24>`,
+  `TestPolicyRevIsTheLastPolicyWritesRevision` and `TestARewriteAfterAReadComparesTheRevision`.
 
   Mutation checks (do them, report them, revert them):
   1. In `mutate`, drop the `PolicyMoved` resolution. `PolicyRevision` must fail, because a touch
      would then move `PolicyRev`.
   4. In `RewriteContext`, drop the `snap.mod != rev` refusal. `RewriteBindsToTheRevision` must
      fail.
+  5. In `RewriteContext`'s cached path, commit with no compare.
+     `TestARewriteAfterAReadComparesTheRevision` must fail (re-check MA3).
   2. In `SwapLogin`, skip the mark comparison. This task cannot see that (no lookup readers yet).
      Note it for Task 7, whose `JoinHonoursAStandingMark` catches it.
   3. In `SetRevokedAt`, replace the `applyTo` call with `r.RevokedAt = at`, unconditionally.
@@ -6189,7 +7140,8 @@ from Task 5, etcd.
   read and a transaction comparing the context and its ref's index record;
   SwapLogin writes the context, the index change and the lookup entries,
   comparing the marks the login read; RewriteContext is the sealing
-  layer's narrow setter. Every write of an index record drops its expired
+  layer's narrow setter, one transaction after the read it follows
+  (re-check MA3). Every write of an index record drops its expired
   entries. Every context property passes on a real etcd member.
 
   Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
@@ -6705,6 +7657,383 @@ from Task 5, etcd.
 
 ---
 
+### Task 7b: A context its index lost is found, re-indexed and judged
+
+**Files:**
+- Modify: `internal/store/etcd/indexes.go` (`Unindexed`)
+- Test: `internal/store/etcd/etcd_test.go`
+- Modify: `internal/session/session.go` (`Manager.Reindex`)
+- Create: `internal/broker/reindex.go`, `internal/broker/reindex_test.go` (`ReindexContexts`)
+- Modify: `internal/daemon/metrics/metrics.go`, `metrics_test.go` (`ContextsReindexed`)
+
+**Interfaces:**
+- Consumes: Task 7's `idxRec`, `lastTwo`, `chunked`, `keys.family`, `keys.indexed`;
+  `Broker.refreshContext`; `session.Manager`.
+- Produces:
+  - `func (s *etcd.Store) Unindexed(ctx context.Context) ([]store.ContextRef, error)`
+  - `func (m *session.Manager) Reindex(ctx context.Context, ref store.ContextRef, c store.Context) error`
+  - `func (b *Broker) ReindexContexts(ctx context.Context, refs []store.ContextRef) (int, error)`
+  - `Metrics.ContextsReindexed` (`port49_contexts_reindexed_total`)
+
+**Why:** Ruling 6, re-check IA2.
+- **The gap.** The refresh walks the index (`refreshContexts`, refresh.go:337, through
+  `ActivePrincipals`), and so do `revoke --mine` and a revocation by sid. On etcd the index is
+  the `x/` family, and the daemon's role writes it.
+- **The scenario.** With a context's `x/` record deleted:
+  - a grant removed, or a narrowing, never reaches that context;
+  - `revoke --mine` misses it;
+  - Touch keeps it alive, so under `max_session_age: never` that lasts indefinitely.
+
+  Only a principal or certificate mark (the daemon's `Marks`) still catches it.
+- **The fix.** A login writes a context and its index record in one step, and every extension
+  carries both, so a live context whose `x/` record is gone, or lists no live principal, was
+  hidden by a store write. `Unindexed` finds each such context. `ReindexContexts` then
+  re-indexes it, judges it, or revokes it if it will not open.
+- **Who calls it.** port49d runs it at start and after every sweep (Task 12), so 7d-1 builds
+  and tests it and calls it from nothing yet. The memory store has no outside writer, and needs
+  no finder.
+
+- [ ] **Step 1: The failing tests.** Append to `internal/store/etcd/etcd_test.go`:
+
+  ```go
+  // A live context whose index record is gone, or lists no live principal,
+  // is named; one indexed is not (re-check IA2).
+  func TestUnindexedFindsAContextItsIndexLost(t *testing.T) {
+  	ctx := context.Background()
+  	now := t0
+  	s := onShared(t, func() time.Time { return now })
+  	kept := store.ContextRef{NAS: "leaf-01", Username: "kept"}
+  	lost := store.ContextRef{NAS: "leaf-01", Username: "lost"}
+  	stale := store.ContextRef{NAS: "rack/1%2Fleaf", Username: "stale"}
+  	for _, r := range []store.ContextRef{kept, lost, stale} {
+  		if err := s.PutContext(ctx, store.ContextKey{NAS: r.NAS, Username: r.Username},
+  			store.Context{CtxID: "c", Principal: "user:a", Username: r.Username}, 2*time.Hour); err != nil {
+  			t.Fatal(err)
+  		}
+  	}
+  	if err := s.IndexContext(ctx, "user:a", "", "", kept, 2*time.Hour); err != nil {
+  		t.Fatal(err)
+  	}
+  	if err := s.IndexContext(ctx, "user:a", "", "", lost, 2*time.Hour); err != nil {
+  		t.Fatal(err)
+  	}
+  	if err := s.IndexContext(ctx, "user:a", "sid-1", "", stale, time.Minute); err != nil {
+  		t.Fatal(err)
+  	}
+  	if _, err := s.ctx.Delete(ctx, s.k.indexed(lost)); err != nil { // a store write hides it
+  		t.Fatal(err)
+  	}
+  	now = now.Add(2 * time.Minute) // stale's entries have expired; its context has not
+  	got, err := s.Unindexed(ctx)
+  	if err != nil {
+  		t.Fatal(err)
+  	}
+  	if len(got) != 2 || !slices.Contains(got, lost) || !slices.Contains(got, stale) {
+  		t.Fatalf("Unindexed = %v, want %v and %v", got, lost, stale)
+  	}
+  }
+  ```
+
+  Add `"slices"` to the file's imports if it is not there.
+
+  Create `internal/broker/reindex_test.go`:
+
+  ```go
+  package broker
+
+  import (
+  	"context"
+  	"errors"
+  	"testing"
+
+  	"github.com/prometheus/client_golang/prometheus/testutil"
+
+  	"github.com/rhwendt/port49/internal/store"
+  )
+
+  // unreadableAt is a store whose context at k will not open, as one sealed
+  // under a key this window lacks reads through the sealing layer.
+  type unreadableAt struct {
+  	store.Store
+  	k store.ContextKey
+  }
+
+  func (u unreadableAt) GetContext(ctx context.Context, k store.ContextKey) (store.Context, error) {
+  	if k == u.k {
+  		return store.Context{}, &store.UnreadableContextError{Err: errors.New("test: will not open")}
+  	}
+  	return u.Store.GetContext(ctx, k)
+  }
+
+  // A context whose index was lost is re-indexed, so a revocation by
+  // principal reaches it again, and judged against the policy in force at
+  // once (plan 7d; re-check IA2).
+  func TestReindexContextsRestoresRevocationsReach(t *testing.T) {
+  	f := newFixtureWithPolicy(t, 8, sharedPolicy)
+  	ctx := context.Background()
+  	f.liveContext(t, "leaf1", "alice", alicePrincipal, "")
+  	ref := store.ContextRef{NAS: "leaf1", Username: "alice"}
+  	k := store.ContextKey{NAS: "leaf1", Username: "alice"}
+  	before, err := f.st.GetContext(ctx, k)
+  	if err != nil {
+  		t.Fatal(err)
+  	}
+  	if err := f.st.SetContextPolicy(ctx, k, before.PolicyRev, store.ContextPolicy{BlobHash: "sha256:from-before",
+  		MaxPrivilege: before.MaxPrivilege, Enable: before.Enable}); err != nil {
+  		t.Fatal(err)
+  	}
+  	if err := f.st.UnindexRef(ctx, ref); err != nil { // what a deleted x/ record leaves
+  		t.Fatal(err)
+  	}
+  	if refs, _ := f.st.ContextsByPrincipal(ctx, alicePrincipal); len(refs) != 0 {
+  		t.Fatalf("the index still names it: %v", refs)
+  	}
+  	n, err := f.b.ReindexContexts(ctx, []store.ContextRef{ref})
+  	if err != nil || n != 1 {
+  		t.Fatalf("ReindexContexts = %d, %v", n, err)
+  	}
+  	if refs, _ := f.st.ContextsByPrincipal(ctx, alicePrincipal); len(refs) != 1 || refs[0] != ref {
+  		t.Fatalf("not re-indexed: %v", refs)
+  	}
+  	if got, _ := f.st.GetContext(ctx, k); got.BlobHash == "sha256:from-before" {
+  		t.Fatal("re-indexed but not judged against the policy in force")
+  	}
+  	if v := testutil.ToFloat64(f.b.Metrics.ContextsReindexed); v != 1 {
+  		t.Fatalf("port49_contexts_reindexed_total = %v", v)
+  	}
+  	if refs, err := f.b.Sessions.RevokeByPrincipal(ctx, alicePrincipal); err != nil || len(refs) != 1 {
+  		t.Fatalf("a revocation by principal after the re-index: %v %v", refs, err)
+  	}
+  }
+
+  // One that will not open cannot be indexed, and no refresh would visit
+  // it: it is revoked, which needs no key.
+  func TestReindexContextsRevokesOneThatWillNotOpen(t *testing.T) {
+  	f := newFixtureWithPolicy(t, 8, sharedPolicy)
+  	ctx := context.Background()
+  	f.liveContext(t, "leaf1", "alice", alicePrincipal, "")
+  	k := store.ContextKey{NAS: "leaf1", Username: "alice"}
+  	f.b.Store = unreadableAt{Store: f.st, k: k}
+  	if n, err := f.b.ReindexContexts(ctx, []store.ContextRef{{NAS: "leaf1", Username: "alice"}}); err != nil || n != 1 {
+  		t.Fatalf("ReindexContexts = %d, %v", n, err)
+  	}
+  	if got, _ := f.st.GetContext(ctx, k); got.RevokedAt.IsZero() {
+  		t.Fatal("an unindexed context that will not open was left unrevoked")
+  	}
+  }
+  ```
+
+  The fixture names are 7c's (`internal/broker/fixture_test.go`), as in Task 12. If the fixture
+  leaves `f.b.Sessions` nil, set it as 7a's revoke tests do, over `f.st`.
+
+  Run: `go test ./internal/store/etcd/ ./internal/broker/ -run 'Unindexed|ReindexContexts' -count=1`
+  Expected: FAIL to build (`Unindexed`, `ReindexContexts`, `ContextsReindexed` undefined).
+
+- [ ] **Step 2: The finder.** Append to `internal/store/etcd/indexes.go`:
+
+  ```go
+  // Unindexed is the ref of every context whose index record is gone, or
+  // lists no live principal (plan 7d; Ruling 6; re-check IA2). A login
+  // writes a context and its index record in one step and every extension
+  // carries both, so each is a record hidden by a store write: from the
+  // refresh, which walks the index, and from a revocation by sid or by
+  // --mine. It pages the context family keys-only and reads each page's
+  // index records in batched transactions, as the sweep does. A context
+  // past its expiry and not yet reclaimed may be named; ReindexContexts
+  // reads it and finds nothing. An index record that does not decode is an
+  // error naming its key (pre-flight M18).
+  func (s *Store) Unindexed(ctx context.Context) ([]store.ContextRef, error) {
+  	prefix := s.k.family(famContext)
+  	end := clientv3.GetPrefixRangeEnd(prefix)
+  	from := prefix
+  	now := s.now()
+  	var out []store.ContextRef
+  	for {
+  		resp, err := s.ctx.Get(ctx, from, clientv3.WithRange(end), clientv3.WithLimit(500), clientv3.WithKeysOnly())
+  		if err != nil {
+  			return out, unavailable(err)
+  		}
+  		refs := make([]store.ContextRef, 0, len(resp.Kvs))
+  		gets := make([]clientv3.Op, 0, len(resp.Kvs))
+  		for _, kv := range resp.Kvs {
+  			nas, user, ok := lastTwo(string(kv.Key))
+  			if !ok {
+  				return out, fmt.Errorf("etcd: context key %q does not parse", kv.Key)
+  			}
+  			ref := store.ContextRef{NAS: nas, Username: user}
+  			refs = append(refs, ref)
+  			gets = append(gets, clientv3.OpGet(s.k.indexed(ref)))
+  		}
+  		i := 0
+  		var bad error
+  		if err := chunked(ctx, s.ctx, gets, func(t *clientv3.TxnResponse) {
+  			for _, op := range t.Responses {
+  				ref := refs[i]
+  				i++
+  				kvs := op.GetResponseRange().Kvs
+  				if len(kvs) == 0 {
+  					out = append(out, ref)
+  					continue
+  				}
+  				var x idxRec
+  				if err := json.Unmarshal(kvs[0].Value, &x); err != nil {
+  					if bad == nil {
+  						bad = fmt.Errorf("etcd: index record %q does not decode: %w", kvs[0].Key, err)
+  					}
+  					continue
+  				}
+  				live := false
+  				for _, e := range x.Principals {
+  					live = live || e.ExpiresAt.After(now)
+  				}
+  				if !live {
+  					out = append(out, ref)
+  				}
+  			}
+  		}); err != nil {
+  			return out, err
+  		}
+  		if bad != nil {
+  			return out, bad
+  		}
+  		if !resp.More {
+  			return out, nil
+  		}
+  		from = string(resp.Kvs[len(resp.Kvs)-1].Key) + "\x00"
+  	}
+  }
+  ```
+
+- [ ] **Step 3: The re-index.**
+  - In `internal/session/session.go`, after `RevokeByCert`:
+
+    ```go
+    // Reindex indexes ref again under c's principal, sid and certificate,
+    // for the index TTL: a context whose index record was deleted in the
+    // store (plan 7d; re-check IA2). Revocation and the refresh read the
+    // index, so a context left out of it is reached by neither.
+    func (m *Manager) Reindex(ctx context.Context, ref store.ContextRef, c store.Context) error {
+    	return m.store.IndexContext(ctx, c.Principal, c.Credential.Sid,
+    		store.CertKey(c.Credential.Issuer, c.Credential.Serial), ref, m.indexTTL)
+    }
+    ```
+  - Create `internal/broker/reindex.go`:
+
+    ```go
+    package broker
+
+    import (
+    	"context"
+    	"errors"
+
+    	"github.com/rhwendt/port49/internal/store"
+    )
+
+    // ReindexContexts is what port49d does with the contexts
+    // (*etcd.Store).Unindexed names (plan 7d; Ruling 6; re-check IA2):
+    // each one that opens is indexed again under its own principal, sid and
+    // certificate, and judged at once against the policy in force, since a
+    // refresh that ran while it was hidden never reached it. One that will
+    // not open cannot be indexed, and no refresh would visit it, so it is
+    // revoked, which needs no key. One gone since the scan is skipped. Each
+    // is counted (port49_contexts_reindexed_total), and the total said: any
+    // is an index record deleted in the store. It returns how many it found,
+    // and its first store error, for the caller to run it again.
+    func (b *Broker) ReindexContexts(ctx context.Context, refs []store.ContextRef) (int, error) {
+    	if b.Sessions == nil {
+    		return 0, errors.New("broker: revocation is not wired (no session manager); the unindexed contexts were not re-indexed")
+    	}
+    	var rep RefreshReport
+    	rep.At = b.Now()
+    	cur := b.Policy.Load()
+    	n := 0
+    	defer func() {
+    		if n > 0 {
+    			b.logf("broker: %d live context(s) were missing from the index (an index record deleted in the store?); "+
+    				"re-indexed and judged against the policy in force, or revoked when they would not open", n)
+    		}
+    	}()
+    	for _, ref := range refs {
+    		k := store.ContextKey{NAS: ref.NAS, Username: ref.Username}
+    		c, err := b.Store.GetContext(ctx, k)
+    		var unreadable *store.UnreadableContextError
+    		switch {
+    		case errors.Is(err, store.ErrNotFound):
+    			continue
+    		case errors.As(err, &unreadable):
+    			if err := b.Store.SetRevokedAt(ctx, k, rep.At); err != nil && !errors.Is(err, store.ErrNotFound) {
+    				return n, err
+    			}
+    		case err != nil:
+    			return n, err
+    		default:
+    			if err := b.Sessions.Reindex(ctx, ref, c); err != nil {
+    				return n, err
+    			}
+    			if _, err := b.refreshContext(ctx, cur, nil, rep.At, c.Principal, ref, &rep, map[string]bool{},
+    				false); err != nil && !errors.Is(err, store.ErrConflict) {
+    				return n, err
+    			}
+    		}
+    		n++
+    		b.Metrics.ContextsReindexed.Inc()
+    	}
+    	return n, nil
+    }
+    ```
+
+    A conflict in the judging leaves that context for the next policy refresh: it is indexed
+    now, so the refresh reaches it.
+  - In `internal/daemon/metrics/metrics.go`, add:
+
+    ```go
+    	// ContextsReindexed counts live contexts found missing from the index
+    	// and re-indexed, or revoked when they would not open (plan 7d;
+    	// re-check IA2). Any increase is an index record deleted in the store.
+    	ContextsReindexed prometheus.Counter
+    ```
+
+    named `port49_contexts_reindexed_total`, registered, and named in
+    `TestNewRegistersEveryMetric` with one sample (pre-flight M31).
+
+- [ ] **Step 4: Run.**
+
+  Run: `go test ./internal/store/etcd/ ./internal/session/ ./internal/broker/ ./internal/daemon/metrics/ -count=1`
+  Expected: PASS: `TestUnindexedFindsAContextItsIndexLost`,
+  `TestReindexContextsRestoresRevocationsReach`, `TestReindexContextsRevokesOneThatWillNotOpen`,
+  and every existing test.
+
+  Mutation checks (do them, report them, revert them):
+  1. In `Unindexed`, count any principal entry as live, expired or not.
+     `TestUnindexedFindsAContextItsIndexLost` must fail (`stale`).
+  2. In `ReindexContexts`, skip the `refreshContext` call.
+     `TestReindexContextsRestoresRevocationsReach` must fail ("not judged").
+
+- [ ] **Step 5: Commit.**
+
+  ```bash
+  gofmt -w internal/store/etcd internal/session internal/broker internal/daemon/metrics
+  make build && make test && make vet
+  git add internal/store/etcd/indexes.go internal/store/etcd/etcd_test.go internal/session/session.go \
+    internal/broker/reindex.go internal/broker/reindex_test.go internal/daemon/metrics/metrics.go \
+    internal/daemon/metrics/metrics_test.go
+  git commit -m "feat(store): find a context its index lost, and re-index and judge it
+
+  A login writes a context and its index record in one step, so a live
+  context whose x/ record is gone was hidden by a store write: from the
+  refresh, which walks the index, and from a revocation by sid or --mine.
+  etcd's Unindexed pages the context family keys-only and names each one;
+  the broker's ReindexContexts indexes it again under its own principal,
+  sid and certificate, judges it against the policy in force, revokes
+  one that will not open, and counts port49_contexts_reindexed_total.
+  port49d calls it from 7d-2 (plan 7d; Ruling 6; re-check IA2).
+
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  ```
+
+---
+
 ### Task 8: Idempotency on etcd, and every property against etcd and the sealing layer over it
 
 **Files:**
@@ -6948,8 +8277,9 @@ from Task 5, etcd.
   tasks are written against the ledger this plan's split relies on.
   - In `docs/superpowers/plans/README.md`, change the status line to say 7d-1 is executed and
     merged, with its pull request and merge commit, and 7d-2 next.
-  - After "Plan 7c — As built", add "Plan 7d-1 — As built" in 7c's form: Tasks 1–8 (and 4b) task
-    by task, what differs from this plan's text, with commits; and any interface that changed.
+  - After "Plan 7c — As built", add "Plan 7d-1 — As built" in 7c's form: Tasks 1–8 (with 4b and
+    7b) task by task, what differs from this plan's text, with commits; and any interface that
+    changed.
   - If 7d-1's review changed an interface 7d-2 consumes, amend 7d-2's tasks in this plan in the
     same commit and say so (the split's rule above).
 
@@ -6995,8 +8325,9 @@ does, it says what port49d does and cites L35 as open.
       out a reply at about 3s. So a device hears `store_unavailable` before its own timeout, and
       a redemption's write lands inside the policy refresh's 30s settle pass.
     - **The failure delay.** The packet deadline never shortens the authentication failure
-      delay, which sleeps on the server's context. A FAIL's worst case is the two summed (§15
-      L35 measures the store's side).
+      delay, which sleeps on the server's context. The delay counts from the packet's
+      arrival, so the store's time is inside it: a FAIL arrives at max(`packet_deadline`,
+      delay), 2s at the defaults, and every failure still costs its sender the whole delay.
     - **The circuit.** After `breaker.failures` (5) consecutive failures, a pool's circuit opens
       for `breaker.open_for` (5s) and then lets one call probe. A failure is any of:
       - a timeout;
@@ -7010,13 +8341,16 @@ does, it says what port49d does and cites L35 as open.
       context operations use separate connections (design document §12).
   - **A store gone is a store that is down.** port49d closes every listener when:
     - it loses its hold on the keyspace;
-    - a pool's circuit stays open for `store.etcd.hold_ttl`;
-    - or every call on a pool is refused for that long (a role revoked at runtime).
+    - the token or the context pool's circuit stays open for `store.etcd.hold_ttl`;
+    - or every call on one of those pools is refused for that long (a role revoked at runtime):
+      at least `breaker.failures` refusals, none more than `breaker.open_for` after the last.
 
+    The bulk pool's circuit is alarmed, never a store gone: a slow scan while logins and
+    commands are answered does not close the listeners. Held TACACS+ connections are reset.
     Devices then find the connection refused and use their local method: the owner's go-dark
     ruling of 2026-09-24 in its coarse form, which plan 7f refines. port49d then waits
-    in-process for the store, `/readyz` 503, with no deadline, and starts again as below. It
-    never exits for an outage, so it needs no service manager to come back.
+    in-process for the store, `/readyz` 503, with no deadline, and starts again as below,
+    retrying any error that start meets. Once it has served, it never exits for an outage.
   - **Identity.** Each component authenticates to etcd by its own client certificate, its CN
     etcd's user, under the roles `port49d store-roles` prints.
     - **The daemon's role cannot** read idempotency records, write the token indexes, write
@@ -7030,21 +8364,26 @@ does, it says what port49d does and cites L35 as open.
   - **One port49d per keyspace until plan 7e.**
     - **The hold.** port49d holds the keyspace on an etcd lease of `store.etcd.hold_ttl` (15s),
       as the broker. A second port49d waits for it, its listeners closed.
-    - **A fence.** The holder reads its lock key every sixth of `hold_ttl`. It counts the hold
-      lost when the key is gone or on another lease, or when no read has answered for two
-      thirds of it: before etcd can expire the lease and let another take the keyspace.
+    - **A fence.** Every sixth of `hold_ttl` the holder reads its lock key and its lease's
+      remaining TTL. It counts the hold lost when the key is gone or on another lease, the lease
+      has expired, or, with etcd not answering, its estimate of the lease (each answer's send
+      time plus its TTL) has half of `hold_ttl` or less left: at least a sixth of `hold_ttl`
+      before etcd can expire the lease and let another take the keyspace.
   - **A start on etcd.** port49d waits for the store with every listener closed (up to
     `store.etcd.start_timeout`, 30s, then exits 1; `0` waits forever; after a store gone, no
     deadline), and then, retrying while the store errs:
     1. takes the hold;
     2. puts the revocations file's marks into the store (a mark in either stands);
-    3. applies every standing mark to the live contexts the store kept, by the revocation's two
+    3. re-indexes every live context whose index record was deleted in the store, as it does
+       after every index sweep;
+    4. applies every standing mark to the live contexts the store kept, by the revocation's two
        context passes, so a revocation a restart or an outage cut short reaches them before any
-       listener opens;
-    4. deletes every unspent token, as a restart always did, and marks every key superseded,
+       listener opens. A kept context that will not open is still marked, and never stops the
+       start;
+    5. deletes every unspent token, as a restart always did, and marks every key superseded,
        so an idempotent replay mints again;
-    5. carries the policy in force into every live context the store kept;
-    6. binds TACACS+.
+    6. carries the policy in force into every live context the store kept;
+    7. binds TACACS+.
 
     Live contexts survive a restart (what a device then sees: §15 L35). `store.backend: etcd`
     requires `admin_socket`, because editing `broker.revocations_file` with port49d stopped no
@@ -7072,10 +8411,11 @@ does, it says what port49d does and cites L35 as open.
   ```markdown
   port49d will do this itself by closing its TACACS+ listener while the store is unhealthy
   (owner's ruling 2026-09-24; plan 7f). On etcd (plan 7d) it already closes every listener once
-  its hold on the store is lost, or a pool's circuit has stayed open, for `store.etcd.hold_ttl`,
-  and opens them again when the store returns. Before then a store that does not answer, or a
-  pool's open circuit, is answered within `store.packet_deadline`, never left for the device to
-  time out (what each image does then: §15 L35).
+  its hold on the store is lost, or the token or context pool's circuit has stayed open, or every
+  call on one has been refused, for `store.etcd.hold_ttl`, and opens them again when the store
+  returns. Before then a store that does not answer, or a pool's open circuit, is answered
+  within `store.packet_deadline`, never left for the device to time out (what each image does
+  then: §15 L35).
   ```
 
 - [ ] **Step 4: §12, `port49d store-roles`** (pre-flight M5). After the `port49d
@@ -7093,9 +8433,12 @@ does, it says what port49d does and cites L35 as open.
   - **`port49_broker`.** Read-write on the whole keyspace.
   - **The users.** A user per component, named by the CN of the certificate `store.etcd.daemon`
     and `store.etcd.broker` name, granted its role.
-  - **What a stolen daemon key yields under these roles:** decision 35's residual, the replay of
-    a context record it cannot forge. The broker's role holds the whole keyspace until plan 7e
-    splits the broker out.
+  - **What a stolen daemon key yields under these roles:** decision 35's residual, replay of
+    records it cannot forge. While port49d runs that is an earlier version of a key's own
+    context, a deleted token for a holder of its secret, or a receipt's sliding bound; across a
+    restart, another login's context put back while port49d was stopped (impersonation). It can
+    also hide a context from the index until the next sweep re-indexes it, and deny by deleting.
+    The broker's role holds the whole keyspace until plan 7e splits the broker out.
   - **The command itself.** It reads the config and those certificates, holds no etcd
     credential, and changes nothing. It refuses a CN or prefix holding a character outside
     `[A-Za-z0-9._@/-]`, printing nothing. It exits 0, 1 naming what it could not read or
@@ -7114,9 +8457,13 @@ does, it says what port49d does and cites L35 as open.
     stopped names, is revoked before any listener binds, and its next command is denied
     `credential_revoked`.
   - **A store gone**: with the store hung past `store.etcd.hold_ttl`, port49d closes every
-    listener and says why; when the store returns, the same process listens again.
+    listener, resets every held connection, and says why; when the store returns, the same
+    process listens again. A start after a store gone that fails for any other reason is
+    tried again, never an exit.
   - **The failure delay**: a FAIL behind a `store.packet_deadline` shorter than the delay takes
-    the whole delay.
+    the whole delay, and a FAIL behind a slow store arrives at the delay, its store time
+    inside it.
+  - **The bulk pool**: its circuit open for `store.etcd.hold_ttl` closes no listener.
   ```
 
 - [ ] **Step 6: L35, opened** (pre-flight M6). In the §15 table, after the L34 row, add:
@@ -7158,8 +8505,9 @@ does, it says what port49d does and cites L35 as open.
         deadline is refused.
       - **What counts.** A failure is a timeout, a caller's deadline that struck mid-call, or an
         etcd error that is not a refusal by the roles; a caller that went away is none.
-      - **Going dark.** A circuit open, or every call refused, for `store.etcd.hold_ttl` closes
-        the listeners as a lost hold does.
+      - **Going dark.** The token or context pool's circuit open, or every call on it refused,
+        for `store.etcd.hold_ttl` closes the listeners as a lost hold does. The bulk pool's
+        circuit is alarmed, never a reason to close them.
       - The warm context cache stays plan 7f's.
     ```
   - In the readiness paragraph replace `It arrives with the remote store (plan 7).`
@@ -7182,8 +8530,10 @@ does, it says what port49d does and cites L35 as open.
     hundred bytes; a blob a few kilobytes).
   - **One keyspace per port49d until plan 7e.** A Kubernetes rollout must therefore stop the old
     pod first (`Recreate`), because a surge pod waits for the keyspace and is not ready.
-  - **No restart policy is needed for an outage.** port49d closes its listeners and waits for
-    the store in-process; a supervisor restarts it only after a crash or a configuration error.
+  - **No restart policy is needed for an outage, but keep `Restart=on-failure`.** port49d
+    closes its listeners and waits for the store in-process, and once it has served it retries
+    every start error after an outage. A supervisor is still what restarts it after a crash, or
+    after a cold start that exits 1 (a configuration fault, or `start_timeout`).
   - **Backups.** Back etcd up as a database holding the revocation marks. Until plan 7e retires
     it, `broker.revocations_file` is kept as well.
     - **Protect every snapshot as the store itself.** It holds the plaintext index (§8):
@@ -7204,10 +8554,12 @@ does, it says what port49d does and cites L35 as open.
     requires;
   - `port49_store_keyspace_held`;
   - `port49_store_client_cert_expiry_timestamp_seconds{component}`;
-  - `port49_crypt_store_key_unknown`.
+  - `port49_crypt_store_key_unknown`;
+  - `port49_contexts_reindexed_total`.
 
   Alert on any of:
   - a circuit open;
+  - any increase of `port49_contexts_reindexed_total`: an index record deleted in the store;
   - the hold not held while port49d runs;
   - a store client certificate within 30 days of expiry;
   - `port49_crypt_store_key_unknown` at 1;
@@ -7587,33 +8939,62 @@ circuit, and shares the backend's connections.
   }
 
   // A store that refuses every call (the daemon's role revoked at runtime)
-  // never opens a circuit, but once every call has been refused for
-  // StopAfter the guard says so; an answer in between starts the count
-  // again (pre-flight I10).
+  // never opens a circuit, but once a steady run of refusals has lasted
+  // StopAfter the guard says so. An answer in between starts the count
+  // again (pre-flight I10). So does a gap longer than OpenFor: two refusals
+  // far apart are not a store refusing (re-check R-I5).
   func TestRefusalsGoDark(t *testing.T) {
   	var said, gone told
-  	inner := &stuck{err: store.ErrRefused}
-  	c := config(&said, &gone)
+  	c := config(&said, &gone) // Failures 3, OpenFor 100ms
   	c.StopAfter = 200 * time.Millisecond
+  	sparse := Wrap(&stuck{err: store.ErrRefused}, c)
+  	sparse.GetContext(context.Background(), k)
+  	time.Sleep(250 * time.Millisecond)
+  	sparse.GetContext(context.Background(), k)
+  	if l := gone.all(); len(l) != 0 {
+  		t.Fatalf("two refusals with a gap past OpenFor went dark: %q", l)
+  	}
+  	inner := &stuck{err: store.ErrRefused}
   	g := Wrap(inner, c)
-  	g.GetContext(context.Background(), k)
-  	time.Sleep(150 * time.Millisecond)
+  	steady := func(d time.Duration) {
+  		for end := time.Now().Add(d); time.Now().Before(end); time.Sleep(20 * time.Millisecond) {
+  			g.GetContext(context.Background(), k)
+  		}
+  	}
+  	steady(150 * time.Millisecond)
   	inner.set(nil, 0)
   	g.GetContext(context.Background(), k) // an answer: the count starts again
   	inner.set(store.ErrRefused, 0)
-  	g.GetContext(context.Background(), k)
-  	time.Sleep(150 * time.Millisecond)
-  	g.GetContext(context.Background(), k)
+  	steady(150 * time.Millisecond)
   	if l := gone.all(); len(l) != 0 {
   		t.Fatalf("an answer did not restart the count: %q", l)
   	}
-  	time.Sleep(100 * time.Millisecond)
-  	g.GetContext(context.Background(), k)
+  	steady(100 * time.Millisecond)
   	if l := gone.all(); len(l) != 1 || !strings.Contains(l[0], "refused") {
   		t.Fatalf("told %q", l)
   	}
   	if v := testutil.ToFloat64(c.Metrics.Open.WithLabelValues("daemon", "context")); v != 0 {
   		t.Fatal("refusals opened the circuit")
+  	}
+  }
+
+  // The bulk pool's circuit, open for StopAfter, is said and gauged and
+  // never takes port49d dark: a slow scan is not a store gone while the
+  // hot pools answer (re-check R-I5).
+  func TestTheBulkPoolNeverGoesDark(t *testing.T) {
+  	var said, gone told
+  	c := config(&said, &gone)
+  	c.StopAfter = 100 * time.Millisecond
+  	g := Wrap(&stuck{err: store.ErrUnavailable}, c)
+  	for end := time.Now().Add(400 * time.Millisecond); time.Now().Before(end); time.Sleep(20 * time.Millisecond) {
+  		g.ActivePrincipals(context.Background())
+  	}
+  	if l := gone.all(); len(l) != 0 {
+  		t.Fatalf("the bulk pool took port49d dark: %q", l)
+  	}
+  	if testutil.ToFloat64(c.Metrics.Open.WithLabelValues("daemon", "bulk")) != 1 ||
+  		len(said.all()) == 0 || !strings.Contains(said.all()[0], "bulk pool's circuit is open") {
+  		t.Fatalf("the bulk circuit was not alarmed: said %q", said.all())
   	}
   }
 
@@ -7755,8 +9136,9 @@ circuit, and shares the backend's connections.
   //     a slot within its deadline is refused: a queue is worse than a
   //     refusal.
   //
-  // It reports a pool that has stayed failed, or stayed refused, for
-  // StopAfter, and port49d goes dark on that (Ruling 11). It sits under the
+  // It reports a token or context pool that has stayed failed, or stayed
+  // refused, for StopAfter, and port49d goes dark on that (Ruling 11); the
+  // bulk pool's circuit is said and gauged, never reported. It sits under the
   // sealing layer, so a record that will not decrypt is never counted as
   // the store failing.
   package guard
@@ -7811,9 +9193,10 @@ circuit, and shares the backend's connections.
   	MaxInFlight map[Pool]int
   	Failures    int           // consecutive failures that open a pool's circuit
   	OpenFor     time.Duration // how long it stays open before a probe
-  	// StopAfter is how long a pool's circuit may stay open, or its every
-  	// call be refused, before Unhealthy is told, once (store.etcd.hold_ttl);
-  	// zero never tells it.
+  	// StopAfter is how long a token or context pool's circuit may stay
+  	// open, or its calls be refused in a steady run, before Unhealthy is
+  	// told, once (store.etcd.hold_ttl); zero never tells it. The bulk pool
+  	// never tells it (re-check R-I5).
   	StopAfter time.Duration
   	Unhealthy func(why string)
   	Now       func() time.Time
@@ -7844,11 +9227,14 @@ circuit, and shares the backend's connections.
   	probe   bool
   	cause   error
   	// openedAt is when the circuit last opened from closed; a failed probe
-  	// opens it again without moving it. refusedSince is the first of the
-  	// refusals since the last answer. told is whether Unhealthy has been
-  	// told about this run of either.
-  	openedAt, refusedSince time.Time
-  	told                   bool
+  	// opens it again without moving it. refusedSince is the first refusal
+  	// of the current run, lastRefused its latest, and refused its count: a
+  	// run ends at an answer, or at a refusal more than OpenFor after the
+  	// one before it, which starts the next (re-check R-I5). told is whether
+  	// Unhealthy has been told about this run of either.
+  	openedAt, refusedSince, lastRefused time.Time
+  	refused                             int
+  	told                                bool
   }
 
   type guarded struct {
@@ -7898,7 +9284,7 @@ circuit, and shares the backend's connections.
   // leave records how a call ended, and reports whether the circuit changed
   // and how it now stands. A call not counted (a caller that went away, a
   // refusal, a slot never got) changes nothing but the probe it held; a
-  // refusal also starts or continues refusedSince, and an answer ends it.
+  // refusal also starts or continues the refused run, and an answer ends it.
   func (p *pool) leave(now time.Time, probe bool, outcome string, cause error, threshold int, openFor time.Duration) (changed, open bool) {
   	p.mu.Lock()
   	defer p.mu.Unlock()
@@ -7907,9 +9293,11 @@ circuit, and shares the backend's connections.
   	}
   	switch outcome {
   	case "refused":
-  		if p.refusedSince.IsZero() {
-  			p.refusedSince = now
+  		if p.refusedSince.IsZero() || now.Sub(p.lastRefused) > openFor {
+  			p.refusedSince, p.refused, p.told = now, 0, false
   		}
+  		p.lastRefused = now
+  		p.refused++
   		return false, p.open
   	case "canceled", "saturated":
   		return false, p.open
@@ -7927,7 +9315,7 @@ circuit, and shares the backend's connections.
   		return false, p.open
   	}
   	// An answer: ok, not_found, conflict, error.
-  	p.fails, p.refusedSince, p.told = 0, time.Time{}, false
+  	p.fails, p.refusedSince, p.refused, p.told = 0, time.Time{}, 0, false
   	if p.open {
   		p.open = false
   		return true, false
@@ -7935,10 +9323,11 @@ circuit, and shares the backend's connections.
   	return false, false
   }
 
-  // gone reports, once per run, a pool whose circuit has stayed open or
-  // whose every call has been refused for stopAfter. whose names the pool
-  // ("the daemon's context pool").
-  func (p *pool) gone(now time.Time, stopAfter time.Duration, whose string) (why string, tell bool) {
+  // gone reports, once per run, a pool whose circuit has stayed open, or
+  // whose every call has been refused, for stopAfter: a refused run of at
+  // least minRefused calls, none more than OpenFor apart (leave). whose
+  // names the pool ("the daemon's context pool").
+  func (p *pool) gone(now time.Time, stopAfter time.Duration, minRefused int, whose string) (why string, tell bool) {
   	p.mu.Lock()
   	defer p.mu.Unlock()
   	if stopAfter <= 0 || p.told {
@@ -7948,7 +9337,7 @@ circuit, and shares the backend's connections.
   	case p.open && now.Sub(p.openedAt) >= stopAfter:
   		p.told = true
   		return fmt.Sprintf("%s's circuit has been open for %v (%v)", whose, stopAfter, p.cause), true
-  	case !p.refusedSince.IsZero() && now.Sub(p.refusedSince) >= stopAfter:
+  	case !p.refusedSince.IsZero() && p.refused >= minRefused && now.Sub(p.refusedSince) >= stopAfter:
   		p.told = true
   		return fmt.Sprintf("every call on %s has been refused by the store for %v (its role no longer grants it)",
   			whose, stopAfter), true
@@ -8031,10 +9420,20 @@ circuit, and shares the backend's connections.
   	}
   }
 
-  // watch tells Unhealthy, outside every lock, when pl has gone dark.
+  // watch tells Unhealthy, outside every lock, when pl has gone dark. The
+  // bulk pool never does (re-check R-I5): a scan slow at scale, or a
+  // refused one, while the token and context pools answer, is not a store
+  // gone, and closing every listener on it would undo the pools' separation
+  // (pre-flight I14). Its circuit is said and gauged (changed), and that is
+  // the alarm. A pool with no calls never reaches watch, so an idle pool
+  // whose circuit is open is never told: harmless, since an idle pool
+  // serves no one (re-check R-M5).
   func (g *guarded) watch(pl *pool) {
+  	if pl.name == Bulk {
+  		return
+  	}
   	whose := fmt.Sprintf("the %s's %s pool", g.c.Component, pl.name)
-  	if why, tell := pl.gone(g.c.Now(), g.c.StopAfter, whose); tell && g.c.Unhealthy != nil {
+  	if why, tell := pl.gone(g.c.Now(), g.c.StopAfter, g.c.Failures, whose); tell && g.c.Unhealthy != nil {
   		g.c.Unhealthy(why)
   	}
   }
@@ -8048,6 +9447,12 @@ circuit, and shares the backend's connections.
   		g.c.Metrics.Open.WithLabelValues(g.c.Component, string(p)).Set(v)
   	}
   	if g.c.Say == nil {
+  		return
+  	}
+  	if open && p == Bulk {
+  		g.c.Say(fmt.Sprintf("port49d: store: the %s's bulk pool's circuit is open after %d consecutive failures (%v); "+
+  			"the scans (the refresh, a revocation by principal, a start's purge) fail until a probe in %v succeeds; "+
+  			"logins and commands are unaffected", g.c.Component, g.c.Failures, cause, g.c.OpenFor))
   		return
   	}
   	if open {
@@ -8098,7 +9503,10 @@ circuit, and shares the backend's connections.
   	// (daemon, broker), pool (token, context, bulk) and outcome (ok,
   	// not_found, conflict, error, timeout, deadline, unavailable, refused,
   	// canceled, saturated, circuit_open); how long they took; and whether
-  	// each pool's circuit is open, design §15's circuit-breaker state.
+  	// each pool's circuit is open, design §15's circuit-breaker state. The
+  	// gauge moves only when a call ends, so a pool no one calls keeps the
+  	// value of its last call, open included, and never goes dark on it:
+  	// harmless, since it serves no one (re-check R-M5).
   	StoreCalls       *prometheus.CounterVec
   	StoreCallSeconds *prometheus.HistogramVec
   	StoreCircuitOpen *prometheus.GaugeVec
@@ -8146,6 +9554,9 @@ circuit, and shares the backend's connections.
      `TestASlowStoreGoesDark` must fail.
   4. In `PoolOf`'s table, move `ListRevocations` to `Token` and leave its method on `Bulk`.
      `TestEveryMethodIsRoutedToItsPool` must fail.
+  5. In `watch`, drop the `Bulk` return. `TestTheBulkPoolNeverGoesDark` must fail.
+  6. In `leave`, drop the gap check (`now.Sub(p.lastRefused) > openFor`).
+     `TestRefusalsGoDark` must fail ("two refusals with a gap").
 
 - [ ] **Step 5: Commit.**
 
@@ -8161,10 +9572,11 @@ circuit, and shares the backend's connections.
   through; token, context and bulk calls have their own slots, and one
   that cannot get a slot within its deadline is refused. A caller that
   went away is never the store failing; a caller's deadline that struck
-  mid-call is. A pool whose circuit stays open, or whose every call is
-  refused, for hold_ttl is reported, and port49d goes dark on it. Design
-  §12's hard timeouts, circuit breaker and pool separation (plan 7d;
-  decision 35; pre-flight I10, I11, I14).
+  mid-call is. A token or context pool whose circuit stays open, or whose
+  calls are refused in a steady run, for hold_ttl is reported, and
+  port49d goes dark on it; the bulk pool's circuit is alarmed instead.
+  Design §12's hard timeouts, circuit breaker and pool separation (plan
+  7d; decision 35; pre-flight I10, I11, I14; re-check R-I5).
 
   Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
@@ -8194,8 +9606,8 @@ circuit, and shares the backend's connections.
   - `func config.StoreOf(raw []byte) (StoreConfig, error)` (for `port49d store-roles`, Task 11)
   - `const config.BackendMemory = "memory"`, `config.BackendEtcd = "etcd"`, `config.RolesEnforced`, `config.RolesUnenforced = "unenforced"`
   - `server.Deps.PacketDeadline time.Duration`
-  - `func authen.WithDelayContext(ctx, delay context.Context) context.Context`,
-    `func authen.DelayContext(ctx context.Context) context.Context`
+  - `func authen.WithDelayContext(ctx, delay context.Context, arrived time.Time) context.Context`,
+    `func authen.DelayContext(ctx context.Context) (context.Context, time.Time)`
 
 The schema, with every default:
 
@@ -8403,6 +9815,54 @@ store:
   	reply, err := wire.DecodeAuthenReply(body)
   	if err != nil || reply.Status != wire.AuthenStatusFail || took < 300*time.Millisecond {
   		t.Fatalf("status %v (%v) after %v: the packet deadline cut the failure delay", reply.Status, err, took)
+  	}
+  }
+
+  // slowStore answers the two reads a wrong token's redemption makes, each
+  // after d: a store slow but inside every deadline.
+  type slowStore struct {
+  	store.Store
+  	d time.Duration
+  }
+
+  func (s slowStore) GetReceipt(ctx context.Context, rk store.ReceiptKey) (store.Receipt, error) {
+  	time.Sleep(s.d)
+  	return s.Store.GetReceipt(ctx, rk)
+  }
+
+  func (s slowStore) Candidates(ctx context.Context, k store.TokenKey) ([]store.Token, error) {
+  	time.Sleep(s.d)
+  	return s.Store.Candidates(ctx, k)
+  }
+
+  // The failure delay counts from the packet's arrival, so the store's time
+  // is inside it, not added to it: a wrong token behind a store spending
+  // 250ms and a 300ms delay is answered FAIL at about 300ms, never 550ms
+  // (re-check N1). That keeps a FAIL's worst case at max(packet_deadline,
+  // delay), inside Junos's 3s (L13), and the throttle whole.
+  func TestAFailArrivesAtItsDelay(t *testing.T) {
+  	log := &syncBuffer{}
+  	st := slowStore{Store: memory.New(time.Now), d: 125 * time.Millisecond}
+  	ts := newTestServerWith(t, log, st, nil, func(d *Deps) {
+  		d.PacketDeadline = 2 * time.Second
+  		lim := limits.New(limits.Config{PerNASConnections: 2, IdleTimeout: time.Second,
+  			MalformedBackoffBase: time.Millisecond, MalformedBackoffMax: time.Millisecond, MalformedWindow: time.Minute,
+  			AuthFailureDelayBase: 300 * time.Millisecond, AuthFailureDelayMax: 300 * time.Millisecond,
+  			AuthFailureWindow: time.Minute}, time.Now)
+  		d.Limits = lim
+  		d.Authen = authen.New(st, d.Log, lim, d.Metrics, time.Now, func() string { return "ctx1" },
+  			15*time.Minute, 2*time.Hour, time.Hour, time.Hour, token.NewTagWindow(token.TagKey([]byte("server_test"))))
+  	})
+  	c := dial(t, ts.addr, []byte("k2"))
+  	start := time.Now()
+  	c.send(t, wire.TypeAuthen, wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP,
+  		Service: wire.AuthenServiceLogin, User: []byte("alice"), Port: []byte("vty0"), Data: []byte("not-a-token")}.Encode(), 0)
+  	_, body := c.recv(t)
+  	took := time.Since(start)
+  	reply, err := wire.DecodeAuthenReply(body)
+  	if err != nil || reply.Status != wire.AuthenStatusFail || took < 300*time.Millisecond || took >= 500*time.Millisecond {
+  		t.Fatalf("status %v (%v) after %v: want FAIL at the 300ms delay, the 250ms of store inside it", reply.Status,
+  			err, took)
   	}
   }
   ```
@@ -8621,26 +10081,56 @@ store:
     ```go
     type delayKey struct{}
 
-    // WithDelayContext is ctx carrying delay, the context a failure delay
-    // may be ended by: the server's, never the packet's. A packet's
-    // store.packet_deadline bounds its store work and must not cut the
-    // brute-force delay (plan 7d; pre-flight I1).
-    func WithDelayContext(ctx, delay context.Context) context.Context {
-    	return context.WithValue(ctx, delayKey{}, delay)
+    type delayFrom struct {
+    	ctx     context.Context
+    	arrived time.Time
     }
 
-    // DelayContext is the context WithDelayContext put on ctx, or ctx itself.
-    func DelayContext(ctx context.Context) context.Context {
-    	if d, ok := ctx.Value(delayKey{}).(context.Context); ok {
-    		return d
+    // WithDelayContext is ctx carrying delay, the context a failure delay
+    // may be ended by, and arrived, when the packet arrived. delay is the
+    // server's context, never the packet's: a packet's store.packet_deadline
+    // bounds its store work and must not cut the brute-force delay (plan 7d;
+    // pre-flight I1). The delay counts from arrived, so the store work it
+    // waited on is inside it, not added to it (re-check N1).
+    func WithDelayContext(ctx, delay context.Context, arrived time.Time) context.Context {
+    	return context.WithValue(ctx, delayKey{}, delayFrom{ctx: delay, arrived: arrived})
+    }
+
+    // DelayContext is the context and arrival WithDelayContext put on ctx,
+    // or ctx itself and the zero time.
+    func DelayContext(ctx context.Context) (context.Context, time.Time) {
+    	if d, ok := ctx.Value(delayKey{}).(delayFrom); ok {
+    		return d.ctx, d.arrived
     	}
-    	return ctx
+    	return ctx, time.Time{}
     }
     ```
 
-    In `Session.fail` (authen.go:878), sleep on `DelayContext(ctx).Done()` in place of
-    `ctx.Done()`, and add to its comment: `It sleeps on DelayContext(ctx): a packet deadline
-    does not shorten it either (plan 7d).`
+    In `Session.fail` (authen.go:878), replace the timer and its `select` with:
+
+    ```go
+    	// The delay counts from the packet's arrival, and sleeps on the
+    	// server's context (DelayContext): the store's time is inside it, not
+    	// added to it, and a packet deadline does not shorten it (plan 7d;
+    	// pre-flight I1; re-check N1). A FAIL therefore arrives at the later of
+    	// the store's answer and arrival plus the delay, and each failure still
+    	// costs its sender the whole delay from its send. With no arrival (a
+    	// caller other than the server) it counts from now, as before.
+    	dctx, arrived := DelayContext(ctx)
+    	if !arrived.IsZero() {
+    		delay -= time.Since(arrived)
+    	}
+    	if delay > 0 {
+    		timer := time.NewTimer(delay)
+    		select {
+    		case <-timer.C:
+    		case <-dctx.Done():
+    			timer.Stop()
+    		}
+    	}
+    ```
+
+    The arrival is real time, not the handler's clock, because the sleep is real time.
   - In `internal/daemon/server/server.go`, add to `Deps`, beside `IdleTimeout`:
 
     ```go
@@ -8653,15 +10143,16 @@ store:
   - In `conn.go`'s `dispatch`, as its first lines:
 
     ```go
+    	// The failure delay keeps the server's context and counts from now,
+    	// the packet's arrival (authen.DelayContext): the deadline is for the
+    	// store, never the brute-force delay (re-check N1).
+    	delay, arrived := ctx, time.Now()
     	if s.d.PacketDeadline > 0 {
-    		// The failure delay keeps the server's context (authen.DelayContext):
-    		// the deadline is for the store, never the brute-force delay.
-    		delay := ctx
     		var cancel context.CancelFunc
     		ctx, cancel = context.WithTimeout(ctx, s.d.PacketDeadline)
     		defer cancel()
-    		ctx = authen.WithDelayContext(ctx, delay)
     	}
+    	ctx = authen.WithDelayContext(ctx, delay, arrived)
     ```
   - In `cmd/port49d/main.go`, where `deps := server.Deps{…}` is built, add `PacketDeadline:
     cfg.Store.PacketDeadline,`.
@@ -8673,8 +10164,11 @@ store:
   deadline. That changes no existing test, since none waits 2 s on a store, and no failure delay
   is cut by it.
 
-  Mutation check (do it, report it, revert it): in `fail`, sleep on `ctx.Done()` again.
-  `TestThePacketDeadlineNeverShortensTheFailureDelay` must fail.
+  Mutation checks (do them, report them, revert them):
+  1. In `fail`, sleep on `ctx.Done()` again. `TestThePacketDeadlineNeverShortensTheFailureDelay`
+     must fail.
+  2. In `fail`, drop the `delay -= time.Since(arrived)`. `TestAFailArrivesAtItsDelay` must
+     fail (about 550ms).
 
 - [ ] **Step 5: Commit.**
 
@@ -8690,10 +10184,12 @@ store:
   at most 2s, L13's Junos timeout) bounds every TACACS+ packet's store
   work, so a device hears store_unavailable before its own timeout and a
   redemption's write lands inside the refresh's 30s settle pass (4b m3).
-  The failure delay sleeps on the server's context and is never cut by
-  it. store.etcd refuses plain http, a missing identity, etcd with no
-  broker and etcd with no admin_socket; start_timeout 0 waits forever
-  (plan 7d; decision 35; pre-flight I1, I13, I16, I19).
+  The failure delay sleeps on the server's context, is never cut by it,
+  and counts from the packet's arrival, so a slow store's time is inside
+  it and a FAIL arrives within max(packet_deadline, delay). store.etcd
+  refuses plain http, a missing identity, etcd with no broker and etcd
+  with no admin_socket; start_timeout 0 waits forever (plan 7d; decision
+  35; pre-flight I1, I13, I16, I19; re-check N1).
 
   Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
@@ -9021,8 +10517,9 @@ store:
   // or write an idempotency record (which holds minted tokens), write the
   // token index, or write meta/ — so a stolen daemon key cannot delete the
   // keyspace hold (pre-flight I15) or the seal-key record. The broker holds
-  // the keyspace. What a stolen daemon key can still do to a context is
-  // bounded by the seal and the marks (Ruling 17).
+  // the keyspace. What a stolen daemon key can still do to a token, a
+  // receipt or a context is bounded by the seals, the ledger and the marks,
+  // record family by record family (Ruling 17's table).
   const (
   	RoleDaemon = "port49_daemon"
   	RoleBroker = "port49_broker"
@@ -9298,11 +10795,13 @@ store:
 - Modify: `internal/broker/broker.go` (`SupersededAll`), `internal/broker/refresh.go`
   (`ApplyMarksAtStart`, `RefreshAtStart`, `RefreshReport.Contexts`)
 - Test: `internal/broker/refresh_test.go`, `cmd/port49d/store_e2e_test.go`
+- Modify: `internal/daemon/server/server.go` (`Deps.Abort`: a reset on a store gone)
 - Modify: `internal/daemon/metrics/metrics.go`, `metrics_test.go` (`StoreKeyspaceHeld`,
   `StoreCertExpiry`)
 
 **Interfaces:**
-- Consumes: everything from Tasks 4b–11; `internal/keyfile.LoadX509KeyPair`.
+- Consumes: everything from Tasks 4b–11, `crypt.NewLedger` and `crypt.WithLedger` (4b),
+  `(*etcd.Store).Unindexed` and `Broker.ReindexContexts` (7b); `internal/keyfile.LoadX509KeyPair`.
 - Produces:
   - `func (s *etcd.Store) Hold(ctx context.Context, ttl time.Duration, who string, waiting func(holder string)) (lost <-chan struct{}, release func(), err error)`
   - In `cmd/port49d`:
@@ -9311,9 +10810,12 @@ store:
     - `type storeGone struct{ why string }`, `type storeFault struct{ err error }`;
     - `func identity(name string, id config.EtcdIdentity, pool *x509.CertPool, now time.Time) (*tls.Config, *x509.Certificate, error)`;
     - `func probeTLS(ctx context.Context, endpoints []string, tc *tls.Config, timeout time.Duration) error`;
-    - `func startOnPersistentStore(ctx context.Context, brk *broker.Broker, st store.Store, cfg config.Config, marks *[]store.Revocation, m *metrics.Metrics) error`;
-    - `func sweepLoop(ctx context.Context, s *etcdstore.Store, every time.Duration, out io.Writer)`;
-    - `func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again bool) (err error)`; `run` becomes its loop.
+    - `func startOnPersistentStore(ctx context.Context, brk *broker.Broker, st store.Store, e *etcdstore.Store, cfg config.Config, marks *[]store.Revocation, m *metrics.Metrics) error`;
+    - `func sweepLoop(ctx context.Context, s *etcdstore.Store, brk *broker.Broker, every time.Duration, out io.Writer)`;
+    - `func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again bool) (err error)`;
+      `func runLoop(parent context.Context, once func(again bool) error, every time.Duration) error`;
+      `run` calls `runLoop` over `runOnce`.
+  - `server.Deps.Abort func() bool`
   - `Broker.SupersededAll time.Time`; `func (b *Broker) ApplyMarksAtStart(ctx context.Context, marks []store.Revocation) (int, error)`;
     `func (b *Broker) RefreshAtStart(ctx context.Context) (RefreshReport, error)`; `func (r RefreshReport) Contexts() int`
   - `Metrics.StoreKeyspaceHeld` (`port49_store_keyspace_held`), `Metrics.StoreCertExpiry`
@@ -9338,8 +10840,10 @@ store:
 
   // One port49d per keyspace: a second Hold waits, saying who holds it,
   // until the first lets go; and a hold whose store stops answering is lost
-  // within two thirds of its TTL, before etcd can expire the lease and the
-  // second take it (Ruling 11; pre-flight I15; Review Focus 4).
+  // at least a sixth of its TTL before etcd can expire the lease and the
+  // second take it (Ruling 11; pre-flight I15; re-check R-I4; Review Focus
+  // 4). That margin, 0.83s at a 5s TTL, plus etcd's own lease-expiry
+  // granularity, is what keeps the ordering assertion below from racing.
   func TestHoldIsOnePerKeyspaceAndLapses(t *testing.T) {
   	srv := etcdtest.Start(t, etcdtest.Options{})
   	proxy := etcdtest.NewProxy(t, strings.TrimPrefix(srv.Endpoint, "http://"))
@@ -9472,10 +10976,11 @@ store:
   // daemon's role cannot write meta/. While another holds it, Hold waits,
   // telling waiting the holder's who every 30s, until ctx ends.
   //
-  // lost is closed when the hold is gone (pre-flight I15): the lock key
-  // deleted or on another lease, the session ended, or no read of the key
-  // answered for two thirds of ttl. That is before etcd can expire the
-  // lease and let another port49d take the keyspace. The session's
+  // lost is closed when the hold is gone (pre-flight I15; re-check R-I4):
+  // the lock key deleted or on another lease, the lease expired, the
+  // session ended, or etcd not answering with half of ttl or less left on
+  // the lease as last reported. That is before etcd can expire the lease
+  // and let another port49d take the keyspace. The session's
   // keepalive is its own, not ctx's, so a shutdown is not a loss. release
   // lets go: it unlocks and revokes the lease, unless the hold was lost,
   // when it does neither, since the store may not answer and the lease is
@@ -9542,17 +11047,28 @@ store:
   	}, nil
   }
 
-  // fence is the hold's watch (pre-flight I15). Every sixth of ttl it reads
-  // the lock key, linearizably. A key gone, or on a lease not this
-  // session's, is a hold lost at once: an operator deleted it, or the lease
-  // was reclaimed. The session ending is one too. And a hold whose reads
-  // have not answered for two thirds of ttl is lost then, before etcd
-  // expires the lease at ttl, so this port49d stops serving before a
-  // second can start. A process paused past that is the residual: its next
+  // fence is the hold's watch (pre-flight I15; re-check R-I4). Every sixth
+  // of ttl it reads the lock key, linearizably, and the lease's remaining
+  // TTL. A key gone, or on a lease not this session's, is a hold lost at
+  // once: an operator deleted it, or the lease was reclaimed. A lease
+  // expired, or the session ending, is one too.
+  //
+  // expires is when the lease expires at the latest by the last answer:
+  // its send time plus the TTL it reported, which etcd counted after the
+  // send, so never later than etcd's own. A hold whose reads stop
+  // answering is lost once that has half of ttl or less left. Reads are at
+  // most ttl/3 apart (a tick, then a read up to ttl/6 long), so the loss
+  // comes at least ttl/6 before etcd can expire the lease and a second
+  // port49d take the keyspace. Stamping at the send, and reading the TTL
+  // rather than counting from the last answer, is what keeps that margin:
+  // the lease's last keepalive can be up to ttl/3 older than the last
+  // answered read. A process paused past that is the residual: its next
   // read finds the key gone.
   func (s *Store) fence(ctx context.Context, sess *concurrency.Session, key string, ttl time.Duration, lose func()) {
   	every := ttl / 6
-  	last := time.Now()
+  	// The lock was just taken on this lease, which the session keeps alive
+  	// every ttl/3: at least two thirds of ttl is left.
+  	expires := time.Now().Add(2 * ttl / 3)
   	t := time.NewTicker(every)
   	defer t.Stop()
   	for {
@@ -9564,18 +11080,23 @@ store:
   			return
   		case <-t.C:
   		}
+  		sent := time.Now()
   		rctx, cancel := context.WithTimeout(ctx, every)
   		resp, err := s.ctx.Get(rctx, key)
+  		var left *clientv3.LeaseTimeToLiveResponse
+  		if err == nil {
+  			left, err = s.ctx.TimeToLive(rctx, sess.Lease())
+  		}
   		cancel()
   		switch {
   		case ctx.Err() != nil:
   			return
-  		case err == nil && (len(resp.Kvs) == 0 || clientv3.LeaseID(resp.Kvs[0].Lease) != sess.Lease()):
+  		case err == nil && (len(resp.Kvs) == 0 || clientv3.LeaseID(resp.Kvs[0].Lease) != sess.Lease() || left.TTL <= 0):
   			lose()
   			return
   		case err == nil:
-  			last = time.Now()
-  		case time.Since(last) >= 2*ttl/3:
+  			expires = sent.Add(time.Duration(left.TTL) * time.Second)
+  		case time.Until(expires) <= ttl/2:
   			lose()
   			return
   		}
@@ -9583,14 +11104,19 @@ store:
   }
   ```
 
+  `TimeToLive`'s `TTL` is whole seconds, rounded down, which only moves the estimate earlier.
+  At the smallest `hold_ttl` (5 s) a healthy lease reports at least 3 s, above the 2.5 s line.
+
   Check `concurrency.WithContext` and `Session.Orphan` in v3.6.15's `concurrency` package (the
   pre-flight review compiled `WithContext`). If a name differs, use what the package offers, as
   Global Constraints allow.
 
   Run: `go test ./internal/store/etcd/ -run 'TestHold|TestTheHold|TestTheDaemonCannotTakeTheHold' -count=1` — PASS.
 
-  Mutation check (do it, report it, revert it): in `fence`, drop the key-gone case.
-  `TestTheHoldIsLostWhenItsKeyIsDeleted` must fail.
+  Mutation checks (do them, report them, revert them):
+  1. In `fence`, drop the key-gone case. `TestTheHoldIsLostWhenItsKeyIsDeleted` must fail.
+  2. In `fence`, declare the loss at `time.Until(expires) <= 0` instead of `ttl/2`.
+     `TestHoldIsOnePerKeyspaceAndLapses` must fail, or report that it raced; report which.
 
 - [ ] **Step 3: The broker's start, failing first.** In `internal/broker/refresh_test.go`, add:
 
@@ -9648,7 +11174,31 @@ store:
   		t.Fatalf("by principal: %d %v", n, err)
   	}
   }
+
+  // A kept context that will not open (sealed under a key this window
+  // lacks) under a certificate mark is still marked, since a revocation
+  // needs no key, and never fails the start: it is denied as unreadable
+  // anyway (re-check R-I3).
+  func TestApplyMarksAtStartSkipsAnUnreadableContext(t *testing.T) {
+  	f := newFixtureWithPolicy(t, 8, sharedPolicy)
+  	ctx := context.Background()
+  	f.liveContext(t, "leaf1", "alice", alicePrincipal, store.CertKey("CN=Corp CA", "0a"))
+  	k := store.ContextKey{NAS: "leaf1", Username: "alice"}
+  	f.b.Sessions = session.New(unreadableAt{Store: f.st, k: k}, f.b.Now, time.Hour, time.Hour)
+  	n, err := f.b.ApplyMarksAtStart(ctx, []store.Revocation{
+  		{Kind: store.RevocationCert, Key: store.CertKey("CN=Corp CA", "0a"), At: f.now},
+  	})
+  	if err != nil || n != 1 {
+  		t.Fatalf("ApplyMarksAtStart = %d, %v; want the unreadable context marked and no error", n, err)
+  	}
+  	if got, _ := f.st.GetContext(ctx, k); got.RevokedAt.IsZero() {
+  		t.Fatal("the unreadable context was not marked")
+  	}
+  }
   ```
+
+  `unreadableAt` is Task 7b's (`reindex_test.go`, the same package). Build the session manager
+  as 7a's revoke tests do if `session.New`'s arguments there differ.
 
   The fixture names (`newFixtureWithPolicy`, `liveContext`, `sharedPolicy`, `alicePrincipal`,
   `f.st`, `f.b`, `f.now`) are 7c's (`internal/broker/fixture_test.go`). `liveContext`'s fifth
@@ -9700,20 +11250,37 @@ store:
   // added to broker.revocations_file with port49d stopped, or a revocation
   // whose passes an outage cut short. It touches no token (the start purges
   // them) and no connection (none is held yet). It reports how many
-  // contexts it marked, and its first error, for the caller to run it again;
-  // a mark it could not apply is still denied by the daemon's marks.
+  // contexts it marked, and its first outage, for the caller to run it
+  // again; a mark it could not apply is still denied by the daemon's marks.
+  //
+  // Only an outage is returned (re-check R-I3). A context that will not
+  // open, sealed under a key this window lacks, is still marked (session.mark
+  // marks what it cannot read, since a revocation needs no key), and is
+  // denied as unreadable anyway; returned, it would fail every start until
+  // that context's TTL ran out. Any other error is said and skipped for the
+  // same reason: the daemon's marks deny that context on every request.
   func (b *Broker) ApplyMarksAtStart(ctx context.Context, marks []store.Revocation) (int, error) {
   	if b.Sessions == nil {
   		return 0, errors.New("broker: revocation is not wired (no session manager); the standing marks were not applied")
   	}
   	reached := map[store.ContextRef]bool{}
   	var first error
+  	var kind string
   	note := func(err error) {
-  		if err != nil && first == nil {
-  			first = err
+  		var unreadable *store.UnreadableContextError
+  		switch {
+  		case err == nil, errors.Is(err, store.ErrNotFound), errors.As(err, &unreadable):
+  		case errors.Is(err, store.ErrUnavailable):
+  			if first == nil {
+  				first = err
+  			}
+  		default:
+  			b.logf("broker: a standing %s revocation was not applied to every kept context (%v); the daemon's marks "+
+  				"deny those contexts on every request regardless", kind, err)
   		}
   	}
   	for _, r := range marks {
+  		kind = r.Kind
   		for pass := 0; pass < 2; pass++ {
   			var refs []store.ContextRef
   			var err error
@@ -9739,8 +11306,15 @@ store:
 
   Add `"errors"` and `"strings"` to `refresh.go`'s imports if absent.
 
+  The log line names the mark's kind, never its key: a certificate key or a principal is an
+  identity, and the line needs only to say a mark was not applied. Add `"github.com/rhwendt/port49/internal/session"`
+  and `"time"` to `refresh_test.go`'s imports if absent.
+
   Run: `go test ./internal/broker/ -run 'TestRefreshAtStart|TestApplyMarksAtStart' -count=1` —
-  PASS. A test that mints with `SupersededAll` set and replays is added in Step 6's end-to-end
+  PASS.
+
+  Mutation check (do it, report it, revert it): in `note`, return an `UnreadableContextError`
+  as `first`. `TestApplyMarksAtStartSkipsAnUnreadableContext` must fail. A test that mints with `SupersededAll` set and replays is added in Step 6's end-to-end
   test, where it is observable.
 
 - [ ] **Step 4: The metrics.** In `metrics.go`, add:
@@ -9925,9 +11499,13 @@ store:
   			StopAfter: e.HoldTTL, Unhealthy: func(why string) { gone(&storeGone{why: why}) },
   			Say:       func(l string) { fmt.Fprintln(out, l) }}
   	}
+  	// One ledger for both layers (re-check IA1): the broker's reads at
+  	// start seed it for the daemon's, and either denies another login's
+  	// context written back.
+  	ledger := crypt.WithLedger(crypt.NewLedger())
   	return stores{
-  		daemon:     crypt.Wrap(guard.Wrap(d, gc("daemon")), keys, m.CryptOpenFailures),
-  		broker:     crypt.Wrap(guard.Wrap(b, gc("broker")), keys, m.CryptOpenFailures),
+  		daemon:     crypt.Wrap(guard.Wrap(d, gc("daemon")), keys, m.CryptOpenFailures, ledger),
+  		broker:     crypt.Wrap(guard.Wrap(b, gc("broker")), keys, m.CryptOpenFailures, ledger),
   		etcd:       d,
   		persistent: true,
   		lost:       lost,
@@ -10130,20 +11708,24 @@ store:
   }
 
   // startOnPersistentStore is a start on etcd after the file's marks are
-  // restored (Ruling 12; Ruling 13; pre-flight C1, M41). With the listeners
-  // still closed, it:
+  // restored (Ruling 12; Ruling 13; pre-flight C1, M41; re-check IA2). With
+  // the listeners still closed, it:
   //   1. puts the store's marks the file lacked in force and saves them to
   //      it, counted as a set difference on (kind, key);
-  //   2. applies every standing mark to the live contexts the store kept,
+  //   2. re-indexes every kept context the index lost (e.Unindexed, then
+  //      ReindexContexts), so the passes below reach it;
+  //   3. applies every standing mark to the live contexts the store kept,
   //      by 7a's two context passes;
-  //   3. purges every unspent token and supersedes every key;
-  //   4. carries the policy in force into every live context the store
+  //   4. purges every unspent token and supersedes every key;
+  //   5. carries the policy in force into every live context the store
   //      kept.
   // Each step that reads the store retries every 5s while it errs. marks
   // ends as every mark in force, which the caller puts in the daemon's
-  // marks and the listener's.
-  func startOnPersistentStore(ctx context.Context, brk *broker.Broker, st store.Store, cfg config.Config,
-  	marks *[]store.Revocation, m *metrics.Metrics) error {
+  // marks and the listener's. Steps 2, 3 and 5 read every kept context
+  // through the sealing layer, which seeds the ledger before any listener
+  // binds.
+  func startOnPersistentStore(ctx context.Context, brk *broker.Broker, st store.Store, e *etcdstore.Store,
+  	cfg config.Config, marks *[]store.Revocation, m *metrics.Metrics) error {
   	retry := func(what string, f func() error) error {
   		for {
   			err := f()
@@ -10187,6 +11769,20 @@ store:
   	}
   	*marks = all
   	countRevocations(all, m)
+  	if err := retry("re-indexing the kept contexts the index lost", func() error {
+  		// e is the daemon's raw store, outside the guard, as the sweep's is:
+  		// the scan gets the bulk pool's deadline here.
+  		uctx, cancel := context.WithTimeout(ctx, cfg.Store.Etcd.BulkTimeout)
+  		refs, err := e.Unindexed(uctx)
+  		cancel()
+  		if err != nil {
+  			return err
+  		}
+  		_, err = brk.ReindexContexts(ctx, refs)
+  		return err
+  	}); err != nil {
+  		return err
+  	}
   	var marked int
   	if err := retry("applying the standing revocations to the live contexts", func() (err error) {
   		marked, err = brk.ApplyMarksAtStart(ctx, all)
@@ -10220,9 +11816,11 @@ store:
   	return nil
   }
 
-  // sweepLoop runs the index sweep every interval (Ruling 6), saying only a
-  // failure.
-  func sweepLoop(ctx context.Context, s *etcdstore.Store, every time.Duration, out io.Writer) {
+  // sweepLoop runs the index sweep every interval (Ruling 6), then finds
+  // the contexts the index lost and has the broker re-index and judge them
+  // (re-check IA2), saying only a failure. ReindexContexts says what it
+  // found.
+  func sweepLoop(ctx context.Context, s *etcdstore.Store, brk *broker.Broker, every time.Duration, out io.Writer) {
   	t := time.NewTicker(every)
   	defer t.Stop()
   	for {
@@ -10235,15 +11833,25 @@ store:
   		if _, _, err := s.Sweep(sctx); err != nil && ctx.Err() == nil {
   			fmt.Fprintf(out, "port49d: store: the index sweep did not finish (%v); it runs again in %v\n", err, every)
   		}
+  		refs, err := s.Unindexed(sctx)
+  		if err == nil {
+  			_, err = brk.ReindexContexts(sctx, refs)
+  		}
+  		if err != nil && ctx.Err() == nil {
+  			fmt.Fprintf(out, "port49d: store: finding the contexts the index lost did not finish (%v); it runs again "+
+  				"in %v\n", err, every)
+  		}
   		cancel()
   	}
   }
   ```
 
-  `ApplyMarksAtStart`'s error may be a store error that is not `ErrUnavailable` (one that
-  decodes badly). `retry` returns it, and the start fails loudly. A mark it could not apply is
-  still denied at every request by the daemon's marks, loaded from `all` right after this
-  returns.
+  `ApplyMarksAtStart` returns only an outage (re-check R-I3), which `retry` waits out. A mark it
+  could not apply for any other reason is said by the broker, and still denied at every request
+  by the daemon's marks, loaded from `all` right after this returns. `Unindexed` runs on the
+  daemon's etcd store, which bypasses the guard as the sweep does; its scan is bounded by the
+  sweep's `every/2` context in the loop, and by `bulk_timeout` at start. A deadline there is
+  `store.ErrUnavailable` (`unavailable`), which `retry` waits out.
 
   Add to `refresh.go`:
 
@@ -10364,12 +11972,14 @@ store:
 
   import (
   	"context"
+  	"errors"
   	"fmt"
   	"net"
   	"os"
   	"path/filepath"
   	"regexp"
   	"strings"
+  	"syscall"
   	"testing"
   	"time"
 
@@ -10516,7 +12126,10 @@ store:
   	}
 
   	tacacs, _, _ = startRun(t, cfgPath, &out, 2)
-  	waitForCount(t, &out, "standing revocation(s) applied to the live contexts the store kept", 1)
+  	// The start itself marked it, not only the daemon's marks at request
+  	// time (re-check R-M1): without ApplyMarksAtStart this line is absent.
+  	waitForCount(t, &out, "standing revocation(s) applied to the live contexts the store kept "+
+  		"(1 context(s) marked revoked)", 1)
   	dev = tacacsClient{t: t, addr: tacacs, key: []byte("run-test-secret")}
   	if dev.permits("alice", "configure") {
   		t.Fatal("a kept context under a standing mark was permitted")
@@ -10587,6 +12200,12 @@ store:
   		t.Fatalf("login: %d", st)
   	}
   	tok := mint(t, brokerAddr, pkiDir, "leaf1")
+  	// A connection a device holds open across the hang (re-check R-M0).
+  	held, err := net.DialTimeout("tcp", tacacs, time.Second)
+  	if err != nil {
+  		t.Fatal(err)
+  	}
+  	defer held.Close()
 
   	proxy.Hang(true)
   	start := time.Now()
@@ -10594,6 +12213,12 @@ store:
   		t.Fatalf("a login on a hung store: status %d after %v", st, time.Since(start))
   	}
   	waitWithin(t, &out, "closing every listener so that devices use their local method", 1, 20*time.Second)
+  	// Reset, not closed with a FIN: L28 measured the fast fall to local on
+  	// a reset.
+  	held.SetReadDeadline(time.Now().Add(5 * time.Second))
+  	if _, err := held.Read(make([]byte, 1)); !errors.Is(err, syscall.ECONNRESET) {
+  		t.Fatalf("a held connection on a store gone: %v, want a reset", err)
+  	}
   	waitWithin(t, &out, "waiting for the store again, as at a start", 1, 20*time.Second)
   	select {
   	case err := <-done:
@@ -10618,6 +12243,10 @@ store:
 
   `lastCommandPrincipal` reads the `principal` of the last `authorize_command` or `redeem` record
   in the log (`records`, run_test.go:165). Add it beside `lastCommand` if no helper gives it.
+
+  The held connection must outlive the hang. Read `writeRunConfig`'s idle timeout for TACACS+
+  connections; if it is under 30 s, raise it in `etcdRun`'s config, or the connection is closed
+  idle, with a FIN, before the store gone.
 
   There is no `TestMain` to add: these tests start their own members, and no test in the package
   uses `etcdtest.Endpoint()`.
@@ -10649,25 +12278,100 @@ store:
      // bring port49d back (Ruling 11; pre-flight I19). SIGHUP is caught
      // here, once, so a HUP between two runs never takes its default
      // action, which ends the process.
+     //
+     // Each run builds its own metrics registry and binds its own metrics
+     // listener, so between runs /healthz and /readyz are unbound for the
+     // drain and the next run's config load (seconds), and the counters
+     // restart (re-check R-M3). A liveness probe's failure window should be
+     // over 30s. Binding them once here would hold a metrics address across a
+     // config change, so it is said instead.
      func run(parent context.Context, cfgPath string) error {
      	hup := make(chan os.Signal, 1)
      	signal.Notify(hup, syscall.SIGHUP)
      	defer signal.Stop(hup)
+     	return runLoop(parent, func(again bool) error { return runOnce(parent, cfgPath, hup, again) }, 5*time.Second)
+     }
+
+     // runLoop runs once until a run ends for a reason other than a store
+     // gone, or, once a store gone has happened, until parent ends (re-check
+     // R-I2). A start after a store gone repeats the whole start: config,
+     // inventory, policy, the revocations file, the hold, the marks. Any of
+     // those can fail for a reason that is not the store, such as a policy
+     // file caught half-written during the outage, or the broker's role
+     // refused on meta/. Since I19 nothing restarts port49d after an outage
+     // but this loop, so every such error is said and tried again every
+     // `every`, the listeners closed, never an exit. A cold start still
+     // returns its error, for exit 1 and a supervisor.
+     func runLoop(parent context.Context, once func(again bool) error, every time.Duration) error {
      	again := false
      	for {
-     		err := runOnce(parent, cfgPath, hup, again)
-     		var gone *storeGone
-     		if !errors.As(err, &gone) || parent.Err() != nil {
+     		err := once(again)
+     		if parent.Err() != nil {
      			return err
      		}
-     		fmt.Fprintf(stderr, "port49d: %v; every listener is closed; waiting for the store again, as at a start\n", gone)
-     		again = true
+     		var gone *storeGone
+     		switch {
+     		case errors.As(err, &gone):
+     			fmt.Fprintf(stderr, "port49d: %v; every listener is closed; waiting for the store again, as at a start\n", gone)
+     			again = true
+     			continue
+     		case err == nil, !again:
+     			return err
+     		}
+     		fmt.Fprintf(stderr, "port49d: starting again after a store gone: %v; the listeners stay closed; trying "+
+     			"again in %v\n", err, every)
+     		select {
+     		case <-parent.Done():
+     			return nil
+     		case <-time.After(every):
+     		}
      	}
      }
      ```
 
-     Each run builds a new metrics registry, so the counters restart at a store gone, and the
-     metrics listener is closed and bound again: say so in `run`'s comment.
+     Add to `cmd/port49d/store_test.go`:
+
+     ```go
+     // After a store gone, a start that fails for any other reason is said
+     // and tried again, never an exit; a cold start's error is returned
+     // (re-check R-I2).
+     func TestAStartAfterAStoreGoneRetriesEveryError(t *testing.T) {
+     	var out syncBuffer
+     	e := stderr
+     	t.Cleanup(func() { stderr = e })
+     	stderr = &out
+     	ctx, cancel := context.WithCancel(context.Background())
+     	defer cancel()
+     	var calls []bool
+     	once := func(again bool) error {
+     		calls = append(calls, again)
+     		switch len(calls) {
+     		case 1:
+     			return &storeGone{why: "test: the store went"}
+     		case 2, 3:
+     			return errors.New("test: the policy file is half-written")
+     		}
+     		cancel()
+     		return nil
+     	}
+     	if err := runLoop(ctx, once, time.Millisecond); err != nil {
+     		t.Fatalf("runLoop = %v", err)
+     	}
+     	if len(calls) != 4 || calls[0] || !calls[1] || !calls[3] {
+     		t.Fatalf("runs %v; want a cold start, then three after the store gone", calls)
+     	}
+     	if strings.Count(out.String(), "starting again after a store gone: test: the policy file is half-written") != 2 {
+     		t.Fatalf("said %q", out.String())
+     	}
+     	cold := errors.New("test: a bad config")
+     	if err := runLoop(context.Background(), func(bool) error { return cold }, time.Millisecond); err != cold {
+     		t.Fatalf("a cold start's error: %v", err)
+     	}
+     }
+     ```
+
+     `syncBuffer` and `stderr` are run_test.go's; merge `"errors"` and `"strings"` into the file's
+     imports.
   2. **The cause** (pre-flight M39). Right after `cfg, err := config.Load(cfgPath)` succeeds in
      `runOnce`:
 
@@ -10706,14 +12410,15 @@ store:
      			select {
      			case <-sts.lost:
      				cancelRun(&storeGone{why: fmt.Sprintf("lost this port49d's hold on keyspace %s (its lock key is "+
-     					"gone, or etcd has not answered for %v)", cfg.Store.Etcd.Prefix, 2*cfg.Store.Etcd.HoldTTL/3)})
+     					"gone, or etcd stopped answering with half its lease or less left)", cfg.Store.Etcd.Prefix)})
      			case <-ctx.Done():
      			}
      		}()
-     		go sweepLoop(ctx, sts.etcd, cfg.Store.Etcd.SweepInterval, stderr)
      	}
      	st := sts.broker
      ```
+
+     The sweep starts in item 6, once the broker it hands the unindexed contexts to exists.
 
      `openStores` is called after the metrics listener is up, where `st` was built, so the
      metrics show `port49_store_keyspace_held` 0 and `/readyz` says `readyStore` while port49d
@@ -10735,7 +12440,7 @@ store:
 
      ```go
      	if sts.persistent {
-     		if err := startOnPersistentStore(ctx, brk, st, cfg, &marks, m); err != nil {
+     		if err := startOnPersistentStore(ctx, brk, st, sts.etcd, cfg, &marks, m); err != nil {
      			stopSpool()
      			<-spoolDone
      			if ctx.Err() != nil {
@@ -10743,61 +12448,120 @@ store:
      			}
      			return err
      		}
+     		go sweepLoop(ctx, sts.etcd, brk, cfg.Store.Etcd.SweepInterval, stderr)
      	}
      ```
 
      Move Task 4b's `for _, r := range marks { authMarks.Set(r, true) }` after it, so the
      daemon's marks are the union. The listener's `bl.Revoked` loop already reads `marks`, later.
-  7. **The line a store gone ends a run with.** In the final `select`'s `case <-ctx.Done():`,
-     replace `fmt.Fprintln(stderr, "port49d: signal received, draining")` with:
+     (`store.backend: etcd` requires a broker, Task 10, so `brk` is set here.)
+  7. **The line a store gone ends a run with, and the listeners it closes** (re-check R-M0,
+     R-M2). In the final `select`'s `case <-ctx.Done():`, replace `fmt.Fprintln(stderr,
+     "port49d: signal received, draining")` with:
 
      ```go
      		var gone *storeGone
      		if errors.As(context.Cause(parent), &gone) {
+     			// Close the broker's listener first, so the line is true when it
+     			// is said; TACACS+'s is closing with ctx, its held connections
+     			// reset (Deps.Abort).
+     			if bl != nil {
+     				bl.Close()
+     			}
      			fmt.Fprintf(stderr, "port49d: %v; closing every listener so that devices use their local method\n", gone)
      		} else {
      			fmt.Fprintln(stderr, "port49d: signal received, draining")
      		}
      ```
+
+     After it, where the broker server is shut down, close what `Shutdown` left at its timeout
+     (the agent's held connections):
+
+     ```go
+     	if brokerSrv != nil {
+     		shutdownCtx, done := context.WithTimeout(context.Background(), 5*time.Second)
+     		if err := brokerSrv.Shutdown(shutdownCtx); err != nil {
+     			brokerSrv.Close()
+     		}
+     		done()
+     	}
+     ```
+
+     `bl` is `broker.NewListener`'s; if its type has no `Close`, close `bln` under it. In the
+     `deps := server.Deps{…}` literal, add `Abort: func() bool { var g *storeGone; return
+     errors.As(context.Cause(parent), &g) }`.
+
+     In `internal/daemon/server/server.go`, add to `Deps`, beside `PacketDeadline`:
+
+     ```go
+     	// Abort reports, when the server's context ends, whether it ended for
+     	// a store gone (plan 7d; re-check R-M0): held connections are then
+     	// reset (linger 0), not closed with a FIN, since a reset is what L28
+     	// measured devices falling to their local method on at once. Nil is a
+     	// shutdown, closed as before.
+     	Abort func() bool
+     ```
+
+     and in `Serve`'s per-connection goroutine, in `case <-ctx.Done():`, before `c.Close()`:
+
+     ```go
+     				if d.Abort != nil && d.Abort() {
+     					if tc, ok := c.(*net.TCPConn); ok {
+     						_ = tc.SetLinger(0)
+     					}
+     				}
+     ```
+
+     conn.go:179 sets linger 0 the same way; follow its form if the accepted connection is
+     wrapped.
   8. **Readiness.** Add `readyStore` to the fixed lines' block beside `readyWaiting` (it is
      declared in `store.go`; move it here if the block reads better whole).
 
-  Run: `go test ./cmd/port49d/ -count=1`
-  Expected: PASS: the end-to-end tests, the identity and probe tests, and every existing test
-  (memory, unchanged). The `memory` import moves to `store.go`; drop it from `main.go` if the
+  Run: `go test ./cmd/port49d/ ./internal/daemon/server/ -count=1`
+  Expected: PASS: the end-to-end tests, the identity and probe tests,
+  `TestAStartAfterAStoreGoneRetriesEveryError`, and every existing test (memory, unchanged). The `memory` import moves to `store.go`; drop it from `main.go` if the
   compiler says it is unused. Existing tests call `run`, which is now the loop. On memory no run
   ends with a store gone, so each behaves as before.
 
   Mutation checks (do them, report them, revert them):
-  1. In `startOnPersistentStore`, drop the `ApplyMarksAtStart` step. `TestAStartAppliesAStandingMarkToAKeptContext`
-     must still pass, because the daemon's marks deny the session. Then also drop the `authMarks`
-     loop: it must fail. Report both; the first shows the marks close C1 at runtime on their own.
-  2. In `run`, return on a `storeGone` instead of looping. `TestAHungStoreGoesDarkAndServesAgainWhenItReturns`
-     must fail ("port49d exited on a store gone").
+  1. In `startOnPersistentStore`, drop the `ApplyMarksAtStart` step.
+     `TestAStartAppliesAStandingMarkToAKeptContext` must fail: the start's line no longer says
+     `(1 context(s) marked revoked)` (re-check R-M1). The session is still denied at runtime by
+     the daemon's marks, which the test's last assertion shows.
+  2. In `runLoop`, return on a `storeGone` instead of looping.
+     `TestAHungStoreGoesDarkAndServesAgainWhenItReturns` must fail ("port49d exited on a store
+     gone").
+  3. In `runLoop`, return any error once `again` is set. `TestAStartAfterAStoreGoneRetriesEveryError`
+     must fail (re-check R-I2).
+  4. In `server.go`, drop the `SetLinger(0)`. The hung-store e2e must fail ("want a reset").
 
 - [ ] **Step 8: Commit.**
 
   ```bash
-  gofmt -w cmd/port49d internal/store/etcd internal/broker internal/daemon/metrics
+  gofmt -w cmd/port49d internal/store/etcd internal/broker internal/daemon/metrics internal/daemon/server
   make build && make test && make vet
   git add internal/store/etcd/meta.go internal/store/etcd/meta_test.go cmd/port49d/store.go \
     cmd/port49d/store_test.go cmd/port49d/store_e2e_test.go cmd/port49d/main.go internal/broker/broker.go \
     internal/broker/refresh.go internal/broker/refresh_test.go internal/daemon/metrics/metrics.go \
-    internal/daemon/metrics/metrics_test.go
+    internal/daemon/metrics/metrics_test.go internal/daemon/server/server.go
   git commit -m "feat(port49d): run on etcd: one per keyspace, every mark at start, going dark in-process
 
   With store.backend etcd, port49d waits for etcd with its listeners
   closed, checking each certificate's validity, the TLS handshake and its
   roles, and naming a fault rather than calling it an outage. It holds the
-  keyspace as the broker, behind a fence (a second port49d waits), puts
-  the file's marks into the store, applies every standing mark to the
-  contexts the store kept, purges unspent tokens and supersedes every key,
-  carries the policy in force into every kept context, and only then
-  binds TACACS+. A lost hold, or a pool failed or refused for hold_ttl,
-  closes every listener; port49d then waits in-process and serves again
-  when the store returns. The daemon's handlers read through the daemon's
-  identity, the broker through its own (plan 7d; decision 35; pre-flight
-  C1, I9, I13, I15, I19).
+  keyspace as the broker, behind a fence read from the lease's own TTL (a
+  second port49d waits), puts the file's marks into the store, re-indexes
+  any kept context the index lost, applies every standing mark to the
+  contexts the store kept (one that will not open never stops it), purges
+  unspent tokens and supersedes every key, carries the policy in force
+  into every kept context, and only then binds TACACS+. A lost hold, or a
+  token or context pool failed or refused for hold_ttl, closes every
+  listener and resets every held connection; port49d then waits
+  in-process, retries any start error, and serves again when the store
+  returns. The daemon's and the broker's sealing layers share one ledger;
+  the daemon's handlers read through the daemon's identity, the broker
+  through its own (plan 7d; decision 35; pre-flight C1, I9, I13, I15,
+  I19; re-check IA1, IA2, R-I2, R-I3, R-I4, R-M0 to R-M3).
 
   Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
@@ -10818,11 +12582,10 @@ store:
 - Modify: `internal/daemon/metrics/metrics.go`, `metrics_test.go` (`CryptStoreKeyUnknown`)
 
 **Interfaces:**
-- Consumes: `crypt.Wrap`, `crypt.Keys`; Task 12's `openStores` and `Hold`.
+- Consumes: `crypt.Wrap`, `crypt.Keys`, `crypt.Option` (Task 4b; `Wrap` is variadic since
+  then); Task 12's `openStores` and `Hold`.
 - Produces:
-  - `type crypt.Option func(*wrapped)`; `func crypt.OnUnopenable(f func(record, keyID string)) Option`;
-    `func crypt.Wrap(inner store.Store, k Keys, openFailures *prometheus.CounterVec, opts ...Option) store.Store`
-    (variadic, so every existing caller compiles unchanged)
+  - `func crypt.OnUnopenable(f func(record, keyID string)) Option`
   - `func crypt.SealedKeyID(sealed []byte) string`
   - `type etcd.SealKeys struct { Current, Previous string; WrittenAt time.Time }`;
     `func (s *Store) SealKeys(ctx context.Context) (SealKeys, bool, error)`;
@@ -10980,9 +12743,6 @@ an operator can act on, and the start a check.
 - [ ] **Step 2: The sealing layer.** In `internal/store/crypt/crypt.go`:
 
   ```go
-  // Option configures Wrap.
-  type Option func(*wrapped)
-
   // OnUnopenable is told the kind and the key id of every record that will
   // not open, beside crypt_open_failures_total. The key id is the sealed
   // record's own header, never a secret: it is how an operator learns which
@@ -11016,12 +12776,13 @@ an operator can act on, and the start a check.
   Check the charset against what `config` accepts for `encryption.current`'s id; if config allows
   more, use config's rule and say so.
 
-  Add `onUnopenable func(record, keyID string)` to `wrapped`. Make `Wrap` variadic and apply
-  each option. Give `openErr` the record's sealed bytes: `func (w *wrapped) openErr(record string,
+  Add `onUnopenable func(record, keyID string)` to `wrapped`; `Wrap` already applies each option
+  (Task 4b). Give `openErr` the record's sealed bytes: `func (w *wrapped) openErr(record string,
   sealed []byte, err error) error`, calling `w.onUnopenable(record, SealedKeyID(sealed))` when it
   is set, after the counter. Pass the sealed bytes at each of its callers: `t.Sealed` in
-  `Candidates`, `r.Sealed` in `GetReceipt`, `c.Sealed` in `GetContext`, `cur.Sealed` in
-  `ReserveIdempotency`, and any Task 4b added (grep `openErr(`).
+  `Candidates`, `r.Sealed` in `GetReceipt`, `c.Sealed` in `GetContext` (both the open failure
+  and the ledger's `ErrNotLastWritten`), `cur.Sealed` in `ReserveIdempotency`, and any other
+  Task 4b added (grep `openErr(`).
 
 - [ ] **Step 3: The seal keys on etcd.** Append to `internal/store/etcd/meta.go`:
 
@@ -11083,8 +12844,11 @@ an operator can act on, and the start a check.
   		said[k] = now()
   		held := keyID == keys.Current.ID || keys.Previous != nil && keyID == keys.Previous.ID
   		if held {
-  			fmt.Fprintf(out, "port49d: crypt: a %s failed authentication under key id %q: it was altered or is "+
-  				"corrupt, and is treated as unreadable\n", record, keyID)
+  			// A held key's record that will not open was altered: its bytes
+  			// fail authentication, or it opens but is not the context this
+  			// port49d last wrote at its key (the ledger; re-check IA1).
+  			fmt.Fprintf(out, "port49d: crypt: a %s failed authentication under key id %q, or is not the one this "+
+  				"port49d last wrote there: it was altered or is corrupt, and is treated as unreadable\n", record, keyID)
   			return
   		}
   		fmt.Fprintf(out, "port49d: crypt: a %s is sealed under key id %q, which this port49d does not hold (%s): a "+
@@ -11201,8 +12965,9 @@ an operator can act on, and the start a check.
 **Every send on the held connection** (pre-flight I18). At `9cefbba` the agent sends on the
 connection from four places, each taking the wire as below:
 - **`Connect`** (agent.go:217, `a.do`): around its send and its body read.
-- **`Mint`**, through `post` (:376, `a.do`): around `post`'s loop, the `409` waits and the body
-  read, so a mint is one turn.
+- **`Mint`**, through `post` (:376, `a.do`): around each `post` and its answer's read, given
+  back across each `409` Retry-After sleep (re-check m1), so a revocation never queues behind a
+  mint that is only waiting. The final answer's body is read before the wire is given back.
 - **`refreshOnce`** (:706 and :757, `a.do`): once, around both sends. The challenge and its
   answer share a connection (the answer is signed over that connection's exporter value), so
   nothing may run between them.
@@ -11303,7 +13068,50 @@ search away: Step 2 ends with that grep.
   		t.Fatal(err)
   	}
   }
+
+  // A mint waiting out a 409's Retry-After holds no turn on the connection:
+  // a revocation sent meanwhile goes at once, not after the mint's sleep
+  // (re-check m1).
+  func TestARevocationIsNotQueuedBehindAMintsWait(t *testing.T) {
+  	r := newRig(t)
+  	r.fb.mu.Lock()
+  	r.fb.inProgress = 1 // one 409 idempotency_in_progress, Retry-After: 1
+  	r.fb.answers = map[string]refusal{"/v1/tokens/revoke": {status: 200}}
+  	r.fb.mu.Unlock()
+  	minted := make(chan error, 1)
+  	go func() {
+  		_, err := r.a.Mint(context.Background(), "leaf1", false, 0)
+  		minted <- err
+  	}()
+  	deadline := time.Now().Add(5 * time.Second)
+  	for {
+  		r.fb.mu.Lock()
+  		n := len(r.fb.keys)
+  		r.fb.mu.Unlock()
+  		if n == 1 {
+  			break
+  		}
+  		if time.Now().After(deadline) {
+  			t.Fatal("the mint was never answered 409")
+  		}
+  		time.Sleep(5 * time.Millisecond)
+  	}
+  	start := time.Now()
+  	if _, err := r.a.Revoke(context.Background(), api.RevokeRequest{Mine: true}); err != nil {
+  		t.Fatal(err)
+  	}
+  	if took := time.Since(start); took > 500*time.Millisecond {
+  		t.Fatalf("the revocation waited %v behind a mint's Retry-After sleep", took)
+  	}
+  	if err := <-minted; err != nil {
+  		t.Fatalf("the mint after its wait: %v", err)
+  	}
+  }
   ```
+
+  The rig's `inProgress` answers that many mints `409` with `Retry-After: 1`
+  (agent_test.go:204-229), and the agent sleeps `min(1s, inProgressDelayMax)`, so the revocation
+  must land well inside that second.
 
   Use `socketFor(t, r.a)`'s client exactly as the 7c tests in this file do; its mint is
   `Client.Token(ctx, TokenRequest{…})` (socket.go:141; pre-flight M42). If `fakeBroker.addrs`
@@ -11311,7 +13119,7 @@ search away: Step 2 ends with that grep.
   If the rig's refresh needs a challenge answer configured, configure none: nothing may reach
   the broker.
 
-  Run: `go test ./internal/agent/ -run 'BehindARunningRevocation' -count=1`
+  Run: `go test ./internal/agent/ -run 'BehindARunningRevocation|NotQueuedBehindAMintsWait' -count=1`
   Expected: FAIL to build (`RevocationRunningError`, `wireWait`, `revoking` undefined). Once
   they exist, the tests fail: each call waits on the transport, and succeeds after the
   revocation or fails "unreachable".
@@ -11402,13 +13210,40 @@ search away: Step 2 ends with that grep.
        	}
        	defer a.giveWire(false)
        ```
-     - `Mint`, after the key is made and before its `for wait := 0; ; wait++` loop:
+     - `Mint`, per send (re-check m1). Its loop becomes:
        ```go
-       	if err := a.takeWire(ctx, false, "minted", "port49 token"); err != nil {
-       		return api.MintItem{}, err
+       	var resp *http.Response
+       	for wait := 0; ; wait++ {
+       		if err := a.takeWire(ctx, false, "minted", "port49 token"); err != nil {
+       			return api.MintItem{}, err
+       		}
+       		if resp, err = a.post(ctx, body, key); err != nil {
+       			a.giveWire(false)
+       			return api.MintItem{}, err
+       		}
+       		if resp.StatusCode != http.StatusConflict {
+       			break // the wire is held through this answer's read, and given back below
+       		}
+       		var e api.Error
+       		_ = json.NewDecoder(resp.Body).Decode(&e)
+       		drain(resp.Body)
+       		// Given back across the wait: a revocation sent now goes at once,
+       		// never behind a mint that is only sleeping.
+       		a.giveWire(false)
+       		if e.Error != "idempotency_in_progress" || wait >= inProgressRetries {
+       			return api.MintItem{}, fmt.Errorf("agent: the broker answered %s: %s %s", resp.Status, e.Error, e.Detail)
+       		}
+       		select {
+       		case <-ctx.Done():
+       			return api.MintItem{}, ctx.Err()
+       		case <-time.After(retryAfter(resp.Header)):
+       		}
        	}
-       	defer a.giveWire(false) // through the 409 waits and the body read: one mint is one turn
+       	defer a.giveWire(false)
+       	defer drain(resp.Body)
        ```
+       keeping the loop's comments as they are. The two defers run body first, wire second, so
+       the final answer is read whole before another call may send.
      - `refreshOnce`, as its first lines, so the challenge and its answer are one turn:
        ```go
        	if err := a.takeWire(ctx, false, "refreshed", "port49 refresh"); err != nil {
@@ -11471,12 +13306,17 @@ search away: Step 2 ends with that grep.
   reads as written, and add a case to `cmd/port49/main_test.go` only if it does not.
 
   Run: `go test ./internal/agent/ ./cmd/port49/ -count=1`
-  Expected: PASS: the two new tests and every existing agent test, 7c's
+  Expected: PASS: the three new tests and every existing agent test, 7c's
   `TestAnUnansweredRevocationIsSentOnceAndMayBeInForce` included. Its revocations run one at a
-  time on the wire, as they did on the transport.
+  time on the wire, as they did on the transport. `TestARevocationIsNotQueuedBehindAMintsWait`
+  passes before this task too (the transport holds nothing across a sleep); it guards the wire
+  against holding a turn across one.
 
-  Mutation check (do it, report it, revert it): drop the wire from `refreshOnce`.
-  `TestEveryCallBehindARunningRevocationSaysSo`'s refresh case must fail.
+  Mutation checks (do them, report them, revert them):
+  1. Drop the wire from `refreshOnce`. `TestEveryCallBehindARunningRevocationSaysSo`'s refresh
+     case must fail.
+  2. In `Mint`, take the wire once before the loop and give it back by a defer, as the plan
+     first had it. `TestARevocationIsNotQueuedBehindAMintsWait` must fail (re-check m1).
 
 - [ ] **Step 3: Commit.**
 
@@ -11486,9 +13326,10 @@ search away: Step 2 ends with that grep.
   git add internal/agent/agent.go internal/agent/socket.go internal/agent/agent_test.go
   git commit -m "fix(agent): every send takes its turn on the held connection; a call behind a revocation says so
 
-  The agent's four sends on its held connection (Connect, Mint, the
-  refresh's challenge and answer as one turn, and every exchange) each
-  take a one-slot wire, and the agent knows when a revocation holds it.
+  The agent's four sends on its held connection (Connect, each of Mint's
+  posts, the refresh's challenge and answer as one turn, and every
+  exchange) each take a one-slot wire, and the agent knows when a
+  revocation holds it; a mint gives it back across a 409's wait.
   A mint, refresh, identity or explain arriving behind one waits its own
   30s and then says the revocation is still running and nothing was
   done, never that the broker is unreachable, which a remote store made
@@ -11526,8 +13367,9 @@ search away: Step 2 ends with that grep.
 
 **What it measures** (L35, opened by Task 8b). The store is a real etcd member, with TLS and
 port49's roles, inside the lab test process. port49d reaches it through an in-process proxy the
-test hangs (Ruling 16), with `hold_ttl: 60s`, so the window before port49d closes its listeners
-(⅔ of it, 40 s) is long enough to measure in. On each image:
+test hangs (Ruling 16), with `hold_ttl: 60s`. The window before port49d closes its listeners is
+at least a sixth of that, 10 s, and usually 20 to 50 s (re-check R-I4), so step 3 takes each
+measurement on a hang of its own, the store returned between them. On each image:
 
 1. **Baseline on etcd.** alice logs in with a token, and `show version` runs.
 2. **A restart.** port49d stops and starts on the same store.
@@ -11547,10 +13389,10 @@ test hangs (Ruling 16), with `hold_ttl: 60s`, so the window before port49d close
      record, which must be `redeem error store_unavailable`.
    - **Break-glass** is tried and recorded as measured: logged in or not, a command or not,
      compared with `tests/lab/results/L4-error-<platform>.md`.
-   - **Valid only before the listeners close.** Step 3 ends before port49d says it is closing
-     its listeners. Otherwise its cells measured port49d dark, not a hung store, and are marked
-     invalid in the note.
-4. **port49d closes its listeners.** Within `hold_ttl` + 30 s of the hang, port49d's stderr says
+   - **Valid only before the listeners close.** Each of step 3's hangs ends before port49d says
+     it is closing its listeners. Otherwise that cell measured port49d dark, not a hung store,
+     and is marked invalid in the note.
+4. **port49d closes its listeners.** On a fresh hang, within `hold_ttl` + 30 s, port49d's stderr says
    it is closing every listener, and that it waits for the store. It does not exit.
    - The open session's next command runs or does not, under local authorization. It is
      compared with `quarantine-<platform>.md` where one exists; vSRX has none, and the cell says
@@ -11790,27 +13632,50 @@ test hangs (Ruling 16), with `hold_ttl: 60s`, so the window before port49d close
   		}
 
   		// 3. The store hangs. Every time below that a device sees is the
-  		// capture's, request to reply (pre-flight I17).
+  		// capture's, request to reply (pre-flight I17). Each measurement
+  		// gets its own hang, the store back between them: the fence counts
+  		// the hold lost as soon as a sixth of hold_ttl after a hang begins
+  		// (10s at 60s; re-check R-I4), and a login or a break-glass login
+  		// can take most of that on its own.
   		_, tok3 := l29Mint(sock, l.p.node)
-  		errOff = l.errLogSize()
-  		proxy.Hang(true)
-  		hungAt := time.Now()
   		off = l.mark()
-  		if !sessionOnly {
-  			hung := revokeOutcome(l.p.name, sh, "show version", fail, "with the store hung")
-  			row("3. store hung, the open session's `show version`", hung)
-  			if !strings.HasPrefix(hung, "refused") {
-  				fail("with the store hung the next command was not refused: %s", hung)
+  		firstHang := time.Now()
+  		var berr error
+  		hang := func(what string, measure func()) {
+  			errOff = l.errLogSize()
+  			proxy.Hang(true)
+  			measure()
+  			proxy.Hang(false)
+  			// Valid only if port49d had not gone dark yet: otherwise the cell
+  			// measured port49d with its listeners closed (pre-flight I17).
+  			if dark := l.errLinesSince(errOff, "closing every listener"); len(dark) > 0 {
+  				row("3. validity", "INVALID: port49d closed its listeners before "+what+" ended ("+dark[0]+")")
+  				fail("step 3 (%s) overran the window before port49d closed its listeners; its cell is invalid", what)
   			}
+  			// The circuits' probes, and the fence's next answered read.
+  			time.Sleep(15 * time.Second)
   		}
-  		_, lerr := l.loginWithin(sliceUser, tok3, 60*time.Second, "show version")
-  		row("3. store hung, a token login", fmt.Sprint(lerr))
-  		if lerr == nil {
-  			fail("a token login succeeded with the store hung")
+  		if !sessionOnly {
+  			hang("the open session's command", func() {
+  				hung := revokeOutcome(l.p.name, sh, "show version", fail, "with the store hung")
+  				row("3. store hung, the open session's `show version`", hung)
+  				if !strings.HasPrefix(hung, "refused") {
+  					fail("with the store hung the next command was not refused: %s", hung)
+  				}
+  			})
   		}
-  		_, berr := l.loginWithin(breakglassUser, breakglassPassword, 60*time.Second, "show version")
-  		row("3. store hung, break-glass and `show version`",
-  			fmt.Sprintf("%v (compare tests/lab/results/L4-error-%s.md)", berr, l.p.name))
+  		hang("the token login", func() {
+  			_, lerr := l.loginWithin(sliceUser, tok3, 60*time.Second, "show version")
+  			row("3. store hung, a token login", fmt.Sprint(lerr))
+  			if lerr == nil {
+  				fail("a token login succeeded with the store hung")
+  			}
+  		})
+  		hang("break-glass", func() {
+  			_, berr = l.loginWithin(breakglassUser, breakglassPassword, 60*time.Second, "show version")
+  			row("3. store hung, break-glass and `show version`",
+  				fmt.Sprintf("%v (compare tests/lab/results/L4-error-%s.md)", berr, l.p.name))
+  		})
   		recs = l.waitForRecords(off, 20*time.Second, func([]map[string]any) bool { return true })
   		row("3. records", summarize(recs))
   		cmds, redeems := reasonsOf(recs, "authorize_command"), reasonsOf(recs, "redeem")
@@ -11821,15 +13686,12 @@ test hangs (Ruling 16), with `hold_ttl: 60s`, so the window before port49d close
   			fail("no login was answered error store_unavailable with the store hung: %v", redeems)
   		}
   		l.flushCapture(t)
-  		row("3. request-to-reply, from the capture", strings.Join(replyTimes(capPath, labKeyDefault, hungAt), "; "))
-  		// Valid only if port49d had not gone dark yet: otherwise these cells
-  		// measured port49d with its listeners closed (pre-flight I17).
-  		if dark := l.errLinesSince(errOff, "closing every listener"); len(dark) > 0 {
-  			row("3. validity", "INVALID: port49d closed its listeners before step 3 ended ("+dark[0]+")")
-  			fail("step 3 overran the window before port49d closed its listeners; its cells are invalid")
-  		}
+  		row("3. request-to-reply, from the capture", strings.Join(replyTimes(capPath, labKeyDefault, firstHang), "; "))
 
   		// 4. port49d closes its listeners on losing the store, and stays up.
+  		errOff = l.errLogSize()
+  		proxy.Hang(true)
+  		hungAt := time.Now()
   		for time.Since(hungAt) < 90*time.Second && len(l.errLinesSince(errOff, "closing every listener")) == 0 {
   			time.Sleep(time.Second)
   		}
@@ -12010,6 +13872,8 @@ test hangs (Ruling 16), with `hold_ttl: 60s`, so the window before port49d close
         hold none);
       - the listener's marks and the daemon's (`store.Marks`) shared across replicas, through a
         watch on the marks family;
+      - the ledger (`crypt.Ledger`) shared across replicas or replaced, since per process it
+        would deny another replica's logins (re-check IA1);
       - `broker.revocations_file` retired;
       - one refresh runner;
       - the decision-log emits under a policy hold (4b Task 4).
@@ -12025,12 +13889,23 @@ test hangs (Ruling 16), with `hold_ttl: 60s`, so the window before port49d close
   - **Unassigned follow-ups:**
     - 7c's M3 (a `revoke` record for a mark that could not be written), unchanged;
     - the bulk lift (7c), unchanged;
-    - **new, Ruling 17's residual:** a stolen daemon store credential can replay a context record
-      port49 sealed earlier for the same key, undoing a revocation that leaves no mark (self or
-      key) or a policy narrowing until the next refresh, and can keep a context alive past its
-      idle TTL within its ceiling. Closing it needs a revocation record the daemon's role cannot
-      write for every kind (a spec change to decision 34), or a sealed freshness counter the
-      daemon checks.
+    - **new, Ruling 17's residual** (its table, exactly): with a stolen daemon store credential,
+      - **across a restart, impersonation:** another login's context put back while port49d
+        was stopped is taken as that key's at the start, until its sealed ceiling, if it has
+        one, or the key's next login;
+      - **while port49d runs:** an earlier version of a key's own context put back, undoing a
+        revocation that leaves no mark (self or key) or a policy narrowing until the next
+        refresh;
+      - a deleted token put back for a holder of its secret, until its sealed expiry;
+      - a receipt's sliding bound stretched to its sealed cap;
+      - a context kept alive past its idle TTL, to its sealed ceiling if it has one, and
+        indefinitely under `max_session_age: never`;
+      - a context hidden from the index until the next sweep re-indexes it, during which a
+        revocation by sid does not reach it.
+
+      Closing it needs a revocation record the daemon's role cannot write for every kind (a
+      spec change to decision 34), and a sealed freshness counter checked across restarts (a
+      write sequence the broker's role keeps per key, which 7e's shared ledger could become).
 - [ ] **Step 2: Docs drift.**
   - **The restart note** (pre-flight M7). In spec §15, the Junos `authorization-time-interval`
     note says a port49d restart denies every live Junos session's next re-authorization, because
@@ -12075,6 +13950,14 @@ test hangs (Ruling 16), with `hold_ttl: 60s`, so the window before port49d close
     operators log in again.
   - A store dump shows only `revoked_at`, the revisions, the idle clock and accounting's
     annotations in the clear.
+- **A token's policy and clocks, and a receipt, are sealed too.** A token's kind, expiry,
+  policy blob, session age, enable mechanism, maximum privilege and clocks are sealed with its
+  secret, bound to its device, username and ID; a receipt is bound to its device, username,
+  kind and credential. A token or receipt edited in the store does not open: the token is
+  dropped (`token_not_found`), and `port49_crypt_open_failures_total{record}` counts it.
+- **A context written back over another login's is denied.** port49d remembers the `ctx_id`
+  it last wrote at each device and username; a different one there is `store_unavailable`,
+  counted as `port49_crypt_open_failures_total{record="context"}`, until the next login.
 - `port49_store_operations_total{op}` no longer counts `index_context`, `unindex_context` or
   `unindex_ref` on the login path. Those are now part of `join_context`.
 
@@ -12099,6 +13982,13 @@ test hangs (Ruling 16), with `hold_ttl: 60s`, so the window before port49d close
   - client-certificate auth and auth enabled;
   - `--auto-compaction-mode=periodic --auto-compaction-retention=1h`, and defragmentation;
   - a quota above the live records.
+- **Who may write etcd.** The daemon's client certificate can write tokens, receipts, contexts
+  and the index. With it alone, a thief can replay records port49 sealed, never forge them:
+  while port49d runs, an earlier version of a session's own context; across a port49d
+  restart, another login's context put back while port49d was stopped (impersonation until
+  that session's ceiling or its device's next login). Protect the daemon's key like the
+  encryption key. After a suspected theft, have etcd stop trusting that certificate (a new
+  CN, granted the daemon's role, and the old user deleted) before port49d next restarts.
 - **Backups.**
   - **Back etcd up** as you would the revocations file.
   - **Protect every snapshot as the store itself.** It holds who is logged into which device
@@ -12129,12 +14019,24 @@ test hangs (Ruling 16), with `hold_ttl: 60s`, so the window before port49d close
   - **While running:**
     - Commands are refused `store_unavailable` within `packet_deadline`, and at once after the
       circuit opens (`port49_store_circuit_open` 1). Break-glass is refused (L4).
-    - After `hold_ttl`, port49d closes every listener, says why, and devices fall to local, so
-      break-glass works. It does not exit.
-    - It waits for etcd itself, then serves again, and sessions resume on their contexts. No
-      `Restart=` policy is needed for this. L35 has the per-image detail.
-  - **A store slow but up** does the same once its calls keep missing their deadlines. So does
-    etcd refusing every call (a role removed).
+    - After `hold_ttl`, port49d closes every listener, resets every held TACACS+ connection,
+      says why, and devices fall to local, so break-glass works. It does not exit.
+    - It waits for etcd itself, then serves again, and sessions resume on their contexts. If
+      that start fails for another reason (a policy file caught half-written), it says so and
+      tries again every 5 s; it does not exit. L35 has the per-image detail.
+    - **Keep `Restart=on-failure` anyway.** It is still what restarts port49d after a crash, or
+      after a cold start that exits 1 (a configuration fault, or `start_timeout`).
+    - **Metrics between runs.** `/healthz`, `/readyz` and `/metrics` are unbound for the drain
+      and the next config load (seconds), and the counters restart. Give a Kubernetes
+      liveness probe a failure window over 30 s.
+  - **A store slow but up** does the same once its token or context calls keep missing their
+    deadlines. So does etcd refusing every such call (a role removed): a steady run of
+    refusals, not two an hour apart.
+  - **Slow scans** (the refresh's, a large purge) open only the bulk pool's circuit
+    (`port49_store_circuit_open{pool="bulk"}` 1, and a line saying logins and commands are
+    unaffected). port49d keeps serving. Alert on it, and size `bulk_timeout`.
+  - **A wrong token's FAIL** arrives at the failure delay even with a slow store: the store's
+    time is inside the delay, so at most 2 s at the defaults.
 - **Certificates.**
   - Each start prints each client certificate's expiry, and
     `port49_store_client_cert_expiry_timestamp_seconds{component}` carries it.
@@ -12145,10 +14047,14 @@ test hangs (Ruling 16), with `hold_ttl: 60s`, so the window before port49d close
     `port49_store_circuit_open{component,pool}` (pools `token`, `context`, `bulk`; outcomes include
     `deadline` and `refused`);
   - `port49_store_keyspace_held`, `port49_store_client_cert_expiry_timestamp_seconds{component}`,
-    `port49_crypt_store_key_unknown`.
+    `port49_crypt_store_key_unknown`, `port49_contexts_reindexed_total`.
 
   Alert on any of:
   - a circuit open;
+  - any increase of `port49_contexts_reindexed_total`: an index record was deleted in etcd, and
+    the context it hid has been re-indexed (each sweep, `sweep_interval`);
+  - any increase of `port49_crypt_open_failures_total{record="context"}` with the key held: a
+    record altered in etcd, or another login's written back;
   - `port49_store_keyspace_held` 0 while port49d runs;
   - a client certificate within 30 days of expiry;
   - `port49_crypt_store_key_unknown` 1;
@@ -12198,6 +14104,9 @@ test hangs (Ruling 16), with `hold_ttl: 60s`, so the window before port49d close
   - **"the agent's single held connection"** — Task 14, every send.
 - **The pre-flight review** — every finding, in "Pre-flight resolution": C1 (Task 12), I12 (Task
   4b), I19 (Task 12), and the rest where the table says.
+- **Its re-check** — every finding, in that section's "Re-check 1" table: CA1 and IA1 (Task 4b),
+  IA2 (new Task 7b, wired in Task 12), N1 (Task 10), R-I2 to R-I4 (Task 12), R-I5 (Task 9), and
+  each Minor where its row says.
 - **Design §12 "Store health MUST NOT be wired into the readiness probe":** kept.
   - The metrics `/readyz` and the broker's `/readyz` read nothing of the store's health.
   - A store gone ends a run: the listeners close and `/readyz` says the TACACS+ listener is
@@ -12222,19 +14131,22 @@ interface assertion.
   `store.PurgeTokens`, `store.RewriteContext`, `store.ErrUnavailable`, `store.ErrRefused`,
   `store.BlankCertKey`, `store.CheckRevocation`;
 - `store.Apply*`, `store.CheckContextPolicy`, `store.Marks`, `store.NewMarks`;
-- `crypt.Keys.SealBound`, `crypt.Keys.OpenBound`, `crypt.OnUnopenable`, `crypt.SealedKeyID`;
+- `crypt.Keys.SealBound`, `crypt.Keys.OpenBound`, `crypt.Option`, `crypt.WithLedger`,
+  `crypt.Ledger`, `crypt.NewLedger`, `crypt.ErrNotLastWritten` (Task 4b), `crypt.OnUnopenable`,
+  `crypt.SealedKeyID` (Task 13);
 - `etcd.Config`, `etcd.Open`, `etcd.ErrRefused`, `etcd.ErrTooLarge`, `etcd.Roles`, `etcd.Grant`,
   `etcd.RoleDaemon`, `etcd.RoleBroker`, `(*etcd.Store).CheckIdentity`, `Hold`, `Sweep`,
-  `SealKeys`, `PutSealKeys`;
+  `Unindexed`, `SealKeys`, `PutSealKeys`;
+- `session.Manager.Reindex`, `Metrics.ContextsReindexed`;
 - `guard.Wrap`, `guard.Config`, `guard.Metrics`, `guard.PoolOf`, `guard.Token`,
   `guard.Context`, `guard.Bulk`;
 - `config.StoreConfig`, `config.EtcdConfig`, `config.StoreOf`;
-- `authen.WithDelayContext`, `authen.DelayContext`, `(*authen.Handler).WithMarks`,
-  `(*author.Handler).WithMarks`;
+- `authen.WithDelayContext` (with the arrival), `authen.DelayContext` (returning it),
+  `(*authen.Handler).WithMarks`, `(*author.Handler).WithMarks`, `server.Deps.Abort`;
 - `Broker.SupersededAll`, `Broker.Marks`, `Broker.ApplyMarksAtStart`, `Broker.RefreshAtStart`,
-  `RefreshReport.Contexts`;
-- `storeGone`, `storeFault`, `openStores`, `identity`, `probeTLS`, `startOnPersistentStore`,
-  `runOnce`;
+  `Broker.ReindexContexts`, `RefreshReport.Contexts`;
+- `storeGone`, `storeFault`, `openStores`, `identity`, `probeTLS`, `startOnPersistentStore` (with
+  the daemon's etcd store), `sweepLoop` (with the broker), `runOnce`, `runLoop`;
 - `agent.RevocationRunningError`, `wireWait`.
 
 `etcdtest.Grant` and `etcd.Grant` are deliberately two types, so `etcdtest` never imports
@@ -12242,18 +14154,26 @@ interface assertion.
 
 **Review Focus.** Each line's test is in the task it names.
 
-**Reason codes.** None added. A timeout, an open circuit, a saturated pool, a refused role and a
-record that fails authentication are all `store_unavailable`; a standing mark is
-`credential_revoked`, as a revoked context already was.
+**Reason codes.** None added. A timeout, an open circuit, a saturated pool, a refused role, a
+record that fails authentication and a context the ledger does not admit are all
+`store_unavailable`; a token that will not open is dropped, so its login is `token_not_found`;
+a standing mark is `credential_revoked`, as a revoked context already was.
+
+**Logs.** No line names a token, secret, credential or ledger entry. The new lines name a key
+id, a mark's kind (never its key), a count, or a keyspace prefix.
 
 **The split, re-verified.**
 - **7d-1 is independently mergeable and safe.**
   - The binary stays on the memory store, and no binary links the etcd client or server until
-    Task 12.
+    Task 12. `ReindexContexts` and `Unindexed` are built and tested, and called by nothing
+    until Task 12.
   - Every behaviour it changes fails closed: the login refused on an index failure or under a
-    mark; a context denied under a mark; a context sealed whole, with the old form unreadable
-    and so denied and replaced.
+    mark; a context denied under a mark or by the ledger; a context, token and receipt sealed
+    to their keys, with the old forms unreadable and so dropped or denied and replaced.
   - Its docs say only what it builds (Task 1), and `make test` stays green at every commit.
+  - On memory no outside writer exists, so CA1 and IA1 were not exploitable before 7d-2; they
+    are closed in 7d-1 all the same, so its docs claim nothing it does not hold.
 - **7d-2 consumes exactly the names 7d-1 produces.** Those are `RewriteContext`, `Marks`,
-  `ErrRefused`, `SwapLogin`, `PurgeTokens`, and the etcd backend's `Open`, `Config`, `Ping`,
-  `Sweep` and `ErrTooLarge`. Task 8 Step 6 amends 7d-2 if 7d-1's review moved any.
+  `ErrRefused`, `SwapLogin`, `PurgeTokens`, `crypt.Option`, `crypt.WithLedger`,
+  `crypt.NewLedger`, `Broker.ReindexContexts`, and the etcd backend's `Open`, `Config`, `Ping`,
+  `Sweep`, `Unindexed` and `ErrTooLarge`. Task 8 Step 6 amends 7d-2 if 7d-1's review moved any.
