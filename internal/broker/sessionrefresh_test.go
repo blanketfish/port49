@@ -260,7 +260,9 @@ func TestARefreshIsBoundToItsConnectionAndItsKey(t *testing.T) {
 }
 
 // A connection refreshes once per 10s, and a bad answer is paced as a good
-// one is: every consumed nonce counts (pre-flight M17).
+// one is: a mismatched nonce counts (pre-flight M17). An expired one does
+// not, so the agent's one retry after refresh_challenge_missing gets a new
+// challenge at once (Task 7 re-review R1).
 func TestARefreshIsRateLimited(t *testing.T) {
 	f := newFixture(t, 8)
 	addr, _ := serveThrough(t, f, DefaultListenerLimits, nil)
