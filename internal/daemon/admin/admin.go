@@ -91,6 +91,11 @@ type Server struct {
 	// OpTimeout bounds revoke and revocations; zero is the package's
 	// OpTimeout. Tests shorten it.
 	OpTimeout time.Duration
+	// ownUID is the uid answered besides root; nil is port49d's own. A test
+	// moves it so its own uid reads as another's without needing root. It
+	// is the Server's, never a package variable, so a test that moves it
+	// cannot race another test's handler still reading it.
+	ownUID func() uint32
 }
 
 const maxRequest = 4096
@@ -165,7 +170,11 @@ func (s *Server) handle(c net.Conn) {
 	defer c.Close()
 	_ = c.SetDeadline(time.Now().Add(5 * time.Second))
 	enc := json.NewEncoder(c)
-	uid, err := peerAllowed(c)
+	own := ownUID
+	if s.ownUID != nil {
+		own = s.ownUID
+	}
+	uid, err := peerAllowed(c, own())
 	if err != nil {
 		_ = enc.Encode(Response{Error: "refused: " + err.Error()})
 		return
