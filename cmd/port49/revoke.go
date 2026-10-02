@@ -59,8 +59,18 @@ func revokeCmd(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stderr, usage)
 		return 2
 	}
+	if *yes && !(*viaAgent && *principal != "") {
+		fmt.Fprintln(stderr, "port49 revoke: --yes goes with --via-agent --principal, the one form that asks")
+		return 2
+	}
 	if *mine || *viaAgent || *device != "" || *username != "" {
+		socketSet := false
+		fs.Visit(func(f *flag.Flag) { socketSet = socketSet || f.Name == "socket" })
 		switch {
+		case socketSet:
+			fmt.Fprintln(stderr, "port49 revoke: --socket is port49d's admin socket; over the agent the socket is "+
+				"--agent-socket")
+			return 2
 		case *list || *lift || *certFile != "" || *issuer != "" || *serial != "":
 			fmt.Fprintln(stderr, "port49 revoke: over the broker a revocation names --mine, --principal, or "+
 				"--device and --username; lifting, listing and certificates are port49d's admin socket's (--socket)")

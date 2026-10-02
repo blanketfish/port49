@@ -102,6 +102,40 @@ func TestRevokeViaAgentAsksOnATerminal(t *testing.T) {
 	if code := run(args, &out, &errb); code != 1 || strings.Contains(errb.String(), "[y/N]") {
 		t.Fatalf("off a terminal: %d %q", code, errb.String())
 	}
+	confirmTTY = func() bool { return true }
+	errb.Reset()
+	confirmIn = strings.NewReader("y\n")
+	if code := run(args, &out, &errb); code != 1 || !strings.Contains(errb.String(), "[y/N]") ||
+		!strings.Contains(errb.String(), "no agent at") || strings.Contains(errb.String(), "nothing was revoked") {
+		t.Fatalf("a yes: %d %q", code, errb.String())
+	}
+	errb.Reset()
+	confirmIn = strings.NewReader("")
+	if code := run(args, &out, &errb); code != 1 || !strings.Contains(errb.String(), "[y/N]") ||
+		!strings.Contains(errb.String(), "nothing was revoked") || strings.Contains(errb.String(), "no agent at") {
+		t.Fatalf("EOF on a terminal: %d %q", code, errb.String())
+	}
+}
+
+// --yes belongs to --via-agent --principal alone, and the admin socket's
+// --socket is not the agent's: either elsewhere is usage, so an operator
+// is not left wondering why the flag did nothing.
+func TestRevokeAgentFlagsOutOfPlace(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"revoke", "--principal", "user:bob@example.com", "--yes"}, "--yes"},
+		{[]string{"revoke", "--mine", "--yes"}, "--yes"},
+		{[]string{"revoke", "--via-agent", "--device", "leaf1", "--username", "bob", "--yes"}, "--yes"},
+		{[]string{"revoke", "--mine", "--socket", "/tmp/x.sock"}, "--agent-socket"},
+		{[]string{"revoke", "--via-agent", "--principal", "user:bob@example.com", "--socket", "/tmp/x.sock"}, "--agent-socket"},
+	} {
+		var out, errb bytes.Buffer
+		if code := run(tc.args, &out, &errb); code != 2 || !strings.Contains(errb.String(), tc.want) {
+			t.Errorf("%v: %d %q", tc.args, code, errb.String())
+		}
+	}
 }
 
 // /dev/null is a character device but no terminal: a script run with
