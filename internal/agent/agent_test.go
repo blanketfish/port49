@@ -88,10 +88,14 @@ type fakeBroker struct {
 }
 
 // refusal is one scripted answer: a status, an api.Error, a Retry-After.
+// empty answers the status with no body at all, as an intermediary might;
+// body, when set, is sent as is in place of e.
 type refusal struct {
 	status     int
 	e          api.Error
 	retryAfter string
+	empty      bool
+	body       string
 }
 
 func (fb *fakeBroker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -122,11 +126,15 @@ func (fb *fakeBroker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			// A revocation slow behind a slow store: it answers after
 			// delay, or not at all once the caller has gone. The body is
 			// read first: only then does the server see the caller go.
+			// "Not at all" is an abort: a handler that returned would
+			// answer an empty 200, which can still reach an agent whose
+			// close was under way (its transport takes a response that
+			// raced the cancel), and the broker never answers that.
 			_, _ = io.Copy(io.Discard, r.Body)
 			select {
 			case <-time.After(delay):
 			case <-r.Context().Done():
-				return
+				panic(http.ErrAbortHandler)
 			}
 		}
 		if !ok {
@@ -135,6 +143,11 @@ func (fb *fakeBroker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		if ref.retryAfter != "" {
 			w.Header().Set("Retry-After", ref.retryAfter)
+		}
+		if ref.empty || ref.body != "" {
+			w.WriteHeader(ref.status)
+			_, _ = io.WriteString(w, ref.body)
+			return
 		}
 		writeJSON(w, ref.status, ref.e)
 	case "/v1/config":
@@ -1732,6 +1745,13 @@ func TestAnExpiredHangUpDuringARefreshEndsTheSession(t *testing.T) {
 			if _, err := a.Connect(context.Background()); err != nil {
 				t.Fatal(err)
 			}
+			// The broker has closed Connect's connection; drop it here too,
+			// so the challenge goes out on a new one rather than racing that
+			// close (TestAResetOnTheHeldConnectionDuringARefreshIsTriedOnANewOne
+			// is that race). Otherwise both retries a refresh has can be
+			// spent on it and on the answer leg's close, and the reconnect
+			// under test is never reached.
+			a.client.CloseIdleConnections()
 			mu.Lock()
 			now = now.Add(25 * time.Hour) // the client certificate is good for a day
 			mu.Unlock()
@@ -1752,6 +1772,46 @@ func TestAnExpiredHangUpDuringARefreshEndsTheSession(t *testing.T) {
 				t.Fatalf("%d connections, want %d: an ended session was tried again", n, want)
 			}
 		})
+	}
+}
+
+// A reset on the held connection, which has answered before, as the
+// refresh's challenge goes out on it is the network or a restarting broker,
+// as it is for a mint: the challenge is asked again on a new connection, and
+// a hang-up there with the certificate past its NotAfter ends the session.
+// Before, the first reset was returned as "unreachable" and the session
+// stayed up, whenever the broker's close of the held connection raced the
+// refresh.
+func TestAResetOnTheHeldConnectionDuringARefreshIsTriedOnANewOne(t *testing.T) {
+	var accepted atomic.Int32
+	url, ca, cli := rawBroker(t, func(i int, c *tls.Conn, raw *net.TCPConn) {
+		accepted.Add(1)
+		if i == 1 {
+			// Connect's /v1/config, then the challenge arrives here and the
+			// connection is reset under it.
+			br := bufio.NewReader(c)
+			if answerOne(c, br) {
+				_, _ = br.Peek(1)
+			}
+		}
+		hangUp(raw, true)
+	})
+	var mu sync.Mutex
+	now := time.Now()
+	clock := func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+	a := New(Config{BrokerURL: url, Cert: cli, BrokerCA: ca.Pool(), Now: clock})
+	if _, err := a.Connect(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	now = now.Add(25 * time.Hour) // the client certificate is good for a day
+	mu.Unlock()
+	_, err := a.Refresh(context.Background())
+	if !errors.Is(err, ErrSessionOver) || !strings.Contains(err.Error(), "your certificate expired at") {
+		t.Fatalf("a reset on the held connection, then an expired hang-up: %v", err)
+	}
+	if n := accepted.Load(); n != 2 {
+		t.Fatalf("%d connections, want 2: the challenge was not asked again on a new one", n)
 	}
 }
 
@@ -1941,6 +2001,65 @@ func TestAnUnansweredRevocationIsSentOnceAndMayBeInForce(t *testing.T) {
 	}
 }
 
+// A 200 to a revocation whose body does not decode is no answer: the
+// broker may have marked, so the operator is told it may be in force, not
+// handed a decode error (flake review minor 5). No port49 broker answers
+// so; an intermediary could.
+func TestARevocationsUndecodableAnswerMayBeInForce(t *testing.T) {
+	r := newRig(t)
+	r.fb.mu.Lock()
+	r.fb.answers = map[string]refusal{"/v1/tokens/revoke": {status: 200, empty: true}}
+	r.fb.mu.Unlock()
+	req := api.RevokeRequest{Principal: "user:carol@example.com"}
+	_, err := r.a.Revoke(context.Background(), req)
+	var ue *UnansweredRevokeError
+	if !errors.As(err, &ue) || !strings.Contains(err.Error(), "it may be in force") {
+		t.Fatalf("the agent: %v", err)
+	}
+	_, err = socketFor(t, r.a).Revoke(context.Background(), req)
+	if err == nil || !strings.Contains(err.Error(), "it may be in force") {
+		t.Fatalf("through the socket: %v", err)
+	}
+	r.fb.mu.Lock()
+	n := len(r.fb.addrs["/v1/tokens/revoke"])
+	r.fb.mu.Unlock()
+	if n != 2 {
+		t.Fatalf("the broker saw %d revocations, want one per call", n)
+	}
+	select {
+	case <-r.a.Done():
+		t.Fatal("an undecodable revocation answer ended the session")
+	default:
+	}
+}
+
+// A 200 to a revocation that decodes but names no revocation ({} or null,
+// no "by") is no answer either: the broker always says what it revoked, so
+// the operator is told it may be in force, never handed a silent success.
+func TestARevocationsEmptyAnswerMayBeInForce(t *testing.T) {
+	r := newRig(t)
+	req := api.RevokeRequest{Principal: "user:carol@example.com"}
+	for _, body := range []string{"{}", "null", `{"by":""}`} {
+		r.fb.mu.Lock()
+		r.fb.answers = map[string]refusal{"/v1/tokens/revoke": {status: 200, body: body}}
+		r.fb.mu.Unlock()
+		_, err := r.a.Revoke(context.Background(), req)
+		var ue *UnansweredRevokeError
+		if !errors.As(err, &ue) || !strings.Contains(err.Error(), "it may be in force") {
+			t.Fatalf("%s, the agent: %v", body, err)
+		}
+		_, err = socketFor(t, r.a).Revoke(context.Background(), req)
+		if err == nil || !strings.Contains(err.Error(), "it may be in force") {
+			t.Fatalf("%s, through the socket: %v", body, err)
+		}
+	}
+	select {
+	case <-r.a.Done():
+		t.Fatal("an empty revocation answer ended the session")
+	default:
+	}
+}
+
 // The agent's wait on a revocation outlasts the broker's worst case: the
 // wait for the slot, the run port49d bounds at admin.OpTimeout, the
 // revocations_file save. The socket client outlasts the agent, so the agent
@@ -1979,6 +2098,33 @@ func TestARevocationTheAgentDroppedMayBeInForce(t *testing.T) {
 	if got.Load() != 1 || err == nil || errors.Is(err, ErrNoAgent) || !strings.Contains(err.Error(), "may be in force") ||
 		!strings.Contains(err.Error(), "`port49 revoke --list`") {
 		t.Fatalf("%d asked: %v", got.Load(), err)
+	}
+}
+
+// A 200 from the agent to a revocation that does not decode, or names no
+// revocation, is no answer: the agent may have reached the broker, and the
+// CLI says it may be in force, never a bare decode error or a success.
+func TestARevocationsBadAnswerFromTheAgentMayBeInForce(t *testing.T) {
+	for _, body := range []string{"", `{"by":"princ`, "{}", "null"} {
+		p := filepath.Join(shortDir(t), "s", "agent.sock")
+		ln, err := Listen(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mux := http.NewServeMux()
+		mux.HandleFunc("POST /revoke", func(w http.ResponseWriter, r *http.Request) {
+			_, _ = io.Copy(io.Discard, r.Body)
+			_, _ = io.WriteString(w, body) // an agent that died mid-write, or a bare 200
+		})
+		srv := &http.Server{Handler: mux}
+		go func() { _ = srv.Serve(ln) }()
+		_, err = NewClient(p).Revoke(context.Background(), api.RevokeRequest{Principal: "user:carol@example.com"})
+		_ = srv.Close()
+		var ue *UnansweredRevokeError
+		if !errors.As(err, &ue) || !strings.Contains(err.Error(), "it may be in force") ||
+			!strings.Contains(err.Error(), "your agent at") {
+			t.Fatalf("%q: %v", body, err)
+		}
 	}
 }
 

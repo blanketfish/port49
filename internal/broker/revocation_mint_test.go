@@ -448,3 +448,27 @@ func TestARevocationBeforeABatchIsCutShortDeletesWhatItWrote(t *testing.T) {
 		t.Fatalf("%d token(s) survived on leaf1", n)
 	}
 }
+
+// A mark a CA's revocation wrote (origin "crl <name>" or "ocsp <responder>")
+// is answered as the CA's: the user cannot lift it and the CA has revoked
+// the certificate, so the answer never offers a lift and sends the user for
+// a new certificate. An operator's mark still names its lift.
+func TestACAMarkIsAnsweredAsTheCAsAndOffersNoLift(t *testing.T) {
+	at := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		kind, origin string
+		want         string
+		lift         bool
+	}{
+		{store.RevocationCert, "crl corp", "this certificate was revoked at its CA (crl corp) and marked at 2026-10-01T00:00:00Z; nothing is minted for it; request a new certificate", false},
+		{store.RevocationCert, "ocsp http://ocsp.example.com", "this certificate was revoked at its CA (ocsp http://ocsp.example.com) and marked at 2026-10-01T00:00:00Z; nothing is minted for it; request a new certificate", false},
+		{store.RevocationCert, "admin_socket uid 0", "this certificate was revoked at 2026-10-01T00:00:00Z", true},
+		{store.RevocationPrincipal, "admin_socket uid 0", "this principal was revoked at 2026-10-01T00:00:00Z", true},
+	} {
+		e := revokedError(store.Revocation{Kind: tc.kind, Origin: tc.origin, At: at})
+		if e.Error != string(decision.CredentialRevoked) || !strings.Contains(e.Detail, tc.want) ||
+			strings.Contains(e.Detail, "port49 revoke --lift") != tc.lift {
+			t.Errorf("%s %q: %+v", tc.kind, tc.origin, e)
+		}
+	}
+}

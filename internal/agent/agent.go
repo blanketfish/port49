@@ -494,6 +494,11 @@ func (a *Agent) exchange(ctx context.Context, c *http.Client, unanswered func(er
 	defer drain(resp.Body)
 	if resp.StatusCode == http.StatusOK {
 		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+			if unanswered != nil {
+				// A 200 with no answer in it, from an intermediary: the
+				// broker may still have acted.
+				return unanswered(fmt.Errorf("its 200 did not decode: %w", err))
+			}
 			return fmt.Errorf("agent: the broker's answer: %w", err)
 		}
 		return nil
@@ -545,9 +550,19 @@ func (a *Agent) Revoke(ctx context.Context, req api.RevokeRequest) (api.RevokeRe
 	var out api.RevokeResponse
 	ctx, cancel := context.WithTimeout(ctx, revokeTimeout)
 	defer cancel()
-	return out, a.exchange(ctx, a.revokeClient, func(err error) error {
+	unanswered := func(err error) error {
 		return &UnansweredRevokeError{Who: "the broker at " + a.broker, Principal: req.Principal != "", Err: err}
-	}, http.MethodPost, "/v1/tokens/revoke", req, &out)
+	}
+	if err := a.exchange(ctx, a.revokeClient, unanswered, http.MethodPost, "/v1/tokens/revoke", req, &out); err != nil {
+		return out, err
+	}
+	if out.By == "" {
+		// The broker always says what it revoked: a 200 that names
+		// nothing ({}, null) is an intermediary's, and the broker may
+		// still have acted.
+		return api.RevokeResponse{}, unanswered(errors.New("its 200 named no revocation"))
+	}
+	return out, nil
 }
 
 // UnansweredRevokeError is a revocation sent and never answered, by the
@@ -665,7 +680,8 @@ func retryIn(d time.Duration) string {
 // on the agent's own initiative: the ceiling measures time since a person
 // authenticated. A refusal that names the challenge, a connection dropped
 // between the two requests or a hardware touch slower than the challenge's
-// minute, is tried once more.
+// minute, is tried once more, and so is a challenge that met a transport
+// failure.
 //
 // credential_revoked ends the session, as a mint's does. Anything else the
 // broker refuses (refresh_too_soon, a 503) is returned and ends nothing, and
@@ -710,7 +726,11 @@ func (a *Agent) refreshOnce(ctx context.Context, signer crypto.Signer) (api.Refr
 		if over := a.refusedReconnect(err); over != nil {
 			return api.RefreshResponse{}, false, over
 		}
-		return api.RefreshResponse{}, false, fmt.Errorf("agent: the broker at %s is unreachable: %w", a.broker, err)
+		// Anything else is tried once more on a new connection, as a mint
+		// is: a held connection the broker closed as the challenge went out
+		// on it is the network or a restarting broker, not an answer.
+		a.client.CloseIdleConnections()
+		return api.RefreshResponse{}, true, fmt.Errorf("agent: the broker at %s is unreachable: %w", a.broker, err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		defer drain(resp.Body)
