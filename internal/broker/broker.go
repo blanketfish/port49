@@ -494,7 +494,8 @@ func (b *Broker) RefusedAtBind(path, principal string, cred store.Credential, re
 
 // bindEvent is the event a request refused as its connection bound is
 // recorded under: its endpoint's own, and mint for any other path, as
-// before (decision 34).
+// before (decision 34). It matches the path alone, not the method, by
+// design: the request reaches no handler, so its event is all it names.
 func bindEvent(path string) string {
 	switch path {
 	case "/v1/identity":

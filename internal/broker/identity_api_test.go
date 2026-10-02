@@ -157,3 +157,28 @@ func TestARefusalAtBindIsRecordedUnderItsEndpointsEvent(t *testing.T) {
 		t.Fatalf("events %v, want %s", got, want)
 	}
 }
+
+// A grant past its expiry selects nothing, so identity does not list it;
+// the subject's live grant still answers (design §17).
+func TestIdentityListsOnlyUnexpiredGrants(t *testing.T) {
+	f := newFixture(t, 8)
+	lapse := f.now.Add(time.Hour)
+	extra := "  - {subject: netops, scope: all_devices, roles: [read_only]"
+	f.reload(t, edit(t, roleList, readOnly)+extra+", expires: "+lapse.UTC().Format(time.RFC3339)+"}\n")
+	grants := func() []api.IdentityGrant {
+		t.Helper()
+		w := f.call(context.Background(), f.state(f.alice), "GET", "/v1/identity", "")
+		var id api.Identity
+		if err := json.Unmarshal(w.Body.Bytes(), &id); err != nil || w.Code != http.StatusOK {
+			t.Fatalf("%d %s", w.Code, w.Body)
+		}
+		return id.Grants
+	}
+	if g := grants(); len(g) != 2 || g[1].Expires != lapse.UTC().Format(time.RFC3339) {
+		t.Fatalf("before the lapse both grants stand: %+v", g)
+	}
+	f.advance(2 * time.Hour)
+	if g := grants(); len(g) != 1 || strings.Join(g[0].Roles, " ") != "network_admin no_reload" || g[0].Expires != "" {
+		t.Fatalf("after the lapse only the live grant: %+v", g)
+	}
+}
