@@ -1755,6 +1755,46 @@ func TestAnExpiredHangUpDuringARefreshEndsTheSession(t *testing.T) {
 	}
 }
 
+// A reset on the held connection, which has answered before, as the
+// refresh's challenge goes out on it is the network or a restarting broker,
+// as it is for a mint: the challenge is asked again on a new connection, and
+// a hang-up there with the certificate past its NotAfter ends the session.
+// Before, the first reset was returned as "unreachable" and the session
+// stayed up, whenever the broker's close of the held connection raced the
+// refresh.
+func TestAResetOnTheHeldConnectionDuringARefreshIsTriedOnANewOne(t *testing.T) {
+	var accepted atomic.Int32
+	url, ca, cli := rawBroker(t, func(i int, c *tls.Conn, raw *net.TCPConn) {
+		accepted.Add(1)
+		if i == 1 {
+			// Connect's /v1/config, then the challenge arrives here and the
+			// connection is reset under it.
+			br := bufio.NewReader(c)
+			if answerOne(c, br) {
+				_, _ = br.Peek(1)
+			}
+		}
+		hangUp(raw, true)
+	})
+	var mu sync.Mutex
+	now := time.Now()
+	clock := func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+	a := New(Config{BrokerURL: url, Cert: cli, BrokerCA: ca.Pool(), Now: clock})
+	if _, err := a.Connect(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	now = now.Add(25 * time.Hour) // the client certificate is good for a day
+	mu.Unlock()
+	_, err := a.Refresh(context.Background())
+	if !errors.Is(err, ErrSessionOver) || !strings.Contains(err.Error(), "your certificate expired at") {
+		t.Fatalf("a reset on the held connection, then an expired hang-up: %v", err)
+	}
+	if n := accepted.Load(); n != 2 {
+		t.Fatalf("%d connections, want 2: the challenge was not asked again on a new one", n)
+	}
+}
+
 // socketFor serves r's agent on a private socket and returns a Client on
 // it, as TestTheClientRefreshesOverTheSocket does.
 func socketFor(t *testing.T, a *Agent) *Client {

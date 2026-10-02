@@ -665,7 +665,8 @@ func retryIn(d time.Duration) string {
 // on the agent's own initiative: the ceiling measures time since a person
 // authenticated. A refusal that names the challenge, a connection dropped
 // between the two requests or a hardware touch slower than the challenge's
-// minute, is tried once more.
+// minute, is tried once more, and so is a challenge that met a transport
+// failure.
 //
 // credential_revoked ends the session, as a mint's does. Anything else the
 // broker refuses (refresh_too_soon, a 503) is returned and ends nothing, and
@@ -710,7 +711,11 @@ func (a *Agent) refreshOnce(ctx context.Context, signer crypto.Signer) (api.Refr
 		if over := a.refusedReconnect(err); over != nil {
 			return api.RefreshResponse{}, false, over
 		}
-		return api.RefreshResponse{}, false, fmt.Errorf("agent: the broker at %s is unreachable: %w", a.broker, err)
+		// Anything else is tried once more on a new connection, as a mint
+		// is: a held connection the broker closed as the challenge went out
+		// on it is the network or a restarting broker, not an answer.
+		a.client.CloseIdleConnections()
+		return api.RefreshResponse{}, true, fmt.Errorf("agent: the broker at %s is unreachable: %w", a.broker, err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		defer drain(resp.Body)
