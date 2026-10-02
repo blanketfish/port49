@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1062,12 +1063,16 @@ func TestALoginUnderAStandingMarkIsRefused(t *testing.T) {
 // retransmission.
 type getRevocationFailsOnce struct {
 	*memory.Store
+	mu     sync.Mutex
 	failed bool
 }
 
 func (g *getRevocationFailsOnce) GetRevocation(ctx context.Context, kind, key string) (store.Revocation, error) {
-	if !g.failed {
-		g.failed = true
+	g.mu.Lock()
+	first := !g.failed
+	g.failed = true
+	g.mu.Unlock()
+	if first {
 		return store.Revocation{}, errors.New("store unavailable")
 	}
 	return g.Store.GetRevocation(ctx, kind, key)
@@ -1115,12 +1120,16 @@ func TestAJoinThatErrorsLeavesNoPassToReplay(t *testing.T) {
 // everything after answers.
 type joinAndFailReceiptBlink struct {
 	getRevocationFailsOnce
+	receiptMu     sync.Mutex
 	receiptFailed bool
 }
 
 func (b *joinAndFailReceiptBlink) FailReceipt(ctx context.Context, rk store.ReceiptKey) error {
-	if !b.receiptFailed {
-		b.receiptFailed = true
+	b.receiptMu.Lock()
+	first := !b.receiptFailed
+	b.receiptFailed = true
+	b.receiptMu.Unlock()
+	if first {
 		return errors.New("store unavailable")
 	}
 	return b.Store.FailReceipt(ctx, rk)
@@ -1152,12 +1161,74 @@ func TestKnownGapAJoinErrorWithALostFailReceiptReplaysPass(t *testing.T) {
 	start := papStart("alice", "ssh", "198.51.100.4", secret)
 	f.h.NewSession(f.peer).Start(context.Background(), start)
 	rec := f.records(t)[0]
-	if ie, _ := rec["index_error"].(string); rec["reason"] != "store_unavailable" || !strings.Contains(ie, "receipt") {
-		t.Fatalf("a lost FailReceipt on a failed join must say what it cost: %v", rec)
+	// The principal is the join an incident responder needs to find whose
+	// PASS may replay (Task 4 review M1).
+	if ie, _ := rec["index_error"].(string); rec["reason"] != "store_unavailable" || !strings.Contains(ie, "receipt") ||
+		rec["principal"] != "user:alice@example.com" {
+		t.Fatalf("a lost FailReceipt on a failed join must say what it cost, and whose: %v", rec)
 	}
 	if reply, _ := f.h.NewSession(f.peer).Start(context.Background(), start); reply.Status != wire.AuthenStatusPass {
 		t.Fatalf("the known gap closed (Task 4b?): flip this test to assert credential_revoked: %+v %v",
 			reply, f.records(t))
+	}
+}
+
+// midJoinRetransmit runs during() inside the join's first mark read, then
+// fails that read: a retransmission that arrives while a join is still in
+// flight on a degraded store, and the join that then ERRORs.
+type midJoinRetransmit struct {
+	*memory.Store
+	mu     sync.Mutex
+	during func()
+	done   bool
+}
+
+func (m *midJoinRetransmit) GetRevocation(ctx context.Context, kind, key string) (store.Revocation, error) {
+	m.mu.Lock()
+	first := !m.done && m.during != nil
+	m.done = m.done || first
+	m.mu.Unlock()
+	if first {
+		m.during()
+		return store.Revocation{}, errors.New("store unavailable")
+	}
+	return m.Store.GetRevocation(ctx, kind, key)
+}
+
+// KNOWN GAP, pinned for Task 4b to flip (Task 4 review I2). A
+// retransmission that reads the receipt while the failing join is still in
+// flight, before its FailReceipt lands, finds the PASS receipt naming window
+// A's context, which is live and unrevoked because the join never wrote cert
+// B's mark into it, and replays PASS: a session for a certificate a standing
+// mark names, authorized under window A's context until its idle TTL. Task
+// 4b's replay must check the marks for the presented credential's own
+// principal and certificate, and this test then asserts the in-flight
+// retransmission is refused credential_revoked.
+func TestKnownGapARetransmissionDuringAFailingJoinReplaysPass(t *testing.T) {
+	m := &midJoinRetransmit{}
+	f := setupStore(t, func(st *memory.Store) store.Store { m.Store = st; return m })
+	f.joinFixture(t, nil)
+	secret := f.tag() + "certBcertBcertBcertBcert"
+	if _, err := f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
+		store.Token{ID: "b", Secret: []byte(secret), Kind: store.KindLogin, Username: "alice",
+			Principal:  "user:alice@example.com",
+			Credential: store.Credential{Method: "cert", Issuer: "ca", Serial: "0b"}, Enable: "token",
+			MaxPrivilege: 15, MintedAt: f.now.Add(-time.Minute), ExpiresAt: f.now.Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.PutRevocation(context.Background(), store.Revocation{Kind: store.RevocationCert,
+		Key: store.CertKey("ca", "0b"), At: f.now.Add(-time.Second), Origin: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	start := papStart("alice", "ssh", "198.51.100.4", secret)
+	var mid wire.AuthenReply
+	m.during = func() { mid, _ = f.h.NewSession(f.peer).Start(context.Background(), start) }
+	if reply, _ := f.h.NewSession(f.peer).Start(context.Background(), start); reply.Status != wire.AuthenStatusError {
+		t.Fatalf("the join whose mark read failed: %+v %v", reply, f.records(t))
+	}
+	if mid.Status != wire.AuthenStatusPass {
+		t.Fatalf("the known gap closed (Task 4b?): flip this test to assert credential_revoked: %+v %v",
+			mid, f.records(t))
 	}
 }
 

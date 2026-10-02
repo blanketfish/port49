@@ -600,7 +600,11 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 		// revocation of that credential can find (Task 3 review I2). So it is
 		// marked failed, and the retransmission replays a refusal. A mark that
 		// does not land is put on the record; ErrNotFound lost nothing, as
-		// below.
+		// below. A retransmission that reads the receipt while this join is
+		// still in flight, or after a mark that did not land, replays the PASS
+		// onto an unrevoked context; Task 4b's replay check, on the presented
+		// credential's own marks, closes both (spec §5.6).
+		rec.Principal = winner.Principal
 		ferr := s.h.store.FailReceipt(ctx, rk)
 		s.h.metrics.StoreOps.WithLabelValues("fail_receipt", storeOutcome(ferr)).Inc()
 		if ferr != nil && !errors.Is(ferr, store.ErrNotFound) {
