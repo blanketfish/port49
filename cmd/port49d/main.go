@@ -796,7 +796,7 @@ func run(parent context.Context, cfgPath string) error {
 		// to let revocation reach a live context, so they need to outlast
 		// nothing the context does not.
 		Authen: authen.New(handlerStore, log, lim, m, time.Now, newCtxID, cfg.ReceiptIdleTTL, cfg.ReceiptMaxAge,
-			cfg.ContextIdleTTL, cfg.Session.IndexTTL, tags),
+			cfg.ContextIdleTTL, cfg.Session.IndexTTL, tags).WithMarks(authMarks),
 		// `session.staleness_ceiling` defaults to 0 — no staleness check — and
 		// that default is the operational one, not an unfinished wiring: a
 		// finite ceiling denies a steadily working operator `context_stale`,

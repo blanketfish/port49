@@ -9,6 +9,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/rhwendt/port49/internal/daemon/limits"
@@ -79,6 +80,10 @@ type Handler struct {
 	// must stay acceptable for as long as its store record opens, which is the
 	// whole of the crypt read window.
 	tags token.TagWindow
+	// marks is the daemon's copy of the standing revocation marks
+	// (store.Marks): the enable gate and a receipt's replay read it beside
+	// the context's own revocation. Nil names none.
+	marks *store.Marks
 }
 
 // New builds the authentication handler. tags are the keys the token tag may be
@@ -91,6 +96,13 @@ func New(s store.Store, e decision.Emitter, l *limits.Limiter, m *metrics.Metric
 	return &Handler{store: s, log: e, limits: l, metrics: m, now: now, newCtxID: newCtxID,
 		receiptIdleTTL: receiptIdleTTL, receiptMaxAge: receiptMaxAge, contextTTL: contextTTL,
 		indexTTL: indexTTL, tags: tags}
+}
+
+// WithMarks sets the standing revocation marks the enable gate and a
+// receipt's replay read (plan 7d; Ruling 17).
+func (h *Handler) WithMarks(m *store.Marks) *Handler {
+	h.marks = m
+	return h
 }
 
 // phase is a Session's place in a multi-round ASCII exchange. phaseDone is
@@ -292,8 +304,10 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 		// a session-only platform asks once at login and never again (spec §13,
 		// decision 21; measured over 26 Junos sessions,
 		// tests/lab/results/L18-*.md), and there the enable exchange is the
-		// last decision port49 gets to make about this shell.
-		if !c.RevokedAt.IsZero() {
+		// last decision port49 gets to make about this shell. A standing
+		// mark for the context's principal or certificate refuses it too,
+		// whatever the record says (plan 7d; Ruling 17).
+		if !s.h.marks.RevokedAt(c).IsZero() {
 			return s.fail(ctx, rec, decision.CredentialRevoked)
 		}
 		if !c.SessionExpires.IsZero() && s.h.now().After(c.SessionExpires) {
@@ -340,20 +354,10 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 		if !now.Before(capAt) || !now.Before(r.IdleExpiresAt) {
 			return s.fail(ctx, rec, decision.TokenSpent)
 		}
-		// A receipt replays only onto the context it was written for (spec
-		// §5.6). The check is here, before the extension, so a refused
+		// The check is here, before the extension, so a refused
 		// presentation does not slide the window on its way to the refusal.
-		switch live, ok, lerr := s.receiptContext(ctx, ck, r.CtxID, enable, incumbent); {
-		case lerr != nil:
-			return s.storeError(rec)
-		case !ok:
-			return s.fail(ctx, rec, decision.TokenSpent)
-		case !live.RevokedAt.IsZero():
-			// Answered from what the context says now, not from what the
-			// receipt stored: a revoked context admits nothing, whether the
-			// revocation landed after the login or the login wrote it (spec
-			// §5.6). Refused before the extension, so it does not slide.
-			return s.revoked(ctx, rec, live.Principal, live.CtxID, live.RevokedAt)
+		if reply, done, refused := s.refuseReplay(ctx, rec, ck, r, enable, incumbent); refused {
+			return reply, done
 		}
 		next := now.Add(s.h.receiptIdleTTL)
 		if next.After(capAt) {
@@ -507,9 +511,13 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 	if !revokedAt.IsZero() {
 		status = wire.AuthenStatusFail
 	}
+	// The receipt names the credential it is written for, so a replay
+	// checks the marks and the index for it, not only for the context it
+	// names (refuseReplay).
 	receipt := store.Receipt{CredentialSHA256: credHash, Status: status, CtxID: ctxID,
 		FirstRedeemedAt: now, IdleExpiresAt: now.Add(s.h.receiptIdleTTL),
-		RetainUntil: now.Add(s.h.receiptMaxAge + s.h.receiptIdleTTL)}
+		RetainUntil: now.Add(s.h.receiptMaxAge + s.h.receiptIdleTTL), Principal: winner.Principal,
+		Sid: winner.Credential.Sid, CertKey: store.CertKey(winner.Credential.Issuer, winner.Credential.Serial)}
 	w := store.ReceiptWrite{Key: rk, Receipt: receipt, Principal: winner.Principal,
 		IndexTTL: s.h.receiptMaxAge + s.h.receiptIdleTTL}
 	err = s.h.store.RedeemAndReceipt(ctx, store.TokenKey{NAS: s.peer.NAS, Username: username}, winner.ID, w)
@@ -519,25 +527,15 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 			r, rerr := s.h.store.GetReceipt(ctx, rk)
 			s.h.metrics.StoreOps.WithLabelValues("get_receipt", storeOutcome(rerr)).Inc()
 			if rerr == nil && subtle.ConstantTimeCompare(r.CredentialSHA256[:], credHash[:]) == 1 {
-				// An enable replays onto the context it was written for, as a
-				// retransmission does. A login that lost is not checked: it
-				// presented the winner's own credential, and the winner's
-				// JoinContext is still in flight, so a read here would race the
-				// winner's write and refuse the duplicate for nothing. It can
-				// therefore answer PASS from the receipt of a winner that, after
-				// its join, is refused credential_revoked, if it reads the receipt
-				// before the winner's FailReceipt lands: the one replay the §5.6
-				// rule does not reach. It takes two byte-identical
-				// presentations inside one join; every authorization on the
-				// revoked context is denied, and the next retransmission reads
-				// the live context and is refused (plan 3, pre-flight F16).
-				if enable {
-					switch _, ok, lerr := s.receiptContext(ctx, ck, r.CtxID, enable, incumbent); {
-					case lerr != nil:
-						return s.storeError(rec)
-					case !ok:
-						return s.fail(ctx, rec, decision.TokenSpent)
-					}
+				// The loser replays the winner's receipt on the checks a
+				// retransmission's replay makes. A login whose winner's
+				// JoinContext is still in flight has not committed: the
+				// index does not reach the context under its credential
+				// yet, so it is token_spent, as spec §5.6 has a write in
+				// flight, and the device prompts again (plan 7d). It takes
+				// two byte-identical presentations inside one join.
+				if reply, done, refused := s.refuseReplay(ctx, rec, ck, r, enable, incumbent); refused {
+					return reply, done
 				}
 				// The concurrent-escalation case, and it has the same shape as
 				// the retransmission above: the winner's receipt says PASS, but
@@ -595,26 +593,12 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 		//
 		// The receipt was written PASS before the join, and on a join it
 		// names the live context, which this login's credential never
-		// reached: a retransmission replaying it would admit a credential
-		// whose marks the failed join did not read, onto a context no
-		// revocation of that credential can find (Task 3 review I2). So it is
-		// marked failed, and the retransmission replays a refusal. A mark that
-		// does not land is put on the record; ErrNotFound lost nothing, as
-		// below. A retransmission that reads the receipt while this join is
-		// still in flight, or after a mark that did not land, replays the PASS
-		// onto an unrevoked context; Task 4b's replay check, on the presented
-		// credential's own marks, closes both (spec §5.6).
-		//
-		// Interim and fail-closed: this marking departs from §5.6, where a
-		// committed write replays PASS and one not committed is token_spent.
-		// Task 4b replaces it with that replay check on the presented
-		// credential, which restores §5.6 exactly (Task 4 review ruling I4).
+		// reached. Nothing more is written for it: a retransmission replays
+		// PASS only once the index reaches the context under this
+		// credential, which only a committed join writes, and only while no
+		// mark names it (refuseReplay). This one is token_spent, or
+		// credential_revoked under a mark (spec §5.6; Task 4 review I4).
 		rec.Principal = winner.Principal
-		ferr := s.h.store.FailReceipt(ctx, rk)
-		s.h.metrics.StoreOps.WithLabelValues("fail_receipt", storeOutcome(ferr)).Inc()
-		if ferr != nil && !errors.Is(ferr, store.ErrNotFound) {
-			rec.IndexError = "receipt not marked failed; a retransmission may replay PASS"
-		}
 		return s.storeError(rec)
 	}
 	rec.Session.ReplacedCtxID = out.Replaced
@@ -634,7 +618,7 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 	//
 	// The receipt was written PASS before the join, so the refusal marks it
 	// failed (FailReceipt). A retransmission is refused credential_revoked
-	// while the context is revoked (receiptContext), and replays the refusal
+	// while the context is revoked (refuseReplay), and replays the refusal
 	// after a token minted later has lifted the revocation on the same ctx_id
 	// (decision 15): the token the revocation was meant to stop gets no
 	// second try either way. A mark that does not land is counted and put on
@@ -717,6 +701,116 @@ func (s *Session) receiptContext(ctx context.Context, ck store.ContextKey, recei
 	default:
 		return store.Context{}, false, err
 	}
+}
+
+// refuseReplay answers a presentation a receipt was found for, when the
+// receipt may not replay, and reports whether it did (spec §5.6):
+//
+//   - token_spent when the context the receipt was written for is not the
+//     live one (receiptContext);
+//   - credential_revoked when that context is revoked, or a standing mark
+//     names its principal or certificate (store.Marks), answered from what
+//     the context says now and not from what the receipt stored, whether
+//     the revocation landed after the login or the login wrote it;
+//   - for a PASS, credential_revoked when a standing mark names the
+//     credential the receipt was written for, which the context need not
+//     name: a join keeps only its latest login's credential;
+//   - for a login's PASS, token_spent while the index does not reach the
+//     context under that credential (indexed).
+//
+// The last two are what tell a login that committed from one that did not
+// (plan 7d; Task 4 review I3, I4). The receipt is written PASS before the
+// join, naming the context the login predicts it lands on, which on a join
+// is the live one; the join writes the context and the credential's index
+// entries in one step under the marks (SwapLogin). A login whose join
+// ERRORed, or is still in flight, has written neither, and replaying its
+// PASS would admit a credential whose marks no write checked onto a context
+// no revocation of that credential can reach. So a committed login replays
+// PASS, and one not committed, or in flight, is token_spent.
+func (s *Session) refuseReplay(ctx context.Context, rec decision.Record, ck store.ContextKey, r store.Receipt,
+	enable bool, incumbent store.Context) (wire.AuthenReply, bool, bool) {
+	live, ok, err := s.receiptContext(ctx, ck, r.CtxID, enable, incumbent)
+	switch {
+	case err != nil:
+		reply, done := s.storeError(rec)
+		return reply, done, true
+	case !ok:
+		reply, done := s.fail(ctx, rec, decision.TokenSpent)
+		return reply, done, true
+	}
+	if at := s.h.marks.RevokedAt(live); !at.IsZero() {
+		reply, done := s.revoked(ctx, rec, live.Principal, live.CtxID, at)
+		return reply, done, true
+	}
+	if r.Failed || r.Status != wire.AuthenStatusPass {
+		return wire.AuthenReply{}, false, false // it replays a refusal
+	}
+	if at := s.h.marks.Standing(r.Principal, r.CertKey); !at.IsZero() {
+		reply, done := s.revoked(ctx, rec, r.Principal, r.CtxID, at)
+		return reply, done, true
+	}
+	if enable {
+		// An escalation writes no index: its gate has checked the live
+		// context, which is the one its receipt names.
+		return wire.AuthenReply{}, false, false
+	}
+	switch ok, err := s.indexed(ctx, ck, r); {
+	case err != nil:
+		reply, done := s.storeError(rec)
+		return reply, done, true
+	case !ok:
+		reply, done := s.fail(ctx, rec, decision.TokenSpent)
+		return reply, done, true
+	}
+	return wire.AuthenReply{}, false, false
+}
+
+// indexed reports whether the index reaches ck under the credential r was
+// written for: under its sid and its certificate, each it has, or under
+// its principal when it has neither. A revocation of that credential
+// reads those keys, and a login's join writes them with its context
+// (SwapLogin), so only a login that committed is reachable there.
+//
+// For a credential with neither a sid nor a certificate, the principal's
+// entry may be an earlier window's of the same principal, which the join
+// keeps, so such a login's retransmission can replay PASS while its join
+// is in flight or after it ERRORed. Nothing a revocation reads is missed by
+// it: revocation of that credential is by principal, which reaches the
+// context, and the marks were read above. A sid the session manager has
+// since rotated (ReindexSid) no longer reaches the context, and the
+// retransmission is token_spent: fail closed.
+func (s *Session) indexed(ctx context.Context, ck store.ContextKey, r store.Receipt) (bool, error) {
+	type lookup struct {
+		op, key string
+		by      func(context.Context, string) ([]store.ContextRef, error)
+	}
+	var by []lookup
+	if r.Sid != "" {
+		by = append(by, lookup{"contexts_by_sid", r.Sid, s.h.store.ContextsBySid})
+	}
+	if !store.BlankCertKey(r.CertKey) {
+		by = append(by, lookup{"contexts_by_cert", r.CertKey, s.h.store.ContextsByCert})
+	}
+	if len(by) == 0 {
+		by = append(by, lookup{"contexts_by_principal", r.Principal, s.h.store.ContextsByPrincipal})
+	}
+	ref := store.ContextRef{NAS: ck.NAS, Username: ck.Username}
+	for _, l := range by {
+		if l.key == "" {
+			return false, nil
+		}
+		refs, err := l.by(ctx, l.key)
+		s.h.metrics.StoreOps.WithLabelValues(l.op, storeOutcome(err)).Inc()
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+			return false, nil
+		case err != nil:
+			return false, err
+		case !slices.Contains(refs, ref):
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // revoked refuses a login, or its retransmission, into a revoked context:
