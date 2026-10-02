@@ -63,8 +63,10 @@ type Metrics struct {
 	CryptOpenFailures *prometheus.CounterVec
 	// port49_store_index_records_undecodable_total: an etcd index record (x/)
 	// that would not decode, each time a walk skipped it (the refresh's
-	// active principals, the sweep) or a lookup took its ref without
-	// reading it (plan 7d Task 7). Only a store writer makes one. No labels:
+	// active principals, the sweep), a lookup took its ref without reading
+	// it (plan 7d Task 7), or the re-index scan, a login or an index write
+	// met it, the last two writing it whole again (Task 7b). Only a store
+	// writer makes one. No labels:
 	// its key, which names a device, is in the log line beside it.
 	IndexRecordsUndecodable prometheus.Counter
 	// port49_accounting_attributions_total{attribution}: every accounting
@@ -136,6 +138,15 @@ type Metrics struct {
 	// A context the refresh skipped — another principal's since, the lab's,
 	// already revoked — is not counted. The label is the outcome only.
 	ContextRefreshes *prometheus.CounterVec
+	// ContextsReindexed counts live contexts found missing from the index
+	// and re-indexed, or revoked when they would not open (plan 7d;
+	// re-check IA2). Any increase is an index record deleted or rewritten in
+	// the store.
+	ContextsReindexed prometheus.Counter
+	// ContextsReindexFailures counts contexts the re-index could not
+	// re-index or judge, each left for its next pass; the process log names
+	// the device and username (plan 7d; re-check I3). No labels.
+	ContextsReindexFailures prometheus.Counter
 	// port49_session_refreshes_total{outcome}: session refreshes (spec §5.6;
 	// decision 33). Per context a refresh visited: "extended", "revoked" (the
 	// policy in force withdrew it, or the context could not be judged and was
@@ -359,7 +370,7 @@ func New(reg prometheus.Registerer) *Metrics {
 			Help: "Stored records that would not decrypt, by record kind."}, []string{"record"}),
 		IndexRecordsUndecodable: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "port49_store_index_records_undecodable_total",
-			Help: "etcd index records that would not decode, each time one was skipped or taken unread."}),
+			Help: "etcd index records that would not decode, each time one was skipped, taken unread, or written over."}),
 		Attributions: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_accounting_attributions_total",
 			Help: "Accounting records accepted, by attribution."}, []string{"attribution"}),
 		BrokerItemErrors: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_broker_item_errors_total",
@@ -376,6 +387,11 @@ func New(reg prometheus.Registerer) *Metrics {
 			Help: "Compiled-blob cache lookups by the authorizer, by outcome."}, []string{"outcome"}),
 		ContextRefreshes: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_context_refreshes_total",
 			Help: "Live login contexts a policy refresh visited, by outcome."}, []string{"outcome"}),
+		ContextsReindexed: prometheus.NewCounter(prometheus.CounterOpts{Name: "port49_contexts_reindexed_total",
+			Help: "Live login contexts found missing from the index and re-indexed, or revoked when they would not open."}),
+		ContextsReindexFailures: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "port49_contexts_reindex_failures_total",
+			Help: "Live login contexts the re-index could not re-index or judge, each left for its next pass."}),
 		SessionRefreshes: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_session_refreshes_total",
 			Help: "Session refreshes: per context extended, revoked, past_grace or not_judged; per refresh refused, " +
 				"store_error or too_soon."}, []string{"outcome"}),
@@ -452,7 +468,8 @@ func New(reg prometheus.Registerer) *Metrics {
 		m.Connections, m.ConnectionEvents, m.AuthFailures, m.SpoolDepth, m.SpoolDrops, m.SpoolQuarantines,
 		m.StoreOps, m.DecisionLogWriteFailures, m.CryptOpenFailures, m.IndexRecordsUndecodable, m.Attributions, m.BrokerItemErrors, m.BrokerIdempotency,
 		m.BrokerHandshakeFailures, m.BrokerConnectionEvents, m.BrokerConnections, m.BlobCache,
-		m.DevicesQuarantined, m.DevicesAdmissionRefused, m.ContextRefreshes, m.SessionRefreshes, m.TokensSuperseded, m.CeilingWarnings,
+		m.DevicesQuarantined, m.DevicesAdmissionRefused, m.ContextRefreshes, m.ContextsReindexed,
+		m.ContextsReindexFailures, m.SessionRefreshes, m.TokensSuperseded, m.CeilingWarnings,
 		m.Revocations, m.RevocationsInForce, m.RevocationsFileFailed, m.CertStatusChecks, m.CRLLoads, m.CRLNextUpdate,
 		m.CertStatusUnavailable, m.PolicyReloads, m.PolicyFileRefused,
 		m.PolicyRefreshPending, m.InventoryReloads, m.InventoryFileRefused, m.InventorySnapshotAge,
