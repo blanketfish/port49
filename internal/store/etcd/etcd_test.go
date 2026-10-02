@@ -112,6 +112,79 @@ func TestALostQuorumIsUnavailableNeverStale(t *testing.T) {
 	}
 }
 
+// A store writer who adds a login witness, or names another identity, in
+// the plaintext beside a sealed record changes nothing read through the
+// sealing layer: the login witness, the principal and the receipt's
+// presented credential are read from the seal alone. crypt_test.go pins
+// that the plaintext is blank when written; this pins that it is ignored
+// when read (Task 6 review M-2.2).
+func TestThePlaintextBesideASealIsNeverRead(t *testing.T) {
+	ctx := context.Background()
+	now := t0
+	inner := onShared(t, func() time.Time { return now })
+	s := crypt.Wrap(inner, sealKeys, nil)
+	edit := func(key string, v any, f func()) {
+		t.Helper()
+		resp, err := inner.tok.Get(ctx, key)
+		if err != nil || len(resp.Kvs) != 1 {
+			t.Fatalf("reading %s: %v %v", key, resp, err)
+		}
+		if err := json.Unmarshal(resp.Kvs[0].Value, v); err != nil {
+			t.Fatal(err)
+		}
+		f()
+		body, err := json.Marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := inner.tok.Put(ctx, key, string(body), clientv3.WithIgnoreLease()); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var h, forged [32]byte
+	copy(h[:], "hash")
+	copy(forged[:], "forged")
+	ck := store.ContextKey{NAS: "leaf-01", Username: "alice"}
+	if err := s.PutContext(ctx, ck, store.Context{CtxID: "ctx1", Principal: "user:alice", Username: "alice",
+		PrivLvl: 1, Logins: []string{store.LoginWitness(h)}}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	var cr ctxRec
+	edit(inner.k.context(ck), &cr, func() {
+		cr.Logins = append(cr.Logins, store.LoginWitness(forged))
+		cr.Principal = "user:mallory"
+	})
+	if cr.Logins[0] != store.LoginWitness(forged) {
+		t.Fatalf("the sealed context held a plaintext witness: %v", cr.Logins)
+	}
+	c, err := s.GetContext(ctx, ck)
+	if err != nil || c.Principal != "user:alice" || !slices.Equal(c.Logins, []string{store.LoginWitness(h)}) {
+		t.Fatalf("a context read through the seal after a plaintext edit: %+v %v", c, err)
+	}
+
+	tk := store.TokenKey{NAS: "leaf-01", Username: "alice"}
+	if _, err := s.PutToken(ctx, tk, store.Token{ID: "t1", Secret: []byte("x"), Kind: store.KindLogin,
+		ExpiresAt: now.Add(time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	rk := store.ReceiptKey{NAS: "leaf-01", Username: "alice", Kind: store.KindLogin, CredentialSHA256: h}
+	if err := s.RedeemAndReceipt(ctx, tk, "t1", store.ReceiptWrite{Key: rk, Principal: "user:alice", IndexTTL: time.Hour,
+		Receipt: store.Receipt{CredentialSHA256: h, Status: 1, CtxID: "ctx1", FirstRedeemedAt: now,
+			IdleExpiresAt: now.Add(time.Minute), RetainUntil: now.Add(time.Hour),
+			Principal: "user:alice", Sid: "sid-1", CertKey: store.CertKey("ca", "0a")}}); err != nil {
+		t.Fatal(err)
+	}
+	var rr receiptRec
+	edit(inner.k.receipt(rk), &rr, func() {
+		rr.Principal, rr.Sid, rr.CertKey = "user:mallory", "sid-m", store.CertKey("ca", "ff")
+	})
+	r, err := s.GetReceipt(ctx, rk)
+	if err != nil || r.Principal != "user:alice" || r.Sid != "sid-1" || r.CertKey != store.CertKey("ca", "0a") {
+		t.Fatalf("a receipt read through the seal after a plaintext edit: %+v %v", r, err)
+	}
+}
+
 // A completion and a release each write only the record they read: a
 // write that lands between the read and the commit (here at the clock read
 // that tells whether the record is live) makes the commit's compare fail
@@ -164,6 +237,85 @@ func TestIdempotencyWritesCompareTheirRead(t *testing.T) {
 	}
 	if cur, ok, err := s.ReserveIdempotency(ctx, "user:alice", "k2", pending("c")); err != nil || ok || cur.Holder != "b" {
 		t.Fatalf("after the refused completion: %+v %v %v", cur, ok, err)
+	}
+}
+
+// restored is the etcd store under the sealing layer, which a test moves
+// to another member's: a restore whose revisions went back.
+type restored struct{ *Store }
+
+// An etcd restored under a live port49d to revisions below the ones it
+// last wrote at is placed by the ledger, not refused: a login after the
+// restore is admitted, and a store writer's replay of the context a later
+// login replaced before the restore is denied. The restore is a member of
+// its own, starting from revision one, given the snapshot's record, under
+// a port49d whose last writes were at revisions above a hundred (Task 6b
+// review C1; crypt's TestALoginAfterARestoreIsTheLast on memory).
+func TestALoginAfterAnEtcdRestoreIsTheLast(t *testing.T) {
+	ctx := context.Background()
+	clock := func() time.Time { return t0 }
+	prefix := etcdtest.Prefix()
+	cli := etcdtest.Client(t)
+	inner := &restored{newStore(cli, cli, Config{Prefix: prefix, Now: clock})}
+	for i := range 100 { // the revisions the restore goes back below
+		if _, err := cli.Put(ctx, fmt.Sprintf("%spad/%d", prefix, i), "x"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	l := crypt.NewLedger()
+	s := crypt.Wrap(inner, sealKeys, nil, crypt.WithLedger(l))
+	l.Seal()
+	k := store.ContextKey{NAS: "leaf-01", Username: "netops"}
+	login := func(id string, priv uint8) store.Context {
+		return store.Context{CtxID: id, Principal: "user:" + id + "@example.com", Username: "netops", PrivLvl: priv}
+	}
+	raw := func() []byte {
+		t.Helper()
+		resp, err := inner.ctx.Get(ctx, inner.k.context(k))
+		if err != nil || len(resp.Kvs) != 1 {
+			t.Fatalf("reading the context's record: %v %v", resp, err)
+		}
+		return resp.Kvs[0].Value
+	}
+	if err := s.PutContext(ctx, k, login("alice-1", 1), time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := raw()
+	alice, err := s.GetContext(ctx, k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SwapContext(ctx, k, alice.Rev, login("bob-1", 15), time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	bobSealed := raw()
+	last, _ := s.GetContext(ctx, k)
+
+	srv := etcdtest.Start(t, etcdtest.Options{}) // the restore
+	cliB := srv.Client(t, "")
+	inner.Store = newStore(cliB, cliB, Config{Prefix: prefix, Now: clock})
+	put, err := cliB.Put(ctx, inner.k.context(k), string(snapshot))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if uint64(put.Header.Revision) >= last.Rev {
+		t.Fatalf("the restore is at revision %d, not below the last write's %d", put.Header.Revision, last.Rev)
+	}
+	var u *store.UnreadableContextError
+	if _, err := s.GetContext(ctx, k); !errors.As(err, &u) {
+		t.Fatalf("Alice's record, restored: %v", err)
+	}
+	if err := s.SwapContext(ctx, k, u.Rev, login("carol-1", 1), time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.GetContext(ctx, k); err != nil || got.CtxID != "carol-1" {
+		t.Fatalf("Carol's login after the restore: %q %v", got.CtxID, err)
+	}
+	if _, err := cliB.Put(ctx, inner.k.context(k), string(bobSealed)); err != nil { // Bob's, written back
+		t.Fatal(err)
+	}
+	if got, err := s.GetContext(ctx, k); !errors.Is(err, crypt.ErrNotLastWritten) {
+		t.Fatalf("Bob's record written back over Carol's: %q %v", got.CtxID, err)
 	}
 }
 
