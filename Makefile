@@ -1,4 +1,4 @@
-.PHONY: test lab-unit vet fuzz lab build evidence
+.PHONY: test test-race lab-unit vet fuzz lab build evidence
 
 build:
 	go build -o bin/port49d ./cmd/port49d
@@ -7,6 +7,13 @@ build:
 
 test: lab-unit
 	go test ./... -count=1
+
+# The race detector over the daemon's packages. On the memory store a split
+# between a login's mark check and its write that never yields between the
+# two is caught only here: without -race the race property has nothing to
+# interleave (plan 7d, R1).
+test-race:
+	go test -race ./internal/... -count=1
 
 # The lab package's pure tests — the classifiers and row builders that read a
 # device's output into a verdict, and the committed notes they must still

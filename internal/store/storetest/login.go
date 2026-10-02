@@ -282,12 +282,11 @@ func JoinHonoursAStandingMark(t *testing.T, b Backend) {
 // The window is a few instructions wide on memory, so the property runs
 // enough rounds to land in it: with the mark check in its own critical
 // section it failed 20 runs of 20 at 10000 rounds, and about half at 300.
-// -short runs 300, for a backend whose rounds are network round trips.
+// A backend whose rounds are network round trips runs fewer, set by its
+// Backend.RaceRounds and proved there by a mutation that splits the check
+// from the write.
 func LoginRacesARevocationByMark(t *testing.T, b Backend) {
-	rounds := 10000
-	if testing.Short() {
-		rounds = 300
-	}
+	rounds := b.raceRounds()
 	k := store.ContextKey{NAS: "leaf-01", Username: "svc"}
 	const alice, carol = "spiffe://example.com/alice", "spiffe://example.com/carol"
 	for _, kind := range []string{store.RevocationPrincipal, store.RevocationCert} {
