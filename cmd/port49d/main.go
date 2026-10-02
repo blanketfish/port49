@@ -826,7 +826,8 @@ func run(parent context.Context, cfgPath string) error {
 		// (internal/platform). No idle TTL: accounting does not extend one
 		// (spec §5.8).
 		Acct:   acct.New(handlerStore, spool, m, time.Now, platform.SystemUsers()).WithRedactor(redactorFor(live)),
-		Limits: lim, Metrics: m, Log: log, Now: time.Now, IdleTimeout: cfg.Limits.IdleTimeout}
+		Limits: lim, Metrics: m, Log: log, Now: time.Now, IdleTimeout: cfg.Limits.IdleTimeout,
+		PacketDeadline: cfg.Store.PacketDeadline}
 
 	ln, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {

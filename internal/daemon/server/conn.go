@@ -428,6 +428,16 @@ func (s *conn) write(h wire.Header, body []byte) bool {
 // protoErr reports a packet this connection cannot answer at all, which closes
 // it without a reply.
 func (s *conn) dispatch(ctx context.Context, h wire.Header, body []byte) (reply []byte, done, protoErr bool) {
+	// The failure delay keeps the server's context and counts from now,
+	// the packet's arrival (authen.DelayContext): the deadline is for the
+	// store, never the brute-force delay (re-check N1).
+	delay, arrived := ctx, time.Now()
+	if s.d.PacketDeadline > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, s.d.PacketDeadline)
+		defer cancel()
+	}
+	ctx = authen.WithDelayContext(ctx, delay, arrived)
 	peer := authen.Peer{NAS: s.dev.Device.Name, NASAddr: s.src.String(), Platform: s.dev.Device.Platform,
 		KeyRef: s.dev.KeyRef, KeyVersion: s.version, WirePlatform: s.dev.WirePlatform}
 	start := s.d.Now()
