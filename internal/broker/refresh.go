@@ -332,6 +332,8 @@ func (b *Broker) supersedeTokens(ctx context.Context, cur *policy.Policy, now ti
 // after every attempt does not: it is left for the retry, the pass goes on,
 // and the conflict is returned at the end so the caller runs it again — one
 // busy session must not hold every session after it on the superseded policy.
+// Nor does one principal's lookup failing for any reason but the store being
+// unavailable: it is said, counted failed and left for the next pass.
 func (b *Broker) refreshContexts(ctx context.Context, cur *policy.Policy, priors []Prior, now time.Time,
 	rep *RefreshReport, sameSource bool) error {
 	principals, err := b.Store.ActivePrincipals(ctx)
@@ -339,14 +341,27 @@ func (b *Broker) refreshContexts(ctx context.Context, cur *policy.Policy, priors
 		return err
 	}
 	quarantined := map[string]bool{} // the ctx_ids this pass left for a quarantine
+	unvisited := false               // a principal whose contexts this pass could not look up
 	var busy error
 	for _, principal := range principals {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		refs, err := b.Store.ContextsByPrincipal(ctx, principal)
-		if err != nil {
+		switch {
+		case errors.Is(err, store.ErrUnavailable), errors.Is(err, context.Canceled),
+			errors.Is(err, context.DeadlineExceeded):
 			return err
+		case err != nil:
+			// One principal's lookup failing for any other reason (a
+			// record a store writer planted) must not leave every
+			// principal after it on the superseded policy: said, counted
+			// failed, and left for the next pass (final review I-1).
+			log.Printf("broker: refresh: the contexts of %q could not be looked up (%v); left for the next pass",
+				principal, err)
+			b.count(rep, "failed")
+			unvisited = true
+			continue
 		}
 		for _, ref := range refs {
 			switch _, err := b.refreshContext(ctx, cur, priors, now, principal, ref, rep, quarantined, sameSource); {
@@ -361,7 +376,10 @@ func (b *Broker) refreshContexts(ctx context.Context, cur *policy.Policy, priors
 	}
 	// Every live context was visited, so a quarantine this pass did not see
 	// is over, or its context is: forget it, and a context quarantined again
-	// later is recorded again.
+	// later is recorded again. A principal left unvisited may hold one still.
+	if unvisited {
+		return busy
+	}
 	b.mu.Lock()
 	for id := range b.quarantineRecorded {
 		if !quarantined[id] {

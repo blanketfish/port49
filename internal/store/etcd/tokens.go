@@ -297,11 +297,14 @@ func (s *Store) tokenKeys(ctx context.Context, fam, key string) ([]store.TokenKe
 	for _, kv := range resp.Kvs {
 		// An entry that does not decode is an error, never skipped: a
 		// revocation that skipped it would miss that key's tokens, which
-		// is revocation failing open (pre-flight M18).
+		// is revocation failing open (pre-flight M18). One whose key does
+		// not parse names no token key, so it is said, counted and skipped,
+		// as refsUnder skips a lookup entry's (final review I-1).
 		var r expiryRec
 		nas, user, ok := lastTwo(string(kv.Key))
 		if !ok {
-			return nil, fmt.Errorf("etcd: token index entry %q does not parse", kv.Key)
+			s.unparseable("token index entry", kv.Key, "a lookup skips it")
+			continue
 		}
 		if err := json.Unmarshal(kv.Value, &r); err != nil {
 			return nil, notDecoded(fmt.Sprintf("token index entry %q", kv.Key))

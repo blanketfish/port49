@@ -92,6 +92,29 @@ func TestAGarbledContextNeverStopsTheRefresh(t *testing.T) {
 	}
 }
 
+// A lookup entry a store writer planted whose key does not parse never
+// stops the refresh: alice2's lookup skips it, and alice, sorted after
+// alice2 ('2' before '@'), is still judged (final review I-1).
+func TestAnUnparseableLookupEntryNeverStopsTheRefresh(t *testing.T) {
+	f := newFixtureWithPolicy(t, 8, sharedPolicy)
+	ctx := context.Background()
+	_, sealed, raw, root := onEtcd(t, f)
+	putJudged(t, f, sealed, "nx1", "alice2", alice2)
+	putJudged(t, f, sealed, "leaf1", "alice", alicePrincipal)
+	if _, err := raw.Put(ctx, root+"ip/"+url.PathEscape(alice2)+"/%zz/x", "{}"); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := f.b.Refresh(ctx, nil)
+	if err != nil || rep.Failed != 0 {
+		t.Fatalf("a refresh over an unparseable lookup entry: %+v %v", rep, err)
+	}
+	for _, k := range []store.ContextKey{{NAS: "nx1", Username: "alice2"}, {NAS: "leaf1", Username: "alice"}} {
+		if c, err := sealed.GetContext(ctx, k); err != nil || c.BlobHash == "sha256:from-before" && c.RevokedAt.IsZero() {
+			t.Fatalf("%v was not judged: %v", k, err)
+		}
+	}
+}
+
 // The I2 path on etcd through the sealing layer: a raw rewrite of x/ to
 // list another principal hides the context from the refresh; Unindexed and
 // ReindexContexts restore it, and the next pass finds nothing (re-check I2).

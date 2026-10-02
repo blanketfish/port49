@@ -3,7 +3,6 @@ package etcd
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/url"
 	"sort"
 	"strings"
@@ -34,12 +33,15 @@ func (s *Store) refsUnder(ctx context.Context, fam, key string) ([]store.Context
 	var refs []store.ContextRef
 	var gets []clientv3.Op
 	for _, kv := range resp.Kvs {
-		// An entry that does not parse is an error, never skipped: a
-		// revocation that skipped it would miss a context, which is
-		// revocation failing open (pre-flight M18). It names no ref to keep.
+		// An entry that does not parse names no ref, so skipping it hides
+		// no context: the context's own record and its real entry still
+		// answer. Failing the lookup on it instead would let one planted
+		// key stop every revocation of key and the refresh for every
+		// principal after it (final review I-1). The sweep deletes it.
 		nas, user, ok := lastTwo(string(kv.Key))
 		if !ok {
-			return nil, fmt.Errorf("etcd: lookup entry %q does not parse", kv.Key)
+			s.unparseable("lookup entry", kv.Key, "a lookup skips it")
+			continue
 		}
 		r := store.ContextRef{NAS: nas, Username: user}
 		refs = append(refs, r)
@@ -258,7 +260,8 @@ func (s *Store) Sweep(ctx context.Context) (pruned, removed int, err error) {
 // The index records a page names are read together, in transactions of
 // gets (chunked), not one linearizable read per entry (pre-flight M25).
 // An entry whose record does not decode is left: the sweep never deletes
-// against a record it could not read.
+// against a record it could not read. An entry whose key does not parse is
+// deleted at its own revision: it names no record to read.
 func (s *Store) sweepLookups(ctx context.Context, fam string) (int, error) {
 	prefix := s.k.family(fam)
 	end := clientv3.GetPrefixRangeEnd(prefix)
@@ -285,7 +288,19 @@ func (s *Store) sweepLookups(ctx context.Context, fam string) (int, error) {
 		for _, kv := range resp.Kvs {
 			lookupKey, ref, ok := s.parseLookup(fam, string(kv.Key))
 			if !ok {
-				continue // not a lookup entry this sweep wrote; left alone
+				// Only a store writer puts one, and it names no ref: deleted,
+				// compared on its own revision, so it does not sit there until
+				// an operator finds it (final review I-1).
+				s.unparseable("lookup entry", kv.Key, "the sweep deletes it")
+				done, err := commit(ctx, s.ctx, s.ctxLeases, []clientv3.Cmp{unchanged(string(kv.Key), kv.ModRevision)},
+					nil, del{key: string(kv.Key)})
+				if err != nil {
+					return removed, err
+				}
+				if done {
+					removed++
+				}
+				continue
 			}
 			e := entry{key: string(kv.Key), lookupKey: lookupKey, xk: s.k.indexed(ref), mod: kv.ModRevision}
 			entries = append(entries, e)
@@ -497,6 +512,18 @@ func liveKeys(l []idxEntry, now time.Time) []string {
 // revision (readCtx; Task 7 review K-2).
 func (s *Store) undecodableIndex(key []byte, what string) {
 	s.logf("etcd: index record %q does not decode; %s", key, what)
+	if s.idxUndecodable != nil {
+		s.idxUndecodable.Inc()
+	}
+}
+
+// unparseable says a lookup or token-index entry whose key does not parse,
+// by its key alone, and counts it beside the undecodable index records
+// (metrics.IndexRecordsUndecodable). Only a store writer makes one. It
+// names no ref, so a lookup skips it and the sweep deletes a lookup entry
+// (final review I-1).
+func (s *Store) unparseable(what string, key []byte, then string) {
+	s.logf("etcd: %s %q does not parse; %s", what, key, then)
 	if s.idxUndecodable != nil {
 		s.idxUndecodable.Inc()
 	}

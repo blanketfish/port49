@@ -683,6 +683,81 @@ func TestAPlantedIndexRecordNeverStopsARevocation(t *testing.T) {
 	}
 }
 
+// A planted lookup or token-index entry whose key does not parse never
+// fails a lookup of its key: it names no ref, so it is said by its key
+// alone, counted and skipped, and the real ref is still answered. The
+// sweep deletes it, compared on its revision (final review I-1).
+func TestAnUnparseableLookupEntryIsSkippedAndSwept(t *testing.T) {
+	ctx := context.Background()
+	var mu sync.Mutex
+	var logged []string
+	undecodable := prometheus.NewCounter(prometheus.CounterOpts{Name: "undecodable"})
+	cli := etcdtest.Client(t)
+	s := newStore(cli, cli, Config{Prefix: etcdtest.Prefix(), Now: func() time.Time { return t0 },
+		Logf: func(format string, args ...any) {
+			mu.Lock()
+			defer mu.Unlock()
+			logged = append(logged, fmt.Sprintf(format, args...))
+		}, IndexUndecodable: undecodable})
+	live := store.ContextRef{NAS: "leaf-01", Username: "alice"}
+	if err := s.PutContext(ctx, store.ContextKey{NAS: live.NAS, Username: live.Username},
+		store.Context{CtxID: "c-1", Principal: "user:alice", Username: "alice"}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.IndexContext(ctx, "user:alice", "sid-1", "", live, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	tk := store.TokenKey{NAS: "leaf-01", Username: "alice"}
+	if err := s.IndexToken(ctx, "user:alice", "", tk, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	planted := []string{s.k.lookups(famByPrincipal, "user:alice") + "%zz/x",
+		s.k.lookups(famBySid, "sid-1") + "%zz/x"}
+	for _, key := range planted {
+		if _, err := s.ctx.Put(ctx, key, "{}"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tokPlanted := s.k.tokenIndex(famTokByPrin, "user:alice") + "%zz/x"
+	if _, err := s.tok.Put(ctx, tokPlanted, `{"expires_at":"`+t0.Add(time.Hour).Format(time.RFC3339)+`"}`); err != nil {
+		t.Fatal(err)
+	}
+
+	if refs, err := s.ContextsByPrincipal(ctx, "user:alice"); err != nil || !slices.Equal(refs, []store.ContextRef{live}) {
+		t.Fatalf("a lookup by principal over an unparseable entry: %v %v", refs, err)
+	}
+	if refs, err := s.ContextsBySid(ctx, "sid-1"); err != nil || !slices.Equal(refs, []store.ContextRef{live}) {
+		t.Fatalf("a lookup by sid over an unparseable entry: %v %v", refs, err)
+	}
+	if keys, err := s.TokensByPrincipal(ctx, "user:alice"); err != nil || !slices.Equal(keys, []store.TokenKey{tk}) {
+		t.Fatalf("a token lookup over an unparseable entry: %v %v", keys, err)
+	}
+	if n := testutil.ToFloat64(undecodable); n != 3 {
+		t.Fatalf("port49_store_index_records_undecodable_total = %v, want 3", n)
+	}
+	if _, removed, err := s.Sweep(ctx); err != nil || removed != 2 {
+		t.Fatalf("a sweep over two unparseable entries removed %d: %v", removed, err)
+	}
+	for _, key := range planted {
+		if resp, err := s.ctx.Get(ctx, key); err != nil || len(resp.Kvs) != 0 {
+			t.Fatalf("the sweep left %q: %v %v", key, resp, err)
+		}
+	}
+	if refs, err := s.ContextsByPrincipal(ctx, "user:alice"); err != nil || !slices.Equal(refs, []store.ContextRef{live}) {
+		t.Fatalf("the sweep took the live entry: %v %v", refs, err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(logged) == 0 {
+		t.Fatal("no unparseable entry was said")
+	}
+	for _, line := range logged {
+		if !strings.Contains(line, "%zz/x") || strings.Contains(line, "expires_at") {
+			t.Fatalf("a log line that does not name the key alone: %q", line)
+		}
+	}
+}
+
 // The lookups, the walk and the sweep page past etcd's 500-key page and
 // batch past the 64-get transaction: 130 refs under one principal and 510
 // index records in all, every one swept once it has expired (Task 7

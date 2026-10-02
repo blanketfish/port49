@@ -65,8 +65,10 @@ type Metrics struct {
 	// that would not decode, each time a walk skipped it (the refresh's
 	// active principals, the sweep), a lookup took its ref without reading
 	// it (plan 7d Task 7), or the re-index scan, a login or an index write
-	// met it, the last two writing it whole again (Task 7b). Only a store
-	// writer makes one. No labels:
+	// met it, the last two writing it whole again (Task 7b). It also counts
+	// a lookup or token-index entry whose key does not parse, each time a
+	// lookup skipped it or the sweep deleted it (final review I-1). Only a
+	// store writer makes either. No labels:
 	// its key, which names a device, is in the log line beside it.
 	IndexRecordsUndecodable prometheus.Counter
 	// port49_accounting_attributions_total{attribution}: every accounting
@@ -134,7 +136,9 @@ type Metrics struct {
 	// is left as it was), or "failed" (a context that could not be opened, or
 	// a policy in force that could not be resolved or compiled for it — both
 	// revoked, failing closed — or a context still changing after every
-	// compare-and-set attempt, left for the retry; the process log says which).
+	// compare-and-set attempt, left for the retry, or a principal whose
+	// contexts could not be looked up, counted once and left for the next
+	// pass; the process log says which).
 	// A context the refresh skipped — another principal's since, the lab's,
 	// already revoked — is not counted. The label is the outcome only.
 	ContextRefreshes *prometheus.CounterVec
@@ -370,7 +374,7 @@ func New(reg prometheus.Registerer) *Metrics {
 			Help: "Stored records that would not decrypt, by record kind."}, []string{"record"}),
 		IndexRecordsUndecodable: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "port49_store_index_records_undecodable_total",
-			Help: "etcd index records that would not decode, each time one was skipped, taken unread, or written over."}),
+			Help: "etcd index records that would not decode, or index entries whose key would not parse, each time one was skipped, taken unread, written over, or deleted."}),
 		Attributions: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_accounting_attributions_total",
 			Help: "Accounting records accepted, by attribution."}, []string{"attribution"}),
 		BrokerItemErrors: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_broker_item_errors_total",
