@@ -2154,8 +2154,8 @@ scan (M14's side effect, below). What differs from the plan's text, task by task
 
 **Rulings, as made** (spec §13, decision 34; the plan's ten rulings): Rulings 1, 5 and 7 stand as
 written. Ruling 2 stands, its retransmission answered `token_not_found` (I3-carry). Ruling 3 gains
-the per-caller bound on self and key revocations (Task 8). Ruling 4 stands, and neither busy
-answer writes a record. Ruling 6 gains: session attributes are never returned, and a no-grant
+the per-caller bound on self and key revocations (Task 8). Ruling 4 stands, with one exception
+made in Task 8: neither busy answer writes a record. Ruling 6 gains: session attributes are never returned, and a no-grant
 answer works out nothing a granted one does (Task 9). Ruling 8 is amended by the conflict scan
 (padding never offsets) and by Task 10's I1, I2, M1 and R1 above. Ruling 9 is amended by Task 2:
 the file before the marker, a relative path refused, a raced init refused. Ruling 10 stands: no
@@ -2208,7 +2208,8 @@ notes", amended by what was built):
     - `… belongs to root, and this runs as uid N: if a volume should be mounted there, it is not;
       mount it`: the volume did not mount, or the directory must be given to port49d's user.
     - `broker.revocations_file "<p>" is relative: it must be absolute`: give an absolute path in
-      `port49d.yaml`. A start still accepts a relative one, resolved against port49d's directory.
+      `port49d.yaml`. A start still accepts a relative one, resolved against port49d's working
+      directory (`/` under systemd unless `WorkingDirectory=` is set).
     - `… exists and does not load (…); init never replaces it`: restore it, or fix it by hand.
     - `… is missing, and its marker <path> says port49d held revocations here: init never
       re-creates a lost file`: restore it from backup (below).
@@ -2221,7 +2222,8 @@ notes", amended by what was built):
     `|| true`.
   - **What a start does.** A missing file refuses every start: `broker.revocations_file <path>:
     does not exist: if port49d has run here before, the volume holding it is missing or empty:
-    mount it or restore the file; only on a first install, run 'port49d init-revocations' once`.
+    mount it or restore the file; only on a first install, run 'port49d init-revocations' once,
+    as port49d's user, with the same --config`.
     So an unmounted or empty volume never starts port49d with no revocations.
   - **Upgrading.** An install that already has the file changes nothing; a start writes the marker
     beside it if it has none.
@@ -2230,8 +2232,8 @@ notes", amended by what was built):
     hand (0600, port49d's user) is the deliberate way to start empty.
 - **Upgrade: agents and brokers older than this release.** An agent lives for `max_session_age`,
   and one started by the old `port49` has no `identity`, `explain` or `revoke` route; the new CLI
-  says `your agent (started before this port49) does not carry this command; run `port49 login`
-  again`. A new CLI against an old port49d gets `not_supported: the broker at <url> does not serve
+  says ``your agent (started before this port49) does not carry this command; run `port49
+  login` again``. A new CLI against an old port49d gets `not_supported: the broker at <url> does not serve
   /v1/…: it runs a port49d older than this port49`.
 - **New: `port49 identity [--json] [--socket PATH]`.** It prints whom the broker resolves you to:
   principal, subject, groups, unexpired grants by scope, `api:` rights, and until when this
@@ -2277,12 +2279,21 @@ notes", amended by what was built):
     (`port49d: broker: no admin_socket: …`) say lifting it needs port49d stopped, the entry
     removed from `broker.revocations_file`, and a start.
   - **Watch for a burst.** Alert on
-    `rate(port49_revocations_total{by="principal",outcome="applied"}[5m])` above your normal: a
-    compromised `revoke_others` certificate can mark every human. Revoke that certificate on the
-    admin socket, then lift its marks; until a bulk lift exists:
+    `rate(port49_revocations_total{by="principal",outcome=~"applied|partial"}[5m])` above your
+    normal: a compromised `revoke_others` certificate can mark every human. Revoke that
+    certificate on the admin socket, then lift the marks it made during the burst, and only those:
+    a mark the same principal made before the compromise (a departed employee, a leaked
+    principal) is legitimate and must stay. Until a bulk lift exists:
+    - Read `port49 revoke --list` first, and find when the burst began, from the alert or the
+      `revoke` records (`origin: api user:oncall@example.com`).
+    - Set `t` to just before it, in UTC as `--list` prints it. The filter keeps only marks at or
+      after `t` (`$4` is the `since` time; RFC 3339 in UTC compares as text).
+    - Run it on port49d's host, as port49d's user or root: `--list` and `--lift` are the admin
+      socket's.
 
     ```
-    port49 revoke --list | awk '$1 == "principal" && /\(api user:oncall@example\.com\)$/ {print $2}' |
+    port49 revoke --list | awk -v t=2026-10-02T03:00:00Z \
+      '$1 == "principal" && $4 >= t && /\(api user:oncall@example\.com\)$/ {print $2}' |
       while read -r p; do port49 revoke --lift --principal "$p"; done
     ```
 - **New: `port49 revoke --via-agent --device D --username U`** (needs `api: [revoke_others]`).
@@ -2370,7 +2381,8 @@ notes", amended by what was built):
 
 - A bulk lift, `port49 revoke --lift --origin "api <principal>"`, so recovery from a mass
   revocation by a compromised `revoke_others` certificate is one command, not one lift per victim
-  (pre-flight M19; the shell loop above until then).
+  (pre-flight M19; the shell loop above until then). It takes a `--since` as well, so a lift
+  never reaches a mark the same origin made before the compromise (task 14 review I1).
 - `internal/agent`'s `TestAnExpiredHangUpDuringARefreshEndsTheSession` (7b code) failed once in a
   Task 10 mutation run across `./...`; 200 plain runs and 15 package runs under `-race` did not
   reproduce it. Task 11's first `make test` also reported one failure it could not attribute,
