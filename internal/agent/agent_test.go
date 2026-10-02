@@ -2101,6 +2101,33 @@ func TestARevocationTheAgentDroppedMayBeInForce(t *testing.T) {
 	}
 }
 
+// A 200 from the agent to a revocation that does not decode, or names no
+// revocation, is no answer: the agent may have reached the broker, and the
+// CLI says it may be in force, never a bare decode error or a success.
+func TestARevocationsBadAnswerFromTheAgentMayBeInForce(t *testing.T) {
+	for _, body := range []string{"", `{"by":"princ`, "{}", "null"} {
+		p := filepath.Join(shortDir(t), "s", "agent.sock")
+		ln, err := Listen(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mux := http.NewServeMux()
+		mux.HandleFunc("POST /revoke", func(w http.ResponseWriter, r *http.Request) {
+			_, _ = io.Copy(io.Discard, r.Body)
+			_, _ = io.WriteString(w, body) // an agent that died mid-write, or a bare 200
+		})
+		srv := &http.Server{Handler: mux}
+		go func() { _ = srv.Serve(ln) }()
+		_, err = NewClient(p).Revoke(context.Background(), api.RevokeRequest{Principal: "user:carol@example.com"})
+		_ = srv.Close()
+		var ue *UnansweredRevokeError
+		if !errors.As(err, &ue) || !strings.Contains(err.Error(), "it may be in force") ||
+			!strings.Contains(err.Error(), "your agent at") {
+			t.Fatalf("%q: %v", body, err)
+		}
+	}
+}
+
 // A certificate_status_unavailable is said by the broker's detail alone,
 // as unavailable says it, with the minute the broker asked for.
 func TestAnAPICertificateStatusRefusalSaysTheDetailAlone(t *testing.T) {
