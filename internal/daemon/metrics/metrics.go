@@ -9,6 +9,8 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
+
+	"github.com/rhwendt/port49/internal/store/guard"
 )
 
 type Metrics struct {
@@ -53,8 +55,20 @@ type Metrics struct {
 	// port49_accounting_spool_quarantines_total: .draining files set aside for
 	// an operator after three consecutive read failures. Not a record count —
 	// the records are still in the quarantined file.
-	SpoolQuarantines         prometheus.Counter
-	StoreOps                 *prometheus.CounterVec
+	SpoolQuarantines prometheus.Counter
+	StoreOps         *prometheus.CounterVec
+	// StoreCalls, StoreCallSeconds and StoreCircuitOpen are the guard's
+	// (internal/store/guard; plan 7d): every store call by component
+	// (daemon, broker), pool (token, context, bulk) and outcome (ok,
+	// not_found, conflict, error, timeout, deadline, unavailable, refused,
+	// canceled, saturated, circuit_open); how long they took; and whether
+	// each pool's circuit is open, design §15's circuit-breaker state. The
+	// gauge moves only when a call ends, so a pool no one calls keeps the
+	// value of its last call, open included, and never goes dark on it:
+	// harmless, since it serves no one (re-check R-M5).
+	StoreCalls               *prometheus.CounterVec
+	StoreCallSeconds         *prometheus.HistogramVec
+	StoreCircuitOpen         *prometheus.GaugeVec
 	DecisionLogWriteFailures prometheus.Counter // port49_decision_log_write_failures_total
 	// port49_crypt_open_failures_total{record}. A record that will not open is a
 	// key problem, not a missing record, and it is the one failure mode of the
@@ -363,6 +377,13 @@ func New(reg prometheus.Registerer) *Metrics {
 			Help: "Unreadable spool files renamed aside for an operator."}),
 		StoreOps: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_store_operations_total",
 			Help: "Store operations by op and outcome."}, []string{"op", "outcome"}),
+		StoreCalls: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_store_calls_total",
+			Help: "Store calls through the guard, by component, pool and outcome."}, []string{"component", "pool", "outcome"}),
+		StoreCallSeconds: prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "port49_store_call_seconds",
+			Help:    "Store call latency through the guard, by component and pool.",
+			Buckets: []float64{.001, .0025, .005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10, 30}}, []string{"component", "pool"}),
+		StoreCircuitOpen: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "port49_store_circuit_open",
+			Help: "1 while a pool's circuit is open: its calls fail at once until a probe succeeds."}, []string{"component", "pool"}),
 		// A decision record the sink refused is a record that does not exist:
 		// the device was still answered, so without this counter the log is
 		// silently short and nothing says so (design §11). It counts refused
@@ -472,7 +493,7 @@ func New(reg prometheus.Registerer) *Metrics {
 	})
 	reg.MustRegister(m.Requests, m.Latency, m.Decisions, m.Unvalidated, m.KeyValidations,
 		m.Connections, m.ConnectionEvents, m.AuthFailures, m.SpoolDepth, m.SpoolDrops, m.SpoolQuarantines,
-		m.StoreOps, m.DecisionLogWriteFailures, m.CryptOpenFailures, m.IndexRecordsUndecodable, m.Attributions, m.BrokerItemErrors, m.BrokerIdempotency,
+		m.StoreOps, m.StoreCalls, m.StoreCallSeconds, m.StoreCircuitOpen, m.DecisionLogWriteFailures, m.CryptOpenFailures, m.IndexRecordsUndecodable, m.Attributions, m.BrokerItemErrors, m.BrokerIdempotency,
 		m.BrokerHandshakeFailures, m.BrokerConnectionEvents, m.BrokerConnections, m.BlobCache,
 		m.DevicesQuarantined, m.DevicesAdmissionRefused, m.ContextRefreshes, m.ContextsReindexed,
 		m.ContextsReindexFailures, m.SessionRefreshes, m.TokensSuperseded, m.CeilingWarnings,
@@ -491,4 +512,9 @@ func New(reg prometheus.Registerer) *Metrics {
 		retires: prometheus.NewDesc("port49_key_retirement_seconds",
 			"Seconds until a key version's retire_after passes; negative once it has.", []string{"key_ref", "version"}, nil)})
 	return m
+}
+
+// StoreGuard is the guard's Metrics over these series.
+func (m *Metrics) StoreGuard() guard.Metrics {
+	return guard.Metrics{Calls: m.StoreCalls, Seconds: m.StoreCallSeconds, Open: m.StoreCircuitOpen}
 }

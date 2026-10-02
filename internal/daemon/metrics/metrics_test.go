@@ -26,6 +26,9 @@ func TestNewRegistersEveryMetric(t *testing.T) {
 	m.SpoolDrops.WithLabelValues("offer_refused").Inc()
 	m.SpoolQuarantines.Inc()
 	m.StoreOps.WithLabelValues("put", "ok").Inc()
+	m.StoreCalls.WithLabelValues("daemon", "context", "ok").Inc()
+	m.StoreCallSeconds.WithLabelValues("daemon", "context").Observe(0.001)
+	m.StoreCircuitOpen.WithLabelValues("daemon", "context").Set(0)
 	m.DecisionLogWriteFailures.Inc()
 	m.CryptOpenFailures.WithLabelValues("context").Inc()
 	m.IndexRecordsUndecodable.Inc()
@@ -77,6 +80,9 @@ func TestNewRegistersEveryMetric(t *testing.T) {
 		"port49_accounting_spool_depth":                false,
 		"port49_accounting_spool_drops_total":          false,
 		"port49_store_operations_total":                false,
+		"port49_store_calls_total":                     false,
+		"port49_store_call_seconds":                    false,
+		"port49_store_circuit_open":                    false,
 		"port49_decision_log_write_failures_total":     false,
 		"port49_crypt_open_failures_total":             false,
 		"port49_store_index_records_undecodable_total": false,
@@ -224,5 +230,14 @@ port49_key_version_devices{key_ref="prod_key",version="3"} 8
 	if err := testutil.GatherAndCompare(reg, strings.NewReader(want), "port49_key_version_devices",
 		"port49_key_retirement_seconds"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// The guard counts into the registered series, not copies of them.
+func TestStoreGuardIsTheRegisteredSeries(t *testing.T) {
+	m := New(prometheus.NewRegistry())
+	g := m.StoreGuard()
+	if g.Calls != m.StoreCalls || g.Seconds != m.StoreCallSeconds || g.Open != m.StoreCircuitOpen {
+		t.Fatal("StoreGuard's series are not the registered ones")
 	}
 }
