@@ -23,6 +23,12 @@ type ctxSnap struct {
 	mod    int64
 	idx    idxRec
 	idxMod int64
+	// idxBad is an index record there that does not decode: idx is empty,
+	// and every write that would change or carry it returns this. One
+	// that leaves it alone (a revocation, any setter that does not extend)
+	// lands, compared on idxMod (Task 7 review I-1; K-2 makes it
+	// replaceable in Task 7b).
+	idxBad error
 	marks  map[[2]string]markSnap
 }
 
@@ -68,7 +74,7 @@ func (s *Store) readCtx(ctx context.Context, k store.ContextKey, marks ...[2]str
 	}
 	if kvs := resp.Responses[1].GetResponseRange().Kvs; len(kvs) == 1 {
 		if err := json.Unmarshal(kvs[0].Value, &snap.idx); err != nil {
-			return ctxSnap{}, fmt.Errorf("etcd: index record of %v does not decode: %w", k, err)
+			snap.idx, snap.idxBad = idxRec{}, fmt.Errorf("etcd: index record of %v does not decode: %w", k, err)
 		}
 		snap.idxMod = kvs[0].ModRevision
 	}
@@ -209,6 +215,9 @@ func (s *Store) putContext(ctx context.Context, k store.ContextKey, c store.Cont
 		if err != nil {
 			return 0, err
 		}
+		if snap.idxBad != nil {
+			return 0, snap.idxBad
+		}
 		r := whole(c, s.now(), ttl)
 		var idx *idxRec
 		if snap.idxMod != 0 {
@@ -261,6 +270,9 @@ func (s *Store) swapLogin(ctx context.Context, k store.ContextKey, rev uint64, c
 			if !snap.marks[[2]string{m.Kind, m.Key}].at.Equal(m.At) {
 				return 0, store.ErrConflict
 			}
+		}
+		if snap.idxBad != nil {
+			return 0, snap.idxBad
 		}
 		now := s.now()
 		r := whole(c, now, ttl)
@@ -345,6 +357,9 @@ func (s *Store) rewriteContext(ctx context.Context, k store.ContextKey, rev uint
 	r.PolicyRev, r.PolicyMoved = snap.rec.policyRev(snap.mod), policyMoved
 	var idx *idxRec
 	if ttl > 0 {
+		if snap.idxBad != nil {
+			return 0, snap.idxBad
+		}
 		now := s.now()
 		r.ExpiresAt, r.LastTouchedAt = now.Add(ttl), now
 		if snap.idxMod != 0 {
@@ -411,6 +426,9 @@ func (s *Store) mutate(ctx context.Context, k store.ContextKey,
 		extend, err := f(&r, snap.mod, s.now())
 		if err != nil {
 			return err
+		}
+		if extend && snap.idxBad != nil {
+			return snap.idxBad
 		}
 		var idx *idxRec
 		if extend && snap.idxMod != 0 {
@@ -615,6 +633,9 @@ func (s *Store) indexOp(ctx context.Context, ref store.ContextRef, f func(x *idx
 		snap, err := s.readCtx(ctx, k)
 		if err != nil {
 			return err
+		}
+		if snap.idxBad != nil {
+			return snap.idxBad
 		}
 		x := snap.idx
 		x.prune(s.now())

@@ -15,8 +15,10 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"log"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/zap"
@@ -43,6 +45,12 @@ type Config struct {
 	LeaseGrace time.Duration
 	// DialTimeout bounds Open's connect; 5s when zero.
 	DialTimeout time.Duration
+	// Logf says what a read skipped, by key alone; log.Printf when nil.
+	Logf func(format string, args ...any)
+	// IndexUndecodable counts the index records a read skipped or took
+	// unread because they do not decode
+	// (metrics.IndexRecordsUndecodable); nil counts nothing.
+	IndexUndecodable prometheus.Counter
 }
 
 // Store is store.Store on etcd.
@@ -56,6 +64,8 @@ type Store struct {
 	tokLeases, ctxLeases *leases
 	owned                []*clientv3.Client // closed by Close
 	seen                 seenCache          // GetContext's last read per key (contexts.go)
+	logf                 func(format string, args ...any)
+	idxUndecodable       prometheus.Counter // nil counts nothing
 }
 
 // ErrRefused is etcd refusing this identity an operation: a role that
@@ -101,6 +111,9 @@ func (c Config) withDefaults() Config {
 	if c.DialTimeout == 0 {
 		c.DialTimeout = 5 * time.Second
 	}
+	if c.Logf == nil {
+		c.Logf = log.Printf
+	}
 	return c
 }
 
@@ -128,7 +141,7 @@ func dial(c Config) (*clientv3.Client, error) {
 // newStore is a store on clients the caller owns: tests build many on one.
 func newStore(tok, ctx *clientv3.Client, c Config) *Store {
 	c = c.withDefaults()
-	s := &Store{k: newKeys(c.Prefix), now: c.Now, tok: tok, ctx: ctx}
+	s := &Store{k: newKeys(c.Prefix), now: c.Now, tok: tok, ctx: ctx, logf: c.Logf, idxUndecodable: c.IndexUndecodable}
 	s.tokLeases = newLeases(tok, c.Now, c.LeaseGrace)
 	s.ctxLeases = s.tokLeases
 	if ctx != tok {

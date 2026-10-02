@@ -15,7 +15,13 @@ import (
 
 // refsUnder reads the lookup entries under fam/key and keeps each ref whose
 // index record lists key live (Ruling 6), sorted as the memory store
-// sorts them.
+// sorts them. A ref whose index record does not decode is kept unread,
+// said and counted (undecodableIndex): a revocation then over-reaches onto
+// that one ref, where the context's own record decides (one that is gone
+// is ErrNotFound, and skipped), and every other ref is still answered.
+// Failing the lookup instead would let one planted record turn a
+// revocation of a principal into a revocation of nothing (Task 7 review
+// I-1; pre-flight M18's aim, never a ref left out).
 func (s *Store) refsUnder(ctx context.Context, fam, key string) ([]store.ContextRef, error) {
 	if key == "" {
 		return nil, nil
@@ -27,9 +33,9 @@ func (s *Store) refsUnder(ctx context.Context, fam, key string) ([]store.Context
 	var refs []store.ContextRef
 	var gets []clientv3.Op
 	for _, kv := range resp.Kvs {
-		// An entry that does not parse, or a record that does not decode,
-		// is an error, never skipped: a revocation that skipped it would
-		// miss a context, which is revocation failing open (pre-flight M18).
+		// An entry that does not parse is an error, never skipped: a
+		// revocation that skipped it would miss a context, which is
+		// revocation failing open (pre-flight M18). It names no ref to keep.
 		nas, user, ok := lastTwo(string(kv.Key))
 		if !ok {
 			return nil, fmt.Errorf("etcd: lookup entry %q does not parse", kv.Key)
@@ -40,7 +46,6 @@ func (s *Store) refsUnder(ctx context.Context, fam, key string) ([]store.Context
 	}
 	now := s.now()
 	var out []store.ContextRef
-	var bad error
 	i := 0
 	if err := chunked(ctx, s.ctx, gets, func(t *clientv3.TxnResponse) {
 		for _, op := range t.Responses {
@@ -49,9 +54,8 @@ func (s *Store) refsUnder(ctx context.Context, fam, key string) ([]store.Context
 			for _, kv := range op.GetResponseRange().Kvs {
 				var x idxRec
 				if err := json.Unmarshal(kv.Value, &x); err != nil {
-					if bad == nil {
-						bad = fmt.Errorf("etcd: index record %q does not decode: %w", kv.Key, err)
-					}
+					s.undecodableIndex(kv.Key, "a lookup takes its ref unread")
+					out = append(out, r)
 					continue
 				}
 				if x.lists(fam, key, now) {
@@ -61,9 +65,6 @@ func (s *Store) refsUnder(ctx context.Context, fam, key string) ([]store.Context
 		}
 	}); err != nil {
 		return nil, err
-	}
-	if bad != nil {
-		return nil, bad
 	}
 	sort.Slice(out, func(i, j int) bool {
 		return out[i].NAS+"\x00"+out[i].Username < out[j].NAS+"\x00"+out[j].Username
@@ -86,9 +87,12 @@ func (s *Store) ContextsByCert(ctx context.Context, certKey string) ([]store.Con
 	return s.refsUnder(ctx, famByCert, certKey)
 }
 
-// eachIndexed calls f on every index record, a page at a time. A record
-// that does not decode fails the walk, naming its key (pre-flight M18):
-// ActivePrincipals skipping it would leave its principal unrefreshed.
+// eachIndexed calls f on every index record that decodes, a page at a
+// time. One that does not is skipped, said and counted (undecodableIndex):
+// it names no principal to refresh and no entry to prune, and failing the
+// walk on it would stop the refresh for every principal and the sweep for
+// every record (Task 7 review I-1). The context it hides is the
+// re-index's to find (Task 7b).
 func (s *Store) eachIndexed(ctx context.Context, f func(key string, mod int64, x idxRec)) error {
 	prefix := s.k.family(famIndexed)
 	end := clientv3.GetPrefixRangeEnd(prefix)
@@ -101,7 +105,8 @@ func (s *Store) eachIndexed(ctx context.Context, f func(key string, mod int64, x
 		for _, kv := range resp.Kvs {
 			var x idxRec
 			if err := json.Unmarshal(kv.Value, &x); err != nil {
-				return fmt.Errorf("etcd: index record %q does not decode: %w", kv.Key, err)
+				s.undecodableIndex(kv.Key, "a walk of the index skips it")
+				continue
 			}
 			f(string(kv.Key), kv.ModRevision, x)
 		}
@@ -147,13 +152,16 @@ func (s *Store) ActivePrincipals(ctx context.Context) ([]string, error) {
 // A lookup entry whose key is listed but expired is left for pass 1 of
 // the next sweep: deleted any earlier, a restamp could list a key whose
 // lookup is gone. pruned counts entries dropped, removed lookup entries
-// deleted.
+// deleted, each only by a write that landed. An index record that does not
+// decode is never pruned, deleted, or a reason to delete a lookup entry
+// naming it: it is skipped, said and counted, and the sweep goes on.
 func (s *Store) Sweep(ctx context.Context) (pruned, removed int, err error) {
 	now := s.now()
 	type prune struct {
 		key string
 		mod int64
 		x   idxRec
+		n   int // entries dropped
 	}
 	var prunes []prune
 	if err := s.eachIndexed(ctx, func(key string, mod int64, x idxRec) {
@@ -169,8 +177,7 @@ func (s *Store) Sweep(ctx context.Context) (pruned, removed int, err error) {
 		}
 		x.Principals, x.Sids, x.Certs = keepLive(x.Principals), keepLive(x.Sids), keepLive(x.Certs)
 		if n := before - (len(x.Principals) + len(x.Sids) + len(x.Certs)); n > 0 {
-			pruned += n
-			prunes = append(prunes, prune{key: key, mod: mod, x: x})
+			prunes = append(prunes, prune{key: key, mod: mod, x: x, n: n})
 		}
 	}); err != nil {
 		return 0, 0, err
@@ -187,8 +194,12 @@ func (s *Store) Sweep(ctx context.Context) (pruned, removed int, err error) {
 			}
 			puts = append(puts, put{key: p.key, val: body, exp: p.x.maxExp()})
 		}
-		if _, err := commit(ctx, s.ctx, s.ctxLeases, []clientv3.Cmp{unchanged(p.key, p.mod)}, puts, dels...); err != nil {
+		done, err := commit(ctx, s.ctx, s.ctxLeases, []clientv3.Cmp{unchanged(p.key, p.mod)}, puts, dels...)
+		if err != nil {
 			return pruned, removed, err
+		}
+		if done { // one written since the read is the next sweep's
+			pruned += p.n
 		}
 	}
 	for _, fam := range []string{famByPrincipal, famBySid, famByCert} {
@@ -205,6 +216,8 @@ func (s *Store) Sweep(ctx context.Context) (pruned, removed int, err error) {
 // list their key, each only while the entry and the record are as read.
 // The index records a page names are read together, in transactions of
 // gets (chunked), not one linearizable read per entry (pre-flight M25).
+// An entry whose record does not decode is left: the sweep never deletes
+// against a record it could not read.
 func (s *Store) sweepLookups(ctx context.Context, fam string) (int, error) {
 	prefix := s.k.family(fam)
 	end := clientv3.GetPrefixRangeEnd(prefix)
@@ -218,6 +231,7 @@ func (s *Store) sweepLookups(ctx context.Context, fam string) (int, error) {
 		x     idxRec
 		mod   int64
 		found bool
+		bad   bool // present and undecodable
 	}
 	for {
 		resp, err := s.ctx.Get(ctx, from, clientv3.WithRange(end), clientv3.WithLimit(500), clientv3.WithKeysOnly())
@@ -244,7 +258,6 @@ func (s *Store) sweepLookups(ctx context.Context, fam string) (int, error) {
 			gets[i] = clientv3.OpGet(xk)
 		}
 		recs := map[string]rec{}
-		var bad error
 		i := 0
 		if err := chunked(ctx, s.ctx, gets, func(t *clientv3.TxnResponse) {
 			for _, op := range t.Responses {
@@ -252,8 +265,9 @@ func (s *Store) sweepLookups(ctx context.Context, fam string) (int, error) {
 				i++
 				var r rec
 				for _, kv := range op.GetResponseRange().Kvs {
-					if err := json.Unmarshal(kv.Value, &r.x); err != nil && bad == nil {
-						bad = fmt.Errorf("etcd: index record %q does not decode: %w", kv.Key, err)
+					if err := json.Unmarshal(kv.Value, &r.x); err != nil {
+						s.undecodableIndex(kv.Key, "the sweep leaves the lookup entries naming it")
+						r.bad = true
 					}
 					r.mod, r.found = kv.ModRevision, true
 				}
@@ -262,14 +276,15 @@ func (s *Store) sweepLookups(ctx context.Context, fam string) (int, error) {
 		}); err != nil {
 			return removed, err
 		}
-		if bad != nil {
-			return removed, bad // never delete against a record it could not read
-		}
 		for _, e := range entries {
 			r := recs[e.xk]
-			if r.found && listed(r.x, fam, e.lookupKey) {
+			if r.bad || r.found && listed(r.x, fam, e.lookupKey) {
 				continue
 			}
+			// The lookup entry's compare is the one that bites: a login
+			// listing this key puts the entry again (addKeys), so it has
+			// moved since the read. The record's is belt and braces; keep
+			// both (Task 7 review m-3).
 			done, err := commit(ctx, s.ctx, s.ctxLeases,
 				[]clientv3.Cmp{unchanged(e.key, e.mod), unchanged(e.xk, r.mod)}, nil, del{key: e.key})
 			if err != nil {
@@ -310,4 +325,16 @@ func (s *Store) parseLookup(fam, key string) (string, store.ContextRef, bool) {
 		return "", store.ContextRef{}, false
 	}
 	return indexed, store.ContextRef{NAS: nas, Username: user}, true
+}
+
+// undecodableIndex says an index record that does not decode, by its key
+// alone (its value is never logged, whatever a writer put there), and
+// counts it (metrics.IndexRecordsUndecodable). Only a store writer makes
+// one. Deleting the key is the operator's fix until Task 7b lets a login
+// and the re-index write it whole again (Task 7 review K-2).
+func (s *Store) undecodableIndex(key []byte, what string) {
+	s.logf("etcd: index record %q does not decode; %s", key, what)
+	if s.idxUndecodable != nil {
+		s.idxUndecodable.Inc()
+	}
 }

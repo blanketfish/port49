@@ -3,14 +3,20 @@ package etcd
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
 	clientv3 "go.etcd.io/etcd/client/v3"
 
+	"github.com/rhwendt/port49/internal/session"
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/store/etcd/etcdtest"
 	"github.com/rhwendt/port49/internal/store/storetest"
@@ -362,24 +368,124 @@ func TestTheSweepRemovesOnlyWhatNothingLists(t *testing.T) {
 	}
 }
 
-// A record a lookup or a walk cannot decode is an error, never a ref left
-// out: a revocation that skipped it would miss a live context (pre-flight
-// M18).
-func TestAnUndecodableIndexRecordIsAnError(t *testing.T) {
+// A planted index record never stops a revocation, the refresh or the
+// sweep: a store writer puts a lookup entry for user:victim naming a ref
+// with no context, and an x/ record for it that does not decode. The
+// lookup keeps that ref unread, so the victim's live contexts are still
+// marked; the walk and the sweep skip it, say its key (never its value)
+// and count it; and the sweep deletes nothing it could not read (Task 7
+// review I-1).
+func TestAPlantedIndexRecordNeverStopsARevocation(t *testing.T) {
 	ctx := context.Background()
-	s := onShared(t, func() time.Time { return t0 })
-	ref := store.ContextRef{NAS: "leaf-01", Username: "alice"}
-	if err := s.IndexContext(ctx, "user:a", "", "", ref, time.Hour); err != nil {
+	var mu sync.Mutex
+	var logged []string
+	undecodable := prometheus.NewCounter(prometheus.CounterOpts{Name: "undecodable"})
+	cli := etcdtest.Client(t)
+	s := newStore(cli, cli, Config{Prefix: etcdtest.Prefix(), Now: func() time.Time { return t0 },
+		Logf: func(format string, args ...any) {
+			mu.Lock()
+			defer mu.Unlock()
+			logged = append(logged, fmt.Sprintf(format, args...))
+		}, IndexUndecodable: undecodable})
+	victims := []store.ContextRef{{NAS: "leaf-01", Username: "alice"}, {NAS: "leaf-02", Username: "alice"}}
+	for _, r := range victims {
+		if err := s.PutContext(ctx, store.ContextKey{NAS: r.NAS, Username: r.Username},
+			store.Context{CtxID: "c-" + r.NAS, Principal: "user:victim", Username: r.Username}, time.Hour); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.IndexContext(ctx, "user:victim", "", "", r, time.Hour); err != nil {
+			t.Fatal(err)
+		}
+	}
+	planted := store.ContextRef{NAS: "zz", Username: "zz"}
+	entry := s.k.lookup(famByPrincipal, "user:victim", planted)
+	if _, err := s.ctx.Put(ctx, entry, "{}"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.ctx.Put(ctx, s.k.indexed(ref), "not json"); err != nil {
+	if _, err := s.ctx.Put(ctx, s.k.indexed(planted), "not json"); err != nil {
 		t.Fatal(err)
 	}
-	if refs, err := s.ContextsByPrincipal(ctx, "user:a"); err == nil {
-		t.Fatalf("a lookup over an undecodable record answered %v", refs)
+
+	if refs, err := s.ContextsByPrincipal(ctx, "user:victim"); err != nil || len(refs) != 3 {
+		t.Fatalf("a lookup over a planted record: %v %v, want the two victims and the planted ref", refs, err)
 	}
-	if ps, err := s.ActivePrincipals(ctx); err == nil {
-		t.Fatalf("a walk over an undecodable record answered %v", ps)
+	marked, err := session.New(s, func() time.Time { return t0 }, time.Hour, time.Hour).
+		RevokeByPrincipal(ctx, "user:victim")
+	if err != nil || len(marked) != 2 {
+		t.Fatalf("a revocation of user:victim marked %v (%v), want both live contexts", marked, err)
+	}
+	for _, r := range victims {
+		if c, err := s.GetContext(ctx, store.ContextKey{NAS: r.NAS, Username: r.Username}); err != nil ||
+			c.RevokedAt.IsZero() {
+			t.Fatalf("%v after the revocation: %+v %v", r, c, err)
+		}
+	}
+	if ps, err := s.ActivePrincipals(ctx); err != nil || !slices.Equal(ps, []string{"user:victim"}) {
+		t.Fatalf("active principals over a planted record: %v %v", ps, err)
+	}
+	if _, _, err := s.Sweep(ctx); err != nil {
+		t.Fatalf("a sweep over a planted record: %v", err)
+	}
+	for _, key := range []string{entry, s.k.indexed(planted)} {
+		if resp, err := s.ctx.Get(ctx, key); err != nil || len(resp.Kvs) != 1 {
+			t.Fatalf("the sweep deleted %q, which it could not read: %v %v", key, resp, err)
+		}
+	}
+	// One each: the two lookups (the test's and the revocation's), the
+	// walk, and the sweep's two passes.
+	if n := testutil.ToFloat64(undecodable); n != 5 {
+		t.Fatalf("port49_store_index_records_undecodable_total = %v, want 5", n)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for _, line := range logged {
+		if !strings.Contains(line, s.k.indexed(planted)) || strings.Contains(line, "not json") {
+			t.Fatalf("a log line that does not name the key alone: %q", line)
+		}
+	}
+}
+
+// The lookups, the walk and the sweep page past etcd's 500-key page and
+// batch past the 64-get transaction: 130 refs under one principal and 510
+// index records in all, every one swept once it has expired (Task 7
+// review m-2).
+func TestTheIndexReadsPage(t *testing.T) {
+	ctx := context.Background()
+	var mu sync.Mutex
+	now := t0
+	s := onShared(t, func() time.Time { mu.Lock(); defer mu.Unlock(); return now })
+	const many, all = 130, 510
+	for i := range all {
+		p := "user:many"
+		if i >= many {
+			p = fmt.Sprintf("user:%03d", i)
+		}
+		if err := s.IndexContext(ctx, p, "", "", store.ContextRef{NAS: "leaf", Username: fmt.Sprintf("u%03d", i)},
+			time.Hour); err != nil {
+			t.Fatal(err)
+		}
+	}
+	refs, err := s.ContextsByPrincipal(ctx, "user:many")
+	if err != nil || len(refs) != many {
+		t.Fatalf("ContextsByPrincipal = %d refs, %v; want %d", len(refs), err, many)
+	}
+	for i, r := range refs { // sorted, so each in its place: none twice, none left out
+		if want := fmt.Sprintf("u%03d", i); r.Username != want {
+			t.Fatalf("ref %d is %v, want %s", i, r, want)
+		}
+	}
+	if ps, err := s.ActivePrincipals(ctx); err != nil || len(ps) != all-many+1 {
+		t.Fatalf("ActivePrincipals = %d, %v; want %d", len(ps), err, all-many+1)
+	}
+	mu.Lock()
+	now = now.Add(2 * time.Hour)
+	mu.Unlock()
+	if pruned, removed, err := s.Sweep(ctx); err != nil || pruned != all || removed != all {
+		t.Fatalf("Sweep = %d pruned, %d removed, %v; want %d and %d", pruned, removed, err, all, all)
+	}
+	resp, err := s.ctx.Get(ctx, s.k.root, clientv3.WithPrefix(), clientv3.WithCountOnly())
+	if err != nil || resp.Count != 0 {
+		t.Fatalf("keys left after the sweep: %v %v", resp, err)
 	}
 }
 

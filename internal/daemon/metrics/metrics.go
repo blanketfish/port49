@@ -61,6 +61,12 @@ type Metrics struct {
 	// rotation window that has no other symptom. Labels are the record kind only —
 	// "token", "receipt", "context", "idempotency" — never a device or a user.
 	CryptOpenFailures *prometheus.CounterVec
+	// port49_store_index_records_undecodable_total: an etcd index record (x/)
+	// that would not decode, each time a walk skipped it (the refresh's
+	// active principals, the sweep) or a lookup took its ref without
+	// reading it (plan 7d Task 7). Only a store writer makes one. No labels:
+	// its key, which names a device, is in the log line beside it.
+	IndexRecordsUndecodable prometheus.Counter
 	// port49_accounting_attributions_total{attribution}: every accounting
 	// record the spool accepted, by the attribution it was given — "resolved",
 	// "unattributed", "system", "foreign" (spec §5.8). `foreign` is the one to
@@ -351,6 +357,9 @@ func New(reg prometheus.Registerer) *Metrics {
 			Help: "Writes the decision log sink refused. A record the accounting spool retries counts once per attempt."}),
 		CryptOpenFailures: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_crypt_open_failures_total",
 			Help: "Stored records that would not decrypt, by record kind."}, []string{"record"}),
+		IndexRecordsUndecodable: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "port49_store_index_records_undecodable_total",
+			Help: "etcd index records that would not decode, each time one was skipped or taken unread."}),
 		Attributions: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_accounting_attributions_total",
 			Help: "Accounting records accepted, by attribution."}, []string{"attribution"}),
 		BrokerItemErrors: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_broker_item_errors_total",
@@ -441,7 +450,7 @@ func New(reg prometheus.Registerer) *Metrics {
 	})
 	reg.MustRegister(m.Requests, m.Latency, m.Decisions, m.Unvalidated, m.KeyValidations,
 		m.Connections, m.ConnectionEvents, m.AuthFailures, m.SpoolDepth, m.SpoolDrops, m.SpoolQuarantines,
-		m.StoreOps, m.DecisionLogWriteFailures, m.CryptOpenFailures, m.Attributions, m.BrokerItemErrors, m.BrokerIdempotency,
+		m.StoreOps, m.DecisionLogWriteFailures, m.CryptOpenFailures, m.IndexRecordsUndecodable, m.Attributions, m.BrokerItemErrors, m.BrokerIdempotency,
 		m.BrokerHandshakeFailures, m.BrokerConnectionEvents, m.BrokerConnections, m.BlobCache,
 		m.DevicesQuarantined, m.DevicesAdmissionRefused, m.ContextRefreshes, m.SessionRefreshes, m.TokensSuperseded, m.CeilingWarnings,
 		m.Revocations, m.RevocationsInForce, m.RevocationsFileFailed, m.CertStatusChecks, m.CRLLoads, m.CRLNextUpdate,
