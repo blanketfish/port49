@@ -887,10 +887,11 @@ revoked: a login's context write checks, in the same atomic step, that no mark s
 principal or its certificate (plan 7d; §13, decision 35), and the mark is written before
 anything else. The daemon also reads the standing marks on every authorization, so a context a
 revocation by principal or certificate never reached is denied anyway. A self or key
-revocation leaves no mark, so for those the window of one store round trip stays. Deleting by certificate
-deletes every unspent token under each `(device, username)` key that certificate minted under, the
-same principal's other certificates' included: the store holds no finer cut, and the error is
-toward denying. A principal is compared as `Identity` spells it, `user:` and the lower-cased email.
+revocation leaves no mark, so for those the window of one store round trip stays. Deleting by
+certificate deletes every unspent token under each `(device, username)` key that certificate
+minted under, the same principal's other certificates' included: the store holds no finer cut,
+and the error is toward denying. A principal is compared as `Identity` spells it, `user:` and the
+lower-cased email.
 The broker's listener holds the marks in memory too, so a connection made with a revoked
 certificate, or by a revoked principal, is answered `credential_revoked` and closed as it binds,
 and cannot close its owner's other connections. Its one request is answered as a mint under the
@@ -1447,8 +1448,8 @@ annotation, a privilege raise or a refresh that lands mid-login is merged rather
 two simultaneous logins both land.
 
 **A replace unindexes what it displaced, in the same step that writes the new login's context
-and index**, so a later revocation of the displaced credential does not reach the context that replaced it. What it unindexes
-depends on whose context it was:
+and index**, so a later revocation of the displaced credential does not reach the context that
+replaced it. What it unindexes depends on whose context it was:
 
 - **Another principal's**: every key the context was indexed under — its principal and every
   login's `sid` and certificate, including joined logins the record no longer names. Nothing of
@@ -1480,15 +1481,17 @@ context and its index that cannot be written together are never written apart, s
 is never admitted with a context no revocation can reach. An ERROR whose write timed out
 may still have committed: the context is then indexed, so revocable, and a retransmission
 replays the receipt; if it did not commit, the retransmission is `token_spent`. A record the
-store returns but port49 cannot open — sealed under a key that has left the two-key window, or failing authentication — cannot be joined, and is **replaced fresh** through
-the same compare-and-set: the replace carries the record's plaintext `revoked_at` by the rule in
-the table, whoever its principal was, because the principal is sealed; the `redeem` record carries
+store returns but port49 cannot open — sealed under a key that has left the two-key window, or
+failing authentication — cannot be joined, and is **replaced fresh** through the same
+compare-and-set: the replace carries the record's plaintext `revoked_at` by the rule in the table,
+whoever its principal was, because the principal is sealed; the `redeem` record carries
 `session.replaced_unreadable: true` and no `replaced_ctx_id`, because that id is sealed too; and
 the unreadable login's index entries cannot be named, so the replace clears every key the context
-was indexed under, as another principal's replace does, before the new login is indexed. Left in
-place they would not age out at `index_ttl`: every extension of the replacing context re-stamps
-them, so a revocation of the displaced credential would reach it for as long as it lives. Each such
-login opens the record twice (the read before the token is spent and the join's own), so
+was indexed under, as another principal's replace does, in the same step as the new login's
+index. Left in place they would not age out at `index_ttl`: every extension of the replacing
+context re-stamps them, so a revocation of the displaced credential would reach it for as long as
+it lives. Each such login opens the record twice (the read before the token is spent and the
+join's own), so
 `port49_crypt_open_failures_total{record="context"}` counts at least two per login. Every read of
 such a record counts `port49_store_operations_total{outcome="unreadable"}`, not `outcome="error"`:
 the store answered, and a key rotation must not read as a store outage.
@@ -6498,8 +6501,8 @@ review (the owner may override them).*
   read there. A context that opens at a key under another `ctx_id` (another login's record
   written back) is denied `store_unavailable`, replaced by the next login and revoked by the
   refresh.
-  - **Once per process.** port49d builds the ledger once per process, not per run of its
-    start, so a start that waits for the store again keeps what the ledger has seen.
+  - **One per process.** One ledger is shared by every sealing layer, so the daemon's reads
+    and the broker's agree.
   - **Sealed after the start's reads.** A start reads every kept context before any listener
     binds, and then seals the ledger. A sealed ledger denies a context at any key it has not
     seen, unless this process wrote it. Before the seal, the first record read at an unseen
@@ -6535,8 +6538,9 @@ review (the owner may override them).*
   - **the index**: a context whose index record is deleted is hidden from the refresh and
     from a revocation by sid or `--mine` until the re-index finds and re-indexes it; a
     revocation by principal or certificate still denies it through the marks. An index record
-    rewritten to name another principal does not hide it: the re-index compares the record
-    against the context's own sealed principal.
+    rewritten to name another principal is found by the same re-index, which compares it
+    against the context's own sealed principal; until the next re-index it hides the context
+    as a deleted one does.
 
   That residual is carried, unassigned.
 - **The index is plaintext.** The keys revocation reads (principal, device, username,
