@@ -497,6 +497,24 @@ func TestASerialIsTakenInTheSpellingsOperatorsHave(t *testing.T) {
 	}
 }
 
+// markBlind is a login that did not see the revocation's mark: it reads
+// none and binds its write to none. Since decision 35 a login reads the
+// marks and writes its context revoked under one (store.JoinContext), so a
+// test of the revocation's context pass hides the mark from the login, or
+// the join would revoke the context itself and the pass would carry no
+// assertion. The pass is the backstop for a context the marks did not stop.
+type markBlind struct{ store.Store }
+
+func (markBlind) GetRevocation(context.Context, string, string) (store.Revocation, error) {
+	return store.Revocation{}, store.ErrNotFound
+}
+
+func (m markBlind) SwapLogin(ctx context.Context, k store.ContextKey, rev uint64, c store.Context, ttl time.Duration,
+	w store.LoginWrite) error {
+	w.Marks = nil
+	return m.Store.SwapLogin(ctx, k, rev, c, ttl, w)
+}
+
 // tokenGatedStore holds DeleteTokens until gate closes, so a redemption can
 // land between the token pass and the context pass.
 type tokenGatedStore struct {
@@ -531,11 +549,12 @@ func TestAContextARedemptionWritesMidRevocationIsMarked(t *testing.T) {
 	}()
 	<-g.entered
 	// The daemon's redemption, as authen writes it: join (a fresh context,
-	// none being live) and index.
+	// none being live) and index. The join is blind to the mark (markBlind),
+	// so the context is revoked by the context pass or not at all.
 	k := store.ContextKey{NAS: "nx1", Username: "alice"}
 	login := store.Context{CtxID: "ctx_mid", Principal: alice, Username: "alice", PrivLvl: 1,
 		AuthTime: f.now, RefreshedAt: f.now}
-	if _, err := store.JoinContext(ctx, f.st, k, login, f.now.Add(-time.Minute), f.now, time.Hour, store.LoginIndex{}); err != nil {
+	if _, err := store.JoinContext(ctx, markBlind{f.st}, k, login, f.now.Add(-time.Minute), f.now, time.Hour, store.LoginIndex{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.st.IndexContext(ctx, alice, "", certKey(f.alice), store.ContextRef{NAS: "nx1", Username: "alice"},
@@ -575,9 +594,11 @@ func TestTheSecondContextPassMarksALateContext(t *testing.T) {
 	f.liveContext(t, "leaf1", "alice", alice, certKey(f.alice))
 	k := store.ContextKey{NAS: "nx1", Username: "alice"}
 	raced := &contextRacedStore{Store: f.st, late: func() {
+		// Blind to the mark (markBlind): the second pass, not the join,
+		// revokes it.
 		login := store.Context{CtxID: "ctx_late", Principal: alice, Username: "alice", PrivLvl: 1,
 			AuthTime: f.now, RefreshedAt: f.now}
-		if _, err := store.JoinContext(ctx, f.st, k, login, f.now.Add(-time.Minute), f.now, time.Hour, store.LoginIndex{}); err != nil {
+		if _, err := store.JoinContext(ctx, markBlind{f.st}, k, login, f.now.Add(-time.Minute), f.now, time.Hour, store.LoginIndex{}); err != nil {
 			t.Error(err)
 		}
 		if err := f.st.IndexContext(ctx, alice, "", certKey(f.alice), store.ContextRef{NAS: "nx1", Username: "alice"},

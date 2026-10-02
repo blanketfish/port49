@@ -1013,6 +1013,7 @@ func Run(t *testing.T, b Backend) {
 		{"SwapLoginIsOneStep", SwapLoginIsOneStep},
 		{"LoginsRaceToOneIndex", LoginsRaceToOneIndex},
 		{"JoinHonoursAStandingMark", JoinHonoursAStandingMark},
+		{"LoginRacesARevocationByMark", LoginRacesARevocationByMark},
 		{"PurgeTakesEveryToken", PurgeTakesEveryToken},
 		{"SelfRevocationBindsToTheRead", SelfRevocationBindsToTheRead},
 	} {

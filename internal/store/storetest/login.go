@@ -101,7 +101,9 @@ func SwapLoginIsOneStep(t *testing.T, b Backend) {
 // under one username on one device, racing, leave the ref indexed under
 // the keys of the principal whose context stands, all of them, and under
 // no other's. Each round races alice's two windows and bob's login over
-// carol's context.
+// carol's context. No two logins replace the same context: each write is
+// on the revision it read, so a second replace of one record is a lost
+// update.
 func LoginsRaceToOneIndex(t *testing.T, b Backend) {
 	const rounds = 100
 	k := store.ContextKey{NAS: "leaf-01", Username: "svc"}
@@ -116,13 +118,16 @@ func LoginsRaceToOneIndex(t *testing.T, b Backend) {
 		start := make(chan struct{})
 		var wg sync.WaitGroup
 		errs := make(chan error, 3)
-		for _, l := range []struct{ p, sid, serial string }{{alice, "sid-a1", "0a"}, {alice, "sid-a2", "0a"}, {bob, "sid-b", "0b"}} {
+		logins := []struct{ p, sid, serial string }{{alice, "sid-a1", "0a"}, {alice, "sid-a2", "0a"}, {bob, "sid-b", "0b"}}
+		results := make([]store.JoinResult, len(logins))
+		for i, l := range logins {
 			c, ix := loginOf(l.p, l.sid, l.serial, t0)
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
 				<-start
-				_, err := store.JoinContext(ctx, s, k, c, t0, t0, time.Hour, ix)
+				var err error
+				results[i], err = store.JoinContext(ctx, s, k, c, t0, t0, time.Hour, ix)
 				errs <- err
 			}()
 		}
@@ -133,6 +138,17 @@ func LoginsRaceToOneIndex(t *testing.T, b Backend) {
 			if err != nil {
 				t.Fatalf("round %d: %v", round, err)
 			}
+		}
+		replaced := map[string]bool{}
+		for i, res := range results {
+			if res.Replaced == "" {
+				continue
+			}
+			if replaced[res.Replaced] {
+				t.Fatalf("round %d: %s replaced %s, which another login had replaced already", round,
+					logins[i].sid, res.Replaced)
+			}
+			replaced[res.Replaced] = true
 		}
 		got, err := s.GetContext(ctx, k)
 		if err != nil {
@@ -148,18 +164,29 @@ func LoginsRaceToOneIndex(t *testing.T, b Backend) {
 				t.Fatalf("round %d: %s's context stands, and %s is indexed %d times", round, got.Principal, p, n)
 			}
 			for _, sid := range sids {
-				// The standing principal's own sids: each that joined is
-				// indexed; the other principal's: none is.
+				// The other principal's sids: none reaches the context.
 				if n := refsOf(t, s, s.ContextsBySid, sid); p != got.Principal && n != 0 {
 					t.Fatalf("round %d: %s's context stands, and %s's sid %s reaches it", round, got.Principal, p, sid)
 				}
 			}
 		}
+		// The standing principal's own sids: the last writer's is indexed,
+		// and when alice's windows met in one context — either returned
+		// Joined — both are. A join is the only way the two meet, and
+		// alice standing means nothing replaced it after.
+		if got.Principal == alice {
+			want := []string{got.Credential.Sid}
+			if results[0].Joined || results[1].Joined {
+				want = mine[alice]
+			}
+			for _, sid := range want {
+				if n := refsOf(t, s, s.ContextsBySid, sid); n != 1 {
+					t.Fatalf("round %d: alice's context stands, and its sid %s is indexed %d times", round, sid, n)
+				}
+			}
+		}
 		if refsOf(t, s, s.ContextsByPrincipal, carol) != 0 || refsOf(t, s, s.ContextsBySid, "sid-c") != 0 {
 			t.Fatalf("round %d: carol's keys outlived the replace", round)
-		}
-		if got.Principal == alice && refsOf(t, s, s.ContextsBySid, got.Credential.Sid) != 1 {
-			t.Fatalf("round %d: alice's standing context is not under its own last sid", round)
 		}
 	}
 }
@@ -239,6 +266,86 @@ func JoinHonoursAStandingMark(t *testing.T, b Backend) {
 		// would find it too.
 		if refsOf(t, inner, inner.ContextsByPrincipal, alice) != 1 {
 			t.Fatalf("%s: the revoked login is not indexed", kind)
+		}
+	}
+}
+
+// LoginRacesARevocationByMark is decision 35's one step, raced: a login
+// against a revocation by mark — PutRevocation, then one pass over the
+// index setting RevokedAt, as broker.Revoke does — never leaves the login's
+// context unrevoked under a mark that stands, on a token minted before it.
+// Either the login's write landed first, and is indexed in the same step,
+// so the pass finds it; or the mark did, and the login's swap conflicts and
+// is decided again against it. A backend that checks the marks outside the
+// step that writes the context (or indexes it in another) fails here.
+//
+// The window is a few instructions wide on memory, so the property runs
+// enough rounds to land in it: with the mark check in its own critical
+// section it failed 20 runs of 20 at 10000 rounds, and about half at 300.
+// -short runs 300, for a backend whose rounds are network round trips.
+func LoginRacesARevocationByMark(t *testing.T, b Backend) {
+	rounds := 10000
+	if testing.Short() {
+		rounds = 300
+	}
+	k := store.ContextKey{NAS: "leaf-01", Username: "svc"}
+	const alice, carol = "spiffe://example.com/alice", "spiffe://example.com/carol"
+	for _, kind := range []string{store.RevocationPrincipal, store.RevocationCert} {
+		for round := 0; round < rounds; round++ {
+			s := b.New(t, func() time.Time { return t0 })
+			ctx := context.Background()
+			if round%2 == 1 { // a replace of another principal's context
+				c0, ix0 := loginOf(carol, "sid-c", "0c", t0)
+				if _, err := store.JoinContext(ctx, s, k, c0, t0, t0, time.Hour, ix0); err != nil {
+					t.Fatal(err)
+				}
+			}
+			c, ix := loginOf(alice, "sid-a", "0a", t0)
+			mark := store.Revocation{Kind: kind, Key: alice, At: t0, Origin: "storetest"}
+			byIndex := s.ContextsByPrincipal
+			if kind == store.RevocationCert {
+				mark.Key, byIndex = ix.CertKey, s.ContextsByCert
+			}
+			start := make(chan struct{})
+			errs := make(chan error, 2)
+			var wg sync.WaitGroup
+			wg.Add(2)
+			go func() {
+				defer wg.Done()
+				<-start
+				_, err := store.JoinContext(ctx, s, k, c, t0.Add(-time.Minute), t0, time.Hour, ix)
+				errs <- err
+			}()
+			go func() {
+				defer wg.Done()
+				<-start
+				if err := s.PutRevocation(ctx, mark); err != nil {
+					errs <- err
+					return
+				}
+				refs, err := byIndex(ctx, mark.Key)
+				for _, r := range refs {
+					if err == nil {
+						err = s.SetRevokedAt(ctx, store.ContextKey{NAS: r.NAS, Username: r.Username}, mark.At)
+					}
+				}
+				errs <- err
+			}()
+			close(start)
+			wg.Wait()
+			close(errs)
+			for err := range errs {
+				if err != nil {
+					t.Fatalf("%s round %d: %v", kind, round, err)
+				}
+			}
+			got, err := s.GetContext(ctx, k)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Principal == alice && got.RevokedAt.IsZero() {
+				t.Fatalf("%s round %d: a login landed unrevoked under a standing mark", kind, round)
+			}
 		}
 	}
 }
