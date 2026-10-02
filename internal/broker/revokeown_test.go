@@ -370,3 +370,59 @@ func TestRevokeOwnContextGivesUpAfterItsTries(t *testing.T) {
 		t.Fatal("the context was marked")
 	}
 }
+
+// keyReads counts the reads of one (device, username)'s tokens and context.
+type keyReads struct {
+	store.Store
+	key   store.TokenKey
+	reads *int
+}
+
+func (s keyReads) Candidates(ctx context.Context, k store.TokenKey) ([]store.Token, error) {
+	if k == s.key {
+		*s.reads++
+	}
+	return s.Store.Candidates(ctx, k)
+}
+
+func (s keyReads) GetContext(ctx context.Context, k store.ContextKey) (store.Context, error) {
+	if k == (store.ContextKey{NAS: s.key.NAS, Username: s.key.Username}) {
+		*s.reads++
+	}
+	return s.Store.GetContext(ctx, k)
+}
+
+// mine on a key the caller holds nothing under never reads that key's
+// tokens or context, so what another principal holds there leaves them
+// untouched and changes neither the answer nor the work done: no timing
+// says whether anyone is logged in there (final review M1; design §17).
+func TestMineOnAKeyReadsOnlyTheCallersOwn(t *testing.T) {
+	k := store.TokenKey{NAS: "leaf1", Username: "alice"}
+	answer := func(occupied bool) (int, string, int) {
+		f := newFixtureWithPolicy(t, 8, sharedPolicy)
+		if occupied {
+			f.mintFor(t, "alice2@example.com", "leaf1")
+			f.liveContext(t, "leaf1", "alice", alice2, "")
+		}
+		reads := 0
+		f.b.Store = keyReads{Store: f.st, key: k, reads: &reads}
+		w := f.revokeAs(t, "alice@example.com", `{"mine":true,"device":"leaf1","username":"alice"}`)
+		if occupied {
+			if got := tokensOf(t, f, k); got[alice2] != 1 {
+				t.Fatalf("alice2's tokens after alice's mine: %v", got)
+			}
+			if c, _ := f.st.GetContext(context.Background(), store.ContextKey{NAS: "leaf1", Username: "alice"}); !c.RevokedAt.IsZero() {
+				t.Fatal("alice2's context was marked by alice's mine")
+			}
+		}
+		return w.Code, w.Body.String(), reads
+	}
+	code0, body0, reads0 := answer(false)
+	code1, body1, reads1 := answer(true)
+	if code0 != 200 || code0 != code1 || body0 != body1 {
+		t.Fatalf("the answer depends on another's: %d %s / %d %s", code0, body0, code1, body1)
+	}
+	if reads0 != 0 || reads1 != 0 {
+		t.Fatalf("the key was read: %d with nobody there, %d with alice2 there", reads0, reads1)
+	}
+}

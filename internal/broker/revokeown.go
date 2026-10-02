@@ -24,6 +24,11 @@ const ownRevokeTries = 3
 // username): tokens are deleted one by one by ID, only those the caller
 // minted (DeleteToken), and a context is marked by compare-and-set on the
 // policy revision read, only while it is the caller's (revokeOwnContext).
+// With only, it acts on that key only when the caller's own indexes
+// (TokensByPrincipal, ContextsByPrincipal) name it, and never reads the key
+// otherwise: what another principal holds there changes neither the answer
+// nor the work, so no timing says whether anyone is logged in there (final
+// review M1; design §17).
 // As Revoke does, tokens go before contexts and contexts are marked twice,
 // so a redemption in flight is caught; then the caller's receipts are
 // deleted, everywhere, even when only names one key: the store holds no
@@ -46,15 +51,15 @@ func (b *Broker) RevokeOwn(ctx context.Context, principal string, only *store.To
 			rep.Err = err
 		}
 	}
-	var keys []store.TokenKey
 	if only != nil {
-		rep.Key, keys = *only, []store.TokenKey{*only}
-	} else {
-		var err error
-		keys, err = b.Store.TokensByPrincipal(ctx, principal)
-		note(err)
+		rep.Key = *only
 	}
+	keys, err := b.Store.TokensByPrincipal(ctx, principal)
+	note(err)
 	for _, k := range keys {
+		if only != nil && k != *only {
+			continue
+		}
 		toks, err := b.Store.Candidates(ctx, k)
 		if err != nil {
 			note(err)
@@ -84,15 +89,12 @@ func (b *Broker) RevokeOwn(ctx context.Context, principal string, only *store.To
 	}
 	seen := map[store.ContextRef]bool{}
 	for pass := 0; pass < 2; pass++ {
-		var refs []store.ContextRef
-		if only != nil {
-			refs = []store.ContextRef{{NAS: only.NAS, Username: only.Username}}
-		} else {
-			var err error
-			refs, err = b.Store.ContextsByPrincipal(ctx, principal)
-			note(err)
-		}
+		refs, err := b.Store.ContextsByPrincipal(ctx, principal)
+		note(err)
 		for _, ref := range refs {
+			if only != nil && (ref.NAS != only.NAS || ref.Username != only.Username) {
+				continue
+			}
 			marked, err := b.revokeOwnContext(ctx, principal, ref, now)
 			note(err)
 			if marked && !seen[ref] {
