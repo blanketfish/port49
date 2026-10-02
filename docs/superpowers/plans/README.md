@@ -1774,15 +1774,16 @@ for the revoked login):
 - A revoked caller's broker connection is answered `credential_revoked`; port49d says it on stderr
   (rate-limited), counts it (`revoked_refused`, `port49_decisions`) and writes a `mint deny` record.
 
-**Decisions for Ryan (open, not changed):**
+**Decisions for Ryan (answered 2026-10-02, all as recommended):**
 
-- **D1**, the shared store's backend (above; 7d; etcd recommended).
+- **D1**, the shared store's backend: **etcd** (7d).
 - **Task 9 review M1:** an unmounted or empty revocations volume that passes the fence looks like a
   first install, so port49d creates an empty file and starts with no marks, saying so in one stderr
-  line. Closing it changes decision 32 (and pre-flight C1). Recommendation: require an explicit
-  one-time init instead of creating the file.
+  line. **Ruled: require an explicit one-time init instead of creating the file.** This changes
+  decision 32 (and pre-flight C1); carried to plan 7c.
 - **Decision 15's cost on a certificate's mark:** the owner's next login re-admits the stolen
-  certificate's still-open device shell (operator notes, above). Decision 15 already accepts this.
+  certificate's still-open device shell (operator notes, above). **Accepted**, as decision 15
+  already does; the operator notes tell the responder to close the device session.
 
 **Carried, for later plans:**
 
@@ -1895,9 +1896,9 @@ not paced) and Task 8 (`port49 login` refreshes only its own agent). Ruling 9 is
 SHA-1 signatures are never trusted, the whole CertID is matched, and a CRL's issuer name must equal
 `issuer_file`'s subject byte for byte.
 
-**D-7b-1** (refuse or allow when status cannot be established; certificate status required): no
-answer from the owner yet. Built as ruled: `refuse` by default, `allow` available, the key
-required with `disabled: true` as the opt-out.
+**D-7b-1** (refuse or allow when status cannot be established; certificate status required):
+**answered 2026-10-02, as ruled**: `refuse` by default, `allow` available, the key required with
+`disabled: true` as the opt-out.
 
 **Lab (Task 12)**, all five images on beehive, 2026-10-01 (`tests/lab/results/L34-*.md`, `L2-*.md`,
 `session-*.md`; captures `tests/lab/evidence/session-<platform>.pcap`):
@@ -1951,7 +1952,7 @@ notes", amended):
   would: `port49 revoke --list` shows origin `crl <name>`. A `certificateHold` entry is refused
   while listed and never marked. Lift a CRL-origin mark only after the CA delists the certificate:
   while it is listed, the mark comes back at the next restart or the certificate's next use.
-- **`on_unavailable: refuse` (the default; D-7b-1 open).** A CRL past its next update, or an OCSP
+- **`on_unavailable: refuse` (the default; D-7b-1, confirmed).** A CRL past its next update, or an OCSP
   responder down, answers new logins, mints and refreshes for that issuer `503
   certificate_status_unavailable` with `Retry-After: 60`, recorded `<event> deny
   trust_domain_unresolved`. No agent session ends, live device sessions run to their ceiling, and
@@ -2033,7 +2034,7 @@ audit fails.
 
 **Carried, for later plans:**
 
-- **7c:** the HTTP revocation, and `api:` rights over `RefreshSession`'s self-only rule.
+- **7c:** the HTTP revocation, and `api:` rights over `RefreshSession`'s self-only rule. Also from 7a (Ryan, 2026-10-02): an empty or missing revocations volume requires an explicit one-time init (`port49d init-revocations` or similar) instead of being created at start (amends decision 32).
 - **7g:** the `staleness_ceiling` default and the scheduled refresh.
 - **7h:** the OIDC refresh: `prompt=login`, `auth_time` from the assertion, `sid` re-indexing.
   `session.Manager.Refresh` now takes a grace cutoff (the refresh time less
