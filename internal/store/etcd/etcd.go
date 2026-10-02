@@ -57,9 +57,9 @@ type Config struct {
 type Store struct {
 	k   keys
 	now func() time.Time
-	// tok and ctx are the token and context pools (design §12): mint
-	// pressure on one cannot take the other's connection. They are one
-	// client until plan 7d Task 11 dials two.
+	// tok and ctx are the token and context pools (design §12), two
+	// clients and so two connections: mint pressure on one cannot take the
+	// other's connection.
 	tok, ctx             *clientv3.Client
 	tokLeases, ctxLeases *leases
 	owned                []*clientv3.Client // closed by Close
@@ -91,12 +91,17 @@ var ErrTooLarge = errors.New("etcd: request too large")
 // configuration clientv3 refuses outright.
 func Open(c Config) (*Store, error) {
 	c = c.withDefaults()
-	cli, err := dial(c)
+	tok, err := dial(c)
 	if err != nil {
 		return nil, err
 	}
-	s := newStore(cli, cli, c)
-	s.owned = []*clientv3.Client{cli}
+	ctxCli, err := dial(c)
+	if err != nil {
+		tok.Close()
+		return nil, err
+	}
+	s := newStore(tok, ctxCli, c)
+	s.owned = []*clientv3.Client{tok, ctxCli}
 	return s, nil
 }
 

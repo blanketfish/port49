@@ -62,18 +62,21 @@ import (
 )
 
 func main() {
-	// The one subcommand, before the daemon's flags: it reads port49d.yaml for
-	// one path and starts nothing (spec §13 decision 32, amended).
+	// The subcommands, before the daemon's flags: each reads port49d.yaml and
+	// starts nothing (spec §12; §13 decisions 32, amended, and 35).
 	if len(os.Args) > 1 && os.Args[1] == "init-revocations" {
 		os.Exit(initRevocationsCmd(os.Args[2:], os.Stdout, os.Stderr))
+	}
+	if len(os.Args) > 1 && os.Args[1] == "store-roles" {
+		os.Exit(storeRolesCmd(os.Args[2:], os.Stdout, os.Stderr))
 	}
 	cfgPath := flag.String("config", "/etc/port49/port49d.yaml", "path to port49d.yaml")
 	flag.Parse()
 	// A subcommand after a flag (port49d --config X init-revocations) would
 	// otherwise start the daemon (pre-flight M20).
 	if flag.NArg() != 0 {
-		fmt.Fprintln(os.Stderr, "usage: port49d [--config FILE], or port49d init-revocations [--config FILE] "+
-			"(the subcommand comes first)")
+		fmt.Fprintln(os.Stderr, "usage: port49d [--config FILE], port49d init-revocations [--config FILE], "+
+			"or port49d store-roles [--config FILE] (a subcommand comes first)")
 		os.Exit(2)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
