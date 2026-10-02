@@ -561,7 +561,11 @@ func (s *Store) DeleteContextIf(ctx context.Context, k store.ContextKey, rev uin
 }
 
 // PutBlob writes body, keeping the later of the existing and the new
-// expiry.
+// expiry. It is on the token pool, and GetBlob and BumpBlob on the context
+// pool, on purpose: the broker's mint is what writes a blob, and the
+// commands it authorizes and the refresh are what read and extend one, so
+// each rides the pool of the path that calls it (design §12). The pools
+// are one cluster, so a blob put on one is read on the other.
 func (s *Store) PutBlob(ctx context.Context, hash string, body []byte, ttl time.Duration) error {
 	exp := s.now().Add(ttl)
 	return cas(ctx, s.tok, s.tokLeases, s.k.blob(hash), func(b blobRec) bool { return b.ExpiresAt.After(s.now()) },

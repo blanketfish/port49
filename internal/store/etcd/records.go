@@ -148,7 +148,11 @@ type ctxRec struct {
 	CreatedAt             time.Time `json:"created_at"`
 	// Logins is the login witness (store.Context.Logins): empty under
 	// crypt, which seals it. It is held here only for the plaintext form,
-	// so a join on this backend alone keeps the witness memory keeps.
+	// so a join on this backend alone keeps the witness memory keeps. The
+	// replay check trusts Logins only through crypt, which ignores this
+	// field and reads its sealed copy: anyone who can write etcd can write
+	// this one, and bare etcd, with no sealing layer over it, is never a
+	// production configuration (Task 6 review M-2).
 	Logins []string `json:"logins,omitempty"`
 	Sealed []byte   `json:"sealed,omitempty"`
 
