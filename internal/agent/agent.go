@@ -36,6 +36,7 @@ import (
 	"time"
 
 	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/rhwendt/port49/internal/daemon/admin"
 )
 
 // Config is what opens a session.
@@ -74,6 +75,23 @@ func (e *RevokedError) Is(target error) bool { return target == ErrSessionOver }
 // a test can shorten it.
 var connectTimeout = 10 * time.Second
 
+// revokeWait is how long the agent waits on POST /v1/tokens/revoke: the
+// broker's wait for its revocation slot (api.RevokeSlotWait), the run it
+// bounds at RevokeTimeout, which port49d sets to admin.OpTimeout, the
+// revocations_file save (admin.PersistTimeout, headroom as port49d's admin
+// socket gives it) and a margin for the answer. Every other call keeps the
+// client's thirty seconds, which a revocation behind a slow store outlives:
+// the agent would give up on a revocation that went on to finish (final
+// review I1).
+const revokeWait = api.RevokeSlotWait + admin.OpTimeout + admin.PersistTimeout + revokeAnswerMargin
+
+// revokeAnswerMargin is the time past the broker's bounds a revocation's
+// answer is given to arrive.
+const revokeAnswerMargin = 10 * time.Second
+
+// revokeTimeout is revokeWait, a var so a test can shorten it.
+var revokeTimeout = revokeWait
+
 // inProgressRetries and inProgressDelay bound how long Mint waits for a
 // first try still minting under its key: fifteen seconds, past the
 // broker's ten-second bound on a mint's store calls. The broker's
@@ -99,12 +117,13 @@ func retryAfter(h http.Header) time.Duration {
 
 // Agent is one operator session.
 type Agent struct {
-	broker     string
-	cert       tls.Certificate
-	client     *http.Client
-	now        func() time.Time
-	log        io.Writer
-	handshakes atomic.Int64
+	broker       string
+	cert         tls.Certificate
+	client       *http.Client
+	revokeClient *http.Client // client's transport, no Timeout: Revoke's ctx carries revokeTimeout
+	now          func() time.Time
+	log          io.Writer
+	handshakes   atomic.Int64
 	// fingerprint is the certificate's, as CertFingerprint gives it.
 	fingerprint string
 
@@ -164,6 +183,7 @@ func New(c Config) *Agent {
 		MaxIdleConnsPerHost: 1,
 	}
 	a.client = &http.Client{Transport: tr, Timeout: 30 * time.Second}
+	a.revokeClient = &http.Client{Transport: tr}
 	return a
 }
 
@@ -403,10 +423,26 @@ func (e *APIError) Error() string {
 // A refusal that ends the session ends it here, as a mint's does; anything
 // else, a 503 included, is an *APIError, so a caller can tell
 // revocation_busy from api_right_missing by its code. A transport failure
-// is tried once more on a new connection, as post does: every call made
-// through it is safe to repeat (identity and explain read; a revocation
-// made again reaches what the first did not, and stands as before).
+// is tried once more on a new connection, as post does: identity and
+// explain read, and are safe to repeat.
 func (a *Agent) call(ctx context.Context, method, path string, in, out any) error {
+	return a.exchange(ctx, a.client, nil, method, path, in, out)
+}
+
+// exchange is call on client c. With unanswered set, a request whose
+// writing began is never sent again: a transport failure after it, a
+// timeout included, is unanswered's error, since the broker may have acted
+// on it. Only a failure before any byte left the agent (a dial, a handshake,
+// a connection that dropped before the write) is tried again. The
+// transport's own retry of a held connection it finds closed is the same
+// rule: it repeats a request only when nothing of it was written.
+//
+// hangUpError cannot tell the two apart: it means the broker never
+// answered, not that nothing was written. WroteHeaders can: the request
+// line and headers, a few hundred bytes, are buffered whole in the
+// transport's 4 KiB writer and reach the connection only after it fires.
+func (a *Agent) exchange(ctx context.Context, c *http.Client, unanswered func(error) error,
+	method, path string, in, out any) error {
 	select {
 	case <-a.done:
 		return ErrSessionOver
@@ -428,19 +464,24 @@ func (a *Agent) call(ctx context.Context, method, path string, in, out any) erro
 		if in != nil {
 			rd = bytes.NewReader(body)
 		}
-		req, err := http.NewRequestWithContext(ctx, method, a.broker+path, rd)
+		var sent atomic.Bool
+		traced := httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{WroteHeaders: func() { sent.Store(true) }})
+		req, err := http.NewRequestWithContext(traced, method, a.broker+path, rd)
 		if err != nil {
 			return err
 		}
 		if in != nil {
 			req.Header.Set("Content-Type", "application/json")
 		}
-		if resp, err = a.do(req); err == nil {
+		if resp, err = a.doOn(c, req); err == nil {
 			break
 		}
 		a.client.CloseIdleConnections()
 		if over := a.refusedReconnect(err); over != nil {
 			return over
+		}
+		if unanswered != nil && sent.Load() {
+			return unanswered(err)
 		}
 		if attempt == 2 {
 			var hup *hangUpError
@@ -495,10 +536,41 @@ func (a *Agent) Explain(ctx context.Context, req api.ExplainRequest) (api.Explai
 // a revocation of this session's own principal by another is answered
 // credential_revoked at the next call, which ends it. A 503
 // revocation_busy revoked nothing and ends nothing.
+//
+// It waits revokeTimeout, past the broker's worst case, and is never sent
+// twice once written: a revocation the broker did not answer may be in
+// force, and is said so (UnansweredRevokeError), never retried into a
+// revocation_busy that would say nothing was revoked (final review I1).
 func (a *Agent) Revoke(ctx context.Context, req api.RevokeRequest) (api.RevokeResponse, error) {
 	var out api.RevokeResponse
-	return out, a.call(ctx, http.MethodPost, "/v1/tokens/revoke", req, &out)
+	ctx, cancel := context.WithTimeout(ctx, revokeTimeout)
+	defer cancel()
+	return out, a.exchange(ctx, a.revokeClient, func(err error) error {
+		return &UnansweredRevokeError{Who: "the broker at " + a.broker, Principal: req.Principal != "", Err: err}
+	}, http.MethodPost, "/v1/tokens/revoke", req, &out)
 }
+
+// UnansweredRevokeError is a revocation sent and never answered, by the
+// broker or by the agent: it may have run, and the operator looks before
+// asking again. Its text is port49 revoke's on the admin socket for the same
+// case. A self or key revocation leaves no mark for --list to show; the
+// decision log names it.
+type UnansweredRevokeError struct {
+	Who       string // who did not answer: "the broker at …", "your agent at …"
+	Principal bool   // a revocation of a principal, which leaves a standing mark
+	Err       error
+}
+
+func (e *UnansweredRevokeError) Error() string {
+	if e.Principal {
+		return fmt.Sprintf("agent: %s did not answer the revocation (%v); it may be in force — check `port49 "+
+			"revoke --list` (on port49d's host) and port49d's log before retrying", e.Who, e.Err)
+	}
+	return fmt.Sprintf("agent: %s did not answer the revocation (%v); it may have run — check port49d's "+
+		"decision log (event revoke) before retrying", e.Who, e.Err)
+}
+
+func (e *UnansweredRevokeError) Unwrap() error { return e.Err }
 
 // refusedReconnect ends the session on a transport error that means no
 // reconnect will be accepted, and returns why; nil for any other error.
@@ -819,12 +891,15 @@ func (c *watchedConn) Read(p []byte) (int, error) {
 // "connection reset by peer" or EOF. A new connection closed before its
 // first answer is how a refusal looks when the race is lost. A connection
 // that has answered before, a dial failure and a timeout are not.
-func (a *Agent) do(req *http.Request) (*http.Response, error) {
+func (a *Agent) do(req *http.Request) (*http.Response, error) { return a.doOn(a.client, req) }
+
+// doOn is do on client c, which shares a.client's transport.
+func (a *Agent) doOn(c *http.Client, req *http.Request) (*http.Response, error) {
 	var conn *watchedConn
 	trace := &httptrace.ClientTrace{GotConn: func(i httptrace.GotConnInfo) {
 		conn, _ = i.Conn.(*watchedConn)
 	}}
-	resp, err := a.client.Do(req.WithContext(httptrace.WithClientTrace(req.Context(), trace)))
+	resp, err := c.Do(req.WithContext(httptrace.WithClientTrace(req.Context(), trace)))
 	if err == nil || conn == nil || conn.answered.Load() {
 		return resp, err
 	}

@@ -29,6 +29,7 @@ import (
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/broker"
 	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/rhwendt/port49/internal/daemon/admin"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/engine"
@@ -83,6 +84,7 @@ type fakeBroker struct {
 	tooSoon         bool
 	certStatus      bool
 	answers         map[string]refusal
+	revokeDelay     time.Duration
 }
 
 // refusal is one scripted answer: a status, an api.Error, a Retry-After.
@@ -114,7 +116,19 @@ func (fb *fakeBroker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/v1/identity", "/v1/explain", "/v1/tokens/revoke":
 		fb.mu.Lock()
 		ref, ok := fb.answers[r.URL.Path]
+		delay := fb.revokeDelay
 		fb.mu.Unlock()
+		if r.URL.Path == "/v1/tokens/revoke" && delay > 0 {
+			// A revocation slow behind a slow store: it answers after
+			// delay, or not at all once the caller has gone. The body is
+			// read first: only then does the server see the caller go.
+			_, _ = io.Copy(io.Discard, r.Body)
+			select {
+			case <-time.After(delay):
+			case <-r.Context().Done():
+				return
+			}
+		}
 		if !ok {
 			http.NotFound(w, r)
 			return
@@ -1867,6 +1881,104 @@ func TestABusyRevocationIsAnAPIErrorAndEndsNothing(t *testing.T) {
 	check("through the socket", err)
 	if _, err := r.a.Mint(context.Background(), "leaf1", false, 0); err != nil {
 		t.Fatalf("a mint after a busy revocation: %v", err)
+	}
+}
+
+// A revocation the broker is slower to answer than the agent waits is sent
+// once, never again: the broker may have marked, and a second try would
+// queue behind the first and answer revocation_busy, "nothing was revoked"
+// (final review I1). The operator is told it may be in force and where to
+// look, and the session goes on.
+func TestAnUnansweredRevocationIsSentOnceAndMayBeInForce(t *testing.T) {
+	defer func(d time.Duration) { revokeTimeout = d }(revokeTimeout)
+	revokeTimeout = 200 * time.Millisecond
+	r := newRig(t)
+	r.fb.mu.Lock()
+	r.fb.answers = map[string]refusal{"/v1/tokens/revoke": {status: 200}}
+	r.fb.revokeDelay = 5 * time.Second
+	r.fb.mu.Unlock()
+	c := socketFor(t, r.a)
+	for _, tc := range []struct {
+		name  string
+		req   api.RevokeRequest
+		where string
+	}{
+		{"a principal", api.RevokeRequest{Principal: "user:carol@example.com"}, "it may be in force — check " +
+			"`port49 revoke --list` (on port49d's host) and port49d's log before retrying"},
+		{"mine", api.RevokeRequest{Mine: true},
+			"it may have run — check port49d's decision log (event revoke) before retrying"},
+		{"a key", api.RevokeRequest{Device: "leaf1", Username: "alice"},
+			"it may have run — check port49d's decision log (event revoke) before retrying"},
+	} {
+		for _, via := range []string{"the agent", "the socket"} {
+			r.fb.mu.Lock()
+			r.fb.addrs = nil
+			r.fb.mu.Unlock()
+			var err error
+			if via == "the agent" {
+				_, err = r.a.Revoke(context.Background(), tc.req)
+			} else {
+				_, err = c.Revoke(context.Background(), tc.req)
+			}
+			r.fb.mu.Lock()
+			n := len(r.fb.addrs["/v1/tokens/revoke"])
+			r.fb.mu.Unlock()
+			if n != 1 {
+				t.Fatalf("%s through %s: the broker saw %d revocations, want exactly 1", tc.name, via, n)
+			}
+			var ae *APIError
+			if err == nil || errors.As(err, &ae) || errors.Is(err, ErrSessionOver) ||
+				!strings.Contains(err.Error(), "did not answer the revocation") || !strings.Contains(err.Error(), tc.where) ||
+				strings.Contains(err.Error(), "nothing was revoked") {
+				t.Fatalf("%s through %s: %v", tc.name, via, err)
+			}
+		}
+	}
+	select {
+	case <-r.a.Done():
+		t.Fatal("an unanswered revocation ended the session")
+	default:
+	}
+}
+
+// The agent's wait on a revocation outlasts the broker's worst case: the
+// wait for the slot, the run port49d bounds at admin.OpTimeout, the
+// revocations_file save. The socket client outlasts the agent, so the agent
+// is always the side that gives up and says so (final review I1).
+func TestTheRevocationWaitsOutlastTheBroker(t *testing.T) {
+	if broker.DefaultRevokeTimeout > admin.OpTimeout {
+		t.Fatalf("the broker's default run bound %v is past the admin.OpTimeout %v the agent waits on",
+			broker.DefaultRevokeTimeout, admin.OpTimeout)
+	}
+	worst := api.RevokeSlotWait + admin.OpTimeout + admin.PersistTimeout
+	if revokeWait <= worst || socketTimeout <= revokeWait {
+		t.Fatalf("broker %v, agent %v, socket %v", worst, revokeWait, socketTimeout)
+	}
+}
+
+// A revocation the agent took and then dropped without an answer is not
+// "no agent": it may have reached the broker, and the CLI says so.
+func TestARevocationTheAgentDroppedMayBeInForce(t *testing.T) {
+	p := filepath.Join(shortDir(t), "s", "agent.sock")
+	ln, err := Listen(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /revoke", func(w http.ResponseWriter, r *http.Request) {
+		got.Add(1)
+		_, _ = io.Copy(io.Discard, r.Body)
+		conn, _, _ := w.(http.Hijacker).Hijack()
+		conn.Close() // an agent that died mid-revocation
+	})
+	srv := &http.Server{Handler: mux}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+	_, err = NewClient(p).Revoke(context.Background(), api.RevokeRequest{Principal: "user:carol@example.com"})
+	if got.Load() != 1 || err == nil || errors.Is(err, ErrNoAgent) || !strings.Contains(err.Error(), "may be in force") ||
+		!strings.Contains(err.Error(), "`port49 revoke --list`") {
+		t.Fatalf("%d asked: %v", got.Load(), err)
 	}
 }
 

@@ -207,8 +207,8 @@ func (putRevocationFails) PutRevocation(context.Context, store.Revocation) error
 // (pre-flight M18).
 func TestABusyRevocationIs503(t *testing.T) {
 	f := newFixtureWithPolicy(t, 8, sharedPolicy)
-	defer func(d time.Duration) { holdTimeout = d }(holdTimeout)
-	holdTimeout = 50 * time.Millisecond
+	defer func(d time.Duration) { revokeSlotWait = d }(revokeSlotWait)
+	revokeSlotWait = 50 * time.Millisecond
 	release, err := f.b.acquireRevoke(context.Background())
 	if err != nil {
 		t.Fatal(err)

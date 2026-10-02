@@ -9,9 +9,12 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptrace"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -110,9 +113,14 @@ type Client struct {
 	http   *http.Client
 }
 
+// socketTimeout bounds a call to the agent: past its longest wait on the
+// broker (revokeWait), so the agent is always the side that gives up, and
+// says why.
+const socketTimeout = revokeWait + 10*time.Second
+
 // NewClient talks to the agent at socket.
 func NewClient(socket string) *Client {
-	return &Client{socket: socket, http: &http.Client{Timeout: 90 * time.Second, Transport: &http.Transport{
+	return &Client{socket: socket, http: &http.Client{Timeout: socketTimeout, Transport: &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			var d net.Dialer
 			return d.DialContext(ctx, "unix", socket)
@@ -246,7 +254,7 @@ func (c *Client) roundTrip(ctx context.Context, method, path string, in, out any
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("%w at %s: %v", ErrNoAgent, c.socket, err)
+		return fmt.Errorf("%w at %s: %w", ErrNoAgent, c.socket, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusOK {
@@ -282,9 +290,21 @@ func (c *Client) Explain(ctx context.Context, req api.ExplainRequest) (api.Expla
 }
 
 // Revoke asks the agent to send a revocation under its principal's rights.
+// One the agent took and never answered is an *UnansweredRevokeError, not
+// ErrNoAgent: it may have reached the broker.
 func (c *Client) Revoke(ctx context.Context, req api.RevokeRequest) (api.RevokeResponse, error) {
 	var out api.RevokeResponse
-	return out, c.roundTrip(ctx, http.MethodPost, "/revoke", req, &out)
+	var sent atomic.Bool
+	ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{WroteHeaders: func() { sent.Store(true) }})
+	err := c.roundTrip(ctx, http.MethodPost, "/revoke", req, &out)
+	if errors.Is(err, ErrNoAgent) && sent.Load() {
+		var cause error = err
+		if ue := (*url.Error)(nil); errors.As(err, &ue) {
+			cause = ue.Err
+		}
+		return out, &UnansweredRevokeError{Who: "your agent at " + c.socket, Principal: req.Principal != "", Err: cause}
+	}
+	return out, err
 }
 
 // Status asks the agent whose session it holds.

@@ -19,6 +19,11 @@ import (
 // generous bound on what any platform takes, and what a record may carry.
 const maxDeviceUsername = 64
 
+// revokeSlotWait bounds a principal revocation's wait for revokeSem
+// (api.RevokeSlotWait, which the agent sizes its own wait from); swapped in
+// tests.
+var revokeSlotWait = api.RevokeSlotWait
+
 // errIncomplete stands in, on the wire, for the store error that stopped a
 // step: the caller is told to run it again, and the process log says what
 // failed (Global Constraints).
@@ -134,7 +139,7 @@ func (b *Broker) tokensRevoke(w http.ResponseWriter, r *http.Request) {
 	}
 	// The wait for the revocation slot is bounded; once Revoke holds it, it
 	// runs to the end detached from this request (Revoke's comment).
-	wait, cancel := context.WithTimeout(r.Context(), holdTimeout)
+	wait, cancel := context.WithTimeout(r.Context(), revokeSlotWait)
 	defer cancel()
 	rep, err := b.Revoke(wait, RevokeRequest{Principal: target, Origin: origin})
 	switch {

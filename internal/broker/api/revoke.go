@@ -1,5 +1,14 @@
 package api
 
+import "time"
+
+// RevokeSlotWait bounds how long POST /v1/tokens/revoke waits for the
+// broker's revocation slot, behind another revocation or lift, before it
+// answers 503 revocation_busy. Once it holds the slot, the run is bounded by
+// the broker's RevokeTimeout. A client sizes its wait from both, so it is
+// never the side that gives up on a revocation that goes on to finish.
+const RevokeSlotWait = 10 * time.Second
+
 // RevokeRequest is POST /v1/tokens/revoke (design §17; spec §5.1.4). Exactly
 // one form: Mine (alone, or with Device and Username for the caller's own
 // on one key); Principal; or Device and Username (whoever holds the key,
