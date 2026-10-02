@@ -67,8 +67,10 @@ review done 2026-10-02 (one important: a token outlived its ceiling, fixed in th
 docs; no owner decision, ten rulings recorded as decision 34, decision 32 amended first by the
 owner's answer on the revocations volume; no register row); **executed 2026-10-02** on
 `feature/api-and-authorization`, reviewed per task and as a whole branch, the HTTP revocation's
-shapes measured on vEOS, the N9Kv, the C8000V and vJunos-router (Plan 7c — As built, below).
-7d–7h and 8–13 not yet.
+shapes measured on vEOS, the N9Kv, the C8000V and vJunos-router (Plan 7c — As built, below);
+final review: one important fixed (a slow revocation resent and reported as not done), re-review
+clean; **merged 2026-10-02 (PR #22, merge c485e03)**, and `make test` (with the labpcap audit)
+passes on main. 7d–7h and 8–13 not yet.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
