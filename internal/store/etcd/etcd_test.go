@@ -534,3 +534,28 @@ func TestAnUndecodableContextIsReplacedByALogin(t *testing.T) {
 		t.Fatalf("the login is not indexed: %v %v", refs, err)
 	}
 }
+
+// A context that does not decode is deleted on the Rev its error carries,
+// as any other is: nothing can use it, and the re-index may clear it so
+// (Task 7 review m-4, K-1).
+func TestAnUndecodableContextIsDeletedOnItsRev(t *testing.T) {
+	ctx := context.Background()
+	s := onShared(t, func() time.Time { return t0 })
+	k := store.ContextKey{NAS: "leaf-01", Username: "alice"}
+	if _, err := s.ctx.Put(ctx, s.k.context(k), "not json"); err != nil {
+		t.Fatal(err)
+	}
+	var u *store.UnreadableContextError
+	if _, err := s.GetContext(ctx, k); !errors.As(err, &u) {
+		t.Fatalf("a read of an undecodable context: %v", err)
+	}
+	if err := s.DeleteContextIf(ctx, k, u.Rev+1); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("a delete on another Rev: %v", err)
+	}
+	if err := s.DeleteContextIf(ctx, k, u.Rev); err != nil {
+		t.Fatalf("a delete on its Rev: %v", err)
+	}
+	if _, err := s.GetContext(ctx, k); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("after the delete: %v", err)
+	}
+}

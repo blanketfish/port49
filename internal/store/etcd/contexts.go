@@ -557,16 +557,22 @@ func (s *Store) DeleteContext(ctx context.Context, k store.ContextKey) error {
 	return unavailable(err)
 }
 
-// DeleteContextIf deletes the context only while its Rev is rev.
+// DeleteContextIf deletes the context only while its Rev is rev. One that
+// does not decode is there at the Rev its UnreadableContextError carries,
+// and is deleted on it as any other is (undecodable).
 func (s *Store) DeleteContextIf(ctx context.Context, k store.ContextKey, rev uint64) error {
 	ck := s.k.context(k)
 	for {
-		var r ctxRec
-		mod, ok, err := getJSON(ctx, s.ctx, ck, &r)
+		resp, err := s.ctx.Get(ctx, ck)
 		if err != nil {
-			return err
+			return unavailable(err)
 		}
-		if !ok || !r.ExpiresAt.After(s.now()) {
+		if len(resp.Kvs) == 0 {
+			return store.ErrNotFound
+		}
+		var r ctxRec
+		mod := resp.Kvs[0].ModRevision
+		if json.Unmarshal(resp.Kvs[0].Value, &r) == nil && !r.ExpiresAt.After(s.now()) {
 			return store.ErrNotFound
 		}
 		if uint64(mod) != rev {
