@@ -4,7 +4,7 @@
 - **Platform:** cisco_iosxe (containerlab node `xe1`, 172.100.100.41)
 - **Image version:** Catalyst 8000V 17.13.01a (`vrnetlab/cisco_c8000v:17.13.01a`)
 - **Image ID:** `sha256:ec5b86bf54286ef3bfecee6ec4ba576289ec2da78c301a007a091d694a6c414b`
-- **Run:** at commit 0529b92, from a detached worktree pinned to it (`make build` there), on beehive: `PORT49_LAB_PLATFORMS=iosxe go test -tags lab -run TestAPIRevokeEndToEnd -count=1 -timeout 60m -v ./tests/lab/` (under `sg docker -c`)
+- **Run:** at commit 9bfb710, from a detached worktree pinned to it (`make build` there), on beehive: `PORT49_LAB_PLATFORMS=iosxe go test -tags lab -run TestAPIRevokeEndToEnd -count=1 -timeout 60m -v ./tests/lab/` (under `sg docker -c`)
 - **Credentials:** no token, password or key appears in this note; tokens are named only by the decision log's `credential_sha256`, and the capture's credential fields are redacted
 - **Topology:** `tests/lab/topologies/iosxe.clab.yml`
 - **Capture:** `tests/lab/evidence/api-revoke-cisco_iosxe.pcap` — 830 packets to or from the device, countable with `tcpdump -r tests/lab/evidence/api-revoke-cisco_iosxe.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
@@ -27,17 +27,25 @@ The HTTP revocation (`POST /v1/tokens/revoke`, plan 7c; spec §5.1.4, §13 decis
 | a login with a token minted after it | logged in |
 | the session `--mine` refused, after that login | printed its output in 300ms: `Cisco IOS XE Software, Version 17.13.01a` |
 | bob (revoke_others): `--via-agent --device xe1 --username slice01` | exit 0; report below |
+| alice's re-login session's `show version` after it | refused in 300ms: `port49: this session was revoked - log in again` |
 | a login after the key revocation | logged in and ran show version |
 | bob: `--via-agent --principal user:alice@slice.port49.test` | exit 0; `--list` names `api user:bob@slice.port49.test` |
-| alice's agent's next mint | a 401 credential_revoked, which ended the agent's session: `port49 token: the session is over: this principal was revoked at 2026-10-02T07:05:23Z; nothing is minted for it until an operator lifts the revocation (port49 r…`; the agent exited |
+| alice's agent's next mint | a 401 credential_revoked, which ended the agent's session: `port49 token: the session is over: this principal was revoked at 2026-10-02T07:25:29Z; nothing is minted for it until an operator lifts the revocation (port49 r…`; the agent exited |
 | a lift on the admin socket, a new agent, a mint and a login | logged in and ran show version |
 
 Revoke records by `by` and reason: map[key api_right_missing:1 key credential_revoked:1 principal api_right_missing:1 principal credential_revoked:1 principal revocation_lifted:1 self credential_revoked:1].
 
+carol's refusals, in full:
+
+```
+port49 revoke: refused: revoking another principal needs the api: revoke_others right, which your subject does not declare
+port49 revoke: refused: ending a (device, username) whoever holds it needs the api: revoke_others right, which your subject does not declare; for your own session there, use --mine --device xe1 --username slice01
+```
+
 `port49 revoke --mine` printed:
 
 ```
-ended user:alice@slice.port49.test's sessions everywhere at 2026-10-02T07:05:05Z: 1 live context(s) marked, the unspent tokens under 1 (device, username) key(s) deleted; nothing stands against user:alice@slice.port49.test, so a new `port49 token` and login work at once
+ended user:alice@slice.port49.test's sessions everywhere at 2026-10-02T07:25:11Z: 1 live context(s) marked, the unspent tokens under 1 (device, username) key(s) deleted; nothing stands against user:alice@slice.port49.test, so a new `port49 token` and login work at once
 your next login on a device re-admits every session open there under your username: if anyone else used your token, close their session on the device (or ask an operator to revoke your principal) before you log in there again
 ```
 
@@ -45,7 +53,7 @@ The key revocation:
 
 ```
 target: user:alice@slice.port49.test (subject slice_operator)
-ended the session on xe1 (slice01), user:alice@slice.port49.test's, at 2026-10-02T07:05:22Z: 1 live context(s) marked, the unspent tokens under 0 key(s) deleted; no revocation stands, so its owner can mint and log in again (to stop that, revoke the principal)
+ended the session on xe1 (slice01), user:alice@slice.port49.test's, at 2026-10-02T07:25:28Z: 1 live context(s) marked, the unspent tokens under 0 key(s) deleted; no revocation stands, so its owner can mint and log in again (to stop that, revoke the principal)
 the owner's next login on xe1 re-admits any session still open on it under slice01; close it on the device
 ```
 
@@ -53,7 +61,7 @@ The principal's:
 
 ```
 target: user:alice@slice.port49.test (subject slice_operator)
-revoked user:alice@slice.port49.test at 2026-10-02T07:05:23Z: 1 live context(s) marked, the unspent tokens under 0 (device, username) key(s) deleted, 1 held broker connection(s) closed; every mint by user:alice@slice.port49.test is refused until `port49 revoke --lift --principal user:alice@slice.port49.test`
-the lift is made on port49d's admin socket (/home/rwendt/git/port49/.worktrees/lab-7c-t13/tests/lab/logs/api-revoke-admin.sock), by port49d's user or root
+revoked user:alice@slice.port49.test at 2026-10-02T07:25:29Z: 1 live context(s) marked, the unspent tokens under 0 (device, username) key(s) deleted, 1 held broker connection(s) closed; every mint by user:alice@slice.port49.test is refused until `port49 revoke --lift --principal user:alice@slice.port49.test`
+the lift is made on port49d's admin socket (tests/lab/logs/api-revoke-admin.sock), by port49d's user or root
 ```
 
