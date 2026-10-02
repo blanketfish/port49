@@ -301,6 +301,32 @@ func TestInitRevocationsCmdReadsOnlyThePath(t *testing.T) {
 	}
 }
 
+// A relative broker.revocations_file is refused, exit 1, and nothing is
+// written: it would resolve against the caller's directory, not port49d's
+// (task 2 review m2, m4).
+func TestInitRevocationsCmdRefusesARelativePath(t *testing.T) {
+	dir := safeDir(t)
+	cfg := filepath.Join(dir, "port49d.yaml")
+	if err := os.WriteFile(cfg, []byte("broker:\n  revocations_file: state/revocations.json\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := initRevocationsCmd([]string{"--config", cfg}, &out, &errb); code != 1 ||
+		!strings.Contains(errb.String(), `broker.revocations_file "state/revocations.json" is relative: it must be absolute`) ||
+		out.Len() != 0 {
+		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{filepath.Join(cwd, "state"), filepath.Join(dir, "state")} {
+		if _, err := os.Lstat(p); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("a refused init wrote under %s: %v", p, err)
+		}
+	}
+}
+
 // The directory is fenced whether or not the file exists: a missing
 // directory, or one others can write, refuses the start before "missing"
 // can mean anything (pre-flight C1).

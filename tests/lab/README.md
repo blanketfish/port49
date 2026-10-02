@@ -224,7 +224,9 @@ chmod go-w tests/lab/slice tests/lab/slice/policy.yaml tests/lab/quarantine test
 # a broker run only: its certificates, written before the daemon that loads them at start
 go run ./tests/lab/cmd/slice-pki
 # a broker run only: port49d never creates broker.revocations_file; init creates it once, run as the
-# user port49d runs as (a later run over a file that loads writes nothing)
+# user port49d runs as (a later run over a file that loads writes nothing); init refuses a relative
+# path, so the derived config names the file absolutely
+sed -i "s|^  revocations_file: tests/|  revocations_file: $PWD/tests/|" tests/lab/logs/port49d-byhand.yaml
 bin/port49d init-revocations --config tests/lab/logs/port49d-byhand.yaml
 PORT49_LAB_KEY=labsecret PORT49_LAB_ENC_KEY=port49-lab-encryption-key-32byte \
   bin/port49d -config tests/lab/logs/port49d-byhand.yaml \

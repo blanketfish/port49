@@ -266,9 +266,11 @@ var initCreate = createExclusive
 
 // initRevocationsCmd runs `port49d init-revocations [--config FILE]`. It
 // exits 0 having created the file or found it already there and loading, 1
-// when it would not, and 2 on usage. It prints the absolute path, and warns
-// when the configured one is relative: that resolved against this shell's
-// directory, and port49d resolves it against its own (pre-flight M10).
+// when it would not, and 2 on usage. It refuses a relative
+// broker.revocations_file: that would resolve against this shell's
+// directory, and port49d resolves it against its own, so init would create
+// a file port49d may never look at (task 2 review m4). A start still takes
+// a relative path as Load does.
 func initRevocationsCmd(args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("port49d init-revocations", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -290,16 +292,13 @@ func initRevocationsCmd(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "port49d init-revocations:", err)
 		return 1
 	}
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		fmt.Fprintln(stderr, "port49d init-revocations:", err)
+	if !filepath.IsAbs(path) {
+		fmt.Fprintf(stderr, "port49d init-revocations: broker.revocations_file %q is relative: it must be absolute, "+
+			"since it would resolve against this shell's directory, not port49d's; give an absolute path in "+
+			"port49d.yaml\n", path)
 		return 1
 	}
-	if !filepath.IsAbs(path) {
-		fmt.Fprintf(stderr, "port49d init-revocations: warning: broker.revocations_file %q is relative: it resolved "+
-			"against this shell's directory, to %s, and port49d resolves it against its own; give an absolute "+
-			"path in port49d.yaml\n", path, abs)
-	}
+	abs := filepath.Clean(path)
 	cfgAbs, err := filepath.Abs(*cfgPath)
 	if err != nil {
 		fmt.Fprintln(stderr, "port49d init-revocations:", err)
