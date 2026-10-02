@@ -559,3 +559,33 @@ func TestAnUndecodableContextIsDeletedOnItsRev(t *testing.T) {
 		t.Fatalf("after the delete: %v", err)
 	}
 }
+
+// A garbled index record never drops a principal from the refresh: one
+// left out would keep a policy that may be wider than the one in force.
+// The principal is read off its lookup entry's own key, and every other
+// principal is still listed (Task 7 review I-1, as refined).
+func TestAGarbledIndexRecordKeepsItsPrincipalActive(t *testing.T) {
+	ctx := context.Background()
+	s := onShared(t, func() time.Time { return t0 })
+	victim := store.ContextRef{NAS: "leaf-01", Username: "alice"}
+	other := store.ContextRef{NAS: "leaf-02", Username: "bob"}
+	for _, x := range []struct {
+		ref       store.ContextRef
+		principal string
+	}{{victim, "user:victim"}, {other, "user:other"}} {
+		if err := s.PutContext(ctx, store.ContextKey{NAS: x.ref.NAS, Username: x.ref.Username},
+			store.Context{CtxID: "c", Principal: x.principal, Username: x.ref.Username}, time.Hour); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.IndexContext(ctx, x.principal, "sid-"+x.ref.Username, "", x.ref, time.Hour); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.ctx.Put(ctx, s.k.indexed(victim), "not json"); err != nil {
+		t.Fatal(err)
+	}
+	ps, err := s.ActivePrincipals(ctx)
+	if err != nil || !slices.Equal(ps, []string{"user:other", "user:victim"}) {
+		t.Fatalf("active principals with user:victim's index record garbled: %v %v", ps, err)
+	}
+}

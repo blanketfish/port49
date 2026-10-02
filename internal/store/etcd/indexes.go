@@ -88,12 +88,12 @@ func (s *Store) ContextsByCert(ctx context.Context, certKey string) ([]store.Con
 }
 
 // eachIndexed calls f on every index record that decodes, a page at a
-// time. One that does not is skipped, said and counted (undecodableIndex):
-// it names no principal to refresh and no entry to prune, and failing the
-// walk on it would stop the refresh for every principal and the sweep for
-// every record (Task 7 review I-1). The context it hides is the
-// re-index's to find (Task 7b).
-func (s *Store) eachIndexed(ctx context.Context, f func(key string, mod int64, x idxRec)) error {
+// time. One that does not is said and counted (undecodableIndex), handed
+// to bad when it is not nil, and otherwise skipped: failing the walk on it
+// would stop the refresh for every principal and the sweep for every
+// record (Task 7 review I-1). The context it hides is the re-index's to
+// find (Task 7b).
+func (s *Store) eachIndexed(ctx context.Context, f func(key string, mod int64, x idxRec), bad func(key string)) error {
 	prefix := s.k.family(famIndexed)
 	end := clientv3.GetPrefixRangeEnd(prefix)
 	from := prefix
@@ -106,6 +106,9 @@ func (s *Store) eachIndexed(ctx context.Context, f func(key string, mod int64, x
 			var x idxRec
 			if err := json.Unmarshal(kv.Value, &x); err != nil {
 				s.undecodableIndex(kv.Key, "a walk of the index skips it")
+				if bad != nil {
+					bad(string(kv.Key))
+				}
 				continue
 			}
 			f(string(kv.Key), kv.ModRevision, x)
@@ -118,18 +121,30 @@ func (s *Store) eachIndexed(ctx context.Context, f func(key string, mod int64, x
 }
 
 // ActivePrincipals is every principal some index record lists live,
-// sorted: one pass over the index records, no lookup entry read.
+// sorted: one pass over the index records, and no lookup entry read while
+// every record decodes. A record that does not decode never drops a
+// principal from the refresh, since one left out keeps a policy that may
+// be wider than the one in force: each principal with a lookup entry
+// naming that record's ref is kept, live or not, read off the entry's own
+// key (ip/<principal>/<nas>/<user>), so its refresh runs and its contexts'
+// own records decide (Task 7 review I-1, as refined).
 func (s *Store) ActivePrincipals(ctx context.Context) ([]string, error) {
 	now := s.now()
 	set := map[string]bool{}
+	bad := map[string]bool{}
 	if err := s.eachIndexed(ctx, func(_ string, _ int64, x idxRec) {
 		for _, e := range x.Principals {
 			if e.ExpiresAt.After(now) {
 				set[e.Key] = true
 			}
 		}
-	}); err != nil {
+	}, func(key string) { bad[key] = true }); err != nil {
 		return nil, err
+	}
+	if len(bad) > 0 {
+		if err := s.principalsNaming(ctx, bad, set); err != nil {
+			return nil, err
+		}
 	}
 	out := make([]string, 0, len(set))
 	for p := range set {
@@ -137,6 +152,31 @@ func (s *Store) ActivePrincipals(ctx context.Context) ([]string, error) {
 	}
 	sort.Strings(out)
 	return out, nil
+}
+
+// principalsNaming adds to set the principal of every principal lookup
+// entry whose ref's index record key is in xks, paging the family
+// keys-only. An entry that does not parse names no principal, as the sweep
+// treats it.
+func (s *Store) principalsNaming(ctx context.Context, xks, set map[string]bool) error {
+	prefix := s.k.family(famByPrincipal)
+	end := clientv3.GetPrefixRangeEnd(prefix)
+	from := prefix
+	for {
+		resp, err := s.ctx.Get(ctx, from, clientv3.WithRange(end), clientv3.WithLimit(500), clientv3.WithKeysOnly())
+		if err != nil {
+			return unavailable(err)
+		}
+		for _, kv := range resp.Kvs {
+			if p, ref, ok := s.parseLookup(famByPrincipal, string(kv.Key)); ok && xks[s.k.indexed(ref)] {
+				set[p] = true
+			}
+		}
+		if !resp.More || len(resp.Kvs) == 0 {
+			return nil
+		}
+		from = string(resp.Kvs[len(resp.Kvs)-1].Key) + "\x00"
+	}
 }
 
 // Sweep is the index's reclamation, which leases cannot do for it (Ruling
@@ -179,7 +219,7 @@ func (s *Store) Sweep(ctx context.Context) (pruned, removed int, err error) {
 		if n := before - (len(x.Principals) + len(x.Sids) + len(x.Certs)); n > 0 {
 			prunes = append(prunes, prune{key: key, mod: mod, x: x, n: n})
 		}
-	}); err != nil {
+	}, nil); err != nil {
 		return 0, 0, err
 	}
 	for _, p := range prunes {
