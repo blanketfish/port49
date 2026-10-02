@@ -1478,13 +1478,9 @@ are as read, and otherwise reads and decides again. So no window leaves a joined
 A store port49 cannot reach fails the login `store_unavailable`: before the token is spent
 when the redemption fails, and after it when the step that writes the context fails. A
 context and its index that cannot be written together are never written apart, so a login
-is never admitted with a context no revocation can reach. A login whose join ERRORs marks its
-receipt failed, whether or not the write committed: a retransmission is FAIL
-`receipt_replayed`, or `token_spent` when the receipt names a context that does not exist; the
-operator mints again (plan 7d, Task 3 review I2). Two cases still replay PASS until plan 7d's
-Task 4b checks the marks of the presented credential itself at the replay: a retransmission
-that reads the receipt while the failing join is still in flight, and one after a failed join
-whose mark on the receipt did not land either (the `redeem` record's `index_error` says so). A record the
+is never admitted with a context no revocation can reach. An ERROR whose write timed out
+may still have committed: the context is then indexed, so revocable, and a retransmission
+replays the receipt; if it did not commit, the retransmission is `token_spent`. A record the
 store returns but port49 cannot open — sealed under a key that has left the two-key window, or
 failing authentication — cannot be joined, and is **replaced fresh** through the same
 compare-and-set: the replace carries the record's plaintext `revoked_at` by the rule in the table,
@@ -2059,7 +2055,7 @@ refused request named; any other path is recorded `mint`.
 | `token_spent` | `redeem`/`escalate`: the credential matched a receipt whose sliding window (`receipt_idle_ttl`) or absolute cap (`receipt_max_age`) had passed, or whose `ctx_id` is no longer the live context's — the context was replaced or reclaimed since, so the stored decision describes nothing that exists (§5.6); FAIL on the wire, distinguishable only in the log |
 | `device_mismatch` | `redeem`: the presented token's device tag is not this device's (design document §8) — PAP and ASCII only; under CHAP the tag is not visible and the outcome is `token_not_found` |
 | `credential_mismatch` | `redeem`: the receipt the store returned does not carry the credential hash the lookup asked for. Since 2026-09-20 the hash is *in* the receipt key (§13, decision 15), so a differing credential finds no receipt and redeems normally instead; this reason now covers only a store that answered with a record it was not asked for, which is a store fault and never a normal outcome |
-| `receipt_replayed` | `redeem`: a byte-identical retransmission replayed the stored decision; not while the context it names is revoked — that is `credential_revoked` (§5.6). A login refused, or ERRORed, after its join replays as FAIL (after a refusal, once the revocation is lifted) |
+| `receipt_replayed` | `redeem`: a byte-identical retransmission replayed the stored decision; not while the context it names is revoked — that is `credential_revoked` (§5.6). A login refused after its join replays as FAIL once the revocation is lifted |
 | `token_kind_mismatch` | `redeem`/`escalate`: a login token presented at `enable`, or the reverse (§7) |
 | `enable_refused` | `escalate`: the subject's mechanism is `none` |
 | `ceiling_exceeded` | `escalate`: the requested level is above `max_privilege` |
@@ -6478,9 +6474,7 @@ review (the owner may override them).*
     revocation by principal or certificate writes its context revoked, or is reached by the
     revocation's second pass.
   - **An index that cannot be written.** The login is refused ERROR `store_unavailable` (it
-    was a PASS with `index_error`), and its receipt is marked failed, so a retransmission
-    after it replays a refusal, not a PASS for a credential whose marks the failed join did
-    not read (Task 3 review I2). §5.6 names the two windows Task 4b closes.
+    was a PASS with `index_error`). An ERROR whose write may have committed is §5.6's.
   - **What it leaves.** A self or key revocation leaves no mark, so its window of one round
     trip stays (§5.1.4).
 - **The context is sealed whole, bound to its key.**
