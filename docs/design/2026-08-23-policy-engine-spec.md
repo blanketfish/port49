@@ -6523,8 +6523,10 @@ review (the owner may override them).*
     key is admitted.
 - **The standing marks are read on every request.** The daemon holds the marks in memory, with
   the store as the authority.
-  - **Kept current.** They are loaded at start before any listener binds; a mark is added once
-    its write lands and removed once its lift does.
+  - **Kept current.** They are loaded at start before any listener binds. A mark is added
+    before its write is sent, so a write that commits and whose reply is lost leaves no gap,
+    and is taken out again only when the store refused the write, wrote nothing, and the mark
+    did not stand already. It is removed once its lift lands.
   - **What they deny.** An authorization, an `enable` and a receipt's replay are denied
     `credential_revoked` for a context whose principal or certificate a mark names, whatever
     the record says.
