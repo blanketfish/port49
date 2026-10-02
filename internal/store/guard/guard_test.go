@@ -394,6 +394,75 @@ func TestACallersDeadlineWaitingForASlotIsSaturated(t *testing.T) {
 	wg.Wait()
 }
 
+// A caller whose deadline has already passed (a packet whose earlier store
+// calls spent store.packet_deadline) is the store too slow for it, on an
+// idle pool every time: deadline, counted, never saturated, and it never
+// reaches the store (review I1). Enough of them open the circuit.
+func TestACallerAlreadyPastItsDeadlineIsADeadline(t *testing.T) {
+	var said, gone told
+	inner := &stuck{}
+	c := config(&said, &gone)
+	c.Failures = 1000
+	g := Wrap(inner, c)
+	past, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	for i := 0; i < 200; i++ {
+		if _, err := g.GetContext(past, k); !errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, store.ErrUnavailable) {
+			t.Fatalf("a call past its deadline: %v", err)
+		}
+	}
+	for _, o := range outcomes {
+		want := 0.0
+		if o == "deadline" {
+			want = 200
+		}
+		if n := testutil.ToFloat64(c.Metrics.Calls.WithLabelValues("daemon", "context", o)); n != want {
+			t.Errorf("outcome %s: %v, want %v", o, n, want)
+		}
+	}
+	if inner.count() != 0 {
+		t.Fatalf("%d calls past their deadline reached the store", inner.count())
+	}
+	c = config(&said, &gone)
+	g = Wrap(inner, c)
+	for i := 0; i < 3; i++ {
+		g.GetContext(past, k)
+	}
+	if v := testutil.ToFloat64(c.Metrics.Open.WithLabelValues("daemon", "context")); v != 1 {
+		t.Fatalf("three calls past their deadline left the circuit closed (%v)", v)
+	}
+}
+
+// An open circuit that Unhealthy was told about, whose probe is then
+// refused, is not told again: the open run and the refused run each tell
+// once (review M1).
+func TestAnOpenCircuitIsToldOnce(t *testing.T) {
+	var said, gone told
+	inner := &stuck{err: store.ErrUnavailable}
+	c := config(&said, &gone)
+	c.OpenFor, c.StopAfter = 20*time.Millisecond, 50*time.Millisecond
+	g := Wrap(inner, c)
+	for i := 0; i < 3; i++ {
+		g.GetContext(context.Background(), k)
+	}
+	time.Sleep(60 * time.Millisecond)
+	inner.set(store.ErrRefused, 0)
+	for i := 0; i < 3; i++ {
+		g.GetContext(context.Background(), k) // the first is told; each later one probes, refused
+		time.Sleep(25 * time.Millisecond)
+	}
+	l := gone.all()
+	n := 0
+	for _, line := range l {
+		if strings.Contains(line, "circuit has been open") {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("the open circuit was told %d times: %q", n, l)
+	}
+}
+
 // A bulk call has its own deadline and circuit: a scan that fails opens
 // the bulk pool's, never the context pool's (pre-flight I14).
 func TestABulkFailureLeavesTheHotPoolsClosed(t *testing.T) {

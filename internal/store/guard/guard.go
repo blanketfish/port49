@@ -68,9 +68,12 @@ type Config struct {
 	OpenFor     time.Duration // how long it stays open before a probe
 	// StopAfter is how long a token or context pool's circuit may stay
 	// open, or its calls be refused in a steady run, before Unhealthy is
-	// told, once (store.etcd.hold_ttl); zero never tells it. The bulk pool
-	// never tells it (re-check R-I5).
+	// told (store.etcd.hold_ttl), once per open circuit and once per
+	// refused run; zero never tells it. The bulk pool never tells it
+	// (re-check R-I5).
 	StopAfter time.Duration
+	// Unhealthy is called on the goroutine of the store call that found
+	// the pool gone, a TACACS+ handler's among them: it must not block.
 	Unhealthy func(why string)
 	Now       func() time.Time
 	Say       func(line string) // told when a circuit opens or closes; nil says nothing
@@ -103,11 +106,13 @@ type pool struct {
 	// opens it again without moving it. refusedSince is the first refusal
 	// of the current run, lastRefused its latest, and refused its count: a
 	// run ends at an answer, or at a refusal more than OpenFor after the
-	// one before it, which starts the next (re-check R-I5). told is whether
-	// Unhealthy has been told about this run of either.
+	// one before it, which starts the next (re-check R-I5). toldOpen is
+	// whether Unhealthy has been told of this open circuit, and toldRefused
+	// of this refused run: each is its own, so a refused probe on an open
+	// circuit already told does not tell it again (review M1).
 	openedAt, refusedSince, lastRefused time.Time
 	refused                             int
-	told                                bool
+	toldOpen, toldRefused               bool
 }
 
 type guarded struct {
@@ -167,7 +172,7 @@ func (p *pool) leave(now time.Time, probe bool, outcome string, cause error, thr
 	switch outcome {
 	case "refused":
 		if p.refusedSince.IsZero() || now.Sub(p.lastRefused) > openFor {
-			p.refusedSince, p.refused, p.told = now, 0, false
+			p.refusedSince, p.refused, p.toldRefused = now, 0, false
 		}
 		p.lastRefused = now
 		p.refused++
@@ -181,14 +186,14 @@ func (p *pool) leave(now time.Time, probe bool, outcome string, cause error, thr
 			was := p.open
 			p.open, p.until = true, now.Add(openFor)
 			if !was {
-				p.openedAt = now
+				p.openedAt, p.toldOpen = now, false
 			}
 			return !was, true
 		}
 		return false, p.open
 	}
 	// An answer: ok, not_found, conflict, error.
-	p.fails, p.refusedSince, p.refused, p.told = 0, time.Time{}, 0, false
+	p.fails, p.refusedSince, p.refused, p.toldRefused = 0, time.Time{}, 0, false
 	if p.open {
 		p.open = false
 		return true, false
@@ -198,22 +203,23 @@ func (p *pool) leave(now time.Time, probe bool, outcome string, cause error, thr
 
 // gone reports, once per run, a pool whose circuit has stayed open, or
 // whose every call has been refused, for stopAfter: a refused run of at
-// least minRefused calls, none more than OpenFor apart (leave). whose
-// names the pool ("the daemon's context pool").
-func (p *pool) gone(now time.Time, stopAfter time.Duration, minRefused int, whose string) (why string, tell bool) {
+// least minRefused calls, none more than OpenFor apart (leave). The
+// line names the pool by component ("the daemon's context pool"), formatted
+// only when it is told, never on the hot path (review M3).
+func (p *pool) gone(now time.Time, stopAfter time.Duration, minRefused int, component string) (why string, tell bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if stopAfter <= 0 || p.told {
+	if stopAfter <= 0 {
 		return "", false
 	}
 	switch {
-	case p.open && now.Sub(p.openedAt) >= stopAfter:
-		p.told = true
-		return fmt.Sprintf("%s's circuit has been open for %v (%v)", whose, stopAfter, p.cause), true
-	case !p.refusedSince.IsZero() && p.refused >= minRefused && now.Sub(p.refusedSince) >= stopAfter:
-		p.told = true
-		return fmt.Sprintf("every call on %s has been refused by the store for %v (its role no longer grants it)",
-			whose, stopAfter), true
+	case p.open && !p.toldOpen && now.Sub(p.openedAt) >= stopAfter:
+		p.toldOpen = true
+		return fmt.Sprintf("the %s's %s pool's circuit has been open for %v (%v)", component, p.name, stopAfter, p.cause), true
+	case !p.toldRefused && !p.refusedSince.IsZero() && p.refused >= minRefused && now.Sub(p.refusedSince) >= stopAfter:
+		p.toldRefused = true
+		return fmt.Sprintf("every call on the %s's %s pool has been refused by the store for %v (its role no longer grants it)",
+			component, p.name, stopAfter), true
 	}
 	return "", false
 }
@@ -226,6 +232,22 @@ func (g *guarded) do(ctx context.Context, p Pool, f func(context.Context) error)
 	if !ok {
 		g.count(p, "circuit_open")
 		return fmt.Errorf("%w: the %s pool's circuit is open", store.ErrUnavailable, p)
+	}
+	// A caller already gone, or already past its deadline, is read before
+	// the slot wait: a select on a free slot and a closed Done picks either
+	// at random, and the outcome must not (review I1). Past its deadline
+	// is a packet whose earlier calls spent store.packet_deadline: the
+	// store too slow for it, a deadline as one struck mid-call is.
+	if err := ctx.Err(); err != nil {
+		outcome := "canceled"
+		if errors.Is(err, context.DeadlineExceeded) {
+			outcome, err = "deadline", fmt.Errorf("%w: the caller's deadline had passed (%w)", store.ErrUnavailable, err)
+		}
+		g.count(p, outcome)
+		if changed, open := pl.leave(g.c.Now(), probe, outcome, err, g.c.Failures, g.c.OpenFor); changed {
+			g.changed(p, open, err)
+		}
+		return err
 	}
 	cctx, cancel := context.WithTimeout(ctx, pl.timeout)
 	defer cancel()
@@ -307,8 +329,7 @@ func (g *guarded) watch(pl *pool) {
 	if pl.name == Bulk {
 		return
 	}
-	whose := fmt.Sprintf("the %s's %s pool", g.c.Component, pl.name)
-	if why, tell := pl.gone(g.c.Now(), g.c.StopAfter, g.c.Failures, whose); tell && g.c.Unhealthy != nil {
+	if why, tell := pl.gone(g.c.Now(), g.c.StopAfter, g.c.Failures, g.c.Component); tell && g.c.Unhealthy != nil {
 		g.c.Unhealthy(why)
 	}
 }
@@ -346,6 +367,7 @@ func (g *guarded) changed(p Pool, open bool, cause error) {
 	}
 	g.c.Say(fmt.Sprintf("port49d: store: the %s's %s pool's circuit is closed: a probe was answered", g.c.Component, p))
 }
+
 func (g *guarded) PutToken(ctx context.Context, k store.TokenKey, t store.Token) (n int, err error) {
 	err = g.do(ctx, Token, func(ctx context.Context) (e error) { n, e = g.inner.PutToken(ctx, k, t); return })
 	return
