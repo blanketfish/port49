@@ -400,6 +400,27 @@ func (s *Store) DeleteTokens(_ context.Context, k store.TokenKey) error {
 	return nil
 }
 
+// DeleteToken removes the live token with this ID under k, compacting the
+// set as RedeemAndReceipt does, so the removed entry's Secret is not left
+// reachable from the backing array (clearTail).
+func (s *Store) DeleteToken(_ context.Context, k store.TokenKey, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	set := s.live(k)
+	for i, t := range set {
+		if t.ID != id {
+			continue
+		}
+		s.tokens[k] = append(set[:i:i], set[i+1:]...)
+		clearTail(set, i)
+		if len(s.tokens[k]) == 0 {
+			delete(s.tokens, k)
+		}
+		return nil
+	}
+	return store.ErrNotFound
+}
+
 func (s *Store) GetReceipt(_ context.Context, rk store.ReceiptKey) (store.Receipt, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

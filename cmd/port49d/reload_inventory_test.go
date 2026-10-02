@@ -446,8 +446,10 @@ func TestAPolicyThatAdmitsNoDeviceIsRefusedWhateverTheBound(t *testing.T) {
 	rig.write(t, strings.Replace(policyWithGroups, "cidr: 10.0.0.0/8", "cidr: 11.0.0.0/8", 1))
 	rig.sighupWithBound(t, 100)
 	out := rig.out.String()
+	// A start refuses it too, so the line does not say a restart would
+	// load it unguarded.
 	if !strings.Contains(out, "the new policy admits none of the 2 device(s)") || !strings.Contains(out, "stop port49d") ||
-		testutil.ToFloat64(rig.m.PolicyFileRefused) != 1 {
+		strings.Contains(out, "a restart of port49d would load it") || testutil.ToFloat64(rig.m.PolicyFileRefused) != 1 {
 		t.Fatalf("the refusal: %s", out)
 	}
 	if len(rig.b.Policy.Load().AdmissionRefusals()) != 0 {

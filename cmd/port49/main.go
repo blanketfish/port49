@@ -1,7 +1,9 @@
 // Command port49 is the operator's CLI (design §17, "Client libraries"; §19
 // step 3). `port49 login` starts the agent that holds the session — one
 // mutual-TLS connection to the broker — and `port49 token DEVICE` mints
-// through it, fresh every time. The policy tools of spec §12 (`explain`,
+// through it, fresh every time. `port49 identity`, `explain` given no files,
+// and `revoke --mine` or `--via-agent` ask the broker through the agent, under
+// the caller's api: rights. The policy tools of spec §12 (`explain`,
 // `policy test`, `policy replay`, `access review`, `grants remove`) read a
 // policy file and an inventory file offline and need no broker. Plan 9 builds
 // the rest: `port49 ssh` with host-key verification, the OIDC client, and a
@@ -33,8 +35,11 @@ const usage = `usage:
   port49 login --broker URL --cert FILE --key FILE --broker-ca FILE [--socket PATH]
   port49 token [--enable] [--ttl DURATION] [--json] [--socket PATH] DEVICE
   port49 refresh [--socket PATH]
+  port49 identity [--json] [--socket PATH]
   port49 explain --policy FILE --inventory FILE (--subject NAME | --principal ID) --device NAME
                  [--command "LINE"] [--show-attributes]
+  port49 explain --device NAME [--command "LINE"] [--principal ID] [--socket PATH]
+                 (asks the broker through your agent; --principal another needs api: explain_others)
   port49 policy test --policy FILE --inventory FILE [--config PORT49D_YAML]
   port49 policy replay [--line N] [--policy FILE --inventory FILE] LOGFILE|-
   port49 policy diff --old FILE --new FILE --inventory FILE
@@ -62,6 +67,10 @@ const usage = `usage:
   port49 revoke [--socket PATH] (--principal PRINCIPAL | --cert FILE | --cert-issuer DN --cert-serial HEX) [--lift]
   port49 revoke [--socket PATH] --list
                 (exits 3 when the revocation is in force but incomplete or not saved)
+  port49 revoke --mine [--device NAME --username NAME] [--agent-socket PATH]
+  port49 revoke --via-agent [--yes] (--principal PRINCIPAL | --device NAME --username NAME) [--agent-socket PATH]
+                (through your agent, under your api: rights; --mine leaves no mark; --via-agent needs
+                api: revoke_others, and asks first on a terminal unless --yes)
 `
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
@@ -78,6 +87,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return tokenCmd(args[1:], stdout, stderr)
 	case "refresh":
 		return refreshCmd(args[1:], stdout, stderr)
+	case "identity":
+		return identityCmd(args[1:], stdout, stderr)
 	case "agent":
 		// What login starts; not for typing.
 		return agentMain(args[1:], stderr)

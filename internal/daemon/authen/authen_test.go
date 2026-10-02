@@ -379,6 +379,9 @@ func (noStore) RedeemAndReceipt(context.Context, store.TokenKey, string, store.R
 func (noStore) DeleteTokens(context.Context, store.TokenKey) error {
 	panic("store called")
 }
+func (noStore) DeleteToken(context.Context, store.TokenKey, string) error {
+	panic("store called")
+}
 func (noStore) GetReceipt(context.Context, store.ReceiptKey) (store.Receipt, error) {
 	panic("store called")
 }

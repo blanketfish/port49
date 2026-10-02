@@ -246,6 +246,12 @@ func (w *wrapped) DeleteTokens(ctx context.Context, k store.TokenKey) error {
 	return w.inner.DeleteTokens(ctx, k)
 }
 
+// DeleteToken carries no sealed field: the key and the plaintext ID
+// address the record.
+func (w *wrapped) DeleteToken(ctx context.Context, k store.TokenKey, id string) error {
+	return w.inner.DeleteToken(ctx, k, id)
+}
+
 func (w *wrapped) GetReceipt(ctx context.Context, rk store.ReceiptKey) (store.Receipt, error) {
 	r, err := w.inner.GetReceipt(ctx, rk)
 	if err != nil {

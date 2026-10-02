@@ -21,6 +21,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -143,7 +144,19 @@ const (
 // the broker's client trust anchor and the issuer of its server certificate
 // (for 127.0.0.1), and one client certificate for email. Everything is valid
 // for a day from now. Keys are 0600.
-func WriteLab(dir, email string, now time.Time) error {
+func WriteLab(dir, email string, now time.Time) error { return WriteLabWith(dir, email, nil, now) }
+
+// LabClientFiles names the certificate and key WriteLabWith writes for an
+// extra person: client-<local part>.pem and client-<local part>-key.pem.
+func LabClientFiles(email string) (cert, key string) {
+	local, _, _ := strings.Cut(email, "@")
+	return "client-" + local + ".pem", "client-" + local + "-key.pem"
+}
+
+// WriteLabWith is WriteLab with a client certificate for each of others
+// too, from the same CA, under LabClientFiles' names: the lab's on-call
+// and peer beside its operator (plan 7c).
+func WriteLabWith(dir, email string, others []string, now time.Time) error {
 	// MkdirAll keeps an existing mode; a directory left loose by an earlier
 	// run is tightened, not inherited. The files are written fresh
 	// (writeFresh).
@@ -177,6 +190,19 @@ func WriteLab(dir, email string, now time.Time) error {
 			return err
 		}
 		files[l.cert], files[l.key] = c, k
+	}
+	for _, o := range others {
+		oc, err := ca.Issue(Leaf{CommonName: o, Emails: []string{o}, Client: true,
+			NotBefore: now.Add(-time.Hour), NotAfter: now.Add(24 * time.Hour)})
+		if err != nil {
+			return err
+		}
+		c, k, err := PEMs(oc)
+		if err != nil {
+			return err
+		}
+		certName, keyName := LabClientFiles(o)
+		files[certName], files[keyName] = c, k
 	}
 	for name, body := range files {
 		if err := writeFresh(filepath.Join(dir, name), body); err != nil {

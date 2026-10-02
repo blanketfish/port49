@@ -62,8 +62,20 @@ import (
 )
 
 func main() {
+	// The one subcommand, before the daemon's flags: it reads port49d.yaml for
+	// one path and starts nothing (spec §13 decision 32, amended).
+	if len(os.Args) > 1 && os.Args[1] == "init-revocations" {
+		os.Exit(initRevocationsCmd(os.Args[2:], os.Stdout, os.Stderr))
+	}
 	cfgPath := flag.String("config", "/etc/port49/port49d.yaml", "path to port49d.yaml")
 	flag.Parse()
+	// A subcommand after a flag (port49d --config X init-revocations) would
+	// otherwise start the daemon (pre-flight M20).
+	if flag.NArg() != 0 {
+		fmt.Fprintln(os.Stderr, "usage: port49d [--config FILE], or port49d init-revocations [--config FILE] "+
+			"(the subcommand comes first)")
+		os.Exit(2)
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	if err := run(ctx, *cfgPath); err != nil {
@@ -352,7 +364,9 @@ func (q quotesCut) Error() string {
 	var out strings.Builder
 	// A load error quotes no rule text and no term (policy.Parse names a rule
 	// by role, list and position), so there is nothing here to redact: a
-	// refused file's own redaction patterns never loaded (spec §5.8).
+	// refused file's own redaction patterns never loaded (spec §5.8). The
+	// reload guard's causes do quote rule text: refusalLine redacts them
+	// before they are cut.
 	s := []rune(q.err.Error())
 	for i := 0; i < len(s); i++ {
 		out.WriteRune(s[i])
@@ -674,21 +688,15 @@ func run(parent context.Context, cfgPath string) error {
 		// certificate again (spec §13 decision 32). Restored into, and saved
 		// from, the broker's own store, the one every mint reads, so the two
 		// cannot drift apart (Task 9 review M6).
-		var created bool
-		marks, created, err = restoreRevocations(ctx, brk.Store, cfg.Broker.RevocationsFile, m)
+		marks, err = restoreRevocations(ctx, brk.Store, cfg.Broker.RevocationsFile, m)
 		if err != nil {
 			stopSpool()
 			<-spoolDone
 			return fmt.Errorf("broker.revocations_file %s: %w", cfg.Broker.RevocationsFile, err)
 		}
 		brk.Persist = persister(brk.Store, cfg.Broker.RevocationsFile, m)
-		if created {
-			fmt.Fprintf(stderr, "port49d: broker: created %s (no revocations); if this is not a first install, "+
-				"stop port49d and restore the file\n", cfg.Broker.RevocationsFile)
-		} else {
-			fmt.Fprintf(stderr, "port49d: broker: %d revocation(s) in force from %s\n", len(marks),
-				cfg.Broker.RevocationsFile)
-		}
+		fmt.Fprintf(stderr, "port49d: broker: %d revocation(s) in force from %s\n", len(marks),
+			cfg.Broker.RevocationsFile)
 	}
 	// Certificate status (spec §5.1.4; decision 33): the kept lists are put
 	// in force now, after the marks and before any listener binds. That is
@@ -864,14 +872,17 @@ func run(parent context.Context, cfgPath string) error {
 			// The socket's deadline covers the wait and the run; one bound
 			// for both, so they cannot drift apart.
 			brk.RevokeTimeout = admin.OpTimeout
+			brk.AdminSocket = cfg.AdminSocket
 			srv.Revoke, srv.Revocations = adminRevoke(brk), adminRevocations(brk.Store)
 		}
 		go srv.Serve(ctx, aln)
 		fmt.Fprintf(stderr, "port49d: admin socket on %s (port49 keys diagnose, port49 revoke)\n", cfg.AdminSocket)
 	}
 	if brk != nil && cfg.AdminSocket == "" {
-		fmt.Fprintln(stderr, "port49d: broker: port49 revoke is unavailable: set admin_socket; until then, cut "+
-			"someone off by removing their grants from broker.policy_file")
+		fmt.Fprintln(stderr, "port49d: broker: no admin_socket: a revocation over HTTP (port49 revoke --via-agent, "+
+			"under api: revoke_others) is made, but none can be lifted, nor a certificate revoked, short of stopping "+
+			"port49d and editing broker.revocations_file; set admin_socket. To cut someone off meanwhile, remove "+
+			"their grants from broker.policy_file")
 	}
 
 	// The bound address, not the configured one: `:49` says nothing about
@@ -887,6 +898,7 @@ func run(parent context.Context, cfgPath string) error {
 	brokerErr := make(chan error, 1)
 	if brokerSrv != nil {
 		go func() { brokerErr <- brokerSrv.Serve(bl) }()
+		brk.SetReady(broker.ReadyServing)
 		fmt.Fprintf(stderr, "port49d: broker listening on %s\n", bln.Addr())
 	}
 
@@ -958,20 +970,32 @@ func run(parent context.Context, cfgPath string) error {
 	select {
 	case err := <-metricsErr:
 		rd.draining()
+		if brk != nil {
+			brk.SetReady(broker.ReadyDraining)
+		}
 		runErr = fmt.Errorf("metrics listener on %s: %w", cfg.MetricsListen, err)
 		cancel()
 		<-serveErr
 	case err := <-brokerErr:
 		rd.draining()
+		if brk != nil {
+			brk.SetReady(broker.ReadyDraining)
+		}
 		runErr = fmt.Errorf("broker listener on %s: %w", cfg.Broker.Listen, err)
 		cancel()
 		<-serveErr
 	case err := <-serveErr:
 		rd.draining()
+		if brk != nil {
+			brk.SetReady(broker.ReadyDraining)
+		}
 		runErr = err
 		cancel()
 	case <-ctx.Done():
 		rd.draining()
+		if brk != nil {
+			brk.SetReady(broker.ReadyDraining)
+		}
 		fmt.Fprintln(stderr, "port49d: signal received, draining")
 		<-serveErr
 	}

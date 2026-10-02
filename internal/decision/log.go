@@ -39,6 +39,11 @@ type Record struct {
 	Change *Change `json:"change,omitempty"`
 	// Revocation is the revoke record's body (spec §5.7).
 	Revocation *Revocation `json:"revocation,omitempty"`
+	// Explain is an explain record's own (spec §5.7): who asked, and whether
+	// a command was asked. The command itself is never recorded. An explain
+	// record carries no Auth: its Principal is whom it was about, and the
+	// caller's credential is in AskedByFingerprint (decision 34).
+	Explain *Explain `json:"explain,omitempty"`
 	// IndexError names what a failed index write cost, on the record for the
 	// session that lost it. Revocation must report the contexts it could not
 	// reach (spec §5.6), and this is the only place that says which they are.
@@ -263,20 +268,37 @@ type Revocation struct {
 	By          string       `json:"by"`
 	Issuer      string       `json:"issuer,omitempty"`
 	Serial      string       `json:"serial,omitempty"`
+	Device      string       `json:"device,omitempty"`
+	Username    string       `json:"username,omitempty"`
 	At          string       `json:"at"`
 	Origin      string       `json:"origin,omitempty"`
 	Contexts    int          `json:"contexts,omitempty"`
 	TokenKeys   int          `json:"token_keys,omitempty"`
 	Connections int          `json:"connections,omitempty"`
 	Unreached   []ContextRef `json:"unreached,omitempty"`
-	Saved       bool         `json:"saved"`
-	Error       string       `json:"error,omitempty"`
+	// Saved is whether broker.revocations_file was written: a standing
+	// mark's alone, absent for a self or key revocation, which writes none.
+	Saved *bool  `json:"saved,omitempty"`
+	Error string `json:"error,omitempty"`
 }
 
 // ContextRef names a live context without its ctx_id, which is sealed.
 type ContextRef struct {
 	Device   string `json:"device"`
 	Username string `json:"username"`
+}
+
+// Explain is what an explain record says of the call beside its answer.
+// AskedBy and AskedByFingerprint are the caller's principal and
+// certificate, kept out of Auth so a record's auth and principal always
+// describe one credential (decision 34). MintError is the mint item error
+// the broker would answer instead of a token; the record then has no
+// verdict.
+type Explain struct {
+	AskedBy            string `json:"asked_by"`
+	AskedByFingerprint string `json:"asked_by_fingerprint,omitempty"`
+	Command            bool   `json:"command,omitempty"`
+	MintError          string `json:"mint_error,omitempty"`
 }
 
 // Unvalidated is what is recorded for a packet no key validated: cleartext header

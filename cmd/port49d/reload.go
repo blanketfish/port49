@@ -19,6 +19,7 @@ import (
 	"github.com/rhwendt/port49/internal/engine"
 	"github.com/rhwendt/port49/internal/inventory"
 	"github.com/rhwendt/port49/internal/keyring"
+	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/store"
 )
@@ -527,7 +528,18 @@ func (r *reloader) loadBoth(ctx context.Context, trigger string, from combinedFr
 		err = bundle.CheckFrom(old, pol, r.cfg.MaxRemovedPercent, fix)
 	}
 	if err == nil {
-		err = bundle.CheckAdmission(old, pol, r.cfg.MaxRemovedPercent)
+		// The policy's bound judges the policy's effect alone: base is the
+		// policy in force over the new inventory, so a device the inventory
+		// takes out is Check's, quarantined as decision 20 says, and the
+		// line blames the policy file only for what the policy does. A base
+		// that does not parse leaves every device the policy's (nil).
+		base, berr := bundle.Parse(old.Raw(), inv, policy.Env{KeyRefs: r.cfg.KeyRefs()})
+		if berr != nil {
+			base = nil
+		}
+		if err = bundle.CheckAdmissionOver(old, base, pol, r.cfg.MaxRemovedPercent, r.now()); err != nil {
+			err = fmt.Errorf("broker.policy_file %s: %w", r.cfg.Broker.PolicyFile, err)
+		}
 	}
 	if err != nil {
 		if from != fromInventory || v == r.refused {
@@ -549,7 +561,7 @@ func (r *reloader) loadBoth(ctx context.Context, trigger string, from combinedFr
 		if pair := v + " " + iv; pair != r.together {
 			r.together = pair
 			fmt.Fprintf(stderr, "port49d: policy and inventory reload (%s) refused together; still serving %s "+
-				"(bundle %s): %s\n", trigger, old.Source, old.Bundle, oneLine(quotesCut{err}))
+				"(bundle %s): %s\n", trigger, old.Source, old.Bundle, refusalLine(err, d == nil, old, pol))
 		}
 		return false
 	}
@@ -887,7 +899,7 @@ func (r *reloader) load(ctx context.Context, trigger string, raw []byte, v strin
 			// revoked and its tokens deleted (I2): a key_groups typo must
 			// not log out the fleet (plan 6a, N1). A policy that admits no
 			// device is refused whatever the bound.
-			if err = bundle.CheckAdmission(old, pol, r.cfg.MaxRemovedPercent); err != nil {
+			if err = bundle.CheckAdmission(old, pol, r.cfg.MaxRemovedPercent, r.now()); err != nil {
 				forAdmission = true
 				err = fmt.Errorf("broker.policy_file %s: %w", r.cfg.Broker.PolicyFile, err)
 			}
@@ -909,7 +921,7 @@ func (r *reloader) load(ctx context.Context, trigger string, raw []byte, v strin
 		r.metrics.PolicyFileRefused.Set(1)
 		r.refused = v
 		fmt.Fprintf(stderr, "port49d: policy reload (%s) refused; still serving %s (bundle %s): %s\n", trigger,
-			old.Source, old.Bundle, oneLine(err))
+			old.Source, old.Bundle, refusalLine(err, false, old, pol))
 		return false
 	}
 	r.refused = ""
@@ -1147,6 +1159,43 @@ func summary(rep broker.RefreshReport) string {
 	}
 	return s + fmt.Sprintf("; unspent tokens superseded on %d (device, username) key(s)", rep.TokenKeys)
 }
+
+// refusalLine is a refused reload's error on one line for stderr, a log:
+// every quoted value a rule of any of pols marks secret is redacted first,
+// as sayPolicy redacts a quarantine's cause, then each is cut to maxQuoted
+// (quotesCut), so a cut never leaves a secret's head (spec §5.8;
+// pre-flight I3). The guard's causes quote policy text, so the policy in
+// force and the refused one are both given; a nil one (a file that did not
+// parse) is skipped. A refusal for the bound (bundle.OverBound) ends with
+// unguardedAtStart, of both files when both are files on disk.
+func refusalLine(err error, both bool, pols ...*policy.Policy) string {
+	line := err.Error()
+	for _, p := range pols {
+		if p != nil {
+			line = platform.RedactQuoted(p.Redactions(), line)
+		}
+	}
+	line = oneLine(quotesCut{errors.New(line)})
+	if over := (*bundle.OverBound)(nil); errors.As(err, &over) {
+		if both {
+			return line + unguardedAtStartBoth
+		}
+		line += unguardedAtStart
+	}
+	return line
+}
+
+// unguardedAtStart ends the line of a reload the guard refused (pre-flight
+// I4): the refused file stays on disk, and a start has no policy in force to
+// bound against, so a pod rescheduled, a crash or the next deploy would
+// load it and take the devices out of service the guard just kept in.
+const unguardedAtStart = "; the refused file is still on disk and is NOT what is serving: a restart of port49d " +
+	"would load it with no such bound, so revert or fix it now"
+
+// unguardedAtStartBoth is unguardedAtStart for a combined reload in file
+// mode, which refuses the policy file and the inventory file together.
+const unguardedAtStartBoth = "; the refused files are still on disk and are NOT what is serving: a restart of " +
+	"port49d would load them with no such bound, so revert or fix them now"
 
 // oneLine is err's text on one line, the way port49d's other lines are: a YAML
 // error lists what it found on lines of its own.

@@ -32,6 +32,10 @@ type Explanation struct {
 	// Refused is device_unknown on a device the inventory names and
 	// admission refuses (spec §10), with why. Nothing else is filled in.
 	Refused string
+	// Revoked is set by the broker when a revocation stands against the
+	// principal (spec §5.1.4): nothing would be minted for it, so nothing
+	// else is filled in but Subject (the principal) and Device.
+	Revoked time.Time
 	// MintError is the mint item error the broker would answer instead of a
 	// token (attribute_too_long, attribute_unsafe, broker_error), and
 	// MintDetail what it names. Nothing is decided past it: no token, no
@@ -72,8 +76,7 @@ func (p *Policy) Explain(subject, principal, device, line string, now time.Time)
 	if _, ok := p.subs[subject]; !ok {
 		return Explanation{}, fmt.Errorf("subject %q is not declared", subject)
 	}
-	e := Explanation{Subject: subject, Device: device, Platform: d.Platform, Command: line,
-		hidden: append(platform.HiddenValues(p.Redactions(), strings.Fields(line)), p.HiddenValues()...)}
+	e := Explanation{Subject: subject, Device: device, Platform: d.Platform, Command: line}
 	dialect := p.dialect(d.Platform)
 	var res Resolution
 	var o engine.Outcome
@@ -106,6 +109,11 @@ func (p *Policy) Explain(subject, principal, device, line string, now time.Time)
 	case err != nil:
 		return e, err
 	}
+	// What a rendered line hides is worked out only for an answer that
+	// quotes one: a no-grant answer, an unknown device's, must cost what the
+	// broker's does, or the time it takes says which devices exist (design
+	// §17; plan 7c review C1).
+	e.hidden = append(platform.HiddenValues(p.Redactions(), strings.Fields(line)), p.HiddenValues()...)
 	// A quarantine an expiry will bring on has not failed yet: the device
 	// answers now, and the note says from when it will not.
 	_, e.Caveats = p.quarantineAt(d.Name, now)
@@ -202,6 +210,29 @@ func MintCheck(res Resolution, principal, device string) (code, detail string) {
 	return "broker_error", err.Error()
 }
 
+// Answer is the explanation's one verdict and reason, as the broker would
+// mint and the daemon decide, in Render's order; or the mint item error the
+// broker would answer instead of a token, with no verdict.
+func (e Explanation) Answer() (verdict string, reason decision.Reason, mintError string) {
+	switch {
+	case !e.Revoked.IsZero():
+		return decision.VerdictDeny, decision.CredentialRevoked, ""
+	case e.Refused != "":
+		return decision.VerdictDeny, decision.DeviceUnknown, ""
+	case e.Quarantined:
+		return decision.VerdictDeny, decision.DeviceQuarantined, ""
+	case e.NoGrants:
+		return decision.VerdictDeny, decision.NoGrantsMatched, ""
+	case e.MintError != "":
+		return "", "", e.MintError
+	case e.Command == "":
+		return decision.VerdictPermit, e.Resolution.Blob.SessionReason(), ""
+	case e.Outcome.Permit:
+		return decision.VerdictPermit, e.Outcome.Reason, ""
+	}
+	return decision.VerdictDeny, e.Outcome.Reason, ""
+}
+
 // mintCheck is MintCheck for each of principals, the first refusal naming
 // the principal. With none to try (a group subject), {principal} is filled in
 // empty, and Explain says so.
@@ -248,14 +279,37 @@ func (p *Policy) quarantineAt(device string, now time.Time) (causes, scheduled [
 }
 
 // wouldPermit lists every role whose permits alone match the command on this
-// platform, compiled as the daemon would compile them. A permit naming a class
-// the platform does not define cannot match there and is skipped; any other
-// failure is an error, since every permit passed load and a role dropped
-// silently would read as "permitted by none".
+// platform, held or not: what to ask for (spec §13 decision 34 records that
+// this names roles from the whole policy, deliberately).
 func (p *Policy) wouldPermit(line, platformName string) ([]string, error) {
-	dialect := p.dialect(platformName)
+	progs, err := p.permitPrograms(platformName)
+	if err != nil {
+		return nil, err
+	}
 	raw, _ := p.commandRaw(line, platformName)
 	var out []string
+	for name, prog := range progs {
+		if len(prog.Command(raw).Permits) > 0 {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// permitPrograms is every role's permits alone compiled for platformName,
+// as the daemon would compile them, compiled at the first call and kept
+// (permitsAlone). A permit naming a class the platform does not define
+// cannot match there and is skipped; any other failure is an error, since
+// every permit passed load and a role dropped silently would read as
+// "permitted by none". An error is not kept, so it is said again at the
+// next call.
+func (p *Policy) permitPrograms(platformName string) (map[string]*engine.Program, error) {
+	if v, ok := p.permitsAlone.Load(platformName); ok {
+		return v.(map[string]*engine.Program), nil
+	}
+	dialect := p.dialect(platformName)
+	progs := make(map[string]*engine.Program, len(p.roles))
 	for name, r := range p.roles {
 		// This blob is never minted; Compile only needs a bundle named.
 		b := engine.Blob{Version: engine.Version, Bundle: "explain", Platform: platformName, Classes: dialect.EntityClasses,
@@ -273,12 +327,10 @@ func (p *Policy) wouldPermit(line, platformName string) ([]string, error) {
 		if err != nil {
 			return nil, fmt.Errorf("role %q: %w", name, err)
 		}
-		if len(prog.Command(raw).Permits) > 0 {
-			out = append(out, name)
-		}
+		progs[name] = prog
 	}
-	sort.Strings(out)
-	return out, nil
+	stored, _ := p.permitsAlone.LoadOrStore(platformName, progs)
+	return stored.(map[string]*engine.Program), nil
 }
 
 func missingClass(rule string, classes map[string][]string) (bool, error) {
@@ -331,8 +383,24 @@ func (e Explanation) Redacted(rules []platform.Redaction) Explanation {
 }
 
 // Render writes the explanation for a person: the verdict and its one reason
-// first, then what it rests on.
+// first, then what it rests on, and the session attributes for a session or
+// when showAttributes asks for them.
 func (e Explanation) Render(w io.Writer, showAttributes bool) {
+	e.render(w, showAttributes || e.Command == "")
+}
+
+// RenderWithoutAttributes is Render that never lists the session
+// attributes, a session's included: what POST /v1/explain returns, since
+// an attribute's source and shape are the operator's, not the caller's.
+func (e Explanation) RenderWithoutAttributes(w io.Writer) { e.render(w, false) }
+
+func (e Explanation) render(w io.Writer, attributes bool) {
+	if !e.Revoked.IsZero() {
+		fmt.Fprintf(w, "deny %s\n  a revocation stands against %s since %s: the broker mints nothing for it until "+
+			"an operator lifts it (port49 revoke --lift)\n", decision.CredentialRevoked, e.Subject,
+			e.Revoked.UTC().Format(time.RFC3339))
+		return
+	}
 	if e.Refused != "" {
 		fmt.Fprintf(w, "deny %s\n  %s (%s) is in the inventory and admission refuses it: %s; nothing is minted "+
 			"for it, and port49d closes its connections after the header (spec §10)\n", decision.DeviceUnknown,
@@ -352,8 +420,12 @@ func (e Explanation) Render(w io.Writer, showAttributes bool) {
 		return
 	}
 	if e.NoGrants {
-		fmt.Fprintf(w, "deny %s\n  %s holds no grant whose scope selects %s (%s); attached roles never add a "+
-			"device (spec §5.5)\n", decision.NoGrantsMatched, e.Subject, e.Device, e.Platform)
+		on := e.Device
+		if e.Platform != "" {
+			on += " (" + e.Platform + ")"
+		}
+		fmt.Fprintf(w, "deny %s\n  %s holds no grant whose scope selects %s; attached roles never add a "+
+			"device (spec §5.5)\n", decision.NoGrantsMatched, e.Subject, on)
 		return
 	}
 	if e.MintError != "" {
@@ -443,7 +515,7 @@ func (e Explanation) Render(w io.Writer, showAttributes bool) {
 			fmt.Fprintf(w, "  permitted by %s\n", wp)
 		}
 	}
-	if showAttributes || e.Command == "" {
+	if attributes {
 		fmt.Fprintf(w, "session attributes that would be returned:\n")
 		if len(r.Attributes) == 0 {
 			fmt.Fprintf(w, "  (none)\n")

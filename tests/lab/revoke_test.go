@@ -102,10 +102,36 @@ func revokeCLI(socket string, args ...string) (string, bool) {
 	return strings.TrimSpace(string(out)), err == nil
 }
 
+// agentRevoke runs `port49 revoke` with args against the agent at sock, and
+// returns what it printed and its exit code.
+func agentRevoke(sock string, args ...string) (string, int) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, filepath.Join(root, "bin", "port49"),
+		append(append([]string{"revoke"}, args...), "--agent-socket", sock)...)
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
+	code := 0
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		code = ee.ExitCode()
+	} else if err != nil {
+		code = -1
+	}
+	return strings.TrimSpace(string(out)), code
+}
+
 // revokeAgent is l29Agent with the agent's pid: a revocation ends the
 // agent on its own, and the run must see that it did (pre-flight I4).
 // stop ends it only if it is still running.
-func revokeAgent(t *testing.T) (sock string, pid int, stop func()) {
+func revokeAgent(t *testing.T) (string, int, func()) {
+	return personAgent(t, testpki.LabClientCert, testpki.LabClientKey)
+}
+
+// personAgent starts `port49 login` with cert and key (paths under the slice
+// PKI directory) on a fresh private socket and returns its socket, its pid,
+// and a stop that ends it only if it is still running (pre-flight I4).
+func personAgent(t *testing.T, cert, key string) (sock string, pid int, stop func()) {
 	t.Helper()
 	pki := filepath.Join(root, slicePKIDir)
 	dir, err := os.MkdirTemp("", "p49revoke")
@@ -116,7 +142,7 @@ func revokeAgent(t *testing.T) (sock string, pid int, stop func()) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, filepath.Join(root, "bin", "port49"), "login", "--broker", sliceBrokerURL,
-		"--cert", filepath.Join(pki, testpki.LabClientCert), "--key", filepath.Join(pki, testpki.LabClientKey),
+		"--cert", filepath.Join(pki, cert), "--key", filepath.Join(pki, key),
 		"--broker-ca", filepath.Join(pki, testpki.LabCA), "--socket", sock).CombinedOutput()
 	m := agentPID.FindSubmatch(out)
 	if err != nil || m == nil {

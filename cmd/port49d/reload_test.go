@@ -22,6 +22,7 @@ import (
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/engine"
+	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/store/memory"
 )
@@ -684,5 +685,52 @@ key_groups:
 	}
 	if !regexp.MustCompile(`(?m)^port49_devices_admission_refused 1$`).Match(body) {
 		t.Fatalf("port49_devices_admission_refused is not 1:\n%s", body)
+	}
+}
+
+// A policy edit that would quarantine more than inventory.max_removed_percent
+// of the devices in service is refused: the policy in force keeps serving,
+// the alarm is up, and the line names the cause and the remedy, and says
+// the refused file is still on disk and a restart would load it unguarded
+// (decision 34; pre-flight I4). With the bound off it applies, and the
+// device is quarantined live.
+func TestAReloadThatQuarantinesTheFleetIsRefused(t *testing.T) {
+	rig := newReloadRig(t, minimalPolicy)
+	before := rig.b.Policy.Load().Source
+	rig.write(t, unmappedLevel+strings.Replace(minimalPolicy, "privilege: admin", "privilege: unmapped", 1))
+	rig.with(func() { rig.r.reload(context.Background(), "SIGHUP") })
+	if rig.b.Policy.Load().Source != before {
+		t.Fatal("a reload quarantining the whole fleet was applied")
+	}
+	if testutil.ToFloat64(rig.m.PolicyFileRefused) != 1 {
+		t.Fatal("port49_policy_file_refused")
+	}
+	if out := rig.out.String(); !strings.Contains(out, "it quarantines 1: leaf1") ||
+		!strings.Contains(out, "raise inventory.max_removed_percent") ||
+		!strings.Contains(out, "is NOT what is serving: a restart of port49d would load it with no such bound") {
+		t.Fatalf("stderr: %s", out)
+	}
+	rig.r.cfg.MaxRemovedPercent = 100
+	rig.with(func() { rig.r.reload(context.Background(), "SIGHUP") })
+	if _, q := rig.b.Policy.Load().Quarantined("leaf1", rig.now); !q {
+		t.Fatal("with the bound off the reload applies and quarantines leaf1")
+	}
+}
+
+// A refused reload's line is redacted with the redactions of both the
+// policy in force and the refused one before it reaches stderr, a log, and
+// only then are its quoted values cut, so a cut never leaves a secret's
+// head (spec §5.8; pre-flight I3): a quarantine's cause quotes policy text.
+// The value is a Junos community, `community <c> {`: the pattern needs the
+// brace past the cut, so a value cut first no longer matches and its
+// secret's head would print (task 10 review M3).
+func TestARefusedReloadsLineIsRedacted(t *testing.T) {
+	pol := newReloadRig(t, minimalPolicy).b.Policy.Load()
+	err := errors.New(`it quarantines 1: leaf1 (role r: "community ` + strings.Repeat("Hunter2", 9) + ` {")`)
+	if cutFirst := platform.RedactQuoted(pol.Redactions(), oneLine(quotesCut{err})); !strings.Contains(cutFirst, "Hunter2") {
+		t.Fatalf("the fixture does not tell the order apart: %s", cutFirst)
+	}
+	if line := refusalLine(err, false, pol, nil); strings.Contains(line, "Hunter2") || !strings.Contains(line, "leaf1") {
+		t.Fatalf("%s", line)
 	}
 }

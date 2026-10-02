@@ -250,7 +250,25 @@ func (l *lab) l31Run(t *testing.T, li *labInventory, src, policy string, ph l31P
 	stop := l.capture(t, "L31-"+ph.name)
 	defer stop()
 	pr.at(t, "phase %s: port49d restarted on the service config, probing until the device asks it", ph.name)
-	live := l.l28Live(t, l.serviceConfig(t, li, policy))
+	cfg := l.serviceConfig(t, li, policy)
+	if ph.name == "quarantined" {
+		// This phase measures a quarantine, which a policy reload brings on
+		// only with the reload guard off: quarantining the one device in
+		// service is 100% and no net release (spec §13 decision 34). L31's
+		// results stand; this only keeps its reload in force under the bound.
+		raw, err := os.ReadFile(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(raw), "\ninventory:\n") {
+			t.Fatalf("%s has no inventory block to turn the reload guard off in", cfg)
+		}
+		body := strings.Replace(string(raw), "\ninventory:\n", "\ninventory:\n  max_removed_percent: 100\n", 1)
+		if err := os.WriteFile(cfg, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	live := l.l28Live(t, cfg)
 	fmt.Fprintf(&b, "%s\n\n", live)
 	if !l28Reached(live) {
 		fail("%s: no probe login reached port49d before the change", ph.name)

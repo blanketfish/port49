@@ -58,10 +58,14 @@ func TestPrivatePolicyCopiesABrokerConfigsInventory(t *testing.T) {
 		!strings.Contains(got, "\n  revocations_file: "+rev+"\n  certificate_status: {disabled: true}\n") {
 		t.Fatalf("the lines were not pointed at the copies:\n%s", got)
 	}
-	for _, p := range []string{rev, rev + ".created"} {
-		if _, err := os.Lstat(p); !os.IsNotExist(err) {
-			t.Errorf("%s outlived the derivation: %v", p, err)
-		}
+	// The file is written empty on purpose, since port49d never creates it
+	// (spec §13 decision 32, amended 2026-10-02); the marker is a start's to
+	// write, so the derivation writes none.
+	if got, err := os.ReadFile(rev); err != nil || string(got) != "{\"revocations\": []}\n" {
+		t.Errorf("%s is not a fresh empty revocations file: %q %v", rev, got, err)
+	}
+	if _, err := os.Lstat(rev + ".created"); !os.IsNotExist(err) {
+		t.Errorf("%s.created outlived the derivation: %v", rev, err)
 	}
 	want, err := os.ReadFile(filepath.Join(r, "tests", "lab", "inventory-lab.yaml"))
 	if err != nil {

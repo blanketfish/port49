@@ -311,3 +311,50 @@ func TestACombinedSIGHUPCountsARefusedDocumentOnce(t *testing.T) {
 		t.Fatalf("a combined SIGHUP counted the document held %v times", n)
 	}
 }
+
+// dcUnmapped lands every device in the dc scope at a level no built-in
+// platform renders, so it quarantines each, and the rest of the fleet reads.
+const dcUnmapped = unmappedLevel + `
+scopes: [{name: all_devices, match: {}}, {name: dc, match: {site: dc1}}]
+roles: [{name: ro, privilege: readonly, permit: [show **]}, {name: u, privilege: unmapped, permit: ["**"]}]
+subjects: [{name: s, identity: ["user:alice@example.com"], username: alice, token_ttl: 60s}]
+grants: [{subject: s, scope: all_devices, roles: [ro]}, {subject: s, scope: dc, roles: [u]}]
+key_groups: [{match: {cidr: 10.0.0.0/8}, key_ref: lab_key}]
+`
+
+// A combined reload is bounded on what its policy does (task 10 review I1):
+// the same policy text, a comment added, with an inventory that moves leaf1
+// into the capped scope, applies and quarantines leaf1, as the inventory
+// alone would (decision 20). A policy that caps the scope the inventory
+// moves leaf1 into is the policy's doing: refused together, the line naming
+// the policy file and saying both refused files would load at a restart.
+func TestACombinedReloadIsBoundedOnThePolicysEffect(t *testing.T) {
+	moved := strings.Replace(withoutGroups, "addresses: [10.0.0.1]}", "addresses: [10.0.0.1], attributes: {site: dc1}}", 1)
+	rig := newReloadRig(t, dcUnmapped)
+	rig.writeInventory(t, withoutGroups)
+	rig.pollTwice()
+	rig.write(t, dcUnmapped+"# the same policy\n")
+	rig.writeInventory(t, moved)
+	rig.sighupWithBound(t, 10)
+	if out := rig.out.String(); !strings.Contains(out, "port49d: policy and inventory reloaded together (SIGHUP)") {
+		t.Fatalf("the inventory's quarantine refused the pair: %s", out)
+	}
+	if _, q := rig.b.Policy.Load().Quarantined("leaf1", rig.now); !q {
+		t.Fatal("leaf1 is not quarantined")
+	}
+
+	rig = newReloadRig(t, strings.Replace(dcUnmapped, "scope: dc, roles: [u]}", "scope: dc, roles: [ro]}", 1))
+	rig.writeInventory(t, withoutGroups)
+	rig.pollTwice()
+	serving := rig.b.Policy.Load().Bundle
+	rig.write(t, dcUnmapped)
+	rig.writeInventory(t, moved)
+	rig.sighupWithBound(t, 10)
+	out := rig.out.String()
+	if !strings.Contains(out, "refused together") || !strings.Contains(out, "broker.policy_file ") ||
+		!strings.Contains(out, "it quarantines 1: leaf1") ||
+		!strings.Contains(out, "the refused files are still on disk and are NOT what is serving") ||
+		rig.b.Policy.Load().Bundle != serving {
+		t.Fatalf("the policy's quarantine: %s", out)
+	}
+}

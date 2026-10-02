@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -524,6 +525,201 @@ func TokenIndex(t *testing.T, newStore func() store.Store, now time.Time) {
 		}
 		if got, err := s.TokensByCert(ctx, blank); err != nil || len(got) != 0 {
 			t.Fatalf("the blank certificate key %q indexed %v (%v)", blank, got, err)
+		}
+	}
+}
+
+// DeleteTokenRemovesOne is DeleteToken (plan 7c): it removes the live token
+// with that ID and leaves every other under the key, and every token under
+// every other key; a second delete, an ID never put, and a key with nothing
+// under it are ErrNotFound. A principal ending its own sessions deletes its
+// own tokens this way and never another's under the same (device, username)
+// (spec §5.1.4; decision 34).
+//
+// The token index (plan 7a) is by key, not by ID, so DeleteToken leaves it
+// as it is: the remaining token's principal and certificate still lead to
+// it, and the deleted token's principal may still name the key, where it
+// finds nothing of its own and no error. Whether that stale entry is pruned
+// is the backend's choice; that it never breaks a lookup is not.
+func DeleteTokenRemovesOne(t *testing.T, newStore func() store.Store, now time.Time) {
+	t.Helper()
+	ctx := context.Background()
+	s := newStore()
+	k := store.TokenKey{NAS: "leaf-01", Username: "svc"}
+	other := store.TokenKey{NAS: "leaf-02", Username: "svc"}
+	cert := store.CertKey("CN=Corp CA", "3f9a01")
+	put := func(k store.TokenKey, id, principal string) {
+		t.Helper()
+		// Index first, as the minter does (store.IndexToken).
+		if err := s.IndexToken(ctx, principal, cert, k, time.Minute); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.PutToken(ctx, k, store.Token{ID: id, Secret: []byte("secret-" + id), Kind: store.KindLogin,
+			ExpiresAt: now.Add(time.Minute), Principal: principal, Username: k.Username, MintedAt: now}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	put(k, "a", "spiffe://example.com/a")
+	put(k, "b", "spiffe://example.com/b")
+	put(other, "a", "spiffe://example.com/a")
+	if err := s.DeleteToken(ctx, k, "a"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Candidates(ctx, k)
+	if err != nil || len(got) != 1 || got[0].ID != "b" || got[0].Principal != "spiffe://example.com/b" {
+		t.Fatalf("left under the key: %v %v", got, err)
+	}
+	if got, err := s.Candidates(ctx, other); err != nil || len(got) != 1 {
+		t.Fatalf("another key's token: %v %v", got, err)
+	}
+	for _, c := range []struct {
+		k  store.TokenKey
+		id string
+	}{{k, "a"}, {k, "never"}, {store.TokenKey{NAS: "nowhere", Username: "svc"}, "b"}} {
+		if err := s.DeleteToken(ctx, c.k, c.id); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("DeleteToken(%v, %q) = %v, want ErrNotFound", c.k, c.id, err)
+		}
+	}
+
+	// The survivor is still reachable through both indexes, so a revocation
+	// of b, or of the certificate, still finds it.
+	if keys, err := s.TokensByPrincipal(ctx, "spiffe://example.com/b"); err != nil || !slices.Contains(keys, k) {
+		t.Fatalf("b's keys after a's delete: %v %v", keys, err)
+	}
+	if keys, err := s.TokensByCert(ctx, cert); err != nil || !slices.Contains(keys, k) || !slices.Contains(keys, other) {
+		t.Fatalf("the certificate's keys after a's delete: %v %v", keys, err)
+	}
+	// a's keys still include other, where a's token lives; any key they still
+	// name under which a has nothing yields no token of a's and no error.
+	keys, err := s.TokensByPrincipal(ctx, "spiffe://example.com/a")
+	if err != nil || !slices.Contains(keys, other) {
+		t.Fatalf("a's keys after its delete: %v %v", keys, err)
+	}
+	for _, key := range keys {
+		got, err := s.Candidates(ctx, key)
+		if err != nil {
+			t.Fatalf("Candidates(%v) through a's index: %v", key, err)
+		}
+		for _, tok := range got {
+			if key == k && tok.Principal == "spiffe://example.com/a" {
+				t.Fatalf("a's deleted token is still under %v", key)
+			}
+		}
+	}
+
+	// A middle entry, then the last: each compacts the set differently, and
+	// neither may disturb a survivor's secret.
+	three := store.TokenKey{NAS: "leaf-03", Username: "svc"}
+	for _, id := range []string{"x", "y", "z"} {
+		put(three, id, "spiffe://example.com/"+id)
+	}
+	for _, step := range []struct {
+		id   string
+		want []string
+	}{{"y", []string{"x", "z"}}, {"z", []string{"x"}}} {
+		if err := s.DeleteToken(ctx, three, step.id); err != nil {
+			t.Fatalf("DeleteToken(%q): %v", step.id, err)
+		}
+		SecretsIntact(t, s, three, step.want...)
+	}
+
+	// An expired token is not live, so there is nothing to delete.
+	expired := store.TokenKey{NAS: "leaf-04", Username: "svc"}
+	if _, err := s.PutToken(ctx, expired, store.Token{ID: "old", Secret: []byte("secret-old"), Kind: store.KindLogin,
+		ExpiresAt: now, Principal: "spiffe://example.com/a", Username: expired.Username, MintedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteToken(ctx, expired, "old"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("DeleteToken on an expired token = %v, want ErrNotFound", err)
+	}
+}
+
+// SecretsIntact fails t unless the live tokens under k are exactly ids, in
+// any order, each with the Secret "secret-"+ID. A Secret is compared and
+// never printed.
+func SecretsIntact(t *testing.T, s store.Store, k store.TokenKey, ids ...string) {
+	t.Helper()
+	got, err := s.Candidates(context.Background(), k)
+	if err != nil {
+		t.Fatalf("Candidates(%v): %v", k, err)
+	}
+	var have []string
+	for _, tok := range got {
+		have = append(have, tok.ID)
+		if string(tok.Secret) != "secret-"+tok.ID {
+			t.Fatalf("under %v, token %q's secret was damaged", k, tok.ID)
+		}
+	}
+	slices.Sort(have)
+	want := slices.Clone(ids)
+	slices.Sort(want)
+	if !slices.Equal(have, want) {
+		t.Fatalf("under %v: tokens %v, want %v", k, have, want)
+	}
+}
+
+// DeleteTokenRacesRedeem is DeleteToken among the other writers of one key's
+// token set (plan 7c). Each round puts a, b and d under one key, then runs at
+// once: RedeemAndReceipt and DeleteToken of a, DeleteToken of b, and PutToken
+// of c. Whatever the interleaving, exactly one of a's redeem and delete wins
+// and the other is ErrNotFound; b's delete succeeds; and the set ends as
+// exactly c and d with their secrets whole. So a spent token never comes
+// back (a replay), a token put concurrently is never lost, and a delete never
+// takes a token under another ID. A backend that rewrites the set from a stale
+// read, without a compare on what it read, fails one of these.
+func DeleteTokenRacesRedeem(t *testing.T, newStore func() store.Store, now time.Time) {
+	t.Helper()
+	const rounds = 200
+	k := store.TokenKey{NAS: "leaf-01", Username: "svc"}
+	tok := func(id string) store.Token {
+		return store.Token{ID: id, Secret: []byte("secret-" + id), Kind: store.KindLogin,
+			ExpiresAt: now.Add(time.Minute), Principal: "spiffe://example.com/" + id, Username: k.Username, MintedAt: now}
+	}
+	w := store.ReceiptWrite{
+		Key:       store.ReceiptKey{NAS: k.NAS, Username: k.Username, Kind: store.KindLogin, CredentialSHA256: [32]byte{1}},
+		Receipt:   store.Receipt{CredentialSHA256: [32]byte{1}, FirstRedeemedAt: now, IdleExpiresAt: now.Add(time.Minute), RetainUntil: now.Add(time.Hour)},
+		Principal: "spiffe://example.com/a",
+		IndexTTL:  time.Hour,
+	}
+	for round := 0; round < rounds; round++ {
+		s := newStore()
+		ctx := context.Background()
+		for _, id := range []string{"a", "b", "d"} {
+			if _, err := s.PutToken(ctx, k, tok(id)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		start := make(chan struct{})
+		var redeemErr, deleteAErr, deleteBErr, putErr error
+		var wg sync.WaitGroup
+		for _, f := range []func(){
+			func() { redeemErr = s.RedeemAndReceipt(ctx, k, "a", w) },
+			func() { deleteAErr = s.DeleteToken(ctx, k, "a") },
+			func() { deleteBErr = s.DeleteToken(ctx, k, "b") },
+			func() { _, putErr = s.PutToken(ctx, k, tok("c")) },
+		} {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				f()
+			}()
+		}
+		close(start)
+		wg.Wait()
+		if deleteBErr != nil || putErr != nil {
+			t.Fatalf("round %d: delete b %v, put c %v", round, deleteBErr, putErr)
+		}
+		switch {
+		case redeemErr == nil && errors.Is(deleteAErr, store.ErrNotFound):
+		case deleteAErr == nil && errors.Is(redeemErr, store.ErrNotFound):
+		default:
+			t.Fatalf("round %d: redeem a %v, delete a %v; want exactly one nil and the other ErrNotFound",
+				round, redeemErr, deleteAErr)
+		}
+		SecretsIntact(t, s, k, "c", "d")
+		if err := s.RedeemAndReceipt(ctx, k, "a", w); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("round %d: a redeemed again: %v", round, err)
 		}
 	}
 }

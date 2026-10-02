@@ -875,7 +875,8 @@ func privatePolicy(cfg, dir string) (string, error) {
 	// (plan 7a): tests/lab/logs is 0775 under the desktop umask and would
 	// refuse the start, and a mark one run left would refuse the next run's
 	// mints. It goes in the private directory, fresh at every derived
-	// config: the first start creates it (pre-flight I6).
+	// config, written empty on purpose: port49d no longer creates it (spec
+	// §13 decision 32, amended 2026-10-02).
 	if i := strings.Index(cfg, "  revocations_file: "); i >= 0 {
 		j := strings.Index(cfg[i:], "\n")
 		if j < 0 {
@@ -887,9 +888,31 @@ func privatePolicy(cfg, dir string) (string, error) {
 				return "", err
 			}
 		}
+		if err := writeEmptyRevocations(dst); err != nil {
+			return "", err
+		}
 		cfg = cfg[:i] + "  revocations_file: " + dst + cfg[i+j:]
 	}
 	return cfg, nil
+}
+
+// writeEmptyRevocations writes {"revocations": []} to path, 0600, only when
+// nothing is there: port49d never creates the file (spec §13 decision 32,
+// amended 2026-10-02), and one already there may be held by a port49d still
+// running, whose marks a truncation would lose (task 2 review m5).
+func writeEmptyRevocations(path string) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if errors.Is(err, fs.ErrExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	_, err = f.WriteString("{\"revocations\": []}\n")
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	return err
 }
 
 // privateCopy copies the file the line starting at anchor names to name in

@@ -421,6 +421,19 @@ type Store interface {
 	// one atomic operation, indexing the receipt by principal (design §12).
 	RedeemAndReceipt(ctx context.Context, k TokenKey, tokenID string, w ReceiptWrite) error
 	DeleteTokens(ctx context.Context, k TokenKey) error
+	// DeleteToken removes the one live token with this ID under k, and
+	// nothing else: a principal ending its own sessions deletes its own
+	// tokens, never another's under the same (device, username) (spec
+	// §5.1.4; decision 34). ErrNotFound when no live token under k has that
+	// ID. The ID is plaintext (Token.ID), so the sealing layer passes it
+	// through.
+	// It leaves the token index (IndexToken) as it is. That index is by key,
+	// not by ID, and the same principal or certificate can hold a second live
+	// token under k: pruning its entry would let a revocation miss that
+	// token, where a stale entry costs a revocation of that principal one
+	// DeleteTokens on k, which, as for a live entry, also ends any other
+	// principal's tokens there.
+	DeleteToken(ctx context.Context, k TokenKey, id string) error
 	GetReceipt(ctx context.Context, rk ReceiptKey) (Receipt, error)
 	// ExtendReceipt pushes the sliding bound out. It never moves RetainUntil or
 	// FirstRedeemedAt, so the absolute cap cannot be slid.

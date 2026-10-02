@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rhwendt/port49/internal/broker/api"
@@ -91,6 +92,11 @@ type Broker struct {
 	// DefaultRevokeTimeout.
 	RevokeTimeout time.Duration
 
+	// AdminSocket is port49d's admin_socket, where a revocation is lifted;
+	// empty when none is configured. Only the HTTP revocation's answer reads
+	// it, to say where its mark is lifted (decision 34).
+	AdminSocket string
+
 	// CertStatus answers a certificate chain's revocation status (spec
 	// §5.1.4; decision 33): nil checks nothing, port49d's `disabled: true`.
 	// OnUnavailable is "refuse" or "allow", for a status it cannot establish.
@@ -106,6 +112,12 @@ type Broker struct {
 	// made lazily under mu. A channel, not a mutex, so a caller waiting
 	// behind a hung store call or Persist gives up when its ctx ends.
 	revokeSem chan struct{}
+
+	// ownRevoking is, by caller principal, a self or key revocation over
+	// HTTP still running (holdOwnRevoke). Neither takes revokeSem, and both
+	// run detached, so without it one caller's retries would pile up
+	// detached runs against a slow store (ruling M4). Guarded by mu.
+	ownRevoking map[string]bool
 
 	mu        sync.Mutex
 	blobsSeen map[string]bool
@@ -125,6 +137,9 @@ type Broker struct {
 	pending map[[2]string]queuedRevoke
 	// said is, by key, when sayOnce last said it.
 	said map[string]time.Time
+
+	// ready is what /readyz answers (SetReady).
+	ready atomic.Pointer[string]
 }
 
 // Handler routes the endpoints the broker serves.
@@ -134,6 +149,11 @@ func (b *Broker) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/tokens", b.tokens)
 	mux.HandleFunc("POST /v1/refresh/challenge", b.refreshChallenge)
 	mux.HandleFunc("POST /v1/refresh", b.refresh)
+	mux.HandleFunc("GET /v1/identity", b.identity)
+	mux.HandleFunc("POST /v1/tokens/revoke", b.tokensRevoke)
+	mux.HandleFunc("POST /v1/explain", b.explain)
+	mux.HandleFunc("GET /healthz", b.healthz)
+	mux.HandleFunc("GET /readyz", b.readyz)
 	return mux
 }
 
@@ -198,59 +218,16 @@ func deviceName(name string) bool {
 }
 
 func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
-	now := b.Now()
-	authTime := b.authTime(r)
 	// The principal comes from the verified connection and nowhere else: the
 	// body has no field that names one, and DisallowUnknownFields refuses a
-	// body that tries.
-	principal, cred, err := Identity(r.TLS, now)
-	if err != nil {
-		// A chain the anchor verified is named on the refusal (principal when
-		// it maps to one, the fingerprint always); no chain names no one.
-		b.emit(decision.Record{TS: now, Event: decision.EventMint, Verdict: decision.VerdictDeny,
-			Reason: decision.TrustDomainUnresolved, Principal: principal,
-			Auth: &decision.Auth{Method: "cert", Fingerprint: cred.Fingerprint}})
-		writeError(w, http.StatusUnauthorized, string(decision.TrustDomainUnresolved), err.Error())
+	// body that tries. The marks authenticate read are read again after the
+	// last token write, below.
+	principal, cred, ok := b.authenticate(w, r, decision.EventMint, "minted nothing")
+	if !ok {
 		return
 	}
-	if b.MaxSessionAge > 0 && now.Sub(authTime) > b.MaxSessionAge {
-		b.emit(decision.Record{TS: now, Event: decision.EventMint, Verdict: decision.VerdictDeny,
-			Reason: decision.SessionExpired, Principal: principal, Auth: &decision.Auth{Method: cred.Method}})
-		// Closing the connection is what makes the next request a handshake,
-		// and the handshake is the fresh authentication decision 17 requires.
-		w.Header().Set("Connection", "close")
-		writeError(w, http.StatusUnauthorized, string(decision.SessionExpired), fmt.Sprintf(
-			"this connection authenticated at %s, more than max_session_age (%s) ago; authenticate again",
-			authTime.UTC().Format(time.RFC3339), b.MaxSessionAge))
-		return
-	}
-	// A revocation stands against the principal, or this certificate, until
-	// an operator lifts it (spec §5.1.4). It is read before anything else, so
-	// a revoked caller is told nothing more, and again after the last token
-	// write, below. Marks that cannot be read mint for no one.
-	checkCtx, cancelCheck := context.WithTimeout(r.Context(), holdTimeout)
-	rv, revoked, err := b.revocation(checkCtx, principal, cred)
-	cancelCheck()
-	switch {
-	case err != nil:
-		b.emit(decision.Record{TS: now, Event: decision.EventMint, Verdict: decision.VerdictDeny,
-			Reason: decision.StoreUnavailable, Principal: principal, Auth: &decision.Auth{Method: cred.Method}})
-		writeError(w, http.StatusServiceUnavailable, string(decision.StoreUnavailable),
-			"the broker could not read the revocations in force, so it minted nothing; try again")
-		return
-	case revoked:
-		b.refuseRevoked(w, now, principal, cred, rv)
-		return
-	}
-	statusCtx, cancelStatus := context.WithTimeout(r.Context(), holdTimeout)
-	ref := b.certRefusal(statusCtx, r.TLS, cred)
-	cancelStatus()
-	if ref != nil {
-		b.emit(decision.Record{TS: now, Event: decision.EventMint, Verdict: decision.VerdictDeny, Reason: ref.Reason,
-			Principal: principal, Auth: &decision.Auth{Method: cred.Method, Fingerprint: cred.Fingerprint}})
-		b.answerRefusal(w, r, ref)
-		return
-	}
+	now := b.Now()
+	authTime := b.authTime(r)
 
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxBody+1))
 	if err != nil || len(body) > maxBody {
@@ -375,6 +352,66 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+// authenticate is the first step of every authenticated endpoint but the
+// refresh, which re-authenticates (spec §5.6): the caller is the
+// connection's verified certificate (Identity) and nothing in the request;
+// the connection is within max_session_age (decision 17); no revocation
+// stands against the principal or the certificate, read before anything
+// else so a revoked caller is told nothing more (spec §5.1.4); and the
+// certificate's status does not refuse it (decision 33). A caller any of
+// these refuses is answered here, recorded once under event with a mint's
+// reasons and meanings (spec §5.7; decision 34), and ok is false. nothing
+// completes the marks-unreadable answer: "so it minted nothing".
+func (b *Broker) authenticate(w http.ResponseWriter, r *http.Request, event, nothing string) (string, store.Credential, bool) {
+	now := b.Now()
+	authTime := b.authTime(r)
+	principal, cred, err := Identity(r.TLS, now)
+	if err != nil {
+		// A chain the anchor verified is named on the refusal (principal when
+		// it maps to one, the fingerprint always); no chain names no one.
+		b.emit(decision.Record{TS: now, Event: event, Verdict: decision.VerdictDeny,
+			Reason: decision.TrustDomainUnresolved, Principal: principal,
+			Auth: &decision.Auth{Method: "cert", Fingerprint: cred.Fingerprint}})
+		writeError(w, http.StatusUnauthorized, string(decision.TrustDomainUnresolved), err.Error())
+		return "", store.Credential{}, false
+	}
+	if b.MaxSessionAge > 0 && now.Sub(authTime) > b.MaxSessionAge {
+		b.emit(decision.Record{TS: now, Event: event, Verdict: decision.VerdictDeny,
+			Reason: decision.SessionExpired, Principal: principal, Auth: &decision.Auth{Method: cred.Method}})
+		// Closing the connection is what makes the next request a handshake,
+		// and the handshake is the fresh authentication decision 17 requires.
+		w.Header().Set("Connection", "close")
+		writeError(w, http.StatusUnauthorized, string(decision.SessionExpired), fmt.Sprintf(
+			"this connection authenticated at %s, more than max_session_age (%s) ago; authenticate again",
+			authTime.UTC().Format(time.RFC3339), b.MaxSessionAge))
+		return "", store.Credential{}, false
+	}
+	checkCtx, cancelCheck := context.WithTimeout(r.Context(), holdTimeout)
+	rv, revoked, err := b.revocation(checkCtx, principal, cred)
+	cancelCheck()
+	switch {
+	case err != nil:
+		b.emit(decision.Record{TS: now, Event: event, Verdict: decision.VerdictDeny,
+			Reason: decision.StoreUnavailable, Principal: principal, Auth: &decision.Auth{Method: cred.Method}})
+		writeError(w, http.StatusServiceUnavailable, string(decision.StoreUnavailable),
+			"the broker could not read the revocations in force, so it "+nothing+"; try again")
+		return "", store.Credential{}, false
+	case revoked:
+		b.refuseRevokedAs(w, event, now, principal, cred, rv)
+		return "", store.Credential{}, false
+	}
+	statusCtx, cancelStatus := context.WithTimeout(r.Context(), holdTimeout)
+	ref := b.certRefusal(statusCtx, r.TLS, cred)
+	cancelStatus()
+	if ref != nil {
+		b.emit(decision.Record{TS: now, Event: event, Verdict: decision.VerdictDeny, Reason: ref.Reason,
+			Principal: principal, Auth: &decision.Auth{Method: cred.Method, Fingerprint: cred.Fingerprint}})
+		b.answerRefusal(w, r, ref)
+		return "", store.Credential{}, false
+	}
+	return principal, cred, true
+}
+
 // revokedSince reads the marks again after a request's last token write,
 // and answers the request when one stands. A revocation that landed while
 // this request minted may have read the token index before these tokens
@@ -441,16 +478,11 @@ func (b *Broker) revocation(ctx context.Context, principal string, cred store.Cr
 	return store.Revocation{}, false, nil
 }
 
-// refuseRevoked answers a caller a revocation stands against before it
-// minted anything: one mint record naming whose credential it was (spec
-// §5.7), and answerRevoked.
-func (b *Broker) refuseRevoked(w http.ResponseWriter, now time.Time, principal string, cred store.Credential,
-	rv store.Revocation) {
-	b.refuseRevokedAs(w, decision.EventMint, now, principal, cred, rv)
-}
-
-// refuseRevokedAs is refuseRevoked with the record's event given: a refresh
-// under a mark is recorded as a refresh (pre-flight M2).
+// refuseRevokedAs answers a caller a revocation stands against before it
+// was answered anything else: one record under event naming whose
+// credential it was (spec §5.7), and answerRevoked. A refresh under a mark
+// is recorded as a refresh (pre-flight M2), any other call under its
+// endpoint's event (decision 34).
 func (b *Broker) refuseRevokedAs(w http.ResponseWriter, event string, now time.Time, principal string,
 	cred store.Credential, rv store.Revocation) {
 	rec := revokedRecord(now, principal, cred)
@@ -470,12 +502,29 @@ func revokedRecord(now time.Time, principal string, cred store.Credential) decis
 // RefusedAtBind records a request the broker's listener refused as its
 // connection bound (Listener.Refused): credential_revoked for a mark on its
 // principal or certificate, or the reason its certificate's status gave.
-// It is the same one mint deny record a mint refused so writes, counted in
-// port49_decisions (spec §5.7).
-func (b *Broker) RefusedAtBind(principal string, cred store.Credential, reason decision.Reason) {
+// It is the one deny record a call refused after the bind writes, under
+// the event of the path it asked for (bindEvent), counted in
+// port49_decisions (spec §5.7; decision 34).
+func (b *Broker) RefusedAtBind(path, principal string, cred store.Credential, reason decision.Reason) {
 	rec := revokedRecord(b.Now(), principal, cred)
-	rec.Reason = reason
+	rec.Event, rec.Reason = bindEvent(path), reason
 	b.emit(rec)
+}
+
+// bindEvent is the event a request refused as its connection bound is
+// recorded under: its endpoint's own, and mint for any other path, as
+// before (decision 34). It matches the path alone, not the method, by
+// design: the request reaches no handler, so its event is all it names.
+func bindEvent(path string) string {
+	switch path {
+	case "/v1/identity":
+		return decision.EventIdentity
+	case "/v1/explain":
+		return decision.EventExplain
+	case "/v1/tokens/revoke":
+		return decision.EventRevoke
+	}
+	return decision.EventMint
 }
 
 // answerRevoked is the 401 credential_revoked, with the connection closed
@@ -826,6 +875,20 @@ func (b *Broker) logf(format string, args ...any) {
 func (b *Broker) emit(r decision.Record) {
 	b.Log.Emit(r)
 	b.Metrics.Decisions.WithLabelValues(r.Event, r.Verdict, string(r.Reason)).Inc()
+}
+
+// refuseRight answers a call that would act on another principal, or on a
+// (device, username) whoever holds it, without the api: right that
+// unlocks it: 403 api_right_missing, and rec, the one deny record. rec
+// names whom the call was about and, in origin or explain.asked_by, who
+// asked; it carries no auth, so a record's auth and principal always
+// describe one credential (spec §5.7; decision 34). what says what was
+// asked, for the answer. Nothing is done.
+func (b *Broker) refuseRight(w http.ResponseWriter, rec decision.Record, right, what string) {
+	rec.Verdict, rec.Reason, rec.Auth = decision.VerdictDeny, decision.APIRightMissing, nil
+	b.emit(rec)
+	writeError(w, http.StatusForbidden, string(decision.APIRightMissing), fmt.Sprintf(
+		"%s needs the api: %s right, which your subject does not declare (spec §2)", what, right))
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

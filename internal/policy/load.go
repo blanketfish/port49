@@ -89,6 +89,18 @@ type Policy struct {
 	overrides map[string]filePlatform
 	// projected memoizes project, keyed by what a projection reads.
 	projected sync.Map
+	// permitsAlone memoizes wouldPermit's programs, keyed by platform: each
+	// role's permits alone, compiled once per policy (a Policy is one
+	// bundle, never changed once loaded), so a denied explain matches and
+	// compiles nothing (spec §13 decision 34). The key is a device's
+	// platform, a set the inventory bounds, never a caller's text.
+	permitsAlone sync.Map
+	// hiddenOnce and hiddenValues memoize HiddenValues, which runs every
+	// redaction pattern over every rule: constant per policy, and read on
+	// every explain that quotes a line (plan 7c review C1). It is first
+	// read once roles and platforms are set.
+	hiddenOnce   sync.Once
+	hiddenValues []string
 
 	levels  []string          // the declared ordering, lowest first
 	parents map[string]string // level → parent, for rendering
@@ -207,7 +219,19 @@ var DefaultPipe = []string{"include **", "exclude **", "begin **", "section **",
 // reservedLevels ship built in and cannot be renamed or removed (spec §6).
 var reservedLevels = []string{"readonly", "operator", "admin"}
 
-var apiRights = []string{"revoke_others", "explain_others", "sync", "keys_show", "replay"}
+// The broker API rights a subject may declare (spec §2). revoke_others and
+// explain_others unlock a broker endpoint; sync, keys_show and replay are
+// reserved: declared, reported by CI and the gate, and granting nothing until
+// an endpoint they guard exists (spec §13 decision 34).
+const (
+	RightRevokeOthers  = "revoke_others"
+	RightExplainOthers = "explain_others"
+	RightSync          = "sync"
+	RightKeysShow      = "keys_show"
+	RightReplay        = "replay"
+)
+
+var apiRights = []string{RightRevokeOthers, RightExplainOthers, RightSync, RightKeysShow, RightReplay}
 
 // Design §8: device tokens live 30–900s.
 const (
@@ -1658,6 +1682,18 @@ func (p *Policy) ConfigDialect(platformName string) (platform.Dialect, error) {
 func (p *Policy) SubjectOf(principal string) (string, bool) {
 	name, ok := p.byID[principal]
 	return name, ok
+}
+
+// HasRight reports whether the subject principal resolves to declares right
+// in its api: list (spec §2). A principal no subject names holds none. A
+// group subject's members are resolved through the directory (plan 7g), so
+// until then a right is held through an identity list alone, as a mint is.
+func (p *Policy) HasRight(principal, right string) bool {
+	name, ok := p.byID[principal]
+	if !ok {
+		return false
+	}
+	return slices.Contains(p.subs[name].API, right)
 }
 
 // Subject returns a declared subject.

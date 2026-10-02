@@ -308,6 +308,12 @@ func (p *Policy) Redactions() []platform.Redaction {
 // derive text from a rule, a word it names or a fix it suggests, beside the
 // rule's quoted form (platform.RedactValues; spec §5.8).
 func (p *Policy) HiddenValues() []string {
+	p.hiddenOnce.Do(func() { p.hiddenValues = p.hiddenValuesOnce() })
+	return slices.Clone(p.hiddenValues)
+}
+
+// hiddenValuesOnce is HiddenValues worked out: every pattern over every rule.
+func (p *Policy) hiddenValuesOnce() []string {
 	patterns := p.Redactions()
 	var out []string
 	for _, name := range sortedKeys(p.roles) {

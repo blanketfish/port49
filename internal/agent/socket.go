@@ -6,11 +6,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"net/http/httptrace"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -109,9 +113,14 @@ type Client struct {
 	http   *http.Client
 }
 
+// socketTimeout bounds a call to the agent: past its longest wait on the
+// broker (revokeWait), so the agent is always the side that gives up, and
+// says why.
+const socketTimeout = revokeWait + 10*time.Second
+
 // NewClient talks to the agent at socket.
 func NewClient(socket string) *Client {
-	return &Client{socket: socket, http: &http.Client{Timeout: 90 * time.Second, Transport: &http.Transport{
+	return &Client{socket: socket, http: &http.Client{Timeout: socketTimeout, Transport: &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			var d net.Dialer
 			return d.DialContext(ctx, "unix", socket)
@@ -213,6 +222,89 @@ func (c *Client) Refresh(ctx context.Context) (api.RefreshResponse, error) {
 		}
 		return api.RefreshResponse{}, fmt.Errorf("agent: %s: %s", e.Error, e.Detail)
 	}
+}
+
+// ErrAgentTooOld is a call the running agent has no route for: it was
+// started by a port49 older than this one, and lives until max_session_age
+// (pre-flight I9).
+var ErrAgentTooOld = errors.New("agent: your agent (started before this port49) does not carry this command; " +
+	"run `port49 login` again")
+
+// roundTrip asks the agent one API call: a 200 decodes into out; a 410 is
+// the session's end (a revocation's own error, or ErrSessionOver); a 404
+// with no API code is the agent's own mux, which predates the route
+// (ErrAgentTooOld); the agent's 502 broker_error is its own error, said as
+// it is; any other answer carries the broker's status and code, a 503
+// revocation_busy among them, and is an *APIError.
+func (c *Client) roundTrip(ctx context.Context, method, path string, in, out any) error {
+	var rd io.Reader = http.NoBody
+	if in != nil {
+		body, err := json.Marshal(in)
+		if err != nil {
+			return err
+		}
+		rd = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, "http://agent"+path, rd)
+	if err != nil {
+		return err
+	}
+	if err := c.checkDir(); err != nil {
+		return err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("%w at %s: %w", ErrNoAgent, c.socket, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusOK {
+		return json.NewDecoder(resp.Body).Decode(out)
+	}
+	var e api.Error
+	_ = json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&e)
+	switch {
+	case resp.StatusCode == http.StatusGone && e.Error == "credential_revoked":
+		return &RevokedError{Detail: e.Detail}
+	case resp.StatusCode == http.StatusGone:
+		return fmt.Errorf("%w%s", ErrSessionOver, strings.TrimPrefix(e.Detail, ErrSessionOver.Error()))
+	case resp.StatusCode == http.StatusNotFound && e.Error == "":
+		return ErrAgentTooOld
+	case resp.StatusCode == http.StatusBadGateway && e.Error == "broker_error":
+		return errors.New(e.Detail)
+	case e.Error != "":
+		return &APIError{Status: resp.StatusCode, Code: e.Error, Detail: e.Detail, RetryAfter: retryAfterHeader(resp.Header)}
+	}
+	return fmt.Errorf("agent: the agent at %s answered %s", c.socket, resp.Status)
+}
+
+// Identity asks the agent what the broker resolves its principal to.
+func (c *Client) Identity(ctx context.Context) (api.Identity, error) {
+	var out api.Identity
+	return out, c.roundTrip(ctx, http.MethodGet, "/identity", nil, &out)
+}
+
+// Explain asks the agent for the broker's explanation.
+func (c *Client) Explain(ctx context.Context, req api.ExplainRequest) (api.ExplainResponse, error) {
+	var out api.ExplainResponse
+	return out, c.roundTrip(ctx, http.MethodPost, "/explain", req, &out)
+}
+
+// Revoke asks the agent to send a revocation under its principal's rights.
+// One the agent took and never answered is an *UnansweredRevokeError, not
+// ErrNoAgent: it may have reached the broker.
+func (c *Client) Revoke(ctx context.Context, req api.RevokeRequest) (api.RevokeResponse, error) {
+	var out api.RevokeResponse
+	var sent atomic.Bool
+	ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{WroteHeaders: func() { sent.Store(true) }})
+	err := c.roundTrip(ctx, http.MethodPost, "/revoke", req, &out)
+	if errors.Is(err, ErrNoAgent) && sent.Load() {
+		var cause error = err
+		if ue := (*url.Error)(nil); errors.As(err, &ue) {
+			cause = ue.Err
+		}
+		return out, &UnansweredRevokeError{Who: "your agent at " + c.socket, Principal: req.Principal != "", Err: cause}
+	}
+	return out, err
 }
 
 // Status asks the agent whose session it holds.

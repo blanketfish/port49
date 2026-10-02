@@ -1206,3 +1206,24 @@ func TestLabDenyMessageLength(t *testing.T) {
 		}
 	}
 }
+
+// RevocationsFile reads the one path init-revocations needs, as strictly as
+// Load decodes, resolves no secret, and refuses a path Load would refuse as
+// another file port49d uses (pre-flight M10).
+func TestRevocationsFileReadsThePathAlone(t *testing.T) {
+	got, err := RevocationsFile([]byte("broker:\n  revocations_file: /var/lib/port49/revocations.json\n"))
+	if err != nil || got != "/var/lib/port49/revocations.json" {
+		t.Fatalf("%q %v", got, err)
+	}
+	if _, err := RevocationsFile([]byte("broker:\n  revocation_file: x\n")); err == nil {
+		t.Fatal("a misspelt key was read as no path")
+	}
+	if _, err := RevocationsFile([]byte("listen: 127.0.0.1:49\n")); err == nil ||
+		!strings.Contains(err.Error(), "no broker.revocations_file") {
+		t.Fatalf("no broker: %v", err)
+	}
+	if _, err := RevocationsFile([]byte("admin_socket: /var/lib/port49/r.json\nbroker:\n" +
+		"  revocations_file: /var/lib/port49/r.json\n")); err == nil || !strings.Contains(err.Error(), "may not be admin_socket") {
+		t.Fatalf("revocations_file over admin_socket: %v", err)
+	}
+}

@@ -21,6 +21,7 @@ import (
 	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/inventory"
 	"github.com/rhwendt/port49/internal/keyfile"
+	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/policy"
 )
 
@@ -155,13 +156,13 @@ func inventoryDiff(args []string, stdout, stderr io.Writer) int {
 	orders := []order{
 		reloadOrder(stdout, now, old, new,
 			func() (*policy.Policy, error) { return bundle.Load(*newPol, oldInv, env) },
-			func(mid *policy.Policy) error { return bundle.CheckAdmission(old, mid, bound) },
+			func(mid *policy.Policy) error { return redacted(bundle.CheckAdmission(old, mid, bound, now), old, mid) },
 			func(mid *policy.Policy) error { return bundle.Check(mid, new, bound) },
 			"policy", "inventory"),
 		reloadOrder(stdout, now, old, new,
 			func() (*policy.Policy, error) { return bundle.Load(*polPath, newInv, env) },
 			func(mid *policy.Policy) error { return bundle.Check(old, mid, bound) },
-			func(mid *policy.Policy) error { return bundle.CheckAdmission(mid, new, bound) },
+			func(mid *policy.Policy) error { return redacted(bundle.CheckAdmission(mid, new, bound, now), mid, new) },
 			"inventory", "policy"),
 	}
 	// An order whose first reload is taken and whose second is refused
@@ -199,6 +200,20 @@ func inventoryDiff(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+// redacted is err with every quoted value a rule of pols marks secret
+// redacted (spec §5.8): the reload guard's causes quote policy text, and
+// this output is a CI log (pre-flight I3).
+func redacted(err error, pols ...*policy.Policy) error {
+	if err == nil {
+		return nil
+	}
+	line := err.Error()
+	for _, p := range pols {
+		line = platform.RedactQuoted(p.Redactions(), line)
+	}
+	return errors.New(line)
 }
 
 // order is one order of a two-file change's reloads: err is nil when both

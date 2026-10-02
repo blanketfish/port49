@@ -23,6 +23,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/rhwendt/port49/internal/admission"
+	"github.com/rhwendt/port49/internal/broker"
 	"github.com/rhwendt/port49/internal/bundle"
 	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
@@ -44,7 +45,7 @@ func brokerConfig(t *testing.T, policyBody string) config.Config {
 	if err := os.WriteFile(pol, []byte(policyBody), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	return config.Config{
+	cfg := config.Config{
 		Session:   config.SessionConfig{MaxSessionAgeDefault: time.Hour},
 		Keys:      map[string]config.KeySet{"lab_key": {Current: config.KeyVersion{Version: 1, SecretEnv: "UNUSED"}}},
 		Inventory: admission.Inventory{Devices: []admission.Device{{Name: "leaf1", Platform: "arista_eos", KeyRef: "lab_key"}}},
@@ -54,6 +55,10 @@ func brokerConfig(t *testing.T, policyBody string) config.Config {
 			MaxConnsPerPrincipal: 4, MaxPendingConnsPerSource: 16,
 			CertificateStatus: &config.CertificateStatusConfig{Disabled: true}},
 	}
+	if _, err := initRevocations(cfg.Broker.RevocationsFile, testInitConfig); err != nil {
+		t.Fatal(err)
+	}
+	return cfg
 }
 
 // port49d names the bundle an offline tool names for the same two files, so a
@@ -675,6 +680,93 @@ func aliceCertKey(t *testing.T, pkiDir string) string {
 	return store.CertKey(leaf.Issuer.String(), leaf.SerialNumber.Text(16))
 }
 
+// brokerReadyz asks the broker at addr for /readyz over TLS with no client
+// certificate, trusting the lab CA in pkiDir, and returns the status and
+// the trimmed body.
+func brokerReadyz(t *testing.T, pkiDir, addr string) (int, string) {
+	t.Helper()
+	pool := x509.NewCertPool()
+	caPEM, err := os.ReadFile(filepath.Join(pkiDir, testpki.LabCA))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool.AppendCertsFromPEM(caPEM)
+	hc := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool}}}
+	resp, err := hc.Get("https://" + addr + "/readyz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, strings.TrimSpace(string(body))
+}
+
+// gatedWriter is a syncBuffer whose write of a line containing gate blocks
+// until release is closed, after closing hit: a test holds run at the
+// point it says that line.
+type gatedWriter struct {
+	syncBuffer
+	gate    string
+	hit     chan struct{}
+	release chan struct{}
+}
+
+func (g *gatedWriter) Write(p []byte) (int, error) {
+	if bytes.Contains(p, []byte(g.gate)) {
+		close(g.hit)
+		<-g.release
+	}
+	return g.syncBuffer.Write(p)
+}
+
+// From the moment shutdown begins, the broker's /readyz answers 503
+// draining while the broker still serves: a load balancer takes this
+// replica out before its listener closes, not after (design §12). run is
+// held at its "draining" line, which it says after SetReady(ReadyDraining)
+// and before brokerSrv.Shutdown, so the probe lands in that window every
+// time.
+func TestRunAnswersDrainingBeforeTheBrokerCloses(t *testing.T) {
+	out := &gatedWriter{gate: "port49d: signal received, draining", hit: make(chan struct{}),
+		release: make(chan struct{})}
+	e, o := stderr, stdout
+	t.Cleanup(func() { stderr, stdout = e, o })
+	stderr, stdout = out, io.Discard
+	release := sync.OnceFunc(func() { close(out.release) })
+	t.Cleanup(release) // a failed probe must not leave run held
+	b := brokerConfig(t, minimalPolicy).Broker
+	pki := filepath.Dir(b.ClientCAFile)
+	cfgPath := writeRunConfig(t, b)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- run(ctx, cfgPath) }()
+	waitFor(t, &out.syncBuffer, "port49d: broker listening on ")
+	addr := regexp.MustCompile(`port49d: broker listening on (\S+)`).FindStringSubmatch(out.String())[1]
+	if code, body := brokerReadyz(t, pki, addr); code != 200 || body != broker.ReadyServing {
+		t.Fatalf("broker /readyz serving: %d %q", code, body)
+	}
+
+	cancel()
+	select {
+	case <-out.hit:
+	case <-time.After(10 * time.Second):
+		t.Fatal("run never said it was draining")
+	}
+	code, body := brokerReadyz(t, pki, addr)
+	release()
+	if code != 503 || body != broker.ReadyDraining {
+		t.Fatalf("broker /readyz draining: %d %q", code, body)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("run: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("run did not return")
+	}
+}
+
 // run restores the marks before the broker serves a request, and refuses
 // to start on a file it cannot load or a directory others can write: the
 // wiring is the point of the file, and a unit test of loadRevocations
@@ -717,9 +809,14 @@ func TestRunRestoresRevocationsBeforeTheBrokerServes(t *testing.T) {
 		}
 
 		addr, stop := start()
-		waitFor(t, &out, "port49d: broker: created "+b.RevocationsFile+" (no revocations)")
+		waitFor(t, &out, "port49d: broker: 0 revocation(s) in force from "+b.RevocationsFile)
 		if status, _, err := postAsAlice(pki, addr); err != nil || status != http.StatusOK {
 			t.Fatalf("the first start's mint: %d %v", status, err)
+		}
+		// The broker's readiness, over its own TLS listener with no client
+		// certificate (decision 34).
+		if code, body := brokerReadyz(t, pki, addr); code != 200 || body != broker.ReadyServing {
+			t.Fatalf("broker /readyz: %d %q", code, body)
 		}
 		stop()
 
@@ -762,7 +859,7 @@ func TestRunRestoresRevocationsBeforeTheBrokerServes(t *testing.T) {
 			t.Fatal(err)
 		}
 		st := memory.New(time.Now)
-		if _, _, err := restoreRevocations(context.Background(), st, cfg.Broker.RevocationsFile, newMetrics()); err != nil {
+		if _, err := restoreRevocations(context.Background(), st, cfg.Broker.RevocationsFile, newMetrics()); err != nil {
 			t.Fatal(err)
 		}
 		srv, _, err := buildBroker(cfg, "inventory_file "+cfg.InventoryFile, st, seedMinter(),

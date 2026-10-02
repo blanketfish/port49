@@ -256,6 +256,17 @@ func (f *fixture) postAt(ctx context.Context, cs *tls.ConnectionState, body, key
 	return f.post(withHeldConn(ctx, at), cs, body, key)
 }
 
+// call sends one request to path through the broker's handler on a
+// connection whose verified chain is cs. ctx carries the held connection,
+// if the test gives one (withHeldConn).
+func (f *fixture) call(ctx context.Context, cs *tls.ConnectionState, method, path, body string) *httptest.ResponseRecorder {
+	r := httptest.NewRequest(method, path, strings.NewReader(body)).WithContext(ctx)
+	r.TLS = cs
+	w := httptest.NewRecorder()
+	f.b.Handler().ServeHTTP(w, r)
+	return w
+}
+
 // heldAnswer is one response on a held connection.
 type heldAnswer struct {
 	status     int

@@ -148,9 +148,10 @@ type Metrics struct {
 	// carried the session ceiling warning in server_msg (spec §5.6; decision
 	// 33). No labels.
 	CeilingWarnings prometheus.Counter
-	// port49_revocations_total{by, outcome}: revocations by principal or by
-	// cert, applied, partial (the mark in force, a later step failed) or
-	// lifted (spec §5.1.4).
+	// port49_revocations_total{by, outcome}: revocations by what they named,
+	// principal or cert (a standing mark), self (a principal ending its own
+	// sessions) or key (one (device, username) ended), and outcome: applied,
+	// partial (a later step failed) or lifted (spec §5.1.4; decision 34).
 	Revocations *prometheus.CounterVec
 	// port49_revocations_in_force{by}: marks standing now.
 	RevocationsInForce *prometheus.GaugeVec
@@ -374,7 +375,7 @@ func New(reg prometheus.Registerer) *Metrics {
 		CeilingWarnings: prometheus.NewCounter(prometheus.CounterOpts{Name: "port49_ceiling_warnings_total",
 			Help: "Permitted authorization replies that carried the session ceiling warning."}),
 		Revocations: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_revocations_total",
-			Help: "Revocations by principal or certificate, by outcome."}, []string{"by", "outcome"}),
+			Help: "Revocations by what they named (principal, cert, self, key) and outcome."}, []string{"by", "outcome"}),
 		RevocationsInForce: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "port49_revocations_in_force",
 			Help: "Revocation marks in force now."}, []string{"by"}),
 		RevocationsFileFailed: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_revocations_file_failed",
