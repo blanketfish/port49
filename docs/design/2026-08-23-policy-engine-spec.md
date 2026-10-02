@@ -6554,9 +6554,10 @@ review (the owner may override them).*
   - **the index**: a context whose index record is deleted is hidden from the refresh and
     from a revocation by sid or `--mine` until the re-index finds and re-indexes it; a
     revocation by principal or certificate still denies it through the marks. An index record
-    rewritten to name another principal is found by the same re-index, which compares it
-    against the context's own sealed principal; until the next re-index it hides the context
-    as a deleted one does.
+    rewritten to name another principal or another sid, or with a lookup entry deleted, is
+    found by the same re-index, which compares the keys listed, each with its lookup entry in
+    place, against the context's own sealed principal, sid and certificate; until the next
+    re-index it hides the context as a deleted one does.
 
   That residual is carried, unassigned.
 - **The index is plaintext.** The keys revocation reads (principal, device, username,
@@ -7071,8 +7072,8 @@ Beyond those already listed in the design document's §14:
   version of the same context is not (the residual). Once sealed, the ledger denies a context
   at a key it has not seen.
 - **The index lost**: a context whose index record is deleted, or rewritten to name another
-  principal, is found, re-indexed and judged against the policy in force, and a revocation by
-  principal reaches it again. An index record that does not decode is skipped, logged and
+  principal or another sid, or whose lookup entry is deleted, is found, re-indexed and judged
+  against the policy in force, and a revocation by principal or sid reaches it again. An index record that does not decode is skipped, logged and
   counted, and the rest are re-indexed.
 - **The marks**: a context a standing mark names is denied `credential_revoked` at
   authorization, at `enable` and at a receipt's replay, whatever its record says; a lifted
