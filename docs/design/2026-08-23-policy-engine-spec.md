@@ -5645,8 +5645,9 @@ socket answers port49d's user and root alone, the people who can already rewrite
 revocation prints what it reached and names each live context on a platform it cannot reach;
 `--cert` reads the issuer and serial from the certificate itself, in the spelling the broker
 compares, which is safer than typing a distinguished name. It exits 0 when the revocation, lift
-or list is done; 1 when it did not take force (refused, unreachable, or no answer, §5.7); 3 when
-it took force and did not finish or was not saved, the mark standing; and 2 on usage.
+or list is done; 1 when it did not take force (refused or unreachable), or when port49d did not
+answer, the revocation then possibly in force (`--list` says); 3 when it took force and did not
+finish or was not saved, the mark standing; and 2 on usage.
 
 **`port49 revoke --mine [--device <name> --username <name>]`** and **`port49 revoke --via-agent
 [--yes] (--principal <principal> | --device <name> --username <name>)`** send the revocation to
@@ -6368,10 +6369,11 @@ the design was silent, each the option that denies more.*
   stopped and the file edited.
 - **Records.** Every `identity`, `explain` and `revoke` call that is authorized or refused for a
   right is one record: the events `identity` and `explain` and the reason `api_right_missing`
-  are added; a call refused before its body is read, or as its connection binds, is recorded under its own event with a mint's reasons; an explain never
-  records its command. A record's `auth` and `principal` describe one credential: a record about
-  someone other than the caller carries no `auth`, and names the caller in `origin` or in
-  `explain.asked_by` and `explain.asked_by_fingerprint`.
+  are added; a call refused before its body is read, or as its connection binds, is recorded
+  under its own event with a mint's reasons; an explain never records its command. A record's
+  `auth` and `principal` describe one credential: a record about someone other than the caller
+  carries no `auth`, and names the caller in `origin` or in `explain.asked_by` and
+  `explain.asked_by_fingerprint`.
 - **Explain.** It answers as the broker mints and the daemon decides, from the policy in force,
   and its record names the bundle. An unknown device is answered exactly as a device with no
   grant, naming no platform, and a principal under a mark is `credential_revoked`. A caller's
@@ -6550,7 +6552,7 @@ Beyond those already listed in the design document's §14:
 
 **Decision log**
 
-- **One record per evaluation**, at each of the seven decision events, permits included — a corpus
+- **One record per evaluation**, at each of the nine decision events, permits included — a corpus
   exercising the matcher produces exactly as many records as decisions. The two `refresh`
   carve-outs (§5.7) hold: a refresh that finds a context already on the answer the policy in
   force gives writes no record, and nor does a pass a store error stops, for the context it
