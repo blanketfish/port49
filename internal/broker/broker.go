@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rhwendt/port49/internal/broker/api"
@@ -125,6 +126,9 @@ type Broker struct {
 	pending map[[2]string]queuedRevoke
 	// said is, by key, when sayOnce last said it.
 	said map[string]time.Time
+
+	// ready is what /readyz answers (SetReady).
+	ready atomic.Pointer[string]
 }
 
 // Handler routes the endpoints the broker serves.
@@ -135,6 +139,8 @@ func (b *Broker) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/refresh/challenge", b.refreshChallenge)
 	mux.HandleFunc("POST /v1/refresh", b.refresh)
 	mux.HandleFunc("GET /v1/identity", b.identity)
+	mux.HandleFunc("GET /healthz", b.healthz)
+	mux.HandleFunc("GET /readyz", b.readyz)
 	return mux
 }
 

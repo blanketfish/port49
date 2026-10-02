@@ -23,6 +23,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/rhwendt/port49/internal/admission"
+	"github.com/rhwendt/port49/internal/broker"
 	"github.com/rhwendt/port49/internal/bundle"
 	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
@@ -724,6 +725,24 @@ func TestRunRestoresRevocationsBeforeTheBrokerServes(t *testing.T) {
 		waitFor(t, &out, "port49d: broker: 0 revocation(s) in force from "+b.RevocationsFile)
 		if status, _, err := postAsAlice(pki, addr); err != nil || status != http.StatusOK {
 			t.Fatalf("the first start's mint: %d %v", status, err)
+		}
+		// The broker's readiness, over its own TLS listener with no client
+		// certificate (decision 34).
+		pool := x509.NewCertPool()
+		caPEM, err := os.ReadFile(filepath.Join(pki, testpki.LabCA))
+		if err != nil {
+			t.Fatal(err)
+		}
+		pool.AppendCertsFromPEM(caPEM)
+		hc := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool}}}
+		resp, err := hc.Get("https://" + addr + "/readyz")
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != 200 || strings.TrimSpace(string(body)) != broker.ReadyServing {
+			t.Fatalf("broker /readyz: %d %q", resp.StatusCode, body)
 		}
 		stop()
 

@@ -893,6 +893,7 @@ func run(parent context.Context, cfgPath string) error {
 	brokerErr := make(chan error, 1)
 	if brokerSrv != nil {
 		go func() { brokerErr <- brokerSrv.Serve(bl) }()
+		brk.SetReady(broker.ReadyServing)
 		fmt.Fprintf(stderr, "port49d: broker listening on %s\n", bln.Addr())
 	}
 
@@ -964,20 +965,32 @@ func run(parent context.Context, cfgPath string) error {
 	select {
 	case err := <-metricsErr:
 		rd.draining()
+		if brk != nil {
+			brk.SetReady(broker.ReadyDraining)
+		}
 		runErr = fmt.Errorf("metrics listener on %s: %w", cfg.MetricsListen, err)
 		cancel()
 		<-serveErr
 	case err := <-brokerErr:
 		rd.draining()
+		if brk != nil {
+			brk.SetReady(broker.ReadyDraining)
+		}
 		runErr = fmt.Errorf("broker listener on %s: %w", cfg.Broker.Listen, err)
 		cancel()
 		<-serveErr
 	case err := <-serveErr:
 		rd.draining()
+		if brk != nil {
+			brk.SetReady(broker.ReadyDraining)
+		}
 		runErr = err
 		cancel()
 	case <-ctx.Done():
 		rd.draining()
+		if brk != nil {
+			brk.SetReady(broker.ReadyDraining)
+		}
 		fmt.Fprintln(stderr, "port49d: signal received, draining")
 		<-serveErr
 	}
