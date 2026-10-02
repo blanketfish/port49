@@ -577,82 +577,41 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 	// because its ctx_id is sealed. JoinContext reads, merges and swaps on the
 	// revision it read, so a revocation or annotation landing mid-login is
 	// merged rather than erased, and two simultaneous logins both land.
-	out, err := store.JoinContext(ctx, s.h.store, ck, login, winner.MintedAt, s.h.now(), s.h.contextTTL, store.LoginIndex{})
+	//
+	// The join carries the index and the revocation check in one
+	// step (spec §5.6; §13, decision 35): a context is never live and
+	// unindexed, and a mark that stands for this principal or certificate,
+	// on a token minted before it, is written into the context, which the
+	// check below then refuses. store.JoinContext says how the displaced
+	// record's keys are unindexed.
+	out, err := store.JoinContext(ctx, s.h.store, ck, login, winner.MintedAt, s.h.now(), s.h.contextTTL,
+		store.LoginIndex{Principal: winner.Principal, Sid: winner.Credential.Sid,
+			CertKey: store.CertKey(winner.Credential.Issuer, winner.Credential.Serial), TTL: s.h.indexTTL})
 	s.h.metrics.StoreOps.WithLabelValues("join_context", storeOutcome(err)).Inc()
 	if err != nil {
-		// The token is already redeemed, but without a context a later authorization
-		// request has nothing to check against: ERROR, not a PASS we can't back up.
+		// The token is already redeemed, but without a context and its index
+		// a later authorization has nothing to check against, and a
+		// revocation nothing to reach: ERROR, not a PASS we can't back up.
+		//
+		// The receipt was written PASS before the join, and on a join it
+		// names the live context, which this login's credential never
+		// reached: a retransmission replaying it would admit a credential
+		// whose marks the failed join did not read, onto a context no
+		// revocation of that credential can find (Task 3 review I2). So it is
+		// marked failed, and the retransmission replays a refusal. A mark that
+		// does not land is put on the record; ErrNotFound lost nothing, as
+		// below.
+		ferr := s.h.store.FailReceipt(ctx, rk)
+		s.h.metrics.StoreOps.WithLabelValues("fail_receipt", storeOutcome(ferr)).Inc()
+		if ferr != nil && !errors.Is(ferr, store.ErrNotFound) {
+			rec.IndexError = "receipt not marked failed; a retransmission may replay PASS"
+		}
 		return s.storeError(rec)
 	}
 	rec.Session.ReplacedCtxID = out.Replaced
 	rec.Session.ReplacedUnreadable = out.ReplacedUnreadable
 	if out.ClampedFrom != 0 {
 		rec.Session.PrivilegeClamped = &decision.PrivilegeClamp{From: out.ClampedFrom, To: out.Context.PrivLvl}
-	}
-	// A replace unindexes the credential it displaced before this login is
-	// indexed. The index keeps every sid and certificate a context was
-	// indexed under, so that a join stays revocable by either login's; left
-	// in place after a replace, the displaced login's would keep reaching
-	// this context, and a back-channel logout of that principal would revoke
-	// this one (spec §5.6). A failure is counted and does not fail the login:
-	// what it leaves is a revocation that can reach too far, never one that
-	// cannot reach.
-	//
-	// Another principal's replace clears every key the ref was indexed
-	// under (UnindexRef), not only what Prior names: a joined context was
-	// indexed under each of its logins' sids and certificates, and the record
-	// keeps only the last login's. Nothing of the displaced principal's is
-	// this login's to keep. An unreadable replace does the same, because it
-	// has no Prior to compare — the displaced record's principal and
-	// credential are sealed — and anything it left would be re-stamped by
-	// every extension of this context for as long as it lives, not only until
-	// index_ttl. When the unreadable record was this principal's own, its own
-	// keys go too, and the IndexContext below puts this login's back.
-	//
-	// The same principal's replace — past its ceiling — unindexes only the
-	// keys this login does not share. A key both logins hold is one this
-	// login is about to index anyway, and unindexing it first would leave a
-	// moment in which a revocation by it finds nothing, and the context
-	// written in that moment would never be marked. An earlier joined
-	// login's sid that Prior does not name stays, and a revocation of it can
-	// mark this context: the same person, and fail-closed.
-	ref := store.ContextRef{NAS: s.peer.NAS, Username: username}
-	switch {
-	case out.ReplacedUnreadable:
-		uerr := s.h.store.UnindexRef(ctx, ref)
-		s.h.metrics.StoreOps.WithLabelValues("unindex_ref", storeOutcome(uerr)).Inc()
-	case out.Prior.CtxID == "":
-	case out.Prior.Principal != winner.Principal:
-		uerr := s.h.store.UnindexRef(ctx, ref)
-		s.h.metrics.StoreOps.WithLabelValues("unindex_ref", storeOutcome(uerr)).Inc()
-	default:
-		sid := out.Prior.Credential.Sid
-		certKey := store.CertKey(out.Prior.Credential.Issuer, out.Prior.Credential.Serial)
-		if sid == winner.Credential.Sid {
-			sid = ""
-		}
-		if certKey == store.CertKey(winner.Credential.Issuer, winner.Credential.Serial) {
-			certKey = ""
-		}
-		if sid != "" || certKey != "" {
-			uerr := s.h.store.UnindexContext(ctx, "", sid, certKey, ref)
-			s.h.metrics.StoreOps.WithLabelValues("unindex_context", storeOutcome(uerr)).Inc()
-		}
-	}
-	// Indexed under this login's credential even on a join, and added to what
-	// the context was indexed under rather than replacing it: revocation by
-	// either login's sid or certificate has to reach the joined context.
-	err = s.h.store.IndexContext(ctx, winner.Principal, winner.Credential.Sid,
-		store.CertKey(winner.Credential.Issuer, winner.Credential.Serial), ref, s.h.indexTTL)
-	s.h.metrics.StoreOps.WithLabelValues("index_context", storeOutcome(err)).Inc()
-	// An index write that fails does not fail the login: the operator is
-	// authenticated and the context exists. What is lost is reach — a later
-	// revocation will not find this context — so it is counted AND put on the
-	// record that is about to be emitted anyway. That record carries the ctx_id
-	// and the principal, which is the join an incident responder needs; the
-	// metric only says it happened somewhere on the fleet.
-	if err != nil {
-		rec.IndexError = "context not indexed; revocation by sid, principal or certificate will not reach it"
 	}
 	// One check on what the login actually wrote (spec §5.6). The pre-read
 	// refuses the case it can see before writing; three it cannot see end
@@ -674,20 +633,13 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 	// replay after a lift. ErrNotFound lost nothing: a revocation by principal
 	// deleted the receipt, and a deleted receipt replays nothing.
 	//
-	// After the index bookkeeping, not before: the context exists and is
-	// revoked, and a revocation of this credential must still reach it.
-	//
 	// A revocation that lands after the join's swap is not seen here, and that
 	// login answers PASS; its first authorization is denied.
 	if !out.Context.RevokedAt.IsZero() {
 		ferr := s.h.store.FailReceipt(ctx, rk)
 		s.h.metrics.StoreOps.WithLabelValues("fail_receipt", storeOutcome(ferr)).Inc()
 		if ferr != nil && !errors.Is(ferr, store.ErrNotFound) {
-			lost := "receipt not marked failed; a retransmission after the revocation is lifted will replay PASS"
-			if rec.IndexError != "" {
-				lost = rec.IndexError + "; " + lost
-			}
-			rec.IndexError = lost
+			rec.IndexError = "receipt not marked failed; a retransmission after the revocation is lifted will replay PASS"
 		}
 		return s.revoked(ctx, rec, winner.Principal, out.Context.CtxID, out.Context.RevokedAt)
 	}

@@ -980,31 +980,184 @@ func (indexFailsStore) IndexContext(context.Context, string, string, string, sto
 	return errors.New("index unavailable")
 }
 
-// An index write that fails does not fail the login — the operator is
-// authenticated and the context exists — but what is lost is reach: a later
-// revocation by sid, principal or certificate will not find this context. A
-// metric with outcome="error" says that happened somewhere on the fleet; only
-// the record says WHICH session is now unrevocable, and §5.6 already requires
-// revocation to report the contexts it could not reach.
-func TestAnUnindexedContextSaysSoOnTheRecord(t *testing.T) {
+// A login is indexed by its own write (SwapLogin), never by a separate
+// IndexContext call: with IndexContext failing, the login still PASSes,
+// its context is found under its principal, and the record carries no
+// index_error (plan 7d; decision 35; PR #7's third follow-up).
+func TestALoginIsIndexedByItsOwnWrite(t *testing.T) {
 	f := setupStore(t, func(st *memory.Store) store.Store { return indexFailsStore{st} })
+	reply, _ := f.h.NewSession(f.peer).Start(context.Background(), wire.AuthenStart{Action: wire.AuthenActionLogin,
+		AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceLogin, User: []byte("alice"),
+		Port: []byte("vty0"), Data: []byte(f.tag() + "tok1tok1tok1tok1tok1tok1")})
+	if reply.Status != wire.AuthenStatusPass {
+		t.Fatalf("status %d, want PASS", reply.Status)
+	}
+	if rec := f.records(t)[0]; rec["index_error"] != nil {
+		t.Fatalf("record: %v", rec)
+	}
+	if refs, _ := f.st.ContextsByPrincipal(context.Background(), "user:alice@example.com"); len(refs) != 1 {
+		t.Fatalf("the login's own write indexed %d refs, want 1", len(refs))
+	}
+}
+
+// swapLoginFails answers everything normally but never writes a login:
+// a store that is up for reads and refuses the one step that writes the
+// context with its index.
+type swapLoginFails struct{ *memory.Store }
+
+func (swapLoginFails) SwapLogin(context.Context, store.ContextKey, uint64, store.Context, time.Duration,
+	store.LoginWrite) error {
+	return errors.New("store unavailable")
+}
+
+// A login whose context and index cannot be written together is refused
+// ERROR store_unavailable, never admitted with a context no revocation
+// can reach (plan 7d; decision 35). Before plan 7d it was a PASS with
+// index_error.
+func TestALoginThatCannotBeIndexedIsRefused(t *testing.T) {
+	f := setupStore(t, func(st *memory.Store) store.Store { return swapLoginFails{st} })
+	reply, _ := f.h.NewSession(f.peer).Start(context.Background(), wire.AuthenStart{Action: wire.AuthenActionLogin,
+		AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceLogin, User: []byte("alice"),
+		Port: []byte("vty0"), Data: []byte(f.tag() + "tok1tok1tok1tok1tok1tok1")})
+	if reply.Status != wire.AuthenStatusError {
+		t.Fatalf("status %d, want ERROR", reply.Status)
+	}
+	rec := f.records(t)[0]
+	if rec["reason"] != "store_unavailable" || rec["index_error"] != nil {
+		t.Fatalf("record: %v", rec)
+	}
+	if refs, _ := f.st.ContextsByPrincipal(context.Background(), "user:alice@example.com"); len(refs) != 0 {
+		t.Fatalf("an unindexed login left refs: %v", refs)
+	}
+	if _, err := f.st.GetContext(context.Background(), store.ContextKey{NAS: f.peer.NAS, Username: "alice"}); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("an unindexed login left a context: %v", err)
+	}
+}
+
+// A login by a principal a standing mark names is refused
+// credential_revoked, and the context it wrote is revoked at the mark:
+// the redemption that raced a revocation (spec §5.1.4; decision 35).
+func TestALoginUnderAStandingMarkIsRefused(t *testing.T) {
+	f := setupStore(t, func(st *memory.Store) store.Store { return st })
+	at := f.now.Add(-time.Second)
+	if err := f.st.PutRevocation(context.Background(), store.Revocation{Kind: store.RevocationPrincipal,
+		Key: "user:alice@example.com", At: at, Origin: "test"}); err != nil {
+		t.Fatal(err)
+	}
 	f.h.NewSession(f.peer).Start(context.Background(), wire.AuthenStart{Action: wire.AuthenActionLogin,
 		AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceLogin, User: []byte("alice"),
 		Port: []byte("vty0"), Data: []byte(f.tag() + "tok1tok1tok1tok1tok1tok1")})
 	rec := f.records(t)[0]
-	if rec["reason"] != "token_redeemed" {
-		t.Fatalf("an index failure must not fail the login: %v", rec)
+	if rec["reason"] != "credential_revoked" {
+		t.Fatalf("record: %v", rec)
 	}
-	if rec["index_error"] == nil {
-		t.Fatalf("the record must name the lost reach: %v", rec)
+	c, err := f.st.GetContext(context.Background(), store.ContextKey{NAS: f.peer.NAS, Username: "alice"})
+	if err != nil || !c.RevokedAt.Equal(at) {
+		t.Fatalf("context %+v %v", c, err)
 	}
-	// The principal is the join: the metric says an index failed somewhere on
-	// the fleet, and only this field says whose session it was.
-	if rec["principal"] != "user:alice@example.com" {
-		t.Fatalf("the record must name the principal that lost its reach: %v", rec)
+}
+
+// getRevocationFailsOnce errs on the first mark read and answers every
+// later one: the store blinks during a login's join and is back for the
+// retransmission.
+type getRevocationFailsOnce struct {
+	*memory.Store
+	failed bool
+}
+
+func (g *getRevocationFailsOnce) GetRevocation(ctx context.Context, kind, key string) (store.Revocation, error) {
+	if !g.failed {
+		g.failed = true
+		return store.Revocation{}, errors.New("store unavailable")
 	}
-	if n := testutil.ToFloat64(f.m.StoreOps.WithLabelValues("index_context", "error")); n != 1 {
-		t.Fatalf("store_operations_total{op=index_context,outcome=error} = %v, want 1", n)
+	return g.Store.GetRevocation(ctx, kind, key)
+}
+
+// A join that ERRORs leaves no PASS for a retransmission to replay (Task 3
+// review I2). The receipt is written PASS before the join, naming window
+// A's context, and the join that failed never wrote window B's certificate
+// into it or its index, so a retransmission replaying that PASS would admit
+// a certificate a standing mark names, onto a context nothing revoking that
+// certificate can reach. The refusal marks the receipt failed, as the
+// revoked refusal does: the retransmission replays a refusal.
+func TestAJoinThatErrorsLeavesNoPassToReplay(t *testing.T) {
+	g := &getRevocationFailsOnce{}
+	f := setupStore(t, func(st *memory.Store) store.Store { g.Store = st; return g })
+	f.joinFixture(t, nil)
+	secret := f.tag() + "certBcertBcertBcertBcert"
+	certB := store.Credential{Method: "cert", Issuer: "ca", Serial: "0b"}
+	if _, err := f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
+		store.Token{ID: "b", Secret: []byte(secret), Kind: store.KindLogin, Username: "alice",
+			Principal: "user:alice@example.com", Credential: certB, Enable: "token", MaxPrivilege: 15,
+			MintedAt: f.now.Add(-time.Minute), ExpiresAt: f.now.Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.PutRevocation(context.Background(), store.Revocation{Kind: store.RevocationCert,
+		Key: store.CertKey("ca", "0b"), At: f.now.Add(-time.Second), Origin: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	start := papStart("alice", "ssh", "198.51.100.4", secret)
+	if reply, _ := f.h.NewSession(f.peer).Start(context.Background(), start); reply.Status != wire.AuthenStatusError {
+		t.Fatalf("the join whose mark read failed: %+v %v", reply, f.records(t))
+	}
+	reply, _ := f.h.NewSession(f.peer).Start(context.Background(), start)
+	if reply.Status == wire.AuthenStatusPass {
+		t.Fatalf("a retransmission after a join that ERRORed replayed PASS for a marked certificate: %v",
+			f.records(t))
+	}
+	if c, _ := f.st.GetContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"}); c.Credential.Serial == certB.Serial {
+		t.Fatalf("the failed join wrote window B's credential: %+v", c)
+	}
+}
+
+// joinAndFailReceiptBlink is the store down for both of a failed join's
+// writes: the join's first mark read and the FailReceipt after it err, and
+// everything after answers.
+type joinAndFailReceiptBlink struct {
+	getRevocationFailsOnce
+	receiptFailed bool
+}
+
+func (b *joinAndFailReceiptBlink) FailReceipt(ctx context.Context, rk store.ReceiptKey) error {
+	if !b.receiptFailed {
+		b.receiptFailed = true
+		return errors.New("store unavailable")
+	}
+	return b.Store.FailReceipt(ctx, rk)
+}
+
+// KNOWN GAP, pinned for Task 4b to flip (Task 3 review I2). When the
+// FailReceipt after a failed join is lost too, the receipt stays PASS
+// naming window A's context, and a retransmission replays it: a PASS for a
+// certificate a standing mark names. The record says so (index_error).
+// Task 4b's replay must check the marks for the presented credential's own
+// principal and certificate, not only the context's, and this test then
+// asserts the retransmission is refused credential_revoked.
+func TestKnownGapAJoinErrorWithALostFailReceiptReplaysPass(t *testing.T) {
+	b := &joinAndFailReceiptBlink{}
+	f := setupStore(t, func(st *memory.Store) store.Store { b.Store = st; return b })
+	f.joinFixture(t, nil)
+	secret := f.tag() + "certBcertBcertBcertBcert"
+	if _, err := f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
+		store.Token{ID: "b", Secret: []byte(secret), Kind: store.KindLogin, Username: "alice",
+			Principal:  "user:alice@example.com",
+			Credential: store.Credential{Method: "cert", Issuer: "ca", Serial: "0b"}, Enable: "token",
+			MaxPrivilege: 15, MintedAt: f.now.Add(-time.Minute), ExpiresAt: f.now.Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.PutRevocation(context.Background(), store.Revocation{Kind: store.RevocationCert,
+		Key: store.CertKey("ca", "0b"), At: f.now.Add(-time.Second), Origin: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	start := papStart("alice", "ssh", "198.51.100.4", secret)
+	f.h.NewSession(f.peer).Start(context.Background(), start)
+	rec := f.records(t)[0]
+	if ie, _ := rec["index_error"].(string); rec["reason"] != "store_unavailable" || !strings.Contains(ie, "receipt") {
+		t.Fatalf("a lost FailReceipt on a failed join must say what it cost: %v", rec)
+	}
+	if reply, _ := f.h.NewSession(f.peer).Start(context.Background(), start); reply.Status != wire.AuthenStatusPass {
+		t.Fatalf("the known gap closed (Task 4b?): flip this test to assert credential_revoked: %+v %v",
+			reply, f.records(t))
 	}
 }
 
@@ -1815,8 +1968,11 @@ func TestAnUnreadableReplaceUnindexesWhatItDisplaced(t *testing.T) {
 	if refs, _ := f.st.ContextsBySid(context.Background(), "sid-alice"); len(refs) != 1 {
 		t.Fatalf("the new login must be indexed under its own sid: %v", refs)
 	}
-	if n := testutil.ToFloat64(f.m.StoreOps.WithLabelValues("unindex_ref", "ok")); n != 1 {
-		t.Fatalf("store_operations_total{op=unindex_ref,outcome=ok} = %v, want 1", n)
+	if refs, _ := f.st.ContextsByPrincipal(context.Background(), "user:alice@example.com"); len(refs) != 1 {
+		t.Fatalf("the new login must be indexed under its own principal: %v", refs)
+	}
+	if n := testutil.ToFloat64(f.m.StoreOps.WithLabelValues("join_context", "ok")); n != 1 {
+		t.Fatalf("store_operations_total{op=join_context,outcome=ok} = %v, want 1", n)
 	}
 }
 
@@ -1863,15 +2019,21 @@ func TestAReplaceUnindexesTheCredentialItDisplaced(t *testing.T) {
 		t.Fatalf("the new login must still be indexed under its own sid: %v", refs)
 	}
 	// Another principal's replace clears the ref whole (ruling P10).
-	if n := testutil.ToFloat64(f.m.StoreOps.WithLabelValues("unindex_ref", "ok")); n != 1 {
-		t.Fatalf("store_operations_total{op=unindex_ref,outcome=ok} = %v, want 1", n)
+	if refs, _ := f.st.ContextsByPrincipal(context.Background(), "user:alice@example.com"); len(refs) != 0 {
+		t.Fatalf("the displaced principal still reaches the replacing context: %v", refs)
+	}
+	if refs, _ := f.st.ContextsByPrincipal(context.Background(), "user:alice@corp.example"); len(refs) != 1 {
+		t.Fatalf("the new login must be indexed under its own principal: %v", refs)
+	}
+	if n := testutil.ToFloat64(f.m.StoreOps.WithLabelValues("join_context", "ok")); n != 1 {
+		t.Fatalf("store_operations_total{op=join_context,outcome=ok} = %v, want 1", n)
 	}
 }
 
-// certReachStore checks, after every index write and context write the login
-// makes, that revocation by one certificate still finds ref. It is how a test
-// sees the moments between the calls, which is where an unindex-then-index
-// would drop a key both logins share.
+// certReachStore checks, after the one write the login makes (SwapLogin),
+// that revocation by one certificate still finds ref. It is how a test sees
+// the moment after the write, which is where an unindex-then-index would
+// drop a key both logins share.
 type certReachStore struct {
 	*memory.Store
 	certKey string
@@ -1885,28 +2047,10 @@ func (c *certReachStore) check(ctx context.Context, after string) {
 	}
 }
 
-func (c *certReachStore) SwapContext(ctx context.Context, k store.ContextKey, rev uint64, v store.Context, ttl time.Duration) error {
-	err := c.Store.SwapContext(ctx, k, rev, v, ttl)
-	c.check(ctx, "swap_context")
-	return err
-}
-
 func (c *certReachStore) SwapLogin(ctx context.Context, k store.ContextKey, rev uint64, v store.Context,
 	ttl time.Duration, w store.LoginWrite) error {
 	err := c.Store.SwapLogin(ctx, k, rev, v, ttl, w)
 	c.check(ctx, "swap_login")
-	return err
-}
-
-func (c *certReachStore) UnindexContext(ctx context.Context, principal, sid, certKey string, ref store.ContextRef) error {
-	err := c.Store.UnindexContext(ctx, principal, sid, certKey, ref)
-	c.check(ctx, "unindex_context")
-	return err
-}
-
-func (c *certReachStore) IndexContext(ctx context.Context, principal, sid, certKey string, ref store.ContextRef, ttl time.Duration) error {
-	err := c.Store.IndexContext(ctx, principal, sid, certKey, ref, ttl)
-	c.check(ctx, "index_context")
 	return err
 }
 
@@ -2250,8 +2394,11 @@ func TestAnotherPrincipalsReplaceUnindexesEveryJoinedLogin(t *testing.T) {
 	if c, _ := f.st.GetContext(context.Background(), key); !c.RevokedAt.IsZero() {
 		t.Fatalf("the replacing context was revoked by another principal's logout: %+v", c)
 	}
-	if n := testutil.ToFloat64(f.m.StoreOps.WithLabelValues("unindex_ref", "ok")); n != 1 {
-		t.Fatalf("store_operations_total{op=unindex_ref,outcome=ok} = %v, want 1", n)
+	if refs, _ := f.st.ContextsByPrincipal(context.Background(), "user:alice@corp.example"); len(refs) != 1 {
+		t.Fatalf("the new login must be indexed under its own principal: %v", refs)
+	}
+	if n := testutil.ToFloat64(f.m.StoreOps.WithLabelValues("join_context", "ok")); n != 3 {
+		t.Fatalf("store_operations_total{op=join_context,outcome=ok} = %v, want 3", n)
 	}
 }
 
