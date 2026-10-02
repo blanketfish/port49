@@ -210,9 +210,12 @@ func createExclusive(abs string, body []byte) error {
 // I6). It refuses a file that is there and does not load, and a marker with
 // no file beside it: a loss, which a restore or a deliberate
 // {"revocations": []} answers, never a re-created file. Otherwise it
-// creates the marker, then the file, each exclusively (createExclusive): a
-// crash between the two leaves a marker and no file, which refuses the next
-// start and the next init.
+// creates the file, then the marker, each exclusively (initCreate): a crash
+// between the two leaves a file with no marker, which the next start loads
+// and marks, and the next init finds initialized (task 2 review m1). A file
+// that appears before init's own lands is another init's, or one just run:
+// this one writes nothing and says so (m3). A marker that appears before
+// init's own is a start's, beside the file this init wrote, and stands.
 func initRevocations(path, cfgPath string) (created bool, err error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
@@ -240,18 +243,26 @@ func initRevocations(path, cfgPath string) (created bool, err error) {
 	case !errors.Is(err, fs.ErrNotExist):
 		return false, err
 	}
-	if err := createExclusive(markerOf(abs), markerBody(abs)); err != nil {
-		return false, err
-	}
 	body, err := encodeRevocations(nil)
 	if err != nil {
 		return false, err
 	}
-	if err := createExclusive(abs, body); err != nil {
+	switch err := initCreate(abs, body); {
+	case errors.Is(err, fs.ErrExist):
+		return false, errors.New("appeared while this ran: another init-revocations is running or has just run; " +
+			"nothing written")
+	case err != nil:
+		return false, err
+	}
+	if err := initCreate(markerOf(abs), markerBody(abs)); err != nil && !errors.Is(err, fs.ErrExist) {
 		return false, err
 	}
 	return true, nil
 }
+
+// initCreate is initRevocations' exclusive create, swapped in tests to
+// race it.
+var initCreate = createExclusive
 
 // initRevocationsCmd runs `port49d init-revocations [--config FILE]`. It
 // exits 0 having created the file or found it already there and loading, 1

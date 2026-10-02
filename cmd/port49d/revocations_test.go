@@ -205,6 +205,66 @@ func TestCreateExclusiveNeverReplaces(t *testing.T) {
 	}
 }
 
+// init writes the file before its marker, so a crash between the two
+// leaves a file with no marker, which the next start loads and marks and
+// the next init finds initialized, never a marker that claims a loss (task
+// 2 review m1).
+func TestInitRevocationsWritesTheFileBeforeTheMarker(t *testing.T) {
+	path := filepath.Join(safeDir(t), "revocations.json")
+	defer func(f func(string, []byte) error) { initCreate = f }(initCreate)
+	var order []string
+	initCreate = func(abs string, body []byte) error {
+		order = append(order, filepath.Base(abs))
+		if len(order) == 2 {
+			return errors.New("crashed")
+		}
+		return createExclusive(abs, body)
+	}
+	if _, err := initRevocations(path, testInitConfig); err == nil {
+		t.Fatal("the crash was not reported")
+	}
+	if len(order) != 2 || order[0] != "revocations.json" || order[1] != "revocations.json.created" {
+		t.Fatalf("the order: %v", order)
+	}
+	initCreate = createExclusive
+	if created, err := initRevocations(path, testInitConfig); err != nil || created {
+		t.Fatalf("an init after the crash: %v %v", created, err)
+	}
+	if rs, err := loadRevocations(path); err != nil || len(rs) != 0 {
+		t.Fatalf("a start after the crash: %v %v", rs, err)
+	}
+	if _, err := os.Lstat(markerOf(path)); err != nil {
+		t.Fatalf("the start did not write the marker: %v", err)
+	}
+}
+
+// Two inits racing: the one whose file lands second writes nothing and says
+// another init ran, never a raw link error, and leaves the winner's file
+// (task 2 review m3).
+func TestARacedInitWritesNothingAndSaysSo(t *testing.T) {
+	path := filepath.Join(safeDir(t), "revocations.json")
+	defer func(f func(string, []byte) error) { initCreate = f }(initCreate)
+	initCreate = func(abs string, body []byte) error {
+		if abs == path {
+			if err := os.WriteFile(path, []byte("theirs"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return createExclusive(abs, body)
+	}
+	_, err := initRevocations(path, testInitConfig)
+	if err == nil || err.Error() != "appeared while this ran: another init-revocations is running or has just run; "+
+		"nothing written" {
+		t.Fatalf("%v", err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != "theirs" {
+		t.Fatalf("replaced: %q", got)
+	}
+	if _, err := os.Lstat(markerOf(path)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the losing init wrote the marker: %v", err)
+	}
+}
+
 // The command reads broker.revocations_file and nothing else: a config
 // whose secrets are not in the environment still inits, and a second run
 // says the file is already initialized, exit 0. One with no broker block is
