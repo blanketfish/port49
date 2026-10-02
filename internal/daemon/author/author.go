@@ -99,6 +99,9 @@ type Handler struct {
 	// redact is the redaction every record passes through before it is
 	// written (spec §5.8); nil is the built-in patterns.
 	redact platform.Redactor
+	// marks is the daemon's copy of the standing revocation marks
+	// (store.Marks); nil names none.
+	marks *store.Marks
 
 	// bumped is when this replica last bumped each blob hash successfully,
 	// so a blob is bumped at most once per half idle TTL (bumpBlob). At most
@@ -117,6 +120,13 @@ const blobBumpMax = 1024
 // patterns reach the log. Without it the built-in patterns apply.
 func (h *Handler) WithRedactor(r platform.Redactor) *Handler {
 	h.redact = r
+	return h
+}
+
+// WithMarks sets the standing revocation marks every authorization reads
+// beside the context's own revocation (plan 7d; Ruling 17).
+func (h *Handler) WithMarks(m *store.Marks) *Handler {
+	h.marks = m
 	return h
 }
 
@@ -255,7 +265,11 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AuthorR
 	// Spec §5.3, in order. Each denial says what to do next rather than what
 	// went wrong inside: the person who typed the command is reading this.
 	now := h.now()
-	if !c.RevokedAt.IsZero() {
+	// The record's own revocation, or a standing mark for its principal
+	// or certificate, whatever the record says (plan 7d; Ruling 17): a
+	// record put back from before its revocation, or a context a
+	// revocation never reached, is still denied.
+	if !h.marks.RevokedAt(c).IsZero() {
 		return h.deny(rec, decision.CredentialRevoked, "port49: this session was revoked - log in again")
 	}
 	if !c.SessionExpires.IsZero() && now.After(c.SessionExpires) {

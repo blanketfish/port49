@@ -83,6 +83,10 @@ type Broker struct {
 	// Conns closes a revoked principal's or certificate's held connections:
 	// the Listener this broker is served through. Nil closes none.
 	Conns ConnCloser
+	// Marks is the daemon's copy of the standing marks (store.Marks): a
+	// revocation puts its mark in it once the store holds the mark, and a
+	// lift takes it out once the store's is gone. Nil keeps none.
+	Marks *store.Marks
 	// Persist writes the marks in force to broker.revocations_file after
 	// every change. Nil keeps them in the store alone.
 	Persist func(context.Context) error

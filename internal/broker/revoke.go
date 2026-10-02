@@ -206,6 +206,9 @@ func (b *Broker) Revoke(ctx context.Context, req RevokeRequest) (RevokeReport, e
 	if got, err := b.Store.GetRevocation(ctx, kind, key); err == nil {
 		rep.Mark = got // an earlier mark stands, with its own time
 	}
+	// In force for the daemon's authorizations from here (plan 7d), as
+	// the store's mark is for its logins and mints.
+	b.Marks.Set(rep.Mark, true)
 	if kind == store.RevocationPrincipal {
 		_, named := b.Policy.Load().SubjectOf(key)
 		rep.Unnamed = !named
@@ -299,6 +302,7 @@ func (b *Broker) Lift(ctx context.Context, req RevokeRequest) (RevokeReport, err
 	if err := b.Store.DeleteRevocation(ctx, kind, key); err != nil {
 		return RevokeReport{}, fmt.Errorf("broker: the revocation could not be lifted, and stands: %w", err)
 	}
+	b.Marks.Set(cur, false)
 	if b.Conns != nil {
 		b.Conns.Revoked(cur, false)
 	}

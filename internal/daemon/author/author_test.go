@@ -1456,3 +1456,33 @@ func TestTheLabDenyMessageIsPadded(t *testing.T) {
 		t.Fatalf("%q", got)
 	}
 }
+
+// A standing mark denies a context whatever its record says (plan 7d;
+// Ruling 17; pre-flight C1, I12): an unrevoked record under a mark for its
+// principal or its certificate (a record put back from before the
+// revocation, or one a revocation never reached) is denied
+// credential_revoked, and a lifted mark denies nothing.
+func TestAStandingMarkDeniesAnUnrevokedContext(t *testing.T) {
+	h, st, log := setup(t)
+	marks := store.NewMarks()
+	h.WithMarks(marks)
+	k := store.ContextKey{NAS: "leaf-01", Username: "alice"}
+	st.PutContext(context.Background(), k, store.Context{CtxID: "c", Principal: "user:alice@example.com",
+		Username: "alice", PrivLvl: 15, RefreshedAt: time.Now(),
+		Credential: store.Credential{Issuer: "CN=Corp CA", Serial: "0a"}}, time.Hour)
+	for _, mark := range []store.Revocation{
+		{Kind: store.RevocationPrincipal, Key: "user:alice@example.com", At: time.Now().Add(-time.Minute)},
+		{Kind: store.RevocationCert, Key: store.CertKey("CN=Corp CA", "0a"), At: time.Now().Add(-time.Minute)},
+	} {
+		marks.Set(mark, true)
+		resp := h.Handle(context.Background(), peer, req("alice", "vty0", "service=shell", "cmd=show"))
+		if resp.Status != wire.AuthorStatusFail || lastRecord(t, log)["reason"] != "credential_revoked" {
+			t.Fatalf("%s mark: %+v %v", mark.Kind, resp, lastRecord(t, log))
+		}
+		marks.Set(mark, false)
+	}
+	resp := h.Handle(context.Background(), peer, req("alice", "vty0", "service=shell", "cmd=show"))
+	if resp.Status == wire.AuthorStatusFail && lastRecord(t, log)["reason"] == "credential_revoked" {
+		t.Fatalf("a lifted mark still denied: %v", lastRecord(t, log))
+	}
+}

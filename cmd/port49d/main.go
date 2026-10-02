@@ -681,6 +681,11 @@ func run(parent context.Context, cfgPath string) error {
 		persistStart(cfg.InventoryService, coldPick{startDoc, startFrom}, m)
 	}
 	var marks []store.Revocation
+	// The daemon's copy of the standing marks, which every authorization,
+	// enable and receipt replay reads (plan 7d; Ruling 17). Filled from
+	// the restore below, and kept by the broker's Revoke and Lift; with no
+	// broker there are no marks, and it stays empty.
+	authMarks := store.NewMarks()
 	if brk != nil {
 		brk.Sessions = sessions
 		// Every mark in the file is in force before the broker serves a
@@ -697,6 +702,10 @@ func run(parent context.Context, cfgPath string) error {
 		brk.Persist = persister(brk.Store, cfg.Broker.RevocationsFile, m)
 		fmt.Fprintf(stderr, "port49d: broker: %d revocation(s) in force from %s\n", len(marks),
 			cfg.Broker.RevocationsFile)
+		for _, r := range marks {
+			authMarks.Set(r, true)
+		}
+		brk.Marks = authMarks
 	}
 	// Certificate status (spec §5.1.4; decision 33): the kept lists are put
 	// in force now, after the marks and before any listener binds. That is
@@ -801,7 +810,7 @@ func run(parent context.Context, cfgPath string) error {
 		// to the operator's own list.
 		Author: author.New(handlerStore, authz, log, m, time.Now, cfg.SessionServices,
 			cfg.Session.StalenessCeiling, cfg.Session.GraceWindow, cfg.ContextIdleTTL).WithRedactor(redactorFor(live)).
-			WithCeilingWarning(cfg.Session.CeilingWarning, cfg.Session.CeilingWarningPlatforms),
+			WithCeilingWarning(cfg.Session.CeilingWarning, cfg.Session.CeilingWarningPlatforms).WithMarks(authMarks),
 		// The system-user table is injected rather than looked up through a
 		// package global, so nothing can mutate a security rule at run time.
 		// It carries `root` for juniper_junos and nothing else

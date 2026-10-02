@@ -965,3 +965,25 @@ func TestACallerAlreadyGoneWithTheSlotFreeIsRevokedEveryTime(t *testing.T) {
 		}
 	}
 }
+
+// The daemon's marks follow the broker's (plan 7d; Ruling 17): a
+// revocation puts its mark in force once it is written, and a lift takes
+// it out once the store's is gone.
+func TestRevokeAndLiftKeepTheDaemonsMarks(t *testing.T) {
+	f := newFixtureWithPolicy(t, 8, sharedPolicy)
+	f.b.Marks = store.NewMarks()
+	ctx := context.Background()
+	alice := store.Context{Principal: alicePrincipal}
+	if _, err := f.b.Revoke(ctx, RevokeRequest{Principal: alicePrincipal, Origin: "t"}); err != nil {
+		t.Fatal(err)
+	}
+	if f.b.Marks.RevokedAt(alice).IsZero() {
+		t.Fatal("a revocation left the daemon's marks without it")
+	}
+	if _, err := f.b.Lift(ctx, RevokeRequest{Principal: alicePrincipal}); err != nil {
+		t.Fatal(err)
+	}
+	if !f.b.Marks.RevokedAt(alice).IsZero() {
+		t.Fatal("a lift left the mark in the daemon's marks")
+	}
+}
