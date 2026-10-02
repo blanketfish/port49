@@ -6466,11 +6466,19 @@ review (the owner may override them).*
   acceptable only with its replay window stated (design document §13).
 - **Expiry.** Each record carries its own expiry and is read against port49d's clock; etcd's
   leases only reclaim, at least `store.etcd.lease_grace` (5m) later. A revocation mark carries
-  no lease, and never expires. A record that does not decode is an error naming its key, never
-  skipped: a revocation that skipped one would miss a live context. The re-index (below) is the
-  exception: an index record that does not decode, or a ref it fails to re-index, is skipped,
-  logged and counted, and never fails a start or the re-index; the marks still deny by
-  principal or certificate.
+  no lease, and never expires. A record that does not decode, or an entry whose key does not
+  parse, is said by its key alone, never its value, and counted; none stops a revocation, the
+  refresh or the sweep for any other record. An index record (`x/`) that does not decode is
+  taken unread by a lookup, so a revocation over-reaches onto its ref and the context's own
+  record decides; the walk behind `active_principals` and the sweep skip it, and the sweep
+  deletes nothing against it; a login, an index write and the re-index write it whole again. A
+  lookup or token-index entry whose key does not parse names no ref, so a lookup skips it and
+  the sweep deletes it at its revision. A context record (`c/`) that does not decode is
+  unreadable, as one the sealing layer cannot open is: a login replaces it, and the refresh and
+  the re-index, which cannot revoke it, delete it at the revision they read. The re-index skips,
+  logs and counts a ref it fails to re-index, and never fails a start. Any other record that
+  does not decode is an error naming its key, never skipped: a revocation that skipped one
+  would miss a live context. The marks still deny by principal or certificate throughout.
 - **The login is one step.** A login's context write, its index entries, and a check that no
   revocation mark stands for its principal or its certificate that was not there when it
   read, are one transaction.
