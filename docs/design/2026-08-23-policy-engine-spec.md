@@ -699,9 +699,13 @@ read on a timer and on `SIGHUP`, and a change is handled in four steps:
    refused the policy (the joint check, §10; §13 decision 20), so a compile fault here is
    never a reason to revoke the fleet. Such a context is revoked, so it is on the policy in
    force and counts as reached for `port49_policy_refresh_pending`; the `failed` count is the
-   alarm. A context the refresher cannot open — sealed under a key that has left the two-key
-   window, or failing authentication — cannot be judged against the policy in force and is
-   not left on the one before, so it is revoked the same way and counted `failed`. Its owner
+   alarm. A context the refresher cannot open because it fails authentication — a tampered
+   record — cannot be judged against the policy in force and is not left on the one before,
+   so it is revoked the same way and counted `failed`. One sealed under a key this port49d
+   does not hold — a key that has left the two-key window, or a mis-set `PORT49_ENC_V1` — is
+   not revoked: it is said, counted `failed` and left for the next pass. Revoking it would turn
+   one key mistake into every session on the fleet ending, which fixing the key would not undo;
+   no login can open it meanwhile, so it is denied anyway (§5.6). Its owner
    is sealed, and the index entry that led to it may be stale, so its `refresh` deny record
    (`blob_unavailable`) names the device and the username its key holds and no principal. Every
    revocation a refresh makes is written as the revocation mark alone, with no compare, and
@@ -735,7 +739,7 @@ the context's `ctx_id`, so the record before a command's changed answer says why
 | revoked it: no grant left on the device, the subject's username changed, or the device left the inventory | `deny` | `no_grants_matched` |
 | revoked it: admission refuses the device — no key group admits it, two tie on it, or its key is not held (§10) | `deny` | `device_unknown` |
 | revoked it: the policy in force could not be resolved or compiled for it | `deny` | `blob_unavailable` |
-| revoked it: the context could not be opened (the record names no principal) | `deny` | `blob_unavailable` |
+| revoked it: the context could not be opened, failing authentication (the record names no principal) | `deny` | `blob_unavailable` |
 | left it as it was: the device is quarantined (recorded once per context per bundle) | `deny` | `device_quarantined` |
 
 Each context is counted once per pass in `port49_context_refreshes_total{outcome}`: `updated`,
@@ -777,8 +781,9 @@ stops at its first store error, says how far it got, and runs again every 30s un
 finishes; a context not yet reached keeps its previous policy until then, and
 `port49_policy_refresh_pending` holds at 1 from the swap, or from a grant's expiry, until the
 settle pass after it completes, reaching every live context and leaving none behind — a
-context skipped as busy, or a pass stopped by a store error, keeps it at 1 until a later pass
-reaches that context — the alert for a policy in force that has not yet reached every live
+context skipped as busy, a context sealed under a key port49d does not hold, a principal whose
+contexts could not be looked up, or a pass stopped by a store error, keeps it at 1 until a later
+pass reaches that context — the alert for a policy in force that has not yet reached every live
 session. It is never 0 while a settle pass is outstanding: until then a login in flight may
 still write the superseded answer. A context revoked for a compile fault is
 done: revoked is its answer under the policy in force, so it does not hold the gauge, and it is
@@ -882,11 +887,16 @@ revocation never saw; the second pass catches a redemption that was in flight. W
 deleted and the token spent, a device's retransmission of a login made before the revocation is
 answered `token_not_found`, not replayed and not `credential_revoked` (§5.6); deleting the receipt
 also closes the one unchecked replay, the concurrent duplicate's (§5.6). A redemption that
-removed its token before the delete and writes its context after the second pass is a window of one
-store round trip, which the shared store (plan 7d) closes atomically. Deleting by certificate
-deletes every unspent token under each `(device, username)` key that certificate minted under, the
-same principal's other certificates' included: the store holds no finer cut, and the error is
-toward denying. A principal is compared as `Identity` spells it, `user:` and the lower-cased email.
+removed its token before the delete and writes its context after the second pass writes it
+revoked: a login's context write checks, in the same atomic step, that no mark stands for its
+principal or its certificate (plan 7d; §13, decision 35), and the mark is written before
+anything else. The daemon also reads the standing marks on every authorization, so a context a
+revocation by principal or certificate never reached is denied anyway. A self or key
+revocation leaves no mark, so for those the window of one store round trip stays. Deleting by
+certificate deletes every unspent token under each `(device, username)` key that certificate
+minted under, the same principal's other certificates' included: the store holds no finer cut,
+and the error is toward denying. A principal is compared as `Identity` spells it, `user:` and the
+lower-cased email.
 The broker's listener holds the marks in memory too, so a connection made with a revoked
 certificate, or by a revoked principal, is answered `credential_revoked` and closed as it binds,
 and cannot close its owner's other connections. Its one request is answered as a mint under the
@@ -1414,11 +1424,13 @@ context rather than replacing it (ruled 2026-09-23):
 **A login into a revoked context is refused.** A login whose resulting context carries
 `revoked_at` answers FAIL `credential_revoked` — the answer the `enable` gate gives for the same
 state — and its token is spent, so a token the revocation was meant to stop gets no second try
-(ruled 2026-09-23; made one rule in plan 3). There are four ways to get there. The context the login
+(ruled 2026-09-23; made one rule in plan 3). There are five ways to get there. The context the login
 would join is already revoked and the token was not minted after it: refused before anything is
 written. The same principal's context past its ceiling, replaced carrying a revocation the token
-predates; a context the sealing layer cannot open, replaced carrying its plaintext `revoked_at`; and
-a revocation that lands between the login's read and its join, merged by the join: each has already
+predates; a context the sealing layer cannot open, replaced carrying its plaintext `revoked_at`;
+a revocation that lands between the login's read and its join, merged by the join; and a
+revocation mark standing for the login's principal or certificate, on a token minted before it,
+read in the same step as the write (plan 7d; §13, decision 35): each has already
 written the context when it is refused, and that context is revoked, so every authorization against
 it is denied anyway until the idle TTL reclaims it. The `redeem` record carries the principal, the
 `ctx_id` and `session.revoked_at`, the revocation that refused it. A retransmission is answered from
@@ -1442,9 +1454,9 @@ to name. The join is a compare-and-set on the context's revision, so a revocatio
 annotation, a privilege raise or a refresh that lands mid-login is merged rather than erased, and
 two simultaneous logins both land.
 
-**A replace unindexes what it displaced, before the new login is indexed**, so a later revocation
-of the displaced credential does not reach the context that replaced it. What it unindexes
-depends on whose context it was:
+**A replace unindexes what it displaced, in the same step that writes the new login's context
+and index**, so a later revocation of the displaced credential does not reach the context that
+replaced it. What it unindexes depends on whose context it was:
 
 - **Another principal's**: every key the context was indexed under — its principal and every
   login's `sid` and certificate, including joined logins the record no longer names. Nothing of
@@ -1465,25 +1477,28 @@ An empty `sid` or certificate (no issuer or no serial) is never indexed or unind
 revocation by one is refused rather than run: every certificate login shares the empty `sid`, and
 every OIDC login the empty certificate, so revoking by either would revoke them fleet-wide.
 
-The unindex and the index are not one operation with the context write, and two races follow,
-each needing logins under one username on one device within a few milliseconds. A second window
-of the replacing principal that joins between the replace's write and its whole clear loses its
-`sid` and certificate entries; revocation by principal still reaches the context. And two
-principals replacing each other can leave the survivor indexed under the loser's keys only, so a
-revocation of the loser marks it and one of the survivor misses it; that also needs the
-uniqueness MUST broken.
+The context write, the unindex and the index are one atomic step (plan 7d; §13, decision
+35): it lands only while the context, the ref's index record and the marks the login read
+are as read, and otherwise reads and decides again. So no window leaves a joined login's
+`sid` unindexed, and no replace leaves the survivor under the loser's keys.
 
-A store port49 cannot reach fails the login `store_unavailable`, refused before the token is
-spent. A record the store returns but port49 cannot open — sealed under a key that has left the
-two-key window, or failing authentication — cannot be joined, and is **replaced fresh** through
-the same compare-and-set: the replace carries the record's plaintext `revoked_at` by the rule in
-the table, whoever its principal was, because the principal is sealed; the `redeem` record carries
+A store port49 cannot reach fails the login `store_unavailable`: before the token is spent
+when the redemption fails, and after it when the step that writes the context fails. A
+context and its index that cannot be written together are never written apart, so a login
+is never admitted with a context no revocation can reach. An ERROR whose write timed out
+may still have committed: the context is then indexed, so revocable, and a retransmission
+replays the receipt; if it did not commit, the retransmission is `token_spent`. A record the
+store returns but port49 cannot open — sealed under a key that has left the two-key window, or
+failing authentication — cannot be joined, and is **replaced fresh** through the same
+compare-and-set: the replace carries the record's plaintext `revoked_at` by the rule in the table,
+whoever its principal was, because the principal is sealed; the `redeem` record carries
 `session.replaced_unreadable: true` and no `replaced_ctx_id`, because that id is sealed too; and
 the unreadable login's index entries cannot be named, so the replace clears every key the context
-was indexed under, as another principal's replace does, before the new login is indexed. Left in
-place they would not age out at `index_ttl`: every extension of the replacing context re-stamps
-them, so a revocation of the displaced credential would reach it for as long as it lives. Each such
-login opens the record twice (the read before the token is spent and the join's own), so
+was indexed under, as another principal's replace does, in the same step as the new login's
+index. Left in place they would not age out at `index_ttl`: every extension of the replacing
+context re-stamps them, so a revocation of the displaced credential would reach it for as long as
+it lives. Each such login opens the record twice (the read before the token is spent and the
+join's own), so
 `port49_crypt_open_failures_total{record="context"}` counts at least two per login. Every read of
 such a record counts `port49_store_operations_total{outcome="unreadable"}`, not `outcome="error"`:
 the store answered, and a key rotation must not read as a store outage.
@@ -2064,7 +2079,7 @@ refused request named; any other path is recorded `mint`.
 | `api_right_missing` | `revoke`, `explain`: the caller asked to act on another principal's tokens, sessions or decisions, or on a `(device, username)` whoever holds it, and its subject declares no `api:` right that unlocks it (§2). The API answers 403 `api_right_missing`; nothing is done |
 | `device_unknown` | the source address is not in the admission trie (§10). On an `unvalidated` record: a reload refused, removed, renamed, re-keyed or re-platformed the device an open connection was admitted as, so that admission is no longer one port49d knows, and the connection is reset with no strike (§10, "How a daemon refreshes its snapshot"). On `mint` and `refresh`: the device is in inventory and admission refuses it — no key group admits it, two tie on it, or its `key_ref` is one port49d holds no key for (§10) — so no token is minted for it and its live contexts are revoked: it cannot reach port49d, and a token for it would only be a login that falls to the device's local method (`tests/lab/results/quarantine-*.md`). As with a quarantine, a subject with no grant on the device is answered `no_grants_matched` first, so the API tells no caller which devices exist |
 | `platform_unknown` | the device's platform has no adapter; generic fallback applied |
-| `blob_unavailable` | the referenced blob could not be resolved from the store or any cache — a store fault, alarmed (§5.1.1) — or the context no longer fits the blob: a session attribute filled from it exceeds 255 bytes, or a filled-in value carries a separator (`=`, `*`) or a control character, either of which the broker refused at mint (§6), or the reply would send a `priv-lvl` above the context's `max_privilege`, a `priv-lvl` that is not a level 0 to 15, or an attribute the blob's `accepted_attributes` does not take — compositions the load quarantines (§6, §7). On `refresh`: the policy in force could not be resolved or compiled for this context — an unexpected broker fault, since the reload's load (§5.1.3 step 1) compiled every subject on every device, and what failed quarantined its device or refused the policy under the joint check (§10) — so the context is revoked, failing closed; the process log names the `ctx_id` and the fault, and it is counted `failed`. Also on `refresh`: the context could not be opened — sealed under a key that has left the two-key window, or failing authentication — so it is revoked through the monotonic revocation mark, the record names the device and the username its key holds and no principal (the owner and `ctx_id` are sealed, and the index entry that led to it may be stale), and it is counted `failed` |
+| `blob_unavailable` | the referenced blob could not be resolved from the store or any cache — a store fault, alarmed (§5.1.1) — or the context no longer fits the blob: a session attribute filled from it exceeds 255 bytes, or a filled-in value carries a separator (`=`, `*`) or a control character, either of which the broker refused at mint (§6), or the reply would send a `priv-lvl` above the context's `max_privilege`, a `priv-lvl` that is not a level 0 to 15, or an attribute the blob's `accepted_attributes` does not take — compositions the load quarantines (§6, §7). On `refresh`: the policy in force could not be resolved or compiled for this context — an unexpected broker fault, since the reload's load (§5.1.3 step 1) compiled every subject on every device, and what failed quarantined its device or refused the policy under the joint check (§10) — so the context is revoked, failing closed; the process log names the `ctx_id` and the fault, and it is counted `failed`. Also on `refresh`: the context could not be opened, failing authentication (one sealed under a key port49 does not hold is left unrevoked and unrecorded, §5.1.3) — so it is revoked through the monotonic revocation mark, the record names the device and the username its key holds and no principal (the owner and `ctx_id` are sealed, and the index entry that led to it may be stale), and it is counted `failed` |
 | `blob_platform_mismatch` | the context's blob was compiled for a platform other than the one inventory gives the device — inventory changed since the mint, or the broker and the daemon read different inventories. Its dialect and attributes are another platform's, so it is never answered from; operational, alertable beside `blob_unavailable` |
 | `device_quarantined` | the device is in inventory but failed joint validation against policy (§10); the connection is closed without a reply, as for `device_unknown`, until fixed. On `refresh`, a deny recorded once per context per policy version (bundle): the live context is left as it was until the quarantine lifts |
 | `projection_fail_closed` | `authorize_session`, a permit: the session on a projected platform (§8) was answered with its composition's fail-closed reply — every command denied but what the projection proved — because the projection cannot tell the device that composition faithfully (§13, decision 26). The blob carries why (`fail_closed`: `refused_shape`, `configuration_mode`, `overflow`, `unwritable`, `secret_rule`, `unsound`, `argument_deny`, a deny Junos cannot match because it names an argument, or `configuration_deny`, a deny of a configuration statement, which deny-commands never reaches; decision 27). Every other subject on the device is answered as before; `policy test` and `policy diff` fail on the composition |
@@ -6438,6 +6453,121 @@ the design was silent, each the option that denies more.*
 
 (§2, §5.1.3, §5.1.4, §5.7, §12, §14; design document §12, §17)
 
+**35. The shared store is etcd, every read is linearizable, a login lands with its index and
+its revocation check in one step, and no field a login or an authorization trusts is written in
+the clear.**
+*Plan 7d, 2026-10-02: D1 answered by the owner (etcd); the rest rulings where the design was
+silent, each the option that denies more, and the controller's rulings on plan 7d's pre-flight
+review (the owner may override them).*
+
+- **Backend.** etcd v3.6. Every acknowledged write survives a leader failover (Raft), so a
+  redeemed token never comes back and a revocation mark is never lost. Every read is
+  linearizable: a member cut off from the quorum answers nothing, never a stale context. The
+  interface stays pluggable; a backend whose replication is asynchronous (Valkey, Redis) is
+  acceptable only with its replay window stated (design document §13).
+- **Expiry.** Each record carries its own expiry and is read against port49d's clock; etcd's
+  leases only reclaim, at least `store.etcd.lease_grace` (5m) later. A revocation mark carries
+  no lease, and never expires. A record that does not decode, or an entry whose key does not
+  parse, is said by its key alone, never its value, and counted; none stops a revocation, the
+  refresh or the sweep for any other record. An index record (`x/`) that does not decode is
+  taken unread by a lookup, so a revocation over-reaches onto its ref and the context's own
+  record decides; the walk behind `active_principals` and the sweep skip it, and the sweep
+  deletes nothing against it; a login, an index write and the re-index write it whole again. A
+  lookup or token-index entry whose key does not parse names no ref, so a lookup skips it and
+  the sweep deletes it at its revision. A context record (`c/`) that does not decode is
+  unreadable, as one the sealing layer cannot open is: a login replaces it, and the refresh and
+  the re-index, which cannot revoke it, delete it at the revision they read. The re-index skips,
+  logs and counts a ref it fails to re-index, and never fails a start. Any other record that
+  does not decode is an error naming its key, never skipped: a revocation that skipped one
+  would miss a live context. The marks still deny by principal or certificate throughout.
+- **The login is one step.** A login's context write, its index entries, and a check that no
+  revocation mark stands for its principal or its certificate that was not there when it
+  read, are one transaction.
+  - **A standing mark.** A mark that stands, for a token not minted after it, is written into
+    the context as its revocation, and the login is refused `credential_revoked`.
+  - **What that closes.** A context is never live and unindexed. A redemption racing a
+    revocation by principal or certificate writes its context revoked, or is reached by the
+    revocation's second pass.
+  - **An index that cannot be written.** The login is refused ERROR `store_unavailable` (it
+    was a PASS with `index_error`). An ERROR whose write may have committed is §5.6's.
+  - **What it leaves.** A self or key revocation leaves no mark, so its window of one round
+    trip stays (§5.1.4).
+- **The context is sealed whole, bound to its key.**
+  - **What is sealed.** Every field the authorizer trusts is sealed with the identity: the
+    privilege, the ceiling, the policy blob, the enable mechanism, the maximum privilege, the
+    clocks, and the revocation.
+  - **Bound to its key.** The cipher's additional data is the context's key, so a record moved
+    to another device or username will not open.
+  - **The revocation in the clear.** `revoked_at` is kept in the clear as well, so revoking
+    needs no key; a read takes the later of the two.
+  - **The setters.** A narrow setter on a sealed field reads, opens, applies its rule, seals
+    and rewrites on the revision it read. The idle clock and accounting's annotations stay
+    plaintext and authorize nothing.
+  - **The token and the receipt.** A token's secret, identity and every field a login trusts
+    (its kind, expiry, policy blob, session age, enable mechanism, maximum privilege and
+    clocks) are sealed, bound to the token's key and ID; a copy of the expiry stays in the
+    clear for the store, and a token whose two expiries differ is dropped. A receipt is
+    sealed, its first redemption included, bound to its whole key, kind and credential hash
+    among it.
+  - **Migration.** A token, receipt or context sealed before this does not open: a token is
+    dropped, a context is denied and replaced at the next login. The memory store loses every
+    record at the restart that installs it, and etcd holds none before plan 7d.
+- **The ledger.** port49d keeps, per context key, the `ctx_id` it last wrote there or first
+  read there. A context that opens at a key under another `ctx_id` (another login's record
+  written back) is denied `store_unavailable`, replaced by the next login and revoked by the
+  refresh.
+  - **One per process.** One ledger is shared by every sealing layer, so the daemon's reads
+    and the broker's agree.
+  - **Sealed after the start's reads.** A start reads every kept context before any listener
+    binds, and then seals the ledger. A sealed ledger denies a context at any key it has not
+    seen, unless this process wrote it. Before the seal, the first record read at an unseen
+    key is admitted.
+- **The standing marks are read on every request.** The daemon holds the marks in memory, with
+  the store as the authority.
+  - **Kept current.** They are loaded at start before any listener binds. A mark is added
+    before its write is sent, so a write that commits and whose reply is lost leaves no gap,
+    and is taken out again only when the store refused the write, wrote nothing, and the mark
+    did not stand already. It is removed once its lift lands.
+  - **What they deny.** An authorization, an `enable` and a receipt's replay are denied
+    `credential_revoked` for a context whose principal or certificate a mark names, whatever
+    the record says.
+  - **The cost** per request is one in-memory lookup.
+- **What store write access still yields.** A stolen daemon store credential cannot forge or
+  move a token, receipt or context, raise a privilege past what port49 wrote, or lift a
+  revocation by principal or certificate. Deleting a record, or making a write conflict, is
+  a denial. What it can do is replay:
+  - **a context** port49 sealed earlier for the same key. While port49d runs, the ledger
+    admits only an earlier version of the context the key holds now (the same `ctx_id`, so
+    the same principal), which undoes a self or key revocation of it (no mark; decision 34)
+    or a policy narrowing until the next refresh judges it. **Across a restart it is
+    impersonation:** the ledger admits the first record read at a key it has not seen until
+    the start's reads seal it, so another login's context put back while port49d was stopped,
+    or before the start read it, is taken as that key's, until its sealed ceiling, if it has
+    one, or the key's next login. A principal or certificate mark still denies it;
+  - **a token** port49 minted for the same key and ID, deleted since, which a holder of its
+    secret can redeem until its sealed expiry;
+  - **a receipt's sliding bound**, up to its sealed cap, or its refusal flag, which replays
+    PASS only onto the live context that receipt's own principal holds unrevoked;
+  - **the idle clock**: a context kept alive past its idle TTL, to its sealed ceiling if it
+    has one, and indefinitely under `max_session_age: never`;
+  - **accounting's annotations**: a context's session discriminators cleared, which
+    suppresses the `foreign` attribution of its accounting records;
+  - **the index**: a context whose index record is deleted is hidden from the refresh and
+    from a revocation by sid or `--mine` until the re-index finds and re-indexes it; a
+    revocation by principal or certificate still denies it through the marks. An index record
+    rewritten to name another principal or another sid, or with a lookup entry deleted, is
+    found by the same re-index, which compares the keys listed, each with its lookup entry in
+    place, against the context's own sealed principal, sid and certificate; until the next
+    re-index it hides the context as a deleted one does.
+
+  That residual is carried, unassigned.
+- **The index is plaintext.** The keys revocation reads (principal, device, username,
+  certificate, sid) stay plaintext, because revocation must not depend on the encryption key
+  (owner's ruling 2026-09-21). On a persistent store every snapshot holds them, and is
+  protected as the store is (design document §8).
+
+(§5.1.4, §5.6, §14; design document §8, §12)
+
 ### Deferred, with reasons
 
 Neither of these is an open question about the design. Both are closed for v1 on the
@@ -6924,6 +7054,31 @@ Beyond those already listed in the design document's §14:
   denied command with no policy change.
 - **`on_missing`**: a device lacking the scoped attribute is included for a deny-bearing
   scope and excluded for a permit-bearing one.
+
+**Shared store** (plan 7d; §13, decision 35)
+
+- **Every backend, every property**: each `storetest` property passes against the memory
+  store, the sealing layer over it, the etcd backend, and the sealing layer over etcd.
+- **The login is one step**: a login replacing another principal's context leaves it indexed
+  under the new login's keys alone, whatever lands concurrently; a revocation mark that appears
+  between a login's read and its write makes the write conflict and land revoked.
+- **Quorum lost**: with two of three etcd members stopped, a store call fails with
+  `store.ErrUnavailable` within its deadline, never answers from a stale member.
+- **The seal**: a context record whose `revoked_at` is zeroed, privilege raised, blob swapped
+  or ceiling removed in the store reads back as port49 wrote it, and one moved to another key
+  does not open. A token whose trusted fields are raised in the store reads back as minted,
+  one moved to another key or ID or whose expiry is extended is dropped, and a login receipt
+  copied to the enable key does not open.
+- **The ledger**: another login's context written back at a key is denied; an earlier
+  version of the same context is not (the residual). Once sealed, the ledger denies a context
+  at a key it has not seen.
+- **The index lost**: a context whose index record is deleted, or rewritten to name another
+  principal or another sid, or whose lookup entry is deleted, is found, re-indexed and judged
+  against the policy in force, and a revocation by principal or sid reaches it again. An index record that does not decode is skipped, logged and
+  counted, and the rest are re-indexed.
+- **The marks**: a context a standing mark names is denied `credential_revoked` at
+  authorization, at `enable` and at a receipt's replay, whatever its record says; a lifted
+  mark denies nothing.
 
 ---
 

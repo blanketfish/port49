@@ -47,6 +47,15 @@ type JoinResult struct {
 	Prior Context
 }
 
+// LoginIndex is what a login indexes its context under (IndexContext's
+// arguments): its principal, sid and certificate key, for TTL. JoinContext
+// decides what the displaced record's keys lose, and SwapLogin writes it
+// with the context (plan 7d).
+type LoginIndex struct {
+	Principal, Sid, CertKey string
+	TTL                     time.Duration
+}
+
 // Joinable reports whether a login may join the live context rather than
 // replace it (spec §5.6): the same principal, and a context not past its
 // session ceiling. A context past session_expires is over, whatever else it
@@ -86,6 +95,14 @@ func Join(live, login Context, mintedAt time.Time) Context {
 	}
 	out.RevokedAt = CarryRevocation(live.RevokedAt, mintedAt)
 	out.SessionDiscriminators = append([]string(nil), live.SessionDiscriminators...)
+	// The login is witnessed only into a context it leaves unrevoked: a
+	// revoked one admits nothing, and a login refused on it must not
+	// replay PASS once a later login lifts the revocation (Task 4b review
+	// I1, I2). login.RevokedAt is a mark JoinContext carried in.
+	out.Logins = append([]string(nil), live.Logins...)
+	if out.RevokedAt.IsZero() && login.RevokedAt.IsZero() {
+		out.Logins = addLogins(out.Logins, login.Logins)
+	}
 	out.Rev = 0
 	return out
 }
@@ -121,53 +138,82 @@ func laterCeiling(a, b time.Time) time.Time {
 	return later(a, b)
 }
 
-// JoinContext writes a login's context at k: a join into the live context when
-// Joinable says it may, the login itself otherwise (spec §5.6). It reads,
-// decides, and swaps on the revision it read, retrying from the read when the
-// swap is refused, so a write that lands in between — SetRevokedAt above all —
-// is merged rather than erased, and two concurrent logins both land in one
-// context instead of one overwriting the other.
+// JoinContext writes a login's context at k: a join into the live context
+// when Joinable says it may, the login itself otherwise (spec §5.6), with
+// its index and its revocation check in the same step (SwapLogin; plan 7d).
+// It reads the marks for the login's principal and certificate, then the
+// context, decides, and swaps on what it read, retrying from the read when
+// the swap is refused, so a write that lands in between — SetRevokedAt, or
+// a mark, above all — is merged rather than erased, and two concurrent
+// logins both land in one context instead of one overwriting the other.
 //
-// login is the context this login would create on its own, CtxID included.
-// A replace of the same principal's context past its ceiling carries the
-// revocation by the same rule a join does: a session ceiling ending is not a
-// credential being verified again.
+// login is the context this login would create on its own, CtxID
+// included. A mark that stands for login's principal or certificate is
+// carried into the context as its revocation by CarryRevocation's rule: a
+// token minted after the mark is the credential verified again (decision
+// 15). A replace of the same principal's context past its ceiling carries
+// the revocation by the same rule a join does.
 //
-// A record the sealing layer cannot open (UnreadableContextError) cannot be
-// merged, and is replaced by the login: refusing it would lock the operator
-// out until the idle TTL reclaims a record nothing can use. The replace is a
-// swap on the plaintext revision the error carries, and it keeps the plaintext
-// RevokedAt by the same minted-after rule whoever the principal was, because
-// the principal is sealed. Any other store error is returned as it is.
-func JoinContext(ctx context.Context, s Store, k ContextKey, login Context, mintedAt, now time.Time, ttl time.Duration) (JoinResult, error) {
+// The index change is the one the login path made in three calls before
+// plan 7d: another principal's replace, or an unreadable one, clears every
+// key the ref was indexed under; the same principal's replace drops only
+// the displaced sid and certificate this login does not share; a join
+// keeps what is there. Then the login's own keys are added.
+//
+// A record the sealing layer cannot open (UnreadableContextError) cannot
+// be merged, and is replaced by the login: refusing it would lock the
+// operator out until the idle TTL reclaims a record nothing can use. The
+// replace is a swap on the plaintext revision the error carries, and it
+// keeps the plaintext RevokedAt by the same minted-after rule whoever the
+// principal was, because the principal is sealed. Any other store error is
+// returned as it is.
+func JoinContext(ctx context.Context, s Store, k ContextKey, login Context, mintedAt, now time.Time, ttl time.Duration,
+	ix LoginIndex) (JoinResult, error) {
 	for attempt := 0; attempt < MaxJoinAttempts; attempt++ {
+		marks, standing, err := readMarks(ctx, s, login)
+		if err != nil {
+			return JoinResult{}, err
+		}
+		mine := login
+		mine.RevokedAt = later(mine.RevokedAt, CarryRevocation(standing, mintedAt))
 		live, err := s.GetContext(ctx, k)
 		var res JoinResult
 		var rev uint64
+		w := LoginWrite{Principal: ix.Principal, Sid: ix.Sid, CertKey: ix.CertKey, IndexTTL: ix.TTL, Marks: marks}
 		var unreadable *UnreadableContextError
 		switch {
 		case errors.Is(err, ErrNotFound):
-			res.Context = login
+			res.Context = mine
 		case errors.As(err, &unreadable):
-			res = JoinResult{Context: login, ReplacedUnreadable: true}
-			res.Context.RevokedAt = CarryRevocation(unreadable.RevokedAt, mintedAt)
+			res = JoinResult{Context: mine, ReplacedUnreadable: true}
+			res.Context.RevokedAt = later(mine.RevokedAt, CarryRevocation(unreadable.RevokedAt, mintedAt))
 			rev = unreadable.Rev
+			w.ClearRef = true
 		case err != nil:
 			return JoinResult{}, err
-		case Joinable(live, login, now):
-			res = JoinResult{Context: Join(live, login, mintedAt), Joined: true}
+		case Joinable(live, mine, now):
+			res = JoinResult{Context: Join(live, mine, mintedAt), Joined: true}
+			res.Context.RevokedAt = later(res.Context.RevokedAt, mine.RevokedAt)
 			if live.PrivLvl > res.Context.PrivLvl {
 				res.ClampedFrom = live.PrivLvl
 			}
 			rev = live.Rev
 		default:
-			res = JoinResult{Context: login, Replaced: live.CtxID, Prior: live}
-			if live.Principal == login.Principal {
-				res.Context.RevokedAt = CarryRevocation(live.RevokedAt, mintedAt)
-			}
+			res = JoinResult{Context: mine, Replaced: live.CtxID, Prior: live}
 			rev = live.Rev
+			if live.Principal == mine.Principal {
+				res.Context.RevokedAt = later(mine.RevokedAt, CarryRevocation(live.RevokedAt, mintedAt))
+				w.DropSid, w.DropCertKey = displaced(live.Credential, mine.Credential)
+			} else {
+				w.ClearRef = true
+			}
 		}
-		switch err := s.SwapContext(ctx, k, rev, res.Context, ttl); {
+		// A login that writes a revoked context of its own is not witnessed
+		// (Join's rule for a join).
+		if !res.Joined && !res.Context.RevokedAt.IsZero() {
+			res.Context.Logins = nil
+		}
+		switch err := s.SwapLogin(ctx, k, rev, res.Context, ttl, w); {
 		case err == nil:
 			return res, nil
 		case !errors.Is(err, ErrConflict):
@@ -175,4 +221,47 @@ func JoinContext(ctx context.Context, s Store, k ContextKey, login Context, mint
 		}
 	}
 	return JoinResult{}, fmt.Errorf("store: context still changing after %d attempts: %w", MaxJoinAttempts, ErrConflict)
+}
+
+// readMarks reads the marks for the login's principal and certificate, as
+// SwapLogin will compare them, and the latest At among those standing.
+func readMarks(ctx context.Context, s Store, login Context) ([]MarkRead, time.Time, error) {
+	keys := [][2]string{{RevocationPrincipal, login.Principal}}
+	if ck := CertKey(login.Credential.Issuer, login.Credential.Serial); !BlankCertKey(ck) {
+		keys = append(keys, [2]string{RevocationCert, ck})
+	}
+	var out []MarkRead
+	var standing time.Time
+	for _, kk := range keys {
+		if kk[1] == "" {
+			continue
+		}
+		r, err := s.GetRevocation(ctx, kk[0], kk[1])
+		switch {
+		case errors.Is(err, ErrNotFound):
+			out = append(out, MarkRead{Kind: kk[0], Key: kk[1]})
+		case err != nil:
+			return nil, time.Time{}, err
+		default:
+			out = append(out, MarkRead{Kind: kk[0], Key: kk[1], At: r.At})
+			standing = later(standing, r.At)
+		}
+	}
+	return out, standing, nil
+}
+
+// displaced is what a same-principal replace unindexes: the displaced
+// login's sid and certificate, each only where this login does not share
+// it. A key both hold is one this login indexes anyway, and dropping it
+// first would leave a moment in which a revocation by it finds nothing —
+// which, in one step, it no longer can; the rule is kept so the index ends
+// where it did before plan 7d.
+func displaced(prior, login Credential) (sid, certKey string) {
+	if prior.Sid != login.Sid {
+		sid = prior.Sid
+	}
+	if ck := CertKey(prior.Issuer, prior.Serial); ck != CertKey(login.Issuer, login.Serial) {
+		certKey = ck
+	}
+	return sid, certKey
 }

@@ -28,6 +28,7 @@ func TestNewRegistersEveryMetric(t *testing.T) {
 	m.StoreOps.WithLabelValues("put", "ok").Inc()
 	m.DecisionLogWriteFailures.Inc()
 	m.CryptOpenFailures.WithLabelValues("context").Inc()
+	m.IndexRecordsUndecodable.Inc()
 	m.Attributions.WithLabelValues("foreign").Inc()
 	m.BrokerItemErrors.WithLabelValues("device_unconfigured").Inc()
 	m.BrokerIdempotency.WithLabelValues("conflict").Inc()
@@ -37,6 +38,8 @@ func TestNewRegistersEveryMetric(t *testing.T) {
 	m.BlobCache.WithLabelValues("hit").Inc()
 	m.CountQuarantined(func() int { return 1 })
 	m.ContextRefreshes.WithLabelValues("updated").Inc()
+	m.ContextsReindexed.Inc()
+	m.ContextsReindexFailures.Inc()
 	m.SessionRefreshes.WithLabelValues("extended").Inc()
 	m.TokensSuperseded.Inc()
 	m.CeilingWarnings.Inc()
@@ -63,50 +66,53 @@ func TestNewRegistersEveryMetric(t *testing.T) {
 
 	// Expected metric names from brief + ConnectionEvents.
 	expectedMetrics := map[string]bool{
-		"port49_requests_total":                      false,
-		"port49_request_seconds":                     false,
-		"port49_decisions_total":                     false,
-		"port49_unvalidated_packets_total":           false,
-		"port49_key_validations_total":               false,
-		"port49_connections":                         false,
-		"port49_connection_events_total":             false,
-		"port49_authentication_failures_total":       false,
-		"port49_accounting_spool_depth":              false,
-		"port49_accounting_spool_drops_total":        false,
-		"port49_store_operations_total":              false,
-		"port49_decision_log_write_failures_total":   false,
-		"port49_crypt_open_failures_total":           false,
-		"port49_accounting_attributions_total":       false,
-		"port49_broker_item_errors_total":            false,
-		"port49_broker_idempotency_refusals_total":   false,
-		"port49_broker_tls_handshake_failures_total": false,
-		"port49_broker_connection_events_total":      false,
-		"port49_broker_connections":                  false,
-		"port49_blob_cache_lookups_total":            false,
-		"port49_devices_quarantined":                 false,
-		"port49_context_refreshes_total":             false,
-		"port49_session_refreshes_total":             false,
-		"port49_tokens_superseded_total":             false,
-		"port49_ceiling_warnings_total":              false,
-		"port49_revocations_total":                   false,
-		"port49_revocations_in_force":                false,
-		"port49_revocations_file_failed":             false,
-		"port49_cert_status_checks_total":            false,
-		"port49_crl_loads_total":                     false,
-		"port49_crl_next_update_timestamp_seconds":   false,
-		"port49_cert_status_unavailable_total":       false,
-		"port49_policy_reloads_total":                false,
-		"port49_policy_file_refused":                 false,
-		"port49_policy_refresh_pending":              false,
-		"port49_inventory_reloads_total":             false,
-		"port49_inventory_file_refused":              false,
-		"port49_inventory_snapshot_age_seconds":      false,
-		"port49_inventory_bundle_sequence":           false,
-		"port49_inventory_persist_failed":            false,
-		"port49_inventory_bundle_refused":            false,
-		"port49_inventory_policy_mismatch":           false,
-		"port49_inventory_mirror_unreadable":         false,
-		"port49_inventory_fetches_total":             false,
+		"port49_requests_total":                        false,
+		"port49_request_seconds":                       false,
+		"port49_decisions_total":                       false,
+		"port49_unvalidated_packets_total":             false,
+		"port49_key_validations_total":                 false,
+		"port49_connections":                           false,
+		"port49_connection_events_total":               false,
+		"port49_authentication_failures_total":         false,
+		"port49_accounting_spool_depth":                false,
+		"port49_accounting_spool_drops_total":          false,
+		"port49_store_operations_total":                false,
+		"port49_decision_log_write_failures_total":     false,
+		"port49_crypt_open_failures_total":             false,
+		"port49_store_index_records_undecodable_total": false,
+		"port49_accounting_attributions_total":         false,
+		"port49_broker_item_errors_total":              false,
+		"port49_broker_idempotency_refusals_total":     false,
+		"port49_broker_tls_handshake_failures_total":   false,
+		"port49_broker_connection_events_total":        false,
+		"port49_broker_connections":                    false,
+		"port49_blob_cache_lookups_total":              false,
+		"port49_devices_quarantined":                   false,
+		"port49_context_refreshes_total":               false,
+		"port49_contexts_reindexed_total":              false,
+		"port49_contexts_reindex_failures_total":       false,
+		"port49_session_refreshes_total":               false,
+		"port49_tokens_superseded_total":               false,
+		"port49_ceiling_warnings_total":                false,
+		"port49_revocations_total":                     false,
+		"port49_revocations_in_force":                  false,
+		"port49_revocations_file_failed":               false,
+		"port49_cert_status_checks_total":              false,
+		"port49_crl_loads_total":                       false,
+		"port49_crl_next_update_timestamp_seconds":     false,
+		"port49_cert_status_unavailable_total":         false,
+		"port49_policy_reloads_total":                  false,
+		"port49_policy_file_refused":                   false,
+		"port49_policy_refresh_pending":                false,
+		"port49_inventory_reloads_total":               false,
+		"port49_inventory_file_refused":                false,
+		"port49_inventory_snapshot_age_seconds":        false,
+		"port49_inventory_bundle_sequence":             false,
+		"port49_inventory_persist_failed":              false,
+		"port49_inventory_bundle_refused":              false,
+		"port49_inventory_policy_mismatch":             false,
+		"port49_inventory_mirror_unreadable":           false,
+		"port49_inventory_fetches_total":               false,
 		// The key-version alert gates on uptime with it (spec §10).
 		"process_start_time_seconds": false,
 	}

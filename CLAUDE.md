@@ -43,7 +43,7 @@ Spec §15 lists every claim about device behavior with an ID (L1–L12). Rules:
 
 ## Code conventions
 
-- Go 1.22+, module `github.com/rhwendt/port49`, `gofmt` and `go vet` clean, no cgo.
+- Go 1.26+ (etcd's floor, plan 7d), module `github.com/rhwendt/port49`, `gofmt` and `go vet` clean, no cgo.
 - **snake_case everywhere it is data**: YAML keys, JSON log keys, config, metric names.
 - Reason codes are the closed vocabulary of spec §5.7 (`internal/decision/reasons.go`).
   Never invent one; add to the spec table first.

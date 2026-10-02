@@ -14,6 +14,7 @@ import (
 	"github.com/rhwendt/port49/internal/engine"
 	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/store"
+	"github.com/rhwendt/port49/internal/store/crypt"
 )
 
 // Prior is a policy that has been in force since the last complete refresh,
@@ -136,7 +137,9 @@ type RefreshReport struct {
 // context, and the caller runs it again. A context still changing after every
 // attempt does not end it: it is counted failed and left for the retry, and
 // the pass goes on and returns store.ErrConflict at the end so the caller
-// runs it again. A cancelled ctx ends the pass at the next principal, in
+// runs it again. So does a context under a key this port49d does not hold,
+// and a principal whose contexts could not be looked up: each is left
+// unjudged (re-review r-m1). A cancelled ctx ends the pass at the next principal, in
 // either half, and is returned: port49d is shutting down.
 func (b *Broker) Refresh(ctx context.Context, priors []Prior) (RefreshReport, error) {
 	cur := b.Policy.Load()
@@ -332,6 +335,10 @@ func (b *Broker) supersedeTokens(ctx context.Context, cur *policy.Policy, now ti
 // after every attempt does not: it is left for the retry, the pass goes on,
 // and the conflict is returned at the end so the caller runs it again — one
 // busy session must not hold every session after it on the superseded policy.
+// Nor does one principal's lookup failing for any reason but the store being
+// unavailable: it is said, counted failed and left for the next pass, and the
+// pass returns errPrincipalUnvisited, an ErrConflict, so it is not taken as
+// complete (re-review r-m1).
 func (b *Broker) refreshContexts(ctx context.Context, cur *policy.Policy, priors []Prior, now time.Time,
 	rep *RefreshReport, sameSource bool) error {
 	principals, err := b.Store.ActivePrincipals(ctx)
@@ -339,14 +346,30 @@ func (b *Broker) refreshContexts(ctx context.Context, cur *policy.Policy, priors
 		return err
 	}
 	quarantined := map[string]bool{} // the ctx_ids this pass left for a quarantine
+	unvisited := false               // a principal whose contexts this pass could not look up
 	var busy error
 	for _, principal := range principals {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		refs, err := b.Store.ContextsByPrincipal(ctx, principal)
-		if err != nil {
+		switch {
+		case errors.Is(err, store.ErrUnavailable), errors.Is(err, context.Canceled),
+			errors.Is(err, context.DeadlineExceeded):
 			return err
+		case err != nil:
+			// One principal's lookup failing for any other reason (a
+			// record a store writer planted) must not leave every
+			// principal after it on the superseded policy: said, counted
+			// failed, and left for the next pass (final review I-1).
+			log.Printf("broker: refresh: the contexts of %q could not be looked up (%v); left for the next pass",
+				principal, err)
+			b.count(rep, "failed")
+			unvisited = true
+			if busy == nil {
+				busy = errPrincipalUnvisited
+			}
+			continue
 		}
 		for _, ref := range refs {
 			switch _, err := b.refreshContext(ctx, cur, priors, now, principal, ref, rep, quarantined, sameSource); {
@@ -361,7 +384,10 @@ func (b *Broker) refreshContexts(ctx context.Context, cur *policy.Policy, priors
 	}
 	// Every live context was visited, so a quarantine this pass did not see
 	// is over, or its context is: forget it, and a context quarantined again
-	// later is recorded again.
+	// later is recorded again. A principal left unvisited may hold one still.
+	if unvisited {
+		return busy
+	}
 	b.mu.Lock()
 	for id := range b.quarantineRecorded {
 		if !quarantined[id] {
@@ -391,27 +417,14 @@ func (b *Broker) refreshContext(ctx context.Context, cur *policy.Policy, priors 
 		case errors.Is(err, store.ErrNotFound):
 			return "skipped", nil // the index outlived the context; its own TTL reclaims it
 		case errors.As(err, &unreadable):
-			if !unreadable.RevokedAt.IsZero() {
-				return "skipped", nil // revoked already, and a refresh never lifts a mark
+			outcome, err := b.revokeUnopened(ctx, cur, priors, now, "indexed under "+principal, ref, unreadable, rep)
+			if errors.Is(err, errKeyNotHeld) {
+				log.Printf("broker: refresh: the context for %q on %q, indexed under %s: %v; left for the next pass",
+					ref.Username, ref.NAS, principal, err)
+				b.count(rep, "failed")
+				return "failed", errLeftUnderUnheldKey
 			}
-			// Sealed under a key that has left the two-key window, or failing
-			// authentication: whose it is and what it holds cannot be read,
-			// so it cannot be judged against the policy in force, and it is
-			// not left on the one before. It is revoked, as a compile fault
-			// is; the authorizer cannot open it either, and the next login
-			// replaces it. The record names what is authoritative, the
-			// device and the username the key holds, and no principal: the
-			// index entry that led here may be one another principal's
-			// login has made stale, and whose the record is, is sealed.
-			log.Printf("broker: refresh: the context for %q on %q, indexed under %s, will not open (%v); revoking it",
-				ref.Username, ref.NAS, principal, err)
-			rec := decision.Record{TS: now, Event: decision.EventRefresh, Verdict: decision.VerdictDeny,
-				Reason:  decision.BlobUnavailable,
-				Device:  &decision.Device{Name: ref.NAS, Platform: plat},
-				Session: &decision.Session{Username: ref.Username, Unreached: sessionOnly(known, plat)},
-				Policy:  &decision.Policy{Bundle: cur.Bundle}}
-			step := refreshStep{revoke: true, rec: rec, outcome: "failed", sessionOnly: sessionOnly(known, plat)}
-			return b.revoke(ctx, k, now, step, rep)
+			return outcome, err
 		case err != nil:
 			return "", err
 		}
@@ -440,7 +453,7 @@ func (b *Broker) refreshContext(ctx context.Context, cur *policy.Policy, priors 
 		}
 		switch {
 		case step.revoke:
-			return b.revoke(ctx, k, now, step, rep)
+			return b.revoke(ctx, k, c.Rev, now, step, rep)
 		case step.outcome == "quarantined":
 			quarantined[c.CtxID] = true
 			if b.quarantineUnrecorded(c.CtxID, cur.Bundle) {
@@ -527,24 +540,110 @@ func knownPlatform(cur *policy.Policy, priors []Prior, name string) (*policy.Pol
 	return cur, ""
 }
 
+// revokeUnopened revokes a context that will not open, found by via (the
+// index entry that led here, or the re-index), and records and counts it
+// failed. One revoked already is "skipped": a refresh never lifts a mark.
+//
+// Sealed under a key that has left the two-key window, or failing
+// authentication: whose it is and what it holds cannot be read, so it
+// cannot be judged against the policy in force, and it is not left on the
+// one before. It is revoked, as a compile fault is; the authorizer cannot
+// open it either, and the next login replaces it. The record names what is
+// authoritative, the device and the username the key holds, and no
+// principal: the index entry that led here may be one another principal's
+// login has made stale, and whose the record is, is sealed.
+//
+// Sealed under a key this port49d does not hold (crypt.ErrUnknownKey), it
+// is not revoked: that is a mis-set or rotated-out PORT49_ENC_V1, and
+// revoking would end every session on the fleet for a key mistake that
+// fixing the key undoes (crypt.openErr; final review I-2). It returns
+// errKeyNotHeld, and the caller says it, counts it a failure and leaves it
+// for the next pass. No login can open it meanwhile, so it is denied
+// anyway. One that fails authentication, or opens and is not the one this
+// port49d last wrote (crypt.ErrNotLastWritten), is tampered, and revoked.
+func (b *Broker) revokeUnopened(ctx context.Context, cur *policy.Policy, priors []Prior, now time.Time, via string,
+	ref store.ContextRef, unreadable *store.UnreadableContextError, rep *RefreshReport) (string, error) {
+	if !unreadable.RevokedAt.IsZero() {
+		return "skipped", nil
+	}
+	if errors.Is(unreadable, crypt.ErrUnknownKey) {
+		return "", fmt.Errorf("%w (%v)", errKeyNotHeld, unreadable)
+	}
+	known, plat := knownPlatform(cur, priors, ref.NAS)
+	log.Printf("broker: refresh: the context for %q on %q, %s, will not open (%v); revoking it",
+		ref.Username, ref.NAS, via, unreadable)
+	rec := decision.Record{TS: now, Event: decision.EventRefresh, Verdict: decision.VerdictDeny,
+		Reason:  decision.BlobUnavailable,
+		Device:  &decision.Device{Name: ref.NAS, Platform: plat},
+		Session: &decision.Session{Username: ref.Username, Unreached: sessionOnly(known, plat)},
+		Policy:  &decision.Policy{Bundle: cur.Bundle}}
+	step := refreshStep{revoke: true, rec: rec, outcome: "failed", sessionOnly: sessionOnly(known, plat)}
+	return b.revoke(ctx, store.ContextKey{NAS: ref.NAS, Username: ref.Username}, unreadable.Rev, now, step, rep)
+}
+
+// errKeyNotHeld is a context revokeUnopened left because it is sealed under
+// a key this port49d does not hold.
+var errKeyNotHeld = errors.New("broker: sealed under a key this port49d does not hold; not revoked")
+
+// errLeftUnderUnheldKey and errPrincipalUnvisited are what a pass left
+// unjudged. Each is store.ErrConflict, as a busy context is: the pass goes
+// on, the tokens are still superseded, and Refresh returns it, so port49d
+// keeps port49_policy_refresh_pending at 1 and runs the pass again, never
+// taking the pass for one that reached every live context (re-review r-m1).
+var (
+	errLeftUnderUnheldKey = fmt.Errorf("broker: a context under an unheld key was left unjudged: %w", store.ErrConflict)
+	errPrincipalUnvisited = fmt.Errorf("broker: a principal could not be looked up, so its contexts were left "+
+		"unjudged: %w", store.ErrConflict)
+)
+
 // revoke marks the context revoked at at through SetRevokedAt, the setter that
 // writes the mark alone and keeps the later of two, and records and counts it.
 // It does not compare: a revocation is right whoever the record belongs to by
 // now, at the worst revoking a login another principal made a moment ago,
 // whose owner logs in again (fail closed). It returns the step's outcome, or
-// "skipped" for a context already gone.
-func (b *Broker) revoke(ctx context.Context, k store.ContextKey, at time.Time, step refreshStep,
+// "skipped" for a context already gone. One the store cannot revoke is
+// deleted at rev, the revision it was read at (revokeOrDelete).
+func (b *Broker) revoke(ctx context.Context, k store.ContextKey, rev uint64, at time.Time, step refreshStep,
 	rep *RefreshReport) (string, error) {
-	switch err := b.Store.SetRevokedAt(ctx, k, at); {
-	case errors.Is(err, store.ErrNotFound):
-		return "skipped", nil
+	switch gone, err := b.revokeOrDelete(ctx, k, rev, at); {
 	case err != nil:
 		return "", err
+	case gone:
+		return "skipped", nil
 	}
 	b.emit(step.rec)
 	b.count(rep, step.outcome)
 	b.unreached(step, rep)
 	return step.outcome, nil
+}
+
+// revokeOrDelete marks the context at k revoked at at, which needs no key.
+// One the store cannot mark because it does not decode (an etcd record a
+// store writer garbled) is deleted at rev, the revision it was read at:
+// nothing can use it, and left in place it would stop every refresh pass
+// that reaches it, for every principal after it (Task 7 review K-1; Task
+// 7b review I-1). gone reports one gone already, or written again since
+// that read, which the next pass reads afresh.
+func (b *Broker) revokeOrDelete(ctx context.Context, k store.ContextKey, rev uint64, at time.Time) (gone bool,
+	err error) {
+	var bad *store.UnreadableContextError
+	switch err := b.Store.SetRevokedAt(ctx, k, at); {
+	case errors.Is(err, store.ErrNotFound):
+		return true, nil
+	case errors.As(err, &bad):
+		switch err := b.Store.DeleteContextIf(ctx, k, rev); {
+		case errors.Is(err, store.ErrNotFound), errors.Is(err, store.ErrConflict):
+			return true, nil
+		case err != nil:
+			return false, err
+		}
+		log.Printf("broker: the context for %q on %q could not be revoked (%v); deleted it at the revision read",
+			k.Username, k.NAS, bad)
+		return false, nil
+	case err != nil:
+		return false, err
+	}
+	return false, nil
 }
 
 // sessionOnly reports whether a platform never asks about a command (spec §13

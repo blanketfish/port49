@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -28,6 +29,21 @@ var ErrConflict = errors.New("store: context changed since it was read")
 // is over and no refresh resumes it (spec §5.6, teardown row 3). Nothing
 // was written.
 var ErrPastGrace = errors.New("store: context is past its grace window")
+
+// ErrUnavailable is a store that did not answer, or answered with an
+// error that is not about the record: a network backend that timed out,
+// lost its quorum, or is unreachable. The guard (internal/store/guard)
+// counts it toward a pool's circuit, and every handler answers it
+// store_unavailable, as any error that is not ErrNotFound (spec §5.7).
+var ErrUnavailable = errors.New("store: unavailable")
+
+// ErrRefused is a backend refusing this identity an operation by its own
+// access control: an etcd role that does not grant it, or authentication
+// that failed. It is configuration, not an outage: never ErrUnavailable,
+// so it opens no circuit, and the guard (internal/store/guard) stops
+// port49d's service when every call is refused for store.etcd.hold_ttl
+// (plan 7d; pre-flight I10). Handlers answer it store_unavailable.
+var ErrRefused = errors.New("store: refused this identity")
 
 // UnreadableContextError is a context record the store returned and the
 // sealing layer could not open: sealed under a key that has left the two-key
@@ -179,8 +195,23 @@ type Receipt struct {
 	// join that wrote a revoked context), and every retransmission replays
 	// that refusal. Plaintext on purpose, like the bounds: it is written
 	// without opening the record, so any daemon can write it whatever key
-	// sealed the rest, and it only ever turns a PASS into a FAIL.
+	// sealed the rest. A store write can clear it, and that turns the
+	// replay back into the PASS the receipt was written with; it is not what
+	// refuses that login: the context never witnessed it (Context.Logins),
+	// so a PASS replay is token_spent whatever Failed says (Task 4b review
+	// I2). Failed is what makes the answer the refusal instead.
 	Failed bool
+
+	// Principal, Sid and CertKey name the credential the redeemed token
+	// carried: its principal, its credential's sid, and CertKey of its
+	// certificate. A retransmission replays this receipt's PASS only while
+	// no mark stands for that principal or certificate, and, for a login,
+	// only once the index reaches the context under the sid and the
+	// certificate, which is how a login that committed is told from one
+	// that did not or is still in flight (spec §5.6; plan 7d). Sealed.
+	Principal string // sealed
+	Sid       string // sealed
+	CertKey   string // sealed
 
 	Sealed []byte
 }
@@ -264,13 +295,30 @@ type Context struct {
 	MaxPrivilege uint8
 	CreatedAt    time.Time
 
+	// Logins witnesses the logins this context committed: LoginWitness of
+	// each one's presented credential, written by the join in the same
+	// step as the context, and only when the context it writes is not
+	// revoked; the last MaxLogins are kept. A retransmission replays PASS
+	// only for a login named here (spec §5.6; Task 4b review I1), so a
+	// login whose join ERRORed, is still in flight, or wrote a revoked
+	// context is token_spent. Sealed, and hash prefixes only: it is never
+	// logged.
+	Logins []string // sealed
+
 	// Rev is the store's revision of this record. GetContext sets it and
 	// SwapContext compares it; every other writer ignores what the caller
 	// passes, and every write to the record — each narrow setter included —
 	// moves it. That last part is the point: a read-merge-write that lost a
 	// race to SetRevokedAt finds the revision moved and reads again, rather
-	// than putting back a copy whose RevokedAt is zero. It is plaintext
-	// bookkeeping, like the expiry.
+	// than putting back a copy whose RevokedAt is zero. It only grows, across
+	// every key: a write takes a revision above any context has held (etcd's
+	// mod_revision), so of two writes the later holds the larger, which is
+	// how the sealing layer's ledger orders writes that end out of order
+	// (crypt.Ledger, by the revision each returns: RevStore). The exception
+	// is etcd restored from a snapshot under a running port49d: revisions go
+	// back to the snapshot's, and the ledger detects it by a write sent after
+	// the last ended reporting a lower revision. It is plaintext bookkeeping,
+	// like the expiry.
 	Rev uint64
 	// PolicyRev is the store's revision of what a policy refresh decides
 	// (spec §5.1.3): GetContext sets it and SetContextPolicy compares it.
@@ -302,6 +350,29 @@ const (
 // session's STOP, and refusing would lose the newest session, which is the one
 // still running (spec §5.8).
 const MaxSessionDiscriminators = 8
+
+// MaxLogins caps Context.Logins. A login evicted past it fails closed: its
+// retransmission is token_spent rather than PASS, which costs the device
+// one prompt. Eight is above the concurrent windows MaxSessionDiscriminators
+// already accepts.
+const MaxLogins = 8
+
+// LoginWitness renders a login's presented credential for Context.Logins:
+// the first 8 bytes of its credential_sha256, hex. It names a login within
+// one context's last few, which is all a replay asks of it.
+func LoginWitness(credentialSHA256 [32]byte) string {
+	return hex.EncodeToString(credentialSHA256[:8])
+}
+
+// addLogins is held with add appended, the last MaxLogins kept, in a new
+// slice.
+func addLogins(held, add []string) []string {
+	out := append(append([]string(nil), held...), add...)
+	if len(out) > MaxLogins {
+		out = out[len(out)-MaxLogins:]
+	}
+	return out
+}
 
 // HashDiscriminator renders a device's session discriminator for storage:
 // sha256, truncated to 16 bytes, hex. Equality is all a binding needs, and the
@@ -339,6 +410,12 @@ type ContextRefresh struct {
 	// Empty leaves it alone — a refresh that did not recompute policy must
 	// not erase the hash the authorizer reads.
 	BlobHash string
+	// Sid, when non-empty, is the OIDC session id a refresh rotated to: it
+	// replaces the context's Credential.Sid, so the sealed record names
+	// the sid the index lists, and the re-index can tell a sid a store
+	// write swapped from one a refresh rotated (Task 7b review I-2). Empty
+	// leaves it alone.
+	Sid string
 	// SessionAge, when set, is the ceiling the policy in force gives this
 	// context: SessionExpires becomes AuthTime plus it, and zero clears it
 	// (never). A refresh is a fresh authentication event, so it may lengthen
@@ -399,6 +476,41 @@ type ContextRef struct {
 	Username string
 }
 
+// IndexedRef is a context's ref and the keys its index record lists live,
+// as the etcd backend's re-index scan reads them (plan 7d; re-check IA2
+// and I2). The record is plaintext, so the re-index compares it with the
+// context's own principal, sid and certificate, read sealed. A record that
+// is gone, lists nothing live, or does not decode lists nothing.
+type IndexedRef struct {
+	ContextRef
+	Principals, Sids, Certs []string
+}
+
+// MarkRead is a revocation mark as a login read it: At is the mark's, or
+// zero when none stood (plan 7d).
+type MarkRead struct {
+	Kind, Key string
+	At        time.Time
+}
+
+// LoginWrite is what a login's SwapLogin carries beside the context: the
+// index change its join decided, and the marks it read (spec §13,
+// decision 35). The zero value changes no index and checks no mark,
+// which is SwapContext.
+type LoginWrite struct {
+	// ClearRef unindexes the ref from every key it was indexed under: a
+	// replace by another principal, or of a record that would not open.
+	ClearRef bool
+	// DropSid and DropCertKey are a same-principal replace's displaced
+	// credential, unindexed where this login does not share it.
+	DropSid, DropCertKey string
+	// Principal, Sid and CertKey index the ref for IndexTTL.
+	Principal, Sid, CertKey string
+	IndexTTL                time.Duration
+	// Marks must still be as read for the write to land.
+	Marks []MarkRead
+}
+
 type Idempotency struct {
 	BodyHash  string
 	Response  []byte // sealed — it contains the minted tokens (design §17)
@@ -434,6 +546,13 @@ type Store interface {
 	// DeleteTokens on k, which, as for a live entry, also ends any other
 	// principal's tokens there.
 	DeleteToken(ctx context.Context, k TokenKey, id string) error
+	// PurgeTokens deletes every token record, live or expired, under every
+	// key, and reports how many were live. It is a start on a store that
+	// persists (plan 7d): no policy this port49d loaded minted them, so none
+	// is redeemable after it, as none was after a restart of the memory
+	// store. The token indexes stay; an entry that outlives its token costs
+	// a revocation one DeleteTokens on an empty key (IndexToken).
+	PurgeTokens(ctx context.Context) (int, error)
 	GetReceipt(ctx context.Context, rk ReceiptKey) (Receipt, error)
 	// ExtendReceipt pushes the sliding bound out. It never moves RetainUntil or
 	// FirstRedeemedAt, so the absolute cap cannot be slid.
@@ -465,6 +584,32 @@ type Store interface {
 	// On success it behaves as PutContext does: the expiry is now+ttl,
 	// LastTouchedAt is stamped, and the context's index entries are extended.
 	SwapContext(ctx context.Context, k ContextKey, rev uint64, c Context, ttl time.Duration) error
+	// SwapLogin is SwapContext with a login's index bookkeeping and its
+	// revocation check in the same atomic step (plan 7d; spec §13, decision
+	// 35). It writes c only if the record at k is still the one the caller
+	// read (rev, as SwapContext reads it) and each mark in w.Marks is still
+	// as the caller read it: present at that At, or absent for a zero At.
+	// Otherwise ErrConflict, and nothing — context or index — is written.
+	// On success, after the context is written and its existing index
+	// entries extended as SwapContext extends them, the ref is unindexed
+	// wholly when w.ClearRef (UnindexRef), then from w.DropSid and
+	// w.DropCertKey (UnindexContext, no principal), then indexed under
+	// w.Principal, w.Sid and w.CertKey for w.IndexTTL (IndexContext), each
+	// empty or blank key skipped.
+	SwapLogin(ctx context.Context, k ContextKey, rev uint64, c Context, ttl time.Duration, w LoginWrite) error
+	// RewriteContext writes c's fields over the live record at k only while
+	// its Rev is rev: ErrNotFound when no record is live, ErrConflict when
+	// Rev has moved, and nothing written either way (plan 7d; spec §13,
+	// decision 35). Rev moves; PolicyRev moves to the new revision only when
+	// policyMoved. A zero ttl leaves the expiry and LastTouchedAt as the
+	// record has them; a non-zero ttl extends both, and the ref's index
+	// entries, as TouchContext does. It is the sealing layer's narrow
+	// setter: the layer reads the record, opens it, applies the setter's
+	// rule (ApplyPrivilege, ApplyRefresh, ApplyRevokedAt,
+	// ApplyContextPolicy), seals it again and rewrites it on the revision it
+	// read, so no field the authorizer trusts is written in the clear by a
+	// setter that cannot read it.
+	RewriteContext(ctx context.Context, k ContextKey, rev uint64, c Context, ttl time.Duration, policyMoved bool) error
 	// TouchContext extends this context's expiry to now+ttl. It writes exactly
 	// two things, both plaintext bookkeeping about the extension itself: the
 	// expiry, and LastTouchedAt. It never takes a Context from the caller.
@@ -737,8 +882,59 @@ type Store interface {
 	ListRevocations(ctx context.Context) ([]Revocation, error)
 }
 
+// RevStore is a Store whose whole-context writes also return the revision
+// each committed at: the record's Rev from then on, and zero with every
+// error. The sealing layer orders its own writes at a key by it, which is
+// the store's commit order whatever order the writes end in (crypt.Ledger;
+// plan 7d Task 6b). Each is its plain method otherwise. The sealing layer
+// calls only these, so a test double that overrides a plain method and not
+// its Rev twin is bypassed.
+type RevStore interface {
+	Store
+	PutContextRev(ctx context.Context, k ContextKey, c Context, ttl time.Duration) (uint64, error)
+	SwapContextRev(ctx context.Context, k ContextKey, rev uint64, c Context, ttl time.Duration) (uint64, error)
+	SwapLoginRev(ctx context.Context, k ContextKey, rev uint64, c Context, ttl time.Duration, w LoginWrite) (uint64, error)
+	RewriteContextRev(ctx context.Context, k ContextKey, rev uint64, c Context, ttl time.Duration,
+		policyMoved bool) (uint64, error)
+}
+
 // CertKey is the index key a CRL or OCSP response names (spec §5.1.4).
 func CertKey(issuer, serial string) string { return issuer + "|" + serial }
+
+// BlankCertKey reports whether certKey is CertKey of an empty issuer or an
+// empty serial, or is not a CertKey at all (no "|"). It names no
+// certificate: every OIDC login's credential has neither, so "|" would be
+// one index entry holding every OIDC operator's context on the fleet, and
+// a revocation by it would revoke them all. Every backend treats it as ""
+// — never indexed, never marked (ruling P8).
+func BlankCertKey(certKey string) bool {
+	return !strings.Contains(certKey, "|") || strings.HasPrefix(certKey, "|") || strings.HasSuffix(certKey, "|")
+}
+
+// ErrIncompleteMark refuses a revocation mark that could match nothing: it
+// would be reported as in force and revoke nothing.
+var ErrIncompleteMark = errors.New("store: a revocation mark must name a principal, or a certificate by issuer and serial, and when it was made")
+
+// CheckRevocation is PutRevocation's refusal, shared by every backend: a
+// kind that is neither RevocationPrincipal nor RevocationCert, an empty
+// key, a certificate key that is blank (BlankCertKey), or a zero At. A
+// zero At is how a login reads "no mark stands" (MarkRead), so a mark
+// written with one would be compared as absent: the memory store would
+// refuse every login under it ErrConflict and etcd would land them
+// unrevoked (pre-flight M10). The revocations file reaches every backend
+// through PutRevocation, so a file mark with no time is refused at start.
+func CheckRevocation(r Revocation) error {
+	if r.At.IsZero() {
+		return ErrIncompleteMark
+	}
+	switch {
+	case r.Kind == RevocationPrincipal && r.Key != "":
+		return nil
+	case r.Kind == RevocationCert && !BlankCertKey(r.Key):
+		return nil
+	}
+	return ErrIncompleteMark
+}
 
 // Revocation kinds (spec §5.1.4; plan 7a).
 const (

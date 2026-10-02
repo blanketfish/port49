@@ -28,11 +28,13 @@ type Planter interface {
 // there is one, read through ReserveIdempotency, which returns a live record
 // untouched: store.Store has no plain read, since nothing but a reservation
 // reads one. A probe reservation it writes when there is none is released.
-func Peek(t *testing.T, s store.Store, principal, key string) (store.Idempotency, bool) {
+// now is what the store's clock reads, so the probe's expiry, and its lease
+// on a backend that leases, follow the store's time and not the wall's.
+func Peek(t *testing.T, s store.Store, now time.Time, principal, key string) (store.Idempotency, bool) {
 	t.Helper()
 	ctx := context.Background()
 	cur, ok, err := s.ReserveIdempotency(ctx, principal, key, store.Idempotency{BodyHash: "peek", Holder: "storetest-peek",
-		Pending: true, ExpiresAt: time.Now().Add(time.Hour)})
+		Pending: true, ExpiresAt: now.Add(time.Hour)})
 	if err != nil {
 		t.Fatalf("peeking at the idempotency record %q: %v", key, err)
 	}
@@ -82,7 +84,7 @@ func JoinRacesRevocation(t *testing.T, newStore func() store.Store, now time.Tim
 			go func() {
 				defer wg.Done()
 				<-start
-				_, err := store.JoinContext(ctx, s, k, login, mintedAt, now, time.Hour)
+				_, err := store.JoinContext(ctx, s, k, login, mintedAt, now, time.Hour, store.LoginIndex{})
 				errs <- err
 			}()
 		}
@@ -196,7 +198,7 @@ func PolicyRevision(t *testing.T, newStore func() store.Store, now time.Time) {
 		write func(store.Store) error
 	}{
 		{"JoinContext", func(s store.Store) error {
-			_, err := store.JoinContext(ctx, s, k, login, now, now, time.Hour)
+			_, err := store.JoinContext(ctx, s, k, login, now, now, time.Hour, store.LoginIndex{})
 			return err
 		}},
 		{"PutContext", func(s store.Store) error { return s.PutContext(ctx, k, seed, time.Hour) }},
@@ -264,7 +266,7 @@ func PolicyRevision(t *testing.T, newStore func() store.Store, now time.Time) {
 	if got := read(s); !got.RevokedAt.Equal(revokedAt) {
 		t.Fatalf("a revoking refresh moved a later revocation earlier: %+v", got)
 	}
-	if _, err := store.JoinContext(ctx, s, k, login, now.Add(-30*time.Minute), now, time.Hour); err != nil {
+	if _, err := store.JoinContext(ctx, s, k, login, now.Add(-30*time.Minute), now, time.Hour, store.LoginIndex{}); err != nil {
 		t.Fatal(err)
 	}
 	if got := read(s); !got.RevokedAt.Equal(revokedAt) {
@@ -311,7 +313,7 @@ func RevocationIsMonotonic(t *testing.T, newStore func() store.Store, now time.T
 	// two does not lift the revocation.
 	login := store.Context{CtxID: "ctx_login", Principal: principal, Username: "alice", PrivLvl: 1,
 		AuthTime: now, RefreshedAt: now}
-	if _, err := store.JoinContext(ctx, s, k, login, now.Add(-30*time.Minute), now, time.Hour); err != nil {
+	if _, err := store.JoinContext(ctx, s, k, login, now.Add(-30*time.Minute), now, time.Hour, store.LoginIndex{}); err != nil {
 		t.Fatal(err)
 	}
 	if got := marked(); !got.Equal(later) {
@@ -477,6 +479,21 @@ func IdempotencyLeaseExpires(t *testing.T, newStore func() (store.Store, func(ti
 	}
 	if cur, ok, _ := s.ReserveIdempotency(ctx, "user:alice", "k", res("third")); ok || cur.Holder != "retry" {
 		t.Fatalf("the dead holder released the retry's reservation: %+v %v", cur, ok)
+	}
+	// An expired reservation nobody has replaced is not its holder's either:
+	// a completion over it is refused, and writes nothing (store.Store's
+	// CompleteIdempotency; a renewal of an abandoned replay relies on it).
+	if _, ok, err := s.ReserveIdempotency(ctx, "user:alice", "k2", res("dead")); err != nil || !ok {
+		t.Fatalf("second reservation: %v %v", ok, err)
+	}
+	advance(time.Minute)
+	now = now.Add(time.Minute)
+	if err := s.CompleteIdempotency(ctx, "user:alice", "k2", "dead",
+		store.Idempotency{BodyHash: "h1", Holder: "dead", ExpiresAt: now.Add(time.Hour)}); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("the dead holder completed its own expired reservation: %v", err)
+	}
+	if cur, ok := Peek(t, s, now, "user:alice", "k2"); ok {
+		t.Fatalf("a refused completion over an expired reservation wrote %+v", cur)
 	}
 }
 
@@ -731,7 +748,8 @@ func DeleteTokenRacesRedeem(t *testing.T, newStore func() store.Store, now time.
 // that could match nothing — an unknown kind, an empty key, a certificate
 // key with no issuer, no serial or no "|", which the token and context indexes
 // never hold — is refused, so a revocation never reports a mark that
-// revokes nothing.
+// revokes nothing; and so is a mark with no time, which a login would read
+// as no mark at all (store.CheckRevocation).
 func RevocationMarks(t *testing.T, newStore func() store.Store, now time.Time) {
 	t.Helper()
 	ctx := context.Background()
@@ -772,9 +790,10 @@ func RevocationMarks(t *testing.T, newStore func() store.Store, now time.Time) {
 		{Kind: store.RevocationCert, Key: store.CertKey("", "3f9a01"), At: now},
 		{Kind: store.RevocationCert, Key: store.CertKey("CN=Corp CA", ""), At: now},
 		{Kind: store.RevocationCert, Key: "3f9a01", At: now},
+		{Kind: store.RevocationPrincipal, Key: "user:carol@example.com"},
 	} {
-		if err := s.PutRevocation(ctx, r); err == nil {
-			t.Fatalf("an incomplete mark was taken: %+v", r)
+		if err := s.PutRevocation(ctx, r); !errors.Is(err, store.ErrIncompleteMark) {
+			t.Fatalf("an incomplete mark was taken: %+v %v", r, err)
 		}
 	}
 	list, err := s.ListRevocations(ctx)
@@ -952,5 +971,99 @@ func WritesBindToTheRevision(t *testing.T, newStore func() store.Store, now time
 	}
 	if _, err := s.GetContext(ctx, k); !errors.Is(err, store.ErrNotFound) {
 		t.Fatal("the delete at the current revision did not delete")
+	}
+}
+
+// Backend is a store.Store implementation the properties run against. New
+// returns a fresh, empty store whose clock is clock; a property moves time
+// by changing what clock returns. A store that is also a Planter gets
+// IdempotencyReservesOnce's holderless case.
+type Backend struct {
+	New func(t *testing.T, clock func() time.Time) store.Store
+	// RaceRounds is how many rounds LoginRacesARevocationByMark and the
+	// token family's races (races.go) run; zero is 10000, what memory's
+	// few-instruction window needs. A backend whose rounds are network
+	// round trips sets fewer, and its own tests show a mutation that splits
+	// a check from its write is still caught at that count (plan 7d, R1).
+	RaceRounds int
+	// Stagger starts the short side of a race against a login a random
+	// part of a login's time late: LoginRacesARevocationByMark's
+	// revocation, and IndexWritesRaceAContextWrite's index write. A login
+	// on a network backend is several round trips, and a write started
+	// with it lands before the login reads: the window between that read
+	// and the login's write is never met, at any count of rounds (plan 7d
+	// Task 6, R1: 0 catches in 10000 rounds unstaggered). Memory's login is
+	// one critical section and leaves it off.
+	Stagger bool
+}
+
+func (b Backend) raceRounds() int {
+	if b.RaceRounds > 0 {
+		return b.RaceRounds
+	}
+	return 10000
+}
+
+// t0 is the instant the fixed-clock properties run at: far from the wall
+// clock on purpose, so a backend that reads time.Now where it should read
+// its clock fails.
+var t0 = time.Unix(1_000_000, 0).UTC()
+
+// Run runs every property against b, each as its own subtest.
+func Run(t *testing.T, b Backend) {
+	fixed := func(t *testing.T) func() store.Store {
+		return func() store.Store { return b.New(t, func() time.Time { return t0 }) }
+	}
+	for _, p := range []struct {
+		name string
+		run  func(*testing.T)
+	}{
+		{"JoinRacesRevocation", func(t *testing.T) { JoinRacesRevocation(t, fixed(t), t0) }},
+		{"PolicyRevision", func(t *testing.T) { PolicyRevision(t, fixed(t), t0) }},
+		{"RevocationIsMonotonic", func(t *testing.T) { RevocationIsMonotonic(t, fixed(t), t0) }},
+		{"IdempotencyReservesOnce", func(t *testing.T) { IdempotencyReservesOnce(t, fixed(t), t0) }},
+		{"IdempotencyLeaseExpires", func(t *testing.T) {
+			IdempotencyLeaseExpires(t, func() (store.Store, func(time.Duration)) {
+				var mu sync.Mutex
+				now := t0
+				s := b.New(t, func() time.Time { mu.Lock(); defer mu.Unlock(); return now })
+				return s, func(d time.Duration) { mu.Lock(); now = now.Add(d); mu.Unlock() }
+			}, t0)
+		}},
+		{"TokenIndex", func(t *testing.T) { TokenIndex(t, fixed(t), t0) }},
+		{"DeleteTokenRemovesOne", func(t *testing.T) { DeleteTokenRemovesOne(t, fixed(t), t0) }},
+		{"DeleteTokenRacesRedeem", func(t *testing.T) { DeleteTokenRacesRedeem(t, fixed(t), t0) }},
+		{"RevocationMarks", func(t *testing.T) { RevocationMarks(t, fixed(t), t0) }},
+		{"CeilingShortensOnly", func(t *testing.T) { CeilingShortensOnly(t, fixed(t), t0) }},
+		{"RefreshSetsTheCeiling", func(t *testing.T) { RefreshSetsTheCeiling(t, fixed(t), t0) }},
+		{"RefreshStopsAtGrace", func(t *testing.T) { RefreshStopsAtGrace(t, fixed(t), t0) }},
+		{"WritesBindToTheRevision", func(t *testing.T) { WritesBindToTheRevision(t, fixed(t), t0) }},
+	} {
+		t.Run(p.name, p.run)
+	}
+	for _, p := range lifted {
+		p := p
+		t.Run(p.name, func(t *testing.T) { p.run(t, b) })
+	}
+	for _, p := range []struct {
+		name string
+		run  func(*testing.T, Backend)
+	}{
+		{"SwapLoginIsOneStep", SwapLoginIsOneStep},
+		{"LoginsRaceToOneIndex", LoginsRaceToOneIndex},
+		{"LoginsRaceToAnEmptyKey", LoginsRaceToAnEmptyKey},
+		{"JoinHonoursAStandingMark", JoinHonoursAStandingMark},
+		{"LoginRacesARevocationByMark", LoginRacesARevocationByMark},
+		{"PurgeTakesEveryToken", PurgeTakesEveryToken},
+		{"SelfRevocationBindsToTheRead", SelfRevocationBindsToTheRead},
+		{"RewriteBindsToTheRevision", RewriteBindsToTheRevision},
+		{"IndexTokenKeepsTheLongestUnderARace", IndexTokenKeepsTheLongestUnderARace},
+		{"IndexWritesRaceAContextWrite", IndexWritesRaceAContextWrite},
+		{"FailReceiptSurvivesARacingExtend", FailReceiptSurvivesARacingExtend},
+		{"RedeemOrDeleteNotBoth", RedeemOrDeleteNotBoth},
+		{"IndexKeysAreExact", IndexKeysAreExact},
+	} {
+		p := p
+		t.Run(p.name, func(t *testing.T) { p.run(t, b) })
 	}
 }

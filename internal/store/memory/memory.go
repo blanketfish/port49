@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
@@ -421,6 +420,26 @@ func (s *Store) DeleteToken(_ context.Context, k store.TokenKey, id string) erro
 	return store.ErrNotFound
 }
 
+// PurgeTokens drops every token, clearing each set's entries so no
+// secret stays reachable from a backing array (clearTail), and counts
+// the live ones.
+func (s *Store) PurgeTokens(context.Context) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	n := 0
+	for k, set := range s.tokens {
+		for _, t := range set {
+			if t.ExpiresAt.After(now) {
+				n++
+			}
+		}
+		clearTail(set, 0)
+		delete(s.tokens, k)
+	}
+	return n, nil
+}
+
 func (s *Store) GetReceipt(_ context.Context, rk store.ReceiptKey) (store.Receipt, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -489,7 +508,14 @@ func (s *Store) DeleteReceiptsByPrincipal(_ context.Context, principal string) (
 	return n, nil
 }
 
-func (s *Store) PutContext(_ context.Context, k store.ContextKey, c store.Context, ttl time.Duration) error {
+func (s *Store) PutContext(ctx context.Context, k store.ContextKey, c store.Context, ttl time.Duration) error {
+	_, err := s.PutContextRev(ctx, k, c, ttl)
+	return err
+}
+
+// PutContextRev is PutContext, returning the revision it committed at
+// (store.RevStore).
+func (s *Store) PutContextRev(_ context.Context, k store.ContextKey, c store.Context, ttl time.Duration) (uint64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now()
@@ -497,13 +523,13 @@ func (s *Store) PutContext(_ context.Context, k store.ContextKey, c store.Contex
 	// does (store.Context). Leaving it to the caller would hand Task 10's
 	// half-TTL rule a zero on every freshly written context, and a rule that
 	// reads zero extends on every command — the write this exists to avoid.
-	s.writeContextLocked(k, c, now, ttl)
-	return nil
+	return s.writeContextLocked(k, c, now, ttl), nil
 }
 
 // writeContextLocked is the whole-record write PutContext and SwapContext
-// share once SwapContext's precondition has held.
-func (s *Store) writeContextLocked(k store.ContextKey, c store.Context, now time.Time, ttl time.Duration) {
+// share once SwapContext's precondition has held. It returns the revision
+// the write took.
+func (s *Store) writeContextLocked(k store.ContextKey, c store.Context, now time.Time, ttl time.Duration) uint64 {
 	c.LastTouchedAt = now
 	c.Rev, c.PolicyRev = 0, 0 // the entry holds the revisions; the record's copies are GetContext's to fill
 	exp := now.Add(ttl)
@@ -518,6 +544,7 @@ func (s *Store) writeContextLocked(k store.ContextKey, c store.Context, now time
 	if s.writes%sweepEvery == 0 {
 		s.sweepLocked()
 	}
+	return rev
 }
 
 func (s *Store) GetContext(_ context.Context, k store.ContextKey) (store.Context, error) {
@@ -533,21 +560,58 @@ func (s *Store) GetContext(_ context.Context, k store.ContextKey) (store.Context
 	return c, nil
 }
 
-// SwapContext writes c only if the record at k still carries revision rev, or,
-// for rev zero, only if there is no live record (store.Store). The comparison
-// and the write are one critical section, which is the whole of what makes it
-// a compare-and-set.
-func (s *Store) SwapContext(_ context.Context, k store.ContextKey, rev uint64, c store.Context, ttl time.Duration) error {
+// SwapContext is SwapLogin with no index change and no mark to check.
+func (s *Store) SwapContext(ctx context.Context, k store.ContextKey, rev uint64, c store.Context, ttl time.Duration) error {
+	return s.SwapLogin(ctx, k, rev, c, ttl, store.LoginWrite{})
+}
+
+// SwapContextRev is SwapContext, returning the revision it committed at
+// (store.RevStore).
+func (s *Store) SwapContextRev(ctx context.Context, k store.ContextKey, rev uint64, c store.Context,
+	ttl time.Duration) (uint64, error) {
+	return s.SwapLoginRev(ctx, k, rev, c, ttl, store.LoginWrite{})
+}
+
+// SwapLogin writes c only if the record at k still carries revision rev
+// (for rev zero, only if there is no live record) and every mark in
+// w.Marks is still as read; then the index change, all under the one
+// lock, which is what makes the three one step (store.Store).
+func (s *Store) SwapLogin(ctx context.Context, k store.ContextKey, rev uint64, c store.Context, ttl time.Duration,
+	w store.LoginWrite) error {
+	_, err := s.SwapLoginRev(ctx, k, rev, c, ttl, w)
+	return err
+}
+
+// SwapLoginRev is SwapLogin, returning the revision it committed at
+// (store.RevStore).
+func (s *Store) SwapLoginRev(_ context.Context, k store.ContextKey, rev uint64, c store.Context, ttl time.Duration,
+	w store.LoginWrite) (uint64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now()
 	e, ok := s.contexts[k]
 	live := ok && e.exp.After(now)
 	if live && e.rev != rev || !live && rev != 0 {
-		return store.ErrConflict
+		return 0, store.ErrConflict
 	}
-	s.writeContextLocked(k, c, now, ttl)
-	return nil
+	for _, m := range w.Marks {
+		cur, ok := s.revocations[[2]string{m.Kind, m.Key}]
+		if ok == m.At.IsZero() || ok && !cur.At.Equal(m.At) {
+			return 0, store.ErrConflict
+		}
+	}
+	committed := s.writeContextLocked(k, c, now, ttl)
+	ref := store.ContextRef{NAS: k.NAS, Username: k.Username}
+	if w.ClearRef {
+		s.unindexRefLocked(ref)
+	}
+	if w.DropSid != "" || w.DropCertKey != "" {
+		s.unindexLocked("", w.DropSid, w.DropCertKey, ref)
+	}
+	if w.Principal != "" || w.Sid != "" || w.CertKey != "" {
+		s.indexLocked(w.Principal, w.Sid, w.CertKey, ref, w.IndexTTL)
+	}
+	return committed, nil
 }
 
 // TouchContext is the read-modify-write inside the lock that the handler cannot
@@ -587,21 +651,14 @@ func (s *Store) SetPrivilege(_ context.Context, k store.ContextKey, level uint8)
 	// which is the property the caller cannot get by re-putting a record it
 	// read a moment ago (store.Store).
 	//
-	// Raise-only, then clamped, both under this lock: the ceiling read is the
-	// one on the record now, which a join may have moved since the caller read
-	// it (spec §5.3).
-	held := e.c.PrivLvl
-	if level > e.c.PrivLvl {
-		e.c.PrivLvl = level
-	}
-	if ceiling, ok := e.c.PrivilegeCeiling(); ok && e.c.PrivLvl > ceiling {
-		e.c.PrivLvl = ceiling
-	}
+	// The rule under this lock: the ceiling read is the one on the record
+	// now, which a join may have moved since the caller read it (spec §5.3).
+	moved := store.ApplyPrivilege(&e.c, level)
 	e.rev = s.nextRevLocked()
 	// A level that moved is a write to what the refresh decides; a grant of
 	// the level already held, which a device repeats, is not, or a session
 	// authorizing often could keep the refresh losing (store.Context.PolicyRev).
-	if e.c.PrivLvl != held {
+	if moved {
 		e.policyRev = e.rev
 	}
 	s.contexts[k] = e
@@ -674,34 +731,13 @@ func (s *Store) RefreshContext(_ context.Context, k store.ContextKey, r store.Co
 	if r.ExpectRev != 0 && e.rev != r.ExpectRev {
 		return store.ErrConflict
 	}
-	// "Has a ceiling" is read as the authorizer reads it, a non-zero
-	// SessionExpires, so a context it denies session_expired is one no
-	// refresh resumes.
-	if !r.GraceCutoff.IsZero() && !e.c.SessionExpires.IsZero() && e.c.SessionExpires.Before(r.GraceCutoff) {
-		return store.ErrPastGrace
-	}
 	// The window is read here, under the lock, from the pair this call is
 	// about to overwrite. A caller computing it from a copy it read earlier
 	// would compute it from a pair another refresh may already have moved.
-	// A SessionAge replaces it outright: a refresh is a fresh authentication
-	// event, so it may lengthen the ceiling (decision 33).
-	switch {
-	case r.SessionAge != nil && *r.SessionAge == 0:
-		e.c.SessionExpires = time.Time{}
-	case r.SessionAge != nil:
-		e.c.SessionExpires = r.AuthTime.Add(*r.SessionAge)
-	case e.c.HasCeiling():
-		e.c.SessionExpires = r.AuthTime.Add(e.c.SessionExpires.Sub(e.c.AuthTime))
-	}
-	e.c.AuthTime = r.AuthTime
-	e.c.RefreshedAt = r.RefreshedAt
-	// RevokedAt is deliberately absent from this list. A refresh is a
-	// directory re-resolution, not a credential re-verification, and the only
-	// thing that ends a revocation is spec §5.6 row 6 reclaiming the record
-	// (store.Store).
-	blobMoved := r.BlobHash != "" && r.BlobHash != e.c.BlobHash
-	if r.BlobHash != "" {
-		e.c.BlobHash = r.BlobHash
+	// The rule refuses past the grace window with nothing written.
+	blobMoved, err := store.ApplyRefresh(&e.c, r)
+	if err != nil {
+		return err
 	}
 	e.exp = now.Add(ttl)
 	e.c.LastTouchedAt = now
@@ -729,11 +765,7 @@ func (s *Store) SetRevokedAt(_ context.Context, k store.ContextKey, at time.Time
 		delete(s.contexts, k)
 		return store.ErrNotFound
 	}
-	// The later mark stands (store.Store): an earlier one would let a token
-	// minted between the two lift the revocation at a join.
-	if at.After(e.c.RevokedAt) {
-		e.c.RevokedAt = at
-	}
+	store.ApplyRevokedAt(&e.c, at)
 	e.rev = s.nextRevLocked()
 	e.policyRev = e.rev
 	s.contexts[k] = e
@@ -745,10 +777,8 @@ func (s *Store) SetRevokedAt(_ context.Context, k store.ContextKey, at time.Time
 // revision, moves both revisions, and nothing about the expiry: a policy edit
 // is not activity. The session ceiling only ever moves earlier here.
 func (s *Store) SetContextPolicy(_ context.Context, k store.ContextKey, policyRev uint64, p store.ContextPolicy) error {
-	if p.RevokedAt.IsZero() && p.BlobHash == "" {
-		// A live context pointing at no blob is a corrupt record, whatever
-		// the caller meant; refuse it rather than write it.
-		return errors.New("store: a policy write that does not revoke must name a blob hash")
+	if err := store.CheckContextPolicy(p); err != nil {
+		return err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -760,32 +790,52 @@ func (s *Store) SetContextPolicy(_ context.Context, k store.ContextKey, policyRe
 	if e.policyRev != policyRev {
 		return store.ErrConflict
 	}
-	if !p.RevokedAt.IsZero() {
-		// The later mark stands: an earlier one would let a token minted
-		// between the two lift the revocation at a join (spec §5.6).
-		if p.RevokedAt.After(e.c.RevokedAt) {
-			e.c.RevokedAt = p.RevokedAt
-		}
-	} else {
-		e.c.BlobHash, e.c.MaxPrivilege, e.c.Enable = p.BlobHash, p.MaxPrivilege, p.Enable
-		if ceiling, ok := e.c.PrivilegeCeiling(); ok && e.c.PrivLvl > ceiling {
-			e.c.PrivLvl = ceiling
-		}
-		// A context with a zero AuthTime has no instant to anchor a ceiling
-		// to, and is given one in the distant past, as a login gives a token
-		// with none (authen's loginContext): it denies, loudly, where dropping
-		// the ceiling would leave an unbounded session that looks exactly like
-		// a legitimate `never`.
-		if p.MaxSessionAge > 0 {
-			if ceiling := e.c.AuthTime.Add(p.MaxSessionAge); e.c.SessionExpires.IsZero() || ceiling.Before(e.c.SessionExpires) {
-				e.c.SessionExpires = ceiling
-			}
-		}
-	}
+	store.ApplyContextPolicy(&e.c, p)
 	e.rev = s.nextRevLocked()
 	e.policyRev = e.rev
 	s.contexts[k] = e
 	return nil
+}
+
+// RewriteContext writes c over the live record at k only while its
+// revision is rev, under the one lock (store.Store): the sealing layer's
+// narrow setter.
+func (s *Store) RewriteContext(ctx context.Context, k store.ContextKey, rev uint64, c store.Context, ttl time.Duration,
+	policyMoved bool) error {
+	_, err := s.RewriteContextRev(ctx, k, rev, c, ttl, policyMoved)
+	return err
+}
+
+// RewriteContextRev is RewriteContext, returning the revision it committed
+// at (store.RevStore).
+func (s *Store) RewriteContextRev(_ context.Context, k store.ContextKey, rev uint64, c store.Context, ttl time.Duration,
+	policyMoved bool) (uint64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	e, ok := s.contexts[k]
+	if !ok || !e.exp.After(now) {
+		delete(s.contexts, k)
+		return 0, store.ErrNotFound
+	}
+	if e.rev != rev {
+		return 0, store.ErrConflict
+	}
+	c.Rev, c.PolicyRev = 0, 0 // the entry holds the revisions
+	c.LastTouchedAt = e.c.LastTouchedAt
+	if ttl > 0 {
+		e.exp, c.LastTouchedAt = now.Add(ttl), now
+	}
+	e.c = c
+	e.rev = s.nextRevLocked()
+	if policyMoved {
+		e.policyRev = e.rev
+	}
+	s.contexts[k] = e
+	if ttl > 0 {
+		s.extendIndexesLocked(store.ContextRef{NAS: k.NAS, Username: k.Username}, e.exp)
+	}
+	return e.rev, nil
 }
 
 func (s *Store) DeleteContext(_ context.Context, k store.ContextKey) error {
@@ -953,14 +1003,9 @@ func listRefs(idx map[string]map[store.ContextRef]time.Time, key string, now tim
 	return out
 }
 
-// blankCertKey reports whether certKey is store.CertKey of an empty issuer or
-// an empty serial, or is not a CertKey at all (no "|"). It names no
-// certificate: every OIDC login's credential has neither, so "|" would be one
-// index entry holding every OIDC operator's context on the fleet, and a
-// revocation by it would revoke them all. It is treated as "" — never
-// indexed — as the empty sid is (ruling P8).
+// blankCertKey is store.BlankCertKey.
 func blankCertKey(certKey string) bool {
-	return !strings.Contains(certKey, "|") || strings.HasPrefix(certKey, "|") || strings.HasSuffix(certKey, "|")
+	return store.BlankCertKey(certKey)
 }
 
 // IndexContext adds ref to each non-empty index — principal, sid, and cert —
@@ -971,6 +1016,11 @@ func blankCertKey(certKey string) bool {
 func (s *Store) IndexContext(_ context.Context, principal, sid, certKey string, ref store.ContextRef, ttl time.Duration) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.indexLocked(principal, sid, certKey, ref, ttl)
+	return nil
+}
+
+func (s *Store) indexLocked(principal, sid, certKey string, ref store.ContextRef, ttl time.Duration) {
 	if blankCertKey(certKey) {
 		certKey = ""
 	}
@@ -995,7 +1045,6 @@ func (s *Store) IndexContext(_ context.Context, principal, sid, certKey string, 
 	if s.writes%sweepEvery == 0 {
 		s.sweepLocked()
 	}
-	return nil
 }
 
 // UnindexContext removes ref from each of the three indexes it was written
@@ -1003,6 +1052,11 @@ func (s *Store) IndexContext(_ context.Context, principal, sid, certKey string, 
 func (s *Store) UnindexContext(_ context.Context, principal, sid, certKey string, ref store.ContextRef) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.unindexLocked(principal, sid, certKey, ref)
+	return nil
+}
+
+func (s *Store) unindexLocked(principal, sid, certKey string, ref store.ContextRef) {
 	if blankCertKey(certKey) {
 		certKey = ""
 	}
@@ -1024,7 +1078,6 @@ func (s *Store) UnindexContext(_ context.Context, principal, sid, certKey string
 			s.indexedAs[ref] = rec
 		}
 	}
-	return nil
 }
 
 // UnindexRef removes ref from every entry recorded for it in indexedAs — its
@@ -1033,9 +1086,14 @@ func (s *Store) UnindexContext(_ context.Context, principal, sid, certKey string
 func (s *Store) UnindexRef(_ context.Context, ref store.ContextRef) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.unindexRefLocked(ref)
+	return nil
+}
+
+func (s *Store) unindexRefLocked(ref store.ContextRef) {
 	rec, ok := s.indexedAs[ref]
 	if !ok {
-		return nil
+		return
 	}
 	removeRef(s.byPrincipal, rec.principal, ref)
 	for _, sid := range rec.sids {
@@ -1045,7 +1103,6 @@ func (s *Store) UnindexRef(_ context.Context, ref store.ContextRef) error {
 		removeRef(s.byCert, certKey, ref)
 	}
 	delete(s.indexedAs, ref)
-	return nil
 }
 
 // ContextsByPrincipal returns the live context refs indexed under principal.
@@ -1268,23 +1325,10 @@ func (s *Store) ReleaseIdempotency(_ context.Context, principal, key, holder str
 	return nil
 }
 
-// errIncompleteMark refuses a revocation mark that could match nothing: it
-// would be reported as in force and revoke nothing.
-var errIncompleteMark = errors.New("store: a revocation mark must name a principal, or a certificate by issuer and serial")
-
 // PutRevocation writes r unless a mark for its key already stands.
 func (s *Store) PutRevocation(_ context.Context, r store.Revocation) error {
-	switch r.Kind {
-	case store.RevocationPrincipal:
-		if r.Key == "" {
-			return errIncompleteMark
-		}
-	case store.RevocationCert:
-		if blankCertKey(r.Key) {
-			return errIncompleteMark
-		}
-	default:
-		return errIncompleteMark
+	if err := store.CheckRevocation(r); err != nil {
+		return err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1337,4 +1381,4 @@ func (s *Store) wroteLocked() {
 	}
 }
 
-var _ store.Store = (*Store)(nil)
+var _ store.RevStore = (*Store)(nil)

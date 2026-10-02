@@ -439,10 +439,10 @@ func TestReleaseGivesBackOnlyWhatDidNotComplete(t *testing.T) {
 		t.Fatal(err)
 	}
 	m.Release(ctx, req.Subject.Principal, res)
-	if cur, ok := storetest.Peek(t, st, req.Subject.Principal, idemScope("01J", "leaf-01")); !ok || cur.Pending {
+	if cur, ok := storetest.Peek(t, st, time.Now(), req.Subject.Principal, idemScope("01J", "leaf-01")); !ok || cur.Pending {
 		t.Fatalf("the minted device's record: %+v %v", cur, ok)
 	}
-	if cur, ok := storetest.Peek(t, st, req.Subject.Principal, idemScope("01J", "leaf-02")); ok {
+	if cur, ok := storetest.Peek(t, st, time.Now(), req.Subject.Principal, idemScope("01J", "leaf-02")); ok {
 		t.Fatalf("the unminted device's reservation was not released: %+v", cur)
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/rhwendt/port49/internal/store"
+	"github.com/rhwendt/port49/internal/store/storetest"
 )
 
 // The context key is (nas, username): two usernames on one device are two
@@ -61,7 +62,7 @@ func TestReceiptKeyCarriesTheCredentialHash(t *testing.T) {
 	h1 := sha256.Sum256([]byte("p49_tok1"))
 	rk := store.ReceiptKey{NAS: "leaf-01", Username: "alice", Kind: store.KindLogin, CredentialSHA256: h1}
 	r := store.Receipt{CredentialSHA256: h1, CtxID: "ctx1", FirstRedeemedAt: now, IdleExpiresAt: now.Add(time.Minute), RetainUntil: now.Add(time.Minute)}
-	if err := s.RedeemAndReceipt(ctx, k, "t1", rw(rk, r, "user:alice@example.com")); err != nil {
+	if err := s.RedeemAndReceipt(ctx, k, "t1", storetest.Rw(rk, r, "user:alice@example.com")); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := s.GetReceipt(ctx, rk); err != nil || got.CtxID != "ctx1" {

@@ -458,6 +458,71 @@ func TestARefreshReturnsAStoreErrorForTheCallerToRetry(t *testing.T) {
 	}
 }
 
+// lookupFailingStore is a store whose lookup of principal's contexts fails
+// with err.
+type lookupFailingStore struct {
+	store.Store
+	principal string
+	err       error
+}
+
+func (l lookupFailingStore) ContextsByPrincipal(ctx context.Context, principal string) ([]store.ContextRef, error) {
+	if principal == l.principal {
+		return nil, l.err
+	}
+	return l.Store.ContextsByPrincipal(ctx, principal)
+}
+
+// One principal whose contexts cannot be looked up, for any reason but the
+// store being unavailable or the pass ending, is said and counted failed,
+// and the pass goes on to every principal after it: one store write must
+// not hold the refresh for everyone (final review I-1). The store being
+// unavailable still ends the pass, for port49d to run it again.
+func TestAFailedLookupDoesNotStopTheRefresh(t *testing.T) {
+	f := newFixtureWithPolicy(t, 8, sharedPolicy)
+	ctx := context.Background()
+	f.liveContextAt(t, "leaf1", "alice", alicePrincipal, "", f.now, f.now.Add(time.Hour))
+	f.liveContextAt(t, "nx1", "alice2", alice2, "", f.now, f.now.Add(time.Hour))
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(prev) })
+	// alice2 sorts before alice ('2' before '@'), so alice is after it.
+	f.b.Store = lookupFailingStore{Store: f.st, principal: alice2, err: errors.New("test: does not parse")}
+	rep, err := f.b.Refresh(ctx, nil)
+	if !errors.Is(err, store.ErrConflict) || rep.Failed != 1 || rep.Updated+rep.Unchanged+rep.Revoked != 1 {
+		t.Fatalf("a pass past one failed lookup: %+v %v", rep, err)
+	}
+	if !strings.Contains(buf.String(), alice2) {
+		t.Fatalf("the failed lookup was not said: %q", buf.String())
+	}
+	f.b.Store = lookupFailingStore{Store: f.st, principal: alice2, err: store.ErrUnavailable}
+	if _, err := f.b.Refresh(ctx, nil); !errors.Is(err, store.ErrUnavailable) {
+		t.Fatalf("a pass with the store unavailable = %v", err)
+	}
+}
+
+// A pass that left a principal unjudged is not complete: it returns
+// store.ErrConflict naming what it left, so port49d keeps
+// port49_policy_refresh_pending at 1 and runs it again, and the tokens are
+// still superseded (re-review r-m1).
+func TestAPassThatLeftAPrincipalIsNotComplete(t *testing.T) {
+	f := newFixture(t, 8)
+	ctx := context.Background()
+	f.liveContextAt(t, "leaf1", "alice", alicePrincipal, "", f.now, f.now.Add(time.Hour))
+	tk := store.TokenKey{NAS: "nx1", Username: "alice"}
+	decodeMint(t, f.post(ctx, f.state(f.alice), `{"devices":["nx1"]}`, ""))
+	priors := f.reload(t, edit(t, "token_ttl: 60s}", "token_ttl: 30s}"))
+	f.b.Store = lookupFailingStore{Store: f.st, principal: alicePrincipal, err: errors.New("test: does not parse")}
+	rep, err := f.b.Refresh(ctx, priors)
+	if !errors.Is(err, store.ErrConflict) || !strings.Contains(err.Error(), "a principal could not be looked up") {
+		t.Fatalf("a pass that left a principal = %v, want ErrConflict naming it", err)
+	}
+	if toks, _ := f.st.Candidates(ctx, tk); len(toks) != 0 || rep.TokenKeys != 1 {
+		t.Fatalf("the supersede did not run: %d left, report %+v", len(toks), rep)
+	}
+}
+
 // A widening applies from the next command too: dropping no_reload lets
 // alice's next `reload` through, in the session she already has.
 func TestARefreshWidensALiveContext(t *testing.T) {
