@@ -277,34 +277,65 @@ func TestARewriteAfterAReadComparesTheRevision(t *testing.T) {
 	}
 }
 
-// Each sealed context write keeps at hand the revision it committed at,
-// and that revision is the Rev the next read sees: the order a caller can
-// place its own writes in (the crypt ledger's follow-up).
+// Each sealed context write returns the revision it committed at, and
+// that revision is the Rev the next read sees: the order the crypt ledger
+// places its own writes in (store.RevStore). A write that loses its
+// compare returns zero; one that loses only to an index write reads again
+// and returns the revision of the write that landed (Task 6 review M-1).
 func TestAContextWriteReturnsItsRevision(t *testing.T) {
 	ctx := context.Background()
-	s := onShared(t, func() time.Time { return t0 })
+	var race func() // run once at the next clock read: between a write's read and its commit
+	s := onShared(t, func() time.Time {
+		if f := race; f != nil {
+			race = nil
+			f()
+		}
+		return t0
+	})
 	k := store.ContextKey{NAS: "leaf-01", Username: "alice"}
 	c := store.Context{CtxID: "c", Principal: "p", Username: "alice", PrivLvl: 1}
-	check := func(what string, mod int64, err error) store.Context {
+	check := func(what string, mod uint64, err error) store.Context {
 		t.Helper()
 		if err != nil {
 			t.Fatalf("%s: %v", what, err)
 		}
 		got, err := s.GetContext(ctx, k)
-		if err != nil || got.Rev != uint64(mod) || mod == 0 {
+		if err != nil || got.Rev != mod || mod == 0 {
 			t.Fatalf("%s committed at %d, and a read sees Rev %d (%v)", what, mod, got.Rev, err)
 		}
 		return got
 	}
-	mod, err := s.putContext(ctx, k, c, time.Hour)
+	mod, err := s.PutContextRev(ctx, k, c, time.Hour)
 	got := check("a put", mod, err)
-	mod, err = s.swapLogin(ctx, k, got.Rev, c, time.Hour, store.LoginWrite{Principal: "p", Sid: "s", IndexTTL: time.Hour})
+	mod, err = s.SwapLoginRev(ctx, k, got.Rev, c, time.Hour, store.LoginWrite{Principal: "p", Sid: "s", IndexTTL: time.Hour})
 	got = check("a login", mod, err)
 	got.PrivLvl = 7
-	mod, err = s.rewriteContext(ctx, k, got.Rev, got, 0, true) // the cached path: GetContext just read it
+	mod, err = s.RewriteContextRev(ctx, k, got.Rev, got, 0, true) // the cached path: GetContext just read it
 	got = check("a rewrite after a read", mod, err)
-	mod, err = s.rewriteContext(ctx, k, got.Rev, got, time.Hour, false) // a ttl reads again
-	check("a rewrite with a ttl", mod, err)
+	mod, err = s.RewriteContextRev(ctx, k, got.Rev, got, time.Hour, false) // a ttl reads again
+	got = check("a rewrite with a ttl", mod, err)
+	mod, err = s.SwapContextRev(ctx, k, got.Rev, c, time.Hour)
+	stale := check("a swap", mod, err).Rev - 1
+
+	if mod, err := s.SwapLoginRev(ctx, k, stale, c, time.Hour, store.LoginWrite{}); mod != 0 || !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("a login on a stale revision: %d %v, want 0 and ErrConflict", mod, err)
+	}
+	ref := store.ContextRef{NAS: k.NAS, Username: k.Username}
+	raced := false
+	race = func() {
+		raced = true
+		if err := s.IndexContext(ctx, "q", "", "", ref, time.Hour); err != nil {
+			t.Error(err)
+		}
+	}
+	mod, err = s.PutContextRev(ctx, k, c, time.Hour)
+	if !raced {
+		t.Fatal("the index write did not race the put")
+	}
+	check("a put after a racing index write", mod, err)
+	if refs, err := s.ContextsByPrincipal(ctx, "q"); err != nil || len(refs) != 1 {
+		t.Fatalf("the racing index write: %v %v", refs, err)
+	}
 }
 
 // The index family: lookups, extension, the login's one step read back
@@ -325,6 +356,7 @@ func TestIndexesOnEtcd(t *testing.T) {
 		"UnindexRefClearsEveryKey": func(t *testing.T) { storetest.UnindexRefClearsEveryKey(t, backend) },
 		"SwapLoginIsOneStep":       func(t *testing.T) { storetest.SwapLoginIsOneStep(t, backend) },
 		"LoginsRaceToOneIndex":     func(t *testing.T) { storetest.LoginsRaceToOneIndex(t, backend) },
+		"LoginsRaceToAnEmptyKey":   func(t *testing.T) { storetest.LoginsRaceToAnEmptyKey(t, backend) },
 		"JoinHonoursAStandingMark": func(t *testing.T) { storetest.JoinHonoursAStandingMark(t, backend) },
 		"IndexKeysAreExact":        func(t *testing.T) { storetest.IndexKeysAreExact(t, backend) },
 		"LoginRacesARevocationByMark": func(t *testing.T) {

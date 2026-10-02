@@ -314,7 +314,8 @@ type Context struct {
 	// every key: a write takes a revision above any context has held (etcd's
 	// mod_revision), so of two writes the later holds the larger, which is
 	// how the sealing layer's ledger orders writes that end out of order
-	// (crypt.Ledger). It is plaintext bookkeeping, like the expiry.
+	// (crypt.Ledger, by the revision each returns: RevStore). It is
+	// plaintext bookkeeping, like the expiry.
 	Rev uint64
 	// PolicyRev is the store's revision of what a policy refresh decides
 	// (spec §5.1.3): GetContext sets it and SetContextPolicy compares it.
@@ -860,6 +861,20 @@ type Store interface {
 	DeleteRevocation(ctx context.Context, kind, key string) error
 	// ListRevocations is every mark in force, sorted by (Kind, Key).
 	ListRevocations(ctx context.Context) ([]Revocation, error)
+}
+
+// RevStore is a Store whose whole-context writes also return the revision
+// each committed at: the record's Rev from then on, and zero with every
+// error. The sealing layer orders its own writes at a key by it, which is
+// the store's commit order whatever order the writes end in (crypt.Ledger;
+// plan 7d Task 6b). Each is its plain method otherwise.
+type RevStore interface {
+	Store
+	PutContextRev(ctx context.Context, k ContextKey, c Context, ttl time.Duration) (uint64, error)
+	SwapContextRev(ctx context.Context, k ContextKey, rev uint64, c Context, ttl time.Duration) (uint64, error)
+	SwapLoginRev(ctx context.Context, k ContextKey, rev uint64, c Context, ttl time.Duration, w LoginWrite) (uint64, error)
+	RewriteContextRev(ctx context.Context, k ContextKey, rev uint64, c Context, ttl time.Duration,
+		policyMoved bool) (uint64, error)
 }
 
 // CertKey is the index key a CRL or OCSP response names (spec §5.1.4).

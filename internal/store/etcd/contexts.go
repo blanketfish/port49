@@ -199,17 +199,20 @@ func whole(c store.Context, now time.Time, ttl time.Duration) ctxRec {
 	return r
 }
 
+// The context writes return the revision each committed at, so the
+// sealing layer can order its own writes by the store's (crypt.Ledger).
+var _ store.RevStore = (*Store)(nil)
+
 // PutContext writes c unconditionally, extending the ref's index entries
 // with it (store.Store; no production path calls it).
 func (s *Store) PutContext(ctx context.Context, k store.ContextKey, c store.Context, ttl time.Duration) error {
-	_, err := s.putContext(ctx, k, c, ttl)
+	_, err := s.PutContextRev(ctx, k, c, ttl)
 	return err
 }
 
-// putContext is PutContext, returning the revision it committed at: the
-// context's Rev from then on. The context writes keep it at hand, so a
-// caller can order its own writes by the store's (the crypt ledger).
-func (s *Store) putContext(ctx context.Context, k store.ContextKey, c store.Context, ttl time.Duration) (int64, error) {
+// PutContextRev is PutContext, returning the revision it committed at:
+// the context's Rev from then on (store.RevStore).
+func (s *Store) PutContextRev(ctx context.Context, k store.ContextKey, c store.Context, ttl time.Duration) (uint64, error) {
 	for {
 		snap, err := s.readCtx(ctx, k)
 		if err != nil {
@@ -227,7 +230,7 @@ func (s *Store) putContext(ctx context.Context, k store.ContextKey, c store.Cont
 			idx = &x
 		}
 		if ok, mod, err := s.commitCtx(ctx, k, snap, &r, idx, nil); err != nil || ok {
-			return mod, err
+			return uint64(mod), err
 		}
 	}
 }
@@ -235,6 +238,13 @@ func (s *Store) putContext(ctx context.Context, k store.ContextKey, c store.Cont
 // SwapContext is SwapLogin with no index change and no mark.
 func (s *Store) SwapContext(ctx context.Context, k store.ContextKey, rev uint64, c store.Context, ttl time.Duration) error {
 	return s.SwapLogin(ctx, k, rev, c, ttl, store.LoginWrite{})
+}
+
+// SwapContextRev is SwapContext, returning the revision it committed at
+// (PutContextRev).
+func (s *Store) SwapContextRev(ctx context.Context, k store.ContextKey, rev uint64, c store.Context,
+	ttl time.Duration) (uint64, error) {
+	return s.SwapLoginRev(ctx, k, rev, c, ttl, store.LoginWrite{})
 }
 
 // SwapLogin is the login's one step (store.Store; plan 7d Ruling 7): the
@@ -245,14 +255,14 @@ func (s *Store) SwapContext(ctx context.Context, k store.ContextKey, rev uint64,
 // context or a mark is ErrConflict, for JoinContext to decide again.
 func (s *Store) SwapLogin(ctx context.Context, k store.ContextKey, rev uint64, c store.Context, ttl time.Duration,
 	w store.LoginWrite) error {
-	_, err := s.swapLogin(ctx, k, rev, c, ttl, w)
+	_, err := s.SwapLoginRev(ctx, k, rev, c, ttl, w)
 	return err
 }
 
-// swapLogin is SwapLogin, returning the revision it committed at
-// (putContext).
-func (s *Store) swapLogin(ctx context.Context, k store.ContextKey, rev uint64, c store.Context, ttl time.Duration,
-	w store.LoginWrite) (int64, error) {
+// SwapLoginRev is SwapLogin, returning the revision it committed at
+// (PutContextRev).
+func (s *Store) SwapLoginRev(ctx context.Context, k store.ContextKey, rev uint64, c store.Context, ttl time.Duration,
+	w store.LoginWrite) (uint64, error) {
 	marks := make([][2]string, 0, len(w.Marks))
 	for _, m := range w.Marks {
 		marks = append(marks, [2]string{m.Kind, m.Key})
@@ -295,7 +305,7 @@ func (s *Store) swapLogin(ctx context.Context, k store.ContextKey, rev uint64, c
 			idx = &x
 		}
 		if ok, mod, err := s.commitCtx(ctx, k, snap, &r, idx, added); err != nil || ok {
-			return mod, err
+			return uint64(mod), err
 		}
 	}
 }
@@ -309,14 +319,14 @@ func (s *Store) swapLogin(ctx context.Context, k store.ContextKey, rev uint64, c
 // only when policyMoved.
 func (s *Store) RewriteContext(ctx context.Context, k store.ContextKey, rev uint64, c store.Context, ttl time.Duration,
 	policyMoved bool) error {
-	_, err := s.rewriteContext(ctx, k, rev, c, ttl, policyMoved)
+	_, err := s.RewriteContextRev(ctx, k, rev, c, ttl, policyMoved)
 	return err
 }
 
-// rewriteContext is RewriteContext, returning the revision it committed at
-// (putContext).
-func (s *Store) rewriteContext(ctx context.Context, k store.ContextKey, rev uint64, c store.Context,
-	ttl time.Duration, policyMoved bool) (int64, error) {
+// RewriteContextRev is RewriteContext, returning the revision it committed
+// at (PutContextRev).
+func (s *Store) RewriteContextRev(ctx context.Context, k store.ContextKey, rev uint64, c store.Context,
+	ttl time.Duration, policyMoved bool) (uint64, error) {
 	if r0, ok := s.seen.take(s.k.context(k), int64(rev)); ok && ttl == 0 {
 		if !r0.ExpiresAt.After(s.now()) {
 			return 0, store.ErrNotFound
@@ -337,7 +347,7 @@ func (s *Store) rewriteContext(ctx context.Context, k store.ContextKey, rev uint
 		case !ok:
 			return 0, store.ErrConflict // moved, or gone, since the read: the caller reads again
 		}
-		return mod, nil
+		return uint64(mod), nil
 	}
 	snap, err := s.readCtx(ctx, k)
 	if err != nil {
@@ -376,7 +386,7 @@ func (s *Store) rewriteContext(ctx context.Context, k store.ContextKey, rev uint
 	if !ok {
 		return 0, store.ErrConflict // the context or its index record moved since the read
 	}
-	return mod, nil
+	return uint64(mod), nil
 }
 
 // addKeys lists ref under each non-empty key until exp (a blank

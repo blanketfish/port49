@@ -508,7 +508,14 @@ func (s *Store) DeleteReceiptsByPrincipal(_ context.Context, principal string) (
 	return n, nil
 }
 
-func (s *Store) PutContext(_ context.Context, k store.ContextKey, c store.Context, ttl time.Duration) error {
+func (s *Store) PutContext(ctx context.Context, k store.ContextKey, c store.Context, ttl time.Duration) error {
+	_, err := s.PutContextRev(ctx, k, c, ttl)
+	return err
+}
+
+// PutContextRev is PutContext, returning the revision it committed at
+// (store.RevStore).
+func (s *Store) PutContextRev(_ context.Context, k store.ContextKey, c store.Context, ttl time.Duration) (uint64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now()
@@ -516,13 +523,13 @@ func (s *Store) PutContext(_ context.Context, k store.ContextKey, c store.Contex
 	// does (store.Context). Leaving it to the caller would hand Task 10's
 	// half-TTL rule a zero on every freshly written context, and a rule that
 	// reads zero extends on every command — the write this exists to avoid.
-	s.writeContextLocked(k, c, now, ttl)
-	return nil
+	return s.writeContextLocked(k, c, now, ttl), nil
 }
 
 // writeContextLocked is the whole-record write PutContext and SwapContext
-// share once SwapContext's precondition has held.
-func (s *Store) writeContextLocked(k store.ContextKey, c store.Context, now time.Time, ttl time.Duration) {
+// share once SwapContext's precondition has held. It returns the revision
+// the write took.
+func (s *Store) writeContextLocked(k store.ContextKey, c store.Context, now time.Time, ttl time.Duration) uint64 {
 	c.LastTouchedAt = now
 	c.Rev, c.PolicyRev = 0, 0 // the entry holds the revisions; the record's copies are GetContext's to fill
 	exp := now.Add(ttl)
@@ -537,6 +544,7 @@ func (s *Store) writeContextLocked(k store.ContextKey, c store.Context, now time
 	if s.writes%sweepEvery == 0 {
 		s.sweepLocked()
 	}
+	return rev
 }
 
 func (s *Store) GetContext(_ context.Context, k store.ContextKey) (store.Context, error) {
@@ -557,27 +565,42 @@ func (s *Store) SwapContext(ctx context.Context, k store.ContextKey, rev uint64,
 	return s.SwapLogin(ctx, k, rev, c, ttl, store.LoginWrite{})
 }
 
+// SwapContextRev is SwapContext, returning the revision it committed at
+// (store.RevStore).
+func (s *Store) SwapContextRev(ctx context.Context, k store.ContextKey, rev uint64, c store.Context,
+	ttl time.Duration) (uint64, error) {
+	return s.SwapLoginRev(ctx, k, rev, c, ttl, store.LoginWrite{})
+}
+
 // SwapLogin writes c only if the record at k still carries revision rev
 // (for rev zero, only if there is no live record) and every mark in
 // w.Marks is still as read; then the index change, all under the one
 // lock, which is what makes the three one step (store.Store).
-func (s *Store) SwapLogin(_ context.Context, k store.ContextKey, rev uint64, c store.Context, ttl time.Duration,
+func (s *Store) SwapLogin(ctx context.Context, k store.ContextKey, rev uint64, c store.Context, ttl time.Duration,
 	w store.LoginWrite) error {
+	_, err := s.SwapLoginRev(ctx, k, rev, c, ttl, w)
+	return err
+}
+
+// SwapLoginRev is SwapLogin, returning the revision it committed at
+// (store.RevStore).
+func (s *Store) SwapLoginRev(_ context.Context, k store.ContextKey, rev uint64, c store.Context, ttl time.Duration,
+	w store.LoginWrite) (uint64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now()
 	e, ok := s.contexts[k]
 	live := ok && e.exp.After(now)
 	if live && e.rev != rev || !live && rev != 0 {
-		return store.ErrConflict
+		return 0, store.ErrConflict
 	}
 	for _, m := range w.Marks {
 		cur, ok := s.revocations[[2]string{m.Kind, m.Key}]
 		if ok == m.At.IsZero() || ok && !cur.At.Equal(m.At) {
-			return store.ErrConflict
+			return 0, store.ErrConflict
 		}
 	}
-	s.writeContextLocked(k, c, now, ttl)
+	committed := s.writeContextLocked(k, c, now, ttl)
 	ref := store.ContextRef{NAS: k.NAS, Username: k.Username}
 	if w.ClearRef {
 		s.unindexRefLocked(ref)
@@ -588,7 +611,7 @@ func (s *Store) SwapLogin(_ context.Context, k store.ContextKey, rev uint64, c s
 	if w.Principal != "" || w.Sid != "" || w.CertKey != "" {
 		s.indexLocked(w.Principal, w.Sid, w.CertKey, ref, w.IndexTTL)
 	}
-	return nil
+	return committed, nil
 }
 
 // TouchContext is the read-modify-write inside the lock that the handler cannot
@@ -777,18 +800,26 @@ func (s *Store) SetContextPolicy(_ context.Context, k store.ContextKey, policyRe
 // RewriteContext writes c over the live record at k only while its
 // revision is rev, under the one lock (store.Store): the sealing layer's
 // narrow setter.
-func (s *Store) RewriteContext(_ context.Context, k store.ContextKey, rev uint64, c store.Context, ttl time.Duration,
+func (s *Store) RewriteContext(ctx context.Context, k store.ContextKey, rev uint64, c store.Context, ttl time.Duration,
 	policyMoved bool) error {
+	_, err := s.RewriteContextRev(ctx, k, rev, c, ttl, policyMoved)
+	return err
+}
+
+// RewriteContextRev is RewriteContext, returning the revision it committed
+// at (store.RevStore).
+func (s *Store) RewriteContextRev(_ context.Context, k store.ContextKey, rev uint64, c store.Context, ttl time.Duration,
+	policyMoved bool) (uint64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now()
 	e, ok := s.contexts[k]
 	if !ok || !e.exp.After(now) {
 		delete(s.contexts, k)
-		return store.ErrNotFound
+		return 0, store.ErrNotFound
 	}
 	if e.rev != rev {
-		return store.ErrConflict
+		return 0, store.ErrConflict
 	}
 	c.Rev, c.PolicyRev = 0, 0 // the entry holds the revisions
 	c.LastTouchedAt = e.c.LastTouchedAt
@@ -804,7 +835,7 @@ func (s *Store) RewriteContext(_ context.Context, k store.ContextKey, rev uint64
 	if ttl > 0 {
 		s.extendIndexesLocked(store.ContextRef{NAS: k.NAS, Username: k.Username}, e.exp)
 	}
-	return nil
+	return e.rev, nil
 }
 
 func (s *Store) DeleteContext(_ context.Context, k store.ContextKey) error {
@@ -1350,4 +1381,4 @@ func (s *Store) wroteLocked() {
 	}
 }
 
-var _ store.Store = (*Store)(nil)
+var _ store.RevStore = (*Store)(nil)
