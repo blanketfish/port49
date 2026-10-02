@@ -378,18 +378,25 @@ func (a *Agent) post(ctx context.Context, body []byte, key string) (*http.Respon
 // APIError is a broker answer that is neither a 200 nor a refusal that ends
 // the session (sessionOver): its status, the API's code (design §17's
 // Errors) and the broker's detail. A 503 is one too, revocation_busy among
-// them: it ends nothing, and the operator asks again.
+// them: it ends nothing, and the operator asks again after RetryAfter, the
+// broker's Retry-After (zero for none).
 type APIError struct {
-	Status int
-	Code   string
-	Detail string
+	Status     int
+	Code       string
+	Detail     string
+	RetryAfter time.Duration
 }
 
 func (e *APIError) Error() string {
-	if e.Status == http.StatusServiceUnavailable {
-		return "agent: the broker is unavailable just now: " + e.Code + ": " + e.Detail
+	switch {
+	case e.Status == http.StatusServiceUnavailable && e.Code == "certificate_status_unavailable" && e.Detail != "":
+		// The broker's detail says what it could not establish, as
+		// unavailable says it.
+		return "agent: " + e.Detail + retryIn(e.RetryAfter)
+	case e.Status == http.StatusServiceUnavailable:
+		return "agent: the broker is unavailable just now: " + e.Code + ": " + e.Detail + retryIn(e.RetryAfter)
 	}
-	return "agent: the broker refused: " + e.Code + ": " + e.Detail
+	return "agent: the broker refused: " + e.Code + ": " + e.Detail + retryIn(e.RetryAfter)
 }
 
 // call sends one request on the held connection and decodes a 200 into out.
@@ -466,7 +473,7 @@ func (a *Agent) call(ctx context.Context, method, path string, in, out any) erro
 		// Not the broker's API answering: a proxy, or a body cut short.
 		return fmt.Errorf("agent: %s%s answered %s with no API error", a.broker, path, resp.Status)
 	}
-	return &APIError{Status: resp.StatusCode, Code: e.Error, Detail: e.Detail}
+	return &APIError{Status: resp.StatusCode, Code: e.Error, Detail: e.Detail, RetryAfter: retryAfterHeader(resp.Header)}
 }
 
 // Identity is GET /v1/identity: what the broker resolves this session's
@@ -560,11 +567,23 @@ func unavailable(resp *http.Response, e api.Error) error {
 }
 
 // retryHint is "; retry in Ns" for a Retry-After in whole seconds, or "".
-func retryHint(h http.Header) string {
+func retryHint(h http.Header) string { return retryIn(retryAfterHeader(h)) }
+
+// retryAfterHeader is a Retry-After in whole seconds, uncapped, or zero
+// when there is none the agent can read.
+func retryAfterHeader(h http.Header) time.Duration {
 	if n, err := strconv.Atoi(h.Get("Retry-After")); err == nil && n > 0 {
-		return fmt.Sprintf("; retry in %ds", n)
+		return time.Duration(n) * time.Second
 	}
-	return ""
+	return 0
+}
+
+// retryIn is "; retry in Ns" for a positive d, or "".
+func retryIn(d time.Duration) string {
+	if d <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("; retry in %ds", int(d/time.Second))
 }
 
 // Refresh re-authenticates the session on the held connection (spec §5.6;
@@ -959,9 +978,7 @@ func (a *Agent) Handler() http.Handler {
 	})
 	mux.HandleFunc("POST /explain", func(w http.ResponseWriter, r *http.Request) {
 		var req api.ExplainRequest
-		dec := json.NewDecoder(io.LimitReader(r.Body, 1<<16))
-		dec.DisallowUnknownFields()
-		if err := dec.Decode(&req); err != nil {
+		if err := decodeOne(r.Body, &req); err != nil {
 			writeJSON(w, http.StatusBadRequest, api.Error{Error: "bad_request", Detail: "not an explain request"})
 			return
 		}
@@ -970,9 +987,7 @@ func (a *Agent) Handler() http.Handler {
 	})
 	mux.HandleFunc("POST /revoke", func(w http.ResponseWriter, r *http.Request) {
 		var req api.RevokeRequest
-		dec := json.NewDecoder(io.LimitReader(r.Body, 1<<16))
-		dec.DisallowUnknownFields()
-		if err := dec.Decode(&req); err != nil {
+		if err := decodeOne(r.Body, &req); err != nil {
 			writeJSON(w, http.StatusBadRequest, api.Error{Error: "bad_request", Detail: "not a revocation request"})
 			return
 		}
@@ -982,11 +997,30 @@ func (a *Agent) Handler() http.Handler {
 	return mux
 }
 
+// decodeOne reads one JSON object, with no unknown fields and nothing after
+// it, as the broker reads these bodies: the agent forwards only what it
+// decoded, so anything after the object would be dropped in silence.
+func decodeOne(body io.Reader, v any) error {
+	dec := json.NewDecoder(io.LimitReader(body, 1<<16))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil {
+		return err
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return errors.New("trailing data")
+	}
+	return nil
+}
+
 // answer writes one API call's result to the socket: out on success; a
 // session that is over as POST /token says it (410, the revocation's own
-// code kept); a broker refusal, a 503 included, with its own status and
-// body, so the client rebuilds the *APIError; anything else 502 with the
-// agent's error.
+// code kept); a broker refusal, a 503 included, with its own status, body
+// and Retry-After, so the client rebuilds the *APIError; anything else 502
+// with the agent's error.
+//
+// 410 is reserved for the agent's own session end, which the client reads
+// as ErrSessionOver: a 410 the broker sent is relayed as a 502, so it can
+// never say the session is over while the agent's runs on.
 func answer(w http.ResponseWriter, out any, err error) {
 	var revoked *RevokedError
 	var refused *APIError
@@ -998,7 +1032,14 @@ func answer(w http.ResponseWriter, out any, err error) {
 	case errors.Is(err, ErrSessionOver):
 		writeJSON(w, http.StatusGone, api.Error{Error: "session_over", Detail: err.Error()})
 	case errors.As(err, &refused):
-		writeJSON(w, refused.Status, api.Error{Error: refused.Code, Detail: refused.Detail})
+		status := refused.Status
+		if status == http.StatusGone {
+			status = http.StatusBadGateway
+		}
+		if refused.RetryAfter > 0 {
+			w.Header().Set("Retry-After", strconv.Itoa(int(refused.RetryAfter/time.Second)))
+		}
+		writeJSON(w, status, api.Error{Error: refused.Code, Detail: refused.Detail})
 	default:
 		writeJSON(w, http.StatusBadGateway, api.Error{Error: "broker_error", Detail: err.Error()})
 	}

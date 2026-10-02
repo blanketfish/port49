@@ -264,7 +264,7 @@ func (c *Client) roundTrip(ctx context.Context, method, path string, in, out any
 	case resp.StatusCode == http.StatusBadGateway && e.Error == "broker_error":
 		return errors.New(e.Detail)
 	case e.Error != "":
-		return &APIError{Status: resp.StatusCode, Code: e.Error, Detail: e.Detail}
+		return &APIError{Status: resp.StatusCode, Code: e.Error, Detail: e.Detail, RetryAfter: retryAfterHeader(resp.Header)}
 	}
 	return fmt.Errorf("agent: the agent at %s answered %s", c.socket, resp.Status)
 }

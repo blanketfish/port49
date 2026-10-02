@@ -1793,6 +1793,11 @@ func TestTheAgentCarriesTheAPI(t *testing.T) {
 	if !errors.As(err, &revoked) || !errors.Is(err, ErrSessionOver) {
 		t.Fatalf("identity under a mark: %v", err)
 	}
+	select {
+	case <-r.a.Done():
+	default:
+		t.Fatal("a mark did not end the agent's session")
+	}
 }
 
 // A CLI newer than the running agent: the agent's mux has no route for the
@@ -1846,6 +1851,7 @@ func TestABusyRevocationIsAnAPIErrorAndEndsNothing(t *testing.T) {
 		t.Helper()
 		var ae *APIError
 		if !errors.As(err, &ae) || ae.Status != 503 || ae.Code != "revocation_busy" || ae.Detail != busy.e.Detail ||
+			ae.RetryAfter != 5*time.Second || !strings.HasSuffix(err.Error(), "; retry in 5s") ||
 			errors.Is(err, ErrSessionOver) {
 			t.Fatalf("%s: %v", what, err)
 		}
@@ -1861,5 +1867,70 @@ func TestABusyRevocationIsAnAPIErrorAndEndsNothing(t *testing.T) {
 	check("through the socket", err)
 	if _, err := r.a.Mint(context.Background(), "leaf1", false, 0); err != nil {
 		t.Fatalf("a mint after a busy revocation: %v", err)
+	}
+}
+
+// A certificate_status_unavailable is said by the broker's detail alone,
+// as unavailable says it, with the minute the broker asked for.
+func TestAnAPICertificateStatusRefusalSaysTheDetailAlone(t *testing.T) {
+	r := newRig(t)
+	ref := refusal{status: 503, retryAfter: "60", e: api.Error{Error: "certificate_status_unavailable",
+		Detail: "the broker cannot establish this certificate's revocation status (OCSP http://ocsp.example.com: " +
+			"no answer within 2s); try again"}}
+	r.fb.mu.Lock()
+	r.fb.answers = map[string]refusal{"/v1/explain": ref}
+	r.fb.mu.Unlock()
+	_, err := socketFor(t, r.a).Explain(context.Background(), api.ExplainRequest{Device: "leaf1"})
+	var ae *APIError
+	if !errors.As(err, &ae) || err.Error() != "agent: "+ref.e.Detail+"; retry in 60s" {
+		t.Fatalf("%v", err)
+	}
+}
+
+// A 410 is the agent's own word for its session's end: one relayed from
+// the broker reaches the client as a 502, never as ErrSessionOver while
+// the agent's session runs on.
+func TestARelayedGoneIsNotTheSessionsEnd(t *testing.T) {
+	r := newRig(t)
+	r.fb.mu.Lock()
+	r.fb.answers = map[string]refusal{"/v1/identity": {status: 410, e: api.Error{Error: "gone", Detail: "a proxy's"}}}
+	r.fb.mu.Unlock()
+	_, err := socketFor(t, r.a).Identity(context.Background())
+	var ae *APIError
+	if !errors.As(err, &ae) || ae.Status != http.StatusBadGateway || ae.Code != "gone" || errors.Is(err, ErrSessionOver) {
+		t.Fatalf("%v", err)
+	}
+	select {
+	case <-r.a.Done():
+		t.Fatal("a relayed 410 ended the session")
+	default:
+	}
+}
+
+// The socket's /explain and /revoke take one object and nothing after it,
+// as the broker does, so a request is never narrowed in silence: trailing
+// data is refused before the broker is asked.
+func TestTheSocketRefusesTrailingData(t *testing.T) {
+	r := newRig(t)
+	c := socketFor(t, r.a)
+	for path, body := range map[string]string{
+		"/explain": `{"device":"leaf1"} {"device":"leaf2"}`,
+		"/revoke":  `{"mine":true} {"principal":"user:bob@example.com"}`,
+	} {
+		resp, err := c.http.Post("http://agent"+path, "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var e api.Error
+		_ = json.NewDecoder(resp.Body).Decode(&e)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest || e.Error != "bad_request" {
+			t.Fatalf("%s: %d %+v", path, resp.StatusCode, e)
+		}
+	}
+	r.fb.mu.Lock()
+	defer r.fb.mu.Unlock()
+	if n := len(r.fb.addrs["/v1/explain"]) + len(r.fb.addrs["/v1/tokens/revoke"]); n != 0 {
+		t.Fatalf("the broker was asked %d times", n)
 	}
 }
