@@ -527,7 +527,11 @@ func (w *wrapped) SwapLogin(ctx context.Context, k store.ContextKey, rev uint64,
 }
 
 func (w *wrapped) GetContext(ctx context.Context, k store.ContextKey) (store.Context, error) {
+	at := w.ledger.mark()
 	c, err := w.inner.GetContext(ctx, k)
+	if errors.Is(err, store.ErrNotFound) {
+		w.ledger.forget(k, at, true)
+	}
 	if err != nil {
 		return store.Context{}, err
 	}
@@ -701,15 +705,27 @@ func (w *wrapped) RewriteContext(ctx context.Context, k store.ContextKey, rev ui
 	return w.sent(k, c.CtxID, func() error { return w.inner.RewriteContext(ctx, k, rev, sc, ttl, policyMoved) })
 }
 
-// DeleteContext is addressed by key alone.
+// DeleteContext is addressed by key alone. One that lands takes the key
+// out of the ledger (Ledger.forget).
 func (w *wrapped) DeleteContext(ctx context.Context, k store.ContextKey) error {
-	return w.inner.DeleteContext(ctx, k)
+	at := w.ledger.mark()
+	err := w.inner.DeleteContext(ctx, k)
+	if err == nil {
+		w.ledger.forget(k, at, false)
+	}
+	return err
 }
 
 // DeleteContextIf passes through: it is addressed by key and compares Rev,
-// which is plaintext bookkeeping.
+// which is plaintext bookkeeping. One that lands takes the key out of the
+// ledger, as DeleteContext does.
 func (w *wrapped) DeleteContextIf(ctx context.Context, k store.ContextKey, rev uint64) error {
-	return w.inner.DeleteContextIf(ctx, k, rev)
+	at := w.ledger.mark()
+	err := w.inner.DeleteContextIf(ctx, k, rev)
+	if err == nil {
+		w.ledger.forget(k, at, false)
+	}
+	return err
 }
 
 // PutBlob passes through unsealed. Blobs hold no identity (design §12).

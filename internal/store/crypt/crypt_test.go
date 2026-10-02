@@ -845,6 +845,88 @@ func TestTheLedgerAdmitsWritesInFlight(t *testing.T) {
 	}
 }
 
+// A read that finds a write whose outcome was unknown settles every one:
+// the store holds that one, so a later write whose outcome is unknown too
+// did not land over it, and is not admitted (Task 4b review M4).
+func TestAReadSettlesEveryWriteWhoseOutcomeWasUnknown(t *testing.T) {
+	l := NewLedger()
+	k := store.ContextKey{NAS: "leaf-01", Username: "netops"}
+	for _, id := range []string{"d", "e"} {
+		l.begin(k, id)
+		l.end(k, id, store.ErrUnavailable)
+	}
+	if !l.admits(k, "d") {
+		t.Fatal("a write whose outcome is unknown may have landed")
+	}
+	if l.admits(k, "e") {
+		t.Fatal("a read of d left e admitted")
+	}
+}
+
+// The ledger forgets a key the store holds nothing at: a delete that
+// landed, or after Seal a read that found nothing. A sealed ledger then
+// admits nothing there but what this process writes, so forgetting fails
+// closed; a write sent since the delete or the read was keeps the entry
+// (Task 4b review M5).
+func TestTheLedgerForgetsAKeyTheStoreNoLongerHolds(t *testing.T) {
+	ctx := context.Background()
+	now := time.Unix(1_000_000, 0).UTC()
+	inner := memory.New(func() time.Time { return now })
+	l := NewLedger()
+	s := Wrap(inner, keys(), nil, WithLedger(l))
+	k := store.ContextKey{NAS: "leaf-01", Username: "netops"}
+	alice := store.Context{CtxID: "alice-1", Principal: "user:alice@example.com", Username: "netops", PrivLvl: 15}
+	// Before Seal a read that finds nothing keeps the entry: forgetting it
+	// would let the next read seed the key.
+	l.begin(k, "a")
+	l.end(k, "a", nil)
+	if _, err := s.GetContext(ctx, k); !errors.Is(err, store.ErrNotFound) || len(l.m) != 1 {
+		t.Fatalf("a read before Seal that found nothing: %v %v", err, l.m)
+	}
+	l.Seal()
+	if err := s.PutContext(ctx, k, alice, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteContext(ctx, k); err != nil {
+		t.Fatal(err)
+	}
+	if len(l.m) != 0 {
+		t.Fatalf("a delete that landed kept the entry: %v", l.m)
+	}
+	// Alice's record put back where it was deleted is not this key's now.
+	if err := Wrap(inner, keys(), nil).PutContext(ctx, k, alice, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.GetContext(ctx, k); !errors.Is(err, ErrNotLastWritten) {
+		t.Fatalf("a record put back at a forgotten key: %v", err)
+	}
+	if err := inner.DeleteContext(ctx, k); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutContext(ctx, k, alice, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := inner.DeleteContext(ctx, k); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.GetContext(ctx, k); !errors.Is(err, store.ErrNotFound) || len(l.m) != 0 {
+		t.Fatalf("a read after Seal that found nothing kept the entry: %v %v", err, l.m)
+	}
+	// A write sent after the read or the delete was keeps the entry.
+	at := l.mark()
+	l.begin(k, "b")
+	l.end(k, "b", nil)
+	l.forget(k, at, false)
+	if !l.admits(k, "b") {
+		t.Fatal("a write sent after the delete was is forgotten")
+	}
+	l.begin(k, "c")
+	l.forget(k, l.mark(), false)
+	if !l.admits(k, "c") {
+		t.Fatal("a write in flight is forgotten")
+	}
+}
+
 // A sealed ledger admits nothing at a key it has never seen, except what
 // this process writes there itself; before Seal, the first record read at
 // an unseen key is the key's (re-check 2 I1; decision 35). port49d seals
