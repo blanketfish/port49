@@ -323,49 +323,6 @@ func TestSwapContextSealsAndKeepsTheRevision(t *testing.T) {
 	}
 }
 
-// The join's merge happens up here, with the sealed fields open, and the
-// precondition is held down in the inner store: the property has to survive
-// that split, so it is run against the wrapped store as well as the bare one.
-// PolicyRev is plaintext bookkeeping like Rev, so the property has to hold
-// with the sealing layer between the refresher and the inner store.
-func TestPolicyRevisionThroughTheSealingLayer(t *testing.T) {
-	now := time.Unix(1_757_041_495, 0)
-	storetest.PolicyRevision(t, func() store.Store {
-		return Wrap(memory.New(func() time.Time { return now }), keys(), nil)
-	}, now)
-}
-
-// SetRevokedAt's comparison is made below the sealing layer, on a plaintext
-// timestamp, so the property has to hold through it.
-func TestRevocationIsMonotonicThroughTheSealingLayer(t *testing.T) {
-	now := time.Unix(1_757_041_495, 0)
-	storetest.RevocationIsMonotonic(t, func() store.Store {
-		return Wrap(memory.New(func() time.Time { return now }), keys(), nil)
-	}, now)
-}
-
-func TestJoinRacesRevocationThroughTheSealingLayer(t *testing.T) {
-	now := time.Unix(1_757_041_495, 0)
-	storetest.JoinRacesRevocation(t, func() store.Store {
-		return Wrap(memory.New(func() time.Time { return now }), keys(), nil)
-	}, now)
-}
-
-func TestIdempotencyReservesOnceThroughTheSealingLayer(t *testing.T) {
-	now := time.Unix(1_757_041_495, 0)
-	storetest.IdempotencyReservesOnce(t, func() store.Store {
-		return Wrap(memory.New(func() time.Time { return now }), keys(), nil)
-	}, now)
-}
-
-func TestIdempotencyLeaseExpiresThroughTheSealingLayer(t *testing.T) {
-	now := time.Unix(1_757_041_495, 0)
-	storetest.IdempotencyLeaseExpires(t, func() (store.Store, func(time.Duration)) {
-		return Wrap(memory.New(func() time.Time { return now }), keys(), nil),
-			func(d time.Duration) { now = now.Add(d) }
-	}, now)
-}
-
 // A pending reservation has nothing sealed in it, so reading one back is
 // not a record that will not open: no open failure is counted, and no
 // decryption error reaches the caller.
@@ -532,61 +489,10 @@ func TestSetContextPolicyThroughTheSealingLayer(t *testing.T) {
 	}
 }
 
-func TestTokenIndexThroughTheSealingLayer(t *testing.T) {
-	now := time.Unix(1_757_041_495, 0)
-	storetest.TokenIndex(t, func() store.Store {
-		return Wrap(memory.New(func() time.Time { return now }), keys(), nil)
-	}, now)
-}
-
-func TestDeleteTokenRemovesOneThroughTheSealingLayer(t *testing.T) {
-	now := time.Now()
-	storetest.DeleteTokenRemovesOne(t, func() store.Store {
-		return Wrap(memory.New(func() time.Time { return now }), keys(), nil)
-	}, now)
-}
-
-func TestDeleteTokenRacesRedeemThroughTheSealingLayer(t *testing.T) {
-	now := time.Now()
-	storetest.DeleteTokenRacesRedeem(t, func() store.Store {
-		return Wrap(memory.New(func() time.Time { return now }), keys(), nil)
-	}, now)
-}
-
-func TestRevocationMarksThroughTheSealingLayer(t *testing.T) {
-	now := time.Unix(1_757_041_495, 0)
-	storetest.RevocationMarks(t, func() store.Store {
-		return Wrap(memory.New(func() time.Time { return now }), keys(), nil)
-	}, now)
-}
-
-// SessionExpires, AuthTime and Rev are plaintext bookkeeping, so the ceiling,
-// the grace window and the revision binding are all held below the sealing
-// layer, and each property has to hold through it.
-func TestCeilingShortensOnlyThroughTheSealingLayer(t *testing.T) {
-	now := time.Unix(1_757_041_495, 0)
-	storetest.CeilingShortensOnly(t, func() store.Store {
-		return Wrap(memory.New(func() time.Time { return now }), keys(), nil)
-	}, now)
-}
-
-func TestRefreshSetsTheCeilingThroughTheSealingLayer(t *testing.T) {
-	now := time.Unix(1_757_041_495, 0)
-	storetest.RefreshSetsTheCeiling(t, func() store.Store {
-		return Wrap(memory.New(func() time.Time { return now }), keys(), nil)
-	}, now)
-}
-
-func TestRefreshStopsAtGraceThroughTheSealingLayer(t *testing.T) {
-	now := time.Unix(1_757_041_495, 0)
-	storetest.RefreshStopsAtGrace(t, func() store.Store {
-		return Wrap(memory.New(func() time.Time { return now }), keys(), nil)
-	}, now)
-}
-
-func TestWritesBindToTheRevisionThroughTheSealingLayer(t *testing.T) {
-	now := time.Unix(1_757_041_495, 0)
-	storetest.WritesBindToTheRevision(t, func() store.Store {
-		return Wrap(memory.New(func() time.Time { return now }), keys(), nil)
-	}, now)
+// Every storetest property through the sealing layer over memory: what the
+// layer passes through, it must not change.
+func TestTheSealingLayerHoldsEveryProperty(t *testing.T) {
+	storetest.Run(t, storetest.Backend{New: func(_ *testing.T, clock func() time.Time) store.Store {
+		return Wrap(memory.New(clock), keys(), nil)
+	}})
 }

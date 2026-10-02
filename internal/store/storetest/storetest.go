@@ -954,3 +954,54 @@ func WritesBindToTheRevision(t *testing.T, newStore func() store.Store, now time
 		t.Fatal("the delete at the current revision did not delete")
 	}
 }
+
+// Backend is a store.Store implementation the properties run against. New
+// returns a fresh, empty store whose clock is clock; a property moves time
+// by changing what clock returns. A store that is also a Planter gets
+// IdempotencyReservesOnce's holderless case.
+type Backend struct {
+	New func(t *testing.T, clock func() time.Time) store.Store
+}
+
+// t0 is the instant the fixed-clock properties run at: far from the wall
+// clock on purpose, so a backend that reads time.Now where it should read
+// its clock fails.
+var t0 = time.Unix(1_000_000, 0).UTC()
+
+// Run runs every property against b, each as its own subtest.
+func Run(t *testing.T, b Backend) {
+	fixed := func(t *testing.T) func() store.Store {
+		return func() store.Store { return b.New(t, func() time.Time { return t0 }) }
+	}
+	for _, p := range []struct {
+		name string
+		run  func(*testing.T)
+	}{
+		{"JoinRacesRevocation", func(t *testing.T) { JoinRacesRevocation(t, fixed(t), t0) }},
+		{"PolicyRevision", func(t *testing.T) { PolicyRevision(t, fixed(t), t0) }},
+		{"RevocationIsMonotonic", func(t *testing.T) { RevocationIsMonotonic(t, fixed(t), t0) }},
+		{"IdempotencyReservesOnce", func(t *testing.T) { IdempotencyReservesOnce(t, fixed(t), t0) }},
+		{"IdempotencyLeaseExpires", func(t *testing.T) {
+			IdempotencyLeaseExpires(t, func() (store.Store, func(time.Duration)) {
+				var mu sync.Mutex
+				now := t0
+				s := b.New(t, func() time.Time { mu.Lock(); defer mu.Unlock(); return now })
+				return s, func(d time.Duration) { mu.Lock(); now = now.Add(d); mu.Unlock() }
+			}, t0)
+		}},
+		{"TokenIndex", func(t *testing.T) { TokenIndex(t, fixed(t), t0) }},
+		{"DeleteTokenRemovesOne", func(t *testing.T) { DeleteTokenRemovesOne(t, fixed(t), t0) }},
+		{"DeleteTokenRacesRedeem", func(t *testing.T) { DeleteTokenRacesRedeem(t, fixed(t), t0) }},
+		{"RevocationMarks", func(t *testing.T) { RevocationMarks(t, fixed(t), t0) }},
+		{"CeilingShortensOnly", func(t *testing.T) { CeilingShortensOnly(t, fixed(t), t0) }},
+		{"RefreshSetsTheCeiling", func(t *testing.T) { RefreshSetsTheCeiling(t, fixed(t), t0) }},
+		{"RefreshStopsAtGrace", func(t *testing.T) { RefreshStopsAtGrace(t, fixed(t), t0) }},
+		{"WritesBindToTheRevision", func(t *testing.T) { WritesBindToTheRevision(t, fixed(t), t0) }},
+	} {
+		t.Run(p.name, p.run)
+	}
+	for _, p := range lifted {
+		p := p
+		t.Run(p.name, func(t *testing.T) { p.run(t, b) })
+	}
+}

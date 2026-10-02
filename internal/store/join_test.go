@@ -8,7 +8,6 @@ import (
 
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/store/memory"
-	"github.com/rhwendt/port49/internal/store/storetest"
 )
 
 var t0 = time.Unix(1_757_041_495, 0)
@@ -425,8 +424,4 @@ func TestUnreadableContextErrorWithoutAnErr(t *testing.T) {
 	if e.Error() == "" || e.Unwrap() != nil || errors.Is(e, store.ErrNotFound) {
 		t.Fatalf("%q %v", e.Error(), e.Unwrap())
 	}
-}
-
-func TestJoinRacesRevocationOnTheMemoryStore(t *testing.T) {
-	storetest.JoinRacesRevocation(t, func() store.Store { return newMemory() }, t0)
 }
