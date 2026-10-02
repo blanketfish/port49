@@ -2,8 +2,10 @@ package policy
 
 import (
 	"bytes"
+	"fmt"
 	"net/netip"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -283,5 +285,86 @@ func TestExplainSaysTheSessionAge(t *testing.T) {
 	} {
 		_, out := explained(t, sessionAgePolicy(t, tc.ages...), "s", "", "leaf-01", "", false)
 		mustContain(t, out, tc.want)
+	}
+}
+
+// Answer is the one verdict and reason an explanation gives, in Render's
+// order, or the mint error the broker would answer instead (plan 7c).
+func TestAnswerIsRendersVerdict(t *testing.T) {
+	at := time.Date(2026, 10, 2, 3, 0, 0, 0, time.UTC)
+	for _, c := range []struct {
+		e       Explanation
+		verdict string
+		reason  decision.Reason
+		mintErr string
+	}{
+		{Explanation{Revoked: at}, "deny", decision.CredentialRevoked, ""},
+		{Explanation{Refused: "no_key_group"}, "deny", decision.DeviceUnknown, ""},
+		{Explanation{Quarantined: true}, "deny", decision.DeviceQuarantined, ""},
+		{Explanation{NoGrants: true}, "deny", decision.NoGrantsMatched, ""},
+		{Explanation{MintError: "attribute_too_long"}, "", "", "attribute_too_long"},
+	} {
+		v, r, m := c.e.Answer()
+		if v != c.verdict || r != c.reason || m != c.mintErr {
+			t.Errorf("%+v: %s %s %s", c.e, v, r, m)
+		}
+	}
+	var b strings.Builder
+	Explanation{Subject: "user:alice@example.com", Device: "leaf1", Revoked: at}.Render(&b, false)
+	if !strings.HasPrefix(b.String(), "deny credential_revoked\n  a revocation stands against user:alice@example.com "+
+		"since 2026-10-02T03:00:00Z") {
+		t.Fatalf("%q", b.String())
+	}
+	b.Reset()
+	Explanation{Subject: "ops", Device: "leaf1", NoGrants: true}.Render(&b, false)
+	if got := b.String(); strings.Contains(got, "()") || !strings.Contains(got, "selects leaf1;") {
+		t.Fatalf("a no-grant answer with no platform: %q", got)
+	}
+}
+
+// wouldPermit compiles each role's permits once per platform per policy and
+// keeps them (spec §13 decision 34; pre-flight M15): a second denied explain
+// on the platform compiles nothing and gives the same answer.
+func TestWouldPermitCompilesOncePerPlatform(t *testing.T) {
+	p := mustParse(t, `
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: ops, privilege: admin, permit: ["reload **"]}, {name: ro, privilege: readonly, permit: [show **]}]
+subjects: [{name: s, identity: ["user:alice@example.com"], username: alice, token_ttl: 60s}]
+grants: [{subject: s, scope: all_devices, roles: [ro]}]`)
+	first, err := p.wouldPermit("reload now", "arista_eos")
+	if err != nil || strings.Join(first, " ") != "ops" {
+		t.Fatalf("%v %v", first, err)
+	}
+	second, err := p.wouldPermit("reload now", "arista_eos")
+	n := 0
+	p.permitsAlone.Range(func(any, any) bool { n++; return true })
+	if err != nil || strings.Join(second, " ") != "ops" || n != 1 {
+		t.Fatalf("%v %v; %d platform(s) compiled", second, err, n)
+	}
+}
+
+// Concurrent denied explains share one policy's programs: whichever compile
+// is stored first, every caller gets the same answer (run under -race).
+func TestWouldPermitIsSafeConcurrently(t *testing.T) {
+	p := mustParse(t, `
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: ops, privilege: admin, permit: ["reload **"]}, {name: ro, privilege: readonly, permit: [show **]}]
+subjects: [{name: s, identity: ["user:alice@example.com"], username: alice, token_ttl: 60s}]
+grants: [{subject: s, scope: all_devices, roles: [ro]}]`)
+	var wg sync.WaitGroup
+	errs := make(chan string, 16)
+	for range 16 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if got, err := p.wouldPermit("reload now", "arista_eos"); err != nil || strings.Join(got, " ") != "ops" {
+				errs <- fmt.Sprintf("%v %v", got, err)
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for e := range errs {
+		t.Error(e)
 	}
 }

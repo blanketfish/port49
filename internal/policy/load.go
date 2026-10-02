@@ -89,6 +89,12 @@ type Policy struct {
 	overrides map[string]filePlatform
 	// projected memoizes project, keyed by what a projection reads.
 	projected sync.Map
+	// permitsAlone memoizes wouldPermit's programs, keyed by platform: each
+	// role's permits alone, compiled once per policy (a Policy is one
+	// bundle, never changed once loaded), so a denied explain matches and
+	// compiles nothing (spec §13 decision 34). The key is a device's
+	// platform, a set the inventory bounds, never a caller's text.
+	permitsAlone sync.Map
 
 	levels  []string          // the declared ordering, lowest first
 	parents map[string]string // level → parent, for rendering

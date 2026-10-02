@@ -151,6 +151,7 @@ func (b *Broker) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/refresh", b.refresh)
 	mux.HandleFunc("GET /v1/identity", b.identity)
 	mux.HandleFunc("POST /v1/tokens/revoke", b.tokensRevoke)
+	mux.HandleFunc("POST /v1/explain", b.explain)
 	mux.HandleFunc("GET /healthz", b.healthz)
 	mux.HandleFunc("GET /readyz", b.readyz)
 	return mux
