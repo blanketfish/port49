@@ -626,9 +626,10 @@ func (w *wrapped) AnnotateContext(ctx context.Context, k store.ContextKey, discH
 
 // RefreshContext is a rewrite that extends the record, as the inner
 // store's does; ExpectRev is compared with the revision each attempt
-// reads. The window, the blob hash and the clocks it writes are sealed
-// (plan 7d). The credential's sid is not rewritten: a rotated sid moves in
-// the plaintext index instead, through ReindexSid, which is what
+// reads. The window, the blob hash, the clocks and a rotated sid it writes
+// are sealed (plan 7d). A rotated sid is written into the sealed credential
+// (store.ApplyRefresh), so the re-index compares the index against it, and
+// moves in the plaintext index too, through ReindexSid, which is what
 // revocation by sid reads.
 func (w *wrapped) RefreshContext(ctx context.Context, k store.ContextKey, r store.ContextRefresh, ttl time.Duration) error {
 	return w.rewrite(ctx, k, ttl, store.MaxJoinAttempts, func(c *store.Context) (bool, error) {
