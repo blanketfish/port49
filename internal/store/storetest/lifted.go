@@ -835,10 +835,10 @@ func Idempotency(t *testing.T, b Backend) {
 		Response: []byte("resp"), ExpiresAt: t0.Add(time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
-	if r, ok := Peek(t, s, "user:alice", "k1"); !ok || string(r.Response) != "resp" {
+	if r, ok := Peek(t, s, t0, "user:alice", "k1"); !ok || string(r.Response) != "resp" {
 		t.Fatalf("%+v %v", r, ok)
 	}
-	if _, ok := Peek(t, s, "user:bob", "k1"); ok {
+	if _, ok := Peek(t, s, t0, "user:bob", "k1"); ok {
 		t.Fatal("idempotency is per principal")
 	}
 }

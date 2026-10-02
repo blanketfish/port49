@@ -28,11 +28,13 @@ type Planter interface {
 // there is one, read through ReserveIdempotency, which returns a live record
 // untouched: store.Store has no plain read, since nothing but a reservation
 // reads one. A probe reservation it writes when there is none is released.
-func Peek(t *testing.T, s store.Store, principal, key string) (store.Idempotency, bool) {
+// now is what the store's clock reads, so the probe's expiry, and its lease
+// on a backend that leases, follow the store's time and not the wall's.
+func Peek(t *testing.T, s store.Store, now time.Time, principal, key string) (store.Idempotency, bool) {
 	t.Helper()
 	ctx := context.Background()
 	cur, ok, err := s.ReserveIdempotency(ctx, principal, key, store.Idempotency{BodyHash: "peek", Holder: "storetest-peek",
-		Pending: true, ExpiresAt: time.Now().Add(time.Hour)})
+		Pending: true, ExpiresAt: now.Add(time.Hour)})
 	if err != nil {
 		t.Fatalf("peeking at the idempotency record %q: %v", key, err)
 	}
