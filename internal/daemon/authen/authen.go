@@ -604,6 +604,11 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 		// still in flight, or after a mark that did not land, replays the PASS
 		// onto an unrevoked context; Task 4b's replay check, on the presented
 		// credential's own marks, closes both (spec §5.6).
+		//
+		// Interim and fail-closed: this marking departs from §5.6, where a
+		// committed write replays PASS and one not committed is token_spent.
+		// Task 4b replaces it with that replay check on the presented
+		// credential, which restores §5.6 exactly (Task 4 review ruling I4).
 		rec.Principal = winner.Principal
 		ferr := s.h.store.FailReceipt(ctx, rk)
 		s.h.metrics.StoreOps.WithLabelValues("fail_receipt", storeOutcome(ferr)).Inc()
