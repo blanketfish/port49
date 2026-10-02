@@ -88,12 +88,14 @@ type fakeBroker struct {
 }
 
 // refusal is one scripted answer: a status, an api.Error, a Retry-After.
-// empty answers the status with no body at all, as an intermediary might.
+// empty answers the status with no body at all, as an intermediary might;
+// body, when set, is sent as is in place of e.
 type refusal struct {
 	status     int
 	e          api.Error
 	retryAfter string
 	empty      bool
+	body       string
 }
 
 func (fb *fakeBroker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -142,8 +144,9 @@ func (fb *fakeBroker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if ref.retryAfter != "" {
 			w.Header().Set("Retry-After", ref.retryAfter)
 		}
-		if ref.empty {
+		if ref.empty || ref.body != "" {
 			w.WriteHeader(ref.status)
+			_, _ = io.WriteString(w, ref.body)
 			return
 		}
 		writeJSON(w, ref.status, ref.e)
@@ -2026,6 +2029,33 @@ func TestARevocationsUndecodableAnswerMayBeInForce(t *testing.T) {
 	select {
 	case <-r.a.Done():
 		t.Fatal("an undecodable revocation answer ended the session")
+	default:
+	}
+}
+
+// A 200 to a revocation that decodes but names no revocation ({} or null,
+// no "by") is no answer either: the broker always says what it revoked, so
+// the operator is told it may be in force, never handed a silent success.
+func TestARevocationsEmptyAnswerMayBeInForce(t *testing.T) {
+	r := newRig(t)
+	req := api.RevokeRequest{Principal: "user:carol@example.com"}
+	for _, body := range []string{"{}", "null", `{"by":""}`} {
+		r.fb.mu.Lock()
+		r.fb.answers = map[string]refusal{"/v1/tokens/revoke": {status: 200, body: body}}
+		r.fb.mu.Unlock()
+		_, err := r.a.Revoke(context.Background(), req)
+		var ue *UnansweredRevokeError
+		if !errors.As(err, &ue) || !strings.Contains(err.Error(), "it may be in force") {
+			t.Fatalf("%s, the agent: %v", body, err)
+		}
+		_, err = socketFor(t, r.a).Revoke(context.Background(), req)
+		if err == nil || !strings.Contains(err.Error(), "it may be in force") {
+			t.Fatalf("%s, through the socket: %v", body, err)
+		}
+	}
+	select {
+	case <-r.a.Done():
+		t.Fatal("an empty revocation answer ended the session")
 	default:
 	}
 }

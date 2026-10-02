@@ -550,9 +550,19 @@ func (a *Agent) Revoke(ctx context.Context, req api.RevokeRequest) (api.RevokeRe
 	var out api.RevokeResponse
 	ctx, cancel := context.WithTimeout(ctx, revokeTimeout)
 	defer cancel()
-	return out, a.exchange(ctx, a.revokeClient, func(err error) error {
+	unanswered := func(err error) error {
 		return &UnansweredRevokeError{Who: "the broker at " + a.broker, Principal: req.Principal != "", Err: err}
-	}, http.MethodPost, "/v1/tokens/revoke", req, &out)
+	}
+	if err := a.exchange(ctx, a.revokeClient, unanswered, http.MethodPost, "/v1/tokens/revoke", req, &out); err != nil {
+		return out, err
+	}
+	if out.By == "" {
+		// The broker always says what it revoked: a 200 that names
+		// nothing ({}, null) is an intermediary's, and the broker may
+		// still have acted.
+		return api.RevokeResponse{}, unanswered(errors.New("its 200 named no revocation"))
+	}
+	return out, nil
 }
 
 // UnansweredRevokeError is a revocation sent and never answered, by the
