@@ -340,9 +340,9 @@ inventory:
 		testpki.InvDaemonCert, testpki.InvDaemonKey, li.pubFile, state, filepath.Join(filepath.Dir(policy), "revocations.json"))
 	// port49d never creates its revocations file (spec §13 decision 32,
 	// amended 2026-10-02): it is written empty on purpose beside the policy,
-	// in the directory privateDir made.
-	if err := os.WriteFile(filepath.Join(filepath.Dir(policy), "revocations.json"), []byte("{\"revocations\": []}\n"),
-		0o600); err != nil {
+	// in the directory privateDir made, unless a port49d this run started
+	// already holds it.
+	if err := writeEmptyRevocations(filepath.Join(filepath.Dir(policy), "revocations.json")); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(root, "tests", "lab", "logs", "port49d-lab-"+l.p.name+"-service.yaml")
