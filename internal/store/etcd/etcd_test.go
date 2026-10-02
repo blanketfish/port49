@@ -382,3 +382,49 @@ func TestAnUndecodableIndexRecordIsAnError(t *testing.T) {
 		t.Fatalf("a walk over an undecodable record answered %v", ps)
 	}
 }
+
+// A context record that does not decode is unreadable, as one the sealing
+// layer cannot open is: it carries its revision, the narrow setters refuse
+// it, and a login replaces it. As a plain error on every read it would
+// lock the user out on that device until its lease ended (Task 6 review
+// M-4).
+func TestAnUndecodableContextIsReplacedByALogin(t *testing.T) {
+	ctx := context.Background()
+	s := onShared(t, func() time.Time { return t0 })
+	k := store.ContextKey{NAS: "leaf-01", Username: "alice"}
+	ref := store.ContextRef{NAS: k.NAS, Username: k.Username}
+	if err := s.PutContext(ctx, k, store.Context{CtxID: "old", Principal: "user:a", Username: "alice"},
+		time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.IndexContext(ctx, "user:a", "sid-old", "", ref, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	put, err := s.ctx.Put(ctx, s.k.context(k), "not json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var u *store.UnreadableContextError
+	if _, err := s.GetContext(ctx, k); !errors.As(err, &u) || u.Rev != uint64(put.Header.Revision) {
+		t.Fatalf("a read of an undecodable context: %v", err)
+	}
+	if err := s.TouchContext(ctx, k, time.Hour); !errors.As(err, &u) {
+		t.Fatalf("a touch of an undecodable context: %v", err)
+	}
+	login := store.Context{CtxID: "new", Principal: "user:b", Username: "alice", PrivLvl: 1, AuthTime: t0,
+		RefreshedAt: t0, Credential: store.Credential{Method: "oidc", Sid: "sid-new"}}
+	res, err := store.JoinContext(ctx, s, k, login, t0, t0, time.Hour,
+		store.LoginIndex{Principal: "user:b", Sid: "sid-new", TTL: time.Hour})
+	if err != nil || !res.ReplacedUnreadable {
+		t.Fatalf("a login over an undecodable context: %+v %v", res, err)
+	}
+	if got, err := s.GetContext(ctx, k); err != nil || got.CtxID != "new" {
+		t.Fatalf("after the login: %+v %v", got, err)
+	}
+	if refs, err := s.ContextsByPrincipal(ctx, "user:a"); err != nil || len(refs) != 0 {
+		t.Fatalf("the replaced context is still indexed: %v %v", refs, err)
+	}
+	if refs, err := s.ContextsBySid(ctx, "sid-new"); err != nil || len(refs) != 1 || refs[0] != ref {
+		t.Fatalf("the login is not indexed: %v %v", refs, err)
+	}
+}

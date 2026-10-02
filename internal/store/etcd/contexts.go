@@ -18,7 +18,8 @@ import (
 // of one revision.
 type ctxSnap struct {
 	rec    ctxRec
-	found  bool // present and not past its expiry
+	found  bool  // present and not past its expiry
+	bad    error // present and undecodable: rec is empty (undecodable)
 	mod    int64
 	idx    idxRec
 	idxMod int64
@@ -34,6 +35,19 @@ func refOf(k store.ContextKey) store.ContextRef {
 	return store.ContextRef{NAS: k.NAS, Username: k.Username}
 }
 
+// undecodable is a context record that is there and does not decode. It is
+// unreadable, as one the sealing layer cannot open is
+// (store.UnreadableContextError), so a login replaces it on its revision;
+// a plain error on every read would lock the user out on that device until
+// its lease ended (Task 6 review M-4). Its revocation is not known, so the
+// replace keeps none: that lifts no more than deleting the record, which
+// the writer that garbled it could do as well, and the marks a login
+// compares still stand. The narrow setters refuse it with this error.
+func undecodable(k store.ContextKey, mod int64, err error) error {
+	return &store.UnreadableContextError{Rev: uint64(mod),
+		Err: fmt.Errorf("etcd: context %v does not decode: %w", k, err)}
+}
+
 func (s *Store) readCtx(ctx context.Context, k store.ContextKey, marks ...[2]string) (ctxSnap, error) {
 	ops := []clientv3.Op{clientv3.OpGet(s.k.context(k)), clientv3.OpGet(s.k.indexed(refOf(k)))}
 	for _, m := range marks {
@@ -45,10 +59,12 @@ func (s *Store) readCtx(ctx context.Context, k store.ContextKey, marks ...[2]str
 	}
 	var snap ctxSnap
 	if kvs := resp.Responses[0].GetResponseRange().Kvs; len(kvs) == 1 {
+		snap.mod = kvs[0].ModRevision
 		if err := json.Unmarshal(kvs[0].Value, &snap.rec); err != nil {
-			return ctxSnap{}, fmt.Errorf("etcd: context %v does not decode: %w", k, err)
+			snap.rec, snap.found, snap.bad = ctxRec{}, true, undecodable(k, snap.mod, err)
+		} else {
+			snap.found = snap.rec.ExpiresAt.After(s.now())
 		}
-		snap.mod, snap.found = kvs[0].ModRevision, snap.rec.ExpiresAt.After(s.now())
 	}
 	if kvs := resp.Responses[1].GetResponseRange().Kvs; len(kvs) == 1 {
 		if err := json.Unmarshal(kvs[0].Value, &snap.idx); err != nil {
@@ -150,12 +166,19 @@ func (c *seenCache) take(key string, mod int64) (ctxRec, bool) {
 
 // GetContext reads the context alone: its revisions are its key's.
 func (s *Store) GetContext(ctx context.Context, k store.ContextKey) (store.Context, error) {
-	var r ctxRec
-	mod, ok, err := getJSON(ctx, s.ctx, s.k.context(k), &r)
+	resp, err := s.ctx.Get(ctx, s.k.context(k))
 	if err != nil {
-		return store.Context{}, err
+		return store.Context{}, unavailable(err)
 	}
-	if !ok || !r.ExpiresAt.After(s.now()) {
+	if len(resp.Kvs) == 0 {
+		return store.Context{}, store.ErrNotFound
+	}
+	var r ctxRec
+	mod := resp.Kvs[0].ModRevision
+	if err := json.Unmarshal(resp.Kvs[0].Value, &r); err != nil {
+		return store.Context{}, undecodable(k, mod, err)
+	}
+	if !r.ExpiresAt.After(s.now()) {
 		return store.Context{}, store.ErrNotFound
 	}
 	s.seen.put(s.k.context(k), mod, r)
@@ -311,6 +334,9 @@ func (s *Store) rewriteContext(ctx context.Context, k store.ContextKey, rev uint
 	if !snap.found {
 		return 0, store.ErrNotFound
 	}
+	if snap.bad != nil {
+		return 0, snap.bad
+	}
 	if uint64(snap.mod) != rev {
 		return 0, store.ErrConflict
 	}
@@ -374,6 +400,9 @@ func (s *Store) mutate(ctx context.Context, k store.ContextKey,
 		}
 		if !snap.found {
 			return store.ErrNotFound
+		}
+		if snap.bad != nil {
+			return snap.bad
 		}
 		r := snap.rec
 		if r.PolicyMoved {
