@@ -9740,9 +9740,11 @@ store:
   		}, true, true, "at least store.etcd.call_timeout"},
   		{"a prefix not absolute", func(s *storeYAML) { s.Etcd.Prefix = "port49/" }, true, true, "store.etcd.prefix"},
   		{"a hold too short", func(s *storeYAML) { s.Etcd.HoldTTL = time.Second }, true, true, "store.etcd.hold_ttl"},
-  		// The floor (8b re-review 2 R2-I1): clientv3's keepalive loop checks
-  		// every 500ms, so under 10s a healthy lease can report ttl/2 or less
-  		// and the fence drops the hold.
+  		// The floor (8b re-review 2 R2-I1, round 3b): clientv3's keepalive
+  		// loop checks every 500ms, so a healthy lease can report as little as
+  		// floor(2*ttl/3 - 0.5s - RTT); at 10s that stays at half of ttl or
+  		// more for a round trip up to about 1.17s, and below 10s the bound
+  		// shrinks to 0.5s or less.
   		{"a hold under 10s", func(s *storeYAML) { s.Etcd.HoldTTL = 9 * time.Second }, true, true,
   			"store.etcd.hold_ttl 9s: must be 10s to 1m0s"},
   		{"a start timeout too short", func(s *storeYAML) { d := time.Second; s.Etcd.StartTimeoutSet = &d }, true, true,
@@ -10934,15 +10936,14 @@ store:
   	}
   }
 
-  // A slow but healthy store keeps the hold: each fence read answers late,
-  // inside its ttl/6 deadline, and the lease's keepalives land, so the
-  // TTL each read reports is above ttl/2 at its send (8b re-review R-M2).
-  // Judged when the read returns instead, a read slower than about
-  // floor(2*ttl/3) - ttl/2 would drop the hold. It runs at the 15s
-  // default, not the 10s floor: the proxy's delay slows the keepalives
-  // too, and at 10s a healthy lease stays above ttl/2 only while their
-  // round trip is under about 0.17s, too little for a read slow enough
-  // to fail the mutation (8b re-review 2 R2-I1).
+  // A slow but healthy store keeps the hold at the 10s floor: each fence
+  // read answers late, inside its ttl/6 deadline, and the lease's
+  // keepalives land late too, so the TTL each read reports dips to 6s and
+  // at times 5s, never under the 5s line (8b re-review R-M2; round 3b).
+  // Judged when the read returns instead, a read of 1s or more that
+  // reported 6s drops the hold; lost at 5s rather than under it, a read
+  // that reported 5s drops it. Each dip lasts a fraction of a second, so
+  // the test watches for 60s to catch both mutations.
   func TestASlowAnsweredReadKeepsTheHold(t *testing.T) {
   	srv := etcdtest.Start(t, etcdtest.Options{})
   	proxy := etcdtest.NewProxy(t, strings.TrimPrefix(srv.Endpoint, "http://"))
@@ -10953,21 +10954,21 @@ store:
   	defer s.Close()
   	ctx, cancel := context.WithCancel(context.Background())
   	defer cancel()
-  	lost, release, err := s.Hold(ctx, 15*time.Second, "port49d one", func(string) {})
+  	lost, release, err := s.Hold(ctx, 10*time.Second, "port49d one", func(string) {})
   	if err != nil {
   		t.Fatal(err)
   	}
   	defer release()
-  	// Each fence read (a Get and a TimeToLive) then answers in about 1.2s
-  	// to 1.5s: over the 0.5s to 1s that judging at the return allows at
-  	// the lowest healthy TTL, under the read's 2.5s deadline. A keepalive's
-  	// round trip is about 0.6s, so a healthy lease still reports 8s or
-  	// more (floor(10 - 0.5 - 0.6)), above the 7.5s line.
-  	proxy.Delay(300 * time.Millisecond)
+  	// Each fence read (a Get and a TimeToLive) then answers in about 1s to
+  	// 1.4s, under the read's 1.67s deadline. A keepalive's round trip is
+  	// about 0.5s: over the 0.17s past which a healthy lease reports 5s at
+  	// its lowest (floor(6.67 - 0.5 - 0.5)), under the 1.17s past which it
+  	// reports 4s.
+  	proxy.Delay(250 * time.Millisecond)
   	select {
   	case <-lost:
   		t.Fatal("a slow but healthy store lost the hold")
-  	case <-time.After(45 * time.Second):
+  	case <-time.After(60 * time.Second):
   	}
   }
 
@@ -10994,8 +10995,8 @@ store:
   Expected: FAIL to build (`Hold` undefined).
 
   In `TestASlowAnsweredReadKeepsTheHold`, measure the fence's read time and the keepalive's
-  round trip once under the delay. Tune `Delay` until each read answers between 1s and 2s, with
-  the keepalive's round trip under 1.5s. Report the values you used.
+  round trip once under the delay. Tune `Delay` until each read answers between 1s and 1.5s,
+  with the keepalive's round trip between 0.3s and 0.9s. Report the values you used.
 
 - [ ] **Step 2: The hold and its fence.** Create `internal/store/etcd/meta.go`:
 
@@ -11103,14 +11104,19 @@ store:
   // expires is when the lease expires at the latest by the last answer:
   // its send time plus the TTL it reported, which etcd counted after the
   // send, so never later than etcd's own. An answered read is judged at
-  // its send time: the hold is lost when the TTL it reported is half of ttl
-  // or less (the keepalives stalled while reads answer; re-check 2 M-B7),
+  // its send time: the hold is lost when the TTL it reported is under half
+  // of ttl (the keepalives stalled while reads answer; re-check 2 M-B7),
   // never by how long the read took, so a slow but healthy read keeps it
-  // (8b re-review R-M2). With the reads not answering, it is lost once
-  // expires has half of ttl or less left. Reads are at
-  // most ttl/3 apart (a tick, then a read up to ttl/6 long), so the loss
-  // comes at least ttl/6 before etcd can expire the lease and a second
-  // port49d take the keyspace. Stamping at the send, and reading the TTL
+  // (8b re-review R-M2). Under, not at: TTL is whole seconds rounded
+  // down, so a healthy lease at its lowest can report exactly ttl/2, and
+  // losing there would drop it (8b round 3b). With the reads not
+  // answering, it is lost once expires has half of ttl or less left.
+  // Reads are at most ttl/3 apart (a tick, then a read up to ttl/6 long).
+  // A read that kept the hold reported ttl/2 or more, and etcd's count is
+  // never below the reported one, so the lease had ttl/2 or more then;
+  // the next decision comes within ttl/3, with at least ttl/6 left. So
+  // the loss comes at least ttl/6 before etcd can expire the lease and a
+  // second port49d take the keyspace. Stamping at the send, and reading the TTL
   // rather than counting from the last answer, is what keeps that margin:
   // the lease's last keepalive can be up to ttl/3 older than the last
   // answered read. A process paused past that is the residual: its next
@@ -11145,7 +11151,7 @@ store:
   		case err == nil && (len(resp.Kvs) == 0 || clientv3.LeaseID(resp.Kvs[0].Lease) != sess.Lease() || left.TTL <= 0):
   			lose()
   			return
-  		case err == nil && time.Duration(left.TTL)*time.Second <= ttl/2:
+  		case err == nil && time.Duration(left.TTL)*time.Second < ttl/2:
   			lose()
   			return
   		case err == nil:
@@ -11161,12 +11167,13 @@ store:
   `TimeToLive`'s `TTL` is whole seconds, rounded down, which only moves the estimate earlier.
   clientv3's keepalive loop sends the next keepalive ttl/3 after a response but checks only
   every 500ms (`retryConnWait`, lease.go), so etcd renews at most ttl/3 + 0.5s + a round trip
-  apart. A healthy lease therefore reports at least floor(2·ttl/3 − 0.5s − RTT), which must
-  stay above ttl/2. At the smallest `hold_ttl` (10 s, the config floor; 8b re-review 2 R2-I1)
-  that is 6 s, above the 5 s line, while the round trip is under about 0.17 s; at the 15 s
-  default it is 8 s or more, above 7.5 s, while it is under about 1.5 s. Below 10 s a healthy
-  lease reports ttl/2 or less and the hold drops. That holds however long the read took,
-  since an answered read is judged at its send.
+  apart. A healthy lease therefore reports at least floor(2·ttl/3 − 0.5s − RTT), which must not
+  fall under ttl/2 (the loss is at `< ttl/2`; round 3b). At the smallest `hold_ttl` (10 s, the
+  config floor; 8b re-review 2 R2-I1) that is 5 s or more while the round trip is under about
+  1.17 s; at the 15 s default it is 8 s or more, above 7.5 s, while it is under about 1.5 s.
+  Below 10 s the round trip it tolerates is 0.5 s or less. A store whose round trip passes
+  the bound drops the hold and goes dark, never an overlap. That holds however long the read
+  took, since an answered read is judged at its send.
 
   Check `concurrency.WithContext` and `Session.Orphan` in v3.6.15's `concurrency` package (the
   pre-flight review compiled `WithContext`). If a name differs, use what the package offers, as
@@ -11181,6 +11188,12 @@ store:
   3. In `fence`, judge an answered read when it returns (set `expires`, then check
      `time.Until(expires) <= ttl/2` after every read). `TestASlowAnsweredReadKeepsTheHold` must
      fail.
+  4. In `fence`, lose an answered read at `left.TTL <= ttl/2` instead of `< ttl/2`.
+     `TestASlowAnsweredReadKeepsTheHold` must fail. It fails only when a fence read lands in a
+     dip where the lease reports exactly 5s, which the test makes likely but cannot force.
+     Run each of mutations 3 and 4 five times and report how many runs caught it. If either
+     is caught in fewer than five, lengthen the watch or move the keepalive round trip
+     toward 0.9s, and say what you changed.
 
 - [ ] **Step 3: The broker's start, failing first.** In `internal/broker/refresh_test.go`, add:
 
@@ -14046,7 +14059,11 @@ measurement on a hang of its own, the store returned between them. On each image
 - **etcd itself.** Run three or five members in the devices' region, with:
   - client-certificate auth and auth enabled;
   - `--auto-compaction-mode=periodic --auto-compaction-retention=1h`, and defragmentation;
-  - a quota above the live records.
+  - a quota above the live records;
+  - **a round trip from port49d under about 1.17s at `hold_ttl` 10s, or 1.5s at 15s.** Past
+    that, a healthy lease can report under half of `hold_ttl`, and port49d drops its hold and
+    closes every listener (dark, never two port49d on one keyspace). A cross-site etcd should
+    use the 15s default or more.
 - **Who may write etcd.** The daemon's client certificate can write tokens, receipts, contexts
   and the index. With it alone, a thief can replay records port49 sealed, never forge them:
   while port49d runs, an earlier version of a session's own context; across a port49d
