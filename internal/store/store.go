@@ -410,6 +410,12 @@ type ContextRefresh struct {
 	// Empty leaves it alone — a refresh that did not recompute policy must
 	// not erase the hash the authorizer reads.
 	BlobHash string
+	// Sid, when non-empty, is the OIDC session id a refresh rotated to: it
+	// replaces the context's Credential.Sid, so the sealed record names
+	// the sid the index lists, and the re-index can tell a sid a store
+	// write swapped from one a refresh rotated (Task 7b review I-2). Empty
+	// leaves it alone.
+	Sid string
 	// SessionAge, when set, is the ceiling the policy in force gives this
 	// context: SessionExpires becomes AuthTime plus it, and zero clears it
 	// (never). A refresh is a fresh authentication event, so it may lengthen

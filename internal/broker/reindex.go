@@ -11,15 +11,15 @@ import (
 
 // ReindexContexts is what port49d does with the contexts
 // (*etcd.Store).Unindexed names (plan 7d; Ruling 6; re-check IA2): each
-// one that opens and whose index record does not list its own principal
-// and certificate, read sealed, or lists no sid while it has one, is
-// indexed again under its own principal, sid and certificate, and judged
-// at once against the policy in force, since a refresh that ran while it
-// was hidden never reached it. A record rewritten to list another
-// principal hides the context as a deleted one does, so the compare is
-// with the sealed principal, never with any principal listed (re-check
-// I2). A sid is compared only by its absence: a session refresh rotates
-// the sid in the index and not on the record (session.Manager.Refresh).
+// one that opens and whose own principal, sid and certificate, read
+// sealed, are not each listed live with its lookup entry in place, is
+// indexed again under all three, and judged at once against the policy in
+// force, since a refresh that ran while it was hidden never reached it. A
+// record rewritten to list another principal or sid, or a lookup entry
+// deleted, hides the context as a deleted record does, so the compare is
+// with the sealed keys, never with any key listed (re-check I2; Task 7b
+// review I-2). A session refresh writes a rotated sid into the record as
+// well as the index (session.Manager.Refresh), so a rotation is no loss.
 //
 // One that a standing mark revokes (store.Marks) is marked instead of
 // judged: the revocation walked the index, and missed it.
@@ -95,7 +95,7 @@ func (b *Broker) reindexContext(ctx context.Context, cur *policy.Policy, r store
 		return false, err
 	}
 	ck := store.CertKey(c.Credential.Issuer, c.Credential.Serial)
-	if slices.Contains(r.Principals, c.Principal) && (c.Credential.Sid == "" || len(r.Sids) > 0) &&
+	if slices.Contains(r.Principals, c.Principal) && (c.Credential.Sid == "" || slices.Contains(r.Sids, c.Credential.Sid)) &&
 		(store.BlankCertKey(ck) || slices.Contains(r.Certs, ck)) {
 		return false, nil
 	}

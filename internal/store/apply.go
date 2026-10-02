@@ -27,7 +27,8 @@ func ApplyPrivilege(c *Context, level uint8) (moved bool) {
 // ApplyRefresh is RefreshContext's rule, ExpectRev aside (the caller
 // compares it with the revision it read): ErrPastGrace, writing nothing,
 // for a ceiling before r.GraceCutoff; else the window, AuthTime,
-// RefreshedAt and BlobHash. moved reports a blob hash that changed.
+// RefreshedAt, BlobHash and a rotated sid. moved reports a blob hash that
+// changed.
 // RevokedAt is not on the list: a refresh is a directory re-resolution,
 // not a credential re-verification, and the only thing that ends a
 // revocation is spec §5.6 row 6 reclaiming the record (store.Store).
@@ -52,6 +53,9 @@ func ApplyRefresh(c *Context, r ContextRefresh) (moved bool, err error) {
 	moved = r.BlobHash != "" && r.BlobHash != c.BlobHash
 	if r.BlobHash != "" {
 		c.BlobHash = r.BlobHash
+	}
+	if r.Sid != "" {
+		c.Credential.Sid = r.Sid
 	}
 	return moved, nil
 }

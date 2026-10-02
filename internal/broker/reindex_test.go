@@ -166,8 +166,8 @@ func TestReindexContextsRestoresARewrittenIndex(t *testing.T) {
 }
 
 // A context whose index record lists its principal but not its
-// certificate, or no sid while it has one, is re-indexed: a revocation by
-// either would miss it (re-check I2).
+// certificate, or not its own sid, is re-indexed: a revocation by either
+// would miss it (re-check I2; Task 7b review I-2).
 func TestReindexContextsRestoresASidOrCertificate(t *testing.T) {
 	f := newFixtureWithPolicy(t, 8, sharedPolicy)
 	ctx := context.Background()
@@ -196,10 +196,11 @@ func TestReindexContextsRestoresASidOrCertificate(t *testing.T) {
 			t.Fatalf("after %+v, not indexed by certificate: %v", listed, refs)
 		}
 	}
-	// A rotated sid lists another than the record's: that is no loss.
+	// A sid swapped for another hides it from a revocation by its own
+	// (Task 7b review I-2).
 	if n, err := f.b.ReindexContexts(ctx, []store.IndexedRef{{ContextRef: ref, Principals: []string{alicePrincipal},
-		Sids: []string{"sid-2"}, Certs: []string{ck}}}); err != nil || n != 0 {
-		t.Fatalf("ReindexContexts over a rotated sid = %d, %v", n, err)
+		Sids: []string{"sid-x"}, Certs: []string{ck}}}); err != nil || n != 1 {
+		t.Fatalf("ReindexContexts over a swapped sid = %d, %v", n, err)
 	}
 }
 

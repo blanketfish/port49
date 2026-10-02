@@ -77,15 +77,14 @@ func New(s store.Store, now func() time.Time, contextIdleTTL, indexTTL time.Dura
 // ends a revocation. See store.Store's RefreshContext.
 //
 // A rotated sid (newSid different from oldSid, both non-empty in practice)
-// moves in the index, not on the record: Credential is sealed, so the sid is
-// the one thing a narrow setter cannot write (store.Store's RefreshContext).
-// Nothing reads the sid off a context to make a decision — revocation by sid
-// reads the index — so the index is the copy that has to be right. For the
-// same reason oldSid must be the sid the caller's own session record holds,
-// never one read off a stored context: a context's recorded sid is not updated
-// by a rotation, so passing it on a second rotation removes nothing and leaves
-// the intermediate sid indexed against a live ref. That direction is
-// over-revocation, so it is safe, but it accumulates dangling entries.
+// moves on the record and in the index. The record's is the refresh's own
+// write (ContextRefresh.Sid; the sealing layer re-seals the whole record in
+// it), so the sealed record names the sid the index lists, and the re-index
+// can tell a sid a store write swapped from one rotated here (Task 7b review
+// I-2). The record is written first: a failure between the two leaves the
+// sealed sid unlisted, which the next re-index lists again. Revocation by sid
+// reads the index, so the index is still the copy that has to be right, and
+// oldSid is the sid the caller's own session record holds.
 //
 // An index entry whose context is already gone is skipped rather than treated
 // as an error: the index has its own TTL and reclaims it. The other direction
@@ -101,9 +100,12 @@ func (m *Manager) Refresh(ctx context.Context, principal string, authTime, grace
 	if err != nil {
 		return 0, err
 	}
+	rotating := newSid != "" && newSid != oldSid
 	r := store.ContextRefresh{AuthTime: authTime, RefreshedAt: m.now(), BlobHash: newBlobHash,
 		GraceCutoff: graceCutoff}
-	rotating := newSid != "" && newSid != oldSid
+	if rotating {
+		r.Sid = newSid
+	}
 	n := 0
 	for _, ref := range refs {
 		switch err := m.store.RefreshContext(ctx, keyOf(ref), r, m.contextIdleTTL); {
