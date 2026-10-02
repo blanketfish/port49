@@ -986,7 +986,9 @@ indexed under it, an unspent token), the broker revokes it as `port49 revoke --c
 origin `crl <name>`. Everything it reaches is reached, and the mark outlives a list that later goes
 stale. An OCSP response answering `revoked` for a leaf at bind, mint or refresh revokes it the same
 way, its origin `ocsp <responder>`. A `certificateHold` entry, a revoked intermediate, and an entry
-nothing holds write no mark: each is refused at every use.
+nothing holds write no mark: each is refused at every use. A mark whose origin is `crl …` or
+`ocsp …` is answered as the CA's revocation and names no lift; an operator's mark names
+`port49 revoke --lift`.
 
 A status that cannot be established (a stale list, a responder that does not answer, an issuer no
 source covers) is refused unless `on_unavailable: allow`. The refusal is answered as unavailable

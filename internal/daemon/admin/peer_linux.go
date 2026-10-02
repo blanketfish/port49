@@ -10,13 +10,13 @@ import (
 	"syscall"
 )
 
-// ownUID is port49d's own uid, which peerAllowed answers. A test swaps it,
-// so that its own uid reads as another's without needing root.
-var ownUID = func() uint32 { return uint32(os.Geteuid()) }
+// ownUID is port49d's own uid, which peerAllowed answers unless the Server
+// gives another (Server.ownUID).
+func ownUID() uint32 { return uint32(os.Geteuid()) }
 
-// peerAllowed answers port49d's own uid and root only (SO_PEERCRED), and
-// returns the caller's uid.
-func peerAllowed(c net.Conn) (uint32, error) {
+// peerAllowed answers own and root only (SO_PEERCRED), and returns the
+// caller's uid.
+func peerAllowed(c net.Conn, own uint32) (uint32, error) {
 	uc, ok := c.(*net.UnixConn)
 	if !ok {
 		return 0, errors.New("not a Unix socket")
@@ -35,7 +35,7 @@ func peerAllowed(c net.Conn) (uint32, error) {
 	if credErr != nil {
 		return 0, credErr
 	}
-	return cred.Uid, uidAllowed(cred.Uid, ownUID())
+	return cred.Uid, uidAllowed(cred.Uid, own)
 }
 
 // listenPrivate binds path as a socket that is 0600 from the instant it

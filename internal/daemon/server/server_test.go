@@ -137,6 +137,7 @@ func (c *client) recv(t *testing.T) (wire.Header, []byte) {
 type testServer struct {
 	addr      string
 	metrics   *metrics.Metrics
+	limits    *limits.Limiter
 	spool     *acct.Spool
 	cancel    context.CancelFunc
 	stopSpool context.CancelFunc
@@ -156,6 +157,25 @@ func (ts *testServer) shutdown() {
 		ts.stopSpool()
 		<-ts.spoolDone
 	})
+}
+
+// slotFree waits until 127.0.0.1 has a per-NAS connection slot free. A
+// connection's slot is released after its goroutine returns, which is after
+// the reply has reached the client and after the server's close, so a client
+// that dials again at once can still meet the cap: Accept refuses it, and the
+// close of a socket holding its unread request is a reset. A test that dials
+// one connection after another, more than the cap of 2, waits here first.
+func (ts *testServer) slotFree(t *testing.T) {
+	t.Helper()
+	if !waitFor(t, func() bool {
+		release, ok := ts.limits.Acquire(netip.MustParseAddr("127.0.0.1"))
+		if ok {
+			release()
+		}
+		return ok
+	}) {
+		t.Fatal("no per-NAS slot came free")
+	}
 }
 
 // newTestServer starts a daemon against st. authz may be nil, which uses the
@@ -214,7 +234,7 @@ func newTestServerWith(t *testing.T, log *syncBuffer, st store.Store, authz auth
 	}
 	served := make(chan struct{})
 	go func() { defer close(served); Serve(ctx, ln, d) }()
-	ts := &testServer{addr: ln.Addr().String(), metrics: m, spool: sp, cancel: cancel, stopSpool: stopSpool, served: served, spoolDone: spoolDone}
+	ts := &testServer{addr: ln.Addr().String(), metrics: m, limits: d.Limits, spool: sp, cancel: cancel, stopSpool: stopSpool, served: served, spoolDone: spoolDone}
 	t.Cleanup(ts.shutdown)
 	return ts
 }
@@ -242,7 +262,13 @@ func dial(t *testing.T, addr string, key []byte) *client {
 
 func TestPAPLoginThenAuthorizeThenAccount(t *testing.T) {
 	log := &syncBuffer{}
-	addr, _, _ := startServer(t, log)
+	st := memory.New(time.Now)
+	if _, err := st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
+		store.Token{ID: "e2e", Secret: []byte("p49_e2e"), Kind: store.KindLogin, Principal: "user:alice@example.com", ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	ts := newTestServer(t, log, st, nil)
+	addr := ts.addr
 
 	c := dial(t, addr, []byte("k2"))
 	c.send(t, wire.TypeAuthen, wire.AuthenStart{Action: wire.AuthenActionLogin, PrivLvl: 1, AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceLogin,
@@ -261,6 +287,7 @@ func TestPAPLoginThenAuthorizeThenAccount(t *testing.T) {
 	// denies: the context holds the login START's 1 until this reply grants 15
 	// and the handler records it. See TestTheDevicePrivLvlRaisedByOurOwnSessionReply
 	// in internal/daemon/author for the whole sequence.
+	ts.slotFree(t)
 	c = dial(t, addr, []byte("k2"))
 	c.send(t, wire.TypeAuthor, wire.AuthorRequest{AuthenMethod: wire.AuthenMethodTACACSPlus, PrivLvl: 1, AuthenType: wire.AuthenTypeASCII, Service: wire.AuthenServiceLogin,
 		User: []byte("alice"), Port: []byte("vty0"), Args: [][]byte{[]byte("service=shell"), []byte("cmd=")}}.Encode(), 0)
@@ -270,6 +297,7 @@ func TestPAPLoginThenAuthorizeThenAccount(t *testing.T) {
 		t.Fatalf("%+v", ar)
 	}
 
+	ts.slotFree(t)
 	c = dial(t, addr, []byte("k2"))
 	c.send(t, wire.TypeAcct, wire.AcctRequest{Flags: wire.AcctFlagStop, AuthenMethod: wire.AuthenMethodTACACSPlus, PrivLvl: 15, AuthenType: wire.AuthenTypeASCII,
 		Service: wire.AuthenServiceLogin, User: []byte("alice"), Port: []byte("vty0"), Args: [][]byte{[]byte("task_id=1"), []byte("service=shell"), []byte("cmd=show"), []byte("cmd-arg=version"), []byte("cmd-arg=<cr>")}}.Encode(), 0)
@@ -611,6 +639,7 @@ func TestPanicInOneConnectionDoesNotStopTheDaemon(t *testing.T) {
 		store.Token{ID: "after", Secret: []byte("p49_after"), Kind: store.KindLogin, Principal: "user:bob@example.com", ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
+	ts.slotFree(t)
 	c = dial(t, ts.addr, []byte("k2"))
 	c.send(t, wire.TypeAuthen, wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceLogin,
 		User: []byte("bob"), Port: []byte("vty1"), Data: []byte("p49_after")}.Encode(), 0)
@@ -1777,8 +1806,7 @@ func TestAKeyMissIsClosedAtOnceAndAHeldSourceRefusedAtAccept(t *testing.T) {
 	c.send(t, wire.TypeAuthen, wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP,
 		Service: wire.AuthenServiceLogin, User: []byte("alice"), Data: []byte("p49_e2e")}.Encode(), 0)
 	closedAtOnce(t, c)
-	c = dial(t, ts.addr, []byte("k2"))
-	closedAtOnce(t, c)
+	refusedAtAccept(t, &net.Dialer{}, ts.addr)
 	if n := testutil.ToFloat64(ts.metrics.ConnectionEvents.WithLabelValues("held_refused")); n != 1 {
 		t.Fatalf("held_refused = %v", n)
 	}
@@ -1862,11 +1890,7 @@ func TestAHeldSourceIsRefusedWithAReset(t *testing.T) {
 	c.send(t, wire.TypeAuthen, wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP,
 		Service: wire.AuthenServiceLogin, User: []byte("alice"), Data: []byte("p49_e2e")}.Encode(), 0)
 	closedAtOnce(t, c)
-	c = dial(t, ts.addr, []byte("k2"))
-	c.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
-	if _, err := c.conn.Read(make([]byte, 1)); !errors.Is(err, syscall.ECONNRESET) {
-		t.Fatalf("want the held source refused with a reset, got %v", err)
-	}
+	refusedAtAccept(t, &net.Dialer{}, ts.addr)
 }
 
 // swapAdmitter is the policy in force's admission index as port49d gives it:

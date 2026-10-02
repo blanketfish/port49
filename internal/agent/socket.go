@@ -258,7 +258,10 @@ func (c *Client) roundTrip(ctx context.Context, method, path string, in, out any
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusOK {
-		return json.NewDecoder(resp.Body).Decode(out)
+		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+			return &badAnswerError{err}
+		}
+		return nil
 	}
 	var e api.Error
 	_ = json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&e)
@@ -296,16 +299,33 @@ func (c *Client) Revoke(ctx context.Context, req api.RevokeRequest) (api.RevokeR
 	var out api.RevokeResponse
 	var sent atomic.Bool
 	ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{WroteHeaders: func() { sent.Store(true) }})
+	unanswered := func(err error) error {
+		return &UnansweredRevokeError{Who: "your agent at " + c.socket, Principal: req.Principal != "", Err: err}
+	}
 	err := c.roundTrip(ctx, http.MethodPost, "/revoke", req, &out)
-	if errors.Is(err, ErrNoAgent) && sent.Load() {
+	var bad *badAnswerError
+	switch {
+	case errors.Is(err, ErrNoAgent) && sent.Load():
 		var cause error = err
 		if ue := (*url.Error)(nil); errors.As(err, &ue) {
 			cause = ue.Err
 		}
-		return out, &UnansweredRevokeError{Who: "your agent at " + c.socket, Principal: req.Principal != "", Err: cause}
+		return out, unanswered(cause)
+	case errors.As(err, &bad):
+		// An agent that died mid-write: it may have reached the broker.
+		return api.RevokeResponse{}, unanswered(fmt.Errorf("its 200 did not decode: %w", bad.err))
+	case err == nil && out.By == "":
+		return api.RevokeResponse{}, unanswered(errors.New("its 200 named no revocation"))
 	}
 	return out, err
 }
+
+// badAnswerError is a 200 from the agent whose body did not decode. Its text
+// is the decode error's, as it always was; Revoke tells it apart.
+type badAnswerError struct{ err error }
+
+func (e *badAnswerError) Error() string { return e.err.Error() }
+func (e *badAnswerError) Unwrap() error { return e.err }
 
 // Status asks the agent whose session it holds.
 func (c *Client) Status(ctx context.Context) (Status, error) {

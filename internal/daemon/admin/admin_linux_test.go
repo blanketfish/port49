@@ -213,11 +213,9 @@ func TestAnotherUIDCannotRevokeLiftOrList(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root is always answered")
 	}
-	own := ownUID
-	t.Cleanup(func() { ownUID = own })
-	ownUID = func() uint32 { return uint32(os.Geteuid()) + 1 }
 	called := make(chan string, 4)
 	p := serve(t, &Server{Held: &keyring.Held{}, Now: time.Now,
+		ownUID: func() uint32 { return uint32(os.Geteuid()) + 1 },
 		Revoke: func(_ context.Context, op RevokeOp) (string, bool, error) {
 			called <- "revoke"
 			return "revoked", false, nil
