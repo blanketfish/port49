@@ -628,21 +628,14 @@ func (s *Store) SetPrivilege(_ context.Context, k store.ContextKey, level uint8)
 	// which is the property the caller cannot get by re-putting a record it
 	// read a moment ago (store.Store).
 	//
-	// Raise-only, then clamped, both under this lock: the ceiling read is the
-	// one on the record now, which a join may have moved since the caller read
-	// it (spec §5.3).
-	held := e.c.PrivLvl
-	if level > e.c.PrivLvl {
-		e.c.PrivLvl = level
-	}
-	if ceiling, ok := e.c.PrivilegeCeiling(); ok && e.c.PrivLvl > ceiling {
-		e.c.PrivLvl = ceiling
-	}
+	// The rule under this lock: the ceiling read is the one on the record
+	// now, which a join may have moved since the caller read it (spec §5.3).
+	moved := store.ApplyPrivilege(&e.c, level)
 	e.rev = s.nextRevLocked()
 	// A level that moved is a write to what the refresh decides; a grant of
 	// the level already held, which a device repeats, is not, or a session
 	// authorizing often could keep the refresh losing (store.Context.PolicyRev).
-	if e.c.PrivLvl != held {
+	if moved {
 		e.policyRev = e.rev
 	}
 	s.contexts[k] = e
@@ -715,34 +708,13 @@ func (s *Store) RefreshContext(_ context.Context, k store.ContextKey, r store.Co
 	if r.ExpectRev != 0 && e.rev != r.ExpectRev {
 		return store.ErrConflict
 	}
-	// "Has a ceiling" is read as the authorizer reads it, a non-zero
-	// SessionExpires, so a context it denies session_expired is one no
-	// refresh resumes.
-	if !r.GraceCutoff.IsZero() && !e.c.SessionExpires.IsZero() && e.c.SessionExpires.Before(r.GraceCutoff) {
-		return store.ErrPastGrace
-	}
 	// The window is read here, under the lock, from the pair this call is
 	// about to overwrite. A caller computing it from a copy it read earlier
 	// would compute it from a pair another refresh may already have moved.
-	// A SessionAge replaces it outright: a refresh is a fresh authentication
-	// event, so it may lengthen the ceiling (decision 33).
-	switch {
-	case r.SessionAge != nil && *r.SessionAge == 0:
-		e.c.SessionExpires = time.Time{}
-	case r.SessionAge != nil:
-		e.c.SessionExpires = r.AuthTime.Add(*r.SessionAge)
-	case e.c.HasCeiling():
-		e.c.SessionExpires = r.AuthTime.Add(e.c.SessionExpires.Sub(e.c.AuthTime))
-	}
-	e.c.AuthTime = r.AuthTime
-	e.c.RefreshedAt = r.RefreshedAt
-	// RevokedAt is deliberately absent from this list. A refresh is a
-	// directory re-resolution, not a credential re-verification, and the only
-	// thing that ends a revocation is spec §5.6 row 6 reclaiming the record
-	// (store.Store).
-	blobMoved := r.BlobHash != "" && r.BlobHash != e.c.BlobHash
-	if r.BlobHash != "" {
-		e.c.BlobHash = r.BlobHash
+	// The rule refuses past the grace window with nothing written.
+	blobMoved, err := store.ApplyRefresh(&e.c, r)
+	if err != nil {
+		return err
 	}
 	e.exp = now.Add(ttl)
 	e.c.LastTouchedAt = now
@@ -770,11 +742,7 @@ func (s *Store) SetRevokedAt(_ context.Context, k store.ContextKey, at time.Time
 		delete(s.contexts, k)
 		return store.ErrNotFound
 	}
-	// The later mark stands (store.Store): an earlier one would let a token
-	// minted between the two lift the revocation at a join.
-	if at.After(e.c.RevokedAt) {
-		e.c.RevokedAt = at
-	}
+	store.ApplyRevokedAt(&e.c, at)
 	e.rev = s.nextRevLocked()
 	e.policyRev = e.rev
 	s.contexts[k] = e
@@ -786,10 +754,8 @@ func (s *Store) SetRevokedAt(_ context.Context, k store.ContextKey, at time.Time
 // revision, moves both revisions, and nothing about the expiry: a policy edit
 // is not activity. The session ceiling only ever moves earlier here.
 func (s *Store) SetContextPolicy(_ context.Context, k store.ContextKey, policyRev uint64, p store.ContextPolicy) error {
-	if p.RevokedAt.IsZero() && p.BlobHash == "" {
-		// A live context pointing at no blob is a corrupt record, whatever
-		// the caller meant; refuse it rather than write it.
-		return errors.New("store: a policy write that does not revoke must name a blob hash")
+	if err := store.CheckContextPolicy(p); err != nil {
+		return err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -801,31 +767,43 @@ func (s *Store) SetContextPolicy(_ context.Context, k store.ContextKey, policyRe
 	if e.policyRev != policyRev {
 		return store.ErrConflict
 	}
-	if !p.RevokedAt.IsZero() {
-		// The later mark stands: an earlier one would let a token minted
-		// between the two lift the revocation at a join (spec §5.6).
-		if p.RevokedAt.After(e.c.RevokedAt) {
-			e.c.RevokedAt = p.RevokedAt
-		}
-	} else {
-		e.c.BlobHash, e.c.MaxPrivilege, e.c.Enable = p.BlobHash, p.MaxPrivilege, p.Enable
-		if ceiling, ok := e.c.PrivilegeCeiling(); ok && e.c.PrivLvl > ceiling {
-			e.c.PrivLvl = ceiling
-		}
-		// A context with a zero AuthTime has no instant to anchor a ceiling
-		// to, and is given one in the distant past, as a login gives a token
-		// with none (authen's loginContext): it denies, loudly, where dropping
-		// the ceiling would leave an unbounded session that looks exactly like
-		// a legitimate `never`.
-		if p.MaxSessionAge > 0 {
-			if ceiling := e.c.AuthTime.Add(p.MaxSessionAge); e.c.SessionExpires.IsZero() || ceiling.Before(e.c.SessionExpires) {
-				e.c.SessionExpires = ceiling
-			}
-		}
-	}
+	store.ApplyContextPolicy(&e.c, p)
 	e.rev = s.nextRevLocked()
 	e.policyRev = e.rev
 	s.contexts[k] = e
+	return nil
+}
+
+// RewriteContext writes c over the live record at k only while its
+// revision is rev, under the one lock (store.Store): the sealing layer's
+// narrow setter.
+func (s *Store) RewriteContext(_ context.Context, k store.ContextKey, rev uint64, c store.Context, ttl time.Duration,
+	policyMoved bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	e, ok := s.contexts[k]
+	if !ok || !e.exp.After(now) {
+		delete(s.contexts, k)
+		return store.ErrNotFound
+	}
+	if e.rev != rev {
+		return store.ErrConflict
+	}
+	c.Rev, c.PolicyRev = 0, 0 // the entry holds the revisions
+	c.LastTouchedAt = e.c.LastTouchedAt
+	if ttl > 0 {
+		e.exp, c.LastTouchedAt = now.Add(ttl), now
+	}
+	e.c = c
+	e.rev = s.nextRevLocked()
+	if policyMoved {
+		e.policyRev = e.rev
+	}
+	s.contexts[k] = e
+	if ttl > 0 {
+		s.extendIndexesLocked(store.ContextRef{NAS: k.NAS, Username: k.Username}, e.exp)
+	}
 	return nil
 }
 

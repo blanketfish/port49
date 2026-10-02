@@ -1016,6 +1016,7 @@ func Run(t *testing.T, b Backend) {
 		{"LoginRacesARevocationByMark", LoginRacesARevocationByMark},
 		{"PurgeTakesEveryToken", PurgeTakesEveryToken},
 		{"SelfRevocationBindsToTheRead", SelfRevocationBindsToTheRead},
+		{"RewriteBindsToTheRevision", RewriteBindsToTheRevision},
 	} {
 		p := p
 		t.Run(p.name, func(t *testing.T) { p.run(t, b) })

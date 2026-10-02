@@ -198,6 +198,17 @@ type Receipt struct {
 	// sealed the rest, and it only ever turns a PASS into a FAIL.
 	Failed bool
 
+	// Principal, Sid and CertKey name the credential the redeemed token
+	// carried: its principal, its credential's sid, and CertKey of its
+	// certificate. A retransmission replays this receipt's PASS only while
+	// no mark stands for that principal or certificate, and, for a login,
+	// only once the index reaches the context under the sid and the
+	// certificate, which is how a login that committed is told from one
+	// that did not or is still in flight (spec §5.6; plan 7d). Sealed.
+	Principal string // sealed
+	Sid       string // sealed
+	CertKey   string // sealed
+
 	Sealed []byte
 }
 
@@ -526,6 +537,19 @@ type Store interface {
 	// w.Principal, w.Sid and w.CertKey for w.IndexTTL (IndexContext), each
 	// empty or blank key skipped.
 	SwapLogin(ctx context.Context, k ContextKey, rev uint64, c Context, ttl time.Duration, w LoginWrite) error
+	// RewriteContext writes c's fields over the live record at k only while
+	// its Rev is rev: ErrNotFound when no record is live, ErrConflict when
+	// Rev has moved, and nothing written either way (plan 7d; spec §13,
+	// decision 35). Rev moves; PolicyRev moves to the new revision only when
+	// policyMoved. A zero ttl leaves the expiry and LastTouchedAt as the
+	// record has them; a non-zero ttl extends both, and the ref's index
+	// entries, as TouchContext does. It is the sealing layer's narrow
+	// setter: the layer reads the record, opens it, applies the setter's
+	// rule (ApplyPrivilege, ApplyRefresh, ApplyRevokedAt,
+	// ApplyContextPolicy), seals it again and rewrites it on the revision it
+	// read, so no field the authorizer trusts is written in the clear by a
+	// setter that cannot read it.
+	RewriteContext(ctx context.Context, k ContextKey, rev uint64, c Context, ttl time.Duration, policyMoved bool) error
 	// TouchContext extends this context's expiry to now+ttl. It writes exactly
 	// two things, both plaintext bookkeeping about the extension itself: the
 	// expiry, and LastTouchedAt. It never takes a Context from the caller.

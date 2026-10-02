@@ -97,8 +97,11 @@ func TestWrappedStoreHoldsNoPlaintext(t *testing.T) {
 	if len(raw) != 1 || raw[0].Secret != nil || raw[0].Principal != "" || raw[0].Credential.Sub != "" || raw[0].Sealed == nil {
 		t.Fatalf("inner holds plaintext: %+v", raw[0])
 	}
-	if raw[0].ID != "t1" || raw[0].Kind != store.KindLogin || raw[0].BlobHash != "sha256:x" || raw[0].ExpiresAt.IsZero() {
-		t.Fatalf("keying fields must stay plaintext: %+v", raw[0])
+	// The ID and the expiry alone stay in the clear, for the backend to
+	// address and expire the record; the kind and the policy blob are sealed
+	// with the secret now (plan 7d; re-check CA1).
+	if raw[0].ID != "t1" || raw[0].ExpiresAt.IsZero() || raw[0].Kind != "" || raw[0].BlobHash != "" {
+		t.Fatalf("only the ID and the expiry stay plaintext: %+v", raw[0])
 	}
 	got, _ := s.Candidates(ctx, k)
 	if len(got) != 1 || string(got[0].Secret) != "p49_secret" || got[0].Principal != "user:alice@example.com" || got[0].Sealed != nil {
@@ -111,15 +114,20 @@ func TestWrappedStoreHoldsNoPlaintext(t *testing.T) {
 	now := time.Now()
 	w := store.ReceiptWrite{Key: rk, Principal: "user:alice@example.com", IndexTTL: time.Hour,
 		Receipt: store.Receipt{CredentialSHA256: h, Status: 1, CtxID: "ctx1",
-			FirstRedeemedAt: now, IdleExpiresAt: now.Add(time.Minute), RetainUntil: now.Add(time.Hour)}}
+			FirstRedeemedAt: now, IdleExpiresAt: now.Add(time.Minute), RetainUntil: now.Add(time.Hour),
+			Principal: "user:alice@example.com", Sid: "sid-1", CertKey: store.CertKey("ca", "0a")}}
 	if err := s.RedeemAndReceipt(ctx, k, "t1", w); err != nil {
 		t.Fatal(err)
 	}
 	inr, _ := inner.GetReceipt(ctx, rk)
-	if inr.CtxID != "" || inr.CredentialSHA256 != ([32]byte{}) || inr.Sealed == nil || inr.FirstRedeemedAt.IsZero() {
+	if inr.CtxID != "" || inr.CredentialSHA256 != ([32]byte{}) || inr.Sealed == nil || inr.FirstRedeemedAt.IsZero() ||
+		inr.Principal != "" || inr.Sid != "" || inr.CertKey != "" {
 		t.Fatalf("receipt plaintext: %+v", inr)
 	}
-	if r, _ := s.GetReceipt(ctx, rk); r.CtxID != "ctx1" || r.CredentialSHA256 != h || !r.IdleExpiresAt.Equal(w.Receipt.IdleExpiresAt) {
+	// The credential the receipt was written for comes back from the seal:
+	// a replay checks the marks and the index for it (plan 7d).
+	if r, _ := s.GetReceipt(ctx, rk); r.CtxID != "ctx1" || r.CredentialSHA256 != h || !r.IdleExpiresAt.Equal(w.Receipt.IdleExpiresAt) ||
+		r.Principal != "user:alice@example.com" || r.Sid != "sid-1" || r.CertKey != store.CertKey("ca", "0a") {
 		t.Fatalf("receipt read: %+v", r)
 	}
 	// FailReceipt writes a plaintext mark and reseals nothing: it works under
@@ -141,17 +149,17 @@ func TestWrappedStoreHoldsNoPlaintext(t *testing.T) {
 		Port: "ssh", RemAddr: "198.51.100.4", PrivLvl: 1}, time.Hour); err != nil {
 		t.Fatal(err)
 	}
-	if c, _ := inner.GetContext(ctx, ck); c.Principal != "" || c.RemAddr != "" || c.PrivLvl != 1 {
+	if c, _ := inner.GetContext(ctx, ck); c.Principal != "" || c.RemAddr != "" || c.PrivLvl != 0 {
 		t.Fatalf("context plaintext: %+v", c)
 	}
 	if c, _ := s.GetContext(ctx, ck); c.Principal != "user:alice@example.com" || c.RemAddr != "198.51.100.4" {
 		t.Fatalf("context read: %+v", c)
 	}
 
-	// SetPrivilege, TouchContext and AnnotateContext pass straight through:
-	// all three write only plaintext bookkeeping, so the inner store changes a
-	// record it cannot read, and the sealed fields it never touched still open
-	// afterwards.
+	// TouchContext and AnnotateContext pass straight through: both write only
+	// plaintext bookkeeping, so the inner store changes a record it cannot
+	// read, and the sealed fields it never touched still open afterwards.
+	// SetPrivilege is a rewrite now: the level is sealed (plan 7d).
 	if err := s.SetPrivilege(ctx, ck, 15); err != nil {
 		t.Fatal(err)
 	}
@@ -162,8 +170,8 @@ func TestWrappedStoreHoldsNoPlaintext(t *testing.T) {
 	if err := s.AnnotateContext(ctx, ck, hash, store.AccountingStateClosing); err != nil {
 		t.Fatal(err)
 	}
-	if c, _ := inner.GetContext(ctx, ck); c.PrivLvl != 15 {
-		t.Fatalf("SetPrivilege must reach the inner store in the clear: %+v", c)
+	if c, _ := inner.GetContext(ctx, ck); c.PrivLvl != 0 {
+		t.Fatalf("SetPrivilege wrote the level in the clear: %+v", c)
 	}
 	// The discriminator set is the point of the hashing: the INNER store, which
 	// cannot open a sealed field, can both write and read it. Were it sealed,
@@ -495,4 +503,388 @@ func TestTheSealingLayerHoldsEveryProperty(t *testing.T) {
 	storetest.Run(t, storetest.Backend{New: func(_ *testing.T, clock func() time.Time) store.Store {
 		return Wrap(memory.New(clock), keys(), nil)
 	}})
+}
+
+// The sealing layer seals every field the authorizer trusts, bound to the
+// record's key (plan 7d; Ruling 17; pre-flight I12). A store write that
+// zeroes revoked_at, raises the privilege, swaps the blob or removes the
+// ceiling changes nothing the layer returns, and a record moved to another
+// (nas, username) does not open.
+func TestTheSealCoversWhatAuthorizationTrusts(t *testing.T) {
+	ctx := context.Background()
+	now := time.Unix(1_000_000, 0).UTC()
+	inner := memory.New(func() time.Time { return now })
+	s := Wrap(inner, keys(), nil)
+	k := store.ContextKey{NAS: "leaf-01", Username: "alice"}
+	if err := s.PutContext(ctx, k, store.Context{CtxID: "c1", Principal: "user:alice@example.com", Username: "alice",
+		PrivLvl: 1, MaxPrivilege: 1, BlobHash: "sha256:narrow", Enable: "none", AuthTime: now, RefreshedAt: now,
+		SessionExpires: now.Add(time.Hour)}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetRevokedAt(ctx, k, now); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := inner.GetContext(ctx, k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// What the backend holds names none of it in the clear, the revocation
+	// aside, which is written both ways.
+	if raw.PrivLvl != 0 || raw.MaxPrivilege != 0 || raw.BlobHash != "" || raw.Enable != "" ||
+		!raw.SessionExpires.IsZero() || !raw.AuthTime.IsZero() || !raw.RevokedAt.Equal(now) {
+		t.Fatalf("the backend holds a trusted field in the clear: %+v", raw)
+	}
+	// Each edit writes a plaintext value the seal must outrank: a field
+	// already blank in the clear, set blank, would test nothing (re-check
+	// MA5).
+	for name, edit := range map[string]func(*store.Context){
+		"a zeroed revoked_at": func(r *store.Context) { r.RevokedAt = time.Time{} },
+		"a raised privilege":  func(r *store.Context) { r.PrivLvl, r.MaxPrivilege = 15, 15 },
+		"a swapped blob":      func(r *store.Context) { r.BlobHash = "sha256:wide" },
+		"a later ceiling": func(r *store.Context) {
+			r.SessionExpires, r.AuthTime = now.Add(100*time.Hour), now.Add(99*time.Hour)
+		},
+	} {
+		r := raw
+		edit(&r)
+		if err := inner.PutContext(ctx, k, r, time.Hour); err != nil {
+			t.Fatal(err)
+		}
+		got, err := s.GetContext(ctx, k)
+		if err != nil || !got.RevokedAt.Equal(now) || got.PrivLvl != 1 || got.MaxPrivilege != 1 ||
+			got.BlobHash != "sha256:narrow" || !got.SessionExpires.Equal(now.Add(time.Hour)) {
+			t.Fatalf("%s reached the reader: %+v %v", name, got, err)
+		}
+	}
+	// Moved to another key, the record does not open: unreadable, never
+	// another device's session.
+	other := store.ContextKey{NAS: "leaf-02", Username: "alice"}
+	if err := inner.PutContext(ctx, other, raw, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	var u *store.UnreadableContextError
+	if _, err := s.GetContext(ctx, other); !errors.As(err, &u) {
+		t.Fatalf("a transplanted record opened: %v", err)
+	}
+	// One sealed byte flipped: the record does not open (re-check MA5).
+	flipped := raw
+	flipped.Sealed = append([]byte(nil), raw.Sealed...)
+	flipped.Sealed[len(flipped.Sealed)-1] ^= 1
+	if err := inner.PutContext(ctx, k, flipped, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.GetContext(ctx, k); !errors.As(err, &u) {
+		t.Fatalf("a record with a flipped sealed byte opened: %v", err)
+	}
+}
+
+// A revocation needs no key: on a record the layer cannot open, the
+// plaintext mark still lands, and a read of it is the unreadable error
+// carrying that mark (plan 7d; Ruling 17). A regression guard, not a
+// failing test: it passes before this task too, since SetRevokedAt was
+// already a plaintext pass-through (re-check MA4).
+func TestARevocationOfAnUnopenableContextNeedsNoKey(t *testing.T) {
+	ctx := context.Background()
+	now := time.Unix(1_000_000, 0).UTC()
+	inner := memory.New(func() time.Time { return now })
+	k := store.ContextKey{NAS: "leaf-01", Username: "alice"}
+	old := Wrap(inner, Keys{Current: Key{ID: "gone", Bytes: [32]byte{9}}}, nil)
+	if err := old.PutContext(ctx, k, store.Context{CtxID: "c", Principal: "p", Username: "alice"}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	s := Wrap(inner, keys(), nil)
+	if err := s.SetRevokedAt(ctx, k, now); err != nil {
+		t.Fatalf("a keyless revocation: %v", err)
+	}
+	var u *store.UnreadableContextError
+	if _, err := s.GetContext(ctx, k); !errors.As(err, &u) || !u.RevokedAt.Equal(now) {
+		t.Fatalf("the unopenable record: %v", err)
+	}
+}
+
+// A token's every field a redemption or a login trusts is sealed, bound to
+// its key and ID (plan 7d; Ruling 17; re-check CA1). A store write that
+// changes one reads back as minted, and the login copies what this layer
+// returns (authen.go:705-724), so its context carries the minted value. A
+// token moved to another key or ID, or whose plaintext expiry moved, is
+// dropped and counted. A deleted token put back opens: the replay Ruling 17
+// states, bounded by its sealed expiry.
+func TestTheTokensTrustedFieldsAreSealed(t *testing.T) {
+	ctx := context.Background()
+	now := time.Unix(1_000_000, 0).UTC()
+	inner := memory.New(func() time.Time { return now })
+	failures := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "t"}, []string{"record"})
+	s := Wrap(inner, keys(), failures)
+	k := store.TokenKey{NAS: "leaf-01", Username: "alice"}
+	minted := store.Token{ID: "t1", Secret: []byte("p49_secret"), Kind: store.KindLogin, ExpiresAt: now.Add(time.Minute),
+		Principal: "user:alice@example.com", Username: "alice", BlobHash: "sha256:narrow", MaxSessionAge: time.Hour,
+		Enable: "token", MaxPrivilege: 1, AuthTime: now, MintedAt: now}
+	if _, err := s.PutToken(ctx, k, minted); err != nil {
+		t.Fatal(err)
+	}
+	raws, err := inner.Candidates(ctx, k)
+	if err != nil || len(raws) != 1 {
+		t.Fatalf("%v %v", raws, err)
+	}
+	raw := raws[0]
+	if raw.Kind != "" || raw.BlobHash != "" || raw.MaxSessionAge != 0 || raw.Enable != "" || raw.MaxPrivilege != 0 ||
+		!raw.AuthTime.IsZero() || !raw.MintedAt.IsZero() || !raw.ExpiresAt.Equal(minted.ExpiresAt) {
+		t.Fatalf("the backend holds a trusted token field in the clear: %+v", raw)
+	}
+	putRaw := func(k store.TokenKey, r store.Token) {
+		t.Helper()
+		if err := inner.DeleteTokens(ctx, k); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := inner.PutToken(ctx, k, r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	asMinted := func(got store.Token) bool {
+		return got.Kind == minted.Kind && got.BlobHash == minted.BlobHash && got.MaxSessionAge == minted.MaxSessionAge &&
+			got.Enable == minted.Enable && got.MaxPrivilege == minted.MaxPrivilege && got.AuthTime.Equal(minted.AuthTime) &&
+			got.MintedAt.Equal(minted.MintedAt) && got.ExpiresAt.Equal(minted.ExpiresAt) &&
+			got.Principal == minted.Principal && string(got.Secret) == string(minted.Secret)
+	}
+	for name, edit := range map[string]func(*store.Token){
+		"a raised privilege":   func(r *store.Token) { r.MaxPrivilege = 15 },
+		"enable auto":          func(r *store.Token) { r.Enable = "auto" },
+		"a longer session age": func(r *store.Token) { r.MaxSessionAge = 1000 * time.Hour },
+		"another blob":         func(r *store.Token) { r.BlobHash = "sha256:wide" },
+		"a later auth time":    func(r *store.Token) { r.AuthTime = now.Add(time.Hour) },
+		"a later mint":         func(r *store.Token) { r.MintedAt = now.Add(time.Hour) },
+		"the enable kind":      func(r *store.Token) { r.Kind = store.KindEnable },
+	} {
+		r := raw
+		edit(&r)
+		putRaw(k, r)
+		got, err := s.Candidates(ctx, k)
+		if err != nil || len(got) != 1 || !asMinted(got[0]) {
+			t.Fatalf("%s reached the reader: %+v %v", name, got, err)
+		}
+	}
+	// Dropped and counted: an extended plaintext expiry, another key,
+	// another ID.
+	dropped := func(what string, k store.TokenKey) {
+		t.Helper()
+		before := testutil.ToFloat64(failures.WithLabelValues("token"))
+		if got, err := s.Candidates(ctx, k); err != nil || len(got) != 0 {
+			t.Fatalf("%s opened: %+v %v", what, got, err)
+		}
+		if testutil.ToFloat64(failures.WithLabelValues("token")) != before+1 {
+			t.Fatalf("%s was not counted", what)
+		}
+	}
+	later := raw
+	later.ExpiresAt = now.Add(time.Hour)
+	putRaw(k, later)
+	dropped("an extended plaintext expiry", k)
+	other := store.TokenKey{NAS: "leaf-02", Username: "alice"}
+	putRaw(other, raw)
+	dropped("a token moved to another key", other)
+	renamed := raw
+	renamed.ID = "t2"
+	putRaw(k, renamed)
+	dropped("a token moved to another ID", k)
+	// The replay: a deleted token put back opens, until its sealed expiry.
+	putRaw(k, raw)
+	if got, err := s.Candidates(ctx, k); err != nil || len(got) != 1 || !asMinted(got[0]) {
+		t.Fatalf("a token put back as it was: %+v %v (the residual, Ruling 17)", got, err)
+	}
+}
+
+// A receipt is sealed bound to its whole key (re-check CA1): a login
+// receipt copied to the enable key does not open, so it can never replay
+// an escalation; and the cap's anchor is the sealed first redemption,
+// whatever the plaintext copy says.
+func TestAReceiptIsBoundToItsKey(t *testing.T) {
+	ctx := context.Background()
+	now := time.Unix(1_000_000, 0).UTC()
+	inner := memory.New(func() time.Time { return now })
+	s := Wrap(inner, keys(), nil)
+	tk := store.TokenKey{NAS: "leaf-01", Username: "alice"}
+	spend := func(id string) {
+		t.Helper()
+		if _, err := inner.PutToken(ctx, tk, store.Token{ID: id, ExpiresAt: now.Add(time.Minute)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var h [32]byte
+	copy(h[:], "hash")
+	login := store.ReceiptKey{NAS: "leaf-01", Username: "alice", Kind: store.KindLogin, CredentialSHA256: h}
+	spend("t1")
+	if err := s.RedeemAndReceipt(ctx, tk, "t1", store.ReceiptWrite{Key: login, Principal: "user:alice@example.com",
+		IndexTTL: time.Hour, Receipt: store.Receipt{CredentialSHA256: h, Status: 1, CtxID: "ctx1", FirstRedeemedAt: now,
+			IdleExpiresAt: now.Add(time.Minute), RetainUntil: now.Add(time.Hour)}}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := inner.GetReceipt(ctx, login)
+	if err != nil {
+		t.Fatal(err)
+	}
+	enable := login
+	enable.Kind = store.KindEnable
+	spend("t2")
+	if err := inner.RedeemAndReceipt(ctx, tk, "t2", store.ReceiptWrite{Key: enable, Principal: "user:alice@example.com",
+		IndexTTL: time.Hour, Receipt: raw}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.GetReceipt(ctx, enable); err == nil || errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("a login receipt copied to the enable key opened: %v", err)
+	}
+	moved := raw
+	moved.FirstRedeemedAt = now.Add(time.Hour)
+	spend("t3")
+	if err := inner.RedeemAndReceipt(ctx, tk, "t3", store.ReceiptWrite{Key: login, Principal: "user:alice@example.com",
+		IndexTTL: time.Hour, Receipt: moved}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.GetReceipt(ctx, login); err != nil || !got.FirstRedeemedAt.Equal(now) {
+		t.Fatalf("the cap's anchor came from the clear: %+v %v", got, err)
+	}
+}
+
+// The ledger (re-check IA1; the controller's ruling): another login's
+// context written back at a key is denied ErrNotLastWritten, through
+// either Wrap sharing the ledger. An earlier version of the same context
+// opens, which is the residual Ruling 17 states. A fresh process takes the
+// first record it reads as the key's, the restart residual, and denies
+// another after it.
+func TestTheLedgerDeniesAnotherLoginsContext(t *testing.T) {
+	ctx := context.Background()
+	now := time.Unix(1_000_000, 0).UTC()
+	inner := memory.New(func() time.Time { return now })
+	l := NewLedger()
+	daemon := Wrap(inner, keys(), nil, WithLedger(l))
+	broker := Wrap(inner, keys(), nil, WithLedger(l))
+	k := store.ContextKey{NAS: "leaf-01", Username: "netops"}
+	if err := daemon.PutContext(ctx, k, store.Context{CtxID: "alice-1", Principal: "user:alice@example.com",
+		Username: "netops", PrivLvl: 15}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	alice, _ := inner.GetContext(ctx, k)
+	if err := daemon.PutContext(ctx, k, store.Context{CtxID: "bob-1", Principal: "user:bob@example.com",
+		Username: "netops", PrivLvl: 1}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	bob, _ := inner.GetContext(ctx, k)
+	if err := broker.SetPrivilege(ctx, k, 5); err != nil {
+		t.Fatal(err)
+	}
+	if err := inner.PutContext(ctx, k, alice, time.Hour); err != nil { // Alice's, written back
+		t.Fatal(err)
+	}
+	var u *store.UnreadableContextError
+	for name, s := range map[string]store.Store{"daemon": daemon, "broker": broker} {
+		if _, err := s.GetContext(ctx, k); !errors.As(err, &u) || !errors.Is(err, ErrNotLastWritten) {
+			t.Fatalf("%s read another login's context written back: %v", name, err)
+		}
+	}
+	if err := inner.PutContext(ctx, k, bob, time.Hour); err != nil { // Bob's own, before the raise
+		t.Fatal(err)
+	}
+	if got, err := daemon.GetContext(ctx, k); err != nil || got.CtxID != "bob-1" || got.PrivLvl != 1 {
+		t.Fatalf("an earlier version of the same context: %+v %v (the residual)", got, err)
+	}
+	fresh := Wrap(inner, keys(), nil) // a restart: its own, empty ledger
+	if err := inner.PutContext(ctx, k, alice, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := fresh.GetContext(ctx, k); err != nil || got.CtxID != "alice-1" {
+		t.Fatalf("a fresh process's first read: %+v %v (the restart residual)", got, err)
+	}
+	if err := inner.PutContext(ctx, k, bob, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fresh.GetContext(ctx, k); !errors.Is(err, ErrNotLastWritten) {
+		t.Fatalf("after its first read, a fresh process read another login's: %v", err)
+	}
+}
+
+// A write in flight is admitted beside the last one, a write that landed
+// replaces it, one refused admits nothing, and one whose outcome is
+// unknown stays admitted until a later write lands, or until a read finds
+// it, which proves it landed (re-check IA1; re-check 2 M-B1).
+func TestTheLedgerAdmitsWritesInFlight(t *testing.T) {
+	l := NewLedger()
+	k := store.ContextKey{NAS: "leaf-01", Username: "netops"}
+	if !l.admits(k, "a") {
+		t.Fatal("a first read is the key's")
+	}
+	l.begin(k, "b")
+	if !l.admits(k, "a") || !l.admits(k, "b") || l.admits(k, "x") {
+		t.Fatal("a write in flight")
+	}
+	l.end(k, "b", nil)
+	if l.admits(k, "a") || !l.admits(k, "b") {
+		t.Fatal("a write that landed")
+	}
+	l.begin(k, "c")
+	l.end(k, "c", store.ErrConflict)
+	if l.admits(k, "c") {
+		t.Fatal("a conflict wrote nothing")
+	}
+	l.begin(k, "d")
+	l.end(k, "d", store.ErrUnavailable)
+	if !l.admits(k, "b") || !l.admits(k, "d") {
+		t.Fatal("a write whose outcome is unknown may have landed")
+	}
+	// The read of d is the store holding it: it landed, and b is gone.
+	if l.admits(k, "b") || !l.admits(k, "d") {
+		t.Fatal("a read of a write whose outcome was unknown did not settle it")
+	}
+	l.begin(k, "e")
+	l.end(k, "e", store.ErrUnavailable)
+	l.begin(k, "f")
+	l.end(k, "f", nil)
+	if l.admits(k, "e") || l.admits(k, "d") || !l.admits(k, "f") {
+		t.Fatal("a later write landed")
+	}
+}
+
+// A sealed ledger admits nothing at a key it has never seen, except what
+// this process writes there itself; before Seal, the first record read at
+// an unseen key is the key's (re-check 2 I1; decision 35). port49d seals
+// it once the start has read every kept context, so a record put back at
+// an empty key, after the start, is never taken as that key's.
+func TestASealedLedgerAdmitsNoUnseenKey(t *testing.T) {
+	ctx := context.Background()
+	now := time.Unix(1_000_000, 0).UTC()
+	inner := memory.New(func() time.Time { return now })
+	l := NewLedger()
+	s := Wrap(inner, keys(), nil, WithLedger(l))
+	alice := store.Context{CtxID: "alice-1", Principal: "user:alice@example.com", Username: "netops", PrivLvl: 15}
+	kept := store.ContextKey{NAS: "leaf-01", Username: "netops"}
+	if err := Wrap(inner, keys(), nil).PutContext(ctx, kept, alice, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	// Before Seal: the start's read of a kept context seeds the key.
+	if got, err := s.GetContext(ctx, kept); err != nil || got.CtxID != "alice-1" {
+		t.Fatalf("a first read before Seal: %+v %v", got, err)
+	}
+	l.Seal()
+	if got, err := s.GetContext(ctx, kept); err != nil || got.CtxID != "alice-1" {
+		t.Fatalf("a key seeded before Seal: %+v %v", got, err)
+	}
+	// After Seal: Alice's record put back at a key no one here has read.
+	empty := store.ContextKey{NAS: "leaf-02", Username: "netops"}
+	other := Wrap(inner, keys(), nil)
+	if err := other.PutContext(ctx, empty, alice, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	var u *store.UnreadableContextError
+	for range 2 { // denied, and the denial seeds nothing
+		if _, err := s.GetContext(ctx, empty); !errors.As(err, &u) || !errors.Is(err, ErrNotLastWritten) {
+			t.Fatalf("an unseen key after Seal: %v", err)
+		}
+	}
+	// This process's own write at an unseen key is admitted.
+	own := store.ContextKey{NAS: "leaf-03", Username: "netops"}
+	if err := s.PutContext(ctx, own, store.Context{CtxID: "bob-1", Principal: "user:bob@example.com",
+		Username: "netops"}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.GetContext(ctx, own); err != nil || got.CtxID != "bob-1" {
+		t.Fatalf("its own write after Seal: %+v %v", got, err)
+	}
 }

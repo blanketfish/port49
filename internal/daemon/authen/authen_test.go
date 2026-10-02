@@ -498,6 +498,10 @@ func (noStore) SetRevokedAt(context.Context, store.ContextKey, time.Time) error 
 	panic("store called")
 }
 
+func (noStore) RewriteContext(context.Context, store.ContextKey, uint64, store.Context, time.Duration, bool) error {
+	panic("RewriteContext called")
+}
+
 func (noStore) SetContextPolicy(context.Context, store.ContextKey, uint64, store.ContextPolicy) error {
 	panic("store called")
 }
