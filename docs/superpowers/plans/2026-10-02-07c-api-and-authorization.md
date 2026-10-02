@@ -13,9 +13,10 @@ plans 4b and 7a handed it.
     or on one `(device, username)`, and leaves no standing mark (7a's carried "self-revocation's
     shape").
   - **Others.** Under `revoke_others` it revokes another principal through 7a's `Broker.Revoke`, a
-    standing mark, or ends whatever holds one `(device, username)`.
+    standing mark, or ends whatever holds one `(device, username)`. Without the right either form
+    is refused 403: the request's form, never the caller's rights, decides what it means.
 - **`GET /v1/identity`.** What the broker resolves the caller to: subject, unexpired grants, rights,
-  and the session's clock.
+  and the connection's clock.
 - **`POST /v1/explain`.** A hypothetical decision from the policy in force, about the caller or,
   under `explain_others`, another principal. An unknown device answers exactly as a device with no
   grant does.
@@ -25,10 +26,11 @@ plans 4b and 7a handed it.
   `--via-agent`.
 - **Plan 4b's candidate reload guard, ruled on.** A policy reload that would take more than
   `inventory.max_removed_percent` of the devices in service out of service is refused, whether by
-  refusing admission (as today) or by quarantining them.
+  refusing admission (as today) or by quarantining them, unless it leaves at least as many devices
+  in service as before.
 - **Ryan's answer of 2026-10-02.** `broker.revocations_file` is never created by a start: an empty
-  or missing volume refuses every start, and `port49d init-revocations` creates the file once.
-  Decision 32 is amended first, by Task 1.
+  or missing volume refuses every start, and `port49d init-revocations`, run once at install as
+  port49d's user, creates the file. Decision 32 is amended first, by Task 1.
 - **Lab.** The HTTP revocation's three shapes, end to end on the four images 7a measured.
 
 **Architecture:**
@@ -44,7 +46,8 @@ plans 4b and 7a handed it.
     are untouched. It marks only the caller's own contexts, by compare-and-set on the policy
     revision read (`SetContextPolicy` with `RevokedAt`), so a context another principal's login
     replaced is never marked.
-  - **Key.** `Broker.RevokeKey` is `revoke_others`' `(device, username)` form.
+  - **Key.** `Broker.RevokeKey` is `revoke_others`' `(device, username)` form. The caller's own
+    session on one key is `mine` with that key, never a key alone.
   - **Neither leaves a mark.** A revocation of another principal is 7a's `Broker.Revoke`,
     unchanged, its origin `api <caller>`.
 - **Explain.** `/v1/explain` reuses `policy.Explain`, the evaluator `port49 explain` runs. The
@@ -52,10 +55,15 @@ plans 4b and 7a handed it.
   a mark as `credential_revoked`. It returns the rendered, redacted text beside the verdict and
   reason.
 - **The guard.** It extends `bundle.CheckAdmission`, which already bounds a policy reload's newly
-  refused devices, to count newly quarantined ones at the reload instant.
+  refused devices, to count newly quarantined ones at the reload instant. port49d prints its
+  refusal redacted (spec §5.8), saying the refused file is still on disk and a restart would load
+  it unguarded.
 - **Init.** `port49d init-revocations` reads only `broker.revocations_file` from port49d.yaml
-  (`config.RevocationsFile`; no secret is resolved), fences the directory, and writes the marker
-  and an empty file. A start never writes either.
+  (`config.RevocationsFile`; no secret is resolved, and the path checks `Load` makes are made),
+  fences the directory, refuses unless it runs as the directory's owner, and creates the marker and
+  an empty file, each exclusively. A file already there that loads is "already initialized", exit
+  0, nothing written. A start never creates the file; it still writes the marker beside a file
+  that loads, as 7a's start did.
 
 **Tech Stack:**
 - Go 1.22 (the module's `go` line).
@@ -86,6 +94,41 @@ plans 4b and 7a handed it.
 
 **Prerequisite:** plan 7b merged (PR #21, `513e4bd`; `main` at `66faee6`). Branch
 `feature/api-and-authorization` off `main` at the commit that adds this file.
+
+## Pre-flight resolution
+
+The pre-flight review (`.superpowers/sdd/2026-10-02-07c-api-and-authorization/preflight-review.md`)
+and the controller's rulings (`progress.md`), finding by finding:
+
+- **I1**: re-admission caveat in the Texts (Task 7), Ruling 2, §5.1.4, decision 34, notes; lab re-asks the refused session (Task 13).
+- **I2**: a key without `mine` and the right is 403 (Task 8); Rulings 3–4; Task 1 Steps 2, 4, 7–10; CLI (Task 12); lab (Task 13); Review Focus 6.
+- **I3**: `refusalLine` (port49d) and `redacted` (`inventory diff`) redact before cutting (Task 10); the `quotesCut` sentence corrected.
+- **I4**: `unguardedAtStart` on the refusal line (Task 10); Ruling 8; §5.1.3; decision 34; start guard carried to 7e/12 (Task 14).
+- **I5**: `initOwner` refuses unless the euid owns the directory, naming the `sudo -u` line, no chown (Task 2); Ruling 9; decision 32.
+- **I6**: init exits 0 over a file that loads, 1 over a bad file or a lost one (Task 2); "never on a start path" in Ruling 9, decision 32, §12, Task 14, notes.
+- **I7**: mark kept; `Broker.AdminSocket`/`liftNote` and port49d's start line (Task 8, both tested); Ruling 3; §5.1.4; decision 34.
+- **I8**: no `auth` on `revoke deny` and `explain` records; `explain.asked_by_fingerprint` (Tasks 3, 8, 9); Ruling 4; §5.7.
+- **I9**: `agent.ErrAgentTooOld`, and `not_supported` for an old broker (Task 11); notes.
+- **M1**: Task 13 Consumes fixed (`agentPID` a var; `revokedMint`, `mintRefusal` added; unused `revokeRefusedLine` dropped).
+- **M2**: Task 6 adds `noStore.DeleteToken` in `internal/daemon/authen/authen_test.go`, and the file to the commit.
+- **M3**: Task 1 Step 9 names the broker's bullet, not the inventory service's.
+- **M4**: Task 10 passes `inventory.go`'s existing `now`.
+- **M5**: comments in Task 2 (`config.go`, `revocations.go`) and Task 7 (`port49_revocations_total`).
+- **M6**: Task 10's test starts from one of four quarantined: release, same, one more of three refused.
+- **M7**: Task 9's `TestAScopedCallerLearnsNothingOfADeviceOutsideItsGrants`; Review Focus 7.
+- **M8**: `Refused`/`RefusedAtBind` take the path and record its endpoint's event (Task 4); Ruling 4; §5.7.
+- **M9**: receipts deleted everywhere, said in `RevokeOwn`'s comment, Ruling 2, §5.1.4, notes.
+- **M10**: `createExclusive` (link, never replace), absolute path and relative warning, `ownRevocationsFile` in `RevocationsFile` (Task 2).
+- **M11**: `LiftNote` text, `RevokeResponse.Subject` printed, `y/N` on a terminal with `--yes` (Tasks 7, 8, 12).
+- **M12**: the start keeps the marker beside a file that loads; test flipped; decision 32 says why (Tasks 1, 2).
+- **M13**: the missing-file refusal leads with the volume (Task 2; operator trace).
+- **M14**: a net release is never refused (`inServiceCount`); the line says to lower the bound again (Task 10; Ruling 8; §5.1.3; d34).
+- **M15**: (a) catalogue deliberate; (b) chose per-policy compiled-program cache `Policy.permitsAlone` over a rate bound, which would need a reason §5.7 lacks (Task 9, d34); (c) `policy.bundle` on the record; (d) dashboard note.
+- **M16**: `connection_ends_at`, and the CLI says a device ceiling may end a session sooner (Tasks 4, 12; Ruling 5; §12).
+- **M17**: Task 4's pin test comment and Step 2 note.
+- **M18**: `ErrRevocationBusy`, bounded wait, `503 revocation_busy` (Task 8); no re-check after the wait, commented; design §17 Errors.
+- **M19**: `--list` points at the log (Task 12); burst alert and shell loop (notes); bulk lift to the unassigned list (Task 14).
+- **M20**: `port49d` refuses a stray argument (Task 2 Step 5, checked in Step 7); identity record volume (notes).
 
 ## What this plan does not do
 
@@ -130,12 +173,18 @@ Each takes the option that denies more, is written into the tasks named, and is 
      - its unspent tokens are deleted one by one by ID;
      - its live contexts are marked revoked by compare-and-set on the revision read, twice, as
        7a's revocation marks twice;
-     - its receipts are deleted.
+     - its receipts are deleted, everywhere, even when it names one key: the store has no finer
+       cut, so a retransmission in flight on another device is answered `token_spent`.
      With a `device` and `username` beside `mine`, it does that on one key only.
    - **Why no mark.** A mark is an operator's lock, which only port49d's user and root lift. A
      principal that marked itself could not lift it, and its agent would end on its next mint.
      With no mark, a token minted after the revocation joins the revoked context at the next login
-     and lifts it (decision 15), which is what a principal ending its own sessions wants.
+     and lifts it (decision 15), which is what a principal ending its own sessions wants, **with
+     one caveat the response says aloud**: the join lifts the mark for every session open under
+     that `(device, username)`. If someone else used the leaked token, the owner's next login on
+     that device re-admits that person's session too. So the text tells the caller to close such a
+     session on the device (or ask an operator to revoke their principal) before logging in there
+     again. The lab records the old session's state after the re-login (Task 13).
    - **Why it is still worth having.** The case is "I pasted a token into a chat": every unspent
      token is gone at once, and every session on a platform that asks about commands is ended.
    - **What it does not touch.** It closes no held connection, since the request arrives on one
@@ -144,33 +193,51 @@ Each takes the option that denies more, is written into the tasks named, and is 
 3. **The HTTP revocation's other shapes.**
    - **Another principal** (`revoke_others`) is `Broker.Revoke`, a standing mark exactly as
      `port49 revoke --principal` makes, its origin `api <caller>`. `port49 revoke --list` shows
-     who asked.
+     who asked. The response names the target's subject, so a typo of a real colleague's address
+     is seen at once, and on a terminal the CLI asks `y/N` first (`--yes` skips it).
    - **A `(device, username)` key without `mine`.** Under `revoke_others` it ends whatever holds
      the key: every unspent token under it, and the live context whoever's it is, with no mark.
-     Without the right it is the caller's own on that key (Ruling 2), so it is never refused and
-     never reaches another's.
+     Without the right it is refused 403 `api_right_missing` and recorded with the key, never
+     narrowed silently to the caller's own: an on-call whose right a reload withdrew minutes ago
+     must not read "0 contexts marked" as "bob's session is gone". The caller's own session on one
+     key is `{"mine": true, "device", "username"}` (`port49 revoke --mine --device --username`).
    - **What is refused.** A principal and a key together, `mine` beside a principal, an empty
      body, a `sid` (400, "arrives with OIDC, plan 7h"), and an unknown field such as `lift` (400).
    - **What stays on the admin socket.** A lift, and a revocation by certificate. A lift
      re-grants, so it stays with the people who can already rewrite the policy, and a
      certificate's mark needs the issuer and serial read from the certificate (`port49 revoke
-     --cert`).
+     --cert`). The HTTP mark is still allowed with no `admin_socket` (revoking is the safe
+     direction), and its text then says lifting it needs port49d stopped, the entry removed from
+     `broker.revocations_file`, and a start; port49d's start line says the same.
+   - **Busy.** A revocation that cannot take 7a's revocation slot within 10 s (another revocation
+     or lift is running) is answered `503 revocation_busy` with `Retry-After`, nothing revoked. The
+     right is read before that wait and not again after it, as a mint reads the policy once.
 4. **Every call to an authenticated endpoint is one decision record** (design §17).
    - **New events and reason.** Two events are added, `identity` and `explain`, and one reason,
      `api_right_missing` (deny; HTTP 403).
    - **Refused before the body is read.** A call refused this way is recorded under its own event,
      for the reasons and with the meanings a mint has: no trusted certificate, a connection past
-     `max_session_age`, a mark, a certificate status that refuses, marks unreadable.
+     `max_session_age`, a mark, a certificate status that refuses, marks unreadable. The
+     listener's refusal as a connection binds is recorded under the event of the path the refused
+     request asked for (`/v1/identity`, `/v1/explain`, `/v1/tokens/revoke`), and any other path
+     stays `mint`.
    - **The `revoke` record.** It gains `by: self` and `by: key`, with `device` and `username`.
      Its `saved` is present only for a standing mark.
-   - **The `explain` record.** It carries whom it was about (`principal`), who asked
-     (`explain.asked_by`), the device, and the answer. It never carries the command: the command
-     is the caller's text, unvalidated as a decision input, and the record says only that one was
-     asked (`explain.command: true`).
+   - **One credential per record.** `auth.fingerprint` and `principal` always describe one
+     credential, so a SIEM joining fingerprint to principal never pins one person's probe on
+     another's certificate. A `revoke deny api_right_missing` names the target as `principal` (or
+     the key as `device`, `username`), carries no `auth`, and names the caller in `origin`.
+   - **The `explain` record.** It carries whom it was about (`principal`), no `auth`, who asked
+     (`explain.asked_by` and `explain.asked_by_fingerprint`), the device, the bundle that answered
+     (`policy.bundle`), and the answer. It never carries the command: the command is the caller's
+     text, unvalidated as a decision input, and the record says only that one was asked
+     (`explain.command: true`).
 5. **`/v1/identity`.** It returns the principal, the method and the certificate's fingerprint, the
    subject, its grants unexpired at the request (scope, roles, `max_privilege`, `expires`), its
-   `api:` rights, `groups` (empty until 7g), the connection's `auth_time` and when its session
-   ends.
+   `api:` rights, `groups` (empty until 7g), the connection's `auth_time` and
+   `connection_ends_at` (`auth_time` plus `max_session_age`). That is when this connection must
+   authenticate again, not when a device session ends: a role's session ceiling on a device may
+   end one sooner, and the CLI says so.
    - **No device list.** Scopes are named, not enumerated: the caller can mint for its devices,
      and the API never lists the fleet.
    - **The record.** `identity permit grants_matched` with at least one grant, else `identity deny
@@ -185,6 +252,15 @@ Each takes the option that denies more, is written into the tasks named, and is 
      minted for it.
    - **What is returned.** The rendered text is redacted as `port49 explain`'s is, and session
      attributes are never returned.
+   - **A role catalogue, deliberately.** A caller's own denied command returns, in its text,
+     `Explanation.WouldPermit`: the names of every role in the policy whose permits would match it,
+     held by anyone. That names
+     roles, never who holds them or where, and it is the useful answer ("what to ask for").
+   - **Cost.** `WouldPermit` matches every role's permits. Each role's permits are compiled once
+     per platform per loaded policy and kept (`Policy.permitsAlone`, as `projected` memoizes
+     projections), so a denied explain costs a match per role, no compile. That was chosen over a
+     per-principal rate bound because a rate refusal would need a reason code §5.7 does not have,
+     and every call must be one record.
    - **Bounds.** A command is at most 1024 printable characters.
 7. **Health and readiness.**
    - **`/healthz`** answers `200 ok` while the broker's handler answers.
@@ -203,26 +279,60 @@ Each takes the option that denies more, is written into the tasks named, and is 
      port49 exists to remove.
    - **The cost.** A refused reload also keeps any grant the same edit withdrew. The refusal line
      says `port49 revoke` cuts someone off now, independent of the file.
-   - **What is never refused.** A reload that releases quarantined devices.
+   - **What is never refused.** A reload after which at least as many devices are in service as
+     before it: an incident fix that releases 50 devices and quarantines 5 is a net release, and
+     goes in. A reload that only releases quarantined devices is one of these.
+   - **The refused file is still on disk.** A start has no policy in force to bound against, so a
+     restart (a pod rescheduled, a crash, the next deploy) loads the refused file unguarded. The
+     refusal line says so: `broker.policy_file` on disk is not what is serving; revert or fix it
+     now. A guard at start against the last bundle in force is carried to plans 7e and 12.
+   - **The line is redacted.** A quarantine's cause quotes policy text, so port49d prints the
+     refusal through `platform.RedactQuoted` with the redactions of both the policy in force and
+     the refused one, as `sayPolicy` does (spec §5.8), and `port49 inventory diff` prints it the
+     same way.
+   - **One knob, two bounds.** `inventory.max_removed_percent` also bounds inventory syncs, so the
+     line says to lower it again once the reload is in force.
    - **What it does not reach.** A quarantine a grant expiry brings on later is not judged at the
      reload; `port49 policy diff` already fails on it in CI. An inventory-only reload stays decision
      20's, quarantining and moving on.
 9. **The revocations file is never created by a start** (owner's ruling, 2026-10-02; amends
    decision 32).
-   - **At start.** A missing file refuses every start. The message says to run `port49d
-     init-revocations` on a first install, and otherwise to mount the volume or restore the file.
-     When the old marker is there, it says the revocations were lost.
-   - **`port49d init-revocations [--config FILE]`** creates the marker, then the empty file,
-     both 0600 behind the directory fence. It refuses when either already exists, so it cannot
-     paper over a lost file.
-   - **Existing markers** are left as they are. A start no longer writes one.
+   - **At start.** A missing file refuses every start. The message leads with the upgrade case
+     (if port49d has run here before, the volume holding it is missing or empty: mount it or
+     restore the file), and only then says to run `port49d init-revocations` once on a first
+     install, so an operator whose volume did not mount is not steered into creating a file on the
+     root filesystem. When the old marker is there, it says the revocations were lost.
+   - **The marker beside a file that loads.** A start still writes the marker beside a file that
+     loaded with none, as 7a's start did. That creates no revocations file, and it gives a
+     config-managed install (file laid down by hand, never inited) the "revocations were lost"
+     message if the file later goes missing, rather than "on a first install run init".
+   - **`port49d init-revocations [--config FILE]`** runs once, at install, by hand or as a
+     one-off job, and never on a start path (an init container, `ExecStartPre=`): wrapped to
+     tolerate failure there, it would re-create the file on the next empty volume, the hazard this
+     ruling removes. Its exits:
+     - The file is there and loads: exit 0, "already initialized", nothing written, so an
+       idempotent provisioning step needs no `|| true`.
+     - The file is there and does not load: exit 1.
+     - The marker is there and the file is not: exit 1, a lost file, never re-created.
+     - Neither is there: it creates the marker, then the empty file, 0600 behind the directory
+       fence. Each is created exclusively (a temporary file linked to its name, which fails if the
+       name appeared), so a check-then-write race cannot replace a file.
+   - **As port49d's user.** Init refuses unless the effective uid owns the revocations directory,
+     naming the owner: `run as <user>, e.g. sudo -u <user> port49d init-revocations`. A root-run
+     init would leave 0600 files that port49d, running as its own user, cannot read, so the first
+     start would fail on `permission denied`. It never chowns.
+   - **Where it writes.** It prints the absolute path, warns when `broker.revocations_file` is
+     relative (resolved against the caller's directory, not port49d's), and makes `Load`'s checks
+     that the path is not another file port49d uses (`admin_socket`, the spool, …).
    - **Deliberately empty.** Writing `{"revocations": []}` by hand stays the way to start empty on
      purpose.
 10. **The lab measures the HTTP shapes on devices, with no new register row.** The device
     behaviour, a marked context's next command refused and Junos keeping its session, rests on 7a's
     `tests/lab/results/revoke-*.md`. The new claims are the HTTP paths: a self-revocation's re-login
-    works with no lift, a key revocation by an on-call reaches another principal's session, and a
-    caller with no right reaches nothing. They are written to `tests/lab/results/api-revoke-*.md`.
+    works with no lift and re-admits the session the revocation ended (decision 15's join,
+    recorded), a key revocation by an on-call reaches another principal's session, and a caller
+    with no right reaches nothing, by principal or by key. They are written to
+    `tests/lab/results/api-revoke-*.md`.
 
 **One reason and two events are added** (spec §5.7, by Task 1 before any code): the reason
 `api_right_missing`, and the events `identity` and `explain`. The `revoke` event gains two `by`
@@ -234,7 +344,8 @@ values. No other reason code is added.
 worth reading before the merge, because an operator will meet them:
 - Ruling 8 makes a small fleet's first quarantining reload a refusal: three devices, one
   quarantined, is 33% against a 10% bound. The remedy is the existing knob.
-- Ruling 2 means `port49 revoke --mine` ends sessions but does not lock the principal out.
+- Ruling 2 means `port49 revoke --mine` ends sessions but does not lock the principal out, and
+  the owner's next login on a device re-admits every session open there under their username.
 
 ## What the operator sees
 
@@ -243,40 +354,58 @@ The owner's rule is to trace a mechanism on a bad day first.
 - **First install.** `port49d` refuses to start:
 
   ```
-  port49d: broker.revocations_file /var/lib/port49/revocations.json: does not exist: on a first
-  install run 'port49d init-revocations' once (with the same --config); if port49d has run here
-  before, the volume holding it is missing or empty: mount it, or restore the file
+  port49d: broker.revocations_file /var/lib/port49/revocations.json: does not exist: if port49d has
+  run here before, the volume holding it is missing or empty: mount it or restore the file; only on
+  a first install, run 'port49d init-revocations' once, as port49d's user, with the same --config
   ```
 
   The operator runs `sudo -u port49 port49d init-revocations --config /etc/port49/port49d.yaml`,
-  which prints `port49d: created broker.revocations_file … with no revocations, and its marker …`,
-  and starts port49d.
-- **3am, the revocations volume did not mount.** The same refusal, never a start with no marks.
-  Break-glass works as with port49d stopped.
+  which prints `port49d: created broker.revocations_file /var/lib/port49/revocations.json with no
+  revocations, and its marker …; run this once per install, never on a start path: …`, and starts
+  port49d. Run as root by mistake, init refuses and says `run as port49, e.g. sudo -u port49
+  port49d init-revocations`; nothing is written. Run again later, it prints `port49d:
+  broker.revocations_file … is already initialized; nothing written` and exits 0.
+- **3am, the revocations volume did not mount.** The same refusal, never a start with no marks,
+  and its first words say to mount the volume. Break-glass works as with port49d stopped. If the
+  file was there before and the marker is still beside it, `init-revocations` refuses too: a lost
+  file is restored, never re-created.
 - **3am, a token was pasted into a chat.** The operator runs `port49 revoke --mine`:
 
   ```
   ended user:alice@example.com's sessions everywhere at 2026-10-02T03:12:09Z: 2 live context(s)
   marked, the unspent tokens under 3 (device, username) key(s) deleted; nothing stands against
   user:alice@example.com, so a new `port49 token` and login work at once
+  your next login on a device re-admits every session open there under your username: if anyone
+  else used your token, close their session on the device (or ask an operator to revoke your
+  principal) before you log in there again
   ```
 
   Their open sessions on EOS, NX-OS and IOS-XE refuse the next command (`port49: this session was
   revoked`). A Junos session is named as not reached. `port49 token core-sw01` and a new login work
-  at once.
+  at once, and that login re-admits any session still open on core-sw01 under their username
+  (decision 15's join), which is why the second line says to close a stranger's first.
 - **3am, a stolen laptop, and the on-call holds `revoke_others`.** They run `port49 revoke
-  --via-agent --principal user:bob@example.com`. This is 7a's revocation, from their own laptop with
-  no SSH to port49d. `port49 revoke --list` on port49d shows `principal user:bob@example.com since
-  … (api user:oncall@example.com)`. Lifting it still takes the admin socket.
+  --via-agent --principal user:bob@example.com`. On a terminal it asks `revoke user:bob@example.com
+  everywhere? … [y/N]` (`--yes` skips the question). It prints `target: user:bob@example.com
+  (subject netops)` and 7a's report, from their own laptop with no SSH to port49d, ending `the lift
+  is made on port49d's admin socket (/run/port49/port49d.sock), by port49d's user or root`.
+  `port49 revoke --list` on port49d shows `principal user:bob@example.com since … (api
+  user:oncall@example.com)`. With no `admin_socket` configured the last line says instead that
+  lifting needs port49d stopped, the entry removed from `broker.revocations_file`, and a start.
 - **One wedged session.** `port49 revoke --via-agent --device core-sw01 --username bob` ends what
-  holds that key. Bob can log in again at once; to stop that, revoke the principal.
+  holds that key. Bob can log in again at once, and that login re-admits any session still open
+  there; the report says to close it on the device, and to stop bob, revoke the principal. `port49
+  revoke --list` does not show it (nothing stands); it says on stderr that the decision log's
+  `revoke` records name such revocations.
 - **Someone without the right tries.** `port49 revoke --via-agent --principal user:bob@…` prints
   `port49 revoke: refused: revoking another principal needs the api: revoke_others right, which
-  your subject does not declare` and exits 1. The log holds `revoke deny api_right_missing`, naming
-  bob as the target and the caller in `origin`.
-- **"What can I do?"** `port49 identity` prints the principal, subject, grants, rights, and when
-  the session ends. `port49 explain --device core-sw01 --command "reload"` answers from the broker's
-  policy in force, with no policy file on the laptop.
+  your subject does not declare` and exits 1. By key, `--via-agent --device core-sw01 --username
+  bob` is refused the same way, and points at `--mine --device --username` for the caller's own
+  session there. The log holds `revoke deny api_right_missing`, naming bob (or the key) as the
+  target, the caller in `origin`, and no `auth`.
+- **"What can I do?"** `port49 identity` prints the principal, subject, grants, rights, and until
+  when this connection lasts. `port49 explain --device core-sw01 --command "reload"` answers from
+  the broker's policy in force, with no policy file on the laptop.
 - **A policy edit that quarantines most of the fleet:**
 
   ```
@@ -285,10 +414,13 @@ The owner's rule is to trace a mechanism on a bad day first.
   than inventory.max_removed_percent (10%): it quarantines 412: core-sw01 (…), …; `port49 policy
   diff` names each cause; the policy in force keeps serving (to cut someone off now, use `port49
   revoke`); if the change is meant, raise inventory.max_removed_percent in port49d.yaml and send
-  SIGHUP, which re-reads it with the reload
+  SIGHUP, which re-reads it with the reload, then lower it again, since it bounds inventory syncs
+  too; the refused file is still on disk and is NOT what is serving: a restart of port49d would
+  load it with no such bound, so revert or fix it now
   ```
 
-  `port49_policy_file_refused` is 1. Devices keep being served on the policy in force.
+  Each cause is redacted as port49d's other policy lines are. `port49_policy_file_refused` is 1.
+  Devices keep being served on the policy in force until port49d restarts.
 - **A Kubernetes probe** on the broker port: `GET /readyz` is `200 serving` while it serves, and
   stays 200 through a store outage (alarms say so instead).
 
@@ -356,12 +488,21 @@ Each has its test in the task named.
 3. **An explain of a device that does not exist and one the caller has no grant on.** The two
    bodies are identical but for the name. *Task 9,
    `TestAnUnknownDeviceIsAnsweredAsOneWithNoGrant`.*
-4. **A reload that only releases quarantined devices, on a fleet already mostly quarantined.**
-   Never refused. A small fleet's first quarantine is refused, naming the bound and the remedy.
-   *Task 10, `TestCheckAdmissionBoundsAPolicyThatQuarantinesTheFleet`.*
+4. **A reload against a fleet that already has a quarantine.** A reload that releases the
+   quarantined device and quarantines nothing passes; the policy in force reloaded passes with three
+   of four in service; one more quarantined of the three in service (33%) is refused; and a reload
+   that releases one quarantined device and quarantines another, leaving as many in service as
+   before, passes. *Task 10, `TestCheckAdmissionBoundsAPolicyThatQuarantinesTheFleet`.*
 5. **port49d starts on a mounted but empty volume, or `init-revocations` finds a marker with no
-   file.** Both refuse; nothing is written. *Task 2,
-   `TestAStartNeverCreatesTheFile` and `TestInitRevocationsCreatesOnceAndNeverOverALoss`.*
+   file, or runs as someone other than the directory's owner.** All refuse; nothing is written. An
+   init over a file that loads exits 0 and writes nothing. *Task 2, `TestAStartNeverCreatesTheFile`,
+   `TestInitRevocationsCreatesOnceAndNeverOverALoss`, `TestInitRevocationsRunsAsTheDirectorysOwner`.*
+6. **A caller without `revoke_others` names a `(device, username)` with no `mine`.** Refused 403
+   and recorded with the key, never answered as the caller's own sessions there. *Task 8,
+   `TestRevokeOthersMarksAPrincipalAndEndsAKey`.*
+7. **An explain about a device outside a scoped caller's grants that is quarantined, or refused
+   admission.** Answered and recorded exactly as a device that does not exist. *Task 9,
+   `TestAScopedCallerLearnsNothingOfADeviceOutsideItsGrants`.*
 
 ## Running the lab (Task 13)
 
@@ -388,31 +529,35 @@ fails.
 ```
 docs/design/2026-08-23-policy-engine-spec.md   MOD  d32 amended; §2, §5.1.3, §5.1.4, §5.7, §12, §14, d34 (Task 1)
 docs/design/2026-08-21-port49-design.md        MOD  §12 revocations-file row, readiness; §17 surface, errors (Task 1)
-internal/config/config.go                      MOD  RevocationsFile(raw) (Task 2)
-cmd/port49d/revocations.go                     MOD  no creation at start; initRevocations, initRevocationsCmd (Task 2)
-cmd/port49d/main.go                            MOD  init-revocations dispatch; start line (Task 2); SetReady (Task 5)
+internal/config/config.go                      MOD  RevocationsFile(raw), with ownRevocationsFile's checks; comments (Task 2)
+cmd/port49d/revocations.go                     MOD  no creation at start; readRevocations; initRevocations, initRevocationsCmd; createExclusive (Task 2)
+cmd/port49d/initowner_linux.go, _other.go      NEW  initOwner: init runs as the directory's owner (Task 2)
+cmd/port49d/main.go                            MOD  init-revocations dispatch, stray arguments; start line (Task 2); SetReady (Task 5); AdminSocket, start line (Task 8)
 tests/lab/harness_test.go, inventory_test.go   MOD  write {"revocations": []} before a start (Task 2)
 tests/lab/README.md                            MOD  the by-hand init step (Task 2)
 internal/decision/reasons.go, log.go           MOD  api_right_missing; identity, explain; Explain; Revocation fields (Task 3)
-internal/policy/load.go                        MOD  Right* constants; HasRight (Task 3)
-internal/broker/broker.go                      MOD  authenticate; routes; refuseRight (Tasks 4, 8, 9)
+internal/policy/load.go                        MOD  Right* constants; HasRight (Task 3); permitsAlone (Task 9)
+internal/broker/broker.go                      MOD  authenticate; RefusedAtBind's event; routes; refuseRight; AdminSocket (Tasks 4, 8, 9)
+internal/broker/listen.go                      MOD  Refused gains the request's path (Task 4)
 internal/broker/identity_api.go                NEW  GET /v1/identity (Task 4)
 internal/broker/api/identity.go                NEW  api.Identity (Task 4)
 internal/broker/health.go                      NEW  /healthz, /readyz, SetReady (Task 5)
 internal/store/store.go, memory, crypt         MOD  DeleteToken (Task 6)
 internal/store/storetest/storetest.go          MOD  DeleteTokenRemovesOne (Task 6)
-internal/broker/revoke.go                      MOD  By, Key; normalPrincipal; unreachedOf; Text (Task 7)
+internal/daemon/authen/authen_test.go          MOD  noStore gains DeleteToken (Task 6)
+internal/broker/revoke.go                      MOD  By, Key, LiftNote; normalPrincipal; unreachedOf; Text (Task 7); ErrRevocationBusy (Task 8)
+internal/daemon/metrics/metrics.go             MOD  port49_revocations_total's help names self and key (Task 7)
 internal/broker/revokeown.go                   NEW  RevokeOwn, RevokeKey (Task 7)
 internal/broker/revoke_api.go                  NEW  POST /v1/tokens/revoke (Task 8)
 internal/broker/api/revoke.go                  NEW  api.RevokeRequest, RevokeResponse (Task 8)
-internal/policy/explain.go                     MOD  Explanation.Revoked, Answer; Render's no-grant line (Task 9)
+internal/policy/explain.go                     MOD  Explanation.Revoked, Answer; Render's no-grant line; wouldPermit's cache (Task 9)
 internal/broker/explain_api.go                 NEW  POST /v1/explain (Task 9)
 internal/broker/api/explain.go                 NEW  api.ExplainRequest, ExplainResponse (Task 9)
 internal/bundle/diff.go                        MOD  NewlyQuarantined; CheckAdmission(…, now) (Task 10)
-cmd/port49d/reload.go, cmd/port49/inventory.go MOD  pass the reload instant (Task 10)
+cmd/port49d/reload.go, cmd/port49/inventory.go MOD  pass the reload instant; the refusal redacted, and the restart warning (Task 10)
 tests/lab/l31_test.go                          MOD  max_removed_percent 100 for its quarantining reload (Task 10)
-internal/agent/agent.go, socket.go             MOD  call; Identity, Explain, Revoke; socket routes; Client (Task 11)
-cmd/port49/main.go, identity.go, policy.go, revoke.go  MOD/NEW  port49 identity; explain and revoke over the agent (Task 12)
+internal/agent/agent.go, socket.go             MOD  call; Identity, Explain, Revoke; socket routes; Client; ErrAgentTooOld (Task 11)
+cmd/port49/main.go, identity.go, policy.go, revoke.go  MOD/NEW  port49 identity; explain and revoke over the agent; --list's pointer (Task 12)
 internal/testpki/testpki.go                    MOD  WriteLabWith, LabClientFiles (Task 13)
 tests/lab/api_revoke_test.go                   NEW  the HTTP revocation end to end (Task 13)
 tests/lab/slice/api-policy.yaml                NEW  the slice policy with an on-call and a peer (Task 13)
@@ -461,13 +606,19 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   ```markdown
   The marks are kept in `broker.revocations_file`, required with a
   broker, and read behind the fence with its directory fenced whether or not the file exists. A
-  start never creates it: a missing file, or one that does not parse, refuses every start, and
-  `port49d init-revocations` creates it once, empty, beside a marker, refusing when either is
-  already there (amended 2026-10-02 by the owner's ruling on plan 7a's Task 9 review M1: as first
-  built, an unmounted or empty volume that passed the fence read as a first install and started
-  with no marks). Writing `{"revocations": []}` by hand stays the way to start empty on purpose.
-  Revocation is an admin-socket operation open to port49d's user and root, and over HTTP
-  `POST /v1/tokens/revoke` under `api:` rights (plan 7c; decision 34).
+  start never creates it: a missing file, or one that does not parse, refuses every start (amended
+  2026-10-02 by the owner's ruling on plan 7a's Task 9 review M1: as first built, an unmounted or
+  empty volume that passed the fence read as a first install and started with no marks).
+  `port49d init-revocations` creates it, empty, beside a marker, once per install, run by hand or
+  as a one-off job as the user that owns its directory (port49d's), and never on a start path:
+  automation that ran it at every start and tolerated its refusal would re-create the file on the
+  next empty volume. It exits 0 writing nothing when the file is there and loads, and refuses when
+  the file is there and does not load, or when the marker is there without the file (a loss,
+  restored from backup, never re-created). A start still writes the marker beside a file that
+  loads with none: that creates no revocations file, and it makes a config-managed file's later
+  loss read as a loss rather than as a first install. Writing `{"revocations": []}` by hand stays
+  the way to start empty on purpose. Revocation is an admin-socket operation open to port49d's user
+  and root, and over HTTP `POST /v1/tokens/revoke` under `api:` rights (plan 7c; decision 34).
   ```
 
 - [ ] **Step 2: §2, the rights table.** Under "**What a subject may do through the broker API.**",
@@ -504,10 +655,13 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   So is a file that takes more than `inventory.max_removed_percent` of the devices in
   service under the policy in force (admitted, and not quarantined) out of service at the reload,
   counting the devices it newly refuses admission and the devices it newly quarantines together,
-  or that admits no device at all whatever the bound (§10; §13 decision 34). A reload that only
-  releases quarantined devices is never refused, and a quarantine a grant expiry brings on later is
-  not judged at the reload (`port49 policy diff` fails on it). A refused file also keeps any grant
-  it withdrew: `port49 revoke` cuts a principal off whatever the file.
+  or that admits no device at all whatever the bound (§10; §13 decision 34). A reload after which
+  at least as many devices are in service as before it is never refused (a net release), and a
+  quarantine a grant expiry brings on later is not judged at the reload (`port49 policy diff`
+  fails on it). A refused file also keeps any grant it withdrew: `port49 revoke` cuts a principal
+  off whatever the file. A refused file stays on disk, and a start has no policy in force to bound
+  against, so a restart would load it unguarded: port49d's refusal line says so, redacted as its
+  other policy lines are (§5.8).
   ```
 
 - [ ] **Step 4: §5.1.4, the HTTP revocation.** After the paragraph that begins "**Revocation by
@@ -523,19 +677,30 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
     leaves no mark. Its unspent tokens are deleted one by one, so another principal's under a
     shared `(device, username)` stay. Its live contexts are marked by compare-and-set on the
     revision read, so a context another principal's login replaced is never marked, and they are
-    marked twice. Its receipts are deleted. With `device` and `username` beside `mine` it does that
-    on that key alone. Nothing stands after it: a token minted later joins the context and lifts
-    the mark (decision 15).
+    marked twice. Its receipts are deleted everywhere, even with a key named: the store has no
+    finer cut, so a retransmission in flight on another device is answered `token_spent`. With
+    `device` and `username` beside `mine` it does that on that key alone. Nothing stands after it:
+    a token minted later joins the context and lifts the mark (decision 15), for every session
+    open under that `(device, username)`. So if anyone else used the caller's token, the caller's
+    next login on that device re-admits their session too: the response says to close such a
+    session on the device, or ask an operator to revoke the principal, before logging in there
+    again.
   - **`{"principal": …}` naming another principal**, under `revoke_others`, is the revocation
     above, a standing mark, with origin `api <caller>`; without the right it is refused 403
-    `api_right_missing` and recorded.
+    `api_right_missing` and recorded. The response names the target's subject. A lift is made on
+    port49d's admin socket; with no `admin_socket` configured the response says lifting needs
+    port49d stopped, the entry removed from this file, and a start.
   - **`{"device": …, "username": …}`**, under `revoke_others`, ends whatever holds that key: every
     unspent token under it, and its live context whoever's it is, with the owner's receipts. It
-    leaves no mark. Without the right it is the caller's own on that key, as `mine` is.
+    leaves no mark, so the owner's next login on that device re-admits any session still open
+    there: the response says to close it on the device. Without the right it is refused 403
+    `api_right_missing` and recorded with the key: the request's form, never the caller's rights,
+    decides what it means, and the caller's own session on one key is `mine` with the key.
 
-  A lift and a revocation by certificate are the admin socket's alone. The response says what was
-  reached, names the contexts on a platform that never asks about a command, and repeats the text
-  `port49 revoke` prints.
+  A lift and a revocation by certificate are the admin socket's alone. One that cannot take the
+  revocation slot within 10 s is answered `503 revocation_busy`, nothing revoked. The response
+  says what was reached, names the contexts on a platform that never asks about a command, and
+  repeats the text `port49 revoke` prints.
   ```
 
 - [ ] **Step 5: §5.7, the events.**
@@ -582,23 +747,28 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
 
   ```markdown
   A `self` or `key` revocation writes one record each time it runs; its `principal` is the caller
-  for `self`, and for `key` the owner of the context it found, if one was read. A `revoke deny
-  api_right_missing` names the target as `principal` (or the key as `device` and `username`) and
-  the caller in `origin`. An `explain` record names whom it was about as `principal`, the caller's
-  method and fingerprint in `auth`, the device by name (no platform where the answer is
-  `no_grants_matched`), and `"explain": {"asked_by", "command", "mint_error"}`: `command` is true
-  when a command was asked, and the command itself is never recorded. Where the broker would mint
-  no token (`mint_error`, a mint item error), the record has no verdict. An API call refused before
-  its body is read, for a reason a mint is refused (`trust_domain_unresolved`, `session_expired`,
-  `credential_revoked`, `store_unavailable`, with their `mint` meanings), is recorded under its own
-  event: `identity`, `explain`, or `revoke`.
+  for `self`, and for `key` the owner of the context it found, if one was read. A record's `auth`
+  and `principal` always describe one credential, so a record about someone other than the caller
+  carries no `auth`. A `revoke deny api_right_missing` names the target as `principal` (or the key
+  as `device` and `username`, with no `principal`), carries no `auth`, and names the caller in
+  `origin`. An `explain` record names whom it was about as `principal`, carries no `auth`, names
+  the device (no platform where the answer is `no_grants_matched`) and the bundle that answered
+  (`policy.bundle`), and has `"explain": {"asked_by", "asked_by_fingerprint", "command",
+  "mint_error"}`: `asked_by` and `asked_by_fingerprint` are the caller's principal and certificate,
+  `command` is true when a command was asked, and the command itself is never recorded. Where the
+  broker would mint no token (`mint_error`, a mint item error), the record has no verdict. An API
+  call refused before its body is read, for a reason a mint is refused (`trust_domain_unresolved`,
+  `session_expired`, `credential_revoked`, `store_unavailable`, with their `mint` meanings), is
+  recorded under its own event: `identity`, `explain`, or `revoke`, the caller as `principal` with
+  its `auth`. So is one the broker's listener refuses as the connection binds, by the path the
+  refused request named; any other path is recorded `mint`.
   ```
 
 - [ ] **Step 7: §5.7, the reason.** In the reason-code table, after the `revocation_lifted` row,
   add:
 
   ```markdown
-  | `api_right_missing` | `revoke`, `explain`: the caller asked to act on another principal's tokens, sessions or decisions, and its subject declares no `api:` right that unlocks it (§2). The API answers 403 `api_right_missing`; nothing is done |
+  | `api_right_missing` | `revoke`, `explain`: the caller asked to act on another principal's tokens, sessions or decisions, or on a `(device, username)` whoever holds it, and its subject declares no `api:` right that unlocks it (§2). The API answers 403 `api_right_missing`; nothing is done |
   ```
 
 - [ ] **Step 8: §12, tooling.** After the paragraph that begins "**`port49 revoke (--principal
@@ -607,15 +777,21 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
 
   ```markdown
   **`port49 revoke --mine [--device <name> --username <name>]`** and **`port49 revoke --via-agent
-  (--principal <principal> | --device <name> --username <name>)`** send the revocation to the
-  broker through the operator's own agent (`POST /v1/tokens/revoke`, §5.1.4), under the caller's
-  `api:` rights (§2): `--mine` ends the caller's own sessions and leaves no mark; `--via-agent
-  --principal` revokes another principal as the admin socket does, and needs `revoke_others`; a
-  device and username end that key (the caller's own on it, or whoever's under `revoke_others`).
-  A lift, a certificate and `--list` stay the admin socket's. Exit codes are as above.
+  [--yes] (--principal <principal> | --device <name> --username <name>)`** send the revocation to
+  the broker through the operator's own agent (`POST /v1/tokens/revoke`, §5.1.4), under the
+  caller's `api:` rights (§2): `--mine` ends the caller's own sessions, or its session on one key,
+  and leaves no mark; `--via-agent --principal` revokes another principal as the admin socket
+  does, and needs `revoke_others`; `--via-agent --device --username` ends whatever holds that key,
+  and needs `revoke_others` too. `--via-agent --principal` asks `y/N` on a terminal first
+  (`--yes` skips it; off a terminal it does not ask), and prints the target's subject from the
+  answer. A lift, a certificate and `--list` stay the admin socket's; `--list` shows marks only,
+  and says on stderr that a self or key revocation, which leaves none, is named in the decision
+  log. Exit codes are as above.
 
   **`port49 identity [--json]`** prints what the broker resolves the agent's principal to (`GET
-  /v1/identity`): subject, grants unexpired now, `api:` rights, and when the session ends.
+  /v1/identity`): subject, grants unexpired now, `api:` rights, and until when this connection
+  lasts before it must authenticate again (`connection_ends_at`; a device's own session ceiling may
+  end a session sooner).
 
   **`port49 explain --device <name> [--command "<line>"] [--principal <principal>]`**, with no
   `--policy` and `--inventory`, asks the broker through the agent (`POST /v1/explain`) and prints
@@ -624,22 +800,31 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   form's alone.
 
   **`port49d init-revocations [--config <port49d.yaml>]`** creates `broker.revocations_file`,
-  empty, and its marker, once, behind the directory fence, reading nothing from port49d.yaml but
-  that path (no secret is resolved). It refuses when either is already there: a lost file is
-  restored from backup, or replaced by `{"revocations": []}` on purpose (§13, decision 32).
+  empty, and its marker, once per install, behind the directory fence, reading nothing from
+  port49d.yaml but that path and the paths it must not collide with (no secret is resolved). It
+  runs as the user that owns the file's directory, port49d's, and refuses otherwise, naming that
+  user. Run it by hand or as a one-off job at install, never on a start path. It exits 0 when it
+  created both, or when the file is already there and loads ("already initialized", nothing
+  written); 1 when the file is there and does not load, or the marker is there without it (a lost
+  file is restored from backup, or replaced by `{"revocations": []}` on purpose; §13, decision
+  32); 2 on usage.
   ```
 
-- [ ] **Step 9: §14, API rights.** Replace the "**API rights**" bullet with:
+- [ ] **Step 9: §14, API rights.** Replace the broker's "**API rights**" bullet, the one that
+  begins "a principal without `api:` can revoke its own tokens and not another's" (§14 has a
+  second, the inventory service's "a reader cannot trigger a sync", which stays), with:
 
   ```markdown
   - **API rights**: a principal without `api:` can end its own sessions and delete its own
     unspent tokens, never another's, including another principal's under a shared `(device,
     username)`, and never marks a context another login replaced; `revoke_others` unlocks a
     standing mark on another principal and ending any `(device, username)`; `explain_others`
-    unlocks explaining another principal; a request without the right is refused 403
-    `api_right_missing` and recorded; no right widens a mint or a refresh; an unknown device is
-    explained exactly as one with no grant; `/v1/logout` succeeds with a valid logout token and no
-    caller rights; every subject carrying `api:` appears in the CI report.
+    unlocks explaining another principal; a request without the right, a `(device, username)`
+    without `mine` included, is refused 403 `api_right_missing` and recorded with no `auth`; no
+    right widens a mint or a refresh; an unknown device, and one outside the caller's grants that
+    is quarantined or refused admission, is explained exactly as one with no grant; `/v1/logout`
+    succeeds with a valid logout token and no caller rights; every subject carrying `api:` appears
+    in the CI report.
   ```
 
 - [ ] **Step 10: §13, decision 34.** After decision 33 (it ends "(§5.1.4, §5.6, §5.7, §12; design
@@ -655,24 +840,47 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
     right widens a mint or a refresh, and `/v1/identity` answers the caller alone. Rights are read
     from the policy in force at each request.
   - **Self-revocation.** It deletes the caller's own unspent tokens one by one and marks its own
-    contexts by compare-and-set, twice, and leaves no mark, so a token minted after it re-admits
-    (decision 15). It closes no held connection.
+    contexts by compare-and-set, twice, deletes its receipts everywhere, and leaves no mark, so a
+    token minted after it re-admits (decision 15). That re-admission is the join's: it lifts the
+    mark for every session open under that `(device, username)`, a stranger's on a leaked token
+    included, so the response tells the caller to close such a session on the device, or have an
+    operator revoke the principal, before logging in there again. It closes no held connection.
   - **Others.** Another principal under `revoke_others` is a standing mark through the admin
-    socket's revocation, its origin `api <caller>`. A `(device, username)` under it is ended
-    whoever holds it, with no mark; without it, a key is the caller's own. A lift and a certificate
-    stay on the admin socket.
+    socket's revocation, its origin `api <caller>`, and the response names the target's subject. A
+    `(device, username)` under it is ended whoever holds it, with no mark, and the owner's next
+    login there re-admits any session still open, which the response says to close. Without the
+    right either form is refused 403: the request's form, not the caller's rights, decides what it
+    means, so a withdrawn right fails loudly instead of narrowing to the caller's own; the caller's
+    own session on one key is `mine` with the key. A lift and a certificate stay on the admin
+    socket; an HTTP mark is still made with no `admin_socket` configured (revoking is the safe
+    direction), and the response and port49d's start line say lifting it then needs port49d
+    stopped and the file edited.
   - **Records.** Every authenticated call is one record: the events `identity` and `explain` and
-    the reason `api_right_missing` are added; a call refused before its body is read is recorded
-    under its own event with a mint's reasons; an explain never records its command.
-  - **Explain.** It answers as the broker mints and the daemon decides, from the policy in force.
-    An unknown device is answered exactly as a device with no grant, naming no platform, and a
-    principal under a mark is `credential_revoked`.
+    the reason `api_right_missing` are added; a call refused before its body is read, or as its
+    connection binds, is recorded under its own event with a mint's reasons; an explain never
+    records its command. A record's `auth` and `principal` describe one credential: a record about
+    someone other than the caller carries no `auth`, and names the caller in `origin` or in
+    `explain.asked_by` and `explain.asked_by_fingerprint`.
+  - **Explain.** It answers as the broker mints and the daemon decides, from the policy in force,
+    and its record names the bundle. An unknown device is answered exactly as a device with no
+    grant, naming no platform, and a principal under a mark is `credential_revoked`. A caller's
+    own denied command is answered, in its text, with the name of every role in the whole policy
+    whose permits would match it, deliberately: a role catalogue, never who holds a role or where. Each role's permits are compiled once per
+    platform per loaded policy, as projections are memoized, so a denied explain costs a match per
+    role; a per-principal rate bound was not chosen, since its refusal would need a reason code
+    this vocabulary lacks and every call is one record.
   - **Health.** `/healthz` and `/readyz` need no certificate and write no record; readiness is
     serving or not, never the store's health (design document §12).
   - **The reload guard** (plan 4b, M3). A policy reload that newly refuses or newly quarantines,
     together, more than `inventory.max_removed_percent` of the devices in service is refused, the
-    policy in force serving on. An inventory-only reload stays decision 20's.
-  - **The revocations file.** A start never creates it (decision 32, amended the same day).
+    policy in force serving on, unless at least as many devices are in service after it as before
+    (a net release, which an incident fix often is; it also admits a policy and inventory reload
+    that adds devices while quarantining others). The refusal is printed redacted (§5.8), says to
+    lower the bound again after a deliberate raise (it bounds inventory syncs too), and says the
+    refused file is still on disk and a restart would load it unguarded: a start has no policy in
+    force to bound against. An inventory-only reload stays decision 20's.
+  - **The revocations file.** A start never creates it (decision 32, amended the same day), and
+    `port49d init-revocations` runs once, as the directory's owner, never on a start path.
 
   (§2, §5.1.3, §5.1.4, §5.7, §12, §14; design document §12, §17)
   ```
@@ -683,7 +891,8 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   unmounted volume, unparseable, or writable by someone else; port49d never creates it, `port49d
   init-revocations` does, once;". In the same row's last cell, replace "Restore the file, or write
   `{"revocations": []}` on purpose" with "Mount the volume or restore the file, or write
-  `{"revocations": []}` on purpose; on a first install, run `port49d init-revocations`".
+  `{"revocations": []}` on purpose; on a first install, run `port49d init-revocations` once, as
+  port49d's user, never on a start path".
 
   After the paragraph that begins "**Store health MUST NOT be wired into the readiness probe.**",
   add: "The broker's own `/readyz` (plan 7c) follows the same rule: it answers whether the broker
@@ -696,7 +905,8 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   - In the **Errors** block, add these lines after the `400  bad_request` line:
 
     ```
-    403  api_right_missing                the call names another principal, and the caller's subject declares no api: right that unlocks it (plan 7c)
+    403  api_right_missing                the call names another principal, or a (device, username) whoever holds it, and the caller's subject declares no api: right that unlocks it (plan 7c)
+    503  revocation_busy                  another revocation or lift held the revocation slot for 10 s; nothing was revoked; Retry-After (plan 7c)
     ```
 
   - After the paragraph that begins "**Every call is authorized as a principal, and by default a
@@ -728,44 +938,67 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
 ### Task 2: A start never creates the revocations file; `port49d init-revocations` does, once
 
 **Files:**
-- Modify: `internal/config/config.go` (beside `InventoryBound`, ~line 487)
-- Modify: `cmd/port49d/revocations.go` (`loadRevocations`, `restoreRevocations`; new
-  `initRevocations`, `initRevocationsCmd`)
+- Modify: `internal/config/config.go` (beside `InventoryBound`, ~line 487; the spool default in
+  `Load`, ~line 631; the comments on `BrokerConfig.RevocationsFile`, ~lines 205–212, and on
+  `ownRevocationsFile`, ~lines 1155–1160)
+- Modify: `cmd/port49d/revocations.go` (`loadRevocations` splits into `readRevocations` and
+  itself; `writeMarker`, `saveRevocations` and `restoreRevocations`; new `markerBody`,
+  `encodeRevocations`, `createExclusive`, `initRevocations`, `initRevocationsCmd`)
+- Create: `cmd/port49d/initowner_linux.go`, `cmd/port49d/initowner_other.go` (`initOwner`)
 - Modify: `cmd/port49d/main.go` (`main`, ~line 64; the start line in `run`, ~lines 677–690)
-- Modify: `cmd/port49d/revocations_test.go`, `cmd/port49d/broker_test.go` (`brokerConfig`, the
-  run-level test that waits for "created"), and any other test that starts port49d with a
-  `revocations_file` (find them with `grep -rn 'revocations_file\|RevocationsFile' cmd/port49d`)
+- Modify: `cmd/port49d/revocations_test.go`; `cmd/port49d/broker_test.go` (`brokerConfig`, ~line
+  37; the run-level test that waits for "created", ~line 720; the restore test's
+  `restoreRevocations` call, ~line 765)
+- Create: `cmd/port49d/initowner_linux_test.go`
 - Modify: `internal/config/config_test.go`
 - Modify: `tests/lab/harness_test.go` (`privatePolicy`, ~line 879), `tests/lab/inventory_test.go`
   (the config at ~line 327), `tests/lab/private_policy_unit_test.go`, `tests/lab/README.md`
 
+Every other `cmd/port49d` test that starts port49d with a broker builds its config through
+`brokerConfig` (checked: `admin_linux_test.go`, `certstatus_test.go`, `reload_test.go`,
+`run_test.go`, `service_e2e_test.go`, `coldstart_policy_test.go`, `policyfile_test.go`,
+`redact_test.go`), so initialising there covers them.
+
 **Interfaces:**
-- Consumes: `fence.CheckDir`, `fence.ReadNoLink`, `writeMarker`, `saveRevocations`, `markerOf`
-  (all in `cmd/port49d/revocations.go`); `config.ReadRegular`, `config.MaxConfigSize`.
+- Consumes: `fence.CheckDir`, `fence.ReadNoLink`, `fence.FileOwner`, `fence.Geteuid` (a var, on
+  Linux); `writeMarker`, `saveRevocations`, `markerOf` (all in `cmd/port49d/revocations.go`);
+  `config.ReadRegular`, `config.MaxConfigSize`, `ownRevocationsFile`.
 - Produces:
-  - `func config.RevocationsFile(raw []byte) (string, error)`
+  - `func config.RevocationsFile(raw []byte) (string, error)`; `const defaultSpoolPath`
+  - `func readRevocations(path string) ([]store.Revocation, error)` (fence, read, parse; writes
+    nothing)
   - `func loadRevocations(path string) ([]store.Revocation, error)` (the `created` result is
-    gone)
+    gone; it still writes the marker beside a file that loads with none)
   - `func restoreRevocations(ctx context.Context, st store.Store, path string, m *metrics.Metrics) ([]store.Revocation, error)`
-  - `func initRevocations(path string) error`
+  - `func markerBody(abs string) []byte`, `func encodeRevocations(rs []store.Revocation) ([]byte, error)`
+  - `func createExclusive(abs string, body []byte) error`
+  - `func initOwner(dir string) error`
+  - `func initRevocations(path string) (created bool, err error)`
   - `func initRevocationsCmd(args []string, stdout, stderr io.Writer) int`
 
 - [ ] **Step 1: Write the failing tests.** In `cmd/port49d/revocations_test.go`, replace
-  `TestTheFirstStartCreatesTheFileAndALaterMissingOneRefuses` with the tests below, and change
-  `TestTheDirectoryIsFencedWithOrWithoutTheFile` to the new `loadRevocations` signature
-  (`if _, err := loadRevocations(…); err == nil`). Its last check, that no `.created` was written
-  in a refused directory, stays.
+  `TestTheFirstStartCreatesTheFileAndALaterMissingOneRefuses` with the tests below (its hand-laid
+  half is `TestAHandLaidFileLoadsAndGetsAMarker`). Move every other call to the two-result
+  signatures: `_, _, err := loadRevocations(…)` becomes `_, err :=` (~lines 118, 125, 148, 180,
+  187), `rs, _, err` becomes `rs, err` (~lines 284, 333), and `restoreRevocations` at ~line 163
+  likewise. `TestTheDirectoryIsFencedWithOrWithoutTheFile` keeps its last check, that no `.created`
+  was written in a refused directory. `TestRevocationsSurviveARestart` (~line 32) can no longer
+  start on an empty directory: its first start becomes `if created, err := initRevocations(path);
+  err != nil || !created { t.Fatalf("init: %v %v", created, err) }`, and its later restore reads
+  `rs, err := restoreRevocations(ctx, after, path, m)` and checks `err != nil || len(rs) != 2`.
 
   ```go
   // A start never creates the file (spec §13 decision 32, amended
   // 2026-10-02): a fresh directory, or a mounted volume left empty, refuses
-  // every start and writes nothing, and the refusal names the one-time init.
+  // every start and writes nothing. The refusal leads with the upgrade case,
+  // so an operator whose volume did not mount mounts it rather than running
+  // the first-install init on an empty mount point (pre-flight M13).
   func TestAStartNeverCreatesTheFile(t *testing.T) {
   	path := filepath.Join(safeDir(t), "revocations.json")
   	for i := 0; i < 2; i++ {
   		_, err := loadRevocations(path)
-  		if err == nil || !strings.Contains(err.Error(), "port49d init-revocations") ||
-  			!strings.Contains(err.Error(), "the volume holding it is missing or empty") {
+  		if err == nil || !strings.HasPrefix(err.Error(), "does not exist: if port49d has run here before, the "+
+  			"volume holding it is missing or empty") || !strings.Contains(err.Error(), "port49d init-revocations") {
   			t.Fatalf("start %d on an empty directory: %v", i, err)
   		}
   	}
@@ -777,13 +1010,15 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   }
 
   // init writes the marker and an empty file, 0600, and a start loads them.
-  // It refuses a second time, and it refuses over a lost file (the marker
-  // still there), so it never papers over revocations that were lost; a
+  // Run again over a file that loads, it writes nothing and says so, so a
+  // provisioning step may run it twice (pre-flight I6). Over a file that does
+  // not load it refuses and leaves it. Over a lost file (the marker still
+  // there) it refuses, so it never papers over revocations that were lost; a
   // start then says they were lost.
   func TestInitRevocationsCreatesOnceAndNeverOverALoss(t *testing.T) {
   	path := filepath.Join(safeDir(t), "revocations.json")
-  	if err := initRevocations(path); err != nil {
-  		t.Fatal(err)
+  	if created, err := initRevocations(path); err != nil || !created {
+  		t.Fatalf("the first init: %v %v", created, err)
   	}
   	for _, p := range []string{path, markerOf(path)} {
   		if fi, err := os.Stat(p); err != nil || fi.Mode().Perm() != 0o600 {
@@ -793,13 +1028,29 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   	if rs, err := loadRevocations(path); err != nil || len(rs) != 0 {
   		t.Fatalf("the start after init: %v %v", rs, err)
   	}
-  	if err := initRevocations(path); err == nil || !strings.Contains(err.Error(), "exists") {
-  		t.Fatalf("a second init: %v", err)
+  	before, err := os.ReadFile(path)
+  	if err != nil {
+  		t.Fatal(err)
+  	}
+  	if created, err := initRevocations(path); err != nil || created {
+  		t.Fatalf("a second init over a file that loads: %v %v", created, err)
+  	}
+  	if after, err := os.ReadFile(path); err != nil || !bytes.Equal(before, after) {
+  		t.Fatalf("a second init wrote the file: %q %v", after, err)
+  	}
+  	if err := os.WriteFile(path, []byte("{"), 0o600); err != nil {
+  		t.Fatal(err)
+  	}
+  	if _, err := initRevocations(path); err == nil || !strings.Contains(err.Error(), "does not load") {
+  		t.Fatalf("an init over a file that does not load: %v", err)
+  	}
+  	if got, _ := os.ReadFile(path); string(got) != "{" {
+  		t.Fatalf("init replaced a file that does not load: %q", got)
   	}
   	if err := os.Remove(path); err != nil {
   		t.Fatal(err)
   	}
-  	if err := initRevocations(path); err == nil || !strings.Contains(err.Error(), "exists") {
+  	if _, err := initRevocations(path); err == nil || !strings.Contains(err.Error(), "never re-creates a lost file") {
   		t.Fatalf("an init over a lost file: %v", err)
   	}
   	if _, err := loadRevocations(path); err == nil || !strings.Contains(err.Error(), "its marker says") {
@@ -810,9 +1061,11 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   	}
   }
 
-  // A file laid down by hand loads, and no start writes a marker beside it
-  // any more: the marker is init's alone.
-  func TestAHandLaidFileLoadsAndGetsNoMarker(t *testing.T) {
+  // A file laid down by hand loads, and the start writes the marker beside
+  // it, as 7a's start did (spec §13 decision 32; pre-flight M12): that
+  // creates no revocations file, and the file's later loss then refuses the
+  // start as a loss, never as a first install.
+  func TestAHandLaidFileLoadsAndGetsAMarker(t *testing.T) {
   	path := filepath.Join(safeDir(t), "revocations.json")
   	if err := os.WriteFile(path, []byte(`{"revocations": []}`), 0o600); err != nil {
   		t.Fatal(err)
@@ -820,8 +1073,14 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   	if rs, err := loadRevocations(path); err != nil || len(rs) != 0 {
   		t.Fatalf("%v %v", rs, err)
   	}
-  	if _, err := os.Lstat(markerOf(path)); !errors.Is(err, os.ErrNotExist) {
-  		t.Fatalf("a start wrote a marker: %v", err)
+  	if _, err := os.Lstat(markerOf(path)); err != nil {
+  		t.Fatalf("no marker beside a file that loaded: %v", err)
+  	}
+  	if err := os.Remove(path); err != nil {
+  		t.Fatal(err)
+  	}
+  	if _, err := loadRevocations(path); err == nil || !strings.Contains(err.Error(), "its marker says") {
+  		t.Fatalf("a start after a hand-laid file was lost: %v", err)
   	}
   }
 
@@ -833,7 +1092,7 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   		t.Fatal(err)
   	}
   	path := filepath.Join(open, "revocations.json")
-  	if err := initRevocations(path); err == nil {
+  	if _, err := initRevocations(path); err == nil {
   		t.Fatal("init wrote into a directory others can write")
   	}
   	for _, p := range []string{path, markerOf(path)} {
@@ -843,9 +1102,29 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   	}
   }
 
+  // A file that appears between init's look and its write is never
+  // replaced: the create is a link, which fails on an existing name
+  // (pre-flight M10).
+  func TestCreateExclusiveNeverReplaces(t *testing.T) {
+  	path := filepath.Join(safeDir(t), "revocations.json")
+  	if err := os.WriteFile(path, []byte("theirs"), 0o600); err != nil {
+  		t.Fatal(err)
+  	}
+  	if err := createExclusive(path, []byte("ours")); !errors.Is(err, fs.ErrExist) {
+  		t.Fatalf("over an existing file: %v", err)
+  	}
+  	if got, _ := os.ReadFile(path); string(got) != "theirs" {
+  		t.Fatalf("replaced: %q", got)
+  	}
+  	if left, _ := filepath.Glob(filepath.Join(filepath.Dir(path), ".revocations.json.init-*")); len(left) != 0 {
+  		t.Fatalf("temporary files left: %v", left)
+  	}
+  }
+
   // The command reads broker.revocations_file and nothing else: a config
-  // whose secrets are not in the environment still inits, and one with no
-  // broker block is refused, exit 1.
+  // whose secrets are not in the environment still inits, and a second run
+  // says the file is already initialized, exit 0. One with no broker block is
+  // refused, exit 1; stray arguments are usage, exit 2.
   func TestInitRevocationsCmdReadsOnlyThePath(t *testing.T) {
   	dir := safeDir(t)
   	path := filepath.Join(dir, "revocations.json")
@@ -857,8 +1136,14 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   	}
   	var out, errb bytes.Buffer
   	if code := initRevocationsCmd([]string{"--config", cfg}, &out, &errb); code != 0 ||
-  		!strings.Contains(out.String(), "created broker.revocations_file "+path) {
+  		!strings.Contains(out.String(), "created broker.revocations_file "+path) ||
+  		!strings.Contains(out.String(), "never on a start path") {
   		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
+  	}
+  	out.Reset()
+  	if code := initRevocationsCmd([]string{"--config", cfg}, &out, &errb); code != 0 ||
+  		!strings.Contains(out.String(), path+" is already initialized; nothing written") {
+  		t.Fatalf("the second run: code %d stdout %q stderr %q", code, out.String(), errb.String())
   	}
   	if err := os.WriteFile(cfg, []byte("listen: 127.0.0.1:49\n"), 0o600); err != nil {
   		t.Fatal(err)
@@ -875,13 +1160,55 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
 
   If the `encryption:` line does not decode against the real schema, use whatever key
   `fileConfig` names for it. The point of the test is a config that `config.Load` would refuse for
-  a missing secret and `RevocationsFile` reads.
+  a missing secret and `RevocationsFile` reads. `revocations_test.go` gains the `bytes` and
+  `io/fs` imports if it lacks them.
+
+  Create `cmd/port49d/initowner_linux_test.go`:
+
+  ```go
+  //go:build linux
+
+  package main
+
+  import (
+  	"errors"
+  	"os"
+  	"path/filepath"
+  	"strings"
+  	"testing"
+
+  	"github.com/rhwendt/port49/internal/fence"
+  )
+
+  // init runs as the revocations directory's owner, port49d's user, or not
+  // at all: a root-run init would leave 0600 files port49d cannot read, and
+  // the first start would fail on "permission denied" (pre-flight I5). The
+  // refusal names the owner and the sudo line, and nothing is written; it
+  // never chowns. It is asked before the fence, whose own refusal would say
+  // "chown it".
+  func TestInitRevocationsRunsAsTheDirectorysOwner(t *testing.T) {
+  	path := filepath.Join(safeDir(t), "revocations.json")
+  	defer func(f func() int) { fence.Geteuid = f }(fence.Geteuid)
+  	fence.Geteuid = func() int { return os.Geteuid() + 1 }
+  	_, err := initRevocations(path)
+  	if err == nil || !strings.Contains(err.Error(), "e.g. sudo -u ") ||
+  		!strings.Contains(err.Error(), " port49d init-revocations") || strings.Contains(err.Error(), "chown") {
+  		t.Fatalf("%v", err)
+  	}
+  	for _, p := range []string{path, markerOf(path)} {
+  		if _, err := os.Lstat(p); !errors.Is(err, os.ErrNotExist) {
+  			t.Fatalf("a refused init wrote %s", p)
+  		}
+  	}
+  }
+  ```
 
   In `internal/config/config_test.go`:
 
   ```go
   // RevocationsFile reads the one path init-revocations needs, as strictly as
-  // Load decodes, and resolves no secret.
+  // Load decodes, resolves no secret, and refuses a path Load would refuse as
+  // another file port49d uses (pre-flight M10).
   func TestRevocationsFileReadsThePathAlone(t *testing.T) {
   	got, err := RevocationsFile([]byte("broker:\n  revocations_file: /var/lib/port49/revocations.json\n"))
   	if err != nil || got != "/var/lib/port49/revocations.json" {
@@ -894,22 +1221,32 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   		!strings.Contains(err.Error(), "no broker.revocations_file") {
   		t.Fatalf("no broker: %v", err)
   	}
+  	if _, err := RevocationsFile([]byte("admin_socket: /var/lib/port49/r.json\nbroker:\n" +
+  		"  revocations_file: /var/lib/port49/r.json\n")); err == nil || !strings.Contains(err.Error(), "may not be admin_socket") {
+  		t.Fatalf("revocations_file over admin_socket: %v", err)
+  	}
   }
   ```
 
 - [ ] **Step 2: Run them to see them fail.**
 
-  Run: `go test ./cmd/port49d/ -run 'TestAStartNeverCreatesTheFile|TestInitRevocations|TestAHandLaid' && go test ./internal/config/ -run TestRevocationsFileReadsThePathAlone`
-  Expected: build failure (`initRevocations`, `initRevocationsCmd`, `RevocationsFile` undefined;
-  `loadRevocations` returns three values).
+  Run: `go test ./cmd/port49d/ -run 'TestAStartNeverCreatesTheFile|TestInitRevocations|TestAHandLaid|TestCreateExclusive' && go test ./internal/config/ -run TestRevocationsFileReadsThePathAlone`
+  Expected: build failure (`initRevocations`, `initRevocationsCmd`, `createExclusive`,
+  `RevocationsFile` undefined; `loadRevocations` returns three values).
 
-- [ ] **Step 3: `config.RevocationsFile`.** In `internal/config/config.go`, after `inventoryBound`:
+- [ ] **Step 3: `config.RevocationsFile`.** In `internal/config/config.go`, lift `Load`'s spool
+  default (`c.Accounting.SpoolPath = "/var/lib/port49/acct.jsonl"`, ~line 631) into
+  `const defaultSpoolPath = "/var/lib/port49/acct.jsonl"` and use it there. After
+  `inventoryBound`:
 
   ```go
   // RevocationsFile reads broker.revocations_file from a port49d.yaml's bytes,
   // for `port49d init-revocations` (spec §13 decision 32, amended): it resolves
   // no secret, so the command runs where the daemon's environment is not, and
-  // decodes as strictly as Load, so a typo is an error, never "no path".
+  // decodes as strictly as Load, so a typo is an error, never "no path". It
+  // refuses the paths Load refuses (ownRevocationsFile), each read from the
+  // same bytes, so init never drops a file where admin_socket, the spool or
+  // the policy will be (pre-flight M10).
   func RevocationsFile(raw []byte) (string, error) {
   	var f fileConfig
   	dec := yaml.NewDecoder(bytes.NewReader(raw))
@@ -920,28 +1257,49 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   	if f.Broker == nil || f.Broker.RevocationsFile == "" {
   		return "", errors.New("config: no broker.revocations_file: init-revocations is for a port49d with a broker")
   	}
+  	c := Config{InventoryFile: f.InventoryFile, InventoryService: f.InventoryOpts.Service, Accounting: f.Accounting,
+  		Lab: f.Lab, AdminSocket: f.AdminSocket}
+  	if c.Accounting.SpoolPath == "" {
+  		c.Accounting.SpoolPath = defaultSpoolPath
+  	}
+  	if err := ownRevocationsFile(c, *f.Broker); err != nil {
+  		return "", err
+  	}
   	return f.Broker.RevocationsFile, nil
   }
   ```
 
-  Add `errors` to the imports if it is not there.
+  Add `errors` to the imports if it is not there. If `Config`'s field for the inventory service
+  is named otherwise, use `Load`'s assignment from `f.InventoryOpts.Service` as the guide.
 
-- [ ] **Step 4: `loadRevocations` never creates, and `initRevocations`.** In
-  `cmd/port49d/revocations.go`, replace `loadRevocations`' comment and its not-exist branch, drop
-  the marker-writing block after the parse loop, and return `([]store.Revocation, error)`:
+  Two comments change (pre-flight M5). `BrokerConfig.RevocationsFile`'s, from "port49d creates it
+  at the first start" to its end, becomes: "port49d never creates it: a missing file, or one that
+  does not load, refuses every start, and so does a directory others can write (spec §13 decision
+  32, amended 2026-10-02). `port49d init-revocations` creates it once per install, as port49d's
+  user, beside a marker (<file>.created); a start writes the marker beside a file that loads with
+  none. port49d writes the file, 0600 and atomically, after every revocation and lift."
+  `ownRevocationsFile`'s "Its marker (<file>.created), which port49d writes too," becomes "Its
+  marker (<file>.created), which init-revocations creates and a start writes beside a file that
+  loads,".
+
+- [ ] **Step 4: `readRevocations`, `loadRevocations`, and `initRevocations`.** In
+  `cmd/port49d/revocations.go`, rename `loadRevocations` to `readRevocations`, replace its comment
+  and its not-exist branch, move the marker-writing block after the parse loop into a new
+  `loadRevocations`, and return `([]store.Revocation, error)`:
 
   ```go
-  // loadRevocations reads the file behind the write fence, its own name never
+  // readRevocations reads the file behind the write fence, its own name never
   // a link (fence.ReadNoLink): whoever could write it could lift a revocation
   // at the next restart. The directory is fenced first, whether or not the
-  // file is there (fence.CheckDir). A file that is not there refuses the
-  // start, always: port49d never creates it (spec §13 decision 32, amended
+  // file is there (fence.CheckDir). A file that is not there is an error,
+  // always: port49d never creates it (spec §13 decision 32, amended
   // 2026-10-02). An unmounted or empty volume that passes the fence would
   // otherwise read as a first install and start with no marks; `port49d
-  // init-revocations` creates it, once. The marker init writes beside it
-  // only changes what the refusal says: with it, the revocations were lost.
-  // Anything else it cannot read whole is an error, which refuses the start.
-  func loadRevocations(path string) ([]store.Revocation, error) {
+  // init-revocations` creates it, once. The marker beside it only changes what
+  // the refusal says: with it, the revocations were lost. Without it, the
+  // refusal leads with the volume, then the first install (pre-flight M13).
+  // Anything else it cannot read whole is an error. It writes nothing.
+  func readRevocations(path string) ([]store.Revocation, error) {
   	if err := fence.CheckDir(path, "revocations file"); err != nil {
   		return nil, err
   	}
@@ -955,9 +1313,9 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   		case !errors.Is(merr, fs.ErrNotExist):
   			return nil, merr
   		}
-  		return nil, errors.New("does not exist: on a first install run 'port49d init-revocations' once (with the " +
-  			"same --config); if port49d has run here before, the volume holding it is missing or empty: mount " +
-  			"it, or restore the file")
+  		return nil, errors.New("does not exist: if port49d has run here before, the volume holding it is missing " +
+  			"or empty: mount it or restore the file; only on a first install, run 'port49d init-revocations' once, " +
+  			"as port49d's user, with the same --config")
   	}
   	if err != nil {
   		return nil, err
@@ -967,45 +1325,178 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   	return out, nil
   }
 
-  // initRevocations is `port49d init-revocations`: broker.revocations_file
-  // created once, empty, behind the same directory fence a start applies, with
-  // its marker written first, as the first start used to write them (a crash
-  // between the two leaves a marker and no file, which refuses the next start
-  // and the next init). It refuses when either is already there, so it never
-  // stands in for a restore.
-  func initRevocations(path string) error {
-  	if err := fence.CheckDir(path, "revocations file"); err != nil {
-  		return err
+  // loadRevocations is a start's read (readRevocations), then, when no marker
+  // is beside the file that loaded (laid down by config management, or
+  // restored onto a new volume), it writes one, as 7a's start did. That
+  // creates no revocations file, and it makes the file's later loss refuse
+  // the start as a loss rather than read as a first install (spec §13
+  // decision 32; pre-flight M12).
+  func loadRevocations(path string) ([]store.Revocation, error) {
+  	rs, err := readRevocations(path)
+  	if err != nil {
+  		return nil, err
   	}
-  	for _, p := range []string{path, markerOf(path)} {
-  		switch _, err := os.Lstat(p); {
-  		case err == nil:
-  			return fmt.Errorf("%s exists: port49d init-revocations runs once per install; a lost file is restored "+
-  				`from backup, or replaced by {"revocations": []} on purpose`, p)
-  		case !errors.Is(err, fs.ErrNotExist):
-  			return err
+  	switch _, err := os.Lstat(markerOf(path)); {
+  	case errors.Is(err, fs.ErrNotExist):
+  		abs, err := filepath.Abs(path)
+  		if err != nil {
+  			return nil, err
   		}
+  		if err := writeMarker(abs); err != nil {
+  			return nil, err
+  		}
+  	case err != nil:
+  		return nil, err
+  	}
+  	return rs, nil
+  }
+  ```
+
+  Split the two writers' bodies out, so init writes the same bytes they do:
+
+  ```go
+  // markerBody is what the marker beside the file at abs says.
+  func markerBody(abs string) []byte {
+  	return []byte("port49d created " + filepath.Base(abs) + " at " + decision.FormatTime(time.Now()) + "\n")
+  }
+
+  // writeMarker writes the marker beside the file at abs, 0600, atomically.
+  func writeMarker(abs string) error {
+  	return inventory.WriteAtomic(filepath.Dir(abs), filepath.Base(markerOf(abs)), markerBody(abs), 0o600)
+  }
+
+  // encodeRevocations is the file's content for rs.
+  func encodeRevocations(rs []store.Revocation) ([]byte, error) {
+  	f := revocationsFile{Revocations: []revocationEntry{}}
+  	for _, r := range rs {
+  		f.Revocations = append(f.Revocations, revocationEntry{Kind: r.Kind, Key: r.Key,
+  			At: decision.FormatTime(r.At), Origin: r.Origin})
+  	}
+  	body, err := json.MarshalIndent(f, "", "  ")
+  	if err != nil {
+  		return nil, err
+  	}
+  	return append(body, '\n'), nil
+  }
+
+  // saveRevocations writes rs whole, 0600, atomically: a reader sees the old
+  // file or the new one.
+  func saveRevocations(path string, rs []store.Revocation) error {
+  	body, err := encodeRevocations(rs)
+  	if err != nil {
+  		return err
   	}
   	abs, err := filepath.Abs(path)
   	if err != nil {
   		return err
   	}
-  	if err := writeMarker(abs); err != nil {
+  	return inventory.WriteAtomic(filepath.Dir(abs), filepath.Base(abs), body, 0o600)
+  }
+  ```
+
+  Then add init:
+
+  ```go
+  // createExclusive writes body to a new file at abs, 0600, and fails with
+  // fs.ErrExist if abs is already there: a temporary file beside it is
+  // written and synced, then linked to the name, which, unlike a rename,
+  // never replaces a file that appeared after init looked (pre-flight M10).
+  // The directory is synced, so the name survives a crash.
+  func createExclusive(abs string, body []byte) error {
+  	dir := filepath.Dir(abs)
+  	tmp, err := os.CreateTemp(dir, "."+filepath.Base(abs)+".init-*") // 0600
+  	if err != nil {
   		return err
   	}
-  	return saveRevocations(abs, nil)
+  	defer os.Remove(tmp.Name())
+  	_, werr := tmp.Write(body)
+  	if werr == nil {
+  		werr = tmp.Sync()
+  	}
+  	if cerr := tmp.Close(); werr == nil {
+  		werr = cerr
+  	}
+  	if werr != nil {
+  		return werr
+  	}
+  	if err := os.Link(tmp.Name(), abs); err != nil {
+  		return err
+  	}
+  	d, err := os.Open(dir)
+  	if err != nil {
+  		return err
+  	}
+  	defer d.Close()
+  	return d.Sync()
+  }
+
+  // initRevocations is `port49d init-revocations` (spec §13 decision 32,
+  // amended): broker.revocations_file created once per install, empty, by the
+  // user that owns its directory (initOwner, asked first, so a root-run init
+  // is told to run as that user rather than, by the fence, to chown), behind
+  // the directory fence a start applies.
+  //
+  // created is false, and err nil, when the file is already there and loads:
+  // nothing is written, so a provisioning step may run it twice (pre-flight
+  // I6). It refuses a file that is there and does not load, and a marker with
+  // no file beside it: a loss, which a restore or a deliberate
+  // {"revocations": []} answers, never a re-created file. Otherwise it
+  // creates the marker, then the file, each exclusively (createExclusive): a
+  // crash between the two leaves a marker and no file, which refuses the next
+  // start and the next init.
+  func initRevocations(path string) (created bool, err error) {
+  	abs, err := filepath.Abs(path)
+  	if err != nil {
+  		return false, err
+  	}
+  	if err := initOwner(filepath.Dir(abs)); err != nil {
+  		return false, err
+  	}
+  	if err := fence.CheckDir(abs, "revocations file"); err != nil {
+  		return false, err
+  	}
+  	switch _, err := os.Lstat(abs); {
+  	case err == nil:
+  		if _, err := readRevocations(abs); err != nil {
+  			return false, fmt.Errorf("exists and does not load (%v); init never replaces it", err)
+  		}
+  		return false, nil
+  	case !errors.Is(err, fs.ErrNotExist):
+  		return false, err
+  	}
+  	switch _, err := os.Lstat(markerOf(abs)); {
+  	case err == nil:
+  		return false, fmt.Errorf("is missing, and its marker %s says port49d held revocations here: init never "+
+  			`re-creates a lost file; restore it from backup, or write {"revocations": []} on purpose`, markerOf(abs))
+  	case !errors.Is(err, fs.ErrNotExist):
+  		return false, err
+  	}
+  	if err := createExclusive(markerOf(abs), markerBody(abs)); err != nil {
+  		return false, err
+  	}
+  	body, err := encodeRevocations(nil)
+  	if err != nil {
+  		return false, err
+  	}
+  	if err := createExclusive(abs, body); err != nil {
+  		return false, err
+  	}
+  	return true, nil
   }
 
   // initRevocationsCmd runs `port49d init-revocations [--config FILE]`. It
-  // exits 0 having created the file, 1 when it would not, and 2 on usage.
+  // exits 0 having created the file or found it already there and loading, 1
+  // when it would not, and 2 on usage. It prints the absolute path, and warns
+  // when the configured one is relative: that resolved against this shell's
+  // directory, and port49d resolves it against its own (pre-flight M10).
   func initRevocationsCmd(args []string, stdout, stderr io.Writer) int {
-  	fs := flag.NewFlagSet("port49d init-revocations", flag.ContinueOnError)
-  	fs.SetOutput(stderr)
-  	cfgPath := fs.String("config", "/etc/port49/port49d.yaml", "path to port49d.yaml")
-  	if err := fs.Parse(args); err != nil {
+  	flags := flag.NewFlagSet("port49d init-revocations", flag.ContinueOnError)
+  	flags.SetOutput(stderr)
+  	cfgPath := flags.String("config", "/etc/port49/port49d.yaml", "path to port49d.yaml")
+  	if err := flags.Parse(args); err != nil {
   		return 2
   	}
-  	if fs.NArg() != 0 {
+  	if flags.NArg() != 0 {
   		fmt.Fprintln(stderr, "usage: port49d init-revocations [--config FILE]")
   		return 2
   	}
@@ -1019,21 +1510,95 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   		fmt.Fprintln(stderr, "port49d init-revocations:", err)
   		return 1
   	}
-  	if err := initRevocations(path); err != nil {
-  		fmt.Fprintf(stderr, "port49d init-revocations: broker.revocations_file %s: %v\n", path, err)
+  	abs, err := filepath.Abs(path)
+  	if err != nil {
+  		fmt.Fprintln(stderr, "port49d init-revocations:", err)
   		return 1
   	}
+  	if !filepath.IsAbs(path) {
+  		fmt.Fprintf(stderr, "port49d init-revocations: warning: broker.revocations_file %q is relative: it resolved "+
+  			"against this shell's directory, to %s, and port49d resolves it against its own; give an absolute "+
+  			"path in port49d.yaml\n", path, abs)
+  	}
+  	created, err := initRevocations(abs)
+  	switch {
+  	case err != nil:
+  		fmt.Fprintf(stderr, "port49d init-revocations: broker.revocations_file %s: %v\n", abs, err)
+  		return 1
+  	case !created:
+  		fmt.Fprintf(stdout, "port49d: broker.revocations_file %s is already initialized; nothing written\n", abs)
+  		return 0
+  	}
   	fmt.Fprintf(stdout, "port49d: created broker.revocations_file %s with no revocations, and its marker %s; "+
-  		"run this once per install: from now on port49d refuses to start if the file goes missing\n",
-  		path, markerOf(path))
+  		"run this once per install, never on a start path: from now on port49d refuses to start if the file "+
+  		"goes missing\n", abs, markerOf(abs))
   	return 0
   }
   ```
 
-  The parameter named `fs` shadows the `io/fs` import inside `initRevocationsCmd` only, where `fs`
-  the package is not used. If `go vet` objects, name it `flags`.
+  Create `cmd/port49d/initowner_linux.go`:
 
-  `restoreRevocations` drops `created`:
+  ```go
+  //go:build linux
+
+  package main
+
+  import (
+  	"errors"
+  	"fmt"
+  	"io/fs"
+  	"os"
+  	"os/user"
+  	"strconv"
+
+  	"github.com/rhwendt/port49/internal/fence"
+  )
+
+  // initOwner refuses `port49d init-revocations` run by anyone but the owner
+  // of dir, the directory that holds broker.revocations_file (pre-flight I5).
+  // port49d runs as that user, and a 0600 file another user wrote, root above
+  // all, is one port49d cannot read: its first start would fail on
+  // "permission denied". The refusal names the owner, by name where the
+  // system knows it, and the line to run; it never chowns. A directory that
+  // is not there is left to fence.CheckDir to say so.
+  func initOwner(dir string) error {
+  	fi, err := os.Stat(dir)
+  	if errors.Is(err, fs.ErrNotExist) {
+  		return nil
+  	}
+  	if err != nil {
+  		return err
+  	}
+  	uid, ok := fence.FileOwner(fi)
+  	if !ok {
+  		return fmt.Errorf("the directory %s: cannot read its owner", dir)
+  	}
+  	euid := fence.Geteuid()
+  	if uint32(euid) == uid {
+  		return nil
+  	}
+  	who := strconv.FormatUint(uint64(uid), 10)
+  	if u, err := user.LookupId(who); err == nil {
+  		who = u.Username
+  	}
+  	return fmt.Errorf("the directory %s belongs to %s, and this runs as uid %d: port49d, running as %s, could not "+
+  		"read what this would write; run as %s, e.g. sudo -u %s port49d init-revocations", dir, who, euid, who, who, who)
+  }
+  ```
+
+  `os/user` reads `/etc/passwd` without cgo. Create `cmd/port49d/initowner_other.go`:
+
+  ```go
+  //go:build !linux
+
+  package main
+
+  // initOwner has nothing to ask off Linux: fence.CheckDir refuses there
+  // first, since port49 keeps the revocations file on Linux only.
+  func initOwner(string) error { return nil }
+  ```
+
+  `restoreRevocations` drops `created`, and its comment's "created is the first start's." goes:
 
   ```go
   func restoreRevocations(ctx context.Context, st store.Store, path string, m *metrics.Metrics) ([]store.Revocation, error) {
@@ -1051,9 +1616,10 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   }
   ```
 
-  Add `flag`, `io` and `github.com/rhwendt/port49/internal/config` to the imports.
+  Add `flag`, `io` and `github.com/rhwendt/port49/internal/config` to `revocations.go`'s imports.
 
-- [ ] **Step 5: `main` dispatches it, and the start line.** In `cmd/port49d/main.go`:
+- [ ] **Step 5: `main` dispatches it, refuses a stray argument, and the start line.** In
+  `cmd/port49d/main.go`:
 
   ```go
   func main() {
@@ -1063,6 +1629,14 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   		os.Exit(initRevocationsCmd(os.Args[2:], os.Stdout, os.Stderr))
   	}
   	cfgPath := flag.String("config", "/etc/port49/port49d.yaml", "path to port49d.yaml")
+  	flag.Parse()
+  	// A subcommand after a flag (port49d --config X init-revocations) would
+  	// otherwise start the daemon (pre-flight M20).
+  	if flag.NArg() != 0 {
+  		fmt.Fprintln(os.Stderr, "usage: port49d [--config FILE], or port49d init-revocations [--config FILE] "+
+  			"(the subcommand comes first)")
+  		os.Exit(2)
+  	}
   	// … unchanged …
   ```
 
@@ -1081,50 +1655,62 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   ```
 
 - [ ] **Step 6: Every test and harness that starts port49d inits first.**
-  - **`brokerConfig`** (`cmd/port49d/broker_test.go`): after building the config, call
-    `initRevocations(cfg.Broker.RevocationsFile)` and `t.Fatal` on error, so every run-level test
-    starts as an initialised install.
-  - **The run-level test** that waits for `"port49d: broker: created "+b.RevocationsFile+" (no
-    revocations)"` waits for `"port49d: broker: 0 revocation(s) in force from "+b.RevocationsFile`
-    instead.
-  - **The test at ~line 810** that points `RevocationsFile` into another directory inits that path
-    the same way, if it means to start; if it means to be refused, leave it and check its message.
-  - **Any other config in `cmd/port49d` tests** with a `revocations_file` (the grep in **Files**)
-    inits the same way.
+  - **`brokerConfig`** (`cmd/port49d/broker_test.go`, ~line 37): build the config into a variable,
+    call `if _, err := initRevocations(cfg.Broker.RevocationsFile); err != nil { t.Fatal(err) }`,
+    and return it, so every run-level test starts as an initialised install. Its directory is
+    `t.TempDir()`, owned by the test's user and closed to others, so `initOwner` and the fence
+    pass.
+  - **The run-level test** (~line 720) that waits for `"port49d: broker: created
+    "+b.RevocationsFile+" (no revocations)"` waits for `"port49d: broker: 0 revocation(s) in force
+    from "+b.RevocationsFile` instead.
+  - **"a restored mark refuses the mint"** (~line 765): `restoreRevocations` returns two values
+    (`if _, err := restoreRevocations(…); err != nil`). It overwrites the file `brokerConfig`
+    inited, which is what it means.
+  - **The refusal subtests** (~lines 785–822, "a file that does not parse", "a file deleted after
+    the first start", "a directory its group can write") point `RevocationsFile` into their own
+    `safeDir` and mean to be refused: leave them. Each is still refused, and "a file deleted after
+    the first start" now by the marker's message.
   - **`privatePolicy`** (`tests/lab/harness_test.go`). After removing `dst` and its marker, write
     `{"revocations": []}\n` to `dst` at 0600. Change its comment's last sentence to: "It goes in the
     private directory, fresh at every derived config, written empty on purpose: port49d no longer
     creates it (spec §13 decision 32, amended 2026-10-02)."
   - **`tests/lab/private_policy_unit_test.go`**: assert the file exists with that content and no
-    `.created` beside it.
+    `.created` beside it (the derivation writes none; a start does).
   - **`tests/lab/inventory_test.go`**: before the config at ~line 327 is used, write
     `{"revocations": []}\n` at 0600 to `filepath.Join(filepath.Dir(policy), "revocations.json")`.
   - **`tests/lab/README.md`**: in the by-hand slice run, before the first `bin/port49d` start, add
     `bin/port49d init-revocations --config <the derived config>` with one line saying port49d never
-    creates the file. The `chmod go-w tests/lab/logs` note stays.
+    creates the file and init runs once, as the user port49d runs as. The `chmod go-w
+    tests/lab/logs` note stays.
 
-- [ ] **Step 7: Run the tests.**
+- [ ] **Step 7: Run the tests, and check `main`'s guard by hand.**
 
   Run: `go test ./cmd/port49d/ ./internal/config/ && go vet -tags lab ./tests/lab/ && go test -tags lab ./tests/lab/ -run '^TestPrivatePolicyCopiesABrokerConfigsInventory$' -count=1`
   Expected: PASS. (`make test` runs the lab package's unit tests by the list of names in the
   Makefile; `TestPrivatePolicyCopiesABrokerConfigsInventory` is the one `privatePolicy` has.)
 
+  `main` is not under test. Run `go run ./cmd/port49d --config /nonexistent init-revocations;
+  echo $?` and expect the usage line and `2`, not a start that fails on the missing config.
+
 - [ ] **Step 8: Commit.**
 
   ```bash
-  gofmt -w internal/config/config.go cmd/port49d/revocations.go cmd/port49d/main.go cmd/port49d/*_test.go \
+  gofmt -w internal/config/config.go cmd/port49d/revocations.go cmd/port49d/initowner_linux.go \
+    cmd/port49d/initowner_other.go cmd/port49d/main.go cmd/port49d/*_test.go \
     internal/config/config_test.go tests/lab/harness_test.go tests/lab/inventory_test.go tests/lab/private_policy_unit_test.go
   make build && make test && make vet
-  git add internal/config/config.go internal/config/config_test.go cmd/port49d/revocations.go cmd/port49d/main.go \
-    cmd/port49d/revocations_test.go cmd/port49d/broker_test.go tests/lab/harness_test.go tests/lab/inventory_test.go \
-    tests/lab/private_policy_unit_test.go tests/lab/README.md
-  # plus any other cmd/port49d test file Step 6 changed, by name
+  git add internal/config/config.go internal/config/config_test.go cmd/port49d/revocations.go \
+    cmd/port49d/initowner_linux.go cmd/port49d/initowner_other.go cmd/port49d/initowner_linux_test.go \
+    cmd/port49d/main.go cmd/port49d/revocations_test.go cmd/port49d/broker_test.go tests/lab/harness_test.go \
+    tests/lab/inventory_test.go tests/lab/private_policy_unit_test.go tests/lab/README.md
   git commit -m "feat(port49d): never create broker.revocations_file at start; add port49d init-revocations
 
   An empty or unmounted volume that passed the fence read as a first install and
-  started with no marks. A missing file now refuses every start, and
-  init-revocations creates the file and its marker once, refusing over either
-  (spec §13 decision 32, amended 2026-10-02).
+  started with no marks. A missing file now refuses every start, its message
+  leading with the volume. init-revocations creates the file and its marker
+  once, exclusively, as the directory's owner; exits 0 writing nothing over a
+  file that loads; and refuses over a lost file (spec §13 decision 32, amended
+  2026-10-02). A start still writes the marker beside a file that loads.
 
   Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
@@ -1146,7 +1732,7 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   - `decision.APIRightMissing Reason = "api_right_missing"`
   - `decision.EventIdentity = "identity"`, `decision.EventExplain = "explain"`
   - `decision.Record.Explain *decision.Explain` (`json:"explain,omitempty"`), and
-    `type decision.Explain struct{ AskedBy string; Command bool; MintError string }`
+    `type decision.Explain struct{ AskedBy, AskedByFingerprint string; Command bool; MintError string }`
   - `decision.Revocation.Device`, `.Username string`; `.Saved` becomes `*bool`
   - `policy.RightRevokeOthers`, `RightExplainOthers`, `RightSync`, `RightKeysShow`, `RightReplay`
   - `func (p *policy.Policy) HasRight(principal, right string) bool`
@@ -1162,18 +1748,20 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   	}
   }
 
-  // An explain record carries who asked and whether a command was asked,
-  // never the command (spec §5.7); a revoke record's saved is absent unless
-  // it is a standing mark's.
+  // An explain record carries who asked, by principal and certificate, and
+  // whether a command was asked, never the command (spec §5.7); a revoke
+  // record's saved is absent unless it is a standing mark's.
   func TestTheAPIRecordsShapes(t *testing.T) {
   	var b bytes.Buffer
   	l := NewJSONLines(&b)
   	l.Emit(Record{Event: EventExplain, Verdict: VerdictDeny, Reason: NoGrantsMatched,
-  		Principal: "user:alice@example.com", Explain: &Explain{AskedBy: "user:bob@example.com", Command: true}})
+  		Principal: "user:alice@example.com", Explain: &Explain{AskedBy: "user:bob@example.com",
+  			AskedByFingerprint: "sha256:ab12", Command: true}})
   	l.Emit(Record{Event: EventRevoke, Verdict: VerdictDeny, Reason: CredentialRevoked,
   		Revocation: &Revocation{By: "key", Device: "leaf-01", Username: "alice", At: "2026-10-02T03:12:09Z"}})
   	lines := strings.Split(strings.TrimSpace(b.String()), "\n")
-  	if !strings.Contains(lines[0], `"explain":{"asked_by":"user:bob@example.com","command":true}`) {
+  	if !strings.Contains(lines[0], `"explain":{"asked_by":"user:bob@example.com","asked_by_fingerprint":"sha256:ab12",`+
+  		`"command":true}`) || strings.Contains(lines[0], `"auth"`) {
   		t.Fatalf("explain: %s", lines[0])
   	}
   	if !strings.Contains(lines[1], `"device":"leaf-01","username":"alice"`) || strings.Contains(lines[1], `"saved"`) {
@@ -1257,7 +1845,9 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
 
   ```go
   	// Explain is an explain record's own (spec §5.7): who asked, and whether
-  	// a command was asked. The command itself is never recorded.
+  	// a command was asked. The command itself is never recorded. An explain
+  	// record carries no Auth: its Principal is whom it was about, and the
+  	// caller's credential is in AskedByFingerprint (decision 34).
   	Explain *Explain `json:"explain,omitempty"`
   ```
 
@@ -1265,12 +1855,16 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
 
   ```go
   // Explain is what an explain record says of the call beside its answer.
-  // MintError is the mint item error the broker would answer instead of a
-  // token; the record then has no verdict.
+  // AskedBy and AskedByFingerprint are the caller's principal and
+  // certificate, kept out of Auth so a record's auth and principal always
+  // describe one credential (decision 34). MintError is the mint item error
+  // the broker would answer instead of a token; the record then has no
+  // verdict.
   type Explain struct {
-  	AskedBy   string `json:"asked_by"`
-  	Command   bool   `json:"command,omitempty"`
-  	MintError string `json:"mint_error,omitempty"`
+  	AskedBy            string `json:"asked_by"`
+  	AskedByFingerprint string `json:"asked_by_fingerprint,omitempty"`
+  	Command            bool   `json:"command,omitempty"`
+  	MintError          string `json:"mint_error,omitempty"`
   }
   ```
 
@@ -1348,7 +1942,9 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
 ### Task 4: One preamble for every authenticated call, `GET /v1/identity`, and no right widens a mint or a refresh
 
 **Files:**
-- Modify: `internal/broker/broker.go` (`Handler`, ~line 131; `tokens`, ~lines 200–253)
+- Modify: `internal/broker/broker.go` (`Handler`, ~line 131; `tokens`, ~lines 200–253;
+  `RefusedAtBind`, ~line 475)
+- Modify: `internal/broker/listen.go` (`Listener.Refused`, ~line 99; `answerRefused`, ~line 450)
 - Create: `internal/broker/identity_api.go`
 - Create: `internal/broker/api/identity.go`
 - Modify: `internal/broker/fixture_test.go` (a `call` helper)
@@ -1361,7 +1957,12 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   - `func (b *Broker) authenticate(w http.ResponseWriter, r *http.Request, event, nothing string) (principal string, cred store.Credential, ok bool)`.
     `nothing` completes "so it … nothing" in the marks-unreadable answer: `"minted nothing"`,
     `"revoked nothing"`, `"explained nothing"`, `"answered nothing"`.
-  - `type api.Identity struct{ Principal, Method, Fingerprint, Subject string; Groups []string; Grants []api.IdentityGrant; API []string; AuthTime, SessionEndsAt string }`
+  - `type api.Identity struct{ Principal, Method, Fingerprint, Subject string; Groups []string; Grants []api.IdentityGrant; API []string; AuthTime, ConnectionEndsAt string }`
+  - `Listener.Refused func(path, principal string, cred store.Credential, reason decision.Reason)`
+    and `func (b *Broker) RefusedAtBind(path, principal string, cred store.Credential, reason decision.Reason)`
+    (the refused request's path is new); `func bindEvent(path string) string`. `cmd/port49d/main.go`
+    (`bl.Refused = brk.RefusedAtBind`) and `cmd/port49/main_test.go` (~line 399) assign the method
+    value and need no edit.
   - `type api.IdentityGrant struct{ Scope string; Roles []string; MaxPrivilege, Expires string }`
   - the route `GET /v1/identity`; the test helper
     `func (f *fixture) call(ctx context.Context, cs *tls.ConnectionState, method, path, body string) *httptest.ResponseRecorder`.
@@ -1395,6 +1996,7 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   	"time"
 
   	"github.com/rhwendt/port49/internal/broker/api"
+  	"github.com/rhwendt/port49/internal/decision"
   	"github.com/rhwendt/port49/internal/store"
   )
 
@@ -1422,8 +2024,8 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   		strings.Join(id.Grants[0].Roles, " ") != "network_admin no_reload" {
   		t.Fatalf("grants: %+v", id.Grants)
   	}
-  	if id.AuthTime != at.UTC().Format(time.RFC3339) || id.SessionEndsAt != at.Add(12*time.Hour).UTC().Format(time.RFC3339) {
-  		t.Fatalf("clock: %s %s", id.AuthTime, id.SessionEndsAt)
+  	if id.AuthTime != at.UTC().Format(time.RFC3339) || id.ConnectionEndsAt != at.Add(12*time.Hour).UTC().Format(time.RFC3339) {
+  		t.Fatalf("clock: %s %s", id.AuthTime, id.ConnectionEndsAt)
   	}
   	recs := eventsOf(f.records(t), "identity")
   	if len(recs) != 1 || recs[0]["verdict"] != "permit" || recs[0]["reason"] != "grants_matched" ||
@@ -1495,7 +2097,10 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   // No right widens a mint or a refresh (decision 34; 7b's carried item): a
   // principal holding every right still cannot name another in a mint, and its
   // refresh does not extend another principal's context, even one a stale
-  // index entry lists under it.
+  // index entry lists under it. Neither path reads a right, so this passes on
+  // 7b's code: it is a regression pin on 7b's self-only rule, against a
+  // future rights-aware change to either (pre-flight M17), not a test of
+  // this plan's rights code.
   func TestNoRightWidensAMintOrARefresh(t *testing.T) {
   	f := newFixtureWithPolicy(t, 8, strings.Replace(testPolicy, "enable: token, token_ttl: 60s}",
   		"enable: token, token_ttl: 60s, api: [revoke_others, explain_others, sync, keys_show, replay]}", 1))
@@ -1518,6 +2123,27 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   		t.Fatalf("carol's context was touched by alice's refresh: %+v %v", c, err)
   	}
   }
+
+  // A request the listener refuses as its connection binds is recorded under
+  // the event of the path it asked for, as authenticate records a refusal
+  // after the bind (decision 34; pre-flight M8); any other path stays mint.
+  func TestARefusalAtBindIsRecordedUnderItsEndpointsEvent(t *testing.T) {
+  	f := newFixture(t, 8)
+  	cred := store.Credential{Method: "cert", Fingerprint: "sha256:ab12"}
+  	for _, path := range []string{"/v1/identity", "/v1/explain", "/v1/tokens/revoke", "/v1/tokens", "/v1/refresh", "/nowhere"} {
+  		f.b.RefusedAtBind(path, alicePrincipal, cred, decision.CredentialRevoked)
+  	}
+  	var got []string
+  	for _, r := range f.records(t) {
+  		got = append(got, r["event"].(string))
+  		if r["reason"] != "credential_revoked" || r["principal"] != alicePrincipal {
+  			t.Fatalf("%v", r)
+  		}
+  	}
+  	if want := "identity explain revoke mint mint mint"; strings.Join(got, " ") != want {
+  		t.Fatalf("events %v, want %s", got, want)
+  	}
+  }
   ```
 
   If `liveContextAt` refuses a principal with no grant on the device (it resolves the blob), it
@@ -1526,9 +2152,10 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
 
 - [ ] **Step 2: Run them to see them fail.**
 
-  Run: `go test ./internal/broker/ -run 'TestIdentity|TestNoRightWidens'`
-  Expected: FAIL (404 from the mux for `/v1/identity`; `api.Identity` undefined: a build failure
-  first).
+  Run: `go test ./internal/broker/ -run 'TestIdentity|TestNoRightWidens|TestARefusalAtBind'`
+  Expected: a build failure (`api.Identity` undefined; `RefusedAtBind` takes no path), then 404s
+  from the mux for `/v1/identity`. `TestNoRightWidensAMintOrARefresh` fails only with the file's
+  build: on its own it passes on today's code, as its comment says.
 
 - [ ] **Step 3: The preamble.** In `internal/broker/broker.go`, add after `tokens`:
 
@@ -1609,6 +2236,53 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   not, drop it. Every existing mint test must pass unchanged: the records and answers are the same
   bytes.
 
+  The listener's refusal as a connection binds is recorded under the path's event too (pre-flight
+  M8). In `internal/broker/listen.go`, `Listener.Refused` gains the path first:
+
+  ```go
+  	// Refused records a request refused as its connection bound, with the
+  	// path it asked for and the reason: credential_revoked for a mark, or
+  	// Status's. One deny record each, under the path's event (spec §5.7;
+  	// decision 34), which port49d sets to Broker.RefusedAtBind. Set it before
+  	// the first Accept; nil records nothing.
+  	Refused func(path, principal string, cred store.Credential, reason decision.Reason)
+  ```
+
+  and `answerRefused`, which has read the request, calls `l.Refused(req.URL.Path, principal, cred,
+  reason)`. In `broker.go`, replace `RefusedAtBind`:
+
+  ```go
+  // RefusedAtBind records a request the broker's listener refused as its
+  // connection bound (Listener.Refused): credential_revoked for a mark on its
+  // principal or certificate, or the reason its certificate's status gave.
+  // It is the one deny record a call refused after the bind writes, under
+  // the event of the path it asked for (bindEvent), counted in
+  // port49_decisions (spec §5.7; decision 34).
+  func (b *Broker) RefusedAtBind(path, principal string, cred store.Credential, reason decision.Reason) {
+  	rec := revokedRecord(b.Now(), principal, cred)
+  	rec.Event, rec.Reason = bindEvent(path), reason
+  	b.emit(rec)
+  }
+
+  // bindEvent is the event a request refused as its connection bound is
+  // recorded under: its endpoint's own, and mint for any other path, as
+  // before (decision 34).
+  func bindEvent(path string) string {
+  	switch path {
+  	case "/v1/identity":
+  		return decision.EventIdentity
+  	case "/v1/explain":
+  		return decision.EventExplain
+  	case "/v1/tokens/revoke":
+  		return decision.EventRevoke
+  	}
+  	return decision.EventMint
+  }
+  ```
+
+  The path is matched exactly, as the mux routes it, and is never recorded: only the event it
+  maps to.
+
 - [ ] **Step 4: The wire type and the handler.** Create `internal/broker/api/identity.go`:
 
   ```go
@@ -1627,7 +2301,10 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   	Grants        []IdentityGrant `json:"grants"`
   	API           []string        `json:"api"`
   	AuthTime      string          `json:"auth_time"`
-  	SessionEndsAt string          `json:"session_ends_at,omitempty"`
+  	// ConnectionEndsAt is auth_time plus max_session_age: when this
+  	// connection must authenticate again. A device's own session ceiling
+  	// may end a session sooner (pre-flight M16).
+  	ConnectionEndsAt string `json:"connection_ends_at,omitempty"`
   }
 
   // IdentityGrant is one grant row as the policy declares it.
@@ -1666,7 +2343,7 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   	out := api.Identity{Principal: principal, Method: cred.Method, Fingerprint: cred.Fingerprint,
   		Groups: []string{}, Grants: []api.IdentityGrant{}, API: []string{}, AuthTime: at.UTC().Format(time.RFC3339)}
   	if b.MaxSessionAge > 0 {
-  		out.SessionEndsAt = at.Add(b.MaxSessionAge).UTC().Format(time.RFC3339)
+  		out.ConnectionEndsAt = at.Add(b.MaxSessionAge).UTC().Format(time.RFC3339)
   	}
   	rec := decision.Record{TS: now, Event: decision.EventIdentity, Verdict: decision.VerdictDeny,
   		Reason: decision.NoGrantsMatched, Principal: principal,
@@ -1708,17 +2385,18 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
 - [ ] **Step 6: Commit.**
 
   ```bash
-  gofmt -w internal/broker/broker.go internal/broker/identity_api.go internal/broker/api/identity.go \
-    internal/broker/fixture_test.go internal/broker/identity_api_test.go
+  gofmt -w internal/broker/broker.go internal/broker/listen.go internal/broker/identity_api.go \
+    internal/broker/api/identity.go internal/broker/fixture_test.go internal/broker/identity_api_test.go
   make build && make test && make vet
-  git add internal/broker/broker.go internal/broker/identity_api.go internal/broker/api/identity.go \
-    internal/broker/fixture_test.go internal/broker/identity_api_test.go
+  git add internal/broker/broker.go internal/broker/listen.go internal/broker/identity_api.go \
+    internal/broker/api/identity.go internal/broker/fixture_test.go internal/broker/identity_api_test.go
   git commit -m "feat(broker): one preamble for every authenticated call, and GET /v1/identity
 
   The mint's checks (certificate, max_session_age, marks, certificate status)
-  move into authenticate, recorded under the calling endpoint's event. Identity
-  answers the caller alone. A test pins that no right widens a mint or a refresh
-  (decision 34).
+  move into authenticate, recorded under the calling endpoint's event, and the
+  listener's refusal at bind is recorded under the refused path's event.
+  Identity answers the caller alone, with connection_ends_at. A test pins that
+  no right widens a mint or a refresh (decision 34).
 
   Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
@@ -1923,6 +2601,8 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
 - Modify: `internal/store/storetest/storetest.go`
 - Modify: `internal/store/memory/memory_test.go`, `internal/store/crypt/crypt_test.go` (call the
   property beside `storetest.TokenIndex`)
+- Modify: `internal/daemon/authen/authen_test.go` (`noStore`, ~line 368, which implements
+  `store.Store` in full and is asserted to by `var _ store.Store = noStore{}`, ~line 495)
 
 **Interfaces:**
 - Produces: `DeleteToken(ctx context.Context, k TokenKey, id string) error` on `store.Store`;
@@ -2040,23 +2720,35 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   }
   ```
 
-  Any other type that implements `store.Store` in full, rather than by embedding it, gains the
-  method; `go build ./... && go vet ./...` names each. A test double that embeds `store.Store`
-  needs nothing.
+  Three types implement `store.Store` in full rather than by embedding it: `memory.Store`,
+  crypt's `wrapped` (both above), and `noStore` in `internal/daemon/authen/authen_test.go`. Add
+  to the last, beside its `DeleteTokens` (~line 379):
+
+  ```go
+  func (noStore) DeleteToken(context.Context, store.TokenKey, string) error {
+  	panic("store called")
+  }
+  ```
+
+  Every other double (`author.FaultStore`, the broker's and the server's test stores) embeds
+  `store.Store` and needs nothing. `go build ./... && go vet ./...` names any type this list
+  missed.
 
 - [ ] **Step 4: Run the tests.**
 
-  Run: `go test ./internal/store/... && go build ./...`
+  Run: `go test ./internal/store/... ./internal/daemon/authen/ && go build ./...`
   Expected: PASS.
 
 - [ ] **Step 5: Commit.**
 
   ```bash
   gofmt -w internal/store/store.go internal/store/memory/memory.go internal/store/crypt/crypt.go \
-    internal/store/storetest/storetest.go internal/store/memory/memory_test.go internal/store/crypt/crypt_test.go
+    internal/store/storetest/storetest.go internal/store/memory/memory_test.go internal/store/crypt/crypt_test.go \
+    internal/daemon/authen/authen_test.go
   make build && make test && make vet
   git add internal/store/store.go internal/store/memory/memory.go internal/store/crypt/crypt.go \
-    internal/store/storetest/storetest.go internal/store/memory/memory_test.go internal/store/crypt/crypt_test.go
+    internal/store/storetest/storetest.go internal/store/memory/memory_test.go internal/store/crypt/crypt_test.go \
+    internal/daemon/authen/authen_test.go
   git commit -m "feat(store): DeleteToken removes one token by ID, with a storetest property
 
   A principal ending its own sessions must not delete another principal's tokens
@@ -2074,7 +2766,9 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
 - Create: `internal/broker/revokeown.go`
 - Modify: `internal/broker/revoke.go` (`RevokeReport` gains `By`, `Key`; `normal` calls
   `normalPrincipal`; `Revoke` and `Lift` set `By`; `unreachedOf` lifted out of `Revoke`;
-  `recordRevocation` and `Text` learn `self` and `key`)
+  `recordRevocation` and `Text` learn `self` and `key`; `LiftNote`)
+- Modify: `internal/daemon/metrics/metrics.go` (`Revocations`' comment, ~line 151, and help,
+  ~line 377: the `by` label gains `self` and `key`; pre-flight M5)
 - Test: `internal/broker/revokeown_test.go` (new)
 
 **Interfaces:**
@@ -2084,7 +2778,7 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
 - Produces:
   - `const ByPrincipal = store.RevocationPrincipal`, `ByCert = store.RevocationCert`,
     `ByOwn = "self"`, `ByKey = "key"`
-  - `RevokeReport.By string`, `RevokeReport.Key store.TokenKey`
+  - `RevokeReport.By string`, `RevokeReport.Key store.TokenKey`, `RevokeReport.LiftNote string`
   - `func (b *Broker) RevokeOwn(ctx context.Context, principal string, only *store.TokenKey, origin string) RevokeReport`
   - `func (b *Broker) RevokeKey(ctx context.Context, k store.TokenKey, origin string) RevokeReport`
   - `func normalPrincipal(p string) (string, error)`
@@ -2308,6 +3002,9 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   	want := "ended user:alice@example.com's sessions everywhere at 2026-10-02T03:12:09Z: 2 live context(s) marked, " +
   		"the unspent tokens under 3 (device, username) key(s) deleted; nothing stands against " +
   		"user:alice@example.com, so a new `port49 token` and login work at once\n" +
+  		"your next login on a device re-admits every session open there under your username: if anyone else used " +
+  		"your token, close their session on the device (or ask an operator to revoke your principal) before you " +
+  		"log in there again\n" +
   		"not reached, on a platform that never asks port49 about a command (close these on the device): srx1 (alice)"
   	if got := own.Text(); got != want {
   		t.Fatalf("self:\n%s\nwant\n%s", got, want)
@@ -2317,8 +3014,15 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   		Contexts: []store.ContextRef{{NAS: "leaf1", Username: "alice"}}}
   	if got := key.Text(); !strings.HasPrefix(got, "ended the session on leaf1 (alice), user:alice2@example.com's, at "+
   		"2026-10-02T03:12:09Z: 1 live context(s) marked, the unspent tokens under 1 key(s) deleted; no revocation "+
-  		"stands, so its owner can mint and log in again (to stop that, revoke the principal)") {
+  		"stands, so its owner can mint and log in again (to stop that, revoke the principal)\n"+
+  		"the owner's next login on leaf1 re-admits any session still open on it under alice; close it on the device") {
   		t.Fatalf("key: %s", got)
+  	}
+  	// A standing mark made over HTTP says where it is lifted (decision 34).
+  	mark := RevokeReport{By: ByPrincipal, Request: RevokeRequest{Principal: alice2},
+  		Mark: store.Revocation{Kind: store.RevocationPrincipal, At: at}, LiftNote: "the lift is made on X"}
+  	if got := mark.Text(); !strings.HasSuffix(got, "\nthe lift is made on X") {
+  		t.Fatalf("mark: %s", got)
   	}
   }
   ```
@@ -2354,6 +3058,11 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   	// Key is the (device, username) a ByKey revocation, or a ByOwn one
   	// limited to one key, named.
   	Key store.TokenKey
+  	// LiftNote says where a standing mark made over HTTP is lifted: the
+  	// endpoint sets it from Broker.AdminSocket (decision 34), and Text prints
+  	// it after the mark's own text. Empty from the admin socket, whose
+  	// caller is already there.
+  	LiftNote string
   ```
 
   Lift `normal`'s principal branch into a function, and have `normal` call it:
@@ -2463,6 +3172,12 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   		fmt.Fprintf(&b, "ended %s's sessions %s at %s: %d live context(s) marked, the unspent tokens under %d "+
   			"(device, username) key(s) deleted; nothing stands against %s, so a new `port49 token` and login work "+
   			"at once", r.Request.Principal, where, at, len(r.Contexts), r.TokenKeys, r.Request.Principal)
+  		// A login joins the context it shares and lifts its mark for every
+  		// session on that (device, username) (spec §5.6; decision 15), a
+  		// stranger's on a leaked token included (pre-flight I1).
+  		b.WriteString("\nyour next login on a device re-admits every session open there under your username: if " +
+  			"anyone else used your token, close their session on the device (or ask an operator to revoke your " +
+  			"principal) before you log in there again")
   	case ByKey:
   		owner := ""
   		if r.Request.Principal != "" {
@@ -2471,8 +3186,13 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   		fmt.Fprintf(&b, "ended the session on %s (%s)%s at %s: %d live context(s) marked, the unspent tokens "+
   			"under %d key(s) deleted; no revocation stands, so its owner can mint and log in again (to stop that, "+
   			"revoke the principal)", r.Key.NAS, r.Key.Username, owner, at, len(r.Contexts), r.TokenKeys)
+  		fmt.Fprintf(&b, "\nthe owner's next login on %s re-admits any session still open on it under %s; close it "+
+  			"on the device", r.Key.NAS, r.Key.Username)
   	default:
   		b.WriteString(r.markText())
+  		if r.LiftNote != "" {
+  			b.WriteString("\n" + r.LiftNote)
+  		}
   	}
   	if len(r.Unreached) > 0 {
   		var names []string
@@ -2498,7 +3218,15 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   }
   ```
 
-  Every existing `Text` test must pass unchanged: the mark's text is the same bytes.
+  Every existing `Text` test must pass unchanged: the mark's text is the same bytes, and
+  `LiftNote` is empty on the admin socket's path.
+
+  In `internal/daemon/metrics/metrics.go`, `Revocations`' comment becomes "port49_revocations_total{by,
+  outcome}: revocations by what they named, principal or cert (a standing mark), self (a principal
+  ending its own sessions) or key (one (device, username) ended), and outcome: applied, partial
+  (a later step failed) or lifted (spec §5.1.4; decision 34)", and its `Help` "Revocations by what
+  they named (principal, cert, self, key) and outcome." The label set is closed; no principal,
+  device or right is a label.
 
 - [ ] **Step 4: `RevokeOwn` and `RevokeKey`.** Create `internal/broker/revokeown.go`:
 
@@ -2531,8 +3259,10 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   // policy revision read, only while it is the caller's (revokeOwnContext).
   // As Revoke does, tokens go before contexts and contexts are marked twice,
   // so a redemption in flight is caught; then the caller's receipts are
-  // deleted. It closes no held connection: with no mark the agent reconnects,
-  // and the request arrives on one.
+  // deleted, everywhere, even when only names one key: the store holds no
+  // finer cut, so a retransmission in flight on another device is answered
+  // token_spent (pre-flight M9). It closes no held connection: with no mark
+  // the agent reconnects, and the request arrives on one.
   //
   // It runs to the end on a context detached from the caller and bounded by
   // RevokeTimeout, as Revoke does once it holds its slot, so a dropped
@@ -2719,14 +3449,18 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
 - [ ] **Step 6: Commit.**
 
   ```bash
-  gofmt -w internal/broker/revoke.go internal/broker/revokeown.go internal/broker/revokeown_test.go
+  gofmt -w internal/broker/revoke.go internal/broker/revokeown.go internal/broker/revokeown_test.go \
+    internal/daemon/metrics/metrics.go
   make build && make test && make vet
-  git add internal/broker/revoke.go internal/broker/revokeown.go internal/broker/revokeown_test.go
+  git add internal/broker/revoke.go internal/broker/revokeown.go internal/broker/revokeown_test.go \
+    internal/daemon/metrics/metrics.go
   git commit -m "feat(broker): RevokeOwn ends a principal's own sessions without a mark; RevokeKey ends one key
 
   A self-revocation deletes the caller's own tokens by ID and marks its own
   contexts by compare-and-set on the revision read, so nothing of another
-  principal's under a shared (device, username) is reached (decision 34).
+  principal's under a shared (device, username) is reached (decision 34). Each
+  text says the owner's next login on a device re-admits what is still open
+  there (decision 15's join).
 
   Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
@@ -2739,18 +3473,26 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
 **Files:**
 - Create: `internal/broker/revoke_api.go`
 - Create: `internal/broker/api/revoke.go`
-- Modify: `internal/broker/broker.go` (`Handler`; `refuseRight`)
+- Modify: `internal/broker/broker.go` (`Broker` gains `AdminSocket`; `Handler`; `refuseRight`)
+- Modify: `internal/broker/revoke.go` (`ErrRevocationBusy`, wrapped by `Revoke`'s busy error)
+- Modify: `cmd/port49d/main.go` (`brk.AdminSocket`; the no-`admin_socket` start line, ~line 873)
+- Modify: `cmd/port49d/admin_linux_test.go` (the start-line test, ~line 276; the admin-socket
+  run, ~line 160)
 - Test: `internal/broker/revoke_api_test.go` (new)
 
 **Interfaces:**
 - Consumes: `b.authenticate` (Task 4); `policy.HasRight`, `policy.RightRevokeOthers` (Task 3);
-  `b.RevokeOwn`, `b.RevokeKey`, `normalPrincipal`, `ByPrincipal` (Task 7); `b.Revoke` (7a).
+  `b.RevokeOwn`, `b.RevokeKey`, `normalPrincipal`, `ByPrincipal`, `ByKey`, `RevokeReport.LiftNote`
+  (Task 7); `b.Revoke`, `b.acquireRevoke`, `holdTimeout` (7a and before); `Policy.SubjectOf`.
 - Produces:
   - `type api.RevokeRequest struct{ Mine bool; Principal, Device, Username, Sid string }`
-  - `type api.RevokeResponse struct{ By, Principal, Device, Username string; Standing bool; At string; Contexts, TokenKeys, Connections int; Unreached []api.SessionRef; Saved *bool; Incomplete, Text string }`
+  - `type api.RevokeResponse struct{ By, Principal, Subject, Device, Username string; Standing bool; At string; Contexts, TokenKeys, Connections int; Unreached []api.SessionRef; Saved *bool; Incomplete, Text string }`
   - `type api.SessionRef struct{ Device, Username string }`
   - `func (r RevokeReport) response() api.RevokeResponse`
-  - `func (b *Broker) refuseRight(w http.ResponseWriter, rec decision.Record, right string)`
+  - `func (b *Broker) answerRevocation(w http.ResponseWriter, pol *policy.Policy, rep RevokeReport, origin string)`
+  - `func (b *Broker) refuseRight(w http.ResponseWriter, rec decision.Record, right, what string)`
+  - `Broker.AdminSocket string`; `func (b *Broker) liftNote() string`
+  - `var broker.ErrRevocationBusy error`
   - the route `POST /v1/tokens/revoke`
 
 - [ ] **Step 1: Write the failing tests.** Create `internal/broker/revoke_api_test.go`:
@@ -2790,8 +3532,9 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   }
 
   // A caller with no right cannot revoke another principal: 403
-  // api_right_missing, one record naming the target and the caller, and the
-  // target untouched (design §17; decision 34).
+  // api_right_missing, one record naming the target and, in origin, the
+  // caller, with no auth (one credential per record; decision 34), and the
+  // target untouched (design §17).
   func TestRevokingAnotherNeedsTheRight(t *testing.T) {
   	f := newFixtureWithPolicy(t, 8, sharedPolicy)
   	ctx := context.Background()
@@ -2803,7 +3546,7 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   	}
   	recs := eventsOf(f.records(t), "revoke")
   	if len(recs) != 1 || recs[0]["reason"] != "api_right_missing" || recs[0]["principal"] != alicePrincipal ||
-  		recs[0]["revocation"].(map[string]any)["origin"] != "api user:carol@example.com" {
+  		recs[0]["auth"] != nil || recs[0]["revocation"].(map[string]any)["origin"] != "api user:carol@example.com" {
   		t.Fatalf("%v", recs)
   	}
   	if got := tokensOf(t, f, store.TokenKey{NAS: "leaf1", Username: "alice"}); got[alicePrincipal] != 1 {
@@ -2835,7 +3578,8 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   	f.mintFor(t, "alice@example.com", "leaf1")
   	r := decodeRevoke(t, f.revokeAs(t, "alice@example.com", `{"mine":true}`))
   	if r.By != "self" || r.Standing || r.TokenKeys != 1 || r.Saved != nil ||
-  		!strings.Contains(r.Text, "nothing stands against user:alice@example.com") {
+  		!strings.Contains(r.Text, "nothing stands against user:alice@example.com") ||
+  		!strings.Contains(r.Text, "close their session on the device") {
   		t.Fatalf("%+v", r)
   	}
   	f.mintFor(t, "alice@example.com", "leaf1")
@@ -2846,27 +3590,44 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   }
 
   // Under revoke_others, another principal is a standing mark with the caller
-  // as its origin, and the target's next mint is refused; a key is ended
-  // whoever holds it. Without the right, a key is the caller's own: a peer's
-  // key revocation reaches nothing of alice's.
+  // as its origin, the answer naming the target's subject and where the mark
+  // is lifted, and the target's next mint is refused; a key is ended whoever
+  // holds it. Without the right a key is refused 403 and recorded with the
+  // key, never narrowed to the caller's own there (Review Focus 6;
+  // pre-flight I2); the caller's own on one key is mine with the key, which
+  // reaches nothing of alice's.
   func TestRevokeOthersMarksAPrincipalAndEndsAKey(t *testing.T) {
   	f := newFixtureWithPolicy(t, 8, sharedPolicy)
   	ctx := context.Background()
   	f.mintFor(t, "alice@example.com", "leaf1")
   	f.liveContext(t, "leaf1", "alice", alicePrincipal, "")
-  	peer := decodeRevoke(t, f.revokeAs(t, "carol@example.com", `{"device":"leaf1","username":"alice"}`))
-  	if peer.By != "self" || peer.TokenKeys != 0 || peer.Contexts != 0 {
-  		t.Fatalf("a peer's key revocation: %+v", peer)
+  	if w := f.revokeAs(t, "carol@example.com", `{"device":"leaf1","username":"alice"}`); w.Code != 403 ||
+  		!strings.Contains(w.Body.String(), `"error":"api_right_missing"`) {
+  		t.Fatalf("a peer's key revocation: %d %s", w.Code, w.Body)
+  	}
+  	recs := eventsOf(f.records(t), "revoke")
+  	if len(recs) != 1 || recs[0]["reason"] != "api_right_missing" || recs[0]["principal"] != nil || recs[0]["auth"] != nil {
+  		t.Fatalf("the peer's refusal: %v", recs)
+  	}
+  	if rv := recs[0]["revocation"].(map[string]any); rv["by"] != "key" || rv["device"] != "leaf1" ||
+  		rv["username"] != "alice" || rv["origin"] != "api user:carol@example.com" {
+  		t.Fatalf("the peer's refusal: %v", rv)
+  	}
+  	own := decodeRevoke(t, f.revokeAs(t, "carol@example.com", `{"mine":true,"device":"leaf1","username":"alice"}`))
+  	if own.By != "self" || own.TokenKeys != 0 || own.Contexts != 0 {
+  		t.Fatalf("the peer's own on alice's key: %+v", own)
   	}
   	if got := tokensOf(t, f, store.TokenKey{NAS: "leaf1", Username: "alice"}); got[alicePrincipal] != 1 {
   		t.Fatalf("the peer reached alice's token: %v", got)
   	}
   	key := decodeRevoke(t, f.revokeAs(t, "bob@example.com", `{"device":"leaf1","username":"alice"}`))
-  	if key.By != "key" || key.TokenKeys != 1 || key.Contexts != 1 || key.Standing || key.Principal != alicePrincipal {
+  	if key.By != "key" || key.TokenKeys != 1 || key.Contexts != 1 || key.Standing || key.Principal != alicePrincipal ||
+  		key.Subject != "netops" {
   		t.Fatalf("bob's key revocation: %+v", key)
   	}
   	mark := decodeRevoke(t, f.revokeAs(t, "bob@example.com", `{"principal":"user:alice@example.com"}`))
-  	if mark.By != "principal" || !mark.Standing || mark.Saved == nil {
+  	if mark.By != "principal" || !mark.Standing || mark.Saved == nil || mark.Subject != "netops" ||
+  		!strings.Contains(mark.Text, "port49d has no admin_socket configured: lifting this needs port49d stopped") {
   		t.Fatalf("bob's revocation of alice: %+v", mark)
   	}
   	rv, err := f.st.GetRevocation(ctx, store.RevocationPrincipal, alicePrincipal)
@@ -2876,6 +3637,12 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   	if w := f.post(ctx, f.state(f.alice), `{"devices":["leaf1"]}`, ""); w.Code != 401 ||
   		!strings.Contains(w.Body.String(), "credential_revoked") {
   		t.Fatalf("alice's mint after the mark: %d %s", w.Code, w.Body)
+  	}
+  	f.b.AdminSocket = "/run/port49/port49d.sock"
+  	again := decodeRevoke(t, f.revokeAs(t, "bob@example.com", `{"principal":"`+alice2+`"}`))
+  	if !strings.HasSuffix(again.Text, "the lift is made on port49d's admin socket (/run/port49/port49d.sock), "+
+  		"by port49d's user or root") {
+  		t.Fatalf("a mark with an admin socket: %s", again.Text)
   	}
   }
 
@@ -2917,15 +3684,54 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   func (putRevocationFails) PutRevocation(context.Context, store.Revocation) error {
   	return errors.New("disk on fire")
   }
+
+  // A revocation that waits out its bound behind another revocation or lift
+  // is 503 revocation_busy, nothing revoked, never "could not be recorded"
+  // (pre-flight M18).
+  func TestABusyRevocationIs503(t *testing.T) {
+  	f := newFixtureWithPolicy(t, 8, sharedPolicy)
+  	defer func(d time.Duration) { holdTimeout = d }(holdTimeout)
+  	holdTimeout = 50 * time.Millisecond
+  	release, err := f.b.acquireRevoke(context.Background())
+  	if err != nil {
+  		t.Fatal(err)
+  	}
+  	defer release()
+  	w := f.revokeAs(t, "bob@example.com", `{"principal":"user:alice@example.com"}`)
+  	if w.Code != 503 || !strings.Contains(w.Body.String(), `"error":"revocation_busy"`) ||
+  		w.Header().Get("Retry-After") == "" {
+  		t.Fatalf("%d %s", w.Code, w.Body)
+  	}
+  	if _, err := f.st.GetRevocation(context.Background(), store.RevocationPrincipal, alicePrincipal); !errors.Is(err, store.ErrNotFound) {
+  		t.Fatal("a busy revocation left a mark")
+  	}
+  }
   ```
 
   `sharedPolicy`, `mintFor`, `tokensOf` and `alice2` are Task 7's. `carol@example.com` is in no
-  subject of `sharedPolicy`; she holds no right.
+  subject of `sharedPolicy`; she holds no right. `holdTimeout` is a var (`broker.go`, ~line 863)
+  that `engine_test.go` already shortens the same way.
+
+  In `cmd/port49d/admin_linux_test.go`, rename `TestRunWithABrokerAndNoAdminSocketSaysRevokeIsUnavailable`
+  to `TestRunWithABrokerAndNoAdminSocketSaysWhatRevocationCanDo`, its comment to "A broker with no
+  admin_socket says once, at start, that an HTTP revocation is made but nothing can lift it, and
+  how to cut someone off meanwhile (pre-flight I7).", and its check to:
+
+  ```go
+  	if n := strings.Count(out.String(), "port49d: broker: no admin_socket: a revocation over HTTP"); n != 1 ||
+  		strings.Contains(out.String(), "port49 revoke is unavailable") {
+  		t.Fatalf("said %d times: %q", n, out.String())
+  	}
+  ```
+
+  In `TestRunRevokesListsAndLiftsOverTheAdminSocket`, after its first wait for the listener, add
+  `if strings.Contains(out.String(), "no admin_socket:") { t.Fatalf("said with an admin socket: %q", out.String()) }`.
 
 - [ ] **Step 2: Run them to see them fail.**
 
-  Run: `go test ./internal/broker/ -run 'TestRevokingAnother|TestARevocationIs|TestMineIs|TestRevokeOthers|TestARevocationBody|TestAMarkThatCannot'`
-  Expected: build failure (`api.RevokeResponse` undefined), then 404s.
+  Run: `go test ./internal/broker/ -run 'TestRevokingAnother|TestARevocationIs|TestMineIs|TestRevokeOthers|TestARevocationBody|TestAMarkThatCannot|TestABusyRevocation' && go test ./cmd/port49d/ -run 'TestRunWithABrokerAndNoAdminSocket'`
+  Expected: build failure (`api.RevokeResponse`, `AdminSocket` undefined), then 404s, and the old
+  start line.
 
 - [ ] **Step 3: The wire types.** Create `internal/broker/api/revoke.go`:
 
@@ -2933,9 +3739,10 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   package api
 
   // RevokeRequest is POST /v1/tokens/revoke (design §17; spec §5.1.4). Exactly
-  // one form: Mine (alone, or with Device and Username for one key);
-  // Principal; or Device and Username. Sid is refused until OIDC (plan 7h).
-  // A token is never sent: the broker finds what to revoke itself.
+  // one form: Mine (alone, or with Device and Username for the caller's own
+  // on one key); Principal; or Device and Username (whoever holds the key,
+  // under revoke_others). Sid is refused until OIDC (plan 7h). A token is
+  // never sent: the broker finds what to revoke itself.
   type RevokeRequest struct {
   	Mine      bool   `json:"mine,omitempty"`
   	Principal string `json:"principal,omitempty"`
@@ -2951,13 +3758,17 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   }
 
   // RevokeResponse says what a revocation reached. By is principal (a
-  // standing mark), self or key (neither leaves one). Saved is a standing
-  // mark's alone: whether broker.revocations_file was written. Incomplete is
-  // set when a step did not finish; running the same request again repeats
-  // every step. Text is what port49 revoke prints.
+  // standing mark), self or key (neither leaves one). Subject is the policy
+  // subject the revoked principal, or the key's owner, resolves to, so a
+  // misspelt colleague is seen at once; empty for self, or when no subject
+  // names the principal. Saved is a standing mark's alone: whether
+  // broker.revocations_file was written. Incomplete is set when a step did
+  // not finish; running the same request again repeats every step. Text is
+  // what port49 revoke prints.
   type RevokeResponse struct {
   	By          string       `json:"by"`
   	Principal   string       `json:"principal,omitempty"`
+  	Subject     string       `json:"subject,omitempty"`
   	Device      string       `json:"device,omitempty"`
   	Username    string       `json:"username,omitempty"`
   	Standing    bool         `json:"standing"`
@@ -2972,12 +3783,31 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   }
   ```
 
-- [ ] **Step 4: The handler.** Create `internal/broker/revoke_api.go`:
+- [ ] **Step 4: The busy error.** In `internal/broker/revoke.go`, after `ErrBadRevocation`:
+
+  ```go
+  // ErrRevocationBusy is a revocation that could not take revokeSem before
+  // its ctx ended: another revocation or lift was running, and this one did
+  // nothing (decision 34). The HTTP endpoint answers it 503 revocation_busy.
+  var ErrRevocationBusy = errors.New("broker: another revocation or lift is still running")
+  ```
+
+  and `Revoke`'s busy return wraps it, with the same bytes as today:
+
+  ```go
+  		return RevokeReport{}, fmt.Errorf("%w, so nothing was revoked by this one (%w); "+fallback,
+  			ErrRevocationBusy, err)
+  ```
+
+  (Go 1.20's `fmt.Errorf` takes two `%w`.) `Lift` is the admin socket's alone and is left as it is.
+
+- [ ] **Step 5: The handler.** Create `internal/broker/revoke_api.go`:
 
   ```go
   package broker
 
   import (
+  	"context"
   	"encoding/json"
   	"errors"
   	"io"
@@ -3005,20 +3835,26 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   var errNotSaved = errors.New("port49d's log says why")
 
   // tokensRevoke is POST /v1/tokens/revoke (design §17; spec §5.1.4; decision
-  // 34). The caller acts on itself unless its subject declares revoke_others:
+  // 34). The caller acts on itself unless its subject declares revoke_others,
+  // and the request's form, never the caller's rights, decides what it means:
   //
-  //   - mine, or a principal that is the caller's: RevokeOwn, everywhere or on
-  //     the one key named, leaving no mark;
+  //   - mine, or a principal that is the caller's: RevokeOwn, everywhere or,
+  //     with a device and username, on that key alone, leaving no mark;
   //   - another principal: revoke_others, then 7a's Revoke, a standing mark
   //     whose origin is the caller; without the right, 403 api_right_missing;
-  //   - a (device, username): under revoke_others RevokeKey, whoever holds it;
-  //     without it, the caller's own on that key (RevokeOwn), never refused.
+  //   - a (device, username) without mine: revoke_others, then RevokeKey,
+  //     whoever holds it; without the right, 403 api_right_missing, never the
+  //     caller's own there (pre-flight I2): a right a reload withdrew minutes
+  //     ago fails loudly, rather than reporting "0 contexts marked" to an
+  //     on-call who believes someone else's session is gone.
   //
   // A principal is compared with the caller only as the broker spells it
-  // (normalPrincipal), so no spelling crosses the line either way. A lift and
-  // a revocation by certificate are the admin socket's alone.
+  // (normalPrincipal), so no spelling crosses the line either way. The right
+  // is read once, from the policy in force, before Revoke waits for its slot,
+  // and not again after the wait, as a mint reads the policy once (pre-flight
+  // M18). A lift and a revocation by certificate are the admin socket's alone.
   func (b *Broker) tokensRevoke(w http.ResponseWriter, r *http.Request) {
-  	caller, cred, ok := b.authenticate(w, r, decision.EventRevoke, "revoked nothing")
+  	caller, _, ok := b.authenticate(w, r, decision.EventRevoke, "revoked nothing")
   	if !ok {
   		return
   	}
@@ -3050,17 +3886,24 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   		return
   	}
   	pol := b.Policy.Load()
+  	mayOthers := pol.HasRight(caller, policy.RightRevokeOthers)
   	if byKey {
   		k := store.TokenKey{NAS: req.Device, Username: req.Username}
-  		if !req.Mine && pol.HasRight(caller, policy.RightRevokeOthers) {
-  			b.answerRevocation(w, b.RevokeKey(r.Context(), k, origin), origin)
-  			return
+  		switch {
+  		case req.Mine:
+  			b.answerRevocation(w, pol, b.RevokeOwn(r.Context(), caller, &k, origin), origin)
+  		case mayOthers:
+  			b.answerRevocation(w, pol, b.RevokeKey(r.Context(), k, origin), origin)
+  		default:
+  			b.refuseRight(w, decision.Record{TS: b.Now(), Event: decision.EventRevoke,
+  				Revocation: &decision.Revocation{By: ByKey, Device: k.NAS, Username: k.Username,
+  					At: decision.FormatTime(b.Now()), Origin: origin}},
+  				policy.RightRevokeOthers, "ending a (device, username) whoever holds it")
   		}
-  		b.answerRevocation(w, b.RevokeOwn(r.Context(), caller, &k, origin), origin)
   		return
   	}
   	if req.Mine {
-  		b.answerRevocation(w, b.RevokeOwn(r.Context(), caller, nil, origin), origin)
+  		b.answerRevocation(w, pol, b.RevokeOwn(r.Context(), caller, nil, origin), origin)
   		return
   	}
   	target, err := normalPrincipal(req.Principal)
@@ -3069,20 +3912,27 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   		return
   	}
   	if target == caller {
-  		b.answerRevocation(w, b.RevokeOwn(r.Context(), caller, nil, origin), origin)
+  		b.answerRevocation(w, pol, b.RevokeOwn(r.Context(), caller, nil, origin), origin)
   		return
   	}
-  	if !pol.HasRight(caller, policy.RightRevokeOthers) {
+  	if !mayOthers {
   		b.refuseRight(w, decision.Record{TS: b.Now(), Event: decision.EventRevoke, Principal: target,
-  			Auth: &decision.Auth{Method: cred.Method, Fingerprint: cred.Fingerprint},
   			Revocation: &decision.Revocation{By: ByPrincipal, At: decision.FormatTime(b.Now()), Origin: origin}},
-  			policy.RightRevokeOthers)
+  			policy.RightRevokeOthers, "revoking another principal")
   		return
   	}
-  	rep, err := b.Revoke(r.Context(), RevokeRequest{Principal: target, Origin: origin})
+  	// The wait for the revocation slot is bounded; once Revoke holds it, it
+  	// runs to the end detached from this request (Revoke's comment).
+  	wait, cancel := context.WithTimeout(r.Context(), holdTimeout)
+  	defer cancel()
+  	rep, err := b.Revoke(wait, RevokeRequest{Principal: target, Origin: origin})
   	switch {
   	case errors.Is(err, ErrBadRevocation):
   		writeError(w, http.StatusBadRequest, "bad_request", strings.TrimPrefix(err.Error(), "broker: "))
+  	case errors.Is(err, ErrRevocationBusy):
+  		w.Header().Set("Retry-After", "5")
+  		writeError(w, http.StatusServiceUnavailable, "revocation_busy", "another revocation or lift is still "+
+  			"running, so nothing was revoked; try again")
   	case err != nil:
   		// The mark was not written, so nothing was revoked: Revoke's own
   		// error names the store's fault and the fallback, for port49d's log.
@@ -3091,14 +3941,29 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   		writeError(w, http.StatusServiceUnavailable, string(decision.StoreUnavailable), "the revocation could not "+
   			"be recorded, so nothing was revoked; try again, or ask an operator to run `port49 revoke` on port49d")
   	default:
-  		b.answerRevocation(w, rep, origin)
+  		rep.LiftNote = b.liftNote()
+  		b.answerRevocation(w, pol, rep, origin)
   	}
+  }
+
+  // liftNote says where a standing mark made over HTTP is lifted: port49d's
+  // admin socket, or, with none configured, the only way there is
+  // (pre-flight I7). Revoking stays allowed without one: it is the safe
+  // direction.
+  func (b *Broker) liftNote() string {
+  	if b.AdminSocket == "" {
+  		return "port49d has no admin_socket configured: lifting this needs port49d stopped, the entry removed " +
+  			"from broker.revocations_file, and a start"
+  	}
+  	return "the lift is made on port49d's admin socket (" + b.AdminSocket + "), by port49d's user or root"
   }
 
   // answerRevocation writes rep, with a step's store error, and a standing
   // mark's file error, replaced by fixed ones on the wire and said whole in
-  // port49d's log: neither is the caller's to read.
-  func (b *Broker) answerRevocation(w http.ResponseWriter, rep RevokeReport, origin string) {
+  // port49d's log: neither is the caller's to read. It names the subject the
+  // revoked principal, or the key's owner, resolves to in pol (pre-flight
+  // M11), so a typo of a real colleague's address is seen at once.
+  func (b *Broker) answerRevocation(w http.ResponseWriter, pol *policy.Policy, rep RevokeReport, origin string) {
   	if rep.Err != nil {
   		b.logf("broker: a revocation (%s, by %s) did not finish: %v", rep.By, origin, rep.Err)
   		rep.Err = errIncomplete
@@ -3108,10 +3973,14 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   			rep.SaveErr)
   		rep.SaveErr = errNotSaved
   	}
-  	writeJSON(w, http.StatusOK, rep.response())
+  	out := rep.response()
+  	if rep.By != ByOwn && rep.Request.Principal != "" {
+  		out.Subject, _ = pol.SubjectOf(rep.Request.Principal)
+  	}
+  	writeJSON(w, http.StatusOK, out)
   }
 
-  // response is rep's wire form (api.RevokeResponse).
+  // response is rep's wire form (api.RevokeResponse), Subject aside.
   func (r RevokeReport) response() api.RevokeResponse {
   	out := api.RevokeResponse{By: r.By, Principal: r.Request.Principal, Standing: r.By == ByPrincipal || r.By == ByCert,
   		At: r.Mark.At.UTC().Format(time.RFC3339), Contexts: len(r.Contexts), TokenKeys: r.TokenKeys,
@@ -3140,39 +4009,67 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   }
   ```
 
-  In `internal/broker/broker.go`, add to `Handler` `mux.HandleFunc("POST /v1/tokens/revoke",
-  b.tokensRevoke)`, and after `emit`:
+  In `internal/broker/broker.go`, add to `Broker`:
 
   ```go
-  // refuseRight answers a call that would act on another principal without
-  // the api: right that unlocks it: 403 api_right_missing, and rec, the one
-  // deny record naming whom it was about and who asked (spec §5.7; decision
-  // 34). Nothing is done.
-  func (b *Broker) refuseRight(w http.ResponseWriter, rec decision.Record, right string) {
-  	rec.Verdict, rec.Reason = decision.VerdictDeny, decision.APIRightMissing
+  	// AdminSocket is port49d's admin_socket, where a revocation is lifted;
+  	// empty when none is configured. Only the HTTP revocation's answer reads
+  	// it, to say where its mark is lifted (decision 34).
+  	AdminSocket string
+  ```
+
+  add to `Handler` `mux.HandleFunc("POST /v1/tokens/revoke", b.tokensRevoke)`, and after `emit`:
+
+  ```go
+  // refuseRight answers a call that would act on another principal, or on a
+  // (device, username) whoever holds it, without the api: right that
+  // unlocks it: 403 api_right_missing, and rec, the one deny record. rec
+  // names whom the call was about and, in origin or explain.asked_by, who
+  // asked; it carries no auth, so a record's auth and principal always
+  // describe one credential (spec §5.7; decision 34). what says what was
+  // asked, for the answer. Nothing is done.
+  func (b *Broker) refuseRight(w http.ResponseWriter, rec decision.Record, right, what string) {
+  	rec.Verdict, rec.Reason, rec.Auth = decision.VerdictDeny, decision.APIRightMissing, nil
   	b.emit(rec)
   	writeError(w, http.StatusForbidden, string(decision.APIRightMissing), fmt.Sprintf(
-  		"acting on another principal needs the api: %s right, which your subject does not declare (spec §2)", right))
+  		"%s needs the api: %s right, which your subject does not declare (spec §2)", what, right))
   }
   ```
 
-- [ ] **Step 5: Run the tests.**
+  In `cmd/port49d/main.go`'s admin-socket block, beside `brk.RevokeTimeout = admin.OpTimeout`, add
+  `brk.AdminSocket = cfg.AdminSocket`. Replace the no-`admin_socket` line (~line 873) with:
 
-  Run: `go test ./internal/broker/`
+  ```go
+  	if brk != nil && cfg.AdminSocket == "" {
+  		fmt.Fprintln(stderr, "port49d: broker: no admin_socket: a revocation over HTTP (port49 revoke --via-agent, "+
+  			"under api: revoke_others) is made, but none can be lifted, nor a certificate revoked, short of stopping "+
+  			"port49d and editing broker.revocations_file; set admin_socket. To cut someone off meanwhile, remove "+
+  			"their grants from broker.policy_file")
+  	}
+  ```
+
+- [ ] **Step 6: Run the tests.**
+
+  Run: `go test ./internal/broker/ ./cmd/port49d/`
   Expected: PASS.
 
-- [ ] **Step 6: Commit.**
+- [ ] **Step 7: Commit.**
 
   ```bash
-  gofmt -w internal/broker/revoke_api.go internal/broker/api/revoke.go internal/broker/broker.go internal/broker/revoke_api_test.go
+  gofmt -w internal/broker/revoke_api.go internal/broker/api/revoke.go internal/broker/broker.go \
+    internal/broker/revoke.go internal/broker/revoke_api_test.go cmd/port49d/main.go cmd/port49d/admin_linux_test.go
   make build && make test && make vet
-  git add internal/broker/revoke_api.go internal/broker/api/revoke.go internal/broker/broker.go internal/broker/revoke_api_test.go
+  git add internal/broker/revoke_api.go internal/broker/api/revoke.go internal/broker/broker.go \
+    internal/broker/revoke.go internal/broker/revoke_api_test.go cmd/port49d/main.go cmd/port49d/admin_linux_test.go
   git commit -m "feat(broker): POST /v1/tokens/revoke, self-only unless revoke_others
 
-  mine (or the caller's own principal) ends the caller's sessions with no mark;
-  another principal under revoke_others is 7a's standing mark, its origin the
-  caller; a (device, username) is the caller's own without the right. A refusal
-  is 403 api_right_missing and one record (decision 34).
+  mine (or the caller's own principal) ends the caller's sessions with no mark,
+  on one key with a device and username; another principal under revoke_others
+  is 7a's standing mark, its origin the caller, its answer naming the target's
+  subject and where it is lifted; a (device, username) is ended whoever holds
+  it under revoke_others. Without the right either is 403 api_right_missing and
+  one record with no auth. A busy slot is 503 revocation_busy. port49d's start
+  line says an HTTP mark cannot be lifted without admin_socket (decision 34).
 
   Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
@@ -3184,19 +4081,21 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
 
 **Files:**
 - Modify: `internal/policy/explain.go` (`Explanation.Revoked`; `Answer`; `Render`'s revoked and
-  no-grant lines)
+  no-grant lines; `wouldPermit` reads compiled programs from `permitPrograms`)
+- Modify: `internal/policy/load.go` (`Policy` gains `permitsAlone`, beside `projected`, ~line 91)
 - Create: `internal/broker/explain_api.go`
 - Create: `internal/broker/api/explain.go`
 - Modify: `internal/broker/broker.go` (`Handler`)
 - Test: `internal/policy/explain_test.go` (add), `internal/broker/explain_api_test.go` (new)
 
 **Interfaces:**
-- Consumes: `b.authenticate` (Task 4); `b.refuseRight` (Task 8); `normalPrincipal` (Task 7);
-  `policy.Policy.Explain`, `Explanation.Redacted`, `Explanation.Render`, `Policy.Redactions`;
-  `b.revocation`.
+- Consumes: `b.authenticate` (Task 4); `b.refuseRight(w, rec, right, what)` (Task 8);
+  `normalPrincipal` (Task 7); `policy.Policy.Explain`, `Explanation.Redacted`, `Explanation.Render`,
+  `Policy.Redactions`, `Policy.Quarantined`, `Policy.Admitted`; `b.revocation`.
 - Produces:
   - `Explanation.Revoked time.Time`
   - `func (e policy.Explanation) Answer() (verdict string, reason decision.Reason, mintError string)`
+  - `Policy.permitsAlone sync.Map`; `func (p *Policy) permitPrograms(platformName string) (map[string]*engine.Program, error)`
   - `type api.ExplainRequest struct{ Device, Command, Principal string }`
   - `type api.ExplainResponse struct{ Principal, Subject, Device, Platform, Verdict, Reason, MintError, Text string }`
   - the route `POST /v1/explain`
@@ -3237,6 +4136,27 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   		t.Fatalf("a no-grant answer with no platform: %q", got)
   	}
   }
+
+  // wouldPermit compiles each role's permits once per platform per policy and
+  // keeps them (spec §13 decision 34; pre-flight M15): a second denied explain
+  // on the platform compiles nothing and gives the same answer.
+  func TestWouldPermitCompilesOncePerPlatform(t *testing.T) {
+  	p := mustParse(t, `
+  scopes: [{name: all_devices, match: {}}]
+  roles: [{name: ops, privilege: admin, permit: ["reload **"]}, {name: ro, privilege: readonly, permit: [show **]}]
+  subjects: [{name: s, identity: ["user:alice@example.com"], username: alice, token_ttl: 60s}]
+  grants: [{subject: s, scope: all_devices, roles: [ro]}]`)
+  	first, err := p.wouldPermit("reload now", "arista_eos")
+  	if err != nil || strings.Join(first, " ") != "ops" {
+  		t.Fatalf("%v %v", first, err)
+  	}
+  	second, err := p.wouldPermit("reload now", "arista_eos")
+  	n := 0
+  	p.permitsAlone.Range(func(any, any) bool { n++; return true })
+  	if err != nil || strings.Join(second, " ") != "ops" || n != 1 {
+  		t.Fatalf("%v %v; %d platform(s) compiled", second, err, n)
+  	}
+  }
   ```
 
   Create `internal/broker/explain_api_test.go`:
@@ -3253,6 +4173,7 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   	"time"
 
   	"github.com/rhwendt/port49/internal/broker/api"
+  	"github.com/rhwendt/port49/internal/policy"
   	"github.com/rhwendt/port49/internal/store"
   )
 
@@ -3280,8 +4201,9 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   }
 
   // A caller explains itself: the broker's answer from the policy in force,
-  // the daemon's evaluator, and one explain record that names who asked and
-  // never the command (spec §5.7; decision 34).
+  // the daemon's evaluator, and one explain record that names who asked, by
+  // principal and certificate, and the bundle that answered, carries no
+  // auth, and never the command (spec §5.7; decision 34).
   func TestExplainAnswersTheCallerAndNeverLogsTheCommand(t *testing.T) {
   	f := newFixtureWithPolicy(t, 8, explainPolicy)
   	r := decodeExplain(t, f.explainAs(t, "alice@example.com", `{"device":"leaf1","command":"reload now"}`))
@@ -3298,8 +4220,12 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   		t.Fatalf("%v", recs)
   	}
   	ex := recs[0]["explain"].(map[string]any)
-  	if ex["asked_by"] != alicePrincipal || ex["command"] != true {
-  		t.Fatalf("%v", ex)
+  	if ex["asked_by"] != alicePrincipal || ex["command"] != true ||
+  		!strings.HasPrefix(ex["asked_by_fingerprint"].(string), "sha256:") || recs[0]["auth"] != nil {
+  		t.Fatalf("%v", recs[0])
+  	}
+  	if pol, _ := recs[0]["policy"].(map[string]any); pol["bundle"] != f.b.Policy.Load().Bundle {
+  		t.Fatalf("the record does not name the bundle that answered: %v", recs[0])
   	}
   	if strings.Contains(f.log.String(), "reload now") {
   		t.Fatal("the log holds the command explain was asked")
@@ -3324,9 +4250,69 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   	}
   }
 
+  // A scoped caller asking about a device outside its grants that is
+  // quarantined, or refused admission, is answered and recorded exactly as
+  // about a device that does not exist (Review Focus 7; pre-flight M7).
+  // Explain judges no grant before a quarantine or a refusal, as the mint
+  // does; a reordering would tell a caller which devices exist and what state
+  // they are in. nx1 is cisco_nxos, which defines no @loopback, so alice's
+  // grant quarantines it (TestAQuarantinedDeviceIsRefusedAtMint); bare lies
+  // outside the key group's range, so it is refused admission; carol's grant
+  // selects arista_eos alone.
+  func TestAScopedCallerLearnsNothingOfADeviceOutsideItsGrants(t *testing.T) {
+  	f := newFixture(t, 8)
+  	body := `
+  scopes: [{name: all_devices, match: {}}, {name: eos, match: {platform: arista_eos}, on_missing: exclude}]
+  roles: [{name: r, permit: ["**"], deny: [interface @loopback]}]
+  subjects:
+    - {name: c, identity: "user:carol@example.com", username: carol, token_ttl: 60s}
+    - {name: s, identity: "user:alice@example.com", username: alice, token_ttl: 60s}
+  grants: [{subject: s, scope: all_devices, roles: [r]}, {subject: c, scope: eos, roles: [r]}]
+  key_groups: [{match: {cidr: 172.100.100.0/27}, key_ref: k}]
+  `
+  	pol, err := policy.Parse([]byte(body), policy.Env{Devices: f.b.Policy.Load().Devices(), Now: f.b.Now(),
+  		KeyRefs: []string{"k"}})
+  	if err != nil {
+  		t.Fatal(err)
+  	}
+  	f.b.Policy.Swap(pol)
+  	if _, q := pol.Quarantined("nx1", f.b.Now()); !q {
+  		t.Fatal("the fixture does not quarantine nx1")
+  	}
+  	if r, _ := pol.Admitted("bare"); r.Refused == "" {
+  		t.Fatal("the fixture does not refuse bare admission")
+  	}
+  	unknown := decodeExplain(t, f.explainAs(t, "carol@example.com", `{"device":"nosuch"}`))
+  	if unknown.Reason != "no_grants_matched" || unknown.Platform != "" {
+  		t.Fatalf("unknown: %+v", unknown)
+  	}
+  	for _, name := range []string{"nx1", "bare"} {
+  		got := decodeExplain(t, f.explainAs(t, "carol@example.com", `{"device":"`+name+`"}`))
+  		got.Device, got.Text = "nosuch", strings.ReplaceAll(got.Text, name, "nosuch")
+  		if got != unknown {
+  			t.Fatalf("%s:\n%+v\nunknown:\n%+v", name, got, unknown)
+  		}
+  	}
+  	recs := eventsOf(f.records(t), "explain")
+  	if len(recs) != 3 {
+  		t.Fatalf("%d explain records", len(recs))
+  	}
+  	var same []string
+  	for _, r := range recs {
+  		delete(r, "ts")
+  		r["device"].(map[string]any)["name"] = "nosuch"
+  		raw, _ := json.Marshal(r) // map keys sorted
+  		same = append(same, string(raw))
+  	}
+  	if same[1] != same[0] || same[2] != same[0] {
+  		t.Fatalf("records differ but for the name:\n%s", strings.Join(same, "\n"))
+  	}
+  }
+
   // Explaining another principal needs explain_others: without it, 403 and
-  // one deny api_right_missing record naming the target and who asked; with
-  // it, the target's answer, and a target under a mark is credential_revoked.
+  // one deny api_right_missing record naming the target and who asked, with
+  // no auth (decision 34); with it, the target's answer, and a target under a
+  // mark is credential_revoked.
   func TestExplainingAnotherNeedsTheRight(t *testing.T) {
   	f := newFixtureWithPolicy(t, 8, explainPolicy)
   	if w := f.explainAs(t, "carol@example.com", `{"device":"leaf1","principal":"USER:alice@example.com"}`); w.Code != 403 ||
@@ -3335,7 +4321,7 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   	}
   	recs := eventsOf(f.records(t), "explain")
   	if len(recs) != 1 || recs[0]["reason"] != "api_right_missing" || recs[0]["principal"] != alicePrincipal ||
-  		recs[0]["explain"].(map[string]any)["asked_by"] != "user:carol@example.com" {
+  		recs[0]["explain"].(map[string]any)["asked_by"] != "user:carol@example.com" || recs[0]["auth"] != nil {
   		t.Fatalf("%v", recs)
   	}
   	if r := decodeExplain(t, f.explainAs(t, "bob@example.com", `{"device":"leaf1","principal":"user:alice@example.com"}`)); r.Verdict != "permit" || r.Subject != "netops" {
@@ -3374,8 +4360,8 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
 
 - [ ] **Step 2: Run them to see them fail.**
 
-  Run: `go test ./internal/policy/ -run TestAnswerIsRendersVerdict && go test ./internal/broker/ -run 'TestExplain|TestAnUnknownDevice'`
-  Expected: build failure (`Revoked`, `Answer`, `api.ExplainResponse` undefined).
+  Run: `go test ./internal/policy/ -run 'TestAnswerIsRendersVerdict|TestWouldPermitCompilesOncePerPlatform' && go test ./internal/broker/ -run 'TestExplain|TestAnUnknownDevice|TestAScopedCaller'`
+  Expected: build failure (`Revoked`, `Answer`, `permitsAlone`, `api.ExplainResponse` undefined).
 
 - [ ] **Step 3: The explanation's answer.** In `internal/policy/explain.go`, add to `Explanation`
   after `Refused`:
@@ -3441,6 +4427,77 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
 
   `port49 explain`'s offline output is unchanged wherever the platform is known; check its tests.
 
+  `wouldPermit` compiles every role's permits on each call, which a denied explain would make a
+  CPU lever for any granted principal (pre-flight M15). Keep the programs per platform on the
+  `Policy`, as `projected` keeps projections. In `internal/policy/load.go`, after `projected`:
+
+  ```go
+  	// permitsAlone memoizes wouldPermit's programs, keyed by platform: each
+  	// role's permits alone, compiled once per policy (a Policy is one
+  	// bundle, never changed once loaded), so a denied explain matches and
+  	// compiles nothing (spec §13 decision 34). The key is a device's
+  	// platform, a set the inventory bounds, never a caller's text.
+  	permitsAlone sync.Map
+  ```
+
+  In `internal/policy/explain.go`, replace `wouldPermit` with:
+
+  ```go
+  // wouldPermit lists every role whose permits alone match the command on this
+  // platform, held or not: what to ask for (spec §13 decision 34 records that
+  // this names roles from the whole policy, deliberately).
+  func (p *Policy) wouldPermit(line, platformName string) ([]string, error) {
+  	progs, err := p.permitPrograms(platformName)
+  	if err != nil {
+  		return nil, err
+  	}
+  	raw, _ := p.commandRaw(line, platformName)
+  	var out []string
+  	for name, prog := range progs {
+  		if len(prog.Command(raw).Permits) > 0 {
+  			out = append(out, name)
+  		}
+  	}
+  	sort.Strings(out)
+  	return out, nil
+  }
+
+  // permitPrograms is every role's permits alone compiled for platformName,
+  // compiled at the first call and kept (permitsAlone). An error is not kept,
+  // so it is said again at the next call.
+  func (p *Policy) permitPrograms(platformName string) (map[string]*engine.Program, error) {
+  	if v, ok := p.permitsAlone.Load(platformName); ok {
+  		return v.(map[string]*engine.Program), nil
+  	}
+  	dialect := p.dialect(platformName)
+  	progs := make(map[string]*engine.Program, len(p.roles))
+  	for name, r := range p.roles {
+  		// This blob is never minted; Compile only needs a bundle named.
+  		b := engine.Blob{Version: engine.Version, Bundle: "explain", Platform: platformName, Classes: dialect.EntityClasses,
+  			Normalize: p.normalizeFor(platformName)}
+  		for _, rule := range r.Permit {
+  			missing, err := missingClass(rule, dialect.EntityClasses)
+  			if err != nil {
+  				return nil, fmt.Errorf("role %q: %w", name, err)
+  			}
+  			if !missing {
+  				b.Rules = append(b.Rules, engine.Rule{Verdict: engine.Permit, Rule: rule, Role: name})
+  			}
+  		}
+  		prog, err := engine.Compile(b)
+  		if err != nil {
+  			return nil, fmt.Errorf("role %q: %w", name, err)
+  		}
+  		progs[name] = prog
+  	}
+  	stored, _ := p.permitsAlone.LoadOrStore(platformName, progs)
+  	return stored.(map[string]*engine.Program), nil
+  }
+  ```
+
+  The compile loop is today's, moved; a `*engine.Program` is read-only once compiled, as every
+  context's program is shared across requests.
+
 - [ ] **Step 4: The wire types and the handler.** Create `internal/broker/api/explain.go`:
 
   ```go
@@ -3502,7 +4559,8 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   // explain_others. A device the inventory does not name is answered exactly
   // as one the principal has no grant on, and neither names a platform: the
   // API tells no caller which devices exist. A principal under a mark is
-  // credential_revoked. One explain record, which never holds the command.
+  // credential_revoked. One explain record, which names the bundle that
+  // answered and never holds the command.
   func (b *Broker) explain(w http.ResponseWriter, r *http.Request) {
   	caller, cred, ok := b.authenticate(w, r, decision.EventExplain, "explained nothing")
   	if !ok {
@@ -3529,12 +4587,14 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   	}
   	now := b.Now()
   	pol := b.Policy.Load()
+  	// No auth: principal is whom it was about, and the caller's credential
+  	// is in explain.asked_by_fingerprint, so a record's auth and principal
+  	// always describe one credential (decision 34; pre-flight I8).
   	rec := decision.Record{TS: now, Event: decision.EventExplain, Principal: about,
-  		Auth:    &decision.Auth{Method: cred.Method, Fingerprint: cred.Fingerprint},
-  		Device:  &decision.Device{Name: req.Device},
-  		Explain: &decision.Explain{AskedBy: caller, Command: req.Command != ""}}
+  		Device: &decision.Device{Name: req.Device}, Policy: &decision.Policy{Bundle: pol.Bundle},
+  		Explain: &decision.Explain{AskedBy: caller, AskedByFingerprint: cred.Fingerprint, Command: req.Command != ""}}
   	if about != caller && !pol.HasRight(caller, policy.RightExplainOthers) {
-  		b.refuseRight(w, rec, policy.RightExplainOthers)
+  		b.refuseRight(w, rec, policy.RightExplainOthers, "explaining another principal")
   		return
   	}
   	ctx, cancel := context.WithTimeout(r.Context(), holdTimeout)
@@ -3615,16 +4675,21 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
 - [ ] **Step 6: Commit.**
 
   ```bash
-  gofmt -w internal/policy/explain.go internal/policy/explain_test.go internal/broker/explain_api.go \
-    internal/broker/api/explain.go internal/broker/broker.go internal/broker/explain_api_test.go
+  gofmt -w internal/policy/explain.go internal/policy/explain_test.go internal/policy/load.go \
+    internal/broker/explain_api.go internal/broker/api/explain.go internal/broker/broker.go \
+    internal/broker/explain_api_test.go
   make build && make test && make vet
-  git add internal/policy/explain.go internal/policy/explain_test.go internal/broker/explain_api.go \
-    internal/broker/api/explain.go internal/broker/broker.go internal/broker/explain_api_test.go
+  git add internal/policy/explain.go internal/policy/explain_test.go internal/policy/load.go \
+    internal/broker/explain_api.go internal/broker/api/explain.go internal/broker/broker.go \
+    internal/broker/explain_api_test.go
   git commit -m "feat(broker): POST /v1/explain from the policy in force, never a device oracle
 
-  An unknown device is answered as one with no grant, naming no platform; another
-  principal needs explain_others; a principal under a mark is credential_revoked;
-  the record names who asked and never the command (decision 34).
+  An unknown device, and one outside a scoped caller's grants that is quarantined
+  or refused admission, is answered as one with no grant, naming no platform;
+  another principal needs explain_others; a principal under a mark is
+  credential_revoked; the record names who asked and the bundle, carries no auth,
+  and never the command. Each role's permits are compiled once per platform per
+  policy (decision 34).
 
   Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
@@ -3635,76 +4700,122 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
 ### Task 10: The candidate reload guard: a policy reload cannot quarantine the fleet
 
 **Files:**
-- Modify: `internal/bundle/diff.go` (`CheckAdmission`, ~line 266; new `NewlyQuarantined`)
-- Modify: `cmd/port49d/reload.go` (the two `CheckAdmission` calls, ~lines 530 and 890)
-- Modify: `cmd/port49/inventory.go` (the two `CheckAdmission` calls, ~lines 158 and 164)
+- Modify: `internal/bundle/diff.go` (`CheckAdmission`, ~line 266; new `NewlyQuarantined`,
+  `inService`, `inServiceCount`)
+- Modify: `cmd/port49d/reload.go` (the two `CheckAdmission` calls, ~lines 530 and 890; the two
+  refusal lines, ~lines 552 and 911; new `refusalLine`, `unguardedAtStart`)
+- Modify: `cmd/port49/inventory.go` (the two `CheckAdmission` calls, ~lines 158 and 164; new
+  `redacted`)
 - Modify: `tests/lab/l31_test.go` (its quarantining reload's derived config)
 - Test: `internal/bundle/diff_test.go`, `cmd/port49d/reload_test.go`
 
 **Interfaces:**
 - Consumes: `policy.Policy.Quarantined(name string, now time.Time) (string, bool)`,
-  `Policy.Admitted`, `Policy.AdmissionAssessed`, `NewlyRefused`, `admitsNone`, `names`, `nameList`.
+  `Policy.Admitted`, `Policy.AdmissionAssessed`, `Policy.Redactions`, `NewlyRefused`, `admitsNone`,
+  `names`, `nameList`; `platform.RedactQuoted`; `oneLine`, `quotesCut` (`cmd/port49d`).
 - Produces:
   - `type bundle.Quarantined struct{ Device, Cause string }`
   - `func bundle.NewlyQuarantined(old, new *policy.Policy, now time.Time) []bundle.Quarantined`
   - `func bundle.CheckAdmission(old, new *policy.Policy, maxRemovedPercent int, now time.Time) error`
     (the new `now` parameter)
+  - `func refusalLine(err error, pols ...*policy.Policy) string`, `const unguardedAtStart`
+    (`cmd/port49d`); `func redacted(err error, pols ...*policy.Policy) error` (`cmd/port49`)
 
 - [ ] **Step 1: Write the failing tests.** In `internal/bundle/diff_test.go`, change the existing
   `CheckAdmission(old, x, n)` calls to `CheckAdmission(old, x, n, time.Now())`, and add:
 
   ```go
-  // A policy that quarantines more than the bound of the devices in service
-  // is refused, naming each and the remedy, as one that refuses admission is
-  // (plan 4b's candidate guard; spec §13 decision 34). A reload that only
-  // releases quarantined devices is never refused (Review Focus 4).
+  // A policy that takes more than the bound of the devices in service out of
+  // service, by quarantining them, is refused, naming each, the remedy, and
+  // the knob's other use, as one that refuses admission is (plan 4b's
+  // candidate guard; spec §13 decision 34). Against a fleet that already has
+  // a quarantine (Review Focus 4; pre-flight M6): a release passes; the
+  // policy in force reloaded passes; one more of the three in service
+  // quarantined is 33% and refused; and a reload that releases one and
+  // quarantines another, leaving as many in service as before, passes
+  // (pre-flight M14).
   func TestCheckAdmissionBoundsAPolicyThatQuarantinesTheFleet(t *testing.T) {
   	now := time.Now()
-  	devs := []admission.Device{dev("a", "10.0.3.1", nil), dev("b", "10.0.3.2", nil), dev("c", "10.0.3.3", nil)}
+  	devs := []admission.Device{dev("a", "10.0.3.1", nil), dev("b", "10.0.3.2", nil),
+  		dev("c", "10.0.3.3", map[string]string{"site": "campus"}), dev("d", "10.0.3.4", map[string]string{"site": "dc1"})}
+  	// quarantineOn caps an admin role at operator on the named scopes'
+  	// grants: it lands above its ceiling's level on arista_eos, so every
+  	// device those scopes select is quarantined.
+  	quarantineOn := func(t *testing.T, scopes ...string) *policy.Policy {
+  		t.Helper()
+  		text := strings.Replace(withScopes, "roles: [{name: r, privilege: readonly, permit: [show **]}]",
+  			"roles: [{name: r, privilege: readonly, permit: [show **]}, {name: big, privilege: admin, permit: [show **]}]", 1)
+  		for _, sc := range scopes {
+  			text = strings.Replace(text, "scope: "+sc+", roles: [r]}", "scope: "+sc+", roles: [big], max_privilege: operator}", 1)
+  		}
+  		p, err := Parse([]byte(text), admission.Inventory{Devices: devs}, policy.Env{})
+  		if err != nil {
+  			t.Fatal(err)
+  		}
+  		return p
+  	}
   	good := mustBundle(t, devs...)
-  	// An admin role capped at operator lands above its ceiling on arista_eos:
-  	// every device is quarantined (policy, TestARoleAboveItsCeilingsLevelIs…).
-  	quarantining := strings.NewReplacer("privilege: readonly", "privilege: admin",
-  		"roles: [r]}", "roles: [r], max_privilege: operator}").Replace(withScopes)
-  	bad, err := Parse([]byte(quarantining), admission.Inventory{Devices: devs}, policy.Env{})
-  	if err != nil {
-  		t.Fatal(err)
+  	all := quarantineOn(t, "all_devices", "campus", "dc")
+  	dc := quarantineOn(t, "dc")                 // d out: a, b, c in service
+  	dcCampus := quarantineOn(t, "dc", "campus") // c and d out: a, b in service
+  	campus := quarantineOn(t, "campus")         // c out: a, b, d in service
+  	for name, c := range map[string]struct {
+  		p   *policy.Policy
+  		out string
+  	}{"all": {all, "a b c d"}, "dc": {dc, "d"}, "dc and campus": {dcCampus, "c d"}, "campus": {campus, "c"}} {
+  		var out []string
+  		for _, d := range devs {
+  			if _, q := c.p.Quarantined(d.Name, now); q {
+  				out = append(out, d.Name)
+  			}
+  		}
+  		if strings.Join(out, " ") != c.out {
+  			t.Fatalf("the %s fixture quarantines %v, not %s", name, out, c.out)
+  		}
   	}
-  	if _, q := bad.Quarantined("a", now); !q {
-  		t.Fatal("the fixture does not quarantine a")
+  	err := CheckAdmission(good, all, 10, now)
+  	if err == nil || !strings.Contains(err.Error(), "takes 4 of 4 devices in service out of it") ||
+  		!strings.Contains(err.Error(), "it quarantines 4: a (") || !strings.Contains(err.Error(), "port49 revoke") ||
+  		!strings.Contains(err.Error(), "raise inventory.max_removed_percent") ||
+  		!strings.Contains(err.Error(), "then lower it again, since it bounds inventory syncs too") {
+  		t.Fatalf("the whole fleet: %v", err)
   	}
-  	err = CheckAdmission(good, bad, 10, now)
-  	if err == nil || !strings.Contains(err.Error(), "takes 3 of 3 devices in service out of it") ||
-  		!strings.Contains(err.Error(), "it quarantines 3: a") || !strings.Contains(err.Error(), "port49 revoke") ||
-  		!strings.Contains(err.Error(), "raise inventory.max_removed_percent") {
-  		t.Fatalf("%v", err)
-  	}
-  	if err := CheckAdmission(good, bad, 100, now); err != nil {
+  	if err := CheckAdmission(good, all, 100, now); err != nil {
   		t.Fatalf("the bound off: %v", err)
   	}
-  	if err := CheckAdmission(bad, good, 10, now); err != nil {
-  		t.Fatalf("a reload that releases every quarantine: %v", err)
+  	if err := CheckAdmission(dc, good, 10, now); err != nil {
+  		t.Fatalf("(a) a reload that releases the quarantine and quarantines nothing: %v", err)
   	}
-  	if err := CheckAdmission(bad, bad, 10, now); err != nil {
-  		t.Fatalf("a quarantine already in force is not new: %v", err)
+  	if err := CheckAdmission(dc, dc, 10, now); err != nil || len(NewlyQuarantined(dc, dc, now)) != 0 {
+  		t.Fatalf("(b) the policy in force again, three of four in service: %v", err)
   	}
-  	if got := NewlyQuarantined(good, bad, now); len(got) != 3 || got[0].Device != "a" || got[0].Cause == "" {
+  	err = CheckAdmission(dc, dcCampus, 10, now)
+  	if err == nil || !strings.Contains(err.Error(), "takes 1 of 3 devices in service out of it (33%)") ||
+  		!strings.Contains(err.Error(), "it quarantines 1: c (") {
+  		t.Fatalf("(c) one more of the three in service: %v", err)
+  	}
+  	if err := CheckAdmission(campus, dc, 10, now); err != nil {
+  		t.Fatalf("(d) c released and d quarantined, three in service before and after: %v", err)
+  	}
+  	if got := NewlyQuarantined(good, all, now); len(got) != 4 || got[0].Device != "a" || got[0].Cause == "" {
   		t.Fatalf("NewlyQuarantined: %+v", got)
   	}
   }
   ```
 
-  If the replacer's grant edit does not reach every grant in `withScopes` (each reads `roles:
-  [r]}`), adjust the fixture minimally; the `bad.Quarantined("a", now)` check says whether it
-  quarantines.
+  The fixture claims what quarantines; its first loop checks the claim. If a cap at operator does
+  not quarantine on `arista_eos` here, use the edit the policy package's quarantine tests use, so
+  the loop passes; never weaken the assertions after it.
 
   In `cmd/port49d/reload_test.go`:
 
   ```go
   // A policy edit that would quarantine more than inventory.max_removed_percent
   // of the devices in service is refused: the policy in force keeps serving,
-  // the alarm is up, and the line names the cause and the remedy (decision
-  // 34). With the bound off it applies, and the device is quarantined live.
+  // the alarm is up, and the line names the cause and the remedy, and says
+  // the refused file is still on disk and a restart would load it unguarded
+  // (decision 34; pre-flight I4). With the bound off it applies, and the
+  // device is quarantined live.
   func TestAReloadThatQuarantinesTheFleetIsRefused(t *testing.T) {
   	rig := newReloadRig(t, minimalPolicy)
   	before := rig.b.Policy.Load().Source
@@ -3717,13 +4828,26 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   		t.Fatal("port49_policy_file_refused")
   	}
   	if out := rig.out.String(); !strings.Contains(out, "it quarantines 1: leaf1") ||
-  		!strings.Contains(out, "raise inventory.max_removed_percent") {
+  		!strings.Contains(out, "raise inventory.max_removed_percent") ||
+  		!strings.Contains(out, "is NOT what is serving: a restart of port49d would load it with no such bound") {
   		t.Fatalf("stderr: %s", out)
   	}
   	rig.r.cfg.MaxRemovedPercent = 100
   	rig.with(func() { rig.r.reload(context.Background(), "SIGHUP") })
   	if _, q := rig.b.Policy.Quarantined("leaf1", rig.now); !q {
   		t.Fatal("with the bound off the reload applies and quarantines leaf1")
+  	}
+  }
+
+  // A refused reload's line is redacted with the redactions of both the
+  // policy in force and the refused one before it reaches stderr, a log, and
+  // only then are its quoted values cut, so a cut never leaves a secret's
+  // head (spec §5.8; pre-flight I3): a quarantine's cause quotes policy text.
+  func TestARefusedReloadsLineIsRedacted(t *testing.T) {
+  	pol := newReloadRig(t, minimalPolicy).b.Policy.Load()
+  	err := errors.New(`it quarantines 1: leaf1 (role r: "username bob secret Hunter2Hunter2Hunter2Hunter2Hunter2Hunter2Hunter2")`)
+  	if line := refusalLine(err, pol, nil); strings.Contains(line, "Hunter2") || !strings.Contains(line, "leaf1") {
+  		t.Fatalf("%s", line)
   	}
   }
   ```
@@ -3734,12 +4858,16 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   keeps `r.cfg.MaxRemovedPercent` (`rereadBound`). The admission-refusal test in
   `cmd/port49d/reload_inventory_test.go` (the one asserting "refuses admission to 2 of 3 devices",
   ~line 416) drives the same `CheckAdmission` path through a reload; if this rig's reload does not
-  reach `load` (a pending inventory taking it to `loadBoth`), mirror that test's setup.
+  reach `load` (a pending inventory taking it to `loadBoth`), mirror that test's setup. The
+  redaction test rests on a built-in pattern (`platform.AllRedactions`) covering `username …
+  secret …`; if none does, quote a value one of the built-in patterns covers, and keep the
+  assertion. `reload_test.go` gains the `errors` import if it lacks it.
 
 - [ ] **Step 2: Run them to see them fail.**
 
-  Run: `go test ./internal/bundle/ ./cmd/port49d/ -run 'TestCheckAdmission|TestAReloadThatQuarantines'`
-  Expected: build failure (four-argument `CheckAdmission`, `NewlyQuarantined` undefined).
+  Run: `go test ./internal/bundle/ ./cmd/port49d/ -run 'TestCheckAdmission|TestAReloadThatQuarantines|TestARefusedReloadsLine'`
+  Expected: build failure (four-argument `CheckAdmission`, `NewlyQuarantined`, `refusalLine`
+  undefined).
 
 - [ ] **Step 3: Implement.** In `internal/bundle/diff.go`, replace `CheckAdmission`:
 
@@ -3759,6 +4887,17 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   	}
   	_, q := p.Quarantined(name, now)
   	return !q
+  }
+
+  // inServiceCount is how many of its devices p serves at now.
+  func inServiceCount(p *policy.Policy, now time.Time) int {
+  	n := 0
+  	for _, d := range p.Devices() {
+  		if inService(p, d.Name, now) {
+  			n++
+  		}
+  	}
+  	return n
   }
 
   // NewlyQuarantined is every device, by name, that old serves at now and new
@@ -3782,6 +4921,12 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   	return out
   }
 
+  // reloadRemedy ends a guard refusal: what serves meanwhile, how to cut
+  // someone off now, and how to apply the change on purpose, then undo the
+  // raise, since the same bound holds inventory syncs (pre-flight M14).
+  const reloadRemedy = "if the change is meant, raise inventory.max_removed_percent in port49d.yaml and send " +
+  	"SIGHUP, which re-reads it with the reload, then lower it again, since it bounds inventory syncs too"
+
   // CheckAdmission is a policy reload's bound (plan 6a, N1; plan 4b's
   // candidate guard, decision 34). Key groups and the joint check are policy,
   // so one edit can take the fleet out of service: a refused device's
@@ -3790,34 +4935,28 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   // (tests/lab/results/quarantine-*.md). Unbounded, one bad edit puts the
   // fleet on break-glass. It refuses a policy that newly refuses and newly
   // quarantines, together, more than maxRemovedPercent of the devices old
-  // serves at now, naming them. A reload that only releases devices is never
-  // refused, and a quarantine an expiry brings on later is not judged here
-  // (port49 policy diff fails on it). An inventory-only reload is Check's,
-  // and quarantines as decision 20 says.
+  // serves at now, naming them, unless new serves at least as many devices at
+  // now as old does: a net release, as an incident fix that releases fifty
+  // and quarantines five is, is never refused (pre-flight M14). A quarantine
+  // an expiry brings on later is not judged here (port49 policy diff fails on
+  // it). An inventory-only reload is Check's, and quarantines as decision 20
+  // says. A cause quotes policy text: whoever prints the error redacts it
+  // (spec §5.8).
   func CheckAdmission(old, new *policy.Policy, maxRemovedPercent int, now time.Time) error {
   	if err := admitsNone("policy", new, false); err != nil {
   		return err
   	}
-  	was := 0
-  	for _, d := range old.Devices() {
-  		if inService(old, d.Name, now) {
-  			was++
-  		}
-  	}
+  	was := inServiceCount(old, now)
   	refused := NewlyRefused(old, new)
   	quarantined := NewlyQuarantined(old, new, now)
   	gone := len(refused) + len(quarantined)
-  	if was == 0 || maxRemovedPercent >= 100 || gone*100 <= was*maxRemovedPercent {
+  	if was == 0 || maxRemovedPercent >= 100 || gone*100 <= was*maxRemovedPercent || inServiceCount(new, now) >= was {
   		return nil
   	}
-  	const remedy = "; the policy in force keeps serving (to cut someone off now, use `port49 revoke`); if the " +
-  		"change is meant, raise inventory.max_removed_percent in port49d.yaml and send SIGHUP, which re-reads it " +
-  		"with the reload"
   	if len(quarantined) == 0 {
   		return fmt.Errorf("the new policy refuses admission to %d of %d devices (%d%%), more than "+
-  			"inventory.max_removed_percent (%d%%): %s; check key_groups, or, if the change is meant, raise "+
-  			"inventory.max_removed_percent in port49d.yaml and send SIGHUP, which re-reads it with the reload",
-  			len(refused), was, len(refused)*100/was, maxRemovedPercent, names(refused))
+  			"inventory.max_removed_percent (%d%%): %s; check key_groups, or, %s",
+  			len(refused), was, len(refused)*100/was, maxRemovedPercent, names(refused), reloadRemedy)
   	}
   	msg := fmt.Sprintf("the new policy takes %d of %d devices in service out of it (%d%%), more than "+
   		"inventory.max_removed_percent (%d%%):", gone, was, gone*100/was, maxRemovedPercent)
@@ -3829,28 +4968,97 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   		q[i] = fmt.Sprintf("%s (%s)", d.Device, d.Cause)
   	}
   	msg += fmt.Sprintf(" it quarantines %d: %s; `port49 policy diff` names each cause", len(quarantined), nameList(q))
-  	return errors.New(msg + remedy)
+  	return errors.New(msg + "; the policy in force keeps serving (to cut someone off now, use `port49 revoke`); " +
+  		reloadRemedy)
   }
   ```
 
-  The refusal-only message is the old one, word for word, so the existing tests and the
-  operator's runbook text hold. Add `sort` to the imports if it is not there. A cause is policy
-  text; the reloader's line already passes the whole error through `quotesCut`, which bounds what
-  it quotes.
+  The refusal-only message is the old one, word for word, with ", then lower it again, since it
+  bounds inventory syncs too" appended, so the existing tests and the operator's runbook text
+  hold. Add `sort` to the imports if it is not there.
 
-  In `cmd/port49d/reload.go`, pass the reloader's clock, `r.now()`, as the new argument at both
-  calls. In `cmd/port49/inventory.go`, pass `time.Now()` at both.
+  A cause is policy text, and neither printer redacts today: port49d's `load` prints the error
+  through `oneLine` alone (`reload.go`, ~line 911), and `loadBoth` through `oneLine(quotesCut{…})`,
+  which cuts quoted values and redacts none (its comment says a load error quotes no rule text;
+  the guard's causes do). In `cmd/port49d/reload.go`:
+
+  ```go
+  // refusalLine is a refused reload's error on one line for stderr, a log:
+  // every quoted value a rule of any of pols marks secret is redacted first,
+  // as sayPolicy redacts a quarantine's cause, then each is cut to maxQuoted
+  // (quotesCut), so a cut never leaves a secret's head (spec §5.8;
+  // pre-flight I3). The guard's causes quote policy text, so the policy in
+  // force and the refused one are both given; a nil one (a file that did not
+  // parse) is skipped.
+  func refusalLine(err error, pols ...*policy.Policy) string {
+  	line := err.Error()
+  	for _, p := range pols {
+  		if p != nil {
+  			line = platform.RedactQuoted(p.Redactions(), line)
+  		}
+  	}
+  	return oneLine(quotesCut{errors.New(line)})
+  }
+
+  // unguardedAtStart ends the line of a reload the guard refused (pre-flight
+  // I4): the refused file stays on disk, and a start has no policy in force to
+  // bound against, so a pod rescheduled, a crash or the next deploy would
+  // load it and take the devices out of service the guard just kept in.
+  const unguardedAtStart = "; the refused file is still on disk and is NOT what is serving: a restart of port49d " +
+  	"would load it with no such bound, so revert or fix it now"
+  ```
+
+  In `load`, the refusal line becomes:
+
+  ```go
+  		said := refusalLine(err, old, pol)
+  		if forAdmission {
+  			said += unguardedAtStart
+  		}
+  		fmt.Fprintf(stderr, "port49d: policy reload (%s) refused; still serving %s (bundle %s): %s\n", trigger,
+  			old.Source, old.Bundle, said)
+  ```
+
+  In `loadBoth`, note whether the error is the guard's (`guarded := false`; after
+  `err = bundle.CheckAdmission(old, pol, r.cfg.MaxRemovedPercent, r.now())`, `guarded = err !=
+  nil`), and print `refusalLine(err, old, pol)`, plus `unguardedAtStart` when `guarded`, in place
+  of `oneLine(quotesCut{err})`. Pass the reloader's clock, `r.now()`, as `CheckAdmission`'s new
+  argument at both calls. Add the `platform` import if `reload.go` lacks it.
+
+  In `cmd/port49/inventory.go`, pass the function's existing `now` (`now := time.Now()`, ~line
+  121, which `bundle.Diff` already uses) at both calls, so the diff and the bound judge one
+  instant (pre-flight M4), and redact what CI prints:
+
+  ```go
+  // redacted is err with every quoted value a rule of pols marks secret
+  // redacted (spec §5.8): the reload guard's causes quote policy text, and
+  // this output is a CI log (pre-flight I3).
+  func redacted(err error, pols ...*policy.Policy) error {
+  	if err == nil {
+  		return nil
+  	}
+  	line := err.Error()
+  	for _, p := range pols {
+  		line = platform.RedactQuoted(p.Redactions(), line)
+  	}
+  	return errors.New(line)
+  }
+  ```
+
+  The two closures become `func(mid *policy.Policy) error { return redacted(bundle.CheckAdmission(old,
+  mid, bound, now), old, mid) }` and `… redacted(bundle.CheckAdmission(mid, new, bound, now), mid,
+  new) …`. Add the `platform` import. The diff runs offline, so its text says nothing of a restart.
 
 - [ ] **Step 4: The lab harness that reloads into a quarantine.** `tests/lab/l31_test.go` replaces
   `broker.policy_file` with `tests/lab/quarantine-sync/policy.yaml`, which quarantines the lab
-  device: one device of one, which the guard now refuses. Give that run's derived config
-  `inventory: {max_removed_percent: 100}` (or add the key under an `inventory:` block the base
-  config already has). Add a comment saying the run measures a quarantine, so the guard is off for
-  it (decision 34), and that L31's results stand: the change only keeps its reload in force under
-  the new bound. Search the other lab tests for a reload into a quarantining policy (`grep -rln
-  'quarantine' tests/lab/*_test.go`) and do the same where one is found. An inventory reload (the
-  `quarantine-sync` bundle through the service in `l29_test.go`) is not bounded by this and needs
-  nothing.
+  device: one device of one, which the guard now refuses (no device is in service after it, so it
+  is no net release). Give that run's derived config `inventory: {max_removed_percent: 100}` (or
+  add the key under an `inventory:` block the base config already has). Add a comment saying the
+  run measures a quarantine, so the guard is off for it (decision 34), and that L31's results
+  stand: the change only keeps its reload in force under the new bound. Search the other lab tests
+  for a reload into a quarantining policy (`grep -rln 'quarantine' tests/lab/*_test.go`) and do the
+  same where one is found. An inventory reload (the `quarantine-sync` bundle through the service in
+  `l29_test.go`) is not bounded by this and needs nothing.
 
 - [ ] **Step 5: Run the tests.**
 
@@ -3869,8 +5077,11 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
 
   Plan 4b's candidate reload guard, ruled on (decision 34): a policy edit that
   would put more than inventory.max_removed_percent of the devices in service on
-  break-glass is refused, the policy in force serving on. L31's lab harness turns
-  the bound off for the quarantine it measures.
+  break-glass is refused, the policy in force serving on, unless as many devices
+  are in service after it as before. The refusal is redacted, says to lower the
+  bound again after a deliberate raise, and says the refused file is still on
+  disk and a restart would load it unguarded. L31's lab harness turns the bound
+  off for the quarantine it measures.
 
   Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
@@ -3900,6 +5111,7 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   - `func (c *Client) Identity(ctx context.Context) (api.Identity, error)`,
     `Explain(ctx, api.ExplainRequest) (api.ExplainResponse, error)`,
     `Revoke(ctx, api.RevokeRequest) (api.RevokeResponse, error)`
+  - `var agent.ErrAgentTooOld error` (pre-flight I9)
 
 - [ ] **Step 1: Write the failing tests.** `agent_test.go`'s `newRealRig` (~line 1212) serves a
   real `broker.Broker` over TLS and connects an agent to it, with alice's live context on `leaf1`.
@@ -3965,10 +5177,34 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   the next call and the broker's `authenticate` refuses it, as a mark that lands after the agent's
   connection bound is refused (spec §5.1.4).
 
+  An agent lives for `max_session_age`, so after an upgrade the running one predates these routes,
+  and its mux answers a plain-text 404 (pre-flight I9). Add:
+
+  ```go
+  // A CLI newer than the running agent: the agent's mux has no route for the
+  // call, and the client says to log in again, never "the broker refused"
+  // (pre-flight I9).
+  func TestAnOlderAgentIsNamedNotBlamedOnTheBroker(t *testing.T) {
+  	p := filepath.Join(shortDir(t), "s", "agent.sock")
+  	ln, err := Listen(p)
+  	if err != nil {
+  		t.Fatal(err)
+  	}
+  	srv := &http.Server{Handler: http.NewServeMux()} // an agent with none of the new routes
+  	go func() { _ = srv.Serve(ln) }()
+  	t.Cleanup(func() { _ = srv.Close() })
+  	_, err = NewClient(p).Identity(context.Background())
+  	var ae *APIError
+  	if !errors.Is(err, ErrAgentTooOld) || errors.As(err, &ae) || !strings.Contains(err.Error(), "port49 login") {
+  		t.Fatalf("%v", err)
+  	}
+  }
+  ```
+
 - [ ] **Step 2: Run it to see it fail.**
 
-  Run: `go test ./internal/agent/ -run TestTheAgentCarriesTheAPI`
-  Expected: build failure (`Client.Identity`, `APIError` undefined).
+  Run: `go test ./internal/agent/ -run 'TestTheAgentCarriesTheAPI|TestAnOlderAgentIsNamed'`
+  Expected: build failure (`Client.Identity`, `APIError`, `ErrAgentTooOld` undefined).
 
 - [ ] **Step 3: The agent's call.** In `internal/agent/agent.go`, after `post`:
 
@@ -4049,6 +5285,12 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   	}
   	if busy := unavailable(resp, e); busy != nil {
   		return busy
+  	}
+  	if resp.StatusCode == http.StatusNotFound && e.Error == "" {
+  		// The broker's mux has no such route: a port49d older than this
+  		// agent (pre-flight I9).
+  		return &APIError{Status: http.StatusNotFound, Code: "not_supported", Detail: fmt.Sprintf(
+  			"the broker at %s does not serve %s: it runs a port49d older than this port49", a.broker, path)}
   	}
   	return &APIError{Status: resp.StatusCode, Code: e.Error, Detail: e.Detail}
   }
@@ -4136,10 +5378,17 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
 - [ ] **Step 4: The client.** In `internal/agent/socket.go`:
 
   ```go
+  // ErrAgentTooOld is a call the running agent has no route for: it was
+  // started by a port49 older than this one, and lives until max_session_age
+  // (pre-flight I9).
+  var ErrAgentTooOld = errors.New("agent: your agent (started before this port49) does not carry this command; " +
+  	"run `port49 login` again")
+
   // roundTrip asks the agent one API call: a 200 decodes into out; a 410 is
-  // the session's end (a revocation's own error, or ErrSessionOver); a 4xx
-  // with the broker's code is an *APIError; anything else names the agent's
-  // error.
+  // the session's end (a revocation's own error, or ErrSessionOver); a 404
+  // with no API code is the agent's own mux, which predates the route
+  // (ErrAgentTooOld); a 4xx with the broker's code is an *APIError; anything
+  // else names the agent's error.
   func (c *Client) roundTrip(ctx context.Context, method, path string, in, out any) error {
   	var rd io.Reader = http.NoBody
   	if in != nil {
@@ -4171,6 +5420,8 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   		return &RevokedError{Detail: e.Detail}
   	case resp.StatusCode == http.StatusGone:
   		return fmt.Errorf("%w%s", ErrSessionOver, strings.TrimPrefix(e.Detail, ErrSessionOver.Error()))
+  	case resp.StatusCode == http.StatusNotFound && e.Error == "":
+  		return ErrAgentTooOld
   	case resp.StatusCode >= 400 && resp.StatusCode < 500:
   		return &APIError{Status: resp.StatusCode, Code: e.Error, Detail: e.Detail}
   	}
@@ -4197,7 +5448,9 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   ```
 
   A `503` the broker sent reaches the client as the agent's 502 `broker_error` with
-  `unavailable`'s text, which already says to try again and when.
+  `unavailable`'s text, which already says to try again and when. A broker older than the agent
+  reaches the client as `answer`'s 404 with the code `not_supported`, an `*APIError` naming the
+  broker, so the two upgrade orders read differently.
 
 - [ ] **Step 5: Run the tests.**
 
@@ -4214,7 +5467,8 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
 
   One call path for the API: a refusal that ends the session ends it, a 503 is
   retried by the caller, and a broker refusal such as 403 api_right_missing
-  comes back to the CLI as an APIError.
+  comes back to the CLI as an APIError. An agent older than the CLI is named
+  as such, with the fix (port49 login), not reported as a broker refusal.
 
   Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
@@ -4228,9 +5482,10 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
 - Create: `cmd/port49/identity.go`
 - Modify: `cmd/port49/main.go` (`usage`; `run` dispatches `identity`)
 - Modify: `cmd/port49/policy.go` (`explainCmd`: the agent form)
-- Modify: `cmd/port49/revoke.go` (`revokeCmd`: the agent forms; new `revokeOverAgent`)
-- Test: `cmd/port49/api_linux_test.go` (new); `cmd/port49/main_test.go` (usage checks, if it has
-  them)
+- Modify: `cmd/port49/revoke.go` (`revokeCmd`: the agent forms and the question; new
+  `revokeOverAgent`, `confirmRevoke`; `askRevoke`: `--list`'s pointer to the log)
+- Test: `cmd/port49/api_linux_test.go` (new); `cmd/port49/revoke_linux_test.go` (`--list`'s
+  pointer, ~line 95); `cmd/port49/main_test.go` (usage checks, if it has them)
 
 **Interfaces:**
 - Consumes: `agent.Client.Identity`, `.Explain`, `.Revoke`, `agent.APIError`,
@@ -4239,6 +5494,8 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   - `func identityCmd(args []string, stdout, stderr io.Writer) int`
   - `func printIdentity(w io.Writer, id api.Identity)`
   - `func revokeOverAgent(socket string, req api.RevokeRequest, stdout, stderr io.Writer) int`
+  - `var confirmIn io.Reader`, `var confirmTTY func() bool`;
+    `func confirmRevoke(principal string, stderr io.Writer) bool`
 
 - [ ] **Step 1: Write the failing tests.** Create `cmd/port49/api_linux_test.go`:
 
@@ -4255,10 +5512,12 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   )
 
   // The CLI's API commands, through a real agent to a real broker: identity
-  // says who the session is; explain answers from the broker with no policy
-  // file; revoke --mine ends the caller's own sessions with no mark, so a
-  // token mints at once after it; revoking another principal without the
-  // right is refused, exit 1, saying which right.
+  // says who the session is and until when its connection lasts; explain
+  // answers from the broker with no policy file; revoke --mine ends the
+  // caller's own sessions with no mark, so a token mints at once after it;
+  // revoking another principal, or a key without --mine, without the right is
+  // refused, exit 1, saying which right and, for a key, the --mine form; a
+  // key with neither --mine nor --via-agent is usage.
   func TestTheCLIReachesTheAPIThroughTheAgent(t *testing.T) {
   	l := newLabBroker(t, time.Hour)
   	sock := privateSocket(t)
@@ -4276,7 +5535,8 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   	}
   	if code, so, se := cli("identity", "--socket", sock); code != 0 ||
   		!strings.Contains(so, "principal  user:alice@example.com") || !strings.Contains(so, "subject    s") ||
-  		!strings.Contains(so, "all_devices [r]") || !strings.Contains(so, "api        (none") {
+  		!strings.Contains(so, "all_devices [r]") || !strings.Contains(so, "api        (none") ||
+  		!strings.Contains(so, "this connection lasts until") {
   		t.Fatalf("identity: %d %q %q", code, so, se)
   	}
   	if code, so, se := cli("explain", "--socket", sock, "--device", "leaf1", "--command", "show version"); code != 0 ||
@@ -4298,6 +5558,14 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   		!strings.Contains(se, "needs the api: revoke_others right") {
   		t.Fatalf("revoking another without the right: %d %q", code, se)
   	}
+  	if code, _, se := cli("revoke", "--via-agent", "--device", "leaf1", "--username", "alice", "--agent-socket", sock); code != 1 ||
+  		!strings.Contains(se, "needs the api: revoke_others right") || !strings.Contains(se, "--mine --device leaf1 --username alice") {
+  		t.Fatalf("a key without the right: %d %q", code, se)
+  	}
+  	if code, _, se := cli("revoke", "--device", "leaf1", "--username", "alice", "--agent-socket", sock); code != 2 ||
+  		!strings.Contains(se, "--mine") {
+  		t.Fatalf("a key with neither --mine nor --via-agent: %d %q", code, se)
+  	}
   	if code, _, se := cli("revoke", "--via-agent", "--lift", "--principal", "user:carol@example.com"); code != 2 ||
   		!strings.Contains(se, "admin socket") {
   		t.Fatalf("--lift over the agent: %d %q", code, se)
@@ -4308,10 +5576,46 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   The `permit permit_dominates` line is what `Render` prints for a permitted command; if the
   policy's `**` permit renders another reason, assert the first word, `permit`.
 
+  Add, in the same file:
+
+  ```go
+  // --via-agent --principal asks before it marks someone, on a terminal only;
+  // a no sends nothing, and --yes skips the question (pre-flight M11). The
+  // socket names no agent, so a request that is sent says so.
+  func TestRevokeViaAgentAsksOnATerminal(t *testing.T) {
+  	defer func(in io.Reader, tty func() bool) { confirmIn, confirmTTY = in, tty }(confirmIn, confirmTTY)
+  	confirmTTY = func() bool { return true }
+  	sock := filepath.Join(t.TempDir(), "none.sock")
+  	args := []string{"revoke", "--via-agent", "--principal", "user:bob@example.com", "--agent-socket", sock}
+  	var out, errb bytes.Buffer
+  	confirmIn = strings.NewReader("n\n")
+  	if code := run(args, &out, &errb); code != 1 || !strings.Contains(errb.String(), "[y/N]") ||
+  		!strings.Contains(errb.String(), "nothing was revoked") || strings.Contains(errb.String(), "no agent at") {
+  		t.Fatalf("declined: %d %q", code, errb.String())
+  	}
+  	errb.Reset()
+  	confirmIn = strings.NewReader("")
+  	if code := run(append(args, "--yes"), &out, &errb); code != 1 || strings.Contains(errb.String(), "[y/N]") ||
+  		!strings.Contains(errb.String(), "no agent at") {
+  		t.Fatalf("--yes: %d %q", code, errb.String())
+  	}
+  	errb.Reset()
+  	confirmTTY = func() bool { return false }
+  	if code := run(args, &out, &errb); code != 1 || strings.Contains(errb.String(), "[y/N]") {
+  		t.Fatalf("off a terminal: %d %q", code, errb.String())
+  	}
+  }
+  ```
+
+  `api_linux_test.go` gains the `io` and `path/filepath` imports. In `revoke_linux_test.go`, the
+  successful `--list` (~line 95) also asserts `strings.Contains(errb.String(), "leaves no mark and
+  is not listed")`.
+
 - [ ] **Step 2: Run it to see it fail.**
 
-  Run: `go test ./cmd/port49/ -run TestTheCLIReachesTheAPIThroughTheAgent`
-  Expected: FAIL (`identity` is a usage error, exit 2).
+  Run: `go test ./cmd/port49/ -run 'TestTheCLIReachesTheAPIThroughTheAgent|TestRevokeViaAgentAsksOnATerminal'`
+  Expected: build failure (`confirmIn`, `confirmTTY` undefined), then `identity` a usage error,
+  exit 2.
 
 - [ ] **Step 3: `port49 identity`.** Create `cmd/port49/identity.go`:
 
@@ -4398,8 +5702,11 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   	}
   	fmt.Fprintf(w, "api        %s\n", rights)
   	fmt.Fprintf(w, "session    authenticated %s", id.AuthTime)
-  	if id.SessionEndsAt != "" {
-  		fmt.Fprintf(w, "; lasts until %s", id.SessionEndsAt)
+  	if id.ConnectionEndsAt != "" {
+  		// max_session_age's end for this connection, not a device session's:
+  		// a role's ceiling on a device may end one sooner (pre-flight M16).
+  		fmt.Fprintf(w, "; this connection lasts until %s (a device's own session ceiling may end a session "+
+  			"sooner)", id.ConnectionEndsAt)
   	}
   	fmt.Fprintln(w)
   }
@@ -4459,6 +5766,7 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   	device := fs.String("device", "", "with --mine or --via-agent: one device, by its inventory name")
   	username := fs.String("username", "", "with --device: the device-facing username")
   	agentSocket := fs.String("agent-socket", agent.SocketPath(), "your agent's socket")
+  	yes := fs.Bool("yes", false, "with --via-agent --principal: do not ask before revoking")
   ```
 
   After `fs.Parse` and the `NArg` check:
@@ -4476,9 +5784,18 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   		case (*device == "") != (*username == ""):
   			fmt.Fprintln(stderr, "port49 revoke: --device and --username go together")
   			return 2
+  		case !*mine && !*viaAgent:
+  			// A key means one thing whatever the caller's rights (pre-flight I2).
+  			fmt.Fprintln(stderr, "port49 revoke: --device and --username go with --mine (your own session there) "+
+  				"or --via-agent (whoever's, under api: revoke_others)")
+  			return 2
   		case !*mine && (*principal == "") == (*device == ""):
   			fmt.Fprintln(stderr, "port49 revoke: --via-agent names --principal, or --device and --username")
   			return 2
+  		}
+  		if *viaAgent && *principal != "" && !*yes && confirmTTY() && !confirmRevoke(*principal, stderr) {
+  			fmt.Fprintln(stderr, "port49 revoke: nothing was revoked")
+  			return 1
   		}
   		return revokeOverAgent(*agentSocket, api.RevokeRequest{Mine: *mine, Principal: *principal,
   			Device: *device, Username: *username}, stdout, stderr)
@@ -4500,9 +5817,14 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   	case errors.Is(err, agent.ErrNoAgent):
   		fmt.Fprintf(stderr, "port49 revoke: no agent at %s; run 'port49 login'\n", socket)
   		return 1
-  	case errors.As(err, &refused) && refused.Code == "api_right_missing":
+  	case errors.As(err, &refused) && refused.Code == "api_right_missing" && req.Principal != "":
   		fmt.Fprintln(stderr, "port49 revoke: refused: revoking another principal needs the api: revoke_others "+
   			"right, which your subject does not declare")
+  		return 1
+  	case errors.As(err, &refused) && refused.Code == "api_right_missing":
+  		fmt.Fprintf(stderr, "port49 revoke: refused: ending a (device, username) whoever holds it needs the api: "+
+  			"revoke_others right, which your subject does not declare; for your own session there, use --mine "+
+  			"--device %s --username %s\n", req.Device, req.Username)
   		return 1
   	case errors.As(err, &revoked):
   		fmt.Fprintln(stderr, "port49 revoke:", unprefixed(err))
@@ -4510,6 +5832,15 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   	case err != nil:
   		fmt.Fprintln(stderr, "port49 revoke:", unprefixed(err))
   		return 1
+  	}
+  	if rep.By != "self" && rep.Principal != "" {
+  		// Whom the broker revoked, by the policy's subject, so a misspelt
+  		// colleague is seen at once (pre-flight M11).
+  		subject := "no subject in the policy in force names it"
+  		if rep.Subject != "" {
+  			subject = "subject " + rep.Subject
+  		}
+  		fmt.Fprintf(stdout, "target: %s (%s)\n", rep.Principal, subject)
   	}
   	fmt.Fprintln(stdout, rep.Text)
   	if rep.Incomplete != "" || (rep.Saved != nil && !*rep.Saved) {
@@ -4519,8 +5850,48 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
   }
   ```
 
-  Add the `context`, `agent` and `api` imports to `revoke.go`. The admin-socket path below is
-  unchanged.
+  The question, asked only on a terminal, so a script never hangs on it:
+
+  ```go
+  // confirmIn and confirmTTY are where port49 revoke --via-agent --principal
+  // asks before it puts a standing mark on someone from a laptop (pre-flight
+  // M11): the terminal, and only when stdin is one. Swapped in tests.
+  var (
+  	confirmIn  io.Reader = os.Stdin
+  	confirmTTY           = func() bool {
+  		fi, err := os.Stdin.Stat()
+  		return err == nil && fi.Mode()&os.ModeCharDevice != 0
+  	}
+  )
+
+  // confirmRevoke asks whether to revoke principal, on stderr, and reads one
+  // line: y or yes goes on, anything else, an empty line or EOF included,
+  // does not.
+  func confirmRevoke(principal string, stderr io.Writer) bool {
+  	fmt.Fprintf(stderr, "revoke %s everywhere? It is a standing mark: every mint by it is refused until it is "+
+  		"lifted on port49d's admin socket. [y/N] ", principal)
+  	line, _ := bufio.NewReader(confirmIn).ReadString('\n')
+  	switch strings.ToLower(strings.TrimSpace(line)) {
+  	case "y", "yes":
+  		return true
+  	}
+  	return false
+  }
+  ```
+
+  `--list` shows marks only; a self or key revocation leaves none (pre-flight M19). In
+  `askRevoke`, after a successful `revocations` answer is printed, add on stderr, so stdout stays
+  the list a script reads:
+
+  ```go
+  	if req.Op == "revocations" {
+  		fmt.Fprintln(stderr, "port49 revoke: a self or key revocation (--mine, or --via-agent --device) leaves no "+
+  			"mark and is not listed: port49d's decision log names each (event revoke, revocation.by self or key)")
+  	}
+  ```
+
+  Add the `bufio`, `context`, `agent` and `api` imports to `revoke.go`. The admin-socket path below
+  is otherwise unchanged.
 
 - [ ] **Step 6: The usage text.** In `main.go`'s `usage`, after the `port49 refresh` line:
 
@@ -4539,8 +5910,9 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
 
   ```
     port49 revoke --mine [--device NAME --username NAME] [--agent-socket PATH]
-    port49 revoke --via-agent (--principal PRINCIPAL | --device NAME --username NAME) [--agent-socket PATH]
-                  (through your agent, under your api: rights; --mine leaves no mark)
+    port49 revoke --via-agent [--yes] (--principal PRINCIPAL | --device NAME --username NAME) [--agent-socket PATH]
+                  (through your agent, under your api: rights; --mine leaves no mark; --via-agent needs
+                  api: revoke_others, and asks first on a terminal unless --yes)
   ```
 
   Update the package comment's first paragraph to say `identity`, and `explain` without files,
@@ -4554,14 +5926,19 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
 - [ ] **Step 8: Commit.**
 
   ```bash
-  gofmt -w cmd/port49/identity.go cmd/port49/main.go cmd/port49/policy.go cmd/port49/revoke.go cmd/port49/api_linux_test.go
+  gofmt -w cmd/port49/identity.go cmd/port49/main.go cmd/port49/policy.go cmd/port49/revoke.go cmd/port49/api_linux_test.go \
+    cmd/port49/revoke_linux_test.go
   make build && make test && make vet
-  git add cmd/port49/identity.go cmd/port49/main.go cmd/port49/policy.go cmd/port49/revoke.go cmd/port49/api_linux_test.go
+  git add cmd/port49/identity.go cmd/port49/main.go cmd/port49/policy.go cmd/port49/revoke.go cmd/port49/api_linux_test.go \
+    cmd/port49/revoke_linux_test.go
   git commit -m "feat(port49): identity, explain over the agent, and revoke --mine and --via-agent
 
   The HTTP API from the operator's own laptop: who the broker says they are, an
   explanation from the policy in force with no policy file, and a revocation
-  under their api: rights. Lift, list and certificates stay the admin socket's.
+  under their api: rights. A key means one thing whatever the rights; a mark on
+  someone else is asked about on a terminal and names the target's subject.
+  Lift, list and certificates stay the admin socket's; --list points at the log
+  for revocations that leave no mark.
 
   Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
@@ -4585,9 +5962,11 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
 - Consumes: the lab harness (`eachPlatform`, `l.derivedConfig`, `l.stopDaemon`,
   `l.startDaemonWith`, `l.awaitTACACS`, `l.configPath`, `l.capture`, `l.mark`, `l.shell`,
   `l.loginWithin`, `l.waitForRecords`, `l.recordsSince`, `l.result`); 7a's `revokeOutcome`,
-  `revokeCLI`, `redeemReason`, `agentEnded`, `revokeRefusedLine`; `l29Mint`, `l29Cell`; `sha`,
-  `str`, `sub`, `summarize`, `sliceRecords`; `sliceUser`, `sliceEmail`, `slicePrincipal`,
-  `slicePKIDir`, `sliceBrokerURL`, `agentPID`.
+  `revokeCLI`, `redeemReason`, `agentEnded`, `revokedMint`, `mintRefusal` (all in
+  `tests/lab/revoke_test.go`); `l29Mint`, `l29Cell`; `sha`, `str`, `sub`, `summarize`,
+  `sliceRecords`; `sliceUser`, `sliceEmail`, `slicePrincipal`, `slicePKIDir`, `sliceBrokerURL`; and
+  `agentPID`, the regexp var (`tests/lab/slice_test.go:54`) that `personAgent` keeps using to read
+  the pid off `port49 login`'s output. `revokeRefusedLine` is 7a's and this run does not use it.
 - Produces:
   - `func testpki.WriteLabWith(dir, email string, others []string, now time.Time) error`
   - `func testpki.LabClientFiles(email string) (cert, key string)`
@@ -4598,10 +5977,13 @@ behaviour beyond what 7a's `tests/lab/results/revoke-*.md` measured.
 it as claimed.
 
 - **A peer with no right reaches nothing.** carol's `port49 revoke --via-agent --principal alice` is
-  refused 403 and recorded, and alice's next command still runs.
+  refused 403 and recorded, and so is her `--via-agent --device <node> --username slice01`, the
+  key form without the right (never narrowed to her own there); alice's next command still runs.
 - **A self-revocation, then a re-login.** alice's `port49 revoke --mine` makes her open session's
   next command refused, on the per-command platforms. Her unspent token logs in nowhere
   (`token_not_found`). A token she mints after it logs in at once with no lift (decision 15's join).
+  That login joins the context the open session shares, so the session `--mine` refused runs its
+  next command again: the re-admission the report warns of, measured and recorded.
 - **An on-call ends one key.** bob, with `revoke_others`, runs `port49 revoke --via-agent --device
   <node> --username slice01`. alice's session on the new login refuses its next command, and she
   logs in again at once.
@@ -4755,7 +6137,9 @@ it as claimed.
   	"the operator is refused 403 api_right_missing and the operator's next command still runs; the operator's " +
   	"`port49 revoke --mine` refuses the open session's next command on a platform that authorizes each command (Junos " +
   	"keeps what it had at login and the report names it), refuses the unspent token token_not_found, and leaves no " +
-  	"mark, so a token minted after it logs in at once; an on-call holding revoke_others ends the operator's session by " +
+  	"mark, so a token minted after it logs in at once, and that login re-admits the session the revocation refused, " +
+  	"whose next command runs again (decision 15's join; the report says to close such a session first); a peer's key " +
+  	"revocation without the right is refused 403 as well; an on-call holding revoke_others ends the operator's session by " +
   	"(device, username) with no mark, and the operator logs in again at once; and the on-call's revocation of the " +
   	"principal is a standing mark with the on-call as its origin, which ends the operator's agent until a lift."
 
@@ -4813,14 +6197,21 @@ it as claimed.
   		if peerCode != 1 || !strings.Contains(peerText, "needs the api: revoke_others right") {
   			fail("the peer's revocation of alice: exit %d: %s", peerCode, peerText)
   		}
-  		afterPeer := revokeOutcome(l.p.name, sh, "show version", fail, "after the peer's refused revocation")
+  		// The key form without the right is refused too, never answered as
+  		// carol's own sessions there (pre-flight I2).
+  		peerKeyText, peerKeyCode := agentRevoke(carolSock, "--via-agent", "--device", l.p.node, "--username", sliceUser)
+  		if peerKeyCode != 1 || !strings.Contains(peerKeyText, "needs the api: revoke_others right") {
+  			fail("the peer's key revocation: exit %d: %s", peerKeyCode, peerKeyText)
+  		}
+  		afterPeer := revokeOutcome(l.p.name, sh, "show version", fail, "after the peer's refused revocations")
   		if !strings.HasPrefix(afterPeer, "printed its output") {
-  			fail("alice's session after the peer's refused revocation: %s", afterPeer)
+  			fail("alice's session after the peer's refused revocations: %s", afterPeer)
   		}
 
   		// 3. alice ends her own sessions.
   		mineText, mineCode := agentRevoke(aliceSock, "--mine")
-  		if mineCode != 0 || !strings.Contains(mineText, "nothing stands against "+slicePrincipal) {
+  		if mineCode != 0 || !strings.Contains(mineText, "nothing stands against "+slicePrincipal) ||
+  			!strings.Contains(mineText, "close their session on the device") {
   			fail("revoke --mine: exit %d: %s", mineCode, mineText)
   		}
   		if sessionOnly != strings.Contains(mineText, "not reached") {
@@ -4857,6 +6248,13 @@ it as claimed.
   			if out := revokeOutcome(l.p.name, sh3, "show version", fail, "on the new login"); !strings.HasPrefix(out, "printed its output") {
   				fail("the new login's command: %s", out)
   			}
+  		}
+  		// The new login joined the context the old session shares and lifted its
+  		// mark (decision 15): the session --mine refused runs again. This is what
+  		// the report's second line warns of (pre-flight I1); recorded as found.
+  		afterReLogin := revokeOutcome(l.p.name, sh, "show version", fail, "the old session after the re-login")
+  		if !strings.HasPrefix(afterReLogin, "printed its output") {
+  			fail("the session --mine refused did not run again after the re-login (decision 15's join): %s", afterReLogin)
   		}
 
   		// 4. The on-call ends alice's session on this device by key.
@@ -4901,7 +6299,7 @@ it as claimed.
   		}
 
   		recs = l.waitForRecords(off, 60*time.Second, func(rs []map[string]any) bool {
-  			return len(sliceRecords(rs, "revoke", "")) >= 4
+  			return len(sliceRecords(rs, "revoke", "")) >= 6
   		})
   		bys := map[string]int{}
   		for _, r := range recs {
@@ -4909,7 +6307,7 @@ it as claimed.
   				bys[str(sub(r, "revocation"), "by")+" "+str(r, "reason")]++
   			}
   		}
-  		for _, want := range []string{"principal api_right_missing", "self credential_revoked",
+  		for _, want := range []string{"principal api_right_missing", "key api_right_missing", "self credential_revoked",
   			"key credential_revoked", "principal credential_revoked", "principal revocation_lifted"} {
   			if bys[want] == 0 {
   				fail("no revoke record %q: %v", want, bys)
@@ -4918,11 +6316,13 @@ it as claimed.
   		gone := map[bool]string{true: "exited", false: "**kept running** (stopped by the test)"}
   		obs := fmt.Sprintf("| Step | What happened |\n|---|---|\n"+
   			"| carol (no right): `port49 revoke --via-agent --principal %s` | exit %d: %s |\n"+
-  			"| alice's `show version` after it | %s |\n"+
+  			"| carol (no right): `--via-agent --device %s --username %s` | exit %d: %s |\n"+
+  			"| alice's `show version` after both | %s |\n"+
   			"| alice: `port49 revoke --mine` | exit %d; report below |\n"+
   			"| alice's `show version` in the same session after it | %s |\n"+
   			"| a login with a token minted before it, unspent | refused, `%s` |\n"+
   			"| a login with a token minted after it | %s |\n"+
+  			"| the session `--mine` refused, after that login | %s |\n"+
   			"| bob (revoke_others): `--via-agent --device %s --username %s` | exit %d; report below |\n"+
   			"| a login after the key revocation | %s |\n"+
   			"| bob: `--via-agent --principal %s` | exit %d; `--list` names `api user:%s` |\n"+
@@ -4932,7 +6332,8 @@ it as claimed.
   			"`port49 revoke --mine` printed:\n\n```\n%s\n```\n\n"+
   			"The key revocation:\n\n```\n%s\n```\n\n"+
   			"The principal's:\n\n```\n%s\n```\n",
-  			slicePrincipal, peerCode, l29Cell(peerText), afterPeer, mineCode, afterMine, tok2Reason, reLogin,
+  			slicePrincipal, peerCode, l29Cell(peerText), l.p.node, sliceUser, peerKeyCode, l29Cell(peerKeyText), afterPeer,
+  			mineCode, afterMine, tok2Reason, reLogin, afterReLogin,
   			l.p.node, sliceUser, keyCode, afterKeyLogin, slicePrincipal, markCode, oncallEmail,
   			mintRefusal(agentSaid), l29Cell(agentSaid), gone[agentGone], liftLogin, bys, mineText, keyText, markText)
   		if len(failed) > 0 {
@@ -4954,7 +6355,8 @@ it as claimed.
 
   `revokedMint`'s fourth argument names what was revoked, for its failure lines. `agentEnded` is
   7a's 10-second wait for a pid to exit: here it must say **no**, and it is asked right after the
-  self-revocation.
+  self-revocation. `agentRevoke` runs `port49 revoke` with no terminal on stdin, so
+  `--via-agent --principal` asks nothing (Task 12).
 
 - [ ] **Step 5: Compile it without the lab.**
 
@@ -4969,9 +6371,10 @@ it as claimed.
     tests/lab/api_revoke_test.go tests/lab/slice/api-policy.yaml
   git commit -m "test(lab): the HTTP revocation's three shapes end to end
 
-  A peer with no right, a self-revocation and its re-login, an on-call's key
-  revocation and principal revocation, on the four images 7a measured; results
-  to tests/lab/results/api-revoke-<platform>.md.
+  A peer with no right, by principal and by key; a self-revocation, its re-login,
+  and the old session's state after it; an on-call's key revocation and principal
+  revocation, on the four images 7a measured; results to
+  tests/lab/results/api-revoke-<platform>.md.
 
   Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
@@ -5039,11 +6442,19 @@ it as claimed.
     - **7d**: `storetest.DeleteTokenRemovesOne` for the etcd backend; the self-revocation's
       compare-and-set on the backend's `SetContextPolicy`.
     - **7e**: `/healthz` and `/readyz` on the broker's own process; the revocations file's init in
-      the broker's deployment.
+      the broker's deployment, run once at install and never on a start path; a reload guard at
+      start, against the last bundle in force, so a restart cannot load a file the guard refused
+      (pre-flight I4).
     - **7g**: rights held through a group subject.
     - **7h**: `/v1/tokens/revoke` by `sid`; `/v1/logout`.
-    - **12**: the deployment's `port49d init-revocations` step (an init container or a one-shot
-      unit) and the small-fleet note on the reload guard.
+    - **12**: the deployment's `port49d init-revocations` step: once, at install, by hand or as a
+      one-off job, as port49d's user, and never in an init container or `ExecStartPre=` (a
+      tolerated failure there re-creates the file on the next empty volume, the hazard decision
+      32's amendment removes); the small-fleet note on the reload guard; the guard at start, as
+      for 7e.
+  - Under "Unassigned follow-ups": a bulk lift (`port49 revoke --lift --origin "api <principal>"`),
+    so recovery from a mass revocation by a compromised `revoke_others` certificate is one command,
+    not one lift per victim (pre-flight M19; the shell loop in the operator notes until then).
 
   Update the status line ("**7c written 2026-10-02** …") with executed, reviewed and merged as
   they happen, and the "Plan 7c" bullet with "As built" pointing at the section.
@@ -5066,41 +6477,80 @@ it as claimed.
 For plan 13's docs. Amend these with what was built before the pull request is opened.
 
 - **Breaking: port49d no longer creates `broker.revocations_file`.**
-  - **First install.** Run `port49d init-revocations --config /etc/port49/port49d.yaml` once, as
-    the user port49d runs as. It reads only that path from the config, so no secret needs to be in
-    the environment.
+  - **First install.** Run `sudo -u port49 port49d init-revocations --config
+    /etc/port49/port49d.yaml` once, as the user port49d runs as (the owner of the file's
+    directory). Run as anyone else, root included, it refuses and names that user: a root-written
+    0600 file is one port49d cannot read. It reads only that path from the config, so no secret
+    needs to be in the environment, and it refuses a path that is another file port49d uses. Give
+    `broker.revocations_file` an absolute path; a relative one draws a warning.
+  - **Once, at install, never on a start path.** Run it by hand or as a one-off job. Do not put it
+    in an init container or an `ExecStartPre=`: wrapped to tolerate its refusal there, it would
+    re-create the file on the next empty volume, the very hazard this change removes. Run again,
+    it exits 0 (`already initialized; nothing written`) when the file is there and loads, so an
+    idempotent provisioning step needs no `|| true`.
   - **What a start does.** A missing file refuses every start, so an unmounted or empty volume can
-    never start port49d with no revocations.
-  - **Upgrading.** An install that already has the file changes nothing.
+    never start port49d with no revocations. The message leads with mounting the volume.
+  - **Upgrading.** An install that already has the file changes nothing; a start still writes the
+    marker beside it if it has none.
   - **After a loss.** If the file is lost, restore it from backup. `init-revocations` refuses over
-    a marker it left, and `{"revocations": []}` written by hand is the deliberate way to start
-    empty.
-  - **Deployment.** An init container or a one-shot unit runs `init-revocations` before the first
-    start.
+    a marker it left (exit 1), and `{"revocations": []}` written by hand is the deliberate way to
+    start empty.
+- **Upgrade: agents started before this release.** An agent lives for `max_session_age`, and one
+  started by the old `port49` has no `identity`, `explain` or `revoke` route. The new CLI says
+  `your agent (started before this port49) does not carry this command; run 'port49 login' again`.
 - **New: `port49 identity`.** It prints whom the broker resolves you to: subject, grants
-  (unexpired, by scope), `api:` rights, and when your session ends. `--json` prints the broker's
-  answer.
+  (unexpired, by scope), `api:` rights, and until when this connection lasts
+  (`connection_ends_at`, `max_session_age` from the authentication); a device's own session
+  ceiling may end a session sooner. `--json` prints the broker's answer. Each call writes an
+  `identity` record, so do not put it in a shell prompt.
 - **New: `port49 explain` without `--policy`/`--inventory`.**
   - **What it does.** It asks the broker through your agent, from the policy in force, and prints
-    what the offline form prints, redacted.
+    what the offline form prints, redacted. For a denied command it names every role in the policy
+    that would permit it (what to ask for), never who holds one.
   - **Another principal.** `--principal` naming someone else needs `api: [explain_others]`.
   - **Offline only.** `--subject` and `--show-attributes` stay the offline form's.
+  - **Dashboards.** `explain` records carry hypothetical verdicts: a panel of denials, or of
+    `port49_decisions` with `verdict="deny"`, should filter `event!="explain"`.
 - **New: `port49 revoke --mine`.**
   - **What it does.** It ends your own live sessions and deletes your unspent tokens (one device
-    with `--device` and `--username`).
+    with `--device` and `--username`), and your receipts everywhere.
   - **No lock.** It leaves no mark: `port49 token` and a login work at once after it. Use it when
     a token leaked.
+  - **Close a stranger's session first.** Your next login on a device re-admits every session open
+    there under your username, a stranger's on your leaked token included. If anyone else used
+    your token, close their session on the device, or ask an operator to revoke your principal,
+    before you log in there again. The report says so.
   - **Junos sessions** keep what they had at login and are named in the report; close them on
     the device.
 - **New: `port49 revoke --via-agent --principal P`** (needs `api: [revoke_others]`).
   - **What it does.** It is the admin socket's revocation, from your laptop, through your agent.
+    On a terminal it asks `[y/N]` first (`--yes` skips it), and it prints `target: P (subject …)`,
+    so a typo of a real colleague's address is seen at once.
   - **The record.** `port49 revoke --list` and the `revoke` record name you as `origin: api
     <you>`.
-  - **Lifting** stays the admin socket's, as does `--cert`.
-- **New: `port49 revoke --via-agent --device D --username U`.**
-  - **With `revoke_others`** it ends whatever holds that key, with no mark, so the owner can log
-    in again; revoke the principal to stop that.
-  - **Without it**, it ends your own session on that key only.
+  - **Lifting** stays the admin socket's, as does `--cert`; the report names the socket. With no
+    `admin_socket` configured, the mark is still made, the report and port49d's start line say so,
+    and lifting it needs port49d stopped, the entry removed from `broker.revocations_file`, and a
+    start.
+  - **Watch for a burst.** Alert on `rate(port49_revocations_total{by="principal",outcome="applied"}[5m])`
+    above your normal: a compromised `revoke_others` certificate can mark every human. Revoke that
+    certificate on the admin socket, then lift its marks; until a bulk lift exists:
+
+    ```
+    port49 revoke --list | awk '$1 == "principal" && /\(api user:oncall@example\.com\)$/ {print $2}' |
+      while read -r p; do port49 revoke --lift --principal "$p"; done
+    ```
+  - **Busy.** If another revocation or lift holds the slot for 10 s, the answer is `503
+    revocation_busy` and nothing was revoked; run it again.
+- **New: `port49 revoke --via-agent --device D --username U`** (needs `api: [revoke_others]`).
+  - **What it does.** It ends whatever holds that key, with no mark, so the owner can log in again;
+    revoke the principal to stop that. The owner's next login there re-admits any session still
+    open on it: close it on the device.
+  - **Without the right** it is refused 403, never narrowed to your own sessions there. For your
+    own session on one device, use `--mine --device D --username U`.
+  - **Not in `--list`.** A self or key revocation leaves no mark, so `--list` does not show it; it
+    says so on stderr, and the decision log's `revoke` records (`revocation.by` `self` or `key`)
+    name each.
 - **`api:` rights now mean something.**
   - **What they unlock.** `revoke_others` and `explain_others` act on other people. `sync`,
     `keys_show` and `replay` are reserved and grant nothing yet.
@@ -5111,24 +6561,32 @@ For plan 13's docs. Amend these with what was built before the pull request is o
   - **What is refused.** A policy edit that would take more than `inventory.max_removed_percent`
     (default 10) of the devices in service out of service, by refusing admission or by
     quarantining, is refused. `port49_policy_file_refused` goes to 1, and the policy in force keeps
-    serving.
+    serving. The line names each device and cause, redacted.
+  - **The refused file is still on disk.** A restart (pod rescheduled, crash, next deploy) loads it
+    with no bound and takes those devices out of service. Revert or fix it at once; the line says
+    so.
   - **Small fleets.** One quarantined device of three is 33%. Raise the bound and send `SIGHUP`
-    for a deliberate change.
+    for a deliberate change, then lower it again: the same bound holds inventory syncs.
   - **A refused edit keeps any grant it withdrew.** `port49 revoke` cuts a principal off whatever
     the file says.
-  - **What is never refused.** A reload that only releases quarantines.
+  - **What is never refused.** A reload after which at least as many devices are in service as
+    before, such as an incident fix that releases many and quarantines a few.
 - **New broker endpoints.**
   - `GET /v1/identity`, `POST /v1/explain` and `POST /v1/tokens/revoke`, each authenticated as
     `/v1/tokens` is.
   - `GET /healthz` and `GET /readyz`, with no certificate. `/readyz` is `200 serving` while the
     broker serves, and stays 200 through a store outage, by design (design §12); watch the alarms.
-  - **New API error:** `403 api_right_missing`.
+  - **New API errors:** `403 api_right_missing`; `503 revocation_busy`.
 - **New records.**
   - `identity permit grants_matched` and `identity deny no_grants_matched`.
-  - `explain <the answer>`, with `explain.asked_by` and never the command.
-  - `revoke deny api_right_missing`.
+  - `explain <the answer>`, with `explain.asked_by` and `explain.asked_by_fingerprint`, the
+    `policy.bundle` that answered, and never the command.
+  - `revoke deny api_right_missing`, naming the target (or the key) and the caller in `origin`.
   - `revoke` with `by: self` or `by: key`, `device` and `username`, and `origin: api <principal>`.
-  - A call refused before it is read is recorded under its own event, with the mint's reasons.
+  - A record about someone other than the caller carries no `auth`: `auth` and `principal` always
+    describe one credential, so a join of fingerprint to principal stays true.
+  - A call refused before it is read, or as its connection binds, is recorded under its own
+    event, with the mint's reasons.
 - **Metrics.** `port49_revocations_total{by}` gains `self` and `key`. `port49_decisions` counts the
   new events.
 
@@ -5149,7 +6607,8 @@ For plan 13's docs. Amend these with what was built before the pull request is o
 - **Design §17, "Errors are typed, and never leak fleet data":**
   - explain on an unknown device (Task 9, Review Focus 3);
   - identity lists scopes, never devices (Task 4);
-  - a peer's key revocation reaches and reports nothing of another's (Task 8);
+  - a peer's key revocation is refused 403, and its own form on the key (`mine`) reaches and reports
+    nothing of another's (Task 8);
   - store errors reach the process log, not the caller (Task 8).
 - **Design §12, readiness:** Ruling 7; Task 5's test with a store that fails every call.
 - **Spec §2 rights table:** every right is ruled (Ruling 1, Task 1 Step 2); `HasRight` (Task 3).
@@ -5177,8 +6636,16 @@ For plan 13's docs. Amend these with what was built before the pull request is o
   - Task 14's as-built text, which only the execution can write.
 - **Type consistency:** these names are used in more than one task, and match:
   - `authenticate(w, r, event, nothing)`;
+  - `RefusedAtBind(path, principal, cred, reason)` (Task 4; port49d and `cmd/port49`'s test assign
+    the method value);
   - `RevokeOwn(ctx, principal, *store.TokenKey, origin)`, `RevokeKey(ctx, store.TokenKey, origin)`;
-  - `ByOwn`/`ByKey` = `self`/`key`;
-  - `api.RevokeRequest{Mine, Principal, Device, Username, Sid}`;
+  - `ByOwn`/`ByKey` = `self`/`key`; `RevokeReport.LiftNote` (Task 7) set by Task 8;
+  - `refuseRight(w, rec, right, what)` (Task 8, used by Task 9);
+  - `api.RevokeRequest{Mine, Principal, Device, Username, Sid}`; `api.RevokeResponse.Subject`
+    (Task 8, printed by Task 12);
+  - `api.Identity.ConnectionEndsAt` / `connection_ends_at` (Task 4, printed by Task 12);
+  - `decision.Explain.AskedByFingerprint` (Task 3, set by Task 9);
   - `api.ExplainResponse.Text`;
-  - `CheckAdmission(old, new, max, now)`.
+  - `initRevocations(path) (created bool, err error)` (Task 2, called by `brokerConfig`);
+  - `CheckAdmission(old, new, max, now)`;
+  - `agent.ErrAgentTooOld`, `agent.APIError` (Task 11, read by Task 12).
