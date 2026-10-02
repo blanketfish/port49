@@ -352,7 +352,7 @@ func TestCheckAdmissionNeverExemptsARefusal(t *testing.T) {
 		t.Fatalf("the fixture: %d in service before, %d after", inServiceCount(old, now), keptInService(old, typo, now))
 	}
 	if err := CheckAdmission(old, typo, 10, now); err == nil ||
-		!strings.Contains(err.Error(), "refuses admission to 20 of 50 devices (40%)") {
+		!strings.Contains(err.Error(), "refuses admission to 20 of 100 devices (20%)") {
 		t.Fatalf("a release offset a refusal: %v", err)
 	}
 
@@ -373,6 +373,32 @@ func TestCheckAdmissionNeverExemptsARefusal(t *testing.T) {
 	if err := CheckAdmission(old, typo, 10, now); err == nil ||
 		!strings.Contains(err.Error(), "refuses admission to 21 of 200 devices (11%)") {
 		t.Fatalf("21 of 200: %v", err)
+	}
+}
+
+// Plan 6a's refusal bound is kept as it was, over the devices the policy in
+// force admits, quarantined ones included: a refusal deletes the contexts a
+// quarantine keeps for the device's release. Five of ten quarantined, and
+// refused by a narrowed key group, is 5 of 10 admitted and refused, though
+// none of the five was in service (task 10 re-review R1).
+func TestCheckAdmissionBoundsTheRefusalOfQuarantinedDevices(t *testing.T) {
+	now := time.Now()
+	var devs []admission.Device
+	for i := range 10 {
+		addr, attrs := fmt.Sprintf("10.1.0.%d", i+1), map[string]string(nil)
+		if i < 5 {
+			addr, attrs = fmt.Sprintf("10.2.0.%d", i+1), map[string]string{"site": "dc1"}
+		}
+		devs = append(devs, dev(fmt.Sprintf("d%02d", i), addr, attrs))
+	}
+	old := quarantineOn(t, devs, "dc")
+	narrowed := quarantineIn(t, strings.Replace(withScopes, "cidr: 10.0.0.0/8", "cidr: 10.1.0.0/16", 1), devs, "dc")
+	if inServiceCount(old, now) != 5 || len(NewlyRefused(old, narrowed)) != 5 {
+		t.Fatalf("the fixture: %d in service, %d refused", inServiceCount(old, now), len(NewlyRefused(old, narrowed)))
+	}
+	if err := CheckAdmission(old, narrowed, 10, now); err == nil ||
+		!strings.Contains(err.Error(), "refuses admission to 5 of 10 devices (50%)") {
+		t.Fatalf("five quarantined devices refused: %v", err)
 	}
 }
 
@@ -575,5 +601,19 @@ key_groups: [{match: {attributes: {site: dc1}}, key_ref: lab_key}]
 	}
 	if err := CheckFrom(before, next, 10, "fix the source of truth"); err != nil {
 		t.Fatalf("stripping an already refused device: %v", err)
+	}
+}
+
+// An inventory's refusal prints its share rounded up, as the policy's does,
+// so 21 of 200 removed over a bound of 10 never reads "(10%)" (task 10
+// re-review R2).
+func TestCheckPrintsTheShareRoundedUp(t *testing.T) {
+	var devs []admission.Device
+	for i := range 200 {
+		devs = append(devs, dev(fmt.Sprintf("e%03d", i), fmt.Sprintf("10.1.%d.%d", i/200, i%200+1), nil))
+	}
+	if err := Check(mustBundle(t, devs...), mustBundle(t, devs[21:]...), 10); err == nil ||
+		!strings.Contains(err.Error(), "removes 21 of 200 devices and refuses 0 more (11%)") {
+		t.Fatalf("%v", err)
 	}
 }
