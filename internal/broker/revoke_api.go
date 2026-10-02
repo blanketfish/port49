@@ -57,7 +57,15 @@ func (b *Broker) tokensRevoke(w http.ResponseWriter, r *http.Request) {
 	var req api.RevokeRequest
 	dec := json.NewDecoder(io.LimitReader(r.Body, 4<<10))
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(&req); err != nil {
+	err := dec.Decode(&req)
+	if err == nil {
+		// One object and nothing after it: a second one would otherwise be
+		// dropped unread, narrowing the request silently.
+		if _, terr := dec.Token(); terr != io.EOF {
+			err = errors.New("trailing data")
+		}
+	}
+	if err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", "the body is not a revocation request: "+
 			"name mine, a principal, or a device and a username (a lift is port49d's admin socket's)")
 		return
@@ -95,9 +103,10 @@ func (b *Broker) tokensRevoke(w http.ResponseWriter, r *http.Request) {
 				return b.RevokeKey(r.Context(), k, origin)
 			})
 		default:
-			b.refuseRight(w, decision.Record{TS: b.Now(), Event: decision.EventRevoke,
+			now := b.Now()
+			b.refuseRight(w, decision.Record{TS: now, Event: decision.EventRevoke,
 				Revocation: &decision.Revocation{By: ByKey, Device: k.NAS, Username: k.Username,
-					At: decision.FormatTime(b.Now()), Origin: origin}},
+					At: decision.FormatTime(now), Origin: origin}},
 				policy.RightRevokeOthers, "ending a (device, username) whoever holds it")
 		}
 		return
@@ -117,8 +126,9 @@ func (b *Broker) tokensRevoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !mayOthers {
-		b.refuseRight(w, decision.Record{TS: b.Now(), Event: decision.EventRevoke, Principal: target,
-			Revocation: &decision.Revocation{By: ByPrincipal, At: decision.FormatTime(b.Now()), Origin: origin}},
+		now := b.Now()
+		b.refuseRight(w, decision.Record{TS: now, Event: decision.EventRevoke, Principal: target,
+			Revocation: &decision.Revocation{By: ByPrincipal, At: decision.FormatTime(now), Origin: origin}},
 			policy.RightRevokeOthers, "revoking another principal")
 		return
 	}
@@ -138,7 +148,7 @@ func (b *Broker) tokensRevoke(w http.ResponseWriter, r *http.Request) {
 		b.logf("broker: a revocation of %s asked by %s was not made: %v", target, caller, err)
 		w.Header().Set("Retry-After", "10")
 		writeError(w, http.StatusServiceUnavailable, string(decision.StoreUnavailable), "the revocation could not "+
-			"be recorded, so nothing was revoked; try again, or ask an operator to run `port49 revoke` on port49d")
+			"be recorded, so nothing was revoked; "+b.unrecordedNote())
 	default:
 		rep.LiftNote = b.liftNote()
 		b.answerRevocation(w, pol, rep, origin)
@@ -194,6 +204,18 @@ func (b *Broker) holdOwnRevoke(caller string) (func(), bool) {
 func writeBusy(w http.ResponseWriter, detail string) {
 	w.Header().Set("Retry-After", "5")
 	writeError(w, http.StatusServiceUnavailable, "revocation_busy", detail)
+}
+
+// unrecordedNote says what to do when a standing mark could not be
+// written: `port49 revoke` on port49d's admin socket, or, with none
+// configured, the one cut there is, as port49d's start line says
+// (liftNote).
+func (b *Broker) unrecordedNote() string {
+	if b.AdminSocket == "" {
+		return "try again; port49d has no admin_socket configured, so meanwhile have an operator remove the " +
+			"principal's grants from broker.policy_file"
+	}
+	return "try again, or ask an operator to run `port49 revoke` on port49d's admin socket (" + b.AdminSocket + ")"
 }
 
 // liftNote says where a standing mark made over HTTP is lifted: port49d's

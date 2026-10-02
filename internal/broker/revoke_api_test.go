@@ -156,7 +156,9 @@ func TestARevocationBodyIsOneForm(t *testing.T) {
 		`{"mine":true,"principal":"user:alice@example.com"}`: "not both",
 		`{"sid":"9c2b"}`: "OIDC", `{"principal":"user:alice@example.com","lift":true}`: "not a revocation request",
 		`{"device":"leaf 1","username":"alice"}`: "printable", `{"device":"leaf1"}`: "name",
-		`{"principal":"alice@example.com"}`: "begins user:",
+		`{"principal":"alice@example.com"}`:                   "begins user:",
+		`{"mine":true}{"principal":"user:alice@example.com"}`: "not a revocation request",
+		`{"mine":true} garbage`:                               "not a revocation request",
 	} {
 		w := f.revokeAs(t, "bob@example.com", body)
 		if w.Code != 400 || !strings.Contains(w.Body.String(), want) {
@@ -169,14 +171,28 @@ func TestARevocationBodyIsOneForm(t *testing.T) {
 }
 
 // A revocation the store cannot record is 503 with a fixed sentence; the
-// store's error goes to the process log, not to the caller.
+// store's error goes to the process log, not to the caller. The way out it
+// names is one that exists: port49 revoke on the admin socket, or, with
+// none configured, the policy file (review M2).
 func TestAMarkThatCannotBeWrittenIs503(t *testing.T) {
 	f := newFixtureWithPolicy(t, 8, sharedPolicy)
 	f.b.Store = putRevocationFails{f.st}
-	w := f.revokeAs(t, "bob@example.com", `{"principal":"user:alice@example.com"}`)
-	if w.Code != 503 || !strings.Contains(w.Body.String(), "store_unavailable") ||
-		strings.Contains(w.Body.String(), "disk on fire") || w.Header().Get("Retry-After") == "" {
-		t.Fatalf("%d %s", w.Code, w.Body)
+	for socket, want := range map[string]string{
+		"": "port49d has no admin_socket configured, so meanwhile have an operator remove the principal's " +
+			"grants from broker.policy_file",
+		"/run/port49/port49d.sock": "ask an operator to run `port49 revoke` on port49d's admin socket " +
+			"(/run/port49/port49d.sock)",
+	} {
+		f.b.AdminSocket = socket
+		w := f.revokeAs(t, "bob@example.com", `{"principal":"user:alice@example.com"}`)
+		if w.Code != 503 || !strings.Contains(w.Body.String(), "store_unavailable") ||
+			strings.Contains(w.Body.String(), "disk on fire") || w.Header().Get("Retry-After") == "" ||
+			!strings.Contains(w.Body.String(), want) {
+			t.Fatalf("admin socket %q: %d %s", socket, w.Code, w.Body)
+		}
+		if socket == "" && strings.Contains(w.Body.String(), "port49 revoke") {
+			t.Fatalf("no admin socket, yet port49 revoke is offered: %s", w.Body)
+		}
 	}
 }
 
