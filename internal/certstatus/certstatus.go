@@ -85,7 +85,7 @@ type Checker struct {
 
 	mu    sync.Mutex
 	crls  map[string]*loadedCRL
-	onNew func(issuer, serial, source string, replay bool)
+	onNew func(issuer, serial, source string, bulk bool)
 	// failing is, by source, whether its last load failed: the next good
 	// one is said (loaded).
 	failing      map[string]bool
@@ -123,9 +123,11 @@ func New(cfg Config, now func() time.Time, m *metrics.Metrics, logf func(string,
 
 // OnNewEntry sets f to be told of each serial a verified list newly names
 // over its source's last good list, a certificateHold entry excepted.
-// replay is true for a kept list put in force again at start
-// (LoadPersisted), whose entries were each told before.
-func (c *Checker) OnNewEntry(f func(issuer, serial, source string, replay bool)) {
+// bulk is true when the entries are a whole list rather than news: a kept
+// list put in force again at start (LoadPersisted), whose entries were each
+// told before, or a source's first list, every entry of which is new only to
+// this process (final review M-6).
+func (c *Checker) OnNewEntry(f func(issuer, serial, source string, bulk bool)) {
 	c.mu.Lock()
 	c.onNew = f
 	c.mu.Unlock()

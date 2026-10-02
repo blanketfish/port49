@@ -182,6 +182,7 @@ func (c *Checker) install(src CRLSource, l *loadedCRL, persist bool) error {
 		}
 	}
 	if onNew != nil {
+		bulk := !persist || prev == nil
 		for serial, e := range l.revoked {
 			if e.hold {
 				continue // a hold is lifted by the CA: refused while listed, never marked (M13)
@@ -191,7 +192,7 @@ func (c *Checker) install(src CRLSource, l *loadedCRL, persist bool) error {
 					continue
 				}
 			}
-			onNew(l.list.Issuer.String(), serial, src.Name, !persist)
+			onNew(l.list.Issuer.String(), serial, src.Name, bulk)
 		}
 	}
 	return nil

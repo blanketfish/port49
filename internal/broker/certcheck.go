@@ -168,11 +168,12 @@ func (q queuedRevoke) key() [2]string { return [2]string{q.issuer, q.serial} }
 // already marked is passed over at its turn, so a replay revokes and
 // records nothing twice.
 //
-// replay is a restart's: its load is not said, since nearly every entry is
-// one passed over, and a line saying N are revoked in turn would read as a
-// revocation storm.
-func (b *Broker) OnCRLEntry(issuer, serial, source string, replay bool) {
-	b.enqueueRevoke(issuer, serial, "crl "+source, replay)
+// bulk is a whole list rather than news: a restart's replay, or a source's
+// first list. Its load is not said, since nearly every entry touches nothing
+// in use, and a line saying thousands are queued would read as a revocation
+// storm (final review M-6). Each entry is still checked.
+func (b *Broker) OnCRLEntry(issuer, serial, source string, bulk bool) {
+	b.enqueueRevoke(issuer, serial, "crl "+source, bulk)
 }
 
 // enqueueRevoke queues q once: a certificate already waiting, refused at
@@ -194,8 +195,8 @@ func (b *Broker) enqueueRevoke(issuer, serial, origin string, quiet bool) {
 	select {
 	case b.revokeQueue <- q:
 		if n := len(b.revokeQueue); n >= queueWarn && !quiet {
-			b.sayOnce("queue", 10*time.Minute, "broker: %d CRL revocations are queued; each is revoked in turn, "+
-				"and each certificate is refused at every use meanwhile", n)
+			b.sayOnce("queue", 10*time.Minute, "broker: %d CRL entries are being checked against what is in use; "+
+				"each certificate is refused at every use meanwhile", n)
 		}
 	default:
 		b.mu.Lock()
@@ -276,8 +277,8 @@ func (b *Broker) pend(q queuedRevoke) {
 	}
 }
 
-// RetryPending requeues every pending entry (port49d calls it after each
-// CRL poll).
+// RetryPending requeues every pending entry (port49d calls it on a
+// refresh_interval ticker).
 func (b *Broker) RetryPending() {
 	b.mu.Lock()
 	pending := b.pending

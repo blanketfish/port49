@@ -694,9 +694,10 @@ func TestCRL(t *testing.T) {
 		}
 	})
 
-	// A kept list put in force again at start tells each entry as a replay;
-	// a fetched one does not.
-	t.Run("OnNewEntry says a replay", func(t *testing.T) {
+	// A source's first list and a kept list put in force again at start tell
+	// each entry in bulk; an entry a later list adds is news (final review
+	// M-6).
+	t.Run("OnNewEntry says a bulk load", func(t *testing.T) {
 		ca := newCA(t, "issuing CA")
 		c, _, _, srv, clk, dir := one(t, ca)
 		var replays, fresh int
@@ -708,9 +709,15 @@ func TestCRL(t *testing.T) {
 			}
 		})
 		srv.serve(signCRL(t, ca, crlSpec{number: 1, revoked: []x509.RevocationListEntry{revoked(7, t0)}}), 200)
-		if errs := c.LoadAll(ctx); len(errs) != 0 || fresh != 1 || replays != 0 {
-			t.Fatalf("a fetch: fresh %d replays %d %v", fresh, replays, errs)
+		if errs := c.LoadAll(ctx); len(errs) != 0 || fresh != 0 || replays != 1 {
+			t.Fatalf("a first fetch: fresh %d bulk %d %v", fresh, replays, errs)
 		}
+		srv.serve(signCRL(t, ca, crlSpec{number: 2, revoked: []x509.RevocationListEntry{revoked(7, t0),
+			revoked(8, t0)}}), 200)
+		if errs := c.LoadAll(ctx); len(errs) != 0 || fresh != 1 || replays != 1 {
+			t.Fatalf("a second fetch: fresh %d bulk %d %v", fresh, replays, errs)
+		}
+		replays = 0
 		restarted, _, _ := newChecker(t, Config{CRLs: []CRLSource{{Name: "issuing", URL: srv.URL + "/crl",
 			Issuer: ca.Cert}}, RefreshInterval: 10 * time.Minute, StateDir: dir}, clk)
 		restarted.OnNewEntry(func(_, _, _ string, replay bool) {
@@ -720,8 +727,8 @@ func TestCRL(t *testing.T) {
 				fresh++
 			}
 		})
-		if errs := restarted.LoadPersisted(); len(errs) != 0 || fresh != 1 || replays != 1 {
-			t.Fatalf("a restart: fresh %d replays %d %v", fresh, replays, errs)
+		if errs := restarted.LoadPersisted(); len(errs) != 0 || fresh != 1 || replays != 2 {
+			t.Fatalf("a restart: fresh %d bulk %d %v", fresh, replays, errs)
 		}
 	})
 

@@ -685,7 +685,7 @@ func TestAQueueOfCRLEntriesYieldsToAnOperator(t *testing.T) {
 		t.Fatalf("the operator's revocation waited for all %v queued ones", n)
 	}
 	eventually(t, "every queued revocation", func() bool { return certRevocations(f) == 150 })
-	if n := strings.Count(logs.String(), "CRL revocations are queued"); n != 1 {
+	if n := strings.Count(logs.String(), "CRL entries are being checked against what is in use"); n != 1 {
 		t.Fatalf("the load was said %d times: %q", n, logs.String())
 	}
 }
@@ -703,7 +703,7 @@ func TestAReplayDoesNotSayTheQueuesLoad(t *testing.T) {
 	for i := 0; i < 150; i++ {
 		f.b.OnCRLEntry(iss, fmt.Sprintf("b%03x", i), "corp", true)
 	}
-	if strings.Contains(logs.String(), "CRL revocations are queued") {
+	if strings.Contains(logs.String(), "CRL entries are being checked against what is in use") {
 		t.Fatalf("a replay said the load: %q", logs.String())
 	}
 }
