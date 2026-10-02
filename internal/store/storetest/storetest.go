@@ -969,6 +969,15 @@ type Backend struct {
 	// round trips sets fewer, and its own tests show a mutation that splits
 	// a check from its write is still caught at that count (plan 7d, R1).
 	RaceRounds int
+	// Stagger starts the short side of a race against a login a random
+	// part of a login's time late: LoginRacesARevocationByMark's
+	// revocation, and IndexWritesRaceAContextWrite's index write. A login
+	// on a network backend is several round trips, and a write started
+	// with it lands before the login reads: the window between that read
+	// and the login's write is never met, at any count of rounds (plan 7d
+	// Task 6, R1: 0 catches in 10000 rounds unstaggered). Memory's login is
+	// one critical section and leaves it off.
+	Stagger bool
 }
 
 func (b Backend) raceRounds() int {
@@ -1031,6 +1040,7 @@ func Run(t *testing.T, b Backend) {
 		{"SelfRevocationBindsToTheRead", SelfRevocationBindsToTheRead},
 		{"RewriteBindsToTheRevision", RewriteBindsToTheRevision},
 		{"IndexTokenKeepsTheLongestUnderARace", IndexTokenKeepsTheLongestUnderARace},
+		{"IndexWritesRaceAContextWrite", IndexWritesRaceAContextWrite},
 		{"FailReceiptSurvivesARacingExtend", FailReceiptSurvivesARacingExtend},
 		{"RedeemOrDeleteNotBoth", RedeemOrDeleteNotBoth},
 	} {

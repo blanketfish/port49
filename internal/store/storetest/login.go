@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"sync"
 	"testing"
 	"time"
@@ -191,6 +192,13 @@ func LoginsRaceToOneIndex(t *testing.T, b Backend) {
 	}
 }
 
+// spin waits d: a spin, not a sleep, since a timer's slack is as wide as
+// the window a staggered race aims into (Backend.Stagger).
+func spin(d time.Duration) {
+	for began := time.Now(); time.Since(began) < d; {
+	}
+}
+
 // markingStore puts a mark the first time JoinContext reads that none
 // stands, so the mark lands between the login's read and its write.
 type markingStore struct {
@@ -289,6 +297,7 @@ func LoginRacesARevocationByMark(t *testing.T, b Backend) {
 	rounds := b.raceRounds()
 	k := store.ContextKey{NAS: "leaf-01", Username: "svc"}
 	const alice, carol = "spiffe://example.com/alice", "spiffe://example.com/carol"
+	var lastLogin time.Duration // the last round's login, which Backend.Stagger spreads the revocation over
 	for _, kind := range []string{store.RevocationPrincipal, store.RevocationCert} {
 		for round := 0; round < rounds; round++ {
 			s := b.New(t, func() time.Time { return t0 })
@@ -309,15 +318,22 @@ func LoginRacesARevocationByMark(t *testing.T, b Backend) {
 			errs := make(chan error, 2)
 			var wg sync.WaitGroup
 			wg.Add(2)
+			var delay time.Duration
+			if b.Stagger && lastLogin > 0 {
+				delay = rand.N(lastLogin)
+			}
 			go func() {
 				defer wg.Done()
 				<-start
+				began := time.Now()
 				_, err := store.JoinContext(ctx, s, k, c, t0.Add(-time.Minute), t0, time.Hour, ix)
+				lastLogin = time.Since(began)
 				errs <- err
 			}()
 			go func() {
 				defer wg.Done()
 				<-start
+				spin(delay)
 				if err := s.PutRevocation(ctx, mark); err != nil {
 					errs <- err
 					return

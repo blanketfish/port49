@@ -26,11 +26,14 @@ func onShared(t *testing.T, clock func() time.Time) *Store {
 }
 
 // backend runs LoginRacesARevocationByMark for 200 rounds, each a few
-// round trips to the member, not memory's 10000: plan 7d R1's starting
-// count, which Task 6, where SwapLogin is built, proves by a mutation.
+// round trips to the member, not memory's 10000, its revocation staggered
+// across the login (storetest.Backend.Stagger). Plan 7d R1's proof, Task
+// 6: a SwapLogin that leaves the marks out of its transaction's compare,
+// or reads them in Gets of their own before it, was caught in 10 runs of
+// 10 each, the first catch by round 30; unstaggered, in none of 10000.
 var backend = storetest.Backend{New: func(t *testing.T, clock func() time.Time) store.Store {
 	return onShared(t, clock)
-}, RaceRounds: 200}
+}, RaceRounds: 200, Stagger: true}
 
 // run runs the named properties against etcd. Task 8 replaces every call
 // with storetest.Run.

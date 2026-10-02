@@ -3,6 +3,7 @@ package storetest
 import (
 	"context"
 	"errors"
+	"math/rand/v2"
 	"sync"
 	"testing"
 	"time"
@@ -138,6 +139,51 @@ func RedeemOrDeleteNotBoth(t *testing.T, b Backend) {
 		if took != 1 {
 			t.Fatalf("round %d: redeem %v, deletes %v; want exactly one nil and the rest ErrNotFound",
 				round, errs[0], errs[1:])
+		}
+	}
+}
+
+// IndexWritesRaceAContextWrite is a write to the ref's index alone raced
+// against a write of its context that carries the index: a sid rotation
+// (ReindexSid) against a touch, and an index (IndexContext, as a re-index
+// writes it) against a second window's join. Both writes stand. A context
+// write that put back the index as it read it, over the index write that
+// landed since, would lose the new sid, and a back-channel logout by it
+// would miss the context: revocation failing open (plan 7d Task 6, I3). A
+// race among logins alone cannot show this, since each login's write is
+// bound to the context it read and so already waits for the others.
+func IndexWritesRaceAContextWrite(t *testing.T, b Backend) {
+	k := store.ContextKey{NAS: "leaf-01", Username: "svc"}
+	ref := store.ContextRef{NAS: k.NAS, Username: k.Username}
+	const alice = "spiffe://example.com/alice"
+	for round := 0; round < b.raceRounds(); round++ {
+		s := b.New(t, func() time.Time { return t0 })
+		ctx := context.Background()
+		c, ix := loginOf(alice, "sid-a1", "0a", t0)
+		began := time.Now()
+		if _, err := store.JoinContext(ctx, s, k, c, t0, t0, time.Hour, ix); err != nil {
+			t.Fatal(err)
+		}
+		var delay time.Duration // the index write aimed across the join's round trips (Backend.Stagger)
+		if b.Stagger {
+			delay = rand.N(time.Since(began))
+		}
+		var errs [4]error
+		race(func() { errs[0] = s.ReindexSid(ctx, "sid-a1", "sid-r", ref, time.Hour) },
+			func() { errs[1] = s.TouchContext(ctx, k, time.Hour) })
+		c2, ix2 := loginOf(alice, "sid-a2", "0a", t0)
+		race(func() { spin(delay); errs[2] = s.IndexContext(ctx, alice, "sid-x", "", ref, time.Hour) },
+			func() { _, errs[3] = store.JoinContext(ctx, s, k, c2, t0, t0, time.Hour, ix2) })
+		if err := errors.Join(errs[:]...); err != nil {
+			t.Fatalf("round %d: %v", round, err)
+		}
+		for _, sid := range []string{"sid-r", "sid-x", "sid-a2"} {
+			if n := refsOf(t, s, s.ContextsBySid, sid); n != 1 {
+				t.Fatalf("round %d: sid %s is indexed %d times after the race", round, sid, n)
+			}
+		}
+		if n := refsOf(t, s, s.ContextsBySid, "sid-a1"); n != 0 {
+			t.Fatalf("round %d: the rotated-out sid-a1 is indexed %d times", round, n)
 		}
 	}
 }
