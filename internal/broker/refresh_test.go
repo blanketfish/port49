@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1401,5 +1402,39 @@ func TestAContextWithNoAuthTimeIsFailedClosed(t *testing.T) {
 	}
 	if got := f.context(t, "leaf1", "alice"); got.SessionExpires.IsZero() || got.SessionExpires.After(f.now) {
 		t.Fatalf("session_expires %v: not failed closed", got.SessionExpires)
+	}
+}
+
+// blobTTLStore records the TTL of every blob written.
+type blobTTLStore struct {
+	store.Store
+	mu   sync.Mutex
+	ttls map[string]time.Duration
+}
+
+func (s *blobTTLStore) PutBlob(ctx context.Context, hash string, body []byte, ttl time.Duration) error {
+	s.mu.Lock()
+	s.ttls[hash] = ttl
+	s.mu.Unlock()
+	return s.Store.PutBlob(ctx, hash, body, ttl)
+}
+
+// A refresh keeps the blob it writes as long as the context naming it can
+// live, as a mint does: with context_idle_ttl above max_session_age_default,
+// an idle context must not outlive its blob and be denied blob_unavailable
+// (final review M-4).
+func TestARefreshKeepsItsBlobAsLongAsTheContext(t *testing.T) {
+	f := newFixture(t, 8)
+	f.login(t, alice, "leaf1", "alice")
+	f.b.ContextIdleTTL = 48 * time.Hour
+	rec := &blobTTLStore{Store: f.st, ttls: map[string]time.Duration{}}
+	f.b.Store = rec
+	priors := f.reload(t, edit(t, roleList, readOnly, aliceGrant, "roles: [read_only], max_privilege: admin"))
+	if rep, err := f.b.Refresh(context.Background(), priors); err != nil || rep.Updated != 1 {
+		t.Fatalf("report %+v err %v", rep, err)
+	}
+	after := f.context(t, "leaf1", "alice")
+	if ttl := rec.ttls[after.BlobHash]; ttl < f.b.ContextIdleTTL {
+		t.Fatalf("the refreshed blob is kept %v, under context_idle_ttl %v", ttl, f.b.ContextIdleTTL)
 	}
 }

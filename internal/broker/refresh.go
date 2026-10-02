@@ -453,8 +453,12 @@ func (b *Broker) refreshContext(ctx context.Context, cur *policy.Policy, priors 
 			return step.outcome, nil
 		}
 		// The blob is in the store, and in the log, before any context
-		// names it: the daemon's next command reads it by that name.
-		if err := b.putBlob(ctx, step.write.BlobHash, step.body, b.MaxSessionAge); err != nil {
+		// names it: the daemon's next command reads it by that name. It is
+		// kept as long as the context can live, as at mint: an idle context
+		// outliving its blob would be denied blob_unavailable for nothing
+		// (final review M-4).
+		ttl := blobTTL(max(step.age, b.ContextIdleTTL), b.MaxSessionAge)
+		if err := b.putBlob(ctx, step.write.BlobHash, step.body, ttl); err != nil {
 			return "", err
 		}
 		switch err := b.Store.SetContextPolicy(ctx, k, c.PolicyRev, *step.write); {
