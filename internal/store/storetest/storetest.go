@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -524,6 +525,85 @@ func TokenIndex(t *testing.T, newStore func() store.Store, now time.Time) {
 		}
 		if got, err := s.TokensByCert(ctx, blank); err != nil || len(got) != 0 {
 			t.Fatalf("the blank certificate key %q indexed %v (%v)", blank, got, err)
+		}
+	}
+}
+
+// DeleteTokenRemovesOne is DeleteToken (plan 7c): it removes the live token
+// with that ID and leaves every other under the key, and every token under
+// every other key; a second delete, an ID never put, and a key with nothing
+// under it are ErrNotFound. A principal ending its own sessions deletes its
+// own tokens this way and never another's under the same (device, username)
+// (spec §5.1.4; decision 34).
+//
+// The token index (plan 7a) is by key, not by ID, so DeleteToken leaves it
+// as it is: the remaining token's principal and certificate still lead to
+// it, and the deleted token's principal may still name the key, where it
+// finds nothing of its own and no error. Whether that stale entry is pruned
+// is the backend's choice; that it never breaks a lookup is not.
+func DeleteTokenRemovesOne(t *testing.T, newStore func() store.Store, now time.Time) {
+	t.Helper()
+	ctx := context.Background()
+	s := newStore()
+	k := store.TokenKey{NAS: "leaf-01", Username: "svc"}
+	other := store.TokenKey{NAS: "leaf-02", Username: "svc"}
+	cert := store.CertKey("CN=Corp CA", "3f9a01")
+	put := func(k store.TokenKey, id, principal string) {
+		t.Helper()
+		// Index first, as the minter does (store.IndexToken).
+		if err := s.IndexToken(ctx, principal, cert, k, time.Minute); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.PutToken(ctx, k, store.Token{ID: id, Secret: []byte("secret-" + id), Kind: store.KindLogin,
+			ExpiresAt: now.Add(time.Minute), Principal: principal, Username: k.Username, MintedAt: now}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	put(k, "a", "spiffe://example.com/a")
+	put(k, "b", "spiffe://example.com/b")
+	put(other, "a", "spiffe://example.com/a")
+	if err := s.DeleteToken(ctx, k, "a"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Candidates(ctx, k)
+	if err != nil || len(got) != 1 || got[0].ID != "b" || got[0].Principal != "spiffe://example.com/b" {
+		t.Fatalf("left under the key: %v %v", got, err)
+	}
+	if got, err := s.Candidates(ctx, other); err != nil || len(got) != 1 {
+		t.Fatalf("another key's token: %v %v", got, err)
+	}
+	for _, c := range []struct {
+		k  store.TokenKey
+		id string
+	}{{k, "a"}, {k, "never"}, {store.TokenKey{NAS: "nowhere", Username: "svc"}, "b"}} {
+		if err := s.DeleteToken(ctx, c.k, c.id); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("DeleteToken(%v, %q) = %v, want ErrNotFound", c.k, c.id, err)
+		}
+	}
+
+	// The survivor is still reachable through both indexes, so a revocation
+	// of b, or of the certificate, still finds it.
+	if keys, err := s.TokensByPrincipal(ctx, "spiffe://example.com/b"); err != nil || !slices.Contains(keys, k) {
+		t.Fatalf("b's keys after a's delete: %v %v", keys, err)
+	}
+	if keys, err := s.TokensByCert(ctx, cert); err != nil || !slices.Contains(keys, k) || !slices.Contains(keys, other) {
+		t.Fatalf("the certificate's keys after a's delete: %v %v", keys, err)
+	}
+	// a's keys still include other, where a's token lives; any key they still
+	// name under which a has nothing yields no token of a's and no error.
+	keys, err := s.TokensByPrincipal(ctx, "spiffe://example.com/a")
+	if err != nil || !slices.Contains(keys, other) {
+		t.Fatalf("a's keys after its delete: %v %v", keys, err)
+	}
+	for _, key := range keys {
+		got, err := s.Candidates(ctx, key)
+		if err != nil {
+			t.Fatalf("Candidates(%v) through a's index: %v", key, err)
+		}
+		for _, tok := range got {
+			if key == k && tok.Principal == "spiffe://example.com/a" {
+				t.Fatalf("a's deleted token is still under %v", key)
+			}
 		}
 	}
 }
