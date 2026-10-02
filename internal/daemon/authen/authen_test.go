@@ -1165,6 +1165,121 @@ func TestAJoinErrorUnderAMarkOnThePresentedCertificateIsRefused(t *testing.T) {
 	}
 }
 
+// An earlier login with the presented credential already reaches the
+// context through the index: a second `port49 token` window from one
+// certificate, or any login of a credential with neither a sid nor a
+// certificate, which is indexed by its principal. The index cannot tell a
+// join that ERRORed from one that committed; the context's witness can, so
+// the retransmission is token_spent either way (spec §5.6; Task 4b review
+// I1). Before the witness, the last two were PASS.
+func TestAJoinThatErrorsReplaysNoPassThroughAnEarlierLoginsIndex(t *testing.T) {
+	ref := store.ContextRef{NAS: "leaf-01", Username: "alice"}
+	for _, c := range []struct {
+		name  string
+		index [3]string // principal, sid, cert key an earlier login indexed
+		cert  bool      // window B's certificate, else the seed's token-only login
+	}{
+		{"the certificate, no earlier window", [3]string{}, true},
+		{"the certificate, an earlier window", [3]string{"", "", store.CertKey("ca", "0b")}, true},
+		{"no sid and no certificate", [3]string{"user:alice@example.com", "", ""}, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			g := &getRevocationFailsOnce{}
+			f := setupStore(t, func(st *memory.Store) store.Store { g.Store = st; return g })
+			start := f.joinFixture(t, nil)
+			if c.cert {
+				start = f.certBToken(t)
+			}
+			if c.index != ([3]string{}) {
+				if err := f.st.IndexContext(context.Background(), c.index[0], c.index[1], c.index[2], ref,
+					time.Hour); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if reply, _ := f.h.NewSession(f.peer).Start(context.Background(), start); reply.Status != wire.AuthenStatusError {
+				t.Fatalf("the join whose mark read failed: %+v %v", reply, f.records(t))
+			}
+			reply, _ := f.h.NewSession(f.peer).Start(context.Background(), start)
+			if rec := f.records(t)[1]; reply.Status != wire.AuthenStatusFail || rec["reason"] != "token_spent" {
+				t.Fatalf("a retransmission after a join that ERRORed: %+v %v", reply, rec)
+			}
+		})
+	}
+}
+
+// failReceiptLost answers FailReceipt without writing it: the Failed flag
+// a store write cleared, or one that never landed.
+type failReceiptLost struct{ *memory.Store }
+
+func (failReceiptLost) FailReceipt(context.Context, store.ReceiptKey) error { return nil }
+
+// A login refused after its join, on a context the join wrote revoked, is
+// never witnessed. Once a token minted later lifts that revocation on the
+// same ctx_id (decision 15), its retransmission is token_spent, not the
+// PASS its receipt was written with, though a store write cleared the
+// receipt's plaintext Failed (Task 4b review I2).
+func TestALoginRefusedAfterItsJoinReplaysNoPassOnceTheRevocationIsLifted(t *testing.T) {
+	f := setupStore(t, func(st *memory.Store) store.Store { return failReceiptLost{st} })
+	f.joinFixture(t, nil)
+	start := f.certBToken(t)
+	f.markCertB(t, nil)
+	if reply, _ := f.h.NewSession(f.peer).Start(context.Background(), start); reply.Status != wire.AuthenStatusFail ||
+		f.records(t)[0]["reason"] != "credential_revoked" {
+		t.Fatalf("a login under a mark its token predates: %+v %v", reply, f.records(t))
+	}
+	if err := f.st.DeleteRevocation(context.Background(), store.RevocationCert, store.CertKey("ca", "0b")); err != nil {
+		t.Fatal(err)
+	}
+	later := f.tag() + "certCcertCcertCcertCcert"
+	if _, err := f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
+		store.Token{ID: "c", Secret: []byte(later), Kind: store.KindLogin, Username: "alice",
+			Principal:  "user:alice@example.com",
+			Credential: store.Credential{Method: "cert", Issuer: "ca", Serial: "0c"}, Enable: "token",
+			MaxPrivilege: 15, MintedAt: f.now, ExpiresAt: f.now.Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	if reply, _ := f.h.NewSession(f.peer).Start(context.Background(), papStart("alice", "ssh", "198.51.100.4",
+		later)); reply.Status != wire.AuthenStatusPass {
+		t.Fatalf("a login minted after the revocation: %+v %v", reply, f.records(t))
+	}
+	if c, _ := f.st.GetContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"}); c.CtxID != "ctxL" ||
+		!c.RevokedAt.IsZero() {
+		t.Fatalf("the test needs the revocation lifted on the same ctx_id: %+v", c)
+	}
+	reply, _ := f.h.NewSession(f.peer).Start(context.Background(), start)
+	recs := f.records(t)
+	if rec := recs[len(recs)-1]; reply.Status != wire.AuthenStatusFail || rec["reason"] != "token_spent" {
+		t.Fatalf("the refused login's retransmission after the lift: %+v %v", reply, rec)
+	}
+}
+
+// A committed login replays PASS only while the index reaches its context
+// under its credential, so that a revocation of the credential can still
+// reach what the replay admits. Window B's certificate, indexed now only to
+// another device's context, is token_spent here (Task 4b review I3,
+// mutation A).
+func TestAReplayTheIndexNoLongerReachesIsRefused(t *testing.T) {
+	f := setup(t)
+	f.joinFixture(t, nil)
+	start := f.certBToken(t)
+	if reply, _ := f.h.NewSession(f.peer).Start(context.Background(), start); reply.Status != wire.AuthenStatusPass {
+		t.Fatalf("the login: %+v %v", reply, f.records(t))
+	}
+	cert := store.CertKey("ca", "0b")
+	if err := f.st.IndexContext(context.Background(), "", "", cert, store.ContextRef{NAS: "leaf-02", Username: "alice"},
+		time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.UnindexContext(context.Background(), "", "", cert,
+		store.ContextRef{NAS: "leaf-01", Username: "alice"}); err != nil {
+		t.Fatal(err)
+	}
+	reply, _ := f.h.NewSession(f.peer).Start(context.Background(), start)
+	if rec := f.records(t)[1]; reply.Status != wire.AuthenStatusFail || rec["reason"] != "token_spent" {
+		t.Fatalf("a replay the certificate index no longer reaches: %+v %v", reply, rec)
+	}
+}
+
 // midJoinRetransmit runs during() inside the join's first mark read, then
 // fails that read: a retransmission that arrives while a join is still in
 // flight on a degraded store, and the join that then ERRORs.
@@ -1584,6 +1699,40 @@ func TestAnEnableUnderAStandingMarkIsRefused(t *testing.T) {
 				t.Fatalf("a context under a standing mark was raised: %+v", c)
 			}
 		})
+	}
+}
+
+// A replayed escalation is refused credential_revoked when a standing mark
+// names the certificate its enable token was minted under, though the
+// context names another certificate and its principal is clear (Task 4b
+// review I3, mutation C). Enable is the escalation path.
+func TestAnEnableReplayUnderAMarkOnThePresentedCertificateIsRefused(t *testing.T) {
+	f := setup(t)
+	marks := store.NewMarks()
+	f.h.WithMarks(marks)
+	f.seedLogin(t, "token", 15)
+	secret := f.tag() + "enabenabenabenabenab0123"
+	if _, err := f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
+		store.Token{ID: "en", Secret: []byte(secret), Kind: store.KindEnable, Username: "alice",
+			Principal:  "user:alice@example.com",
+			Credential: store.Credential{Method: "cert", Issuer: "ca", Serial: "0b"},
+			ExpiresAt:  f.now.Add(time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	enable := func() wire.AuthenReply {
+		sess := f.h.NewSession(f.peer)
+		sess.Start(context.Background(), f.enableStart("alice"))
+		reply, _ := sess.Continue(context.Background(), wire.AuthenContinue{UserMsg: []byte(secret)})
+		return reply
+	}
+	if reply := enable(); reply.Status != wire.AuthenStatusPass {
+		t.Fatalf("the escalation: %+v %v", reply, f.records(t))
+	}
+	marks.Set(store.Revocation{Kind: store.RevocationCert, Key: store.CertKey("ca", "0b"), At: f.now}, true)
+	reply := enable()
+	recs := f.records(t)
+	if rec := recs[len(recs)-1]; reply.Status != wire.AuthenStatusFail || rec["reason"] != "credential_revoked" {
+		t.Fatalf("a replayed escalation under a mark on its certificate: %+v %v", reply, rec)
 	}
 }
 

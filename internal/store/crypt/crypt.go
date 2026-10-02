@@ -197,8 +197,8 @@ const contextSealVersion = 2
 
 // contextSecret is everything of a context the authorizer trusts,
 // sealed whole (plan 7d; Ruling 17): the identity and credential, as
-// before, and the privilege, the ceiling, the policy, the clocks and
-// the revocation. Only the store's bookkeeping stays outside it: the
+// before, and the privilege, the ceiling, the policy, the clocks, the
+// revocation and the login witness (Context.Logins). Only the store's bookkeeping stays outside it: the
 // revisions, the idle clock (LastTouchedAt), and accounting's
 // annotations, which authorize nothing. RevokedAt is also written in
 // the clear (sealContext).
@@ -219,6 +219,7 @@ type contextSecret struct {
 	RefreshedAt    time.Time        `json:"refreshed_at"`
 	RevokedAt      time.Time        `json:"revoked_at"`
 	CreatedAt      time.Time        `json:"created_at"`
+	Logins         []string         `json:"logins"`
 }
 
 // contextAAD binds a sealed context to the key it is stored at: the
@@ -439,7 +440,8 @@ func (w *wrapped) sealContext(k store.ContextKey, c store.Context) (store.Contex
 	b, err := json.Marshal(contextSecret{V: contextSealVersion, CtxID: c.CtxID, Principal: c.Principal,
 		Username: c.Username, Port: c.Port, RemAddr: c.RemAddr, Credential: c.Credential, PrivLvl: c.PrivLvl,
 		BlobHash: c.BlobHash, MaxPrivilege: c.MaxPrivilege, Enable: c.Enable, AuthTime: c.AuthTime,
-		SessionExpires: c.SessionExpires, RefreshedAt: c.RefreshedAt, RevokedAt: c.RevokedAt, CreatedAt: c.CreatedAt})
+		SessionExpires: c.SessionExpires, RefreshedAt: c.RefreshedAt, RevokedAt: c.RevokedAt, CreatedAt: c.CreatedAt,
+		Logins: c.Logins})
 	if err != nil {
 		return store.Context{}, err
 	}
@@ -475,7 +477,8 @@ func (w *wrapped) openContext(k store.ContextKey, c store.Context) (store.Contex
 	return store.Context{CtxID: cs.CtxID, Principal: cs.Principal, Username: cs.Username, Port: cs.Port,
 		RemAddr: cs.RemAddr, Credential: cs.Credential, PrivLvl: cs.PrivLvl, BlobHash: cs.BlobHash,
 		MaxPrivilege: cs.MaxPrivilege, Enable: cs.Enable, AuthTime: cs.AuthTime, SessionExpires: cs.SessionExpires,
-		RefreshedAt: cs.RefreshedAt, RevokedAt: revoked, CreatedAt: cs.CreatedAt, LastTouchedAt: c.LastTouchedAt,
+		RefreshedAt: cs.RefreshedAt, RevokedAt: revoked, CreatedAt: cs.CreatedAt, Logins: cs.Logins,
+		LastTouchedAt:         c.LastTouchedAt,
 		SessionDiscriminators: c.SessionDiscriminators, AccountingState: c.AccountingState,
 		Rev: c.Rev, PolicyRev: c.PolicyRev}, nil
 }

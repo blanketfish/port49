@@ -148,6 +148,64 @@ func TestJoinable(t *testing.T) {
 	}
 }
 
+// A join witnesses the login only into a context it leaves unrevoked, and
+// keeps the earlier logins' witnesses either way; the last MaxLogins are
+// kept (Task 4b review I1, I2).
+func TestJoinWitnessesOnlyAnUnrevokedLogin(t *testing.T) {
+	a, b := live(), login()
+	a.Logins = []string{"aa"}
+	b.Logins = []string{"bb"}
+	if got := store.Join(a, b, t0); len(got.Logins) != 2 || got.Logins[0] != "aa" || got.Logins[1] != "bb" {
+		t.Fatalf("a join that commits the login: %v", got.Logins)
+	}
+	revoked := a
+	revoked.RevokedAt = t0.Add(-time.Minute)
+	if got := store.Join(revoked, b, t0.Add(-time.Hour)); len(got.Logins) != 1 || got.Logins[0] != "aa" {
+		t.Fatalf("a join into a revocation the token predates: %v", got.Logins)
+	}
+	marked := b
+	marked.RevokedAt = t0.Add(-time.Minute) // a mark JoinContext carried in
+	if got := store.Join(a, marked, t0.Add(-time.Hour)); len(got.Logins) != 1 || got.Logins[0] != "aa" {
+		t.Fatalf("a join under a mark: %v", got.Logins)
+	}
+	for i := 0; i < store.MaxLogins; i++ {
+		a = store.Join(a, b, t0)
+	}
+	if len(a.Logins) != store.MaxLogins || a.Logins[0] != "bb" {
+		t.Fatalf("the oldest witness is not the one evicted: %v", a.Logins)
+	}
+	var h [32]byte
+	h[0], h[7], h[8] = 0xab, 0xcd, 0xef
+	if w := store.LoginWitness(h); w != "ab000000000000cd" {
+		t.Fatalf("the witness is the hash's first 8 bytes, hex: %q", w)
+	}
+}
+
+// A login that writes a revoked context of its own, fresh or replacing,
+// is not witnessed; an unrevoked one is.
+func TestJoinContextWitnessesOnlyAnUnrevokedLogin(t *testing.T) {
+	b := login()
+	b.Logins = []string{"bb"}
+	s := newMemory()
+	if res, err := store.JoinContext(context.Background(), s, ck, b, t0, t0, time.Hour,
+		store.LoginIndex{}); err != nil || len(res.Context.Logins) != 1 {
+		t.Fatalf("a fresh login: %+v %v", res, err)
+	}
+	s = newMemory()
+	if err := s.PutRevocation(context.Background(), store.Revocation{Kind: store.RevocationPrincipal,
+		Key: b.Principal, At: t0.Add(-time.Minute), Origin: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	res, err := store.JoinContext(context.Background(), s, ck, b, t0.Add(-time.Hour), t0, time.Hour,
+		store.LoginIndex{Principal: b.Principal})
+	if err != nil || res.Context.RevokedAt.IsZero() || len(res.Context.Logins) != 0 {
+		t.Fatalf("a fresh login under a mark: %+v %v", res, err)
+	}
+	if got, _ := s.GetContext(context.Background(), ck); len(got.Logins) != 0 {
+		t.Fatalf("the store holds a witness for a refused login: %v", got.Logins)
+	}
+}
+
 func newMemory() *memory.Store { return memory.New(func() time.Time { return t0 }) }
 
 var ck = store.ContextKey{NAS: "leaf-01", Username: "alice"}

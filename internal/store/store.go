@@ -195,7 +195,11 @@ type Receipt struct {
 	// join that wrote a revoked context), and every retransmission replays
 	// that refusal. Plaintext on purpose, like the bounds: it is written
 	// without opening the record, so any daemon can write it whatever key
-	// sealed the rest, and it only ever turns a PASS into a FAIL.
+	// sealed the rest. A store write can clear it, and that turns the
+	// replay back into the PASS the receipt was written with; it is not what
+	// refuses that login: the context never witnessed it (Context.Logins),
+	// so a PASS replay is token_spent whatever Failed says (Task 4b review
+	// I2). Failed is what makes the answer the refusal instead.
 	Failed bool
 
 	// Principal, Sid and CertKey name the credential the redeemed token
@@ -291,6 +295,16 @@ type Context struct {
 	MaxPrivilege uint8
 	CreatedAt    time.Time
 
+	// Logins witnesses the logins this context committed: LoginWitness of
+	// each one's presented credential, written by the join in the same
+	// step as the context, and only when the context it writes is not
+	// revoked; the last MaxLogins are kept. A retransmission replays PASS
+	// only for a login named here (spec §5.6; Task 4b review I1), so a
+	// login whose join ERRORed, is still in flight, or wrote a revoked
+	// context is token_spent. Sealed, and hash prefixes only: it is never
+	// logged.
+	Logins []string // sealed
+
 	// Rev is the store's revision of this record. GetContext sets it and
 	// SwapContext compares it; every other writer ignores what the caller
 	// passes, and every write to the record — each narrow setter included —
@@ -329,6 +343,29 @@ const (
 // session's STOP, and refusing would lose the newest session, which is the one
 // still running (spec §5.8).
 const MaxSessionDiscriminators = 8
+
+// MaxLogins caps Context.Logins. A login evicted past it fails closed: its
+// retransmission is token_spent rather than PASS, which costs the device
+// one prompt. Eight is above the concurrent windows MaxSessionDiscriminators
+// already accepts.
+const MaxLogins = 8
+
+// LoginWitness renders a login's presented credential for Context.Logins:
+// the first 8 bytes of its credential_sha256, hex. It names a login within
+// one context's last few, which is all a replay asks of it.
+func LoginWitness(credentialSHA256 [32]byte) string {
+	return hex.EncodeToString(credentialSHA256[:8])
+}
+
+// addLogins is held with add appended, the last MaxLogins kept, in a new
+// slice.
+func addLogins(held, add []string) []string {
+	out := append(append([]string(nil), held...), add...)
+	if len(out) > MaxLogins {
+		out = out[len(out)-MaxLogins:]
+	}
+	return out
+}
 
 // HashDiscriminator renders a device's session discriminator for storage:
 // sha256, truncated to 16 bytes, hex. Equality is all a binding needs, and the

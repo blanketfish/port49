@@ -95,6 +95,14 @@ func Join(live, login Context, mintedAt time.Time) Context {
 	}
 	out.RevokedAt = CarryRevocation(live.RevokedAt, mintedAt)
 	out.SessionDiscriminators = append([]string(nil), live.SessionDiscriminators...)
+	// The login is witnessed only into a context it leaves unrevoked: a
+	// revoked one admits nothing, and a login refused on it must not
+	// replay PASS once a later login lifts the revocation (Task 4b review
+	// I1, I2). login.RevokedAt is a mark JoinContext carried in.
+	out.Logins = append([]string(nil), live.Logins...)
+	if out.RevokedAt.IsZero() && login.RevokedAt.IsZero() {
+		out.Logins = addLogins(out.Logins, login.Logins)
+	}
 	out.Rev = 0
 	return out
 }
@@ -199,6 +207,11 @@ func JoinContext(ctx context.Context, s Store, k ContextKey, login Context, mint
 			} else {
 				w.ClearRef = true
 			}
+		}
+		// A login that writes a revoked context of its own is not witnessed
+		// (Join's rule for a join).
+		if !res.Joined && !res.Context.RevokedAt.IsZero() {
+			res.Context.Logins = nil
 		}
 		switch err := s.SwapLogin(ctx, k, rev, res.Context, ttl, w); {
 		case err == nil:

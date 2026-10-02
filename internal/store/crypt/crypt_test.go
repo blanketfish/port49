@@ -146,13 +146,16 @@ func TestWrappedStoreHoldsNoPlaintext(t *testing.T) {
 
 	ck := store.ContextKey{NAS: "leaf-01", Username: "alice"}
 	if err := s.PutContext(ctx, ck, store.Context{CtxID: "ctx1", Principal: "user:alice@example.com", Username: "alice",
-		Port: "ssh", RemAddr: "198.51.100.4", PrivLvl: 1}, time.Hour); err != nil {
+		Port: "ssh", RemAddr: "198.51.100.4", PrivLvl: 1, Logins: []string{store.LoginWitness(h)}}, time.Hour); err != nil {
 		t.Fatal(err)
 	}
-	if c, _ := inner.GetContext(ctx, ck); c.Principal != "" || c.RemAddr != "" || c.PrivLvl != 0 {
+	// The login witness is sealed: a store write cannot add a login that
+	// did not commit (Task 4b review I1).
+	if c, _ := inner.GetContext(ctx, ck); c.Principal != "" || c.RemAddr != "" || c.PrivLvl != 0 || c.Logins != nil {
 		t.Fatalf("context plaintext: %+v", c)
 	}
-	if c, _ := s.GetContext(ctx, ck); c.Principal != "user:alice@example.com" || c.RemAddr != "198.51.100.4" {
+	if c, _ := s.GetContext(ctx, ck); c.Principal != "user:alice@example.com" || c.RemAddr != "198.51.100.4" ||
+		len(c.Logins) != 1 || c.Logins[0] != store.LoginWitness(h) {
 		t.Fatalf("context read: %+v", c)
 	}
 
