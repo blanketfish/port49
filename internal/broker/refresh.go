@@ -391,27 +391,7 @@ func (b *Broker) refreshContext(ctx context.Context, cur *policy.Policy, priors 
 		case errors.Is(err, store.ErrNotFound):
 			return "skipped", nil // the index outlived the context; its own TTL reclaims it
 		case errors.As(err, &unreadable):
-			if !unreadable.RevokedAt.IsZero() {
-				return "skipped", nil // revoked already, and a refresh never lifts a mark
-			}
-			// Sealed under a key that has left the two-key window, or failing
-			// authentication: whose it is and what it holds cannot be read,
-			// so it cannot be judged against the policy in force, and it is
-			// not left on the one before. It is revoked, as a compile fault
-			// is; the authorizer cannot open it either, and the next login
-			// replaces it. The record names what is authoritative, the
-			// device and the username the key holds, and no principal: the
-			// index entry that led here may be one another principal's
-			// login has made stale, and whose the record is, is sealed.
-			log.Printf("broker: refresh: the context for %q on %q, indexed under %s, will not open (%v); revoking it",
-				ref.Username, ref.NAS, principal, err)
-			rec := decision.Record{TS: now, Event: decision.EventRefresh, Verdict: decision.VerdictDeny,
-				Reason:  decision.BlobUnavailable,
-				Device:  &decision.Device{Name: ref.NAS, Platform: plat},
-				Session: &decision.Session{Username: ref.Username, Unreached: sessionOnly(known, plat)},
-				Policy:  &decision.Policy{Bundle: cur.Bundle}}
-			step := refreshStep{revoke: true, rec: rec, outcome: "failed", sessionOnly: sessionOnly(known, plat)}
-			return b.revoke(ctx, k, now, step, rep)
+			return b.revokeUnopened(ctx, cur, priors, now, "indexed under "+principal, ref, unreadable, rep)
 		case err != nil:
 			return "", err
 		}
@@ -440,7 +420,7 @@ func (b *Broker) refreshContext(ctx context.Context, cur *policy.Policy, priors 
 		}
 		switch {
 		case step.revoke:
-			return b.revoke(ctx, k, now, step, rep)
+			return b.revoke(ctx, k, c.Rev, now, step, rep)
 		case step.outcome == "quarantined":
 			quarantined[c.CtxID] = true
 			if b.quarantineUnrecorded(c.CtxID, cur.Bundle) {
@@ -527,24 +507,83 @@ func knownPlatform(cur *policy.Policy, priors []Prior, name string) (*policy.Pol
 	return cur, ""
 }
 
+// revokeUnopened revokes a context that will not open, found by via (the
+// index entry that led here, or the re-index), and records and counts it
+// failed. One revoked already is "skipped": a refresh never lifts a mark.
+//
+// Sealed under a key that has left the two-key window, or failing
+// authentication: whose it is and what it holds cannot be read, so it
+// cannot be judged against the policy in force, and it is not left on the
+// one before. It is revoked, as a compile fault is; the authorizer cannot
+// open it either, and the next login replaces it. The record names what is
+// authoritative, the device and the username the key holds, and no
+// principal: the index entry that led here may be one another principal's
+// login has made stale, and whose the record is, is sealed.
+func (b *Broker) revokeUnopened(ctx context.Context, cur *policy.Policy, priors []Prior, now time.Time, via string,
+	ref store.ContextRef, unreadable *store.UnreadableContextError, rep *RefreshReport) (string, error) {
+	if !unreadable.RevokedAt.IsZero() {
+		return "skipped", nil
+	}
+	known, plat := knownPlatform(cur, priors, ref.NAS)
+	log.Printf("broker: refresh: the context for %q on %q, %s, will not open (%v); revoking it",
+		ref.Username, ref.NAS, via, unreadable)
+	rec := decision.Record{TS: now, Event: decision.EventRefresh, Verdict: decision.VerdictDeny,
+		Reason:  decision.BlobUnavailable,
+		Device:  &decision.Device{Name: ref.NAS, Platform: plat},
+		Session: &decision.Session{Username: ref.Username, Unreached: sessionOnly(known, plat)},
+		Policy:  &decision.Policy{Bundle: cur.Bundle}}
+	step := refreshStep{revoke: true, rec: rec, outcome: "failed", sessionOnly: sessionOnly(known, plat)}
+	return b.revoke(ctx, store.ContextKey{NAS: ref.NAS, Username: ref.Username}, unreadable.Rev, now, step, rep)
+}
+
 // revoke marks the context revoked at at through SetRevokedAt, the setter that
 // writes the mark alone and keeps the later of two, and records and counts it.
 // It does not compare: a revocation is right whoever the record belongs to by
 // now, at the worst revoking a login another principal made a moment ago,
 // whose owner logs in again (fail closed). It returns the step's outcome, or
-// "skipped" for a context already gone.
-func (b *Broker) revoke(ctx context.Context, k store.ContextKey, at time.Time, step refreshStep,
+// "skipped" for a context already gone. One the store cannot revoke is
+// deleted at rev, the revision it was read at (revokeOrDelete).
+func (b *Broker) revoke(ctx context.Context, k store.ContextKey, rev uint64, at time.Time, step refreshStep,
 	rep *RefreshReport) (string, error) {
-	switch err := b.Store.SetRevokedAt(ctx, k, at); {
-	case errors.Is(err, store.ErrNotFound):
-		return "skipped", nil
+	switch gone, err := b.revokeOrDelete(ctx, k, rev, at); {
 	case err != nil:
 		return "", err
+	case gone:
+		return "skipped", nil
 	}
 	b.emit(step.rec)
 	b.count(rep, step.outcome)
 	b.unreached(step, rep)
 	return step.outcome, nil
+}
+
+// revokeOrDelete marks the context at k revoked at at, which needs no key.
+// One the store cannot mark because it does not decode (an etcd record a
+// store writer garbled) is deleted at rev, the revision it was read at:
+// nothing can use it, and left in place it would stop every refresh pass
+// that reaches it, for every principal after it (Task 7 review K-1; Task
+// 7b review I-1). gone reports one gone already, or written again since
+// that read, which the next pass reads afresh.
+func (b *Broker) revokeOrDelete(ctx context.Context, k store.ContextKey, rev uint64, at time.Time) (gone bool,
+	err error) {
+	var bad *store.UnreadableContextError
+	switch err := b.Store.SetRevokedAt(ctx, k, at); {
+	case errors.Is(err, store.ErrNotFound):
+		return true, nil
+	case errors.As(err, &bad):
+		switch err := b.Store.DeleteContextIf(ctx, k, rev); {
+		case errors.Is(err, store.ErrNotFound), errors.Is(err, store.ErrConflict):
+			return true, nil
+		case err != nil:
+			return false, err
+		}
+		log.Printf("broker: the context for %q on %q could not be revoked (%v); deleted it at the revision read",
+			k.Username, k.NAS, bad)
+		return false, nil
+	case err != nil:
+		return false, err
+	}
+	return false, nil
 }
 
 // sessionOnly reports whether a platform never asks about a command (spec §13

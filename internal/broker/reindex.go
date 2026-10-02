@@ -21,14 +21,17 @@ import (
 // I2). A sid is compared only by its absence: a session refresh rotates
 // the sid in the index and not on the record (session.Manager.Refresh).
 //
-// One that will not open, and that no live principal lists, cannot be
-// indexed, and no refresh would visit it, so it is revoked, which needs no
-// key; one the store cannot revoke because it does not decode is deleted
-// at its own revision, since nothing can use it (Task 7 review K-1). One
-// listed live is left to the refresh, which revokes it. One gone since the
-// scan is skipped. Each re-indexed or revoked is counted
-// (port49_contexts_reindexed_total), and the total said: any is an index
-// record deleted or rewritten in the store.
+// One that a standing mark revokes (store.Marks) is marked instead of
+// judged: the revocation walked the index, and missed it.
+//
+// One that will not open cannot be indexed, and no refresh may visit it,
+// so it is revoked, which needs no key, as the refresh revokes one, with
+// its blob_unavailable record; one the store cannot revoke because it does
+// not decode is deleted at its own revision, since nothing can use it
+// (revokeOrDelete; Task 7 review K-1). One gone since the scan is skipped.
+// Each re-indexed or revoked is said by its device and username, and
+// counted (port49_contexts_reindexed_total), and the total said: any is
+// an index record deleted or rewritten in the store.
 //
 // One context that fails is said, by its device and username alone, and
 // counted (port49_contexts_reindex_failures_total), and the pass goes on:
@@ -83,20 +86,11 @@ func (b *Broker) reindexContext(ctx context.Context, cur *policy.Policy, r store
 	case errors.Is(err, store.ErrNotFound):
 		return false, nil
 	case errors.As(err, &unreadable):
-		if len(r.Principals) > 0 || !unreadable.RevokedAt.IsZero() {
-			return false, nil // the refresh reaches it, or it is revoked already
-		}
-		var bad *store.UnreadableContextError
-		switch err := b.Store.SetRevokedAt(ctx, k, rep.At); {
-		case errors.As(err, &bad):
-			if err := b.Store.DeleteContextIf(ctx, k, unreadable.Rev); err != nil &&
-				!errors.Is(err, store.ErrNotFound) {
-				return false, err
-			}
-		case err != nil && !errors.Is(err, store.ErrNotFound):
-			return false, err
-		}
-		return true, nil
+		// Revoked whether or not a principal lists it: a listing may name
+		// only one whose lookup entry is gone, which no refresh walks
+		// (Task 7b review m-2), and the refresh would revoke it anyway.
+		outcome, err := b.revokeUnopened(ctx, cur, nil, rep.At, "found by the re-index", r.ContextRef, unreadable, rep)
+		return outcome != "skipped" && err == nil, err
 	case err != nil:
 		return false, err
 	}
@@ -107,6 +101,18 @@ func (b *Broker) reindexContext(ctx context.Context, cur *policy.Policy, r store
 	}
 	if err := b.Sessions.Reindex(ctx, r.ContextRef, c); err != nil {
 		return false, err
+	}
+	b.logf("broker: re-index: the context for %q on %q was missing from the index under its own principal, "+
+		"certificate or sid; re-indexed", r.Username, r.NAS)
+	// A mark set while it was hidden missed it, since a revocation walks
+	// the index. The daemon denies by the mark anyway; the record is
+	// marked too, so it reads as revoked (Task 7b review m-1).
+	if at := b.Marks.RevokedAt(c); c.RevokedAt.IsZero() && !at.IsZero() {
+		if _, err := b.revokeOrDelete(ctx, k, c.Rev, at); err != nil {
+			return true, err
+		}
+		b.logf("broker: re-index: the context for %q on %q stands revoked by a mark; marked it", r.Username, r.NAS)
+		return true, nil
 	}
 	if _, err := b.refreshContext(ctx, cur, nil, rep.At, c.Principal, r.ContextRef, rep, map[string]bool{},
 		false); err != nil && !errors.Is(err, store.ErrConflict) {

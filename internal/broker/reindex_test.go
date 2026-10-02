@@ -271,3 +271,53 @@ func TestReindexContextsGoesOnPastAFailure(t *testing.T) {
 		t.Fatalf("ReindexContexts with the store unavailable = %v", err)
 	}
 }
+
+// A context a mark revoked while it was hidden is marked by the re-index,
+// not judged: the revocation walked the index and missed it, and the
+// record must read as revoked (Task 7b review m-1).
+func TestReindexContextsMarksOneAMarkRevokes(t *testing.T) {
+	f := newFixtureWithPolicy(t, 8, sharedPolicy)
+	ctx := context.Background()
+	f.liveContext(t, "leaf1", "alice", alicePrincipal, "")
+	ref := store.ContextRef{NAS: "leaf1", Username: "alice"}
+	if err := f.st.UnindexRef(ctx, ref); err != nil {
+		t.Fatal(err)
+	}
+	at := f.now.Add(-time.Minute)
+	f.b.Marks = store.NewMarks()
+	f.b.Marks.Put(store.Revocation{Kind: store.RevocationPrincipal, Key: alicePrincipal, At: at})
+	if n, err := f.b.ReindexContexts(ctx, []store.IndexedRef{{ContextRef: ref}}); err != nil || n != 1 {
+		t.Fatalf("ReindexContexts = %d, %v", n, err)
+	}
+	if c, _ := f.st.GetContext(ctx, store.ContextKey{NAS: "leaf1", Username: "alice"}); !c.RevokedAt.Equal(at) {
+		t.Fatalf("revoked_at = %v, want the mark's %v", c.RevokedAt, at)
+	}
+}
+
+// One that will not open is revoked even when a principal lists it: the
+// listing may name one no refresh walks. Each revoked is named in the log,
+// and recorded as the refresh records one (Task 7b review m-2, m-3).
+func TestReindexContextsRevokesOneListedThatWillNotOpen(t *testing.T) {
+	f := newFixtureWithPolicy(t, 8, sharedPolicy)
+	ctx := context.Background()
+	f.liveContext(t, "leaf1", "alice", alicePrincipal, "")
+	k := store.ContextKey{NAS: "leaf1", Username: "alice"}
+	f.b.Store = unreadableAt{Store: f.st, k: k}
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(prev) })
+	if n, err := f.b.ReindexContexts(ctx, []store.IndexedRef{{ContextRef: store.ContextRef{NAS: "leaf1",
+		Username: "alice"}, Principals: []string{"user:mallory@example.com"}}}); err != nil || n != 1 {
+		t.Fatalf("ReindexContexts = %d, %v", n, err)
+	}
+	if got, _ := f.st.GetContext(ctx, k); got.RevokedAt.IsZero() {
+		t.Fatal("a listed context that will not open was left unrevoked")
+	}
+	if !strings.Contains(buf.String(), `the context for "alice" on "leaf1", found by the re-index`) {
+		t.Fatalf("the revocation was not named: %q", buf.String())
+	}
+	if !strings.Contains(f.log.String(), `"reason":"blob_unavailable"`) {
+		t.Fatalf("no refresh record: %q", f.log.String())
+	}
+}
