@@ -155,8 +155,9 @@ func (b *Broker) tokensRevoke(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, ErrRevocationBusy):
 		writeBusy(w, "another revocation or lift is still running, so nothing was revoked; try again")
 	case err != nil:
-		// The mark was not written, so nothing was revoked: Revoke's own
-		// error names the store's fault and the fallback, for port49d's log.
+		// The mark was not written, so nothing was revoked beyond this
+		// port49d's own copy (Revoke): Revoke's own error names the store's
+		// fault and the fallback, for port49d's log.
 		b.logf("broker: a revocation of %s asked by %s was not made: %v", target, caller, err)
 		w.Header().Set("Retry-After", "10")
 		writeError(w, http.StatusServiceUnavailable, string(decision.StoreUnavailable), "the revocation could not "+

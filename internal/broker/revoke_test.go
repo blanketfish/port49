@@ -276,17 +276,31 @@ func (markFailingStore) PutRevocation(context.Context, store.Revocation) error {
 	return errors.New("store: connection refused")
 }
 
-// A mark that cannot be written revokes nothing, and says so: nothing below
-// it may run without the mark that keeps a mint from undoing it.
+// A mark that cannot be written revokes nothing else, and says so: nothing
+// below it may run without the mark that keeps a mint from undoing it. The
+// daemon's own copy keeps it, since the write may have committed with its
+// reply lost (Task 4b review M6), and a lift the store answers "not
+// revoked" takes it out.
 func TestAMarkThatCannotBeWrittenRevokesNothing(t *testing.T) {
 	f := newFixture(t, 8)
 	conns := &fakeConns{held: [][2]string{{alice, certKey(f.alice)}}}
 	f.b.Conns = conns
 	f.b.Store = markFailingStore{f.st}
+	f.b.Marks = store.NewMarks()
 	f.liveContext(t, "leaf1", "alice", alice, certKey(f.alice))
 	if _, err := f.b.Revoke(context.Background(), RevokeRequest{Principal: alice}); err == nil ||
-		!strings.Contains(err.Error(), "nothing was revoked") {
+		!strings.Contains(err.Error(), "nothing else was revoked") {
 		t.Fatalf("%v", err)
+	}
+	if !f.b.Marks.Holds(store.RevocationPrincipal, alice) {
+		t.Fatal("a mark whose write may have committed is not in the daemon's marks")
+	}
+	f.b.Store = f.st
+	if _, err := f.b.Lift(context.Background(), RevokeRequest{Principal: alice}); !errors.Is(err, ErrNotRevoked) {
+		t.Fatalf("the lift: %v", err)
+	}
+	if f.b.Marks.Holds(store.RevocationPrincipal, alice) {
+		t.Fatal("a lift the store answered not revoked left the daemon's mark")
 	}
 	if c, _ := f.st.GetContext(context.Background(), store.ContextKey{NAS: "leaf1", Username: "alice"}); !c.RevokedAt.IsZero() {
 		t.Fatal("a context was marked without the mark")
@@ -296,6 +310,35 @@ func TestAMarkThatCannotBeWrittenRevokesNothing(t *testing.T) {
 	}
 	if len(eventsOf(f.records(t), "revoke")) != 0 {
 		t.Fatal("a revocation that did not happen was recorded")
+	}
+}
+
+type markRefusingStore struct{ store.Store }
+
+func (markRefusingStore) PutRevocation(context.Context, store.Revocation) error {
+	return store.ErrRefused
+}
+
+// A mark the store refused wrote nothing, and the daemon's copy does not
+// keep it; a mark that stood already stays (Task 4b review M6).
+func TestARefusedMarkLeavesTheDaemonsMarksAsTheyWere(t *testing.T) {
+	f := newFixture(t, 8)
+	f.b.Store = markRefusingStore{f.st}
+	f.b.Marks = store.NewMarks()
+	if _, err := f.b.Revoke(context.Background(), RevokeRequest{Principal: alice}); err == nil ||
+		!strings.Contains(err.Error(), "nothing was revoked") {
+		t.Fatalf("%v", err)
+	}
+	if f.b.Marks.Holds(store.RevocationPrincipal, alice) {
+		t.Fatal("a refused mark is in the daemon's marks")
+	}
+	stood := store.Revocation{Kind: store.RevocationPrincipal, Key: alice, At: f.b.Now().Add(-time.Hour)}
+	f.b.Marks.Set(stood, true)
+	if _, err := f.b.Revoke(context.Background(), RevokeRequest{Principal: alice}); err == nil {
+		t.Fatal("a refused mark was not an error")
+	}
+	if !f.b.Marks.Holds(store.RevocationPrincipal, alice) {
+		t.Fatal("a refused repeat took out a mark that stood")
 	}
 }
 
@@ -979,6 +1022,25 @@ func TestRevokeAndLiftKeepTheDaemonsMarks(t *testing.T) {
 	}
 	if f.b.Marks.RevokedAt(alice).IsZero() {
 		t.Fatal("a revocation left the daemon's marks without it")
+	}
+	// A repeat keeps the time of the mark that stands, as the store does.
+	first := f.b.Marks.Standing(alicePrincipal, "")
+	f.now = f.now.Add(time.Minute)
+	if _, err := f.b.Revoke(ctx, RevokeRequest{Principal: alicePrincipal, Origin: "t"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.b.Marks.Standing(alicePrincipal, ""); !got.Equal(first) {
+		t.Fatalf("a repeat moved the daemon's mark from %v to %v", first, got)
+	}
+	// A mark the store holds and the daemon's copy lacks takes the store's
+	// time, not the one this revocation was sent with.
+	f.b.Marks = store.NewMarks()
+	f.now = f.now.Add(time.Minute)
+	if _, err := f.b.Revoke(ctx, RevokeRequest{Principal: alicePrincipal, Origin: "t"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.b.Marks.Standing(alicePrincipal, ""); !got.Equal(first) {
+		t.Fatalf("the daemon's mark is at %v, the store's at %v", got, first)
 	}
 	if _, err := f.b.Lift(ctx, RevokeRequest{Principal: alicePrincipal}); err != nil {
 		t.Fatal(err)

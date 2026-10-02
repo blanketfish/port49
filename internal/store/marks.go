@@ -8,7 +8,8 @@ import (
 // Marks is the daemon's copy of the standing revocation marks (plan 7d;
 // spec §13, decision 35). The store is the authority: port49d loads every
 // mark from it at start, before any listener binds, and the broker adds a
-// mark once its write has landed and removes one once its lift has. The
+// mark before its write is sent, keeping it unless the store refused the
+// write, and removes one once its lift has. The
 // authorizer, the enable gate and a receipt's replay read it on every
 // request, so a context its principal or certificate names is denied
 // whatever the record says: a record put back from before the revocation,
@@ -41,6 +42,28 @@ func (m *Marks) Set(r Revocation, on bool) {
 	if _, ok := m.m[k]; !ok {
 		m.m[k] = r.At
 	}
+}
+
+// Put puts r in force at r.At, replacing the time of a mark already in
+// force: the broker's correction once the store says which mark stands.
+func (m *Marks) Put(r Revocation) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.m[[2]string{r.Kind, r.Key}] = r.At
+}
+
+// Holds reports whether a mark for (kind, key) is in force.
+func (m *Marks) Holds(kind, key string) bool {
+	if m == nil {
+		return false
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	_, ok := m.m[[2]string{kind, key}]
+	return ok
 }
 
 // RevokedAt is when c stands revoked: the later of its own RevokedAt and

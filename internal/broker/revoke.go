@@ -198,17 +198,27 @@ func (b *Broker) Revoke(ctx context.Context, req RevokeRequest) (RevokeReport, e
 	defer cancel()
 	now := b.Now()
 	mark := store.Revocation{Kind: kind, Key: key, At: now, Origin: req.Origin}
+	// In force for the daemon's authorizations before the store's write is
+	// sent (plan 7d; Task 4b review M6): a write that commits and whose
+	// reply is lost leaves the store's mark standing, and the daemon's
+	// copy must not be the one that lacks it. Only a refusal that wrote
+	// nothing takes it out again, and only when it did not stand already.
+	held := b.Marks.Holds(kind, key)
+	b.Marks.Set(mark, true)
 	if err := b.Store.PutRevocation(ctx, mark); err != nil {
-		return RevokeReport{}, fmt.Errorf("broker: the revocation could not be recorded, so nothing was revoked (%w); "+
-			fallback, err)
+		if !held && (errors.Is(err, store.ErrIncompleteMark) || errors.Is(err, store.ErrRefused)) {
+			b.Marks.Set(mark, false)
+			return RevokeReport{}, fmt.Errorf("broker: the revocation was refused, so nothing was revoked (%w); "+
+				fallback, err)
+		}
+		return RevokeReport{}, fmt.Errorf("broker: the revocation could not be recorded, so nothing else was "+
+			"revoked; this port49d denies what it names until a lift or a restart (%w); "+fallback, err)
 	}
 	rep := RevokeReport{Request: req, By: kind, Mark: mark, decimal: decimal}
 	if got, err := b.Store.GetRevocation(ctx, kind, key); err == nil {
 		rep.Mark = got // an earlier mark stands, with its own time
 	}
-	// In force for the daemon's authorizations from here (plan 7d), as
-	// the store's mark is for its logins and mints.
-	b.Marks.Set(rep.Mark, true)
+	b.Marks.Put(rep.Mark)
 	if kind == store.RevocationPrincipal {
 		_, named := b.Policy.Load().SubjectOf(key)
 		rep.Unnamed = !named
@@ -295,6 +305,9 @@ func (b *Broker) Lift(ctx context.Context, req RevokeRequest) (RevokeReport, err
 	cur, err := b.Store.GetRevocation(ctx, kind, key)
 	switch {
 	case errors.Is(err, store.ErrNotFound):
+		// The daemon's copy may hold a mark whose write failed (Revoke);
+		// the store, which is the authority, holds none.
+		b.Marks.Set(store.Revocation{Kind: kind, Key: key}, false)
 		return RevokeReport{}, ErrNotRevoked
 	case err != nil:
 		return RevokeReport{}, fmt.Errorf("broker: reading the revocation: %w", err)

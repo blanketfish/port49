@@ -376,7 +376,7 @@ func TestARevocationOnAHungStoreGivesUpAtTheDeadlineAndSaysSo(t *testing.T) {
 	p := adminOverBroker(t, st, 200*time.Millisecond)
 	start := time.Now()
 	r, err := ask(p, admin.Request{Op: "revoke", Principal: "user:alice@example.com"})
-	if err != nil || r.Partial || !strings.Contains(r.Error, "nothing was revoked") ||
+	if err != nil || r.Partial || !strings.Contains(r.Error, "nothing else was revoked") ||
 		!strings.Contains(r.Error, "deadline exceeded") || !strings.Contains(r.Error, "broker.policy_file") {
 		t.Fatalf("%+v, %v", r, err)
 	}
