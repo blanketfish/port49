@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -324,8 +325,22 @@ type EtcdConfig struct {
 	// StartTimeoutSet is the start_timeout key, a pointer so an absent key
 	// (30s) is told from an explicit 0 (wait forever), as limitsYAML does
 	// for its windows. StartTimeout is its resolved value: 0, or 5s to 10m.
-	StartTimeoutSet *time.Duration `yaml:"start_timeout"`
-	StartTimeout    time.Duration  `yaml:"-"`
+	StartTimeoutSet *zeroDuration `yaml:"start_timeout"`
+	StartTimeout    time.Duration `yaml:"-"`
+}
+
+// zeroDuration is a duration that may also be written as a bare 0, as
+// the spec writes start_timeout's "wait forever" (decision 35): yaml.v3
+// alone refuses an integer for a time.Duration. Any other bare number
+// has no unit and is still refused.
+type zeroDuration time.Duration
+
+func (z *zeroDuration) UnmarshalYAML(n *yaml.Node) error {
+	if n.Kind == yaml.ScalarNode && n.Value == "0" {
+		*z = 0
+		return nil
+	}
+	return n.Decode((*time.Duration)(z))
 }
 
 // EtcdIdentity is one component's client certificate and key. The key
@@ -866,7 +881,7 @@ func Load(path string) (Config, error) {
 		c.Broker = &b
 	}
 	if c.Store, err = checkStore(f.Store, f.Broker != nil, f.AdminSocket != ""); err != nil {
-		return Config{}, err
+		return Config{}, fmt.Errorf("config: %w", err)
 	}
 
 	if c.Keys, err = checkKeySets(c.Keys, raw); err != nil {
@@ -1540,11 +1555,16 @@ func checkStore(s storeYAML, hasBroker, hasAdminSocket bool) (StoreConfig, error
 	if len(e.Endpoints) == 0 {
 		return StoreConfig{}, errors.New("store.etcd.endpoints is empty")
 	}
+	// As checkService: no user information, where a credential would sit,
+	// and no path, query or fragment, where a token would be pasted. None
+	// is printed; the index names the endpoint.
 	for i, ep := range e.Endpoints {
 		u, err := url.Parse(ep)
-		if err != nil || u.Scheme != "https" || u.Host == "" {
-			return StoreConfig{}, fmt.Errorf("store.etcd.endpoints[%d] %q: must be https://host:port: port49d "+
-				"authenticates to etcd by client certificate (decision 35)", i, ep)
+		if err != nil || u.Scheme != "https" || u.Host == "" || u.Opaque != "" || u.User != nil ||
+			(u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+			return StoreConfig{}, fmt.Errorf("store.etcd.endpoints[%d] must be https://host:port, with no user "+
+				"information, path, query or fragment: port49d authenticates to etcd by client certificate "+
+				"(decision 35)", i)
 		}
 	}
 	e.Prefix = or(e.Prefix, "/port49/")
@@ -1597,7 +1617,7 @@ func checkStore(s storeYAML, hasBroker, hasAdminSocket bool) (StoreConfig, error
 	// start_timeout: absent is 30s; 0 is wait forever (pre-flight I19).
 	e.StartTimeout = 30 * time.Second
 	if e.StartTimeoutSet != nil {
-		e.StartTimeout = *e.StartTimeoutSet
+		e.StartTimeout = time.Duration(*e.StartTimeoutSet)
 	}
 	if e.StartTimeout != 0 && (e.StartTimeout < 5*time.Second || e.StartTimeout > 10*time.Minute) {
 		return StoreConfig{}, fmt.Errorf("store.etcd.start_timeout %v: must be 0 (wait for as long as it takes), "+
@@ -1626,14 +1646,23 @@ func checkStore(s storeYAML, hasBroker, hasAdminSocket bool) (StoreConfig, error
 	return out, nil
 }
 
-// readableFile refuses a path that is empty or not a regular file. A
-// private key's mode and owner are keyfile's, at the read (Task 12).
+// readableFile refuses a path that is empty, relative (port49d's working
+// directory is not a place its trust roots should depend on, as
+// checkService says), or not a regular file. A private key's mode and
+// owner are keyfile's, at the read (Task 12).
 func readableFile(name, path string) error {
 	if path == "" {
 		return fmt.Errorf("%s is missing", name)
 	}
+	if !filepath.IsAbs(path) {
+		return fmt.Errorf("%s must be an absolute path", name)
+	}
 	fi, err := os.Stat(path)
 	if err != nil {
+		var pe *fs.PathError
+		if errors.As(err, &pe) {
+			err = pe.Err // the path is printed once, below
+		}
 		return fmt.Errorf("%s %s: %w", name, path, err)
 	}
 	if !fi.Mode().IsRegular() {
@@ -1655,7 +1684,11 @@ func StoreOf(raw []byte) (StoreConfig, error) {
 	if err := dec.Decode(&f); err != nil && err != io.EOF {
 		return StoreConfig{}, fmt.Errorf("config: %w; check the key spelling against the port49d.yaml schema", decodeFault(err))
 	}
-	return checkStore(f.Store, f.Broker != nil, f.AdminSocket != "")
+	s, err := checkStore(f.Store, f.Broker != nil, f.AdminSocket != "")
+	if err != nil {
+		return StoreConfig{}, fmt.Errorf("config: %w", err)
+	}
+	return s, nil
 }
 
 // envName is what an environment variable's name looks like. A secret_env

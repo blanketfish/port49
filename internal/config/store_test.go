@@ -55,7 +55,7 @@ func TestEtcdTakesItsDefaults(t *testing.T) {
 // 0 are told apart.
 func TestAStartTimeoutOfZeroWaitsForever(t *testing.T) {
 	y := etcdYAML(storeFiles(t))
-	zero := time.Duration(0)
+	zero := zeroDuration(0)
 	y.Etcd.StartTimeoutSet = &zero
 	s, err := checkStore(y, true, true)
 	if err != nil || s.Etcd.StartTimeout != 0 {
@@ -88,6 +88,16 @@ func TestTheStoreRefusesWhatWouldRunUnsafely(t *testing.T) {
 			s.PacketDeadline, s.Etcd.CallTimeout = 200*time.Millisecond, time.Second
 		}, true, true, "at least store.etcd.call_timeout"},
 		{"a prefix not absolute", func(s *storeYAML) { s.Etcd.Prefix = "port49/" }, true, true, "store.etcd.prefix"},
+		{"an endpoint with a path", func(s *storeYAML) { s.Etcd.Endpoints = []string{"https://etcd-0:2379/v3"} }, true, true,
+			"store.etcd.endpoints[0] must be https://host:port, with no user information, path, query or fragment"},
+		{"an endpoint with a query", func(s *storeYAML) { s.Etcd.Endpoints = []string{"https://etcd-0:2379?x=1"} }, true,
+			true, "store.etcd.endpoints[0] must be https://host:port"},
+		// port49d's working directory is not a place its trust roots should
+		// depend on, as inventory.service's files (checkService).
+		{"a relative ca_file", func(s *storeYAML) { s.Etcd.CAFile = "ca.pem" }, true, true,
+			"store.etcd.ca_file must be an absolute path"},
+		{"a relative key_file", func(s *storeYAML) { s.Etcd.Broker.KeyFile = "b-key.pem" }, true, true,
+			"store.etcd.broker.key_file must be an absolute path"},
 		{"a hold too short", func(s *storeYAML) { s.Etcd.HoldTTL = time.Second }, true, true, "store.etcd.hold_ttl"},
 		// The floor (8b re-review 2 R2-I1, round 3b): clientv3's keepalive
 		// loop checks every 500ms, so a healthy lease can report as little as
@@ -96,7 +106,7 @@ func TestTheStoreRefusesWhatWouldRunUnsafely(t *testing.T) {
 		// shrinks to 0.5s or less.
 		{"a hold under 10s", func(s *storeYAML) { s.Etcd.HoldTTL = 9 * time.Second }, true, true,
 			"store.etcd.hold_ttl 9s: must be 10s to 1m0s"},
-		{"a start timeout too short", func(s *storeYAML) { d := time.Second; s.Etcd.StartTimeoutSet = &d }, true, true,
+		{"a start timeout too short", func(s *storeYAML) { d := zeroDuration(time.Second); s.Etcd.StartTimeoutSet = &d }, true, true,
 			"store.etcd.start_timeout"},
 	} {
 		y := etcdYAML(dir)
@@ -104,5 +114,65 @@ func TestTheStoreRefusesWhatWouldRunUnsafely(t *testing.T) {
 		if _, err := checkStore(y, c.broker, c.admin); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: %v, want %q", c.name, err, c.want)
 		}
+	}
+}
+
+// An endpoint is never echoed: user information there is a password, and
+// the error goes to stderr and the journal. It is refused, named by its
+// index alone (review I1).
+func TestAnEndpointsCredentialIsNeverPrinted(t *testing.T) {
+	for _, ep := range []string{"https://alice:hunter2@etcd-0:2379", "http://alice:hunter2@etcd-0:2379"} {
+		y := etcdYAML(storeFiles(t))
+		y.Etcd.Endpoints = []string{"https://etcd-1:2379", ep}
+		_, err := checkStore(y, true, true)
+		if err == nil || !strings.Contains(err.Error(), "store.etcd.endpoints[1]") ||
+			strings.Contains(err.Error(), "alice") || strings.Contains(err.Error(), "hunter2") {
+			t.Fatalf("%s: %v", ep, err)
+		}
+	}
+}
+
+// storeDoc is a port49d.yaml whose store is etcd, with startTimeout as
+// the start_timeout line ("" for none).
+func storeDoc(dir, startTimeout string) string {
+	doc := "admin_socket: /run/port49/admin.sock\nbroker: {listen: \":8443\"}\nstore:\n  backend: etcd\n  etcd:\n" +
+		"    endpoints: [https://etcd-0:2379]\n    ca_file: " + filepath.Join(dir, "ca.pem") + "\n" +
+		"    daemon: {cert_file: " + filepath.Join(dir, "d.pem") + ", key_file: " + filepath.Join(dir, "d-key.pem") + "}\n" +
+		"    broker: {cert_file: " + filepath.Join(dir, "b.pem") + ", key_file: " + filepath.Join(dir, "b-key.pem") + "}\n"
+	if startTimeout != "" {
+		doc += "    start_timeout: " + startTimeout + "\n"
+	}
+	return doc
+}
+
+// start_timeout: 0, as the spec writes it, decodes and waits forever
+// (pre-flight I19): yaml.v3 alone refuses a bare 0 for a duration.
+func TestABareZeroStartTimeoutWaitsForever(t *testing.T) {
+	dir := storeFiles(t)
+	for _, c := range []struct {
+		line string
+		want time.Duration
+	}{{"0", 0}, {"0s", 0}, {"45s", 45 * time.Second}, {"", 30 * time.Second}} {
+		s, err := StoreOf([]byte(storeDoc(dir, c.line)))
+		if err != nil || s.Etcd.StartTimeout != c.want {
+			t.Fatalf("start_timeout %q: %+v %v, want %v", c.line, s.Etcd, err, c.want)
+		}
+	}
+	if _, err := StoreOf([]byte(storeDoc(dir, "5"))); err == nil {
+		t.Fatal("start_timeout: 5 loaded: a bare number other than 0 has no unit")
+	}
+	// The unmarshaler is the scalar's alone, so store.etcd is still decoded
+	// strictly: a misspelt key beside it is refused, never ignored.
+	if _, err := StoreOf([]byte(storeDoc(dir, "0") + "    start_timout: 0\n")); err == nil ||
+		!strings.Contains(err.Error(), "an unknown field") {
+		t.Fatalf("a misspelt key beside start_timeout: %v", err)
+	}
+}
+
+// A store refusal reads as every other load refusal does (review M1).
+func TestAStoreRefusalIsAConfigError(t *testing.T) {
+	_, err := StoreOf([]byte("store: {backend: redis}\n"))
+	if err == nil || !strings.HasPrefix(err.Error(), `config: store.backend "redis"`) {
+		t.Fatalf("%v", err)
 	}
 }
