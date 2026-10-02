@@ -6702,15 +6702,20 @@ review (the owner may override them).*
      start;
   5. deletes every unspent token, as a restart always did, and marks every key superseded,
      so an idempotent replay mints again;
-  6. carries the policy in force into every live context the store kept. A context sealed
-     under a key this port49d does not hold, which every path denies anyway, is left unjudged:
-     it keeps `port49_policy_refresh_pending` at 1, is judged by a later pass (§5.1.3), and
-     never stops the start. Any other context left unjudged holds the start exactly as an
-     outage does, said, counted and retried with the listeners closed: a principal whose
-     contexts could not be looked up, or a context still changing after every attempt. Those
-     contexts open, so left unjudged they could serve a grant the policy in force withdrew. On
-     etcd that lookup fails only as the store being unavailable, and nothing else writes a
-     context before the listeners open;
+  6. carries the policy in force into every live context the store kept. What it leaves
+     unjudged keeps `port49_policy_refresh_pending` at 1, and is one of:
+     - **a context sealed under a key this port49d does not hold.** Every path denies it
+       anyway, so it never stops the start, and a later pass judges it (§5.1.3);
+     - **a context still changing after every attempt.** Another writer is changing it: the
+       broker's mint or session refresh, the sweep, or a process outside the hold. Expect
+       that rarely at the start. It never stops the start, because holding the start on it
+       would let one busy session keep port49d dark without end. A refresh pass retries it
+       at once after the listeners open, not at the next interval. Until then it answers from
+       the policy last carried into it, and the marks are read on every request;
+     - **a principal whose contexts could not be looked up.** Those contexts open and are
+       unjudged, so they could serve a grant the policy in force withdrew. That holds the
+       start exactly as an outage does: said, counted, and retried with the listeners closed.
+       On etcd that lookup fails only as the store being unavailable;
   7. seals the ledger, the start having read every kept context;
   8. binds TACACS+.
 
