@@ -449,3 +449,44 @@ func SelfRevocationBindsToTheRead(t *testing.T, b Backend) {
 		t.Fatalf("bob's context: %+v %v", got, err)
 	}
 }
+
+// IndexKeysAreExact: a lookup by principal, sid or certificate finds the
+// refs indexed under exactly that key, whatever the keys hold: one that is
+// the start of another ("user:al", "user:alice"), and a device name, sid or
+// certificate key with "/" or "%" in it (plan 7d, Review Focus 3).
+func IndexKeysAreExact(t *testing.T, b Backend) {
+	ctx := context.Background()
+	s := b.New(t, func() time.Time { return t0 })
+	refs := []struct {
+		ref            store.ContextRef
+		principal, sid string
+		cert           string
+	}{
+		{store.ContextRef{NAS: "leaf-01", Username: "al"}, "user:al", "s/1", store.CertKey("CN=A/O=B", "01")},
+		{store.ContextRef{NAS: "leaf-01", Username: "alice"}, "user:alice", "s/10", store.CertKey("CN=A/O=B", "010")},
+		{store.ContextRef{NAS: "rack/1%2Fleaf", Username: "al"}, "user:al%2F", "s%2F1", store.CertKey("CN=A", "01")},
+	}
+	for _, r := range refs {
+		if err := s.PutContext(ctx, store.ContextKey{NAS: r.ref.NAS, Username: r.ref.Username},
+			store.Context{CtxID: "c", Principal: r.principal, Username: r.ref.Username}, time.Hour); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.IndexContext(ctx, r.principal, r.sid, r.cert, r.ref, time.Hour); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, r := range refs {
+		for _, q := range []struct {
+			f   func(context.Context, string) ([]store.ContextRef, error)
+			key string
+		}{{s.ContextsByPrincipal, r.principal}, {s.ContextsBySid, r.sid}, {s.ContextsByCert, r.cert}} {
+			got, err := q.f(ctx, q.key)
+			if err != nil || len(got) != 1 || got[0] != r.ref {
+				t.Fatalf("lookup %q: %v %v, want only %v", q.key, got, err, r.ref)
+			}
+		}
+	}
+	if ps, err := s.ActivePrincipals(ctx); err != nil || len(ps) != 3 {
+		t.Fatalf("active principals: %v %v", ps, err)
+	}
+}

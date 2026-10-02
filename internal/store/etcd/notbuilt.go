@@ -12,20 +12,6 @@ import (
 // Task 8.
 var errNotBuilt = errors.New("etcd: not built yet (plan 7d)")
 
-func (s *Store) ContextsByPrincipal(context.Context, string) ([]store.ContextRef, error) {
-	return nil, errNotBuilt
-}
-
-func (s *Store) ContextsBySid(context.Context, string) ([]store.ContextRef, error) {
-	return nil, errNotBuilt
-}
-
-func (s *Store) ContextsByCert(context.Context, string) ([]store.ContextRef, error) {
-	return nil, errNotBuilt
-}
-
-func (s *Store) ActivePrincipals(context.Context) ([]string, error) { return nil, errNotBuilt }
-
 func (s *Store) ReserveIdempotency(context.Context, string, string, store.Idempotency) (store.Idempotency, bool, error) {
 	return store.Idempotency{}, false, errNotBuilt
 }

@@ -300,3 +300,85 @@ func TestAContextWriteReturnsItsRevision(t *testing.T) {
 	mod, err = s.rewriteContext(ctx, k, got.Rev, got, time.Hour, false) // a ttl reads again
 	check("a rewrite with a ttl", mod, err)
 }
+
+// The index family: lookups, extension, the login's one step read back
+// through them, active principals (plan 7d Task 7). The login's races run
+// here with backend's RaceRounds and Stagger: they are what guards the
+// mark compare and the index compare in the login's transaction (Task 6
+// review C-1).
+func TestIndexesOnEtcd(t *testing.T) {
+	run(t, map[string]func(*testing.T){
+		"Indexes":                         func(t *testing.T) { storetest.Indexes(t, backend) },
+		"ExtendingCarriesIndexEntries":    func(t *testing.T) { storetest.ExtendingCarriesIndexEntries(t, backend) },
+		"ExtendingNeverShortensOrCreates": func(t *testing.T) { storetest.ExtendingNeverShortensOrCreates(t, backend) },
+		"ExtendingFollowsARotatedSid":     func(t *testing.T) { storetest.ExtendingFollowsARotatedSid(t, backend) },
+		"ExtendingCarriesEveryJoinedCredential": func(t *testing.T) {
+			storetest.ExtendingCarriesEveryJoinedCredential(t, backend)
+		},
+		"BlankKeysAreNeverIndexed": func(t *testing.T) { storetest.BlankKeysAreNeverIndexed(t, backend) },
+		"UnindexRefClearsEveryKey": func(t *testing.T) { storetest.UnindexRefClearsEveryKey(t, backend) },
+		"SwapLoginIsOneStep":       func(t *testing.T) { storetest.SwapLoginIsOneStep(t, backend) },
+		"LoginsRaceToOneIndex":     func(t *testing.T) { storetest.LoginsRaceToOneIndex(t, backend) },
+		"JoinHonoursAStandingMark": func(t *testing.T) { storetest.JoinHonoursAStandingMark(t, backend) },
+		"IndexKeysAreExact":        func(t *testing.T) { storetest.IndexKeysAreExact(t, backend) },
+		"LoginRacesARevocationByMark": func(t *testing.T) {
+			storetest.LoginRacesARevocationByMark(t, backend)
+		},
+		"IndexWritesRaceAContextWrite": func(t *testing.T) { storetest.IndexWritesRaceAContextWrite(t, backend) },
+	})
+}
+
+// The sweep prunes an index record's expired entries and removes the
+// lookup entries no record lists; it never removes one a record lists,
+// so a revocation never misses a ref the index holds (Ruling 6).
+func TestTheSweepRemovesOnlyWhatNothingLists(t *testing.T) {
+	ctx := context.Background()
+	now := t0
+	s := onShared(t, func() time.Time { return now })
+	keep := store.ContextRef{NAS: "leaf-01", Username: "keep"}
+	gone := store.ContextRef{NAS: "leaf-01", Username: "gone"}
+	for _, r := range []store.ContextRef{keep, gone} {
+		if err := s.IndexContext(ctx, "user:a", "sid-"+r.Username, "", r, time.Hour); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.UnindexRef(ctx, gone); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.IndexContext(ctx, "", "short", "", keep, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(2 * time.Minute) // "short" has expired; the hour has not
+	pruned, removed, err := s.Sweep(ctx)
+	if err != nil || pruned != 1 || removed != 3 { // gone's principal and sid, keep's "short"
+		t.Fatalf("Sweep = %d pruned, %d removed, %v", pruned, removed, err)
+	}
+	if refs, _ := s.ContextsByPrincipal(ctx, "user:a"); len(refs) != 1 || refs[0] != keep {
+		t.Fatalf("after the sweep: %v", refs)
+	}
+	resp, err := s.ctx.Get(ctx, s.k.lookups(famByPrincipal, "user:a"), clientv3.WithPrefix(), clientv3.WithCountOnly())
+	if err != nil || resp.Count != 1 {
+		t.Fatalf("lookup entries left under user:a: %v %v", resp, err)
+	}
+}
+
+// A record a lookup or a walk cannot decode is an error, never a ref left
+// out: a revocation that skipped it would miss a live context (pre-flight
+// M18).
+func TestAnUndecodableIndexRecordIsAnError(t *testing.T) {
+	ctx := context.Background()
+	s := onShared(t, func() time.Time { return t0 })
+	ref := store.ContextRef{NAS: "leaf-01", Username: "alice"}
+	if err := s.IndexContext(ctx, "user:a", "", "", ref, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ctx.Put(ctx, s.k.indexed(ref), "not json"); err != nil {
+		t.Fatal(err)
+	}
+	if refs, err := s.ContextsByPrincipal(ctx, "user:a"); err == nil {
+		t.Fatalf("a lookup over an undecodable record answered %v", refs)
+	}
+	if ps, err := s.ActivePrincipals(ctx); err == nil {
+		t.Fatalf("a walk over an undecodable record answered %v", ps)
+	}
+}

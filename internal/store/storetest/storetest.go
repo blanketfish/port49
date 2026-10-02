@@ -1043,6 +1043,7 @@ func Run(t *testing.T, b Backend) {
 		{"IndexWritesRaceAContextWrite", IndexWritesRaceAContextWrite},
 		{"FailReceiptSurvivesARacingExtend", FailReceiptSurvivesARacingExtend},
 		{"RedeemOrDeleteNotBoth", RedeemOrDeleteNotBoth},
+		{"IndexKeysAreExact", IndexKeysAreExact},
 	} {
 		p := p
 		t.Run(p.name, func(t *testing.T) { p.run(t, b) })
