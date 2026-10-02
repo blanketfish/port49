@@ -626,7 +626,11 @@ func run(parent context.Context, cfgPath string) error {
 	if keys.Previous != nil {
 		tags = token.NewTagWindow(tagKey, token.TagKey(keys.Previous.Bytes[:]))
 	}
-	st := crypt.Wrap(memory.New(time.Now), keys, m.CryptOpenFailures)
+	// One ledger for the process: it denies a context another login wrote
+	// at a key, and it is sealed below, once the start has read every
+	// context it keeps (plan 7d; decision 35).
+	ledger := crypt.NewLedger()
+	st := crypt.Wrap(memory.New(time.Now), keys, m.CryptOpenFailures, crypt.WithLedger(ledger))
 
 	spool, err := acct.NewSpool(cfg.Accounting.SpoolCapacity, cfg.Accounting.SpoolPath, log, m)
 	if err != nil {
@@ -707,6 +711,11 @@ func run(parent context.Context, cfgPath string) error {
 		}
 		brk.Marks = authMarks
 	}
+	// The memory store starts empty, so no context is kept to read: the
+	// ledger is sealed now, before any listener binds, and from here a key
+	// this process never read admits only what it writes there (re-check 2
+	// I1). On a persistent store the start reads its kept contexts first.
+	ledger.Seal()
 	// Certificate status (spec §5.1.4; decision 33): the kept lists are put
 	// in force now, after the marks and before any listener binds. That is
 	// local and fast, so it never delays device AAA; nothing is fetched
