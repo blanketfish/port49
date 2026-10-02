@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -14,6 +15,8 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/rhwendt/port49/internal/agent"
+	"github.com/rhwendt/port49/internal/broker/api"
 	"github.com/rhwendt/port49/internal/bundle"
 	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/decision"
@@ -72,8 +75,43 @@ func explainCmd(args []string, stdout, stderr io.Writer) int {
 	device := fs.String("device", "", "the device, by its inventory name")
 	command := fs.String("command", "", "the command line, quoted; omit it to see the session")
 	attrs := fs.Bool("show-attributes", false, "show the session attributes and where each came from")
+	socket := fs.String("socket", agent.SocketPath(), "the agent's socket, when no --policy is given")
 	if err := fs.Parse(args); err != nil {
 		return 2
+	}
+	// With neither file it asks the broker, through the agent, from the policy
+	// in force (POST /v1/explain; decision 34). --subject and the session
+	// attributes are the offline form's alone.
+	if files.policy == "" && files.inventory == "" {
+		switch {
+		case *subject != "":
+			fmt.Fprintln(stderr, "port49 explain: --subject needs --policy and --inventory; over the broker name a "+
+				"--principal, or nobody for yourself")
+			return 2
+		case *attrs:
+			fmt.Fprintln(stderr, "port49 explain: --show-attributes needs --policy and --inventory")
+			return 2
+		case *device == "" || fs.NArg() != 0:
+			fmt.Fprint(stderr, usage)
+			return 2
+		}
+		e, err := agent.NewClient(*socket).Explain(context.Background(),
+			api.ExplainRequest{Device: *device, Command: *command, Principal: *principal})
+		var refused *agent.APIError
+		switch {
+		case errors.Is(err, agent.ErrNoAgent):
+			fmt.Fprintf(stderr, "port49 explain: no agent at %s; run 'port49 login', or give --policy and --inventory\n", *socket)
+			return 1
+		case errors.As(err, &refused) && refused.Code == "api_right_missing":
+			fmt.Fprintln(stderr, "port49 explain: refused: explaining another principal needs the api: explain_others "+
+				"right, which your subject does not declare")
+			return 1
+		case err != nil:
+			fmt.Fprintln(stderr, "port49 explain:", unprefixed(err))
+			return 1
+		}
+		fmt.Fprint(stdout, e.Text)
+		return 0
 	}
 	if (*subject == "") == (*principal == "") || *device == "" || files.missing() || fs.NArg() != 0 {
 		fmt.Fprint(stderr, usage)

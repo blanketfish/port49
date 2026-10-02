@@ -92,9 +92,11 @@ func TestRevokeAsksTheAdminSocket(t *testing.T) {
 	}
 
 	out.Reset()
+	errb.Reset()
 	if code := run([]string{"revoke", "--socket", socket, "--list"}, &out, &errb); code != 0 ||
-		!strings.Contains(out.String(), "no revocation is in force") {
-		t.Fatalf("exit %d: %q", code, out.String())
+		!strings.Contains(out.String(), "no revocation is in force") ||
+		!strings.Contains(errb.String(), "leaves no mark and is not listed") {
+		t.Fatalf("exit %d: %q %q", code, out.String(), errb.String())
 	}
 	mu.Lock()
 	partial = true
