@@ -225,7 +225,7 @@ func (b *Broker) RefreshSession(ctx context.Context, principal string, cred stor
 	if err != nil {
 		return rep, err
 	}
-	var pass RefreshReport
+	pass := RefreshReport{session: true}
 	quarantined := map[string]bool{}
 	for _, ref := range refs {
 		k := store.ContextKey{NAS: ref.NAS, Username: ref.Username}

@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/netip"
 	"strings"
 	"testing"
@@ -90,6 +91,12 @@ func TestARefreshExtendsToThePolicysCeiling(t *testing.T) {
 	if n := testutil.ToFloat64(f.b.Metrics.SessionRefreshes.WithLabelValues("extended")); n != 1 {
 		t.Fatalf("port49_session_refreshes_total{outcome=extended} = %v", n)
 	}
+	// The judgment before the extension is the session refresh's, not a
+	// policy refresh's: an alert on the policy metric must not see it
+	// (final review M-2).
+	if n := testutil.CollectAndCount(f.b.Metrics.ContextRefreshes); n != 0 {
+		t.Fatalf("a session refresh moved port49_context_refreshes_total: %d series", n)
+	}
 	f.advance(4*time.Hour + 20*time.Minute)
 	if r := postOn(t, c, br, "/v1/tokens", `{"devices":["leaf1"]}`); r.status != 200 {
 		t.Fatalf("a mint after the refresh, past the handshake's ceiling: %s", reply(r.status, r.body))
@@ -134,7 +141,17 @@ func TestARefreshExtendsOnlyWhatThePolicyKept(t *testing.T) {
 	f.advance(11 * time.Second)
 	f.loadPolicy(t, strings.Replace(testPolicy, `permit: ["**"]`, `permit: ["show **"]`, 1)) // leaf1's answer changes
 	f.b.Store = conflictingPolicyStore{f.st}
+	logs := &lockedBuffer{}
+	prev := log.Writer()
+	log.SetOutput(logs)
 	status, resp = refreshOn(t, c, br, f.alice)
+	log.SetOutput(prev)
+	// No retry follows a session refresh, so the line does not promise one
+	// (final review M-2).
+	if l := logs.String(); !strings.Contains(l, "still changing after") ||
+		!strings.Contains(l, "not extended; run 'port49 refresh' again") || strings.Contains(l, "left for the retry") {
+		t.Fatalf("the process log for a context that lost every race: %q", l)
+	}
 	seen := false
 	for _, s := range resp.Sessions {
 		if s.Device == "leaf1" {

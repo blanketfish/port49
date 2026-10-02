@@ -67,6 +67,12 @@ type RefreshReport struct {
 	// that expiry is already due: an expiry between At and the caller's clock
 	// is one no context has been judged after.
 	At time.Time
+	// session is set on the judgment a session refresh makes
+	// (RefreshSession). It is counted in port49_session_refreshes_total, not
+	// in the policy refresh's port49_context_refreshes_total, and nothing
+	// retries it: the operator runs `port49 refresh` again (final review
+	// M-2).
+	session bool
 }
 
 // Refresh carries the policy in force into everything the policies before it
@@ -468,8 +474,12 @@ func (b *Broker) refreshContext(ctx context.Context, cur *policy.Policy, priors 
 	// landing between every read and its write. A revocation never gets here
 	// (it does not compare), so this context keeps a policy the one in force
 	// would widen or narrow, and is left for the retry.
-	log.Printf("broker: refresh: the context for %q on %q was still changing after %d attempts; left for the retry",
-		ref.Username, ref.NAS, store.MaxJoinAttempts)
+	next := "left for the retry"
+	if rep.session {
+		next = "not extended; run 'port49 refresh' again"
+	}
+	log.Printf("broker: refresh: the context for %q on %q was still changing after %d attempts; %s",
+		ref.Username, ref.NAS, store.MaxJoinAttempts, next)
 	b.count(rep, "failed")
 	return "failed", fmt.Errorf("the context for %q on %q was still changing after %d attempts: %w", ref.Username,
 		ref.NAS, store.MaxJoinAttempts, store.ErrConflict)
@@ -700,7 +710,8 @@ func (b *Broker) decideRefresh(cur *policy.Policy, now time.Time, principal stri
 		MaxSessionAge: age}, body: body, rec: rec, outcome: "updated", age: age, shortens: shortens}
 }
 
-// count adds one context to the report and the metric.
+// count adds one context to the report, and to the policy refresh's metric
+// unless the judgment is a session refresh's.
 func (b *Broker) count(rep *RefreshReport, outcome string) {
 	switch outcome {
 	case "updated":
@@ -714,7 +725,9 @@ func (b *Broker) count(rep *RefreshReport, outcome string) {
 	case "failed":
 		rep.Failed++
 	}
-	b.Metrics.ContextRefreshes.WithLabelValues(outcome).Inc()
+	if !rep.session {
+		b.Metrics.ContextRefreshes.WithLabelValues(outcome).Inc()
+	}
 }
 
 // resolveFor is how the refresh resolves a context's principal, swapped in
