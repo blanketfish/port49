@@ -45,7 +45,9 @@ func TestAPIRevokeEndToEnd(t *testing.T) {
 		}
 		brokerYAML = []byte(strings.Replace(string(brokerYAML), "tests/lab/slice/policy.yaml",
 			"tests/lab/slice/api-policy.yaml", 1))
-		socket := filepath.Join(root, "tests", "lab", "logs", "api-revoke-admin.sock")
+		// Relative to the repository root, where port49d and revokeCLI both run,
+		// so the principal's report quotes no machine's checkout (review M3).
+		socket := filepath.Join("tests", "lab", "logs", "api-revoke-admin.sock")
 		cfg, err := l.derivedConfig("api-revoke", platformSessionAttributes[l.p.name],
 			string(brokerYAML)+"\nadmin_socket: "+socket+"\n")
 		if err != nil {
@@ -130,8 +132,10 @@ func TestAPIRevokeEndToEnd(t *testing.T) {
 		case !sessionOnly && !strings.HasPrefix(afterMine, "refused"):
 			fail("the next command after revoke --mine was not refused: %s", afterMine)
 		}
+		tok2Login := "refused"
 		if _, err := l.loginWithin(sliceUser, tok2, 60*time.Second, "show version"); err == nil {
 			fail("the token minted before revoke --mine still logged in")
+			tok2Login = "**logged in**"
 		}
 		recs := l.waitForRecords(off, 30*time.Second, func(rs []map[string]any) bool {
 			return redeemReason(rs, sha(tok2)) != ""
@@ -168,9 +172,17 @@ func TestAPIRevokeEndToEnd(t *testing.T) {
 		if keyCode != 0 || !strings.Contains(keyText, "ended the session on "+l.p.node+" ("+sliceUser+")") {
 			fail("the on-call's key revocation: exit %d: %s", keyCode, keyText)
 		}
+		if sessionOnly != strings.Contains(keyText, "not reached") ||
+			(sessionOnly && !strings.Contains(keyText, l.p.node+" ("+sliceUser+")")) {
+			fail("the key revocation's report and the platform disagree on reach: %s", keyText)
+		}
+		afterKey := "**no re-login session** (its login failed)"
 		if sh3 != nil {
-			afterKey := revokeOutcome(l.p.name, sh3, "show version", fail, "after the key revocation")
-			if !sessionOnly && !strings.HasPrefix(afterKey, "refused") {
+			afterKey = revokeOutcome(l.p.name, sh3, "show version", fail, "after the key revocation")
+			switch {
+			case sessionOnly && !strings.HasPrefix(afterKey, "printed its output"):
+				fail("Junos: the re-login session did not keep what it had at login: %s", afterKey)
+			case !sessionOnly && !strings.HasPrefix(afterKey, "refused"):
 				fail("the next command after the on-call's key revocation was not refused: %s", afterKey)
 			}
 		}
@@ -186,9 +198,12 @@ func TestAPIRevokeEndToEnd(t *testing.T) {
 		if markCode != 0 || !strings.Contains(markText, "every mint by "+slicePrincipal+" is refused") {
 			fail("the on-call's revocation of alice: exit %d: %s", markCode, markText)
 		}
+		revokeReport(markText, l.p.node, sessionOnly, "the on-call's principal", fail)
 		listText, _ := revokeCLI(socket, "--list")
+		listCell := "`--list` names `api user:" + oncallEmail + "`"
 		if !strings.Contains(listText, "(api user:"+oncallEmail+")") {
 			fail("port49 revoke --list does not name the on-call as the origin: %s", listText)
+			listCell = "`--list` **does not name** `api user:" + oncallEmail + "`: " + l29Cell(listText)
 		}
 		agentSaid, agentGone, _ := revokedMint(aliceSock, alicePID, l.p.node, "the principal's", fail)
 		liftText, ok := revokeCLI(socket, "--lift", "--principal", slicePrincipal)
@@ -220,28 +235,41 @@ func TestAPIRevokeEndToEnd(t *testing.T) {
 			}
 		}
 		gone := map[bool]string{true: "exited", false: "**kept running** (stopped by the test)"}
+		// On Junos --mine refused nothing (the open session kept what it had),
+		// so there is no refused session to re-admit; the row says so (review I2).
+		reAdmitRow := "the session `--mine` refused, after that login"
+		junosNote := ""
+		if sessionOnly {
+			reAdmitRow = "the open session (never refused: Junos keeps what it had at login), after that login"
+			junosNote = "On Junos no command was refused by `--mine` or by the key revocation, so the re-admission " +
+				"(decision 15's join) is not observable here: the open sessions ran throughout, as each report " +
+				"names them not reached.\n\n"
+		}
 		obs := fmt.Sprintf("| Step | What happened |\n|---|---|\n"+
 			"| carol (no right): `port49 revoke --via-agent --principal %s` | exit %d: %s |\n"+
 			"| carol (no right): `--via-agent --device %s --username %s` | exit %d: %s |\n"+
 			"| alice's `show version` after both | %s |\n"+
 			"| alice: `port49 revoke --mine` | exit %d; report below |\n"+
 			"| alice's `show version` in the same session after it | %s |\n"+
-			"| a login with a token minted before it, unspent | refused, `%s` |\n"+
+			"| a login with a token minted before it, unspent | %s, `%s` |\n"+
 			"| a login with a token minted after it | %s |\n"+
-			"| the session `--mine` refused, after that login | %s |\n"+
+			"| %s | %s |\n"+
 			"| bob (revoke_others): `--via-agent --device %s --username %s` | exit %d; report below |\n"+
+			"| alice's re-login session's `show version` after it | %s |\n"+
 			"| a login after the key revocation | %s |\n"+
-			"| bob: `--via-agent --principal %s` | exit %d; `--list` names `api user:%s` |\n"+
+			"| bob: `--via-agent --principal %s` | exit %d; %s |\n"+
 			"| alice's agent's next mint | %s: %s; the agent %s |\n"+
 			"| a lift on the admin socket, a new agent, a mint and a login | %s |\n\n"+
-			"Revoke records by `by` and reason: %v.\n\n"+
+			"%sRevoke records by `by` and reason: %v.\n\n"+
+			"carol's refusals, in full:\n\n```\n%s\n%s\n```\n\n"+
 			"`port49 revoke --mine` printed:\n\n```\n%s\n```\n\n"+
 			"The key revocation:\n\n```\n%s\n```\n\n"+
 			"The principal's:\n\n```\n%s\n```\n",
 			slicePrincipal, peerCode, l29Cell(peerText), l.p.node, sliceUser, peerKeyCode, l29Cell(peerKeyText), afterPeer,
-			mineCode, afterMine, tok2Reason, reLogin, afterReLogin,
-			l.p.node, sliceUser, keyCode, afterKeyLogin, slicePrincipal, markCode, oncallEmail,
-			mintRefusal(agentSaid), l29Cell(agentSaid), gone[agentGone], liftLogin, bys, mineText, keyText, markText)
+			mineCode, afterMine, tok2Login, tok2Reason, reLogin, reAdmitRow, afterReLogin,
+			l.p.node, sliceUser, keyCode, afterKey, afterKeyLogin, slicePrincipal, markCode, listCell,
+			mintRefusal(agentSaid), l29Cell(agentSaid), gone[agentGone], liftLogin, junosNote, bys,
+			peerText, peerKeyText, mineText, keyText, markText)
 		if len(failed) > 0 {
 			obs += "\n**Not as the claim says:**\n\n- " + strings.Join(failed, "\n- ") + "\n"
 		}
