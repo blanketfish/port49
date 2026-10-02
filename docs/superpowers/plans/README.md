@@ -62,8 +62,11 @@ fixed the same day); **executed 2026-10-01** on `feature/session-lifetime-and-ce
 reviewed per task, closing L34 with `cisco_iosxe` the one platform that shows the ceiling warning,
 and measuring L2 on five images (open: Junos cannot show it) (Plan 7b — As built, below); final
 review done 2026-10-02 (one important: a token outlived its ceiling, fixed in the fix wave);
-**merged 2026-10-02 (PR #21)**.
-7c–7h and 8–13 not yet.
+**merged 2026-10-02 (PR #21)**. **7c written 2026-10-02**
+(`2026-10-02-07c-api-and-authorization.md`, fourteen tasks: one docs, eleven code, one lab, one
+docs; no owner decision, ten rulings recorded as decision 34, decision 32 amended first by the
+owner's answer on the revocations volume; no register row).
+7d–7h and 8–13 not yet.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -1524,11 +1527,19 @@ until 7c merges to be made. Every sub-plan is separately mergeable and leaves `m
   checking of client certificates at mint, feeding 7a's certificate marks (spec §5.1.4); the
   refresh's per-context records naming unreached contexts as 7a's revoke record does (decision 21).
   Lab: L2's open truncation length and IOS-XE, which the warning rests on.
-- **Plan 7c — the API and its authorization.** `api:` rights enforced (`revoke_others`,
-  `explain_others`, `sync`, `keys_show`, `replay`; self-only by default, design §17);
-  `POST /v1/tokens/revoke` (by principal, or by (device, username)) over 7a's `Revoke`;
-  `GET /v1/identity`; `POST /v1/explain`; `/healthz` and `/readyz` on the broker; plan 4b's candidate
-  reload guard weighed and ruled.
+- **Plan 7c — `2026-10-02-07c-api-and-authorization.md`. Written 2026-10-02.** `api:` rights
+  enforced (`revoke_others`, `explain_others`; `sync`, `keys_show` and `replay` ruled reserved, no
+  broker endpoint guarding them; no right widens a mint or `RefreshSession`; self-only by default,
+  design §17); `POST /v1/tokens/revoke`: `mine` (the caller's own tokens deleted by ID and its own
+  contexts marked by compare-and-set, no standing mark), another principal under `revoke_others`
+  through 7a's `Revoke` (origin `api <caller>`), or a (device, username); `GET /v1/identity`;
+  `POST /v1/explain` (an unknown device answered as one with no grant); `/healthz` and `/readyz` on
+  the broker, readiness never the store's; plan 4b's candidate reload guard ruled on (a policy
+  reload newly quarantining or refusing more than `inventory.max_removed_percent` of the devices in
+  service is refused); `port49d init-revocations`, a start never creating the file (decision 32
+  amended); `port49 identity`, `port49 explain` and `port49 revoke --mine`/`--via-agent` over the
+  agent; a new `store.DeleteToken` with a `storetest` property. Lab: the HTTP revocation's shapes on
+  the four images 7a measured.
 - **Plan 7d — the shared store (D1).** The backend D1 chooses, implementing every store method
   with its atomicity and passing every `storetest` property, 7a's included; store-native mutual-TLS
   authentication per component (design §17); a hard timeout and a circuit breaker on every store
