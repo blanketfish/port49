@@ -1034,6 +1034,7 @@ func Run(t *testing.T, b Backend) {
 	}{
 		{"SwapLoginIsOneStep", SwapLoginIsOneStep},
 		{"LoginsRaceToOneIndex", LoginsRaceToOneIndex},
+		{"LoginsRaceToAnEmptyKey", LoginsRaceToAnEmptyKey},
 		{"JoinHonoursAStandingMark", JoinHonoursAStandingMark},
 		{"LoginRacesARevocationByMark", LoginRacesARevocationByMark},
 		{"PurgeTakesEveryToken", PurgeTakesEveryToken},

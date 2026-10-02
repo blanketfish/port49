@@ -247,7 +247,7 @@ func receiptAAD(rk store.ReceiptKey) []byte {
 }
 
 type wrapped struct {
-	inner        store.Store
+	inner        store.RevStore
 	keys         Keys
 	openFailures *prometheus.CounterVec
 	ledger       *Ledger
@@ -263,8 +263,9 @@ func WithLedger(l *Ledger) Option { return func(w *wrapped) { w.ledger = l } }
 
 // Wrap decorates inner so every credential-bearing record is sealed under k
 // before it reaches the backend. openFailures may be nil; the daemon passes
-// metrics.CryptOpenFailures.
-func Wrap(inner store.Store, k Keys, openFailures *prometheus.CounterVec, opts ...Option) store.Store {
+// metrics.CryptOpenFailures. inner reports the revision each context write
+// committed at, which is how the ledger orders them (store.RevStore).
+func Wrap(inner store.RevStore, k Keys, openFailures *prometheus.CounterVec, opts ...Option) store.Store {
 	w := &wrapped{inner: inner, keys: k, openFailures: openFailures, ledger: NewLedger()}
 	for _, o := range opts {
 		o(w)
@@ -484,11 +485,12 @@ func (w *wrapped) openContext(k store.ContextKey, c store.Context) (store.Contex
 }
 
 // sent sends one sealed write of the context id at k, compared on rev
-// (zero for none), telling the ledger before and after (re-check IA1).
-func (w *wrapped) sent(k store.ContextKey, id string, rev uint64, send func() error) error {
+// (zero for none), telling the ledger before and after, with the revision
+// it committed at (re-check IA1; Task 6b).
+func (w *wrapped) sent(k store.ContextKey, id string, rev uint64, send func() (uint64, error)) error {
 	lw := w.ledger.begin(k, id, rev)
-	err := send()
-	w.ledger.end(lw, err)
+	committed, err := send()
+	w.ledger.end(lw, committed, err)
 	return err
 }
 
@@ -497,7 +499,7 @@ func (w *wrapped) PutContext(ctx context.Context, k store.ContextKey, c store.Co
 	if err != nil {
 		return err
 	}
-	return w.sent(k, c.CtxID, 0, func() error { return w.inner.PutContext(ctx, k, sc, ttl) })
+	return w.sent(k, c.CtxID, 0, func() (uint64, error) { return w.inner.PutContextRev(ctx, k, sc, ttl) })
 }
 
 // SwapContext seals as PutContext does and hands the revision through
@@ -510,7 +512,7 @@ func (w *wrapped) SwapContext(ctx context.Context, k store.ContextKey, rev uint6
 	if err != nil {
 		return err
 	}
-	return w.sent(k, c.CtxID, rev, func() error { return w.inner.SwapContext(ctx, k, rev, sc, ttl) })
+	return w.sent(k, c.CtxID, rev, func() (uint64, error) { return w.inner.SwapContextRev(ctx, k, rev, sc, ttl) })
 }
 
 // SwapLogin seals as SwapContext does, and passes the index change and the
@@ -523,7 +525,7 @@ func (w *wrapped) SwapLogin(ctx context.Context, k store.ContextKey, rev uint64,
 	if err != nil {
 		return err
 	}
-	return w.sent(k, c.CtxID, rev, func() error { return w.inner.SwapLogin(ctx, k, rev, sc, ttl, lw) })
+	return w.sent(k, c.CtxID, rev, func() (uint64, error) { return w.inner.SwapLoginRev(ctx, k, rev, sc, ttl, lw) })
 }
 
 func (w *wrapped) GetContext(ctx context.Context, k store.ContextKey) (store.Context, error) {
@@ -587,7 +589,9 @@ func (w *wrapped) rewrite(ctx context.Context, k store.ContextKey, ttl time.Dura
 		if err != nil {
 			return err
 		}
-		switch err := w.sent(k, c.CtxID, rev, func() error { return w.inner.RewriteContext(ctx, k, rev, sc, ttl, moved) }); {
+		switch err := w.sent(k, c.CtxID, rev, func() (uint64, error) {
+			return w.inner.RewriteContextRev(ctx, k, rev, sc, ttl, moved)
+		}); {
 		case err == nil:
 			return nil
 		case !errors.Is(err, store.ErrConflict):
@@ -702,7 +706,9 @@ func (w *wrapped) RewriteContext(ctx context.Context, k store.ContextKey, rev ui
 	if err != nil {
 		return err
 	}
-	return w.sent(k, c.CtxID, rev, func() error { return w.inner.RewriteContext(ctx, k, rev, sc, ttl, policyMoved) })
+	return w.sent(k, c.CtxID, rev, func() (uint64, error) {
+		return w.inner.RewriteContextRev(ctx, k, rev, sc, ttl, policyMoved)
+	})
 }
 
 // DeleteContext is addressed by key alone. One that lands takes the key

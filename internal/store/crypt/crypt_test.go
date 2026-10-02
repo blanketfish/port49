@@ -819,15 +819,15 @@ func TestTheLedgerAdmitsWritesInFlight(t *testing.T) {
 	if !l.admits(k, "a") || !l.admits(k, "b") || l.admits(k, "x") {
 		t.Fatal("a write in flight")
 	}
-	l.end(b, nil)
+	l.end(b, 1, nil)
 	if l.admits(k, "a") || !l.admits(k, "b") {
 		t.Fatal("a write that landed")
 	}
-	l.end(l.begin(k, "c", 0), store.ErrConflict)
+	l.end(l.begin(k, "c", 0), 0, store.ErrConflict)
 	if l.admits(k, "c") {
 		t.Fatal("a conflict wrote nothing")
 	}
-	l.end(l.begin(k, "d", 0), store.ErrUnavailable)
+	l.end(l.begin(k, "d", 0), 0, store.ErrUnavailable)
 	if !l.admits(k, "b") || !l.admits(k, "d") {
 		t.Fatal("a write whose outcome is unknown may have landed")
 	}
@@ -835,8 +835,8 @@ func TestTheLedgerAdmitsWritesInFlight(t *testing.T) {
 	if l.admits(k, "b") || !l.admits(k, "d") {
 		t.Fatal("a read of a write whose outcome was unknown did not settle it")
 	}
-	l.end(l.begin(k, "e", 0), store.ErrUnavailable)
-	l.end(l.begin(k, "f", 0), nil)
+	l.end(l.begin(k, "e", 0), 0, store.ErrUnavailable)
+	l.end(l.begin(k, "f", 0), 3, nil)
 	if l.admits(k, "e") || l.admits(k, "d") || !l.admits(k, "f") {
 		t.Fatal("a later write landed")
 	}
@@ -849,7 +849,7 @@ func TestAReadSettlesEveryWriteWhoseOutcomeWasUnknown(t *testing.T) {
 	l := NewLedger()
 	k := store.ContextKey{NAS: "leaf-01", Username: "netops"}
 	for _, id := range []string{"d", "e"} {
-		l.end(l.begin(k, id, 0), store.ErrUnavailable)
+		l.end(l.begin(k, id, 0), 0, store.ErrUnavailable)
 	}
 	if !l.admits(k, "d") {
 		t.Fatal("a write whose outcome is unknown may have landed")
@@ -874,7 +874,7 @@ func TestTheLedgerForgetsAKeyTheStoreNoLongerHolds(t *testing.T) {
 	alice := store.Context{CtxID: "alice-1", Principal: "user:alice@example.com", Username: "netops", PrivLvl: 15}
 	// Before Seal a read that finds nothing keeps the entry: forgetting it
 	// would let the next read seed the key.
-	l.end(l.begin(k, "a", 0), nil)
+	l.end(l.begin(k, "a", 0), 1, nil)
 	if _, err := s.GetContext(ctx, k); !errors.Is(err, store.ErrNotFound) || len(l.m) != 1 {
 		t.Fatalf("a read before Seal that found nothing: %v %v", err, l.m)
 	}
@@ -909,7 +909,7 @@ func TestTheLedgerForgetsAKeyTheStoreNoLongerHolds(t *testing.T) {
 	}
 	// A write sent after the read or the delete was keeps the entry.
 	at := l.mark()
-	l.end(l.begin(k, "b", 0), nil)
+	l.end(l.begin(k, "b", 0), 100, nil)
 	l.forget(k, at, false)
 	if !l.admits(k, "b") {
 		t.Fatal("a write sent after the delete was is forgotten")
@@ -971,19 +971,19 @@ func TestASealedLedgerAdmitsNoUnseenKey(t *testing.T) {
 // holdingStore holds the first SwapContext after it has landed, before it
 // returns, so the sealing layer has not yet told the ledger it ended.
 type holdingStore struct {
-	store.Store
+	store.RevStore
 	landed, release chan struct{}
 	held            atomic.Bool
 }
 
-func (h *holdingStore) SwapContext(ctx context.Context, k store.ContextKey, rev uint64, c store.Context,
-	ttl time.Duration) error {
-	err := h.Store.SwapContext(ctx, k, rev, c, ttl)
+func (h *holdingStore) SwapContextRev(ctx context.Context, k store.ContextKey, rev uint64, c store.Context,
+	ttl time.Duration) (uint64, error) {
+	committed, err := h.RevStore.SwapContextRev(ctx, k, rev, c, ttl)
 	if h.held.CompareAndSwap(false, true) {
 		close(h.landed)
 		<-h.release
 	}
-	return err
+	return committed, err
 }
 
 // Two logins' writes that end out of the order the store committed them
@@ -1005,27 +1005,23 @@ func TestTheLedgerOrdersWritesByTheStoresCommit(t *testing.T) {
 	}
 }
 
-// KNOWN GAP (Task 4b fix 2 review I2): the same race on a key no context
-// holds, which is every first login to a device and username, and every
-// login after a context expired. Alice's write compared on no record, so
-// the ledger cannot place it, and its late end takes the key back from
-// Bob's: Bob's session is denied until a login writes the key again. It
-// fails closed. The fix is writes that report the revision they committed
-// at, after Task 6; flip this test then, and unskip
-// TestTheSealingLayerRacesLoginsToAnEmptyKey.
-func TestKnownGapFirstLoginsRacingOnAnEmptyKey(t *testing.T) {
-	s, _, k, _ := twoLoginsEndOutOfOrder(t, false)
-	if _, err := s.GetContext(context.Background(), k); !errors.Is(err, ErrNotLastWritten) {
-		t.Fatalf("the known gap closed (flip this test): %v", err)
+// The same race on a key no context holds, which is every first login to
+// a device and username, and every login after a context expired. Alice's
+// write compared on no record, so only the revision it committed at
+// places it: below Bob's, so its late end leaves Bob's the key's, and
+// Alice's written back is still another login's (Task 4b fix 2 review I2;
+// Task 6b).
+func TestFirstLoginsRacingOnAnEmptyKey(t *testing.T) {
+	s, inner, k, aliceSealed := twoLoginsEndOutOfOrder(t, false)
+	if got, err := s.GetContext(context.Background(), k); err != nil || got.CtxID != "bob-1" {
+		t.Fatalf("the write the store committed last: %q %v", got.CtxID, err)
 	}
-}
-
-// LoginsRaceToOneIndex over an empty key, through the sealing layer.
-func TestTheSealingLayerRacesLoginsToAnEmptyKey(t *testing.T) {
-	t.Skip("known gap: TestKnownGapFirstLoginsRacingOnAnEmptyKey")
-	storetest.LoginsRaceToAnEmptyKey(t, storetest.Backend{New: func(_ *testing.T, clock func() time.Time) store.Store {
-		return Wrap(memory.New(clock), keys(), nil)
-	}})
+	if err := inner.PutContext(context.Background(), k, aliceSealed, time.Hour); err != nil { // Alice's, written back
+		t.Fatal(err)
+	}
+	if _, err := s.GetContext(context.Background(), k); !errors.Is(err, ErrNotLastWritten) {
+		t.Fatalf("the write the store committed first, written back: %v", err)
+	}
 }
 
 // twoLoginsEndOutOfOrder races Alice's write and Bob's at k, on Carol's
@@ -1037,7 +1033,7 @@ func twoLoginsEndOutOfOrder(t *testing.T, seeded bool) (store.Store, store.Store
 	ctx := context.Background()
 	now := time.Unix(1_000_000, 0).UTC()
 	inner := memory.New(func() time.Time { return now })
-	h := &holdingStore{Store: inner, landed: make(chan struct{}), release: make(chan struct{})}
+	h := &holdingStore{RevStore: inner, landed: make(chan struct{}), release: make(chan struct{})}
 	l := NewLedger()
 	s := Wrap(h, keys(), nil, WithLedger(l))
 	k := store.ContextKey{NAS: "leaf-01", Username: "netops"}
@@ -1079,44 +1075,92 @@ func twoLoginsEndOutOfOrder(t *testing.T, seeded bool) (store.Store, store.Store
 	return s, inner, k, aliceSealed
 }
 
-// A write that compared on a nonzero revision and was sent before the
-// last was committed before it, if it landed: it does not replace the
-// last, and ending with an unknown outcome it is not admitted. A write
-// that compared on no record is not placed: it replaces the last when it
-// ends (Ledger).
+// Each landed write is placed by the revision it committed at, whatever
+// order the writes end in. A write that compared on a revision below the
+// last's committed before it, if it landed: ending with an unknown outcome
+// it is not admitted. A landed write whose revision is unknown leaves the
+// key admitting neither it nor the last (Ledger; Task 6b).
 func TestTheLedgerPlacesAWriteThatEndsLate(t *testing.T) {
 	k := store.ContextKey{NAS: "leaf-01", Username: "netops"}
 
-	// Sent before the last: b compared on 5 and landed, the record was
-	// deleted, and c, sent after, landed on no record.
+	// b compared on 5 and committed at 6, the record was deleted, and c
+	// landed on no record at 8; b ends last.
 	l := NewLedger()
 	l.admits(k, "a")
 	b := l.begin(k, "b", 5)
-	l.end(l.begin(k, "c", 0), nil)
-	l.end(b, nil)
+	l.end(l.begin(k, "c", 0), 8, nil)
+	l.end(b, 6, nil)
 	if l.admits(k, "b") || !l.admits(k, "c") {
-		t.Fatal("a write sent before the last replaced it")
+		t.Fatal("a write committed before the last replaced it")
 	}
 
-	// The same, ending with an unknown outcome: the store does not hold
-	// it, so a read of it back is not admitted (fix 2 review M1).
+	// The same, b ending with an unknown outcome: it compared below the
+	// last's revision, so the store does not hold it, and a read of it
+	// back is not admitted (fix 2 review M1).
 	l = NewLedger()
 	l.admits(k, "a")
 	b = l.begin(k, "b", 5)
-	l.end(l.begin(k, "c", 0), nil)
-	l.end(b, store.ErrUnavailable)
+	l.end(l.begin(k, "c", 0), 8, nil)
+	l.end(b, 0, store.ErrUnavailable)
 	if l.admits(k, "b") || !l.admits(k, "c") {
-		t.Fatal("a write sent before the last, its outcome unknown, was admitted")
+		t.Fatal("a write compared below the last, its outcome unknown, was admitted")
 	}
 
-	// Compared on no record: not placed, so it replaces the last.
+	// b compared on no record and committed at 4, c swapped on it at 6;
+	// b ends last. This is the empty-key race (fix 2 review I2).
 	l = NewLedger()
 	l.admits(k, "a")
 	b = l.begin(k, "b", 0)
-	l.end(l.begin(k, "c", 5), nil)
-	l.end(b, nil)
+	l.end(l.begin(k, "c", 4), 6, nil)
+	l.end(b, 4, nil)
+	if l.admits(k, "b") || !l.admits(k, "c") {
+		t.Fatal("a write on no record, committed first and ending last, replaced the last")
+	}
+
+	// b compared on no record and committed at 9, after c at 6: it is the
+	// last, whichever ends first.
+	l = NewLedger()
+	l.admits(k, "a")
+	b = l.begin(k, "b", 0)
+	l.end(l.begin(k, "c", 4), 6, nil)
+	l.end(b, 9, nil)
 	if l.admits(k, "c") || !l.admits(k, "b") {
-		t.Fatal("a write on no record that ended last")
+		t.Fatal("a write committed after the last did not replace it")
+	}
+
+	// b landed, and the store did not say at what revision: it or c is
+	// the store's, and neither is admitted until a write lands at a known
+	// one.
+	l = NewLedger()
+	l.admits(k, "a")
+	l.end(l.begin(k, "c", 0), 6, nil)
+	l.end(l.begin(k, "b", 6), 0, nil)
+	if l.admits(k, "b") || l.admits(k, "c") {
+		t.Fatal("a write landed at an unknown revision, and a record was admitted")
+	}
+	l.end(l.begin(k, "d", 0), 7, nil)
+	if !l.admits(k, "d") {
+		t.Fatal("a write landed at a known revision after one at an unknown")
+	}
+}
+
+// A read sets the last at no revision, so any write that lands after
+// replaces it: a write that compared on 3 and ends after another landed
+// and a record whose outcome was unknown was read back is the last, and
+// the read one is denied (fix 2 re-review N1).
+func TestAReadSetsTheLastAtNoRevision(t *testing.T) {
+	k := store.ContextKey{NAS: "leaf-01", Username: "netops"}
+	l := NewLedger()
+	l.admits(k, "a")
+	w := l.begin(k, "w", 3)
+	l.end(l.begin(k, "x", 0), 10, nil)
+	l.end(l.begin(k, "d", 0), 0, store.ErrUnavailable)
+	if !l.admits(k, "d") {
+		t.Fatal("a write whose outcome was unknown, read back")
+	}
+	l.end(w, 4, nil)
+	if l.admits(k, "d") || !l.admits(k, "w") {
+		t.Fatal("a write that landed after a read did not replace the record read")
 	}
 }
 
@@ -1128,12 +1172,12 @@ func TestAReplayReadBeforeALandedWriteEndsIsDeniedAfter(t *testing.T) {
 	k := store.ContextKey{NAS: "leaf-01", Username: "netops"}
 	l := NewLedger()
 	l.admits(k, "a")
-	l.end(l.begin(k, "d", 0), store.ErrUnavailable)
-	w := l.begin(k, "w", 3) // lands; d is put back before w ends
+	l.end(l.begin(k, "d", 0), 0, store.ErrUnavailable)
+	w := l.begin(k, "w", 3) // lands at 8; d is put back at 9 before w ends
 	if !l.admits(k, "d") {
 		t.Fatal("a write whose outcome was unknown, read back")
 	}
-	l.end(w, nil)
+	l.end(w, 8, nil)
 	if l.admits(k, "d") || !l.admits(k, "w") {
 		t.Fatal("a replay read before a landed write ended outlived its end")
 	}
