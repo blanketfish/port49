@@ -742,7 +742,7 @@ func TestRunRestoresRevocationsBeforeTheBrokerServes(t *testing.T) {
 			status, body, err := postAsAlice(pki, addr)
 			if err != nil || status != http.StatusUnauthorized || !strings.Contains(body, `"credential_revoked"`) ||
 				!strings.Contains(body, "revoked at 2026-10-02T03:12:09Z") {
-				t.Fatalf("by %s: alice's connection: %d %s %v", mark.Kind, status, body, err)
+				t.Fatalf("by %s: alice's connection: %s %v", mark.Kind, reply(status, body), err)
 			}
 			waitForCount(t, &out, "as it bound: user:alice@example.com or its certificate is revoked", i+1)
 			stop()
@@ -778,7 +778,7 @@ func TestRunRestoresRevocationsBeforeTheBrokerServes(t *testing.T) {
 		t.Cleanup(func() { srv.Close() })
 		status, body, err := postAsAlice(filepath.Dir(cfg.Broker.ClientCAFile), ln.Addr().String())
 		if err != nil || status != http.StatusUnauthorized || !strings.Contains(body, "credential_revoked") {
-			t.Fatalf("the first mint after a restore with alice revoked: %d %s %v", status, body, err)
+			t.Fatalf("the first mint after a restore with alice revoked: %s %v", reply(status, body), err)
 		}
 	})
 

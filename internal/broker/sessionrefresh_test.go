@@ -27,7 +27,7 @@ func challengeOn(t *testing.T, c *tls.Conn, br *bufio.Reader) ([]byte, string) {
 	r := postOn(t, c, br, "/v1/refresh/challenge", "")
 	var ch api.RefreshChallenge
 	if err := json.Unmarshal([]byte(r.body), &ch); err != nil || r.status != 200 {
-		t.Fatalf("challenge: %d %s", r.status, r.body)
+		t.Fatalf("challenge: %s", reply(r.status, r.body))
 	}
 	nonce, _ := base64.RawURLEncoding.DecodeString(ch.Nonce)
 	return nonce, ch.Nonce
@@ -92,7 +92,7 @@ func TestARefreshExtendsToThePolicysCeiling(t *testing.T) {
 	}
 	f.advance(4*time.Hour + 20*time.Minute)
 	if r := postOn(t, c, br, "/v1/tokens", `{"devices":["leaf1"]}`); r.status != 200 {
-		t.Fatalf("a mint after the refresh, past the handshake's ceiling: %d %s", r.status, r.body)
+		t.Fatalf("a mint after the refresh, past the handshake's ceiling: %s", reply(r.status, r.body))
 	}
 }
 
@@ -190,7 +190,7 @@ func TestARefreshIsBoundToItsConnectionAndItsKey(t *testing.T) {
 	f.advance(11 * time.Second)
 	nonce, text = challengeOn(t, other, obr)
 	if s, body := answerOn(t, other, obr, other, f.alice, nonce, text); s != 200 {
-		t.Fatalf("the same answer over other's own exporter: %d %s", s, body)
+		t.Fatalf("the same answer over other's own exporter: %s", reply(s, body))
 	}
 
 	// Replay: a correct answer sent twice; the second is refused.
@@ -201,7 +201,7 @@ func TestARefreshIsBoundToItsConnectionAndItsKey(t *testing.T) {
 	}
 	f.advance(11 * time.Second)
 	if s, body := answerOn(t, c, br, c, f.alice, nonce, text); s != 401 || !strings.Contains(body, "refresh_challenge_missing") {
-		t.Fatalf("a replayed answer: %d %s", s, body)
+		t.Fatalf("a replayed answer: %s", reply(s, body))
 	}
 
 	// 59s: accepted; 61s: refused.
@@ -270,7 +270,7 @@ func TestARefreshIsRateLimited(t *testing.T) {
 	wrong := base64.RawURLEncoding.EncodeToString(make([]byte, api.RefreshNonceLen))
 	if s, body := answerOn(t, c, br, c, f.alice, make([]byte, api.RefreshNonceLen), wrong); s != 401 ||
 		!strings.Contains(body, "refresh_challenge_missing") {
-		t.Fatalf("a mismatched nonce: %d %s", s, body)
+		t.Fatalf("a mismatched nonce: %s", reply(s, body))
 	}
 	if r := postOn(t, c, br, "/v1/refresh/challenge", ""); r.status != 429 {
 		t.Fatalf("a challenge at once after a mismatched nonce: %d (body withheld: a 200 carries a challenge)", r.status)
@@ -282,10 +282,10 @@ func TestARefreshIsRateLimited(t *testing.T) {
 	nonce, text = challengeOn(t, c, br)
 	f.advance(61 * time.Second)
 	if s, body := answerOn(t, c, br, c, f.alice, nonce, text); s != 401 || !strings.Contains(body, "refresh_challenge_missing") {
-		t.Fatalf("a stale nonce: %d %s", s, body)
+		t.Fatalf("a stale nonce: %s", reply(s, body))
 	}
 	if r := postOn(t, c, br, "/v1/refresh/challenge", ""); r.status != 200 {
-		t.Fatalf("a challenge at once after a stale nonce: %d %s", r.status, r.body)
+		t.Fatalf("a challenge at once after a stale nonce: %s", reply(r.status, r.body))
 	}
 }
 
@@ -307,7 +307,7 @@ func TestARevokedCallerCannotRefresh(t *testing.T) {
 			f.revoke(t, by, key)
 			nonce, text := challengeOn(t, c, br)
 			if s, body := answerOn(t, c, br, c, f.alice, nonce, text); s != 401 || !strings.Contains(body, "credential_revoked") {
-				t.Fatalf("%d %s", s, body)
+				t.Fatalf("%s", reply(s, body))
 			}
 			recs := eventsOf(f.records(t), "refresh")
 			if last := recs[len(recs)-1]; last["reason"] != "credential_revoked" || last["verdict"] != "deny" {
@@ -351,7 +351,7 @@ func TestARefreshTheStoreFailsIsRecorded(t *testing.T) {
 			status, body, retry := answerHeaders(t, c, br, f.alice, nonce, text)
 			if status != 503 || !strings.Contains(body, "store_unavailable") || !strings.Contains(body, tc.text) ||
 				retry != tc.retry {
-				t.Fatalf("%d %s Retry-After %q", status, body, retry)
+				t.Fatalf("%s Retry-After %q", reply(status, body), retry)
 			}
 			denies := 0
 			for _, r := range eventsOf(f.records(t), "refresh") {
@@ -409,7 +409,7 @@ func TestARevocationDuringARefreshIsAnswered(t *testing.T) {
 	f.b.Store = markingStore{Store: f.st, f: f}
 	nonce, text := challengeOn(t, c, br)
 	if s, body := answerOn(t, c, br, c, f.alice, nonce, text); s != 401 || !strings.Contains(body, "credential_revoked") {
-		t.Fatalf("%d %s", s, body)
+		t.Fatalf("%s", reply(s, body))
 	}
 	recs := eventsOf(f.records(t), "refresh")
 	if last := recs[len(recs)-1]; last["reason"] != "credential_revoked" || last["verdict"] != "deny" {

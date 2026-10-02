@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"fmt"
 	"io"
 	"math/big"
 	"net/http"
@@ -305,7 +306,7 @@ func TestRunChecksAFileCRL(t *testing.T) {
 		"be established is refused (503, retried)")
 	if status, body := mintUntil(t, pki, addr); status != http.StatusUnauthorized ||
 		!strings.Contains(body, `"credential_revoked"`) || !strings.Contains(body, "at its CA (crl lab_ca") {
-		t.Fatalf("alice on the CRL: %d %s", status, body)
+		t.Fatalf("alice on the CRL: %s", reply(status, body))
 	}
 	stop()
 	if _, err := os.Stat(filepath.Join(filepath.Dir(b.RevocationsFile), "crl-lab_ca.der")); err != nil {
@@ -318,7 +319,7 @@ func TestRunChecksAFileCRL(t *testing.T) {
 		next.Format(time.RFC3339)+")")
 	if status, body, err := postAsAlice(pki, addr); err != nil || status != http.StatusUnauthorized ||
 		!strings.Contains(body, `"credential_revoked"`) {
-		t.Fatalf("alice after a restart: %d %s %v", status, body, err)
+		t.Fatalf("alice after a restart: %s %v", reply(status, body), err)
 	}
 }
 
@@ -342,7 +343,7 @@ func TestRunRefusesOnAStaleCRL(t *testing.T) {
 	resp, body := mintResponse(t, filepath.Dir(b.ClientCAFile), addr)
 	if resp.StatusCode != http.StatusServiceUnavailable || resp.Header.Get("Retry-After") != "60" ||
 		!strings.Contains(body, `"certificate_status_unavailable"`) || !strings.Contains(body, "past its next update") {
-		t.Fatalf("a stale list: %d %q %s", resp.StatusCode, resp.Header.Get("Retry-After"), body)
+		t.Fatalf("a stale list: %s %q", reply(resp.StatusCode, body), resp.Header.Get("Retry-After"))
 	}
 }
 
@@ -403,7 +404,7 @@ func TestRunFetchesAfterListeningAndKeepsTheList(t *testing.T) {
 	addr, stop := startDaemon(t, cfgPath, out)
 	if status, body := mintUntil(t, pki, addr); status != http.StatusUnauthorized ||
 		!strings.Contains(body, "at its CA (crl lab_ca") {
-		t.Fatalf("alice on the fetched CRL: %d %s", status, body)
+		t.Fatalf("alice on the fetched CRL: %s", reply(status, body))
 	}
 	// The first list in force is said (Task 11 review I1).
 	const loaded = "port49d: broker: certificate status: CRL lab_ca loaded (next update "
@@ -415,7 +416,7 @@ func TestRunFetchesAfterListeningAndKeepsTheList(t *testing.T) {
 	defer stop()
 	if status, body, err := postAsAlice(pki, addr); err != nil || status != http.StatusUnauthorized ||
 		!strings.Contains(body, "at its CA (crl lab_ca") {
-		t.Fatalf("alice with the URL down: %d %s %v", status, body, err)
+		t.Fatalf("alice with the URL down: %s %v", reply(status, body), err)
 	}
 	if n := strings.Count(out.String(), loaded); n != 1 {
 		t.Fatalf("the kept list, or the URL down, was said as loaded: %d lines", n)
@@ -449,7 +450,7 @@ func TestRunRevokesACertificateANewListNames(t *testing.T) {
 	addr, stop := startDaemon(t, writeRunConfig(t, b), out)
 	defer stop()
 	if status, body, err := postAsAlice(pki, addr); err != nil || status != http.StatusOK {
-		t.Fatalf("alice with no list in force, under allow: %d %s %v", status, body, err)
+		t.Fatalf("alice with no list in force, under allow: %s %v", reply(status, body), err)
 	}
 	close(release)
 	waitUntil(t, "alice's mark in revocations_file", fileHolds(b.RevocationsFile, `"kind": "cert"`))
@@ -520,4 +521,14 @@ func TestRunRefusesAnIssuerFileTheAnchorDidNotSign(t *testing.T) {
 	if strings.Contains(out, "listening") {
 		t.Fatalf("stderr claims a listener is up: %q", out)
 	}
+}
+
+// reply is a broker answer for a failure message: its status, and its body
+// unless that is a 200's, which carries tokens test output never prints
+// (plan 7b final review M-1).
+func reply(status int, body string) string {
+	if status == http.StatusOK {
+		return "200 (body withheld: it carries tokens)"
+	}
+	return fmt.Sprintf("%d %s", status, body)
 }

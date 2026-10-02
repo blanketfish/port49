@@ -162,7 +162,7 @@ func TestAnUntrustedCallerIsRefused(t *testing.T) {
 		var e api.Error
 		_ = json.Unmarshal(w.Body.Bytes(), &e)
 		if w.Code != 401 || e.Error != "trust_domain_unresolved" {
-			t.Fatalf("%s: %d %s", tt.name, w.Code, w.Body.String())
+			t.Fatalf("%s: %s", tt.name, answer(w))
 		}
 	}
 	mints := eventsOf(f.records(t), "mint")
@@ -207,7 +207,7 @@ func TestAConnectionPastTheCeilingIsRefused(t *testing.T) {
 	var e api.Error
 	_ = json.Unmarshal(w.Body.Bytes(), &e)
 	if w.Code != 401 || e.Error != "session_expired" || w.Header().Get("Connection") != "close" {
-		t.Fatalf("%d %v %s", w.Code, w.Header(), w.Body.String())
+		t.Fatalf("%s %v", answer(w), w.Header())
 	}
 	last := f.records(t)[len(f.records(t))-1]
 	if last["event"] != "mint" || last["reason"] != "session_expired" || last["principal"] != "user:alice@example.com" {
@@ -312,13 +312,13 @@ func TestIdempotency(t *testing.T) {
 	a := decodeMint(t, f.post(context.Background(), f.state(f.alice), body, "k1"))
 	b := decodeMint(t, f.post(context.Background(), f.state(f.alice), body, "k1"))
 	if a.Results[0].Login != b.Results[0].Login {
-		t.Fatalf("a retry must replay, not mint again: %q vs %q", a.Results[0].Login, b.Results[0].Login)
+		t.Fatal("a retry must replay, not mint again: the two logins differ")
 	}
 	if c, _ := f.st.Candidates(context.Background(), store.TokenKey{NAS: "leaf1", Username: "alice"}); len(c) != 1 {
 		t.Fatalf("one token minted, %d in the store", len(c))
 	}
 	if w := f.post(context.Background(), f.state(f.alice), `{"devices":["leaf1"],"enable":true}`, "k1"); w.Code != 409 {
-		t.Fatalf("same key, different body: %d %s", w.Code, w.Body.String())
+		t.Fatalf("same key, different body: %s", answer(w))
 	}
 	mallory := f.client(t, "mallory@example.com", f.now.Add(time.Hour))
 	m := decodeMint(t, f.post(context.Background(), f.state(mallory), body, "k1"))
@@ -389,7 +389,7 @@ func TestAConflictLaterInTheBatchMintsNothing(t *testing.T) {
 	decodeMint(t, f.post(context.Background(), f.state(f.alice), `{"devices":["leaf1"]}`, "k1"))
 	before := len(eventsOf(f.records(t), "mint"))
 	if w := f.post(context.Background(), f.state(f.alice), `{"devices":["nx1","leaf1"]}`, "k1"); w.Code != 409 {
-		t.Fatalf("%d %s", w.Code, w.Body.String())
+		t.Fatalf("%s", answer(w))
 	}
 	if c, _ := f.st.Candidates(context.Background(), store.TokenKey{NAS: "nx1", Username: "alice"}); len(c) != 0 {
 		t.Fatalf("nx1 minted %d tokens into a refused batch", len(c))
@@ -441,11 +441,11 @@ func TestMalformedBatchesAreRefusedWhole(t *testing.T) {
 		"a space":             `{"devices":["leaf 1"]}`,
 	} {
 		if w := f.post(context.Background(), f.state(f.alice), body, ""); w.Code != 400 {
-			t.Errorf("%s: %d %s", name, w.Code, w.Body.String())
+			t.Errorf("%s: %s", name, answer(w))
 		}
 	}
 	if w := f.post(context.Background(), f.state(f.alice), `{"devices":["leaf1"]}`, strings.Repeat("k", 129)); w.Code != 400 {
-		t.Errorf("a 129-byte Idempotency-Key: %d %s", w.Code, w.Body.String())
+		t.Errorf("a 129-byte Idempotency-Key: %s", answer(w))
 	}
 	if recs := f.records(t); len(recs) != 0 {
 		t.Fatalf("a malformed batch writes no record: %v", recs)
@@ -460,7 +460,7 @@ func TestConfigIsDiscoveryOnly(t *testing.T) {
 	var c api.Config
 	if err := json.Unmarshal(w.Body.Bytes(), &c); err != nil || w.Code != 200 ||
 		len(c.Methods) != 1 || c.Methods[0] != "x509" || c.MaxSessionAgeSeconds != 43200 || c.BatchMax != 4 {
-		t.Fatalf("%d %s", w.Code, w.Body.String())
+		t.Fatalf("%s", answer(w))
 	}
 	if strings.Contains(w.Body.String(), "leaf1") {
 		t.Fatal("discovery must not name a device")
@@ -508,7 +508,7 @@ func TestTwoRequestsUnderOneKeyMintOnce(t *testing.T) {
 			<-g.entered
 			w := f.post(context.Background(), f.state(f.alice), tc.second, "01J")
 			if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), tc.wantErr) {
-				t.Fatalf("the overlapping request: %d %s", w.Code, w.Body.String())
+				t.Fatalf("the overlapping request: %s", answer(w))
 			}
 			if tc.wantErr == "idempotency_in_progress" && w.Header().Get("Retry-After") != "1" {
 				t.Fatalf("Retry-After: %q", w.Header().Get("Retry-After"))
@@ -543,7 +543,7 @@ func TestTwoRequestsUnderOneKeyMintOnce(t *testing.T) {
 		<-g.entered
 		w := f.post(context.Background(), f.state(f.alice), body, "01S")
 		if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "idempotency_in_progress") {
-			t.Fatalf("the second abandoned replay: %d %s", w.Code, w.Body.String())
+			t.Fatalf("the second abandoned replay: %s", answer(w))
 		}
 		close(g.gate)
 		if r := decodeMint(t, <-first); r.Results[0].Verdict != "permit" {
@@ -604,7 +604,7 @@ func TestAHoldIsRenewedBeforeEachMintSoARetryMintsNothing(t *testing.T) {
 	select {
 	case w := <-second:
 		if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "idempotency_in_progress") {
-			t.Fatalf("the retry: %d %s", w.Code, w.Body.String())
+			t.Fatalf("the retry: %s", answer(w))
 		}
 	case op := <-s.entered:
 		t.Fatalf("the retry reached %s while the first request was minting leaf1", op)
@@ -638,6 +638,6 @@ func TestABatchNamingADeviceTwiceIsRefused(t *testing.T) {
 	f := newFixture(t, 8)
 	w := f.post(context.Background(), f.state(f.alice), `{"devices":["leaf1","leaf1"]}`, "01L")
 	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "twice") {
-		t.Fatalf("%d %s", w.Code, w.Body.String())
+		t.Fatalf("%s", answer(w))
 	}
 }

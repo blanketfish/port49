@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -112,6 +113,21 @@ type Token struct {
 
 	Sealed []byte // written by internal/store/crypt; zero in plaintext form
 }
+
+// String is the token with its secret withheld, so that a %v anywhere — a
+// test's failure message, a debug line — never prints one (plan 7b final
+// review M-1).
+func (t Token) String() string {
+	type plain Token
+	p := plain(t)
+	if len(p.Secret) > 0 {
+		p.Secret = []byte("<withheld>")
+	}
+	return fmt.Sprintf("%+v", p)
+}
+
+// GoString is String, for %#v.
+func (t Token) GoString() string { return t.String() }
 
 // ReceiptKey addresses the short-lived proof of a completed redemption. The
 // credential hash is part of the key, not merely recorded in the record: that

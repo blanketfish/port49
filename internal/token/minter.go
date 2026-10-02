@@ -262,6 +262,23 @@ type Result struct {
 	Replayed bool `json:"-"`
 }
 
+// String is the result with its tokens withheld, so that a %v anywhere —
+// a test's failure message, a debug line — never prints one (plan 7b final
+// review M-1). The idempotency record is JSON and is untouched.
+func (r Result) String() string {
+	type plain Result
+	p := plain(r)
+	for _, t := range []*string{&p.Login, &p.Enable} {
+		if *t != "" {
+			*t = "<withheld>"
+		}
+	}
+	return fmt.Sprintf("%+v", p)
+}
+
+// GoString is String, for %#v.
+func (r Result) GoString() string { return r.String() }
+
 // Minter issues device tokens. It is in-process and knows nothing of HTTP;
 // plan 3's broker wraps it behind /v1/tokens.
 type Minter struct {

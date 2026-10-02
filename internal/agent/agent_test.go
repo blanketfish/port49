@@ -353,7 +353,7 @@ func TestEveryTokenIsAFreshMintOnTheHeldConnection(t *testing.T) {
 	}
 	keys := r.fb.seen()
 	if a.Login == b.Login || len(keys) != 2 || keys[0] == "" || keys[0] == keys[1] {
-		t.Fatalf("two asks must be two mints under two keys: %q %q %q", a.Login, b.Login, keys)
+		t.Fatalf("two asks must be two mints under two keys: logins equal %v, keys %q", a.Login == b.Login, keys)
 	}
 	if n := r.a.Handshakes(); n != 1 {
 		t.Fatalf("one session, one handshake; got %d", n)

@@ -326,7 +326,7 @@ func (f *fixture) blobRecords(t *testing.T) []decision.Blob {
 func decodeMint(t *testing.T, w *httptest.ResponseRecorder) api.MintResponse {
 	t.Helper()
 	if w.Code != 200 {
-		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+		t.Fatalf("status %s", answer(w))
 	}
 	var r api.MintResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &r); err != nil {

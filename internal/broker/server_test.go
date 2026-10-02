@@ -279,7 +279,7 @@ func TestACertificateWithNoExtendedKeyUsageMints(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
 	if resp.StatusCode != 200 || !strings.Contains(string(body), `"verdict":"permit"`) {
-		t.Fatalf("a mint with a no-EKU certificate: %s %s", resp.Status, body)
+		t.Fatalf("a mint with a no-EKU certificate: %s", reply(resp.StatusCode, string(body)))
 	}
 }
 

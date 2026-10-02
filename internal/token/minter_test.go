@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -173,7 +174,8 @@ func TestOneIdempotencyKeyAcrossDevicesDoesNotCross(t *testing.T) {
 		t.Fatal(err)
 	}
 	if a.Login == b.Login || !strings.HasPrefix(b.Login, Tag(TagKey([]byte("k")), "leaf-04")) {
-		t.Fatalf("leaf-04 was handed core-sw01's token: %q %q", a.Login, b.Login)
+		t.Fatalf("leaf-04 was handed core-sw01's token: logins equal %v, leaf-04's tag %v", a.Login == b.Login,
+			strings.HasPrefix(b.Login, Tag(TagKey([]byte("k")), "leaf-04")))
 	}
 	for _, d := range []string{"core-sw01", "leaf-04"} {
 		if c, _ := st.Candidates(context.Background(), store.TokenKey{NAS: d, Username: "alice"}); len(c) != 1 {
@@ -759,5 +761,18 @@ func TestMintRefusesAPassedOrUnanchoredCeiling(t *testing.T) {
 	s.MaxSessionAge, s.AuthTime = 0, time.Time{}
 	if _, err := m.Mint(context.Background(), Request{Subject: s, Device: "leaf-01"}); err != nil {
 		t.Fatalf("never with no auth_time: %v", err)
+	}
+}
+
+// A result printed with any verb withholds its tokens (plan 7b final review
+// M-1).
+func TestAResultPrintsNoToken(t *testing.T) {
+	r := Result{Login: "LOGINSECRET", Enable: "ENABLESECRET", Username: "alice"}
+	for _, verb := range []string{"%v", "%+v", "%#v", "%s"} {
+		for _, v := range []any{r, &r} {
+			if got := fmt.Sprintf(verb, v); strings.Contains(got, "SECRET") || !strings.Contains(got, "alice") {
+				t.Fatalf("%s of %T printed a token, or nothing: %d bytes", verb, v, len(got))
+			}
+		}
 	}
 }

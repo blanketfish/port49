@@ -3,6 +3,8 @@
 // key is snake_case.
 package api
 
+import "fmt"
+
 // Config is GET /v1/config: discovery data, never fleet information.
 type Config struct {
 	Methods              []string `json:"methods"`
@@ -46,6 +48,28 @@ type MintItem struct {
 	// Replayed is the broker's own, never on the wire: this permit is an
 	// idempotent replay, which recorded no permit of its own.
 	Replayed bool `json:"-"`
+}
+
+// String is the item with its tokens withheld, so that a %v anywhere — a
+// test's failure message, a debug line — never prints one (plan 7b final
+// review M-1). The wire form is JSON and is untouched.
+func (it MintItem) String() string {
+	type plain MintItem
+	p := plain(it)
+	p.Login, p.Enable = withheld(p.Login), withheld(p.Enable)
+	return fmt.Sprintf("%+v", p)
+}
+
+// GoString is String, for %#v.
+func (it MintItem) GoString() string { return it.String() }
+
+// withheld stands in for a credential in printed output: whether there was
+// one, never what it was.
+func withheld(s string) string {
+	if s == "" {
+		return ""
+	}
+	return "<withheld>"
 }
 
 // MintResponse is POST /v1/tokens' 200: partial failure is per item, never at

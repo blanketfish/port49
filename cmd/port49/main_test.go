@@ -82,7 +82,7 @@ func TestTokenPrintsTheLoginTokenAndNothingElse(t *testing.T) {
 	p := fakeAgent(t, http.StatusOK, permit)
 	var out, errb bytes.Buffer
 	if code := run([]string{"token", "--socket", p, "leaf1"}, &out, &errb); code != 0 || out.String() != "LOGINTOKEN\n" {
-		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
+		t.Fatalf("code %d stdout %s stderr %q", code, tokenOut(out.String()), errb.String())
 	}
 	out.Reset()
 	if code := run([]string{"token", "--json", "--socket", p, "leaf1"}, &out, &errb); code != 0 {
@@ -90,7 +90,7 @@ func TestTokenPrintsTheLoginTokenAndNothingElse(t *testing.T) {
 	}
 	var item api.MintItem
 	if err := json.Unmarshal(out.Bytes(), &item); err != nil || item.Enable != "ENABLETOKEN" || item.Username != "alice" {
-		t.Fatalf("json: %s %v", out.String(), err)
+		t.Fatalf("json: %s %v", tokenOut(out.String()), err)
 	}
 }
 
@@ -99,7 +99,7 @@ func TestADenialIsAFailureWithItsReason(t *testing.T) {
 	var out, errb bytes.Buffer
 	code := run([]string{"token", "--socket", p, "leaf1"}, &out, &errb)
 	if code != 1 || out.Len() != 0 || !strings.Contains(errb.String(), "leaf1: deny no_grants_matched") {
-		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
+		t.Fatalf("code %d stdout %s stderr %q", code, tokenOut(out.String()), errb.String())
 	}
 }
 
@@ -114,7 +114,7 @@ func TestAnItemErrorNamesTheDeviceAndPrintsNoToken(t *testing.T) {
 		code := run(args, &out, &errb)
 		if code != 1 || out.Len() != 0 || strings.Contains(errb.String(), "LOGINTOKEN") ||
 			!strings.Contains(errb.String(), "leaf1") || !strings.Contains(errb.String(), "device_unconfigured") {
-			t.Fatalf("%v: code %d stdout %q stderr %q", args, code, out.String(), errb.String())
+			t.Fatalf("%v: code %d stdout %s stderr %q", args, code, tokenOut(out.String()), errb.String())
 		}
 	}
 }
@@ -150,7 +150,7 @@ func TestAnEndedSessionSaysWhy(t *testing.T) {
 	code := run([]string{"token", "--socket", p, "leaf1"}, &out, &errb)
 	if code != 1 || out.Len() != 0 || !strings.Contains(errb.String(), "port49 login") ||
 		!strings.Contains(errb.String(), "no longer trusts this certificate (x509: certificate has expired)") {
-		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
+		t.Fatalf("code %d stdout %s stderr %q", code, tokenOut(out.String()), errb.String())
 	}
 }
 
@@ -162,7 +162,7 @@ func TestAPermitWithNoTokenIsAFailure(t *testing.T) {
 		var out, errb bytes.Buffer
 		code := run(args, &out, &errb)
 		if code != 1 || out.Len() != 0 || !strings.Contains(errb.String(), "leaf1: the broker answered permit with no token") {
-			t.Fatalf("%v: code %d stdout %q stderr %q", args, code, out.String(), errb.String())
+			t.Fatalf("%v: code %d stdout %s stderr %q", args, code, tokenOut(out.String()), errb.String())
 		}
 	}
 }
@@ -665,7 +665,7 @@ func TestTokenWarnsNearTheDevicesCeiling(t *testing.T) {
 	var out, errb bytes.Buffer
 	if code := run([]string{"token", "--socket", p, "leaf1"}, &out, &errb); code != 0 || out.String() != "LOGINTOKEN\n" ||
 		errb.String() != want {
-		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
+		t.Fatalf("code %d stdout %s stderr %q", code, tokenOut(out.String()), errb.String())
 	}
 	out.Reset()
 	errb.Reset()
@@ -683,7 +683,7 @@ func TestTokenWarnsNearTheDevicesCeiling(t *testing.T) {
 		errb.Reset()
 		if code := run([]string{"token", "--socket", p, "leaf1"}, &out, &errb); code != 0 || out.String() != "LOGINTOKEN\n" ||
 			errb.Len() != 0 {
-			t.Errorf("%s: code %d stdout %q stderr %q", name, code, out.String(), errb.String())
+			t.Errorf("%s: code %d stdout %s stderr %q", name, code, tokenOut(out.String()), errb.String())
 		}
 	}
 }
@@ -696,7 +696,7 @@ func TestASessionExpiredDenialSaysToRefresh(t *testing.T) {
 	var out, errb bytes.Buffer
 	if code := run([]string{"token", "--socket", p, "leaf1"}, &out, &errb); code != 1 || out.Len() != 0 ||
 		errb.String() != "port49 token: leaf1: deny session_expired: your session on leaf1 reached its ceiling; run 'port49 refresh'\n" {
-		t.Fatalf("code %d stdout %q stderr %q", code, out.String(), errb.String())
+		t.Fatalf("code %d stdout %s stderr %q", code, tokenOut(out.String()), errb.String())
 	}
 }
 
@@ -714,4 +714,10 @@ func TestTimeLeft(t *testing.T) {
 			t.Errorf("%v: %q, want %q", d, got, want)
 		}
 	}
+}
+
+// tokenOut is port49 token's stdout for a failure message: its length, never
+// its text, which is the token (plan 7b final review M-1).
+func tokenOut(s string) string {
+	return fmt.Sprintf("(%d bytes, withheld: it carries the token)", len(s))
 }

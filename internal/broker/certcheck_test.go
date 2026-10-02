@@ -185,7 +185,7 @@ func TestARevokedLeafIsRefusedAndRevoked(t *testing.T) {
 		a := boundAnswer(t, f, addr, f.alice)
 		if a.status != 401 || !strings.Contains(a.body, `"credential_revoked"`) ||
 			!strings.Contains(a.body, "was revoked at its CA (crl corp, 2026-09-30T12:00:00Z)") {
-			t.Fatalf("%d %s", a.status, a.body)
+			t.Fatalf("%s", reply(a.status, a.body))
 		}
 		eventually(t, "the revocation", func() bool { return certRevocations(f) == 1 })
 		waitMark(t, f, f.alice, "crl corp")
@@ -215,7 +215,7 @@ func TestARevokedLeafIsRefusedAndRevoked(t *testing.T) {
 		}
 		for i := 0; i < 10; i++ {
 			if a := boundAnswer(t, f, addr, f.alice); a.status != 401 {
-				t.Fatalf("bind %d of the revoked certificate: %d %s", i, a.status, a.body)
+				t.Fatalf("bind %d of the revoked certificate: %s", i, reply(a.status, a.body))
 			}
 		}
 		for _, o := range owner {
@@ -267,7 +267,7 @@ func TestARevokedLeafIsRefusedAndRevoked(t *testing.T) {
 		f.liveContext(t, "leaf1", "alice", alicePrincipal, certKey(f.alice))
 		fs.set(f.alice, revokedByCRL)
 		if a := postOn(t, c, br, "/v1/tokens", mintBody); a.status != 401 || !strings.Contains(a.body, `"credential_revoked"`) {
-			t.Fatalf("%d %s", a.status, a.body)
+			t.Fatalf("%s", reply(a.status, a.body))
 		}
 		eventually(t, "the revocation", func() bool { return certRevocations(f) == 1 })
 		waitMark(t, f, f.alice, "crl corp")
@@ -286,7 +286,7 @@ func TestARevokedLeafIsRefusedAndRevoked(t *testing.T) {
 		fs.set(f.alice, revokedByCRL)
 		nonce, text := challengeOn(t, c, br)
 		if s, body := answerOn(t, c, br, c, f.alice, nonce, text); s != 401 || !strings.Contains(body, `"credential_revoked"`) {
-			t.Fatalf("%d %s", s, body)
+			t.Fatalf("%s", reply(s, body))
 		}
 		eventually(t, "the revocation", func() bool { return certRevocations(f) == 1 })
 		waitMark(t, f, f.alice, "crl corp")
@@ -344,7 +344,7 @@ func TestAMarkOutranksAStatusOutageAtBind(t *testing.T) {
 	fs.set(f.alice, unknownStatus)
 	bl.Revoked(store.Revocation{Kind: store.RevocationPrincipal, Key: alicePrincipal, At: f.now}, true)
 	if a := boundAnswer(t, f, addr, f.alice); a.status != 401 || !strings.Contains(a.body, `"credential_revoked"`) {
-		t.Fatalf("%d %s", a.status, a.body)
+		t.Fatalf("%s", reply(a.status, a.body))
 	}
 	wantDeny(t, lastRecord(t, f, "mint"), "credential_revoked")
 }
@@ -368,7 +368,7 @@ func TestAMarkLiftedDuringTheStatusCheckStillRefuses(t *testing.T) {
 	fs.set(f.alice, revokedByCRL)
 	a := boundAnswer(t, f, addr, f.alice)
 	if a.status != 401 || !strings.Contains(a.body, "was revoked at its CA") {
-		t.Fatalf("%d %s", a.status, a.body)
+		t.Fatalf("%s", reply(a.status, a.body))
 	}
 	if n := testutil.ToFloat64(f.b.Metrics.BrokerConnections.WithLabelValues("held")); n != 0 {
 		t.Fatalf("held gauge: %v", n)
@@ -403,7 +403,7 @@ func TestAnUnknownStatusIsUnavailable(t *testing.T) {
 		fs.set(f.alice, unknownStatus)
 		a := boundAnswer(t, f, addr, f.alice)
 		if a.status != 503 || !strings.Contains(a.body, `"certificate_status_unavailable"`) || a.retryAfter != "60" {
-			t.Fatalf("%d %q %s", a.status, a.retryAfter, a.body)
+			t.Fatalf("%s %q", reply(a.status, a.body), a.retryAfter)
 		}
 		wantDeny(t, lastRecord(t, f, "mint"), "trust_domain_unresolved")
 		ev := f.b.Metrics.BrokerConnectionEvents
@@ -427,7 +427,7 @@ func TestAnUnknownStatusIsUnavailable(t *testing.T) {
 		nonce, text := challengeOn(t, c, br)
 		s, body, retry := answerHeaders(t, c, br, f.alice, nonce, text)
 		if s != 503 || !strings.Contains(body, `"certificate_status_unavailable"`) || retry != "60" {
-			t.Fatalf("%d %q %s", s, retry, body)
+			t.Fatalf("%s %q", reply(s, body), retry)
 		}
 		wantDeny(t, lastRecord(t, f, "refresh"), "trust_domain_unresolved")
 		if n := testutil.ToFloat64(f.b.Metrics.SessionRefreshes.WithLabelValues("refused")); n != 1 {
