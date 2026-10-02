@@ -627,8 +627,11 @@ read on a timer and on `SIGHUP`, and a change is handled in four steps:
    counting the devices it newly refuses admission and the devices it newly quarantines together,
    or that admits no device at all whatever the bound (§10; §13 decision 34). A reload after which
    at least as many devices are in service as before it, counting only devices the inventory before
-   it held, is never refused (a net release): a device the same reload adds never offsets one it
-   takes out of service, so padding the inventory cannot pass the bound. A quarantine a grant
+   it held, is not refused for the two together (a net release): a device the same reload adds
+   never offsets one it takes out of service, so padding the inventory cannot pass the bound. A
+   release never offsets a refusal: a file that newly refuses admission to more than the bound of
+   the devices in service is refused whatever it releases, since a refused device's tokens are
+   deleted and a revert does not bring them back. A quarantine a grant
    expiry brings on later is not judged at the reload (`port49 policy diff` fails on it). A refused
    file also keeps any grant it withdrew: `port49 revoke` cuts a principal off whatever the file. A
    refused file stays on disk, and a start has no policy in force to bound against, so a restart
@@ -5063,8 +5066,12 @@ port49d's clock, which would otherwise outrank every later copy.
 **A reload of either source tries both together when both have moved.** At `SIGHUP`, and whenever
 a load of one is refused while the other holds a settled version not in force, port49d builds the
 bundle from both and bounds it against the bundle in force as one step, by `bundle.Check` and the
-policy's bound together. It passes and one swap applies both; it fails and neither is applied, one
-line naming both. A whole-fleet re-address with its key group — where each file alone admits none —
+policy's bound together. The policy's bound judges what the policy does: against the policy in
+force over the new inventory, so a device the inventory change takes out of service is the
+inventory's, quarantined as decision 20 says, and the line names the policy file only when the
+policy is the cause (if the policy in force does not parse over the new inventory, every device
+is counted as the policy's). It passes and one swap applies both; it fails and neither is
+applied, one line naming both. A whole-fleet re-address with its key group — where each file alone admits none —
 then loads, and no bundle between the two revokes a context the final one keeps.
 
 **A policy reload is held to the same bound.** Key groups are policy, and a refused device's live
@@ -5074,7 +5081,10 @@ policy reload that newly refuses admission to, or newly quarantines, together mo
 `inventory.max_removed_percent` of the devices in service under the policy in force (admitted
 and not quarantined) is refused, naming them, unless at least as many of the devices the
 inventory held before it are in service after it (a net release; a device the reload adds never
-offsets one it takes out; §13 decision 34); the policy in force keeps serving and
+offsets one it takes out; §13 decision 34). The net release never covers refusals: one that
+newly refuses admission to more than the bound of the devices in service is refused whatever it
+releases, as plan 6a's bound refused it, since the tokens a refusal deletes do not come back on a
+revert. Either way the policy in force keeps serving and
 `port49_policy_file_refused` is 1, and raising the bound and sending `SIGHUP` applies a deliberate
 change. A policy reload whose bundle admits no device of a non-empty inventory is refused
 whatever the bound, as a start is (above): the policy in force keeps serving, the refusal is
@@ -6397,7 +6407,13 @@ the design was silent, each the option that denies more.*
   policy in force serving on, unless at least as many devices are in service after it as before
   (a net release, which an incident fix often is). The net exemption counts only devices present
   in the inventory before the reload: a device the same reload adds never offsets a device it
-  newly quarantines or refuses, so padding the inventory cannot bypass the guard. The refusal is
+  newly quarantines or refuses, so padding the inventory cannot bypass the guard. The net
+  exemption never exempts refusals: newly refused devices alone over the bound are refused
+  whatever the reload releases (plan 6a's bound, unchanged), since a refusal deletes tokens a
+  revert does not restore; the exemption applies only to the combined count. On a combined
+  policy-and-inventory reload the guard judges the policy's effect alone, against the policy in
+  force over the new inventory; a quarantine the inventory change causes stays decision 20's
+  (task 10 review I1, M1; amended 2026-10-02). The refusal is
   printed redacted (§5.8), says to lower the bound again after a deliberate raise (it bounds
   inventory syncs too), and says the refused file is still on disk and a restart would load it
   unguarded: a start has no policy in force to bound against. An inventory-only reload stays
