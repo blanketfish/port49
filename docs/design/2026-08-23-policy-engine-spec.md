@@ -6694,12 +6694,20 @@ review (the owner may override them).*
   - **`hold_ttl` is 10s to 60s**, and a shorter one is refused at config load. etcd's client
     sends the next keepalive a third of the TTL after a response but checks only every
     500ms, so a healthy lease can report as little as ⌊2·`hold_ttl`/3 − 0.5s − a round
-    trip⌋. That must not fall under half of `hold_ttl`: at 10s it is 5s or more while the
-    round trip is under about 1.17s; at the default 15s it is 8s, above 7.5s, while the
-    round trip is under about 1.5s. Below 10s the round trip tolerated is 0.5s or less.
-  - **The round trip is a deployment bound.** A store whose round trip from port49d passes
-    it drops a healthy hold, and port49d closes every listener: dark, never two port49d on
-    one keyspace (design document §13).
+    trip⌋, which must not fall under half of `hold_ttl`. Below 10s that allows a round trip
+    of 0.5s or less.
+  - **The round trip a hold survives** (to the etcd leader) is the least of three bounds:
+    - the keepalive bound just given: about 1.17s at 10s, 1.5s at 15s;
+    - the fence read, a `Get` then a `TimeToLive`, two round trips within a sixth of
+      `hold_ttl`: about 0.83s at 10s, 1.25s at 15s. One read that times out usually drops
+      the hold;
+    - `store.etcd.call_timeout` (500ms by default) on every token and context call, past
+      which the circuits open and the store is gone after `hold_ttl` anyway.
+
+    So at the defaults `call_timeout` binds: keep every etcd call well under it. A cross-site
+    etcd raises `call_timeout`, `store.packet_deadline` and `hold_ttl` together. Past any
+    bound port49d closes every listener: dark, never two port49d on one keyspace (design
+    document §13).
 - **A start on etcd.** port49d waits for the store with every listener closed (up to
   `store.etcd.start_timeout`, 30s, then exits 1; `0` waits forever; after a store gone, no
   deadline), and then, retrying while the store errs:
