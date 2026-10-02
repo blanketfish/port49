@@ -21,6 +21,17 @@ var ErrBadRevocation = errors.New("broker: a revocation names a principal, or a 
 // ErrNotRevoked is a lift of a revocation that is not in force.
 var ErrNotRevoked = errors.New("broker: no such revocation is in force")
 
+// What a revocation named (spec §5.7's revoke body, "by"). A principal's
+// or a certificate's is a standing mark (Revoke, Lift); a principal ending
+// its own sessions (RevokeOwn) and one (device, username) ended
+// (RevokeKey) leave none (decision 34).
+const (
+	ByPrincipal = store.RevocationPrincipal
+	ByCert      = store.RevocationCert
+	ByOwn       = "self"
+	ByKey       = "key"
+)
+
 // RevokeRequest is one revocation or lift (spec §5.1.4): of a principal, or
 // of one certificate by its issuer (RFC 2253, as Go prints it) and serial
 // (hex). Origin says who asked, for the record.
@@ -35,7 +46,17 @@ type RevokeRequest struct {
 // again. SaveErr is broker.revocations_file's write. Unnamed is set when no
 // subject in the policy in force names the principal (pre-flight I2).
 type RevokeReport struct {
-	Request     RevokeRequest
+	Request RevokeRequest
+	// By is what the revocation named (ByPrincipal, ByCert, ByOwn, ByKey).
+	By string
+	// Key is the (device, username) a ByKey revocation, or a ByOwn one
+	// limited to one key, named.
+	Key store.TokenKey
+	// LiftNote says where a standing mark made over HTTP is lifted: the
+	// endpoint sets it from Broker.AdminSocket (decision 34), and Text prints
+	// it after the mark's own text. Empty from the admin socket, whose
+	// caller is already there.
+	LiftNote    string
 	Mark        store.Revocation
 	Contexts    []store.ContextRef
 	Unreached   []store.ContextRef
@@ -70,17 +91,12 @@ func (req RevokeRequest) normal() (RevokeRequest, string, string, error) {
 	case (req.Principal != "") == byCert:
 		return req, "", "", ErrBadRevocation
 	case req.Principal != "":
-		if len(req.Principal) > 1024 || strings.IndexFunc(req.Principal, func(r rune) bool { return r < 0x21 || r > 0x7e }) >= 0 {
-			return req, "", "", fmt.Errorf("%w: a principal is printable ASCII", ErrBadRevocation)
+		p, err := normalPrincipal(req.Principal)
+		if err != nil {
+			return req, "", "", err
 		}
-		for _, p := range principalPrefixes {
-			if strings.HasPrefix(strings.ToLower(req.Principal), p) && len(req.Principal) > len(p) {
-				req.Principal = p + strings.ToLower(req.Principal[len(p):])
-				return req, store.RevocationPrincipal, req.Principal, nil
-			}
-		}
-		return req, "", "", fmt.Errorf("%w: a principal begins %s, as the log names it (user:alice@example.com)",
-			ErrBadRevocation, strings.Join(principalPrefixes, " or "))
+		req.Principal = p
+		return req, store.RevocationPrincipal, p, nil
 	case req.Issuer == "" || req.Serial == "":
 		return req, "", "", fmt.Errorf("%w: a certificate is named by its issuer and its serial, both", ErrBadRevocation)
 	}
@@ -102,6 +118,25 @@ func (req RevokeRequest) normal() (RevokeRequest, string, string, error) {
 	}
 	req.Serial = s
 	return req, store.RevocationCert, store.CertKey(req.Issuer, req.Serial), nil
+}
+
+// normalPrincipal is p as Identity spells it: user: and the lower-cased
+// email, the mapping being case-insensitive by construction. One that is
+// not printable ASCII, has no known prefix, or nothing after it, is refused
+// (pre-flight I2, M16). The HTTP endpoints compare a caller to a principal
+// a request names only after this, so no spelling makes another principal
+// read as the caller, or the caller as another (decision 34).
+func normalPrincipal(p string) (string, error) {
+	if len(p) > 1024 || strings.IndexFunc(p, func(r rune) bool { return r < 0x21 || r > 0x7e }) >= 0 {
+		return "", fmt.Errorf("%w: a principal is printable ASCII", ErrBadRevocation)
+	}
+	for _, pre := range principalPrefixes {
+		if strings.HasPrefix(strings.ToLower(p), pre) && len(p) > len(pre) {
+			return pre + strings.ToLower(p[len(pre):]), nil
+		}
+	}
+	return "", fmt.Errorf("%w: a principal begins %s, as the log names it (user:alice@example.com)",
+		ErrBadRevocation, strings.Join(principalPrefixes, " or "))
 }
 
 // Revoke puts a mark in force and reaches everything it names (spec
@@ -158,7 +193,7 @@ func (b *Broker) Revoke(ctx context.Context, req RevokeRequest) (RevokeReport, e
 		return RevokeReport{}, fmt.Errorf("broker: the revocation could not be recorded, so nothing was revoked (%w); "+
 			fallback, err)
 	}
-	rep := RevokeReport{Request: req, Mark: mark, decimal: decimal}
+	rep := RevokeReport{Request: req, By: kind, Mark: mark, decimal: decimal}
 	if got, err := b.Store.GetRevocation(ctx, kind, key); err == nil {
 		rep.Mark = got // an earlier mark stands, with its own time
 	}
@@ -219,15 +254,7 @@ func (b *Broker) Revoke(ctx context.Context, req RevokeRequest) (RevokeReport, e
 			}
 		}
 	}
-	pol := b.Policy.Load()
-	for _, ref := range rep.Contexts {
-		// A platform that never asks about a command keeps the live session
-		// whatever its context says (spec §13 decision 21), and a device the
-		// inventory gives no platform is assumed to, as the refresh assumes.
-		if dev, ok := pol.Device(ref.NAS); !ok || dev.Platform == "" || sessionOnly(pol, dev.Platform) {
-			rep.Unreached = append(rep.Unreached, ref)
-		}
-	}
+	rep.Unreached = b.unreachedOf(rep.Contexts)
 	outcome := "applied"
 	if rep.Err != nil {
 		outcome = "partial"
@@ -266,10 +293,25 @@ func (b *Broker) Lift(ctx context.Context, req RevokeRequest) (RevokeReport, err
 	if b.Conns != nil {
 		b.Conns.Revoked(cur, false)
 	}
-	rep := RevokeReport{Request: req, Mark: cur}
+	rep := RevokeReport{Request: req, By: cur.Kind, Mark: cur}
 	rep.Saved, rep.SaveErr = b.persist(ctx)
 	b.recordRevocation(b.Now(), rep, decision.VerdictPermit, decision.RevocationLifted, "lifted")
 	return rep, nil
+}
+
+// unreachedOf is each of refs on a platform that never asks about a command,
+// which keeps the live session whatever its context says (spec §13 decision
+// 21), or on a device the inventory gives no platform, assumed to, as the
+// refresh assumes.
+func (b *Broker) unreachedOf(refs []store.ContextRef) []store.ContextRef {
+	pol := b.Policy.Load()
+	var out []store.ContextRef
+	for _, ref := range refs {
+		if dev, ok := pol.Device(ref.NAS); !ok || dev.Platform == "" || sessionOnly(pol, dev.Platform) {
+			out = append(out, ref)
+		}
+	}
+	return out
 }
 
 // fallback is how to cut access when a revocation cannot be made.
@@ -327,15 +369,21 @@ func (b *Broker) persist(ctx context.Context) (bool, error) {
 // recordRevocation writes the one revoke record a revocation or lift makes
 // (spec §5.7), and counts it.
 func (b *Broker) recordRevocation(now time.Time, rep RevokeReport, verdict string, reason decision.Reason, outcome string) {
-	body := &decision.Revocation{By: rep.Mark.Kind, At: decision.FormatTime(rep.Mark.At), Origin: rep.Request.Origin,
+	body := &decision.Revocation{By: rep.By, At: decision.FormatTime(rep.Mark.At), Origin: rep.Request.Origin,
 		Contexts: len(rep.Contexts), TokenKeys: rep.TokenKeys, Connections: rep.Connections}
-	saved := rep.Saved
-	body.Saved = &saved
 	rec := decision.Record{TS: now, Event: decision.EventRevoke, Verdict: verdict, Reason: reason, Revocation: body}
-	if rep.Mark.Kind == store.RevocationPrincipal {
-		rec.Principal = rep.Request.Principal
-	} else {
+	switch rep.By {
+	case ByCert:
 		body.Issuer, body.Serial = rep.Request.Issuer, rep.Request.Serial
+	default:
+		rec.Principal = rep.Request.Principal // ByKey: the context's owner, when one was read
+	}
+	if rep.Key != (store.TokenKey{}) {
+		body.Device, body.Username = rep.Key.NAS, rep.Key.Username
+	}
+	if rep.By == ByPrincipal || rep.By == ByCert {
+		saved := rep.Saved // a standing mark's file; self and key write none
+		body.Saved = &saved
 	}
 	for _, ref := range rep.Unreached {
 		body.Unreached = append(body.Unreached, decision.ContextRef{Device: ref.NAS, Username: ref.Username})
@@ -344,7 +392,7 @@ func (b *Broker) recordRevocation(now time.Time, rep RevokeReport, verdict strin
 		body.Error = printsafe.Line(rep.Err.Error(), 300)
 	}
 	b.emit(rec)
-	b.Metrics.Revocations.WithLabelValues(rep.Mark.Kind, outcome).Inc()
+	b.Metrics.Revocations.WithLabelValues(rep.By, outcome).Inc()
 }
 
 // what names the revoked credential for a person. A serial is shown as
@@ -370,10 +418,72 @@ func (r RevokeReport) flags() string {
 // finish or was not saved: `port49 revoke` exits 3 on it (M10).
 func (r RevokeReport) Partial() bool { return r.Err != nil || r.SaveErr != nil }
 
-// Text is what `port49 revoke` prints for a revocation: a warning first when
-// the principal may be misspelled, what was revoked and what it reached,
-// the contexts it could not reach, then anything that did not finish.
+// Text is what port49 revoke prints for a revocation: for a standing mark,
+// a warning first when the principal may be misspelled, what was revoked and
+// what it reached; for a self or key revocation, what it ended and that
+// nothing stands; then, for all, the contexts it could not reach and
+// anything that did not finish.
 func (r RevokeReport) Text() string {
+	var b strings.Builder
+	at := r.Mark.At.UTC().Format(time.RFC3339)
+	switch r.By {
+	case ByOwn:
+		where := "everywhere"
+		if r.Key != (store.TokenKey{}) {
+			where = fmt.Sprintf("on %s (%s)", r.Key.NAS, r.Key.Username)
+		}
+		fmt.Fprintf(&b, "ended %s's sessions %s at %s: %d live context(s) marked, the unspent tokens under %d "+
+			"(device, username) key(s) deleted; nothing stands against %s, so a new `port49 token` and login work "+
+			"at once", r.Request.Principal, where, at, len(r.Contexts), r.TokenKeys, r.Request.Principal)
+		// A login joins the context it shares and lifts its mark for every
+		// session on that (device, username) (spec §5.6; decision 15), a
+		// stranger's on a leaked token included (pre-flight I1).
+		b.WriteString("\nyour next login on a device re-admits every session open there under your username: if " +
+			"anyone else used your token, close their session on the device (or ask an operator to revoke your " +
+			"principal) before you log in there again")
+	case ByKey:
+		owner := ""
+		if r.Request.Principal != "" {
+			owner = ", " + r.Request.Principal + "'s,"
+		}
+		fmt.Fprintf(&b, "ended the session on %s (%s)%s at %s: %d live context(s) marked, the unspent tokens "+
+			"under %d key(s) deleted; no revocation stands, so its owner can mint and log in again (to stop that, "+
+			"revoke the principal)", r.Key.NAS, r.Key.Username, owner, at, len(r.Contexts), r.TokenKeys)
+		fmt.Fprintf(&b, "\nthe owner's next login on %s re-admits any session still open on it under %s; close it "+
+			"on the device", r.Key.NAS, r.Key.Username)
+	default:
+		b.WriteString(r.markText())
+		if r.LiftNote != "" {
+			b.WriteString("\n" + r.LiftNote)
+		}
+	}
+	if len(r.Unreached) > 0 {
+		var names []string
+		for _, ref := range r.Unreached {
+			names = append(names, fmt.Sprintf("%s (%s)", ref.NAS, ref.Username))
+		}
+		fmt.Fprintf(&b, "\nnot reached, on a platform that never asks port49 about a command (close these on the "+
+			"device): %s", strings.Join(names, ", "))
+	}
+	if r.SaveErr != nil {
+		fmt.Fprintf(&b, "\nNOT saved to broker.revocations_file (%v): this is in force now, and a restart of "+
+			"port49d forgets it", r.SaveErr)
+	}
+	if r.Err != nil && (r.By == ByPrincipal || r.By == ByCert) {
+		fmt.Fprintf(&b, "\nincomplete: %v; the mark is in force and refuses every new mint, but until a run "+
+			"finishes, unspent tokens may still log in on a device (up to their TTL) and unmarked contexts keep "+
+			"authorizing — run the same command again, which repeats every step", r.Err)
+	} else if r.Err != nil {
+		fmt.Fprintf(&b, "\nincomplete: %v; what it reached is ended, and the rest still works: run the same "+
+			"command again, which repeats every step", r.Err)
+	}
+	return b.String()
+}
+
+// markText is what Text prints first for a standing mark: a warning first
+// when the principal may be misspelled, then what was revoked and what it
+// reached.
+func (r RevokeReport) markText() string {
 	var b strings.Builder
 	nothing := len(r.Contexts) == 0 && r.TokenKeys == 0 && r.Connections == 0
 	if r.Mark.Kind == store.RevocationPrincipal && (r.Unnamed || nothing) {
@@ -402,23 +512,6 @@ func (r RevokeReport) Text() string {
 	if r.Mark.Kind == store.RevocationCert && nothing {
 		b.WriteString("\nnothing was found under this certificate; if it is in use, its issuer is likely spelled " +
 			"differently from the broker's (RFC 2253, as Go prints it: CN=Corp Issuing CA,O=Example): use --cert FILE")
-	}
-	if len(r.Unreached) > 0 {
-		var names []string
-		for _, ref := range r.Unreached {
-			names = append(names, fmt.Sprintf("%s (%s)", ref.NAS, ref.Username))
-		}
-		fmt.Fprintf(&b, "\nnot reached, on a platform that never asks port49 about a command (close these on the "+
-			"device): %s", strings.Join(names, ", "))
-	}
-	if r.SaveErr != nil {
-		fmt.Fprintf(&b, "\nNOT saved to broker.revocations_file (%v): this is in force now, and a restart of "+
-			"port49d forgets it", r.SaveErr)
-	}
-	if r.Err != nil {
-		fmt.Fprintf(&b, "\nincomplete: %v; the mark is in force and refuses every new mint, but until a run "+
-			"finishes, unspent tokens may still log in on a device (up to their TTL) and unmarked contexts keep "+
-			"authorizing — run the same command again, which repeats every step", r.Err)
 	}
 	return b.String()
 }
