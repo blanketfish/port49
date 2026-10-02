@@ -398,8 +398,15 @@ func (s keyReads) GetContext(ctx context.Context, k store.ContextKey) (store.Con
 // says whether anyone is logged in there (final review M1; design §17).
 func TestMineOnAKeyReadsOnlyTheCallersOwn(t *testing.T) {
 	k := store.TokenKey{NAS: "leaf1", Username: "alice"}
+	// Both fixtures answer at one instant: each starts its clock at its own
+	// second, and the answer's "at" would differ whenever the two straddled
+	// a second boundary, which is not what this compares.
+	at := time.Now().Truncate(time.Second)
 	answer := func(occupied bool) (int, string, int) {
 		f := newFixtureWithPolicy(t, 8, sharedPolicy)
+		f.mu.Lock()
+		f.now = at
+		f.mu.Unlock()
 		if occupied {
 			f.mintFor(t, "alice2@example.com", "leaf1")
 			f.liveContext(t, "leaf1", "alice", alice2, "")
