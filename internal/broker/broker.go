@@ -662,6 +662,14 @@ func (b *Broker) mintOne(ctx context.Context, pol *policy.Policy, principal stri
 		return api.MintItem{}, err
 	case errors.As(err, &capped):
 		return deny(decision.CandidateCapReached, dev.Platform), nil
+	case errors.Is(err, token.ErrSessionExpired):
+		// The ceiling passed between the check above and the mint.
+		item := deny(decision.SessionExpired, dev.Platform)
+		item.Detail = "this device's session ceiling has passed since you authenticated; run 'port49 refresh'"
+		return item, nil
+	case errors.Is(err, token.ErrNoAuthTime):
+		b.logf("broker: minting for %s on %q: %v", principal, name, err)
+		return b.fault(name, "broker_error", "the broker could not mint for this device; tell the operator"), nil
 	case err != nil:
 		return deny(decision.StoreUnavailable, dev.Platform), nil
 	}

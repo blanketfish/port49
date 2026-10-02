@@ -281,6 +281,12 @@ func TestAReplayKeepsItsTokensCeiling(t *testing.T) {
 	if first.Verdict != "permit" || first.SessionExpiresAt != auth.Add(time.Hour).UTC().Format(time.RFC3339) {
 		t.Fatalf("the first mint: %+v", first)
 	}
+	// Minted 5m before a 1h ceiling with a 15m token_ttl, the token expires
+	// at the ceiling (final review I-1).
+	if first.ExpiresAt != first.SessionExpiresAt {
+		t.Fatalf("the token outlives its ceiling: expires_at %s, session_expires_at %s",
+			first.ExpiresAt, first.SessionExpiresAt)
+	}
 	// A fresh connection before the ceiling: the same token, its own ceiling.
 	f.advance(3 * time.Minute)
 	again := decodeMint(t, f.postAt(ctx, f.state(f.alice), body, "k1", f.now)).Results[0]

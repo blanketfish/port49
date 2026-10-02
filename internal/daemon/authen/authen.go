@@ -417,6 +417,21 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 		return s.fail(ctx, rec, decision.TokenNotFound)
 	}
 
+	// A token whose session ceiling has passed opens nothing: the context it
+	// would write is born expired. The minter clamps a token's expiry to its
+	// ceiling, so this is the floor under that, for a token minted without
+	// the clamp. It matters most on Junos, where a refused session
+	// authorization does not stop the login and the device never asks again
+	// (spec §13, decision 21): FAIL here is the one answer Junos honours as a
+	// failed login. Refused before the token is spent, so nothing is written
+	// and a retransmission is refused the same way. A ceiling with no
+	// AuthTime is measured from the epoch and refused too.
+	if winner.MaxSessionAge > 0 && !s.h.now().Before(winner.AuthTime.Add(winner.MaxSessionAge)) {
+		rec.Principal = winner.Principal
+		rec.Session.SessionExpires = decision.FormatTime(winner.AuthTime.Add(winner.MaxSessionAge))
+		return s.fail(ctx, rec, decision.SessionExpired)
+	}
+
 	// 3. Atomic redemption; the loser of a race adopts the winner's receipt.
 	//
 	// The receipt carries the ctx_id this redemption lands on, so that id is
@@ -698,7 +713,8 @@ func (s *Session) loginContext(winner *store.Token, username, port, remAddr stri
 	//
 	// Nothing else is guarded here, and a token carrying a ceiling with no
 	// AuthTime to anchor it is deliberately left to compute a SessionExpires
-	// in the distant past. That denies, loudly and visibly, where dropping the
+	// in the distant past (redeem refuses such a token session_expired before
+	// it gets here). That denies, loudly and visibly, where dropping the
 	// ceiling instead would hand out an unbounded session that looks exactly
 	// like a legitimate `never` and that nothing logs.
 	if winner.MaxSessionAge > 0 {
