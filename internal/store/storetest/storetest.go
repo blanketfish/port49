@@ -480,6 +480,21 @@ func IdempotencyLeaseExpires(t *testing.T, newStore func() (store.Store, func(ti
 	if cur, ok, _ := s.ReserveIdempotency(ctx, "user:alice", "k", res("third")); ok || cur.Holder != "retry" {
 		t.Fatalf("the dead holder released the retry's reservation: %+v %v", cur, ok)
 	}
+	// An expired reservation nobody has replaced is not its holder's either:
+	// a completion over it is refused, and writes nothing (store.Store's
+	// CompleteIdempotency; a renewal of an abandoned replay relies on it).
+	if _, ok, err := s.ReserveIdempotency(ctx, "user:alice", "k2", res("dead")); err != nil || !ok {
+		t.Fatalf("second reservation: %v %v", ok, err)
+	}
+	advance(time.Minute)
+	now = now.Add(time.Minute)
+	if err := s.CompleteIdempotency(ctx, "user:alice", "k2", "dead",
+		store.Idempotency{BodyHash: "h1", Holder: "dead", ExpiresAt: now.Add(time.Hour)}); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("the dead holder completed its own expired reservation: %v", err)
+	}
+	if cur, ok := Peek(t, s, now, "user:alice", "k2"); ok {
+		t.Fatalf("a refused completion over an expired reservation wrote %+v", cur)
+	}
 }
 
 // TokenIndex is what a revocation needs to find a principal's, or a
