@@ -11055,8 +11055,10 @@ store:
   //
   // expires is when the lease expires at the latest by the last answer:
   // its send time plus the TTL it reported, which etcd counted after the
-  // send, so never later than etcd's own. A hold whose reads stop
-  // answering is lost once that has half of ttl or less left. Reads are at
+  // send, so never later than etcd's own. The hold is lost once that has
+  // half of ttl or less left, whether a read answered with that TTL (the
+  // keepalives stalled while reads answer; re-check 2 M-B7) or the reads
+  // stopped answering. Reads are at
   // most ttl/3 apart (a tick, then a read up to ttl/6 long), so the loss
   // comes at least ttl/6 before etcd can expire the lease and a second
   // port49d take the keyspace. Stamping at the send, and reading the TTL
@@ -11096,7 +11098,8 @@ store:
   			return
   		case err == nil:
   			expires = sent.Add(time.Duration(left.TTL) * time.Second)
-  		case time.Until(expires) <= ttl/2:
+  		}
+  		if time.Until(expires) <= ttl/2 {
   			lose()
   			return
   		}
@@ -14002,9 +14005,9 @@ measurement on a hang of its own, the store returned between them. On each image
     revocations file's marks back into etcd, applies every mark to the restored sessions, and
     purges every unspent token, so a token redeemed since the snapshot cannot be redeemed
     again. Then `port49 revoke --lift` again any revocation lifted since the snapshot.
-  - **Restore with `etcdutl snapshot restore --bump-revision <n> --mark-compacted`** (both in
-    etcdutl v3.6.15), `<n>` above the revisions written since the snapshot, so etcd never
-    reuses a revision port49 has seen for another write.
+  - **Restore with `etcdutl snapshot restore --bump-revision 1000000000 --mark-compacted`**
+    (both in etcdutl v3.6.15). A billion is far above the writes since any snapshot worth
+    restoring, so etcd never reuses a revision port49 has seen for another write.
 - **One port49d per keyspace until plan 7e.** A second one waits and is not ready. On
   Kubernetes use `strategy: Recreate`. Never delete `meta/hold` by hand: stop the port49d that
   holds it.
