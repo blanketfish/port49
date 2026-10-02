@@ -62,6 +62,13 @@ func New(s store.Store, now func() time.Time, contextIdleTTL, indexTTL time.Dura
 // newBlobHash is installed when it is non-empty. It returns how many contexts
 // were touched.
 //
+// graceCutoff is the refresh time less session.grace_window, and it is
+// required (ErrNoGraceCutoff): a context whose ceiling is before it is past
+// its grace window, is skipped and not counted, and is never resumed, as
+// /v1/refresh refuses one (store.ErrPastGrace; spec §5.6, teardown row 3).
+// Without it the store would carry an expired ceiling forward by its span
+// (plan 7b final review M-3).
+//
 // It does not clear a revocation. A refresh re-resolves a directory; it does
 // not re-verify a credential, and it runs on every principal with a live
 // context every few minutes — so lifting the mark here would un-revoke every
@@ -85,17 +92,22 @@ func New(s store.Store, now func() time.Time, contextIdleTTL, indexTTL time.Dura
 // — a context outliving the entries that name it — is the dangerous one and is
 // not this package's to police: every store writer that moves a context's
 // expiry moves its index entries with it (design §12).
-func (m *Manager) Refresh(ctx context.Context, principal string, authTime time.Time, newBlobHash, oldSid, newSid string) (int, error) {
+func (m *Manager) Refresh(ctx context.Context, principal string, authTime, graceCutoff time.Time,
+	newBlobHash, oldSid, newSid string) (int, error) {
+	if graceCutoff.IsZero() {
+		return 0, ErrNoGraceCutoff
+	}
 	refs, err := m.store.ContextsByPrincipal(ctx, principal)
 	if err != nil {
 		return 0, err
 	}
-	r := store.ContextRefresh{AuthTime: authTime, RefreshedAt: m.now(), BlobHash: newBlobHash}
+	r := store.ContextRefresh{AuthTime: authTime, RefreshedAt: m.now(), BlobHash: newBlobHash,
+		GraceCutoff: graceCutoff}
 	rotating := newSid != "" && newSid != oldSid
 	n := 0
 	for _, ref := range refs {
 		switch err := m.store.RefreshContext(ctx, keyOf(ref), r, m.contextIdleTTL); {
-		case errors.Is(err, store.ErrNotFound):
+		case errors.Is(err, store.ErrNotFound), errors.Is(err, store.ErrPastGrace):
 			continue
 		case err != nil:
 			// The count is what was actually refreshed before the store
@@ -112,6 +124,10 @@ func (m *Manager) Refresh(ctx context.Context, principal string, authTime time.T
 	}
 	return n, nil
 }
+
+// ErrNoGraceCutoff is a Refresh with no grace cutoff, which could resume a
+// context past its grace window. It refreshes nothing.
+var ErrNoGraceCutoff = errors.New("session: a refresh needs a grace cutoff")
 
 // ErrBlankRevocation is a revocation by an empty sid, or by a certificate
 // with no issuer or no serial. Every certificate login has sid "" and every

@@ -38,7 +38,7 @@ func TestRefreshMovesAuthTimeKeepsWindowReindexesSid(t *testing.T) {
 	s := memory.New(func() time.Time { return now })
 	seed(t, s, now)
 	m := New(s, func() time.Time { return now }, time.Hour, time.Hour)
-	n, err := m.Refresh(context.Background(), "user:alice@example.com", now, "sha256:new", "s1", "s2")
+	n, err := m.Refresh(context.Background(), "user:alice@example.com", now, now.Add(-10*time.Minute), "sha256:new", "s1", "s2")
 	if err != nil || n != 1 {
 		t.Fatalf("n=%d err=%v", n, err)
 	}
@@ -70,7 +70,7 @@ func TestRefreshWithoutCeilingLeavesNoCeiling(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := New(s, func() time.Time { return now }, time.Hour, time.Hour)
-	if _, err := m.Refresh(ctx, "user:bob@example.com", now, "", "", ""); err != nil {
+	if _, err := m.Refresh(ctx, "user:bob@example.com", now, now.Add(-10*time.Minute), "", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	c, _ := s.GetContext(ctx, key(bob))
@@ -125,7 +125,7 @@ func TestRefreshDoesNotClearRevocation(t *testing.T) {
 	if _, err := m.RevokeByPrincipal(context.Background(), "user:alice@example.com"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.Refresh(context.Background(), "user:alice@example.com", now, "sha256:new", "s1", "s1"); err != nil {
+	if _, err := m.Refresh(context.Background(), "user:alice@example.com", now, now.Add(-10*time.Minute), "sha256:new", "s1", "s1"); err != nil {
 		t.Fatal(err)
 	}
 	c, _ := s.GetContext(context.Background(), key(ref))
@@ -350,7 +350,7 @@ func TestRefreshAndRevokeByPrincipalTakeNoCopyToLose(t *testing.T) {
 	h := &hookStore{Store: s}
 	m := New(h, func() time.Time { return now }, time.Hour, time.Hour)
 
-	if _, err := m.Refresh(ctx, "user:alice@example.com", now, "sha256:new", "s1", "s2"); err != nil {
+	if _, err := m.Refresh(ctx, "user:alice@example.com", now, now.Add(-10*time.Minute), "sha256:new", "s1", "s2"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := m.RevokeByPrincipal(ctx, "user:alice@example.com"); err != nil {
@@ -424,5 +424,38 @@ func TestARevocationByABlankSidOrCertificateMarksNothing(t *testing.T) {
 				t.Fatalf("a blank revocation deleted a receipt: %v", err)
 			}
 		})
+	}
+}
+
+// A context past its grace window is never resumed by Refresh: it is
+// skipped and not counted, and its ceiling stays where it was. A Refresh
+// with no cutoff refreshes nothing (plan 7b final review M-3).
+func TestRefreshNeverResumesAContextPastItsGraceWindow(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	s := memory.New(func() time.Time { return now })
+	ctx := context.Background()
+	expired := now.Add(-11 * time.Minute)
+	if err := s.PutContext(ctx, key(ref), store.Context{CtxID: "c1", Principal: "user:alice@example.com",
+		Username: "alice", AuthTime: expired.Add(-8 * time.Hour), SessionExpires: expired}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.IndexContext(ctx, "user:alice@example.com", "", "", ref, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	m := New(s, func() time.Time { return now }, time.Hour, time.Hour)
+	if n, err := m.Refresh(ctx, "user:alice@example.com", now, time.Time{}, "", "", ""); !errors.Is(err, ErrNoGraceCutoff) || n != 0 {
+		t.Fatalf("no cutoff: n=%d err=%v", n, err)
+	}
+	n, err := m.Refresh(ctx, "user:alice@example.com", now, now.Add(-10*time.Minute), "", "", "")
+	if err != nil || n != 0 {
+		t.Fatalf("past grace: n=%d err=%v", n, err)
+	}
+	if c, _ := s.GetContext(ctx, key(ref)); !c.SessionExpires.Equal(expired) || !c.AuthTime.Equal(expired.Add(-8*time.Hour)) {
+		t.Fatalf("a context past its grace window was resumed: session_expires %v", c.SessionExpires)
+	}
+	// Inside the window it is carried forward, as before.
+	n, err = m.Refresh(ctx, "user:alice@example.com", now, now.Add(-20*time.Minute), "", "", "")
+	if c, _ := s.GetContext(ctx, key(ref)); err != nil || n != 1 || !c.SessionExpires.Equal(now.Add(8*time.Hour)) {
+		t.Fatalf("inside grace: n=%d err=%v session_expires %v", n, err, c.SessionExpires)
 	}
 }
