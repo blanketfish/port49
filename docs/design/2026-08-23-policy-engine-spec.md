@@ -908,7 +908,7 @@ principal, a `sid` until plan 7h, an unknown field):
   shared `(device, username)` stay. Its live contexts are marked by compare-and-set on the
   revision read, so a context another principal's login replaced is never marked, and they are
   marked twice. Its receipts are deleted everywhere, even with a key named: the store has no
-  finer cut, so a retransmission in flight on another device is answered `token_spent`. With
+  finer cut, so a retransmission in flight on another device is answered `token_not_found`. With
   `device` and `username` beside `mine` it does that on that key alone. Nothing stands after it:
   a token minted later joins the context and lifts the mark (decision 15), for every session
   open under that `(device, username)`. So if anyone else used the caller's token, the caller's
@@ -1968,7 +1968,8 @@ A `revoke` record (plan 7a) is written once per revocation or lift that takes fo
 credential_revoked` for a revocation, `permit revocation_lifted` for a lift. A revocation that took
 force but did not finish is recorded too, with `error`. One that did not take force writes none (a
 mark that could not be written, a lift that found no mark or could not delete it, a malformed
-request, one that gave up waiting behind another): `port49 revoke` reports it and exits 1. Its
+request, one that gave up waiting behind another; a refusal for a missing `api:` right is
+recorded, below): `port49 revoke` reports it and exits 1. Its
 `principal` is the revoked principal when the revocation is by principal. Its body is `"revocation": {"by", "issuer", "serial", "device", "username", "at",
 "origin", "contexts", "token_keys", "connections", "unreached", "saved", "error"}`: `by` is
 `principal` or `cert` for a standing mark, `self` for a principal ending its own sessions, and
@@ -2001,7 +2002,8 @@ the device (no platform where the answer is `no_grants_matched`) and the bundle 
 (`policy.bundle`), and has `"explain": {"asked_by", "asked_by_fingerprint", "command",
 "mint_error"}`: `asked_by` and `asked_by_fingerprint` are the caller's principal and certificate,
 `command` is true when a command was asked, and the command itself is never recorded. Where the
-broker would mint no token (`mint_error`, a mint item error), the record has no verdict. An API
+broker would mint no token (`mint_error`, a mint item error), the record has no verdict and no
+reason; `mint_error` is the answer. An API
 call refused before its body is read, for a reason a mint is refused (`trust_domain_unresolved`,
 `session_expired`, `credential_revoked`, `store_unavailable`, with their `mint` meanings), is
 recorded under its own event: `identity`, `explain`, or `revoke`, the caller as `principal` with
@@ -2014,8 +2016,8 @@ refused request named; any other path is recorded `mint`.
 
 | `reason` | Meaning |
 |---|---|
-| `grants_matched` | `mint`: at least one declared grant selected the device; blob written. `refresh`: the policy in force was written into the live context; or, on a session refresh, the context was extended |
-| `no_grants_matched` | `mint`: no declared grant for this principal selects the device. `refresh`: none does any more, and the live context is revoked |
+| `grants_matched` | `mint`: at least one declared grant selected the device; blob written. `refresh`: the policy in force was written into the live context; or, on a session refresh, the context was extended. `identity`: the caller's subject holds a grant unexpired now |
+| `no_grants_matched` | `mint`: no declared grant for this principal selects the device. `refresh`: none does any more, and the live context is revoked. `identity`: it holds none |
 | `username_collision` | `mint`: the derived username is already held by a subject in another trust domain (§2) |
 | `trust_domain_unresolved` | `mint`: no configured verifier accepted the credential (design document §7); or the revocation status of the certificate or one above it could not be established (a stale CRL, an OCSP responder that did not answer, an issuer no configured source covers) and `broker.certificate_status.on_unavailable` is `refuse` (§5.1.4). The API then answers 503 `certificate_status_unavailable`, to be retried, never a final 401. On `refresh`: the refresh challenge was not answered by the connection's key, or the certificate's status could not be established as on `mint` (503) |
 | `candidate_cap_reached` | `mint`: `token.candidate_cap` unspent tokens already stand for this `(device, username)`; the mint is refused, never a redemption, and every token already issued stays usable (design document §8) |
@@ -5065,8 +5067,11 @@ then loads, and no bundle between the two revokes a context the final one keeps.
 **A policy reload is held to the same bound.** Key groups are policy, and a refused device's live
 contexts are revoked and its tokens deleted, so a `key_groups` edit that misses the fleet would
 otherwise log everyone out within seconds, and a revert would not bring the sessions back. A
-policy reload that refuses admission to more than `inventory.max_removed_percent` of the devices
-the policy in force admits is refused, naming them; the policy in force keeps serving and
+policy reload that newly refuses admission to, or newly quarantines, together more than
+`inventory.max_removed_percent` of the devices in service under the policy in force (admitted
+and not quarantined) is refused, naming them, unless at least as many of the devices the
+inventory held before it are in service after it (a net release; a device the reload adds never
+offsets one it takes out; §13 decision 34); the policy in force keeps serving and
 `port49_policy_file_refused` is 1, and raising the bound and sending `SIGHUP` applies a deliberate
 change. A policy reload whose bundle admits no device of a non-empty inventory is refused
 whatever the bound, as a start is (above): the policy in force keeps serving, the refusal is
@@ -5639,7 +5644,9 @@ principal or one certificate, to lift a revocation, or to list those in force (�
 socket answers port49d's user and root alone, the people who can already rewrite the policy. A
 revocation prints what it reached and names each live context on a platform it cannot reach;
 `--cert` reads the issuer and serial from the certificate itself, in the spelling the broker
-compares, which is safer than typing a distinguished name.
+compares, which is safer than typing a distinguished name. It exits 0 when the revocation, lift
+or list is done; 1 when it did not take force (refused, unreachable, or no answer, §5.7); 3 when
+it took force and did not finish or was not saved, the mark standing; and 2 on usage.
 
 **`port49 revoke --mine [--device <name> --username <name>]`** and **`port49 revoke --via-agent
 [--yes] (--principal <principal> | --device <name> --username <name>)`** send the revocation to
@@ -5651,7 +5658,9 @@ and needs `revoke_others` too. `--via-agent --principal` asks `y/N` on a termina
 (`--yes` skips it; off a terminal it does not ask), and prints the target's subject from the
 answer. A lift, a certificate and `--list` stay the admin socket's; `--list` shows marks only,
 and says on stderr that a self or key revocation, which leaves none, is named in the decision
-log. Exit codes are as above.
+log. It exits as the admin-socket form does: 0 done; 1 refused (`api_right_missing`,
+`revocation_busy`, declined at the prompt, no agent); 3 in force but not finished or, for a
+standing mark, not saved; 2 on usage.
 
 **`port49 identity [--json]`** prints what the broker resolves the agent's principal to (`GET
 /v1/identity`): subject, grants unexpired now, `api:` rights, and until when this connection
@@ -5728,8 +5737,9 @@ defined at all. It reports an `accept` version whose `retire_after` has passed a
 Without `--config` it still fails on every device admission refuses where key groups are
 declared: a tie, and a device no group admits, since port49d serves neither. It fails on a test
 naming a device the inventory does not have, which a load no longer refuses (§10).
-**`port49 policy diff`** fails on a device the new policy refuses admission and the old admitted,
-naming it: the edit port49d's reload would refuse over `inventory.max_removed_percent` (§10).
+**`port49 policy diff`** fails on a device the new policy refuses admission or newly quarantines
+and the old kept in service, naming it: the edit port49d's reload would refuse over
+`inventory.max_removed_percent`, which counts the two together (§10).
 
 **Access review** is a rendering of the flat grant table, not an investigation:
 `port49 access review --subject <name>` lists every grant row the subject appears in, with
@@ -6356,9 +6366,9 @@ the design was silent, each the option that denies more.*
   socket; an HTTP mark is still made with no `admin_socket` configured (revoking is the safe
   direction), and the response and port49d's start line say lifting it then needs port49d
   stopped and the file edited.
-- **Records.** Every authenticated call is one record: the events `identity` and `explain` and
-  the reason `api_right_missing` are added; a call refused before its body is read, or as its
-  connection binds, is recorded under its own event with a mint's reasons; an explain never
+- **Records.** Every `identity`, `explain` and `revoke` call that is authorized or refused for a
+  right is one record: the events `identity` and `explain` and the reason `api_right_missing`
+  are added; a call refused before its body is read, or as its connection binds, is recorded under its own event with a mint's reasons; an explain never
   records its command. A record's `auth` and `principal` describe one credential: a record about
   someone other than the caller carries no `auth`, and names the caller in `origin` or in
   `explain.asked_by` and `explain.asked_by_fingerprint`.
@@ -6369,7 +6379,7 @@ the design was silent, each the option that denies more.*
   whose permits would match it, deliberately: a role catalogue, never who holds a role or where.
   Each role's permits are compiled once per platform per loaded policy, as projections are
   memoized, so a denied explain costs a match per role; a per-principal rate bound was not
-  chosen, since its refusal would need a reason code this vocabulary lacks and every call is one
+  chosen, since its refusal would need a reason code this vocabulary lacks and every explain is one
   record.
 - **Health.** `/healthz` and `/readyz` need no certificate and write no record; readiness is
   serving or not, never the store's health (design document §12).
@@ -6546,8 +6556,9 @@ Beyond those already listed in the design document's §14:
   force gives writes no record, and nor does a pass a store error stops, for the context it
   stopped at. Every revocation a refresh makes has its record.
 - **Replay agreement**: every record in the corpus replays against its named blob and
-  reproduces the logged verdict and reason. A `revoke` record names no blob, and is checked
-  against the marks it reports instead.
+  reproduces the logged verdict and reason. A `revoke` record names no blob, and one by
+  principal or certificate is checked against the marks it reports instead; `identity`,
+  `explain`, and `self` or `key` revocations are passed over.
 - **Replay divergence is detected**: a record whose blob is substituted, or whose verdict is
   edited, is reported as divergent rather than silently accepted.
 - **Raw arguments survive normalization**: a record's `raw` reproduces the arguments as
