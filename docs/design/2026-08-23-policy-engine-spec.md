@@ -6540,11 +6540,7 @@ review (the owner may override them).*
     revocation by principal or certificate still denies it through the marks. An index record
     rewritten to name another principal is found by the same re-index, which compares it
     against the context's own sealed principal; until the next re-index it hides the context
-    as a deleted one does. An index record whose sid is swapped for another hides the context
-    from a revocation by sid until its entries expire: a session refresh rotates the sid in
-    the index and not in the sealed record, so the re-index can find only a sid gone, never
-    one swapped. No mark backs a revocation by sid; the principal and certificate marks still
-    deny the context. Plan 7h, which seals the current sid at each rotation, carries the fix.
+    as a deleted one does.
 
   That residual is carried, unassigned.
 - **The index is plaintext.** The keys revocation reads (principal, device, username,
