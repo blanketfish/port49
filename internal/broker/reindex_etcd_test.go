@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"log"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -128,5 +129,102 @@ func TestARewrittenIndexIsRestoredOnEtcd(t *testing.T) {
 	}
 	if got, err := f.b.Sessions.RevokeByPrincipal(ctx, alicePrincipal); err != nil || len(got) != 1 {
 		t.Fatalf("a revocation of alice after the re-index: %v %v", got, err)
+	}
+}
+
+// putWithSid is putJudged for an OIDC login under sid.
+func putWithSid(t *testing.T, f *fixture, st store.Store, nas, user, principal, sid string) {
+	t.Helper()
+	ctx := context.Background()
+	if err := st.PutContext(ctx, store.ContextKey{NAS: nas, Username: user}, store.Context{CtxID: "ctx_" + nas,
+		Principal: principal, Username: user, PrivLvl: 1, AuthTime: f.now, RefreshedAt: f.now,
+		BlobHash: "sha256:from-before", Credential: store.Credential{Method: "oidc", Sid: sid}}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.IndexContext(ctx, principal, sid, "", store.ContextRef{NAS: nas, Username: user}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// reindexAll is port49d's pass: Unindexed, then ReindexContexts.
+func reindexAll(t *testing.T, f *fixture, es *etcd.Store) int {
+	t.Helper()
+	refs, err := es.Unindexed(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, err := f.b.ReindexContexts(context.Background(), refs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// A session refresh that rotates the sid writes it into the sealed record
+// as well as the index, so the re-index finds nothing to repair; an x/
+// record whose sid a store writer swapped hides the context from a
+// revocation by its own sid, and is re-indexed, after which that
+// revocation reaches it (Task 7b review I-2).
+func TestASwappedSidIsRestoredOnEtcd(t *testing.T) {
+	f := newFixtureWithPolicy(t, 8, sharedPolicy)
+	ctx := context.Background()
+	es, sealed, raw, root := onEtcd(t, f)
+	putWithSid(t, f, sealed, "leaf1", "alice", alicePrincipal, "sid-1")
+	if n, err := f.b.Sessions.Refresh(ctx, alicePrincipal, f.now, f.now.Add(-time.Hour), "", "sid-1",
+		"sid-2"); err != nil || n != 1 {
+		t.Fatalf("a rotating refresh = %d, %v", n, err)
+	}
+	if n := reindexAll(t, f, es); n != 0 {
+		t.Fatalf("the re-index after a rotation re-indexed %d", n)
+	}
+	if _, err := raw.Put(ctx, root+"x/leaf1/alice", `{"principals":[{"key":"`+alicePrincipal+`","expires_at":"`+
+		f.now.Add(time.Hour).Format(time.RFC3339)+`"}],"sids":[{"key":"sid-x","expires_at":"`+
+		f.now.Add(time.Hour).Format(time.RFC3339)+`"}]}`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Put(ctx, root+"is/sid-x/leaf1/alice", "{}"); err != nil { // and its lookup, so x/ looks whole
+		t.Fatal(err)
+	}
+	if refs, _ := sealed.ContextsBySid(ctx, "sid-2"); len(refs) != 0 {
+		t.Fatalf("the swap did not hide the context; the test proves nothing: %v", refs)
+	}
+	if n := reindexAll(t, f, es); n != 1 {
+		t.Fatalf("the re-index over a swapped sid re-indexed %d", n)
+	}
+	if refs, err := f.b.Sessions.RevokeBySid(ctx, "sid-2"); err != nil || len(refs) != 1 {
+		t.Fatalf("a revocation by the sealed sid after the re-index: %v %v", refs, err)
+	}
+}
+
+// A store write that deletes a context's lookup entry alone, its x/
+// record intact, hides it from the revocation that starts there; the
+// re-index sees the entry missing and puts it again (Task 7b review I-2).
+func TestADeletedLookupEntryIsRestoredOnEtcd(t *testing.T) {
+	for _, c := range []struct {
+		name, entry string
+		revoke      func(f *fixture) ([]store.ContextRef, error)
+	}{
+		{"principal", "ip/" + url.PathEscape(alicePrincipal) + "/leaf1/alice", func(f *fixture) ([]store.ContextRef, error) {
+			return f.b.Sessions.RevokeByPrincipal(context.Background(), alicePrincipal)
+		}},
+		{"sid", "is/sid-1/leaf1/alice", func(f *fixture) ([]store.ContextRef, error) {
+			return f.b.Sessions.RevokeBySid(context.Background(), "sid-1")
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFixtureWithPolicy(t, 8, sharedPolicy)
+			ctx := context.Background()
+			es, sealed, raw, root := onEtcd(t, f)
+			putWithSid(t, f, sealed, "leaf1", "alice", alicePrincipal, "sid-1")
+			if resp, err := raw.Delete(ctx, root+c.entry); err != nil || resp.Deleted != 1 {
+				t.Fatalf("deleting %s: %v %v", c.entry, resp, err)
+			}
+			if n := reindexAll(t, f, es); n != 1 {
+				t.Fatalf("the re-index over a deleted %s lookup re-indexed %d", c.name, n)
+			}
+			if refs, err := c.revoke(f); err != nil || len(refs) != 1 {
+				t.Fatalf("a revocation by %s after the re-index: %v %v", c.name, refs, err)
+			}
+		})
 	}
 }

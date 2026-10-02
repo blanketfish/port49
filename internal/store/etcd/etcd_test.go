@@ -622,10 +622,12 @@ func TestAGarbledIndexRecordKeepsItsPrincipalActive(t *testing.T) {
 	}
 }
 
-// Every context is named with what its index record lists live: one
-// whose record is gone, or lists no live principal, lists none, and one
-// whose record was rewritten to list another principal lists that one,
-// for the re-index to compare with the context's own (re-check IA2, I2).
+// Every context is named with what its index record lists live and its
+// lookup entries hold: one whose record is gone, or lists no live
+// principal, lists none; one whose record was rewritten to list another
+// principal lists that one; and a key whose lookup entry is deleted is not
+// listed, for the re-index to compare with the context's own (re-check
+// IA2, I2; Task 7b review I-2).
 func TestUnindexedFindsAContextItsIndexLost(t *testing.T) {
 	ctx := context.Background()
 	now := t0
@@ -634,7 +636,8 @@ func TestUnindexedFindsAContextItsIndexLost(t *testing.T) {
 	lost := store.ContextRef{NAS: "leaf-01", Username: "lost"}
 	stale := store.ContextRef{NAS: "rack/1%2Fleaf", Username: "stale"}
 	moved := store.ContextRef{NAS: "leaf-02", Username: "moved"}
-	for _, r := range []store.ContextRef{kept, lost, stale, moved} {
+	unlooked := store.ContextRef{NAS: "leaf-02", Username: "unlooked"}
+	for _, r := range []store.ContextRef{kept, lost, stale, moved, unlooked} {
 		if err := s.PutContext(ctx, store.ContextKey{NAS: r.NAS, Username: r.Username},
 			store.Context{CtxID: "c", Principal: "user:a", Username: r.Username}, 2*time.Hour); err != nil {
 			t.Fatal(err)
@@ -656,6 +659,15 @@ func TestUnindexedFindsAContextItsIndexLost(t *testing.T) {
 		`{"principals":[{"key":"user:b","expires_at":"`+t0.Add(2*time.Hour).Format(time.RFC3339)+`"}]}`); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := s.ctx.Put(ctx, s.k.lookup(famByPrincipal, "user:b", moved), "{}"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.IndexContext(ctx, "user:a", "sid-u", "", unlooked, 2*time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ctx.Delete(ctx, s.k.lookup(famByPrincipal, "user:a", unlooked)); err != nil { // its lookup alone
+		t.Fatal(err)
+	}
 	now = now.Add(2 * time.Minute) // stale's entries have expired; its context has not
 	got, err := s.Unindexed(ctx)
 	if err != nil {
@@ -666,6 +678,8 @@ func TestUnindexedFindsAContextItsIndexLost(t *testing.T) {
 		lost:  {ContextRef: lost},
 		stale: {ContextRef: stale},
 		moved: {ContextRef: moved, Principals: []string{"user:b"}},
+		// Listed, but its lookup entry deleted: hidden as if not listed.
+		unlooked: {ContextRef: unlooked, Sids: []string{"sid-u"}},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("Unindexed = %+v, want %+v", got, want)

@@ -369,7 +369,7 @@ func (s *Store) parseLookup(fam, key string) (string, store.ContextRef, bool) {
 }
 
 // Unindexed is the ref of every context, with the keys its index record
-// lists live, for the broker's ReindexContexts to compare with the
+// lists live whose lookup entry is there (withLookups), for the broker's ReindexContexts to compare with the
 // context's own (plan 7d; Ruling 6; re-check IA2 and I2). A login writes a
 // context and its index record in one step and every extension carries
 // both, so a live context whose record is gone, lists no live principal,
@@ -411,6 +411,7 @@ func (s *Store) Unindexed(ctx context.Context) ([]store.IndexedRef, error) {
 			refs = append(refs, ref)
 			gets = append(gets, clientv3.OpGet(s.k.indexed(ref)))
 		}
+		page := make([]store.IndexedRef, 0, len(refs))
 		i := 0
 		if err := chunked(ctx, s.ctx, gets, func(t *clientv3.TxnResponse) {
 			for _, op := range t.Responses {
@@ -425,16 +426,57 @@ func (s *Store) Unindexed(ctx context.Context) ([]store.IndexedRef, error) {
 					r.Principals, r.Sids, r.Certs = liveKeys(x.Principals, now), liveKeys(x.Sids, now),
 						liveKeys(x.Certs, now)
 				}
-				out = append(out, r)
+				page = append(page, r)
 			}
 		}); err != nil {
 			return out, err
 		}
+		if err := s.withLookups(ctx, page); err != nil {
+			return out, err
+		}
+		out = append(out, page...)
 		if !resp.More || len(resp.Kvs) == 0 {
 			return out, nil
 		}
 		from = string(resp.Kvs[len(resp.Kvs)-1].Key) + "\x00"
 	}
+}
+
+// withLookups keeps in each of page's lists only the keys whose lookup
+// entry is there, counted in batched transactions of count-only gets: a
+// lookup is where a revocation and the refresh start (refsUnder), so a key
+// listed whose entry a store write deleted is hidden as one not listed is,
+// and the re-index, which puts the entries again (addKeys), must see it
+// missing (Task 7b review I-2).
+func (s *Store) withLookups(ctx context.Context, page []store.IndexedRef) error {
+	type at struct {
+		list *[]string
+		key  string
+	}
+	var ats []at
+	var gets []clientv3.Op
+	for i := range page {
+		r := &page[i]
+		for _, l := range []struct {
+			fam  string
+			keys *[]string
+		}{{famByPrincipal, &r.Principals}, {famBySid, &r.Sids}, {famByCert, &r.Certs}} {
+			for _, key := range *l.keys {
+				ats = append(ats, at{list: l.keys, key: key})
+				gets = append(gets, clientv3.OpGet(s.k.lookup(l.fam, key, r.ContextRef), clientv3.WithCountOnly()))
+			}
+			*l.keys = nil
+		}
+	}
+	i := 0
+	return chunked(ctx, s.ctx, gets, func(t *clientv3.TxnResponse) {
+		for _, op := range t.Responses {
+			if op.GetResponseRange().Count > 0 {
+				*ats[i].list = append(*ats[i].list, ats[i].key)
+			}
+			i++
+		}
+	})
 }
 
 // liveKeys is the key of every entry live at now.
