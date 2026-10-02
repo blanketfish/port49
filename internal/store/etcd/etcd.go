@@ -55,6 +55,7 @@ type Store struct {
 	tok, ctx             *clientv3.Client
 	tokLeases, ctxLeases *leases
 	owned                []*clientv3.Client // closed by Close
+	seen                 seenCache          // GetContext's last read per key (contexts.go)
 }
 
 // ErrRefused is etcd refusing this identity an operation: a role that

@@ -166,3 +166,104 @@ func TestScannedKeysEndWithASlash(t *testing.T) {
 		}
 	}
 }
+
+// The context family: every context property, the revisions, the narrow
+// setters, the join with its marks, the blobs (plan 7d Task 6). The index
+// properties that read lookups are Task 7's.
+func TestContextsOnEtcd(t *testing.T) {
+	run(t, map[string]func(*testing.T){
+		"JoinRacesRevocation":           func(t *testing.T) { storetest.JoinRacesRevocation(t, fixed(t), t0) },
+		"PolicyRevision":                func(t *testing.T) { storetest.PolicyRevision(t, fixed(t), t0) },
+		"RevocationIsMonotonic":         func(t *testing.T) { storetest.RevocationIsMonotonic(t, fixed(t), t0) },
+		"CeilingShortensOnly":           func(t *testing.T) { storetest.CeilingShortensOnly(t, fixed(t), t0) },
+		"RefreshSetsTheCeiling":         func(t *testing.T) { storetest.RefreshSetsTheCeiling(t, fixed(t), t0) },
+		"RefreshStopsAtGrace":           func(t *testing.T) { storetest.RefreshStopsAtGrace(t, fixed(t), t0) },
+		"WritesBindToTheRevision":       func(t *testing.T) { storetest.WritesBindToTheRevision(t, fixed(t), t0) },
+		"ContextExpires":                func(t *testing.T) { storetest.ContextExpires(t, backend) },
+		"DeleteContextRemovesIt":        func(t *testing.T) { storetest.DeleteContextRemovesIt(t, backend) },
+		"TouchExtendsWithoutClobbering": func(t *testing.T) { storetest.TouchExtendsWithoutClobbering(t, backend) },
+		"AnnotateKeepsARacingRevocation": func(t *testing.T) {
+			storetest.AnnotateKeepsARacingRevocation(t, backend)
+		},
+		"SetRevokedAtMarksOneField": func(t *testing.T) { storetest.SetRevokedAtMarksOneField(t, backend) },
+		"RefreshMovesTheWindow":     func(t *testing.T) { storetest.RefreshMovesTheWindow(t, backend) },
+		"RefreshWithoutCeiling":     func(t *testing.T) { storetest.RefreshWithoutCeiling(t, backend) },
+		"AnnotateSetRules":          func(t *testing.T) { storetest.AnnotateSetRules(t, backend) },
+		"AnnotateDoesNotEditAReadersSlice": func(t *testing.T) {
+			storetest.AnnotateDoesNotEditAReadersSlice(t, backend)
+		},
+		"BlobBump":                       func(t *testing.T) { storetest.BlobBump(t, backend) },
+		"SwapIsACompareAndSet":           func(t *testing.T) { storetest.SwapIsACompareAndSet(t, backend) },
+		"EveryWriteMovesTheRevision":     func(t *testing.T) { storetest.EveryWriteMovesTheRevision(t, backend) },
+		"SetPrivilegeIsRaiseOnly":        func(t *testing.T) { storetest.SetPrivilegeIsRaiseOnly(t, backend) },
+		"SetContextPolicyBindsToTheRead": func(t *testing.T) { storetest.SetContextPolicyBindsToTheRead(t, backend) },
+		"SelfRevocationBindsToTheRead":   func(t *testing.T) { storetest.SelfRevocationBindsToTheRead(t, backend) },
+		"PurgeTakesEveryToken":           func(t *testing.T) { storetest.PurgeTakesEveryToken(t, backend) },
+		"RewriteBindsToTheRevision":      func(t *testing.T) { storetest.RewriteBindsToTheRevision(t, backend) },
+	})
+}
+
+// PolicyRev comes from etcd's revision counter through policy_moved: a
+// policy write takes the write's own revision, and the next write that is
+// not one keeps it (Ruling 5).
+func TestPolicyRevIsTheLastPolicyWritesRevision(t *testing.T) {
+	ctx := context.Background()
+	s := onShared(t, func() time.Time { return t0 })
+	k := store.ContextKey{NAS: "leaf-01", Username: "alice"}
+	if err := s.PutContext(ctx, k, store.Context{CtxID: "c", Principal: "p", Username: "alice", BlobHash: "b"},
+		time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	put, _ := s.GetContext(ctx, k)
+	if put.PolicyRev != put.Rev {
+		t.Fatalf("a whole write moves both revisions to its own: %d %d", put.Rev, put.PolicyRev)
+	}
+	if err := s.TouchContext(ctx, k, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	touched, _ := s.GetContext(ctx, k)
+	if touched.Rev == put.Rev || touched.PolicyRev != put.PolicyRev {
+		t.Fatalf("a touch: %d/%d -> %d/%d", put.Rev, put.PolicyRev, touched.Rev, touched.PolicyRev)
+	}
+	if err := s.SetRevokedAt(ctx, k, t0); err != nil {
+		t.Fatal(err)
+	}
+	revoked, _ := s.GetContext(ctx, k)
+	if revoked.PolicyRev != revoked.Rev || revoked.PolicyRev == touched.PolicyRev {
+		t.Fatalf("a revocation takes its own revision: %d/%d", revoked.Rev, revoked.PolicyRev)
+	}
+}
+
+// A rewrite on the revision a read saw commits without reading again,
+// and is still refused once the record has moved since that read
+// (re-check MA3).
+func TestARewriteAfterAReadComparesTheRevision(t *testing.T) {
+	ctx := context.Background()
+	s := onShared(t, func() time.Time { return t0 })
+	k := store.ContextKey{NAS: "leaf-01", Username: "alice"}
+	if err := s.PutContext(ctx, k, store.Context{CtxID: "c", Principal: "p", Username: "alice", PrivLvl: 1},
+		time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	read, err := s.GetContext(ctx, k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.TouchContext(ctx, k, time.Hour); err != nil { // the record moves after the read
+		t.Fatal(err)
+	}
+	stale := read
+	stale.PrivLvl = 15
+	if err := s.RewriteContext(ctx, k, read.Rev, stale, 0, false); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("a rewrite of a version read and since moved: %v", err)
+	}
+	read, _ = s.GetContext(ctx, k)
+	next := read
+	next.PrivLvl = 7
+	if err := s.RewriteContext(ctx, k, read.Rev, next, 0, false); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.GetContext(ctx, k); got.PrivLvl != 7 || !got.LastTouchedAt.Equal(read.LastTouchedAt) {
+		t.Fatalf("a rewrite after a read: %+v", got)
+	}
+}

@@ -114,3 +114,180 @@ func markRecOf(r store.Revocation) markRec {
 func (r markRec) revocation() store.Revocation {
 	return store.Revocation{Kind: r.Kind, Key: r.Key, At: r.At, Origin: r.Origin}
 }
+
+// ctxRec is a login context as stored. PolicyRev is store.Context's
+// PolicyRev drawn from etcd's revision counter: a write that moves what a
+// policy refresh decides sets PolicyMoved, and the context's PolicyRev is
+// then the key's mod_revision, the revision of that very write; the next
+// write that does not move it stores the mod_revision it read as
+// policy_rev and clears the flag. So PolicyRev moves exactly on the writes
+// memory moves it on, and never repeats a value (store.Context.PolicyRev).
+//
+// Under crypt every trusted field is inside Sealed and empty here, except
+// revoked_at, which crypt also writes in the clear; the revisions, the
+// idle clock (last_touched_at) and accounting's annotations are the
+// plaintext bookkeeping beside it (Ruling 17).
+type ctxRec struct {
+	CtxID                 string    `json:"ctx_id,omitempty"`
+	Principal             string    `json:"principal,omitempty"`
+	Username              string    `json:"username,omitempty"`
+	Port                  string    `json:"port,omitempty"`
+	RemAddr               string    `json:"rem_addr,omitempty"`
+	PrivLvl               uint8     `json:"priv_lvl"`
+	BlobHash              string    `json:"blob_hash,omitempty"`
+	Credential            credRec   `json:"credential"`
+	AuthTime              time.Time `json:"auth_time"`
+	SessionExpires        time.Time `json:"session_expires"`
+	RefreshedAt           time.Time `json:"refreshed_at"`
+	RevokedAt             time.Time `json:"revoked_at"`
+	LastTouchedAt         time.Time `json:"last_touched_at"`
+	SessionDiscriminators []string  `json:"session_discriminators,omitempty"`
+	AccountingState       string    `json:"accounting_state,omitempty"`
+	Enable                string    `json:"enable,omitempty"`
+	MaxPrivilege          uint8     `json:"max_privilege"`
+	CreatedAt             time.Time `json:"created_at"`
+	// Logins is the login witness (store.Context.Logins): empty under
+	// crypt, which seals it. It is held here only for the plaintext form,
+	// so a join on this backend alone keeps the witness memory keeps.
+	Logins []string `json:"logins,omitempty"`
+	Sealed []byte   `json:"sealed,omitempty"`
+
+	ExpiresAt   time.Time `json:"expires_at"`
+	PolicyRev   int64     `json:"policy_rev"`
+	PolicyMoved bool      `json:"policy_moved"`
+}
+
+func ctxRecOf(c store.Context) ctxRec {
+	return ctxRec{CtxID: c.CtxID, Principal: c.Principal, Username: c.Username, Port: c.Port, RemAddr: c.RemAddr,
+		PrivLvl: c.PrivLvl, BlobHash: c.BlobHash, Credential: credRec(c.Credential), AuthTime: c.AuthTime,
+		SessionExpires: c.SessionExpires, RefreshedAt: c.RefreshedAt, RevokedAt: c.RevokedAt,
+		LastTouchedAt: c.LastTouchedAt, SessionDiscriminators: append([]string(nil), c.SessionDiscriminators...),
+		AccountingState: c.AccountingState, Enable: c.Enable, MaxPrivilege: c.MaxPrivilege, CreatedAt: c.CreatedAt,
+		Logins: append([]string(nil), c.Logins...), Sealed: c.Sealed}
+}
+
+func (r ctxRec) context(mod int64) store.Context {
+	return store.Context{CtxID: r.CtxID, Principal: r.Principal, Username: r.Username, Port: r.Port,
+		RemAddr: r.RemAddr, PrivLvl: r.PrivLvl, BlobHash: r.BlobHash, Credential: store.Credential(r.Credential),
+		AuthTime: r.AuthTime, SessionExpires: r.SessionExpires, RefreshedAt: r.RefreshedAt, RevokedAt: r.RevokedAt,
+		LastTouchedAt: r.LastTouchedAt, SessionDiscriminators: append([]string(nil), r.SessionDiscriminators...),
+		AccountingState: r.AccountingState, Enable: r.Enable, MaxPrivilege: r.MaxPrivilege, CreatedAt: r.CreatedAt,
+		Logins: append([]string(nil), r.Logins...), Sealed: r.Sealed, Rev: uint64(mod),
+		PolicyRev: uint64(r.policyRev(mod))}
+}
+
+func (r ctxRec) policyRev(mod int64) int64 {
+	if r.PolicyMoved {
+		return mod
+	}
+	return r.PolicyRev
+}
+
+type blobRec struct {
+	Body      []byte    `json:"body"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+// idxRec is a ref's index record, x/<nas>/<user>: every principal, sid and
+// certificate key the ref answers under, each with its own expiry. It is
+// authoritative: a lookup entry answers only while this lists its key
+// live (Ruling 6).
+type idxRec struct {
+	Principals []idxEntry `json:"principals,omitempty"`
+	Sids       []idxEntry `json:"sids,omitempty"`
+	Certs      []idxEntry `json:"certs,omitempty"`
+}
+
+type idxEntry struct {
+	Key       string    `json:"key"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+func (x *idxRec) list(fam string) *[]idxEntry {
+	switch fam {
+	case famByPrincipal:
+		return &x.Principals
+	case famBySid:
+		return &x.Sids
+	}
+	return &x.Certs
+}
+
+// add lists key under fam until exp, as the memory store's addRef does:
+// an entry already there takes exp, whatever it held.
+func (x *idxRec) add(fam, key string, exp time.Time) {
+	l := x.list(fam)
+	for i := range *l {
+		if (*l)[i].Key == key {
+			(*l)[i].ExpiresAt = exp
+			return
+		}
+	}
+	*l = append(*l, idxEntry{Key: key, ExpiresAt: exp})
+}
+
+func (x *idxRec) drop(fam, key string) {
+	l := x.list(fam)
+	out := (*l)[:0]
+	for _, e := range *l {
+		if e.Key != key {
+			out = append(out, e)
+		}
+	}
+	*l = out
+}
+
+// restamp pushes every entry out to exp, never shortening one: an
+// extension of the context carries its index entries (design §12).
+func (x *idxRec) restamp(exp time.Time) {
+	for _, l := range []*[]idxEntry{&x.Principals, &x.Sids, &x.Certs} {
+		for i := range *l {
+			if exp.After((*l)[i].ExpiresAt) {
+				(*l)[i].ExpiresAt = exp
+			}
+		}
+	}
+}
+
+// lists reports whether key is listed under fam, live at now.
+func (x idxRec) lists(fam, key string, now time.Time) bool {
+	for _, e := range *x.list(fam) {
+		if e.Key == key {
+			return e.ExpiresAt.After(now)
+		}
+	}
+	return false
+}
+
+func (x idxRec) maxExp() time.Time {
+	var m time.Time
+	for _, l := range [][]idxEntry{x.Principals, x.Sids, x.Certs} {
+		for _, e := range l {
+			if e.ExpiresAt.After(m) {
+				m = e.ExpiresAt
+			}
+		}
+	}
+	return m
+}
+
+func (x idxRec) empty() bool { return len(x.Principals)+len(x.Sids)+len(x.Certs) == 0 }
+
+// prune drops every entry expired at now. Every write of the record calls
+// it, so the record holds the keys still live and no more: a joined
+// context that sees a login per window stays as large as its live logins,
+// not its history (pre-flight M20). An expired entry answers no lookup
+// already (lists), so dropping it changes no answer. It is not a cap: a
+// live entry is never dropped to bound the record, since that would cost
+// a revocation its reach (the memory store's indexKeys says why).
+func (x *idxRec) prune(now time.Time) {
+	for _, l := range []*[]idxEntry{&x.Principals, &x.Sids, &x.Certs} {
+		out := (*l)[:0]
+		for _, e := range *l {
+			if e.ExpiresAt.After(now) {
+				out = append(out, e)
+			}
+		}
+		*l = out
+	}
+}
