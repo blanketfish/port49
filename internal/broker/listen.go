@@ -94,10 +94,11 @@ type Listener struct {
 	logf  func(format string, args ...any)
 
 	// Refused records a request refused as its connection bound, with the
-	// reason: credential_revoked for a mark, or Status's. One mint deny
-	// record each (spec §5.7), which port49d sets to Broker.RefusedAtBind.
-	// Set it before the first Accept; nil records nothing.
-	Refused func(principal string, cred store.Credential, reason decision.Reason)
+	// path it asked for and the reason: credential_revoked for a mark, or
+	// Status's. One deny record each, under the path's event (spec §5.7;
+	// decision 34), which port49d sets to Broker.RefusedAtBind. Set it before
+	// the first Accept; nil records nothing.
+	Refused func(path, principal string, cred store.Credential, reason decision.Reason)
 	// Status answers a certificate chain's revocation status before the
 	// connection binds (spec §5.1.4): a refusal is answered, recorded
 	// (Refused) and closed while the connection is still charged to its
@@ -466,7 +467,7 @@ func (l *Listener) answerRefused(tc *tls.Conn, status int, body api.Error, retry
 		return
 	}
 	if l.Refused != nil {
-		l.Refused(principal, cred, reason)
+		l.Refused(req.URL.Path, principal, cred, reason)
 	}
 	var buf bytes.Buffer
 	_ = json.NewEncoder(&buf).Encode(body)
