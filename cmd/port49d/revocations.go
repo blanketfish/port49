@@ -202,7 +202,8 @@ func createExclusive(abs string, body []byte) error {
 // amended): broker.revocations_file created once per install, empty, by the
 // user that owns its directory (initOwner, asked first, so a root-run init
 // is told to run as that user rather than, by the fence, to chown), behind
-// the directory fence a start applies.
+// the directory fence a start applies. cfgPath is the config it was read
+// from, for the line a refusal gives to run.
 //
 // created is false, and err nil, when the file is already there and loads:
 // nothing is written, so a provisioning step may run it twice (pre-flight
@@ -212,12 +213,12 @@ func createExclusive(abs string, body []byte) error {
 // creates the marker, then the file, each exclusively (createExclusive): a
 // crash between the two leaves a marker and no file, which refuses the next
 // start and the next init.
-func initRevocations(path string) (created bool, err error) {
+func initRevocations(path, cfgPath string) (created bool, err error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return false, err
 	}
-	if err := initOwner(filepath.Dir(abs)); err != nil {
+	if err := initOwner(filepath.Dir(abs), cfgPath); err != nil {
 		return false, err
 	}
 	if err := fence.CheckDir(abs, "revocations file"); err != nil {
@@ -288,7 +289,12 @@ func initRevocationsCmd(args []string, stdout, stderr io.Writer) int {
 			"against this shell's directory, to %s, and port49d resolves it against its own; give an absolute "+
 			"path in port49d.yaml\n", path, abs)
 	}
-	created, err := initRevocations(abs)
+	cfgAbs, err := filepath.Abs(*cfgPath)
+	if err != nil {
+		fmt.Fprintln(stderr, "port49d init-revocations:", err)
+		return 1
+	}
+	created, err := initRevocations(abs, cfgAbs)
 	switch {
 	case err != nil:
 		fmt.Fprintf(stderr, "port49d init-revocations: broker.revocations_file %s: %v\n", abs, err)

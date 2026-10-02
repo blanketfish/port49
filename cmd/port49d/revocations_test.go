@@ -29,12 +29,16 @@ import (
 
 func newMetrics() *metrics.Metrics { return metrics.New(prometheus.NewRegistry()) }
 
+// testInitConfig is the config path initRevocations is told it read, for
+// the line its refusals give to run.
+const testInitConfig = "/etc/port49/port49d.yaml"
+
 // A mark put in force before a restart is in force after it: the file is
 // what a restart reads back (spec §13 decision 32).
 func TestRevocationsSurviveARestart(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(safeDir(t), "revocations.json")
-	if created, err := initRevocations(path); err != nil || !created {
+	if created, err := initRevocations(path, testInitConfig); err != nil || !created {
 		t.Fatalf("init: %v %v", created, err)
 	}
 	at := time.Date(2026, 10, 2, 3, 12, 9, 0, time.UTC)
@@ -97,7 +101,7 @@ func TestAStartNeverCreatesTheFile(t *testing.T) {
 // start then says they were lost.
 func TestInitRevocationsCreatesOnceAndNeverOverALoss(t *testing.T) {
 	path := filepath.Join(safeDir(t), "revocations.json")
-	if created, err := initRevocations(path); err != nil || !created {
+	if created, err := initRevocations(path, testInitConfig); err != nil || !created {
 		t.Fatalf("the first init: %v %v", created, err)
 	}
 	for _, p := range []string{path, markerOf(path)} {
@@ -112,7 +116,7 @@ func TestInitRevocationsCreatesOnceAndNeverOverALoss(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if created, err := initRevocations(path); err != nil || created {
+	if created, err := initRevocations(path, testInitConfig); err != nil || created {
 		t.Fatalf("a second init over a file that loads: %v %v", created, err)
 	}
 	if after, err := os.ReadFile(path); err != nil || !bytes.Equal(before, after) {
@@ -121,7 +125,7 @@ func TestInitRevocationsCreatesOnceAndNeverOverALoss(t *testing.T) {
 	if err := os.WriteFile(path, []byte("{"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := initRevocations(path); err == nil || !strings.Contains(err.Error(), "does not load") {
+	if _, err := initRevocations(path, testInitConfig); err == nil || !strings.Contains(err.Error(), "does not load") {
 		t.Fatalf("an init over a file that does not load: %v", err)
 	}
 	if got, _ := os.ReadFile(path); string(got) != "{" {
@@ -130,7 +134,7 @@ func TestInitRevocationsCreatesOnceAndNeverOverALoss(t *testing.T) {
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := initRevocations(path); err == nil || !strings.Contains(err.Error(), "never re-creates a lost file") {
+	if _, err := initRevocations(path, testInitConfig); err == nil || !strings.Contains(err.Error(), "never re-creates a lost file") {
 		t.Fatalf("an init over a lost file: %v", err)
 	}
 	if _, err := loadRevocations(path); err == nil || !strings.Contains(err.Error(), "its marker says") {
@@ -172,7 +176,7 @@ func TestInitRevocationsIsFenced(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(open, "revocations.json")
-	if _, err := initRevocations(path); err == nil {
+	if _, err := initRevocations(path, testInitConfig); err == nil {
 		t.Fatal("init wrote into a directory others can write")
 	}
 	for _, p := range []string{path, markerOf(path)} {

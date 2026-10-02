@@ -54,7 +54,7 @@ func brokerConfig(t *testing.T, policyBody string) config.Config {
 			MaxConnsPerPrincipal: 4, MaxPendingConnsPerSource: 16,
 			CertificateStatus: &config.CertificateStatusConfig{Disabled: true}},
 	}
-	if _, err := initRevocations(cfg.Broker.RevocationsFile); err != nil {
+	if _, err := initRevocations(cfg.Broker.RevocationsFile, testInitConfig); err != nil {
 		t.Fatal(err)
 	}
 	return cfg
