@@ -481,7 +481,7 @@ func TestRefreshSaysWhatHappenedToEachDevice(t *testing.T) {
 	want := "refreshed at 2026-10-01T09:00:00Z; this login lasts until 2026-10-01T21:00:00Z\n" +
 		"  leaf1 (alice)    extended to 2026-10-01T21:00:00Z\n" +
 		"  mx1 (alice)      extended to 2026-10-01T21:00:00Z, not reached: the device keeps its own session\n" +
-		"  spine01 (alice)  revoked by the policy in force, not extended\n" +
+		"  spine01 (alice)  revoked, not extended (see 'port49 revoke --list' and the refresh record)\n" +
 		"  nx1 (alice)      past the grace window, not resumed: log in again there\n" +
 		"  bare (alice)     not extended this time (the policy could not be applied to it): run 'port49 refresh' again\n"
 	if out.String() != want {

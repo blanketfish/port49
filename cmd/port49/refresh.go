@@ -39,9 +39,11 @@ func refreshCmd(args []string, stdout, stderr io.Writer) int {
 }
 
 // printRefresh says what a refresh did, one line per device (pre-flight M6):
-// extended to when, revoked by the policy, past the grace window (log in
-// again there), not judged (try again), and whether the device's own
-// session is out of reach.
+// extended to when, revoked, past the grace window (log in again there), not
+// judged (try again), and whether the device's own session is out of reach.
+// A revoked context names no cause: the policy, a revocation mark, or a
+// fault the broker revoked it for all answer the same, so the line points at
+// both places that say which (final review M-5).
 func printRefresh(w io.Writer, r api.RefreshResponse) {
 	fmt.Fprintf(w, "refreshed at %s; this login lasts until %s\n", r.AuthTime, r.SessionEndsAt)
 	if len(r.Sessions) == 0 {
@@ -60,7 +62,7 @@ func printRefresh(w io.Writer, r api.RefreshResponse) {
 				what = "extended to " + s.SessionExpires
 			}
 		case "revoked":
-			what = "revoked by the policy in force, not extended"
+			what = "revoked, not extended (see 'port49 revoke --list' and the refresh record)"
 		case "past_grace":
 			what = "past the grace window, not resumed: log in again there"
 		default:
