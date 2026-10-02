@@ -61,7 +61,8 @@ twenty-two minor fixed, one minor rebutted in part; its re-check's three importa
 fixed the same day); **executed 2026-10-01** on `feature/session-lifetime-and-cert-status`,
 reviewed per task, closing L34 with `cisco_iosxe` the one platform that shows the ceiling warning,
 and measuring L2 on five images (open: Junos cannot show it) (Plan 7b — As built, below); final
-review and merge pending.
+review done 2026-10-02 (one important: a token outlived its ceiling, fixed in the fix wave); merge
+pending.
 7c–7h and 8–13 not yet.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
@@ -1840,8 +1841,8 @@ important and five minor fixed at 0fc2761). What differs from the plan's text, t
   `not_judged`.
 - **Task 8 (the agent; 915dbd6, 495d74b).** Controller ruling: `port49 login` refreshes a running
   agent only when its broker and its certificate's fingerprint match the flags. Otherwise it exits 1
-  naming the running agent's broker. The agent never moves its own deadline on a 503. A refresh whose
-  connection drops or is swapped is tried once on a new connection.
+  naming the running agent's broker. The agent never moves its own deadline on a 503. A refresh
+  whose connection drops or is swapped is tried once on a new connection.
 - **Task 9 (`certstatus`; 8a9a11d, 6521fd2, df78f0b).** Retries back off from 30s again after a
   recovery (the plan's code waited a full `refresh_interval`). OCSP signatures are verified by hand,
   so an intermediate's own embedded certificate works. A list with no `NextUpdate` is fresh for
@@ -1871,9 +1872,20 @@ important and five minor fixed at 0fc2761). What differs from the plan's text, t
 - **Task 13 (38c43fd, caffec6, 0b09d54, and this section).** `cisco_iosxe` alone joins
   `ceilingWarningOn`. L34 closes; L2 stays open, its N9Kv clause corrected (rule 4). §5.6 and
   decision 33 say what L34 found.
-- **Final review and fix wave.** Not run when this section was written. Handed to it: Task 3 M-3
-  (`Mint` should refuse `MaxSessionAge > 0` with a zero `AuthTime`), and the stale comment on
-  `TestARefreshIsRateLimited` ("every consumed nonce counts", before Task 7's pacing ruling).
+- **Final review and fix wave.** The final review (`final-review.md`) found one important issue: a
+  login token outlived its session ceiling, so a token minted just before the ceiling opened a Junos
+  shell just after it, which ran until logout (decision 21). The fix wave clamps a token's expiry to
+  its ceiling at mint and refuses a token past its ceiling at redeem, FAIL `session_expired` (§5.6,
+  §5.7, decision 33). From its minors: no test failure message prints a token (`api.MintItem`,
+  `token.Result` and `store.Token` print with their tokens withheld); a session refresh no longer
+  moves `port49_context_refreshes_total`, and its "still changing" line says to run `port49
+  refresh` again; a policy refresh keeps its blob as long as the context; `port49 refresh` says
+  `revoked, not extended (see 'port49 revoke --list' and the refresh record)`; a CRL's first load
+  is told in bulk, and the queue line reads "N CRL entries are being checked against what is in
+  use"; `session.Manager.Refresh` takes a grace cutoff and never resumes a context past it. Handed
+  to it and done: `Mint` refuses a finite ceiling with a zero `AuthTime` (Task 3 M-3), the stale
+  comment on `TestARefreshIsRateLimited`, and the over-long lines and §17 wording from Task 13's
+  re-review.
 
 **Rulings, as made** (spec §13, decision 33; the plan's twelve rulings): all stand. Ruling 4's
 allow-list holds `cisco_iosxe` alone, from L34. Ruling 6 is amended by Task 7 (an expired nonce is
@@ -1889,9 +1901,9 @@ required with `disabled: true` as the opt-out.
 `session-*.md`; captures `tests/lab/evidence/session-<platform>.pcap`):
 
 - **IOS-XE 17.13.01a.** L34: the warning shown before the prompt at login and with `show version`'s
-  output, inside a 2m warning window; still a permit. L2: a denial shown in full, 64–1000 bytes. Session: the ceiling denial,
-  the grace-window refresh that resumed, and "session ended" after it, each printed as port49 wrote
-  it.
+  output, inside a 2m warning window; still a permit. L2: a denial shown in full, 64–1000 bytes.
+  Session: the ceiling denial, the grace-window refresh that resumed, and "session ended" after it,
+  each printed as port49 wrote it.
 - **vEOS-lab 4.31.2F (image tagged 4.32.2F).** L34: not shown; still a permit. L2: shown in full,
   64–1000 bytes. Session: as IOS-XE, each message after the device's `% Authorization denied for
   command …:`.
@@ -1955,12 +1967,13 @@ notes", amended):
   lengthening it, or `never`, at each operator's next `port49 refresh` or login.
 - **New: `port49 refresh`.** It re-authenticates on your held broker connection and extends every
   live device session your policy still grants: no reconnect, and the candidate configuration stays
-  intact. It prints one line per device: extended to when, revoked by the policy, past the grace
-  window (log in again there), not extended this time (run it again), or not reached (Junos keeps
-  its own session). One refresh per connection per 10s.
+  intact. It prints one line per device: extended to when, revoked (`revoked, not extended (see
+  'port49 revoke --list' and the refresh record)`: the policy, a revocation mark or a broker fault),
+  past the grace window (log in again there), not extended this time (run it again), or not reached
+  (Junos keeps its own session). One refresh per connection per 10s.
   - `port49 login` with an agent already running for the same broker and certificate says
-    `port49: already logged in to <broker>; refreshing` and refreshes. With another broker or certificate it
-    exits 1 naming the running agent's broker.
+    `port49: already logged in to <broker>; refreshing` and refreshes. With another broker or
+    certificate it exits 1 naming the running agent's broker.
   - With today's PEM key files a refresh proves you hold the key file, not that you are at the
     keyboard; a script running `port49 refresh` in a loop keeps sessions alive indefinitely. Keep
     key files readable only by their owner; a hardware key (plan 9) adds the touch.
@@ -1980,6 +1993,10 @@ notes", amended):
   token') and log in again`. NX-OS prints only its own `Error: AAA authorization failed`, with no
   hint to refresh. Junos keeps its session past the ceiling and the grace window (decision 21):
   close it on the device.
+- **A token ends at the ceiling.** A token expires at `token_ttl` or at the device's session
+  ceiling, whichever is first; `port49 token --json`'s `expires_at` shows which. A login with a
+  token past its ceiling fails on every platform (`redeem deny session_expired`), Junos included:
+  run `port49 refresh`, then `port49 token` again.
 - **Clocks.** CRL and OCSP freshness follow port49d's clock, so an NTP step forward can make a fresh
   list stale. `port49 token`'s warning follows the laptop's clock.
 - **New metrics.** `port49_broker_connection_events_total{event}` gains `status_unavailable_refused`
@@ -1992,8 +2009,9 @@ notes", amended):
   `session_expires`; `refresh deny session_expired` past the grace window; `refresh deny
   trust_domain_unresolved` for a signature that did not verify or a status not established; `refresh
   deny credential_revoked`; `refresh deny store_unavailable`; `mint deny session_expired` per device
-  already past its ceiling; `mint deny trust_domain_unresolved`; `unreached: true` on refresh records
-  for session-only platforms.
+  already past its ceiling; `mint deny trust_domain_unresolved`; `redeem deny session_expired`, with
+  `session.session_expires`, for a login with a token past its ceiling; `unreached: true` on refresh
+  records for session-only platforms.
 - **API.** `POST /v1/refresh/challenge` and `POST /v1/refresh`, on the held connection only, with
   `refresh_challenge_missing` (401) and `refresh_too_soon` (429); `503
   certificate_status_unavailable` with `Retry-After`; `GET /v1/config` gains
@@ -2016,6 +2034,8 @@ audit fails.
 - **7c:** the HTTP revocation, and `api:` rights over `RefreshSession`'s self-only rule.
 - **7g:** the `staleness_ceiling` default and the scheduled refresh.
 - **7h:** the OIDC refresh: `prompt=login`, `auth_time` from the assertion, `sid` re-indexing.
+  `session.Manager.Refresh` now takes a grace cutoff (the refresh time less
+  `session.grace_window`) and refuses a zero one.
 - **9:** the hardware key's touch on refresh, and a PKCS#1 v1.5 mapping for tokens without PSS.
 - **12:** the Junos `idle-timeout` classes rendered from a per-role ceiling rather than the default,
   and `port49 policy diff` reporting a changed ceiling (pre-flight M11).

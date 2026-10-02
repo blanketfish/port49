@@ -1576,8 +1576,8 @@ A session approaching the ceiling is **warned in the session** where the device 
 authorization REPLY carries `server_msg`, so the operator is told on the device before anything
 stops working; of the measured images only IOS-XE shows it on a permit (L34, closed), and
 everywhere else the warning is `port49 token`'s (as built, below) — and re-authentication does
-not require reconnecting, because the broker can refresh live context (§5.1.3) through the `contexts_by_principal` index
-(illustrative; as built below):
+not require reconnecting, because the broker can refresh live context (§5.1.3) through the
+`contexts_by_principal` index (illustrative; as built below):
 
 ```
 t+0h00   Alice authenticates (OIDC, amr=["pwd","mfa"]), mints, logs into core-sw01
@@ -1637,6 +1637,11 @@ forcing a reconnect. Requirements:
   ceiling has passed since the connection authenticated is refused per item at mint,
   `session_expired`. The held connection keeps its own ceiling at
   `session.max_session_age_default` (decision 17), whatever a role says.
+- **The token.** A token never outlives its ceiling: it expires at `token_ttl` after the mint or at
+  the ceiling, whichever is first, and the mint item's `expires_at` says which. A login with a token
+  whose ceiling has passed is refused at redeem, FAIL `session_expired`, before the token is spent
+  and with no context written. On Junos that FAIL is the gate: a session authorization refused
+  there does not stop the login, and the device never asks again (decision 21).
 - **A policy edit.** It shortens a live context's ceiling and never lengthens it.
 - **A refresh.** It sets the ceiling the policy in force gives, from the new `auth_time`, so a
   lengthened ceiling or `never` takes effect at the next refresh or login.
@@ -1964,7 +1969,7 @@ device minted afresh writes one `deny credential_revoked` naming no device.
 | `username_mismatch` | the request's username differs from the one bound at redemption (§5.6). Reachable two ways, and a request under a name port49 never authenticated is neither of them — that is `context_missing`, because the username is the key. First, wherever the username is resolved from context rather than read off the wire: the `$enab{level}$` enable path through the `(nas, rem_addr)` index. Second, as a **store-fault guard** — the context lookup selects on the username, so a store answering with another principal's record fails the re-check that follows it and is denied rather than authorized. A correct store never produces the second |
 | `rem_addr_mismatch` | enable arrived from a different address than the bound one |
 | `privilege_exceeded` | the request is above the session's granted level |
-| `session_expired` | the session ceiling was reached; context retained through the grace window (§5.6). On `mint`: the held connection's authentication is older than `session.max_session_age_default`, and the caller must authenticate again (§13, decision 17). Per item on `mint`: the device's ceiling (the least `max_session_age` of its roles, §5.6) has passed since the connection authenticated; run `port49 refresh`. On `refresh`: the context is past its grace window and is not extended. |
+| `session_expired` | the session ceiling was reached; context retained through the grace window (§5.6). On `mint`: the held connection's authentication is older than `session.max_session_age_default`, and the caller must authenticate again (§13, decision 17). Per item on `mint`: the device's ceiling (the least `max_session_age` of its roles, §5.6) has passed since the connection authenticated; run `port49 refresh`. On `refresh`: the context is past its grace window and is not extended. On `redeem`: the token's ceiling has passed; the login is refused FAIL, the token is not spent, and no context is written (§5.6). |
 | `context_stale` | the broker has been unreachable past `staleness_ceiling`; context retained, denies until refreshed (§5.1.1, design document §9) |
 | `credential_revoked` | the context's `revoked_at` is set — CRL, OCSP, back-channel logout, every grant on the device withdrawn, a subject's username changed, the policy in force not compiling for the context, or a refresh finding a context it could not open, where the `refresh` record before it says which (§5.1.3, §5.6); on `redeem`, a login whose resulting context is revoked because its token was not minted after the revocation, or a retransmission answered while the context it names is revoked (§5.6); on `mint`, a revocation by principal or by this certificate stands (§5.1.4) or a CRL or OCSP response names the certificate or an intermediate above it, so nothing is minted and the connection is closed; on `refresh`, the caller's certificate is marked, or a CRL or OCSP response names it or an intermediate above it, so nothing is extended; on `revoke`, a revocation's own record |
 | `revocation_lifted` | `revoke`: an operator lifted a revocation (§5.1.4). Mints by the principal or certificate are made again; a context the revocation marked stays revoked until a login whose token was minted after the revocation joins it (§5.6; §13, decision 15): for a principal's mark, after the lift; for a certificate's, by any of the principal's other certificates at any time |
@@ -5567,11 +5572,12 @@ rights, is plan 7c's.
 
 **`port49 refresh`** re-authenticates the session the agent holds and extends every live context the
 policy in force still grants (§5.6). The agent signs the broker's nonce with the certificate's key
-over the held connection, and prints one line per device: extended to when, revoked by the policy,
-past its grace window, not judged, or on a platform the extension cannot reach. `port49 login` does
-the same while a session is held for the same broker and certificate, and exits 1 naming the running
-agent's broker otherwise; it also refreshes once after a new one connects. `port49 token` warns on stderr
-when the device's session ends within `session.ceiling_warning`. `port49 explain` prints a subject's
+over the held connection, and prints one line per device: extended to when, revoked (by the policy,
+a mark or a fault; `port49 revoke --list` and the refresh record say which), past its grace window,
+not judged, or on a platform the extension cannot reach. `port49 login` does the same while a
+session is held for the same broker and certificate, and exits 1 naming the running agent's broker
+otherwise; it also refreshes once after a new session connects. `port49 token` warns on stderr when
+the device's session ends within `session.ceiling_warning`. `port49 explain` prints a subject's
 ceiling on a device.
 
 **`port49 inventory diff --policy <file> [--new-policy <file>] <old-inventory> <new-inventory>`**
@@ -6178,7 +6184,9 @@ spec was silent, each the option that denies more; revised after its pre-flight 
   across a device's roles governing, the default staying finite. A device whose ceiling has passed
   is refused per item at mint. The held connection keeps its own ceiling at the default (decision
   17). A policy edit shortens a live ceiling and never lengthens one; a refresh sets the ceiling the
-  policy in force gives.
+  policy in force gives. A token expires at its ceiling if that comes before its `token_ttl`, and a
+  login with a token past its ceiling is refused at redeem, `session_expired` (the final review's
+  I-1: on Junos, where a refused session authorization does not stop the login, it is the gate).
 - **The warning.** It rides on permits within `session.ceiling_warning` (30m), to the platforms L34
   finds show it (an allow-list) and any an operator lists (`session.ceiling_warning_platforms`),
   and on `port49 token`'s stderr everywhere. L34 closed 2026-10-01 with one platform on the list,
