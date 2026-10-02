@@ -67,4 +67,15 @@ func TestHealthAndReadiness(t *testing.T) {
 	if code, body := get("/readyz"); code != 503 || body != ReadyDraining {
 		t.Fatalf("readyz draining: %d %q", code, body)
 	}
+
+	// With no store at all, any store call a probe made would panic here,
+	// brokenStore's own methods included.
+	f.b.Store = nil
+	f.b.SetReady(ReadyServing)
+	if code, body := get("/readyz"); code != 200 || body != ReadyServing {
+		t.Fatalf("readyz, no store: %d %q", code, body)
+	}
+	if code, body := get("/healthz"); code != 200 || body != "ok" {
+		t.Fatalf("healthz, no store: %d %q", code, body)
+	}
 }
