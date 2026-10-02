@@ -70,7 +70,7 @@ owner's answer on the revocations volume; no register row); **executed 2026-10-0
 shapes measured on vEOS, the N9Kv, the C8000V and vJunos-router (Plan 7c — As built, below);
 final review: one important fixed (a slow revocation resent and reported as not done), re-review
 clean; **merged 2026-10-02 (PR #22, merge c485e03)**, and `make test` (with the labpcap audit)
-passes on main. 7d–7h and 8–13 not yet.
+passes on main. **7d written 2026-10-02** (`2026-10-02-07d-shared-store.md`, sixteen tasks in two merges: 7d-1, Tasks 1–8, the etcd backend passing every `storetest` property, the login's one step and the lifted suite; 7d-2, Tasks 9–16, the guard, the config, the identities and roles, port49d on etcd, the crypt alarm, the agent's one connection, the lab and the docs; one owner decision, OD-1, the Go floor to 1.26, recommended accept; sixteen rulings recorded as decision 35; it opens and closes L35). 7e–7h and 8–13 not yet.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -1544,7 +1544,7 @@ until 7c merges to be made. Every sub-plan is separately mergeable and leaves `m
   amended); `port49 identity`, `port49 explain` and `port49 revoke --mine`/`--via-agent` over the
   agent; a new `store.DeleteToken` with a `storetest` property. Lab: the HTTP revocation's shapes on
   the four images 7a measured. **As built:** "Plan 7c — As built", below.
-- **Plan 7d — the shared store (D1).** The backend D1 chooses, implementing every store method
+- **Plan 7d — `2026-10-02-07d-shared-store.md`. Written 2026-10-02.** The shared store (D1 = etcd). The backend D1 chooses, implementing every store method
   with its atomicity and passing every `storetest` property, 7a's included; store-native mutual-TLS
   authentication per component (design §17); a hard timeout and a circuit breaker on every store
   call, and pool separation between token and context operations (design §12); plan 4b's
