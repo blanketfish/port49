@@ -430,7 +430,9 @@ type Store interface {
 	// It leaves the token index (IndexToken) as it is. That index is by key,
 	// not by ID, and the same principal or certificate can hold a second live
 	// token under k: pruning its entry would let a revocation miss that
-	// token, where a stale entry costs only a DeleteTokens on an empty key.
+	// token, where a stale entry costs a revocation of that principal one
+	// DeleteTokens on k, which, as for a live entry, also ends any other
+	// principal's tokens there.
 	DeleteToken(ctx context.Context, k TokenKey, id string) error
 	GetReceipt(ctx context.Context, rk ReceiptKey) (Receipt, error)
 	// ExtendReceipt pushes the sliding bound out. It never moves RetainUntil or
