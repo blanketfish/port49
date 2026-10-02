@@ -5675,14 +5675,17 @@ another principal needs `explain_others`, and `--subject` and `--show-attributes
 form's alone.
 
 **`port49d init-revocations [--config <port49d.yaml>]`** creates `broker.revocations_file`,
-empty, and its marker, once per install, behind the directory fence, reading nothing from
-port49d.yaml but that path and the paths it must not collide with (no secret is resolved). It
-runs as the user that owns the file's directory, port49d's, and refuses otherwise, naming that
-user. Run it by hand or as a one-off job at install, never on a start path. It exits 0 when it
-created both, or when the file is already there and loads ("already initialized", nothing
-written); 1 when the file is there and does not load, or the marker is there without it (a lost
-file is restored from backup, or replaced by `{"revocations": []}` on purpose; §13, decision
-32); 2 on usage.
+empty, then its marker, once per install, behind the directory fence, reading nothing from
+port49d.yaml but that path and the paths it must not collide with (no secret is resolved). The
+file comes first, so a crash between the two leaves a file with no marker, which the next start
+loads and marks. It runs as the user that owns the file's directory, port49d's, and refuses
+otherwise, naming that user. Run it by hand or as a one-off job at install, never on a start
+path. It exits 0 when it created both, or when the file is already there and loads ("already
+initialized", nothing written); 1 when the file is there and does not load, or the marker is
+there without it (a lost file is restored from backup, or replaced by `{"revocations": []}` on
+purpose; §13, decision 32), when `broker.revocations_file` is a relative path (it would resolve
+against the caller's directory, not port49d's), or when the file appeared while it ran (another
+init-revocations is running or has just run; nothing written); 2 on usage.
 
 **`port49 refresh`** re-authenticates the session the agent holds and extends every live context the
 policy in force still grants (§5.6). The agent signs the broker's nonce with the certificate's key
@@ -6288,7 +6291,8 @@ broker, and read behind the fence with its directory fenced whether or not the f
 start never creates it: a missing file, or one that does not parse, refuses every start (amended
 2026-10-02 by the owner's ruling on plan 7a's Task 9 review M1: as first built, an unmounted or
 empty volume that passed the fence read as a first install and started with no marks).
-`port49d init-revocations` creates it, empty, beside a marker, once per install, run by hand or
+`port49d init-revocations` creates it, empty, then a marker beside it (the file first, so a
+crash between the two leaves a file a start loads and marks), once per install, run by hand or
 as a one-off job as the user that owns its directory (port49d's), and never on a start path:
 automation that ran it at every start and tolerated its refusal would re-create the file on the
 next empty volume. It exits 0 writing nothing when the file is there and loads, and refuses when
