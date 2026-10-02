@@ -928,7 +928,10 @@ principal, a `sid` until plan 7h, an unknown field):
   decides what it means, and the caller's own session on one key is `mine` with the key.
 
 A lift and a revocation by certificate are the admin socket's alone. One that cannot take the
-revocation slot within 10 s is answered `503 revocation_busy`, nothing revoked. The response
+revocation slot within 10 s is answered `503 revocation_busy`, nothing revoked. A self or key
+revocation takes no slot, and one caller has one in flight at a time: a caller's second self or
+key revocation, while its first is still running, is answered `503 revocation_busy` at once,
+with `Retry-After`, nothing revoked. Neither busy answer writes a record. The response
 says what was reached, names the contexts on a platform that never asks about a command, and
 repeats the text `port49 revoke` prints.
 
