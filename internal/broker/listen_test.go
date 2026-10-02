@@ -119,6 +119,25 @@ func closedByPeer(c net.Conn) bool {
 	return err != nil && !(errors.As(err, &ne) && ne.Timeout())
 }
 
+// refusedAtAdmit dials addr from d and wants the connection reset at admit,
+// as a source at its pending cap is. On loopback that reset can reach the
+// client before connect() returns, so the dial itself may fail with it: the
+// same refusal, as daemon/server's refusedAtAccept takes it.
+func refusedAtAdmit(t *testing.T, d *net.Dialer, addr string) {
+	t.Helper()
+	c, err := d.Dial("tcp", addr)
+	if err != nil {
+		if !errors.Is(err, syscall.ECONNRESET) {
+			t.Fatalf("want the connection reset at admit, got %v", err)
+		}
+		return
+	}
+	defer c.Close()
+	if !closedByPeer(c) {
+		t.Fatal("a connection past its source's pending cap was held, not reset")
+	}
+}
+
 // mintRequest is an agent's mint for one device, as it goes on the wire.
 const mintRequest = "POST /v1/tokens HTTP/1.1\r\nHost: broker\r\nContent-Type: application/json\r\n" +
 	"Idempotency-Key: k1\r\nContent-Length: 21\r\n\r\n{\"devices\":[\"leaf1\"]}"
@@ -298,14 +317,7 @@ func TestOneSourceHoldsAtMostItsPendingCap(t *testing.T) {
 		raws = append(raws, c)
 	}
 	eventually(t, "two pending", func() bool { return f.gauge("pending") == 2 })
-	third, err := net.Dial("tcp", addr)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer third.Close()
-	if !closedByPeer(third) {
-		t.Fatal("a third connection from the source was held, not reset")
-	}
+	refusedAtAdmit(t, &net.Dialer{}, addr)
 	eventually(t, "source_cap_refused counted", func() bool {
 		return testutil.ToFloat64(f.b.Metrics.BrokerConnectionEvents.WithLabelValues("source_cap_refused")) == 1
 	})
@@ -478,14 +490,7 @@ func TestAFullSourceDoesNotRefuseAnother(t *testing.T) {
 		defer c.Close()
 	}
 	eventually(t, "two pending", func() bool { return f.gauge("pending") == 2 })
-	third, err := net.Dial("tcp", addr)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer third.Close()
-	if !closedByPeer(third) {
-		t.Fatal("a third connection from 127.0.0.1 was held, not reset")
-	}
+	refusedAtAdmit(t, &net.Dialer{}, addr)
 	other := &net.Dialer{LocalAddr: &net.TCPAddr{IP: net.ParseIP("127.0.0.2")}}
 	c, err := tls.DialWithDialer(other, "tcp", addr, &tls.Config{Certificates: []tls.Certificate{f.alice},
 		RootCAs: f.ca.Pool(), MinVersion: tls.VersionTLS13})
