@@ -1106,27 +1106,8 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 					}
 					m.StoreFeedUp.WithLabelValues("marks").Set(v)
 				},
-				func() error {
-					m.StoreFeedRescans.WithLabelValues("marks").Inc()
-					// Before the reload reads the store: a mark an etcd
-					// restore lost is put back from the file, not lifted
-					// (final review 7e-1 C-1). A put-back that fails (the
-					// broker's circuit open through the restore) refuses
-					// the reload: the feed is down, said once per run of
-					// failures, until it succeeds (re-review 1 C-2).
-					n, err := putBackFileMarks(mctx, brk.Store, cfg.Broker.RevocationsFile, authMarks)
-					if n > 0 {
-						fmt.Fprintf(stderr, "port49d: broker: %d revocation(s) in broker.revocations_file %s were "+
-							"missing from the store (an etcd restore?) and are put back; lift any lifted on "+
-							"purpose with port49 revoke --lift\n", n, cfg.Broker.RevocationsFile)
-					}
-					if err != nil {
-						return fmt.Errorf("broker: putting broker.revocations_file %s's marks back into the store "+
-							"before the marks reload: %w; the marks are not reloaded until they are back",
-							cfg.Broker.RevocationsFile, err)
-					}
-					return nil
-				},
+				marksReloadHook(mctx, brk.Store, cfg.Broker.RevocationsFile, authMarks,
+					m.StoreFeedRescans.WithLabelValues("marks"), stderr),
 				func(format string, args ...any) { fmt.Fprintf(stderr, "port49d: "+format+"\n", args...) })
 		}()
 		defer func() { stopMarks(); <-marksDone }()
