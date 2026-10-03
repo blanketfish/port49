@@ -44,6 +44,7 @@ var pools = map[string]Pool{
 	"DeleteContextIf": Context, "GetBlob": Context, "BumpBlob": Context, "IndexContext": Context,
 	"UnindexContext": Context, "UnindexRef": Context, "ContextsByPrincipal": Context, "ContextsBySid": Context,
 	"ContextsByCert": Context, "ReindexSid": Context,
+	"PutContextRev": Context, "SwapContextRev": Context, "SwapLoginRev": Context, "RewriteContextRev": Context,
 
 	"ActivePrincipals": Bulk, "DeleteReceiptsByPrincipal": Bulk, "ListRevocations": Bulk, "PurgeTokens": Bulk,
 
@@ -142,6 +143,44 @@ func Wrap(inner store.Store, c Config) store.Store {
 		}
 	}
 	return g
+}
+
+// WrapRev guards inner as Wrap does, keeping the revision each
+// whole-context write committed at (store.RevStore) for the sealing layer
+// above it, which calls those twins alone: port49d's stores on etcd are
+// crypt.Wrap(WrapRev(the component's store)) (plan 7d).
+func WrapRev(inner store.RevStore, c Config) store.RevStore {
+	return revGuarded{guarded: Wrap(inner, c).(*guarded), rev: inner}
+}
+
+// revGuarded is guarded with inner's RevStore twins, each in the context
+// pool as its plain method is.
+type revGuarded struct {
+	*guarded
+	rev store.RevStore
+}
+
+func (g revGuarded) PutContextRev(ctx context.Context, k store.ContextKey, c store.Context, ttl time.Duration) (rev uint64, err error) {
+	err = g.do(ctx, Context, func(ctx context.Context) (e error) { rev, e = g.rev.PutContextRev(ctx, k, c, ttl); return })
+	return
+}
+
+func (g revGuarded) SwapContextRev(ctx context.Context, k store.ContextKey, rev uint64, c store.Context, ttl time.Duration) (n uint64, err error) {
+	err = g.do(ctx, Context, func(ctx context.Context) (e error) { n, e = g.rev.SwapContextRev(ctx, k, rev, c, ttl); return })
+	return
+}
+
+func (g revGuarded) SwapLoginRev(ctx context.Context, k store.ContextKey, rev uint64, c store.Context, ttl time.Duration, w store.LoginWrite) (n uint64, err error) {
+	err = g.do(ctx, Context, func(ctx context.Context) (e error) { n, e = g.rev.SwapLoginRev(ctx, k, rev, c, ttl, w); return })
+	return
+}
+
+func (g revGuarded) RewriteContextRev(ctx context.Context, k store.ContextKey, rev uint64, c store.Context, ttl time.Duration, policyMoved bool) (n uint64, err error) {
+	err = g.do(ctx, Context, func(ctx context.Context) (e error) {
+		n, e = g.rev.RewriteContextRev(ctx, k, rev, c, ttl, policyMoved)
+		return
+	})
+	return
 }
 
 // enter decides whether a call may go: always while closed; while open,

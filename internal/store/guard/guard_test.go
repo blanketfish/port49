@@ -566,8 +566,10 @@ func TestEveryMethodIsRoutedToItsPool(t *testing.T) {
 	var said, gone told
 	c := config(&said, &gone)
 	c.CallTimeout, c.BulkTimeout = 5*time.Second, 5*time.Second
-	g := reflect.ValueOf(Wrap(memory.New(time.Now), c))
-	st := reflect.TypeOf((*store.Store)(nil)).Elem()
+	// WrapRev's is Wrap's with the RevStore twins, which the sealing layer
+	// calls in place of their plain methods: each runs in its pool too.
+	g := reflect.ValueOf(WrapRev(memory.New(time.Now), c))
+	st := reflect.TypeOf((*store.RevStore)(nil)).Elem()
 	for i := 0; i < st.NumMethod(); i++ {
 		m := st.Method(i)
 		p := PoolOf(m.Name)
