@@ -3,6 +3,7 @@ package etcd
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -277,9 +278,10 @@ func TestTheMarkFeedBringsPutsAndLifts(t *testing.T) {
 	}
 }
 
-// A mark that does not decode is never a mark skipped: the read is an
-// error naming its key, as ListRevocations's is, and the watch stands the
-// mark its key names, as of when it saw it.
+// A mark that does not decode is never a mark skipped, nor an error that
+// would fail every reload (Ruling T9-e): the load and the watch each
+// stand the mark its key names, as of when they read it, and say so by its
+// key.
 func TestTheMarkFeedNeverSkipsAMarkThatDoesNotDecode(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -293,8 +295,15 @@ func TestTheMarkFeedNeverSkipsAMarkThatDoesNotDecode(t *testing.T) {
 	if _, err := s.tok.Put(ctx, key, "{"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := s.Revocations(ctx); err == nil || !strings.Contains(err.Error(), "garbled") {
-		t.Fatalf("%v", err)
+	var said []string
+	s.logf = func(format string, args ...any) { said = append(said, fmt.Sprintf(format, args...)) }
+	_, rs, err := s.Revocations(ctx)
+	want := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:garbled@example.com", At: now}
+	if err != nil || len(rs) != 1 || rs[0] != want {
+		t.Fatalf("the load: %+v %v", rs, err)
+	}
+	if len(said) != 1 || !strings.Contains(said[0], "garbled") || !strings.Contains(said[0], "stands it") {
+		t.Fatalf("the load said %q", said)
 	}
 	got := make(chan store.Revocation, 1)
 	go s.WatchRevocations(ctx, rev, func(r store.Revocation, lifted bool, _ uint64) {
@@ -304,7 +313,7 @@ func TestTheMarkFeedNeverSkipsAMarkThatDoesNotDecode(t *testing.T) {
 	})
 	select {
 	case r := <-got:
-		if r != (store.Revocation{Kind: store.RevocationPrincipal, Key: "user:garbled@example.com", At: now}) {
+		if r != want {
 			t.Fatalf("the watch brought %+v", r)
 		}
 	case <-time.After(10 * time.Second):

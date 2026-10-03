@@ -153,7 +153,11 @@ func (s *Store) markOf(key string) (string, string, bool) {
 // Revocations is every mark in force at one revision, which it returns
 // (store.MarkFeed): ListRevocations read a page at a time on the token
 // client, every page at the first page's revision. A mark that does not
-// decode is an error naming its key, as ListRevocations's is.
+// decode stands by the kind and key its etcd key names, as of now, and is
+// said by its key, as the watch stands it: an error would fail every
+// reload, and leave the marks feed loading again once a second while it
+// stands (Ruling T9-e). A key that does not parse names nothing, and is
+// said and skipped.
 func (s *Store) Revocations(ctx context.Context) (uint64, []store.Revocation, error) {
 	prefix := s.k.family(famMark)
 	end := clientv3.GetPrefixRangeEnd(prefix)
@@ -176,8 +180,14 @@ func (s *Store) Revocations(ctx context.Context) (uint64, []store.Revocation, er
 		}
 		for _, kv := range resp.Kvs {
 			var r markRec
-			if err := json.Unmarshal(kv.Value, &r); err != nil {
-				return 0, nil, notDecoded(fmt.Sprintf("mark %q", kv.Key))
+			if json.Unmarshal(kv.Value, &r) != nil {
+				kind, key, ok := s.markOf(string(kv.Key))
+				if !ok {
+					s.logf("etcd: the mark key %q does not parse; the marks load skipped it", kv.Key)
+					continue
+				}
+				s.logf("etcd: the mark at %q does not decode; the marks load stands it as of now", kv.Key)
+				r = markRec{Kind: kind, Key: key, At: s.now()}
 			}
 			out = append(out, r.revocation())
 		}
@@ -200,9 +210,9 @@ func (s *Store) Revocations(ctx context.Context) (uint64, []store.Revocation, er
 // WatchContexts does. A put is its record; a lift is the kind and key its
 // etcd key names. A put that does not decode stands the mark its key
 // names, at the time it was seen, and says so by its key: a revocation
-// left out would be one not enforced, and Revocations refuses the same
-// record at the next load. A key that does not parse names nothing, and
-// is said and skipped. A watch that fails is ErrUnavailable, or ErrRefused
+// left out would be one not enforced. Revocations stands it the same
+// way. A key that does not parse names nothing, and is said and skipped.
+// A watch that fails is ErrUnavailable, or ErrRefused
 // when etcd refuses this identity (unavailable).
 func (s *Store) WatchRevocations(ctx context.Context, after uint64,
 	fn func(r store.Revocation, lifted bool, rev uint64)) error {
