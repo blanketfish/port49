@@ -1587,6 +1587,16 @@ until 7c merges to be made. Every sub-plan is separately mergeable and leaves `m
   the slice on the split deployment.
 - **Plan 7f — go-dark and the warm context cache.** The owner's ruling of 2026-09-24: `port49d`
   health-checks the store and closes its TACACS+ listener after N failed checks, reopening after M;
+  **its Task 1 (Ryan, 2026-10-03):** the container shape, pulled forward from plan 12, before 7f's
+  own work. It ships:
+  - a minimal image holding the static binaries, non-root;
+  - one compose file: port49d, port49-broker, a three-member etcd with client-cert auth, and a
+    named volume per broker for `broker.state_dir`;
+  - a CI smoke test: `compose up`, then a device login, then a restart, and the broker's state
+    is kept.
+
+  It closes L39's Docker half. From then on every plan's lab runs on it, and a plan that changes a
+  config changes the compose file in the same plan. Kubernetes stays plan 12's, after plan 10.
   the per-replica read-through cache of contexts and blobs, TTL in seconds, served past its TTL
   through an outage and alarmed (design §12). Lab: a new register row, what each image does when
   port49d closes its listener mid-session, beside port49d stopped.
@@ -3254,7 +3264,9 @@ required. Supporting every shape well matters for adoption. So "supported" means
   - a kind cluster.
 - its own install page in plan 13's operator guide.
 
-A shape without its test is not shipped. This plan ships all three shapes and treats them as peers:
+A shape without its test is not shipped. This plan ships all three shapes and treats them as peers.
+The container shape arrives early, in 7f's Task 1. This plan adds the other two and finishes the
+container's install page:
 
 1. **Binaries under systemd.** Units for port49d and, on etcd, port49-broker.
 2. **A container image**, with a compose example: port49d, port49-broker and a three-member etcd.
