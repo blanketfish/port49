@@ -583,16 +583,22 @@ func (b *Broker) refreshContext(ctx context.Context, cur *policy.Policy, priors 
 			b.count(rep, step.outcome)
 			return step.outcome, nil
 		}
-		// The blob is in the store, and in the log, before any context
-		// names it: the daemon's next command reads it by that name. It is
-		// kept as long as the context can live, as at mint: an idle context
-		// outliving its blob would be denied blob_unavailable for nothing
-		// (final review M-4).
+		// The blob is in the store before any context names it: the
+		// daemon's next command reads it by that name. It is kept as long
+		// as the context can live, as at mint: an idle context outliving
+		// its blob would be denied blob_unavailable for nothing (final
+		// review M-4).
 		ttl := blobTTL(max(step.age, b.ContextIdleTTL), b.MaxSessionAge)
-		// Its blob record goes to the log before this context is written,
-		// or, under a session refresh, to its buffer ahead of this
-		// context's record; either way the hash is marked emitted only once
-		// the record lands (blobLanded).
+		// Its blob record reaches the log before this context is written,
+		// except under a session refresh, which buffers it ahead of this
+		// context's record and writes both once it lets go of the policy
+		// (plan 7e, Ruling 10). A port49d that dies between this context's
+		// write and that flush leaves a context naming a blob its log never
+		// carried. Nothing running misreads that: the daemon reads the
+		// store, and replay holds a record until its blob appears. The gap
+		// closes on the hash's next use, since the hash is marked emitted
+		// only when its record lands (blobLanded), so the next mint or
+		// refresh that writes it writes its record again.
 		if rep.log != nil {
 			err = b.putBlob(ctx, rep.log, step.write.BlobHash, step.body, ttl)
 		} else {

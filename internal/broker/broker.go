@@ -951,7 +951,9 @@ func (b *Broker) emit(r decision.Record) {
 	b.emitTo(b.Log, r)
 }
 
-// emitTo is emit into to: a request's buffer, under the policy hold.
+// emitTo is emit into to: a request's buffer, under the policy hold. The
+// decision is counted when it is buffered, not when it lands; the two differ
+// only for a process that dies before the flush.
 func (b *Broker) emitTo(to decision.Emitter, r decision.Record) {
 	to.Emit(r)
 	b.Metrics.Decisions.WithLabelValues(r.Event, r.Verdict, string(r.Reason)).Inc()

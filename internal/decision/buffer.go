@@ -7,6 +7,10 @@ import "sync"
 // mint holds the policy from its first resolution to its last token write,
 // and a log sink that stalls there would stall every reload. The caller
 // flushes it once it has let go. It is safe for concurrent use.
+//
+// A record's ts is taken when it is buffered, not when it is written, so
+// records from concurrent buffers reach the log out of ts order: the log is
+// in write order, and ts is not monotonic in it.
 type Buffer struct {
 	mu   sync.Mutex
 	recs []Record
