@@ -721,3 +721,22 @@ func TestTimeLeft(t *testing.T) {
 func tokenOut(s string) string {
 	return fmt.Sprintf("(%d bytes, withheld: it carries the token)", len(s))
 }
+
+// A revocation the agent did not send, because an earlier one still held
+// its connection, says so on port49 revoke's line, exit 1 (Task 14
+// review, Minor 2). The agent's half is internal/agent's
+// TestARevocationBehindARunningRevocationSaysItWasNotSent; this stub
+// answers as its socket does.
+func TestRevokeMineBehindAnEarlierRevocationSaysItWasNotSent(t *testing.T) {
+	sock := agentStub(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		_ = json.NewEncoder(w).Encode(api.Error{Error: "broker_error",
+			Detail: "agent: an earlier revocation still held the connection; this one was not sent"})
+	}))
+	var out, errb bytes.Buffer
+	if code := run([]string{"revoke", "--mine", "--agent-socket", sock}, &out, &errb); code != 1 ||
+		errb.String() != "port49 revoke: an earlier revocation still held the connection; this one was not sent\n" {
+		t.Fatalf("exit %d: %q", code, errb.String())
+	}
+}

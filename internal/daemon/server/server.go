@@ -60,6 +60,17 @@ type Deps struct {
 	Log         decision.Emitter
 	Now         func() time.Time
 	IdleTimeout time.Duration
+	// PacketDeadline bounds the store work of one packet (store.packet_deadline;
+	// plan 7d): past it every store call returns, the handler answers
+	// store_unavailable, and the device hears that before its own timeout.
+	// It never shortens the authentication failure delay. Zero is none.
+	PacketDeadline time.Duration
+	// Abort reports, when the server's context ends, whether it ended for
+	// a store gone (plan 7d; re-check R-M0): held connections are then
+	// reset (linger 0), not closed with a FIN, since a reset is what L28
+	// measured devices falling to their local method on at once. Nil is a
+	// shutdown, closed as before.
+	Abort func() bool
 }
 
 func Serve(ctx context.Context, ln net.Listener, d Deps) error {
@@ -187,6 +198,9 @@ func Serve(ctx context.Context, ln net.Listener, d Deps) error {
 			go func() {
 				select {
 				case <-ctx.Done():
+					if d.Abort != nil && d.Abort() {
+						reset(c)
+					}
 					c.Close()
 				case <-done:
 				}

@@ -2192,3 +2192,166 @@ func TestTheSocketRefusesTrailingData(t *testing.T) {
 		t.Fatalf("the broker was asked %d times", n)
 	}
 }
+
+// revokedSelf is the broker's 200 to a self-revocation: a 200 that names no
+// revocation is no answer (TestARevocationsEmptyAnswerMayBeInForce).
+var revokedSelf = refusal{status: 200, body: `{"by":"self","text":"revoked your own sessions"}`}
+
+// revokeHolding starts a revocation the fake broker answers only after
+// delay, and returns once it holds the agent's connection.
+func revokeHolding(t *testing.T, r *rig, delay time.Duration) <-chan error {
+	t.Helper()
+	r.fb.mu.Lock()
+	r.fb.answers = map[string]refusal{"/v1/tokens/revoke": revokedSelf}
+	r.fb.revokeDelay = delay
+	r.fb.mu.Unlock()
+	revoked := make(chan error, 1)
+	go func() {
+		_, err := r.a.Revoke(context.Background(), api.RevokeRequest{Mine: true})
+		revoked <- err
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for r.a.revoking.Load() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the revocation never took the wire")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return revoked
+}
+
+// A mint behind a revocation that holds the agent's one connection waits
+// its own budget, then says the revocation is still running and nothing
+// was minted, never that the broker is unreachable; it sends nothing
+// (plan 7d, Ruling 15; 7c final review).
+func TestAMintBehindARunningRevocationSaysSo(t *testing.T) {
+	defer func(d time.Duration) { wireWait = d }(wireWait)
+	wireWait = 200 * time.Millisecond
+	r := newRig(t)
+	revoked := revokeHolding(t, r, 2*time.Second)
+	start := time.Now()
+	_, err := socketFor(t, r.a).Token(context.Background(), TokenRequest{Device: "leaf1"})
+	var running *RevocationRunningError
+	if !errors.As(err, &running) || time.Since(start) > time.Second {
+		t.Fatalf("a mint behind a revocation: %v after %v", err, time.Since(start))
+	}
+	if !strings.Contains(err.Error(), "is still running on the broker; nothing was minted") ||
+		strings.Contains(err.Error(), "unreachable") {
+		t.Fatalf("said %q", err.Error())
+	}
+	r.fb.mu.Lock()
+	mints := len(r.fb.addrs["/v1/tokens"])
+	r.fb.mu.Unlock()
+	if mints != 0 {
+		t.Fatalf("the mint was sent behind the revocation: %d", mints)
+	}
+	if err := <-revoked; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.a.Mint(context.Background(), "leaf1", false, 0); err != nil {
+		t.Fatalf("a mint after the revocation: %v", err)
+	}
+}
+
+// A refresh, an identity and an explain behind a running revocation say
+// the same, through the socket, never as the broker failing (pre-flight
+// I18, M43).
+func TestEveryCallBehindARunningRevocationSaysSo(t *testing.T) {
+	defer func(d time.Duration) { wireWait = d }(wireWait)
+	wireWait = 200 * time.Millisecond
+	r := newRig(t)
+	revoked := revokeHolding(t, r, 2*time.Second)
+	c := socketFor(t, r.a)
+	for name, call := range map[string]func() error{
+		"refresh":  func() error { _, err := c.Refresh(context.Background()); return err },
+		"identity": func() error { _, err := c.Identity(context.Background()); return err },
+		"explain": func() error {
+			_, err := c.Explain(context.Background(), api.ExplainRequest{Device: "leaf1", Command: "show version"})
+			return err
+		},
+	} {
+		var running *RevocationRunningError
+		if err := call(); !errors.As(err, &running) || !strings.Contains(err.Error(), "is still running on the broker") {
+			t.Errorf("%s behind a revocation: %v", name, err)
+		}
+	}
+	r.fb.mu.Lock()
+	sent := len(r.fb.addrs["/v1/refresh/challenge"]) + len(r.fb.addrs["/v1/identity"]) + len(r.fb.addrs["/v1/explain"])
+	r.fb.mu.Unlock()
+	if sent != 0 {
+		t.Fatalf("%d call(s) were sent behind the revocation", sent)
+	}
+	if err := <-revoked; err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A mint waiting out a 409's Retry-After holds no turn on the connection:
+// a revocation sent meanwhile goes at once, not after the mint's sleep
+// (re-check m1).
+func TestARevocationIsNotQueuedBehindAMintsWait(t *testing.T) {
+	r := newRig(t)
+	r.fb.mu.Lock()
+	r.fb.inProgress = 1 // one 409 idempotency_in_progress, Retry-After: 1
+	r.fb.answers = map[string]refusal{"/v1/tokens/revoke": revokedSelf}
+	r.fb.mu.Unlock()
+	minted := make(chan error, 1)
+	go func() {
+		_, err := r.a.Mint(context.Background(), "leaf1", false, 0)
+		minted <- err
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		r.fb.mu.Lock()
+		n := len(r.fb.keys)
+		r.fb.mu.Unlock()
+		if n == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the mint was never answered 409")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	start := time.Now()
+	if _, err := r.a.Revoke(context.Background(), api.RevokeRequest{Mine: true}); err != nil {
+		t.Fatal(err)
+	}
+	if took := time.Since(start); took > 500*time.Millisecond {
+		t.Fatalf("the revocation waited %v behind a mint's Retry-After sleep", took)
+	}
+	if err := <-minted; err != nil {
+		t.Fatalf("the mint after its wait: %v", err)
+	}
+}
+
+// A revocation that waits out its own timeout behind an earlier one says
+// it was not sent, never a bare deadline, and sends nothing (Task 14
+// review, Minor 2).
+func TestARevocationBehindARunningRevocationSaysItWasNotSent(t *testing.T) {
+	defer func(d time.Duration) { revokeTimeout = d }(revokeTimeout)
+	r := newRig(t)
+	revoked := revokeHolding(t, r, 2*time.Second)
+	// The first revocation took its timeout as it started; the second has
+	// only this long.
+	revokeTimeout = 200 * time.Millisecond
+	c := socketFor(t, r.a)
+	const want = "an earlier revocation still held the connection; this one was not sent"
+	if _, err := r.a.Revoke(context.Background(), api.RevokeRequest{Mine: true}); err == nil ||
+		err.Error() != "agent: "+want {
+		t.Fatalf("the agent: %v", err)
+	}
+	if _, err := c.Revoke(context.Background(), api.RevokeRequest{Mine: true}); err == nil ||
+		err.Error() != "agent: "+want {
+		t.Fatalf("through the socket: %v", err)
+	}
+	r.fb.mu.Lock()
+	n := len(r.fb.addrs["/v1/tokens/revoke"])
+	r.fb.mu.Unlock()
+	if n != 1 {
+		t.Fatalf("the broker saw %d revocations, want the first alone", n)
+	}
+	if err := <-revoked; err != nil {
+		t.Fatal(err)
+	}
+}

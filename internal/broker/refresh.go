@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/rhwendt/port49/internal/admission"
@@ -180,6 +181,101 @@ func (b *Broker) Refresh(ctx context.Context, priors []Prior) (RefreshReport, er
 	}
 }
 
+// RefreshAtStart carries the policy in force into every live context a
+// persistent store kept across a restart (plan 7d; spec §13, decision
+// 35). No policy those contexts were written under is one this port49d
+// loaded, so none is the same source, and every context is judged against
+// the policy in force; the tokens are already purged, so nothing is
+// superseded here. port49d runs it before TACACS+ binds.
+//
+// What it leaves unjudged is an ErrConflict, and port49d does a different
+// thing with each (decision 35, a start on etcd, step 6):
+//   - ErrPrincipalUnvisited, a principal whose contexts could not be
+//     looked up: those contexts would open unjudged, so it holds the start
+//     as an outage does, and port49d runs it again (Ruling T12-c);
+//   - any other ErrConflict, a context still changing after every
+//     attempt: another writer is changing it, so the start goes on, and
+//     port49d runs a refresh pass at once after the listeners open
+//     (Ruling T12-d);
+//   - ErrLeftUnderUnheldKey, a context sealed under a key this port49d
+//     does not hold: every path denies it, so the start goes on, and the
+//     next pass judges it (Ruling T12-a).
+//
+// The last two keep port49_policy_refresh_pending at 1 (re-review r-m1).
+// refreshContexts returns the first of these that the pass met at all, in
+// that order. A store error is returned as it is, and holds the start.
+func (b *Broker) RefreshAtStart(ctx context.Context) (RefreshReport, error) {
+	var rep RefreshReport
+	rep.At = b.Now()
+	err := b.refreshContexts(ctx, b.Policy.Load(), nil, rep.At, &rep, false)
+	return rep, err
+}
+
+// Contexts is how many live contexts the pass judged.
+func (r RefreshReport) Contexts() int {
+	return r.Updated + r.Unchanged + r.Revoked + r.Quarantined + r.Failed
+}
+
+// ApplyMarksAtStart runs 7a's two context passes for every standing mark
+// (plan 7d; pre-flight C1). On the memory store a restart lost every
+// context, so a mark never had a kept context to miss. On a store that
+// persists, a start keeps contexts a revocation never reached: a mark
+// added to broker.revocations_file with port49d stopped, or a revocation
+// whose passes an outage cut short. It touches no token (the start purges
+// them) and no connection (none is held yet). It reports how many
+// contexts it marked, and its first outage, for the caller to run it
+// again; a mark it could not apply is still denied by the daemon's marks.
+//
+// Only an outage is returned (re-check R-I3). A context that will not
+// open, sealed under a key this window lacks, is still marked (session.mark
+// marks what it cannot read, since a revocation needs no key), and is
+// denied as unreadable anyway; returned, it would fail every start until
+// that context's TTL ran out. Any other error is said and skipped for the
+// same reason: the daemon's marks deny that context on every request.
+func (b *Broker) ApplyMarksAtStart(ctx context.Context, marks []store.Revocation) (int, error) {
+	if b.Sessions == nil {
+		return 0, errors.New("broker: revocation is not wired (no session manager); the standing marks were not applied")
+	}
+	reached := map[store.ContextRef]bool{}
+	var first error
+	var kind string
+	note := func(err error) {
+		var unreadable *store.UnreadableContextError
+		switch {
+		case err == nil, errors.Is(err, store.ErrNotFound), errors.As(err, &unreadable):
+		case errors.Is(err, store.ErrUnavailable):
+			if first == nil {
+				first = err
+			}
+		default:
+			b.logf("broker: a standing %s revocation was not applied to every kept context (%v); the daemon's marks "+
+				"deny those contexts on every request regardless", kind, err)
+		}
+	}
+	for _, r := range marks {
+		kind = r.Kind
+		for pass := 0; pass < 2; pass++ {
+			var refs []store.ContextRef
+			var err error
+			switch r.Kind {
+			case store.RevocationPrincipal:
+				refs, err = b.Sessions.RevokeByPrincipal(ctx, r.Key)
+			case store.RevocationCert:
+				i := strings.LastIndexByte(r.Key, '|')
+				if i < 0 {
+					continue // CheckRevocation refused such a key; nothing names it
+				}
+				refs, err = b.Sessions.RevokeByCert(ctx, r.Key[:i], r.Key[i+1:])
+			}
+			note(err)
+			for _, ref := range refs {
+				reached[ref] = true
+			}
+		}
+	}
+	return len(reached), first
+}
+
 // minted is what a token for one principal on one device carries of its
 // policy, the bundle aside: every policy file has its own bundle, so comparing
 // it would supersede every token at every edit. ttl is the subject's
@@ -337,8 +433,12 @@ func (b *Broker) supersedeTokens(ctx context.Context, cur *policy.Policy, now ti
 // busy session must not hold every session after it on the superseded policy.
 // Nor does one principal's lookup failing for any reason but the store being
 // unavailable: it is said, counted failed and left for the next pass, and the
-// pass returns errPrincipalUnvisited, an ErrConflict, so it is not taken as
+// pass returns ErrPrincipalUnvisited, an ErrConflict, so it is not taken as
 // complete (re-review r-m1).
+//
+// What it left is returned by what a start does with it (RefreshAtStart):
+// ErrPrincipalUnvisited over a context still changing, and that over
+// ErrLeftUnderUnheldKey, whatever order the pass met them in.
 func (b *Broker) refreshContexts(ctx context.Context, cur *policy.Policy, priors []Prior, now time.Time,
 	rep *RefreshReport, sameSource bool) error {
 	principals, err := b.Store.ActivePrincipals(ctx)
@@ -347,7 +447,7 @@ func (b *Broker) refreshContexts(ctx context.Context, cur *policy.Policy, priors
 	}
 	quarantined := map[string]bool{} // the ctx_ids this pass left for a quarantine
 	unvisited := false               // a principal whose contexts this pass could not look up
-	var busy error
+	var busy, unheld error
 	for _, principal := range principals {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -366,13 +466,12 @@ func (b *Broker) refreshContexts(ctx context.Context, cur *policy.Policy, priors
 				principal, err)
 			b.count(rep, "failed")
 			unvisited = true
-			if busy == nil {
-				busy = errPrincipalUnvisited
-			}
 			continue
 		}
 		for _, ref := range refs {
 			switch _, err := b.refreshContext(ctx, cur, priors, now, principal, ref, rep, quarantined, sameSource); {
+			case errors.Is(err, ErrLeftUnderUnheldKey):
+				unheld = err
 			case errors.Is(err, store.ErrConflict):
 				if busy == nil {
 					busy = err
@@ -386,7 +485,7 @@ func (b *Broker) refreshContexts(ctx context.Context, cur *policy.Policy, priors
 	// is over, or its context is: forget it, and a context quarantined again
 	// later is recorded again. A principal left unvisited may hold one still.
 	if unvisited {
-		return busy
+		return ErrPrincipalUnvisited
 	}
 	b.mu.Lock()
 	for id := range b.quarantineRecorded {
@@ -395,7 +494,10 @@ func (b *Broker) refreshContexts(ctx context.Context, cur *policy.Policy, priors
 		}
 	}
 	b.mu.Unlock()
-	return busy
+	if busy != nil {
+		return busy
+	}
+	return unheld
 }
 
 // refreshContext re-resolves one context and writes the answer, reading again
@@ -418,11 +520,14 @@ func (b *Broker) refreshContext(ctx context.Context, cur *policy.Policy, priors 
 			return "skipped", nil // the index outlived the context; its own TTL reclaims it
 		case errors.As(err, &unreadable):
 			outcome, err := b.revokeUnopened(ctx, cur, priors, now, "indexed under "+principal, ref, unreadable, rep)
+			if errors.Is(err, errReadAgain) {
+				continue
+			}
 			if errors.Is(err, errKeyNotHeld) {
 				log.Printf("broker: refresh: the context for %q on %q, indexed under %s: %v; left for the next pass",
 					ref.Username, ref.NAS, principal, err)
 				b.count(rep, "failed")
-				return "failed", errLeftUnderUnheldKey
+				return "failed", ErrLeftUnderUnheldKey
 			}
 			return outcome, err
 		case err != nil:
@@ -561,6 +666,12 @@ func knownPlatform(cur *policy.Policy, priors []Prior, name string) (*policy.Pol
 // for the next pass. No login can open it meanwhile, so it is denied
 // anyway. One that fails authentication, or opens and is not the one this
 // port49d last wrote (crypt.ErrNotLastWritten), is tampered, and revoked.
+// The ledger's denial is read once more first: revoked only when the read
+// again is still denied at the same revision, since one the store now
+// answers, or holds at another, raced a write of its own and is
+// errReadAgain, for the caller to judge afresh (Task 13b review I-1). A
+// record put back, or restored under a running port49d, is still denied
+// there, and revoked (Ruling T13b-a).
 func (b *Broker) revokeUnopened(ctx context.Context, cur *policy.Policy, priors []Prior, now time.Time, via string,
 	ref store.ContextRef, unreadable *store.UnreadableContextError, rep *RefreshReport) (string, error) {
 	if !unreadable.RevokedAt.IsZero() {
@@ -568,6 +679,18 @@ func (b *Broker) revokeUnopened(ctx context.Context, cur *policy.Policy, priors 
 	}
 	if errors.Is(unreadable, crypt.ErrUnknownKey) {
 		return "", fmt.Errorf("%w (%v)", errKeyNotHeld, unreadable)
+	}
+	if errors.Is(unreadable, crypt.ErrNotLastWritten) {
+		var again *store.UnreadableContextError
+		switch _, err := b.Store.GetContext(ctx, store.ContextKey{NAS: ref.NAS, Username: ref.Username}); {
+		case errors.As(err, &again) && errors.Is(again, crypt.ErrNotLastWritten) && again.Rev == unreadable.Rev:
+		case errors.Is(err, store.ErrNotFound):
+			return "skipped", nil
+		case err == nil, errors.As(err, &again):
+			return "", errReadAgain
+		default:
+			return "", err
+		}
 	}
 	known, plat := knownPlatform(cur, priors, ref.NAS)
 	log.Printf("broker: refresh: the context for %q on %q, %s, will not open (%v); revoking it",
@@ -581,18 +704,22 @@ func (b *Broker) revokeUnopened(ctx context.Context, cur *policy.Policy, priors 
 	return b.revoke(ctx, store.ContextKey{NAS: ref.NAS, Username: ref.Username}, unreadable.Rev, now, step, rep)
 }
 
+// errReadAgain is a context the ledger denied that revokeUnopened, reading
+// it again, found written since: a read that raced a write, judged afresh.
+var errReadAgain = fmt.Errorf("broker: the context was written again since it was read: %w", store.ErrConflict)
+
 // errKeyNotHeld is a context revokeUnopened left because it is sealed under
 // a key this port49d does not hold.
 var errKeyNotHeld = errors.New("broker: sealed under a key this port49d does not hold; not revoked")
 
-// errLeftUnderUnheldKey and errPrincipalUnvisited are what a pass left
+// ErrLeftUnderUnheldKey and ErrPrincipalUnvisited are what a pass left
 // unjudged. Each is store.ErrConflict, as a busy context is: the pass goes
 // on, the tokens are still superseded, and Refresh returns it, so port49d
 // keeps port49_policy_refresh_pending at 1 and runs the pass again, never
 // taking the pass for one that reached every live context (re-review r-m1).
 var (
-	errLeftUnderUnheldKey = fmt.Errorf("broker: a context under an unheld key was left unjudged: %w", store.ErrConflict)
-	errPrincipalUnvisited = fmt.Errorf("broker: a principal could not be looked up, so its contexts were left "+
+	ErrLeftUnderUnheldKey = fmt.Errorf("broker: a context under an unheld key was left unjudged: %w", store.ErrConflict)
+	ErrPrincipalUnvisited = fmt.Errorf("broker: a principal could not be looked up, so its contexts were left "+
 		"unjudged: %w", store.ErrConflict)
 )
 

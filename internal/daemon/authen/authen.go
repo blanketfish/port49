@@ -927,6 +927,32 @@ func (s *Session) finish(rec decision.Record, status uint8, reason decision.Reas
 	return wire.AuthenReply{Status: status}, true
 }
 
+type delayKey struct{}
+
+type delayFrom struct {
+	ctx     context.Context
+	arrived time.Time
+}
+
+// WithDelayContext is ctx carrying delay, the context a failure delay
+// may be ended by, and arrived, when the packet arrived. delay is the
+// server's context, never the packet's: a packet's store.packet_deadline
+// bounds its store work and must not cut the brute-force delay (plan 7d;
+// pre-flight I1). The delay counts from arrived, so the store work it
+// waited on is inside it, not added to it (re-check N1).
+func WithDelayContext(ctx, delay context.Context, arrived time.Time) context.Context {
+	return context.WithValue(ctx, delayKey{}, delayFrom{ctx: delay, arrived: arrived})
+}
+
+// DelayContext is the context and arrival WithDelayContext put on ctx,
+// or ctx itself and the zero time.
+func DelayContext(ctx context.Context) (context.Context, time.Time) {
+	if d, ok := ctx.Value(delayKey{}).(delayFrom); ok {
+		return d.ctx, d.arrived
+	}
+	return ctx, time.Time{}
+}
+
 // fail replies FAIL after the per-(nas, username) failure delay. The sleep is
 // cancellable, but by the server's context, not the connection's: a device
 // that hangs up mid-delay does not shorten it, and only shutdown does. The
@@ -944,11 +970,24 @@ func (s *Session) finish(rec decision.Record, status uint8, reason decision.Reas
 func (s *Session) fail(ctx context.Context, rec decision.Record, reason decision.Reason) (wire.AuthenReply, bool) {
 	delay := s.h.limits.AuthFailure(s.peer.NAS, Canonical(s.user))
 	s.h.metrics.AuthFailures.Inc()
-	timer := time.NewTimer(delay)
-	select {
-	case <-timer.C:
-	case <-ctx.Done():
-		timer.Stop()
+	// The delay counts from the packet's arrival, and sleeps on the
+	// server's context (DelayContext): the store's time is inside it, not
+	// added to it, and a packet deadline does not shorten it (plan 7d;
+	// pre-flight I1; re-check N1). A FAIL therefore arrives at the later of
+	// the store's answer and arrival plus the delay, and each failure still
+	// costs its sender the whole delay from its send. With no arrival (a
+	// caller other than the server) it counts from now, as before.
+	dctx, arrived := DelayContext(ctx)
+	if !arrived.IsZero() {
+		delay -= time.Since(arrived)
+	}
+	if delay > 0 {
+		timer := time.NewTimer(delay)
+		select {
+		case <-timer.C:
+		case <-dctx.Done():
+			timer.Stop()
+		}
 	}
 	rec.ServerMsg = "port49: authentication failed, mint a new token with `port49 token`"
 	reply, done := s.finish(rec, wire.AuthenStatusFail, reason)

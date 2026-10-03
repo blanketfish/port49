@@ -93,7 +93,8 @@ func (b *Broker) reindexContext(ctx context.Context, cur *policy.Policy, r store
 		// only one whose lookup entry is gone, which no refresh walks
 		// (Task 7b review m-2), and the refresh would revoke it anyway.
 		// One under a key not held is not revoked: revokeUnopened returns
-		// errKeyNotHeld, a failure left for the next pass.
+		// errKeyNotHeld, a failure left for the next pass. So is one written
+		// again since it was read: revokeUnopened returns errReadAgain.
 		outcome, err := b.revokeUnopened(ctx, cur, nil, rep.At, "found by the re-index", r.ContextRef, unreadable, rep)
 		return outcome != "skipped" && err == nil, err
 	case err != nil:

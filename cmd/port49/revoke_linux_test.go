@@ -232,6 +232,43 @@ func TestRevokeUnansweredMayBeInForce(t *testing.T) {
 	}
 }
 
+// port49d always says what a revocation or lift did: an answer that names
+// nothing ({}) is not port49d's report, and the op may have run. It is
+// unanswered, as the broker's and the agent's {} are, never exit 0.
+func TestRevokeAnswerNamingNothingIsUnanswered(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), "port49d.sock")
+	ln, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			_, _ = bufio.NewReader(c).ReadString('\n')
+			_, _ = io.WriteString(c, "{}\n")
+			c.Close()
+		}
+	}()
+	for _, tc := range []struct {
+		args []string
+		what string
+	}{
+		{[]string{"--principal", "user:alice@example.com"}, "the revocation may be in force"},
+		{[]string{"--principal", "user:alice@example.com", "--lift"}, "the lift may be in force"},
+	} {
+		var out, errb bytes.Buffer
+		if code := run(append([]string{"revoke", "--socket", socket}, tc.args...), &out, &errb); code != 1 ||
+			!strings.Contains(errb.String(), "port49d did not answer (its answer named no revocation); "+tc.what) ||
+			out.Len() != 0 {
+			t.Fatalf("%v: exit %d: %q, %q", tc.args, code, out.String(), errb.String())
+		}
+	}
+}
+
 // --cert takes one certificate, PEM or DER, and names its subject before
 // anything is sent; a chain, an oversized file, or flags that conflict are
 // refused before the dial.

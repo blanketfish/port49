@@ -136,6 +136,12 @@ type Broker struct {
 	// (token.Request). It holds at most one entry per key the policy has
 	// ever minted for.
 	superseded map[store.TokenKey]time.Time
+	// SupersededAll is when port49d started on a store that persists (plan
+	// 7d): every unspent token was purged then, so every key is superseded
+	// at least then, and an idempotent replay of a mint from before is
+	// minted again, never answered with a token that no longer exists.
+	// Zero on the memory store. Set before the broker serves.
+	SupersededAll time.Time
 	// queued is, by (issuer, serial), each certificate in revokeQueue, and
 	// pending each one a store error or a full queue left for RetryPending.
 	queued  map[[2]string]bool
@@ -715,6 +721,9 @@ func (b *Broker) mintOne(ctx context.Context, pol *policy.Policy, principal stri
 	b.mu.Lock()
 	supersededAt := b.superseded[store.TokenKey{NAS: name, Username: res.Username}]
 	b.mu.Unlock()
+	if b.SupersededAll.After(supersededAt) {
+		supersededAt = b.SupersededAll
+	}
 	out, err := b.Minter.Mint(ctx, token.Request{
 		Subject: token.Subject{Principal: principal, Username: res.Username, TokenTTL: res.TokenTTL,
 			Enable: res.Enable, MaxPrivilege: res.MaxPrivilege, MaxSessionAge: age,

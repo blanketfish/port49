@@ -376,6 +376,18 @@ func TestAContextUnderAnUnheldKeyIsNeverRevoked(t *testing.T) {
 				t.Fatalf("a refresh: %+v %v", rep, err)
 			}
 		}},
+		// The session refresh reports it not_judged, never revoked: the
+		// caller is told what was left, not that a session ended (bd4ae7f).
+		{"session refresh", func(t *testing.T, f *fixture) {
+			rep, err := f.b.RefreshSession(context.Background(), alicePrincipal, store.Credential{Method: "cert"},
+				f.b.Now())
+			if err != nil || len(rep.Sessions) != 1 || rep.Sessions[0].Outcome != "not_judged" {
+				t.Fatalf("a session refresh: %+v %v", rep, err)
+			}
+			if v := testutil.ToFloat64(f.b.Metrics.SessionRefreshes.WithLabelValues("revoked")); v != 0 {
+				t.Fatalf("port49_session_refreshes_total{outcome=\"revoked\"} = %v", v)
+			}
+		}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			f := newFixtureWithPolicy(t, 8, sharedPolicy)

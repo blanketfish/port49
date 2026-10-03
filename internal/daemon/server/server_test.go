@@ -2185,3 +2185,108 @@ func TestAnOpenConnectionsRecordsAreNeverRedactedUnderADeletedVariant(t *testing
 		t.Fatalf("a secret Junos's patterns hide reached the log under the deleted variant: %s", log.String())
 	}
 }
+
+// hangingStore answers Candidates only when its context ends: a store
+// that does not answer.
+type hangingStore struct{ store.Store }
+
+func (hangingStore) Candidates(ctx context.Context, _ store.TokenKey) ([]store.Token, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// A packet's store work ends at store.packet_deadline: the device hears
+// ERROR then, never silence until its own timeout (spec §13, decision 35;
+// L35 measures what each image does with it).
+func TestAPacketsStoreWorkEndsAtItsDeadline(t *testing.T) {
+	log := &syncBuffer{}
+	ts := newTestServerWith(t, log, hangingStore{memory.New(time.Now)}, nil, func(d *Deps) {
+		d.PacketDeadline = 200 * time.Millisecond
+	})
+	c := dial(t, ts.addr, []byte("k2"))
+	start := time.Now()
+	c.send(t, wire.TypeAuthen, wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP,
+		Service: wire.AuthenServiceLogin, User: []byte("alice"), Port: []byte("vty0"), Data: []byte("p49_e2e")}.Encode(), 0)
+	_, body := c.recv(t)
+	took := time.Since(start)
+	reply, err := wire.DecodeAuthenReply(body)
+	if err != nil || reply.Status != wire.AuthenStatusError || took < 200*time.Millisecond || took > time.Second {
+		t.Fatalf("status %v (%v) after %v", reply.Status, err, took)
+	}
+}
+
+// The packet deadline bounds store work and never the brute-force delay:
+// a FAIL behind a 50ms deadline still takes the whole 300ms delay
+// (pre-flight I1; authen.Session.fail).
+func TestThePacketDeadlineNeverShortensTheFailureDelay(t *testing.T) {
+	log := &syncBuffer{}
+	st := memory.New(time.Now)
+	ts := newTestServerWith(t, log, st, nil, func(d *Deps) {
+		d.PacketDeadline = 50 * time.Millisecond
+		lim := limits.New(limits.Config{PerNASConnections: 2, IdleTimeout: time.Second,
+			MalformedBackoffBase: time.Millisecond, MalformedBackoffMax: time.Millisecond, MalformedWindow: time.Minute,
+			AuthFailureDelayBase: 300 * time.Millisecond, AuthFailureDelayMax: 300 * time.Millisecond,
+			AuthFailureWindow: time.Minute}, time.Now)
+		d.Limits = lim
+		d.Authen = authen.New(st, d.Log, lim, d.Metrics, time.Now, func() string { return "ctx1" },
+			15*time.Minute, 2*time.Hour, time.Hour, time.Hour, token.NewTagWindow(token.TagKey([]byte("server_test"))))
+	})
+	c := dial(t, ts.addr, []byte("k2"))
+	start := time.Now()
+	c.send(t, wire.TypeAuthen, wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP,
+		Service: wire.AuthenServiceLogin, User: []byte("alice"), Port: []byte("vty0"), Data: []byte("not-a-token")}.Encode(), 0)
+	_, body := c.recv(t)
+	took := time.Since(start)
+	reply, err := wire.DecodeAuthenReply(body)
+	if err != nil || reply.Status != wire.AuthenStatusFail || took < 300*time.Millisecond {
+		t.Fatalf("status %v (%v) after %v: the packet deadline cut the failure delay", reply.Status, err, took)
+	}
+}
+
+// slowStore answers the two reads a wrong token's redemption makes, each
+// after d: a store slow but inside every deadline.
+type slowStore struct {
+	store.Store
+	d time.Duration
+}
+
+func (s slowStore) GetReceipt(ctx context.Context, rk store.ReceiptKey) (store.Receipt, error) {
+	time.Sleep(s.d)
+	return s.Store.GetReceipt(ctx, rk)
+}
+
+func (s slowStore) Candidates(ctx context.Context, k store.TokenKey) ([]store.Token, error) {
+	time.Sleep(s.d)
+	return s.Store.Candidates(ctx, k)
+}
+
+// The failure delay counts from the packet's arrival, so the store's time
+// is inside it, not added to it: a wrong token behind a store spending
+// 250ms and a 300ms delay is answered FAIL at about 300ms, never 550ms
+// (re-check N1). That keeps a FAIL's worst case at max(packet_deadline,
+// delay), inside Junos's 3s (L13), and the throttle whole.
+func TestAFailArrivesAtItsDelay(t *testing.T) {
+	log := &syncBuffer{}
+	st := slowStore{Store: memory.New(time.Now), d: 125 * time.Millisecond}
+	ts := newTestServerWith(t, log, st, nil, func(d *Deps) {
+		d.PacketDeadline = 2 * time.Second
+		lim := limits.New(limits.Config{PerNASConnections: 2, IdleTimeout: time.Second,
+			MalformedBackoffBase: time.Millisecond, MalformedBackoffMax: time.Millisecond, MalformedWindow: time.Minute,
+			AuthFailureDelayBase: 300 * time.Millisecond, AuthFailureDelayMax: 300 * time.Millisecond,
+			AuthFailureWindow: time.Minute}, time.Now)
+		d.Limits = lim
+		d.Authen = authen.New(st, d.Log, lim, d.Metrics, time.Now, func() string { return "ctx1" },
+			15*time.Minute, 2*time.Hour, time.Hour, time.Hour, token.NewTagWindow(token.TagKey([]byte("server_test"))))
+	})
+	c := dial(t, ts.addr, []byte("k2"))
+	start := time.Now()
+	c.send(t, wire.TypeAuthen, wire.AuthenStart{Action: wire.AuthenActionLogin, AuthenType: wire.AuthenTypePAP,
+		Service: wire.AuthenServiceLogin, User: []byte("alice"), Port: []byte("vty0"), Data: []byte("not-a-token")}.Encode(), 0)
+	_, body := c.recv(t)
+	took := time.Since(start)
+	reply, err := wire.DecodeAuthenReply(body)
+	if err != nil || reply.Status != wire.AuthenStatusFail || took < 300*time.Millisecond || took >= 500*time.Millisecond {
+		t.Fatalf("status %v (%v) after %v: want FAIL at the 300ms delay, the 250ms of store inside it", reply.Status,
+			err, took)
+	}
+}

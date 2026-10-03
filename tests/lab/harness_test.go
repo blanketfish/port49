@@ -1029,7 +1029,9 @@ func (l *lab) startDaemonWith(cfgPath string, resume bool) error {
 		close(l.daemonDone)
 	}()
 
-	deadline := time.Now().Add(30 * time.Second)
+	// 60s, not 30s: on etcd the keyspace hold waits a third of hold_ttl
+	// once locked, 20s at L35's 60s, before port49d listens (plan 7d).
+	deadline := time.Now().Add(60 * time.Second)
 	for {
 		if daemonHealthy() {
 			return l.loadSeeds(cfgPath, started)
@@ -1046,7 +1048,7 @@ func (l *lab) startDaemonWith(cfgPath string, resume bool) error {
 		time.Sleep(250 * time.Millisecond)
 	}
 	stderr, _ := os.ReadFile(l.errPath)
-	return fmt.Errorf("port49d did not come up within 30s; its stderr was:\n%s", stderr)
+	return fmt.Errorf("port49d did not come up within 60s; its stderr was:\n%s", stderr)
 }
 
 // loadSeeds reads the pairs port49d minted for this platform's NAS out of the

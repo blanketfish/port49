@@ -13,6 +13,7 @@ package etcd
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"log"
@@ -57,15 +58,20 @@ type Config struct {
 type Store struct {
 	k   keys
 	now func() time.Time
-	// tok and ctx are the token and context pools (design §12): mint
-	// pressure on one cannot take the other's connection. They are one
-	// client until plan 7d Task 11 dials two.
+	// tok and ctx are the token and context pools (design §12), two
+	// clients and so two connections: mint pressure on one cannot take the
+	// other's connection.
 	tok, ctx             *clientv3.Client
 	tokLeases, ctxLeases *leases
 	owned                []*clientv3.Client // closed by Close
 	seen                 seenCache          // GetContext's last read per key (contexts.go)
 	logf                 func(format string, args ...any)
 	idxUndecodable       prometheus.Counter // nil counts nothing
+	// user is the etcd user this identity authenticates as, its client
+	// certificate's CN, or "" when Open could not read one. CheckIdentity
+	// reads its grants, and refuses "" unless the store is in the clear.
+	user  string
+	clear bool // dialed with no TLS: tests only, and etcd's auth cannot know it
 }
 
 var _ store.Store = (*Store)(nil)
@@ -91,12 +97,18 @@ var ErrTooLarge = errors.New("etcd: request too large")
 // configuration clientv3 refuses outright.
 func Open(c Config) (*Store, error) {
 	c = c.withDefaults()
-	cli, err := dial(c)
+	tok, err := dial(c)
 	if err != nil {
 		return nil, err
 	}
-	s := newStore(cli, cli, c)
-	s.owned = []*clientv3.Client{cli}
+	ctxCli, err := dial(c)
+	if err != nil {
+		tok.Close()
+		return nil, err
+	}
+	s := newStore(tok, ctxCli, c)
+	s.owned = []*clientv3.Client{tok, ctxCli}
+	s.user = userOf(c.TLS)
 	return s, nil
 }
 
@@ -140,10 +152,24 @@ func dial(c Config) (*clientv3.Client, error) {
 	return cli, nil
 }
 
+// userOf is the CN of t's client certificate, the user etcd
+// authenticates it as; "" when there is none or it does not parse.
+func userOf(t *tls.Config) string {
+	if t == nil || len(t.Certificates) == 0 || len(t.Certificates[0].Certificate) == 0 {
+		return ""
+	}
+	c, err := x509.ParseCertificate(t.Certificates[0].Certificate[0])
+	if err != nil {
+		return ""
+	}
+	return c.Subject.CommonName
+}
+
 // newStore is a store on clients the caller owns: tests build many on one.
 func newStore(tok, ctx *clientv3.Client, c Config) *Store {
 	c = c.withDefaults()
-	s := &Store{k: newKeys(c.Prefix), now: c.Now, tok: tok, ctx: ctx, logf: c.Logf, idxUndecodable: c.IndexUndecodable}
+	s := &Store{k: newKeys(c.Prefix), now: c.Now, tok: tok, ctx: ctx, logf: c.Logf, idxUndecodable: c.IndexUndecodable,
+		clear: c.TLS == nil}
 	s.tokLeases = newLeases(tok, c.Now, c.LeaseGrace)
 	s.ctxLeases = s.tokLeases
 	if ctx != tok {

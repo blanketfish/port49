@@ -127,6 +127,13 @@ type Agent struct {
 	// fingerprint is the certificate's, as CertFingerprint gives it.
 	fingerprint string
 
+	// wire is the held connection's one slot (plan 7d, Ruling 15): one
+	// exchange at a time, which the transport did already, now with the
+	// agent knowing what holds it. revoking is when a revocation took it,
+	// in Unix nanoseconds; 0 when none holds it.
+	wire     chan struct{}
+	revoking atomic.Int64
+
 	mu       sync.Mutex
 	deadline time.Time
 	// ceilingWarning is /v1/config's ceiling_warning_seconds: how near a
@@ -152,7 +159,7 @@ type Agent struct {
 // drops, the next ask dials again, which is one more use of the key.
 func New(c Config) *Agent {
 	a := &Agent{broker: strings.TrimRight(c.BrokerURL, "/"), now: c.Now, log: c.Log, done: make(chan struct{}),
-		deadlineChanged: make(chan struct{}, 1)}
+		deadlineChanged: make(chan struct{}, 1), wire: make(chan struct{}, 1)}
 	if a.now == nil {
 		a.now = time.Now
 	}
@@ -214,6 +221,11 @@ func (a *Agent) Connect(ctx context.Context) (api.Config, error) {
 	if err != nil {
 		return api.Config{}, err
 	}
+	// Connect runs before the socket listens, so nothing contends for the wire yet.
+	if err := a.takeWire(ctx, false, "connected", "port49 login"); err != nil {
+		return api.Config{}, err
+	}
+	defer a.giveWire(false)
 	resp, err := a.do(req)
 	if err != nil {
 		if refused := a.refusal(err); refused != nil {
@@ -311,15 +323,22 @@ func (a *Agent) Mint(ctx context.Context, device string, enable bool, ttl time.D
 	}
 	var resp *http.Response
 	for wait := 0; ; wait++ {
+		if err := a.takeWire(ctx, false, "minted", "port49 token"); err != nil {
+			return api.MintItem{}, err
+		}
 		if resp, err = a.post(ctx, body, key); err != nil {
+			a.giveWire(false)
 			return api.MintItem{}, err
 		}
 		if resp.StatusCode != http.StatusConflict {
-			break
+			break // the wire is held through this answer's read, and given back below
 		}
 		var e api.Error
 		_ = json.NewDecoder(resp.Body).Decode(&e)
 		drain(resp.Body)
+		// Given back across the wait: a revocation sent now goes at once,
+		// never behind a mint that is only sleeping.
+		a.giveWire(false)
 		if e.Error != "idempotency_in_progress" || wait >= inProgressRetries {
 			return api.MintItem{}, fmt.Errorf("agent: the broker answered %s: %s %s", resp.Status, e.Error, e.Detail)
 		}
@@ -332,6 +351,7 @@ func (a *Agent) Mint(ctx context.Context, device string, enable bool, ttl time.D
 		case <-time.After(retryAfter(resp.Header)):
 		}
 	}
+	defer a.giveWire(false)
 	defer drain(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		var e api.Error
@@ -419,6 +439,70 @@ func (e *APIError) Error() string {
 	return "agent: the broker refused: " + e.Code + ": " + e.Detail + retryIn(e.RetryAfter)
 }
 
+// wireWait bounds how long a call that is not a revocation waits for
+// the held connection: the budget it had before plan 7d, when it
+// queued in the transport under the client's 30s timeout.
+var wireWait = 30 * time.Second
+
+// RevocationRunningError is a call that waited wireWait for the held
+// connection while a revocation the operator sent held it: nothing was
+// sent, and the revocation is still the broker's to answer. Undone and
+// Again name what was not done and the command to run again; Detail is
+// the whole line, when it came back through the agent's socket.
+type RevocationRunningError struct {
+	Since         time.Time
+	Undone, Again string
+	Detail        string
+}
+
+func (e *RevocationRunningError) Error() string {
+	if e.Detail != "" {
+		return e.Detail
+	}
+	return fmt.Sprintf("your revocation sent at %s is still running on the broker; nothing was %s; run %s "+
+		"again once port49 revoke reports", e.Since.Local().Format("15:04:05"), e.Undone, e.Again)
+}
+
+// takeWire waits for the held connection. A revocation waits as long as
+// its ctx lets it and marks the wire as its own; any other call waits
+// wireWait, and if a revocation still holds it then, says so, naming
+// what it did not do (undone) and the command to run again (again).
+func (a *Agent) takeWire(ctx context.Context, revocation bool, undone, again string) error {
+	wait := ctx
+	if !revocation {
+		var cancel context.CancelFunc
+		wait, cancel = context.WithTimeout(ctx, wireWait)
+		defer cancel()
+	}
+	select {
+	case a.wire <- struct{}{}:
+	case <-wait.Done():
+		if since := a.revoking.Load(); since != 0 && ctx.Err() == nil {
+			return &RevocationRunningError{Since: time.Unix(0, since), Undone: undone, Again: again}
+		}
+		if revocation && a.revoking.Load() != 0 {
+			// Its own timeout ran out behind another revocation: nothing of
+			// it reached the broker, so it is not unanswered.
+			return errors.New("agent: an earlier revocation still held the connection; this one was not sent")
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return fmt.Errorf("agent: the connection to the broker at %s was busy for %v", a.broker, wireWait)
+	}
+	if revocation {
+		a.revoking.Store(a.now().UnixNano())
+	}
+	return nil
+}
+
+func (a *Agent) giveWire(revocation bool) {
+	if revocation {
+		a.revoking.Store(0)
+	}
+	<-a.wire
+}
+
 // call sends one request on the held connection and decodes a 200 into out.
 // A refusal that ends the session ends it here, as a mint's does; anything
 // else, a 503 included, is an *APIError, so a caller can tell
@@ -451,6 +535,11 @@ func (a *Agent) exchange(ctx context.Context, c *http.Client, unanswered func(er
 	if ends := a.SessionEndsAt(); ends.IsZero() || !a.now().Before(ends) {
 		return ErrSessionOver
 	}
+	revocation := unanswered != nil // only Revoke passes one, and it never gets the error
+	if err := a.takeWire(ctx, revocation, "asked", "port49 "+strings.TrimPrefix(path, "/v1/")); err != nil {
+		return err
+	}
+	defer a.giveWire(revocation)
 	var body []byte
 	if in != nil {
 		var err error
@@ -712,6 +801,10 @@ func (a *Agent) Refresh(ctx context.Context) (api.RefreshResponse, error) {
 // refreshOnce is one challenge and its answer. retry says the broker found
 // no live challenge for the answer: a new challenge may succeed.
 func (a *Agent) refreshOnce(ctx context.Context, signer crypto.Signer) (api.RefreshResponse, bool, error) {
+	if err := a.takeWire(ctx, false, "refreshed", "port49 refresh"); err != nil {
+		return api.RefreshResponse{}, false, err
+	}
+	defer a.giveWire(false)
 	var conn *watchedConn
 	trace := &httptrace.ClientTrace{GotConn: func(i httptrace.GotConnInfo) { conn, _ = i.Conn.(*watchedConn) }}
 	req, err := http.NewRequestWithContext(httptrace.WithClientTrace(ctx, trace), http.MethodPost,
@@ -1039,6 +1132,10 @@ func (a *Agent) Handler() http.Handler {
 			writeJSON(w, http.StatusGone, api.Error{Error: "credential_revoked", Detail: revoked.Detail})
 		case errors.Is(err, ErrSessionOver):
 			writeJSON(w, http.StatusGone, api.Error{Error: "session_over", Detail: err.Error()})
+		case errors.As(err, new(*RevocationRunningError)):
+			// Not the broker failing: the operator's own revocation is still
+			// running, and nothing was minted.
+			writeJSON(w, http.StatusServiceUnavailable, api.Error{Error: "revocation_running", Detail: err.Error()})
 		case err != nil:
 			writeJSON(w, http.StatusBadGateway, api.Error{Error: "broker_error", Detail: err.Error()})
 		default:
@@ -1053,6 +1150,8 @@ func (a *Agent) Handler() http.Handler {
 			writeJSON(w, http.StatusGone, api.Error{Error: "credential_revoked", Detail: revoked.Detail})
 		case errors.Is(err, ErrSessionOver):
 			writeJSON(w, http.StatusGone, api.Error{Error: "session_over", Detail: err.Error()})
+		case errors.As(err, new(*RevocationRunningError)):
+			writeJSON(w, http.StatusServiceUnavailable, api.Error{Error: "revocation_running", Detail: err.Error()})
 		case err != nil:
 			writeJSON(w, http.StatusBadGateway, api.Error{Error: "refresh_failed", Detail: err.Error()})
 		default:
@@ -1126,6 +1225,8 @@ func answer(w http.ResponseWriter, out any, err error) {
 		writeJSON(w, http.StatusGone, api.Error{Error: "credential_revoked", Detail: revoked.Detail})
 	case errors.Is(err, ErrSessionOver):
 		writeJSON(w, http.StatusGone, api.Error{Error: "session_over", Detail: err.Error()})
+	case errors.As(err, new(*RevocationRunningError)):
+		writeJSON(w, http.StatusServiceUnavailable, api.Error{Error: "revocation_running", Detail: err.Error()})
 	case errors.As(err, &refused):
 		status := refused.Status
 		if status == http.StatusGone {

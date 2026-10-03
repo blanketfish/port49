@@ -3,23 +3,30 @@ package crypt
 import (
 	"errors"
 	"sync"
+	"time"
 
 	"github.com/rhwendt/port49/internal/store"
 )
 
 // ErrNotLastWritten is a context that opens at its key but is not the
-// one this process last wrote there, or first read there: another
-// login's record, written back by whoever can write the store (plan 7d;
-// Ruling 17; re-check IA1). GetContext returns it inside an
+// write this process last made there, or first read there: another
+// login's record, or an earlier version of the same context, written back
+// by whoever can write the store (plan 7d; Ruling 17; re-check IA1;
+// Ruling T12-g). GetContext returns it inside an
 // UnreadableContextError, so every handler treats it as a record that
 // will not open.
 var ErrNotLastWritten = errors.New("crypt: not the context this port49d last wrote at its key")
 
-// Ledger is, per context key, the ctx_id this process last wrote there,
+// Ledger is, per context key, the write this process last made there,
 // or first read there (plan 7d; Ruling 17; re-check IA1). A sealed
 // context is bound to its key, not to the login that wrote it, so
 // without the ledger a record of Alice's saved from leaf-01/netops and
 // written back over Bob's there would authorize Bob's session as Alice.
+// Each write is named by the write ID sealed into it, fresh on every seal
+// (contextSecret), not by its ctx_id, which a join, a refresh or a
+// revocation keeps: so an earlier version of the same context, written
+// back, is denied too, and cannot undo a self revocation or a policy
+// narrowing (Ruling T12-g).
 //
 // A write is told before it is sent (begin) and when it ends (end): in
 // flight it is admitted beside the last, landed it replaces the last,
@@ -45,7 +52,8 @@ var ErrNotLastWritten = errors.New("crypt: not the context this port49d last wro
 // repeat at a key and only grow (store.Context.Rev), so a write that
 // compared on a revision below the last's committed before it, if it
 // landed at all; one whose outcome is unknown is not admitted then
-// (earlier). A landed write whose revision the store did not report is
+// (earlier). A restore breaks both, and is placed by its own rules,
+// below. A landed write whose revision the store did not report is
 // not placed, and the key admits nothing but writes in flight until
 // another lands, which fails closed. A read sets the last at no revision:
 // any write that lands replaces it (Task 4b fix 2 review I1, N1).
@@ -56,38 +64,72 @@ var ErrNotLastWritten = errors.New("crypt: not the context this port49d last wro
 // store's revisions going back, and it is placed as the last, with its
 // revision (Task 6b review C1): a login after the restore is admitted,
 // and the stale last, replayed, is denied. A key no write lands at after
-// the restore keeps its old last, which is the last as on base. A write
-// whose outcome is unknown, sent after the restore on a low revision, is
-// taken as earlier and not admitted until the next write lands there,
-// which fails closed.
+// the restore keeps its old last. A context written since the snapshot
+// is restored to an earlier write, so it is denied, as any rollback is,
+// until a login replaces it, which fails closed; the broker's refresh
+// revokes it as altered meanwhile, and a restart before that seeds the
+// key with it again (the restart residual). A write whose outcome is
+// unknown, sent after the restore on a low revision, is taken as earlier
+// and not admitted until the next write lands there, which fails closed.
+// The runbook's restore bumps the revision instead (--bump-revision;
+// design §12): a restored record keeps its revision, below the last's,
+// and the store's jumps past every one it gave, so a login after it
+// sent after the last ended compares below the last and commits above
+// it, and is placed as the last too (Task 15, measured:
+// tests/lab/results/L35-restore-arista_eos.md). One sent before the last
+// ended may have committed before a restore the last came after, so it is
+// taken as earlier, which fails closed (Task 15 cryptfix review M1).
 //
-// A read racing a login's replace can return the replaced record after
-// the replace landed; that one request is denied, which fails closed.
+// A read racing a write can return the record it replaced after it
+// landed. Its revision is below the last's (stale), so GetContext reads
+// again, up to twice, and judges that read; one still denied after it is
+// denied, which fails closed (Task 13b review I-1).
 // It holds one entry per key this process has read or written, until a
 // delete of the key lands, or after Seal a read finds it empty, with no
 // write to it sent since the delete or the read was (forget); after Seal
 // a forgotten key admits only what this process writes there, so
-// forgetting fails closed (Task 4b review M5). One Ledger is shared by every Wrap in a process
-// (WithLedger). It is safe for concurrent use.
+// forgetting fails closed (Task 4b review M5).
+//
+// A revocation's plaintext mark that landed is k's revocation floor until
+// this process seals one into the record: SetRevokedAt's seal can fail
+// before it sends anything, and then the last write at k is still the
+// record from before the revocation, which a store writer could put back.
+// GetContext takes the latest of the sealed time, the plaintext time and
+// the floor. A write sent after the floor that lands at k clears it, since
+// this process chose that write's sealed fields; so does forgetting k once
+// the ledger is sealed, after which a record put back there is denied
+// anyway. Before Seal a forgotten key takes its next read, so the floor
+// stays (final review 7d-2 I-1).
+//
+// One Ledger is shared by every Wrap in a process (WithLedger). It is safe
+// for concurrent use.
 type Ledger struct {
 	mu     sync.Mutex
 	m      map[store.ContextKey]*ledgerEntry
+	floors map[store.ContextKey]revocationFloor
 	sealed bool
 	seq    uint64 // counts begin, so forget can tell a write sent after its call was
 }
 
+// revocationFloor is a revocation's plaintext mark that landed at a key,
+// and seq when it did, so a write sent after it can clear it.
+type revocationFloor struct {
+	at  time.Time
+	seq uint64
+}
+
 type ledgerEntry struct {
-	last     string          // the last write that landed, or the first read
-	known    bool            // last is set: false for a key whose first write is in flight
-	lastRev  uint64          // the revision the write that set last committed at; zero when a read did
-	lastEnd  uint64          // seq when the write that set last ended
-	inFlight map[string]int  // writes sent and not yet ended, by ctx_id; nil until one is
-	unknown  map[string]bool // writes that ended with neither a landing nor a refusal; nil until one does
-	began    uint64          // seq at the last write sent
+	last     string            // the write ID of the last write that landed, or of the first read
+	known    bool              // last is set: false for a key whose first write is in flight
+	lastRev  uint64            // the revision the write that set last committed at; zero when a read did
+	lastEnd  uint64            // seq when the write that set last ended
+	inFlight map[string]int    // writes sent and not yet ended, by write ID; nil until one is
+	unknown  map[string]uint64 // writes that ended neither landed nor refused, to seq when sent; nil until one does
+	began    uint64            // seq at the last write sent
 }
 
 // ledgerWrite is a write the ledger was told of (begin), for end: its
-// key, its ctx_id, the revision it compares (zero for none, or for no
+// key, its write ID, the revision it compares (zero for none, or for no
 // record), and seq when it was sent.
 type ledgerWrite struct {
 	k   store.ContextKey
@@ -108,7 +150,9 @@ func (e *ledgerEntry) settle(id string) {
 }
 
 // NewLedger is an empty ledger, not yet sealed.
-func NewLedger() *Ledger { return &Ledger{m: map[store.ContextKey]*ledgerEntry{}} }
+func NewLedger() *Ledger {
+	return &Ledger{m: map[store.ContextKey]*ledgerEntry{}, floors: map[store.ContextKey]revocationFloor{}}
+}
 
 // Seal ends the first-read rule: from now on a key this process has
 // neither read nor written admits nothing it did not write itself.
@@ -138,18 +182,50 @@ func (l *Ledger) mark() uint64 {
 // forget drops k's entry once the store holds no record there: a delete
 // that landed, or after Seal a read that found none (sealedOnly). It keeps
 // the entry while a write to k is in flight, or when one was sent after at
-// (mark), since that write may be what the store holds now.
+// (mark), since that write may be what the store holds now. It drops k's
+// revocation floor too, once sealed: a record put back at k is denied
+// then, and before Seal it would be the key's first read.
 func (l *Ledger) forget(k store.ContextKey, at uint64, sealedOnly bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	e, ok := l.m[k]
-	if !ok || (sealedOnly && !l.sealed) || len(e.inFlight) > 0 || e.began > at {
+	if (sealedOnly && !l.sealed) || (ok && (len(e.inFlight) > 0 || e.began > at)) {
 		return
 	}
 	delete(l.m, k)
+	if l.sealed {
+		delete(l.floors, k)
+	}
 }
 
-// admits reports whether a record holding id may be read at k.
+// revoked records at as k's revocation floor, once a revocation's
+// plaintext mark has landed there; the floor is the latest such at.
+func (l *Ledger) revoked(k store.ContextKey, at time.Time) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if f, ok := l.floors[k]; ok && f.at.After(at) {
+		at = f.at
+	}
+	l.floors[k] = revocationFloor{at: at, seq: l.seq}
+}
+
+// floor is k's revocation floor, zero when it has none.
+func (l *Ledger) floor(k store.ContextKey) time.Time {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.floors[k].at
+}
+
+// landed clears k's revocation floor when the write sent at seq, which
+// landed and is the last now, was sent after it.
+func (l *Ledger) landed(k store.ContextKey, seq uint64) {
+	if f, ok := l.floors[k]; ok && seq > f.seq {
+		delete(l.floors, k)
+	}
+}
+
+// admits reports whether a record sealed under the write ID id may be
+// read at k.
 func (l *Ledger) admits(k store.ContextKey, id string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -164,9 +240,10 @@ func (l *Ledger) admits(k store.ContextKey, id string) bool {
 	switch {
 	case e.known && id == e.last, e.inFlight[id] > 0:
 		return true
-	case e.unknown[id]:
+	case e.unknown[id] > 0:
 		// Read back, so it landed: it is the last now, and the writes it
 		// replaced are not admitted again.
+		l.landed(k, e.unknown[id])
 		e.settle(id)
 		clear(e.unknown)
 		return true
@@ -174,7 +251,20 @@ func (l *Ledger) admits(k store.ContextKey, id string) bool {
 	return false
 }
 
-// begin is told of a write of id at k, compared on rev, before it is
+// stale reports whether a record read at k at rev was served before the
+// last write there committed: its revision is below the last's. A read
+// that raced a write of the same context is one; a record put back is
+// not, since it commits after the last (Task 13b review I-1). After a
+// restore every revision is below the last's, so each read there is
+// stale, and still denied once read again (Ruling T13b-a).
+func (l *Ledger) stale(k store.ContextKey, rev uint64) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	e, ok := l.m[k]
+	return ok && e.known && e.lastRev > 0 && rev < e.lastRev
+}
+
+// begin is told of the write id at k, compared on rev, before it is
 // sent; its return is end's.
 func (l *Ledger) begin(k store.ContextKey, id string, rev uint64) ledgerWrite {
 	l.mu.Lock()
@@ -205,6 +295,18 @@ func (l *Ledger) end(w ledgerWrite, committed uint64, err error) {
 		// earlier, which takes its low compare revision as an earlier write.
 		e.last, e.lastRev, e.lastEnd = w.id, committed, l.seq
 		clear(e.unknown)
+		l.landed(w.k, w.seq)
+	case err == nil && e.earlier(w) && committed > e.lastRev && w.seq > e.lastEnd:
+		// Sent after the last ended, compared below it and committed above
+		// it: a restore with --bump-revision, whose records keep their
+		// revisions while the store's jumps past every one it gave. It holds
+		// this write. One sent before the last ended may have committed
+		// before a restore the last came after, so it is earlier (Task 15
+		// cryptfix review M1). Before earlier, which takes the low compare
+		// revision as an earlier write.
+		e.last, e.lastRev, e.lastEnd = w.id, committed, l.seq
+		clear(e.unknown)
+		l.landed(w.k, w.seq)
 	case e.earlier(w), err == nil && e.known && committed != 0 && committed < e.lastRev:
 		// Landed and replaced since, or never landed: the store holds the
 		// last, whatever the error.
@@ -216,11 +318,12 @@ func (l *Ledger) end(w ledgerWrite, committed uint64, err error) {
 	case err == nil:
 		e.last, e.known, e.lastRev, e.lastEnd = w.id, true, committed, l.seq
 		clear(e.unknown)
+		l.landed(w.k, w.seq)
 	case errors.Is(err, store.ErrConflict), errors.Is(err, store.ErrNotFound):
 	default:
 		if e.unknown == nil {
-			e.unknown = map[string]bool{}
+			e.unknown = map[string]uint64{}
 		}
-		e.unknown[w.id] = true
+		e.unknown[w.id] = w.seq
 	}
 }

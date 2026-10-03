@@ -14,11 +14,13 @@
 // A store write can then delete, or put back an earlier record sealed for
 // the same key, and nothing else: it cannot zero a revocation, raise a
 // privilege, swap a blob or move a record to another key, except by putting
-// back an earlier version of the same context. That residual undoes a
-// revocation that leaves no mark (a self or key revocation) or a policy
-// narrowing, a clamp included, until the next refresh (spec §13, decision
-// 35). The put-back that would be impersonation, another login's context
-// written over this one's, the Ledger denies while this process runs.
+// back an earlier version of the same context. The Ledger denies every
+// such put-back while this process runs: another login's context, which
+// would be impersonation, and an earlier version of this one, which would
+// undo a revocation that leaves no mark (a self or key revocation) or a
+// policy narrowing, a clamp included. What stays is the restart residual,
+// a record put back before the start's first read of its key (spec §13,
+// decision 35; Ruling T12-g).
 //
 // What is NOT sealed is deliberate and is argued in plan 2 Task 5: blobs (no
 // identity) and the indexes: the four of plan 2 and the two token indexes of
@@ -42,6 +44,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -194,9 +197,10 @@ type receiptSecret struct {
 }
 
 // contextSealVersion is the form of contextSecret below: 2 is plan 7d's
-// whole record. A context in any other form does not open, and is
-// replaced at its next login (store.UnreadableContextError).
-const contextSealVersion = 2
+// whole record, and 3 adds the write ID (Ruling T12-g). A context in any
+// other form does not open, a form-2 record included, and is replaced at
+// its next login (store.UnreadableContextError): it fails closed.
+const contextSealVersion = 3
 
 // contextSecret is everything of a context the authorizer trusts,
 // sealed whole (plan 7d; Ruling 17): the identity and credential, as
@@ -205,8 +209,17 @@ const contextSealVersion = 2
 // revisions, the idle clock (LastTouchedAt), and accounting's
 // annotations, which authorize nothing. RevokedAt is also written in
 // the clear (sealContext).
+//
+// WriteID names the write, not the context: sealContext draws a fresh one
+// on every seal, so each Put, Swap, login swap and rewrite carries its
+// own, and the Ledger admits the one it last wrote at the key, so an
+// earlier version of the same context is denied (Ruling T12-g). Sealed, a
+// store writer can neither forge it nor move it. It authorizes nothing by
+// itself and has no operator use, so it never leaves this layer: it is
+// not on store.Context, and nothing logs it.
 type contextSecret struct {
 	V              int              `json:"v"`
+	WriteID        string           `json:"write_id"`
 	CtxID          string           `json:"ctx_id"`
 	Principal      string           `json:"principal"`
 	Username       string           `json:"username"`
@@ -254,6 +267,7 @@ type wrapped struct {
 	keys         Keys
 	openFailures *prometheus.CounterVec
 	ledger       *Ledger
+	onUnopenable func(record, keyID string)
 }
 
 // Option configures Wrap.
@@ -263,6 +277,43 @@ type Option func(*wrapped)
 // the broker's layers in one process agree on what each key last held
 // (re-check IA1). Without it each Wrap keeps its own, never sealed.
 func WithLedger(l *Ledger) Option { return func(w *wrapped) { w.ledger = l } }
+
+// OnUnopenable is told the kind and the key id of every record that will
+// not open, beside crypt_open_failures_total. The key id is the sealed
+// record's own header, never a secret: it is how an operator learns which
+// key a rotation retired too early (plan 2's alarm; plan 7d).
+func OnUnopenable(f func(record, keyID string)) Option {
+	return func(w *wrapped) { w.onUnopenable = f }
+}
+
+// SealedKeyID is the key id a sealed record's header names, "" when it is
+// too short to name one, and "?" when it names one outside the key-id
+// charset (LineKeyID): the header is the record's, so whoever can write
+// the store writes it, and a line must not echo up to 255 bytes of it
+// (pre-flight M44).
+func SealedKeyID(sealed []byte) string {
+	if len(sealed) < 1 || len(sealed) < 1+int(sealed[0]) {
+		return ""
+	}
+	return LineKeyID(string(sealed[1 : 1+int(sealed[0])]))
+}
+
+// LineKeyID is id as a line may echo it: itself within the key-id charset
+// ([A-Za-z0-9._-], at most 64 bytes), "?" outside it. An id read from the
+// store is whatever its writer put there (pre-flight M44; review I-2).
+func LineKeyID(id string) string {
+	if len(id) > 64 {
+		return "?"
+	}
+	for _, b := range []byte(id) {
+		switch {
+		case b >= 'a' && b <= 'z', b >= 'A' && b <= 'Z', b >= '0' && b <= '9', b == '.', b == '_', b == '-':
+		default:
+			return "?"
+		}
+	}
+	return id
+}
 
 // Wrap decorates inner so every credential-bearing record is sealed under k
 // before it reaches the backend. openFailures may be nil; the daemon passes
@@ -285,9 +336,12 @@ func Wrap(inner store.RevStore, k Keys, openFailures *prometheus.CounterVec, opt
 // expiring at once, with nothing anywhere naming decryption. Handlers take
 // their existing non-ErrNotFound branch instead — store_unavailable — which is
 // honest: the store is unavailable to this daemon.
-func (w *wrapped) openErr(record string, err error) error {
+func (w *wrapped) openErr(record string, sealed []byte, err error) error {
 	if w.openFailures != nil {
 		w.openFailures.WithLabelValues(record).Inc()
+	}
+	if w.onUnopenable != nil {
+		w.onUnopenable(record, SealedKeyID(sealed))
 	}
 	// err is already ErrUnknownKey when neither key id matched, and a GCM or
 	// JSON failure when the key matched and the bytes did not; both are
@@ -359,7 +413,7 @@ func (w *wrapped) Candidates(ctx context.Context, k store.TokenKey) ([]store.Tok
 			// token in a candidate set of eight must not deny the seven — so
 			// the counter is the only place it is visible. That is what
 			// crypt_open_failures_total{record="token"} is for.
-			_ = w.openErr("token", err)
+			_ = w.openErr("token", t.Sealed, err)
 			continue
 		}
 		out = append(out, ot)
@@ -406,11 +460,11 @@ func (w *wrapped) GetReceipt(ctx context.Context, rk store.ReceiptKey) (store.Re
 	}
 	b, err := w.keys.OpenBound(r.Sealed, receiptAAD(rk))
 	if err != nil {
-		return store.Receipt{}, w.openErr("receipt", err)
+		return store.Receipt{}, w.openErr("receipt", r.Sealed, err)
 	}
 	var rs receiptSecret
 	if err := json.Unmarshal(b, &rs); err != nil {
-		return store.Receipt{}, w.openErr("receipt", err)
+		return store.Receipt{}, w.openErr("receipt", r.Sealed, err)
 	}
 	r.CredentialSHA256, r.Status, r.CtxID, r.FirstRedeemedAt, r.Sealed =
 		rs.CredentialSHA256, rs.Status, rs.CtxID, rs.FirstRedeemedAt, nil
@@ -436,43 +490,50 @@ func (w *wrapped) DeleteReceiptsByPrincipal(ctx context.Context, principal strin
 	return w.inner.DeleteReceiptsByPrincipal(ctx, principal)
 }
 
-// sealContext seals c's trusted fields for k. What the backend holds
+// sealContext seals c's trusted fields for k, under a fresh write ID,
+// which it returns for the ledger (contextSecret). What the backend holds
 // beside the sealed bytes is the bookkeeping and RevokedAt: the
 // revocation stays in the clear too, so a revocation needs no key
 // (SetRevokedAt), and a read takes the later of the two (openContext).
-func (w *wrapped) sealContext(k store.ContextKey, c store.Context) (store.Context, error) {
-	b, err := json.Marshal(contextSecret{V: contextSealVersion, CtxID: c.CtxID, Principal: c.Principal,
-		Username: c.Username, Port: c.Port, RemAddr: c.RemAddr, Credential: c.Credential, PrivLvl: c.PrivLvl,
-		BlobHash: c.BlobHash, MaxPrivilege: c.MaxPrivilege, Enable: c.Enable, AuthTime: c.AuthTime,
+func (w *wrapped) sealContext(k store.ContextKey, c store.Context) (store.Context, string, error) {
+	var id [16]byte
+	if _, err := io.ReadFull(rand.Reader, id[:]); err != nil {
+		return store.Context{}, "", err
+	}
+	writeID := hex.EncodeToString(id[:])
+	b, err := json.Marshal(contextSecret{V: contextSealVersion, WriteID: writeID, CtxID: c.CtxID,
+		Principal: c.Principal, Username: c.Username, Port: c.Port, RemAddr: c.RemAddr, Credential: c.Credential,
+		PrivLvl: c.PrivLvl, BlobHash: c.BlobHash, MaxPrivilege: c.MaxPrivilege, Enable: c.Enable, AuthTime: c.AuthTime,
 		SessionExpires: c.SessionExpires, RefreshedAt: c.RefreshedAt, RevokedAt: c.RevokedAt, CreatedAt: c.CreatedAt,
 		Logins: c.Logins})
 	if err != nil {
-		return store.Context{}, err
+		return store.Context{}, "", err
 	}
 	s, err := w.keys.SealBound(b, contextAAD(k))
 	if err != nil {
-		return store.Context{}, err
+		return store.Context{}, "", err
 	}
 	return store.Context{RevokedAt: c.RevokedAt, LastTouchedAt: c.LastTouchedAt,
 		SessionDiscriminators: c.SessionDiscriminators, AccountingState: c.AccountingState,
-		Rev: c.Rev, PolicyRev: c.PolicyRev, Sealed: s}, nil
+		Rev: c.Rev, PolicyRev: c.PolicyRev, Sealed: s}, writeID, nil
 }
 
-// openContext is sealContext reversed for the record read at k. Every
-// trusted field is the sealed one; RevokedAt is the later of the sealed
-// and the plaintext, so a keyless revocation is in force at once and a
-// store write that zeroes the plaintext lifts nothing.
-func (w *wrapped) openContext(k store.ContextKey, c store.Context) (store.Context, error) {
+// openContext is sealContext reversed for the record read at k, with the
+// write ID it was sealed under, for the ledger. Every trusted field is
+// the sealed one; RevokedAt is the later of the sealed and the plaintext,
+// so a keyless revocation is in force at once and a store write that
+// zeroes the plaintext lifts nothing.
+func (w *wrapped) openContext(k store.ContextKey, c store.Context) (store.Context, string, error) {
 	b, err := w.keys.OpenBound(c.Sealed, contextAAD(k))
 	if err != nil {
-		return store.Context{}, err
+		return store.Context{}, "", err
 	}
 	var cs contextSecret
 	if err := json.Unmarshal(b, &cs); err != nil {
-		return store.Context{}, err
+		return store.Context{}, "", err
 	}
 	if cs.V != contextSealVersion {
-		return store.Context{}, fmt.Errorf("crypt: a context sealed in form %d, not %d", cs.V, contextSealVersion)
+		return store.Context{}, "", fmt.Errorf("crypt: a context sealed in form %d, not %d", cs.V, contextSealVersion)
 	}
 	revoked := cs.RevokedAt
 	if c.RevokedAt.After(revoked) {
@@ -484,25 +545,25 @@ func (w *wrapped) openContext(k store.ContextKey, c store.Context) (store.Contex
 		RefreshedAt: cs.RefreshedAt, RevokedAt: revoked, CreatedAt: cs.CreatedAt, Logins: cs.Logins,
 		LastTouchedAt:         c.LastTouchedAt,
 		SessionDiscriminators: c.SessionDiscriminators, AccountingState: c.AccountingState,
-		Rev: c.Rev, PolicyRev: c.PolicyRev}, nil
+		Rev: c.Rev, PolicyRev: c.PolicyRev}, cs.WriteID, nil
 }
 
-// sent sends one sealed write of the context id at k, compared on rev
-// (zero for none), telling the ledger before and after, with the revision
-// it committed at (re-check IA1; Task 6b).
-func (w *wrapped) sent(k store.ContextKey, id string, rev uint64, send func() (uint64, error)) error {
-	lw := w.ledger.begin(k, id, rev)
+// sent sends one sealed write, writeID, at k, compared on rev (zero for
+// none), telling the ledger before and after, with the revision it
+// committed at (re-check IA1; Task 6b; Ruling T12-g).
+func (w *wrapped) sent(k store.ContextKey, writeID string, rev uint64, send func() (uint64, error)) error {
+	lw := w.ledger.begin(k, writeID, rev)
 	committed, err := send()
 	w.ledger.end(lw, committed, err)
 	return err
 }
 
 func (w *wrapped) PutContext(ctx context.Context, k store.ContextKey, c store.Context, ttl time.Duration) error {
-	sc, err := w.sealContext(k, c)
+	sc, writeID, err := w.sealContext(k, c)
 	if err != nil {
 		return err
 	}
-	return w.sent(k, c.CtxID, 0, func() (uint64, error) { return w.inner.PutContextRev(ctx, k, sc, ttl) })
+	return w.sent(k, writeID, 0, func() (uint64, error) { return w.inner.PutContextRev(ctx, k, sc, ttl) })
 }
 
 // SwapContext seals as PutContext does and hands the revision through
@@ -511,11 +572,11 @@ func (w *wrapped) PutContext(ctx context.Context, k store.ContextKey, c store.Co
 // record it cannot, so the merge happens up here with the fields open and the
 // precondition is enforced down there under its own lock (store.Store).
 func (w *wrapped) SwapContext(ctx context.Context, k store.ContextKey, rev uint64, c store.Context, ttl time.Duration) error {
-	sc, err := w.sealContext(k, c)
+	sc, writeID, err := w.sealContext(k, c)
 	if err != nil {
 		return err
 	}
-	return w.sent(k, c.CtxID, rev, func() (uint64, error) { return w.inner.SwapContextRev(ctx, k, rev, sc, ttl) })
+	return w.sent(k, writeID, rev, func() (uint64, error) { return w.inner.SwapContextRev(ctx, k, rev, sc, ttl) })
 }
 
 // SwapLogin seals as SwapContext does, and passes the index change and the
@@ -524,41 +585,65 @@ func (w *wrapped) SwapContext(ctx context.Context, k store.ContextKey, rev uint6
 // same step as the sealed context.
 func (w *wrapped) SwapLogin(ctx context.Context, k store.ContextKey, rev uint64, c store.Context, ttl time.Duration,
 	lw store.LoginWrite) error {
-	sc, err := w.sealContext(k, c)
+	sc, writeID, err := w.sealContext(k, c)
 	if err != nil {
 		return err
 	}
-	return w.sent(k, c.CtxID, rev, func() (uint64, error) { return w.inner.SwapLoginRev(ctx, k, rev, sc, ttl, lw) })
+	return w.sent(k, writeID, rev, func() (uint64, error) { return w.inner.SwapLoginRev(ctx, k, rev, sc, ttl, lw) })
 }
 
+// staleReads bounds how many times GetContext reads again a record the
+// ledger does not admit and that was served before the last write at its
+// key committed (Ledger.stale).
+const staleReads = 2
+
 func (w *wrapped) GetContext(ctx context.Context, k store.ContextKey) (store.Context, error) {
-	at := w.ledger.mark()
-	c, err := w.inner.GetContext(ctx, k)
-	if errors.Is(err, store.ErrNotFound) {
-		w.ledger.forget(k, at, true)
+	for read := 0; ; read++ {
+		at := w.ledger.mark()
+		c, err := w.inner.GetContext(ctx, k)
+		if errors.Is(err, store.ErrNotFound) {
+			w.ledger.forget(k, at, true)
+		}
+		if err != nil {
+			return store.Context{}, err
+		}
+		oc, writeID, err := w.openContext(k, c)
+		if err != nil {
+			// The record is there and will not open. Its revision and
+			// revocation are plaintext, and JoinContext needs both to replace
+			// it without racing a revocation or lifting one
+			// (store.UnreadableContextError). The wrapped error is openErr's,
+			// so errors.Is(err, ErrUnknownKey) still tells a wrong key from a
+			// tampered record.
+			return store.Context{}, &store.UnreadableContextError{Rev: c.Rev,
+				RevokedAt: latest(c.RevokedAt, w.ledger.floor(k)), Err: w.openErr("context", c.Sealed, err)}
+		}
+		// The ledger (re-check IA1; Ruling T12-g): a record sealed for this
+		// key that is not the write this process last made here, or first
+		// read here, is another login's, or an earlier version of this one,
+		// written back. It opens, since it is bound to this key, and so it is
+		// denied as one that does not. One served before the last write
+		// committed raced that write, and is read again (Task 13b review
+		// I-1). A revocation whose seal sent nothing holds through the
+		// ledger's floor (Ledger).
+		if w.ledger.admits(k, writeID) {
+			oc.RevokedAt = latest(oc.RevokedAt, w.ledger.floor(k))
+			return oc, nil
+		}
+		if read < staleReads && w.ledger.stale(k, c.Rev) {
+			continue
+		}
+		return store.Context{}, &store.UnreadableContextError{Rev: c.Rev,
+			RevokedAt: latest(c.RevokedAt, w.ledger.floor(k)), Err: w.openErr("context", c.Sealed, ErrNotLastWritten)}
 	}
-	if err != nil {
-		return store.Context{}, err
+}
+
+// latest is the later of a and b.
+func latest(a, b time.Time) time.Time {
+	if b.After(a) {
+		return b
 	}
-	oc, err := w.openContext(k, c)
-	if err != nil {
-		// The record is there and will not open. Its revision and revocation
-		// are plaintext, and JoinContext needs both to replace it without
-		// racing a revocation or lifting one (store.UnreadableContextError).
-		// The wrapped error is openErr's, so errors.Is(err, ErrUnknownKey)
-		// still tells a wrong key from a tampered record.
-		return store.Context{}, &store.UnreadableContextError{Rev: c.Rev, RevokedAt: c.RevokedAt,
-			Err: w.openErr("context", err)}
-	}
-	// The ledger (re-check IA1): a record sealed for this key that is not
-	// the one this process last wrote here, or first read here, is another
-	// login's written back. It opens, since it is bound to this key, and so
-	// it is denied as one that does not.
-	if !w.ledger.admits(k, oc.CtxID) {
-		return store.Context{}, &store.UnreadableContextError{Rev: c.Rev, RevokedAt: c.RevokedAt,
-			Err: w.openErr("context", ErrNotLastWritten)}
-	}
-	return oc, nil
+	return a
 }
 
 // TouchContext needs no sealed field, and that is exactly why it exists
@@ -588,11 +673,11 @@ func (w *wrapped) rewrite(ctx context.Context, k store.ContextKey, ttl time.Dura
 		if err != nil {
 			return err
 		}
-		sc, err := w.sealContext(k, c)
+		sc, writeID, err := w.sealContext(k, c)
 		if err != nil {
 			return err
 		}
-		switch err := w.sent(k, c.CtxID, rev, func() (uint64, error) {
+		switch err := w.sent(k, writeID, rev, func() (uint64, error) {
 			return w.inner.RewriteContextRev(ctx, k, rev, sc, ttl, moved)
 		}); {
 		case err == nil:
@@ -654,10 +739,15 @@ func (w *wrapped) RefreshContext(ctx context.Context, k store.ContextKey, r stor
 // the caller's deadline, and sealAttempts times when the caller set none.
 // The revocation is in force from the first write either way, so an error
 // after it says so, and that only the seal is pending (re-check MA2).
+// Until a seal lands, the ledger holds the mark as k's revocation floor,
+// so a store writer who puts the record before it back, or zeroes the
+// plaintext mark, lifts nothing while this process runs (final review
+// 7d-2 I-1).
 func (w *wrapped) SetRevokedAt(ctx context.Context, k store.ContextKey, at time.Time) error {
 	if err := w.inner.SetRevokedAt(ctx, k, at); err != nil {
 		return err
 	}
+	w.ledger.revoked(k, at)
 	attempts := sealAttempts
 	if _, ok := ctx.Deadline(); ok {
 		attempts = math.MaxInt
@@ -706,11 +796,11 @@ func (w *wrapped) SetContextPolicy(ctx context.Context, k store.ContextKey, poli
 // the ledger.
 func (w *wrapped) RewriteContext(ctx context.Context, k store.ContextKey, rev uint64, c store.Context, ttl time.Duration,
 	policyMoved bool) error {
-	sc, err := w.sealContext(k, c)
+	sc, writeID, err := w.sealContext(k, c)
 	if err != nil {
 		return err
 	}
-	return w.sent(k, c.CtxID, rev, func() (uint64, error) {
+	return w.sent(k, writeID, rev, func() (uint64, error) {
 		return w.inner.RewriteContextRev(ctx, k, rev, sc, ttl, policyMoved)
 	})
 }
@@ -825,7 +915,7 @@ func (w *wrapped) ReserveIdempotency(ctx context.Context, principal, key string,
 	}
 	resp, err := w.keys.Open(cur.Sealed)
 	if err != nil {
-		return store.Idempotency{}, false, w.openErr("idempotency", err)
+		return store.Idempotency{}, false, w.openErr("idempotency", cur.Sealed, err)
 	}
 	cur.Response, cur.Sealed = resp, nil
 	return cur, false, nil

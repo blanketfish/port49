@@ -12,9 +12,12 @@ package config
 import (
 	"bytes"
 	"crypto/ed25519"
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -263,6 +266,108 @@ type CertificateStatusOCSP struct {
 	Hash      string        `yaml:"hash"`    // the CertID hash: sha256 (default) or sha1
 }
 
+// StoreConfig is `store:`, resolved (plan 7d; spec §13, decision 35): the
+// backend and every packet's store deadline, and on etcd its client.
+type StoreConfig struct {
+	// Backend is memory (the default) or etcd. etcd requires a broker:
+	// block and admin_socket.
+	Backend string
+	// PacketDeadline bounds every TACACS+ packet's store work: default 2s,
+	// 100ms to 2s (Junos times out a reply at about 3s; spec §15, L13), and
+	// at least store.etcd.call_timeout.
+	PacketDeadline time.Duration
+	// Etcd is nil on memory.
+	Etcd *EtcdConfig
+}
+
+// storeYAML mirrors the store block; checkStore resolves it.
+type storeYAML struct {
+	Backend        string        `yaml:"backend"`
+	PacketDeadline time.Duration `yaml:"packet_deadline"`
+	Etcd           *EtcdConfig   `yaml:"etcd"`
+}
+
+const (
+	BackendMemory   = "memory"
+	BackendEtcd     = "etcd"
+	RolesEnforced   = "enforced"
+	RolesUnenforced = "unenforced"
+)
+
+// EtcdConfig is store.etcd: where the keyspace is, and how port49d
+// bounds every call to it (decision 35).
+type EtcdConfig struct {
+	// Endpoints are https only: port49d authenticates by client certificate.
+	Endpoints []string `yaml:"endpoints"`
+	CAFile    string   `yaml:"ca_file"`
+	// Prefix is the keyspace: default /port49/, and it must start with /.
+	Prefix string `yaml:"prefix"`
+	// Daemon and Broker are each component's own identity, its CN etcd's
+	// user. Broker is required: until plan 7e the one port49d on a keyspace
+	// is its broker too.
+	Daemon EtcdIdentity  `yaml:"daemon"`
+	Broker *EtcdIdentity `yaml:"broker"`
+	// Roles is enforced (the default) or unenforced: whether port49d
+	// refuses to start when the daemon's identity can do more than its role.
+	Roles string `yaml:"roles"`
+	// CallTimeout bounds each token and context call: default 500ms, 10ms to 5s.
+	CallTimeout time.Duration `yaml:"call_timeout"`
+	// BulkTimeout bounds each bulk scan: default 30s, 1s to 5m.
+	BulkTimeout time.Duration `yaml:"bulk_timeout"`
+	Breaker     EtcdBreaker   `yaml:"breaker"`
+	MaxInFlight EtcdInFlight  `yaml:"max_in_flight"`
+	// LeaseGrace is how long past a record's own expiry its lease reclaims
+	// it: default 5m, 1m to 1h.
+	LeaseGrace time.Duration `yaml:"lease_grace"`
+	// HoldTTL is the keyspace hold's lease: default 15s, 10s to 60s. It is
+	// also how long a pool's circuit stays open before the store is gone.
+	HoldTTL time.Duration `yaml:"hold_ttl"`
+	// SweepInterval is how often the index sweep runs: default 10m, 1m to 24h.
+	SweepInterval time.Duration `yaml:"sweep_interval"`
+	// StartTimeoutSet is the start_timeout key, a pointer so an absent key
+	// (30s) is told from an explicit 0 (wait forever), as limitsYAML does
+	// for its windows. StartTimeout is its resolved value: 0, or 5s to 10m.
+	StartTimeoutSet *zeroDuration `yaml:"start_timeout"`
+	StartTimeout    time.Duration `yaml:"-"`
+}
+
+// zeroDuration is a duration that may also be written as a bare 0, as
+// the spec writes start_timeout's "wait forever" (decision 35): yaml.v3
+// alone refuses an integer for a time.Duration. Any other bare number
+// has no unit and is still refused.
+type zeroDuration time.Duration
+
+func (z *zeroDuration) UnmarshalYAML(n *yaml.Node) error {
+	if n.Kind == yaml.ScalarNode && n.Value == "0" {
+		*z = 0
+		return nil
+	}
+	return n.Decode((*time.Duration)(z))
+}
+
+// EtcdIdentity is one component's client certificate and key. The key
+// loads through internal/keyfile: owner-only, no symlink.
+type EtcdIdentity struct {
+	CertFile string `yaml:"cert_file"`
+	KeyFile  string `yaml:"key_file"`
+}
+
+// EtcdBreaker is each pool's circuit: Failures consecutive failures
+// (default 5, 1 to 100) open it for OpenFor (default 5s, 1s to 5m).
+type EtcdBreaker struct {
+	Failures int           `yaml:"failures"`
+	OpenFor  time.Duration `yaml:"open_for"`
+}
+
+// EtcdInFlight is each pool's in-flight slots: default 64 token, 128
+// context, 4 bulk, 1 to 4096 each. A call that gets none within its
+// deadline is refused, never queued.
+type EtcdInFlight struct {
+	Token   int `yaml:"token"`
+	Context int `yaml:"context"`
+	Bulk    int `yaml:"bulk"`
+}
+
 // encKeyYAML names one encryption-at-rest key: the id that travels with every
 // record it seals, and the environment variable holding its 32 bytes. The
 // secret is never inline, for the same reason no shared secret in this file is.
@@ -342,6 +447,7 @@ type fileConfig struct {
 	Lab            *LabConfig                `yaml:"lab"`
 	InventoryOpts  inventoryYAML             `yaml:"inventory"`
 	AdminSocket    string                    `yaml:"admin_socket"`
+	Store          storeYAML                 `yaml:"store"`
 }
 
 // inventoryYAML is how port49d bounds an inventory reload (spec §10). The
@@ -405,6 +511,10 @@ type Config struct {
 	// owner decision 2): a Unix socket, 0600, for port49d's user and root.
 	// Empty, the default, is off, and no packet is held.
 	AdminSocket string
+
+	// Store is where tokens, receipts and contexts live: memory, the
+	// default, or etcd (plan 7d).
+	Store StoreConfig
 
 	// MaxRemovedPercent refuses an inventory reload that takes more than this
 	// share of the devices in force out of service — removed, or kept and
@@ -771,6 +881,9 @@ func Load(path string) (Config, error) {
 		}
 		b.CertificateStatus = &cs
 		c.Broker = &b
+	}
+	if c.Store, err = checkStore(f.Store, f.Broker != nil, f.AdminSocket != ""); err != nil {
+		return Config{}, fmt.Errorf("config: %w", err)
 	}
 
 	if c.Keys, err = checkKeySets(c.Keys, raw); err != nil {
@@ -1398,6 +1511,212 @@ func InventoryServiceOf(raw []byte) (*InventoryServiceConfig, error) {
 // decodeFault is a port49d.yaml decode error as it is shown: each fault's
 // line and a fixed category, and no text from the document (yamlfault).
 func decodeFault(err error) error { return yamlfault.Of(err) }
+
+// checkStore resolves `store:` (plan 7d; spec §13, decision 35): the
+// backend, the packet deadline, and on etcd every key's default and
+// bound. It refuses what would run unsafely:
+//   - an endpoint that is not https;
+//   - an identity missing, or a file it names absent;
+//   - etcd with no broker (until plan 7e the one port49d on a keyspace
+//     is its broker too);
+//   - etcd with no admin_socket (there is no other way to lift a mark;
+//     Ruling 13).
+//
+// A key file's mode, owner and symlink are refused where it is read,
+// by internal/keyfile (Task 12).
+func checkStore(s storeYAML, hasBroker, hasAdminSocket bool) (StoreConfig, error) {
+	out := StoreConfig{Backend: or(s.Backend, BackendMemory), PacketDeadline: orD(s.PacketDeadline, 2*time.Second)}
+	if out.PacketDeadline < 100*time.Millisecond || out.PacketDeadline > 2*time.Second {
+		return StoreConfig{}, fmt.Errorf("store.packet_deadline %v: must be 100ms to 2s, so a device hears port49's "+
+			"answer before its own TACACS+ timeout, which is about 3s on Junos (spec §15, L13)", out.PacketDeadline)
+	}
+	switch out.Backend {
+	case BackendMemory:
+		if s.Etcd != nil {
+			return StoreConfig{}, errors.New("store.etcd is set but store.backend is memory: say store.backend: etcd, " +
+				"or remove store.etcd")
+		}
+		return out, nil
+	case BackendEtcd:
+	default:
+		return StoreConfig{}, fmt.Errorf("store.backend %q: must be memory or etcd", s.Backend)
+	}
+	if s.Etcd == nil {
+		return StoreConfig{}, errors.New("store.backend is etcd and store.etcd is missing")
+	}
+	if !hasBroker {
+		return StoreConfig{}, errors.New("store.backend etcd needs a broker: block: until plan 7e the one port49d " +
+			"on a keyspace is its broker too")
+	}
+	if !hasAdminSocket {
+		return StoreConfig{}, errors.New("store.backend etcd needs admin_socket: on etcd a mark is kept in the store " +
+			"as well as broker.revocations_file, so editing the file no longer lifts one; a lift is " +
+			"'port49 revoke --lift' on the admin socket (decision 35)")
+	}
+	e := *s.Etcd
+	if len(e.Endpoints) == 0 {
+		return StoreConfig{}, errors.New("store.etcd.endpoints is empty")
+	}
+	// As checkService: no user information, where a credential would sit,
+	// and no path, query or fragment, where a token would be pasted. None
+	// is printed; the index names the endpoint.
+	for i, ep := range e.Endpoints {
+		u, err := url.Parse(ep)
+		if err != nil || u.Scheme != "https" || u.Host == "" || u.Opaque != "" || u.User != nil ||
+			(u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+			return StoreConfig{}, fmt.Errorf("store.etcd.endpoints[%d] must be https://host:port, with no user "+
+				"information, path, query or fragment: port49d authenticates to etcd by client certificate "+
+				"(decision 35)", i)
+		}
+	}
+	e.Prefix = or(e.Prefix, "/port49/")
+	if !strings.HasPrefix(e.Prefix, "/") {
+		return StoreConfig{}, fmt.Errorf("store.etcd.prefix %q: must start with /", e.Prefix)
+	}
+	if !strings.HasSuffix(e.Prefix, "/") {
+		e.Prefix += "/"
+	}
+	if e.Broker == nil {
+		return StoreConfig{}, errors.New("store.etcd.broker is missing: the broker authenticates to etcd as " +
+			"itself (decision 35)")
+	}
+	if err := readableFile("store.etcd.ca_file", e.CAFile); err != nil {
+		return StoreConfig{}, err
+	}
+	for _, id := range []struct {
+		name string
+		id   EtcdIdentity
+	}{{"store.etcd.daemon", e.Daemon}, {"store.etcd.broker", *e.Broker}} {
+		for _, f := range [][2]string{{".cert_file", id.id.CertFile}, {".key_file", id.id.KeyFile}} {
+			if err := readableFile(id.name+f[0], f[1]); err != nil {
+				return StoreConfig{}, err
+			}
+		}
+		// etcd takes a client certificate's CN as its user, and root is
+		// its administrator, past every role (Ruling T11-a).
+		if certCN(id.id.CertFile) == "root" {
+			return StoreConfig{}, fmt.Errorf("%s.cert_file: its CN is \"root\", etcd's administrator, which "+
+				"bypasses every role: give the component a certificate of its own (decision 35)", id.name)
+		}
+	}
+	switch e.Roles = or(e.Roles, RolesEnforced); e.Roles {
+	case RolesEnforced, RolesUnenforced:
+	default:
+		return StoreConfig{}, fmt.Errorf("store.etcd.roles %q: must be enforced or unenforced", e.Roles)
+	}
+	for _, d := range []struct {
+		name     string
+		v        *time.Duration
+		def      time.Duration
+		min, max time.Duration
+	}{
+		{"store.etcd.call_timeout", &e.CallTimeout, 500 * time.Millisecond, 10 * time.Millisecond, 5 * time.Second},
+		{"store.etcd.bulk_timeout", &e.BulkTimeout, 30 * time.Second, time.Second, 5 * time.Minute},
+		{"store.etcd.breaker.open_for", &e.Breaker.OpenFor, 5 * time.Second, time.Second, 5 * time.Minute},
+		{"store.etcd.lease_grace", &e.LeaseGrace, 5 * time.Minute, time.Minute, time.Hour},
+		{"store.etcd.hold_ttl", &e.HoldTTL, 15 * time.Second, 10 * time.Second, time.Minute},
+		{"store.etcd.sweep_interval", &e.SweepInterval, 10 * time.Minute, time.Minute, 24 * time.Hour},
+	} {
+		*d.v = orD(*d.v, d.def)
+		if *d.v < d.min || *d.v > d.max {
+			return StoreConfig{}, fmt.Errorf("%s %v: must be %v to %v", d.name, *d.v, d.min, d.max)
+		}
+	}
+	// start_timeout: absent is 30s; 0 is wait forever (pre-flight I19).
+	e.StartTimeout = 30 * time.Second
+	if e.StartTimeoutSet != nil {
+		e.StartTimeout = time.Duration(*e.StartTimeoutSet)
+	}
+	if e.StartTimeout != 0 && (e.StartTimeout < 5*time.Second || e.StartTimeout > 10*time.Minute) {
+		return StoreConfig{}, fmt.Errorf("store.etcd.start_timeout %v: must be 0 (wait for as long as it takes), "+
+			"or 5s to 10m", e.StartTimeout)
+	}
+	for _, n := range []struct {
+		name          string
+		v             *int
+		def, min, max int
+	}{
+		{"store.etcd.breaker.failures", &e.Breaker.Failures, 5, 1, 100},
+		{"store.etcd.max_in_flight.token", &e.MaxInFlight.Token, 64, 1, 4096},
+		{"store.etcd.max_in_flight.context", &e.MaxInFlight.Context, 128, 1, 4096},
+		{"store.etcd.max_in_flight.bulk", &e.MaxInFlight.Bulk, 4, 1, 4096},
+	} {
+		*n.v = orI(*n.v, n.def)
+		if *n.v < n.min || *n.v > n.max {
+			return StoreConfig{}, fmt.Errorf("%s %d: must be %d to %d", n.name, *n.v, n.min, n.max)
+		}
+	}
+	if out.PacketDeadline < e.CallTimeout {
+		return StoreConfig{}, fmt.Errorf("store.packet_deadline %v: must be at least store.etcd.call_timeout (%v)",
+			out.PacketDeadline, e.CallTimeout)
+	}
+	out.Etcd = &e
+	return out, nil
+}
+
+// certCN is the subject CN of the first certificate in the PEM file at
+// path, or "" when there is none or it does not parse: port49d's start
+// names that (Task 12).
+func certCN(path string) string {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	b, _ := pem.Decode(raw)
+	if b == nil || b.Type != "CERTIFICATE" {
+		return ""
+	}
+	c, err := x509.ParseCertificate(b.Bytes)
+	if err != nil {
+		return ""
+	}
+	return c.Subject.CommonName
+}
+
+// readableFile refuses a path that is empty, relative (port49d's working
+// directory is not a place its trust roots should depend on, as
+// checkService says), or not a regular file. A private key's mode and
+// owner are keyfile's, at the read (Task 12).
+func readableFile(name, path string) error {
+	if path == "" {
+		return fmt.Errorf("%s is missing", name)
+	}
+	if !filepath.IsAbs(path) {
+		return fmt.Errorf("%s must be an absolute path", name)
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		var pe *fs.PathError
+		if errors.As(err, &pe) {
+			err = pe.Err // the path is printed once, below
+		}
+		return fmt.Errorf("%s %s: %w", name, path, err)
+	}
+	if !fi.Mode().IsRegular() {
+		return fmt.Errorf("%s %s: not a regular file", name, path)
+	}
+	return nil
+}
+
+// StoreOf is `store:` from port49d.yaml's bytes, checked as Load checks
+// it (the stale seed keys first, as Load refuses them), for `port49d
+// store-roles`, which reads nothing else (plan 7d; pre-flight M35).
+func StoreOf(raw []byte) (StoreConfig, error) {
+	if err := staleSeedKeys(raw); err != nil {
+		return StoreConfig{}, err
+	}
+	var f fileConfig
+	dec := yaml.NewDecoder(bytes.NewReader(raw))
+	dec.KnownFields(true)
+	if err := dec.Decode(&f); err != nil && err != io.EOF {
+		return StoreConfig{}, fmt.Errorf("config: %w; check the key spelling against the port49d.yaml schema", decodeFault(err))
+	}
+	s, err := checkStore(f.Store, f.Broker != nil, f.AdminSocket != "")
+	if err != nil {
+		return StoreConfig{}, fmt.Errorf("config: %w", err)
+	}
+	return s, nil
+}
 
 // envName is what an environment variable's name looks like. A secret_env
 // that is not one is refused without being printed: it is most likely the

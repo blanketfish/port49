@@ -145,6 +145,11 @@ func revokeCmd(args []string, stdout, stderr io.Writer) int {
 // askRevoke sends a revoke or revocations request and prints its answer.
 func askRevoke(socket string, req admin.Request, wait time.Duration, stdout, stderr io.Writer) int {
 	resp, err := askAdmin(socket, req, wait)
+	if err == nil && req.Op == "revoke" && resp.Error == "" && resp.Text == "" {
+		// port49d always says what it did: an answer that names nothing
+		// ({}) is not its report, and the op may have run.
+		err = &unansweredError{errors.New("its answer named no revocation")}
+	}
 	var unanswered *unansweredError
 	if errors.As(err, &unanswered) && req.Op == "revoke" {
 		// The request reached port49d, which marks first: the revocation

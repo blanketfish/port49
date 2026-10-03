@@ -18,7 +18,9 @@ import (
 	"github.com/rhwendt/port49/internal/engine"
 	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/policy"
+	"github.com/rhwendt/port49/internal/session"
 	"github.com/rhwendt/port49/internal/store"
+	"github.com/rhwendt/port49/internal/store/crypt"
 )
 
 const alice = "user:alice@example.com"
@@ -1501,5 +1503,180 @@ func TestARefreshKeepsItsBlobAsLongAsTheContext(t *testing.T) {
 	after := f.context(t, "leaf1", "alice")
 	if ttl := rec.ttls[after.BlobHash]; ttl < f.b.ContextIdleTTL {
 		t.Fatalf("the refreshed blob is kept %v, under context_idle_ttl %v", ttl, f.b.ContextIdleTTL)
+	}
+}
+
+// RefreshAtStart carries the policy in force into a context a persistent
+// store kept across a restart, whatever bundle it was written under: a
+// narrowing reaches it before TACACS+ binds (plan 7d, Ruling 12).
+func TestRefreshAtStartCarriesThePolicyIntoKeptContexts(t *testing.T) {
+	f := newFixtureWithPolicy(t, 8, sharedPolicy)
+	ctx := context.Background()
+	f.liveContext(t, "leaf1", "alice", alicePrincipal, "")
+	k := store.ContextKey{NAS: "leaf1", Username: "alice"}
+	before, err := f.st.GetContext(ctx, k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The kept context names a blob the policy in force would not write.
+	if err := f.st.SetContextPolicy(ctx, k, before.PolicyRev, store.ContextPolicy{BlobHash: "sha256:from-before",
+		MaxPrivilege: before.MaxPrivilege, Enable: before.Enable}); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := f.b.RefreshAtStart(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := f.st.GetContext(ctx, k)
+	if err != nil || got.BlobHash == "sha256:from-before" {
+		t.Fatalf("the kept context was not carried onto the policy in force: %+v %v (report %+v)", got, err, rep)
+	}
+}
+
+// What a start's carry leaves unjudged is told apart by its error, since
+// port49d does a different thing with each (plan 7d; decision 35, a start
+// on etcd, step 6; Rulings T12-a, T12-c, T12-d):
+//   - a context under a key this port49d does not hold is
+//     ErrLeftUnderUnheldKey, and the start opens;
+//   - a context still changing after every attempt is a plain
+//     ErrConflict, and the start opens and runs a pass again at once;
+//   - a principal whose contexts could not be looked up is
+//     ErrPrincipalUnvisited, and holds the start, whatever else the pass
+//     left before it.
+func TestRefreshAtStartTellsWhatItLeft(t *testing.T) {
+	const zed = "user:zed@example.com" // sorts after alicePrincipal, so it is visited after her
+	kept := func(t *testing.T, f *fixture) {
+		t.Helper()
+		ctx := context.Background()
+		f.liveContext(t, "leaf1", "alice", alicePrincipal, "")
+		k := store.ContextKey{NAS: "leaf1", Username: "alice"}
+		before, err := f.st.GetContext(ctx, k)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := f.st.SetContextPolicy(ctx, k, before.PolicyRev, store.ContextPolicy{BlobHash: "sha256:from-before",
+			MaxPrivilege: before.MaxPrivilege, Enable: before.Enable}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, c := range []struct {
+		name                    string
+		arrange                 func(t *testing.T, f *fixture)
+		unheld, busy, unvisited bool
+	}{
+		{"a context under an unheld key", func(t *testing.T, f *fixture) {
+			sealedContext(t, f, testKeys("k1"))
+			f.b.Store = crypt.Wrap(f.st, testKeys("k2"), nil)
+		}, true, false, false},
+		{"a context still changing", func(t *testing.T, f *fixture) {
+			kept(t, f)
+			f.b.Store = conflictingPolicyStore{f.st}
+		}, false, true, false},
+		{"a principal unvisited after a context still changing", func(t *testing.T, f *fixture) {
+			kept(t, f)
+			f.liveContextAt(t, "nx1", "zed", zed, "", f.now, f.now.Add(time.Hour))
+			f.b.Store = conflictingPolicyStore{lookupFailingStore{Store: f.st, principal: zed,
+				err: errors.New("test: does not parse")}}
+		}, false, false, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFixtureWithPolicy(t, 8, sharedPolicy)
+			c.arrange(t, f)
+			_, err := f.b.RefreshAtStart(context.Background())
+			if !errors.Is(err, store.ErrConflict) {
+				t.Fatalf("RefreshAtStart = %v, want an ErrConflict", err)
+			}
+			unheld, unvisited := errors.Is(err, ErrLeftUnderUnheldKey), errors.Is(err, ErrPrincipalUnvisited)
+			if unheld != c.unheld || unvisited != c.unvisited || (!unheld && !unvisited) != c.busy {
+				t.Fatalf("RefreshAtStart = %v: unheld key %v, unvisited %v; want %v, %v (busy %v)", err, unheld,
+					unvisited, c.unheld, c.unvisited, c.busy)
+			}
+		})
+	}
+}
+
+// A context still changing outranks one under an unheld key, whichever
+// the pass met first: the start opens either way, but only the busy one
+// owes a pass at once (Ruling T12-d), and the unheld one must not hide it.
+// alice2 sorts before alice, so each order is one case.
+func TestRefreshAtStartPutsBusyOverUnheld(t *testing.T) {
+	k1, k2 := testKeys("k1"), testKeys("k2")
+	seal := func(t *testing.T, f *fixture, keys crypt.Keys, principal, device string) {
+		t.Helper()
+		ctx := context.Background()
+		k := store.ContextKey{NAS: device, Username: "alice"}
+		if err := crypt.Wrap(f.st, keys, nil).PutContext(ctx, k, store.Context{CtxID: "ctx_" + device,
+			Principal: principal, Username: "alice", PrivLvl: 1, AuthTime: f.now, RefreshedAt: f.now,
+			BlobHash: "sha256:from-before"}, time.Hour); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.st.IndexContext(ctx, principal, "", "", store.ContextRef{NAS: device, Username: "alice"},
+			time.Hour); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, c := range []struct{ name, busy, unheld string }{
+		{"busy met first", alice2, alicePrincipal},
+		{"unheld met first", alicePrincipal, alice2},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFixtureWithPolicy(t, 8, sharedPolicy)
+			seal(t, f, k2, c.busy, "nx1")
+			seal(t, f, k1, c.unheld, "leaf1")
+			f.b.Store = conflictingPolicyStore{crypt.Wrap(f.st, k2, nil)}
+			_, err := f.b.RefreshAtStart(context.Background())
+			if !errors.Is(err, store.ErrConflict) || errors.Is(err, ErrLeftUnderUnheldKey) ||
+				errors.Is(err, ErrPrincipalUnvisited) {
+				t.Fatalf("RefreshAtStart = %v, want a busy context's ErrConflict", err)
+			}
+		})
+	}
+}
+
+// A start applies every standing mark to the contexts a persistent store
+// kept, before any listener binds: a mark added to the revocations file
+// with port49d stopped, or a revocation whose passes an outage cut short,
+// reaches the session it was meant for (plan 7d; pre-flight C1).
+func TestApplyMarksAtStartRevokesAKeptContext(t *testing.T) {
+	f := newFixtureWithPolicy(t, 8, sharedPolicy)
+	ctx := context.Background()
+	f.liveContext(t, "leaf1", "alice", alicePrincipal, store.CertKey("CN=Corp CA", "0a"))
+	f.liveContext(t, "leaf2", "alice", alicePrincipal, store.CertKey("CN=Corp CA", "0b"))
+	n, err := f.b.ApplyMarksAtStart(ctx, []store.Revocation{
+		{Kind: store.RevocationCert, Key: store.CertKey("CN=Corp CA", "0b"), At: f.now},
+	})
+	if err != nil || n != 1 {
+		t.Fatalf("ApplyMarksAtStart = %d, %v; want the one context the certificate reaches", n, err)
+	}
+	one, _ := f.st.GetContext(ctx, store.ContextKey{NAS: "leaf1", Username: "alice"})
+	two, _ := f.st.GetContext(ctx, store.ContextKey{NAS: "leaf2", Username: "alice"})
+	if !one.RevokedAt.IsZero() || two.RevokedAt.IsZero() {
+		t.Fatalf("leaf1 revoked %v (want no), leaf2 revoked %v (want yes)", one.RevokedAt, two.RevokedAt)
+	}
+	if n, err := f.b.ApplyMarksAtStart(ctx, []store.Revocation{
+		{Kind: store.RevocationPrincipal, Key: alicePrincipal, At: f.now},
+	}); err != nil || n != 2 {
+		t.Fatalf("by principal: %d %v", n, err)
+	}
+}
+
+// A kept context that will not open (sealed under a key this window
+// lacks) under a certificate mark is still marked, since a revocation
+// needs no key, and never fails the start: it is denied as unreadable
+// anyway (re-check R-I3).
+func TestApplyMarksAtStartSkipsAnUnreadableContext(t *testing.T) {
+	f := newFixtureWithPolicy(t, 8, sharedPolicy)
+	ctx := context.Background()
+	f.liveContext(t, "leaf1", "alice", alicePrincipal, store.CertKey("CN=Corp CA", "0a"))
+	k := store.ContextKey{NAS: "leaf1", Username: "alice"}
+	f.b.Sessions = session.New(unreadableAt{Store: f.st, k: k}, f.b.Now, time.Hour, time.Hour)
+	n, err := f.b.ApplyMarksAtStart(ctx, []store.Revocation{
+		{Kind: store.RevocationCert, Key: store.CertKey("CN=Corp CA", "0a"), At: f.now},
+	})
+	if err != nil || n != 1 {
+		t.Fatalf("ApplyMarksAtStart = %d, %v; want the unreadable context marked and no error", n, err)
+	}
+	if got, _ := f.st.GetContext(ctx, k); got.RevokedAt.IsZero() {
+		t.Fatal("the unreadable context was not marked")
 	}
 }

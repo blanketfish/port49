@@ -183,7 +183,7 @@ finding is skipped.** M29 is applied in part, with the reason in its row.
 | I12 | As ruled: the whole context record is sealed with the context key as AAD. The daemon reads the standing marks on every request (authorizer, enable gate, receipt replay). Tests cover a zeroed `revoked_at`, a raised privilege, a swapped blob, a removed ceiling, a transplanted record, and a replay under a mark. The per-command cost is one in-memory lookup. Migration: memory is wiped by the restart that installs 7d-1, and etcd has no contexts before 7d. The residual (a replay of an unmarked revocation) is stated and carried. | Ruling 17; new Task 4b; Task 6 (`RewriteContext` on etcd); d35 and design §8 (Task 1) |
 | I13 | Store keys load through `keyfile.LoadX509KeyPair` in `openStores`. Config checks presence only. | Task 10 Step 2; Task 12 Step 5 |
 | I14 | A third pool, `bulk` (`ActivePrincipals`, `DeleteReceiptsByPrincipal`, `ListRevocations`, `PurgeTokens`), has its own `bulk_timeout` (30 s), slots and circuit, apart from the hot pools'. The backend pages them. `PurgeTokens` reads and deletes a page at a time. | Ruling 8; Task 5 Step 8–9; Task 9; Task 10 |
-| I15 | The hold is the broker's, and the daemon's role is read-only on `meta/`. The holder reads its lock key every ttl/6 and counts the hold lost when the key is gone or on another lease, or when etcd stops answering in time (the ⅔-ttl rule first written here is replaced by Re-check 1's R-I4). The waiting line says to stop the holder and never delete `meta/hold`. A test deletes the key. | Ruling 11; Task 11 (roles); Task 12 Steps 1–2 |
+| I15 | The hold is the broker's, and the daemon's role is read-only on `meta/`. The holder reads its lock key every ttl/6 and counts the hold lost when the key is gone or on another lease, or when etcd stops answering in time (the ⅔-ttl rule first written here is replaced by Re-check 1's R-I4). A port49d that takes the lock waits ttl/3 before it serves, since a holder whose key was deleted sees it gone only within ttl/3 while etcd answers it (Ruling T12-e; a holder cut off from etcd as the key goes serves until its fence loses the hold, so the two can overlap briefly then, Task 12 review m-1). The waiting line says to stop the holder and never delete `meta/hold`. A test deletes the key. | Ruling 11; Task 11 (roles); Task 12 Steps 1–2 |
 | I16 | As ruled: `store.backend: etcd` requires `admin_socket` at config load. | Ruling 13; Task 10 |
 | I17 | The L35 test times each request from the capture (labpcap gains a packet time). It asserts no store-gone line by the end of step 3, or marks the cell invalid. It asserts the `store_unavailable` reasons, and commits itself in a `test(lab):` commit before the run. | Task 15 |
 | I18 | Every send on the held connection takes the wire: `Connect` (agent.go:217), `Mint`'s `post` (:376), both of `refreshOnce`'s (:706, :757) under one hold, and `exchange` (:476). | Ruling 15; Task 14 |
@@ -248,7 +248,7 @@ finding "apply the reviewer's fix" (`progress.md`, the Re-check 1 block). One ro
 | # | Done | Where |
 |---|---|---|
 | CA1 | A token's `kind`, `expires_at`, `blob_hash`, `max_session_age`, `enable`, `max_privilege`, `auth_time` and `minted_at` are sealed in `tokenSecret` beside the secret and identity, with additional data = key id + token key + token ID. A token whose plaintext expiry differs from its sealed one is dropped as unopenable. A receipt is sealed with its whole receipt key (device, username, kind, credential hash) as additional data, and its `first_redeemed_at`, which anchors the cap, is sealed too. Every record family the daemon can write is audited in Ruling 17's table: sealed, or why it is safe. Ruling 17, decision 35, design §8, Ruling 10 and §12's store-roles text say what a stolen daemon credential yields. Tests tamper each sealed token field, transplant a token (another key, another ID) and a receipt (another kind), and replay a deleted token. | Ruling 17; Task 4b Steps 1, 4; Task 1 Steps 1, 6; Task 8b Step 4 |
-| IA1 | `crypt.Ledger`: per context key, the `ctx_id` of the last write that landed (or the first read, so a start's reads seed it), plus writes in flight or of unknown outcome. A record that opens under any other `ctx_id` is `UnreadableContextError` wrapping `crypt.ErrNotLastWritten`. One ledger per process, shared by the daemon's and the broker's `Wrap` (`crypt.WithLedger`). The residual, impersonation by a record put back while port49d was stopped, is in Ruling 17, d35 and design §8, and carried. | Ruling 17; Task 4b Steps 1, 4; Task 12 Step 5; Task 13 Step 2; Task 16 |
+| IA1 | `crypt.Ledger`: per context key, the `ctx_id` of the last write that landed (or the first read, so a start's reads seed it), plus writes in flight or of unknown outcome; Task 13b keys it on a write ID sealed into each record instead, so an earlier version of the same context is denied too (Ruling T12-g). A record that opens under any other `ctx_id` is `UnreadableContextError` wrapping `crypt.ErrNotLastWritten`. One ledger per process, shared by the daemon's and the broker's `Wrap` (`crypt.WithLedger`). The residual, impersonation by a record put back while port49d was stopped, is in Ruling 17, d35 and design §8, and carried. | Ruling 17; Task 4b Steps 1, 4; Task 12 Step 5; Task 13 Step 2; Task 16 |
 | IA2 | New Task 7b. `(*etcd.Store).Unindexed` pages the `c/` family keys-only and names each ref whose `x/` record is gone or lists no live principal. `Broker.ReindexContexts` re-indexes each (`session.Manager.Reindex`), judges it against the policy in force, revokes one that will not open, and counts `port49_contexts_reindexed_total`. port49d runs it at start, before the marks are applied, and after every sweep. The residual (a sid revocation, and the refresh, miss it until the next sweep; the marks deny throughout) is stated. | Ruling 6; Ruling 17; Task 7b; Task 12 Steps 5, 7 |
 | N1 | `dispatch` stashes the packet's arrival with the server's context, and `fail` sleeps until arrival + the delay, so store time is inside the delay, not added to it. The worst case is max(`packet_deadline`, delay), 2 s at the defaults; the throttle is unchanged. The residual is dropped. Test: a store spending 250 ms behind a 300 ms delay answers in under 500 ms. | Ruling 9; Task 10 Steps 1, 3; Task 8b Step 1 |
 | R-I2 | `run`'s loop, once `again` is set, retries every error but a parent cancel, every 5 s, the listeners closed, and says it. `runLoop` is factored out and tested with a fake run. | Ruling 11; Task 12 Step 7 |
@@ -259,7 +259,7 @@ finding "apply the reviewer's fix" (`progress.md`, the Re-check 1 block). One ro
 | MA2 | crypt `SetRevokedAt`'s seal retries until the caller's deadline (64 attempts with none), and its error says the revocation is in force and the seal pending. | Task 4b Step 4 |
 | MA3 | The etcd `GetContext` remembers the plaintext bookkeeping of the version it read (bounded); `RewriteContext` with no ttl on that revision commits without reading again. A setter's rewrite is two RPCs. A test reads, moves the record, and rewrites the stale version. | Task 6 Step 4b |
 | MA4 | `TestARevocationOfAnUnopenableContextNeedsNoKey` is labelled a regression guard: it passes before 4b. | Task 4b Step 1 |
-| MA5 | `TestTheSealCoversWhatAuthorizationTrusts` gains a flipped sealed byte and a same-key older ciphertext (the ledger's two cases: another login's, denied; the same `ctx_id`'s, admitted, the residual). The "no ceiling" case writes a plaintext ceiling the seal ignores. | Task 4b Step 1 |
+| MA5 | `TestTheSealCoversWhatAuthorizationTrusts` gains a flipped sealed byte and a same-key older ciphertext (the ledger's two cases: another login's, denied; the same `ctx_id`'s, admitted, the residual, until Task 13b denies it too). The "no ceiling" case writes a plaintext ceiling the seal ignores. | Task 4b Step 1 |
 | R-M0 | `server.Deps.Abort`: when it reports true at shutdown (a store gone), each held connection is reset (linger 0), as L28 measured the fast fall to local. The hung-store e2e holds one connection across the hang and reads a reset. | Task 12 Steps 6, 7 |
 | R-M1 | The mark-at-start e2e asserts `(1 context(s) marked revoked)`. Mutation 1 now fails it. | Task 12 Steps 6, 7 |
 | R-M2 | On a store gone the broker listener `bl` is closed before the line, and `brokerSrv.Close()` follows a `Shutdown` that times out. | Task 12 Step 7 |
@@ -344,13 +344,13 @@ review gate falls.
   M3). It is untouched. A store outage is now loud on stderr and in metrics (Task 9), which
   narrows what M3 costs.
 - **Spec, unassigned, new: replay by a stolen daemon store credential** (Ruling 17's
-  residual, listed there exactly). Within a running port49d it is an earlier version of the
-  context a key holds now (the same `ctx_id`), which undoes a self or key revocation (no mark;
-  decision 34) or a policy narrowing until the next refresh. Across a restart it is
-  impersonation: a context of another login put back while port49d was stopped is taken as the
-  key's at the start. Closing it needs a revocation record the daemon's role cannot write for
-  every kind (a spec change to decision 34) and a sealed freshness counter checked across
-  restarts. Task 16 carries it.
+  residual, listed there exactly). Within a running port49d an earlier version of the same
+  context was admitted until Task 13b named each write (Ruling T12-g); now it is denied.
+  Across a restart it is impersonation: a context of another login put back while port49d was
+  stopped is taken as the key's at the start, and an earlier version of the same context
+  undoes a self or key revocation (no mark; decision 34). Closing it needs a revocation
+  record the daemon's role cannot write for every kind (a spec change to decision 34) and a
+  sealed freshness counter checked across restarts. Task 16 carries it.
 
 ## Rulings where the design and spec are silent
 
@@ -734,12 +734,12 @@ I19) and on its re-check (CA1, IA1, IA2, N1, R-I2 to R-I5). The owner may overri
       | Family | In the clear | What a store write gains |
       |---|---|---|
       | `t/` tokens | `id`; a copy of `expires_at` | **Nothing forged:** every trusted field is sealed and bound. **Replay:** a token port49 minted for the same key and ID, deleted since (redeemed, or by a self or key revocation), can be put back and redeemed by a holder of its secret until its sealed expiry (the TTL it was minted with). An extended plaintext expiry drops it. |
-      | `r/` receipts | `idle_expires_at`, `retain_until`, `failed`, a copy of `first_redeemed_at` | **`idle_expires_at`** stretches the replay window to the sealed cap (`first_redeemed_at` plus `receipt_max_age`), never past it. **`failed`**, zeroed, replays PASS only onto the live context with the receipt's `ctx_id`, whose own revocation and the marks are read again: what that principal's later token already granted. Every replay needs the credential. |
+      | `r/` receipts | `idle_expires_at`, `retain_until`, `failed`, a copy of `first_redeemed_at` | **`idle_expires_at`** stretches the replay window to the sealed cap (`first_redeemed_at` plus `receipt_max_age`), never past it. **`failed`**, zeroed, replays PASS only onto the live context with the receipt's `ctx_id`, whose own revocation and the marks are read again, the marks for the receipt's own sealed principal and certificate too, and only for a login that context's sealed witness (`Logins`) names and the index still reaches under that credential: what that principal's later token already granted. Every replay needs the credential. |
       | `rp/` receipt index | all | **Deleted:** a revocation by principal misses those receipts, and each replay still reads the live context and the marks, so it is denied. **Added:** a revocation deletes more, which is a denial. |
-      | `c/` contexts | `revoked_at` (a read takes the later), the revisions, `last_touched_at`, accounting's annotations | **Nothing forged or moved.** **Replay in a running port49d** (the ledger): an earlier version of the context the key holds now, which has the same `ctx_id`, so the same principal and login. It undoes a self or key revocation of that context, or a policy narrowing, until the next refresh judges it. **Replay across a restart:** a context of any login port49 sealed for that key, put back while port49d was stopped, is taken as the key's at the start. That is impersonation, until that record's sealed ceiling (if it has one) or the key's next login; a principal or certificate mark still denies it. **The idle clock:** a context can be kept alive past its idle TTL, to its sealed ceiling if it has one, and indefinitely under `max_session_age: never` (re-check MA1). The refresh still judges it, and every revocation reaches it. |
-      | `x/` index records; `ip/`, `is/`, `ic/` lookups | all | **Deleted:** the context is hidden from the refresh, `revoke --mine` and a revocation by sid until the next sweep re-indexes it (`sweep_interval`, 10 m; Ruling 6). A revocation by sid in that window never reaches it; one by principal or certificate does, through the marks. **Added:** a revocation reaches a context it should not, which is a denial. |
+      | `c/` contexts | `revoked_at` (a read takes the later), the revisions, `last_touched_at`, accounting's annotations | **Nothing forged or moved.** **Replay in a running port49d:** none. The ledger admits only the write it last made at the key, or first read there, so an earlier version of the same context is denied as another login's is (Task 13b; Ruling T12-g). **Replay across a restart:** a context of any login port49 sealed for that key, or an earlier version of the same context, which undoes a self or key revocation, put back while port49d was stopped, or before the start read it, is taken as the key's at the start; once the start seals the ledger, one put back at a key it has not seen is denied, and the ledger is kept across a start after a store gone. That is impersonation, until that record's sealed ceiling (if it has one) or the key's next login; a principal or certificate mark still denies it. **The idle clock:** a context can be kept alive past its idle TTL, to its sealed ceiling if it has one, and indefinitely under `max_session_age: never` (re-check MA1). The refresh still judges it, and every revocation reaches it. **Accounting's annotations:** clearing a context's session discriminators suppresses the `foreign` attribution of its accounting records (re-check 2 M-B2). |
+      | `x/` index records; `ip/`, `is/`, `ic/` lookups | all | **Deleted, or rewritten to name another principal or another sid, or a lookup entry deleted:** the context is hidden from the refresh, `revoke --mine` and a revocation by sid until the re-index finds it, at the start and after each sweep (`sweep_interval`, 10 m; Ruling 6), by comparing the keys listed, each with its lookup entry in place, against the context's own sealed principal, sid and certificate. A revocation by sid in that window never reaches it; one by principal or certificate does, through the marks. **Added:** a revocation reaches a context it should not, which is a denial. |
       | `b/` blobs | all (no identity) | **Nothing:** a blob is checked against its sealed hash (`engine.Decode`), so an altered body is refused, which is a denial. |
-      | `rv/` marks, `meta/` | read-only for the daemon | Nothing. |
+      | `rv/` marks, `meta/` | read-only for the daemon | Nothing, under the daemon's role (Task 11), which is what makes "cannot lift a revocation by principal or certificate" true. Before that role a daemon credential holds the whole keyspace, marks included. |
       | `tp/`, `tc/` token indexes; `id/` idempotency | no access | Nothing. |
 
       Deleting a record, or making a write conflict, is a denial, never a grant. Task 16 carries
@@ -900,8 +900,11 @@ task in this plan, and the tests named pin it.
   keyspace /port49/ is held by port49d on core-aaa-1 (pid 4121, since 2026-10-02T03:00:00Z);
   waiting, with the listeners closed: one port49d per keyspace until plan 7e; stop that port49d
   to move the keyspace, and never delete meta/hold`, every 30 s.
-- **Someone deletes `meta/hold`** (or `etcdctl del --prefix`): the holder sees its key gone
-  within `hold_ttl`/6 and closes its listeners, so two port49d never serve one keyspace.
+- **Someone deletes `meta/hold`** (or `etcdctl del --prefix`): while etcd answers it, the
+  holder sees its key gone within `hold_ttl`/3 and closes its listeners, and the next port49d
+  waits `hold_ttl`/3 after taking the lock before it serves, so two port49d never serve one
+  keyspace. A holder cut off from etcd as the key goes serves until its fence loses the hold,
+  so the two can overlap briefly then: never delete `meta/hold`.
 - **A planned restart.** The memory store lost every session at a restart; etcd keeps them.
   - Tokens are purged, and a `port49 token` minted before the restart is refused
     `token_not_found`.
@@ -9628,7 +9631,7 @@ store:
     max_in_flight: {token: 64, context: 128, bulk: 4}  # 1 to 4096 each
     lease_grace: 5m             # 1m to 1h
     start_timeout: 30s          # 0 (wait forever), or 5s to 10m
-    hold_ttl: 15s               # 5s to 60s
+    hold_ttl: 15s               # 10s to 60s
     sweep_interval: 10m         # 1m to 24h
 ```
 
@@ -9740,6 +9743,13 @@ store:
   		}, true, true, "at least store.etcd.call_timeout"},
   		{"a prefix not absolute", func(s *storeYAML) { s.Etcd.Prefix = "port49/" }, true, true, "store.etcd.prefix"},
   		{"a hold too short", func(s *storeYAML) { s.Etcd.HoldTTL = time.Second }, true, true, "store.etcd.hold_ttl"},
+  		// The floor (8b re-review 2 R2-I1, round 3b): clientv3's keepalive
+  		// loop checks every 500ms, so a healthy lease can report as little as
+  		// floor(2*ttl/3 - 0.5s - RTT); at 10s that stays at half of ttl or
+  		// more for a round trip up to about 1.17s, and below 10s the bound
+  		// shrinks to 0.5s or less.
+  		{"a hold under 10s", func(s *storeYAML) { s.Etcd.HoldTTL = 9 * time.Second }, true, true,
+  			"store.etcd.hold_ttl 9s: must be 10s to 1m0s"},
   		{"a start timeout too short", func(s *storeYAML) { d := time.Second; s.Etcd.StartTimeoutSet = &d }, true, true,
   			"store.etcd.start_timeout"},
   	} {
@@ -10000,7 +10010,7 @@ store:
      		{"store.etcd.bulk_timeout", &e.BulkTimeout, 30 * time.Second, time.Second, 5 * time.Minute},
      		{"store.etcd.breaker.open_for", &e.Breaker.OpenFor, 5 * time.Second, time.Second, 5 * time.Minute},
      		{"store.etcd.lease_grace", &e.LeaseGrace, 5 * time.Minute, time.Minute, time.Hour},
-     		{"store.etcd.hold_ttl", &e.HoldTTL, 15 * time.Second, 5 * time.Second, time.Minute},
+     		{"store.etcd.hold_ttl", &e.HoldTTL, 15 * time.Second, 10 * time.Second, time.Minute},
      		{"store.etcd.sweep_interval", &e.SweepInterval, 10 * time.Minute, time.Minute, 24 * time.Hour},
      	} {
      		*d.v = orD(*d.v, d.def)
@@ -10842,7 +10852,8 @@ store:
   // until the first lets go; and a hold whose store stops answering is lost
   // at least a sixth of its TTL before etcd can expire the lease and the
   // second take it (Ruling 11; pre-flight I15; re-check R-I4; Review Focus
-  // 4). That margin, 0.83s at a 5s TTL, plus etcd's own lease-expiry
+  // 4). That margin, 1.67s at a 10s TTL (the floor; a shorter one can drop
+  // a healthy hold, 8b re-review 2 R2-I1), plus etcd's own lease-expiry
   // granularity, is what keeps the ordering assertion below from racing.
   func TestHoldIsOnePerKeyspaceAndLapses(t *testing.T) {
   	srv := etcdtest.Start(t, etcdtest.Options{})
@@ -10859,7 +10870,7 @@ store:
   	first, second := open("http://"+proxy.Addr()), open(srv.Endpoint)
   	ctx, cancel := context.WithCancel(context.Background())
   	defer cancel()
-  	lost, release, err := first.Hold(ctx, 5*time.Second, "port49d one", func(string) {})
+  	lost, release, err := first.Hold(ctx, 10*time.Second, "port49d one", func(string) {})
   	if err != nil {
   		t.Fatal(err)
   	}
@@ -10867,7 +10878,7 @@ store:
   	got := make(chan error, 1)
   	tookAt := make(chan time.Time, 1)
   	go func() {
-  		_, rel, err := second.Hold(ctx, 5*time.Second, "port49d two", func(h string) { waited <- h })
+  		_, rel, err := second.Hold(ctx, 10*time.Second, "port49d two", func(h string) { waited <- h })
   		tookAt <- time.Now()
   		if err == nil {
   			defer rel()
@@ -10889,7 +10900,7 @@ store:
   	select {
   	case <-lost:
   		lostAt = time.Now()
-  	case <-time.After(15 * time.Second):
+  	case <-time.After(20 * time.Second):
   		t.Fatal("the first's hold did not lapse")
   	}
   	select { // pre-flight M38: never an unbounded receive
@@ -10897,7 +10908,7 @@ store:
   		if err != nil {
   			t.Fatalf("the second, once the first lapsed: %v", err)
   		}
-  	case <-time.After(20 * time.Second):
+  	case <-time.After(30 * time.Second):
   		t.Fatal("the second never took the keyspace")
   	}
   	if took := <-tookAt; took.Before(lostAt) {
@@ -10913,7 +10924,7 @@ store:
   func TestTheHoldIsLostWhenItsKeyIsDeleted(t *testing.T) {
   	s := onShared(t, func() time.Time { return t0 })
   	ctx := context.Background()
-  	lost, release, err := s.Hold(ctx, 6*time.Second, "port49d one", func(string) {})
+  	lost, release, err := s.Hold(ctx, 10*time.Second, "port49d one", func(string) {})
   	if err != nil {
   		t.Fatal(err)
   	}
@@ -10928,17 +10939,91 @@ store:
   	}
   }
 
+  // A slow but healthy store keeps the hold at the 10s floor for 60s: each
+  // fence read answers late, well inside its ttl/6 deadline, and the
+  // lease's keepalives land late too (8b re-review R-M2; round 3b). This
+  // is a smoke check of the whole fence; TestTheFenceJudgesEachRead is what
+  // pins each decision (8b re-review 3 R3-M1).
+  func TestASlowAnsweredReadKeepsTheHold(t *testing.T) {
+  	srv := etcdtest.Start(t, etcdtest.Options{})
+  	proxy := etcdtest.NewProxy(t, strings.TrimPrefix(srv.Endpoint, "http://"))
+  	s, err := Open(Config{Endpoints: []string{"http://" + proxy.Addr()}, Prefix: etcdtest.Prefix()})
+  	if err != nil {
+  		t.Fatal(err)
+  	}
+  	defer s.Close()
+  	ctx, cancel := context.WithCancel(context.Background())
+  	defer cancel()
+  	lost, release, err := s.Hold(ctx, 10*time.Second, "port49d one", func(string) {})
+  	if err != nil {
+  		t.Fatal(err)
+  	}
+  	defer release()
+  	// Each fence read (a Get and a TimeToLive) then answers in about 0.6s
+  	// to 0.9s, with headroom under the read's 1.67s deadline, and a
+  	// keepalive's round trip is 0.6s or less, so a healthy lease reports 5s
+  	// or more at its lowest (floor(6.67 - 0.5 - 0.6)).
+  	proxy.Delay(150 * time.Millisecond)
+  	select {
+  	case <-lost:
+  		t.Fatal("a slow but healthy store lost the hold")
+  	case <-time.After(60 * time.Second):
+  	}
+  }
+
+  // The fence's keep-or-lose decision, read by read (8b re-review 3
+  // R3-M1). An answered read is judged at its send, by the TTL it reported,
+  // and lost only under half of ttl; a failed read is judged by the last
+  // answer's estimate at now.
+  func TestTheFenceJudgesEachRead(t *testing.T) {
+  	sent := time.Unix(1000, 0)
+  	n := func(v int64) *int64 { return &v }
+  	for _, c := range []struct {
+  		name     string
+  		ttl      time.Duration
+  		reported *int64
+  		now      time.Time
+  		expires  time.Time
+  		lose     bool
+  	}{
+  		{"an answered read reporting exactly half keeps it", 10 * time.Second, n(5),
+  			sent.Add(100 * time.Millisecond), time.Time{}, false},
+  		{"a slow answered read is judged at its send", 10 * time.Second, n(6),
+  			sent.Add(1500 * time.Millisecond), time.Time{}, false},
+  		{"an answered read under half loses it", 10 * time.Second, n(4),
+  			sent.Add(100 * time.Millisecond), time.Time{}, true},
+  		{"at 15s, 8s keeps it", 15 * time.Second, n(8), sent.Add(100 * time.Millisecond), time.Time{}, false},
+  		{"at 15s, 7s loses it", 15 * time.Second, n(7), sent.Add(100 * time.Millisecond), time.Time{}, true},
+  		{"a failed read with half or less left loses it", 10 * time.Second, nil,
+  			sent, sent.Add(5 * time.Second), true},
+  		{"a failed read with more left keeps it", 10 * time.Second, nil,
+  			sent, sent.Add(5*time.Second + time.Millisecond), false},
+  	} {
+  		lose, next := judge(c.ttl, sent, c.reported, c.now, c.expires)
+  		if lose != c.lose {
+  			t.Errorf("%s: lose %v, want %v", c.name, lose, c.lose)
+  		}
+  		want := c.expires
+  		if c.reported != nil {
+  			want = sent.Add(time.Duration(*c.reported) * time.Second)
+  		}
+  		if !next.Equal(want) {
+  			t.Errorf("%s: expires %v, want %v", c.name, next, want)
+  		}
+  	}
+  }
+
   // The daemon's identity cannot take the hold: meta/ is the broker's to
   // write (Ruling 10; pre-flight I15).
   func TestTheDaemonCannotTakeTheHold(t *testing.T) {
   	const prefix = "/port49/"
   	srv := provisioned(t, prefix)
-  	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+  	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
   	defer cancel()
-  	if _, _, err := openAs(t, srv, "port49-daemon", prefix).Hold(ctx, 5*time.Second, "x", func(string) {}); !errors.Is(err, ErrRefused) {
+  	if _, _, err := openAs(t, srv, "port49-daemon", prefix).Hold(ctx, 10*time.Second, "x", func(string) {}); !errors.Is(err, ErrRefused) {
   		t.Fatalf("the daemon took the hold: %v", err)
   	}
-  	lost, release, err := openAs(t, srv, "port49-broker", prefix).Hold(ctx, 5*time.Second, "x", func(string) {})
+  	lost, release, err := openAs(t, srv, "port49-broker", prefix).Hold(ctx, 10*time.Second, "x", func(string) {})
   	if err != nil {
   		t.Fatalf("the broker could not take the hold: %v", err)
   	}
@@ -10947,8 +11032,12 @@ store:
   }
   ```
 
-  Run: `go test ./internal/store/etcd/ -run 'TestHold|TestTheHold|TestTheDaemonCannotTakeTheHold' -count=1`
+  Run: `go test ./internal/store/etcd/ -run 'TestHold|TestTheHold|TestASlowAnsweredReadKeepsTheHold|TestTheFenceJudgesEachRead|TestTheDaemonCannotTakeTheHold' -count=1`
   Expected: FAIL to build (`Hold` undefined).
+
+  In `TestASlowAnsweredReadKeepsTheHold`, measure the fence's read time and the keepalive's
+  round trip once under the delay. Tune `Delay` until each read answers between 0.6s and 0.9s,
+  with the keepalive's round trip 0.6s or less. Report the values you used.
 
 - [ ] **Step 2: The hold and its fence.** Create `internal/store/etcd/meta.go`:
 
@@ -11055,11 +11144,20 @@ store:
   //
   // expires is when the lease expires at the latest by the last answer:
   // its send time plus the TTL it reported, which etcd counted after the
-  // send, so never later than etcd's own. A hold whose reads stop
-  // answering is lost once that has half of ttl or less left. Reads are at
-  // most ttl/3 apart (a tick, then a read up to ttl/6 long), so the loss
-  // comes at least ttl/6 before etcd can expire the lease and a second
-  // port49d take the keyspace. Stamping at the send, and reading the TTL
+  // send, so never later than etcd's own. An answered read is judged at
+  // its send time: the hold is lost when the TTL it reported is under half
+  // of ttl (the keepalives stalled while reads answer; re-check 2 M-B7),
+  // never by how long the read took, so a slow but healthy read keeps it
+  // (8b re-review R-M2). Under, not at: TTL is whole seconds rounded
+  // down, so a healthy lease at its lowest can report exactly ttl/2, and
+  // losing there would drop it (8b round 3b). With the reads not
+  // answering, it is lost once expires has half of ttl or less left.
+  // Reads are at most ttl/3 apart (a tick, then a read up to ttl/6 long).
+  // A read that kept the hold reported ttl/2 or more, and etcd's count is
+  // never below the reported one, so the lease had ttl/2 or more then;
+  // the next decision comes within ttl/3, with at least ttl/6 left. So
+  // the loss comes at least ttl/6 before etcd can expire the lease and a
+  // second port49d take the keyspace. Stamping at the send, and reading the TTL
   // rather than counting from the last answer, is what keeps that margin:
   // the lease's last keepalive can be up to ttl/3 older than the last
   // answered read. A process paused past that is the residual: its next
@@ -11094,29 +11192,69 @@ store:
   		case err == nil && (len(resp.Kvs) == 0 || clientv3.LeaseID(resp.Kvs[0].Lease) != sess.Lease() || left.TTL <= 0):
   			lose()
   			return
-  		case err == nil:
-  			expires = sent.Add(time.Duration(left.TTL) * time.Second)
-  		case time.Until(expires) <= ttl/2:
+  		}
+  		var reported *int64
+  		if err == nil {
+  			reported = &left.TTL
+  		}
+  		var gone bool
+  		if gone, expires = judge(ttl, sent, reported, time.Now(), expires); gone {
   			lose()
   			return
   		}
   	}
   }
+
+  // judge is the fence's keep-or-lose decision for one read, apart from the
+  // key and the lease's identity, so it is tested on its own (8b re-review 3
+  // R3-M1). An answered read (reported non-nil) is judged at its send: it
+  // loses when the TTL it reported is under half of ttl, whatever now is,
+  // and next is its send plus that TTL. A failed read loses once expires,
+  // the last answer's, has half of ttl or less left at now.
+  func judge(ttl time.Duration, sent time.Time, reported *int64, now, expires time.Time) (lose bool, next time.Time) {
+  	if reported != nil {
+  		left := time.Duration(*reported) * time.Second
+  		return left < ttl/2, sent.Add(left)
+  	}
+  	return expires.Sub(now) <= ttl/2, expires
+  }
   ```
 
   `TimeToLive`'s `TTL` is whole seconds, rounded down, which only moves the estimate earlier.
-  At the smallest `hold_ttl` (5 s) a healthy lease reports at least 3 s, above the 2.5 s line.
+  clientv3's keepalive loop sends the next keepalive ttl/3 after a response but checks only
+  every 500ms (`retryConnWait`, lease.go), so etcd renews at most ttl/3 + 0.5s + a round trip
+  apart. A healthy lease therefore reports at least floor(2·ttl/3 − 0.5s − RTT), which must not
+  fall under ttl/2 (the loss is at `< ttl/2`; round 3b). That holds however long the read
+  took, since an answered read is judged at its send.
+
+  The round trip to the etcd leader a hold survives is the least of three bounds (8b re-review
+  3 R3-I1):
+  - **the keepalive bound** above: about 1.17 s at 10 s, 1.5 s at 15 s, 0.5 s or less under
+    10 s (hence the 10 s floor);
+  - **the fence read:** a Get then a TimeToLive, two round trips within ttl/6, so about
+    0.83 s at 10 s and 1.25 s at 15 s. One read that times out usually drops the hold, since
+    the last answer's estimate is then at or under ttl/2 for most of the keepalive cycle;
+  - **`call_timeout`** (500 ms by default) on every token and context call, past which the
+    circuits open and the store is gone after `hold_ttl` anyway.
+
+  So `call_timeout` binds at the defaults. Every bound fails toward going dark, never toward
+  two port49d on one keyspace.
 
   Check `concurrency.WithContext` and `Session.Orphan` in v3.6.15's `concurrency` package (the
   pre-flight review compiled `WithContext`). If a name differs, use what the package offers, as
   Global Constraints allow.
 
-  Run: `go test ./internal/store/etcd/ -run 'TestHold|TestTheHold|TestTheDaemonCannotTakeTheHold' -count=1` — PASS.
+  Run: `go test ./internal/store/etcd/ -run 'TestHold|TestTheHold|TestASlowAnsweredReadKeepsTheHold|TestTheFenceJudgesEachRead|TestTheDaemonCannotTakeTheHold' -count=1` — PASS.
 
   Mutation checks (do them, report them, revert them):
   1. In `fence`, drop the key-gone case. `TestTheHoldIsLostWhenItsKeyIsDeleted` must fail.
   2. In `fence`, declare the loss at `time.Until(expires) <= 0` instead of `ttl/2`.
      `TestHoldIsOnePerKeyspaceAndLapses` must fail, or report that it raced; report which.
+  3. In `judge`, judge an answered read when it returns (`sent.Add(left).Sub(now) <= ttl/2`).
+     `TestTheFenceJudgesEachRead` must fail ("a slow answered read is judged at its send").
+  4. In `judge`, lose an answered read at `left <= ttl/2` instead of `< ttl/2`.
+     `TestTheFenceJudgesEachRead` must fail ("an answered read reporting exactly half keeps
+     it").
 
 - [ ] **Step 3: The broker's start, failing first.** In `internal/broker/refresh_test.go`, add:
 
@@ -12011,7 +12149,7 @@ store:
   	}
   	raw = append(raw, []byte(fmt.Sprintf("\nstore:\n  backend: etcd\n  packet_deadline: 1s\n  etcd:\n"+
   		"    endpoints: [https://%s]\n    ca_file: %s\n    daemon: {cert_file: %s, key_file: %s}\n"+
-  		"    broker: {cert_file: %s, key_file: %s}\n    call_timeout: 200ms\n    hold_ttl: 5s\n"+
+  		"    broker: {cert_file: %s, key_file: %s}\n    call_timeout: 200ms\n    hold_ttl: 10s\n"+
   		"    breaker: {failures: 3, open_for: 2s}\nadmin_socket: %s\n",
   		proxy.Addr(), filepath.Join(srv.Dir, "ca.pem"), dc, dk, bc, bk, filepath.Join(t.TempDir(), "a.sock")))...)
   	if err := os.WriteFile(cfgPath, raw, 0o600); err != nil {
@@ -12212,7 +12350,7 @@ store:
   	if st := dev.login("alice", tok); st != wire.AuthenStatusError || time.Since(start) > 1500*time.Millisecond {
   		t.Fatalf("a login on a hung store: status %d after %v", st, time.Since(start))
   	}
-  	waitWithin(t, &out, "closing every listener so that devices use their local method", 1, 20*time.Second)
+  	waitWithin(t, &out, "closing every listener so that devices use their local method", 1, 30*time.Second)
   	// Reset, not closed with a FIN: L28 measured the fast fall to local on
   	// a reset.
   	held.SetReadDeadline(time.Now().Add(5 * time.Second))
@@ -12940,6 +13078,33 @@ an operator can act on, and the start a check.
   Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
   ```
+
+---
+
+### Task 13b: The ledger names each write, so an earlier version of the same context is denied
+
+Added by the controller (Ruling T12-g; Ryan, 2026-10-03). The Task 12 re-review measured a
+put-back of an earlier version of the same context admitted at runtime: the ledger keyed on
+`ctx_id`, which a join, a refresh and a revocation keep ("Context-ID rollback",
+`task-12-rereview.md`).
+
+- `contextSecret` gains `write_id`, 16 random bytes in hex, drawn fresh by `sealContext` on
+  every seal; `contextSealVersion` is 3, and a form-2 record does not open (it is replaced at
+  its next login). The ledger compares the write ID where it compared the `ctx_id`. It never
+  leaves the sealing layer.
+- Every context write goes through a sealing layer `openStores` builds (one on memory, the
+  daemon's and the broker's on etcd), all on the process's one ledger.
+- Tests: `TestTheLedgerDeniesAnEarlierVersionOfTheSameContext` (a join, a self revocation, a
+  refresh), `TestTheLedgerAdmitsTheSameContextsWritesInFlightOrUnknown`,
+  `TestAContextOfFormTwoDoesNotOpen`; `TestTheLedgerDeniesAnotherLoginsContext` flipped; the
+  hung-store e2e (Task 12) puts back the earlier login's record without deleting it first.
+- Review I-1: a read that raced a write of the same context is stale (below the last's
+  revision), not put back. `GetContext` reads it again, up to twice, and `revokeUnopened`
+  reads once more and revokes only what is still denied at the same revision.
+- Docs: spec d35's ledger and replay bullets, the roles bullet and the tests clause; design §8
+  and §12 (a restore under a running port49d); the operator notes. The text Task 1, Task 4b and
+  Task 11 wrote and quoted above ("an earlier version of the same context is not") is
+  superseded here.
 
 ---
 
@@ -13958,6 +14123,8 @@ measurement on a hang of its own, the store returned between them. On each image
 - **A context written back over another login's is denied.** port49d remembers the `ctx_id`
   it last wrote at each device and username; a different one there is `store_unavailable`,
   counted as `port49_crypt_open_failures_total{record="context"}`, until the next login.
+  (7d-2, Task 13b: it remembers the write, so an earlier version of the same session is
+  denied too.)
 - `port49_store_operations_total{op}` no longer counts `index_context`, `unindex_context` or
   `unindex_ref` on the login path. Those are now part of `join_context`.
 
@@ -13976,17 +14143,24 @@ measurement on a hang of its own, the store returned between them. On each image
     - `packet_deadline` 2s (at most 2s: Junos times out at about 3s, L13);
     - `breaker` 5 failures and 5s open;
     - `max_in_flight` 64 token, 128 context, 4 bulk;
-    - `lease_grace` 5m, `start_timeout` 30s (`0` waits forever), `hold_ttl` 15s, `sweep_interval`
+    - `lease_grace` 5m, `start_timeout` 30s (`0` waits forever), `hold_ttl` 15s (10s to 60s; a
+      shorter hold can drop on a healthy etcd, so it is refused), `sweep_interval`
       10m.
 - **etcd itself.** Run three or five members in the devices' region, with:
   - client-certificate auth and auth enabled;
   - `--auto-compaction-mode=periodic --auto-compaction-retention=1h`, and defragmentation;
-  - a quota above the live records.
+  - a quota above the live records;
+  - **every call answered well under `call_timeout` (500ms).** That is the binding bound at
+    the defaults; the hold itself survives a round trip to the etcd leader of about 0.83s at `hold_ttl` 10s and
+    1.25s at 15s (its fence read). Past any of them port49d closes every listener: dark,
+    never two port49d on one keyspace. A cross-site etcd raises `call_timeout`,
+    `packet_deadline` and `hold_ttl` together.
 - **Who may write etcd.** The daemon's client certificate can write tokens, receipts, contexts
-  and the index. With it alone, a thief can replay records port49 sealed, never forge them:
-  while port49d runs, an earlier version of a session's own context; across a port49d
-  restart, another login's context put back while port49d was stopped (impersonation until
-  that session's ceiling or its device's next login). Protect the daemon's key like the
+  and the index. With it alone, a thief can replay records port49 sealed, never forge them.
+  While port49d runs, a session record put back is denied, an earlier version of the same
+  session included. Across a port49d restart, a record put back while port49d was stopped is
+  taken: another login's (impersonation until that session's ceiling or its device's next
+  login), or an earlier version of the session's own, which undoes a `revoke --mine`. Protect the daemon's key like the
   encryption key. After a suspected theft, have etcd stop trusting that certificate (a new
   CN, granted the daemon's role, and the old user deleted) before port49d next restarts.
 - **Backups.**
@@ -13997,6 +14171,18 @@ measurement on a hang of its own, the store returned between them. On each image
     certificate revocation is denied again at once, by the marks. One ended by `port49 revoke
     --mine`, or by `(device, username)`, is live again until its idle TTL: revoke it again after
     a restore.
+  - **Restored under a running port49d**, every session written since the snapshot is denied
+    `store_unavailable` until its next login (port49d sees the rollback as records put back),
+    and the next refresh revokes it. Restarting port49d before that refresh admits them again.
+    Restore with port49d stopped and this does not arise.
+  - **A restore rolls the marks back too:** a revocation added since the snapshot is gone from
+    etcd, and one lifted since is back. Restore with port49d stopped. Its start puts the
+    revocations file's marks back into etcd, applies every mark to the restored sessions, and
+    purges every unspent token, so a token redeemed since the snapshot cannot be redeemed
+    again. Then `port49 revoke --lift` again any revocation lifted since the snapshot.
+  - **Restore with `etcdutl snapshot restore --bump-revision 1000000000 --mark-compacted`**
+    (both in etcdutl v3.6.15). A billion is far above the writes since any snapshot worth
+    restoring, so etcd never reuses a revision port49 has seen for another write.
 - **One port49d per keyspace until plan 7e.** A second one waits and is not ready. On
   Kubernetes use `strategy: Recreate`. Never delete `meta/hold` by hand: stop the port49d that
   holds it.
@@ -14054,15 +14240,26 @@ measurement on a hang of its own, the store returned between them. On each image
   - any increase of `port49_contexts_reindexed_total`: an index record was deleted in etcd, and
     the context it hid has been re-indexed (each sweep, `sweep_interval`);
   - any increase of `port49_crypt_open_failures_total{record="context"}` with the key held: a
-    record altered in etcd, or another login's written back;
+    record altered in etcd, or another login's, or an earlier version of a session, written
+    back;
   - `port49_store_keyspace_held` 0 while port49d runs;
   - a client certificate within 30 days of expiry;
   - `port49_crypt_store_key_unknown` 1;
   - any `increase(port49_crypt_open_failures_total{record="token"}[10m])`.
 - **Key rotation across a restart.** Keep `encryption.previous` until the old key's records
-  expire. A start that finds the store last written under a key it does not hold says so, ends
-  those sessions before it serves, and sets `port49_crypt_store_key_unknown` to 1. A record that
-  will not open is named by its key id on stderr, once per 10 minutes.
+  expire. A start that finds the store last written under a key it does not hold says so, and
+  sets `port49_crypt_store_key_unknown` to 1. A record that will not open is named by its key id
+  on stderr, once per 10 minutes.
+- **A wrong `PORT49_ENC_V1` never revokes.** Sessions sealed under a key port49d does not hold
+  are denied `store_unavailable`, and the re-index and the refresh say each by device and
+  username, count it (`port49_contexts_reindex_failures_total`, the refresh's `failed`) and
+  leave it; `port49_policy_refresh_pending` stays 1. Fix the key and restart, and those
+  sessions answer again. A record that fails authentication, or is another login's or an earlier
+  version of the session written back, is tampered and is still revoked.
+- **A session record that does not decode** (a `c/` value garbled in etcd) is unreadable, as
+  one that will not open is: the next login on that device and username replaces it, and the
+  refresh and the re-index delete it at the revision they read, since nothing can revoke or
+  use it. It is said by its key alone, never its value.
 - **A `port49 token`, refresh, identity or explain behind a slow `port49 revoke`** now says `your
   revocation sent at … is still running on the broker; nothing was minted; run port49 token again
   once port49 revoke reports` (exit 1), not `the broker … is unreachable`.
