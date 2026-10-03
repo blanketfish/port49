@@ -339,3 +339,21 @@ func TestPutCorrectsOnlyAMarkInForce(t *testing.T) {
 		t.Fatalf("Put did not correct the time: %v", m.All())
 	}
 }
+
+// Count is told the marks standing by kind at once and after every change
+// that moves them, a lift included, and not for one that moves nothing.
+func TestCountFollowsEveryChange(t *testing.T) {
+	m := NewMarks()
+	m.Set(Revocation{Kind: RevocationCert, Key: "CN=x|0a", At: time.Unix(1, 0)}, true)
+	var got []string
+	m.Count(func(p, c int) { got = append(got, fmt.Sprintf("%d/%d", p, c)) })
+	alice := Revocation{Kind: RevocationPrincipal, Key: "user:alice@example.com", At: time.Unix(2, 0)}
+	m.Pend(alice)
+	m.Set(alice, true) // already standing: no change
+	m.Put(alice)       // a correction: no change
+	m.Set(alice, false)
+	m.Set(alice, false) // not standing: no change
+	if fmt.Sprint(got) != "[0/1 1/1 0/1]" {
+		t.Fatalf("counted %v", got)
+	}
+}

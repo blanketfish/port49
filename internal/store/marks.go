@@ -30,6 +30,9 @@ type Marks struct {
 	// unrecorded is each unwritten mark whose write failed (Unrecorded):
 	// once the store is seen to hold it, the feed tells it Standing.
 	unrecorded map[[2]string]bool
+	// counted is told how many marks stand by kind after every change, under
+	// the lock, so its calls are in the changes' order (Count).
+	counted func(principal, cert int)
 }
 
 // NewMarks is an empty set: no mark stands.
@@ -48,14 +51,46 @@ func (m *Marks) Set(r Revocation, on bool) {
 	defer m.mu.Unlock()
 	k := [2]string{r.Kind, r.Key}
 	if !on {
-		delete(m.m, k)
+		if _, ok := m.m[k]; ok {
+			delete(m.m, k)
+			m.count()
+		}
 		delete(m.unwritten, k)
 		delete(m.unrecorded, k)
 		return
 	}
 	if _, ok := m.m[k]; !ok {
 		m.m[k] = r.At
+		m.count()
 	}
+}
+
+// Count has fn told how many marks stand, by kind, now and after every
+// change: port49_revocations_in_force's one source, the marks this process
+// enforces (review M3). It is called under m's lock, so fn must not call
+// back into m. Set it once, before m is shared.
+func (m *Marks) Count(fn func(principal, cert int)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.counted = fn
+	m.count()
+}
+
+// count tells counted; m.mu is held.
+func (m *Marks) count() {
+	if m.counted == nil {
+		return
+	}
+	p, c := 0, 0
+	for k := range m.m {
+		switch k[0] {
+		case RevocationPrincipal:
+			p++
+		case RevocationCert:
+			c++
+		}
+	}
+	m.counted(p, c)
 }
 
 // Pend puts r in force as Set does, before its store write is known to

@@ -320,10 +320,9 @@ func initRevocationsCmd(args []string, stdout, stderr io.Writer) int {
 }
 
 // restoreRevocations puts every mark in the file in force in st, before
-// the broker serves a request, counts them, and returns them for the
-// listener's copy. A mark the store refuses (a certificate key with no
+// the broker serves a request, and returns them for the listener's copy. A mark the store refuses (a certificate key with no
 // issuer) is named by its index; run names the file.
-func restoreRevocations(ctx context.Context, st store.Store, path string, m *metrics.Metrics) ([]store.Revocation, error) {
+func restoreRevocations(ctx context.Context, st store.Store, path string) ([]store.Revocation, error) {
 	rs, err := loadRevocations(path)
 	if err != nil {
 		return nil, err
@@ -333,7 +332,6 @@ func restoreRevocations(ctx context.Context, st store.Store, path string, m *met
 			return nil, fmt.Errorf("revocation %d: %w", i, err)
 		}
 	}
-	countRevocations(rs, m)
 	return rs, nil
 }
 
@@ -386,7 +384,6 @@ func persister(st store.Store, path string, m *metrics.Metrics) func(context.Con
 			rs, err := st.ListRevocations(pctx)
 			cancel()
 			if err == nil {
-				countRevocations(rs, m)
 				err = write(path, rs)
 			}
 			mu.Lock()
@@ -451,16 +448,6 @@ func persister(st store.Store, path string, m *metrics.Metrics) func(context.Con
 			return fmt.Errorf("%s: %w", path, err)
 		}
 		return nil
-	}
-}
-
-func countRevocations(rs []store.Revocation, m *metrics.Metrics) {
-	n := map[string]int{store.RevocationPrincipal: 0, store.RevocationCert: 0}
-	for _, r := range rs {
-		n[r.Kind]++
-	}
-	for by, c := range n {
-		m.RevocationsInForce.WithLabelValues(by).Set(float64(c))
 	}
 }
 

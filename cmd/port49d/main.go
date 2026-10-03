@@ -806,6 +806,12 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 	// the restore below, and kept by the broker's Revoke and Lift; with no
 	// broker there are no marks, and it stays empty.
 	authMarks := store.NewMarks()
+	// port49_revocations_in_force is these marks, the ones this process
+	// enforces, and nothing else sets it (review M3).
+	authMarks.Count(func(principal, cert int) {
+		m.RevocationsInForce.WithLabelValues(store.RevocationPrincipal).Set(float64(principal))
+		m.RevocationsInForce.WithLabelValues(store.RevocationCert).Set(float64(cert))
+	})
 	if brk != nil {
 		brk.Sessions = sessions
 		// Every mark in the file is in force before the broker serves a
@@ -817,7 +823,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		// until it does, the listeners closed (pre-flight M41). Any other
 		// error is a file that does not load.
 		for {
-			marks, err = restoreRevocations(ctx, brk.Store, cfg.Broker.RevocationsFile, m)
+			marks, err = restoreRevocations(ctx, brk.Store, cfg.Broker.RevocationsFile)
 			if err == nil || !sts.persistent || !errors.Is(err, store.ErrUnavailable) {
 				break
 			}
@@ -1081,12 +1087,9 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		marksDone := make(chan struct{})
 		go func() {
 			defer close(marksDone)
-			// Every change is counted in force (Ruling T9-c), the daemon's
-			// marks being every mark this process holds.
-			store.FollowMarks(mctx, sts.etcd, authMarks, markRev, func(c store.MarkChange) {
-				brk.MarkChanged(c)
-				countRevocations(authMarks.All(), m)
-			},
+			// Every change is counted in force as it is applied
+			// (authMarks.Count; Ruling T9-c).
+			store.FollowMarks(mctx, sts.etcd, authMarks, markRev, brk.MarkChanged,
 				func(up bool) {
 					v := 0.0
 					if up {

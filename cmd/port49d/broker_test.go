@@ -859,7 +859,7 @@ func TestRunRestoresRevocationsBeforeTheBrokerServes(t *testing.T) {
 			t.Fatal(err)
 		}
 		st := memory.New(time.Now)
-		if _, err := restoreRevocations(context.Background(), st, cfg.Broker.RevocationsFile, newMetrics()); err != nil {
+		if _, err := restoreRevocations(context.Background(), st, cfg.Broker.RevocationsFile); err != nil {
 			t.Fatal(err)
 		}
 		srv, _, err := buildBroker(cfg, "inventory_file "+cfg.InventoryFile, st, seedMinter(),

@@ -58,17 +58,13 @@ func TestRevocationsSurviveARestart(t *testing.T) {
 		t.Fatalf("the file: %v %v", fi, err)
 	}
 	after := memory.New(time.Now)
-	m := newMetrics()
-	rs, err := restoreRevocations(ctx, after, path, m)
+	rs, err := restoreRevocations(ctx, after, path)
 	if err != nil || len(rs) != 2 {
 		t.Fatalf("%d %v", len(rs), err)
 	}
 	got, err := after.GetRevocation(ctx, store.RevocationPrincipal, "user:alice@example.com")
 	if err != nil || !got.At.Equal(at) || got.Origin != "admin_socket uid 0" {
 		t.Fatalf("%+v %v", got, err)
-	}
-	if testutil.ToFloat64(m.RevocationsInForce.WithLabelValues("cert")) != 1 {
-		t.Fatal("port49_revocations_in_force{by=cert}")
 	}
 }
 
@@ -376,7 +372,7 @@ func TestAMarkTheStoreRefusesRefusesTheStart(t *testing.T) {
 		`"at":"2026-10-02T03:12:09Z","origin":"o"}]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := restoreRevocations(context.Background(), memory.New(time.Now), path, newMetrics()); err == nil ||
+	if _, err := restoreRevocations(context.Background(), memory.New(time.Now), path); err == nil ||
 		!strings.Contains(err.Error(), "revocation 0") {
 		t.Fatalf("a certificate mark with no issuer: %v", err)
 	}

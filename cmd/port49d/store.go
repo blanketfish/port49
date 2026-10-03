@@ -784,7 +784,6 @@ func startOnPersistentStore(ctx context.Context, brk *broker.Broker, st store.St
 		}
 	}
 	*marks = all
-	countRevocations(all, m)
 	if err := retry("re-indexing the kept contexts the index lost", func() error {
 		// e is the daemon's raw store, outside the guard, as the sweep's is:
 		// the scan gets the bulk pool's deadline here.
