@@ -831,7 +831,9 @@ func (w *wrapped) RewriteContext(ctx context.Context, k store.ContextKey, rev ui
 
 // DeleteContext is addressed by key alone, and passes through. The ledger
 // keeps the key's mark: a record put back after the delete is still below
-// it (Ledger).
+// it, or is the record deleted, at the mark, which is admitted. Every
+// delete removes a record past its sealed ceiling or one that will not
+// open, so that one is denied anyway (Ledger; Task 7 review M-5).
 func (w *wrapped) DeleteContext(ctx context.Context, k store.ContextKey) error {
 	return w.inner.DeleteContext(ctx, k)
 }

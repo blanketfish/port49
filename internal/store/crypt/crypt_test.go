@@ -1223,6 +1223,13 @@ func TestTheLedgerPrunesAKeyPastItsKeep(t *testing.T) {
 	if n := l.Prune(now.Add(time.Hour + DefaultLedgerKeep + time.Second)); n != 1 || l.Len() != 1 {
 		t.Fatalf("pruned %d, %d left: the never context's mark must stay", n, l.Len())
 	}
+	// A key pruned since its mark was handed out is owed nothing again
+	// (Task 7 review M-4).
+	l.Dirty()
+	l.Redirty([]store.LedgerMark{{Key: ka, Seq: 10}})
+	if n := l.Pending(); n != 0 {
+		t.Fatalf("a pruned key is owed again: %d pending", n)
+	}
 }
 
 // The sequence a write seals is above the revision it compares on, above
@@ -1428,6 +1435,17 @@ func TestTheRevocationFloorIsClearedOnlyByALaterWrite(t *testing.T) {
 	l.revoked(k, now.Add(-time.Minute), 0)
 	if got := l.floor(k); !got.Equal(now) {
 		t.Fatalf("the floor is not the latest revocation: %v", got)
+	}
+	// A plaintext revocation read at the mark does not lower a floor held
+	// through the revision seen: a record sealed before the revocation,
+	// above the mark, still keeps it (Task 7 review M-3).
+	l = NewLedger()
+	l.Observe(k, 7, 7, time.Time{}, time.Time{})
+	l.revoked(k, now, 101) // through 100
+	l.Observe(k, 7, 8, now.Add(time.Minute), time.Time{})
+	l.Observe(k, 50, 50, time.Time{}, time.Time{}) // sealed before the revocation
+	if got := l.floor(k); got.IsZero() {
+		t.Fatal("a plaintext revocation at the mark lowered the floor's sequence")
 	}
 }
 

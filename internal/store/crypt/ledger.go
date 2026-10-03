@@ -46,7 +46,11 @@ const DefaultLedgerKeep = 24 * time.Hour
 //     deadline or an outage may have committed it, and if it did, the next
 //     read finds the higher sequence and admits it.
 //   - Deletes forget nothing: a record put back after a delete is still
-//     below the mark.
+//     below the mark, unless it is the record deleted, at the mark, which
+//     is admitted. That is safe only because every delete removes a record
+//     past its sealed ceiling, which denies it put back, or one that will
+//     not open (Task 7 review M-5): a delete that ends a live session in
+//     place of a revocation would need a mark of its own.
 //
 // A record below the mark is another login's, or an earlier version of
 // the same context, written back. The base is the revision just past the
@@ -57,7 +61,7 @@ const DefaultLedgerKeep = 24 * time.Hour
 // (LoadLedger, Seed). Each only raises. A write of unknown outcome needs
 // nothing: if it landed, its sequence is the higher and the next read
 // admits it; if not, the store holds the record the mark names. A delete
-// forgets nothing.
+// forgets nothing (the rule's last item says what that covers).
 //
 // A revocation whose plaintext mark landed and whose seal did not is the
 // key's revocation floor (final review 7d-2 I-1): GetContext takes the
@@ -271,12 +275,15 @@ func (l *Ledger) Dirty() []store.LedgerMark {
 	return out
 }
 
-// Redirty marks ms owed again: the keeper's write of them failed.
+// Redirty marks ms owed again: the keeper's write of them failed. A key
+// pruned since is owed nothing.
 func (l *Ledger) Redirty(ms []store.LedgerMark) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	for _, m := range ms {
-		l.dirty[m.Key] = true
+		if l.m[m.Key] != nil {
+			l.dirty[m.Key] = true
+		}
 	}
 }
 
@@ -289,6 +296,13 @@ func (l *Ledger) Pending() int {
 
 // Prune drops every mark past its keep after the latest ceiling seen at
 // its key, and returns how many. A mark that saw a never context stays.
+// So does an entry that holds only a revocation floor, set at a key with
+// no mark (revoked) and no ceiling seen since: it is one per revoked
+// record this process could not open, say each form-3 context at the 7e
+// upgrade, and the next login at the key gives it a mark and a ceiling.
+// Dropping it would let a record put back from before the revocation, at
+// a key with no mark, lift it; keeping it costs an entry until the
+// process exits (Task 7 review M-4).
 func (l *Ledger) Prune(now time.Time) int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
