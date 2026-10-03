@@ -576,7 +576,10 @@ func (b *Broker) refreshContext(ctx context.Context, cur *policy.Policy, priors 
 		// outliving its blob would be denied blob_unavailable for nothing
 		// (final review M-4).
 		ttl := blobTTL(max(step.age, b.ContextIdleTTL), b.MaxSessionAge)
-		if err := b.putBlob(ctx, step.write.BlobHash, step.body, ttl); err != nil {
+		one := decision.NewBuffer()
+		err = b.putBlob(ctx, one, step.write.BlobHash, step.body, ttl)
+		one.Flush(b.Log, b.blobLanded)
+		if err != nil {
 			return "", err
 		}
 		switch err := b.Store.SetContextPolicy(ctx, k, c.PolicyRev, *step.write); {

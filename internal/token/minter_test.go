@@ -776,3 +776,27 @@ func TestAResultPrintsNoToken(t *testing.T) {
 		}
 	}
 }
+
+// A request that names a log gets the permit record there, and the minter's
+// own log gets none: the broker buffers a mint's records until it lets go of
+// the policy (plan 7e, Ruling 10).
+func TestAMintWritesItsRecordWhereTheRequestSays(t *testing.T) {
+	m, _, log := minter(t)
+	buf := decision.NewBuffer()
+	if _, err := m.Mint(context.Background(), Request{Subject: subject(), Device: "leaf-01", BlobHash: "sha256:b",
+		TTL: time.Hour, Log: buf}); err != nil {
+		t.Fatal(err)
+	}
+	if log.Len() != 0 {
+		t.Fatalf("the minter's own log got %s", log)
+	}
+	var got []decision.Record
+	buf.Flush(emitTo(func(r decision.Record) { got = append(got, r) }), nil)
+	if len(got) != 1 || got[0].Event != decision.EventMint || got[0].Verdict != decision.VerdictPermit {
+		t.Fatalf("buffered %+v", got)
+	}
+}
+
+type emitTo func(decision.Record)
+
+func (f emitTo) Emit(r decision.Record) { f(r) }

@@ -172,6 +172,15 @@ func (f *fixture) liveContext(t *testing.T, device, username, principal, certKey
 	}
 }
 
+// putBlobLogged is putBlob outside a mint, as the refresh writes a blob:
+// its record is written to b.Log at once, and its hash marked when it lands.
+func (b *Broker) putBlobLogged(ctx context.Context, hash string, body []byte, ttl time.Duration) error {
+	one := decision.NewBuffer()
+	err := b.putBlob(ctx, one, hash, body, ttl)
+	one.Flush(b.Log, b.blobLanded)
+	return err
+}
+
 // liveContextAt writes a live context for principal on device under
 // username, authenticated at auth with the given ceiling (zero: none), as a
 // redemption of a token the policy in force minted would: its blob is that
@@ -192,7 +201,7 @@ func (f *fixture) liveContextAt(t *testing.T, device, username, principal, certK
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := f.b.putBlob(ctx, h, body, 24*time.Hour); err != nil {
+		if err := f.b.putBlobLogged(ctx, h, body, 24*time.Hour); err != nil {
 			t.Fatal(err)
 		}
 		hash = h

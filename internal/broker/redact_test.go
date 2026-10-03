@@ -27,7 +27,7 @@ func TestABlobEventNeverCarriesARuleSecret(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := b.putBlob(context.Background(), hash, body, b.MaxSessionAge); err != nil {
+		if err := b.putBlobLogged(context.Background(), hash, body, b.MaxSessionAge); err != nil {
 			t.Fatal(err)
 		}
 		return hash, body
@@ -83,7 +83,7 @@ func TestABlobEventRedactsPipePermitsAndSecretClasses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := b.putBlob(context.Background(), hash, body, b.MaxSessionAge); err != nil {
+	if err := b.putBlobLogged(context.Background(), hash, body, b.MaxSessionAge); err != nil {
 		t.Fatal(err)
 	}
 	if s := log.String(); strings.Contains(s, "5ecret") || !strings.Contains(s, `"redacted":true`) ||

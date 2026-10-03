@@ -51,6 +51,10 @@ const (
 	maxIdempotencyKey = 128
 )
 
+// blobsSeenMax bounds blobsSeen: a policy rewritten on a schedule mints a
+// new hash per device per rewrite, and the set must not grow with them.
+const blobsSeenMax = 4096
+
 // Broker is the slice's broker. Every field is required but Redact, Sessions
 // (which only Revoke needs, and refuses without), Conns, Persist,
 // RevokeTimeout, CertStatus and OnUnavailable.
@@ -124,7 +128,12 @@ type Broker struct {
 	// detached runs against a slow store (ruling M4). Guarded by mu.
 	ownRevoking map[string]bool
 
-	mu        sync.Mutex
+	mu sync.Mutex
+	// blobsSeen is which blob hashes this process has written into its
+	// decision log, bounded at blobsSeenMax and forgotten whole there: a
+	// forgotten hash is emitted again, which costs one duplicate record
+	// (plan 7e, Ruling 9). Per process, by design: each process's log stays
+	// replayable alone.
 	blobsSeen map[string]bool
 	// quarantineRecorded is, by ctx_id, the bundle under which a refresh last
 	// recorded the context left for a quarantine: one record per context per
@@ -323,12 +332,18 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
 	// mid-response, must not hold a reload — and, behind it, every mint and
 	// every refresh — until TCP gives up. The deferred call is for a panic,
 	// which net/http recovers: a hold it leaked would stop every reload.
+	//
+	// Every record written under the hold goes to buf, and is written to the
+	// log once the hold is let go: a log sink that stalls must not hold a
+	// reload either (plan 7e, Ruling 10).
+	buf := decision.NewBuffer()
 	pol, hold := b.Policy.Hold()
 	held := true
 	release := func() {
 		if held {
 			held = false
 			hold()
+			buf.Flush(b.Log, b.blobLanded)
 		}
 	}
 	defer release()
@@ -339,7 +354,7 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
 	resp := api.MintResponse{Principal: principal}
 	resp.Subject, _ = pol.SubjectOf(principal)
 	for _, name := range req.Devices {
-		item, err := b.mintOne(ctx, pol, principal, cred, authTime, name, req, res, bodyHash)
+		item, err := b.mintOne(ctx, buf, pol, principal, cred, authTime, name, req, res, bodyHash)
 		if errors.Is(err, token.ErrIdempotencyInProgress) {
 			// This device's hold was taken by another request under the
 			// key, or lapsed before its turn: two retries that both
@@ -624,11 +639,13 @@ func (b *Broker) supersede(k store.TokenKey, at time.Time) {
 
 // mintOne answers one device. The only error it returns is
 // ErrIdempotencyInProgress, which is the whole request's; every other refusal
-// is an item.
-func (b *Broker) mintOne(ctx context.Context, pol *policy.Policy, principal string, cred store.Credential,
-	authTime time.Time, name string, req api.MintRequest, hold *token.Reservation, bodyHash string) (api.MintItem, error) {
+// is an item. Every record it writes goes to buf, the request's buffer
+// (tokens).
+func (b *Broker) mintOne(ctx context.Context, buf decision.Emitter, pol *policy.Policy, principal string,
+	cred store.Credential, authTime time.Time, name string, req api.MintRequest, hold *token.Reservation,
+	bodyHash string) (api.MintItem, error) {
 	deny := func(reason decision.Reason, platform string) api.MintItem {
-		b.emit(decision.Record{TS: b.Now(), Event: decision.EventMint, Verdict: decision.VerdictDeny, Reason: reason,
+		b.emitTo(buf, decision.Record{TS: b.Now(), Event: decision.EventMint, Verdict: decision.VerdictDeny, Reason: reason,
 			Principal: principal, Auth: &decision.Auth{Method: cred.Method},
 			Device: &decision.Device{Name: name, Platform: platform}})
 		return api.MintItem{Device: name, Verdict: decision.VerdictDeny, Reason: string(reason)}
@@ -715,7 +732,7 @@ func (b *Broker) mintOne(ctx context.Context, pol *policy.Policy, principal stri
 		b.logf("broker: the policy for %s on %q compiled to a blob the daemon would refuse: %v", principal, name, err)
 		return b.fault(name, "broker_error", "the broker could not compile this device's policy; tell the operator"), nil
 	}
-	if err := b.putBlob(ctx, hash, body, blobTTL(age, b.MaxSessionAge)); err != nil {
+	if err := b.putBlob(ctx, buf, hash, body, blobTTL(age, b.MaxSessionAge)); err != nil {
 		return deny(decision.StoreUnavailable, dev.Platform), nil
 	}
 	b.mu.Lock()
@@ -731,7 +748,7 @@ func (b *Broker) mintOne(ctx context.Context, pol *policy.Policy, principal stri
 		Device: name, Platform: dev.Platform, BlobHash: hash, WithEnable: req.Enable,
 		TTL:         time.Duration(req.TTLSeconds) * time.Second,
 		Reservation: hold, BodyHash: bodyHash, SupersededAt: supersededAt,
-		Policy: &decision.Policy{Bundle: pol.Bundle, Subject: res.Subject, Grants: res.Grants}})
+		Policy: &decision.Policy{Bundle: pol.Bundle, Subject: res.Subject, Grants: res.Grants}, Log: buf})
 	var capped *token.ErrTooManyOutstanding
 	switch {
 	case errors.Is(err, token.ErrIdempotencyInProgress):
@@ -787,45 +804,50 @@ func (b *Broker) fault(name, code, detail string) api.MintItem {
 	return api.MintItem{Device: name, Error: code, Detail: detail}
 }
 
-// putBlob writes an encoded blob under its hash and emits it into the log the
-// first time this process writes it (spec §5.1.1; §13, decision 19). Its store
-// TTL is ttl, at least the ceiling of any context it backs (blobTTL): a
-// context's session_expires is its auth_time plus that, and auth_time is never
-// later than the mint, so no context this blob backs can outlive it. PutBlob
-// keeps the later expiry, so a re-put never shortens it. A blob is emitted
-// once per process, and the log's first copy serves every later re-put,
-// including one after the store's copy expired (plan 3, Decided 8).
-//
-// The emit happens under b.mu, so a second request for the same hash cannot
-// return from putBlob, and so cannot reach Mint, until the blob record is
-// written: within one sink, every mint record naming a hash follows that
-// hash's blob record. Emit is one buffered line write, so that is all the lock
-// holds.
-//
-// A blob record the sink refuses is not marked emitted, so the next mint that
-// writes the hash emits it again (roadmap, plan 4): replay reads the log alone,
-// and a mint record naming a blob the log never carried cannot be replayed.
-// The refusal is counted by port49_decision_log_write_failures_total. An
-// Emitter that cannot report a refusal is trusted, as before.
-func (b *Broker) putBlob(ctx context.Context, hash string, body []byte, ttl time.Duration) error {
+// putBlob writes an encoded blob under its hash, and buffers its blob
+// record into out the first time this process writes it (spec §5.1.1;
+// §13, decision 19). out is the request's buffer, written to the log once
+// the request lets go of the policy (plan 7e, Ruling 10); a hash is marked
+// emitted only when its record lands (blobLanded), so a request that finds
+// a hash unmarked buffers a blob record of its own, and within one sink
+// every mint record follows one for its hash. Its store TTL is ttl
+// (blobTTL); PutBlob keeps the later expiry.
+func (b *Broker) putBlob(ctx context.Context, out decision.Emitter, hash string, body []byte, ttl time.Duration) error {
 	if err := b.Store.PutBlob(ctx, hash, body, ttl); err != nil {
 		return err
 	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.blobsSeen == nil {
-		b.blobsSeen = map[string]bool{}
-	}
-	if !b.blobsSeen[hash] {
-		rec := decision.Record{TS: b.Now(), Event: decision.EventBlob, Blob: b.blobEvent(hash, body)}
-		if sink, ok := b.Log.(decision.Sink); ok {
-			b.blobsSeen[hash] = sink.Write(rec) == nil
-		} else {
-			b.Log.Emit(rec)
-			b.blobsSeen[hash] = true
-		}
+	if !b.blobSeen(hash) {
+		out.Emit(decision.Record{TS: b.Now(), Event: decision.EventBlob, Blob: b.blobEvent(hash, body)})
 	}
 	return nil
+}
+
+// blobLanded is Buffer.Flush's landed for the request's buffer: a blob
+// record the sink took marks its hash emitted. One the sink refused is not
+// marked, so the next mint that writes the hash emits it again (roadmap,
+// plan 4).
+func (b *Broker) blobLanded(r decision.Record, err error) {
+	if err == nil && r.Event == decision.EventBlob && r.Blob != nil {
+		b.markBlob(r.Blob.Hash)
+	}
+}
+
+// markBlob records that hash's blob record landed in the log, forgetting
+// every hash first when blobsSeen is full.
+func (b *Broker) markBlob(hash string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.blobsSeen == nil || len(b.blobsSeen) >= blobsSeenMax {
+		b.blobsSeen = map[string]bool{}
+	}
+	b.blobsSeen[hash] = true
+}
+
+// blobSeen reports whether hash's blob record has landed in the log.
+func (b *Broker) blobSeen(hash string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.blobsSeen[hash]
 }
 
 // blobEvent is the blob event's body: the blob as stored, unless a rule's
@@ -900,7 +922,12 @@ func (b *Broker) logf(format string, args ...any) {
 
 // emit writes a refusal the broker decided itself, and counts it.
 func (b *Broker) emit(r decision.Record) {
-	b.Log.Emit(r)
+	b.emitTo(b.Log, r)
+}
+
+// emitTo is emit into to: a request's buffer, under the policy hold.
+func (b *Broker) emitTo(to decision.Emitter, r decision.Record) {
+	to.Emit(r)
 	b.Metrics.Decisions.WithLabelValues(r.Event, r.Verdict, string(r.Reason)).Inc()
 }
 

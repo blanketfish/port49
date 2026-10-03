@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -639,5 +640,126 @@ func TestABatchNamingADeviceTwiceIsRefused(t *testing.T) {
 	w := f.post(context.Background(), f.state(f.alice), `{"devices":["leaf1","leaf1"]}`, "01L")
 	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "twice") {
 		t.Fatalf("%s", answer(w))
+	}
+}
+
+// stallSink is a log whose Write blocks until release is closed, and says
+// when the first Write has begun.
+type stallSink struct {
+	began   chan struct{}
+	once    sync.Once
+	release chan struct{}
+	mu      sync.Mutex
+	got     []decision.Record
+}
+
+func newStallSink() *stallSink {
+	return &stallSink{began: make(chan struct{}), release: make(chan struct{})}
+}
+func (s *stallSink) Emit(r decision.Record) { _ = s.Write(r) }
+func (s *stallSink) Write(r decision.Record) error {
+	s.once.Do(func() { close(s.began) })
+	<-s.release
+	s.mu.Lock()
+	s.got = append(s.got, r)
+	s.mu.Unlock()
+	return nil
+}
+
+// A log sink that stalls during a mint never holds a reload: the mint
+// writes its records only once it has let go of the policy, so Swap
+// returns while the sink is still stalled, and once it drains the mint's
+// records land, in order (plan 7e Ruling 10; 4b Task 4).
+func TestAStalledLogNeverHoldsAReload(t *testing.T) {
+	sink := newStallSink()
+	f := newFixture(t, 8)
+	b := f.b
+	b.Log = sink
+	b.Minter = token.NewMinter(f.st, sink, rand.Reader, token.TagKey([]byte("k")), b.Now, 8)
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() { done <- f.post(context.Background(), f.state(f.alice), `{"devices":["leaf1"]}`, "") }()
+	select {
+	case <-sink.began:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the mint never wrote a record")
+	}
+	swapped := make(chan struct{})
+	go func() { b.Policy.Swap(b.Policy.Load()); close(swapped) }()
+	select {
+	case <-swapped:
+	case <-time.After(time.Second):
+		t.Fatal("a stalled log held the reload: the mint still held the policy while it wrote")
+	}
+	close(sink.release)
+	if rr := <-done; rr.Code != http.StatusOK {
+		t.Fatalf("the mint: %d %s", rr.Code, rr.Body)
+	}
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if len(sink.got) < 2 || sink.got[0].Event != decision.EventBlob || sink.got[1].Event != decision.EventMint {
+		t.Fatalf("records %+v", sink.got)
+	}
+}
+
+// Two requests minting the same blob at once: each request's run of lines
+// carries a blob record before its mint record, unless the hash was marked
+// emitted, which happens only once a blob record has landed.
+//
+// A regression guard, not a failing-first test (pre-flight M4): today
+// putBlob writes the blob record under b.mu before any mint record, so it
+// passes before this task. It pins that buffering keeps the order.
+func TestEveryMintRecordFollowsItsBlobRecord(t *testing.T) {
+	buf := &lockedBuffer{}
+	f := newFixture(t, 8)
+	b := f.b
+	b.Log = decision.NewJSONLines(buf)
+	b.Minter = token.NewMinter(f.st, b.Log, rand.Reader, token.TagKey([]byte("k")), b.Now, 8)
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			f.post(context.Background(), f.state(f.alice), `{"devices":["leaf1"]}`, "")
+		}()
+	}
+	wg.Wait()
+	seen := map[string]bool{}
+	mints := 0
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		var r map[string]any
+		if err := json.Unmarshal([]byte(line), &r); err != nil {
+			t.Fatal(err)
+		}
+		switch r["event"] {
+		case decision.EventBlob:
+			seen[r["blob"].(map[string]any)["hash"].(string)] = true
+		case decision.EventMint:
+			mints++
+			h, _ := r["mint"].(map[string]any)["blob"].(string) // decision.Mint.BlobHash
+			if h == "" || !seen[h] {
+				t.Fatalf("a mint record names blob %q before any blob record for it:\n%s", h, buf.String())
+			}
+		}
+	}
+	if mints != 8 {
+		t.Fatalf("%d mint records, want 8:\n%s", mints, buf.String())
+	}
+}
+
+// blobsSeen forgets every hash once it holds blobsSeenMax, so a policy
+// rewritten on a schedule cannot grow it without bound (4b m10): the next
+// mint of a forgotten hash writes its blob record again, which replay reads
+// as a duplicate.
+func TestBlobsSeenIsBounded(t *testing.T) {
+	b := newFixture(t, 8).b
+	for i := 0; i < blobsSeenMax; i++ {
+		b.markBlob(fmt.Sprintf("h%d", i))
+	}
+	if b.blobSeen("h0") != true {
+		t.Fatal("a hash marked was not seen")
+	}
+	b.markBlob("one-more")
+	if b.blobSeen("h0") || !b.blobSeen("one-more") || len(b.blobsSeen) != 1 {
+		t.Fatalf("at the bound blobsSeen kept %d hashes", len(b.blobsSeen))
 	}
 }

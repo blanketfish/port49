@@ -166,6 +166,10 @@ type Request struct {
 	// Policy is the subject and grants that allowed this mint. The minter
 	// judges none of it and copies it onto the mint record (spec §5.7).
 	Policy *decision.Policy
+	// Log is where Mint writes its permit record; nil is the minter's own
+	// log. The broker passes a per-request decision.Buffer, flushed once
+	// the request lets go of the policy (plan 7e, Ruling 10).
+	Log decision.Emitter
 }
 
 // idemScope puts the device in the idempotency key. §17's key is one header
@@ -477,7 +481,11 @@ func (m *Minter) Mint(ctx context.Context, r Request) (Result, error) {
 		}
 	}
 
-	m.log.Emit(decision.Record{TS: m.now(), Event: decision.EventMint, Verdict: decision.VerdictPermit,
+	log := m.log
+	if r.Log != nil {
+		log = r.Log
+	}
+	log.Emit(decision.Record{TS: m.now(), Event: decision.EventMint, Verdict: decision.VerdictPermit,
 		Reason: decision.GrantsMatched, Principal: r.Subject.Principal,
 		Auth:       &decision.Auth{Method: r.Subject.Credential.Method},
 		Device:     &decision.Device{Name: r.Device, Platform: r.Platform},
