@@ -287,7 +287,7 @@ func TestReindexContextsMarksOneAMarkRevokes(t *testing.T) {
 	}
 	at := f.now.Add(-time.Minute)
 	f.b.Marks = store.NewMarks()
-	f.b.Marks.Put(store.Revocation{Kind: store.RevocationPrincipal, Key: alicePrincipal, At: at})
+	f.b.Marks.Set(store.Revocation{Kind: store.RevocationPrincipal, Key: alicePrincipal, At: at}, true)
 	if n, err := f.b.ReindexContexts(ctx, []store.IndexedRef{{ContextRef: ref}}); err != nil || n != 1 {
 		t.Fatalf("ReindexContexts = %d, %v", n, err)
 	}

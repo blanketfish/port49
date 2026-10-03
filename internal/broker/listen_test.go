@@ -937,6 +937,7 @@ func TestAMarkFromTheFeedClosesOnlyWhatItNames(t *testing.T) {
 // Each watch's after is sent on afters once those changes are delivered.
 type replayFeed struct {
 	history []replayed
+	marks   []store.Revocation // what a load reads
 	fail    chan error
 	afters  chan uint64
 }
@@ -948,7 +949,7 @@ type replayed struct {
 }
 
 func (f *replayFeed) Revocations(context.Context) (uint64, []store.Revocation, error) {
-	return 7, nil, nil
+	return 7, f.marks, nil
 }
 
 func (f *replayFeed) WatchRevocations(ctx context.Context, after uint64,
@@ -1019,7 +1020,7 @@ func (putRevocationUnavailable) PutRevocation(context.Context, store.Revocation)
 }
 
 // A revocation the store could not record stands in the daemon's marks
-// until a lift or a restart, as Revoke's error says, and a compacted
+// until a lift on this port49d or its restart, as Revoke's error says, and a compacted
 // watch's reload, whose load lacks the mark, does not lift it there or
 // tell the listener of it (Ruling T9-b). The listener is not reached by
 // such a mark at all (spec §5.1.4: a mark that cannot be written revokes
@@ -1069,5 +1070,149 @@ func TestAReloadNeverLiftsAMarkItsWriteLost(t *testing.T) {
 	}
 	if b.Marks.Holds(store.RevocationPrincipal, "user:alice@example.com") {
 		t.Fatal("the lift of a mark the store could not record left it standing")
+	}
+}
+
+// A mark this process could not record (Revoke's "could not be recorded")
+// reaches its own listener once the store holds it, put there by another
+// process or by a write whose reply was lost: the feed's put, or a
+// compacted watch's load, closes its held connections and refuses the next
+// bind, as on every other process (review I1; Ruling 5).
+func TestAMarkThatLandsAfterAFailedWriteReachesTheListener(t *testing.T) {
+	for _, viaLoad := range []bool{false, true} {
+		b, l, conn := brokerWithHeldConn(t, "user:alice@example.com")
+		b.Marks = store.NewMarks()
+		st := b.Store
+		b.Store = putRevocationUnavailable{st}
+		if _, err := b.Revoke(context.Background(), RevokeRequest{Principal: "user:alice@example.com"}); err == nil ||
+			!strings.Contains(err.Error(), "could not be recorded") {
+			t.Fatalf("the revocation: %v", err)
+		}
+		if bindRefused(t, l, "user:alice@example.com") {
+			t.Fatal("a mark that could not be written reached the listener (spec §5.1.4)")
+		}
+		alice := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:alice@example.com", At: time.Now()}
+		feed := &replayFeed{history: []replayed{{r: alice, rev: 8}}, fail: make(chan error),
+			afters: make(chan uint64, 2)}
+		if viaLoad {
+			feed.history, feed.marks = nil, []store.Revocation{alice}
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		go store.FollowMarks(ctx, feed, b.Marks, 7, b.MarkChanged, func(bool) {}, func() {}, t.Logf)
+		if viaLoad {
+			<-feed.afters
+			feed.fail <- store.ErrCompacted
+		}
+		if !closedWithin(conn, 2*time.Second) {
+			t.Fatalf("via load %v: the held connection was not closed once the store held the mark", viaLoad)
+		}
+		if !bindRefused(t, l, "user:alice@example.com") {
+			t.Fatalf("via load %v: a new bind was not refused once the store held the mark", viaLoad)
+		}
+		cancel()
+	}
+}
+
+// putRevocationThen writes the mark, then runs then (the marks feed
+// applying the put) and answers err: a write whose reply was lost, or a
+// write that succeeded, with the feed's put arriving first.
+type putRevocationThen struct {
+	store.Store
+	then func(store.Revocation)
+	err  error
+}
+
+func (s putRevocationThen) PutRevocation(ctx context.Context, r store.Revocation) error {
+	if err := s.Store.PutRevocation(ctx, r); err != nil {
+		return err
+	}
+	s.then(r)
+	return s.err
+}
+
+// storeFeed loads the marks of a store, at rev 7.
+type storeFeed struct{ st store.Store }
+
+func (f storeFeed) Revocations(ctx context.Context) (uint64, []store.Revocation, error) {
+	rs, err := f.st.ListRevocations(ctx)
+	return 7, rs, err
+}
+
+func (storeFeed) WatchRevocations(context.Context, uint64, func(store.Revocation, bool, uint64)) error {
+	return store.ErrUnavailable
+}
+
+// The feed's put of a mark whose Revoke is still in flight tells nothing:
+// that Revoke closes its connections itself, and counts them. And when its
+// write committed but its reply was lost, the feed's put came first, so
+// Revoke's failure applies it to the listener itself (review I1).
+func TestAMarkInFlightIsAppliedByItsRevoke(t *testing.T) {
+	for _, lost := range []bool{false, true} {
+		b, l, conn := brokerWithHeldConn(t, "user:alice@example.com")
+		b.Marks = store.NewMarks()
+		st := b.Store
+		var err error
+		if lost {
+			err = fmt.Errorf("%w: the reply was lost", store.ErrUnavailable)
+		}
+		b.Store = putRevocationThen{Store: st, err: err, then: func(store.Revocation) {
+			if _, err := store.LoadMarks(context.Background(), storeFeed{st}, b.Marks, b.MarkChanged); err != nil {
+				t.Error(err)
+			}
+		}}
+		rep, rerr := b.Revoke(context.Background(), RevokeRequest{Principal: "user:alice@example.com"})
+		if lost != (rerr != nil) {
+			t.Fatalf("lost %v: %v", lost, rerr)
+		}
+		if !lost && rep.Connections != 1 {
+			t.Fatalf("the Revoke closed %d connection(s), want its own 1", rep.Connections)
+		}
+		if !closedWithin(conn, 2*time.Second) || !bindRefused(t, l, "user:alice@example.com") {
+			t.Fatalf("lost %v: the mark did not reach the listener", lost)
+		}
+	}
+}
+
+// A standing mark a reload found closes the held connections it names and
+// refuses the next bind, as a watched one does: a mark made in a compacted
+// gap is a mark all the same (review I2).
+func TestAReloadedMarkClosesHeldConnections(t *testing.T) {
+	b, l, conn := brokerWithHeldConn(t, "user:alice@example.com")
+	b.MarkChanged(store.MarkChange{Revocation: store.Revocation{Kind: store.RevocationPrincipal,
+		Key: "user:alice@example.com", At: time.Now()}, Standing: true, Reloaded: true})
+	if !closedWithin(conn, 2*time.Second) {
+		t.Fatal("a reloaded mark left the held connection open")
+	}
+	if !bindRefused(t, l, "user:alice@example.com") {
+		t.Fatal("a reloaded mark did not refuse the next bind")
+	}
+}
+
+// A lift another process makes between this Revoke's write and its
+// correction, which the feed applies, is not undone: the daemon's marks
+// and the listener stay lifted (review M2). The connections the revocation
+// named are closed all the same.
+func TestALiftDuringARevokeIsNotUndone(t *testing.T) {
+	b, l, conn := brokerWithHeldConn(t, "user:alice@example.com")
+	b.Marks = store.NewMarks()
+	st := b.Store
+	b.Store = putRevocationThen{Store: st, then: func(r store.Revocation) {
+		if err := st.DeleteRevocation(context.Background(), r.Kind, r.Key); err != nil {
+			t.Error(err)
+		}
+		b.Marks.Set(r, false) // the feed's lift
+		b.MarkChanged(store.MarkChange{Revocation: store.Revocation{Kind: r.Kind, Key: r.Key}})
+	}}
+	if _, err := b.Revoke(context.Background(), RevokeRequest{Principal: "user:alice@example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	if !closedWithin(conn, 2*time.Second) {
+		t.Fatal("the revocation's held connection was not closed")
+	}
+	if b.Marks.Holds(store.RevocationPrincipal, "user:alice@example.com") {
+		t.Fatal("the Revoke's correction put back a lifted mark")
+	}
+	if bindRefused(t, l, "user:alice@example.com") {
+		t.Fatal("the listener was marked for a lifted mark")
 	}
 }

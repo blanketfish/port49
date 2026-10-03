@@ -325,3 +325,17 @@ func TestAReloadKeepsAMarkStillUnwritten(t *testing.T) {
 	f.events <- markEvent{r: Revocation{Kind: alice.Kind, Key: alice.Key}, lifted: true, rev: 9}
 	waitFor(t, func() bool { return !m.Holds(alice.Kind, alice.Key) })
 }
+
+// Put is a correction only: it moves the time of a mark in force, and
+// never puts back one lifted meanwhile (review M2).
+func TestPutCorrectsOnlyAMarkInForce(t *testing.T) {
+	alice := Revocation{Kind: RevocationPrincipal, Key: "user:alice@example.com", At: time.Unix(10, 0)}
+	m := NewMarks()
+	if m.Put(alice) || m.Holds(alice.Kind, alice.Key) {
+		t.Fatal("Put put back a mark not in force")
+	}
+	m.Set(Revocation{Kind: alice.Kind, Key: alice.Key, At: time.Unix(20, 0)}, true)
+	if !m.Put(alice) || !m.All()[0].At.Equal(alice.At) {
+		t.Fatalf("Put did not correct the time: %v", m.All())
+	}
+}

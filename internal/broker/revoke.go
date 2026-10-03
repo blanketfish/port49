@@ -215,14 +215,24 @@ func (b *Broker) Revoke(ctx context.Context, req RevokeRequest) (RevokeReport, e
 			return RevokeReport{}, fmt.Errorf("broker: the revocation was refused, so nothing was revoked (%w); "+
 				fallback, err)
 		}
+		// Once the store holds it after all (another process's revocation,
+		// or this write committed with its reply lost), the marks feed
+		// brings it to this listener (Marks.Unrecorded; review I1); when
+		// the feed's put came first, it is applied here.
+		if !held && b.Marks.Unrecorded(mark) {
+			b.MarkChanged(store.MarkChange{Revocation: mark, Standing: true})
+		}
 		return RevokeReport{}, fmt.Errorf("broker: the revocation could not be recorded, so nothing else was "+
-			"revoked; this port49d denies what it names until a lift or a restart (%w); "+fallback, err)
+			"revoked; this port49d denies what it names until a lift on this port49d or its restart (%w); "+
+			fallback, err)
 	}
 	rep := RevokeReport{Request: req, By: kind, Mark: mark, decimal: decimal}
 	if got, err := b.Store.GetRevocation(ctx, kind, key); err == nil {
 		rep.Mark = got // an earlier mark stands, with its own time
 	}
-	b.Marks.Put(rep.Mark)
+	// A correction only: a lift the feed brought since the write is not
+	// undone, and the listener is not marked for it (review M2).
+	stands := b.Marks == nil || b.Marks.Put(rep.Mark)
 	if kind == store.RevocationPrincipal {
 		_, named := b.Policy.Load().SubjectOf(key)
 		rep.Unnamed = !named
@@ -233,7 +243,9 @@ func (b *Broker) Revoke(ctx context.Context, req RevokeRequest) (RevokeReport, e
 		}
 	}
 	if b.Conns != nil {
-		b.Conns.Revoked(rep.Mark, true)
+		if stands {
+			b.Conns.Revoked(rep.Mark, true)
+		}
 		rep.Connections = b.Conns.CloseHeld(matchMark(rep.Mark))
 	}
 	rep.Saved, rep.SaveErr = b.persist(ctx)
