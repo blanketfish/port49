@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sync/atomic"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -65,6 +66,7 @@ type Store struct {
 	tokLeases, ctxLeases *leases
 	owned                []*clientv3.Client // closed by Close
 	seen                 seenCache          // GetContext's last read per key (contexts.go)
+	seenRev              atomic.Uint64      // Seen: the highest revision a response carried
 	logf                 func(format string, args ...any)
 	idxUndecodable       prometheus.Counter // nil counts nothing
 	// user is the etcd user this identity authenticates as, its client
@@ -192,9 +194,27 @@ func (s *Store) Close() error {
 // Ping is one linearizable read on the context pool: nil when etcd's
 // quorum answers.
 func (s *Store) Ping(ctx context.Context) error {
-	_, err := s.ctx.Get(ctx, s.k.meta("ping"))
-	return unavailable(err)
+	resp, err := s.ctx.Get(ctx, s.k.meta("ping"))
+	if err != nil {
+		return unavailable(err)
+	}
+	s.saw(resp.Header.Revision)
+	return nil
 }
+
+// saw raises Seen to rev.
+func (s *Store) saw(rev int64) {
+	for {
+		cur := s.seenRev.Load()
+		if uint64(rev) <= cur || s.seenRev.CompareAndSwap(cur, uint64(rev)) {
+			return
+		}
+	}
+}
+
+// Seen is the highest store revision any of this store's responses or
+// watch events carried (store.RevStore).
+func (s *Store) Seen() uint64 { return s.seenRev.Load() }
 
 // unavailable classifies an etcd error for the layers above: a caller that
 // gave up is its own error; a refusal of this identity is ErrRefused; a

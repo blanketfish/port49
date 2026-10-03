@@ -66,6 +66,7 @@ func (s *Store) readCtx(ctx context.Context, k store.ContextKey, marks ...[2]str
 	if err != nil {
 		return ctxSnap{}, unavailable(err)
 	}
+	s.saw(resp.Header.Revision)
 	var snap ctxSnap
 	if kvs := resp.Responses[0].GetResponseRange().Kvs; len(kvs) == 1 {
 		snap.mod = kvs[0].ModRevision
@@ -132,7 +133,15 @@ func (s *Store) commitCtx(ctx context.Context, k store.ContextKey, snap ctxSnap,
 	for _, key := range added {
 		puts = append(puts, put{key: key, val: []byte("{}")}) // no lease: the index record decides (Ruling 6)
 	}
-	return commitRev(ctx, s.ctx, s.ctxLeases, cmps, puts, dels...)
+	return s.commitSeen(ctx, cmps, puts, dels...)
+}
+
+// commitSeen is commitRev on the context client, the revision its response
+// carried seen (Seen).
+func (s *Store) commitSeen(ctx context.Context, cmps []clientv3.Cmp, puts []put, dels ...del) (bool, int64, error) {
+	ok, rev, err := commitRev(ctx, s.ctx, s.ctxLeases, cmps, puts, dels...)
+	s.saw(rev)
+	return ok, rev, err
 }
 
 // seenCache is the plaintext bookkeeping of the last version GetContext
@@ -179,6 +188,7 @@ func (s *Store) GetContext(ctx context.Context, k store.ContextKey) (store.Conte
 	if err != nil {
 		return store.Context{}, unavailable(err)
 	}
+	s.saw(resp.Header.Revision) // an absent key's read too: a create is sealed above it
 	if len(resp.Kvs) == 0 {
 		return store.Context{}, store.ErrNotFound
 	}
@@ -342,7 +352,7 @@ func (s *Store) RewriteContextRev(ctx context.Context, k store.ContextKey, rev u
 			return 0, err
 		}
 		ck := s.k.context(k)
-		ok, mod, err := commitRev(ctx, s.ctx, s.ctxLeases, []clientv3.Cmp{unchanged(ck, int64(rev))},
+		ok, mod, err := s.commitSeen(ctx, []clientv3.Cmp{unchanged(ck, int64(rev))},
 			[]put{{key: ck, val: body, exp: r.ExpiresAt}})
 		switch {
 		case err != nil:
@@ -580,6 +590,7 @@ func (s *Store) DeleteContextIf(ctx context.Context, k store.ContextKey, rev uin
 		if err != nil {
 			return unavailable(err)
 		}
+		s.saw(resp.Header.Revision)
 		if len(resp.Kvs) == 0 {
 			return store.ErrNotFound
 		}
@@ -591,7 +602,7 @@ func (s *Store) DeleteContextIf(ctx context.Context, k store.ContextKey, rev uin
 		if uint64(mod) != rev {
 			return store.ErrConflict
 		}
-		if done, err := commit(ctx, s.ctx, s.ctxLeases, []clientv3.Cmp{unchanged(ck, mod)}, nil, del{key: ck}); err != nil || done {
+		if done, _, err := s.commitSeen(ctx, []clientv3.Cmp{unchanged(ck, mod)}, nil, del{key: ck}); err != nil || done {
 			return err
 		}
 	}
@@ -692,7 +703,8 @@ func (s *Store) commitIndex(ctx context.Context, k store.ContextKey, snap ctxSna
 	for _, key := range added {
 		puts = append(puts, put{key: key, val: []byte("{}")})
 	}
-	return commit(ctx, s.ctx, s.ctxLeases, []clientv3.Cmp{unchanged(xk, snap.idxMod)}, puts, dels...)
+	ok, _, err := s.commitSeen(ctx, []clientv3.Cmp{unchanged(xk, snap.idxMod)}, puts, dels...)
+	return ok, err
 }
 
 // IndexContext lists ref under each non-empty key for ttl.

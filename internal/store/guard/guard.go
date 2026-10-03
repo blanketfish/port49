@@ -45,6 +45,7 @@ var pools = map[string]Pool{
 	"UnindexContext": Context, "UnindexRef": Context, "ContextsByPrincipal": Context, "ContextsBySid": Context,
 	"ContextsByCert": Context, "ReindexSid": Context,
 	"PutContextRev": Context, "SwapContextRev": Context, "SwapLoginRev": Context, "RewriteContextRev": Context,
+	"Ping": Context,
 
 	"ActivePrincipals": Bulk, "DeleteReceiptsByPrincipal": Bulk, "ListRevocations": Bulk, "PurgeTokens": Bulk,
 
@@ -182,6 +183,13 @@ func (g revGuarded) RewriteContextRev(ctx context.Context, k store.ContextKey, r
 		return
 	})
 	return
+}
+
+// Seen makes no call, so it takes no slot and no deadline (store.RevStore).
+func (g revGuarded) Seen() uint64 { return g.rev.Seen() }
+
+func (g revGuarded) Ping(ctx context.Context) error {
+	return g.do(ctx, Context, func(ctx context.Context) error { return g.rev.Ping(ctx) })
 }
 
 // enter decides whether a call may go: always while closed; while open,

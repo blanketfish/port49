@@ -1401,6 +1401,16 @@ func (s *Store) wroteLocked() {
 
 var _ store.RevStore = (*Store)(nil)
 
+// Seen is the store's revision counter: no write has a higher one.
+func (s *Store) Seen() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.revs
+}
+
+// Ping answers at once: the store is in the process.
+func (s *Store) Ping(context.Context) error { return nil }
+
 // SupersedeTokens keeps the later instant at k, for SupersededFor from now.
 func (s *Store) SupersedeTokens(_ context.Context, k store.TokenKey, at time.Time) error {
 	s.mu.Lock()

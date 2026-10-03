@@ -1079,3 +1079,32 @@ func TestARebuiltIndexRecordComparesItsRevision(t *testing.T) {
 		}
 	}
 }
+
+// Seen is at least the store's revision when a read answered, the read of
+// a key that is not there included: a create sealed after it is above
+// every record ever at the key (plan 7e, Ruling 3).
+func TestSeenIsTheRevisionAReadOfAnAbsentKeyAnswered(t *testing.T) {
+	ctx := context.Background()
+	s := onShared(t, time.Now)
+	cli := etcdtest.Client(t)
+	resp, err := cli.Put(ctx, etcdtest.Prefix()+"elsewhere", "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.GetContext(ctx, store.ContextKey{NAS: "leaf-01", Username: "nobody"}); !errors.Is(err, store.ErrNotFound) {
+		t.Fatal(err)
+	}
+	if got := s.Seen(); got < uint64(resp.Header.Revision) {
+		t.Fatalf("Seen %d, below the revision %d written before the read", got, resp.Header.Revision)
+	}
+}
+
+// Seen never goes back, whatever a later response says.
+func TestSeenNeverGoesBack(t *testing.T) {
+	s := onShared(t, time.Now)
+	s.saw(500)
+	s.saw(10)
+	if s.Seen() != 500 {
+		t.Fatalf("Seen %d", s.Seen())
+	}
+}

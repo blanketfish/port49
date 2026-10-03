@@ -280,3 +280,13 @@ func TestAContextWriteReturnsItsRevision(t *testing.T) {
 		t.Fatalf("a rewrite on a stale revision: %d %v, want 0 and ErrConflict", rev, err)
 	}
 }
+
+// The memory store's Seen is its revision counter, past every write.
+func TestMemorySeenIsItsCounter(t *testing.T) {
+	s := New(time.Now)
+	k := store.ContextKey{NAS: "leaf-01", Username: "alice"}
+	rev, err := s.PutContextRev(context.Background(), k, store.Context{CtxID: "c", Principal: "user:a", Username: "alice"}, time.Hour)
+	if err != nil || s.Seen() < rev || s.Ping(context.Background()) != nil {
+		t.Fatalf("Seen %d after a write at %d: %v", s.Seen(), rev, err)
+	}
+}

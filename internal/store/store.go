@@ -912,6 +912,14 @@ type RevStore interface {
 	SwapLoginRev(ctx context.Context, k ContextKey, rev uint64, c Context, ttl time.Duration, w LoginWrite) (uint64, error)
 	RewriteContextRev(ctx context.Context, k ContextKey, rev uint64, c Context, ttl time.Duration,
 		policyMoved bool) (uint64, error)
+	// Seen is the highest store revision this client has been told of, by
+	// any read, write or watch; it makes no call and never goes back. A
+	// context write's sealed sequence is drawn above it (crypt; plan 7e,
+	// Ruling 3).
+	Seen() uint64
+	// Ping is one linearizable read: nil when the store answers. port49d's
+	// probe calls it through the guard (plan 7e, Ruling 11).
+	Ping(ctx context.Context) error
 }
 
 // SupersededFor is how long a superseded instant is kept: past the
