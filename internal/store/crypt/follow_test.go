@@ -22,6 +22,10 @@ type feedOf struct {
 	rev     uint64
 	changes chan store.ContextChange
 	compact chan struct{}
+	// fail ends the watch with what is sent on it, and progressed is each
+	// progress notification the watch tells.
+	fail       chan error
+	progressed chan uint64
 }
 
 func (f *feedOf) ScanContexts(_ context.Context, fn func(store.ContextKey, store.Context)) (uint64, error) {
@@ -42,8 +46,12 @@ func (f *feedOf) WatchContexts(ctx context.Context, _ uint64, fn func(store.Cont
 		case c := <-f.changes:
 			fn(c)
 			progress(c.Rev)
+		case rev := <-f.progressed:
+			progress(rev)
 		case <-f.compact:
 			return store.ErrCompacted
+		case err := <-f.fail:
+			return err
 		}
 	}
 }
@@ -1024,5 +1032,59 @@ func TestARescansSeedOwesTheRecordNothingItHolds(t *testing.T) {
 	}
 	if l.next(ka) != 101 || !l.floor(kb).Equal(at) || l.Pending() != 0 {
 		t.Fatalf("a rescan's seed: next %d, floor %v, %d owed", l.next(ka), l.floor(kb), l.Pending())
+	}
+}
+
+// The context feed says each stop, not only its first, and says it
+// follows the store again at the first change or progress a new watch
+// delivers (final review 7e-1 I-2).
+func TestTheContextFeedSaysEachStopAndEachReturn(t *testing.T) {
+	feed := &feedOf{changes: make(chan store.ContextChange), compact: make(chan struct{}), fail: make(chan error),
+		progressed: make(chan uint64)}
+	var mu sync.Mutex
+	var said []string
+	kinds := func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		var out []string
+		for _, s := range said {
+			switch {
+			case strings.Contains(s, "the context feed stopped"):
+				out = append(out, "stopped")
+			case strings.Contains(s, "store: the context feed follows the store again"):
+				out = append(out, "again")
+			}
+		}
+		return strings.Join(out, " ")
+	}
+	until := func(want string) {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for kinds() != want {
+			if time.Now().After(deadline) {
+				t.Fatalf("said %q, want %q", kinds(), want)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go FollowContexts(ctx, feed, nil, keys(), NewLedger(), 0, func(bool) {}, func() {},
+		func(format string, args ...any) {
+			mu.Lock()
+			defer mu.Unlock()
+			said = append(said, fmt.Sprintf(format, args...))
+		})
+	k := store.ContextKey{NAS: "leaf-01", Username: "alice"}
+	feed.fail <- store.ErrUnavailable
+	feed.changes <- store.ContextChange{Key: k, Deleted: true, Rev: 3} // the next watch, a second later
+	until("stopped again")
+	feed.fail <- store.ErrUnavailable
+	feed.progressed <- 4
+	until("stopped again stopped again")
+	feed.changes <- store.ContextChange{Key: k, Deleted: true, Rev: 5}
+	feed.progressed <- 6
+	if got := kinds(); got != "stopped again stopped again" {
+		t.Fatalf("said %q", got)
 	}
 }

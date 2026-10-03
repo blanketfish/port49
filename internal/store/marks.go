@@ -310,14 +310,24 @@ func LoadMarks(ctx context.Context, feed MarkFeed, m *Marks, on func(MarkChange)
 // the watch told (final review 7e-1 I-1): watched again from where the
 // follow began, a put whose lift came after would stand again for a
 // moment, and close the held connections of a principal already let back
-// in. up and logf are as crypt.FollowContexts's.
+// in. up and logf are as crypt.FollowContexts's, each stop said and the
+// first delivery after one said as following the store again.
 func FollowMarks(ctx context.Context, feed MarkFeed, m *Marks, from uint64, on func(MarkChange),
 	up func(bool), rescanned func(), logf func(string, ...any)) error {
 	failing := false
+	// delivered is a change or progress the watch told: after a stop, the
+	// feed follows the store again (final review 7e-1 I-2).
+	delivered := func(rev uint64) {
+		from = max(from, rev)
+		if failing {
+			logf("store: the marks feed follows the store again")
+			failing = false
+		}
+	}
 	for {
 		up(true)
 		err := feed.WatchRevocations(ctx, from, func(r Revocation, lifted bool, rev uint64) {
-			from = max(from, rev)
+			delivered(rev)
 			if !lifted && m.stored(r.Kind, r.Key) {
 				if on != nil {
 					on(MarkChange{Revocation: r, Standing: true})
@@ -331,7 +341,7 @@ func FollowMarks(ctx context.Context, feed MarkFeed, m *Marks, from uint64, on f
 			if on != nil {
 				on(MarkChange{Revocation: r, Standing: !lifted})
 			}
-		}, func(rev uint64) { from = max(from, rev) })
+		}, delivered)
 		up(false)
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -340,7 +350,7 @@ func FollowMarks(ctx context.Context, feed MarkFeed, m *Marks, from uint64, on f
 			logf("store: the marks feed's revision was compacted; loading the marks again")
 			rescanned()
 			if rev, lerr := LoadMarks(ctx, feed, m, on); lerr == nil {
-				from, failing = max(from, rev), false
+				from = max(from, rev)
 				continue
 			} else {
 				err = lerr

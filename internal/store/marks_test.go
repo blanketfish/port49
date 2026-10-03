@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -66,6 +67,8 @@ type markFeed struct {
 	compact chan struct{}
 	fail    chan error
 	afters  chan uint64
+	// progressed is each progress notification the watch tells.
+	progressed chan uint64
 }
 
 type markEvent struct {
@@ -85,7 +88,7 @@ func (f *markFeed) Revocations(context.Context) (uint64, []Revocation, error) {
 // told renders a change for the assertions: key, standing, reloaded.
 func told(c MarkChange) string { return fmt.Sprintf("%s %v %v", c.Key, c.Standing, c.Reloaded) }
 func (f *markFeed) WatchRevocations(ctx context.Context, after uint64, fn func(Revocation, bool, uint64),
-	_ func(uint64)) error {
+	progress func(uint64)) error {
 	if f.afters != nil {
 		f.afters <- after
 	}
@@ -95,11 +98,64 @@ func (f *markFeed) WatchRevocations(ctx context.Context, after uint64, fn func(R
 			return ctx.Err()
 		case e := <-f.events:
 			fn(e.r, e.lifted, e.rev)
+		case rev := <-f.progressed:
+			progress(rev)
 		case <-f.compact:
 			return ErrCompacted
 		case err := <-f.fail:
 			return err
 		}
+	}
+}
+
+// lines is a logf that keeps what it was told, for a follow's goroutine.
+type lines struct {
+	mu   sync.Mutex
+	said []string
+}
+
+func (l *lines) logf(format string, args ...any) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.said = append(l.said, fmt.Sprintf(format, args...))
+}
+
+// kinds is each line said, as "stopped" or "again", in order.
+func (l *lines) kinds() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var out []string
+	for _, s := range l.said {
+		switch {
+		case strings.Contains(s, "stopped"):
+			out = append(out, "stopped")
+		case strings.Contains(s, "follows the store again"):
+			out = append(out, "again")
+		}
+	}
+	return strings.Join(out, " ")
+}
+
+// A feed says each stop, not only its first, and says it follows the store
+// again at the first change or progress a new watch delivers (final review
+// 7e-1 I-2): at 3am the log tells tonight's outage, not only yesterday's.
+func TestTheMarksFeedSaysEachStopAndEachReturn(t *testing.T) {
+	f := &markFeed{events: make(chan markEvent), fail: make(chan error), progressed: make(chan uint64)}
+	var said lines
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go FollowMarks(ctx, f, NewMarks(), 7, nil, func(bool) {}, func() {}, said.logf)
+	alice := Revocation{Kind: RevocationPrincipal, Key: "user:alice@example.com", At: time.Unix(10, 0)}
+	f.fail <- ErrUnavailable
+	f.events <- markEvent{r: alice, rev: 8} // the next watch, a second later
+	waitFor(t, func() bool { return said.kinds() == "stopped again" })
+	f.fail <- ErrUnavailable
+	f.progressed <- 9
+	waitFor(t, func() bool { return said.kinds() == "stopped again stopped again" })
+	f.events <- markEvent{r: alice, lifted: true, rev: 10}
+	f.progressed <- 11
+	if got := said.kinds(); got != "stopped again stopped again" {
+		t.Fatalf("said %q", got)
 	}
 }
 

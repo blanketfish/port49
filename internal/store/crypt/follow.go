@@ -104,8 +104,9 @@ func rescan(ctx context.Context, feed store.ContextFeed, src store.LedgerSource,
 // the watch delivered through: its last change or its last progress
 // notification, so a quiet family's re-watch resumes above a compaction
 // (final review 7e-1 I-1). up is told whether the watch is running
-// (port49_store_feed_up{feed="contexts"}), and logf says each rescan and
-// each failure once per run of them.
+// (port49_store_feed_up{feed="contexts"}), and logf says each rescan,
+// each failure once per run of them, and the first change or progress
+// delivered after a run of them.
 //
 // It moves l's fence (Fenced): each revision the watch has delivered
 // through, and each rescan's revision once its marks are in; a waiting
@@ -119,11 +120,21 @@ func rescan(ctx context.Context, feed store.ContextFeed, src store.LedgerSource,
 func FollowContexts(ctx context.Context, feed store.ContextFeed, src store.LedgerSource, keys Keys,
 	l *Ledger, from uint64, up func(bool), rescanned func(), logf func(string, ...any)) error {
 	failing := false
+	// again is the first change or progress a watch delivers after a stop:
+	// the feed follows the store again, and says so (final review 7e-1
+	// I-2).
+	again := func() {
+		if failing {
+			logf("store: the context feed follows the store again")
+			failing = false
+		}
+	}
 	for {
 		up(true)
 		l.Fence().SetUp(true)
 		l.Fence().askAgain()
 		err := feed.WatchContexts(ctx, from, func(c store.ContextChange) {
+			again()
 			if c.Rev > from {
 				from = c.Rev
 			}
@@ -131,6 +142,7 @@ func FollowContexts(ctx context.Context, feed store.ContextFeed, src store.Ledge
 				observe(l, keys, c.Key, c.Context, false)
 			}
 		}, func(rev uint64) {
+			again()
 			from = max(from, rev)
 			l.Fence().Followed(rev)
 		}, l.Fence().Asks())
@@ -146,7 +158,6 @@ func FollowContexts(ctx context.Context, feed store.ContextFeed, src store.Ledge
 			if rev, serr := rescan(ctx, feed, src, keys, l); serr == nil {
 				l.Fence().Followed(rev) // only once the seed and the scan are in
 				from = max(from, rev)
-				failing = false
 				continue
 			} else {
 				err = serr
