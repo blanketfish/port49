@@ -6700,7 +6700,9 @@ review (the owner may override them).*
     or more, and etcd's own count is never below the one it reports, rounded down to whole
     seconds; so the lease then had half or more, and the next decision, within a third,
     comes with at least a sixth of `hold_ttl` left before etcd can expire the lease and let
-    another take the keyspace (1.67s at 10s, 2.5s at the default 15s).
+    another take the keyspace (1.67s at 10s, 2.5s at the default 15s). A port49d that takes
+    the lock waits a third of `hold_ttl` before it serves, because a holder whose `meta/hold`
+    was deleted sees it gone only within a third, while the lock was free at once.
   - **`hold_ttl` is 10s to 60s**, and a shorter one is refused at config load. etcd's client
     sends the next keepalive a third of the TTL after a response but checks only every
     500ms, so a healthy lease can report as little as ⌊2·`hold_ttl`/3 − 0.5s − a round

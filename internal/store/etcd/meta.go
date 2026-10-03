@@ -19,7 +19,8 @@ type holderRec struct {
 // under meta/hold on an etcd session lease of ttl, with who written
 // beside it under meta/holder. port49d takes it as the broker: the
 // daemon's role cannot write meta/. While another holds it, Hold waits,
-// telling waiting the holder's who every 30s, until ctx ends.
+// telling waiting the holder's who every 30s, until ctx ends. Once it
+// has the lock, it waits ttl/3 more before it returns.
 //
 // lost is closed when the hold is gone (pre-flight I15; re-check R-I4):
 // the lock key deleted or on another lease, the lease expired, the
@@ -77,7 +78,7 @@ func (s *Store) Hold(ctx context.Context, ttl time.Duration, who string, waiting
 	lose := func() { once.Do(func() { close(lost) }) }
 	fctx, stop := context.WithCancel(context.Background())
 	go s.fence(fctx, sess, mu.Key(), ttl, lose)
-	return lost, func() {
+	release := func() {
 		stop()
 		select {
 		case <-lost:
@@ -89,7 +90,19 @@ func (s *Store) Hold(ctx context.Context, ttl time.Duration, who string, waiting
 			sess.Close()
 		}
 		scancel()
-	}, nil
+	}
+	// A holder whose meta/hold was deleted sees it gone within ttl/3 (a
+	// tick, then a read up to ttl/6), while this lock was free at once.
+	// Waiting ttl/3 before serving keeps the two from serving at once
+	// (Ruling T12-e). The fence runs through the wait.
+	select {
+	case <-ctx.Done():
+		release()
+		return nil, nil, ctx.Err()
+	case <-lost:
+	case <-time.After(ttl / 3):
+	}
+	return lost, release, nil
 }
 
 // fence is the hold's watch (pre-flight I15; re-check R-I4). Every sixth

@@ -183,7 +183,7 @@ finding is skipped.** M29 is applied in part, with the reason in its row.
 | I12 | As ruled: the whole context record is sealed with the context key as AAD. The daemon reads the standing marks on every request (authorizer, enable gate, receipt replay). Tests cover a zeroed `revoked_at`, a raised privilege, a swapped blob, a removed ceiling, a transplanted record, and a replay under a mark. The per-command cost is one in-memory lookup. Migration: memory is wiped by the restart that installs 7d-1, and etcd has no contexts before 7d. The residual (a replay of an unmarked revocation) is stated and carried. | Ruling 17; new Task 4b; Task 6 (`RewriteContext` on etcd); d35 and design §8 (Task 1) |
 | I13 | Store keys load through `keyfile.LoadX509KeyPair` in `openStores`. Config checks presence only. | Task 10 Step 2; Task 12 Step 5 |
 | I14 | A third pool, `bulk` (`ActivePrincipals`, `DeleteReceiptsByPrincipal`, `ListRevocations`, `PurgeTokens`), has its own `bulk_timeout` (30 s), slots and circuit, apart from the hot pools'. The backend pages them. `PurgeTokens` reads and deletes a page at a time. | Ruling 8; Task 5 Step 8–9; Task 9; Task 10 |
-| I15 | The hold is the broker's, and the daemon's role is read-only on `meta/`. The holder reads its lock key every ttl/6 and counts the hold lost when the key is gone or on another lease, or when etcd stops answering in time (the ⅔-ttl rule first written here is replaced by Re-check 1's R-I4). The waiting line says to stop the holder and never delete `meta/hold`. A test deletes the key. | Ruling 11; Task 11 (roles); Task 12 Steps 1–2 |
+| I15 | The hold is the broker's, and the daemon's role is read-only on `meta/`. The holder reads its lock key every ttl/6 and counts the hold lost when the key is gone or on another lease, or when etcd stops answering in time (the ⅔-ttl rule first written here is replaced by Re-check 1's R-I4). A port49d that takes the lock waits ttl/3 before it serves, since a holder whose key was deleted sees it gone only within ttl/3 (Ruling T12-e). The waiting line says to stop the holder and never delete `meta/hold`. A test deletes the key. | Ruling 11; Task 11 (roles); Task 12 Steps 1–2 |
 | I16 | As ruled: `store.backend: etcd` requires `admin_socket` at config load. | Ruling 13; Task 10 |
 | I17 | The L35 test times each request from the capture (labpcap gains a packet time). It asserts no store-gone line by the end of step 3, or marks the cell invalid. It asserts the `store_unavailable` reasons, and commits itself in a `test(lab):` commit before the run. | Task 15 |
 | I18 | Every send on the held connection takes the wire: `Connect` (agent.go:217), `Mint`'s `post` (:376), both of `refreshOnce`'s (:706, :757) under one hold, and `exchange` (:476). | Ruling 15; Task 14 |
@@ -901,7 +901,8 @@ task in this plan, and the tests named pin it.
   waiting, with the listeners closed: one port49d per keyspace until plan 7e; stop that port49d
   to move the keyspace, and never delete meta/hold`, every 30 s.
 - **Someone deletes `meta/hold`** (or `etcdctl del --prefix`): the holder sees its key gone
-  within `hold_ttl`/6 and closes its listeners, so two port49d never serve one keyspace.
+  within `hold_ttl`/3 and closes its listeners, and the next port49d waits `hold_ttl`/3 after
+  taking the lock before it serves, so two port49d never serve one keyspace.
 - **A planned restart.** The memory store lost every session at a restart; etcd keeps them.
   - Tokens are purged, and a `port49 token` minted before the restart is refused
     `token_not_found`.

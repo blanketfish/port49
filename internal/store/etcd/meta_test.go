@@ -103,6 +103,34 @@ func TestTheHoldIsLostWhenItsKeyIsDeleted(t *testing.T) {
 	}
 }
 
+// A meta/hold deleted under a live holder never leaves two holders at
+// once (Ruling T12-e): the next takes the lock at once, but its Hold
+// returns only ttl/3 later, by when the first has seen the key gone. The
+// delete lands just after the first's Hold returns, a whole tick before
+// its next read.
+func TestADeletedHoldNeverServesTwo(t *testing.T) {
+	s := onShared(t, func() time.Time { return t0 })
+	ctx := context.Background()
+	lost, release, err := s.Hold(ctx, 10*time.Second, "port49d one", func(string) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	if _, err := s.ctx.Delete(ctx, s.k.meta("hold"), clientv3.WithPrefix()); err != nil {
+		t.Fatal(err)
+	}
+	_, release2, err := s.Hold(ctx, 10*time.Second, "port49d two", func(string) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release2()
+	select {
+	case <-lost:
+	default:
+		t.Fatal("the second holds the keyspace while the first still does")
+	}
+}
+
 // A slow but healthy store keeps the hold at the 10s floor for 60s: each
 // fence read answers late, well inside its ttl/6 deadline, and the
 // lease's keepalives land late too (8b re-review R-M2; round 3b). This
