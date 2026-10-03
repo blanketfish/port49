@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -302,13 +303,38 @@ func TestASecondPort49dWaitsForTheKeyspace(t *testing.T) {
 // store has been gone long enough, and port49d closes every listener and
 // says why, without exiting; when the store returns, the same process
 // listens again, and the session's next command is answered from its
-// context (Ruling 11; pre-flight I19; Review Focus 4).
+// context (Ruling 11; pre-flight I19; Review Focus 4). While it waits,
+// /readyz says so (I19), and a record a store writer puts back in the
+// dark is denied after the return: the run after a store gone keeps the
+// process's ledger, sealed (decision 35; Ruling T12-b; Task 12 review
+// m-3). A ledger built again would take it at the start's first read.
 func TestAHungStoreGoesDarkAndServesAgainWhenItReturns(t *testing.T) {
 	var out, log syncBuffer
 	e, o := stderr, stdout
 	t.Cleanup(func() { stderr, stdout = e, o })
 	stderr, stdout = &out, &log
-	cfgPath, pkiDir, _, proxy := etcdRun(t)
+	cfgPath, pkiDir, _, proxy, srv := etcdRunServer(t)
+	root := srv.Client(t, "root")
+	sctx := context.Background()
+
+	// An earlier port49d's login, whose record a store writer keeps ...
+	tacacs, brokerAddr, stop := startRun(t, cfgPath, &out, 1)
+	loginSession(t, tacacsClient{t: t, addr: tacacs, key: []byte("run-test-secret")},
+		mint(t, brokerAddr, pkiDir, "leaf1"), &log)
+	if err := stop(); err != nil {
+		t.Fatal(err)
+	}
+	kept, err := root.Get(sctx, "/port49/v1/c/", clientv3.WithPrefix())
+	if err != nil || len(kept.Kvs) != 1 {
+		t.Fatalf("the kept contexts: %v %v", kept, err)
+	}
+	earlier := kept.Kvs[0]
+	// ... and deletes, so the next login at the key is a context of its
+	// own, not a join of this one under its ctx_id.
+	if _, err := root.Delete(sctx, string(earlier.Key)); err != nil {
+		t.Fatal(err)
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- run(ctx, cfgPath) }()
@@ -320,8 +346,8 @@ func TestAHungStoreGoesDarkAndServesAgainWhenItReturns(t *testing.T) {
 			t.Error("port49d did not stop")
 		}
 	})
-	waitCountWithin(t, &out, "port49d: broker listening on ", 1, 30*time.Second)
-	tacacs, brokerAddr := newestAddrs(t, &out)
+	waitCountWithin(t, &out, "port49d: broker listening on ", 2, 30*time.Second)
+	tacacs, brokerAddr = newestAddrs(t, &out)
 	dev := tacacsClient{t: t, addr: tacacs, key: []byte("run-test-secret")}
 	loginSession(t, dev, mint(t, brokerAddr, pkiDir, "leaf1"), &log)
 	tok := mint(t, brokerAddr, pkiDir, "leaf1")
@@ -354,11 +380,37 @@ func TestAHungStoreGoesDarkAndServesAgainWhenItReturns(t *testing.T) {
 		c.Close()
 		t.Fatal("TACACS+ still listens with the store gone")
 	}
+	waitCountWithin(t, &out, "port49d: metrics on ", 3, 20*time.Second)
+	ms := regexp.MustCompile(`port49d: metrics on (127\.0\.0\.1:\d+)`).FindAllStringSubmatch(out.String(), -1)
+	resp, err := http.Get("http://" + ms[len(ms)-1][1] + "/readyz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("/readyz while waiting for the store: %d, want 503", resp.StatusCode)
+	}
+	// In the dark, a store writer puts the earlier login's record back at
+	// the session's key, keeping the session's own.
+	now, err := root.Get(sctx, string(earlier.Key))
+	if err != nil || len(now.Kvs) != 1 {
+		t.Fatalf("the session's context: %v %v", now, err)
+	}
+	if _, err := root.Put(sctx, string(earlier.Key), string(earlier.Value)); err != nil {
+		t.Fatal(err)
+	}
 
 	proxy.Hang(false)
-	waitCountWithin(t, &out, "port49d: broker listening on ", 2, 60*time.Second)
+	waitCountWithin(t, &out, "port49d: broker listening on ", 3, 60*time.Second)
 	tacacs, _ = newestAddrs(t, &out)
 	dev = tacacsClient{t: t, addr: tacacs, key: []byte("run-test-secret")}
+	if dev.permits("alice", "configure") {
+		t.Fatalf("a record put back while the store was gone was taken after it returned; log %s", log.String())
+	}
+	// The session's own record, put back, is answered: the ledger kept it.
+	if _, err := root.Put(sctx, string(earlier.Key), string(now.Kvs[0].Value)); err != nil {
+		t.Fatal(err)
+	}
 	if !dev.permits("alice", "configure") {
 		t.Fatalf("after the store returned the session's next command was not answered from its context; log %s",
 			log.String())
