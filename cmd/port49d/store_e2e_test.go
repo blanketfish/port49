@@ -257,6 +257,10 @@ func TestAStartSealsTheLedgerOnceItHasReadTheStore(t *testing.T) {
 
 	tacacs, _, _ = startRun(t, cfgPath, &out, 2)
 	waitForCount(t, &out, "live context(s) carried onto the policy in force", 2)
+	// Each start's scan says its ledger; neither found a context, so the
+	// base alone judges a record at alice's key.
+	waitForCount(t, &out, "port49d: ledger: 0 context key(s) known (0 from the ledger record); following the "+
+		"store from revision ", 2)
 	// ... and puts it back once the start has read the store.
 	if _, err := root.Put(ctx, string(saved.Key), string(saved.Value)); err != nil {
 		t.Fatal(err)
@@ -264,6 +268,11 @@ func TestAStartSealsTheLedgerOnceItHasReadTheStore(t *testing.T) {
 	dev = tacacsClient{t: t, addr: tacacs, key: []byte("run-test-secret")}
 	if dev.permits("alice", "configure") {
 		t.Fatal("a context put back at a key the start never read was taken as that key's")
+	}
+	// Under port49's roles the daemon's identity watches the contexts: the
+	// feed never stopped.
+	if strings.Contains(out.String(), "the context feed stopped") {
+		t.Fatalf("the feed stopped: %s", out.String())
 	}
 }
 

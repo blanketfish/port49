@@ -169,13 +169,37 @@ func (l *Ledger) observe(k store.ContextKey, seq, rev uint64, plainRevokedAt, ce
 	}
 }
 
+// ObserveFollowed is Observe for a record the context feed, a rescan, or a
+// later start's scan brought (pre-flight I1): it raises a mark the ledger
+// holds, and makes one only for a record sealed at or above the base. A
+// record below the base at a key with no mark is what a put-back looks
+// like; made the key's mark, a read would admit it.
+func (l *Ledger) ObserveFollowed(k store.ContextKey, seq, rev uint64, plainRevokedAt, ceiling time.Time) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if e, ok := l.m[k]; (!ok || e.hw == 0) && seq < l.base {
+		return
+	}
+	l.observe(k, seq, rev, plainRevokedAt, ceiling)
+}
+
 // Seed is Observe from the ledger record (plan 7e, Ruling 4).
 func (l *Ledger) Seed(m store.LedgerMark) {
-	ceiling := time.Time{}
-	if !m.Until.IsZero() {
-		ceiling = m.Until.Add(-l.keepFor())
+	l.Observe(m.Key, m.Seq, 0, m.RevokedAt, l.seedCeiling(m))
+}
+
+// seedFollowed is Seed on a ledger already loaded, as ObserveFollowed: a
+// rescan's or a re-entry's seed makes no entry below the base.
+func (l *Ledger) seedFollowed(m store.LedgerMark) {
+	l.ObserveFollowed(m.Key, m.Seq, 0, m.RevokedAt, l.seedCeiling(m))
+}
+
+// seedCeiling is the sealed ceiling m's Until was kept from.
+func (l *Ledger) seedCeiling(m store.LedgerMark) time.Time {
+	if m.Until.IsZero() {
+		return time.Time{}
 	}
-	l.Observe(m.Key, m.Seq, 0, m.RevokedAt, ceiling)
+	return m.Until.Add(-l.keepFor())
 }
 
 func (l *Ledger) keepFor() time.Duration {

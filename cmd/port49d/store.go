@@ -53,8 +53,13 @@ type stores struct {
 	persistent bool
 	// lost is closed when this port49d loses its hold on the keyspace;
 	// nil on memory, where nothing is lost.
-	lost  <-chan struct{}
-	close func()
+	lost <-chan struct{}
+	// follow keeps the ledger following the store's contexts until its
+	// ctx ends (crypt.FollowContexts). runOnce runs it as soon as the stores
+	// are open, and joins it before close. Nil on memory, where every write
+	// is this process's own.
+	follow func(ctx context.Context)
+	close  func()
 }
 
 // storeGone ends one run of port49d on etcd (Ruling 11; pre-flight I10,
@@ -221,6 +226,55 @@ func openStores(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 		case <-time.After(5 * time.Second):
 		}
 	}
+	// The ledger (plan 7e, Ruling 3): every live context at one revision,
+	// read on the daemon's raw store, which the feed then follows from that
+	// revision. The base is just past it before anything reads a context,
+	// the start's reads included. The ledger record is Task 10's (src nil).
+	// An outage is said and tried again as the key check is.
+	var rev uint64
+	for {
+		lctx, cancel := context.WithTimeout(ctx, e.BulkTimeout)
+		var known, recorded int
+		var err error
+		rev, known, recorded, err = crypt.LoadLedger(lctx, d, nil, keys, ledger)
+		cancel()
+		if err == nil {
+			fmt.Fprintf(out, "port49d: ledger: %d context key(s) known (%d from the ledger record); following the "+
+				"store from revision %d\n", known, recorded, rev)
+			break
+		}
+		if ctx.Err() != nil || !errors.Is(err, store.ErrUnavailable) && !errors.Is(err, store.ErrCompacted) {
+			letGo()
+			if ctx.Err() != nil {
+				return stores{}, ctx.Err()
+			}
+			return stores{}, fmt.Errorf("store: reading the live contexts for the ledger: %w", err)
+		}
+		fmt.Fprintf(out, "port49d: store: reading the live contexts for the ledger: %v; the listeners stay closed; "+
+			"trying again in 5s\n", err)
+		select {
+		case <-ctx.Done():
+			letGo()
+			return stores{}, ctx.Err()
+		case <-lost:
+			letGo()
+			return stores{}, &storeGone{why: fmt.Sprintf("lost this port49d's hold on keyspace %s while "+
+				"reading the live contexts for the ledger", e.Prefix)}
+		case <-time.After(5 * time.Second):
+		}
+	}
+	follow := func(ctx context.Context) {
+		crypt.FollowContexts(ctx, d, nil, keys, ledger, rev, // the ledger record (src): Task 10
+			func(up bool) {
+				v := 0.0
+				if up {
+					v = 1
+				}
+				m.StoreFeedUp.WithLabelValues("contexts").Set(v)
+			},
+			func() { m.StoreFeedRescans.WithLabelValues("contexts").Inc() },
+			func(format string, args ...any) { fmt.Fprintf(out, "port49d: "+format+"\n", args...) })
+	}
 	gc := func(component string) guard.Config {
 		return guard.Config{Component: component, CallTimeout: e.CallTimeout, BulkTimeout: e.BulkTimeout,
 			MaxInFlight: map[guard.Pool]int{guard.Token: e.MaxInFlight.Token, guard.Context: e.MaxInFlight.Context,
@@ -240,6 +294,7 @@ func openStores(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 		etcd:       d,
 		persistent: true,
 		lost:       lost,
+		follow:     follow,
 		close:      func() { release(); m.StoreKeyspaceHeld.Set(0); closeAll() },
 	}, nil
 }
@@ -666,12 +721,11 @@ func startLeftBy(err error) (owed refreshOwed, again error) {
 //     by 7a's two context passes;
 //  4. purges every unspent token and supersedes every key;
 //  5. carries the policy in force into every live context the store
-//     kept;
-//  6. sets ledger's base past the store's revision: steps 2, 3 and 5 read
-//     every kept context through the sealing layer, which seeded its
-//     marks, and from here a key it has no mark for admits only a record
-//     sealed above the base (re-check 2 I1; plan 7e, Ruling 3). Task 8
-//     sets the base before the start's reads, from its scan.
+//     kept.
+//
+// The ledger's base was set before any of it, just past openStores's scan
+// of the contexts (crypt.LoadLedger), and the feed follows from there
+// (plan 7e, Ruling 3).
 //
 // Each step that reads the store retries every 5s while it errs, and so
 // does step 5 while a principal's contexts cannot be looked up (Ruling
@@ -679,7 +733,7 @@ func startLeftBy(err error) (owed refreshOwed, again error) {
 // (refreshOwed). marks ends as every mark in force, which the caller puts
 // in the daemon's marks and the listener's.
 func startOnPersistentStore(ctx context.Context, brk *broker.Broker, st store.Store, e *etcdstore.Store,
-	cfg config.Config, marks *[]store.Revocation, m *metrics.Metrics, ledger *crypt.Ledger) (refreshOwed, error) {
+	cfg config.Config, marks *[]store.Revocation, m *metrics.Metrics) (refreshOwed, error) {
 	retry := func(what string, f func() error, also ...error) error {
 		for {
 			err := f()
@@ -776,7 +830,6 @@ func startOnPersistentStore(ctx context.Context, brk *broker.Broker, st store.St
 	}, broker.ErrPrincipalUnvisited); err != nil {
 		return refreshOwed{}, err
 	}
-	ledger.SetBase(e.Seen() + 1)
 	fmt.Fprintf(stderr, "port49d: store: %d live context(s) carried onto the policy in force (bundle %s) "+
 		"before serving\n", rep.Contexts()-rep.Failed, brk.Policy.Load().Bundle)
 	if !owed.owed {

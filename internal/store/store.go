@@ -250,6 +250,49 @@ type LedgerMark struct {
 	Until     time.Time
 }
 
+// ContextChange is one change to the context family, as a feed brings it
+// (plan 7e, Ruling 3): the record as GetContext's backend returns it
+// (sealed under crypt), or Deleted, at revision Rev.
+type ContextChange struct {
+	Key     ContextKey
+	Context Context
+	Deleted bool
+	Rev     uint64
+}
+
+// ContextFeed is a backend's context family as a stream: a scan at one
+// revision, then every change after it. A watch never admits a record;
+// what follows it only raises what a read must clear.
+type ContextFeed interface {
+	// ScanContexts calls fn for every live context at one revision, which
+	// it returns.
+	ScanContexts(ctx context.Context, fn func(ContextKey, Context)) (uint64, error)
+	// WatchContexts calls fn for every change after `after`, in revision
+	// order, until ctx ends (ctx.Err()), the revision was compacted
+	// (ErrCompacted), or the watch fails (ErrUnavailable). progress is told
+	// a revision through which every change has been delivered: each
+	// batch's highest event once fn has had them all, and each progress
+	// notification's header revision. Each receive on asks requests one
+	// such notification from the store; a nil asks requests none (plan 7e,
+	// the feed fence).
+	WatchContexts(ctx context.Context, after uint64, fn func(ContextChange), progress func(rev uint64),
+		asks <-chan struct{}) error
+}
+
+// ErrCompacted is a feed asked for revisions the store no longer keeps: the
+// follower scans again.
+var ErrCompacted = errors.New("store: the feed's revision was compacted")
+
+// LedgerSource reads the ledger record at one revision (plan 7e, Ruling 4).
+type LedgerSource interface {
+	LedgerMarks(ctx context.Context) (uint64, []LedgerMark, error)
+}
+
+// LedgerSink raises the ledger record's marks, never lowering one.
+type LedgerSink interface {
+	PutLedgerMarks(ctx context.Context, ms []LedgerMark) error
+}
+
 type Context struct {
 	CtxID     string // sealed
 	Principal string // sealed

@@ -724,6 +724,15 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		return err
 	}
 	defer sts.close()
+	if sts.follow != nil {
+		// The ledger follows the store from the start's scan at once, before
+		// anything reads a context, the start's reads included (plan 7e,
+		// Ruling 3), and is joined before sts.close, as the sweep is.
+		fctx, stopFollow := context.WithCancel(ctx)
+		followDone := make(chan struct{})
+		go func() { defer close(followDone); sts.follow(fctx) }()
+		defer func() { stopFollow(); <-followDone }()
+	}
 	if sts.lost != nil {
 		go func() {
 			select {
@@ -835,11 +844,12 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 	}
 	// A start on a store that persists (decision 35, a start on etcd): with
 	// the listeners closed, the store's marks, the re-index, every mark on
-	// the kept contexts, the purge, the carry, and the ledger's base set.
+	// the kept contexts, the purge and the carry. The ledger's base was set
+	// by openStores's scan.
 	// (store.backend: etcd requires a broker, so brk is set here.)
 	var owed refreshOwed
 	if sts.persistent {
-		if owed, err = startOnPersistentStore(ctx, brk, st, sts.etcd, cfg, &marks, m, ledger); err != nil {
+		if owed, err = startOnPersistentStore(ctx, brk, st, sts.etcd, cfg, &marks, m); err != nil {
 			stopSpool()
 			<-spoolDone
 			if ctx.Err() != nil {
