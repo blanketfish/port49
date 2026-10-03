@@ -268,3 +268,18 @@ func (f *losingFeed) WatchContexts(ctx context.Context, after uint64, fn func(st
 	}
 	return f.answeringFeed.WatchContexts(ctx, after, fn, progress, asks)
 }
+
+// The fence only rises: a later Followed or Attach below it lowers
+// nothing, so a read it held is never let through by a stale revision.
+func TestTheFenceNeverLowers(t *testing.T) {
+	f := newFence()
+	f.Attach(10)
+	f.Followed(5)
+	if f.At() != 10 {
+		t.Fatalf("Followed(5) after Attach(10) left the fence at %d", f.At())
+	}
+	f.Attach(3)
+	if f.At() != 10 {
+		t.Fatalf("Attach(3) left the fence at %d", f.At())
+	}
+}
