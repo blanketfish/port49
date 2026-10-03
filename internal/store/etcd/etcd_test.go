@@ -1136,4 +1136,15 @@ func TestSeenIsRaisedByEveryContextClientResponse(t *testing.T) {
 			t.Errorf("%s: Seen %d, below the revision %d written before it", name, got, resp.Header.Revision)
 		}
 	}
+	// A transaction's commit: its own revision is above its read's, so only
+	// the commit's response can raise Seen to it.
+	s := onShared(t, time.Now)
+	rev, err := s.PutContextRev(ctx, store.ContextKey{NAS: "leaf-01", Username: "alice"},
+		store.Context{CtxID: "c", Principal: "user:a", Username: "alice"}, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.Seen(); got < rev {
+		t.Errorf("PutContextRev: Seen %d, below the revision %d it committed at", got, rev)
+	}
 }
