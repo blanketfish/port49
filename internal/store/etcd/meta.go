@@ -32,10 +32,27 @@ type holderRec struct {
 // when it does neither, since the store may not answer and the lease is
 // gone or going (pre-flight M49).
 func (s *Store) Hold(ctx context.Context, ttl time.Duration, who string, waiting func(holder string)) (<-chan struct{}, func(), error) {
+	// The lease is granted under ctx and at most ttl/3, so a store that
+	// hangs neither keeps a stopping port49d nor leaves a start silent: it
+	// is unavailable, and the start says it is trying again (Task 12
+	// review I-2). The session's keepalive is then off ctx.
+	gctx, gcancel := context.WithTimeout(ctx, ttl/3)
+	lease, err := s.ctx.Grant(gctx, int64(ttl/time.Second))
+	gcancel()
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, nil, ctx.Err()
+		}
+		return nil, nil, unavailable(err)
+	}
 	sctx, scancel := context.WithCancel(context.Background())
-	sess, err := concurrency.NewSession(s.ctx, concurrency.WithTTL(int(ttl/time.Second)), concurrency.WithContext(sctx))
+	sess, err := concurrency.NewSession(s.ctx, concurrency.WithTTL(int(ttl/time.Second)),
+		concurrency.WithLease(lease.ID), concurrency.WithContext(sctx))
 	if err != nil {
 		scancel()
+		rctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		s.ctx.Revoke(rctx, lease.ID)
+		cancel()
 		return nil, nil, unavailable(err)
 	}
 	quit := func() { sess.Close(); scancel() }

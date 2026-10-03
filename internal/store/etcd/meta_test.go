@@ -9,6 +9,7 @@ import (
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 
+	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/store/etcd/etcdtest"
 )
 
@@ -128,6 +129,51 @@ func TestADeletedHoldNeverServesTwo(t *testing.T) {
 	case <-lost:
 	default:
 		t.Fatal("the second holds the keyspace while the first still does")
+	}
+}
+
+// Hold honours its ctx while the store hangs, and with no deadline of its
+// own it gives up on the lease after ttl/3 as the store unavailable, so a
+// start says it is trying again and a SIGTERM stops it (Task 12 review
+// I-2).
+func TestHoldOnAHungStoreReturns(t *testing.T) {
+	srv := etcdtest.Start(t, etcdtest.Options{})
+	proxy := etcdtest.NewProxy(t, strings.TrimPrefix(srv.Endpoint, "http://"))
+	s, err := Open(Config{Endpoints: []string{"http://" + proxy.Addr()}, Prefix: etcdtest.Prefix()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.Ping(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	proxy.Hang(true)
+	defer proxy.Hang(false)
+	hold := func(ctx context.Context) (time.Duration, error) {
+		start := time.Now()
+		done := make(chan error, 1)
+		go func() {
+			_, release, err := s.Hold(ctx, 10*time.Second, "port49d one", func(string) {})
+			if err == nil {
+				release()
+			}
+			done <- err
+		}()
+		select {
+		case err := <-done:
+			return time.Since(start), err
+		case <-time.After(15 * time.Second):
+			t.Fatal("Hold on a hung store did not return")
+			return 0, nil
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if took, err := hold(ctx); err == nil || took > 3*time.Second {
+		t.Fatalf("Hold with a 2s ctx on a hung store: %v after %v", err, took)
+	}
+	if took, err := hold(context.Background()); !errors.Is(err, store.ErrUnavailable) || took > 10*time.Second/3+time.Second {
+		t.Fatalf("Hold with no deadline on a hung store: %v after %v, want unavailable within ttl/3", err, took)
 	}
 }
 
