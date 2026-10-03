@@ -203,8 +203,12 @@ func (b *Broker) Revoke(ctx context.Context, req RevokeRequest) (RevokeReport, e
 	// reply is lost leaves the store's mark standing, and the daemon's
 	// copy must not be the one that lacks it. Only a refusal that wrote
 	// nothing takes it out again, and only when it did not stand already.
+	// A new mark is unwritten (Pend) until the store is known to hold it,
+	// so a marks feed's reload in between never lifts it (Ruling T9-b).
 	held := b.Marks.Holds(kind, key)
-	b.Marks.Set(mark, true)
+	if !held {
+		b.Marks.Pend(mark)
+	}
 	if err := b.Store.PutRevocation(ctx, mark); err != nil {
 		if !held && (errors.Is(err, store.ErrIncompleteMark) || errors.Is(err, store.ErrRefused)) {
 			b.Marks.Set(mark, false)

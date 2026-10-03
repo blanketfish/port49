@@ -24,13 +24,17 @@ import (
 type Marks struct {
 	mu sync.RWMutex
 	m  map[[2]string]time.Time
+	// unwritten is each mark put in force before the store was known to
+	// hold it (Pend): a load that lacks it keeps it (Ruling T9-b).
+	unwritten map[[2]string]bool
 }
 
 // NewMarks is an empty set: no mark stands.
-func NewMarks() *Marks { return &Marks{m: map[[2]string]time.Time{}} }
+func NewMarks() *Marks { return &Marks{m: map[[2]string]time.Time{}, unwritten: map[[2]string]bool{}} }
 
 // Set puts r in force, or lifts it when on is false. A mark already in
-// force keeps its first time, as PutRevocation keeps it.
+// force keeps its first time, as PutRevocation keeps it. A lift lifts an
+// unwritten mark too.
 func (m *Marks) Set(r Revocation, on bool) {
 	if m == nil {
 		return
@@ -40,6 +44,7 @@ func (m *Marks) Set(r Revocation, on bool) {
 	k := [2]string{r.Kind, r.Key}
 	if !on {
 		delete(m.m, k)
+		delete(m.unwritten, k)
 		return
 	}
 	if _, ok := m.m[k]; !ok {
@@ -47,15 +52,52 @@ func (m *Marks) Set(r Revocation, on bool) {
 	}
 }
 
+// Pend puts r in force as Set does, before its store write is known to
+// have landed: the broker's mark ahead of its PutRevocation, kept when
+// that write fails (Revoke). Until a load or the marks feed shows the
+// store holds it, or Put says so, a load that lacks it keeps it standing
+// (LoadMarks; Ruling T9-b): a reload is not a lift, and a mark this
+// process could not record is denied here until a lift or a restart.
+func (m *Marks) Pend(r Revocation) {
+	if m == nil {
+		return
+	}
+	m.Set(r, true)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.unwritten[[2]string{r.Kind, r.Key}] = true
+}
+
+// stored says the store holds the mark for (kind, key): it is unwritten
+// no longer.
+func (m *Marks) stored(kind, key string) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.unwritten, [2]string{kind, key})
+}
+
+// unwrittenHeld reports whether the mark for (kind, key) is unwritten.
+func (m *Marks) unwrittenHeld(kind, key string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.unwritten[[2]string{kind, key}]
+}
+
 // Put puts r in force at r.At, replacing the time of a mark already in
-// force: the broker's correction once the store says which mark stands.
+// force: the broker's correction once the store says which mark stands,
+// so it is unwritten no longer.
 func (m *Marks) Put(r Revocation) {
 	if m == nil {
 		return
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.m[[2]string{r.Kind, r.Key}] = r.At
+	k := [2]string{r.Kind, r.Key}
+	m.m[k] = r.At
+	delete(m.unwritten, k)
 }
 
 // Holds reports whether a mark for (kind, key) is in force.
@@ -139,8 +181,9 @@ type MarkChange struct {
 }
 
 // LoadMarks makes m the store's marks (plan 7e, Ruling 5): every mark feed
-// holds is put in, every mark m holds that feed lacks is lifted, and on is
-// told of each change, as Reloaded (nil tells nothing). It returns the
+// holds is put in, every mark m holds that feed lacks is lifted, unless it
+// is unwritten (Pend; Ruling T9-b), and on is told of each change, as
+// Reloaded (nil tells nothing). It returns the
 // revision read at, which FollowMarks follows from.
 func LoadMarks(ctx context.Context, feed MarkFeed, m *Marks, on func(MarkChange)) (uint64, error) {
 	rev, rs, err := feed.Revocations(ctx)
@@ -150,6 +193,7 @@ func LoadMarks(ctx context.Context, feed MarkFeed, m *Marks, on func(MarkChange)
 	stored := map[[2]string]bool{}
 	for _, r := range rs {
 		stored[[2]string{r.Kind, r.Key}] = true
+		m.stored(r.Kind, r.Key)
 		if !m.Holds(r.Kind, r.Key) {
 			m.Set(r, true)
 			if on != nil {
@@ -158,7 +202,7 @@ func LoadMarks(ctx context.Context, feed MarkFeed, m *Marks, on func(MarkChange)
 		}
 	}
 	for _, r := range m.All() {
-		if !stored[[2]string{r.Kind, r.Key}] {
+		if !stored[[2]string{r.Kind, r.Key}] && !m.unwrittenHeld(r.Kind, r.Key) {
 			m.Set(r, false)
 			if on != nil {
 				on(MarkChange{Revocation: r, Reloaded: true})
@@ -170,7 +214,8 @@ func LoadMarks(ctx context.Context, feed MarkFeed, m *Marks, on func(MarkChange)
 
 // FollowMarks keeps m current from feed after `from` until ctx ends, and
 // returns ctx's error then (plan 7e, Ruling 5). Each put and lift is
-// applied to m and told to on; one that changes nothing (a put of a mark
+// applied to m and told to on, a put making its mark the store's (no
+// longer unwritten); one that changes nothing (a put of a mark
 // standing, a lift of one that does not) tells nothing. A compacted watch
 // loads the marks again (LoadMarks), telling on only of the difference,
 // tells rescanned, and goes on from the later of the load's revision and
@@ -186,6 +231,9 @@ func FollowMarks(ctx context.Context, feed MarkFeed, m *Marks, from uint64, on f
 		up(true)
 		err := feed.WatchRevocations(ctx, from, func(r Revocation, lifted bool, rev uint64) {
 			from = max(from, rev)
+			if !lifted {
+				m.stored(r.Kind, r.Key)
+			}
 			if m.Holds(r.Kind, r.Key) == !lifted {
 				return
 			}

@@ -1010,3 +1010,64 @@ func TestARewatchNeverClosesAConnectionALiftLetIn(t *testing.T) {
 		t.Fatal("the re-watch stood the lifted mark again")
 	}
 }
+
+// putRevocationUnavailable is a store whose mark writes find it gone.
+type putRevocationUnavailable struct{ store.Store }
+
+func (putRevocationUnavailable) PutRevocation(context.Context, store.Revocation) error {
+	return fmt.Errorf("%w: no quorum", store.ErrUnavailable)
+}
+
+// A revocation the store could not record stands in the daemon's marks
+// until a lift or a restart, as Revoke's error says, and a compacted
+// watch's reload, whose load lacks the mark, does not lift it there or
+// tell the listener of it (Ruling T9-b). The listener is not reached by
+// such a mark at all (spec §5.1.4: a mark that cannot be written revokes
+// nothing else), so alice's held connection is served throughout. The
+// lift Revoke's error names takes the mark out.
+func TestAReloadNeverLiftsAMarkItsWriteLost(t *testing.T) {
+	b, _, conn := brokerWithHeldConn(t, "user:alice@example.com")
+	br := bufio.NewReader(conn)
+	b.Marks = store.NewMarks()
+	st := b.Store
+	b.Store = putRevocationUnavailable{st}
+	if _, err := b.Revoke(context.Background(), RevokeRequest{Principal: "user:alice@example.com"}); err == nil ||
+		!strings.Contains(err.Error(), "could not be recorded") {
+		t.Fatalf("the revocation: %v", err)
+	}
+	feed := &replayFeed{fail: make(chan error), afters: make(chan uint64, 2)}
+	var mu sync.Mutex
+	var told []store.MarkChange
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go store.FollowMarks(ctx, feed, b.Marks, 7, func(c store.MarkChange) {
+		mu.Lock()
+		told = append(told, c)
+		mu.Unlock()
+		b.MarkChanged(c)
+	}, func(bool) {}, func() {}, t.Logf)
+	<-feed.afters
+	feed.fail <- store.ErrCompacted // the reload's load is empty
+	select {
+	case <-feed.afters:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no watch after the reload")
+	}
+	if !b.Marks.Holds(store.RevocationPrincipal, "user:alice@example.com") {
+		t.Fatal("the reload lifted a mark the store could not record")
+	}
+	mu.Lock()
+	if len(told) != 0 {
+		t.Fatalf("the reload told %+v", told)
+	}
+	mu.Unlock()
+	ask(t, conn, br)
+	b.Store = st
+	if _, err := b.Lift(context.Background(), RevokeRequest{Principal: "user:alice@example.com"}); !errors.Is(err,
+		ErrNotRevoked) {
+		t.Fatalf("the lift: %v", err)
+	}
+	if b.Marks.Holds(store.RevocationPrincipal, "user:alice@example.com") {
+		t.Fatal("the lift of a mark the store could not record left it standing")
+	}
+}

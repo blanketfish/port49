@@ -271,3 +271,57 @@ func TestAllIsEveryMarkSorted(t *testing.T) {
 		t.Fatal("a nil Marks has marks")
 	}
 }
+
+// A mark put in force before its store write has landed (Pend) is never
+// lifted by a load the store lacks it in (Ruling T9-b): its write failed,
+// or has not committed yet, and a reload is not a lift. Once a load or a
+// watch shows the store holds it, or the broker's correction (Put) says
+// so, it is the store's like any other, and a load without it lifts it. A
+// lift the watch brings, or the broker's own (Set false), lifts it at once.
+func TestAReloadKeepsAMarkStillUnwritten(t *testing.T) {
+	alice := Revocation{Kind: RevocationPrincipal, Key: "user:alice@example.com", At: time.Unix(10, 0)}
+	ctx := context.Background()
+	var got []string
+	on := func(c MarkChange) { got = append(got, told(c)) }
+	empty, holding := &markFeed{}, &markFeed{marks: []Revocation{alice}}
+
+	m := NewMarks()
+	m.Pend(alice)
+	if _, err := LoadMarks(ctx, empty, m, on); err != nil || !m.Holds(alice.Kind, alice.Key) || len(got) != 0 {
+		t.Fatalf("an unwritten mark after a load without it: %v, holds %v, told %v", err,
+			m.Holds(alice.Kind, alice.Key), got)
+	}
+	LoadMarks(ctx, holding, m, on) // the store has it now
+	LoadMarks(ctx, empty, m, on)
+	if m.Holds(alice.Kind, alice.Key) || fmt.Sprint(got) != "[user:alice@example.com false true]" {
+		t.Fatalf("a mark the store held, then lacked: holds %v, told %v", m.Holds(alice.Kind, alice.Key), got)
+	}
+
+	m.Pend(alice)
+	m.Put(alice) // the broker's correction: the store holds it
+	LoadMarks(ctx, empty, m, nil)
+	if m.Holds(alice.Kind, alice.Key) {
+		t.Fatal("a mark Put said the store held outlived a load without it")
+	}
+
+	m.Pend(alice)
+	m.Set(alice, false) // the broker's own lift
+	m.Set(alice, true)  // marked again, written
+	LoadMarks(ctx, empty, m, nil)
+	if m.Holds(alice.Kind, alice.Key) {
+		t.Fatal("a lifted unwritten mark stayed unwritten")
+	}
+
+	// The watch: a put shows the store holds it; a lift lifts it.
+	f := &markFeed{events: make(chan markEvent), compact: make(chan struct{})}
+	m.Pend(alice)
+	fctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go FollowMarks(fctx, f, m, 7, nil, func(bool) {}, func() {}, t.Logf)
+	f.events <- markEvent{r: alice, rev: 8}
+	f.compact <- struct{}{} // the load is empty: the watched put made it the store's
+	waitFor(t, func() bool { return !m.Holds(alice.Kind, alice.Key) })
+	m.Pend(alice)
+	f.events <- markEvent{r: Revocation{Kind: alice.Kind, Key: alice.Key}, lifted: true, rev: 9}
+	waitFor(t, func() bool { return !m.Holds(alice.Kind, alice.Key) })
+}
