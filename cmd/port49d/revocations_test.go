@@ -144,6 +144,48 @@ func TestAPersistBeforeTheReloadKeepsAMarkARestoreLost(t *testing.T) {
 	}
 }
 
+// The file marks the persister keeps are what it last wrote, not only what
+// the start read (re-review 1 I-5): a mark revoked here after the start,
+// then lost by an etcd restore, stays in the file through the next persist
+// while this process enforces it, so the reload's put-back finds it.
+func TestAPersistKeepsAMarkMadeSinceTheStartThatARestoreLost(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(safeDir(t), "revocations.json")
+	if _, err := initRevocations(path, testInitConfig); err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 10, 3, 3, 0, 0, 0, time.UTC)
+	a := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:alice@example.com", At: at, Origin: "admin_socket uid 0"}
+	z := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:zed@example.com", At: at, Origin: "admin_socket uid 0"}
+	st := memory.New(time.Now)
+	enforced := store.NewMarks()
+	for _, r := range []store.Revocation{a, z} {
+		enforced.Set(r, true)
+	}
+	if err := st.PutRevocation(ctx, a); err != nil {
+		t.Fatal(err)
+	}
+	persist := persister(st, path, []store.Revocation{a}, enforced, newMetrics()) // the start read A
+	if err := st.PutRevocation(ctx, z); err != nil {                              // revoked here since
+		t.Fatal(err)
+	}
+	if err := persist(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.DeleteRevocation(ctx, z.Kind, z.Key); err != nil { // the restore loses it
+		t.Fatal(err)
+	}
+	if err := persist(ctx); err != nil { // another revoke or lift here, before the reload
+		t.Fatal(err)
+	}
+	if rs, err := readRevocations(path); err != nil || len(rs) != 2 || rs[1].Key != z.Key {
+		t.Fatalf("the file after a persist in the window: %+v %v", rs, err)
+	}
+	if n, err := putBackFileMarks(ctx, st, path, enforced); err != nil || n != 1 {
+		t.Fatalf("put back %d: %v", n, err)
+	}
+}
+
 // A start never creates the file (spec §13 decision 32, amended
 // 2026-10-02): a fresh directory, or a mounted volume left empty, refuses
 // every start and writes nothing. The refusal leads with the upgrade case,
