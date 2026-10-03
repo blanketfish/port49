@@ -147,6 +147,25 @@ func TestLoadLedgerTakesTheRecordOverAPutBack(t *testing.T) {
 	}
 }
 
+// LoadLedger attaches the fence at the scan's revision: from there a
+// fenced read of a record written after the scan waits for the feed, and
+// with no feed running is unavailable (pre-flight C1; review 8a I-1).
+func TestLoadLedgerAttachesTheFenceAtTheScan(t *testing.T) {
+	inner, a, _, _, _ := twoProcesses(t)
+	feed := &feedOf{rev: inner.Seen()}
+	l := NewLedger()
+	rev, _, _, err := LoadLedger(context.Background(), feed, nil, keys(), l)
+	if err != nil || l.Fence().At() != rev {
+		t.Fatalf("the fence at %d after a scan at %d: %v", l.Fence().At(), rev, err)
+	}
+	login(t, a, "ctx-alice", "user:alice")
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if _, err := Fenced(inner, l).GetContext(ctx, ka); !errors.Is(err, ErrFeedBehind) {
+		t.Fatalf("a read past the scan with no feed running: %v", err)
+	}
+}
+
 // A compacted watch scans again, counts the rescan, and goes on. The rescan
 // raises a mark below a record it finds, never lowers one above it, and
 // makes an entry only for a record at or above the base: nothing the
@@ -171,12 +190,16 @@ func TestACompactedFeedScansAgainAndOnlyRaises(t *testing.T) {
 	var rescans atomic.Int32
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
-		until(func() bool { return rescans.Load() > 0 && l.next(kd) == 401 }, 10*time.Second)
+		until(func() bool { return rescans.Load() > 0 && l.next(kd) == 401 && l.Fence().At() >= 500 },
+			10*time.Second)
 		cancel()
 	}()
 	FollowContexts(ctx, feed, nil, keys(), l, 150, func(bool) {}, func() { rescans.Add(1) }, t.Logf)
 	if rescans.Load() != 1 || l.next(kd) != 401 {
 		t.Fatalf("rescans %d, next at an unseen key above the base %d", rescans.Load(), l.next(kd))
+	}
+	if l.Fence().At() < 500 {
+		t.Fatalf("the rescan at 500 left the fence at %d", l.Fence().At())
 	}
 	if l.next(ka) != 101 {
 		t.Fatalf("a rescan lowered the mark: next %d", l.next(ka))

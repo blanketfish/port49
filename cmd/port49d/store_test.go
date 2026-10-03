@@ -528,6 +528,52 @@ func TestOpenStoresSharesOneSayer(t *testing.T) {
 	}
 }
 
+// openStores fences each layer under its guard (pre-flight C1; review 8a
+// I-1): with the feed not running, a context written after the start's
+// scan is read on neither layer, each a context-pool timeout at
+// call_timeout, though the store answers it.
+func TestOpenStoresFencesEachLayerUnderItsGuard(t *testing.T) {
+	cfgPath, _, _, _, _ := etcdRunServer(t)
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys, err := cfg.EncryptionKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m := metrics.New(prometheus.NewRegistry())
+	sts, err := openStores(ctx, cfg, keys, m, io.Discard, newReadiness(), false, func(error) {}, crypt.NewLedger(),
+		newKeyAlarm(), new(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sts.close()
+	// Another process's login: sealed past this one's base, so only the
+	// fence keeps it from being read.
+	other := crypt.NewLedger()
+	other.SetBase(sts.etcd.Seen() + 1)
+	k := store.ContextKey{NAS: "leaf1", Username: "alice"}
+	if err := crypt.Wrap(sts.etcd, keys, nil, crypt.WithLedger(other)).PutContext(ctx, k, store.Context{CtxID: "c",
+		Principal: "user:alice", Username: "alice", AuthTime: time.Now(), RefreshedAt: time.Now()},
+		time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		component string
+		st        store.Store
+	}{{"daemon", sts.daemon}, {"broker", sts.broker}} {
+		if got, err := c.st.GetContext(ctx, k); !errors.Is(err, store.ErrUnavailable) {
+			t.Fatalf("the %s read %q with the feed not running: %v", c.component, got.CtxID, err)
+		}
+		if n := testutil.ToFloat64(m.StoreCalls.WithLabelValues(c.component, "context", "timeout")); n != 1 {
+			t.Fatalf("the %s's guard counted %v context timeouts", c.component, n)
+		}
+	}
+}
+
 // A run after a store gone shows the alarm a run before it raised for as
 // long as it waits for the store, not from when the store answers: the
 // wait is the outage, and an alert would resolve through it (re-review
