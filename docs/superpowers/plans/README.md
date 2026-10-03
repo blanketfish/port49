@@ -2628,7 +2628,8 @@ here from the ledger. What differs from the plan's text, task by task:
     unanswered. `admin.Response` has no `by`, so "naming nothing" is no `error` and no `text`.
   - 8a9b75a is a WIP commit, kept, from redoing `agent.go` edits that a `git checkout` lost.
   - 92161a7: a revocation behind a running one says it was not sent.
-- **Task 15 (the lab; b3ce65d, b193375, 79812ef, a6ebda6, 4f62284, 0eee340, 2a340f6).**
+- **Task 15 (the lab; b3ce65d, b193375, 79812ef, a6ebda6, 4f62284, 0eee340, 2a340f6;
+  3159dbc from 79812ef's review).**
   - **Harness fixes:**
     - replies are matched on the device port, session and sequence;
     - a redeem answered ERROR is recorded `deny store_unavailable`;
@@ -2638,6 +2639,9 @@ here from the ledger. What differs from the plan's text, task by task:
     login's write compared on the restored record's low revision and committed above the
     ledger's last, and the ledger dropped it. So the first login after the restore was denied
     on its own context. Design §12 was right and the code wrong (CLAUDE.md lab rule 4).
+    The fix's own review hardened it in 3159dbc: such a write becomes the last only if it was
+    sent after the last write ended. That closes a write whose reply came late, across two
+    restores, being placed over a later write the store holds.
   - **Docs corrected by the notes (2a340f6).** The listeners close when the hold is lost, not
     after `hold_ttl`. IOS-XE refuses an open session's command once port49d is dark.
 - **Task 16 (this section; the docs).** Spec §15's Junos `authorization-time-interval` note
@@ -2668,7 +2672,8 @@ here from the ledger. What differs from the plan's text, task by task:
     context is denied (Task 13b). This had been proposed for 7e; Ryan ruled to fix it now,
     2026-10-03.
   - T13b-a: a denied context is still revoked by the refresh.
-  - 79812ef: a write that commits above the last after a revision bump is the last.
+  - 79812ef and 3159dbc: a write sent after the last ended, which commits above it after a
+    revision bump, is the last.
 
 The controller's rulings in 7d-1 are each in the ledger:
 - C1: every mark applied at the start;
