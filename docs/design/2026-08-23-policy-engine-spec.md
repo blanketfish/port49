@@ -5772,8 +5772,11 @@ port49's two etcd roles and grant them, for the keyspace `store.etcd.prefix` nam
   and under `store.etcd.roles: unenforced` the daemon's is too.
 - **The command itself.** It reads the config and those certificates, holds no etcd
   credential, and changes nothing. It refuses a CN or prefix holding a character outside
-  `[A-Za-z0-9._@/-]`, printing nothing. It exits 0, 1 naming what it could not read or
-  refused, or 2 on usage.
+  `[A-Za-z0-9._@/-]`, one CN for both components, and a CN of `root` for either (etcd's
+  administrator, past every role; config load refuses it first), printing nothing. Its output
+  says to check a role that already exists with `etcdctl role get` first: `role add` fails on
+  one and leaves its grants, and a grant on another range is added to a role, not replaced.
+  It exits 0, 1 naming what it could not read or refused, or 2 on usage.
 
 The output is run once, by etcd's root user.
 
@@ -6672,9 +6675,16 @@ review (the owner may override them).*
     it, a daemon credential is the whole keyspace's. That holds for the daemon's credential
     taken alone: until plan 7e port49d also holds the broker's, whose role is the whole
     keyspace, marks included, and under `store.etcd.roles: unenforced` the daemon's is too.
+  - **Neither identity is etcd's root.** A certificate whose CN is `root` is etcd's
+    administrator, past every role. It is refused for the daemon and the broker alike: at
+    config load, by `port49d store-roles`, and by the start check, which also refuses a user
+    holding the `root` role.
   - **The start check.** port49d refuses to start when its daemon identity can do any of
-    those, probing reads and never-true writes, unless `store.etcd.roles: unenforced`, said at
-    every start.
+    those, unless `store.etcd.roles: unenforced`, said at every start. It reads the daemon's
+    own grants (its user's roles and their permissions) and refuses any grant that reaches an
+    idempotency record or a token index, and any write grant outside the families the daemon
+    writes, whatever its range. Probing reads and never-true writes is the backstop for auth
+    being off, when etcd has no grants to read.
   - **Keys and certificates.** Key files load as the broker's key does (owner-only, no
     symlink). Every certificate's validity window, and the CA's, is checked at each start and
     named when it fails: never read as etcd not answering.
