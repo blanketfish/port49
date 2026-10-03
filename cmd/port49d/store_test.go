@@ -435,6 +435,25 @@ func TestTheSayerNamesAnEarlierFormAsTheUpgrade(t *testing.T) {
 	}
 }
 
+// An earlier-form line does not silence a put-back or a tamper line under
+// the same key id, nor the reverse: a store writer can put a form-3 record
+// back at any key every 10 minutes, and the line that names tampering must
+// still be said (Task 7 review I-1).
+func TestAnEarlierFormLineDoesNotSilenceAPutBackLine(t *testing.T) {
+	var out bytes.Buffer
+	keys := crypt.Keys{Current: crypt.Key{ID: "v2"}}
+	say := unopenableSayer(keys, &out, time.Now)
+	say("context", "v2", fmt.Errorf("crypt: opening context: %w", crypt.ErrEarlierForm))
+	say("context", "v2", crypt.ErrNotLastWritten)
+	say("context", "v2", nil)
+	say("context", "v2", fmt.Errorf("crypt: opening context: %w", crypt.ErrEarlierForm))
+	got := out.String()
+	if strings.Count(got, "\n") != 3 || !strings.Contains(got, "earlier port49") || !strings.Contains(got, "put back") ||
+		!strings.Contains(got, "altered") {
+		t.Fatalf("%q", got)
+	}
+}
+
 // A record below the newest write is named as that, not as "the one this
 // port49d last wrote", which is no longer the rule (plan 7e, Ruling 3).
 func TestTheSayerNamesAPutBackAsBelowTheNewestWrite(t *testing.T) {

@@ -245,23 +245,28 @@ func openStores(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 }
 
 // unopenableSayer is crypt.OnUnopenable's line (Ruling 14): which record,
-// which key id, and what to do, once per (record, key id) per 10 minutes,
-// so a fleet of logins under a retired key is one line, not one per login.
+// which key id, and what to do, once per (record, key id, kind) per 10
+// minutes, so a fleet of logins under a retired key is one line, not one
+// per login. The kind (sayerKind) keeps the upgrade's benign line from
+// silencing a put-back or tamper line under the same key id, or the
+// reverse: a store writer can put a form-3 record back at any key, and
+// must not be able to turn every tamper line into the upgrade's (Task 7
+// review I-1).
 // openStores builds one and hands it to every Wrap, so the daemon's and
 // the broker's layers share its memory and say a key once, not twice. It
-// remembers at most sayerMax pairs, and forgets them all past it: a key id
+// remembers at most sayerMax entries, and forgets them all past it: a key id
 // is the record's header, which whoever writes the store chooses, so the
 // memory is bounded and the cost of forgetting is one repeated line
 // (pre-flight M44).
 func unopenableSayer(keys crypt.Keys, out io.Writer, now func() time.Time) func(record, keyID string, why error) {
 	const sayerMax = 64
 	var mu sync.Mutex
-	said := map[[2]string]time.Time{}
+	said := map[[3]string]time.Time{}
 	window := keyWindow(keys)
 	return func(record, keyID string, why error) {
 		mu.Lock()
 		defer mu.Unlock()
-		k := [2]string{record, keyID}
+		k := [3]string{record, keyID, sayerKind(why)}
 		if t, ok := said[k]; ok && now().Sub(t) < 10*time.Minute {
 			return
 		}
@@ -301,6 +306,19 @@ func unopenableSayer(keys crypt.Keys, out io.Writer, now func() time.Time) func(
 			"rotation retired that key while records it sealed were live; set encryption.previous to %q until they "+
 			"expire\n", record, keyID, window, keyID)
 	}
+}
+
+// sayerKind is which of unopenableSayer's lines why calls for, as far as
+// the key id does not decide it: an earlier form, a put-back, or anything
+// else.
+func sayerKind(why error) string {
+	switch {
+	case errors.Is(why, crypt.ErrEarlierForm):
+		return "earlier"
+	case errors.Is(why, crypt.ErrNotLastWritten):
+		return "below"
+	}
+	return "other"
 }
 
 // keyWindow names keys' ids for a line: "current "a", previous "b"".
