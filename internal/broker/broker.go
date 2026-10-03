@@ -810,8 +810,20 @@ func (b *Broker) fault(name, code, detail string) api.MintItem {
 // the request lets go of the policy (plan 7e, Ruling 10); a hash is marked
 // emitted only when its record lands (blobLanded), so a request that finds
 // a hash unmarked buffers a blob record of its own, and within one sink
-// every mint record follows one for its hash. Its store TTL is ttl
-// (blobTTL); PutBlob keeps the later expiry.
+// every mint record follows one for its hash.
+//
+// Its store TTL is ttl, at least the ceiling of any context it backs
+// (blobTTL): a context's session_expires is its auth_time plus that, and
+// auth_time is never later than the mint, so no context this blob backs can
+// outlive it. PutBlob keeps the later expiry, so a re-put never shortens it.
+// The log's first copy serves every later re-put, including one after the
+// store's copy expired (plan 3, Decided 8).
+//
+// A blob record the sink refuses is counted by
+// port49_decision_log_write_failures_total and is not marked emitted, so
+// the next mint that writes the hash emits it again: replay reads the log
+// alone, and a mint record naming a blob the log never carried cannot be
+// replayed. An Emitter that cannot report a refusal is trusted.
 func (b *Broker) putBlob(ctx context.Context, out decision.Emitter, hash string, body []byte, ttl time.Duration) error {
 	if err := b.Store.PutBlob(ctx, hash, body, ttl); err != nil {
 		return err
