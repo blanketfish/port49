@@ -3105,6 +3105,9 @@ plan's text, task by task:
   `port49_store_feed_rescans_total{feed}` (alert on any increase), `port49_ledger_pending`
   (above 0 for a minute is an alarm: the record cannot be written), `port49_ledger_behind` (1 is
   an alarm: the keeper's context feed is down). Both ledger gauges read 0 once the keeper stops.
+  `port49_store_fence_timeouts_total` counts context reads denied because the context feed had
+  not delivered the record's revision in time: rising with `feed_up` 1 and etcd answering, the
+  feed lags; it is not the store (final review M-4).
 
 ## Plan 8 — Workload certificates (§19 step 8)
 

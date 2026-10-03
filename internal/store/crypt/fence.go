@@ -30,6 +30,8 @@ type Fence struct {
 	waiting int // reads in Wait behind the feed
 	wake    chan struct{}
 	asks    chan struct{}
+	// timedOut is told each ErrFeedBehind (OnTimeout).
+	timedOut func()
 }
 
 func newFence() *Fence { return &Fence{wake: make(chan struct{}), asks: make(chan struct{}, 1)} }
@@ -60,6 +62,11 @@ func (f *Fence) raise(rev uint64) {
 		f.wake = make(chan struct{})
 	}
 }
+
+// OnTimeout has fn told each read Wait gives up on, ErrFeedBehind:
+// port49_store_fence_timeouts_total, which tells a feed behind from an
+// etcd failure (final review 7e-1 M-4). fn must not call back into f.
+func (f *Fence) OnTimeout(fn func()) { f.mu.Lock(); f.timedOut = fn; f.mu.Unlock() }
 
 // SetUp records whether the feed's watch runs; Up reads it.
 func (f *Fence) SetUp(up bool) { f.mu.Lock(); f.up = up; f.mu.Unlock() }
@@ -118,6 +125,12 @@ func (f *Fence) Wait(ctx context.Context, rev uint64) error {
 		select {
 		case <-wake:
 		case <-ctx.Done():
+			f.mu.Lock()
+			timedOut := f.timedOut
+			f.mu.Unlock()
+			if timedOut != nil {
+				timedOut()
+			}
 			return fmt.Errorf("%w (the feed at revision %d, the record at %d)", ErrFeedBehind, at, rev)
 		}
 	}

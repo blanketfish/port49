@@ -94,6 +94,7 @@ func TestNewRegistersEveryMetric(t *testing.T) {
 		"port49_store_keyspace_held":                        false,
 		"port49_store_feed_up":                              false,
 		"port49_store_feed_rescans_total":                   false,
+		"port49_store_fence_timeouts_total":                 false,
 		"port49_ledger_pending":                             false,
 		"port49_ledger_behind":                              false,
 		"port49_crypt_store_key_unknown":                    false,

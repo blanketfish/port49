@@ -122,6 +122,7 @@ func openStores(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 		m.StoreFeedUp.WithLabelValues(feed).Set(0)
 		m.StoreFeedRescans.WithLabelValues(feed)
 	}
+	ledger.Fence().OnTimeout(m.StoreFenceTimeouts.Inc)
 	// A run after a store gone shows the alarm a run before raised from
 	// its first scrape: the wait below is the outage, and a gauge at 0
 	// through it would resolve the alert (keyAlarm; re-review I-3).

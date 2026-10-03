@@ -559,7 +559,9 @@ func TestARefusedLedgerRecordReadNamesStoreRoles(t *testing.T) {
 // openStores fences each layer under its guard (pre-flight C1; review 8a
 // I-1): with the feed not running, a context written after the start's
 // scan is read on neither layer, each a context-pool timeout at
-// call_timeout, though the store answers it.
+// call_timeout, though the store answers it, and each counted in
+// port49_store_fence_timeouts_total, which tells it from an etcd failure
+// (final review 7e-1 M-4).
 func TestOpenStoresFencesEachLayerUnderItsGuard(t *testing.T) {
 	cfgPath, _, _, _, _ := etcdRunServer(t)
 	cfg, err := config.Load(cfgPath)
@@ -599,6 +601,9 @@ func TestOpenStoresFencesEachLayerUnderItsGuard(t *testing.T) {
 		if n := testutil.ToFloat64(m.StoreCalls.WithLabelValues(c.component, "context", "timeout")); n != 1 {
 			t.Fatalf("the %s's guard counted %v context timeouts", c.component, n)
 		}
+	}
+	if n := testutil.ToFloat64(m.StoreFenceTimeouts); n != 2 {
+		t.Fatalf("port49_store_fence_timeouts_total = %v, want 2", n)
 	}
 }
 

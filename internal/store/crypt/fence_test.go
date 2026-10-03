@@ -283,3 +283,21 @@ func TestTheFenceNeverLowers(t *testing.T) {
 		t.Fatalf("Attach(3) left the fence at %d", f.At())
 	}
 }
+
+// A read the feed has not passed by its deadline is told to the fence's
+// timeout hook (port49_store_fence_timeouts_total; final review 7e-1
+// M-4); a read the feed has passed is not.
+func TestAFenceTimeoutIsTold(t *testing.T) {
+	f := newFence()
+	var timeouts atomic.Int32
+	f.OnTimeout(func() { timeouts.Add(1) })
+	f.Attach(5)
+	if err := f.Wait(context.Background(), 5); err != nil || timeouts.Load() != 0 {
+		t.Fatalf("a read the feed has passed: %v, %d timeouts", err, timeouts.Load())
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if err := f.Wait(ctx, 9); !errors.Is(err, ErrFeedBehind) || timeouts.Load() != 1 {
+		t.Fatalf("a read the feed has not passed: %v, %d timeouts", err, timeouts.Load())
+	}
+}
