@@ -3133,14 +3133,19 @@ plan's text, task by task:
     marks feed is down, `port49_store_feed_up{feed="marks"}` 0, and the line says `the marks
     feed stopped (broker: putting broker.revocations_file …'s marks back into the store before
     the marks reload: …; the marks are not reloaded until they are back)`. It is tried again
-    every second.
-- **A port49d restarted soon after a lift made on another port49d may put that mark back**,
-  fleet-wide: its revocations file lags lifts made elsewhere. `port49 revoke --lift` it again.
-  7e-2 retires the file on etcd (Ruling 12), and this note with it.
+    every second, and the stop and the compaction are said once per run of failures.
+  - While the marks feed is down, mints and refreshes still read the store's marks, and a
+    revoked principal's contexts and tokens are revoked in the store, so logins are still
+    refused. Held connections are not closed by a mark made elsewhere, and lifts made elsewhere
+    do not reach this port49d until it follows the store again. A file that does not load keeps
+    the feed down until it loads, or until the next revoke or lift here rewrites it.
   - A mark the reload lifts (one not in this port49d's file) is said by its key: `broker: a
     reload of the marks found the revocation of … lifted: lifted on a broker process while the
     marks feed was down, or lost by an etcd restore; revoke it again unless it was lifted on
     purpose`.
+- **A port49d restarted soon after a lift made on another port49d may put that mark back**,
+  fleet-wide: its revocations file lags lifts made elsewhere. `port49 revoke --lift` it again.
+  7e-2 retires the file on etcd (Ruling 12), and this note with it.
 - **Each feed says each stop and each return:** `store: the context feed stopped (…)` (or the
   marks feed) at every stop, and `store: the context feed follows the store again` at the first
   change or progress after one. Both watches ask etcd for progress notifications, so a reconnect
