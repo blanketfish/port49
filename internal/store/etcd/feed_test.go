@@ -220,3 +220,123 @@ func TestAWatchAnswersAProgressRequest(t *testing.T) {
 		}
 	}
 }
+
+// The marks feed: Revocations reads every mark at one revision, and a watch
+// from it brings a put as (r, false) and a lift as (r, true), the lift
+// carrying the kind and key parsed from its etcd key, each with its own
+// revision, in revision order. A mark put before the read is not brought
+// again.
+func TestTheMarkFeedBringsPutsAndLifts(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s := onShared(t, time.Now)
+	at := time.Unix(1_000_000, 0).UTC()
+	before := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:before@example.com", At: at}
+	if err := s.PutRevocation(ctx, before); err != nil {
+		t.Fatal(err)
+	}
+	rev, rs, err := s.Revocations(ctx)
+	if err != nil || rev == 0 || len(rs) != 1 || rs[0].Key != before.Key || !rs[0].At.Equal(at) {
+		t.Fatalf("rev %d %v: %v", rev, rs, err)
+	}
+	cert := store.Revocation{Kind: store.RevocationCert, Key: store.CertKey("CN=Corp/CA", "0a"), At: at,
+		Origin: "admin_socket uid 0"} // a '/' in the key: escaped, and parsed back
+	if err := s.PutRevocation(ctx, cert); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteRevocation(ctx, cert.Kind, cert.Key); err != nil {
+		t.Fatal(err)
+	}
+	type ev struct {
+		r      store.Revocation
+		lifted bool
+		rev    uint64
+	}
+	got := make(chan ev, 8)
+	go s.WatchRevocations(ctx, rev, func(r store.Revocation, lifted bool, at uint64) { got <- ev{r, lifted, at} })
+	var evs []ev
+	for len(evs) < 2 {
+		select {
+		case e := <-got:
+			evs = append(evs, e)
+		case <-time.After(10 * time.Second):
+			t.Fatalf("the watch brought %+v", evs)
+		}
+	}
+	put, lift := evs[0], evs[1]
+	if put.lifted || put.r != cert || put.rev <= rev {
+		t.Fatalf("the put came as %+v", put)
+	}
+	if !lift.lifted || lift.r != (store.Revocation{Kind: cert.Kind, Key: cert.Key}) || lift.rev <= put.rev {
+		t.Fatalf("the lift came as %+v", lift)
+	}
+	select {
+	case e := <-got:
+		t.Fatalf("the watch brought more: %+v", e)
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+// A mark that does not decode is never a mark skipped: the read is an
+// error naming its key, as ListRevocations's is, and the watch stands the
+// mark its key names, as of when it saw it.
+func TestTheMarkFeedNeverSkipsAMarkThatDoesNotDecode(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	now := time.Unix(2_000_000, 0).UTC()
+	s := onShared(t, func() time.Time { return now })
+	rev, _, err := s.Revocations(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := s.k.mark(store.RevocationPrincipal, "user:garbled@example.com")
+	if _, err := s.tok.Put(ctx, key, "{"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.Revocations(ctx); err == nil || !strings.Contains(err.Error(), "garbled") {
+		t.Fatalf("%v", err)
+	}
+	got := make(chan store.Revocation, 1)
+	go s.WatchRevocations(ctx, rev, func(r store.Revocation, lifted bool, _ uint64) {
+		if !lifted {
+			got <- r
+		}
+	})
+	select {
+	case r := <-got:
+		if r != (store.Revocation{Kind: store.RevocationPrincipal, Key: "user:garbled@example.com", At: now}) {
+			t.Fatalf("the watch brought %+v", r)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the watch skipped the mark")
+	}
+}
+
+// A marks watch from a compacted revision is store.ErrCompacted. On a
+// member of its own, as TestAWatchFromACompactedRevisionSaysSo is.
+func TestAMarkWatchFromACompactedRevisionSaysSo(t *testing.T) {
+	ctx := context.Background()
+	srv := etcdtest.Start(t, etcdtest.Options{})
+	s, err := Open(Config{Endpoints: []string{srv.Endpoint}, Prefix: "/port49/", Now: time.Now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	r := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:alice@example.com", At: time.Now()}
+	s.PutRevocation(ctx, r)
+	rev, _, _ := s.Revocations(ctx)
+	s.DeleteRevocation(ctx, r.Kind, r.Key)
+	resp, err := s.tok.Put(ctx, "compact-me", "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.tok.Compact(ctx, resp.Header.Revision); err != nil {
+		t.Fatal(err)
+	}
+	wctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	err = s.WatchRevocations(wctx, rev, func(store.Revocation, bool, uint64) {})
+	if !errors.Is(err, store.ErrCompacted) {
+		t.Fatalf("%v", err)
+	}
+}

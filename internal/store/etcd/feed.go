@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 
 	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -140,4 +141,102 @@ func (s *Store) WatchContexts(ctx context.Context, after uint64, fn func(store.C
 		return ctx.Err()
 	}
 	return fmt.Errorf("%w: the context watch ended", store.ErrUnavailable)
+}
+
+// markOf is the (kind, key) of an rv/ key, false for one that does not
+// parse.
+func (s *Store) markOf(key string) (string, string, bool) {
+	kind, k, ok := lastTwo(key)
+	return kind, k, ok && s.k.mark(kind, k) == key
+}
+
+// Revocations is every mark in force at one revision, which it returns
+// (store.MarkFeed): ListRevocations read a page at a time on the token
+// client, every page at the first page's revision. A mark that does not
+// decode is an error naming its key, as ListRevocations's is.
+func (s *Store) Revocations(ctx context.Context) (uint64, []store.Revocation, error) {
+	prefix := s.k.family(famMark)
+	end := clientv3.GetPrefixRangeEnd(prefix)
+	from, rev := prefix, int64(0)
+	var out []store.Revocation
+	for {
+		opts := []clientv3.OpOption{clientv3.WithRange(end), clientv3.WithLimit(500)}
+		if rev > 0 {
+			opts = append(opts, clientv3.WithRev(rev))
+		}
+		resp, err := s.tok.Get(ctx, from, opts...)
+		if errors.Is(err, rpctypes.ErrCompacted) {
+			return 0, nil, store.ErrCompacted
+		}
+		if err != nil {
+			return 0, nil, unavailable(err)
+		}
+		if rev == 0 {
+			rev = resp.Header.Revision
+		}
+		for _, kv := range resp.Kvs {
+			var r markRec
+			if err := json.Unmarshal(kv.Value, &r); err != nil {
+				return 0, nil, notDecoded(fmt.Sprintf("mark %q", kv.Key))
+			}
+			out = append(out, r.revocation())
+		}
+		if !resp.More || len(resp.Kvs) == 0 {
+			break
+		}
+		from = string(resp.Kvs[len(resp.Kvs)-1].Key) + "\x00"
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Kind != out[j].Kind {
+			return out[i].Kind < out[j].Kind
+		}
+		return out[i].Key < out[j].Key
+	})
+	return uint64(rev), out, nil
+}
+
+// WatchRevocations calls fn for every put and lift of a mark after `after`
+// (store.MarkFeed), on the token client, requiring a leader as
+// WatchContexts does. A put is its record; a lift is the kind and key its
+// etcd key names. A put that does not decode stands the mark its key
+// names, at the time it was seen, and says so by its key: a revocation
+// left out would be one not enforced, and Revocations refuses the same
+// record at the next load. A key that does not parse names nothing, and
+// is said and skipped. A watch that fails is ErrUnavailable, or ErrRefused
+// when etcd refuses this identity (unavailable).
+func (s *Store) WatchRevocations(ctx context.Context, after uint64,
+	fn func(r store.Revocation, lifted bool, rev uint64)) error {
+	wctx, cancel := context.WithCancel(clientv3.WithRequireLeader(ctx))
+	defer cancel()
+	ch := s.tok.Watch(wctx, s.k.family(famMark), clientv3.WithPrefix(), clientv3.WithRev(int64(after)+1))
+	for resp := range ch {
+		if err := resp.Err(); err != nil {
+			if resp.CompactRevision > 0 || errors.Is(err, rpctypes.ErrCompacted) {
+				return store.ErrCompacted
+			}
+			return unavailable(err)
+		}
+		for _, ev := range resp.Events {
+			kind, key, ok := s.markOf(string(ev.Kv.Key))
+			if !ok {
+				s.logf("etcd: the mark key %q does not parse; the marks feed skipped it", ev.Kv.Key)
+				continue
+			}
+			rev := uint64(ev.Kv.ModRevision)
+			if ev.Type == clientv3.EventTypeDelete {
+				fn(store.Revocation{Kind: kind, Key: key}, true, rev)
+				continue
+			}
+			var r markRec
+			if json.Unmarshal(ev.Kv.Value, &r) != nil {
+				s.logf("etcd: the mark at %q does not decode; the marks feed stands it as of now", ev.Kv.Key)
+				r = markRec{Kind: kind, Key: key, At: s.now()}
+			}
+			fn(r.revocation(), false, rev)
+		}
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return fmt.Errorf("%w: the marks watch ended", store.ErrUnavailable)
 }

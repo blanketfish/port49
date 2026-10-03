@@ -280,6 +280,20 @@ type ContextFeed interface {
 		asks <-chan struct{}) error
 }
 
+// MarkFeed is a backend's revocation marks as a stream (plan 7e, Ruling 5):
+// every mark at one revision, then every put and lift after it.
+type MarkFeed interface {
+	// Revocations is every mark in force at one revision, which it
+	// returns.
+	Revocations(ctx context.Context) (uint64, []Revocation, error)
+	// WatchRevocations calls fn for every put (lifted false) and lift
+	// (lifted true) after `after`, in revision order, with the change's
+	// revision, until ctx ends (ctx.Err()), the revision was compacted
+	// (ErrCompacted), or the watch fails. A lift carries only Kind and
+	// Key.
+	WatchRevocations(ctx context.Context, after uint64, fn func(r Revocation, lifted bool, rev uint64)) error
+}
+
 // ErrCompacted is a feed asked for revisions the store no longer keeps: the
 // follower scans again.
 var ErrCompacted = errors.New("store: the feed's revision was compacted")

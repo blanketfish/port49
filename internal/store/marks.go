@@ -1,6 +1,9 @@
 package store
 
 import (
+	"context"
+	"errors"
+	"sort"
 	"sync"
 	"time"
 )
@@ -103,4 +106,116 @@ func (m *Marks) Len() int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return len(m.m)
+}
+
+// All is every mark in force, sorted by kind and key.
+func (m *Marks) All() []Revocation {
+	if m == nil {
+		return nil
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]Revocation, 0, len(m.m))
+	for k, at := range m.m {
+		out = append(out, Revocation{Kind: k[0], Key: k[1], At: at})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Kind != out[j].Kind {
+			return out[i].Kind < out[j].Kind
+		}
+		return out[i].Key < out[j].Key
+	})
+	return out
+}
+
+// MarkChange is one change applied to a process's marks (plan 7e, Ruling
+// 5): a mark that now stands, or one lifted. Reloaded is a change a load
+// found by difference, not an event the watch delivered: a mark missing
+// from a load may be a lift made in a gap, or a mark an etcd restore lost
+// (Ruling 12).
+type MarkChange struct {
+	Revocation
+	Standing, Reloaded bool
+}
+
+// LoadMarks makes m the store's marks (plan 7e, Ruling 5): every mark feed
+// holds is put in, every mark m holds that feed lacks is lifted, and on is
+// told of each change, as Reloaded (nil tells nothing). It returns the
+// revision read at, which FollowMarks follows from.
+func LoadMarks(ctx context.Context, feed MarkFeed, m *Marks, on func(MarkChange)) (uint64, error) {
+	rev, rs, err := feed.Revocations(ctx)
+	if err != nil {
+		return 0, err
+	}
+	stored := map[[2]string]bool{}
+	for _, r := range rs {
+		stored[[2]string{r.Kind, r.Key}] = true
+		if !m.Holds(r.Kind, r.Key) {
+			m.Set(r, true)
+			if on != nil {
+				on(MarkChange{Revocation: r, Standing: true, Reloaded: true})
+			}
+		}
+	}
+	for _, r := range m.All() {
+		if !stored[[2]string{r.Kind, r.Key}] {
+			m.Set(r, false)
+			if on != nil {
+				on(MarkChange{Revocation: r, Reloaded: true})
+			}
+		}
+	}
+	return rev, nil
+}
+
+// FollowMarks keeps m current from feed after `from` until ctx ends, and
+// returns ctx's error then (plan 7e, Ruling 5). Each put and lift is
+// applied to m and told to on; one that changes nothing (a put of a mark
+// standing, a lift of one that does not) tells nothing. A compacted watch
+// loads the marks again (LoadMarks), telling on only of the difference,
+// tells rescanned, and goes on from the later of the load's revision and
+// the last change delivered. A watch that fails is tried again every
+// second, from the last change delivered: watched again from where the
+// follow began, a put whose lift came after would stand again for a
+// moment, and close the held connections of a principal already let back
+// in. up and logf are as crypt.FollowContexts's.
+func FollowMarks(ctx context.Context, feed MarkFeed, m *Marks, from uint64, on func(MarkChange),
+	up func(bool), rescanned func(), logf func(string, ...any)) error {
+	failing := false
+	for {
+		up(true)
+		err := feed.WatchRevocations(ctx, from, func(r Revocation, lifted bool, rev uint64) {
+			from = max(from, rev)
+			if m.Holds(r.Kind, r.Key) == !lifted {
+				return
+			}
+			m.Set(r, !lifted)
+			if on != nil {
+				on(MarkChange{Revocation: r, Standing: !lifted})
+			}
+		})
+		up(false)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if errors.Is(err, ErrCompacted) {
+			logf("store: the marks feed's revision was compacted; loading the marks again")
+			rescanned()
+			if rev, lerr := LoadMarks(ctx, feed, m, on); lerr == nil {
+				from, failing = max(from, rev), false
+				continue
+			} else {
+				err = lerr
+			}
+		}
+		if !failing {
+			logf("store: the marks feed stopped (%v); trying again every second", err)
+			failing = true
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Second):
+		}
+	}
 }

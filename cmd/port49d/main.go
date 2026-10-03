@@ -878,11 +878,40 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		}()
 		defer func() { cancel(); <-pruneDone }()
 	}
+	// markRev is the revision the daemon's marks were read at on etcd, which
+	// the marks feed follows from once the listener is built.
+	var markRev uint64
 	if brk != nil {
 		// The daemon's marks are every mark in force: the file's, and on
-		// etcd the store's too.
-		for _, r := range marks {
-			authMarks.Set(r, true)
+		// etcd the store's, read at one revision (plan 7e, Ruling 5). The
+		// file's are in the store by now (restoreRevocations).
+		if sts.persistent {
+			for {
+				markRev, err = store.LoadMarks(ctx, sts.etcd, authMarks, nil)
+				if err == nil || !errors.Is(err, store.ErrUnavailable) {
+					break
+				}
+				fmt.Fprintf(stderr, "port49d: store: reading the revocations in force: %v; the listeners stay "+
+					"closed; trying again in 5s\n", err)
+				select {
+				case <-ctx.Done():
+				case <-time.After(5 * time.Second):
+				}
+				if ctx.Err() != nil {
+					stopSpool()
+					<-spoolDone
+					return nil
+				}
+			}
+			if err != nil {
+				stopSpool()
+				<-spoolDone
+				return fmt.Errorf("store: reading the revocations in force: %w", err)
+			}
+		} else {
+			for _, r := range marks {
+				authMarks.Set(r, true)
+			}
 		}
 		brk.Marks = authMarks
 	}
@@ -1034,12 +1063,35 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 				MaxPerPrincipal:  cfg.Broker.MaxConnsPerPrincipal,
 				HandshakeTimeout: broker.DefaultListenerLimits.HandshakeTimeout},
 			m, time.Now, func(format string, args ...any) { fmt.Fprintf(stderr, format+"\n", args...) })
-		for _, r := range marks {
+		for _, r := range authMarks.All() {
 			bl.Revoked(r, true)
 		}
 		bl.Refused = brk.RefusedAtBind
 		bl.Status = brk.BindStatus
 		brk.Conns = bl
+	}
+	if sts.persistent && brk != nil {
+		// The daemon's marks and the listener's follow every mark made or
+		// lifted on any broker process from the revision they were read at
+		// (plan 7e, Ruling 5). Started once the listener holds those marks
+		// and is brk.Conns, so no change between the read and the listener
+		// is missed, and joined before sts.close, as the context feed is.
+		mctx, stopMarks := context.WithCancel(ctx)
+		marksDone := make(chan struct{})
+		go func() {
+			defer close(marksDone)
+			store.FollowMarks(mctx, sts.etcd, authMarks, markRev, brk.MarkChanged,
+				func(up bool) {
+					v := 0.0
+					if up {
+						v = 1
+					}
+					m.StoreFeedUp.WithLabelValues("marks").Set(v)
+				},
+				func() { m.StoreFeedRescans.WithLabelValues("marks").Inc() },
+				func(format string, args ...any) { fmt.Fprintf(stderr, "port49d: "+format+"\n", args...) })
+		}()
+		defer func() { stopMarks(); <-marksDone }()
 	}
 	// The admin socket binds before anything says "listening", as the broker
 	// does, and a failure lets go of every listener already bound (pre-flight

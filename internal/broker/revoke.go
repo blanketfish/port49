@@ -230,12 +230,7 @@ func (b *Broker) Revoke(ctx context.Context, req RevokeRequest) (RevokeReport, e
 	}
 	if b.Conns != nil {
 		b.Conns.Revoked(rep.Mark, true)
-		rep.Connections = b.Conns.CloseHeld(func(principal, certKey string) bool {
-			if kind == store.RevocationPrincipal {
-				return principal == key
-			}
-			return certKey == key
-		})
+		rep.Connections = b.Conns.CloseHeld(matchMark(rep.Mark))
 	}
 	rep.Saved, rep.SaveErr = b.persist(ctx)
 	var tokenKeys []store.TokenKey
@@ -283,6 +278,17 @@ func (b *Broker) Revoke(ctx context.Context, req RevokeRequest) (RevokeReport, e
 	}
 	b.recordRevocation(now, rep, decision.VerdictDeny, decision.CredentialRevoked, outcome)
 	return rep, nil
+}
+
+// matchMark names the held connections r names: a principal's by its
+// principal, a certificate's by its certificate key.
+func matchMark(r store.Revocation) func(principal, certKey string) bool {
+	return func(principal, certKey string) bool {
+		if r.Kind == store.RevocationPrincipal {
+			return principal == r.Key
+		}
+		return certKey == r.Key
+	}
 }
 
 // Lift removes a mark, from the store and the listener. It restores no

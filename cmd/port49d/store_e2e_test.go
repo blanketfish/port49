@@ -1,12 +1,16 @@
 package main
 
 import (
+	"bufio"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -21,6 +25,7 @@ import (
 	"github.com/rhwendt/port49/internal/store/etcd"
 	"github.com/rhwendt/port49/internal/store/etcd/etcdtest"
 	"github.com/rhwendt/port49/internal/tacacs/wire"
+	"github.com/rhwendt/port49/internal/testpki"
 )
 
 // etcdRun is a port49d config on a TLS etcd member with port49's roles,
@@ -454,4 +459,100 @@ func TestAHungStoreGoesDarkAndServesAgainWhenItReturns(t *testing.T) {
 	if !dev.permits("alice", "configure") {
 		t.Fatalf("after the store returned a new login's command was not permitted; log %s", log.String())
 	}
+}
+
+// A mark another broker process puts in the store reaches this port49d
+// through the marks feed (plan 7e, Ruling 5): alice's held broker
+// connection is closed, and her next command is denied credential_revoked
+// from the daemon's marks. Its lift lets her back in. And a mark standing
+// in the store alone when port49d starts is in the listener's copy before
+// any connection binds.
+func TestAMarkFromAnotherBrokerProcessReachesThisOne(t *testing.T) {
+	var out, log syncBuffer
+	e, o := stderr, stdout
+	t.Cleanup(func() { stderr, stdout = e, o })
+	stderr, stdout = &out, &log
+	cfgPath, pkiDir, _, _, srv := etcdRunServer(t)
+	root := srv.Client(t, "root")
+	ctx := context.Background()
+
+	tacacs, brokerAddr, stop := startRun(t, cfgPath, &out, 1)
+	dev := tacacsClient{t: t, addr: tacacs, key: []byte("run-test-secret")}
+	loginSession(t, dev, mint(t, brokerAddr, pkiDir, "leaf1"), &log)
+	principal := lastCommandPrincipal(t, &log)
+	conn := heldBrokerConn(t, pkiDir, brokerAddr)
+	key := "/port49/v1/rv/principal/" + url.PathEscape(principal)
+	val := fmt.Sprintf(`{"kind":"principal","key":%q,"at":%q,"origin":"test: another broker process"}`,
+		principal, time.Now().UTC().Format(time.RFC3339Nano))
+	if _, err := root.Put(ctx, key, val); err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	if _, err := conn.Read(make([]byte, 1)); err == nil || errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("alice's held broker connection was not closed: %v", err)
+	}
+	if dev.permits("alice", "configure") {
+		t.Fatal("a command under a mark the feed brought was permitted")
+	}
+	if r := lastCommand(t, &log); r["reason"] != "credential_revoked" {
+		t.Fatalf("the denial: %v", r)
+	}
+	if _, err := root.Delete(ctx, key); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for !dev.permits("alice", "configure") {
+		if time.Now().After(deadline) {
+			t.Fatalf("a lift the feed brought did not let alice back in: %v", lastCommand(t, &log))
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if err := stop(); err != nil {
+		t.Fatal(err)
+	}
+
+	// In the store alone, never this port49d's file: the next start reads
+	// it from the store, and the listener refuses alice as she binds.
+	if _, err := root.Put(ctx, key, val); err != nil {
+		t.Fatal(err)
+	}
+	_, brokerAddr, _ = startRun(t, cfgPath, &out, 2)
+	status, body, err := postAsAlice(pkiDir, brokerAddr)
+	if err != nil || status != http.StatusUnauthorized || !strings.Contains(body, `"credential_revoked"`) {
+		t.Fatalf("alice's first connection after the start: %s %v", reply(status, body), err)
+	}
+	waitFor(t, &out, "as it bound: "+principal+" or its certificate is revoked")
+}
+
+// heldBrokerConn opens a connection to the broker as the lab client and
+// asks /v1/config on it, leaving it open: an agent's held connection.
+func heldBrokerConn(t *testing.T, pkiDir, addr string) *tls.Conn {
+	t.Helper()
+	cert, err := tls.LoadX509KeyPair(filepath.Join(pkiDir, testpki.LabClientCert), filepath.Join(pkiDir, testpki.LabClientKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+	caPEM, err := os.ReadFile(filepath.Join(pkiDir, testpki.LabCA))
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots := x509.NewCertPool()
+	roots.AppendCertsFromPEM(caPEM)
+	c, err := tls.Dial("tcp", addr, &tls.Config{Certificates: []tls.Certificate{cert}, RootCAs: roots,
+		MinVersion: tls.VersionTLS13})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { c.Close() })
+	if _, err := io.WriteString(c, "GET /v1/config HTTP/1.1\r\nHost: broker\r\n\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
+	resp, err := http.ReadResponse(bufio.NewReader(c), nil)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("/v1/config on a held connection: %v %v", resp, err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	return c
 }

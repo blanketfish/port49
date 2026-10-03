@@ -817,3 +817,117 @@ func TestALargeBodyOnAMarkedConnectionIsAnswered(t *testing.T) {
 	}
 	wantRefusedRecords(t, f, lb, f.alice, f.alice)
 }
+
+// heldListener is a fixture served behind a Listener its broker's Conns
+// is, as port49d wires it.
+type heldListener struct {
+	f    *fixture
+	addr string
+	bl   *Listener
+}
+
+// brokerWithHeldConn serves a fixture behind a Listener that is its
+// broker's Conns (serveThrough), and opens principal's held connection
+// (held) with a certificate issued it.
+func brokerWithHeldConn(t *testing.T, principal string) (*Broker, *heldListener, *tls.Conn) {
+	t.Helper()
+	f := newFixture(t, 8)
+	addr, bl := serveThrough(t, f, DefaultListenerLimits, nil)
+	f.b.Conns = bl
+	l := &heldListener{f: f, addr: addr, bl: bl}
+	c, _ := held(t, f, addr, l.cert(t, principal))
+	return f.b, l, c
+}
+
+// cert is a certificate for principal ("user:<subject>").
+func (l *heldListener) cert(t *testing.T, principal string) tls.Certificate {
+	t.Helper()
+	return l.f.client(t, strings.TrimPrefix(principal, "user:"), l.f.now.Add(time.Hour))
+}
+
+// closedWithin reports whether the broker closed c within d.
+func closedWithin(c net.Conn, d time.Duration) bool {
+	_ = c.SetReadDeadline(time.Now().Add(d))
+	_, err := c.Read(make([]byte, 1))
+	var ne net.Error
+	return err != nil && !(errors.As(err, &ne) && ne.Timeout())
+}
+
+// bindRefused binds a new connection as principal and asks /v1/config on
+// it: true when it is answered 401 credential_revoked, as a marked
+// connection is (answeredRevoked), false when it is served.
+func bindRefused(t *testing.T, l *heldListener, principal string) bool {
+	t.Helper()
+	c := dialAs(t, l.f, l.addr, l.cert(t, principal))
+	defer c.Close()
+	if _, err := io.WriteString(c, "GET /v1/config HTTP/1.1\r\nHost: broker\r\n\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
+	resp, err := http.ReadResponse(bufio.NewReader(c), nil)
+	if err != nil {
+		t.Fatalf("a new bind was not answered: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	switch {
+	case resp.StatusCode == http.StatusUnauthorized && strings.Contains(string(body), string(decision.CredentialRevoked)):
+		return true
+	case resp.StatusCode == http.StatusOK:
+		return false
+	}
+	t.Fatalf("a new bind was answered %s %q", resp.Status, body)
+	return false
+}
+
+// A mark another broker process made, arriving through the feed, closes
+// this process's held connections it names and refuses the next bind
+// (Review Focus 3; Ruling 5).
+func TestAMarkFromTheFeedClosesThisReplicasHeldConnections(t *testing.T) {
+	b, l, conn := brokerWithHeldConn(t, "user:alice@example.com") // a Broker whose Conns is l, and alice's live connection
+	alice := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:alice@example.com", At: time.Now()}
+	b.MarkChanged(store.MarkChange{Revocation: alice, Standing: true})
+	if !closedWithin(conn, 2*time.Second) {
+		t.Fatal("the held connection was not closed")
+	}
+	if !bindRefused(t, l, "user:alice@example.com") {
+		t.Fatal("a new bind was not refused credential_revoked")
+	}
+	b.MarkChanged(store.MarkChange{Revocation: store.Revocation{Kind: alice.Kind, Key: alice.Key}})
+	if bindRefused(t, l, "user:alice@example.com") {
+		t.Fatal("a lift from the feed did not reach the listener")
+	}
+}
+
+// A mark from the feed closes only what it names: a principal's mark
+// closes no one else's, a certificate's closes the connection holding
+// that certificate and not its owner's others, and a lift, or a reload's
+// lift, closes nothing. A broker with no listener takes a change and does
+// nothing.
+func TestAMarkFromTheFeedClosesOnlyWhatItNames(t *testing.T) {
+	b, l, alice := brokerWithHeldConn(t, "user:alice@example.com")
+	aliceBr := bufio.NewReader(alice)
+	carolCert := l.cert(t, "user:carol@example.com")
+	carol, carolBr := held(t, l.f, l.addr, carolCert)
+	other, otherBr := held(t, l.f, l.addr, l.f.alice) // alice's other certificate
+	b.MarkChanged(store.MarkChange{Revocation: store.Revocation{Kind: store.RevocationPrincipal,
+		Key: "user:bob@example.com", At: time.Now()}, Standing: true})
+	b.MarkChanged(store.MarkChange{Revocation: store.Revocation{Kind: store.RevocationCert,
+		Key: certKey(l.f.alice), At: time.Now()}, Standing: true})
+	if !closedWithin(other, 2*time.Second) {
+		t.Fatal("the connection holding the marked certificate was not closed")
+	}
+	ask(t, alice, aliceBr)
+	ask(t, carol, carolBr)
+	_ = otherBr
+	for _, reloaded := range []bool{false, true} {
+		b.MarkChanged(store.MarkChange{Revocation: store.Revocation{Kind: store.RevocationPrincipal,
+			Key: "user:carol@example.com"}, Reloaded: reloaded})
+		ask(t, carol, carolBr)
+	}
+	if got := testutil.ToFloat64(l.f.b.Metrics.BrokerConnectionEvents.WithLabelValues("revoked_closed")); got != 1 {
+		t.Fatalf("revoked_closed %v, want the one certificate's", got)
+	}
+	(&Broker{}).MarkChanged(store.MarkChange{Revocation: store.Revocation{Kind: store.RevocationPrincipal,
+		Key: "user:alice@example.com", At: time.Now()}, Standing: true})
+}

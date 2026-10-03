@@ -523,6 +523,25 @@ func revokedRecord(now time.Time, principal string, cred store.Credential) decis
 		Auth: &decision.Auth{Method: cred.Method, Fingerprint: cred.Fingerprint}}
 }
 
+// MarkChanged is a mark made or lifted on a broker process, this one
+// included, as the marks feed brings it (plan 7e, Ruling 5): the
+// listener's copy follows, and a mark that stands closes this process's
+// held connections it names, as Revoke closes its own. The daemon's marks
+// (b.Marks) are the feed's own to keep (store.FollowMarks).
+func (b *Broker) MarkChanged(c store.MarkChange) {
+	if b.Conns == nil {
+		return
+	}
+	b.Conns.Revoked(c.Revocation, c.Standing)
+	if !c.Standing {
+		return
+	}
+	if n := b.Conns.CloseHeld(matchMark(c.Revocation)); n > 0 {
+		b.logf("broker: a revocation of %s made on a broker process closed %d held connection(s) here",
+			printsafe.Line(c.Key, 160), n)
+	}
+}
+
 // RefusedAtBind records a request the broker's listener refused as its
 // connection bound (Listener.Refused): credential_revoked for a mark on its
 // principal or certificate, or the reason its certificate's status gave.
