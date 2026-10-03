@@ -1484,6 +1484,25 @@ func TestTheLedgerPlacesAWriteAfterTheStoresRevisionsWereBumped(t *testing.T) {
 	}
 }
 
+// A write's end can come late. w compared on 300 and committed at 340,
+// after a restore whose revisions climbed again; before its end, a second
+// restore took the revisions back, and v, sent after it, committed at 305
+// and was placed. The store holds v. w was sent before v ended, so its
+// higher revision is from before the second restore, and it is not placed
+// (Task 15 cryptfix review M1).
+func TestTheLedgerDoesNotPlaceAWriteThatEndedAfterALaterOne(t *testing.T) {
+	k := store.ContextKey{NAS: "leaf-01", Username: "netops"}
+	l := NewLedger()
+	l.admits(k, "a")
+	l.end(l.begin(k, "x", 0), 331, nil)
+	w := l.begin(k, "w", 300)
+	l.end(l.begin(k, "v", 300), 305, nil)
+	l.end(w, 340, nil)
+	if l.admits(k, "w") || !l.admits(k, "v") {
+		t.Fatal("a write that ended after a later write was placed over it")
+	}
+}
+
 // offsetStore reports every context revision off above the store's, and
 // takes them back on a compare: setting off to zero is an etcd restore,
 // whose revisions go back.

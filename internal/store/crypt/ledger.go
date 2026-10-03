@@ -51,7 +51,8 @@ var ErrNotLastWritten = errors.New("crypt: not the context this port49d last wro
 // repeat at a key and only grow (store.Context.Rev), so a write that
 // compared on a revision below the last's committed before it, if it
 // landed at all; one whose outcome is unknown is not admitted then
-// (earlier). A landed write whose revision the store did not report is
+// (earlier). A restore breaks both, and is placed by its own rules,
+// below. A landed write whose revision the store did not report is
 // not placed, and the key admits nothing but writes in flight until
 // another lands, which fails closed. A read sets the last at no revision:
 // any write that lands replaces it (Task 4b fix 2 review I1, N1).
@@ -72,8 +73,11 @@ var ErrNotLastWritten = errors.New("crypt: not the context this port49d last wro
 // The runbook's restore bumps the revision instead (--bump-revision;
 // design §12): a restored record keeps its revision, below the last's,
 // and the store's jumps past every one it gave, so a login after it
-// compares below the last and commits above it, and is placed as the last
-// too (Task 15, measured: tests/lab/results/L35-restore-arista_eos.md).
+// sent after the last ended compares below the last and commits above
+// it, and is placed as the last too (Task 15, measured:
+// tests/lab/results/L35-restore-arista_eos.md). One sent before the last
+// ended may have committed before a restore the last came after, so it is
+// taken as earlier, which fails closed (Task 15 cryptfix review M1).
 //
 // A read racing a write can return the record it replaced after it
 // landed. Its revision is below the last's (stale), so GetContext reads
@@ -235,11 +239,14 @@ func (l *Ledger) end(w ledgerWrite, committed uint64, err error) {
 		// earlier, which takes its low compare revision as an earlier write.
 		e.last, e.lastRev, e.lastEnd = w.id, committed, l.seq
 		clear(e.unknown)
-	case err == nil && e.earlier(w) && committed > e.lastRev:
-		// Compared below the last and committed above it: a restore with
-		// --bump-revision, whose records keep their revisions while the
-		// store's jumps past every one it gave. It holds this write. Before
-		// earlier, which takes the low compare revision as an earlier write.
+	case err == nil && e.earlier(w) && committed > e.lastRev && w.seq > e.lastEnd:
+		// Sent after the last ended, compared below it and committed above
+		// it: a restore with --bump-revision, whose records keep their
+		// revisions while the store's jumps past every one it gave. It holds
+		// this write. One sent before the last ended may have committed
+		// before a restore the last came after, so it is earlier (Task 15
+		// cryptfix review M1). Before earlier, which takes the low compare
+		// revision as an earlier write.
 		e.last, e.lastRev, e.lastEnd = w.id, committed, l.seq
 		clear(e.unknown)
 	case e.earlier(w), err == nil && e.known && committed != 0 && committed < e.lastRev:
