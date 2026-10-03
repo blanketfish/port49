@@ -22,6 +22,10 @@ hand to 7e.
     earlier record put back is denied.
   - Every process keeps that high-water mark current by following the store's context family
     (a watch).
+  - **The feed fence.** A read admits a record only once this process's feed has delivered
+    every change through the record's revision. A put-back cannot hide behind a feed that lags
+    or has stopped: the read waits for the feed, up to `call_timeout`, and is otherwise
+    `store_unavailable`. A dead feed therefore goes dark as a dead store does.
   - The runner records each key's mark in a **ledger record** that the daemon's role cannot
     write. A process that starts is therefore seeded with what the processes before it knew.
 - **The marks across processes.** Each process loads the revocation marks at a revision and
@@ -34,6 +38,17 @@ hand to 7e.
     is released.
 - **`broker.revocations_file` is retired on etcd**, which persists the marks. It stays for the
   memory store.
+  - Each broker replica keeps its own copy of the marks it followed, in
+    `broker.state_dir/marks.json`. After an etcd restore, the runner puts back every mark the
+    copy holds that the store lost.
+  - With every broker down, `port49-broker revoke --offline` writes a revocation through the
+    store, with no API.
+- **Policy across replicas.**
+  - Every replica records the bundle it serves.
+  - A replica whose bundle differs from the runner's says so, and its reload or start has the
+    runner judge every live context.
+  - A start whose policy file the reload guard would refuse, against the bundle last judged,
+    stays not ready.
 - **Carries.** The flaky `TestStartClusterRetriesAPortTaken`; the encryption key-id charset
   refused at load.
 - **Lab.**
@@ -64,12 +79,22 @@ hand to 7e.
     revision the start's scan read at. A key it has never seen admits only a record sealed at
     or above that.
   - **What feeds it.** Its own writes and reads; the context feed (`ScanContexts`, then
-    `WatchContexts`); and, at the start, the ledger record (`lw/`).
+    `WatchContexts`); and, at the start, the ledger record (`lw/`). The feed and a later scan
+    raise a mark the ledger holds. They make a new one only for a record sealed at or above the
+    base.
+  - **The fence (`crypt.Fence`, `crypt.Fenced`).** It records how far the feed has delivered.
+    It sits under the guard and holds each context read until the feed has passed the record's
+    revision, so the guard counts a feed that never gets there as a failed call.
 - **The runner.**
   - **The hold.** It takes plan 7d's hold (`meta/hold`) as the broker. On taking it, it runs
-    plan 7d's start: the seal keys, the re-index, the marks on the kept contexts, the purge
-    (only when the bundle in force is not the one last judged), and the carry. Then it runs
-    the sweep, the ledger keeper and the context half of every refresh pass.
+    plan 7d's start: the seal keys, the re-index, the marks its copy holds and the store lost,
+    the marks on the kept contexts, the purge (only when the bundle in force is not the one
+    last judged), the carry, and `meta/judged` when nothing is owed. Then it runs the sweep,
+    the ledger keeper, the context half of every refresh pass, and a full context pass whenever
+    another replica's reload or start asks for one (`meta/refresh_owed`).
+  - **Before the hold.** A replica whose policy file the reload guard refuses, against the
+    policy `meta/judged` records, stays not ready: it does not mint and does not take the
+    hold.
   - **Losing it.** It stops those duties, keeps serving the API, and tries to take the hold
     again.
 - **port49d on etcd.**
@@ -138,6 +163,10 @@ what happens to it.
 | Go-dark proper (N failures / M passes) and the warm context cache | **Left to 7f** | The roadmap's 7f. Ruling 11's probe is the interim for a daemon with no hold |
 | The etcd deployment artifacts, two Deployments and the runner; timeouts sized under load; the store alarms | **Left to plan 12** | The roadmap's 12. Task 18's operator notes name what plan 12 must ship |
 | Copying 7d's raw L35 captures to `main` | **The controller's merge chore**, not a task | Task 17 Step 0 checks the labpcap audit passes on the branch before the run |
+| 7c: a reload guard at start, against the last bundle in force (roadmap, 7c's "7e" carries; 7c pre-flight I4) | **Taken** | Ruling 17; Task 15a. `meta/judged` records the policy judged, and a start the guard refuses stays not ready |
+| 7c: `/healthz` and `/readyz` on the broker's own process | **Taken** | Task 15 Step 7, item 2 |
+| 7c: the revocations file's init in the broker's deployment | **Taken: moot on etcd** | Ruling 12 retires the file on etcd. On memory, `port49d init-revocations` stays as it is, and plan 12 owns the deployment step |
+| 7c: the per-caller self/key bound (`holdOwnRevoke`) and the revocation slot are per process, so with replicas a caller holds one per replica | **Left unassigned** | Each replica bounds its own callers, so a fleet of N replicas allows N at once. That is a rate bound, not a security boundary: every revocation is idempotent, and none is refused that one replica would answer. A shared bound would need one more store record per call. Named in Task 18's "Unassigned" |
 
 ## The split: two merges, one plan
 
@@ -152,23 +181,28 @@ request, each leaving `make test` green. Nothing is cut.
   - **Tasks 2–3:** two carried fixes.
   - **Task 4:** the decision-log emits under the policy hold.
   - **Task 5:** `superseded` in the store.
-  - **Tasks 6–10:** the write sequence, the ledger, the feeds and the ledger record.
+  - **Tasks 6–10:** the write sequence, the ledger, the feeds (8), the feed fence (8a) and the
+    ledger record.
   - **What changes for an operator in 7e-1:**
     - a context sealed by 7d (form 3) no longer opens, so an etcd store's live sessions end at
-      the upgrade;
+      the upgrade, with one line naming it;
     - a context put back while port49d was stopped is denied after a restart, for every key the
       ledger record holds;
-    - two new metrics.
+    - a context read waits for the context feed, so a feed that has stopped denies new
+      sessions `store_unavailable`;
+    - `port49d store-roles` is re-applied before the upgrade;
+    - four new metrics.
   - No device-visible behaviour changes, so there is no lab.
 - **7e-2, `feature/broker-split`, off `main` after 7e-1 merges.** The two processes.
   - **Task 11:** the docs for what 7e-2 builds, and L37 and L38 opened.
   - **Task 12:** the move into `internal/port49d`.
-  - **Tasks 13–16:** the config, port49d without a broker, port49-broker, and the fleet end to
-    end.
+  - **Tasks 13–16:** the config, port49d without a broker, port49-broker (15), policy across
+    replicas and the guard at start (15a), the marks copy and the offline revocation (15b), and
+    the fleet end to end.
   - **Task 17:** the lab, which gates the merge.
   - **Task 18:** the as-built docs.
 
-**Why split.** Eighteen tasks is above 7d's sixteen.
+**Why split.** Twenty-one tasks (eighteen, plus 8a, 15a and 15b) is well above 7d's sixteen.
 - **What each half risks is different.** 7e-1 is correctness against properties, with no new
   process. 7e-2 is operational, and L37 gates it.
 - **A reviewer can reject one and approve the other.** The ledger change is the one most worth
@@ -251,28 +285,63 @@ them. The ones to read first are under "Worth reading before the merge".
        delete reads at a revision past the delete, and `hw + 1` is above everything known.
    - **The rule.** A read admits a record whose sealed sequence is at or above the key's
      high-water, and raises the high-water to it.
+     - **The feed fence comes first** (pre-flight C1). A record is judged only once this
+       process's context feed has delivered every change through the record's mod revision.
+       - A put-back is a store write, so it commits above the write it hides. Once the feed
+         has passed the put-back's revision, it has delivered that later write and raised the
+         high-water past the put-back.
+       - A read whose record is newer than the feed asks the feed for its progress (etcd's
+         `RequestProgress`) and waits, bounded by the guard's `call_timeout`.
+       - A feed still behind at the bound is `store.ErrUnavailable`, and the guard counts it.
+         A dead feed therefore opens the context pool's circuit and goes dark as a dead store
+         does (Ruling 11's probe pings through the fence too).
+       - No wait is needed for a record at the revision this process last knew at its key: its
+         own write, or a record it already admitted.
+       - A process with no feed (memory, the tests' two-layer fixtures) passes at once. Its
+         ledger sees every write already.
      - **A key with no entry** admits a record at or above the ledger's **base**, the revision
-       after the start's scan (Ruling 4). Any record that existed then was scanned, and
-       anything sealed since is above it.
+       after the start's scan (Ruling 4). Any record that existed then was scanned.
+       - **The feed and every later scan** (a compacted watch, a re-entry after a store gone)
+         raise an entry that exists. They make one only for a record sealed at or above the
+         base (`Ledger.ObserveFollowed`; pre-flight I1).
+       - So a put-back at a key this process never saw is denied whether or not the feed has
+         brought it. Made the key's entry, it would be admitted.
+       - **The one fail-closed race.** A login sealed by another process before this process's
+         scan, and committed after it, is below the base. Its writer's `Seen()` predated the
+         scan, and a put-back looks the same. It is denied on this process until the next
+         write at its key, `store_unavailable` to that one session. That needs a login in
+         flight across another process's start.
      - **Below the high-water** is denied `store_unavailable`, as 7d denies a record that is not
        the one last written (`crypt.ErrNotLastWritten`, kept).
      - **A read that raced a write** is read again (`stale`), up to twice, as 7d does: its
        revision is below the high-water's.
-   - **What it fixes.** Another process's later login at a key is admitted: its sequence is
-     higher. An earlier record put back is denied: its sequence is lower. With a per-process
-     ledger, the first would deny every other replica's logins (re-check IA1).
+   - **What it fixes.** Another process's later login at a key is admitted, once this
+     process's feed has passed it: its sequence is higher. An earlier record put back is
+     denied, whether or not the feed has caught up, and whichever process wrote either: its
+     sequence is lower. With a per-process ledger, the first would deny every other replica's
+     logins (re-check IA1).
    - **Simpler than 7d's.** 7d's writes in flight, unknown outcomes and the two restore cases
      (Tasks 6b, 13b; 79812ef, 3159dbc) all fall out of the rule.
      - A write of unknown outcome that landed has the higher sequence. One that did not left
        the record the high-water names.
-     - After a restore, with or without `--bump-revision`, `Seen()` never goes back, so a write
-       after it seals above every earlier record. A record the restore brought back is below
-       the high-water and is denied, as 7d measured (L35).
+     - After a restore, with or without `--bump-revision`, this process's `Seen()` never goes
+       back, so its next write seals above every earlier record. A record the restore brought
+       back is below the high-water and is denied, as 7d measured (L35).
+     - **Across processes, a restore needs the runbook** (pre-flight I12). A process started
+       after a restore without `--bump-revision` has a low `Seen()`, and seals below the
+       high-water a process that ran across the restore holds. Its logins are denied there
+       until a process that ran across it writes at the key.
+       - With `--bump-revision`, every revision after the restore is above every earlier one,
+         so every process admits them.
+       - So the runbook (design §13; Task 11) says to restore with `--bump-revision` and
+         `--mark-compacted`, as etcd advises, or else to restart every port49d and
+         port49-broker after the restore.
+       - `TestALoginAfterARestoreIsAdmitted` pins both outcomes with two processes.
    - **The revocation floor** (7d final review I-1) stays.
      - Each process also takes a floor from the feed: a change at a key whose plaintext
        `revoked_at` is set, at the high-water's sequence.
      - So a seal that failed on one replica is held on every replica that saw the plaintext
-       mark land.
+       mark land. The fence makes "saw" certain before a put-back that zeroes it is read.
    - **Memory.** An entry is kept while a record it saw could still be live: until the latest
      sealed ceiling it saw at the key, plus `session.grace_window`. A `never` context's entry is
      kept for good. Past that a record put back is past its sealed ceiling, which the
@@ -281,6 +350,14 @@ them. The ones to read first are under "Worth reading before the merge".
      upgrade: it is denied, replaced at the next login, and revoked by the refresh as tampered,
      as 13b did to form 2. Tokens are purged at a start that changes the bundle anyway. The
      memory store loses everything at the restart that installs it.
+     - **What the operator reads** (pre-flight I10). An earlier form is
+       `crypt.ErrEarlierForm`, and the line says so once per 10 minutes, not as tampering:
+       `a context sealed by an earlier port49 (form 3) does not open: expected once after the
+       7e upgrade; replaced at its user's next login`.
+     - A record below the high-water says `is sealed below the newest write any port49
+       process made there`. 7d's "is not the one this port49d last wrote there" is wrong under
+       the new rule.
+     - **Rolling back to 7d** ends sessions again: 7d does not open form 4.
 4. **The ledger record, `lw/<nas>/<user>`, kept by the runner alone.**
    - **What it holds.** Per key, `{seq, revoked_at, until}`.
    - **Who writes it.** The runner, about once a second, from its own ledger. Every write
@@ -294,7 +371,18 @@ them. The ones to read first are under "Worth reading before the merge".
    - **The residual it leaves:**
      - a key written within the keeper's lag (a second, and a store round trip) and put back
        inside it;
-     - a key written while no runner ran, put back before a runner recorded it.
+     - a key written while no runner ran, put back before a runner recorded it;
+     - a key written while the runner's own context feed was down, since the record follows
+       the runner's ledger, which only that feed raises for other processes' logins.
+   - **Saying it is behind** (pre-flight I11).
+     - `port49_ledger_pending` is how many marks the runner's ledger owes the record.
+     - `port49_ledger_behind` is 1 while the runner keeps the record and its context feed is
+       down: pending then reads 0 while the record silently stops following other processes'
+       logins.
+     - Both are set to 0 when the runner's duties stop, so an ex-runner never shows a stale
+       value.
+     - The alarm (design §15) is: on the runner, `port49_ledger_pending` above 0 for a minute,
+       or `port49_ledger_behind` at 1.
 5. **The marks across processes.**
    - **Loading.** Every process loads the marks with the revision they were read at
      (`Revocations`) before it serves, then follows `rv/` from that revision
@@ -305,28 +393,46 @@ them. The ones to read first are under "Worth reading before the merge".
      - closes the held connections it names on every replica (`Broker.MarkChanged`);
      - is in every daemon's marks within the watch's latency.
    - **A lift** takes it out of each.
-   - **A lagging feed opens nothing.** A revocation marks every context record it reaches (7a),
-     and the mint path reads the store's marks itself. A lagging feed only delays the
-     in-memory copy, which is defence against a put-back.
-   - **A compacted watch** loads the marks again and applies the difference.
+   - **A lagging marks feed only delays the in-memory copy.**
+     - A revocation marks every context record it reaches (7a), and the mint path reads the
+       store's marks itself.
+     - A put-back that would hide a revocation (the plaintext `revoked_at` zeroed, or an
+       earlier record) is the context feed's to catch. A read waits for that feed (Ruling 3,
+       the fence).
+     - 0cc5573's "a lagging feed opens nothing" claimed this without the fence. Without it, a
+       put-back read before the context feed delivered the revocation was admitted (pre-flight
+       C1).
+   - **A compacted watch** loads the marks again and applies the difference. A mark the reload
+     finds missing is applied as a lift, but is told as `Reloaded`. It may be a lift made in
+     the gap, or a mark a restore lost. So each broker's copy (Ruling 12) keeps it, and only a
+     lift the watch delivered as a delete removes one.
 6. **The runner.** The keyspace hold of 7d's Ruling 11 is now the runner's: one port49-broker
    per keyspace at a time.
    - **On taking it,** with the API already serving:
      1. it records the seal keys (`meta/seal_keys`);
      2. re-indexes every kept context the index lost;
-     3. applies every standing mark to the kept contexts;
-     4. purges the unspent tokens, only by Ruling 7;
-     5. carries the policy in force into every kept context.
+     3. puts back every mark its copy holds that the store lacks (Ruling 12), and says how many;
+     4. applies every standing mark to the kept contexts;
+     5. purges the unspent tokens, only by Ruling 7;
+     6. carries the policy in force into every kept context;
+     7. records `meta/judged` (Ruling 7) itself when the carry leaves no pass owed (pre-flight
+        I2). Otherwise the reloader's settle records it, as below.
    - **Then it runs:**
      - the sweep and the re-index every `sweep_interval`;
      - the ledger keeper (Ruling 4);
      - the context half of every refresh pass, which records quarantines as before;
-     - `meta/judged` (Ruling 7) whenever its `port49_policy_refresh_pending` reaches 0.
+     - a full context pass whenever another replica asks for one in `meta/refresh_owed`
+       (Ruling 8);
+     - `meta/judged` (Ruling 7) whenever its `port49_policy_refresh_pending` reaches 0 and
+       every replica serves the runner's bundle;
+     - after every reload of its marks feed, the same put-back as step 3.
    - **Every replica, runner or not:**
      - serves the API and the admin socket;
      - runs the token half of its own reload's passes (Ruling 8);
+     - records the bundle it serves (`meta/bundles/`), and asks for a full pass after its own
+       reload or start (Ruling 8);
      - runs certificate status and its revocation queue (a mark is idempotent);
-     - follows the marks and the contexts.
+     - follows the marks and the contexts, and keeps its copy of the marks (Ruling 12).
    - **Losing the hold** (the key gone, the lease lapsed, or etcd not answering with half the
      lease or less left, as 7d's fence judges):
      - the runner's duties stop at once;
@@ -338,16 +444,44 @@ them. The ones to read first are under "Worth reading before the merge".
      write is a compare-and-set and every mark is idempotent. It costs at most a duplicated
      `refresh` record.
    - **The waiting line** names the holder, as 7d's did, with "this replica serves the API".
+     - When the holder is this replica's own last run (a hold lost while the lease lives on),
+       the line is 7d's I-2 line (4001732), not "run by" itself (pre-flight M7): `keyspace
+       … is still held by this replica's last run (…); waiting up to hold_ttl for its lease to
+       expire`.
+   - **The purge's moment** (pre-flight M8). A token minted on any replica between the
+     takeover's `SupersedeAll` and its purge is deleted too. `port49 token` succeeded, and
+     the login then fails `token_not_found`. That needs a mint within the purge's few store
+     round trips of an unjudged takeover. It fails closed, and running `port49 token` again
+     mints one that works. It is named in the operator notes rather than cut off by a mint
+     time the store cannot read (the time is sealed).
 7. **The token purge happens when the bundle changed hands unjudged**, not at every start.
-   - **`meta/judged`** is the bundle in force when the runner's last pass left
-     `port49_policy_refresh_pending` at 0, so every token minted under an earlier bundle was
-     judged against it.
+   - **`meta/judged`** is the bundle in force, with its policy file's bytes (Ruling 17). It is
+     written only when two things hold:
+     - the runner's last pass left `port49_policy_refresh_pending` at 0, so every token minted
+       under an earlier bundle was judged against it;
+     - every replica's `meta/bundles/` record names the runner's bundle (Ruling 8), so no
+       replica still mints under another.
+   - **Who writes it** (pre-flight I2):
+     - the takeover itself, once its purge (if any) and its carry complete with no pass owed;
+     - the reloader's settle otherwise (`onSettled`).
+     - Each says `runner: recorded bundle <bundle> as judged`. When a replica still serves
+       another bundle, it says `runner: not recording bundle … as judged: <replica> serves
+       bundle …` instead.
+     - Without the takeover's own write, a first install, and every takeover after a purge,
+       left it absent, so every later takeover purged again.
    - **At a takeover** a runner whose bundle in force differs (an edit made with no runner, or a
      runner that died before its settle pass) purges every unspent token. It writes
      `meta/superseded_all` with the instant, so an idempotent replay on any replica mints
-     afresh.
+     afresh. A `meta/judged` that does not decode is taken as absent: the takeover purges.
    - **Otherwise it purges nothing.** A rolling restart of the brokers does not make every
      operator run `port49 token` again.
+   - **After an etcd restore,** `meta/judged` is the snapshot's, so a takeover would not purge.
+     A token redeemed since the snapshot would be unspent again until its sealed expiry. 7d's
+     start purged at every start and closed that.
+     - So the restore runbook (design §13, Task 11) deletes `meta/judged` before any
+       port49-broker starts: `etcdctl del <prefix>v1/meta/judged`.
+     - The first takeover then purges every unspent token, as 7d's start did.
+     - Found while revising for the pre-flight review, not by it. Named in the commit.
    - **Memory.** A start still purges as before; its store is empty anyway.
 8. **The settle pass covers a replica that reloads late.**
    - **The delay** is `max(30s, 2 × policy_watch_interval + 5s)` after a swap.
@@ -355,9 +489,35 @@ them. The ones to read first are under "Worth reading before the merge".
      that settle pass completes, instead of resetting them after the first complete pass.
    - **What that catches.** A token another replica minted under the replaced policy before it
      reloaded is judged by the runner's settle pass, and by that replica's own token pass.
-   - **The residual.** A replica that reloads later than the settle pass, which only a
-     `policy_watch_interval` differing between replicas can cause. Task 13 refuses nothing for
-     it; the operator note says to set the same interval everywhere.
+   - **What it does not catch, and what does** (pre-flight I3). Each replica reads its own
+     `broker.policy_file`.
+     - **Propagation skew** outlasts any settle window: a ConfigMap volume often lags 60s or
+       more, and config management reaches hosts at different times. So a replica can mint
+       under the withdrawn grant after the runner's settle pass, and a context redeemed from
+       it carries the old blob. That replica's own reload runs only the token half, so no
+       pass reaches that context. 0cc5573's "only a differing interval" was wrong.
+     - **Every replica records the bundle it serves**, in `meta/bundles/<who>`. The record is
+       leased for `hold_ttl`, renewed every third of it, and rewritten at every swap.
+     - **`port49_policy_bundle_matches_runner`** is 1 while a replica's bundle is the one the
+       runner's record names, 0 otherwise. It is 1 on the runner. A mismatch is said once per
+       pair of bundles: `policy: this replica serves bundle X and the runner (<who>) serves
+       bundle Y; set the same broker.policy_file content and broker.policy_watch_interval on
+       every replica`.
+     - **A non-runner's swap, and its start, write `meta/refresh_owed`**. The runner reads it
+       every `policy_watch_interval`. When its revision is newer than the last one handled, the
+       runner runs a full context pass: `Refresh` with `priors = [the policy in force]`, whose
+       context half judges every live context against that policy. Then it deletes the record
+       on that revision.
+     - **A replica that dies before it reloads** leaves its record to lapse. The runner, having
+       seen another bundle in `meta/bundles/`, owes a full context pass at the last sighting
+       plus `policy.MaxTokenTTL` (15m). By then every token that replica minted has expired
+       or been redeemed, so the pass reaches every context it made.
+     - While a replica serves another bundle, the runner writes no `meta/judged` (Ruling 7), so
+       the next takeover purges.
+   - **The residual.** A token minted on a skewed replica is redeemable until that replica's
+     own token pass or its expiry, at most `token_ttl` (15m). Any context made from one is
+     carried at the replica's reload, or at the last sighting plus 15m if the replica dies.
+     The operator note still says to set the same file and interval everywhere.
 9. **What the broker remembers.**
    - **`superseded` moves into the store** (`sp/<nas>/<user>`, broker role only). Every replica
      must answer an idempotent replay alike (design §17), and the key a revocation superseded
@@ -371,7 +531,11 @@ them. The ones to read first are under "Worth reading before the merge".
      - Each process's decision log must stay replayable by itself (spec §5.7, Replay): a mint
        record names a blob its own stream carried.
      - A shared "seen" would leave a replica's stream naming blobs only another stream holds.
-     - Forgetting costs one duplicate `blob` record.
+     - Forgetting costs a duplicate `blob` record per concurrent request. Since Task 4 drops
+       `putBlob`'s `b.mu` serialisation, N mints of a new hash at once after a reload each
+       buffer and write a blob record, a burst of up to N large duplicates (pre-flight M10).
+       Replay reads a duplicate as one. Accepted: serialising them again would put a store
+       write back under a lock every mint shares.
    - **`quarantineRecorded` stays the runner's.** Each complete pass already prunes it to the
      contexts it met (`refreshContexts`), so it is bounded by the live contexts. A takeover
      writes at most one more `refresh` record per quarantined context.
@@ -393,32 +557,85 @@ them. The ones to read first are under "Worth reading before the merge".
     - **The probe.** One `Ping` every `hold_ttl`/6 through the context pool, so an idle
       port49d's circuit opens and it goes dark as 7d's fence made it. The two triggers are a
       token or context pool whose circuit stays open for `hold_ttl`, and a refused run.
+      - The ping goes through the feed fence (Ruling 3): it answers only once the context feed
+        has delivered through the revision the ping read at.
+      - So a context feed that has stopped fails every probe, and the port49d goes dark,
+        though the store answers. A device then uses another replica, or its local method,
+        rather than a port49d that cannot tell a put-back from a login.
     - **A run after a store gone** keeps the ledger and the marks, which are the process's.
     - **Live sessions survive a restart,** as in 7d.
     - **The policy.** port49d reloads its policy file live, for admission, quarantine and
       redaction, and carries nothing into live contexts: that is the broker's (design §6).
       Broker down, a reload changes admission at once and live contexts at the next runner's
       pass.
-12. **`broker.revocations_file` is retired on etcd.**
-    - **Why it is not needed.** The store persists the marks, and since plan 7d every start
-      has put the file's marks into it, so a 7d deployment's marks are all in etcd already.
-    - **What replaces it.** `broker.state_dir` holds the persisted CRLs. The file, its marker
-      and `port49d init-revocations` stay for the memory store.
-    - **A restore.** A restored etcd snapshot rolls the marks back, and the operator re-applies
-      revocations made since the snapshot. The file no longer puts them back; the runbook
-      changes (Task 18).
-13. **The admin sockets.**
-    - **port49-broker's** answers `revoke`, `lift` and `list`.
+12. **`broker.revocations_file` is retired on etcd, and each broker keeps a copy of the
+    marks.** Changed by pre-flight I5 to the option that denies more.
+    - **Why the file is not needed.** The store persists the marks, and since plan 7d every
+      start has put the file's marks into it, so a 7d deployment's marks are all in etcd
+      already. The file is operator-managed. Its copy below is not.
+    - **What replaces it.**
+      - `broker.state_dir` holds the persisted CRLs and `marks.json`.
+      - The file, its marker and `port49d init-revocations` stay for the memory store.
+    - **`marks.json`, one per replica.**
+      - Each port49-broker writes the marks it follows to `broker.state_dir/marks.json`: owner
+        only, written to a temporary file and renamed.
+      - A mark the feed or a load brings is added.
+      - A lift is removed only when the watch delivered it as a delete. A mark a reload found
+        missing (`MarkChange.Reloaded`) stays in the copy: it may be a restore's loss.
+      - A write that fails is said once per run of failures. The copy in memory stays whole.
+    - **The put-back.** The runner's takeover, and every reload of the runner's marks feed,
+      put back every mark in its copy that the store lacks (`PutRevocation`, idempotent). It
+      says how many:
+      `runner: 2 revocation(s) in broker.state_dir/marks.json were missing from the store (an
+      etcd restore, or a lift made while this replica's watch was compacted away) and are put
+      back; lift any that were lifted on purpose with port49 revoke --lift`.
+      The takeover's next step applies them to the kept contexts.
+    - **Which way it errs.**
+      - A mark lifted after the snapshot is absent from every copy that saw the lift, so the
+        restored store's mark stands, as the restored snapshot says.
+      - A copy that missed a lift (its replica down, or its watch compacted, at the time) puts
+        the mark back. That denies more, and the line says how to lift it.
+    - **A restore.** The runbook (design §13) restores with every port49-broker stopped, deletes
+      `meta/judged` (Ruling 7), and starts the brokers: the first runner puts the marks back and
+      purges the unspent tokens. Nothing is re-applied from memory at 3am.
+13. **The admin sockets, and revoking with every broker down.**
+    - **port49-broker's** answers `revoke`, `lift` and `list`. A `keys diagnose` there is
+      answered "port49-broker holds no device packets; keys diagnose is port49d's admin
+      socket" (`admin.Server.DiagnoseElsewhere`).
     - **port49d's** answers `keys diagnose`. When it runs no broker, a `revoke` or a `list`
       there is answered "port49d runs no broker; revocation is port49-broker's admin socket (its
       `admin_socket`): run `port49 revoke --socket <that path>`". That is an error, so the
       client exits 1.
+    - **With every port49-broker down** (pre-flight I4), there is a break-glass.
+      - Ruling 13's socket refuses, Ruling 12 retired the file, and decision 32's fallback
+        (remove the grants) reaches live contexts only through a runner (Ruling 11). Without a
+        break-glass, an operator with a compromised user and a crash-looping broker could
+        only stop every port49d.
+      - **`port49-broker revoke --offline --config port49-broker.yaml (--principal P |
+        --cert-issuer I --cert-serial S) [--lift]`** opens the store on the broker's identity,
+        serves no API, takes no hold, and runs `broker.Revoke` (or `Lift`) on a broker built
+        with no listener. That is 7a's whole ordering: the mark first, tokens, contexts twice.
+        It prints the report as `port49 revoke` does, and exits 0, or 1 on any failure.
+      - Every running port49d gets the mark through its marks feed, and denies the session's
+        next command `credential_revoked`. A broker that later starts loads it.
+      - **With no broker host at all,** the operator writes the mark as etcd's root:
+        `etcdctl put <prefix>v1/rv/principal/<key> '{"kind":"principal","key":"<key>","at":"<RFC 3339
+        now>","origin":"etcdctl"}'`. Every port49d denies at the next command. Tokens are not
+        deleted, so a token already minted still logs in and each of its commands is denied.
+        The next runner's takeover applies the mark to the kept contexts.
 14. **`store-roles` reads both files:** `port49d store-roles --config port49d.yaml
     --broker-config port49-broker.yaml`.
     - **The daemon's role** gains read on `lw/`, and never touches `sp/`. `CheckIdentity`
       probes that the daemon is refused a write to `lw/` and any access to `sp/`.
     - **The output** gains one grant line, the daemon's read on `lw/`.
     - **On memory** it is refused, as it is today.
+    - **How it reads them** (pre-flight I8). It reads both files through `config.StoreBlocks`,
+      a role-free decoder of the `store:` block that checks its shape and no role's
+      requirements.
+      - A 7d port49d.yaml naming both identities therefore still works without
+        `--broker-config`, with a line naming the move.
+      - `config.Load` under the daemon's role still refuses that file. Only `store-roles`
+        reads it role-free.
 15. **An encryption key id is `[A-Za-z0-9._-]{1,64}`**, refused at load otherwise (7d Task 13
     C2). It is sealed into every record's header and named by every line about a record that
     will not open (`crypt.LineKeyID`). Today such an id prints as `?`.
@@ -435,6 +652,34 @@ them. The ones to read first are under "Worth reading before the merge".
     - **L36:** both Junos images, measured within the L37 run. A session's re-authorization
       (`authorization-time-interval` 15m) after its port49d replica restarts on etcd.
     - Nothing about them is asserted before its row closes.
+17. **The reload guard runs at a broker's start too** (7c's carry; pre-flight I6).
+    - **The hazard.** A broker rollout restarts every replica onto the file on disk, a file
+      the reload guard refused included. A takeover would then carry it into every context and
+      delete the tokens of every device it newly refuses. That is what the guard's own line
+      warns of: "a restart would load it".
+    - **What the start does.**
+      - It loads the file, then reads `meta/judged`, which holds the bundle last judged and
+        its policy's bytes (Ruling 7).
+      - If the bundles differ, it compiles the recorded policy against the inventory in force
+        and runs the guard (`bundle.CheckAdmission(recorded, file, max_removed_percent, now)`).
+    - **A refusal** says the guard's line once:
+      `port49-broker: policy file refused at start against the bundle last judged (<bundle>):
+      <refusal>; this replica stays not ready, mints nothing and takes no hold until
+      broker.policy_file is fixed`.
+      - It sets `port49_policy_file_refused` to 1.
+      - It keeps `/readyz` at 503, so the API answers nothing that mints.
+      - It polls the file every `policy_watch_interval` until a version passes, then goes on
+        with its start.
+    - **When the guard cannot judge,** the start goes on, as a first install does:
+      - no record;
+      - a record whose policy does not compile against the inventory in force (an inventory
+        edit in between);
+      - a record written without its policy, because the policy was over 1 MiB.
+      Each case says one line naming why. The guard is a typo guard, not a security boundary.
+      A broker stranded at 3am by an inventory change would cost every login.
+    - **port49d judges nothing at start.** Its policy decides admission alone: a device it
+      newly refuses is answered by another replica or its local method. The destruction the
+      guard prevents is the broker's carry and purge.
 
 ### Open for Ryan
 
@@ -452,23 +697,43 @@ default either way.
   must move its `broker:` block into `port49-broker.yaml` and start `port49-broker` beside
   port49d.
 - **Ruling 3.** The upgrade from 7d to 7e on etcd ends every live session once (form 3 does not
-  open). Users log in again.
+  open). Users log in again. A context read now waits for the context feed: a port49d whose
+  feed has stopped goes dark although etcd answers (pre-flight C1).
 - **Ruling 7.** Unspent tokens survive a broker rollout now. They are purged only when the
   bundle in force changed with no runner to judge the tokens minted under it.
 - **Ruling 11.** On etcd port49d no longer takes the keyspace. A second port49d serves beside the
   first, and Kubernetes' `strategy: Recreate` advice is withdrawn for port49d. It moves to
   nothing: port49-broker's replicas share the runner's hold.
-- **Ruling 12.** On etcd the revocations file is gone. Back etcd up, and after a restore re-apply
-  the revocations made since the snapshot.
+- **Ruling 12.** On etcd the revocations file is gone. Each broker keeps its own copy of the
+  marks, and after a restore the runner puts back every mark the store lost. A copy that
+  missed a lift puts that mark back too, and says so (pre-flight I5).
+- **Ruling 13.** With every broker down, `port49-broker revoke --offline` revokes through the
+  store; with no broker host, an `etcdctl put` as root does (pre-flight I4).
+- **Ruling 17.** A broker whose policy file the reload guard refuses, against the bundle last
+  judged, starts not ready and takes no hold (pre-flight I6).
 
 ## What the operator sees
 
 The owner's rule: trace a mechanism on a bad day first. Every line below is printed by a task
 in this plan, and the tests named pin it.
 
+- **Upgrading to 7e-1, on etcd** (one port49d, as in 7d).
+  - Re-apply `port49d store-roles` first. Without the daemon's read on `lw/`, the start stops
+    at the ledger record (pre-flight M17):
+
+    ```
+    port49d: store: the daemon's role cannot read lw/, the ledger record: apply port49d store-roles (plan 7e) as etcd's root, then start again
+    ```
+  - Every live session ends once, said once per 10 minutes on each node, never as tampering:
+
+    ```
+    port49d: crypt: a context sealed by an earlier port49 (form 3) does not open: expected once after the 7e upgrade; replaced at its user's next login
+    ```
+  - Rolling 7e-1 back to 7d ends every session again: 7d does not open form 4.
 - **Install, on etcd.**
   - Run `port49d store-roles --config /etc/port49/port49d.yaml --broker-config
-    /etc/port49/port49-broker.yaml` and apply its output once, as etcd's root (one grant more than 7d's: the daemon's read on `lw/`).
+    /etc/port49/port49-broker.yaml` and apply its output once, as etcd's root (one grant more
+    than 7d's: the daemon's read on `lw/`).
   - Start one or more `port49-broker --config /etc/port49/port49-broker.yaml`, then one or more
     `port49d`, in either order.
   - A 7d port49d.yaml with a `broker:` block on etcd stops with:
@@ -478,6 +743,9 @@ in this plan, and the tests named pin it.
     with store.etcd.broker, into port49-broker.yaml and start port49-broker; name the policy port49d admits from
     under policy: (file, watch_interval)
     ```
+
+    A 7e-2 port49d refused on its config can be rolled back to the 7e-1 binary, which still
+    reads the 7d file (pre-flight M17).
 - **A port49-broker start:**
 
   ```
@@ -486,9 +754,11 @@ in this plan, and the tests named pin it.
   port49-broker: ledger: 1204 context key(s) known (1190 from the ledger record); following the store from revision 88213
   port49-broker: listening on 0.0.0.0:8443, metrics on 0.0.0.0:9050
   port49-broker: runner: took keyspace /port49/ ("port49-broker on brk-a (pid 4121, since 2026-10-04T09:00:00Z)"): this replica runs the start, the sweep and the policy refresh
+  port49-broker: runner: every revocation in broker.state_dir/marks.json is in the store
   port49-broker: runner: 3 standing revocation(s) applied to the live contexts the store kept (0 context(s) marked revoked)
   port49-broker: runner: the bundle in force (b3f9…) is the one the last runner judged; no unspent token purged
   port49-broker: runner: 1204 live context(s) carried onto the policy in force (bundle b3f9…)
+  port49-broker: runner: recorded bundle b3f9… as judged
   ```
 
   A second replica says, instead of the runner's lines, and every 30s:
@@ -496,6 +766,25 @@ in this plan, and the tests named pin it.
   ```
   port49-broker: runner: keyspace /port49/ is run by "port49-broker on brk-a (pid 4121, since 2026-10-04T09:00:00Z)"; this replica serves the API and takes over if that one stops
   ```
+
+  A replica whose last run still holds the lease says 7d's own-hold line instead (`… is still
+  held by this replica's last run (…); waiting up to hold_ttl for its lease to expire`).
+- **A replica serving another policy** (its file not yet propagated):
+
+  ```
+  port49-broker: policy: this replica serves bundle 77c1… and the runner ("port49-broker on brk-a (pid 4121, since …)") serves bundle b3f9…; set the same broker.policy_file content and broker.policy_watch_interval on every replica
+  ```
+
+  `port49_policy_bundle_matches_runner` is 0 there. When it reloads, the runner says
+  `runner: a full context pass owed by "port49-broker on brk-b (…)" (bundle b3f9…)`, and carries
+  every live context.
+- **A start on a policy file the guard refuses:**
+
+  ```
+  port49-broker: policy file refused at start against the bundle last judged (b3f9…): <the guard's reason, as refusalLine words a refused reload>; this replica stays not ready, mints nothing and takes no hold until broker.policy_file is fixed
+  ```
+
+  `port49_policy_file_refused` is 1 and `/readyz` answers 503 until the file is fixed.
 - **A port49d start on etcd:**
 
   ```
@@ -518,6 +807,15 @@ in this plan, and the tests named pin it.
   - `port49 token` fails with the broker unreachable.
   - A policy edit changes admission at once, and live contexts only when a runner returns.
   - Measured on five images by L37 (Task 17).
+  - **To revoke now**, on any broker host:
+
+    ```
+    # port49-broker revoke --offline --config /etc/port49/port49-broker.yaml --principal user:alice@example.com
+    port49-broker: revoke (offline, no API): principal user:alice@example.com marked; 2 unspent token(s) deleted; 1 live context(s) marked revoked
+    ```
+
+    With no broker host, write the mark as etcd's root (Ruling 13 gives the command). Every
+    port49d denies alice's next command either way.
 - **A revocation on any replica.** `port49 revoke --socket /run/port49/port49-broker.sock
   --principal user:alice@example.com` on brk-b:
   - closes alice's held connections on brk-a and brk-b;
@@ -539,11 +837,27 @@ in this plan, and the tests named pin it.
 - **A feed that falls behind** (a compacted watch): `port49d: store: the context feed's revision
   was compacted; scanning the store again` once, and `port49_store_feed_rescans_total{feed}`
   counts it. `port49_store_feed_up{feed}` is 0 while a feed re-establishes.
+- **A context feed that stops** while etcd answers. Every context read newer than the feed
+  waits up to `call_timeout` and is `store_unavailable`, and the guard counts it. The probe
+  fails the same way. On port49d the context pool's circuit opens, and `hold_ttl` later it
+  closes every listener, as on a hung store (Rulings 3, 11). On a broker the API answers 503
+  `store_unavailable` for what reads a context. The line is `port49d: store: the context feed
+  stopped (…); trying again every second`, with `port49_store_feed_up{feed="contexts"}` 0.
+- **After an etcd restore** (design §13's runbook):
+  - restore with `--bump-revision` and `--mark-compacted` and every port49-broker stopped;
+  - `etcdctl del <prefix>v1/meta/judged`;
+  - start the brokers.
+  The first runner says how many marks it put back from its copy, and purges the unspent
+  tokens. Without `--bump-revision`, restart every port49d and port49-broker. Otherwise a
+  login made on a process started after the restore is denied `store_unavailable` on the
+  processes that ran across it, until one of those writes at its key.
 - **The ledger record lagging:** `port49_ledger_pending` on the runner is the number of keys
   whose high-water the record does not yet hold. Above 0 for a minute is an alarm: a put-back
-  there would survive a restart.
+  there would survive a restart. `port49_ledger_behind` is 1 on the runner while its context
+  feed is down, when pending cannot see what it misses. Both read 0 on every other replica.
 - **New metrics:** `port49_store_feed_up{feed}`, `port49_store_feed_rescans_total{feed}` (`feed`
-  is `contexts` or `marks`), and `port49_ledger_pending`.
+  is `contexts` or `marks`), `port49_ledger_pending`, `port49_ledger_behind` (7e-1);
+  `port49_policy_bundle_matches_runner` (7e-2).
 - **Changed meaning:** `port49_store_keyspace_held` is 1 on the runner and 0 on every other
   replica and on every port49d. Alert on its sum over the brokers being 0 for twice `hold_ttl`.
 
@@ -583,7 +897,11 @@ New in this plan:
   and no code path in `port49-broker` opens the daemon's or reads `keys:`.
 - **Every context seal carries a write sequence, and every context read is judged against the
   high-water** (Ruling 3). A watch event or a ledger record only raises; neither ever lowers a
-  high-water or removes a floor.
+  high-water or removes a floor. A watch event or a later scan makes no entry for a record
+  below the base.
+- **No context read is judged before the feed has passed its revision** (Ruling 3, the fence).
+  The wait is bounded by the guard's call deadline and fails closed as `store.ErrUnavailable`,
+  counted by the guard. Nothing admits a record because the feed is late.
 - **The daemon's role never writes `lw/`, `sp/`, `rv/` or `meta/`.** `etcd.Roles` and
   `CheckIdentity` say so, and a test grants one and is refused.
 - **The code blocks are written against `b508ba0`.** Where the compiler or a test says a block is
@@ -606,38 +924,96 @@ The input classes the spec implies and no task's happy path exercises, most like
 first. Each has its test in the task named.
 
 1. **A login on one port49d replica, the next packet on another, before the second's feed has
-   seen the write.** It is admitted, never denied as an unseen key. The record's sequence is
-   above the second's base, and above any high-water it knows at the key. *Task 7,
-   `TestAnotherProcesssWriteIsAdmittedBeforeItsFeedArrives`; Task 16,
+   seen the write.** It is admitted once the second's feed delivers it, within the read's
+   wait, and never denied as an unseen key. The record's sequence is above the second's base,
+   and above any high-water it knows at the key. *Task 7,
+   `TestAnotherProcesssWriteIsAdmittedWithNoFeedBetween`; Task 8a,
+   `TestAnotherProcesssWriteIsAdmittedOnceTheFeedDeliversIt`; Task 16,
    `TestALoginOnOneDaemonIsAnsweredOnAnother`.*
 2. **A record put back on one replica while another replica, or a port49d started later, reads
-   it.** The running replicas deny it once their feed has passed the later write. A port49d
-   started after the put-back denies it from the ledger record. *Task 8,
-   `TestTheFeedRaisesTheHighWaterSoAPutBackIsDenied`; Task 10,
+   it.** The running replicas deny it once their feed has passed the later write, and wait
+   for the feed until then. A port49d started after the put-back denies it from the ledger
+   record. *Task 8, `TestTheFeedRaisesTheHighWaterSoAPutBackIsDenied`; Task 10,
    `TestAStartSeededFromTheLedgerRecordDeniesAPutBack`; Task 16,
-   `TestAPutBackBeforeADaemonStartsIsDenied`.*
+   `TestAPutBackBeforeADaemonStartsIsDenied`. Each put-back there is bob's context over
+   alice's, and each has a positive control.*
 3. **A revocation made on one broker replica, while the agent holds a connection to another.**
    The other closes it, and every port49d denies the session's next command. *Task 9,
    `TestAMarkFromTheFeedClosesThisReplicasHeldConnections`; Task 16,
    `TestARevocationOnOneBrokerReachesTheOther`.*
-4. **The runner killed mid-pass, and a runner paused past its fence.** Another takes the hold
-   within `hold_ttl` and a third. It purges only when the bundle changed unjudged, and two
-   runners for a moment write nothing wrong. *Task 15, `TestARunnerThatStopsIsReplaced`,
-   `TestATakeoverPurgesOnlyAnUnjudgedBundle`.*
+4. **The runner killed mid-pass, cut off from etcd, or paused past its fence.**
+   - Another takes the hold within `hold_ttl` and a third: of a graceful stop, and of a runner
+     whose lease is never released.
+   - The takeover purges only when the bundle changed unjudged.
+   - A cut-off runner says it lost the hold and does not run again while the other holds.
+   - Two runners for a moment write nothing wrong.
+   *Task 15, `TestARunnerThatStopsIsReplaced`, `TestARunnerCutOffIsReplacedAfterItsLease`,
+   `TestATakeoverPurgesOnlyAnUnjudgedBundle`, `TestACleanTakeoverRecordsItsBundleAsJudged`;
+   Task 10, `TestTheLedgerRecordRaceKeepsTheHigher` (two keepers at once).*
 5. **A log sink that stalls during a mint.** A reload still swaps within a second, and the
    mint's records land in order once the sink drains. *Task 4,
    `TestAStalledLogNeverHoldsAReload`, `TestEveryMintRecordFollowsItsBlobRecord`.*
-6. **An etcd restore under running processes, with and without `--bump-revision`.** A login
-   after it is admitted on every replica, and a restored record is denied. *Task 7,
-   `TestALoginAfterARestoreIsAdmitted`.*
+6. **An etcd restore, with and without `--bump-revision`, with two processes.**
+   - With the bump, a login after it is admitted on every process, and a restored record is
+     denied.
+   - Without it, a process started after the restore has its login denied by one that ran
+     across it, which is why the runbook says to bump or restart every process.
+   *Task 7, `TestALoginAfterARestoreIsAdmitted`.*
 7. **A watch whose revision was compacted.** The feed scans again. It only raises, so nothing
-   is admitted that the scan before would have denied, and the rescan is counted. *Task 8,
-   `TestACompactedFeedScansAgainAndOnlyRaises`; Task 9, `TestACompactedMarkFeedReloadsTheDifference`.*
+   is admitted that the scan before would have denied; a record above the mark in the rescan
+   raises it; the rescan is counted. *Task 8, `TestACompactedFeedScansAgainAndOnlyRaises`;
+   Task 9, `TestACompactedMarkFeedReloadsTheDifference`.*
 8. **The daemon given the broker's reach on `lw/` or `sp/`.** port49d refuses to start. *Task 10,
    `TestCheckIdentityRefusesADaemonThatCanWriteTheLedgerRecord`.*
 9. **A port49d.yaml naming the broker's identity, or a port49-broker.yaml naming `keys:`.** Each
    is refused at load, naming the key. *Task 13, `TestTheDaemonsConfigNeverNamesTheBrokersIdentity`,
    `TestTheBrokersConfigNeverNamesADeviceKey`.*
+10. **A context feed that lags or has stopped, while a store writer puts back an earlier
+    record or a pre-revocation one** (pre-flight C1). The read is never admitted: it waits, and
+    is `store_unavailable`; once the feed delivers, it is denied. A dead feed fails the
+    probe. *Task 8a, `TestAPutBackIsDeniedWhileTheFeedLags`,
+    `TestARevocationFromAnotherProcessHoldsWhileTheFeedIsDown`,
+    `TestAPingFailsWhileTheFeedIsBehind`.*
+11. **A put-back at a key this process never saw, brought by the feed or a rescan** (pre-flight
+    I1). It makes no entry and is denied. *Task 8, `TestAFedPutBackAtAnUnseenKeyIsDenied`.*
+12. **An etcd restore that loses revocations** (pre-flight I5). The runner puts back every mark
+    its copy holds and the store lacks; a mark lifted through the watch is not put back.
+    *Task 15b, `TestATakeoverPutsBackAMarkTheStoreLost`.*
+13. **A compromised user with every broker down** (pre-flight I4). The offline revocation, or a
+    mark written as etcd's root, denies the next command on every port49d. *Task 15b,
+    `TestAnOfflineRevokeDeniesWithEveryBrokerStopped`; Task 16,
+    `TestARootWrittenMarkDeniesWithEveryBrokerStopped`.*
+14. **A replica serving another policy than the runner's** (pre-flight I3). It says so; its
+    reload has the runner carry the context it made under the old policy; no `meta/judged` is
+    written meanwhile. *Task 15a, `TestALateReplicasContextIsCarriedWhenItReloads`.*
+15. **A start on a file the reload guard would refuse** (pre-flight I6). It stays not ready and
+    takes no hold until the file is fixed. *Task 15a,
+    `TestAStartRefusesAFileTheGuardRefusesAgainstTheJudgedBundle`.*
+
+## Conflict scan: where tasks share a file or an interface
+
+The pre-flight review's scan (`preflight-review.md`, "Conflict scan"), as this revision leaves
+it. Only the pairs that changed or were marked ✗ are listed; every other pair stands as the
+review found it.
+
+| Pair | Shared | Now |
+|---|---|---|
+| T1 ↔ T11 | decision 36's closing citation | T11 Step 1 replaces it with 7e-2's sections (M12) ✓ |
+| T7 ↔ T15 | `sweepLoop` | `sweepLoop(ctx, s, brk, ledger, every, out)` from Task 7; Task 15 calls it as is (M16) ✓ |
+| T7 ↔ T8 ↔ T8a | `Ledger` | Task 8 adds `ObserveFollowed`; Task 8a adds `Fence`, `knownAt` and `Fenced`. Each later task names them ✓ |
+| T8 ↔ T8a | `ContextFeed.WatchContexts(…, progress, asks)` | Task 8 fixes the signature and etcd's progress handling, passing a no-op and nil; Task 8a wires the fence. The crypt fixtures (`feedOf`, `answeringFeed`) implement the new signature ✓ |
+| T8a ↔ T14, T15, T15b | `crypt.Fenced` under the guard | the daemon (T14) and the broker (T15) fence their raw stores; the offline revocation (T15b) does not, since nothing follows there ✓ |
+| T9 ↔ T15b | `store.MarkChange` (`Reloaded`) | Task 9 tells each change as an event or a reload; Task 15b's copy keeps a mark a reload found missing ✓ |
+| T9 files | `revoke.go` (`matchMark`) | now in Task 9's Files ✓ |
+| T10 ↔ T15 | `KeepLedger`'s `report(pending, behind)` | 7e-1's port49d and 7e-2's runner both set `LedgerPending` and `LedgerBehind`; both are zeroed when duties stop (I11) ✓ |
+| T13 ↔ T16 | `config.StoreBlocks` | it reads either file with no role, so a 7d file still yields both identities for `store-roles`, while `Load` refuses it (I8; was ✗) ✓ |
+| T13 | `internal/config/broker_role_test.go` | new file; `broker_test.go` untouched (I7; was ✗) ✓ |
+| T14 ↔ `store_test.go` | `openStores`, the hold tests | each test listed and moved in Task 14 Step 7, the hold tests to Task 15 (I9; was ✗) ✓ |
+| T15 ↔ T15a | `recordJudged`, `PutJudged(ctx, bundle, policy)`, `JudgedRecord` | Task 15 writes the record with its policy; Task 15a's guard reads it and adds the every-replica condition ✓ |
+| T15 ↔ T15b | the takeover's steps | Task 15b inserts `restoreMarks` after the re-index and before `ApplyMarksAtStart` ✓ |
+| T15b ↔ T16 | `askAdminAt`, `adminSocketOf` | written in Task 15b, used in Task 16 ✓ |
+| T10 ↔ T16 | `waitForLedgerSeq`, `sharedUsernamePolicy`, `brokerConfigWith`, `mintAs` | written in Task 10 (`cmd/port49d`), moved by Task 12, used in Task 16 ✓ |
+| T17 ↔ every lab test | `tests/lab/topologies/*`, `tests/lab/configs/*` | not changed; `startSplit` pushes the second server and removes it (I13; was ✗) ✓ |
 
 ## Running the lab (Task 17)
 
@@ -654,6 +1030,16 @@ single-occupant.
   `test(lab):` first.
 - **One platform at a time:** `PORT49_LAB_PLATFORMS=eos`, then `nxos`, `iosxe`, `vjunos`,
   `vsrx`.
+- **The shared topologies are not changed** (pre-flight I13).
+  - The second TACACS+ server (`172.100.100.2`) is pushed onto each device by `startSplit`, at
+    the start of each split test, and removed at its end (`t.Cleanup`).
+  - Every other register test (L1–L36) therefore runs with one server listed, as it was
+    measured.
+  - Step 2 re-runs one L35 cell (`TestStoreOutageEndToEnd`'s hung-store cell, on EOS) after
+    the split tests, and checks it matches `L35-arista_eos.md`.
+- **An INVALID cell keeps its row open.** A cell recorded INVALID on a named image (as L35's
+  Ruling T15-a recorded one) leaves that row open for that image. The row is not closed with an
+  INVALID cell in it.
 - **A stall watchdog** runs for the whole run (background, re-armed on every wake) on the test
   log, capture growth and results files, with a 25-minute stall threshold, except that L36's
   15-minute re-authorization wait raises it to 40 minutes on the Junos images. Match the test
@@ -670,68 +1056,86 @@ single-occupant.
 ## File Structure
 
 ```
-docs/design/2026-08-23-policy-engine-spec.md   MOD  d36 (7e-1 part), d35 amended (the ledger), §5.1.4 (Task 1); d36 (7e-2 part),
-                                                    d32 and d34 amended (the file, the sockets), §5.1.3, §12, §14, L37 and L38
-                                                    opened (Task 11); L36, L37, L38 measured (Task 17)
-docs/design/2026-08-21-port49-design.md        MOD  §8 the ledger, §12 store interface (Task 1); §6, §12 matrix, §13, §15, §17,
-                                                    §19 (Task 11); device cells (Task 17)
+docs/design/2026-08-23-policy-engine-spec.md   MOD  d36 (7e-1 part), d35 amended (the ledger), §13's floor note, §14 (Task 1);
+                                                    d36 (7e-2 part, its citation extended), d32, d34 and d35's "until plan 7e"
+                                                    clauses amended, §5.1.3, §12, §14, L37 and L38 opened (Task 11); L36, L37,
+                                                    L38 measured (Task 17)
+docs/design/2026-08-21-port49-design.md        MOD  §8 the ledger, §12 store interface (Task 1); §6, §12 matrix, §13 (the
+                                                    restore runbook), §15, §17, §19 (Task 11); device cells (Task 17)
 internal/store/etcd/etcdtest/etcdtest.go       MOD  StartCluster retries until a deadline (Task 2)
 internal/store/etcd/etcdtest/etcdtest_test.go  MOD  (Task 2)
 internal/config/config.go                      MOD  KeyIDShape (Task 3); Role, Policy, LoadBroker, key_refs, state_dir, the
-                                                    refusals (Task 13)
-internal/config/config_test.go                 MOD  (Task 3)
-internal/config/broker_test.go                 NEW  (Task 13)
+                                                    refusals, StoreBlocks (Task 13)
+internal/config/config_test.go                 MOD  (Tasks 3, 13)
+internal/config/broker_role_test.go            NEW  (Task 13; broker_test.go exists and is left alone)
 internal/decision/buffer.go, buffer_test.go    NEW  Buffer (Task 4)
 internal/token/minter.go, minter_test.go       MOD  Request.Log (Task 4)
 internal/broker/broker.go, broker_test.go      MOD  the buffered request, putBlob, bounded blobsSeen (Task 4); supersede in the store,
                                                     SupersededAll removed (Task 5); MarkChanged (Task 9)
 internal/broker/refresh.go, refresh_test.go    MOD  supersede (Task 5); RefreshTokens (Task 15)
-internal/broker/revoke.go, revokeown.go        MOD  supersede(ctx, …) (Task 5)
+internal/broker/revoke.go, revokeown.go        MOD  supersede(ctx, …) (Task 5); matchMark (Task 9)
 internal/store/store.go                        MOD  SupersedeTokens, SupersededAt, SupersedeAll, SupersededFor (Task 5); RevStore.Seen,
                                                     RevStore.Ping (Task 6); LedgerMark (Task 7); ContextChange, ContextFeed, ErrCompacted,
-                                                    LedgerSource, LedgerSink (Task 8); MarkFeed (Task 9)
+                                                    LedgerSource, LedgerSink (Task 8); MarkFeed, MarkChange (Task 9)
 internal/store/marks.go, marks_test.go         MOD  Marks.All; LoadMarks, FollowMarks (Task 9)
 internal/store/memory/memory.go, _test.go      MOD  superseded (Task 5); Seen, Ping (Task 6)
 internal/store/etcd/keys.go                    MOD  famSuperseded sp/ (Task 5); famLedger lw/ (Task 10)
 internal/store/etcd/superseded.go              NEW  (Task 5)
-internal/store/etcd/etcd.go, contexts.go       MOD  seen, Seen, every context response observed (Task 6)
-internal/store/etcd/feed.go, feed_test.go      NEW  ScanContexts, WatchContexts (Task 8); Revocations, WatchRevocations (Task 9)
+internal/store/etcd/etcd.go, contexts.go       MOD  seenRev, Seen, every context response observed (Task 6)
+internal/store/etcd/feed.go, feed_test.go      NEW  ScanContexts, WatchContexts with progress (Tasks 8, 8a); Revocations,
+                                                    WatchRevocations (Task 9)
 internal/store/etcd/ledger.go, ledger_test.go  NEW  LedgerMarks, PutLedgerMarks (Task 10)
 internal/store/etcd/roles.go, roles_test.go    MOD  sp/ never, lw/ read for the daemon; probes (Task 10)
-internal/store/etcd/meta.go, meta_test.go      MOD  Judged, PutJudged, SupersededAll's record (Task 15)
+internal/store/etcd/meta.go, meta_test.go      MOD  Judged, PutJudged (Task 15); Bundles, PutBundle, RefreshOwed, PutRefreshOwed,
+                                                    ClearRefreshOwed (Task 15a)
 internal/store/etcd/etcd_test.go               MOD  the restore test on the new ledger (Task 7)
 internal/store/guard/guard.go, guard_test.go   MOD  the three new methods routed (Task 5); Seen, Ping (Task 6)
-internal/store/crypt/crypt.go                  MOD  form 4, seq, the ledger on reads and writes (Task 7); supersede pass-through (Task 5)
-internal/store/crypt/ledger.go                 MOD  rewritten: high-water, base, floor, prune, dirty (Task 7)
+internal/store/crypt/crypt.go                  MOD  form 4, seq, the ledger on reads and writes, ErrEarlierForm, OnUnopenable's
+                                                    why (Task 7); supersede pass-through (Task 5)
+internal/store/crypt/ledger.go                 MOD  rewritten: high-water, base, floor, prune, dirty (Task 7); ObserveFollowed
+                                                    (Task 8); the fence it owns (Task 8a)
 internal/store/crypt/follow.go, follow_test.go NEW  LoadLedger, FollowContexts (Task 8); KeepLedger (Task 10)
+internal/store/crypt/fence.go, fence_test.go   NEW  Fence, Fenced, ErrFeedBehind (Task 8a)
 internal/store/crypt/crypt_test.go             MOD  the ledger's tests on the new rule (Task 7)
 internal/store/storetest/superseded.go         NEW  SupersededIsTheLaterAndExpires (Task 5)
 internal/store/storetest/storetest.go          MOD  Run lists it (Task 5)
-internal/daemon/metrics/metrics.go, _test.go   MOD  store_feed_up, store_feed_rescans_total, ledger_pending (Tasks 8, 10)
-cmd/port49d/store.go, main.go                  MOD  the feeds and the keeper wired, Seal replaced by the base (Tasks 8–10)
+internal/daemon/metrics/metrics.go, _test.go   MOD  store_feed_up, store_feed_rescans_total (Task 8); ledger_pending, ledger_behind
+                                                    (Task 10); policy_bundle_matches_runner (Task 15a)
+cmd/port49d/store.go, main.go                  MOD  the sayer's lines (Task 7); the feeds, the fence and the keeper wired, Seal
+                                                    replaced by the base (Tasks 8–10)
+cmd/port49d/store_test.go                      MOD  the sayer's lines (Task 7)
 cmd/port49d/store_e2e_test.go                  MOD  the put-back test on the record (Task 10)
 cmd/port49d/*.go → internal/port49d/*.go       MOV  package port49d (Task 12)
 cmd/port49d/main.go                            NEW  the shim (Task 12)
 cmd/port49-broker/main.go                      NEW  the shim (Task 15)
 internal/port49d/daemon.go                     NEW  the daemon's start on etcd, the probe (Task 14)
-internal/port49d/brokerd.go, runner.go         NEW  runBroker, the runner (Task 15)
-internal/port49d/reload.go                     MOD  live, log, refresher; the settle's priors (Tasks 14, 15)
-internal/port49d/storeroles.go                 MOD  --broker-config (Task 16)
+internal/port49d/store_test.go                 MOD  the hold tests moved to the runner, the rest to the split daemon (Task 14)
+internal/port49d/brokerd.go, runner.go         NEW  runBroker, the runner (Task 15); revoke --offline (Task 15b)
+internal/port49d/policyskew.go, startguard.go  NEW  the bundle record and refresh_owed; the guard at start (Task 15a)
+internal/port49d/markscopy.go, offline.go      NEW  broker.state_dir/marks.json; the offline revocation (Task 15b)
+internal/port49d/reload.go                     MOD  live, log, refresher (Task 14); the settle's priors, onSettled (Task 15);
+                                                    onSwap, the full pass owed (Task 15a)
+internal/port49d/storeroles.go                 MOD  --broker-config, StoreBlocks (Task 16)
 internal/port49d/split_e2e_test.go             NEW  the fleet end to end (Task 16)
-internal/daemon/admin/admin.go                 MOD  NoBroker's answer (Task 14)
+internal/daemon/admin/admin.go, admin_test.go  MOD  RevokeElsewhere (Task 14); DiagnoseElsewhere (Task 15)
 Makefile                                       MOD  build port49-broker (Task 15)
 tests/lab/split_test.go                        NEW  L37, L38, L36 (Task 17)
-tests/lab/harness_test.go                      MOD  startSplit, the second replica's address (Task 17)
-tests/lab/topologies/*                         MOD  a second TACACS+ server on each device (Task 17)
+tests/lab/harness_test.go                      MOD  startSplit, the second server pushed and removed, the second replica's
+                                                    address (Task 17)
 tests/lab/results/L36-*, L37-*, L38-*.md       NEW  written by the run (Task 17)
 docs/superpowers/plans/README.md               MOD  7e written (this commit); 7e-1 as built (Task 10 Step 7); 7e as built (Task 18)
 ```
 
-Eighteen tasks in two merges:
-- **7e-1:** Task 1 is docs, first; Tasks 2–3 are carried fixes; Task 4 is the emits; Tasks 5–10
-  are the store and the ledger.
-- **7e-2:** Task 11 is docs, first; Task 12 is a move with no behaviour change; Tasks 13–16 are
-  the processes; Task 17 is the lab and gates the merge; Task 18 is the as-built docs.
+The topologies under `tests/lab/topologies/` and the startup configs under `tests/lab/configs/`
+are not changed (pre-flight I13; "Running the lab").
+
+Twenty-one tasks in two merges:
+- **7e-1 (Tasks 1–10, with 8a):** Task 1 is docs, first; Tasks 2–3 are carried fixes; Task 4 is
+  the emits; Tasks 5–10 are the store and the ledger, 8a the feed fence.
+- **7e-2 (Tasks 11–18, with 15a and 15b):** Task 11 is docs, first; Task 12 is a move with no
+  behaviour change; Tasks 13–16 are the processes, 15a policy across replicas and 15b the marks
+  copy and the offline revocation; Task 17 is the lab and gates the merge; Task 18 is the
+  as-built docs.
 
 ---
 
@@ -749,7 +1153,8 @@ No code. Each edit names a one-line fragment to find, which does not wrap, and t
 after it or in its place.
 
 **What this task writes, and what it leaves.** Only what 7e-1 builds: the write sequence, the
-ledger record, the feeds, `superseded` in the store, the emits, and the key-id charset. The two
+ledger record, the feeds and the feed fence, `superseded` in the store, the emits, and the
+key-id charset. The two
 processes, the runner, the config split, the sockets, the retired file, L37 and L38 are Task 11's,
 the first commit of 7e-2. Nothing here asserts what a device does.
 
@@ -774,27 +1179,42 @@ the first commit of 7e-2. Nothing here asserts what a device does.
     highest sequence this process knows at its key, and raises it; below is denied
     `store_unavailable`, as decision 35's ledger denies a record not last written. A key it has
     no mark for admits a record sealed at or above the revision just past its start's scan of the
-    contexts: anything at a key then was scanned, and anything sealed since is above it. A read
-    that raced a write is read again, up to twice. Another process's later login is therefore
-    admitted, and an earlier record put back is denied, whichever process wrote either. A write of
-    unknown outcome needs nothing more: if it landed it is the higher, and if not, the record the
-    mark names is still the store's. After an etcd restore, with or without `--bump-revision`, a
-    write seals above every earlier record, so a login is admitted and a restored record is
-    denied.
+    contexts: anything at a key then was scanned. A login sealed by another process before that
+    scan and committed after it is below it too, as a put-back is, and is denied on this process
+    until the next write at its key. A read that raced a write is read again, up to twice. A
+    write of unknown outcome needs nothing more: if it landed it is the higher, and if not, the
+    record the mark names is still the store's.
+  - **No record is judged before this process's context feed has passed it.** A read waits until
+    the feed has delivered every change through the record's revision, asking the store for the
+    feed's progress, for at most the store's call timeout; a feed still behind then is
+    `store_unavailable`, counted as a store failure, so a feed that has stopped takes port49d dark
+    as a store that has stopped does. A record at the revision this process last knew at its key
+    needs no wait. A put-back is a store write, so it commits above the write it hides, and once
+    the feed has passed it the later write has raised the mark. Another process's later login is
+    therefore admitted, and an earlier record put back is denied, whichever process wrote either
+    and however late the feed.
+  - **After an etcd restore** a process's next write seals above every record it knew, so its
+    login is admitted and a restored record is denied. Restore with `--bump-revision`: without
+    it, a process started after the restore seals below the mark a process that ran across it
+    holds, and its logins are denied there until that process writes at the key, so restart
+    every process.
   - **Every process follows the store's contexts.** After its start's scan it watches the context
-    family from that revision. Each change raises the key's mark, never lowers it. A plaintext
-    `revoked_at` at the mark's sequence is the key's revocation floor, cleared only by a later
-    sequence, so a revocation whose seal failed holds on every process that saw its mark land. A
-    watch whose revision was compacted scans again, raising only. A mark is kept while a record it
-    saw could be live: to the latest sealed ceiling seen at the key and `session.grace_window`,
-    and for good for a `never` context.
+    family from that revision. Each change raises the key's mark, never lowers it, and makes no
+    mark for a record below the base. A plaintext `revoked_at` at the mark's sequence is the
+    key's revocation floor, cleared only by a later sequence, so a revocation whose seal failed
+    holds on every process that saw its mark land. A watch whose revision was compacted scans
+    again, raising only. A mark is kept while a record it saw could be live: to the latest sealed
+    ceiling seen at the key and `session.grace_window`, and for good for a `never` context.
   - **The ledger record.** The process that holds the keyspace writes each key's mark, its
     revocation floor and how long to keep it to `lw/<nas>/<user>`, about once a second, raising
     only, by a compare on the record's revision. The daemon's etcd role reads it and never writes
     it. Every start seeds its ledger from it before it scans, so a record put back while every
     process was stopped is denied at its key when the record holds a later mark there. Left: a
     key written and put back within the record's lag, about a second, or while no process held
-    the keyspace and before one recorded it.
+    the keyspace or its feed was down, and before one recorded it. `port49_ledger_pending` and
+    `port49_ledger_behind` say when the record lags.
+  - **An earlier form says so.** A context sealed in form 3 is named as sealed by an earlier
+    port49, expected once after the upgrade, never as altered.
   - **The marks are followed too.** Every process loads the revocation marks with the revision
     they were read at, before it serves, and follows them from there. A mark that lands closes
     the held broker connections it names in this process; a lift removes it. A compacted watch
@@ -834,14 +1254,14 @@ the first commit of 7e-2. Nothing here asserts what a device does.
   its key)
   ```
 
-- [ ] **Step 3: §5.1.4's residual window.** In §5.1.4, find the paragraph that names the
-  revocation floor (search `revocation floor`). After it, add:
-
-  ```markdown
-  With several port49d processes on one store (plan 7e), each holds the floor of every
-  revocation whose plaintext mark it saw land, through the store's context feed, not only of the
-  revocations it made (§13, decision 36).
-  ```
+- [ ] **Step 3: The floor across processes, in §13.** The floor is named once in the spec, in
+  §13, decision 35's "What store write access still yields" bullet (pre-flight M2: §5.1.4 does
+  not name it). Find the one line
+  `    time and the floor, until a later write of this process lands at the key. The floor`
+  and replace `until a later write of this process lands at the key.` on it with `until a
+  later write lands at the key (with several processes on one store, each holds the floor of
+  every revocation whose plaintext mark its context feed delivered, and reads nothing before
+  that feed has passed it; decision 36).` Leave the rest of the bullet.
 
 - [ ] **Step 4: §14's ledger assertions.** In §14, under "Shared store", replace the bullet that
   begins `- **The ledger**: another login's context written back at a key is denied` with:
@@ -849,15 +1269,24 @@ the first commit of 7e-2. Nothing here asserts what a device does.
   ```markdown
   - **The ledger**: another login's context written back at a key is denied, and so is an
     earlier version of the same context put back after a later write landed, whichever process
-    made either. Another process's later write at a key is admitted, before and after this
-    process's feed has seen it. A key with no mark admits only a record sealed past the start's
-    scan. A process started after a put-back denies it when the ledger record holds a later mark
-    at the key. A login after an etcd restore, with or without `--bump-revision`, is admitted,
-    and a restored record is denied. A form-3 context does not open.
+    made either. Another process's later write at a key is admitted once this process's feed
+    has delivered it. A key with no mark admits only a record sealed past the start's scan, and
+    a put-back the feed or a rescan brings at such a key is denied. A process started after a
+    put-back denies it when the ledger record holds a later mark at the key. With
+    `--bump-revision`, a login after an etcd restore is admitted on every process and a
+    restored record is denied; without it, a login on a process started after the restore is
+    denied on one that ran across it. A form-3 context does not open, and is named as an
+    earlier form.
+  - **The feed fence**: while this process's context feed lags or has stopped, a record put
+    back over another process's later write, or over its revocation, is never admitted: the
+    read waits and is `store_unavailable`, and once the feed delivers, it is denied. A ping
+    through the fence fails while the feed is behind.
   - **The feeds**: a context change raises its key's mark and never lowers it; a plaintext
     revocation at the mark's sequence is a floor a put-back cannot clear; a compacted watch
     scans again. A mark landing on one process closes that process's held connections it names,
     and a lift removes it.
+  - **The ledger record**: `port49_ledger_behind` is 1 while the keeper's context feed is down,
+    and both ledger gauges are 0 once its duties stop.
   - **The emits**: a log sink that stalls during a mint never stalls a reload, and every mint
     record follows its blob record.
   ```
@@ -873,18 +1302,30 @@ the first commit of 7e-2. Nothing here asserts what a device does.
     and above every sequence it knows at the key. Every process keeps the highest sequence it
     knows at each key, from its own writes, its reads and a watch on the store's contexts, and
     denies a context sealed below it: another login's record, or an earlier version of the same
-    context, written back. A key it has no mark for admits only a record sealed past its start's
-    scan. The process holding the keyspace keeps each key's mark in a ledger record the daemon's
-    etcd role cannot write, and every start is seeded from it (policy engine spec §13, decision
-    36).
+    context, written back. It judges no record before its watch has delivered every change
+    through the record's revision, so a watch that lags or has stopped cannot let a put-back
+    through: the read waits, and fails as a store failure. A key it has no mark for admits only
+    a record sealed past its start's scan. The process holding the keyspace keeps each key's
+    mark in a ledger record the daemon's etcd role cannot write, and every start is seeded from
+    it (policy engine spec §13, decision 36).
   ```
 
   In the paragraph after it (`- **What store write access still yields is replay**`), replace
-  `before the start's reads seal the ledger, the first record read at a key it has not seen is
-  admitted, so another login's context put back while port49d was stopped is taken as that key's`
-  with `a start admits the record at a key the ledger record holds no later mark for, so another
-  login's context put back while every port49d was stopped, at such a key, is taken as that
-  key's`. Leave the rest of the sentence.
+  these two whole lines (pre-flight M2: each is quoted as it stands, indentation included):
+
+  ```
+    before the start's reads seal the ledger, the first record read at a key it has not seen
+    is admitted, so another login's context put back while port49d was stopped is taken as
+  ```
+
+  with:
+
+  ```
+    a start admits the record at a key the ledger record holds no later mark for, so another
+    login's context put back while every port49d was stopped, at such a key, is taken as
+  ```
+
+  The next line, `  that key's, until its sealed ceiling, …`, stays as it is.
 
 - [ ] **Step 6: Design §12, the store interface.** In §12's record table, after the row that
   begins `| revocation mark |`, add:
@@ -900,7 +1341,8 @@ the first commit of 7e-2. Nothing here asserts what a device does.
   **Following the store (plan 7e).** Every process scans the context family at one revision, then
   watches it from there, and does the same for the revocation marks: that is how a process learns
   of another's writes and marks without asking it (decision 36). A watch never admits a record;
-  it only raises what a read must clear.
+  it only raises what a read must clear, and a context read waits until the watch has passed
+  the record's revision (etcd's progress request), for at most the call timeout.
   ```
 
 - [ ] **Step 7: Check the edits.** Run:
@@ -908,12 +1350,15 @@ the first commit of 7e-2. Nothing here asserts what a device does.
   ```bash
   grep -c '^\*\*36\. ' docs/design/2026-08-23-policy-engine-spec.md
   grep -n 'Amended by decision 36' docs/design/2026-08-23-policy-engine-spec.md
-  grep -n 'whichever process' docs/design/2026-08-23-policy-engine-spec.md
+  grep -n 'No record is judged before this process' docs/design/2026-08-23-policy-engine-spec.md
+  grep -n 'The feed fence\*\*: while' docs/design/2026-08-23-policy-engine-spec.md
+  grep -n 'reads nothing before' docs/design/2026-08-23-policy-engine-spec.md
   grep -n 'Following the store (plan 7e)' docs/design/2026-08-21-port49-design.md
   grep -n '| ledger record |' docs/design/2026-08-21-port49-design.md
+  grep -c "before the start's reads seal the ledger" docs/design/2026-08-21-port49-design.md
   ```
 
-  Expected: `1`, then one line each.
+  Expected: `1`, then one line each, then `0`.
 
 - [ ] **Step 8: Commit.**
 
@@ -1013,8 +1458,10 @@ lose pins it.
 - [ ] **Step 2: Run it to see it fail.**
 
   Run: `go test ./internal/store/etcd/etcdtest/ -run 'TestStartCluster' -count=1 -v`
-  Expected: FAIL. `TestStartClusterRetriesAPortTaken` reports `12 ports picked` (one retry), and
-  `TestStartClusterGivesUpAtItsDeadline` fails to compile on `clusterRetryFor`.
+  Expected: FAIL to compile: `clusterRetryFor` is undefined, so neither test runs (pre-flight
+  M5). To see the retry test fail on its own first, declare `var clusterRetryFor = 30 *
+  time.Second` alone, run again, and expect `TestStartClusterRetriesAPortTaken` to report `12
+  ports picked`, one retry, before Step 3 writes the loop.
 
 - [ ] **Step 3: Retry until the deadline.** In `etcdtest.go`, replace `StartCluster`'s body and
   add the variable:
@@ -1046,6 +1493,10 @@ lose pins it.
   		if !strings.Contains(err.Error(), "address already in use") || time.Now().After(deadline) {
   			t.Fatal(err)
   		}
+  		// A pause between attempts, so a loop that keeps losing does not
+  		// make a temp dir and three members every few milliseconds
+  		// (pre-flight M5).
+  		time.Sleep(50 * time.Millisecond)
   	}
   }
   ```
@@ -1087,33 +1538,57 @@ lose pins it.
 Ruling 15. Today an id outside the charset loads, and every line about a record sealed under it
 prints `?`.
 
-- [ ] **Step 1: The failing test.** Add to `internal/config/config_test.go` (the helpers
-  `writeConfig`, `baseYAML` and `setEnv` are the file's own; use whatever the file names its
-  fixture builder and environment setter, and say so in the report):
+- [ ] **Step 1: The failing test.** Add to `internal/config/config_test.go`. It uses the
+  file's own fixture (pre-flight M1):
+  - `sample`, whose `encryption.current` is `{id: v2, secret_env: PORT49_ENC_V2}` and whose
+    first `%s` is the inventory path;
+  - `inv`, `write(t, name, body)` and `setKeyEnv(t)`, which sets `PORT49_ENC_V2` and the
+    shared secrets.
 
   ```go
+  // sampleWithKeyID is sample with encryption.current's id replaced by the
+  // YAML scalar id, and the previous block added when prev is not empty.
+  func sampleWithKeyID(t *testing.T, id, prev string) string {
+  	t.Helper()
+  	body := fmt.Sprintf(sample, write(t, "inv.yaml", inv))
+  	if !strings.Contains(body, "id: v2,") {
+  		t.Fatal("sample no longer names id v2: the test would replace nothing")
+  	}
+  	body = strings.Replace(body, "id: v2,", "id: "+id+",", 1)
+  	if prev != "" {
+  		body = strings.Replace(body, "encryption:\n", "encryption:\n  previous: "+prev+"\n", 1)
+  	}
+  	return body
+  }
+
   // An encryption key id is sealed into every record's header and named by
   // every line about one that will not open, which prints only the key-id
   // charset (crypt.LineKeyID). One outside it is refused at load, naming the
-  // block and never echoing the id (plan 7e, Ruling 15).
+  // block and never echoing the id (plan 7e, Ruling 15), whether or not the
+  // block names a secret_env (pre-flight M6).
   func TestAnEncryptionKeyIDOutsideTheCharsetIsRefused(t *testing.T) {
   	for _, id := range []string{"has space", "semi;colon", "émoji", strings.Repeat("a", 65), "new\nline"} {
   		t.Run(fmt.Sprintf("%q", id), func(t *testing.T) {
-  			setEnv(t, "PORT49_ENC_V1", strings.Repeat("k", 32))
-  			raw := strings.Replace(baseYAML, "id: v1", fmt.Sprintf("id: %q", id), 1)
-  			_, err := Load(writeConfig(t, raw))
+  			setKeyEnv(t)
+  			_, err := Load(write(t, "port49d.yaml", sampleWithKeyID(t, fmt.Sprintf("%q", id), "")))
   			if err == nil || !strings.Contains(err.Error(), "encryption.current: id must be 1 to 64 of") {
   				t.Fatalf("an id %q loaded, or the refusal does not say why: %v", id, err)
   			}
   			if strings.Contains(err.Error(), id) {
   				t.Fatalf("the refusal echoes the id: %v", err)
   			}
+  			// A previous block naming the id and no secret_env took the
+  			// branch that echoed it with %q before the shape was checked.
+  			_, err = Load(write(t, "port49d.yaml", sampleWithKeyID(t, "v2", fmt.Sprintf("{id: %q}", id))))
+  			if err == nil || !strings.Contains(err.Error(), "encryption.previous: id must be 1 to 64 of") ||
+  				strings.Contains(err.Error(), id) {
+  				t.Fatalf("a previous id %q with no secret_env: %v", id, err)
+  			}
   		})
   	}
-  	for _, id := range []string{"v1", "2026-10.key_A", strings.Repeat("a", 64)} {
-  		setEnv(t, "PORT49_ENC_V1", strings.Repeat("k", 32))
-  		raw := strings.Replace(baseYAML, "id: v1", "id: "+id, 1)
-  		if _, err := Load(writeConfig(t, raw)); err != nil {
+  	for _, id := range []string{"v2", "2026-10.key_A", strings.Repeat("a", 64)} {
+  		setKeyEnv(t)
+  		if _, err := Load(write(t, "port49d.yaml", sampleWithKeyID(t, id, ""))); err != nil {
   			t.Fatalf("an id %q in the charset was refused: %v", id, err)
   		}
   	}
@@ -1134,16 +1609,21 @@ prints `?`.
   var KeyIDShape = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
   ```
 
-  In `Load`'s loop over `encryption.current` and `encryption.previous`, after the `if k.ref.ID
-  == ""` refusal, add:
+  In `Load`'s loop over `encryption.current` and `encryption.previous`, as the loop body's
+  first statement, before the `if k.ref.SecretEnv == ""` branch whose refusal echoes the id
+  with `%q` (pre-flight M6), add:
 
   ```go
-  		if !KeyIDShape.MatchString(k.ref.ID) {
-  			// Not printed: whatever the operator wrote, a line must not carry it.
+  		if k.ref.ID != "" && !KeyIDShape.MatchString(k.ref.ID) {
+  			// Not printed: whatever the operator wrote, a line must not carry
+  			// it. Checked first, so no later refusal in this loop echoes an
+  			// id outside the charset.
   			return Config{}, fmt.Errorf("config: %s: id must be 1 to 64 of A-Z a-z 0-9 . _ -: it is written "+
   				"into every record the key seals, and every line about a record that will not open names it", k.what)
   		}
   ```
+
+  The `if k.ref.ID == ""` refusal below stays: an empty id is required, not misshapen.
 
 - [ ] **Step 4: Run it to see it pass.**
 
@@ -1267,10 +1747,11 @@ Ruling 10, and Ruling 9's `blobsSeen`.
   func (emitOnly) Emit(Record) {}
   ```
 
-- [ ] **Step 2: The failing tests, the broker.** Add to `internal/broker/broker_test.go`. Use the
-  file's own fixture (`newTestBroker` or whatever builds a `*Broker` with a policy, a minter and a
-  memory store, and `mintRequest` or the helper that drives `tokens` over `httptest`), and name
-  them in the report:
+- [ ] **Step 2: The failing tests, the broker.** Add to `internal/broker/broker_test.go`. They use
+  `fixture_test.go`'s fixture (pre-flight M1):
+  - `newFixture(t, candidateCap)`, whose `f.b` is a `*Broker` on the memory store `f.st`;
+  - `f.post(ctx, f.state(f.alice), body, key)`, which drives `tokens` through `f.b.Handler()`;
+  - the minter's tag key, `token.TagKey([]byte("k"))`, as the fixture builds it.
 
   ```go
   // stallSink is a log whose Write blocks until release is closed, and says
@@ -1302,11 +1783,12 @@ Ruling 10, and Ruling 9's `blobsSeen`.
   // records land, in order (plan 7e Ruling 10; 4b Task 4).
   func TestAStalledLogNeverHoldsAReload(t *testing.T) {
   	sink := newStallSink()
-  	b := newTestBroker(t)
+  	f := newFixture(t, 8)
+  	b := f.b
   	b.Log = sink
-  	b.Minter = token.NewMinter(b.Store, sink, rand.Reader, testTagKey, b.Now, 8)
+  	b.Minter = token.NewMinter(f.st, sink, rand.Reader, token.TagKey([]byte("k")), b.Now, 8)
   	done := make(chan *httptest.ResponseRecorder, 1)
-  	go func() { done <- mintRequest(t, b, "leaf1") }()
+  	go func() { done <- f.post(context.Background(), f.state(f.alice), `{"devices":["leaf1"]}`, "") }()
   	select {
   	case <-sink.began:
   	case <-time.After(5 * time.Second):
@@ -1333,18 +1815,27 @@ Ruling 10, and Ruling 9's `blobsSeen`.
   // Two requests minting the same blob at once: each request's run of lines
   // carries a blob record before its mint record, unless the hash was marked
   // emitted, which happens only once a blob record has landed.
+  //
+  // A regression guard, not a failing-first test (pre-flight M4): today
+  // putBlob writes the blob record under b.mu before any mint record, so it
+  // passes before this task. It pins that buffering keeps the order.
   func TestEveryMintRecordFollowsItsBlobRecord(t *testing.T) {
   	var buf bytes.Buffer
-  	b := newTestBroker(t)
+  	f := newFixture(t, 8)
+  	b := f.b
   	b.Log = decision.NewJSONLines(&lockedWriter{w: &buf})
-  	b.Minter = token.NewMinter(b.Store, b.Log, rand.Reader, testTagKey, b.Now, 8)
+  	b.Minter = token.NewMinter(f.st, b.Log, rand.Reader, token.TagKey([]byte("k")), b.Now, 8)
   	var wg sync.WaitGroup
   	for i := 0; i < 8; i++ {
   		wg.Add(1)
-  		go func() { defer wg.Done(); mintRequest(t, b, "leaf1") }()
+  		go func() {
+  			defer wg.Done()
+  			f.post(context.Background(), f.state(f.alice), `{"devices":["leaf1"]}`, "")
+  		}()
   	}
   	wg.Wait()
   	seen := map[string]bool{}
+  	mints := 0
   	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
   		var r map[string]any
   		if err := json.Unmarshal([]byte(line), &r); err != nil {
@@ -1354,14 +1845,15 @@ Ruling 10, and Ruling 9's `blobsSeen`.
   		case decision.EventBlob:
   			seen[r["blob"].(map[string]any)["hash"].(string)] = true
   		case decision.EventMint:
-  			if pol, _ := r["policy"].(map[string]any); pol != nil {
-  				for _, h := range blobHashesOf(r) {
-  					if !seen[h] {
-  						t.Fatalf("a mint record names blob %s before any blob record for it:\n%s", h, buf.String())
-  					}
-  				}
+  			mints++
+  			h, _ := r["mint"].(map[string]any)["blob"].(string) // decision.Mint.BlobHash
+  			if h == "" || !seen[h] {
+  				t.Fatalf("a mint record names blob %q before any blob record for it:\n%s", h, buf.String())
   			}
   		}
+  	}
+  	if mints != 8 {
+  		t.Fatalf("%d mint records, want 8:\n%s", mints, buf.String())
   	}
   }
 
@@ -1370,7 +1862,7 @@ Ruling 10, and Ruling 9's `blobsSeen`.
   // mint of a forgotten hash writes its blob record again, which replay reads
   // as a duplicate.
   func TestBlobsSeenIsBounded(t *testing.T) {
-  	b := newTestBroker(t)
+  	b := newFixture(t, 8).b
   	for i := 0; i < blobsSeenMax; i++ {
   		b.markBlob(fmt.Sprintf("h%d", i))
   	}
@@ -1384,15 +1876,16 @@ Ruling 10, and Ruling 9's `blobsSeen`.
   }
   ```
 
-  `lockedWriter` (an `io.Writer` with a mutex) and `blobHashesOf` (the blob hashes a mint record
-  names, from its `mint.blobs` or `policy` field, as the decision log's schema writes them) are
-  test helpers. Add them to the file if it has none, and say which field the schema uses.
+  `lockedWriter` (an `io.Writer` with a mutex) is a test helper: add it to the file if no
+  `_test.go` file in the package has one. A mint record names its blob at `mint.blob`
+  (`decision.Mint.BlobHash`, `json:"blob"`), so no helper is needed to read it.
 
 - [ ] **Step 3: Run them to see them fail.**
 
   Run: `go test ./internal/decision/ ./internal/broker/ -run 'Buffer|Stalled|FollowsItsBlob|BlobsSeenIsBounded' -count=1`
   Expected: FAIL. `NewBuffer`, `markBlob`, `blobSeen` and `blobsSeenMax` are undefined, and once
-  they compile, the reload is held.
+  they compile, the reload is held. `TestEveryMintRecordFollowsItsBlobRecord` passes once it
+  compiles: it is the regression guard for Step 6.
 
 - [ ] **Step 4: The buffer.** Create `internal/decision/buffer.go`:
 
@@ -1796,7 +2289,9 @@ refresh, a revocation, or a start's purge superseded its key, so the instant liv
 
   // supersededRec is sp/<nas>/<user>, and meta/superseded_all for every key:
   // when tokens were last superseded there, and until when that is kept
-  // (plan 7e, Ruling 9). The broker's role alone writes or reads it.
+  // (plan 7e, Ruling 9). The broker's role alone writes either, and alone
+  // reads sp/; meta/superseded_all sits under meta/, which the daemon's
+  // role reads, and tells it nothing it could use.
   type supersededRec struct {
   	At        time.Time `json:"at"`
   	ExpiresAt time.Time `json:"expires_at"`
@@ -1947,13 +2442,38 @@ refresh, a revocation, or a start's purge superseded its key, so the instant liv
 - [ ] **Step 8: The broker's tests.** Add to `broker_test.go`:
 
   ```go
+  // second is another *Broker on f's store, policy, log and sessions, with a
+  // minter of its own: a second broker process on one keyspace. Built field
+  // by field, since a Broker holds a mutex and is never copied.
+  func second(f *fixture) *Broker {
+  	return &Broker{Policy: f.b.Policy, Store: f.st, Log: f.b.Log, Now: f.b.Now,
+  		Minter:  token.NewMinter(f.st, f.b.Log, rand.Reader, token.TagKey([]byte("k")), f.b.Now, 8),
+  		Metrics: metrics.New(prometheus.NewRegistry()), MaxSessionAge: f.b.MaxSessionAge,
+  		BatchMax: f.b.BatchMax, Sessions: f.b.Sessions, ContextIdleTTL: f.b.ContextIdleTTL}
+  }
+
+  // postTo is f.post through b's handler.
+  func postTo(f *fixture, b *Broker, body, key string) *httptest.ResponseRecorder {
+  	r := httptest.NewRequest("POST", "/v1/tokens", strings.NewReader(body))
+  	r.TLS = f.state(f.alice)
+  	if key != "" {
+  		r.Header.Set("Idempotency-Key", key)
+  	}
+  	w := httptest.NewRecorder()
+  	b.Handler().ServeHTTP(w, r)
+  	return w
+  }
+
   // A key superseded on one broker process makes an idempotent replay on
   // another mint afresh: the instant is in the store (plan 7e, Ruling 9).
   func TestASupersededKeyReplaysAfreshOnAnotherBroker(t *testing.T) {
-  	a, b := twoBrokersOneStore(t) // two *Broker on one memory store, each with its own minter
-  	first := mintKeyedOn(t, a, "leaf1", "k1")
-  	a.supersede(context.Background(), store.TokenKey{NAS: "leaf1", Username: "alice"}, a.Now())
-  	again := mintKeyedOn(t, b, "leaf1", "k1")
+  	f := newFixture(t, 8)
+  	other := second(f)
+  	body := `{"devices":["leaf1"]}`
+  	first := postTo(f, f.b, body, "k1").Body.String()
+  	f.b.supersede(context.Background(), store.TokenKey{NAS: "leaf1", Username: "alice"}, f.b.Now())
+  	f.advance(time.Second)
+  	again := postTo(f, other, body, "k1").Body.String()
   	if again == first {
   		t.Fatal("another broker answered a superseded key's replay with the deleted token")
   	}
@@ -1962,9 +2482,9 @@ refresh, a revocation, or a start's purge superseded its key, so the instant liv
   // A store that fails the read of the superseded instant refuses the item
   // store_unavailable rather than risk handing back a deleted token.
   func TestAnUnreadableSupersededInstantRefusesTheItem(t *testing.T) {
-  	b := newTestBroker(t)
-  	b.Store = &failSuperseded{Store: b.Store}
-  	rr := mintKeyedRequest(t, b, "leaf1", "k2")
+  	f := newFixture(t, 8)
+  	f.b.Store = &failSuperseded{Store: f.st}
+  	rr := f.post(context.Background(), f.state(f.alice), `{"devices":["leaf1"]}`, "k2")
   	if !strings.Contains(rr.Body.String(), `"store_unavailable"`) {
   		t.Fatalf("%d %s", rr.Code, rr.Body)
   	}
@@ -1977,8 +2497,10 @@ refresh, a revocation, or a start's purge superseded its key, so the instant liv
   }
   ```
 
-  `twoBrokersOneStore`, `mintKeyedOn` and `mintKeyedRequest` are built from the file's existing
-  fixture. Name them in the report.
+  Without Step 7, the first test fails: the second broker's in-memory `superseded` is empty, so
+  it answers the replay from the idempotency record. If the fixture's policy gives alice no
+  token on `leaf1` at `f.now`, use the device the file's existing idempotency tests mint on, and
+  say so in the report.
 
 - [ ] **Step 9: Run everything.**
 
@@ -2045,7 +2567,7 @@ empty carries the store's current revision.
   // every record ever at the key (plan 7e, Ruling 3).
   func TestSeenIsTheRevisionAReadOfAnAbsentKeyAnswered(t *testing.T) {
   	ctx := context.Background()
-  	s := newEtcdStore(t) // the file's helper: a store on the shared member with a fresh prefix
+  	s := onShared(t, time.Now) // etcd_test.go's helper: the shared member, a fresh prefix
   	cli := etcdtest.Client(t)
   	resp, err := cli.Put(ctx, etcdtest.Prefix()+"elsewhere", "x")
   	if err != nil {
@@ -2061,7 +2583,7 @@ empty carries the store's current revision.
 
   // Seen never goes back, whatever a later response says.
   func TestSeenNeverGoesBack(t *testing.T) {
-  	s := newEtcdStore(t)
+  	s := onShared(t, time.Now)
   	s.saw(500)
   	s.saw(10)
   	if s.Seen() != 500 {
@@ -2084,9 +2606,17 @@ empty carries the store's current revision.
   }
   ```
 
-  In `guard_test.go`, the routing test's method list reads `store.RevStore`'s methods. Add
-  `TestSeenPassesThroughAndPingIsTheContextPools`: `Seen` through the guard returns the inner's
-  value, and `Ping` on an inner that fails counts one `context` pool failure.
+  In `guard_test.go` (pre-flight M15):
+  - `TestEveryMethodIsRoutedToItsPool` iterates every `store.RevStore` method and calls each
+    with a context. `Seen` has no pool ("Seen has no pool"), and a context passed to it would
+    panic the reflective call. Exempt it by name at the top of the loop (`if m.Name == "Seen"
+    { continue }`), with a comment that `Seen` makes no call.
+  - Add `TestSeenPassesThroughWithNoSlot`. Build a guard whose context pool has one slot, held
+    by a call parked inside the inner store. `Seen` through the guard still returns the
+    inner's value at once, within 100ms, and counts nothing in `c.Metrics.Calls`. It fails
+    against a `Seen` routed through `g.do`, which waits for the slot.
+  - Add `TestPingIsTheContextPools`: `Ping` on an inner that fails counts one `context` pool
+    failure, and none in `token` or `bulk`.
 
 - [ ] **Step 2: Run them to see them fail.**
 
@@ -2154,14 +2684,16 @@ empty carries the store's current revision.
   wrapper:
 
   ```go
-  func (g *guardedRev) Seen() uint64 { return g.inner.Seen() }
+  // Seen makes no call, so it takes no slot and no deadline (store.RevStore).
+  func (g revGuarded) Seen() uint64 { return g.rev.Seen() }
 
-  func (g *guardedRev) Ping(ctx context.Context) error {
-  	return g.do(ctx, Context, func(ctx context.Context) error { return g.inner.Ping(ctx) })
+  func (g revGuarded) Ping(ctx context.Context) error {
+  	return g.do(ctx, Context, func(ctx context.Context) error { return g.rev.Ping(ctx) })
   }
   ```
 
-  (Use the `RevStore` wrapper's real type and field names at `b508ba0`.) Every test double that
+  `revGuarded` (`guard.go:158`) is the wrapper `WrapRev` returns, a value type whose inner
+  `RevStore` is `rev`. Every test double that
   implements `store.RevStore` without embedding one gains both methods: `grep -rn 'RevStore'
   internal cmd` names them.
 
@@ -2199,13 +2731,25 @@ empty carries the store's current revision.
 - Modify: `internal/store/crypt/ledger.go` (rewritten)
 - Modify: `internal/store/crypt/crypt.go:199-239` (`contextSecret`, form 4), `:498-639` (seal,
   open, `sent`, the writes, `GetContext`), `:808-829` (the deletes)
+- Modify: `internal/store/crypt/crypt.go:281-287` (`OnUnopenable` gains the reason)
 - Modify: `internal/store/crypt/crypt_test.go` (the ledger's tests, listed below)
 - Modify: `internal/broker/ledger_test.go`, `internal/store/etcd/etcd_test.go:284-357`
-- Modify: `cmd/port49d/main.go:859`, `cmd/port49d/store.go:741` (`Seal` replaced)
+- Modify: `cmd/port49d/main.go:859`, `cmd/port49d/store.go:741` (`Seal` replaced),
+  `cmd/port49d/store.go:243-290` (`unopenableSayer`'s lines), `:761` (`sweepLoop` takes the
+  ledger)
+- Modify: `cmd/port49d/store_test.go` (`TestUnopenableSayerSaysOncePerKeyPerTenMinutes`,
+  `TestUnopenableSayerCallsANamelessRecordCorrupt`; two new sayer tests)
 
 **Interfaces:**
 - Consumes: `store.RevStore.Seen()` (Task 6).
 - Produces (`crypt`):
+  - `var ErrEarlierForm = errors.New("crypt: a context sealed by an earlier port49")`: a context
+    that opens and is sealed in a form below `contextSealVersion` (pre-flight I10). Exported, so
+    port49d's sayer tells it from tampering. A form above it is the plain mismatch error, as
+    today.
+  - `func OnUnopenable(f func(record, keyID string, why error)) Option`: `why` is the error the
+    open returned (`ErrUnknownKey`, `ErrEarlierForm`, `ErrNotLastWritten`, or an authentication
+    or decode failure).
   - `const contextSealVersion = 4`; `contextSecret.Seq uint64` (`json:"seq"`) in place of
     `WriteID`.
   - `func NewLedger() *Ledger`, unchanged.
@@ -2232,6 +2776,9 @@ empty carries the store's current revision.
   - `ErrNotLastWritten`, kept: a record sealed below its key's mark.
   - `func openContextWith(keys Keys, k store.ContextKey, c store.Context) (store.Context, uint64, error)`,
     the open without a `wrapped`, for Task 8's feed.
+- Produces (`cmd/port49d`): `func sweepLoop(ctx context.Context, s *etcdstore.Store, brk
+  *broker.Broker, ledger *crypt.Ledger, every time.Duration, out io.Writer)` (pre-flight M16),
+  which Task 15's runner calls as is.
 
 Ruling 3. This is the change most worth its own review: read the ruling first.
 
@@ -2259,13 +2806,14 @@ kept as a property of the new rule:
 | `TestTheLedgerAdmitsTheSameContextsWritesInFlightOrUnknown`, `TestTheLedgerAdmitsWritesInFlight`, `TestAReadSettlesEveryWriteWhoseOutcomeWasUnknown` | replaced by `TestAWriteInFlightOrOfUnknownOutcomeIsAdmittedWhicheverLanded` |
 | `TestARevocationWhoseSealFailedIsNotUndoneByAPutBack` | kept |
 | `TestTheRevocationFloorIsClearedOnlyByALaterWrite` | kept, as "only by a later sequence" |
-| `TestAReadRacingAWriteOfTheSameContextReadsAgain` | kept |
+| `TestAReadRacingAWriteOfTheSameContextReadsAgain` | kept on its `readHoldingStore`, which embeds `store.RevStore` and so gains `Seen` and `Ping`; its `l.Seal()` becomes `l.SetBase(h.Seen()+1)` (pre-flight M3) |
 | `TestAContextOfFormTwoDoesNotOpen` | becomes `TestAContextOfFormThreeDoesNotOpen` (form 2 too) |
 | `TestTheLedgerForgetsAKeyTheStoreNoLongerHolds` | replaced by `TestADeletedKeyKeepsItsMark` (stronger: a put-back after a delete is denied) and `TestTheLedgerPrunesAKeyPastItsKeep` |
 | `TestASealedLedgerAdmitsNoUnseenKey` | becomes `TestARecordSealedBeforeTheBaseIsDeniedAtAnUnseenKey` |
-| `TestTheLedgerOrdersWritesByTheStoresCommit`, `TestFirstLoginsRacingOnAnEmptyKey`, `TestTheLedgerPlacesAWriteThatEndsLate`, `TestTheLedgerDoesNotPlaceAWriteThatEndedAfterALaterOne`, `TestAWriteBegunBeforeTheLastEndedIsNotARestore`, `TestAReadSetsTheLastAtNoRevision`, `TestAReplayReadBeforeALandedWriteEndsIsDeniedAfter` | `TestFirstLoginsRacingOnAnEmptyKey` kept; the rest replaced by `TestTheStoresLastWriteIsAdmittedWhateverOrderWritesEnd` |
-| `TestTheLedgerPlacesAWriteAfterTheStoresRevisionsWentBack`, `…WereBumped`, `TestALoginAfterARestoreIsTheLast` | replaced by `TestALoginAfterARestoreIsAdmitted` (both kinds of restore), and `etcd_test.go`'s `TestALoginAfterAnEtcdRestoreIsTheLast` kept on the new API |
-| — | new: `TestAnotherProcesssWriteIsAdmittedBeforeItsFeedArrives`, `TestAnEarlierRecordIsDeniedOnEveryProcessThatSawALater`, `TestTheSequenceIsAboveEverythingKnown` |
+| `TestTheLedgerOrdersWritesByTheStoresCommit`, `TestFirstLoginsRacingOnAnEmptyKey`, `TestTheLedgerPlacesAWriteThatEndsLate`, `TestTheLedgerDoesNotPlaceAWriteThatEndedAfterALaterOne`, `TestAWriteBegunBeforeTheLastEndedIsNotARestore`, `TestAReadSetsTheLastAtNoRevision` (`crypt_test.go:1529` at `b508ba0`), `TestAReplayReadBeforeALandedWriteEndsIsDeniedAfter` | `TestFirstLoginsRacingOnAnEmptyKey` kept on `twoLoginsEndOutOfOrder` and its `holdingStore`, whose `l.Seal()` (`:1401`) becomes `l.SetBase(inner.Seen()+1)`; the rest replaced by `TestTheStoresLastWriteIsAdmittedWhateverOrderWritesEnd` |
+| `TestTheLedgerPlacesAWriteAfterTheStoresRevisionsWentBack`, `…WereBumped`, `TestALoginAfterARestoreIsTheLast` | replaced by `TestALoginAfterARestoreIsAdmitted` (both kinds of restore, one process and two), and `etcd_test.go`'s `TestALoginAfterAnEtcdRestoreIsTheLast` kept on the new API |
+| — | new: `TestAnotherProcesssWriteIsAdmittedWithNoFeedBetween`, `TestAnEarlierRecordIsDeniedOnEveryProcessThatSawALater`, `TestTheSequenceIsAboveEverythingKnown`, `TestAnEarlierFormIsNamedAsOne` |
+| `cmd/port49d`'s `TestUnopenableSayerSaysOncePerKeyPerTenMinutes`, `TestUnopenableSayerCallsANamelessRecordCorrupt` | kept, the sayer called with a `why`; new: `TestTheSayerNamesAnEarlierFormAsTheUpgrade`, `TestTheSayerNamesAPutBackAsBelowTheNewestWrite` |
 
 - [ ] **Step 1: The failing tests.** In `crypt_test.go`, delete the tests the table replaces.
   Adapt the kept ones (`Seal()` → `SetBase(inner.Seen()+1)`; no other change to what they
@@ -2307,11 +2855,12 @@ kept as a property of the new rule:
   	}
   }
 
-  // A login on one process is admitted on another at once: the record's
-  // sequence is above the other's base, and above any mark it knows at the
-  // key, with no feed between them (Review Focus 1; Ruling 3). A
-  // per-process ledger, sealed, denied it (re-check IA1).
-  func TestAnotherProcesssWriteIsAdmittedBeforeItsFeedArrives(t *testing.T) {
+  // A login on one process is admitted on another: the record's sequence is
+  // above the other's base, and above any mark it knows at the key (Review
+  // Focus 1; Ruling 3). Neither ledger here follows a feed, so the fence
+  // (Task 8a) passes at once; Task 8a's test covers the wait. A per-process
+  // ledger, sealed, denied it (re-check IA1).
+  func TestAnotherProcesssWriteIsAdmittedWithNoFeedBetween(t *testing.T) {
   	_, a, b, _, _ := twoProcesses(t)
   	login(t, a, "ctx-alice", "user:alice")
   	if c, err := b.GetContext(context.Background(), ka); err != nil || c.CtxID != "ctx-alice" {
@@ -2411,56 +2960,98 @@ kept as a property of the new rule:
   // this process knew, because Seen never goes back: it is admitted, and a
   // record the restore brought back, below the mark, is denied (Ruling 3;
   // L35's restore, measured).
+  //
+  // With two processes (pre-flight I12): q starts after the restore, so its
+  // Seen is the restored store's. With the bump, q's login seals above
+  // everything p knew, and p admits it. Without it, q seals below p's mark,
+  // and p denies it until p writes at the key. The runbook (design §13)
+  // says to bump, or to restart every process: the second half pins why.
   func TestALoginAfterARestoreIsAdmitted(t *testing.T) {
   	for _, bump := range []bool{false, true} {
-  		inner := &rewinding{RevStore: memory.New(time.Now)}
+  		inner := newRewinding(memory.New(time.Now))
   		l := NewLedger()
   		l.SetBase(inner.Seen() + 1)
-  		s := Wrap(inner, keys(), nil, WithLedger(l))
-  		login(t, s, "ctx-old", "user:alice")
+  		p := Wrap(inner, keys(), nil, WithLedger(l))
+  		login(t, p, "ctx-old", "user:alice")
   		old, _ := inner.RevStore.GetContext(context.Background(), ka)
-  		login(t, s, "ctx-new", "user:alice")
+  		for i := 0; i < 5; i++ { // p's mark well past the snapshot's revisions
+  			login(t, p, fmt.Sprintf("ctx-new-%d", i), "user:alice")
+  		}
   		inner.restore(old, bump) // the store now holds ctx-old, its revisions back or bumped
-  		if _, err := s.GetContext(context.Background(), ka); !errors.Is(err, ErrNotLastWritten) {
+  		if _, err := p.GetContext(context.Background(), ka); !errors.Is(err, ErrNotLastWritten) {
   			t.Fatalf("bump=%v: a restored record below the mark was admitted: %v", bump, err)
   		}
-  		login(t, s, "ctx-after", "user:alice")
-  		if c, err := s.GetContext(context.Background(), ka); err != nil || c.CtxID != "ctx-after" {
-  			t.Fatalf("bump=%v: the login after the restore: %v %v", bump, c.CtxID, err)
+  		// q: a process started after the restore, with a view of its own.
+  		qv := inner.view()
+  		lq := NewLedger()
+  		lq.SetBase(qv.Seen() + 1)
+  		q := Wrap(qv, keys(), nil, WithLedger(lq))
+  		login(t, q, "ctx-on-q", "user:alice")
+  		c, err := p.GetContext(context.Background(), ka)
+  		switch {
+  		case bump && (err != nil || c.CtxID != "ctx-on-q"):
+  			t.Fatalf("with the bump, p did not admit q's login: %v %v", c.CtxID, err)
+  		case !bump && !errors.Is(err, ErrNotLastWritten):
+  			t.Fatalf("without the bump, p admitted a login sealed below its mark (%v %v): the runbook's "+
+  				"restart is no longer needed, so say so in design §13", c.CtxID, err)
+  		}
+  		login(t, p, "ctx-after", "user:alice") // p's own write after the restore
+  		for name, s := range map[string]store.Store{"p": p, "q": q} {
+  			if c, err := s.GetContext(context.Background(), ka); err != nil || c.CtxID != "ctx-after" {
+  				t.Fatalf("bump=%v, %s: the login after the restore: %v %v", bump, name, c.CtxID, err)
+  			}
   		}
   	}
   }
 
   // rewinding is a store whose revisions can be put back to before a
   // record's, as a restore without --bump-revision does, or bumped by a
-  // billion, as one with it does. Seen is the wrapper's and never goes back,
-  // as etcd's client's is.
+  // billion, as one with it does. Each view's Seen is its own and never goes
+  // back, as an etcd client's is; the offset is the store's, shared by every
+  // view.
   type rewinding struct {
   	store.RevStore
+  	shared *rewindState
+  	mu     sync.Mutex
+  	seen   uint64
+  }
+
+  type rewindState struct {
   	mu     sync.Mutex
   	offset int64 // added to every revision the inner store reports
-  	seen   uint64
+  }
+
+  func newRewinding(inner store.RevStore) *rewinding {
+  	return &rewinding{RevStore: inner, shared: &rewindState{}}
+  }
+
+  // view is another client of the same store, which has seen nothing yet:
+  // a process started now.
+  func (r *rewinding) view() *rewinding { return &rewinding{RevStore: r.RevStore, shared: r.shared} }
+
+  func (r *rewinding) offset() int64 {
+  	r.shared.mu.Lock()
+  	defer r.shared.mu.Unlock()
+  	return r.shared.offset
   }
 
   // out is an inner revision as the store reports it; in is the reverse.
   func (r *rewinding) out(rev uint64) uint64 {
-  	r.mu.Lock()
-  	defer r.mu.Unlock()
   	if rev == 0 {
   		return 0
   	}
-  	v := uint64(int64(rev) + r.offset)
+  	v := uint64(int64(rev) + r.offset())
+  	r.mu.Lock()
   	r.seen = max(r.seen, v)
+  	r.mu.Unlock()
   	return v
   }
 
   func (r *rewinding) in(rev uint64) uint64 {
-  	r.mu.Lock()
-  	defer r.mu.Unlock()
   	if rev == 0 {
   		return 0
   	}
-  	return uint64(int64(rev) - r.offset)
+  	return uint64(int64(rev) - r.offset())
   }
 
   func (r *rewinding) Seen() uint64 {
@@ -2490,13 +3081,13 @@ kept as a property of the new rule:
   // since, or up by a billion (bump).
   func (r *rewinding) restore(old store.Context, bump bool) {
   	cur := r.RevStore.Seen()
-  	r.mu.Lock()
+  	r.shared.mu.Lock()
   	if bump {
-  		r.offset = 1_000_000_000
+  		r.shared.offset = 1_000_000_000
   	} else {
-  		r.offset = 1 - int64(cur)
+  		r.shared.offset = 1 - int64(cur)
   	}
-  	r.mu.Unlock()
+  	r.shared.mu.Unlock()
   	old.Rev, old.PolicyRev = 0, 0
   	r.RevStore.PutContext(context.Background(), ka, old, time.Hour)
   }
@@ -2559,19 +3150,32 @@ kept as a property of the new rule:
   }
 
   // The sequence a write seals is above the revision it compares on, above
-  // everything the store has told this process, and above the key's mark.
+  // everything the store has told this process, and above the key's mark:
+  // each term wins once (pre-flight M4: the Seen term is exercised too).
   func TestTheSequenceIsAboveEverythingKnown(t *testing.T) {
-  	inner := memory.New(time.Now)
+  	inner := &seenAt{RevStore: memory.New(time.Now), seen: 10}
   	l := NewLedger()
   	l.Observe(ka, 1000, 1000, time.Time{}, time.Time{})
   	w := Wrap(inner, keys(), nil, WithLedger(l)).(*wrapped)
   	if got := w.seqFor(ka, 5); got != 1001 {
-  		t.Fatalf("below the mark: %d", got)
+  		t.Fatalf("the mark's term: %d", got)
   	}
   	if got := w.seqFor(ka, 5000); got != 5000 {
-  		t.Fatalf("below the compare revision: %d", got)
+  		t.Fatalf("the compare revision's term: %d", got)
+  	}
+  	inner.seen = 9000
+  	if got := w.seqFor(ka, 5000); got != 9000 {
+  		t.Fatalf("the Seen term: %d", got)
   	}
   }
+
+  // seenAt is a store whose Seen is whatever the test sets.
+  type seenAt struct {
+  	store.RevStore
+  	seen uint64
+  }
+
+  func (s *seenAt) Seen() uint64 { return s.seen }
 
   // A form-3 (7d) or form-2 context does not open: denied, and replaced at
   // the next login (Ruling 3, the migration).
@@ -2600,17 +3204,87 @@ kept as a property of the new rule:
   		}
   	}
   }
+
+  // An earlier form is ErrEarlierForm, both in the read's error and in what
+  // OnUnopenable is told, so the operator's line names the upgrade rather
+  // than tampering; a later form, and a put-back, are not it (pre-flight I10).
+  func TestAnEarlierFormIsNamedAsOne(t *testing.T) {
+  	for _, c := range []struct {
+  		v       int
+  		earlier bool
+  	}{{3, true}, {2, true}, {5, false}} {
+  		inner := memory.New(time.Now)
+  		var told error
+  		s := Wrap(inner, keys(), nil, OnUnopenable(func(_, _ string, why error) { told = why }))
+  		body, _ := json.Marshal(map[string]any{"v": c.v, "ctx_id": "c-old", "principal": "user:alice",
+  			"username": "netops"})
+  		sealed, _ := keys().SealBound(body, contextAAD(ka))
+  		inner.PutContext(context.Background(), ka, store.Context{Sealed: sealed}, time.Hour)
+  		_, err := s.GetContext(context.Background(), ka)
+  		if errors.Is(err, ErrEarlierForm) != c.earlier || errors.Is(told, ErrEarlierForm) != c.earlier {
+  			t.Fatalf("form %d: read %v, told %v", c.v, err, told)
+  		}
+  	}
+  	// A put-back is told as one, never as an earlier form.
+  	inner := memory.New(time.Now)
+  	l := NewLedger()
+  	l.SetBase(inner.Seen() + 1)
+  	var told error
+  	s := Wrap(inner, keys(), nil, WithLedger(l), OnUnopenable(func(_, _ string, why error) { told = why }))
+  	login(t, s, "ctx-alice", "user:alice")
+  	saved, _ := inner.GetContext(context.Background(), ka)
+  	login(t, s, "ctx-bob", "user:bob")
+  	inner.PutContext(context.Background(), ka, saved, time.Hour)
+  	s.GetContext(context.Background(), ka)
+  	if !errors.Is(told, ErrNotLastWritten) || errors.Is(told, ErrEarlierForm) {
+  		t.Fatalf("a put-back was told as %v", told)
+  	}
+  }
   ```
 
   In `internal/broker/ledger_test.go` and `etcd_test.go:284`, replace `l.Seal()` with
   `l.SetBase(<the store>.Seen()+1)`. Keep what they assert.
 
+  In `cmd/port49d/store_test.go`, the two sayer tests call the sayer with a third argument,
+  `nil` (an authentication failure), and assert as before. Add (pre-flight I10):
+
+  ```go
+  // An earlier form is the upgrade, said as the upgrade: never "altered or is
+  // corrupt", which at 3am reads as an attack across the fleet.
+  func TestTheSayerNamesAnEarlierFormAsTheUpgrade(t *testing.T) {
+  	var out bytes.Buffer
+  	keys := crypt.Keys{Current: crypt.Key{ID: "v2"}}
+  	say := unopenableSayer(keys, &out, time.Now)
+  	say("context", "v2", fmt.Errorf("crypt: opening context: %w", crypt.ErrEarlierForm))
+  	got := out.String()
+  	if !strings.Contains(got, "a context sealed by an earlier port49 (form 3) does not open: expected once "+
+  		"after the 7e upgrade; replaced at its user's next login") || strings.Contains(got, "altered") {
+  		t.Fatalf("%q", got)
+  	}
+  }
+
+  // A record below the newest write is named as that, not as "the one this
+  // port49d last wrote", which is no longer the rule (plan 7e, Ruling 3).
+  func TestTheSayerNamesAPutBackAsBelowTheNewestWrite(t *testing.T) {
+  	var out bytes.Buffer
+  	keys := crypt.Keys{Current: crypt.Key{ID: "v2"}}
+  	say := unopenableSayer(keys, &out, time.Now)
+  	say("context", "v2", crypt.ErrNotLastWritten)
+  	got := out.String()
+  	if !strings.Contains(got, "is sealed below the newest write any port49 process made there") ||
+  		strings.Contains(got, "last wrote") {
+  		t.Fatalf("%q", got)
+  	}
+  }
+  ```
+
 - [ ] **Step 2: Run them to see them fail.**
 
-  Run: `go test ./internal/store/crypt/ -count=1`
-  Expected: FAIL to compile (`SetBase`, `Observe`, `seqFor` undefined). Once compiled against a
-  stub, `TestAnotherProcesssWriteIsAdmittedBeforeItsFeedArrives` fails as 7d's sealed ledger
-  would: process b denies a's login.
+  Run: `go test ./internal/store/crypt/ ./cmd/port49d/ -run 'Ledger|Process|Restore|Sequence|Form|Sayer|Earlier|Deleted|Prune|Racing|Revocation' -count=1`
+  Expected: FAIL to compile (`SetBase`, `Observe`, `seqFor`, `ErrEarlierForm` undefined; the
+  sayer takes two arguments). Once compiled against a stub,
+  `TestAnotherProcesssWriteIsAdmittedWithNoFeedBetween` fails as 7d's sealed ledger would:
+  process b denies a's login.
 
 - [ ] **Step 3: The ledger.** Replace `internal/store/crypt/ledger.go` with:
 
@@ -2934,8 +3608,14 @@ kept as a property of the new rule:
   - `sealContext(k, c, seq uint64) (store.Context, error)` seals `Seq: seq` and no longer draws
     a random ID.
   - `openContextWith(keys, k, c) (store.Context, uint64, error)` is today's `openContext` body
-    over `keys`, returning `cs.Seq`. A form other than 4 is the error it is today.
-    `(*wrapped).openContext` calls it with `w.keys`.
+    over `keys`, returning `cs.Seq`. `(*wrapped).openContext` calls it with `w.keys`.
+    - A form below 4 is `fmt.Errorf("%w (form %d, not %d)", ErrEarlierForm, cs.V,
+      contextSealVersion)`, so `errors.Is(err, ErrEarlierForm)` holds through `openErr`'s
+      wrap.
+    - A form above 4 is the mismatch error it is today.
+  - `OnUnopenable(f func(record, keyID string, why error))`. `openErr(record, sealed, err)`
+    calls `w.onUnopenable(record, SealedKeyID(sealed), err)`. Every caller of `OnUnopenable` in
+    the tree passes a three-argument function (`grep -rn OnUnopenable internal cmd`).
   - Add:
 
   ```go
@@ -3010,9 +3690,34 @@ kept as a property of the new rule:
   `TestAStartSealsTheLedgerOnceItHasReadTheStore` still passes.
 
   Also call `ledger.SetKeep(max(cfg.Session.GraceWindow+time.Hour, crypt.DefaultLedgerKeep))`
-  where the ledger is built (`run`). `Prune` runs in the sweep loop: add
-  `ledger.Prune(time.Now())` after each sweep in `sweepLoop` (pass the ledger), and on memory
-  every 10 minutes from `run` (a ticker joined with the run).
+  where the ledger is built (`run`). `Prune` runs in the sweep loop and, on memory, every 10
+  minutes from `run` (a ticker joined with the run). The sweep loop's signature becomes
+  (pre-flight M16):
+
+  ```go
+  func sweepLoop(ctx context.Context, s *etcdstore.Store, brk *broker.Broker, ledger *crypt.Ledger,
+  	every time.Duration, out io.Writer)
+  ```
+
+  It calls `ledger.Prune(time.Now())` after each sweep. `runOnce`'s call becomes
+  `sweepLoop(ctx, sts.etcd, brk, ledger, cfg.Store.Etcd.SweepInterval, stderr)`.
+
+  **The sayer's lines** (`unopenableSayer` in `store.go`, pre-flight I10). It becomes `func(record,
+  keyID string, why error)`. In its held-key branch:
+  - `errors.Is(why, crypt.ErrEarlierForm)` prints `port49d: crypt: a %s sealed by an earlier
+    port49 (form 3) does not open: expected once after the 7e upgrade; replaced at its user's
+    next login`.
+  - `errors.Is(why, crypt.ErrNotLastWritten)` prints `port49d: crypt: a %s under key id %q is
+    sealed below the newest write any port49 process made there: it was put back, and is treated
+    as unreadable`.
+  - Anything else prints today's line without its "or is not the one this port49d last wrote
+    there" clause: `port49d: crypt: a %s failed authentication under key id %q: it was altered or
+    is corrupt, and is treated as unreadable`.
+  - The memory key stays `(record, keyID)`, so each line is still once per 10 minutes. The
+    earlier-form line is the one a fleet sees at the upgrade.
+
+  The form-3 line names form 3 because 7d's form is 3. A form-2 record, which only a 7d store
+  that never re-sealed can hold, prints the same line.
 
 - [ ] **Step 6: Run everything.**
 
@@ -3031,7 +3736,7 @@ kept as a property of the new rule:
   make build && make test && make vet && make test-race
   git add internal/store/crypt/ledger.go internal/store/crypt/crypt.go internal/store/crypt/crypt_test.go \
     internal/store/store.go internal/broker/ledger_test.go internal/store/etcd/etcd_test.go \
-    cmd/port49d/main.go cmd/port49d/store.go
+    cmd/port49d/main.go cmd/port49d/store.go cmd/port49d/store_test.go
   git commit -m "feat(crypt): a sealed write sequence and a high-water ledger per key
 
   A context seal (form 4) carries a sequence above its compare revision,
@@ -3057,6 +3762,7 @@ kept as a property of the new rule:
   `LedgerSource`, `LedgerSink`)
 - Create: `internal/store/etcd/feed.go`, `internal/store/etcd/feed_test.go`
 - Create: `internal/store/crypt/follow.go`, `internal/store/crypt/follow_test.go`
+- Modify: `internal/store/crypt/ledger.go` (`ObserveFollowed`)
 - Modify: `internal/daemon/metrics/metrics.go`, `metrics_test.go` (`StoreFeedUp`,
   `StoreFeedRescans`)
 - Modify: `cmd/port49d/store.go` (`openStores`, `stores`), `cmd/port49d/main.go`
@@ -3066,14 +3772,25 @@ kept as a property of the new rule:
 - Produces:
   - `store`:
     - `type ContextChange struct { Key ContextKey; Context Context; Deleted bool; Rev uint64 }`;
-    - `type ContextFeed interface { ScanContexts(ctx context.Context, fn func(ContextKey, Context)) (uint64, error); WatchContexts(ctx context.Context, after uint64, fn func(ContextChange)) error }`;
+    - `type ContextFeed interface { ScanContexts(ctx context.Context, fn func(ContextKey, Context)) (uint64, error); WatchContexts(ctx context.Context, after uint64, fn func(ContextChange), progress func(rev uint64), asks <-chan struct{}) error }`.
+      `progress` is told a revision through which every change has been delivered: the
+      highest event's after each batch, and each progress notify's header revision. Each
+      receive on `asks` requests one progress notify. A nil `asks` requests none. Task 8a
+      wires both to the fence; this task passes a no-op and nil;
     - `var ErrCompacted = errors.New("store: the feed's revision was compacted")`;
     - `type LedgerSource interface { LedgerMarks(ctx context.Context) (uint64, []LedgerMark, error) }`;
     - `type LedgerSink interface { PutLedgerMarks(ctx context.Context, ms []LedgerMark) error }`.
   - `(*etcd.Store).ScanContexts` and `(*etcd.Store).WatchContexts`.
   - `crypt`:
-    - `func LoadLedger(ctx context.Context, feed store.ContextFeed, src store.LedgerSource, keys Keys, l *Ledger) (rev uint64, known, recorded int, err error)`;
+    - `func (l *Ledger) ObserveFollowed(k store.ContextKey, seq, rev uint64, plainRevokedAt, ceiling time.Time)`:
+      `Observe` for a record the feed or a later scan brought. It raises an entry the ledger
+      holds, and makes one only for `seq >= l.Base()` (pre-flight I1);
+    - `func LoadLedger(ctx context.Context, feed store.ContextFeed, src store.LedgerSource, keys Keys, l *Ledger) (rev uint64, known, recorded int, err error)`.
+      Its scan makes entries (`Observe`) only on a ledger never loaded (`l.Base() == 0`). On a
+      ledger already loaded, such as a re-entry after a store gone, it uses `ObserveFollowed`
+      against the base before this load, then raises the base;
     - `func FollowContexts(ctx context.Context, feed store.ContextFeed, keys Keys, l *Ledger, from uint64, up func(bool), rescanned func(), logf func(string, ...any)) error`.
+      Every change and every rescan goes through `ObserveFollowed`.
   - metrics:
     - `Metrics.StoreFeedUp *prometheus.GaugeVec` (`port49_store_feed_up{feed}`);
     - `Metrics.StoreFeedRescans *prometheus.CounterVec` (`port49_store_feed_rescans_total{feed}`).
@@ -3086,6 +3803,12 @@ Ruling 3's "every process follows the store's contexts":
 - **The watch.** `WatchContexts` watches from the next revision.
 - **What the crypt side does with them.** It opens each record with the keys, raises its key's
   mark, and never admits anything: admission is `GetContext`'s alone.
+- **No entry from below the base** (pre-flight I1).
+  - Without `ObserveFollowed`, a store writer's put-back at a key absent from the record and
+    from the start's scan was denied before the feed brought it, by the base. Once the feed
+    brought it, `entry(k)` made `hw = seq_old`, and it was admitted.
+  - Now the feed only raises entries that exist, and makes one only at or above the base.
+  - The same holds for a compacted watch's rescan and a re-entry's scan.
 
 - [ ] **Step 1: The failing tests, the feed.** Create `internal/store/etcd/feed_test.go`:
 
@@ -3108,7 +3831,7 @@ Ruling 3's "every process follows the store's contexts":
   // raised by each.
   func TestTheScanAndTheWatchMeetWithNoGap(t *testing.T) {
   	ctx := context.Background()
-  	s := newEtcdStore(t)
+  	s := onShared(t, time.Now)
   	k1 := store.ContextKey{NAS: "leaf/01", Username: "al%ce"} // escaping
   	k2 := store.ContextKey{NAS: "leaf-02", Username: "bob"}
   	put := func(k store.ContextKey, id string) {
@@ -3134,11 +3857,12 @@ Ruling 3's "every process follows the store's contexts":
   		done <- s.WatchContexts(wctx, rev, func(c store.ContextChange) {
   			mu.Lock()
   			changes = append(changes, c)
+  			n := len(changes)
   			mu.Unlock()
-  			if len(changes) == 2 {
+  			if n == 2 {
   				cancel()
   			}
-  		})
+  		}, func(uint64) {}, nil)
   	}()
   	select {
   	case err := <-done:
@@ -3155,28 +3879,72 @@ Ruling 3's "every process follows the store's contexts":
   }
 
   // A watch from a compacted revision is store.ErrCompacted, never a silent
-  // gap.
+  // gap. On a member of its own: compacting the shared member would cut the
+  // history every other test in the package reads with WithRev (pre-flight
+  // M17).
   func TestAWatchFromACompactedRevisionSaysSo(t *testing.T) {
   	ctx := context.Background()
-  	s := newEtcdStore(t)
+  	srv := etcdtest.Start(t, etcdtest.Options{})
+  	s, err := Open(Config{Endpoints: []string{srv.Endpoint}, Prefix: "/port49/", Now: time.Now})
+  	if err != nil {
+  		t.Fatal(err)
+  	}
+  	t.Cleanup(func() { s.Close() })
   	k := store.ContextKey{NAS: "leaf-01", Username: "alice"}
   	s.PutContext(ctx, k, store.Context{CtxID: "c1", Principal: "user:x", Username: "alice"}, time.Hour)
   	rev, _ := s.ScanContexts(ctx, func(store.ContextKey, store.Context) {})
   	s.PutContext(ctx, k, store.Context{CtxID: "c2", Principal: "user:x", Username: "alice"}, time.Hour)
-  	resp, _ := etcdtest.Client(t).Get(ctx, "compact-me")
-  	if _, err := etcdtest.Client(t).Compact(ctx, resp.Header.Revision); err != nil {
+  	resp, err := s.ctx.Get(ctx, "compact-me")
+  	if err != nil {
   		t.Fatal(err)
   	}
-  	err := s.WatchContexts(ctx, rev, func(store.ContextChange) {})
+  	if _, err := s.ctx.Compact(ctx, resp.Header.Revision); err != nil {
+  		t.Fatal(err)
+  	}
+  	err = s.WatchContexts(ctx, rev, func(store.ContextChange) {}, func(uint64) {}, nil)
   	if !errors.Is(err, store.ErrCompacted) {
   		t.Fatalf("%v", err)
   	}
   }
+
+  // A progress request is answered: with no change to deliver, progress is
+  // told a revision at least the store's, so a reader waiting on the feed is
+  // let through an idle family (Task 8a's fence).
+  func TestAWatchAnswersAProgressRequest(t *testing.T) {
+  	ctx, cancel := context.WithCancel(context.Background())
+  	defer cancel()
+  	s := onShared(t, time.Now)
+  	rev, _ := s.ScanContexts(ctx, func(store.ContextKey, store.Context) {})
+  	other, err := s.ctx.Put(ctx, etcdtest.Prefix()+"elsewhere", "x") // a revision outside c/
+  	if err != nil {
+  		t.Fatal(err)
+  	}
+  	asks := make(chan struct{}, 1)
+  	got := make(chan uint64, 8)
+  	go s.WatchContexts(ctx, rev, func(store.ContextChange) {}, func(r uint64) { got <- r }, asks)
+  	deadline := time.After(10 * time.Second)
+  	for {
+  		select {
+  		case asks <- struct{}{}:
+  		default:
+  		}
+  		select {
+  		case r := <-got:
+  			if r >= uint64(other.Header.Revision) {
+  				return
+  			}
+  		case <-time.After(100 * time.Millisecond):
+  		case <-deadline:
+  			t.Fatal("no progress past a revision outside the family was told")
+  		}
+  	}
+  }
   ```
 
-  The shared member is compacted by `TestAWatchFromACompactedRevisionSaysSo`, which every other
-  test in the package shares. Run it on a member of its own (`etcdtest.Start(t,
-  etcdtest.Options{})`) if a test after it reads history. Note which in the report.
+  A store opened by `Open` on a plain member is the one `roles_test.go`'s `openAs` opens,
+  without TLS. If `Config` requires TLS at `b508ba0`, use `etcdtest.Start(t,
+  etcdtest.Options{TLS: true})` and `openAs(t, srv, "root", "/port49/")`. Either way the member
+  is the test's own.
 
 - [ ] **Step 2: The failing tests, the crypt side.** Create `internal/store/crypt/follow_test.go`:
 
@@ -3213,17 +3981,27 @@ Ruling 3's "every process follows the store's contexts":
   	return f.rev, nil
   }
 
-  func (f *feedOf) WatchContexts(ctx context.Context, _ uint64, fn func(store.ContextChange)) error {
+  func (f *feedOf) WatchContexts(ctx context.Context, _ uint64, fn func(store.ContextChange),
+  	progress func(uint64), _ <-chan struct{}) error {
   	for {
   		select {
   		case <-ctx.Done():
   			return ctx.Err()
   		case c := <-f.changes:
   			fn(c)
+  			progress(c.Rev)
   		case <-f.compact:
   			return store.ErrCompacted
   		}
   	}
+  }
+
+  // setScanned replaces what the next scan finds, under the feed's lock: a
+  // rescan runs on FollowContexts's goroutine (pre-flight M4, the race).
+  func (f *feedOf) setScanned(m map[store.ContextKey]store.Context, rev uint64) {
+  	f.mu.Lock()
+  	defer f.mu.Unlock()
+  	f.scanned, f.rev = m, rev
   }
 
   type marksOf []store.LedgerMark
@@ -3275,33 +4053,96 @@ Ruling 3's "every process follows the store's contexts":
   	}
   }
 
-  // A compacted watch scans again, raising only, counts the rescan, and goes
-  // on; nothing the earlier scan would have denied is admitted.
+  // A compacted watch scans again, counts the rescan, and goes on. The rescan
+  // raises a mark below a record it finds, never lowers one above it, and
+  // makes an entry only for a record at or above the base: nothing the
+  // earlier scan would have denied is admitted (pre-flight M4: each half can
+  // fail; I1).
   func TestACompactedFeedScansAgainAndOnlyRaises(t *testing.T) {
+  	kb := store.ContextKey{NAS: "leaf-02", Username: "bob"}
+  	kc := store.ContextKey{NAS: "leaf-03", Username: "carol"}
+  	kd := store.ContextKey{NAS: "leaf-04", Username: "dave"}
   	l := NewLedger()
+  	l.SetBase(150)
   	l.Observe(ka, 100, 100, time.Time{}, time.Time{})
-  	low := sealedAt(t, ka, 50) // a record sealed at sequence 50
-  	feed := &feedOf{scanned: map[store.ContextKey]store.Context{ka: low}, rev: 200,
-  		changes: make(chan store.ContextChange), compact: make(chan struct{}, 1)}
+  	l.Observe(kb, 10, 10, time.Time{}, time.Time{})
+  	feed := &feedOf{changes: make(chan store.ContextChange), compact: make(chan struct{}, 1)}
+  	feed.setScanned(map[store.ContextKey]store.Context{
+  		ka: sealedAt(t, ka, 50),  // below ka's mark: must not lower it
+  		kb: sealedAt(t, kb, 300), // above kb's mark: must raise it
+  		kc: sealedAt(t, kc, 60),  // unseen, below the base: a put-back, no entry
+  		kd: sealedAt(t, kd, 400), // unseen, above the base: an entry
+  	}, 500)
   	feed.compact <- struct{}{}
-  	rescans := 0
+  	var rescans atomic.Int32
   	ctx, cancel := context.WithCancel(context.Background())
-  	go func() { eventually(t, func() bool { return rescans > 0 }); cancel() }()
-  	FollowContexts(ctx, feed, keys(), l, 150, func(bool) {}, func() { rescans++ }, t.Logf)
+  	go func() { eventually(t, func() bool { return rescans.Load() > 0 && l.next(kd) == 401 }); cancel() }()
+  	FollowContexts(ctx, feed, keys(), l, 150, func(bool) {}, func() { rescans.Add(1) }, t.Logf)
   	if l.next(ka) != 101 {
   		t.Fatalf("a rescan lowered the mark: next %d", l.next(ka))
   	}
+  	if l.next(kb) != 301 {
+  		t.Fatalf("a rescan did not raise the mark: next %d", l.next(kb))
+  	}
+  	if l.admits(kc, 60) {
+  		t.Fatal("a rescan made an entry from a record below the base")
+  	}
+  }
+
+  // A put-back at a key this process never saw, brought by the feed, makes
+  // no entry: the read still judges it against the base, and denies it
+  // (pre-flight I1). Before ObserveFollowed, the event made hw = its own
+  // sequence and the read admitted it.
+  func TestAFedPutBackAtAnUnseenKeyIsDenied(t *testing.T) {
+  	inner, a, _, _, _ := twoProcesses(t)
+  	login(t, a, "ctx-alice", "user:alice")
+  	saved, _ := inner.GetContext(context.Background(), ka)
+  	if err := inner.DeleteContext(context.Background(), ka); err != nil {
+  		t.Fatal(err)
+  	}
+  	late := NewLedger()
+  	late.SetBase(inner.Seen() + 1) // started after the delete: ka is not in its scan
+  	c := Wrap(inner, keys(), nil, WithLedger(late))
+  	if err := inner.PutContext(context.Background(), ka, saved, time.Hour); err != nil {
+  		t.Fatal(err)
+  	}
+  	back, _ := inner.GetContext(context.Background(), ka)
+  	feed := &feedOf{changes: make(chan store.ContextChange, 1), compact: make(chan struct{})}
+  	ctx, cancel := context.WithCancel(context.Background())
+  	defer cancel()
+  	delivered := make(chan struct{})
+  	go FollowContexts(ctx, &tapFeed{feedOf: feed, after: func() { close(delivered) }}, keys(), late,
+  		late.Base()-1, func(bool) {}, func() {}, t.Logf)
+  	feed.changes <- store.ContextChange{Key: ka, Context: back, Rev: back.Rev}
+  	<-delivered
+  	if _, err := c.GetContext(context.Background(), ka); !errors.Is(err, ErrNotLastWritten) {
+  		t.Fatalf("a put-back the feed brought at an unseen key was admitted: %v", err)
+  	}
+  }
+
+  // tapFeed is feedOf that calls after once its first change is delivered.
+  type tapFeed struct {
+  	*feedOf
+  	after func()
+  	once  sync.Once
+  }
+
+  func (f *tapFeed) WatchContexts(ctx context.Context, from uint64, fn func(store.ContextChange),
+  	progress func(uint64), asks <-chan struct{}) error {
+  	return f.feedOf.WatchContexts(ctx, from, func(c store.ContextChange) { fn(c); f.once.Do(f.after) }, progress, asks)
   }
   ```
 
   `eventually`, `seqOf` (opens a sealed record with `keys()` and returns its sequence) and
   `sealedAt` (seals a context at a given sequence with the test keys) are test helpers. Write
-  them in `follow_test.go`.
+  them in `follow_test.go`; add `"sync/atomic"` to its imports.
 
 - [ ] **Step 3: Run them to see them fail.**
 
-  Run: `go test ./internal/store/etcd/ ./internal/store/crypt/ -run 'Scan|Watch|Feed|LoadLedger' -count=1`
-  Expected: FAIL to compile.
+  Run: `go test ./internal/store/etcd/ ./internal/store/crypt/ -run 'Scan|Watch|Feed|LoadLedger|Compacted|UnseenKey' -count=1`
+  Expected: FAIL to compile. With `ObserveFollowed` stubbed as `Observe`,
+  `TestAFedPutBackAtAnUnseenKeyIsDenied` and the base half of
+  `TestACompactedFeedScansAgainAndOnlyRaises` fail.
 
 - [ ] **Step 4: The store's types.** In `store.go`:
 
@@ -3325,8 +4166,14 @@ Ruling 3's "every process follows the store's contexts":
   	ScanContexts(ctx context.Context, fn func(ContextKey, Context)) (uint64, error)
   	// WatchContexts calls fn for every change after `after`, in revision
   	// order, until ctx ends (ctx.Err()), the revision was compacted
-  	// (ErrCompacted), or the watch fails (ErrUnavailable).
-  	WatchContexts(ctx context.Context, after uint64, fn func(ContextChange)) error
+  	// (ErrCompacted), or the watch fails (ErrUnavailable). progress is told
+  	// a revision through which every change has been delivered: each
+  	// batch's highest event once fn has had them all, and each progress
+  	// notification's header revision. Each receive on asks requests one
+  	// such notification from the store; a nil asks requests none (plan 7e,
+  	// the feed fence).
+  	WatchContexts(ctx context.Context, after uint64, fn func(ContextChange), progress func(rev uint64),
+  		asks <-chan struct{}) error
   }
 
   // ErrCompacted is a feed asked for revisions the store no longer keeps: the
@@ -3419,18 +4266,45 @@ Ruling 3's "every process follows the store's contexts":
   // WatchContexts calls fn for every change to the context family after
   // `after` (store.ContextFeed), on the context client, requiring a leader so
   // a member cut off from its quorum ends the watch rather than going quiet.
-  func (s *Store) WatchContexts(ctx context.Context, after uint64, fn func(store.ContextChange)) error {
+  // A request on asks is sent with RequestProgress on the watch's own
+  // context, which names its stream: etcd answers it with a progress
+  // notification once the stream's watchers are synced, and that header
+  // revision is told to progress. An event batch tells progress its highest
+  // event's revision, never the batch header's, which a catching-up watcher
+  // may send ahead of what it has delivered.
+  func (s *Store) WatchContexts(ctx context.Context, after uint64, fn func(store.ContextChange),
+  	progress func(uint64), asks <-chan struct{}) error {
   	wctx, cancel := context.WithCancel(clientv3.WithRequireLeader(ctx))
   	defer cancel()
   	ch := s.ctx.Watch(wctx, s.k.family(famContext), clientv3.WithPrefix(), clientv3.WithRev(int64(after)+1))
-  	for resp := range ch {
+  	for {
+  		var resp clientv3.WatchResponse
+  		var ok bool
+  		select {
+  		case <-asks: // nil: never ready
+  			if err := s.ctx.RequestProgress(wctx); err != nil && ctx.Err() == nil {
+  				s.logf("etcd: asking the context watch for its progress: %v", err)
+  			}
+  			continue
+  		case resp, ok = <-ch:
+  		}
+  		if !ok {
+  			break
+  		}
   		if err := resp.Err(); err != nil {
   			if resp.CompactRevision > 0 || errors.Is(err, rpctypes.ErrCompacted) {
   				return store.ErrCompacted
   			}
   			return unavailable(err)
   		}
+  		if resp.IsProgressNotify() {
+  			s.saw(resp.Header.Revision)
+  			progress(uint64(resp.Header.Revision))
+  			continue
+  		}
+  		var top int64
   		for _, ev := range resp.Events {
+  			top = max(top, ev.Kv.ModRevision)
   			s.saw(ev.Kv.ModRevision)
   			k, ok := s.contextKeyOf(string(ev.Kv.Key))
   			if !ok {
@@ -3450,6 +4324,9 @@ Ruling 3's "every process follows the store's contexts":
   			c.Context = r.context(ev.Kv.ModRevision)
   			fn(c)
   		}
+  		if top > 0 {
+  			progress(uint64(top))
+  		}
   	}
   	if ctx.Err() != nil {
   		return ctx.Err()
@@ -3457,6 +4334,10 @@ Ruling 3's "every process follows the store's contexts":
   	return fmt.Errorf("%w: the context watch ended", store.ErrUnavailable)
   }
   ```
+
+  The `if !ok { break }` sits after the `select`, so it leaves the `for`; keep it there. A
+  skipped undecodable event still counts toward `top`: its revision was delivered, and nothing
+  at it can be admitted, since a read of it does not open.
 
   Check `s.unparseable`'s signature at `b508ba0` (`indexes.go:525`) and pass what it takes.
 
@@ -3480,6 +4361,12 @@ Ruling 3's "every process follows the store's contexts":
   // will not open is skipped, since a read of it is unreadable anyway. It
   // sets the base just past the scan's revision and returns that revision,
   // how many keys l knows, and how many came from the record.
+  //
+  // A ledger loaded before (a re-entry after a store gone keeps it) is
+  // scanned as the feed is followed: a record at a key it has no mark for
+  // makes one only at or above the base it had, so a put-back made while the
+  // store was away is not taken as its key's (pre-flight I1). Only then is
+  // the base raised.
   func LoadLedger(ctx context.Context, feed store.ContextFeed, src store.LedgerSource, keys Keys,
   	l *Ledger) (rev uint64, known, recorded int, err error) {
   	if src != nil {
@@ -3492,7 +4379,8 @@ Ruling 3's "every process follows the store's contexts":
   		}
   		recorded = len(ms)
   	}
-  	rev, err = feed.ScanContexts(ctx, func(k store.ContextKey, c store.Context) { observe(l, keys, k, c) })
+  	first := l.Base() == 0
+  	rev, err = feed.ScanContexts(ctx, func(k store.ContextKey, c store.Context) { observe(l, keys, k, c, first) })
   	if err != nil {
   		return 0, 0, 0, err
   	}
@@ -3500,13 +4388,18 @@ Ruling 3's "every process follows the store's contexts":
   	return rev, l.Len(), recorded, nil
   }
 
-  // observe raises k's mark from c, sealed, if it opens.
-  func observe(l *Ledger, keys Keys, k store.ContextKey, c store.Context) {
+  // observe raises k's mark from c, sealed, if it opens: making a mark for
+  // any record at a first start's scan, and as ObserveFollowed otherwise.
+  func observe(l *Ledger, keys Keys, k store.ContextKey, c store.Context, first bool) {
   	oc, seq, err := openContextWith(keys, k, c)
   	if err != nil {
   		return
   	}
-  	l.Observe(k, seq, c.Rev, c.RevokedAt, oc.SessionExpires)
+  	if first {
+  		l.Observe(k, seq, c.Rev, c.RevokedAt, oc.SessionExpires)
+  		return
+  	}
+  	l.ObserveFollowed(k, seq, c.Rev, c.RevokedAt, oc.SessionExpires)
   }
 
   // FollowContexts keeps l current from feed after `from` until ctx ends,
@@ -3526,9 +4419,9 @@ Ruling 3's "every process follows the store's contexts":
   				from = c.Rev
   			}
   			if !c.Deleted {
-  				observe(l, keys, c.Key, c.Context)
+  				observe(l, keys, c.Key, c.Context, false)
   			}
-  		})
+  		}, func(uint64) {}, nil) // Task 8a: the fence's progress and asks
   		up(false)
   		if ctx.Err() != nil {
   			return ctx.Err()
@@ -3536,7 +4429,7 @@ Ruling 3's "every process follows the store's contexts":
   		if errors.Is(err, store.ErrCompacted) {
   			logf("store: the context feed's revision was compacted; scanning the store again")
   			rescanned()
-  			if rev, serr := feed.ScanContexts(ctx, func(k store.ContextKey, c store.Context) { observe(l, keys, k, c) }); serr == nil {
+  			if rev, serr := feed.ScanContexts(ctx, func(k store.ContextKey, c store.Context) { observe(l, keys, k, c, false) }); serr == nil {
   				from = rev
   				failing = false
   				continue
@@ -3556,6 +4449,27 @@ Ruling 3's "every process follows the store's contexts":
   	}
   }
   ```
+
+  In `ledger.go`, beside `Observe`:
+
+  ```go
+  // ObserveFollowed is Observe for a record the context feed, a rescan, or a
+  // later start's scan brought (pre-flight I1): it raises a mark the ledger
+  // holds, and makes one only for a record sealed at or above the base. A
+  // record below the base at a key with no mark is what a put-back looks
+  // like; made the key's mark, a read would admit it.
+  func (l *Ledger) ObserveFollowed(k store.ContextKey, seq, rev uint64, plainRevokedAt, ceiling time.Time) {
+  	l.mu.Lock()
+  	defer l.mu.Unlock()
+  	if e, ok := l.m[k]; (!ok || e.hw == 0) && seq < l.base {
+  		return
+  	}
+  	l.observe(k, seq, rev, plainRevokedAt, ceiling)
+  }
+  ```
+
+  An entry that holds only a floor (`hw == 0`, `revoked` before any sequence) counts as no
+  mark here. The floor stays, and the record below the base makes no mark.
 
 - [ ] **Step 7: The metrics.** In `metrics.go`, add, beside the store guard's series:
 
@@ -3589,10 +4503,14 @@ Ruling 3's "every process follows the store's contexts":
   - `logf` printing `port49d: ` + the line.
 
   Put the retry around `LoadLedger` in the shape of the `checkSealKeys` loop beside it: an
-  outage is said and tried every 5s, and a lost hold ends the start as a store gone. In
-  `runOnce`, after `openStores`, run `sts.follow` on a goroutine joined before `sts.close`, as
-  the sweep is (`sweepDone`). Remove the interim `ledger.SetBase(e.Seen() + 1)` Task 7 put in
-  `startOnPersistentStore`: the base is the scan's now, set before the start's reads.
+  outage is said and tried every 5s, and a lost hold ends the start as a store gone.
+  - In `runOnce`, start `sts.follow` on a goroutine **immediately after `openStores` returns**,
+    before anything reads a context, the start's reads (`startOnPersistentStore`) included.
+    Task 8a's fence holds every context read until the feed has delivered through the record's
+    revision, so a feed started later would stall the start for a call timeout per read.
+  - Join it before `sts.close`, as the sweep is (`sweepDone`).
+  - Remove the interim `ledger.SetBase(e.Seen() + 1)` Task 7 put in `startOnPersistentStore`:
+    the base is the scan's now, set before the start's reads.
 
 - [ ] **Step 9: Run everything.**
 
@@ -3606,15 +4524,502 @@ Ruling 3's "every process follows the store's contexts":
   gofmt -w internal/store internal/daemon/metrics cmd/port49d
   make build && make test && make vet
   git add internal/store/store.go internal/store/etcd/feed.go internal/store/etcd/feed_test.go \
-    internal/store/crypt/follow.go internal/store/crypt/follow_test.go internal/daemon/metrics/metrics.go \
-    internal/daemon/metrics/metrics_test.go cmd/port49d/store.go cmd/port49d/main.go
+    internal/store/crypt/follow.go internal/store/crypt/follow_test.go internal/store/crypt/ledger.go \
+    internal/daemon/metrics/metrics.go internal/daemon/metrics/metrics_test.go cmd/port49d/store.go \
+    cmd/port49d/main.go
   git commit -m "feat(store): every process follows the store's contexts
 
   A scan at one revision, then a watch from it, raise each key's mark in
-  the ledger and never lower one; a compacted watch scans again. The
-  start's base is the scan's revision, before any read. port49_store_feed_up
-  and port49_store_feed_rescans_total say whether it follows (plan 7e
-  Ruling 3).
+  the ledger and never lower one; a compacted watch scans again. The feed
+  and a later scan make no mark from a record below the base, so a
+  put-back at a key this process never saw stays denied (pre-flight I1).
+  The start's base is the scan's revision, before any read. The watch
+  reports its progress and answers progress requests, for Task 8a's
+  fence. port49_store_feed_up and port49_store_feed_rescans_total say
+  whether it follows (plan 7e Ruling 3).
+
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  ```
+
+---
+
+### Task 8a: No context read is judged before the feed has passed it
+
+**Files:**
+- Create: `internal/store/crypt/fence.go`, `internal/store/crypt/fence_test.go`
+- Modify: `internal/store/crypt/ledger.go` (the ledger owns a `*Fence`; `knownAt`),
+  `internal/store/crypt/follow.go` (`LoadLedger` attaches the fence; `FollowContexts` moves it)
+- Modify: `cmd/port49d/store.go` (`openStores`: each raw store fenced under its guard)
+
+**Interfaces:**
+- Consumes: `store.ContextFeed.WatchContexts`'s `progress` and `asks` (Task 8),
+  `store.RevStore.Seen` and `Ping` (Task 6), `Ledger.ObserveFollowed` (Task 8).
+- Produces (`crypt`):
+  - `var ErrFeedBehind = fmt.Errorf("%w: this process's context feed has not delivered the record's revision", store.ErrUnavailable)`.
+  - `type Fence struct` with:
+    - `func (f *Fence) Attach(at uint64)`: a feed follows from `at`, and from now on a read
+      waits for it;
+    - `func (f *Fence) Followed(rev uint64)`: every change through `rev` is delivered. It only
+      rises, and wakes every waiter;
+    - `func (f *Fence) SetUp(up bool)` and `func (f *Fence) Up() bool`: whether the feed's
+      watch runs (Task 10's `port49_ledger_behind`);
+    - `func (f *Fence) At() uint64`;
+    - `func (f *Fence) Asks() <-chan struct{}`: requests for a progress notification, buffered
+      one;
+    - `func (f *Fence) Wait(ctx context.Context, rev uint64) error`. It returns nil at once
+      when no feed is attached or the feed is at or past `rev`. Otherwise it asks, and waits
+      until it is, asking again after each wake that leaves it behind. When `ctx` ends first it
+      returns `ErrFeedBehind`.
+  - `func (l *Ledger) Fence() *Fence`, built by `NewLedger`.
+  - `func (l *Ledger) knownAt(k store.ContextKey, rev uint64) bool`: `rev` is the revision of
+    the record this process last knew at `k`, its own landed write or a record it admitted.
+  - `func Fenced(inner store.RevStore, l *Ledger) store.RevStore`. `GetContext` waits on
+    `l.Fence()` for the record's revision, unless `l.knownAt(k, c.Rev)`. `Ping` waits for
+    `inner.Seen()` after the ping. Every other method passes through.
+
+Ruling 3's fence (pre-flight C1, the plan's one Critical).
+- **The hole.** In 7d one ledger per process saw every write that could legitimately land, so
+  a put-back was always below it. Across processes, a process's high-water at a key rises only
+  from its own writes, its reads and its feed. While the feed lagged or was down, a store
+  writer could put back the record another process's rewrite or revocation replaced, and this
+  process admitted it, for as long as the feed was down.
+- **The fence.** A put-back is a store write, so it commits above the write it hides. Once the
+  feed has delivered through the put-back's revision, it has delivered the later write and
+  raised the high-water past the put-back. So a read waits for that.
+- **Where it sits.** `Fenced` sits under the guard (`crypt.Wrap(guard.WrapRev(crypt.Fenced(raw,
+  ledger), gc), …)`).
+  - The wait runs inside the guard's call, bounded by `call_timeout`.
+  - A feed that never arrives is the guard's `timeout` outcome, a counted failure. A dead feed
+    opens the context pool's circuit like a dead store, and on port49d goes dark.
+- **What needs no wait.**
+  - A record at the revision this process last knew at its key: its own write (the login's
+    next packet on the same process), or a record it admitted. The store holding that
+    revision at the key holds that record, and nothing written after it.
+  - Any read with no feed attached: memory, the tests' fixtures, the offline revocation.
+  - A read after this process's own plaintext write (a touch, an annotation) waits for the
+    feed to deliver it. That costs a watch's latency, typically milliseconds. L37's reply
+    times measure it on the split.
+- **7e-1 wires it** on port49d's daemon and broker layers. With one port49d, every legitimate
+  write is its own and its reads seldom wait, but 7e-2 inherits it whole.
+
+- [ ] **Step 1: The failing tests.** Create `internal/store/crypt/fence_test.go`:
+
+  ```go
+  package crypt
+
+  import (
+  	"context"
+  	"errors"
+  	"testing"
+  	"time"
+
+  	"github.com/prometheus/client_golang/prometheus"
+
+  	"github.com/rhwendt/port49/internal/store"
+  	"github.com/rhwendt/port49/internal/store/guard"
+  	"github.com/rhwendt/port49/internal/store/memory"
+  )
+
+  // fencedPair is twoProcesses with b's layer fenced, its feed attached at
+  // the store's revision and delivering nothing until the test says.
+  func fencedPair(t *testing.T) (*memory.Store, store.Store, store.Store, *Ledger) {
+  	t.Helper()
+  	inner, a, _, _, lb := twoProcesses(t)
+  	lb.Fence().Attach(inner.Seen())
+  	return inner, a, Wrap(Fenced(inner, lb), keys(), nil, WithLedger(lb)), lb
+  }
+
+  // feedUpTo stands in for b's feed delivering every change through the
+  // store's revision: each record at k is observed as FollowContexts would,
+  // and the fence moves.
+  func feedUpTo(t *testing.T, inner *memory.Store, l *Ledger, recs ...store.Context) {
+  	t.Helper()
+  	for _, c := range recs {
+  		observe(l, keys(), ka, c, false)
+  	}
+  	l.Fence().Followed(inner.Seen())
+  }
+
+  func within(d time.Duration) (context.Context, context.CancelFunc) {
+  	return context.WithTimeout(context.Background(), d)
+  }
+
+  // While b's feed lags, a store writer puts back alice's context over the
+  // later login a made: b never admits it. It waits and is unavailable, and
+  // once the feed delivers the later write, it is denied (pre-flight C1).
+  // Without the fence b admitted it: alice's seq is b's high-water.
+  func TestAPutBackIsDeniedWhileTheFeedLags(t *testing.T) {
+  	inner, a, b, lb := fencedPair(t)
+  	login(t, a, "ctx-alice", "user:alice")
+  	alice, _ := inner.GetContext(context.Background(), ka)
+  	feedUpTo(t, inner, lb, alice)
+  	if c, err := b.GetContext(context.Background(), ka); err != nil || c.CtxID != "ctx-alice" {
+  		t.Fatalf("b's read of alice's: %v %v", c.CtxID, err)
+  	}
+  	login(t, a, "ctx-bob", "user:bob") // the later write b's feed has not delivered
+  	bob, _ := inner.GetContext(context.Background(), ka)
+  	if err := inner.PutContext(context.Background(), ka, alice, time.Hour); err != nil {
+  		t.Fatal(err)
+  	}
+  	ctx, cancel := within(150 * time.Millisecond)
+  	defer cancel()
+  	c, err := b.GetContext(ctx, ka)
+  	if err == nil || !errors.Is(err, store.ErrUnavailable) || !errors.Is(err, ErrFeedBehind) {
+  		t.Fatalf("with the feed behind, b read %q: %v", c.CtxID, err)
+  	}
+  	back, _ := inner.GetContext(context.Background(), ka)
+  	feedUpTo(t, inner, lb, bob, back)
+  	if _, err := b.GetContext(context.Background(), ka); !errors.Is(err, ErrNotLastWritten) {
+  		t.Fatalf("once the feed delivered the later write: %v", err)
+  	}
+  }
+
+  // a revokes alice: its plaintext mark lands and its seal does not (the
+  // revocation floor's case). A store writer then puts back the record from
+  // before, revoked_at zeroed. With b's feed down, b never answers it as
+  // live; once the feed delivers the mark, the record put back is answered
+  // revoked, from the floor (pre-flight C1).
+  func TestARevocationFromAnotherProcessHoldsWhileTheFeedIsDown(t *testing.T) {
+  	inner, a, b, lb := fencedPair(t)
+  	login(t, a, "ctx-alice", "user:alice")
+  	before, _ := inner.GetContext(context.Background(), ka)
+  	feedUpTo(t, inner, lb, before)
+  	if _, err := b.GetContext(context.Background(), ka); err != nil {
+  		t.Fatal(err)
+  	}
+  	at := time.Now().UTC().Truncate(time.Second)
+  	if err := inner.SetRevokedAt(context.Background(), ka, at); err != nil { // the plaintext mark alone
+  		t.Fatal(err)
+  	}
+  	marked, _ := inner.GetContext(context.Background(), ka)
+  	before.RevokedAt = time.Time{}
+  	if err := inner.PutContext(context.Background(), ka, before, time.Hour); err != nil {
+  		t.Fatal(err)
+  	}
+  	ctx, cancel := within(150 * time.Millisecond)
+  	defer cancel()
+  	if c, err := b.GetContext(ctx, ka); err == nil {
+  		t.Fatalf("with the feed down, b answered the put-back, revoked_at %v", c.RevokedAt)
+  	} else if !errors.Is(err, store.ErrUnavailable) {
+  		t.Fatalf("with the feed down: %v", err)
+  	}
+  	back, _ := inner.GetContext(context.Background(), ka)
+  	feedUpTo(t, inner, lb, marked, back)
+  	c, err := b.GetContext(context.Background(), ka)
+  	if err != nil || !c.RevokedAt.Equal(at) {
+  		t.Fatalf("once the feed delivered the mark: revoked_at %v, %v", c.RevokedAt, err)
+  	}
+  }
+
+  // A login on a, read on b before b's feed has delivered it, is admitted
+  // once the feed does, within the read's wait (Review Focus 1).
+  func TestAnotherProcesssWriteIsAdmittedOnceTheFeedDeliversIt(t *testing.T) {
+  	inner, a, b, lb := fencedPair(t)
+  	feed := &feedOf{changes: make(chan store.ContextChange, 1), compact: make(chan struct{})}
+  	ctx, cancel := context.WithCancel(context.Background())
+  	defer cancel()
+  	go FollowContexts(ctx, feed, keys(), lb, inner.Seen(), func(bool) {}, func() {}, t.Logf)
+  	login(t, a, "ctx-alice", "user:alice")
+  	alice, _ := inner.GetContext(context.Background(), ka)
+  	go func() {
+  		time.Sleep(50 * time.Millisecond)
+  		feed.changes <- store.ContextChange{Key: ka, Context: alice, Rev: alice.Rev}
+  	}()
+  	rctx, rcancel := within(2 * time.Second)
+  	defer rcancel()
+  	if c, err := b.GetContext(rctx, ka); err != nil || c.CtxID != "ctx-alice" {
+  		t.Fatalf("b's read once its feed delivered a's login: %v %v", c.CtxID, err)
+  	}
+  }
+
+  // A read waiting on a feed with nothing to deliver asks it for its
+  // progress, and the answer lets it through (an idle family; etcd's
+  // RequestProgress).
+  func TestAWaitingReadAsksTheFeedForItsProgress(t *testing.T) {
+  	inner, a, b, lb := fencedPair(t)
+  	login(t, a, "ctx-alice", "user:alice")
+  	feed := &answeringFeed{now: inner.Seen}
+  	ctx, cancel := context.WithCancel(context.Background())
+  	defer cancel()
+  	go FollowContexts(ctx, feed, keys(), lb, inner.Seen(), func(bool) {}, func() {}, t.Logf)
+  	rctx, rcancel := within(2 * time.Second)
+  	defer rcancel()
+  	if _, err := b.GetContext(rctx, ka); err != nil {
+  		t.Fatalf("a read the feed's progress answer should let through: %v", err)
+  	}
+  	if feed.asked.Load() == 0 {
+  		t.Fatal("the read never asked the feed")
+  	}
+  }
+
+  // answeringFeed delivers no change, and answers every ask with progress
+  // at the store's revision.
+  type answeringFeed struct {
+  	now   func() uint64
+  	asked atomic.Int32
+  }
+
+  func (f *answeringFeed) ScanContexts(context.Context, func(store.ContextKey, store.Context)) (uint64, error) {
+  	return f.now(), nil
+  }
+
+  func (f *answeringFeed) WatchContexts(ctx context.Context, _ uint64, _ func(store.ContextChange),
+  	progress func(uint64), asks <-chan struct{}) error {
+  	for {
+  		select {
+  		case <-ctx.Done():
+  			return ctx.Err()
+  		case <-asks:
+  			f.asked.Add(1)
+  			progress(f.now())
+  		}
+  	}
+  }
+
+  // A ping through the fence fails while the feed is behind the revision
+  // the ping read at, so an idle port49d's probe takes it dark when its
+  // feed has stopped (Ruling 11).
+  func TestAPingFailsWhileTheFeedIsBehind(t *testing.T) {
+  	inner, a, _, lb := fencedPair(t)
+  	login(t, a, "ctx-alice", "user:alice") // the store moves past the fence
+  	f := Fenced(inner, lb)
+  	ctx, cancel := within(100 * time.Millisecond)
+  	defer cancel()
+  	if err := f.Ping(ctx); !errors.Is(err, ErrFeedBehind) {
+  		t.Fatalf("a ping with the feed behind: %v", err)
+  	}
+  	lb.Fence().Followed(inner.Seen())
+  	if err := f.Ping(context.Background()); err != nil {
+  		t.Fatalf("a ping with the feed caught up: %v", err)
+  	}
+  }
+
+  // Under the guard, a read the feed never lets through is the guard's
+  // timeout, counted in the context pool: a dead feed opens the circuit as
+  // a dead store does.
+  func TestAFeedThatNeverArrivesIsCountedByTheGuard(t *testing.T) {
+  	inner, a, _, lb := fencedPair(t)
+  	login(t, a, "ctx-alice", "user:alice")
+  	calls := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "calls"}, []string{"component", "pool", "outcome"})
+  	g := guard.WrapRev(Fenced(inner, lb), guard.Config{Component: "daemon", CallTimeout: 100 * time.Millisecond,
+  		BulkTimeout: time.Second, Now: time.Now, Metrics: guard.Metrics{Calls: calls}})
+  	if _, err := g.GetContext(context.Background(), ka); !errors.Is(err, store.ErrUnavailable) {
+  		t.Fatalf("%v", err)
+  	}
+  	if n := testutil.ToFloat64(calls.WithLabelValues("daemon", "context", "timeout")); n != 1 {
+  		t.Fatalf("the guard counted %v timeouts", n)
+  	}
+  }
+  ```
+
+  Add `"sync/atomic"` and `"github.com/prometheus/client_golang/prometheus/testutil"` to the
+  imports. Build `guard.Config` as `guard_test.go`'s `config` helper builds it if a field the
+  guard needs (slots, breaker) has no usable zero value at `b508ba0`, and say so.
+
+- [ ] **Step 2: Run them to see them fail.**
+
+  Run: `go test ./internal/store/crypt/ -run 'Feed|Fence|Ping|Revocation' -count=1`
+  Expected: FAIL to compile (`Fenced`, `Fence`, `ErrFeedBehind` undefined). With a `Fenced`
+  that passes `GetContext` through, `TestAPutBackIsDeniedWhileTheFeedLags` admits alice's
+  put-back and `TestARevocationFromAnotherProcessHoldsWhileTheFeedIsDown` answers it unrevoked.
+
+- [ ] **Step 3: The fence.** Create `internal/store/crypt/fence.go`:
+
+  ```go
+  package crypt
+
+  import (
+  	"context"
+  	"fmt"
+  	"sync"
+
+  	"github.com/rhwendt/port49/internal/store"
+  )
+
+  // ErrFeedBehind is a context read whose record this process's context feed
+  // had not delivered by the read's deadline (plan 7e, pre-flight C1). It is
+  // store.ErrUnavailable: the guard counts it, a handler denies
+  // store_unavailable, and the refresh leaves the context for its next pass.
+  var ErrFeedBehind = fmt.Errorf("%w: this process's context feed has not delivered the record's revision",
+  	store.ErrUnavailable)
+
+  // Fence is how far this process's context feed has delivered the store's
+  // changes (plan 7e, Ruling 3). A read judges no record its feed has not
+  // passed: a put-back commits above the write it hides, so once the feed has
+  // passed the put-back it has raised the key's mark past it, and while it
+  // has not, the read cannot tell a put-back from another process's login.
+  // With no feed attached (memory, a fixture, the offline revocation) every
+  // revision passes. It is safe for concurrent use.
+  type Fence struct {
+  	mu   sync.Mutex
+  	on   bool
+  	at   uint64
+  	up   bool
+  	wake chan struct{}
+  	asks chan struct{}
+  }
+
+  func newFence() *Fence { return &Fence{wake: make(chan struct{}), asks: make(chan struct{}, 1)} }
+
+  // Attach is a feed following the store from at: from now on a read waits
+  // for it. It only raises.
+  func (f *Fence) Attach(at uint64) {
+  	f.mu.Lock()
+  	defer f.mu.Unlock()
+  	f.on = true
+  	f.raise(at)
+  }
+
+  // Followed is every change through rev delivered. It only raises.
+  func (f *Fence) Followed(rev uint64) {
+  	f.mu.Lock()
+  	defer f.mu.Unlock()
+  	f.raise(rev)
+  }
+
+  func (f *Fence) raise(rev uint64) {
+  	if rev > f.at {
+  		f.at = rev
+  		close(f.wake)
+  		f.wake = make(chan struct{})
+  	}
+  }
+
+  // SetUp records whether the feed's watch runs; Up reads it.
+  func (f *Fence) SetUp(up bool) { f.mu.Lock(); f.up = up; f.mu.Unlock() }
+  func (f *Fence) Up() bool      { f.mu.Lock(); defer f.mu.Unlock(); return f.up }
+
+  // At is the revision the feed has delivered through.
+  func (f *Fence) At() uint64 { f.mu.Lock(); defer f.mu.Unlock(); return f.at }
+
+  // Asks is where a waiting read asks the feed for a progress notification.
+  func (f *Fence) Asks() <-chan struct{} { return f.asks }
+
+  // Wait returns once the feed has delivered every change through rev, or at
+  // once with no feed attached. While it is behind, it asks the feed for its
+  // progress, again after each wake that leaves it behind, and returns
+  // ErrFeedBehind when ctx ends first. ctx carries the guard's call deadline.
+  func (f *Fence) Wait(ctx context.Context, rev uint64) error {
+  	for {
+  		f.mu.Lock()
+  		if !f.on || f.at >= rev {
+  			f.mu.Unlock()
+  			return nil
+  		}
+  		wake, at := f.wake, f.at
+  		f.mu.Unlock()
+  		select {
+  		case f.asks <- struct{}{}:
+  		default: // an ask is already pending
+  		}
+  		select {
+  		case <-wake:
+  		case <-ctx.Done():
+  			return fmt.Errorf("%w (the feed at revision %d, the record at %d)", ErrFeedBehind, at, rev)
+  		}
+  	}
+  }
+
+  // Fenced is inner with each context read held until l's feed has passed
+  // the record's revision (plan 7e, pre-flight C1). port49d puts it under the
+  // guard, so the wait is bounded by call_timeout and a feed that never
+  // arrives is a counted failure. A record at the revision l last knew at
+  // its key needs no wait: the store holding that revision there holds that
+  // record and nothing written after it. Ping waits for the revision the
+  // ping itself read at, so a probe fails while the feed is behind.
+  func Fenced(inner store.RevStore, l *Ledger) store.RevStore { return fenced{RevStore: inner, l: l} }
+
+  type fenced struct {
+  	store.RevStore
+  	l *Ledger
+  }
+
+  func (f fenced) GetContext(ctx context.Context, k store.ContextKey) (store.Context, error) {
+  	c, err := f.RevStore.GetContext(ctx, k)
+  	if err != nil || f.l.knownAt(k, c.Rev) {
+  		return c, err
+  	}
+  	if err := f.l.Fence().Wait(ctx, c.Rev); err != nil {
+  		return store.Context{}, err
+  	}
+  	return c, nil
+  }
+
+  func (f fenced) Ping(ctx context.Context) error {
+  	if err := f.RevStore.Ping(ctx); err != nil {
+  		return err
+  	}
+  	return f.l.Fence().Wait(ctx, f.RevStore.Seen())
+  }
+  ```
+
+  In `ledger.go`, add `fence *Fence` to `Ledger`, built in `NewLedger` as `newFence()`, and:
+
+  ```go
+  // Fence is this process's feed fence (Fenced).
+  func (l *Ledger) Fence() *Fence { return l.fence }
+
+  // knownAt reports whether rev is the revision of the record this process
+  // last knew at k: a write of its own that landed, or a record it admitted.
+  func (l *Ledger) knownAt(k store.ContextKey, rev uint64) bool {
+  	l.mu.Lock()
+  	defer l.mu.Unlock()
+  	e, ok := l.m[k]
+  	return ok && rev > 0 && e.rev == rev
+  }
+  ```
+
+  Add to `Ledger`'s comment one paragraph: "A read judges no record the context feed has not
+  passed (Fence, Fenced): a put-back commits above the write it hides, so once the feed has
+  passed it the mark is past it."
+
+- [ ] **Step 4: The feed moves it.** In `follow.go`:
+  - `LoadLedger`, after `l.SetBase(rev + 1)`: `l.Fence().Attach(rev)`. Say in its comment that
+    from here every fenced read waits for `FollowContexts`, so the caller starts it at once.
+  - `FollowContexts`:
+    - pass `l.Fence().Followed` as `progress` and `l.Fence().Asks()` as `asks` to
+      `WatchContexts`, replacing Task 8's no-op and nil;
+    - call `l.Fence().Followed(rev)` after a rescan's `ScanContexts`;
+    - call `l.Fence().SetUp(true)` and `SetUp(false)` beside each `up(…)`.
+
+- [ ] **Step 5: port49d fences its stores.** In `cmd/port49d/store.go`'s `openStores` etcd branch,
+  wrap each component's raw store in the fence under its guard:
+
+  ```go
+  	daemon := crypt.Wrap(guard.WrapRev(crypt.Fenced(d, ledger), gc("daemon")), keys, m.CryptOpenFailures,
+  		crypt.WithLedger(ledger), say)
+  ```
+
+  Do the same for the broker's (`crypt.Fenced(b, ledger)`, `gc("broker")`). The raw stores the
+  sweep, the hold and the record use stay unfenced: they read no context for admission. Memory
+  is not fenced.
+
+- [ ] **Step 6: Run everything.**
+
+  Run: `go test ./internal/store/... ./cmd/port49d/ -count=1` then `make test-race`
+  Expected: PASS. 7d's e2e tests pass unchanged, through the fence:
+  - `TestAHungStoreGoesDarkAndServesAgainWhenItReturns`;
+  - `TestRunOnEtcdKeepsALoginAcrossARestart`;
+  - `TestAStartAppliesAStandingMarkToAKeptContext`.
+
+- [ ] **Step 7: Commit.**
+
+  ```bash
+  gofmt -w internal/store/crypt cmd/port49d
+  make build && make test && make vet && make test-race
+  git add internal/store/crypt/fence.go internal/store/crypt/fence_test.go internal/store/crypt/ledger.go \
+    internal/store/crypt/follow.go cmd/port49d/store.go
+  git commit -m "feat(crypt): judge no context the feed has not passed
+
+  A process's high-water rises from its own writes, its reads and its
+  feed; while the feed lagged or was down, a put-back over another
+  process's rewrite or revocation was admitted (pre-flight C1). A read now
+  waits, under the guard and within call_timeout, until the context feed
+  has delivered through the record's revision, asking etcd for progress;
+  a put-back commits above what it hides, so the feed has raised the mark
+  past it by then. A feed that never arrives is a counted store failure,
+  and a ping waits too, so a dead feed goes dark as a dead store does.
 
   Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
@@ -3628,21 +5033,30 @@ Ruling 3's "every process follows the store's contexts":
 - Modify: `internal/store/store.go` (`MarkFeed`), `internal/store/marks.go`,
   `internal/store/marks_test.go`
 - Modify: `internal/store/etcd/feed.go`, `internal/store/etcd/feed_test.go`
-- Modify: `internal/broker/broker.go` (`MarkChanged`), `internal/broker/listen_test.go`
+- Modify: `internal/broker/broker.go` (`MarkChanged`), `internal/broker/revoke.go`
+  (`matchMark`, factored out of `Revoke`; pre-flight's per-task table),
+  `internal/broker/listen_test.go`
 - Modify: `cmd/port49d/main.go` (the daemon's marks and the listener's from the feed)
 
 **Interfaces:**
 - Consumes: `store.Marks` (7d), `broker.ConnCloser` (7a).
 - Produces:
   - `type store.MarkFeed interface { Revocations(ctx context.Context) (uint64, []Revocation, error); WatchRevocations(ctx context.Context, after uint64, fn func(r Revocation, lifted bool)) error }`.
+  - `type store.MarkChange struct { Revocation; Standing, Reloaded bool }`: one change applied
+    to a process's marks. `Reloaded` is a change a load found by difference, not an event the
+    watch delivered. A mark a reload finds missing may be a lift made in a gap, or a mark an
+    etcd restore lost, and Task 15b's copy of the marks keeps it (Ruling 12).
   - `func (m *Marks) All() []Revocation`: every mark in force, `Kind`, `Key` and `At`, sorted.
-  - `func store.LoadMarks(ctx context.Context, feed MarkFeed, m *Marks, on func(r Revocation, standing bool)) (uint64, error)`:
+  - `func store.LoadMarks(ctx context.Context, feed MarkFeed, m *Marks, on func(MarkChange)) (uint64, error)`:
     every mark the store holds goes into `m`; every mark `m` holds that the store lacks is lifted
-    from `m`; `on` is told of each change; it returns the revision read at.
-  - `func store.FollowMarks(ctx context.Context, feed MarkFeed, m *Marks, from uint64, on func(Revocation, bool), up func(bool), rescanned func(), logf func(string, ...any)) error`.
+    from `m`; `on` is told of each change, every one `Reloaded`; it returns the revision read
+    at.
+  - `func store.FollowMarks(ctx context.Context, feed MarkFeed, m *Marks, from uint64, on func(MarkChange), up func(bool), rescanned func(), logf func(string, ...any)) error`.
+    A watch event is told with `Reloaded` false. A reload after a compacted watch is told as
+    `LoadMarks` tells it.
   - `(*etcd.Store).Revocations` and `(*etcd.Store).WatchRevocations`.
-  - `func (b *Broker) MarkChanged(r store.Revocation, standing bool)`: the listener's copy, and,
-    for a mark that stands, the held connections it names, closed.
+  - `func (b *Broker) MarkChanged(c store.MarkChange)`: the listener's copy, and, for a mark
+    that stands, the held connections it names, closed.
 
 Ruling 5. A mark made on one broker process reaches every other process's in-memory copy and
 held connections through the feed. A lift does the same, removing the mark.
@@ -3650,9 +5064,11 @@ held connections through the feed. A lift does the same, removing the mark.
 - [ ] **Step 1: The failing tests.** In `internal/store/marks_test.go`:
 
   ```go
-  // markFeed serves a fixed set of marks at rev 7, and a watch that delivers
-  // what the test sends.
+  // markFeed serves a set of marks at rev 7, and a watch that delivers what
+  // the test sends. The set is read on FollowMarks's goroutine at a reload,
+  // so it is behind a lock (pre-flight M4, the race).
   type markFeed struct {
+  	mu      sync.Mutex
   	marks   []Revocation
   	events  chan markEvent
   	compact chan struct{}
@@ -3663,7 +5079,16 @@ held connections through the feed. A lift does the same, removing the mark.
   	lifted bool
   }
 
-  func (f *markFeed) Revocations(context.Context) (uint64, []Revocation, error) { return 7, f.marks, nil }
+  func (f *markFeed) setMarks(rs []Revocation) { f.mu.Lock(); f.marks = rs; f.mu.Unlock() }
+
+  func (f *markFeed) Revocations(context.Context) (uint64, []Revocation, error) {
+  	f.mu.Lock()
+  	defer f.mu.Unlock()
+  	return 7, append([]Revocation(nil), f.marks...), nil
+  }
+
+  // told renders a change for the assertions: key, standing, reloaded.
+  func told(c MarkChange) string { return fmt.Sprintf("%s %v %v", c.Key, c.Standing, c.Reloaded) }
   func (f *markFeed) WatchRevocations(ctx context.Context, _ uint64, fn func(Revocation, bool)) error {
   	for {
   		select {
@@ -3678,46 +5103,60 @@ held connections through the feed. A lift does the same, removing the mark.
   }
 
   // LoadMarks puts every stored mark in, takes out one the store lacks, and
-  // tells on of each change.
+  // tells on of each change, each as Reloaded: a mark missing from a load
+  // may be a restore's loss, not a lift (Ruling 12).
   func TestLoadMarksMakesTheCopyTheStores(t *testing.T) {
   	alice := Revocation{Kind: RevocationPrincipal, Key: "user:alice@example.com", At: time.Unix(10, 0)}
   	gone := Revocation{Kind: RevocationPrincipal, Key: "user:bob@example.com", At: time.Unix(5, 0)}
   	m := NewMarks()
   	m.Set(gone, true)
-  	var told []string
+  	var got []string
   	rev, err := LoadMarks(context.Background(), &markFeed{marks: []Revocation{alice}}, m,
-  		func(r Revocation, on bool) { told = append(told, fmt.Sprintf("%s %v", r.Key, on)) })
+  		func(c MarkChange) { got = append(got, told(c)) })
   	if err != nil || rev != 7 || !m.Holds(alice.Kind, alice.Key) || m.Holds(gone.Kind, gone.Key) {
   		t.Fatalf("rev %d: %v; marks %v", rev, err, m.All())
   	}
-  	sort.Strings(told)
-  	if fmt.Sprint(told) != "[user:alice@example.com true user:bob@example.com false]" {
-  		t.Fatalf("told %v", told)
+  	sort.Strings(got)
+  	if fmt.Sprint(got) != "[user:alice@example.com true true user:bob@example.com false true]" {
+  		t.Fatalf("told %v", got)
   	}
   }
 
-  // FollowMarks applies each put and lift; a compacted watch loads them again
-  // and applies the difference, telling on of it alone.
+  // FollowMarks applies each put and lift, told as events; a compacted
+  // watch loads them again and applies the difference, telling on of it
+  // alone, as reloaded.
   func TestACompactedMarkFeedReloadsTheDifference(t *testing.T) {
   	alice := Revocation{Kind: RevocationPrincipal, Key: "user:alice@example.com", At: time.Unix(10, 0)}
   	carol := Revocation{Kind: RevocationPrincipal, Key: "user:carol@example.com", At: time.Unix(11, 0)}
+  	dave := Revocation{Kind: RevocationPrincipal, Key: "user:dave@example.com", At: time.Unix(12, 0)}
   	f := &markFeed{events: make(chan markEvent, 1), compact: make(chan struct{}, 1)}
   	m := NewMarks()
   	var mu sync.Mutex
-  	var told []string
-  	on := func(r Revocation, s bool) { mu.Lock(); told = append(told, fmt.Sprintf("%s %v", r.Key, s)); mu.Unlock() }
+  	var got []string
+  	on := func(c MarkChange) { mu.Lock(); got = append(got, told(c)); mu.Unlock() }
   	ctx, cancel := context.WithCancel(context.Background())
   	defer cancel()
   	go FollowMarks(ctx, f, m, 7, on, func(bool) {}, func() {}, t.Logf)
   	f.events <- markEvent{r: alice}
-  	waitFor(t, func() bool { return m.Holds(alice.Kind, alice.Key) })
-  	f.marks = []Revocation{carol} // alice lifted and carol marked while the watch was compacted away
+  	f.events <- markEvent{r: dave}
+  	f.events <- markEvent{r: dave, lifted: true}
+  	waitFor(t, func() bool { return m.Holds(alice.Kind, alice.Key) && !m.Holds(dave.Kind, dave.Key) })
+  	f.setMarks([]Revocation{carol}) // alice lifted and carol marked while the watch was compacted away
   	f.compact <- struct{}{}
   	waitFor(t, func() bool { return m.Holds(carol.Kind, carol.Key) && !m.Holds(alice.Kind, alice.Key) })
   	mu.Lock()
   	defer mu.Unlock()
-  	if len(told) != 3 {
-  		t.Fatalf("told %v", told)
+  	want := []string{
+  		"user:alice@example.com true false", "user:dave@example.com true false",
+  		"user:dave@example.com false false", // a lift the watch delivered: not reloaded
+  	}
+  	if len(got) != 5 || fmt.Sprint(got[:3]) != fmt.Sprint(want) {
+  		t.Fatalf("told %v", got)
+  	}
+  	rest := append([]string(nil), got[3:]...)
+  	sort.Strings(rest)
+  	if fmt.Sprint(rest) != "[user:alice@example.com false true user:carol@example.com true true]" {
+  		t.Fatalf("the reload told %v", rest)
   	}
   }
   ```
@@ -3733,14 +5172,15 @@ held connections through the feed. A lift does the same, removing the mark.
   // (Review Focus 3; Ruling 5).
   func TestAMarkFromTheFeedClosesThisReplicasHeldConnections(t *testing.T) {
   	b, l, conn := brokerWithHeldConn(t, "user:alice@example.com") // a Broker whose Conns is l, and alice's live connection
-  	b.MarkChanged(store.Revocation{Kind: store.RevocationPrincipal, Key: "user:alice@example.com", At: time.Now()}, true)
+  	alice := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:alice@example.com", At: time.Now()}
+  	b.MarkChanged(store.MarkChange{Revocation: alice, Standing: true})
   	if !closedWithin(conn, 2*time.Second) {
   		t.Fatal("the held connection was not closed")
   	}
   	if !bindRefused(t, l, "user:alice@example.com") {
   		t.Fatal("a new bind was not refused credential_revoked")
   	}
-  	b.MarkChanged(store.Revocation{Kind: store.RevocationPrincipal, Key: "user:alice@example.com"}, false)
+  	b.MarkChanged(store.MarkChange{Revocation: store.Revocation{Kind: alice.Kind, Key: alice.Key}})
   	if bindRefused(t, l, "user:alice@example.com") {
   		t.Fatal("a lift from the feed did not reach the listener")
   	}
@@ -3784,11 +5224,21 @@ held connections through the feed. A lift does the same, removing the mark.
   	return out
   }
 
+  // MarkChange is one change applied to a process's marks (plan 7e, Ruling
+  // 5): a mark that now stands, or one lifted. Reloaded is a change a load
+  // found by difference, not an event the watch delivered: a mark missing
+  // from a load may be a lift made in a gap, or a mark an etcd restore lost
+  // (Ruling 12).
+  type MarkChange struct {
+  	Revocation
+  	Standing, Reloaded bool
+  }
+
   // LoadMarks makes m the store's marks (plan 7e, Ruling 5): every mark feed
   // holds is put in, every mark m holds that feed lacks is lifted, and on is
-  // told of each change (nil tells nothing). It returns the revision read
-  // at, which FollowMarks follows from.
-  func LoadMarks(ctx context.Context, feed MarkFeed, m *Marks, on func(r Revocation, standing bool)) (uint64, error) {
+  // told of each change, as Reloaded (nil tells nothing). It returns the
+  // revision read at, which FollowMarks follows from.
+  func LoadMarks(ctx context.Context, feed MarkFeed, m *Marks, on func(MarkChange)) (uint64, error) {
   	rev, rs, err := feed.Revocations(ctx)
   	if err != nil {
   		return 0, err
@@ -3799,7 +5249,7 @@ held connections through the feed. A lift does the same, removing the mark.
   		if !m.Holds(r.Kind, r.Key) {
   			m.Set(r, true)
   			if on != nil {
-  				on(r, true)
+  				on(MarkChange{Revocation: r, Standing: true, Reloaded: true})
   			}
   		}
   	}
@@ -3807,7 +5257,7 @@ held connections through the feed. A lift does the same, removing the mark.
   		if !stored[[2]string{r.Kind, r.Key}] {
   			m.Set(r, false)
   			if on != nil {
-  				on(r, false)
+  				on(MarkChange{Revocation: r, Reloaded: true})
   			}
   		}
   	}
@@ -3820,7 +5270,7 @@ held connections through the feed. A lift does the same, removing the mark.
   // (LoadMarks), telling on only of the difference, and tells rescanned; a
   // watch that fails is tried again every second. up and logf are as
   // crypt.FollowContexts's.
-  func FollowMarks(ctx context.Context, feed MarkFeed, m *Marks, from uint64, on func(Revocation, bool),
+  func FollowMarks(ctx context.Context, feed MarkFeed, m *Marks, from uint64, on func(MarkChange),
   	up func(bool), rescanned func(), logf func(string, ...any)) error {
   	failing := false
   	for {
@@ -3831,7 +5281,7 @@ held connections through the feed. A lift does the same, removing the mark.
   			}
   			m.Set(r, !lifted)
   			if on != nil {
-  				on(r, !lifted)
+  				on(MarkChange{Revocation: r, Standing: !lifted})
   			}
   		})
   		up(false)
@@ -3876,34 +5326,32 @@ held connections through the feed. A lift does the same, removing the mark.
 - [ ] **Step 5: The broker.** In `broker.go`:
 
   ```go
-  // MarkChanged is a mark another broker process made or lifted, as the
-  // marks feed brings it (plan 7e, Ruling 5): the listener's copy follows,
-  // and a mark that stands closes this process's held connections it names,
-  // as Revoke closes its own. The daemon's marks (b.Marks) are the feed's
-  // own to keep (store.FollowMarks).
-  func (b *Broker) MarkChanged(r store.Revocation, standing bool) {
+  // MarkChanged is a mark made or lifted on a broker process, this one
+  // included, as the marks feed brings it (plan 7e, Ruling 5): the
+  // listener's copy follows, and a mark that stands closes this process's
+  // held connections it names, as Revoke closes its own. The daemon's marks
+  // (b.Marks) are the feed's own to keep (store.FollowMarks).
+  func (b *Broker) MarkChanged(c store.MarkChange) {
   	if b.Conns == nil {
   		return
   	}
-  	b.Conns.Revoked(r, standing)
-  	if !standing {
+  	b.Conns.Revoked(c.Revocation, c.Standing)
+  	if !c.Standing {
   		return
   	}
-  	n := b.Conns.CloseHeld(func(principal, certKey string) bool {
-  		if r.Kind == store.RevocationPrincipal {
-  			return principal == r.Key
-  		}
-  		return certKey == r.Key
-  	})
-  	if n > 0 {
-  		b.logf("broker: a revocation of %s made on another broker process closed %d held connection(s) here",
-  			printsafe.Line(r.Key, 160), n)
+  	if n := b.Conns.CloseHeld(matchMark(c.Revocation)); n > 0 {
+  		b.logf("broker: a revocation of %s made on a broker process closed %d held connection(s) here",
+  			printsafe.Line(c.Key, 160), n)
   	}
   }
   ```
 
-  Factor the match closure into `func matchMark(r store.Revocation) func(principal, certKey
-  string) bool`, used by `Revoke` and here.
+  The feed delivers this process's own marks too, after `Revoke` has closed their connections,
+  so the line says "a broker process", never "another" (pre-flight M11). A mark this process
+  made usually closes nothing here, since `Revoke` closed it first, and prints nothing.
+
+  Factor `Revoke`'s match closure in `revoke.go` into `func matchMark(r store.Revocation)
+  func(principal, certKey string) bool`, used by `Revoke` and here.
 
 - [ ] **Step 6: port49d follows the marks.** In `cmd/port49d/main.go`, on etcd, after
   `startOnPersistentStore`:
@@ -3914,6 +5362,8 @@ held connections through the feed. A lift does the same, removing the mark.
   - start `store.FollowMarks(ctx, sts.etcd, authMarks, rev, brk.MarkChanged, …)` on a goroutine
     joined as the context feed is, with `up` and `rescanned` on `StoreFeedUp` and
     `StoreFeedRescans` labelled `marks`.
+
+  In `feed_test.go`, `TestTheMarkFeedBringsPutsAndLifts` runs on `onShared(t, time.Now)`.
 
   Before the listener exists, `brk.MarkChanged` finds `brk.Conns` nil and does nothing. The
   listener is filled from `authMarks.All()` once built, so no mark is missed between the two.
@@ -3954,19 +5404,24 @@ held connections through the feed. A lift does the same, removing the mark.
 - Create: `internal/store/etcd/ledger.go`, `internal/store/etcd/ledger_test.go`
 - Modify: `internal/store/etcd/roles_test.go`
 - Modify: `internal/store/crypt/follow.go` (`KeepLedger`), `follow_test.go`
-- Modify: `internal/daemon/metrics/metrics.go`, `metrics_test.go` (`LedgerPending`)
-- Modify: `cmd/port49d/store.go` (the record into `LoadLedger`; the keeper), `cmd/port49d/storeroles_test.go`,
-  `cmd/port49d/store_e2e_test.go`
+- Modify: `internal/daemon/metrics/metrics.go`, `metrics_test.go` (`LedgerPending`, `LedgerBehind`)
+- Modify: `cmd/port49d/store.go` (the record into `LoadLedger`; the keeper; the refused-read
+  line), `cmd/port49d/storeroles_test.go`, `cmd/port49d/store_e2e_test.go`,
+  `cmd/port49d/broker_test.go` (`sharedUsernamePolicy`)
 - Modify: `docs/superpowers/plans/README.md` (7e-1 as built, Step 7)
 
 **Interfaces:**
 - Consumes: `store.LedgerMark`, `store.LedgerSource`, `store.LedgerSink` (Tasks 7, 8);
-  `crypt.Ledger.Dirty`, `Redirty`, `Pending` (Task 7).
+  `crypt.Ledger.Dirty`, `Redirty`, `Pending` (Task 7); `crypt.Fence.Up` (Task 8a).
 - Produces:
   - etcd: `famLedger = "lw/"` (`lw/<nas>/<user>`); `(*etcd.Store).LedgerMarks` and
     `(*etcd.Store).PutLedgerMarks`.
-  - `func crypt.KeepLedger(ctx context.Context, l *Ledger, sink store.LedgerSink, every time.Duration, pending func(int), logf func(string, ...any))`.
-  - `Metrics.LedgerPending prometheus.Gauge` (`port49_ledger_pending`).
+  - `func crypt.KeepLedger(ctx context.Context, l *Ledger, sink store.LedgerSink, every time.Duration, report func(pending int, behind bool), logf func(string, ...any))`.
+    `behind` is `!l.Fence().Up()`: the context feed that raises the ledger for other
+    processes' logins is down. When `ctx` ends, it reports `(0, false)` once, so a keeper that
+    stops leaves no stale gauge (pre-flight I11).
+  - `Metrics.LedgerPending prometheus.Gauge` (`port49_ledger_pending`) and
+    `Metrics.LedgerBehind prometheus.Gauge` (`port49_ledger_behind`).
   - roles: `daemonReads` gains `famLedger`. `CheckIdentity` probes that the daemon is refused a
     write of `lw/`, and a read and a write of `sp/`. The broker is allowed all three.
 
@@ -3981,7 +5436,7 @@ with the broker's identity. In 7e-2 the runner does.
   // context's mark has no lease (Ruling 4).
   func TestTheLedgerRecordOnlyRaises(t *testing.T) {
   	ctx := context.Background()
-  	s := newEtcdStore(t)
+  	s := onShared(t, time.Now)
   	k := store.ContextKey{NAS: "leaf-01", Username: "netops"}
   	until := time.Now().Add(48 * time.Hour).UTC().Truncate(time.Second)
   	put := func(m store.LedgerMark) {
@@ -4007,7 +5462,7 @@ with the broker's identity. In 7e-2 the runner does.
   // the one that took over) both land, and the higher stands.
   func TestTheLedgerRecordRaceKeepsTheHigher(t *testing.T) {
   	ctx := context.Background()
-  	s := newEtcdStore(t)
+  	s := onShared(t, time.Now)
   	k := store.ContextKey{NAS: "leaf-01", Username: "netops"}
   	var wg sync.WaitGroup
   	for _, run := range [][2]int{{1, 1}, {200, -1}} { // one counts up, one down
@@ -4036,87 +5491,205 @@ with the broker's identity. In 7e-2 the runner does.
   // the start: either would let a stolen daemon key lower the ledger record
   // or forge a replay's superseded instant (Review Focus 8; Rulings 4, 9).
   func TestCheckIdentityRefusesADaemonThatCanWriteTheLedgerRecord(t *testing.T) {
+  	const prefix = "/port49/"
+  	ledger, superseded := newKeys(prefix).family(famLedger), newKeys(prefix).family(famSuperseded)
+  	srv := provisioned(t, prefix)
+  	if err := openAs(t, srv, "port49-daemon", prefix).CheckIdentity(context.Background(), false); err != nil {
+  		t.Fatalf("the daemon as itself, with its read on lw/: %v", err)
+  	}
   	for _, extra := range []etcdtest.Grant{
-  		{Role: RoleDaemon, Key: "/port49/v1/lw/", RangeEnd: clientv3.GetPrefixRangeEnd("/port49/v1/lw/"), Write: true},
-  		{Role: RoleDaemon, Key: "/port49/v1/sp/", RangeEnd: clientv3.GetPrefixRangeEnd("/port49/v1/sp/")},
+  		{Role: RoleDaemon, Key: ledger, RangeEnd: clientv3.GetPrefixRangeEnd(ledger), Write: true},
+  		{Role: RoleDaemon, Key: superseded, RangeEnd: clientv3.GetPrefixRangeEnd(superseded)},
   	} {
-  		d := daemonWithGrant(t, extra) // the file's fixture: a TLS member, port49's roles plus extra, the daemon's store
-  		if err := d.CheckIdentity(context.Background(), false); !errors.Is(err, ErrNotSeparated) {
+  		loose := provisionedWith(t, prefix, []etcdtest.Grant{extra}, nil)
+  		if err := openAs(t, loose, "port49-daemon", prefix).CheckIdentity(context.Background(), false); !errors.Is(err, ErrNotSeparated) {
   			t.Fatalf("a daemon granted %+v passed: %v", extra, err)
   		}
   	}
   }
   ```
 
+  `provisioned`, `provisionedWith` and `openAs` are `roles_test.go`'s own (pre-flight M1).
+
   In `crypt/follow_test.go`:
 
   ```go
   // The keeper writes what was raised, keeps what a failed write owed for the
-  // next round, and gauges what is owed.
+  // next round, and reports what is owed; when it stops it reports 0, so an
+  // ex-runner's gauge is never stale (pre-flight I11).
   func TestTheKeeperWritesRaisedMarksAndRetriesAFailure(t *testing.T) {
   	l := NewLedger()
+  	l.Fence().SetUp(true)
   	l.Observe(ka, 10, 10, time.Time{}, time.Now().Add(time.Hour))
   	sink := &flakySink{fail: 1}
-  	var owed []int
+  	var reports []report
   	ctx, cancel := context.WithCancel(context.Background())
   	go func() { eventually(t, func() bool { return sink.landed() == 1 }); cancel() }()
-  	KeepLedger(ctx, l, sink, 10*time.Millisecond, func(n int) { owed = append(owed, n) }, t.Logf)
-  	if sink.calls < 2 || l.Pending() != 0 || owed[0] != 1 {
-  		t.Fatalf("calls %d pending %d owed %v", sink.calls, l.Pending(), owed)
+  	KeepLedger(ctx, l, sink, 10*time.Millisecond, func(n int, behind bool) {
+  		reports = append(reports, report{n, behind})
+  	}, t.Logf)
+  	if sink.calls() < 2 || l.Pending() != 0 || reports[0] != (report{1, false}) {
+  		t.Fatalf("calls %d pending %d reports %v", sink.calls(), l.Pending(), reports)
+  	}
+  	if last := reports[len(reports)-1]; last != (report{0, false}) {
+  		t.Fatalf("a keeper that stopped last reported %v", last)
   	}
   }
+
+  // While the context feed is down, the keeper reports itself behind: its
+  // pending count cannot see the logins other processes make (pre-flight
+  // I11).
+  func TestTheKeeperIsBehindWhileTheFeedIsDown(t *testing.T) {
+  	l := NewLedger()
+  	l.Fence().SetUp(false)
+  	sink := &flakySink{}
+  	var mu sync.Mutex
+  	var reports []report
+  	ctx, cancel := context.WithCancel(context.Background())
+  	defer cancel()
+  	go KeepLedger(ctx, l, sink, 10*time.Millisecond, func(n int, behind bool) {
+  		mu.Lock()
+  		reports = append(reports, report{n, behind})
+  		mu.Unlock()
+  	}, t.Logf)
+  	eventually(t, func() bool { mu.Lock(); defer mu.Unlock(); return len(reports) > 0 && reports[len(reports)-1].behind })
+  	l.Fence().SetUp(true)
+  	eventually(t, func() bool { mu.Lock(); defer mu.Unlock(); return !reports[len(reports)-1].behind })
+  }
+
+  type report struct {
+  	pending int
+  	behind  bool
+  }
+
+  // flakySink fails its first fail calls with store.ErrUnavailable and
+  // records what lands, under a lock: KeepLedger calls it on its own
+  // goroutine (pre-flight M4, the race).
+  type flakySink struct {
+  	mu          sync.Mutex
+  	fail, n, ok int
+  }
+
+  func (s *flakySink) PutLedgerMarks(context.Context, []store.LedgerMark) error {
+  	s.mu.Lock()
+  	defer s.mu.Unlock()
+  	s.n++
+  	if s.n <= s.fail {
+  		return store.ErrUnavailable
+  	}
+  	s.ok++
+  	return nil
+  }
+
+  func (s *flakySink) calls() int  { s.mu.Lock(); defer s.mu.Unlock(); return s.n }
+  func (s *flakySink) landed() int { s.mu.Lock(); defer s.mu.Unlock(); return s.ok }
   ```
 
-  `flakySink` fails its first `fail` calls with `store.ErrUnavailable` and records what lands.
-  Write it in the test file.
+  In the first test, `reports` is appended on the keeper's goroutine, which is the test's own
+  (`KeepLedger` runs in the foreground), so it needs no lock.
 
-  In `cmd/port49d/store_e2e_test.go`, add:
+  In `cmd/port49d/store_e2e_test.go`, add the test and its helpers (pre-flight I14):
 
   ```go
   // A context put back while port49d was stopped, at a key the ledger record
   // holds a later mark for, is denied after the restart: the start seeds its
   // ledger from the record before it scans (Review Focus 2; Ruling 4). In
   // 7d this was the restart residual: the start took it as the key's.
+  //
+  // The put-back is bob's context over alice's at the username both log in
+  // as: impersonation, so a denial here cannot come from some unrelated
+  // fault. Two positive controls: alice's own session is permitted before
+  // the stop, and after a restart with nothing put back.
   func TestAStartSeededFromTheLedgerRecordDeniesAPutBack(t *testing.T) {
   	var out, log syncBuffer
   	e, o := stderr, stdout
   	t.Cleanup(func() { stderr, stdout = e, o })
   	stderr, stdout = &out, &log
-  	cfgPath, pkiDir, _, _, srv := etcdRunServer(t)
+  	cfgPath, pkiDir, _, _, srv := etcdRunServerWith(t, sharedUsernamePolicy, []string{"bob@example.com"})
   	root := srv.Client(t, "root")
   	ctx := context.Background()
   	tacacs, brokerAddr, stop := startRun(t, cfgPath, &out, 1)
   	dev := tacacsClient{t: t, addr: tacacs, key: []byte("run-test-secret")}
-  	loginSession(t, dev, mint(t, brokerAddr, pkiDir, "leaf1"), &log)
-  	resp, err := root.Get(ctx, "/port49/v1/c/", clientv3.WithPrefix())
+  	loginSession(t, dev, mintAs(t, brokerAddr, pkiDir, "leaf1", "bob@example.com"), &log)
+  	resp, err := root.Get(ctx, "/port49/v1/c/leaf1/alice")
   	if err != nil || len(resp.Kvs) != 1 {
-  		t.Fatalf("the context: %v %v", resp, err)
+  		t.Fatalf("bob's context: %v %v", resp, err)
   	}
-  	saved := resp.Kvs[0]
-  	loginSession(t, dev, mint(t, brokerAddr, pkiDir, "leaf1"), &log) // a later login at the key
-  	waitForGauge(t, &out, "port49_ledger_pending", 0)                // the record holds it
+  	bobs := resp.Kvs[0]
+  	s1 := waitForLedgerSeq(t, root, "/port49/v1/lw/leaf1/alice", 0)
+  	loginSession(t, dev, mint(t, brokerAddr, pkiDir, "leaf1"), &log) // alice's, later, at the same key
+  	waitForLedgerSeq(t, root, "/port49/v1/lw/leaf1/alice", s1)       // the record holds alice's
+  	if !dev.permits("alice", "configure") || lastCommandPrincipal(t, &log) != "user:alice@example.com" {
+  		t.Fatal("control: alice's own session was not permitted as alice before the stop")
+  	}
   	if err := stop(); err != nil {
   		t.Fatal(err)
   	}
-  	if _, err := root.Put(ctx, string(saved.Key), string(saved.Value)); err != nil {
+  	tacacs, brokerAddr, stop = startRun(t, cfgPath, &out, 2) // nothing put back
+  	dev = tacacsClient{t: t, addr: tacacs, key: []byte("run-test-secret")}
+  	if !dev.permits("alice", "configure") {
+  		t.Fatal("control: alice's session was not permitted after a restart with nothing put back")
+  	}
+  	if err := stop(); err != nil {
   		t.Fatal(err)
   	}
-  	tacacs, _, _ = startRun(t, cfgPath, &out, 2)
+  	if _, err := root.Put(ctx, string(bobs.Key), string(bobs.Value)); err != nil {
+  		t.Fatal(err)
+  	}
+  	tacacs, _, _ = startRun(t, cfgPath, &out, 3)
   	dev = tacacsClient{t: t, addr: tacacs, key: []byte("run-test-secret")}
   	if dev.permits("alice", "configure") {
-  		t.Fatal("a context put back while port49d was stopped was taken as the key's after the restart")
+  		t.Fatalf("bob's context put back over alice's while port49d was stopped was taken as the key's: %v",
+  			lastCommandPrincipal(t, &log))
   	}
+  }
+
+  // waitForLedgerSeq polls the ledger record at key, as etcd's root, until
+  // its seq is above above or 10s pass, and returns it. The keeper writes
+  // within a second of a raise; a gauge read at 0 can be the round before
+  // (pre-flight I14).
+  func waitForLedgerSeq(t *testing.T, root *clientv3.Client, key string, above uint64) uint64 {
+  	t.Helper()
+  	deadline := time.Now().Add(10 * time.Second)
+  	for time.Now().Before(deadline) {
+  		if resp, err := root.Get(context.Background(), key); err == nil && len(resp.Kvs) == 1 {
+  			var r struct {
+  				Seq uint64 `json:"seq"`
+  			}
+  			if json.Unmarshal(resp.Kvs[0].Value, &r) == nil && r.Seq > above {
+  				return r.Seq
+  			}
+  		}
+  		time.Sleep(50 * time.Millisecond)
+  	}
+  	t.Fatalf("the ledger record at %s never rose above %d", key, above)
+  	return 0
   }
   ```
 
-  `waitForGauge` scrapes the run's metrics address, as `gauge` in `service_e2e_test.go` does,
-  until the series reads the value or 10s pass.
+  The fixture's helpers, beside the ones they generalise (`broker_test.go`, `run_test.go`,
+  `store_e2e_test.go`):
+  - `sharedUsernamePolicy` is `minimalPolicy` with a second subject,
+    `{name: b, identity: ["user:bob@example.com"], username: alice, token_ttl: 60s}`, granted
+    the same scope and role. Bob and alice then log in to `leaf1` under one username, one
+    context key.
+  - `brokerConfigWith(t, policyBody, others)` is `brokerConfig` with
+    `testpki.WriteLabWith(dir, "alice@example.com", others, time.Now())`, and `brokerConfig`
+    becomes `brokerConfigWith(t, policyBody, nil)`.
+  - `etcdRunServerWith(t, policyBody, others)` is `etcdRunServer` over `brokerConfigWith`, and
+    `etcdRunServer` becomes `etcdRunServerWith(t, minimalPolicy, nil)`.
+  - `mintAs(t, brokerAddr, pkiDir, device, email)` is `mintKeyed` with
+    `testpki.LabClientFiles(email)`'s certificate and key in place of the lab client's.
+
+  The key path assumes the default prefix (`/port49/`) and `esc`, which leaves `leaf1` and
+  `alice` as they are.
 
 - [ ] **Step 2: Run them to see them fail.**
 
   Run: `go test ./internal/store/etcd/ ./internal/store/crypt/ ./cmd/port49d/ -run 'LedgerRecord|Keeper|SeededFromTheLedgerRecord|CanWriteTheLedgerRecord' -count=1`
-  Expected: FAIL to compile, then `TestAStartSeededFromTheLedgerRecordDeniesAPutBack` FAILs: the
-  restart admits the put-back.
+  Expected: FAIL to compile. Then `TestAStartSeededFromTheLedgerRecordDeniesAPutBack` fails at
+  `waitForLedgerSeq`, since no keeper writes `lw/`. Once the keeper is wired and `LoadLedger`
+  is passed no record, it fails at its last assertion: the restart admits bob's context.
 
 - [ ] **Step 3: etcd's record.** In `keys.go`, add `famLedger = "lw/" // lw/<nas>/<user>: the
   ledger record (plan 7e)` and `func (k keys) ledgerOf(c store.ContextKey) string { return k.root
@@ -4253,12 +5826,17 @@ with the broker's identity. In 7e-2 the runner does.
   // KeepLedger writes l's raised marks to sink every `every` until ctx ends
   // (plan 7e, Ruling 4): the keyspace's holder alone runs it. A write that
   // fails is said once per run of failures, and its marks are owed again.
-  // pending is told how many marks are owed after each round
-  // (port49_ledger_pending).
-  func KeepLedger(ctx context.Context, l *Ledger, sink store.LedgerSink, every time.Duration, pending func(int),
-  	logf func(string, ...any)) {
+  // report is told after each round how many marks are owed
+  // (port49_ledger_pending), and whether the context feed is down
+  // (port49_ledger_behind): then the ledger is not raised by other
+  // processes' logins, and pending cannot show what the record misses. When
+  // ctx ends it reports (0, false) once, so a runner whose duties stopped
+  // shows no stale value (pre-flight I11).
+  func KeepLedger(ctx context.Context, l *Ledger, sink store.LedgerSink, every time.Duration,
+  	report func(pending int, behind bool), logf func(string, ...any)) {
   	t := time.NewTicker(every)
   	defer t.Stop()
+  	defer report(0, false)
   	failing := false
   	for {
   		select {
@@ -4284,21 +5862,44 @@ with the broker's identity. In 7e-2 the runner does.
   				failing = false
   			}
   		}
-  		pending(l.Pending())
+  		report(l.Pending(), !l.Fence().Up())
   	}
   }
   ```
 
-  In `metrics.go`, add `LedgerPending prometheus.Gauge` (`port49_ledger_pending`, "context keys
-  whose mark the ledger record does not yet hold; above 0 for a minute, a context put back at
-  one would be taken after a restart"). Add it to `TestNewRegistersEveryMetric`.
+  In `metrics.go`, add:
+  - `LedgerPending prometheus.Gauge` (`port49_ledger_pending`, "context keys whose mark the
+    ledger record does not yet hold; above 0 for a minute, a context put back at one would be
+    taken after a restart");
+  - `LedgerBehind prometheus.Gauge` (`port49_ledger_behind`, "1 while the ledger record's
+    keeper runs with its context feed down: the record does not follow other processes'
+    logins, whatever port49_ledger_pending says").
+
+  Add both to `TestNewRegistersEveryMetric`.
 
 - [ ] **Step 6: port49d keeps it.** In `cmd/port49d/store.go`'s `openStores` (etcd):
-  - `crypt.LoadLedger(ctx, d, d, keys, ledger)`: the daemon's identity reads `lw/`;
-  - in the returned `stores`, a `keep func(ctx)` that runs `crypt.KeepLedger(ctx, ledger, b,
-    time.Second, func(n int) { m.LedgerPending.Set(float64(n)) }, logf)`. `b` is the broker's
-    raw store, which holds the hold in 7e-1;
-  - `runOnce` runs and joins it as it does the feeds.
+  - `crypt.LoadLedger(ctx, d, d, keys, ledger)`: the daemon's identity reads `lw/`.
+  - **A refused read** (pre-flight M17). Roles applied before 7e lack the daemon's read on
+    `lw/`, and the read is `store.ErrRefused`. That is a store fault, not an outage: waiting
+    does not mend it. It ends the start with:
+
+    ```
+    port49d: store: the daemon's role cannot read lw/, the ledger record: apply port49d store-roles (plan 7e) as etcd's root, then start again
+    ```
+
+    It is a `storeFault`, so a cold start exits 1 and a start after a store gone retries, as
+    7d's identity faults do.
+  - In the returned `stores`, a `keep func(ctx)` runs `crypt.KeepLedger(ctx, ledger, b,
+    time.Second, func(n int, behind bool) { m.LedgerPending.Set(float64(n));
+    m.LedgerBehind.Set(b2f(behind)) }, logf)`. `b` is the broker's raw store, which holds the
+    hold in 7e-1. `b2f` is 1 for true.
+  - `runOnce` runs and joins it as it does the feeds. The keeper's final `(0, false)` zeroes
+    both gauges when the run ends.
+
+  Add `TestARefusedLedgerRecordReadNamesStoreRoles` to `cmd/port49d/store_test.go`: on a TLS
+  member whose daemon role has no read on `lw/` (7d's roles, `etcd.Roles` minus that grant),
+  `openStores` fails with a `*storeFault` whose text holds `apply port49d store-roles (plan
+  7e)`.
 
   On memory there is no record and no keeper.
 
@@ -4309,9 +5910,10 @@ with the broker's identity. In 7e-2 the runner does.
 
   In `docs/superpowers/plans/README.md`, under "Plan 7d — As built", add a heading `### Plan 7e
   — As built`, with a paragraph "**7e-1** (`feature/broker-process`, base `b508ba0`)". List
-  each task's commits and what differs from this plan's text, as the 7d section does from its
-  ledger. Name every interface 7e-1's review changed: the controller amends 7e-2's tasks to
-  match before dispatching Task 11.
+  each task's commits (8a included) and what differs from this plan's text, as the 7d section
+  does from its ledger. Name every interface 7e-1's review changed: the controller amends
+  7e-2's tasks to match before dispatching Task 11. Add 7e-1's operator notes, the 7e-1 half of
+  "Operator-facing notes" below, as amended by what was built.
 
 - [ ] **Step 8: Commit.**
 
@@ -4322,7 +5924,7 @@ with the broker's identity. In 7e-2 the runner does.
     internal/store/etcd/ledger.go internal/store/etcd/ledger_test.go internal/store/crypt/follow.go \
     internal/store/crypt/follow_test.go internal/daemon/metrics/metrics.go internal/daemon/metrics/metrics_test.go \
     cmd/port49d/store.go cmd/port49d/main.go cmd/port49d/storeroles_test.go cmd/port49d/store_e2e_test.go \
-    docs/superpowers/plans/README.md
+    cmd/port49d/store_test.go cmd/port49d/broker_test.go cmd/port49d/run_test.go docs/superpowers/plans/README.md
   git commit -m "feat(store): the ledger record, kept by the keyspace's holder
 
   lw/<nas>/<user> holds each key's highest write sequence, raised once a
@@ -4330,7 +5932,10 @@ with the broker's identity. In 7e-2 the runner does.
   it. A start seeds its ledger from it before it scans, so a context put
   back while port49d was stopped is denied at a key the record holds a
   later mark for: 7d's restart residual, closed but for the keeper's lag
-  (plan 7e Ruling 4). port49_ledger_pending gauges what it owes.
+  (plan 7e Ruling 4). port49_ledger_pending gauges what it owes, and
+  port49_ledger_behind says when the keeper's feed is down; both read 0
+  once the keeper stops (pre-flight I11). A daemon role without the read
+  on lw/ is told to re-apply store-roles.
 
   Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
@@ -4354,8 +5959,10 @@ dispatches Task 11 on `feature/broker-split` off the new `main`.
 No code. As Task 1: a one-line fragment to find, and the text to put after it or in its place.
 Nothing here asserts what a device does. The device cells it adds cite L37 or L38 as open.
 
-- [ ] **Step 1: Decision 36, 7e-2's part.** At the end of decision 36's bullets (before its
-  closing `(§5.1.4, §5.6, §5.7, §14; design document §8, §12, §17)`), add:
+- [ ] **Step 1: Decision 36, 7e-2's part.** At the end of decision 36's bullets, add the bullets
+  below. Then replace its closing `(§5.1.4, §5.6, §5.7, §14; design document §8, §12, §17)`
+  with `(§5.1.3, §5.1.4, §5.6, §5.7, §12, §14, §15; design document §6, §8, §12, §13, §15, §17,
+  §19)` (pre-flight M12).
 
   ```markdown
   - **Two processes.** `port49-broker` serves the API and holds the broker's etcd identity alone;
@@ -4374,40 +5981,103 @@ Nothing here asserts what a device does. The device cells it adds cite L37 or L3
     requires `policy: {file, watch_interval}` and refuses `broker:`, `store.etcd.broker` and
     `lab.seed_tokens`.
   - **The runner.** The keyspace hold is the runner's: one port49-broker at a time. On taking it,
-    it records the seal keys, re-indexes the contexts the index lost, applies every standing mark
-    to the kept contexts, purges the unspent tokens only as below, and carries the policy in force
-    into every kept context; then it runs the sweep, the re-index, the ledger record's keeper and
-    the context half of every refresh pass. Every replica serves the API and the admin socket,
-    runs the token half of its own reload's passes and certificate status, and follows the
-    contexts and the marks. A runner that loses the hold stops those duties at once, keeps serving
-    the API, and tries to take the hold again every 5s; a broker's readiness is never the store's.
-  - **The purge at a takeover.** The runner records in `meta/judged` the bundle in force whenever a
-    pass leaves `port49_policy_refresh_pending` at 0. A runner taking the hold with another bundle
-    in force (an edit made while none ran, or a runner gone before its settle pass) purges every
-    unspent token and records the instant for every key; with the same, it purges none, so a
-    rolling restart of the brokers keeps everyone's tokens.
+    it records the seal keys, re-indexes the contexts the index lost, puts back every revocation
+    its copy of the marks holds and the store lacks, applies every standing mark to the kept
+    contexts, purges the unspent tokens only as below, and carries the policy in force into every
+    kept context; then it runs the sweep, the re-index, the ledger record's keeper, the context
+    half of every refresh pass, and a full context pass whenever another replica asks for one.
+    Every replica serves the API and the admin socket, runs the token half of its own reload's
+    passes and certificate status, and follows the contexts and the marks. A runner that loses
+    the hold stops those duties at once, keeps serving the API, and tries to take the hold again
+    every 5s; a broker's readiness is never the store's.
+  - **The purge at a takeover.** The runner records in `meta/judged` the bundle in force, with its
+    policy, when a pass leaves `port49_policy_refresh_pending` at 0 and every broker process
+    serves that bundle, and at a takeover whose carry leaves nothing owed. A runner taking the
+    hold with another bundle in force (an edit made while none ran, a runner gone before its
+    settle pass, or a replica serving another bundle) purges every unspent token and records the
+    instant for every key; with the same, it purges none, so a rolling restart of the brokers
+    keeps everyone's tokens. A token minted in the moment between that instant and the purge is
+    purged too, and its login fails `token_not_found`. After an etcd restore, `meta/judged` is
+    deleted before any broker starts, so the first takeover purges.
   - **The settle pass** is 30s or two policy watch intervals and 5s after a swap, whichever is
     longer, and the policies since the last settled pass are kept until it completes, so a token
     another replica minted under the replaced policy before it reloaded is judged.
+  - **Policy across replicas.** Every broker process records the bundle it serves, leased, and
+    says when it is not the runner's (`port49_policy_bundle_matches_runner`). A replica that
+    swaps, or starts, while it is not the runner asks the runner for a full context pass, which
+    judges every live context against the policy in force; a replica that dies unreloaded is
+    covered by a full pass the runner owes once its tokens have expired, `token_ttl` (at most
+    15 minutes) after it last saw that replica's bundle. Until then the runner records no bundle
+    as judged.
+  - **The reload guard at a start.** A broker process whose policy file the reload guard would
+    refuse against the policy `meta/judged` records stays not ready, mints nothing and takes no
+    hold until the file is fixed, so a restart cannot load a file a running broker refused.
   - **The daemon's start on etcd** waits for the store and checks its identity, reads (never
     writes) the seal-key record, loads the marks, seeds the ledger from the record and a scan, starts
     both feeds and binds. It reloads its policy file for admission, quarantine and redaction and
     carries nothing into live contexts. It probes the store every sixth of `hold_ttl` through its
-    context pool, so an idle port49d goes dark as one under load does; a run after a store gone
-    keeps the ledger and the marks.
+    context pool and the feed fence, so an idle port49d goes dark as one under load does, on a
+    store or a context feed that has stopped; a run after a store gone keeps the ledger and the
+    marks.
   - **The revocations file is retired on etcd**, which persists the marks; it stays for the memory
-    store, with `port49d init-revocations`. After an etcd restore, revocations made since the
-    snapshot are re-applied by hand.
+    store, with `port49d init-revocations`. Each broker process keeps its own copy of the marks it
+    followed, adding each mark and removing a mark only on a lift the watch delivered. The runner
+    puts back any mark in its copy the store lacks, at a takeover and after its marks feed
+    reloads, and says how many: an etcd restore's lost revocations are revoked again, and a lift
+    a copy missed is revoked again too, which the line says how to lift.
   - **The sockets.** port49-broker's admin socket answers `port49 revoke` (revoke, lift, list).
     port49d's answers `port49 keys diagnose`, and, with no broker in it, a revocation there is
     refused naming port49-broker's socket.
+  - **Revoking with every broker down.** `port49-broker revoke --offline` revokes and lifts
+    through the store on the broker's identity, with no API and no hold, in decision 32's order.
+    With no broker host, a mark written as etcd's root under `rv/` is followed by every port49d,
+    which denies the session's next command; tokens are deleted only by the next revocation that
+    reaches them.
   ```
 
-- [ ] **Step 2: Decisions 32 and 34 amended.** At the end of decision 32's paragraph, before
+- [ ] **Step 2: Decisions 32, 34 and 35 amended.** At the end of decision 32's paragraph, before
   `(§5.1.4, §5.7, §12; design document §11, §12, §17)`, add `*Amended by decision 36 (plan 7e):*
-  on etcd the store keeps the marks and the file is retired; a lift is port49-broker's admin
-  socket's.` At the end of decision 34's "The revocations file" bullet, add `On etcd it is retired
-  (decision 36).`
+  on etcd the store keeps the marks, each broker process a copy, and the file is retired; a lift
+  is port49-broker's admin socket's, or its offline command's.` At the end of decision 34's "The
+  revocations file" bullet, add `On etcd it is retired (decision 36).`
+
+  Decision 35's three "until plan 7e" clauses (pre-flight M12). Each replacement quotes whole
+  lines, as they stand:
+  - **"What store write access still yields"** (spec line 6594). Replace the two lines
+
+    ```
+      That holds for the daemon's credential taken alone: until plan 7e port49d also holds the
+      broker's, whose role is the whole keyspace, marks included, and under
+    ```
+
+    with
+
+    ```
+      That holds for the daemon's credential, which since plan 7e is all a port49d host holds
+      (decision 36): the broker's, whose role is the whole keyspace, is port49-broker's, and under
+    ```
+
+    The next line, `` `store.etcd.roles: unenforced` the daemon's is too.``, stays.
+  - **"The daemon's role cannot"** (spec line 6693). Replace the two lines
+
+    ```
+        taken alone: until plan 7e port49d also holds the broker's, whose role is the whole
+        keyspace, marks included, and under `store.etcd.roles: unenforced` the daemon's is too.
+    ```
+
+    with
+
+    ```
+        alone, which since plan 7e is all a port49d host holds (decision 36); under
+        `store.etcd.roles: unenforced` the daemon's is the whole keyspace too.
+    ```
+  - **"One port49d per keyspace"** (spec line 6708). Replace the line
+    `- **One port49d per keyspace until plan 7e.**` with `- **One port49d per keyspace in plan
+    7d.** *Amended by decision 36 (plan 7e):* any number of port49d serve a keyspace and hold
+    nothing; the hold below is port49-broker's runner's.`
+
+  Check the result reads as a sentence in each bullet before committing, and fix the joins
+  minimally if a neighbouring line differs from what is quoted here.
 
 - [ ] **Step 3: §5.1.3, who refreshes.** In §5.1.3, after the paragraph that says the refresh
   runs after every reload (search `#### Policy reload` and the first paragraph after it), add:
@@ -4437,9 +6107,16 @@ Nothing here asserts what a device does. The device cells it adds cite L37 or L3
     refused; port49-broker.yaml naming `keys:` or the daemon's identity is refused. A login on
     one port49d is answered on another. A revocation made on one port49-broker closes the held
     connections it names on another, and every port49d denies the session's next command. A
-    runner that stops is replaced within `hold_ttl` and a third; a takeover purges only when the
-    bundle in force is not the one last judged. With every broker stopped, an open session's next
-    command is answered.
+    runner that stops, or is cut off from etcd without releasing its lease, is replaced within
+    `hold_ttl` and a third; a takeover purges only when the bundle in force is not the one last
+    judged, and a clean takeover records its bundle as judged. With every broker stopped, an
+    open session's next command is answered, and a revocation made offline, or as etcd's root,
+    denies it.
+  - **Across replicas**: a replica serving another bundle than the runner's says so, and its
+    reload has the runner carry a context it made under the old policy. A start whose policy
+    file the reload guard refuses against the judged bundle stays not ready and takes no hold. A
+    mark in a broker's copy that the store lost is put back by the runner, and a mark lifted
+    through the watch is not.
   ```
 
 - [ ] **Step 6: §15, L37 and L38.** After the L36 row, add:
@@ -4472,14 +6149,54 @@ Nothing here asserts what a device does. The device cells it adds cite L37 or L3
       every replica.
     ```
 
-    In the "Backups" bullet, replace `Until plan 7e retires it, broker.revocations_file is kept as
-    well.` with `On etcd broker.revocations_file is retired (plan 7e): after a restore, revoke again
-    what was revoked since the snapshot.` In "Restore with port49d stopped", replace `its start
-    puts the revocations file's marks back into the store,` with `the runner's start`.
-  - **§15.** In the alarms list, add: `port49_store_feed_up{feed}` 0 for longer than `hold_ttl`;
-    any increase of `port49_store_feed_rescans_total`; `port49_ledger_pending` above 0 for a
-    minute; the sum of `port49_store_keyspace_held` over port49-broker's replicas 0 for twice
-    `hold_ttl`.
+    In the "Backups" bullet, replace these two whole lines (pre-flight M2: quoted as they stand):
+
+    ```
+    - **Backups.** Back etcd up as a database holding the revocation marks. Until plan 7e retires
+      it, `broker.revocations_file` is kept as well.
+    ```
+
+    with:
+
+    ```
+    - **Backups.** Back etcd up as a database holding the revocation marks. On etcd
+      `broker.revocations_file` is retired (plan 7e): each port49-broker keeps its own copy of the
+      marks it followed, in `broker.state_dir/marks.json`, and the runner puts back any the store
+      lost. Back `broker.state_dir` up with the broker's host.
+    ```
+
+    Then replace the whole bullet that begins `  - **A restore rolls the marks back too.**` (its
+    six lines, through `snapshot, since a mark in either the file or the store stands.`) with
+    (pre-flight I5, I12; Ruling 7):
+
+    ```
+      - **A restore rolls the marks back too.** A mark added since the snapshot is gone from
+        the store, and one lifted since is back. The runbook, on etcd since plan 7e:
+        1. Stop every port49-broker. port49d may run on.
+        2. Restore with `--bump-revision` and `--mark-compacted` (below). Without
+           `--bump-revision`, also restart every port49d after the restore: a process started
+           after it seals below what one that ran across it knows, and their logins are denied
+           there (`store_unavailable`) until that process writes at the key.
+        3. Delete `meta/judged` (`etcdctl del <prefix>v1/meta/judged`), so the first runner
+           purges every unspent token, and a token redeemed since the snapshot is not redeemable
+           again.
+        4. Start the brokers. The first runner puts back every mark its `marks.json` holds that
+           the store lacks, and says how many; it applies every mark to the restored contexts,
+           and purges.
+        5. Lift again, with `port49 revoke --lift`, any mark that was lifted since the snapshot
+           and that the line says was put back.
+    ```
+
+    The bullet `  - **Restored under a running port49d**, …` stays as it is: it describes one
+    process, which is what L35 measured.
+  - **§15.** In the alarms list, add:
+    - `port49_store_feed_up{feed}` 0 for longer than `hold_ttl`;
+    - any increase of `port49_store_feed_rescans_total`;
+    - on the runner, `port49_ledger_pending` above 0 for a minute, or `port49_ledger_behind` at 1
+      (pre-flight I11);
+    - `port49_policy_bundle_matches_runner` 0 for longer than twice `policy_watch_interval`;
+    - the sum of `port49_store_keyspace_held` over port49-broker's replicas 0 for twice
+      `hold_ttl`.
   - **§17, internal interfaces.** In the row `| daemon, broker → token store |`, add after `under
     port49's roles`: `; each process holds its own component's certificate alone (plan 7e)`.
   - **§19, step 7.** After `the API authorization model.` add ` Plan 7e splits the broker into its
@@ -4490,11 +6207,13 @@ Nothing here asserts what a device does. The device cells it adds cite L37 or L3
   ```bash
   grep -n '^| \*\*L37\*\*\|^| \*\*L38\*\*' docs/design/2026-08-23-policy-engine-spec.md
   grep -n 'The runner.\*\* The keyspace hold' docs/design/2026-08-23-policy-engine-spec.md
+  grep -n 'Revoking with every broker down' docs/design/2026-08-23-policy-engine-spec.md
   grep -n 'Any number of port49d and port49-broker per keyspace' docs/design/2026-08-21-port49-design.md
-  grep -c 'One keyspace per port49d until plan 7e' docs/design/2026-08-21-port49-design.md
+  grep -n 'etcdctl del <prefix>v1/meta/judged' docs/design/2026-08-21-port49-design.md
+  grep -c 'until plan 7e\|Until plan 7e' docs/design/2026-08-21-port49-design.md docs/design/2026-08-23-policy-engine-spec.md
   ```
 
-  Expected: two rows; one line; one line; `0`.
+  Expected: two rows; then one line each; then `0` for each file.
 
 - [ ] **Step 9: Commit.**
 
@@ -4557,9 +6276,14 @@ test moves with its code and keeps its package-internal access.
   (`internal/fence`, `internal/keyfile`, `internal/daemon/server`, `tests/lab/harness_test.go`)
   name `internal/port49d/<file>` now. Fix them.
 
-  Run: `make build && make test && make vet`
+  Run: `make build && make test && make vet && make test-race`
   Expected: PASS, with `internal/port49d` running exactly the tests `cmd/port49d` ran (compare
   `go test -list . ./internal/port49d/ | wc -l` with the count at `main`).
+
+  `make test-race` covers `./internal/...`, so this move race-tests port49d's code under it for
+  the first time (pre-flight M13; 7d ran `go test -race ./cmd/...` by hand). A race it reports
+  is pre-existing: fix it here, in its own `fix(port49d):` commit before the move's, so it
+  surfaces at the move and not in Task 15.
 
 - [ ] **Step 4: Commit.**
 
@@ -4581,11 +6305,17 @@ test moves with its code and keeps its package-internal access.
 
 **Files:**
 - Modify: `internal/config/config.go` (`Role`, `PolicyConfig`, `Config.Policy`, `Config.Role`,
-  `LoadBroker`, `key_refs`, `broker.state_dir`, `checkStore`, the refusals, `KeyRefs`)
-- Create: `internal/config/broker_test.go`
-- Modify: `internal/config/store_test.go`, `internal/config/config_test.go`
+  `LoadBroker`, `key_refs`, `broker.state_dir`, `checkStore`, the refusals, `KeyRefs`,
+  `StoreBlocks` in place of `StoreOf`)
+- Create: `internal/config/broker_role_test.go`. `internal/config/broker_test.go` exists at
+  `b508ba0`, with `loadWith`, `brokerBlock` and the 7a/7b broker-block tests, and is not
+  touched (pre-flight I7).
+- Modify: `internal/config/store_test.go` (`checkStore` takes the role; `StoreBlocks`),
+  `internal/config/config_test.go`
 - Modify: every reader of `cfg.Broker.PolicyFile` and `cfg.Broker.PolicyWatchInterval` in
   `internal/port49d` (`loadPolicy`, `parseBundle`, `reload.go`), which read `cfg.Policy` now
+- Modify: `internal/port49d/storeroles.go` (`StoreBlocks` for `StoreOf`, no other change: Task 16
+  adds `--broker-config`)
 
 **Interfaces:**
 - Produces:
@@ -4599,13 +6329,28 @@ test moves with its code and keeps its package-internal access.
   - `fileConfig.KeyRefs []string` (`yaml:"key_refs"`). `Config.KeyRefs()` is `key_refs` under the
     broker role and `keys:`' names under the daemon's.
   - `fileConfig.Policy *policyYAML` (`yaml:"policy"`): `{file, watch_interval}`.
-  - `config.StoreOf(raw)` reads either file's `store:` block (Task 16 uses it on both).
+  - `func config.StoreBlocks(raw []byte) (StoreConfig, error)` (pre-flight I8). It replaces
+    `StoreOf`: either file's `store:` block, decoded strictly and checked for shape alone, by
+    `checkStoreShape`:
+    - checked: endpoints, the CA, durations, no identity named `root`, each named identity's
+      files;
+    - not checked: any role's requirement. Either identity may be named or absent.
+    `store-roles` (Task 16) reads both files through it, so a 7d port49d.yaml naming both
+    identities still yields both, while `Load` under the daemon's role refuses that file.
+  - `checkStore(s storeYAML, role Role, hasBroker, hasPolicy, hasAdminSocket bool)`: the role's
+    requirements over `checkStoreShape`.
 
-Rulings 1, 2, 12.
+Rulings 1, 2, 12, 14.
 
-- [ ] **Step 1: The failing tests.** Create `internal/config/broker_test.go`. Its fixtures are
-  built as `config_test.go`'s are: a temp file with a base YAML, and `t.Setenv` for the
-  encryption key. Write them as helpers here:
+- [ ] **Step 1: The failing tests.** Create `internal/config/broker_role_test.go`. Its fixtures are
+  built from the package's own (pre-flight M1):
+  - `config_test.go`'s `inv` (whose key group names `prod_key`), `write(t, name, body)`,
+    `setKeyEnv(t)` (`PORT49_ENC_V2` and the shared secrets) and `sampleHead`;
+  - `store_test.go`'s `storeFiles(t)`, which writes `ca.pem`, `d.pem`, `d-key.pem`, `b.pem`
+    and `b-key.pem` at mode 0600;
+  - `broker_test.go`'s `brokerBlock` const, which is read, never edited.
+  Check each new name against `broker_test.go`'s (`loadWith`, `brokerBlock`, its test names)
+  before committing.
 
   ```go
   package config
@@ -4617,53 +6362,72 @@ Rulings 1, 2, 12.
   	"testing"
   )
 
-  // brokerYAML is a port49-broker.yaml that loads; each test changes one key.
-  func brokerYAML(t *testing.T) string {
+  // brokerRoleYAML is a port49-broker.yaml that loads under the broker's
+  // role; each test changes one key.
+  func brokerRoleYAML(t *testing.T) string {
   	t.Helper()
-  	dir := t.TempDir()
-  	pki := writeEtcdIdentity(t, dir, "port49-broker") // writes ca.pem, cert and 0600 key; store_test.go's helper
+  	dir := storeFiles(t)
   	state := filepath.Join(dir, "state")
   	if err := os.Mkdir(state, 0o700); err != nil {
   		t.Fatal(err)
   	}
   	return strings.Join([]string{
-  		"inventory_file: " + writeInventory(t, dir),
-  		"key_refs: [core]",
-  		"encryption: {current: {id: v1, secret_env: PORT49_ENC_V1}}",
+  		"inventory_file: " + write(t, "inv.yaml", inv),
+  		"key_refs: [prod_key]",
+  		"encryption:",
+  		"  current: {id: v2, secret_env: PORT49_ENC_V2}",
   		"admin_socket: " + filepath.Join(dir, "broker.sock"),
   		"broker:",
   		"  listen: 127.0.0.1:0",
-  		"  tls_cert_file: " + pki.cert, "  tls_key_file: " + pki.key, "  client_ca_file: " + pki.ca,
-  		"  policy_file: " + writePolicy(t, dir),
+  		"  tls_cert_file: /etc/port49/broker.pem",
+  		"  tls_key_file: /etc/port49/broker-key.pem",
+  		"  client_ca_file: /etc/port49/clients-ca.pem",
+  		"  policy_file: /etc/port49/policy.yaml",
   		"  state_dir: " + state,
   		"  certificate_status: {disabled: true}",
   		"store:",
   		"  backend: etcd",
   		"  etcd:",
-  		"    endpoints: [https://127.0.0.1:2379]",
-  		"    ca_file: " + pki.ca,
-  		"    broker: {cert_file: " + pki.cert + ", key_file: " + pki.key + "}",
+  		"    endpoints: [https://etcd-0:2379]",
+  		"    ca_file: " + filepath.Join(dir, "ca.pem"),
+  		"    broker: {cert_file: " + filepath.Join(dir, "b.pem") + ", key_file: " + filepath.Join(dir, "b-key.pem") + "}",
   	}, "\n") + "\n"
   }
 
-  func loadBrokerYAML(t *testing.T, raw string) (Config, error) {
+  func loadBrokerRole(t *testing.T, raw string) (Config, error) {
   	t.Helper()
-  	t.Setenv("PORT49_ENC_V1", strings.Repeat("k", 32))
-  	p := filepath.Join(t.TempDir(), "port49-broker.yaml")
-  	if err := os.WriteFile(p, []byte(raw), 0o600); err != nil {
-  		t.Fatal(err)
-  	}
-  	return LoadBroker(p)
+  	setKeyEnv(t)
+  	return LoadBroker(write(t, "port49-broker.yaml", raw))
+  }
+
+  // daemonRoleYAML is a port49d.yaml on etcd with no broker: the daemon's
+  // identity alone, and the policy it admits from under policy:.
+  func daemonRoleYAML(t *testing.T) string {
+  	t.Helper()
+  	dir := storeFiles(t)
+  	return fmt.Sprintf(sampleHead, write(t, "inv.yaml", inv)) +
+  		"encryption:\n  current: {id: v2, secret_env: PORT49_ENC_V2}\n" +
+  		"policy: {file: /etc/port49/policy.yaml}\n" +
+  		"admin_socket: " + filepath.Join(dir, "admin.sock") + "\n" +
+  		"store:\n  backend: etcd\n  etcd:\n    endpoints: [https://etcd-0:2379]\n" +
+  		"    ca_file: " + filepath.Join(dir, "ca.pem") + "\n" +
+  		"    daemon: {cert_file: " + filepath.Join(dir, "d.pem") + ", key_file: " + filepath.Join(dir, "d-key.pem") + "}\n"
+  }
+
+  func loadDaemonRole(t *testing.T, raw string) (Config, error) {
+  	t.Helper()
+  	setKeyEnv(t)
+  	return Load(write(t, "port49d.yaml", raw))
   }
 
   // A port49-broker.yaml loads under the broker's role: key_refs are its key
   // names, its policy is broker.policy_file, and metrics default to :9050.
   func TestABrokerConfigLoads(t *testing.T) {
-  	c, err := loadBrokerYAML(t, brokerYAML(t))
+  	c, err := loadBrokerRole(t, brokerRoleYAML(t))
   	if err != nil {
   		t.Fatal(err)
   	}
-  	if c.Role != RoleBroker || len(c.KeyRefs()) != 1 || c.KeyRefs()[0] != "core" || c.Policy == nil ||
+  	if c.Role != RoleBroker || len(c.KeyRefs()) != 1 || c.KeyRefs()[0] != "prod_key" || c.Policy == nil ||
   		c.MetricsListen != ":9050" || c.Broker.StateDir == "" {
   		t.Fatalf("%+v", c)
   	}
@@ -4674,7 +6438,7 @@ Rulings 1, 2, 12.
   // the key.
   func TestTheBrokersConfigNeverNamesADeviceKey(t *testing.T) {
   	for key, extra := range map[string]string{
-  		"keys:":                   "keys: {core: {accept: [{version: 1, secret_env: PORT49_LAB_KEY}]}}\n",
+  		"keys:":                   "keys: {prod_key: {current: {version: 3, secret_env: T_PROD_V3}}}\n",
   		"listen":                  "listen: :49\n",
   		"store.etcd.daemon":       "", // added under store.etcd below
   		"accounting":              "accounting: {spool_capacity: 10}\n",
@@ -4685,14 +6449,14 @@ Rulings 1, 2, 12.
   		"broker.revocations_file": "",
   		"lab.fault_file":          "lab: {fault_file: /tmp/f}\n",
   	} {
-  		raw := brokerYAML(t) + extra
+  		raw := brokerRoleYAML(t) + extra
   		switch key {
   		case "store.etcd.daemon":
   			raw = strings.Replace(raw, "    broker: {", "    daemon: {cert_file: /x, key_file: /y}\n    broker: {", 1)
   		case "broker.revocations_file":
   			raw = strings.Replace(raw, "  state_dir:", "  revocations_file: /var/lib/port49/r.json\n  state_dir:", 1)
   		}
-  		if _, err := loadBrokerYAML(t, raw); err == nil || !strings.Contains(err.Error(), key) {
+  		if _, err := loadBrokerRole(t, raw); err == nil || !strings.Contains(err.Error(), key) {
   			t.Errorf("port49-broker.yaml with %s loaded, or the refusal does not name it: %v", key, err)
   		}
   	}
@@ -4702,12 +6466,12 @@ Rulings 1, 2, 12.
   func TestTheBrokersConfigRequiresItsKeys(t *testing.T) {
   	for _, cut := range []string{"key_refs:", "state_dir:", "admin_socket:", "backend: etcd", "    broker: {"} {
   		var lines []string
-  		for _, l := range strings.Split(brokerYAML(t), "\n") {
+  		for _, l := range strings.Split(brokerRoleYAML(t), "\n") {
   			if !strings.Contains(l, cut) {
   				lines = append(lines, l)
   			}
   		}
-  		if _, err := loadBrokerYAML(t, strings.Join(lines, "\n")); err == nil {
+  		if _, err := loadBrokerRole(t, strings.Join(lines, "\n")); err == nil {
   			t.Errorf("port49-broker.yaml without %q loaded", cut)
   		}
   	}
@@ -4717,39 +6481,65 @@ Rulings 1, 2, 12.
   // broker: block, and names the policy it admits from (Review Focus 9;
   // Rulings 1, 2).
   func TestTheDaemonsConfigNeverNamesTheBrokersIdentity(t *testing.T) {
-  	base := daemonEtcdYAML(t) // store_test.go's etcd fixture, with the broker identity and block removed and policy: added
-  	if c, err := loadYAML(t, base); err != nil || c.Policy == nil || c.Broker != nil {
+  	base := daemonRoleYAML(t)
+  	if c, err := loadDaemonRole(t, base); err != nil || c.Policy == nil || c.Broker != nil {
   		t.Fatalf("the split daemon's config: %+v %v", c, err)
   	}
   	withBrokerID := strings.Replace(base, "    daemon: {", "    broker: {cert_file: /x, key_file: /y}\n    daemon: {", 1)
-  	if _, err := loadYAML(t, withBrokerID); err == nil || !strings.Contains(err.Error(), "store.etcd.broker") {
+  	if _, err := loadDaemonRole(t, withBrokerID); err == nil || !strings.Contains(err.Error(), "store.etcd.broker") {
   		t.Fatalf("a daemon config naming the broker's identity: %v", err)
   	}
-  	withBlock := base + brokerBlockYAML(t)
-  	if _, err := loadYAML(t, withBlock); err == nil || !strings.Contains(err.Error(), "port49-broker.yaml") {
+  	withBlock := strings.Replace(base, "policy: {file: /etc/port49/policy.yaml}\n", brokerBlock, 1)
+  	if _, err := loadDaemonRole(t, withBlock); err == nil || !strings.Contains(err.Error(), "port49-broker.yaml") {
   		t.Fatalf("a broker: block in port49d.yaml on etcd: %v", err)
   	}
-  	noPolicy := strings.Replace(base, "policy:", "unused_policy_marker:", 1)
-  	if _, err := loadYAML(t, noPolicy); err == nil {
-  		t.Fatal("port49d.yaml on etcd with no policy: loaded")
+  	noPolicy := strings.Replace(base, "policy: {file: /etc/port49/policy.yaml}\n", "", 1)
+  	if _, err := loadDaemonRole(t, noPolicy); err == nil || !strings.Contains(err.Error(), "policy") {
+  		t.Fatalf("port49d.yaml on etcd with no policy: %v", err)
+  	}
+  }
+
+  // StoreBlocks reads either file's store: block whatever role would load
+  // it (pre-flight I8): a 7d port49d.yaml naming both identities yields
+  // both, as store-roles needs; Load under the daemon's role refuses the
+  // same file. A block whose shape is wrong is refused by both.
+  func TestStoreBlocksReadsEitherFileWithNoRole(t *testing.T) {
+  	dir := storeFiles(t)
+  	both := []byte(storeDoc(dir, ""))
+  	sc, err := StoreBlocks(both)
+  	if err != nil || sc.Etcd == nil || sc.Etcd.Daemon.CertFile == "" || sc.Etcd.Broker == nil {
+  		t.Fatalf("a 7d file's two identities: %+v %v", sc, err)
+  	}
+  	if sc, err := StoreBlocks([]byte(brokerRoleYAML(t))); err != nil || sc.Etcd.Broker == nil ||
+  		sc.Etcd.Daemon.CertFile != "" {
+  		t.Fatalf("port49-broker.yaml: %+v %v", sc, err)
+  	}
+  	if sc, err := StoreBlocks([]byte(daemonRoleYAML(t))); err != nil || sc.Etcd.Broker != nil ||
+  		sc.Etcd.Daemon.CertFile == "" {
+  		t.Fatalf("port49d.yaml with no broker: %+v %v", sc, err)
+  	}
+  	misshapen := strings.Replace(storeDoc(dir, ""), "    endpoints: [https://etcd-0:2379]", "    endpoints: []", 1)
+  	if _, err := StoreBlocks([]byte(misshapen)); err == nil || !strings.Contains(err.Error(), "endpoints") {
+  		t.Fatalf("a store block with no endpoint was read: %v", err)
   	}
   }
   ```
 
-  `writeEtcdIdentity`, `writeInventory`, `writePolicy`, `daemonEtcdYAML`, `brokerBlockYAML` and
-  `loadYAML` are built from `store_test.go`'s and `config_test.go`'s fixtures. Name them in the
-  report.
-  - `writeInventory` writes an inventory with no key groups.
-  - `writePolicy` writes a policy whose key group assigns `core`, behind the fence's owner and
-    mode rules.
+  `TestAStoreIdentityNamedRootIsRefused` (`store_test.go:186`) keeps pinning the root refusal;
+  run it through `StoreBlocks` as well as `Load`, since `checkStoreShape` now holds that check.
+
+  Add `"fmt"` to the file's imports. `storeDoc(dir, startTimeout)` is `store_test.go`'s
+  (`:139`), a 7d port49d.yaml naming both identities.
 
   Then add to `config_test.go`: `TestAnInProcessBrokerSetsThePolicy` (`Config.Policy` mirrors
-  `broker.policy_file` and its interval on memory) and `TestPolicyIsRefusedBesideABrokerBlock`.
+  `broker.policy_file` and its interval on memory, through `loadWith(t, brokerBlock)`) and
+  `TestPolicyIsRefusedBesideABrokerBlock` (`loadWith(t, brokerBlock+"policy: {file:
+  /etc/port49/p.yaml}\n")` is refused naming `policy:`).
 
 - [ ] **Step 2: Run them to see them fail.**
 
   Run: `go test ./internal/config/ -count=1`
-  Expected: FAIL to compile (`LoadBroker`, `RoleBroker`, `Policy`).
+  Expected: FAIL to compile (`LoadBroker`, `RoleBroker`, `Policy`, `StoreBlocks`).
 
 - [ ] **Step 3: The role and the policy.** In `config.go`:
 
@@ -4864,9 +6654,19 @@ Rulings 1, 2, 12.
   - **`lab.seed_tokens`** under `RoleDaemon` with `store.backend: etcd` is refused ("lab seed
     tokens are minted by port49-broker on etcd").
 
-  `StoreOf(raw)` decodes either file. It cannot know the role from the bytes, so it calls
-  `checkStore` with the role whose identity the block names: the broker's if `store.etcd.broker`
-  is set and `store.etcd.daemon` is not, else the daemon's.
+  **`StoreBlocks` replaces `StoreOf`** (pre-flight I8).
+  - Split `checkStore` in two:
+    - `checkStoreShape(s storeYAML) (StoreConfig, error)` holds every check that is not a
+      role's: the endpoints, the CA file, durations and defaults, `roles`, each named
+      identity's files, and no identity whose CN is `root`;
+    - `checkStore(s, role, hasBroker, hasPolicy, hasAdminSocket)` calls it, then applies the
+      role's requirements above.
+  - `StoreBlocks(raw)` runs `staleSeedKeys`, the strict decode, and `checkStoreShape` alone,
+    so either identity may be present or absent.
+  - `storeroles.go`'s one call to `StoreOf` becomes `StoreBlocks`. Its output is unchanged on a
+    7d file until Task 16.
+  - In 0cc5573, `StoreOf` guessed a role from which identities were named. That refused a 7d
+    file naming both under the daemon's role, which Task 16 had promised keeps working.
 
 - [ ] **Step 5: One field for the policy.** Replace every read of `cfg.Broker.PolicyFile` and
   `cfg.Broker.PolicyWatchInterval` in `internal/port49d` with `cfg.Policy.File` and
@@ -4890,8 +6690,9 @@ Rulings 1, 2, 12.
 
   ```bash
   gofmt -w internal/config internal/port49d
-  git add internal/config/config.go internal/config/broker_test.go internal/config/config_test.go \
-    internal/config/store_test.go internal/port49d/main.go internal/port49d/reload.go internal/port49d/store.go
+  git add internal/config/config.go internal/config/broker_role_test.go internal/config/config_test.go \
+    internal/config/store_test.go internal/port49d/main.go internal/port49d/reload.go internal/port49d/store.go \
+    internal/port49d/storeroles.go
   git commit -m "feat(config): port49-broker.yaml, and port49d.yaml with no broker on etcd
 
   LoadBroker reads port49d.yaml's schema under the broker's role: key_refs
@@ -4917,6 +6718,8 @@ Rulings 1, 2, 12.
   an optional pass)
 - Modify: `internal/daemon/admin/admin.go` (`Server.RevokeElsewhere`), `admin_test.go`
 - Modify: `internal/port49d/store_e2e_test.go` (the etcd fixture: a split daemon config)
+- Modify: `internal/port49d/store_test.go` (its etcd tests on the split daemon, or moved to Task
+  15; pre-flight I9)
 
 **Interfaces:**
 - Consumes:
@@ -5107,9 +6910,11 @@ Ruling 11.
   }
   ```
 
-  In `openStores`, keep the daemon's guarded `RevStore` (`gd := guard.WrapRev(d, gc("daemon"))`),
-  wrap it with `crypt.Wrap(gd, …)` as today, and set `probe: func(ctx context.Context) { probe(ctx,
-  gd, e.HoldTTL/6) }`.
+  In `openStores`, keep the daemon's guarded, fenced `RevStore` (`gd :=
+  guard.WrapRev(crypt.Fenced(d, ledger), gc("daemon"))`, Task 8a). Wrap it with `crypt.Wrap(gd,
+  …)` as 7e-1 does, and set `probe: func(ctx context.Context) { probe(ctx, gd, e.HoldTTL/6) }`.
+  Each ping then waits for the context feed too, so a feed that has stopped fails the probe and
+  takes an idle port49d dark (Ruling 11).
 
 - [ ] **Step 6: `runOnce` with a policy and no broker.** In `main.go`, when `cfg.Broker == nil
   && cfg.Policy != nil`:
@@ -5146,13 +6951,28 @@ Ruling 11.
   - Delete `TestASecondPort49dWaitsForTheKeyspace`: Ruling 11 withdraws it, and
     `TestTwoDaemonsServeOneKeyspace` replaces it.
 
-  Each skipped test stays in the file, named in the report, and Task 15 fails its review if one
-  is left skipped.
+  **`store_test.go`'s etcd tests** (pre-flight I9). Each builds a port49d.yaml with a `broker:`
+  block on etcd and calls `openStores`, which Task 13 refuses and this task splits. Each is
+  moved, by name:
+
+  | Test (`internal/port49d/store_test.go`) | Now |
+  |---|---|
+  | `TestOpenStoresSharesOneSayer` (`:427`) | on `etcdSplit`'s daemon config: the daemon's layer and the probe's share one sayer. Its broker half moves to Task 15 as `TestTheBrokersStoresShareOneSayer`, on `brokerSplit` |
+  | `TestARaisedAlarmIsGaugedWhileTheStoreIsAway` (`:466`) | on `etcdSplit`'s daemon config, unchanged in what it asserts: the daemon reads the seal keys and raises the alarm too |
+  | `TestAHoldStillOnThisPort49dsLastRunIsSaidAsIts` (`:529`) | moves to Task 15's `brokerd_test.go` as `TestAHoldStillOnThisReplicasLastRunIsSaidAsIts`: the hold is the runner's. Mark it skipped here, as the e2e tests are |
+  | `TestTheRolesCheckRunsTheBrokersUnderUnenforced` (`:130`) | splits. The daemon's half stays: under `roles: unenforced` the daemon's check is skipped and said. The broker's half moves to Task 15 as `TestTheBrokersRolesCheckRunsUnderUnenforced`, on the broker's identity alone |
+  | `TestAStartAfterAStoreGoneRetriesEveryError` (`:178`) | on `etcdSplit`'s daemon config, unchanged in what it asserts |
+  | `TestTheStartsCarryDecidesHoldOrOpen` (`:217`) | the daemon has no hold, so its pure function's hold branch is the runner's: moved to Task 15 with the takeover, and skipped here |
+
+  Each test kept here passes in this task. Each skipped one is named in the report, and Task 15
+  fails its review if one is left skipped. 7d's I-2 line ("still held by this port49d's last
+  run") becomes the runner's (Task 15, pre-flight M7).
 
 - [ ] **Step 8: Run everything.**
 
   Run: `make build && make test && make vet`
-  Expected: PASS, with the four 7d e2e tests skipped and named.
+  Expected: PASS, with the four 7d e2e tests and the two hold tests of `store_test.go` skipped
+  and named.
 
 - [ ] **Step 9: Commit.**
 
@@ -5160,7 +6980,7 @@ Ruling 11.
   gofmt -w internal/port49d internal/daemon/admin
   git add internal/port49d/daemon.go internal/port49d/daemon_test.go internal/port49d/main.go \
     internal/port49d/store.go internal/port49d/reload.go internal/port49d/store_e2e_test.go \
-    internal/daemon/admin/admin.go internal/daemon/admin/admin_test.go
+    internal/port49d/store_test.go internal/daemon/admin/admin.go internal/daemon/admin/admin_test.go
   git commit -m "feat(port49d): serve TACACS+ on etcd with no broker inside
 
   With the daemon's identity alone: no hold, the seal keys read and never
@@ -5187,7 +7007,10 @@ Ruling 11.
 - Modify: `internal/port49d/store.go` (`lineHolder`'s shape takes `port49-broker on …`;
   `startOnPersistentStore` becomes the runner's takeover)
 - Modify: `internal/port49d/certstatus.go` (the state dir)
-- Modify: `internal/port49d/store_e2e_test.go` (Task 14's skipped tests, on the split)
+- Modify: `internal/port49d/store_e2e_test.go` (Task 14's skipped tests, on the split),
+  `internal/port49d/store_test.go` (Task 14's skipped hold tests, moved here)
+- Modify: `internal/daemon/admin/admin.go` (`Server.DiagnoseElsewhere`), `admin_test.go`
+  (pre-flight M16)
 - Modify: `Makefile` (`build`)
 
 **Interfaces:**
@@ -5195,10 +7018,11 @@ Ruling 11.
   - Tasks 13–14: `config.LoadBroker`, `Config.Policy`, `Config.KeyRefs()`,
     `BrokerConfig.StateDir`;
   - Task 14: `newReloader(cfg, live, log, pass, m, now)`;
-  - 7e-1: `crypt.LoadLedger`, `crypt.FollowContexts`, `crypt.KeepLedger`, `store.LoadMarks`,
-    `store.FollowMarks`, `Broker.MarkChanged`;
+  - 7e-1: `crypt.LoadLedger`, `crypt.FollowContexts`, `crypt.Fenced`, `crypt.KeepLedger`,
+    `store.LoadMarks`, `store.FollowMarks`, `Broker.MarkChanged`;
   - 7d: `etcd.Store.Hold`, `Broker.ApplyMarksAtStart`, `Broker.RefreshAtStart`,
-    `Broker.ReindexContexts`, `etcd.Store.Unindexed`, `sweepLoop`, `startLeftBy`.
+    `Broker.ReindexContexts`, `etcd.Store.Unindexed`, `startLeftBy`;
+  - Task 7: `sweepLoop(ctx, s, brk, ledger, every, out)`.
 - Produces:
   - `func port49d.BrokerMain(args []string) int`, behind `cmd/port49-broker`.
   - `func runBroker(parent context.Context, cfgPath string) error`.
@@ -5206,15 +7030,25 @@ Ruling 11.
     - `func (r *runner) run(ctx context.Context)`: hold, takeover, duties, loss, again;
     - `func (r *runner) running() bool`.
   - `func (b *broker.Broker) RefreshTokens(ctx context.Context, priors []broker.Prior) (broker.RefreshReport, error)`.
-  - `func (s *etcd.Store) Judged(ctx context.Context) (string, bool, error)` and
-    `func (s *etcd.Store) PutJudged(ctx context.Context, bundle string) error`, at `meta/judged`.
+  - `type etcd.JudgedRecord struct { Bundle string; Policy []byte }`;
+    `func (s *etcd.Store) Judged(ctx context.Context) (JudgedRecord, bool, error)` and
+    `func (s *etcd.Store) PutJudged(ctx context.Context, bundle string, policy []byte) error`, at
+    `meta/judged`. `policy` is the bundle's policy file (`policy.Policy.Raw()`), for Task 15a's
+    guard at start. Above `maxJudgedPolicy` (1 MiB) it is left out and the record says so
+    (Ruling 17).
+  - `func (r *runner) recordJudged(ctx context.Context, why string)`: the one place
+    `meta/judged` is written, by the takeover with nothing owed and by `onSettled` (pre-flight
+    I2). Task 15a adds its condition that every replica serves the bundle.
+  - `admin.Server.DiagnoseElsewhere string`: when set and `Held` is nil, a `keys_diagnose` is
+    refused naming it.
   - `const settleMin = 30 * time.Second`; `func settleAfter(interval time.Duration) time.Duration`
     is `max(settleMin, 2*interval+5*time.Second)`, which replaces the constant
     `settleAfterReload` at its uses.
 
 Rulings 6, 7, 8, 9, 12, 13. The broker process is port49d's broker path, with no TACACS+
 listener, on the broker's identity alone, and with the start steps moved behind the runner's
-hold.
+hold. Task 15a adds policy across replicas and the guard at start, and Task 15b the marks copy
+and the offline revocation, each on this task's runner.
 
 - [ ] **Step 1: The failing tests.** Create `internal/port49d/brokerd_test.go`. The fixture,
   `splitFleet(t)`, is one TLS etcd member with the roles, one `port49d.yaml` and one
@@ -5246,10 +7080,66 @@ hold.
   	}
   }
 
+  // A runner cut off from etcd, which neither releases its lease nor renews
+  // it (a crash, a partition, or a pause past its fence), is replaced once
+  // its lease lapses: within hold_ttl and a third. Back, it says it lost the
+  // hold and waits behind the new runner; it runs nothing while that one
+  // holds (Review Focus 4; pre-flight M9). A graceful stop releases the
+  // lease at once, so TestARunnerThatStopsIsReplaced alone never reaches
+  // this path.
+  func TestARunnerCutOffIsReplacedAfterItsLease(t *testing.T) {
+  	var out syncBuffer
+  	e := stderr
+  	t.Cleanup(func() { stderr = e })
+  	stderr = &out
+  	f := splitFleet(t) // hold_ttl 10s
+  	cfgA, proxyA := f.copyBrokerVia(t) // A reaches etcd through a proxy of its own
+  	startBroker(t, cfgA, &out, 1)
+  	waitFor(t, &out, "runner: took keyspace /port49/")
+  	startBroker(t, f.copyBroker(t), &out, 2)
+  	waitFor(t, &out, "this replica serves the API and takes over if that one stops")
+  	start := time.Now()
+  	proxyA.Hang(true)
+  	waitWithin(t, &out, "runner: lost the keyspace's hold", 15*time.Second)
+  	waitCountWithin(t, &out, "runner: took keyspace /port49/", 2, 30*time.Second)
+  	if d := time.Since(start); d > 10*time.Second+10*time.Second/3+5*time.Second {
+  		t.Fatalf("the takeover after a lease never released took %v", d)
+  	}
+  	proxyA.Hang(false)
+  	time.Sleep(10 * time.Second) // A tries again every 5s; B holds throughout
+  	if n := strings.Count(out.String(), "runner: took keyspace /port49/"); n != 2 {
+  		t.Fatalf("a runner cut off and back took the hold while another held it: %d takes", n)
+  	}
+  }
+
+  // A clean takeover, with nothing owed after its carry, records its bundle
+  // as judged itself: no reloader pass runs to do it (pre-flight I2). The
+  // next takeover on the same bundle purges nothing.
+  func TestACleanTakeoverRecordsItsBundleAsJudged(t *testing.T) {
+  	var out syncBuffer
+  	e := stderr
+  	t.Cleanup(func() { stderr = e })
+  	stderr = &out
+  	f := splitFleet(t)
+  	_, stop := startBroker(t, f.broker, &out, 1)
+  	waitFor(t, &out, "runner: recorded bundle ")
+  	resp, err := f.srv.Client(t, "root").Get(context.Background(), "/port49/v1/meta/judged")
+  	if err != nil || len(resp.Kvs) != 1 || !strings.Contains(string(resp.Kvs[0].Value), `"bundle":"`+f.bundle(t)+`"`) {
+  		t.Fatalf("meta/judged after a clean takeover: %v %v", resp, err)
+  	}
+  	if err := stop(); err != nil {
+  		t.Fatal(err)
+  	}
+  	startBroker(t, f.broker, &out, 2)
+  	waitFor(t, &out, "is the one the last runner judged; no unspent token purged")
+  }
+
   // A takeover purges the unspent tokens only when the bundle in force is
   // not the one the last runner judged (Ruling 7): a broker restart on the
   // same policy keeps a minted token redeemable; an edit made with no
-  // broker running purges it, and an idempotent replay mints afresh.
+  // broker running purges it, and an idempotent replay mints afresh. Each
+  // step waits on the judged line, never on a gauge already at 0 (pre-flight
+  // I14).
   func TestATakeoverPurgesOnlyAnUnjudgedBundle(t *testing.T) {
   	var out, log syncBuffer
   	e, o := stderr, stdout
@@ -5258,15 +7148,14 @@ hold.
   	f := splitFleet(t)
   	tacacs := startDaemon(t, f.daemon, &out, 1)
   	api, stop := startBroker(t, f.broker, &out, 1)
-  	waitFor(t, &out, "runner: took keyspace")
-  	waitForGauge(t, &out, "port49_policy_refresh_pending", 0) // judged
+  	waitForCount(t, &out, "runner: recorded bundle ", 1)
   	kept := mintOn(t, api, f.pki, "leaf1")
   	stop()
   	api, stop = startBroker(t, f.broker, &out, 2)
   	waitFor(t, &out, "is the one the last runner judged; no unspent token purged")
   	dev := tacacsClient{t: t, addr: tacacs, key: []byte("run-test-secret")}
   	if st := dev.login("alice", kept); st != wire.AuthenStatusPass {
-  		t.Fatalf("a token minted before a broker restart on the same policy: %d", st)
+  		t.Fatalf("control: a token minted before a broker restart on the same policy: %d", st)
   	}
   	spare := mintOn(t, api, f.pki, "leaf1")
   	stop()
@@ -5276,15 +7165,22 @@ hold.
   	if st := dev.login("alice", spare); st == wire.AuthenStatusPass {
   		t.Fatal("a token minted under a bundle no runner judged was not purged")
   	}
+  	waitForCount(t, &out, "runner: recorded bundle ", 3) // the purge's takeover records the new bundle too
   }
 
   // A token another replica minted under the replaced policy before it
-  // reloaded is judged by the runner's settle pass (Ruling 8).
+  // reloaded is judged by the runner's settle pass (Ruling 8). The settle's
+  // delay is exact, not merely past a floor (pre-flight M4).
   func TestTheSettlePassJudgesALateReplicasTokens(t *testing.T) {
-  	r := newReloaderForTest(t) // reload_test.go's fixture: a runner reloader on a memory broker
-  	if got := settleAfter(r.interval); got < 2*r.interval {
-  		t.Fatalf("settle %v is not past two watch intervals %v", got, r.interval)
+  	for interval, want := range map[time.Duration]time.Duration{
+  		time.Second: 30 * time.Second, 5 * time.Second: 30 * time.Second,
+  		20 * time.Second: 45 * time.Second, time.Minute: 125 * time.Second,
+  	} {
+  		if got := settleAfter(interval); got != want {
+  			t.Fatalf("settleAfter(%v) = %v, want %v", interval, got, want)
+  		}
   	}
+  	r := newReloaderForTest(t) // reload_test.go's fixture: a runner reloader on a memory broker
   	r.swapTo(t, withdrawnGrantPolicy) // the edit that withdraws alice's grant
   	tok := mintUnder(t, r, oldPolicy)  // another replica, still on the old policy
   	r.runFirstPass(t)
@@ -5295,21 +7191,49 @@ hold.
   }
   ```
 
-  Write the third test's helpers from `reload_test.go`'s fixture:
+  Write the settle test's helpers from `reload_test.go`'s fixture:
   - `mintUnder` mints through a second `*broker.Broker` on the same store, holding the old
     policy;
   - `runFirstPass` and `runSettlePass` call `r.refresh` with the clock moved to each.
+
+  `splitFleet`'s further helpers:
+  - `f.copyBrokerVia(t) (string, *etcdtest.Proxy)` is `copyBroker` with the endpoint through
+    an `etcdtest.NewProxy` of its own;
+  - `f.bundle(t)` is the bundle the policy file loads into, read as `loadPolicy` reads it;
+  - `f.srv` is the member, for a root client.
+  `waitFor`, `waitForCount`, `waitWithin` and `waitCountWithin` are the package's own.
 
   Add to `refresh_test.go`: `TestRefreshTokensJudgesTokensAndNoContext`. It deletes a
   superseded token and leaves a context on the withdrawn grant untouched, and returns a report
   whose context counts are all 0.
 
-  Add to `meta_test.go`: `TestJudgedIsReadBackAndAbsentIsNotFound`.
+  Add to `meta_test.go`: `TestJudgedIsReadBackAndAbsentIsNotFound`. It covers four cases:
+  - a record written with its policy reads back both;
+  - one whose policy is over `maxJudgedPolicy` reads back the bundle and no policy;
+  - an absent record is `ok` false with no error;
+  - a record that does not decode is `ok` false, with its key said.
+
+  Add to `admin_test.go`: `TestAKeysDiagnoseWithNoPacketsNamesWhereItIs`. A `Server` with
+  `DiagnoseElsewhere` set and `Held` nil answers `keys_diagnose` with an error naming
+  port49d's admin socket.
+
+  Unskip, and move into `brokerd_test.go` on `splitFleet`, the hold tests Task 14 skipped in
+  `store_test.go` (pre-flight I9):
+  - **`TestAHoldStillOnThisReplicasLastRunIsSaidAsIts`.** A runner whose hold was lost, and
+    whose lease is live, says `is still held by this replica's last run`, never "is run by"
+    itself. A holder that is another replica's is named as that one (pre-flight M7; 7d's
+    4001732).
+  - **`TestTheBrokersRolesCheckRunsUnderUnenforced`.** Under `roles: unenforced` the broker's
+    check still refuses an identity that cannot do the broker's work.
+  - **`TestTheBrokersStoresShareOneSayer`.** The broker's sealing layer and the runner's reads
+    share one sayer.
+  - **`TestTheStartsCarryDecidesHoldOrOpen`.** It is now the takeover's.
 
 - [ ] **Step 2: Run them to see them fail.**
 
-  Run: `go test ./internal/port49d/ ./internal/broker/ ./internal/store/etcd/ -run 'Runner|Takeover|Settle|RefreshTokens|Judged' -count=1`
-  Expected: FAIL to compile.
+  Run: `go test ./internal/port49d/ ./internal/broker/ ./internal/store/etcd/ ./internal/daemon/admin/ -run 'Runner|Takeover|Settle|RefreshTokens|Judged|LastRun|Unenforced|Sayer|Carry|KeysDiagnose' -count=1`
+  Expected: FAIL to compile. Once it compiles against a takeover that writes no `meta/judged`,
+  `TestACleanTakeoverRecordsItsBundleAsJudged` fails waiting for its line.
 
 - [ ] **Step 3: The broker's token half.** In `refresh.go`:
 
@@ -5341,31 +7265,50 @@ hold.
 - [ ] **Step 4: The judged record.** In `meta.go`:
 
   ```go
+  // maxJudgedPolicy is the most of a policy file meta/judged carries: under
+  // etcd's request limit (1.5 MiB by default) with room for the record.
+  const maxJudgedPolicy = 1 << 20
+
   type judgedRec struct {
   	Bundle    string    `json:"bundle"`
+  	Policy    []byte    `json:"policy,omitempty"`
+  	Omitted   bool      `json:"policy_omitted,omitempty"`
   	WrittenAt time.Time `json:"written_at"`
   }
 
-  // Judged is the bundle the last runner's pass left
-  // port49_policy_refresh_pending at 0 under (plan 7e, Ruling 7); ok is
-  // false when none was recorded. A record that does not decode is ok false
-  // too, said by its key alone: a takeover then purges, which fails closed.
-  func (s *Store) Judged(ctx context.Context) (bundle string, ok bool, err error) {
+  // JudgedRecord is meta/judged: the bundle a runner last judged every
+  // unspent token against (plan 7e, Ruling 7), and its policy file, for the
+  // reload guard at a start (Ruling 17). Policy is nil when the file was
+  // over maxJudgedPolicy.
+  type JudgedRecord struct {
+  	Bundle string
+  	Policy []byte
+  }
+
+  // Judged reads meta/judged; ok is false when none was recorded. A record
+  // that does not decode is ok false too, said by its key alone: a takeover
+  // then purges, which fails closed.
+  func (s *Store) Judged(ctx context.Context) (JudgedRecord, bool, error) {
   	var r judgedRec
   	_, found, err := getJSON(ctx, s.ctx, s.k.meta("judged"), &r)
   	if errors.Is(err, errNotDecoded) { // whatever getJSON's undecodable error is at b508ba0
   		s.logf("etcd: %s does not decode; the takeover purges the unspent tokens", s.k.meta("judged"))
-  		return "", false, nil
+  		return JudgedRecord{}, false, nil
   	}
   	if err != nil || !found {
-  		return "", false, err
+  		return JudgedRecord{}, false, err
   	}
-  	return r.Bundle, true, nil
+  	return JudgedRecord{Bundle: r.Bundle, Policy: r.Policy}, true, nil
   }
 
-  // PutJudged records bundle as judged, as the broker.
-  func (s *Store) PutJudged(ctx context.Context, bundle string) error {
-  	body, err := json.Marshal(judgedRec{Bundle: bundle, WrittenAt: s.now().UTC()})
+  // PutJudged records bundle as judged, with its policy file unless that is
+  // over maxJudgedPolicy, as the broker.
+  func (s *Store) PutJudged(ctx context.Context, bundle string, policy []byte) error {
+  	r := judgedRec{Bundle: bundle, Policy: policy, WrittenAt: s.now().UTC()}
+  	if len(policy) > maxJudgedPolicy {
+  		r.Policy, r.Omitted = nil, true
+  	}
+  	body, err := json.Marshal(r)
   	if err != nil {
   		return err
   	}
@@ -5374,7 +7317,10 @@ hold.
   }
   ```
 
-  Check `getJSON`'s error for a record that does not decode at `b508ba0`, and match it.
+  Check `getJSON`'s error for a record that does not decode at `b508ba0`, and match it. The
+  daemon's role reads `meta/`, so port49d can read the policy here. That is no wider than the
+  policy file port49d already reads from disk, and the file names no secret (key groups name key
+  references, never keys).
 
 - [ ] **Step 5: The settle covers a late replica.** In `reload.go`:
   - add `settleMin` and `settleAfter`, and use `settleAfter(r.interval)` where `settleAfterReload`
@@ -5384,7 +7330,8 @@ hold.
     the newest's span at `rep.At`, so the settle pass judges every token minted under each of
     them since;
   - when a complete pass leaves `PolicyRefreshPending` at 0 and `r.onSettled` is set, call
-    `r.onSettled(r.live.Load().Bundle)`.
+    `r.onSettled(r.live.Load())`. `onSettled` is now `func(pol *policy.Policy)`, so the
+    record can carry `pol.Raw()`.
 
   Update `refresh`'s comment. Every existing reload test passes: a pass with no settle owed
   resets as before.
@@ -5421,6 +7368,15 @@ hold.
   	e := r.cfg.Store.Etcd
   	for ctx.Err() == nil {
   		lost, release, err := r.raw.Hold(ctx, e.HoldTTL, r.who, func(holder string) {
+  			if r.held != "" && holder == r.held {
+  				// This replica's own last run, whose hold was lost and whose
+  				// lease lives on: never "run by" itself (7d's I-2, 4001732;
+  				// pre-flight M7).
+  				fmt.Fprintf(stderr, "port49-broker: runner: keyspace %s is still held by this replica's last run "+
+  					"(%s); waiting up to hold_ttl (%v) for its lease to expire\n", e.Prefix, lineHolder(holder),
+  					e.HoldTTL)
+  				return
+  			}
   			fmt.Fprintf(stderr, "port49-broker: runner: keyspace %s is run by %s; this replica serves the API and "+
   				"takes over if that one stops\n", e.Prefix, lineHolder(holder))
   		})
@@ -5449,6 +7405,10 @@ hold.
   		<-done
   		r.on.Store(false)
   		r.m.StoreKeyspaceHeld.Set(0)
+  		// The keeper reports (0, false) as it stops; set them here too, for
+  		// a takeover that failed before the keeper started (pre-flight I11).
+  		r.m.LedgerPending.Set(0)
+  		r.m.LedgerBehind.Set(0)
   		release()
   		sleepCtx(ctx, 5*time.Second)
   	}
@@ -5470,12 +7430,35 @@ hold.
   	go func() { defer wg.Done(); sweepLoop(ctx, r.raw, r.brk, r.ledger, r.cfg.Store.Etcd.SweepInterval, stderr) }()
   	go func() {
   		defer wg.Done()
-  		crypt.KeepLedger(ctx, r.ledger, r.raw, time.Second, func(n int) { r.m.LedgerPending.Set(float64(n)) },
-  			func(f string, a ...any) { fmt.Fprintf(stderr, "port49-broker: "+f+"\n", a...) })
+  		crypt.KeepLedger(ctx, r.ledger, r.raw, time.Second, func(n int, behind bool) {
+  			r.m.LedgerPending.Set(float64(n))
+  			r.m.LedgerBehind.Set(b2f(behind))
+  		}, func(f string, a ...any) { fmt.Fprintf(stderr, "port49-broker: "+f+"\n", a...) })
   	}()
   	wg.Wait()
   }
+
+  // recordJudged writes meta/judged for the policy in force, retried while
+  // the store is unavailable and ctx lives, and says so (plan 7e, Ruling 7;
+  // pre-flight I2). It is the only writer of the record: the takeover calls
+  // it once its carry leaves nothing owed, and the reloader's onSettled
+  // whenever a pass leaves nothing pending. Task 15a adds that every
+  // replica must serve the bundle.
+  func (r *runner) recordJudged(ctx context.Context, why string) {
+  	pol := r.brk.Policy.Load()
+  	if err := retryCtx(ctx, func() error { return r.raw.PutJudged(ctx, pol.Bundle, pol.Raw()) }); err != nil {
+  		if ctx.Err() == nil {
+  			fmt.Fprintf(stderr, "port49-broker: runner: recording bundle %s as judged: %v; the next takeover "+
+  				"purges the unspent tokens\n", pol.Bundle, err)
+  		}
+  		return
+  	}
+  	fmt.Fprintf(stderr, "port49-broker: runner: recorded bundle %s as judged (%s)\n", pol.Bundle, why)
+  }
   ```
+
+  `retryCtx` is the takeover's retry, tried every 5s while `store.ErrUnavailable` and `ctx`
+  lives. A failure fails toward purging at the next takeover, which denies more.
 
   `takeover(ctx) error` is 7d's `startOnPersistentStore`, renamed and moved here, with these
   changes:
@@ -5487,25 +7470,35 @@ hold.
   ```go
   	bundle := r.brk.Policy.Load().Bundle
   	judged, ok, err := r.raw.Judged(ctx) // retried while unavailable, as every step is
-  	if ok && judged == bundle {
+  	if ok && judged.Bundle == bundle {
   		fmt.Fprintf(stderr, "port49-broker: runner: the bundle in force (%s) is the one the last runner judged; no "+
   			"unspent token purged\n", bundle)
   	} else {
   		at := r.brk.Now()
   		// SupersedeAll first: a replay after any token is gone mints afresh (Task 5).
-  		// … retry(st.SupersedeAll(ctx, at)), then n, err := st.PurgeTokens(ctx) …
+  		if err := retryCtx(ctx, func() error { return r.st.SupersedeAll(ctx, at) }); err != nil {
+  			return err
+  		}
+  		var n int
+  		if err := retryCtx(ctx, func() (e error) { n, e = r.st.PurgeTokens(ctx); return }); err != nil {
+  			return err
+  		}
   		fmt.Fprintf(stderr, "port49-broker: runner: the bundle in force (%s) is not the one the last runner judged "+
-  			"(%s); %d unspent token(s) purged (run 'port49 token' again)\n", bundle, orNone(judged, ok), n)
+  			"(%s); %d unspent token(s) purged (run 'port49 token' again)\n", bundle, orNone(judged.Bundle, ok), n)
   	}
   ```
 
   - the carry's owed pass (`startLeftBy`) goes to `r.rel.startLeft(now)` through the reloader's
     own goroutine. Send it on a channel the reloader's `run` selects on (`r.rel.owed`), never by
     calling into the reloader from this goroutine;
+  - **when the carry leaves no pass owed** (7d's `store.go:741-745`, where no reloader pass
+    runs), the takeover calls `r.recordJudged(ctx, "the takeover's carry left nothing owed")`
+    as its last step (pre-flight I2). Without it, a first install and every takeover after a
+    purge left `meta/judged` absent, and every later takeover purged again;
   - `ledger.Seal()` is gone (7e-1).
 
-  `sweepLoop` gains the ledger argument, and prunes it after each sweep (Task 7 Step 5 added the
-  prune).
+  `sweepLoop` takes the ledger since Task 7 (pre-flight M16), and prunes it after each sweep.
+  The runner calls it as written above.
 
 - [ ] **Step 7: `runBroker`.** Create `internal/port49d/brokerd.go`. Its body is `runOnce`'s
   broker path, in this order, each step as `runOnce` does it today unless said:
@@ -5519,30 +7512,35 @@ hold.
      `start_timeout` on a cold start, no deadline after.
      - Its guard has `StopAfter: 0`. A broker never goes dark: the API answers 503
        `store_unavailable` from the guard, and readiness is never the store's (design §12).
-     - It is wrapped as `crypt.Wrap(guard.WrapRev(b, gc("broker")), keys, …,
-       crypt.WithLedger(ledger))`.
-  6. The ledger: `crypt.LoadLedger(ctx, b, b, keys, ledger)`, then `crypt.FollowContexts`. The
-     marks: `store.LoadMarks(ctx, b, marks, nil)`. Both are retried while unavailable.
+     - It is wrapped as `crypt.Wrap(guard.WrapRev(crypt.Fenced(b, ledger), gc("broker")), keys, …,
+       crypt.WithLedger(ledger))`: the broker's context reads wait for its feed as port49d's do
+       (Task 8a). A broker whose feed is down answers 503 `store_unavailable` for what reads a
+       context, and its refresh leaves those contexts pending. It never admits one.
+  6. The ledger: `crypt.LoadLedger(ctx, b, b, keys, ledger)`, then `crypt.FollowContexts` on its
+     goroutine at once. The marks: `store.LoadMarks(ctx, b, marks, nil)`. Both are retried while
+     unavailable.
   7. `buildBrokerAnchor` (the minter, the session manager, `brk.Marks = marks`, `Persist` nil).
      Certificate status with `certStatusConfig(*cs, anchorCert, cfg.Broker.StateDir)`.
   8. The broker listener, every mark in `marks.All()` put in it, `brk.Conns = bl`. Then
      `store.FollowMarks(ctx, b, marks, rev, brk.MarkChanged, …)`.
   9. The admin socket: `admin.Server{Revoke: adminRevoke(brk), Revocations: adminRevocations(st),
-     Now: time.Now}`, with `Held` nil. A `keys_diagnose` there is answered `port49-broker holds no
-     device packets; keys diagnose is port49d's admin socket`.
+     Now: time.Now, DiagnoseElsewhere: "port49d's admin socket"}`, with `Held` nil. In
+     `admin.go`'s `keys_diagnose` case, when `s.Held == nil && s.DiagnoseElsewhere != ""`, the
+     answer is `Response{Error: "port49-broker holds no device packets; keys diagnose is " +
+     s.DiagnoseElsewhere}` (pre-flight M16).
   10. The lab's seeds, if any (`mintSeeds`), on every broker start.
   11. Serve. `port49-broker: listening on <api>, metrics on <metrics>`. `brk.SetReady(ReadyServing)`.
   12. The reloader: `newReloader(cfg, brk.Policy, brk.Log, pass, m, time.Now)`, where `pass`
       calls `brk.Refresh` while `rn.running()` and `brk.RefreshTokens` otherwise, and
-      `onSettled` calls `rn.raw.PutJudged` while running.
+      `onSettled` calls `rn.recordJudged(ctx, "a pass left nothing pending")` while running.
   13. The runner, `rn.run(ctx)`, on its goroutine.
   14. On a signal: drain as `runOnce` does. The runner lets go of the hold; the listener, the
       admin socket and the reloader stop. Every goroutine is joined.
 
   `BrokerMain(args)` parses `--config` (default `/etc/port49/port49-broker.yaml`), refuses any
-  subcommand or extra argument (exit 2), and runs `runBroker` under `signal.NotifyContext`, as
-  `Main` runs `run`. SIGHUP is caught and reloads, as port49d's does. Create
-  `cmd/port49-broker/main.go`:
+  other subcommand or extra argument (exit 2), and runs `runBroker` under `signal.NotifyContext`,
+  as `Main` runs `run`. SIGHUP is caught and reloads, as port49d's does. Task 15b adds the one
+  subcommand, `revoke --offline`. Create `cmd/port49-broker/main.go`:
 
   ```go
   // Command port49-broker is port49's broker, its own process on etcd (plan
@@ -5584,18 +7582,727 @@ hold.
   gofmt -w internal/port49d internal/broker internal/store/etcd cmd/port49-broker
   git add cmd/port49-broker/main.go internal/port49d/brokerd.go internal/port49d/runner.go \
     internal/port49d/brokerd_test.go internal/port49d/reload.go internal/port49d/reload_test.go \
-    internal/port49d/store.go internal/port49d/certstatus.go internal/port49d/store_e2e_test.go \
-    internal/broker/refresh.go internal/broker/refresh_test.go internal/store/etcd/meta.go \
-    internal/store/etcd/meta_test.go Makefile
+    internal/port49d/store.go internal/port49d/store_test.go internal/port49d/certstatus.go \
+    internal/port49d/store_e2e_test.go internal/broker/refresh.go internal/broker/refresh_test.go \
+    internal/store/etcd/meta.go internal/store/etcd/meta_test.go internal/daemon/admin/admin.go \
+    internal/daemon/admin/admin_test.go Makefile
   git commit -m "feat(port49-broker): the broker as its own process, with one runner per keyspace
 
   port49-broker serves the API on the broker's identity alone. Its
   replicas share the keyspace hold as the runner's: the runner records the
   seal keys, re-indexes, applies the marks, purges only a bundle no runner
-  judged, carries the policy, sweeps, and keeps the ledger record; every
-  replica runs its own reload's token half. The settle pass keeps the
-  replaced policies until it completes, so a late replica's tokens are
-  judged (plan 7e Rulings 6-9, 12, 13).
+  judged, carries the policy, records its bundle as judged when nothing is
+  owed (pre-flight I2), sweeps, and keeps the ledger record; every replica
+  runs its own reload's token half. A replica whose last run still holds
+  the lease says so (7d's I-2). The settle pass keeps the replaced
+  policies until it completes, so a late replica's tokens are judged (plan
+  7e Rulings 6-9, 12, 13).
+
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  ```
+
+---
+
+### Task 15a: Policy across replicas, and the reload guard at a start
+
+**Files:**
+- Modify: `internal/store/etcd/meta.go` (`PutBundle`, `Bundles`, `Holder`, `PutRefreshOwed`,
+  `RefreshOwed`, `ClearRefreshOwed`), `meta_test.go`
+- Create: `internal/port49d/policyskew.go`, `internal/port49d/policyskew_test.go`
+- Create: `internal/port49d/startguard.go`, `internal/port49d/startguard_test.go`
+- Modify: `internal/port49d/reload.go` (`onSwap`; `fullPass`, the channel a full context pass
+  is owed on), `internal/port49d/runner.go` (`recordJudged`'s condition; the owed passes),
+  `internal/port49d/brokerd.go` (the guard at start; the bundle keeper)
+- Modify: `internal/daemon/metrics/metrics.go`, `metrics_test.go` (`PolicyBundleMatchesRunner`)
+- Modify: `internal/port49d/brokerd_test.go` (the fleet tests below)
+
+**Interfaces:**
+- Consumes: Task 15's runner, `recordJudged`, `etcd.JudgedRecord`; `bundle.CheckAdmission`;
+  `parseBundle`, `refusalLine`; `policy.MaxTokenTTL` (Task 5).
+- Produces (`etcd`):
+  - `type BundleRecord struct { Who, Bundle string; At time.Time }`.
+  - `func (s *Store) PutBundle(ctx context.Context, who, bundle string, ttl time.Duration) error`:
+    `meta/bundles/<esc(who)>`, on a lease of `ttl`.
+  - `func (s *Store) Bundles(ctx context.Context) ([]BundleRecord, error)`: every live record. A
+    record that does not decode is an error naming its key.
+  - `func (s *Store) Holder(ctx context.Context) (string, bool, error)`: `meta/holder`, the
+    runner's `who`. Export the read `Hold`'s wait already makes, if it is not exported at
+    `b508ba0`.
+  - `func (s *Store) PutRefreshOwed(ctx context.Context, who, bundle string) error`,
+    `func (s *Store) RefreshOwed(ctx context.Context) (rev uint64, rec BundleRecord, ok bool, err error)`
+    and `func (s *Store) ClearRefreshOwed(ctx context.Context, rev uint64) error`. The clear is a
+    delete on a compare of the record's mod revision, so an ask written during the pass stays.
+- Produces (`port49d`):
+  - `func keepBundle(ctx context.Context, raw bundleStore, who string, live *policy.Live, ttl time.Duration, swapped <-chan struct{}, m *metrics.Metrics, out io.Writer)`.
+    Every `ttl/3`, and at once on each receive from `swapped`, it writes this replica's
+    record. Each round it reads `Bundles` and `Holder`, sets
+    `port49_policy_bundle_matches_runner`, and says a mismatch once per pair of bundles.
+  - `func owedFullPassAt(lastMismatch time.Time) time.Time`: `lastMismatch.Add(policy.MaxTokenTTL)`.
+  - `reloader.onSwap func(pol *policy.Policy)`, called after every swap, on the reloader's
+    goroutine.
+  - `reloader.fullPass chan fullPassOwed`, which `run` selects on. A full context pass is
+    `brk.Refresh(ctx, []broker.Prior{{Policy: cur, At: now}})`, said as `runner: a full
+    context pass owed by <who> (bundle …): <report>`.
+  - `func guardAtStart(ctx context.Context, cfg config.Config, judged judgedReader, pol *policy.Policy, now time.Time) (refused error, said string)`.
+    `refused` is non-nil when `bundle.CheckAdmission` refuses `pol` against the recorded
+    policy. `said` is the one line for a start the guard could not judge, and is empty when it
+    judged. `judgedReader` is `interface{ Judged(context.Context) (etcdstore.JudgedRecord, bool, error) }`.
+  - `Metrics.PolicyBundleMatchesRunner prometheus.Gauge` (`port49_policy_bundle_matches_runner`).
+
+Ruling 8 as corrected (pre-flight I3), and Ruling 17 (pre-flight I6, 7c's carry).
+
+- [ ] **Step 1: The failing tests.** In `internal/store/etcd/meta_test.go`, on `onShared(t,
+  time.Now)`:
+  - `TestBundlesAreLeasedAndListed`: two `PutBundle`s list two records. One put with a 2s
+    `ttl` is gone from `Bundles` within 5s. A `who` with spaces and parentheses round-trips.
+  - `TestRefreshOwedIsClearedOnlyAtItsRevision`: `PutRefreshOwed`, then `RefreshOwed` gives
+    `rev1`. A second `PutRefreshOwed` gives `rev2`. `ClearRefreshOwed(rev1)` leaves the record;
+    `ClearRefreshOwed(rev2)` deletes it.
+
+  Create `internal/port49d/startguard_test.go`:
+
+  ```go
+  // judgedAt is a judgedReader holding one record, or none.
+  type judgedAt struct {
+  	rec etcdstore.JudgedRecord
+  	ok  bool
+  }
+
+  func (j judgedAt) Judged(context.Context) (etcdstore.JudgedRecord, bool, error) { return j.rec, j.ok, nil }
+
+  // A start whose policy file the reload guard would refuse against the
+  // policy last judged is refused; one it cannot judge says why and goes on
+  // (Ruling 17; pre-flight I6).
+  func TestAStartRefusesAFileTheGuardRefusesAgainstTheJudgedBundle(t *testing.T) {
+  	cfg := brokerConfig(t, minimalPolicy) // its inventory: leaf1
+  	cfg.MaxRemovedPercent = 20
+  	inv := cfg.Inventory
+  	good, err := parseBundle(cfg, []byte(minimalPolicy), inv)
+  	if err != nil {
+  		t.Fatal(err)
+  	}
+  	none, err := parseBundle(cfg, []byte(admitsNothingPolicy), inv) // scopes match no device
+  	if err != nil {
+  		t.Fatal(err)
+  	}
+  	ctx, now := context.Background(), time.Now()
+  	recorded := judgedAt{rec: etcdstore.JudgedRecord{Bundle: good.Bundle, Policy: good.Raw()}, ok: true}
+  	if refused, said := guardAtStart(ctx, cfg, recorded, none, now); refused == nil || said != "" {
+  		t.Fatalf("a file admitting no device, against a judged one admitting leaf1: %v %q", refused, said)
+  	}
+  	if refused, said := guardAtStart(ctx, cfg, recorded, good, now); refused != nil || said != "" {
+  		t.Fatalf("the judged bundle itself: %v %q", refused, said)
+  	}
+  	for name, j := range map[string]judgedAt{
+  		"no record":      {},
+  		"no policy":      {rec: etcdstore.JudgedRecord{Bundle: "b-other"}, ok: true},
+  		"does not parse": {rec: etcdstore.JudgedRecord{Bundle: "b-other", Policy: []byte("scopes: [")}, ok: true},
+  	} {
+  		if refused, said := guardAtStart(ctx, cfg, j, none, now); refused != nil || said == "" {
+  			t.Fatalf("%s: the guard cannot judge, so the start goes on and says why: %v %q", name, refused, said)
+  		}
+  	}
+  }
+  ```
+
+  `admitsNothingPolicy` is `minimalPolicy` with its scope matching a device name no inventory
+  holds. If `CheckAdmission` refuses a policy admitting nothing whatever the bound
+  (`admitsNone`), that is the refusal this test sees; keep it.
+
+  Create `internal/port49d/policyskew_test.go`:
+
+  ```go
+  // A replica whose bundle is not the runner's gauges 0 and says so once per
+  // pair; matching, it gauges 1 (pre-flight I3).
+  func TestAReplicaServingAnotherBundleSaysSo(t *testing.T) {
+  	var out syncBuffer
+  	m := metrics.New(prometheus.NewRegistry())
+  	st := &fakeBundles{holder: "runner-a", recs: []etcdstore.BundleRecord{{Who: "runner-a", Bundle: "b-new"}}}
+  	live := policy.NewLive(policyWithBundle(t, "b-old"))
+  	ctx, cancel := context.WithCancel(context.Background())
+  	defer cancel()
+  	go keepBundle(ctx, st, "replica-b", live, 300*time.Millisecond, nil, m, &out)
+  	waitFor(t, &out, "this replica serves bundle b-old and the runner")
+  	if v := testutil.ToFloat64(m.PolicyBundleMatchesRunner); v != 0 {
+  		t.Fatalf("gauge %v with another bundle", v)
+  	}
+  	time.Sleep(time.Second) // several rounds: the line is said once
+  	if n := strings.Count(out.String(), "this replica serves bundle b-old"); n != 1 {
+  		t.Fatalf("said %d times", n)
+  	}
+  	st.set("runner-a", "b-old")
+  	waitUntil(t, func() bool { return testutil.ToFloat64(m.PolicyBundleMatchesRunner) == 1 })
+  	if got := st.put("replica-b"); got != "b-old" {
+  		t.Fatalf("the replica recorded %q", got)
+  	}
+  }
+
+  // A full pass is owed once every token a mismatched replica could have
+  // minted has expired.
+  func TestAFullPassIsOwedATokenLifeAfterTheLastMismatch(t *testing.T) {
+  	at := time.Unix(1_000_000, 0)
+  	if got := owedFullPassAt(at); !got.Equal(at.Add(policy.MaxTokenTTL)) {
+  		t.Fatalf("%v", got)
+  	}
+  }
+  ```
+
+  `fakeBundles` implements `bundleStore` (`PutBundle`, `Bundles`, `Holder`) in memory under a
+  lock, with `set(who, bundle)` and `put(who) string`. `policyWithBundle(t, bundle)` loads
+  `minimalPolicy` into the named bundle. `waitUntil` polls a condition for 5s.
+
+  In `brokerd_test.go`, on `splitFleet`:
+
+  ```go
+  // A replica that minted under a policy the runner had replaced, then
+  // reloads, has the runner carry the context its token made: the runner
+  // runs a full context pass on its ask. Meanwhile the runner records no
+  // bundle as judged (pre-flight I3; Ruling 8 corrected).
+  func TestALateReplicasContextIsCarriedWhenItReloads(t *testing.T) {
+  	var out, log syncBuffer
+  	e, o := stderr, stdout
+  	t.Cleanup(func() { stderr, stdout = e, o })
+  	stderr, stdout = &out, &log
+  	f := splitFleet(t)
+  	tacacs := startDaemon(t, f.daemon, &out, 1)
+  	startBroker(t, f.broker, &out, 1)
+  	waitFor(t, &out, "runner: recorded bundle ")
+  	cfgB := f.copyBroker(t) // a policy file of its own
+  	apiB, _ := startBroker(t, cfgB, &out, 2)
+  	f.writePolicyOf(t, f.broker, withdrawnConfigurePolicy) // A's file only: alice loses configure
+  	waitFor(t, &out, "policy reloaded")
+  	waitFor(t, &out, "this replica serves bundle ")
+  	waitFor(t, &out, "runner: not recording bundle ")
+  	dev := tacacsClient{t: t, addr: tacacs, key: []byte("run-test-secret")}
+  	loginSession(t, dev, mintOn(t, apiB, f.pki, "leaf1"), &log) // under B's old policy
+  	if !dev.permits("alice", "configure") {
+  		t.Fatal("control: the context B's token made should carry the old grant")
+  	}
+  	f.writePolicyOf(t, cfgB, withdrawnConfigurePolicy) // B catches up
+  	waitFor(t, &out, "runner: a full context pass owed by ")
+  	if dev.permits("alice", "configure") {
+  		t.Fatal("the context a late replica's token made kept the withdrawn grant after it reloaded")
+  	}
+  	waitForCount(t, &out, "runner: recorded bundle ", 2)
+  }
+
+  // A start whose policy file the guard refuses against the bundle last
+  // judged stays not ready and takes no hold, until the file is fixed
+  // (Ruling 17; pre-flight I6).
+  func TestAStartOnARefusedFileStaysNotReady(t *testing.T) {
+  	var out syncBuffer
+  	e := stderr
+  	t.Cleanup(func() { stderr = e })
+  	stderr = &out
+  	f := splitFleet(t)
+  	_, stop := startBrokerNoWait(t, f.broker, &out, 1)
+  	waitFor(t, &out, "runner: recorded bundle ")
+  	stop()
+  	f.writePolicyOf(t, f.broker, admitsNothingPolicy)
+  	startBrokerNoWait(t, f.broker, &out, 2)
+  	waitFor(t, &out, "policy file refused at start against the bundle last judged")
+  	if code := readyz(t, f.metricsOf(t, f.broker)); code != http.StatusServiceUnavailable {
+  		t.Fatalf("/readyz %d while the file is refused", code)
+  	}
+  	if strings.Count(out.String(), "runner: took keyspace") != 1 {
+  		t.Fatal("a broker on a refused file took the hold")
+  	}
+  	f.writePolicyOf(t, f.broker, minimalPolicy)
+  	waitForCount(t, &out, "runner: took keyspace", 2)
+  }
+  ```
+
+  The helpers, beside `splitFleet`'s:
+  - `startBrokerNoWait` is `startBroker` that waits for the metrics line, not the API's;
+  - `f.writePolicyOf(t, cfg, body)` rewrites the policy file the config names, behind the
+    fence's owner and mode rules, as `reload_test.go`'s writes do;
+  - `withdrawnConfigurePolicy` is `minimalPolicy` whose role permits `show **` alone;
+  - `f.metricsOf(t, cfg)` is the config's metrics address;
+  - `readyz` gets `/readyz` and returns its status.
+
+- [ ] **Step 2: Run them to see them fail.**
+
+  Run: `go test ./internal/store/etcd/ ./internal/port49d/ -run 'Bundles|RefreshOwed|GuardRefuses|AnotherBundle|FullPassIsOwed|LateReplica|RefusedFile' -count=1`
+  Expected: FAIL to compile (`PutBundle`, `guardAtStart`, `keepBundle`, `owedFullPassAt`
+  undefined).
+
+- [ ] **Step 3: The records.** In `meta.go`, beside `Judged`:
+  - `PutBundle` writes `bundleRec{Who, Bundle, At}` at `s.k.meta("bundles/") + esc(who)` with
+    `cas` (it compares nothing, and the lease is the expiry `f` names: `now + ttl`).
+  - `Bundles` reads the prefix in pages at one revision, as `LedgerMarks` does, and returns
+    the records whose lease is live. Every record carries one.
+  - `Holder` reads `meta/holder`.
+  - `PutRefreshOwed` puts `bundleRec` at `meta/refresh_owed`.
+  - `RefreshOwed` returns its mod revision with it.
+  - `ClearRefreshOwed(rev)` is a transaction: `If(ModRevision(key) == rev).Then(OpDelete(key))`.
+
+- [ ] **Step 4: The replica's record and the gauge.** Create `policyskew.go`:
+
+  ```go
+  package port49d
+
+  // bundleStore is what keepBundle reads and writes (etcd.Store).
+  type bundleStore interface {
+  	PutBundle(ctx context.Context, who, bundle string, ttl time.Duration) error
+  	Bundles(ctx context.Context) ([]etcdstore.BundleRecord, error)
+  	Holder(ctx context.Context) (string, bool, error)
+  }
+
+  // keepBundle records the bundle this replica serves, leased for ttl and
+  // renewed every third of it and at every swap, and gauges whether it is
+  // the runner's (plan 7e, Ruling 8; pre-flight I3): each replica reads its
+  // own broker.policy_file, and propagation can skew them past any settle
+  // window. A mismatch is said once per pair of bundles. A store that does
+  // not answer leaves the gauge as it was: the record lapses on its own.
+  func keepBundle(ctx context.Context, raw bundleStore, who string, live *policy.Live, ttl time.Duration,
+  	swapped <-chan struct{}, m *metrics.Metrics, out io.Writer) {
+  	t := time.NewTicker(ttl / 3)
+  	defer t.Stop()
+  	said := ""
+  	for {
+  		mine := live.Load().Bundle
+  		rctx, cancel := context.WithTimeout(ctx, ttl/3)
+  		_ = raw.PutBundle(rctx, who, mine, ttl)
+  		recs, err := raw.Bundles(rctx)
+  		holder, held, herr := raw.Holder(rctx)
+  		cancel()
+  		if err == nil && herr == nil && held {
+  			theirs, match := mine, true
+  			for _, r := range recs {
+  				if r.Who == holder {
+  					theirs, match = r.Bundle, r.Bundle == mine
+  				}
+  			}
+  			m.PolicyBundleMatchesRunner.Set(b2f(match))
+  			if pair := mine + " " + theirs; !match && pair != said {
+  				fmt.Fprintf(out, "port49-broker: policy: this replica serves bundle %s and the runner (%s) serves "+
+  					"bundle %s; set the same broker.policy_file content and broker.policy_watch_interval on every "+
+  					"replica\n", mine, lineHolder(holder), theirs)
+  				said = pair
+  			} else if match {
+  				said = ""
+  			}
+  		}
+  		select {
+  		case <-ctx.Done():
+  			return
+  		case <-t.C:
+  		case <-swapped:
+  		}
+  	}
+  }
+
+  // owedFullPassAt is when the runner owes a full context pass after it last
+  // saw a replica serve another bundle: every token that replica could have
+  // minted under it has expired by then, so the pass reaches every context
+  // one of them made (pre-flight I3).
+  func owedFullPassAt(lastMismatch time.Time) time.Time { return lastMismatch.Add(policy.MaxTokenTTL) }
+  ```
+
+  The runner's own replica runs `keepBundle` too, so its record is the one the others compare
+  with. On the runner the gauge is 1 by construction.
+
+- [ ] **Step 5: The runner's owed passes and its judged condition.** In `runner.go`'s `duties`,
+  add a third goroutine, `r.owed(ctx)`, which every `policy_watch_interval`:
+  - reads `RefreshOwed`. When its revision is newer than the last one handled, it sends
+    `fullPassOwed{who, bundle, rev}` on `r.rel.fullPass`;
+  - reads `Bundles`. When any record's bundle differs from the runner's, it sets
+    `lastMismatch = now`;
+  - when `lastMismatch` is set and `now` is past `owedFullPassAt(lastMismatch)`, it sends a
+    `fullPassOwed{who: "a replica that served another bundle"}` once, and clears
+    `lastMismatch`.
+
+  In `reload.go`'s `run`, a receive on `fullPass` runs the full context pass, says its line, and
+  then, if `rev` is set, calls `ClearRefreshOwed(rev)`. A pass that fails is said and left owed:
+  the record stays, and the next read sends it again.
+
+  `recordJudged` reads `Bundles` first. When a record names another bundle, it says
+  `port49-broker: runner: not recording bundle %s as judged: %s serves bundle %s` and writes
+  nothing. That makes the next takeover purge, which denies more.
+
+- [ ] **Step 6: Every replica asks.** In `brokerd.go`:
+  - start `keepBundle(ctx, b, who, brk.Policy, e.HoldTTL, swapped, m, stderr)` on its
+    goroutine, joined at the end;
+  - the reloader's `onSwap` pokes `swapped` (non-blocking, buffered one), and, when
+    `!rn.running()`, calls `PutRefreshOwed(ctx, who, pol.Bundle)`, retried as the takeover's
+    steps are;
+  - after the guard at start passes, a replica that is not yet the runner calls
+    `PutRefreshOwed` once. A replica's start then makes the runner judge every live context
+    against the policy in force, so a context made from an earlier life's token, under
+    another bundle, is carried. A rolling restart of N replicas costs N full context passes:
+    a full pass is what every takeover's carry already is.
+
+- [ ] **Step 7: The guard at start.** Create `startguard.go`:
+
+  ```go
+  package port49d
+
+  // judgedReader reads meta/judged (etcd.Store).
+  type judgedReader interface {
+  	Judged(ctx context.Context) (etcdstore.JudgedRecord, bool, error)
+  }
+
+  // guardAtStart is the reload guard run at a broker's start, against the
+  // policy meta/judged records (plan 7e, Ruling 17; 7c's carry): a rollout
+  // restarts every replica onto the file on disk, and a file a running
+  // broker refused would otherwise be carried into every context and its
+  // newly refused devices' tokens deleted. refused is the guard's error.
+  // When it cannot judge (no record, a record with no policy, a recorded
+  // policy that no longer compiles against the inventory in force), said
+  // names why and the start goes on: the guard is a typo guard, and a broker
+  // stranded by an inventory edit would cost every login.
+  func guardAtStart(ctx context.Context, cfg config.Config, judged judgedReader, pol *policy.Policy,
+  	now time.Time) (refused error, said string) {
+  	rec, ok, err := judged.Judged(ctx)
+  	switch {
+  	case err != nil:
+  		return nil, fmt.Sprintf("the bundle last judged could not be read (%v); this start is not judged against it", err)
+  	case !ok:
+  		return nil, "no bundle has been judged on this keyspace; this start is not judged against one"
+  	case rec.Bundle == pol.Bundle:
+  		return nil, ""
+  	case rec.Policy == nil:
+  		return nil, fmt.Sprintf("the bundle last judged (%s) was recorded without its policy (over 1 MiB); "+
+  			"this start is not judged against it", rec.Bundle)
+  	}
+  	old, err := parseBundle(cfg, rec.Policy, pol.Inventory())
+  	if err != nil {
+  		return nil, fmt.Sprintf("the policy last judged (%s) does not compile against the inventory in force (%v); "+
+  			"this start is not judged against it", rec.Bundle, oneLine(err))
+  	}
+  	if err := bundle.CheckAdmission(old, pol, cfg.MaxRemovedPercent, now); err != nil {
+  		return fmt.Errorf("%s: %w", policyKey(cfg), err), ""
+  	}
+  	return nil, ""
+  }
+  ```
+
+  In `runBroker`, between the store's open (step 5) and serving (step 11), on the store's
+  first answer:
+  - run `guardAtStart` with the policy loaded at step 3. A `said` line is printed once,
+    prefixed `port49-broker: policy: `.
+  - **On a refusal**, print `port49-broker: policy file refused at start against the bundle
+    last judged (<bundle>): <refusalLine(refused, false, old, pol)>; this replica stays not
+    ready, mints nothing and takes no hold until broker.policy_file is fixed`, and set
+    `PolicyFileRefused` to 1.
+  - Then poll the file every `policy_watch_interval`, by `policyVersion` and `parseBundle`,
+    until a version passes. Keep `brk.SetReady` at its starting state meanwhile, so `/readyz`
+    answers 503. Do not start the runner. Serve nothing that mints: the API listener is not
+    started.
+  - Once a version passes, set `PolicyFileRefused` to 0 and go on with the start on that
+    policy.
+
+  port49d's start does not run it (Ruling 17).
+
+- [ ] **Step 8: The metric.** In `metrics.go`, add `PolicyBundleMatchesRunner prometheus.Gauge`
+  (`port49_policy_bundle_matches_runner`, "1 while this broker serves the bundle the runner
+  serves; 0 is a replica whose policy file differs: its tokens and the contexts they make carry
+  another policy until it reloads"), and add it to `TestNewRegistersEveryMetric`.
+
+- [ ] **Step 9: Run everything.**
+
+  Run: `make build && make test && make vet && make test-race`
+  Expected: PASS.
+
+- [ ] **Step 10: Commit.**
+
+  ```bash
+  gofmt -w internal/port49d internal/store/etcd internal/daemon/metrics
+  git add internal/store/etcd/meta.go internal/store/etcd/meta_test.go internal/port49d/policyskew.go \
+    internal/port49d/policyskew_test.go internal/port49d/startguard.go internal/port49d/startguard_test.go \
+    internal/port49d/reload.go internal/port49d/runner.go internal/port49d/brokerd.go \
+    internal/port49d/brokerd_test.go internal/daemon/metrics/metrics.go internal/daemon/metrics/metrics_test.go
+  git commit -m "feat(port49-broker): policy skew across replicas, and the reload guard at a start
+
+  Each replica reads its own policy file, and propagation can skew them
+  past any settle window: a replica minting under a withdrawn grant made
+  contexts no pass reached (pre-flight I3). Every replica now records the
+  bundle it serves and gauges whether it is the runner's; its reload or
+  start asks the runner for a full context pass; a replica that dies
+  unreloaded is covered a token life later; and no bundle is recorded as
+  judged while one differs. A start whose policy file the reload guard
+  refuses against the policy last judged stays not ready and takes no
+  hold (7c's carry; pre-flight I6; plan 7e Rulings 8, 17).
+
+  Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+  Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+  ```
+
+---
+
+### Task 15b: The marks copy, and revoking with every broker down
+
+**Files:**
+- Create: `internal/port49d/markscopy.go`, `internal/port49d/markscopy_test.go`
+- Create: `internal/port49d/offline.go`, `internal/port49d/offline_test.go`
+- Modify: `internal/port49d/brokerd.go` (the copy fed by `FollowMarks`; `BrokerMain`'s `revoke`
+  subcommand), `internal/port49d/runner.go` (`restoreMarks`, at the takeover and after a
+  marks reload)
+- Modify: `internal/port49d/brokerd_test.go` (the fleet tests below)
+
+**Interfaces:**
+- Consumes: `store.MarkChange` (Task 9), `BrokerConfig.StateDir` (Task 13), the runner (Task
+  15), `broker.Revoke`, `broker.Lift`, `broker.RevokeRequest`.
+- Produces:
+  - `type marksCopy struct` with:
+    - `func openMarksCopy(path string, out io.Writer) *marksCopy`: reads `path`. An absent file
+      is an empty copy. A file that does not decode is said, moved aside to
+      `path + ".bad-" + time`, and replaced by an empty copy: the store still holds every mark;
+    - `func (c *marksCopy) Apply(ch store.MarkChange)`. A mark that stands is added. A lift is
+      removed only when `!ch.Reloaded`. The file is rewritten on each change, to a temporary
+      file at mode 0600 and then renamed. A write that fails is said once per run of failures;
+    - `func (c *marksCopy) Missing(stored []store.Revocation) []store.Revocation`;
+    - `func (c *marksCopy) All() []store.Revocation`.
+  - `func (r *runner) restoreMarks(ctx context.Context) error`: puts back every mark the copy
+    holds and the store lacks, and says how many.
+  - `func offlineRevoke(args []string, stdout, stderr io.Writer) int`, behind `port49-broker
+    revoke --offline`.
+
+Ruling 12 as changed (pre-flight I5) and Ruling 13's break-glass (pre-flight I4).
+
+- [ ] **Step 1: The failing tests.** Create `internal/port49d/markscopy_test.go`:
+
+  ```go
+  // The copy keeps every mark it was told stands, drops one only on a lift
+  // the watch delivered, and keeps one a reload found missing: that may be a
+  // restore's loss (Ruling 12; pre-flight I5). It survives a restart, owner
+  // only.
+  func TestTheCopyKeepsAMarkAReloadFoundMissing(t *testing.T) {
+  	path := filepath.Join(t.TempDir(), "marks.json")
+  	alice := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:alice@example.com", At: time.Unix(10, 0).UTC()}
+  	carol := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:carol@example.com", At: time.Unix(11, 0).UTC()}
+  	var out bytes.Buffer
+  	c := openMarksCopy(path, &out)
+  	c.Apply(store.MarkChange{Revocation: alice, Standing: true})
+  	c.Apply(store.MarkChange{Revocation: carol, Standing: true})
+  	c.Apply(store.MarkChange{Revocation: store.Revocation{Kind: alice.Kind, Key: alice.Key}, Reloaded: true})
+  	c.Apply(store.MarkChange{Revocation: store.Revocation{Kind: carol.Kind, Key: carol.Key}}) // a lift
+  	again := openMarksCopy(path, &out)
+  	if got := again.All(); len(got) != 1 || got[0].Key != alice.Key {
+  		t.Fatalf("after a restart the copy holds %+v", got)
+  	}
+  	if fi, err := os.Stat(path); err != nil || fi.Mode().Perm() != 0o600 {
+  		t.Fatalf("%v %v", fi, err)
+  	}
+  	if miss := again.Missing(nil); len(miss) != 1 || miss[0].Key != alice.Key {
+  		t.Fatalf("missing from an empty store: %+v", miss)
+  	}
+  	if miss := again.Missing([]store.Revocation{alice}); len(miss) != 0 {
+  		t.Fatalf("missing from a store holding it: %+v", miss)
+  	}
+  }
+
+  // A copy that does not decode is moved aside and replaced, never fatal:
+  // the store holds every mark.
+  func TestACopyThatDoesNotDecodeIsMovedAside(t *testing.T) {
+  	dir := t.TempDir()
+  	path := filepath.Join(dir, "marks.json")
+  	os.WriteFile(path, []byte("{"), 0o600)
+  	var out bytes.Buffer
+  	if c := openMarksCopy(path, &out); len(c.All()) != 0 || !strings.Contains(out.String(), "does not decode") {
+  		t.Fatalf("%q", out.String())
+  	}
+  	if m, _ := filepath.Glob(path + ".bad-*"); len(m) != 1 {
+  		t.Fatalf("not moved aside: %v", m)
+  	}
+  }
+  ```
+
+  In `brokerd_test.go`, on `splitFleet`:
+
+  ```go
+  // After a restore loses a revocation, the runner's takeover puts it back
+  // from its copy and says so; a mark lifted through the watch is not put
+  // back (Ruling 12; pre-flight I5).
+  func TestATakeoverPutsBackAMarkTheStoreLost(t *testing.T) {
+  	var out syncBuffer
+  	e := stderr
+  	t.Cleanup(func() { stderr = e })
+  	stderr = &out
+  	f := splitFleet(t)
+  	root := f.srv.Client(t, "root")
+  	_, stop := startBroker(t, f.broker, &out, 1)
+  	waitFor(t, &out, "runner: recorded bundle ")
+  	sock := adminSocketOf(t, f.broker)
+  	for _, req := range []admin.Request{
+  		{Op: "revoke", Principal: "user:alice@example.com"},
+  		{Op: "revoke", Principal: "user:carol@example.com"},
+  		{Op: "revoke", Principal: "user:carol@example.com", Lift: true},
+  	} {
+  		if resp := askAdminAt(t, sock, req); resp.Error != "" {
+  			t.Fatalf("%+v: %+v", req, resp)
+  		}
+  	}
+  	waitUntil(t, func() bool { return copyHolds(t, f.stateDir(t), "user:alice@example.com", "user:carol@example.com") == "10" })
+  	if err := stop(); err != nil {
+  		t.Fatal(err)
+  	}
+  	if _, err := root.Delete(context.Background(), "/port49/v1/rv/principal/user:alice@example.com"); err != nil {
+  		t.Fatal(err) // what a restore from before the revocation leaves
+  	}
+  	startBroker(t, f.broker, &out, 2)
+  	waitFor(t, &out, "1 revocation(s) in broker.state_dir/marks.json were missing from the store")
+  	resp, err := root.Get(context.Background(), "/port49/v1/rv/principal/", clientv3.WithPrefix())
+  	if err != nil || len(resp.Kvs) != 1 || !strings.Contains(string(resp.Kvs[0].Key), "alice") {
+  		t.Fatalf("the store's marks after the takeover: %v %v", resp, err)
+  	}
+  }
+
+  // With every port49-broker stopped, the offline revocation reaches a live
+  // session on port49d at its next command, and deletes a token minted
+  // before (Ruling 13; pre-flight I4).
+  func TestAnOfflineRevokeDeniesWithEveryBrokerStopped(t *testing.T) {
+  	var out, log syncBuffer
+  	e, o := stderr, stdout
+  	t.Cleanup(func() { stderr, stdout = e, o })
+  	stderr, stdout = &out, &log
+  	f := splitFleet(t)
+  	tacacs := startDaemon(t, f.daemon, &out, 1)
+  	api, stop := startBroker(t, f.broker, &out, 1)
+  	dev := tacacsClient{t: t, addr: tacacs, key: []byte("run-test-secret")}
+  	loginSession(t, dev, mintOn(t, api, f.pki, "leaf1"), &log)
+  	spare := mintOn(t, api, f.pki, "leaf1")
+  	if err := stop(); err != nil {
+  		t.Fatal(err)
+  	}
+  	if !dev.permits("alice", "configure") {
+  		t.Fatal("control: the session runs on with every broker stopped")
+  	}
+  	var rout, rerr bytes.Buffer
+  	if code := offlineRevoke([]string{"--offline", "--config", f.broker, "--principal", "user:alice@example.com"},
+  		&rout, &rerr); code != 0 {
+  		t.Fatalf("exit %d: %s", code, rerr.String())
+  	}
+  	waitUntil(t, func() bool { return !dev.permits("alice", "configure") })
+  	if r := lastCommand(t, &log); r["reason"] != "credential_revoked" {
+  		t.Fatalf("the denial: %v", r)
+  	}
+  	if st := dev.login("alice", spare); st == wire.AuthenStatusPass {
+  		t.Fatal("a token minted before the offline revocation still logged in")
+  	}
+  }
+
+  // revoke without --offline is port49 revoke's, on the admin socket: said,
+  // exit 2.
+  func TestARevokeWithoutOfflineNamesTheSocket(t *testing.T) {
+  	var o, e bytes.Buffer
+  	if code := offlineRevoke([]string{"--principal", "user:alice@example.com"}, &o, &e); code != 2 ||
+  		!strings.Contains(e.String(), "port49 revoke --socket") {
+  		t.Fatalf("exit %d: %s", code, e.String())
+  	}
+  }
+  ```
+
+  `TestARevokeWithoutOfflineNamesTheSocket` goes in `offline_test.go`, beside its code; the two
+  fleet tests go in `brokerd_test.go`.
+
+  The helpers:
+  - `f.stateDir(t)` is the broker config's `broker.state_dir`;
+  - `copyHolds(t, dir, keys...)` reads `marks.json` and returns a `1` or `0` per key, in order;
+  - `adminSocketOf` and `askAdminAt` were Task 16's in 0cc5573. Write them here, and Task 16
+    uses them.
+
+- [ ] **Step 2: Run them to see them fail.**
+
+  Run: `go test ./internal/port49d/ -run 'Copy|PutsBackAMark|OfflineRevoke|WithoutOffline' -count=1`
+  Expected: FAIL to compile (`openMarksCopy`, `offlineRevoke` undefined).
+
+- [ ] **Step 3: The copy.** Create `markscopy.go` as its interface says. The file is `{"marks":
+  [{"kind": …, "key": …, "at": …}]}`, written sorted by kind and key, through a temporary file in
+  the same directory at mode 0600, then `os.Rename`. Its comment states which way it errs: a
+  mark the store lost is put back, and so is a mark whose lift this copy missed. Both deny
+  more, and the takeover's line says how to lift.
+
+- [ ] **Step 4: Wired.** In `brokerd.go`:
+  - open the copy at `filepath.Join(cfg.Broker.StateDir, "marks.json")` before the marks load;
+  - pass `on: func(c store.MarkChange) { copy.Apply(c); brk.MarkChanged(c) }` to both
+    `LoadMarks` and `FollowMarks`. Before the listener exists `brk.MarkChanged` does nothing,
+    as Task 9 says;
+  - give the runner the copy, and route the marks feed's `rescanned` to the runner while it
+    runs. A non-blocking send on `rn.marksReloaded` is enough.
+
+  In `runner.go`:
+
+  ```go
+  // restoreMarks puts back every mark this replica's copy holds that the
+  // store lacks (plan 7e, Ruling 12; pre-flight I5): an etcd restore's lost
+  // revocations, or a lift this copy missed. Both deny more, and the line
+  // says how to lift. The takeover's next step applies them to the kept
+  // contexts; the marks feed brings them to every process.
+  func (r *runner) restoreMarks(ctx context.Context) error {
+  	var stored []store.Revocation
+  	if err := retryCtx(ctx, func() (e error) { stored, e = r.st.ListRevocations(ctx); return }); err != nil {
+  		return err
+  	}
+  	missing := r.copy.Missing(stored)
+  	for _, m := range missing {
+  		if err := retryCtx(ctx, func() error { return r.st.PutRevocation(ctx, m) }); err != nil {
+  			return err
+  		}
+  	}
+  	if len(missing) == 0 {
+  		fmt.Fprintln(stderr, "port49-broker: runner: every revocation in broker.state_dir/marks.json is in the store")
+  		return nil
+  	}
+  	fmt.Fprintf(stderr, "port49-broker: runner: %d revocation(s) in broker.state_dir/marks.json were missing from the "+
+  		"store (an etcd restore, or a lift made while this replica's watch was compacted away) and are put back; "+
+  		"lift any that were lifted on purpose with port49 revoke --lift\n", len(missing))
+  	return nil
+  }
+  ```
+
+  The takeover calls it after the re-index and before `ApplyMarksAtStart`, and passes the marks
+  it put back to `ApplyMarksAtStart` with the rest. `duties` runs one more goroutine: on each
+  receive from `r.marksReloaded`, it calls `restoreMarks`, then applies what it put back
+  through `ApplyMarksAtStart`.
+
+- [ ] **Step 5: The offline revocation.** Create `offline.go`:
+  - `offlineRevoke(args, stdout, stderr)` parses `--offline` (required), `--config` (default
+    `/etc/port49/port49-broker.yaml`), `--principal`, `--cert-issuer`, `--cert-serial` and
+    `--lift`. Without `--offline` it says `port49-broker revoke: without --offline, revoke on
+    the running broker's admin socket: port49 revoke --socket <its admin_socket>` and exits 2.
+  - It loads the config with `config.LoadBroker`, and opens the broker's identity with
+    `openIdentity` (Task 14), running the broker's `CheckIdentity`. It takes no hold and binds
+    nothing.
+  - It builds the sealing layer as `crypt.Wrap(guard.WrapRev(b, gc("broker")), keys, …,
+    crypt.WithLedger(crypt.NewLedger()))`, with no fence: nothing follows here, and the tool
+    only writes marks and revokes.
+  - It builds a `*broker.Broker` with `Store`, `Sessions` (`session.New(st, time.Now, …)` as
+    `buildBrokerAnchor` builds it), `Now`, `Log` (a decision-log sink on `stdout`, as
+    port49-broker's), and `Metrics` (a private registry). No listener, no minter.
+  - It calls `brk.Revoke` (or `brk.Lift`) with `RevokeRequest{Principal, Issuer, Serial, Origin:
+    "offline"}`, and prints the report to `stderr` as `adminRevoke` words it, prefixed
+    `port49-broker: revoke (offline, no API): `.
+  - It exits 0 on a full report, and 1 on an error or a report with `Err` set, as `port49
+    revoke` does.
+
+  `BrokerMain` routes `args[0] == "revoke"` to `offlineRevoke(args[1:], stdout, stderr)`. Any
+  other subcommand stays exit 2.
+
+- [ ] **Step 6: Run everything.**
+
+  Run: `make build && make test && make vet && make test-race`
+  Expected: PASS.
+
+- [ ] **Step 7: Commit.**
+
+  ```bash
+  gofmt -w internal/port49d
+  git add internal/port49d/markscopy.go internal/port49d/markscopy_test.go internal/port49d/offline.go \
+    internal/port49d/offline_test.go internal/port49d/brokerd.go internal/port49d/runner.go \
+    internal/port49d/brokerd_test.go
+  git commit -m "feat(port49-broker): a copy of the marks per replica, and revoking with every broker down
+
+  With the revocations file retired, an etcd restore silently lifted every
+  revocation made since the snapshot (pre-flight I5). Each broker keeps
+  the marks it followed in broker.state_dir/marks.json, dropping one only
+  on a lift the watch delivered, and the runner puts back any the store
+  lacks, at a takeover and after a marks reload, saying how many. With
+  every broker down there was no revocation path (pre-flight I4):
+  port49-broker revoke --offline runs the whole revocation through the
+  store on the broker's identity, with no API and no hold (plan 7e
+  Rulings 12, 13).
 
   Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
@@ -5678,36 +8385,87 @@ them.
 
   // A context put back while a daemon was stopped, and another daemon ran,
   // is denied by the stopped one when it starts: the runner's ledger record
-  // holds the later mark (Review Focus 2; Ruling 4).
+  // holds the later mark (Review Focus 2; Ruling 4). The put-back is bob's
+  // context over alice's at the username both log in as (pre-flight I14):
+  // impersonation, so a denial cannot come from an unrelated fault. The
+  // controls: a daemon started with nothing put back permits alice's
+  // session, and the running daemon permits it before the put-back.
   func TestAPutBackBeforeADaemonStartsIsDenied(t *testing.T) {
+  	var out, log syncBuffer
+  	e, o := stderr, stdout
+  	t.Cleanup(func() { stderr, stdout = e, o })
+  	stderr, stdout = &out, &log
+  	f := splitFleetWith(t, sharedUsernamePolicy, []string{"bob@example.com"})
+  	root := f.srv.Client(t, "root")
+  	ctx := context.Background()
+  	a := startDaemon(t, f.daemon, &out, 1)
+  	api, _ := startBroker(t, f.broker, &out, 1)
+  	devA := tacacsClient{t: t, addr: a, key: []byte("run-test-secret")}
+  	loginSession(t, devA, mintOnAs(t, api, f.pki, "leaf1", "bob@example.com"), &log)
+  	resp, err := root.Get(ctx, "/port49/v1/c/leaf1/alice")
+  	if err != nil || len(resp.Kvs) != 1 {
+  		t.Fatalf("bob's context: %v %v", resp, err)
+  	}
+  	bobs := resp.Kvs[0]
+  	s1 := waitForLedgerSeq(t, root, "/port49/v1/lw/leaf1/alice", 0)
+  	loginSession(t, devA, mintOn(t, api, f.pki, "leaf1"), &log) // alice's, later, at the key
+  	waitForLedgerSeq(t, root, "/port49/v1/lw/leaf1/alice", s1)   // the runner's record holds it
+  	if !devA.permits("alice", "configure") || lastCommandPrincipal(t, &log) != "user:alice@example.com" {
+  		t.Fatal("control: alice's session on the running daemon")
+  	}
+  	c := startDaemon(t, f.copyDaemon(t), &out, 2) // started with nothing put back
+  	devC := tacacsClient{t: t, addr: c, key: []byte("run-test-secret")}
+  	if !devC.permits("alice", "configure") {
+  		t.Fatal("control: a daemon started with nothing put back denied alice's session")
+  	}
+  	if _, err := root.Put(ctx, string(bobs.Key), string(bobs.Value)); err != nil {
+  		t.Fatal(err)
+  	}
+  	b := startDaemon(t, f.copyDaemon(t), &out, 3) // started after the put-back
+  	devB := tacacsClient{t: t, addr: b, key: []byte("run-test-secret")}
+  	if devB.permits("alice", "configure") {
+  		t.Fatalf("a daemon started after a put-back took bob's context as alice's key's: %v",
+  			lastCommandPrincipal(t, &log))
+  	}
+  	if devA.permits("alice", "configure") {
+  		t.Fatal("the running daemon took the put-back once its feed had passed it")
+  	}
+  }
+
+  // With every port49-broker stopped and no broker host to run the offline
+  // revocation on, a mark written as etcd's root reaches every port49d
+  // through its marks feed, and the session's next command is denied
+  // credential_revoked (Ruling 13's break-glass; pre-flight I4). A token
+  // already minted still logs in, and its commands are denied.
+  func TestARootWrittenMarkDeniesWithEveryBrokerStopped(t *testing.T) {
   	var out, log syncBuffer
   	e, o := stderr, stdout
   	t.Cleanup(func() { stderr, stdout = e, o })
   	stderr, stdout = &out, &log
   	f := splitFleet(t)
   	root := f.srv.Client(t, "root")
-  	ctx := context.Background()
   	a := startDaemon(t, f.daemon, &out, 1)
-  	api, _ := startBroker(t, f.broker, &out, 1)
+  	b := startDaemon(t, f.copyDaemon(t), &out, 2)
+  	api, stop := startBroker(t, f.broker, &out, 1)
   	devA := tacacsClient{t: t, addr: a, key: []byte("run-test-secret")}
+  	devB := tacacsClient{t: t, addr: b, key: []byte("run-test-secret")}
   	loginSession(t, devA, mintOn(t, api, f.pki, "leaf1"), &log)
-  	resp, err := root.Get(ctx, "/port49/v1/c/", clientv3.WithPrefix())
-  	if err != nil || len(resp.Kvs) != 1 {
-  		t.Fatalf("the context: %v %v", resp, err)
-  	}
-  	saved := resp.Kvs[0]
-  	loginSession(t, devA, mintOn(t, api, f.pki, "leaf1"), &log) // a later login at the key
-  	waitForGauge(t, &out, "port49_ledger_pending", 0)            // the runner's record holds it
-  	if _, err := root.Put(ctx, string(saved.Key), string(saved.Value)); err != nil {
+  	if err := stop(); err != nil {
   		t.Fatal(err)
   	}
-  	b := startDaemon(t, f.copyDaemon(t), &out, 2) // started after the put-back
-  	devB := tacacsClient{t: t, addr: b, key: []byte("run-test-secret")}
-  	if devB.permits("alice", "configure") {
-  		t.Fatal("a daemon started after a put-back took it as the key's")
+  	if !devA.permits("alice", "configure") || !devB.permits("alice", "configure") {
+  		t.Fatal("control: the session runs on, on either daemon, with every broker stopped")
   	}
-  	if devA.permits("alice", "configure") {
-  		t.Fatal("the running daemon took the put-back its feed had passed")
+  	mark := fmt.Sprintf(`{"kind":"principal","key":"user:alice@example.com","at":%q,"origin":"etcdctl"}`,
+  		time.Now().UTC().Format(time.RFC3339))
+  	if _, err := root.Put(context.Background(), "/port49/v1/rv/principal/user:alice@example.com", mark); err != nil {
+  		t.Fatal(err)
+  	}
+  	for name, dev := range map[string]tacacsClient{"a": devA, "b": devB} {
+  		waitUntil(t, func() bool { return !dev.permits("alice", "configure") })
+  		if r := lastCommand(t, &log); r["reason"] != "credential_revoked" {
+  			t.Fatalf("daemon %s's denial: %v", name, r)
+  		}
   	}
   }
 
@@ -5737,14 +8495,22 @@ them.
   }
   ```
 
-  The helpers beside Task 15's:
+  The helpers beside Task 15's and 15b's:
   - `heldConnTo` is a `tls.Dial` with alice's client certificate that sends one `GET
     /v1/identity` and keeps the connection, as `listen_test.go`'s held-connection tests do;
   - `closedWithin` is a read that returns EOF or a reset within the bound;
-  - `askAdminAt` speaks the admin protocol on a socket, as `admin_linux_test.go` does
-    (`internal/port49d` cannot import `cmd/port49`);
-  - `adminSocketOf` reads a config's `admin_socket`;
-  - `mintStatus` is `mintOn` that returns the status and body.
+  - `askAdminAt` and `adminSocketOf` are Task 15b's;
+  - `mintStatus` is `mintOn` that returns the status and body;
+  - `splitFleetWith(t, policyBody, others)` is `splitFleet` over Task 10's `brokerConfigWith`,
+    so the lab pki holds a client certificate for each of `others`, and `splitFleet` becomes
+    `splitFleetWith(t, minimalPolicy, nil)`;
+  - `mintOnAs(t, api, pki, device, email)` is `mintOn` with `email`'s certificate, as Task 10's
+    `mintAs`;
+  - `waitForLedgerSeq`, `sharedUsernamePolicy` and `lastCommandPrincipal` came over in Task
+    12's move;
+  - `waitUntil` is Task 15a's.
+
+  No test here waits on a gauge already at its target (pre-flight I14).
 
   In `storeroles_test.go`:
 
@@ -5767,24 +8533,50 @@ them.
   		t.Fatalf("one file: exit %d, %s", code, errb.String())
   	}
   }
+
+  // A 7d port49d.yaml naming both identities still yields both roles with
+  // no --broker-config, and says to move the broker's identity (pre-flight
+  // I8: StoreBlocks reads it with no role; Load would refuse it).
+  func TestStoreRolesStillReadsA7dFile(t *testing.T) {
+  	f := splitFleet(t)
+  	old := f.sevenDFile(t) // port49d.yaml as 7d wrote it: a broker: block and both identities
+  	var out, errb bytes.Buffer
+  	if code := storeRolesCmd([]string{"--config", old}, &out, &errb); code != 0 {
+  		t.Fatalf("exit %d: %s", code, errb.String())
+  	}
+  	if !strings.Contains(out.String(), "etcdctl user add port49-broker --no-password") ||
+  		!strings.Contains(errb.String(), "port49-broker.yaml") {
+  		t.Fatalf("out %s; err %s", out.String(), errb.String())
+  	}
+  	if _, err := config.Load(old); err == nil {
+  		t.Fatal("control: Load under the daemon's role must refuse the 7d file on etcd")
+  	}
+  }
   ```
+
+  `f.sevenDFile(t)` writes the fleet's daemon config with the broker's `broker:` block and
+  `store.etcd.broker` added back, as `etcdRunServer` wrote it in 7d.
 
 - [ ] **Step 2: Run them to see them fail.**
 
-  Run: `go test ./internal/port49d/ -run 'OneDaemonIsAnswered|OneBrokerReaches|BeforeADaemonStarts|EveryBrokerStopped|ReadsBothFiles' -count=1`
-  Expected: the e2e tests PASS where Tasks 12–15 hold, and FAIL to show any gap. Each failure is
-  a defect in an earlier task, fixed in its own `fix(…)` commit with this test as its witness.
-  `TestStoreRolesReadsBothFiles` FAILs: `--broker-config` is undefined.
+  Run: `go test ./internal/port49d/ -run 'OneDaemonIsAnswered|OneBrokerReaches|BeforeADaemonStarts|EveryBrokerStopped|RootWrittenMark|ReadsBothFiles|A7dFile' -count=1`
+  Expected: the e2e tests PASS where Tasks 12–15b hold, and FAIL to show any gap. Each failure
+  is a defect in an earlier task, fixed in its own `fix(…)` commit with this test as its
+  witness. That these pass first is said in the report: they are the fleet's integration
+  witnesses, not failing-first tests. `TestStoreRolesReadsBothFiles` and
+  `TestStoreRolesStillReadsA7dFile` FAIL: `--broker-config` is undefined.
 
 - [ ] **Step 3: `store-roles`.** In `storeroles.go`:
   - add `--broker-config` (default `/etc/port49/port49-broker.yaml`);
   - read the daemon's identity from `--config`'s `store.etcd.daemon`, and the broker's from
-    `--broker-config`'s `store.etcd.broker`, each through `config.StoreOf`;
+    `--broker-config`'s `store.etcd.broker`, each through `config.StoreBlocks` (Task 13), which
+    checks shape and no role (pre-flight I8);
   - refuse a mismatch of `store.etcd.prefix` between the two ("the two files name different
     keyspaces");
   - a `--config` that still names `store.etcd.broker` (a 7d file) keeps working without
-    `--broker-config`, said with a line naming the move (Ruling 1). A file with neither is
-    refused naming `--broker-config`;
+    `--broker-config`, said with a line naming the move (Ruling 1). `StoreBlocks` reads both of
+    its identities; `config.Load` would refuse that file, and `store-roles` never calls it. A
+    file with neither is refused naming `--broker-config`;
   - the header line says `(plan 7e)`, and the four "until plan 7e" comment lines become "the
     daemon's credential cannot write a mark, meta/, the ledger record or the superseded record;
     port49d holds it alone (plan 7e)".
@@ -5800,14 +8592,17 @@ them.
 
   ```bash
   gofmt -w internal/port49d
-  git add internal/port49d/split_e2e_test.go internal/port49d/storeroles.go internal/port49d/storeroles_test.go
+  git add internal/port49d/split_e2e_test.go internal/port49d/storeroles.go internal/port49d/storeroles_test.go \
+    internal/port49d/brokerd_test.go
   git commit -m "test(port49d): the fleet end to end; store-roles reads both files
 
   Two daemons and two brokers on one keyspace: a login answered on the
   other daemon, a revocation on one broker closing the other's held
-  connection, a put-back denied by a daemon started after it, and sessions
-  running on with every broker stopped. store-roles takes the broker's
-  identity from port49-broker.yaml (plan 7e Ruling 14).
+  connection, bob's context put back over alice's denied by a daemon
+  started after it, sessions running on with every broker stopped, and a
+  mark written as etcd's root denying them. store-roles takes the broker's
+  identity from port49-broker.yaml, and still reads a 7d file whole
+  (plan 7e Rulings 13, 14).
 
   Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
@@ -5819,11 +8614,12 @@ them.
 
 **Files:**
 - Create: `tests/lab/split_test.go`
-- Modify: `tests/lab/harness_test.go` (`startSplit`, the second replica, the broker's process),
-  `tests/lab/store_test.go` (`storeLab` on the split's two configs)
-- Modify: the five topologies' device configs under `tests/lab/` (a second TACACS+ server,
-  `172.100.100.2`, in the same server group as `172.100.100.1`) and the bridge's second host
-  address
+- Modify: `tests/lab/harness_test.go` (`startSplit`, the second replica, the broker's process,
+  `addSecondServer` and `removeSecondServer`), `tests/lab/store_test.go` (`storeLab` on the
+  split's two configs)
+- Not modified: the topologies (`tests/lab/topologies/*.clab.yml`) and the startup configs
+  (`tests/lab/configs/*`). The second TACACS+ server is pushed by `startSplit` and removed at
+  the test's end (pre-flight I13)
 - Create (by the run): `tests/lab/results/L37-*.md`, `L38-cisco_iosxe.md`, `L36-*.md`;
   `tests/lab/evidence/L3[678]-*.pcap`
 - Modify (closing): `docs/design/2026-08-23-policy-engine-spec.md` §15 (L36, L37, L38),
@@ -5857,11 +8653,20 @@ Ruling 16. Read "Running the lab" first. **No claim enters a doc before its row'
     broker's identities. Each process gets its own log and stderr file under
     `tests/lab/logs/`. `stopDaemon(which)`, `stopBroker()` and `startBroker()` each wait on the
     process's exit, as `stopDaemon` does today.
-  - **The second address.** The bridge's second host address is added at `bringUp` and removed
-    at `down`.
-  - **The device configs.** Each topology's config lists both servers in one group, in the
-    platform's own syntax, A first. Every line was measured working on its image in an earlier
-    row; cite which in a comment, and where one was not, Step 2's first cell is its own check.
+  - **The second address.** `startSplit` adds the bridge's second host address and removes it
+    in `t.Cleanup`.
+  - **The second server, pushed and removed** (pre-flight I13).
+    - `addSecondServer(t, l)` pushes the configuration that lists `172.100.100.2` after
+      `172.100.100.1`, in one group, in the platform's own syntax, through `labShell`'s config
+      path.
+    - `removeSecondServer` pushes the inverse. `startSplit` registers it in `t.Cleanup`, so a
+      failed test still removes it.
+    - Neither touches the startup configs or the topologies. Every other register test (L1–L36)
+      therefore runs with the one server it was measured with: on `ERROR`, a timeout or a
+      refused connection a device tries the next server, and a listed server with nothing
+      behind it would change L4's and L35's timings and fallbacks.
+    - Every pushed line was measured working on its image in an earlier row; cite which in a
+      comment. Where one was not, Step 2's first cell is its own check.
 
   Create `tests/lab/split_test.go` with `//go:build lab` and three tests:
   - **`TestSplitEndToEnd`, L37 on every image, one cell per row of this table, in order.** Each
@@ -5893,7 +8698,7 @@ Ruling 16. Read "Running the lab" first. **No claim enters a doc before its row'
   Commit before the run:
 
   ```bash
-  git add tests/lab/split_test.go tests/lab/harness_test.go tests/lab/store_test.go tests/lab/topologies
+  git add tests/lab/split_test.go tests/lab/harness_test.go tests/lab/store_test.go
   git commit -m "test(lab): L37, L38 and L36 on the split deployment
 
   Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
@@ -5911,16 +8716,29 @@ Ruling 16. Read "Running the lab" first. **No claim enters a doc before its row'
   PORT49_LAB_PLATFORMS=vsrx  …  -run 'TestSplitEndToEnd|TestJunosReauthorizationAfterRestart'
   ```
 
+  After the split tests on EOS, re-run one L35 cell with the second server removed, and check
+  it matches `L35-arista_eos.md` within its recorded spread (pre-flight I13):
+
+  ```bash
+  PORT49_LAB_PLATFORMS=eos go test -tags lab ./tests/lab/ -run 'TestStoreOutageEndToEnd' -count=1 -v -timeout 60m
+  ```
+
+  A mismatch means `removeSecondServer` left something behind: fix the harness, and re-run.
+  This one is a check, not a new measurement. Its note is a line in `L37-arista_eos.md`.
+
   **Cell outcomes:**
   - A cell whose precondition failed (the device never tried B, the store did not hang) is
-    re-run up to three times, then recorded INVALID, as L35's Ruling T15-a.
+    re-run up to three times, then recorded INVALID, as L35's Ruling T15-a. **A row with an
+    INVALID cell on a named image stays open for that image**: it is not closed, and the note
+    says what would make the cell valid.
   - A cell that shows port49 wrong (B denies a session A wrote, a revocation that does not
     reach B, a daemon that does not go dark) is a defect. Fix it on the branch, with a unit
     test, in a `fix(…)` commit, and re-run every image from a worktree pinned to the fix
     (CLAUDE.md rule 4).
   - A device that does not try the second server is a device fact, not a defect: record it.
 
-- [ ] **Step 3: Close the rows.** Close each row only when every platform it names has a note.
+- [ ] **Step 3: Close the rows.** Close each row only when every platform it names has a note
+  with no INVALID cell.
   - **L37:** five images. **L38:** IOS-XE. **L36:** both Junos images.
   - **The notes.** Each has the date, the image versions and digests, the run command at the
     pinned commit, a capture pointer, the credentials statement, and the observation table with
@@ -5965,12 +8783,13 @@ Ruling 16. Read "Running the lab" first. **No claim enters a doc before its row'
   add **7e-2**. It covers:
   - every task's commits;
   - what differs from this plan's text;
-  - the rulings as made, against Rulings 1–16 and OR-1;
+  - the rulings as made, against Rulings 1–17 and OR-1;
   - the lab table, one row per image, from the notes: cells 1–5 of L37, L38's four cells, and
     L36;
   - the operator notes below, as amended by what was built;
   - "Carried, for later plans", and the unassigned follow-ups, with the residual Ruling 4 leaves
-    named exactly.
+    named exactly, and the per-replica self/key bound and revocation slot (7c's carry, left
+    unassigned in the carries table).
 - [ ] **Step 2: The status line.** In the README's status paragraph, after the 7d-2 sentence, add
   `**7e written 2026-10-03** (…), **executed** …, **merged** … (PR #…)`. The 7e bullet under
   "Plan 7" gains `**As built:** "Plan 7e — As built", below.`
@@ -5992,13 +8811,24 @@ Ruling 16. Read "Running the lab" first. **No claim enters a doc before its row'
 ## Operator-facing notes (for the pull request bodies)
 
 **7e-1's:**
+- **Re-apply `port49d store-roles` before upgrading.** It prints one more grant: the daemon's
+  read on `lw/`. Without it the start stops with `the daemon's role cannot read lw/, the ledger
+  record: apply port49d store-roles (plan 7e)`. port49d's start check also refuses a daemon role
+  that can write `lw/` or touch `sp/`.
 - **Upgrading from 7d on etcd ends every live session once.** A session record 7d sealed does
-  not open under 7e: it is denied `store_unavailable`, replaced at the user's next login, and
-  revoked by the next refresh pass. Users log in again. The memory store loses everything at a
-  restart, as before.
+  not open under 7e. It is denied `store_unavailable`, replaced at the user's next login, and
+  revoked by the next refresh pass. Users log in again.
+  - Each node says it once per 10 minutes as the upgrade, never as tampering: `a context sealed
+    by an earlier port49 (form 3) does not open: expected once after the 7e upgrade`.
+  - Rolling back to 7d ends sessions again: 7d does not open 7e's records.
+  - The memory store loses everything at a restart, as before.
 - **A context put back in etcd while port49d was stopped is now denied after the restart,** for
   every key the new ledger record (`lw/`) holds a later write for. In 7d the start took it as
   that key's.
+- **A context read waits for port49d's watch on the store** (the feed fence).
+  - Normally that is milliseconds, on a command after a write.
+  - If the watch stops while etcd answers, new sessions are denied `store_unavailable`, and
+    `port49_store_feed_up{feed="contexts"}` is 0. The line says `the context feed stopped`.
 - **After an etcd restore under a running port49d**, with or without `--bump-revision`, the
   next login is admitted, and a session written since the snapshot is denied until its next
   login, as 7d measured.
@@ -6009,9 +8839,9 @@ Ruling 16. Read "Running the lab" first. **No claim enters a doc before its row'
 - **New metrics:**
   - `port49_store_feed_up{feed}` (`contexts`, `marks`): 0 for longer than `hold_ttl` is an alarm;
   - `port49_store_feed_rescans_total{feed}`: alert on any increase;
-  - `port49_ledger_pending`: above 0 for a minute is an alarm.
-- **`port49d store-roles`** prints one more grant: the daemon's read on `lw/`. Re-apply it before
-  starting 7e-1; port49d's start check refuses a daemon role that can write `lw/` or touch `sp/`.
+  - `port49_ledger_pending`: above 0 for a minute is an alarm;
+  - `port49_ledger_behind`: 1 is an alarm. The record keeper's watch is down, and pending cannot
+    show what the record misses.
 
 **7e-2's:**
 - **New binary: `port49-broker`.** On etcd the broker runs as its own process, from
@@ -6026,8 +8856,16 @@ Ruling 16. Read "Running the lab" first. **No claim enters a doc before its row'
     remove `store.etcd.broker`. The marks are already in etcd: every 7d start put the file's
     there.
   - **Run** `port49d store-roles --config port49d.yaml --broker-config port49-broker.yaml` and
-    apply its output.
-  - **Set the same `broker.policy_watch_interval` on every broker replica.**
+    apply its output. On the 7d file alone it still works, and says to move the broker's
+    identity.
+  - **Rolling back:** a 7e-2 port49d refused on its config can be rolled back to the 7e-1
+    binary, which still reads the 7d file.
+  - **Set the same `broker.policy_file` content and `broker.policy_watch_interval` on every
+    broker replica.** A replica serving another bundle says so, and
+    `port49_policy_bundle_matches_runner` is 0 there. When it catches up, the runner carries
+    every live context.
+  - **Back up `broker.state_dir`** with each broker host. It holds that replica's copy of the
+    marks (`marks.json`).
 - **port49d no longer takes the keyspace.**
   - **A second port49d serves beside the first.** List several on each device, and use a rolling
     update. 7d's `strategy: Recreate` advice is withdrawn.
@@ -6036,17 +8874,36 @@ Ruling 16. Read "Running the lab" first. **No claim enters a doc before its row'
     `hold_ttl`.
 - **A broker rollout keeps everyone's tokens.** Unspent tokens are purged only when the runner
   that takes over finds a policy in force that no runner judged: an edit made while every broker
-  was stopped.
+  was stopped, or while a replica served another policy.
+  - A token minted in the moment of such a purge is purged too: its login fails
+    `token_not_found`, and `port49 token` again works.
+- **A broker restart on a policy file the reload guard refuses** stays not ready (`/readyz` 503)
+  and takes no hold until the file is fixed. It says the guard's reason, and
+  `port49_policy_file_refused` is 1.
 - **Revocation lives on port49-broker's admin socket:** `port49 revoke --socket <its
   admin_socket>`. port49d's socket answers `keys diagnose`, and a revocation sent there says
-  which socket to use.
-- **On etcd the revocations file is retired.** etcd holds the marks. After an etcd restore,
-  revoke again what you revoked since the snapshot.
+  which socket to use. A `keys diagnose` sent to port49-broker's says to use port49d's.
+- **With every broker down, revoke offline:** `port49-broker revoke --offline --config
+  /etc/port49/port49-broker.yaml --principal <p>` on a broker host. It runs the whole
+  revocation through etcd, with no API.
+  - With no broker host, write the mark as etcd's root (`etcdctl put
+    <prefix>v1/rv/principal/<p> '{"kind":"principal","key":"<p>","at":"<now>","origin":"etcdctl"}'`).
+  - Either way every port49d denies the session's next command.
+- **On etcd the revocations file is retired.** etcd holds the marks, and each broker keeps a
+  copy in `broker.state_dir/marks.json`. After an etcd restore:
+  - stop every broker;
+  - restore with `--bump-revision` and `--mark-compacted`, or restart every port49d too;
+  - `etcdctl del <prefix>v1/meta/judged`;
+  - start the brokers.
+  The first runner puts back the marks the restore lost, says how many, and purges the unspent
+  tokens. Lift again anything it put back that was lifted on purpose.
 - **With every broker stopped,** open sessions run on, a token already minted logs in, and a
   policy edit changes admission at once and live sessions when a broker returns. What each image
   does: L37.
-- **A port49d with no traffic** still goes dark on a hung store: it probes the store every
-  `hold_ttl`/6. L37 measures how long that takes.
+- **A port49d with no traffic** still goes dark on a hung store, or a stopped watch: it probes
+  the store every `hold_ttl`/6, through the feed fence. L37 measures how long that takes.
+- **New alarms:** `port49_policy_bundle_matches_runner` 0 for twice `policy_watch_interval`;
+  `port49_ledger_behind` 1 on the runner.
 - **What each device does** when one port49d replica stops, when every broker stops, and on a
   revocation from the broker: L37, per image. IOS-XE's open session once port49 is unreachable:
   L38. A Junos session's re-authorization after a port49d restart: L36.
@@ -6071,21 +8928,45 @@ Checked against the roadmap's 7e bullet, 7d's carries, and decisions 32–35:
 - **`7d2-carries.md`'s 7e items.** The IOS-XE run (L38), the key-id charset (Task 3) and the
   flaky test (Task 2) are taken.
 - **Decision 35's three "until plan 7e" clauses** (the broker's credential in port49d, one
-  port49d per keyspace, the hold): Rulings 1, 11; Task 18 Step 3 checks no "until plan 7e" is
-  left.
+  port49d per keyspace, the hold): Rulings 1, 11. Task 11 Step 2 amends each (pre-flight M12),
+  and Task 11 Step 8 and Task 18 Step 3 check that no "until plan 7e" is left.
+- **The 7c carries for 7e:** `/healthz` and `/readyz` (Task 15), the reload guard at start
+  (Task 15a), the file's init (moot on etcd), and the per-replica bound (left unassigned, with
+  its reason).
 - **Spec §14:** Task 1 Step 4 and Task 11 Step 5 add the assertions, and each names its test.
-- **Review Focus:** each of the nine lines names its test and task.
+- **Review Focus:** each of the fifteen lines names its test and task.
+- **The pre-flight review** (`.superpowers/sdd/2026-10-03-07e-broker-process/preflight-review.md`):
+  - C1 → Task 8a;
+  - I1 → Task 8;
+  - I2 → Task 15;
+  - I3, I6 → Task 15a;
+  - I4, I5 → Task 15b, with the root path in Task 16;
+  - I7, I8 → Task 13;
+  - I9 → Tasks 14 and 15;
+  - I10 → Task 7;
+  - I11 → Task 10, with the runner's reset in Task 15;
+  - I12 → Task 7's test, Task 11's runbook;
+  - I13 → Task 17;
+  - I14 → Tasks 10, 15 and 16.
+  The Minors are in the tasks they name. Revision 1 of the writer's report maps each one.
 - **Placeholders.** None in the unit and e2e tests. The lab tests (Task 17) are specified cell by
   cell, as 7d's Task 15 was, since they are written against the harness at the pinned commit.
   Three of `rewinding`'s methods are "SwapLoginRev's shape", written beside it. Test helpers built
-  from a file's existing fixtures are named, and each task's report names what it built them
-  from.
+  from a file's existing fixtures are named after the real helper they build on (pre-flight
+  M1). A helper still to be written is named with what it is built from.
 - **Type consistency.** These names are used alike in every task that consumes them:
-  - `Ledger.SetBase`, `Observe`, `Seed`, `Dirty`, `Redirty`, `Pending`, `Prune`;
-  - `store.LedgerMark`, `ContextFeed`, `MarkFeed`, `LedgerSource`, `LedgerSink`;
-  - `crypt.LoadLedger`, `FollowContexts`, `KeepLedger`;
-  - `store.LoadMarks`, `FollowMarks`;
-  - `Broker.MarkChanged`, `RefreshTokens`;
-  - `etcd.Store.Seen`, `Judged`, `PutJudged`;
-  - `config.LoadBroker`, `Config.Policy`, `RoleBroker`.
+  - `Ledger.SetBase`, `Observe`, `ObserveFollowed`, `Seed`, `Dirty`, `Redirty`, `Pending`,
+    `Prune`, `Fence`;
+  - `crypt.Fence` (`Attach`, `Followed`, `SetUp`, `Up`, `Wait`), `crypt.Fenced`,
+    `crypt.ErrFeedBehind`, `crypt.ErrEarlierForm`;
+  - `store.LedgerMark`, `ContextFeed` (with `progress` and `asks`), `MarkFeed`, `MarkChange`,
+    `LedgerSource`, `LedgerSink`;
+  - `crypt.LoadLedger`, `FollowContexts`, `KeepLedger` (with `report(pending, behind)`);
+  - `store.LoadMarks`, `FollowMarks` (with `on func(MarkChange)`);
+  - `Broker.MarkChanged(store.MarkChange)`, `RefreshTokens`;
+  - `etcd.Store.Seen`, `Judged` (`JudgedRecord`), `PutJudged(ctx, bundle, policy)`,
+    `PutBundle`, `Bundles`, `Holder`, `PutRefreshOwed`, `RefreshOwed`, `ClearRefreshOwed`;
+  - `config.LoadBroker`, `Config.Policy`, `RoleBroker`, `StoreBlocks`;
+  - `sweepLoop(ctx, s, brk, ledger, every, out)`, `recordJudged`, `restoreMarks`,
+    `guardAtStart`, `keepBundle`, `offlineRevoke`.
 
