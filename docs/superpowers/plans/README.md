@@ -3037,7 +3037,7 @@ plan's text, task by task:
   feed (T9-c). An undecodable mark stands by its key on a load as on a watch (T9-e).
 - **Flake fix (f6e5a26).** A product bug: on `credential_revoked` the agent's close cut the 410
   answer, so the client said "no agent". It shuts down within 5s after stopping.
-- **Task 10 (the ledger record; 267f73a, and fix round 1).**
+- **Task 10 (the ledger record; 267f73a, 782f2d5).**
   - `store.LedgerMark` gains `FloorSeq`, the sequence the floor holds through: `Dirty` writes it,
     and `Seed` takes the floor where the key's mark is at or below it (review C1). `lw/` keeps it
     as `floor_seq`, and a mark above it clears the floor there, as in the ledger.
