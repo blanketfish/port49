@@ -239,6 +239,17 @@ type ContextKey struct {
 	Username string // canonical form
 }
 
+// LedgerMark is one key's entry in the ledger record (plan 7e, Ruling 4):
+// the highest write sequence known there, a revocation's plaintext time
+// held at it, and until when it is kept (zero: for good, a never
+// context's).
+type LedgerMark struct {
+	Key       ContextKey
+	Seq       uint64
+	RevokedAt time.Time
+	Until     time.Time
+}
+
 type Context struct {
 	CtxID     string // sealed
 	Principal string // sealed
@@ -312,16 +323,11 @@ type Context struct {
 	// race to SetRevokedAt finds the revision moved and reads again, rather
 	// than putting back a copy whose RevokedAt is zero. It only grows, across
 	// every key: a write takes a revision above any context has held (etcd's
-	// mod_revision), so of two writes the later holds the larger, which is
-	// how the sealing layer's ledger orders writes that end out of order
-	// (crypt.Ledger, by the revision each returns: RevStore). The exception
-	// is etcd restored from a snapshot under a running port49d: revisions go
-	// back to the snapshot's, and the ledger detects it by a write sent after
-	// the last ended reporting a lower revision. Restored with
-	// --bump-revision, as design §12 says to, a record keeps its revision
-	// while the store's jumps past every one it gave, and the ledger detects
-	// it by a write that compared below the last committing above it. It is
-	// plaintext bookkeeping, like the expiry.
+	// mod_revision), so of two writes the later holds the larger. The
+	// sealing layer draws each write's sealed sequence above it, and above
+	// every revision the store has told it (crypt.Ledger; RevStore.Seen),
+	// so a restore that takes revisions back, or bumps them, moves no
+	// sequence back. It is plaintext bookkeeping, like the expiry.
 	Rev uint64
 	// PolicyRev is the store's revision of what a policy refresh decides
 	// (spec §5.1.3): GetContext sets it and SetContextPolicy compares it.
@@ -900,11 +906,11 @@ type Store interface {
 
 // RevStore is a Store whose whole-context writes also return the revision
 // each committed at: the record's Rev from then on, and zero with every
-// error. The sealing layer orders its own writes at a key by it, which is
-// the store's commit order whatever order the writes end in (crypt.Ledger;
-// plan 7d Task 6b). Each is its plain method otherwise. The sealing layer
-// calls only these, so a test double that overrides a plain method and not
-// its Rev twin is bypassed.
+// error. The sealing layer keeps it beside the key's mark, so a read
+// served before the write that set the mark committed is read again
+// (crypt.Ledger; plan 7e, Ruling 3). Each is its plain method otherwise.
+// The sealing layer calls only these, so a test double that overrides a
+// plain method and not its Rev twin is bypassed.
 type RevStore interface {
 	Store
 	PutContextRev(ctx context.Context, k ContextKey, c Context, ttl time.Duration) (uint64, error)

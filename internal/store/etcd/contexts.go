@@ -204,8 +204,8 @@ func whole(c store.Context, now time.Time, ttl time.Duration) ctxRec {
 	return r
 }
 
-// The context writes return the revision each committed at, so the
-// sealing layer can order its own writes by the store's (crypt.Ledger).
+// The context writes return the revision each committed at, which the
+// sealing layer keeps beside the key's mark (crypt.Ledger).
 var _ store.RevStore = (*Store)(nil)
 
 // PutContext writes c unconditionally, extending the ref's index entries

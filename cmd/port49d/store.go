@@ -94,7 +94,11 @@ func openStores(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 	// (pre-flight M44).
 	say := crypt.OnUnopenable(unopenableSayer(keys, out, time.Now))
 	if cfg.Store.Backend != config.BackendEtcd {
-		st := crypt.Wrap(memory.New(time.Now), keys, m.CryptOpenFailures, crypt.WithLedger(ledger), say)
+		// The memory store is new and empty: every record in it is sealed
+		// above its base (crypt.Ledger).
+		mem := memory.New(time.Now)
+		ledger.SetBase(mem.Seen() + 1)
+		st := crypt.Wrap(mem, keys, m.CryptOpenFailures, crypt.WithLedger(ledger), say)
 		return stores{daemon: st, broker: st, close: func() {}}, nil
 	}
 	e := cfg.Store.Etcd
@@ -249,12 +253,12 @@ func openStores(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 // is the record's header, which whoever writes the store chooses, so the
 // memory is bounded and the cost of forgetting is one repeated line
 // (pre-flight M44).
-func unopenableSayer(keys crypt.Keys, out io.Writer, now func() time.Time) func(record, keyID string) {
+func unopenableSayer(keys crypt.Keys, out io.Writer, now func() time.Time) func(record, keyID string, why error) {
 	const sayerMax = 64
 	var mu sync.Mutex
 	said := map[[2]string]time.Time{}
 	window := keyWindow(keys)
-	return func(record, keyID string) {
+	return func(record, keyID string, why error) {
 		mu.Lock()
 		defer mu.Unlock()
 		k := [2]string{record, keyID}
@@ -273,12 +277,24 @@ func unopenableSayer(keys crypt.Keys, out io.Writer, now func() time.Time) func(
 			return
 		}
 		held := keyID == keys.Current.ID || keys.Previous != nil && keyID == keys.Previous.ID
-		if held {
+		switch {
+		case held && errors.Is(why, crypt.ErrEarlierForm):
+			// The upgrade, said as the upgrade: at 3am "altered" across the
+			// fleet reads as an attack (pre-flight I10).
+			fmt.Fprintf(out, "port49d: crypt: a %s sealed by an earlier port49 (form 3) does not open: expected once "+
+				"after the 7e upgrade; replaced at its user's next login\n", record)
+			return
+		case held && errors.Is(why, crypt.ErrNotLastWritten):
+			// It opens, and is sealed below the newest write known at its key
+			// (the ledger; plan 7e, Ruling 3).
+			fmt.Fprintf(out, "port49d: crypt: a %s under key id %q is sealed below the newest write any port49 "+
+				"process made there: it was put back, and is treated as unreadable\n", record, keyID)
+			return
+		case held:
 			// A held key's record that will not open was altered: its bytes
-			// fail authentication, or it opens but is not the context this
-			// port49d last wrote at its key (the ledger; re-check IA1).
-			fmt.Fprintf(out, "port49d: crypt: a %s failed authentication under key id %q, or is not the one this "+
-				"port49d last wrote there: it was altered or is corrupt, and is treated as unreadable\n", record, keyID)
+			// fail authentication.
+			fmt.Fprintf(out, "port49d: crypt: a %s failed authentication under key id %q: it was altered or is "+
+				"corrupt, and is treated as unreadable\n", record, keyID)
 			return
 		}
 		fmt.Fprintf(out, "port49d: crypt: a %s is sealed under key id %q, which this port49d does not hold (%s): a "+
@@ -633,9 +649,11 @@ func startLeftBy(err error) (owed refreshOwed, again error) {
 //  4. purges every unspent token and supersedes every key;
 //  5. carries the policy in force into every live context the store
 //     kept;
-//  6. seals ledger: steps 2, 3 and 5 read every kept context through the
-//     sealing layer, which seeded it, and from here a key it has not seen
-//     admits only what this process writes there (re-check 2 I1).
+//  6. sets ledger's base past the store's revision: steps 2, 3 and 5 read
+//     every kept context through the sealing layer, which seeded its
+//     marks, and from here a key it has no mark for admits only a record
+//     sealed above the base (re-check 2 I1; plan 7e, Ruling 3). Task 8
+//     sets the base before the start's reads, from its scan.
 //
 // Each step that reads the store retries every 5s while it errs, and so
 // does step 5 while a principal's contexts cannot be looked up (Ruling
@@ -740,7 +758,7 @@ func startOnPersistentStore(ctx context.Context, brk *broker.Broker, st store.St
 	}, broker.ErrPrincipalUnvisited); err != nil {
 		return refreshOwed{}, err
 	}
-	ledger.Seal()
+	ledger.SetBase(e.Seen() + 1)
 	fmt.Fprintf(stderr, "port49d: store: %d live context(s) carried onto the policy in force (bundle %s) "+
 		"before serving\n", rep.Contexts()-rep.Failed, brk.Policy.Load().Bundle)
 	if !owed.owed {
@@ -759,8 +777,10 @@ func startOnPersistentStore(ctx context.Context, brk *broker.Broker, st store.St
 // the contexts the index lost and has the broker re-index and judge them
 // (re-check IA2), saying only a failure. ReindexContexts says what it
 // found. Each half has half the interval of its own, so a slow sweep
-// cannot starve the re-index (pre-flight re-check 2 M-B5).
-func sweepLoop(ctx context.Context, s *etcdstore.Store, brk *broker.Broker, every time.Duration, out io.Writer) {
+// cannot starve the re-index (pre-flight re-check 2 M-B5). After each, it
+// prunes the ledger's marks past their keep (crypt.Ledger.Prune).
+func sweepLoop(ctx context.Context, s *etcdstore.Store, brk *broker.Broker, ledger *crypt.Ledger,
+	every time.Duration, out io.Writer) {
 	t := time.NewTicker(every)
 	defer t.Stop()
 	for {
@@ -784,5 +804,25 @@ func sweepLoop(ctx context.Context, s *etcdstore.Store, brk *broker.Broker, ever
 				"in %v\n", err, every)
 		}
 		cancel()
+		ledger.Prune(time.Now())
+	}
+}
+
+// ledgerPruneEvery is how often pruneLoop prunes the ledger on the memory
+// store, which has no sweep.
+const ledgerPruneEvery = 10 * time.Minute
+
+// pruneLoop prunes the ledger's marks past their keep every interval
+// until ctx ends: sweepLoop's prune, on the memory store.
+func pruneLoop(ctx context.Context, ledger *crypt.Ledger, every time.Duration) {
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			ledger.Prune(time.Now())
+		}
 	}
 }

@@ -280,7 +280,7 @@ type restored struct{ *Store }
 // login replaced before the restore is denied. The restore is a member of
 // its own, starting from revision one, given the snapshot's record, under
 // a port49d whose last writes were at revisions above a hundred (Task 6b
-// review C1; crypt's TestALoginAfterARestoreIsTheLast on memory).
+// review C1; crypt's TestALoginAfterARestoreIsAdmitted on memory).
 func TestALoginAfterAnEtcdRestoreIsTheLast(t *testing.T) {
 	ctx := context.Background()
 	clock := func() time.Time { return t0 }
@@ -294,7 +294,7 @@ func TestALoginAfterAnEtcdRestoreIsTheLast(t *testing.T) {
 	}
 	l := crypt.NewLedger()
 	s := crypt.Wrap(inner, sealKeys, nil, crypt.WithLedger(l))
-	l.Seal()
+	l.SetBase(inner.Seen() + 1)
 	k := store.ContextKey{NAS: "leaf-01", Username: "netops"}
 	login := func(id string, priv uint8) store.Context {
 		return store.Context{CtxID: id, Principal: "user:" + id + "@example.com", Username: "netops", PrivLvl: priv}

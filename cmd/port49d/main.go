@@ -506,9 +506,10 @@ func watchQuarantine(live *policy.Live, m *metrics.Metrics,
 //
 // The ledger is the process's, built here once and kept across a store
 // gone and a lost hold (decision 35; Ruling T12-b): a run after one starts
-// with it sealed, so a record put back at a key while the store was gone
-// is denied as a key this process never saw. So is the start key check's
-// alarm (keyAlarm): a run after a store gone keeps a warning raised.
+// with its marks and its base, so a record put back at a key while the
+// store was gone is still below the key's mark, or the base. So is the
+// start key check's alarm (keyAlarm): a run after a store gone keeps a
+// warning raised.
 //
 // Each run builds its own metrics registry and binds its own metrics
 // listener, so between runs /healthz and /readyz are unbound for the
@@ -573,6 +574,10 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 	if err != nil {
 		return err
 	}
+	// A mark outlives any grace window a context is kept past its ceiling
+	// (crypt.DefaultLedgerKeep), so a record put back is past its ceiling
+	// before its mark goes.
+	ledger.SetKeep(max(cfg.Session.GraceWindow+time.Hour, crypt.DefaultLedgerKeep))
 	parent, cancelRun := context.WithCancelCause(parent)
 	defer cancelRun(nil)
 	// Whatever path a run ends by, a store gone is what it returns, so
@@ -830,7 +835,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 	}
 	// A start on a store that persists (decision 35, a start on etcd): with
 	// the listeners closed, the store's marks, the re-index, every mark on
-	// the kept contexts, the purge, the carry, and the ledger sealed.
+	// the kept contexts, the purge, the carry, and the ledger's base set.
 	// (store.backend: etcd requires a broker, so brk is set here.)
 	var owed refreshOwed
 	if sts.persistent {
@@ -848,15 +853,20 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		sweepDone := make(chan struct{})
 		go func() {
 			defer close(sweepDone)
-			sweepLoop(ctx, sts.etcd, brk, cfg.Store.Etcd.SweepInterval, stderr)
+			sweepLoop(ctx, sts.etcd, brk, ledger, cfg.Store.Etcd.SweepInterval, stderr)
 		}()
 		defer func() { cancel(); <-sweepDone }()
 	} else {
-		// The memory store starts empty, so no context is kept to read: the
-		// ledger is sealed now, before any listener binds, and from here a
-		// key this process never read admits only what it writes there
-		// (re-check 2 I1).
-		ledger.Seal()
+		// The memory store starts empty, so no context is kept to read:
+		// openStores set the ledger's base past it. With no sweep, the
+		// ledger's marks past their keep are pruned here, joined as the
+		// sweep is.
+		pruneDone := make(chan struct{})
+		go func() {
+			defer close(pruneDone)
+			pruneLoop(ctx, ledger, ledgerPruneEvery)
+		}()
+		defer func() { cancel(); <-pruneDone }()
 	}
 	if brk != nil {
 		// The daemon's marks are every mark in force: the file's, and on

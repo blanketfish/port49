@@ -694,8 +694,9 @@ func knownPlatform(cur *policy.Policy, priors []Prior, name string) (*policy.Pol
 // fixing the key undoes (crypt.openErr; final review I-2). It returns
 // errKeyNotHeld, and the caller says it, counts it a failure and leaves it
 // for the next pass. No login can open it meanwhile, so it is denied
-// anyway. One that fails authentication, or opens and is not the one this
-// port49d last wrote (crypt.ErrNotLastWritten), is tampered, and revoked.
+// anyway. One that fails authentication, or opens and is sealed below the
+// newest write known at its key (crypt.ErrNotLastWritten), is tampered,
+// and revoked.
 // The ledger's denial is read once more first: revoked only when the read
 // again is still denied at the same revision, since one the store now
 // answers, or holds at another, raced a write of its own and is

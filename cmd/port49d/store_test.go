@@ -384,19 +384,19 @@ func TestUnopenableSayerSaysOncePerKeyPerTenMinutes(t *testing.T) {
 	now := time.Unix(1000, 0)
 	var out bytes.Buffer
 	say := unopenableSayer(crypt.Keys{Current: crypt.Key{ID: "enc3"}}, &out, func() time.Time { return now })
-	say("token", "enc2")
-	say("token", "enc2")
+	say("token", "enc2", nil)
+	say("token", "enc2", nil)
 	if strings.Count(out.String(), "\n") != 1 || !strings.Contains(out.String(),
 		`a token is sealed under key id "enc2", which this port49d does not hold (current "enc3", no previous)`) {
 		t.Fatalf("said %q", out.String())
 	}
-	say("context", "enc2")
+	say("context", "enc2", nil)
 	now = now.Add(11 * time.Minute)
-	say("token", "enc2")
+	say("token", "enc2", nil)
 	if strings.Count(out.String(), "\n") != 3 {
 		t.Fatalf("said %q", out.String())
 	}
-	say("token", "enc3")
+	say("token", "enc3", nil)
 	if !strings.Contains(out.String(), `failed authentication under key id "enc3"`) {
 		t.Fatalf("a record under a held key that will not open: %q", out.String())
 	}
@@ -408,16 +408,44 @@ func TestUnopenableSayerSaysOncePerKeyPerTenMinutes(t *testing.T) {
 func TestUnopenableSayerCallsANamelessRecordCorrupt(t *testing.T) {
 	var out bytes.Buffer
 	say := unopenableSayer(crypt.Keys{Current: crypt.Key{ID: "enc3"}}, &out, time.Now)
-	say("token", "")
+	say("token", "", nil)
 	if !strings.Contains(out.String(), "it was altered or is corrupt") ||
 		strings.Contains(out.String(), "encryption.previous") {
 		t.Fatalf("a nameless record: %q", out.String())
 	}
 	out.Reset()
-	say("token", "enc2")
+	say("token", "enc2", nil)
 	if !strings.Contains(out.String(), `set encryption.previous to "enc2"`) ||
 		strings.Contains(out.String(), "altered") {
 		t.Fatalf("a record under a retired key: %q", out.String())
+	}
+}
+
+// An earlier form is the upgrade, said as the upgrade: never "altered or is
+// corrupt", which at 3am reads as an attack across the fleet.
+func TestTheSayerNamesAnEarlierFormAsTheUpgrade(t *testing.T) {
+	var out bytes.Buffer
+	keys := crypt.Keys{Current: crypt.Key{ID: "v2"}}
+	say := unopenableSayer(keys, &out, time.Now)
+	say("context", "v2", fmt.Errorf("crypt: opening context: %w", crypt.ErrEarlierForm))
+	got := out.String()
+	if !strings.Contains(got, "a context sealed by an earlier port49 (form 3) does not open: expected once "+
+		"after the 7e upgrade; replaced at its user's next login") || strings.Contains(got, "altered") {
+		t.Fatalf("%q", got)
+	}
+}
+
+// A record below the newest write is named as that, not as "the one this
+// port49d last wrote", which is no longer the rule (plan 7e, Ruling 3).
+func TestTheSayerNamesAPutBackAsBelowTheNewestWrite(t *testing.T) {
+	var out bytes.Buffer
+	keys := crypt.Keys{Current: crypt.Key{ID: "v2"}}
+	say := unopenableSayer(keys, &out, time.Now)
+	say("context", "v2", crypt.ErrNotLastWritten)
+	got := out.String()
+	if !strings.Contains(got, "is sealed below the newest write any port49 process made there") ||
+		strings.Contains(got, "last wrote") {
+		t.Fatalf("%q", got)
 	}
 }
 
