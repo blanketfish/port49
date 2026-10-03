@@ -784,6 +784,12 @@ them. The ones to read first are under "Worth reading before the merge".
         `port49-broker: runner: no witness record in broker.state_dir; cannot tell whether the
         store was restored; going by meta/judged alone`. If every replica's `state_dir` is lost,
         the runbook's delete is the only cover.
+      - **A broker whose `state_dir` was lost or is new, started first after a
+        `--bump-revision` restore,** means the restore is never caught. It does not purge, and
+        its first witness lands above every other replica's record, so no later takeover sees
+        the restore either. Without the bump, its witness lands below them, and the next
+        takeover by a replica with a record catches it. So after a restore, start a broker whose
+        `state_dir` survived first (the runbook's step 4, the operator notes).
       - A snapshot taken within about one keeper interval (1s) after the last witness any
         surviving replica recorded, where the only writes lost came after that witness, is not
         caught. The file is saved at most once a second too, so a replica host that crashes
@@ -6514,8 +6520,10 @@ Nothing here asserts what a device does. The device cells it adds cite L37 or L3
            not caught then. Check `broker.policy_file` on every broker host before step 4. If
            this step is forgotten, a runner whose `broker.state_dir/witness.json` survived
            finds the restored `meta/witness` below its record and purges anyway (decision 36,
-           the restore witness); one with no record cannot.
-        4. Start the brokers. The first runner puts back every mark its `marks.json` holds that
+           the restore witness); one whose `state_dir` was lost or is new cannot.
+        4. Start the brokers, a broker whose `broker.state_dir` survived the restore first:
+           one with no `witness.json` started first after a `--bump-revision` restore means a
+           forgotten step 3 is never caught. The first runner puts back every mark its `marks.json` holds that
            the store lacks, and names them; it applies every mark to the restored contexts,
            and purges.
         5. Lift again, with `port49 revoke --lift`, any mark that was lifted since the snapshot
@@ -10281,7 +10289,7 @@ Ruling 16. Read "Running the lab" first. **No claim enters a doc before its row'
   - stop every broker;
   - restore with `--bump-revision` and `--mark-compacted`, or restart every port49d too;
   - `etcdctl del <prefix>v1/meta/judged`;
-  - start the brokers.
+  - start the brokers, one whose `broker.state_dir` survived the restore first.
   The first runner puts back the marks the restore lost, says how many, and purges the unspent
   tokens. Lift again anything it put back that was lifted on purpose.
 - **With every broker stopped,** open sessions run on, a token already minted logs in, and a
@@ -10297,6 +10305,9 @@ Ruling 16. Read "Running the lab" first. **No claim enters a doc before its row'
   witness below that record says `the store was restored from a snapshot`, naming both
   revisions, and purges every unspent token, at a takeover or while it runs. A replica with no
   `witness.json` says it cannot tell. The runbook above stays the procedure.
+  - **After a restore, start a broker whose `state_dir` survived first.** A broker whose
+    `state_dir` was lost or is new, started first after a `--bump-revision` restore, means a
+    forgotten `etcdctl del` is never caught.
 - **After the runbook's delete of `meta/judged`,** the first broker start has no judged bundle
   for the reload guard, and says so: check the policy file on every broker host before
   starting them.
