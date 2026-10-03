@@ -6599,7 +6599,12 @@ review (the owner may override them).*
   - **a context** port49 sealed earlier for the same key, but only across a restart. While
     port49d runs, the ledger admits only the write it last made at a key, or first read
     there, so an earlier version of the same context is denied as another login's is, and
-    cannot undo a self or key revocation (no mark; decision 34) or a policy narrowing. That
+    cannot undo a self or key revocation (no mark; decision 34) or a policy narrowing. The
+    exception is the write before one in flight or of unknown outcome, admitted until a later
+    write lands at the key or a read finds the one whose outcome was unknown, since the store
+    may still hold it; put back then, it undoes that write until the next one lands. A read
+    that raced a write of the same context, served before that write committed, is read
+    again, not denied. That
     holds across a start after a store gone too, since that start keeps the ledger. **Across
     a restart it is impersonation:** the ledger admits the first record read at a key it has
     not seen until the start's reads seal it, so a record put back while port49d was stopped,

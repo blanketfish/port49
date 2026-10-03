@@ -348,9 +348,9 @@ review gate falls.
   context was admitted until Task 13b named each write (Ruling T12-g); now it is denied.
   Across a restart it is impersonation: a context of another login put back while port49d was
   stopped is taken as the key's at the start, and an earlier version of the same context
-  undoes a self or key revocation (no mark; decision 34). Closing it needs a revocation record the daemon's role cannot write for
-  every kind (a spec change to decision 34) and a sealed freshness counter checked across
-  restarts. Task 16 carries it.
+  undoes a self or key revocation (no mark; decision 34). Closing it needs a revocation
+  record the daemon's role cannot write for every kind (a spec change to decision 34) and a
+  sealed freshness counter checked across restarts. Task 16 carries it.
 
 ## Rulings where the design and spec are silent
 
@@ -13098,6 +13098,9 @@ put-back of an earlier version of the same context admitted at runtime: the ledg
   refresh), `TestTheLedgerAdmitsTheSameContextsWritesInFlightOrUnknown`,
   `TestAContextOfFormTwoDoesNotOpen`; `TestTheLedgerDeniesAnotherLoginsContext` flipped; the
   hung-store e2e (Task 12) puts back the earlier login's record without deleting it first.
+- Review I-1: a read that raced a write of the same context is stale (below the last's
+  revision), not put back. `GetContext` reads it again, up to twice, and `revokeUnopened`
+  reads once more and revokes only what is still denied at the same revision.
 - Docs: spec d35's ledger and replay bullets, the roles bullet and the tests clause; design §8
   and §12 (a restore under a running port49d); the operator notes. The text Task 1, Task 4b and
   Task 11 wrote and quoted above ("an earlier version of the same context is not") is
