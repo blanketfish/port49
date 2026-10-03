@@ -243,3 +243,28 @@ func judge(ttl time.Duration, sent time.Time, reported *int64, now, expires time
 	}
 	return expires.Sub(now) <= ttl/2, expires
 }
+
+// SealKeys is the encryption key window the last port49d on this keyspace
+// started with: ids only, never key material (plan 7d, Ruling 14).
+type SealKeys struct {
+	Current   string    `json:"current"`
+	Previous  string    `json:"previous,omitempty"`
+	WrittenAt time.Time `json:"written_at"`
+}
+
+// SealKeys reads the window the last start recorded; false when none has.
+func (s *Store) SealKeys(ctx context.Context) (SealKeys, bool, error) {
+	var k SealKeys
+	_, ok, err := getJSON(ctx, s.ctx, s.k.meta("seal_keys"), &k)
+	return k, ok, err
+}
+
+// PutSealKeys records k as this start's window, over the last one.
+func (s *Store) PutSealKeys(ctx context.Context, k SealKeys) error {
+	body, err := json.Marshal(k)
+	if err != nil {
+		return err
+	}
+	_, err = s.ctx.Put(ctx, s.k.meta("seal_keys"), string(body))
+	return unavailable(err)
+}

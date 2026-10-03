@@ -330,3 +330,22 @@ func (l *syncLines) String() string {
 	defer l.mu.Unlock()
 	return strings.Join(l.lines, "\n")
 }
+
+func TestSealKeysRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(Config{Endpoints: []string{etcdtest.Endpoint()}, Prefix: etcdtest.Prefix()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, ok, err := s.SealKeys(ctx); ok || err != nil {
+		t.Fatalf("a new keyspace has seal keys: %v %v", ok, err)
+	}
+	want := SealKeys{Current: "enc3", Previous: "enc2", WrittenAt: t0}
+	if err := s.PutSealKeys(ctx, want); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok, err := s.SealKeys(ctx); !ok || err != nil || got.Current != "enc3" || got.Previous != "enc2" {
+		t.Fatalf("%+v %v %v", got, ok, err)
+	}
+}

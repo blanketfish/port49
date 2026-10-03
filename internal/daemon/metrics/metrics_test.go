@@ -88,6 +88,7 @@ func TestNewRegistersEveryMetric(t *testing.T) {
 		"port49_crypt_open_failures_total":                  false,
 		"port49_store_index_records_undecodable_total":      false,
 		"port49_store_keyspace_held":                        false,
+		"port49_crypt_store_key_unknown":                    false,
 		"port49_store_client_cert_expiry_timestamp_seconds": false,
 		"port49_accounting_attributions_total":              false,
 		"port49_broker_item_errors_total":                   false,

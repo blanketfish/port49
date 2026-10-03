@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/x509"
 	"errors"
@@ -11,9 +12,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
+
 	"github.com/rhwendt/port49/internal/broker"
 	"github.com/rhwendt/port49/internal/config"
+	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/store"
+	"github.com/rhwendt/port49/internal/store/crypt"
 	etcdstore "github.com/rhwendt/port49/internal/store/etcd"
 	"github.com/rhwendt/port49/internal/store/etcd/etcdtest"
 	"github.com/rhwendt/port49/internal/testpki"
@@ -234,5 +240,65 @@ func TestTheStartsCarryDecidesHoldOrOpen(t *testing.T) {
 		if c.waits != nil && !errors.Is(again, c.waits) {
 			t.Errorf("%s: the start's retry would not wait on %v", c.name, again)
 		}
+	}
+}
+
+// A start whose store was last written under a current key this
+// configuration does not hold warns and sets the gauge; one that holds it
+// as previous does not (Ruling 14). Either way it records its own.
+func TestCheckSealKeysWarnsAboutAKeyNotHeld(t *testing.T) {
+	srv := etcdtest.Start(t, etcdtest.Options{})
+	s, err := etcdstore.Open(etcdstore.Config{Endpoints: []string{srv.Endpoint}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	if err := s.PutSealKeys(ctx, etcdstore.SealKeys{Current: "enc2"}); err != nil {
+		t.Fatal(err)
+	}
+	m := metrics.New(prometheus.NewRegistry())
+	var out bytes.Buffer
+	rotated := crypt.Keys{Current: crypt.Key{ID: "enc3"}}
+	if err := checkSealKeys(ctx, s, rotated, m, &out); err != nil {
+		t.Fatal(err)
+	}
+	// None is revoked for it: the start leaves a context under an unheld
+	// key unjudged, and every path denies it store_unavailable (spec, a
+	// start on etcd, Keys; Ruling T12-a).
+	if !strings.Contains(out.String(), `whose current key is "enc2", which this configuration does not hold`) ||
+		!strings.Contains(out.String(), "are denied store_unavailable until a start holds that key again") ||
+		testutil.ToFloat64(m.CryptStoreKeyUnknown) != 1 {
+		t.Fatalf("said %q, gauge %v", out.String(), testutil.ToFloat64(m.CryptStoreKeyUnknown))
+	}
+	out.Reset()
+	kept := crypt.Keys{Current: crypt.Key{ID: "enc4"}, Previous: &crypt.Key{ID: "enc3"}}
+	if err := checkSealKeys(ctx, s, kept, m, &out); err != nil || out.Len() != 0 ||
+		testutil.ToFloat64(m.CryptStoreKeyUnknown) != 0 {
+		t.Fatalf("a window holding the store's key: said %q, %v", out.String(), err)
+	}
+}
+
+// The unopenable line names the key and what to do, once per record kind
+// and key id per ten minutes.
+func TestUnopenableSayerSaysOncePerKeyPerTenMinutes(t *testing.T) {
+	now := time.Unix(1000, 0)
+	var out bytes.Buffer
+	say := unopenableSayer(crypt.Keys{Current: crypt.Key{ID: "enc3"}}, &out, func() time.Time { return now })
+	say("token", "enc2")
+	say("token", "enc2")
+	if strings.Count(out.String(), "\n") != 1 || !strings.Contains(out.String(),
+		`a token is sealed under key id "enc2", which this port49d does not hold (current "enc3", no previous)`) {
+		t.Fatalf("said %q", out.String())
+	}
+	say("context", "enc2")
+	now = now.Add(11 * time.Minute)
+	say("token", "enc2")
+	if strings.Count(out.String(), "\n") != 3 {
+		t.Fatalf("said %q", out.String())
+	}
+	say("token", "enc3")
+	if !strings.Contains(out.String(), `failed authentication under key id "enc3"`) {
+		t.Fatalf("a record under a held key that will not open: %q", out.String())
 	}
 }

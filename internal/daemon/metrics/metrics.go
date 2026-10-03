@@ -89,6 +89,10 @@ type Metrics struct {
 	// (plan 7d): 0 while it waits for another or for the store, and alarmed
 	// when port49d runs with it 0.
 	StoreKeyspaceHeld prometheus.Gauge
+	// CryptStoreKeyUnknown is 1 when port49d started on a store last written
+	// under a current key its encryption window does not hold (plan 7d):
+	// records sealed under it will not open.
+	CryptStoreKeyUnknown prometheus.Gauge
 	// StoreCertExpiry is each component's etcd client certificate's
 	// NotAfter, in Unix seconds (plan 7d; pre-flight I9), as
 	// port49_crl_next_update_timestamp_seconds is: an alert subtracts now.
@@ -409,6 +413,8 @@ func New(reg prometheus.Registerer) *Metrics {
 			Help: "etcd index records that would not decode, or index entries whose key would not parse, each time one was skipped, taken unread, written over, or deleted."}),
 		StoreKeyspaceHeld: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_store_keyspace_held",
 			Help: "1 while this port49d holds its keyspace on etcd."}),
+		CryptStoreKeyUnknown: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_crypt_store_key_unknown",
+			Help: "1 when port49d started on a store last written under a current key its encryption window does not hold."}),
 		StoreCertExpiry: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "port49_store_client_cert_expiry_timestamp_seconds",
 			Help: "When each component's etcd client certificate expires, in Unix seconds."}, []string{"component"}),
@@ -507,7 +513,7 @@ func New(reg prometheus.Registerer) *Metrics {
 	})
 	reg.MustRegister(m.Requests, m.Latency, m.Decisions, m.Unvalidated, m.KeyValidations,
 		m.Connections, m.ConnectionEvents, m.AuthFailures, m.SpoolDepth, m.SpoolDrops, m.SpoolQuarantines,
-		m.StoreOps, m.StoreCalls, m.StoreCallSeconds, m.StoreCircuitOpen, m.DecisionLogWriteFailures, m.CryptOpenFailures, m.IndexRecordsUndecodable, m.StoreKeyspaceHeld, m.StoreCertExpiry, m.Attributions, m.BrokerItemErrors, m.BrokerIdempotency,
+		m.StoreOps, m.StoreCalls, m.StoreCallSeconds, m.StoreCircuitOpen, m.DecisionLogWriteFailures, m.CryptOpenFailures, m.IndexRecordsUndecodable, m.StoreKeyspaceHeld, m.CryptStoreKeyUnknown, m.StoreCertExpiry, m.Attributions, m.BrokerItemErrors, m.BrokerIdempotency,
 		m.BrokerHandshakeFailures, m.BrokerConnectionEvents, m.BrokerConnections, m.BlobCache,
 		m.DevicesQuarantined, m.DevicesAdmissionRefused, m.ContextRefreshes, m.ContextsReindexed,
 		m.ContextsReindexFailures, m.SessionRefreshes, m.TokensSuperseded, m.CeilingWarnings,

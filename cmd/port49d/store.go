@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rhwendt/port49/internal/broker"
@@ -67,8 +68,11 @@ func (f *storeFault) Unwrap() error { return f.err }
 // guard ends the run. It says each step on out.
 func openStores(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metrics.Metrics, out io.Writer,
 	rd *readiness, again bool, gone func(error), ledger *crypt.Ledger) (stores, error) {
+	// One sayer for every layer, so a key is said once, not once per layer
+	// (pre-flight M44).
+	say := crypt.OnUnopenable(unopenableSayer(keys, out, time.Now))
 	if cfg.Store.Backend != config.BackendEtcd {
-		st := crypt.Wrap(memory.New(time.Now), keys, m.CryptOpenFailures, crypt.WithLedger(ledger))
+		st := crypt.Wrap(memory.New(time.Now), keys, m.CryptOpenFailures, crypt.WithLedger(ledger), say)
 		return stores{daemon: st, broker: st, close: func() {}}, nil
 	}
 	e := cfg.Store.Etcd
@@ -148,6 +152,31 @@ func openStores(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 		}
 	}
 	m.StoreKeyspaceHeld.Set(1)
+	// meta/ is the broker's to write (Task 11), so the key check is its.
+	for {
+		err := checkSealKeys(ctx, b, keys, m, out)
+		if err == nil {
+			break
+		}
+		if ctx.Err() != nil || !errors.Is(err, store.ErrUnavailable) {
+			release()
+			m.StoreKeyspaceHeld.Set(0)
+			closeAll()
+			if ctx.Err() != nil {
+				return stores{}, ctx.Err()
+			}
+			return stores{}, err
+		}
+		fmt.Fprintf(out, "port49d: %v; the listeners stay closed; trying again in 5s\n", err)
+		select {
+		case <-ctx.Done():
+			release()
+			m.StoreKeyspaceHeld.Set(0)
+			closeAll()
+			return stores{}, ctx.Err()
+		case <-time.After(5 * time.Second):
+		}
+	}
 	gc := func(component string) guard.Config {
 		return guard.Config{Component: component, CallTimeout: e.CallTimeout, BulkTimeout: e.BulkTimeout,
 			MaxInFlight: map[guard.Pool]int{guard.Token: e.MaxInFlight.Token, guard.Context: e.MaxInFlight.Context,
@@ -160,13 +189,94 @@ func openStores(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 	// start seed it for the daemon's, and either denies another login's
 	// context written back.
 	return stores{
-		daemon:     crypt.Wrap(guard.WrapRev(d, gc("daemon")), keys, m.CryptOpenFailures, crypt.WithLedger(ledger)),
-		broker:     crypt.Wrap(guard.WrapRev(b, gc("broker")), keys, m.CryptOpenFailures, crypt.WithLedger(ledger)),
+		daemon: crypt.Wrap(guard.WrapRev(d, gc("daemon")), keys, m.CryptOpenFailures, crypt.WithLedger(ledger),
+			say),
+		broker: crypt.Wrap(guard.WrapRev(b, gc("broker")), keys, m.CryptOpenFailures, crypt.WithLedger(ledger),
+			say),
 		etcd:       d,
 		persistent: true,
 		lost:       lost,
 		close:      func() { release(); m.StoreKeyspaceHeld.Set(0); closeAll() },
 	}, nil
+}
+
+// unopenableSayer is crypt.OnUnopenable's line (Ruling 14): which record,
+// which key id, and what to do, once per (record, key id) per 10 minutes,
+// so a fleet of logins under a retired key is one line, not one per login.
+// openStores builds one and hands it to every Wrap, so the daemon's and
+// the broker's layers share its memory and say a key once, not twice. It
+// remembers at most sayerMax pairs, and forgets them all past it: a key id
+// is the record's header, which whoever writes the store chooses, so the
+// memory is bounded and the cost of forgetting is one repeated line
+// (pre-flight M44).
+func unopenableSayer(keys crypt.Keys, out io.Writer, now func() time.Time) func(record, keyID string) {
+	const sayerMax = 64
+	var mu sync.Mutex
+	said := map[[2]string]time.Time{}
+	window := keyWindow(keys)
+	return func(record, keyID string) {
+		mu.Lock()
+		defer mu.Unlock()
+		k := [2]string{record, keyID}
+		if t, ok := said[k]; ok && now().Sub(t) < 10*time.Minute {
+			return
+		}
+		if len(said) >= sayerMax {
+			clear(said)
+		}
+		said[k] = now()
+		held := keyID == keys.Current.ID || keys.Previous != nil && keyID == keys.Previous.ID
+		if held {
+			// A held key's record that will not open was altered: its bytes
+			// fail authentication, or it opens but is not the context this
+			// port49d last wrote at its key (the ledger; re-check IA1).
+			fmt.Fprintf(out, "port49d: crypt: a %s failed authentication under key id %q, or is not the one this "+
+				"port49d last wrote there: it was altered or is corrupt, and is treated as unreadable\n", record, keyID)
+			return
+		}
+		fmt.Fprintf(out, "port49d: crypt: a %s is sealed under key id %q, which this port49d does not hold (%s): a "+
+			"rotation retired that key while records it sealed were live; set encryption.previous to %q until they "+
+			"expire\n", record, keyID, window, keyID)
+	}
+}
+
+// keyWindow names keys' ids for a line: "current "a", previous "b"".
+func keyWindow(keys crypt.Keys) string {
+	if keys.Previous != nil {
+		return fmt.Sprintf("current %q, previous %q", keys.Current.ID, keys.Previous.ID)
+	}
+	return fmt.Sprintf("current %q, no previous", keys.Current.ID)
+}
+
+// checkSealKeys is the start's key check on etcd (Ruling 14): a store last
+// written under a current key this window lacks is said, and gauged, and
+// never refuses the start; then this window is recorded.
+func checkSealKeys(ctx context.Context, s *etcdstore.Store, keys crypt.Keys, m *metrics.Metrics, out io.Writer) error {
+	last, ok, err := s.SealKeys(ctx)
+	if err != nil {
+		return fmt.Errorf("store: reading the last start's key ids: %w", err)
+	}
+	held := !ok || last.Current == keys.Current.ID || keys.Previous != nil && last.Current == keys.Previous.ID
+	m.CryptStoreKeyUnknown.Set(0)
+	if !held {
+		m.CryptStoreKeyUnknown.Set(1)
+		// Said before the start carries the policy into the kept contexts,
+		// which leaves every one under an unheld key unjudged, never
+		// revoked (refresh.go, ErrLeftUnderUnheldKey; spec, a start on
+		// etcd, Keys): so it says they are denied until a start holds the
+		// key, and that fixing it brings them back. Tokens are purged at
+		// every start on etcd, so none is named.
+		fmt.Fprintf(out, "port49d: crypt: the store was last written by a port49d whose current key is %q, which "+
+			"this configuration does not hold (%s); the live sessions sealed under %q cannot be read, and "+
+			"are denied store_unavailable until a start holds that key again; none is revoked for it: if %q "+
+			"was retired by mistake, set encryption.previous to %q and start port49d again\n",
+			last.Current, keyWindow(keys), last.Current, last.Current, last.Current)
+	}
+	cur := etcdstore.SealKeys{Current: keys.Current.ID, WrittenAt: time.Now().UTC()}
+	if keys.Previous != nil {
+		cur.Previous = keys.Previous.ID
+	}
+	return s.PutSealKeys(ctx, cur)
 }
 
 // attempt is one try at the store, as a start-wait loop runs it

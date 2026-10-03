@@ -254,6 +254,7 @@ type wrapped struct {
 	keys         Keys
 	openFailures *prometheus.CounterVec
 	ledger       *Ledger
+	onUnopenable func(record, keyID string)
 }
 
 // Option configures Wrap.
@@ -263,6 +264,37 @@ type Option func(*wrapped)
 // the broker's layers in one process agree on what each key last held
 // (re-check IA1). Without it each Wrap keeps its own, never sealed.
 func WithLedger(l *Ledger) Option { return func(w *wrapped) { w.ledger = l } }
+
+// OnUnopenable is told the kind and the key id of every record that will
+// not open, beside crypt_open_failures_total. The key id is the sealed
+// record's own header, never a secret: it is how an operator learns which
+// key a rotation retired too early (plan 2's alarm; plan 7d).
+func OnUnopenable(f func(record, keyID string)) Option {
+	return func(w *wrapped) { w.onUnopenable = f }
+}
+
+// SealedKeyID is the key id a sealed record's header names, "" when it is
+// too short to name one, and "?" when it names one outside the key-id
+// charset ([A-Za-z0-9._-], at most 64 bytes): the header is the record's,
+// so whoever can write the store writes it, and a line must not echo up to
+// 255 bytes of it (pre-flight M44).
+func SealedKeyID(sealed []byte) string {
+	if len(sealed) < 1 || len(sealed) < 1+int(sealed[0]) {
+		return ""
+	}
+	id := sealed[1 : 1+int(sealed[0])]
+	if len(id) > 64 {
+		return "?"
+	}
+	for _, b := range id {
+		switch {
+		case b >= 'a' && b <= 'z', b >= 'A' && b <= 'Z', b >= '0' && b <= '9', b == '.', b == '_', b == '-':
+		default:
+			return "?"
+		}
+	}
+	return string(id)
+}
 
 // Wrap decorates inner so every credential-bearing record is sealed under k
 // before it reaches the backend. openFailures may be nil; the daemon passes
@@ -285,9 +317,12 @@ func Wrap(inner store.RevStore, k Keys, openFailures *prometheus.CounterVec, opt
 // expiring at once, with nothing anywhere naming decryption. Handlers take
 // their existing non-ErrNotFound branch instead — store_unavailable — which is
 // honest: the store is unavailable to this daemon.
-func (w *wrapped) openErr(record string, err error) error {
+func (w *wrapped) openErr(record string, sealed []byte, err error) error {
 	if w.openFailures != nil {
 		w.openFailures.WithLabelValues(record).Inc()
+	}
+	if w.onUnopenable != nil {
+		w.onUnopenable(record, SealedKeyID(sealed))
 	}
 	// err is already ErrUnknownKey when neither key id matched, and a GCM or
 	// JSON failure when the key matched and the bytes did not; both are
@@ -359,7 +394,7 @@ func (w *wrapped) Candidates(ctx context.Context, k store.TokenKey) ([]store.Tok
 			// token in a candidate set of eight must not deny the seven — so
 			// the counter is the only place it is visible. That is what
 			// crypt_open_failures_total{record="token"} is for.
-			_ = w.openErr("token", err)
+			_ = w.openErr("token", t.Sealed, err)
 			continue
 		}
 		out = append(out, ot)
@@ -406,11 +441,11 @@ func (w *wrapped) GetReceipt(ctx context.Context, rk store.ReceiptKey) (store.Re
 	}
 	b, err := w.keys.OpenBound(r.Sealed, receiptAAD(rk))
 	if err != nil {
-		return store.Receipt{}, w.openErr("receipt", err)
+		return store.Receipt{}, w.openErr("receipt", r.Sealed, err)
 	}
 	var rs receiptSecret
 	if err := json.Unmarshal(b, &rs); err != nil {
-		return store.Receipt{}, w.openErr("receipt", err)
+		return store.Receipt{}, w.openErr("receipt", r.Sealed, err)
 	}
 	r.CredentialSHA256, r.Status, r.CtxID, r.FirstRedeemedAt, r.Sealed =
 		rs.CredentialSHA256, rs.Status, rs.CtxID, rs.FirstRedeemedAt, nil
@@ -548,7 +583,7 @@ func (w *wrapped) GetContext(ctx context.Context, k store.ContextKey) (store.Con
 		// The wrapped error is openErr's, so errors.Is(err, ErrUnknownKey)
 		// still tells a wrong key from a tampered record.
 		return store.Context{}, &store.UnreadableContextError{Rev: c.Rev, RevokedAt: c.RevokedAt,
-			Err: w.openErr("context", err)}
+			Err: w.openErr("context", c.Sealed, err)}
 	}
 	// The ledger (re-check IA1): a record sealed for this key that is not
 	// the one this process last wrote here, or first read here, is another
@@ -556,7 +591,7 @@ func (w *wrapped) GetContext(ctx context.Context, k store.ContextKey) (store.Con
 	// it is denied as one that does not.
 	if !w.ledger.admits(k, oc.CtxID) {
 		return store.Context{}, &store.UnreadableContextError{Rev: c.Rev, RevokedAt: c.RevokedAt,
-			Err: w.openErr("context", ErrNotLastWritten)}
+			Err: w.openErr("context", c.Sealed, ErrNotLastWritten)}
 	}
 	return oc, nil
 }
@@ -825,7 +860,7 @@ func (w *wrapped) ReserveIdempotency(ctx context.Context, principal, key string,
 	}
 	resp, err := w.keys.Open(cur.Sealed)
 	if err != nil {
-		return store.Idempotency{}, false, w.openErr("idempotency", err)
+		return store.Idempotency{}, false, w.openErr("idempotency", cur.Sealed, err)
 	}
 	cur.Response, cur.Sealed = resp, nil
 	return cur, false, nil

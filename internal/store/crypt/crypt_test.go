@@ -1309,3 +1309,35 @@ func TestALoginAfterARestoreIsTheLast(t *testing.T) {
 		t.Errorf("Bob's record written back over Carol's: %q %v", got.CtxID, err)
 	}
 }
+
+// A record that will not open is told to OnUnopenable with its kind and
+// the key id its header names, beside the counter; a token among
+// candidates is dropped as before (plan 7d; the plan 2 alarm).
+func TestAnUnopenableRecordNamesItsKey(t *testing.T) {
+	now := time.Unix(1000, 0)
+	inner := memory.New(func() time.Time { return now })
+	old := Keys{Current: Key{ID: "enc2", Bytes: [32]byte{2}}}
+	cur := Keys{Current: Key{ID: "enc3", Bytes: [32]byte{3}}}
+	k := store.TokenKey{NAS: "leaf-01", Username: "alice"}
+	if _, err := Wrap(inner, old, nil).PutToken(context.Background(), k, store.Token{ID: "t", Secret: []byte("s"),
+		ExpiresAt: now.Add(time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	var told [][2]string
+	s := Wrap(inner, cur, nil, OnUnopenable(func(record, keyID string) { told = append(told, [2]string{record, keyID}) }))
+	if got, err := s.Candidates(context.Background(), k); err != nil || len(got) != 0 {
+		t.Fatalf("%v %v", got, err)
+	}
+	if len(told) != 1 || told[0] != [2]string{"token", "enc2"} {
+		t.Fatalf("told %v", told)
+	}
+	if SealedKeyID(nil) != "" || SealedKeyID([]byte{9, 'a'}) != "" {
+		t.Fatal("a short or empty record names no key")
+	}
+	// A header is the record's, so anyone who can write the store writes
+	// it: what it names is echoed only within the key-id charset
+	// (pre-flight M44).
+	if got := SealedKeyID(append([]byte{5}, "a\nb;c"...)); got != "?" {
+		t.Fatalf("a header outside the key-id charset named %q", got)
+	}
+}
