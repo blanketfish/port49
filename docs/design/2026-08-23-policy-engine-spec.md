@@ -6604,9 +6604,8 @@ review (the owner may override them).*
     write lands at the key or a read finds the one whose outcome was unknown, since the store
     may still hold it; put back then, it undoes that write until the next one lands. A read
     that raced a write of the same context, served before that write committed, is read
-    again, not denied. That
-    holds across a start after a store gone too, since that start keeps the ledger. **Across
-    a restart it is impersonation:** the ledger admits the first record read at a key it has
+    again, not denied. That holds across a start after a store gone too, since that start
+    keeps the ledger. **Across a restart it is impersonation:** the ledger admits the first record read at a key it has
     not seen until the start's reads seal it, so a record put back while port49d was stopped,
     or before the start's first read of its key, is taken as that key's: another login's
     context, until its sealed ceiling, if it has one, or the key's next login, or an earlier
@@ -8662,7 +8661,8 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
   refresh. Revocation still cannot reach a Junos session that is already open; the most it can
   do is refuse the next login.
 
-  **A port49d restart denies every live Junos session's next re-authorization.** The denials
+  **On the memory store, a port49d restart denies every live Junos session's next
+  re-authorization.** The denials
   above arrived as `deny context_missing` rather than `service_unsupported`, and the reason is
   worth carrying: switching port49's configuration restarts the daemon, the login context
   store is in memory (`internal/store/memory`), and the contexts do not survive. On a fleet
@@ -8670,7 +8670,11 @@ than a platform family, except where the row's own *Unmeasured* paragraph says o
   operator a denied re-authorization within the interval. On these images that costs nothing,
   because the denial does not end the session — but that is a measurement, not a guarantee,
   and it is the thing to re-measure before recommending the statement to anyone who has also
-  made denials binding.
+  made denials binding. On etcd (plan 7d) the store keeps the contexts across a restart, and
+  whether a Junos session's next re-authorization is then answered from its context is §15
+  L35's to settle (tests/lab/results/L35-juniper_vjunos-router.md, L35-juniper_vsrx.md). L35
+  measured the open session running on across a restart, not a re-authorization: its runs
+  set no `authorization-time-interval`, so that answer is still unmeasured.
 
   *Unmeasured:* the other six leaves in the listing above, `exclude-cmd-attribute`,
   `no-cmd-attribute-value`, `timestamp-and-timezone` and `no-strict-authorization` in

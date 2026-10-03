@@ -84,7 +84,21 @@ The re-review also fixed r-m1: a refresh that skips anything keeps `port49_polic
 
 Carried to Task 12: `ledger.Seal()` needs a test, and must be called only after the start's re-index. Carried to 7d-2: a `{}` answer on the admin socket to `port49 revoke` still exits 0.
 
-**7d-2 (Tasks 8b–16) next.** 7e–7h and 8–13 not yet.
+**7d-2 executed 2026-10-03 on `feature/shared-store-daemon`; PR pending** (base 06d0821;
+Tasks 8b–16 plus a new Task 13b, each reviewed). It delivers:
+- the guard: a hard timeout on every store call, three pools with a circuit each, and going
+  dark;
+- `store:` in `port49d.yaml`, and every packet's store deadline;
+- an etcd identity and role per component, checked at every start, and `port49d store-roles`;
+- port49d on etcd: one per keyspace behind a fenced hold, every standing mark applied at the
+  start, live sessions kept across a restart, and going dark in-process when the store is gone;
+- the crypt alarm;
+- a ledger keyed on each write, so an earlier version of a context put back while port49d
+  runs is denied (Task 13b, Ruling T12-g);
+- the agent's one connection.
+
+L35 is measured and closed on five images. The lab's snapshot restore found a ledger bug, fixed
+in 79812ef (Plan 7d — As built, below). 7e–7h and 8–13 not yet.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -1565,7 +1579,7 @@ until 7c merges to be made. Every sub-plan is separately mergeable and leaves `m
   remote-store items (a deadline on each refresh and per-packet store call; the settle pass's
   redeem-to-write assumption; unindexed contexts invisible to the refresh); PR #7's third follow-up,
   a replace, its unindex and its index made one atomic operation; the
-  `crypt_open_failures_total{record="token"}` alarm.
+  `crypt_open_failures_total{record="token"}` alarm. **As built:** "Plan 7d — As built", below.
 - **Plan 7e — the broker as its own process.** `cmd/port49-broker`, and `port49d` serving
   TACACS+ with no broker inside; `b.superseded` and `b.blobsSeen` moved into the store and bounded
   (4b final review m10); decision-log emits under the policy hold bounded (4b Task 4); one refresh
@@ -2462,6 +2476,506 @@ merge. Run `make test` on main after the merge to see it pass.
   failure there re-creates the file on the next empty volume, the hazard decision 32's amendment
   removes); the small-fleet note on the reload guard; the guard at start, as for 7e; the broker's
   readiness probe as HTTPS with no client certificate.
+
+### Plan 7d — As built
+
+Executed in two merges from `2026-10-02-07d-shared-store.md`, each task reviewed. The ledger is
+`.superpowers/sdd/2026-10-02-07d-shared-store/progress.md`, with each task's brief, report and
+review beside it. `7d2-carries.md` records what each task handed a later one. A pre-flight review
+and two re-checks revised the plan before Task 1 (ef549e4). Tasks 4b, 6b, 7b and 13b were added
+during execution. 7d-1's Task 8 Step 6 section was not written at its merge, so 7d-1 is recorded
+here from the ledger. What differs from the plan's text, task by task:
+
+**7d-1** (`feature/shared-store`, base ef549e4; merged 2026-10-02, PR #24, merge fe23595):
+
+- **Task 1 (docs; 2f37031, f371f37).** Two clauses moved to Task 8b, because only 7d-2 builds
+  them: the once-per-process ledger, and "cannot lift a revocation by principal or certificate"
+  holding only under the daemon's role.
+- **Task 2 (the lifted suite; feed70c).** 44 subtests on memory and crypt.
+- **Task 3 (`SwapLogin`, `PurgeTokens`; a7d3d89, 7eb5054).** A racing property pins the mark
+  check to the write inside `SwapLogin` (review I1).
+- **Task 4 (the login's one step; 8022d26, 300a222, 8f656a8, 2062739, c9d40c3).** A join that
+  errors wrote a `FailReceipt`, as an interim fail-closed step. Two known-gap tests pinned a
+  revoked certificate replaying PASS. 300a222's spec amendment was reverted (2062739) by
+  ruling I4: the spec was right, and 4b restores it.
+- **Task 4b (the seal, the ledger, the marks; 60e0ec4, b0dafc9, 909c42a, ef31e69, 5f6aa9d,
+  19277e9, 98c7d9d).** Beyond the plan, a sealed `Logins` witness: the last 8
+  `credential_sha256` prefixes. It is the commit proof a replay needs, which a store writer
+  cannot fake. An unwitnessed replay is `token_spent`. Both known-gap tests flipped. Task 5
+  found a ledger defect: under concurrent writes, "last" could be recorded out of commit
+  order. It was fixed on `fix/ledger-order` and cherry-picked (0c304ad, 19a47c4).
+- **Task 5 (the etcd foundation; 2fef779, 6432b92, be47fc8, 78cc867, eec9c57).**
+  - `Backend.RaceRounds` per backend, and `make test-race`.
+  - Race properties for `IndexToken` and `ExtendReceipt` (review I1).
+  - prometheus, x/crypto and x/sys bumped.
+- **Task 6 (contexts on etcd; 355c506, 78275f2, c3ba62a).** Sealed writes return their commit
+  revision (c3ba62a), ahead of Task 6b.
+- **Task 7 (the indexes on etcd; c78380e, 98b6999, 3f7a0d9, 749af0c, 12f9315, 98c06fe).** An
+  `x/` record that does not decode no longer stops anything (review I-1, overriding the plan's
+  `TestAnUndecodableIndexRecordIsAnError`):
+  - a revocation over-reaches it;
+  - `ActivePrincipals` and the sweep skip it and count it
+    (`port49_store_index_records_undecodable_total`);
+  - the sweep never deletes what it cannot decode.
+- **Task 6b (new: the ledger by revision; 17fcab3, 38856a8, f2c0aee, 4bc961c).**
+  - The ledger orders writes by commit revision, so two first logins on an empty key are not
+    denied.
+  - A regression witness stops a snapshot restore under a running port49d from admitting a
+    stale record over a new session (review C1).
+- **Task 7b (the re-index; ff5c3fb, d2f4a56, 4d4c531, c375955, 858f7f0, b76b703, 0fa66d9,
+  2ade09f).**
+  - One garbled `c/` no longer aborts the refresh: it is deleted at the revision read.
+  - A rotated sid is written into the sealed record (`ContextRefresh.Sid`), so the re-index
+    compares sids exactly.
+  - Deleted `ip/` and `is/` lookup entries are found too.
+- **Task 8 (idempotency on etcd, every property; 79dcd46, f978801, 57ef6fe, c73f05b,
+  2ec6ca5).** 57 subtests each on memory, etcd and crypt-over-etcd.
+- **Flakes.** Five were fixed first and merged as PR #23. One was a production fix: the refresh
+  challenge retries a reset on a held connection.
+- **Final review (ecec515, a9cf678, 2e3901b, bd4ae7f; docs 42ceb9a–81b9c98).**
+  - F-1: an unparseable lookup entry is said, counted, skipped and swept.
+  - F-2: a context under a key port49d does not hold is never revoked.
+  - r-m1: a refresh that skips anything keeps `port49_policy_refresh_pending` at 1.
+
+**7d-2** (`feature/shared-store-daemon`, base 06d0821; PR pending):
+
+- **Task 8b (docs; ee4ff27, then 910b213, 8a49560, 41fd152, 6e43436, 707e828, 82deff5,
+  f63df64, 37dbd0e, e4eb512, 1218c9a, 952d6ed, 0931755, 413f63a, 1d928e3, 90e4775,
+  1751e4e).** The docs follow 7d-1's code over the plan's text. A context under a key not held
+  is denied, never revoked (a9cf678), so decision 35 and the operator note say the start leaves
+  it, not that it "ends" it. Four review rounds reshaped the hold:
+  - `hold_ttl` is 10s to 60s, refused below 10s. clientv3's keepalive loop ticks every 500ms,
+    so a healthy lease of 5–8s can report under half its TTL.
+  - The fence loses an answered read only when it reports under half of `hold_ttl`, judged at
+    its send. The judgement is a pure `judge`, tested by table.
+  - The round trip a hold survives, to the etcd leader, is the least of three bounds:
+    `call_timeout` binds at the defaults.
+  - `etcdutl snapshot restore --bump-revision 1000000000 --mark-compacted` was confirmed in
+    v3.6.15's source and recommended.
+
+  Rulings T12-a, c and d came out of this review (below).
+- **Task 9 (the guard; c03cc30, 3628986, 4753190, 2644adb).**
+  - A caller's deadline while it waits for a slot is `saturated`, not `canceled`, so a full
+    pool never reads as devices going away.
+  - A caller already past its deadline is `deadline`, counts toward the circuit, and never
+    reaches the store (review I1).
+  - The circuit gauge is set from the pool's state under its lock.
+  - An open circuit and a refused run are each told once (review M1).
+  - `TestRefusalsGoDark` uses four refusals, so the gap check is pinned.
+  - The etcdtest hung proxy and the cluster retry are exercised (7d-1's Task 5 review M3).
+- **Task 10 (the config; c7d67c8, 74b79b9).**
+  - `hold_ttl`'s floor is 10s, per Task 8b; the brief's 5s was stale.
+  - An endpoint with user information, a path, a query or a fragment is refused at load,
+    naming only its index. The first cut echoed the endpoint, password included (review I1).
+  - Store file paths must be absolute.
+  - `start_timeout: 0` decodes bare (`StartTimeoutSet` is `*zeroDuration`, not the plan's
+    `*time.Duration`).
+  - Every refusal carries `config: `.
+- **Task 11 (identities and roles; 6377394, 38bb2ab, 86adb77, 2df619b).**
+  - `CheckIdentity` also reads the daemon's own grants (`UserGet`, `RoleGet`). It refuses any
+    grant on `id/`, `tp/` or `tc/`, and any write outside the nine families. The probes alone
+    passed a daemon grant widened onto `rv/`, `meta/hold` or `id/` (review I1).
+  - Ruling T11-a: a certificate CN of `root` is refused, at load and by `CheckIdentity`, as is
+    a user holding etcd's root role.
+  - An identity whose etcd user cannot be named is refused.
+  - `ErrNotSeparated` reads "a store identity reaches past its role".
+  - `store-roles` prints the residual, and says to check an existing role with `etcdctl role
+    get` first.
+- **Task 12 (port49d on etcd; 1d8cd0b, db6c12b, 5739e76, 01da5d1, 5abcd36, c1d2f65, ab106b1,
+  5b459a8, c47be85, 4c37a54, 0f75e02, fb28ba4, ace3fd9, d8f8f5c, 6c3a3ff, 793df0a, 709e579,
+  f054682).**
+  - **Signatures the plan does not list:**
+    - `guard.WrapRev`: `crypt.Wrap` takes a `store.RevStore`, so the plan's
+      `crypt.Wrap(guard.Wrap(…))` did not compile;
+    - `broker.ErrLeftUnderUnheldKey` and `ErrPrincipalUnvisited`, exported;
+    - the process's one ledger, passed to `openStores`, `runOnce` and
+      `startOnPersistentStore`, which returns `(refreshOwed, error)`;
+    - the start's hold-or-open decision, the pure `startLeftBy`;
+    - `reloader.startLeft`.
+  - `refreshContexts` returns what it left by precedence: an unvisited principal, then a busy
+    context, then an unheld key.
+  - `session.mark` returns an outage over an earlier unreadable context (M-B9).
+  - The plan's end-to-end tests lacked the exec session authorization; `loginSession` adds it.
+  - `TestAStartSealsTheLedgerOnceItHasReadTheStore` pins where `Seal` is called (7d-1 m-7).
+  - Ruling T12-e: `Hold` waits a third of `hold_ttl` after the lock.
+  - From the review: `Hold` grants its lease under the caller's ctx, capped at a third of
+    `hold_ttl`, and bounds its TryLock and holder write the same way. It lets go with a 1s
+    bound, and says when it leaves the lease to expire.
+- **Task 13 (the crypt alarm; bbf39d5, f0082bb, cf4d0b2, e95edfa, 2df6bb2).**
+  - The start's warning says the sessions are denied until a start holds the key, not that
+    the start ends them.
+  - A key id outside `[A-Za-z0-9._-]{1,64}` prints as `?` (`crypt.LineKeyID`). Config still
+    accepts such an id (spec follow-up, below).
+  - Ruling T13-a: an undecodable `meta/seal_keys` is said, gauged 1 and overwritten, and the
+    start goes on.
+  - The check is bounded at four times `call_timeout`.
+  - Ruling T13-b: the alarm is per process. It is kept across a store-gone re-entry and gauged
+    while that run waits.
+  - An empty key id is called corrupt.
+  - One sayer serves every sealing layer, pinned by a test.
+  - bbf39d5 pins 7d-1's untested change: the session refresh reports a context under an
+    unheld key `not_judged`.
+- **Task 13b (new, Ruling T12-g; 87c4d21, c043526, e4e32ac, f46ee39).**
+  - Every context seal carries a fresh random `write_id` (form 3), and the ledger is keyed on
+    it, so an earlier version of the same context put back while port49d runs is denied.
+  - A form-2 record does not open: it is denied, then revoked by the refresh as tampered.
+  - Ruling T13b-a: the refresh still revokes a context the ledger denies, after a restore too.
+  - Review I-1: a read that raced a write of the same context is read again, up to twice
+    (`Ledger.stale`), and `revokeUnopened` reads once more before it revokes. A re-index pass
+    that meets the race leaves that context for the next pass.
+- **Task 14 (the agent; 05cfecb, 8a9b75a, 98505fc, 92161a7).**
+  - 05cfecb takes the unassigned carry: an admin-socket answer naming nothing exits 1 as
+    unanswered. `admin.Response` has no `by`, so "naming nothing" is no `error` and no `text`.
+  - 8a9b75a is a WIP commit, kept, from redoing `agent.go` edits that a `git checkout` lost.
+  - 92161a7: a revocation behind a running one says it was not sent.
+- **Task 15 (the lab; b3ce65d, b193375, 79812ef, a6ebda6, 4f62284, 0eee340, 2a340f6).**
+  - **Harness fixes:**
+    - replies are matched on the device port, session and sequence;
+    - a redeem answered ERROR is recorded `deny store_unavailable`;
+    - IB1's dark check is re-run after the settle;
+    - an INVALID cell is re-measured (Ruling T15-a); none was.
+  - **A code bug, fixed with a unit test in 79812ef.** After a `--bump-revision` restore, a
+    login's write compared on the restored record's low revision and committed above the
+    ledger's last, and the ledger dropped it. So the first login after the restore was denied
+    on its own context. Design §12 was right and the code wrong (CLAUDE.md lab rule 4).
+  - **Docs corrected by the notes (2a340f6).** The listeners close when the hold is lost, not
+    after `hold_ttl`. IOS-XE refuses an open session's command once port49d is dark.
+- **Task 16 (this section; the docs).** Spec §15's Junos `authorization-time-interval` note
+  is now the memory store's. On etcd the store keeps the contexts across a restart, and the
+  note says L35 did not measure the re-authorization. 13b's two nits are fixed: the
+  `reindex.go` comment names `errReadAgain`, and a design §8 line is rewrapped. Every other
+  drift a task report names was fixed in that task's own docs commits.
+
+**Rulings, as made** (spec §13, decision 35; the plan's rulings 1–18 and OD-1):
+- **Stand as written:** 1–7, 9, 13, 15, 16 and 18, and OD-1 (Go 1.26).
+- **Ruling 8 (the guard)** gains Task 9's two deadline outcomes.
+- **Ruling 10 (identities)** gains the grant read and the `root` refusal (T11-a).
+- **Ruling 11 (the hold)** is amended:
+  - by Task 8b: `hold_ttl` is 10s to 60s, and an answered read is lost under half, judged
+    at its send;
+  - by T12-b: one ledger per process, kept across a store gone;
+  - by T12-e: a new holder waits a third of `hold_ttl` before it serves.
+- **Ruling 12 (the start)** tells three outcomes apart:
+  - T12-a: a context under an unheld key opens the start, and the pending gauge stays 1;
+  - T12-c: a principal whose lookup failed holds the start, as an outage does;
+  - T12-d: a busy context opens the start, and is retried at once.
+- **Ruling 14 (the crypt alarm)** is amended:
+  - the warning says denied, never ended;
+  - T13-a: an undecodable seal-key record never refuses a start;
+  - T13-b: the alarm is per process.
+- **Ruling 17 (the seal and the ledger)** is amended:
+  - T12-g: the ledger is keyed on a sealed write ID, so a runtime put-back of the same
+    context is denied (Task 13b). This had been proposed for 7e; Ryan ruled to fix it now,
+    2026-10-03.
+  - T13b-a: a denied context is still revoked by the refresh.
+  - 79812ef: a write that commits above the last after a revision bump is the last.
+
+The controller's rulings in 7d-1 are each in the ledger:
+- C1: every mark applied at the start;
+- I12 and CA1: the whole-context seal, and the token's trusted fields sealed;
+- IA1, with I1's `Seal`: the ledger;
+- the `Logins` witness (4b review I1);
+- the exact-revision ledger and its restore witness (6b);
+- an undecodable index record over-reached, never fatal (Task 7 I-1);
+- the rotated sid sealed (7b);
+- F-1 and F-2.
+
+**Lab (Task 15)**, five images on beehive, 2026-10-03, run at 0eee340 from a pinned worktree with
+`hold_ttl` 60s (`tests/lab/results/L35-*.md`; captures `tests/lab/evidence/L35-*.pcap`). Every
+step-3 cell was valid on its first hang. With the store hung, every reply came in 500–502ms in
+the capture (`call_timeout`), so `packet_deadline`'s 2s default stands.
+
+| image | store hung: command / login | break-glass, store hung | dark after | dark: open session / break-glass | listening again; the session |
+|---|---|---|---|---|---|
+| vEOS-lab 4.31.2F (tagged 4.32.2F) | FAIL, port49's text / ERROR, refused | logs in; its command FAIL | 12s | runs / logs in | 56s; same `ctx_id`, permit |
+| N9Kv 10.4(2)F | FAIL, AAA error / ERROR twice, refused | logs in; its command FAIL | 25s | runs / logs in | 38s; same `ctx_id`, permit |
+| C8000V 17.13.01a | FAIL, prints nothing / ERROR, refused | refused (ERROR is final) | 20s | **refused `% Authorization failed.`** / logs in | 1m27s; same `ctx_id`, permit |
+| vJunos-router 23.4R2-S2.1 | session runs on / ERROR, refused | logs in (`password`) | 17s | runs / logs in | 55s; runs |
+| vSRX3 21.4R3.15 | session runs on / ERROR, refused | logs in (`password`) | 14s | runs / logs in | 53s; runs |
+
+On every image a restart on the same store kept the open session, and refused a token minted
+before it `token_not_found`. Listening again waits for the lost hold's lease (60s) to expire,
+then a third of `hold_ttl`.
+
+The IOS-XE dark row contradicts `quarantine-cisco_iosxe.md`, where an open session's `show
+privilege` ran with port49d stopped. The two runs differ in the command and in what came before
+(a hung store's FAIL). Design §12 now states what was measured, and a run to settle the
+difference is carried to 7e.
+
+**The restore** (`L35-restore-*.md`), on vEOS, the N9Kv and the C8000V, with etcd 3.6.15:
+- `store-roles`' 21 lines run as printed under etcdctl, and port49d starts under the roles
+  they make.
+- `--bump-revision 1000000000 --mark-compacted` reused no revision.
+- port49d said nothing through the 8.1s restore and stayed listening.
+- The session written since the snapshot was denied `store_unavailable`. The next refresh pass
+  revoked it (counted failed), and the device still showed `store_unavailable` after that.
+- A new login after the restore was admitted, after 79812ef.
+
+**Operator notes** (for the pull request bodies and plan 13's docs; the plan's "Operator-facing
+notes", amended by what was built).
+
+7d-1's, as PR #24 carried them, still hold, with one change from Task 13b. port49d remembers the
+write it last made at each device and username, not only the `ctx_id`. So an earlier version of
+the same session, written back, is denied too: `store_unavailable`, counted as
+`port49_crypt_open_failures_total{record="context"}`, until the next login.
+
+7d-2's:
+
+- **New: `store:` in `port49d.yaml`.** `backend: memory` stays the default.
+  - **Turning on etcd.** Set `backend: etcd` with `store.etcd`:
+    - **endpoints:** `https` only, with `ca_file`. An endpoint with a user, a password, a path
+      or a query is refused at load, and the error names only its index.
+    - **a client certificate each for `daemon` and `broker`.** The CN is the etcd user, and
+      neither may be `root`. The key files are owned by port49d's user, mode 0600, not
+      symlinks, and every path is absolute.
+
+    `admin_socket` must be set too. Run `port49d store-roles --config …` and apply its output
+    once, as etcd's root. Its 21 lines run as printed under etcdctl 3.6.15.
+  - **Knobs and defaults:**
+    - `call_timeout` 500ms, `bulk_timeout` 30s;
+    - `packet_deadline` 2s, at most 2s: Junos times out at about 3s (L13). Measured with a
+      hung store, every reply came in about 500ms (L35);
+    - `breaker`: 5 failures and 5s open;
+    - `max_in_flight`: 64 token, 128 context, 4 bulk;
+    - `lease_grace` 5m;
+    - `start_timeout` 30s. A bare `0` waits forever;
+    - `hold_ttl` 15s, from 10s to 60s. A shorter hold can drop on a healthy etcd, so it is
+      refused;
+    - `sweep_interval` 10m.
+- **etcd itself.** Run three or five members in the devices' region, with:
+  - client-certificate auth and auth enabled;
+  - `--auto-compaction-mode=periodic --auto-compaction-retention=1h`, and defragmentation;
+  - a quota above the live records;
+  - **every call answered well under `call_timeout` (500ms).** That is the binding bound at
+    the defaults. The hold itself survives a round trip to the etcd leader of about 0.83s at
+    `hold_ttl` 10s and 1.25s at 15s. Past any of them port49d closes every listener: dark,
+    never two port49d on one keyspace. A cross-site etcd raises `call_timeout`,
+    `packet_deadline` and `hold_ttl` together.
+- **The roles.**
+  - **etcd replaces a grant on the same range; it does not add to it.** Re-running an older
+    `store-roles` output, or granting by hand, can silently change a role.
+  - port49d's start reads the daemon's grants and refuses one that reaches past its role ("a
+    store identity reaches past its role").
+  - Check an existing role with `etcdctl role get` before you apply anything.
+- **Who may write etcd.** The daemon's client certificate can write tokens, receipts, contexts
+  and the index. With it alone, a thief can replay records port49 sealed, never forge them.
+  - **While port49d runs**, a session record put back is denied, an earlier version of the
+    same session included.
+  - **Across a port49d restart**, a record put back while port49d was stopped is taken:
+    - another login's, which is impersonation until that session's ceiling or its device's
+      next login;
+    - or an earlier version of the session's own, which undoes a `revoke --mine`.
+
+  Protect the daemon's key like the encryption key. After a suspected theft, have etcd stop
+  trusting that certificate before port49d next restarts: a new CN, granted the daemon's role,
+  and the old user deleted.
+- **Backups.**
+  - **Back etcd up** as you would the revocations file.
+  - **Protect every snapshot as the store itself.** It holds who is logged into which device
+    (the plaintext index; design §8).
+  - **Restore with port49d stopped.** Use `etcdutl snapshot restore --bump-revision 1000000000
+    --mark-compacted`, which reused no revision when measured (L35).
+    - A restore rolls the marks back too: a revocation added since the snapshot is gone from
+      etcd, and one lifted since is back.
+    - The start puts the revocations file's marks back into etcd, and applies every mark to the
+      restored sessions. It purges every unspent token, so a token redeemed since the snapshot
+      cannot be redeemed again.
+    - Then run `port49 revoke --lift` again for any revocation lifted since the snapshot.
+  - **What a restored snapshot brings back.** It brings back the contexts it held.
+    - One ended by a principal or certificate revocation is denied again at once, by the
+      marks.
+    - One ended by `port49 revoke --mine`, or by `(device, username)`, is live again until its
+      idle TTL. Revoke it again after a restore.
+  - **Restored under a running port49d,** port49d sees the rollback as records put back.
+    - Every session written since the snapshot is denied `store_unavailable`, and the next
+      refresh pass revokes it.
+    - **The device still shows `store_unavailable` after that pass, not a revocation** (L35).
+      The user logs in again, and that login is admitted.
+    - A port49d restart before the pass admits those sessions again.
+- **One port49d per keyspace until plan 7e.**
+  - A second one waits, is not ready, and names the holder every 30s.
+  - On Kubernetes use `strategy: Recreate`.
+  - Never delete `meta/hold` by hand: stop the port49d that holds it. A port49d that takes the
+    keyspace waits a third of `hold_ttl` before it serves, so a deleted key never serves two
+    while etcd answers both.
+- **What a restart does now.**
+  - Live sessions survive. Every standing revocation is applied to them first, so a mark added
+    to the file with port49d stopped takes effect before it serves. Each is then carried onto
+    the policy in force, and the next command is answered from the kept context. Measured on
+    all five images (L35).
+  - Unspent tokens are purged (`port49d: store: purged N unspent token(s) …`), so run `port49
+    token` again. A retried `port49 token` with the same idempotency key mints afresh.
+    - **The replay's caveat.** That relies on this port49d's clock. If port49d moves to a host
+      whose clock is behind the old one's, a replay inside the skew can still be answered from
+      before.
+    - **A pending reservation.** One a stopped port49d left blocks its key for up to a minute.
+  - **Editing `broker.revocations_file` with port49d stopped no longer lifts a mark on etcd:**
+    the store's copy comes back. Lift with `port49 revoke --lift` on the admin socket.
+  - **Junos re-authorization on etcd is unmeasured.** On the memory store a restart denied
+    every live Junos session's next re-authorization (`authorization-time-interval`). On etcd
+    the contexts survive, but L35 did not measure a re-authorization.
+- **What an etcd outage does.**
+  - **At start:** nothing listens, and `/readyz` says `waiting for the store`. Devices use their
+    local method, and break-glass works. port49d waits up to `start_timeout`, then exits 1. With
+    `0` it waits for as long as it takes.
+  - **While running:**
+    - Commands are refused `store_unavailable` within `packet_deadline`, and at once after the
+      circuit opens (`port49_store_circuit_open` 1). Break-glass logs in where the device falls
+      through on ERROR: on vEOS and the N9Kv its commands are then refused, and Junos
+      authorizes no command with port49. IOS-XE refuses break-glass outright (L4, L35).
+    - **The listeners close.** They close when port49d loses its hold (12–25s into a hang at
+      `hold_ttl` 60s, measured), or when a pool's circuit stays open for `hold_ttl`.
+      - port49d resets every held TACACS+ connection and says why.
+      - `/readyz` is 503 meanwhile. port49d does not exit.
+      - Devices fall to local, and break-glass logs in on all five images.
+    - **On IOS-XE, dark means break-glass.** An open session's commands are refused (`%
+      Authorization failed.`) until port49d listens again. vEOS, the N9Kv and Junos run them
+      under local authorization.
+    - **Listening again.** port49d waits for etcd itself, then serves again, and sessions resume
+      on their contexts. That takes the lost hold's lease to expire, plus a third of `hold_ttl`:
+      38s to 1m27s at 60s, measured. If that start fails for another reason (a policy file
+      caught half-written), it says so and tries again every 5s; it does not exit.
+    - **Keep `Restart=on-failure` anyway.** It still restarts port49d after a crash, or after a
+      cold start that exits 1 (a configuration fault, or `start_timeout`).
+    - **Metrics between runs.** `/healthz`, `/readyz` and `/metrics` are unbound for the drain
+      and the next config load (seconds), and the counters restart. Give a Kubernetes liveness
+      probe a failure window over 30s.
+  - **A store slow but up** does the same once its token or context calls keep missing their
+    deadlines. So does etcd refusing every such call (a role removed): a steady run of
+    refusals, not two an hour apart.
+  - **Slow scans** (the refresh's, a large purge) open only the bulk pool's circuit
+    (`port49_store_circuit_open{pool="bulk"}` 1, and a line saying logins and commands are
+    unaffected). port49d keeps serving. Alert on it, and size `bulk_timeout`.
+  - **A wrong token's FAIL** arrives at the failure delay even with a slow store. The store's
+    time is inside the delay, so it is at most 2s at the defaults.
+- **Certificates.**
+  - Each start prints each client certificate's expiry, and
+    `port49_store_client_cert_expiry_timestamp_seconds{component}` carries it.
+  - An expired or untrusted certificate is named, never reported as etcd not answering.
+  - A certificate that does not parse is refused, naming both of its files.
+  - After an outage, a renewed certificate file is picked up without a restart.
+- **New metrics:**
+  - `port49_store_calls_total{component,pool,outcome}`, `port49_store_call_seconds{component,pool}`
+    and `port49_store_circuit_open{component,pool}`. The pools are `token`, `context` and
+    `bulk`; the outcomes include `deadline`, `saturated` and `refused`;
+  - `port49_store_keyspace_held`, `port49_store_client_cert_expiry_timestamp_seconds{component}`
+    and `port49_crypt_store_key_unknown`;
+  - port49d now reports 7d-1's `port49_contexts_reindexed_total`,
+    `port49_contexts_reindex_failures_total` and
+    `port49_store_index_records_undecodable_total`.
+
+  Alert on any of:
+  - a circuit open;
+  - any increase of `port49_contexts_reindexed_total`: an index record was deleted in etcd, and
+    the context it hid has been re-indexed (each sweep, `sweep_interval`);
+  - any increase of `port49_crypt_open_failures_total{record="context"}` with the key held: a
+    record altered in etcd, or another login's, or an earlier version of a session, written
+    back;
+  - `port49_store_keyspace_held` 0 while port49d runs;
+  - a client certificate within 30 days of expiry;
+  - `port49_crypt_store_key_unknown` 1;
+  - any `increase(port49_crypt_open_failures_total{record="token"}[10m])`.
+- **Key rotation across a restart.** Keep `encryption.previous` until the old key's records
+  expire.
+  - **The warning.** A start that finds the store last written under a key it does not hold
+    says so. It names the key id, printed as `?` if it is outside `[A-Za-z0-9._-]{1,64}`, and
+    sets `port49_crypt_store_key_unknown` to 1.
+  - **The alarm lasts only for that process.** The next start records its own keys, so the
+    warning and the gauge clear even if sessions sealed under the lost key are still live.
+    From then on `port49_crypt_open_failures_total` and the unopenable-record lines are the
+    only witnesses.
+  - **The unopenable-record lines.** A record that will not open is named by its key id on
+    stderr, once per 10 minutes.
+  - **An unreadable `meta/seal_keys`** is said, raises the alarm, and is overwritten. The start
+    goes on.
+- **A wrong `PORT49_ENC_V1` never revokes.** Sessions sealed under a key port49d does not hold
+  are denied `store_unavailable`.
+  - The re-index and the refresh say each one by device and username, count it
+    (`port49_contexts_reindex_failures_total`, the refresh's `failed`), and leave it.
+    `port49_policy_refresh_pending` stays 1.
+  - Fix the key and restart, and those sessions answer again.
+  - A record that fails authentication is tampered and is still revoked. So is another login's
+    record or an earlier version of the session written back.
+- **A session record that does not decode** (a `c/` value garbled in etcd) is unreadable, as
+  one that will not open is.
+  - The next login on that device and username replaces it.
+  - The refresh and the re-index delete it at the revision they read, since nothing can revoke
+    or use it.
+  - It is said by its key alone, never its value.
+- **A `port49 token`, refresh, identity or explain behind a slow `port49 revoke`** now says
+  `your revocation sent at … is still running on the broker; nothing was minted; run port49
+  token again once port49 revoke reports` (exit 1). It no longer says `the broker … is
+  unreachable`.
+- **A revocation behind another running one** says `an earlier revocation still held the
+  connection; this one was not sent` (exit 1). Nothing was sent, so run it again.
+- **`port49 revoke` on the admin socket now exits 1 on an answer that names nothing.** It says
+  ``port49 revoke: port49d did not answer (its answer named no revocation); the revocation may
+  be in force — check `port49 revoke --list` and port49d's log before retrying`` (`lift` for a
+  lift), as the agent forms already did. port49d never sends one.
+- **New command: `port49d store-roles [--config FILE]`.**
+
+**Unassigned follow-ups:**
+
+- 7c's M3, unchanged: a `revoke` record for a mark that could not be written.
+- The bulk lift (7c), unchanged.
+- **New: Ruling 17's residual, as Task 13b left it.** With a stolen daemon store credential:
+  - **Across a restart, impersonation.** Another login's context put back while port49d was
+    stopped is taken as that key's at the start. It holds until its sealed ceiling, if it has
+    one, or the key's next login.
+  - **Across a restart, rollback.** An earlier version of a key's own context put back while
+    port49d was stopped undoes a revocation that leaves no mark (self or key). The start's
+    refresh judges its policy.
+  - **While port49d runs** (narrowed by Task 13b from any earlier version): the write before
+    one in flight or of unknown outcome, put back, is admitted until a later write lands at
+    the key.
+  - A deleted token put back for a holder of its secret, until its sealed expiry.
+  - A receipt's sliding bound stretched to its sealed cap.
+  - A context kept alive past its idle TTL: to its sealed ceiling if it has one, and
+    indefinitely under `max_session_age: never`.
+  - A context hidden from the index until the next sweep re-indexes it. Meanwhile a revocation
+    by sid does not reach it.
+
+  Closing it needs two things. One is a revocation record the daemon's role cannot write, for
+  every kind: a spec change to decision 34. The other is a sealed freshness check that holds
+  across restarts: Task 13b's write ID holds only within one process's ledger, so this needs a
+  write sequence the broker's role keeps per key, which 7e's shared ledger could become.
+- **Spec follow-up (7e or later):** config refuses an encryption key id outside the seal-key
+  charset. Today such an id prints as `?` (Task 13).
+- `TestStartClusterRetriesAPortTaken` (etcdtest) failed once under load: its one retry hit a
+  taken port again (the pick-then-bind race). A retry until a deadline would settle it.
+- Lab hygiene: beehive's root filesystem filled during Task 15 and killed port49d at setup
+  (ENOSPC). Check free space before a lab run.
+
+**After the merge:** the raw L35 captures are only in the 7d-2 worktree's `tests/lab/captures/`.
+Copy `tests/lab/captures/L35-*` to the main checkout before removing the worktree, or the
+labpcap audit fails.
+
+**Carried, for later plans:**
+
+- **7e:**
+  - `b.superseded`, `b.blobsSeen` and `quarantineRecorded` move into the store, with m10's
+    bound on `b.superseded`.
+  - More than one port49d per keyspace: the hold becomes per broker process, and the daemons
+    hold none.
+  - The listener's marks and the daemon's (`store.Marks`) are shared across replicas, through
+    a watch on the marks family.
+  - The ledger (`crypt.Ledger`) is shared across replicas or replaced, since per process it
+    would deny another replica's logins (re-check IA1). Since Task 13b it is keyed on write
+    IDs.
+  - `broker.revocations_file` is retired.
+  - One refresh runner.
+  - The decision-log emits under a policy hold are bounded (4b Task 4).
+  - A lab run to settle why IOS-XE refused an open session's command once port49d went dark
+    (`L35-cisco_iosxe.md`), when `quarantine-cisco_iosxe.md` ran one with port49d stopped.
+- **7f:**
+  - Go-dark proper: the N-failures/M-passes listener control replaces Ruling 11's coarse
+    close-and-wait.
+  - The warm context cache.
+- **12:**
+  - The etcd deployment artifacts: the members, compaction, the quota, and the roles applied
+    from `port49d store-roles`.
+  - `call_timeout`, `bulk_timeout` and `packet_deadline` sized against load.
+  - The store alarms, a client certificate's expiry among them.
 
 ## Plan 8 — Workload certificates (§19 step 8)
 
