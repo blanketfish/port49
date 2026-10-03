@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"slices"
 	"strings"
 	"sync"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
+	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/broker/api"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/engine"
@@ -802,5 +804,69 @@ func TestAStalledLogNeverHoldsAReloadThroughASessionRefresh(t *testing.T) {
 	if last < 0 || sink.got[last].Event != decision.EventRefresh || sink.got[last].Verdict != decision.VerdictPermit ||
 		sink.got[last].Session == nil || sink.got[last].Session.AuthTime == "" {
 		t.Fatalf("records %+v", sink.got)
+	}
+}
+
+// leaf2 is a second arista_eos device: under testPolicy it compiles to
+// leaf1's blob, hash for hash.
+var leaf2 = admission.Device{Name: "leaf2", Platform: "arista_eos",
+	Addresses: []netip.Addr{netip.MustParseAddr("172.100.100.12")}}
+
+// blobLines is the blob records in log, by hash, and every mint record's
+// blob hash, in order.
+func blobLines(t *testing.T, log string) (blobs map[string]int, mints []string) {
+	t.Helper()
+	blobs = map[string]int{}
+	for _, line := range strings.Split(strings.TrimSpace(log), "\n") {
+		var r map[string]any
+		if err := json.Unmarshal([]byte(line), &r); err != nil {
+			t.Fatal(err)
+		}
+		switch r["event"] {
+		case decision.EventBlob:
+			blobs[r["blob"].(map[string]any)["hash"].(string)]++
+		case decision.EventMint:
+			if m, ok := r["mint"].(map[string]any); ok {
+				mints = append(mints, m["blob"].(string))
+			}
+		}
+	}
+	return blobs, mints
+}
+
+// Two devices in one request that compile to one blob write one blob
+// record between them, which both mint records name: the request's
+// buffer knows what it already carries (Task 4 review I1).
+func TestABatchWritesEachBlobOnce(t *testing.T) {
+	f := newFixtureWithDevices(t, 8, leaf2)
+	if w := f.post(context.Background(), f.state(f.alice), `{"devices":["leaf1","leaf2"]}`, ""); w.Code != http.StatusOK {
+		t.Fatalf("the mint: %d %s", w.Code, w.Body)
+	}
+	blobs, mints := blobLines(t, f.log.String())
+	if len(blobs) != 1 || len(mints) != 2 || mints[0] != mints[1] || blobs[mints[0]] != 1 {
+		t.Fatalf("blob records %v, mint records naming %v:\n%s", blobs, mints, f.log)
+	}
+}
+
+// A session refresh that moves two contexts onto one new blob writes one
+// blob record for it (Task 4 review I1).
+func TestASessionRefreshWritesEachBlobOnce(t *testing.T) {
+	f := newFixtureWithDevices(t, 8, leaf2)
+	f.liveContextAt(t, "leaf1", "alice", alicePrincipal, "", f.now, f.now.Add(time.Hour))
+	f.liveContextAt(t, "leaf2", "alice", alicePrincipal, "", f.now, f.now.Add(time.Hour))
+	f.loadPolicy(t, strings.Replace(testPolicy, `deny: ["reload **"]`, `deny: ["reload **", "write erase"]`, 1))
+	f.log.Reset()
+	rep, err := f.b.RefreshSession(context.Background(), alicePrincipal, store.Credential{Method: "cert"}, f.b.Now())
+	if err != nil || len(rep.Sessions) != 2 {
+		t.Fatalf("the refresh: %+v %v", rep, err)
+	}
+	ctx := context.Background()
+	c1, err1 := f.st.GetContext(ctx, store.ContextKey{NAS: "leaf1", Username: "alice"})
+	c2, err2 := f.st.GetContext(ctx, store.ContextKey{NAS: "leaf2", Username: "alice"})
+	if err1 != nil || err2 != nil || c1.BlobHash != c2.BlobHash {
+		t.Fatalf("contexts %+v %v, %+v %v", c1, err1, c2, err2)
+	}
+	if blobs, _ := blobLines(t, f.log.String()); len(blobs) != 1 || blobs[c1.BlobHash] != 1 {
+		t.Fatalf("blob records %v, the contexts name %s:\n%s", blobs, c1.BlobHash, f.log)
 	}
 }

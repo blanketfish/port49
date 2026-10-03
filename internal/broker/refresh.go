@@ -79,7 +79,7 @@ type RefreshReport struct {
 	// session refresh holds the policy while it judges, so it passes its
 	// buffer, written once it lets go (plan 7e, Ruling 10); a policy
 	// refresh, after a reload, holds none and writes at once.
-	log *decision.Buffer
+	log *heldLog
 }
 
 // passLog is where a pass writes its records: rep's buffer, or b.Log.
@@ -596,7 +596,7 @@ func (b *Broker) refreshContext(ctx context.Context, cur *policy.Policy, priors 
 		if rep.log != nil {
 			err = b.putBlob(ctx, rep.log, step.write.BlobHash, step.body, ttl)
 		} else {
-			one := decision.NewBuffer()
+			one := newHeldLog()
 			err = b.putBlob(ctx, one, step.write.BlobHash, step.body, ttl)
 			one.Flush(b.Log, b.blobLanded)
 		}

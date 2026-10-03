@@ -336,7 +336,7 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
 	// Every record written under the hold goes to buf, and is written to the
 	// log once the hold is let go: a log sink that stalls must not hold a
 	// reload either (plan 7e, Ruling 10).
-	buf := decision.NewBuffer()
+	buf := newHeldLog()
 	pol, hold := b.Policy.Hold()
 	held := true
 	release := func() {
@@ -641,7 +641,7 @@ func (b *Broker) supersede(k store.TokenKey, at time.Time) {
 // ErrIdempotencyInProgress, which is the whole request's; every other refusal
 // is an item. Every record it writes goes to buf, the request's buffer
 // (tokens).
-func (b *Broker) mintOne(ctx context.Context, buf decision.Emitter, pol *policy.Policy, principal string,
+func (b *Broker) mintOne(ctx context.Context, buf *heldLog, pol *policy.Policy, principal string,
 	cred store.Credential, authTime time.Time, name string, req api.MintRequest, hold *token.Reservation,
 	bodyHash string) (api.MintItem, error) {
 	deny := func(reason decision.Reason, platform string) api.MintItem {
@@ -824,14 +824,28 @@ func (b *Broker) fault(name, code, detail string) api.MintItem {
 // the next mint that writes the hash emits it again: replay reads the log
 // alone, and a mint record naming a blob the log never carried cannot be
 // replayed. An Emitter that cannot report a refusal is trusted.
-func (b *Broker) putBlob(ctx context.Context, out decision.Emitter, hash string, body []byte, ttl time.Duration) error {
+func (b *Broker) putBlob(ctx context.Context, out *heldLog, hash string, body []byte, ttl time.Duration) error {
 	if err := b.Store.PutBlob(ctx, hash, body, ttl); err != nil {
 		return err
 	}
-	if !b.blobSeen(hash) {
+	if !b.blobSeen(hash) && !out.blobs[hash] {
 		out.Emit(decision.Record{TS: b.Now(), Event: decision.EventBlob, Blob: b.blobEvent(hash, body)})
+		out.blobs[hash] = true
 	}
 	return nil
+}
+
+// heldLog is the records one request or pass writes while it holds the
+// policy, with the blob hashes it already carries a record for: two
+// devices, or two contexts, that compile to one blob buffer one blob record
+// between them, not one each (Task 4 review I1). One goroutine uses it.
+type heldLog struct {
+	*decision.Buffer
+	blobs map[string]bool
+}
+
+func newHeldLog() *heldLog {
+	return &heldLog{Buffer: decision.NewBuffer(), blobs: map[string]bool{}}
 }
 
 // blobLanded is Buffer.Flush's landed for the request's buffer: a blob

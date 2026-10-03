@@ -175,7 +175,7 @@ func (f *fixture) liveContext(t *testing.T, device, username, principal, certKey
 // putBlobLogged is putBlob outside a mint, as the refresh writes a blob:
 // its record is written to b.Log at once, and its hash marked when it lands.
 func (b *Broker) putBlobLogged(ctx context.Context, hash string, body []byte, ttl time.Duration) error {
-	one := decision.NewBuffer()
+	one := newHeldLog()
 	err := b.putBlob(ctx, one, hash, body, ttl)
 	one.Flush(b.Log, b.blobLanded)
 	return err

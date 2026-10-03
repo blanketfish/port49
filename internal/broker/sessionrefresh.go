@@ -223,7 +223,7 @@ type SessionRefreshReport struct {
 // must not hold a reload (plan 7e, Ruling 10). A policy refresh, the pass
 // after a reload, holds no policy and writes at once.
 func (b *Broker) RefreshSession(ctx context.Context, principal string, cred store.Credential, at time.Time) (SessionRefreshReport, error) {
-	buf := decision.NewBuffer()
+	buf := newHeldLog()
 	pol, hold := b.Policy.Hold()
 	defer func() {
 		hold()
