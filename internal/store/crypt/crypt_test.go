@@ -1304,6 +1304,10 @@ func TestAnEarlierFormIsNamedAsOne(t *testing.T) {
 		sealed, _ := keys().SealBound(body, contextAAD(ka))
 		inner.PutContext(context.Background(), ka, store.Context{Sealed: sealed}, time.Hour)
 		_, err := s.GetContext(context.Background(), ka)
+		var u *store.UnreadableContextError
+		if !errors.As(err, &u) { // a later form does not open either (Task 7 review M-6)
+			t.Fatalf("form %d opened: %v", c.v, err)
+		}
 		if errors.Is(err, ErrEarlierForm) != c.earlier || errors.Is(told, ErrEarlierForm) != c.earlier {
 			t.Fatalf("form %d: read %v, told %v", c.v, err, told)
 		}
@@ -1645,5 +1649,244 @@ func TestAnUnopenableRecordNamesItsKey(t *testing.T) {
 	// (pre-flight M44).
 	if got := SealedKeyID(append([]byte{5}, "a\nb;c"...)); got != "?" {
 		t.Fatalf("a header outside the key-id charset named %q", got)
+	}
+}
+
+// A revocation at a key this process has no mark for, whose seal failed,
+// is not lifted by the record from before it put back with its plaintext
+// zeroed: SetRevokedAt hands the ledger the revision it had seen once the
+// mark landed, and the floor holds through every sequence below it. A
+// login after it, on another process, is admitted and not read as revoked
+// (Task 7 review I-2; the brief's pending floor, deviation 5).
+func TestAFloorAtAKeyWithNoMarkHoldsAgainstAPutBack(t *testing.T) {
+	ctx := context.Background()
+	now := time.Unix(1_000_000, 0).UTC()
+	inner := memory.New(func() time.Time { return now })
+	fails := &sealFailsStore{RevStore: inner}
+	la, lb := NewLedger(), NewLedger()
+	la.SetBase(inner.Seen() + 1)
+	lb.SetBase(inner.Seen() + 1)
+	b := Wrap(inner, keys(), nil, WithLedger(lb))
+	a := Wrap(fails, keys(), nil, WithLedger(la))
+	login(t, b, "ctx-1", "user:alice")
+	other := store.ContextKey{NAS: "leaf-09", Username: "x"}
+	for range 3 { // the store's revision moves past the record's sequence
+		if err := b.PutContext(ctx, other, store.Context{CtxID: "o", Principal: "user:o", Username: "x"},
+			time.Hour); err != nil {
+			t.Fatal(err)
+		}
+	}
+	saved, err := inner.GetContext(ctx, ka)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.SetRevokedAt(ctx, ka, now); !errors.Is(err, store.ErrUnavailable) {
+		t.Fatalf("a revocation whose seal failed: %v", err)
+	}
+	fails.down.Store(false)
+	if err := inner.PutContext(ctx, ka, saved, time.Hour); err != nil { // put back, plaintext zero
+		t.Fatal(err)
+	}
+	if got, err := a.GetContext(ctx, ka); err != nil || !got.RevokedAt.Equal(now) {
+		t.Fatalf("a put-back at a key with no mark lifted the revocation: %v %v", got.RevokedAt, err)
+	}
+	login(t, b, "ctx-2", "user:alice")
+	if got, err := a.GetContext(ctx, ka); err != nil || got.CtxID != "ctx-2" || !got.RevokedAt.IsZero() {
+		t.Fatalf("a later login on another process, read here: %q %v %v", got.CtxID, got.RevokedAt, err)
+	}
+}
+
+// Observe raises a key's mark and never lowers it, from a record read or
+// from the ledger record (Seed): a lower sequence leaves every record
+// below the mark denied (Task 7 review I-3).
+func TestTheMarkNeverGoesDown(t *testing.T) {
+	for name, lower := range map[string]func(l *Ledger){
+		"observe": func(l *Ledger) { l.Observe(ka, 5, 5, time.Time{}, time.Time{}) },
+		"seed":    func(l *Ledger) { l.Seed(store.LedgerMark{Key: ka, Seq: 5}) },
+	} {
+		l := NewLedger()
+		l.Observe(ka, 10, 10, time.Time{}, time.Time{})
+		lower(l)
+		if l.admits(ka, 9) || !l.admits(ka, 10) || l.next(ka) != 11 {
+			t.Fatalf("%s: a lower sequence moved the mark: admits(9)=%v next=%d", name, l.admits(ka, 9), l.next(ka))
+		}
+	}
+}
+
+// The base only rises, and a write at a key with no mark seals at it, so
+// another process whose base is the same admits it (Task 7 review M-6).
+func TestTheBaseOnlyRisesAndSealsAKeyWithNoMark(t *testing.T) {
+	l := NewLedger()
+	if got := l.next(ka); got != 1 {
+		t.Fatalf("next with no base: %d", got)
+	}
+	l.SetBase(100)
+	l.SetBase(50)
+	if l.Base() != 100 || l.next(ka) != 100 {
+		t.Fatalf("base %d, next %d: want 100, 100", l.Base(), l.next(ka))
+	}
+}
+
+// The keep is never below DefaultLedgerKeep, and a longer one is kept;
+// a mark that saw a context with no ceiling, even after one with a
+// ceiling at the same sequence, is never pruned (Task 7 review M-6).
+func TestTheKeepAndANeverMark(t *testing.T) {
+	now := time.Unix(2_000_000, 0)
+	l := NewLedger()
+	l.SetKeep(time.Hour)
+	l.Observe(ka, 10, 10, time.Time{}, now)
+	if n := l.Prune(now.Add(2 * time.Hour)); n != 0 {
+		t.Fatalf("a keep below %v pruned at 2h: %d", DefaultLedgerKeep, n)
+	}
+	l.SetKeep(48 * time.Hour)
+	if n := l.Prune(now.Add(25 * time.Hour)); n != 0 {
+		t.Fatalf("a 48h keep pruned at 25h: %d", n)
+	}
+	if n := l.Prune(now.Add(49 * time.Hour)); n != 1 {
+		t.Fatalf("a 48h keep did not prune at 49h: %d", n)
+	}
+	never := store.ContextKey{NAS: "leaf-02", Username: "svc"}
+	l.Observe(never, 10, 10, time.Time{}, now)
+	l.Observe(never, 10, 11, time.Time{}, time.Time{}) // the same write, its ceiling never
+	if n := l.Prune(now.Add(1000 * time.Hour)); n != 0 || l.Len() != 1 {
+		t.Fatalf("a mark that saw a never context was pruned: %d, %d left", n, l.Len())
+	}
+	if ms := l.Dirty(); len(ms) != 1 || !ms[0].Until.IsZero() {
+		t.Fatalf("a never mark's record is kept for good: %+v", ms)
+	}
+}
+
+// A read at the mark's sequence at a later revision (a touch moved it)
+// raises the revision kept beside the mark, so a read below that is
+// stale (Task 7 review M-6).
+func TestAnEqualSequenceRaisesTheMarksRevision(t *testing.T) {
+	l := NewLedger()
+	l.Observe(ka, 10, 5, time.Time{}, time.Time{})
+	l.Observe(ka, 10, 8, time.Time{}, time.Time{})
+	if !l.stale(ka, 7) || l.stale(ka, 8) {
+		t.Fatalf("stale(7)=%v stale(8)=%v: want true, false", l.stale(ka, 7), l.stale(ka, 8))
+	}
+}
+
+// Dirty hands out each raised mark once, with its ceiling plus the keep;
+// Redirty owes them again; Seed takes a record's Until back to the
+// ceiling, so a mark seeded and handed out again carries the same Until
+// (Task 10's keeper; Task 7 review M-6).
+func TestDirtyRedirtyAndSeedRoundTrip(t *testing.T) {
+	ceiling := time.Unix(2_000_000, 0).UTC()
+	l := NewLedger()
+	l.Observe(ka, 10, 10, time.Time{}, ceiling)
+	ms := l.Dirty()
+	want := store.LedgerMark{Key: ka, Seq: 10, Until: ceiling.Add(DefaultLedgerKeep)}
+	if len(ms) != 1 || ms[0] != want {
+		t.Fatalf("Dirty: %+v, want %+v", ms, want)
+	}
+	if again := l.Dirty(); len(again) != 0 || l.Pending() != 0 {
+		t.Fatalf("Dirty did not clear: %+v, %d pending", again, l.Pending())
+	}
+	l.Redirty(ms)
+	if l.Pending() != 1 {
+		t.Fatalf("Redirty owes nothing: %d pending", l.Pending())
+	}
+	if again := l.Dirty(); len(again) != 1 || again[0] != want {
+		t.Fatalf("Dirty after Redirty: %+v", again)
+	}
+	seeded := NewLedger()
+	seeded.Seed(want)
+	if got := seeded.Dirty(); len(got) != 1 || got[0] != want {
+		t.Fatalf("Seed then Dirty: %+v, want %+v", got, want)
+	}
+}
+
+// Another process's revocation whose seal failed reaches this one through
+// the plaintext revoked_at it reads at the mark: the record put back with
+// it zeroed is still revoked here (Task 7 review M-6; M-2 before Task 8's
+// feed).
+func TestAPlaintextRevocationReadAtTheMarkIsTheFloor(t *testing.T) {
+	ctx := context.Background()
+	now := time.Unix(1_000_000, 0).UTC()
+	inner := memory.New(func() time.Time { return now })
+	fails := &sealFailsStore{RevStore: inner}
+	la, lb := NewLedger(), NewLedger()
+	la.SetBase(inner.Seen() + 1)
+	lb.SetBase(inner.Seen() + 1)
+	a := Wrap(fails, keys(), nil, WithLedger(la))
+	b := Wrap(inner, keys(), nil, WithLedger(lb))
+	login(t, a, "ctx-1", "user:alice")
+	saved, _ := inner.GetContext(ctx, ka)
+	if _, err := b.GetContext(ctx, ka); err != nil {
+		t.Fatal(err)
+	}
+	a.SetRevokedAt(ctx, ka, now) // the plaintext lands; the seal does not
+	fails.down.Store(false)
+	if got, err := b.GetContext(ctx, ka); err != nil || !got.RevokedAt.Equal(now) {
+		t.Fatalf("the plaintext revocation, read: %v %v", got.RevokedAt, err)
+	}
+	if err := inner.PutContext(ctx, ka, saved, time.Hour); err != nil { // plaintext zero
+		t.Fatal(err)
+	}
+	if got, err := b.GetContext(ctx, ka); err != nil || !got.RevokedAt.Equal(now) {
+		t.Fatalf("the record put back lifted the revocation on b: %v %v", got.RevokedAt, err)
+	}
+}
+
+// A record that does not open, or that the ledger denies, carries the
+// key's floor in its UnreadableContextError, so the login that replaces
+// it cannot lift a revocation whose seal failed (Task 7 review M-6).
+func TestAnUnreadableRecordCarriesTheFloor(t *testing.T) {
+	ctx := context.Background()
+	now := time.Unix(1_000_000, 0).UTC()
+	body, _ := json.Marshal(map[string]any{"v": 3, "ctx_id": "c-old", "principal": "user:alice", "username": "netops"})
+	form3, _ := keys().SealBound(body, contextAAD(ka))
+	for name, putBack := range map[string]func(saved store.Context) store.Context{
+		"does not open":  func(store.Context) store.Context { return store.Context{Sealed: form3} },
+		"below the mark": func(saved store.Context) store.Context { return saved },
+	} {
+		inner := memory.New(func() time.Time { return now })
+		fails := &sealFailsStore{RevStore: inner}
+		l := NewLedger()
+		l.SetBase(inner.Seen() + 1)
+		s := Wrap(fails, keys(), nil, WithLedger(l))
+		login(t, s, "ctx-1", "user:alice")
+		saved, _ := inner.GetContext(ctx, ka)
+		login(t, s, "ctx-2", "user:bob")
+		s.SetRevokedAt(ctx, ka, now)
+		fails.down.Store(false)
+		if err := inner.PutContext(ctx, ka, putBack(saved), time.Hour); err != nil {
+			t.Fatal(err)
+		}
+		var u *store.UnreadableContextError
+		if _, err := s.GetContext(ctx, ka); !errors.As(err, &u) || !u.RevokedAt.Equal(now) {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+}
+
+// countingStore counts GetContext calls.
+type countingStore struct {
+	store.RevStore
+	reads atomic.Int32
+}
+
+func (c *countingStore) GetContext(ctx context.Context, k store.ContextKey) (store.Context, error) {
+	c.reads.Add(1)
+	return c.RevStore.GetContext(ctx, k)
+}
+
+// A record put back commits after the mark, so it is not stale: it is
+// denied on its first read, not read again (Task 7 review M-6).
+func TestAPutBackIsNotReadAgain(t *testing.T) {
+	ctx := context.Background()
+	inner := &countingStore{RevStore: memory.New(time.Now)}
+	l := NewLedger()
+	l.SetBase(inner.Seen() + 1)
+	s := Wrap(inner, keys(), nil, WithLedger(l))
+	login(t, s, "ctx-1", "user:alice")
+	saved, _ := inner.RevStore.GetContext(ctx, ka)
+	login(t, s, "ctx-2", "user:bob")
+	inner.RevStore.PutContext(ctx, ka, saved, time.Hour)
+	inner.reads.Store(0)
+	if _, err := s.GetContext(ctx, ka); !errors.Is(err, ErrNotLastWritten) || inner.reads.Load() != 1 {
+		t.Fatalf("a put-back: %v after %d reads", err, inner.reads.Load())
 	}
 }

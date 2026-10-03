@@ -454,6 +454,23 @@ func TestAnEarlierFormLineDoesNotSilenceAPutBackLine(t *testing.T) {
 	}
 }
 
+// Under a key this port49d does not hold, the line is the rotation advice
+// whatever the open said: the earlier-form and put-back lines are only for
+// a held key, whose record did open (Task 7 review M-6).
+func TestTheSayerGivesTheRotationAdviceUnderAnUnheldKey(t *testing.T) {
+	for _, why := range []error{fmt.Errorf("crypt: opening context: %w", crypt.ErrEarlierForm),
+		crypt.ErrNotLastWritten} {
+		var out bytes.Buffer
+		say := unopenableSayer(crypt.Keys{Current: crypt.Key{ID: "v2"}}, &out, time.Now)
+		say("context", "v1", why)
+		got := out.String()
+		if !strings.Contains(got, `set encryption.previous to "v1"`) || strings.Contains(got, "earlier port49") ||
+			strings.Contains(got, "put back") {
+			t.Fatalf("%v: %q", why, got)
+		}
+	}
+}
+
 // A record below the newest write is named as that, not as "the one this
 // port49d last wrote", which is no longer the rule (plan 7e, Ruling 3).
 func TestTheSayerNamesAPutBackAsBelowTheNewestWrite(t *testing.T) {
