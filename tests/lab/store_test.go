@@ -336,10 +336,18 @@ func TestStoreOutageEndToEnd(t *testing.T) {
 					return
 				}
 				hung := revokeOutcome(l.p.name, sh, "show version", f, "with the store hung")
-				row(fmt.Sprintf("3. store hung, the open session's `show version` (attempt %d)", attempt), hung)
-				if !strings.HasPrefix(hung, "refused") {
+				switch {
+				case strings.HasPrefix(hung, "refused"):
+				case strings.HasPrefix(hung, "printed something"):
+					// IOS-XE prints nothing for a refused command, not even
+					// the FAIL's server_msg (tests/lab/results/L4-error-cisco_iosxe.md
+					// (b)): no output line is the refusal. The FAIL itself is
+					// read off the wire, and its record, below.
+					hung = "refused silently, no output: " + hung
+				default:
 					f("with the store hung the next command was not refused: %s", hung)
 				}
+				row(fmt.Sprintf("3. store hung, the open session's `show version` (attempt %d)", attempt), hung)
 			})
 		}
 		var tok3 string
@@ -387,6 +395,9 @@ func TestStoreOutageEndToEnd(t *testing.T) {
 			if strings.Contains(w.what, "token login") && !strings.Contains(times, "AUTHEN seq 1 -> ERROR") &&
 				!strings.Contains(times, "AUTHEN seq 3 -> ERROR") {
 				fail("the hung store's token login was not answered ERROR on the wire: %s", times)
+			}
+			if strings.Contains(w.what, "open session") && !strings.Contains(times, "AUTHOR seq 1 -> FAIL") {
+				fail("the hung store's command was not answered FAIL on the wire: %s", times)
 			}
 		}
 
