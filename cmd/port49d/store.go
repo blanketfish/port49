@@ -59,7 +59,13 @@ type stores struct {
 	// are open, and joins it before close. Nil on memory, where every write
 	// is this process's own.
 	follow func(ctx context.Context)
-	close  func()
+	// keep writes the ledger's raised marks to the ledger record until its
+	// ctx ends (crypt.KeepLedger; plan 7e, Ruling 4): in 7e-1 port49d holds
+	// the keyspace, so it keeps the record, with the broker's identity.
+	// runOnce runs and joins it as it does follow. Nil on memory, where
+	// there is no record.
+	keep  func(ctx context.Context)
+	close func()
 }
 
 // storeGone ends one run of port49d on etcd (Ruling 11; pre-flight I10,
@@ -226,17 +232,19 @@ func openStores(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 		case <-time.After(5 * time.Second):
 		}
 	}
-	// The ledger (plan 7e, Ruling 3): every live context at one revision,
-	// read on the daemon's raw store, which the feed then follows from that
-	// revision. The base is just past it before anything reads a context,
-	// the start's reads included. The ledger record is Task 10's (src nil).
-	// An outage is said and tried again as the key check is.
+	// The ledger (plan 7e, Rulings 3, 4): every mark the ledger record
+	// holds, then every live context at one revision, both read on the
+	// daemon's raw store, which the feed then follows from that revision.
+	// The base is just past it before anything reads a context, the
+	// start's reads included. An outage is said and tried again as the key
+	// check is. A refused read of the record is roles applied before plan
+	// 7e, which waiting does not mend: a store fault (pre-flight M17).
 	var rev uint64
 	for {
 		lctx, cancel := context.WithTimeout(ctx, e.BulkTimeout)
 		var known, recorded int
 		var err error
-		rev, known, recorded, err = crypt.LoadLedger(lctx, d, nil, keys, ledger)
+		rev, known, recorded, err = crypt.LoadLedger(lctx, d, d, keys, ledger)
 		cancel()
 		if err == nil {
 			fmt.Fprintf(out, "port49d: ledger: %d context key(s) known (%d from the ledger record); following the "+
@@ -245,8 +253,12 @@ func openStores(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 		}
 		if ctx.Err() != nil || !errors.Is(err, store.ErrUnavailable) && !errors.Is(err, store.ErrCompacted) {
 			letGo()
-			if ctx.Err() != nil {
+			switch {
+			case ctx.Err() != nil:
 				return stores{}, ctx.Err()
+			case errors.Is(err, store.ErrRefused):
+				return stores{}, &storeFault{errors.New("store: the daemon's role cannot read lw/, the ledger " +
+					"record: apply port49d store-roles (plan 7e) as etcd's root, then start again")}
 			}
 			return stores{}, fmt.Errorf("store: reading the live contexts for the ledger: %w", err)
 		}
@@ -264,7 +276,7 @@ func openStores(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 		}
 	}
 	follow := func(ctx context.Context) {
-		crypt.FollowContexts(ctx, d, nil, keys, ledger, rev, // the ledger record (src): Task 10
+		crypt.FollowContexts(ctx, d, d, keys, ledger, rev,
 			func(up bool) {
 				v := 0.0
 				if up {
@@ -274,6 +286,12 @@ func openStores(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 			},
 			func() { m.StoreFeedRescans.WithLabelValues("contexts").Inc() },
 			func(format string, args ...any) { fmt.Fprintf(out, "port49d: "+format+"\n", args...) })
+	}
+	keep := func(ctx context.Context) {
+		crypt.KeepLedger(ctx, ledger, b, time.Second, func(n int, behind bool) {
+			m.LedgerPending.Set(float64(n))
+			m.LedgerBehind.Set(b2f(behind))
+		}, func(format string, args ...any) { fmt.Fprintf(out, "port49d: "+format+"\n", args...) })
 	}
 	gc := func(component string) guard.Config {
 		return guard.Config{Component: component, CallTimeout: e.CallTimeout, BulkTimeout: e.BulkTimeout,
@@ -299,8 +317,17 @@ func openStores(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 		persistent: true,
 		lost:       lost,
 		follow:     follow,
+		keep:       keep,
 		close:      func() { release(); m.StoreKeyspaceHeld.Set(0); closeAll() },
 	}, nil
+}
+
+// b2f is 1 for true, 0 for false: a gauge's reading of a bool.
+func b2f(b bool) float64 {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // unopenableSayer is crypt.OnUnopenable's line (Ruling 14): which record,

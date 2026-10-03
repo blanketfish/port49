@@ -37,8 +37,15 @@ import (
 
 func brokerConfig(t *testing.T, policyBody string) config.Config {
 	t.Helper()
+	return brokerConfigWith(t, policyBody, nil)
+}
+
+// brokerConfigWith is brokerConfig with a lab client certificate for each
+// of others too (testpki.LabClientFiles), for mintAs.
+func brokerConfigWith(t *testing.T, policyBody string, others []string) config.Config {
+	t.Helper()
 	dir := t.TempDir()
-	if err := testpki.WriteLab(dir, "alice@example.com", time.Now()); err != nil {
+	if err := testpki.WriteLabWith(dir, "alice@example.com", others, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	pol := filepath.Join(dir, "policy.yaml")
@@ -98,6 +105,16 @@ const minimalPolicy = `
 scopes: [{name: all_devices, match: {}}]
 roles: [{name: r, privilege: admin, permit: ["**"]}]
 subjects: [{name: s, identity: ["user:alice@example.com"], username: alice, token_ttl: 60s}]
+grants: [{subject: s, scope: all_devices, roles: [r]}]
+`
+
+// sharedUsernamePolicy is minimalPolicy with bob as a second identity of
+// alice's subject: the two log in under one username, so one context key
+// on a device. Two subjects may not share a username (spec §2).
+const sharedUsernamePolicy = `
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: r, privilege: admin, permit: ["**"]}]
+subjects: [{name: s, identity: ["user:alice@example.com", "user:bob@example.com"], username: alice, token_ttl: 60s}]
 grants: [{subject: s, scope: all_devices, roles: [r]}]
 `
 

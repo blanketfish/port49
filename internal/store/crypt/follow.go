@@ -3,6 +3,7 @@ package crypt
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/rhwendt/port49/internal/store"
@@ -67,7 +68,7 @@ func seedFrom(ctx context.Context, src store.LedgerSource, l *Ledger) (int, erro
 	}
 	_, ms, err := src.LedgerMarks(ctx)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("reading the ledger record: %w", err)
 	}
 	first := l.Base() == 0
 	for _, m := range ms {
@@ -157,3 +158,57 @@ func FollowContexts(ctx context.Context, feed store.ContextFeed, src store.Ledge
 		}
 	}
 }
+
+// KeepLedger writes l's raised marks to sink every `every` until ctx ends
+// (plan 7e, Ruling 4): the keyspace's holder alone runs it. A write that
+// fails is said once per run of failures, and its marks are owed again.
+// report is told after each round how many marks are owed
+// (port49_ledger_pending), and whether the context feed is down
+// (port49_ledger_behind): then the ledger is not raised by other
+// processes' logins, and pending cannot show what the record misses. When
+// ctx ends it writes what is still owed once, within keeperStopFlush, so a
+// graceful stop leaves its last round in the record, and reports (0,
+// false) once, so a runner whose duties stopped shows no stale value
+// (pre-flight I11).
+func KeepLedger(ctx context.Context, l *Ledger, sink store.LedgerSink, every time.Duration,
+	report func(pending int, behind bool), logf func(string, ...any)) {
+	t := time.NewTicker(every)
+	defer t.Stop()
+	defer report(0, false)
+	failing := false
+	flush := func(ctx context.Context, timeout time.Duration) {
+		ms := l.Dirty()
+		if len(ms) == 0 {
+			return
+		}
+		wctx, cancel := context.WithTimeout(ctx, timeout)
+		err := sink.PutLedgerMarks(wctx, ms)
+		cancel()
+		switch {
+		case err != nil:
+			l.Redirty(ms)
+			if !failing {
+				logf("store: writing the ledger record failed (%v); %d mark(s) owed, tried again every %v; a "+
+					"context put back at those keys would be taken after a restart", err, len(ms), every)
+				failing = true
+			}
+		case failing:
+			logf("store: the ledger record is written again")
+			failing = false
+		}
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			flush(context.WithoutCancel(ctx), keeperStopFlush)
+			return
+		case <-t.C:
+		}
+		flush(ctx, 10*every+5*time.Second)
+		report(l.Pending(), !l.Fence().Up())
+	}
+}
+
+// keeperStopFlush bounds a stopping keeper's last write: a stop with the
+// store down waits this long, no longer.
+const keeperStopFlush = 2 * time.Second

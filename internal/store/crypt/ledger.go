@@ -69,7 +69,9 @@ const DefaultLedgerKeep = 24 * time.Hour
 // is set by this process's own revocation (revoked), held through the
 // mark and every sequence sealed before the revocation landed, and by any
 // record it reads or the feed brings at the mark's sequence with a
-// plaintext revoked_at; only a later sequence clears it.
+// plaintext revoked_at; only a later sequence clears it. The ledger record
+// keeps it with the sequence it holds through (store.LedgerMark.FloorSeq),
+// so a restart holds it as far (seedFloor).
 //
 // A mark is kept until keep past the latest sealed ceiling seen at its
 // key; one that saw a context with no ceiling (max_session_age: never) is
@@ -206,15 +208,41 @@ func (l *Ledger) ObserveFollowed(k store.ContextKey, seq, rev uint64, plainRevok
 	l.observe(k, seq, rev, plainRevokedAt, ceiling)
 }
 
-// Seed is Observe from the ledger record (plan 7e, Ruling 4).
+// Seed is Observe from the ledger record (plan 7e, Ruling 4), and the
+// record's floor (seedFloor).
 func (l *Ledger) Seed(m store.LedgerMark) {
-	l.Observe(m.Key, m.Seq, 0, m.RevokedAt, l.seedCeiling(m))
+	l.Observe(m.Key, m.Seq, 0, time.Time{}, l.seedCeiling(m))
+	l.seedFloor(m)
 }
 
 // seedFollowed is Seed on a ledger already loaded, as ObserveFollowed: a
 // rescan's or a re-entry's seed makes no entry below the base.
 func (l *Ledger) seedFollowed(m store.LedgerMark) {
-	l.ObserveFollowed(m.Key, m.Seq, 0, m.RevokedAt, l.seedCeiling(m))
+	l.ObserveFollowed(m.Key, m.Seq, 0, time.Time{}, l.seedCeiling(m))
+	l.seedFloor(m)
+}
+
+// seedFloor takes m's floor at a key l holds an entry for, held through
+// m.FloorSeq, while the key's mark is at or below it. Observe would hold
+// it only through m.Seq, and a floor revoked holds through every sequence
+// below the revision seen once it landed, which can be above the mark: a
+// record put back sealed between the two would clear it after a restart
+// (Task 10, C1).
+func (l *Ledger) seedFloor(m store.LedgerMark) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	e, ok := l.m[m.Key]
+	if !ok || m.RevokedAt.IsZero() || e.hw > m.FloorSeq {
+		return
+	}
+	if m.RevokedAt.After(e.floor) {
+		e.floor = m.RevokedAt
+		l.dirty[m.Key] = true
+	}
+	if m.FloorSeq > e.floorSeq {
+		e.floorSeq = m.FloorSeq
+		l.dirty[m.Key] = true
+	}
 }
 
 // seedCeiling is the sealed ceiling m's Until was kept from.
@@ -312,7 +340,10 @@ func (l *Ledger) Dirty() []store.LedgerMark {
 		if e == nil {
 			continue
 		}
-		m := store.LedgerMark{Key: k, Seq: e.hw, RevokedAt: e.floor}
+		m := store.LedgerMark{Key: k, Seq: e.hw}
+		if !e.floor.IsZero() {
+			m.RevokedAt, m.FloorSeq = e.floor, e.floorSeq
+		}
 		if !e.never && !e.ceiling.IsZero() {
 			m.Until = e.ceiling.Add(l.keep)
 		}

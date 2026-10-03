@@ -241,12 +241,13 @@ type ContextKey struct {
 
 // LedgerMark is one key's entry in the ledger record (plan 7e, Ruling 4):
 // the highest write sequence known there, a revocation's plaintext time
-// held at it, and until when it is kept (zero: for good, a never
-// context's).
+// held through FloorSeq (the floor, which a sequence above FloorSeq
+// clears), and until when it is kept (zero: for good, a never context's).
 type LedgerMark struct {
 	Key       ContextKey
 	Seq       uint64
 	RevokedAt time.Time
+	FloorSeq  uint64
 	Until     time.Time
 }
 

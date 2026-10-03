@@ -733,6 +733,15 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		go func() { defer close(followDone); sts.follow(fctx) }()
 		defer func() { stopFollow(); <-followDone }()
 	}
+	if sts.keep != nil {
+		// The keeper writes the ledger record from the start on, and is
+		// joined before sts.close: its last write, on the way out, needs
+		// the store (crypt.KeepLedger).
+		kctx, stopKeep := context.WithCancel(ctx)
+		keepDone := make(chan struct{})
+		go func() { defer close(keepDone); sts.keep(kctx) }()
+		defer func() { stopKeep(); <-keepDone }()
+	}
 	if sts.lost != nil {
 		go func() {
 			select {

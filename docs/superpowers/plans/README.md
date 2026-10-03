@@ -98,7 +98,7 @@ Tasks 8b–16 plus a new Task 13b, each reviewed). It delivers:
 - the agent's one connection.
 
 L35 is measured and closed on five images. The lab's snapshot restore found a ledger bug, fixed
-in 79812ef (Plan 7d — As built, below). **7e written 2026-10-03** (`2026-10-03-07e-broker-process.md`, eighteen tasks in two merges: 7e-1, Tasks 1–10, the store a fleet of processes shares (a sealed write sequence and a high-water ledger per key, the context and marks feeds, the ledger record the daemon cannot write, `superseded` in the store, the decision-log emits under the hold, two carried fixes); 7e-2, Tasks 11–18, `port49-broker`, port49d on etcd with no broker inside, one runner per keyspace, the revocations file retired on etcd, and the lab; sixteen rulings recorded as decision 36; one question for Ryan, OR-1, `port49 revoke`'s default socket, recommended unchanged; it opens L37 and L38 and measures them with L36). 7f–7h and 8–13 not yet.
+in 79812ef (Plan 7d — As built, below). **7e written 2026-10-03** (`2026-10-03-07e-broker-process.md`, eighteen tasks in two merges: 7e-1, Tasks 1–10, the store a fleet of processes shares (a sealed write sequence and a high-water ledger per key, the context and marks feeds, the ledger record the daemon cannot write, `superseded` in the store, the decision-log emits under the hold, two carried fixes); 7e-2, Tasks 11–18, `port49-broker`, port49d on etcd with no broker inside, one runner per keyspace, the revocations file retired on etcd, and the lab; sixteen rulings recorded as decision 36; one question for Ryan, OR-1, `port49 revoke`'s default socket, recommended unchanged; it opens L37 and L38 and measures them with L36); **7e-1 executed 2026-10-03** on `feature/broker-process`, each task reviewed (Plan 7e — As built, below). 7f–7h and 8–13 not yet.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -2990,6 +2990,101 @@ labpcap audit fails.
     from `port49d store-roles`.
   - `call_timeout`, `bulk_timeout` and `packet_deadline` sized against load.
   - The store alarms, a client certificate's expiry among them.
+
+### Plan 7e — As built
+
+Executed from `2026-10-03-07e-broker-process.md`, each task reviewed. The ledger is
+`.superpowers/sdd/2026-10-03-07e-broker-process/progress.md`, with each task's brief, report
+and review beside it. A pre-flight review, a re-check and a final check revised the plan before
+Task 1 (716b857). Task 8a was added by the pre-flight (the feed fence). What differs from the
+plan's text, task by task:
+
+**7e-1** (`feature/broker-process`, base `b508ba0`):
+
+- **Task 1 (docs, decision 36; 11ac5e2).** As planned. Design §15's exports list gains the four
+  7e gauges in Task 11 (review m-1).
+- **Task 2 (etcdtest; c21f04f, c92827d).** `StartCluster` retries a taken port until a
+  deadline, and a failed attempt stops at once (Ruling T2-a).
+- **Task 3 (config; a85c22e).** An encryption key id outside the seal-key charset is refused at
+  load. Task 13 routes the broker's keys through the same check.
+- **Task 4 (records after the policy; a316fd0, b329bd4, 6bfc362, d7c0662, a4e5215).** A mint's
+  records, and a session refresh's (Ruling T4-a), are written once it lets go of the policy.
+  One blob record per hash per request (review I1).
+- **Task 5 (`superseded` in the store; ca282ba, 6130540, 3e692eb).** The local copy is pruned
+  once a minute; the daemon is probed against writing `sp/`. Carried to 7e-2's docs: broker
+  replicas need NTP-synced clocks; an undecodable `meta/superseded_all` is deleted, and the next
+  start rewrites it.
+- **Task 6 (`Seen`, `Ping`; 5f1d17d, f98cd2f, 83ff587).** Every context-client response feeds
+  `Seen` (`sawKV`), deletes, indexes and meta included (Ruling T6-a).
+- **Task 7 (the sealed sequence and the ledger; f8b057f, dc320bd, bcde669, 3f66a33).** The
+  revocation floor is `revoked(k, at, seen)`, held through `max(hw, seen-1)`, in place of the
+  plan's pending floor, which revoked every user's next login after the upgrade (Ruling T7-a).
+  The unopenable sayer is keyed by (record, key id, kind), so the upgrade's line never silences
+  a put-back's.
+- **Task 8 (the context feed; 972fefe, 864531a).** `Ledger` gains `SetBase`, `Seed`,
+  `ObserveFollowed`, `Dirty`/`Redirty`; a rescan's seed is `seedFollowed`, which makes no entry
+  below the base. A floor-only entry counts as no mark. Watch events feed `Seen`.
+- **Task 8a (new: the feed fence; 3bd92b7, 08b095f, b2260b1, 618bff3).** `crypt.Fence`,
+  `crypt.Fenced` and `ErrFeedBehind`: a context read waits, within `call_timeout`, for the feed
+  to pass the record's revision. A waiting read's progress request is made again for each new
+  watch. Parked (R-1): `askAgain` may reach etcd before the new watch registers; that read then
+  waits out `call_timeout`, failing closed. Task 17 revisits it if L37 sees it.
+- **Task 9 (the marks feed; 3677a78, 30e0554, 04a2c71, 88f03c3, a3464a3, 7f98f81, 49fc71d,
+  1147a0e).** `WatchRevocations`' callback is `fn(r, lifted, rev)`, and `FollowMarks` advances
+  per event (Ruling T9-a). A reload never lifts a mark whose store write has not landed
+  (`Marks.Pend`, `Unrecorded`; T9-b); such a mark closes no held connection (spec §5.1.4, T9-d)
+  and reaches this listener once the store has it. `port49_revocations_in_force` follows the
+  feed (T9-c). An undecodable mark stands by its key on a load as on a watch (T9-e).
+- **Flake fix (f6e5a26).** A product bug: on `credential_revoked` the agent's close cut the 410
+  answer, so the client said "no agent". It shuts down within 5s after stopping.
+- **Task 10 (the ledger record).**
+  - `store.LedgerMark` gains `FloorSeq`, the sequence the floor holds through: `Dirty` writes it,
+    and `Seed` takes the floor where the key's mark is at or below it (review C1). `lw/` keeps it
+    as `floor_seq`, and a mark above it clears the floor there, as in the ledger.
+  - The plan's put-back test needed a second subject sharing alice's username, which spec §2
+    refuses. bob is a second identity of alice's subject instead: same username, other
+    principal.
+  - `KeepLedger` writes what it still owes once when it stops, within 2s, so a graceful stop
+    leaves its last round in the record.
+  - `TestAStartSealsTheLedgerOnceItHasReadTheStore` deletes `lw/` with the context, so the base
+    still judges the put-back alone.
+
+**Interfaces 7e-1 changed, for 7e-2's tasks:**
+- `store.MarkFeed.WatchRevocations(ctx, after, fn func(r Revocation, lifted bool, rev uint64))`.
+- `store.LedgerMark{Key, Seq, RevokedAt, FloorSeq, Until}`.
+- `crypt.KeepLedger(ctx, l, sink, every, report, logf)`, with the stop's last write.
+- `crypt.Ledger`: `SetBase`, `Base`, `Seed`, `ObserveFollowed`, `Dirty`, `Redirty`, `Pending`,
+  `Fence`.
+- `crypt.Fence` (`Attach`, `Followed`, `SetUp`, `Up`, `At`, `Asks`, `Wait`), `crypt.Fenced`,
+  `crypt.ErrFeedBehind`.
+- `store.Marks.Pend` and `Unrecorded`.
+- port49d's `stores.keep`, run and joined by `runOnce` beside `stores.follow`.
+
+**7e-1's operator notes, as built:**
+- **Re-apply `port49d store-roles` before upgrading.** It prints one more grant: the daemon's
+  read on `lw/`. Without it the start stops with `the daemon's role cannot read lw/, the ledger
+  record: apply port49d store-roles (plan 7e)`. The start check also refuses a daemon role that
+  can write `lw/`, or read or write `sp/`.
+- **Upgrading from 7d on etcd ends every live session once.** A context 7d sealed does not open
+  under 7e: it is denied `store_unavailable`, replaced at the user's next login, and revoked by
+  the next refresh. Each node says it once per 10 minutes as the upgrade. Rolling back to 7d
+  ends sessions again.
+- **A context put back in etcd while port49d was stopped is denied after the restart** at every
+  key the ledger record (`lw/`) holds a later write for. A revocation's floor is kept there too,
+  through every sequence it held. The record trails by at most a second, and a graceful stop
+  writes what is owed.
+- **A context read waits for port49d's watch on the store** (the feed fence): milliseconds
+  normally. With the watch stopped and etcd answering, new sessions are denied
+  `store_unavailable`, `port49_store_feed_up{feed="contexts"}` is 0, and the line says `the
+  context feed stopped`. **Run etcd 3.5.8 or later** (3.4.24 on 3.4; etcd #15220).
+- **After an etcd restore under a running port49d,** the next login is admitted, and a session
+  written since the snapshot is denied until its next login, as 7d measured.
+- **A stalled decision-log sink no longer holds a policy reload**, nor the mints behind it.
+- **New config refusal:** an `encryption` key `id` outside `A-Z a-z 0-9 . _ -` (1 to 64).
+- **New metrics:** `port49_store_feed_up{feed}` (0 for longer than `hold_ttl` is an alarm),
+  `port49_store_feed_rescans_total{feed}` (alert on any increase), `port49_ledger_pending`
+  (above 0 for a minute is an alarm: the record cannot be written), `port49_ledger_behind` (1 is
+  an alarm: the keeper's context feed is down). Both ledger gauges read 0 once the keeper stops.
 
 ## Plan 8 — Workload certificates (§19 step 8)
 

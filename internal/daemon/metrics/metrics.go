@@ -95,6 +95,14 @@ type Metrics struct {
 	StoreFeedUp *prometheus.GaugeVec
 	// StoreFeedRescans counts a feed's rescans after a compacted watch.
 	StoreFeedRescans *prometheus.CounterVec
+	// LedgerPending is how many context keys' marks the ledger record does
+	// not yet hold (plan 7e, Ruling 4). Above 0 for a minute is an alarm:
+	// a context put back at one would be taken after a restart.
+	LedgerPending prometheus.Gauge
+	// LedgerBehind is 1 while the ledger record's keeper runs with its
+	// context feed down: the record does not follow other processes'
+	// logins, whatever LedgerPending says (pre-flight I11).
+	LedgerBehind prometheus.Gauge
 	// CryptStoreKeyUnknown is 1 when port49d started on a store last written
 	// under a current key its encryption window does not hold (plan 7d):
 	// records sealed under it will not open.
@@ -423,6 +431,10 @@ func New(reg prometheus.Registerer) *Metrics {
 			Help: "1 while a feed's watch on the store runs, by feed (contexts or marks)."}, []string{"feed"}),
 		StoreFeedRescans: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_store_feed_rescans_total",
 			Help: "Rescans of the store after a feed's watch was compacted, by feed."}, []string{"feed"}),
+		LedgerPending: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_ledger_pending",
+			Help: "Context keys whose mark the ledger record does not yet hold; above 0 for a minute, a context put back at one would be taken after a restart."}),
+		LedgerBehind: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_ledger_behind",
+			Help: "1 while the ledger record's keeper runs with its context feed down: the record does not follow other processes' logins, whatever port49_ledger_pending says."}),
 		CryptStoreKeyUnknown: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_crypt_store_key_unknown",
 			Help: "1 when port49d started on a store last written under a current key its encryption window does not hold."}),
 		StoreCertExpiry: prometheus.NewGaugeVec(prometheus.GaugeOpts{
@@ -523,7 +535,7 @@ func New(reg prometheus.Registerer) *Metrics {
 	})
 	reg.MustRegister(m.Requests, m.Latency, m.Decisions, m.Unvalidated, m.KeyValidations,
 		m.Connections, m.ConnectionEvents, m.AuthFailures, m.SpoolDepth, m.SpoolDrops, m.SpoolQuarantines,
-		m.StoreOps, m.StoreCalls, m.StoreCallSeconds, m.StoreCircuitOpen, m.DecisionLogWriteFailures, m.CryptOpenFailures, m.IndexRecordsUndecodable, m.StoreKeyspaceHeld, m.StoreFeedUp, m.StoreFeedRescans, m.CryptStoreKeyUnknown, m.StoreCertExpiry, m.Attributions, m.BrokerItemErrors, m.BrokerIdempotency,
+		m.StoreOps, m.StoreCalls, m.StoreCallSeconds, m.StoreCircuitOpen, m.DecisionLogWriteFailures, m.CryptOpenFailures, m.IndexRecordsUndecodable, m.StoreKeyspaceHeld, m.StoreFeedUp, m.StoreFeedRescans, m.LedgerPending, m.LedgerBehind, m.CryptStoreKeyUnknown, m.StoreCertExpiry, m.Attributions, m.BrokerItemErrors, m.BrokerIdempotency,
 		m.BrokerHandshakeFailures, m.BrokerConnectionEvents, m.BrokerConnections, m.BlobCache,
 		m.DevicesQuarantined, m.DevicesAdmissionRefused, m.ContextRefreshes, m.ContextsReindexed,
 		m.ContextsReindexFailures, m.SessionRefreshes, m.TokensSuperseded, m.CeilingWarnings,

@@ -3,6 +3,8 @@ package crypt
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -474,4 +476,326 @@ type tapFeed struct {
 func (f *tapFeed) WatchContexts(ctx context.Context, from uint64, fn func(store.ContextChange),
 	progress func(uint64), asks <-chan struct{}) error {
 	return f.feedOf.WatchContexts(ctx, from, func(c store.ContextChange) { fn(c); f.once.Do(f.after) }, progress, asks)
+}
+
+// The keeper writes what was raised, keeps what a failed write owed for the
+// next round, and reports what is owed; when it stops it reports 0, so an
+// ex-runner's gauge is never stale (pre-flight I11).
+func TestTheKeeperWritesRaisedMarksAndRetriesAFailure(t *testing.T) {
+	l := NewLedger()
+	l.Fence().SetUp(true)
+	l.Observe(ka, 10, 10, time.Time{}, time.Now().Add(time.Hour))
+	sink := &flakySink{fail: 1}
+	var reports []report
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { until(func() bool { return sink.landed() == 1 }, 10*time.Second); cancel() }()
+	var lines []string
+	KeepLedger(ctx, l, sink, 10*time.Millisecond, func(n int, behind bool) {
+		reports = append(reports, report{n, behind})
+	}, func(f string, args ...any) { lines = append(lines, fmt.Sprintf(f, args...)) })
+	if sink.calls() < 2 || l.Pending() != 0 || reports[0] != (report{1, false}) {
+		t.Fatalf("calls %d pending %d reports %v", sink.calls(), l.Pending(), reports)
+	}
+	if last := reports[len(reports)-1]; last != (report{0, false}) {
+		t.Fatalf("a keeper that stopped last reported %v", last)
+	}
+	if len(lines) != 2 || !strings.Contains(lines[0], "writing the ledger record failed") ||
+		!strings.Contains(lines[1], "written again") {
+		t.Fatalf("the failure and its end, said once each: %q", lines)
+	}
+}
+
+// A keeper that stops while it owes marks and its feed is down reports
+// (0, false) last: the gauges of a runner whose duties stopped say nothing
+// stale (pre-flight I11).
+func TestAStoppedKeeperLeavesNoStaleGauge(t *testing.T) {
+	l := NewLedger()
+	l.Fence().SetUp(false)
+	l.Observe(ka, 10, 10, time.Time{}, time.Now().Add(time.Hour))
+	var mu sync.Mutex
+	var reports []report
+	var lines []string
+	last := func() report { mu.Lock(); defer mu.Unlock(); return reports[len(reports)-1] }
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		KeepLedger(ctx, l, &flakySink{fail: 1 << 30}, 10*time.Millisecond, func(n int, behind bool) {
+			mu.Lock()
+			reports = append(reports, report{n, behind})
+			mu.Unlock()
+		}, func(f string, args ...any) {
+			mu.Lock()
+			lines = append(lines, fmt.Sprintf(f, args...))
+			mu.Unlock()
+		})
+	}()
+	eventually(t, func() bool { mu.Lock(); defer mu.Unlock(); return len(reports) > 0 })
+	if got := last(); got != (report{1, true}) {
+		t.Fatalf("a keeper owing one mark with its feed down reported %v", got)
+	}
+	cancel()
+	<-done
+	if got := last(); got != (report{0, false}) {
+		t.Fatalf("a keeper that stopped last reported %v", got)
+	}
+	if len(lines) != 1 { // its round and its stop failed: one run of failures
+		t.Fatalf("a run of failures said %d times: %q", len(lines), lines)
+	}
+}
+
+// While the context feed is down, the keeper reports itself behind: its
+// pending count cannot see the logins other processes make (pre-flight
+// I11).
+func TestTheKeeperIsBehindWhileTheFeedIsDown(t *testing.T) {
+	l := NewLedger()
+	l.Fence().SetUp(false)
+	sink := &flakySink{}
+	var mu sync.Mutex
+	var reports []report
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go KeepLedger(ctx, l, sink, 10*time.Millisecond, func(n int, behind bool) {
+		mu.Lock()
+		reports = append(reports, report{n, behind})
+		mu.Unlock()
+	}, t.Logf)
+	eventually(t, func() bool { mu.Lock(); defer mu.Unlock(); return len(reports) > 0 && reports[len(reports)-1].behind })
+	l.Fence().SetUp(true)
+	eventually(t, func() bool { mu.Lock(); defer mu.Unlock(); return !reports[len(reports)-1].behind })
+}
+
+// A keeper that stops writes what it still owes once, so a graceful stop
+// leaves no mark raised in its last round out of the record: the restart
+// that follows it is the one the record is for.
+func TestAStoppingKeeperWritesWhatItOwes(t *testing.T) {
+	l := NewLedger()
+	l.Observe(ka, 10, 10, time.Time{}, time.Now().Add(time.Hour))
+	sink := &flakySink{}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	KeepLedger(ctx, l, sink, time.Hour, func(int, bool) {}, t.Logf)
+	if sink.landed() != 1 || l.Pending() != 0 {
+		t.Fatalf("a stopping keeper landed %d write(s), %d mark(s) still owed", sink.landed(), l.Pending())
+	}
+}
+
+type report struct {
+	pending int
+	behind  bool
+}
+
+// flakySink fails its first fail calls with store.ErrUnavailable and
+// records what lands, under a lock: KeepLedger calls it on its own
+// goroutine (pre-flight M4, the race).
+type flakySink struct {
+	mu          sync.Mutex
+	fail, n, ok int
+}
+
+func (s *flakySink) PutLedgerMarks(context.Context, []store.LedgerMark) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.n++
+	if s.n <= s.fail {
+		return store.ErrUnavailable
+	}
+	s.ok++
+	return nil
+}
+
+func (s *flakySink) calls() int  { s.mu.Lock(); defer s.mu.Unlock(); return s.n }
+func (s *flakySink) landed() int { s.mu.Lock(); defer s.mu.Unlock(); return s.ok }
+
+// recordOf is a ledger record for these tests: what PutLedgerMarks wrote,
+// the last write per key, read back by LedgerMarks.
+type recordOf struct {
+	mu sync.Mutex
+	m  map[store.ContextKey]store.LedgerMark
+}
+
+func (r *recordOf) PutLedgerMarks(_ context.Context, ms []store.LedgerMark) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.m == nil {
+		r.m = map[store.ContextKey]store.LedgerMark{}
+	}
+	for _, m := range ms {
+		r.m[m.Key] = m
+	}
+	return nil
+}
+
+func (r *recordOf) LedgerMarks(context.Context) (uint64, []store.LedgerMark, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []store.LedgerMark
+	for _, m := range r.m {
+		out = append(out, m)
+	}
+	return 1, out, nil
+}
+
+// restarted is l's marks written to a record and loaded into a fresh
+// ledger, as a stop and a start do.
+func restarted(t *testing.T, l *Ledger) *Ledger {
+	t.Helper()
+	rec := &recordOf{}
+	if err := rec.PutLedgerMarks(context.Background(), l.Dirty()); err != nil {
+		t.Fatal(err)
+	}
+	fresh := NewLedger()
+	feed := &feedOf{scanned: map[store.ContextKey]store.Context{}, rev: 500}
+	if _, _, _, err := LoadLedger(context.Background(), feed, rec, keys(), fresh); err != nil {
+		t.Fatal(err)
+	}
+	return fresh
+}
+
+// A revocation floor survives a restart through every sequence it held
+// before it (C1): revoked at a mark of 100 once the store had shown
+// revision 151, it holds through 150, which a write sent before the
+// revocation landed may be sealed at. Recorded at the mark alone, a
+// record put back sealed at 140 would clear it after the restart.
+func TestARevocationFloorSurvivesARestart(t *testing.T) {
+	at := time.Unix(1_000_000, 0).UTC()
+	l := NewLedger()
+	l.Observe(ka, 100, 100, time.Time{}, time.Time{})
+	l.revoked(ka, at, 151)
+	fresh := restarted(t, l)
+	fresh.Observe(ka, 140, 140, time.Time{}, time.Time{})
+	if !fresh.floor(ka).Equal(at) {
+		t.Fatalf("after a restart, a sequence the floor held through cleared it: floor %v", fresh.floor(ka))
+	}
+	fresh.Observe(ka, 151, 151, time.Time{}, time.Time{})
+	if !fresh.floor(ka).IsZero() {
+		t.Fatalf("a sequence past the floor's did not clear it: %v", fresh.floor(ka))
+	}
+}
+
+// A revocation at a key whose mark is above every revision the store has
+// shown holds its floor through the mark (revoked's hw term; C2): recorded
+// through seen alone, it holds through nothing the mark admits, and the
+// restart drops it.
+func TestARevocationFloorHoldsThroughTheMarkAcrossARestart(t *testing.T) {
+	at := time.Unix(1_000_000, 0).UTC()
+	for _, seen := range []uint64{0, 51} {
+		l := NewLedger()
+		l.Observe(ka, 100, 100, time.Time{}, time.Time{})
+		l.revoked(ka, at, seen)
+		if fresh := restarted(t, l); !fresh.floor(ka).Equal(at) {
+			t.Fatalf("seen %d: a floor at the mark was lost across a restart: %v", seen, fresh.floor(ka))
+		}
+	}
+}
+
+// failingSource is a ledger record that will not be read.
+type failingSource struct{ calls atomic.Int32 }
+
+func (f *failingSource) LedgerMarks(context.Context) (uint64, []store.LedgerMark, error) {
+	f.calls.Add(1)
+	return 0, nil, store.ErrUnavailable
+}
+
+// A start whose read of the ledger record fails fails, and sets no base and
+// no fence: a base set without the record would admit every put-back at a
+// key the record holds a later mark for (C3).
+func TestALoadWhoseRecordFailsSetsNoBase(t *testing.T) {
+	l := NewLedger()
+	feed := &feedOf{scanned: map[store.ContextKey]store.Context{}, rev: 500}
+	if _, _, _, err := LoadLedger(context.Background(), feed, &failingSource{}, keys(), l); !errors.Is(err,
+		store.ErrUnavailable) {
+		t.Fatalf("a failed read of the record: %v", err)
+	}
+	if l.Base() != 0 || l.Fence().At() != 0 {
+		t.Fatalf("a failed load set base %d, fence %d", l.Base(), l.Fence().At())
+	}
+}
+
+// flakySource fails its first read, with the feed's fence checked down at
+// each, then holds marks.
+type flakySource struct {
+	l      *Ledger
+	marks  []store.LedgerMark
+	calls  atomic.Int32
+	upOnce atomic.Bool // the fence was up at some read
+}
+
+func (f *flakySource) LedgerMarks(context.Context) (uint64, []store.LedgerMark, error) {
+	if f.l.Fence().Up() {
+		f.upOnce.Store(true)
+	}
+	if f.calls.Add(1) == 1 {
+		return 0, nil, store.ErrUnavailable
+	}
+	return 1, f.marks, nil
+}
+
+// A compacted watch's rescan whose read of the ledger record fails is a
+// failed watch (C3): said as the feed stopping, the fence down, and tried
+// again; the next compacted watch's rescan seeds from the record.
+func TestARescanWhoseRecordFailsIsAFailedWatch(t *testing.T) {
+	l := NewLedger()
+	l.SetBase(10)
+	src := &flakySource{l: l, marks: []store.LedgerMark{{Key: ka, Seq: 120}}}
+	feed := &replayFeed{batches: [][]store.ContextChange{{}, {}}, ends: []error{store.ErrCompacted, store.ErrCompacted}}
+	feed.setScanned(map[store.ContextKey]store.Context{}, 200)
+	var mu sync.Mutex
+	var lines []string
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { until(func() bool { return feed.served.Load() > 0 }, 10*time.Second); cancel() }()
+	FollowContexts(ctx, feed, src, keys(), l, 10, func(bool) {}, func() {}, func(f string, args ...any) {
+		mu.Lock()
+		defer mu.Unlock()
+		lines = append(lines, fmt.Sprintf(f, args...))
+	})
+	if src.calls.Load() != 2 || src.upOnce.Load() || l.next(ka) != 121 {
+		t.Fatalf("record reads %d, fence up at one %v, next %d", src.calls.Load(), src.upOnce.Load(), l.next(ka))
+	}
+	stopped := 0
+	for _, line := range lines {
+		if strings.Contains(line, "the context feed stopped") && strings.Contains(line, store.ErrUnavailable.Error()) {
+			stopped++
+		}
+	}
+	if stopped != 1 {
+		t.Fatalf("a failed rescan was not said once as the feed stopping: %q", lines)
+	}
+}
+
+// The record's floor is seeded where it holds and nowhere else (C1): not at
+// a key whose mark is past its FloorSeq, not further than a mark with no
+// floor says, never earlier than the floor this process holds, and on a
+// rescan's seed as on a start's.
+func TestTheRecordsFloorIsSeededOnlyWhereItHolds(t *testing.T) {
+	at := time.Unix(1_000_000, 0).UTC()
+	l := NewLedger()
+	l.Observe(ka, 200, 200, time.Time{}, time.Time{})
+	l.Seed(store.LedgerMark{Key: ka, Seq: 100, RevokedAt: at, FloorSeq: 150})
+	if !l.floor(ka).IsZero() {
+		t.Fatalf("a recorded floor through 150 was taken at a mark of 200: %v", l.floor(ka))
+	}
+
+	l = NewLedger()
+	l.Observe(ka, 100, 100, time.Time{}, time.Time{})
+	l.revoked(ka, at, 0) // held through 100
+	l.Seed(store.LedgerMark{Key: ka, Seq: 100, FloorSeq: 150})
+	l.Seed(store.LedgerMark{Key: ka, Seq: 100, RevokedAt: at.Add(-time.Hour), FloorSeq: 100})
+	if !l.floor(ka).Equal(at) {
+		t.Fatalf("an earlier recorded floor replaced a later one: %v", l.floor(ka))
+	}
+	l.Observe(ka, 140, 140, time.Time{}, time.Time{})
+	if !l.floor(ka).IsZero() {
+		t.Fatalf("a recorded mark with no floor held this process's past 100: %v", l.floor(ka))
+	}
+
+	l = NewLedger()
+	l.SetBase(10)
+	if _, err := seedFrom(context.Background(), marksOf{{Key: ka, Seq: 120, RevokedAt: at, FloorSeq: 130}}, l); err != nil {
+		t.Fatal(err)
+	}
+	l.Observe(ka, 125, 125, time.Time{}, time.Time{})
+	if !l.floor(ka).Equal(at) {
+		t.Fatalf("a rescan's seed did not take the record's floor through 130: %v", l.floor(ka))
+	}
 }

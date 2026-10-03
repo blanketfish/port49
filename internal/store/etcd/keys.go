@@ -46,6 +46,7 @@ const (
 	famIdem        = "id/" // id/<principal>/<key>: an idempotency record
 	famMark        = "rv/" // rv/<kind>/<key>: a revocation mark
 	famSuperseded  = "sp/" // sp/<nas>/<user>: when its tokens were last superseded
+	famLedger      = "lw/" // lw/<nas>/<user>: the ledger record (plan 7e)
 	famMeta        = "meta/"
 )
 
@@ -81,9 +82,10 @@ func (k keys) tokenIndexed(fam, key string, t store.TokenKey) string {
 	return k.tokenIndex(fam, key) + esc(t.NAS, t.Username)
 }
 
-func (k keys) idem(principal, key string) string { return k.root + famIdem + esc(principal, key) }
-func (k keys) mark(kind, key string) string      { return k.root + famMark + esc(kind, key) }
-func (k keys) meta(name string) string           { return k.root + famMeta + name }
+func (k keys) idem(principal, key string) string  { return k.root + famIdem + esc(principal, key) }
+func (k keys) mark(kind, key string) string       { return k.root + famMark + esc(kind, key) }
+func (k keys) meta(name string) string            { return k.root + famMeta + name }
+func (k keys) ledgerOf(c store.ContextKey) string { return k.root + famLedger + esc(c.NAS, c.Username) }
 func (k keys) superseded(t store.TokenKey) string {
 	return k.root + famSuperseded + esc(t.NAS, t.Username)
 }

@@ -121,7 +121,22 @@ func mint(t *testing.T, brokerAddr, pkiDir, device string) string {
 // mintKeyed is mint with an Idempotency-Key, when key is not empty.
 func mintKeyed(t *testing.T, brokerAddr, pkiDir, device, key string) string {
 	t.Helper()
-	cert, err := tls.LoadX509KeyPair(filepath.Join(pkiDir, testpki.LabClientCert), filepath.Join(pkiDir, testpki.LabClientKey))
+	return mintWith(t, brokerAddr, pkiDir, device, key, testpki.LabClientCert, testpki.LabClientKey)
+}
+
+// mintAs is mint as email, with the client certificate brokerConfigWith
+// wrote for it.
+func mintAs(t *testing.T, brokerAddr, pkiDir, device, email string) string {
+	t.Helper()
+	certFile, keyFile := testpki.LabClientFiles(email)
+	return mintWith(t, brokerAddr, pkiDir, device, "", certFile, keyFile)
+}
+
+// mintWith is mintKeyed with the client certificate and key at certFile
+// and keyFile in pkiDir.
+func mintWith(t *testing.T, brokerAddr, pkiDir, device, key, certFile, keyFile string) string {
+	t.Helper()
+	cert, err := tls.LoadX509KeyPair(filepath.Join(pkiDir, certFile), filepath.Join(pkiDir, keyFile))
 	if err != nil {
 		t.Fatal(err)
 	}

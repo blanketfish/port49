@@ -63,6 +63,8 @@ func TestNewRegistersEveryMetric(t *testing.T) {
 	m.StoreCertExpiry.WithLabelValues("daemon").Set(1)
 	m.StoreFeedUp.WithLabelValues("contexts").Set(1)
 	m.StoreFeedRescans.WithLabelValues("contexts").Inc()
+	m.LedgerPending.Set(0)
+	m.LedgerBehind.Set(0)
 
 	// Gather all metrics from registry.
 	families, err := reg.Gather()
@@ -92,6 +94,8 @@ func TestNewRegistersEveryMetric(t *testing.T) {
 		"port49_store_keyspace_held":                        false,
 		"port49_store_feed_up":                              false,
 		"port49_store_feed_rescans_total":                   false,
+		"port49_ledger_pending":                             false,
+		"port49_ledger_behind":                              false,
 		"port49_crypt_store_key_unknown":                    false,
 		"port49_store_client_cert_expiry_timestamp_seconds": false,
 		"port49_accounting_attributions_total":              false,

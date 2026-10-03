@@ -15,6 +15,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	clientv3 "go.etcd.io/etcd/client/v3"
 
 	"github.com/rhwendt/port49/internal/broker"
 	"github.com/rhwendt/port49/internal/config"
@@ -525,6 +526,33 @@ func TestOpenStoresSharesOneSayer(t *testing.T) {
 	}
 	if n := strings.Count(out.String(), `sealed under key id "retired"`); n != 1 {
 		t.Fatalf("said %d times: %q", n, out.String())
+	}
+}
+
+// A daemon role without the read on lw/ (roles applied before plan 7e)
+// ends the start as a store fault naming store-roles: waiting does not
+// mend a refusal (pre-flight M17).
+func TestARefusedLedgerRecordReadNamesStoreRoles(t *testing.T) {
+	cfgPath, _, _, _, srv := etcdRunServer(t)
+	lw := "/port49/v1/lw/"
+	if _, err := srv.Client(t, "root").RoleRevokePermission(context.Background(), etcdstore.RoleDaemon, lw,
+		clientv3.GetPrefixRangeEnd(lw)); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys, err := cfg.EncryptionKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out syncBuffer
+	_, err = openStores(context.Background(), cfg, keys, metrics.New(prometheus.NewRegistry()), &out, newReadiness(),
+		false, func(error) {}, crypt.NewLedger(), newKeyAlarm(), new(string))
+	var fault *storeFault
+	if !errors.As(err, &fault) || !strings.Contains(err.Error(), "apply port49d store-roles (plan 7e)") {
+		t.Fatalf("a refused read of the ledger record: %v", err)
 	}
 }
 
