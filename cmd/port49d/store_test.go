@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -243,16 +244,24 @@ func TestTheStartsCarryDecidesHoldOrOpen(t *testing.T) {
 	}
 }
 
-// A start whose store was last written under a current key this
-// configuration does not hold warns and sets the gauge; one that holds it
-// as previous does not (Ruling 14). Either way it records its own.
-func TestCheckSealKeysWarnsAboutAKeyNotHeld(t *testing.T) {
+// sealKeysStore is an etcd store on a server of its own, for the start's
+// key check.
+func sealKeysStore(t *testing.T) (*etcdtest.Server, *etcdstore.Store) {
+	t.Helper()
 	srv := etcdtest.Start(t, etcdtest.Options{})
 	s, err := etcdstore.Open(etcdstore.Config{Endpoints: []string{srv.Endpoint}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
+	t.Cleanup(func() { s.Close() })
+	return srv, s
+}
+
+// A start whose store was last written under a current key this
+// configuration does not hold warns and sets the gauge; one that holds it
+// as previous does not (Ruling 14). Either way it records its own.
+func TestCheckSealKeysWarnsAboutAKeyNotHeld(t *testing.T) {
+	_, s := sealKeysStore(t)
 	ctx := context.Background()
 	if err := s.PutSealKeys(ctx, etcdstore.SealKeys{Current: "enc2"}); err != nil {
 		t.Fatal(err)
@@ -260,7 +269,7 @@ func TestCheckSealKeysWarnsAboutAKeyNotHeld(t *testing.T) {
 	m := metrics.New(prometheus.NewRegistry())
 	var out bytes.Buffer
 	rotated := crypt.Keys{Current: crypt.Key{ID: "enc3"}}
-	if err := checkSealKeys(ctx, s, rotated, m, &out); err != nil {
+	if err := checkSealKeys(ctx, s, rotated, m, &out, time.Second, newKeyAlarm()); err != nil {
 		t.Fatal(err)
 	}
 	// None is revoked for it: the start leaves a context under an unheld
@@ -272,10 +281,100 @@ func TestCheckSealKeysWarnsAboutAKeyNotHeld(t *testing.T) {
 		t.Fatalf("said %q, gauge %v", out.String(), testutil.ToFloat64(m.CryptStoreKeyUnknown))
 	}
 	out.Reset()
+	// Another process: a window holding the store's key.
 	kept := crypt.Keys{Current: crypt.Key{ID: "enc4"}, Previous: &crypt.Key{ID: "enc3"}}
-	if err := checkSealKeys(ctx, s, kept, m, &out); err != nil || out.Len() != 0 ||
+	if err := checkSealKeys(ctx, s, kept, m, &out, time.Second, newKeyAlarm()); err != nil || out.Len() != 0 ||
 		testutil.ToFloat64(m.CryptStoreKeyUnknown) != 0 {
 		t.Fatalf("a window holding the store's key: said %q, %v", out.String(), err)
+	}
+}
+
+// A run after a store gone keeps the alarm: the records under the lost key
+// are as live as before, though the first run wrote its own window over
+// the store's. The gauge, a new run's, stays 1 until port49d restarts, and
+// the line is not said again (review m-1). Nor is it said again for the
+// same window while a start retries through an outage (review m-4).
+func TestCheckSealKeysKeepsTheAlarmAcrossARun(t *testing.T) {
+	_, s := sealKeysStore(t)
+	ctx := context.Background()
+	if err := s.PutSealKeys(ctx, etcdstore.SealKeys{Current: "enc2"}); err != nil {
+		t.Fatal(err)
+	}
+	alarm := newKeyAlarm()
+	var out bytes.Buffer
+	rotated := crypt.Keys{Current: crypt.Key{ID: "enc3"}}
+	if err := checkSealKeys(ctx, s, rotated, metrics.New(prometheus.NewRegistry()), &out, time.Second,
+		alarm); err != nil {
+		t.Fatal(err)
+	}
+	// An outage after the read: the next try reads the same window.
+	if err := s.PutSealKeys(ctx, etcdstore.SealKeys{Current: "enc2"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkSealKeys(ctx, s, rotated, metrics.New(prometheus.NewRegistry()), &out, time.Second,
+		alarm); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(out.String(), "\n") != 1 {
+		t.Fatalf("a retry said the same window again: %q", out.String())
+	}
+	again := metrics.New(prometheus.NewRegistry())
+	if err := checkSealKeys(ctx, s, rotated, again, &out, time.Second, alarm); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(out.String(), "\n") != 1 || testutil.ToFloat64(again.CryptStoreKeyUnknown) != 1 {
+		t.Fatalf("a run after a store gone: said %q, gauge %v", out.String(),
+			testutil.ToFloat64(again.CryptStoreKeyUnknown))
+	}
+}
+
+// A stored id is the store writer's, so the warning echoes it only within
+// the key-id charset (review I-2; pre-flight M44).
+func TestCheckSealKeysEchoesNoForeignID(t *testing.T) {
+	for _, c := range []struct{ name, id string }{
+		{"outside the charset", "a\nb;c"},
+		{"a megabyte", strings.Repeat("k", 1<<20)},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			_, s := sealKeysStore(t)
+			ctx := context.Background()
+			if err := s.PutSealKeys(ctx, etcdstore.SealKeys{Current: c.id}); err != nil {
+				t.Fatal(err)
+			}
+			m := metrics.New(prometheus.NewRegistry())
+			var out bytes.Buffer
+			if err := checkSealKeys(ctx, s, crypt.Keys{Current: crypt.Key{ID: "enc3"}}, m, &out, time.Second,
+				newKeyAlarm()); err != nil {
+				t.Fatal(err)
+			}
+			if out.Len() > 1024 || !strings.Contains(out.String(), `whose current key is "?"`) ||
+				strings.Contains(out.String(), `a\nb`) || testutil.ToFloat64(m.CryptStoreKeyUnknown) != 1 {
+				t.Fatalf("said %d bytes: %.300q", out.Len(), out.String())
+			}
+		})
+	}
+}
+
+// A store that stops answering after the hold does not hang the start: each
+// call of the check is bounded, and the bound's end is an outage, which
+// openStores says and tries again (review I-1).
+func TestCheckSealKeysIsBounded(t *testing.T) {
+	srv := etcdtest.Start(t, etcdtest.Options{})
+	proxy := etcdtest.NewProxy(t, strings.TrimPrefix(srv.Endpoint, "http://"))
+	s, err := etcdstore.Open(etcdstore.Config{Endpoints: []string{"http://" + proxy.Addr()}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	proxy.Hang(true)
+	defer proxy.Hang(false)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	start := time.Now()
+	err = checkSealKeys(ctx, s, crypt.Keys{Current: crypt.Key{ID: "enc3"}}, metrics.New(prometheus.NewRegistry()),
+		io.Discard, 200*time.Millisecond, newKeyAlarm())
+	if !errors.Is(err, store.ErrUnavailable) || time.Since(start) > 2*time.Second {
+		t.Fatalf("a hung store: %v after %v", err, time.Since(start))
 	}
 }
 
@@ -303,17 +402,69 @@ func TestUnopenableSayerSaysOncePerKeyPerTenMinutes(t *testing.T) {
 	}
 }
 
+// A record too short to name a key is corrupt, not a key a rotation
+// retired: it gets the altered wording, never the rotation advice (review
+// m-3).
+func TestUnopenableSayerCallsANamelessRecordCorrupt(t *testing.T) {
+	var out bytes.Buffer
+	say := unopenableSayer(crypt.Keys{Current: crypt.Key{ID: "enc3"}}, &out, time.Now)
+	say("token", "")
+	if !strings.Contains(out.String(), "it was altered or is corrupt") ||
+		strings.Contains(out.String(), "encryption.previous") {
+		t.Fatalf("a nameless record: %q", out.String())
+	}
+	out.Reset()
+	say("token", "enc2")
+	if !strings.Contains(out.String(), `set encryption.previous to "enc2"`) ||
+		strings.Contains(out.String(), "altered") {
+		t.Fatalf("a record under a retired key: %q", out.String())
+	}
+}
+
+// Every sealing layer openStores builds shares one sayer, so a key the
+// daemon's and the broker's layers both meet is said once (pre-flight M44;
+// review m-2).
+func TestOpenStoresSharesOneSayer(t *testing.T) {
+	cfgPath, _, _, _, _ := etcdRunServer(t)
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys, err := cfg.EncryptionKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var out syncBuffer
+	sts, err := openStores(ctx, cfg, keys, metrics.New(prometheus.NewRegistry()), &out, newReadiness(), false,
+		func(error) {}, crypt.NewLedger(), newKeyAlarm())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sts.close()
+	k := store.ContextKey{NAS: "leaf1", Username: "alice"}
+	retired := crypt.Keys{Current: crypt.Key{ID: "retired", Bytes: [32]byte{7}}}
+	if err := crypt.Wrap(sts.etcd, retired, nil).PutContext(ctx, k, store.Context{CtxID: "c", Principal: "user:alice",
+		Username: "alice", AuthTime: time.Now(), RefreshedAt: time.Now()}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	for _, st := range []store.Store{sts.daemon, sts.broker} {
+		if _, err := st.GetContext(ctx, k); !errors.Is(err, crypt.ErrUnknownKey) {
+			t.Fatalf("a context under a retired key: %v", err)
+		}
+	}
+	if n := strings.Count(out.String(), `sealed under key id "retired"`); n != 1 {
+		t.Fatalf("said %d times: %q", n, out.String())
+	}
+}
+
 // A last window that does not decode never refuses the start: whoever can
 // write the store would otherwise hold every start shut. It is said with
 // none of its bytes, gauged, and written over with this window (spec, a
 // start on etcd, Keys).
 func TestCheckSealKeysGoesOnPastAnUndecodableRecord(t *testing.T) {
-	srv := etcdtest.Start(t, etcdtest.Options{})
-	s, err := etcdstore.Open(etcdstore.Config{Endpoints: []string{srv.Endpoint}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
+	srv, s := sealKeysStore(t)
 	ctx := context.Background()
 	if _, err := srv.Client(t, "root").Put(ctx, "/port49/v1/meta/seal_keys", "{\"current\":\"a\nb"); err != nil {
 		t.Fatal(err)
@@ -321,7 +472,7 @@ func TestCheckSealKeysGoesOnPastAnUndecodableRecord(t *testing.T) {
 	m := metrics.New(prometheus.NewRegistry())
 	var out bytes.Buffer
 	keys := crypt.Keys{Current: crypt.Key{ID: "enc3"}}
-	if err := checkSealKeys(ctx, s, keys, m, &out); err != nil {
+	if err := checkSealKeys(ctx, s, keys, m, &out, time.Second, newKeyAlarm()); err != nil {
 		t.Fatalf("an undecodable record refused the start: %v", err)
 	}
 	if !strings.Contains(out.String(), "the last start's key ids are unreadable") ||

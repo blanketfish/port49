@@ -67,7 +67,7 @@ func (f *storeFault) Unwrap() error { return f.err }
 // takes the hold, waiting for another port49d to let go. gone is how the
 // guard ends the run. It says each step on out.
 func openStores(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metrics.Metrics, out io.Writer,
-	rd *readiness, again bool, gone func(error), ledger *crypt.Ledger) (stores, error) {
+	rd *readiness, again bool, gone func(error), ledger *crypt.Ledger, alarm *keyAlarm) (stores, error) {
 	// One sayer for every layer, so a key is said once, not once per layer
 	// (pre-flight M44).
 	say := crypt.OnUnopenable(unopenableSayer(keys, out, time.Now))
@@ -153,15 +153,18 @@ func openStores(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 	}
 	m.StoreKeyspaceHeld.Set(1)
 	// meta/ is the broker's to write (Task 11), so the key check is its.
+	// Each of its calls is bounded as the ping is, so a store that stops
+	// answering here is said and tried again, not a silent hang with the
+	// hold kept (review I-1); a hold lost meanwhile ends the start as a
+	// store gone, letting it go.
+	letGo := func() { release(); m.StoreKeyspaceHeld.Set(0); closeAll() }
 	for {
-		err := checkSealKeys(ctx, b, keys, m, out)
+		err := checkSealKeys(ctx, b, keys, m, out, 4*e.CallTimeout, alarm)
 		if err == nil {
 			break
 		}
 		if ctx.Err() != nil || !errors.Is(err, store.ErrUnavailable) {
-			release()
-			m.StoreKeyspaceHeld.Set(0)
-			closeAll()
+			letGo()
 			if ctx.Err() != nil {
 				return stores{}, ctx.Err()
 			}
@@ -170,10 +173,12 @@ func openStores(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 		fmt.Fprintf(out, "port49d: %v; the listeners stay closed; trying again in 5s\n", err)
 		select {
 		case <-ctx.Done():
-			release()
-			m.StoreKeyspaceHeld.Set(0)
-			closeAll()
+			letGo()
 			return stores{}, ctx.Err()
+		case <-lost:
+			letGo()
+			return stores{}, &storeGone{why: fmt.Sprintf("lost this port49d's hold on keyspace %s while "+
+				"checking the store's key ids", e.Prefix)}
 		case <-time.After(5 * time.Second):
 		}
 	}
@@ -225,6 +230,13 @@ func unopenableSayer(keys crypt.Keys, out io.Writer, now func() time.Time) func(
 			clear(said)
 		}
 		said[k] = now()
+		if keyID == "" {
+			// Too short to name a key: corrupt, not a key a rotation retired
+			// (review m-3).
+			fmt.Fprintf(out, "port49d: crypt: a %s names no key id: it was altered or is corrupt, and is treated "+
+				"as unreadable\n", record)
+			return
+		}
 		held := keyID == keys.Current.ID || keys.Previous != nil && keyID == keys.Previous.ID
 		if held {
 			// A held key's record that will not open was altered: its bytes
@@ -248,45 +260,88 @@ func keyWindow(keys crypt.Keys) string {
 	return fmt.Sprintf("current %q, no previous", keys.Current.ID)
 }
 
+// keyAlarm is the start key check's memory for the process, kept across a
+// store gone as the ledger is (review m-1, m-4). A window once warned
+// keeps port49_crypt_store_key_unknown at 1 until port49d restarts: the
+// records sealed under the lost key are as live after this start writes
+// its own window over the store's, and a run after a store gone would
+// otherwise clear the alert with nothing fixed. The stored window last
+// said is not said again, through an outage's retries or a run after one.
+// One start uses it at a time.
+type keyAlarm struct {
+	raised bool
+	said   *storedWindow // nil before any is said
+}
+
+// storedWindow is a window the store held, as keyAlarm remembers it.
+type storedWindow struct {
+	undecodable       bool
+	current, previous string
+}
+
+func newKeyAlarm() *keyAlarm { return &keyAlarm{} }
+
+// warn raises the alarm for w and says it once per stored window.
+func (a *keyAlarm) warn(w storedWindow, say func()) {
+	a.raised = true
+	if a.said != nil && *a.said == w {
+		return
+	}
+	a.said = &w
+	say()
+}
+
 // checkSealKeys is the start's key check on etcd (Ruling 14): a store last
 // written under a current key this window lacks is said, and gauged, and
 // never refuses the start; then this window is recorded. A last window
 // that does not decode is said and gauged the same, never echoed, and
 // written over: a refused start would hand whoever can write the store a
-// lockout of every start. Only an outage is returned.
-func checkSealKeys(ctx context.Context, s *etcdstore.Store, keys crypt.Keys, m *metrics.Metrics, out io.Writer) error {
-	last, ok, err := s.SealKeys(ctx)
+// lockout of every start. Only an outage is returned, a call past bound
+// among them. alarm is the process's (keyAlarm).
+func checkSealKeys(ctx context.Context, s *etcdstore.Store, keys crypt.Keys, m *metrics.Metrics, out io.Writer,
+	bound time.Duration, alarm *keyAlarm) error {
+	rctx, cancel := context.WithTimeout(ctx, bound)
+	last, ok, err := s.SealKeys(rctx)
+	cancel()
 	undecodable := errors.Is(err, etcdstore.ErrSealKeysUndecodable)
 	if err != nil && !undecodable {
 		return fmt.Errorf("store: reading the last start's key ids: %w", err)
 	}
 	held := !ok || last.Current == keys.Current.ID || keys.Previous != nil && last.Current == keys.Previous.ID
-	m.CryptStoreKeyUnknown.Set(0)
 	if undecodable {
-		m.CryptStoreKeyUnknown.Set(1)
-		fmt.Fprintf(out, "port49d: crypt: the last start's key ids are unreadable (meta/seal_keys does not "+
-			"decode), so records may be sealed under a key this port49d does not hold (%s); any that are are "+
-			"denied store_unavailable, and port49d says each key id as it meets one; this start's are written "+
-			"over it\n", keyWindow(keys))
+		alarm.warn(storedWindow{undecodable: true}, func() {
+			fmt.Fprintf(out, "port49d: crypt: the last start's key ids are unreadable (meta/seal_keys does not "+
+				"decode), so records may be sealed under a key this port49d does not hold (%s); any that are are "+
+				"denied store_unavailable, and port49d says each key id as it meets one; this start's are written "+
+				"over it\n", keyWindow(keys))
+		})
 	} else if !held {
+		id := crypt.LineKeyID(last.Current)
+		alarm.warn(storedWindow{current: last.Current, previous: last.Previous}, func() {
+			// Said before the start carries the policy into the kept contexts,
+			// which leaves every one under an unheld key unjudged, never
+			// revoked (refresh.go, ErrLeftUnderUnheldKey; spec, a start on
+			// etcd, Keys): so it says they are denied until a start holds the
+			// key, and that fixing it brings them back. Tokens are purged at
+			// every start on etcd, so none is named.
+			fmt.Fprintf(out, "port49d: crypt: the store was last written by a port49d whose current key is %q, "+
+				"which this configuration does not hold (%s); the live sessions sealed under %q cannot be read, "+
+				"and are denied store_unavailable until a start holds that key again; none is revoked for it: "+
+				"if %q was retired by mistake, set encryption.previous to %q and start port49d again\n",
+				id, keyWindow(keys), id, id, id)
+		})
+	}
+	m.CryptStoreKeyUnknown.Set(0)
+	if alarm.raised {
 		m.CryptStoreKeyUnknown.Set(1)
-		// Said before the start carries the policy into the kept contexts,
-		// which leaves every one under an unheld key unjudged, never
-		// revoked (refresh.go, ErrLeftUnderUnheldKey; spec, a start on
-		// etcd, Keys): so it says they are denied until a start holds the
-		// key, and that fixing it brings them back. Tokens are purged at
-		// every start on etcd, so none is named.
-		fmt.Fprintf(out, "port49d: crypt: the store was last written by a port49d whose current key is %q, which "+
-			"this configuration does not hold (%s); the live sessions sealed under %q cannot be read, and "+
-			"are denied store_unavailable until a start holds that key again; none is revoked for it: if %q "+
-			"was retired by mistake, set encryption.previous to %q and start port49d again\n",
-			last.Current, keyWindow(keys), last.Current, last.Current, last.Current)
 	}
 	cur := etcdstore.SealKeys{Current: keys.Current.ID, WrittenAt: time.Now().UTC()}
 	if keys.Previous != nil {
 		cur.Previous = keys.Previous.ID
 	}
-	return s.PutSealKeys(ctx, cur)
+	pctx, cancel := context.WithTimeout(ctx, bound)
+	defer cancel()
+	return s.PutSealKeys(pctx, cur)
 }
 
 // attempt is one try at the store, as a start-wait loop runs it

@@ -275,25 +275,31 @@ func OnUnopenable(f func(record, keyID string)) Option {
 
 // SealedKeyID is the key id a sealed record's header names, "" when it is
 // too short to name one, and "?" when it names one outside the key-id
-// charset ([A-Za-z0-9._-], at most 64 bytes): the header is the record's,
-// so whoever can write the store writes it, and a line must not echo up to
-// 255 bytes of it (pre-flight M44).
+// charset (LineKeyID): the header is the record's, so whoever can write
+// the store writes it, and a line must not echo up to 255 bytes of it
+// (pre-flight M44).
 func SealedKeyID(sealed []byte) string {
 	if len(sealed) < 1 || len(sealed) < 1+int(sealed[0]) {
 		return ""
 	}
-	id := sealed[1 : 1+int(sealed[0])]
+	return LineKeyID(string(sealed[1 : 1+int(sealed[0])]))
+}
+
+// LineKeyID is id as a line may echo it: itself within the key-id charset
+// ([A-Za-z0-9._-], at most 64 bytes), "?" outside it. An id read from the
+// store is whatever its writer put there (pre-flight M44; review I-2).
+func LineKeyID(id string) string {
 	if len(id) > 64 {
 		return "?"
 	}
-	for _, b := range id {
+	for _, b := range []byte(id) {
 		switch {
 		case b >= 'a' && b <= 'z', b >= 'A' && b <= 'Z', b >= '0' && b <= '9', b == '.', b == '_', b == '-':
 		default:
 			return "?"
 		}
 	}
-	return string(id)
+	return id
 }
 
 // Wrap decorates inner so every credential-bearing record is sealed under k

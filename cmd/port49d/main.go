@@ -507,7 +507,8 @@ func watchQuarantine(live *policy.Live, m *metrics.Metrics,
 // The ledger is the process's, built here once and kept across a store
 // gone and a lost hold (decision 35; Ruling T12-b): a run after one starts
 // with it sealed, so a record put back at a key while the store was gone
-// is denied as a key this process never saw.
+// is denied as a key this process never saw. So is the start key check's
+// alarm (keyAlarm): a run after a store gone keeps a warning raised.
 //
 // Each run builds its own metrics registry and binds its own metrics
 // listener, so between runs /healthz and /readyz are unbound for the
@@ -519,8 +520,9 @@ func run(parent context.Context, cfgPath string) error {
 	hup := make(chan os.Signal, 1)
 	signal.Notify(hup, syscall.SIGHUP)
 	defer signal.Stop(hup)
-	ledger := crypt.NewLedger()
-	return runLoop(parent, func(again bool) error { return runOnce(parent, cfgPath, hup, again, ledger) }, 5*time.Second)
+	ledger, alarm := crypt.NewLedger(), newKeyAlarm()
+	return runLoop(parent, func(again bool) error { return runOnce(parent, cfgPath, hup, again, ledger, alarm) },
+		5*time.Second)
 }
 
 // runLoop runs once until a run ends for a reason other than a store
@@ -563,7 +565,8 @@ func runLoop(parent context.Context, once func(again bool) error, every time.Dur
 // serves until parent ends — main's is SIGINT or SIGTERM, a test's is its
 // own — or the store is gone, and then shuts down in the order the
 // package comment gives. again says a store gone ended the run before.
-func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again bool, ledger *crypt.Ledger) (err error) {
+func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again bool, ledger *crypt.Ledger,
+	alarm *keyAlarm) (err error) {
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		return err
@@ -705,7 +708,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 	// memory, one store. Each sealing layer is on the process's ledger,
 	// which denies a context another login wrote at a key, and is sealed
 	// below, once the start has read every context it keeps (decision 35).
-	sts, err := openStores(ctx, cfg, keys, m, stderr, rd, again, func(e error) { cancelRun(e) }, ledger)
+	sts, err := openStores(ctx, cfg, keys, m, stderr, rd, again, func(e error) { cancelRun(e) }, ledger, alarm)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil // stopped while waiting for the store: nothing was served, as coldCopies says
