@@ -520,6 +520,9 @@ func (b *Broker) refreshContext(ctx context.Context, cur *policy.Policy, priors 
 			return "skipped", nil // the index outlived the context; its own TTL reclaims it
 		case errors.As(err, &unreadable):
 			outcome, err := b.revokeUnopened(ctx, cur, priors, now, "indexed under "+principal, ref, unreadable, rep)
+			if errors.Is(err, errReadAgain) {
+				continue
+			}
 			if errors.Is(err, errKeyNotHeld) {
 				log.Printf("broker: refresh: the context for %q on %q, indexed under %s: %v; left for the next pass",
 					ref.Username, ref.NAS, principal, err)
@@ -663,6 +666,12 @@ func knownPlatform(cur *policy.Policy, priors []Prior, name string) (*policy.Pol
 // for the next pass. No login can open it meanwhile, so it is denied
 // anyway. One that fails authentication, or opens and is not the one this
 // port49d last wrote (crypt.ErrNotLastWritten), is tampered, and revoked.
+// The ledger's denial is read once more first: revoked only when the read
+// again is still denied at the same revision, since one the store now
+// answers, or holds at another, raced a write of its own and is
+// errReadAgain, for the caller to judge afresh (Task 13b review I-1). A
+// record put back, or restored under a running port49d, is still denied
+// there, and revoked (Ruling T13b-a).
 func (b *Broker) revokeUnopened(ctx context.Context, cur *policy.Policy, priors []Prior, now time.Time, via string,
 	ref store.ContextRef, unreadable *store.UnreadableContextError, rep *RefreshReport) (string, error) {
 	if !unreadable.RevokedAt.IsZero() {
@@ -670,6 +679,18 @@ func (b *Broker) revokeUnopened(ctx context.Context, cur *policy.Policy, priors 
 	}
 	if errors.Is(unreadable, crypt.ErrUnknownKey) {
 		return "", fmt.Errorf("%w (%v)", errKeyNotHeld, unreadable)
+	}
+	if errors.Is(unreadable, crypt.ErrNotLastWritten) {
+		var again *store.UnreadableContextError
+		switch _, err := b.Store.GetContext(ctx, store.ContextKey{NAS: ref.NAS, Username: ref.Username}); {
+		case errors.As(err, &again) && errors.Is(again, crypt.ErrNotLastWritten) && again.Rev == unreadable.Rev:
+		case errors.Is(err, store.ErrNotFound):
+			return "skipped", nil
+		case err == nil, errors.As(err, &again):
+			return "", errReadAgain
+		default:
+			return "", err
+		}
 	}
 	known, plat := knownPlatform(cur, priors, ref.NAS)
 	log.Printf("broker: refresh: the context for %q on %q, %s, will not open (%v); revoking it",
@@ -682,6 +703,10 @@ func (b *Broker) revokeUnopened(ctx context.Context, cur *policy.Policy, priors 
 	step := refreshStep{revoke: true, rec: rec, outcome: "failed", sessionOnly: sessionOnly(known, plat)}
 	return b.revoke(ctx, store.ContextKey{NAS: ref.NAS, Username: ref.Username}, unreadable.Rev, now, step, rep)
 }
+
+// errReadAgain is a context the ledger denied that revokeUnopened, reading
+// it again, found written since: a read that raced a write, judged afresh.
+var errReadAgain = fmt.Errorf("broker: the context was written again since it was read: %w", store.ErrConflict)
 
 // errKeyNotHeld is a context revokeUnopened left because it is sealed under
 // a key this port49d does not hold.

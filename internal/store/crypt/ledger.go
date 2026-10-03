@@ -70,8 +70,10 @@ var ErrNotLastWritten = errors.New("crypt: not the context this port49d last wro
 // unknown, sent after the restore on a low revision, is taken as earlier
 // and not admitted until the next write lands there, which fails closed.
 //
-// A read racing a login's replace can return the replaced record after
-// the replace landed; that one request is denied, which fails closed.
+// A read racing a write can return the record it replaced after it
+// landed. Its revision is below the last's (stale), so GetContext reads
+// again, up to twice, and judges that read; one still denied after it is
+// denied, which fails closed (Task 13b review I-1).
 // It holds one entry per key this process has read or written, until a
 // delete of the key lands, or after Seal a read finds it empty, with no
 // write to it sent since the delete or the read was (forget); after Seal
@@ -182,6 +184,19 @@ func (l *Ledger) admits(k store.ContextKey, id string) bool {
 		return true
 	}
 	return false
+}
+
+// stale reports whether a record read at k at rev was served before the
+// last write there committed: its revision is below the last's. A read
+// that raced a write of the same context is one; a record put back is
+// not, since it commits after the last (Task 13b review I-1). After a
+// restore every revision is below the last's, so each read there is
+// stale, and still denied once read again (Ruling T13b-a).
+func (l *Ledger) stale(k store.ContextKey, rev uint64) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	e, ok := l.m[k]
+	return ok && e.known && e.lastRev > 0 && rev < e.lastRev
 }
 
 // begin is told of the write id at k, compared on rev, before it is

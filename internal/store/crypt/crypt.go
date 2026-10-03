@@ -592,35 +592,48 @@ func (w *wrapped) SwapLogin(ctx context.Context, k store.ContextKey, rev uint64,
 	return w.sent(k, writeID, rev, func() (uint64, error) { return w.inner.SwapLoginRev(ctx, k, rev, sc, ttl, lw) })
 }
 
+// staleReads bounds how many times GetContext reads again a record the
+// ledger does not admit and that was served before the last write at its
+// key committed (Ledger.stale).
+const staleReads = 2
+
 func (w *wrapped) GetContext(ctx context.Context, k store.ContextKey) (store.Context, error) {
-	at := w.ledger.mark()
-	c, err := w.inner.GetContext(ctx, k)
-	if errors.Is(err, store.ErrNotFound) {
-		w.ledger.forget(k, at, true)
-	}
-	if err != nil {
-		return store.Context{}, err
-	}
-	oc, writeID, err := w.openContext(k, c)
-	if err != nil {
-		// The record is there and will not open. Its revision and revocation
-		// are plaintext, and JoinContext needs both to replace it without
-		// racing a revocation or lifting one (store.UnreadableContextError).
-		// The wrapped error is openErr's, so errors.Is(err, ErrUnknownKey)
-		// still tells a wrong key from a tampered record.
-		return store.Context{}, &store.UnreadableContextError{Rev: c.Rev, RevokedAt: c.RevokedAt,
-			Err: w.openErr("context", c.Sealed, err)}
-	}
-	// The ledger (re-check IA1; Ruling T12-g): a record sealed for this key
-	// that is not the write this process last made here, or first read
-	// here, is another login's, or an earlier version of this one, written
-	// back. It opens, since it is bound to this key, and so it is denied as
-	// one that does not.
-	if !w.ledger.admits(k, writeID) {
+	for read := 0; ; read++ {
+		at := w.ledger.mark()
+		c, err := w.inner.GetContext(ctx, k)
+		if errors.Is(err, store.ErrNotFound) {
+			w.ledger.forget(k, at, true)
+		}
+		if err != nil {
+			return store.Context{}, err
+		}
+		oc, writeID, err := w.openContext(k, c)
+		if err != nil {
+			// The record is there and will not open. Its revision and
+			// revocation are plaintext, and JoinContext needs both to replace
+			// it without racing a revocation or lifting one
+			// (store.UnreadableContextError). The wrapped error is openErr's,
+			// so errors.Is(err, ErrUnknownKey) still tells a wrong key from a
+			// tampered record.
+			return store.Context{}, &store.UnreadableContextError{Rev: c.Rev, RevokedAt: c.RevokedAt,
+				Err: w.openErr("context", c.Sealed, err)}
+		}
+		// The ledger (re-check IA1; Ruling T12-g): a record sealed for this
+		// key that is not the write this process last made here, or first
+		// read here, is another login's, or an earlier version of this one,
+		// written back. It opens, since it is bound to this key, and so it is
+		// denied as one that does not. One served before the last write
+		// committed raced that write, and is read again (Task 13b review
+		// I-1).
+		if w.ledger.admits(k, writeID) {
+			return oc, nil
+		}
+		if read < staleReads && w.ledger.stale(k, c.Rev) {
+			continue
+		}
 		return store.Context{}, &store.UnreadableContextError{Rev: c.Rev, RevokedAt: c.RevokedAt,
 			Err: w.openErr("context", c.Sealed, ErrNotLastWritten)}
 	}
-	return oc, nil
 }
 
 // TouchContext needs no sealed field, and that is exactly why it exists

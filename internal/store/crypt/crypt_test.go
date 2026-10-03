@@ -954,6 +954,70 @@ func TestTheLedgerAdmitsTheSameContextsWritesInFlightOrUnknown(t *testing.T) {
 	}
 }
 
+// readHoldingStore holds the first GetContext after the store has read
+// the record, before it returns, so the sealing layer has not yet asked
+// the ledger.
+type readHoldingStore struct {
+	store.RevStore
+	read, release chan struct{}
+	held          atomic.Bool
+}
+
+func (h *readHoldingStore) GetContext(ctx context.Context, k store.ContextKey) (store.Context, error) {
+	c, err := h.RevStore.GetContext(ctx, k)
+	if h.held.CompareAndSwap(false, true) {
+		close(h.read)
+		<-h.release
+	}
+	return c, err
+}
+
+// A read that races a write of the same context, landing and ending
+// between the store's read and the ledger's check, read the write before
+// the last: its revision is below the last's, so it is stale, not put
+// back, and the layer reads again and is answered from the last. Through
+// either Wrap, whichever wrote (Task 13b review I-1).
+func TestAReadRacingAWriteOfTheSameContextReadsAgain(t *testing.T) {
+	for _, reader := range []string{"daemon", "broker"} {
+		t.Run(reader, func(t *testing.T) {
+			ctx := context.Background()
+			now := time.Unix(1_000_000, 0).UTC()
+			h := &readHoldingStore{RevStore: memory.New(func() time.Time { return now }), read: make(chan struct{}),
+				release: make(chan struct{})}
+			l := NewLedger()
+			wraps := map[string]store.Store{"daemon": Wrap(h, keys(), nil, WithLedger(l)),
+				"broker": Wrap(h, keys(), nil, WithLedger(l))}
+			writer := wraps["daemon"]
+			if reader == "daemon" {
+				writer = wraps["broker"]
+			}
+			k := store.ContextKey{NAS: "leaf-01", Username: "netops"}
+			l.Seal()
+			if err := writer.PutContext(ctx, k, store.Context{CtxID: "alice-1", Principal: "user:alice@example.com",
+				Username: "netops", PrivLvl: 1}, time.Hour); err != nil {
+				t.Fatal(err)
+			}
+			type got struct {
+				c   store.Context
+				err error
+			}
+			done := make(chan got)
+			go func() {
+				c, err := wraps[reader].GetContext(ctx, k)
+				done <- got{c, err}
+			}()
+			<-h.read
+			if err := writer.SetPrivilege(ctx, k, 15); err != nil {
+				t.Fatal(err)
+			}
+			close(h.release)
+			if g := <-done; g.err != nil || g.c.PrivLvl != 15 {
+				t.Fatalf("a read racing a write of the same context: %+v %v", g.c, g.err)
+			}
+		})
+	}
+}
+
 // A context sealed in form 2, before the write ID, does not open: it is
 // unreadable, not another login's, and a login replaces it. Each seal
 // draws a write ID of its own (Ruling T12-g).
@@ -1480,8 +1544,11 @@ func TestALoginAfterARestoreIsTheLast(t *testing.T) {
 	if err := inner.Store.PutContext(ctx, k, snapshot, time.Hour); err != nil {
 		t.Fatal(err)
 	}
+	// Every revision is below the last's after a restore, so the read
+	// looks stale: the layer reads again, and still denies it (Ruling
+	// T13b-a; Task 13b review I-1).
 	var u *store.UnreadableContextError
-	if _, err := s.GetContext(ctx, k); !errors.As(err, &u) {
+	if _, err := s.GetContext(ctx, k); !errors.As(err, &u) || !errors.Is(err, ErrNotLastWritten) {
 		t.Fatalf("Alice's record, restored: %v", err)
 	}
 	if err := s.SwapContext(ctx, k, u.Rev, login("carol-1", 1), time.Hour); err != nil {
