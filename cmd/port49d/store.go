@@ -391,23 +391,24 @@ type refreshOwed struct {
 
 // startLeftBy is what the start does with what its carry left
 // (RefreshAtStart). An outage, or a principal whose contexts could not be
-// looked up, holds it: hold, and the carry runs again with the listeners
-// closed (Ruling T12-c). A context still changing opens it owing a pass
-// as soon as the listeners are open (Ruling T12-d); one under an unheld
-// key opens it owing the next retry, since every path denies it meanwhile
-// (Ruling T12-a). Any other error is fail, and ends the start.
-func startLeftBy(err error) (owed refreshOwed, hold bool, fail error) {
+// looked up, holds it: again is that error, which the carry's retry waits
+// on, running it again with the listeners closed (Ruling T12-c). A
+// context still changing opens it owing a pass as soon as the listeners
+// are open (Ruling T12-d); one under an unheld key opens it owing the next
+// retry, since every path denies it meanwhile (Ruling T12-a). Any other
+// error is again as well, and ends the start.
+func startLeftBy(err error) (owed refreshOwed, again error) {
 	switch {
 	case err == nil:
-		return refreshOwed{}, false, nil
+		return refreshOwed{}, nil
 	case errors.Is(err, store.ErrUnavailable), errors.Is(err, broker.ErrPrincipalUnvisited):
-		return refreshOwed{}, true, nil
+		return refreshOwed{}, err
 	case errors.Is(err, broker.ErrLeftUnderUnheldKey):
-		return refreshOwed{owed: true}, false, nil
+		return refreshOwed{owed: true}, nil
 	case errors.Is(err, store.ErrConflict):
-		return refreshOwed{owed: true, now: true}, false, nil
+		return refreshOwed{owed: true, now: true}, nil
 	}
-	return refreshOwed{}, false, err
+	return refreshOwed{}, err
 }
 
 // startOnPersistentStore is a start on etcd after the file's marks are
@@ -521,14 +522,9 @@ func startOnPersistentStore(ctx context.Context, brk *broker.Broker, st store.St
 	if err := retry("carrying the policy in force into the live contexts", func() error {
 		var err error
 		rep, err = brk.RefreshAtStart(ctx)
-		var hold bool
-		var fail error
-		owed, hold, fail = startLeftBy(err)
 		left = err
-		if hold {
-			return err
-		}
-		return fail
+		owed, err = startLeftBy(err)
+		return err
 	}, broker.ErrPrincipalUnvisited); err != nil {
 		return refreshOwed{}, err
 	}

@@ -203,30 +203,36 @@ func TestAStartAfterAStoreGoneRetriesEveryError(t *testing.T) {
 }
 
 // What the start's carry left decides what the start does (Rulings T12-a,
-// T12-c, T12-d): an outage or an unvisited principal holds it, a busy
-// context opens it owing a pass at once, an unheld key opens it owing the
-// next retry, and anything else ends it (Task 12 review I-1).
+// T12-c, T12-d): an outage or an unvisited principal holds it, returned
+// for the retry to wait on; a busy context opens it owing a pass at once,
+// an unheld key opens it owing the next retry, and anything else is
+// returned to end it (Task 12 review I-1; re-review m-5).
 func TestTheStartsCarryDecidesHoldOrOpen(t *testing.T) {
 	other := errors.New("test: something else")
+	unvisited := fmt.Errorf("pass: %w", broker.ErrPrincipalUnvisited)
+	outage := fmt.Errorf("pass: %w", store.ErrUnavailable)
 	for _, c := range []struct {
-		name string
-		err  error
-		owed refreshOwed
-		hold bool
-		fail error
+		name  string
+		err   error
+		owed  refreshOwed
+		again error
+		waits error // what the start's retry waits on, for a hold
 	}{
-		{"nothing left", nil, refreshOwed{}, false, nil},
-		{"an unvisited principal holds", fmt.Errorf("pass: %w", broker.ErrPrincipalUnvisited), refreshOwed{}, true, nil},
-		{"an outage holds", fmt.Errorf("pass: %w", store.ErrUnavailable), refreshOwed{}, true, nil},
+		{"nothing left", nil, refreshOwed{}, nil, nil},
+		{"an unvisited principal holds", unvisited, refreshOwed{}, unvisited, broker.ErrPrincipalUnvisited},
+		{"an outage holds", outage, refreshOwed{}, outage, store.ErrUnavailable},
 		{"a busy context opens owing a pass now", fmt.Errorf("pass: %w", store.ErrConflict),
-			refreshOwed{owed: true, now: true}, false, nil},
+			refreshOwed{owed: true, now: true}, nil, nil},
 		{"an unheld key opens owing the next retry", fmt.Errorf("pass: %w", broker.ErrLeftUnderUnheldKey),
-			refreshOwed{owed: true}, false, nil},
-		{"anything else ends the start", other, refreshOwed{}, false, other},
+			refreshOwed{owed: true}, nil, nil},
+		{"anything else ends the start", other, refreshOwed{}, other, nil},
 	} {
-		owed, hold, fail := startLeftBy(c.err)
-		if owed != c.owed || hold != c.hold || fail != c.fail {
-			t.Errorf("%s: startLeftBy = %+v, %v, %v; want %+v, %v, %v", c.name, owed, hold, fail, c.owed, c.hold, c.fail)
+		owed, again := startLeftBy(c.err)
+		if owed != c.owed || again != c.again {
+			t.Errorf("%s: startLeftBy = %+v, %v; want %+v, %v", c.name, owed, again, c.owed, c.again)
+		}
+		if c.waits != nil && !errors.Is(again, c.waits) {
+			t.Errorf("%s: the start's retry would not wait on %v", c.name, again)
 		}
 	}
 }
