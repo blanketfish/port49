@@ -113,6 +113,15 @@ func openStores(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 		return stores{daemon: st, broker: st, close: func() {}}, nil
 	}
 	e := cfg.Store.Etcd
+	// Both feeds read down from here until each first runs, so an alert on
+	// port49_store_feed_up == 0 fires through a wait for the store or a
+	// marks load still retrying, not on an absent series; and each rescan
+	// counter is there at 0, so the first rescan is an increase (final
+	// review 7e-1 M-3).
+	for _, feed := range []string{"contexts", "marks"} {
+		m.StoreFeedUp.WithLabelValues(feed).Set(0)
+		m.StoreFeedRescans.WithLabelValues(feed)
+	}
 	// A run after a store gone shows the alarm a run before raised from
 	// its first scrape: the wait below is the outage, and a gauge at 0
 	// through it would resolve the alert (keyAlarm; re-review I-3).

@@ -638,6 +638,48 @@ func TestARaisedAlarmIsGaugedWhileTheStoreIsAway(t *testing.T) {
 	<-done
 }
 
+// Both feeds' series read 0 from when a run on etcd begins waiting for
+// the store, before either feed first runs: an alert on
+// port49_store_feed_up == 0 for hold_ttl cannot fire on an absent series
+// (final review 7e-1 M-3). The rescan counters are there at 0 too, so the
+// first rescan is an increase.
+func TestBothFeedsReadDownWhileTheStoreIsAway(t *testing.T) {
+	cfgPath, _, _, proxy, _ := etcdRunServer(t)
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys, err := cfg.EncryptionKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy.Hang(true)
+	defer proxy.Hang(false)
+	m := metrics.New(prometheus.NewRegistry())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var out syncBuffer
+	done := make(chan error, 1)
+	go func() {
+		_, err := openStores(ctx, cfg, keys, m, &out, newReadiness(), false, func(error) {}, crypt.NewLedger(),
+			newKeyAlarm(), new(string))
+		done <- err
+	}()
+	waitCountWithin(t, &out, "not answering", 1, 10*time.Second)
+	if up, rescans := testutil.CollectAndCount(m.StoreFeedUp), testutil.CollectAndCount(m.StoreFeedRescans); up != 2 ||
+		rescans != 2 {
+		t.Fatalf("while the store is away: %d port49_store_feed_up series and %d rescan series, want 2 each", up,
+			rescans)
+	}
+	for _, feed := range []string{"contexts", "marks"} {
+		if v := testutil.ToFloat64(m.StoreFeedUp.WithLabelValues(feed)); v != 0 {
+			t.Fatalf("port49_store_feed_up{feed=%q} = %v while the store is away", feed, v)
+		}
+	}
+	cancel()
+	<-done
+}
+
 // A last window that does not decode never refuses the start: whoever can
 // write the store would otherwise hold every start shut. It is said with
 // none of its bytes, gauged, and written over with this window (spec, a
