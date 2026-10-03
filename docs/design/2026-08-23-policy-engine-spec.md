@@ -6571,6 +6571,9 @@ review (the owner may override them).*
   earlier version of the same context, written back) is denied `store_unavailable`, replaced
   by the next login and revoked by the refresh. A record sealed before the write ID (form 2)
   does not open, and is replaced the same way.
+  *Amended by decision 36 (plan 7e):* the write ID is a sealed write sequence, the ledger a
+  high-water mark per key that every process follows, and the start's seal a base revision; a
+  form-3 record does not open.
   - **One per process.** One ledger is shared by every sealing layer, so the daemon's reads
     and the broker's agree.
   - **Sealed after the start's reads.** A start reads every kept context before any listener
@@ -6602,7 +6605,9 @@ review (the owner may override them).*
     cannot undo a self or key revocation (no mark; decision 34) or a policy narrowing. A self
     or key revocation whose plaintext mark landed and whose seal did not is held by the
     ledger's revocation floor: every read takes the latest of the sealed time, the plaintext
-    time and the floor, until a later write of this process lands at the key. The floor
+    time and the floor, until a later write lands at the key (with several processes on one
+    store, each holds the floor of every revocation whose plaintext mark its context feed
+    delivered, and reads nothing before that feed has passed it; decision 36). The floor
     holds any revocation whose mark landed, the refresh's of a record put back included
     (Ruling T13b-a), so the session's own record put back after it is answered revoked too,
     and its owner logs in again. Across a
@@ -6613,7 +6618,10 @@ review (the owner may override them).*
     may still hold it; put back then, it undoes that write until the next one lands. A read
     that raced a write of the same context, served before that write committed, is read
     again, not denied. That holds across a start after a store gone too, since that start
-    keeps the ledger. **Across a restart it is impersonation:** the ledger admits the first record read at a key it has
+    keeps the ledger. **Across a restart it is impersonation:**
+    (narrowed by decision 36: a start denies a record below the mark the ledger record holds at
+    its key)
+    the ledger admits the first record read at a key it has
     not seen until the start's reads seal it, so a record put back while port49d was stopped,
     or before the start's first read of its key, is taken as that key's: another login's
     context, until its sealed ceiling, if it has one, or the key's next login, or an earlier
@@ -6785,6 +6793,82 @@ review (the owner may override them).*
   brings them back.
 
 (§5.1.4, §5.6, §5.7, §12, §14, §15; design document §8, §12, §13, §15, §17)
+
+**36. The broker is its own process, any number of each on one keyspace; the ledger is a
+sealed write sequence every process follows, and a ledger record the daemon cannot write.**
+*Plan 7e, 2026-10-03, rulings where the design was silent, each the option that denies more
+(the owner may override them).*
+
+- **A sealed write sequence replaces the write ID.** Every context seal (form 4) carries a
+  sequence: the highest of the revision the write compares on, the highest store revision
+  this process has been told of, and one above the highest sequence it knows at the key. Each
+  write that lands at a key is therefore sealed above every earlier one, and no store writer
+  can forge it. A context sealed in form 3 does not open: denied, replaced at the next login,
+  and revoked by the refresh as tampered. On etcd every live session ends once, at the
+  upgrade.
+- **The ledger is a high-water mark per key.** A read admits a record sealed at or above the
+  highest sequence this process knows at its key, and raises it; below is denied
+  `store_unavailable`, as decision 35's ledger denies a record not last written. A key it has
+  no mark for admits a record sealed at or above the revision just past its start's scan of the
+  contexts: anything at a key then was scanned. A login sealed by another process before that
+  scan and committed after it is below it too, as a put-back is, and is denied on this process
+  until the next write at its key. A read that raced a write is read again, up to twice. A
+  write of unknown outcome needs nothing more: if it landed it is the higher, and if not, the
+  record the mark names is still the store's.
+- **No record is judged before this process's context feed has passed it.** A read waits until
+  the feed has delivered every change through the record's revision, asking the store for the
+  feed's progress, for at most the store's call timeout; a feed still behind then is
+  `store_unavailable`, counted as a store failure, so a feed that has stopped takes port49d dark
+  as a store that has stopped does. A record at the revision this process last knew at its key
+  needs no wait. A put-back is a store write, so it commits above the write it hides, and once
+  the feed has passed it the later write has raised the mark. Another process's later login is
+  therefore admitted, and an earlier record put back is denied, whichever process wrote either
+  and however late the feed. This rests on etcd never sending a progress notification ahead of
+  an event it has not delivered, which etcd 3.4.24, 3.5.8 and every 3.6 guarantee; an older
+  etcd is a known risk.
+- **After an etcd restore** a process's next write seals above every record it knew, so its
+  login is admitted and a restored record is denied. Restore with `--bump-revision`: without
+  it, a process started after the restore seals below the mark a process that ran across it
+  holds, and its logins are denied there until that process writes at the key, so restart
+  every process.
+- **Every process follows the store's contexts.** After its start's scan it watches the context
+  family from that revision. Each change raises the key's mark, never lowers it, and makes no
+  mark for a record below the base. A plaintext `revoked_at` at the mark's sequence is the
+  key's revocation floor, cleared only by a later sequence, so a revocation whose seal failed
+  holds on every process that saw its mark land. A watch whose revision was compacted seeds from
+  the ledger record, as a start does, then scans again, raising only: a scan sees each key's
+  latest record, and a login a put-back hid while the watch was down is in the record alone.
+  A mark is kept while a record it saw could be live: to the latest sealed
+  ceiling seen at the key and `session.grace_window`, and for good for a `never` context.
+- **The ledger record.** The process that holds the keyspace writes each key's mark, its
+  revocation floor and how long to keep it to `lw/<nas>/<user>`, about once a second, raising
+  only, by a compare on the record's revision. The daemon's etcd role reads it and never writes
+  it. Every start seeds its ledger from it before it scans, so a record put back while every
+  process was stopped is denied at its key when the record holds a later mark there, and so is
+  one put back while a process's watch was compacted. Left: a key written and put back within
+  the record's lag, about a second, or while no process held the keyspace or its feed was
+  down, and before one recorded it. `port49_ledger_pending` and
+  `port49_ledger_behind` say when the record lags.
+- **An earlier form says so.** A context sealed in form 3 is named as sealed by an earlier
+  port49, expected once after the upgrade, never as altered.
+- **The marks are followed too.** Every process loads the revocation marks with the revision
+  they were read at, before it serves, and follows them from there. A mark that lands closes
+  the held broker connections it names in this process; a lift removes it. A compacted watch
+  loads them again and applies the difference.
+- **What the broker remembers.** When a refresh or a revocation deleted a key's unspent tokens is
+  kept in the store (`sp/`, the broker's role alone) for 20 minutes, past any token's
+  `token_ttl` (at most 15m): an idempotent replay on any broker process mints afresh after it.
+  Which blobs a process has emitted into its decision log stays the process's, bounded at
+  4096: each process's log stays replayable alone, and forgetting costs a repeated `blob`
+  record. Which quarantined contexts the refresh recorded stays the refresh's, pruned at every
+  complete pass.
+- **The records a mint writes while it holds the policy** are buffered and written once it lets
+  go, in order, before its response: a log that stalls never stalls a reload. A blob counts as
+  emitted once its record has landed.
+- **An encryption key id** is 1 to 64 of `A-Z a-z 0-9 . _ -`, refused at load otherwise: it is
+  in every sealed record's header and every line about one that will not open.
+
+(§5.1.4, §5.6, §5.7, §14; design document §8, §12, §17)
 
 ### Deferred, with reasons
 
@@ -7289,8 +7373,29 @@ Beyond those already listed in the design document's §14:
   one moved to another key or ID or whose expiry is extended is dropped, and a login receipt
   copied to the enable key does not open.
 - **The ledger**: another login's context written back at a key is denied, and so is an
-  earlier version of the same context, put back after a later write (a join, a refresh, a
-  revocation) landed. Once sealed, the ledger denies a context at a key it has not seen.
+  earlier version of the same context put back after a later write landed, whichever process
+  made either. Another process's later write at a key is admitted once this process's feed
+  has delivered it. A key with no mark admits only a record sealed past the start's scan, and
+  a put-back the feed or a rescan brings at such a key is denied. A process started after a
+  put-back denies it when the ledger record holds a later mark at the key. With
+  `--bump-revision`, a login after an etcd restore is admitted on every process and a
+  restored record is denied; without it, a login on a process started after the restore is
+  denied on one that ran across it. A form-3 context does not open, and is named as an
+  earlier form.
+- **The feed fence**: while this process's context feed lags or has stopped, a record put
+  back over another process's later write, or over its revocation, is never admitted: the
+  read waits and is `store_unavailable`, and once the feed delivers, it is denied. A ping
+  through the fence fails while the feed is behind.
+- **The feeds**: a context change raises its key's mark and never lowers it; a plaintext
+  revocation at the mark's sequence is a floor a put-back cannot clear; a compacted watch
+  seeds from the ledger record and scans again, and a put-back made in the gap over a later
+  login the record holds is denied after it. A progress notification never precedes an event
+  at or below its revision. A mark landing on one process closes that process's held
+  connections it names, and a lift removes it.
+- **The ledger record**: `port49_ledger_behind` is 1 while the keeper's context feed is down,
+  and both ledger gauges are 0 once its duties stop.
+- **The emits**: a log sink that stalls during a mint never stalls a reload, and every mint
+  record follows its blob record.
 - **The index lost**: a context whose index record is deleted, or rewritten to name another
   principal or another sid, or whose lookup entry is deleted, is found, re-indexed and judged
   against the policy in force, and a revocation by principal or sid reaches it again. An index record that does not decode is skipped, logged and
