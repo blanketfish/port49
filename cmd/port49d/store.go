@@ -250,15 +250,25 @@ func keyWindow(keys crypt.Keys) string {
 
 // checkSealKeys is the start's key check on etcd (Ruling 14): a store last
 // written under a current key this window lacks is said, and gauged, and
-// never refuses the start; then this window is recorded.
+// never refuses the start; then this window is recorded. A last window
+// that does not decode is said and gauged the same, never echoed, and
+// written over: a refused start would hand whoever can write the store a
+// lockout of every start. Only an outage is returned.
 func checkSealKeys(ctx context.Context, s *etcdstore.Store, keys crypt.Keys, m *metrics.Metrics, out io.Writer) error {
 	last, ok, err := s.SealKeys(ctx)
-	if err != nil {
+	undecodable := errors.Is(err, etcdstore.ErrSealKeysUndecodable)
+	if err != nil && !undecodable {
 		return fmt.Errorf("store: reading the last start's key ids: %w", err)
 	}
 	held := !ok || last.Current == keys.Current.ID || keys.Previous != nil && last.Current == keys.Previous.ID
 	m.CryptStoreKeyUnknown.Set(0)
-	if !held {
+	if undecodable {
+		m.CryptStoreKeyUnknown.Set(1)
+		fmt.Fprintf(out, "port49d: crypt: the last start's key ids are unreadable (meta/seal_keys does not "+
+			"decode), so records may be sealed under a key this port49d does not hold (%s); any that are are "+
+			"denied store_unavailable, and port49d says each key id as it meets one; this start's are written "+
+			"over it\n", keyWindow(keys))
+	} else if !held {
 		m.CryptStoreKeyUnknown.Set(1)
 		// Said before the start carries the policy into the kept contexts,
 		// which leaves every one under an unheld key unjudged, never

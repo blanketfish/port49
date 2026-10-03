@@ -302,3 +302,34 @@ func TestUnopenableSayerSaysOncePerKeyPerTenMinutes(t *testing.T) {
 		t.Fatalf("a record under a held key that will not open: %q", out.String())
 	}
 }
+
+// A last window that does not decode never refuses the start: whoever can
+// write the store would otherwise hold every start shut. It is said with
+// none of its bytes, gauged, and written over with this window (spec, a
+// start on etcd, Keys).
+func TestCheckSealKeysGoesOnPastAnUndecodableRecord(t *testing.T) {
+	srv := etcdtest.Start(t, etcdtest.Options{})
+	s, err := etcdstore.Open(etcdstore.Config{Endpoints: []string{srv.Endpoint}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	if _, err := srv.Client(t, "root").Put(ctx, "/port49/v1/meta/seal_keys", "{\"current\":\"a\nb"); err != nil {
+		t.Fatal(err)
+	}
+	m := metrics.New(prometheus.NewRegistry())
+	var out bytes.Buffer
+	keys := crypt.Keys{Current: crypt.Key{ID: "enc3"}}
+	if err := checkSealKeys(ctx, s, keys, m, &out); err != nil {
+		t.Fatalf("an undecodable record refused the start: %v", err)
+	}
+	if !strings.Contains(out.String(), "the last start's key ids are unreadable") ||
+		strings.Contains(out.String(), "a\nb") || strings.Count(out.String(), "\n") != 1 ||
+		testutil.ToFloat64(m.CryptStoreKeyUnknown) != 1 {
+		t.Fatalf("said %q, gauge %v", out.String(), testutil.ToFloat64(m.CryptStoreKeyUnknown))
+	}
+	if got, ok, err := s.SealKeys(ctx); !ok || err != nil || got.Current != "enc3" {
+		t.Fatalf("not written over: %+v %v %v", got, ok, err)
+	}
+}

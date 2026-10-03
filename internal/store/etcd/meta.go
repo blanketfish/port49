@@ -252,11 +252,24 @@ type SealKeys struct {
 	WrittenAt time.Time `json:"written_at"`
 }
 
+// ErrSealKeysUndecodable is a recorded window that does not decode. It is
+// not an outage: a start says it and goes on (spec, a start on etcd, Keys).
+var ErrSealKeysUndecodable = errors.New("etcd: the last start's key ids do not decode")
+
 // SealKeys reads the window the last start recorded; false when none has.
 func (s *Store) SealKeys(ctx context.Context) (SealKeys, bool, error) {
 	var k SealKeys
-	_, ok, err := getJSON(ctx, s.ctx, s.k.meta("seal_keys"), &k)
-	return k, ok, err
+	resp, err := s.ctx.Get(ctx, s.k.meta("seal_keys"))
+	if err != nil {
+		return SealKeys{}, false, unavailable(err)
+	}
+	if len(resp.Kvs) == 0 {
+		return SealKeys{}, false, nil
+	}
+	if err := json.Unmarshal(resp.Kvs[0].Value, &k); err != nil {
+		return SealKeys{}, false, ErrSealKeysUndecodable
+	}
+	return k, true, nil
 }
 
 // PutSealKeys records k as this start's window, over the last one.

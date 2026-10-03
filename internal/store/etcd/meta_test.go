@@ -349,3 +349,22 @@ func TestSealKeysRoundTrip(t *testing.T) {
 		t.Fatalf("%+v %v %v", got, ok, err)
 	}
 }
+
+// A window that does not decode is ErrSealKeysUndecodable, apart from an
+// outage, so a start can go on past it.
+func TestSealKeysUndecodable(t *testing.T) {
+	ctx := context.Background()
+	prefix := etcdtest.Prefix()
+	s, err := Open(Config{Endpoints: []string{etcdtest.Endpoint()}, Prefix: prefix})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := s.ctx.Put(ctx, s.k.meta("seal_keys"), "not json"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := s.SealKeys(ctx); ok || !errors.Is(err, ErrSealKeysUndecodable) ||
+		errors.Is(err, store.ErrUnavailable) {
+		t.Fatalf("%v %v", ok, err)
+	}
+}
