@@ -14,6 +14,7 @@ import (
 	"crypto/x509"
 	"encoding/base32"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -56,7 +57,6 @@ import (
 	"github.com/rhwendt/port49/internal/session"
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/store/crypt"
-	"github.com/rhwendt/port49/internal/store/memory"
 	"github.com/rhwendt/port49/internal/token"
 	"github.com/rhwendt/port49/internal/username"
 )
@@ -489,24 +489,95 @@ func watchQuarantine(live *policy.Live, m *metrics.Metrics,
 	return live.Quarantined
 }
 
-// run is port49d from config load to exit. It serves until parent ends —
-// main's is SIGINT or SIGTERM, a test's is its own — and then shuts down in
-// the order the package comment gives, returning once the spool has drained.
+// run is port49d from config load to exit (plan 7d): it runs runOnce
+// until a run ends for a reason other than a store gone. A store gone
+// closes every listener and drains, as a shutdown does. The next run
+// then waits for the store with the listeners closed and no deadline,
+// and starts again in-process: devices find TACACS+ refused meanwhile
+// and use their local method, and no service manager is needed to
+// bring port49d back (Ruling 11; pre-flight I19).
+//
+// SIGHUP reloads the policy (plan 4b), and is taken with no broker too,
+// where it is said to do nothing: its default action ends the process, and
+// a reload habit must not take device AAA down. It is caught here, once,
+// before anything else, so a HUP sent while port49d starts — by the tool
+// that just wrote the file, say — or between two runs does not end it
+// either; one that arrives before the reloader runs waits in the channel.
+//
+// The ledger is the process's, built here once and kept across a store
+// gone and a lost hold (decision 35; Ruling T12-b): a run after one starts
+// with it sealed, so a record put back at a key while the store was gone
+// is denied as a key this process never saw.
+//
+// Each run builds its own metrics registry and binds its own metrics
+// listener, so between runs /healthz and /readyz are unbound for the
+// drain and the next run's config load (seconds), and the counters
+// restart (re-check R-M3). A liveness probe's failure window should be
+// over 30s. Binding them once here would hold a metrics address across a
+// config change, so it is said instead.
 func run(parent context.Context, cfgPath string) error {
-	// SIGHUP reloads the policy (plan 4b), and is taken with no broker too,
-	// where it is said to do nothing: its default action ends the process, and
-	// a reload habit must not take device AAA down. It is caught first, before
-	// anything else, so a HUP sent while port49d starts — by the tool that
-	// just wrote the file, say — does not end it either; one that arrives
-	// before the reloader runs waits in the channel.
 	hup := make(chan os.Signal, 1)
 	signal.Notify(hup, syscall.SIGHUP)
 	defer signal.Stop(hup)
+	ledger := crypt.NewLedger()
+	return runLoop(parent, func(again bool) error { return runOnce(parent, cfgPath, hup, again, ledger) }, 5*time.Second)
+}
 
+// runLoop runs once until a run ends for a reason other than a store
+// gone, or, once a store gone has happened, until parent ends (re-check
+// R-I2). A start after a store gone repeats the whole start: config,
+// inventory, policy, the revocations file, the hold, the marks. Any of
+// those can fail for a reason that is not the store, such as a policy
+// file caught half-written during the outage, or the broker's role
+// refused on meta/. Since I19 nothing restarts port49d after an outage
+// but this loop, so every such error is said and tried again every
+// `every`, the listeners closed, never an exit. A cold start still
+// returns its error, for exit 1 and a supervisor.
+func runLoop(parent context.Context, once func(again bool) error, every time.Duration) error {
+	again := false
+	for {
+		err := once(again)
+		if parent.Err() != nil {
+			return err
+		}
+		var gone *storeGone
+		switch {
+		case errors.As(err, &gone):
+			fmt.Fprintf(stderr, "port49d: %v; every listener is closed; waiting for the store again, as at a start\n", gone)
+			again = true
+			continue
+		case err == nil, !again:
+			return err
+		}
+		fmt.Fprintf(stderr, "port49d: starting again after a store gone: %v; the listeners stay closed; trying "+
+			"again in %v\n", err, every)
+		select {
+		case <-parent.Done():
+			return nil
+		case <-time.After(every):
+		}
+	}
+}
+
+// runOnce is one run of port49d, from config load to a drained spool. It
+// serves until parent ends — main's is SIGINT or SIGTERM, a test's is its
+// own — or the store is gone, and then shuts down in the order the
+// package comment gives. again says a store gone ended the run before.
+func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again bool, ledger *crypt.Ledger) (err error) {
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		return err
 	}
+	parent, cancelRun := context.WithCancelCause(parent)
+	defer cancelRun(nil)
+	// Whatever path a run ends by, a store gone is what it returns, so
+	// run starts the next.
+	defer func() {
+		var gone *storeGone
+		if c := context.Cause(parent); errors.As(c, &gone) {
+			err = gone
+		}
+	}()
 	// With a broker the inventory is live, so it is read behind the policy
 	// file's fence, first and only there (config.Load leaves it unread), and
 	// hashed now rather than when the reloader starts: the reloader starts
@@ -629,11 +700,33 @@ func run(parent context.Context, cfgPath string) error {
 	if keys.Previous != nil {
 		tags = token.NewTagWindow(tagKey, token.TagKey(keys.Previous.Bytes[:]))
 	}
-	// One ledger for the process: it denies a context another login wrote
-	// at a key, and it is sealed below, once the start has read every
-	// context it keeps (plan 7d; decision 35).
-	ledger := crypt.NewLedger()
-	st := crypt.Wrap(memory.New(time.Now), keys, m.CryptOpenFailures, crypt.WithLedger(ledger))
+	// The stores (plan 7d): on etcd, waited for with every listener still
+	// closed, the identities and roles checked, the keyspace held; on
+	// memory, one store. Each sealing layer is on the process's ledger,
+	// which denies a context another login wrote at a key, and is sealed
+	// below, once the start has read every context it keeps (decision 35).
+	sts, err := openStores(ctx, cfg, keys, m, stderr, rd, again, func(e error) { cancelRun(e) }, ledger)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil // stopped while waiting for the store: nothing was served, as coldCopies says
+		}
+		return err
+	}
+	defer sts.close()
+	if sts.lost != nil {
+		go func() {
+			select {
+			case <-sts.lost:
+				cancelRun(&storeGone{why: fmt.Sprintf("lost this port49d's hold on keyspace %s (its lock key is "+
+					"gone, or etcd stopped answering with half its lease or less left)", cfg.Store.Etcd.Prefix)})
+			case <-ctx.Done():
+			}
+		}()
+	}
+	// The broker's store: the minter, the session manager, the broker, the
+	// lab seeds and the revocations. The daemon's handlers read the
+	// daemon's (sts.daemon), each its own identity on etcd.
+	st := sts.broker
 
 	spool, err := acct.NewSpool(cfg.Accounting.SpoolCapacity, cfg.Accounting.SpoolPath, log, m)
 	if err != nil {
@@ -655,7 +748,7 @@ func run(parent context.Context, cfgPath string) error {
 	// is answered by the lab's instrument where port49d.yaml has a `lab:`
 	// block, and denied where it has none: port49 never falls back to
 	// permitting everything.
-	authz := &author.Engine{Store: st, Metrics: m}
+	authz := &author.Engine{Store: sts.daemon, Metrics: m}
 	var fault author.LabFault
 	if cfg.Lab != nil {
 		fault = author.LabFault{Path: cfg.Lab.FaultFile}
@@ -672,7 +765,7 @@ func run(parent context.Context, cfgPath string) error {
 	// minter, the broker and the seeding below do not, so a fault can never
 	// stop the daemon starting. With no `lab:` block or no fault_file this is
 	// the store itself.
-	handlerStore := labHandlerStore(st, fault)
+	handlerStore := labHandlerStore(sts.daemon, fault)
 	minter := token.NewMinter(st, log, rand.Reader, tagKey, time.Now, cfg.Token.CandidateCap)
 	// The broker marks a revoked principal's or certificate's live contexts
 	// through the Manager (plan 7a); Refresh behind /v1/refresh is plan 7b's.
@@ -700,7 +793,26 @@ func run(parent context.Context, cfgPath string) error {
 		// certificate again (spec §13 decision 32). Restored into, and saved
 		// from, the broker's own store, the one every mint reads, so the two
 		// cannot drift apart (Task 9 review M6).
-		marks, err = restoreRevocations(ctx, brk.Store, cfg.Broker.RevocationsFile, m)
+		// On etcd the store may not answer yet: the marks are put again
+		// until it does, the listeners closed (pre-flight M41). Any other
+		// error is a file that does not load.
+		for {
+			marks, err = restoreRevocations(ctx, brk.Store, cfg.Broker.RevocationsFile, m)
+			if err == nil || !sts.persistent || !errors.Is(err, store.ErrUnavailable) {
+				break
+			}
+			fmt.Fprintf(stderr, "port49d: broker: putting %s's marks into the store: %v; the listeners stay closed; "+
+				"trying again in 5s\n", cfg.Broker.RevocationsFile, err)
+			select {
+			case <-ctx.Done():
+			case <-time.After(5 * time.Second):
+			}
+			if ctx.Err() != nil {
+				stopSpool()
+				<-spoolDone
+				return nil
+			}
+		}
 		if err != nil {
 			stopSpool()
 			<-spoolDone
@@ -709,16 +821,37 @@ func run(parent context.Context, cfgPath string) error {
 		brk.Persist = persister(brk.Store, cfg.Broker.RevocationsFile, m)
 		fmt.Fprintf(stderr, "port49d: broker: %d revocation(s) in force from %s\n", len(marks),
 			cfg.Broker.RevocationsFile)
+	}
+	// A start on a store that persists (decision 35, a start on etcd): with
+	// the listeners closed, the store's marks, the re-index, every mark on
+	// the kept contexts, the purge, the carry, and the ledger sealed.
+	// (store.backend: etcd requires a broker, so brk is set here.)
+	var owed refreshOwed
+	if sts.persistent {
+		if owed, err = startOnPersistentStore(ctx, brk, st, sts.etcd, cfg, &marks, m, ledger); err != nil {
+			stopSpool()
+			<-spoolDone
+			if ctx.Err() != nil {
+				return nil
+			}
+			return err
+		}
+		go sweepLoop(ctx, sts.etcd, brk, cfg.Store.Etcd.SweepInterval, stderr)
+	} else {
+		// The memory store starts empty, so no context is kept to read: the
+		// ledger is sealed now, before any listener binds, and from here a
+		// key this process never read admits only what it writes there
+		// (re-check 2 I1).
+		ledger.Seal()
+	}
+	if brk != nil {
+		// The daemon's marks are every mark in force: the file's, and on
+		// etcd the store's too.
 		for _, r := range marks {
 			authMarks.Set(r, true)
 		}
 		brk.Marks = authMarks
 	}
-	// The memory store starts empty, so no context is kept to read: the
-	// ledger is sealed now, before any listener binds, and from here a key
-	// this process never read admits only what it writes there (re-check 2
-	// I1). On a persistent store the start reads its kept contexts first.
-	ledger.Seal()
 	// Certificate status (spec §5.1.4; decision 33): the kept lists are put
 	// in force now, after the marks and before any listener binds. That is
 	// local and fast, so it never delays device AAA; nothing is fetched
@@ -830,7 +963,9 @@ func run(parent context.Context, cfgPath string) error {
 		// (spec §5.8).
 		Acct:   acct.New(handlerStore, spool, m, time.Now, platform.SystemUsers()).WithRedactor(redactorFor(live)),
 		Limits: lim, Metrics: m, Log: log, Now: time.Now, IdleTimeout: cfg.Limits.IdleTimeout,
-		PacketDeadline: cfg.Store.PacketDeadline}
+		PacketDeadline: cfg.Store.PacketDeadline,
+		// A store gone resets the held connections (re-check R-M0).
+		Abort: func() bool { var g *storeGone; return errors.As(context.Cause(parent), &g) }}
 
 	ln, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
@@ -969,6 +1104,9 @@ func run(parent context.Context, cfgPath string) error {
 		}
 		r := newReloader(cfg, brk, m, time.Now)
 		r.inventory, r.cfgPath = inventoryAtStart, cfgPath
+		if owed.owed {
+			r.startLeft(owed.now)
+		}
 		r.startDocument(startDoc, startFrom)
 		r.seen, r.held = seen, deps.Held
 		var fetchDone <-chan struct{}
@@ -1018,15 +1156,30 @@ func run(parent context.Context, cfgPath string) error {
 		if brk != nil {
 			brk.SetReady(broker.ReadyDraining)
 		}
-		fmt.Fprintln(stderr, "port49d: signal received, draining")
+		var gone *storeGone
+		if errors.As(context.Cause(parent), &gone) {
+			// Close the broker's listener first, so the line is true when it
+			// is said; TACACS+'s is closing with ctx, its held connections
+			// reset (Deps.Abort).
+			if bl != nil {
+				bl.Close()
+			}
+			fmt.Fprintf(stderr, "port49d: %v; closing every listener so that devices use their local method\n", gone)
+		} else {
+			fmt.Fprintln(stderr, "port49d: signal received, draining")
+		}
 		<-serveErr
 	}
 	cancel()
 	<-reloadDone
 	statusDone.Wait()
 	if brokerSrv != nil {
+		// Close what Shutdown left at its timeout: the agent's held
+		// connections.
 		shutdownCtx, done := context.WithTimeout(context.Background(), 5*time.Second)
-		_ = brokerSrv.Shutdown(shutdownCtx)
+		if err := brokerSrv.Shutdown(shutdownCtx); err != nil {
+			brokerSrv.Close()
+		}
 		done()
 	}
 
@@ -1048,6 +1201,7 @@ type readiness struct{ why atomic.Pointer[string] }
 const (
 	readyStarting = "starting: the TACACS+ listener is not open yet"
 	readyWaiting  = "waiting for a first bundle from the inventory service"
+	readyStore    = "waiting for the store: the TACACS+ listener stays closed until etcd answers (plan 7d)"
 	readyDraining = "draining: port49d is shutting down, and the TACACS+ listener is closed or closing"
 	readyServing  = "serving"
 )

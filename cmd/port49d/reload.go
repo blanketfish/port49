@@ -1132,6 +1132,21 @@ func (r *reloader) refresh(ctx context.Context) {
 	r.reschedule()
 }
 
+// startLeft is what a start on a persistent store left unjudged (plan
+// 7d; decision 35, a start on etcd, step 6): a pass is owed, at once for
+// a context still changing (Ruling T12-d), at the next retry for one
+// under an unheld key, which every path denies meanwhile (T12-a). Until
+// one completes, port49_policy_refresh_pending is 1 (re-review r-m1).
+func (r *reloader) startLeft(now bool) {
+	r.metrics.PolicyRefreshPending.Set(1)
+	r.stopped = true
+	r.retry = r.now()
+	if !now {
+		r.retry = r.retry.Add(refreshRetry)
+	}
+	r.reschedule()
+}
+
 // reschedule sets due. A retry owed comes first, and alone: that pass judges
 // everything an expiry or a settle pass would, and a store still down must
 // not be asked again at once for an expiry already past. Otherwise it is the

@@ -734,3 +734,30 @@ func TestARefusedReloadsLineIsRedacted(t *testing.T) {
 		t.Fatalf("%s", line)
 	}
 }
+
+// What a start on a persistent store left unjudged is owed a pass: at
+// once for a context still changing, at the next retry for one under an
+// unheld key, with port49_policy_refresh_pending 1 until a pass completes
+// (plan 7d; Rulings T12-a, T12-d).
+func TestAStartThatLeftAContextOwesAPass(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		now  bool
+		in   time.Duration
+	}{{"still changing", true, 0}, {"under an unheld key", false, refreshRetry}} {
+		t.Run(c.name, func(t *testing.T) {
+			rig := newReloadRig(t, showOnly)
+			rig.r.startLeft(c.now)
+			if !rig.r.due.Equal(rig.now.Add(c.in)) || testutil.ToFloat64(rig.m.PolicyRefreshPending) != 1 {
+				t.Fatalf("due %v (want %v from now), pending %v", rig.r.due.Sub(rig.now), c.in,
+					testutil.ToFloat64(rig.m.PolicyRefreshPending))
+			}
+			rig.with(func() { rig.r.refresh(context.Background()) })
+			if testutil.ToFloat64(rig.m.PolicyRefreshPending) != 0 || !strings.Contains(rig.out.String(),
+				"policy refresh finished") {
+				t.Fatalf("the owed pass: pending %v, said %q", testutil.ToFloat64(rig.m.PolicyRefreshPending),
+					rig.out.String())
+			}
+		})
+	}
+}
