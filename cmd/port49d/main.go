@@ -521,8 +521,10 @@ func run(parent context.Context, cfgPath string) error {
 	signal.Notify(hup, syscall.SIGHUP)
 	defer signal.Stop(hup)
 	ledger, alarm := crypt.NewLedger(), newKeyAlarm()
-	return runLoop(parent, func(again bool) error { return runOnce(parent, cfgPath, hup, again, ledger, alarm) },
-		5*time.Second)
+	var held string // the holder this process's last hold was taken as (openStores)
+	return runLoop(parent, func(again bool) error {
+		return runOnce(parent, cfgPath, hup, again, ledger, alarm, &held)
+	}, 5*time.Second)
 }
 
 // runLoop runs once until a run ends for a reason other than a store
@@ -566,7 +568,7 @@ func runLoop(parent context.Context, once func(again bool) error, every time.Dur
 // own — or the store is gone, and then shuts down in the order the
 // package comment gives. again says a store gone ended the run before.
 func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again bool, ledger *crypt.Ledger,
-	alarm *keyAlarm) (err error) {
+	alarm *keyAlarm, held *string) (err error) {
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		return err
@@ -708,7 +710,8 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 	// memory, one store. Each sealing layer is on the process's ledger,
 	// which denies a context another login wrote at a key, and is sealed
 	// below, once the start has read every context it keeps (decision 35).
-	sts, err := openStores(ctx, cfg, keys, m, stderr, rd, again, func(e error) { cancelRun(e) }, ledger, alarm)
+	sts, err := openStores(ctx, cfg, keys, m, stderr, rd, again, func(e error) { cancelRun(e) }, ledger, alarm,
+		held)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil // stopped while waiting for the store: nothing was served, as coldCopies says
@@ -839,7 +842,15 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 			}
 			return err
 		}
-		go sweepLoop(ctx, sts.etcd, brk, cfg.Store.Etcd.SweepInterval, stderr)
+		// Joined before sts.close, as every run-scoped goroutine is, so no
+		// sweep of this run is still inside the store when its clients
+		// close and the next run starts (final review 7d-2 m-3).
+		sweepDone := make(chan struct{})
+		go func() {
+			defer close(sweepDone)
+			sweepLoop(ctx, sts.etcd, brk, cfg.Store.Etcd.SweepInterval, stderr)
+		}()
+		defer func() { cancel(); <-sweepDone }()
 	} else {
 		// The memory store starts empty, so no context is kept to read: the
 		// ledger is sealed now, before any listener binds, and from here a

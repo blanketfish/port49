@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -24,6 +25,23 @@ import (
 	"github.com/rhwendt/port49/internal/store/guard"
 	"github.com/rhwendt/port49/internal/store/memory"
 )
+
+// holderShape is the holder port49d writes under meta/hold (openStores).
+var holderShape = regexp.MustCompile(`^port49d on [A-Za-z0-9._-]{0,253} \(pid [0-9]{1,10}, since [0-9TZ:+.-]{1,40}\)$`)
+
+// lineHolder is meta/holder as a line may echo it: quoted and cut to 200
+// bytes in the shape port49d writes, "?" otherwise. Whoever can write
+// meta/ writes it, and a line must not carry its newlines or a megabyte
+// of it (final review 7d-2 m-1).
+func lineHolder(holder string) string {
+	if !holderShape.MatchString(holder) {
+		return "?"
+	}
+	if len(holder) > 200 {
+		holder = holder[:200]
+	}
+	return fmt.Sprintf("%q", holder)
+}
 
 // stores is what port49d's components read and write through (plan 7d):
 // on etcd the daemon's and the broker's, each its own identity, guard and
@@ -65,9 +83,13 @@ func (f *storeFault) Unwrap() error { return f.err }
 // start_timeout on a cold start (0 is for as long as it takes), and with
 // no deadline when again says this run follows a store gone. Then it
 // takes the hold, waiting for another port49d to let go. gone is how the
-// guard ends the run. It says each step on out.
+// guard ends the run. It says each step on out. held is the holder this
+// process's last hold was taken as, kept across runs: a hold lost when the
+// store stopped answering leaves its lease to expire, so the next run
+// waits on this process's own last run, and says so (final review 7d-2
+// I-2). openStores sets it once it holds the keyspace.
 func openStores(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metrics.Metrics, out io.Writer,
-	rd *readiness, again bool, gone func(error), ledger *crypt.Ledger, alarm *keyAlarm) (stores, error) {
+	rd *readiness, again bool, gone func(error), ledger *crypt.Ledger, alarm *keyAlarm, held *string) (stores, error) {
 	// One sayer for every layer, so a key is said once, not once per layer
 	// (pre-flight M44).
 	say := crypt.OnUnopenable(unopenableSayer(keys, out, time.Now))
@@ -134,11 +156,18 @@ func openStores(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 	for {
 		var err error
 		lost, release, err = b.Hold(ctx, e.HoldTTL, who, func(holder string) {
+			if *held != "" && holder == *held {
+				fmt.Fprintf(out, "port49d: store: keyspace %s is still held by this port49d's last run (its hold "+
+					"was lost when the store stopped answering); waiting up to hold_ttl (%v) for its lease to "+
+					"expire, with the listeners closed\n", e.Prefix, e.HoldTTL)
+				return
+			}
 			fmt.Fprintf(out, "port49d: store: keyspace %s is held by %s; waiting, with the listeners closed: one "+
 				"port49d per keyspace until plan 7e; stop that port49d to move the keyspace, and never delete "+
-				"meta/hold\n", e.Prefix, holder)
+				"meta/hold\n", e.Prefix, lineHolder(holder))
 		})
 		if err == nil {
+			*held = who
 			break
 		}
 		if ctx.Err() != nil || !errors.Is(err, store.ErrUnavailable) {

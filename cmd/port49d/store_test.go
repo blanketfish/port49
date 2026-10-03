@@ -438,7 +438,7 @@ func TestOpenStoresSharesOneSayer(t *testing.T) {
 	defer cancel()
 	var out syncBuffer
 	sts, err := openStores(ctx, cfg, keys, metrics.New(prometheus.NewRegistry()), &out, newReadiness(), false,
-		func(error) {}, crypt.NewLedger(), newKeyAlarm())
+		func(error) {}, crypt.NewLedger(), newKeyAlarm(), new(string))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -483,7 +483,8 @@ func TestARaisedAlarmIsGaugedWhileTheStoreIsAway(t *testing.T) {
 	var out syncBuffer
 	done := make(chan error, 1)
 	go func() {
-		_, err := openStores(ctx, cfg, keys, m, &out, newReadiness(), true, func(error) {}, crypt.NewLedger(), alarm)
+		_, err := openStores(ctx, cfg, keys, m, &out, newReadiness(), true, func(error) {}, crypt.NewLedger(), alarm,
+			new(string))
 		done <- err
 	}()
 	waitCountWithin(t, &out, "not answering", 1, 10*time.Second)
@@ -517,5 +518,81 @@ func TestCheckSealKeysGoesOnPastAnUndecodableRecord(t *testing.T) {
 	}
 	if got, ok, err := s.SealKeys(ctx); !ok || err != nil || got.Current != "enc3" {
 		t.Fatalf("not written over: %+v %v %v", got, ok, err)
+	}
+}
+
+// A run that finds the keyspace held by this process's own last run, whose
+// hold was lost and whose lease has not expired yet, says so and waits for
+// the lease: it never tells the operator to stop "that port49d", which is
+// itself (final review 7d-2 I-2). A holder that is not this process's is
+// named as another port49d.
+func TestAHoldStillOnThisPort49dsLastRunIsSaidAsIts(t *testing.T) {
+	cfgPath, _, _, _, _ := etcdRunServer(t)
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys, err := cfg.EncryptionKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var held string
+	var out syncBuffer
+	last, err := openStores(ctx, cfg, keys, metrics.New(prometheus.NewRegistry()), &out, newReadiness(), false,
+		func(error) {}, crypt.NewLedger(), newKeyAlarm(), &held)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer last.close()
+	if !strings.HasPrefix(held, "port49d on ") {
+		t.Fatalf("the hold's holder was not kept: %q", held)
+	}
+	for _, c := range []struct {
+		held, want string
+	}{
+		{held, fmt.Sprintf("port49d: store: keyspace %s is still held by this port49d's last run (its hold was lost "+
+			"when the store stopped answering); waiting up to hold_ttl (%v) for its lease to expire, with the "+
+			"listeners closed\n", cfg.Store.Etcd.Prefix, cfg.Store.Etcd.HoldTTL)},
+		{"port49d on another (pid 1, since 2026-10-03T00:00:00Z)", fmt.Sprintf("port49d: store: keyspace %s is "+
+			"held by %q; waiting, with the listeners closed: one port49d per keyspace until plan 7e; stop that "+
+			"port49d to move the keyspace, and never delete meta/hold\n", cfg.Store.Etcd.Prefix, held)},
+	} {
+		prev := c.held
+		var out syncBuffer
+		rctx, rcancel := context.WithCancel(ctx)
+		done := make(chan error, 1)
+		go func() {
+			_, err := openStores(rctx, cfg, keys, metrics.New(prometheus.NewRegistry()), &out, newReadiness(), true,
+				func(error) {}, crypt.NewLedger(), newKeyAlarm(), &prev)
+			done <- err
+		}()
+		waitCountWithin(t, &out, "held by", 1, 10*time.Second)
+		rcancel()
+		<-done
+		if !strings.Contains(out.String(), c.want) {
+			t.Fatalf("with the last run's holder %q:\n%s", c.held, out.String())
+		}
+	}
+}
+
+// meta/holder is the store's, so the line echoes it only in the shape
+// port49d writes, quoted and cut to 200 bytes, and "?" otherwise (final
+// review 7d-2 m-1).
+func TestLineHolderEchoesOnlyTheShapePort49dWrites(t *testing.T) {
+	ok := "port49d on leaf-host.example.com (pid 4242, since 2026-10-03T01:02:03Z)"
+	long := "port49d on " + strings.Repeat("h", 250) + " (pid 4242, since 2026-10-03T01:02:03Z)"
+	for in, want := range map[string]string{
+		ok:   fmt.Sprintf("%q", ok),
+		long: fmt.Sprintf("%q", long[:200]),
+		"port49d on host (pid 1, since 2026-10-03T01:02:03Z)\nport49d: forged line":        "?",
+		"port49d on host (pid 1, since 2026-10-03T01:02:03Z)" + strings.Repeat("x", 1<<20): "?",
+		strings.Repeat("x", 1<<20): "?",
+		"":                         "?",
+	} {
+		if got := lineHolder(in); got != want {
+			t.Errorf("lineHolder(%.80q) = %.300q, want %.300q", in, got, want)
+		}
 	}
 }

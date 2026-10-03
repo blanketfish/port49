@@ -291,7 +291,7 @@ func TestASecondPort49dWaitsForTheKeyspace(t *testing.T) {
 			t.Error("the second port49d did not stop")
 		}
 	})
-	waitFor(t, &out, "is held by port49d on")
+	waitFor(t, &out, `is held by "port49d on`)
 	time.Sleep(2 * time.Second)
 	if got := strings.Count(out.String(), "listening on "); got != n {
 		t.Fatalf("the second port49d bound a listener while the first held the keyspace:\n%s", out.String())
