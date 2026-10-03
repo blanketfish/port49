@@ -1466,6 +1466,24 @@ func TestTheLedgerPlacesAWriteAfterTheStoresRevisionsWentBack(t *testing.T) {
 	}
 }
 
+// The runbook's restore, `etcdutl snapshot restore --bump-revision
+// --mark-compacted` (design §12, Backups), goes the other way: the store's
+// revision jumps past every one it gave, but a restored record keeps the
+// revision it was written at, below the last's. A login after it compares
+// on that revision and commits above the last's, so the store holds it: it
+// is the last, and the last before the restore, written back, is denied
+// (Task 15, measured on EOS: tests/lab/results/L35-restore-arista_eos.md).
+func TestTheLedgerPlacesAWriteAfterTheStoresRevisionsWereBumped(t *testing.T) {
+	k := store.ContextKey{NAS: "leaf-01", Username: "netops"}
+	l := NewLedger()
+	l.admits(k, "a")
+	l.end(l.begin(k, "x", 300), 331, nil) // written since the snapshot, which holds a at 300
+	l.end(l.begin(k, "w", 300), 1_000_000_321, nil)
+	if l.admits(k, "x") || !l.admits(k, "w") {
+		t.Fatal("a write that compared on a restored revision and committed above the last did not replace it")
+	}
+}
+
 // offsetStore reports every context revision off above the store's, and
 // takes them back on a compare: setting off to zero is an etcd restore,
 // whose revisions go back.

@@ -69,6 +69,11 @@ var ErrNotLastWritten = errors.New("crypt: not the context this port49d last wro
 // key with it again (the restart residual). A write whose outcome is
 // unknown, sent after the restore on a low revision, is taken as earlier
 // and not admitted until the next write lands there, which fails closed.
+// The runbook's restore bumps the revision instead (--bump-revision;
+// design §12): a restored record keeps its revision, below the last's,
+// and the store's jumps past every one it gave, so a login after it
+// compares below the last and commits above it, and is placed as the last
+// too (Task 15, measured: tests/lab/results/L35-restore-arista_eos.md).
 //
 // A read racing a write can return the record it replaced after it
 // landed. Its revision is below the last's (stale), so GetContext reads
@@ -228,6 +233,13 @@ func (l *Ledger) end(w ledgerWrite, committed uint64, err error) {
 		// Sent after the last ended, so committed after it: the store's
 		// revisions went back (a restore), and it holds this write. Before
 		// earlier, which takes its low compare revision as an earlier write.
+		e.last, e.lastRev, e.lastEnd = w.id, committed, l.seq
+		clear(e.unknown)
+	case err == nil && e.earlier(w) && committed > e.lastRev:
+		// Compared below the last and committed above it: a restore with
+		// --bump-revision, whose records keep their revisions while the
+		// store's jumps past every one it gave. It holds this write. Before
+		// earlier, which takes the low compare revision as an earlier write.
 		e.last, e.lastRev, e.lastEnd = w.id, committed, l.seq
 		clear(e.unknown)
 	case e.earlier(w), err == nil && e.known && committed != 0 && committed < e.lastRev:

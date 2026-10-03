@@ -317,8 +317,11 @@ type Context struct {
 	// (crypt.Ledger, by the revision each returns: RevStore). The exception
 	// is etcd restored from a snapshot under a running port49d: revisions go
 	// back to the snapshot's, and the ledger detects it by a write sent after
-	// the last ended reporting a lower revision. It is plaintext bookkeeping,
-	// like the expiry.
+	// the last ended reporting a lower revision. Restored with
+	// --bump-revision, as design §12 says to, a record keeps its revision
+	// while the store's jumps past every one it gave, and the ledger detects
+	// it by a write that compared below the last committing above it. It is
+	// plaintext bookkeeping, like the expiry.
 	Rev uint64
 	// PolicyRev is the store's revision of what a policy refresh decides
 	// (spec §5.1.3): GetContext sets it and SetContextPolicy compares it.
