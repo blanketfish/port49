@@ -321,8 +321,9 @@ func initRevocationsCmd(args []string, stdout, stderr io.Writer) int {
 }
 
 // restoreRevocations puts every mark in the file in force in st, before
-// the broker serves a request, and returns them for the listener's copy. A mark the store refuses (a certificate key with no
-// issuer) is named by its index; run names the file.
+// the broker serves a request, and returns them for the listener's copy.
+// A mark the store refuses (a certificate key with no issuer) is named by
+// its index; run names the file.
 func restoreRevocations(ctx context.Context, st store.Store, path string) ([]store.Revocation, error) {
 	rs, err := loadRevocations(path)
 	if err != nil {
