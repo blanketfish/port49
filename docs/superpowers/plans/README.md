@@ -98,7 +98,7 @@ Tasks 8b–16 plus a new Task 13b, each reviewed). It delivers:
 - the agent's one connection.
 
 L35 is measured and closed on five images. The lab's snapshot restore found a ledger bug, fixed
-in 79812ef (Plan 7d — As built, below). 7e–7h and 8–13 not yet.
+in 79812ef (Plan 7d — As built, below). **7e written 2026-10-03** (`2026-10-03-07e-broker-process.md`, eighteen tasks in two merges: 7e-1, Tasks 1–10, the store a fleet of processes shares (a sealed write sequence and a high-water ledger per key, the context and marks feeds, the ledger record the daemon cannot write, `superseded` in the store, the decision-log emits under the hold, two carried fixes); 7e-2, Tasks 11–18, `port49-broker`, port49d on etcd with no broker inside, one runner per keyspace, the revocations file retired on etcd, and the lab; sixteen rulings recorded as decision 36; one question for Ryan, OR-1, `port49 revoke`'s default socket, recommended unchanged; it opens L37 and L38 and measures them with L36). 7f–7h and 8–13 not yet.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -1580,7 +1580,7 @@ until 7c merges to be made. Every sub-plan is separately mergeable and leaves `m
   redeem-to-write assumption; unindexed contexts invisible to the refresh); PR #7's third follow-up,
   a replace, its unindex and its index made one atomic operation; the
   `crypt_open_failures_total{record="token"}` alarm. **As built:** "Plan 7d — As built", below.
-- **Plan 7e — the broker as its own process.** `cmd/port49-broker`, and `port49d` serving
+- **Plan 7e — `2026-10-03-07e-broker-process.md`. Written 2026-10-03.** The broker as its own process. `cmd/port49-broker`, and `port49d` serving
   TACACS+ with no broker inside; `b.superseded` and `b.blobsSeen` moved into the store and bounded
   (4b final review m10); decision-log emits under the policy hold bounded (4b Task 4); one refresh
   runner across broker replicas; `broker.revocations_file` retired if D1's backend persists. Lab:
