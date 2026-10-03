@@ -1227,3 +1227,51 @@ func TestRevocationsFileReadsThePathAlone(t *testing.T) {
 		t.Fatalf("revocations_file over admin_socket: %v", err)
 	}
 }
+
+// sampleWithKeyID is sample with encryption.current's id replaced by the
+// YAML scalar id, and the previous block added when prev is not empty.
+func sampleWithKeyID(t *testing.T, id, prev string) string {
+	t.Helper()
+	body := fmt.Sprintf(sample, write(t, "inv.yaml", inv))
+	if !strings.Contains(body, "id: v2,") {
+		t.Fatal("sample no longer names id v2: the test would replace nothing")
+	}
+	body = strings.Replace(body, "id: v2,", "id: "+id+",", 1)
+	if prev != "" {
+		body = strings.Replace(body, "encryption:\n", "encryption:\n  previous: "+prev+"\n", 1)
+	}
+	return body
+}
+
+// An encryption key id is sealed into every record's header and named by
+// every line about one that will not open, which prints only the key-id
+// charset (crypt.LineKeyID). One outside it is refused at load, naming the
+// block and never echoing the id (plan 7e, Ruling 15), whether or not the
+// block names a secret_env (pre-flight M6).
+func TestAnEncryptionKeyIDOutsideTheCharsetIsRefused(t *testing.T) {
+	for _, id := range []string{"has space", "semi;colon", "émoji", strings.Repeat("a", 65), "new\nline"} {
+		t.Run(fmt.Sprintf("%q", id), func(t *testing.T) {
+			setKeyEnv(t)
+			_, err := Load(write(t, "port49d.yaml", sampleWithKeyID(t, fmt.Sprintf("%q", id), "")))
+			if err == nil || !strings.Contains(err.Error(), "encryption.current: id must be 1 to 64 of") {
+				t.Fatalf("an id %q loaded, or the refusal does not say why: %v", id, err)
+			}
+			if strings.Contains(err.Error(), id) {
+				t.Fatalf("the refusal echoes the id: %v", err)
+			}
+			// A previous block naming the id and no secret_env took the
+			// branch that echoed it with %q before the shape was checked.
+			_, err = Load(write(t, "port49d.yaml", sampleWithKeyID(t, "v2", fmt.Sprintf("{id: %q}", id))))
+			if err == nil || !strings.Contains(err.Error(), "encryption.previous: id must be 1 to 64 of") ||
+				strings.Contains(err.Error(), id) {
+				t.Fatalf("a previous id %q with no secret_env: %v", id, err)
+			}
+		})
+	}
+	for _, id := range []string{"v2", "2026-10.key_A", strings.Repeat("a", 64)} {
+		setKeyEnv(t)
+		if _, err := Load(write(t, "port49d.yaml", sampleWithKeyID(t, id, ""))); err != nil {
+			t.Fatalf("an id %q in the charset was refused: %v", id, err)
+		}
+	}
+}

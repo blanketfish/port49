@@ -1062,6 +1062,7 @@ func Run(t *testing.T, b Backend) {
 		{"FailReceiptSurvivesARacingExtend", FailReceiptSurvivesARacingExtend},
 		{"RedeemOrDeleteNotBoth", RedeemOrDeleteNotBoth},
 		{"IndexKeysAreExact", IndexKeysAreExact},
+		{"SupersededIsTheLaterAndExpires", SupersededIsTheLaterAndExpires},
 	} {
 		p := p
 		t.Run(p.name, func(t *testing.T) { p.run(t, b) })

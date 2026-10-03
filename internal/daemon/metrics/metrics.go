@@ -89,6 +89,25 @@ type Metrics struct {
 	// (plan 7d): 0 while it waits for another or for the store, and alarmed
 	// when port49d runs with it 0.
 	StoreKeyspaceHeld prometheus.Gauge
+	// StoreFeedUp is 1 while a feed's watch runs (plan 7e): feed is
+	// "contexts" or "marks". 0 for longer than hold_ttl is an alarm: this
+	// process's ledger or marks are not following the store.
+	StoreFeedUp *prometheus.GaugeVec
+	// StoreFeedRescans counts a feed's rescans after a compacted watch.
+	StoreFeedRescans *prometheus.CounterVec
+	// StoreFenceTimeouts counts context reads denied because this
+	// process's context feed had not delivered the record's revision by the
+	// read's deadline (the feed fence): with port49_store_feed_up 1 and
+	// etcd answering, a rising count is a feed lagging, not a store down.
+	StoreFenceTimeouts prometheus.Counter
+	// LedgerPending is how many context keys' marks the ledger record does
+	// not yet hold (plan 7e, Ruling 4). Above 0 for a minute is an alarm:
+	// a context put back at one would be taken after a restart.
+	LedgerPending prometheus.Gauge
+	// LedgerBehind is 1 while the ledger record's keeper runs with its
+	// context feed down: the record does not follow other processes'
+	// logins, whatever LedgerPending says (pre-flight I11).
+	LedgerBehind prometheus.Gauge
 	// CryptStoreKeyUnknown is 1 when port49d started on a store last written
 	// under a current key its encryption window does not hold (plan 7d):
 	// records sealed under it will not open.
@@ -413,6 +432,16 @@ func New(reg prometheus.Registerer) *Metrics {
 			Help: "etcd index records that would not decode, or index entries whose key would not parse, each time one was skipped, taken unread, written over, or deleted."}),
 		StoreKeyspaceHeld: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_store_keyspace_held",
 			Help: "1 while this port49d holds its keyspace on etcd."}),
+		StoreFeedUp: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "port49_store_feed_up",
+			Help: "1 while a feed's watch on the store runs, by feed (contexts or marks)."}, []string{"feed"}),
+		StoreFeedRescans: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_store_feed_rescans_total",
+			Help: "Rescans of the store after a feed's watch was compacted, by feed."}, []string{"feed"}),
+		StoreFenceTimeouts: prometheus.NewCounter(prometheus.CounterOpts{Name: "port49_store_fence_timeouts_total",
+			Help: "Context reads denied because this process's context feed had not delivered the record's revision by the read's deadline."}),
+		LedgerPending: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_ledger_pending",
+			Help: "Context keys whose mark the ledger record does not yet hold; above 0 for a minute, a context put back at one would be taken after a restart."}),
+		LedgerBehind: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_ledger_behind",
+			Help: "1 while the ledger record's keeper runs with its context feed down: the record does not follow other processes' logins, whatever port49_ledger_pending says."}),
 		CryptStoreKeyUnknown: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_crypt_store_key_unknown",
 			Help: "1 when port49d started on a store last written under a current key its encryption window does not hold."}),
 		StoreCertExpiry: prometheus.NewGaugeVec(prometheus.GaugeOpts{
@@ -513,7 +542,7 @@ func New(reg prometheus.Registerer) *Metrics {
 	})
 	reg.MustRegister(m.Requests, m.Latency, m.Decisions, m.Unvalidated, m.KeyValidations,
 		m.Connections, m.ConnectionEvents, m.AuthFailures, m.SpoolDepth, m.SpoolDrops, m.SpoolQuarantines,
-		m.StoreOps, m.StoreCalls, m.StoreCallSeconds, m.StoreCircuitOpen, m.DecisionLogWriteFailures, m.CryptOpenFailures, m.IndexRecordsUndecodable, m.StoreKeyspaceHeld, m.CryptStoreKeyUnknown, m.StoreCertExpiry, m.Attributions, m.BrokerItemErrors, m.BrokerIdempotency,
+		m.StoreOps, m.StoreCalls, m.StoreCallSeconds, m.StoreCircuitOpen, m.DecisionLogWriteFailures, m.CryptOpenFailures, m.IndexRecordsUndecodable, m.StoreKeyspaceHeld, m.StoreFeedUp, m.StoreFeedRescans, m.StoreFenceTimeouts, m.LedgerPending, m.LedgerBehind, m.CryptStoreKeyUnknown, m.StoreCertExpiry, m.Attributions, m.BrokerItemErrors, m.BrokerIdempotency,
 		m.BrokerHandshakeFailures, m.BrokerConnectionEvents, m.BrokerConnections, m.BlobCache,
 		m.DevicesQuarantined, m.DevicesAdmissionRefused, m.ContextRefreshes, m.ContextsReindexed,
 		m.ContextsReindexFailures, m.SessionRefreshes, m.TokensSuperseded, m.CeilingWarnings,

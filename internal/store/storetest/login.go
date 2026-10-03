@@ -109,8 +109,8 @@ func LoginsRaceToOneIndex(t *testing.T, b Backend) { loginsRace(t, b, true) }
 
 // LoginsRaceToAnEmptyKey is LoginsRaceToOneIndex on a key no context
 // holds: the first logins to a device and username, or after a context
-// expired. Through the sealing layer it is the ledger placing a write that
-// compared on no record by the revision it committed at (crypt's
+// expired. Through the sealing layer the later write is sealed above the
+// one it read, so the ledger admits it (crypt's
 // TestFirstLoginsRacingOnAnEmptyKey).
 func LoginsRaceToAnEmptyKey(t *testing.T, b Backend) { loginsRace(t, b, false) }
 

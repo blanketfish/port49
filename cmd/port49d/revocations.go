@@ -11,10 +11,13 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/rhwendt/port49/internal/broker"
 	"github.com/rhwendt/port49/internal/config"
@@ -320,10 +323,10 @@ func initRevocationsCmd(args []string, stdout, stderr io.Writer) int {
 }
 
 // restoreRevocations puts every mark in the file in force in st, before
-// the broker serves a request, counts them, and returns them for the
-// listener's copy. A mark the store refuses (a certificate key with no
-// issuer) is named by its index; run names the file.
-func restoreRevocations(ctx context.Context, st store.Store, path string, m *metrics.Metrics) ([]store.Revocation, error) {
+// the broker serves a request, and returns them for the listener's copy.
+// A mark the store refuses (a certificate key with no issuer) is named by
+// its index; run names the file.
+func restoreRevocations(ctx context.Context, st store.Store, path string) ([]store.Revocation, error) {
 	rs, err := loadRevocations(path)
 	if err != nil {
 		return nil, err
@@ -333,8 +336,95 @@ func restoreRevocations(ctx context.Context, st store.Store, path string, m *met
 			return nil, fmt.Errorf("revocation %d: %w", i, err)
 		}
 	}
-	countRevocations(rs, m)
 	return rs, nil
+}
+
+// putBackFileMarks is the marks feed's hook before a reload (final review
+// 7e-1 C-1): every mark in the file at path that this process enforces and
+// the store lacks is put back into st, before the reload reads it, and how
+// many is returned. An etcd restore under a running port49d loses every
+// mark made since its snapshot, and the reload would take each as lifted:
+// a revoked principal would mint again until a restart. A mark the file
+// holds and enforced does not was lifted on purpose, on this process or on
+// another whose lift the feed delivered, and is not put back. A lift the
+// feed did not deliver, made on another process while it was down, cannot
+// be told from a mark the restore lost: it is put back, and the caller's
+// line says to lift it again.
+func putBackFileMarks(ctx context.Context, st store.Store, path string, enforced *store.Marks) (int, error) {
+	rs, err := readRevocations(path)
+	if err != nil {
+		return 0, err
+	}
+	in, err := st.ListRevocations(ctx)
+	if err != nil {
+		return 0, err
+	}
+	stored := map[[2]string]bool{}
+	for _, r := range in {
+		stored[[2]string{r.Kind, r.Key}] = true
+	}
+	n := 0
+	for i, r := range rs {
+		if stored[[2]string{r.Kind, r.Key}] || !enforced.Holds(r.Kind, r.Key) {
+			continue
+		}
+		if err := st.PutRevocation(ctx, r); err != nil {
+			return n, fmt.Errorf("revocation %d: %w", i, err)
+		}
+		n++
+	}
+	return n, nil
+}
+
+// marksReloadHook is port49d's rescanned for the marks feed (store.
+// FollowMarks): before a reload reads the store, a mark an etcd restore
+// lost is put back from the file at path, not lifted (final review 7e-1
+// C-1), and said on out. A put-back that fails (the broker's circuit open
+// through the restore, or a file that does not load) refuses the reload:
+// the feed is down, said once per run of failures, until it succeeds
+// (re-review 1 C-2). Each call counts a rescan.
+func marksReloadHook(ctx context.Context, st store.Store, path string, enforced *store.Marks,
+	rescans prometheus.Counter, out io.Writer) func() error {
+	return func() error {
+		rescans.Inc()
+		n, err := putBackFileMarks(ctx, st, path, enforced)
+		if n > 0 {
+			fmt.Fprintf(out, "port49d: broker: %d revocation(s) in broker.revocations_file %s were missing from "+
+				"the store (an etcd restore?) and are put back; lift any lifted on purpose with port49 revoke "+
+				"--lift\n", n, path)
+		}
+		if err != nil {
+			return fmt.Errorf("broker: putting broker.revocations_file %s's marks back into the store before the "+
+				"marks reload: %w; the marks are not reloaded until they are back", path, err)
+		}
+		return nil
+	}
+}
+
+// withHeld is rs, the store's marks, and every mark in held (the file's)
+// that the store lacks and enforced still holds, sorted by kind and key: a
+// mark an etcd restore lost stays in the file until this process lifts it
+// or the feed brings its lift (final review 7e-1 C-1). A write between the
+// restore and the marks feed's reload, which puts it back from the file
+// (putBackFileMarks), would otherwise drop it from both.
+func withHeld(rs, held []store.Revocation, enforced *store.Marks) []store.Revocation {
+	stored := map[[2]string]bool{}
+	for _, r := range rs {
+		stored[[2]string{r.Kind, r.Key}] = true
+	}
+	out := rs
+	for _, r := range held {
+		if !stored[[2]string{r.Kind, r.Key}] && enforced.Holds(r.Kind, r.Key) {
+			out = append(out, r)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Kind != out[j].Kind {
+			return out[i].Kind < out[j].Kind
+		}
+		return out[i].Key < out[j].Key
+	})
+	return out
 }
 
 // writeRevocations is persister's write, swapped in tests; persistDeadline
@@ -348,7 +438,10 @@ var (
 
 // persister is Broker.Persist: it lists every mark in force and writes the
 // file, one writer at a time and listing under the slot, so the last write
-// holds every mark put before it.
+// holds every mark put before it. held is the file's marks as the start
+// read them: a mark the file holds and the store lacks is kept while
+// enforced, this process's marks, still holds it (withHeld; nil keeps
+// none).
 //
 // A write to a hung mount (NFS, a blocked disk) blocks in the kernel, and
 // Revoke waits on Persist before it deletes the mark's unspent tokens. So
@@ -370,7 +463,8 @@ var (
 // found nothing behind it; a call whose pass answered as its deadline
 // struck takes the answer, not the timeout. It never calls Revoke or Lift,
 // which hold the semaphore this is called under.
-func persister(st store.Store, path string, m *metrics.Metrics) func(context.Context) error {
+func persister(st store.Store, path string, held []store.Revocation, enforced *store.Marks,
+	m *metrics.Metrics) func(context.Context) error {
 	slot := make(chan struct{}, 1)
 	var mu sync.Mutex // dirty, the alarm, and a pass's last look and release
 	dirty := false
@@ -386,8 +480,10 @@ func persister(st store.Store, path string, m *metrics.Metrics) func(context.Con
 			rs, err := st.ListRevocations(pctx)
 			cancel()
 			if err == nil {
-				countRevocations(rs, m)
-				err = write(path, rs)
+				rs = withHeld(rs, held, enforced)
+				if err = write(path, rs); err == nil {
+					held = rs // passes run one at a time, under the slot
+				}
 			}
 			mu.Lock()
 			if err == nil && dirty {
@@ -451,16 +547,6 @@ func persister(st store.Store, path string, m *metrics.Metrics) func(context.Con
 			return fmt.Errorf("%s: %w", path, err)
 		}
 		return nil
-	}
-}
-
-func countRevocations(rs []store.Revocation, m *metrics.Metrics) {
-	n := map[string]int{store.RevocationPrincipal: 0, store.RevocationCert: 0}
-	for _, r := range rs {
-		n[r.Kind]++
-	}
-	for by, c := range n {
-		m.RevocationsInForce.WithLabelValues(by).Set(float64(c))
 	}
 }
 

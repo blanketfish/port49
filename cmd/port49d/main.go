@@ -506,9 +506,10 @@ func watchQuarantine(live *policy.Live, m *metrics.Metrics,
 //
 // The ledger is the process's, built here once and kept across a store
 // gone and a lost hold (decision 35; Ruling T12-b): a run after one starts
-// with it sealed, so a record put back at a key while the store was gone
-// is denied as a key this process never saw. So is the start key check's
-// alarm (keyAlarm): a run after a store gone keeps a warning raised.
+// with its marks and its base, so a record put back at a key while the
+// store was gone is still below the key's mark, or the base. So is the
+// start key check's alarm (keyAlarm): a run after a store gone keeps a
+// warning raised.
 //
 // Each run builds its own metrics registry and binds its own metrics
 // listener, so between runs /healthz and /readyz are unbound for the
@@ -573,6 +574,10 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 	if err != nil {
 		return err
 	}
+	// A mark outlives any grace window a context is kept past its ceiling
+	// (crypt.DefaultLedgerKeep), so a record put back is past its ceiling
+	// before its mark goes.
+	ledger.SetKeep(max(cfg.Session.GraceWindow+time.Hour, crypt.DefaultLedgerKeep))
 	parent, cancelRun := context.WithCancelCause(parent)
 	defer cancelRun(nil)
 	// Whatever path a run ends by, a store gone is what it returns, so
@@ -719,6 +724,24 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		return err
 	}
 	defer sts.close()
+	if sts.follow != nil {
+		// The ledger follows the store from the start's scan at once, before
+		// anything reads a context, the start's reads included (plan 7e,
+		// Ruling 3), and is joined before sts.close, as the sweep is.
+		fctx, stopFollow := context.WithCancel(ctx)
+		followDone := make(chan struct{})
+		go func() { defer close(followDone); sts.follow(fctx) }()
+		defer func() { stopFollow(); <-followDone }()
+	}
+	if sts.keep != nil {
+		// The keeper writes the ledger record from the start on, and is
+		// joined before sts.close: its last write, on the way out, needs
+		// the store (crypt.KeepLedger).
+		kctx, stopKeep := context.WithCancel(ctx)
+		keepDone := make(chan struct{})
+		go func() { defer close(keepDone); sts.keep(kctx) }()
+		defer func() { stopKeep(); <-keepDone }()
+	}
 	if sts.lost != nil {
 		go func() {
 			select {
@@ -792,6 +815,12 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 	// the restore below, and kept by the broker's Revoke and Lift; with no
 	// broker there are no marks, and it stays empty.
 	authMarks := store.NewMarks()
+	// port49_revocations_in_force is these marks, the ones this process
+	// enforces, and nothing else sets it (review M3).
+	authMarks.Count(func(principal, cert int) {
+		m.RevocationsInForce.WithLabelValues(store.RevocationPrincipal).Set(float64(principal))
+		m.RevocationsInForce.WithLabelValues(store.RevocationCert).Set(float64(cert))
+	})
 	if brk != nil {
 		brk.Sessions = sessions
 		// Every mark in the file is in force before the broker serves a
@@ -803,7 +832,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		// until it does, the listeners closed (pre-flight M41). Any other
 		// error is a file that does not load.
 		for {
-			marks, err = restoreRevocations(ctx, brk.Store, cfg.Broker.RevocationsFile, m)
+			marks, err = restoreRevocations(ctx, brk.Store, cfg.Broker.RevocationsFile)
 			if err == nil || !sts.persistent || !errors.Is(err, store.ErrUnavailable) {
 				break
 			}
@@ -824,17 +853,19 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 			<-spoolDone
 			return fmt.Errorf("broker.revocations_file %s: %w", cfg.Broker.RevocationsFile, err)
 		}
-		brk.Persist = persister(brk.Store, cfg.Broker.RevocationsFile, m)
+		brk.Persist = persister(brk.Store, cfg.Broker.RevocationsFile, marks, authMarks, m)
+		brk.Say = func(format string, args ...any) { fmt.Fprintf(stderr, "port49d: "+format+"\n", args...) }
 		fmt.Fprintf(stderr, "port49d: broker: %d revocation(s) in force from %s\n", len(marks),
 			cfg.Broker.RevocationsFile)
 	}
 	// A start on a store that persists (decision 35, a start on etcd): with
 	// the listeners closed, the store's marks, the re-index, every mark on
-	// the kept contexts, the purge, the carry, and the ledger sealed.
+	// the kept contexts, the purge and the carry. The ledger's base was set
+	// by openStores's scan.
 	// (store.backend: etcd requires a broker, so brk is set here.)
 	var owed refreshOwed
 	if sts.persistent {
-		if owed, err = startOnPersistentStore(ctx, brk, st, sts.etcd, cfg, &marks, m, ledger); err != nil {
+		if owed, err = startOnPersistentStore(ctx, brk, st, sts.etcd, cfg, &marks, m); err != nil {
 			stopSpool()
 			<-spoolDone
 			if ctx.Err() != nil {
@@ -848,21 +879,55 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		sweepDone := make(chan struct{})
 		go func() {
 			defer close(sweepDone)
-			sweepLoop(ctx, sts.etcd, brk, cfg.Store.Etcd.SweepInterval, stderr)
+			sweepLoop(ctx, sts.etcd, brk, ledger, cfg.Store.Etcd.SweepInterval, stderr)
 		}()
 		defer func() { cancel(); <-sweepDone }()
 	} else {
-		// The memory store starts empty, so no context is kept to read: the
-		// ledger is sealed now, before any listener binds, and from here a
-		// key this process never read admits only what it writes there
-		// (re-check 2 I1).
-		ledger.Seal()
+		// The memory store starts empty, so no context is kept to read:
+		// openStores set the ledger's base past it. With no sweep, the
+		// ledger's marks past their keep are pruned here, joined as the
+		// sweep is.
+		pruneDone := make(chan struct{})
+		go func() {
+			defer close(pruneDone)
+			pruneLoop(ctx, ledger, ledgerPruneEvery)
+		}()
+		defer func() { cancel(); <-pruneDone }()
 	}
+	// markRev is the revision the daemon's marks were read at on etcd, which
+	// the marks feed follows from once the listener is built.
+	var markRev uint64
 	if brk != nil {
 		// The daemon's marks are every mark in force: the file's, and on
-		// etcd the store's too.
-		for _, r := range marks {
-			authMarks.Set(r, true)
+		// etcd the store's, read at one revision (plan 7e, Ruling 5). The
+		// file's are in the store by now (restoreRevocations).
+		if sts.persistent {
+			for {
+				markRev, err = store.LoadMarks(ctx, sts.etcd, authMarks, nil)
+				if err == nil || !errors.Is(err, store.ErrUnavailable) {
+					break
+				}
+				fmt.Fprintf(stderr, "port49d: store: reading the revocations in force: %v; the listeners stay "+
+					"closed; trying again in 5s\n", err)
+				select {
+				case <-ctx.Done():
+				case <-time.After(5 * time.Second):
+				}
+				if ctx.Err() != nil {
+					stopSpool()
+					<-spoolDone
+					return nil
+				}
+			}
+			if err != nil {
+				stopSpool()
+				<-spoolDone
+				return fmt.Errorf("store: reading the revocations in force: %w", err)
+			}
+		} else {
+			for _, r := range marks {
+				authMarks.Set(r, true)
+			}
 		}
 		brk.Marks = authMarks
 	}
@@ -1014,12 +1079,38 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 				MaxPerPrincipal:  cfg.Broker.MaxConnsPerPrincipal,
 				HandshakeTimeout: broker.DefaultListenerLimits.HandshakeTimeout},
 			m, time.Now, func(format string, args ...any) { fmt.Fprintf(stderr, format+"\n", args...) })
-		for _, r := range marks {
+		for _, r := range authMarks.All() {
 			bl.Revoked(r, true)
 		}
 		bl.Refused = brk.RefusedAtBind
 		bl.Status = brk.BindStatus
 		brk.Conns = bl
+	}
+	if sts.persistent && brk != nil {
+		// The daemon's marks and the listener's follow every mark made or
+		// lifted on any broker process from the revision they were read at
+		// (plan 7e, Ruling 5). Started once the listener holds those marks
+		// and is brk.Conns, so no change between the read and the listener
+		// is missed, and joined before sts.close, as the context feed is.
+		mctx, stopMarks := context.WithCancel(ctx)
+		marksDone := make(chan struct{})
+		go func() {
+			defer close(marksDone)
+			// Every change is counted in force as it is applied
+			// (authMarks.Count; Ruling T9-c).
+			store.FollowMarks(mctx, sts.etcd, authMarks, markRev, brk.MarkChanged,
+				func(up bool) {
+					v := 0.0
+					if up {
+						v = 1
+					}
+					m.StoreFeedUp.WithLabelValues("marks").Set(v)
+				},
+				marksReloadHook(mctx, brk.Store, cfg.Broker.RevocationsFile, authMarks,
+					m.StoreFeedRescans.WithLabelValues("marks"), stderr),
+				func(format string, args ...any) { fmt.Fprintf(stderr, "port49d: "+format+"\n", args...) })
+		}()
+		defer func() { stopMarks(); <-marksDone }()
 	}
 	// The admin socket binds before anything says "listening", as the broker
 	// does, and a failure lets go of every listener already bound (pre-flight

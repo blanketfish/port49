@@ -280,7 +280,7 @@ type restored struct{ *Store }
 // login replaced before the restore is denied. The restore is a member of
 // its own, starting from revision one, given the snapshot's record, under
 // a port49d whose last writes were at revisions above a hundred (Task 6b
-// review C1; crypt's TestALoginAfterARestoreIsTheLast on memory).
+// review C1; crypt's TestALoginAfterARestoreIsAdmitted on memory).
 func TestALoginAfterAnEtcdRestoreIsTheLast(t *testing.T) {
 	ctx := context.Background()
 	clock := func() time.Time { return t0 }
@@ -294,7 +294,7 @@ func TestALoginAfterAnEtcdRestoreIsTheLast(t *testing.T) {
 	}
 	l := crypt.NewLedger()
 	s := crypt.Wrap(inner, sealKeys, nil, crypt.WithLedger(l))
-	l.Seal()
+	l.SetBase(inner.Seen() + 1)
 	k := store.ContextKey{NAS: "leaf-01", Username: "netops"}
 	login := func(id string, priv uint8) store.Context {
 		return store.Context{CtxID: id, Principal: "user:" + id + "@example.com", Username: "netops", PrivLvl: priv}
@@ -1077,5 +1077,74 @@ func TestARebuiltIndexRecordComparesItsRevision(t *testing.T) {
 		if err1 != nil || err2 != nil || len(p) != 1 || len(q) != 1 {
 			t.Fatalf("round %d: a racing rebuild lost a key: by principal %v, by sid %v (%v %v)", round, p, q, err1, err2)
 		}
+	}
+}
+
+// Seen is at least the store's revision when a read answered, the read of
+// a key that is not there included: a create sealed after it is above
+// every record ever at the key (plan 7e, Ruling 3).
+func TestSeenIsTheRevisionAReadOfAnAbsentKeyAnswered(t *testing.T) {
+	ctx := context.Background()
+	s := onShared(t, time.Now)
+	cli := etcdtest.Client(t)
+	resp, err := cli.Put(ctx, etcdtest.Prefix()+"elsewhere", "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.GetContext(ctx, store.ContextKey{NAS: "leaf-01", Username: "nobody"}); !errors.Is(err, store.ErrNotFound) {
+		t.Fatal(err)
+	}
+	if got := s.Seen(); got < uint64(resp.Header.Revision) {
+		t.Fatalf("Seen %d, below the revision %d written before the read", got, resp.Header.Revision)
+	}
+}
+
+// Seen never goes back, whatever a later response says.
+func TestSeenNeverGoesBack(t *testing.T) {
+	s := onShared(t, time.Now)
+	s.saw(500)
+	s.saw(10)
+	if s.Seen() != 500 {
+		t.Fatalf("Seen %d", s.Seen())
+	}
+}
+
+// Every context-client response raises Seen, not GetContext's alone: a
+// delete, an index scan and a meta read each do (plan 7e, Ruling T6-a).
+func TestSeenIsRaisedByEveryContextClientResponse(t *testing.T) {
+	ctx := context.Background()
+	cli := etcdtest.Client(t)
+	for name, call := range map[string]func(s *Store) error{
+		"DeleteContext": func(s *Store) error {
+			return s.DeleteContext(ctx, store.ContextKey{NAS: "leaf-01", Username: "nobody"})
+		},
+		"ContextsByPrincipal": func(s *Store) error {
+			_, err := s.ContextsByPrincipal(ctx, "user:nobody")
+			return err
+		},
+		"SealKeys": func(s *Store) error { _, _, err := s.SealKeys(ctx); return err },
+	} {
+		s := onShared(t, time.Now)
+		resp, err := cli.Put(ctx, etcdtest.Prefix()+"elsewhere", "x")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := call(s); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if got := s.Seen(); got < uint64(resp.Header.Revision) {
+			t.Errorf("%s: Seen %d, below the revision %d written before it", name, got, resp.Header.Revision)
+		}
+	}
+	// A transaction's commit: its own revision is above its read's, so only
+	// the commit's response can raise Seen to it.
+	s := onShared(t, time.Now)
+	rev, err := s.PutContextRev(ctx, store.ContextKey{NAS: "leaf-01", Username: "alice"},
+		store.Context{CtxID: "c", Principal: "user:a", Username: "alice"}, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.Seen(); got < rev {
+		t.Errorf("PutContextRev: Seen %d, below the revision %d it committed at", got, rev)
 	}
 }

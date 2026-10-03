@@ -83,7 +83,7 @@ func (b *Broker) RevokeOwn(ctx context.Context, principal string, only *store.To
 			// The supersede is per key, so another principal holding this
 			// (device, username) pays for it too: its retry is minted fresh
 			// beside the token it still holds, nearer the outstanding cap.
-			b.supersede(k, b.Now())
+			b.supersede(ctx, k, b.Now())
 			rep.TokenKeys++
 		}
 	}
@@ -175,7 +175,7 @@ func (b *Broker) RevokeKey(ctx context.Context, k store.TokenKey, origin string)
 	if err := b.Store.DeleteTokens(ctx, k); err != nil {
 		note(err)
 	} else {
-		b.supersede(k, b.Now())
+		b.supersede(ctx, k, b.Now())
 		if cerr != nil || len(toks) > 0 {
 			rep.TokenKeys = 1
 		}

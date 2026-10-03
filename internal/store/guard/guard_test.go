@@ -572,6 +572,10 @@ func TestEveryMethodIsRoutedToItsPool(t *testing.T) {
 	st := reflect.TypeOf((*store.RevStore)(nil)).Elem()
 	for i := 0; i < st.NumMethod(); i++ {
 		m := st.Method(i)
+		// Seen makes no call, so it has no pool and takes no context.
+		if m.Name == "Seen" {
+			continue
+		}
 		p := PoolOf(m.Name)
 		if p != Token && p != Context && p != Bulk {
 			t.Errorf("%s has no pool", m.Name)
@@ -595,4 +599,68 @@ func poolCalls(c *prometheus.CounterVec, p Pool) float64 {
 		n += testutil.ToFloat64(c.WithLabelValues("daemon", string(p), o))
 	}
 	return n
+}
+
+// revStuck is a RevStore whose GetContext is stuck's, whose Seen is seen,
+// and whose Ping answers ping.
+type revStuck struct {
+	store.RevStore
+	s    *stuck
+	seen uint64
+	ping error
+}
+
+func (r *revStuck) GetContext(ctx context.Context, k store.ContextKey) (store.Context, error) {
+	return r.s.GetContext(ctx, k)
+}
+func (r *revStuck) Seen() uint64                   { return r.seen }
+func (r *revStuck) Ping(ctx context.Context) error { return r.ping }
+
+// Seen makes no call: it reaches the inner store at once with every
+// context slot held, and counts nothing (plan 7e, Ruling 3; pre-flight M15).
+func TestSeenPassesThroughWithNoSlot(t *testing.T) {
+	var said, gone told
+	inner := &revStuck{RevStore: memory.New(time.Now), s: &stuck{hold: make(chan struct{})}, seen: 42}
+	c := config(&said, &gone)
+	c.CallTimeout, c.MaxInFlight[Context] = time.Hour, 1
+	g := WrapRev(inner, c)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() { defer wg.Done(); g.GetContext(context.Background(), k) }()
+	eventually(t, "the context slot held", func() bool { return inner.s.count() == 1 })
+	got := make(chan uint64, 1)
+	go func() { got <- g.Seen() }()
+	select {
+	case n := <-got:
+		if n != 42 {
+			t.Fatalf("Seen %d through the guard, want the inner's 42", n)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("Seen waited for a context slot")
+	}
+	for _, p := range []Pool{Token, Context, Bulk} {
+		if n := poolCalls(c.Metrics.Calls, p); n != 0 {
+			t.Errorf("Seen counted %v calls in the %s pool", n, p)
+		}
+	}
+	close(inner.s.hold)
+	wg.Wait()
+}
+
+// Ping runs in the context pool: a store that does not answer it is one
+// context-pool failure, and the token and bulk pools see nothing (plan 7e,
+// Ruling 11).
+func TestPingIsTheContextPools(t *testing.T) {
+	var said, gone told
+	c := config(&said, &gone)
+	g := WrapRev(&revStuck{RevStore: memory.New(time.Now), ping: store.ErrUnavailable}, c)
+	if err := g.Ping(context.Background()); !errors.Is(err, store.ErrUnavailable) {
+		t.Fatalf("Ping: %v", err)
+	}
+	if n := testutil.ToFloat64(c.Metrics.Calls.WithLabelValues("daemon", "context", "unavailable")); n != 1 {
+		t.Fatalf("context pool failures: %v", n)
+	}
+	if poolCalls(c.Metrics.Calls, Context) != 1 || poolCalls(c.Metrics.Calls, Token) != 0 || poolCalls(c.Metrics.Calls, Bulk) != 0 {
+		t.Fatal("Ping ran outside the context pool alone")
+	}
 }

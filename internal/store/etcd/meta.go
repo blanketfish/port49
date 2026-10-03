@@ -45,6 +45,7 @@ func (s *Store) Hold(ctx context.Context, ttl time.Duration, who string, waiting
 		}
 		return nil, nil, unavailable(err)
 	}
+	s.saw(lease.ResponseHeader.GetRevision())
 	holdGranted()
 	sctx, scancel := context.WithCancel(context.Background())
 	sess, err := concurrency.NewSession(s.ctx, concurrency.WithTTL(int(ttl/time.Second)),
@@ -52,7 +53,9 @@ func (s *Store) Hold(ctx context.Context, ttl time.Duration, who string, waiting
 	if err != nil {
 		scancel()
 		rctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		s.ctx.Revoke(rctx, lease.ID)
+		if resp, err := s.ctx.Revoke(rctx, lease.ID); err == nil {
+			s.saw(resp.Header.GetRevision())
+		}
 		cancel()
 		return nil, nil, unavailable(err)
 	}
@@ -63,7 +66,9 @@ func (s *Store) Hold(ctx context.Context, ttl time.Duration, who string, waiting
 	letGo := func() {
 		sess.Orphan()
 		rctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		if _, err := s.ctx.Revoke(rctx, lease.ID); err != nil {
+		if resp, err := s.ctx.Revoke(rctx, lease.ID); err == nil {
+			s.saw(resp.Header.GetRevision())
+		} else {
 			s.logf("etcd: letting go of %s: revoking its lease: %v; the lease was left to expire within "+
 				"hold_ttl (%v), and the next port49d waits for it", s.k.meta("hold"), err, ttl)
 		}
@@ -95,7 +100,7 @@ func (s *Store) Hold(ctx context.Context, ttl time.Duration, who string, waiting
 		}
 		if time.Since(said) >= 30*time.Second {
 			var h holderRec
-			if bounded(func(c context.Context) error { _, _, err := getJSON(c, s.ctx, s.k.meta("holder"), &h); return err }) == nil {
+			if bounded(func(c context.Context) error { _, _, err := getJSON(c, s.ctxKV, s.k.meta("holder"), &h); return err }) == nil {
 				waiting(h.Who)
 			}
 			said = time.Now()
@@ -114,7 +119,7 @@ func (s *Store) Hold(ctx context.Context, ttl time.Duration, who string, waiting
 		return nil, nil, err
 	}
 	if err := bounded(func(c context.Context) error {
-		_, err := s.ctx.Put(c, s.k.meta("holder"), string(body), clientv3.WithLease(sess.Lease()))
+		_, err := s.ctxKV.Put(c, s.k.meta("holder"), string(body), clientv3.WithLease(sess.Lease()))
 		return err
 	}); err != nil {
 		return fail(err)
@@ -205,10 +210,12 @@ func (s *Store) fence(ctx context.Context, sess *concurrency.Session, key string
 		}
 		sent := time.Now()
 		rctx, cancel := context.WithTimeout(ctx, every)
-		resp, err := s.ctx.Get(rctx, key)
+		resp, err := s.ctxKV.Get(rctx, key)
 		var left *clientv3.LeaseTimeToLiveResponse
 		if err == nil {
-			left, err = s.ctx.TimeToLive(rctx, sess.Lease())
+			if left, err = s.ctx.TimeToLive(rctx, sess.Lease()); err == nil {
+				s.saw(left.ResponseHeader.GetRevision())
+			}
 		}
 		cancel()
 		switch {
@@ -259,7 +266,7 @@ var ErrSealKeysUndecodable = errors.New("etcd: the last start's key ids do not d
 // SealKeys reads the window the last start recorded; false when none has.
 func (s *Store) SealKeys(ctx context.Context) (SealKeys, bool, error) {
 	var k SealKeys
-	resp, err := s.ctx.Get(ctx, s.k.meta("seal_keys"))
+	resp, err := s.ctxKV.Get(ctx, s.k.meta("seal_keys"))
 	if err != nil {
 		return SealKeys{}, false, unavailable(err)
 	}
@@ -278,6 +285,6 @@ func (s *Store) PutSealKeys(ctx context.Context, k SealKeys) error {
 	if err != nil {
 		return err
 	}
-	_, err = s.ctx.Put(ctx, s.k.meta("seal_keys"), string(body))
+	_, err = s.ctxKV.Put(ctx, s.k.meta("seal_keys"), string(body))
 	return unavailable(err)
 }

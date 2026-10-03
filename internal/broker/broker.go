@@ -51,6 +51,10 @@ const (
 	maxIdempotencyKey = 128
 )
 
+// blobsSeenMax bounds blobsSeen: a policy rewritten on a schedule mints a
+// new hash per device per rewrite, and the set must not grow with them.
+const blobsSeenMax = 4096
+
 // Broker is the slice's broker. Every field is required but Redact, Sessions
 // (which only Revoke needs, and refuses without), Conns, Persist,
 // RevokeTimeout, CertStatus and OnUnavailable.
@@ -91,6 +95,10 @@ type Broker struct {
 	// Persist writes the marks in force to broker.revocations_file after
 	// every change. Nil keeps them in the store alone.
 	Persist func(context.Context) error
+	// Say writes a line where port49d writes its own (its stderr), redacted
+	// as logf redacts. Nil is the process log (logf). Only MarkChanged's
+	// line goes through it (Ruling T9-c).
+	Say func(format string, args ...any)
 
 	// RevokeTimeout bounds a revocation's or lift's steps once it holds
 	// revokeSem, which run detached from the caller (Revoke). Zero is
@@ -124,7 +132,12 @@ type Broker struct {
 	// detached runs against a slow store (ruling M4). Guarded by mu.
 	ownRevoking map[string]bool
 
-	mu        sync.Mutex
+	mu sync.Mutex
+	// blobsSeen is which blob hashes this process has written into its
+	// decision log, bounded at blobsSeenMax and forgotten whole there: a
+	// forgotten hash is emitted again, which costs one duplicate record
+	// (plan 7e, Ruling 9). Per process, by design: each process's log stays
+	// replayable alone.
 	blobsSeen map[string]bool
 	// quarantineRecorded is, by ctx_id, the bundle under which a refresh last
 	// recorded the context left for a quarantine: one record per context per
@@ -133,15 +146,13 @@ type Broker struct {
 	// superseded is, by (device, username), when a refresh or a revocation
 	// last deleted its unspent tokens: an idempotent retry of a mint from
 	// before then is not replayed with a token that no longer exists
-	// (token.Request). It holds at most one entry per key the policy has
-	// ever minted for.
+	// (token.Request). It is this process's copy of the store's (plan 7e,
+	// Ruling 9), each entry kept SupersededFor (supersede).
 	superseded map[store.TokenKey]time.Time
-	// SupersededAll is when port49d started on a store that persists (plan
-	// 7d): every unspent token was purged then, so every key is superseded
-	// at least then, and an idempotent replay of a mint from before is
-	// minted again, never answered with a token that no longer exists.
-	// Zero on the memory store. Set before the broker serves.
-	SupersededAll time.Time
+	// supersedePruned is when supersede last pruned superseded: at most once
+	// per supersedePruneEvery, so a pass that supersedes n keys scans the
+	// map once, not n times, under mu.
+	supersedePruned time.Time
 	// queued is, by (issuer, serial), each certificate in revokeQueue, and
 	// pending each one a store error or a full queue left for RetryPending.
 	queued  map[[2]string]bool
@@ -323,12 +334,18 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
 	// mid-response, must not hold a reload — and, behind it, every mint and
 	// every refresh — until TCP gives up. The deferred call is for a panic,
 	// which net/http recovers: a hold it leaked would stop every reload.
+	//
+	// Every record written under the hold goes to buf, and is written to the
+	// log once the hold is let go: a log sink that stalls must not hold a
+	// reload either (plan 7e, Ruling 10).
+	buf := newHeldLog()
 	pol, hold := b.Policy.Hold()
 	held := true
 	release := func() {
 		if held {
 			held = false
 			hold()
+			buf.Flush(b.Log, b.blobLanded)
 		}
 	}
 	defer release()
@@ -339,7 +356,7 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
 	resp := api.MintResponse{Principal: principal}
 	resp.Subject, _ = pol.SubjectOf(principal)
 	for _, name := range req.Devices {
-		item, err := b.mintOne(ctx, pol, principal, cred, authTime, name, req, res, bodyHash)
+		item, err := b.mintOne(ctx, buf, pol, principal, cred, authTime, name, req, res, bodyHash)
 		if errors.Is(err, token.ErrIdempotencyInProgress) {
 			// This device's hold was taken by another request under the
 			// key, or lapsed before its turn: two retries that both
@@ -451,7 +468,7 @@ func (b *Broker) revokedSince(w http.ResponseWriter, r *http.Request, principal 
 		now := b.Now()
 		for _, it := range items {
 			if it.Verdict == decision.VerdictPermit {
-				b.supersede(store.TokenKey{NAS: it.Device, Username: it.Username}, now)
+				b.supersede(ctx, store.TokenKey{NAS: it.Device, Username: it.Username}, now)
 			}
 		}
 		b.emit(decision.Record{TS: now, Event: decision.EventMint, Verdict: decision.VerdictDeny,
@@ -508,6 +525,32 @@ func revokedRecord(now time.Time, principal string, cred store.Credential) decis
 	return decision.Record{TS: now, Event: decision.EventMint, Verdict: decision.VerdictDeny,
 		Reason: decision.CredentialRevoked, Principal: principal,
 		Auth: &decision.Auth{Method: cred.Method, Fingerprint: cred.Fingerprint}}
+}
+
+// MarkChanged is a mark made or lifted on a broker process, this one
+// included, as the marks feed brings it (plan 7e, Ruling 5): the
+// listener's copy follows, and a mark that stands closes this process's
+// held connections it names, as Revoke closes its own. A lift a reload
+// found (Reloaded) is said, never silent: it may be a mark an etcd restore
+// lost (final review 7e-1 C-1). The daemon's marks (b.Marks) are the
+// feed's own to keep (store.FollowMarks).
+func (b *Broker) MarkChanged(c store.MarkChange) {
+	if c.Reloaded && !c.Standing {
+		b.say("broker: a reload of the marks found the revocation of %s lifted: lifted on a broker process "+
+			"while the marks feed was down, or lost by an etcd restore; revoke it again unless it was lifted "+
+			"on purpose", printsafe.Line(c.Key, 160))
+	}
+	if b.Conns == nil {
+		return
+	}
+	b.Conns.Revoked(c.Revocation, c.Standing)
+	if !c.Standing {
+		return
+	}
+	if n := b.Conns.CloseHeld(matchMark(c.Revocation)); n > 0 {
+		b.say("broker: a revocation of %s made on a broker process closed %d held connection(s) here",
+			printsafe.Line(c.Key, 160), n)
+	}
 }
 
 // RefusedAtBind records a request the broker's listener refused as its
@@ -594,7 +637,7 @@ func (b *Broker) unmint(ctx context.Context, principal string, cred store.Creden
 			b.logf("broker: deleting the tokens a revoked mint wrote under %q on %q: %v; they expire at their TTL",
 				it.Username, it.Device, err)
 		}
-		b.supersede(k, now)
+		b.supersede(ctx, k, now)
 		if it.Replayed {
 			continue
 		}
@@ -609,26 +652,67 @@ func (b *Broker) unmint(ctx context.Context, principal string, cred store.Creden
 	return n
 }
 
-// supersede records that k's unspent tokens were deleted at at, keeping
-// the later of two (token.Request.SupersededAt).
-func (b *Broker) supersede(k store.TokenKey, at time.Time) {
+// supersede records that k's unspent tokens were deleted at at: in this
+// process, so its own replays mint afresh whatever the store says, and in
+// the store, so every broker process's do (plan 7e, Ruling 9). A store
+// write that fails is said, and this process's copy still covers its own
+// replays; another process may then answer one with a deleted token's
+// record, which redeems token_not_found.
+func (b *Broker) supersede(ctx context.Context, k store.TokenKey, at time.Time) {
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	if b.superseded == nil {
 		b.superseded = map[store.TokenKey]time.Time{}
 	}
 	if at.After(b.superseded[k]) {
 		b.superseded[k] = at
 	}
+	if now := b.Now(); now.Sub(b.supersedePruned) >= supersedePruneEvery {
+		b.supersedePruned = now
+		for key, t := range b.superseded {
+			if now.Sub(t) > store.SupersededFor {
+				delete(b.superseded, key)
+			}
+		}
+	}
+	b.mu.Unlock()
+	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), holdTimeout)
+	defer cancel()
+	if err := b.Store.SupersedeTokens(sctx, k, at); err != nil {
+		b.logf("broker: recording that the tokens under %q on %q were superseded: %v; this process still "+
+			"mints a replay of them afresh", k.Username, k.NAS, err)
+	}
+}
+
+// supersedePruneEvery bounds how often supersede prunes its local copy: an
+// entry lives at most this long past SupersededFor, which only ever mints
+// a replay afresh.
+const supersedePruneEvery = time.Minute
+
+// supersededAt is the later of this process's instant for k and the
+// store's (every process's, and a start's purge).
+func (b *Broker) supersededAt(ctx context.Context, k store.TokenKey) (time.Time, error) {
+	b.mu.Lock()
+	local := b.superseded[k]
+	b.mu.Unlock()
+	at, err := b.Store.SupersededAt(ctx, k)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if local.After(at) {
+		at = local
+	}
+	return at, nil
 }
 
 // mintOne answers one device. The only error it returns is
 // ErrIdempotencyInProgress, which is the whole request's; every other refusal
-// is an item.
-func (b *Broker) mintOne(ctx context.Context, pol *policy.Policy, principal string, cred store.Credential,
-	authTime time.Time, name string, req api.MintRequest, hold *token.Reservation, bodyHash string) (api.MintItem, error) {
+// is an item. Every record it writes goes to buf, the request's buffer
+// (tokens).
+func (b *Broker) mintOne(ctx context.Context, buf *heldLog, pol *policy.Policy, principal string,
+	cred store.Credential, authTime time.Time, name string, req api.MintRequest, hold *token.Reservation,
+	bodyHash string) (api.MintItem, error) {
 	deny := func(reason decision.Reason, platform string) api.MintItem {
-		b.emit(decision.Record{TS: b.Now(), Event: decision.EventMint, Verdict: decision.VerdictDeny, Reason: reason,
+		b.emitTo(buf, decision.Record{TS: b.Now(), Event: decision.EventMint, Verdict: decision.VerdictDeny, Reason: reason,
 			Principal: principal, Auth: &decision.Auth{Method: cred.Method},
 			Device: &decision.Device{Name: name, Platform: platform}})
 		return api.MintItem{Device: name, Verdict: decision.VerdictDeny, Reason: string(reason)}
@@ -715,14 +799,15 @@ func (b *Broker) mintOne(ctx context.Context, pol *policy.Policy, principal stri
 		b.logf("broker: the policy for %s on %q compiled to a blob the daemon would refuse: %v", principal, name, err)
 		return b.fault(name, "broker_error", "the broker could not compile this device's policy; tell the operator"), nil
 	}
-	if err := b.putBlob(ctx, hash, body, blobTTL(age, b.MaxSessionAge)); err != nil {
+	if err := b.putBlob(ctx, buf, hash, body, blobTTL(age, b.MaxSessionAge)); err != nil {
 		return deny(decision.StoreUnavailable, dev.Platform), nil
 	}
-	b.mu.Lock()
-	supersededAt := b.superseded[store.TokenKey{NAS: name, Username: res.Username}]
-	b.mu.Unlock()
-	if b.SupersededAll.After(supersededAt) {
-		supersededAt = b.SupersededAll
+	var supersededAt time.Time
+	if hold != nil { // only a request under an Idempotency-Key can be replayed
+		var err error
+		if supersededAt, err = b.supersededAt(ctx, store.TokenKey{NAS: name, Username: res.Username}); err != nil {
+			return deny(decision.StoreUnavailable, dev.Platform), nil
+		}
 	}
 	out, err := b.Minter.Mint(ctx, token.Request{
 		Subject: token.Subject{Principal: principal, Username: res.Username, TokenTTL: res.TokenTTL,
@@ -731,7 +816,7 @@ func (b *Broker) mintOne(ctx context.Context, pol *policy.Policy, principal stri
 		Device: name, Platform: dev.Platform, BlobHash: hash, WithEnable: req.Enable,
 		TTL:         time.Duration(req.TTLSeconds) * time.Second,
 		Reservation: hold, BodyHash: bodyHash, SupersededAt: supersededAt,
-		Policy: &decision.Policy{Bundle: pol.Bundle, Subject: res.Subject, Grants: res.Grants}})
+		Policy: &decision.Policy{Bundle: pol.Bundle, Subject: res.Subject, Grants: res.Grants}, Log: buf})
 	var capped *token.ErrTooManyOutstanding
 	switch {
 	case errors.Is(err, token.ErrIdempotencyInProgress):
@@ -787,45 +872,76 @@ func (b *Broker) fault(name, code, detail string) api.MintItem {
 	return api.MintItem{Device: name, Error: code, Detail: detail}
 }
 
-// putBlob writes an encoded blob under its hash and emits it into the log the
-// first time this process writes it (spec §5.1.1; §13, decision 19). Its store
-// TTL is ttl, at least the ceiling of any context it backs (blobTTL): a
-// context's session_expires is its auth_time plus that, and auth_time is never
-// later than the mint, so no context this blob backs can outlive it. PutBlob
-// keeps the later expiry, so a re-put never shortens it. A blob is emitted
-// once per process, and the log's first copy serves every later re-put,
-// including one after the store's copy expired (plan 3, Decided 8).
+// putBlob writes an encoded blob under its hash, and buffers its blob
+// record into out the first time this process writes it (spec §5.1.1;
+// §13, decision 19). out is the request's buffer, written to the log once
+// the request lets go of the policy (plan 7e, Ruling 10); a hash is marked
+// emitted only when its record lands (blobLanded), so a request that finds
+// a hash unmarked buffers a blob record of its own, and within one sink
+// every mint record follows one for its hash.
 //
-// The emit happens under b.mu, so a second request for the same hash cannot
-// return from putBlob, and so cannot reach Mint, until the blob record is
-// written: within one sink, every mint record naming a hash follows that
-// hash's blob record. Emit is one buffered line write, so that is all the lock
-// holds.
+// Its store TTL is ttl, at least the ceiling of any context it backs
+// (blobTTL): a context's session_expires is its auth_time plus that, and
+// auth_time is never later than the mint, so no context this blob backs can
+// outlive it. PutBlob keeps the later expiry, so a re-put never shortens it.
+// The log's first copy serves every later re-put, including one after the
+// store's copy expired (plan 3, Decided 8).
 //
-// A blob record the sink refuses is not marked emitted, so the next mint that
-// writes the hash emits it again (roadmap, plan 4): replay reads the log alone,
-// and a mint record naming a blob the log never carried cannot be replayed.
-// The refusal is counted by port49_decision_log_write_failures_total. An
-// Emitter that cannot report a refusal is trusted, as before.
-func (b *Broker) putBlob(ctx context.Context, hash string, body []byte, ttl time.Duration) error {
+// A blob record the sink refuses is counted by
+// port49_decision_log_write_failures_total and is not marked emitted, so
+// the next mint that writes the hash emits it again: replay reads the log
+// alone, and a mint record naming a blob the log never carried cannot be
+// replayed. An Emitter that cannot report a refusal is trusted.
+func (b *Broker) putBlob(ctx context.Context, out *heldLog, hash string, body []byte, ttl time.Duration) error {
 	if err := b.Store.PutBlob(ctx, hash, body, ttl); err != nil {
 		return err
 	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.blobsSeen == nil {
-		b.blobsSeen = map[string]bool{}
-	}
-	if !b.blobsSeen[hash] {
-		rec := decision.Record{TS: b.Now(), Event: decision.EventBlob, Blob: b.blobEvent(hash, body)}
-		if sink, ok := b.Log.(decision.Sink); ok {
-			b.blobsSeen[hash] = sink.Write(rec) == nil
-		} else {
-			b.Log.Emit(rec)
-			b.blobsSeen[hash] = true
-		}
+	if !b.blobSeen(hash) && !out.blobs[hash] {
+		out.Emit(decision.Record{TS: b.Now(), Event: decision.EventBlob, Blob: b.blobEvent(hash, body)})
+		out.blobs[hash] = true
 	}
 	return nil
+}
+
+// heldLog is the records one request or pass writes while it holds the
+// policy, with the blob hashes it already carries a record for: two
+// devices, or two contexts, that compile to one blob buffer one blob record
+// between them, not one each (Task 4 review I1). One goroutine uses it.
+type heldLog struct {
+	*decision.Buffer
+	blobs map[string]bool
+}
+
+func newHeldLog() *heldLog {
+	return &heldLog{Buffer: decision.NewBuffer(), blobs: map[string]bool{}}
+}
+
+// blobLanded is Buffer.Flush's landed for the request's buffer: a blob
+// record the sink took marks its hash emitted. One the sink refused is not
+// marked, so the next mint that writes the hash emits it again (roadmap,
+// plan 4).
+func (b *Broker) blobLanded(r decision.Record, err error) {
+	if err == nil && r.Event == decision.EventBlob && r.Blob != nil {
+		b.markBlob(r.Blob.Hash)
+	}
+}
+
+// markBlob records that hash's blob record landed in the log, forgetting
+// every hash first when blobsSeen is full.
+func (b *Broker) markBlob(hash string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.blobsSeen == nil || len(b.blobsSeen) >= blobsSeenMax {
+		b.blobsSeen = map[string]bool{}
+	}
+	b.blobsSeen[hash] = true
+}
+
+// blobSeen reports whether hash's blob record has landed in the log.
+func (b *Broker) blobSeen(hash string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.blobsSeen[hash]
 }
 
 // blobEvent is the blob event's body: the blob as stored, unless a rule's
@@ -898,9 +1014,29 @@ func (b *Broker) logf(format string, args ...any) {
 	log.Print(platform.RedactQuoted(redact, fmt.Sprintf(format, args...)))
 }
 
+// say is logf to Say when it is set.
+func (b *Broker) say(format string, args ...any) {
+	if b.Say == nil {
+		b.logf(format, args...)
+		return
+	}
+	redact := platform.AllRedactions()
+	if b.Policy != nil {
+		redact = b.Policy.Load().Redactions()
+	}
+	b.Say("%s", platform.RedactQuoted(redact, fmt.Sprintf(format, args...)))
+}
+
 // emit writes a refusal the broker decided itself, and counts it.
 func (b *Broker) emit(r decision.Record) {
-	b.Log.Emit(r)
+	b.emitTo(b.Log, r)
+}
+
+// emitTo is emit into to: a request's buffer, under the policy hold. The
+// decision is counted when it is buffered, not when it lands; the two differ
+// only for a process that dies before the flush.
+func (b *Broker) emitTo(to decision.Emitter, r decision.Record) {
+	to.Emit(r)
 	b.Metrics.Decisions.WithLabelValues(r.Event, r.Verdict, string(r.Reason)).Inc()
 }
 

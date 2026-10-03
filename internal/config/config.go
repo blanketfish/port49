@@ -930,6 +930,13 @@ func Load(path string) (Config, error) {
 	}{
 		{"encryption.current", f.Encryption.Current}, {"encryption.previous", f.Encryption.Previous},
 	} {
+		if k.ref.ID != "" && !KeyIDShape.MatchString(k.ref.ID) {
+			// Not printed: whatever the operator wrote, a line must not carry
+			// it. Checked first, so no later refusal in this loop echoes an
+			// id outside the charset.
+			return Config{}, fmt.Errorf("config: %s: id must be 1 to 64 of A-Z a-z 0-9 . _ -: it is written "+
+				"into every record the key seals, and every line about a record that will not open names it", k.what)
+		}
 		if k.ref.SecretEnv == "" {
 			// previous is optional; current's absence was refused above. But a
 			// previous key that names an id and no variable is not "absent" to
@@ -1722,6 +1729,11 @@ func StoreOf(raw []byte) (StoreConfig, error) {
 // that is not one is refused without being printed: it is most likely the
 // secret, pasted where its variable's name goes.
 var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// KeyIDShape is an encryption key id: what crypt seals into every record's
+// header and what every line about a record that will not open names
+// (crypt.LineKeyID prints anything else as "?"). Plan 7e, Ruling 15.
+var KeyIDShape = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
 
 // sortedKeySets names keys' refs, sorted, so the start notices read the same
 // every time.

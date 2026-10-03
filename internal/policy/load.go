@@ -236,7 +236,7 @@ var apiRights = []string{RightRevokeOthers, RightExplainOthers, RightSync, Right
 // Design §8: device tokens live 30–900s.
 const (
 	minTokenTTL = 30 * time.Second
-	maxTokenTTL = 900 * time.Second
+	MaxTokenTTL = 900 * time.Second
 )
 
 // Load reads and validates the policy file at path against env. Every error
@@ -1290,9 +1290,9 @@ func (p *Policy) buildSubjects(f file) error {
 		default:
 			return fmt.Errorf("subject %q: enable must be none, auto or token (spec §7)", s.Name)
 		}
-		if s.TokenTTL != 0 && (s.TokenTTL < minTokenTTL || s.TokenTTL > maxTokenTTL) {
+		if s.TokenTTL != 0 && (s.TokenTTL < minTokenTTL || s.TokenTTL > MaxTokenTTL) {
 			return fmt.Errorf("subject %q: token_ttl must be between %s and %s (design §8); got %s",
-				s.Name, minTokenTTL, maxTokenTTL, s.TokenTTL)
+				s.Name, minTokenTTL, MaxTokenTTL, s.TokenTTL)
 		}
 		for i, r := range s.API {
 			if !slices.Contains(apiRights, r) {
@@ -1407,7 +1407,7 @@ func (p *Policy) checkMinters(file) error {
 		}
 		if s.TokenTTL == 0 {
 			return fmt.Errorf("subject %q: token_ttl is required: a grant names it, so it mints device tokens, "+
-				"which live %s to %s (design §8)", s.Name, minTokenTTL, maxTokenTTL)
+				"which live %s to %s (design §8)", s.Name, minTokenTTL, MaxTokenTTL)
 		}
 	}
 	return nil

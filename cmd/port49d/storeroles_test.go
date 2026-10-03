@@ -84,6 +84,7 @@ func TestStoreRolesPrintsTheCommands(t *testing.T) {
 		"etcdctl role grant-permission port49_daemon readwrite --prefix=true /port49/v1/t/",
 		"etcdctl role grant-permission port49_daemon read --prefix=true /port49/v1/rv/",
 		"etcdctl role grant-permission port49_daemon read --prefix=true /port49/v1/meta/",
+		"etcdctl role grant-permission port49_daemon read --prefix=true /port49/v1/lw/",
 		"etcdctl role grant-permission port49_broker readwrite --prefix=true /port49/v1/",
 		"etcdctl user add port49-daemon --no-password",
 		"etcdctl user grant-role port49-daemon port49_daemon",

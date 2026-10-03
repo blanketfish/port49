@@ -78,13 +78,22 @@ type memberSpec struct {
 	client, peer   string // URLs; "" picks a loopback port
 	cluster, token string // InitialCluster; "" is this member alone
 	tls            *transport.TLSInfo
+	stop           <-chan struct{} // closed: give up waiting to be ready
+	progress       time.Duration   // the progress notification interval; 0 is etcd's (10m)
 }
+
+// errStopped is member's error when its spec's stop closed before it was
+// ready: a cluster another member of which failed to start.
+var errStopped = errors.New("stopped before ready")
 
 func member(s memberSpec) (*embed.Etcd, error) {
 	cfg := embed.NewConfig()
 	cfg.Name, cfg.Dir = s.name, filepath.Join(s.dir, s.name)
 	cfg.ZapLoggerBuilder = embed.NewZapLoggerBuilder(zap.NewNop())
 	cfg.UnsafeNoFsync = true // a test member: durability is not what is measured
+	if s.progress > 0 {
+		cfg.WatchProgressNotifyInterval = s.progress
+	}
 	scheme := "http"
 	if s.tls != nil {
 		scheme = "https"
@@ -111,10 +120,21 @@ func member(s memberSpec) (*embed.Etcd, error) {
 	select {
 	case <-e.Server.ReadyNotify():
 		return e, nil
+	case <-s.stop:
+		halt(e)
+		return nil, errStopped
 	case <-time.After(30 * time.Second):
 		e.Close()
 		return nil, fmt.Errorf("member %s not ready in 30s", s.name)
 	}
+}
+
+// halt stops a member of a cluster that failed to start. HardStop first:
+// Close alone has a leader hand off to a peer, and waits ReqTimeout (~7s)
+// when that peer is gone.
+func halt(e *embed.Etcd) {
+	e.Server.HardStop()
+	e.Close()
 }
 
 func or(s, d string) string {
@@ -125,8 +145,13 @@ func or(s, d string) string {
 }
 
 // Options is Start's: TLS turns on https with client-certificate
-// authentication under a CA of the server's own.
-type Options struct{ TLS bool }
+// authentication under a CA of the server's own. ProgressNotify, when
+// set, is how often a watch that asks for progress notifications is sent
+// one (etcd's --watch-progress-notify-interval; 10 minutes otherwise).
+type Options struct {
+	TLS            bool
+	ProgressNotify time.Duration
+}
 
 // Server is one member of a test's own.
 type Server struct {
@@ -140,7 +165,7 @@ type Server struct {
 func Start(t testing.TB, o Options) *Server {
 	t.Helper()
 	s := &Server{Dir: t.TempDir()}
-	spec := memberSpec{name: "solo", dir: t.TempDir()}
+	spec := memberSpec{name: "solo", dir: t.TempDir(), progress: o.ProgressNotify}
 	if o.TLS {
 		now := time.Now()
 		ca, err := testpki.NewCA("etcdtest CA", now.Add(-time.Hour), now.Add(24*time.Hour))
@@ -238,26 +263,37 @@ type Cluster struct {
 	once      []sync.Once
 }
 
+// clusterRetryFor is how long StartCluster tries new ports for, swapped in
+// a test.
+var clusterRetryFor = 30 * time.Second
+
 // StartCluster runs three members for t, stopped at its cleanup.
 //
 // Its members cannot listen on :0 as every other member here does: the
 // initial cluster names each peer's address before any binds, so freePort
 // picks them, and another process can take one in between. A member that
 // finds its address in use stops the members that started, and the cluster
-// is tried once more on new ports (pre-flight M29).
+// is tried again on new ports, until clusterRetryFor has passed (pre-flight
+// M29; plan 7e Task 2: one retry lost the race too, under load).
 func StartCluster(t testing.TB) *Cluster {
 	t.Helper()
-	c, err := startCluster(t)
-	if err != nil && strings.Contains(err.Error(), "address already in use") {
-		c, err = startCluster(t)
+	deadline := time.Now().Add(clusterRetryFor)
+	for {
+		c, err := startCluster(t)
+		if err == nil {
+			for i := range c.members {
+				t.Cleanup(func() { c.Stop(i) })
+			}
+			return c
+		}
+		if !strings.Contains(err.Error(), "address already in use") || time.Now().After(deadline) {
+			t.Fatal(err)
+		}
+		// A pause between attempts, so a loop that keeps losing does not
+		// make a temp dir and three members every few milliseconds
+		// (pre-flight M5).
+		time.Sleep(50 * time.Millisecond)
 	}
-	if err != nil {
-		t.Fatal(err)
-	}
-	for i := range c.members {
-		t.Cleanup(func() { c.Stop(i) })
-	}
-	return c
 }
 
 func startCluster(t testing.TB) (*Cluster, error) {
@@ -269,28 +305,53 @@ func startCluster(t testing.TB) (*Cluster, error) {
 	}
 	dir := t.TempDir()
 	c := &Cluster{Endpoints: clients, members: make([]*embed.Etcd, 3), once: make([]sync.Once, 3)}
-	errs := make(chan error, 3)
+	type started struct {
+		i int
+		e *embed.Etcd
+	}
+	stop, results, errs := make(chan struct{}), make(chan started, 3), make(chan error, 3)
 	for i, n := range names {
 		go func(i int, n string) {
 			e, err := member(memberSpec{name: n, dir: dir, client: clients[i], peer: peers[i],
-				cluster: strings.Join(initial, ","), token: "port49-etcdtest"})
-			c.members[i] = e
-			errs <- err
+				cluster: strings.Join(initial, ","), token: "port49-etcdtest", stop: stop})
+			if err != nil {
+				errs <- err
+				return
+			}
+			results <- started{i, e}
 		}(i, n)
 	}
-	var failed []error
-	for range names {
-		if err := <-errs; err != nil {
-			failed = append(failed, err)
+	for left := len(names); left > 0; left-- {
+		select {
+		case r := <-results:
+			c.members[r.i] = r.e
+		case err := <-errs:
+			// The first failure stops the attempt at once. A member still
+			// in etcd's bootstrap cannot be cut short (it asks each peer,
+			// a taken port too, for up to a second), so the others are
+			// halted in the background, and t's cleanup waits for them
+			// before its temp dir goes (plan 7e Task 2: a failed attempt
+			// cost ~10s waiting on them, a third of the retry deadline).
+			close(stop)
+			done := make(chan struct{})
+			go func(left int) {
+				defer close(done)
+				for _, e := range c.members {
+					if e != nil {
+						halt(e)
+					}
+				}
+				for ; left > 0; left-- {
+					select {
+					case r := <-results:
+						halt(r.e)
+					case <-errs:
+					}
+				}
+			}(left - 1)
+			t.Cleanup(func() { <-done })
+			return nil, err
 		}
-	}
-	if len(failed) > 0 {
-		for _, e := range c.members {
-			if e != nil {
-				e.Close()
-			}
-		}
-		return nil, errors.Join(failed...)
 	}
 	return c, nil
 }
@@ -345,6 +406,20 @@ func (p *Proxy) Addr() string { return p.ln.Addr().String() }
 func (p *Proxy) Hang(on bool) {
 	p.mu.Lock()
 	p.hung = on
+	p.mu.Unlock()
+	p.cond.Broadcast()
+}
+
+// Drop closes every connection open through the proxy and forwards again:
+// what a member restart looks like to a client, its streams ended, and
+// whatever a hang held back never delivered. New connections are
+// forwarded as before.
+func (p *Proxy) Drop() {
+	p.mu.Lock()
+	for c := range p.conns {
+		c.Close()
+	}
+	p.hung = false
 	p.mu.Unlock()
 	p.cond.Broadcast()
 }

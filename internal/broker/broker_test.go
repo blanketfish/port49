@@ -7,19 +7,25 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
+	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/engine"
+	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/token"
 )
@@ -639,5 +645,336 @@ func TestABatchNamingADeviceTwiceIsRefused(t *testing.T) {
 	w := f.post(context.Background(), f.state(f.alice), `{"devices":["leaf1","leaf1"]}`, "01L")
 	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "twice") {
 		t.Fatalf("%s", answer(w))
+	}
+}
+
+// stallSink is a log whose Write blocks until release is closed, and says
+// when the first Write has begun.
+type stallSink struct {
+	began   chan struct{}
+	once    sync.Once
+	release chan struct{}
+	mu      sync.Mutex
+	got     []decision.Record
+}
+
+func newStallSink() *stallSink {
+	return &stallSink{began: make(chan struct{}), release: make(chan struct{})}
+}
+func (s *stallSink) Emit(r decision.Record) { _ = s.Write(r) }
+func (s *stallSink) Write(r decision.Record) error {
+	s.once.Do(func() { close(s.began) })
+	<-s.release
+	s.mu.Lock()
+	s.got = append(s.got, r)
+	s.mu.Unlock()
+	return nil
+}
+
+// A log sink that stalls during a mint never holds a reload: the mint
+// writes its records only once it has let go of the policy, so Swap
+// returns while the sink is still stalled, and once it drains the mint's
+// records land, in order (plan 7e Ruling 10; 4b Task 4).
+func TestAStalledLogNeverHoldsAReload(t *testing.T) {
+	sink := newStallSink()
+	f := newFixture(t, 8)
+	b := f.b
+	b.Log = sink
+	b.Minter = token.NewMinter(f.st, sink, rand.Reader, token.TagKey([]byte("k")), b.Now, 8)
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() { done <- f.post(context.Background(), f.state(f.alice), `{"devices":["leaf1"]}`, "") }()
+	select {
+	case <-sink.began:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the mint never wrote a record")
+	}
+	swapped := make(chan struct{})
+	go func() { b.Policy.Swap(b.Policy.Load()); close(swapped) }()
+	select {
+	case <-swapped:
+	case <-time.After(time.Second):
+		t.Fatal("a stalled log held the reload: the mint still held the policy while it wrote")
+	}
+	close(sink.release)
+	if rr := <-done; rr.Code != http.StatusOK {
+		t.Fatalf("the mint: %d %s", rr.Code, rr.Body)
+	}
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if len(sink.got) < 2 || sink.got[0].Event != decision.EventBlob || sink.got[1].Event != decision.EventMint {
+		t.Fatalf("records %+v", sink.got)
+	}
+}
+
+// Two requests minting the same blob at once: each request's run of lines
+// carries a blob record before its mint record, unless the hash was marked
+// emitted, which happens only once a blob record has landed.
+//
+// A regression guard, not a failing-first test (pre-flight M4): today
+// putBlob writes the blob record under b.mu before any mint record, so it
+// passes before this task. It pins that buffering keeps the order.
+func TestEveryMintRecordFollowsItsBlobRecord(t *testing.T) {
+	buf := &lockedBuffer{}
+	f := newFixture(t, 8)
+	b := f.b
+	b.Log = decision.NewJSONLines(buf)
+	b.Minter = token.NewMinter(f.st, b.Log, rand.Reader, token.TagKey([]byte("k")), b.Now, 8)
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			f.post(context.Background(), f.state(f.alice), `{"devices":["leaf1"]}`, "")
+		}()
+	}
+	wg.Wait()
+	seen := map[string]bool{}
+	mints := 0
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		var r map[string]any
+		if err := json.Unmarshal([]byte(line), &r); err != nil {
+			t.Fatal(err)
+		}
+		switch r["event"] {
+		case decision.EventBlob:
+			seen[r["blob"].(map[string]any)["hash"].(string)] = true
+		case decision.EventMint:
+			mints++
+			h, _ := r["mint"].(map[string]any)["blob"].(string) // decision.Mint.BlobHash
+			if h == "" || !seen[h] {
+				t.Fatalf("a mint record names blob %q before any blob record for it:\n%s", h, buf.String())
+			}
+		}
+	}
+	if mints != 8 {
+		t.Fatalf("%d mint records, want 8:\n%s", mints, buf.String())
+	}
+}
+
+// blobsSeen forgets every hash once it holds blobsSeenMax, so a policy
+// rewritten on a schedule cannot grow it without bound (4b m10): the next
+// mint of a forgotten hash writes its blob record again, which replay reads
+// as a duplicate.
+func TestBlobsSeenIsBounded(t *testing.T) {
+	b := newFixture(t, 8).b
+	for i := 0; i < blobsSeenMax; i++ {
+		b.markBlob(fmt.Sprintf("h%d", i))
+	}
+	if b.blobSeen("h0") != true {
+		t.Fatal("a hash marked was not seen")
+	}
+	b.markBlob("one-more")
+	if b.blobSeen("h0") || !b.blobSeen("one-more") || len(b.blobsSeen) != 1 {
+		t.Fatalf("at the bound blobsSeen kept %d hashes", len(b.blobsSeen))
+	}
+}
+
+// A session refresh holds the policy as a mint does, and a stalled log
+// sink must not hold a reload through it either: its records are written
+// once it has let go (plan 7e Ruling 10; Ruling T4-a).
+func TestAStalledLogNeverHoldsAReloadThroughASessionRefresh(t *testing.T) {
+	f := newFixture(t, 8)
+	b := f.b
+	f.liveContextAt(t, "leaf1", "alice", alicePrincipal, "", f.now, f.now.Add(time.Hour))
+	sink := newStallSink()
+	b.Log = sink
+	done := make(chan error, 1)
+	go func() {
+		_, err := b.RefreshSession(context.Background(), alicePrincipal, store.Credential{Method: "cert"}, b.Now())
+		done <- err
+	}()
+	select {
+	case <-sink.began:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the refresh never wrote a record")
+	}
+	swapped := make(chan struct{})
+	go func() { b.Policy.Swap(b.Policy.Load()); close(swapped) }()
+	select {
+	case <-swapped:
+	case <-time.After(time.Second):
+		t.Fatal("a stalled log held the reload: the refresh still held the policy while it wrote")
+	}
+	close(sink.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	// The judgment's record, then the extension's, which names the new
+	// auth_time.
+	last := len(sink.got) - 1
+	if last < 0 || sink.got[last].Event != decision.EventRefresh || sink.got[last].Verdict != decision.VerdictPermit ||
+		sink.got[last].Session == nil || sink.got[last].Session.AuthTime == "" {
+		t.Fatalf("records %+v", sink.got)
+	}
+}
+
+// leaf2 is a second arista_eos device: under testPolicy it compiles to
+// leaf1's blob, hash for hash.
+var leaf2 = admission.Device{Name: "leaf2", Platform: "arista_eos",
+	Addresses: []netip.Addr{netip.MustParseAddr("172.100.100.12")}}
+
+// blobLines is the blob records in log, by hash, and every mint record's
+// blob hash, in order.
+func blobLines(t *testing.T, log string) (blobs map[string]int, mints []string) {
+	t.Helper()
+	blobs = map[string]int{}
+	for _, line := range strings.Split(strings.TrimSpace(log), "\n") {
+		var r map[string]any
+		if err := json.Unmarshal([]byte(line), &r); err != nil {
+			t.Fatal(err)
+		}
+		switch r["event"] {
+		case decision.EventBlob:
+			blobs[r["blob"].(map[string]any)["hash"].(string)]++
+		case decision.EventMint:
+			if m, ok := r["mint"].(map[string]any); ok {
+				mints = append(mints, m["blob"].(string))
+			}
+		}
+	}
+	return blobs, mints
+}
+
+// Two devices in one request that compile to one blob write one blob
+// record between them, which both mint records name: the request's
+// buffer knows what it already carries (Task 4 review I1).
+func TestABatchWritesEachBlobOnce(t *testing.T) {
+	f := newFixtureWithDevices(t, 8, leaf2)
+	if w := f.post(context.Background(), f.state(f.alice), `{"devices":["leaf1","leaf2"]}`, ""); w.Code != http.StatusOK {
+		t.Fatalf("the mint: %d %s", w.Code, w.Body)
+	}
+	blobs, mints := blobLines(t, f.log.String())
+	if len(blobs) != 1 || len(mints) != 2 || mints[0] != mints[1] || blobs[mints[0]] != 1 {
+		t.Fatalf("blob records %v, mint records naming %v:\n%s", blobs, mints, f.log)
+	}
+}
+
+// A session refresh that moves two contexts onto one new blob writes one
+// blob record for it (Task 4 review I1).
+func TestASessionRefreshWritesEachBlobOnce(t *testing.T) {
+	f := newFixtureWithDevices(t, 8, leaf2)
+	f.liveContextAt(t, "leaf1", "alice", alicePrincipal, "", f.now, f.now.Add(time.Hour))
+	f.liveContextAt(t, "leaf2", "alice", alicePrincipal, "", f.now, f.now.Add(time.Hour))
+	f.loadPolicy(t, strings.Replace(testPolicy, `deny: ["reload **"]`, `deny: ["reload **", "write erase"]`, 1))
+	f.log.Reset()
+	rep, err := f.b.RefreshSession(context.Background(), alicePrincipal, store.Credential{Method: "cert"}, f.b.Now())
+	if err != nil || len(rep.Sessions) != 2 {
+		t.Fatalf("the refresh: %+v %v", rep, err)
+	}
+	ctx := context.Background()
+	c1, err1 := f.st.GetContext(ctx, store.ContextKey{NAS: "leaf1", Username: "alice"})
+	c2, err2 := f.st.GetContext(ctx, store.ContextKey{NAS: "leaf2", Username: "alice"})
+	if err1 != nil || err2 != nil || c1.BlobHash != c2.BlobHash {
+		t.Fatalf("contexts %+v %v, %+v %v", c1, err1, c2, err2)
+	}
+	if blobs, _ := blobLines(t, f.log.String()); len(blobs) != 1 || blobs[c1.BlobHash] != 1 {
+		t.Fatalf("blob records %v, the contexts name %s:\n%s", blobs, c1.BlobHash, f.log)
+	}
+}
+
+// SupersededFor outlives every idempotency record a replay could read.
+func TestSupersededOutlivesTheLongestToken(t *testing.T) {
+	if store.SupersededFor <= policy.MaxTokenTTL {
+		t.Fatalf("SupersededFor %v is not past the longest token_ttl %v", store.SupersededFor, policy.MaxTokenTTL)
+	}
+}
+
+// second is another *Broker on f's store, policy, log and sessions, with a
+// minter of its own: a second broker process on one keyspace. Built field
+// by field, since a Broker holds a mutex and is never copied.
+func second(f *fixture) *Broker {
+	return &Broker{Policy: f.b.Policy, Store: f.st, Log: f.b.Log, Now: f.b.Now,
+		Minter:  token.NewMinter(f.st, f.b.Log, rand.Reader, token.TagKey([]byte("k")), f.b.Now, 8),
+		Metrics: metrics.New(prometheus.NewRegistry()), MaxSessionAge: f.b.MaxSessionAge,
+		BatchMax: f.b.BatchMax, Sessions: f.b.Sessions, ContextIdleTTL: f.b.ContextIdleTTL}
+}
+
+// postTo is f.post through b's handler.
+func postTo(f *fixture, b *Broker, body, key string) *httptest.ResponseRecorder {
+	r := httptest.NewRequest("POST", "/v1/tokens", strings.NewReader(body))
+	r.TLS = f.state(f.alice)
+	if key != "" {
+		r.Header.Set("Idempotency-Key", key)
+	}
+	w := httptest.NewRecorder()
+	b.Handler().ServeHTTP(w, r)
+	return w
+}
+
+// A key superseded on one broker process makes an idempotent replay on
+// another mint afresh: the instant is in the store (plan 7e, Ruling 9).
+func TestASupersededKeyReplaysAfreshOnAnotherBroker(t *testing.T) {
+	f := newFixture(t, 8)
+	other := second(f)
+	body := `{"devices":["leaf1"]}`
+	first := postTo(f, f.b, body, "k1")
+	permitted(t, first)
+	f.b.supersede(context.Background(), store.TokenKey{NAS: "leaf1", Username: "alice"}, f.b.Now())
+	f.advance(time.Second)
+	again := postTo(f, other, body, "k1")
+	permitted(t, again) // a fresh mint, not a refusal
+	if again.Body.String() == first.Body.String() {
+		t.Fatal("another broker answered a superseded key's replay with the deleted token")
+	}
+}
+
+// permitted fails t unless w is a 200 whose one item is a permit.
+func permitted(t *testing.T, w *httptest.ResponseRecorder) {
+	t.Helper()
+	if r := decodeMint(t, w); len(r.Results) != 1 || r.Results[0].Verdict != decision.VerdictPermit {
+		t.Fatalf("not one permit: %s", w.Body)
+	}
+}
+
+// A store that fails the read of the superseded instant refuses the item
+// store_unavailable rather than risk handing back a deleted token.
+func TestAnUnreadableSupersededInstantRefusesTheItem(t *testing.T) {
+	f := newFixture(t, 8)
+	f.b.Store = &failSuperseded{Store: f.st}
+	rr := f.post(context.Background(), f.state(f.alice), `{"devices":["leaf1"]}`, "k2")
+	if !strings.Contains(rr.Body.String(), `"store_unavailable"`) {
+		t.Fatalf("%d %s", rr.Code, rr.Body)
+	}
+}
+
+type failSuperseded struct{ store.Store }
+
+func (f *failSuperseded) SupersededAt(context.Context, store.TokenKey) (time.Time, error) {
+	return time.Time{}, store.ErrUnavailable
+}
+
+// supersede prunes its local copy past SupersededFor, and at most once per
+// supersedePruneEvery: a pass over many keys does not rescan the map for
+// each.
+func TestSupersedePrunesOncePerInterval(t *testing.T) {
+	f := newFixture(t, 8)
+	ctx := context.Background()
+	old := store.TokenKey{NAS: "leaf1", Username: "alice"}
+	f.b.supersede(ctx, old, f.b.Now())
+	f.advance(store.SupersededFor + time.Second)
+	f.b.supersede(ctx, store.TokenKey{NAS: "nx1", Username: "alice"}, f.b.Now())
+	f.b.mu.Lock()
+	_, kept := f.b.superseded[old]
+	f.b.mu.Unlock()
+	if kept {
+		t.Fatal("an entry past SupersededFor survived a prune")
+	}
+	f.b.supersede(ctx, old, f.b.Now().Add(-store.SupersededFor-time.Second))
+	f.b.supersede(ctx, store.TokenKey{NAS: "bare", Username: "alice"}, f.b.Now())
+	f.b.mu.Lock()
+	_, kept = f.b.superseded[old]
+	f.b.mu.Unlock()
+	if !kept {
+		t.Fatal("supersede pruned twice within supersedePruneEvery")
+	}
+	f.advance(supersedePruneEvery)
+	f.b.supersede(ctx, store.TokenKey{NAS: "bare", Username: "alice"}, f.b.Now())
+	f.b.mu.Lock()
+	_, kept = f.b.superseded[old]
+	f.b.mu.Unlock()
+	if kept {
+		t.Fatal("supersede did not prune again after supersedePruneEvery")
 	}
 }

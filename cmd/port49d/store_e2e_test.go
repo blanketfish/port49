@@ -1,11 +1,17 @@
 package main
 
 import (
+	"bufio"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -20,6 +26,7 @@ import (
 	"github.com/rhwendt/port49/internal/store/etcd"
 	"github.com/rhwendt/port49/internal/store/etcd/etcdtest"
 	"github.com/rhwendt/port49/internal/tacacs/wire"
+	"github.com/rhwendt/port49/internal/testpki"
 )
 
 // etcdRun is a port49d config on a TLS etcd member with port49's roles,
@@ -35,6 +42,14 @@ func etcdRun(t *testing.T) (cfgPath, pkiDir, revocations string, proxy *etcdtest
 // store as its root.
 func etcdRunServer(t *testing.T) (cfgPath, pkiDir, revocations string, proxy *etcdtest.Proxy, srv *etcdtest.Server) {
 	t.Helper()
+	return etcdRunServerWith(t, minimalPolicy, nil)
+}
+
+// etcdRunServerWith is etcdRunServer on policyBody, with a lab client
+// certificate for each of others (brokerConfigWith).
+func etcdRunServerWith(t *testing.T, policyBody string, others []string) (cfgPath, pkiDir, revocations string,
+	proxy *etcdtest.Proxy, srv *etcdtest.Server) {
+	t.Helper()
 	srv = etcdtest.Start(t, etcdtest.Options{TLS: true})
 	var grants []etcdtest.Grant
 	for _, g := range etcd.Roles("/port49/") {
@@ -44,7 +59,7 @@ func etcdRunServer(t *testing.T) (cfgPath, pkiDir, revocations string, proxy *et
 	proxy = etcdtest.NewProxy(t, strings.TrimPrefix(srv.Endpoint, "https://"))
 	dc, dk := srv.ClientFiles(t, "port49-daemon")
 	bc, bk := srv.ClientFiles(t, "port49-broker")
-	b := brokerConfig(t, minimalPolicy).Broker
+	b := brokerConfigWith(t, policyBody, others).Broker
 	cfgPath = writeRunConfig(t, b)
 	raw, err := os.ReadFile(cfgPath)
 	if err != nil {
@@ -145,7 +160,7 @@ func loginSession(t *testing.T, dev tacacsClient, tok string, log *syncBuffer) {
 // A live session survives a port49d restart on etcd; a token minted
 // before it does not, and an idempotent replay of a mint from before is
 // minted again, not answered with that token (Ruling 12; spec §14, "A
-// restart on etcd"; Broker.SupersededAll).
+// restart on etcd"; store.Store.SupersedeAll).
 func TestRunOnEtcdKeepsALoginAcrossARestart(t *testing.T) {
 	var out, log syncBuffer
 	e, o := stderr, stdout
@@ -244,8 +259,10 @@ func TestAStartSealsTheLedgerOnceItHasReadTheStore(t *testing.T) {
 	if err := stop(); err != nil {
 		t.Fatal(err)
 	}
-	// A store writer saves alice's sealed context and deletes it, so the
-	// next start finds nothing at its key.
+	// A store writer saves alice's sealed context and deletes it, and the
+	// ledger record with it, so the next start finds nothing at its key:
+	// the base alone judges it (the record's own test is
+	// TestAStartSeededFromTheLedgerRecordDeniesAPutBack).
 	resp, err := root.Get(ctx, "/port49/v1/c/", clientv3.WithPrefix())
 	if err != nil || len(resp.Kvs) != 1 {
 		t.Fatalf("the kept contexts: %v %v", resp, err)
@@ -254,9 +271,16 @@ func TestAStartSealsTheLedgerOnceItHasReadTheStore(t *testing.T) {
 	if _, err := root.Delete(ctx, string(saved.Key)); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := root.Delete(ctx, "/port49/v1/lw/", clientv3.WithPrefix()); err != nil {
+		t.Fatal(err)
+	}
 
 	tacacs, _, _ = startRun(t, cfgPath, &out, 2)
 	waitForCount(t, &out, "live context(s) carried onto the policy in force", 2)
+	// Each start's scan says its ledger; neither found a context, so the
+	// base alone judges a record at alice's key.
+	waitForCount(t, &out, "port49d: ledger: 0 context key(s) known (0 from the ledger record); following the "+
+		"store from revision ", 2)
 	// ... and puts it back once the start has read the store.
 	if _, err := root.Put(ctx, string(saved.Key), string(saved.Value)); err != nil {
 		t.Fatal(err)
@@ -264,6 +288,24 @@ func TestAStartSealsTheLedgerOnceItHasReadTheStore(t *testing.T) {
 	dev = tacacsClient{t: t, addr: tacacs, key: []byte("run-test-secret")}
 	if dev.permits("alice", "configure") {
 		t.Fatal("a context put back at a key the start never read was taken as that key's")
+	}
+	// Under port49's roles the daemon's identity watches the contexts: the
+	// feed runs, and never stopped.
+	ms := regexp.MustCompile(`port49d: metrics on (127\.0\.0\.1:\d+)`).FindAllStringSubmatch(out.String(), -1)
+	if len(ms) == 0 {
+		t.Fatalf("the metrics address is not said: %s", out.String())
+	}
+	scraped, err := http.Get("http://" + ms[len(ms)-1][1] + "/metrics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(scraped.Body)
+	scraped.Body.Close()
+	if !regexp.MustCompile(`(?m)^port49_store_feed_up\{feed="contexts"\} 1$`).Match(body) {
+		t.Fatalf("the context feed is not up:\n%s", body)
+	}
+	if strings.Contains(out.String(), "the context feed stopped") {
+		t.Fatalf("the feed stopped: %s", out.String())
 	}
 }
 
@@ -431,4 +473,215 @@ func TestAHungStoreGoesDarkAndServesAgainWhenItReturns(t *testing.T) {
 	if !dev.permits("alice", "configure") {
 		t.Fatalf("after the store returned a new login's command was not permitted; log %s", log.String())
 	}
+}
+
+// A mark another broker process puts in the store reaches this port49d
+// through the marks feed (plan 7e, Ruling 5): alice's held broker
+// connection is closed, and her next command is denied credential_revoked
+// from the daemon's marks. Its lift lets her back in. And a mark standing
+// in the store alone when port49d starts is in the listener's copy before
+// any connection binds.
+func TestAMarkFromAnotherBrokerProcessReachesThisOne(t *testing.T) {
+	var out, log syncBuffer
+	e, o := stderr, stdout
+	t.Cleanup(func() { stderr, stdout = e, o })
+	stderr, stdout = &out, &log
+	cfgPath, pkiDir, _, _, srv := etcdRunServer(t)
+	root := srv.Client(t, "root")
+	ctx := context.Background()
+
+	tacacs, brokerAddr, stop := startRun(t, cfgPath, &out, 1)
+	dev := tacacsClient{t: t, addr: tacacs, key: []byte("run-test-secret")}
+	loginSession(t, dev, mint(t, brokerAddr, pkiDir, "leaf1"), &log)
+	principal := lastCommandPrincipal(t, &log)
+	waitMetric(t, &out, `port49_store_feed_up{feed="marks"} 1`) // the marks feed runs (review M4)
+	conn := heldBrokerConn(t, pkiDir, brokerAddr)
+	key := "/port49/v1/rv/principal/" + url.PathEscape(principal)
+	val := fmt.Sprintf(`{"kind":"principal","key":%q,"at":%q,"origin":"test: another broker process"}`,
+		principal, time.Now().UTC().Format(time.RFC3339Nano))
+	if _, err := root.Put(ctx, key, val); err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	if _, err := conn.Read(make([]byte, 1)); err == nil || errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("alice's held broker connection was not closed: %v", err)
+	}
+	// Said on port49d's own log, with its other lines (Ruling T9-c), and
+	// counted in force.
+	waitFor(t, &out, "broker: a revocation of "+principal+" made on a broker process closed ")
+	waitInForce(t, &out, "principal", 1)
+	if dev.permits("alice", "configure") {
+		t.Fatal("a command under a mark the feed brought was permitted")
+	}
+	if r := lastCommand(t, &log); r["reason"] != "credential_revoked" {
+		t.Fatalf("the denial: %v", r)
+	}
+	if _, err := root.Delete(ctx, key); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for !dev.permits("alice", "configure") {
+		if time.Now().After(deadline) {
+			t.Fatalf("a lift the feed brought did not let alice back in: %v", lastCommand(t, &log))
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	waitInForce(t, &out, "principal", 0)
+	if err := stop(); err != nil {
+		t.Fatal(err)
+	}
+
+	// In the store alone, never this port49d's file: the next start reads
+	// it from the store, and the listener refuses alice as she binds.
+	if _, err := root.Put(ctx, key, val); err != nil {
+		t.Fatal(err)
+	}
+	_, brokerAddr, _ = startRun(t, cfgPath, &out, 2)
+	status, body, err := postAsAlice(pkiDir, brokerAddr)
+	if err != nil || status != http.StatusUnauthorized || !strings.Contains(body, `"credential_revoked"`) {
+		t.Fatalf("alice's first connection after the start: %s %v", reply(status, body), err)
+	}
+	waitFor(t, &out, "as it bound: "+principal+" or its certificate is revoked")
+}
+
+// heldBrokerConn opens a connection to the broker as the lab client and
+// asks /v1/config on it, leaving it open: an agent's held connection.
+func heldBrokerConn(t *testing.T, pkiDir, addr string) *tls.Conn {
+	t.Helper()
+	cert, err := tls.LoadX509KeyPair(filepath.Join(pkiDir, testpki.LabClientCert), filepath.Join(pkiDir, testpki.LabClientKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+	caPEM, err := os.ReadFile(filepath.Join(pkiDir, testpki.LabCA))
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots := x509.NewCertPool()
+	roots.AppendCertsFromPEM(caPEM)
+	c, err := tls.Dial("tcp", addr, &tls.Config{Certificates: []tls.Certificate{cert}, RootCAs: roots,
+		MinVersion: tls.VersionTLS13})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { c.Close() })
+	if _, err := io.WriteString(c, "GET /v1/config HTTP/1.1\r\nHost: broker\r\n\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
+	resp, err := http.ReadResponse(bufio.NewReader(c), nil)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("/v1/config on a held connection: %v %v", resp, err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	return c
+}
+
+// waitInForce waits up to 10s for the newest run's
+// port49_revocations_in_force{by} to read n.
+func waitInForce(t *testing.T, out *syncBuffer, by string, n int) {
+	t.Helper()
+	waitMetric(t, out, fmt.Sprintf(`port49_revocations_in_force{by="%s"} %d`, by, n))
+}
+
+// waitMetric waits up to 10s for the newest run's /metrics to hold line.
+func waitMetric(t *testing.T, out *syncBuffer, line string) {
+	t.Helper()
+	ms := regexp.MustCompile(`port49d: metrics on (127\.0\.0\.1:\d+)`).FindAllStringSubmatch(out.String(), -1)
+	if len(ms) == 0 {
+		t.Fatalf("the metrics address is not said: %s", out.String())
+	}
+	want := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(line) + `$`)
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		scraped, err := http.Get("http://" + ms[len(ms)-1][1] + "/metrics")
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(scraped.Body)
+		scraped.Body.Close()
+		if want.Match(body) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("/metrics lacks %q:\n%s", line, body)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// A context put back while port49d was stopped, at a key the ledger record
+// holds a later mark for, is denied after the restart: the start seeds its
+// ledger from the record before it scans (Review Focus 2; Ruling 4). In
+// 7d this was the restart residual: the start took it as the key's.
+//
+// The put-back is a replay of another principal's earlier session at the
+// same key: bob's, over alice's later one, at the username both log in as.
+// The principal the device's command is attributed to shows which record
+// was taken. Two positive controls: alice's own session is permitted
+// before the stop, and after a restart with nothing put back.
+func TestAStartSeededFromTheLedgerRecordDeniesAPutBack(t *testing.T) {
+	var out, log syncBuffer
+	e, o := stderr, stdout
+	t.Cleanup(func() { stderr, stdout = e, o })
+	stderr, stdout = &out, &log
+	cfgPath, pkiDir, _, _, srv := etcdRunServerWith(t, sharedUsernamePolicy, []string{"bob@example.com"})
+	root := srv.Client(t, "root")
+	ctx := context.Background()
+	tacacs, brokerAddr, stop := startRun(t, cfgPath, &out, 1)
+	dev := tacacsClient{t: t, addr: tacacs, key: []byte("run-test-secret")}
+	loginSession(t, dev, mintAs(t, brokerAddr, pkiDir, "leaf1", "bob@example.com"), &log)
+	resp, err := root.Get(ctx, "/port49/v1/c/leaf1/alice")
+	if err != nil || len(resp.Kvs) != 1 {
+		t.Fatalf("bob's context: %v %v", resp, err)
+	}
+	bobs := resp.Kvs[0]
+	s1 := waitForLedgerSeq(t, root, "/port49/v1/lw/leaf1/alice", 0)
+	loginSession(t, dev, mint(t, brokerAddr, pkiDir, "leaf1"), &log) // alice's, later, at the same key
+	waitForLedgerSeq(t, root, "/port49/v1/lw/leaf1/alice", s1)       // the record holds alice's
+	if !dev.permits("alice", "configure") || lastCommandPrincipal(t, &log) != "user:alice@example.com" {
+		t.Fatal("control: alice's own session was not permitted as alice before the stop")
+	}
+	if err := stop(); err != nil {
+		t.Fatal(err)
+	}
+	tacacs, brokerAddr, stop = startRun(t, cfgPath, &out, 2) // nothing put back
+	dev = tacacsClient{t: t, addr: tacacs, key: []byte("run-test-secret")}
+	if !dev.permits("alice", "configure") {
+		t.Fatal("control: alice's session was not permitted after a restart with nothing put back")
+	}
+	if err := stop(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := root.Put(ctx, string(bobs.Key), string(bobs.Value)); err != nil {
+		t.Fatal(err)
+	}
+	tacacs, _, _ = startRun(t, cfgPath, &out, 3)
+	dev = tacacsClient{t: t, addr: tacacs, key: []byte("run-test-secret")}
+	if dev.permits("alice", "configure") {
+		t.Fatalf("bob's context put back over alice's while port49d was stopped was taken as the key's: %v",
+			lastCommandPrincipal(t, &log))
+	}
+}
+
+// waitForLedgerSeq polls the ledger record at key, as etcd's root, until
+// its seq is above above or 10s pass, and returns it. The keeper writes
+// within a second of a raise; a gauge read at 0 can be the round before
+// (pre-flight I14).
+func waitForLedgerSeq(t *testing.T, root *clientv3.Client, key string, above uint64) uint64 {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if resp, err := root.Get(context.Background(), key); err == nil && len(resp.Kvs) == 1 {
+			var r struct {
+				Seq uint64 `json:"seq"`
+			}
+			if json.Unmarshal(resp.Kvs[0].Value, &r) == nil && r.Seq > above {
+				return r.Seq
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("the ledger record at %s never rose above %d", key, above)
+	return 0
 }

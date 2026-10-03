@@ -45,6 +45,7 @@ var pools = map[string]Pool{
 	"UnindexContext": Context, "UnindexRef": Context, "ContextsByPrincipal": Context, "ContextsBySid": Context,
 	"ContextsByCert": Context, "ReindexSid": Context,
 	"PutContextRev": Context, "SwapContextRev": Context, "SwapLoginRev": Context, "RewriteContextRev": Context,
+	"Ping": Context,
 
 	"ActivePrincipals": Bulk, "DeleteReceiptsByPrincipal": Bulk, "ListRevocations": Bulk, "PurgeTokens": Bulk,
 
@@ -52,6 +53,7 @@ var pools = map[string]Pool{
 	"GetReceipt": Token, "ExtendReceipt": Token, "FailReceipt": Token, "PutBlob": Token, "IndexToken": Token,
 	"TokensByPrincipal": Token, "TokensByCert": Token, "ReserveIdempotency": Token, "CompleteIdempotency": Token,
 	"ReleaseIdempotency": Token, "PutRevocation": Token, "GetRevocation": Token, "DeleteRevocation": Token,
+	"SupersedeTokens": Token, "SupersedeAll": Token, "SupersededAt": Token,
 }
 
 // PoolOf is the pool method runs in, and "" for a name the table does not
@@ -181,6 +183,13 @@ func (g revGuarded) RewriteContextRev(ctx context.Context, k store.ContextKey, r
 		return
 	})
 	return
+}
+
+// Seen makes no call, so it takes no slot and no deadline (store.RevStore).
+func (g revGuarded) Seen() uint64 { return g.rev.Seen() }
+
+func (g revGuarded) Ping(ctx context.Context) error {
+	return g.do(ctx, Context, func(ctx context.Context) error { return g.rev.Ping(ctx) })
 }
 
 // enter decides whether a call may go: always while closed; while open,
@@ -599,6 +608,19 @@ func (g *guarded) DeleteRevocation(ctx context.Context, kind string, key string)
 
 func (g *guarded) ListRevocations(ctx context.Context) (rs []store.Revocation, err error) {
 	err = g.do(ctx, Bulk, func(ctx context.Context) (e error) { rs, e = g.inner.ListRevocations(ctx); return })
+	return
+}
+
+func (g *guarded) SupersedeTokens(ctx context.Context, k store.TokenKey, at time.Time) error {
+	return g.do(ctx, Token, func(ctx context.Context) error { return g.inner.SupersedeTokens(ctx, k, at) })
+}
+
+func (g *guarded) SupersedeAll(ctx context.Context, at time.Time) error {
+	return g.do(ctx, Token, func(ctx context.Context) error { return g.inner.SupersedeAll(ctx, at) })
+}
+
+func (g *guarded) SupersededAt(ctx context.Context, k store.TokenKey) (at time.Time, err error) {
+	err = g.do(ctx, Token, func(ctx context.Context) (e error) { at, e = g.inner.SupersededAt(ctx, k); return })
 	return
 }
 

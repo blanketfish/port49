@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -749,12 +751,12 @@ func TestAReceiptIsBoundToItsKey(t *testing.T) {
 	}
 }
 
-// The ledger (re-check IA1; the controller's ruling): another login's
-// context written back at a key is denied ErrNotLastWritten, through
-// either Wrap sharing the ledger, and so is an earlier version of the same
-// context, since the ledger names each write (Ruling T12-g). A fresh
-// process takes the first record it reads as the key's, the restart
-// residual, and denies another after it.
+// The ledger (re-check IA1; plan 7e, Ruling 3): another login's context
+// written back at a key is denied ErrNotLastWritten, through either Wrap
+// sharing the ledger, and so is an earlier version of the same context,
+// since each write is sealed at a sequence above the last (Ruling T12-g).
+// A fresh process with a base of zero takes the first record it reads as
+// the key's, the restart residual, and denies an earlier one after it.
 func TestTheLedgerDeniesAnotherLoginsContext(t *testing.T) {
 	ctx := context.Background()
 	now := time.Unix(1_000_000, 0).UTC()
@@ -793,14 +795,14 @@ func TestTheLedgerDeniesAnotherLoginsContext(t *testing.T) {
 			t.Fatalf("%s read an earlier version of the same context: %+v %v", name, got, err)
 		}
 	}
+	// A record sealed above the first one read is a later write, whichever
+	// process made it (Ruling 3), so the residual's check is an earlier one
+	// after it: Bob's first, then Alice's.
 	fresh := Wrap(inner, keys(), nil) // a restart: its own, empty ledger
-	if err := inner.PutContext(ctx, k, alice, time.Hour); err != nil {
-		t.Fatal(err)
-	}
-	if got, err := fresh.GetContext(ctx, k); err != nil || got.CtxID != "alice-1" {
+	if got, err := fresh.GetContext(ctx, k); err != nil || got.CtxID != "bob-1" {
 		t.Fatalf("a fresh process's first read: %+v %v (the restart residual)", got, err)
 	}
-	if err := inner.PutContext(ctx, k, bob, time.Hour); err != nil {
+	if err := inner.PutContext(ctx, k, alice, time.Hour); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := fresh.GetContext(ctx, k); !errors.Is(err, ErrNotLastWritten) {
@@ -810,12 +812,12 @@ func TestTheLedgerDeniesAnotherLoginsContext(t *testing.T) {
 
 // An earlier version of the same context, put back after a later write
 // at its key landed, is denied ErrNotLastWritten: each sealed write
-// carries a write ID of its own, and the ledger admits the last one, not
-// every write under its ctx_id (Ruling T12-g; Task 12 re-review,
-// "Context-ID rollback"). Put back, it would undo a self revocation that
-// leaves no mark, a policy narrowing a refresh wrote, or drop a login's
-// witness. A fresh process still takes the first record it reads, the
-// restart residual.
+// carries a sequence above the last, and the ledger admits the highest,
+// not every write under its ctx_id (Ruling T12-g; Task 12 re-review,
+// "Context-ID rollback"; plan 7e, Ruling 3). Put back, it would undo a
+// self revocation that leaves no mark, a policy narrowing a refresh
+// wrote, or drop a login's witness. A fresh process still takes the
+// first record it reads, the restart residual.
 func TestTheLedgerDeniesAnEarlierVersionOfTheSameContext(t *testing.T) {
 	now := time.Unix(1_000_000, 0).UTC()
 	login := func(blob string) store.Context {
@@ -849,7 +851,7 @@ func TestTheLedgerDeniesAnEarlierVersionOfTheSameContext(t *testing.T) {
 				store.LoginIndex{}); err != nil {
 				t.Fatal(err)
 			}
-			l.Seal()
+			l.SetBase(inner.Seen() + 1)
 			earlier, err := inner.GetContext(ctx, k)
 			if err != nil {
 				t.Fatal(err)
@@ -877,80 +879,452 @@ func TestTheLedgerDeniesAnEarlierVersionOfTheSameContext(t *testing.T) {
 	}
 }
 
-// unknownOutcomeStore lands every SwapContext and then reports
-// ErrUnavailable, as a store that committed and then lost the reply.
-type unknownOutcomeStore struct{ store.RevStore }
+// twoProcesses is one memory store with two sealing layers over it, each
+// with its own ledger, as two port49d processes on one etcd keyspace are;
+// each set its base when the store was empty.
+func twoProcesses(t *testing.T) (*memory.Store, store.Store, store.Store, *Ledger, *Ledger) {
+	t.Helper()
+	inner := memory.New(time.Now)
+	la, lb := NewLedger(), NewLedger()
+	la.SetBase(inner.Seen() + 1)
+	lb.SetBase(inner.Seen() + 1)
+	return inner, Wrap(inner, keys(), nil, WithLedger(la)), Wrap(inner, keys(), nil, WithLedger(lb)), la, lb
+}
 
-func (u unknownOutcomeStore) SwapContextRev(ctx context.Context, k store.ContextKey, rev uint64, c store.Context,
-	ttl time.Duration) (uint64, error) {
-	if _, err := u.RevStore.SwapContextRev(ctx, k, rev, c, ttl); err != nil {
-		return 0, err
+var ka = store.ContextKey{NAS: "leaf-01", Username: "netops"}
+
+func login(t *testing.T, s store.Store, ctxID, principal string) {
+	t.Helper()
+	cur, err := s.GetContext(context.Background(), ka)
+	var rev uint64
+	switch {
+	case err == nil:
+		rev = cur.Rev
+	case errors.Is(err, store.ErrNotFound):
+	default:
+		var u *store.UnreadableContextError
+		if !errors.As(err, &u) {
+			t.Fatal(err)
+		}
+		rev = u.Rev
+	}
+	if err := s.SwapLogin(context.Background(), ka, rev, store.Context{CtxID: ctxID, Principal: principal,
+		Username: "netops", BlobHash: "b-" + ctxID, PrivLvl: 1}, time.Hour, store.LoginWrite{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A login on one process is admitted on another: the record's sequence is
+// above the other's base, and above any mark it knows at the key (Review
+// Focus 1; Ruling 3). Neither ledger here follows a feed, so the fence
+// (Task 8a) passes at once; Task 8a's test covers the wait. A per-process
+// ledger, sealed, denied it (re-check IA1).
+func TestAnotherProcesssWriteIsAdmittedWithNoFeedBetween(t *testing.T) {
+	_, a, b, _, _ := twoProcesses(t)
+	login(t, a, "ctx-alice", "user:alice")
+	if c, err := b.GetContext(context.Background(), ka); err != nil || c.CtxID != "ctx-alice" {
+		t.Fatalf("the other process: %v %v", c.CtxID, err)
+	}
+	login(t, a, "ctx-bob", "user:bob") // a later login, again on a
+	if c, err := b.GetContext(context.Background(), ka); err != nil || c.CtxID != "ctx-bob" {
+		t.Fatalf("the other process, after a later login: %v %v", c.CtxID, err)
+	}
+}
+
+// Bob's context, written on a, read on b, and Alice's earlier one put
+// back by a store writer: b denies it, as a does, since both have seen a
+// later sequence at the key (Ruling 3).
+func TestAnEarlierRecordIsDeniedOnEveryProcessThatSawALater(t *testing.T) {
+	inner, a, b, _, _ := twoProcesses(t)
+	login(t, a, "ctx-alice", "user:alice")
+	saved, err := inner.GetContext(context.Background(), ka)
+	if err != nil {
+		t.Fatal(err)
+	}
+	login(t, b, "ctx-bob", "user:bob") // on b this time
+	if _, err := a.GetContext(context.Background(), ka); err != nil {
+		t.Fatal(err) // a reads bob's, raising its mark
+	}
+	if err := inner.PutContext(context.Background(), ka, saved, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	for name, s := range map[string]store.Store{"a": a, "b": b} {
+		_, err := s.GetContext(context.Background(), ka)
+		if !errors.Is(err, ErrNotLastWritten) {
+			t.Fatalf("process %s took alice's context put back over bob's: %v", name, err)
+		}
+	}
+}
+
+// A write in flight leaves the record before it admitted, and a write
+// whose outcome is unknown is admitted once read if it landed, and leaves
+// the record before it admitted if it did not (Ruling 3; 7d's three
+// in-flight and unknown-outcome tests).
+func TestAWriteInFlightOrOfUnknownOutcomeIsAdmittedWhicheverLanded(t *testing.T) {
+	for _, landed := range []bool{true, false} {
+		inner := &lossy{RevStore: memory.New(time.Now), commit: landed}
+		l := NewLedger()
+		l.SetBase(inner.Seen() + 1)
+		s := Wrap(inner, keys(), nil, WithLedger(l))
+		login(t, s, "ctx-1", "user:alice")
+		inner.lose = true // the next swap's reply is lost: ErrUnavailable, committed or not
+		cur, _ := s.GetContext(context.Background(), ka)
+		err := s.SwapContext(context.Background(), ka, cur.Rev, store.Context{CtxID: "ctx-1", Principal: "user:alice",
+			Username: "netops", BlobHash: "b-2", PrivLvl: 1}, time.Hour)
+		if !errors.Is(err, store.ErrUnavailable) {
+			t.Fatalf("landed=%v: %v", landed, err)
+		}
+		inner.lose = false
+		c, err := s.GetContext(context.Background(), ka)
+		want := map[bool]string{true: "b-2", false: "b-ctx-1"}[landed]
+		if err != nil || c.BlobHash != want {
+			t.Fatalf("landed=%v: read %q, %v; want %q", landed, c.BlobHash, err, want)
+		}
+	}
+}
+
+// lossy commits a SwapContextRev (or not) and reports ErrUnavailable while
+// lose is set.
+type lossy struct {
+	store.RevStore
+	lose, commit bool
+}
+
+func (l *lossy) SwapContextRev(ctx context.Context, k store.ContextKey, rev uint64, c store.Context, ttl time.Duration) (uint64, error) {
+	if !l.lose {
+		return l.RevStore.SwapContextRev(ctx, k, rev, c, ttl)
+	}
+	if l.commit {
+		l.RevStore.SwapContextRev(ctx, k, rev, c, ttl)
 	}
 	return 0, store.ErrUnavailable
 }
 
-// A write of the same context whose outcome is unknown, read back, is
-// admitted and becomes the last, so the version before it, put back, is
-// denied. A write in flight is admitted beside the last, and the last,
-// put back while it is in flight, is too, until the write ends (Ruling
-// T12-g; re-check 2 M-B1).
-func TestTheLedgerAdmitsTheSameContextsWritesInFlightOrUnknown(t *testing.T) {
-	ctx := context.Background()
-	now := time.Unix(1_000_000, 0).UTC()
-	k := store.ContextKey{NAS: "leaf-01", Username: "netops"}
-	alice := func(priv uint8) store.Context {
-		return store.Context{CtxID: "alice-1", Principal: "user:alice@example.com", Username: "netops", PrivLvl: priv}
+// Two writes at a key in either order of ending: whichever the store
+// holds is admitted, because it is the one whose compare-and-set landed
+// last, and a writer that read the other's record seals above it.
+func TestTheStoresLastWriteIsAdmittedWhateverOrderWritesEnd(t *testing.T) {
+	_, a, b, _, _ := twoProcesses(t)
+	login(t, a, "ctx-1", "user:alice")
+	login(t, b, "ctx-1", "user:alice") // b read a's, so seals above it
+	for name, s := range map[string]store.Store{"a": a, "b": b} {
+		if _, err := s.GetContext(context.Background(), ka); err != nil {
+			t.Fatalf("%s: the store's last write was denied: %v", name, err)
+		}
 	}
+}
 
-	inner := memory.New(func() time.Time { return now })
+// After the store's revisions went back (a restore without
+// --bump-revision) or jumped (with it), a login seals above every record
+// this process knew, because Seen never goes back: it is admitted, and a
+// record the restore brought back, below the mark, is denied (Ruling 3;
+// L35's restore, measured).
+//
+// With two processes (pre-flight I12): q starts after the restore, so its
+// Seen is the restored store's. With the bump, q's login seals above
+// everything p knew, and p admits it. Without it, q seals below p's mark,
+// and p denies it until p writes at the key. The runbook (design §13)
+// says to bump, or to restart every process: the second half pins why.
+func TestALoginAfterARestoreIsAdmitted(t *testing.T) {
+	for _, bump := range []bool{false, true} {
+		inner := newRewinding(memory.New(time.Now))
+		l := NewLedger()
+		l.SetBase(inner.Seen() + 1)
+		p := Wrap(inner, keys(), nil, WithLedger(l))
+		login(t, p, "ctx-old", "user:alice")
+		old, _ := inner.RevStore.GetContext(context.Background(), ka)
+		for i := 0; i < 5; i++ { // p's mark well past the snapshot's revisions
+			login(t, p, fmt.Sprintf("ctx-new-%d", i), "user:alice")
+		}
+		inner.restore(old, bump) // the store now holds ctx-old, its revisions back or bumped
+		if _, err := p.GetContext(context.Background(), ka); !errors.Is(err, ErrNotLastWritten) {
+			t.Fatalf("bump=%v: a restored record below the mark was admitted: %v", bump, err)
+		}
+		// q: a process started after the restore, with a view of its own.
+		qv := inner.view()
+		lq := NewLedger()
+		lq.SetBase(qv.Seen() + 1)
+		q := Wrap(qv, keys(), nil, WithLedger(lq))
+		login(t, q, "ctx-on-q", "user:alice")
+		c, err := p.GetContext(context.Background(), ka)
+		switch {
+		case bump && (err != nil || c.CtxID != "ctx-on-q"):
+			t.Fatalf("with the bump, p did not admit q's login: %v %v", c.CtxID, err)
+		case !bump && !errors.Is(err, ErrNotLastWritten):
+			t.Fatalf("without the bump, p admitted a login sealed below its mark (%v %v): the runbook's "+
+				"restart is no longer needed, so say so in design §13", c.CtxID, err)
+		}
+		login(t, p, "ctx-after", "user:alice") // p's own write after the restore
+		for name, s := range map[string]store.Store{"p": p, "q": q} {
+			if c, err := s.GetContext(context.Background(), ka); err != nil || c.CtxID != "ctx-after" {
+				t.Fatalf("bump=%v, %s: the login after the restore: %v %v", bump, name, c.CtxID, err)
+			}
+		}
+	}
+}
+
+// rewinding is a store whose revisions can be put back to before a
+// record's, as a restore without --bump-revision does, or bumped by a
+// billion, as one with it does. Each view's Seen is its own and never goes
+// back, as an etcd client's is; the offset is the store's, shared by every
+// view.
+type rewinding struct {
+	store.RevStore
+	shared *rewindState
+	mu     sync.Mutex
+	seen   uint64
+}
+
+type rewindState struct {
+	mu     sync.Mutex
+	offset int64 // added to every revision the inner store reports
+}
+
+func newRewinding(inner store.RevStore) *rewinding {
+	return &rewinding{RevStore: inner, shared: &rewindState{}}
+}
+
+// view is another client of the same store, which has seen nothing yet:
+// a process started now.
+func (r *rewinding) view() *rewinding { return &rewinding{RevStore: r.RevStore, shared: r.shared} }
+
+func (r *rewinding) offset() int64 {
+	r.shared.mu.Lock()
+	defer r.shared.mu.Unlock()
+	return r.shared.offset
+}
+
+// out is an inner revision as the store reports it; in is the reverse.
+func (r *rewinding) out(rev uint64) uint64 {
+	if rev == 0 {
+		return 0
+	}
+	v := uint64(int64(rev) + r.offset())
+	r.mu.Lock()
+	r.seen = max(r.seen, v)
+	r.mu.Unlock()
+	return v
+}
+
+func (r *rewinding) in(rev uint64) uint64 {
+	if rev == 0 {
+		return 0
+	}
+	return uint64(int64(rev) - r.offset())
+}
+
+func (r *rewinding) Seen() uint64 {
+	r.out(r.RevStore.Seen())
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.seen
+}
+
+func (r *rewinding) GetContext(ctx context.Context, k store.ContextKey) (store.Context, error) {
+	c, err := r.RevStore.GetContext(ctx, k)
+	c.Rev, c.PolicyRev = r.out(c.Rev), r.out(c.PolicyRev)
+	return c, err
+}
+
+func (r *rewinding) SwapLoginRev(ctx context.Context, k store.ContextKey, rev uint64, c store.Context,
+	ttl time.Duration, w store.LoginWrite) (uint64, error) {
+	got, err := r.RevStore.SwapLoginRev(ctx, k, r.in(rev), c, ttl, w)
+	return r.out(got), err
+}
+
+// SwapContextRev, PutContextRev and RewriteContextRev are SwapLoginRev's
+// shape: in on the way down, out on the way up.
+func (r *rewinding) SwapContextRev(ctx context.Context, k store.ContextKey, rev uint64, c store.Context,
+	ttl time.Duration) (uint64, error) {
+	got, err := r.RevStore.SwapContextRev(ctx, k, r.in(rev), c, ttl)
+	return r.out(got), err
+}
+
+func (r *rewinding) PutContextRev(ctx context.Context, k store.ContextKey, c store.Context,
+	ttl time.Duration) (uint64, error) {
+	got, err := r.RevStore.PutContextRev(ctx, k, c, ttl)
+	return r.out(got), err
+}
+
+func (r *rewinding) RewriteContextRev(ctx context.Context, k store.ContextKey, rev uint64, c store.Context,
+	ttl time.Duration, policyMoved bool) (uint64, error) {
+	got, err := r.RevStore.RewriteContextRev(ctx, k, r.in(rev), c, ttl, policyMoved)
+	return r.out(got), err
+}
+
+// restore puts old back at ka as the store's, and moves the revisions the
+// store reports: back to just above 1 (no bump), below everything written
+// since, or up by a billion (bump).
+func (r *rewinding) restore(old store.Context, bump bool) {
+	cur := r.RevStore.Seen()
+	r.shared.mu.Lock()
+	if bump {
+		r.shared.offset = 1_000_000_000
+	} else {
+		r.shared.offset = 1 - int64(cur)
+	}
+	r.shared.mu.Unlock()
+	old.Rev, old.PolicyRev = 0, 0
+	r.RevStore.PutContext(context.Background(), ka, old, time.Hour)
+}
+
+// A record sealed before this process's base, at a key it has no mark
+// for, is a put-back: denied. One sealed after the base, by any process,
+// is admitted (7d's sealed ledger, on the new rule).
+func TestARecordSealedBeforeTheBaseIsDeniedAtAnUnseenKey(t *testing.T) {
+	inner, a, _, _, _ := twoProcesses(t)
+	login(t, a, "ctx-1", "user:alice")
+	saved, _ := inner.GetContext(context.Background(), ka)
+	if err := inner.DeleteContext(context.Background(), ka); err != nil {
+		t.Fatal(err)
+	}
+	late := NewLedger()
+	late.SetBase(inner.Seen() + 1) // a process started now, finding the key empty
+	c := Wrap(inner, keys(), nil, WithLedger(late))
+	if err := inner.PutContext(context.Background(), ka, saved, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.GetContext(context.Background(), ka); !errors.Is(err, ErrNotLastWritten) {
+		t.Fatalf("a record sealed before the base was admitted at an unseen key: %v", err)
+	}
+	login(t, a, "ctx-2", "user:alice")
+	if _, err := c.GetContext(context.Background(), ka); err != nil {
+		t.Fatalf("a record sealed after the base was denied: %v", err)
+	}
+}
+
+// A delete forgets nothing: a record put back after one is still below the
+// key's mark (stronger than 7d's forget).
+func TestADeletedKeyKeepsItsMark(t *testing.T) {
+	inner, a, _, _, _ := twoProcesses(t)
+	login(t, a, "ctx-1", "user:alice")
+	saved, _ := inner.GetContext(context.Background(), ka)
+	login(t, a, "ctx-2", "user:bob")
+	if err := a.DeleteContext(context.Background(), ka); err != nil {
+		t.Fatal(err)
+	}
+	inner.PutContext(context.Background(), ka, saved, time.Hour)
+	if _, err := a.GetContext(context.Background(), ka); !errors.Is(err, ErrNotLastWritten) {
+		t.Fatalf("a put-back after a delete was admitted: %v", err)
+	}
+}
+
+// A mark is kept past the latest sealed ceiling seen at its key by the
+// ledger's keep, then pruned; a context with no ceiling (never) is kept.
+func TestTheLedgerPrunesAKeyPastItsKeep(t *testing.T) {
 	l := NewLedger()
-	s := Wrap(inner, keys(), nil, WithLedger(l))
-	l.Seal()
-	if err := s.PutContext(ctx, k, alice(1), time.Hour); err != nil {
-		t.Fatal(err)
+	now := time.Unix(2_000_000, 0)
+	l.Observe(ka, 10, 10, time.Time{}, now.Add(time.Hour))
+	never := store.ContextKey{NAS: "leaf-02", Username: "svc"}
+	l.Observe(never, 11, 11, time.Time{}, time.Time{})
+	if n := l.Prune(now.Add(time.Hour + DefaultLedgerKeep - time.Second)); n != 0 {
+		t.Fatalf("pruned %d before its keep", n)
 	}
-	first, _ := inner.GetContext(ctx, k)
-	lossy := Wrap(unknownOutcomeStore{inner}, keys(), nil, WithLedger(l))
-	if err := lossy.SwapContext(ctx, k, first.Rev, alice(5), time.Hour); !errors.Is(err, store.ErrUnavailable) {
-		t.Fatalf("a write whose outcome is unknown: %v", err)
+	if n := l.Prune(now.Add(time.Hour + DefaultLedgerKeep + time.Second)); n != 1 || l.Len() != 1 {
+		t.Fatalf("pruned %d, %d left: the never context's mark must stay", n, l.Len())
 	}
-	if got, err := s.GetContext(ctx, k); err != nil || got.PrivLvl != 5 {
-		t.Fatalf("a write whose outcome is unknown, read back: %+v %v", got, err)
+	// A key pruned since its mark was handed out is owed nothing again
+	// (Task 7 review M-4).
+	l.Dirty()
+	l.Redirty([]store.LedgerMark{{Key: ka, Seq: 10}})
+	if n := l.Pending(); n != 0 {
+		t.Fatalf("a pruned key is owed again: %d pending", n)
 	}
-	if err := inner.PutContext(ctx, k, first, time.Hour); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.GetContext(ctx, k); !errors.Is(err, ErrNotLastWritten) {
-		t.Fatalf("the version before a write read back: %v", err)
-	}
+}
 
-	inner = memory.New(func() time.Time { return now })
-	h := &holdingStore{RevStore: inner, landed: make(chan struct{}), release: make(chan struct{})}
-	l = NewLedger()
-	s = Wrap(h, keys(), nil, WithLedger(l))
-	l.Seal()
-	if err := s.PutContext(ctx, k, alice(1), time.Hour); err != nil {
-		t.Fatal(err)
+// The sequence a write seals is above the revision it compares on, above
+// everything the store has told this process, and above the key's mark:
+// each term wins once (pre-flight M4: the Seen term is exercised too).
+func TestTheSequenceIsAboveEverythingKnown(t *testing.T) {
+	inner := &seenAt{RevStore: memory.New(time.Now), seen: 10}
+	l := NewLedger()
+	l.Observe(ka, 1000, 1000, time.Time{}, time.Time{})
+	w := Wrap(inner, keys(), nil, WithLedger(l)).(*wrapped)
+	if got := w.seqFor(ka, 5); got != 1001 {
+		t.Fatalf("the mark's term: %d", got)
 	}
-	first, _ = inner.GetContext(ctx, k)
-	done := make(chan error)
-	go func() { done <- s.SwapContext(ctx, k, first.Rev, alice(5), time.Hour) }()
-	<-h.landed
-	if got, err := s.GetContext(ctx, k); err != nil || got.PrivLvl != 5 {
-		t.Fatalf("a write in flight: %+v %v", got, err)
+	if got := w.seqFor(ka, 5000); got != 5000 {
+		t.Fatalf("the compare revision's term: %d", got)
 	}
-	if err := inner.PutContext(ctx, k, first, time.Hour); err != nil {
-		t.Fatal(err)
+	inner.seen = 9000
+	if got := w.seqFor(ka, 5000); got != 9000 {
+		t.Fatalf("the Seen term: %d", got)
 	}
-	if got, err := s.GetContext(ctx, k); err != nil || got.PrivLvl != 1 {
-		t.Fatalf("the last, beside a write in flight: %+v %v", got, err)
+}
+
+// seenAt is a store whose Seen is whatever the test sets.
+type seenAt struct {
+	store.RevStore
+	seen uint64
+}
+
+func (s *seenAt) Seen() uint64 { return s.seen }
+
+// A form-3 (7d) or form-2 context does not open: denied, and replaced at
+// the next login (Ruling 3, the migration).
+func TestAContextOfFormThreeDoesNotOpen(t *testing.T) {
+	for _, v := range []int{2, 3} {
+		inner := memory.New(time.Now)
+		l := NewLedger()
+		l.SetBase(inner.Seen() + 1)
+		s := Wrap(inner, keys(), nil, WithLedger(l))
+		body, _ := json.Marshal(map[string]any{"v": v, "write_id": "00", "ctx_id": "c-old", "principal": "user:alice",
+			"username": "netops"})
+		sealed, err := keys().SealBound(body, contextAAD(ka))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := inner.PutContext(context.Background(), ka, store.Context{Sealed: sealed}, time.Hour); err != nil {
+			t.Fatal(err)
+		}
+		var u *store.UnreadableContextError
+		if _, err := s.GetContext(context.Background(), ka); !errors.As(err, &u) {
+			t.Fatalf("form %d opened: %v", v, err)
+		}
+		login(t, s, "ctx-new", "user:alice") // the next login replaces it
+		if c, err := s.GetContext(context.Background(), ka); err != nil || c.CtxID != "ctx-new" {
+			t.Fatalf("form %d: the login after it: %v %v", v, c.CtxID, err)
+		}
 	}
-	close(h.release)
-	if err := <-done; err != nil {
-		t.Fatal(err)
+}
+
+// An earlier form is ErrEarlierForm, both in the read's error and in what
+// OnUnopenable is told, so the operator's line names the upgrade rather
+// than tampering; a later form, and a put-back, are not it (pre-flight I10).
+func TestAnEarlierFormIsNamedAsOne(t *testing.T) {
+	for _, c := range []struct {
+		v       int
+		earlier bool
+	}{{3, true}, {2, true}, {5, false}} {
+		inner := memory.New(time.Now)
+		var told error
+		s := Wrap(inner, keys(), nil, OnUnopenable(func(_, _ string, why error) { told = why }))
+		body, _ := json.Marshal(map[string]any{"v": c.v, "ctx_id": "c-old", "principal": "user:alice",
+			"username": "netops"})
+		sealed, _ := keys().SealBound(body, contextAAD(ka))
+		inner.PutContext(context.Background(), ka, store.Context{Sealed: sealed}, time.Hour)
+		_, err := s.GetContext(context.Background(), ka)
+		var u *store.UnreadableContextError
+		if !errors.As(err, &u) { // a later form does not open either (Task 7 review M-6)
+			t.Fatalf("form %d opened: %v", c.v, err)
+		}
+		if errors.Is(err, ErrEarlierForm) != c.earlier || errors.Is(told, ErrEarlierForm) != c.earlier {
+			t.Fatalf("form %d: read %v, told %v", c.v, err, told)
+		}
 	}
-	if _, err := s.GetContext(ctx, k); !errors.Is(err, ErrNotLastWritten) {
-		t.Fatalf("the version before a write that landed: %v", err)
+	// A put-back is told as one, never as an earlier form.
+	inner := memory.New(time.Now)
+	l := NewLedger()
+	l.SetBase(inner.Seen() + 1)
+	var told error
+	s := Wrap(inner, keys(), nil, WithLedger(l), OnUnopenable(func(_, _ string, why error) { told = why }))
+	login(t, s, "ctx-alice", "user:alice")
+	saved, _ := inner.GetContext(context.Background(), ka)
+	login(t, s, "ctx-bob", "user:bob")
+	inner.PutContext(context.Background(), ka, saved, time.Hour)
+	s.GetContext(context.Background(), ka)
+	if !errors.Is(told, ErrNotLastWritten) || errors.Is(told, ErrEarlierForm) {
+		t.Fatalf("a put-back was told as %v", told)
 	}
 }
 
@@ -996,7 +1370,7 @@ func TestARevocationWhoseSealFailedIsNotUndoneByAPutBack(t *testing.T) {
 	if err := daemon.PutContext(ctx, k, alice, time.Hour); err != nil {
 		t.Fatal(err)
 	}
-	l.Seal()
+	l.SetBase(inner.Seen() + 1)
 	earlier, err := inner.GetContext(ctx, k)
 	if err != nil {
 		t.Fatal(err)
@@ -1022,44 +1396,87 @@ func TestARevocationWhoseSealFailedIsNotUndoneByAPutBack(t *testing.T) {
 	}
 }
 
-// The floor is cleared only by a write sent after it that landed, or by
-// forgetting the key once the ledger is sealed: a write sent before it, or
-// a delete before Seal, after which a record put back would be the key's
-// first read, keeps it (final review 7d-2 I-1).
+// The floor is cleared only by a later sequence: a record at or below the
+// sequence it holds through, read or written, keeps it, and so does a
+// write that failed, which tells the ledger nothing. Set at a key with no
+// mark, it holds through every sequence below the revision this process
+// had seen when the plaintext mark landed, which a write sent after it
+// seals above. A plaintext revocation read at the mark sets it too; and it
+// is the latest revocation (final review 7d-2 I-1; plan 7e, Ruling 3).
 func TestTheRevocationFloorIsClearedOnlyByALaterWrite(t *testing.T) {
 	now := time.Unix(1_000_000, 0).UTC()
 	k := store.ContextKey{NAS: "leaf-01", Username: "netops"}
 	l := NewLedger()
-	before := l.begin(k, "a", 0)
-	l.revoked(k, now)
-	l.end(before, 1, nil)
+	l.revoked(k, now, 6)                          // no mark at k; the plaintext mark landed by revision 6
+	l.Observe(k, 5, 10, time.Time{}, time.Time{}) // a record sealed before it, put back
 	if got := l.floor(k); !got.Equal(now) {
-		t.Fatalf("a write sent before the floor cleared it: %v", got)
+		t.Fatalf("a record sealed before the revocation cleared the floor: %v", got)
 	}
-	l.end(l.begin(k, "b", 0), 0, store.ErrUnavailable)
-	if !l.floor(k).Equal(now) {
-		t.Fatal("a write whose outcome is unknown, before it is read back, cleared the floor")
-	}
-	l.forget(k, l.mark(), false)
+	l.Observe(k, 5, 11, time.Time{}, time.Time{}) // the same record, read again
+	l.Observe(k, 3, 12, time.Time{}, time.Time{}) // an earlier one
 	if got := l.floor(k); !got.Equal(now) {
-		t.Fatalf("a delete before Seal cleared the floor: %v", got)
+		t.Fatalf("a record at or below the floor's sequence cleared it: %v", got)
 	}
-	l.Seal()
-	l.forget(k, l.mark(), false)
+	l.wrote(k, 6, 13, time.Time{}) // sealed at the revision seen: sent after
 	if got := l.floor(k); !got.IsZero() {
-		t.Fatalf("a delete after Seal kept the floor: %v", got)
+		t.Fatalf("a later sequence kept the floor: %v", got)
 	}
-	l.revoked(k, now)
-	l.end(l.begin(k, "c", 0), 0, store.ErrUnavailable)
-	l.admits(k, "c")
+	l.revoked(k, now, 2) // at the mark, 6, whatever was seen
+	l.Observe(k, 6, 14, time.Time{}, time.Time{})
+	if got := l.floor(k); !got.Equal(now) {
+		t.Fatalf("the record the revocation landed on cleared the floor: %v", got)
+	}
+	l.Observe(k, 7, 15, time.Time{}, time.Time{})
 	if got := l.floor(k); !got.IsZero() {
-		t.Fatalf("a write sent after the floor, read back, kept it: %v", got)
+		t.Fatalf("a later sequence, read, kept the floor: %v", got)
 	}
-	l.revoked(k, now.Add(-time.Minute))
-	l.revoked(k, now)
-	l.revoked(k, now.Add(-time.Minute))
+	l.Observe(k, 7, 16, now, time.Time{}) // a plaintext revocation at the mark
+	if got := l.floor(k); !got.Equal(now) {
+		t.Fatalf("a plaintext revocation read at the mark is not the floor: %v", got)
+	}
+	l.revoked(k, now.Add(-time.Minute), 0)
+	l.revoked(k, now, 0)
+	l.revoked(k, now.Add(-time.Minute), 0)
 	if got := l.floor(k); !got.Equal(now) {
 		t.Fatalf("the floor is not the latest revocation: %v", got)
+	}
+	// A plaintext revocation read at the mark does not lower a floor held
+	// through the revision seen: a record sealed before the revocation,
+	// above the mark, still keeps it (Task 7 review M-3).
+	l = NewLedger()
+	l.Observe(k, 7, 7, time.Time{}, time.Time{})
+	l.revoked(k, now, 101) // through 100
+	l.Observe(k, 7, 8, now.Add(time.Minute), time.Time{})
+	l.Observe(k, 50, 50, time.Time{}, time.Time{}) // sealed before the revocation
+	if got := l.floor(k); got.IsZero() {
+		t.Fatal("a plaintext revocation at the mark lowered the floor's sequence")
+	}
+}
+
+// A context this process cannot open (a form-3 record at the 7e upgrade)
+// is revoked by the start's refresh, at a key the ledger has no mark for,
+// and the user's next login replaces it: that login is not read as
+// revoked (Task 7 self-review: a floor that took the next sequence as its
+// own held every first login after the upgrade revoked).
+func TestALoginAfterRevokingAnUnopenableContextIsNotRevoked(t *testing.T) {
+	ctx := context.Background()
+	now := time.Unix(1_000_000, 0).UTC()
+	inner := memory.New(func() time.Time { return now })
+	l := NewLedger()
+	l.SetBase(inner.Seen() + 1)
+	s := Wrap(inner, keys(), nil, WithLedger(l))
+	body, _ := json.Marshal(map[string]any{"v": 3, "ctx_id": "c-old", "principal": "user:alice",
+		"username": "netops"})
+	sealed, _ := keys().SealBound(body, contextAAD(ka))
+	if err := inner.PutContext(ctx, ka, store.Context{Sealed: sealed}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetRevokedAt(ctx, ka, now); err != nil {
+		t.Fatal(err)
+	}
+	login(t, s, "ctx-new", "user:alice")
+	if c, err := s.GetContext(ctx, ka); err != nil || !c.RevokedAt.IsZero() {
+		t.Fatalf("the login after the revocation reads as revoked: %v %v", c.RevokedAt, err)
 	}
 }
 
@@ -1101,7 +1518,7 @@ func TestAReadRacingAWriteOfTheSameContextReadsAgain(t *testing.T) {
 				writer = wraps["broker"]
 			}
 			k := store.ContextKey{NAS: "leaf-01", Username: "netops"}
-			l.Seal()
+			l.SetBase(h.Seen() + 1)
 			if err := writer.PutContext(ctx, k, store.Context{CtxID: "alice-1", Principal: "user:alice@example.com",
 				Username: "netops", PrivLvl: 1}, time.Hour); err != nil {
 				t.Fatal(err)
@@ -1127,208 +1544,6 @@ func TestAReadRacingAWriteOfTheSameContextReadsAgain(t *testing.T) {
 	}
 }
 
-// A context sealed in form 2, before the write ID, does not open: it is
-// unreadable, not another login's, and a login replaces it. Each seal
-// draws a write ID of its own (Ruling T12-g).
-func TestAContextOfFormTwoDoesNotOpen(t *testing.T) {
-	ctx := context.Background()
-	now := time.Unix(1_000_000, 0).UTC()
-	inner := memory.New(func() time.Time { return now })
-	k := store.ContextKey{NAS: "leaf-01", Username: "netops"}
-	b, err := json.Marshal(map[string]any{"v": 2, "ctx_id": "alice-1", "principal": "user:alice@example.com",
-		"username": "netops", "priv_lvl": 15})
-	if err != nil {
-		t.Fatal(err)
-	}
-	sealed, err := keys().SealBound(b, contextAAD(k))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := inner.PutContext(ctx, k, store.Context{Sealed: sealed}, time.Hour); err != nil {
-		t.Fatal(err)
-	}
-	var u *store.UnreadableContextError
-	if _, err := Wrap(inner, keys(), nil).GetContext(ctx, k); !errors.As(err, &u) || errors.Is(err, ErrNotLastWritten) {
-		t.Fatalf("a context of form 2: %v", err)
-	}
-
-	w := Wrap(inner, keys(), nil).(*wrapped)
-	_, a, err := w.sealContext(k, store.Context{CtxID: "alice-1"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, b2, err := w.sealContext(k, store.Context{CtxID: "alice-1"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(a) != 32 || a == b2 {
-		t.Fatalf("write IDs %q and %q: not fresh 16-byte hex per seal", a, b2)
-	}
-}
-
-// A write in flight is admitted beside the last one, a write that landed
-// replaces it, one refused admits nothing, and one whose outcome is
-// unknown stays admitted until a later write lands, or until a read finds
-// it, which proves it landed (re-check IA1; re-check 2 M-B1).
-func TestTheLedgerAdmitsWritesInFlight(t *testing.T) {
-	l := NewLedger()
-	k := store.ContextKey{NAS: "leaf-01", Username: "netops"}
-	if !l.admits(k, "a") {
-		t.Fatal("a first read is the key's")
-	}
-	b := l.begin(k, "b", 0)
-	if !l.admits(k, "a") || !l.admits(k, "b") || l.admits(k, "x") {
-		t.Fatal("a write in flight")
-	}
-	l.end(b, 1, nil)
-	if l.admits(k, "a") || !l.admits(k, "b") {
-		t.Fatal("a write that landed")
-	}
-	l.end(l.begin(k, "c", 0), 0, store.ErrConflict)
-	if l.admits(k, "c") {
-		t.Fatal("a conflict wrote nothing")
-	}
-	l.end(l.begin(k, "d", 0), 0, store.ErrUnavailable)
-	if !l.admits(k, "b") || !l.admits(k, "d") {
-		t.Fatal("a write whose outcome is unknown may have landed")
-	}
-	// The read of d is the store holding it: it landed, and b is gone.
-	if l.admits(k, "b") || !l.admits(k, "d") {
-		t.Fatal("a read of a write whose outcome was unknown did not settle it")
-	}
-	l.end(l.begin(k, "e", 0), 0, store.ErrUnavailable)
-	l.end(l.begin(k, "f", 0), 3, nil)
-	if l.admits(k, "e") || l.admits(k, "d") || !l.admits(k, "f") {
-		t.Fatal("a later write landed")
-	}
-}
-
-// A read that finds a write whose outcome was unknown settles every one:
-// the store holds that one, so a later write whose outcome is unknown too
-// did not land over it, and is not admitted (Task 4b review M4).
-func TestAReadSettlesEveryWriteWhoseOutcomeWasUnknown(t *testing.T) {
-	l := NewLedger()
-	k := store.ContextKey{NAS: "leaf-01", Username: "netops"}
-	for _, id := range []string{"d", "e"} {
-		l.end(l.begin(k, id, 0), 0, store.ErrUnavailable)
-	}
-	if !l.admits(k, "d") {
-		t.Fatal("a write whose outcome is unknown may have landed")
-	}
-	if l.admits(k, "e") {
-		t.Fatal("a read of d left e admitted")
-	}
-}
-
-// The ledger forgets a key the store holds nothing at: a delete that
-// landed, or after Seal a read that found nothing. A sealed ledger then
-// admits nothing there but what this process writes, so forgetting fails
-// closed; a write sent since the delete or the read was keeps the entry
-// (Task 4b review M5).
-func TestTheLedgerForgetsAKeyTheStoreNoLongerHolds(t *testing.T) {
-	ctx := context.Background()
-	now := time.Unix(1_000_000, 0).UTC()
-	inner := memory.New(func() time.Time { return now })
-	l := NewLedger()
-	s := Wrap(inner, keys(), nil, WithLedger(l))
-	k := store.ContextKey{NAS: "leaf-01", Username: "netops"}
-	alice := store.Context{CtxID: "alice-1", Principal: "user:alice@example.com", Username: "netops", PrivLvl: 15}
-	// Before Seal a read that finds nothing keeps the entry: forgetting it
-	// would let the next read seed the key.
-	l.end(l.begin(k, "a", 0), 1, nil)
-	if _, err := s.GetContext(ctx, k); !errors.Is(err, store.ErrNotFound) || len(l.m) != 1 {
-		t.Fatalf("a read before Seal that found nothing: %v %v", err, l.m)
-	}
-	l.Seal()
-	if err := s.PutContext(ctx, k, alice, time.Hour); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.DeleteContext(ctx, k); err != nil {
-		t.Fatal(err)
-	}
-	if len(l.m) != 0 {
-		t.Fatalf("a delete that landed kept the entry: %v", l.m)
-	}
-	// Alice's record put back where it was deleted is not this key's now.
-	if err := Wrap(inner, keys(), nil).PutContext(ctx, k, alice, time.Hour); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.GetContext(ctx, k); !errors.Is(err, ErrNotLastWritten) {
-		t.Fatalf("a record put back at a forgotten key: %v", err)
-	}
-	if err := inner.DeleteContext(ctx, k); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.PutContext(ctx, k, alice, time.Hour); err != nil {
-		t.Fatal(err)
-	}
-	if err := inner.DeleteContext(ctx, k); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.GetContext(ctx, k); !errors.Is(err, store.ErrNotFound) || len(l.m) != 0 {
-		t.Fatalf("a read after Seal that found nothing kept the entry: %v %v", err, l.m)
-	}
-	// A write sent after the read or the delete was keeps the entry.
-	at := l.mark()
-	l.end(l.begin(k, "b", 0), 100, nil)
-	l.forget(k, at, false)
-	if !l.admits(k, "b") {
-		t.Fatal("a write sent after the delete was is forgotten")
-	}
-	l.begin(k, "c", 0)
-	l.forget(k, l.mark(), false)
-	if !l.admits(k, "c") {
-		t.Fatal("a write in flight is forgotten")
-	}
-}
-
-// A sealed ledger admits nothing at a key it has never seen, except what
-// this process writes there itself; before Seal, the first record read at
-// an unseen key is the key's (re-check 2 I1; decision 35). port49d seals
-// it once the start has read every kept context, so a record put back at
-// an empty key, after the start, is never taken as that key's.
-func TestASealedLedgerAdmitsNoUnseenKey(t *testing.T) {
-	ctx := context.Background()
-	now := time.Unix(1_000_000, 0).UTC()
-	inner := memory.New(func() time.Time { return now })
-	l := NewLedger()
-	s := Wrap(inner, keys(), nil, WithLedger(l))
-	alice := store.Context{CtxID: "alice-1", Principal: "user:alice@example.com", Username: "netops", PrivLvl: 15}
-	kept := store.ContextKey{NAS: "leaf-01", Username: "netops"}
-	if err := Wrap(inner, keys(), nil).PutContext(ctx, kept, alice, time.Hour); err != nil {
-		t.Fatal(err)
-	}
-	// Before Seal: the start's read of a kept context seeds the key.
-	if got, err := s.GetContext(ctx, kept); err != nil || got.CtxID != "alice-1" {
-		t.Fatalf("a first read before Seal: %+v %v", got, err)
-	}
-	l.Seal()
-	if got, err := s.GetContext(ctx, kept); err != nil || got.CtxID != "alice-1" {
-		t.Fatalf("a key seeded before Seal: %+v %v", got, err)
-	}
-	// After Seal: Alice's record put back at a key no one here has read.
-	empty := store.ContextKey{NAS: "leaf-02", Username: "netops"}
-	other := Wrap(inner, keys(), nil)
-	if err := other.PutContext(ctx, empty, alice, time.Hour); err != nil {
-		t.Fatal(err)
-	}
-	var u *store.UnreadableContextError
-	for range 2 { // denied, and the denial seeds nothing
-		if _, err := s.GetContext(ctx, empty); !errors.As(err, &u) || !errors.Is(err, ErrNotLastWritten) {
-			t.Fatalf("an unseen key after Seal: %v", err)
-		}
-	}
-	// This process's own write at an unseen key is admitted.
-	own := store.ContextKey{NAS: "leaf-03", Username: "netops"}
-	if err := s.PutContext(ctx, own, store.Context{CtxID: "bob-1", Principal: "user:bob@example.com",
-		Username: "netops"}, time.Hour); err != nil {
-		t.Fatal(err)
-	}
-	if got, err := s.GetContext(ctx, own); err != nil || got.CtxID != "bob-1" {
-		t.Fatalf("its own write after Seal: %+v %v", got, err)
-	}
-}
-
 // holdingStore holds the first SwapContext after it has landed, before it
 // returns, so the sealing layer has not yet told the ledger it ended.
 type holdingStore struct {
@@ -1347,33 +1562,15 @@ func (h *holdingStore) SwapContextRev(ctx context.Context, k store.ContextKey, r
 	return committed, err
 }
 
-// Two logins' writes that end out of the order the store committed them
-// in: the store holds the second, and the ledger admits it, not the first
-// (Task 4b defect, LoginsRaceToOneIndex). Alice's write lands on Carol's
-// context and is held before it ends; Bob's reads it, admitted in flight,
-// swaps on its revision and ends. Alice's ends after. The record Bob wrote
-// is the key's, and Alice's written back is still another login's.
-func TestTheLedgerOrdersWritesByTheStoresCommit(t *testing.T) {
-	s, inner, k, aliceSealed := twoLoginsEndOutOfOrder(t, true)
-	if got, err := s.GetContext(context.Background(), k); err != nil || got.CtxID != "bob-1" {
-		t.Fatalf("the write the store committed last: %q %v", got.CtxID, err)
-	}
-	if err := inner.PutContext(context.Background(), k, aliceSealed, time.Hour); err != nil { // Alice's, written back
-		t.Fatal(err)
-	}
-	if _, err := s.GetContext(context.Background(), k); !errors.Is(err, ErrNotLastWritten) {
-		t.Fatalf("the write the store committed first, written back: %v", err)
-	}
-}
-
-// The same race on a key no context holds, which is every first login to
-// a device and username, and every login after a context expired. Alice's
-// write compared on no record, so only the revision it committed at
-// places it: below Bob's, so its late end leaves Bob's the key's, and
-// Alice's written back is still another login's (Task 4b fix 2 review I2;
-// Task 6b).
+// Two first logins racing on a key no context holds, which is every first
+// login to a device and username, and every login after a context
+// expired. Alice's write lands on no record and is held before it ends;
+// Bob's reads it, swaps on its revision, sealing above it, and ends first.
+// The store holds Bob's, and it is admitted whatever order the writes end
+// in; Alice's written back is still another login's (Task 4b fix 2 review
+// I2; Task 6b; plan 7e, Ruling 3).
 func TestFirstLoginsRacingOnAnEmptyKey(t *testing.T) {
-	s, inner, k, aliceSealed := twoLoginsEndOutOfOrder(t, false)
+	s, inner, k, aliceSealed := twoLoginsEndOutOfOrder(t)
 	if got, err := s.GetContext(context.Background(), k); err != nil || got.CtxID != "bob-1" {
 		t.Fatalf("the write the store committed last: %q %v", got.CtxID, err)
 	}
@@ -1385,11 +1582,10 @@ func TestFirstLoginsRacingOnAnEmptyKey(t *testing.T) {
 	}
 }
 
-// twoLoginsEndOutOfOrder races Alice's write and Bob's at k, on Carol's
-// context when seeded and on no record otherwise, so that Bob's swaps on
-// Alice's and ends first. It returns the sealing layer, the store under
-// it, and Alice's sealed record.
-func twoLoginsEndOutOfOrder(t *testing.T, seeded bool) (store.Store, store.Store, store.ContextKey, store.Context) {
+// twoLoginsEndOutOfOrder races Alice's write and Bob's at k, on no
+// record, so that Bob's swaps on Alice's and ends first. It returns the
+// sealing layer, the store under it, and Alice's sealed record.
+func twoLoginsEndOutOfOrder(t *testing.T) (store.Store, store.Store, store.ContextKey, store.Context) {
 	t.Helper()
 	ctx := context.Background()
 	now := time.Unix(1_000_000, 0).UTC()
@@ -1398,22 +1594,10 @@ func twoLoginsEndOutOfOrder(t *testing.T, seeded bool) (store.Store, store.Store
 	l := NewLedger()
 	s := Wrap(h, keys(), nil, WithLedger(l))
 	k := store.ContextKey{NAS: "leaf-01", Username: "netops"}
-	l.Seal()
-	var rev uint64
-	if seeded {
-		if err := s.PutContext(ctx, k, store.Context{CtxID: "carol-1", Principal: "user:carol@example.com",
-			Username: "netops"}, time.Hour); err != nil {
-			t.Fatal(err)
-		}
-		carol, err := s.GetContext(ctx, k)
-		if err != nil {
-			t.Fatal(err)
-		}
-		rev = carol.Rev
-	}
+	l.SetBase(inner.Seen() + 1)
 	done := make(chan error)
 	go func() {
-		done <- s.SwapContext(ctx, k, rev, store.Context{CtxID: "alice-1", Principal: "user:alice@example.com",
+		done <- s.SwapContext(ctx, k, 0, store.Context{CtxID: "alice-1", Principal: "user:alice@example.com",
 			Username: "netops", PrivLvl: 15}, time.Hour)
 	}()
 	<-h.landed
@@ -1436,281 +1620,6 @@ func twoLoginsEndOutOfOrder(t *testing.T, seeded bool) (store.Store, store.Store
 	return s, inner, k, aliceSealed
 }
 
-// A write W begun after the last write L began, but before L ended, that
-// lands at a lower revision committed before L, not after a restore: only
-// a write sent after the last ended can be read as the store's revisions
-// going back. L is admitted and W is not (final review m-1).
-func TestAWriteBegunBeforeTheLastEndedIsNotARestore(t *testing.T) {
-	k := store.ContextKey{NAS: "leaf-01", Username: "netops"}
-	l := NewLedger()
-	l.admits(k, "a")
-	last := l.begin(k, "L", 5)
-	w := l.begin(k, "W", 0)
-	l.end(last, 10, nil)
-	l.end(w, 9, nil)
-	if !l.admits(k, "L") || l.admits(k, "W") {
-		t.Fatal("a write begun before the last ended, landing below it, was taken for a restore")
-	}
-}
-
-// Each landed write is placed by the revision it committed at, whatever
-// order the writes end in. A write that compared on a revision below the
-// last's committed before it, if it landed: ending with an unknown outcome
-// it is not admitted. A landed write whose revision is unknown leaves the
-// key admitting neither it nor the last (Ledger; Task 6b).
-func TestTheLedgerPlacesAWriteThatEndsLate(t *testing.T) {
-	k := store.ContextKey{NAS: "leaf-01", Username: "netops"}
-
-	// b compared on 5 and committed at 6, the record was deleted, and c
-	// landed on no record at 8; b ends last.
-	l := NewLedger()
-	l.admits(k, "a")
-	b := l.begin(k, "b", 5)
-	l.end(l.begin(k, "c", 0), 8, nil)
-	l.end(b, 6, nil)
-	if l.admits(k, "b") || !l.admits(k, "c") {
-		t.Fatal("a write committed before the last replaced it")
-	}
-
-	// The same, b ending with an unknown outcome: it compared below the
-	// last's revision, so the store does not hold it, and a read of it
-	// back is not admitted (fix 2 review M1).
-	l = NewLedger()
-	l.admits(k, "a")
-	b = l.begin(k, "b", 5)
-	l.end(l.begin(k, "c", 0), 8, nil)
-	l.end(b, 0, store.ErrUnavailable)
-	if l.admits(k, "b") || !l.admits(k, "c") {
-		t.Fatal("a write compared below the last, its outcome unknown, was admitted")
-	}
-
-	// b compared on no record and committed at 4, c swapped on it at 6;
-	// b ends last. This is the empty-key race (fix 2 review I2).
-	l = NewLedger()
-	l.admits(k, "a")
-	b = l.begin(k, "b", 0)
-	l.end(l.begin(k, "c", 4), 6, nil)
-	l.end(b, 4, nil)
-	if l.admits(k, "b") || !l.admits(k, "c") {
-		t.Fatal("a write on no record, committed first and ending last, replaced the last")
-	}
-
-	// b compared on no record and committed at 9, after c at 6: it is the
-	// last, whichever ends first.
-	l = NewLedger()
-	l.admits(k, "a")
-	b = l.begin(k, "b", 0)
-	l.end(l.begin(k, "c", 4), 6, nil)
-	l.end(b, 9, nil)
-	if l.admits(k, "c") || !l.admits(k, "b") {
-		t.Fatal("a write committed after the last did not replace it")
-	}
-
-	// b landed, and the store did not say at what revision: it or c is
-	// the store's, and neither is admitted until a write lands at a known
-	// one.
-	l = NewLedger()
-	l.admits(k, "a")
-	l.end(l.begin(k, "c", 0), 6, nil)
-	l.end(l.begin(k, "b", 6), 0, nil)
-	if l.admits(k, "b") || l.admits(k, "c") {
-		t.Fatal("a write landed at an unknown revision, and a record was admitted")
-	}
-	l.end(l.begin(k, "d", 0), 7, nil)
-	if !l.admits(k, "d") {
-		t.Fatal("a write landed at a known revision after one at an unknown")
-	}
-}
-
-// A read sets the last at no revision, so any write that lands after
-// replaces it: a write that compared on 3 and ends after another landed
-// and a record whose outcome was unknown was read back is the last, and
-// the read one is denied (fix 2 re-review N1).
-func TestAReadSetsTheLastAtNoRevision(t *testing.T) {
-	k := store.ContextKey{NAS: "leaf-01", Username: "netops"}
-	l := NewLedger()
-	l.admits(k, "a")
-	w := l.begin(k, "w", 3)
-	l.end(l.begin(k, "x", 0), 10, nil)
-	l.end(l.begin(k, "d", 0), 0, store.ErrUnavailable)
-	if !l.admits(k, "d") {
-		t.Fatal("a write whose outcome was unknown, read back")
-	}
-	l.end(w, 4, nil)
-	if l.admits(k, "d") || !l.admits(k, "w") {
-		t.Fatal("a write that landed after a read did not replace the record read")
-	}
-}
-
-// A record whose write's outcome was unknown, put back and read while
-// another write has landed and not yet ended, is admitted for that read,
-// and denied once the other write ends: that write is the last, as it was
-// before the ledger placed writes (fix 2 review I1).
-func TestAReplayReadBeforeALandedWriteEndsIsDeniedAfter(t *testing.T) {
-	k := store.ContextKey{NAS: "leaf-01", Username: "netops"}
-	l := NewLedger()
-	l.admits(k, "a")
-	l.end(l.begin(k, "d", 0), 0, store.ErrUnavailable)
-	w := l.begin(k, "w", 3) // lands at 8; d is put back at 9 before w ends
-	if !l.admits(k, "d") {
-		t.Fatal("a write whose outcome was unknown, read back")
-	}
-	l.end(w, 8, nil)
-	if l.admits(k, "d") || !l.admits(k, "w") {
-		t.Fatal("a replay read before a landed write ended outlived its end")
-	}
-}
-
-// A write sent after the last ended committed after it, so one that
-// reports a lower revision is the store's revisions going back, as an etcd
-// restore from a snapshot does: it is the last (Task 6b review C1).
-func TestTheLedgerPlacesAWriteAfterTheStoresRevisionsWentBack(t *testing.T) {
-	k := store.ContextKey{NAS: "leaf-01", Username: "netops"}
-	l := NewLedger()
-	l.admits(k, "a")
-	l.end(l.begin(k, "x", 0), 1000, nil)
-	l.end(l.begin(k, "w", 4), 5, nil)
-	if l.admits(k, "x") || !l.admits(k, "w") {
-		t.Fatal("a write sent after the last ended, at a lower revision, did not replace it")
-	}
-}
-
-// The runbook's restore, `etcdutl snapshot restore --bump-revision
-// --mark-compacted` (design §12, Backups), goes the other way: the store's
-// revision jumps past every one it gave, but a restored record keeps the
-// revision it was written at, below the last's. A login after it compares
-// on that revision and commits above the last's, so the store holds it: it
-// is the last, and the last before the restore, written back, is denied
-// (Task 15, measured on EOS: tests/lab/results/L35-restore-arista_eos.md).
-func TestTheLedgerPlacesAWriteAfterTheStoresRevisionsWereBumped(t *testing.T) {
-	k := store.ContextKey{NAS: "leaf-01", Username: "netops"}
-	l := NewLedger()
-	l.admits(k, "a")
-	l.end(l.begin(k, "x", 300), 331, nil) // written since the snapshot, which holds a at 300
-	l.end(l.begin(k, "w", 300), 1_000_000_321, nil)
-	if l.admits(k, "x") || !l.admits(k, "w") {
-		t.Fatal("a write that compared on a restored revision and committed above the last did not replace it")
-	}
-}
-
-// A write's end can come late. w compared on 300 and committed at 340,
-// after a restore whose revisions climbed again; before its end, a second
-// restore took the revisions back, and v, sent after it, committed at 305
-// and was placed. The store holds v. w was sent before v ended, so its
-// higher revision is from before the second restore, and it is not placed
-// (Task 15 cryptfix review M1).
-func TestTheLedgerDoesNotPlaceAWriteThatEndedAfterALaterOne(t *testing.T) {
-	k := store.ContextKey{NAS: "leaf-01", Username: "netops"}
-	l := NewLedger()
-	l.admits(k, "a")
-	l.end(l.begin(k, "x", 0), 331, nil)
-	w := l.begin(k, "w", 300)
-	l.end(l.begin(k, "v", 300), 305, nil)
-	l.end(w, 340, nil)
-	if l.admits(k, "w") || !l.admits(k, "v") {
-		t.Fatal("a write that ended after a later write was placed over it")
-	}
-}
-
-// offsetStore reports every context revision off above the store's, and
-// takes them back on a compare: setting off to zero is an etcd restore,
-// whose revisions go back.
-type offsetStore struct {
-	*memory.Store
-	off uint64
-}
-
-func (o *offsetStore) in(rev uint64) uint64 {
-	if rev == 0 {
-		return 0
-	}
-	return rev - o.off
-}
-
-func (o *offsetStore) out(rev uint64, err error) (uint64, error) {
-	if err != nil {
-		return 0, err
-	}
-	return rev + o.off, nil
-}
-
-func (o *offsetStore) GetContext(ctx context.Context, k store.ContextKey) (store.Context, error) {
-	c, err := o.Store.GetContext(ctx, k)
-	if err == nil {
-		c.Rev += o.off
-	}
-	return c, err
-}
-
-func (o *offsetStore) PutContextRev(ctx context.Context, k store.ContextKey, c store.Context, ttl time.Duration) (uint64, error) {
-	return o.out(o.Store.PutContextRev(ctx, k, c, ttl))
-}
-
-func (o *offsetStore) SwapContextRev(ctx context.Context, k store.ContextKey, rev uint64, c store.Context,
-	ttl time.Duration) (uint64, error) {
-	return o.out(o.Store.SwapContextRev(ctx, k, o.in(rev), c, ttl))
-}
-
-// A port49d running across an etcd restore: Bob's login, made after the
-// snapshot, is the ledger's last at a revision the restored store will not
-// reach for a while. Carol's login after the restore is admitted, and
-// Bob's record, saved and written back over hers, is denied (Task 6b
-// review C1).
-func TestALoginAfterARestoreIsTheLast(t *testing.T) {
-	ctx := context.Background()
-	now := time.Unix(1_000_000, 0).UTC()
-	inner := &offsetStore{Store: memory.New(func() time.Time { return now }), off: 1000}
-	l := NewLedger()
-	s := Wrap(inner, keys(), nil, WithLedger(l))
-	k := store.ContextKey{NAS: "leaf-01", Username: "netops"}
-	l.Seal()
-	login := func(id string, priv uint8) store.Context {
-		return store.Context{CtxID: id, Principal: "user:" + id + "@example.com", Username: "netops", PrivLvl: priv}
-	}
-	if err := s.PutContext(ctx, k, login("alice-1", 1), time.Hour); err != nil {
-		t.Fatal(err)
-	}
-	snapshot, err := inner.Store.GetContext(ctx, k)
-	if err != nil {
-		t.Fatal(err)
-	}
-	alice, err := s.GetContext(ctx, k)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := s.SwapContext(ctx, k, alice.Rev, login("bob-1", 15), time.Hour); err != nil {
-		t.Fatal(err)
-	}
-	bobSealed, err := inner.Store.GetContext(ctx, k)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	inner.off = 0 // the restore
-	if err := inner.Store.PutContext(ctx, k, snapshot, time.Hour); err != nil {
-		t.Fatal(err)
-	}
-	// Every revision is below the last's after a restore, so the read
-	// looks stale: the layer reads again, and still denies it (Ruling
-	// T13b-a; Task 13b review I-1).
-	var u *store.UnreadableContextError
-	if _, err := s.GetContext(ctx, k); !errors.As(err, &u) || !errors.Is(err, ErrNotLastWritten) {
-		t.Fatalf("Alice's record, restored: %v", err)
-	}
-	if err := s.SwapContext(ctx, k, u.Rev, login("carol-1", 1), time.Hour); err != nil {
-		t.Fatal(err)
-	}
-	if got, err := s.GetContext(ctx, k); err != nil || got.CtxID != "carol-1" {
-		t.Errorf("Carol's login after the restore: %q %v", got.CtxID, err)
-	}
-	if err := inner.Store.PutContext(ctx, k, bobSealed, time.Hour); err != nil { // Bob's, written back
-		t.Fatal(err)
-	}
-	if got, err := s.GetContext(ctx, k); !errors.Is(err, ErrNotLastWritten) {
-		t.Errorf("Bob's record written back over Carol's: %q %v", got.CtxID, err)
-	}
-}
-
 // A record that will not open is told to OnUnopenable with its kind and
 // the key id its header names, beside the counter; a token among
 // candidates is dropped as before (plan 7d; the plan 2 alarm).
@@ -1725,7 +1634,7 @@ func TestAnUnopenableRecordNamesItsKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	var told [][2]string
-	s := Wrap(inner, cur, nil, OnUnopenable(func(record, keyID string) { told = append(told, [2]string{record, keyID}) }))
+	s := Wrap(inner, cur, nil, OnUnopenable(func(record, keyID string, _ error) { told = append(told, [2]string{record, keyID}) }))
 	if got, err := s.Candidates(context.Background(), k); err != nil || len(got) != 0 {
 		t.Fatalf("%v %v", got, err)
 	}
@@ -1740,5 +1649,250 @@ func TestAnUnopenableRecordNamesItsKey(t *testing.T) {
 	// (pre-flight M44).
 	if got := SealedKeyID(append([]byte{5}, "a\nb;c"...)); got != "?" {
 		t.Fatalf("a header outside the key-id charset named %q", got)
+	}
+}
+
+// A revocation at a key this process has no mark for, whose seal failed,
+// is not lifted by the record from before it put back with its plaintext
+// zeroed: SetRevokedAt hands the ledger the revision it had seen once the
+// mark landed, and the floor holds through every sequence below it. A
+// login after it, on another process, is admitted and not read as revoked
+// (Task 7 review I-2; the brief's pending floor, deviation 5).
+func TestAFloorAtAKeyWithNoMarkHoldsAgainstAPutBack(t *testing.T) {
+	ctx := context.Background()
+	now := time.Unix(1_000_000, 0).UTC()
+	inner := memory.New(func() time.Time { return now })
+	fails := &sealFailsStore{RevStore: inner}
+	la, lb := NewLedger(), NewLedger()
+	la.SetBase(inner.Seen() + 1)
+	lb.SetBase(inner.Seen() + 1)
+	b := Wrap(inner, keys(), nil, WithLedger(lb))
+	a := Wrap(fails, keys(), nil, WithLedger(la))
+	login(t, b, "ctx-1", "user:alice")
+	other := store.ContextKey{NAS: "leaf-09", Username: "x"}
+	for range 3 { // the store's revision moves past the record's sequence
+		if err := b.PutContext(ctx, other, store.Context{CtxID: "o", Principal: "user:o", Username: "x"},
+			time.Hour); err != nil {
+			t.Fatal(err)
+		}
+	}
+	saved, err := inner.GetContext(ctx, ka)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.SetRevokedAt(ctx, ka, now); !errors.Is(err, store.ErrUnavailable) {
+		t.Fatalf("a revocation whose seal failed: %v", err)
+	}
+	fails.down.Store(false)
+	if err := inner.PutContext(ctx, ka, saved, time.Hour); err != nil { // put back, plaintext zero
+		t.Fatal(err)
+	}
+	if got, err := a.GetContext(ctx, ka); err != nil || !got.RevokedAt.Equal(now) {
+		t.Fatalf("a put-back at a key with no mark lifted the revocation: %v %v", got.RevokedAt, err)
+	}
+	login(t, b, "ctx-2", "user:alice")
+	if got, err := a.GetContext(ctx, ka); err != nil || got.CtxID != "ctx-2" || !got.RevokedAt.IsZero() {
+		t.Fatalf("a later login on another process, read here: %q %v %v", got.CtxID, got.RevokedAt, err)
+	}
+}
+
+// Observe raises a key's mark and never lowers it, from a record read or
+// from the ledger record (Seed): a lower sequence leaves every record
+// below the mark denied (Task 7 review I-3).
+func TestTheMarkNeverGoesDown(t *testing.T) {
+	for name, lower := range map[string]func(l *Ledger){
+		"observe": func(l *Ledger) { l.Observe(ka, 5, 5, time.Time{}, time.Time{}) },
+		"seed":    func(l *Ledger) { l.Seed(store.LedgerMark{Key: ka, Seq: 5}) },
+	} {
+		l := NewLedger()
+		l.Observe(ka, 10, 10, time.Time{}, time.Time{})
+		lower(l)
+		if l.admits(ka, 9) || !l.admits(ka, 10) || l.next(ka) != 11 {
+			t.Fatalf("%s: a lower sequence moved the mark: admits(9)=%v next=%d", name, l.admits(ka, 9), l.next(ka))
+		}
+	}
+}
+
+// The base only rises, and a write at a key with no mark seals at it, so
+// another process whose base is the same admits it (Task 7 review M-6).
+func TestTheBaseOnlyRisesAndSealsAKeyWithNoMark(t *testing.T) {
+	l := NewLedger()
+	if got := l.next(ka); got != 1 {
+		t.Fatalf("next with no base: %d", got)
+	}
+	l.SetBase(100)
+	l.SetBase(50)
+	if l.Base() != 100 || l.next(ka) != 100 {
+		t.Fatalf("base %d, next %d: want 100, 100", l.Base(), l.next(ka))
+	}
+}
+
+// The keep is never below DefaultLedgerKeep, and a longer one is kept;
+// a mark that saw a context with no ceiling, even after one with a
+// ceiling at the same sequence, is never pruned (Task 7 review M-6).
+func TestTheKeepAndANeverMark(t *testing.T) {
+	now := time.Unix(2_000_000, 0)
+	l := NewLedger()
+	l.SetKeep(time.Hour)
+	l.Observe(ka, 10, 10, time.Time{}, now)
+	if n := l.Prune(now.Add(2 * time.Hour)); n != 0 {
+		t.Fatalf("a keep below %v pruned at 2h: %d", DefaultLedgerKeep, n)
+	}
+	l.SetKeep(48 * time.Hour)
+	if n := l.Prune(now.Add(25 * time.Hour)); n != 0 {
+		t.Fatalf("a 48h keep pruned at 25h: %d", n)
+	}
+	if n := l.Prune(now.Add(49 * time.Hour)); n != 1 {
+		t.Fatalf("a 48h keep did not prune at 49h: %d", n)
+	}
+	never := store.ContextKey{NAS: "leaf-02", Username: "svc"}
+	l.Observe(never, 10, 10, time.Time{}, now)
+	l.Observe(never, 10, 11, time.Time{}, time.Time{}) // the same write, its ceiling never
+	if n := l.Prune(now.Add(1000 * time.Hour)); n != 0 || l.Len() != 1 {
+		t.Fatalf("a mark that saw a never context was pruned: %d, %d left", n, l.Len())
+	}
+	if ms := l.Dirty(); len(ms) != 1 || !ms[0].Until.IsZero() {
+		t.Fatalf("a never mark's record is kept for good: %+v", ms)
+	}
+}
+
+// A read at the mark's sequence at a later revision (a touch moved it)
+// raises the revision kept beside the mark, so a read below that is
+// stale (Task 7 review M-6).
+func TestAnEqualSequenceRaisesTheMarksRevision(t *testing.T) {
+	l := NewLedger()
+	l.Observe(ka, 10, 5, time.Time{}, time.Time{})
+	l.Observe(ka, 10, 8, time.Time{}, time.Time{})
+	if !l.stale(ka, 7) || l.stale(ka, 8) {
+		t.Fatalf("stale(7)=%v stale(8)=%v: want true, false", l.stale(ka, 7), l.stale(ka, 8))
+	}
+}
+
+// Dirty hands out each raised mark once, with its ceiling plus the keep;
+// Redirty owes them again; Seed takes a record's Until back to the
+// ceiling and owes nothing, so a mark seeded and handed out again carries
+// the same Until (Task 10's keeper; Task 7 review M-6).
+func TestDirtyRedirtyAndSeedRoundTrip(t *testing.T) {
+	ceiling := time.Unix(2_000_000, 0).UTC()
+	l := NewLedger()
+	l.Observe(ka, 10, 10, time.Time{}, ceiling)
+	ms := l.Dirty()
+	want := store.LedgerMark{Key: ka, Seq: 10, Until: ceiling.Add(DefaultLedgerKeep)}
+	if len(ms) != 1 || ms[0] != want {
+		t.Fatalf("Dirty: %+v, want %+v", ms, want)
+	}
+	if again := l.Dirty(); len(again) != 0 || l.Pending() != 0 {
+		t.Fatalf("Dirty did not clear: %+v, %d pending", again, l.Pending())
+	}
+	l.Redirty(ms)
+	if l.Pending() != 1 {
+		t.Fatalf("Redirty owes nothing: %d pending", l.Pending())
+	}
+	if again := l.Dirty(); len(again) != 1 || again[0] != want {
+		t.Fatalf("Dirty after Redirty: %+v", again)
+	}
+	// Seed holds what the record holds, and so owes it nothing (Task 10
+	// review I-2); a later raise hands it out with the same Until.
+	seeded := NewLedger()
+	seeded.Seed(want)
+	if got := seeded.Dirty(); len(got) != 0 {
+		t.Fatalf("Seed owed the record what it holds: %+v", got)
+	}
+	seeded.Redirty([]store.LedgerMark{want})
+	if got := seeded.Dirty(); len(got) != 1 || got[0] != want {
+		t.Fatalf("Seed then Dirty: %+v, want %+v", got, want)
+	}
+}
+
+// Another process's revocation whose seal failed reaches this one through
+// the plaintext revoked_at it reads at the mark: the record put back with
+// it zeroed is still revoked here (Task 7 review M-6; M-2 before Task 8's
+// feed).
+func TestAPlaintextRevocationReadAtTheMarkIsTheFloor(t *testing.T) {
+	ctx := context.Background()
+	now := time.Unix(1_000_000, 0).UTC()
+	inner := memory.New(func() time.Time { return now })
+	fails := &sealFailsStore{RevStore: inner}
+	la, lb := NewLedger(), NewLedger()
+	la.SetBase(inner.Seen() + 1)
+	lb.SetBase(inner.Seen() + 1)
+	a := Wrap(fails, keys(), nil, WithLedger(la))
+	b := Wrap(inner, keys(), nil, WithLedger(lb))
+	login(t, a, "ctx-1", "user:alice")
+	saved, _ := inner.GetContext(ctx, ka)
+	if _, err := b.GetContext(ctx, ka); err != nil {
+		t.Fatal(err)
+	}
+	a.SetRevokedAt(ctx, ka, now) // the plaintext lands; the seal does not
+	fails.down.Store(false)
+	if got, err := b.GetContext(ctx, ka); err != nil || !got.RevokedAt.Equal(now) {
+		t.Fatalf("the plaintext revocation, read: %v %v", got.RevokedAt, err)
+	}
+	if err := inner.PutContext(ctx, ka, saved, time.Hour); err != nil { // plaintext zero
+		t.Fatal(err)
+	}
+	if got, err := b.GetContext(ctx, ka); err != nil || !got.RevokedAt.Equal(now) {
+		t.Fatalf("the record put back lifted the revocation on b: %v %v", got.RevokedAt, err)
+	}
+}
+
+// A record that does not open, or that the ledger denies, carries the
+// key's floor in its UnreadableContextError, so the login that replaces
+// it cannot lift a revocation whose seal failed (Task 7 review M-6).
+func TestAnUnreadableRecordCarriesTheFloor(t *testing.T) {
+	ctx := context.Background()
+	now := time.Unix(1_000_000, 0).UTC()
+	body, _ := json.Marshal(map[string]any{"v": 3, "ctx_id": "c-old", "principal": "user:alice", "username": "netops"})
+	form3, _ := keys().SealBound(body, contextAAD(ka))
+	for name, putBack := range map[string]func(saved store.Context) store.Context{
+		"does not open":  func(store.Context) store.Context { return store.Context{Sealed: form3} },
+		"below the mark": func(saved store.Context) store.Context { return saved },
+	} {
+		inner := memory.New(func() time.Time { return now })
+		fails := &sealFailsStore{RevStore: inner}
+		l := NewLedger()
+		l.SetBase(inner.Seen() + 1)
+		s := Wrap(fails, keys(), nil, WithLedger(l))
+		login(t, s, "ctx-1", "user:alice")
+		saved, _ := inner.GetContext(ctx, ka)
+		login(t, s, "ctx-2", "user:bob")
+		s.SetRevokedAt(ctx, ka, now)
+		fails.down.Store(false)
+		if err := inner.PutContext(ctx, ka, putBack(saved), time.Hour); err != nil {
+			t.Fatal(err)
+		}
+		var u *store.UnreadableContextError
+		if _, err := s.GetContext(ctx, ka); !errors.As(err, &u) || !u.RevokedAt.Equal(now) {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+}
+
+// countingStore counts GetContext calls.
+type countingStore struct {
+	store.RevStore
+	reads atomic.Int32
+}
+
+func (c *countingStore) GetContext(ctx context.Context, k store.ContextKey) (store.Context, error) {
+	c.reads.Add(1)
+	return c.RevStore.GetContext(ctx, k)
+}
+
+// A record put back commits after the mark, so it is not stale: it is
+// denied on its first read, not read again (Task 7 review M-6).
+func TestAPutBackIsNotReadAgain(t *testing.T) {
+	ctx := context.Background()
+	inner := &countingStore{RevStore: memory.New(time.Now)}
+	l := NewLedger()
+	l.SetBase(inner.Seen() + 1)
+	s := Wrap(inner, keys(), nil, WithLedger(l))
+	login(t, s, "ctx-1", "user:alice")
+	saved, _ := inner.RevStore.GetContext(ctx, ka)
+	login(t, s, "ctx-2", "user:bob")
+	inner.RevStore.PutContext(ctx, ka, saved, time.Hour)
+	inner.reads.Store(0)
+	if _, err := s.GetContext(ctx, ka); !errors.Is(err, ErrNotLastWritten) || inner.reads.Load() != 1 {
+		t.Fatalf("a put-back: %v after %d reads", err, inner.reads.Load())
 	}
 }

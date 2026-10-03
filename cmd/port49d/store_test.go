@@ -15,6 +15,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	clientv3 "go.etcd.io/etcd/client/v3"
 
 	"github.com/rhwendt/port49/internal/broker"
 	"github.com/rhwendt/port49/internal/config"
@@ -384,19 +385,19 @@ func TestUnopenableSayerSaysOncePerKeyPerTenMinutes(t *testing.T) {
 	now := time.Unix(1000, 0)
 	var out bytes.Buffer
 	say := unopenableSayer(crypt.Keys{Current: crypt.Key{ID: "enc3"}}, &out, func() time.Time { return now })
-	say("token", "enc2")
-	say("token", "enc2")
+	say("token", "enc2", nil)
+	say("token", "enc2", nil)
 	if strings.Count(out.String(), "\n") != 1 || !strings.Contains(out.String(),
 		`a token is sealed under key id "enc2", which this port49d does not hold (current "enc3", no previous)`) {
 		t.Fatalf("said %q", out.String())
 	}
-	say("context", "enc2")
+	say("context", "enc2", nil)
 	now = now.Add(11 * time.Minute)
-	say("token", "enc2")
+	say("token", "enc2", nil)
 	if strings.Count(out.String(), "\n") != 3 {
 		t.Fatalf("said %q", out.String())
 	}
-	say("token", "enc3")
+	say("token", "enc3", nil)
 	if !strings.Contains(out.String(), `failed authentication under key id "enc3"`) {
 		t.Fatalf("a record under a held key that will not open: %q", out.String())
 	}
@@ -408,16 +409,80 @@ func TestUnopenableSayerSaysOncePerKeyPerTenMinutes(t *testing.T) {
 func TestUnopenableSayerCallsANamelessRecordCorrupt(t *testing.T) {
 	var out bytes.Buffer
 	say := unopenableSayer(crypt.Keys{Current: crypt.Key{ID: "enc3"}}, &out, time.Now)
-	say("token", "")
+	say("token", "", nil)
 	if !strings.Contains(out.String(), "it was altered or is corrupt") ||
 		strings.Contains(out.String(), "encryption.previous") {
 		t.Fatalf("a nameless record: %q", out.String())
 	}
 	out.Reset()
-	say("token", "enc2")
+	say("token", "enc2", nil)
 	if !strings.Contains(out.String(), `set encryption.previous to "enc2"`) ||
 		strings.Contains(out.String(), "altered") {
 		t.Fatalf("a record under a retired key: %q", out.String())
+	}
+}
+
+// An earlier form is the upgrade, said as the upgrade: never "altered or is
+// corrupt", which at 3am reads as an attack across the fleet.
+func TestTheSayerNamesAnEarlierFormAsTheUpgrade(t *testing.T) {
+	var out bytes.Buffer
+	keys := crypt.Keys{Current: crypt.Key{ID: "v2"}}
+	say := unopenableSayer(keys, &out, time.Now)
+	say("context", "v2", fmt.Errorf("crypt: opening context: %w", crypt.ErrEarlierForm))
+	got := out.String()
+	if !strings.Contains(got, "a context sealed by an earlier port49 (form 3) does not open: expected once "+
+		"after the 7e upgrade; replaced at its user's next login") || strings.Contains(got, "altered") {
+		t.Fatalf("%q", got)
+	}
+}
+
+// An earlier-form line does not silence a put-back or a tamper line under
+// the same key id, nor the reverse: a store writer can put a form-3 record
+// back at any key every 10 minutes, and the line that names tampering must
+// still be said (Task 7 review I-1).
+func TestAnEarlierFormLineDoesNotSilenceAPutBackLine(t *testing.T) {
+	var out bytes.Buffer
+	keys := crypt.Keys{Current: crypt.Key{ID: "v2"}}
+	say := unopenableSayer(keys, &out, time.Now)
+	say("context", "v2", fmt.Errorf("crypt: opening context: %w", crypt.ErrEarlierForm))
+	say("context", "v2", crypt.ErrNotLastWritten)
+	say("context", "v2", nil)
+	say("context", "v2", fmt.Errorf("crypt: opening context: %w", crypt.ErrEarlierForm))
+	got := out.String()
+	if strings.Count(got, "\n") != 3 || !strings.Contains(got, "earlier port49") || !strings.Contains(got, "put back") ||
+		!strings.Contains(got, "altered") {
+		t.Fatalf("%q", got)
+	}
+}
+
+// Under a key this port49d does not hold, the line is the rotation advice
+// whatever the open said: the earlier-form and put-back lines are only for
+// a held key, whose record did open (Task 7 review M-6).
+func TestTheSayerGivesTheRotationAdviceUnderAnUnheldKey(t *testing.T) {
+	for _, why := range []error{fmt.Errorf("crypt: opening context: %w", crypt.ErrEarlierForm),
+		crypt.ErrNotLastWritten} {
+		var out bytes.Buffer
+		say := unopenableSayer(crypt.Keys{Current: crypt.Key{ID: "v2"}}, &out, time.Now)
+		say("context", "v1", why)
+		got := out.String()
+		if !strings.Contains(got, `set encryption.previous to "v1"`) || strings.Contains(got, "earlier port49") ||
+			strings.Contains(got, "put back") {
+			t.Fatalf("%v: %q", why, got)
+		}
+	}
+}
+
+// A record below the newest write is named as that, not as "the one this
+// port49d last wrote", which is no longer the rule (plan 7e, Ruling 3).
+func TestTheSayerNamesAPutBackAsBelowTheNewestWrite(t *testing.T) {
+	var out bytes.Buffer
+	keys := crypt.Keys{Current: crypt.Key{ID: "v2"}}
+	say := unopenableSayer(keys, &out, time.Now)
+	say("context", "v2", crypt.ErrNotLastWritten)
+	got := out.String()
+	if !strings.Contains(got, "is sealed below the newest write any port49 process made there") ||
+		strings.Contains(got, "last wrote") {
+		t.Fatalf("%q", got)
 	}
 }
 
@@ -443,6 +508,11 @@ func TestOpenStoresSharesOneSayer(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer sts.close()
+	// The feed follows as runOnce's does: a fenced read waits for it.
+	fctx, stopFollow := context.WithCancel(ctx)
+	followDone := make(chan struct{})
+	go func() { defer close(followDone); sts.follow(fctx) }()
+	defer func() { stopFollow(); <-followDone }()
 	k := store.ContextKey{NAS: "leaf1", Username: "alice"}
 	retired := crypt.Keys{Current: crypt.Key{ID: "retired", Bytes: [32]byte{7}}}
 	if err := crypt.Wrap(sts.etcd, retired, nil).PutContext(ctx, k, store.Context{CtxID: "c", Principal: "user:alice",
@@ -456,6 +526,84 @@ func TestOpenStoresSharesOneSayer(t *testing.T) {
 	}
 	if n := strings.Count(out.String(), `sealed under key id "retired"`); n != 1 {
 		t.Fatalf("said %d times: %q", n, out.String())
+	}
+}
+
+// A daemon role without the read on lw/ (roles applied before plan 7e)
+// ends the start as a store fault naming store-roles: waiting does not
+// mend a refusal (pre-flight M17).
+func TestARefusedLedgerRecordReadNamesStoreRoles(t *testing.T) {
+	cfgPath, _, _, _, srv := etcdRunServer(t)
+	lw := "/port49/v1/lw/"
+	if _, err := srv.Client(t, "root").RoleRevokePermission(context.Background(), etcdstore.RoleDaemon, lw,
+		clientv3.GetPrefixRangeEnd(lw)); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys, err := cfg.EncryptionKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out syncBuffer
+	_, err = openStores(context.Background(), cfg, keys, metrics.New(prometheus.NewRegistry()), &out, newReadiness(),
+		false, func(error) {}, crypt.NewLedger(), newKeyAlarm(), new(string))
+	var fault *storeFault
+	if !errors.As(err, &fault) || !strings.Contains(err.Error(), "apply port49d store-roles (plan 7e)") {
+		t.Fatalf("a refused read of the ledger record: %v", err)
+	}
+}
+
+// openStores fences each layer under its guard (pre-flight C1; review 8a
+// I-1): with the feed not running, a context written after the start's
+// scan is read on neither layer, each a context-pool timeout at
+// call_timeout, though the store answers it, and each counted in
+// port49_store_fence_timeouts_total, which tells it from an etcd failure
+// (final review 7e-1 M-4).
+func TestOpenStoresFencesEachLayerUnderItsGuard(t *testing.T) {
+	cfgPath, _, _, _, _ := etcdRunServer(t)
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys, err := cfg.EncryptionKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m := metrics.New(prometheus.NewRegistry())
+	sts, err := openStores(ctx, cfg, keys, m, io.Discard, newReadiness(), false, func(error) {}, crypt.NewLedger(),
+		newKeyAlarm(), new(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sts.close()
+	// Another process's login: sealed past this one's base, so only the
+	// fence keeps it from being read.
+	other := crypt.NewLedger()
+	other.SetBase(sts.etcd.Seen() + 1)
+	k := store.ContextKey{NAS: "leaf1", Username: "alice"}
+	if err := crypt.Wrap(sts.etcd, keys, nil, crypt.WithLedger(other)).PutContext(ctx, k, store.Context{CtxID: "c",
+		Principal: "user:alice", Username: "alice", AuthTime: time.Now(), RefreshedAt: time.Now()},
+		time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		component string
+		st        store.Store
+	}{{"daemon", sts.daemon}, {"broker", sts.broker}} {
+		if got, err := c.st.GetContext(ctx, k); !errors.Is(err, store.ErrUnavailable) {
+			t.Fatalf("the %s read %q with the feed not running: %v", c.component, got.CtxID, err)
+		}
+		if n := testutil.ToFloat64(m.StoreCalls.WithLabelValues(c.component, "context", "timeout")); n != 1 {
+			t.Fatalf("the %s's guard counted %v context timeouts", c.component, n)
+		}
+	}
+	if n := testutil.ToFloat64(m.StoreFenceTimeouts); n != 2 {
+		t.Fatalf("port49_store_fence_timeouts_total = %v, want 2", n)
 	}
 }
 
@@ -490,6 +638,48 @@ func TestARaisedAlarmIsGaugedWhileTheStoreIsAway(t *testing.T) {
 	waitCountWithin(t, &out, "not answering", 1, 10*time.Second)
 	if v := testutil.ToFloat64(m.CryptStoreKeyUnknown); v != 1 {
 		t.Fatalf("port49_crypt_store_key_unknown = %v while the store is away", v)
+	}
+	cancel()
+	<-done
+}
+
+// Both feeds' series read 0 from when a run on etcd begins waiting for
+// the store, before either feed first runs: an alert on
+// port49_store_feed_up == 0 for hold_ttl cannot fire on an absent series
+// (final review 7e-1 M-3). The rescan counters are there at 0 too, so the
+// first rescan is an increase.
+func TestBothFeedsReadDownWhileTheStoreIsAway(t *testing.T) {
+	cfgPath, _, _, proxy, _ := etcdRunServer(t)
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys, err := cfg.EncryptionKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy.Hang(true)
+	defer proxy.Hang(false)
+	m := metrics.New(prometheus.NewRegistry())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var out syncBuffer
+	done := make(chan error, 1)
+	go func() {
+		_, err := openStores(ctx, cfg, keys, m, &out, newReadiness(), false, func(error) {}, crypt.NewLedger(),
+			newKeyAlarm(), new(string))
+		done <- err
+	}()
+	waitCountWithin(t, &out, "not answering", 1, 10*time.Second)
+	if up, rescans := testutil.CollectAndCount(m.StoreFeedUp), testutil.CollectAndCount(m.StoreFeedRescans); up != 2 ||
+		rescans != 2 {
+		t.Fatalf("while the store is away: %d port49_store_feed_up series and %d rescan series, want 2 each", up,
+			rescans)
+	}
+	for _, feed := range []string{"contexts", "marks"} {
+		if v := testutil.ToFloat64(m.StoreFeedUp.WithLabelValues(feed)); v != 0 {
+			t.Fatalf("port49_store_feed_up{feed=%q} = %v while the store is away", feed, v)
+		}
 	}
 	cancel()
 	<-done

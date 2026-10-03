@@ -75,6 +75,19 @@ type RefreshReport struct {
 	// retries it: the operator runs `port49 refresh` again (final review
 	// M-2).
 	session bool
+	// log is where the pass writes its records, nil for b.Log (passLog). A
+	// session refresh holds the policy while it judges, so it passes its
+	// buffer, written once it lets go (plan 7e, Ruling 10); a policy
+	// refresh, after a reload, holds none and writes at once.
+	log *heldLog
+}
+
+// passLog is where a pass writes its records: rep's buffer, or b.Log.
+func (b *Broker) passLog(rep *RefreshReport) decision.Emitter {
+	if rep.log != nil {
+		return rep.log
+	}
+	return b.Log
 }
 
 // Refresh carries the policy in force into everything the policies before it
@@ -416,7 +429,7 @@ func (b *Broker) supersedeTokens(ctx context.Context, cur *policy.Policy, now ti
 		if err := b.Store.DeleteTokens(ctx, k); err != nil {
 			return err
 		}
-		b.supersede(k, b.Now())
+		b.supersede(ctx, k, b.Now())
 		if len(toks) > 0 {
 			rep.TokenKeys++
 			b.Metrics.TokensSuperseded.Inc()
@@ -562,7 +575,7 @@ func (b *Broker) refreshContext(ctx context.Context, cur *policy.Policy, priors 
 		case step.outcome == "quarantined":
 			quarantined[c.CtxID] = true
 			if b.quarantineUnrecorded(c.CtxID, cur.Bundle) {
-				b.emit(step.rec)
+				b.emitTo(b.passLog(rep), step.rec)
 			}
 			b.count(rep, step.outcome)
 			return step.outcome, nil
@@ -570,13 +583,30 @@ func (b *Broker) refreshContext(ctx context.Context, cur *policy.Policy, priors 
 			b.count(rep, step.outcome)
 			return step.outcome, nil
 		}
-		// The blob is in the store, and in the log, before any context
-		// names it: the daemon's next command reads it by that name. It is
-		// kept as long as the context can live, as at mint: an idle context
-		// outliving its blob would be denied blob_unavailable for nothing
-		// (final review M-4).
+		// The blob is in the store before any context names it: the
+		// daemon's next command reads it by that name. It is kept as long
+		// as the context can live, as at mint: an idle context outliving
+		// its blob would be denied blob_unavailable for nothing (final
+		// review M-4).
 		ttl := blobTTL(max(step.age, b.ContextIdleTTL), b.MaxSessionAge)
-		if err := b.putBlob(ctx, step.write.BlobHash, step.body, ttl); err != nil {
+		// Its blob record reaches the log before this context is written,
+		// except under a session refresh, which buffers it ahead of this
+		// context's record and writes both once it lets go of the policy
+		// (plan 7e, Ruling 10). A port49d that dies between this context's
+		// write and that flush leaves a context naming a blob its log never
+		// carried. Nothing running misreads that: the daemon reads the
+		// store, and replay holds a record until its blob appears. The gap
+		// closes on the hash's next use, since the hash is marked emitted
+		// only when its record lands (blobLanded), so the next mint or
+		// refresh that writes it writes its record again.
+		if rep.log != nil {
+			err = b.putBlob(ctx, rep.log, step.write.BlobHash, step.body, ttl)
+		} else {
+			one := newHeldLog()
+			err = b.putBlob(ctx, one, step.write.BlobHash, step.body, ttl)
+			one.Flush(b.Log, b.blobLanded)
+		}
+		if err != nil {
 			return "", err
 		}
 		switch err := b.Store.SetContextPolicy(ctx, k, c.PolicyRev, *step.write); {
@@ -587,7 +617,7 @@ func (b *Broker) refreshContext(ctx context.Context, cur *policy.Policy, priors 
 		case err != nil:
 			return "", err
 		}
-		b.emit(step.rec)
+		b.emitTo(b.passLog(rep), step.rec)
 		b.count(rep, step.outcome)
 		b.unreached(step, rep)
 		return step.outcome, nil
@@ -664,8 +694,9 @@ func knownPlatform(cur *policy.Policy, priors []Prior, name string) (*policy.Pol
 // fixing the key undoes (crypt.openErr; final review I-2). It returns
 // errKeyNotHeld, and the caller says it, counts it a failure and leaves it
 // for the next pass. No login can open it meanwhile, so it is denied
-// anyway. One that fails authentication, or opens and is not the one this
-// port49d last wrote (crypt.ErrNotLastWritten), is tampered, and revoked.
+// anyway. One that fails authentication, or opens and is sealed below the
+// newest write known at its key (crypt.ErrNotLastWritten), is tampered,
+// and revoked.
 // The ledger's denial is read once more first: revoked only when the read
 // again is still denied at the same revision, since one the store now
 // answers, or holds at another, raced a write of its own and is
@@ -738,7 +769,7 @@ func (b *Broker) revoke(ctx context.Context, k store.ContextKey, rev uint64, at 
 	case gone:
 		return "skipped", nil
 	}
-	b.emit(step.rec)
+	b.emitTo(b.passLog(rep), step.rec)
 	b.count(rep, step.outcome)
 	b.unreached(step, rep)
 	return step.outcome, nil

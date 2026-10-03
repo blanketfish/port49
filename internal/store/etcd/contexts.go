@@ -62,7 +62,7 @@ func (s *Store) readCtx(ctx context.Context, k store.ContextKey, marks ...[2]str
 	for _, m := range marks {
 		ops = append(ops, clientv3.OpGet(s.k.mark(m[0], m[1])))
 	}
-	resp, err := s.ctx.Txn(ctx).Then(ops...).Commit()
+	resp, err := s.ctxKV.Txn(ctx).Then(ops...).Commit()
 	if err != nil {
 		return ctxSnap{}, unavailable(err)
 	}
@@ -132,7 +132,7 @@ func (s *Store) commitCtx(ctx context.Context, k store.ContextKey, snap ctxSnap,
 	for _, key := range added {
 		puts = append(puts, put{key: key, val: []byte("{}")}) // no lease: the index record decides (Ruling 6)
 	}
-	return commitRev(ctx, s.ctx, s.ctxLeases, cmps, puts, dels...)
+	return commitRev(ctx, s.ctxKV, s.ctxLeases, cmps, puts, dels...)
 }
 
 // seenCache is the plaintext bookkeeping of the last version GetContext
@@ -175,7 +175,9 @@ func (c *seenCache) take(key string, mod int64) (ctxRec, bool) {
 
 // GetContext reads the context alone: its revisions are its key's.
 func (s *Store) GetContext(ctx context.Context, k store.ContextKey) (store.Context, error) {
-	resp, err := s.ctx.Get(ctx, s.k.context(k))
+	// ctxKV has seen this read's revision, a key not there included: a
+	// create is sealed above it (Seen).
+	resp, err := s.ctxKV.Get(ctx, s.k.context(k))
 	if err != nil {
 		return store.Context{}, unavailable(err)
 	}
@@ -202,8 +204,8 @@ func whole(c store.Context, now time.Time, ttl time.Duration) ctxRec {
 	return r
 }
 
-// The context writes return the revision each committed at, so the
-// sealing layer can order its own writes by the store's (crypt.Ledger).
+// The context writes return the revision each committed at, which the
+// sealing layer keeps beside the key's mark (crypt.Ledger).
 var _ store.RevStore = (*Store)(nil)
 
 // PutContext writes c unconditionally, extending the ref's index entries
@@ -342,7 +344,7 @@ func (s *Store) RewriteContextRev(ctx context.Context, k store.ContextKey, rev u
 			return 0, err
 		}
 		ck := s.k.context(k)
-		ok, mod, err := commitRev(ctx, s.ctx, s.ctxLeases, []clientv3.Cmp{unchanged(ck, int64(rev))},
+		ok, mod, err := commitRev(ctx, s.ctxKV, s.ctxLeases, []clientv3.Cmp{unchanged(ck, int64(rev))},
 			[]put{{key: ck, val: body, exp: r.ExpiresAt}})
 		switch {
 		case err != nil:
@@ -566,7 +568,7 @@ func (s *Store) SetContextPolicy(ctx context.Context, k store.ContextKey, policy
 
 // DeleteContext deletes the context alone, as the memory store's does.
 func (s *Store) DeleteContext(ctx context.Context, k store.ContextKey) error {
-	_, err := s.ctx.Delete(ctx, s.k.context(k))
+	_, err := s.ctxKV.Delete(ctx, s.k.context(k))
 	return unavailable(err)
 }
 
@@ -576,7 +578,7 @@ func (s *Store) DeleteContext(ctx context.Context, k store.ContextKey) error {
 func (s *Store) DeleteContextIf(ctx context.Context, k store.ContextKey, rev uint64) error {
 	ck := s.k.context(k)
 	for {
-		resp, err := s.ctx.Get(ctx, ck)
+		resp, err := s.ctxKV.Get(ctx, ck)
 		if err != nil {
 			return unavailable(err)
 		}
@@ -591,7 +593,7 @@ func (s *Store) DeleteContextIf(ctx context.Context, k store.ContextKey, rev uin
 		if uint64(mod) != rev {
 			return store.ErrConflict
 		}
-		if done, err := commit(ctx, s.ctx, s.ctxLeases, []clientv3.Cmp{unchanged(ck, mod)}, nil, del{key: ck}); err != nil || done {
+		if done, err := commit(ctx, s.ctxKV, s.ctxLeases, []clientv3.Cmp{unchanged(ck, mod)}, nil, del{key: ck}); err != nil || done {
 			return err
 		}
 	}
@@ -618,7 +620,7 @@ func (s *Store) PutBlob(ctx context.Context, hash string, body []byte, ttl time.
 // GetBlob is the blob's body until its expiry.
 func (s *Store) GetBlob(ctx context.Context, hash string) ([]byte, error) {
 	var b blobRec
-	_, ok, err := getJSON(ctx, s.ctx, s.k.blob(hash), &b)
+	_, ok, err := getJSON(ctx, s.ctxKV, s.k.blob(hash), &b)
 	if err != nil {
 		return nil, err
 	}
@@ -630,7 +632,7 @@ func (s *Store) GetBlob(ctx context.Context, hash string) ([]byte, error) {
 
 // BumpBlob extends a live blob to at least now+ttl, never shortening it.
 func (s *Store) BumpBlob(ctx context.Context, hash string, ttl time.Duration) error {
-	return cas(ctx, s.ctx, s.ctxLeases, s.k.blob(hash), func(b blobRec) bool { return b.ExpiresAt.After(s.now()) },
+	return cas(ctx, s.ctxKV, s.ctxLeases, s.k.blob(hash), func(b blobRec) bool { return b.ExpiresAt.After(s.now()) },
 		func(b *blobRec, found bool) (bool, time.Time, bool, error) {
 			if !found {
 				return false, time.Time{}, false, store.ErrNotFound
@@ -692,7 +694,7 @@ func (s *Store) commitIndex(ctx context.Context, k store.ContextKey, snap ctxSna
 	for _, key := range added {
 		puts = append(puts, put{key: key, val: []byte("{}")})
 	}
-	return commit(ctx, s.ctx, s.ctxLeases, []clientv3.Cmp{unchanged(xk, snap.idxMod)}, puts, dels...)
+	return commit(ctx, s.ctxKV, s.ctxLeases, []clientv3.Cmp{unchanged(xk, snap.idxMod)}, puts, dels...)
 }
 
 // IndexContext lists ref under each non-empty key for ttl.
@@ -723,7 +725,7 @@ func (s *Store) UnindexContext(ctx context.Context, principal, sid, certKey stri
 // entries it leaves name a record that lists nothing, so they answer
 // nothing, and the sweep removes them (Ruling 6).
 func (s *Store) UnindexRef(ctx context.Context, ref store.ContextRef) error {
-	_, err := s.ctx.Delete(ctx, s.k.indexed(ref))
+	_, err := s.ctxKV.Delete(ctx, s.k.indexed(ref))
 	return unavailable(err)
 }
 

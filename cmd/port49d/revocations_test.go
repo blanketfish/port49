@@ -51,15 +51,14 @@ func TestRevocationsSurviveARestart(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := persister(before, path, newMetrics())(ctx); err != nil {
+	if err := persister(before, path, nil, nil, newMetrics())(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if fi, err := os.Stat(path); err != nil || fi.Mode().Perm() != 0o600 {
 		t.Fatalf("the file: %v %v", fi, err)
 	}
 	after := memory.New(time.Now)
-	m := newMetrics()
-	rs, err := restoreRevocations(ctx, after, path, m)
+	rs, err := restoreRevocations(ctx, after, path)
 	if err != nil || len(rs) != 2 {
 		t.Fatalf("%d %v", len(rs), err)
 	}
@@ -67,8 +66,123 @@ func TestRevocationsSurviveARestart(t *testing.T) {
 	if err != nil || !got.At.Equal(at) || got.Origin != "admin_socket uid 0" {
 		t.Fatalf("%+v %v", got, err)
 	}
-	if testutil.ToFloat64(m.RevocationsInForce.WithLabelValues("cert")) != 1 {
-		t.Fatal("port49_revocations_in_force{by=cert}")
+}
+
+// Between an etcd restore that lost a mark and the marks feed's reload, a
+// persist on this process keeps the mark in the file while this process
+// enforces it, so the reload's put-back still finds it; a mark this
+// process lifted, or saw lifted, is dropped (final review 7e-1 C-1). The
+// put-back puts back only the file's marks this process enforces and the
+// store lacks, and says how many.
+func TestAPersistBeforeTheReloadKeepsAMarkARestoreLost(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(safeDir(t), "revocations.json")
+	if _, err := initRevocations(path, testInitConfig); err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 10, 3, 3, 0, 0, 0, time.UTC)
+	lost := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:alice@example.com", At: at, Origin: "admin_socket uid 0"}
+	lifted := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:carol@example.com", At: at, Origin: "admin_socket uid 0"}
+	kept := store.Revocation{Kind: store.RevocationCert, Key: store.CertKey("CN=Corp CA,O=Example", "3f9a01"), At: at,
+		Origin: "admin_socket uid 0"}
+	held := []store.Revocation{kept, lost, lifted}
+	if err := saveRevocations(path, held); err != nil {
+		t.Fatal(err)
+	}
+	enforced := store.NewMarks()
+	for _, r := range held {
+		enforced.Set(r, true)
+	}
+	enforced.Set(lifted, false) // its lift, made here or brought by the feed
+	// A reload before any persist since the lift: the file still holds it.
+	empty := memory.New(time.Now)
+	if n, err := putBackFileMarks(ctx, empty, path, enforced); err != nil || n != 2 {
+		t.Fatalf("put back %d: %v", n, err)
+	}
+	if _, err := empty.GetRevocation(ctx, lifted.Kind, lifted.Key); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("a mark this process saw lifted was put back: %v", err)
+	}
+	st := memory.New(time.Now) // the restored store: it holds only kept
+	if err := st.PutRevocation(ctx, kept); err != nil {
+		t.Fatal(err)
+	}
+	if err := persister(st, path, held, enforced, newMetrics())(ctx); err != nil {
+		t.Fatal(err)
+	}
+	rs, err := readRevocations(path)
+	if err != nil || len(rs) != 2 || rs[0].Key != kept.Key || rs[1].Key != lost.Key || !rs[1].At.Equal(at) {
+		t.Fatalf("the file after a persist in the window: %+v %v", rs, err)
+	}
+
+	n, err := putBackFileMarks(ctx, st, path, enforced)
+	if err != nil || n != 1 {
+		t.Fatalf("put back %d: %v", n, err)
+	}
+	if got, err := st.GetRevocation(ctx, lost.Kind, lost.Key); err != nil || !got.At.Equal(at) {
+		t.Fatalf("the lost mark is not back in the store: %+v %v", got, err)
+	}
+	if _, err := st.GetRevocation(ctx, lifted.Kind, lifted.Key); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("a lifted mark was put back: %v", err)
+	}
+	if n, err := putBackFileMarks(ctx, st, path, enforced); err != nil || n != 0 {
+		t.Fatalf("a second put-back: %d %v", n, err)
+	}
+
+	// Lifted here: the next persist drops it, and a reload puts nothing back.
+	enforced.Set(lost, false)
+	if err := st.DeleteRevocation(ctx, lost.Kind, lost.Key); err != nil {
+		t.Fatal(err)
+	}
+	if err := persister(st, path, rs, enforced, newMetrics())(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if rs, err := readRevocations(path); err != nil || len(rs) != 1 || rs[0].Key != kept.Key {
+		t.Fatalf("the file after a lift: %+v %v", rs, err)
+	}
+	if n, err := putBackFileMarks(ctx, st, path, enforced); err != nil || n != 0 {
+		t.Fatalf("a put-back after a lift: %d %v", n, err)
+	}
+}
+
+// The file marks the persister keeps are what it last wrote, not only what
+// the start read (re-review 1 I-5): a mark revoked here after the start,
+// then lost by an etcd restore, stays in the file through the next persist
+// while this process enforces it, so the reload's put-back finds it.
+func TestAPersistKeepsAMarkMadeSinceTheStartThatARestoreLost(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(safeDir(t), "revocations.json")
+	if _, err := initRevocations(path, testInitConfig); err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 10, 3, 3, 0, 0, 0, time.UTC)
+	a := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:alice@example.com", At: at, Origin: "admin_socket uid 0"}
+	z := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:zed@example.com", At: at, Origin: "admin_socket uid 0"}
+	st := memory.New(time.Now)
+	enforced := store.NewMarks()
+	for _, r := range []store.Revocation{a, z} {
+		enforced.Set(r, true)
+	}
+	if err := st.PutRevocation(ctx, a); err != nil {
+		t.Fatal(err)
+	}
+	persist := persister(st, path, []store.Revocation{a}, enforced, newMetrics()) // the start read A
+	if err := st.PutRevocation(ctx, z); err != nil {                              // revoked here since
+		t.Fatal(err)
+	}
+	if err := persist(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.DeleteRevocation(ctx, z.Kind, z.Key); err != nil { // the restore loses it
+		t.Fatal(err)
+	}
+	if err := persist(ctx); err != nil { // another revoke or lift here, before the reload
+		t.Fatal(err)
+	}
+	if rs, err := readRevocations(path); err != nil || len(rs) != 2 || rs[1].Key != z.Key {
+		t.Fatalf("the file after a persist in the window: %+v %v", rs, err)
+	}
+	if n, err := putBackFileMarks(ctx, st, path, enforced); err != nil || n != 1 {
+		t.Fatalf("put back %d: %v", n, err)
 	}
 }
 
@@ -376,7 +490,7 @@ func TestAMarkTheStoreRefusesRefusesTheStart(t *testing.T) {
 		`"at":"2026-10-02T03:12:09Z","origin":"o"}]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := restoreRevocations(context.Background(), memory.New(time.Now), path, newMetrics()); err == nil ||
+	if _, err := restoreRevocations(context.Background(), memory.New(time.Now), path); err == nil ||
 		!strings.Contains(err.Error(), "revocation 0") {
 		t.Fatalf("a certificate mark with no issuer: %v", err)
 	}
@@ -410,13 +524,13 @@ func TestARevocationsFileOthersCouldWriteIsRefused(t *testing.T) {
 func TestAFailedWriteIsAlarmed(t *testing.T) {
 	m := newMetrics()
 	st := memory.New(time.Now)
-	if err := persister(st, filepath.Join(safeDir(t), "missing", "revocations.json"), m)(context.Background()); err == nil {
+	if err := persister(st, filepath.Join(safeDir(t), "missing", "revocations.json"), nil, nil, m)(context.Background()); err == nil {
 		t.Fatal("a write into a missing directory succeeded")
 	}
 	if testutil.ToFloat64(m.RevocationsFileFailed) != 1 {
 		t.Fatal("not alarmed")
 	}
-	if err := persister(st, filepath.Join(safeDir(t), "revocations.json"), m)(context.Background()); err != nil {
+	if err := persister(st, filepath.Join(safeDir(t), "revocations.json"), nil, nil, m)(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if testutil.ToFloat64(m.RevocationsFileFailed) != 0 {
@@ -472,7 +586,7 @@ func TestAHungWriteGivesUpAtItsDeadline(t *testing.T) {
 	m := newMetrics()
 	st := memory.New(time.Now)
 	path := filepath.Join(safeDir(t), "revocations.json")
-	persist := persister(st, path, m)
+	persist := persister(st, path, nil, nil, m)
 	release := hangWrites(t, 50*time.Millisecond)
 	put := func(key string) {
 		if err := st.PutRevocation(ctx, store.Revocation{Kind: store.RevocationPrincipal, Key: key, At: time.Now(),
@@ -514,7 +628,7 @@ func TestTheFileCatchesUpAfterAHungWriteReturns(t *testing.T) {
 	m := newMetrics()
 	st := memory.New(time.Now)
 	path := filepath.Join(safeDir(t), "revocations.json")
-	persist := persister(st, path, m)
+	persist := persister(st, path, nil, nil, m)
 	release := hangWrites(t, 50*time.Millisecond)
 	for _, key := range []string{"user:alice@example.com", "user:bob@example.com"} {
 		if err := st.PutRevocation(ctx, store.Revocation{Kind: store.RevocationPrincipal, Key: key, At: time.Now(),
@@ -567,7 +681,7 @@ func TestARevocationBehindAHungWriteIsReportedUnsaved(t *testing.T) {
 		t.Fatal(err)
 	}
 	brk.Sessions = session.New(st, time.Now, time.Hour, time.Hour)
-	brk.Persist = persister(st, filepath.Join(safeDir(t), "revocations.json"), m)
+	brk.Persist = persister(st, filepath.Join(safeDir(t), "revocations.json"), nil, nil, m)
 	// alice holds an unspent token on leaf1, minted as port49d mints it.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -669,7 +783,7 @@ func TestACallThatGivesUpAsThePassEndsCatchesTheFileUp(t *testing.T) {
 	m := newMetrics()
 	st := memory.New(time.Now)
 	path := filepath.Join(safeDir(t), "revocations.json")
-	persist := persister(st, path, m)
+	persist := persister(st, path, nil, nil, m)
 	entered, gate := holdWrites(t)
 	put := func(key string) {
 		if err := st.PutRevocation(ctx, store.Revocation{Kind: store.RevocationPrincipal, Key: key, At: time.Now(),
@@ -720,7 +834,7 @@ func TestACallWhoseWriteAnswersAsItGivesUp(t *testing.T) {
 		m := newMetrics()
 		st := memory.New(time.Now)
 		path := filepath.Join(safeDir(t), "revocations.json")
-		persist := persister(st, path, m)
+		persist := persister(st, path, nil, nil, m)
 		entered, gate := holdWrites(t)
 		if err := st.PutRevocation(ctx, store.Revocation{Kind: store.RevocationPrincipal,
 			Key: "user:alice@example.com", At: time.Now(), Origin: "test"}); err != nil {
@@ -765,5 +879,68 @@ func TestACallWhoseWriteAnswersAsItGivesUp(t *testing.T) {
 		if err := persist(ctx); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+// putsFail is a store whose PutRevocation fails, as the broker's guarded
+// layer does with its Token circuit open.
+type putsFail struct{ store.Store }
+
+func (putsFail) PutRevocation(context.Context, store.Revocation) error {
+	return store.ErrUnavailable
+}
+
+// port49d's hook before a marks reload refuses the reload whenever the
+// put-back fails, a store that will not take a mark or a file that does
+// not load, and counts each call (re-review 2 I-6): a nil there lets the
+// reload lift every mark an etcd restore lost (re-review 1 C-2). On
+// success it says how many it put back, and lets the reload run.
+func TestTheMarksReloadHookRefusesTheReloadOnAFailedPutBack(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(safeDir(t), "revocations.json")
+	if _, err := initRevocations(path, testInitConfig); err != nil {
+		t.Fatal(err)
+	}
+	lost := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:alice@example.com",
+		At: time.Date(2026, 10, 3, 3, 0, 0, 0, time.UTC), Origin: "admin_socket uid 0"}
+	if err := saveRevocations(path, []store.Revocation{lost}); err != nil {
+		t.Fatal(err)
+	}
+	enforced := store.NewMarks()
+	enforced.Set(lost, true)
+	rescans := prometheus.NewCounter(prometheus.CounterOpts{Name: "rescans"})
+	var out bytes.Buffer
+
+	err := marksReloadHook(ctx, putsFail{memory.New(time.Now)}, path, enforced, rescans, &out)()
+	if err == nil || !strings.Contains(err.Error(), "broker.revocations_file "+path) ||
+		!strings.HasSuffix(err.Error(), "the marks are not reloaded until they are back") {
+		t.Fatalf("a put-back the store refused: %v", err)
+	}
+
+	broken := filepath.Join(safeDir(t), "broken.json")
+	if err := os.WriteFile(broken, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := marksReloadHook(ctx, memory.New(time.Now), broken, enforced, rescans, &out)(); err == nil ||
+		!strings.Contains(err.Error(), "does not load") {
+		t.Fatalf("a file that does not load: %v", err)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("a failed put-back said %q", out.String())
+	}
+
+	st := memory.New(time.Now)
+	if err := marksReloadHook(ctx, st, path, enforced, rescans, &out)(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "port49d: broker: 1 revocation(s) in broker.revocations_file "+path+
+		" were missing from the store (an etcd restore?) and are put back") {
+		t.Fatalf("said %q", out.String())
+	}
+	if _, err := st.GetRevocation(ctx, lost.Kind, lost.Key); err != nil {
+		t.Fatalf("not put back: %v", err)
+	}
+	if n := testutil.ToFloat64(rescans); n != 3 {
+		t.Fatalf("counted %v rescans, want 3", n)
 	}
 }

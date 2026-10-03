@@ -13,11 +13,14 @@ import (
 // The roles port49 runs under on etcd (plan 7d, Ruling 10; spec §12 and
 // §13, decision 35). The daemon reads and writes what a login, an
 // authorization and accounting touch, and reads the marks a login
-// compares and the keyspace's meta records; it cannot write a mark, read
-// or write an idempotency record (which holds minted tokens), read or
-// write the token indexes, or write meta/ — so a stolen daemon key cannot
-// lift a revocation by principal or certificate, or delete the keyspace
-// hold (pre-flight I15) or the seal-key record. That holds for the
+// compares, the keyspace's meta records and the ledger record (lw/, plan
+// 7e, Ruling 4); it cannot write a mark, read or write an idempotency
+// record (which holds minted tokens), read or write the token indexes or
+// the superseded record (sp/, Ruling 9), or write meta/ or the ledger
+// record — so a stolen daemon key cannot lift a revocation by principal or
+// certificate, delete the keyspace hold (pre-flight I15) or the seal-key
+// record, lower the ledger record a start seeds from, or forge a replay's
+// superseded instant. That holds for the
 // daemon's credential taken alone: until plan 7e port49d also holds the
 // broker's, whose role is the whole keyspace, marks included, and under
 // store.etcd.roles: unenforced the daemon's is too. What a stolen daemon
@@ -40,8 +43,8 @@ type Grant struct {
 var (
 	daemonWrites = []string{famToken, famReceipt, famReceiptBy, famContext, famIndexed, famByPrincipal,
 		famBySid, famByCert, famBlob}
-	daemonReads = []string{famMark, famMeta}
-	daemonNever = []string{famIdem, famTokByPrin, famTokByCert}
+	daemonReads = []string{famMark, famMeta, famLedger}
+	daemonNever = []string{famIdem, famTokByPrin, famTokByCert, famSuperseded}
 )
 
 // Roles is every grant the two roles need for prefix's keyspace.
@@ -85,9 +88,10 @@ var ErrNotSeparated = errors.New("etcd: a store identity reaches past its role")
 //
 // The probes are the backstop, chiefly for auth being off, when etcd
 // has no grants to read: the broker's identity must be allowed, and the
-// daemon's refused, each of reading the idempotency records and writing
-// a mark, the token indexes, an idempotency record and meta/, one key in
-// each. A write is probed by a transaction whose compare can never hold,
+// daemon's refused, each of reading the idempotency records and the
+// superseded record, and writing a mark, the token indexes, an
+// idempotency record, a superseded instant, the ledger record and meta/,
+// one key in each. A write is probed by a transaction whose compare can never hold,
 // so it writes nothing; etcd checks the permissions of both branches
 // before it evaluates the compare, so a missing grant is still refused
 // (pre-flight M32; measured on v3.6 by
@@ -125,6 +129,9 @@ func (s *Store) CheckIdentity(ctx context.Context, broker bool) error {
 		{"writing " + s.k.family(famMark), func() error { return write(famMark) }},
 		{"writing " + s.k.family(famTokByPrin), func() error { return write(famTokByPrin) }},
 		{"writing " + s.k.family(famTokByCert), func() error { return write(famTokByCert) }},
+		{"reading " + s.k.family(famSuperseded), func() error { return read(famSuperseded) }},
+		{"writing " + s.k.family(famSuperseded), func() error { return write(famSuperseded) }},
+		{"writing " + s.k.family(famLedger), func() error { return write(famLedger) }},
 		{"writing " + s.k.family(famMeta), func() error { return write(famMeta) }},
 	}
 	for _, p := range probes {

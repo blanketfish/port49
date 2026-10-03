@@ -31,7 +31,7 @@ func (h *readHoldingStore) GetContext(ctx context.Context, k store.ContextKey) (
 }
 
 // ledgerFixture puts the broker and a daemon sealing over inner (f's
-// store, or one over it) on one sealed ledger, as port49d runs them, and
+// store, or one over it) on one ledger, its base set, as port49d runs them, and
 // writes alice's live context on leaf1 through the daemon, indexed under
 // her principal.
 func ledgerFixture(t *testing.T, f *fixture, inner store.RevStore) (store.Store, store.ContextKey) {
@@ -39,7 +39,7 @@ func ledgerFixture(t *testing.T, f *fixture, inner store.RevStore) (store.Store,
 	l := crypt.NewLedger()
 	daemon := crypt.Wrap(inner, testKeys("k1"), nil, crypt.WithLedger(l))
 	f.b.Store = crypt.Wrap(inner, testKeys("k1"), nil, crypt.WithLedger(l))
-	l.Seal()
+	l.SetBase(inner.Seen() + 1)
 	ctx := context.Background()
 	k := store.ContextKey{NAS: "leaf1", Username: "alice"}
 	if err := daemon.PutContext(ctx, k, store.Context{CtxID: "ctx_leaf1", Principal: alicePrincipal,

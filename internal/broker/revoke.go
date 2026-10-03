@@ -203,22 +203,36 @@ func (b *Broker) Revoke(ctx context.Context, req RevokeRequest) (RevokeReport, e
 	// reply is lost leaves the store's mark standing, and the daemon's
 	// copy must not be the one that lacks it. Only a refusal that wrote
 	// nothing takes it out again, and only when it did not stand already.
+	// A new mark is unwritten (Pend) until the store is known to hold it,
+	// so a marks feed's reload in between never lifts it (Ruling T9-b).
 	held := b.Marks.Holds(kind, key)
-	b.Marks.Set(mark, true)
+	if !held {
+		b.Marks.Pend(mark)
+	}
 	if err := b.Store.PutRevocation(ctx, mark); err != nil {
 		if !held && (errors.Is(err, store.ErrIncompleteMark) || errors.Is(err, store.ErrRefused)) {
 			b.Marks.Set(mark, false)
 			return RevokeReport{}, fmt.Errorf("broker: the revocation was refused, so nothing was revoked (%w); "+
 				fallback, err)
 		}
+		// Once the store holds it after all (another process's revocation,
+		// or this write committed with its reply lost), the marks feed
+		// brings it to this listener (Marks.Unrecorded; review I1); when
+		// the feed's put came first, it is applied here.
+		if !held && b.Marks.Unrecorded(mark) {
+			b.MarkChanged(store.MarkChange{Revocation: mark, Standing: true})
+		}
 		return RevokeReport{}, fmt.Errorf("broker: the revocation could not be recorded, so nothing else was "+
-			"revoked; this port49d denies what it names until a lift or a restart (%w); "+fallback, err)
+			"revoked; this port49d denies what it names until a lift on this port49d or its restart (%w); "+
+			fallback, err)
 	}
 	rep := RevokeReport{Request: req, By: kind, Mark: mark, decimal: decimal}
 	if got, err := b.Store.GetRevocation(ctx, kind, key); err == nil {
 		rep.Mark = got // an earlier mark stands, with its own time
 	}
-	b.Marks.Put(rep.Mark)
+	// A correction only: a lift the feed brought since the write is not
+	// undone, and the listener is not marked for it (review M2).
+	stands := b.Marks == nil || b.Marks.Put(rep.Mark)
 	if kind == store.RevocationPrincipal {
 		_, named := b.Policy.Load().SubjectOf(key)
 		rep.Unnamed = !named
@@ -229,13 +243,10 @@ func (b *Broker) Revoke(ctx context.Context, req RevokeRequest) (RevokeReport, e
 		}
 	}
 	if b.Conns != nil {
-		b.Conns.Revoked(rep.Mark, true)
-		rep.Connections = b.Conns.CloseHeld(func(principal, certKey string) bool {
-			if kind == store.RevocationPrincipal {
-				return principal == key
-			}
-			return certKey == key
-		})
+		if stands {
+			b.Conns.Revoked(rep.Mark, true)
+		}
+		rep.Connections = b.Conns.CloseHeld(matchMark(rep.Mark))
 	}
 	rep.Saved, rep.SaveErr = b.persist(ctx)
 	var tokenKeys []store.TokenKey
@@ -255,7 +266,7 @@ func (b *Broker) Revoke(ctx context.Context, req RevokeRequest) (RevokeReport, e
 		}
 		// The delete's own time, not the revocation's start: a mint that
 		// stamped its record in between is superseded too (M3).
-		b.supersede(k, b.Now())
+		b.supersede(ctx, k, b.Now())
 		if cerr != nil || len(toks) > 0 {
 			rep.TokenKeys++
 		}
@@ -283,6 +294,17 @@ func (b *Broker) Revoke(ctx context.Context, req RevokeRequest) (RevokeReport, e
 	}
 	b.recordRevocation(now, rep, decision.VerdictDeny, decision.CredentialRevoked, outcome)
 	return rep, nil
+}
+
+// matchMark names the held connections r names: a principal's by its
+// principal, a certificate's by its certificate key.
+func matchMark(r store.Revocation) func(principal, certKey string) bool {
+	return func(principal, certKey string) bool {
+		if r.Kind == store.RevocationPrincipal {
+			return principal == r.Key
+		}
+		return certKey == r.Key
+	}
 }
 
 // Lift removes a mark, from the store and the listener. It restores no

@@ -239,6 +239,82 @@ type ContextKey struct {
 	Username string // canonical form
 }
 
+// LedgerMark is one key's entry in the ledger record (plan 7e, Ruling 4):
+// the highest write sequence known there, a revocation's plaintext time
+// held through FloorSeq (the floor, which a sequence above FloorSeq
+// clears), and until when it is kept (zero: for good, a never context's).
+type LedgerMark struct {
+	Key       ContextKey
+	Seq       uint64
+	RevokedAt time.Time
+	FloorSeq  uint64
+	Until     time.Time
+}
+
+// ContextChange is one change to the context family, as a feed brings it
+// (plan 7e, Ruling 3): the record as GetContext's backend returns it
+// (sealed under crypt), or Deleted, at revision Rev.
+type ContextChange struct {
+	Key     ContextKey
+	Context Context
+	Deleted bool
+	Rev     uint64
+}
+
+// ContextFeed is a backend's context family as a stream: a scan at one
+// revision, then every change after it. A watch never admits a record;
+// what follows it only raises what a read must clear.
+type ContextFeed interface {
+	// ScanContexts calls fn for every live context at one revision, which
+	// it returns.
+	ScanContexts(ctx context.Context, fn func(ContextKey, Context)) (uint64, error)
+	// WatchContexts calls fn for every change after `after`, in revision
+	// order, until ctx ends (ctx.Err()), the revision was compacted
+	// (ErrCompacted), or the watch fails (ErrUnavailable, or ErrRefused
+	// when the store will not let this identity watch). progress is told
+	// a revision through which every change has been delivered: each
+	// batch's highest event once fn has had them all, and each progress
+	// notification's header revision. Each receive on asks requests one
+	// such notification from the store; a nil asks requests none (plan 7e,
+	// the feed fence).
+	WatchContexts(ctx context.Context, after uint64, fn func(ContextChange), progress func(rev uint64),
+		asks <-chan struct{}) error
+}
+
+// MarkFeed is a backend's revocation marks as a stream (plan 7e, Ruling 5):
+// every mark at one revision, then every put and lift after it.
+type MarkFeed interface {
+	// Revocations is every mark in force at one revision, which it
+	// returns.
+	Revocations(ctx context.Context) (uint64, []Revocation, error)
+	// WatchRevocations calls fn for every put (lifted false) and lift
+	// (lifted true) after `after`, in revision order, with the change's
+	// revision, until ctx ends (ctx.Err()), the revision was compacted
+	// (ErrCompacted), or the watch fails. A lift carries only Kind and
+	// Key. progress is told each progress notification's header revision,
+	// through which every change has been delivered, so a re-watch after a
+	// quiet hour resumes above a compaction rather than reloading (final
+	// review 7e-1 I-1).
+	WatchRevocations(ctx context.Context, after uint64, fn func(r Revocation, lifted bool, rev uint64),
+		progress func(rev uint64)) error
+}
+
+// ErrCompacted is a feed asked for revisions the store no longer keeps: the
+// follower scans again.
+var ErrCompacted = errors.New("store: the feed's revision was compacted")
+
+// LedgerSource reads the ledger record at one revision (plan 7e, Ruling 4).
+type LedgerSource interface {
+	LedgerMarks(ctx context.Context) (uint64, []LedgerMark, error)
+}
+
+// LedgerSink raises the ledger record's marks, never lowering one. It
+// returns how many of ms, from the first, landed (or raised nothing) before
+// an error, so a keeper owes again only the rest.
+type LedgerSink interface {
+	PutLedgerMarks(ctx context.Context, ms []LedgerMark) (int, error)
+}
+
 type Context struct {
 	CtxID     string // sealed
 	Principal string // sealed
@@ -312,16 +388,11 @@ type Context struct {
 	// race to SetRevokedAt finds the revision moved and reads again, rather
 	// than putting back a copy whose RevokedAt is zero. It only grows, across
 	// every key: a write takes a revision above any context has held (etcd's
-	// mod_revision), so of two writes the later holds the larger, which is
-	// how the sealing layer's ledger orders writes that end out of order
-	// (crypt.Ledger, by the revision each returns: RevStore). The exception
-	// is etcd restored from a snapshot under a running port49d: revisions go
-	// back to the snapshot's, and the ledger detects it by a write sent after
-	// the last ended reporting a lower revision. Restored with
-	// --bump-revision, as design §12 says to, a record keeps its revision
-	// while the store's jumps past every one it gave, and the ledger detects
-	// it by a write that compared below the last committing above it. It is
-	// plaintext bookkeeping, like the expiry.
+	// mod_revision), so of two writes the later holds the larger. The
+	// sealing layer draws each write's sealed sequence above it, and above
+	// every revision the store has told it (crypt.Ledger; RevStore.Seen),
+	// so a restore that takes revisions back, or bumps them, moves no
+	// sequence back. It is plaintext bookkeeping, like the expiry.
 	Rev uint64
 	// PolicyRev is the store's revision of what a policy refresh decides
 	// (spec §5.1.3): GetContext sets it and SetContextPolicy compares it.
@@ -883,15 +954,28 @@ type Store interface {
 	DeleteRevocation(ctx context.Context, kind, key string) error
 	// ListRevocations is every mark in force, sorted by (Kind, Key).
 	ListRevocations(ctx context.Context) ([]Revocation, error)
+	// SupersedeTokens records that k's unspent tokens were deleted at at, by
+	// a refresh or a revocation, keeping the later of at and what stands,
+	// for SupersededFor. An idempotent replay of a mint from before it, on
+	// any broker process, is minted afresh rather than answered with a token
+	// that no longer exists (plan 7e, Ruling 9).
+	SupersedeTokens(ctx context.Context, k TokenKey, at time.Time) error
+	// SupersedeAll is SupersedeTokens for every key at once: a start that
+	// purged every unspent token.
+	SupersedeAll(ctx context.Context, at time.Time) error
+	// SupersededAt is the later of k's own instant and the all-keys one;
+	// zero when neither stands or both are past SupersededFor. Never
+	// ErrNotFound.
+	SupersededAt(ctx context.Context, k TokenKey) (time.Time, error)
 }
 
 // RevStore is a Store whose whole-context writes also return the revision
 // each committed at: the record's Rev from then on, and zero with every
-// error. The sealing layer orders its own writes at a key by it, which is
-// the store's commit order whatever order the writes end in (crypt.Ledger;
-// plan 7d Task 6b). Each is its plain method otherwise. The sealing layer
-// calls only these, so a test double that overrides a plain method and not
-// its Rev twin is bypassed.
+// error. The sealing layer keeps it beside the key's mark, so a read
+// served before the write that set the mark committed is read again
+// (crypt.Ledger; plan 7e, Ruling 3). Each is its plain method otherwise.
+// The sealing layer calls only these, so a test double that overrides a
+// plain method and not its Rev twin is bypassed.
 type RevStore interface {
 	Store
 	PutContextRev(ctx context.Context, k ContextKey, c Context, ttl time.Duration) (uint64, error)
@@ -899,7 +983,20 @@ type RevStore interface {
 	SwapLoginRev(ctx context.Context, k ContextKey, rev uint64, c Context, ttl time.Duration, w LoginWrite) (uint64, error)
 	RewriteContextRev(ctx context.Context, k ContextKey, rev uint64, c Context, ttl time.Duration,
 		policyMoved bool) (uint64, error)
+	// Seen is the highest store revision this client has been told of, by
+	// any read, write or watch; it makes no call and never goes back. A
+	// context write's sealed sequence is drawn above it (crypt; plan 7e,
+	// Ruling 3).
+	Seen() uint64
+	// Ping is one linearizable read: nil when the store answers. port49d's
+	// probe calls it through the guard (plan 7e, Ruling 11).
+	Ping(ctx context.Context) error
 }
+
+// SupersededFor is how long a superseded instant is kept: past the
+// longest token_ttl (policy.MaxTokenTTL, 15m) and so past the life of any
+// idempotency record whose replay it governs (plan 7e, Ruling 9; 4b m10).
+const SupersededFor = 20 * time.Minute
 
 // CertKey is the index key a CRL or OCSP response names (spec §5.1.4).
 func CertKey(issuer, serial string) string { return issuer + "|" + serial }
