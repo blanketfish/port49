@@ -1216,3 +1216,33 @@ func TestALiftDuringARevokeIsNotUndone(t *testing.T) {
 		t.Fatal("the listener was marked for a lifted mark")
 	}
 }
+
+// A failed Revoke, its lift on this port49d, then a fresh Revoke whose put
+// the feed brings mid-flight: the fresh Revoke closes the connections
+// itself, the failed one's flag having gone with the lift (review R1).
+func TestARevokeAfterALiftedUnrecordedMarkClosesItsOwn(t *testing.T) {
+	b, _, conn := brokerWithHeldConn(t, "user:alice@example.com")
+	b.Marks = store.NewMarks()
+	st := b.Store
+	b.Store = putRevocationUnavailable{st}
+	if _, err := b.Revoke(context.Background(), RevokeRequest{Principal: "user:alice@example.com"}); err == nil {
+		t.Fatal("the failed revocation succeeded")
+	}
+	b.Store = st
+	if _, err := b.Lift(context.Background(), RevokeRequest{Principal: "user:alice@example.com"}); !errors.Is(err,
+		ErrNotRevoked) {
+		t.Fatalf("the lift: %v", err)
+	}
+	b.Store = putRevocationThen{Store: st, then: func(store.Revocation) {
+		if _, err := store.LoadMarks(context.Background(), storeFeed{st}, b.Marks, b.MarkChanged); err != nil {
+			t.Error(err)
+		}
+	}}
+	rep, err := b.Revoke(context.Background(), RevokeRequest{Principal: "user:alice@example.com"})
+	if err != nil || rep.Connections != 1 {
+		t.Fatalf("the fresh Revoke closed %d connection(s), want its own 1: %v", rep.Connections, err)
+	}
+	if !closedWithin(conn, 2*time.Second) {
+		t.Fatal("the held connection was not closed")
+	}
+}

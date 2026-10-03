@@ -357,3 +357,36 @@ func TestCountFollowsEveryChange(t *testing.T) {
 		t.Fatalf("counted %v", got)
 	}
 }
+
+// The unrecorded flag is told once and then cleared: by the store showing
+// the mark, by Put's correction, and by a lift. A stale flag would tell
+// a later Revoke's own mark while it is in flight, so the feed would close
+// that Revoke's connections before it could (review R1).
+func TestTheUnrecordedFlagIsCleared(t *testing.T) {
+	alice := Revocation{Kind: RevocationPrincipal, Key: "user:alice@example.com", At: time.Unix(10, 0)}
+	holding := &markFeed{marks: []Revocation{alice}}
+	ctx := context.Background()
+	for name, clear := range map[string]func(m *Marks){
+		"the store showing it": func(m *Marks) {
+			var got []string
+			LoadMarks(ctx, holding, m, func(c MarkChange) { got = append(got, told(c)) })
+			if fmt.Sprint(got) != "[user:alice@example.com true true]" {
+				t.Fatalf("the first load told %v", got)
+			}
+		},
+		"Put":    func(m *Marks) { m.Put(alice) },
+		"a lift": func(m *Marks) { m.Set(alice, false); m.Pend(alice) }, // and a fresh Revoke, in flight
+	} {
+		m := NewMarks()
+		m.Pend(alice)
+		if m.Unrecorded(alice) {
+			t.Fatalf("%s: a mark the store never showed was taken as stored", name)
+		}
+		clear(m)
+		var got []string
+		LoadMarks(ctx, holding, m, func(c MarkChange) { got = append(got, told(c)) })
+		if len(got) != 0 {
+			t.Fatalf("%s: a load told %v after the flag was cleared", name, got)
+		}
+	}
+}
