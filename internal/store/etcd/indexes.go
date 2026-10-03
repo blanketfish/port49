@@ -26,7 +26,7 @@ func (s *Store) refsUnder(ctx context.Context, fam, key string) ([]store.Context
 	if key == "" {
 		return nil, nil
 	}
-	resp, err := s.ctx.Get(ctx, s.k.lookups(fam, key), clientv3.WithPrefix(), clientv3.WithKeysOnly())
+	resp, err := s.ctxKV.Get(ctx, s.k.lookups(fam, key), clientv3.WithPrefix(), clientv3.WithKeysOnly())
 	if err != nil {
 		return nil, unavailable(err)
 	}
@@ -50,7 +50,7 @@ func (s *Store) refsUnder(ctx context.Context, fam, key string) ([]store.Context
 	now := s.now()
 	var out []store.ContextRef
 	i := 0
-	if err := chunked(ctx, s.ctx, gets, func(t *clientv3.TxnResponse) {
+	if err := chunked(ctx, s.ctxKV, gets, func(t *clientv3.TxnResponse) {
 		for _, op := range t.Responses {
 			r := refs[i]
 			i++
@@ -101,7 +101,7 @@ func (s *Store) eachIndexed(ctx context.Context, f func(key string, mod int64, x
 	end := clientv3.GetPrefixRangeEnd(prefix)
 	from := prefix
 	for {
-		resp, err := s.ctx.Get(ctx, from, clientv3.WithRange(end), clientv3.WithLimit(500))
+		resp, err := s.ctxKV.Get(ctx, from, clientv3.WithRange(end), clientv3.WithLimit(500))
 		if err != nil {
 			return unavailable(err)
 		}
@@ -166,7 +166,7 @@ func (s *Store) principalsNaming(ctx context.Context, xks, set map[string]bool) 
 	end := clientv3.GetPrefixRangeEnd(prefix)
 	from := prefix
 	for {
-		resp, err := s.ctx.Get(ctx, from, clientv3.WithRange(end), clientv3.WithLimit(500), clientv3.WithKeysOnly())
+		resp, err := s.ctxKV.Get(ctx, from, clientv3.WithRange(end), clientv3.WithLimit(500), clientv3.WithKeysOnly())
 		if err != nil {
 			return unavailable(err)
 		}
@@ -237,7 +237,7 @@ func (s *Store) Sweep(ctx context.Context) (pruned, removed int, err error) {
 			}
 			puts = append(puts, put{key: p.key, val: body, exp: p.x.maxExp()})
 		}
-		done, err := commit(ctx, s.ctx, s.ctxLeases, []clientv3.Cmp{unchanged(p.key, p.mod)}, puts, dels...)
+		done, err := commit(ctx, s.ctxKV, s.ctxLeases, []clientv3.Cmp{unchanged(p.key, p.mod)}, puts, dels...)
 		if err != nil {
 			return pruned, removed, err
 		}
@@ -278,7 +278,7 @@ func (s *Store) sweepLookups(ctx context.Context, fam string) (int, error) {
 		bad   bool // present and undecodable
 	}
 	for {
-		resp, err := s.ctx.Get(ctx, from, clientv3.WithRange(end), clientv3.WithLimit(500), clientv3.WithKeysOnly())
+		resp, err := s.ctxKV.Get(ctx, from, clientv3.WithRange(end), clientv3.WithLimit(500), clientv3.WithKeysOnly())
 		if err != nil {
 			return removed, unavailable(err)
 		}
@@ -292,7 +292,7 @@ func (s *Store) sweepLookups(ctx context.Context, fam string) (int, error) {
 				// compared on its own revision, so it does not sit there until
 				// an operator finds it (final review I-1).
 				s.unparseable("lookup entry", kv.Key, "the sweep deletes it")
-				done, err := commit(ctx, s.ctx, s.ctxLeases, []clientv3.Cmp{unchanged(string(kv.Key), kv.ModRevision)},
+				done, err := commit(ctx, s.ctxKV, s.ctxLeases, []clientv3.Cmp{unchanged(string(kv.Key), kv.ModRevision)},
 					nil, del{key: string(kv.Key)})
 				if err != nil {
 					return removed, err
@@ -315,7 +315,7 @@ func (s *Store) sweepLookups(ctx context.Context, fam string) (int, error) {
 		}
 		recs := map[string]rec{}
 		i := 0
-		if err := chunked(ctx, s.ctx, gets, func(t *clientv3.TxnResponse) {
+		if err := chunked(ctx, s.ctxKV, gets, func(t *clientv3.TxnResponse) {
 			for _, op := range t.Responses {
 				xk := xks[i]
 				i++
@@ -341,7 +341,7 @@ func (s *Store) sweepLookups(ctx context.Context, fam string) (int, error) {
 			// listing this key puts the entry again (addKeys), so it has
 			// moved since the read. The record's is belt and braces; keep
 			// both (Task 7 review m-3).
-			done, err := commit(ctx, s.ctx, s.ctxLeases,
+			done, err := commit(ctx, s.ctxKV, s.ctxLeases,
 				[]clientv3.Cmp{unchanged(e.key, e.mod), unchanged(e.xk, r.mod)}, nil, del{key: e.key})
 			if err != nil {
 				return removed, err
@@ -410,7 +410,7 @@ func (s *Store) Unindexed(ctx context.Context) ([]store.IndexedRef, error) {
 	now := s.now()
 	var out []store.IndexedRef
 	for {
-		resp, err := s.ctx.Get(ctx, from, clientv3.WithRange(end), clientv3.WithLimit(500), clientv3.WithKeysOnly())
+		resp, err := s.ctxKV.Get(ctx, from, clientv3.WithRange(end), clientv3.WithLimit(500), clientv3.WithKeysOnly())
 		if err != nil {
 			return out, unavailable(err)
 		}
@@ -428,7 +428,7 @@ func (s *Store) Unindexed(ctx context.Context) ([]store.IndexedRef, error) {
 		}
 		page := make([]store.IndexedRef, 0, len(refs))
 		i := 0
-		if err := chunked(ctx, s.ctx, gets, func(t *clientv3.TxnResponse) {
+		if err := chunked(ctx, s.ctxKV, gets, func(t *clientv3.TxnResponse) {
 			for _, op := range t.Responses {
 				r := store.IndexedRef{ContextRef: refs[i]}
 				i++
@@ -484,7 +484,7 @@ func (s *Store) withLookups(ctx context.Context, page []store.IndexedRef) error 
 		}
 	}
 	i := 0
-	return chunked(ctx, s.ctx, gets, func(t *clientv3.TxnResponse) {
+	return chunked(ctx, s.ctxKV, gets, func(t *clientv3.TxnResponse) {
 		for _, op := range t.Responses {
 			if op.GetResponseRange().Count > 0 {
 				*ats[i].list = append(*ats[i].list, ats[i].key)

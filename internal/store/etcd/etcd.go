@@ -62,7 +62,11 @@ type Store struct {
 	// tok and ctx are the token and context pools (design §12), two
 	// clients and so two connections: mint pressure on one cannot take the
 	// other's connection.
-	tok, ctx             *clientv3.Client
+	tok, ctx *clientv3.Client
+	// ctxKV is ctx's KV, every response seen (sawKV): every KV call on the
+	// context client goes through it, never through ctx itself. Its lease
+	// calls see their revisions where they are made (ctxLeases, meta.go).
+	ctxKV                clientv3.KV
 	tokLeases, ctxLeases *leases
 	owned                []*clientv3.Client // closed by Close
 	seen                 seenCache          // GetContext's last read per key (contexts.go)
@@ -172,11 +176,15 @@ func newStore(tok, ctx *clientv3.Client, c Config) *Store {
 	c = c.withDefaults()
 	s := &Store{k: newKeys(c.Prefix), now: c.Now, tok: tok, ctx: ctx, logf: c.Logf, idxUndecodable: c.IndexUndecodable,
 		clear: c.TLS == nil}
+	s.ctxKV = sawKV{KV: ctx, saw: s.saw}
 	s.tokLeases = newLeases(tok, c.Now, c.LeaseGrace)
 	s.ctxLeases = s.tokLeases
 	if ctx != tok {
 		s.ctxLeases = newLeases(ctx, c.Now, c.LeaseGrace)
 	}
+	// The context client's grants are its responses too. With one client
+	// for both pools the token pool's grants are as well.
+	s.ctxLeases.saw = s.saw
 	return s
 }
 
@@ -194,12 +202,8 @@ func (s *Store) Close() error {
 // Ping is one linearizable read on the context pool: nil when etcd's
 // quorum answers.
 func (s *Store) Ping(ctx context.Context) error {
-	resp, err := s.ctx.Get(ctx, s.k.meta("ping"))
-	if err != nil {
-		return unavailable(err)
-	}
-	s.saw(resp.Header.Revision)
-	return nil
+	_, err := s.ctxKV.Get(ctx, s.k.meta("ping"))
+	return unavailable(err)
 }
 
 // saw raises Seen to rev.

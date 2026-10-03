@@ -31,7 +31,7 @@ type del struct {
 // del. It reports whether the cmps held. A lease etcd no longer knows (one
 // that expired while port49d was paused, or an operator revoked) costs one
 // retry on fresh leases (Review Focus 2).
-func commit(ctx context.Context, cli *clientv3.Client, ls *leases, cmps []clientv3.Cmp, puts []put, dels ...del) (bool, error) {
+func commit(ctx context.Context, cli clientv3.KV, ls *leases, cmps []clientv3.Cmp, puts []put, dels ...del) (bool, error) {
 	ok, _, err := commitRev(ctx, cli, ls, cmps, puts, dels...)
 	return ok, err
 }
@@ -39,7 +39,7 @@ func commit(ctx context.Context, cli *clientv3.Client, ls *leases, cmps []client
 // commitRev is commit, also returning the store revision the transaction
 // ran at: when the cmps held, the revision its writes committed at, which
 // is every written key's mod_revision.
-func commitRev(ctx context.Context, cli *clientv3.Client, ls *leases, cmps []clientv3.Cmp, puts []put,
+func commitRev(ctx context.Context, cli clientv3.KV, ls *leases, cmps []clientv3.Cmp, puts []put,
 	dels ...del) (bool, int64, error) {
 	for attempt := 0; ; attempt++ {
 		ops := make([]clientv3.Op, 0, len(puts)+len(dels))
@@ -93,7 +93,7 @@ func unchanged(key string, mod int64) clientv3.Cmp {
 // compared. f returns write false to write nothing (its answer stands),
 // the expiry the write's lease follows (zero for none), keep to keep the
 // key's own lease, or an error to stop.
-func cas[R any](ctx context.Context, cli *clientv3.Client, ls *leases, key string, live func(R) bool,
+func cas[R any](ctx context.Context, cli clientv3.KV, ls *leases, key string, live func(R) bool,
 	f func(r *R, found bool) (write bool, exp time.Time, keep bool, err error)) error {
 	for {
 		resp, err := cli.Get(ctx, key)
@@ -134,7 +134,7 @@ func cas[R any](ctx context.Context, cli *clientv3.Client, ls *leases, key strin
 func notDecoded(what string) error { return fmt.Errorf("etcd: %s does not decode", what) }
 
 // getJSON reads key into v; false when it is absent.
-func getJSON(ctx context.Context, cli *clientv3.Client, key string, v any) (mod int64, ok bool, err error) {
+func getJSON(ctx context.Context, cli clientv3.KV, key string, v any) (mod int64, ok bool, err error) {
 	resp, err := cli.Get(ctx, key)
 	if err != nil {
 		return 0, false, unavailable(err)
@@ -150,7 +150,7 @@ func getJSON(ctx context.Context, cli *clientv3.Client, key string, v any) (mod 
 
 // chunked calls f on ops in transactions of at most maxTxnOps: etcd's
 // default --max-txn-ops is 128.
-func chunked(ctx context.Context, cli *clientv3.Client, ops []clientv3.Op, f func(*clientv3.TxnResponse)) error {
+func chunked(ctx context.Context, cli clientv3.KV, ops []clientv3.Op, f func(*clientv3.TxnResponse)) error {
 	for len(ops) > 0 {
 		n := min(len(ops), maxTxnOps)
 		resp, err := cli.Txn(ctx).Then(ops[:n]...).Commit()

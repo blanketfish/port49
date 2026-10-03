@@ -1108,3 +1108,32 @@ func TestSeenNeverGoesBack(t *testing.T) {
 		t.Fatalf("Seen %d", s.Seen())
 	}
 }
+
+// Every context-client response raises Seen, not GetContext's alone: a
+// delete, an index scan and a meta read each do (plan 7e, Ruling T6-a).
+func TestSeenIsRaisedByEveryContextClientResponse(t *testing.T) {
+	ctx := context.Background()
+	cli := etcdtest.Client(t)
+	for name, call := range map[string]func(s *Store) error{
+		"DeleteContext": func(s *Store) error {
+			return s.DeleteContext(ctx, store.ContextKey{NAS: "leaf-01", Username: "nobody"})
+		},
+		"ContextsByPrincipal": func(s *Store) error {
+			_, err := s.ContextsByPrincipal(ctx, "user:nobody")
+			return err
+		},
+		"SealKeys": func(s *Store) error { _, _, err := s.SealKeys(ctx); return err },
+	} {
+		s := onShared(t, time.Now)
+		resp, err := cli.Put(ctx, etcdtest.Prefix()+"elsewhere", "x")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := call(s); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if got := s.Seen(); got < uint64(resp.Header.Revision) {
+			t.Errorf("%s: Seen %d, below the revision %d written before it", name, got, resp.Header.Revision)
+		}
+	}
+}

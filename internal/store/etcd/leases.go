@@ -27,6 +27,8 @@ type leases struct {
 	// held is, by bucket end (unix seconds of now's clock), the lease
 	// granted for it and until when it lives on the wall clock.
 	held map[int64]heldLease
+	// saw, when set, sees each grant's revision (Store.Seen).
+	saw func(rev int64)
 }
 
 type heldLease struct {
@@ -73,6 +75,9 @@ func (l *leases) For(ctx context.Context, exp time.Time) (clientv3.LeaseID, erro
 	resp, err := l.cli.Grant(ctx, ttl)
 	if err != nil {
 		return 0, err
+	}
+	if l.saw != nil {
+		l.saw(resp.ResponseHeader.GetRevision())
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
