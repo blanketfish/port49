@@ -530,3 +530,43 @@ func TestTheUnrecordedFlagIsCleared(t *testing.T) {
 		}
 	}
 }
+
+// A hook that keeps failing says the compaction once per run of failures,
+// as the stop is, not once a second (re-review 2 M-11); the next run, after
+// the feed is back, says it again.
+func TestAFailingRescanHookSaysTheCompactionOnce(t *testing.T) {
+	alice := Revocation{Kind: RevocationPrincipal, Key: "user:alice@example.com", At: time.Unix(10, 0)}
+	f := &markFeed{events: make(chan markEvent), compact: make(chan struct{})}
+	var hooks atomic.Int32
+	var said lines
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go FollowMarks(ctx, f, NewMarks(), 7, nil, func(bool) {}, func() error {
+		if hooks.Add(1) <= 3 {
+			return errors.New("circuit open")
+		}
+		return nil
+	}, said.logf)
+	compacted := func() int {
+		said.mu.Lock()
+		defer said.mu.Unlock()
+		n := 0
+		for _, s := range said.said {
+			if strings.Contains(s, "the marks feed's revision was compacted") {
+				n++
+			}
+		}
+		return n
+	}
+	for range 3 { // each a second after the last
+		f.compact <- struct{}{}
+	}
+	f.compact <- struct{}{} // the hook succeeds; the feed reloads
+	f.events <- markEvent{r: alice, rev: 8}
+	waitFor(t, func() bool { return said.kinds() == "stopped again" })
+	if n := compacted(); n != 1 {
+		t.Fatalf("the compaction said %d times in one run of failures", n)
+	}
+	f.compact <- struct{}{}
+	waitFor(t, func() bool { return compacted() == 2 })
+}

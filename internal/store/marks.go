@@ -349,7 +349,9 @@ func FollowMarks(ctx context.Context, feed MarkFeed, m *Marks, from uint64, on f
 			return ctx.Err()
 		}
 		if errors.Is(err, ErrCompacted) {
-			logf("store: the marks feed's revision was compacted; loading the marks again")
+			if !failing { // once per run of failures, as the stop (re-review 2 M-11)
+				logf("store: the marks feed's revision was compacted; loading the marks again")
+			}
 			// A hook that fails refuses the reload (re-review 1 C-2):
 			// port49d's puts back the marks an etcd restore lost, and a
 			// reload without them would lift each for good. It is a failed
