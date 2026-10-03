@@ -3244,6 +3244,34 @@ the inventory-only refresh's cost at fleet size.
 (internal/config/config.go) ignores a second YAML document; refuse it as port49-inventory does.
 `config.InventoryServiceOf`, which `SIGHUP` reads, ignores one too.
 
+**Deployment shapes (Ryan, 2026-10-03): not prescriptive.** Kubernetes is supported natively, never
+required. This plan ships all three shapes and treats them as peers:
+
+1. **Binaries under systemd.** Units for port49d and, on etcd, port49-broker.
+2. **A container image**, with a compose example: port49d, port49-broker and a three-member etcd.
+3. **Kubernetes manifests or a Helm chart.**
+
+Every shape states the same four requirements:
+
+- **The device's source address reaches port49d unrewritten** (design §13). On Kubernetes that means
+  `externalTrafficPolicy: Local` or host networking. Under Docker, the userland proxy and port
+  publishing can rewrite it. Both are unmeasured, so neither is stated as fact until L39 closes.
+- **On etcd, two processes.** port49d and port49-broker run apart (plan 7e). The memory store stays one
+  process.
+- **`broker.state_dir` survives a restart** (plan 7e Rulings 12 and 18). It holds `marks.json` and
+  `witness.json`. A broker without it cannot tell that etcd was restored, so a `--bump-revision`
+  restore with that broker started first goes uncaught.
+  - systemd: a directory.
+  - Docker: a named volume.
+  - Kubernetes: a StatefulSet with a volume per replica, never a Deployment's empty directory.
+- **etcd is port49's own cluster, never the Kubernetes control plane's.** It needs port49's roles,
+  compaction, quota and backups (design §13), and a managed control plane does not expose its etcd.
+  It runs as VMs under systemd, as containers with volumes, or as a StatefulSet.
+
+`port49 revoke` speaks to a local Unix socket, so each shape says where to run it: the host,
+`docker exec` or `kubectl exec`. Whether revocation should also be reachable over the authenticated
+API is a question for this plan; it is not decided here.
+
 ## Plan 13 — User and admin documentation
 
 **Builds:** a published documentation site — MkDocs Material on GitHub Pages, deployed by a
