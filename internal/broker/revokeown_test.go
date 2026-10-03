@@ -433,3 +433,18 @@ func TestMineOnAKeyReadsOnlyTheCallersOwn(t *testing.T) {
 		t.Fatalf("the key was read: %d with nobody there, %d with alice2 there", reads0, reads1)
 	}
 }
+
+// A self or key revocation that did not finish says what it reached may
+// not be sealed into its record yet, so a restart of port49d can let a
+// store write bring it back, and tells the caller to run it again (final
+// review 7d-2 I-1).
+func TestAnIncompleteSelfOrKeyRevocationSaysToRunItAgain(t *testing.T) {
+	for _, by := range []string{ByOwn, ByKey} {
+		rep := RevokeReport{By: by, Key: store.TokenKey{NAS: "leaf1", Username: "alice"},
+			Contexts: []store.ContextRef{{NAS: "leaf1", Username: "alice"}}, Err: errIncomplete}
+		if text := rep.Text(); !strings.Contains(text, "may not be sealed into the store yet") ||
+			!strings.Contains(text, "a restart of port49d") || !strings.Contains(text, "run the same command again") {
+			t.Fatalf("%s:\n%s", by, text)
+		}
+	}
+}

@@ -309,7 +309,10 @@ func TestASecondPort49dWaitsForTheKeyspace(t *testing.T) {
 // the return: the run after a store gone keeps the process's ledger,
 // sealed, and the ledger names each write (decision 35; Ruling T12-b;
 // Task 12 review m-3; Ruling T12-g). A ledger built again would take it
-// at the start's first read.
+// at the start's first read. The start's refresh revokes the record put
+// back (Ruling T13b-a), and that revocation stands on the key as the
+// ledger's floor: the session's own record, put back after it, is answered
+// revoked, and the session's owner logs in again (final review 7d-2 I-1).
 func TestAHungStoreGoesDarkAndServesAgainWhenItReturns(t *testing.T) {
 	var out, log syncBuffer
 	e, o := stderr, stdout
@@ -407,17 +410,25 @@ func TestAHungStoreGoesDarkAndServesAgainWhenItReturns(t *testing.T) {
 
 	proxy.Hang(false)
 	waitCountWithin(t, &out, "port49d: broker listening on ", 3, 60*time.Second)
-	tacacs, _ = newestAddrs(t, &out)
+	tacacs, brokerAddr = newestAddrs(t, &out)
 	dev = tacacsClient{t: t, addr: tacacs, key: []byte("run-test-secret")}
 	if dev.permits("alice", "configure") {
 		t.Fatalf("a record put back while the store was gone was taken after it returned; log %s", log.String())
 	}
-	// The session's own record, put back, is answered: the ledger kept it.
+	// The session's own record, put back, is admitted, and revoked: the
+	// refresh's revocation of the record put back holds as the floor.
 	if _, err := root.Put(sctx, string(earlier.Key), string(now.Kvs[0].Value)); err != nil {
 		t.Fatal(err)
 	}
+	if dev.permits("alice", "configure") {
+		t.Fatalf("the session's own record, put back, lifted the revocation the floor holds; log %s", log.String())
+	}
+	if !strings.Contains(log.String(), `"reason":"credential_revoked"`) {
+		t.Fatalf("the session's own record, put back, was not answered revoked; log %s", log.String())
+	}
+	// A login after it is answered: the system serves again.
+	loginSession(t, dev, mint(t, brokerAddr, pkiDir, "leaf1"), &log)
 	if !dev.permits("alice", "configure") {
-		t.Fatalf("after the store returned the session's next command was not answered from its context; log %s",
-			log.String())
+		t.Fatalf("after the store returned a new login's command was not permitted; log %s", log.String())
 	}
 }

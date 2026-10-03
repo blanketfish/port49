@@ -508,8 +508,9 @@ func (r RevokeReport) Text() string {
 			"finishes, unspent tokens may still log in on a device (up to their TTL) and unmarked contexts keep "+
 			"authorizing — run the same command again, which repeats every step", r.Err)
 	} else if r.Err != nil {
-		fmt.Fprintf(&b, "\nincomplete: %v; what it reached is ended, and the rest still works: run the same "+
-			"command again, which repeats every step", r.Err)
+		fmt.Fprintf(&b, "\nincomplete: %v; what it reached is ended, but may not be sealed into the store yet, "+
+			"so after a restart of port49d a store write could bring it back, and the rest still works: run the "+
+			"same command again, which repeats every step", r.Err)
 	}
 	return b.String()
 }

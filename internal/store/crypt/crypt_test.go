@@ -954,6 +954,115 @@ func TestTheLedgerAdmitsTheSameContextsWritesInFlightOrUnknown(t *testing.T) {
 	}
 }
 
+// sealFailsStore lands SetRevokedAt's plaintext mark and then answers
+// every GetContext ErrUnavailable while down, so the seal that follows the
+// mark sends nothing.
+type sealFailsStore struct {
+	store.RevStore
+	down atomic.Bool
+}
+
+func (s *sealFailsStore) SetRevokedAt(ctx context.Context, k store.ContextKey, at time.Time) error {
+	if err := s.RevStore.SetRevokedAt(ctx, k, at); err != nil {
+		return err
+	}
+	s.down.Store(true)
+	return nil
+}
+
+func (s *sealFailsStore) GetContext(ctx context.Context, k store.ContextKey) (store.Context, error) {
+	if s.down.Load() {
+		return store.Context{}, store.ErrUnavailable
+	}
+	return s.RevStore.GetContext(ctx, k)
+}
+
+// A self or key revocation whose plaintext mark landed and whose seal sent
+// nothing is not undone by the record before it put back: the ledger keeps
+// the mark as k's revocation floor, and every read takes the latest of the
+// sealed time, the plaintext time and the floor, through either Wrap. A
+// write this process sends after the floor, landed, chose its own sealed
+// fields and clears it (final review 7d-2 I-1).
+func TestARevocationWhoseSealFailedIsNotUndoneByAPutBack(t *testing.T) {
+	ctx := context.Background()
+	now := time.Unix(1_000_000, 0).UTC()
+	inner := memory.New(func() time.Time { return now })
+	fails := &sealFailsStore{RevStore: inner}
+	l := NewLedger()
+	daemon := Wrap(inner, keys(), nil, WithLedger(l))
+	broker := Wrap(fails, keys(), nil, WithLedger(l))
+	k := store.ContextKey{NAS: "leaf-01", Username: "netops"}
+	alice := store.Context{CtxID: "alice-1", Principal: "user:alice@example.com", Username: "netops", PrivLvl: 15}
+	if err := daemon.PutContext(ctx, k, alice, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	l.Seal()
+	earlier, err := inner.GetContext(ctx, k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := broker.SetRevokedAt(ctx, k, now); !errors.Is(err, store.ErrUnavailable) {
+		t.Fatalf("a revocation whose seal failed: %v", err)
+	}
+	fails.down.Store(false)
+	if err := inner.PutContext(ctx, k, earlier, time.Hour); err != nil { // put back
+		t.Fatal(err)
+	}
+	for name, s := range map[string]store.Store{"daemon": daemon, "broker": broker} {
+		if got, err := s.GetContext(ctx, k); err != nil || !got.RevokedAt.Equal(now) {
+			t.Fatalf("%s read the record before a revocation whose seal failed: %+v %v", name, got, err)
+		}
+	}
+	if err := daemon.PutContext(ctx, k, store.Context{CtxID: "alice-2", Principal: "user:alice@example.com",
+		Username: "netops", PrivLvl: 15}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := daemon.GetContext(ctx, k); err != nil || !got.RevokedAt.IsZero() {
+		t.Fatalf("a login after the floor: %+v %v", got, err)
+	}
+}
+
+// The floor is cleared only by a write sent after it that landed, or by
+// forgetting the key once the ledger is sealed: a write sent before it, or
+// a delete before Seal, after which a record put back would be the key's
+// first read, keeps it (final review 7d-2 I-1).
+func TestTheRevocationFloorIsClearedOnlyByALaterWrite(t *testing.T) {
+	now := time.Unix(1_000_000, 0).UTC()
+	k := store.ContextKey{NAS: "leaf-01", Username: "netops"}
+	l := NewLedger()
+	before := l.begin(k, "a", 0)
+	l.revoked(k, now)
+	l.end(before, 1, nil)
+	if got := l.floor(k); !got.Equal(now) {
+		t.Fatalf("a write sent before the floor cleared it: %v", got)
+	}
+	l.end(l.begin(k, "b", 0), 0, store.ErrUnavailable)
+	if !l.floor(k).Equal(now) {
+		t.Fatal("a write whose outcome is unknown, before it is read back, cleared the floor")
+	}
+	l.forget(k, l.mark(), false)
+	if got := l.floor(k); !got.Equal(now) {
+		t.Fatalf("a delete before Seal cleared the floor: %v", got)
+	}
+	l.Seal()
+	l.forget(k, l.mark(), false)
+	if got := l.floor(k); !got.IsZero() {
+		t.Fatalf("a delete after Seal kept the floor: %v", got)
+	}
+	l.revoked(k, now)
+	l.end(l.begin(k, "c", 0), 0, store.ErrUnavailable)
+	l.admits(k, "c")
+	if got := l.floor(k); !got.IsZero() {
+		t.Fatalf("a write sent after the floor, read back, kept it: %v", got)
+	}
+	l.revoked(k, now.Add(-time.Minute))
+	l.revoked(k, now)
+	l.revoked(k, now.Add(-time.Minute))
+	if got := l.floor(k); !got.Equal(now) {
+		t.Fatalf("the floor is not the latest revocation: %v", got)
+	}
+}
+
 // readHoldingStore holds the first GetContext after the store has read
 // the record, before it returns, so the sealing layer has not yet asked
 // the ledger.

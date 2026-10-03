@@ -615,8 +615,8 @@ func (w *wrapped) GetContext(ctx context.Context, k store.ContextKey) (store.Con
 			// (store.UnreadableContextError). The wrapped error is openErr's,
 			// so errors.Is(err, ErrUnknownKey) still tells a wrong key from a
 			// tampered record.
-			return store.Context{}, &store.UnreadableContextError{Rev: c.Rev, RevokedAt: c.RevokedAt,
-				Err: w.openErr("context", c.Sealed, err)}
+			return store.Context{}, &store.UnreadableContextError{Rev: c.Rev,
+				RevokedAt: latest(c.RevokedAt, w.ledger.floor(k)), Err: w.openErr("context", c.Sealed, err)}
 		}
 		// The ledger (re-check IA1; Ruling T12-g): a record sealed for this
 		// key that is not the write this process last made here, or first
@@ -624,16 +624,26 @@ func (w *wrapped) GetContext(ctx context.Context, k store.ContextKey) (store.Con
 		// written back. It opens, since it is bound to this key, and so it is
 		// denied as one that does not. One served before the last write
 		// committed raced that write, and is read again (Task 13b review
-		// I-1).
+		// I-1). A revocation whose seal sent nothing holds through the
+		// ledger's floor (Ledger).
 		if w.ledger.admits(k, writeID) {
+			oc.RevokedAt = latest(oc.RevokedAt, w.ledger.floor(k))
 			return oc, nil
 		}
 		if read < staleReads && w.ledger.stale(k, c.Rev) {
 			continue
 		}
-		return store.Context{}, &store.UnreadableContextError{Rev: c.Rev, RevokedAt: c.RevokedAt,
-			Err: w.openErr("context", c.Sealed, ErrNotLastWritten)}
+		return store.Context{}, &store.UnreadableContextError{Rev: c.Rev,
+			RevokedAt: latest(c.RevokedAt, w.ledger.floor(k)), Err: w.openErr("context", c.Sealed, ErrNotLastWritten)}
 	}
+}
+
+// latest is the later of a and b.
+func latest(a, b time.Time) time.Time {
+	if b.After(a) {
+		return b
+	}
+	return a
 }
 
 // TouchContext needs no sealed field, and that is exactly why it exists
@@ -729,10 +739,15 @@ func (w *wrapped) RefreshContext(ctx context.Context, k store.ContextKey, r stor
 // the caller's deadline, and sealAttempts times when the caller set none.
 // The revocation is in force from the first write either way, so an error
 // after it says so, and that only the seal is pending (re-check MA2).
+// Until a seal lands, the ledger holds the mark as k's revocation floor,
+// so a store writer who puts the record before it back, or zeroes the
+// plaintext mark, lifts nothing while this process runs (final review
+// 7d-2 I-1).
 func (w *wrapped) SetRevokedAt(ctx context.Context, k store.ContextKey, at time.Time) error {
 	if err := w.inner.SetRevokedAt(ctx, k, at); err != nil {
 		return err
 	}
+	w.ledger.revoked(k, at)
 	attempts := sealAttempts
 	if _, ok := ctx.Deadline(); ok {
 		attempts = math.MaxInt
