@@ -115,6 +115,12 @@ func (c tacacsClient) permitsAt(priv uint8, user string, words ...string) bool {
 // lab client certificate testpki.WriteLab left beside the broker's.
 func mint(t *testing.T, brokerAddr, pkiDir, device string) string {
 	t.Helper()
+	return mintKeyed(t, brokerAddr, pkiDir, device, "")
+}
+
+// mintKeyed is mint with an Idempotency-Key, when key is not empty.
+func mintKeyed(t *testing.T, brokerAddr, pkiDir, device, key string) string {
+	t.Helper()
 	cert, err := tls.LoadX509KeyPair(filepath.Join(pkiDir, testpki.LabClientCert), filepath.Join(pkiDir, testpki.LabClientKey))
 	if err != nil {
 		t.Fatal(err)
@@ -127,8 +133,16 @@ func mint(t *testing.T, brokerAddr, pkiDir, device string) string {
 	roots.AppendCertsFromPEM(caPEM)
 	client := &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{
 		Certificates: []tls.Certificate{cert}, RootCAs: roots, MinVersion: tls.VersionTLS13}}}
-	resp, err := client.Post("https://"+brokerAddr+"/v1/tokens", "application/json",
+	req, err := http.NewRequest(http.MethodPost, "https://"+brokerAddr+"/v1/tokens",
 		bytes.NewReader([]byte(`{"devices":["`+device+`"]}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if key != "" {
+		req.Header.Set("Idempotency-Key", key)
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
