@@ -3,6 +3,7 @@ package labpcap
 import (
 	"fmt"
 	"net"
+	"time"
 
 	"github.com/rhwendt/port49/internal/tacacs/wire"
 )
@@ -92,6 +93,21 @@ func (s *Stream) add(seq uint32, rec, payloadOff int, payload []byte) {
 	}
 }
 
+// timeOf is the capture time of the earliest record holding the stream's
+// byte at off.
+func (s *Stream) timeOf(f *File, off int) time.Time {
+	first := -1
+	for _, g := range s.Segments {
+		if off >= g.StreamOff && off < g.StreamOff+g.Length && (first < 0 || g.Record < first) {
+			first = g.Record
+		}
+	}
+	if first < 0 {
+		return time.Time{}
+	}
+	return f.TimeOf(first)
+}
+
 // Decode is one capture's TACACS+ content: the streams it was reassembled
 // from, and every packet framed out of them.
 type Decode struct {
@@ -115,6 +131,11 @@ type Packet struct {
 	BodyOff    int
 	Body       []byte
 	Obfuscated bool
+
+	// At is when the capture took the record holding the packet's last
+	// byte: when the whole packet had been sent. Of the copies of a
+	// duplicated segment, the earliest counts.
+	At time.Time
 }
 
 // Kind names the exchange, for a note or an error.
@@ -205,7 +226,7 @@ func (f *File) Decode(key string, subnet *net.IPNet) (*Decode, error) {
 			body := s.Payload[i+wire.HeaderLen : end]
 			p := Packet{
 				Stream: idx, Conn: s.Conn, SrcPort: s.SrcPort, FromDevice: s.FromDevice,
-				Header: h, BodyOff: i + wire.HeaderLen,
+				Header: h, BodyOff: i + wire.HeaderLen, At: s.timeOf(f, end-1),
 			}
 			if h.Flags&wire.FlagUnencrypted == 0 {
 				p.Obfuscated = true

@@ -18,6 +18,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net"
+	"time"
 )
 
 // FileHeaderLen is the 24-byte file header tcpdump writes when it opens a
@@ -70,10 +71,25 @@ type File struct {
 	// a snapshot: notes are written while tcpdump is still running, so a read
 	// can land between a record header and its bytes.
 	TailBytes int
+
+	// nano is a nanosecond savefile's: a record's second timestamp word
+	// counts nanoseconds, not microseconds.
+	nano bool
 }
 
 // Bytes returns one record's captured packet.
 func (f *File) Bytes(r Record) []byte { return f.Raw[r.DataOff : r.DataOff+r.InclLen] }
+
+// TimeOf is when the capture took record rec: the record header's seconds,
+// then its microseconds, or nanoseconds in a nanosecond savefile.
+func (f *File) TimeOf(rec int) time.Time {
+	h := f.Raw[f.Records[rec].HeaderOff:]
+	sec, frac := int64(binary.LittleEndian.Uint32(h[0:4])), int64(binary.LittleEndian.Uint32(h[4:8]))
+	if !f.nano {
+		frac *= int64(time.Microsecond)
+	}
+	return time.Unix(sec, frac)
+}
 
 // Parse reads a savefile's bytes.
 func Parse(raw []byte) (*File, error) {
@@ -88,6 +104,7 @@ func Parse(raw []byte) (*File, error) {
 		Raw:     raw,
 		Link:    binary.LittleEndian.Uint32(raw[20:24]),
 		Snaplen: int(binary.LittleEndian.Uint32(raw[16:20])),
+		nano:    magic == 0xa1b23c4d,
 	}
 	for off := FileHeaderLen; off+RecordHeaderLen <= len(raw); {
 		inclLen := int(binary.LittleEndian.Uint32(raw[off+8 : off+12]))

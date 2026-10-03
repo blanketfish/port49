@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"net"
 	"testing"
+	"time"
 
 	"github.com/rhwendt/port49/internal/tacacs/wire"
 	"github.com/rhwendt/port49/tests/lab/labcreds"
@@ -209,5 +210,51 @@ func synthOptions() Options {
 	return Options{
 		Key:     synthKey,
 		Secrets: []string{synthToken, synthToken2, labcreds.BreakglassPassword, labcreds.TokenPrefix},
+	}
+}
+
+// A packet's At is its capture time, read from the record header: a reply
+// taken 42 seconds after its request is 42 seconds later, and the later
+// duplicate copy of the request (the `-i any` second sighting) does not move
+// the request's time.
+func TestPacketAtIsTheCaptureTime(t *testing.T) {
+	for _, nano := range []bool{false, true} {
+		s := newSynth()
+		if nano {
+			binary.LittleEndian.PutUint32(s.buf[0:4], 0xa1b23c4d)
+		}
+		req := wire.AuthorRequest{AuthenMethod: wire.AuthenMethodTACACSPlus, PrivLvl: 15,
+			AuthenType: wire.AuthenTypeASCII, Service: wire.AuthenServiceLogin, User: []byte("alice01"),
+			Args: [][]byte{[]byte("service=shell"), []byte("cmd=show")}}
+		resp := wire.AuthorResponse{Status: 0x01}
+		reqPkt := tacacs(0x55555555, wire.TypeAuthor, 1, req.Encode())
+		s.segment(synthDevice, synthServer, 50005, Port, 1000, flagSYN, nil, true)
+		s.segment(synthServer, synthDevice, Port, 50005, 2000, flagSYN|flagACK, nil, true)
+		s.segment(synthDevice, synthServer, 50005, Port, 1001, flagACK, reqPkt, true)
+		s.segment(synthDevice, synthServer, 50005, Port, 1001, flagACK, reqPkt, true) // the duplicate copy
+		s.ts += 40
+		s.segment(synthServer, synthDevice, Port, 50005, 2001, flagACK, tacacs(0x55555555, wire.TypeAuthor, 2, resp.Encode()), true)
+
+		f, err := Parse(s.buf)
+		if err != nil {
+			t.Fatal(err)
+		}
+		d, err := f.Decode(synthKey, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(d.Packets) != 2 {
+			t.Fatalf("nano=%v: decoded %d packets, want 2", nano, len(d.Packets))
+		}
+		if got := d.Packets[1].At.Sub(d.Packets[0].At); got != 42*time.Second {
+			t.Errorf("nano=%v: request to reply is %s, want 42s", nano, got)
+		}
+		frac := 500 * time.Microsecond
+		if nano {
+			frac = 500 * time.Nanosecond
+		}
+		if want := time.Unix(int64(newSynth().ts)+3, int64(frac)); !d.Packets[0].At.Equal(want) {
+			t.Errorf("nano=%v: the request's At is %s, want %s", nano, d.Packets[0].At, want)
+		}
 	}
 }
