@@ -225,13 +225,29 @@ func (l *Ledger) Seed(m store.LedgerMark) {
 // seedFollowed is Seed on a ledger already loaded, as ObserveFollowed: a
 // rescan's or a re-entry's seed makes no mark below the base. Its floor
 // still makes an entry: a floor admits nothing, and an entry with no mark
-// is judged by the base as before (ObserveFollowed).
+// is judged by the base as before (ObserveFollowed). A key l knows more
+// at than the record holds is owed (ahead).
 func (l *Ledger) seedFollowed(m store.LedgerMark) {
 	if m.Seq > 0 {
 		l.ObserveFollowed(m.Key, m.Seq, 0, time.Time{}, l.seedCeiling(m))
 	}
 	l.seedFloor(m)
 	l.settled(m)
+	l.ahead(m)
+}
+
+// ahead owes m's key when l knows more there than the record m came from:
+// a higher mark, or a later floor. A record an etcd restore rolled back
+// under a running process would otherwise keep the snapshot's marks at
+// every key not written again, and the next start, seeded from it, would
+// admit what this process denies (final review 7e-1 M-1).
+func (l *Ledger) ahead(m store.LedgerMark) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	e, ok := l.m[m.Key]
+	if ok && (e.hw > m.Seq || e.floorSeq > m.FloorSeq || e.floor.After(m.RevokedAt)) {
+		l.dirty[m.Key] = true
+	}
 }
 
 // seedFloor takes m's floor at a key l holds an entry for, held through

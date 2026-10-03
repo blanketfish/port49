@@ -1088,3 +1088,35 @@ func TestTheContextFeedSaysEachStopAndEachReturn(t *testing.T) {
 		t.Fatalf("said %q", got)
 	}
 }
+
+// A rescan's seed from a record an etcd restore rolled back, below what
+// the running ledger knows at a key, owes that key: the record converges
+// back to the ledger's mark and floor, so the next start is seeded from
+// them, not the snapshot's (final review 7e-1 M-1). A key the record
+// holds as the ledger does is still owed nothing.
+func TestARescansSeedOwesTheRecordWhatTheLedgerKnowsAboveIt(t *testing.T) {
+	at := time.Unix(1_000_000, 0).UTC()
+	l := NewLedger()
+	l.SetBase(10)
+	kb := store.ContextKey{NAS: "leaf-02", Username: "bob"}
+	kc := store.ContextKey{NAS: "leaf-03", Username: "carol"}
+	l.Observe(ka, 200, 0, time.Time{}, at.Add(time.Hour))
+	l.Observe(kb, 150, 0, at, at.Add(time.Hour)) // revoked at its mark
+	l.Observe(kc, 120, 0, time.Time{}, at.Add(time.Hour))
+	l.Dirty() // the keeper wrote them
+	rolledBack := marksOf{
+		{Key: ka, Seq: 100, Until: at.Add(time.Hour + DefaultLedgerKeep)},
+		{Key: kb, Seq: 150, Until: at.Add(time.Hour + DefaultLedgerKeep)},
+		{Key: kc, Seq: 120, Until: at.Add(time.Hour + DefaultLedgerKeep)},
+	}
+	if _, err := seedFrom(context.Background(), rolledBack, l); err != nil {
+		t.Fatal(err)
+	}
+	owed := map[store.ContextKey]store.LedgerMark{}
+	for _, m := range l.Dirty() {
+		owed[m.Key] = m
+	}
+	if len(owed) != 2 || owed[ka].Seq != 200 || owed[kb].Seq != 150 || !owed[kb].RevokedAt.Equal(at) {
+		t.Fatalf("owed after a rolled-back record's seed: %+v", owed)
+	}
+}
