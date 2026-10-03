@@ -20,6 +20,7 @@ import (
 
 	"github.com/rhwendt/port49/internal/store/etcd"
 	"github.com/rhwendt/port49/internal/store/etcd/etcdtest"
+	"github.com/rhwendt/port49/internal/tacacs/wire"
 	"github.com/rhwendt/port49/internal/testpki"
 )
 
@@ -90,37 +91,56 @@ func reasonsOf(recs []map[string]any, event string) []string {
 }
 
 // replyTimes is, for every request the device sent from from to to, the
-// time from its send to port49d's reply, as the capture saw them: the
-// reply is the next packet on the reverse stream with the request's
-// session_id and its seq_no plus one. A request with no reply is listed
-// as unanswered.
+// time from its send to port49d's reply and the reply's status, as the
+// capture saw them: the reply is the first packet at or after the
+// request on the same connection's reverse stream (the device's port, as
+// both directions show it) with the request's session_id and its seq_no
+// plus one. A request with no reply is listed as unanswered.
 func replyTimes(path, key string, from, to time.Time) []string {
 	pkts, _, err := pcapTACACSPackets(path, key)
 	if err != nil {
 		return []string{"capture unreadable: " + err.Error()}
 	}
 	var out []string
-	for i, p := range pkts {
+	for _, p := range pkts {
 		if !p.FromDevice || p.At.Before(from) || p.At.After(to) {
 			continue
 		}
-		answered := false
-		for _, q := range pkts[i+1:] {
-			if !q.FromDevice && q.Conn == p.Conn && q.Header.SessionID == p.Header.SessionID &&
-				q.Header.SeqNo == p.Header.SeqNo+1 {
-				out = append(out, fmt.Sprintf("%s seq %d %s", p.Kind(), p.Header.SeqNo, q.At.Sub(p.At).Round(time.Millisecond)))
-				answered = true
-				break
+		var reply *wirePacket
+		for i, q := range pkts {
+			if !q.FromDevice && q.SrcPort == p.SrcPort && q.Header.SessionID == p.Header.SessionID &&
+				q.Header.SeqNo == p.Header.SeqNo+1 && !q.At.Before(p.At) && (reply == nil || q.At.Before(reply.At)) {
+				reply = &pkts[i]
 			}
 		}
-		if !answered {
+		if reply == nil {
 			out = append(out, fmt.Sprintf("%s seq %d unanswered", p.Kind(), p.Header.SeqNo))
+			continue
 		}
+		out = append(out, fmt.Sprintf("%s seq %d -> %s in %s", p.Kind(), p.Header.SeqNo, replyStatus(*reply),
+			reply.At.Sub(p.At).Round(time.Millisecond)))
 	}
 	if len(out) == 0 {
 		return []string{"no request in the capture"}
 	}
 	return out
+}
+
+// replyStatus is a reply's status, by name.
+func replyStatus(q wirePacket) string {
+	_, st, ok := strings.Cut(q.decoded, "status=")
+	if !ok {
+		return "an undecoded reply"
+	}
+	st, _, _ = strings.Cut(st, " ")
+	names := map[wire.Type]map[string]string{
+		wire.TypeAuthor: {"0x1": "PASS_ADD", "0x2": "PASS_REPL", "0x10": "FAIL", "0x11": "ERROR", "0x21": "FOLLOW"},
+		wire.TypeAcct:   {"0x1": "SUCCESS", "0x2": "ERROR", "0x21": "FOLLOW"},
+	}[q.Header.Type]
+	if name, ok := names[strings.Replace(st, "0x0", "0x", 1)]; ok {
+		return name
+	}
+	return st
 }
 
 // listenAgain waits up to within for port49d to say, after off, that it
@@ -148,6 +168,7 @@ func TestStoreOutageEndToEnd(t *testing.T) {
 		sessionOnly := strings.HasPrefix(l.p.name, "juniper_")
 		var obs strings.Builder
 		row := func(step, what string) { fmt.Fprintf(&obs, "| %s | %s |\n", step, l29Cell(what)) }
+		wide := func(step, what string) { fmt.Fprintf(&obs, "| %s | %s |\n", step, wideCell(what)) }
 		obs.WriteString("| step | observed |\n|---|---|\n")
 		// lit says, at the end of a cell, whether port49d closed its
 		// listeners at any point since off (IB1: also after the store came
@@ -236,7 +257,7 @@ func TestStoreOutageEndToEnd(t *testing.T) {
 			t.Fatal(err)
 		}
 		start("restart")
-		row("2. port49d's start lines", strings.Join(append(l.errLinesSince(errOff, "purged"),
+		wide("2. port49d's start lines", strings.Join(append(l.errLinesSince(errOff, "purged"),
 			l.errLinesSince(errOff, "carried onto the policy in force")...), " / "))
 		off = l.mark()
 		after := revokeOutcome(l.p.name, sh, "show version", fail, "after the restart")
@@ -340,22 +361,33 @@ func TestStoreOutageEndToEnd(t *testing.T) {
 			if f == nil {
 				return
 			}
-			_, berr = l.loginWithin(breakglassUser, breakglassPassword, 60*time.Second, "show version")
+			var outs []string
+			outs, berr = l.loginWithin(breakglassUser, breakglassPassword, 60*time.Second, "show version")
 			row(fmt.Sprintf("3. store hung, break-glass and `show version` (attempt %d)", attempt),
-				fmt.Sprintf("%v (compare tests/lab/results/L4-error-%s.md)", berr, l.p.name))
+				fmt.Sprintf("login err %v; printed %s (compare tests/lab/results/L4-error-%s.md)", berr,
+					firstOut(outs), l.p.name))
 		})
 		recs = l.waitForRecords(off, 20*time.Second, func([]map[string]any) bool { return true })
-		row("3. records", summarize(recs))
 		cmds, redeems := reasonsOf(recs, "authorize_command"), reasonsOf(recs, "redeem")
+		wide("3. records", fmt.Sprintf("authorize_command %v; redeem %v; authorize_session %v; accounting %v", cmds, redeems,
+			reasonsOf(recs, "authorize_session"), reasonsOf(recs, "accounting")))
 		if !sessionOnly && !contains(cmds, "deny store_unavailable") {
 			fail("no command was answered deny store_unavailable with the store hung: %v", cmds)
 		}
-		if !contains(redeems, "error store_unavailable") {
-			fail("no login was answered error store_unavailable with the store hung: %v", redeems)
+		// A redeem answered ERROR is recorded verdict deny: a record's
+		// verdict is permit or deny (authen.storeError); the ERROR is the
+		// wire's, read from the capture below.
+		if !contains(redeems, "deny store_unavailable") {
+			fail("no login was answered store_unavailable with the store hung: %v", redeems)
 		}
 		l.flushCapture(t)
 		for _, w := range windows {
-			row(w.what+", request-to-reply from the capture", strings.Join(replyTimes(capPath, labKeyDefault, w.from, w.to), "; "))
+			times := strings.Join(replyTimes(capPath, labKeyDefault, w.from, w.to), "; ")
+			wide(w.what+", request-to-reply from the capture", times)
+			if strings.Contains(w.what, "token login") && !strings.Contains(times, "AUTHEN seq 1 -> ERROR") &&
+				!strings.Contains(times, "AUTHEN seq 3 -> ERROR") {
+				fail("the hung store's token login was not answered ERROR on the wire: %s", times)
+			}
 		}
 
 		// 4. port49d closes its listeners on losing the store, and stays up.
@@ -366,8 +398,8 @@ func TestStoreOutageEndToEnd(t *testing.T) {
 			time.Sleep(time.Second)
 		}
 		dark := l.errLinesSince(errOff, "closing every listener")
-		row("4. port49d's line", fmt.Sprintf("%s (%s after the hang)", strings.Join(dark, " / "),
-			time.Since(hungAt).Round(time.Second)))
+		wide("4. port49d's line", fmt.Sprintf("%s after the hang: %s", time.Since(hungAt).Round(time.Second),
+			strings.Join(dark, " / ")))
 		if len(dark) == 0 {
 			fail("port49d did not close its listeners within 90s of the hang")
 		}
@@ -382,9 +414,9 @@ func TestStoreOutageEndToEnd(t *testing.T) {
 		stopped := revokeOutcome(l.p.name, sh, "show version", func(string, ...any) {}, "with the listeners closed")
 		row("4. listeners closed, the open session's `show version`", stopped+" ("+quarantine+")")
 		bgAt := time.Now()
-		_, berr = l.loginWithin(breakglassUser, breakglassPassword, 60*time.Second, "show version")
-		row("4. listeners closed, break-glass and `show version`", fmt.Sprintf("%v (%s)", berr,
-			time.Since(bgAt).Round(100*time.Millisecond)))
+		outs, berr := l.loginWithin(breakglassUser, breakglassPassword, 60*time.Second, "show version")
+		row("4. listeners closed, break-glass and `show version`", fmt.Sprintf("login err %v in %s; printed %s", berr,
+			time.Since(bgAt).Round(100*time.Millisecond), firstOut(outs)))
 		if berr != nil {
 			fail("break-glass did not log in with port49d's listeners closed: %v", berr)
 		}
@@ -396,10 +428,9 @@ func TestStoreOutageEndToEnd(t *testing.T) {
 		if err := l.listenAgain(errOff, 150*time.Second); err != nil {
 			t.Fatalf("port49d did not listen again after the store returned: %v", err)
 		}
-		row("5. port49d's start lines", fmt.Sprintf("%s (listening %s after the store returned)",
-			strings.Join(append(l.errLinesSince(errOff, "purged"),
-				l.errLinesSince(errOff, "carried onto the policy in force")...), " / "),
-			time.Since(backAt).Round(time.Second)))
+		wide("5. port49d's start lines", fmt.Sprintf("listening %s after the store returned: %s",
+			time.Since(backAt).Round(time.Second), strings.Join(append(l.errLinesSince(errOff, "purged"),
+				l.errLinesSince(errOff, "carried onto the policy in force")...), " / ")))
 		off = l.mark()
 		back := revokeOutcome(l.p.name, sh, "show version", fail, "after the store returned")
 		ctxBack, verdict, reason := ctxIDOf(l.waitForRecords(off, 30*time.Second, func(rs []map[string]any) bool {
@@ -429,6 +460,30 @@ func TestStoreOutageEndToEnd(t *testing.T) {
 			t.Fatalf("L35 on %s: %s", l.p.name, strings.Join(failed, "; "))
 		}
 	})
+}
+
+// firstOut is the first non-empty line a login's first command printed.
+func firstOut(outs []string) string {
+	if len(outs) == 0 {
+		return "nothing"
+	}
+	if line := firstLine(outs[0]); line != "" {
+		return "'" + line + "'"
+	}
+	return "nothing"
+}
+
+// wideCell is l29Cell for a cell that quotes several lines or records:
+// one line, bounded at 2000 bytes.
+func wideCell(s string) string {
+	s = oneLine(strings.ReplaceAll(s, "`", "'"))
+	if s == "" {
+		return "nothing"
+	}
+	if len(s) > 2000 {
+		s = s[:2000] + "…"
+	}
+	return "`" + s + "`"
 }
 
 func contains(list []string, s string) bool {
@@ -590,7 +645,7 @@ func (e *realEtcd) revision() (int64, error) {
 
 // keys counts the keys under prefix.
 func (e *realEtcd) keys(prefix string) (int64, error) {
-	out, err := e.ctl("get", prefix, "--prefix", "--count-only", "-w", "json")
+	out, err := e.ctl("get", prefix, "--prefix", "--keys-only", "-w", "json")
 	if err != nil {
 		return 0, fmt.Errorf("%v: %s", err, out)
 	}
@@ -654,7 +709,7 @@ func TestStoreSnapshotRestore(t *testing.T) {
 		var failed []string
 		fail := func(format string, args ...any) { failed = append(failed, fmt.Sprintf(format, args...)) }
 		var obs strings.Builder
-		row := func(step, what string) { fmt.Fprintf(&obs, "| %s | %s |\n", step, l29Cell(what)) }
+		row := func(step, what string) { fmt.Fprintf(&obs, "| %s | %s |\n", step, wideCell(what)) }
 		obs.WriteString("| step | observed |\n|---|---|\n")
 
 		pki := filepath.Join(root, slicePKIDir)
