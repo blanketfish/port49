@@ -740,3 +740,66 @@ func TestRevokeMineBehindAnEarlierRevocationSaysItWasNotSent(t *testing.T) {
 		t.Fatalf("exit %d: %q", code, errb.String())
 	}
 }
+
+// An ending agent lets the call that ended its session finish its answer
+// before the socket closes (f6e5a26; final review 7e-1 M-2): a refresh the
+// broker answered credential_revoked is still writing that 410 when
+// Agent.Done wakes agentMain, and a Close would cut it, so the client
+// would say "no agent". And a call that never returns keeps it up no
+// longer than the wait.
+func TestAnEndingAgentDeliversTheAnswerInFlight(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	inFlight, held := make(chan struct{}), make(chan struct{})
+	defer close(held)
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/held" {
+			close(inFlight)
+			<-held
+			return
+		}
+		close(inFlight)
+		time.Sleep(200 * time.Millisecond)
+		w.WriteHeader(http.StatusGone)
+		io.WriteString(w, `{"error":"credential_revoked"}`)
+	})}
+	go srv.Serve(ln)
+	type answer struct {
+		status int
+		body   string
+		err    error
+	}
+	got := make(chan answer, 1)
+	go func() {
+		resp, err := http.Post("http://"+ln.Addr().String()+"/v1/refresh", "application/json", nil)
+		if err != nil {
+			got <- answer{err: err}
+			return
+		}
+		defer resp.Body.Close()
+		body, err := io.ReadAll(resp.Body)
+		got <- answer{resp.StatusCode, string(body), err}
+	}()
+	<-inFlight
+	shutdownSocket(srv, agentShutdownWait)
+	if a := <-got; a.err != nil || a.status != http.StatusGone || a.body != `{"error":"credential_revoked"}` {
+		t.Fatalf("the answer in flight as the agent ended: %d %q %v", a.status, a.body, a.err)
+	}
+
+	ln, err = net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	inFlight = make(chan struct{})
+	srv = &http.Server{Handler: srv.Handler}
+	go srv.Serve(ln)
+	go http.Get("http://" + ln.Addr().String() + "/held")
+	<-inFlight
+	start := time.Now()
+	shutdownSocket(srv, 100*time.Millisecond)
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("a call held open kept the agent up %v", d)
+	}
+}

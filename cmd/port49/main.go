@@ -324,18 +324,23 @@ func agentMain(args []string, stderr io.Writer) int {
 		}
 		break
 	}
-	// Shutdown, not Close: the request that ended the session (a refresh or
-	// mint the broker answered credential_revoked) is still writing that
-	// answer, and Close would cut it, so its client would say "no agent"
-	// instead of the broker's reason. The wait is bounded so a call held on
-	// the broker cannot keep the agent up, and stop lets a second signal end
-	// it at once.
+	// stop first, so a second signal ends the agent at once.
 	stop()
-	sctx, cancel := context.WithTimeout(context.Background(), agentShutdownWait)
-	defer cancel()
-	_ = srv.Shutdown(sctx)
-	_ = srv.Close()
+	shutdownSocket(srv, agentShutdownWait)
 	return 0
+}
+
+// shutdownSocket ends the agent's socket server. Shutdown, not Close: the
+// request that ended the session (a refresh or mint the broker answered
+// credential_revoked) is still writing that answer, and Close would cut
+// it, so its client would say "no agent" instead of the broker's reason.
+// The wait is bounded so a call held on the broker cannot keep the agent
+// up.
+func shutdownSocket(srv *http.Server, wait time.Duration) {
+	ctx, cancel := context.WithTimeout(context.Background(), wait)
+	defer cancel()
+	_ = srv.Shutdown(ctx)
+	_ = srv.Close()
 }
 
 // agentShutdownWait bounds how long an exiting agent lets in-flight socket
