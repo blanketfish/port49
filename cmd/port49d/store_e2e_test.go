@@ -480,6 +480,7 @@ func TestAMarkFromAnotherBrokerProcessReachesThisOne(t *testing.T) {
 	dev := tacacsClient{t: t, addr: tacacs, key: []byte("run-test-secret")}
 	loginSession(t, dev, mint(t, brokerAddr, pkiDir, "leaf1"), &log)
 	principal := lastCommandPrincipal(t, &log)
+	waitMetric(t, &out, `port49_store_feed_up{feed="marks"} 1`) // the marks feed runs (review M4)
 	conn := heldBrokerConn(t, pkiDir, brokerAddr)
 	key := "/port49/v1/rv/principal/" + url.PathEscape(principal)
 	val := fmt.Sprintf(`{"kind":"principal","key":%q,"at":%q,"origin":"test: another broker process"}`,
@@ -566,11 +567,17 @@ func heldBrokerConn(t *testing.T, pkiDir, addr string) *tls.Conn {
 // port49_revocations_in_force{by} to read n.
 func waitInForce(t *testing.T, out *syncBuffer, by string, n int) {
 	t.Helper()
+	waitMetric(t, out, fmt.Sprintf(`port49_revocations_in_force{by="%s"} %d`, by, n))
+}
+
+// waitMetric waits up to 10s for the newest run's /metrics to hold line.
+func waitMetric(t *testing.T, out *syncBuffer, line string) {
+	t.Helper()
 	ms := regexp.MustCompile(`port49d: metrics on (127\.0\.0\.1:\d+)`).FindAllStringSubmatch(out.String(), -1)
 	if len(ms) == 0 {
 		t.Fatalf("the metrics address is not said: %s", out.String())
 	}
-	want := regexp.MustCompile(fmt.Sprintf(`(?m)^port49_revocations_in_force\{by="%s"\} %d$`, by, n))
+	want := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(line) + `$`)
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		scraped, err := http.Get("http://" + ms[len(ms)-1][1] + "/metrics")
@@ -583,7 +590,7 @@ func waitInForce(t *testing.T, out *syncBuffer, by string, n int) {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("port49_revocations_in_force{by=%q} is not %d:\n%s", by, n, body)
+			t.Fatalf("/metrics lacks %q:\n%s", line, body)
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
