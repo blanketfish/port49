@@ -2,6 +2,7 @@ package etcd
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -20,7 +21,7 @@ func TestTheLedgerRecordOnlyRaises(t *testing.T) {
 	k := store.ContextKey{NAS: "leaf-01", Username: "netops"}
 	until := time.Now().Add(48 * time.Hour).UTC().Truncate(time.Second)
 	put := func(m store.LedgerMark) {
-		if err := s.PutLedgerMarks(ctx, []store.LedgerMark{m}); err != nil {
+		if _, err := s.PutLedgerMarks(ctx, []store.LedgerMark{m}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -61,7 +62,7 @@ func TestTheLedgerRecordRaceKeepsTheHigher(t *testing.T) {
 		go func(seq, step int) {
 			defer wg.Done()
 			for i := 0; i < 200; i, seq = i+1, seq+step {
-				if err := s.PutLedgerMarks(ctx, []store.LedgerMark{{Key: k, Seq: uint64(seq)}}); err != nil {
+				if _, err := s.PutLedgerMarks(ctx, []store.LedgerMark{{Key: k, Seq: uint64(seq)}}); err != nil {
 					t.Error(err)
 					return
 				}
@@ -93,7 +94,7 @@ func TestTheLedgerRecordKeepsTheFloorThroughItsSequence(t *testing.T) {
 	}
 	put := func(m store.LedgerMark) {
 		t.Helper()
-		if err := s.PutLedgerMarks(ctx, []store.LedgerMark{m}); err != nil {
+		if _, err := s.PutLedgerMarks(ctx, []store.LedgerMark{m}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -138,8 +139,30 @@ func TestAnUndecodableLedgerRecordIsAnError(t *testing.T) {
 	if _, err := s.ctx.Put(ctx, s.k.ledgerOf(k), "{"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := s.LedgerMarks(ctx); err == nil {
-		t.Fatal("an undecodable ledger record was read")
+	if _, _, err := s.LedgerMarks(ctx); err == nil || !strings.Contains(err.Error(), "delete that key as etcd's root") {
+		t.Fatalf("an undecodable ledger record was read, or its error names no remedy: %v", err)
+	}
+	// A keeper's write stops at it, and says how many landed before it, so
+	// only the rest is owed again (review I-2, M-4).
+	before := store.ContextKey{NAS: "leaf-00", Username: "a"}
+	after := store.ContextKey{NAS: "leaf-02", Username: "b"}
+	n, err := s.PutLedgerMarks(ctx, []store.LedgerMark{{Key: before, Seq: 5}, {Key: k, Seq: 5}, {Key: after, Seq: 5}})
+	if err == nil || n != 1 {
+		t.Fatalf("a write over an undecodable record: %d landed, %v", n, err)
+	}
+}
+
+// A write that lands every mark says so.
+func TestALedgerWriteSaysHowManyLanded(t *testing.T) {
+	ctx := context.Background()
+	s := onShared(t, time.Now)
+	ms := []store.LedgerMark{{Key: store.ContextKey{NAS: "leaf-01", Username: "a"}, Seq: 5},
+		{Key: store.ContextKey{NAS: "leaf-01", Username: "b"}, Seq: 6}}
+	if n, err := s.PutLedgerMarks(ctx, ms); err != nil || n != 2 {
+		t.Fatalf("%d landed: %v", n, err)
+	}
+	if n, err := s.PutLedgerMarks(ctx, ms); err != nil || n != 2 { // raising nothing lands too
+		t.Fatalf("again: %d landed: %v", n, err)
 	}
 }
 
@@ -153,7 +176,7 @@ func TestTheLedgerRecordReadsPages(t *testing.T) {
 		ms = append(ms, store.LedgerMark{Key: store.ContextKey{NAS: "leaf-01", Username: "u" + string(rune('a'+i%26)) +
 			string(rune('a'+i/26))}, Seq: uint64(i + 1)})
 	}
-	if err := s.PutLedgerMarks(ctx, ms); err != nil {
+	if _, err := s.PutLedgerMarks(ctx, ms); err != nil {
 		t.Fatal(err)
 	}
 	if _, got, err := s.LedgerMarks(ctx); err != nil || len(got) != 501 {

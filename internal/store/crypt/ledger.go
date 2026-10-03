@@ -209,22 +209,36 @@ func (l *Ledger) ObserveFollowed(k store.ContextKey, seq, rev uint64, plainRevok
 }
 
 // Seed is Observe from the ledger record (plan 7e, Ruling 4), and the
-// record's floor (seedFloor).
+// record's floor (seedFloor). A floor-only mark (Seq 0: a revocation at a
+// key with no mark) observes nothing: observed, its zero Until reads as a
+// never context's, and the key would be kept for good with no lease after
+// its next login (Task 10 review I-1). A mark the ledger then holds as the
+// record does is owed nothing (settled).
 func (l *Ledger) Seed(m store.LedgerMark) {
-	l.Observe(m.Key, m.Seq, 0, time.Time{}, l.seedCeiling(m))
+	if m.Seq > 0 {
+		l.Observe(m.Key, m.Seq, 0, time.Time{}, l.seedCeiling(m))
+	}
 	l.seedFloor(m)
+	l.settled(m)
 }
 
 // seedFollowed is Seed on a ledger already loaded, as ObserveFollowed: a
-// rescan's or a re-entry's seed makes no entry below the base.
+// rescan's or a re-entry's seed makes no mark below the base. Its floor
+// still makes an entry: a floor admits nothing, and an entry with no mark
+// is judged by the base as before (ObserveFollowed).
 func (l *Ledger) seedFollowed(m store.LedgerMark) {
-	l.ObserveFollowed(m.Key, m.Seq, 0, time.Time{}, l.seedCeiling(m))
+	if m.Seq > 0 {
+		l.ObserveFollowed(m.Key, m.Seq, 0, time.Time{}, l.seedCeiling(m))
+	}
 	l.seedFloor(m)
+	l.settled(m)
 }
 
 // seedFloor takes m's floor at a key l holds an entry for, held through
-// m.FloorSeq, while the key's mark is at or below it. Observe would hold
-// it only through m.Seq, and a floor revoked holds through every sequence
+// m.FloorSeq, while the key's mark is at or below it, making the entry at
+// a key with none (a floor-only mark's, or a rescan's below the base): a
+// floor admits nothing. Observe would hold it
+// only through m.Seq, and a floor revoked holds through every sequence
 // below the revision seen once it landed, which can be above the mark: a
 // record put back sealed between the two would clear it after a restart
 // (Task 10, C1).
@@ -232,6 +246,9 @@ func (l *Ledger) seedFloor(m store.LedgerMark) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	e, ok := l.m[m.Key]
+	if !ok && !m.RevokedAt.IsZero() {
+		e, ok = l.entry(m.Key), true
+	}
 	if !ok || m.RevokedAt.IsZero() || e.hw > m.FloorSeq {
 		return
 	}
@@ -243,6 +260,23 @@ func (l *Ledger) seedFloor(m store.LedgerMark) {
 		e.floorSeq = m.FloorSeq
 		l.dirty[m.Key] = true
 	}
+}
+
+// settled owes nothing at m's key when the mark l would write there is m,
+// what the record holds: a start seeded from a large record would
+// otherwise write every key back, a no-op each, before any new raise
+// (Task 10 review I-2).
+func (l *Ledger) settled(m store.LedgerMark) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if e, ok := l.m[m.Key]; ok && sameMark(l.markOf(m.Key, e), m) {
+		delete(l.dirty, m.Key)
+	}
+}
+
+func sameMark(a, b store.LedgerMark) bool {
+	return a.Key == b.Key && a.Seq == b.Seq && a.RevokedAt.Equal(b.RevokedAt) && a.FloorSeq == b.FloorSeq &&
+		a.Until.Equal(b.Until)
 }
 
 // seedCeiling is the sealed ceiling m's Until was kept from.
@@ -340,17 +374,22 @@ func (l *Ledger) Dirty() []store.LedgerMark {
 		if e == nil {
 			continue
 		}
-		m := store.LedgerMark{Key: k, Seq: e.hw}
-		if !e.floor.IsZero() {
-			m.RevokedAt, m.FloorSeq = e.floor, e.floorSeq
-		}
-		if !e.never && !e.ceiling.IsZero() {
-			m.Until = e.ceiling.Add(l.keep)
-		}
-		out = append(out, m)
+		out = append(out, l.markOf(k, e))
 	}
 	clear(l.dirty)
 	return out
+}
+
+// markOf is the mark the record is written for e at k.
+func (l *Ledger) markOf(k store.ContextKey, e *ledgerEntry) store.LedgerMark {
+	m := store.LedgerMark{Key: k, Seq: e.hw}
+	if !e.floor.IsZero() {
+		m.RevokedAt, m.FloorSeq = e.floor, e.floorSeq
+	}
+	if !e.never && !e.ceiling.IsZero() {
+		m.Until = e.ceiling.Add(l.keep)
+	}
+	return m
 }
 
 // Redirty marks ms owed again: the keeper's write of them failed. A key

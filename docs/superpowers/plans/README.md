@@ -3037,7 +3037,7 @@ plan's text, task by task:
   feed (T9-c). An undecodable mark stands by its key on a load as on a watch (T9-e).
 - **Flake fix (f6e5a26).** A product bug: on `credential_revoked` the agent's close cut the 410
   answer, so the client said "no agent". It shuts down within 5s after stopping.
-- **Task 10 (the ledger record).**
+- **Task 10 (the ledger record; 267f73a, and fix round 1).**
   - `store.LedgerMark` gains `FloorSeq`, the sequence the floor holds through: `Dirty` writes it,
     and `Seed` takes the floor where the key's mark is at or below it (review C1). `lw/` keeps it
     as `floor_seq`, and a mark above it clears the floor there, as in the ledger.
@@ -3048,11 +3048,21 @@ plan's text, task by task:
     leaves its last round in the record.
   - `TestAStartSealsTheLedgerOnceItHasReadTheStore` deletes `lw/` with the context, so the base
     still judges the put-back alone.
+  - Review fix round 1:
+    - A floor-only mark (`seq` 0) seeds its floor and no mark, so the key's next login gives it a
+      lease again (I-1).
+    - A seeded key the ledger holds as the record does is owed nothing, and
+      `store.LedgerSink.PutLedgerMarks` returns how many marks landed, so a failed write owes
+      only the rest (I-2).
+    - A stop that cannot write says how many marks it leaves (M-1).
+    - An undecodable `lw/` key names its remedy (M-4).
 
 **Interfaces 7e-1 changed, for 7e-2's tasks:**
 - `store.MarkFeed.WatchRevocations(ctx, after, fn func(r Revocation, lifted bool, rev uint64))`.
 - `store.LedgerMark{Key, Seq, RevokedAt, FloorSeq, Until}`.
 - `crypt.KeepLedger(ctx, l, sink, every, report, logf)`, with the stop's last write.
+- `store.LedgerSink.PutLedgerMarks(ctx, ms) (int, error)`: how many of `ms`, from the first,
+  landed before an error.
 - `crypt.Ledger`: `SetBase`, `Base`, `Seed`, `ObserveFollowed`, `Dirty`, `Redirty`, `Pending`,
   `Fence`.
 - `crypt.Fence` (`Attach`, `Followed`, `SetUp`, `Up`, `At`, `Asks`, `Wait`), `crypt.Fenced`,
@@ -3072,7 +3082,13 @@ plan's text, task by task:
 - **A context put back in etcd while port49d was stopped is denied after the restart** at every
   key the ledger record (`lw/`) holds a later write for. A revocation's floor is kept there too,
   through every sequence it held. The record trails by at most a second, and a graceful stop
-  writes what is owed.
+  writes what is owed. A stop that cannot write says `stopping with N ledger mark(s) not
+  written to the ledger record`.
+  - A revocation at a key with no mark (each form-3 context at the upgrade) leaves an `lw/` key
+    with no lease. It gets one at the key's next login. One that never sees a login again stays,
+    at most one per (device, username).
+  - An `lw/` key that does not decode stops the start, naming the key. Delete that key as etcd's
+    root to start without its mark, accepting a put-back at that one key.
 - **A context read waits for port49d's watch on the store** (the feed fence): milliseconds
   normally. With the watch stopped and etcd answering, new sessions are denied
   `store_unavailable`, `port49_store_feed_up{feed="contexts"}` is 0, and the line says `the

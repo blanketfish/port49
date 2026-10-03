@@ -304,9 +304,11 @@ type LedgerSource interface {
 	LedgerMarks(ctx context.Context) (uint64, []LedgerMark, error)
 }
 
-// LedgerSink raises the ledger record's marks, never lowering one.
+// LedgerSink raises the ledger record's marks, never lowering one. It
+// returns how many of ms, from the first, landed (or raised nothing) before
+// an error, so a keeper owes again only the rest.
 type LedgerSink interface {
-	PutLedgerMarks(ctx context.Context, ms []LedgerMark) error
+	PutLedgerMarks(ctx context.Context, ms []LedgerMark) (int, error)
 }
 
 type Context struct {

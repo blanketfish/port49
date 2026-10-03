@@ -1770,8 +1770,8 @@ func TestAnEqualSequenceRaisesTheMarksRevision(t *testing.T) {
 
 // Dirty hands out each raised mark once, with its ceiling plus the keep;
 // Redirty owes them again; Seed takes a record's Until back to the
-// ceiling, so a mark seeded and handed out again carries the same Until
-// (Task 10's keeper; Task 7 review M-6).
+// ceiling and owes nothing, so a mark seeded and handed out again carries
+// the same Until (Task 10's keeper; Task 7 review M-6).
 func TestDirtyRedirtyAndSeedRoundTrip(t *testing.T) {
 	ceiling := time.Unix(2_000_000, 0).UTC()
 	l := NewLedger()
@@ -1791,8 +1791,14 @@ func TestDirtyRedirtyAndSeedRoundTrip(t *testing.T) {
 	if again := l.Dirty(); len(again) != 1 || again[0] != want {
 		t.Fatalf("Dirty after Redirty: %+v", again)
 	}
+	// Seed holds what the record holds, and so owes it nothing (Task 10
+	// review I-2); a later raise hands it out with the same Until.
 	seeded := NewLedger()
 	seeded.Seed(want)
+	if got := seeded.Dirty(); len(got) != 0 {
+		t.Fatalf("Seed owed the record what it holds: %+v", got)
+	}
+	seeded.Redirty([]store.LedgerMark{want})
 	if got := seeded.Dirty(); len(got) != 1 || got[0] != want {
 		t.Fatalf("Seed then Dirty: %+v, want %+v", got, want)
 	}

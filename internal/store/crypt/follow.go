@@ -161,50 +161,58 @@ func FollowContexts(ctx context.Context, feed store.ContextFeed, src store.Ledge
 
 // KeepLedger writes l's raised marks to sink every `every` until ctx ends
 // (plan 7e, Ruling 4): the keyspace's holder alone runs it. A write that
-// fails is said once per run of failures, and its marks are owed again.
-// report is told after each round how many marks are owed
-// (port49_ledger_pending), and whether the context feed is down
-// (port49_ledger_behind): then the ledger is not raised by other
-// processes' logins, and pending cannot show what the record misses. When
-// ctx ends it writes what is still owed once, within keeperStopFlush, so a
-// graceful stop leaves its last round in the record, and reports (0,
-// false) once, so a runner whose duties stopped shows no stale value
-// (pre-flight I11).
+// fails is said once per run of failures, and the marks it did not land
+// are owed again; those it landed are not, so a record too large for one
+// round's budget still progresses. report is told after each round how
+// many marks are owed (port49_ledger_pending), and whether the context
+// feed is down (port49_ledger_behind): then the ledger is not raised by
+// other processes' logins, and pending cannot show what the record misses.
+// When ctx ends it writes what is still owed once, within keeperStopFlush,
+// so a graceful stop leaves its last round in the record, says what that
+// write could not land, and reports (0, false) once, so a runner whose
+// duties stopped shows no stale value (pre-flight I11).
 func KeepLedger(ctx context.Context, l *Ledger, sink store.LedgerSink, every time.Duration,
 	report func(pending int, behind bool), logf func(string, ...any)) {
 	t := time.NewTicker(every)
 	defer t.Stop()
 	defer report(0, false)
-	failing := false
-	flush := func(ctx context.Context, timeout time.Duration) {
+	// write writes what is owed within timeout, owes again what did not
+	// land, and returns how many that is and why.
+	write := func(ctx context.Context, timeout time.Duration) (int, error) {
 		ms := l.Dirty()
 		if len(ms) == 0 {
-			return
+			return 0, nil
 		}
 		wctx, cancel := context.WithTimeout(ctx, timeout)
-		err := sink.PutLedgerMarks(wctx, ms)
+		n, err := sink.PutLedgerMarks(wctx, ms)
 		cancel()
-		switch {
-		case err != nil:
-			l.Redirty(ms)
-			if !failing {
-				logf("store: writing the ledger record failed (%v); %d mark(s) owed, tried again every %v; a "+
-					"context put back at those keys would be taken after a restart", err, len(ms), every)
-				failing = true
-			}
-		case failing:
-			logf("store: the ledger record is written again")
-			failing = false
+		if err == nil {
+			return 0, nil
 		}
+		l.Redirty(ms[min(max(n, 0), len(ms)):])
+		return len(ms) - min(max(n, 0), len(ms)), err
 	}
+	failing := false
 	for {
 		select {
 		case <-ctx.Done():
-			flush(context.WithoutCancel(ctx), keeperStopFlush)
+			if owed, err := write(context.WithoutCancel(ctx), keeperStopFlush); err != nil {
+				logf("store: stopping with %d ledger mark(s) not written to the ledger record (%v); a context "+
+					"put back at those keys before the next start would be taken", owed, err)
+			}
 			return
 		case <-t.C:
 		}
-		flush(ctx, 10*every+5*time.Second)
+		owed, err := write(ctx, 10*every+5*time.Second)
+		switch {
+		case err != nil && !failing:
+			logf("store: writing the ledger record failed (%v); %d mark(s) owed, tried again every %v; a "+
+				"context put back at those keys would be taken after a restart", err, owed, every)
+			failing = true
+		case err == nil && failing:
+			logf("store: the ledger record is written again")
+			failing = false
+		}
 		report(l.Pending(), !l.Fence().Up())
 	}
 }

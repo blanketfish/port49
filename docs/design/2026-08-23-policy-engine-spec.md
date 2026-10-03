@@ -6845,9 +6845,11 @@ sealed write sequence every process follows, and a ledger record the daemon cann
   only, by a compare on the record's revision. The daemon's etcd role reads it and never writes
   it. Every start seeds its ledger from it before it scans, so a record put back while every
   process was stopped is denied at its key when the record holds a later mark there, and so is
-  one put back while a process's watch was compacted. Left: a key written and put back within
-  the record's lag, about a second, or while no process held the keyspace or its feed was
-  down, and before one recorded it. `port49_ledger_pending` and
+  one put back while a process's watch was compacted. A floor at a key with no mark (a record
+  the revoker could not open) is kept with no lease until the key's next login, which gives it
+  the mark's keep; one at a key never logged into again stays, at most one per key. Left: a key
+  written and put back within the record's lag, about a second, or while no process held the
+  keyspace or its feed was down, and before one recorded it. `port49_ledger_pending` and
   `port49_ledger_behind` say when the record lags.
 - **An earlier form says so.** A context sealed in form 3 is named as sealed by an earlier
   port49, expected once after the upgrade, never as altered.

@@ -615,10 +615,11 @@ func waitMetric(t *testing.T, out *syncBuffer, line string) {
 // ledger from the record before it scans (Review Focus 2; Ruling 4). In
 // 7d this was the restart residual: the start took it as the key's.
 //
-// The put-back is bob's context over alice's at the username both log in
-// as: impersonation, so a denial here cannot come from some unrelated
-// fault. Two positive controls: alice's own session is permitted before
-// the stop, and after a restart with nothing put back.
+// The put-back is a replay of another principal's earlier session at the
+// same key: bob's, over alice's later one, at the username both log in as.
+// The principal the device's command is attributed to shows which record
+// was taken. Two positive controls: alice's own session is permitted
+// before the stop, and after a restart with nothing put back.
 func TestAStartSeededFromTheLedgerRecordDeniesAPutBack(t *testing.T) {
 	var out, log syncBuffer
 	e, o := stderr, stdout

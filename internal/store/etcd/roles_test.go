@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -80,7 +81,7 @@ func TestTheRolesSeparateTheComponents(t *testing.T) {
 		t.Fatalf("the daemon reads the marks: %v", err)
 	}
 	lk := store.ContextKey{NAS: "leaf-01", Username: "alice"}
-	if err := b.PutLedgerMarks(ctx, []store.LedgerMark{{Key: lk, Seq: 10}}); err != nil {
+	if _, err := b.PutLedgerMarks(ctx, []store.LedgerMark{{Key: lk, Seq: 10}}); err != nil {
 		t.Fatalf("the broker writes the ledger record: %v", err)
 	}
 	if _, ms, err := d.LedgerMarks(ctx); err != nil || len(ms) != 1 || ms[0].Seq != 10 {
@@ -100,7 +101,10 @@ func TestTheRolesSeparateTheComponents(t *testing.T) {
 			_, err := d.ctx.Put(ctx, d.k.ledgerOf(lk), `{"seq":1}`)
 			return unavailable(err)
 		}(),
-		"raise the ledger record": d.PutLedgerMarks(ctx, []store.LedgerMark{{Key: lk, Seq: 11}}),
+		"raise the ledger record": func() error {
+			_, err := d.PutLedgerMarks(ctx, []store.LedgerMark{{Key: lk, Seq: 11}})
+			return err
+		}(),
 		"reserve an idempotency key": func() error {
 			_, _, err := d.ReserveIdempotency(ctx, "user:alice", "k",
 				store.Idempotency{Holder: "h", Pending: true, ExpiresAt: t0.Add(time.Minute)})
@@ -166,13 +170,21 @@ func TestCheckIdentityRefusesADaemonThatCanWriteTheLedgerRecord(t *testing.T) {
 	if err := openAs(t, srv, "port49-daemon", prefix).CheckIdentity(context.Background(), false); err != nil {
 		t.Fatalf("the daemon as itself, with its read on lw/: %v", err)
 	}
-	for _, extra := range []etcdtest.Grant{
-		{Role: RoleDaemon, Key: ledger, RangeEnd: clientv3.GetPrefixRangeEnd(ledger), Write: true},
-		{Role: RoleDaemon, Key: superseded, RangeEnd: clientv3.GetPrefixRangeEnd(superseded)},
+	// The probes run before the grants are read, so each is named by its
+	// own (review M-5).
+	for _, c := range []struct {
+		extra etcdtest.Grant
+		probe string
+	}{
+		{etcdtest.Grant{Role: RoleDaemon, Key: ledger, RangeEnd: clientv3.GetPrefixRangeEnd(ledger), Write: true},
+			"it was allowed writing " + ledger},
+		{etcdtest.Grant{Role: RoleDaemon, Key: superseded, RangeEnd: clientv3.GetPrefixRangeEnd(superseded)},
+			"it was allowed reading " + superseded},
 	} {
-		loose := provisionedWith(t, prefix, []etcdtest.Grant{extra}, nil)
-		if err := openAs(t, loose, "port49-daemon", prefix).CheckIdentity(context.Background(), false); !errors.Is(err, ErrNotSeparated) {
-			t.Fatalf("a daemon granted %+v passed: %v", extra, err)
+		loose := provisionedWith(t, prefix, []etcdtest.Grant{c.extra}, nil)
+		err := openAs(t, loose, "port49-daemon", prefix).CheckIdentity(context.Background(), false)
+		if !errors.Is(err, ErrNotSeparated) || !strings.Contains(err.Error(), c.probe) {
+			t.Fatalf("a daemon granted %+v: %v, want %q", c.extra, err, c.probe)
 		}
 	}
 }

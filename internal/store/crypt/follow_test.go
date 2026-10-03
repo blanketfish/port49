@@ -539,8 +539,11 @@ func TestAStoppedKeeperLeavesNoStaleGauge(t *testing.T) {
 	if got := last(); got != (report{0, false}) {
 		t.Fatalf("a keeper that stopped last reported %v", got)
 	}
-	if len(lines) != 1 { // its round and its stop failed: one run of failures
-		t.Fatalf("a run of failures said %d times: %q", len(lines), lines)
+	// One line for the run of failures, and one for the stop, which is not
+	// tried again (review M-1).
+	if len(lines) != 2 || !strings.Contains(lines[0], "writing the ledger record failed") ||
+		!strings.Contains(lines[1], "stopping with 1 ledger mark(s) not written to the ledger record") {
+		t.Fatalf("a run of failures and the stop: %q", lines)
 	}
 }
 
@@ -587,21 +590,25 @@ type report struct {
 
 // flakySink fails its first fail calls with store.ErrUnavailable and
 // records what lands, under a lock: KeepLedger calls it on its own
-// goroutine (pre-flight M4, the race).
+// goroutine (pre-flight M4, the race). A call on an ended ctx lands
+// nothing, as etcd's does (review M-2).
 type flakySink struct {
 	mu          sync.Mutex
 	fail, n, ok int
 }
 
-func (s *flakySink) PutLedgerMarks(context.Context, []store.LedgerMark) error {
+func (s *flakySink) PutLedgerMarks(ctx context.Context, ms []store.LedgerMark) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.n++
 	if s.n <= s.fail {
-		return store.ErrUnavailable
+		return 0, store.ErrUnavailable
 	}
 	s.ok++
-	return nil
+	return len(ms), nil
 }
 
 func (s *flakySink) calls() int  { s.mu.Lock(); defer s.mu.Unlock(); return s.n }
@@ -614,7 +621,7 @@ type recordOf struct {
 	m  map[store.ContextKey]store.LedgerMark
 }
 
-func (r *recordOf) PutLedgerMarks(_ context.Context, ms []store.LedgerMark) error {
+func (r *recordOf) PutLedgerMarks(_ context.Context, ms []store.LedgerMark) (int, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.m == nil {
@@ -623,7 +630,7 @@ func (r *recordOf) PutLedgerMarks(_ context.Context, ms []store.LedgerMark) erro
 	for _, m := range ms {
 		r.m[m.Key] = m
 	}
-	return nil
+	return len(ms), nil
 }
 
 func (r *recordOf) LedgerMarks(context.Context) (uint64, []store.LedgerMark, error) {
@@ -640,12 +647,18 @@ func (r *recordOf) LedgerMarks(context.Context) (uint64, []store.LedgerMark, err
 // ledger, as a stop and a start do.
 func restarted(t *testing.T, l *Ledger) *Ledger {
 	t.Helper()
+	return restartedScanning(t, l, map[store.ContextKey]store.Context{})
+}
+
+// restartedScanning is restarted with a start whose scan finds scanned.
+func restartedScanning(t *testing.T, l *Ledger, scanned map[store.ContextKey]store.Context) *Ledger {
+	t.Helper()
 	rec := &recordOf{}
-	if err := rec.PutLedgerMarks(context.Background(), l.Dirty()); err != nil {
+	if _, err := rec.PutLedgerMarks(context.Background(), l.Dirty()); err != nil {
 		t.Fatal(err)
 	}
 	fresh := NewLedger()
-	feed := &feedOf{scanned: map[store.ContextKey]store.Context{}, rev: 500}
+	feed := &feedOf{scanned: scanned, rev: 500}
 	if _, _, _, err := LoadLedger(context.Background(), feed, rec, keys(), fresh); err != nil {
 		t.Fatal(err)
 	}
@@ -797,5 +810,195 @@ func TestTheRecordsFloorIsSeededOnlyWhereItHolds(t *testing.T) {
 	l.Observe(ka, 125, 125, time.Time{}, time.Time{})
 	if !l.floor(ka).Equal(at) {
 		t.Fatalf("a rescan's seed did not take the record's floor through 130: %v", l.floor(ka))
+	}
+}
+
+// A floor-only record (a revocation at a key with no mark, say a form-3
+// context at the 7e upgrade) still denies, after a restart, a put-back of
+// a context sealed before the floor (review I-1): the start's scan raises
+// the mark to it, at or below the floor's sequence, and the read is
+// revoked.
+func TestAFloorOnlyRecordDeniesAPreFloorPutBackAfterARestart(t *testing.T) {
+	at := time.Unix(1_000_000, 0).UTC()
+	l := NewLedger()
+	l.revoked(ka, at, 151)
+	back := sealedAt(t, ka, 100)
+	fresh := restartedScanning(t, l, map[store.ContextKey]store.Context{ka: back})
+	if !fresh.floor(ka).Equal(at) || fresh.next(ka) != 101 {
+		t.Fatalf("after a restart over a floor-only record: floor %v, next %d", fresh.floor(ka), fresh.next(ka))
+	}
+	inner := memory.New(time.Now)
+	if err := inner.PutContext(context.Background(), ka, back, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if c, err := Wrap(inner, keys(), nil, WithLedger(fresh)).GetContext(context.Background(), ka); err != nil ||
+		!c.RevokedAt.Equal(at) {
+		t.Fatalf("a pre-floor put-back after a restart: revoked_at %v, %v", c.RevokedAt, err)
+	}
+}
+
+// A key seeded from a floor-only record is not a never context's (review
+// I-1): its next login, with a ceiling, gives its mark a lease, and the
+// mark is pruned past its keep.
+func TestAFloorOnlyKeyRegainsALeaseAtItsNextLogin(t *testing.T) {
+	at := time.Unix(1_000_000, 0).UTC()
+	l := NewLedger()
+	l.revoked(ka, at, 151)
+	fresh := restarted(t, l)
+	fresh.Dirty()
+	ceiling := at.Add(time.Hour)
+	fresh.Observe(ka, 600, 600, time.Time{}, ceiling)
+	if ms := fresh.Dirty(); len(ms) != 1 || !ms[0].Until.Equal(ceiling.Add(DefaultLedgerKeep)) {
+		t.Fatalf("the login after a floor-only seed: %+v", ms)
+	}
+	if n := fresh.Prune(ceiling.Add(DefaultLedgerKeep + time.Hour)); n != 1 {
+		t.Fatalf("a floor-only key's later mark was not pruned past its keep: %d", n)
+	}
+}
+
+// A ledger loaded from its record owes the record nothing it holds (review
+// I-2): marks with a lease, a never context's, a floor through a later
+// sequence and a floor-only one all seed clean. A raise after the load is
+// owed alone.
+func TestALedgerLoadedFromItsRecordOwesNothing(t *testing.T) {
+	at := time.Unix(1_000_000, 0).UTC()
+	l := NewLedger()
+	for i := range 200 {
+		k := store.ContextKey{NAS: "leaf-01", Username: fmt.Sprintf("u%03d", i)}
+		switch i % 4 {
+		case 0:
+			l.Observe(k, uint64(10+i), uint64(10+i), time.Time{}, at.Add(time.Hour))
+		case 1:
+			l.Observe(k, uint64(10+i), uint64(10+i), time.Time{}, time.Time{})
+		case 2:
+			l.Observe(k, uint64(10+i), uint64(10+i), time.Time{}, at.Add(time.Hour))
+			l.revoked(k, at, 1000)
+		case 3:
+			l.revoked(k, at, 1000)
+		}
+	}
+	fresh := restarted(t, l)
+	if n := fresh.Pending(); n != 0 {
+		t.Fatalf("a ledger loaded from its record owes %d mark(s)", n)
+	}
+	fresh.Observe(ka, 2000, 2000, time.Time{}, at.Add(time.Hour))
+	if n := fresh.Pending(); n != 1 {
+		t.Fatalf("one raise after the load owes %d", n)
+	}
+}
+
+// partSink lands the first `lands` marks of its first call and then fails,
+// as a write whose deadline ends partway through does; every later call
+// lands all, and is recorded.
+type partSink struct {
+	mu    sync.Mutex
+	lands int
+	calls [][]store.LedgerMark
+}
+
+func (s *partSink) PutLedgerMarks(_ context.Context, ms []store.LedgerMark) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls = append(s.calls, ms)
+	if len(s.calls) == 1 {
+		return s.lands, context.DeadlineExceeded
+	}
+	return len(ms), nil
+}
+
+func (s *partSink) seen() [][]store.LedgerMark {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([][]store.LedgerMark(nil), s.calls...)
+}
+
+// A write that lands part of a batch before its deadline owes only the
+// rest (review I-2): on a record too large for one round's budget, every
+// round makes progress instead of owing the whole batch again.
+func TestAPartlyLandedWriteOwesOnlyTheRest(t *testing.T) {
+	l := NewLedger()
+	l.Fence().SetUp(true)
+	for i := range 10 {
+		l.Observe(store.ContextKey{NAS: "leaf-01", Username: fmt.Sprintf("u%d", i)}, 10, 10, time.Time{}, time.Time{})
+	}
+	sink := &partSink{lands: 4}
+	var reports []report
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { until(func() bool { return len(sink.seen()) >= 2 }, 10*time.Second); cancel() }()
+	KeepLedger(ctx, l, sink, 10*time.Millisecond, func(n int, behind bool) {
+		reports = append(reports, report{n, behind})
+	}, t.Logf)
+	calls := sink.seen()
+	if len(calls) < 2 || reports[0] != (report{6, false}) {
+		t.Fatalf("after a write that landed 4 of 10: reports %v, %d call(s)", reports, len(calls))
+	}
+	landed := map[store.ContextKey]bool{}
+	for _, m := range calls[0][:4] {
+		landed[m.Key] = true
+	}
+	if len(calls[1]) != 6 {
+		t.Fatalf("the next round wrote %d mark(s), want the 6 that did not land", len(calls[1]))
+	}
+	for _, m := range calls[1] {
+		if landed[m.Key] {
+			t.Fatalf("a mark that landed was owed again: %v", m.Key)
+		}
+	}
+}
+
+// A rescan's floor-only mark at a key this process has no entry for takes
+// the floor (review I-1): another process revoked a record there it could
+// not open, and a record the feed then brings at or below the floor's
+// sequence is read revoked. It makes no mark: the base still judges the
+// key.
+func TestARescansFloorOnlyMarkTakesTheFloor(t *testing.T) {
+	at := time.Unix(1_000_000, 0).UTC()
+	l := NewLedger()
+	l.SetBase(10)
+	if _, err := seedFrom(context.Background(), marksOf{{Key: ka, RevokedAt: at, FloorSeq: 130}}, l); err != nil {
+		t.Fatal(err)
+	}
+	if !l.floor(ka).Equal(at) || l.admits(ka, 9) {
+		t.Fatalf("a rescan's floor-only mark: floor %v, admits below the base %v", l.floor(ka), l.admits(ka, 9))
+	}
+	observe(l, keys(), ka, sealedAt(t, ka, 120), false)
+	if !l.floor(ka).Equal(at) || l.next(ka) != 121 {
+		t.Fatalf("a fed record under the floor: floor %v, next %d", l.floor(ka), l.next(ka))
+	}
+}
+
+// A seed is settled only when the ledger would write what the record
+// holds (review I-2): an entry owed with a later sequence, a later floor,
+// a floor through a later sequence, or a later keep than the record's is
+// still owed after a re-entry's seed.
+func TestASeedBelowWhatTheLedgerHoldsIsStillOwed(t *testing.T) {
+	at := time.Unix(1_000_000, 0).UTC()
+	ceiling := at.Add(time.Hour)
+	for name, c := range map[string]struct {
+		owe    func(l *Ledger)
+		record store.LedgerMark
+	}{
+		"seq": {func(l *Ledger) { l.Observe(ka, 100, 100, time.Time{}, time.Time{}) },
+			store.LedgerMark{Key: ka, Seq: 90}},
+		"floor": {func(l *Ledger) {
+			l.Observe(ka, 100, 100, time.Time{}, time.Time{})
+			l.revoked(ka, at, 151)
+		}, store.LedgerMark{Key: ka, Seq: 100, RevokedAt: at.Add(-time.Hour), FloorSeq: 150}},
+		"floor_seq": {func(l *Ledger) {
+			l.Observe(ka, 100, 100, time.Time{}, time.Time{})
+			l.revoked(ka, at, 201)
+		}, store.LedgerMark{Key: ka, Seq: 100, RevokedAt: at, FloorSeq: 150}},
+		"until": {func(l *Ledger) { l.Observe(ka, 100, 100, time.Time{}, ceiling) },
+			store.LedgerMark{Key: ka, Seq: 100, Until: ceiling.Add(DefaultLedgerKeep - time.Minute)}},
+	} {
+		l := NewLedger()
+		l.SetBase(10)
+		c.owe(l)
+		if _, err := seedFrom(context.Background(), marksOf{c.record}, l); err != nil {
+			t.Fatal(err)
+		}
+		if l.Pending() != 1 {
+			t.Fatalf("%s: a record behind the ledger was taken as written", name)
+		}
 	}
 }

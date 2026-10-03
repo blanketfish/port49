@@ -76,7 +76,8 @@ func (s *Store) LedgerMarks(ctx context.Context) (uint64, []store.LedgerMark, er
 			nas, user, ok := lastTwo(string(kv.Key))
 			var r ledgerRec
 			if !ok || json.Unmarshal(kv.Value, &r) != nil {
-				return 0, nil, notDecoded(fmt.Sprintf("ledger record %q", kv.Key))
+				return 0, nil, fmt.Errorf("%w; delete that key as etcd's root to start without its mark, "+
+					"accepting a context put back at that one key", notDecoded(fmt.Sprintf("ledger record %q", kv.Key)))
 			}
 			out = append(out, store.LedgerMark{Key: store.ContextKey{NAS: nas, Username: user}, Seq: r.Seq,
 				RevokedAt: r.RevokedAt, FloorSeq: r.FloorSeq, Until: r.Until})
@@ -91,11 +92,11 @@ func (s *Store) LedgerMarks(ctx context.Context) (uint64, []store.LedgerMark, er
 // PutLedgerMarks raises each key's record to its mark (store.LedgerSink),
 // never lowering one, by cas on the record's revision; a lost race reads
 // again. A mark is leased to its Until, and one with none has no lease.
-// It stops at the first error and returns it; the keeper owes the rest
-// again.
-func (s *Store) PutLedgerMarks(ctx context.Context, ms []store.LedgerMark) error {
+// It stops at the first error and returns it, with how many marks before
+// it landed or raised nothing; the keeper owes the rest again.
+func (s *Store) PutLedgerMarks(ctx context.Context, ms []store.LedgerMark) (int, error) {
 	live := func(ledgerRec) bool { return true }
-	for _, m := range ms {
+	for i, m := range ms {
 		err := cas(ctx, s.ctxKV, s.ctxLeases, s.k.ledgerOf(m.Key), live,
 			func(r *ledgerRec, _ bool) (bool, time.Time, bool, error) {
 				next, ok := r.raised(m)
@@ -106,8 +107,8 @@ func (s *Store) PutLedgerMarks(ctx context.Context, ms []store.LedgerMark) error
 				return true, next.Until, false, nil
 			})
 		if err != nil {
-			return err
+			return i, err
 		}
 	}
-	return nil
+	return len(ms), nil
 }
