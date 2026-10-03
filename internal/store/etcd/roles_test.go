@@ -2,6 +2,7 @@ package etcd
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"testing"
 	"time"
@@ -213,5 +214,27 @@ func TestCheckIdentityRefusesRoot(t *testing.T) {
 	// but turning it on would make that certificate etcd's root.
 	if err := openAs(t, open, "root", prefix).CheckIdentity(ctx, true); !errors.Is(err, ErrNotSeparated) {
 		t.Errorf("CN root on etcd with auth off: %v", err)
+	}
+}
+
+// An identity whose etcd user port49 cannot read from its own TLS config
+// (a certificate from GetClientCertificate, which etcd still sees) is
+// refused, never let past the grant check (task 11 re-review N1).
+func TestCheckIdentityRefusesAnIdentityItCannotName(t *testing.T) {
+	const prefix = "/port49/"
+	srv := provisioned(t, prefix)
+	cfg := srv.TLS(t, "port49-daemon")
+	pair := cfg.Certificates[0]
+	cfg.Certificates = nil
+	cfg.GetClientCertificate = func(*tls.CertificateRequestInfo) (*tls.Certificate, error) { return &pair, nil }
+	s, err := Open(Config{Endpoints: []string{srv.Endpoint}, TLS: cfg, Prefix: prefix})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	for _, broker := range []bool{false, true} {
+		if err := s.CheckIdentity(context.Background(), broker); !errors.Is(err, ErrNotSeparated) {
+			t.Errorf("broker %v: %v", broker, err)
+		}
 	}
 }

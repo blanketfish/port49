@@ -68,8 +68,10 @@ type Store struct {
 	logf                 func(format string, args ...any)
 	idxUndecodable       prometheus.Counter // nil counts nothing
 	// user is the etcd user this identity authenticates as, its client
-	// certificate's CN; "" in the clear. CheckIdentity reads its grants.
-	user string
+	// certificate's CN, or "" when Open could not read one. CheckIdentity
+	// reads its grants, and refuses "" unless the store is in the clear.
+	user  string
+	clear bool // dialed with no TLS: tests only, and etcd's auth cannot know it
 }
 
 var _ store.Store = (*Store)(nil)
@@ -166,7 +168,8 @@ func userOf(t *tls.Config) string {
 // newStore is a store on clients the caller owns: tests build many on one.
 func newStore(tok, ctx *clientv3.Client, c Config) *Store {
 	c = c.withDefaults()
-	s := &Store{k: newKeys(c.Prefix), now: c.Now, tok: tok, ctx: ctx, logf: c.Logf, idxUndecodable: c.IndexUndecodable}
+	s := &Store{k: newKeys(c.Prefix), now: c.Now, tok: tok, ctx: ctx, logf: c.Logf, idxUndecodable: c.IndexUndecodable,
+		clear: c.TLS == nil}
 	s.tokLeases = newLeases(tok, c.Now, c.LeaseGrace)
 	s.ctxLeases = s.tokLeases
 	if ctx != tok {

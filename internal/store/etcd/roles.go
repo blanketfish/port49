@@ -65,9 +65,11 @@ func Roles(prefix string) []Grant {
 // (Ruling T11-a).
 const RootUser = "root"
 
-// ErrNotSeparated is the daemon's identity able to do what only the
-// broker's may: etcd's roles for port49 are not in force.
-var ErrNotSeparated = errors.New("etcd: the daemon's identity has the broker's reach")
+// ErrNotSeparated is a store identity reaching past its role: the
+// daemon's able to do what only the broker's may, either one etcd's root,
+// or one whose etcd user cannot be read. etcd's roles for port49 are not
+// in force.
+var ErrNotSeparated = errors.New("etcd: a store identity reaches past its role")
 
 // CheckIdentity is port49d's start check that the roles are in force.
 // Neither identity may be etcd's root, by its certificate's CN or by
@@ -91,8 +93,15 @@ var ErrNotSeparated = errors.New("etcd: the daemon's identity has the broker's r
 // (pre-flight M32; measured on v3.6 by
 // TestCheckIdentityRefusesADaemonWithTheBrokersReach).
 func (s *Store) CheckIdentity(ctx context.Context, broker bool) error {
-	if s.user == RootUser {
+	switch {
+	case s.user == RootUser:
 		return fmt.Errorf("%w: its certificate's CN is %q, etcd's administrator", ErrNotSeparated, RootUser)
+	case s.user == "" && !s.clear:
+		// A certificate from GetClientCertificate, or one that does not
+		// parse: etcd knows the user, port49 cannot read its grants (task
+		// 11 re-review N1).
+		return fmt.Errorf("%w: cannot tell which etcd user this identity is, so its grants go unread",
+			ErrNotSeparated)
 	}
 	read := func(fam string) error {
 		_, err := s.tok.Get(ctx, s.k.family(fam), clientv3.WithPrefix(), clientv3.WithLimit(1), clientv3.WithKeysOnly())
@@ -140,7 +149,7 @@ func (s *Store) CheckIdentity(ctx context.Context, broker bool) error {
 // is the keyspace's either way.
 func (s *Store) checkGrants(ctx context.Context, broker bool) error {
 	if s.user == "" {
-		return nil // in the clear: tests only, and auth cannot be on
+		return nil // in the clear (CheckIdentity refused "" otherwise): auth cannot be on
 	}
 	u, err := s.tok.UserGet(ctx, s.user)
 	if errors.Is(err, rpctypes.ErrUserNotFound) {
