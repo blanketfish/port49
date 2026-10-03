@@ -433,7 +433,7 @@ func TestAQuietFeedResumesFromItsProgressNotARescan(t *testing.T) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		store.FollowMarks(fctx, b, store.NewMarks(), start, nil, func(bool) {}, func() { rescans.Add(1) }, t.Logf)
+		store.FollowMarks(fctx, b, store.NewMarks(), start, nil, func(bool) {}, func() error { rescans.Add(1); return nil }, t.Logf)
 	}()
 	go func() {
 		defer wg.Done()

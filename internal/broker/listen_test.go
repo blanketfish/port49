@@ -984,7 +984,7 @@ func TestARewatchNeverClosesAConnectionALiftLetIn(t *testing.T) {
 	marks := store.NewMarks()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go store.FollowMarks(ctx, feed, marks, 7, f.b.MarkChanged, func(bool) {}, func() {}, t.Logf)
+	go store.FollowMarks(ctx, feed, marks, 7, f.b.MarkChanged, func(bool) {}, func() error { return nil }, t.Logf)
 	after := func() uint64 {
 		select {
 		case a := <-feed.afters:
@@ -1046,7 +1046,7 @@ func TestAReloadNeverLiftsAMarkItsWriteLost(t *testing.T) {
 		told = append(told, c)
 		mu.Unlock()
 		b.MarkChanged(c)
-	}, func(bool) {}, func() {}, t.Logf)
+	}, func(bool) {}, func() error { return nil }, t.Logf)
 	<-feed.afters
 	feed.fail <- store.ErrCompacted // the reload's load is empty
 	select {
@@ -1098,7 +1098,7 @@ func TestAMarkThatLandsAfterAFailedWriteReachesTheListener(t *testing.T) {
 			feed.history, feed.marks = nil, []store.Revocation{alice}
 		}
 		ctx, cancel := context.WithCancel(context.Background())
-		go store.FollowMarks(ctx, feed, b.Marks, 7, b.MarkChanged, func(bool) {}, func() {}, t.Logf)
+		go store.FollowMarks(ctx, feed, b.Marks, 7, b.MarkChanged, func(bool) {}, func() error { return nil }, t.Logf)
 		if viaLoad {
 			<-feed.afters
 			feed.fail <- store.ErrCompacted

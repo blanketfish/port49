@@ -69,6 +69,8 @@ type markFeed struct {
 	afters  chan uint64
 	// progressed is each progress notification the watch tells.
 	progressed chan uint64
+	// failLoads is how many loads to come fail ErrUnavailable.
+	failLoads int
 }
 
 type markEvent struct {
@@ -82,6 +84,10 @@ func (f *markFeed) setMarks(rs []Revocation) { f.mu.Lock(); f.marks = rs; f.mu.U
 func (f *markFeed) Revocations(context.Context) (uint64, []Revocation, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.failLoads > 0 {
+		f.failLoads--
+		return 0, nil, ErrUnavailable
+	}
 	return 7, append([]Revocation(nil), f.marks...), nil
 }
 
@@ -120,6 +126,16 @@ func (l *lines) logf(format string, args ...any) {
 	l.said = append(l.said, fmt.Sprintf(format, args...))
 }
 
+// last is the last line said.
+func (l *lines) last() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(l.said) == 0 {
+		return ""
+	}
+	return l.said[len(l.said)-1]
+}
+
 // kinds is each line said, as "stopped" or "again", in order.
 func (l *lines) kinds() string {
 	l.mu.Lock()
@@ -140,11 +156,12 @@ func (l *lines) kinds() string {
 // again at the first change or progress a new watch delivers (final review
 // 7e-1 I-2): at 3am the log tells tonight's outage, not only yesterday's.
 func TestTheMarksFeedSaysEachStopAndEachReturn(t *testing.T) {
-	f := &markFeed{events: make(chan markEvent), fail: make(chan error), progressed: make(chan uint64)}
+	f := &markFeed{events: make(chan markEvent), fail: make(chan error), progressed: make(chan uint64),
+		compact: make(chan struct{})}
 	var said lines
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go FollowMarks(ctx, f, NewMarks(), 7, nil, func(bool) {}, func() {}, said.logf)
+	go FollowMarks(ctx, f, NewMarks(), 7, nil, func(bool) {}, func() error { return nil }, said.logf)
 	alice := Revocation{Kind: RevocationPrincipal, Key: "user:alice@example.com", At: time.Unix(10, 0)}
 	f.fail <- ErrUnavailable
 	f.events <- markEvent{r: alice, rev: 8} // the next watch, a second later
@@ -156,6 +173,72 @@ func TestTheMarksFeedSaysEachStopAndEachReturn(t *testing.T) {
 	f.progressed <- 11
 	if got := said.kinds(); got != "stopped again stopped again" {
 		t.Fatalf("said %q", got)
+	}
+	// A compacted watch whose reload fails is a stop; the next compacted
+	// round's reload succeeds, and the first event after it says the feed
+	// is back, once (re-review 1 M-8): a successful reload does not clear
+	// the stop silently.
+	f.mu.Lock()
+	f.failLoads = 1
+	f.mu.Unlock()
+	f.compact <- struct{}{}
+	waitFor(t, func() bool { return said.kinds() == "stopped again stopped again stopped" })
+	f.compact <- struct{}{} // the next watch, a second later
+	f.events <- markEvent{r: alice, rev: 12}
+	waitFor(t, func() bool { return said.kinds() == "stopped again stopped again stopped again" })
+	f.progressed <- 13
+	if got := said.kinds(); got != "stopped again stopped again stopped again" {
+		t.Fatalf("said %q", got)
+	}
+}
+
+// A reload whose hook fails is not run (re-review 1 C-2): the hook puts
+// back the marks an etcd restore lost, and a reload without them would
+// lift each, for good. It is a failed watch, said and tried again in a
+// second, and the next compacted round's hook and reload run as usual.
+func TestAFailedRescanHookReloadsNothing(t *testing.T) {
+	alice := Revocation{Kind: RevocationPrincipal, Key: "user:alice@example.com", At: time.Unix(10, 0)}
+	f := &markFeed{events: make(chan markEvent), compact: make(chan struct{})} // the store lacks alice
+	m := NewMarks()
+	m.Set(alice, true)
+	var mu sync.Mutex
+	var changes []string
+	var ups []bool
+	var hooks atomic.Int32
+	var said lines
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go FollowMarks(ctx, f, m, 7, func(c MarkChange) {
+		mu.Lock()
+		changes = append(changes, told(c))
+		mu.Unlock()
+	}, func(up bool) {
+		mu.Lock()
+		ups = append(ups, up)
+		mu.Unlock()
+	}, func() error {
+		if hooks.Add(1) == 1 {
+			return errors.New("circuit open")
+		}
+		return nil
+	}, said.logf)
+	f.compact <- struct{}{}
+	waitFor(t, func() bool { return strings.Contains(said.kinds(), "stopped") })
+	mu.Lock()
+	if !m.Holds(alice.Kind, alice.Key) || len(changes) != 0 || ups[len(ups)-1] {
+		mu.Unlock()
+		t.Fatalf("after a failed hook: holds %v, told %v, up %v", m.Holds(alice.Kind, alice.Key), changes, ups)
+	}
+	mu.Unlock()
+	if s := said.last(); !strings.Contains(s, "circuit open") {
+		t.Fatalf("the stop does not say the hook's error: %q", s)
+	}
+	f.compact <- struct{}{} // the next watch, a second later
+	waitFor(t, func() bool { return !m.Holds(alice.Kind, alice.Key) })
+	mu.Lock()
+	defer mu.Unlock()
+	if hooks.Load() != 2 || fmt.Sprint(changes) != "[user:alice@example.com false true]" {
+		t.Fatalf("the second round: %d hooks, told %v", hooks.Load(), changes)
 	}
 }
 
@@ -205,7 +288,7 @@ func TestACompactedMarkFeedReloadsTheDifference(t *testing.T) {
 	on := func(c MarkChange) { mu.Lock(); got = append(got, told(c)); mu.Unlock() }
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go FollowMarks(ctx, f, m, 7, on, func(bool) {}, func() {}, t.Logf)
+	go FollowMarks(ctx, f, m, 7, on, func(bool) {}, func() error { return nil }, t.Logf)
 	f.events <- markEvent{r: alice}
 	f.events <- markEvent{r: dave}
 	f.events <- markEvent{r: dave, lifted: true}
@@ -248,7 +331,7 @@ func TestAMarkFeedResumesWhereItWas(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var rescans atomic.Int32
-	go FollowMarks(ctx, f, m, 3, on, func(bool) {}, func() { rescans.Add(1) }, t.Logf)
+	go FollowMarks(ctx, f, m, 3, on, func(bool) {}, func() error { rescans.Add(1); return nil }, t.Logf)
 	after := func() uint64 {
 		select {
 		case a := <-f.afters:
@@ -374,7 +457,7 @@ func TestAReloadKeepsAMarkStillUnwritten(t *testing.T) {
 	m.Pend(alice)
 	fctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	go FollowMarks(fctx, f, m, 7, nil, func(bool) {}, func() {}, t.Logf)
+	go FollowMarks(fctx, f, m, 7, nil, func(bool) {}, func() error { return nil }, t.Logf)
 	f.events <- markEvent{r: alice, rev: 8}
 	f.compact <- struct{}{} // the load is empty: the watched put made it the store's
 	waitFor(t, func() bool { return !m.Holds(alice.Kind, alice.Key) })

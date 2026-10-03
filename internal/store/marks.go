@@ -303,9 +303,11 @@ func LoadMarks(ctx context.Context, feed MarkFeed, m *Marks, on func(MarkChange)
 // longer unwritten, and told Standing if it was Unrecorded); one that
 // changes nothing (a put of a mark
 // standing, a lift of one that does not) tells nothing. A compacted watch
-// loads the marks again (LoadMarks), telling on only of the difference,
-// tells rescanned, and goes on from the later of the load's revision and
-// the last change delivered or progress told. A watch that fails is tried
+// tells rescanned, then loads the marks again (LoadMarks), telling on
+// only of the difference, and goes on from the later of the load's
+// revision and the last change delivered or progress told; a rescanned
+// that fails is a watch that failed, and nothing is loaded. A watch that
+// fails is tried
 // again every second, from the last change delivered or the last progress
 // the watch told (final review 7e-1 I-1): watched again from where the
 // follow began, a put whose lift came after would stand again for a
@@ -313,7 +315,7 @@ func LoadMarks(ctx context.Context, feed MarkFeed, m *Marks, on func(MarkChange)
 // in. up and logf are as crypt.FollowContexts's, each stop said and the
 // first delivery after one said as following the store again.
 func FollowMarks(ctx context.Context, feed MarkFeed, m *Marks, from uint64, on func(MarkChange),
-	up func(bool), rescanned func(), logf func(string, ...any)) error {
+	up func(bool), rescanned func() error, logf func(string, ...any)) error {
 	failing := false
 	// delivered is a change or progress the watch told: after a stop, the
 	// feed follows the store again (final review 7e-1 I-2).
@@ -348,12 +350,20 @@ func FollowMarks(ctx context.Context, feed MarkFeed, m *Marks, from uint64, on f
 		}
 		if errors.Is(err, ErrCompacted) {
 			logf("store: the marks feed's revision was compacted; loading the marks again")
-			rescanned()
-			if rev, lerr := LoadMarks(ctx, feed, m, on); lerr == nil {
+			// A hook that fails refuses the reload (re-review 1 C-2):
+			// port49d's puts back the marks an etcd restore lost, and a
+			// reload without them would lift each for good. It is a failed
+			// watch, tried again in a second.
+			if herr := rescanned(); herr != nil {
+				err = herr
+			} else if rev, lerr := LoadMarks(ctx, feed, m, on); lerr == nil {
 				from = max(from, rev)
 				continue
 			} else {
 				err = lerr
+			}
+			if ctx.Err() != nil {
+				return ctx.Err()
 			}
 		}
 		if !failing {
