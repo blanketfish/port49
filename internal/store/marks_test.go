@@ -84,7 +84,8 @@ func (f *markFeed) Revocations(context.Context) (uint64, []Revocation, error) {
 
 // told renders a change for the assertions: key, standing, reloaded.
 func told(c MarkChange) string { return fmt.Sprintf("%s %v %v", c.Key, c.Standing, c.Reloaded) }
-func (f *markFeed) WatchRevocations(ctx context.Context, after uint64, fn func(Revocation, bool, uint64)) error {
+func (f *markFeed) WatchRevocations(ctx context.Context, after uint64, fn func(Revocation, bool, uint64),
+	_ func(uint64)) error {
 	if f.afters != nil {
 		f.afters <- after
 	}
@@ -249,7 +250,7 @@ func (failingFeed) Revocations(context.Context) (uint64, []Revocation, error) {
 	return 0, nil, ErrUnavailable
 }
 
-func (failingFeed) WatchRevocations(context.Context, uint64, func(Revocation, bool, uint64)) error {
+func (failingFeed) WatchRevocations(context.Context, uint64, func(Revocation, bool, uint64), func(uint64)) error {
 	return ErrUnavailable
 }
 

@@ -79,6 +79,7 @@ type memberSpec struct {
 	cluster, token string // InitialCluster; "" is this member alone
 	tls            *transport.TLSInfo
 	stop           <-chan struct{} // closed: give up waiting to be ready
+	progress       time.Duration   // the progress notification interval; 0 is etcd's (10m)
 }
 
 // errStopped is member's error when its spec's stop closed before it was
@@ -90,6 +91,9 @@ func member(s memberSpec) (*embed.Etcd, error) {
 	cfg.Name, cfg.Dir = s.name, filepath.Join(s.dir, s.name)
 	cfg.ZapLoggerBuilder = embed.NewZapLoggerBuilder(zap.NewNop())
 	cfg.UnsafeNoFsync = true // a test member: durability is not what is measured
+	if s.progress > 0 {
+		cfg.WatchProgressNotifyInterval = s.progress
+	}
 	scheme := "http"
 	if s.tls != nil {
 		scheme = "https"
@@ -141,8 +145,13 @@ func or(s, d string) string {
 }
 
 // Options is Start's: TLS turns on https with client-certificate
-// authentication under a CA of the server's own.
-type Options struct{ TLS bool }
+// authentication under a CA of the server's own. ProgressNotify, when
+// set, is how often a watch that asks for progress notifications is sent
+// one (etcd's --watch-progress-notify-interval; 10 minutes otherwise).
+type Options struct {
+	TLS            bool
+	ProgressNotify time.Duration
+}
 
 // Server is one member of a test's own.
 type Server struct {
@@ -156,7 +165,7 @@ type Server struct {
 func Start(t testing.TB, o Options) *Server {
 	t.Helper()
 	s := &Server{Dir: t.TempDir()}
-	spec := memberSpec{name: "solo", dir: t.TempDir()}
+	spec := memberSpec{name: "solo", dir: t.TempDir(), progress: o.ProgressNotify}
 	if o.TLS {
 		now := time.Now()
 		ca, err := testpki.NewCA("etcdtest CA", now.Add(-time.Hour), now.Add(24*time.Hour))

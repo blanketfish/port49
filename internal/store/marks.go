@@ -305,8 +305,9 @@ func LoadMarks(ctx context.Context, feed MarkFeed, m *Marks, on func(MarkChange)
 // standing, a lift of one that does not) tells nothing. A compacted watch
 // loads the marks again (LoadMarks), telling on only of the difference,
 // tells rescanned, and goes on from the later of the load's revision and
-// the last change delivered. A watch that fails is tried again every
-// second, from the last change delivered: watched again from where the
+// the last change delivered or progress told. A watch that fails is tried
+// again every second, from the last change delivered or the last progress
+// the watch told (final review 7e-1 I-1): watched again from where the
 // follow began, a put whose lift came after would stand again for a
 // moment, and close the held connections of a principal already let back
 // in. up and logf are as crypt.FollowContexts's.
@@ -330,7 +331,7 @@ func FollowMarks(ctx context.Context, feed MarkFeed, m *Marks, from uint64, on f
 			if on != nil {
 				on(MarkChange{Revocation: r, Standing: !lifted})
 			}
-		})
+		}, func(rev uint64) { from = max(from, rev) })
 		up(false)
 		if ctx.Err() != nil {
 			return ctx.Err()

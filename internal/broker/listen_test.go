@@ -953,7 +953,7 @@ func (f *replayFeed) Revocations(context.Context) (uint64, []store.Revocation, e
 }
 
 func (f *replayFeed) WatchRevocations(ctx context.Context, after uint64,
-	fn func(store.Revocation, bool, uint64)) error {
+	fn func(store.Revocation, bool, uint64), _ func(uint64)) error {
 	for _, e := range f.history {
 		if e.rev > after {
 			fn(e.r, e.lifted, e.rev)
@@ -1138,7 +1138,7 @@ func (f storeFeed) Revocations(ctx context.Context) (uint64, []store.Revocation,
 	return 7, rs, err
 }
 
-func (storeFeed) WatchRevocations(context.Context, uint64, func(store.Revocation, bool, uint64)) error {
+func (storeFeed) WatchRevocations(context.Context, uint64, func(store.Revocation, bool, uint64), func(uint64)) error {
 	return store.ErrUnavailable
 }
 

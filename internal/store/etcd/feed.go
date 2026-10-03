@@ -72,6 +72,10 @@ func (s *Store) ScanContexts(ctx context.Context, fn func(store.ContextKey, stor
 // WatchContexts calls fn for every change to the context family after
 // `after` (store.ContextFeed), on the context client, requiring a leader so
 // a member cut off from its quorum ends the watch rather than going quiet.
+// It asks for etcd's periodic progress notifications (every 10 minutes by
+// default, inside the 1h compaction retention design §13 prescribes), so
+// a quiet family's re-watch resumes above a compaction (final review 7e-1
+// I-1).
 // A request on asks is sent with RequestProgress on the watch's own
 // context, which names its stream: etcd answers it with a progress
 // notification once the stream's watchers are synced, and that header
@@ -85,7 +89,8 @@ func (s *Store) WatchContexts(ctx context.Context, after uint64, fn func(store.C
 	progress func(uint64), asks <-chan struct{}) error {
 	wctx, cancel := context.WithCancel(clientv3.WithRequireLeader(ctx))
 	defer cancel()
-	ch := s.ctx.Watch(wctx, s.k.family(famContext), clientv3.WithPrefix(), clientv3.WithRev(int64(after)+1))
+	ch := s.ctx.Watch(wctx, s.k.family(famContext), clientv3.WithPrefix(), clientv3.WithRev(int64(after)+1),
+		clientv3.WithProgressNotify())
 	for {
 		var resp clientv3.WatchResponse
 		var ok bool
@@ -212,19 +217,26 @@ func (s *Store) Revocations(ctx context.Context) (uint64, []store.Revocation, er
 // names, at the time it was seen, and says so by its key: a revocation
 // left out would be one not enforced. Revocations stands it the same
 // way. A key that does not parse names nothing, and is said and skipped.
-// A watch that fails is ErrUnavailable, or ErrRefused
-// when etcd refuses this identity (unavailable).
+// A progress notification's header revision is told to progress, as
+// WatchContexts asks for and tells them. A watch that fails is
+// ErrUnavailable, or ErrRefused when etcd refuses this identity
+// (unavailable).
 func (s *Store) WatchRevocations(ctx context.Context, after uint64,
-	fn func(r store.Revocation, lifted bool, rev uint64)) error {
+	fn func(r store.Revocation, lifted bool, rev uint64), progress func(uint64)) error {
 	wctx, cancel := context.WithCancel(clientv3.WithRequireLeader(ctx))
 	defer cancel()
-	ch := s.tok.Watch(wctx, s.k.family(famMark), clientv3.WithPrefix(), clientv3.WithRev(int64(after)+1))
+	ch := s.tok.Watch(wctx, s.k.family(famMark), clientv3.WithPrefix(), clientv3.WithRev(int64(after)+1),
+		clientv3.WithProgressNotify())
 	for resp := range ch {
 		if err := resp.Err(); err != nil {
 			if resp.CompactRevision > 0 || errors.Is(err, rpctypes.ErrCompacted) {
 				return store.ErrCompacted
 			}
 			return unavailable(err)
+		}
+		if resp.IsProgressNotify() {
+			progress(uint64(resp.Header.Revision))
+			continue
 		}
 		for _, ev := range resp.Events {
 			kind, key, ok := s.markOf(string(ev.Kv.Key))

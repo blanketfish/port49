@@ -291,8 +291,12 @@ type MarkFeed interface {
 	// (lifted true) after `after`, in revision order, with the change's
 	// revision, until ctx ends (ctx.Err()), the revision was compacted
 	// (ErrCompacted), or the watch fails. A lift carries only Kind and
-	// Key.
-	WatchRevocations(ctx context.Context, after uint64, fn func(r Revocation, lifted bool, rev uint64)) error
+	// Key. progress is told each progress notification's header revision,
+	// through which every change has been delivered, so a re-watch after a
+	// quiet hour resumes above a compaction rather than reloading (final
+	// review 7e-1 I-1).
+	WatchRevocations(ctx context.Context, after uint64, fn func(r Revocation, lifted bool, rev uint64),
+		progress func(rev uint64)) error
 }
 
 // ErrCompacted is a feed asked for revisions the store no longer keeps: the

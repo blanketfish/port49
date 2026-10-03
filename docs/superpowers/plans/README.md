@@ -3058,7 +3058,11 @@ plan's text, task by task:
     - An undecodable `lw/` key names its remedy (M-4).
 
 **Interfaces 7e-1 changed, for 7e-2's tasks:**
-- `store.MarkFeed.WatchRevocations(ctx, after, fn func(r Revocation, lifted bool, rev uint64))`.
+- `store.MarkFeed.WatchRevocations(ctx, after, fn func(r Revocation, lifted bool, rev uint64),
+  progress func(rev uint64))`. Both etcd watches ask for progress notifications, and
+  `FollowMarks` and `crypt.FollowContexts` resume a re-watch from the last progress as well as
+  the last change, so a reconnect within the compaction retention never reloads (final review
+  I-1).
 - `store.LedgerMark{Key, Seq, RevokedAt, FloorSeq, Until}`.
 - `crypt.KeepLedger(ctx, l, sink, every, report, logf)`, with the stop's last write.
 - `store.LedgerSink.PutLedgerMarks(ctx, ms) (int, error)`: how many of `ms`, from the first,

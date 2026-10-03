@@ -100,8 +100,10 @@ func rescan(ctx context.Context, feed store.ContextFeed, src store.LedgerSource,
 // watch seeds from src and scans again (rescan), raising only, tells
 // rescanned, and goes on from the later of the scan's revision and the
 // last change delivered; a rescan that fails is a watch that failed. A
-// watch that fails is tried again every second, from the last change
-// delivered. up is told whether the watch is running
+// watch that fails is tried again every second, from the last revision
+// the watch delivered through: its last change or its last progress
+// notification, so a quiet family's re-watch resumes above a compaction
+// (final review 7e-1 I-1). up is told whether the watch is running
 // (port49_store_feed_up{feed="contexts"}), and logf says each rescan and
 // each failure once per run of them.
 //
@@ -128,7 +130,10 @@ func FollowContexts(ctx context.Context, feed store.ContextFeed, src store.Ledge
 			if !c.Deleted {
 				observe(l, keys, c.Key, c.Context, false)
 			}
-		}, l.Fence().Followed, l.Fence().Asks())
+		}, func(rev uint64) {
+			from = max(from, rev)
+			l.Fence().Followed(rev)
+		}, l.Fence().Asks())
 		l.Fence().SetUp(false)
 		up(false)
 		if ctx.Err() != nil {

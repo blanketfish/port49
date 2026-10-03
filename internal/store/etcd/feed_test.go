@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/rhwendt/port49/internal/store"
+	"github.com/rhwendt/port49/internal/store/crypt"
 	"github.com/rhwendt/port49/internal/store/etcd/etcdtest"
 )
 
@@ -254,7 +256,8 @@ func TestTheMarkFeedBringsPutsAndLifts(t *testing.T) {
 		rev    uint64
 	}
 	got := make(chan ev, 8)
-	go s.WatchRevocations(ctx, rev, func(r store.Revocation, lifted bool, at uint64) { got <- ev{r, lifted, at} })
+	go s.WatchRevocations(ctx, rev, func(r store.Revocation, lifted bool, at uint64) { got <- ev{r, lifted, at} },
+		func(uint64) {})
 	var evs []ev
 	for len(evs) < 2 {
 		select {
@@ -310,7 +313,7 @@ func TestTheMarkFeedNeverSkipsAMarkThatDoesNotDecode(t *testing.T) {
 		if !lifted {
 			got <- r
 		}
-	})
+	}, func(uint64) {})
 	select {
 	case r := <-got:
 		if r != want {
@@ -344,8 +347,153 @@ func TestAMarkWatchFromACompactedRevisionSaysSo(t *testing.T) {
 	}
 	wctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	err = s.WatchRevocations(wctx, rev, func(store.Revocation, bool, uint64) {})
+	err = s.WatchRevocations(wctx, rev, func(store.Revocation, bool, uint64) {}, func(uint64) {})
 	if !errors.Is(err, store.ErrCompacted) {
 		t.Fatalf("%v", err)
+	}
+}
+
+// breakable is a store whose watches the test ends, as a leader change
+// ends one under WithRequireLeader, recording where each watch began and
+// the highest progress each feed was told.
+type breakable struct {
+	*Store
+	endMarks, endContexts chan struct{}
+	mu                    sync.Mutex
+	marksFrom, ctxFrom    []uint64
+	marksAt, ctxAt        uint64
+}
+
+// ending is ctx, ended by a receive on end.
+func ending(ctx context.Context, end <-chan struct{}) (context.Context, context.CancelFunc) {
+	wctx, cancel := context.WithCancel(ctx)
+	go func() {
+		select {
+		case <-end:
+			cancel()
+		case <-wctx.Done():
+		}
+	}()
+	return wctx, cancel
+}
+
+func (b *breakable) WatchRevocations(ctx context.Context, after uint64, fn func(store.Revocation, bool, uint64),
+	progress func(uint64)) error {
+	b.mu.Lock()
+	b.marksFrom = append(b.marksFrom, after)
+	b.mu.Unlock()
+	wctx, cancel := ending(ctx, b.endMarks)
+	defer cancel()
+	return b.Store.WatchRevocations(wctx, after, fn, func(rev uint64) {
+		b.mu.Lock()
+		b.marksAt = max(b.marksAt, rev)
+		b.mu.Unlock()
+		progress(rev)
+	})
+}
+
+func (b *breakable) WatchContexts(ctx context.Context, after uint64, fn func(store.ContextChange),
+	progress func(uint64), asks <-chan struct{}) error {
+	b.mu.Lock()
+	b.ctxFrom = append(b.ctxFrom, after)
+	b.mu.Unlock()
+	wctx, cancel := ending(ctx, b.endContexts)
+	defer cancel()
+	return b.Store.WatchContexts(wctx, after, fn, func(rev uint64) {
+		b.mu.Lock()
+		b.ctxAt = max(b.ctxAt, rev)
+		b.mu.Unlock()
+		progress(rev)
+	}, asks)
+}
+
+// A quiet feed's re-watch resumes from the progress etcd sent it, not from
+// the last change it delivered: with nothing written to c/ or rv/ for
+// longer than the compaction retention, a watch that ends (a leader
+// change, a member restart) is watched again above the compaction, and
+// neither feed reloads (final review 7e-1 I-1). Without progress
+// notifications, each would be ErrCompacted, a reload, and a page.
+func TestAQuietFeedResumesFromItsProgressNotARescan(t *testing.T) {
+	ctx := context.Background()
+	srv := etcdtest.Start(t, etcdtest.Options{ProgressNotify: 100 * time.Millisecond})
+	s, err := Open(Config{Endpoints: []string{srv.Endpoint}, Prefix: "/port49/", Now: time.Now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	b := &breakable{Store: s, endMarks: make(chan struct{}), endContexts: make(chan struct{})}
+	start, _, err := s.Revocations(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rescans atomic.Int32
+	fctx, cancel := context.WithCancel(ctx)
+	var wg sync.WaitGroup
+	defer func() { cancel(); wg.Wait() }()
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		store.FollowMarks(fctx, b, store.NewMarks(), start, nil, func(bool) {}, func() { rescans.Add(1) }, t.Logf)
+	}()
+	go func() {
+		defer wg.Done()
+		crypt.FollowContexts(fctx, b, nil, sealKeys, crypt.NewLedger(), start, func(bool) {},
+			func() { rescans.Add(1) }, t.Logf)
+	}()
+
+	until := func(what string, ok func() bool) {
+		t.Helper()
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			b.mu.Lock()
+			done := ok()
+			b.mu.Unlock()
+			if done {
+				return
+			}
+			if time.Now().After(deadline) {
+				b.mu.Lock()
+				state := fmt.Sprintf("marks at %d from %v, contexts at %d from %v", b.marksAt, b.marksFrom, b.ctxAt,
+					b.ctxFrom)
+				b.mu.Unlock()
+				t.Fatalf("waited 10s for %s; %s", what, state)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+	// Written elsewhere, never c/ or rv/, and compacted past where both
+	// feeds began, once both watches are told progress through the first
+	// write: a watch registered after the compaction would be compacted
+	// itself.
+	elsewhere := func() uint64 {
+		t.Helper()
+		resp, err := s.tok.Put(ctx, "/elsewhere", "x")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return uint64(resp.Header.Revision)
+	}
+	first := elsewhere()
+	until("both watches to be synced", func() bool { return b.marksAt >= first && b.ctxAt >= first })
+	top := elsewhere()
+	if _, err := s.tok.Compact(ctx, int64(top)); err != nil {
+		t.Fatal(err)
+	}
+	until("a progress notification past the compaction",
+		func() bool { return b.marksAt >= top && b.ctxAt >= top })
+	b.endMarks <- struct{}{}
+	b.endContexts <- struct{}{}
+	until("each feed to watch again", func() bool { return len(b.marksFrom) == 2 && len(b.ctxFrom) == 2 })
+	b.mu.Lock()
+	marksFrom, ctxFrom := b.marksFrom[1], b.ctxFrom[1]
+	b.mu.Unlock()
+	if marksFrom < top || ctxFrom < top {
+		t.Fatalf("re-watched from %d (marks) and %d (contexts), below the compaction at %d", marksFrom, ctxFrom, top)
+	}
+	// Running, not compacted: each new watch is told progress again.
+	now := elsewhere()
+	until("progress on the new watches", func() bool { return b.marksAt >= now && b.ctxAt >= now })
+	if n := rescans.Load(); n != 0 {
+		t.Fatalf("%d reload(s) after a re-watch within the progress etcd sent", n)
 	}
 }
