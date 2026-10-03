@@ -3,7 +3,9 @@ package etcd
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -132,21 +134,19 @@ func TestADeletedHoldNeverServesTwo(t *testing.T) {
 	}
 }
 
-// Hold honours its ctx while the store hangs, before the lease is granted
-// or after, and with no deadline of its own it gives up after ttl/3 as
-// the store unavailable, so a start says it is trying again and a SIGTERM
-// stops it; letting go of the lease it was granted waits at most a second
-// on the hung store, never hold_ttl (Task 12 review I-2; re-review m-6).
+// Hold honours its ctx while the store hangs, before the lease is granted,
+// after it, or after the lock is taken, and with no deadline of its own it
+// gives up after ttl/3 as the store unavailable, so a start says it is
+// trying again and a SIGTERM stops it; letting go of the lease it was
+// granted waits at most a second on the hung store, never hold_ttl, and
+// says the lease was left to expire (Task 12 review I-2; re-review m-6,
+// re-review 2 m-7, m-8).
 func TestHoldOnAHungStoreReturns(t *testing.T) {
 	srv := etcdtest.Start(t, etcdtest.Options{})
 	proxy := etcdtest.NewProxy(t, strings.TrimPrefix(srv.Endpoint, "http://"))
-	s, err := Open(Config{Endpoints: []string{"http://" + proxy.Addr()}, Prefix: etcdtest.Prefix()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	defer func() { holdGranted = func() {} }()
-	hold := func(ctx context.Context) (time.Duration, error) {
+	var said syncLines
+	defer func() { holdGranted, holdLocked = func() {}, func() {} }()
+	hold := func(s *Store, ctx context.Context) (time.Duration, error) {
 		start := time.Now()
 		done := make(chan error, 1)
 		go func() {
@@ -166,31 +166,42 @@ func TestHoldOnAHungStoreReturns(t *testing.T) {
 	}
 	const slack = 1500 * time.Millisecond
 	for _, c := range []struct {
-		name  string
-		after bool // the store hangs once the lease is granted
-	}{{"before the grant", false}, {"after the grant", true}} {
-		proxy.Hang(false)
-		if err := s.Ping(context.Background()); err != nil {
-			t.Fatal(err)
-		}
+		name   string
+		hangAt *func() // the step the store hangs after; nil: at once
+	}{{"before the grant", nil}, {"after the grant", &holdGranted}, {"after the lock", &holdLocked}} {
 		for _, deadline := range []time.Duration{2 * time.Second, 0} {
-			holdGranted = func() {}
-			if c.after {
-				holdGranted = func() { proxy.Hang(true) }
+			// A keyspace of its own: a lease the last let expire would hold
+			// the lock here until it did.
+			s, err := Open(Config{Endpoints: []string{"http://" + proxy.Addr()}, Prefix: etcdtest.Prefix(),
+				Logf: said.logf})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			if err := s.Ping(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			holdGranted, holdLocked = func() {}, func() {}
+			if c.hangAt != nil {
+				*c.hangAt = func() { proxy.Hang(true) }
 			} else {
 				proxy.Hang(true)
 			}
+			n := said.count("left to expire")
 			ctx, cancel := context.Background(), context.CancelFunc(func() {})
 			if deadline > 0 {
 				ctx, cancel = context.WithTimeout(ctx, deadline)
 			}
-			took, err := hold(ctx)
+			took, err := hold(s, ctx)
 			cancel()
 			switch {
 			case deadline > 0 && (err == nil || took > deadline+slack):
 				t.Errorf("%s, with a %v ctx: %v after %v", c.name, deadline, err, took)
 			case deadline == 0 && (!errors.Is(err, store.ErrUnavailable) || took > 10*time.Second/3+slack):
 				t.Errorf("%s, with no deadline: %v after %v, want unavailable within ttl/3", c.name, err, took)
+			}
+			if c.hangAt != nil && said.count("left to expire") != n+1 {
+				t.Errorf("%s: letting go of the lease on a hung store said nothing: %q", c.name, said.String())
 			}
 			proxy.Hang(false)
 		}
@@ -288,4 +299,34 @@ func TestTheDaemonCannotTakeTheHold(t *testing.T) {
 	}
 	_ = lost
 	release()
+}
+
+// syncLines collects what a store says through Logf.
+type syncLines struct {
+	mu    sync.Mutex
+	lines []string
+}
+
+func (l *syncLines) logf(format string, args ...any) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.lines = append(l.lines, fmt.Sprintf(format, args...))
+}
+
+func (l *syncLines) count(s string) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	n := 0
+	for _, line := range l.lines {
+		if strings.Contains(line, s) {
+			n++
+		}
+	}
+	return n
+}
+
+func (l *syncLines) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return strings.Join(l.lines, "\n")
 }

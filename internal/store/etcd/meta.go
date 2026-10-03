@@ -58,11 +58,15 @@ func (s *Store) Hold(ctx context.Context, ttl time.Duration, who string, waiting
 	}
 	// letGo ends the session and revokes its lease, waiting a second at
 	// most: sess.Close would wait out ttl on a hung store, and a lease not
-	// revoked expires anyway (re-review m-6).
+	// revoked expires anyway (re-review m-6), which it says (re-review 2
+	// m-7).
 	letGo := func() {
 		sess.Orphan()
 		rctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		s.ctx.Revoke(rctx, lease.ID)
+		if _, err := s.ctx.Revoke(rctx, lease.ID); err != nil {
+			s.logf("etcd: letting go of %s: revoking its lease: %v; the lease was left to expire within "+
+				"hold_ttl (%v), and the next port49d waits for it", s.k.meta("hold"), err, ttl)
+		}
 		cancel()
 		scancel()
 	}
@@ -103,6 +107,7 @@ func (s *Store) Hold(ctx context.Context, ttl time.Duration, who string, waiting
 		case <-time.After(time.Second):
 		}
 	}
+	holdLocked()
 	body, err := json.Marshal(holderRec{Who: who})
 	if err != nil {
 		letGo()
@@ -146,9 +151,9 @@ func (s *Store) Hold(ctx context.Context, ttl time.Duration, who string, waiting
 	return lost, release, nil
 }
 
-// holdGranted is told when Hold has its lease: a test hangs the store
-// there.
-var holdGranted = func() {}
+// holdGranted and holdLocked are told when Hold has its lease and when
+// it has the lock: a test hangs the store there.
+var holdGranted, holdLocked = func() {}, func() {}
 
 // fence is the hold's watch (pre-flight I15; re-check R-I4). Every sixth
 // of ttl it reads the lock key, linearizably, and the lease's remaining
