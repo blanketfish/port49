@@ -86,8 +86,8 @@ var ErrNotSeparated = errors.New("etcd: a store identity reaches past its role")
 // The probes are the backstop, chiefly for auth being off, when etcd
 // has no grants to read: the broker's identity must be allowed, and the
 // daemon's refused, each of reading the idempotency records and writing
-// a mark, the token indexes, an idempotency record and meta/, one key in
-// each. A write is probed by a transaction whose compare can never hold,
+// a mark, the token indexes, an idempotency record, a superseded instant
+// and meta/, one key in each. A write is probed by a transaction whose compare can never hold,
 // so it writes nothing; etcd checks the permissions of both branches
 // before it evaluates the compare, so a missing grant is still refused
 // (pre-flight M32; measured on v3.6 by
@@ -125,6 +125,7 @@ func (s *Store) CheckIdentity(ctx context.Context, broker bool) error {
 		{"writing " + s.k.family(famMark), func() error { return write(famMark) }},
 		{"writing " + s.k.family(famTokByPrin), func() error { return write(famTokByPrin) }},
 		{"writing " + s.k.family(famTokByCert), func() error { return write(famTokByCert) }},
+		{"writing " + s.k.family(famSuperseded), func() error { return write(famSuperseded) }},
 		{"writing " + s.k.family(famMeta), func() error { return write(famMeta) }},
 	}
 	for _, p := range probes {
