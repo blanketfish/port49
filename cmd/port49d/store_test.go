@@ -459,6 +459,41 @@ func TestOpenStoresSharesOneSayer(t *testing.T) {
 	}
 }
 
+// A run after a store gone shows the alarm a run before it raised for as
+// long as it waits for the store, not from when the store answers: the
+// wait is the outage, and an alert would resolve through it (re-review
+// I-3).
+func TestARaisedAlarmIsGaugedWhileTheStoreIsAway(t *testing.T) {
+	cfgPath, _, _, proxy, _ := etcdRunServer(t)
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys, err := cfg.EncryptionKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy.Hang(true)
+	defer proxy.Hang(false)
+	alarm := newKeyAlarm()
+	alarm.warn(storedWindow{current: "enc2"}, func() {})
+	m := metrics.New(prometheus.NewRegistry())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var out syncBuffer
+	done := make(chan error, 1)
+	go func() {
+		_, err := openStores(ctx, cfg, keys, m, &out, newReadiness(), true, func(error) {}, crypt.NewLedger(), alarm)
+		done <- err
+	}()
+	waitCountWithin(t, &out, "not answering", 1, 10*time.Second)
+	if v := testutil.ToFloat64(m.CryptStoreKeyUnknown); v != 1 {
+		t.Fatalf("port49_crypt_store_key_unknown = %v while the store is away", v)
+	}
+	cancel()
+	<-done
+}
+
 // A last window that does not decode never refuses the start: whoever can
 // write the store would otherwise hold every start shut. It is said with
 // none of its bytes, gauged, and written over with this window (spec, a

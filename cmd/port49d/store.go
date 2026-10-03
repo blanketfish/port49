@@ -76,6 +76,12 @@ func openStores(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 		return stores{daemon: st, broker: st, close: func() {}}, nil
 	}
 	e := cfg.Store.Etcd
+	// A run after a store gone shows the alarm a run before raised from
+	// its first scrape: the wait below is the outage, and a gauge at 0
+	// through it would resolve the alert (keyAlarm; re-review I-3).
+	if alarm.raised {
+		m.CryptStoreKeyUnknown.Set(1)
+	}
 	rd.set(readyStore)
 	eps := strings.Join(e.Endpoints, ", ")
 	var deadline time.Time
