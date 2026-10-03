@@ -15,7 +15,9 @@ import (
 // machine's race, not the test's, and any retry can lose it too (7d's
 // flake: its one retry hit a taken port again). StartCluster tries again
 // until clusterRetryFor has passed: here the first two attempts each meet
-// a taken port, and the third starts.
+// a taken port, and the third starts. A failed attempt stops at once, not
+// after its other members finish starting and stopping (~10s each before,
+// which spent a third of the deadline per loss).
 func TestStartClusterRetriesAPortTaken(t *testing.T) {
 	taken, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -23,8 +25,12 @@ func TestStartClusterRetriesAPortTaken(t *testing.T) {
 	}
 	defer taken.Close()
 	pick, picks := freePort, 0
+	var tries []time.Time // when each attempt picked its first port
 	freePort = func(t testing.TB) string {
 		picks++
+		if picks%6 == 1 {
+			tries = append(tries, time.Now())
+		}
 		if picks == 1 || picks == 7 { // the first pick of the first two attempts
 			return taken.Addr().String()
 		}
@@ -34,6 +40,11 @@ func TestStartClusterRetriesAPortTaken(t *testing.T) {
 	c := StartCluster(t)
 	if picks < 18 || picks%6 != 0 || len(c.Endpoints) != 3 {
 		t.Fatalf("%d ports picked, %d endpoints: the cluster was not tried a third time", picks, len(c.Endpoints))
+	}
+	for i := range 2 {
+		if d := tries[i+1].Sub(tries[i]); d > time.Second {
+			t.Errorf("failed attempt %d took %v: it waited on its other members", i+1, d)
+		}
 	}
 }
 

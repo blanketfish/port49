@@ -78,7 +78,12 @@ type memberSpec struct {
 	client, peer   string // URLs; "" picks a loopback port
 	cluster, token string // InitialCluster; "" is this member alone
 	tls            *transport.TLSInfo
+	stop           <-chan struct{} // closed: give up waiting to be ready
 }
+
+// errStopped is member's error when its spec's stop closed before it was
+// ready: a cluster another member of which failed to start.
+var errStopped = errors.New("stopped before ready")
 
 func member(s memberSpec) (*embed.Etcd, error) {
 	cfg := embed.NewConfig()
@@ -111,10 +116,21 @@ func member(s memberSpec) (*embed.Etcd, error) {
 	select {
 	case <-e.Server.ReadyNotify():
 		return e, nil
+	case <-s.stop:
+		halt(e)
+		return nil, errStopped
 	case <-time.After(30 * time.Second):
 		e.Close()
 		return nil, fmt.Errorf("member %s not ready in 30s", s.name)
 	}
+}
+
+// halt stops a member of a cluster that failed to start. HardStop first:
+// Close alone has a leader hand off to a peer, and waits ReqTimeout (~7s)
+// when that peer is gone.
+func halt(e *embed.Etcd) {
+	e.Server.HardStop()
+	e.Close()
 }
 
 func or(s, d string) string {
@@ -280,28 +296,53 @@ func startCluster(t testing.TB) (*Cluster, error) {
 	}
 	dir := t.TempDir()
 	c := &Cluster{Endpoints: clients, members: make([]*embed.Etcd, 3), once: make([]sync.Once, 3)}
-	errs := make(chan error, 3)
+	type started struct {
+		i int
+		e *embed.Etcd
+	}
+	stop, results, errs := make(chan struct{}), make(chan started, 3), make(chan error, 3)
 	for i, n := range names {
 		go func(i int, n string) {
 			e, err := member(memberSpec{name: n, dir: dir, client: clients[i], peer: peers[i],
-				cluster: strings.Join(initial, ","), token: "port49-etcdtest"})
-			c.members[i] = e
-			errs <- err
+				cluster: strings.Join(initial, ","), token: "port49-etcdtest", stop: stop})
+			if err != nil {
+				errs <- err
+				return
+			}
+			results <- started{i, e}
 		}(i, n)
 	}
-	var failed []error
-	for range names {
-		if err := <-errs; err != nil {
-			failed = append(failed, err)
+	for left := len(names); left > 0; left-- {
+		select {
+		case r := <-results:
+			c.members[r.i] = r.e
+		case err := <-errs:
+			// The first failure stops the attempt at once. A member still
+			// in etcd's bootstrap cannot be cut short (it asks each peer,
+			// a taken port too, for up to a second), so the others are
+			// halted in the background, and t's cleanup waits for them
+			// before its temp dir goes (plan 7e Task 2: a failed attempt
+			// cost ~10s waiting on them, a third of the retry deadline).
+			close(stop)
+			done := make(chan struct{})
+			go func(left int) {
+				defer close(done)
+				for _, e := range c.members {
+					if e != nil {
+						halt(e)
+					}
+				}
+				for ; left > 0; left-- {
+					select {
+					case r := <-results:
+						halt(r.e)
+					case <-errs:
+					}
+				}
+			}(left - 1)
+			t.Cleanup(func() { <-done })
+			return nil, err
 		}
-	}
-	if len(failed) > 0 {
-		for _, e := range c.members {
-			if e != nil {
-				e.Close()
-			}
-		}
-		return nil, errors.Join(failed...)
 	}
 	return c, nil
 }
