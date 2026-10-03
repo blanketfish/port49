@@ -12,6 +12,8 @@ package config
 import (
 	"bytes"
 	"crypto/ed25519"
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -1590,6 +1592,12 @@ func checkStore(s storeYAML, hasBroker, hasAdminSocket bool) (StoreConfig, error
 				return StoreConfig{}, err
 			}
 		}
+		// etcd takes a client certificate's CN as its user, and root is
+		// its administrator, past every role (Ruling T11-a).
+		if certCN(id.id.CertFile) == "root" {
+			return StoreConfig{}, fmt.Errorf("%s.cert_file: its CN is \"root\", etcd's administrator, which "+
+				"bypasses every role: give the component a certificate of its own (decision 35)", id.name)
+		}
 	}
 	switch e.Roles = or(e.Roles, RolesEnforced); e.Roles {
 	case RolesEnforced, RolesUnenforced:
@@ -1644,6 +1652,25 @@ func checkStore(s storeYAML, hasBroker, hasAdminSocket bool) (StoreConfig, error
 	}
 	out.Etcd = &e
 	return out, nil
+}
+
+// certCN is the subject CN of the first certificate in the PEM file at
+// path, or "" when there is none or it does not parse: port49d's start
+// names that (Task 12).
+func certCN(path string) string {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	b, _ := pem.Decode(raw)
+	if b == nil || b.Type != "CERTIFICATE" {
+		return ""
+	}
+	c, err := x509.ParseCertificate(b.Bytes)
+	if err != nil {
+		return ""
+	}
+	return c.Subject.CommonName
 }
 
 // readableFile refuses a path that is empty, relative (port49d's working

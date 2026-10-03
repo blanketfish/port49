@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/rhwendt/port49/internal/testpki"
 )
 
 // storeFiles writes a CA and two identities' files, mode 0600, and
@@ -174,5 +176,52 @@ func TestAStoreRefusalIsAConfigError(t *testing.T) {
 	_, err := StoreOf([]byte("store: {backend: redis}\n"))
 	if err == nil || !strings.HasPrefix(err.Error(), `config: store.backend "redis"`) {
 		t.Fatalf("%v", err)
+	}
+}
+
+// A store identity whose certificate's CN is root is refused at load,
+// for either component: etcd would take it as its administrator, past
+// every role (Ruling T11-a). A file that is not a certificate is left
+// to port49d's start, which names it.
+func TestAStoreIdentityNamedRootIsRefused(t *testing.T) {
+	dir := storeFiles(t)
+	now := time.Now()
+	ca, err := testpki.NewCA("ca", now.Add(-time.Hour), now.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, cn := range []string{"root", "port49-x"} {
+		c, err := ca.Issue(testpki.Leaf{CommonName: cn, Client: true, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		cp, _, err := testpki.PEMs(c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, cn+".pem"), cp, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, c := range []struct {
+		name string
+		edit func(*storeYAML)
+		want string
+	}{
+		{"the daemon's", func(s *storeYAML) { s.Etcd.Daemon.CertFile = filepath.Join(dir, "root.pem") },
+			`store.etcd.daemon.cert_file: its CN is "root"`},
+		{"the broker's", func(s *storeYAML) { s.Etcd.Broker.CertFile = filepath.Join(dir, "root.pem") },
+			`store.etcd.broker.cert_file: its CN is "root"`},
+	} {
+		y := etcdYAML(dir)
+		c.edit(&y)
+		if _, err := checkStore(y, true, true); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: %v, want %q", c.name, err, c.want)
+		}
+	}
+	y := etcdYAML(dir)
+	y.Etcd.Daemon.CertFile = filepath.Join(dir, "port49-x.pem")
+	if _, err := checkStore(y, true, true); err != nil {
+		t.Errorf("another CN: %v", err)
 	}
 }

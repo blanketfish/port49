@@ -15,12 +15,22 @@ import (
 // provisioned is a TLS member with auth on and port49's roles applied
 // for prefix: users port49-daemon and port49-broker.
 func provisioned(t *testing.T, prefix string) *etcdtest.Server {
+	return provisionedWith(t, prefix, nil, nil)
+}
+
+// provisionedWith is provisioned with extra grants after port49's, and
+// users overriding port49's two.
+func provisionedWith(t *testing.T, prefix string, extra []etcdtest.Grant, users map[string][]string) *etcdtest.Server {
 	srv := etcdtest.Start(t, etcdtest.Options{TLS: true})
 	var grants []etcdtest.Grant
 	for _, g := range Roles(prefix) {
 		grants = append(grants, etcdtest.Grant{Role: g.Role, Key: g.Key, RangeEnd: g.RangeEnd, Write: g.Write})
 	}
-	srv.EnableAuth(t, grants, map[string][]string{"port49-daemon": {RoleDaemon}, "port49-broker": {RoleBroker}})
+	all := map[string][]string{"port49-daemon": {RoleDaemon}, "port49-broker": {RoleBroker}}
+	for u, rs := range users {
+		all[u] = rs
+	}
+	srv.EnableAuth(t, append(grants, extra...), all)
 	return srv
 }
 
@@ -115,14 +125,9 @@ func TestCheckIdentityRefusesADaemonWithTheBrokersReach(t *testing.T) {
 	}
 	// A daemon role that reads no idempotency record but may write a mark
 	// is not separated either: the write probe catches it (pre-flight M32).
-	loose := etcdtest.Start(t, etcdtest.Options{TLS: true})
-	var grants []etcdtest.Grant
-	for _, g := range Roles(prefix) {
-		grants = append(grants, etcdtest.Grant{Role: g.Role, Key: g.Key, RangeEnd: g.RangeEnd, Write: g.Write})
-	}
 	marks := newKeys(prefix).family(famMark)
-	grants = append(grants, etcdtest.Grant{Role: RoleDaemon, Key: marks, RangeEnd: clientv3.GetPrefixRangeEnd(marks), Write: true})
-	loose.EnableAuth(t, grants, map[string][]string{"port49-daemon": {RoleDaemon}, "port49-broker": {RoleBroker}})
+	loose := provisionedWith(t, prefix, []etcdtest.Grant{{Role: RoleDaemon, Key: marks,
+		RangeEnd: clientv3.GetPrefixRangeEnd(marks), Write: true}}, nil)
 	if err := openAs(t, loose, "port49-daemon", prefix).CheckIdentity(ctx, false); !errors.Is(err, ErrNotSeparated) {
 		t.Fatalf("a daemon that may write a mark: %v", err)
 	}
@@ -148,5 +153,65 @@ func TestOpenDialsAPoolEach(t *testing.T) {
 	defer s.Close()
 	if s.tok == s.ctx || len(s.owned) != 2 || s.tokLeases == s.ctxLeases {
 		t.Fatal("Open shares one client between the pools")
+	}
+}
+
+// A daemon role widened on a range no probe key falls in is still not
+// separated: CheckIdentity reads the daemon's own grants, so a grant
+// that reaches a mark, the keyspace hold, an idempotency record, a token
+// index, or anything outside the daemon's families is refused whatever
+// its range (task 11 review I1).
+func TestCheckIdentityReadsTheDaemonsGrants(t *testing.T) {
+	const prefix = "/port49/"
+	k := newKeys(prefix)
+	sub := func(p string, write bool) etcdtest.Grant {
+		return etcdtest.Grant{Role: RoleDaemon, Key: p, RangeEnd: clientv3.GetPrefixRangeEnd(p), Write: write}
+	}
+	for name, g := range map[string]etcdtest.Grant{
+		"readwrite on rv/principal/":   sub(k.family(famMark)+store.RevocationPrincipal+"/", true),
+		"readwrite on rv/cert/":        sub(k.family(famMark)+store.RevocationCert+"/", true),
+		"readwrite on meta/hold":       {Role: RoleDaemon, Key: k.meta("hold"), Write: true},
+		"readwrite on id/user:alice/":  sub(k.family(famIdem)+"user:alice/", true),
+		"read on id/user:alice/":       sub(k.family(famIdem)+"user:alice/", false),
+		"read on tp/user:alice/":       sub(k.family(famTokByPrin)+"user:alice/", false),
+		"readwrite outside its prefix": sub("/elsewhere/", true),
+		"readwrite from v1/ onward":    {Role: RoleDaemon, Key: k.root, RangeEnd: "\x00", Write: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			srv := provisionedWith(t, prefix, []etcdtest.Grant{g}, nil)
+			err := openAs(t, srv, "port49-daemon", prefix).CheckIdentity(context.Background(), false)
+			if !errors.Is(err, ErrNotSeparated) {
+				t.Fatalf("CheckIdentity: %v", err)
+			}
+		})
+	}
+}
+
+// A store identity that is etcd's root, by its certificate's CN or by
+// holding the root role, bypasses every role: refused for the daemon
+// and the broker alike (Ruling T11-a).
+func TestCheckIdentityRefusesRoot(t *testing.T) {
+	const prefix = "/port49/"
+	ctx := context.Background()
+	srv := provisionedWith(t, prefix, nil, map[string][]string{"port49-broker": {RoleBroker, "root"}})
+	for _, broker := range []bool{true, false} {
+		if err := openAs(t, srv, "root", prefix).CheckIdentity(ctx, broker); !errors.Is(err, ErrNotSeparated) {
+			t.Errorf("CN root, broker %v: %v", broker, err)
+		}
+	}
+	if err := openAs(t, srv, "port49-broker", prefix).CheckIdentity(ctx, true); !errors.Is(err, ErrNotSeparated) {
+		t.Errorf("a broker holding the root role: %v", err)
+	}
+	// With auth off the broker is not refused: under
+	// store.etcd.roles: unenforced it is the daemon's check that is waived.
+	open := etcdtest.Start(t, etcdtest.Options{TLS: true})
+	if err := openAs(t, open, "port49-broker", prefix).CheckIdentity(ctx, true); err != nil {
+		t.Errorf("the broker on etcd with auth off: %v", err)
+	}
+	// Its certificate's CN is refused there too, by name: auth is off,
+	// but turning it on would make that certificate etcd's root.
+	if err := openAs(t, open, "root", prefix).CheckIdentity(ctx, true); !errors.Is(err, ErrNotSeparated) {
+		t.Errorf("CN root on etcd with auth off: %v", err)
 	}
 }

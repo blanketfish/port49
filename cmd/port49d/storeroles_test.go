@@ -15,6 +15,13 @@ import (
 // and a port49d.yaml naming them, the first CN as the daemon's.
 func storeRolesFixture(t *testing.T, daemonCN, brokerCN string) string {
 	t.Helper()
+	return storeRolesFixtureWith(t, daemonCN, brokerCN, "")
+}
+
+// storeRolesFixtureWith is storeRolesFixture with etcd lines added to
+// store.etcd, each indented four spaces.
+func storeRolesFixtureWith(t *testing.T, daemonCN, brokerCN, etcdLines string) string {
+	t.Helper()
 	dir := t.TempDir()
 	now := time.Now()
 	ca, err := testpki.NewCA("ca", now.Add(-time.Hour), now.Add(time.Hour))
@@ -41,12 +48,12 @@ func storeRolesFixture(t *testing.T, daemonCN, brokerCN string) string {
 		name := []string{"daemon", "broker"}[i]
 		ids = append(ids, [2]string{write(name+".pem", cp), write(name+"-key.pem", kp)})
 	}
-	return writeStoreRolesConfig(t, dir, write("ca.pem", ca.PEM()), ids[0], ids[1])
+	return writeStoreRolesConfig(t, dir, write("ca.pem", ca.PEM()), ids[0], ids[1], etcdLines)
 }
 
 // writeStoreRolesConfig writes a minimal valid port49d.yaml with a broker:
 // block and a store: block naming those files.
-func writeStoreRolesConfig(t *testing.T, dir, ca string, d, b [2]string) string {
+func writeStoreRolesConfig(t *testing.T, dir, ca string, d, b [2]string, etcdLines string) string {
 	t.Helper()
 	base := writeRunConfig(t, brokerConfig(t, minimalPolicy).Broker)
 	raw, err := os.ReadFile(base)
@@ -55,7 +62,7 @@ func writeStoreRolesConfig(t *testing.T, dir, ca string, d, b [2]string) string 
 	}
 	raw = append(raw, []byte("\nstore:\n  backend: etcd\n  etcd:\n    endpoints: [https://127.0.0.1:2379]\n"+
 		"    ca_file: "+ca+"\n    daemon: {cert_file: "+d[0]+", key_file: "+d[1]+"}\n"+
-		"    broker: {cert_file: "+b[0]+", key_file: "+b[1]+"}\n"+
+		"    broker: {cert_file: "+b[0]+", key_file: "+b[1]+"}\n"+etcdLines+
 		"admin_socket: "+filepath.Join(dir, "admin.sock")+"\n")...) // etcd needs one (Task 10, I16)
 	p := filepath.Join(dir, "port49d.yaml")
 	if err := os.WriteFile(p, raw, 0o600); err != nil {
@@ -84,6 +91,7 @@ func TestStoreRolesPrintsTheCommands(t *testing.T) {
 		// The residual, no wider than the spec's (§12; decision 35).
 		"until plan 7e port49d also holds the broker's",
 		"store.etcd.roles: unenforced",
+		"if a role already exists, check it with etcdctl role get first",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("missing %q in:\n%s", want, out.String())
@@ -105,13 +113,34 @@ func TestStoreRolesPrintsTheCommands(t *testing.T) {
 }
 
 // A CN or prefix holding anything a shell would read is refused, never
-// printed into commands etcd's root runs (pre-flight M34).
+// printed into commands etcd's root runs (pre-flight M34). Config takes
+// such a prefix (it must only start with /), so the refusal is
+// store-roles' own.
 func TestStoreRolesRefusesAShellUnsafeName(t *testing.T) {
-	cfg := storeRolesFixture(t, "port49-daemon; rm -rf /", "port49-broker")
-	var out, errb bytes.Buffer
-	if code := storeRolesCmd([]string{"--config", cfg}, &out, &errb); code != 1 || out.Len() != 0 ||
-		!strings.Contains(errb.String(), "A-Za-z0-9") {
-		t.Fatalf("exit %d, stdout %q, stderr %q", code, out.String(), errb.String())
+	for name, cfg := range map[string]string{
+		"a daemon CN": storeRolesFixture(t, "port49-daemon; rm -rf /", "port49-broker"),
+		"a broker CN": storeRolesFixture(t, "port49-daemon", "port49-broker`id`"),
+		"a prefix":    storeRolesFixtureWith(t, "port49-daemon", "port49-broker", "    prefix: \"/port49 $(x)/\"\n"),
+	} {
+		var out, errb bytes.Buffer
+		if code := storeRolesCmd([]string{"--config", cfg}, &out, &errb); code != 1 || out.Len() != 0 ||
+			!strings.Contains(errb.String(), "A-Za-z0-9") {
+			t.Errorf("%s: exit %d, stdout %q, stderr %q", name, code, out.String(), errb.String())
+		}
+	}
+}
+
+// A certificate whose CN is root is refused for either component,
+// printing nothing: etcd would take it as its administrator (Ruling
+// T11-a). Config refuses it first.
+func TestStoreRolesRefusesRoot(t *testing.T) {
+	for _, cns := range [][2]string{{"root", "port49-broker"}, {"port49-daemon", "root"}} {
+		cfg := storeRolesFixture(t, cns[0], cns[1])
+		var out, errb bytes.Buffer
+		if code := storeRolesCmd([]string{"--config", cfg}, &out, &errb); code != 1 || out.Len() != 0 ||
+			!strings.Contains(errb.String(), `its CN is "root"`) {
+			t.Errorf("%v: exit %d, stdout %q, stderr %q", cns, code, out.String(), errb.String())
+		}
 	}
 }
 

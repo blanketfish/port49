@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 
+	"go.etcd.io/etcd/api/v3/authpb"
+	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
@@ -33,16 +35,24 @@ type Grant struct {
 	Write               bool
 }
 
+// The daemon's families: read-write on daemonWrites, read-only on
+// daemonReads, nothing on daemonNever (spec §12).
+var (
+	daemonWrites = []string{famToken, famReceipt, famReceiptBy, famContext, famIndexed, famByPrincipal,
+		famBySid, famByCert, famBlob}
+	daemonReads = []string{famMark, famMeta}
+	daemonNever = []string{famIdem, famTokByPrin, famTokByCert}
+)
+
 // Roles is every grant the two roles need for prefix's keyspace.
 func Roles(prefix string) []Grant {
 	k := newKeys(prefix)
 	var out []Grant
-	for _, fam := range []string{famToken, famReceipt, famReceiptBy, famContext, famIndexed, famByPrincipal,
-		famBySid, famByCert, famBlob} {
+	for _, fam := range daemonWrites {
 		p := k.family(fam)
 		out = append(out, Grant{Role: RoleDaemon, Key: p, RangeEnd: clientv3.GetPrefixRangeEnd(p), Write: true})
 	}
-	for _, fam := range []string{famMark, famMeta} {
+	for _, fam := range daemonReads {
 		p := k.family(fam)
 		out = append(out, Grant{Role: RoleDaemon, Key: p, RangeEnd: clientv3.GetPrefixRangeEnd(p)})
 	}
@@ -50,19 +60,40 @@ func Roles(prefix string) []Grant {
 	return out
 }
 
+// RootUser is etcd's administrator, user and role alike. A store
+// identity that is root bypasses every role, so neither component may be
+// (Ruling T11-a).
+const RootUser = "root"
+
 // ErrNotSeparated is the daemon's identity able to do what only the
 // broker's may: etcd's roles for port49 are not in force.
 var ErrNotSeparated = errors.New("etcd: the daemon's identity has the broker's reach")
 
 // CheckIdentity is port49d's start check that the roles are in force.
-// Both identities must read the contexts. The broker's must be allowed,
-// and the daemon's refused, each of: reading the idempotency records, and
-// writing a mark, the token indexes, an idempotency record and meta/. A
-// write is probed by a transaction whose compare can never hold, so it
-// writes nothing; etcd checks the permissions of both branches before it
-// evaluates the compare, so a missing grant is still refused (pre-flight
-// M32; measured on v3.6 by TestCheckIdentityRefusesADaemonWithTheBrokersReach).
+// Neither identity may be etcd's root, by its certificate's CN or by
+// holding the root role. Both must read the contexts.
+//
+// For the daemon, the authoritative check is its own grants, read with
+// UserGet on itself and RoleGet on each of its roles: a grant of any kind
+// that reaches an idempotency record or a token index, and a write grant
+// that reaches a mark or meta/ or falls outside the daemon's nine
+// families, is refused whatever its range. A grant on a sub-range is
+// added to what a role holds, so sampling keys would miss one (task 11
+// review I1).
+//
+// The probes are the backstop, chiefly for auth being off, when etcd
+// has no grants to read: the broker's identity must be allowed, and the
+// daemon's refused, each of reading the idempotency records and writing
+// a mark, the token indexes, an idempotency record and meta/, one key in
+// each. A write is probed by a transaction whose compare can never hold,
+// so it writes nothing; etcd checks the permissions of both branches
+// before it evaluates the compare, so a missing grant is still refused
+// (pre-flight M32; measured on v3.6 by
+// TestCheckIdentityRefusesADaemonWithTheBrokersReach).
 func (s *Store) CheckIdentity(ctx context.Context, broker bool) error {
+	if s.user == RootUser {
+		return fmt.Errorf("%w: its certificate's CN is %q, etcd's administrator", ErrNotSeparated, RootUser)
+	}
 	read := func(fam string) error {
 		_, err := s.tok.Get(ctx, s.k.family(fam), clientv3.WithPrefix(), clientv3.WithLimit(1), clientv3.WithKeysOnly())
 		return unavailable(err)
@@ -98,5 +129,76 @@ func (s *Store) CheckIdentity(ctx context.Context, broker bool) error {
 			return fmt.Errorf("%s: %w", p.what, err) // an outage: the start waits
 		}
 	}
+	return s.checkGrants(ctx, broker)
+}
+
+// checkGrants reads this identity's roles and, for the daemon, their
+// permissions. AuthStatus is root's alone on v3.6, so auth being off is
+// read from the user being unknown: with auth on, a request as a user
+// etcd does not know is refused before this, at the probes. With auth
+// off the probes have refused the daemon already, and the broker's reach
+// is the keyspace's either way.
+func (s *Store) checkGrants(ctx context.Context, broker bool) error {
+	if s.user == "" {
+		return nil // in the clear: tests only, and auth cannot be on
+	}
+	u, err := s.tok.UserGet(ctx, s.user)
+	if errors.Is(err, rpctypes.ErrUserNotFound) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("reading user %q's roles: %w", s.user, unavailable(err))
+	}
+	for _, role := range u.Roles {
+		if role == RootUser {
+			return fmt.Errorf("%w: user %q holds etcd's root role", ErrNotSeparated, s.user)
+		}
+		if broker {
+			continue
+		}
+		r, err := s.tok.RoleGet(ctx, role)
+		if err != nil {
+			return fmt.Errorf("reading role %q's grants: %w", role, unavailable(err))
+		}
+		for _, p := range r.Perm {
+			if why := s.k.beyondDaemon(string(p.Key), string(p.RangeEnd), p.PermType != authpb.READ); why != "" {
+				return fmt.Errorf("%w: role %q grants %s on [%q, %q), which %s", ErrNotSeparated, role,
+					authpb.Permission_Type_name[int32(p.PermType)], p.Key, p.RangeEnd, why)
+			}
+		}
+	}
 	return nil
+}
+
+// beyondDaemon says what a grant on etcd's [key, end) reaches that the
+// daemon's role may not, or "" when nothing. An empty end is the one key;
+// an end of "\x00" is every key from key on.
+func (k keys) beyondDaemon(key, end string, write bool) string {
+	switch end {
+	case "":
+		end = key + "\x00"
+	case "\x00":
+		end = "" // unbounded
+	}
+	overlaps := func(fam string) bool {
+		f := k.family(fam)
+		return key < clientv3.GetPrefixRangeEnd(f) && (end == "" || f < end)
+	}
+	for _, fam := range daemonNever {
+		if overlaps(fam) {
+			return "reaches " + k.family(fam)
+		}
+	}
+	if !write {
+		return ""
+	}
+	// A write must fall inside one family the daemon writes, which keeps
+	// it off the marks and meta/ as well.
+	for _, fam := range daemonWrites {
+		f := k.family(fam)
+		if key >= f && end != "" && end <= clientv3.GetPrefixRangeEnd(f) {
+			return ""
+		}
+	}
+	return "writes outside the families the daemon writes"
 }

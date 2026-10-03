@@ -41,14 +41,16 @@ func storeRolesCmd(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	users := map[string]string{}
-	for role, path := range map[string]string{etcdstore.RoleDaemon: sc.Etcd.Daemon.CertFile,
-		etcdstore.RoleBroker: sc.Etcd.Broker.CertFile} {
-		cn, err := commonName(path)
+	for _, id := range []struct{ role, path string }{
+		{etcdstore.RoleDaemon, sc.Etcd.Daemon.CertFile},
+		{etcdstore.RoleBroker, sc.Etcd.Broker.CertFile},
+	} {
+		cn, err := commonName(id.path)
 		if err != nil {
-			fmt.Fprintf(stderr, "port49d store-roles: %s: %v\n", path, err)
+			fmt.Fprintf(stderr, "port49d store-roles: %s: %v\n", id.path, err)
 			return 1
 		}
-		users[role] = cn
+		users[id.role] = cn
 	}
 	if users[etcdstore.RoleDaemon] == users[etcdstore.RoleBroker] {
 		fmt.Fprintf(stderr, "port49d store-roles: store.etcd.daemon and store.etcd.broker are both CN %q: each "+
@@ -75,6 +77,12 @@ func storeRolesCmd(args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintln(stdout, "# principal or certificate. That holds for the daemon's credential taken alone:")
 	fmt.Fprintln(stdout, "# until plan 7e port49d also holds the broker's, whose role is the whole keyspace,")
 	fmt.Fprintln(stdout, "# marks included, and under store.etcd.roles: unenforced the daemon's is too.")
+	// etcdctl role add fails on a role that exists and leaves its grants;
+	// a grant on another range than these is added to the role, not
+	// replaced (task 11 review M3). port49d's start check refuses a daemon
+	// role that reaches further.
+	fmt.Fprintln(stdout, "# if a role already exists, check it with etcdctl role get first: a grant on a range")
+	fmt.Fprintln(stdout, "# not printed here stays in force.")
 	made := map[string]bool{}
 	for _, g := range etcdstore.Roles(sc.Etcd.Prefix) {
 		if !made[g.Role] {

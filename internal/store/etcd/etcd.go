@@ -13,6 +13,7 @@ package etcd
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"log"
@@ -66,6 +67,9 @@ type Store struct {
 	seen                 seenCache          // GetContext's last read per key (contexts.go)
 	logf                 func(format string, args ...any)
 	idxUndecodable       prometheus.Counter // nil counts nothing
+	// user is the etcd user this identity authenticates as, its client
+	// certificate's CN; "" in the clear. CheckIdentity reads its grants.
+	user string
 }
 
 var _ store.Store = (*Store)(nil)
@@ -102,6 +106,7 @@ func Open(c Config) (*Store, error) {
 	}
 	s := newStore(tok, ctxCli, c)
 	s.owned = []*clientv3.Client{tok, ctxCli}
+	s.user = userOf(c.TLS)
 	return s, nil
 }
 
@@ -143,6 +148,19 @@ func dial(c Config) (*clientv3.Client, error) {
 		return nil, fmt.Errorf("etcd at %v: %w", c.Endpoints, err)
 	}
 	return cli, nil
+}
+
+// userOf is the CN of t's client certificate, the user etcd
+// authenticates it as; "" when there is none or it does not parse.
+func userOf(t *tls.Config) string {
+	if t == nil || len(t.Certificates) == 0 || len(t.Certificates[0].Certificate) == 0 {
+		return ""
+	}
+	c, err := x509.ParseCertificate(t.Certificates[0].Certificate[0])
+	if err != nil {
+		return ""
+	}
+	return c.Subject.CommonName
 }
 
 // newStore is a store on clients the caller owns: tests build many on one.
