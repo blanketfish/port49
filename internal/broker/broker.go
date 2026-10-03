@@ -145,6 +145,10 @@ type Broker struct {
 	// (token.Request). It is this process's copy of the store's (plan 7e,
 	// Ruling 9), each entry kept SupersededFor (supersede).
 	superseded map[store.TokenKey]time.Time
+	// supersedePruned is when supersede last pruned superseded: at most once
+	// per supersedePruneEvery, so a pass that supersedes n keys scans the
+	// map once, not n times, under mu.
+	supersedePruned time.Time
 	// queued is, by (issuer, serial), each certificate in revokeQueue, and
 	// pending each one a store error or a full queue left for RetryPending.
 	queued  map[[2]string]bool
@@ -632,9 +636,12 @@ func (b *Broker) supersede(ctx context.Context, k store.TokenKey, at time.Time) 
 	if at.After(b.superseded[k]) {
 		b.superseded[k] = at
 	}
-	for key, t := range b.superseded {
-		if b.Now().Sub(t) > store.SupersededFor {
-			delete(b.superseded, key)
+	if now := b.Now(); now.Sub(b.supersedePruned) >= supersedePruneEvery {
+		b.supersedePruned = now
+		for key, t := range b.superseded {
+			if now.Sub(t) > store.SupersededFor {
+				delete(b.superseded, key)
+			}
 		}
 	}
 	b.mu.Unlock()
@@ -645,6 +652,11 @@ func (b *Broker) supersede(ctx context.Context, k store.TokenKey, at time.Time) 
 			"mints a replay of them afresh", k.Username, k.NAS, err)
 	}
 }
+
+// supersedePruneEvery bounds how often supersede prunes its local copy: an
+// entry lives at most this long past SupersededFor, which only ever mints
+// a replay afresh.
+const supersedePruneEvery = time.Minute
 
 // supersededAt is the later of this process's instant for k and the
 // store's (every process's, and a start's purge).

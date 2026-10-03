@@ -909,12 +909,22 @@ func TestASupersededKeyReplaysAfreshOnAnotherBroker(t *testing.T) {
 	f := newFixture(t, 8)
 	other := second(f)
 	body := `{"devices":["leaf1"]}`
-	first := postTo(f, f.b, body, "k1").Body.String()
+	first := postTo(f, f.b, body, "k1")
+	permitted(t, first)
 	f.b.supersede(context.Background(), store.TokenKey{NAS: "leaf1", Username: "alice"}, f.b.Now())
 	f.advance(time.Second)
-	again := postTo(f, other, body, "k1").Body.String()
-	if again == first {
+	again := postTo(f, other, body, "k1")
+	permitted(t, again) // a fresh mint, not a refusal
+	if again.Body.String() == first.Body.String() {
 		t.Fatal("another broker answered a superseded key's replay with the deleted token")
+	}
+}
+
+// permitted fails t unless w is a 200 whose one item is a permit.
+func permitted(t *testing.T, w *httptest.ResponseRecorder) {
+	t.Helper()
+	if r := decodeMint(t, w); len(r.Results) != 1 || r.Results[0].Verdict != decision.VerdictPermit {
+		t.Fatalf("not one permit: %s", w.Body)
 	}
 }
 
@@ -933,4 +943,38 @@ type failSuperseded struct{ store.Store }
 
 func (f *failSuperseded) SupersededAt(context.Context, store.TokenKey) (time.Time, error) {
 	return time.Time{}, store.ErrUnavailable
+}
+
+// supersede prunes its local copy past SupersededFor, and at most once per
+// supersedePruneEvery: a pass over many keys does not rescan the map for
+// each.
+func TestSupersedePrunesOncePerInterval(t *testing.T) {
+	f := newFixture(t, 8)
+	ctx := context.Background()
+	old := store.TokenKey{NAS: "leaf1", Username: "alice"}
+	f.b.supersede(ctx, old, f.b.Now())
+	f.advance(store.SupersededFor + time.Second)
+	f.b.supersede(ctx, store.TokenKey{NAS: "nx1", Username: "alice"}, f.b.Now())
+	f.b.mu.Lock()
+	_, kept := f.b.superseded[old]
+	f.b.mu.Unlock()
+	if kept {
+		t.Fatal("an entry past SupersededFor survived a prune")
+	}
+	f.b.supersede(ctx, old, f.b.Now().Add(-store.SupersededFor-time.Second))
+	f.b.supersede(ctx, store.TokenKey{NAS: "bare", Username: "alice"}, f.b.Now())
+	f.b.mu.Lock()
+	_, kept = f.b.superseded[old]
+	f.b.mu.Unlock()
+	if !kept {
+		t.Fatal("supersede pruned twice within supersedePruneEvery")
+	}
+	f.advance(supersedePruneEvery)
+	f.b.supersede(ctx, store.TokenKey{NAS: "bare", Username: "alice"}, f.b.Now())
+	f.b.mu.Lock()
+	_, kept = f.b.superseded[old]
+	f.b.mu.Unlock()
+	if kept {
+		t.Fatal("supersede did not prune again after supersedePruneEvery")
+	}
 }
