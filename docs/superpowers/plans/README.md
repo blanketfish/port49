@@ -3245,7 +3245,16 @@ the inventory-only refresh's cost at fleet size.
 `config.InventoryServiceOf`, which `SIGHUP` reads, ignores one too.
 
 **Deployment shapes (Ryan, 2026-10-03): not prescriptive.** Kubernetes is supported natively, never
-required. This plan ships all three shapes and treats them as peers:
+required. Supporting every shape well matters for adoption. So "supported" means each shape has:
+
+- its artifact;
+- an end-to-end smoke test in CI. A device logs in through it, and its state survives a restart:
+  - a systemd unit under a systemd container;
+  - `docker compose up`;
+  - a kind cluster.
+- its own install page in plan 13's operator guide.
+
+A shape without its test is not shipped. This plan ships all three shapes and treats them as peers:
 
 1. **Binaries under systemd.** Units for port49d and, on etcd, port49-broker.
 2. **A container image**, with a compose example: port49d, port49-broker and a three-member etcd.
