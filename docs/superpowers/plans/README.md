@@ -98,7 +98,7 @@ Tasks 8b–16 plus a new Task 13b, each reviewed). It delivers:
 - the agent's one connection.
 
 L35 is measured and closed on five images. The lab's snapshot restore found a ledger bug, fixed
-in 79812ef (Plan 7d — As built, below). **7e written 2026-10-03** (`2026-10-03-07e-broker-process.md`, eighteen tasks in two merges: 7e-1, Tasks 1–10, the store a fleet of processes shares (a sealed write sequence and a high-water ledger per key, the context and marks feeds, the ledger record the daemon cannot write, `superseded` in the store, the decision-log emits under the hold, two carried fixes); 7e-2, Tasks 11–18, `port49-broker`, port49d on etcd with no broker inside, one runner per keyspace, the revocations file retired on etcd, and the lab; sixteen rulings recorded as decision 36; one question for Ryan, OR-1, `port49 revoke`'s default socket, recommended unchanged; it opens L37 and L38 and measures them with L36); **7e-1 executed 2026-10-03** on `feature/broker-process`, each task reviewed (Plan 7e — As built, below). 7f–7h and 8–13 not yet.
+in 79812ef (Plan 7d — As built, below). **7e written 2026-10-03** (`2026-10-03-07e-broker-process.md`, twenty-two tasks in two merges (eighteen, and 8a, 15a, 15b and 15c): 7e-1, Tasks 1–10 and 8a, the store a fleet of processes shares (a sealed write sequence and a high-water ledger per key, the context and marks feeds, the ledger record the daemon cannot write, `superseded` in the store, the decision-log emits under the hold, two carried fixes); 7e-2, Tasks 11–18 and 15a–15c, `port49-broker`, port49d on etcd with no broker inside, one runner per keyspace, the revocations file retired on etcd, and the lab; eighteen rulings recorded as decision 36; one question for Ryan, OR-1, `port49 revoke`'s default socket, recommended unchanged; it opens L37 and L38 and measures them with L36); **7e-1 executed 2026-10-03** on `feature/broker-process`, each task reviewed (Plan 7e — As built, below). 7f–7h and 8–13 not yet.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -3072,7 +3072,27 @@ plan's text, task by task:
 - `crypt.Fence` (`Attach`, `Followed`, `SetUp`, `Up`, `At`, `Asks`, `Wait`), `crypt.Fenced`,
   `crypt.ErrFeedBehind`.
 - `store.Marks.Pend` and `Unrecorded`.
+- `store.Marks.Count(fn func(principal, cert int))`: `port49_revocations_in_force`'s one source
+  (T9-c), told under the marks' lock after every change. Set it before the first `Set` or
+  `LoadMarks`, or the gauge reads 0. `countRevocations` is gone.
+- `broker.Broker.Say`: `MarkChanged`'s lines (a held connection closed, a lift a reload found)
+  go through it. Nil sends them to the process log, not port49d's stderr.
+- port49d's `startOnPersistentStore(ctx, brk, st, e, cfg, &marks, m)`: it lost `ledger`. The
+  base is set by `LoadLedger` in `openStores`, and `Ledger.Seal` is gone.
+- port49d's `restoreRevocations(ctx, st, path)`: it lost `m`.
+- port49d's `persister(st, path, held, enforced, m)`: `held` is the file's marks as the start
+  read them, and `enforced` this process's marks; a file mark the store lacks is kept while
+  `enforced` holds it. `putBackFileMarks(ctx, st, path, enforced)` is the marks feed's hook before
+  a reload (final review C-1).
+- port49d's `unopenableSayer(keys, out, now) func(record, keyID string, why error)`: keyed by
+  (record, key id, kind), every line hard-prefixed `port49d:`. port49-broker cannot use it
+  unchanged.
+- `crypt.Fence.OnTimeout(fn)`, told each `ErrFeedBehind` (`port49_store_fence_timeouts_total`).
 - port49d's `stores.keep`, run and joined by `runOnce` beside `stores.follow`.
+- The test fixtures: `etcdRunServerWith(t, policyBody, others)`; `sharedUsernamePolicy`, where
+  bob is a second identity of alice's subject, not a second subject (spec §2); `mintAs`;
+  `waitForLedgerSeq`; `etcdtest.Proxy.Drop`, which ends every stream as a member restart does;
+  and `etcdtest.Options.ProgressNotify`. Task 14 Step 7 must split `etcdRunServerWith` too.
 
 **7e-1's operator notes, as built:**
 - **Re-apply `port49d store-roles` before upgrading.** It prints one more grant: the daemon's
@@ -3099,9 +3119,38 @@ plan's text, task by task:
   context feed stopped`. **Run etcd 3.5.8 or later** (3.4.24 on 3.4; etcd #15220).
 - **After an etcd restore under a running port49d,** the next login is admitted, and a session
   written since the snapshot is denied until its next login, as 7d measured.
+  - A mark the restore lost is put back from `broker.revocations_file` before the marks feed
+    reloads, and said: `port49d: broker: N revocation(s) in broker.revocations_file … were
+    missing from the store (an etcd restore?) and are put back; lift any lifted on purpose with
+    port49 revoke --lift`. A mark this port49d lifted, or saw lifted, is not put back. A lift
+    made on another port49d while this one's marks feed was down cannot be told from a loss,
+    and is put back: lift it again.
+  - A mark the reload lifts (one not in this port49d's file) is said by its key: `broker: a
+    reload of the marks found the revocation of … lifted: lifted on a broker process while the
+    marks feed was down, or lost by an etcd restore; revoke it again unless it was lifted on
+    purpose`.
+- **Each feed says each stop and each return:** `store: the context feed stopped (…)` (or the
+  marks feed) at every stop, and `store: the context feed follows the store again` at the first
+  change or progress after one. Both watches ask etcd for progress notifications, so a reconnect
+  within the compaction retention resumes without a reload, and a rescan means a real gap.
+- **The upgrade** also logs, per live context, `broker: refresh: the context for "…" on "…", …,
+  will not open (crypt: a context sealed by an earlier port49 (form 3, not 4)); revoking it`,
+  beside the once-per-10-minutes `crypt: a context sealed by an earlier port49 (form 3) does
+  not open: expected once after the 7e upgrade` line. Both are expected, once.
+- **Rolling back to 7d** prints, per key id once per 10 minutes, 7d's `a context failed
+  authentication under key id "…", or is not the one this port49d last wrote there: it was
+  altered or is corrupt`, and 7d's start refresh revokes every 7e context as tampered, one
+  `broker: refresh: … will not open …; revoking it` line each. That is the rollback, not an
+  attack: rolling forward again finds those contexts revoked, and users log in once more.
+- **`port49 refresh` and `port49 token`** now say the broker's `credential_revoked` reason
+  instead of `no agent at …; run 'port49 login'`, and an ending agent waits up to 5s for its
+  in-flight socket calls (f6e5a26).
+- **`port49_revocations_in_force`** counts the marks this process enforces, following the
+  store's marks feed, not the file's count at the start and at each persist.
 - **A stalled decision-log sink no longer holds a policy reload**, nor the mints behind it.
 - **New config refusal:** an `encryption` key `id` outside `A-Z a-z 0-9 . _ -` (1 to 64).
-- **New metrics:** `port49_store_feed_up{feed}` (0 for longer than `hold_ttl` is an alarm),
+- **New metrics:** `port49_store_feed_up{feed}` (0 for longer than `hold_ttl` is an alarm; both
+  labels read 0 from when a run on etcd begins waiting for the store),
   `port49_store_feed_rescans_total{feed}` (alert on any increase), `port49_ledger_pending`
   (above 0 for a minute is an alarm: the record cannot be written), `port49_ledger_behind` (1 is
   an alarm: the keeper's context feed is down). Both ledger gauges read 0 once the keeper stops.
