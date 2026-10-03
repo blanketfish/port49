@@ -221,6 +221,7 @@ func (a *Agent) Connect(ctx context.Context) (api.Config, error) {
 	if err != nil {
 		return api.Config{}, err
 	}
+	// Connect runs before the socket listens, so nothing contends for the wire yet.
 	if err := a.takeWire(ctx, false, "connected", "port49 login"); err != nil {
 		return api.Config{}, err
 	}
@@ -478,6 +479,11 @@ func (a *Agent) takeWire(ctx context.Context, revocation bool, undone, again str
 	case <-wait.Done():
 		if since := a.revoking.Load(); since != 0 && ctx.Err() == nil {
 			return &RevocationRunningError{Since: time.Unix(0, since), Undone: undone, Again: again}
+		}
+		if revocation && a.revoking.Load() != 0 {
+			// Its own timeout ran out behind another revocation: nothing of
+			// it reached the broker, so it is not unanswered.
+			return errors.New("agent: an earlier revocation still held the connection; this one was not sent")
 		}
 		if ctx.Err() != nil {
 			return ctx.Err()

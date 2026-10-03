@@ -2324,3 +2324,34 @@ func TestARevocationIsNotQueuedBehindAMintsWait(t *testing.T) {
 		t.Fatalf("the mint after its wait: %v", err)
 	}
 }
+
+// A revocation that waits out its own timeout behind an earlier one says
+// it was not sent, never a bare deadline, and sends nothing (Task 14
+// review, Minor 2).
+func TestARevocationBehindARunningRevocationSaysItWasNotSent(t *testing.T) {
+	defer func(d time.Duration) { revokeTimeout = d }(revokeTimeout)
+	r := newRig(t)
+	revoked := revokeHolding(t, r, 2*time.Second)
+	// The first revocation took its timeout as it started; the second has
+	// only this long.
+	revokeTimeout = 200 * time.Millisecond
+	c := socketFor(t, r.a)
+	const want = "an earlier revocation still held the connection; this one was not sent"
+	if _, err := r.a.Revoke(context.Background(), api.RevokeRequest{Mine: true}); err == nil ||
+		err.Error() != "agent: "+want {
+		t.Fatalf("the agent: %v", err)
+	}
+	if _, err := c.Revoke(context.Background(), api.RevokeRequest{Mine: true}); err == nil ||
+		err.Error() != "agent: "+want {
+		t.Fatalf("through the socket: %v", err)
+	}
+	r.fb.mu.Lock()
+	n := len(r.fb.addrs["/v1/tokens/revoke"])
+	r.fb.mu.Unlock()
+	if n != 1 {
+		t.Fatalf("the broker saw %d revocations, want the first alone", n)
+	}
+	if err := <-revoked; err != nil {
+		t.Fatal(err)
+	}
+}
