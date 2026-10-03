@@ -304,10 +304,12 @@ func TestASecondPort49dWaitsForTheKeyspace(t *testing.T) {
 // says why, without exiting; when the store returns, the same process
 // listens again, and the session's next command is answered from its
 // context (Ruling 11; pre-flight I19; Review Focus 4). While it waits,
-// /readyz says so (I19), and a record a store writer puts back in the
-// dark is denied after the return: the run after a store gone keeps the
-// process's ledger, sealed (decision 35; Ruling T12-b; Task 12 review
-// m-3). A ledger built again would take it at the start's first read.
+// /readyz says so (I19), and an earlier version of the session's own
+// context, which a store writer puts back in the dark, is denied after
+// the return: the run after a store gone keeps the process's ledger,
+// sealed, and the ledger names each write (decision 35; Ruling T12-b;
+// Task 12 review m-3; Ruling T12-g). A ledger built again would take it
+// at the start's first read.
 func TestAHungStoreGoesDarkAndServesAgainWhenItReturns(t *testing.T) {
 	var out, log syncBuffer
 	e, o := stderr, stdout
@@ -329,11 +331,6 @@ func TestAHungStoreGoesDarkAndServesAgainWhenItReturns(t *testing.T) {
 		t.Fatalf("the kept contexts: %v %v", kept, err)
 	}
 	earlier := kept.Kvs[0]
-	// ... and deletes, so the next login at the key is a context of its
-	// own, not a join of this one under its ctx_id.
-	if _, err := root.Delete(sctx, string(earlier.Key)); err != nil {
-		t.Fatal(err)
-	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -350,6 +347,13 @@ func TestAHungStoreGoesDarkAndServesAgainWhenItReturns(t *testing.T) {
 	tacacs, brokerAddr = newestAddrs(t, &out)
 	dev := tacacsClient{t: t, addr: tacacs, key: []byte("run-test-secret")}
 	loginSession(t, dev, mint(t, brokerAddr, pkiDir, "leaf1"), &log)
+	ids := map[string]bool{}
+	for _, m := range regexp.MustCompile(`"ctx_id":"([^"]+)"`).FindAllStringSubmatch(log.String(), -1) {
+		ids[m[1]] = true
+	}
+	if len(ids) != 1 {
+		t.Fatalf("the second login did not join the earlier one's context: ctx_ids %v", ids)
+	}
 	tok := mint(t, brokerAddr, pkiDir, "leaf1")
 	// A connection a device holds open across the hang (re-check R-M0).
 	held, err := net.DialTimeout("tcp", tacacs, time.Second)
@@ -391,7 +395,8 @@ func TestAHungStoreGoesDarkAndServesAgainWhenItReturns(t *testing.T) {
 		t.Fatalf("/readyz while waiting for the store: %d, want 503", resp.StatusCode)
 	}
 	// In the dark, a store writer puts the earlier login's record back at
-	// the session's key, keeping the session's own.
+	// the session's key, keeping the session's own: the next login joined
+	// it, so both are the same context, under one ctx_id.
 	now, err := root.Get(sctx, string(earlier.Key))
 	if err != nil || len(now.Kvs) != 1 {
 		t.Fatalf("the session's context: %v %v", now, err)

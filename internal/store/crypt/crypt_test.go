@@ -3,6 +3,7 @@ package crypt
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"sync/atomic"
 	"testing"
@@ -750,10 +751,10 @@ func TestAReceiptIsBoundToItsKey(t *testing.T) {
 
 // The ledger (re-check IA1; the controller's ruling): another login's
 // context written back at a key is denied ErrNotLastWritten, through
-// either Wrap sharing the ledger. An earlier version of the same context
-// opens, which is the residual Ruling 17 states. A fresh process takes the
-// first record it reads as the key's, the restart residual, and denies
-// another after it.
+// either Wrap sharing the ledger, and so is an earlier version of the same
+// context, since the ledger names each write (Ruling T12-g). A fresh
+// process takes the first record it reads as the key's, the restart
+// residual, and denies another after it.
 func TestTheLedgerDeniesAnotherLoginsContext(t *testing.T) {
 	ctx := context.Background()
 	now := time.Unix(1_000_000, 0).UTC()
@@ -787,8 +788,10 @@ func TestTheLedgerDeniesAnotherLoginsContext(t *testing.T) {
 	if err := inner.PutContext(ctx, k, bob, time.Hour); err != nil { // Bob's own, before the raise
 		t.Fatal(err)
 	}
-	if got, err := daemon.GetContext(ctx, k); err != nil || got.CtxID != "bob-1" || got.PrivLvl != 1 {
-		t.Fatalf("an earlier version of the same context: %+v %v (the residual)", got, err)
+	for name, s := range map[string]store.Store{"daemon": daemon, "broker": broker} {
+		if got, err := s.GetContext(ctx, k); !errors.As(err, &u) || !errors.Is(err, ErrNotLastWritten) {
+			t.Fatalf("%s read an earlier version of the same context: %+v %v", name, got, err)
+		}
 	}
 	fresh := Wrap(inner, keys(), nil) // a restart: its own, empty ledger
 	if err := inner.PutContext(ctx, k, alice, time.Hour); err != nil {
@@ -802,6 +805,191 @@ func TestTheLedgerDeniesAnotherLoginsContext(t *testing.T) {
 	}
 	if _, err := fresh.GetContext(ctx, k); !errors.Is(err, ErrNotLastWritten) {
 		t.Fatalf("after its first read, a fresh process read another login's: %v", err)
+	}
+}
+
+// An earlier version of the same context, put back after a later write
+// at its key landed, is denied ErrNotLastWritten: each sealed write
+// carries a write ID of its own, and the ledger admits the last one, not
+// every write under its ctx_id (Ruling T12-g; Task 12 re-review,
+// "Context-ID rollback"). Put back, it would undo a self revocation that
+// leaves no mark, a policy narrowing a refresh wrote, or drop a login's
+// witness. A fresh process still takes the first record it reads, the
+// restart residual.
+func TestTheLedgerDeniesAnEarlierVersionOfTheSameContext(t *testing.T) {
+	now := time.Unix(1_000_000, 0).UTC()
+	login := func(blob string) store.Context {
+		return store.Context{CtxID: "alice-1", Principal: "user:alice@example.com", Username: "netops", PrivLvl: 15,
+			BlobHash: blob, AuthTime: now, CreatedAt: now}
+	}
+	for name, later := range map[string]func(ctx context.Context, s store.Store, k store.ContextKey) error{
+		"a second login joining": func(ctx context.Context, s store.Store, k store.ContextKey) error {
+			res, err := store.JoinContext(ctx, s, k, login("wide"), now, now, time.Hour, store.LoginIndex{})
+			if err == nil && (!res.Joined || res.Context.CtxID != "alice-1") {
+				t.Fatalf("the second login did not join: %+v", res)
+			}
+			return err
+		},
+		"a self revocation": func(ctx context.Context, s store.Store, k store.ContextKey) error {
+			return s.SetRevokedAt(ctx, k, now)
+		},
+		"a refresh narrowing the policy": func(ctx context.Context, s store.Store, k store.ContextKey) error {
+			return s.RefreshContext(ctx, k, store.ContextRefresh{AuthTime: now, RefreshedAt: now, BlobHash: "narrow"},
+				time.Hour)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			inner := memory.New(func() time.Time { return now })
+			l := NewLedger()
+			daemon := Wrap(inner, keys(), nil, WithLedger(l))
+			broker := Wrap(inner, keys(), nil, WithLedger(l))
+			k := store.ContextKey{NAS: "leaf-01", Username: "netops"}
+			if _, err := store.JoinContext(ctx, daemon, k, login("wide"), now, now, time.Hour,
+				store.LoginIndex{}); err != nil {
+				t.Fatal(err)
+			}
+			l.Seal()
+			earlier, err := inner.GetContext(ctx, k)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := later(ctx, broker, k); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := daemon.GetContext(ctx, k); err != nil {
+				t.Fatalf("the later write: %v", err)
+			}
+			if err := inner.PutContext(ctx, k, earlier, time.Hour); err != nil { // put back
+				t.Fatal(err)
+			}
+			var u *store.UnreadableContextError
+			for name, s := range map[string]store.Store{"daemon": daemon, "broker": broker} {
+				if got, err := s.GetContext(ctx, k); !errors.As(err, &u) || !errors.Is(err, ErrNotLastWritten) {
+					t.Fatalf("%s read an earlier version of the same context: %+v %v", name, got, err)
+				}
+			}
+			fresh := Wrap(inner, keys(), nil) // a restart: its own, empty ledger
+			if got, err := fresh.GetContext(ctx, k); err != nil || got.CtxID != "alice-1" {
+				t.Fatalf("a fresh process's first read: %+v %v (the restart residual)", got, err)
+			}
+		})
+	}
+}
+
+// unknownOutcomeStore lands every SwapContext and then reports
+// ErrUnavailable, as a store that committed and then lost the reply.
+type unknownOutcomeStore struct{ store.RevStore }
+
+func (u unknownOutcomeStore) SwapContextRev(ctx context.Context, k store.ContextKey, rev uint64, c store.Context,
+	ttl time.Duration) (uint64, error) {
+	if _, err := u.RevStore.SwapContextRev(ctx, k, rev, c, ttl); err != nil {
+		return 0, err
+	}
+	return 0, store.ErrUnavailable
+}
+
+// A write of the same context whose outcome is unknown, read back, is
+// admitted and becomes the last, so the version before it, put back, is
+// denied. A write in flight is admitted beside the last, and the last,
+// put back while it is in flight, is too, until the write ends (Ruling
+// T12-g; re-check 2 M-B1).
+func TestTheLedgerAdmitsTheSameContextsWritesInFlightOrUnknown(t *testing.T) {
+	ctx := context.Background()
+	now := time.Unix(1_000_000, 0).UTC()
+	k := store.ContextKey{NAS: "leaf-01", Username: "netops"}
+	alice := func(priv uint8) store.Context {
+		return store.Context{CtxID: "alice-1", Principal: "user:alice@example.com", Username: "netops", PrivLvl: priv}
+	}
+
+	inner := memory.New(func() time.Time { return now })
+	l := NewLedger()
+	s := Wrap(inner, keys(), nil, WithLedger(l))
+	l.Seal()
+	if err := s.PutContext(ctx, k, alice(1), time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	first, _ := inner.GetContext(ctx, k)
+	lossy := Wrap(unknownOutcomeStore{inner}, keys(), nil, WithLedger(l))
+	if err := lossy.SwapContext(ctx, k, first.Rev, alice(5), time.Hour); !errors.Is(err, store.ErrUnavailable) {
+		t.Fatalf("a write whose outcome is unknown: %v", err)
+	}
+	if got, err := s.GetContext(ctx, k); err != nil || got.PrivLvl != 5 {
+		t.Fatalf("a write whose outcome is unknown, read back: %+v %v", got, err)
+	}
+	if err := inner.PutContext(ctx, k, first, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.GetContext(ctx, k); !errors.Is(err, ErrNotLastWritten) {
+		t.Fatalf("the version before a write read back: %v", err)
+	}
+
+	inner = memory.New(func() time.Time { return now })
+	h := &holdingStore{RevStore: inner, landed: make(chan struct{}), release: make(chan struct{})}
+	l = NewLedger()
+	s = Wrap(h, keys(), nil, WithLedger(l))
+	l.Seal()
+	if err := s.PutContext(ctx, k, alice(1), time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	first, _ = inner.GetContext(ctx, k)
+	done := make(chan error)
+	go func() { done <- s.SwapContext(ctx, k, first.Rev, alice(5), time.Hour) }()
+	<-h.landed
+	if got, err := s.GetContext(ctx, k); err != nil || got.PrivLvl != 5 {
+		t.Fatalf("a write in flight: %+v %v", got, err)
+	}
+	if err := inner.PutContext(ctx, k, first, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.GetContext(ctx, k); err != nil || got.PrivLvl != 1 {
+		t.Fatalf("the last, beside a write in flight: %+v %v", got, err)
+	}
+	close(h.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.GetContext(ctx, k); !errors.Is(err, ErrNotLastWritten) {
+		t.Fatalf("the version before a write that landed: %v", err)
+	}
+}
+
+// A context sealed in form 2, before the write ID, does not open: it is
+// unreadable, not another login's, and a login replaces it. Each seal
+// draws a write ID of its own (Ruling T12-g).
+func TestAContextOfFormTwoDoesNotOpen(t *testing.T) {
+	ctx := context.Background()
+	now := time.Unix(1_000_000, 0).UTC()
+	inner := memory.New(func() time.Time { return now })
+	k := store.ContextKey{NAS: "leaf-01", Username: "netops"}
+	b, err := json.Marshal(map[string]any{"v": 2, "ctx_id": "alice-1", "principal": "user:alice@example.com",
+		"username": "netops", "priv_lvl": 15})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealed, err := keys().SealBound(b, contextAAD(k))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := inner.PutContext(ctx, k, store.Context{Sealed: sealed}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	var u *store.UnreadableContextError
+	if _, err := Wrap(inner, keys(), nil).GetContext(ctx, k); !errors.As(err, &u) || errors.Is(err, ErrNotLastWritten) {
+		t.Fatalf("a context of form 2: %v", err)
+	}
+
+	w := Wrap(inner, keys(), nil).(*wrapped)
+	_, a, err := w.sealContext(k, store.Context{CtxID: "alice-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, b2, err := w.sealContext(k, store.Context{CtxID: "alice-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(a) != 32 || a == b2 {
+		t.Fatalf("write IDs %q and %q: not fresh 16-byte hex per seal", a, b2)
 	}
 }
 

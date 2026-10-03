@@ -8,18 +8,24 @@ import (
 )
 
 // ErrNotLastWritten is a context that opens at its key but is not the
-// one this process last wrote there, or first read there: another
-// login's record, written back by whoever can write the store (plan 7d;
-// Ruling 17; re-check IA1). GetContext returns it inside an
+// write this process last made there, or first read there: another
+// login's record, or an earlier version of the same context, written back
+// by whoever can write the store (plan 7d; Ruling 17; re-check IA1;
+// Ruling T12-g). GetContext returns it inside an
 // UnreadableContextError, so every handler treats it as a record that
 // will not open.
 var ErrNotLastWritten = errors.New("crypt: not the context this port49d last wrote at its key")
 
-// Ledger is, per context key, the ctx_id this process last wrote there,
+// Ledger is, per context key, the write this process last made there,
 // or first read there (plan 7d; Ruling 17; re-check IA1). A sealed
 // context is bound to its key, not to the login that wrote it, so
 // without the ledger a record of Alice's saved from leaf-01/netops and
 // written back over Bob's there would authorize Bob's session as Alice.
+// Each write is named by the write ID sealed into it, fresh on every seal
+// (contextSecret), not by its ctx_id, which a join, a refresh or a
+// revocation keeps: so an earlier version of the same context, written
+// back, is denied too, and cannot undo a self revocation or a policy
+// narrowing (Ruling T12-g).
 //
 // A write is told before it is sent (begin) and when it ends (end): in
 // flight it is admitted beside the last, landed it replaces the last,
@@ -56,10 +62,13 @@ var ErrNotLastWritten = errors.New("crypt: not the context this port49d last wro
 // store's revisions going back, and it is placed as the last, with its
 // revision (Task 6b review C1): a login after the restore is admitted,
 // and the stale last, replayed, is denied. A key no write lands at after
-// the restore keeps its old last, which is the last as on base. A write
-// whose outcome is unknown, sent after the restore on a low revision, is
-// taken as earlier and not admitted until the next write lands there,
-// which fails closed.
+// the restore keeps its old last. A context written since the snapshot
+// is restored to an earlier write, so it is denied, as any rollback is,
+// until a login replaces it, which fails closed; the broker's refresh
+// revokes it as altered meanwhile, and a restart before that seeds the
+// key with it again (the restart residual). A write whose outcome is
+// unknown, sent after the restore on a low revision, is taken as earlier
+// and not admitted until the next write lands there, which fails closed.
 //
 // A read racing a login's replace can return the replaced record after
 // the replace landed; that one request is denied, which fails closed.
@@ -77,17 +86,17 @@ type Ledger struct {
 }
 
 type ledgerEntry struct {
-	last     string          // the last write that landed, or the first read
+	last     string          // the write ID of the last write that landed, or of the first read
 	known    bool            // last is set: false for a key whose first write is in flight
 	lastRev  uint64          // the revision the write that set last committed at; zero when a read did
 	lastEnd  uint64          // seq when the write that set last ended
-	inFlight map[string]int  // writes sent and not yet ended, by ctx_id; nil until one is
+	inFlight map[string]int  // writes sent and not yet ended, by write ID; nil until one is
 	unknown  map[string]bool // writes that ended with neither a landing nor a refusal; nil until one does
 	began    uint64          // seq at the last write sent
 }
 
 // ledgerWrite is a write the ledger was told of (begin), for end: its
-// key, its ctx_id, the revision it compares (zero for none, or for no
+// key, its write ID, the revision it compares (zero for none, or for no
 // record), and seq when it was sent.
 type ledgerWrite struct {
 	k   store.ContextKey
@@ -149,7 +158,8 @@ func (l *Ledger) forget(k store.ContextKey, at uint64, sealedOnly bool) {
 	delete(l.m, k)
 }
 
-// admits reports whether a record holding id may be read at k.
+// admits reports whether a record sealed under the write ID id may be
+// read at k.
 func (l *Ledger) admits(k store.ContextKey, id string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -174,7 +184,7 @@ func (l *Ledger) admits(k store.ContextKey, id string) bool {
 	return false
 }
 
-// begin is told of a write of id at k, compared on rev, before it is
+// begin is told of the write id at k, compared on rev, before it is
 // sent; its return is end's.
 func (l *Ledger) begin(k store.ContextKey, id string, rev uint64) ledgerWrite {
 	l.mu.Lock()
