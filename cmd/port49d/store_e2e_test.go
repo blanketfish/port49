@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -270,7 +271,20 @@ func TestAStartSealsTheLedgerOnceItHasReadTheStore(t *testing.T) {
 		t.Fatal("a context put back at a key the start never read was taken as that key's")
 	}
 	// Under port49's roles the daemon's identity watches the contexts: the
-	// feed never stopped.
+	// feed runs, and never stopped.
+	ms := regexp.MustCompile(`port49d: metrics on (127\.0\.0\.1:\d+)`).FindAllStringSubmatch(out.String(), -1)
+	if len(ms) == 0 {
+		t.Fatalf("the metrics address is not said: %s", out.String())
+	}
+	scraped, err := http.Get("http://" + ms[len(ms)-1][1] + "/metrics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(scraped.Body)
+	scraped.Body.Close()
+	if !regexp.MustCompile(`(?m)^port49_store_feed_up\{feed="contexts"\} 1$`).Match(body) {
+		t.Fatalf("the context feed is not up:\n%s", body)
+	}
 	if strings.Contains(out.String(), "the context feed stopped") {
 		t.Fatalf("the feed stopped: %s", out.String())
 	}

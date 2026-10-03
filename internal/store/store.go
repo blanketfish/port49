@@ -269,7 +269,8 @@ type ContextFeed interface {
 	ScanContexts(ctx context.Context, fn func(ContextKey, Context)) (uint64, error)
 	// WatchContexts calls fn for every change after `after`, in revision
 	// order, until ctx ends (ctx.Err()), the revision was compacted
-	// (ErrCompacted), or the watch fails (ErrUnavailable). progress is told
+	// (ErrCompacted), or the watch fails (ErrUnavailable, or ErrRefused
+	// when the store refuses this identity the watch). progress is told
 	// a revision through which every change has been delivered: each
 	// batch's highest event once fn has had them all, and each progress
 	// notification's header revision. Each receive on asks requests one

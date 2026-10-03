@@ -282,6 +282,38 @@ func TestARescansSeedMakesNoEntryBelowTheBase(t *testing.T) {
 	}
 }
 
+// An entry that holds only a revocation floor (a recorded floor at a key
+// whose record never opened, say a form-3 context) counts as no mark: a
+// record the feed brings below the base makes none there, and the read
+// still judges it by the base. Taken as a mark, the record became the
+// key's high-water, cleared the floor, and was admitted live (Task 8
+// review I1; pre-flight I1).
+func TestAFedPutBackAtAFloorOnlyKeyIsDeniedByTheBase(t *testing.T) {
+	now := time.Unix(1_000_000, 0).UTC()
+	l := NewLedger()
+	l.Seed(store.LedgerMark{Key: ka, Seq: 0, RevokedAt: now})
+	l.SetBase(150)
+	observe(l, keys(), ka, sealedAt(t, ka, 60), false)
+	if l.admits(ka, 60) {
+		t.Fatal("a put-back below the base at a floor-only key was admitted")
+	}
+	if !l.floor(ka).Equal(now) {
+		t.Fatalf("the floor went: %v", l.floor(ka))
+	}
+}
+
+// A record the feed brings sealed at exactly the base, at a key with no
+// mark, makes one: the base is the least sequence a read admits there, so
+// the feed's mark agrees with the read (Task 8 review M4).
+func TestAFedRecordAtTheBaseMakesAMark(t *testing.T) {
+	l := NewLedger()
+	l.SetBase(150)
+	observe(l, keys(), ka, sealedAt(t, ka, 150), false)
+	if l.next(ka) != 151 {
+		t.Fatalf("a record at the base made no mark: next %d", l.next(ka))
+	}
+}
+
 // Another process's revocation whose seal failed reaches this one through
 // its feed alone (Task 8 review requirement 2). a revokes alice: the
 // plaintext mark lands, the seal does not. b holds a mark at that

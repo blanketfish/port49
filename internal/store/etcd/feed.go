@@ -77,7 +77,9 @@ func (s *Store) ScanContexts(ctx context.Context, fn func(store.ContextKey, stor
 // revision is told to progress. An event batch tells progress its highest
 // event's revision, never the batch header's, which a catching-up watcher
 // may send ahead of what it has delivered. Every response's header
-// revision, and every event's, is seen (Seen; Task 6).
+// revision, and every event's, is seen (Seen; Task 6). A watch that fails
+// is ErrUnavailable, or ErrRefused when etcd refuses this identity
+// (unavailable).
 func (s *Store) WatchContexts(ctx context.Context, after uint64, fn func(store.ContextChange),
 	progress func(uint64), asks <-chan struct{}) error {
 	wctx, cancel := context.WithCancel(clientv3.WithRequireLeader(ctx))

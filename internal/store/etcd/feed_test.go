@@ -66,7 +66,10 @@ func TestTheScanAndTheWatchMeetWithNoGap(t *testing.T) {
 
 // A watch that catches up is answered with the store's revision in its
 // header, above every event it carries: Seen takes the header's too, as
-// Seen's contract says of a watch (Task 6), not only the events'.
+// Seen's contract says of a watch (Task 6), not only the events'. But
+// progress is told only the highest event delivered, never the header: a
+// header ahead of the events would let Task 8a's fence pass a read before
+// the feed raised the mark (pre-flight C1).
 func TestAWatchsHeaderRaisesSeen(t *testing.T) {
 	ctx := context.Background()
 	s := onShared(t, time.Now)
@@ -87,9 +90,11 @@ func TestAWatchsHeaderRaisesSeen(t *testing.T) {
 	w := newStore(s.ctx, s.ctx, Config{Prefix: strings.TrimSuffix(s.k.root, "v1/"), Now: time.Now})
 	wctx, cancel := context.WithCancel(ctx)
 	var top uint64
+	var told []uint64
 	done := make(chan error, 1)
 	go func() {
-		done <- w.WatchContexts(wctx, rev, func(c store.ContextChange) { top = c.Rev; cancel() }, func(uint64) {}, nil)
+		done <- w.WatchContexts(wctx, rev, func(c store.ContextChange) { top = c.Rev; cancel() },
+			func(r uint64) { told = append(told, r) }, nil)
 	}()
 	select {
 	case <-done:
@@ -98,6 +103,14 @@ func TestAWatchsHeaderRaisesSeen(t *testing.T) {
 	}
 	if top == 0 || top >= uint64(other.Header.Revision) || w.Seen() < uint64(other.Header.Revision) {
 		t.Fatalf("event at %d, the store at %d, Seen %d", top, other.Header.Revision, w.Seen())
+	}
+	if len(told) == 0 {
+		t.Fatal("the batch told progress nothing")
+	}
+	for _, r := range told {
+		if r > top {
+			t.Fatalf("progress told %d past the top event %d", r, top)
+		}
 	}
 }
 
