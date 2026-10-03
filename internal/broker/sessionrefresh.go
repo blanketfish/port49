@@ -217,15 +217,24 @@ type SessionRefreshReport struct {
 // just read, to the ceiling the policy gives from at; a context past its
 // grace window is deleted, bound the same way (teardown row 3). Everything
 // else is named, not extended (pre-flight I4).
+//
+// Every record it writes goes to a buffer, written to the log once it lets
+// go of the policy and before the caller answers: a log sink that stalls
+// must not hold a reload (plan 7e, Ruling 10). A policy refresh, the pass
+// after a reload, holds no policy and writes at once.
 func (b *Broker) RefreshSession(ctx context.Context, principal string, cred store.Credential, at time.Time) (SessionRefreshReport, error) {
+	buf := decision.NewBuffer()
 	pol, hold := b.Policy.Hold()
-	defer hold()
+	defer func() {
+		hold()
+		buf.Flush(b.Log, b.blobLanded)
+	}()
 	rep := SessionRefreshReport{At: at}
 	refs, err := b.Store.ContextsByPrincipal(ctx, principal)
 	if err != nil {
 		return rep, err
 	}
-	pass := RefreshReport{session: true}
+	pass := RefreshReport{session: true, log: buf}
 	quarantined := map[string]bool{}
 	for _, ref := range refs {
 		k := store.ContextKey{NAS: ref.NAS, Username: ref.Username}
@@ -247,7 +256,7 @@ func (b *Broker) RefreshSession(ctx context.Context, principal string, cred stor
 			visit.Outcome = "not_judged"
 		}
 		if visit.Outcome == "" {
-			visit.Outcome, visit.SessionExpires, err = b.extend(ctx, pol, principal, cred, ref, dev, at, unreached)
+			visit.Outcome, visit.SessionExpires, err = b.extend(ctx, buf, pol, principal, cred, ref, dev, at, unreached)
 			if err != nil {
 				return rep, err
 			}
@@ -262,9 +271,10 @@ func (b *Broker) RefreshSession(ctx context.Context, principal string, cred stor
 }
 
 // extend reads the context the judgment kept and extends it, or deletes
-// it past its grace window, both bound to the revision read. It returns ""
-// for a context gone or no longer the caller's.
-func (b *Broker) extend(ctx context.Context, pol *policy.Policy, principal string, cred store.Credential,
+// it past its grace window, both bound to the revision read, and writes its
+// record to out, the refresh's buffer. It returns "" for a context gone or
+// no longer the caller's.
+func (b *Broker) extend(ctx context.Context, out decision.Emitter, pol *policy.Policy, principal string, cred store.Credential,
 	ref store.ContextRef, dev admission.Device, at time.Time, unreached bool) (string, time.Time, error) {
 	k := store.ContextKey{NAS: ref.NAS, Username: ref.Username}
 	c, err := b.Store.GetContext(ctx, k)
@@ -290,7 +300,7 @@ func (b *Broker) extend(ctx context.Context, pol *policy.Policy, principal strin
 			return "", time.Time{}, err
 		}
 		rec.Verdict, rec.Reason = decision.VerdictDeny, decision.SessionExpired
-		b.emit(rec)
+		b.emitTo(out, rec)
 		return "past_grace", time.Time{}, nil
 	}
 	age := time.Duration(0)
@@ -318,7 +328,7 @@ func (b *Broker) extend(ctx context.Context, pol *policy.Policy, principal strin
 	}
 	rec.Session.AuthTime = decision.FormatTime(at)
 	rec.Verdict, rec.Reason = decision.VerdictPermit, decision.GrantsMatched
-	b.emit(rec)
+	b.emitTo(out, rec)
 	return "extended", expires, nil
 }
 

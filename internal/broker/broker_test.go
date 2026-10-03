@@ -763,3 +763,44 @@ func TestBlobsSeenIsBounded(t *testing.T) {
 		t.Fatalf("at the bound blobsSeen kept %d hashes", len(b.blobsSeen))
 	}
 }
+
+// A session refresh holds the policy as a mint does, and a stalled log
+// sink must not hold a reload through it either: its records are written
+// once it has let go (plan 7e Ruling 10; Ruling T4-a).
+func TestAStalledLogNeverHoldsAReloadThroughASessionRefresh(t *testing.T) {
+	f := newFixture(t, 8)
+	b := f.b
+	f.liveContextAt(t, "leaf1", "alice", alicePrincipal, "", f.now, f.now.Add(time.Hour))
+	sink := newStallSink()
+	b.Log = sink
+	done := make(chan error, 1)
+	go func() {
+		_, err := b.RefreshSession(context.Background(), alicePrincipal, store.Credential{Method: "cert"}, b.Now())
+		done <- err
+	}()
+	select {
+	case <-sink.began:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the refresh never wrote a record")
+	}
+	swapped := make(chan struct{})
+	go func() { b.Policy.Swap(b.Policy.Load()); close(swapped) }()
+	select {
+	case <-swapped:
+	case <-time.After(time.Second):
+		t.Fatal("a stalled log held the reload: the refresh still held the policy while it wrote")
+	}
+	close(sink.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	// The judgment's record, then the extension's, which names the new
+	// auth_time.
+	last := len(sink.got) - 1
+	if last < 0 || sink.got[last].Event != decision.EventRefresh || sink.got[last].Verdict != decision.VerdictPermit ||
+		sink.got[last].Session == nil || sink.got[last].Session.AuthTime == "" {
+		t.Fatalf("records %+v", sink.got)
+	}
+}

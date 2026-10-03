@@ -75,6 +75,19 @@ type RefreshReport struct {
 	// retries it: the operator runs `port49 refresh` again (final review
 	// M-2).
 	session bool
+	// log is where the pass writes its records, nil for b.Log (passLog). A
+	// session refresh holds the policy while it judges, so it passes its
+	// buffer, written once it lets go (plan 7e, Ruling 10); a policy
+	// refresh, after a reload, holds none and writes at once.
+	log *decision.Buffer
+}
+
+// passLog is where a pass writes its records: rep's buffer, or b.Log.
+func (b *Broker) passLog(rep *RefreshReport) decision.Emitter {
+	if rep.log != nil {
+		return rep.log
+	}
+	return b.Log
 }
 
 // Refresh carries the policy in force into everything the policies before it
@@ -562,7 +575,7 @@ func (b *Broker) refreshContext(ctx context.Context, cur *policy.Policy, priors 
 		case step.outcome == "quarantined":
 			quarantined[c.CtxID] = true
 			if b.quarantineUnrecorded(c.CtxID, cur.Bundle) {
-				b.emit(step.rec)
+				b.emitTo(b.passLog(rep), step.rec)
 			}
 			b.count(rep, step.outcome)
 			return step.outcome, nil
@@ -576,9 +589,17 @@ func (b *Broker) refreshContext(ctx context.Context, cur *policy.Policy, priors 
 		// outliving its blob would be denied blob_unavailable for nothing
 		// (final review M-4).
 		ttl := blobTTL(max(step.age, b.ContextIdleTTL), b.MaxSessionAge)
-		one := decision.NewBuffer()
-		err = b.putBlob(ctx, one, step.write.BlobHash, step.body, ttl)
-		one.Flush(b.Log, b.blobLanded)
+		// Its blob record goes to the log before this context is written,
+		// or, under a session refresh, to its buffer ahead of this
+		// context's record; either way the hash is marked emitted only once
+		// the record lands (blobLanded).
+		if rep.log != nil {
+			err = b.putBlob(ctx, rep.log, step.write.BlobHash, step.body, ttl)
+		} else {
+			one := decision.NewBuffer()
+			err = b.putBlob(ctx, one, step.write.BlobHash, step.body, ttl)
+			one.Flush(b.Log, b.blobLanded)
+		}
 		if err != nil {
 			return "", err
 		}
@@ -590,7 +611,7 @@ func (b *Broker) refreshContext(ctx context.Context, cur *policy.Policy, priors 
 		case err != nil:
 			return "", err
 		}
-		b.emit(step.rec)
+		b.emitTo(b.passLog(rep), step.rec)
 		b.count(rep, step.outcome)
 		b.unreached(step, rep)
 		return step.outcome, nil
@@ -741,7 +762,7 @@ func (b *Broker) revoke(ctx context.Context, k store.ContextKey, rev uint64, at 
 	case gone:
 		return "skipped", nil
 	}
-	b.emit(step.rec)
+	b.emitTo(b.passLog(rep), step.rec)
 	b.count(rep, step.outcome)
 	b.unreached(step, rep)
 	return step.outcome, nil
