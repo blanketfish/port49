@@ -356,8 +356,10 @@ them. The ones to read first are under "Worth reading before the merge".
        - With `--bump-revision`, every revision after the restore is above every earlier one,
          so every process admits them.
        - So the runbook (design §13; Task 11) says to restore with `--bump-revision` and
-         `--mark-compacted`, as etcd advises, or else to restart every port49d and
-         port49-broker after the restore.
+         `--mark-compacted`, as etcd advises, or else to restart every port49d after the
+         restore, once the first runner has put the lost marks back (a port49d restarted
+         before that enforces none the restore lost; pre-flight 7e-2 P-2). The brokers are
+         stopped across the restore and started after it.
        - `TestALoginAfterARestoreIsAdmitted` pins both outcomes with two processes.
    - **The revocation floor** (7d final review I-1) stays.
      - Each process also takes a floor from the feed: a change at a key whose plaintext
@@ -441,6 +443,10 @@ them. The ones to read first are under "Worth reading before the merge".
      second. A reload never runs on a put-back that failed.
    - **On port49d, a mark a reload finds missing stays in force** until a lift the watch
      delivers, or a restart, and is said with a count. This is the daemon's half of C-1.
+     - The marks are the process's, as the ledger is (Ruling 11). A restore that outlasts
+       `hold_ttl` takes port49d dark and ends the run before the feed can reload; the next run
+       keeps the same way (`keepLost`, Task 14) before it loads the restored marks (pre-flight
+       7e-2 P-1).
      - The daemon's role cannot write `rv/`, and on etcd the revocations file that 7e-1's
        `marksReloadHook` put back from is retired (Ruling 12). So port49d's hook
        (`daemonReloadHook`, Task 14) does not put back. It reads the store's marks and keeps
@@ -481,7 +487,8 @@ them. The ones to read first are under "Worth reading before the merge".
      - records the bundle it serves (`meta/bundles/`), and asks for a full pass after its own
        reload or start (Ruling 8);
      - runs certificate status and its revocation queue (a mark is idempotent);
-     - follows the marks and the contexts, and keeps its copy of the marks (Ruling 12);
+     - follows the marks and the contexts, keeps its copy of the marks, and keeps in force
+       through a reload every mark its copy holds that the store lacks (Ruling 12);
      - follows `meta/witness`, and keeps the highest it has seen in `witness.json` (Ruling 18).
    - **Losing the hold** (the key gone, the lease lapsed, or etcd not answering with half the
      lease or less left, as 7d's fence judges):
@@ -627,7 +634,9 @@ them. The ones to read first are under "Worth reading before the merge".
       - So a context feed that has stopped fails every probe, and the port49d goes dark,
         though the store answers. A device then uses another replica, or its local method,
         rather than a port49d that cannot tell a put-back from a login.
-    - **A run after a store gone** keeps the ledger and the marks, which are the process's.
+    - **A run after a store gone** keeps the ledger and the marks, which are the process's:
+      `run` makes both, and the new run keeps every mark the store lacks before it loads
+      (Ruling 5; Task 14, pre-flight 7e-2 P-1).
     - **Live sessions survive a restart,** as in 7d.
     - **The policy.** port49d reloads its policy file live, for admission, quarantine and
       redaction, and carries nothing into live contexts: that is the broker's (design §6).
@@ -658,6 +667,14 @@ them. The ones to read first are under "Worth reading before the merge".
         does not reload: the marks feed is down, `port49_store_feed_up{feed="marks"}` is 0, and
         it is tried again every second. A reload after a failed put-back would lift every lost
         mark from this replica's marks and listener.
+      - **A replica that does not run** (or the runner during its takeover) puts nothing back.
+        Its hook keeps in force (`Marks.Keep`) every mark it enforces that its copy holds and the
+        store lacks, so its listener still refuses that principal at the agent's first request
+        (decision 32) until the runner's put-back arrives or a lift this feed delivers. A read
+        that fails refuses the reload (pre-flight 7e-2 P-3). The line: `store: N revocation(s)
+        in broker.state_dir/marks.json are missing from the store as the marks feed reloads and
+        stay in force on this replica until the runner puts them back or a lift this feed
+        delivers: …`.
       - **What replaces port49d's hook.** 7e-1's `marksReloadHook` put back
         `broker.revocations_file`'s marks before port49d's reload. On etcd that file is retired
         and the daemon's role cannot write `rv/`. So port49d's hook keeps what the store lost
@@ -1034,7 +1051,8 @@ in this plan, and the tests named pin it.
     first start after the delete has no judged bundle to guard against;
   - start the brokers.
   The first runner names the marks it put back from its copy, and purges the unspent tokens.
-  Without `--bump-revision`, restart every port49d and port49-broker. Otherwise a login made on
+  Without `--bump-revision`, restart every port49d once the first runner has put the marks back
+  (before that, a restarted port49d enforces none the restore lost). Otherwise a login made on
   a process started after the restore is denied `store_unavailable` on the processes that ran
   across it, until one of those writes at its key.
 
@@ -1114,9 +1132,10 @@ New in this plan:
   counted by the guard. Nothing admits a record because the feed is late.
 - **The daemon's role never writes `lw/`, `sp/`, `rv/` or `meta/`.** `etcd.Roles` and
   `CheckIdentity` say so, and a test grants one and is refused.
-- **The code blocks are written against `b508ba0`.** Where the compiler or a test says a block is
-  wrong about the tree or about etcd's API, fix the block minimally, keep the behaviour the
-  step's test asserts, and say so in the task's report and commit. Never weaken a test to make a
+- **The code blocks are written against `b508ba0` (7e-1) and `a5e4fe8` (7e-2).** Where the
+  compiler or a test says a block is wrong about the tree or about etcd's API, fix the block
+  minimally, keep the behaviour the step's test asserts, and say so in the task's report and
+  commit. Never weaken a test to make a
   block pass.
 - **Every commit is preceded by `gofmt -w` on the Go files the task touched, then `make build &&
   make test && make vet`.** Report their real output.
@@ -1269,14 +1288,40 @@ The amendment to 7e-1 as built (final review 7e-1, its two re-reviews, and the r
 
 | Pair | Shared | Now |
 |---|---|---|
-| 7e-1 ↔ T14, T15, T15b | `store.FollowMarks(ctx, feed, m, from, on, up, rescanned func() error, logf)` | every caller passes a hook that returns an error to refuse the reload: port49d `daemonReloadHook` (T14), a non-runner replica a counter alone (T15), the runner `reloadHook` (T15b). `progress` is `WatchRevocations`'s, wired inside `FollowMarks`; no caller passes it ✓ |
-| 7e-1 ↔ T14 | `store.Marks` | T14 adds `Keep`, used by port49d's hook alone; `Count` is set before the first `LoadMarks` in `openStores` (T14) and `runBroker` (T15) ✓ |
+| 7e-1 ↔ T14, T15, T15b | `store.FollowMarks(ctx, feed, m, from, on, up, rescanned func() error, logf)` | every caller passes a hook that returns an error to refuse the reload: port49d `daemonReloadHook` (T14), Task 15's counter until T15b; then `reloadHook` (T15b) on every replica: the runner puts back, and a non-runner replica keeps what its copy holds (pre-flight 7e-2 P-3). `progress` is `WatchRevocations`'s, wired inside `FollowMarks`; no caller passes it ✓ |
+| 7e-1 ↔ T14 | `store.Marks` | T14 adds `Keep`, used by port49d's hook and its start after a store gone (`keepLost`), and by every broker replica's hook (T15b; pre-flight 7e-2 P-3); `authMarks` is `run`'s, as the ledger is, and each `runOnce` sets `Count` before `openStores` (T14); `runBroker` sets it before its `LoadMarks` (T15) ✓ |
 | T14 ↔ T15b | `namedMarks` | written in T14 (`daemon.go`) for the daemon's keep line, with its test; T15b's put-back line uses it ✓ |
 | 7e-1 ↔ T14 | `marksReloadHook`, `putBackFileMarks` | `marksReloadHook` and its test are deleted in T14: on etcd the file is retired, and on memory no marks feed runs. `putBackFileMarks`, `withHeld` and `persister(st, path, held, enforced, m)` stay for memory, with the persister's tests; Task 18 names `putBackFileMarks` as called by tests alone ✓ |
 | 7e-1 ↔ T14, T15 | `restore_linux_test.go`, `TestARestoreUnderARunningPort49dKeepsTheFilesMarks` | replaced: its daemon half by T14's `TestARestoreUnderARunningDaemonKeepsItsMarks`, its put-back half by T15b's runner tests; its file half is retired with the file ✓ |
 | 7e-1 ↔ T15 | `unopenableSayer` | gains `prefix`: `port49d` or `port49-broker`, so each process's crypt lines carry its own name ✓ |
 | 7e-1 ↔ T14, T15 | `openStores`'s M-3 and M-4 wiring | the split daemon keeps both; `runBroker` sets both feed series to 0 and `ledger.Fence().OnTimeout(m.StoreFenceTimeouts.Inc)` before its store wait ✓ |
 | T15b ↔ T15c | `marksReloaded` | still `chan struct{}`, buffered one. On each receive `duties` runs `restoreMarks` and then applies every standing mark to the kept contexts. T15c's running purge sends on it, as before. The feed's hook sends on it too, but only after its own synchronous put-back has landed, so the reload never waits on `duties` ✓ |
+
+The pre-flight of the amended 7e-2 (`preflight-7e2.md`, "Cross-task table") marked these ✗;
+each now reads:
+
+| Pair | Shared | Now |
+|---|---|---|
+| T11 ↔ T14, T15b, T15c | the runbook's no-bump restart | every port49d is restarted only after the first runner's put-back line (P-2; was ✗) ✓ |
+| T13 ↔ T14 | hand-built test configs, the reload rig | `brokerConfigWith` sets `Policy`, and `newReloadRig` sets `Policy.WatchInterval`, in Task 13; both files are in its commit (P-8; was ✗) ✓ |
+| Ruling 11 ↔ T14 | the marks across runs (`authMarks`) | `run`'s, as the ledger is; a run after a store gone keeps what the store lost before it loads (`keepLost`) (P-1; was ✗) ✓ |
+| 7e-1 ↔ T14 | `Marks.Count` before the first load | `authMarks` is made in `run`, and each `runOnce` sets `Count` before `openStores` (P-1; was ✗) ✓ |
+| T14 ↔ T15 | `newReloader(cfg, live, log, pass, m, now)` | `reload_test.go`'s caller is in Task 14's Files and commit (P-8; was ✗) ✓ |
+| T14 ↔ T15 | `onSettled` | `func(pol *policy.Policy)` in both (P-10; was ✗) ✓ |
+| T14 ↔ T15 | `checkSealKeys(…, write bool)` | T15 `true`, T14 `false`; `store_test.go`'s eight calls gain `, true` in Task 14 (P-8) ✓ |
+| T14 ↔ T15, T15a, T15b, T15c, T16 | the daemon start helper | `startSplitDaemon` and `startSplitDaemonStop`; `certstatus_test.go`'s `startDaemon` stays (P-7; was ✗) ✓ |
+| T14 ↔ T16 | the second daemon's config | `copyDaemon` gives each copy its own `admin_socket`, spool path and metrics address; `f.copyDaemon` is Task 15's (P-9; was ✗) ✓ |
+| T14 ↔ T15b | `Marks.Keep` | port49d's, and every non-runner broker replica's through `r.marks` (P-3) ✓ |
+| 7e-1 ↔ T14, T15, T15b | `FollowMarks`'s `rescanned` | a non-runner's hook keeps what its copy holds, and a failed read refuses the reload (P-3; was ✗) ✓ |
+| T15 ↔ T15a | `recordJudged`'s every-replica condition | a replica's bundle record is deleted at its graceful stop, so Task 15's restart tests still see their "recorded bundle" lines; a replica that dies leaves its record to lapse by `ExpiresAt` (P-5; was ✗) ✓ |
+| T15 ↔ T15a, T15c | `meta/` reads and writes | every KV call on `s.ctxKV`; `Judged` reads the key and tells an undecodable record itself (P-6; was ✗) ✓ |
+| T15a internal | `Bundles` liveness | `BundleRecord.ExpiresAt` decides; the lease only reclaims (P-4; was ✗) ✓ |
+| T15a ↔ T15a, T15b, T15c, T16 | `waitUntil`, `readyz` | `revocations_test.go`'s `waitUntil(t, what, cond)` at every call; the plan's `readyzAt(t, addr)` (P-7; was ✗) ✓ |
+| T15 ↔ T15a, T15b, T15c, T16 | `copyBroker`, `mintOn`, `editPolicy` | defined in Task 15's helper list (P-9; was ✗) ✓ |
+| T15 ↔ T15b | the runner's fields | `copy`, `marks`, `marksReloaded` (P-3) ✓ |
+| T15 ↔ T15c | `retryCtx`, `sleepCtx`, `orNone` | defined under Task 15's `recordJudged` (P-9) ✓ |
+| T16 ↔ 7e-1 | the held broker connection | 7e-1's `heldBrokerConn` (P-13; was ✗) ✓ |
+| T17 ↔ README | the Junos re-authorization note | the 7d note in `README.md`, replaced in Task 17 Step 3's commit (P-11) ✓ |
 
 ## Running the lab (Task 17)
 
@@ -1373,7 +1418,7 @@ cmd/port49d/store_e2e_test.go                  MOD  the put-back test on the rec
 cmd/port49d/*.go → internal/port49d/*.go       MOV  package port49d (Task 12)
 cmd/port49d/main.go                            NEW  the shim (Task 12)
 cmd/port49-broker/main.go                      NEW  the shim (Task 15)
-internal/port49d/daemon.go                     NEW  the daemon's start on etcd, the probe, daemonReloadHook, namedMarks (Task 14)
+internal/port49d/daemon.go                     NEW  the daemon's start on etcd, the probe, daemonReloadHook, keepLost, namedMarks (Task 14)
 internal/port49d/revocations.go, _test.go      MOD  marksReloadHook and its test deleted (Task 14)
 internal/port49d/restore_linux_test.go         MOD  the file's restore test replaced by the split daemon's (Task 14)
 internal/port49d/store.go                      MOD  unopenableSayer(prefix, …) (Task 15)
@@ -6469,7 +6514,7 @@ Nothing here asserts what a device does. The device cells it adds cite L37 or L3
 
   Decision 35's three "until plan 7e" clauses (pre-flight M12). Each replacement quotes whole
   lines, as they stand:
-  - **"What store write access still yields"** (spec line 6594). Replace the two lines
+  - **"What store write access still yields"** (spec line 6597). Replace the two lines
 
     ```
       That holds for the daemon's credential taken alone: until plan 7e port49d also holds the
@@ -6484,7 +6529,7 @@ Nothing here asserts what a device does. The device cells it adds cite L37 or L3
     ```
 
     The next line, `` `store.etcd.roles: unenforced` the daemon's is too.``, stays.
-  - **"The daemon's role cannot"** (spec line 6693). Replace the two lines
+  - **"The daemon's role cannot"** (spec line 6701). Replace the two lines
 
     ```
         taken alone: until plan 7e port49d also holds the broker's, whose role is the whole
@@ -6497,7 +6542,7 @@ Nothing here asserts what a device does. The device cells it adds cite L37 or L3
         alone, which since plan 7e is all a port49d host holds (decision 36); under
         `store.etcd.roles: unenforced` the daemon's is the whole keyspace too.
     ```
-  - **"One port49d per keyspace"** (spec line 6708). Replace the line
+  - **"One port49d per keyspace"** (spec line 6716). Replace the line
     `- **One port49d per keyspace until plan 7e.**` with `- **One port49d per keyspace in plan
     7d.** *Amended by decision 36 (plan 7e):* any number of port49d serve a keyspace and hold
     nothing; the hold below is port49-broker's runner's.`
@@ -6579,6 +6624,13 @@ Nothing here asserts what a device does. The device cells it adds cite L37 or L3
       share the runner's hold: one runs the start, the sweep and the policy refresh, and another
       takes over within `hold_ttl` and a third when it stops. Set the same
       `broker.policy_watch_interval` on every replica.
+      Each port49d needs its own `listen` address, which devices list as one more TACACS+
+      server, and its own `admin_socket`, `metrics_listen` and `accounting.spool_path`: two on
+      one host (two systemd units, or two containers on the host's network) differ in each, and
+      every one must see the device's true source address (Source address visibility, above;
+      policy engine spec §15 L39 measures the container and Kubernetes cases). Each
+      port49-broker likewise needs its own `broker.listen`, `metrics_listen` (default `:9050`),
+      `admin_socket` and `broker.state_dir`.
     - **`broker.state_dir` survives a restart** (plan 7e). It holds the replica's `marks.json`
       and `witness.json` (policy engine spec §13, decision 36). Under systemd it is a directory
       on the host; in a container, a named volume; on Kubernetes, a volume per replica that
@@ -6622,9 +6674,12 @@ Nothing here asserts what a device does. The device cells it adds cite L37 or L3
         the store, and one lifted since is back. The runbook, on etcd since plan 7e:
         1. Stop every port49-broker. port49d may run on.
         2. Restore with `--bump-revision` and `--mark-compacted` (below). Without
-           `--bump-revision`, also restart every port49d after the restore: a process started
-           after it seals below what one that ran across it knows, and their logins are denied
-           there (`store_unavailable`) until that process writes at the key.
+           `--bump-revision`, also restart every port49d, but only once step 4's first runner
+           has said its put-back line: a process started after the restore seals below what one
+           that ran across it knows, and their logins are denied there (`store_unavailable`)
+           until that process writes at the key; and a port49d restarted before the put-back
+           loads the restored marks, so it enforces none the restore lost until the runner puts
+           them back.
         3. Delete `meta/judged` (`etcdctl del <prefix>v1/meta/judged`), so the first runner
            purges every unspent token, and a token redeemed since the snapshot is not redeemable
            again. With it gone, the reload guard at start has no judged bundle to check against:
@@ -6806,12 +6861,16 @@ test moves with its code and keeps its package-internal access.
   `LoadBroker`, `key_refs`, `broker.state_dir`, `checkStore`, the refusals, `KeyRefs`,
   `StoreBlocks` in place of `StoreOf`)
 - Create: `internal/config/broker_role_test.go`. `internal/config/broker_test.go` exists at
-  `b508ba0`, with `loadWith`, `brokerBlock` and the 7a/7b broker-block tests, and is not
+  `a5e4fe8`, with `loadWith`, `brokerBlock` and the 7a/7b broker-block tests, and is not
   touched (pre-flight I7).
 - Modify: `internal/config/store_test.go` (`checkStore` takes the role; `StoreBlocks`),
   `internal/config/config_test.go`
 - Modify: every reader of `cfg.Broker.PolicyFile` and `cfg.Broker.PolicyWatchInterval` in
   `internal/port49d` (`loadPolicy`, `parseBundle`, `reload.go`), which read `cfg.Policy` now
+- Modify: `internal/port49d/broker_test.go` (`brokerConfigWith` sets `Policy:
+  &config.PolicyConfig{File: pol}`), `internal/port49d/reload_test.go` (`newReloadRig` sets
+  `rig.cfg.Policy.WatchInterval = time.Second` beside the broker's): both build
+  `config.Config` by hand, and would leave `Policy` nil (pre-flight 7e-2 P-8)
 - Modify: `internal/port49d/storeroles.go` (`StoreBlocks` for `StoreOf`, no other change: Task 16
   adds `--broker-config`)
 
@@ -7119,7 +7178,7 @@ Rulings 1, 2, 12, 14.
   }
   ```
 
-  If `AccountingConfig` or `limitsYAML` is not comparable at `b508ba0`, compare field by field.
+  If `AccountingConfig` or `limitsYAML` is not comparable at `a5e4fe8`, compare field by field.
   `lab.session_attributes`, `command_attributes`, `deny_prefixes`, `deny_message_length` and
   `deny_session` join the list as `lab.<key>`.
 
@@ -7190,7 +7249,7 @@ Rulings 1, 2, 12, 14.
   gofmt -w internal/config internal/port49d
   git add internal/config/config.go internal/config/broker_role_test.go internal/config/config_test.go \
     internal/config/store_test.go internal/port49d/main.go internal/port49d/reload.go internal/port49d/store.go \
-    internal/port49d/storeroles.go
+    internal/port49d/storeroles.go internal/port49d/broker_test.go internal/port49d/reload_test.go
   git commit -m "feat(config): port49-broker.yaml, and port49d.yaml with no broker on etcd
 
   LoadBroker reads port49d.yaml's schema under the broker's role: key_refs
@@ -7224,7 +7283,9 @@ Rulings 1, 2, 12, 14.
   `TestARestoreUnderARunningPort49dKeepsTheFilesMarks` replaced by the split daemon's; `restore`
   kept)
 - Modify: `internal/port49d/store_test.go` (its etcd tests on the split daemon, or moved to Task
-  15; pre-flight I9)
+  15; pre-flight I9); its eight `checkSealKeys` calls gain `, true`
+- Modify: `internal/port49d/reload_test.go` (`newReloadRig` calls `newReloader(rig.cfg,
+  b.Policy, b.Log, b.Refresh, rig.m, rig.clock)`; pre-flight 7e-2 P-8)
 
 **Interfaces:**
 - Consumes (as built in 7e-1; roadmap, "Interfaces 7e-1 changed"):
@@ -7253,11 +7314,13 @@ Rulings 1, 2, 12, 14.
     `TestAPersistKeepsAMarkMadeSinceTheStart…`) use `putBackFileMarks` as their witness. Its
     comment gains: `Since plan 7e no marks feed calls it: on etcd the file is retired, and on
     memory no feed runs.`
+  - `func keepLost(ctx context.Context, feed store.MarkFeed, enforced *store.Marks, bound
+    time.Duration, when string, out io.Writer) error`: the keep, run by `daemonReloadHook` and
+    by a run after a store gone before its `LoadMarks` (pre-flight 7e-2 P-1).
+  - `authMarks` is made by `run`, beside the ledger, and passed to every `runOnce`.
   - `func namedMarks(ms []store.Revocation) string` (re-check R4): each mark's kind and key
     (`printsafe.Line`), comma-separated, at most 20, then `and N more`. Written here for the
     daemon's keep line; Task 15b's put-back line uses it.
-  - `type daemonStart struct { ledgerRev, marksRev uint64 }`, returned by `openStores` for the
-    daemon's role.
   - `stores.probe func(ctx context.Context)`: one `Ping` every `hold_ttl`/6 through the
     daemon's guard, until `ctx` ends.
   - `reloader` fields:
@@ -7265,7 +7328,7 @@ Rulings 1, 2, 12, 14.
     - `log decision.Emitter`;
     - `pass func(ctx context.Context, priors []broker.Prior) (broker.RefreshReport, error)`, nil
       for none (port49d with no broker);
-    - `onSettled func(bundle string)`, nil for none (Task 15).
+    - `onSettled func(pol *policy.Policy)`, nil for none (Task 15).
 
     `newReloader(cfg, live, log, pass, m, now)` replaces `newReloader(cfg, b, m, now)`, and an
     in-process broker passes `b.Policy, b.Log, b.Refresh`.
@@ -7290,8 +7353,8 @@ Ruling 11.
   	t.Cleanup(func() { stderr = e })
   	stderr = &out
   	daemonCfg, _ := etcdSplit(t)
-  	startDaemon(t, daemonCfg, &out, 1)
-  	startDaemon(t, copyWithListen(t, daemonCfg, "127.0.0.1:0"), &out, 2) // a second, its own addresses
+  	startSplitDaemon(t, daemonCfg, &out, 1)
+  	startSplitDaemon(t, copyDaemon(t, daemonCfg), &out, 2) // a second, its own addresses
   	if strings.Contains(out.String(), "is held by") {
   		t.Fatalf("a daemon waited for a hold:\n%s", out.String())
   	}
@@ -7307,7 +7370,7 @@ Ruling 11.
   	t.Cleanup(func() { stderr = e })
   	stderr = &out
   	daemonCfg, proxy := etcdSplit(t)
-  	startDaemon(t, daemonCfg, &out, 1)
+  	startSplitDaemon(t, daemonCfg, &out, 1)
   	proxy.Hang(true)
   	waitWithin(t, &out, "closing every listener so that devices use their local method", 60*time.Second)
   	proxy.Hang(false)
@@ -7333,7 +7396,7 @@ Ruling 11.
   	t.Cleanup(func() { stderr = e })
   	stderr = &out
   	cfgPath, policyPath := policyOnlyRun(t) // run_test.go's config, policy: {file, watch_interval: 1s} for broker:
-  	tacacs := startDaemon(t, cfgPath, &out, 1)
+  	tacacs := startSplitDaemon(t, cfgPath, &out, 1)
   	writePolicyFile(t, policyPath, quarantiningLeaf1) // reload_test.go's quarantine fixture
   	waitFor(t, &out, "is quarantined")
   	if answeredFrom(t, tacacs, leaf1Addr) {
@@ -7352,9 +7415,13 @@ Ruling 11.
   built from `run_test.go`'s and `reload_test.go`'s fixtures. `answeredFrom` dials from the
   device's loopback address, as the quarantine tests there do. Name each in the report.
 
-  `startDaemon`, `copyWithListen` and `askAdmin` are helpers. Write them beside the test.
-  `startDaemon` is `startRun` waiting for `port49d: listening on` instead of `broker listening
-  on`.
+  `startSplitDaemon`, `copyDaemon` and `askAdmin` are helpers; write them beside the test.
+  `startSplitDaemon` (not `certstatus_test.go`'s `startDaemon`, which stays) is `startRun`
+  waiting for `port49d: listening on` instead of `broker listening on`, and returns the TACACS+
+  address. `copyDaemon(t, cfg) string` writes a copy of a daemon config with its own
+  `admin_socket`, `accounting.spool_path` and `metrics_listen: 127.0.0.1:0` in a `safeDir` of
+  its own: `admin.Listen` refuses a socket another port49d answers on.
+  `TestTwoDaemonsServeOneKeyspace` uses `copyDaemon(t, daemonCfg)`.
 
   The daemon's half of final review 7e-1 C-1 (Ruling 5). Add to `daemon_test.go`, beside
   `namedMarks`' test, which moves here from 0cc5573's Task 15b:
@@ -7504,7 +7571,7 @@ Ruling 11.
   	daemonCfg, proxy, srv := etcdSplitServer(t)
   	root := srv.Client(t, "root")
   	ctx := context.Background()
-  	startDaemon(t, daemonCfg, &out, 1)
+  	startSplitDaemon(t, daemonCfg, &out, 1)
   	key := "/port49/v1/rv/principal/" + url.PathEscape("user:alice@example.com")
   	bob := "/port49/v1/rv/principal/" + url.PathEscape("user:bob@example.com")
   	mark := func(who string) string {
@@ -7545,14 +7612,45 @@ Ruling 11.
   	}
   	waitInForce(t, &out, "principal", 1)
   }
+
+  // An etcd restore that outlasts hold_ttl takes port49d dark and starts a new
+  // run, which reads the restored marks. The marks are the process's (Ruling
+  // 11), so the new run keeps alice's mark the restore lost, names it, and
+  // enforces it (final review 7e-1 C-1; pre-flight 7e-2 P-1).
+  func TestARestoreAcrossAStoreGoneKeepsTheDaemonsMarks(t *testing.T) {
+  	var out syncBuffer
+  	e := stderr
+  	t.Cleanup(func() { stderr = e })
+  	stderr = &out
+  	daemonCfg, proxy, srv := etcdSplitServer(t)
+  	root := srv.Client(t, "root")
+  	ctx := context.Background()
+  	startSplitDaemon(t, daemonCfg, &out, 1)
+  	key := "/port49/v1/rv/principal/" + url.PathEscape("user:alice@example.com")
+  	if _, err := root.Put(ctx, key, `{"kind":"principal","key":"user:alice@example.com",`+
+  		`"at":"2026-10-03T03:00:00Z","origin":"test: a broker"}`); err != nil {
+  		t.Fatal(err)
+  	}
+  	waitInForce(t, &out, "principal", 1)
+  	proxy.Hang(true)
+  	waitWithin(t, &out, "closing every listener so that devices use their local method", 60*time.Second)
+  	if _, err := root.Delete(ctx, key); err != nil { // the restore, while this port49d is dark
+  		t.Fatal(err)
+  	}
+  	proxy.Drop()
+  	waitCountWithin(t, &out, "port49d: listening on ", 2, 90*time.Second)
+  	waitFor(t, &out, "port49d: store: 1 revocation(s) this port49d enforces are missing from the store "+
+  		"as it starts again after a store gone")
+  	waitInForce(t, &out, "principal", 1)
+  }
   ```
 
-  `etcdSplitServer` is Step 7's. `waitInForce`, `waitMetric`, `waitFor` and `restore` are the
-  package's own (7e-1).
+  `etcdSplitServer` is Step 7's. `waitInForce`, `waitMetric`, `waitFor`, `waitWithin`,
+  `waitCountWithin` and `restore` are the package's own (7e-1).
 
 - [ ] **Step 2: Run them to see them fail.**
 
-  Run: `go test ./internal/port49d/ ./internal/daemon/admin/ ./internal/store/ -run 'TwoDaemons|IdleDaemon|DaemonsSocket|NoBrokerReloads|ReloadHookKeeps|NamedUpToTwenty|RestoreUnderARunningDaemon|KeptMark' -count=1`
+  Run: `go test ./internal/port49d/ ./internal/daemon/admin/ ./internal/store/ -run 'TwoDaemons|IdleDaemon|DaemonsSocket|NoBrokerReloads|ReloadHookKeeps|NamedUpToTwenty|RestoreUnderARunningDaemon|RestoreAcrossAStoreGone|KeptMark' -count=1`
   Expected: FAIL. The split config does not start (port49d takes the hold as the broker, whose
   identity it no longer has), and `RevokeElsewhere`, `Marks.Keep`, `daemonReloadHook`,
   `namedMarks` and `etcdSplitServer` are undefined.
@@ -7594,10 +7692,17 @@ Ruling 11.
     - `store.LoadMarks(ctx, d, authMarks, nil)`, retried while unavailable, then
       `port49d: store: N revocation(s) in force from the store`. This moves the load from
       `runOnce`'s `brk != nil` branch (`main.go:899-930` at `a5e4fe8`) into `openStores`, for the
-      split daemon. Pass `authMarks` into `openStores`, with its `Count` already set: `runOnce`
-      calls `authMarks.Count(…)` (`main.go:820`) before `openStores`, or
-      `port49_revocations_in_force` reads 0 on every split daemon. Keep the marks' revision as
-      `markRev`;
+      split daemon. **`authMarks` is the process's, as the ledger is (Ruling 11):** `run` makes it
+      beside `crypt.NewLedger()` (`main.go:524`) and passes it to every `runOnce`, which passes it
+      to `openStores`. `runOnce` sets `authMarks.Count(…)` to the run's metrics before it calls
+      `openStores` (`main.go:718`), since metrics are per run; the last run's feeds are joined
+      by then, so the new `Count` replaces the old one safely. Move `authMarks := store.NewMarks()`
+      and its `Count` (`main.go:817-823`) up accordingly. **On a run after a store gone**
+      (`again`), before this `LoadMarks`, run the same keep the reload hook runs (factor it out
+      of `daemonReloadHook` as `keepLost(ctx, feed, enforced, bound, when, out) error`, with
+      `when` "as its marks feed reloads" or "as it starts again after a store gone"), so a mark
+      the store lost while this port49d was dark stays in force. A `keepLost` read that fails is
+      retried as the load is. Keep the marks' revision as `markRev`;
     - return `stores` whose:
       - `follow` runs both feeds on two goroutines and returns once both have: the context feed
         as 7e-1's `follow` does (`crypt.FollowContexts(ctx, d, d, keys, ledger, rev, …)`), and
@@ -7637,32 +7742,42 @@ Ruling 11.
     	rescans prometheus.Counter, bound time.Duration, out io.Writer) func() error {
     	return func() error {
     		rescans.Inc()
-    		rctx, cancel := context.WithTimeout(ctx, bound)
-    		_, rs, err := feed.Revocations(rctx)
-    		cancel()
-    		if err != nil {
-    			return fmt.Errorf("reading the marks before the marks reload: %w; the marks are not reloaded "+
-    				"until they are read", err)
-    		}
-    		stored := map[[2]string]bool{}
-    		for _, r := range rs {
-    			stored[[2]string{r.Kind, r.Key}] = true
-    		}
-    		var kept []store.Revocation
-    		for _, r := range enforced.All() {
-    			if !stored[[2]string{r.Kind, r.Key}] {
-    				enforced.Keep(r)
-    				kept = append(kept, r)
-    			}
-    		}
-    		if len(kept) > 0 {
-    			fmt.Fprintf(out, "port49d: store: %d revocation(s) this port49d enforces are missing from the store "+
-    				"as its marks feed reloads (an etcd restore, or lifted on port49-broker while the feed was down) "+
-    				"and stay in force here until a lift this feed delivers or a restart: %s\n", len(kept),
-    				namedMarks(kept))
-    		}
-    		return nil
+    		return keepLost(ctx, feed, enforced, bound, "as its marks feed reloads", out)
     	}
+    }
+
+    // keepLost keeps in force every mark enforced holds that the store lacks,
+    // and names them on out; when says at which load. The reload hook runs it,
+    // and so does a run after a store gone before its LoadMarks: the marks are
+    // the process's (Ruling 11), and an etcd restore that outlasts hold_ttl
+    // ends the run before the feed can reload (pre-flight 7e-2 P-1). A read
+    // that fails returns an error, and the caller loads nothing.
+    func keepLost(ctx context.Context, feed store.MarkFeed, enforced *store.Marks, bound time.Duration,
+    	when string, out io.Writer) error {
+    	rctx, cancel := context.WithTimeout(ctx, bound)
+    	_, rs, err := feed.Revocations(rctx)
+    	cancel()
+    	if err != nil {
+    		return fmt.Errorf("reading the marks before the marks reload: %w; the marks are not reloaded "+
+    			"until they are read", err)
+    	}
+    	stored := map[[2]string]bool{}
+    	for _, r := range rs {
+    		stored[[2]string{r.Kind, r.Key}] = true
+    	}
+    	var kept []store.Revocation
+    	for _, r := range enforced.All() {
+    		if !stored[[2]string{r.Kind, r.Key}] {
+    			enforced.Keep(r)
+    			kept = append(kept, r)
+    		}
+    	}
+    	if len(kept) > 0 {
+    		fmt.Fprintf(out, "port49d: store: %d revocation(s) this port49d enforces are missing from the store "+
+    			"%s (an etcd restore, or lifted on port49-broker while the feed was down) and stay in force "+
+    			"here until a lift this feed delivers or a restart: %s\n", len(kept), when, namedMarks(kept))
+    	}
+    	return nil
     }
 
     // namedMarks names each mark a put-back or keep line lists, its kind and
@@ -7695,8 +7810,9 @@ Ruling 11.
     // unwritten one does (Pend), until a lift (Set false: the feed's, or this
     // process's) or a load that shows the store holds it again: port49d's on
     // etcd, whose role cannot put back a mark an etcd restore lost (plan 7e,
-    // Ruling 5). A mark not in force is not put in force. It is never used
-    // beside Pend and Unrecorded, which are the broker's.
+    // Ruling 5). A mark not in force is not put in force. On a broker it
+    // marks a mark the copy holds and a reload found missing; a later put or
+    // Put clears it as it clears a Pended one.
     func (m *Marks) Keep(r Revocation) {
     	if m == nil {
     		return
@@ -7771,7 +7887,8 @@ Ruling 11.
     refresh and leaves `port49_policy_refresh_pending` alone;
   - the admin socket's server gets `RevokeElsewhere: "port49-broker's admin socket (its
     admin_socket in port49-broker.yaml)"` on etcd;
-  - the daemon's handlers get `authMarks`, which `openStores` filled;
+  - the daemon's handlers get `authMarks`, the process's (`run`'s), which `openStores` filled;
+    on memory the file's marks are `Set` into it each run, as today;
   - run `sts.follow` and `sts.probe` on goroutines joined before `sts.close`, and `sts.keep` only
     when it is set;
   - skip `startOnPersistentStore`, the sweep, the keeper, the restore of the revocations file,
@@ -7847,7 +7964,7 @@ Ruling 11.
   git add internal/port49d/daemon.go internal/port49d/daemon_test.go internal/port49d/main.go \
     internal/port49d/store.go internal/port49d/reload.go internal/port49d/store_e2e_test.go \
     internal/port49d/store_test.go internal/port49d/restore_linux_test.go \
-    internal/port49d/revocations.go internal/port49d/revocations_test.go \
+    internal/port49d/revocations.go internal/port49d/revocations_test.go internal/port49d/reload_test.go \
     internal/store/marks.go internal/store/marks_test.go \
     internal/daemon/admin/admin.go internal/daemon/admin/admin_test.go
   git commit -m "feat(port49d): serve TACACS+ on etcd with no broker inside
@@ -7947,7 +8064,7 @@ and the offline revocation, each on this task's runner.
 - [ ] **Step 1: The failing tests.** Create `internal/port49d/brokerd_test.go`. The fixture,
   `splitFleet(t)`, is one TLS etcd member with the roles, one `port49d.yaml` and one
   `port49-broker.yaml` (`brokerSplit`), and the helpers `startBroker(t, cfg, out, n) (apiAddr
-  string, stop func() error)` and `startDaemon`.
+  string, stop func() error)` and `startSplitDaemon`.
 
   ```go
   // The first port49-broker takes the runner's hold and runs the takeover;
@@ -8040,7 +8157,7 @@ and the offline revocation, each on this task's runner.
   	t.Cleanup(func() { stderr, stdout = e, o })
   	stderr, stdout = &out, &log
   	f := splitFleet(t)
-  	tacacs := startDaemon(t, f.daemon, &out, 1)
+  	tacacs := startSplitDaemon(t, f.daemon, &out, 1)
   	api, stop := startBroker(t, f.broker, &out, 1)
   	waitForCount(t, &out, "runner: recorded bundle ", 1)
   	kept := mintOn(t, api, f.pki, "leaf1")
@@ -8074,23 +8191,35 @@ and the offline revocation, each on this task's runner.
   			t.Fatalf("settleAfter(%v) = %v, want %v", interval, got, want)
   		}
   	}
-  	r := newReloaderForTest(t) // reload_test.go's fixture: a runner reloader on a memory broker
-  	r.swapTo(t, withdrawnGrantPolicy) // the edit that withdraws alice's grant
-  	tok := mintUnder(t, r, oldPolicy)  // another replica, still on the old policy
-  	r.runFirstPass(t)
-  	r.runSettlePass(t)
-  	if tokenStillRedeemable(t, r, tok) {
+  	rig := newReloadRig(t, minimalPolicy) // reload_test.go's fixture: a reloader on a memory broker
+  	swapTo(t, rig, showOnly)               // the edit that withdraws alice's grant
+  	tok := mintUnder(t, rig, minimalPolicy) // another replica, still on the old policy
+  	runFirstPass(t, rig)
+  	runSettlePass(t, rig)
+  	if tokenStillRedeemable(t, rig, tok) {
   		t.Fatal("the settle pass kept a token minted under the replaced policy after the first pass")
   	}
   }
   ```
 
-  Write the settle test's helpers from `reload_test.go`'s fixture:
-  - `mintUnder` mints through a second `*broker.Broker` on the same store, holding the old
-    policy;
-  - `runFirstPass` and `runSettlePass` call `r.refresh` with the clock moved to each.
+  Write the settle test's helpers on `reload_test.go`'s `newReloadRig(t, policyBody)`:
+  - `swapTo(t, rig, body)` is `rig.write(t, body)` and then `rig.pollTwice()`;
+  - the withdrawn grant is `reload_test.go`'s `showOnly`; the old policy is `minimalPolicy`;
+  - `mintUnder(t, rig, body) string` mints through a second broker that `buildBroker` builds on
+    `rig.st`, holding `body`;
+  - `runFirstPass` and `runSettlePass` call the reloader's refresh with `rig.now` moved to each;
+  - `tokenStillRedeemable(t, rig, tok) bool` looks the token up in `rig.st`.
 
   `splitFleet`'s further helpers:
+  - `f.daemon`, `f.broker` and `f.pki` are the two configs and the lab PKI; `f.copyDaemon(t)` is
+    Task 14's `copyDaemon(t, f.daemon)`;
+  - `f.copyBroker(t) string` writes a copy of `f.broker` with its own `broker.listen` and
+    `metrics_listen` (both `127.0.0.1:0`), its own `admin_socket`, its own `broker.state_dir` (a
+    fresh `t.TempDir()`, mode 0700) and its own `broker.policy_file` (a copy of the policy, in a
+    `safeDir`), so Tasks 15a, 15b, 15c and 16 each get the separate file they need;
+  - `mintOn(t, api, pki, device) string` is `run_test.go`'s `mint`; `mintOnAs` is `mintAs`;
+  - `f.editPolicy(t)` rewrites `f.broker`'s policy file with one comment line added, through
+    `f.writePolicyOf` (Task 15a), so its bundle differs;
   - `f.copyBrokerVia(t) (string, *etcdtest.Proxy)` is `copyBroker` with the endpoint through
     an `etcdtest.NewProxy` of its own;
   - `f.bundle(t)` is the bundle the policy file loads into, read as `loadPolicy` reads it;
@@ -8188,14 +8317,18 @@ and the offline revocation, each on this task's runner.
   // that does not decode is ok false too, said by its key alone: a takeover
   // then purges, which fails closed.
   func (s *Store) Judged(ctx context.Context) (JudgedRecord, bool, error) {
-  	var r judgedRec
-  	_, found, err := getJSON(ctx, s.ctx, s.k.meta("judged"), &r)
-  	if errors.Is(err, errNotDecoded) { // whatever getJSON's undecodable error is at b508ba0
-  		s.logf("etcd: %s does not decode; the takeover purges the unspent tokens", s.k.meta("judged"))
+  	key := s.k.meta("judged")
+  	resp, err := s.ctxKV.Get(ctx, key)
+  	if err != nil {
+  		return JudgedRecord{}, false, unavailable(err)
+  	}
+  	if len(resp.Kvs) == 0 {
   		return JudgedRecord{}, false, nil
   	}
-  	if err != nil || !found {
-  		return JudgedRecord{}, false, err
+  	var r judgedRec
+  	if err := json.Unmarshal(resp.Kvs[0].Value, &r); err != nil {
+  		s.logf("etcd: %s does not decode; the takeover purges the unspent tokens", key)
+  		return JudgedRecord{}, false, nil
   	}
   	return JudgedRecord{Bundle: r.Bundle, Policy: r.Policy}, true, nil
   }
@@ -8211,12 +8344,14 @@ and the offline revocation, each on this task's runner.
   	if err != nil {
   		return err
   	}
-  	_, err = s.ctx.Put(ctx, s.k.meta("judged"), string(body))
+  	_, err = s.ctxKV.Put(ctx, s.k.meta("judged"), string(body))
   	return unavailable(err)
   }
   ```
 
-  Check `getJSON`'s error for a record that does not decode at `b508ba0`, and match it. The
+  Every KV call on the context client goes through `s.ctxKV`, so `Seen()` sees it (Ruling
+  T6-a). `Judged` reads the key itself rather than through `getJSON`, whose decode error
+  (`notDecoded`, `commit.go:134`) carries no sentinel to tell it from a failed read. The
   daemon's role reads `meta/`, so port49d can read the policy here. That is no wider than the
   policy file port49d already reads from disk, and the file names no secret (key groups name key
   references, never keys).
@@ -8229,7 +8364,7 @@ and the offline revocation, each on this task's runner.
     the newest's span at `rep.At`, so the settle pass judges every token minted under each of
     them since;
   - when a complete pass leaves `PolicyRefreshPending` at 0 and `r.onSettled` is set, call
-    `r.onSettled(r.live.Load())`. `onSettled` is now `func(pol *policy.Policy)`, so the
+    `r.onSettled(r.live.Load())`. `onSettled` is `func(pol *policy.Policy)` (Task 14), so the
     record can carry `pol.Raw()`.
 
   Update `refresh`'s comment. Every existing reload test passes: a pass with no settle owed
@@ -8356,8 +8491,11 @@ and the offline revocation, each on this task's runner.
   }
   ```
 
-  `retryCtx` is the takeover's retry, tried every 5s while `store.ErrUnavailable` and `ctx`
-  lives. A failure fails toward purging at the next takeover, which denies more.
+  `retryCtx(ctx, f func() error) error` runs `f` until it returns nil, an error that is not
+  `store.ErrUnavailable`, or ctx ends (ctx.Err()), waiting 5s between tries and saying each
+  wait as `port49-broker: runner: <err>; trying again in 5s`. `sleepCtx(ctx, d)` waits d or for
+  ctx. `orNone(bundle string, ok bool) string` is bundle, or `none recorded` when !ok. A
+  failure fails toward purging at the next takeover, which denies more.
 
   `takeover(ctx) error` is 7e-1's `startOnPersistentStore(ctx, brk, st, e, cfg, &marks, m)` as
   built (`store.go:776` at `a5e4fe8`), renamed and moved here, with these changes:
@@ -8461,8 +8599,9 @@ and the offline revocation, each on this task's runner.
      ```
 
      `progress` is `WatchRevocations`'s, wired inside `FollowMarks` (final review 7e-1 I-1).
-     The `rescanned` here only counts; Task 15b replaces it with the runner's put-back, which
-     can refuse the reload.
+     The `rescanned` here only counts; Task 15b replaces it with `reloadHook`, which puts back
+     on the runner, keeps what the copy holds on every other replica, and can refuse the
+     reload.
   9. The admin socket: `admin.Server{Revoke: adminRevoke(brk), Revocations: adminRevocations(st),
      Now: time.Now, DiagnoseElsewhere: "port49d's admin socket"}`, with `Held` nil. In
      `admin.go`'s `keys_diagnose` case, when `s.Held == nil && s.DiagnoseElsewhere != ""`, the
@@ -8500,7 +8639,7 @@ and the offline revocation, each on this task's runner.
   `holderShape` in `store.go` admits `port49-broker on …` beside `port49d on …`.
 
 - [ ] **Step 8: The skipped e2e tests, on the split.** Unskip Task 14's four tests. Rewrite each
-  to start `startDaemon` and `startBroker` on `splitFleet`, keeping what it asserts:
+  to start `startSplitDaemon` and `startBroker` on `splitFleet`, keeping what it asserts:
   - **`TestRunOnEtcdKeepsALoginAcrossARestart`:** restart the daemon; then restart the broker and
     assert the token minted before is still redeemable (Ruling 7, the same bundle). The 7d
     assertion that it is purged now belongs to `TestATakeoverPurgesOnlyAnUnjudgedBundle`.
@@ -8574,14 +8713,18 @@ and the offline revocation, each on this task's runner.
 - Consumes: Task 15's runner, `recordJudged`, `etcd.JudgedRecord`; `bundle.CheckAdmission`;
   `parseBundle`, `refusalLine`; `policy.MaxTokenTTL` (Task 5).
 - Produces (`etcd`):
-  - `type BundleRecord struct { Who, Bundle string; At time.Time }`.
+  - `type BundleRecord struct { Who, Bundle string; At, ExpiresAt time.Time }`.
   - `func (s *Store) PutBundle(ctx context.Context, who, bundle string, ttl time.Duration) error`:
-    `meta/bundles/<esc(who)>`, on a lease of `ttl`.
-  - `func (s *Store) Bundles(ctx context.Context) ([]BundleRecord, error)`: every live record. A
+    `meta/bundles/<esc(who)>`, expiring at `now + ttl` (its lease is `cas`'s bucket past that;
+    the expiry decides).
+  - `func (s *Store) DeleteBundle(ctx context.Context, who string) error`: deletes this
+    replica's record, at its graceful stop (pre-flight 7e-2 P-5).
+  - `func (s *Store) Bundles(ctx context.Context) ([]BundleRecord, error)`: every record whose
+    ExpiresAt is after now. A
     record that does not decode is an error naming its key.
   - `func (s *Store) Holder(ctx context.Context) (string, bool, error)`: `meta/holder`, the
-    runner's `who`. Export the read `Hold`'s wait already makes, if it is not exported at
-    `b508ba0`.
+    runner's `who`: `getJSON(ctx, s.ctxKV, s.k.meta("holder"), &h)`, as `Hold`'s wait already
+    reads it (`meta.go:103`).
   - `func (s *Store) PutRefreshOwed(ctx context.Context, who, bundle string) error`,
     `func (s *Store) RefreshOwed(ctx context.Context) (rev uint64, rec BundleRecord, ok bool, err error)`
     and `func (s *Store) ClearRefreshOwed(ctx context.Context, rev uint64) error`. The clear is a
@@ -8615,7 +8758,8 @@ Ruling 8 as corrected (pre-flight I3) with port49d's gauge (re-check R5), and Ru
 - [ ] **Step 1: The failing tests.** In `internal/store/etcd/meta_test.go`, on `onShared(t,
   time.Now)`:
   - `TestBundlesAreLeasedAndListed`: two `PutBundle`s list two records. One put with a 2s
-    `ttl` is gone from `Bundles` within 5s. A `who` with spaces and parentheses round-trips.
+    `ttl` is gone from `Bundles` within 5s. A `who` with spaces and parentheses round-trips. A
+    `DeleteBundle` removes the record at once.
   - `TestRefreshOwedIsClearedOnlyAtItsRevision`: `PutRefreshOwed`, then `RefreshOwed` gives
     `rev1`. A second `PutRefreshOwed` gives `rev2`. `ClearRefreshOwed(rev1)` leaves the record;
     `ClearRefreshOwed(rev2)` deletes it.
@@ -8692,10 +8836,12 @@ Ruling 8 as corrected (pre-flight I3) with port49d's gauge (re-check R5), and Ru
   		t.Fatalf("said %d times", n)
   	}
   	st.set("runner-a", "b-old")
-  	waitUntil(t, func() bool { return testutil.ToFloat64(m.PolicyBundleMatchesRunner) == 1 })
+  	waitUntil(t, "the gauge to match the runner", func() bool { return testutil.ToFloat64(m.PolicyBundleMatchesRunner) == 1 })
   	if got := st.put("replica-b"); got != "b-old" {
   		t.Fatalf("the replica recorded %q", got)
   	}
+  	cancel() // a graceful stop deletes the record (pre-flight 7e-2 P-5)
+  	waitUntil(t, "the stopped replica's record is deleted", func() bool { return st.put("replica-b") == "" })
   }
 
   // A full pass is owed once every token a mismatched replica could have
@@ -8720,7 +8866,7 @@ Ruling 8 as corrected (pre-flight I3) with port49d's gauge (re-check R5), and Ru
   	defer cancel()
   	m.PolicyBundleMatchesRunner.Set(0)
   	go keepDaemonBundle(ctx, j, live, 100*time.Millisecond, m, &out)
-  	waitUntil(t, func() bool { return testutil.ToFloat64(m.PolicyBundleMatchesRunner) == 1 })
+  	waitUntil(t, "the daemon's gauge to match the judged bundle", func() bool { return testutil.ToFloat64(m.PolicyBundleMatchesRunner) == 1 })
   	if out.String() != "" {
   		t.Fatalf("with no judged record: %q", out.String())
   	}
@@ -8734,7 +8880,7 @@ Ruling 8 as corrected (pre-flight I3) with port49d's gauge (re-check R5), and Ru
   		t.Fatalf("said %d times", n)
   	}
   	j.set(etcdstore.JudgedRecord{Bundle: "b-old"}, true)
-  	waitUntil(t, func() bool { return testutil.ToFloat64(m.PolicyBundleMatchesRunner) == 1 })
+  	waitUntil(t, "the daemon's gauge to match the judged bundle", func() bool { return testutil.ToFloat64(m.PolicyBundleMatchesRunner) == 1 })
   }
 
   // judgedVar is a judgedReader whose record the test changes.
@@ -8757,9 +8903,10 @@ Ruling 8 as corrected (pre-flight I3) with port49d's gauge (re-check R5), and Ru
   }
   ```
 
-  `fakeBundles` implements `bundleStore` (`PutBundle`, `Bundles`, `Holder`) in memory under a
-  lock, with `set(who, bundle)` and `put(who) string`. `policyWithBundle(t, bundle)` loads
-  `minimalPolicy` into the named bundle. `waitUntil` polls a condition for 5s. `judgedAt`
+  `fakeBundles` implements `bundleStore` (`PutBundle`, `DeleteBundle`, `Bundles`, `Holder`) in
+  memory under a lock, with `set(who, bundle)` and `put(who) string` (`""` once deleted).
+  `policyWithBundle(t, bundle)` loads `minimalPolicy` into the named bundle. `waitUntil` is
+  `revocations_test.go`'s (`what`, `cond`), which polls for 5s. `judgedAt`
   (`startguard_test.go`) is the fixed reader; `judgedVar` changes, and needs `"sync"` in the
   file's imports.
 
@@ -8776,7 +8923,7 @@ Ruling 8 as corrected (pre-flight I3) with port49d's gauge (re-check R5), and Ru
   	t.Cleanup(func() { stderr, stdout = e, o })
   	stderr, stdout = &out, &log
   	f := splitFleet(t)
-  	tacacs := startDaemon(t, f.daemon, &out, 1)
+  	tacacs := startSplitDaemon(t, f.daemon, &out, 1)
   	startBroker(t, f.broker, &out, 1)
   	waitFor(t, &out, "runner: recorded bundle ")
   	cfgB := f.copyBroker(t) // a policy file of its own
@@ -8813,7 +8960,7 @@ Ruling 8 as corrected (pre-flight I3) with port49d's gauge (re-check R5), and Ru
   	f.writePolicyOf(t, f.broker, admitsNothingPolicy)
   	startBrokerNoWait(t, f.broker, &out, 2)
   	waitFor(t, &out, "policy file refused at start against the bundle last judged")
-  	if code := readyz(t, f.metricsOf(t, f.broker)); code != http.StatusServiceUnavailable {
+  	if code := readyzAt(t, f.metricsOf(t, f.broker)); code != http.StatusServiceUnavailable {
   		t.Fatalf("/readyz %d while the file is refused", code)
   	}
   	if strings.Count(out.String(), "runner: took keyspace") != 1 {
@@ -8830,7 +8977,8 @@ Ruling 8 as corrected (pre-flight I3) with port49d's gauge (re-check R5), and Ru
     fence's owner and mode rules, as `reload_test.go`'s writes do;
   - `withdrawnConfigurePolicy` is `minimalPolicy` whose role permits `show **` alone;
   - `f.metricsOf(t, cfg)` is the config's metrics address;
-  - `readyz` gets `/readyz` and returns its status.
+  - `readyzAt(t, addr string) int` gets `/readyz` at addr and returns its status (not
+    `service_e2e_test.go`'s `readyz`, which stays).
 
 - [ ] **Step 2: Run them to see them fail.**
 
@@ -8840,11 +8988,18 @@ Ruling 8 as corrected (pre-flight I3) with port49d's gauge (re-check R5), and Ru
   judged, `TestADaemonServingAnotherBundleThanTheJudgedSaysSo` fails.
 
 - [ ] **Step 3: The records.** In `meta.go`, beside `Judged`:
-  - `PutBundle` writes `bundleRec{Who, Bundle, At}` at `s.k.meta("bundles/") + esc(who)` with
-    `cas` (it compares nothing, and the lease is the expiry `f` names: `now + ttl`).
+  - `PutBundle` writes `bundleRec{Who, Bundle, At, ExpiresAt: now + ttl}` at
+    `s.k.meta("bundles/") + esc(who)` with `cas` (`live` is `now.Before(r.ExpiresAt)`, as
+    `supersededRec.live`; `f` writes always and names `ExpiresAt` as the lease's expiry).
   - `Bundles` reads the prefix in pages at one revision, as `LedgerMarks` does, and returns
-    the records whose lease is live. Every record carries one.
-  - `Holder` reads `meta/holder`.
+    the records whose ExpiresAt is after now: a lease only reclaims (leases.go), so a lapsed
+    record can remain up to a minute and lease_grace past its ttl, and is skipped by its own
+    expiry, as every leased record is.
+  - `DeleteBundle(ctx, who)` deletes this replica's record (P-5).
+  - `Holder` reads `meta/holder` with `getJSON(ctx, s.ctxKV, s.k.meta("holder"), &h)`.
+  - Every KV call on the context client goes through `s.ctxKV`, so `Seen()` sees it (Ruling
+    T6-a): `PutBundle`'s `cas`, `Bundles`, `DeleteBundle`, `Holder` and the `*RefreshOwed`
+    calls alike.
   - `PutRefreshOwed` puts `bundleRec` at `meta/refresh_owed`.
   - `RefreshOwed` returns its mod revision with it.
   - `ClearRefreshOwed(rev)` is a transaction: `If(ModRevision(key) == rev).Then(OpDelete(key))`.
@@ -8857,6 +9012,7 @@ Ruling 8 as corrected (pre-flight I3) with port49d's gauge (re-check R5), and Ru
   // bundleStore is what keepBundle reads and writes (etcd.Store).
   type bundleStore interface {
   	PutBundle(ctx context.Context, who, bundle string, ttl time.Duration) error
+  	DeleteBundle(ctx context.Context, who string) error
   	Bundles(ctx context.Context) ([]etcdstore.BundleRecord, error)
   	Holder(ctx context.Context) (string, bool, error)
   }
@@ -8898,6 +9054,12 @@ Ruling 8 as corrected (pre-flight I3) with port49d's gauge (re-check R5), and Ru
   		}
   		select {
   		case <-ctx.Done():
+  			// A replica that stops mints nothing more: its record goes with it,
+  			// so a takeover right after a rollout judges the replicas that serve.
+  			// One that dies leaves its record to lapse (ExpiresAt).
+  			dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
+  			_ = raw.DeleteBundle(dctx, who)
+  			cancel()
   			return
   		case <-t.C:
   		case <-swapped:
@@ -9134,7 +9296,10 @@ Ruling 8 as corrected (pre-flight I3) with port49d's gauge (re-check R5), and Ru
     the marks feed's `rescanned` on every replica. It counts a rescan; while this replica runs,
     it puts back what the store lost **before** the reload, once, bounded by
     `store.etcd.bulk_timeout`, and returns an error when that fails, so the reload is refused
-    (re-review 1 C-2). It replaces port49d's 7e-1 `marksReloadHook`, as Ruling 12 says.
+    (re-review 1 C-2). On a replica that does not run, or runs its takeover still, it keeps in
+    force (`Marks.Keep`) every mark it enforces that its copy holds and the store lacks, and
+    names them; a read that fails refuses the reload (pre-flight 7e-2 P-3). It replaces port49d's
+    7e-1 `marksReloadHook`, as Ruling 12 says.
   - `func offlineRevoke(args []string, stdout, stderr io.Writer) int`, behind `port49-broker
     revoke --offline`.
 
@@ -9213,7 +9378,7 @@ Ruling 12 as changed (pre-flight I5) and Ruling 13's break-glass (pre-flight I4)
   			t.Fatalf("%+v: %+v", req, resp)
   		}
   	}
-  	waitUntil(t, func() bool { return copyHolds(t, f.stateDir(t), "user:alice@example.com", "user:carol@example.com") == "10" })
+  	waitUntil(t, "the copy to hold alice and not carol", func() bool { return copyHolds(t, f.stateDir(t), "user:alice@example.com", "user:carol@example.com") == "10" })
   	if err := stop(); err != nil {
   		t.Fatal(err)
   	}
@@ -9254,7 +9419,7 @@ Ruling 12 as changed (pre-flight I5) and Ruling 13's break-glass (pre-flight I4)
   	if resp := askAdminAt(t, adminSocketOf(t, cfgB), admin.Request{Op: "revoke", Principal: alice}); resp.Error != "" {
   		t.Fatalf("revoke on B: %+v", resp)
   	}
-  	waitUntil(t, func() bool { return copyHolds(t, f.stateDirOf(t, cfgA), alice) == "1" })
+  	waitUntil(t, "A's copy to hold alice", func() bool { return copyHolds(t, f.stateDirOf(t, cfgA), alice) == "1" })
   	// Writes elsewhere move the store past alice's mark, A's marks watch is
   	// told a progress at or above them, and the store is compacted there:
   	// above A's last change, at or below its last progress.
@@ -9275,7 +9440,7 @@ Ruling 12 as changed (pre-flight I5) and Ruling 13's break-glass (pre-flight I4)
   		t.Fatalf("lift on B: %+v", resp)
   	}
   	proxyA.Drop() // A's streams end, and it reconnects
-  	waitUntil(t, func() bool { return copyHolds(t, f.stateDirOf(t, cfgA), alice) == "0" })
+  	waitUntil(t, "A's copy to drop alice", func() bool { return copyHolds(t, f.stateDirOf(t, cfgA), alice) == "0" })
   	if s := out.String(); strings.Contains(s, "the marks feed's revision was compacted") ||
   		strings.Contains(s, "were missing from the store") {
   		t.Fatalf("a short break reloaded or put back:\n%s", s)
@@ -9294,7 +9459,7 @@ Ruling 12 as changed (pre-flight I5) and Ruling 13's break-glass (pre-flight I4)
   	t.Cleanup(func() { stderr, stdout = e, o })
   	stderr, stdout = &out, &log
   	f := splitFleet(t)
-  	tacacs := startDaemon(t, f.daemon, &out, 1)
+  	tacacs := startSplitDaemon(t, f.daemon, &out, 1)
   	api, stop := startBroker(t, f.broker, &out, 1)
   	dev := tacacsClient{t: t, addr: tacacs, key: []byte("run-test-secret")}
   	loginSession(t, dev, mintOn(t, api, f.pki, "leaf1"), &log)
@@ -9310,7 +9475,7 @@ Ruling 12 as changed (pre-flight I5) and Ruling 13's break-glass (pre-flight I4)
   		&rout, &rerr); code != 0 {
   		t.Fatalf("exit %d: %s", code, rerr.String())
   	}
-  	waitUntil(t, func() bool { return !dev.permits("alice", "configure") })
+  	waitUntil(t, "the device to deny alice configure", func() bool { return !dev.permits("alice", "configure") })
   	if r := lastCommand(t, &log); r["reason"] != "credential_revoked" {
   		t.Fatalf("the denial: %v", r)
   	}
@@ -9341,10 +9506,10 @@ Ruling 12 as changed (pre-flight I5) and Ruling 13's break-glass (pre-flight I4)
   // The runner's hook before a marks reload puts back what its copy holds
   // and the store lost; a put-back that fails returns an error, so
   // FollowMarks reloads nothing and the lost mark is never lifted, and the
-  // next compacted round puts it back, then reloads (re-review 1 C-2). The
-  // control: a replica that does not run only counts, and its reload lifts
-  // what the store lost (the runner's put-back brings it back to every
-  // replica through the feed). Each call counts a rescan.
+  // next compacted round puts it back, then reloads (re-review 1 C-2). A
+  // replica that does not run puts nothing back and keeps alice, whom its
+  // copy holds; its reload lifts bob, whom its copy lacks (pre-flight 7e-2
+  // P-3). Each call counts a rescan.
   func TestTheRunnersReloadHookRefusesTheReloadOnAFailedPutBack(t *testing.T) {
   	alice := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:alice@example.com", At: time.Unix(10, 0).UTC()}
   	var out syncBuffer
@@ -9352,52 +9517,61 @@ Ruling 12 as changed (pre-flight I5) and Ruling 13's break-glass (pre-flight I4)
   	t.Cleanup(func() { stderr = e })
   	stderr = &out
   	rescans := prometheus.NewCounter(prometheus.CounterOpts{Name: "rescans"})
+  	bob := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:bob@example.com", At: time.Unix(11, 0).UTC()}
+  	// newRunner's copy holds alice; its marks hold alice and bob, whom the
+  	// copy lacks.
   	newRunner := func(st store.Store, running bool) *runner {
   		c := openMarksCopy(filepath.Join(t.TempDir(), "marks.json"), &out)
   		c.Apply(store.MarkChange{Revocation: alice, Standing: true})
+  		marks := store.NewMarks()
+  		marks.Set(alice, true)
+  		marks.Set(bob, true)
   		r := &runner{cfg: config.Config{Store: config.StoreConfig{Etcd: &config.EtcdConfig{BulkTimeout: time.Second}}},
-  			st: st, copy: c, marksReloaded: make(chan struct{}, 1)}
+  			st: st, copy: c, marks: marks, marksReloaded: make(chan struct{}, 1)}
   		r.on.Store(running)
   		return r
   	}
-  	// follow runs FollowMarks over st's marks, alice standing, compacted
-  	// rounds times, and reports whether any reload lifted her.
-  	follow := func(r *runner, st store.Store, rounds int32) (*store.Marks, *atomic.Bool) {
-  		marks := store.NewMarks()
-  		marks.Set(alice, true)
-  		var lifted atomic.Bool
+  	// follow runs FollowMarks over st's marks into r.marks, compacted
+  	// rounds times, and records each key a reload lifted.
+  	follow := func(r *runner, st store.Store, rounds int32) *sync.Map {
+  		var lifted sync.Map
   		feed := &storeFeed{st: st}
   		feed.compacted.Store(rounds)
   		ctx, cancel := context.WithCancel(context.Background())
   		done := make(chan struct{})
   		go func() {
   			defer close(done)
-  			store.FollowMarks(ctx, feed, marks, 1, func(c store.MarkChange) {
+  			store.FollowMarks(ctx, feed, r.marks, 1, func(c store.MarkChange) {
   				if !c.Standing {
-  					lifted.Store(true)
+  					lifted.Store(c.Key, true)
   				}
   			}, func(bool) {}, r.reloadHook(ctx, rescans), func(string, ...any) {})
   		}()
   		t.Cleanup(func() { cancel(); <-done })
-  		return marks, &lifted
+  		return &lifted
   	}
 
   	idle := memory.New(time.Now)
-  	_, lifted := follow(newRunner(idle, false), idle, 1)
-  	waitUntil(t, lifted.Load) // the control
+  	rIdle := newRunner(idle, false)
+  	liftedIdle := follow(rIdle, idle, 1)
+  	waitUntil(t, "the idle replica's reload lifts bob", func() bool { _, ok := liftedIdle.Load(bob.Key); return ok })
+  	if _, ok := liftedIdle.Load(alice.Key); ok || !rIdle.marks.Holds(alice.Kind, alice.Key) {
+  		t.Fatal("an idle replica's reload lifted a mark its copy holds and the store lost")
+  	}
 
   	st := &putsFailOnce{Store: memory.New(time.Now)}
-  	marks, lifted := follow(newRunner(st, true), st, 2)
-  	waitUntil(t, func() bool {
+  	r := newRunner(st, true)
+  	lifted := follow(r, st, 2)
+  	waitUntil(t, "the runner puts alice back", func() bool {
   		_, err := st.GetRevocation(context.Background(), alice.Kind, alice.Key)
   		return err == nil
   	})
   	waitFor(t, &out, "port49-broker: runner: 1 revocation(s) in broker.state_dir/marks.json were missing from the "+
   		"store")
-  	if lifted.Load() || !marks.Holds(alice.Kind, alice.Key) {
+  	if _, ok := lifted.Load(alice.Key); ok || !r.marks.Holds(alice.Kind, alice.Key) {
   		t.Fatal("a reload after a failed put-back lifted the mark the store lost")
   	}
-  	waitUntil(t, func() bool { return testutil.ToFloat64(rescans) == 3 })
+  	waitUntil(t, "three rescans", func() bool { return testutil.ToFloat64(rescans) == 3 })
   }
 
   // putsFailOnce is a store whose first PutRevocation fails unavailable, as
@@ -9439,12 +9613,13 @@ Ruling 12 as changed (pre-flight I5) and Ruling 13's break-glass (pre-flight I4)
   ```
 
   The hook's `return nil` on a failed put-back makes the first round reload and lift alice, which
-  `lifted` catches; a hook that put back after the reload would too.
+  `lifted` catches; a hook that put back after the reload would too. An idle replica's hook that
+  only counted (0cc5573's, and 670bb7a's) lifts alice there, which the control catches.
 
   The helpers:
   - `f.stateDirOf(t, cfg)` reads a broker config's `broker.state_dir`, and `f.stateDir(t)` is
-    `f.stateDirOf(t, f.broker)`. `f.copyBroker(t)` gives each copy a `broker.state_dir` of its
-    own (a fresh `t.TempDir()`), if Task 15's helper does not already. Task 15c uses them;
+    `f.stateDirOf(t, f.broker)`. `f.copyBroker(t)` (Task 15) gives each copy a
+    `broker.state_dir` of its own. Task 15c uses them;
   - `copyHolds(t, dir, keys...)` reads `marks.json` and returns a `1` or `0` per key, in order;
   - `splitFleetProgress(t, every)` is `splitFleet` on a member started with
     `etcdtest.Options{TLS: true, ProgressNotify: every}` (7e-1). Factor the member's start out of
@@ -9453,7 +9628,7 @@ Ruling 12 as changed (pre-flight I5) and Ruling 13's break-glass (pre-flight I4)
   - `adminSocketOf` and `askAdminAt` were Task 16's in 0cc5573. Write them here, and Task 16
     uses them.
 
-  `runner_test.go` imports `context`, `path/filepath`, `sync/atomic`, `testing`, `time`,
+  `runner_test.go` imports `context`, `path/filepath`, `sync`, `sync/atomic`, `testing`, `time`,
   `prometheus`, `prometheus/testutil`, `config`, `store` and `store/memory`.
 
 - [ ] **Step 2: Run them to see them fail.**
@@ -9479,10 +9654,12 @@ Ruling 12 as changed (pre-flight I5) and Ruling 13's break-glass (pre-flight I4)
       item 8). A feed started before it would tell a change no listener hears and that
       `marks.All()` was read too early to hold. Keep that order, and say so in a comment at the
       `FollowMarks` call;
-  - give the runner the copy (`r.copy`) and a `marksReloaded chan struct{}` buffered one;
+  - give the runner the copy (`r.copy`), the replica's `store.Marks` (`r.marks = marks`), and
+    a `marksReloaded chan struct{}` buffered one;
   - replace Task 15's counting `rescanned` with `rn.reloadHook(ctx,
     m.StoreFeedRescans.WithLabelValues("marks"))`. The hook runs on the marks feed's goroutine,
-    before the reload, and only the runner puts back; on every other replica it counts alone.
+    before the reload, and only the runner puts back; every other replica keeps what its copy
+    holds and the store lacks (pre-flight 7e-2 P-3).
 
   In `runner.go`:
 
@@ -9534,17 +9711,37 @@ Ruling 12 as changed (pre-flight I5) and Ruling 13's break-glass (pre-flight I4)
   // that fails returns an error, so the reload is refused and the marks
   // feed is down until a put-back lands, tried again every second
   // (re-review 1 C-2). What it put back is applied to the kept contexts by
-  // duties (marksReloaded). A replica that does not run puts nothing back:
-  // the runner's does, and the feed brings it here.
+  // duties (marksReloaded). A replica that does not run, or runs its
+  // takeover still, puts nothing back: it keeps in force (store.Marks.Keep)
+  // every mark it enforces that its copy holds and the store lacks, so its
+  // listener refuses that principal until the runner's put-back arrives or
+  // a lift this feed delivers; a read that fails refuses the reload.
   func (r *runner) reloadHook(ctx context.Context, rescans prometheus.Counter) func() error {
   	return func() error {
   		rescans.Inc()
+  		pctx, cancel := context.WithTimeout(ctx, r.cfg.Store.Etcd.BulkTimeout)
+  		defer cancel()
   		if !r.running() {
+  			stored, err := r.st.ListRevocations(pctx)
+  			if err != nil {
+  				return fmt.Errorf("runner: reading the marks before the marks reload: %w; the marks are not "+
+  					"reloaded until they are read", err)
+  			}
+  			var kept []store.Revocation
+  			for _, m := range r.copy.Missing(stored) {
+  				if r.marks.Holds(m.Kind, m.Key) {
+  					r.marks.Keep(m)
+  					kept = append(kept, m)
+  				}
+  			}
+  			if len(kept) > 0 {
+  				fmt.Fprintf(stderr, "port49-broker: store: %d revocation(s) in broker.state_dir/marks.json are "+
+  					"missing from the store as the marks feed reloads and stay in force on this replica until the "+
+  					"runner puts them back or a lift this feed delivers: %s\n", len(kept), namedMarks(kept))
+  			}
   			return nil
   		}
-  		pctx, cancel := context.WithTimeout(ctx, r.cfg.Store.Etcd.BulkTimeout)
   		put, err := r.putBackMissing(pctx)
-  		cancel()
   		if len(put) > 0 {
   			sayPutBack(put)
   			select {
@@ -9894,7 +10091,7 @@ forgetting it fail closed.
   	stderr, stdout = &out, &log
   	f := splitFleet(t)
   	root := f.srv.Client(t, "root")
-  	tacacs, stopD := startDaemonStop(t, f.daemon, &out, 1)
+  	tacacs, stopD := startSplitDaemonStop(t, f.daemon, &out, 1)
   	api, stop := startBroker(t, f.broker, &out, 1)
   	waitFor(t, &out, "runner: recorded bundle ")
   	spent := mintOn(t, api, f.pki, "leaf1")
@@ -9906,7 +10103,7 @@ forgetting it fail closed.
   	if st := loginWithin(t, dev, "alice", spent, 10*time.Second); st != wire.AuthenStatusPass {
   		t.Fatalf("control: the token's first login: %d", st)
   	}
-  	waitUntil(t, func() bool { return witnessIn(t, f.stateDir(t)) > w0 }) // the redemption's witness, recorded
+  	waitUntil(t, "the redemption's witness, recorded", func() bool { return witnessIn(t, f.stateDir(t)) > w0 }) // the redemption's witness, recorded
   	if err := stop(); err != nil {
   		t.Fatal(err)
   	}
@@ -9916,7 +10113,7 @@ forgetting it fail closed.
   	recorded := witnessIn(t, f.stateDir(t)) // saved as the broker stopped
   	f.srv.Restore(t, snapshot)              // meta/judged left as the snapshot's
   	padPast(t, root, recorded)              // as --bump-revision moves revisions up
-  	dev.addr = startDaemon(t, f.daemon, &out, 2)
+  	dev.addr = startSplitDaemon(t, f.daemon, &out, 2)
   	api, _ = startBroker(t, f.broker, &out, 2)
   	waitFor(t, &out, fmt.Sprintf("below the %d this replica saw: the store was restored from a snapshot; every "+
   		"unspent token is purged", recorded))
@@ -9946,7 +10143,7 @@ forgetting it fail closed.
   	snapshot := f.srv.Backup(t)
   	w0 := witnessAt(t, root)
   	mintWithin(t, apiA, f.pki, "leaf1", 10*time.Second) // after the member's restart; brings a witness
-  	waitUntil(t, func() bool { return witnessIn(t, f.stateDirOf(t, cfgB)) > w0 })
+  	waitUntil(t, "B's copy of the witness to rise", func() bool { return witnessIn(t, f.stateDirOf(t, cfgB)) > w0 })
   	// The follower path, proved: A held throughout, so B's record came only
   	// from following. Had A's hold lapsed across Backup's restart, B would
   	// have run and recorded its own writes (final check, Minor 3).
@@ -9967,9 +10164,10 @@ forgetting it fail closed.
   ```
 
   The helpers, beside `splitFleet`'s:
-  - `startDaemonStop(t, cfg, out, n) (addr string, stop func() error)` is `startDaemon` returning
-    its stop, as `startBroker` does; `startDaemon` calls it and drops the stop;
-  - `f.copyBroker(t)` with a `broker.state_dir` of its own, `f.stateDirOf(t, cfg)` and
+  - `startSplitDaemonStop(t, cfg, out, n) (addr string, stop func() error)` is
+    `startSplitDaemon` returning its stop, as `startBroker` does; `startSplitDaemon` calls it and
+    drops the stop;
+  - `f.copyBroker(t)` is Task 15's (a `broker.state_dir` of its own); `f.stateDirOf(t, cfg)` and
     `f.stateDir(t)` are Task 15b's;
   - `witnessAt(t, root) uint64` is `/port49/v1/meta/witness`'s `ModRevision` read as etcd's root,
     0 when absent, tried again for 10s while the member restarts under the client;
@@ -10089,7 +10287,7 @@ forgetting it fail closed.
 
   // Witness reads meta/witness, as the broker.
   func (s *Store) Witness(ctx context.Context) (WitnessRead, error) {
-  	resp, err := s.ctx.Get(ctx, s.k.meta("witness"))
+  	resp, err := s.ctxKV.Get(ctx, s.k.meta("witness"))
   	if err != nil {
   		return WitnessRead{}, unavailable(err)
   	}
@@ -10114,7 +10312,7 @@ forgetting it fail closed.
   	if err != nil {
   		return 0, err
   	}
-  	resp, err := s.ctx.Txn(ctx).If(clientv3.Compare(clientv3.ModRevision(key), "=", int64(over))).
+  	resp, err := s.ctxKV.Txn(ctx).If(clientv3.Compare(clientv3.ModRevision(key), "=", int64(over))).
   		Then(clientv3.OpPut(key, string(body))).Commit()
   	if err != nil {
   		return 0, unavailable(err)
@@ -10133,7 +10331,7 @@ forgetting it fail closed.
   func (s *Store) FollowWitness(ctx context.Context, saw func(uint64)) {
   	key := s.k.meta("witness")
   	for {
-  		if resp, err := s.ctx.Get(ctx, key); err == nil {
+  		if resp, err := s.ctxKV.Get(ctx, key); err == nil {
   			if len(resp.Kvs) > 0 {
   				saw(uint64(resp.Kvs[0].ModRevision))
   			}
@@ -10158,6 +10356,9 @@ forgetting it fail closed.
   	}
   }
   ```
+
+  Every KV call on the context client goes through `s.ctxKV`, so `Seen()` sees it (Ruling
+  T6-a); `FollowWitness`'s `Watch` stays on `s.ctx`, as `WatchContexts`' does.
 
   The key is `meta/`, which the broker's role writes and the daemon's only reads, so port49d
   can neither suppress nor forge it; `store-roles` is unchanged. `keys.go` needs nothing:
@@ -10536,8 +10737,8 @@ them.
   	t.Cleanup(func() { stderr, stdout = e, o })
   	stderr, stdout = &out, &log
   	f := splitFleet(t)
-  	a := startDaemon(t, f.daemon, &out, 1)
-  	b := startDaemon(t, f.copyDaemon(t), &out, 2)
+  	a := startSplitDaemon(t, f.daemon, &out, 1)
+  	b := startSplitDaemon(t, f.copyDaemon(t), &out, 2)
   	api, _ := startBroker(t, f.broker, &out, 1)
   	devA := tacacsClient{t: t, addr: a, key: []byte("run-test-secret")}
   	devB := tacacsClient{t: t, addr: b, key: []byte("run-test-secret")}
@@ -10556,14 +10757,14 @@ them.
   	t.Cleanup(func() { stderr, stdout = e, o })
   	stderr, stdout = &out, &log
   	f := splitFleet(t)
-  	tacacs := startDaemon(t, f.daemon, &out, 1)
+  	tacacs := startSplitDaemon(t, f.daemon, &out, 1)
   	apiA, _ := startBroker(t, f.broker, &out, 1)
   	cfgB := f.copyBroker(t) // its own API address and admin socket
   	startBroker(t, cfgB, &out, 2)
   	dev := tacacsClient{t: t, addr: tacacs, key: []byte("run-test-secret")}
   	loginSession(t, dev, mintOn(t, apiA, f.pki, "leaf1"), &log)
   	principal := lastCommandPrincipal(t, &log)
-  	held := heldConnTo(t, apiA, f.pki) // alice's connection to A, one request answered, kept open
+  	held := heldBrokerConn(t, f.pki, apiA) // alice's connection to A, one request answered, kept open
   	resp := askAdminAt(t, adminSocketOf(t, cfgB), admin.Request{Op: "revoke", Principal: principal})
   	if resp.Error != "" {
   		t.Fatalf("the revocation on B: %+v", resp)
@@ -10601,7 +10802,7 @@ them.
   	f := splitFleetWith(t, sharedUsernamePolicy, []string{"bob@example.com"})
   	root := f.srv.Client(t, "root")
   	ctx := context.Background()
-  	a := startDaemon(t, f.daemon, &out, 1)
+  	a := startSplitDaemon(t, f.daemon, &out, 1)
   	api, _ := startBroker(t, f.broker, &out, 1)
   	devA := tacacsClient{t: t, addr: a, key: []byte("run-test-secret")}
   	loginSession(t, devA, mintOnAs(t, api, f.pki, "leaf1", "bob@example.com"), &log)
@@ -10616,7 +10817,7 @@ them.
   	if !devA.permits("alice", "configure") || lastCommandPrincipal(t, &log) != "user:alice@example.com" {
   		t.Fatal("control: alice's session on the running daemon")
   	}
-  	c := startDaemon(t, f.copyDaemon(t), &out, 2) // started with nothing put back
+  	c := startSplitDaemon(t, f.copyDaemon(t), &out, 2) // started with nothing put back
   	devC := tacacsClient{t: t, addr: c, key: []byte("run-test-secret")}
   	if !devC.permits("alice", "configure") {
   		t.Fatal("control: a daemon started with nothing put back denied alice's session")
@@ -10624,7 +10825,7 @@ them.
   	if _, err := root.Put(ctx, string(bobs.Key), string(bobs.Value)); err != nil {
   		t.Fatal(err)
   	}
-  	b := startDaemon(t, f.copyDaemon(t), &out, 3) // started after the put-back
+  	b := startSplitDaemon(t, f.copyDaemon(t), &out, 3) // started after the put-back
   	devB := tacacsClient{t: t, addr: b, key: []byte("run-test-secret")}
   	if devB.permits("alice", "configure") {
   		t.Fatalf("a daemon started after a put-back took bob's context as alice's key's: %v",
@@ -10647,8 +10848,8 @@ them.
   	stderr, stdout = &out, &log
   	f := splitFleet(t)
   	root := f.srv.Client(t, "root")
-  	a := startDaemon(t, f.daemon, &out, 1)
-  	b := startDaemon(t, f.copyDaemon(t), &out, 2)
+  	a := startSplitDaemon(t, f.daemon, &out, 1)
+  	b := startSplitDaemon(t, f.copyDaemon(t), &out, 2)
   	api, stop := startBroker(t, f.broker, &out, 1)
   	devA := tacacsClient{t: t, addr: a, key: []byte("run-test-secret")}
   	devB := tacacsClient{t: t, addr: b, key: []byte("run-test-secret")}
@@ -10665,7 +10866,7 @@ them.
   		t.Fatal(err)
   	}
   	for name, dev := range map[string]tacacsClient{"a": devA, "b": devB} {
-  		waitUntil(t, func() bool { return !dev.permits("alice", "configure") })
+  		waitUntil(t, name + " to deny alice configure", func() bool { return !dev.permits("alice", "configure") })
   		if r := lastCommand(t, &log); r["reason"] != "credential_revoked" {
   			t.Fatalf("daemon %s's denial: %v", name, r)
   		}
@@ -10681,7 +10882,7 @@ them.
   	t.Cleanup(func() { stderr, stdout = e, o })
   	stderr, stdout = &out, &log
   	f := splitFleet(t)
-  	a := startDaemon(t, f.daemon, &out, 1)
+  	a := startSplitDaemon(t, f.daemon, &out, 1)
   	api, stop := startBroker(t, f.broker, &out, 1)
   	dev := tacacsClient{t: t, addr: a, key: []byte("run-test-secret")}
   	loginSession(t, dev, mintOn(t, api, f.pki, "leaf1"), &log)
@@ -10699,8 +10900,7 @@ them.
   ```
 
   The helpers beside Task 15's and 15b's:
-  - `heldConnTo` is a `tls.Dial` with alice's client certificate that sends one `GET
-    /v1/identity` and keeps the connection, as `listen_test.go`'s held-connection tests do;
+  - `heldBrokerConn` is 7e-1's (`store_e2e_test.go`), moved by Task 12;
   - `closedWithin` is a read that returns EOF or a reset within the bound;
   - `askAdminAt` and `adminSocketOf` are Task 15b's;
   - `mintStatus` is `mintOn` that returns the status and body;
@@ -10711,7 +10911,7 @@ them.
     `mintAs`;
   - `waitForLedgerSeq`, `sharedUsernamePolicy` and `lastCommandPrincipal` came over in Task
     12's move;
-  - `waitUntil` is Task 15a's.
+  - `waitUntil` is `revocations_test.go`'s.
 
   No test here waits on a gauge already at its target (pre-flight I14).
 
@@ -10959,15 +11159,16 @@ Ruling 16. Read "Running the lab" first. **No claim enters a doc before its row'
     Task 11 wrote with what was measured, citing the notes.
   - **The IOS-XE cells** of the store rows: replace L35's "unlike `quarantine-cisco_iosxe.md`"
     clause with L38's answer.
-  - **L36's answer** replaces the operator note "Junos re-authorization on etcd is unmeasured"
-    in Task 18's notes.
+  - **L36's answer** replaces the 7d operator note (`README.md`, "Junos re-authorization on
+    etcd is unmeasured") and is stated in Task 18's notes.
 
   Copy the captures back and run `make evidence` before removing the pinned worktree. Commit:
 
   ```bash
   git add tests/lab/results/L36-*.md tests/lab/results/L37-*.md tests/lab/results/L38-cisco_iosxe.md \
     tests/lab/evidence/L36-* tests/lab/evidence/L37-* tests/lab/evidence/L38-* \
-    docs/design/2026-08-23-policy-engine-spec.md docs/design/2026-08-21-port49-design.md
+    docs/design/2026-08-23-policy-engine-spec.md docs/design/2026-08-21-port49-design.md \
+    docs/superpowers/plans/README.md
   git commit -m "docs: close lab register entries L36, L37 and L38
 
   <one line per row: what was measured, on which images; any doc corrected
@@ -11131,7 +11332,8 @@ The roadmap's "7e-1's operator notes, as built" (`README.md`) is the full text t
   - **A second port49d serves beside the first.** List several on each device, and replace them
     one at a time, a new one starting beside the old: a second systemd unit or container, or on
     Kubernetes a rolling update. 7d's advice to stop the old one first (`strategy: Recreate`) is
-    withdrawn.
+    withdrawn. Two on one host need their own listen address, admin_socket, metrics_listen and
+    spool path, and each must see the device's true source address (design §13; L39).
   - **A login in flight while another port49d or port49-broker starts** can be denied
     `store_unavailable` once on the process that started: it was sealed below that process's
     fresh base. The user's next login is admitted.
@@ -11161,7 +11363,8 @@ The roadmap's "7e-1's operator notes, as built" (`README.md`) is the full text t
 - **On etcd the revocations file is retired.** etcd holds the marks, and each broker keeps a
   copy in `broker.state_dir/marks.json`. After an etcd restore:
   - stop every broker;
-  - restore with `--bump-revision` and `--mark-compacted`, or restart every port49d too;
+  - restore with `--bump-revision` and `--mark-compacted`; without them, restart every port49d
+    too, once the first runner has said which marks it put back, never before;
   - `etcdctl del <prefix>v1/meta/judged`;
   - start the brokers, one whose `broker.state_dir` survived the restore first.
   The first runner puts back the marks the restore lost, says how many, and purges the unspent
@@ -11169,9 +11372,14 @@ The roadmap's "7e-1's operator notes, as built" (`README.md`) is the full text t
   - **Meanwhile each port49d that ran across the restore keeps the marks it lost in force**, and
     names them: `port49d: store: N revocation(s) this port49d enforces are missing from the
     store as its marks feed reloads (…) and stay in force here until a lift this feed delivers
-    or a restart: …`. The daemon cannot put a mark back; the runner does. A lift made on a
-    broker while that port49d's marks feed was down is kept there too: restart that port49d,
-    or revoke and lift again while its feed is up.
+    or a restart: …`; a port49d dark through the restore says `… as it starts again after a
+    store gone …` instead. The daemon cannot put a mark back; the runner does. A lift made on a
+    broker while that port49d's marks feed was down is kept there too: restart that port49d
+    (after the runner's put-back line), or revoke and lift again while its feed is up.
+  - **Each port49-broker that is not the runner keeps the marks its copy holds**, and names
+    them (`… are missing from the store as the marks feed reloads and stay in force on this
+    replica until the runner puts them back …`), so its listener refuses those principals
+    until the put-back arrives.
   - **A runner whose put-back fails before its marks reload** (its store circuit open through
     the restore) does not reload: its marks feed is down, `port49_store_feed_up{feed="marks"}`
     0, `… the marks are not reloaded until they are back`, tried again every second. While it
@@ -11279,6 +11487,17 @@ Checked against the roadmap's 7e bullet, 7d's carries, and decisions 32–35:
     keys; Task 9's `WatchRevocations` and listener order; Task 8a's R-1; OR-1; the deployment
     shapes) → Tasks 11, 14, 15, 15b, 17, 18 and the operator notes.
   `amend-7e2-report.md` maps each one.
+- **The pre-flight of 7e-2 as amended** (`preflight-7e2.md`, P-1 to P-13):
+  - P-1 → Rulings 5 and 11; Task 14 (`authMarks` is `run`'s, `keepLost` at a run after a store
+    gone, `TestARestoreAcrossAStoreGoneKeepsTheDaemonsMarks`);
+  - P-2 → Task 11's runbook step 2, "What the operator sees", the 7e-2 operator notes;
+  - P-3 → Rulings 6 and 12; Task 15b's `reloadHook` on a non-runner replica, and its control;
+  - P-4, P-5 → Task 15a (`BundleRecord.ExpiresAt`, `DeleteBundle`);
+  - P-6 → Tasks 15, 15a and 15c on `s.ctxKV`;
+  - P-7, P-9, P-13 → the test helpers, named and defined once;
+  - P-8 → Tasks 13 and 14's Files and commits;
+  - P-10, P-11, P-12 → Task 14's Produces, the anchors, Task 11's §13 and the operator notes.
+  The "Pre-flight fixes" table in `amend-7e2-report.md` maps each one.
 - **Placeholders.** None in the unit and e2e tests. The lab tests (Task 17) are specified cell by
   cell, as 7d's Task 15 was, since they are written against the harness at the pinned commit.
   Three of `rewinding`'s methods are "SwapLoginRev's shape", written beside it. Test helpers built
@@ -11301,24 +11520,33 @@ Checked against the roadmap's 7e bullet, 7d's carries, and decisions 32–35:
   - `store.LoadMarks(ctx, feed, m, on)`, `FollowMarks(ctx, feed, m, from, on func(MarkChange),
     up func(bool), rescanned func() error, logf)`: a `rescanned` that returns an error refuses
     the reload. Its callers: `daemonReloadHook` (port49d, Task 14), the counting hook (Task 15),
-    `runner.reloadHook` (Task 15b);
+    `runner.reloadHook` (Task 15b, on every replica);
   - `store.Marks.Count(fn func(principal, cert int))`, set before the first `Set` or
-    `LoadMarks`; `Marks.Pend`, `Marks.Unrecorded` (the broker's); `Marks.Keep` (Task 14,
-    port49d's);
+    `LoadMarks`; `Marks.Pend`, `Marks.Unrecorded` (the broker's); `Marks.Keep` (Task 14:
+    port49d's hook and `keepLost`, and a non-runner replica's `reloadHook`, through `r.marks`);
   - `Broker.MarkChanged(store.MarkChange)`, `Broker.Say`, `RefreshTokens`;
   - port49d's `startOnPersistentStore(ctx, brk, st, e, cfg, &marks, m)` (7e-1, which Task 15
     renames `takeover`), `restoreRevocations(ctx, st, path)`, `persister(st, path, held,
     enforced, m)`, `putBackFileMarks(ctx, st, path, enforced)` (memory's file, tests only since
     Task 14), and `unopenableSayer(prefix, keys, out, now)` (Task 15);
-  - `daemonReloadHook(ctx, feed, enforced, rescans, bound, out)`, `namedMarks` (Task 14);
+  - `daemonReloadHook(ctx, feed, enforced, rescans, bound, out)`, `keepLost(ctx, feed, enforced,
+    bound, when, out) error`, `namedMarks` (Task 14); `authMarks` is `run`'s (Task 14);
     `putBackMissing`, `restoreMarks`, `reloadHook(ctx, rescans)`, `sayPutBack`,
     `marksReloaded chan struct{}` (Task 15b);
   - the fixtures `etcdSplitServerWith(t, policyBody, others)`, `etcdSplitServer`, `etcdSplit`
     (Task 14), `etcdSplitServerOpts`, `splitFleetProgress` (Task 15b), and 7e-1's
     `sharedUsernamePolicy` (bob a second identity of alice's subject), `mintAs`,
     `waitForLedgerSeq`, `restore`, `etcdtest.Proxy.Drop`, `etcdtest.Options.ProgressNotify`;
+  - the test helpers the pre-flight of 7e-2 settled: `startSplitDaemon`, `startSplitDaemonStop`,
+    `copyDaemon(t, cfg)` (Task 14); `f.copyDaemon`, `f.copyBroker`, `mintOn`, `f.editPolicy`,
+    `retryCtx`, `sleepCtx`, `orNone` (Task 15); `readyzAt(t, addr)` (Task 15a); and the
+    package's own `waitUntil(t, what, cond)`, `startDaemon`, `readyz(t, out)` and
+    `heldBrokerConn(t, pkiDir, addr)`, which stay;
+  - the runner's fields `copy`, `marks` (the replica's `store.Marks`) and `marksReloaded`
+    (Task 15b);
   - `etcd.Store.Seen`, `Judged` (`JudgedRecord`), `PutJudged(ctx, bundle, policy)`,
-    `PutBundle`, `Bundles`, `Holder`, `PutRefreshOwed`, `RefreshOwed`, `ClearRefreshOwed`;
+    `PutBundle`, `DeleteBundle`, `Bundles` (`BundleRecord.ExpiresAt`), `Holder`, `PutRefreshOwed`,
+    `RefreshOwed`, `ClearRefreshOwed`, each on `s.ctxKV` (Ruling T6-a);
   - `config.LoadBroker`, `Config.Policy`, `RoleBroker`, `StoreBlocks`;
   - `sweepLoop(ctx, s, brk, ledger, every, out)`, `recordJudged`, `guardAtStart`, `keepBundle`,
     `offlineRevoke`;
