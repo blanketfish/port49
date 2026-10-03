@@ -201,7 +201,7 @@ request, each leaving `make test` green. Nothing is cut.
   - **Task 12:** the move into `internal/port49d`.
   - **Tasks 13–16:** the config, port49d without a broker, port49-broker (15), policy across
     replicas and the guard at start (15a), the marks copy and the offline revocation (15b), the
-    restore witness (15c), and the fleet end to end.
+    restore backstop, the beat and the witness (15c), and the fleet end to end.
   - **Task 17:** the lab, which gates the merge.
   - **Task 18:** the as-built docs.
 
@@ -448,8 +448,9 @@ them. The ones to read first are under "Worth reading before the merge".
      - `meta/judged` (Ruling 7) whenever its `port49_policy_refresh_pending` reaches 0 and
        every replica serves the runner's bundle;
      - after every reload of its marks feed, the same put-back as step 3;
-     - the restore witness, read every second beside the keeper, and rewritten when the store
-       has moved (Ruling 18).
+     - the restore backstop: the beat, once a second from the moment it takes the hold, and the
+       witness, read every second beside the keeper and rewritten when the store has moved
+       (Ruling 18).
    - **Every replica, runner or not:**
      - serves the API and the admin socket;
      - runs the token half of its own reload's passes (Ruling 8);
@@ -507,10 +508,12 @@ them. The ones to read first are under "Worth reading before the merge".
        port49-broker starts: `etcdctl del <prefix>v1/meta/judged`.
      - The first takeover then purges every unspent token, as 7d's start did.
      - Found while revising for the pre-flight review, not by it. Named in the commit.
-     - **If the delete is forgotten** (Ruling 18, re-check R6), a takeover, or a running
+     - **The backstop** (Ruling 18). If the delete is forgotten, a runner that sees the store
+       go back purges at once and takes the hold again (the beat), and a takeover, or a running
        runner, that reads `meta/witness` below the revision its replica recorded in
-       `broker.state_dir/witness.json` takes `meta/judged` as absent and purges. A replica with
-       no record cannot tell, and says so.
+       `broker.state_dir/witness.json` deletes `meta/judged` and purges (the witness, re-check
+       R6). The witness covers the runbook's every-broker-stopped restore. A replica with no
+       record cannot tell, and says so.
    - **Memory.** A start still purges as before; its store is empty anyway.
 8. **The settle pass covers a replica that reloads late.**
    - **The delay** is `max(30s, 2 × policy_watch_interval + 5s)` after a swap.
@@ -618,7 +621,7 @@ them. The ones to read first are under "Worth reading before the merge".
       - The file, its marker and `port49d init-revocations` stay for the memory store.
     - **`marks.json`, one per replica.**
       - Each port49-broker writes the marks it follows to `broker.state_dir/marks.json`: owner
-        only, written to a temporary file and renamed.
+        only, written to a temporary file that is fsynced, then renamed (`writeOwnerOnly`).
       - A mark the feed or a load brings is added.
       - A lift is removed only when the watch delivered it as a delete. A mark a reload found
         missing (`MarkChange.Reloaded`) stays in the copy: it may be a restore's loss.
@@ -730,70 +733,106 @@ them. The ones to read first are under "Worth reading before the merge".
     - **port49d judges nothing at start.** Its policy decides admission alone: a device it
       newly refuses is answered by another replica or its local method. The destruction the
       guard prevents is the broker's carry and purge.
-18. **The restore witness: a runner that finds the store older than a replica saw it purges**
-    (pre-flight re-check R6, which replaces the owner's first backstop). After an etcd restore
-    `meta/judged` is the snapshot's, so a takeover would not purge, and a token redeemed since
-    the snapshot is redeemable again until its sealed expiry. The runbook's delete (Ruling 7)
-    stays, but forgetting it now fails closed.
-    - **Why not the first backstop.** It was a runner seeing a response header below its own
-      `Seen()`, or its own beat gone back. It misses both cases the runbook makes: every broker
-      is stopped, so no runner has a `Seen()` or a beat to compare with, and `--bump-revision`
-      moves revisions up. Nothing inside one snapshot shows that it is a snapshot: detection
-      needs a record outside etcd that survives the restore, and `broker.state_dir` (Ruling 12)
-      is one.
-    - **What it compares.** A restored key keeps its original `ModRevision`, with or without
-      `--bump-revision` (measured: `crypt/ledger.go:74-79`; `L35-restore-arista_eos.md`). So the
-      snapshot's copy of a key the runner rewrites whenever the store moves sits below the last
-      copy any replica saw, whichever way the cluster's revision went.
-    - **`meta/witness`** holds no secret: the runner's name and the time.
-      - The runner reads it every second, beside the ledger keeper (`keepWitness`). It rewrites
-        it when the read's header is past the witness's own `ModRevision`, so any write since
-        the last witness brings a new one, at most one a second.
-      - A quiet store writes nothing: the rewrite's own revision is the one the next pass
-        compares with, so it never feeds itself.
-      - The write compares the `ModRevision` it read, so two runners for a moment (Ruling 6)
-        cannot write one over the other.
-    - **Every port49-broker follows it.** One watch on the key sits beside the marks feed
-      (`etcd.Store.FollowWitness`). Each replica keeps the highest `ModRevision` it has seen, a
-      runner's own write included, in `broker.state_dir/witness.json`, as `{"prefix":
-      "<prefix>", "mod_revision": N}`.
-      - The file is owner only, written to a temporary file and renamed, at most once a second.
-      - It is keyed by prefix, not by cluster ID, since a restore may or may not keep the
-        cluster ID. A file for another prefix is no record, and says so.
-    - **At a takeover,** after reading `meta/judged`, the runner reads `meta/witness`. An absent
-      witness is revision 0. Below the replica's record, the store has lost writes this replica
-      saw: the runner takes `meta/judged` as absent and purges every unspent token, writing
-      `meta/superseded_all` as an unjudged bundle does:
-      `port49-broker: runner: the store's meta/witness is at revision 812, below the 1907 this
-      replica saw: the store was restored from a snapshot; every unspent token is purged and must
-      be minted again (port49 token): 14 purged`.
-    - **While running,** a pass that reads the witness below the replica's record is a restore
-      under a running runner: the operator who also skipped "stop every broker". The runner
-      says the same line and purges at once. It then puts the marks back as after a marks reload
-      (Ruling 12), since a watch at a revision the restored store has not reached may not
-      reload on its own.
-    - **The record follows the purge, never the other way.** Only once the purge is done does
-      the runner take the store's witness as its record (`witnessRecord.Reset`). Until then
-      every pass, and every replica's takeover, still sees the restore, so a purge cut short by
-      a lost hold is made by the next runner.
-    - **What it cannot tell.**
-      - A replica with no `witness.json` (a new host, a lost `state_dir`) says
+18. **The restore backstop: a runner that finds the store older than it was purges** (the
+    owner's ruling on the re-check, with re-check R6). After an etcd restore `meta/judged` is
+    the snapshot's, so a takeover would not purge, and a token redeemed since the snapshot is
+    redeemable again until its sealed expiry. The runbook's delete (Ruling 7) stays the first
+    line of defence; this is the backstop for a restore that forgot it. It has two signs. The
+    beat sees a restore under a running runner. The witness sees one made with every broker
+    stopped, which is the runbook's own procedure, and which no running runner is there to see.
+    - **The beat.** Once a second, while it holds, the runner writes `meta/runner_beat` in one
+      transaction that compares the key's mod revision with the one its last beat landed at
+      (`etcd.Store.Beat`). It sees the store went back on either sign:
+      - **the ruled one:** an answer whose header revision is below `Seen()` as it stood
+        before the call was sent. Only a restore without `--bump-revision` repeats revisions.
+        `Seen()` is read before the call and never at the answer, since an answer to a call
+        sent earlier can land after a later one's;
+      - **a beat gone back:** the key absent, or at a mod revision below the one this run's
+        last beat landed at. That is any restore of a snapshot taken before that beat, the
+        runbook's `--bump-revision` included, under which revisions only rise and the first
+        sign never fires. A beat above its own is another runner's, two for a moment (Ruling
+        6), and is no sign.
+    - **What the beat does,** said once:
+      `port49-broker: runner: the store went back (<the sign>): an etcd restore under a running
+      runner; purging every unspent token now, deleting meta/judged so the next takeover purges
+      too, and taking the hold again`.
+      1. Its duties stop.
+      2. Still holding, it deletes `meta/judged`, so whichever replica takes the hold next
+         purges too.
+      3. It purges as a takeover does (`SupersedeAll`, then `PurgeTokens`) and says how many.
+         Purging before it lets go keeps the window short: about a beat, rather than the new
+         holder's wait of a third of `hold_ttl` and a takeover's re-index.
+      4. It lets the hold go and tries to take it again at once. Its next takeover runs every
+         other step: the marks the restore lost are put back (Ruling 12) and applied, and the
+         policy is carried.
+    - **The witness** (re-check R6). Nothing inside one snapshot shows that it is a snapshot:
+      detection with every broker stopped needs a record outside etcd that survives the
+      restore, and `broker.state_dir` (Ruling 12) is one.
+      - **What it compares.** A restored key keeps its original `ModRevision`, with or without
+        `--bump-revision`, while the bump moves the cluster's revision up. That is etcd's
+        restore, and what 7d's ledger stands on (`crypt/ledger.go:74-79`, measured in
+        `L35-restore-arista_eos.md` with a real `etcdutl --bump-revision`). So the snapshot's
+        copy of a key the runner rewrites whenever the store moves sits below the last copy any
+        replica saw, whichever way the cluster's revision went.
+      - **`meta/witness`** holds no secret: the runner's name and the time. The runner reads it
+        every second, beside the ledger keeper (`keepWitness`), and rewrites it when the read's
+        header is past the witness's own `ModRevision`: any write since the last witness brings
+        a new one, at most one a second. A quiet store writes nothing, since the rewrite's own
+        revision is the one the next pass compares with. The write compares the `ModRevision`
+        it read, so two runners for a moment cannot write one over the other.
+      - **Every port49-broker follows it.** One watch on the key sits beside the marks feed
+        (`etcd.Store.FollowWitness`). Each replica keeps the highest `ModRevision` it has seen,
+        a runner's own write included, in `broker.state_dir/witness.json`, as `{"prefix":
+        "<prefix>", "mod_revision": N}`: owner only (0600), written to a temporary file that is
+        fsynced, then renamed, and the directory fsynced, at most once a second. It is keyed by
+        prefix, not by cluster ID, since a restore may or may not keep the cluster ID. A file
+        for another prefix is no record, and says so.
+      - **At a takeover,** after reading `meta/judged`, the runner reads `meta/witness`. Below
+        the replica's record, or absent while the replica holds one, the store has lost writes
+        this replica saw. The runner takes `meta/judged` as absent and runs `purgeRestored`:
+        it deletes `meta/judged`, purges every unspent token (`SupersedeAll`, then
+        `PurgeTokens`), says both revisions, and rewrites its record:
+        `port49-broker: runner: the store's meta/witness is at revision 812, below the 1907 this
+        replica saw: the store was restored from a snapshot; meta/judged deleted, and every
+        unspent token is purged and must be minted again (port49 token): 14 purged`.
+      - **While running,** a pass that reads the witness below the record does the same at once,
+        then has the marks put back as after a marks reload (Ruling 12): a watch at a revision
+        the restored store has not reached may not reload by itself. A restore under a running
+        runner usually trips both signs, and costs two purges; each is idempotent.
+      - **The record follows the purge, never the other way.** Only once the purge is done does
+        the runner rewrite its record to the store's witness (`witnessRecord.Reset`). Until then
+        every pass, and every replica's takeover, still sees the restore, so a purge cut short
+        by a lost hold is made by the next runner.
+    - **What it leaves.**
+      - **A broker whose `state_dir` was lost, or is new** (a new host, a rebuilt volume, a
+        replica added after the snapshot): it has no `witness.json`, says
         `port49-broker: runner: no witness record in broker.state_dir; cannot tell whether the
-        store was restored; going by meta/judged alone`. If every replica's `state_dir` is lost,
-        the runbook's delete is the only cover.
-      - A snapshot taken within about one keeper interval (1s) after the last witness any
-        surviving replica recorded, where the only writes lost came after that witness, is not
-        caught. The file is saved at most once a second too, so a replica host that crashes
-        within a second of a witness may have recorded the one before.
-    - **Which way it errs.** Each errs toward a purge: users run `port49 token` again, and the
-      line says why.
-      - A witness deleted by hand, or a `state_dir` reused against a new empty keyspace under the
-        same prefix, purges once.
-      - After a restore without `--bump-revision`, a replica that did not run the purge keeps its
-        record above the store's revisions until they climb past it. A takeover by that replica
+        store was restored; going by meta/judged alone`, and does not purge. If the first
+        broker started after a restore is one of these, the restore is not caught then. Its
+        first witness decides the rest: after `--bump-revision` it lands above every other
+        replica's record, so the restore is never caught; without the bump it lands below, and
+        the next takeover by a replica with a record catches it. If every replica's
+        `state_dir` is lost, the runbook's delete is the only cover. Start a broker whose
+        `state_dir` survived first after a restore.
+      - **A snapshot taken within about one keeper interval (1s)** after the last witness any
+        surviving replica recorded, where the only writes lost came after that witness. The
+        file is saved at most once a second too, so a host that crashes within a second of a
+        witness may hold the one before.
+      - **A restore under a running runner made within a beat of its snapshot,** where the
+        witness has not moved either: no sign fires.
+      - **The window between etcd's return and the purge,** about a beat or a keeper pass while
+        a runner runs, and a takeover's start otherwise: a token redeemed again in it logs in.
+    - **Which way it errs.** Every false sign costs a purge: users run `port49 token` again, and
+      the line says why.
+      - A witness or beat deleted by hand, or a `state_dir` reused against a new empty keyspace
+        under the same prefix, purges once.
+      - After a restore without `--bump-revision`, a replica that did not run the purge keeps
+        its record above the store's revisions until they climb past it, and a takeover by it
         before then purges once more.
-    - **The roles.** `meta/` is read-only to the daemon, so port49d can neither suppress nor
-      forge the witness. The broker's existing `meta/` write covers it; no grant is new.
+    - **What it costs.** Two writes a second at most on the runner, to keys no process but the
+      brokers' witness watch follows, and one small file per replica. `meta/` is read-only to
+      the daemon, so port49d can neither suppress nor forge either key; the broker's existing
+      `meta/` write covers both, and no grant is new.
 
 ### Open for Ryan
 
@@ -825,11 +864,11 @@ default either way.
   store; with no broker host, an `etcdctl put` as root does (pre-flight I4).
 - **Ruling 17.** A broker whose policy file the reload guard refuses, against the bundle last
   judged, starts not ready and takes no hold (pre-flight I6).
-- **Ruling 18.** A runner that finds `meta/witness` below what its replica recorded in
-  `broker.state_dir/witness.json` (an etcd restore, at a takeover or under a running runner)
-  purges every unspent token, whether or not the runbook's delete of `meta/judged` was done. A
-  replica with no record cannot tell, and a snapshot within about a second of the last witness
-  is not caught.
+- **Ruling 18.** After an etcd restore every unspent token is purged whether or not the
+  runbook's delete of `meta/judged` was done. A running runner sees the store go back by its
+  beat; a takeover after a restore with every broker stopped sees it by `meta/witness` below what
+  its replica recorded in `broker.state_dir/witness.json`. A broker whose `state_dir` was lost or
+  is new cannot tell: start one whose `state_dir` survived first.
 
 ## What the operator sees
 
@@ -980,11 +1019,20 @@ in this plan, and the tests named pin it.
   Without `--bump-revision`, restart every port49d and port49-broker. Otherwise a login made on
   a process started after the restore is denied `store_unavailable` on the processes that ran
   across it, until one of those writes at its key.
-- **A restore with the runbook's delete forgotten** (Ruling 18), at the takeover, or under a
-  running runner:
+- **A restore with the runbook's delete forgotten** (Ruling 18). Under a running runner, the
+  beat:
 
   ```
-  port49-broker: runner: the store's meta/witness is at revision 812, below the 1907 this replica saw: the store was restored from a snapshot; every unspent token is purged and must be minted again (port49 token): 14 purged
+  port49-broker: runner: the store went back (meta/runner_beat is at revision 88102, below revision 88341 this runner last wrote it at): an etcd restore under a running runner; purging every unspent token now, deleting meta/judged so the next takeover purges too, and taking the hold again
+  port49-broker: runner: 14 unspent token(s) purged after the store went back (run 'port49 token' again)
+  port49-broker: runner: took keyspace /port49/ (…): this replica runs the start, the sweep and the policy refresh
+  ```
+
+  At a takeover after a restore with every broker stopped, or on a running runner's pass, the
+  witness:
+
+  ```
+  port49-broker: runner: the store's meta/witness is at revision 812, below the 1907 this replica saw: the store was restored from a snapshot; meta/judged deleted, and every unspent token is purged and must be minted again (port49 token): 14 purged
   ```
 
   A replica with no `witness.json` says instead, once per takeover:
@@ -1137,11 +1185,16 @@ first. Each has its test in the task named.
     takes no hold until the file is fixed. *Task 15a,
     `TestAStartRefusesAFileTheGuardRefusesAgainstTheJudgedBundle`.*
 16. **An etcd restore without the runbook's delete of `meta/judged`** (Ruling 18, re-check R6).
-    A takeover whose replica recorded a later `meta/witness` purges, with `--bump-revision`
-    too, and a token redeemed after the snapshot stays spent. A replica that only followed the
-    witness catches it as the runner does. A quiet store writes no witness. Does the record
-    follow the purge, so a purge cut short is made by the next runner? *Task 15c,
-    `TestARestoredWitnessIsCaught`, `TestATakeoverAfterARestorePurgesWithoutTheRunbook`,
+    Under a running runner the beat sees the store go back, purges and takes the hold again;
+    each of its two signs is seen alone. With every broker stopped, as the runbook says, the
+    first takeover finds `meta/witness` below its replica's record and purges, without the bump
+    and with it (emulated: see Task 15c), and a token redeemed after the snapshot stays spent. A
+    replica that only followed the witness catches it as the runner does. A quiet store writes
+    no witness. Does the record follow the purge, so a purge cut short is made by the next
+    runner? *Task 15c, `TestABeatSaysWhenTheStoreWentBack`,
+    `TestARestoreUnderARunningRunnerPurges`, `TestARestoredWitnessIsCaught`,
+    `TestAStoppedFleetRestorePurgesWithoutTheRunbook`,
+    `TestAStoppedFleetRestoreWithTheBumpPurgesWithoutTheRunbook`,
     `TestAWitnessRecordFromAnotherReplicaCatchesTheRestore`, `TestAQuietStoreWritesNoWitness`.*
 
 ## Conflict scan: where tasks share a file or an interface
@@ -1181,7 +1234,8 @@ create:
 | T9 ↔ T15b | `store.MarkChange` (`Reloaded`); the put-back line | the copy keeps a mark a reload found missing; `namedMarks` names each mark put back (R4) ✓ |
 | T14 ↔ T15a | `stores.judged`, `keepDaemonBundle` | Task 14's daemon start; Task 15a adds the field in `openStores` and the goroutine in `runOnce`, joined before `sts.close` (R5) ✓ |
 | T10 ↔ T15c | the keeper's pass | the witness rides the keeper's interval as `keepWitness`, a sibling duty in the runner: `crypt.KeepLedger` knows nothing of `meta/` and is unchanged ✓ |
-| T15 ↔ T15c | `takeover`'s purge, `duties` | the witness check runs before the judged-bundle comparison (R6), and `purgeRestored` is the unjudged purge's two calls; `duties` gains `keepWitness` ✓ |
+| T15 ↔ T15c | the runner's `run` loop, `takeover`'s purge, `duties` | Task 15c adds `watchStore` beside the duties, a third `select` case and `purgeAfterRewind` (the beat); the witness check runs before the judged-bundle comparison (R6), `purgeRestored` is `DeleteJudged` and the unjudged purge's two calls, and `duties` gains `keepWitness` ✓ |
+| T15b ↔ T15c (beat) | `restoreMarks` at the takeover | the retake after the beat runs it, so the marks the restore lost are put back with no step of its own ✓ |
 | T15a ↔ T15c | the takeover's judged check | the witness decides first; a `meta/judged` that matches is then not consulted for the purge, and `recordJudged` after the carry is unchanged ✓ |
 | T9, T15b ↔ T15c | the marks feed, `marksReloaded` | `FollowWitness` is a second watch beside the marks feed, on its own goroutine; after a running purge `keepWitness` sends on `marksReloaded`, so the put-back is Task 15b's ✓ |
 | T13, T15b ↔ T15c | `broker.state_dir` | `witness.json` beside `marks.json`, written the same way; `copyBroker` gives each copy a `state_dir` of its own ✓ |
@@ -1260,8 +1314,8 @@ internal/store/etcd/feed.go, feed_test.go      NEW  ScanContexts, WatchContexts 
 internal/store/etcd/ledger.go, ledger_test.go  NEW  LedgerMarks, PutLedgerMarks (Task 10)
 internal/store/etcd/roles.go, roles_test.go    MOD  sp/ never, lw/ read for the daemon; probes (Task 10)
 internal/store/etcd/meta.go, meta_test.go      MOD  Judged, PutJudged (Task 15); Bundles, PutBundle, RefreshOwed, PutRefreshOwed,
-                                                    ClearRefreshOwed (Task 15a); WitnessRead, Witness, PutWitness,
-                                                    FollowWitness (Task 15c)
+                                                    ClearRefreshOwed (Task 15a); Beat, DeleteJudged, WitnessRead,
+                                                    Witness, PutWitness, FollowWitness (Task 15c)
 internal/store/etcd/etcd_test.go               MOD  the restore test on the new ledger (Task 7)
 internal/store/guard/guard.go, guard_test.go   MOD  the three new methods routed (Task 5); Seen, Ping (Task 6)
 internal/store/crypt/crypt.go                  MOD  form 4, seq, the ledger on reads and writes, ErrEarlierForm, OnUnopenable's
@@ -1285,12 +1339,14 @@ cmd/port49d/main.go                            NEW  the shim (Task 12)
 cmd/port49-broker/main.go                      NEW  the shim (Task 15)
 internal/port49d/daemon.go                     NEW  the daemon's start on etcd, the probe (Task 14)
 internal/port49d/store_test.go                 MOD  the hold tests moved to the runner, the rest to the split daemon (Task 14)
-internal/port49d/brokerd.go, runner.go         NEW  runBroker, the runner (Task 15); revoke --offline (Task 15b); the witness
-                                                    followed, keepWitness, the takeover's check, purgeRestored (Task 15c)
+internal/port49d/brokerd.go, runner.go         NEW  runBroker, the runner (Task 15); revoke --offline (Task 15b); the beat,
+                                                    purgeAfterRewind, the witness followed, keepWitness, the
+                                                    takeover's check, purgeRestored (Task 15c)
 internal/port49d/policyskew.go, startguard.go  NEW  the bundle record and refresh_owed, port49d's gauge on meta/judged; the guard
                                                     at start (Task 15a)
 internal/port49d/main.go, store.go             MOD  keepDaemonBundle wired, stores.judged (Task 15a)
-internal/port49d/markscopy.go, offline.go      NEW  broker.state_dir/marks.json, namedMarks; the offline revocation (Task 15b)
+internal/port49d/markscopy.go, offline.go      NEW  broker.state_dir/marks.json, namedMarks, writeOwnerOnly; the offline
+                                                    revocation (Task 15b)
 internal/port49d/witness.go, witness_test.go   NEW  broker.state_dir/witness.json, restored (Task 15c)
 internal/port49d/reload.go                     MOD  live, log, refresher (Task 14); the settle's priors, onSettled (Task 15);
                                                     onSwap, the full pass owed (Task 15a)
@@ -1313,7 +1369,7 @@ Twenty-two tasks in two merges:
   the emits; Tasks 5–10 are the store and the ledger, 8a the feed fence.
 - **7e-2 (Tasks 11–18, with 15a, 15b and 15c):** Task 11 is docs, first; Task 12 is a move with
   no behaviour change; Tasks 13–16 are the processes, 15a policy across replicas, 15b the marks
-  copy and the offline revocation, and 15c the restore witness; Task 17 is the lab and gates
+  copy and the offline revocation, and 15c the restore backstop; Task 17 is the lab and gates
   the merge; Task 18 is the as-built docs.
 
 ---
@@ -6309,16 +6365,24 @@ Nothing here asserts what a device does. The device cells it adds cite L37 or L3
     keeps everyone's tokens. A token minted in the moment between that instant and the purge is
     purged too, and its login fails `token_not_found`. After an etcd restore, `meta/judged` is
     deleted before any broker starts, so the first takeover purges.
-  - **The restore witness.** The runner rewrites `meta/witness` (its name and the time, no
-    secret) at most once a second, whenever the store has moved past it. Every broker follows
-    it and keeps the highest `ModRevision` it has seen in `broker.state_dir/witness.json`. A
-    restored key keeps its `ModRevision`, with or without `--bump-revision`, so a runner that
-    reads the witness below its replica's record, at a takeover or while it runs, knows the
-    store was restored: it takes `meta/judged` as absent and purges every unspent token, so a
-    token redeemed since the snapshot stays spent even when the runbook's delete was
-    forgotten. It takes the store's witness as its record only once the purge is done. A
-    replica with no record says it cannot tell, and goes by `meta/judged`; a snapshot taken
-    within about a second of the last witness recorded is not caught.
+  - **The restore backstop.** Two signs, so a token redeemed since the snapshot stays spent
+    even when the runbook's delete of `meta/judged` was forgotten.
+    - *The beat:* while it holds, the runner writes `meta/runner_beat` once a second, on a
+      compare of the revision its last beat landed at. An answer below the highest revision it
+      had been told of before it asked, or a beat absent or below its own last, is the store
+      gone back under a running runner. It then deletes `meta/judged`, purges every unspent
+      token at once, and takes the hold again.
+    - *The witness:* the runner rewrites `meta/witness` (its name and the time, no secret) at
+      most once a second, whenever the store has moved past it. Every broker follows it and
+      keeps the highest `ModRevision` it has seen in `broker.state_dir/witness.json`. A
+      restored key keeps its `ModRevision`, with or without `--bump-revision`, so a runner that
+      reads the witness below its replica's record, or absent while it holds one, at a takeover
+      or while it runs, deletes `meta/judged`, purges every unspent token, and only then
+      rewrites its record. This catches a restore made with every broker stopped.
+    - *What neither sees:* a broker whose `state_dir` was lost or is new has no record and says
+      so; if it is the first to start after a restore made with `--bump-revision`, the restore
+      is never caught. A snapshot within about a second of the last witness recorded, or a
+      restore under a running runner within a beat of its snapshot, is not caught.
   - **The settle pass** is 30s or two policy watch intervals and 5s after a swap, whichever is
     longer, and the policies since the last settled pass are kept until it completes, so a token
     another replica minted under the replaced policy before it reloaded is judged.
@@ -6439,10 +6503,10 @@ Nothing here asserts what a device does. The device cells it adds cite L37 or L3
     mark in a broker's copy that the store lost is put back by the runner, named in its line,
     and a mark lifted through the watch is not. A port49d whose policy is not the bundle last
     judged says so.
-  - **The restore witness**: an etcd restore with `meta/judged` left as the snapshot's still
-    purges, at the takeover or under a running runner, when a broker's `witness.json` recorded
-    a later `meta/witness` than the store holds, with `--bump-revision` too; a token redeemed
-    after the snapshot stays spent.
+  - **The restore backstop**: an etcd restore with `meta/judged` left as the snapshot's still
+    purges: under a running runner by its beat, and with every broker stopped at the first
+    takeover by a broker whose `witness.json` recorded a later `meta/witness` than the store
+    holds, with `--bump-revision` too; a token redeemed after the snapshot stays spent.
   ```
 
 - [ ] **Step 6: §15, L37 and L38.** After the L36 row, add:
@@ -6489,7 +6553,7 @@ Nothing here asserts what a device does. The device cells it adds cite L37 or L3
       `broker.revocations_file` is retired (plan 7e): each port49-broker keeps its own copy of the
       marks it followed, in `broker.state_dir/marks.json`, and the runner puts back any the store
       lost. Beside it, `witness.json` records the latest restore witness that broker saw
-      (decision 36). Back `broker.state_dir` up with the broker's host.
+      (decision 36, the restore backstop). Back `broker.state_dir` up with the broker's host.
     ```
 
     Then replace the whole bullet that begins `  - **A restore rolls the marks back too.**` (its
@@ -6511,7 +6575,8 @@ Nothing here asserts what a device does. The device cells it adds cite L37 or L3
            not caught then. Check `broker.policy_file` on every broker host before step 4. If
            this step is forgotten, a runner whose `broker.state_dir/witness.json` survived
            finds the restored `meta/witness` below its record and purges anyway (decision 36,
-           the restore witness); one with no record cannot.
+           the restore backstop); one whose `state_dir` was lost or is new cannot, so start a
+           broker whose `state_dir` survived first.
         4. Start the brokers. The first runner puts back every mark its `marks.json` holds that
            the store lacks, and names them; it applies every mark to the restored contexts,
            and purges.
@@ -6546,7 +6611,7 @@ Nothing here asserts what a device does. The device cells it adds cite L37 or L3
   grep -n 'Any number of port49d and port49-broker per keyspace' docs/design/2026-08-21-port49-design.md
   grep -n 'etcdctl del <prefix>v1/meta/judged' docs/design/2026-08-21-port49-design.md
   grep -c 'until plan 7e\|Until plan 7e' docs/design/2026-08-21-port49-design.md docs/design/2026-08-23-policy-engine-spec.md
-  grep -c 'The restore witness' docs/design/2026-08-23-policy-engine-spec.md
+  grep -c 'The restore backstop' docs/design/2026-08-23-policy-engine-spec.md
   grep -n 'the reload guard at start has no judged bundle' docs/design/2026-08-21-port49-design.md
   ```
 
@@ -8507,6 +8572,8 @@ Ruling 8 as corrected (pre-flight I3) with port49d's gauge (re-check R5), and Ru
       file at mode 0600 and then renamed. A write that fails is said once per run of failures;
     - `func (c *marksCopy) Missing(stored []store.Revocation) []store.Revocation`;
     - `func (c *marksCopy) All() []store.Revocation`.
+  - `func writeOwnerOnly(path string, body []byte) error`: the fsynced temporary file, rename
+    and directory fsync that `marks.json` and Task 15c's `witness.json` are written through.
   - `func (r *runner) restoreMarks(ctx context.Context) error`: puts back every mark the copy
     holds and the store lacks, and says how many and which.
   - `func namedMarks(ms []store.Revocation) string` (re-check R4): each mark's kind and key
@@ -8686,8 +8753,10 @@ Ruling 12 as changed (pre-flight I5) and Ruling 13's break-glass (pre-flight I4)
   Expected: FAIL to compile (`openMarksCopy`, `offlineRevoke`, `namedMarks` undefined).
 
 - [ ] **Step 3: The copy.** Create `markscopy.go` as its interface says. The file is `{"marks":
-  [{"kind": …, "key": …, "at": …}]}`, written sorted by kind and key, through a temporary file in
-  the same directory at mode 0600, then `os.Rename`. Its comment states which way it errs: a
+  [{"kind": …, "key": …, "at": …}]}`, written sorted by kind and key, through
+  `writeOwnerOnly(path, body)`, which this task writes in `markscopy.go` as Task 15c Step 5 lists
+  it: a temporary file in the same directory at mode 0600, fsynced, renamed, and the directory
+  fsynced. Its comment states which way it errs: a
   mark the store lost is put back, and so is a mark whose lift this copy missed. Both deny
   more, and the takeover's line says how to lift.
 
@@ -8809,26 +8878,28 @@ Ruling 12 as changed (pre-flight I5) and Ruling 13's break-glass (pre-flight I4)
 
 ---
 
-### Task 15c: The restore witness: a runner that finds the store older than a replica saw it purges
+### Task 15c: The restore backstop: the beat under a running runner, and the witness across a stopped fleet
 
 **Files:**
 - Create: `internal/port49d/witness.go`, `internal/port49d/witness_test.go`
 - Modify: `internal/store/etcd/etcdtest/etcdtest.go` (`Server` keeps its member's spec;
   `Server.Backup`, `Server.Restore`, `copyDir`), `etcdtest_test.go`
-- Modify: `internal/store/etcd/meta.go` (`WitnessRead`, `Witness`, `PutWitness`,
-  `FollowWitness`), `meta_test.go`
-- Modify: `internal/port49d/runner.go` (`witnessEvery`, `keepWitness`, `witnessPass`,
-  `purgeRestored`; the takeover's check; `duties`), `internal/port49d/brokerd.go` (the record
-  opened, kept and followed), `internal/port49d/markscopy.go` (`writeOwnerOnly`, if Task 15b
-  wrote its write inline), `internal/port49d/brokerd_test.go`
+- Modify: `internal/store/etcd/meta.go` (`Beat`, `DeleteJudged`, `WitnessRead`, `Witness`,
+  `PutWitness`, `FollowWitness`), `meta_test.go`
+- Modify: `internal/port49d/runner.go` (`beatEvery`, `watchStore`, `purgeAfterRewind`; `run`'s
+  loop; `witnessEvery`, `keepWitness`, `witnessPass`, `purgeRestored`; the takeover's check;
+  `duties`), `internal/port49d/brokerd.go` (the record opened, kept and followed),
+  `internal/port49d/brokerd_test.go`
 
 **Interfaces:**
-- Consumes: Task 15's runner, its takeover's purge, `duties` and `retryCtx`; Task 15b's
-  `marksReloaded`, `restoreMarks` and the copy's temporary-file write; Task 13's
-  `BrokerConfig.StateDir`.
+- Consumes: `(*etcd.Store).Seen` and `saw` (Task 6); Task 15's runner, its takeover's purge,
+  `duties` and `retryCtx`; Task 15b's `marksReloaded`, `restoreMarks` and `writeOwnerOnly`;
+  Task 13's `BrokerConfig.StateDir`.
 - Produces:
   - `func (s *etcdtest.Server) Backup(t testing.TB) string` and
     `func (s *etcdtest.Server) Restore(t testing.TB, from string)`.
+  - `func (s *etcd.Store) Beat(ctx context.Context, who string, last uint64) (landed uint64, wentBack string, err error)`,
+    at `meta/runner_beat`; `func (s *etcd.Store) DeleteJudged(ctx context.Context) error`.
   - `type etcd.WitnessRead struct { ModRevision, Header uint64 }`;
     `func (s *etcd.Store) Witness(ctx context.Context) (WitnessRead, error)`;
     `func (s *etcd.Store) PutWitness(ctx context.Context, who string, over uint64) (uint64, error)`;
@@ -8838,25 +8909,35 @@ Ruling 12 as changed (pre-flight I5) and Ruling 13's break-glass (pre-flight I4)
     *witnessRecord`, `Saw(rev uint64)`, `Recorded() (uint64, bool)`, `Reset(rev uint64)` and
     `keep(ctx context.Context)`.
   - `func restored(read etcdstore.WitnessRead, recorded uint64, haveRecord bool) (bool, string)`.
+  - `const beatEvery = time.Second`; `func (r *runner) watchStore(ctx context.Context, back chan<- string)`;
+    `func (r *runner) purgeAfterRewind(ctx context.Context)`.
   - `const witnessEvery = time.Second`; `func (r *runner) keepWitness(ctx context.Context)`;
     `func (r *runner) witnessPass(ctx context.Context) error`;
     `func (r *runner) purgeRestored(ctx context.Context, why string, read etcdstore.WitnessRead) error`;
     the field `runner.witness *witnessRecord`.
 
-Ruling 18, pre-flight re-check R6, which replaced the owner's first backstop (a header below
-`Seen()`): that one missed both cases the runbook makes, every broker stopped and
-`--bump-revision`. The runbook's delete of `meta/judged` (Ruling 7) stays; this task makes
-forgetting it fail closed.
-- **The record lives outside etcd.** Nothing inside one snapshot shows that it is a snapshot.
-  `broker.state_dir` survives the restore, and every replica keeps one.
-- **It compares `ModRevision`, never the header.** A restored key keeps its own, with or without
+Ruling 18: the owner's ruling on the re-check, and re-check R6. The runbook's delete of
+`meta/judged` (Ruling 7) stays the first line of defence; this task makes forgetting it fail
+closed.
+- **The beat** sees a restore under a running runner. The ruled sign is an answer whose header
+  is below `Seen()` as it stood before the call was sent, which is a restore without
+  `--bump-revision`. The beat's own sign (absent, or below the revision this run's last beat
+  landed at) adds `--bump-revision`, under which revisions only rise.
+- **The witness** sees a restore made with every broker stopped, the runbook's own procedure,
+  where no runner runs to beat. Nothing inside one snapshot shows that it is a snapshot; the
+  record lives outside etcd, in `broker.state_dir`, which survives the restore. It compares
+  `ModRevision`, never the header: a restored key keeps its own, with or without
   `--bump-revision`, while the bump moves the header up.
-- **What it leaves** (Ruling 18): a replica with no `witness.json` says so and goes by
-  `meta/judged` alone; a snapshot taken within about one keeper interval (1s) after the last
-  witness a surviving replica recorded is not caught. The runbook's delete covers both.
-- **The two fleet tests split the cases.** The takeover test pads the restored store's revisions
-  past the record before anything starts, which is what `--bump-revision` does to the witness;
-  the other-replica test restores with no pad.
+- **What it leaves** (Ruling 18): a broker whose `state_dir` was lost or is new says so and goes
+  by `meta/judged` alone; a snapshot within about one keeper interval (1s) of the last witness a
+  surviving replica recorded, or a restore under a running runner within a beat of its
+  snapshot, is not caught.
+- **The bump, honestly.** etcdtest has no `etcdutl`, so `--bump-revision` is emulated: the
+  restored member's revisions are padded past every record before anything starts. That a real
+  bump keeps each restored key's `ModRevision` is etcd's restore, which 7d's ledger stands on and
+  `L35-restore-arista_eos.md` exercised with a real `etcdutl --bump-revision`. The witness's
+  compare catches the bump case by construction, since it never reads the header; the
+  emulated test pins that, and the table test's "the header far above" row pins it alone.
 
 - [ ] **Step 1: The failing tests.** Create `internal/port49d/witness_test.go`:
 
@@ -9000,6 +9081,90 @@ forgetting it fail closed.
   }
   ```
 
+  Beside it, on a member of the test's own (a restore of the shared one would take every other
+  test's keys back):
+
+  ```go
+  // A beat says the store went back on each sign, each seen alone (Ruling
+  // 18): answered below Seen as it stood before the call, after a restore
+  // without --bump-revision; the beat below this run's last, once revisions
+  // have passed Seen again, as --bump-revision makes them at once; and the
+  // beat gone. A beat above its own is another runner's, and no sign.
+  func TestABeatSaysWhenTheStoreWentBack(t *testing.T) {
+  	ctx := context.Background()
+  	srv := etcdtest.Start(t, etcdtest.Options{})
+  	open := func() *Store {
+  		s, err := Open(Config{Endpoints: []string{srv.Endpoint}, Prefix: "/port49/", Now: time.Now})
+  		if err != nil {
+  			t.Fatal(err)
+  		}
+  		t.Cleanup(func() { s.Close() })
+  		return s
+  	}
+  	s, cli := open(), srv.Client(t, "root")
+  	beat := func(s *Store, who string, last uint64) (uint64, string) {
+  		t.Helper()
+  		var err error
+  		for range 50 { // the member restarts under the client: try again what it did not answer
+  			landed, why, berr := s.Beat(ctx, who, last)
+  			if err = berr; err == nil {
+  				return landed, why
+  			}
+  			time.Sleep(100 * time.Millisecond)
+  		}
+  		t.Fatal(err)
+  		return 0, ""
+  	}
+  	pastSeen := func(s *Store) { // revisions rise past Seen again
+  		deadline := time.Now().Add(10 * time.Second)
+  		for cur := uint64(0); cur <= s.Seen(); {
+  			if time.Now().After(deadline) {
+  				t.Fatal("the store's revisions never passed Seen")
+  			}
+  			if resp, err := cli.Put(ctx, "elsewhere", "x"); err == nil {
+  				cur = uint64(resp.Header.Revision)
+  			} else {
+  				time.Sleep(100 * time.Millisecond) // the member restarted under the client
+  			}
+  		}
+  	}
+  	empty := srv.Backup(t) // no beat in it
+  	first, why := beat(s, "runner-a", 0)
+  	if why != "" || first == 0 {
+  		t.Fatalf("a first beat: %d %q", first, why)
+  	}
+  	backup := srv.Backup(t)
+  	last := first
+  	for range 4 {
+  		next, why := beat(s, "runner-a", last)
+  		if why != "" || next <= last {
+  			t.Fatalf("beats on one store chain: %d after %d, %q", next, last, why)
+  		}
+  		last = next
+  	}
+  	srv.Restore(t, backup)
+  	if _, why := beat(s, "runner-a", last); !strings.Contains(why, "had already told this replica of") {
+  		t.Fatalf("the first beat after a restore without --bump-revision: %q", why)
+  	}
+  	pastSeen(s)
+  	if _, why := beat(s, "runner-a", last); !strings.Contains(why, "this runner last wrote it at") {
+  		t.Fatalf("a beat gone back, answered above Seen: %q", why)
+  	}
+  	mine, _ := beat(s, "runner-a", 0)
+  	theirs, why := beat(open(), "runner-b", 0) // another runner, for a moment
+  	if got, why2 := beat(s, "runner-a", mine); why != "" || why2 != "" || got != theirs {
+  		t.Fatalf("another runner's beat above this one's: %d (theirs %d), %q %q", got, theirs, why, why2)
+  	}
+  	srv.Restore(t, empty)
+  	pastSeen(s)
+  	if _, why := beat(s, "runner-a", theirs); !strings.Contains(why, "is gone") {
+  		t.Fatalf("a beat a restore took away: %q", why)
+  	}
+  }
+  ```
+
+  Add `"strings"` to `meta_test.go`'s imports if it lacks it.
+
   In `internal/store/etcd/etcdtest/etcdtest_test.go`:
 
   ```go
@@ -9035,12 +9200,29 @@ forgetting it fail closed.
   In `internal/port49d/brokerd_test.go`, on `splitFleet`:
 
   ```go
-  // An etcd restore with every process stopped, as the runbook says, but its
-  // delete of meta/judged forgotten: the takeover finds meta/witness below
-  // what this replica recorded and purges, so a token redeemed after the
-  // snapshot stays spent. The revisions are padded past the record before
-  // anything starts, as --bump-revision moves them (Ruling 18; re-check R6).
-  func TestATakeoverAfterARestorePurgesWithoutTheRunbook(t *testing.T) {
+  // An etcd restore made as the runbook says, with every process stopped,
+  // but with its delete of meta/judged forgotten and without
+  // --bump-revision: the first takeover finds meta/witness below what its
+  // replica recorded, deletes meta/judged and purges, so a token redeemed
+  // after the snapshot stays spent. No runner runs across the restore, so
+  // the beat cannot see it (Ruling 18; re-check R6).
+  func TestAStoppedFleetRestorePurgesWithoutTheRunbook(t *testing.T) {
+  	stoppedFleetRestore(t, false)
+  }
+
+  // The same with --bump-revision, emulated: etcdtest has no etcdutl, so
+  // the restored member's revisions are padded past the record before
+  // anything starts. A restored key keeps its ModRevision under a real bump
+  // too (L35-restore-arista_eos.md), and the witness never reads the header.
+  func TestAStoppedFleetRestoreWithTheBumpPurgesWithoutTheRunbook(t *testing.T) {
+  	stoppedFleetRestore(t, true)
+  }
+
+  // stoppedFleetRestore redeems a token after a snapshot, stops every
+  // process, restores the snapshot (padded past the record when bump),
+  // starts one of each, and checks the redeemed token stays spent while a
+  // fresh one logs in.
+  func stoppedFleetRestore(t *testing.T, bump bool) {
   	var out, log syncBuffer
   	e, o := stderr, stdout
   	t.Cleanup(func() { stderr, stdout = e, o })
@@ -9066,11 +9248,13 @@ forgetting it fail closed.
   	}
   	recorded := witnessIn(t, f.stateDir(t)) // saved as the broker stopped
   	f.srv.Restore(t, snapshot)              // meta/judged left as the snapshot's
-  	padPast(t, root, recorded)              // as --bump-revision moves revisions up
+  	if bump {
+  		padPast(t, root, recorded) // as --bump-revision moves revisions up
+  	}
   	dev.addr = startDaemon(t, f.daemon, &out, 2)
   	api, _ = startBroker(t, f.broker, &out, 2)
-  	waitFor(t, &out, fmt.Sprintf("below the %d this replica saw: the store was restored from a snapshot; every "+
-  		"unspent token is purged", recorded))
+  	waitFor(t, &out, fmt.Sprintf("below the %d this replica saw: the store was restored from a snapshot; "+
+  		"meta/judged deleted, and every unspent token is purged", recorded))
   	if st := dev.login("alice", spent); st == wire.AuthenStatusPass {
   		t.Fatal("a token redeemed after the snapshot logged in again after the restore")
   	}
@@ -9109,6 +9293,47 @@ forgetting it fail closed.
   	startBroker(t, cfgB, &out, 3)
   	waitFor(t, &out, fmt.Sprintf("below the %d this replica saw: the store was restored from a snapshot", recorded))
   }
+
+  // An etcd restore under a running runner, without the runbook's delete of
+  // meta/judged, still purges: the runner sees the store go back, purges
+  // every unspent token at once, and takes the hold again. A token redeemed
+  // after the snapshot, which the restore made unspent again, stays spent
+  // (Ruling 18).
+  func TestARestoreUnderARunningRunnerPurges(t *testing.T) {
+  	var out, log syncBuffer
+  	e, o := stderr, stdout
+  	t.Cleanup(func() { stderr, stdout = e, o })
+  	stderr, stdout = &out, &log
+  	f := splitFleet(t) // hold_ttl 10s
+  	tacacs := startDaemon(t, f.daemon, &out, 1)
+  	api, _ := startBroker(t, f.broker, &out, 1)
+  	waitFor(t, &out, "runner: recorded bundle ")
+  	spent := mintOn(t, api, f.pki, "leaf1")
+  	snapshot := f.srv.Backup(t) // the token is unspent in it, and meta/judged names the bundle
+  	dev := tacacsClient{t: t, addr: tacacs, key: []byte("run-test-secret")}
+  	if st := dev.login("alice", spent); st != wire.AuthenStatusPass {
+  		t.Fatalf("control: the token's first login: %d", st)
+  	}
+  	if st := dev.login("alice", spent); st == wire.AuthenStatusPass {
+  		t.Fatal("control: a spent token logged in again with no restore")
+  	}
+  	time.Sleep(2 * beatEvery) // a beat lands after the snapshot
+  	f.srv.Restore(t, snapshot) // no --bump-revision, and meta/judged left as the snapshot's
+  	waitWithin(t, &out, "runner: the store went back (", 30*time.Second)
+  	waitFor(t, &out, "unspent token(s) purged after the store went back")
+  	if st := dev.login("alice", spent); st == wire.AuthenStatusPass {
+  		t.Fatal("a token redeemed after the snapshot logged in again after the restore")
+  	}
+  	waitForCount(t, &out, "runner: took keyspace /port49/", 2)
+  	// A second purge follows: the witness's, on a pass or at the retake
+  	// while the record is above the store's, or the retake's own, since
+  	// meta/judged was deleted.
+  	waitUntil(t, func() bool {
+  		s := out.String()
+  		return strings.Contains(s, "is not the one the last runner judged (") ||
+  			strings.Contains(s, "this replica saw: the store was restored from a snapshot")
+  	})
+  }
   ```
 
   The helpers, beside `splitFleet`'s:
@@ -9125,19 +9350,26 @@ forgetting it fail closed.
 
 - [ ] **Step 2: Run them to see them fail.**
 
-  Run: `go test ./internal/store/etcd/... ./internal/port49d/ -run 'RestoreTakesTheStoreBack|WitnessLandsOnly|RestoredWitnessIsCaught|WitnessRecord|QuietStoreWritesNoWitness|AfterARestorePurges' -count=1`
-  Expected: FAIL to compile (`Backup`, `Restore`, `WitnessRead`, `PutWitness`, `openWitness`,
-  `restored`, `witnessPass` undefined). Each can fail once it compiles. Run these mutations, and
-  put each back:
+  Run: `go test ./internal/store/etcd/... ./internal/port49d/ -run 'RestoreTakesTheStoreBack|BeatSays|WitnessLandsOnly|RestoredWitnessIsCaught|WitnessRecord|QuietStoreWritesNoWitness|StoppedFleetRestore|RestoreUnderARunningRunner' -count=1`
+  Expected: FAIL to compile (`Backup`, `Restore`, `Beat`, `beatEvery`, `WitnessRead`,
+  `PutWitness`, `openWitness`, `restored`, `witnessPass` undefined). Each can fail once it
+  compiles. Run these mutations, and put each back:
   - `restored` compares `read.Header` with the record: `TestARestoredWitnessIsCaught`'s "the
-    header far above" row fails, and so does the takeover test, whose revisions are padded;
-  - the takeover's witness check removed, going by `meta/judged` alone: the takeover test's spent
-    token logs in again (re-check R6's mutation);
+    header far above" row fails, and so does the stopped-fleet test with the bump, whose
+    revisions are padded;
+  - the takeover's witness check removed, going by `meta/judged` alone: both stopped-fleet tests'
+    spent token logs in again (re-check R6's mutation). The beat cannot stand in: no runner ran
+    across the restore;
   - the record fed only by the runner's own writes (`FollowWitness` not wired):
     `TestAWitnessRecordFromAnotherReplicaCatchesTheRestore`'s replica has no record, says so, and
     its wait fails;
   - `witnessPass` rewriting the witness on every pass: `TestAQuietStoreWritesNoWitness` fails;
-  - `Saw` taking any revision, lower too: `TestTheWitnessRecordKeepsTheHighest` fails.
+  - `Saw` taking any revision, lower too: `TestTheWitnessRecordKeepsTheHighest` fails;
+  - a `Beat` without the header check says the beat's sign after the first restore, and
+    `TestABeatSaysWhenTheStoreWentBack`'s first assertion fails; without the beat's compare, its
+    second and last fail;
+  - with `watchStore` never sending, `TestARestoreUnderARunningRunnerPurges` waits for its line
+    and fails.
 
 - [ ] **Step 3: The member restored.** In `etcdtest.go`:
   - add to `Server` a field `spec memberSpec`. In `Start`, once `member(spec)` returns and the
@@ -9214,7 +9446,72 @@ forgetting it fail closed.
   Add `"io/fs"` to the imports. A member started on a data directory it already holds ignores
   the initial cluster but checks its own entry, which `s.spec.cluster` keeps.
 
-- [ ] **Step 4: The witness in the store.** In `meta.go`, beside `Judged`:
+- [ ] **Step 4: The beat and the witness in the store.** In `meta.go`, beside `Judged`, the
+  beat:
+
+  ```go
+  // Beat is the runner's restore check (plan 7e, Ruling 18): one
+  // transaction on meta/runner_beat, as the broker. last is the revision
+  // this run's last beat landed at, 0 for none yet. It writes a beat when
+  // the key is still at last (with last 0, at once), and returns the
+  // revision it landed at. wentBack names the sign when the store went back:
+  //   - the answer's header is below Seen as it stood before the call. Only
+  //     a restore without --bump-revision repeats revisions. Seen is read
+  //     before the call is sent, never at its answer: an answer to a call
+  //     sent earlier can land after a later call's;
+  //   - the beat is absent, or below last: the store is older than that
+  //     beat, a restore of a snapshot taken before it, --bump-revision
+  //     included.
+  // A beat above last is another runner's (two for a moment, an old one
+  // paused past its fence): no sign, and its revision is returned as the
+  // one to compare with next.
+  func (s *Store) Beat(ctx context.Context, who string, last uint64) (landed uint64, wentBack string, err error) {
+  	key := s.k.meta("runner_beat")
+  	body, err := json.Marshal(struct {
+  		Who string    `json:"who"`
+  		At  time.Time `json:"at"`
+  	}{who, s.now().UTC()})
+  	if err != nil {
+  		return 0, "", err
+  	}
+  	var cmps []clientv3.Cmp
+  	if last > 0 {
+  		cmps = append(cmps, clientv3.Compare(clientv3.ModRevision(key), "=", int64(last)))
+  	}
+  	sent := s.Seen()
+  	resp, err := s.ctx.Txn(ctx).If(cmps...).Then(clientv3.OpPut(key, string(body))).
+  		Else(clientv3.OpGet(key)).Commit()
+  	if err != nil {
+  		return 0, "", unavailable(err)
+  	}
+  	if h := uint64(resp.Header.Revision); h < sent {
+  		return 0, fmt.Sprintf("etcd answered at revision %d, below revision %d it had already told this replica of",
+  			h, sent), nil
+  	}
+  	s.saw(resp.Header.Revision)
+  	if resp.Succeeded {
+  		return uint64(resp.Header.Revision), "", nil
+  	}
+  	kvs := resp.Responses[0].GetResponseRange().Kvs
+  	switch {
+  	case len(kvs) == 0:
+  		return 0, fmt.Sprintf("%s, which this runner wrote at revision %d, is gone", key, last), nil
+  	case uint64(kvs[0].ModRevision) < last:
+  		return 0, fmt.Sprintf("%s is at revision %d, below revision %d this runner last wrote it at", key,
+  			kvs[0].ModRevision, last), nil
+  	}
+  	return uint64(kvs[0].ModRevision), "", nil
+  }
+
+  // DeleteJudged deletes meta/judged, as the broker, so the next takeover
+  // purges (Ruling 18; the restore runbook does it as root, Ruling 7).
+  func (s *Store) DeleteJudged(ctx context.Context) error {
+  	_, err := s.ctx.Delete(ctx, s.k.meta("judged"))
+  	return unavailable(err)
+  }
+  ```
+
+  And the witness:
 
   ```go
   // WitnessRead is meta/witness as one read found it (plan 7e, Ruling 18):
@@ -9298,8 +9595,8 @@ forgetting it fail closed.
   }
   ```
 
-  The key is `meta/`, which the broker's role writes and the daemon's only reads, so port49d
-  can neither suppress nor forge it; `store-roles` is unchanged. `keys.go` needs nothing:
+  Both keys are `meta/`, which the broker's role writes and the daemon's only reads, so port49d
+  can neither suppress nor forge them; `store-roles` is unchanged. `keys.go` needs nothing:
   `meta(name)` takes any name.
 
 - [ ] **Step 5: The record.** Create `internal/port49d/witness.go`:
@@ -9446,12 +9743,159 @@ forgetting it fail closed.
   `internal/printsafe` and `etcdstore`. `witness_test.go`'s: `bytes`, `context`, `io`, `os`,
   `path/filepath`, `strings`, `testing`, `time`, `etcdtest` and `etcdstore`.
 
-  `writeOwnerOnly(path string, body []byte) error` is the marks copy's write (Task 15b, Step 3):
-  a temporary file in the same directory at mode 0600, then `os.Rename`. If Task 15b wrote it
-  inline, move it into this function in `markscopy.go` and call it from both.
+  `writeOwnerOnly` is Task 15b's, in `markscopy.go`, and both files are written through it, so
+  each survives a host crash whole. Its listing:
 
-- [ ] **Step 6: The runner.** In `runner.go`, add the field `witness *witnessRecord` to `runner`,
-  and:
+  ```go
+  // writeOwnerOnly replaces path with body atomically: a temporary file in
+  // the same directory at mode 0600, written and fsynced, renamed over path,
+  // and the directory fsynced so the rename survives a crash (plan 7e,
+  // Rulings 12 and 18).
+  func writeOwnerOnly(path string, body []byte) error {
+  	dir := filepath.Dir(path)
+  	f, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
+  	if err != nil {
+  		return err
+  	}
+  	tmp := f.Name()
+  	defer os.Remove(tmp) // gone after the rename; left only by a failure
+  	if err := f.Chmod(0o600); err != nil {
+  		f.Close()
+  		return err
+  	}
+  	if _, err := f.Write(body); err != nil {
+  		f.Close()
+  		return err
+  	}
+  	if err := f.Sync(); err != nil {
+  		f.Close()
+  		return err
+  	}
+  	if err := f.Close(); err != nil {
+  		return err
+  	}
+  	if err := os.Rename(tmp, path); err != nil {
+  		return err
+  	}
+  	d, err := os.Open(dir)
+  	if err != nil {
+  		return err
+  	}
+  	defer d.Close()
+  	return d.Sync()
+  }
+  ```
+
+- [ ] **Step 6: The runner.** In `runner.go`, the beat:
+
+  ```go
+  // beatEvery is how often a runner beats (Ruling 18): about the most of a
+  // restore's lost time the backstop cannot see.
+  const beatEvery = time.Second
+
+  // watchStore beats every beatEvery while this replica holds the keyspace
+  // (plan 7e, Ruling 18), from the moment it takes it, and sends the sign on
+  // back, once, when a beat says the store went back. A beat the store does
+  // not answer is tried at the next: an outage is the hold's fence's to
+  // judge.
+  func (r *runner) watchStore(ctx context.Context, back chan<- string) {
+  	var last uint64
+  	t := time.NewTicker(beatEvery)
+  	defer t.Stop()
+  	for {
+  		bctx, cancel := context.WithTimeout(ctx, beatEvery)
+  		landed, why, err := r.raw.Beat(bctx, r.who, last)
+  		cancel()
+  		if why != "" {
+  			back <- why // buffered one, sent once
+  			return
+  		}
+  		if err == nil {
+  			last = landed
+  		}
+  		select {
+  		case <-ctx.Done():
+  			return
+  		case <-t.C:
+  		}
+  	}
+  }
+
+  // purgeAfterRewind is the restore backstop's purge (plan 7e, Ruling 18),
+  // run with the duties stopped and the hold still held. meta/judged is the
+  // snapshot's, so no takeover would purge, and a token redeemed since the
+  // snapshot is unspent again. It deletes meta/judged first, so whichever
+  // replica takes the hold next purges too, then purges at once, as a
+  // takeover does: SupersedeAll first, so a replay mints afresh.
+  func (r *runner) purgeAfterRewind(ctx context.Context) {
+  	if err := retryCtx(ctx, func() error { return r.raw.DeleteJudged(ctx) }); err != nil && ctx.Err() == nil {
+  		fmt.Fprintf(stderr, "port49-broker: runner: deleting meta/judged after the store went back: %v; delete it as "+
+  			"etcd's root (etcdctl del <prefix>v1/meta/judged), or the next takeover will not purge\n", err)
+  	}
+  	at := r.brk.Now()
+  	var n int
+  	err := retryCtx(ctx, func() error { return r.st.SupersedeAll(ctx, at) })
+  	if err == nil {
+  		err = retryCtx(ctx, func() (e error) { n, e = r.st.PurgeTokens(ctx); return })
+  	}
+  	if err != nil {
+  		if ctx.Err() == nil {
+  			fmt.Fprintf(stderr, "port49-broker: runner: purging after the store went back: %v; the next takeover "+
+  				"purges if meta/judged is gone\n", err)
+  		}
+  		return
+  	}
+  	fmt.Fprintf(stderr, "port49-broker: runner: %d unspent token(s) purged after the store went back (run "+
+  		"'port49 token' again)\n", n)
+  }
+  ```
+
+
+  In `run`, replace the block from `dctx, stop := context.WithCancel(ctx)` through
+  `sleepCtx(ctx, 5*time.Second)` with:
+
+  ```go
+  		dctx, stop := context.WithCancel(ctx)
+  		back := make(chan string, 1)
+  		var wg sync.WaitGroup
+  		wg.Add(2)
+  		go func() { defer wg.Done(); r.duties(dctx) }()
+  		go func() { defer wg.Done(); r.watchStore(dctx, back) }()
+  		again := false
+  		select {
+  		case <-ctx.Done():
+  		case <-lost:
+  			fmt.Fprintln(stderr, "port49-broker: runner: lost the keyspace's hold (its lock key is gone, or etcd "+
+  				"stopped answering with half its lease or less left); the runner's duties stop; this replica keeps "+
+  				"serving the API and tries to take the hold again every 5s")
+  		case why := <-back:
+  			fmt.Fprintf(stderr, "port49-broker: runner: the store went back (%s): an etcd restore under a running "+
+  				"runner; purging every unspent token now, deleting meta/judged so the next takeover purges too, and "+
+  				"taking the hold again\n", why)
+  			again = true
+  		}
+  		stop()
+  		wg.Wait()
+  		if again {
+  			r.purgeAfterRewind(ctx) // still holding: the window is a beat, not a new holder's wait
+  		}
+  		r.on.Store(false)
+  		r.m.StoreKeyspaceHeld.Set(0)
+  		// The keeper reports (0, false) as it stops; set them here too, for
+  		// a takeover that failed before the keeper started (pre-flight I11).
+  		r.m.LedgerPending.Set(0)
+  		r.m.LedgerBehind.Set(0)
+  		release()
+  		if !again {
+  			sleepCtx(ctx, 5*time.Second)
+  		}
+  ```
+
+  The retake's takeover finds `meta/judged` gone and purges again, which is harmless, then
+  puts back the marks the restore lost (Task 15b), applies them, carries the policy, and
+  records the bundle as judged.
+
+  Then the witness. Add the field `witness *witnessRecord` to `runner`, and:
 
   ```go
   // witnessEvery is how often the runner reads meta/witness (Ruling 18): the
@@ -9516,13 +9960,18 @@ forgetting it fail closed.
   	return err
   }
 
-  // purgeRestored purges every unspent token after the witness caught a
-  // restore (plan 7e, Ruling 18), as an unjudged takeover does: SupersedeAll
-  // first, so a replay mints afresh. It takes the store's witness as the
-  // replica's record only once the purge is done: until then every pass,
-  // and every replica's takeover, still sees the restore, so a purge cut
-  // short by a lost hold is made by the next runner.
+  // purgeRestored is the witness's purge after a restore (plan 7e, Ruling
+  // 18; re-check R6). meta/judged is the snapshot's: it is deleted first,
+  // so whichever replica takes the hold next purges too, then every unspent
+  // token is purged as an unjudged takeover does, SupersedeAll first so a
+  // replay mints afresh. It rewrites the replica's record to the store's
+  // witness only once the purge is done: until then every pass, and every
+  // replica's takeover, still sees the restore, so a purge cut short by a
+  // lost hold is made by the next runner.
   func (r *runner) purgeRestored(ctx context.Context, why string, read etcdstore.WitnessRead) error {
+  	if err := retryCtx(ctx, func() error { return r.raw.DeleteJudged(ctx) }); err != nil {
+  		return err
+  	}
   	at := r.brk.Now()
   	if err := retryCtx(ctx, func() error { return r.st.SupersedeAll(ctx, at) }); err != nil {
   		return err
@@ -9532,8 +9981,8 @@ forgetting it fail closed.
   		return err
   	}
   	r.witness.Reset(read.ModRevision)
-  	fmt.Fprintf(stderr, "port49-broker: runner: %s; every unspent token is purged and must be minted again "+
-  		"(port49 token): %d purged\n", why, n)
+  	fmt.Fprintf(stderr, "port49-broker: runner: %s; meta/judged deleted, and every unspent token is purged and "+
+  		"must be minted again (port49 token): %d purged\n", why, n)
   	return nil
   }
   ```
@@ -9583,6 +10032,9 @@ forgetting it fail closed.
   owed. In `duties`, run `r.keepWitness(ctx)` on one more goroutine beside the keeper, joined
   with the rest.
 
+  A restore under a running runner usually trips both: the witness's pass purges in place, and
+  the beat's purge and retake follow. Each purge is idempotent; the second costs a line.
+
 - [ ] **Step 7: Wired.** In `brokerd.go`, beside the marks copy, before the runner starts:
 
   ```go
@@ -9607,18 +10059,22 @@ forgetting it fail closed.
   git add internal/store/etcd/etcdtest/etcdtest.go internal/store/etcd/etcdtest/etcdtest_test.go \
     internal/store/etcd/meta.go internal/store/etcd/meta_test.go internal/port49d/witness.go \
     internal/port49d/witness_test.go internal/port49d/runner.go internal/port49d/brokerd.go \
-    internal/port49d/markscopy.go internal/port49d/brokerd_test.go
-  git commit -m "feat(port49-broker): a restore witness, so a forgotten runbook step fails closed
+    internal/port49d/brokerd_test.go
+  git commit -m "feat(port49-broker): a restore backstop, so a forgotten runbook step fails closed
 
   After an etcd restore meta/judged is the snapshot's, so a takeover
   purged nothing and a token redeemed since the snapshot was redeemable
-  again, unless the runbook's delete was done. The runner now rewrites
-  meta/witness whenever the store has moved, and every broker keeps the
-  highest ModRevision it has seen in broker.state_dir/witness.json. A
-  restored key keeps its ModRevision under --bump-revision too, so a
-  takeover or a running runner that reads the witness below its record
-  purges every unspent token and names both revisions (plan 7e Ruling 18,
-  pre-flight re-check R6).
+  again, unless the runbook's delete was done. A running runner now
+  beats on meta/runner_beat once a second; an answer below what it had
+  been told of before it asked, or its beat gone back, is the store gone
+  back, and it deletes meta/judged, purges and takes the hold again. With
+  every broker stopped, as the runbook says, no runner beats, so the
+  runner also rewrites meta/witness whenever the store has moved and
+  every broker keeps the highest ModRevision it has seen in
+  broker.state_dir/witness.json; a takeover or a running runner that
+  reads the witness below its record deletes meta/judged, purges every
+  unspent token and names both revisions (plan 7e Ruling 18, pre-flight
+  re-check R6).
 
   Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
@@ -10227,11 +10683,18 @@ Ruling 16. Read "Running the lab" first. **No claim enters a doc before its row'
 - **port49d's policy file is checked against the brokers'.** A port49d whose policy is not the
   bundle the runner last judged says so, and `port49_policy_bundle_matches_runner` is 0 there.
   Right after a rollout that is expected until the runner's settle pass.
-- **A forgotten `etcdctl del` still purges** (the restore witness). Each broker records the
-  latest `meta/witness` it saw in `broker.state_dir/witness.json`. A runner that finds the store's
-  witness below that record says `the store was restored from a snapshot`, naming both
-  revisions, and purges every unspent token, at a takeover or while it runs. A replica with no
-  `witness.json` says it cannot tell. The runbook above stays the procedure.
+- **A forgotten `etcdctl del` still purges** (the restore backstop). The runbook above stays
+  the procedure.
+  - Under a running runner, its beat (`meta/runner_beat`, once a second) sees the store go back:
+    it says `the store went back`, purges every unspent token at once, and takes the hold again.
+  - With every broker stopped, each broker's record of the latest `meta/witness` it saw, in
+    `broker.state_dir/witness.json`, catches it: the first takeover says `the store was restored
+    from a snapshot`, naming both revisions, deletes `meta/judged` and purges.
+  - **What it cannot catch.** A broker whose `state_dir` was lost or is new has no record, and
+    says `cannot tell whether the store was restored`. If such a broker starts first after a
+    `--bump-revision` restore, the restore is never caught, so after a restore start a broker
+    whose `state_dir` survived first. A snapshot taken within about a second of the last witness,
+    or a restore under a running runner within a beat of its snapshot, is not caught either.
 - **After the runbook's delete of `meta/judged`,** the first broker start has no judged bundle
   for the reload guard, and says so: check the policy file on every broker host before
   starting them.
@@ -10293,7 +10756,7 @@ Checked against the roadmap's 7e bullet, 7d's carries, and decisions 32–35:
   - R3 → Task 8a's `knownAt` comment;
   - R4 → Task 15b's `namedMarks`, and Ruling 12;
   - R5 → Task 15a's `keepDaemonBundle`;
-  - the restore backstop, then R6, which replaced it → Ruling 18, Task 15c;
+  - the restore backstop (the beat) and R6 (the witness) → Ruling 18, Task 15c;
   - the guard after the runbook's delete → Ruling 17, Task 11's runbook step 3.
   Revision 2 of the writer's report maps each one.
 - **Placeholders.** None in the unit and e2e tests. The lab tests (Task 17) are specified cell by
@@ -10317,8 +10780,9 @@ Checked against the roadmap's 7e bullet, 7d's carries, and decisions 32–35:
   - `sweepLoop(ctx, s, brk, ledger, every, out)`, `recordJudged`, `restoreMarks`,
     `guardAtStart`, `keepBundle`, `offlineRevoke`;
   - `FollowContexts(ctx, feed, src, keys, l, from, up, rescanned, logf)`, `rescan`, `seedFrom`;
-  - `etcd.WitnessRead`, `Store.Witness`, `PutWitness`, `FollowWitness`;
-    `etcdtest.Server.Backup`, `Restore`;
+  - `etcd.Store.Beat`, `DeleteJudged`, `WitnessRead`, `Witness`, `PutWitness`,
+    `FollowWitness`; `etcdtest.Server.Backup`, `Restore`;
   - `keepDaemonBundle`, `stores.judged`, `namedMarks`, `witnessRecord` (`openWitness`, `Saw`,
-    `Recorded`, `Reset`, `keep`), `restored`, `keepWitness`, `witnessPass`, `purgeRestored`.
+    `Recorded`, `Reset`, `keep`), `restored`, `beatEvery`, `watchStore`, `purgeAfterRewind`,
+    `keepWitness`, `witnessPass`, `purgeRestored`, `writeOwnerOnly`.
 
