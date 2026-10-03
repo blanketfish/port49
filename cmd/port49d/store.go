@@ -285,12 +285,16 @@ func openStores(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 	}
 	// One ledger for both layers (re-check IA1): the broker's reads at
 	// start seed it for the daemon's, and either denies another login's
-	// context written back.
+	// context written back. Each raw store is fenced under its guard
+	// (crypt.Fenced, pre-flight C1): a context read waits, within
+	// call_timeout, for the feed to pass the record's revision. The raw
+	// stores the sweep, the hold and the record use read no context for
+	// admission and stay unfenced.
 	return stores{
-		daemon: crypt.Wrap(guard.WrapRev(d, gc("daemon")), keys, m.CryptOpenFailures, crypt.WithLedger(ledger),
-			say),
-		broker: crypt.Wrap(guard.WrapRev(b, gc("broker")), keys, m.CryptOpenFailures, crypt.WithLedger(ledger),
-			say),
+		daemon: crypt.Wrap(guard.WrapRev(crypt.Fenced(d, ledger), gc("daemon")), keys, m.CryptOpenFailures,
+			crypt.WithLedger(ledger), say),
+		broker: crypt.Wrap(guard.WrapRev(crypt.Fenced(b, ledger), gc("broker")), keys, m.CryptOpenFailures,
+			crypt.WithLedger(ledger), say),
 		etcd:       d,
 		persistent: true,
 		lost:       lost,

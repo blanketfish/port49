@@ -270,7 +270,7 @@ type ContextFeed interface {
 	// WatchContexts calls fn for every change after `after`, in revision
 	// order, until ctx ends (ctx.Err()), the revision was compacted
 	// (ErrCompacted), or the watch fails (ErrUnavailable, or ErrRefused
-	// when the store refuses this identity the watch). progress is told
+	// when the store will not let this identity watch). progress is told
 	// a revision through which every change has been delivered: each
 	// batch's highest event once fn has had them all, and each progress
 	// notification's header revision. Each receive on asks requests one

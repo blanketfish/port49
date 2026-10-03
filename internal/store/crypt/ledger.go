@@ -75,6 +75,10 @@ const DefaultLedgerKeep = 24 * time.Hour
 // key; one that saw a context with no ceiling (max_session_age: never) is
 // kept for good (Prune).
 //
+// A read judges no record the context feed has not passed (Fence, Fenced):
+// a put-back commits above the write it hides, so once the feed has passed
+// it the mark is past it.
+//
 // One Ledger is shared by every Wrap in a process (WithLedger). It is safe
 // for concurrent use.
 type Ledger struct {
@@ -83,6 +87,7 @@ type Ledger struct {
 	base  uint64
 	keep  time.Duration
 	dirty map[store.ContextKey]bool
+	fence *Fence
 }
 
 type ledgerEntry struct {
@@ -97,7 +102,25 @@ type ledgerEntry struct {
 // NewLedger is an empty ledger with a base of zero and the default keep.
 func NewLedger() *Ledger {
 	return &Ledger{m: map[store.ContextKey]*ledgerEntry{}, keep: DefaultLedgerKeep,
-		dirty: map[store.ContextKey]bool{}}
+		dirty: map[store.ContextKey]bool{}, fence: newFence()}
+}
+
+// Fence is this process's feed fence (Fenced).
+func (l *Ledger) Fence() *Fence { return l.fence }
+
+// knownAt reports whether rev is the revision of the record this process
+// last knew at k: a write of its own that landed, or a record it admitted.
+//
+// After an etcd restore without --bump-revision, revisions repeat, so a
+// put-back can land at a revision equal to a stale e.rev and skip the
+// feed's wait (re-check R3). The high-water still judges it, so this only
+// narrows the fence to the feed-lag case, and the runbook restarts every
+// process after such a restore, which clears it.
+func (l *Ledger) knownAt(k store.ContextKey, rev uint64) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	e, ok := l.m[k]
+	return ok && rev > 0 && e.rev == rev
 }
 
 // SetBase raises the base to rev: a key with no mark admits only a record

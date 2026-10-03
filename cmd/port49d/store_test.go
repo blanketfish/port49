@@ -507,6 +507,11 @@ func TestOpenStoresSharesOneSayer(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer sts.close()
+	// The feed follows as runOnce's does: a fenced read waits for it.
+	fctx, stopFollow := context.WithCancel(ctx)
+	followDone := make(chan struct{})
+	go func() { defer close(followDone); sts.follow(fctx) }()
+	defer func() { stopFollow(); <-followDone }()
 	k := store.ContextKey{NAS: "leaf1", Username: "alice"}
 	retired := crypt.Keys{Current: crypt.Key{ID: "retired", Bytes: [32]byte{7}}}
 	if err := crypt.Wrap(sts.etcd, retired, nil).PutContext(ctx, k, store.Context{CtxID: "c", Principal: "user:alice",

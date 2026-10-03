@@ -21,6 +21,10 @@ import (
 // at a key it has no mark for makes one only at or above the base it had,
 // so a put-back made while the store was away is not taken as its key's
 // (pre-flight I1). Only then is the base raised.
+//
+// It attaches l's fence at the scan's revision: from here every fenced
+// read waits for FollowContexts to deliver past it, so the caller starts
+// it at once.
 func LoadLedger(ctx context.Context, feed store.ContextFeed, src store.LedgerSource, keys Keys,
 	l *Ledger) (rev uint64, known, recorded int, err error) {
 	first := l.Base() == 0
@@ -32,6 +36,7 @@ func LoadLedger(ctx context.Context, feed store.ContextFeed, src store.LedgerSou
 		return 0, 0, 0, err
 	}
 	l.SetBase(rev + 1)
+	l.Fence().Attach(rev)
 	return rev, l.Len(), recorded, nil
 }
 
@@ -99,6 +104,10 @@ func rescan(ctx context.Context, feed store.ContextFeed, src store.LedgerSource,
 // (port49_store_feed_up{feed="contexts"}), and logf says each rescan and
 // each failure once per run of them.
 //
+// It moves l's fence (Fenced): each revision the watch has delivered
+// through, and each rescan's revision once its marks are in; a waiting
+// read's ask goes to the watch as a progress request.
+//
 // A change the feed brings again, after a re-watch or a rescan, is below
 // or at the mark it raised: Observe never lowers a mark, and takes a
 // plaintext revoked_at as the floor only from a record at the mark, so
@@ -108,6 +117,7 @@ func FollowContexts(ctx context.Context, feed store.ContextFeed, src store.Ledge
 	failing := false
 	for {
 		up(true)
+		l.Fence().SetUp(true)
 		err := feed.WatchContexts(ctx, from, func(c store.ContextChange) {
 			if c.Rev > from {
 				from = c.Rev
@@ -115,7 +125,8 @@ func FollowContexts(ctx context.Context, feed store.ContextFeed, src store.Ledge
 			if !c.Deleted {
 				observe(l, keys, c.Key, c.Context, false)
 			}
-		}, func(uint64) {}, nil) // Task 8a: the fence's progress and asks
+		}, l.Fence().Followed, l.Fence().Asks())
+		l.Fence().SetUp(false)
 		up(false)
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -125,6 +136,7 @@ func FollowContexts(ctx context.Context, feed store.ContextFeed, src store.Ledge
 				"the store again")
 			rescanned()
 			if rev, serr := rescan(ctx, feed, src, keys, l); serr == nil {
+				l.Fence().Followed(rev) // only once the seed and the scan are in
 				from = max(from, rev)
 				failing = false
 				continue
