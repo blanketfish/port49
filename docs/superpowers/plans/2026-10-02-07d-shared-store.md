@@ -14119,7 +14119,7 @@ measurement on a hang of its own, the store returned between them. On each image
   - `--auto-compaction-mode=periodic --auto-compaction-retention=1h`, and defragmentation;
   - a quota above the live records;
   - **every call answered well under `call_timeout` (500ms).** That is the binding bound at
-    the defaults; the hold itself survives a round trip of about 0.83s at `hold_ttl` 10s and
+    the defaults; the hold itself survives a round trip to the etcd leader of about 0.83s at `hold_ttl` 10s and
     1.25s at 15s (its fence read). Past any of them port49d closes every listener: dark,
     never two port49d on one keyspace. A cross-site etcd raises `call_timeout`,
     `packet_deadline` and `hold_ttl` together.
