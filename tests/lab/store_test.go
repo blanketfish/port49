@@ -716,38 +716,33 @@ func TestStoreSnapshotRestore(t *testing.T) {
 		if err := testpki.WriteLab(pki, sliceEmail, time.Now()); err != nil {
 			t.Fatal(err)
 		}
-		// The policy is a copy, so that touching it runs a refresh pass.
-		policyDir := filepath.Join(t.TempDir(), "policy")
-		if err := os.Mkdir(policyDir, 0o700); err != nil {
-			t.Fatal(err)
-		}
-		policyRaw, err := os.ReadFile(filepath.Join(root, "tests", "lab", "slice", "policy.yaml"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		policyPath := filepath.Join(policyDir, "policy.yaml")
-		if err := os.WriteFile(policyPath, policyRaw, 0o600); err != nil {
-			t.Fatal(err)
-		}
 		brokerYAML, err := os.ReadFile(filepath.Join(root, "tests", "lab", "slice", "broker.yaml"))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(string(brokerYAML), "policy_file: tests/lab/slice/policy.yaml") {
-			t.Fatal("tests/lab/slice/broker.yaml no longer names tests/lab/slice/policy.yaml")
-		}
-		brokerBlock := strings.Replace(string(brokerYAML), "policy_file: tests/lab/slice/policy.yaml",
-			"policy_file: "+policyPath, 1)
 
 		e := newRealEtcd(t, bin)
 		e.start(t, e.data)
 		block := fmt.Sprintf("\nstore:\n  backend: etcd\n  etcd:\n    endpoints: [https://%s]\n    ca_file: %s\n"+
 			"    daemon: {cert_file: %s, key_file: %s}\n    broker: {cert_file: %s, key_file: %s}\n    hold_ttl: 60s\n"+
 			"admin_socket: %s\n", e.client, e.ca, e.daemC, e.daemK, e.brokC, e.brokK, filepath.Join(t.TempDir(), "admin.sock"))
-		cfg, err := l.derivedConfig("restore", platformSessionAttributes[l.p.name], brokerBlock+block)
+		cfg, err := l.derivedConfig("restore", platformSessionAttributes[l.p.name], string(brokerYAML)+block)
 		if err != nil {
 			t.Fatal(err)
 		}
+		// The derived config runs on a private copy of the policy
+		// (privateCopy): touching that copy swaps the policy, which runs a
+		// refresh pass.
+		cfgRaw, err := os.ReadFile(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, policyLine, ok := strings.Cut(string(cfgRaw), "  policy_file: ")
+		if !ok {
+			t.Fatal("the derived config names no policy_file")
+		}
+		policyPath, _, _ := strings.Cut(policyLine, "\n")
+		policyPath = strings.TrimSpace(policyPath)
 		row("0. `port49d store-roles`, each line run by etcdctl 3.6.15 as root", strings.Join(e.storeRoles(t, cfg), "; "))
 		n, err := e.keys("/port49/")
 		row("0. the keyspace before port49d's first start", fmt.Sprintf("%d keys under /port49/ (err %v)", n, err))
@@ -911,7 +906,7 @@ func TestStoreSnapshotRestore(t *testing.T) {
 			len(l.errLinesSince(errOff, "policy refresh")) == 0; {
 			time.Sleep(time.Second)
 		}
-		refreshed := append(l.errLinesSince(errOff, "policy refresh"), l.errLinesSince(errOff, "will not open")...)
+		refreshed := append(l.errLinesSince(errOff, "policy"), l.errLinesSince(errOff, "will not open")...)
 		row("5. the refresh pass after touching the policy", strings.Join(refreshed, " / "))
 		recs = l.recordsSince(off)
 		row("5. records since the restore", summarize(recs))
@@ -933,15 +928,23 @@ func TestStoreSnapshotRestore(t *testing.T) {
 				return len(reasonsOf(rs, "authorize_command")) > 0
 			}), "authorize_command")))
 
-		// A new login works.
+		// A new login works: it replaces the restored record (design §12).
 		off = l.mark()
-		_, lerr := l.loginWithin(sliceUser, mint("after the restore"), 60*time.Second, "show version")
-		row("6. a new token login after the restore, `show version`", fmt.Sprintf("%v; records %s", lerr,
-			summarize(l.waitForRecords(off, 20*time.Second, func(rs []map[string]any) bool {
-				return len(reasonsOf(rs, "authorize_command")) > 0
-			}))))
+		outs, lerr := l.loginWithin(sliceUser, mint("after the restore"), 60*time.Second, "show version")
+		recs = l.waitForRecords(off, 20*time.Second, func(rs []map[string]any) bool {
+			return len(reasonsOf(rs, "authorize_session")) > 0 && len(reasonsOf(rs, "authorize_command")) > 0
+		})
+		row("6. a new token login after the restore, `show version`", fmt.Sprintf("login err %v; printed %s; "+
+			"redeem %v, authorize_session %v, authorize_command %v", lerr, firstOut(outs), reasonsOf(recs, "redeem"),
+			reasonsOf(recs, "authorize_session"), reasonsOf(recs, "authorize_command")))
 		if lerr != nil {
 			fail("a new login after the restore failed: %v", lerr)
+		}
+		if !contains(reasonsOf(recs, "authorize_session"), "permit context_matched") {
+			fail("the new login's session was not answered from its own context: %v", reasonsOf(recs, "authorize_session"))
+		}
+		if !contains(reasonsOf(recs, "authorize_command"), "permit permit_dominates") {
+			fail("the new login's command was not permitted: %v", reasonsOf(recs, "authorize_command"))
 		}
 
 		note := obs.String()
