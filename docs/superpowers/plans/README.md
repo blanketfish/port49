@@ -2765,7 +2765,8 @@ the same session, written back, is denied too: `store_unavailable`, counted as
 - **Who may write etcd.** The daemon's client certificate can write tokens, receipts, contexts
   and the index. With it alone, a thief can replay records port49 sealed, never forge them.
   - **While port49d runs**, a session record put back is denied, an earlier version of the
-    same session included.
+    same session included. A `revoke --mine` or key revocation that answers `incomplete`
+    holds while port49d runs, but may not be sealed into the record yet: run it again.
   - **Across a port49d restart**, a record put back while port49d was stopped is taken:
     - another login's, which is impersonation until that session's ceiling or its device's
       next login;
@@ -2818,7 +2819,7 @@ the same session, written back, is denied too: `store_unavailable`, counted as
     the store's copy comes back. Lift with `port49 revoke --lift` on the admin socket.
   - **Junos re-authorization on etcd is unmeasured.** On the memory store a restart denied
     every live Junos session's next re-authorization (`authorization-time-interval`). On etcd
-    the contexts survive, but L35 did not measure a re-authorization.
+    the contexts survive, but L35 did not measure a re-authorization (§15 L36, open).
 - **What an etcd outage does.**
   - **At start:** nothing listens, and `/readyz` says `waiting for the store`. Devices use their
     local method, and break-glass works. port49d waits up to `start_timeout`, then exits 1. With
@@ -2838,8 +2839,11 @@ the same session, written back, is denied too: `store_unavailable`, counted as
       under local authorization.
     - **Listening again.** port49d waits for etcd itself, then serves again, and sessions resume
       on their contexts. That takes the lost hold's lease to expire, plus a third of `hold_ttl`:
-      38s to 1m27s at 60s, measured. If that start fails for another reason (a policy file
-      caught half-written), it says so and tries again every 5s; it does not exit.
+      38s to 1m27s at 60s, measured. Meanwhile it says `keyspace … is still held by this
+      port49d's last run (its hold was lost when the store stopped answering); waiting up to
+      hold_ttl (…) for its lease to expire`: that is port49d waiting on itself, so do not stop
+      it. If that start fails for another reason (a policy file caught half-written), it says
+      so and tries again every 5s; it does not exit.
     - **Keep `Restart=on-failure` anyway.** It still restarts port49d after a crash, or after a
       cold start that exits 1 (a configuration fault, or `start_timeout`).
     - **Metrics between runs.** `/healthz`, `/readyz` and `/metrics` are unbound for the drain
@@ -2932,7 +2936,9 @@ the same session, written back, is denied too: `store_unavailable`, counted as
     refresh judges its policy.
   - **While port49d runs** (narrowed by Task 13b from any earlier version): the write before
     one in flight or of unknown outcome, put back, is admitted until a later write lands at
-    the key.
+    the key. A self or key revocation whose seal failed after its plaintext mark landed is
+    held by the ledger's revocation floor (final review I-1); across a restart it is that
+    mark alone, so its `incomplete` answer says to run it again.
   - A deleted token put back for a holder of its secret, until its sealed expiry.
   - A receipt's sliding bound stretched to its sealed cap.
   - A context kept alive past its idle TTL: to its sealed ceiling if it has one, and
@@ -2972,6 +2978,9 @@ labpcap audit fails.
   - The decision-log emits under a policy hold are bounded (4b Task 4).
   - A lab run to settle why IOS-XE refused an open session's command once port49d went dark
     (`L35-cisco_iosxe.md`), when `quarantine-cisco_iosxe.md` ran one with port49d stopped.
+- **Lab, unassigned:** §15 L36 (open), whether a live Junos session's re-authorization
+  (`authorization-time-interval`) after a port49d restart on etcd is answered from the kept
+  context, and whether a denial then ends it. L35 did not measure it.
 - **7f:**
   - Go-dark proper: the N-failures/M-passes listener control replaces Ruling 11's coarse
     close-and-wait.
