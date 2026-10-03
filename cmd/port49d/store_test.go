@@ -4,12 +4,14 @@ import (
 	"context"
 	"crypto/x509"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/rhwendt/port49/internal/broker"
 	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/store"
 	etcdstore "github.com/rhwendt/port49/internal/store/etcd"
@@ -197,5 +199,34 @@ func TestAStartAfterAStoreGoneRetriesEveryError(t *testing.T) {
 	cold := errors.New("test: a bad config")
 	if err := runLoop(context.Background(), func(bool) error { return cold }, time.Millisecond); err != cold {
 		t.Fatalf("a cold start's error: %v", err)
+	}
+}
+
+// What the start's carry left decides what the start does (Rulings T12-a,
+// T12-c, T12-d): an outage or an unvisited principal holds it, a busy
+// context opens it owing a pass at once, an unheld key opens it owing the
+// next retry, and anything else ends it (Task 12 review I-1).
+func TestTheStartsCarryDecidesHoldOrOpen(t *testing.T) {
+	other := errors.New("test: something else")
+	for _, c := range []struct {
+		name string
+		err  error
+		owed refreshOwed
+		hold bool
+		fail error
+	}{
+		{"nothing left", nil, refreshOwed{}, false, nil},
+		{"an unvisited principal holds", fmt.Errorf("pass: %w", broker.ErrPrincipalUnvisited), refreshOwed{}, true, nil},
+		{"an outage holds", fmt.Errorf("pass: %w", store.ErrUnavailable), refreshOwed{}, true, nil},
+		{"a busy context opens owing a pass now", fmt.Errorf("pass: %w", store.ErrConflict),
+			refreshOwed{owed: true, now: true}, false, nil},
+		{"an unheld key opens owing the next retry", fmt.Errorf("pass: %w", broker.ErrLeftUnderUnheldKey),
+			refreshOwed{owed: true}, false, nil},
+		{"anything else ends the start", other, refreshOwed{}, false, other},
+	} {
+		owed, hold, fail := startLeftBy(c.err)
+		if owed != c.owed || hold != c.hold || fail != c.fail {
+			t.Errorf("%s: startLeftBy = %+v, %v, %v; want %+v, %v, %v", c.name, owed, hold, fail, c.owed, c.hold, c.fail)
+		}
 	}
 }

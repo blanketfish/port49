@@ -389,6 +389,27 @@ type refreshOwed struct {
 	now  bool
 }
 
+// startLeftBy is what the start does with what its carry left
+// (RefreshAtStart). An outage, or a principal whose contexts could not be
+// looked up, holds it: hold, and the carry runs again with the listeners
+// closed (Ruling T12-c). A context still changing opens it owing a pass
+// as soon as the listeners are open (Ruling T12-d); one under an unheld
+// key opens it owing the next retry, since every path denies it meanwhile
+// (Ruling T12-a). Any other error is fail, and ends the start.
+func startLeftBy(err error) (owed refreshOwed, hold bool, fail error) {
+	switch {
+	case err == nil:
+		return refreshOwed{}, false, nil
+	case errors.Is(err, store.ErrUnavailable), errors.Is(err, broker.ErrPrincipalUnvisited):
+		return refreshOwed{}, true, nil
+	case errors.Is(err, broker.ErrLeftUnderUnheldKey):
+		return refreshOwed{owed: true}, false, nil
+	case errors.Is(err, store.ErrConflict):
+		return refreshOwed{owed: true, now: true}, false, nil
+	}
+	return refreshOwed{}, false, err
+}
+
 // startOnPersistentStore is a start on etcd after the file's marks are
 // restored (decision 35, a start on etcd; Ruling 12; Ruling 13;
 // pre-flight C1, M41; re-check IA2). With the listeners still closed, it:
@@ -495,24 +516,28 @@ func startOnPersistentStore(ctx context.Context, brk *broker.Broker, st store.St
 	fmt.Fprintf(stderr, "port49d: store: purged %d unspent token(s) from before this start (run 'port49 token' "+
 		"again)\n", n)
 	var rep broker.RefreshReport
+	var owed refreshOwed
 	var left error
-	if err := retry("carrying the policy in force into the live contexts", func() (err error) {
+	if err := retry("carrying the policy in force into the live contexts", func() error {
+		var err error
 		rep, err = brk.RefreshAtStart(ctx)
-		left = nil
-		if errors.Is(err, store.ErrConflict) && !errors.Is(err, broker.ErrPrincipalUnvisited) {
-			left, err = err, nil
+		var hold bool
+		var fail error
+		owed, hold, fail = startLeftBy(err)
+		left = err
+		if hold {
+			return err
 		}
-		return err
+		return fail
 	}, broker.ErrPrincipalUnvisited); err != nil {
 		return refreshOwed{}, err
 	}
 	ledger.Seal()
 	fmt.Fprintf(stderr, "port49d: store: %d live context(s) carried onto the policy in force (bundle %s) "+
-		"before serving\n", rep.Contexts(), brk.Policy.Load().Bundle)
-	if left == nil {
+		"before serving\n", rep.Contexts()-rep.Failed, brk.Policy.Load().Bundle)
+	if !owed.owed {
 		return refreshOwed{}, nil
 	}
-	owed := refreshOwed{owed: true, now: !errors.Is(left, broker.ErrLeftUnderUnheldKey)}
 	when := "again as soon as the listeners are open"
 	if !owed.now {
 		when = "again at the next retry; every path denies it meanwhile"
