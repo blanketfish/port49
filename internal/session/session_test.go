@@ -459,3 +459,44 @@ func TestRefreshNeverResumesAContextPastItsGraceWindow(t *testing.T) {
 		t.Fatalf("inside grace: n=%d err=%v session_expires %v", n, err, c.SessionExpires)
 	}
 }
+
+// outageAfterUnreadable is a store whose every context will not open, and
+// whose mark of the one at down finds the store unavailable.
+type outageAfterUnreadable struct {
+	*memory.Store
+	down store.ContextKey
+}
+
+func (o outageAfterUnreadable) GetContext(context.Context, store.ContextKey) (store.Context, error) {
+	return store.Context{}, &store.UnreadableContextError{Err: errors.New("test: will not open")}
+}
+
+func (o outageAfterUnreadable) SetRevokedAt(ctx context.Context, k store.ContextKey, at time.Time) error {
+	if k == o.down {
+		return store.ErrUnavailable
+	}
+	return o.Store.SetRevokedAt(ctx, k, at)
+}
+
+// An outage is returned over a context that will not open, whichever came
+// first: a caller retries on the outage, and must not take the pass for
+// one that reached every context (plan 7d; pre-flight re-check 2 M-B9).
+func TestAMarkReturnsAnOutageOverAnUnreadableContext(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	s := memory.New(func() time.Time { return now })
+	ctx := context.Background()
+	seed(t, s, now)
+	other := store.ContextRef{NAS: "leaf-02", Username: "alice"}
+	if err := s.PutContext(ctx, key(other), store.Context{CtxID: "c2", Principal: "user:alice@example.com",
+		Username: "alice", PrivLvl: 1, BlobHash: "sha256:old", AuthTime: now}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.IndexContext(ctx, "user:alice@example.com", "", store.CertKey("ca", "01"), other, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	m := New(outageAfterUnreadable{Store: s, down: key(other)}, func() time.Time { return now }, time.Hour, time.Hour)
+	refs, err := m.RevokeByCert(ctx, "ca", "01")
+	if !errors.Is(err, store.ErrUnavailable) || len(refs) != 1 {
+		t.Fatalf("RevokeByCert = %v, %v; want the one context marked and the outage", refs, err)
+	}
+}

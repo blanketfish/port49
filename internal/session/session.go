@@ -219,7 +219,9 @@ func (m *Manager) Reindex(ctx context.Context, ref store.ContextRef, c store.Con
 // open — sealed under a retired key — is still marked, because SetRevokedAt
 // needs no key at all (crypt): a revocation that cannot read the record can
 // still deny it. The error is returned so the caller learns the receipts were
-// not reached, alongside the refs that were.
+// not reached, alongside the refs that were. An outage is returned over
+// any earlier error, so a caller that retries on one is never told the
+// pass met only a record that will not open (pre-flight re-check 2 M-B9).
 func (m *Manager) mark(ctx context.Context, refs []store.ContextRef, knownPrincipal string) ([]store.ContextRef, error) {
 	at := m.now()
 	principals := map[string]bool{}
@@ -228,6 +230,11 @@ func (m *Manager) mark(ctx context.Context, refs []store.ContextRef, knownPrinci
 	}
 	var touched []store.ContextRef
 	var firstErr error
+	keep := func(err error) {
+		if firstErr == nil || (errors.Is(err, store.ErrUnavailable) && !errors.Is(firstErr, store.ErrUnavailable)) {
+			firstErr = err
+		}
+	}
 	for _, ref := range refs {
 		k := keyOf(ref)
 		if knownPrincipal == "" {
@@ -239,9 +246,7 @@ func (m *Manager) mark(ctx context.Context, refs []store.ContextRef, knownPrinci
 				// reclaims it, and there is nothing left to mark.
 				continue
 			case err != nil:
-				if firstErr == nil {
-					firstErr = err
-				}
+				keep(err)
 			default:
 				if c.Principal != "" {
 					principals[c.Principal] = true
@@ -252,16 +257,14 @@ func (m *Manager) mark(ctx context.Context, refs []store.ContextRef, knownPrinci
 		case errors.Is(err, store.ErrNotFound):
 			continue
 		case err != nil:
-			if firstErr == nil {
-				firstErr = err
-			}
+			keep(err)
 			continue
 		}
 		touched = append(touched, ref)
 	}
 	for p := range principals {
-		if _, err := m.store.DeleteReceiptsByPrincipal(ctx, p); err != nil && firstErr == nil {
-			firstErr = err
+		if _, err := m.store.DeleteReceiptsByPrincipal(ctx, p); err != nil {
+			keep(err)
 		}
 	}
 	return touched, firstErr
