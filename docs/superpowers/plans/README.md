@@ -84,7 +84,7 @@ The re-review also fixed r-m1: a refresh that skips anything keeps `port49_polic
 
 Carried to Task 12: `ledger.Seal()` needs a test, and must be called only after the start's re-index. Carried to 7d-2: a `{}` answer on the admin socket to `port49 revoke` still exits 0.
 
-**7d-2 executed 2026-10-03 on `feature/shared-store-daemon`; PR pending** (base 06d0821;
+**7d-2 executed and merged 2026-10-03 as PR #25** (merge 9282085; base 06d0821;
 Tasks 8b–16 plus a new Task 13b, each reviewed). It delivers:
 - the guard: a hard timeout on every store call, three pools with a circuit each, and going
   dark;
@@ -2537,7 +2537,7 @@ here from the ledger. What differs from the plan's text, task by task:
   - F-2: a context under a key port49d does not hold is never revoked.
   - r-m1: a refresh that skips anything keeps `port49_policy_refresh_pending` at 1.
 
-**7d-2** (`feature/shared-store-daemon`, base 06d0821; PR pending):
+**7d-2** (`feature/shared-store-daemon`, base 06d0821; merged as PR #25, 9282085):
 
 - **Task 8b (docs; ee4ff27, then 910b213, 8a49560, 41fd152, 6e43436, 707e828, 82deff5,
   f63df64, 37dbd0e, e4eb512, 1218c9a, 952d6ed, 0931755, 413f63a, 1d928e3, 90e4775,
