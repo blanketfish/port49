@@ -238,26 +238,37 @@ type Cluster struct {
 	once      []sync.Once
 }
 
+// clusterRetryFor is how long StartCluster tries new ports for, swapped in
+// a test.
+var clusterRetryFor = 30 * time.Second
+
 // StartCluster runs three members for t, stopped at its cleanup.
 //
 // Its members cannot listen on :0 as every other member here does: the
 // initial cluster names each peer's address before any binds, so freePort
 // picks them, and another process can take one in between. A member that
 // finds its address in use stops the members that started, and the cluster
-// is tried once more on new ports (pre-flight M29).
+// is tried again on new ports, until clusterRetryFor has passed (pre-flight
+// M29; plan 7e Task 2: one retry lost the race too, under load).
 func StartCluster(t testing.TB) *Cluster {
 	t.Helper()
-	c, err := startCluster(t)
-	if err != nil && strings.Contains(err.Error(), "address already in use") {
-		c, err = startCluster(t)
+	deadline := time.Now().Add(clusterRetryFor)
+	for {
+		c, err := startCluster(t)
+		if err == nil {
+			for i := range c.members {
+				t.Cleanup(func() { c.Stop(i) })
+			}
+			return c
+		}
+		if !strings.Contains(err.Error(), "address already in use") || time.Now().After(deadline) {
+			t.Fatal(err)
+		}
+		// A pause between attempts, so a loop that keeps losing does not
+		// make a temp dir and three members every few milliseconds
+		// (pre-flight M5).
+		time.Sleep(50 * time.Millisecond)
 	}
-	if err != nil {
-		t.Fatal(err)
-	}
-	for i := range c.members {
-		t.Cleanup(func() { c.Stop(i) })
-	}
-	return c
 }
 
 func startCluster(t testing.TB) (*Cluster, error) {
