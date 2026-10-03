@@ -143,6 +143,35 @@ func replyStatus(q wirePacket) string {
 	return st
 }
 
+// storeOutcome is revokeOutcome that, when the command printed something
+// without its version line, reads the shell again 3s later. vSRX redraws
+// its prompt in the command's echo, so the prompt is matched before the
+// output arrives; vJunos-router does not (L35's first vSRX run). The wait
+// also lets late output drain before the next command, and on IOS-XE,
+// whose refused command prints nothing (L4-error-cisco_iosxe.md (b)), it
+// is 3s more of nothing.
+func storeOutcome(platform string, sh *labShell, cmd string, fail func(string, ...any), what string) string {
+	from := len(sh.c.transcript())
+	out := revokeOutcome(platform, sh, cmd, fail, what)
+	if !strings.HasPrefix(out, "printed something") {
+		return out
+	}
+	time.Sleep(3 * time.Second)
+	markers := []string{revokeVersion[platform]}
+	if strings.HasPrefix(platform, "juniper_") {
+		markers = append(markers, "Junos:", "Hostname:")
+	}
+	for _, line := range strings.Split(sh.c.transcript()[from:], "\n") {
+		for _, m := range markers {
+			if m != "" && strings.Contains(line, m) {
+				return fmt.Sprintf("printed its output, read 3s after the prompt its echo carried: %s",
+					l29Cell(strings.TrimSpace(line)))
+			}
+		}
+	}
+	return out + "; nothing more 3s later"
+}
+
 // listenAgain waits up to within for port49d to say, after off, that it
 // listens, then for its TACACS+ port.
 func (l *lab) listenAgain(off int64, within time.Duration) error {
@@ -244,7 +273,7 @@ func TestStoreOutageEndToEnd(t *testing.T) {
 			t.Fatalf("SSH login on etcd: %v\nrecords:%s", err, summarize(l.recordsSince(off)))
 		}
 		defer sh.Close()
-		before := revokeOutcome(l.p.name, sh, "show version", fail, "baseline")
+		before := storeOutcome(l.p.name, sh, "show version", fail, "baseline")
 		row("1. baseline, `show version`", before)
 		ctxBefore, _, _ := ctxIDOf(l.waitForRecords(off, 30*time.Second, func(rs []map[string]any) bool {
 			id, _, _ := ctxIDOf(rs, sliceUser)
@@ -260,7 +289,7 @@ func TestStoreOutageEndToEnd(t *testing.T) {
 		wide("2. port49d's start lines", strings.Join(append(l.errLinesSince(errOff, "purged"),
 			l.errLinesSince(errOff, "carried onto the policy in force")...), " / "))
 		off = l.mark()
-		after := revokeOutcome(l.p.name, sh, "show version", fail, "after the restart")
+		after := storeOutcome(l.p.name, sh, "show version", fail, "after the restart")
 		ctxAfter, verdict, reason := ctxIDOf(l.waitForRecords(off, 30*time.Second, func(rs []map[string]any) bool {
 			id, _, _ := ctxIDOf(rs, sliceUser)
 			return id != "" || sessionOnly
@@ -335,7 +364,7 @@ func TestStoreOutageEndToEnd(t *testing.T) {
 				if f == nil {
 					return
 				}
-				hung := revokeOutcome(l.p.name, sh, "show version", f, "with the store hung")
+				hung := storeOutcome(l.p.name, sh, "show version", f, "with the store hung")
 				switch {
 				case strings.HasPrefix(hung, "refused"):
 				case strings.HasPrefix(hung, "printed something"):
@@ -422,7 +451,7 @@ func TestStoreOutageEndToEnd(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(root, "tests", "lab", "results", "quarantine-"+l.p.name+".md")); err != nil {
 			quarantine = "no quarantine note for this image"
 		}
-		stopped := revokeOutcome(l.p.name, sh, "show version", func(string, ...any) {}, "with the listeners closed")
+		stopped := storeOutcome(l.p.name, sh, "show version", func(string, ...any) {}, "with the listeners closed")
 		row("4. listeners closed, the open session's `show version`", stopped+" ("+quarantine+")")
 		bgAt := time.Now()
 		outs, berr := l.loginWithin(breakglassUser, breakglassPassword, 60*time.Second, "show version")
@@ -443,7 +472,7 @@ func TestStoreOutageEndToEnd(t *testing.T) {
 			time.Since(backAt).Round(time.Second), strings.Join(append(l.errLinesSince(errOff, "purged"),
 				l.errLinesSince(errOff, "carried onto the policy in force")...), " / ")))
 		off = l.mark()
-		back := revokeOutcome(l.p.name, sh, "show version", fail, "after the store returned")
+		back := storeOutcome(l.p.name, sh, "show version", fail, "after the store returned")
 		ctxBack, verdict, reason := ctxIDOf(l.waitForRecords(off, 30*time.Second, func(rs []map[string]any) bool {
 			id, _, _ := ctxIDOf(rs, sliceUser)
 			return id != "" || sessionOnly
