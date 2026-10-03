@@ -324,9 +324,23 @@ func agentMain(args []string, stderr io.Writer) int {
 		}
 		break
 	}
+	// Shutdown, not Close: the request that ended the session (a refresh or
+	// mint the broker answered credential_revoked) is still writing that
+	// answer, and Close would cut it, so its client would say "no agent"
+	// instead of the broker's reason. The wait is bounded so a call held on
+	// the broker cannot keep the agent up, and stop lets a second signal end
+	// it at once.
+	stop()
+	sctx, cancel := context.WithTimeout(context.Background(), agentShutdownWait)
+	defer cancel()
+	_ = srv.Shutdown(sctx)
 	_ = srv.Close()
 	return 0
 }
+
+// agentShutdownWait bounds how long an exiting agent lets in-flight socket
+// calls finish their answers.
+const agentShutdownWait = 5 * time.Second
 
 // tokenCmd mints one device through the agent and prints the login token on
 // stdout — the one place a token is ever written (design §17, write-once).

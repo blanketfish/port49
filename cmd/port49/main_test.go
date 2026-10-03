@@ -629,7 +629,7 @@ func TestARefreshedAgentOutlivesItsFirstDeadline(t *testing.T) {
 	errb.Reset()
 	if code := run([]string{"refresh", "--socket", sock}, &out, &errb); code != 1 ||
 		!strings.Contains(errb.String(), "this principal was revoked") || strings.Contains(errb.String(), "port49 login") {
-		t.Fatalf("a revoked refresh: code %d stderr %q", code, errb.String())
+		t.Fatalf("a revoked refresh: code %d stderr %q\n%s", code, errb.String(), log.String())
 	}
 	select {
 	case code := <-exited:
