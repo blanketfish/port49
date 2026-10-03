@@ -45,6 +45,7 @@ func (s *Store) Hold(ctx context.Context, ttl time.Duration, who string, waiting
 		}
 		return nil, nil, unavailable(err)
 	}
+	holdGranted()
 	sctx, scancel := context.WithCancel(context.Background())
 	sess, err := concurrency.NewSession(s.ctx, concurrency.WithTTL(int(ttl/time.Second)),
 		concurrency.WithLease(lease.ID), concurrency.WithContext(sctx))
@@ -55,40 +56,63 @@ func (s *Store) Hold(ctx context.Context, ttl time.Duration, who string, waiting
 		cancel()
 		return nil, nil, unavailable(err)
 	}
-	quit := func() { sess.Close(); scancel() }
+	// letGo ends the session and revokes its lease, waiting a second at
+	// most: sess.Close would wait out ttl on a hung store, and a lease not
+	// revoked expires anyway (re-review m-6).
+	letGo := func() {
+		sess.Orphan()
+		rctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		s.ctx.Revoke(rctx, lease.ID)
+		cancel()
+		scancel()
+	}
+	// Each call below is bounded as the Grant is (re-review m-6).
+	bounded := func(f func(context.Context) error) error {
+		cctx, cancel := context.WithTimeout(ctx, ttl/3)
+		defer cancel()
+		return f(cctx)
+	}
+	fail := func(err error) (<-chan struct{}, func(), error) {
+		letGo()
+		if ctx.Err() != nil {
+			return nil, nil, ctx.Err()
+		}
+		return nil, nil, unavailable(err)
+	}
 	mu := concurrency.NewMutex(sess, s.k.meta("hold"))
 	var said time.Time
 	for {
-		err := mu.TryLock(ctx)
+		err := bounded(mu.TryLock)
 		if err == nil {
 			break
 		}
 		if !errors.Is(err, concurrency.ErrLocked) {
-			quit()
-			return nil, nil, unavailable(err)
+			return fail(err)
 		}
 		if time.Since(said) >= 30*time.Second {
 			var h holderRec
-			if _, _, err := getJSON(ctx, s.ctx, s.k.meta("holder"), &h); err == nil {
+			if bounded(func(c context.Context) error { _, _, err := getJSON(c, s.ctx, s.k.meta("holder"), &h); return err }) == nil {
 				waiting(h.Who)
 			}
 			said = time.Now()
 		}
 		select {
 		case <-ctx.Done():
-			quit()
+			letGo()
 			return nil, nil, ctx.Err()
 		case <-time.After(time.Second):
 		}
 	}
 	body, err := json.Marshal(holderRec{Who: who})
 	if err != nil {
-		quit()
+		letGo()
 		return nil, nil, err
 	}
-	if _, err := s.ctx.Put(ctx, s.k.meta("holder"), string(body), clientv3.WithLease(sess.Lease())); err != nil {
-		quit()
-		return nil, nil, unavailable(err)
+	if err := bounded(func(c context.Context) error {
+		_, err := s.ctx.Put(c, s.k.meta("holder"), string(body), clientv3.WithLease(sess.Lease()))
+		return err
+	}); err != nil {
+		return fail(err)
 	}
 	lost := make(chan struct{})
 	var once sync.Once
@@ -104,7 +128,7 @@ func (s *Store) Hold(ctx context.Context, ttl time.Duration, who string, waiting
 			uctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			mu.Unlock(uctx)
 			cancel()
-			sess.Close()
+			letGo()
 		}
 		scancel()
 	}
@@ -121,6 +145,10 @@ func (s *Store) Hold(ctx context.Context, ttl time.Duration, who string, waiting
 	}
 	return lost, release, nil
 }
+
+// holdGranted is told when Hold has its lease: a test hangs the store
+// there.
+var holdGranted = func() {}
 
 // fence is the hold's watch (pre-flight I15; re-check R-I4). Every sixth
 // of ttl it reads the lock key, linearizably, and the lease's remaining

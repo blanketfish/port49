@@ -132,10 +132,11 @@ func TestADeletedHoldNeverServesTwo(t *testing.T) {
 	}
 }
 
-// Hold honours its ctx while the store hangs, and with no deadline of its
-// own it gives up on the lease after ttl/3 as the store unavailable, so a
-// start says it is trying again and a SIGTERM stops it (Task 12 review
-// I-2).
+// Hold honours its ctx while the store hangs, before the lease is granted
+// or after, and with no deadline of its own it gives up after ttl/3 as
+// the store unavailable, so a start says it is trying again and a SIGTERM
+// stops it; letting go of the lease it was granted waits at most a second
+// on the hung store, never hold_ttl (Task 12 review I-2; re-review m-6).
 func TestHoldOnAHungStoreReturns(t *testing.T) {
 	srv := etcdtest.Start(t, etcdtest.Options{})
 	proxy := etcdtest.NewProxy(t, strings.TrimPrefix(srv.Endpoint, "http://"))
@@ -144,11 +145,7 @@ func TestHoldOnAHungStoreReturns(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	if err := s.Ping(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	proxy.Hang(true)
-	defer proxy.Hang(false)
+	defer func() { holdGranted = func() {} }()
 	hold := func(ctx context.Context) (time.Duration, error) {
 		start := time.Now()
 		done := make(chan error, 1)
@@ -167,13 +164,36 @@ func TestHoldOnAHungStoreReturns(t *testing.T) {
 			return 0, nil
 		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	if took, err := hold(ctx); err == nil || took > 3*time.Second {
-		t.Fatalf("Hold with a 2s ctx on a hung store: %v after %v", err, took)
-	}
-	if took, err := hold(context.Background()); !errors.Is(err, store.ErrUnavailable) || took > 10*time.Second/3+time.Second {
-		t.Fatalf("Hold with no deadline on a hung store: %v after %v, want unavailable within ttl/3", err, took)
+	const slack = 1500 * time.Millisecond
+	for _, c := range []struct {
+		name  string
+		after bool // the store hangs once the lease is granted
+	}{{"before the grant", false}, {"after the grant", true}} {
+		proxy.Hang(false)
+		if err := s.Ping(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		for _, deadline := range []time.Duration{2 * time.Second, 0} {
+			holdGranted = func() {}
+			if c.after {
+				holdGranted = func() { proxy.Hang(true) }
+			} else {
+				proxy.Hang(true)
+			}
+			ctx, cancel := context.Background(), context.CancelFunc(func() {})
+			if deadline > 0 {
+				ctx, cancel = context.WithTimeout(ctx, deadline)
+			}
+			took, err := hold(ctx)
+			cancel()
+			switch {
+			case deadline > 0 && (err == nil || took > deadline+slack):
+				t.Errorf("%s, with a %v ctx: %v after %v", c.name, deadline, err, took)
+			case deadline == 0 && (!errors.Is(err, store.ErrUnavailable) || took > 10*time.Second/3+slack):
+				t.Errorf("%s, with no deadline: %v after %v, want unavailable within ttl/3", c.name, err, took)
+			}
+			proxy.Hang(false)
+		}
 	}
 }
 
