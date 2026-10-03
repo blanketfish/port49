@@ -124,6 +124,30 @@ func TestProxyForwardsHangsAndCloses(t *testing.T) {
 			t.Fatalf("a hung proxy answered: %v", err)
 		}
 		c.SetReadDeadline(time.Time{})
+		// A drop ends the connection, the chunk held never delivered, and
+		// a new connection is forwarded again.
+		p.Hang(true)
+		if _, err := c.Write([]byte("lost")); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(50 * time.Millisecond)
+		p.Drop()
+		c.SetReadDeadline(time.Now().Add(5 * time.Second))
+		// Ended by a FIN or, with "lost" unread at the proxy, a reset.
+		if got, err := io.ReadAll(c); len(got) != 0 || errors.Is(err, os.ErrDeadlineExceeded) {
+			t.Fatalf("a dropped connection: %q %v", got, err)
+		}
+		c.Close()
+		if c, err = net.Dial("tcp", p.Addr()); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := c.Write([]byte("pong")); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := io.ReadFull(c, buf); err != nil || string(buf) != "pong" {
+			t.Fatalf("forwarded after a drop %q: %v", buf, err)
+		}
+		p.Hang(true)
 	}) // the subtest's cleanup closes the proxy, still hung
 	c.SetReadDeadline(time.Now().Add(5 * time.Second))
 	if _, err := io.ReadAll(c); err != nil {

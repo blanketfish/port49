@@ -846,7 +846,7 @@ func TestRunRestoresRevocationsBeforeTheBrokerServes(t *testing.T) {
 			if err := held.PutRevocation(context.Background(), mark); err != nil {
 				t.Fatal(err)
 			}
-			if err := persister(held, b.RevocationsFile, newMetrics())(context.Background()); err != nil {
+			if err := persister(held, b.RevocationsFile, nil, nil, newMetrics())(context.Background()); err != nil {
 				t.Fatal(err)
 			}
 			addr, stop := start()

@@ -401,6 +401,20 @@ func (p *Proxy) Hang(on bool) {
 	p.cond.Broadcast()
 }
 
+// Drop closes every connection open through the proxy and forwards again:
+// what a member restart looks like to a client, its streams ended, and
+// whatever a hang held back never delivered. New connections are
+// forwarded as before.
+func (p *Proxy) Drop() {
+	p.mu.Lock()
+	for c := range p.conns {
+		c.Close()
+	}
+	p.hung = false
+	p.mu.Unlock()
+	p.cond.Broadcast()
+}
+
 // Delay holds every chunk d before forwarding it.
 func (p *Proxy) Delay(d time.Duration) {
 	p.mu.Lock()

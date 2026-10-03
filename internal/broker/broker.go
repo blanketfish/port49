@@ -530,9 +530,16 @@ func revokedRecord(now time.Time, principal string, cred store.Credential) decis
 // MarkChanged is a mark made or lifted on a broker process, this one
 // included, as the marks feed brings it (plan 7e, Ruling 5): the
 // listener's copy follows, and a mark that stands closes this process's
-// held connections it names, as Revoke closes its own. The daemon's marks
-// (b.Marks) are the feed's own to keep (store.FollowMarks).
+// held connections it names, as Revoke closes its own. A lift a reload
+// found (Reloaded) is said, never silent: it may be a mark an etcd restore
+// lost (final review 7e-1 C-1). The daemon's marks (b.Marks) are the
+// feed's own to keep (store.FollowMarks).
 func (b *Broker) MarkChanged(c store.MarkChange) {
+	if c.Reloaded && !c.Standing {
+		b.say("broker: a reload of the marks found the revocation of %s lifted: lifted on a broker process "+
+			"while the marks feed was down, or lost by an etcd restore; revoke it again unless it was lifted "+
+			"on purpose", printsafe.Line(c.Key, 160))
+	}
 	if b.Conns == nil {
 		return
 	}

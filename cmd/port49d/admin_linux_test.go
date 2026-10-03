@@ -339,7 +339,7 @@ func adminOverBroker(t *testing.T, st store.Store, opTimeout time.Duration) stri
 		t.Fatal(err)
 	}
 	brk.Sessions = session.New(st, time.Now, time.Hour, time.Hour)
-	brk.Persist = persister(st, filepath.Join(safeDir(t), "revocations.json"), m)
+	brk.Persist = persister(st, filepath.Join(safeDir(t), "revocations.json"), nil, nil, m)
 	brk.RevokeTimeout = opTimeout
 	p := filepath.Join(t.TempDir(), "port49d.sock")
 	ln, err := admin.Listen(p)
