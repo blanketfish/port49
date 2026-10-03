@@ -248,7 +248,7 @@ finding "apply the reviewer's fix" (`progress.md`, the Re-check 1 block). One ro
 | # | Done | Where |
 |---|---|---|
 | CA1 | A token's `kind`, `expires_at`, `blob_hash`, `max_session_age`, `enable`, `max_privilege`, `auth_time` and `minted_at` are sealed in `tokenSecret` beside the secret and identity, with additional data = key id + token key + token ID. A token whose plaintext expiry differs from its sealed one is dropped as unopenable. A receipt is sealed with its whole receipt key (device, username, kind, credential hash) as additional data, and its `first_redeemed_at`, which anchors the cap, is sealed too. Every record family the daemon can write is audited in Ruling 17's table: sealed, or why it is safe. Ruling 17, decision 35, design §8, Ruling 10 and §12's store-roles text say what a stolen daemon credential yields. Tests tamper each sealed token field, transplant a token (another key, another ID) and a receipt (another kind), and replay a deleted token. | Ruling 17; Task 4b Steps 1, 4; Task 1 Steps 1, 6; Task 8b Step 4 |
-| IA1 | `crypt.Ledger`: per context key, the `ctx_id` of the last write that landed (or the first read, so a start's reads seed it), plus writes in flight or of unknown outcome. A record that opens under any other `ctx_id` is `UnreadableContextError` wrapping `crypt.ErrNotLastWritten`. One ledger per process, shared by the daemon's and the broker's `Wrap` (`crypt.WithLedger`). The residual, impersonation by a record put back while port49d was stopped, is in Ruling 17, d35 and design §8, and carried. | Ruling 17; Task 4b Steps 1, 4; Task 12 Step 5; Task 13 Step 2; Task 16 |
+| IA1 | `crypt.Ledger`: per context key, the `ctx_id` of the last write that landed (or the first read, so a start's reads seed it), plus writes in flight or of unknown outcome; Task 13b keys it on a write ID sealed into each record instead, so an earlier version of the same context is denied too (Ruling T12-g). A record that opens under any other `ctx_id` is `UnreadableContextError` wrapping `crypt.ErrNotLastWritten`. One ledger per process, shared by the daemon's and the broker's `Wrap` (`crypt.WithLedger`). The residual, impersonation by a record put back while port49d was stopped, is in Ruling 17, d35 and design §8, and carried. | Ruling 17; Task 4b Steps 1, 4; Task 12 Step 5; Task 13 Step 2; Task 16 |
 | IA2 | New Task 7b. `(*etcd.Store).Unindexed` pages the `c/` family keys-only and names each ref whose `x/` record is gone or lists no live principal. `Broker.ReindexContexts` re-indexes each (`session.Manager.Reindex`), judges it against the policy in force, revokes one that will not open, and counts `port49_contexts_reindexed_total`. port49d runs it at start, before the marks are applied, and after every sweep. The residual (a sid revocation, and the refresh, miss it until the next sweep; the marks deny throughout) is stated. | Ruling 6; Ruling 17; Task 7b; Task 12 Steps 5, 7 |
 | N1 | `dispatch` stashes the packet's arrival with the server's context, and `fail` sleeps until arrival + the delay, so store time is inside the delay, not added to it. The worst case is max(`packet_deadline`, delay), 2 s at the defaults; the throttle is unchanged. The residual is dropped. Test: a store spending 250 ms behind a 300 ms delay answers in under 500 ms. | Ruling 9; Task 10 Steps 1, 3; Task 8b Step 1 |
 | R-I2 | `run`'s loop, once `again` is set, retries every error but a parent cancel, every 5 s, the listeners closed, and says it. `runLoop` is factored out and tested with a fake run. | Ruling 11; Task 12 Step 7 |
@@ -259,7 +259,7 @@ finding "apply the reviewer's fix" (`progress.md`, the Re-check 1 block). One ro
 | MA2 | crypt `SetRevokedAt`'s seal retries until the caller's deadline (64 attempts with none), and its error says the revocation is in force and the seal pending. | Task 4b Step 4 |
 | MA3 | The etcd `GetContext` remembers the plaintext bookkeeping of the version it read (bounded); `RewriteContext` with no ttl on that revision commits without reading again. A setter's rewrite is two RPCs. A test reads, moves the record, and rewrites the stale version. | Task 6 Step 4b |
 | MA4 | `TestARevocationOfAnUnopenableContextNeedsNoKey` is labelled a regression guard: it passes before 4b. | Task 4b Step 1 |
-| MA5 | `TestTheSealCoversWhatAuthorizationTrusts` gains a flipped sealed byte and a same-key older ciphertext (the ledger's two cases: another login's, denied; the same `ctx_id`'s, admitted, the residual). The "no ceiling" case writes a plaintext ceiling the seal ignores. | Task 4b Step 1 |
+| MA5 | `TestTheSealCoversWhatAuthorizationTrusts` gains a flipped sealed byte and a same-key older ciphertext (the ledger's two cases: another login's, denied; the same `ctx_id`'s, admitted, the residual, until Task 13b denies it too). The "no ceiling" case writes a plaintext ceiling the seal ignores. | Task 4b Step 1 |
 | R-M0 | `server.Deps.Abort`: when it reports true at shutdown (a store gone), each held connection is reset (linger 0), as L28 measured the fast fall to local. The hung-store e2e holds one connection across the hang and reads a reset. | Task 12 Steps 6, 7 |
 | R-M1 | The mark-at-start e2e asserts `(1 context(s) marked revoked)`. Mutation 1 now fails it. | Task 12 Steps 6, 7 |
 | R-M2 | On a store gone the broker listener `bl` is closed before the line, and `brokerSrv.Close()` follows a `Shutdown` that times out. | Task 12 Step 7 |
@@ -344,11 +344,11 @@ review gate falls.
   M3). It is untouched. A store outage is now loud on stderr and in metrics (Task 9), which
   narrows what M3 costs.
 - **Spec, unassigned, new: replay by a stolen daemon store credential** (Ruling 17's
-  residual, listed there exactly). Within a running port49d it is an earlier version of the
-  context a key holds now (the same `ctx_id`), which undoes a self or key revocation (no mark;
-  decision 34) or a policy narrowing until the next refresh. Across a restart it is
-  impersonation: a context of another login put back while port49d was stopped is taken as the
-  key's at the start. Closing it needs a revocation record the daemon's role cannot write for
+  residual, listed there exactly). Within a running port49d an earlier version of the same
+  context was admitted until Task 13b named each write (Ruling T12-g); now it is denied.
+  Across a restart it is impersonation: a context of another login put back while port49d was
+  stopped is taken as the key's at the start, and an earlier version of the same context
+  undoes a self or key revocation (no mark; decision 34). Closing it needs a revocation record the daemon's role cannot write for
   every kind (a spec change to decision 34) and a sealed freshness counter checked across
   restarts. Task 16 carries it.
 
@@ -736,7 +736,7 @@ I19) and on its re-check (CA1, IA1, IA2, N1, R-I2 to R-I5). The owner may overri
       | `t/` tokens | `id`; a copy of `expires_at` | **Nothing forged:** every trusted field is sealed and bound. **Replay:** a token port49 minted for the same key and ID, deleted since (redeemed, or by a self or key revocation), can be put back and redeemed by a holder of its secret until its sealed expiry (the TTL it was minted with). An extended plaintext expiry drops it. |
       | `r/` receipts | `idle_expires_at`, `retain_until`, `failed`, a copy of `first_redeemed_at` | **`idle_expires_at`** stretches the replay window to the sealed cap (`first_redeemed_at` plus `receipt_max_age`), never past it. **`failed`**, zeroed, replays PASS only onto the live context with the receipt's `ctx_id`, whose own revocation and the marks are read again, the marks for the receipt's own sealed principal and certificate too, and only for a login that context's sealed witness (`Logins`) names and the index still reaches under that credential: what that principal's later token already granted. Every replay needs the credential. |
       | `rp/` receipt index | all | **Deleted:** a revocation by principal misses those receipts, and each replay still reads the live context and the marks, so it is denied. **Added:** a revocation deletes more, which is a denial. |
-      | `c/` contexts | `revoked_at` (a read takes the later), the revisions, `last_touched_at`, accounting's annotations | **Nothing forged or moved.** **Replay in a running port49d** (the ledger): an earlier version of the context the key holds now, which has the same `ctx_id`, so the same principal and login. It undoes a self or key revocation of that context, or a policy narrowing, until the next refresh judges it. **Replay across a restart:** a context of any login port49 sealed for that key, put back while port49d was stopped, or before the start read it, is taken as the key's at the start; once the start seals the ledger, one put back at a key it has not seen is denied, and the ledger is kept across a start after a store gone. That is impersonation, until that record's sealed ceiling (if it has one) or the key's next login; a principal or certificate mark still denies it. **The idle clock:** a context can be kept alive past its idle TTL, to its sealed ceiling if it has one, and indefinitely under `max_session_age: never` (re-check MA1). The refresh still judges it, and every revocation reaches it. **Accounting's annotations:** clearing a context's session discriminators suppresses the `foreign` attribution of its accounting records (re-check 2 M-B2). |
+      | `c/` contexts | `revoked_at` (a read takes the later), the revisions, `last_touched_at`, accounting's annotations | **Nothing forged or moved.** **Replay in a running port49d:** none. The ledger admits only the write it last made at the key, or first read there, so an earlier version of the same context is denied as another login's is (Task 13b; Ruling T12-g). **Replay across a restart:** a context of any login port49 sealed for that key, or an earlier version of the same context, which undoes a self or key revocation, put back while port49d was stopped, or before the start read it, is taken as the key's at the start; once the start seals the ledger, one put back at a key it has not seen is denied, and the ledger is kept across a start after a store gone. That is impersonation, until that record's sealed ceiling (if it has one) or the key's next login; a principal or certificate mark still denies it. **The idle clock:** a context can be kept alive past its idle TTL, to its sealed ceiling if it has one, and indefinitely under `max_session_age: never` (re-check MA1). The refresh still judges it, and every revocation reaches it. **Accounting's annotations:** clearing a context's session discriminators suppresses the `foreign` attribution of its accounting records (re-check 2 M-B2). |
       | `x/` index records; `ip/`, `is/`, `ic/` lookups | all | **Deleted, or rewritten to name another principal or another sid, or a lookup entry deleted:** the context is hidden from the refresh, `revoke --mine` and a revocation by sid until the re-index finds it, at the start and after each sweep (`sweep_interval`, 10 m; Ruling 6), by comparing the keys listed, each with its lookup entry in place, against the context's own sealed principal, sid and certificate. A revocation by sid in that window never reaches it; one by principal or certificate does, through the marks. **Added:** a revocation reaches a context it should not, which is a denial. |
       | `b/` blobs | all (no identity) | **Nothing:** a blob is checked against its sealed hash (`engine.Decode`), so an altered body is refused, which is a denial. |
       | `rv/` marks, `meta/` | read-only for the daemon | Nothing, under the daemon's role (Task 11), which is what makes "cannot lift a revocation by principal or certificate" true. Before that role a daemon credential holds the whole keyspace, marks included. |
@@ -13081,6 +13081,30 @@ an operator can act on, and the start a check.
 
 ---
 
+### Task 13b: The ledger names each write, so an earlier version of the same context is denied
+
+Added by the controller (Ruling T12-g; Ryan, 2026-10-03). The Task 12 re-review measured a
+put-back of an earlier version of the same context admitted at runtime: the ledger keyed on
+`ctx_id`, which a join, a refresh and a revocation keep ("Context-ID rollback",
+`task-12-rereview.md`).
+
+- `contextSecret` gains `write_id`, 16 random bytes in hex, drawn fresh by `sealContext` on
+  every seal; `contextSealVersion` is 3, and a form-2 record does not open (it is replaced at
+  its next login). The ledger compares the write ID where it compared the `ctx_id`. It never
+  leaves the sealing layer.
+- Every context write goes through a sealing layer `openStores` builds (one on memory, the
+  daemon's and the broker's on etcd), all on the process's one ledger.
+- Tests: `TestTheLedgerDeniesAnEarlierVersionOfTheSameContext` (a join, a self revocation, a
+  refresh), `TestTheLedgerAdmitsTheSameContextsWritesInFlightOrUnknown`,
+  `TestAContextOfFormTwoDoesNotOpen`; `TestTheLedgerDeniesAnotherLoginsContext` flipped; the
+  hung-store e2e (Task 12) puts back the earlier login's record without deleting it first.
+- Docs: spec d35's ledger and replay bullets, the roles bullet and the tests clause; design §8
+  and §12 (a restore under a running port49d); the operator notes. The text Task 1, Task 4b and
+  Task 11 wrote and quoted above ("an earlier version of the same context is not") is
+  superseded here.
+
+---
+
 ### Task 14: The agent's one connection: every send takes its turn, and a call behind a revocation says so
 
 **Files:**
@@ -14096,6 +14120,8 @@ measurement on a hang of its own, the store returned between them. On each image
 - **A context written back over another login's is denied.** port49d remembers the `ctx_id`
   it last wrote at each device and username; a different one there is `store_unavailable`,
   counted as `port49_crypt_open_failures_total{record="context"}`, until the next login.
+  (7d-2, Task 13b: it remembers the write, so an earlier version of the same session is
+  denied too.)
 - `port49_store_operations_total{op}` no longer counts `index_context`, `unindex_context` or
   `unindex_ref` on the login path. Those are now part of `join_context`.
 
@@ -14127,10 +14153,11 @@ measurement on a hang of its own, the store returned between them. On each image
     never two port49d on one keyspace. A cross-site etcd raises `call_timeout`,
     `packet_deadline` and `hold_ttl` together.
 - **Who may write etcd.** The daemon's client certificate can write tokens, receipts, contexts
-  and the index. With it alone, a thief can replay records port49 sealed, never forge them:
-  while port49d runs, an earlier version of a session's own context; across a port49d
-  restart, another login's context put back while port49d was stopped (impersonation until
-  that session's ceiling or its device's next login). Protect the daemon's key like the
+  and the index. With it alone, a thief can replay records port49 sealed, never forge them.
+  While port49d runs, a session record put back is denied, an earlier version of the same
+  session included. Across a port49d restart, a record put back while port49d was stopped is
+  taken: another login's (impersonation until that session's ceiling or its device's next
+  login), or an earlier version of the session's own, which undoes a `revoke --mine`. Protect the daemon's key like the
   encryption key. After a suspected theft, have etcd stop trusting that certificate (a new
   CN, granted the daemon's role, and the old user deleted) before port49d next restarts.
 - **Backups.**
@@ -14141,6 +14168,10 @@ measurement on a hang of its own, the store returned between them. On each image
     certificate revocation is denied again at once, by the marks. One ended by `port49 revoke
     --mine`, or by `(device, username)`, is live again until its idle TTL: revoke it again after
     a restore.
+  - **Restored under a running port49d**, every session written since the snapshot is denied
+    `store_unavailable` until its next login (port49d sees the rollback as records put back),
+    and the next refresh revokes it. Restarting port49d before that refresh admits them again.
+    Restore with port49d stopped and this does not arise.
   - **A restore rolls the marks back too:** a revocation added since the snapshot is gone from
     etcd, and one lifted since is back. Restore with port49d stopped. Its start puts the
     revocations file's marks back into etcd, applies every mark to the restored sessions, and
@@ -14206,7 +14237,8 @@ measurement on a hang of its own, the store returned between them. On each image
   - any increase of `port49_contexts_reindexed_total`: an index record was deleted in etcd, and
     the context it hid has been re-indexed (each sweep, `sweep_interval`);
   - any increase of `port49_crypt_open_failures_total{record="context"}` with the key held: a
-    record altered in etcd, or another login's written back;
+    record altered in etcd, or another login's, or an earlier version of a session, written
+    back;
   - `port49_store_keyspace_held` 0 while port49d runs;
   - a client certificate within 30 days of expiry;
   - `port49_crypt_store_key_unknown` 1;
@@ -14219,8 +14251,8 @@ measurement on a hang of its own, the store returned between them. On each image
   are denied `store_unavailable`, and the re-index and the refresh say each by device and
   username, count it (`port49_contexts_reindex_failures_total`, the refresh's `failed`) and
   leave it; `port49_policy_refresh_pending` stays 1. Fix the key and restart, and those
-  sessions answer again. A record that fails authentication, or is another login's written
-  back, is tampered and is still revoked.
+  sessions answer again. A record that fails authentication, or is another login's or an earlier
+  version of the session written back, is tampered and is still revoked.
 - **A session record that does not decode** (a `c/` value garbled in etcd) is unreadable, as
   one that will not open is: the next login on that device and username replaces it, and the
   refresh and the re-index delete it at the revision they read, since nothing can revoke or

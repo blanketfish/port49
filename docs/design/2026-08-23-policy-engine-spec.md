@@ -5761,9 +5761,9 @@ port49's two etcd roles and grant them, for the keyspace `store.etcd.prefix` nam
 - **The users.** A user per component, named by the CN of the certificate `store.etcd.daemon`
   and `store.etcd.broker` name, granted its role.
 - **What a stolen daemon key yields under these roles:** decision 35's residual, replay of
-  records it cannot forge. While port49d runs that is an earlier version of a key's own
-  context, a deleted token for a holder of its secret, or a receipt's sliding bound; across a
-  restart, another login's context put back while port49d was stopped (impersonation). It can
+  records it cannot forge. While port49d runs that is a deleted token for a holder of its
+  secret, or a receipt's sliding bound; across a restart, a context put back while port49d was
+  stopped: another login's (impersonation), or an earlier version of its own. It can
   also hide a context from the index until the next sweep re-indexes it, and deny by deleting.
   It cannot write a revocation mark, so it cannot lift a revocation by principal or
   certificate: this role is what makes that true, since a credential holding the whole
@@ -6565,10 +6565,12 @@ review (the owner may override them).*
   - **Migration.** A token, receipt or context sealed before this does not open: a token is
     dropped, a context is denied and replaced at the next login. The memory store loses every
     record at the restart that installs it, and etcd holds none before plan 7d.
-- **The ledger.** port49d keeps, per context key, the `ctx_id` it last wrote there or first
-  read there. A context that opens at a key under another `ctx_id` (another login's record
-  written back) is denied `store_unavailable`, replaced by the next login and revoked by the
-  refresh.
+- **The ledger.** port49d keeps, per context key, the write it last made there or first read
+  there, named by a write ID sealed into each record and drawn fresh on every write (Ruling
+  T12-g). A context that opens at a key under another write (another login's record, or an
+  earlier version of the same context, written back) is denied `store_unavailable`, replaced
+  by the next login and revoked by the refresh. A record sealed before the write ID (form 2)
+  does not open, and is replaced the same way.
   - **One per process.** One ledger is shared by every sealing layer, so the daemon's reads
     and the broker's agree.
   - **Sealed after the start's reads.** A start reads every kept context before any listener
@@ -6594,15 +6596,18 @@ review (the owner may override them).*
   `store.etcd.roles: unenforced` the daemon's is too.
   Deleting a record, or making a write conflict, is a denial, except that a write conflict
   on a policy refresh postpones its judgement. What it can do is replay:
-  - **a context** port49 sealed earlier for the same key. While port49d runs, the ledger
-    admits only an earlier version of the context the key holds now (the same `ctx_id`, so
-    the same principal), which undoes a self or key revocation of it (no mark; decision 34)
-    or a policy narrowing until the next refresh judges it, which a writer rewriting the
-    context can postpone (`port49_policy_refresh_pending` stays 1). **Across a restart it is
-    impersonation:** the ledger admits the first record read at a key it has not seen until
-    the start's reads seal it, so another login's context put back while port49d was stopped,
-    or before the start read it, is taken as that key's, until its sealed ceiling, if it has
-    one, or the key's next login. A principal or certificate mark still denies it;
+  - **a context** port49 sealed earlier for the same key, but only across a restart. While
+    port49d runs, the ledger admits only the write it last made at a key, or first read
+    there, so an earlier version of the same context is denied as another login's is, and
+    cannot undo a self or key revocation (no mark; decision 34) or a policy narrowing. That
+    holds across a start after a store gone too, since that start keeps the ledger. **Across
+    a restart it is impersonation:** the ledger admits the first record read at a key it has
+    not seen until the start's reads seal it, so a record put back while port49d was stopped,
+    or before the start's first read of its key, is taken as that key's: another login's
+    context, until its sealed ceiling, if it has one, or the key's next login, or an earlier
+    version of the same context, which undoes a revocation that leaves no mark (the start's
+    refresh judges it against the policy in force). A principal or certificate mark still
+    denies it;
   - **a token** port49 minted for the same key and ID, deleted since, which a holder of its
     secret can redeem until its sealed expiry;
   - **a receipt's sliding bound**, up to its sealed cap, or its refusal flag, which replays
@@ -7271,9 +7276,9 @@ Beyond those already listed in the design document's §14:
   does not open. A token whose trusted fields are raised in the store reads back as minted,
   one moved to another key or ID or whose expiry is extended is dropped, and a login receipt
   copied to the enable key does not open.
-- **The ledger**: another login's context written back at a key is denied; an earlier
-  version of the same context is not (the residual). Once sealed, the ledger denies a context
-  at a key it has not seen.
+- **The ledger**: another login's context written back at a key is denied, and so is an
+  earlier version of the same context, put back after a later write (a join, a refresh, a
+  revocation) landed. Once sealed, the ledger denies a context at a key it has not seen.
 - **The index lost**: a context whose index record is deleted, or rewritten to name another
   principal or another sid, or whose lookup entry is deleted, is found, re-indexed and judged
   against the policy in force, and a revocation by principal or sid reaches it again. An index record that does not decode is skipped, logged and
