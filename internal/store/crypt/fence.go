@@ -23,18 +23,22 @@ var ErrFeedBehind = fmt.Errorf("%w: this process's context feed has not delivere
 // With no feed attached (memory, a fixture, the offline revocation) every
 // revision passes. It is safe for concurrent use.
 type Fence struct {
-	mu   sync.Mutex
-	on   bool
-	at   uint64
-	up   bool
-	wake chan struct{}
-	asks chan struct{}
+	mu      sync.Mutex
+	on      bool
+	at      uint64
+	up      bool
+	waiting int // reads in Wait behind the feed
+	wake    chan struct{}
+	asks    chan struct{}
 }
 
 func newFence() *Fence { return &Fence{wake: make(chan struct{}), asks: make(chan struct{}, 1)} }
 
 // Attach is a feed following the store from at: from now on a read waits
-// for it. It only raises.
+// for it. It only raises, so after an etcd restore without
+// --bump-revision, when revisions repeat, a record below the old mark
+// passes unwaited (re-check R3's family); the runbook's restart of every
+// process, which builds a new fence, clears it as it clears R3.
 func (f *Fence) Attach(at uint64) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -67,16 +71,43 @@ func (f *Fence) At() uint64 { f.mu.Lock(); defer f.mu.Unlock(); return f.at }
 // Asks is where a waiting read asks the feed for a progress notification.
 func (f *Fence) Asks() <-chan struct{} { return f.asks }
 
+// askAgain asks once more for any read still waiting, before a watch
+// starts: an ask the last watch took and failed before answering is lost
+// with it, and Wait asks again only on a wake (review 8a M-4).
+func (f *Fence) askAgain() {
+	f.mu.Lock()
+	waiting := f.waiting > 0
+	f.mu.Unlock()
+	if waiting {
+		select {
+		case f.asks <- struct{}{}:
+		default: // an ask is already pending
+		}
+	}
+}
+
 // Wait returns once the feed has delivered every change through rev, or at
 // once with no feed attached. While it is behind, it asks the feed for its
 // progress, again after each wake that leaves it behind, and returns
 // ErrFeedBehind when ctx ends first. ctx carries the guard's call deadline.
 func (f *Fence) Wait(ctx context.Context, rev uint64) error {
+	counted := false
+	defer func() {
+		if counted {
+			f.mu.Lock()
+			f.waiting--
+			f.mu.Unlock()
+		}
+	}()
 	for {
 		f.mu.Lock()
 		if !f.on || f.at >= rev {
 			f.mu.Unlock()
 			return nil
+		}
+		if !counted {
+			f.waiting++
+			counted = true
 		}
 		wake, at := f.wake, f.at
 		f.mu.Unlock()

@@ -205,3 +205,66 @@ func TestAFeedThatNeverArrivesIsCountedByTheGuard(t *testing.T) {
 		t.Fatalf("the guard counted %v timeouts", n)
 	}
 }
+
+// A fence no feed is attached to holds nothing: memory, a fixture and the
+// offline revocation read at once, even with ctx already ended.
+func TestAFenceWithNoFeedAttachedNeverWaits(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := newFence().Wait(ctx, 99); err != nil {
+		t.Fatalf("a wait with no feed attached: %v", err)
+	}
+}
+
+// A process reads its own landed write without waiting for its feed: the
+// login's next packet on the same process is neither slowed nor, with the
+// feed down, denied.
+func TestAProcesssOwnWriteIsReadWithoutWaitingForTheFeed(t *testing.T) {
+	_, _, b, _ := fencedPair(t)
+	login(t, b, "ctx-alice", "user:alice")
+	ctx, cancel := within(100 * time.Millisecond)
+	defer cancel()
+	if c, err := b.GetContext(ctx, ka); err != nil || c.CtxID != "ctx-alice" {
+		t.Fatalf("b's read of its own write with its feed delivering nothing: %v %v", c.CtxID, err)
+	}
+}
+
+// A watch that takes a read's ask and fails before answering it loses
+// the ask; the next watch is asked again, so the read is let through
+// rather than waiting out its deadline (review 8a M-4).
+func TestAnAskAFailedWatchTookIsAskedAgain(t *testing.T) {
+	inner, a, b, lb := fencedPair(t)
+	login(t, a, "ctx-alice", "user:alice")
+	feed := &losingFeed{answeringFeed: answeringFeed{now: inner.Seen}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go FollowContexts(ctx, feed, nil, keys(), lb, inner.Seen(), func(bool) {}, func() {}, t.Logf)
+	rctx, rcancel := within(3 * time.Second)
+	defer rcancel()
+	if _, err := b.GetContext(rctx, ka); err != nil {
+		t.Fatalf("a read whose ask the first watch lost: %v", err)
+	}
+	if feed.watches.Load() < 2 {
+		t.Fatalf("let through by %d watch(es)", feed.watches.Load())
+	}
+}
+
+// losingFeed's first watch takes one ask and fails without answering it;
+// every later watch is an answeringFeed's.
+type losingFeed struct {
+	answeringFeed
+	watches atomic.Int32
+}
+
+func (f *losingFeed) WatchContexts(ctx context.Context, after uint64, fn func(store.ContextChange),
+	progress func(uint64), asks <-chan struct{}) error {
+	if f.watches.Add(1) == 1 {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-asks:
+			return store.ErrUnavailable
+		}
+	}
+	return f.answeringFeed.WatchContexts(ctx, after, fn, progress, asks)
+}

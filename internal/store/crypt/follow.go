@@ -106,7 +106,8 @@ func rescan(ctx context.Context, feed store.ContextFeed, src store.LedgerSource,
 //
 // It moves l's fence (Fenced): each revision the watch has delivered
 // through, and each rescan's revision once its marks are in; a waiting
-// read's ask goes to the watch as a progress request.
+// read's ask goes to the watch as a progress request, and is made again
+// for each new watch while the read still waits.
 //
 // A change the feed brings again, after a re-watch or a rescan, is below
 // or at the mark it raised: Observe never lowers a mark, and takes a
@@ -118,6 +119,7 @@ func FollowContexts(ctx context.Context, feed store.ContextFeed, src store.Ledge
 	for {
 		up(true)
 		l.Fence().SetUp(true)
+		l.Fence().askAgain()
 		err := feed.WatchContexts(ctx, from, func(c store.ContextChange) {
 			if c.Rev > from {
 				from = c.Rev
