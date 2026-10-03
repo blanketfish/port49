@@ -931,3 +931,82 @@ func TestAMarkFromTheFeedClosesOnlyWhatItNames(t *testing.T) {
 	(&Broker{}).MarkChanged(store.MarkChange{Revocation: store.Revocation{Kind: store.RevocationPrincipal,
 		Key: "user:alice@example.com", At: time.Now()}, Standing: true})
 }
+
+// replayFeed is a store's marks history: a watch after `after` delivers
+// every change past it, then runs until ctx ends or the test fails it.
+// Each watch's after is sent on afters once those changes are delivered.
+type replayFeed struct {
+	history []replayed
+	fail    chan error
+	afters  chan uint64
+}
+
+type replayed struct {
+	r      store.Revocation
+	lifted bool
+	rev    uint64
+}
+
+func (f *replayFeed) Revocations(context.Context) (uint64, []store.Revocation, error) {
+	return 7, nil, nil
+}
+
+func (f *replayFeed) WatchRevocations(ctx context.Context, after uint64,
+	fn func(store.Revocation, bool, uint64)) error {
+	for _, e := range f.history {
+		if e.rev > after {
+			fn(e.r, e.lifted, e.rev)
+		}
+	}
+	f.afters <- after
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case err := <-f.fail:
+		return err
+	}
+}
+
+// A mark at 8 and its lift at 9, then alice binds again: a watch that
+// fails and is watched again resumes past the lift, so the put at 8 is
+// never brought again to stand the mark and close her fresh connection
+// (Ruling T9-a).
+func TestARewatchNeverClosesAConnectionALiftLetIn(t *testing.T) {
+	f := newFixture(t, 8)
+	addr, bl := serveThrough(t, f, DefaultListenerLimits, nil)
+	f.b.Conns = bl
+	l := &heldListener{f: f, addr: addr, bl: bl}
+	alice := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:alice@example.com", At: time.Now()}
+	feed := &replayFeed{history: []replayed{{r: alice, rev: 8},
+		{r: store.Revocation{Kind: alice.Kind, Key: alice.Key}, lifted: true, rev: 9}},
+		fail: make(chan error), afters: make(chan uint64, 2)}
+	marks := store.NewMarks()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go store.FollowMarks(ctx, feed, marks, 7, f.b.MarkChanged, func(bool) {}, func() {}, t.Logf)
+	after := func() uint64 {
+		select {
+		case a := <-feed.afters:
+			return a
+		case <-time.After(5 * time.Second):
+			t.Fatal("no watch")
+			return 0
+		}
+	}
+	if a := after(); a != 7 {
+		t.Fatalf("the first watch is after %d", a)
+	}
+	conn, br := held(t, f, addr, l.cert(t, alice.Key)) // a fresh login once the lift is in
+	feed.fail <- fmt.Errorf("%w: the watch ended", store.ErrUnavailable)
+	again := after()
+	if closedWithin(conn, 500*time.Millisecond) {
+		t.Fatalf("a re-watch after %d closed a connection the lift let in", again)
+	}
+	if again != 9 {
+		t.Fatalf("the watch again is after %d, want 9", again)
+	}
+	ask(t, conn, br)
+	if marks.Holds(alice.Kind, alice.Key) {
+		t.Fatal("the re-watch stood the lifted mark again")
+	}
+}
