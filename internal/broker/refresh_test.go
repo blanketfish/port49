@@ -1595,6 +1595,44 @@ func TestRefreshAtStartTellsWhatItLeft(t *testing.T) {
 	}
 }
 
+// A context still changing outranks one under an unheld key, whichever
+// the pass met first: the start opens either way, but only the busy one
+// owes a pass at once (Ruling T12-d), and the unheld one must not hide it.
+// alice2 sorts before alice, so each order is one case.
+func TestRefreshAtStartPutsBusyOverUnheld(t *testing.T) {
+	k1, k2 := testKeys("k1"), testKeys("k2")
+	seal := func(t *testing.T, f *fixture, keys crypt.Keys, principal, device string) {
+		t.Helper()
+		ctx := context.Background()
+		k := store.ContextKey{NAS: device, Username: "alice"}
+		if err := crypt.Wrap(f.st, keys, nil).PutContext(ctx, k, store.Context{CtxID: "ctx_" + device,
+			Principal: principal, Username: "alice", PrivLvl: 1, AuthTime: f.now, RefreshedAt: f.now,
+			BlobHash: "sha256:from-before"}, time.Hour); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.st.IndexContext(ctx, principal, "", "", store.ContextRef{NAS: device, Username: "alice"},
+			time.Hour); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, c := range []struct{ name, busy, unheld string }{
+		{"busy met first", alice2, alicePrincipal},
+		{"unheld met first", alicePrincipal, alice2},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFixtureWithPolicy(t, 8, sharedPolicy)
+			seal(t, f, k2, c.busy, "nx1")
+			seal(t, f, k1, c.unheld, "leaf1")
+			f.b.Store = conflictingPolicyStore{crypt.Wrap(f.st, k2, nil)}
+			_, err := f.b.RefreshAtStart(context.Background())
+			if !errors.Is(err, store.ErrConflict) || errors.Is(err, ErrLeftUnderUnheldKey) ||
+				errors.Is(err, ErrPrincipalUnvisited) {
+				t.Fatalf("RefreshAtStart = %v, want a busy context's ErrConflict", err)
+			}
+		})
+	}
+}
+
 // A start applies every standing mark to the contexts a persistent store
 // kept, before any listener binds: a mark added to the revocations file
 // with port49d stopped, or a revocation whose passes an outage cut short,
