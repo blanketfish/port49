@@ -491,6 +491,10 @@ func TestAMarkFromAnotherBrokerProcessReachesThisOne(t *testing.T) {
 	if _, err := conn.Read(make([]byte, 1)); err == nil || errors.Is(err, os.ErrDeadlineExceeded) {
 		t.Fatalf("alice's held broker connection was not closed: %v", err)
 	}
+	// Said on port49d's own log, with its other lines (Ruling T9-c), and
+	// counted in force.
+	waitFor(t, &out, "broker: a revocation of "+principal+" made on a broker process closed ")
+	waitInForce(t, &out, "principal", 1)
 	if dev.permits("alice", "configure") {
 		t.Fatal("a command under a mark the feed brought was permitted")
 	}
@@ -507,6 +511,7 @@ func TestAMarkFromAnotherBrokerProcessReachesThisOne(t *testing.T) {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
+	waitInForce(t, &out, "principal", 0)
 	if err := stop(); err != nil {
 		t.Fatal(err)
 	}
@@ -555,4 +560,31 @@ func heldBrokerConn(t *testing.T, pkiDir, addr string) *tls.Conn {
 	_, _ = io.Copy(io.Discard, resp.Body)
 	resp.Body.Close()
 	return c
+}
+
+// waitInForce waits up to 10s for the newest run's
+// port49_revocations_in_force{by} to read n.
+func waitInForce(t *testing.T, out *syncBuffer, by string, n int) {
+	t.Helper()
+	ms := regexp.MustCompile(`port49d: metrics on (127\.0\.0\.1:\d+)`).FindAllStringSubmatch(out.String(), -1)
+	if len(ms) == 0 {
+		t.Fatalf("the metrics address is not said: %s", out.String())
+	}
+	want := regexp.MustCompile(fmt.Sprintf(`(?m)^port49_revocations_in_force\{by="%s"\} %d$`, by, n))
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		scraped, err := http.Get("http://" + ms[len(ms)-1][1] + "/metrics")
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(scraped.Body)
+		scraped.Body.Close()
+		if want.Match(body) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("port49_revocations_in_force{by=%q} is not %d:\n%s", by, n, body)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }

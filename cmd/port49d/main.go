@@ -839,6 +839,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 			return fmt.Errorf("broker.revocations_file %s: %w", cfg.Broker.RevocationsFile, err)
 		}
 		brk.Persist = persister(brk.Store, cfg.Broker.RevocationsFile, m)
+		brk.Say = func(format string, args ...any) { fmt.Fprintf(stderr, "port49d: "+format+"\n", args...) }
 		fmt.Fprintf(stderr, "port49d: broker: %d revocation(s) in force from %s\n", len(marks),
 			cfg.Broker.RevocationsFile)
 	}
@@ -1080,7 +1081,12 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		marksDone := make(chan struct{})
 		go func() {
 			defer close(marksDone)
-			store.FollowMarks(mctx, sts.etcd, authMarks, markRev, brk.MarkChanged,
+			// Every change is counted in force (Ruling T9-c), the daemon's
+			// marks being every mark this process holds.
+			store.FollowMarks(mctx, sts.etcd, authMarks, markRev, func(c store.MarkChange) {
+				brk.MarkChanged(c)
+				countRevocations(authMarks.All(), m)
+			},
 				func(up bool) {
 					v := 0.0
 					if up {

@@ -95,6 +95,10 @@ type Broker struct {
 	// Persist writes the marks in force to broker.revocations_file after
 	// every change. Nil keeps them in the store alone.
 	Persist func(context.Context) error
+	// Say writes a line where port49d writes its own (its stderr), redacted
+	// as logf redacts. Nil is the process log (logf). Only MarkChanged's
+	// line goes through it (Ruling T9-c).
+	Say func(format string, args ...any)
 
 	// RevokeTimeout bounds a revocation's or lift's steps once it holds
 	// revokeSem, which run detached from the caller (Revoke). Zero is
@@ -537,7 +541,7 @@ func (b *Broker) MarkChanged(c store.MarkChange) {
 		return
 	}
 	if n := b.Conns.CloseHeld(matchMark(c.Revocation)); n > 0 {
-		b.logf("broker: a revocation of %s made on a broker process closed %d held connection(s) here",
+		b.say("broker: a revocation of %s made on a broker process closed %d held connection(s) here",
 			printsafe.Line(c.Key, 160), n)
 	}
 }
@@ -1001,6 +1005,19 @@ func (b *Broker) logf(format string, args ...any) {
 		redact = b.Policy.Load().Redactions()
 	}
 	log.Print(platform.RedactQuoted(redact, fmt.Sprintf(format, args...)))
+}
+
+// say is logf to Say when it is set.
+func (b *Broker) say(format string, args ...any) {
+	if b.Say == nil {
+		b.logf(format, args...)
+		return
+	}
+	redact := platform.AllRedactions()
+	if b.Policy != nil {
+		redact = b.Policy.Load().Redactions()
+	}
+	b.Say("%s", platform.RedactQuoted(redact, fmt.Sprintf(format, args...)))
 }
 
 // emit writes a refusal the broker decided itself, and counts it.
