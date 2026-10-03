@@ -3058,6 +3058,10 @@ plan's text, task by task:
     - An undecodable `lw/` key names its remedy (M-4).
 
 **Interfaces 7e-1 changed, for 7e-2's tasks:**
+- `store.FollowMarks(ctx, feed, m, from, on, up, rescanned func() error, logf)`: a `rescanned`
+  that fails refuses the reload, and is a failed watch tried again in a second (re-review 1
+  C-2). port49d's hook puts back the revocations file's marks, and a reload without them would
+  lift each for good.
 - `store.MarkFeed.WatchRevocations(ctx, after, fn func(r Revocation, lifted bool, rev uint64),
   progress func(rev uint64))`. Both etcd watches ask for progress notifications, and
   `FollowMarks` and `crypt.FollowContexts` resume a re-watch from the last progress as well as
@@ -3125,6 +3129,14 @@ plan's text, task by task:
     port49 revoke --lift`. A mark this port49d lifted, or saw lifted, is not put back. A lift
     made on another port49d while this one's marks feed was down cannot be told from a loss,
     and is put back: lift it again.
+  - A put-back that fails (the broker's circuit open through the restore) reloads nothing: the
+    marks feed is down, `port49_store_feed_up{feed="marks"}` 0, and the line says `the marks
+    feed stopped (broker: putting broker.revocations_file …'s marks back into the store before
+    the marks reload: …; the marks are not reloaded until they are back)`. It is tried again
+    every second.
+- **A port49d restarted soon after a lift made on another port49d may put that mark back**,
+  fleet-wide: its revocations file lags lifts made elsewhere. `port49 revoke --lift` it again.
+  7e-2 retires the file on etcd (Ruling 12), and this note with it.
   - A mark the reload lifts (one not in this port49d's file) is said by its key: `broker: a
     reload of the marks found the revocation of … lifted: lifted on a broker process while the
     marks feed was down, or lost by an etcd restore; revoke it again unless it was lifted on
