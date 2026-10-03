@@ -17,12 +17,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/engine"
+	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/token"
 )
@@ -869,4 +872,65 @@ func TestASessionRefreshWritesEachBlobOnce(t *testing.T) {
 	if blobs, _ := blobLines(t, f.log.String()); len(blobs) != 1 || blobs[c1.BlobHash] != 1 {
 		t.Fatalf("blob records %v, the contexts name %s:\n%s", blobs, c1.BlobHash, f.log)
 	}
+}
+
+// SupersededFor outlives every idempotency record a replay could read.
+func TestSupersededOutlivesTheLongestToken(t *testing.T) {
+	if store.SupersededFor <= policy.MaxTokenTTL {
+		t.Fatalf("SupersededFor %v is not past the longest token_ttl %v", store.SupersededFor, policy.MaxTokenTTL)
+	}
+}
+
+// second is another *Broker on f's store, policy, log and sessions, with a
+// minter of its own: a second broker process on one keyspace. Built field
+// by field, since a Broker holds a mutex and is never copied.
+func second(f *fixture) *Broker {
+	return &Broker{Policy: f.b.Policy, Store: f.st, Log: f.b.Log, Now: f.b.Now,
+		Minter:  token.NewMinter(f.st, f.b.Log, rand.Reader, token.TagKey([]byte("k")), f.b.Now, 8),
+		Metrics: metrics.New(prometheus.NewRegistry()), MaxSessionAge: f.b.MaxSessionAge,
+		BatchMax: f.b.BatchMax, Sessions: f.b.Sessions, ContextIdleTTL: f.b.ContextIdleTTL}
+}
+
+// postTo is f.post through b's handler.
+func postTo(f *fixture, b *Broker, body, key string) *httptest.ResponseRecorder {
+	r := httptest.NewRequest("POST", "/v1/tokens", strings.NewReader(body))
+	r.TLS = f.state(f.alice)
+	if key != "" {
+		r.Header.Set("Idempotency-Key", key)
+	}
+	w := httptest.NewRecorder()
+	b.Handler().ServeHTTP(w, r)
+	return w
+}
+
+// A key superseded on one broker process makes an idempotent replay on
+// another mint afresh: the instant is in the store (plan 7e, Ruling 9).
+func TestASupersededKeyReplaysAfreshOnAnotherBroker(t *testing.T) {
+	f := newFixture(t, 8)
+	other := second(f)
+	body := `{"devices":["leaf1"]}`
+	first := postTo(f, f.b, body, "k1").Body.String()
+	f.b.supersede(context.Background(), store.TokenKey{NAS: "leaf1", Username: "alice"}, f.b.Now())
+	f.advance(time.Second)
+	again := postTo(f, other, body, "k1").Body.String()
+	if again == first {
+		t.Fatal("another broker answered a superseded key's replay with the deleted token")
+	}
+}
+
+// A store that fails the read of the superseded instant refuses the item
+// store_unavailable rather than risk handing back a deleted token.
+func TestAnUnreadableSupersededInstantRefusesTheItem(t *testing.T) {
+	f := newFixture(t, 8)
+	f.b.Store = &failSuperseded{Store: f.st}
+	rr := f.post(context.Background(), f.state(f.alice), `{"devices":["leaf1"]}`, "k2")
+	if !strings.Contains(rr.Body.String(), `"store_unavailable"`) {
+		t.Fatalf("%d %s", rr.Code, rr.Body)
+	}
+}
+
+type failSuperseded struct{ store.Store }
+
+func (f *failSuperseded) SupersededAt(context.Context, store.TokenKey) (time.Time, error) {
+	return time.Time{}, store.ErrUnavailable
 }

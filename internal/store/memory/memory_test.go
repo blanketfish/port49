@@ -46,12 +46,17 @@ func TestSweepDropsExpiredKeys(t *testing.T) {
 
 		s.tokensByPrincipal["user:u"+string(rune(i))] = map[store.TokenKey]time.Time{tk: exp}
 		s.tokensByCert["cert"+string(rune(i))] = map[store.TokenKey]time.Time{tk: exp}
+		if s.superseded == nil {
+			s.superseded = map[store.TokenKey]supersededEntry{}
+		}
+		s.superseded[tk] = supersededEntry{at: now, until: exp}
 	}
+	s.supersededAll = supersededEntry{at: now, until: now.Add(time.Second)}
 
 	// Verify entries exist
 	if len(s.tokens) != 3 || len(s.receipts) != 3 || len(s.contexts) != 3 || len(s.receiptsByPrincipal) != 3 ||
 		len(s.blobs) != 3 || len(s.idem) != 3 || len(s.byPrincipal) != 3 || len(s.bySid) != 3 || len(s.byCert) != 3 ||
-		len(s.tokensByPrincipal) != 3 || len(s.tokensByCert) != 3 {
+		len(s.tokensByPrincipal) != 3 || len(s.tokensByCert) != 3 || len(s.superseded) != 3 {
 		t.Fatalf("setup failed: tokens=%d receipts=%d contexts=%d index=%d blobs=%d idem=%d byPrincipal=%d bySid=%d byCert=%d tokensByPrincipal=%d tokensByCert=%d",
 			len(s.tokens), len(s.receipts), len(s.contexts), len(s.receiptsByPrincipal),
 			len(s.blobs), len(s.idem), len(s.byPrincipal), len(s.bySid), len(s.byCert),
@@ -70,10 +75,11 @@ func TestSweepDropsExpiredKeys(t *testing.T) {
 	// as the records: a daemon that sweeps records but keeps their index
 	// entries grows one map entry per login for as long as it runs. Same for
 	// the blob, idempotency, and context-index maps Task 3 added, and the
-	// token indexes of plan 7a.
+	// token indexes of plan 7a, and the superseded instants of plan 7e.
 	if len(s.tokens) != 0 || len(s.receipts) != 0 || len(s.contexts) != 0 || len(s.receiptsByPrincipal) != 0 ||
 		len(s.blobs) != 0 || len(s.idem) != 0 || len(s.byPrincipal) != 0 || len(s.bySid) != 0 || len(s.byCert) != 0 ||
-		len(s.tokensByPrincipal) != 0 || len(s.tokensByCert) != 0 {
+		len(s.tokensByPrincipal) != 0 || len(s.tokensByCert) != 0 || len(s.superseded) != 0 ||
+		!s.supersededAll.until.IsZero() {
 		t.Fatalf("sweep failed: tokens=%d receipts=%d contexts=%d index=%d blobs=%d idem=%d byPrincipal=%d bySid=%d byCert=%d tokensByPrincipal=%d tokensByCert=%d",
 			len(s.tokens), len(s.receipts), len(s.contexts), len(s.receiptsByPrincipal),
 			len(s.blobs), len(s.idem), len(s.byPrincipal), len(s.bySid), len(s.byCert),

@@ -145,7 +145,7 @@ func loginSession(t *testing.T, dev tacacsClient, tok string, log *syncBuffer) {
 // A live session survives a port49d restart on etcd; a token minted
 // before it does not, and an idempotent replay of a mint from before is
 // minted again, not answered with that token (Ruling 12; spec §14, "A
-// restart on etcd"; Broker.SupersededAll).
+// restart on etcd"; store.Store.SupersedeAll).
 func TestRunOnEtcdKeepsALoginAcrossARestart(t *testing.T) {
 	var out, log syncBuffer
 	e, o := stderr, stdout

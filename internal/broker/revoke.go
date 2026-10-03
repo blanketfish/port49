@@ -255,7 +255,7 @@ func (b *Broker) Revoke(ctx context.Context, req RevokeRequest) (RevokeReport, e
 		}
 		// The delete's own time, not the revocation's start: a mint that
 		// stamped its record in between is superseded too (M3).
-		b.supersede(k, b.Now())
+		b.supersede(ctx, k, b.Now())
 		if cerr != nil || len(toks) > 0 {
 			rep.TokenKeys++
 		}

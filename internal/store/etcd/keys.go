@@ -45,6 +45,7 @@ const (
 	famTokByCert   = "tc/" // tc/<cert key>/<nas>/<user>
 	famIdem        = "id/" // id/<principal>/<key>: an idempotency record
 	famMark        = "rv/" // rv/<kind>/<key>: a revocation mark
+	famSuperseded  = "sp/" // sp/<nas>/<user>: when its tokens were last superseded
 	famMeta        = "meta/"
 )
 
@@ -83,6 +84,9 @@ func (k keys) tokenIndexed(fam, key string, t store.TokenKey) string {
 func (k keys) idem(principal, key string) string { return k.root + famIdem + esc(principal, key) }
 func (k keys) mark(kind, key string) string      { return k.root + famMark + esc(kind, key) }
 func (k keys) meta(name string) string           { return k.root + famMeta + name }
+func (k keys) superseded(t store.TokenKey) string {
+	return k.root + famSuperseded + esc(t.NAS, t.Username)
+}
 
 // lastTwo unescapes the last two parts of key: the (NAS, Username) every
 // lookup entry and token-index entry ends in.

@@ -506,6 +506,18 @@ func (noStore) SetContextPolicy(context.Context, store.ContextKey, uint64, store
 	panic("store called")
 }
 
+func (noStore) SupersedeTokens(context.Context, store.TokenKey, time.Time) error {
+	panic("store called")
+}
+
+func (noStore) SupersedeAll(context.Context, time.Time) error {
+	panic("store called")
+}
+
+func (noStore) SupersededAt(context.Context, store.TokenKey) (time.Time, error) {
+	panic("store called")
+}
+
 var _ store.Store = noStore{}
 
 func TestEmptyCanonicalUsernameFailsWithoutStoreLookup(t *testing.T) {

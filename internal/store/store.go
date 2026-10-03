@@ -883,6 +883,19 @@ type Store interface {
 	DeleteRevocation(ctx context.Context, kind, key string) error
 	// ListRevocations is every mark in force, sorted by (Kind, Key).
 	ListRevocations(ctx context.Context) ([]Revocation, error)
+	// SupersedeTokens records that k's unspent tokens were deleted at at, by
+	// a refresh or a revocation, keeping the later of at and what stands,
+	// for SupersededFor. An idempotent replay of a mint from before it, on
+	// any broker process, is minted afresh rather than answered with a token
+	// that no longer exists (plan 7e, Ruling 9).
+	SupersedeTokens(ctx context.Context, k TokenKey, at time.Time) error
+	// SupersedeAll is SupersedeTokens for every key at once: a start that
+	// purged every unspent token.
+	SupersedeAll(ctx context.Context, at time.Time) error
+	// SupersededAt is the later of k's own instant and the all-keys one;
+	// zero when neither stands or both are past SupersededFor. Never
+	// ErrNotFound.
+	SupersededAt(ctx context.Context, k TokenKey) (time.Time, error)
 }
 
 // RevStore is a Store whose whole-context writes also return the revision
@@ -900,6 +913,11 @@ type RevStore interface {
 	RewriteContextRev(ctx context.Context, k ContextKey, rev uint64, c Context, ttl time.Duration,
 		policyMoved bool) (uint64, error)
 }
+
+// SupersededFor is how long a superseded instant is kept: past the
+// longest token_ttl (policy.MaxTokenTTL, 15m) and so past the life of any
+// idempotency record whose replay it governs (plan 7e, Ruling 9; 4b m10).
+const SupersededFor = 20 * time.Minute
 
 // CertKey is the index key a CRL or OCSP response names (spec §5.1.4).
 func CertKey(issuer, serial string) string { return issuer + "|" + serial }

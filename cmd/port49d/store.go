@@ -716,7 +716,9 @@ func startOnPersistentStore(ctx context.Context, brk *broker.Broker, st store.St
 		fmt.Fprintf(stderr, "port49d: store: %d standing revocation(s) applied to the live contexts the store kept "+
 			"(%d context(s) marked revoked) before serving\n", len(all), marked)
 	}
-	brk.SupersededAll = brk.Now()
+	if err := retry("recording the purge's instant", func() error { return st.SupersedeAll(ctx, brk.Now()) }); err != nil {
+		return refreshOwed{}, err
+	}
 	var n int
 	if err := retry("purging the tokens from before this start", func() (err error) {
 		n, err = st.PurgeTokens(ctx)

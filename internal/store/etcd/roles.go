@@ -41,7 +41,7 @@ var (
 	daemonWrites = []string{famToken, famReceipt, famReceiptBy, famContext, famIndexed, famByPrincipal,
 		famBySid, famByCert, famBlob}
 	daemonReads = []string{famMark, famMeta}
-	daemonNever = []string{famIdem, famTokByPrin, famTokByCert}
+	daemonNever = []string{famIdem, famTokByPrin, famTokByCert, famSuperseded}
 )
 
 // Roles is every grant the two roles need for prefix's keyspace.

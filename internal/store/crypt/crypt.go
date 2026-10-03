@@ -964,4 +964,18 @@ func (w *wrapped) ListRevocations(ctx context.Context) ([]store.Revocation, erro
 	return w.inner.ListRevocations(ctx)
 }
 
+// SupersedeTokens, SupersedeAll and SupersededAt pass through unsealed: an
+// instant carries no credential.
+func (w *wrapped) SupersedeTokens(ctx context.Context, k store.TokenKey, at time.Time) error {
+	return w.inner.SupersedeTokens(ctx, k, at)
+}
+
+func (w *wrapped) SupersedeAll(ctx context.Context, at time.Time) error {
+	return w.inner.SupersedeAll(ctx, at)
+}
+
+func (w *wrapped) SupersededAt(ctx context.Context, k store.TokenKey) (time.Time, error) {
+	return w.inner.SupersededAt(ctx, k)
+}
+
 var _ store.Store = (*wrapped)(nil)

@@ -142,15 +142,9 @@ type Broker struct {
 	// superseded is, by (device, username), when a refresh or a revocation
 	// last deleted its unspent tokens: an idempotent retry of a mint from
 	// before then is not replayed with a token that no longer exists
-	// (token.Request). It holds at most one entry per key the policy has
-	// ever minted for.
+	// (token.Request). It is this process's copy of the store's (plan 7e,
+	// Ruling 9), each entry kept SupersededFor (supersede).
 	superseded map[store.TokenKey]time.Time
-	// SupersededAll is when port49d started on a store that persists (plan
-	// 7d): every unspent token was purged then, so every key is superseded
-	// at least then, and an idempotent replay of a mint from before is
-	// minted again, never answered with a token that no longer exists.
-	// Zero on the memory store. Set before the broker serves.
-	SupersededAll time.Time
 	// queued is, by (issuer, serial), each certificate in revokeQueue, and
 	// pending each one a store error or a full queue left for RetryPending.
 	queued  map[[2]string]bool
@@ -466,7 +460,7 @@ func (b *Broker) revokedSince(w http.ResponseWriter, r *http.Request, principal 
 		now := b.Now()
 		for _, it := range items {
 			if it.Verdict == decision.VerdictPermit {
-				b.supersede(store.TokenKey{NAS: it.Device, Username: it.Username}, now)
+				b.supersede(ctx, store.TokenKey{NAS: it.Device, Username: it.Username}, now)
 			}
 		}
 		b.emit(decision.Record{TS: now, Event: decision.EventMint, Verdict: decision.VerdictDeny,
@@ -609,7 +603,7 @@ func (b *Broker) unmint(ctx context.Context, principal string, cred store.Creden
 			b.logf("broker: deleting the tokens a revoked mint wrote under %q on %q: %v; they expire at their TTL",
 				it.Username, it.Device, err)
 		}
-		b.supersede(k, now)
+		b.supersede(ctx, k, now)
 		if it.Replayed {
 			continue
 		}
@@ -624,17 +618,48 @@ func (b *Broker) unmint(ctx context.Context, principal string, cred store.Creden
 	return n
 }
 
-// supersede records that k's unspent tokens were deleted at at, keeping
-// the later of two (token.Request.SupersededAt).
-func (b *Broker) supersede(k store.TokenKey, at time.Time) {
+// supersede records that k's unspent tokens were deleted at at: in this
+// process, so its own replays mint afresh whatever the store says, and in
+// the store, so every broker process's do (plan 7e, Ruling 9). A store
+// write that fails is said, and this process's copy still covers its own
+// replays; another process may then answer one with a deleted token's
+// record, which redeems token_not_found.
+func (b *Broker) supersede(ctx context.Context, k store.TokenKey, at time.Time) {
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	if b.superseded == nil {
 		b.superseded = map[store.TokenKey]time.Time{}
 	}
 	if at.After(b.superseded[k]) {
 		b.superseded[k] = at
 	}
+	for key, t := range b.superseded {
+		if b.Now().Sub(t) > store.SupersededFor {
+			delete(b.superseded, key)
+		}
+	}
+	b.mu.Unlock()
+	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), holdTimeout)
+	defer cancel()
+	if err := b.Store.SupersedeTokens(sctx, k, at); err != nil {
+		b.logf("broker: recording that the tokens under %q on %q were superseded: %v; this process still "+
+			"mints a replay of them afresh", k.Username, k.NAS, err)
+	}
+}
+
+// supersededAt is the later of this process's instant for k and the
+// store's (every process's, and a start's purge).
+func (b *Broker) supersededAt(ctx context.Context, k store.TokenKey) (time.Time, error) {
+	b.mu.Lock()
+	local := b.superseded[k]
+	b.mu.Unlock()
+	at, err := b.Store.SupersededAt(ctx, k)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if local.After(at) {
+		at = local
+	}
+	return at, nil
 }
 
 // mintOne answers one device. The only error it returns is
@@ -735,11 +760,12 @@ func (b *Broker) mintOne(ctx context.Context, buf *heldLog, pol *policy.Policy, 
 	if err := b.putBlob(ctx, buf, hash, body, blobTTL(age, b.MaxSessionAge)); err != nil {
 		return deny(decision.StoreUnavailable, dev.Platform), nil
 	}
-	b.mu.Lock()
-	supersededAt := b.superseded[store.TokenKey{NAS: name, Username: res.Username}]
-	b.mu.Unlock()
-	if b.SupersededAll.After(supersededAt) {
-		supersededAt = b.SupersededAll
+	var supersededAt time.Time
+	if hold != nil { // only a request under an Idempotency-Key can be replayed
+		var err error
+		if supersededAt, err = b.supersededAt(ctx, store.TokenKey{NAS: name, Username: res.Username}); err != nil {
+			return deny(decision.StoreUnavailable, dev.Platform), nil
+		}
 	}
 	out, err := b.Minter.Mint(ctx, token.Request{
 		Subject: token.Subject{Principal: principal, Username: res.Username, TokenTTL: res.TokenTTL,

@@ -52,6 +52,7 @@ var pools = map[string]Pool{
 	"GetReceipt": Token, "ExtendReceipt": Token, "FailReceipt": Token, "PutBlob": Token, "IndexToken": Token,
 	"TokensByPrincipal": Token, "TokensByCert": Token, "ReserveIdempotency": Token, "CompleteIdempotency": Token,
 	"ReleaseIdempotency": Token, "PutRevocation": Token, "GetRevocation": Token, "DeleteRevocation": Token,
+	"SupersedeTokens": Token, "SupersedeAll": Token, "SupersededAt": Token,
 }
 
 // PoolOf is the pool method runs in, and "" for a name the table does not
@@ -599,6 +600,19 @@ func (g *guarded) DeleteRevocation(ctx context.Context, kind string, key string)
 
 func (g *guarded) ListRevocations(ctx context.Context) (rs []store.Revocation, err error) {
 	err = g.do(ctx, Bulk, func(ctx context.Context) (e error) { rs, e = g.inner.ListRevocations(ctx); return })
+	return
+}
+
+func (g *guarded) SupersedeTokens(ctx context.Context, k store.TokenKey, at time.Time) error {
+	return g.do(ctx, Token, func(ctx context.Context) error { return g.inner.SupersedeTokens(ctx, k, at) })
+}
+
+func (g *guarded) SupersedeAll(ctx context.Context, at time.Time) error {
+	return g.do(ctx, Token, func(ctx context.Context) error { return g.inner.SupersedeAll(ctx, at) })
+}
+
+func (g *guarded) SupersededAt(ctx context.Context, k store.TokenKey) (at time.Time, err error) {
+	err = g.do(ctx, Token, func(ctx context.Context) (e error) { at, e = g.inner.SupersededAt(ctx, k); return })
 	return
 }
 

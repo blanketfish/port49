@@ -55,6 +55,12 @@ type Store struct {
 	// sweep never touches them: only DeleteRevocation lifts one.
 	revocations map[[2]string]store.Revocation
 
+	// superseded is, by key, when its unspent tokens were last superseded,
+	// and supersededAll the same for every key (plan 7e, Ruling 9). Each is
+	// kept SupersededFor from its last write, and the sweep drops it then.
+	superseded    map[store.TokenKey]supersededEntry
+	supersededAll supersededEntry
+
 	writes int // incremented on every write; triggers sweep at sweepEvery
 	// revs is the last context revision handed out. It is store-wide rather
 	// than per key so a context that is deleted and written again never
@@ -189,6 +195,8 @@ func clearTail(set []store.Token, n int) {
 	}
 }
 
+type supersededEntry struct{ at, until time.Time }
+
 const sweepEvery = 1024
 
 func (s *Store) sweepLocked() {
@@ -253,6 +261,16 @@ func (s *Store) sweepLocked() {
 		if !r.ExpiresAt.After(now) {
 			delete(s.idem, k)
 		}
+	}
+
+	// Sweep superseded instants past SupersededFor.
+	for k, e := range s.superseded {
+		if !now.Before(e.until) {
+			delete(s.superseded, k)
+		}
+	}
+	if !now.Before(s.supersededAll.until) {
+		s.supersededAll = supersededEntry{}
 	}
 
 	// Sweep the context indexes: an entry expires on its own TTL, and a key
@@ -1382,3 +1400,45 @@ func (s *Store) wroteLocked() {
 }
 
 var _ store.RevStore = (*Store)(nil)
+
+// SupersedeTokens keeps the later instant at k, for SupersededFor from now.
+func (s *Store) SupersedeTokens(_ context.Context, k store.TokenKey, at time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.superseded == nil {
+		s.superseded = map[store.TokenKey]supersededEntry{}
+	}
+	s.superseded[k] = s.superseded[k].with(at, s.now())
+	return nil
+}
+
+// SupersedeAll keeps the later all-keys instant, for SupersededFor.
+func (s *Store) SupersedeAll(_ context.Context, at time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.supersededAll = s.supersededAll.with(at, s.now())
+	return nil
+}
+
+// with is e after at was written at now: the later of at and e's own
+// instant while e is live, kept for SupersededFor from now.
+func (e supersededEntry) with(at, now time.Time) supersededEntry {
+	if now.Before(e.until) && e.at.After(at) {
+		at = e.at
+	}
+	return supersededEntry{at: at, until: now.Add(store.SupersededFor)}
+}
+
+// SupersededAt is the later live instant of k's and every key's.
+func (s *Store) SupersededAt(_ context.Context, k store.TokenKey) (time.Time, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	var at time.Time
+	for _, e := range []supersededEntry{s.superseded[k], s.supersededAll} {
+		if now.Before(e.until) && e.at.After(at) {
+			at = e.at
+		}
+	}
+	return at, nil
+}
