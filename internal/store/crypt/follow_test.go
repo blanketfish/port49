@@ -923,12 +923,16 @@ func TestAPartlyLandedWriteOwesOnlyTheRest(t *testing.T) {
 	}
 	sink := &partSink{lands: 4}
 	var reports []report
+	var lines []string
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() { until(func() bool { return len(sink.seen()) >= 2 }, 10*time.Second); cancel() }()
 	KeepLedger(ctx, l, sink, 10*time.Millisecond, func(n int, behind bool) {
 		reports = append(reports, report{n, behind})
-	}, t.Logf)
+	}, func(f string, args ...any) { lines = append(lines, fmt.Sprintf(f, args...)) })
 	calls := sink.seen()
+	if len(lines) == 0 || !strings.Contains(lines[0], "6 mark(s) owed") { // review M-8
+		t.Fatalf("the failure line does not count what is owed: %q", lines)
+	}
 	if len(calls) < 2 || reports[0] != (report{6, false}) {
 		t.Fatalf("after a write that landed 4 of 10: reports %v, %d call(s)", reports, len(calls))
 	}
@@ -1000,5 +1004,25 @@ func TestASeedBelowWhatTheLedgerHoldsIsStillOwed(t *testing.T) {
 		if l.Pending() != 1 {
 			t.Fatalf("%s: a record behind the ledger was taken as written", name)
 		}
+	}
+}
+
+// A rescan's seed of marks the record holds, at keys this loaded ledger
+// has not seen, makes their entries and owes the record nothing (review
+// M-7): otherwise every compacted watch would write the whole record back.
+func TestARescansSeedOwesTheRecordNothingItHolds(t *testing.T) {
+	at := time.Unix(1_000_000, 0).UTC()
+	l := NewLedger()
+	l.SetBase(10)
+	kb := store.ContextKey{NAS: "leaf-02", Username: "bob"}
+	record := marksOf{
+		{Key: ka, Seq: 100, Until: at.Add(time.Hour + DefaultLedgerKeep)},
+		{Key: kb, Seq: 120, RevokedAt: at, FloorSeq: 150},
+	}
+	if _, err := seedFrom(context.Background(), record, l); err != nil {
+		t.Fatal(err)
+	}
+	if l.next(ka) != 101 || !l.floor(kb).Equal(at) || l.Pending() != 0 {
+		t.Fatalf("a rescan's seed: next %d, floor %v, %d owed", l.next(ka), l.floor(kb), l.Pending())
 	}
 }
