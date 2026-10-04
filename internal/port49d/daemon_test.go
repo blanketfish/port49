@@ -4,13 +4,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -191,15 +194,41 @@ func TestTwoDaemonsServeOneKeyspace(t *testing.T) {
 // An idle port49d whose store hangs goes dark on its probe alone: no
 // device asks, and it closes its listeners within hold_ttl of the
 // circuit opening, and listens again when the store returns (Ruling 11).
+// In the dark, a connection a device held is reset (L28: the fast fall to
+// local), TACACS+ takes no new one, and /readyz reads 503.
 func TestAnIdleDaemonGoesDarkOnItsProbe(t *testing.T) {
 	var out syncBuffer
 	e := stderr
 	t.Cleanup(func() { stderr = e })
 	stderr = &out
 	daemonCfg, proxy := etcdSplit(t)
-	startSplitDaemon(t, daemonCfg, &out, 1)
+	tacacs := startSplitDaemon(t, daemonCfg, &out, 1)
+	held, err := net.DialTimeout("tcp", tacacs, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
 	proxy.Hang(true)
 	waitWithin(t, &out, "closing every listener so that devices use their local method", 60*time.Second)
+	held.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if _, err := held.Read(make([]byte, 1)); !errors.Is(err, syscall.ECONNRESET) {
+		t.Fatalf("a held connection on a store gone: %v, want a reset", err)
+	}
+	waitWithin(t, &out, "waiting for the store again, as at a start", 20*time.Second)
+	if c, err := net.DialTimeout("tcp", tacacs, time.Second); err == nil {
+		c.Close()
+		t.Fatal("TACACS+ still listens with the store gone")
+	}
+	waitCountWithin(t, &out, "port49d: metrics on ", 2, 20*time.Second)
+	ms := regexp.MustCompile(`port49d: metrics on (127\.0\.0\.1:\d+)`).FindAllStringSubmatch(out.String(), -1)
+	resp, err := http.Get("http://" + ms[len(ms)-1][1] + "/readyz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("/readyz while waiting for the store: %d, want 503", resp.StatusCode)
+	}
 	proxy.Hang(false)
 	waitCountWithin(t, &out, "port49d: listening on ", 2, 90*time.Second)
 }
