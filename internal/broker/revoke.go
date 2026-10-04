@@ -190,7 +190,7 @@ func (b *Broker) Revoke(ctx context.Context, req RevokeRequest) (RevokeReport, e
 	}
 	release, err := b.acquireRevoke(ctx)
 	if err != nil {
-		return RevokeReport{}, fmt.Errorf("%w, so nothing was revoked by this one (%w); "+fallback,
+		return RevokeReport{}, fmt.Errorf("%w, so nothing was revoked by this one (%w); "+b.fallback(),
 			ErrRevocationBusy, err)
 	}
 	defer release()
@@ -213,7 +213,7 @@ func (b *Broker) Revoke(ctx context.Context, req RevokeRequest) (RevokeReport, e
 		if !held && (errors.Is(err, store.ErrIncompleteMark) || errors.Is(err, store.ErrRefused)) {
 			b.Marks.Set(mark, false)
 			return RevokeReport{}, fmt.Errorf("broker: the revocation was refused, so nothing was revoked (%w); "+
-				fallback, err)
+				b.fallback(), err)
 		}
 		// Once the store holds it after all (another process's revocation,
 		// or this write committed with its reply lost), the marks feed
@@ -223,8 +223,8 @@ func (b *Broker) Revoke(ctx context.Context, req RevokeRequest) (RevokeReport, e
 			b.MarkChanged(store.MarkChange{Revocation: mark, Standing: true})
 		}
 		return RevokeReport{}, fmt.Errorf("broker: the revocation could not be recorded, so nothing else was "+
-			"revoked; this port49d denies what it names until a lift on this port49d or its restart (%w); "+
-			fallback, err)
+			"revoked; this %s denies what it names until a lift on this %s or its restart (%w); "+
+			b.fallback(), b.proc(), b.proc(), err)
 	}
 	rep := RevokeReport{Request: req, By: kind, Mark: mark, decimal: decimal}
 	if got, err := b.Store.GetRevocation(ctx, kind, key); err == nil {
@@ -362,9 +362,17 @@ func (b *Broker) unreachedOf(refs []store.ContextRef) []store.ContextRef {
 	return out
 }
 
-// fallback is how to cut access when a revocation cannot be made.
-const fallback = "cut access another way: remove the principal's grants from broker.policy_file (live within " +
-	"two watch intervals), or stop port49d"
+// fallback is how to cut access when a revocation cannot be made. On
+// port49-broker, which serves no device, stopping it cuts nothing: the
+// port49d that serve the devices are what stop.
+func (b *Broker) fallback() string {
+	const edit = "cut access another way: remove the principal's grants from broker.policy_file (live within " +
+		"two watch intervals), or "
+	if b.proc() == "port49-broker" {
+		return edit + "stop every port49d (port49-broker serves no device)"
+	}
+	return edit + "stop port49d"
+}
 
 // acquireRevoke takes revokeSem, or gives up when ctx ends first. A free
 // slot is taken whatever ctx says, so a caller already gone is answered the

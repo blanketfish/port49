@@ -336,3 +336,36 @@ func TestTheRevokeNotesNameTheBrokersProcess(t *testing.T) {
 		}
 	}
 }
+
+// The fallback a refused revocation names is the process's own: port49d's
+// is to stop port49d, port49-broker's to stop every port49d, since the
+// broker serves no device and stopping it cuts nothing. The busy error and
+// the unrecorded one both carry it, and the unrecorded one names the
+// process whose listener denies what the mark names (Task 18).
+func TestARevocationsFallbackNamesTheProcess(t *testing.T) {
+	for _, c := range []struct{ proc, stop, wrong string }{
+		{"", "or stop port49d", "stop every port49d"},
+		{"port49-broker", "or stop every port49d (port49-broker serves no device)", "this port49d"},
+	} {
+		f := newFixtureWithPolicy(t, 8, sharedPolicy)
+		f.b.Proc = c.proc
+		release, err := f.b.acquireRevoke(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		wait, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		_, err = f.b.Revoke(wait, RevokeRequest{Principal: alicePrincipal})
+		cancel()
+		release()
+		if !errors.Is(err, ErrRevocationBusy) || !strings.HasSuffix(err.Error(), c.stop) ||
+			strings.Contains(err.Error(), c.wrong) {
+			t.Errorf("proc %q busy: %v", c.proc, err)
+		}
+		f.b.Store = putRevocationFails{f.st}
+		_, err = f.b.Revoke(context.Background(), RevokeRequest{Principal: alicePrincipal})
+		if err == nil || !strings.HasSuffix(err.Error(), c.stop) || strings.Contains(err.Error(), c.wrong) ||
+			!strings.Contains(err.Error(), "this "+f.b.proc()+" denies what it names until a lift on this "+f.b.proc()) {
+			t.Errorf("proc %q unrecorded: %v", c.proc, err)
+		}
+	}
+}
