@@ -12,8 +12,8 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
+	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/session"
 	"github.com/rhwendt/port49/internal/store"
