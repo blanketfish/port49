@@ -9,7 +9,7 @@
 
 ## Claim
 
-On the split deployment (port49-broker and two port49d replicas on one etcd, the device listing both replicas as TACACS+ servers): a session opened through one replica has its next command answered by the other once the first stops; with the broker stopped an open session runs on and a token minted before the stop logs in; a revocation made on port49-broker denies the session's next command on either replica; and a port49d with no hold closes its listeners within seconds of its store hanging, after which the device takes break-glass (plan 7e; spec §13 decision 36).
+On the split deployment (port49-broker and two port49d replicas on one etcd, the device listing both replicas as TACACS+ servers): a session opened through one replica has its next command answered by the other once the first stops; with the broker stopped an open session runs on and a token minted before the stop logs in; a revocation made on port49-broker denies the session's next command on either replica; and a port49d with no hold closes its listeners within `darkBound` (125.5s at the lab's `hold_ttl` 60s) of its store hanging, after which the device takes break-glass (plan 7e; spec §13 decision 36).
 
 ## Observation
 

@@ -2833,8 +2833,9 @@ the same session, written back, is denied too: `store_unavailable`, counted as
     a restarted port49d answered the open session's re-authorization `PASS_ADD` from the kept
     context, and a session revoked before its first re-authorization was denied at it (`FAIL`,
     `credential_revoked`). The device did not end the session on the denial: its next command
-    printed an error. Revocation reaches a Junos session only at its next re-authorization, up
-    to the interval later.
+    printed an error. Revocation reaches a Junos session at its first re-authorization, up to
+    the interval after login. Whether a later one comes is unmeasured (§15 L40); until then
+    treat a session past its first re-authorization as not reached.
 - **What an etcd outage does.**
   - **At start:** nothing listens, and `/readyz` says `waiting for the store`. Devices use their
     local method, and break-glass works. port49d waits up to `start_timeout`, then exits 1. With
@@ -2991,18 +2992,18 @@ labpcap audit fails.
   - `broker.revocations_file` is retired.
   - One refresh runner.
   - The decision-log emits under a policy hold are bounded (4b Task 4).
-  - A lab run to settle why IOS-XE refused an open session's command once port49d went dark
-    (`L35-cisco_iosxe.md`), when `quarantine-cisco_iosxe.md` ran one with port49d stopped.
-- **Lab, unassigned:** §15 L36 (open), whether a live Junos session's re-authorization
-  (`authorization-time-interval`) after a port49d restart on etcd is answered from the kept
-  context, and whether a denial then ends it. L35 did not measure it.
+  - IOS-XE's refusal once port49d went dark (`L35-cisco_iosxe.md`), against `quarantine-cisco_iosxe.md`'s
+    `show privilege` that ran with port49d stopped: L38 settled that neither the command nor the
+    session's last answer changes the refusal; why quarantine's ran is unexplained.
+- **Lab, unassigned:** §15 L40 (open), whether a Junos session is re-authorized more than once
+  (L36 measured the first re-authorization after login only).
 - **7f:**
   - Go-dark proper: the N-failures/M-passes listener control replaces Ruling 11's coarse
     close-and-wait.
   - The idle-detection gap (L37, measured 2026-10-04): an idle port49d on a hung store goes dark
     about 2 minutes in at `hold_ttl` 60s (circuit open 43–50s, listeners closed 1m43s–2m0s), because the
     probe needs five failed pings, a sixth of `hold_ttl` apart, to open the circuit; under load it
-    is about `hold_ttl` plus a probe period (about 70s). IOS-XE is locked out for all of it (its
+    should be about `hold_ttl` plus a probe period (about 70s; derived from the guard's rule, not measured). IOS-XE is locked out for all of it (its
     break-glass `ERROR` is final). A probe that re-pings at `breaker.open_for` cadence after one
     failure is the mitigation to weigh, Ryan's and 7f's call.
   - The warm context cache.
