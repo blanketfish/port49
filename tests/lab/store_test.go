@@ -234,6 +234,20 @@ func TestStoreOutageEndToEnd(t *testing.T) {
 		// measure what they measured before the broker left port49d. The
 		// member is this run's own, so the keyspace starts empty: no record of
 		// an earlier form is there to read (Task 13b's C2).
+		//
+		// PORT49_LAB_L35_ENTRY names the run a re-check of L35 after L37 (the
+		// same go test process, so the device carries whatever L37's teardown
+		// left): its capture and note are the entry's, never L35's closed
+		// ones, and its result is appended to L37's note (Task 17 review I-6).
+		entry := "L35"
+		if e := os.Getenv("PORT49_LAB_L35_ENTRY"); e != "" {
+			entry = e
+			rb := l.serverReadback(t)
+			row("0. the device's TACACS+ servers, read back before this run", rb)
+			if err := serverListed(l.p.name, rb, false); err != nil {
+				fail("a second server was left on the device: %v", err)
+			}
+		}
 		s := l.startSplit(t, splitCfg{})
 		proxy := s.Proxy
 		row("0. the keyspace before the first process starts", fmt.Sprintf("%d keys under /port49/", s.KeysAtStart))
@@ -243,9 +257,9 @@ func TestStoreOutageEndToEnd(t *testing.T) {
 				t.Fatalf("port49d would not start on etcd (%s): %v", what, err)
 			}
 		}
-		stop := l.capture(t, "L35")
+		stop := l.capture(t, entry)
 		defer stop()
-		capPath := filepath.Join(root, "tests", "lab", "captures", "L35-"+l.p.name+".pcap")
+		capPath := filepath.Join(root, "tests", "lab", "captures", entry+"-"+l.p.name+".pcap")
 
 		// 1. Baseline.
 		off := l.mark()
@@ -307,10 +321,11 @@ func TestStoreOutageEndToEnd(t *testing.T) {
 
 		// 3. The store hangs. Every time below that a device sees is the
 		// capture's, request to reply (pre-flight I17). Each measurement
-		// gets its own hang, the store back between them: the fence counts
-		// the hold lost as soon as a sixth of hold_ttl after a hang begins
-		// (10s at 60s; re-check R-I4), and a login or a break-glass login
-		// can take most of that on its own. A cell during which port49d
+		// gets its own hang, the store back between them: the probe pings
+		// every hold_ttl/6 (10s at 60s) and five failed pings open the
+		// circuit, and a login or a break-glass login can take most of that
+		// on its own (on the split port49d holds no hold; go-dark is the
+		// probe and the breaker, step 4's bound). A cell during which port49d
 		// closed its listeners, while the store hung or after it came back
 		// (IB1), measured port49d dark, not a hung store: it is marked
 		// INVALID and measured again on a fresh hang, up to storeAttempts
@@ -428,15 +443,13 @@ func TestStoreOutageEndToEnd(t *testing.T) {
 		// port49d holds no hold on the split (plan 7e, Ruling 11): it goes dark
 		// when its probe has found the context pool's circuit open for
 		// hold_ttl, which takes longer than 7d's lost hold did (12s on EOS).
-		for time.Since(hungAt) < 180*time.Second && len(l.errLinesSince(errOff, "closing every listener")) == 0 {
-			time.Sleep(time.Second)
-		}
+		// The wait runs to 180s so the observed time is always written; the
+		// bound is the configuration's (darkBound), and a time past it fails.
+		dts := waitDark(hungAt, 180*time.Second, func(sub string) bool { return len(l.errLinesSince(errOff, sub)) > 0 })
 		dark := l.errLinesSince(errOff, "closing every listener")
-		wide("4. port49d's line", fmt.Sprintf("%s after the hang: %s", time.Since(hungAt).Round(time.Second),
-			strings.Join(dark, " / ")))
-		if len(dark) == 0 {
-			fail("port49d did not close its listeners within 180s of the hang")
-		}
+		wide("4. port49d's line", fmt.Sprintf("%s after the hang: %s | %s", dts[0].Dark.Round(100*time.Millisecond),
+			strings.Join(dark, " / "), dts[0].describe()))
+		failed = append(failed, dts[0].verdict("port49d")...)
 		time.Sleep(5 * time.Second) // the drain
 		if len(l.errLinesSince(errOff, "waiting for the store again")) == 0 {
 			fail("port49d did not say it waits for the store")
@@ -489,7 +502,15 @@ func TestStoreOutageEndToEnd(t *testing.T) {
 		if len(failed) > 0 {
 			note += "\n**Failed:**\n\n- " + strings.Join(failed, "\n- ") + "\n"
 		}
-		l.result(t, "L35", storeClaim, note)
+		if entry == "L35" {
+			l.result(t, "L35", storeClaim, note)
+		} else {
+			l.appendNote(t, "L37", "## "+entry+": step 3's cells and break-glass, on the device L37 left\n\n"+
+				"Compared with L35-"+l.p.name+".md, only step 3's cells are the same by design (reply times, the "+
+				"device's output text, break-glass); step 2's token (`token_redeemed`, not `token_not_found`), "+
+				"step 4's dark time and step 5's listening-again time differ on the split, and the daemon's "+
+				"start-line rows are the broker's. Row 0's readback shows no second server.\n\n"+note)
+		}
 		if len(failed) > 0 {
 			t.Fatalf("L35 on %s: %s", l.p.name, strings.Join(failed, "; "))
 		}

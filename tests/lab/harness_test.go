@@ -30,6 +30,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"syscall"
@@ -39,6 +40,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/rhwendt/port49/internal/store/etcd/etcdtest"
+	"github.com/rhwendt/port49/internal/tacacs/wire"
 	"github.com/rhwendt/port49/internal/testpki"
 	"github.com/rhwendt/port49/tests/lab/labcreds"
 	"github.com/rhwendt/port49/tests/lab/labpcap"
@@ -2328,21 +2330,29 @@ func secondServerLines(platform string, add bool) []string {
 // break-glass CLI. Every daemon is stopped when it is called, which is what
 // lets the device take the local password (withAdminCLI), and withAdminCLI
 // leaves them stopped while a split is active.
-func (l *lab) pushServerLines(t *testing.T, add bool) {
+func (l *lab) pushServerLines(t *testing.T, add bool) string {
 	t.Helper()
 	lines := secondServerLines(l.p.name, add)
 	if strings.HasPrefix(l.p.name, "juniper_") {
 		l.junosConfigureAdmin(t, lines)
-		return
+	} else {
+		l.carriedConfigure(t, lines...)
 	}
-	l.carriedConfigure(t, lines...)
+	// The push is not trusted until the device shows it (Task 17 review I-3):
+	// a line the device took without a `% ` and did not apply would read, in
+	// L37's cell 2, as a device that never tries the second server.
+	readback := l.serverReadback(t)
+	if err := serverListed(l.p.name, readback, add); err != nil {
+		t.Fatalf("the device's TACACS+ servers after the push (add %v): %v\n%s", add, err, readback)
+	}
+	return readback
 }
 
 // addSecondServer lists 172.100.100.2 after 172.100.100.1 in the device's
-// TACACS+ group, with every daemon stopped. The startup configs and the
-// topologies are not touched (pre-flight I13): every other register test
-// runs with the one server it was measured with.
-func addSecondServer(t *testing.T, l *lab) { t.Helper(); l.pushServerLines(t, true) }
+// TACACS+ group, with every daemon stopped, and returns what the device
+// shows. The startup configs and the topologies are not touched (pre-flight
+// I13): every other register test runs with the one server it was measured with.
+func addSecondServer(t *testing.T, l *lab) string { t.Helper(); return l.pushServerLines(t, true) }
 
 // removeSecondServer is addSecondServer's inverse.
 func removeSecondServer(t *testing.T, l *lab) { t.Helper(); l.pushServerLines(t, false) }
@@ -2516,6 +2526,10 @@ type split struct {
 	B, Broker                   *proc
 
 	addrAdded, serverPushed bool
+
+	// Readback is the device's TACACS+ servers as it showed them after the
+	// second server was pushed: the first row of an L37, L38 or L36 note.
+	Readback string
 }
 
 // startSplit prepares the split and starts it, in the order a deployment
@@ -2651,7 +2665,7 @@ func (l *lab) prepareSplit(t *testing.T, cfg splitCfg) *split {
 		}
 		s.addrAdded = true
 		s.serverPushed = true // set first: a push that fails half way is undone too
-		addSecondServer(t, l)
+		s.Readback = addSecondServer(t, l)
 	}
 	return s
 }
@@ -2831,26 +2845,45 @@ func (s *split) teardown(t *testing.T) {
 	for _, err := range s.stopAll() {
 		t.Errorf("stopping the split: %v", err)
 	}
-	if s.serverPushed {
-		s.serverPushed = false
-		removeSecondServer(t, l)
-	}
-	if s.addrAdded {
+	// Registered before the removal, which Fatals on a device that does not
+	// show it gone: the address, the flag and the standing daemon are put back
+	// whatever happens to it (Task 17 review I-3), and deferred calls run last
+	// in, first out.
+	defer func() {
+		l.splitActive = false
+		std, err := l.configPath()
+		if err != nil {
+			t.Errorf("derive this platform's daemon config: %v", err)
+			return
+		}
+		if err := l.restart(std); err != nil {
+			t.Errorf("could not put port49d back on the lab config: %v", err)
+		}
+	}()
+	defer func() {
+		if !s.addrAdded {
+			return
+		}
 		s.addrAdded = false
 		if dev, err := bridgeDevice(); err != nil {
 			t.Errorf("removing %s: %v", splitSecondAddr, err)
 		} else if out, err := exec.Command("sudo", "-n", "ip", "addr", "del", splitSecondAddr+"/24", "dev", dev).CombinedOutput(); err != nil {
 			t.Errorf("removing %s from %s: %v\n%s", splitSecondAddr, dev, err, out)
 		}
-	}
-	l.splitActive = false
-	std, err := l.configPath()
-	if err != nil {
-		t.Errorf("derive this platform's daemon config: %v", err)
-		return
-	}
-	if err := l.restart(std); err != nil {
-		t.Errorf("could not put port49d back on the lab config: %v", err)
+	}()
+	if s.serverPushed {
+		s.serverPushed = false
+		removed := false
+		defer func() {
+			if !removed {
+				// Every later test on this platform fails instead of measuring
+				// a device that still lists a second server.
+				l.err = fmt.Errorf("the second server %s is not shown removed from the %s: the device is not as "+
+					"every other register test measured it", splitSecondAddr, l.p.name)
+			}
+		}()
+		removeSecondServer(t, l)
+		removed = true
 	}
 }
 
@@ -2957,4 +2990,226 @@ func splitSent(path, addr string, from, to time.Time) (syns, data int, err error
 		}
 	}
 	return syns, data, nil
+}
+
+// The lab's store timings, which the dark bound is computed from: every
+// config the harness writes sets hold_ttl 60s, and call_timeout and
+// breaker.failures are the defaults (internal/config).
+const (
+	labHoldTTL         = 60 * time.Second
+	labCallTimeout     = 500 * time.Millisecond
+	labBreakerFailures = 5
+)
+
+// darkBound is the longest an idle port49d on a hung store takes to close its
+// listeners (Task 17 review I-8): its probe pings every hold_ttl/6, failures
+// failed pings open the context pool's circuit, the circuit must have been
+// open hold_ttl, and the next call after that (up to another hold_ttl/6, plus
+// the call's own timeout) tells Unhealthy. 5s is slack for the process.
+func darkBound(holdTTL, callTimeout time.Duration, failures int) time.Duration {
+	return time.Duration(failures)*(holdTTL/6) + holdTTL + holdTTL/6 + callTimeout + 5*time.Second
+}
+
+// serverListed checks a configuration read back from the device: with add,
+// the second server is listed in the group after the first (and the first is
+// still there); without, it is not listed anywhere the push put it.
+func serverListed(platform, readback string, add bool) error {
+	var first, second *regexp.Regexp
+	switch {
+	case strings.HasPrefix(platform, "juniper_"):
+		first = regexp.MustCompile(`tacplus-server 172\.100\.100\.1\b`)
+		second = regexp.MustCompile(`tacplus-server ` + regexp.QuoteMeta(splitSecondAddr) + `\b`)
+		acct := regexp.MustCompile(`accounting destination tacplus server ` + regexp.QuoteMeta(splitSecondAddr) + `\b`)
+		if add && acct.FindStringIndex(readback) == nil {
+			return fmt.Errorf("the accounting destination does not list %s", splitSecondAddr)
+		}
+		if !add && acct.FindStringIndex(readback) != nil {
+			return fmt.Errorf("the accounting destination still lists %s", splitSecondAddr)
+		}
+	case platform == "cisco_iosxe":
+		first = regexp.MustCompile(`server name port49-host\b`)
+		second = regexp.MustCompile(`server name port49-host2\b`)
+	default:
+		first = regexp.MustCompile(`(?m)^\s*server 172\.100\.100\.1\b`)
+		second = regexp.MustCompile(`(?m)^\s*server ` + regexp.QuoteMeta(splitSecondAddr) + `\b`)
+	}
+	f, s := first.FindStringIndex(readback), second.FindStringIndex(readback)
+	switch {
+	case !add && s != nil:
+		return fmt.Errorf("%s is still listed", splitSecondAddr)
+	case !add:
+		return nil
+	case f == nil:
+		return fmt.Errorf("the first server is not listed")
+	case s == nil:
+		return fmt.Errorf("%s is not listed", splitSecondAddr)
+	case s[0] < f[0]:
+		return fmt.Errorf("%s is listed before the first server", splitSecondAddr)
+	}
+	return nil
+}
+
+// serverReadback reads the device's TACACS+ servers back over the break-glass
+// CLI (every daemon stopped), with every secret hidden.
+func (l *lab) serverReadback(t *testing.T) string {
+	t.Helper()
+	var out strings.Builder
+	if strings.HasPrefix(l.p.name, "juniper_") {
+		l.withAdminCLI(t, func(l *lab) (*cliConn, error) { return l.junosCLI(breakglassUser, breakglassPassword) },
+			func(c *cliConn) error {
+				for _, cmd := range []string{"show configuration system tacplus-server | display set",
+					"show configuration system accounting | display set"} {
+					o, err := junosShow(c, cmd)
+					if err != nil {
+						return errors.New(hideKeys(fmt.Sprintf("%q: %v", cmd, err)))
+					}
+					out.WriteString(cleanShow(o, l.p.node))
+				}
+				return nil
+			})
+		return redactConfigCapture(out.String())
+	}
+	cmd := map[string]string{"arista_eos": "show running-config section aaa group", "cisco_nxos": "show running-config tacacs+",
+		"cisco_iosxe": "show running-config | section tacacs"}[l.p.name]
+	l.withAdminCLI(t, adminCLI, func(c *cliConn) error {
+		o, err := l.adminShow(c, cmd)
+		if err != nil {
+			return errors.New(hideKeys(fmt.Sprintf("%q: %v", cmd, err)))
+		}
+		out.WriteString(cleanShow(o, c.prompt))
+		return nil
+	})
+	return redactConfigCapture(out.String())
+}
+
+// repliesWith counts the replies in replyTimesFrom's lines that carry status
+// and, when host is not empty, came from it.
+func repliesWith(lines []string, status, host string) int {
+	n := 0
+	for _, ln := range lines {
+		if !strings.Contains(ln, "-> "+status+" ") {
+			continue
+		}
+		if host == "" || strings.Contains(ln, " from "+host+" ") {
+			n++
+		}
+	}
+	return n
+}
+
+// authorReply is one AUTHOR reply the device received.
+type authorReply struct {
+	At     time.Time
+	Status string
+}
+
+// authorReplies are the AUTHOR replies in the capture at path after from.
+func authorReplies(path string, from time.Time) []authorReply {
+	pkts, _, err := pcapTACACSPackets(path, labKeyDefault)
+	if err != nil {
+		return nil
+	}
+	var out []authorReply
+	for _, p := range pkts {
+		if !p.FromDevice && p.Header.Type == wire.TypeAuthor && p.At.After(from) {
+			out = append(out, authorReply{At: p.At, Status: replyStatus(p)})
+		}
+	}
+	return out
+}
+
+// denialBefore reports whether a FAIL or ERROR reply reached the device
+// within window before end: the only thing that lets a session's end be
+// read as the device's reaction to a denial.
+func denialBefore(rs []authorReply, end time.Time, window time.Duration) bool {
+	for _, r := range rs {
+		if (r.Status == "FAIL" || r.Status == "ERROR") && !r.At.After(end) && end.Sub(r.At) <= window {
+			return true
+		}
+	}
+	return false
+}
+
+// darkTimes is when, after a hang began, a port49d said its context pool's
+// circuit is open and when it closed its listeners; zero is never.
+type darkTimes struct{ Open, Dark time.Duration }
+
+// waitDark polls each process (seen answers whether its stderr, since the
+// hang, holds a substring) every 250ms, until every one has closed its
+// listeners or within has passed.
+func waitDark(hungAt time.Time, within time.Duration, seen ...func(string) bool) []darkTimes {
+	out := make([]darkTimes, len(seen))
+	for time.Since(hungAt) < within {
+		done := true
+		for i, has := range seen {
+			if out[i].Open == 0 && has("context pool's circuit is open") {
+				out[i].Open = time.Since(hungAt)
+			}
+			if out[i].Dark == 0 && has("closing every listener") {
+				out[i].Dark = time.Since(hungAt)
+			}
+			done = done && out[i].Dark != 0
+		}
+		if done {
+			break
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	return out
+}
+
+// describe says both times and the span between them.
+func (d darkTimes) describe() string {
+	r := func(x time.Duration) time.Duration { return x.Round(100 * time.Millisecond) }
+	switch {
+	case d.Open == 0 && d.Dark == 0:
+		return "the circuit never opened and the listeners never closed"
+	case d.Dark == 0:
+		return fmt.Sprintf("circuit open at %s, listeners never closed", r(d.Open))
+	case d.Open == 0:
+		return fmt.Sprintf("listeners closed at %s, no circuit-open line before them", r(d.Dark))
+	}
+	return fmt.Sprintf("circuit open at %s, listeners closed at %s (open to dark %s)", r(d.Open), r(d.Dark), r(d.Dark-d.Open))
+}
+
+// verdict is what the times say against the configuration: dark within
+// darkBound of the hang, and, from the circuit opening, between hold_ttl and
+// hold_ttl + hold_ttl/6 + call_timeout (decision 35), with 5s for the
+// 250ms poll and the process.
+func (d darkTimes) verdict(who string) []string {
+	var out []string
+	bound := darkBound(labHoldTTL, labCallTimeout, labBreakerFailures)
+	if d.Dark == 0 {
+		return []string{who + " did not close its listeners within the wait"}
+	}
+	if d.Dark > bound {
+		out = append(out, fmt.Sprintf("%s closed its listeners %s after the hang, past the bound %s", who, d.Dark.Round(100*time.Millisecond), bound))
+	}
+	if d.Open == 0 {
+		out = append(out, who+" closed its listeners with no circuit-open line before them")
+		return out
+	}
+	if span, lo, hi := d.Dark-d.Open, labHoldTTL-5*time.Second, labHoldTTL+labHoldTTL/6+labCallTimeout+5*time.Second; span < lo || span > hi {
+		out = append(out, fmt.Sprintf("%s went dark %s after its circuit opened, outside hold_ttl to hold_ttl/6 later (%s to %s)",
+			who, span.Round(100*time.Millisecond), lo, hi))
+	}
+	return out
+}
+
+// appendNote appends a section to the note results/<entry>-<platform>.md, or
+// writes the section as a note of its own when there is none (a re-check run
+// without the test it follows).
+func (l *lab) appendNote(t *testing.T, entry, section string) {
+	t.Helper()
+	path := filepath.Join(root, "tests", "lab", "results", fmt.Sprintf("%s-%s.md", entry, l.p.name))
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		l.result(t, entry+"-appended", "A section written with no note to append it to.", section)
+		return
+	}
+	defer f.Close()
+	if _, err := f.WriteString("\n" + labcreds.RedactNote(section) + "\n"); err != nil {
+		t.Fatalf("append to %s: %v", path, err)
+	}
+	t.Logf("appended to %s", path)
 }

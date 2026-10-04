@@ -3,6 +3,7 @@
 package lab
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -119,7 +120,7 @@ func (l *lab) junosConfigureAdmin(t *testing.T, lines []string) string {
 		o, err := junosConfigure(c, lines...)
 		out = o
 		if err != nil {
-			return fmt.Errorf("applying %v: %w\n%s", lines, err, o)
+			return errors.New(hideKeys(fmt.Sprintf("applying %v: %v\n%s", lines, err, o)))
 		}
 		return nil
 	})

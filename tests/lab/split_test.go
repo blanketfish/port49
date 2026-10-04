@@ -65,6 +65,17 @@ func shellCell(l *lab, sh *labShell, cmd string) string {
 	return fmt.Sprintf("%d bytes in %s, first line %s", len(body), d, l29Cell(firstLine(body)))
 }
 
+// countOf is how many of list equal s.
+func countOf(list []string, s string) int {
+	n := 0
+	for _, x := range list {
+		if x == s {
+			n++
+		}
+	}
+	return n
+}
+
 // waitRecordsOf is waitForRecords for any decision log.
 func waitRecordsOf(path string, off int64, timeout time.Duration, want func([]map[string]any) bool) []map[string]any {
 	deadline := time.Now().Add(timeout)
@@ -77,12 +88,17 @@ func waitRecordsOf(path string, off int64, timeout time.Duration, want func([]ma
 	}
 }
 
-// hasCtx is a wait condition: a record carries sliceUser's context, or the
-// platform has none to carry (Junos authorizes locally).
+// hasCtx is a wait condition: a record carries sliceUser's context, or, on
+// Junos, which authorizes no command and so has no context to carry, an
+// accounting record has arrived (they arrive after the command, so a wait
+// that is true at once would read the log before the record is there).
 func hasCtx(sessionOnly bool) func([]map[string]any) bool {
 	return func(rs []map[string]any) bool {
+		if sessionOnly {
+			return len(reasonsOf(rs, "account")) > 0
+		}
 		id, _, _ := ctxIDOf(rs, sliceUser)
-		return id != "" || sessionOnly
+		return id != ""
 	}
 }
 
@@ -92,7 +108,6 @@ func TestSplitEndToEnd(t *testing.T) {
 		fail := func(format string, args ...any) { failed = append(failed, fmt.Sprintf(format, args...)) }
 		sessionOnly := strings.HasPrefix(l.p.name, "juniper_")
 		var obs strings.Builder
-		row := func(cell, what string) { fmt.Fprintf(&obs, "| %s | %s |\n", cell, l29Cell(what)) }
 		wide := func(cell, what string) { fmt.Fprintf(&obs, "| %s | %s |\n", cell, wideCell(what)) }
 		obs.WriteString("| cell | observed |\n|---|---|\n")
 
@@ -101,6 +116,20 @@ func TestSplitEndToEnd(t *testing.T) {
 		defer stop()
 		capPath := filepath.Join(root, "tests", "lab", "captures", "L37-"+l.p.name+".pcap")
 		errA, errB := l.errLogSize(), s.B.errSize()
+		wide("0. the device's TACACS+ servers, read back after the push", s.Readback)
+
+		// triedB says whether the device opened a connection to B in a window:
+		// a cell on "B" in which it did not measured the device's local method.
+		triedB := func(from, to time.Time) bool {
+			l.flushCapture(t)
+			as, _ := splitAttempts(capPath, l.p.addr, from, to)
+			for _, a := range as {
+				if a.Server == splitSecondAddr {
+					return true
+				}
+			}
+			return false
+		}
 
 		// times is a cell's request-to-reply times from the capture, each with
 		// the server that replied, and the connections the device opened: the
@@ -137,6 +166,9 @@ func TestSplitEndToEnd(t *testing.T) {
 		ctx1, v1, r1 := ctxIDOf(l.waitForRecords(offA, 30*time.Second, hasCtx(sessionOnly)), sliceUser)
 		if !strings.HasPrefix(before, "printed its output") {
 			fail("show version did not run in the baseline: %s", before)
+		}
+		if !sessionOnly && ctx1 == "" {
+			fail("A's record of the baseline command carried no ctx_id within 30s: cell 2 cannot compare B's with it")
 		}
 		if err := s.StartB(); err != nil {
 			t.Fatal(err)
@@ -176,8 +208,8 @@ func TestSplitEndToEnd(t *testing.T) {
 				if !sessionOnly && (!strings.HasPrefix(out, "printed its output") || vB != "permit" || ctxB != ctx1) {
 					fail("B did not answer the session A wrote: %s; record %s %s, ctx_id %s, before %s", out, vB, rB, ctxB, ctx1)
 				}
-				if sessionOnly && len(recsB) == 0 {
-					fail("no record reached B for the Junos session after A stopped: %s", out)
+				if sessionOnly && len(reasonsOf(recsB, "account")) == 0 {
+					fail("no accounting record reached B for the Junos session after A stopped: %s", out)
 				}
 			}
 			if !tried && attempt < storeAttempts {
@@ -187,8 +219,11 @@ func TestSplitEndToEnd(t *testing.T) {
 			}
 		}
 		if !tried {
-			row("2. validity", fmt.Sprintf("INVALID on all %d attempts: the device never connected to B with A stopped; "+
-				"if that holds on every attempt it is the device's behaviour (it tries no second server), a device fact, not a defect", storeAttempts))
+			wide("2. validity", fmt.Sprintf("INVALID for closing (L37 stays open on this image): on all %d attempts the device "+
+				"never connected to B with A stopped. That is the device's behaviour, a device fact and not a port49 "+
+				"defect, and the readback in row 0 shows B listed after A, so it was configured. The cell is valid "+
+				"when the device tries B: a device that does not needs a second server it will try, or this row "+
+				"is measured with a different command method.", storeAttempts))
 		}
 
 		// 3. A is back; the broker stops. The session's next command, then a
@@ -224,39 +259,96 @@ func TestSplitEndToEnd(t *testing.T) {
 		}
 
 		// 4. The broker returns; a revocation on it reaches the session on A,
-		// then, with A stopped, on B.
+		// then, with A stopped, on B (if the device tries B: the B half is
+		// measured again, up to storeAttempts times, the revocation standing).
+		// Junos authorizes no command (decision 21), so there is no command to
+		// deny: the revocation's reach is measured by a login through B with
+		// a token minted before it.
 		if err := s.StartBroker(); err != nil {
 			t.Fatal(err)
+		}
+		tok3 := ""
+		if sessionOnly {
+			said, tok3 = l29Mint(sock, l.p.node)
+			if tok3 == "" {
+				t.Fatalf("the agent minted no token before the revocation: %s", said)
+			}
 		}
 		revText, revOK := revokeCLI(s.AdminBroker, "--principal", slicePrincipal)
 		if !revOK {
 			fail("port49 revoke --principal on the broker's socket: %s", revText)
 		}
-		offA, offB := l.mark(), s.B.mark()
-		from = time.Now()
-		outA := revokeOutcome(l.p.name, sh, "show version", fail, "on A after the revocation")
-		recsA := l.waitForRecords(offA, 30*time.Second, func(rs []map[string]any) bool { return len(reasonsOf(rs, "authorize_command")) > 0 || sessionOnly })
-		toA := time.Now()
-		timesA := times(from, toA)
-		if err := s.StopA(); err != nil {
-			t.Fatal(err)
-		}
-		fromB := time.Now()
-		outB := revokeOutcome(l.p.name, sh, "show version", fail, "on B after the revocation")
-		recsB := waitRecordsOf(s.B.logPath, offB, 30*time.Second, func(rs []map[string]any) bool { return len(reasonsOf(rs, "authorize_command")) > 0 || sessionOnly })
-		timesB := times(fromB, time.Now())
-		if err := s.StartA(); err != nil {
-			t.Fatal(err)
-		}
 		wide("4. `port49 revoke --principal` on the broker's socket", firstLine(revText))
-		wide("4. the session's next command on A", fmt.Sprintf("%s; records %v | %s", outA, reasonsOf(recsA, "authorize_command"), timesA))
-		wide("4. A stopped, the session's next command on B", fmt.Sprintf("%s; records %v | %s", outB, reasonsOf(recsB, "authorize_command"), timesB))
-		if !sessionOnly {
+		if sessionOnly {
+			wide("4. the session's next command", "not applicable: Junos authorizes no command (decision 21); the "+
+				"revocation's reach on the session is L36's, and its reach on a login through B is measured here")
+			if err := s.StopA(); err != nil {
+				t.Fatal(err)
+			}
+			reached := false
+			for attempt := 1; attempt <= storeAttempts && !reached; attempt++ {
+				offB := s.B.mark()
+				fromB := time.Now()
+				_, lerr := l.loginWithin(sliceUser, tok3, 90*time.Second, "show version")
+				recsB := waitRecordsOf(s.B.logPath, offB, 30*time.Second, func(rs []map[string]any) bool { return redeemReason(rs, sha(tok3)) != "" })
+				redeemB := redeemReason(recsB, sha(tok3))
+				reached = triedB(fromB, time.Now())
+				label := fmt.Sprintf("4. A stopped, a login through B with a token minted before the revocation (attempt %d)", attempt)
+				if !reached {
+					wide(label, "INVALID: the device never connected to B; measured again | "+times(fromB, time.Now()))
+					continue
+				}
+				wide(label, fmt.Sprintf("login err %v; B's redeem reason %q | %s", lerr, redeemB, times(fromB, time.Now())))
+				if lerr == nil {
+					fail("a token minted before the revocation logged in through B")
+				}
+			}
+			if !reached {
+				wide("4. validity", fmt.Sprintf("INVALID for closing (L37 stays open on this image): on all %d attempts the device "+
+					"never connected to B", storeAttempts))
+			}
+			if err := s.StartA(); err != nil {
+				t.Fatal(err)
+			}
+		} else {
+			offA, offB := l.mark(), s.B.mark()
+			from = time.Now()
+			outA := revokeOutcome(l.p.name, sh, "show version", fail, "on A after the revocation")
+			recsA := l.waitForRecords(offA, 30*time.Second, func(rs []map[string]any) bool { return len(reasonsOf(rs, "authorize_command")) > 0 })
+			wide("4. the session's next command on A", fmt.Sprintf("%s; records %v | %s", outA, reasonsOf(recsA, "authorize_command"), times(from, time.Now())))
 			if !strings.HasPrefix(outA, "refused") || !contains(reasonsOf(recsA, "authorize_command"), "deny credential_revoked") {
 				fail("the revocation did not deny the session's next command on A: %s %v", outA, reasonsOf(recsA, "authorize_command"))
 			}
-			if !strings.HasPrefix(outB, "refused") || !contains(reasonsOf(recsB, "authorize_command"), "deny credential_revoked") {
-				fail("the revocation did not deny the session's next command on B: %s %v", outB, reasonsOf(recsB, "authorize_command"))
+			if err := s.StopA(); err != nil {
+				t.Fatal(err)
+			}
+			reached := false
+			for attempt := 1; attempt <= storeAttempts && !reached; attempt++ {
+				var cellFailed []string
+				fromB := time.Now()
+				outB := revokeOutcome(l.p.name, sh, "show version", func(f string, a ...any) {
+					cellFailed = append(cellFailed, fmt.Sprintf(f, a...))
+				}, "on B after the revocation")
+				recsB := waitRecordsOf(s.B.logPath, offB, 30*time.Second, func(rs []map[string]any) bool { return len(reasonsOf(rs, "authorize_command")) > 0 })
+				reached = triedB(fromB, time.Now())
+				label := fmt.Sprintf("4. A stopped, the session's next command on B (attempt %d)", attempt)
+				if !reached {
+					wide(label, "INVALID: the device never connected to B; measured again. "+outB+" | "+times(fromB, time.Now()))
+					continue
+				}
+				wide(label, fmt.Sprintf("%s; records %v | %s", outB, reasonsOf(recsB, "authorize_command"), times(fromB, time.Now())))
+				failed = append(failed, cellFailed...)
+				if !strings.HasPrefix(outB, "refused") || !contains(reasonsOf(recsB, "authorize_command"), "deny credential_revoked") {
+					fail("the revocation did not deny the session's next command on B: %s %v", outB, reasonsOf(recsB, "authorize_command"))
+				}
+			}
+			if !reached {
+				wide("4. validity", fmt.Sprintf("INVALID for closing (L37 stays open on this image): on all %d attempts the device "+
+					"never connected to B with A stopped, so the revocation's reach on B is unmeasured; a device fact, "+
+					"not a port49 defect (row 0 shows B listed)", storeAttempts))
+			}
+			if err := s.StartA(); err != nil {
+				t.Fatal(err)
 			}
 		}
 		if lines := l.errLinesSince(errA, "closing every listener"); len(lines) > 0 {
@@ -275,23 +367,16 @@ func TestSplitEndToEnd(t *testing.T) {
 		errA, errB = l.errLogSize(), s.B.errSize()
 		s.Proxy.Hang(true)
 		hungAt := time.Now()
-		var darkA, darkB time.Duration
-		for time.Since(hungAt) < 180*time.Second && (darkA == 0 || darkB == 0) {
-			if darkA == 0 && len(l.errLinesSince(errA, "closing every listener")) > 0 {
-				darkA = time.Since(hungAt)
-			}
-			if darkB == 0 && len(s.B.errLinesSince(errB, "closing every listener")) > 0 {
-				darkB = time.Since(hungAt)
-			}
-			time.Sleep(250 * time.Millisecond)
-		}
-		wide("5. the store hangs: seconds to each port49d closing its listeners", fmt.Sprintf("A %s (%v), B %s (%v); "+
-			"A: %s / B: %s", darkA.Round(100*time.Millisecond), darkA > 0, darkB.Round(100*time.Millisecond), darkB > 0,
-			strings.Join(l.errLinesSince(errA, "closing every listener"), " "),
-			strings.Join(s.B.errLinesSince(errB, "closing every listener"), " ")))
-		if darkA == 0 || darkB == 0 {
-			fail("a port49d did not close its listeners within 180s of the hang: A %v, B %v", darkA > 0, darkB > 0)
-		}
+		// The wait runs to 180s so the observed time is always written; each
+		// port49d's go-dark is judged against the configuration's bound
+		// (darkBound, 125.5s at 5 pings, 60s, 500ms).
+		dts := waitDark(hungAt, 180*time.Second,
+			func(sub string) bool { return len(l.errLinesSince(errA, sub)) > 0 },
+			func(sub string) bool { return len(s.B.errLinesSince(errB, sub)) > 0 })
+		wide("5. the store hangs: when each port49d's circuit opened and it closed its listeners", fmt.Sprintf("A: %s; B: %s; bound %s",
+			dts[0].describe(), dts[1].describe(), darkBound(labHoldTTL, labCallTimeout, labBreakerFailures)))
+		failed = append(failed, dts[0].verdict("A")...)
+		failed = append(failed, dts[1].verdict("B")...)
 		time.Sleep(5 * time.Second) // the drain
 		from = time.Now()
 		outs, berr := l.loginWithin(breakglassUser, breakglassPassword, 60*time.Second, "show version")
@@ -327,7 +412,7 @@ func TestIOSXEOpenSessionUnreachable(t *testing.T) {
 		var failed []string
 		fail := func(format string, args ...any) { failed = append(failed, fmt.Sprintf(format, args...)) }
 		var obs strings.Builder
-		obs.WriteString("| cell | first in its session | second in its session | the device sent port49 |\n|---|---|---|---|\n")
+		obs.WriteString("| cell | typed first in its session | typed second in its session |\n|---|---|---|\n")
 
 		s := l.startSplit(t, splitCfg{SecondServer: true})
 		stop := l.capture(t, "L38")
@@ -336,17 +421,23 @@ func TestIOSXEOpenSessionUnreachable(t *testing.T) {
 		sock, _, stopAgent := revokeAgent(t)
 		defer stopAgent()
 
+		wide := func(cell, what string) { fmt.Fprintf(&obs, "| %s | %s |\n", cell, wideCell(what)) }
+		wide("0. the device's TACACS+ servers, read back after the push", s.Readback+" | |")
+
 		cmds := []string{"show privilege", "show version"}
-		for _, failFirst := range []bool{false, true} {
-			col := "the daemons stopped with nothing before"
-			if failFirst {
-				col = "the daemons stopped after a FAIL store_unavailable on the session's last command"
-			}
-			// Two sessions, opened while everything answers: the first will
-			// type show privilege and then show version, the second the
-			// reverse, so an order effect is told from a command effect.
+		// column measures one column: two fresh sessions opened while every
+		// process answers, the store hung and `show clock` typed in each when
+		// failFirst, then both daemons stopped and each session typing both
+		// commands, a window and a capture count per command. It returns
+		// the rows, and why the column is invalid, if it is.
+		column := func(failFirst bool, col string) (rows []string, invalid string) {
 			var shs []*labShell
-			for i := 0; i < 2; i++ {
+			defer func() {
+				for _, sh := range shs {
+					sh.Close()
+				}
+			}()
+			open := func() *labShell {
 				said, tok := l29Mint(sock, l.p.node)
 				if tok == "" {
 					t.Fatalf("the agent minted no token for %s: %s", col, said)
@@ -355,17 +446,44 @@ func TestIOSXEOpenSessionUnreachable(t *testing.T) {
 				if err != nil {
 					t.Fatalf("SSH login for %s: %v", col, err)
 				}
-				defer sh.Close()
-				shs = append(shs, sh)
+				return sh
+			}
+			// The session's privilege level, in a session of its own so that
+			// the two measured sessions type nothing else (the quarantine
+			// session this is compared with ran at priv 15).
+			probe := open()
+			priv := shellCell(l, probe, "show privilege")
+			probe.Close()
+			rows = append(rows, fmt.Sprintf("| (a separate session's `show privilege` while every process answers) | %s | |", l29Cell(priv)))
+			// Two sessions: the first will type show privilege and then
+			// show version, the second the reverse, so an order effect is
+			// told from a command effect.
+			for i := 0; i < 2; i++ {
+				shs = append(shs, open())
 			}
 			if failFirst {
 				// `show clock`, which neither measured command is, with the
-				// store hung: answered FAIL store_unavailable, and the
-				// session's last command. IOS-XE prints nothing for it (L4).
+				// store hung: it must be answered FAIL store_unavailable, in
+				// the decision log and on the wire, in both sessions, or the
+				// column is not "after a FAIL" (IOS-XE prints nothing for it, L4).
+				offA := l.mark()
 				s.Proxy.Hang(true)
+				from := time.Now()
 				for i, sh := range shs {
-					fmt.Fprintf(&obs, "| (the FAIL, session %d: `show clock` with the store hung) | %s | | |\n", i+1,
-						shellCell(l, sh, "show clock"))
+					rows = append(rows, fmt.Sprintf("| (the FAIL, session %d: `show clock` with the store hung) | %s | |", i+1,
+						wideCell(shellCell(l, sh, "show clock"))))
+				}
+				recs := l.waitForRecords(offA, 30*time.Second, func(rs []map[string]any) bool {
+					return countOf(reasonsOf(rs, "authorize_command"), "deny store_unavailable") >= 2
+				})
+				l.flushCapture(t)
+				replies := replyTimesFrom(capPath, labKeyDefault, from, time.Now(), true)
+				got := countOf(reasonsOf(recs, "authorize_command"), "deny store_unavailable")
+				onWire := repliesWith(replies, "FAIL", "172.100.100.1")
+				rows = append(rows, fmt.Sprintf("| (the FAIL's proof) | %d deny store_unavailable record(s) on A; %d AUTHOR FAIL(s) on the wire: %s | |",
+					got, onWire, l29Cell(strings.Join(replies, "; "))))
+				if got < 2 || onWire < 2 {
+					invalid = fmt.Sprintf("the FAIL store_unavailable was not answered to both sessions (%d record(s), %d FAIL(s) on the wire)", got, onWire)
 				}
 			}
 			if err := s.StopB(); err != nil {
@@ -374,31 +492,34 @@ func TestIOSXEOpenSessionUnreachable(t *testing.T) {
 			if err := s.StopA(); err != nil {
 				t.Fatal(err)
 			}
-			from := time.Now()
-			got := map[string][2]string{} // command → [first, second]
+			got := map[string][2]string{} // command → [typed first, typed second]
 			for i, sh := range shs {
 				order := []string{cmds[i], cmds[1-i]}
 				for pos, cmd := range order {
+					from := time.Now()
+					cell := shellCell(l, sh, cmd)
+					to := time.Now()
+					l.flushCapture(t)
+					syns, data, err := splitSent(capPath, l.p.addr, from, to)
+					sent := fmt.Sprintf("the device sent port49 %d connection(s) and %d packet(s) with a payload", syns, data)
+					if err != nil {
+						sent = "capture unreadable: " + err.Error()
+						fail("the capture could not be read for %s: %v", col, err)
+					} else if as, err := splitAttempts(capPath, l.p.addr, from, to); err == nil && len(as) > 0 {
+						sent += ": " + renderAttempts(as)
+					}
 					v := got[cmd]
-					v[pos] = fmt.Sprintf("session %d: %s", i+1, shellCell(l, sh, cmd))
+					v[pos] = fmt.Sprintf("session %d: %s; %s", i+1, cell, sent)
 					got[cmd] = v
 				}
 			}
-			to := time.Now()
-			l.flushCapture(t)
-			syns, data, err := splitSent(capPath, l.p.addr, from, to)
-			sent := fmt.Sprintf("%d connection(s) opened, %d packet(s) with a payload", syns, data)
-			if err != nil {
-				sent = "capture unreadable: " + err.Error()
-				fail("the capture could not be read for %s: %v", col, err)
-			}
 			for _, cmd := range cmds {
-				fmt.Fprintf(&obs, "| `%s`, %s | %s | %s | %s |\n", cmd, col, got[cmd][0], got[cmd][1], sent)
+				rows = append(rows, fmt.Sprintf("| `%s`, %s | %s | %s |", cmd, col, wideCell(got[cmd][0]), wideCell(got[cmd][1])))
 			}
+			return rows, invalid
+		}
+		restart := func() {
 			s.Proxy.Hang(false)
-			for _, sh := range shs {
-				sh.Close()
-			}
 			if err := s.StartA(); err != nil {
 				t.Fatal(err)
 			}
@@ -406,8 +527,32 @@ func TestIOSXEOpenSessionUnreachable(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
+		for _, failFirst := range []bool{false, true} {
+			col := "the daemons stopped after a permit (the harness's `terminal length 0`)"
+			if failFirst {
+				col = "the daemons stopped after a FAIL store_unavailable on the session's last command"
+			}
+			// A column whose FAIL did not happen measured the permit column
+			// under the wrong label: it is measured again on fresh sessions,
+			// up to storeAttempts times (Ruling T15-a), then left INVALID.
+			for attempt := 1; attempt <= storeAttempts; attempt++ {
+				rows, invalid := column(failFirst, col)
+				restart()
+				fmt.Fprintf(&obs, "| (%s, attempt %d) | | |\n", col, attempt)
+				for _, r := range rows {
+					obs.WriteString(r + "\n")
+				}
+				if invalid == "" {
+					break
+				}
+				fmt.Fprintf(&obs, "| INVALID for closing (L38 stays open): %s | | |\n", invalid)
+				if attempt == storeAttempts {
+					fail("%s: INVALID on all %d attempts: %s", col, storeAttempts, invalid)
+				}
+			}
+		}
 		obs.WriteString("\nThe harness's first command in every session, `terminal length 0`, was permitted by port49 before " +
-			"the daemons stopped: \"nothing before\" is nothing but that.\n")
+			"the daemons stopped, so the first column is \"after a permit\", not \"after nothing\".\n")
 		note := obs.String()
 		if len(failed) > 0 {
 			note += "\n**Not as the claim says:**\n\n- " + strings.Join(failed, "\n- ") + "\n"
@@ -435,22 +580,50 @@ func authorRequestsAfter(path string, from time.Time) []wirePacket {
 	return out
 }
 
+// reauth is how a wait for the device's next re-authorization ended: Req is
+// the request's time; Ended, when the session ended first; Dead, when an
+// SSH keepalive went unanswered first (the transport, not the device's
+// reaction); none of them when d passed.
+type reauth struct {
+	Req, Ended, Dead time.Time
+	DeadErr          error
+}
+
 // awaitReauthorization waits until the device has sent an AUTHOR request after
-// from, up to d, watching the open session too: it returns the request's
-// time, and when the session ended, if it did first. A wait that ends with
-// neither returns the zero time.
-func awaitReauthorization(t *testing.T, l *lab, sh *labShell, path string, from time.Time, d time.Duration) (req, ended time.Time) {
+// from, up to d, watching the open session too: every 15s it reads the
+// capture and the session, and every 60s it sends an SSH keepalive with a 10s
+// reply deadline, so that a dropped transport is told from the device's own
+// reaction to a denial (Task 17 review I-7).
+func awaitReauthorization(t *testing.T, l *lab, sh *labShell, path string, from time.Time, d time.Duration) reauth {
 	t.Helper()
+	lastKeepalive := time.Now()
 	for deadline := time.Now().Add(d); time.Now().Before(deadline); time.Sleep(15 * time.Second) {
 		l.flushCapture(t)
 		if ps := authorRequestsAfter(path, from); len(ps) > 0 {
-			return ps[0].At, time.Time{}
+			return reauth{Req: ps[0].At}
 		}
 		if sh.ended() {
-			return time.Time{}, time.Now()
+			return reauth{Ended: time.Now()}
+		}
+		if sh.c.keepalive != nil && time.Since(lastKeepalive) >= 60*time.Second {
+			lastKeepalive = time.Now()
+			if err := sh.c.keepalive(10 * time.Second); err != nil {
+				return reauth{Dead: time.Now(), DeadErr: err}
+			}
 		}
 	}
-	return time.Time{}, time.Time{}
+	return reauth{}
+}
+
+// watchSessionEnd waits up to d for the session to end, and says whether it
+// did and when.
+func watchSessionEnd(sh *labShell, d time.Duration) (time.Time, bool) {
+	for deadline := time.Now().Add(d); time.Now().Before(deadline); time.Sleep(2 * time.Second) {
+		if sh.ended() {
+			return time.Now(), true
+		}
+	}
+	return time.Time{}, false
 }
 
 func TestJunosReauthorizationAfterRestart(t *testing.T) {
@@ -475,6 +648,7 @@ func TestJunosReauthorizationAfterRestart(t *testing.T) {
 		stop := l.capture(t, "L36")
 		defer stop()
 		capPath := filepath.Join(root, "tests", "lab", "captures", "L36-"+l.p.name+".pcap")
+		wide("0. the device's TACACS+ servers, read back after the push", s.Readback)
 
 		// Log in through A with B stopped, so the device asks A, and keep the
 		// session.
@@ -507,15 +681,22 @@ func TestJunosReauthorizationAfterRestart(t *testing.T) {
 		}
 		restartAt := time.Now()
 		offA = l.mark()
-		req, ended := awaitReauthorization(t, l, sh, capPath, restartAt, 20*time.Minute)
+		w := awaitReauthorization(t, l, sh, capPath, restartAt, 20*time.Minute)
 		switch {
-		case !req.IsZero():
-			reply := replyTimesFrom(capPath, labKeyDefault, req.Add(-time.Second), req.Add(30*time.Second), true)
+		case !w.Req.IsZero():
+			reply := replyTimesFrom(capPath, labKeyDefault, w.Req.Add(-time.Second), w.Req.Add(30*time.Second), true)
 			wide("2. A restarted; the first re-authorization request", fmt.Sprintf("%s after the login, %s after the restart: %s",
-				req.Sub(loginAt).Round(time.Second), req.Sub(restartAt).Round(time.Second), strings.Join(reply, "; ")))
-		case !ended.IsZero():
-			wide("2. A restarted; the session", fmt.Sprintf("ended %s after the login with no re-authorization request",
-				ended.Sub(loginAt).Round(time.Second)))
+				w.Req.Sub(loginAt).Round(time.Second), w.Req.Sub(restartAt).Round(time.Second), strings.Join(reply, "; ")))
+			if repliesWith(reply, "PASS_ADD", "172.100.100.1")+repliesWith(reply, "PASS_REPL", "172.100.100.1") == 0 {
+				fail("the re-authorization after A's restart was not answered PASS from 172.100.100.1: %s", strings.Join(reply, "; "))
+			}
+		case !w.Dead.IsZero():
+			wide("2. A restarted; the session", fmt.Sprintf("INVALID: the SSH transport died %s after the login (%v) with no re-authorization request",
+				w.Dead.Sub(loginAt).Round(time.Second), w.DeadErr))
+			fail("the SSH transport died before a re-authorization request: %v", w.DeadErr)
+		case !w.Ended.IsZero():
+			wide("2. A restarted; the session", fmt.Sprintf("INVALID: the session ended %s after the login with no re-authorization request and no denial",
+				w.Ended.Sub(loginAt).Round(time.Second)))
 			fail("the session ended before a re-authorization request")
 		default:
 			wide("2. A restarted; the first re-authorization request", "INVALID: none within 20 minutes of the restart")
@@ -524,7 +705,10 @@ func TestJunosReauthorizationAfterRestart(t *testing.T) {
 		}
 		recs := l.waitForRecords(offA, 30*time.Second, func(rs []map[string]any) bool { return len(reasonsOf(rs, "authorize_session")) > 0 })
 		wide("2. port49d A's records since the restart", fmt.Sprintf("authorize_session %v; accounting %v", reasonsOf(recs, "authorize_session"),
-			reasonsOf(recs, "accounting")))
+			reasonsOf(recs, "account")))
+		if !w.Req.IsZero() && !anyPrefix(reasonsOf(recs, "authorize_session"), "permit") {
+			fail("A's records show no permit for the re-authorization after its restart: %v", reasonsOf(recs, "authorize_session"))
+		}
 		wide("2. the session after the re-authorization, `show version`", shellCell(l, sh, "show version"))
 
 		// Revoke the principal and wait for the next re-authorization.
@@ -535,23 +719,49 @@ func TestJunosReauthorizationAfterRestart(t *testing.T) {
 		revokeAt := time.Now()
 		offA = l.mark()
 		wide("3. `port49 revoke --principal` on the broker's socket", firstLine(revText))
-		req2, ended2 := awaitReauthorization(t, l, sh, capPath, revokeAt, 20*time.Minute)
+		w2 := awaitReauthorization(t, l, sh, capPath, revokeAt, 20*time.Minute)
+		var denied bool
 		switch {
-		case !req2.IsZero():
-			reply := replyTimesFrom(capPath, labKeyDefault, req2.Add(-time.Second), req2.Add(30*time.Second), true)
+		case !w2.Req.IsZero():
+			reply := replyTimesFrom(capPath, labKeyDefault, w2.Req.Add(-time.Second), w2.Req.Add(30*time.Second), true)
 			wide("3. the next re-authorization request", fmt.Sprintf("%s after the revocation: %s",
-				req2.Sub(revokeAt).Round(time.Second), strings.Join(reply, "; ")))
-		case !ended2.IsZero():
-			wide("3. the session", fmt.Sprintf("ended %s after the revocation with no further re-authorization request",
-				ended2.Sub(revokeAt).Round(time.Second)))
+				w2.Req.Sub(revokeAt).Round(time.Second), strings.Join(reply, "; ")))
+			denied = repliesWith(reply, "FAIL", "172.100.100.1")+repliesWith(reply, "ERROR", "172.100.100.1") > 0
+			if !denied {
+				fail("the re-authorization after the revocation was not denied: %s", strings.Join(reply, "; "))
+			}
+		case !w2.Dead.IsZero():
+			wide("3. the session", fmt.Sprintf("INVALID: the SSH transport died %s after the revocation (%v) before a re-authorization request",
+				w2.Dead.Sub(revokeAt).Round(time.Second), w2.DeadErr))
+			fail("the SSH transport died before the re-authorization after the revocation: %v", w2.DeadErr)
+		case !w2.Ended.IsZero():
+			wide("3. the session", fmt.Sprintf("INVALID: ended %s after the revocation with no re-authorization request before it",
+				w2.Ended.Sub(revokeAt).Round(time.Second)))
+			fail("the session ended after the revocation with no re-authorization request and no denial before it")
 		default:
 			wide("3. the next re-authorization request", "INVALID: none within 20 minutes of the revocation")
 			fail("no re-authorization request within 20 minutes of the revocation")
 		}
 		recs = l.waitForRecords(offA, 30*time.Second, func(rs []map[string]any) bool { return len(reasonsOf(rs, "authorize_session")) > 0 })
 		wide("3. port49d A's records since the revocation", fmt.Sprintf("authorize_session %v", reasonsOf(recs, "authorize_session")))
-		wide("3. the session after the denial, `show version`", shellCell(l, sh, "show version"))
-		wide("3. whether the device ended the session", fmt.Sprintf("session ended: %v", sh.ended()))
+		if denied && !contains(reasonsOf(recs, "authorize_session"), "deny credential_revoked") {
+			fail("A's records show no deny credential_revoked for the re-authorization after the revocation: %v", reasonsOf(recs, "authorize_session"))
+		}
+		// What the device does with the session on a denial: watched for 60s,
+		// and an end is the denial's only if a FAIL or ERROR reached the
+		// device within 60s before it.
+		if endAt, ended := watchSessionEnd(sh, 60*time.Second); ended {
+			l.flushCapture(t)
+			if denialBefore(authorReplies(capPath, revokeAt), endAt, 60*time.Second) {
+				wide("3. the session after the denial", fmt.Sprintf("the device ended the session %s after the revocation, with a FAIL or ERROR before it",
+					endAt.Sub(revokeAt).Round(time.Second)))
+			} else {
+				wide("3. the session after the denial", "INVALID: the session ended with no denial before it")
+				fail("the session ended with no FAIL or ERROR to the device in the 60s before it")
+			}
+		} else {
+			wide("3. the session after the denial", "still open 60s after the denial; `show version`: "+shellCell(l, sh, "show version"))
+		}
 
 		note := obs.String()
 		if len(failed) > 0 {
@@ -562,4 +772,14 @@ func TestJunosReauthorizationAfterRestart(t *testing.T) {
 			t.Fatalf("L36 on %s: %s", l.p.name, strings.Join(failed, "; "))
 		}
 	})
+}
+
+// anyPrefix reports whether any of list starts with prefix.
+func anyPrefix(list []string, prefix string) bool {
+	for _, x := range list {
+		if strings.HasPrefix(x, prefix) {
+			return true
+		}
+	}
+	return false
 }

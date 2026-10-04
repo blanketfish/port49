@@ -249,3 +249,102 @@ func TestSplitAttemptsReadsWhichServerRefusedAndWhichAnswered(t *testing.T) {
 		t.Errorf("splitSent: %d SYNs, %d packets with a payload, %v; want 2 and 1", syns, sent, err)
 	}
 }
+
+func TestDarkBoundAtTheLabsValues(t *testing.T) {
+	// 5 failed pings 10s apart, hold_ttl for the open circuit, a sixth more
+	// for the next call, the call's own timeout, and 5s of slack.
+	if got, want := darkBound(60*time.Second, 500*time.Millisecond, 5), 125500*time.Millisecond; got != want {
+		t.Fatalf("darkBound = %s, want %s", got, want)
+	}
+	if darkBound(15*time.Second, 500*time.Millisecond, 5) >= darkBound(60*time.Second, 500*time.Millisecond, 5) {
+		t.Error("the bound does not grow with hold_ttl")
+	}
+}
+
+func TestServerListedReadsTheGroupBack(t *testing.T) {
+	both := map[string]string{
+		"arista_eos":  "aaa group server tacacs+ port49\n   server 172.100.100.1\n   server 172.100.100.2\n",
+		"cisco_nxos":  "tacacs-server host 172.100.100.1 key 7 x\ntacacs-server host 172.100.100.2 key 7 x\naaa group server tacacs+ port49\n  server 172.100.100.1\n  server 172.100.100.2\n",
+		"cisco_iosxe": "tacacs server port49-host\n address ipv4 172.100.100.1\ntacacs server port49-host2\n address ipv4 172.100.100.2\naaa group server tacacs+ port49\n server name port49-host\n server name port49-host2\n",
+		"juniper_vsrx": "set system tacplus-server 172.100.100.1 secret <removed>\nset system tacplus-server 172.100.100.2 secret <removed>\n" +
+			"set system accounting destination tacplus server 172.100.100.2 secret <removed>\n",
+	}
+	one := map[string]string{
+		"arista_eos":   "aaa group server tacacs+ port49\n   server 172.100.100.1\n",
+		"cisco_nxos":   "tacacs-server host 172.100.100.1 key 7 x\naaa group server tacacs+ port49\n  server 172.100.100.1\n",
+		"cisco_iosxe":  "tacacs server port49-host\n address ipv4 172.100.100.1\naaa group server tacacs+ port49\n server name port49-host\n",
+		"juniper_vsrx": "set system tacplus-server 172.100.100.1 secret <removed>\n",
+	}
+	for p, rb := range both {
+		if err := serverListed(p, rb, true); err != nil {
+			t.Errorf("%s: both listed, add check: %v", p, err)
+		}
+		if err := serverListed(p, rb, false); err == nil {
+			t.Errorf("%s: both listed, but the removal check passed", p)
+		}
+		if err := serverListed(p, one[p], true); err == nil {
+			t.Errorf("%s: one listed, but the add check passed", p)
+		}
+		if err := serverListed(p, one[p], false); err != nil {
+			t.Errorf("%s: one listed, removal check: %v", p, err)
+		}
+	}
+	// The second server listed before the first is not the order the cells measure.
+	rev := "aaa group server tacacs+ port49\n   server 172.100.100.2\n   server 172.100.100.1\n"
+	if err := serverListed("arista_eos", rev, true); err == nil {
+		t.Error("the second server listed first passed the add check")
+	}
+}
+
+func TestRepliesWithCountsAStatusFromAServer(t *testing.T) {
+	lines := []string{"AUTHOR seq 1 -> FAIL from 172.100.100.1 in 500ms", "AUTHOR seq 1 -> PASS_ADD from 172.100.100.2 in 3ms",
+		"AUTHOR seq 1 unanswered"}
+	if got := repliesWith(lines, "FAIL", ""); got != 1 {
+		t.Errorf("FAIL from anyone: %d", got)
+	}
+	if got := repliesWith(lines, "PASS_ADD", "172.100.100.1"); got != 0 {
+		t.Errorf("PASS_ADD from .1: %d", got)
+	}
+	if got := repliesWith(lines, "PASS_ADD", "172.100.100.2"); got != 1 {
+		t.Errorf("PASS_ADD from .2: %d", got)
+	}
+}
+
+func TestDenialBeforeAttributesASessionEnd(t *testing.T) {
+	end := time.Now()
+	denied := []authorReply{{At: end.Add(-5 * time.Second), Status: "FAIL"}}
+	if !denialBefore(denied, end, 60*time.Second) {
+		t.Error("a FAIL 5s before the end was not attributed")
+	}
+	if denialBefore([]authorReply{{At: end.Add(-5 * time.Second), Status: "PASS_ADD"}}, end, 60*time.Second) {
+		t.Error("a PASS 5s before the end was attributed as a denial")
+	}
+	if denialBefore([]authorReply{{At: end.Add(-5 * time.Minute), Status: "FAIL"}}, end, 60*time.Second) {
+		t.Error("a FAIL five minutes before the end was attributed")
+	}
+	if denialBefore([]authorReply{{At: end.Add(5 * time.Second), Status: "FAIL"}}, end, 60*time.Second) {
+		t.Error("a FAIL after the end was attributed")
+	}
+	if !denialBefore([]authorReply{{At: end.Add(-time.Second), Status: "ERROR"}}, end, 60*time.Second) {
+		t.Error("an ERROR 1s before the end was not attributed")
+	}
+}
+
+func TestDarkTimesVerdictJudgesBothSpans(t *testing.T) {
+	s := time.Second
+	for _, c := range []struct {
+		name string
+		d    darkTimes
+		bad  int
+	}{
+		{"as designed", darkTimes{Open: 50 * s, Dark: 112 * s}, 0},
+		{"past the bound", darkTimes{Open: 100 * s, Dark: 170 * s}, 1},
+		{"never dark", darkTimes{Open: 50 * s}, 1},
+		{"dark with no circuit line", darkTimes{Dark: 100 * s}, 1},
+		{"dark too soon after opening", darkTimes{Open: 50 * s, Dark: 70 * s}, 1},
+	} {
+		if got := c.d.verdict("port49d"); len(got) != c.bad {
+			t.Errorf("%s: %d findings %v, want %d", c.name, len(got), got, c.bad)
+		}
+	}
+}
