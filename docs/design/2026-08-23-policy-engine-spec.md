@@ -6932,7 +6932,7 @@ sealed write sequence every process follows, and a ledger record the daemon cann
   instant for every key; with the same, it purges none, so a rolling restart of the brokers
   keeps everyone's tokens. A token minted in the moment between that instant and the purge is
   purged too, and its login fails `token_not_found`. After an etcd restore, the unspent tokens
-  (`<prefix>v1/t/`) and `meta/judged` are deleted before any port49 process reaches the
+  (`<prefix>v1/t/`), `meta/judged` and `meta/judged_bundle` are deleted before any port49 process reaches the
   restored store (design §13's runbook): a restore brings back every token redeemed since the
   snapshot, unspent, and a port49d, one that ran across the restore too, would redeem it again
   until the first takeover purges, minutes later.

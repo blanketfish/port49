@@ -727,7 +727,9 @@ them. The ones to read first are under "Worth reading before the merge".
       - **With no broker host at all,** the operator writes the mark as etcd's root:
         `etcdctl put <prefix>v1/rv/principal/<key> '{"kind":"principal","key":"<key>","at":"<RFC 3339
         now>","origin":"etcdctl"}'`. Every port49d denies at the next command. Tokens are not
-        deleted, so a token already minted still logs in and each of its commands is denied.
+        deleted, but a token already minted is refused at its login, `credential_revoked`; open
+        sessions are denied at their next command. (The code corrected the doc: the brief said
+        such a token logs in and is denied command by command.)
         The next runner's takeover applies the mark to the kept contexts.
 14. **`store-roles` reads both files:** `port49d store-roles --config port49d.yaml
     --broker-config port49-broker.yaml`.
@@ -1085,7 +1087,7 @@ in this plan, and the tests named pin it.
     restored members serving clients on loopback only;
   - there, as etcd's root, `etcdctl del --prefix <prefix>v1/t/` (a restore brings back every
     token redeemed since the snapshot, and a port49d that reaches the store first redeems it
-    again), then `etcdctl del <prefix>v1/meta/judged`; only then restart the members on their
+    again), then `etcdctl del <prefix>v1/meta/judged` and `etcdctl del <prefix>v1/meta/judged_bundle`; only then restart the members on their
     usual client URLs, so no port49d or broker reaches a restored token; and check the policy
     file on every broker host: the first start after the delete has no judged bundle to guard
     against;
@@ -6728,11 +6730,11 @@ Nothing here asserts what a device does. The device cells it adds cite L37 or L3
            (`store_unavailable`) until that process writes at the key; and a port49d restarted
            before the put-back loads the restored marks, so it enforces none the restore lost until
            the runner puts them back.
-        3. On the loopback address, as etcd's root, delete the unspent tokens and `meta/judged`:
+        3. On the loopback address, as etcd's root, delete the unspent tokens and `meta/judged` and `meta/judged_bundle`:
            `etcdctl --endpoints https://127.0.0.1:2379 del --prefix <prefix>v1/t/`, then
-           `etcdctl --endpoints https://127.0.0.1:2379 del <prefix>v1/meta/judged` (in a container
-           or on Kubernetes, run `etcdctl` in the member's own network namespace). Only once both
-           have landed, restart the member or members on their usual client URLs. Do not open them
+           `etcdctl --endpoints https://127.0.0.1:2379 del <prefix>v1/meta/judged`, then the same with
+           `meta/judged_bundle` (in a container or on Kubernetes, run `etcdctl` in the member's own
+           network namespace). Only once all three have landed, restart the member or members on their usual client URLs. Do not open them
            before: a restore brings back every single-use token redeemed since the snapshot,
            unspent, and a port49d that reaches the store before the token delete, one that ran
            across the restore too, redeems such a token a second time, and no line says so; the
@@ -11156,12 +11158,7 @@ Ruling 16. Read "Running the lab" first. **No claim enters a doc before its row'
     the 40-minute watchdog on the Junos images;
   - beehive's root filesystem has 20 GiB free (`df -h /`; 7d's Task 15 died at ENOSPC);
   - `make evidence` passes on the feature branch (7d's L35 captures are on `main`);
-  - the five images are present (`image_check_test.go`);
-  - `TestStoreOutageEndToEnd` and `TestStoreSnapshotRestore` start on the split (a dry run on
-    one image). Task 16 left `storeLab` returning both store blocks, and left both tests on a
-    single port49d config that carries `slice/broker.yaml`'s `broker:` block and the lab seeds,
-    which `config.Load` refuses on etcd ("lab seed tokens are minted by port49-broker"). Step 1
-    moves the seeds, the broker block and `store.etcd.broker` into the port49-broker file.
+  - the five images are present (`image_check_test.go`).
 
 - [ ] **Step 1: The harness, committed first.**
   - **`startSplit(cfg splitCfg)`.** It starts, from the pinned `bin/`:
@@ -11214,6 +11211,18 @@ Ruling 16. Read "Running the lab" first. **No claim enters a doc before its row'
     Restart A, with B stopped so the device asks A. Wait 16 minutes, watching the capture for
     the re-authorization request. Record its reply and the session's reaction. Then revoke the
     principal and wait for the next re-authorization: does a denial end the session, or not?
+
+  - **Port the two L35 tests to the split.** `TestStoreOutageEndToEnd` and
+    `TestStoreSnapshotRestore` still start one port49d on a config carrying `slice/broker.yaml`'s
+    `broker:` block and the lab seeds. `config.Load` refuses that first at `checkStore`
+    ("store.backend: etcd runs the broker as its own process"), and then the seeds ("lab seed
+    tokens are minted by port49-broker"). Write a port49-broker.yaml from `slice/broker.yaml`'s
+    block plus `key_refs`, `broker.state_dir`, the lab seeds and `storeLab`'s `brokerBlock`, and
+    start `bin/port49-broker` on it. port49d.yaml gets `policy:` and the daemon's `block`, with
+    no `broker:` and no seeds.
+  - **Dry run before the commit.** Start `TestStoreOutageEndToEnd` on one image and check that
+    port49d and port49-broker start and that its first cell runs. Step 2's L35 re-check depends
+    on it.
 
   Commit before the run:
 
@@ -11514,7 +11523,7 @@ The roadmap's "7e-1's operator notes, as built" (`README.md`) is the full text t
     which marks it put back, never before;
   - there, as etcd's root, `etcdctl del --prefix <prefix>v1/t/` (a restore brings back every
     token redeemed since the snapshot, and a port49d that reaches the store first redeems it
-    again), then `etcdctl del <prefix>v1/meta/judged`; only then restart the members on their
+    again), then `etcdctl del <prefix>v1/meta/judged` and `etcdctl del <prefix>v1/meta/judged_bundle`; only then restart the members on their
     usual client URLs;
   - start the brokers, one whose `broker.state_dir` survived the restore first.
   The first runner puts back the marks the restore lost, says how many, and purges the unspent
