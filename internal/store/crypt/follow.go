@@ -115,8 +115,10 @@ func rescan(ctx context.Context, feed store.ContextFeed, src store.LedgerSource,
 //
 // A change the feed brings again, after a re-watch or a rescan, is below
 // or at the mark it raised: Observe never lowers a mark, and takes a
-// plaintext revoked_at as the floor only from a record at the mark, so
-// nothing brought again lowers a mark or revokes a later record.
+// plaintext revoked_at as the floor only from a record at the mark, or
+// through the sequences below the revocation's own revision
+// (revokedBelow), so nothing brought again lowers a mark or revokes a
+// record written after it.
 func FollowContexts(ctx context.Context, feed store.ContextFeed, src store.LedgerSource, keys Keys,
 	l *Ledger, from uint64, up func(bool), rescanned func(), logf func(string, ...any)) error {
 	failing := false

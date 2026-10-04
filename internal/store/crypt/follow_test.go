@@ -1120,3 +1120,125 @@ func TestARescansSeedOwesTheRecordWhatTheLedgerKnowsAboveIt(t *testing.T) {
 		t.Fatalf("owed after a rolled-back record's seed: %+v", owed)
 	}
 }
+
+// followRevocation starts FollowContexts on l over a feed the test sends
+// on, unbuffered: deliver returns once the change is observed.
+func followRevocation(t *testing.T, l *Ledger) (deliver func(store.ContextChange)) {
+	t.Helper()
+	feed := &feedOf{changes: make(chan store.ContextChange), compact: make(chan struct{}),
+		progressed: make(chan uint64)}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go FollowContexts(ctx, feed, nil, keys(), l, 0, func(bool) {}, func() {}, t.Logf)
+	return func(c store.ContextChange) {
+		feed.changes <- c
+		feed.progressed <- c.Rev // back in the watch's select: c is observed
+	}
+}
+
+// revokeKeyless puts back the record saved at ka and revokes it with no
+// key, as a runner whose ledger denies it does (Ruling T13b-a), and
+// returns the revoked record and its revision R.
+func revokeKeyless(t *testing.T, inner *memory.Store, saved store.Context, at time.Time) (store.Context, uint64) {
+	t.Helper()
+	if err := inner.PutContext(context.Background(), ka, saved, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := inner.SetRevokedAt(context.Background(), ka, at); err != nil {
+		t.Fatal(err)
+	}
+	rv, err := inner.GetContext(context.Background(), ka)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rv, rv.Rev
+}
+
+// Another process's keyless revocation of a record put back below this
+// one's mark, brought by the feed, is a floor here through the mark, as a
+// floor bounded by the revocation's revision (Ruling T15-a): the
+// session's own record, sealed before it and put back after it, is
+// answered revoked by a running process (spec, final review 7d-2 I-1).
+func TestAFollowedRevocationBelowTheMarkHoldsTheRecordsSealedBeforeIt(t *testing.T) {
+	inner, a, _, la, _ := twoProcesses(t)
+	at := time.Unix(1_000_000, 0).UTC()
+	login(t, a, "ctx-alice", "user:alice")
+	s0, _ := inner.GetContext(context.Background(), ka)
+	login(t, a, "ctx-alice", "user:alice")
+	s1, _ := inner.GetContext(context.Background(), ka)
+	deliver := followRevocation(t, la)
+	rv, r := revokeKeyless(t, inner, s0, at)
+	deliver(store.ContextChange{Key: ka, Context: rv, Rev: r})
+	if err := inner.PutContext(context.Background(), ka, s1, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	c, err := a.GetContext(context.Background(), ka)
+	if err != nil || !c.RevokedAt.Equal(at) {
+		t.Fatalf("the session's own record, put back after the revocation: revoked_at %v, %v; want %v",
+			c.RevokedAt, err, at)
+	}
+}
+
+// The bound, pinned at its edge: a record sealed at R-1 is held, so a
+// bound of R-2 is not enough; a login sealed at R itself, which seqFor
+// can seal (it compares on the revoked record's revision, R, and the
+// store may have told it nothing later), is admitted, and stays admitted
+// when the revocation is brought again, so neither R nor the mark alone
+// is the bound (Ruling T15-a).
+func TestAFollowedRevocationsFloorIsBoundedByItsRevision(t *testing.T) {
+	at := time.Unix(1_000_000, 0).UTC()
+	l := NewLedger()
+	l.SetBase(1)
+	l.Observe(ka, 10, 10, time.Time{}, at.Add(time.Hour))
+	l.ObserveFollowed(ka, 5, 11, at, at.Add(time.Hour)) // R = 11: the mark is R-1
+	if !l.floor(ka).Equal(at) {
+		t.Fatalf("a record sealed at R-1 is not held by the floor: %v", l.floor(ka))
+	}
+	l.Observe(ka, 10, 12, time.Time{}, at.Add(time.Hour)) // it, put back after R
+	if !l.floor(ka).Equal(at) {
+		t.Fatal("the record sealed at R-1, put back after R, lifted the floor")
+	}
+	l.wrote(ka, 11, 13, at.Add(time.Hour)) // a login sealed at R
+	if !l.floor(ka).IsZero() {
+		t.Fatalf("a login sealed at R is held by the floor: %v", l.floor(ka))
+	}
+	l.ObserveFollowed(ka, 5, 11, at, at.Add(time.Hour)) // brought again
+	if !l.floor(ka).IsZero() {
+		t.Fatalf("the revocation brought again holds a login sealed at R: %v", l.floor(ka))
+	}
+}
+
+// A login after the revocation is sealed at R (seqFor's fact) and
+// admitted, and the revocation brought again, by a re-watch from an older
+// revision or a compacted rescan, does not revoke it (Ruling T15-a).
+func TestALoginAfterAFollowedRevocationStaysAdmittedWhenItIsBroughtAgain(t *testing.T) {
+	inner, a, _, la, _ := twoProcesses(t)
+	at := time.Unix(1_000_000, 0).UTC()
+	login(t, a, "ctx-alice", "user:alice")
+	s0, _ := inner.GetContext(context.Background(), ka)
+	login(t, a, "ctx-alice", "user:alice")
+	deliver := followRevocation(t, la)
+	rv, r := revokeKeyless(t, inner, s0, at)
+	deliver(store.ContextChange{Key: ka, Context: rv, Rev: r})
+	login(t, a, "ctx-alice", "user:alice")
+	after, _ := inner.GetContext(context.Background(), ka)
+	if seq := seqOf(t, after); seq != r {
+		t.Fatalf("the login after the revocation sealed at %d, R %d: the test no longer pins the edge", seq, r)
+	}
+	check := func(when string) {
+		t.Helper()
+		if c, err := a.GetContext(context.Background(), ka); err != nil || !c.RevokedAt.IsZero() {
+			t.Fatalf("the login after the revocation, %s: revoked_at %v, %v", when, c.RevokedAt, err)
+		}
+	}
+	check("once it landed")
+	deliver(store.ContextChange{Key: ka, Context: rv, Rev: r}) // a re-watch from before R
+	check("with the revocation brought again")
+	l2 := NewLedger() // a rescan's observe, on a ledger loaded before
+	l2.SetBase(1)
+	l2.Observe(ka, seqOf(t, after), after.Rev, time.Time{}, at.Add(time.Hour))
+	observe(l2, keys(), ka, rv, false)
+	if !l2.floor(ka).IsZero() {
+		t.Fatalf("a rescan's revoked record holds the later login: %v", l2.floor(ka))
+	}
+}

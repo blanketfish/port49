@@ -67,9 +67,11 @@ const DefaultLedgerKeep = 24 * time.Hour
 // key's revocation floor (final review 7d-2 I-1): GetContext takes the
 // latest of the sealed time, the plaintext time and the floor. The floor
 // is set by this process's own revocation (revoked), held through the
-// mark and every sequence sealed before the revocation landed, and by any
+// mark and every sequence sealed before the revocation landed, by any
 // record it reads or the feed brings at the mark's sequence with a
-// plaintext revoked_at; only a later sequence clears it. The ledger record
+// plaintext revoked_at, and by one the feed brings below the mark, held
+// through the sequences below its revision (revokedBelow); only a later
+// sequence clears it. The ledger record
 // keeps it with the sequence it holds through (store.LedgerMark.FloorSeq),
 // so a restart holds it as far (seedFloor).
 //
@@ -206,6 +208,41 @@ func (l *Ledger) ObserveFollowed(k store.ContextKey, seq, rev uint64, plainRevok
 		return
 	}
 	l.observe(k, seq, rev, plainRevokedAt, ceiling)
+	l.revokedBelow(k, rev, plainRevokedAt)
+}
+
+// revokedBelow takes a plaintext revocation the feed brought at k,
+// committed at rev, as k's floor through min(mark, rev-1) (Ruling T15-a):
+// another process revoked a record this one holds below its mark, which
+// observe takes no floor from, and the record at the mark may be put back
+// after it.
+//
+// Every seal is at most the revision it commits at, so every record that
+// landed before the revocation is sealed at rev-1 or below, and is held.
+// A seal made after it compares on its revision or has seen it (seqFor),
+// so it is sealed at rev or above, and is not held: rev itself is
+// reachable, since a login compares on the revoked record's revision and
+// the store may have told it nothing later, so the bound is rev-1, not
+// rev. A mark above the bound is such a login's, and takes no floor: the
+// revocation brought again, by a re-watch from an older revision or a
+// compacted rescan, revokes nothing written after it.
+func (l *Ledger) revokedBelow(k store.ContextKey, rev uint64, at time.Time) {
+	e, ok := l.m[k]
+	if !ok || e.hw == 0 || rev == 0 || at.IsZero() {
+		return
+	}
+	bound := min(e.hw, rev-1)
+	if bound < e.hw {
+		return
+	}
+	if at.After(e.floor) {
+		e.floor = at
+		l.dirty[k] = true
+	}
+	if bound > e.floorSeq {
+		e.floorSeq = bound
+		l.dirty[k] = true
+	}
 }
 
 // Seed is Observe from the ledger record (plan 7e, Ruling 4), and the

@@ -877,29 +877,35 @@ func TestAHungStoreGoesDarkAndServesAgainWhenItReturns(t *testing.T) {
 	// back.
 	waitCountWithin(t, &out, "runner: took keyspace /port49/", 2, 60*time.Second)
 	waitCountWithin(t, &out, "live context(s) carried onto the policy in force", 2, 30*time.Second)
-	// The runner's revocation of the record put back is a floor in its
-	// ledger, and its keeper writes it to the ledger record (Ruling 4):
-	// a port49d started after it is seeded with it, so the session's own
-	// record, put back, is answered revoked there too, and its owner logs
-	// in again (final review 7d-2 I-1). A running port49d holds a floor
-	// only at its mark's sequence (Ruling 3; plan 7e Task 15 report), so
-	// the test restarts it.
+	// The runner's revocation of the record put back reaches the running
+	// port49d through its context feed, as a floor through the sequences
+	// below the revocation's revision (Ruling T15-a): the session's own
+	// record, sealed before it and put back after it, is answered revoked
+	// (final review 7d-2 I-1).
 	floorIn(t, root, "/port49/v1/lw/"+strings.TrimPrefix(string(earlier.Key), "/port49/v1/c/"))
-	if err := stopDark(); err != nil {
-		t.Fatal(err)
-	}
 	if _, err := root.Put(sctx, string(earlier.Key), string(now.Kvs[0].Value)); err != nil {
 		t.Fatal(err)
 	}
-	tacacs, _ = runSplitDaemon(t, f.daemon, &out, 4)
-	dev = tacacsClient{t: t, addr: tacacs, key: []byte("run-test-secret")}
 	if dev.permits("alice", "configure") {
 		t.Fatalf("the session's own record, put back, lifted the revocation the floor holds; log %s", log.String())
 	}
 	if r := lastCommand(t, &log); r["reason"] != "credential_revoked" {
 		t.Fatalf("the session's own record, put back, was not answered revoked: %v", r)
 	}
-	// A login after it is answered: the system serves again.
+	// A port49d started after it agrees: the runner's keeper wrote the
+	// floor to the ledger record (Ruling 4), and the start is seeded with it.
+	if err := stopDark(); err != nil {
+		t.Fatal(err)
+	}
+	tacacs, _ = runSplitDaemon(t, f.daemon, &out, 4)
+	dev = tacacsClient{t: t, addr: tacacs, key: []byte("run-test-secret")}
+	if dev.permits("alice", "configure") {
+		t.Fatalf("after a restart the session's own record, put back, was taken; log %s", log.String())
+	}
+	if r := lastCommand(t, &log); r["reason"] != "credential_revoked" {
+		t.Fatalf("after a restart the session's own record, put back, was not answered revoked: %v", r)
+	}
+	// A login after the revocation is admitted: the system serves again.
 	loginSession(t, dev, mintOn(t, api, f.pki, "leaf1"), &log)
 	if !dev.permits("alice", "configure") {
 		t.Fatalf("after the store returned a new login's command was not permitted; log %s", log.String())
