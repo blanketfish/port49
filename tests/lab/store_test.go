@@ -45,10 +45,11 @@ func storeLab(t *testing.T) (block string, proxy *etcdtest.Proxy, keys func() (i
 	srv.EnableAuth(t, grants, map[string][]string{"port49-daemon": {etcd.RoleDaemon}, "port49-broker": {etcd.RoleBroker}})
 	proxy = etcdtest.NewProxy(t, strings.TrimPrefix(srv.Endpoint, "https://"))
 	dc, dk := srv.ClientFiles(t, "port49-daemon")
-	bc, bk := srv.ClientFiles(t, "port49-broker")
+	// port49d.yaml names the daemon's identity alone; the broker's is
+	// port49-broker.yaml's (plan 7e, Ruling 1).
 	block = fmt.Sprintf("\nstore:\n  backend: etcd\n  etcd:\n    endpoints: [https://%s]\n    ca_file: %s\n"+
-		"    daemon: {cert_file: %s, key_file: %s}\n    broker: {cert_file: %s, key_file: %s}\n    hold_ttl: 60s\n",
-		proxy.Addr(), filepath.Join(srv.Dir, "ca.pem"), dc, dk, bc, bk)
+		"    daemon: {cert_file: %s, key_file: %s}\n    hold_ttl: 60s\n",
+		proxy.Addr(), filepath.Join(srv.Dir, "ca.pem"), dc, dk)
 	root := srv.Client(t, "root")
 	keys = func() (int64, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -698,13 +699,13 @@ func (e *realEtcd) keys(prefix string) (int64, error) {
 	return r.Count, nil
 }
 
-// storeRoles runs every etcdctl line `port49d store-roles --config cfg`
-// prints, and then the auth-enabling lines its last comment names, through
+// storeRoles runs every etcdctl line `port49d store-roles --config cfg
+// --broker-config brokerCfg` prints, and then the auth-enabling lines its last comment names, through
 // the real etcdctl, as etcd's root does once. It returns one line per
 // command run, with its result.
-func (e *realEtcd) storeRoles(t *testing.T, cfg string) []string {
+func (e *realEtcd) storeRoles(t *testing.T, cfg, brokerCfg string) []string {
 	t.Helper()
-	out, err := exec.Command(filepath.Join(root, "bin", "port49d"), "store-roles", "--config", cfg).CombinedOutput()
+	out, err := exec.Command(filepath.Join(root, "bin", "port49d"), "store-roles", "--config", cfg, "--broker-config", brokerCfg).CombinedOutput()
 	if err != nil {
 		t.Fatalf("port49d store-roles: %v\n%s", err, out)
 	}
@@ -764,8 +765,15 @@ func TestStoreSnapshotRestore(t *testing.T) {
 		e := newRealEtcd(t, bin)
 		e.start(t, e.data)
 		block := fmt.Sprintf("\nstore:\n  backend: etcd\n  etcd:\n    endpoints: [https://%s]\n    ca_file: %s\n"+
-			"    daemon: {cert_file: %s, key_file: %s}\n    broker: {cert_file: %s, key_file: %s}\n    hold_ttl: 60s\n"+
-			"admin_socket: %s\n", e.client, e.ca, e.daemC, e.daemK, e.brokC, e.brokK, filepath.Join(t.TempDir(), "admin.sock"))
+			"    daemon: {cert_file: %s, key_file: %s}\n    hold_ttl: 60s\n"+
+			"admin_socket: %s\n", e.client, e.ca, e.daemC, e.daemK, filepath.Join(t.TempDir(), "admin.sock"))
+		// port49-broker.yaml's store: block, which store-roles reads the
+		// broker's CN from (--broker-config).
+		brokerCfg := filepath.Join(t.TempDir(), "port49-broker.yaml")
+		if err := os.WriteFile(brokerCfg, []byte(fmt.Sprintf("store:\n  backend: etcd\n  etcd:\n    endpoints: [https://%s]\n"+
+			"    ca_file: %s\n    broker: {cert_file: %s, key_file: %s}\n", e.client, e.ca, e.brokC, e.brokK)), 0o600); err != nil {
+			t.Fatal(err)
+		}
 		cfg, err := l.derivedConfig("restore", platformSessionAttributes[l.p.name], string(brokerYAML)+block)
 		if err != nil {
 			t.Fatal(err)
@@ -783,7 +791,7 @@ func TestStoreSnapshotRestore(t *testing.T) {
 		}
 		policyPath, _, _ := strings.Cut(policyLine, "\n")
 		policyPath = strings.TrimSpace(policyPath)
-		row("0. `port49d store-roles`, each line run by etcdctl 3.6.15 as root", strings.Join(e.storeRoles(t, cfg), "; "))
+		row("0. `port49d store-roles`, each line run by etcdctl 3.6.15 as root", strings.Join(e.storeRoles(t, cfg, brokerCfg), "; "))
 		n, err := e.keys("/port49/")
 		row("0. the keyspace before port49d's first start", fmt.Sprintf("%d keys under /port49/ (err %v)", n, err))
 		if err != nil || n != 0 {

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/testpki"
 )
 
@@ -90,7 +91,7 @@ func TestStoreRolesPrintsTheCommands(t *testing.T) {
 		"etcdctl user grant-role port49-daemon port49_daemon",
 		"etcdctl user grant-role port49-broker port49_broker",
 		// The residual, no wider than the spec's (§12; decision 35).
-		"until plan 7e port49d also holds the broker's",
+		"port49d holds it alone (plan 7e)",
 		"store.etcd.roles: unenforced",
 		"if a role already exists, check it with etcdctl role get first",
 	} {
@@ -167,5 +168,102 @@ func TestStoreRolesRefusesMemoryAndUsage(t *testing.T) {
 	errb.Reset()
 	if code := storeRolesCmd([]string{"--config", cfg, "extra"}, &out, &errb); code != 2 || out.Len() != 0 {
 		t.Fatalf("usage: exit %d, stdout %q, stderr %q", code, out.String(), errb.String())
+	}
+}
+
+// sevenDFile writes the fleet's daemon config as 7d's etcdRunServer wrote
+// it: the broker: block and store.etcd.broker added back to port49d.yaml.
+func (f *fleet) sevenDFile(t *testing.T) string {
+	t.Helper()
+	raw, err := os.ReadFile(f.daemon)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bro, err := os.ReadFile(f.broker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, _, _ := strings.Cut(string(bro)[strings.Index(string(bro), "\nbroker:\n")+1:], "store:\n")
+	bc, bk := f.srv.ClientFiles(t, "port49-broker")
+	body := strings.Replace(string(raw), "\nstore:\n", "\n"+block+"store:\n", 1)
+	body = strings.Replace(body, "    call_timeout:", "    broker: {cert_file: "+bc+", key_file: "+bk+"}\n    call_timeout:", 1)
+	p := filepath.Join(t.TempDir(), "port49d.yaml")
+	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// store-roles reads the daemon's CN from port49d.yaml and the broker's from
+// port49-broker.yaml (Ruling 14); either alone is refused, naming the other.
+func TestStoreRolesReadsBothFiles(t *testing.T) {
+	f := splitFleet(t)
+	var out, errb bytes.Buffer
+	if code := storeRolesCmd([]string{"--config", f.daemon, "--broker-config", f.broker}, &out, &errb); code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	if !strings.Contains(out.String(), "etcdctl role grant-permission port49_daemon read --prefix=true /port49/v1/lw/") ||
+		!strings.Contains(out.String(), "etcdctl user add port49-broker --no-password") {
+		t.Fatalf("%s", out.String())
+	}
+	errb.Reset()
+	if code := storeRolesCmd([]string{"--config", f.daemon}, &out, &errb); code != 1 ||
+		!strings.Contains(errb.String(), "--broker-config") {
+		t.Fatalf("one file: exit %d, %s", code, errb.String())
+	}
+}
+
+// A 7d port49d.yaml naming both identities still yields both roles with
+// no --broker-config, and says to move the broker's identity (pre-flight
+// I8: StoreBlocks reads it with no role; Load would refuse it).
+func TestStoreRolesStillReadsA7dFile(t *testing.T) {
+	f := splitFleet(t)
+	old := f.sevenDFile(t) // port49d.yaml as 7d wrote it: a broker: block and both identities
+	var out, errb bytes.Buffer
+	if code := storeRolesCmd([]string{"--config", old}, &out, &errb); code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	if !strings.Contains(out.String(), "etcdctl user add port49-broker --no-password") ||
+		!strings.Contains(errb.String(), "port49-broker.yaml") {
+		t.Fatalf("out %s; err %s", out.String(), errb.String())
+	}
+	if _, err := config.Load(old); err == nil {
+		t.Fatal("control: Load under the daemon's role must refuse the 7d file on etcd")
+	}
+}
+
+// The two files must name one keyspace: roles for a prefix the other
+// component does not use would grant nothing it needs.
+func TestStoreRolesRefusesTwoKeyspaces(t *testing.T) {
+	f := splitFleet(t)
+	raw, err := os.ReadFile(f.broker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := filepath.Join(t.TempDir(), "port49-broker.yaml")
+	if err := os.WriteFile(other, []byte(strings.Replace(string(raw), "    call_timeout:",
+		"    prefix: /other/\n    call_timeout:", 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := storeRolesCmd([]string{"--config", f.daemon, "--broker-config", other}, &out, &errb); code != 1 ||
+		out.Len() != 0 || !strings.Contains(errb.String(), "different keyspaces") {
+		t.Fatalf("exit %d, stdout %q, stderr %q", code, out.String(), errb.String())
+	}
+}
+
+// A file passed for the wrong component is refused naming the identity it
+// lacks: port49-broker.yaml as --config, port49d.yaml as --broker-config.
+func TestStoreRolesRefusesAFileMissingItsIdentity(t *testing.T) {
+	f := splitFleet(t)
+	var out, errb bytes.Buffer
+	if code := storeRolesCmd([]string{"--config", f.broker, "--broker-config", f.broker}, &out, &errb); code != 1 ||
+		out.Len() != 0 || !strings.Contains(errb.String(), "store.etcd.daemon") {
+		t.Fatalf("no daemon identity: exit %d, stdout %q, stderr %q", code, out.String(), errb.String())
+	}
+	errb.Reset()
+	if code := storeRolesCmd([]string{"--config", f.daemon, "--broker-config", f.daemon}, &out, &errb); code != 1 ||
+		out.Len() != 0 || !strings.Contains(errb.String(), "store.etcd.broker") {
+		t.Fatalf("no broker identity: exit %d, stdout %q, stderr %q", code, out.String(), errb.String())
 	}
 }

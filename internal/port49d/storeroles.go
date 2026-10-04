@@ -13,37 +13,66 @@ import (
 	etcdstore "github.com/rhwendt/port49/internal/store/etcd"
 )
 
-// storeRolesCmd is `port49d store-roles [--config FILE]` (spec §12; plan
-// 7d): it prints the etcdctl commands that create port49's two roles for
-// store.etcd.prefix and a user per component named by its certificate's
-// CN. It holds no etcd credential and changes nothing; etcd's root runs
-// the output, once.
+// storeRolesCmd is `port49d store-roles [--config FILE] [--broker-config
+// FILE]` (spec §12; plans 7d, 7e): it prints the etcdctl commands that
+// create port49's two roles for store.etcd.prefix and a user per component
+// named by its certificate's CN, the daemon's from port49d.yaml and the
+// broker's from port49-broker.yaml (Ruling 14). It holds no etcd credential
+// and changes nothing; etcd's root runs the output, once.
 func storeRolesCmd(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("store-roles", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	cfgPath := fs.String("config", "/etc/port49/port49d.yaml", "path to port49d.yaml")
+	brokerPath := fs.String("broker-config", "/etc/port49/port49-broker.yaml", "path to port49-broker.yaml")
 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
-		fmt.Fprintln(stderr, "usage: port49d store-roles [--config FILE]")
+		fmt.Fprintln(stderr, "usage: port49d store-roles [--config FILE] [--broker-config FILE]")
 		return 2
 	}
-	raw, err := config.ReadRegular(*cfgPath, config.MaxConfigSize)
+	brokerGiven := false
+	fs.Visit(func(f *flag.Flag) { brokerGiven = brokerGiven || f.Name == "broker-config" })
+	dsc, err := storeBlocksOf(*cfgPath)
 	if err != nil {
 		fmt.Fprintln(stderr, "port49d store-roles:", err)
 		return 1
 	}
-	sc, err := config.StoreBlocks(raw)
-	if err != nil {
-		fmt.Fprintln(stderr, "port49d store-roles:", err)
-		return 1
-	}
-	if sc.Etcd == nil {
+	if dsc.Etcd == nil {
 		fmt.Fprintln(stderr, "port49d store-roles: store.backend is not etcd; there are no roles to make")
 		return 1
 	}
+	if dsc.Etcd.Daemon == (config.EtcdIdentity{}) {
+		fmt.Fprintf(stderr, "port49d store-roles: %s names no store.etcd.daemon: it is port49d.yaml's\n", *cfgPath)
+		return 1
+	}
+	// A 7d port49d.yaml names both identities, and is read whole when no
+	// --broker-config says otherwise (Ruling 1; config.Load would refuse
+	// it, and store-roles never calls Load).
+	broker := dsc.Etcd.Broker
+	if dsc.Etcd.Broker != nil && !brokerGiven {
+		fmt.Fprintf(stderr, "port49d store-roles: %s names store.etcd.broker, a 7d layout: move the broker's "+
+			"identity to port49-broker.yaml and pass it with --broker-config\n", *cfgPath)
+	} else {
+		bsc, err := storeBlocksOf(*brokerPath)
+		if err != nil {
+			fmt.Fprintf(stderr, "port49d store-roles: the broker's identity is read from port49-broker.yaml, "+
+				"named by --broker-config: %v\n", err)
+			return 1
+		}
+		if bsc.Etcd == nil || bsc.Etcd.Broker == nil {
+			fmt.Fprintf(stderr, "port49d store-roles: %s names no store.etcd.broker; --broker-config is "+
+				"port49-broker.yaml's\n", *brokerPath)
+			return 1
+		}
+		if bsc.Etcd.Prefix != dsc.Etcd.Prefix {
+			fmt.Fprintf(stderr, "port49d store-roles: the two files name different keyspaces: store.etcd.prefix "+
+				"is %q in %s and %q in %s\n", dsc.Etcd.Prefix, *cfgPath, bsc.Etcd.Prefix, *brokerPath)
+			return 1
+		}
+		broker = bsc.Etcd.Broker
+	}
 	users := map[string]string{}
 	for _, id := range []struct{ role, path string }{
-		{etcdstore.RoleDaemon, sc.Etcd.Daemon.CertFile},
-		{etcdstore.RoleBroker, sc.Etcd.Broker.CertFile},
+		{etcdstore.RoleDaemon, dsc.Etcd.Daemon.CertFile},
+		{etcdstore.RoleBroker, broker.CertFile},
 	} {
 		cn, err := commonName(id.path)
 		if err != nil {
@@ -63,7 +92,7 @@ func storeRolesCmd(args []string, stdout, stderr io.Writer) int {
 	for _, n := range []struct{ what, v string }{
 		{"the daemon certificate's CN", users[etcdstore.RoleDaemon]},
 		{"the broker certificate's CN", users[etcdstore.RoleBroker]},
-		{"store.etcd.prefix", sc.Etcd.Prefix},
+		{"store.etcd.prefix", dsc.Etcd.Prefix},
 	} {
 		if !shellSafe(n.v) {
 			fmt.Fprintf(stderr, "port49d store-roles: %s %q holds a character outside [A-Za-z0-9._@/-]; "+
@@ -71,12 +100,12 @@ func storeRolesCmd(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 	}
-	fmt.Fprintf(stdout, "# port49 roles for keyspace %s (plan 7d). Run as etcd's root user, once.\n", sc.Etcd.Prefix)
+	fmt.Fprintf(stdout, "# port49 roles for keyspace %s (plan 7e). Run as etcd's root user, once.\n", dsc.Etcd.Prefix)
 	// What the daemon's role is worth, no more than spec §12 says.
 	fmt.Fprintln(stdout, "# port49_daemon cannot write a revocation mark, so it cannot lift a revocation by")
-	fmt.Fprintln(stdout, "# principal or certificate. That holds for the daemon's credential taken alone:")
-	fmt.Fprintln(stdout, "# until plan 7e port49d also holds the broker's, whose role is the whole keyspace,")
-	fmt.Fprintln(stdout, "# marks included, and under store.etcd.roles: unenforced the daemon's is too.")
+	fmt.Fprintln(stdout, "# principal or certificate. The daemon's credential cannot write a mark, meta/, the")
+	fmt.Fprintln(stdout, "# ledger record or the superseded record; port49d holds it alone (plan 7e). Under")
+	fmt.Fprintln(stdout, "# store.etcd.roles: unenforced the daemon's is as wide as the broker's.")
 	// etcdctl role add fails on a role that exists and leaves its grants;
 	// a grant on another range than these is added to the role, not
 	// replaced (task 11 review M3). port49d's start check refuses a daemon
@@ -84,7 +113,7 @@ func storeRolesCmd(args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintln(stdout, "# if a role already exists, check it with etcdctl role get first: a grant on a range")
 	fmt.Fprintln(stdout, "# not printed here stays in force.")
 	made := map[string]bool{}
-	for _, g := range etcdstore.Roles(sc.Etcd.Prefix) {
+	for _, g := range etcdstore.Roles(dsc.Etcd.Prefix) {
 		if !made[g.Role] {
 			fmt.Fprintf(stdout, "etcdctl role add %s\n", g.Role)
 			made[g.Role] = true
@@ -102,6 +131,16 @@ func storeRolesCmd(args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintln(stdout, "# then, if auth is not enabled yet: etcdctl user add root --no-password &&")
 	fmt.Fprintln(stdout, "#   etcdctl user grant-role root root && etcdctl auth enable")
 	return 0
+}
+
+// storeBlocksOf reads the store: block of the file at path, checked for its
+// shape alone (config.StoreBlocks).
+func storeBlocksOf(path string) (config.StoreConfig, error) {
+	raw, err := config.ReadRegular(path, config.MaxConfigSize)
+	if err != nil {
+		return config.StoreConfig{}, err
+	}
+	return config.StoreBlocks(raw)
 }
 
 // shellSafe reports whether s is non-empty and every byte of it is one of
