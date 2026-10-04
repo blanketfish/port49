@@ -2827,9 +2827,14 @@ the same session, written back, is denied too: `store_unavailable`, counted as
     - **A pending reservation.** One a stopped port49d left blocks its key for up to a minute.
   - **Editing `broker.revocations_file` with port49d stopped no longer lifts a mark on etcd:**
     the store's copy comes back. Lift with `port49 revoke --lift` on the admin socket.
-  - **Junos re-authorization on etcd is unmeasured.** On the memory store a restart denied
-    every live Junos session's next re-authorization (`authorization-time-interval`). On etcd
-    the contexts survive, but L35 did not measure a re-authorization (§15 L36, open).
+  - **Junos re-authorization on etcd (§15 L36, measured on both Junos images).** On the memory
+    store a restart denied every live Junos session's next re-authorization
+    (`authorization-time-interval`). On etcd the contexts survive: with the interval at 15 minutes
+    a restarted port49d answered the open session's re-authorization `PASS_ADD` from the kept
+    context, and a session revoked before its first re-authorization was denied at it (`FAIL`,
+    `credential_revoked`). The device did not end the session on the denial: its next command
+    printed an error. Revocation reaches a Junos session only at its next re-authorization, up
+    to the interval later.
 - **What an etcd outage does.**
   - **At start:** nothing listens, and `/readyz` says `waiting for the store`. Devices use their
     local method, and break-glass works. port49d waits up to `start_timeout`, then exits 1. With
@@ -2994,6 +2999,12 @@ labpcap audit fails.
 - **7f:**
   - Go-dark proper: the N-failures/M-passes listener control replaces Ruling 11's coarse
     close-and-wait.
+  - The idle-detection gap (L37, measured 2026-10-04): an idle port49d on a hung store goes dark
+    about 2 minutes in at `hold_ttl` 60s (circuit open 43–50s, listeners closed 1m43s–2m0s), because the
+    probe needs five failed pings, a sixth of `hold_ttl` apart, to open the circuit; under load it
+    is about `hold_ttl` plus a probe period (about 70s). IOS-XE is locked out for all of it (its
+    break-glass `ERROR` is final). A probe that re-pings at `breaker.open_for` cadence after one
+    failure is the mitigation to weigh, Ryan's and 7f's call.
   - The warm context cache.
 - **12:**
   - The etcd deployment artifacts: the members, compaction, the quota, and the roles applied

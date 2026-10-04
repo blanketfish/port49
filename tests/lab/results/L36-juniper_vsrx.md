@@ -1,0 +1,27 @@
+# L36 — juniper_vsrx
+
+- **Date measured:** 2026-10-04
+- **Platform:** juniper_vsrx (containerlab node `vsrx1`, 172.100.100.22)
+- **Image version:** vSRX3 21.4R3.15 (`vrnetlab/juniper_vsrx:21.4R3.15`)
+- **Topology:** `tests/lab/topologies/vsrx.clab.yml`
+- **Capture:** `tests/lab/evidence/L36-juniper_vsrx.pcap` — 483 packets to or from the device, countable with `tcpdump -r tests/lab/evidence/L36-juniper_vsrx.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
+- **Transport:** SSH
+
+## Claim
+
+On Junos with `tacplus-options authorization-time-interval 15`, an open session is re-authorized by the device after the port49d replica it logged in through restarts on etcd, and after the principal is revoked the next re-authorization is denied; what the device does with the session on a denial is recorded (plan 7e; spec §13 decision 21).
+
+## Observation
+
+| step | observed |
+|---|---|
+| 0. the device's TACACS+ servers, read back after the push | `set system tacplus-server 172.100.100.1 routing-instance mgmt_junos set system tacplus-server 172.100.100.1 secret <removed> set system tacplus-server 172.100.100.2 routing-instance mgmt_junos set system tacplus-server 172.100.100.2 secret <removed> breakglass@srx1> set system accounting events login set system accounting events change-log set system accounting events interactive-commands set system accounting destination tacplus server 172.100.100.1 routing-instance mgmt_junos set system accounting destination tacplus server 172.100.100.1 secret <removed> set system accounting destination tacplus server 172.100.100.2 routing-instance mgmt_junos set system accounting destination tacplus server 172.100.100.2 secret <removed> breakglass@srx1>` |
+| 1. `set system tacplus-options authorization-time-interval 15`, a login through A (B stopped) | `logged in; 'show version': 2911 bytes in 100ms, first line 'Hostname: srx1'` |
+| 2. A restarted; the first re-authorization request | `15m0s after the login, 14m59s after the restart: AUTHOR seq 1 -> PASS_ADD from 172.100.100.1 in 3ms` |
+| 2. port49d A's records since the restart | `authorize_session [permit context_matched]; accounting [<nil> <nil> <nil> <nil> <nil> <nil>]` |
+| 2. the session after the re-authorization, `show version` | `2911 bytes in 100ms, first line 'Hostname: srx1'` |
+| 3. a second session logged in through A, then `port49 revoke --principal` on the broker's socket (the first closed) | `revoked user:alice@slice.port49.test at 2026-10-04T22:16:14Z: 1 live context(s) marked, the unspent tokens under 0 (device, username) key(s) deleted, 1 held broker connection(s) closed; every mint by user:alice@slice.port49.test is refused until 'port49 revoke --lift --principal user:alice@slice.port49.test'; login 1s before the revocation` |
+| 3. the second session's first re-authorization request | `15m0s after its login, 15m0s after the revocation: AUTHOR seq 1 -> FAIL from 172.100.100.1 in 1ms` |
+| 3. port49d A's records since the revocation | `authorize_session [permit context_matched deny credential_revoked]` |
+| 3. the session after the denial | `still open 60s after the denial; 'show version': 83 bytes in 100ms, first line '^'` |
+
