@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"os"
 	"sync"
 	"time"
@@ -22,8 +23,8 @@ import (
 // this replica saw. The file is keyed by prefix, not by cluster ID, which
 // a restore may or may not keep. Which way it errs: a record lost or old
 // only weakens the check; one the store never reached (a witness deleted
-// by hand, a state_dir reused against a new keyspace) purges once. A nil
-// *witnessRecord is no record.
+// by hand, a state_dir reused against a new keyspace), or one that cannot
+// be read (unreadWitness), purges once. A nil *witnessRecord is no record.
 type witnessRecord struct {
 	path, prefix string
 	out          io.Writer
@@ -39,9 +40,18 @@ type witnessFile struct {
 	ModRevision uint64 `json:"mod_revision"`
 }
 
-// openWitness reads path. An absent file is no record. A file that cannot
-// be read, does not decode, or is another prefix's is no record either,
-// and says so; the next save replaces it.
+// unreadWitness is the record of a witness.json that could not be read or
+// did not decode: above any witness, so the first check purges once, and
+// the purge's Reset replaces it (fix round 1, M-1).
+const unreadWitness = math.MaxUint64
+
+// openWitness reads path. An absent file is no record, and so is another
+// prefix's, which says so; the next save replaces it. A file that cannot
+// be read or does not decode is moved aside to path + ".bad-" + the time,
+// as the marks copy's is, and taken as a record above any witness
+// (unreadWitness): this replica cannot rule out a restore, so the first
+// check purges every unspent token once, which costs a re-login, and says
+// why.
 func openWitness(path, prefix string, out io.Writer) *witnessRecord {
 	w := &witnessRecord{path: path, prefix: prefix, out: out, saved: true}
 	body, err := os.ReadFile(path)
@@ -49,11 +59,21 @@ func openWitness(path, prefix string, out io.Writer) *witnessRecord {
 		return w
 	}
 	var f witnessFile
+	if err == nil {
+		if json.Unmarshal(body, &f) != nil {
+			err = errors.New("it does not decode")
+		}
+	}
 	switch {
 	case err != nil:
-		fmt.Fprintf(out, "port49-broker: reading %s: %v; no witness record\n", path, err)
-	case json.Unmarshal(body, &f) != nil:
-		fmt.Fprintf(out, "port49-broker: %s does not decode; no witness record\n", path)
+		aside := path + ".bad-" + time.Now().UTC().Format("20060102T150405.000000000Z")
+		moved := "moved aside to " + aside
+		if rerr := os.Rename(path, aside); rerr != nil {
+			moved = fmt.Sprintf("could not be moved aside (%v); it is written over once the purge is done", rerr)
+		}
+		fmt.Fprintf(out, "port49-broker: reading %s: %v; %s; this replica cannot tell whether the store was "+
+			"restored, so the first check purges every unspent token once\n", path, err, moved)
+		w.high, w.have = unreadWitness, true
 	case f.Prefix != prefix:
 		fmt.Fprintf(out, "port49-broker: %s is another prefix's (%s), not %s's; no witness record\n", path,
 			printsafe.Line(f.Prefix, 256), prefix)
@@ -150,6 +170,10 @@ func restored(read etcdstore.WitnessRead, recorded uint64, haveRecord bool) (boo
 	}
 	if read.ModRevision >= recorded {
 		return false, ""
+	}
+	if recorded == unreadWitness {
+		return true, "this replica's witness record (broker.state_dir/witness.json) could not be read: the " +
+			"store is taken as restored from a snapshot"
 	}
 	at := fmt.Sprintf("at revision %d", read.ModRevision)
 	if read.ModRevision == 0 {

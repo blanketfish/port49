@@ -1740,6 +1740,12 @@ func TestATakeoverAfterARestorePurgesWithoutTheRunbook(t *testing.T) {
 	if st := dev.login("alice", mintOn(t, api, f.pki, "leaf1")); st != wire.AuthenStatusPass {
 		t.Fatalf("control: a token minted after the takeover: %d", st)
 	}
+	// One restore, one purge: the record follows the purge, so the passes
+	// after it find nothing (Task 15c review I-1).
+	time.Sleep(2 * witnessEvery)
+	if n := strings.Count(out.String()[before:], "every unspent token is purged"); n != 1 {
+		t.Fatalf("%d purges for one restore:\n%s", n, out.String()[before:])
+	}
 }
 
 // A replica that never ran, and only followed the witness, catches the
