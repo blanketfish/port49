@@ -31,7 +31,7 @@ func storeRolesCmd(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "port49d store-roles:", err)
 		return 1
 	}
-	sc, err := config.StoreOf(raw)
+	sc, err := config.StoreBlocks(raw)
 	if err != nil {
 		fmt.Fprintln(stderr, "port49d store-roles:", err)
 		return 1

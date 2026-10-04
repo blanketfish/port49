@@ -288,18 +288,28 @@ func buildBrokerAnchor(cfg config.Config, inventoryFrom string, st store.Store, 
 	return srv, b, anchorCert, nil
 }
 
-// loadPolicy reads broker.policy_file and checks it against the inventory the
-// daemon admits from: a class a platform in it does not define, or a level it
-// cannot render, is found here rather than at the first mint for that device
-// (spec §4, §6). It is the one load, at start and at every reload, so a file
-// the start would refuse is a file a reload refuses, with the same words. A
-// file anyone but port49d's user or root could have written is one of them
-// (readPolicyFile). inventoryFrom names where the inventory came from, for
+// policyKey is the key that named the policy file, for every line about
+// it: broker.policy_file with a broker in the process, policy.file with
+// none (plan 7e).
+func policyKey(cfg config.Config) string {
+	if cfg.Broker != nil {
+		return "broker.policy_file"
+	}
+	return "policy.file"
+}
+
+// loadPolicy reads the policy file (cfg.Policy) and checks it against the
+// inventory the daemon admits from: a class a platform in it does not
+// define, or a level it cannot render, is found here rather than at the
+// first mint for that device (spec §4, §6). It is the one load, at start
+// and at every reload, so a file the start would refuse is a file a reload
+// refuses, with the same words. A file anyone but port49d's user or root
+// could have written is one of them (readPolicyFile). inventoryFrom names where the inventory came from, for
 // that refusal: "inventory_file <path>", or the inventory service's bundle.
 func loadPolicy(cfg config.Config, inventoryFrom string) (*policy.Policy, error) {
-	raw, err := readPolicyFile(cfg.Broker.PolicyFile)
+	raw, err := readPolicyFile(cfg.Policy.File)
 	if err != nil {
-		return nil, fmt.Errorf("broker.policy_file %s: %w", cfg.Broker.PolicyFile, err)
+		return nil, fmt.Errorf("%s %s: %w", policyKey(cfg), cfg.Policy.File, err)
 	}
 	pol, err := parseBundle(cfg, raw, cfg.Inventory)
 	if err != nil {
@@ -320,7 +330,7 @@ func loadPolicy(cfg config.Config, inventoryFrom string) (*policy.Policy, error)
 			fix = "the inventory came from the inventory service, so check the source of truth it syncs from " +
 				"and the service's sync log for what changed"
 		}
-		return nil, fmt.Errorf("broker.policy_file %s with %s: %w", cfg.Broker.PolicyFile,
+		return nil, fmt.Errorf("%s %s with %s: %w", policyKey(cfg), cfg.Policy.File,
 			inventoryFrom, quotesCut{fmt.Errorf("the bundle admits none of the %d device(s) in the inventory "+
 				"(%s: %s); check key_groups and the key_refs port49d.yaml defines, and %s; to take the whole "+
 				"fleet off deliberately, stop port49d", n, r.Device.Name, r.Refused, fix)})
@@ -356,7 +366,7 @@ func fencedInventory(cfg config.Config) (admission.Inventory, string, error) {
 func parseBundle(cfg config.Config, raw []byte, inv admission.Inventory) (*policy.Policy, error) {
 	pol, err := bundle.Parse(raw, inv, policy.Env{KeyRefs: cfg.KeyRefs()})
 	if err != nil {
-		return nil, fmt.Errorf("broker.policy_file %s: %w", cfg.Broker.PolicyFile, quotesCut{err})
+		return nil, fmt.Errorf("%s %s: %w", policyKey(cfg), cfg.Policy.File, quotesCut{err})
 	}
 	return pol, nil
 }
@@ -597,7 +607,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 			err = gone
 		}
 	}()
-	// With a broker the inventory is live, so it is read behind the policy
+	// With a policy the inventory is live, so it is read behind the policy
 	// file's fence, first and only there (config.Load leaves it unread), and
 	// hashed now rather than when the reloader starts: the reloader starts
 	// from the bytes loaded, so an edit in between is loaded (M1). With
@@ -605,7 +615,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 	// place, once the metrics listener is up.
 	var inventoryAtStart string
 	inventoryFrom := "inventory_file " + cfg.InventoryFile
-	if cfg.Broker != nil && cfg.InventoryService == nil {
+	if cfg.Policy != nil && cfg.InventoryService == nil {
 		inv, v, err := fencedInventory(cfg)
 		if err != nil {
 			return err

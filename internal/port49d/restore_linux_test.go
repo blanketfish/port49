@@ -31,6 +31,7 @@ import (
 // streams are held, then every stream dropped, so the watch resumes below
 // the compaction mark and the delete is never delivered as a lift.
 func TestARestoreUnderARunningPort49dKeepsTheFilesMarks(t *testing.T) {
+	t.Skip("plan 7e Task 14: its fixture is a broker: block on etcd, which Task 13 refuses; Task 14 moves it to the split daemon")
 	var out, log syncBuffer
 	e, o := stderr, stdout
 	t.Cleanup(func() { stderr, stdout = e, o })

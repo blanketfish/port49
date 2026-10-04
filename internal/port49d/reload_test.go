@@ -46,6 +46,7 @@ func newReloadRig(t *testing.T, policyBody string) *reloadRig {
 	stderr = io.Discard
 	rig.cfg = brokerConfig(t, policyBody)
 	rig.cfg.Broker.PolicyWatchInterval = time.Second
+	rig.cfg.Policy.WatchInterval = time.Second
 	rig.cfg.MaxRemovedPercent = 10 // config.Load's default
 	// safeDir: the inventory is read behind the policy file's fence.
 	rig.cfg.InventoryFile = filepath.Join(safeDir(t), "inventory.yaml")

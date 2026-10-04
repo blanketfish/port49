@@ -160,7 +160,7 @@ const (
 
 func newReloader(cfg config.Config, b *broker.Broker, m *metrics.Metrics, now func() time.Time) *reloader {
 	start := now()
-	r := &reloader{cfg: cfg, broker: b, metrics: m, now: now, interval: cfg.Broker.PolicyWatchInterval,
+	r := &reloader{cfg: cfg, broker: b, metrics: m, now: now, interval: cfg.Policy.WatchInterval,
 		priors: []broker.Prior{{Policy: b.Policy.Load(), At: start}}}
 	// run sets the version the start loaded; this is a test's. In service
 	// mode there is no inventory file.
@@ -305,7 +305,7 @@ func (r *reloader) poll(ctx context.Context) {
 // it loads is the second read's bytes, the ones the two reads agreed on: read
 // again, a file an editor began writing in between would be loaded half-way.
 func (r *reloader) pollPolicy(ctx context.Context) {
-	raw, v, err := policyVersion(r.cfg.Broker.PolicyFile)
+	raw, v, err := policyVersion(r.cfg.Policy.File)
 	switch {
 	case v == r.broker.Policy.Load().Source:
 		// The file in force ends a run of differing reads: blips days
@@ -316,8 +316,8 @@ func (r *reloader) pollPolicy(ctx context.Context) {
 		if r.refused != "" || alarmed {
 			r.refused = ""
 			r.metrics.PolicyFileRefused.Set(0)
-			fmt.Fprintf(stderr, "port49d: policy: broker.policy_file %s is the policy in force again (%s, bundle %s)\n",
-				r.cfg.Broker.PolicyFile, v, r.broker.Policy.Load().Bundle)
+			fmt.Fprintf(stderr, "port49d: policy: %s %s is the policy in force again (%s, bundle %s)\n", policyKey(r.cfg),
+				r.cfg.Policy.File, v, r.broker.Policy.Load().Bundle)
 			r.retryInventory(ctx, "policy file put back")
 		}
 	case v == r.refused:
@@ -330,9 +330,9 @@ func (r *reloader) pollPolicy(ctx context.Context) {
 		r.pending = v
 		if r.changing++; r.changing == stillChangingAfter {
 			r.metrics.PolicyFileRefused.Set(1)
-			fmt.Fprintf(stderr, "port49d: policy: broker.policy_file %s has changed at each of the last %d reads, "+
+			fmt.Fprintf(stderr, "port49d: policy: %s %s has changed at each of the last %d reads, "+
 				"%s apart, so it is not loaded; still serving %s (bundle %s); write it once, atomically\n",
-				r.cfg.Broker.PolicyFile, stillChangingAfter, r.interval, r.broker.Policy.Load().Source,
+				policyKey(r.cfg), r.cfg.Policy.File, stillChangingAfter, r.interval, r.broker.Policy.Load().Source,
 				r.broker.Policy.Load().Bundle)
 		}
 	default:
@@ -408,7 +408,7 @@ func (r *reloader) reload(ctx context.Context, trigger string) {
 	r.rereadBound()
 	r.rereadVerifyKeys()
 	r.together = ""
-	raw, v, err := policyVersion(r.cfg.Broker.PolicyFile)
+	raw, v, err := policyVersion(r.cfg.Policy.File)
 	if err == nil && v != r.broker.Policy.Load().Source && r.policyParses(raw) {
 		if inv, iv, d, ok := r.newInventory(); ok {
 			if !r.loadBoth(ctx, trigger, atSIGHUP, raw, v, inv, iv, d) && d != nil {
@@ -449,7 +449,7 @@ func (r *reloader) reload(ctx context.Context, trigger string) {
 // only once, which an editor may still be writing — and one that parses: a
 // policy that does not is its own fault, which no inventory can fix.
 func (r *reloader) settledPolicy() ([]byte, string, bool) {
-	raw, v, err := policyVersion(r.cfg.Broker.PolicyFile)
+	raw, v, err := policyVersion(r.cfg.Policy.File)
 	if err != nil || v == r.broker.Policy.Load().Source || (v != r.pending && v != r.refused) {
 		return nil, "", false
 	}
@@ -538,7 +538,7 @@ func (r *reloader) loadBoth(ctx context.Context, trigger string, from combinedFr
 			base = nil
 		}
 		if err = bundle.CheckAdmissionOver(old, base, pol, r.cfg.MaxRemovedPercent, r.now()); err != nil {
-			err = fmt.Errorf("broker.policy_file %s: %w", r.cfg.Broker.PolicyFile, err)
+			err = fmt.Errorf("%s %s: %w", policyKey(r.cfg), r.cfg.Policy.File, err)
 		}
 	}
 	if err != nil {
@@ -901,11 +901,11 @@ func (r *reloader) load(ctx context.Context, trigger string, raw []byte, v strin
 			// device is refused whatever the bound.
 			if err = bundle.CheckAdmission(old, pol, r.cfg.MaxRemovedPercent, r.now()); err != nil {
 				forAdmission = true
-				err = fmt.Errorf("broker.policy_file %s: %w", r.cfg.Broker.PolicyFile, err)
+				err = fmt.Errorf("%s %s: %w", policyKey(r.cfg), r.cfg.Policy.File, err)
 			}
 		}
 	} else {
-		err = fmt.Errorf("broker.policy_file %s: %w", r.cfg.Broker.PolicyFile, err)
+		err = fmt.Errorf("%s %s: %w", policyKey(r.cfg), r.cfg.Policy.File, err)
 	}
 	if err != nil {
 		// Refused alone for what it admits, it is tried with the inventory's
@@ -928,8 +928,8 @@ func (r *reloader) load(ctx context.Context, trigger string, raw []byte, v strin
 	r.metrics.PolicyFileRefused.Set(0)
 	if pol.Source == old.Source {
 		r.metrics.PolicyReloads.WithLabelValues("unchanged").Inc()
-		fmt.Fprintf(stderr, "port49d: policy reload (%s): broker.policy_file unchanged, %s in force (bundle %s)\n",
-			trigger, pol.Source, pol.Bundle)
+		fmt.Fprintf(stderr, "port49d: policy reload (%s): %s unchanged, %s in force (bundle %s)\n",
+			trigger, policyKey(r.cfg), pol.Source, pol.Bundle)
 		return false
 	}
 	r.metrics.PolicyReloads.WithLabelValues("applied").Inc()

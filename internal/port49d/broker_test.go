@@ -61,6 +61,8 @@ func brokerConfigWith(t *testing.T, policyBody string, others []string) config.C
 			PolicyFile: pol, BatchMax: 10, RevocationsFile: filepath.Join(dir, "revocations.json"),
 			MaxConnsPerPrincipal: 4, MaxPendingConnsPerSource: 16,
 			CertificateStatus: &config.CertificateStatusConfig{Disabled: true}},
+		// config.Load mirrors broker.policy_file here (plan 7e).
+		Policy: &config.PolicyConfig{File: pol, WatchInterval: 5 * time.Second},
 	}
 	if _, err := initRevocations(cfg.Broker.RevocationsFile, testInitConfig); err != nil {
 		t.Fatal(err)
@@ -318,6 +320,7 @@ func TestABrokerLoadFailureNamesTheFile(t *testing.T) {
 	} {
 		cfg := brokerConfig(t, minimalPolicy)
 		path := breakIt(cfg.Broker)
+		cfg.Policy.File = cfg.Broker.PolicyFile // as config.Load mirrors it
 		if err := buildWith(cfg); err == nil || !strings.Contains(err.Error(), path) {
 			t.Errorf("%s: the error must name %s: %v", name, path, err)
 		}
