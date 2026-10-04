@@ -377,7 +377,7 @@ func TestTheBrokersStateDirIsItsOwn(t *testing.T) {
 			t.Fatal(err)
 		}
 		if _, err := loadBrokerRole(t, raw); err == nil || !strings.Contains(err.Error(), "broker.state_dir") ||
-			!strings.Contains(err.Error(), "chmod 0700") {
+			!strings.Contains(err.Error(), "chmod 0700 it, or point broker.state_dir at a 0700 directory of its own inside the volume") {
 			t.Errorf("mode %o: %v", mode, err)
 		}
 	}

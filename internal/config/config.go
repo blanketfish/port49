@@ -1180,7 +1180,8 @@ func checkBroker(c Config, b BrokerConfig, role Role) (*BrokerConfig, error) {
 		// directory. Group read, as a 0750 volume mount has, is no write.
 		if fi.Mode().Perm()&0o022 != 0 {
 			return nil, fmt.Errorf("config: broker.state_dir %s is writable by its group or others (mode %04o): "+
-				"port49-broker's own state is kept there; chmod 0700 it", b.StateDir, fi.Mode().Perm())
+				"port49-broker's own state is kept there; chmod 0700 it, or point broker.state_dir at a 0700 directory "+
+				"of its own inside the volume", b.StateDir, fi.Mode().Perm())
 		}
 		// Nor inside, nor around, a directory the inventory service and
 		// port49d rewrite.
