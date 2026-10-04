@@ -38,6 +38,8 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
+	"github.com/rhwendt/port49/internal/store/etcd/etcdtest"
+	"github.com/rhwendt/port49/internal/testpki"
 	"github.com/rhwendt/port49/tests/lab/labcreds"
 	"github.com/rhwendt/port49/tests/lab/labpcap"
 )
@@ -214,6 +216,12 @@ type lab struct {
 	once sync.Once
 	skip string // image absent: every test skips this platform
 	err  error  // setup failed: every test fails this platform
+
+	// splitActive is set while a split deployment (startSplit) runs: port49d A
+	// then reads no seed file (port49-broker mints the seeds), and withAdminCLI
+	// leaves the daemon stopped, since the split's own cleanup puts the
+	// standing one back.
+	splitActive bool
 
 	deployed bool
 	daemon   *exec.Cmd
@@ -1034,6 +1042,9 @@ func (l *lab) startDaemonWith(cfgPath string, resume bool) error {
 	deadline := time.Now().Add(60 * time.Second)
 	for {
 		if daemonHealthy() {
+			if l.splitActive {
+				return nil
+			}
 			return l.loadSeeds(cfgPath, started)
 		}
 		select {
@@ -1801,8 +1812,11 @@ func (l *lab) mark() int64 {
 	return fi.Size()
 }
 
-func (l *lab) recordsSince(off int64) []map[string]any {
-	f, err := os.Open(l.logPath)
+func (l *lab) recordsSince(off int64) []map[string]any { return recordsAt(l.logPath, off) }
+
+// recordsAt is the decision-log records of the file at path from off.
+func recordsAt(path string, off int64) []map[string]any {
+	f, err := os.Open(path)
 	if err != nil {
 		return nil
 	}
@@ -1972,6 +1986,9 @@ func (l *lab) withAdminCLI(t *testing.T, open func(*lab) (*cliConn, error), fn f
 		t.Fatalf("could not stop port49d before opening an admin CLI: %v", err)
 	}
 	restart := func() {
+		if l.splitActive {
+			return
+		}
 		base, err := l.configPath()
 		if err != nil {
 			t.Fatalf("recovering this platform's standing config: %v", err)
@@ -2153,4 +2170,791 @@ func hasSessionAuthz(recs []map[string]any) bool {
 		}
 	}
 	return false
+}
+
+// ---------------------------------------------------------------------------
+// The split deployment (plan 7e): port49-broker and two port49d replicas
+// ---------------------------------------------------------------------------
+
+const (
+	// splitSecondAddr is the bridge's second host address, where port49d B
+	// listens, and the second server each device lists.
+	splitSecondAddr    = "172.100.100.2"
+	splitMetricsB      = "127.0.0.1:9050"
+	splitMetricsBroker = "127.0.0.1:9051"
+
+	// splitSeedComment opens the part of port49d-lab.yaml that is the seeds:
+	// everything from it to the end of the file is lab.seed_token_file and
+	// lab.seed_tokens, which port49-broker.yaml carries and port49d.yaml refuses
+	// on etcd (config.Load: "lab seed tokens are minted by port49-broker").
+	splitSeedComment = "  # Where port49d writes the pairs it mints"
+)
+
+// splitCfg is what startSplit starts.
+type splitCfg struct {
+	// SecondServer adds the bridge's second host address, lists it on the
+	// device after the first in the same group (addSecondServer), and runs
+	// port49d B on it. Without it the deployment is port49-broker and port49d
+	// A, with the one server every other register test was measured with.
+	SecondServer bool
+	// Store, when set, names the store: blocks of a member the test runs (a
+	// real etcd's), in place of storeLab's embedded one.
+	Store *splitStore
+}
+
+// splitStore is a store: block for each process's identity.
+type splitStore struct{ Daemon, Broker string }
+
+// splitNode is what differs between two port49d replicas' configs.
+type splitNode struct{ Listen, Metrics, Admin, Spool string }
+
+// splitBrokerOpts is what port49-broker.yaml names beyond port49d-lab.yaml's.
+type splitBrokerOpts struct {
+	Policy, Inventory, State, Metrics, Admin, Store, PKI string
+}
+
+// swapLine replaces the exact text old in s by new, or says it is not there:
+// a derived config that kept its old line would run the wrong listener.
+func swapLine(s, old, new string) (string, error) {
+	if !strings.Contains(s, old) {
+		return "", fmt.Errorf("tests/lab/port49d-lab.yaml has no `%s` line to derive the split's config from", old)
+	}
+	return strings.Replace(s, old, new, 1), nil
+}
+
+// splitDaemonYAML derives one port49d replica's config from port49d-lab.yaml's
+// text (base): its own listener, metrics address, admin socket and spool; no
+// seeds; the policy it admits from under policy:; the inventory behind the
+// fence; and the daemon's store: block, which carries no broker: block.
+func splitDaemonYAML(base string, n splitNode, policy, inventory, store string) (string, error) {
+	cut := strings.Index(base, splitSeedComment)
+	if cut < 0 {
+		return "", errors.New("tests/lab/port49d-lab.yaml has no seed-token comment to cut the seeds at")
+	}
+	out := strings.TrimRight(base[:cut], "\n") + "\n"
+	var err error
+	for _, s := range [][2]string{
+		{`listen: "` + tacacsAddr + `"`, `listen: "` + n.Listen + `"`},
+		{`metrics_listen: "` + metricsAddr + `"`, `metrics_listen: "` + n.Metrics + `"`},
+		{"spool_path: " + spoolPath, "spool_path: " + n.Spool},
+		{"inventory_file: tests/lab/inventory-lab.yaml", "inventory_file: " + inventory},
+	} {
+		if out, err = swapLine(out, s[0], s[1]); err != nil {
+			return "", err
+		}
+	}
+	return out + "\npolicy:\n  file: " + policy + "\n  watch_interval: 1s\n" + store + "admin_socket: " + n.Admin + "\n", nil
+}
+
+// splitBrokerYAML writes port49-broker.yaml: slice/broker.yaml's block with
+// the policy and state_dir this run names and no revocations_file (the store
+// keeps the marks), the key references, the same inventory and encryption
+// key as port49d's, the broker's store: block, and the lab's seeds.
+func splitBrokerYAML(base, sliceBroker string, o splitBrokerOpts) (string, error) {
+	cut := strings.Index(base, splitSeedComment)
+	if cut < 0 {
+		return "", errors.New("tests/lab/port49d-lab.yaml has no seed-token comment to cut the seeds at")
+	}
+	var block []string
+	for _, ln := range strings.Split(strings.TrimRight(sliceBroker, "\n"), "\n") {
+		switch {
+		case strings.HasPrefix(ln, "  revocations_file:"):
+		case strings.HasPrefix(ln, "  policy_file:"):
+			block = append(block, "  policy_file: "+o.Policy)
+		case strings.HasPrefix(ln, "  tls_") || strings.HasPrefix(ln, "  client_ca_file:"):
+			if o.PKI != "" {
+				k, v, _ := strings.Cut(strings.TrimSpace(ln), ": ")
+				ln = "  " + k + ": " + filepath.Join(o.PKI, filepath.Base(v))
+			}
+			block = append(block, ln)
+		default:
+			block = append(block, ln)
+		}
+	}
+	return "metrics_listen: \"" + o.Metrics + "\"\ninventory_file: " + o.Inventory + "\nkey_refs: [lab_key]\n" +
+		"encryption:\n  current: {id: lab1, secret_env: PORT49_LAB_ENC_KEY}\nadmin_socket: " + o.Admin + "\n" +
+		strings.Join(block, "\n") + "\n  state_dir: " + o.State + "\n  policy_watch_interval: 1s\n" +
+		o.Store + "lab:\n" + base[cut:], nil
+}
+
+// secondServerLines are the lines that list (add) or unlist the second
+// TACACS+ server on a platform, in its own syntax. Each is the syntax an
+// earlier row measured working on that image, applied to the second address:
+//
+//   - the `tacacs-server host <addr> key 0 <key>` line, and the server group's
+//     `server <addr>`: EOS and NX-OS take them in the startup configs, and
+//     L29's single-connection runs typed the host line on both
+//     (tests/lab/results/single-connection-syntax-*.md);
+//   - IOS-XE's `tacacs server <name>` with `address ipv4`, `key 0` and `timeout`,
+//     which configs/iosxe-startup.cfg carries, and `server name <name>` in the
+//     group, which the same file carries for the first;
+//   - Junos's `tacplus-server <addr>` with `secret` and `routing-instance`
+//     (L28's key rotation typed the secret line), and the accounting
+//     destination's server, as L29's single-connection runs typed it.
+//
+// The group-membership line is typed on a running device for the first time
+// here on EOS, NX-OS and IOS-XE, and Junos's `routing-instance` lines on the
+// second address are new too: the first cell of L37 is their own check.
+func secondServerLines(platform string, add bool) []string {
+	switch {
+	case strings.HasPrefix(platform, "juniper_"):
+		if add {
+			return []string{
+				`set system tacplus-server ` + splitSecondAddr + ` secret "` + labKeyDefault + `"`,
+				`set system tacplus-server ` + splitSecondAddr + ` routing-instance mgmt_junos`,
+				`set system accounting destination tacplus server ` + splitSecondAddr + ` secret "` + labKeyDefault + `"`,
+				`set system accounting destination tacplus server ` + splitSecondAddr + ` routing-instance mgmt_junos`,
+			}
+		}
+		return []string{`delete system tacplus-server ` + splitSecondAddr,
+			`delete system accounting destination tacplus server ` + splitSecondAddr}
+	case platform == "cisco_iosxe":
+		if add {
+			return []string{"tacacs server port49-host2", "address ipv4 " + splitSecondAddr, "key 0 " + labKeyDefault,
+				"timeout 5", "exit", "aaa group server tacacs+ port49", "server name port49-host2", "exit"}
+		}
+		return []string{"aaa group server tacacs+ port49", "no server name port49-host2", "exit",
+			"no tacacs server port49-host2"}
+	}
+	if add {
+		return []string{"tacacs-server host " + splitSecondAddr + " key 0 " + labKeyDefault,
+			"aaa group server tacacs+ port49", "server " + splitSecondAddr, "exit"}
+	}
+	return []string{"aaa group server tacacs+ port49", "no server " + splitSecondAddr, "exit",
+		"no tacacs-server host " + splitSecondAddr}
+}
+
+// pushServerLines puts the second server's lines on the device over its
+// break-glass CLI. Every daemon is stopped when it is called, which is what
+// lets the device take the local password (withAdminCLI), and withAdminCLI
+// leaves them stopped while a split is active.
+func (l *lab) pushServerLines(t *testing.T, add bool) {
+	t.Helper()
+	lines := secondServerLines(l.p.name, add)
+	if strings.HasPrefix(l.p.name, "juniper_") {
+		l.junosConfigureAdmin(t, lines)
+		return
+	}
+	l.carriedConfigure(t, lines...)
+}
+
+// addSecondServer lists 172.100.100.2 after 172.100.100.1 in the device's
+// TACACS+ group, with every daemon stopped. The startup configs and the
+// topologies are not touched (pre-flight I13): every other register test
+// runs with the one server it was measured with.
+func addSecondServer(t *testing.T, l *lab) { t.Helper(); l.pushServerLines(t, true) }
+
+// removeSecondServer is addSecondServer's inverse.
+func removeSecondServer(t *testing.T, l *lab) { t.Helper(); l.pushServerLines(t, false) }
+
+// bridgeDevice is the name of the interface holding the clab bridge's .1
+// address, where the second address is added beside it.
+func bridgeDevice() (string, error) {
+	out, err := exec.Command("ip", "-o", "-4", "addr", "show").Output()
+	if err != nil {
+		return "", err
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		f := strings.Fields(line)
+		if len(f) >= 4 && f[3] == "172.100.100.1/24" {
+			return f[1], nil
+		}
+	}
+	return "", errors.New("no interface holds 172.100.100.1/24: the topology is not deployed")
+}
+
+// proc is one process of the split that is not port49d A (which is the lab's
+// own daemon, so the harness's mark, errLinesSince and capture machinery
+// serve it): port49d B and port49-broker. It keeps its two log paths across
+// restarts, truncated at its first start and appended after.
+type proc struct {
+	name, bin, cfg string
+	logPath        string // stdout: the decision log
+	errPath        string // stderr
+	started        bool
+
+	cmd  *exec.Cmd
+	done chan struct{}
+	err  error
+	out  *os.File
+	errf *os.File
+}
+
+func (l *lab) newProc(name, bin, cfg string) *proc {
+	dir := filepath.Join(root, "tests", "lab", "logs")
+	return &proc{name: name, bin: bin, cfg: cfg,
+		logPath: filepath.Join(dir, "decisions-"+l.p.name+"-"+name+".jsonl"),
+		errPath: filepath.Join(dir, name+"-"+l.p.name+".log")}
+}
+
+// start runs the binary on its config and returns once it has started: the
+// caller waits for it to be ready.
+func (p *proc) start() error {
+	if p.cmd != nil {
+		return fmt.Errorf("%s is already running", p.name)
+	}
+	open := os.Create
+	if p.started {
+		open = func(path string) (*os.File, error) {
+			return os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
+		}
+	}
+	var err error
+	if p.out, err = open(p.logPath); err != nil {
+		return err
+	}
+	if p.errf, err = open(p.errPath); err != nil {
+		return err
+	}
+	key := os.Getenv("PORT49_LAB_KEY")
+	if key == "" {
+		key = labKeyDefault
+	}
+	encKey := os.Getenv("PORT49_LAB_ENC_KEY")
+	if encKey == "" {
+		encKey = labEncKeyDefault
+	}
+	p.cmd = exec.Command(filepath.Join(root, "bin", p.bin), "-config", p.cfg)
+	p.cmd.Dir = root
+	p.cmd.Stdout = p.out
+	p.cmd.Stderr = io.MultiWriter(p.errf, os.Stderr)
+	p.cmd.Env = append(os.Environ(), "PORT49_LAB_KEY="+key, "PORT49_LAB_ENC_KEY="+encKey)
+	if err := p.cmd.Start(); err != nil {
+		return fmt.Errorf("start %s: %w", p.bin, err)
+	}
+	p.started = true
+	p.done = make(chan struct{})
+	cmd, done := p.cmd, p.done
+	go func() { p.err = cmd.Wait(); close(done) }()
+	return nil
+}
+
+// stop ends the process with SIGINT, as stopDaemon does, and returns once it
+// has exited: after 20s it is killed.
+func (p *proc) stop() error {
+	if p.cmd == nil {
+		return nil
+	}
+	_ = p.cmd.Process.Signal(os.Interrupt)
+	select {
+	case <-p.done:
+	case <-time.After(20 * time.Second):
+		_ = p.cmd.Process.Kill()
+		<-p.done
+	}
+	p.cmd = nil
+	p.out.Close()
+	p.errf.Close()
+	return nil
+}
+
+// died is the process's exit, with its stderr, once it has exited on its own.
+func (p *proc) died() error {
+	select {
+	case <-p.done:
+		stderr, _ := os.ReadFile(p.errPath)
+		return fmt.Errorf("%s exited (%v); its stderr was:\n%s", p.name, p.err, stderr)
+	default:
+		return nil
+	}
+}
+
+func (p *proc) mark() int64 {
+	fi, err := os.Stat(p.logPath)
+	if err != nil {
+		return 0
+	}
+	return fi.Size()
+}
+
+func (p *proc) recordsSince(off int64) []map[string]any { return recordsAt(p.logPath, off) }
+
+func (p *proc) errSize() int64 {
+	fi, err := os.Stat(p.errPath)
+	if err != nil {
+		return 0
+	}
+	return fi.Size()
+}
+
+// errLinesSince are the process's stderr lines from off that contain s.
+func (p *proc) errLinesSince(off int64, s string) []string {
+	return linesSince(p.errPath, off, s)
+}
+
+// linesSince are the lines of the file at path from off that contain s.
+func linesSince(path string, off int64, s string) []string {
+	raw, err := os.ReadFile(path)
+	if err != nil || int64(len(raw)) < off {
+		return nil
+	}
+	var out []string
+	for _, line := range strings.Split(string(raw[off:]), "\n") {
+		if strings.Contains(line, s) {
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
+// split is the split deployment on one platform: port49-broker, port49d A on
+// 172.100.100.1 and, with SecondServer, port49d B on 172.100.100.2, all on one
+// etcd, behind one proxy the test hangs. A is the lab's own daemon (l.daemon,
+// l.logPath, l.errPath).
+type split struct {
+	l   *lab
+	cfg splitCfg
+
+	Proxy *etcdtest.Proxy // nil when cfg.Store names the member
+	Keys  func() (int64, error)
+	// KeysAtStart is what the keyspace held before any process started.
+	KeysAtStart int64
+
+	Policy                      string // the one policy file all three processes read, a private copy
+	CfgA, CfgB, CfgBroker       string
+	AdminA, AdminB, AdminBroker string
+	B, Broker                   *proc
+
+	addrAdded, serverPushed bool
+}
+
+// startSplit prepares the split and starts it, in the order a deployment
+// starts: port49-broker, then A, then B.
+func (l *lab) startSplit(t *testing.T, cfg splitCfg) *split {
+	t.Helper()
+	s := l.prepareSplit(t, cfg)
+	s.start(t)
+	return s
+}
+
+// prepareSplit does everything before a process starts: the PKI, the store,
+// the three configs, the second address and the device's second server. The
+// standing daemon is stopped, and t.Cleanup stops the split, removes the
+// second server and the address, and puts the standing daemon back, whether
+// or not the test passed.
+func (l *lab) prepareSplit(t *testing.T, cfg splitCfg) *split {
+	t.Helper()
+	s := &split{l: l, cfg: cfg}
+	pki := filepath.Join(root, slicePKIDir)
+	if err := testpki.WriteLab(pki, sliceEmail, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	var daemonStore, brokerStore string
+	if cfg.Store != nil {
+		daemonStore, brokerStore = cfg.Store.Daemon, cfg.Store.Broker
+	} else {
+		daemonStore, brokerStore, s.Proxy, s.Keys = storeLab(t)
+		n, err := s.Keys()
+		if err != nil || n != 0 {
+			t.Fatalf("the store did not start empty: %d keys under /port49/, err %v", n, err)
+		}
+		s.KeysAtStart = n
+	}
+	// The private directory: the policy and the inventory port49d and the
+	// broker read behind the fence (privateCopy), and the broker's state.
+	dir := filepath.Join(root, "tests", "lab", "logs", "split-"+l.p.name)
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	state := filepath.Join(dir, "broker-state")
+	if err := os.Mkdir(state, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	copyPrivate := func(src, name string) string {
+		raw, err := os.ReadFile(filepath.Join(root, src))
+		if err != nil {
+			t.Fatal(err)
+		}
+		dst := filepath.Join(dir, name)
+		if err := os.WriteFile(dst, raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return dst
+	}
+	s.Policy = copyPrivate("tests/lab/slice/policy.yaml", "policy.yaml")
+	inventory := copyPrivate("tests/lab/inventory-lab.yaml", "inventory.yaml")
+	socks := t.TempDir() // admin sockets: a path short enough, in a directory only this user can write
+	s.AdminA, s.AdminB, s.AdminBroker = filepath.Join(socks, "a.sock"), filepath.Join(socks, "b.sock"),
+		filepath.Join(socks, "broker.sock")
+
+	// The standing config with this platform's session attributes, which the
+	// split's configs derive from.
+	std, err := l.derivedConfig("split-base", platformSessionAttributes[l.p.name], "# derived for the split deployment")
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, err := os.ReadFile(std)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write := func(name, body string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	a, err := splitDaemonYAML(string(base), splitNode{Listen: tacacsAddr, Metrics: metricsAddr, Admin: s.AdminA,
+		Spool: spoolPath}, s.Policy, inventory, daemonStore)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.CfgA = write("port49d-a.yaml", a)
+	if cfg.SecondServer {
+		b, err := splitDaemonYAML(string(base), splitNode{Listen: splitSecondAddr + ":49", Metrics: splitMetricsB,
+			Admin: s.AdminB, Spool: "/tmp/port49-lab-acct-b.jsonl"}, s.Policy, inventory, daemonStore)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s.CfgB = write("port49d-b.yaml", b)
+	}
+	sliceBroker, err := os.ReadFile(filepath.Join(root, "tests", "lab", "slice", "broker.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The seeds are the standing file's, platform attributes aside: the broker
+	// mints them, and the harness reads them from the file it names.
+	labRaw, err := os.ReadFile(labConfigPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	br, err := splitBrokerYAML(string(labRaw), string(sliceBroker), splitBrokerOpts{Policy: s.Policy,
+		Inventory: inventory, State: state, Metrics: splitMetricsBroker, Admin: s.AdminBroker, Store: brokerStore})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.CfgBroker = write("port49-broker.yaml", br)
+	s.Broker = l.newProc("port49-broker", "port49-broker", s.CfgBroker)
+	if cfg.SecondServer {
+		s.B = l.newProc("port49d-b", "port49d", s.CfgB)
+	}
+
+	// Registered before anything is changed, so a test that fails half way
+	// still removes what it added.
+	t.Cleanup(func() { s.teardown(t) })
+	if err := l.stopDaemon(); err != nil {
+		t.Fatal(err)
+	}
+	l.splitActive = true
+	if cfg.SecondServer {
+		dev, err := bridgeDevice()
+		if err != nil {
+			t.Fatal(err)
+		}
+		// A leftover from an interrupted run is removed first, and ignored if absent.
+		_ = exec.Command("sudo", "-n", "ip", "addr", "del", splitSecondAddr+"/24", "dev", dev).Run()
+		if out, err := exec.Command("sudo", "-n", "ip", "addr", "add", splitSecondAddr+"/24", "dev", dev).CombinedOutput(); err != nil {
+			t.Fatalf("adding %s to %s: %v\n%s", splitSecondAddr, dev, err, out)
+		}
+		s.addrAdded = true
+		s.serverPushed = true // set first: a push that fails half way is undone too
+		addSecondServer(t, l)
+	}
+	return s
+}
+
+// start runs port49-broker, A and, with SecondServer, B, each to ready.
+func (s *split) start(t *testing.T) {
+	t.Helper()
+	if err := s.StartBroker(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.StartA(); err != nil {
+		t.Fatal(err)
+	}
+	if s.cfg.SecondServer {
+		if err := s.StartB(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// waitProc waits up to within for ready() on p, failing early if p exits.
+func waitProc(p *proc, within time.Duration, ready func() bool) error {
+	for deadline := time.Now().Add(within); time.Now().Before(deadline); time.Sleep(250 * time.Millisecond) {
+		if err := p.died(); err != nil {
+			return err
+		}
+		if ready() {
+			return nil
+		}
+	}
+	stderr, _ := os.ReadFile(p.errPath)
+	return fmt.Errorf("%s was not ready within %s; its stderr was:\n%s", p.name, within, stderr)
+}
+
+func httpOK(url string) bool {
+	resp, err := (&http.Client{Timeout: 2 * time.Second}).Get(url)
+	if err != nil {
+		return false
+	}
+	resp.Body.Close()
+	return resp.StatusCode == http.StatusOK
+}
+
+func dials(addr string) bool {
+	c, err := net.DialTimeout("tcp", addr, 2*time.Second)
+	if err != nil {
+		return false
+	}
+	c.Close()
+	return true
+}
+
+// StartBroker runs port49-broker, which mints the lab seeds before it serves,
+// and reads them once it is ready. Each start truncates the seed file and
+// mints again.
+func (s *split) StartBroker() error {
+	started := time.Now()
+	if err := s.Broker.start(); err != nil {
+		return err
+	}
+	if err := waitProc(s.Broker, 90*time.Second, func() bool {
+		return httpOK("http://" + splitMetricsBroker + "/readyz")
+	}); err != nil {
+		return err
+	}
+	return s.l.loadSeeds(s.CfgBroker, started)
+}
+
+// StopBroker stops port49-broker and returns once it has exited.
+func (s *split) StopBroker() error { return s.Broker.stop() }
+
+// StartA runs port49d A on the split's config, and on IOS-XE waits until the
+// device speaks TACACS+ to it.
+func (s *split) StartA() error {
+	if err := s.l.startDaemonWith(s.CfgA, true); err != nil {
+		return err
+	}
+	return s.l.awaitTACACS()
+}
+
+// StopA stops port49d A, returning once its listener is gone (stopDaemon).
+func (s *split) StopA() error { return s.l.stopDaemon() }
+
+// StartB runs port49d B.
+func (s *split) StartB() error {
+	if dials(splitSecondAddr + ":49") {
+		return fmt.Errorf("something is already listening on %s:49, most likely a port49d left by an interrupted run",
+			splitSecondAddr)
+	}
+	if err := s.B.start(); err != nil {
+		return err
+	}
+	return waitProc(s.B, 90*time.Second, func() bool {
+		return httpOK("http://"+splitMetricsB+"/healthz") && dials(splitSecondAddr+":49")
+	})
+}
+
+// StopB stops port49d B and returns once its listener is gone.
+func (s *split) StopB() error {
+	if s.B == nil {
+		return nil
+	}
+	if err := s.B.stop(); err != nil {
+		return err
+	}
+	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); time.Sleep(500 * time.Millisecond) {
+		if !dials(splitSecondAddr + ":49") {
+			return nil
+		}
+	}
+	return fmt.Errorf("port49d B was stopped but something is still listening on %s:49 after 30s", splitSecondAddr)
+}
+
+// ListenAgainB is listenAgain for B: waits up to within for B to say, after
+// off, that it listens.
+func (s *split) ListenAgainB(off int64, within time.Duration) error {
+	for deadline := time.Now().Add(within); time.Now().Before(deadline) &&
+		len(s.B.errLinesSince(off, "listening on")) == 0; {
+		time.Sleep(time.Second)
+	}
+	if len(s.B.errLinesSince(off, "listening on")) == 0 {
+		return fmt.Errorf("port49d B did not say it listens again within %s", within)
+	}
+	return nil
+}
+
+// stopAll stops every process of the split.
+func (s *split) stopAll() []error {
+	var errs []error
+	if s.Proxy != nil {
+		s.Proxy.Hang(false) // a process draining on a hung store waits out its deadlines
+	}
+	if err := s.StopB(); err != nil {
+		errs = append(errs, err)
+	}
+	if err := s.StopBroker(); err != nil {
+		errs = append(errs, err)
+	}
+	if err := s.StopA(); err != nil {
+		errs = append(errs, err)
+	}
+	return errs
+}
+
+// configureDevice stops port49d (both replicas) and types lines on the device
+// as break-glass, then starts them again: the device takes the local password
+// only with every server unreachable (L4). The broker keeps running.
+func (s *split) configureDevice(t *testing.T, lines []string) {
+	t.Helper()
+	if err := s.StopB(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.StopA(); err != nil {
+		t.Fatal(err)
+	}
+	if strings.HasPrefix(s.l.p.name, "juniper_") {
+		s.l.junosConfigureAdmin(t, lines)
+	} else {
+		s.l.carriedConfigure(t, lines...)
+	}
+	if err := s.StartA(); err != nil {
+		t.Fatal(err)
+	}
+	if s.cfg.SecondServer {
+		if err := s.StartB(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// teardown stops every process, takes the second server off the device and
+// the second address off the bridge, and puts the standing daemon back, so
+// every register test after this one runs as it was measured.
+func (s *split) teardown(t *testing.T) {
+	t.Helper()
+	l := s.l
+	for _, err := range s.stopAll() {
+		t.Errorf("stopping the split: %v", err)
+	}
+	if s.serverPushed {
+		s.serverPushed = false
+		removeSecondServer(t, l)
+	}
+	if s.addrAdded {
+		s.addrAdded = false
+		if dev, err := bridgeDevice(); err != nil {
+			t.Errorf("removing %s: %v", splitSecondAddr, err)
+		} else if out, err := exec.Command("sudo", "-n", "ip", "addr", "del", splitSecondAddr+"/24", "dev", dev).CombinedOutput(); err != nil {
+			t.Errorf("removing %s from %s: %v\n%s", splitSecondAddr, dev, err, out)
+		}
+	}
+	l.splitActive = false
+	std, err := l.configPath()
+	if err != nil {
+		t.Errorf("derive this platform's daemon config: %v", err)
+		return
+	}
+	if err := l.restart(std); err != nil {
+		t.Errorf("could not put port49d back on the lab config: %v", err)
+	}
+}
+
+// splitAttempt is one connection the device opened to a TACACS+ server: which
+// one, when after the window began, and what the server did with its SYN.
+type splitAttempt struct {
+	Server  string
+	At      time.Duration
+	Outcome string
+}
+
+// splitAttempts reads the capture at path for every connection the device at
+// addr opened between from and to, in order: the server it went to, how long
+// after from, and whether the server refused it (RST) or accepted it (SYN-ACK).
+// `tcpdump -i any` sees each segment on each interface it crosses; the first
+// sighting counts.
+func splitAttempts(path, addr string, from, to time.Time) ([]splitAttempt, error) {
+	pkts, err := l29Packets(path, addr)
+	if err != nil {
+		return nil, err
+	}
+	var out []splitAttempt
+	type key struct {
+		port   uint16
+		server string
+	}
+	idx := map[key]int{}
+	var ats []time.Time
+	for _, p := range pkts {
+		if p.fromDevice && p.fl.SYN() && !p.at.Before(from) && !p.at.After(to) {
+			k := key{p.port, p.fl.Dst.String()}
+			if _, seen := idx[k]; seen {
+				continue
+			}
+			idx[k] = len(out)
+			out = append(out, splitAttempt{Server: k.server, At: p.at.Sub(from), Outcome: "no answer"})
+			ats = append(ats, p.at)
+		}
+	}
+	answered := map[int]bool{}
+	for _, p := range pkts {
+		if p.fromDevice {
+			continue
+		}
+		i, ok := idx[key{p.port, p.fl.Src.String()}]
+		if !ok || answered[i] || p.at.Before(ats[i]) {
+			continue
+		}
+		wait := p.at.Sub(ats[i]).Round(time.Millisecond)
+		switch {
+		case p.fl.Flags&0x04 != 0:
+			out[i].Outcome = fmt.Sprintf("refused after %s", wait)
+		case p.fl.Flags&0x12 == 0x12:
+			out[i].Outcome = fmt.Sprintf("accepted after %s", wait)
+		default:
+			continue
+		}
+		answered[i] = true
+	}
+	return out, nil
+}
+
+// renderAttempts is splitAttempts's rows as one line.
+func renderAttempts(as []splitAttempt) string {
+	if len(as) == 0 {
+		return "the device opened no connection"
+	}
+	var parts []string
+	for _, a := range as {
+		parts = append(parts, fmt.Sprintf("+%.2fs to %s: %s", a.At.Seconds(), a.Server, a.Outcome))
+	}
+	return strings.Join(parts, "; ")
+}
+
+// splitSent counts what the device at addr sent between from and to: the
+// connections it opened (SYNs) and the packets that carried a payload, each
+// counted once however many interfaces the capture saw it on.
+func splitSent(path, addr string, from, to time.Time) (syns, data int, err error) {
+	pkts, err := l29Packets(path, addr)
+	if err != nil {
+		return 0, 0, err
+	}
+	type key struct {
+		port   uint16
+		server string
+		seq    uint32
+		flags  byte
+	}
+	seen := map[key]bool{}
+	for _, p := range pkts {
+		if !p.fromDevice || p.at.Before(from) || p.at.After(to) {
+			continue
+		}
+		k := key{p.port, p.fl.Dst.String(), p.fl.Seq, p.fl.Flags}
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		switch {
+		case p.fl.SYN():
+			syns++
+		case p.fl.PayloadLen > 0:
+			data++
+		}
+	}
+	return syns, data, nil
 }

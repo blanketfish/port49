@@ -104,6 +104,12 @@ func reasonsOf(recs []map[string]any, event string) []string {
 // both directions show it) with the request's session_id and its seq_no
 // plus one. A request with no reply is listed as unanswered.
 func replyTimes(path, key string, from, to time.Time) []string {
+	return replyTimesFrom(path, key, from, to, false)
+}
+
+// replyTimesFrom is replyTimes that, with server set, names the TACACS+
+// server each reply came from (the split's two replicas).
+func replyTimesFrom(path, key string, from, to time.Time, server bool) []string {
 	pkts, _, err := pcapTACACSPackets(path, key)
 	if err != nil {
 		return []string{"capture unreadable: " + err.Error()}
@@ -124,7 +130,12 @@ func replyTimes(path, key string, from, to time.Time) []string {
 			out = append(out, fmt.Sprintf("%s seq %d unanswered", p.Kind(), p.Header.SeqNo))
 			continue
 		}
-		out = append(out, fmt.Sprintf("%s seq %d -> %s in %s", p.Kind(), p.Header.SeqNo, replyStatus(*reply),
+		via := ""
+		if server {
+			host, _, _ := strings.Cut(reply.Conn, ":")
+			via = " from " + host
+		}
+		out = append(out, fmt.Sprintf("%s seq %d -> %s%s in %s", p.Kind(), p.Header.SeqNo, replyStatus(*reply), via,
 			reply.At.Sub(p.At).Round(time.Millisecond)))
 	}
 	if len(out) == 0 {
@@ -217,51 +228,21 @@ func TestStoreOutageEndToEnd(t *testing.T) {
 			return true
 		}
 
-		pki := filepath.Join(root, slicePKIDir)
-		if err := testpki.WriteLab(pki, sliceEmail, time.Now()); err != nil {
-			t.Fatal(err)
-		}
-		brokerYAML, err := os.ReadFile(filepath.Join(root, "tests", "lab", "slice", "broker.yaml"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		block, _, proxy, keys := storeLab(t)                                        // Task 17 starts port49-broker on the second block
-		block += "admin_socket: " + filepath.Join(t.TempDir(), "admin.sock") + "\n" // etcd requires one (Ruling 13)
-		cfg, err := l.derivedConfig("store", platformSessionAttributes[l.p.name], string(brokerYAML)+block)
-		if err != nil {
-			t.Fatal(err)
-		}
-		// The member is this run's own, so the keyspace starts empty: no
-		// record of an earlier form is there to read (Task 13b's C2).
-		n, err := keys()
-		row("0. the keyspace before port49d's first start", fmt.Sprintf("%d keys under /port49/ (err %v)", n, err))
-		if err != nil || n != 0 {
-			t.Fatalf("the store did not start empty: %d keys under /port49/, err %v", n, err)
-		}
-		if err := l.stopDaemon(); err != nil {
-			t.Fatal(err)
-		}
+		// port49-broker and port49d A on one store (plan 7e): the broker mints,
+		// A serves TACACS+. The second server is not pushed to the device, so
+		// it lists the one server L35 was measured with, and the cells below
+		// measure what they measured before the broker left port49d. The
+		// member is this run's own, so the keyspace starts empty: no record of
+		// an earlier form is there to read (Task 13b's C2).
+		s := l.startSplit(t, splitCfg{})
+		proxy := s.Proxy
+		row("0. the keyspace before the first process starts", fmt.Sprintf("%d keys under /port49/", s.KeysAtStart))
 		start := func(what string) {
 			t.Helper()
-			if err := l.startDaemonWith(cfg, true); err != nil {
+			if err := s.StartA(); err != nil {
 				t.Fatalf("port49d would not start on etcd (%s): %v", what, err)
 			}
-			if err := l.awaitTACACS(); err != nil {
-				t.Fatal(err)
-			}
 		}
-		start("first")
-		defer func() {
-			proxy.Hang(false)
-			l.stopDaemon()
-			std, err := l.configPath()
-			if err != nil {
-				t.Fatalf("derive this platform's daemon config: %v", err)
-			}
-			if err := l.startDaemonWith(std, true); err != nil {
-				t.Fatalf("could not put port49d back on the lab config: %v", err)
-			}
-		}()
 		stop := l.capture(t, "L35")
 		defer stop()
 		capPath := filepath.Join(root, "tests", "lab", "captures", "L35-"+l.p.name+".pcap")
@@ -309,13 +290,16 @@ func TestStoreOutageEndToEnd(t *testing.T) {
 		if !sessionOnly && (ctxAfter != ctxBefore || verdict != "permit") {
 			fail("the next command was not answered from the kept context: %s %s %s/%s", verdict, reason, ctxAfter, ctxBefore)
 		}
-		if _, err := l.loginWithin(sliceUser, spare, 60*time.Second, "show version"); err == nil {
-			fail("a token minted before the restart logged in")
+		// On the split the purge of unspent tokens is port49-broker's, at its
+		// own start and on a changed bundle (plan 7e): a port49d restart purges
+		// nothing, so a token minted before it still logs in.
+		if _, err := l.loginWithin(sliceUser, spare, 60*time.Second, "show version"); err != nil {
+			fail("a token minted before the port49d restart did not log in: %v", err)
 		}
 		recs := l.waitForRecords(off, 30*time.Second, func(rs []map[string]any) bool { return redeemReason(rs, sha(spare)) != "" })
-		row("2. a token minted before the restart", "refused "+redeemReason(recs, sha(spare)))
-		if redeemReason(recs, sha(spare)) != "token_not_found" {
-			fail("the pre-restart token was refused %q, not token_not_found", redeemReason(recs, sha(spare)))
+		row("2. a token minted before the port49d restart", "redeemed: "+redeemReason(recs, sha(spare)))
+		if redeemReason(recs, sha(spare)) != "token_redeemed" {
+			fail("the pre-restart token was answered %q, not token_redeemed", redeemReason(recs, sha(spare)))
 		}
 		if !lit(errOff, "2.") {
 			fail("port49d closed its listeners during step 2")
@@ -441,14 +425,17 @@ func TestStoreOutageEndToEnd(t *testing.T) {
 		errOff = l.errLogSize()
 		proxy.Hang(true)
 		hungAt := time.Now()
-		for time.Since(hungAt) < 90*time.Second && len(l.errLinesSince(errOff, "closing every listener")) == 0 {
+		// port49d holds no hold on the split (plan 7e, Ruling 11): it goes dark
+		// when its probe has found the context pool's circuit open for
+		// hold_ttl, which takes longer than 7d's lost hold did (12s on EOS).
+		for time.Since(hungAt) < 180*time.Second && len(l.errLinesSince(errOff, "closing every listener")) == 0 {
 			time.Sleep(time.Second)
 		}
 		dark := l.errLinesSince(errOff, "closing every listener")
 		wide("4. port49d's line", fmt.Sprintf("%s after the hang: %s", time.Since(hungAt).Round(time.Second),
 			strings.Join(dark, " / ")))
 		if len(dark) == 0 {
-			fail("port49d did not close its listeners within 90s of the hang")
+			fail("port49d did not close its listeners within 180s of the hang")
 		}
 		time.Sleep(5 * time.Second) // the drain
 		if len(l.errLinesSince(errOff, "waiting for the store again")) == 0 {
@@ -759,71 +746,28 @@ func TestStoreSnapshotRestore(t *testing.T) {
 		row := func(step, what string) { fmt.Fprintf(&obs, "| %s | %s |\n", step, wideCell(what)) }
 		obs.WriteString("| step | observed |\n|---|---|\n")
 
-		pki := filepath.Join(root, slicePKIDir)
-		if err := testpki.WriteLab(pki, sliceEmail, time.Now()); err != nil {
-			t.Fatal(err)
-		}
-		brokerYAML, err := os.ReadFile(filepath.Join(root, "tests", "lab", "slice", "broker.yaml"))
-		if err != nil {
-			t.Fatal(err)
-		}
-
 		e := newRealEtcd(t, bin)
 		e.start(t, e.data)
-		block := fmt.Sprintf("\nstore:\n  backend: etcd\n  etcd:\n    endpoints: [https://%s]\n    ca_file: %s\n"+
-			"    daemon: {cert_file: %s, key_file: %s}\n    hold_ttl: 60s\n"+
-			"admin_socket: %s\n", e.client, e.ca, e.daemC, e.daemK, filepath.Join(t.TempDir(), "admin.sock"))
-		// port49-broker.yaml's store: block, which store-roles reads the
-		// broker's CN from (--broker-config).
-		brokerCfg := filepath.Join(t.TempDir(), "port49-broker.yaml")
-		if err := os.WriteFile(brokerCfg, []byte(fmt.Sprintf("store:\n  backend: etcd\n  etcd:\n    endpoints: [https://%s]\n"+
-			"    ca_file: %s\n    broker: {cert_file: %s, key_file: %s}\n", e.client, e.ca, e.brokC, e.brokK)), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		cfg, err := l.derivedConfig("restore", platformSessionAttributes[l.p.name], string(brokerYAML)+block)
-		if err != nil {
-			t.Fatal(err)
-		}
-		// The derived config runs on a private copy of the policy
-		// (privateCopy): touching that copy swaps the policy, which runs a
-		// refresh pass.
-		cfgRaw, err := os.ReadFile(cfg)
-		if err != nil {
-			t.Fatal(err)
-		}
-		_, policyLine, ok := strings.Cut(string(cfgRaw), "  policy_file: ")
-		if !ok {
-			t.Fatal("the derived config names no policy_file")
-		}
-		policyPath, _, _ := strings.Cut(policyLine, "\n")
-		policyPath = strings.TrimSpace(policyPath)
-		row("0. `port49d store-roles`, each line run by etcdctl 3.6.15 as root", strings.Join(e.storeRoles(t, cfg, brokerCfg), "; "))
+		daemonStore := fmt.Sprintf("\nstore:\n  backend: etcd\n  etcd:\n    endpoints: [https://%s]\n    ca_file: %s\n"+
+			"    daemon: {cert_file: %s, key_file: %s}\n    hold_ttl: 60s\n", e.client, e.ca, e.daemC, e.daemK)
+		brokerStore := fmt.Sprintf("\nstore:\n  backend: etcd\n  etcd:\n    endpoints: [https://%s]\n    ca_file: %s\n"+
+			"    broker: {cert_file: %s, key_file: %s}\n    hold_ttl: 60s\n", e.client, e.ca, e.brokC, e.brokK)
+		// port49-broker and port49d A on the real member (plan 7e): prepared,
+		// not started, because `port49d store-roles` provisions the roles the
+		// two processes start under, from the two configs it reads.
+		s := l.prepareSplit(t, splitCfg{Store: &splitStore{Daemon: daemonStore, Broker: brokerStore}})
+		// The refresh pass is the runner's, and port49d admits from the same
+		// file, so touching it swaps the policy on both.
+		policyPath := s.Policy
+		row("0. `port49d store-roles`, each line run by etcdctl 3.6.15 as root", strings.Join(e.storeRoles(t, s.CfgA, s.CfgBroker), "; "))
 		n, err := e.keys("/port49/")
-		row("0. the keyspace before port49d's first start", fmt.Sprintf("%d keys under /port49/ (err %v)", n, err))
+		row("0. the keyspace before the first process starts", fmt.Sprintf("%d keys under /port49/ (err %v)", n, err))
 		if err != nil || n != 0 {
 			t.Fatalf("the store did not start empty: %d keys, err %v", n, err)
 		}
 
-		if err := l.stopDaemon(); err != nil {
-			t.Fatal(err)
-		}
-		if err := l.startDaemonWith(cfg, true); err != nil {
-			t.Fatalf("port49d would not start under the roles store-roles printed: %v", err)
-		}
-		if err := l.awaitTACACS(); err != nil {
-			t.Fatal(err)
-		}
-		row("0. port49d's start under those roles", "listening (store.etcd.roles: enforced, the default)")
-		defer func() {
-			l.stopDaemon()
-			std, err := l.configPath()
-			if err != nil {
-				t.Fatalf("derive this platform's daemon config: %v", err)
-			}
-			if err := l.startDaemonWith(std, true); err != nil {
-				t.Fatalf("could not put port49d back on the lab config: %v", err)
-			}
-		}()
+		s.start(t)
+		row("0. port49-broker's and port49d's start under those roles", "listening (store.etcd.roles: enforced, the default)")
 		stop := l.capture(t, "L35-restore")
 		defer stop()
 
