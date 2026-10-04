@@ -25,3 +25,20 @@ On Junos with `tacplus-options authorization-time-interval 15`, an open session 
 | 3. port49d A's records since the revocation | `authorize_session [permit context_matched deny credential_revoked]` |
 | 3. the session after the denial | `still open 60s after the denial; 'show version': 83 bytes in 100ms, first line '^'` |
 
+
+## Earlier run (0cff0d0, same image)
+
+One unrepeated observation from this image's first L36 run on 2026-10-04, at commit 0cff0d0, whose harness
+revoked the same session after its first re-authorization instead of using a second session (replaced in
+20fb9fa, so this note's table above is the final design's, not that run's).
+
+- The device re-authorized the open session 15m0s after login (14m59s after A's restart): `AUTHOR` `PASS_ADD`
+  from 172.100.100.1 in 3ms, `permit context_matched`.
+- The principal was revoked at 20:50:55Z. In the 20 minutes after it (until about 21:11) the device sent no
+  further `AUTHOR` request; the only device traffic after the revocation was an `ACCT` stop at 20:51:00. The
+  session stayed open and its `show version` ran.
+- So that session, past its first re-authorization, was not reached by the revocation within 20 minutes. One
+  interval later would have been 15 minutes after the first request. Whether the device ever re-authorizes
+  a session a second time is open: spec §15 L40.
+- Capture not kept: the run's raw capture was in a pinned worktree that was removed with the run, and it
+  was not committed.
