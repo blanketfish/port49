@@ -1047,8 +1047,11 @@ in this plan, and the tests named pin it.
   stopped (…); trying again every second`, with `port49_store_feed_up{feed="contexts"}` 0.
 - **After an etcd restore** (design §13's runbook):
   - restore with `--bump-revision` and `--mark-compacted` and every port49-broker stopped;
-  - `etcdctl del <prefix>v1/meta/judged`, and check the policy file on every broker host: the
-    first start after the delete has no judged bundle to guard against;
+  - as soon as the member answers, before any process starts, `etcdctl del --prefix
+    <prefix>v1/t/` (a restore brings back every token redeemed since the snapshot, and a
+    port49d redeems it again until it is gone), then `etcdctl del <prefix>v1/meta/judged`, and
+    check the policy file on every broker host: the first start after the delete has no judged
+    bundle to guard against;
   - start the brokers.
   The first runner names the marks it put back from its copy, and purges the unspent tokens.
   Without `--bump-revision`, restart every port49d once the first runner has put the marks back
@@ -6684,14 +6687,26 @@ Nothing here asserts what a device does. The device cells it adds cite L37 or L3
            until that process writes at the key; and a port49d restarted before the put-back
            loads the restored marks, so it enforces none the restore lost until the runner puts
            them back.
-        3. Delete `meta/judged` (`etcdctl del <prefix>v1/meta/judged`), so the first runner
-           purges every unspent token, and a token redeemed since the snapshot is not redeemable
-           again. With it gone, the reload guard at start has no judged bundle to check against:
-           the first start after the restore says so and goes on, and a refused policy file is
-           not caught then. Check `broker.policy_file` on every broker host before step 4. If
-           this step is forgotten, a runner whose `broker.state_dir/witness.json` survived
+        3. As soon as the restored member answers, before any port49d or port49-broker is
+           started or restarted, delete the unspent tokens and `meta/judged`:
+           `etcdctl del --prefix <prefix>v1/t/`, then `etcdctl del <prefix>v1/meta/judged`.
+           Do not skip the token delete. A restore brings back every single-use token
+           redeemed since the snapshot, unspent, and every port49d serving, one that ran
+           across the restore too, redeems such a token a second time until it is gone: the
+           first runner's purge (step 4) comes minutes later, after its wait for the restored
+           hold's lease. The seconds between the member answering and the delete are the
+           residual. With `meta/judged` gone the first runner purges too, and a token
+           redeemed since the snapshot is not redeemable again. With it gone, the reload guard
+           at start has no judged bundle to check against: the first start after the restore
+           says so and goes on, and a refused policy file is not caught then. Check
+           `broker.policy_file` on every broker host before step 4. If the `meta/judged`
+           delete is forgotten, a runner whose `broker.state_dir/witness.json` survived
            finds the restored `meta/witness` below its record and purges anyway (decision 36,
-           the restore witness); one whose `state_dir` was lost or is new cannot.
+           the restore witness); one whose `state_dir` was lost or is new cannot, and a
+           snapshot taken within about a second of the last witness (two, if a broker was
+           killed rather than stopped) is not caught: the deletes are still the procedure.
+           After a restore without `--bump-revision`, a later takeover by another broker may
+           purge once more and say the store was restored; `--bump-revision` avoids it.
         4. Start the brokers, a broker whose `broker.state_dir` survived the restore first:
            one with no `witness.json` started first after a `--bump-revision` restore means a
            forgotten step 3 is never caught. The first runner puts back every mark its `marks.json` holds that
@@ -11441,7 +11456,13 @@ The roadmap's "7e-1's operator notes, as built" (`README.md`) is the full text t
   latest `meta/witness` it saw in `broker.state_dir/witness.json`. A runner that finds the store's
   witness below that record says `the store was restored from a snapshot`, naming both
   revisions, and purges every unspent token, at a takeover or while it runs. A replica with no
-  `witness.json` says it cannot tell. The runbook above stays the procedure.
+  `witness.json` says it cannot tell; one whose `witness.json` cannot be read moves it aside and
+  purges once. A snapshot taken within about a second of the last witness (two, if a broker was
+  killed rather than stopped) is not caught. After a restore without `--bump-revision`, a later
+  takeover by another broker may purge once more and say the store was restored;
+  `--bump-revision` avoids it. The witness purges at the first takeover, not before: a port49d
+  serving meanwhile redeems a token spent since the snapshot again, which only the runbook's
+  `etcdctl del --prefix <prefix>v1/t/` closes. The runbook above stays the procedure.
   - **After a restore, start a broker whose `state_dir` survived first.** A broker whose
     `state_dir` was lost or is new, started first after a `--bump-revision` restore, means a
     forgotten `etcdctl del` is never caught.
