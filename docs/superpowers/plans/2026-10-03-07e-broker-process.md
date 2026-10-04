@@ -1046,12 +1046,14 @@ in this plan, and the tests named pin it.
   `store_unavailable` for what reads a context. The line is `port49d: store: the context feed
   stopped (…); trying again every second`, with `port49_store_feed_up{feed="contexts"}` 0.
 - **After an etcd restore** (design §13's runbook):
-  - restore with `--bump-revision` and `--mark-compacted` and every port49-broker stopped;
-  - as soon as the member answers, before any process starts, `etcdctl del --prefix
-    <prefix>v1/t/` (a restore brings back every token redeemed since the snapshot, and a
-    port49d redeems it again until it is gone), then `etcdctl del <prefix>v1/meta/judged`, and
-    check the policy file on every broker host: the first start after the delete has no judged
-    bundle to guard against;
+  - restore with `--bump-revision` and `--mark-compacted` and every port49-broker stopped, the
+    restored members serving clients on loopback only;
+  - there, as etcd's root, `etcdctl del --prefix <prefix>v1/t/` (a restore brings back every
+    token redeemed since the snapshot, and a port49d that reaches the store first redeems it
+    again), then `etcdctl del <prefix>v1/meta/judged`; only then restart the members on their
+    usual client URLs, so no port49d or broker reaches a restored token; and check the policy
+    file on every broker host: the first start after the delete has no judged bundle to guard
+    against;
   - start the brokers.
   The first runner names the marks it put back from its copy, and purges the unspent tokens.
   Without `--bump-revision`, restart every port49d once the first runner has put the marks back
@@ -6679,34 +6681,39 @@ Nothing here asserts what a device does. The device cells it adds cite L37 or L3
     ```
       - **A restore rolls the marks back too.** A mark added since the snapshot is gone from
         the store, and one lifted since is back. The runbook, on etcd since plan 7e:
-        1. Stop every port49-broker. port49d may run on.
-        2. Restore with `--bump-revision` and `--mark-compacted` (below). Without
-           `--bump-revision`, also restart every port49d, but only once step 4's first runner
-           has said its put-back line: a process started after the restore seals below what one
-           that ran across it knows, and their logins are denied there (`store_unavailable`)
-           until that process writes at the key; and a port49d restarted before the put-back
-           loads the restored marks, so it enforces none the restore lost until the runner puts
-           them back.
-        3. As soon as the restored member answers, before any port49d or port49-broker is
-           started or restarted, delete the unspent tokens and `meta/judged`:
-           `etcdctl del --prefix <prefix>v1/t/`, then `etcdctl del <prefix>v1/meta/judged`.
-           Do not skip the token delete. A restore brings back every single-use token
-           redeemed since the snapshot, unspent, and every port49d serving, one that ran
-           across the restore too, redeems such a token a second time until it is gone: the
-           first runner's purge (step 4) comes minutes later, after its wait for the restored
-           hold's lease. The seconds between the member answering and the delete are the
-           residual. With `meta/judged` gone the first runner purges too, and a token
-           redeemed since the snapshot is not redeemable again. With it gone, the reload guard
-           at start has no judged bundle to check against: the first start after the restore
-           says so and goes on, and a refused policy file is not caught then. Check
-           `broker.policy_file` on every broker host before step 4. If the `meta/judged`
-           delete is forgotten, a runner whose `broker.state_dir/witness.json` survived
-           finds the restored `meta/witness` below its record and purges anyway (decision 36,
-           the restore witness); one whose `state_dir` was lost or is new cannot, and a
-           snapshot taken within about a second of the last witness (two, if a broker was
-           killed rather than stopped) is not caught: the deletes are still the procedure.
-           After a restore without `--bump-revision`, a later takeover by another broker may
-           purge once more and say the store was restored; `--bump-revision` avoids it.
+        1. Stop every port49-broker. port49d may run on: it goes dark while the store is down,
+           and reaches the store again only once step 3 reopens it.
+        2. Restore with `--bump-revision` and `--mark-compacted` (below), and start the restored
+           member or members serving clients on loopback only (for example `--listen-client-urls
+           https://127.0.0.1:2379 --advertise-client-urls https://127.0.0.1:2379`, the TLS flags
+           unchanged; the peer URLs stay as they are, so quorum forms). No port49d or broker can
+           reach the restored store yet. Without `--bump-revision`, also restart every port49d, but
+           only once step 4's first runner has said its put-back line: a process started after the
+           restore seals below what one that ran across it knows, and their logins are denied there
+           (`store_unavailable`) until that process writes at the key; and a port49d restarted
+           before the put-back loads the restored marks, so it enforces none the restore lost until
+           the runner puts them back.
+        3. On the loopback address, as etcd's root, delete the unspent tokens and `meta/judged`:
+           `etcdctl --endpoints https://127.0.0.1:2379 del --prefix <prefix>v1/t/`, then
+           `etcdctl --endpoints https://127.0.0.1:2379 del <prefix>v1/meta/judged` (in a container
+           or on Kubernetes, run `etcdctl` in the member's own network namespace). Only once both
+           have landed, restart the member or members on their usual client URLs. Do not open them
+           before: a restore brings back every single-use token redeemed since the snapshot,
+           unspent, and a port49d that reaches the store before the token delete, one that ran
+           across the restore too, redeems such a token a second time, and no line says so; the
+           first runner's purge (step 4) comes minutes later. Where serving on loopback is not
+           possible, stop every port49d in step 1 as well, and start them after both deletes once
+           step 4's first runner has said its put-back line. With `meta/judged` gone the first
+           runner purges too. With it gone, the reload guard at start has no judged bundle to
+           check against: the first start after the restore says so and goes on, and a refused
+           policy file is not caught then. Check `broker.policy_file` on every broker host before
+           step 4. If the `meta/judged` delete is forgotten, a runner whose
+           `broker.state_dir/witness.json` survived finds the restored `meta/witness` below its
+           record and purges anyway (decision 36, the restore witness); one whose `state_dir` was
+           lost or is new cannot, and a snapshot taken within about a second of the last witness
+           (two, if a broker was killed rather than stopped) is not caught: the deletes are still
+           the procedure. After a restore without `--bump-revision`, a later takeover by another
+           broker may purge once more and say the store was restored; `--bump-revision` avoids it.
         4. Start the brokers, a broker whose `broker.state_dir` survived the restore first:
            one with no `witness.json` started first after a `--bump-revision` restore means a
            forgotten step 3 is never caught. The first runner puts back every mark its `marks.json` holds that
@@ -6771,7 +6778,7 @@ Nothing here asserts what a device does. The device cells it adds cite L37 or L3
   grep -n 'The runner.\*\* The keyspace hold' docs/design/2026-08-23-policy-engine-spec.md
   grep -n 'Revoking with every broker down' docs/design/2026-08-23-policy-engine-spec.md
   grep -n 'Any number of port49d and port49-broker per keyspace' docs/design/2026-08-21-port49-design.md
-  grep -n 'etcdctl del <prefix>v1/meta/judged' docs/design/2026-08-21-port49-design.md
+  grep -n 'del <prefix>v1/meta/judged' docs/design/2026-08-21-port49-design.md
   grep -c 'until plan 7e\|Until plan 7e' docs/design/2026-08-21-port49-design.md docs/design/2026-08-23-policy-engine-spec.md
   grep -c 'The restore witness' docs/design/2026-08-23-policy-engine-spec.md
   grep -n 'the reload guard at start has no judged bundle' docs/design/2026-08-21-port49-design.md
@@ -11414,9 +11421,13 @@ The roadmap's "7e-1's operator notes, as built" (`README.md`) is the full text t
 - **On etcd the revocations file is retired.** etcd holds the marks, and each broker keeps a
   copy in `broker.state_dir/marks.json`. After an etcd restore:
   - stop every broker;
-  - restore with `--bump-revision` and `--mark-compacted`; without them, restart every port49d
-    too, once the first runner has said which marks it put back, never before;
-  - `etcdctl del <prefix>v1/meta/judged`;
+  - restore with `--bump-revision` and `--mark-compacted`, the restored members serving clients
+    on loopback only; without them, restart every port49d too, once the first runner has said
+    which marks it put back, never before;
+  - there, as etcd's root, `etcdctl del --prefix <prefix>v1/t/` (a restore brings back every
+    token redeemed since the snapshot, and a port49d that reaches the store first redeems it
+    again), then `etcdctl del <prefix>v1/meta/judged`; only then restart the members on their
+    usual client URLs;
   - start the brokers, one whose `broker.state_dir` survived the restore first.
   The first runner puts back the marks the restore lost, says how many, and purges the unspent
   tokens. Lift again anything it put back that was lifted on purpose.
@@ -11462,7 +11473,8 @@ The roadmap's "7e-1's operator notes, as built" (`README.md`) is the full text t
   takeover by another broker may purge once more and say the store was restored;
   `--bump-revision` avoids it. The witness purges at the first takeover, not before: a port49d
   serving meanwhile redeems a token spent since the snapshot again, which only the runbook's
-  `etcdctl del --prefix <prefix>v1/t/` closes. The runbook above stays the procedure.
+  `etcdctl del --prefix <prefix>v1/t/`, made while the restored members serve clients on
+  loopback only, closes. The runbook above stays the procedure.
   - **After a restore, start a broker whose `state_dir` survived first.** A broker whose
     `state_dir` was lost or is new, started first after a `--bump-revision` restore, means a
     forgotten `etcdctl del` is never caught.

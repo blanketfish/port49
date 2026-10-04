@@ -6926,16 +6926,20 @@ sealed write sequence every process follows, and a ledger record the daemon cann
   settle pass, or a replica serving another bundle) purges every unspent token and records the
   instant for every key; with the same, it purges none, so a rolling restart of the brokers
   keeps everyone's tokens. A token minted in the moment between that instant and the purge is
-  purged too, and its login fails `token_not_found`. After an etcd restore, `meta/judged` is
-  deleted before any broker starts, so the first takeover purges.
+  purged too, and its login fails `token_not_found`. After an etcd restore, the unspent tokens
+  (`<prefix>v1/t/`) and `meta/judged` are deleted before any port49 process reaches the
+  restored store (design §13's runbook): a restore brings back every token redeemed since the
+  snapshot, unspent, and a port49d, one that ran across the restore too, would redeem it again
+  until the first takeover purges, minutes later.
 - **The restore witness.** The runner rewrites `meta/witness` (its name and the time, no
   secret) at most once a second, whenever the store has moved past it. Every broker follows
   it and keeps the highest `ModRevision` it has seen in `broker.state_dir/witness.json`. A
   restored key keeps its `ModRevision`, with or without `--bump-revision`, so a runner that
   reads the witness below its replica's record, at a takeover or while it runs, knows the
-  store was restored: it takes `meta/judged` as absent and purges every unspent token, so a
-  token redeemed since the snapshot stays spent even when the runbook's delete was
-  forgotten. It takes the store's witness as its record only once the purge is done. A
+  store was restored: it takes `meta/judged` as absent and purges every unspent token, so
+  the first takeover purges even when the runbook's delete of `meta/judged` was forgotten.
+  It does not cover a port49d serving before that takeover: only the runbook's token delete
+  (or the port49d witness guard, if built) does. It takes the store's witness as its record only once the purge is done. A
   replica with no record says it cannot tell, and goes by `meta/judged`; a snapshot taken
   within about a second of the last witness recorded is not caught.
 - **The settle pass** is 30s or two policy watch intervals and 5s after a swap, whichever is
