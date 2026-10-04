@@ -14,7 +14,7 @@ import (
 
 // A private key is loaded only from a regular file its owner alone can read,
 // and never through a symlink: ssh's rule for a key, and the seed-token file's
-// rule for a credential (cmd/port49d, O_NOFOLLOW).
+// rule for a credential (internal/port49d, O_NOFOLLOW).
 func TestAPrivateKeyMustBeItsOwnersAlone(t *testing.T) {
 	dir := t.TempDir()
 	if err := testpki.WriteLab(dir, "alice@example.com", time.Now()); err != nil {

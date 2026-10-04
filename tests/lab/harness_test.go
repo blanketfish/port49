@@ -1333,7 +1333,7 @@ func teardown() {
 func (l *lab) stopDaemon() error {
 	if l.daemon != nil && l.daemon.Process != nil {
 		// SIGINT, not Kill: port49d installs signal.NotifyContext for SIGINT and
-		// SIGTERM (cmd/port49d), and on either it stops the listener and drains
+		// SIGTERM (internal/port49d), and on either it stops the listener and drains
 		// the accounting spool on the way out. A record still on disk is a record
 		// this run did not see. Kill is the fallback below, after 20s.
 		_ = l.daemon.Process.Signal(os.Interrupt)

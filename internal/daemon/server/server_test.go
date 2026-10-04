@@ -131,7 +131,7 @@ func (c *client) recv(t *testing.T) (wire.Header, []byte) {
 
 // testServer is a running daemon plus the handles needed to shut it down in
 // the daemon's own order. The spool has a context of its own, exactly as
-// cmd/port49d does: sharing the server's would let the final drain decide the
+// internal/port49d does: sharing the server's would let the final drain decide the
 // spool is empty while a connection is still inside a handler, and whatever
 // that connection offers next would be left on disk.
 type testServer struct {
