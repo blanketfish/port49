@@ -1082,3 +1082,40 @@ func floorIn(t *testing.T, root *clientv3.Client, key string) {
 	}
 	t.Fatalf("the ledger record at %s never held a floor", key)
 }
+
+// Every port49-broker replica's hook before a marks reload, the runner's
+// included, keeps every mark it enforces that the store lacks, so the
+// reload lifts none from its marks or its listener, and names them as
+// this replica's; a read that fails refuses the reload (final review 7e-1
+// C-1; carry C6; Task 15 review M-4). Task 15b's copy also puts back.
+func TestTheBrokersReloadHookKeepsWhatTheStoreLost(t *testing.T) {
+	ctx := context.Background()
+	alice := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:alice@example.com", At: time.Unix(10, 0).UTC()}
+	carol := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:carol@example.com", At: time.Unix(11, 0).UTC()}
+	enforced := store.NewMarks()
+	enforced.Set(alice, true)
+	enforced.Set(carol, true)
+	rescans := prometheus.NewCounter(prometheus.CounterOpts{Name: "rescans"})
+	var out strings.Builder
+	if err := brokerReloadHook(ctx, marksIn{err: store.ErrUnavailable}, enforced, rescans, time.Second, &out)(); err == nil {
+		t.Fatal("a read that failed did not refuse the reload")
+	}
+	feed := marksIn{rs: []store.Revocation{carol}} // the restore lost alice's
+	if err := brokerReloadHook(ctx, feed, enforced, rescans, time.Second, &out)(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "port49-broker: store: 1 revocation(s) this replica enforces are missing "+
+		"from the store as its marks feed reloads") || !strings.HasSuffix(out.String(),
+		"or restart this replica): principal user:alice@example.com\n") {
+		t.Fatalf("said %q", out.String())
+	}
+	if _, err := store.LoadMarks(ctx, feed, enforced, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !enforced.Holds(alice.Kind, alice.Key) || !enforced.Holds(carol.Kind, carol.Key) {
+		t.Fatalf("the reload lifted a kept mark: %+v", enforced.All())
+	}
+	if n := testutil.ToFloat64(rescans); n != 2 {
+		t.Fatalf("counted %v rescans, want 2", n)
+	}
+}

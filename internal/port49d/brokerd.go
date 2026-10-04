@@ -169,6 +169,18 @@ func openBroker(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 	return bs, nil
 }
 
+// brokerReloadHook is every port49-broker replica's rescanned for its
+// marks feed, the runner's included (carry C6): it keeps every mark this
+// replica enforces that the store lacks, in its marks and so its
+// listener, names them as this replica's, and refuses the reload on a
+// read that fails (keepingReloadHook; final review 7e-1 C-1). Task 15b
+// replaces it with one that also puts back on the runner.
+func brokerReloadHook(ctx context.Context, feed store.MarkFeed, enforced *store.Marks,
+	rescans prometheus.Counter, bound time.Duration, out io.Writer) func() error {
+	return keepingReloadHook(ctx, feed, enforced, rescans, bound,
+		keptSayerAs(out, "port49-broker", "this replica", "as its marks feed reloads"))
+}
+
 // announceBroker is announce for port49-broker.yaml: each notice
 // config.LoadBroker left, and the lab block's warning. Under the broker's
 // role a lab: block holds the seed tokens alone (plan 7e, Ruling 2).
@@ -398,9 +410,8 @@ func runBroker(parent context.Context, cfgPath string) error {
 		defer wg.Done()
 		store.FollowMarks(ctx, bs.raw, marks, bs.markRev, brk.MarkChanged,
 			func(up bool) { m.StoreFeedUp.WithLabelValues("marks").Set(b2f(up)) },
-			keepingReloadHook(ctx, bs.raw, marks, m.StoreFeedRescans.WithLabelValues("marks"),
-				cfg.Store.Etcd.BulkTimeout, keptSayerAs(stderr, "port49-broker", "this replica",
-					"as its marks feed reloads")),
+			brokerReloadHook(ctx, bs.raw, marks, m.StoreFeedRescans.WithLabelValues("marks"),
+				cfg.Store.Etcd.BulkTimeout, stderr),
 			func(format string, args ...any) { fmt.Fprintf(stderr, "port49-broker: "+format+"\n", args...) })
 	}()
 
