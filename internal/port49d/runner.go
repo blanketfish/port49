@@ -57,6 +57,10 @@ type runner struct {
 	// reload put a mark back: the duties apply the marks to the kept
 	// contexts again (restoreMarks).
 	marksReloaded chan struct{}
+	// witness is this replica's record of the restore witness
+	// (broker.state_dir/witness.json; Ruling 18), which the takeover and
+	// the duties' keepWitness judge meta/witness against.
+	witness *witnessRecord
 }
 
 // judgedStore is meta/ as the runner reads and writes it (etcd.Store):
@@ -157,9 +161,9 @@ func (r *runner) run(ctx context.Context) {
 	}
 }
 
-// duties is the takeover, then the sweep, the ledger record's keeper,
-// meta/judged's writer, the marks' reapplying after a put-back and the
-// refresh's context half, until ctx ends.
+// duties is the takeover, then the sweep, the ledger record's keeper, the
+// restore witness's keeper, meta/judged's writer, the marks' reapplying
+// after a put-back and the refresh's context half, until ctx ends.
 func (r *runner) duties(ctx context.Context) {
 	carried, err := r.takeover(ctx)
 	if err != nil {
@@ -174,8 +178,9 @@ func (r *runner) duties(ctx context.Context) {
 		return
 	}
 	var wg sync.WaitGroup
-	wg.Add(5)
+	wg.Add(6)
 	go func() { defer wg.Done(); r.judging(ctx) }()
+	go func() { defer wg.Done(); r.keepWitness(ctx) }()
 	go func() { defer wg.Done(); r.reapplying(ctx) }()
 	go func() { defer wg.Done(); r.owed(ctx) }()
 	go func() {
@@ -550,6 +555,89 @@ func (r *runner) doubt(ctx context.Context, b etcdstore.BundleRecord) {
 	}
 }
 
+// witnessEvery is how often the runner reads meta/witness (Ruling 18): the
+// ledger keeper's interval, and about the most of a snapshot's lead over
+// the last witness that the check cannot see.
+const witnessEvery = time.Second
+
+// keepWitness is the runner's half of the restore witness (plan 7e,
+// Ruling 18), beside the ledger's keeper, until ctx ends. A pass the
+// store does not answer is tried at the next: an outage is the hold's
+// fence's to judge.
+func (r *runner) keepWitness(ctx context.Context) {
+	t := time.NewTicker(witnessEvery)
+	defer t.Stop()
+	for {
+		if err := r.witnessPass(ctx); err != nil && ctx.Err() == nil && !errors.Is(err, store.ErrUnavailable) {
+			fmt.Fprintf(stderr, "port49-broker: runner: the restore witness: %v; trying again in %v\n", err,
+				witnessEvery)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
+}
+
+// witnessPass is one pass of keepWitness. It reads meta/witness first:
+// below the replica's record, the store was restored under a running
+// runner, and it purges, then has the marks put back (Ruling 12), since a
+// watch at a revision the restored store has not reached may not reload.
+// Otherwise it rewrites the witness when the read's header is past the
+// witness's own revision. A quiet store writes nothing: the rewrite's
+// revision is the one the next pass compares with.
+func (r *runner) witnessPass(ctx context.Context) error {
+	rctx, cancel := context.WithTimeout(ctx, witnessEvery)
+	read, gone, why, err := readWitness(rctx, r.witness, r.raw.Witness)
+	cancel()
+	if err != nil {
+		return err
+	}
+	if gone {
+		if err := r.purgeRestored(ctx, why, read); err != nil {
+			return err
+		}
+		select {
+		case r.marksReloaded <- struct{}{}:
+		default:
+		}
+		return nil
+	}
+	if read.Header <= read.ModRevision {
+		return nil
+	}
+	wctx, cancel := context.WithTimeout(ctx, witnessEvery)
+	defer cancel()
+	landed, err := r.raw.PutWitness(wctx, r.who, read.ModRevision)
+	if landed > 0 {
+		r.witness.Saw(landed)
+	}
+	return err
+}
+
+// purgeRestored purges every unspent token after the witness caught a
+// restore (plan 7e, Ruling 18), as an unjudged takeover does: SupersedeAll
+// first, so a replay mints afresh. It lifts no mark: a mark the restore
+// lost is the copy's to put back (restoreMarks). It takes the store's
+// witness as the replica's record only once the purge is done: until then
+// every pass, and every replica's takeover, still sees the restore, so a
+// purge cut short by a lost hold is made by the next runner.
+func (r *runner) purgeRestored(ctx context.Context, why string, read etcdstore.WitnessRead) error {
+	at := r.brk.Now()
+	if err := retryCtx(ctx, func() error { return r.st.SupersedeAll(ctx, at) }); err != nil {
+		return err
+	}
+	var n int
+	if err := retryCtx(ctx, func() (e error) { n, e = r.st.PurgeTokens(ctx); return }); err != nil {
+		return err
+	}
+	r.witness.Reset(read.ModRevision)
+	fmt.Fprintf(stderr, "port49-broker: runner: %s; every unspent token is purged and must be minted again "+
+		"(port49 token): %d purged\n", why, n)
+	return nil
+}
+
 // retryCtx runs f until it returns nil, an error that is not
 // store.ErrUnavailable (or one of also), or ctx ends (ctx.Err()), waiting
 // 5s between tries and saying each wait. A failure fails toward purging
@@ -638,8 +726,10 @@ func startLeftBy(err error) (owed refreshOwed, again error) {
 //     ReindexContexts), so the passes below reach it, and applies every
 //     standing mark the store holds to the live contexts it kept, by 7a's
 //     two context passes;
-//  4. purges the unspent tokens, and supersedes every key, only when the
-//     bundle in force is not the one meta/judged names (Ruling 7);
+//  4. purges the unspent tokens, and supersedes every key, when
+//     meta/witness is below this replica's record, the store restored
+//     from a snapshot (purgeRestored; Ruling 18), and otherwise only when
+//     the bundle in force is not the one meta/judged names (Ruling 7);
 //  5. carries the policy in force into every live context the store
 //     kept;
 //  6. records the bundle as judged when the carry left no pass owed
@@ -709,10 +799,29 @@ func (r *runner) takeover(ctx context.Context) (*policy.Policy, error) {
 	if err := retryCtx(ctx, func() (e error) { judged, ok, e = r.meta.Judged(ctx); return }); err != nil {
 		return nil, err
 	}
-	if ok && !judged.InDoubt && judged.Bundle == bundle {
+	// The restore witness first (Ruling 18): after an etcd restore,
+	// meta/judged is the snapshot's, and names the bundle in force.
+	var read etcdstore.WitnessRead
+	var gone bool
+	var why string
+	if err := retryCtx(ctx, func() (e error) {
+		read, gone, why, e = readWitness(ctx, r.witness, r.raw.Witness)
+		return
+	}); err != nil {
+		return nil, err
+	}
+	if !gone && why != "" {
+		fmt.Fprintf(stderr, "port49-broker: runner: %s; going by meta/judged alone\n", why)
+	}
+	switch {
+	case gone: // meta/judged is the snapshot's: taken as absent
+		if err := r.purgeRestored(ctx, why, read); err != nil {
+			return nil, err
+		}
+	case ok && !judged.InDoubt && judged.Bundle == bundle:
 		fmt.Fprintf(stderr, "port49-broker: runner: the bundle in force (%s) is the one the last runner judged; no "+
 			"unspent token purged\n", bundle)
-	} else {
+	default:
 		at := r.brk.Now()
 		// SupersedeAll first: a replay after any token is gone mints afresh (Task 5).
 		if err := retryCtx(ctx, func() error { return r.st.SupersedeAll(ctx, at) }); err != nil {

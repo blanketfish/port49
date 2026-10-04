@@ -12,6 +12,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"net/url"
 	"os"
@@ -159,6 +160,9 @@ type Server struct {
 	Dir      string // the PKI: ca.pem, and the client files ClientFiles writes
 	ca       *testpki.CA
 	e        *embed.Etcd
+	// spec is the member's, with the addresses its start bound, so a
+	// restart (Backup, Restore) listens where every client dials.
+	spec memberSpec
 }
 
 // Start runs a member for t alone, stopped at its cleanup.
@@ -195,14 +199,85 @@ func Start(t testing.TB, o Options) *Server {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(e.Close)
 	s.e = e
+	t.Cleanup(func() { s.e.Close() }) // a restore replaces s.e
 	scheme := "http://"
 	if o.TLS {
 		scheme = "https://"
 	}
 	s.Endpoint = scheme + e.Clients[0].Addr().String()
+	s.spec = spec
+	s.spec.client = s.Endpoint
+	s.spec.peer = "http://" + e.Peers[0].Addr().String()
+	s.spec.cluster = spec.name + "=" + s.spec.peer
 	return s
+}
+
+// Backup stops the member, copies its data directory, and starts it again
+// on the same addresses, and returns the copy: a cold copy is what an etcd
+// snapshot restores a member of its own to (plan 7e, Ruling 18).
+func (s *Server) Backup(t testing.TB) string {
+	t.Helper()
+	dst := t.TempDir()
+	s.restart(t, func(dir string) error { return copyDir(dst, dir) })
+	return dst
+}
+
+// Restore stops the member, puts a Backup's copy in place of its data, and
+// starts it again on the same addresses, under every client still
+// connected: an etcd restore without --bump-revision, whose revisions go
+// back to the backup's. A test pads them past a mark to stand for the bump.
+func (s *Server) Restore(t testing.TB, from string) {
+	t.Helper()
+	s.restart(t, func(dir string) error {
+		if err := os.RemoveAll(dir); err != nil {
+			return err
+		}
+		return copyDir(dir, from)
+	})
+}
+
+// restart stops the member, runs between on its data directory, and
+// starts it again. It halts the member: Close alone waits up to etcd's
+// request timeout (~7s) for each open stream, a watch or a lease's
+// keepalive, to end. Even halted, the member is gone for a second or more:
+// a client's hold may lapse across it (etcd.Store.Hold's fence), so a test
+// that needs a runner to hold throughout backs up with its brokers
+// stopped.
+func (s *Server) restart(t testing.TB, between func(dir string) error) {
+	t.Helper()
+	halt(s.e)
+	if err := between(filepath.Join(s.spec.dir, s.spec.name)); err != nil {
+		t.Fatal(err)
+	}
+	e, err := member(s.spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.e = e
+}
+
+// copyDir copies a member's data directory owner only, as etcd requires of
+// it.
+func copyDir(dst, src string) error {
+	return filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, p)
+		if err != nil {
+			return err
+		}
+		to := filepath.Join(dst, rel)
+		if d.IsDir() {
+			return os.MkdirAll(to, 0o700)
+		}
+		body, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(to, body, 0o600)
+	})
 }
 
 // ClientFiles writes a client certificate for cn, from the server's CA,

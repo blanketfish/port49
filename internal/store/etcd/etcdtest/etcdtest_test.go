@@ -1,6 +1,7 @@
 package etcdtest
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -154,4 +155,32 @@ func TestProxyForwardsHangsAndCloses(t *testing.T) {
 		t.Fatalf("the proxy's cleanup left the connection open: %v", err)
 	}
 	c.Close()
+}
+
+// Restore puts a Backup's data back under clients still connected: a key
+// written since is gone, and the revision is the backup's again (Ruling
+// 18's fleet tests stand on it).
+func TestARestoreTakesTheStoreBack(t *testing.T) {
+	ctx := context.Background()
+	srv := Start(t, Options{})
+	cli := srv.Client(t, "root")
+	if _, err := cli.Put(ctx, "before", "x"); err != nil {
+		t.Fatal(err)
+	}
+	backup := srv.Backup(t)
+	at, err := cli.Get(ctx, "before")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 5 {
+		if _, err := cli.Put(ctx, "after", "y"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	srv.Restore(t, backup)
+	resp, err := cli.Get(ctx, "after")
+	if err != nil || len(resp.Kvs) != 0 || resp.Header.Revision != at.Header.Revision {
+		t.Fatalf("after a restore: %v at revision %d, the backup's %d: %v", resp.Kvs, resp.Header.Revision,
+			at.Header.Revision, err)
+	}
 }

@@ -1674,3 +1674,180 @@ func TestARestoreUnderARunningRunnerIsPutBackBeforeTheReload(t *testing.T) {
 		t.Fatalf("alice after the restore: %s %v", reply(status, body), err)
 	}
 }
+
+// An etcd restore with every process stopped, as the runbook says, but its
+// delete of meta/judged forgotten: the takeover finds meta/witness below
+// what this replica recorded and purges, so a token redeemed after the
+// snapshot stays spent. The revisions are padded past the record before
+// anything starts, as --bump-revision moves them (Ruling 18; re-check R6).
+// The backup is taken with every process stopped too: Backup restarts the
+// member, and a runner whose hold lapsed across it would not witness the
+// redemption.
+func TestATakeoverAfterARestorePurgesWithoutTheRunbook(t *testing.T) {
+	var out, log syncBuffer
+	e, o := stderr, stdout
+	t.Cleanup(func() { stderr, stdout = e, o })
+	stderr, stdout = &out, &log
+	f := splitFleet(t)
+	root := f.srv.Client(t, "root")
+	_, stopD := runSplitDaemon(t, f.daemon, &out, 1)
+	api, stop := startBroker(t, f.broker, &out, 1)
+	waitFor(t, &out, "runner: recorded bundle ")
+	spent := mintOn(t, api, f.pki, "leaf1")
+	waitUntil(t, "a witness", func() bool { return witnessAt(t, root) > 0 })
+	if err := stop(); err != nil {
+		t.Fatal(err)
+	}
+	if err := stopD(); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := f.srv.Backup(t) // the token is unspent in it, and meta/judged names the bundle
+	w0 := witnessAt(t, root)
+	tacacs, stopD := runSplitDaemon(t, f.daemon, &out, 2)
+	_, stop = startBroker(t, f.broker, &out, 2)
+	waitForCount(t, &out, "runner: took keyspace /port49/", 2)
+	dev := tacacsClient{t: t, addr: tacacs, key: []byte("run-test-secret")}
+	if st := dev.login("alice", spent); st != wire.AuthenStatusPass {
+		t.Fatalf("control: the token's first login: %d", st)
+	}
+	waitUntil(t, "the redemption's witness, recorded", func() bool { return witnessIn(t, f.stateDir(t)) > w0 })
+	if err := stop(); err != nil {
+		t.Fatal(err)
+	}
+	if err := stopD(); err != nil {
+		t.Fatal(err)
+	}
+	recorded := witnessIn(t, f.stateDir(t)) // saved as the broker stopped
+	f.srv.Restore(t, snapshot)              // meta/judged left as the snapshot's
+	padPast(t, root, recorded)              // as --bump-revision moves revisions up
+	before := len(out.String())
+	dev.addr = startSplitDaemon(t, f.daemon, &out, 3)
+	api, _ = startBroker(t, f.broker, &out, 3)
+	purged := fmt.Sprintf("below the %d this replica saw: the store was restored from a snapshot; every unspent "+
+		"token is purged", recorded)
+	waitWithin(t, &out, purged, 30*time.Second)
+	// The takeover's purge, not the first witness pass after it: before the
+	// carry, and with meta/judged's purge left unsaid.
+	waitWithin(t, &out, "live context(s) carried onto the policy in force", 10*time.Second)
+	after := out.String()[before:]
+	if strings.Index(after, purged) > strings.Index(after, "live context(s) carried onto the policy in force") ||
+		strings.Contains(after, "is the one the last runner judged; no unspent token purged") {
+		t.Fatalf("the takeover went by meta/judged alone:\n%s", after)
+	}
+	if st := dev.login("alice", spent); st == wire.AuthenStatusPass {
+		t.Fatal("a token redeemed after the snapshot logged in again after the restore")
+	}
+	if st := dev.login("alice", mintOn(t, api, f.pki, "leaf1")); st != wire.AuthenStatusPass {
+		t.Fatalf("control: a token minted after the takeover: %d", st)
+	}
+}
+
+// A replica that never ran, and only followed the witness, catches the
+// restore at its takeover as the runner would have: the record is every
+// replica's, not the runner's alone (Ruling 18; re-check R6). The backup
+// is taken before B starts and while A is stopped: Backup restarts the
+// member, and B could take a hold A lost across it.
+func TestAWitnessRecordFromAnotherReplicaCatchesTheRestore(t *testing.T) {
+	var out syncBuffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	f := splitFleet(t)
+	root := f.srv.Client(t, "root")
+	_, stopA := startBroker(t, f.broker, &out, 1)
+	waitFor(t, &out, "runner: recorded bundle ")
+	waitUntil(t, "a witness", func() bool { return witnessAt(t, root) > 0 })
+	if err := stopA(); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := f.srv.Backup(t)
+	w0 := witnessAt(t, root)
+	apiA, stopA := startBroker(t, f.broker, &out, 2)
+	waitForCount(t, &out, "runner: took keyspace /port49/", 2)
+	cfgB := f.copyBroker(t) // a broker.state_dir of its own
+	_, stopB := startBroker(t, cfgB, &out, 3)
+	waitFor(t, &out, "this replica serves the API and takes over if that one stops")
+	mintOn(t, apiA, f.pki, "leaf1") // brings a witness
+	waitUntil(t, "B's copy of the witness to rise", func() bool { return witnessIn(t, f.stateDirOf(t, cfgB)) > w0 })
+	// The follower path, proved: A held throughout, so B's record came only
+	// from following. Had A's hold lapsed, B would have run and recorded its
+	// own writes (final check, Minor 3).
+	if n := strings.Count(out.String(), "runner: took keyspace /port49/"); n != 2 {
+		t.Fatalf("the hold changed hands: %d takes; the follower path is not what was tested", n)
+	}
+	if err := stopB(); err != nil { // B first, so it never takes the hold
+		t.Fatal(err)
+	}
+	if err := stopA(); err != nil {
+		t.Fatal(err)
+	}
+	recorded := witnessIn(t, f.stateDirOf(t, cfgB))
+	f.srv.Restore(t, snapshot)
+	startBroker(t, cfgB, &out, 4)
+	waitWithin(t, &out, fmt.Sprintf("the store's meta/witness is at revision %d, below the %d this replica saw: "+
+		"the store was restored from a snapshot", w0, recorded), 30*time.Second)
+}
+
+// witnessAt is meta/witness's ModRevision read as etcd's root, 0 when it
+// is absent, tried again for 10s while the member restarts under the
+// client.
+func witnessAt(t *testing.T, root *clientv3.Client) uint64 {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		resp, err := root.Get(ctx, "/port49/v1/meta/witness")
+		cancel()
+		if err == nil {
+			if len(resp.Kvs) == 0 {
+				return 0
+			}
+			return uint64(resp.Kvs[0].ModRevision)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("reading meta/witness: %v", err)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// witnessIn is the mod_revision of witness.json in the broker.state_dir
+// dir, 0 when there is none.
+func witnessIn(t *testing.T, dir string) uint64 {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(dir, stateWitnessFile))
+	if errors.Is(err, os.ErrNotExist) {
+		return 0
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	var f struct {
+		ModRevision uint64 `json:"mod_revision"`
+	}
+	if err := json.Unmarshal(raw, &f); err != nil {
+		t.Fatalf("%s: %v", stateWitnessFile, err) // written by a rename, never partial
+	}
+	return f.ModRevision
+}
+
+// padPast puts /pad/<n> as etcd's root until a put's header revision is
+// past rev, tried again for 10s while the member restarts: what
+// --bump-revision does to the revisions a restore starts from.
+func padPast(t *testing.T, root *clientv3.Client, rev uint64) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for n := 0; ; n++ {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		resp, err := root.Put(ctx, fmt.Sprintf("/pad/%d", n), "x")
+		cancel()
+		switch {
+		case err == nil && uint64(resp.Header.Revision) > rev:
+			return
+		case err != nil && time.Now().After(deadline):
+			t.Fatalf("padding the revisions past %d: %v", rev, err)
+		case err != nil:
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+}

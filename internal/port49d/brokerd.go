@@ -200,7 +200,9 @@ func announceBroker(w io.Writer, cfg *config.Config) {
 //  5. the store, the ledger and the marks (openBroker), the context feed
 //     following at once; this replica's copy of the marks
 //     (broker.state_dir/marks.json), filled from the load, and every mark
-//     it holds that the store lacks kept in force (keepCopied);
+//     it holds that the store lacks kept in force (keepCopied); and its
+//     record of the restore witness (broker.state_dir/witness.json),
+//     following meta/witness;
 //  6. the broker; the reload guard at a start (passGuardAtStart), which
 //     holds the start, not ready, while the policy file is refused against
 //     the bundle last judged; this replica's bundle record (keepBundle) and
@@ -345,6 +347,13 @@ func runBroker(parent context.Context, cfgPath string) error {
 	// anything reads a context (plan 7e, Ruling 3).
 	wg.Add(1)
 	go func() { defer wg.Done(); bs.followContexts(ctx) }()
+	// This replica's record of the restore witness (Ruling 18): every
+	// witness it follows, the runner's own too, kept in broker.state_dir
+	// and saved once more as it stops, so it outlives an etcd restore.
+	wit := openWitness(filepath.Join(cfg.Broker.StateDir, stateWitnessFile), cfg.Store.Etcd.Prefix, stderr)
+	wg.Add(2)
+	go func() { defer wg.Done(); wit.keep(ctx) }()
+	go func() { defer wg.Done(); bs.raw.FollowWitness(ctx, wit.Saw) }()
 
 	minter := token.NewMinter(bs.st, log, rand.Reader, tagKey, time.Now, cfg.Token.CandidateCap)
 	brokerSrv, brk, anchorCert, err := buildBrokerAnchor(cfg, inventoryFrom, bs.st, minter, log, m)
@@ -398,7 +407,7 @@ func runBroker(parent context.Context, cfgPath string) error {
 	}()
 	rn := &runner{cfg: cfg, brk: brk, raw: bs.raw, st: bs.st, meta: bs.raw, ledger: ledger, keys: keys, m: m,
 		judge: make(chan *policy.Policy, 1), alarm: newKeyAlarm(), who: who, copy: marksCopy, marks: marks,
-		marksReloaded: make(chan struct{}, 1)}
+		marksReloaded: make(chan struct{}, 1), witness: wit}
 	// A replica's start and each of its swaps while it does not run ask the
 	// runner for a full context pass (runner.owed): a context made from its
 	// token under another bundle is then judged. Every swap, the runner's

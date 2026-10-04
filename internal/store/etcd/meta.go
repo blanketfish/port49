@@ -417,6 +417,86 @@ func (s *Store) JudgeInDoubt(ctx context.Context, unless string) (bundle string,
 	}
 }
 
+// WitnessRead is meta/witness as one read found it (plan 7e, Ruling 18):
+// the key's ModRevision, 0 when it is absent, and the revision etcd
+// answered the read at. A restored key keeps its ModRevision, with or
+// without --bump-revision; the header rises under the bump.
+type WitnessRead struct {
+	ModRevision uint64
+	Header      uint64
+}
+
+// Witness reads meta/witness, as the broker.
+func (s *Store) Witness(ctx context.Context) (WitnessRead, error) {
+	resp, err := s.ctxKV.Get(ctx, s.k.meta("witness"))
+	if err != nil {
+		return WitnessRead{}, unavailable(err)
+	}
+	w := WitnessRead{Header: uint64(resp.Header.Revision)}
+	if len(resp.Kvs) > 0 {
+		w.ModRevision = uint64(resp.Kvs[0].ModRevision)
+	}
+	return w, nil
+}
+
+// PutWitness rewrites meta/witness, as the broker, if it is still at the
+// ModRevision over (0: absent), and returns the revision it landed at, 0
+// when another write got there first: two runners for a moment never
+// write one over the other. It holds no secret: the runner's name and the
+// time.
+func (s *Store) PutWitness(ctx context.Context, who string, over uint64) (uint64, error) {
+	key := s.k.meta("witness")
+	body, err := json.Marshal(struct {
+		Who string    `json:"who"`
+		At  time.Time `json:"at"`
+	}{who, s.now().UTC()})
+	if err != nil {
+		return 0, err
+	}
+	resp, err := s.ctxKV.Txn(ctx).If(clientv3.Compare(clientv3.ModRevision(key), "=", int64(over))).
+		Then(clientv3.OpPut(key, string(body))).Commit()
+	if err != nil {
+		return 0, unavailable(err)
+	}
+	if !resp.Succeeded {
+		return 0, nil
+	}
+	return uint64(resp.Header.Revision), nil
+}
+
+// FollowWitness tells saw the ModRevision of meta/witness as it reads and
+// watches it, until ctx ends (plan 7e, Ruling 18): one read, then a watch
+// from the read's revision, and a read again a second after the watch
+// ends (a compaction, or etcd gone). A lower revision than before, a
+// restore's, is told too: saw keeps the highest.
+func (s *Store) FollowWitness(ctx context.Context, saw func(uint64)) {
+	key := s.k.meta("witness")
+	for {
+		if resp, err := s.ctxKV.Get(ctx, key); err == nil {
+			if len(resp.Kvs) > 0 {
+				saw(uint64(resp.Kvs[0].ModRevision))
+			}
+			wctx, cancel := context.WithCancel(clientv3.WithRequireLeader(ctx))
+			for wr := range s.ctx.Watch(wctx, key, clientv3.WithRev(resp.Header.Revision+1)) {
+				if wr.Err() != nil {
+					break
+				}
+				for _, ev := range wr.Events {
+					if ev.Type == clientv3.EventTypePut {
+						saw(uint64(ev.Kv.ModRevision))
+					}
+				}
+			}
+			cancel()
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(time.Second):
+		}
+	}
+}
+
 // Holder reads meta/holder, the who of the replica holding the keyspace
 // (Hold); false when none does.
 func (s *Store) Holder(ctx context.Context) (string, bool, error) {

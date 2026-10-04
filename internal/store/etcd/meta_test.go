@@ -580,3 +580,62 @@ func TestAJudgedRecordGoesInDoubtAndIsReplacedOnlyWhenNothingMoved(t *testing.T)
 		t.Fatalf("refused over a record deleted since: %v %v", put, err)
 	}
 }
+
+// A witness lands only over the revision it was given, so two runners
+// for a moment cannot write one over the other, and a read says both
+// its revision and the store's (Ruling 18).
+func TestAWitnessLandsOnlyOverTheOneRead(t *testing.T) {
+	ctx := context.Background()
+	s := onShared(t, time.Now)
+	if w, err := s.Witness(ctx); err != nil || w.ModRevision != 0 || w.Header == 0 {
+		t.Fatalf("no witness yet: %+v %v", w, err)
+	}
+	first, err := s.PutWitness(ctx, "runner-a", 0)
+	if err != nil || first == 0 {
+		t.Fatalf("the first witness: %d %v", first, err)
+	}
+	if got, err := s.PutWitness(ctx, "runner-b", 0); err != nil || got != 0 {
+		t.Fatalf("a witness over an absent one that is there now: %d %v", got, err)
+	}
+	if w, err := s.Witness(ctx); err != nil || w.ModRevision != first || w.Header < first {
+		t.Fatalf("the witness read back: %+v %v", w, err)
+	}
+	if got, err := s.PutWitness(ctx, "runner-a", first); err != nil || got <= first {
+		t.Fatalf("a witness over the one read: %d %v", got, err)
+	}
+}
+
+// FollowWitness tells every ModRevision the witness is written at, from
+// its first read on, until ctx ends (Ruling 18).
+func TestFollowWitnessTellsEachWrite(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	s := onShared(t, time.Now)
+	first, err := s.PutWitness(ctx, "runner-a", 0)
+	if err != nil || first == 0 {
+		t.Fatalf("the first witness: %d %v", first, err)
+	}
+	var mu sync.Mutex
+	var saw []uint64
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.FollowWitness(ctx, func(rev uint64) { mu.Lock(); saw = append(saw, rev); mu.Unlock() })
+	}()
+	next, err := s.PutWitness(ctx, "runner-a", first)
+	if err != nil || next == 0 {
+		t.Fatalf("the next witness: %d %v", next, err)
+	}
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		mu.Lock()
+		got := append([]uint64(nil), saw...)
+		mu.Unlock()
+		if len(got) > 0 && got[len(got)-1] == next {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("followed %v; the witness is at %d", got, next)
+		}
+	}
+	cancel()
+	<-done
+}
