@@ -217,6 +217,36 @@ func TestARefreshRevokesAContextWhoseGrantIsGone(t *testing.T) {
 	}
 }
 
+// RefreshTokens is Refresh's token half alone (plan 7e, Ruling 6): the
+// unspent token the withdrawn grant superseded is deleted, and the context
+// on that grant is left as it was, for the runner's pass to judge.
+func TestRefreshTokensJudgesTokensAndNoContext(t *testing.T) {
+	f := newFixture(t, 8)
+	before := f.login(t, alice, "leaf1", "alice")
+	decodeMint(t, f.post(context.Background(), f.state(f.alice), `{"devices":["nx1"]}`, ""))
+	priors := f.reload(t, edit(t, "  - {subject: netops, scope: all_devices, "+aliceGrant+"}\n",
+		"  - {subject: idle, scope: all_devices, roles: [network_admin]}\n"))
+	f.log.Reset()
+	rep, err := f.b.RefreshTokens(context.Background(), priors)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if toks, _ := f.st.Candidates(context.Background(), store.TokenKey{NAS: "nx1", Username: "alice"}); len(toks) != 0 {
+		t.Fatalf("alice's unspent nx1 token must be deleted: %d left", len(toks))
+	}
+	after := f.context(t, "leaf1", "alice")
+	if !after.RevokedAt.IsZero() || after.BlobHash != before.BlobHash || !after.RefreshedAt.Equal(before.RefreshedAt) {
+		t.Fatalf("the context on the withdrawn grant is the runner's to judge: %+v", after)
+	}
+	if rep.TokenKeys != 1 || rep.Contexts() != 0 || rep.Updated+rep.Unchanged+rep.Revoked+rep.Quarantined+rep.Failed+
+		rep.Unreached != 0 {
+		t.Fatalf("report: %+v", rep)
+	}
+	if recs := eventsOf(f.records(t), "refresh"); len(recs) != 0 {
+		t.Fatalf("no context judged, so no refresh record: %v", recs)
+	}
+}
+
 // A lowered max_privilege reaches the next command: the held level comes down
 // to the new ceiling (the join's rule, spec §5.3), and the record says from
 // what to what, which is what explains the privilege_exceeded that follows.
