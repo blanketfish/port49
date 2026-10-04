@@ -2,6 +2,7 @@ package port49d
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/printsafe"
+	"github.com/rhwendt/port49/internal/store"
 	etcdstore "github.com/rhwendt/port49/internal/store/etcd"
 )
 
@@ -66,6 +68,35 @@ func keepBundle(ctx context.Context, raw bundleStore, who string, live *policy.L
 			return
 		case <-t.C:
 		case <-swapped:
+		}
+	}
+}
+
+// firstBundle records the bundle this replica serves before it serves
+// anything that mints (Task 15a review M-1): the runner judges meta/judged
+// against the replicas' records, so a replica it cannot see mints nothing.
+// Each put is bounded by call; one the store did not answer is tried again
+// every wait, said each time, until it lands or ctx ends. An error waiting
+// does not mend ends the start.
+func firstBundle(ctx context.Context, raw bundleStore, who, bundle string, ttl, call, wait time.Duration,
+	out io.Writer) error {
+	for {
+		pctx, cancel := context.WithTimeout(ctx, call)
+		err := raw.PutBundle(pctx, who, bundle, ttl)
+		cancel()
+		if err == nil {
+			return nil
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if !errors.Is(err, store.ErrUnavailable) {
+			return fmt.Errorf("recording the bundle this replica serves (%s): %w", bundle, err)
+		}
+		fmt.Fprintf(out, "port49-broker: policy: recording the bundle this replica serves (%s): %v; nothing that "+
+			"mints is served until it lands, trying again in %s\n", bundle, err, wait)
+		if !sleepCtx(ctx, wait) {
+			return ctx.Err()
 		}
 	}
 }

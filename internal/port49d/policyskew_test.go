@@ -2,6 +2,7 @@ package port49d
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -12,8 +13,40 @@ import (
 
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/policy"
+	"github.com/rhwendt/port49/internal/store"
 	etcdstore "github.com/rhwendt/port49/internal/store/etcd"
 )
+
+// A replica's first record of the bundle it serves lands before it serves
+// anything that mints, tried again while the store is unavailable and
+// said at each wait; an error waiting does not mend, or a stop, ends the
+// start with nothing recorded (Task 15a review M-1).
+func TestTheFirstBundleRecordLandsBeforeAnythingIsServed(t *testing.T) {
+	var out syncBuffer
+	st := &fakeBundles{fail: 2, failErr: store.ErrUnavailable}
+	if err := firstBundle(context.Background(), st, "replica-b", "b1", time.Minute, time.Second,
+		10*time.Millisecond, &out); err != nil {
+		t.Fatal(err)
+	}
+	if st.put("replica-b") != "b1" || st.puts != 3 ||
+		strings.Count(out.String(), "port49-broker: policy: recording the bundle this replica serves (b1): ") != 2 ||
+		!strings.Contains(out.String(), "nothing that mints is served until it lands") {
+		t.Fatalf("%d put(s), recorded %q; said %q", st.puts, st.put("replica-b"), out.String())
+	}
+	refused := errors.New("the record is refused")
+	st = &fakeBundles{fail: 1, failErr: refused}
+	if err := firstBundle(context.Background(), st, "replica-b", "b1", time.Minute, time.Second,
+		10*time.Millisecond, &out); !errors.Is(err, refused) || st.put("replica-b") != "" || st.puts != 1 {
+		t.Fatalf("an error waiting does not mend: %v, %d put(s)", err, st.puts)
+	}
+	st = &fakeBundles{fail: 1 << 30, failErr: store.ErrUnavailable}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if err := firstBundle(ctx, st, "replica-b", "b1", time.Minute, time.Second, 10*time.Millisecond,
+		&out); err == nil || st.put("replica-b") != "" {
+		t.Fatalf("a stop while the store is unavailable: %v", err)
+	}
+}
 
 // A replica whose bundle is not the runner's gauges 0 and says so once per
 // pair; matching, it gauges 1 (pre-flight I3).
@@ -121,9 +154,21 @@ type fakeBundles struct {
 	mu     sync.Mutex
 	holder string
 	recs   []etcdstore.BundleRecord
+	// fail is how many puts fail next, with failErr.
+	fail    int
+	failErr error
+	puts    int
 }
 
 func (f *fakeBundles) PutBundle(_ context.Context, who, bundle string, ttl time.Duration) error {
+	f.mu.Lock()
+	f.puts++
+	if f.fail > 0 {
+		f.fail--
+		f.mu.Unlock()
+		return f.failErr
+	}
+	f.mu.Unlock()
 	f.set(who, bundle)
 	return nil
 }

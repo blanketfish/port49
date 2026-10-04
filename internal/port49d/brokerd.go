@@ -369,7 +369,15 @@ func runBroker(parent context.Context, cfgPath string) error {
 		time.Now().UTC().Format(time.RFC3339))
 	// This replica's record of the bundle it serves (Ruling 8 corrected;
 	// pre-flight I3), renewed at every swap (swapped) and deleted at a
-	// graceful stop.
+	// graceful stop. The first lands before anything that mints is served
+	// (Task 15a review M-1): until then this replica is not ready.
+	if err := firstBundle(ctx, bs.raw, who, brk.Policy.Load().Bundle, cfg.Store.Etcd.HoldTTL,
+		4*cfg.Store.Etcd.CallTimeout, 5*time.Second, stderr); err != nil {
+		if ctx.Err() != nil {
+			return nil // stopped while the record could not land: nothing was served
+		}
+		return err
+	}
 	swapped := make(chan struct{}, 1)
 	wg.Add(1)
 	go func() {
