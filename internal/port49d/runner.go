@@ -53,8 +53,9 @@ type runner struct {
 // meta/judged, the replicas' bundles and the ask for a full context pass.
 type judgedStore interface {
 	Judged(ctx context.Context) (etcdstore.JudgedRecord, bool, error)
-	PutJudged(ctx context.Context, bundle string, policy []byte) error
-	Bundles(ctx context.Context) ([]etcdstore.BundleRecord, error)
+	PutJudgedSince(ctx context.Context, bundle string, policy []byte, rev uint64) (bool, error)
+	JudgeInDoubt(ctx context.Context) (bundle string, marked bool, err error)
+	BundlesAt(ctx context.Context) ([]etcdstore.BundleRecord, uint64, error)
 	RefreshOwed(ctx context.Context) (rev uint64, rec etcdstore.BundleRecord, ok bool, err error)
 	ClearRefreshOwed(ctx context.Context, rev uint64) error
 }
@@ -243,7 +244,8 @@ func (r *runner) judging(ctx context.Context) {
 //     owed, and the next look asks again;
 //   - a replica seen serving another bundle owes one too, once every token
 //     it could have minted has expired (owedFullPassAt): a replica that
-//     dies unreloaded never asks.
+//     dies unreloaded never asks. It marks meta/judged in doubt at once
+//     (doubt), so a takeover meanwhile purges.
 func (r *runner) owed(ctx context.Context) {
 	every := r.cfg.Policy.WatchInterval
 	bound := func(f func(ctx context.Context) error) error {
@@ -275,16 +277,20 @@ func (r *runner) owed(ctx context.Context) {
 			_ = bound(func(c context.Context) error { return r.meta.ClearRefreshOwed(c, rev) })
 		}
 		var recs []etcdstore.BundleRecord
-		err = bound(func(c context.Context) (err error) { recs, err = r.meta.Bundles(c); return })
+		err = bound(func(c context.Context) (err error) { recs, _, err = r.meta.BundlesAt(c); return })
 		now := r.brk.Now()
 		if err == nil {
 			mine := r.brk.Policy.Load().Bundle
-			for _, b := range recs {
+			var other *etcdstore.BundleRecord
+			for i, b := range recs {
 				// Its own record lags its own swap by a write, and it mints
 				// under the policy in force.
 				if b.Who != r.who && b.Bundle != mine {
-					lastMismatch, lastBundle = now, b.Bundle
+					lastMismatch, lastBundle, other = now, b.Bundle, &recs[i]
 				}
+			}
+			if other != nil {
+				_ = bound(func(c context.Context) error { r.doubt(c, *other); return nil })
 			}
 		}
 		if !lastMismatch.IsZero() && !now.Before(owedFullPassAt(lastMismatch)) &&
@@ -313,39 +319,77 @@ func (r *runner) fullPass(ctx context.Context, o fullPassOwed) bool {
 	}
 }
 
+// judgeTries is how many times recordJudged reads the replicas' records
+// when one is written between its read and its record.
+const judgeTries = 3
+
 // recordJudged writes meta/judged for pol, the policy every live context
 // was judged against, retried while the store is unavailable and ctx
 // lives, and says so (plan 7e, Ruling 7; pre-flight I2). It is the only
 // writer of the record: the takeover calls it once its carry leaves
 // nothing owed, and judging whenever a pass leaves nothing pending. It
 // writes nothing while any replica's record names another bundle (Ruling
-// 8 corrected; pre-flight I3): that replica's tokens, and the contexts
-// they make, carry a policy no pass judged, so the next takeover purges,
-// which denies more.
+// 8 corrected; pre-flight I3), and marks the record in place in doubt
+// (doubt): that replica's tokens, and the contexts they make, carry a
+// policy no pass judged, so the next takeover purges, which denies more.
+// Nor does it write over a replica's record written after its read
+// (PutJudgedSince; Task 15a review I-1): it reads again, judgeTries times
+// in all.
 func (r *runner) recordJudged(ctx context.Context, pol *policy.Policy, why string) {
-	var recs []etcdstore.BundleRecord
-	if err := retryCtx(ctx, func() (err error) { recs, err = r.meta.Bundles(ctx); return }); err != nil {
-		if ctx.Err() == nil {
-			fmt.Fprintf(stderr, "port49-broker: runner: not recording bundle %s as judged: reading the bundles the "+
-				"replicas serve: %v; the next takeover purges the unspent tokens\n", pol.Bundle, err)
+	for try := 0; try < judgeTries; try++ {
+		var recs []etcdstore.BundleRecord
+		var rev uint64
+		if err := retryCtx(ctx, func() (err error) { recs, rev, err = r.meta.BundlesAt(ctx); return }); err != nil {
+			if ctx.Err() == nil {
+				fmt.Fprintf(stderr, "port49-broker: runner: not recording bundle %s as judged: reading the bundles "+
+					"the replicas serve: %v; the next takeover purges the unspent tokens\n", pol.Bundle, err)
+			}
+			return
 		}
-		return
-	}
-	for _, b := range recs {
-		if b.Bundle != pol.Bundle {
-			fmt.Fprintf(stderr, "port49-broker: runner: not recording bundle %s as judged: %s serves bundle %s\n",
-				pol.Bundle, lineHolder(b.Who), lineBundle(b.Bundle))
+		for _, b := range recs {
+			if b.Bundle != pol.Bundle {
+				fmt.Fprintf(stderr, "port49-broker: runner: not recording bundle %s as judged: %s serves bundle %s\n",
+					pol.Bundle, lineHolder(b.Who), lineBundle(b.Bundle))
+				r.doubt(ctx, b)
+				return
+			}
+		}
+		var put bool
+		if err := retryCtx(ctx, func() (err error) {
+			put, err = r.meta.PutJudgedSince(ctx, pol.Bundle, pol.Raw(), rev)
+			return
+		}); err != nil {
+			if ctx.Err() == nil {
+				fmt.Fprintf(stderr, "port49-broker: runner: recording bundle %s as judged: %v; the next takeover "+
+					"purges the unspent tokens\n", pol.Bundle, err)
+			}
+			return
+		}
+		if put {
+			fmt.Fprintf(stderr, "port49-broker: runner: recorded bundle %s as judged (%s)\n", pol.Bundle, why)
 			return
 		}
 	}
-	if err := retryCtx(ctx, func() error { return r.meta.PutJudged(ctx, pol.Bundle, pol.Raw()) }); err != nil {
-		if ctx.Err() == nil {
-			fmt.Fprintf(stderr, "port49-broker: runner: recording bundle %s as judged: %v; the next takeover "+
-				"purges the unspent tokens\n", pol.Bundle, err)
-		}
+	fmt.Fprintf(stderr, "port49-broker: runner: not recording bundle %s as judged: the replicas' records changed at "+
+		"each of %d reads; the next takeover purges the unspent tokens\n", pol.Bundle, judgeTries)
+}
+
+// doubt withdraws meta/judged while b, another replica's record, names
+// another bundle (Task 15a review I-1): the record is marked in doubt, so
+// the next takeover purges though the bundle in force is the one it
+// names, and says so as it marks. A mark that fails is said; the watch
+// (owed) marks again at its next look.
+func (r *runner) doubt(ctx context.Context, b etcdstore.BundleRecord) {
+	bundle, marked, err := r.meta.JudgeInDoubt(ctx)
+	if err != nil {
+		fmt.Fprintf(stderr, "port49-broker: runner: marking the bundle last judged in doubt (%s serves bundle %s): "+
+			"%v; marked again at the next look\n", lineHolder(b.Who), lineBundle(b.Bundle), err)
 		return
 	}
-	fmt.Fprintf(stderr, "port49-broker: runner: recorded bundle %s as judged (%s)\n", pol.Bundle, why)
+	if marked {
+		fmt.Fprintf(stderr, "port49-broker: runner: the bundle last judged (%s) is in doubt: %s serves bundle %s; the "+
+			"next takeover purges the unspent tokens\n", lineBundle(bundle), lineHolder(b.Who), lineBundle(b.Bundle))
+	}
 }
 
 // retryCtx runs f until it returns nil, an error that is not
@@ -499,7 +543,7 @@ func (r *runner) takeover(ctx context.Context) (*policy.Policy, error) {
 	if err := retryCtx(ctx, func() (e error) { judged, ok, e = r.meta.Judged(ctx); return }); err != nil {
 		return nil, err
 	}
-	if ok && judged.Bundle == bundle {
+	if ok && !judged.InDoubt && judged.Bundle == bundle {
 		fmt.Fprintf(stderr, "port49-broker: runner: the bundle in force (%s) is the one the last runner judged; no "+
 			"unspent token purged\n", bundle)
 	} else {
@@ -512,8 +556,15 @@ func (r *runner) takeover(ctx context.Context) (*policy.Policy, error) {
 		if err := retryCtx(ctx, func() (e error) { n, e = r.st.PurgeTokens(ctx); return }); err != nil {
 			return nil, err
 		}
-		fmt.Fprintf(stderr, "port49-broker: runner: the bundle in force (%s) is not the one the last runner judged "+
-			"(%s); %d unspent token(s) purged (run 'port49 token' again)\n", bundle, orNone(judged.Bundle, ok), n)
+		if ok && judged.InDoubt && judged.Bundle == bundle {
+			fmt.Fprintf(stderr, "port49-broker: runner: the bundle the last runner judged (%s) is in doubt, a "+
+				"replica having served another since; %d unspent token(s) purged (run 'port49 token' again)\n",
+				bundle, n)
+		} else {
+			fmt.Fprintf(stderr, "port49-broker: runner: the bundle in force (%s) is not the one the last runner "+
+				"judged (%s); %d unspent token(s) purged (run 'port49 token' again)\n", bundle,
+				orNone(judged.Bundle, ok), n)
+		}
 	}
 	// The carry below judges every live context, so an ask for a full
 	// context pass written before it is owed nothing more (owed). Read

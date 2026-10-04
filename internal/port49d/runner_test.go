@@ -116,28 +116,35 @@ func (m *metaOf) Judged(ctx context.Context) (etcdstore.JudgedRecord, bool, erro
 	return m.inner.Judged(ctx)
 }
 
-func (m *metaOf) PutJudged(ctx context.Context, bundle string, raw []byte) error {
+func (m *metaOf) PutJudgedSince(ctx context.Context, bundle string, raw []byte, rev uint64) (bool, error) {
 	if m.hold != nil {
 		select {
 		case <-m.hold:
 		case <-ctx.Done():
-			return ctx.Err()
+			return false, ctx.Err()
 		}
 	}
 	m.mu.Lock()
 	m.judged = append(m.judged, bundle)
 	m.mu.Unlock()
 	if m.inner == nil {
-		return nil
+		return true, nil
 	}
-	return m.inner.PutJudged(ctx, bundle, raw)
+	return m.inner.PutJudgedSince(ctx, bundle, raw, rev)
 }
 
-func (m *metaOf) Bundles(ctx context.Context) ([]etcdstore.BundleRecord, error) {
+func (m *metaOf) BundlesAt(ctx context.Context) ([]etcdstore.BundleRecord, uint64, error) {
 	if m.inner == nil {
-		return nil, nil
+		return nil, 0, nil
 	}
-	return m.inner.Bundles(ctx)
+	return m.inner.BundlesAt(ctx)
+}
+
+func (m *metaOf) JudgeInDoubt(ctx context.Context) (string, bool, error) {
+	if m.inner == nil {
+		return "", false, nil
+	}
+	return m.inner.JudgeInDoubt(ctx)
 }
 
 func (m *metaOf) RefreshOwed(ctx context.Context) (uint64, etcdstore.BundleRecord, bool, error) {
@@ -339,13 +346,41 @@ type skewMeta struct {
 	cleared []uint64
 	// kept is a clear that does not land: the ask stays.
 	kept bool
+	// readErr fails the replicas' records' read; moved is how many
+	// records as judged find a replica's record written since.
+	readErr error
+	moved   int
+	doubted int
 }
 
-func (s *skewMeta) Bundles(context.Context) ([]etcdstore.BundleRecord, error) {
+func (s *skewMeta) BundlesAt(context.Context) ([]etcdstore.BundleRecord, uint64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.reads++
-	return append([]etcdstore.BundleRecord(nil), s.recs...), nil
+	if s.readErr != nil {
+		return nil, 0, s.readErr
+	}
+	return append([]etcdstore.BundleRecord(nil), s.recs...), uint64(s.reads), nil
+}
+
+func (s *skewMeta) PutJudgedSince(ctx context.Context, bundle string, raw []byte, rev uint64) (bool, error) {
+	s.mu.Lock()
+	moved := s.moved > 0
+	if moved {
+		s.moved--
+	}
+	s.mu.Unlock()
+	if moved {
+		return false, nil
+	}
+	return s.metaOf.PutJudgedSince(ctx, bundle, raw, rev)
+}
+
+func (s *skewMeta) JudgeInDoubt(context.Context) (string, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.doubted++
+	return "b-judged", s.doubted == 1, nil
 }
 
 func (s *skewMeta) RefreshOwed(context.Context) (uint64, etcdstore.BundleRecord, bool, error) {
@@ -461,8 +496,11 @@ func TestTheRunnerOwesAFullPassForAReplicaThatNeverAsks(t *testing.T) {
 
 // No bundle is recorded as judged while any replica's record names
 // another: its tokens, and the contexts they make, carry a policy no pass
-// judged, so the next takeover must purge (Ruling 8 corrected; pre-flight
-// I3).
+// judged, so the record in place is marked in doubt and the next takeover
+// must purge (Ruling 8 corrected; pre-flight I3; Task 15a review I-1).
+// Nor while the replicas' records cannot be read (review M-2), nor over a
+// replica's record written after they were read: they are read again, a
+// few times (review I-1).
 func TestNoBundleIsJudgedWhileAReplicaServesAnother(t *testing.T) {
 	rig := newReloadRig(t, minimalPolicy)
 	pol := rig.b.Policy.Load()
@@ -473,12 +511,95 @@ func TestNoBundleIsJudgedWhileAReplicaServesAnother(t *testing.T) {
 		t.Fatalf("recorded %q while a replica serves another bundle", got)
 	}
 	if !strings.Contains(rig.out.String(), "port49-broker: runner: not recording bundle "+pol.Bundle+
-		" as judged: ? serves bundle b-old") {
+		" as judged: ? serves bundle b-old") ||
+		!strings.Contains(rig.out.String(), "port49-broker: runner: the bundle last judged (b-judged) is in doubt: ? "+
+			"serves bundle b-old; the next takeover purges the unspent tokens") || meta.doubted != 1 {
+		t.Fatalf("said (%d mark(s)): %q", meta.doubted, rig.out.String())
+	}
+	meta.set(func(s *skewMeta) { s.recs, s.readErr = s.recs[:1], errors.New("the read is refused") })
+	rig.with(func() { r.recordJudged(context.Background(), pol, "a test") })
+	if got := meta.recorded(); len(got) != 0 {
+		t.Fatalf("recorded %q with the replicas' records unread", got)
+	}
+	if !strings.Contains(rig.out.String(), "port49-broker: runner: not recording bundle "+pol.Bundle+" as judged: "+
+		"reading the bundles the replicas serve: the read is refused; the next takeover purges the unspent tokens") {
 		t.Fatalf("said: %q", rig.out.String())
 	}
-	meta.set(func(s *skewMeta) { s.recs = s.recs[:1] })
+	meta.set(func(s *skewMeta) { s.readErr, s.moved = nil, judgeTries })
+	reads := meta.bundleReads()
 	rig.with(func() { r.recordJudged(context.Background(), pol, "a test") })
-	if got := meta.recorded(); len(got) != 1 || got[0] != pol.Bundle {
-		t.Fatalf("recorded %q once every replica serves %s", got, pol.Bundle)
+	if got := meta.recorded(); len(got) != 0 || meta.bundleReads() != reads+judgeTries {
+		t.Fatalf("recorded %q over records that kept moving (%d read(s))", got, meta.bundleReads()-reads)
+	}
+	if !strings.Contains(rig.out.String(), "port49-broker: runner: not recording bundle "+pol.Bundle+" as judged: "+
+		"the replicas' records changed at each of 3 reads; the next takeover purges the unspent tokens") {
+		t.Fatalf("said: %q", rig.out.String())
+	}
+	meta.set(func(s *skewMeta) { s.moved = 1 })
+	reads = meta.bundleReads()
+	rig.with(func() { r.recordJudged(context.Background(), pol, "a test") })
+	if got := meta.recorded(); len(got) != 1 || got[0] != pol.Bundle || meta.bundleReads() != reads+2 {
+		t.Fatalf("recorded %q once every replica serves %s (%d read(s))", got, pol.Bundle, meta.bundleReads()-reads)
+	}
+}
+
+// A takeover purges when the bundle last judged went in doubt, though the
+// bundle in force is the one it names: a replica that served another
+// bundle, seen by the runner's watch (owed), may have left unspent tokens
+// no pass judged, though it has since stopped and its record is gone
+// (Task 15a review I-1). The carry then records the bundle afresh.
+func TestATakeoverPurgesOnceTheBundleJudgedIsInDoubt(t *testing.T) {
+	f := splitFleet(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m := metrics.New(prometheus.NewRegistry())
+	bs, keys := openBrokerFor(t, ctx, f.broker, m, io.Discard)
+	cfg, _ := loadBroker(t, f.broker)
+	bcfg := brokerConfig(t, minimalPolicy)
+	_, b, err := buildBroker(bcfg, "inventory_file "+bcfg.InventoryFile, bs.st, seedMinter(),
+		decision.NewJSONLines(io.Discard), m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.Sessions = session.New(bs.st, time.Now, cfg.ContextIdleTTL, cfg.Session.IndexTTL)
+	b.Marks = store.NewMarks()
+	pol := b.Policy.Load()
+	if err := bs.raw.PutJudged(ctx, pol.Bundle, pol.Raw()); err != nil {
+		t.Fatal(err)
+	}
+	c := "port49-broker on c (pid 3, since 2026-10-04T00:00:00Z)"
+	if err := bs.raw.PutBundle(ctx, c, "b-stale", time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	var out syncBuffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	wcfg := cfg
+	wcfg.Policy = &config.PolicyConfig{File: bcfg.Policy.File, WatchInterval: 50 * time.Millisecond}
+	w := &runner{cfg: wcfg, brk: b, meta: bs.raw, who: "runner-a"}
+	wctx, wcancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() { defer close(done); w.owed(wctx) }()
+	waitWithin(t, &out, "port49-broker: runner: the bundle last judged ("+pol.Bundle+") is in doubt: "+
+		lineHolder(c)+" serves bundle b-stale", 10*time.Second)
+	wcancel()
+	<-done
+	if got, ok, err := bs.raw.Judged(ctx); !ok || err != nil || !got.InDoubt || got.Bundle != pol.Bundle {
+		t.Fatalf("meta/judged after the watch saw the replica: %+v %v %v", got, ok, err)
+	}
+	if err := bs.raw.DeleteBundle(ctx, c); err != nil { // its graceful stop
+		t.Fatal(err)
+	}
+	r := &runner{cfg: cfg, brk: b, raw: bs.raw, st: bs.st, meta: bs.raw, keys: keys, m: m, alarm: newKeyAlarm()}
+	if _, err := r.takeover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "port49-broker: runner: the bundle the last runner judged ("+pol.Bundle+
+		") is in doubt, a replica having served another since; 0 unspent token(s) purged") {
+		t.Fatalf("a takeover on a bundle in doubt:\n%s", out.String())
+	}
+	if got, ok, err := bs.raw.Judged(ctx); !ok || err != nil || got.InDoubt || got.Bundle != pol.Bundle {
+		t.Fatalf("meta/judged after the carry: %+v %v %v", got, ok, err)
 	}
 }

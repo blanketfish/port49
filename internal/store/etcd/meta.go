@@ -298,16 +298,20 @@ type judgedRec struct {
 	Bundle    string    `json:"bundle"`
 	Policy    []byte    `json:"policy,omitempty"`
 	Omitted   bool      `json:"policy_omitted,omitempty"`
+	InDoubt   bool      `json:"in_doubt,omitempty"`
 	WrittenAt time.Time `json:"written_at"`
 }
 
 // JudgedRecord is meta/judged: the bundle a runner last judged every
 // unspent token against (plan 7e, Ruling 7), and its policy file, for the
 // reload guard at a start (Ruling 17). Policy is nil when the file was
-// over maxJudgedPolicy.
+// over maxJudgedPolicy. InDoubt is a record withdrawn while a replica
+// served another bundle (JudgeInDoubt): the takeover purges as though
+// there were none, and the guard at a start still judges against it.
 type JudgedRecord struct {
-	Bundle string
-	Policy []byte
+	Bundle  string
+	Policy  []byte
+	InDoubt bool
 }
 
 // Judged reads meta/judged; ok is false when none was recorded. A record
@@ -327,22 +331,87 @@ func (s *Store) Judged(ctx context.Context) (JudgedRecord, bool, error) {
 		s.logf("etcd: %s does not decode; the takeover purges the unspent tokens", key)
 		return JudgedRecord{}, false, nil
 	}
-	return JudgedRecord{Bundle: r.Bundle, Policy: r.Policy}, true, nil
+	return JudgedRecord{Bundle: r.Bundle, Policy: r.Policy, InDoubt: r.InDoubt}, true, nil
 }
 
-// PutJudged records bundle as judged, with its policy file unless that is
-// over maxJudgedPolicy, as the broker.
-func (s *Store) PutJudged(ctx context.Context, bundle string, policy []byte) error {
+func (s *Store) judgedBody(bundle string, policy []byte) (string, error) {
 	r := judgedRec{Bundle: bundle, Policy: policy, WrittenAt: s.now().UTC()}
 	if len(policy) > maxJudgedPolicy {
 		r.Policy, r.Omitted = nil, true
 	}
 	body, err := json.Marshal(r)
+	return string(body), err
+}
+
+// PutJudged records bundle as judged, with its policy file unless that is
+// over maxJudgedPolicy, as the broker, whatever was written before it.
+func (s *Store) PutJudged(ctx context.Context, bundle string, policy []byte) error {
+	body, err := s.judgedBody(bundle, policy)
 	if err != nil {
 		return err
 	}
-	_, err = s.ctxKV.Put(ctx, s.k.meta("judged"), string(body))
+	_, err = s.ctxKV.Put(ctx, s.k.meta("judged"), body)
 	return unavailable(err)
+}
+
+// PutJudgedSince is PutJudged, written only while no replica's record
+// and no meta/judged was written after rev, the revision BundlesAt read
+// the records the runner judged at (Task 15a review I-1): a replica that
+// started or swapped in between, or a mark in doubt, leaves the record
+// as it is, and put is false. A record deleted since mints nothing more.
+func (s *Store) PutJudgedSince(ctx context.Context, bundle string, policy []byte, rev uint64) (put bool, err error) {
+	body, err := s.judgedBody(bundle, policy)
+	if err != nil {
+		return false, err
+	}
+	key := s.k.meta("judged")
+	resp, err := s.ctxKV.Txn(ctx).If(
+		clientv3.Compare(clientv3.ModRevision(s.k.meta("bundles/")), "<", int64(rev)+1).WithPrefix(),
+		clientv3.Compare(clientv3.ModRevision(key), "<", int64(rev)+1),
+	).Then(clientv3.OpPut(key, body)).Commit()
+	if err != nil {
+		return false, unavailable(err)
+	}
+	return resp.Succeeded, nil
+}
+
+// JudgeInDoubt withdraws meta/judged while a replica serves another
+// bundle (Task 15a review I-1): it marks the record in doubt, its bundle
+// and policy kept for the guard at a start, so the next takeover purges.
+// It reports the bundle recorded, and marked true only when this call
+// marked it; no record, or one that does not decode, already purges and
+// is left as it is.
+func (s *Store) JudgeInDoubt(ctx context.Context) (bundle string, marked bool, err error) {
+	key := s.k.meta("judged")
+	for {
+		resp, err := s.ctxKV.Get(ctx, key)
+		if err != nil {
+			return "", false, unavailable(err)
+		}
+		if len(resp.Kvs) == 0 {
+			return "", false, nil
+		}
+		var r judgedRec
+		if json.Unmarshal(resp.Kvs[0].Value, &r) != nil {
+			return "", false, nil
+		}
+		if r.InDoubt {
+			return r.Bundle, false, nil
+		}
+		r.InDoubt = true
+		body, err := json.Marshal(r)
+		if err != nil {
+			return "", false, err
+		}
+		tr, err := s.ctxKV.Txn(ctx).If(clientv3.Compare(clientv3.ModRevision(key), "=", resp.Kvs[0].ModRevision)).
+			Then(clientv3.OpPut(key, string(body))).Commit()
+		if err != nil {
+			return "", false, unavailable(err)
+		}
+		if tr.Succeeded {
+			return r.Bundle, true, nil
+		}
+	}
 }
 
 // Holder reads meta/holder, the who of the replica holding the keyspace
@@ -397,6 +466,12 @@ func (s *Store) DeleteBundle(ctx context.Context, who string) error {
 // leased record is. A record that does not decode is an error naming its
 // key.
 func (s *Store) Bundles(ctx context.Context) ([]BundleRecord, error) {
+	recs, _, err := s.BundlesAt(ctx)
+	return recs, err
+}
+
+// BundlesAt is Bundles, with the revision it read at, for PutJudgedSince.
+func (s *Store) BundlesAt(ctx context.Context) ([]BundleRecord, uint64, error) {
 	prefix := s.k.meta("bundles/")
 	end := clientv3.GetPrefixRangeEnd(prefix)
 	from, rev := prefix, int64(0)
@@ -409,7 +484,7 @@ func (s *Store) Bundles(ctx context.Context) ([]BundleRecord, error) {
 		}
 		resp, err := s.ctxKV.Get(ctx, from, opts...)
 		if err != nil {
-			return nil, unavailable(err)
+			return nil, 0, unavailable(err)
 		}
 		if rev == 0 {
 			rev = resp.Header.Revision
@@ -417,14 +492,14 @@ func (s *Store) Bundles(ctx context.Context) ([]BundleRecord, error) {
 		for _, kv := range resp.Kvs {
 			var r bundleRec
 			if json.Unmarshal(kv.Value, &r) != nil {
-				return nil, notDecoded(fmt.Sprintf("bundle record %q", kv.Key))
+				return nil, 0, notDecoded(fmt.Sprintf("bundle record %q", kv.Key))
 			}
 			if r.live(now) {
 				out = append(out, BundleRecord{Who: r.Who, Bundle: r.Bundle, At: r.At, ExpiresAt: r.ExpiresAt})
 			}
 		}
 		if !resp.More || len(resp.Kvs) == 0 {
-			return out, nil
+			return out, uint64(rev), nil
 		}
 		from = string(resp.Kvs[len(resp.Kvs)-1].Key) + "\x00"
 	}

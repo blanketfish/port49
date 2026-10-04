@@ -500,3 +500,77 @@ func TestRefreshOwedIsClearedOnlyAtItsRevision(t *testing.T) {
 		t.Fatalf("a clear at its revision left the ask: %v %v", ok, err)
 	}
 }
+
+// meta/judged is withdrawn, not deleted, while a replica serves another
+// bundle: marked in doubt with its bundle and policy kept for the reload
+// guard at a start, so the next takeover purges (Task 15a review I-1). A
+// runner's record replaces it only while no replica's record and no mark
+// was written after the replicas' records it judged were read; a record
+// deleted since mints nothing more.
+func TestAJudgedRecordGoesInDoubtAndIsReplacedOnlyWhenNothingMoved(t *testing.T) {
+	ctx := context.Background()
+	s := onShared(t, time.Now)
+	if b, marked, err := s.JudgeInDoubt(ctx); b != "" || marked || err != nil {
+		t.Fatalf("no record to mark: %q %v %v", b, marked, err)
+	}
+	if _, ok, err := s.Judged(ctx); ok || err != nil {
+		t.Fatalf("a mark with no record wrote one: %v %v", ok, err)
+	}
+	pol := []byte("grants: []\n")
+	if err := s.PutJudged(ctx, "b1", pol); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok, err := s.Judged(ctx); !ok || err != nil || got.InDoubt {
+		t.Fatalf("a record just put is in doubt: %+v %v %v", got, ok, err)
+	}
+	if b, marked, err := s.JudgeInDoubt(ctx); b != "b1" || !marked || err != nil {
+		t.Fatalf("the mark: %q %v %v", b, marked, err)
+	}
+	if got, ok, err := s.Judged(ctx); !ok || err != nil || !got.InDoubt || got.Bundle != "b1" ||
+		string(got.Policy) != string(pol) {
+		t.Fatalf("a record marked in doubt: %+v %v %v", got, ok, err)
+	}
+	if b, marked, err := s.JudgeInDoubt(ctx); b != "b1" || marked || err != nil {
+		t.Fatalf("a record already in doubt is marked again: %q %v %v", b, marked, err)
+	}
+	_, rev, err := s.BundlesAt(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutBundle(ctx, "replica-c", "b2", time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if put, err := s.PutJudgedSince(ctx, "b1", pol, rev); put || err != nil {
+		t.Fatalf("recorded over a replica's record written since: %v %v", put, err)
+	}
+	if got, _, _ := s.Judged(ctx); !got.InDoubt {
+		t.Fatal("a refused record cleared the mark")
+	}
+	if _, rev, err = s.BundlesAt(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if put, err := s.PutJudgedSince(ctx, "b1", pol, rev); !put || err != nil {
+		t.Fatalf("nothing moved since: %v %v", put, err)
+	}
+	if got, ok, err := s.Judged(ctx); !ok || err != nil || got.InDoubt || got.Bundle != "b1" {
+		t.Fatalf("a record put clears the mark: %+v %v %v", got, ok, err)
+	}
+	if _, rev, err = s.BundlesAt(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, marked, err := s.JudgeInDoubt(ctx); !marked || err != nil {
+		t.Fatalf("the mark: %v %v", marked, err)
+	}
+	if put, err := s.PutJudgedSince(ctx, "b1", pol, rev); put || err != nil {
+		t.Fatalf("recorded over a mark written since: %v %v", put, err)
+	}
+	if _, rev, err = s.BundlesAt(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteBundle(ctx, "replica-c"); err != nil {
+		t.Fatal(err)
+	}
+	if put, err := s.PutJudgedSince(ctx, "b1", pol, rev); !put || err != nil {
+		t.Fatalf("refused over a record deleted since: %v %v", put, err)
+	}
+}
