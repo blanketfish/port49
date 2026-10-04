@@ -11332,6 +11332,16 @@ The roadmap's "7e-1's operator notes, as built" (`README.md`) is the full text t
     volume; on Kubernetes, a volume per replica that outlives the pod, never an empty
     directory. A `witness.json` restored from an older backup only weakens the check; it never
     purges wrongly.
+  - **`broker.state_dir` must be the directory itself, owned by the user port49-broker runs
+    as (or root), and writable by no group or other user** (0700 or 0750). A start refuses
+    anything else and says why: a group-writable directory, one owned by another uid, a
+    `marks.json` or `witness.json` owned by another uid or not a regular file, and a symbolic
+    link (point `broker.state_dir` at its target). systemd's `StateDirectory=` and a
+    container's 0700 volume pass as they are. On Kubernetes two common volume shapes are
+    refused: one mounted with `fsGroup` (the kubelet makes it group-writable and setgid) and an
+    `emptyDir` (0777). Make a 0700 subdirectory in the volume with an initContainer
+    (`install -d -m 0700 -o <uid> /var/lib/port49-broker/state`) and point
+    `broker.state_dir` at it, or mount the volume without `fsGroup`.
   - **Keep every broker host's clock synchronised (NTP).** A replica whose clock runs behind can
     answer an idempotent replay with a token another replica's revocation or refresh deleted:
     its login fails `token_not_found`. Availability only, never an admission.
@@ -11352,6 +11362,13 @@ The roadmap's "7e-1's operator notes, as built" (`README.md`) is the full text t
   was stopped, or while a replica served another policy.
   - A token minted in the moment of such a purge is purged too: its login fails
     `token_not_found`, and `port49 token` again works.
+  - **A policy edit's settle pass deletes more than the edit's first pass.** At
+    max(30s, 2 × `broker.policy_watch_interval` + 5s) after a replica swaps in an edit, the
+    runner judges the tokens again, so one a slower replica minted under the replaced policy is
+    deleted (Ruling 8). It deletes every unspent token minted since the first pass for each
+    (principal, device) whose answer the edit changed, including tokens minted under the new
+    policy: such a login fails `token_not_found`, and `port49 token` again works. Availability
+    only, never an admission.
 - **A broker restart on a policy file the reload guard refuses** stays not ready (`/readyz` 503)
   and takes no hold until the file is fixed. It says the guard's reason, and
   `port49_policy_file_refused` is 1.
