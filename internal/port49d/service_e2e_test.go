@@ -251,6 +251,19 @@ func waitWithin(t *testing.T, buf *syncBuffer, want string, d time.Duration) {
 	}
 }
 
+// waitWithinFrom is waitWithin that looks only at what buf held from byte
+// from on: output written after the action, never an earlier run's.
+func waitWithinFrom(t *testing.T, buf *syncBuffer, from int, want string, d time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(d)
+	for !strings.Contains(buf.String()[from:], want) {
+		if time.Now().After(deadline) {
+			t.Fatalf("waited %s for %q; have %q", d, want, buf.String()[from:])
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 func metricsAddr(t *testing.T, out *syncBuffer) string {
 	t.Helper()
 	m := regexp.MustCompile(`metrics on (127\.0\.0\.1:\d+)`).FindStringSubmatch(out.String())

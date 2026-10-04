@@ -32,10 +32,12 @@ const storeClaim = "When port49d's store hangs (etcd cut off from port49d), port
 	"session's next command is answered from the context the store kept (plan 7d; spec §13 decision 35)."
 
 // storeLab is the lab's etcd: a TLS member with port49's roles, behind a
-// proxy the test hangs, and the store: block (with the admin_socket etcd
-// requires) that points port49d at it. keys counts what the keyspace holds,
-// read as etcd's root.
-func storeLab(t *testing.T) (block string, proxy *etcdtest.Proxy, keys func() (int64, error)) {
+// proxy the test hangs, and the two store: blocks that point the split's
+// processes at it: block is port49d.yaml's (the daemon's identity, with the
+// admin_socket etcd requires), brokerBlock port49-broker.yaml's (the
+// broker's identity). keys counts what the keyspace holds, read as etcd's
+// root.
+func storeLab(t *testing.T) (block, brokerBlock string, proxy *etcdtest.Proxy, keys func() (int64, error)) {
 	t.Helper()
 	srv := etcdtest.Start(t, etcdtest.Options{TLS: true})
 	var grants []etcdtest.Grant
@@ -50,6 +52,10 @@ func storeLab(t *testing.T) (block string, proxy *etcdtest.Proxy, keys func() (i
 	block = fmt.Sprintf("\nstore:\n  backend: etcd\n  etcd:\n    endpoints: [https://%s]\n    ca_file: %s\n"+
 		"    daemon: {cert_file: %s, key_file: %s}\n    hold_ttl: 60s\n",
 		proxy.Addr(), filepath.Join(srv.Dir, "ca.pem"), dc, dk)
+	bc, bk := srv.ClientFiles(t, "port49-broker")
+	brokerBlock = fmt.Sprintf("\nstore:\n  backend: etcd\n  etcd:\n    endpoints: [https://%s]\n    ca_file: %s\n"+
+		"    broker: {cert_file: %s, key_file: %s}\n    hold_ttl: 60s\n",
+		proxy.Addr(), filepath.Join(srv.Dir, "ca.pem"), bc, bk)
 	root := srv.Client(t, "root")
 	keys = func() (int64, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -60,7 +66,7 @@ func storeLab(t *testing.T) (block string, proxy *etcdtest.Proxy, keys func() (i
 		}
 		return resp.Count, nil
 	}
-	return block, proxy, keys
+	return block, brokerBlock, proxy, keys
 }
 
 // ctxIDOf is the ctx_id of the last authorize_command record for user
@@ -219,7 +225,7 @@ func TestStoreOutageEndToEnd(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		block, proxy, keys := storeLab(t)
+		block, _, proxy, keys := storeLab(t)                                        // Task 17 starts port49-broker on the second block
 		block += "admin_socket: " + filepath.Join(t.TempDir(), "admin.sock") + "\n" // etcd requires one (Ruling 13)
 		cfg, err := l.derivedConfig("store", platformSessionAttributes[l.p.name], string(brokerYAML)+block)
 		if err != nil {

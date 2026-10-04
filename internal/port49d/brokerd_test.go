@@ -1726,10 +1726,11 @@ func TestATakeoverAfterARestorePurgesWithoutTheRunbook(t *testing.T) {
 	api, _ = startBroker(t, f.broker, &out, 3)
 	purged := fmt.Sprintf("below the %d this replica saw: the store was restored from a snapshot; every unspent "+
 		"token is purged", recorded)
-	waitWithin(t, &out, purged, 30*time.Second)
+	waitWithinFrom(t, &out, before, purged, 30*time.Second)
 	// The takeover's purge, not the first witness pass after it: before the
-	// carry, and with meta/judged's purge left unsaid.
-	waitWithin(t, &out, "live context(s) carried onto the policy in force", 10*time.Second)
+	// carry, and with meta/judged's purge left unsaid. Looked for in what
+	// this run wrote: the earlier runs carried too.
+	waitWithinFrom(t, &out, before, "live context(s) carried onto the policy in force", 10*time.Second)
 	after := out.String()[before:]
 	if strings.Index(after, purged) > strings.Index(after, "live context(s) carried onto the policy in force") ||
 		strings.Contains(after, "is the one the last runner judged; no unspent token purged") {

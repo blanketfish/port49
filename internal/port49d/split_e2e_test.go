@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	clientv3 "go.etcd.io/etcd/client/v3"
+
 	"github.com/rhwendt/port49/internal/daemon/admin"
 	"github.com/rhwendt/port49/internal/tacacs/wire"
 	"github.com/rhwendt/port49/internal/testpki"
@@ -30,6 +32,35 @@ func closedWithin(c net.Conn, d time.Duration) bool {
 		return false
 	}
 	return err != nil
+}
+
+// stopEveryBroker stops the one broker after it has run the keyspace and
+// kept its witness, then waits until its hold is gone from etcd and two
+// witness periods have passed: the daemons then run on with a runner that
+// held the keyspace and is dead, which is the 3am case (design §6), not
+// one that never started.
+func stopEveryBroker(t *testing.T, root *clientv3.Client, out *syncBuffer, stop func() error) {
+	t.Helper()
+	waitWithin(t, out, "runner: took keyspace /port49/", 20*time.Second)
+	waitUntil(t, "the runner's witness", func() bool { return witnessAt(t, root) > 0 })
+	if err := stop(); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, "meta/hold to empty", func() bool {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		resp, err := root.Get(ctx, "/port49/v1/meta/hold", clientv3.WithPrefix(), clientv3.WithCountOnly())
+		return err == nil && resp.Count == 0
+	})
+	time.Sleep(2 * witnessEvery)
+}
+
+// lastOf is the last of recs, nil when there is none.
+func lastOf(recs []map[string]any) map[string]any {
+	if len(recs) == 0 {
+		return nil
+	}
+	return recs[len(recs)-1]
 }
 
 // mintStatus is mintOn that returns the status and the body.
@@ -100,9 +131,11 @@ func TestARevocationOnOneBrokerReachesTheOther(t *testing.T) {
 	if r := lastCommand(t, &log); r["reason"] != "credential_revoked" {
 		t.Fatalf("the denial: %v", r)
 	}
+	// Never the body: a mint that should have been refused answers with a token.
 	if code, body := mintStatus(t, apiA, f.pki, "leaf1"); code != http.StatusUnauthorized ||
 		!strings.Contains(body, "credential_revoked") {
-		t.Fatalf("a mint on A after B's revocation: %d %s", code, body)
+		t.Fatalf("a mint on A after B's revocation: status %d, names credential_revoked: %v", code,
+			strings.Contains(body, "credential_revoked"))
 	}
 }
 
@@ -162,7 +195,9 @@ func TestAPutBackBeforeADaemonStartsIsDenied(t *testing.T) {
 // revocation on, a mark written as etcd's root reaches every port49d
 // through its marks feed, and the session's next command is denied
 // credential_revoked (Ruling 13's break-glass; pre-flight I4). A token
-// already minted still logs in, and its commands are denied.
+// already minted is refused at its login, credential_revoked: the brief
+// said it would log in and be denied command by command, and the code,
+// the safer of the two, does not let it in.
 func TestARootWrittenMarkDeniesWithEveryBrokerStopped(t *testing.T) {
 	var out, log syncBuffer
 	e, o := stderr, stdout
@@ -176,9 +211,10 @@ func TestARootWrittenMarkDeniesWithEveryBrokerStopped(t *testing.T) {
 	devA := tacacsClient{t: t, addr: a, key: []byte("run-test-secret")}
 	devB := tacacsClient{t: t, addr: b, key: []byte("run-test-secret")}
 	loginSession(t, devA, mintOn(t, api, f.pki, "leaf1"), &log)
-	if err := stop(); err != nil {
-		t.Fatal(err)
-	}
+	// After the takeover, whose purge takes every token minted before it.
+	waitWithin(t, &out, "runner: took keyspace /port49/", 20*time.Second)
+	spare := mintOn(t, api, f.pki, "leaf1")
+	stopEveryBroker(t, root, &out, stop)
 	if !devA.permits("alice", "configure") || !devB.permits("alice", "configure") {
 		t.Fatal("control: the session runs on, on either daemon, with every broker stopped")
 	}
@@ -193,6 +229,14 @@ func TestARootWrittenMarkDeniesWithEveryBrokerStopped(t *testing.T) {
 			t.Fatalf("daemon %s's denial: %v", name, r)
 		}
 	}
+	// A token minted before the mark is refused at its login, not let in to
+	// be denied command by command.
+	if st := devA.login("alice", spare); st == wire.AuthenStatusPass {
+		t.Fatal("a token minted before the mark logged in after it")
+	}
+	if r := lastOf(records(t, &log, "redeem")); r == nil || r["reason"] != "credential_revoked" {
+		t.Fatalf("the spare token's redemption: %v", r)
+	}
 }
 
 // With every port49-broker stopped, an open session's next command is
@@ -204,18 +248,19 @@ func TestWithEveryBrokerStoppedOpenSessionsRunOn(t *testing.T) {
 	t.Cleanup(func() { stderr, stdout = e, o })
 	stderr, stdout = &out, &log
 	f := splitFleet(t)
+	root := f.srv.Client(t, "root")
 	a := startSplitDaemon(t, f.daemon, &out, 1)
 	api, stop := startBroker(t, f.broker, &out, 1)
 	dev := tacacsClient{t: t, addr: a, key: []byte("run-test-secret")}
 	loginSession(t, dev, mintOn(t, api, f.pki, "leaf1"), &log)
+	// After the takeover, whose purge takes every token minted before it.
+	waitWithin(t, &out, "runner: took keyspace /port49/", 20*time.Second)
 	spare := mintOn(t, api, f.pki, "leaf1")
-	if err := stop(); err != nil {
-		t.Fatal(err)
-	}
+	stopEveryBroker(t, root, &out, stop)
 	if !dev.permits("alice", "configure") {
 		t.Fatalf("an open session's command with every broker stopped: %v", lastCommand(t, &log))
 	}
 	if st := dev.login("alice", spare); st != wire.AuthenStatusPass {
-		t.Fatalf("a token minted before every broker stopped: %d", st)
+		t.Fatalf("a token minted before every broker stopped: %d; the last redeem: %v", st, lastOf(records(t, &log, "redeem")))
 	}
 }
