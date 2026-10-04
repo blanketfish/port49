@@ -77,6 +77,7 @@ func TestADocumentIsLoadedAsAReloadIsAndPersisted(t *testing.T) {
 	rig := newServiceRig(t, groupedPolicy)
 	var buf syncBuffer
 	rig.b.Log = decision.NewJSONLines(&buf)
+	rig.r.log = rig.b.Log // the reloader writes its inventory_change records here
 	rig.receive(rig.doc(t, 1, groupedPolicy, 2))
 	if _, ok := rig.b.Policy.Load().Device("leaf2"); !ok {
 		t.Fatalf("not loaded: %s", rig.out.String())

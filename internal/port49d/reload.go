@@ -39,7 +39,7 @@ const (
 	stillChangingAfter = 6
 )
 
-// reloader keeps the broker's bundle the one broker.policy_file (plan 4b) and
+// reloader keeps the bundle in force the one the policy file (plan 4b) and
 // inventory_file (plan 6a) make. It is one goroutine, so a reload, a poll and a scheduled refresh never run
 // at once: every field below is its own.
 //
@@ -63,8 +63,16 @@ const (
 // a refused edit leaves the bundle in force as it was, and a swap is one
 // pointer (policy.Live).
 type reloader struct {
-	cfg      config.Config
-	broker   *broker.Broker
+	cfg config.Config
+	// live is the policy in force, which a reload swaps; log is where its
+	// inventory_change records go.
+	live *policy.Live
+	log  decision.Emitter
+	// pass is the refresh pass that carries a swap into the live contexts
+	// (broker.Broker.Refresh), nil with no broker in the process (plan 7e):
+	// port49d alone reads the policy in force at each packet, and carries
+	// nothing.
+	pass     func(ctx context.Context, priors []broker.Prior) (broker.RefreshReport, error)
 	metrics  *metrics.Metrics
 	now      func() time.Time
 	interval time.Duration
@@ -158,16 +166,20 @@ const (
 	fromInventory
 )
 
-func newReloader(cfg config.Config, b *broker.Broker, m *metrics.Metrics, now func() time.Time) *reloader {
+// newReloader is a reloader of the policy in force, live, whose records
+// go to log; pass is the in-process broker's Refresh, or nil with none.
+func newReloader(cfg config.Config, live *policy.Live, log decision.Emitter,
+	pass func(context.Context, []broker.Prior) (broker.RefreshReport, error), m *metrics.Metrics,
+	now func() time.Time) *reloader {
 	start := now()
-	r := &reloader{cfg: cfg, broker: b, metrics: m, now: now, interval: cfg.Policy.WatchInterval,
-		priors: []broker.Prior{{Policy: b.Policy.Load(), At: start}}}
+	r := &reloader{cfg: cfg, live: live, log: log, pass: pass, metrics: m, now: now,
+		interval: cfg.Policy.WatchInterval, priors: []broker.Prior{{Policy: live.Load(), At: start}}}
 	// run sets the version the start loaded; this is a test's. In service
 	// mode there is no inventory file.
 	if cfg.InventoryFile != "" {
 		_, r.inventory, _ = inventoryVersion(cfg.InventoryFile)
 	}
-	r.expiry, _ = b.Policy.Load().NextChange(start)
+	r.expiry, _ = live.Load().NextChange(start)
 	r.reschedule()
 	r.invSeen.Store(start.UnixNano())
 	// Never negative: a document dated a little ahead of this clock, within
@@ -210,7 +222,7 @@ func (r *reloader) sayPolicyMatch() {
 	if r.docPolicy == "" {
 		return
 	}
-	mine := r.broker.Policy.Load().Source
+	mine := r.live.Load().Source
 	if r.docPolicy == mine {
 		r.metrics.InventoryPolicyMismatch.Set(0)
 		if r.mismatch != "" {
@@ -307,7 +319,7 @@ func (r *reloader) poll(ctx context.Context) {
 func (r *reloader) pollPolicy(ctx context.Context) {
 	raw, v, err := policyVersion(r.cfg.Policy.File)
 	switch {
-	case v == r.broker.Policy.Load().Source:
+	case v == r.live.Load().Source:
 		// The file in force ends a run of differing reads: blips days
 		// apart — a file missing for a moment in a ConfigMap swap — must
 		// not add up to the never-settles alarm.
@@ -317,7 +329,7 @@ func (r *reloader) pollPolicy(ctx context.Context) {
 			r.refused = ""
 			r.metrics.PolicyFileRefused.Set(0)
 			fmt.Fprintf(stderr, "port49d: policy: %s %s is the policy in force again (%s, bundle %s)\n", policyKey(r.cfg),
-				r.cfg.Policy.File, v, r.broker.Policy.Load().Bundle)
+				r.cfg.Policy.File, v, r.live.Load().Bundle)
 			r.retryInventory(ctx, "policy file put back")
 		}
 	case v == r.refused:
@@ -332,8 +344,8 @@ func (r *reloader) pollPolicy(ctx context.Context) {
 			r.metrics.PolicyFileRefused.Set(1)
 			fmt.Fprintf(stderr, "port49d: policy: %s %s has changed at each of the last %d reads, "+
 				"%s apart, so it is not loaded; still serving %s (bundle %s); write it once, atomically\n",
-				policyKey(r.cfg), r.cfg.Policy.File, stillChangingAfter, r.interval, r.broker.Policy.Load().Source,
-				r.broker.Policy.Load().Bundle)
+				policyKey(r.cfg), r.cfg.Policy.File, stillChangingAfter, r.interval, r.live.Load().Source,
+				r.live.Load().Bundle)
 		}
 	default:
 		r.pending = ""
@@ -374,7 +386,7 @@ func (r *reloader) pollInventory(ctx context.Context) {
 		if r.invRefused != "" || alarmed {
 			r.invRefused = ""
 			fmt.Fprintf(stderr, "port49d: inventory: inventory_file %s is the inventory in force again (bundle %s)\n",
-				r.cfg.InventoryFile, r.broker.Policy.Load().Bundle)
+				r.cfg.InventoryFile, r.live.Load().Bundle)
 		}
 	case v == r.invRefused:
 		r.invPending, r.invChanging = "", 0
@@ -384,7 +396,7 @@ func (r *reloader) pollInventory(ctx context.Context) {
 			r.metrics.InventoryFileRefused.Set(1)
 			fmt.Fprintf(stderr, "port49d: inventory: inventory_file %s has changed at each of the last %d reads, "+
 				"%s apart, so it is not loaded; still serving bundle %s; write it once, atomically\n",
-				r.cfg.InventoryFile, stillChangingAfter, r.interval, r.broker.Policy.Load().Bundle)
+				r.cfg.InventoryFile, stillChangingAfter, r.interval, r.live.Load().Bundle)
 		}
 	default:
 		r.invPending = ""
@@ -409,7 +421,7 @@ func (r *reloader) reload(ctx context.Context, trigger string) {
 	r.rereadVerifyKeys()
 	r.together = ""
 	raw, v, err := policyVersion(r.cfg.Policy.File)
-	if err == nil && v != r.broker.Policy.Load().Source && r.policyParses(raw) {
+	if err == nil && v != r.live.Load().Source && r.policyParses(raw) {
 		if inv, iv, d, ok := r.newInventory(); ok {
 			if !r.loadBoth(ctx, trigger, atSIGHUP, raw, v, inv, iv, d) && d != nil {
 				r.rejudged = d.etag // the poke below fetches it again (receive)
@@ -450,7 +462,7 @@ func (r *reloader) reload(ctx context.Context, trigger string) {
 // policy that does not is its own fault, which no inventory can fix.
 func (r *reloader) settledPolicy() ([]byte, string, bool) {
 	raw, v, err := policyVersion(r.cfg.Policy.File)
-	if err != nil || v == r.broker.Policy.Load().Source || (v != r.pending && v != r.refused) {
+	if err != nil || v == r.live.Load().Source || (v != r.pending && v != r.refused) {
 		return nil, "", false
 	}
 	return raw, v, r.policyParses(raw)
@@ -460,7 +472,7 @@ func (r *reloader) settledPolicy() ([]byte, string, bool) {
 // the inventory in force: only a policy that does can be refused for what it
 // admits, which is the refusal a new inventory can change.
 func (r *reloader) policyParses(raw []byte) bool {
-	_, err := parseBundle(r.cfg, raw, r.broker.Policy.Load().Inventory())
+	_, err := parseBundle(r.cfg, raw, r.live.Load().Inventory())
 	return err == nil
 }
 
@@ -518,7 +530,7 @@ func (r *reloader) newInventory() (admission.Inventory, string, *received, bool)
 // reports whether it applied.
 func (r *reloader) loadBoth(ctx context.Context, trigger string, from combinedFrom, raw []byte, v string,
 	inv admission.Inventory, iv string, d *received) bool {
-	old := r.broker.Policy.Load()
+	old := r.live.Load()
 	fix := "fix the file"
 	if d != nil {
 		fix = "fix the source of truth"
@@ -751,7 +763,7 @@ func (r *reloader) openDocument(raw []byte) (*inventory.Published, error) {
 // judged again only because the service confirmed it while it is still
 // ahead of this clock: that is counted once per document, not once per poll.
 func (r *reloader) loadDocument(ctx context.Context, trigger string, d received) {
-	old := r.broker.Policy.Load()
+	old := r.live.Load()
 	label := trigger
 	var pol *policy.Policy
 	pub, err := r.openDocument(d.raw)
@@ -885,7 +897,7 @@ func (r *reloader) rereadVerifyKeys() {
 // not, or could not be read (err), changes nothing.
 func (r *reloader) load(ctx context.Context, trigger string, raw []byte, v string, err error) bool {
 	r.changing = 0
-	old := r.broker.Policy.Load()
+	old := r.live.Load()
 	var pol *policy.Policy
 	forAdmission := false
 	if err == nil && v == old.Source {
@@ -953,7 +965,7 @@ func (r *reloader) load(ctx context.Context, trigger string, raw []byte, v strin
 // is put back.
 func (r *reloader) loadInventory(ctx context.Context, trigger string, raw []byte, v string, err error) {
 	r.invChanging = 0
-	old := r.broker.Policy.Load()
+	old := r.live.Load()
 	var pol *policy.Policy
 	var inv admission.Inventory
 	if err == nil {
@@ -1022,7 +1034,7 @@ func (r *reloader) inventoryBundle(old *policy.Policy, inv admission.Inventory) 
 // with, so the replaced bundle's span ends when it returns; the next grant
 // expiry is read from pol, and a settle pass is owed.
 func (r *reloader) swap(pol *policy.Policy) time.Time {
-	r.broker.Policy.Swap(pol)
+	r.live.Swap(pol)
 	assigned := func(device string) string {
 		a, _ := pol.Admitted(device)
 		return a.KeyRef
@@ -1038,7 +1050,9 @@ func (r *reloader) swap(pol *policy.Policy) time.Time {
 	r.priors = append(r.priors, broker.Prior{Policy: pol, At: now})
 	r.expiry, _ = pol.NextChange(now)
 	r.settle = now.Add(settleAfterReload)
-	r.metrics.PolicyRefreshPending.Set(1)
+	if r.pass != nil {
+		r.metrics.PolicyRefreshPending.Set(1)
+	}
 	return now
 }
 
@@ -1061,7 +1075,7 @@ func (r *reloader) after(ctx context.Context, file string, rep bundle.Report, po
 func (r *reloader) securityEvents(rep bundle.Report, now time.Time) int {
 	changes := rep.Security()
 	for _, c := range changes {
-		r.broker.Log.Emit(decision.Record{TS: now, Event: decision.EventInventoryChange,
+		r.log.Emit(decision.Record{TS: now, Event: decision.EventInventoryChange,
 			Device: &decision.Device{Name: c.Device, Platform: c.Platform},
 			Change: &decision.Change{Kind: c.Kind, Scope: c.Scope, Address: c.Address, From: c.From, To: c.To,
 				FromBundle: rep.From, ToBundle: rep.To}})
@@ -1082,12 +1096,18 @@ func (r *reloader) securityEvents(rep bundle.Report, now time.Time) int {
 // live context may still hold a policy no longer in force — a withdrawn or
 // expired grant included.
 func (r *reloader) refresh(ctx context.Context) {
+	if r.pass == nil {
+		// No broker in the process: nothing to carry, and nothing scheduled,
+		// or an expiry already past would fire the timer again at once.
+		r.expiry, r.settle, r.retry, r.due = time.Time{}, time.Time{}, time.Time{}, time.Time{}
+		return
+	}
 	if !r.expiry.IsZero() && !r.now().Before(r.expiry) {
 		// A grant has expired, and until this pass reaches every context
 		// one may still hold it.
 		r.metrics.PolicyRefreshPending.Set(1)
 	}
-	rep, err := r.broker.Refresh(ctx, r.priors)
+	rep, err := r.pass(ctx, r.priors)
 	if err != nil && ctx.Err() != nil {
 		return // port49d is shutting down: there is no retry to announce
 	}
@@ -1107,7 +1127,7 @@ func (r *reloader) refresh(ctx context.Context) {
 		r.reschedule()
 		return
 	}
-	cur := r.broker.Policy.Load()
+	cur := r.live.Load()
 	r.priors = []broker.Prior{{Policy: cur, At: rep.At}}
 	r.retry = time.Time{}
 	if !r.settle.IsZero() && !rep.At.Before(r.settle) {

@@ -61,7 +61,7 @@ func newReloadRig(t *testing.T, policyBody string) *reloadRig {
 	}
 	rig.b = b
 	b.Now = rig.clock
-	rig.r = newReloader(rig.cfg, b, rig.m, rig.clock)
+	rig.r = newReloader(rig.cfg, b.Policy, b.Log, b.Refresh, rig.m, rig.clock)
 	return rig
 }
 

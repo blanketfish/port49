@@ -4,111 +4,105 @@ package port49d
 
 import (
 	"context"
-	"net/http"
 	"net/url"
-	"os"
-	"regexp"
-	"strings"
 	"testing"
+	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 
-	"github.com/rhwendt/port49/internal/daemon/admin"
 	"github.com/rhwendt/port49/internal/store/etcd/etcdtest"
 )
 
-// An etcd restore under a running port49d that loses a mark this port49d
-// made does not lift it: the marks feed's reload puts
-// broker.revocations_file's marks back into the store first, and says so,
-// so alice's next mint is refused credential_revoked without a restart
-// (final review 7e-1 C-1). The positive control: a mark lifted on purpose
-// with port49 revoke --lift stays lifted across the same compaction. And a
-// mark the file never held, made on another broker process, that a
-// restore loses is lifted by the reload and said by its key.
+// An etcd restore under a running port49d with no broker lifts nothing
+// there: the marks feed's reload finds alice's mark missing, keeps it in
+// force, and names it (plan 7e, Ruling 5; final review 7e-1 C-1). The
+// daemon's role cannot put it back; the runner does (Task 15b). The
+// controls: a lift the watch delivers lifts it, before the restore and
+// after it.
 //
 // The restore is what a member restart from a snapshot looks like to a
 // watch: the mark's key deleted and compacted past while port49d's
 // streams are held, then every stream dropped, so the watch resumes below
 // the compaction mark and the delete is never delivered as a lift.
-func TestARestoreUnderARunningPort49dKeepsTheFilesMarks(t *testing.T) {
-	t.Skip("plan 7e Task 14: the split daemon's etcd fixture; Task 13 refuses a broker: block on etcd")
-	var out, log syncBuffer
-	e, o := stderr, stdout
-	t.Cleanup(func() { stderr, stdout = e, o })
-	stderr, stdout = &out, &log
-	cfgPath, pkiDir, revocations, proxy, srv := etcdRunServer(t)
+func TestARestoreUnderARunningDaemonKeepsItsMarks(t *testing.T) {
+	var out syncBuffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	daemonCfg, proxy, srv := etcdSplitServer(t)
 	root := srv.Client(t, "root")
 	ctx := context.Background()
-	raw, err := os.ReadFile(cfgPath)
-	if err != nil {
+	startSplitDaemon(t, daemonCfg, &out, 1)
+	key := "/port49/v1/rv/principal/" + url.PathEscape("user:alice@example.com")
+	bob := "/port49/v1/rv/principal/" + url.PathEscape("user:bob@example.com")
+	mark := func(who string) string {
+		return `{"kind":"principal","key":"user:` + who + `@example.com","at":"2026-10-03T03:00:00Z","origin":"test: a broker"}`
+	}
+	if _, err := root.Put(ctx, key, mark("alice")); err != nil {
 		t.Fatal(err)
 	}
-	socket := regexp.MustCompile(`(?m)^admin_socket: (\S+)$`).FindSubmatch(raw)[1]
-
-	_, brokerAddr, _ := startRun(t, cfgPath, &out, 1)
-	if status, body, err := postAsAlice(pkiDir, brokerAddr); err != nil || status != http.StatusOK {
-		t.Fatalf("control: alice's mint before the revocation: %s %v", reply(status, body), err)
+	waitInForce(t, &out, "principal", 1)
+	if _, err := root.Delete(ctx, key); err != nil { // the control: a watched lift
+		t.Fatal(err)
 	}
-	const principal = "user:alice@example.com"
-	key := "/port49/v1/rv/principal/" + url.PathEscape(principal)
-	if r, err := ask(string(socket), admin.Request{Op: "revoke", Principal: principal}); err != nil || r.Error != "" {
-		t.Fatalf("revoke: %+v %v", r, err)
+	waitInForce(t, &out, "principal", 0)
+
+	if _, err := root.Put(ctx, key, mark("alice")); err != nil {
+		t.Fatal(err)
 	}
 	waitInForce(t, &out, "principal", 1)
 	waitMetric(t, &out, `port49_store_feed_up{feed="marks"} 1`)
-
 	restore(t, proxy, root, key)
 	waitFor(t, &out, "store: the marks feed's revision was compacted")
-	waitFor(t, &out, "port49d: broker: 1 revocation(s) in broker.revocations_file "+revocations+
-		" were missing from the store (an etcd restore?) and are put back; lift any lifted on purpose with "+
-		"port49 revoke --lift")
-	if resp, err := root.Get(ctx, key); err != nil || len(resp.Kvs) != 1 {
-		t.Fatalf("the store does not hold the mark again: %v %v", resp, err)
+	waitFor(t, &out, "port49d: store: 1 revocation(s) this port49d enforces are missing from the store as its "+
+		"marks feed reloads (an etcd restore, or lifted on port49-broker while the feed was down) and stay in "+
+		"force here until a lift this feed delivers or a restart: principal user:alice@example.com")
+	// A mark put after the restore arrives only once the reload is done and
+	// the feed follows again: then both stand.
+	if _, err := root.Put(ctx, bob, mark("bob")); err != nil {
+		t.Fatal(err)
 	}
-	status, body, err := postAsAlice(pkiDir, brokerAddr)
-	if err != nil || status != http.StatusUnauthorized || !strings.Contains(body, `"credential_revoked"`) {
-		t.Fatalf("alice's mint after the restore: %s %v; out %s", reply(status, body), err, out.String())
-	}
-	waitInForce(t, &out, "principal", 1)
-	if n := strings.Count(out.String(), "port49d: broker listening on "); n != 1 {
-		t.Fatalf("port49d started again (%d runs): a start puts the file back whatever the feed does", n)
-	}
+	waitInForce(t, &out, "principal", 2)
 
-	// The positive control: lifted on purpose, the file drops it, and the
-	// same restore puts nothing back.
-	if r, err := ask(string(socket), admin.Request{Op: "revoke", Principal: principal, Lift: true}); err != nil ||
-		r.Error != "" {
-		t.Fatalf("lift: %+v %v", r, err)
+	// Released by a revoke and a lift made again while the feed is up.
+	if _, err := root.Put(ctx, key, mark("alice")); err != nil {
+		t.Fatal(err)
 	}
-	waitInForce(t, &out, "principal", 0)
-	restore(t, proxy, root, key)
-	waitForCount(t, &out, "store: the marks feed's revision was compacted", 2)
-	waitMetric(t, &out, `port49_store_feed_rescans_total{feed="marks"} 2`)
-	if status, body, err := postAsAlice(pkiDir, brokerAddr); err != nil || status != http.StatusOK {
-		t.Fatalf("a lift made on purpose was put back by the restore: %s %v; out %s", reply(status, body), err,
-			out.String())
-	}
-	if resp, err := root.Get(ctx, key); err != nil || len(resp.Kvs) != 0 {
-		t.Fatalf("the store holds the lifted mark again: %v %v", resp, err)
-	}
-	if n := strings.Count(out.String(), "were missing from the store"); n != 1 {
-		t.Fatalf("the lifted mark was said put back: %s", out.String())
-	}
-	waitInForce(t, &out, "principal", 0)
-
-	// A mark made on another broker process, never in this port49d's file,
-	// that a restore loses is lifted here by the reload, and said.
-	bob := "/port49/v1/rv/principal/" + url.PathEscape("user:bob@example.com")
-	if _, err := root.Put(ctx, bob, `{"kind":"principal","key":"user:bob@example.com",`+
-		`"at":"2026-10-03T03:00:00Z","origin":"test: another broker process"}`); err != nil {
+	if _, err := root.Delete(ctx, key); err != nil {
 		t.Fatal(err)
 	}
 	waitInForce(t, &out, "principal", 1)
-	restore(t, proxy, root, bob)
-	waitFor(t, &out, "port49d: broker: a reload of the marks found the revocation of user:bob@example.com "+
-		"lifted: lifted on a broker process while the marks feed was down, or lost by an etcd restore; revoke "+
-		"it again unless it was lifted on purpose")
-	waitInForce(t, &out, "principal", 0)
+}
+
+// An etcd restore that outlasts hold_ttl takes port49d dark and starts a new
+// run, which reads the restored marks. The marks are the process's (Ruling
+// 11), so the new run keeps alice's mark the restore lost, names it, and
+// enforces it (final review 7e-1 C-1; pre-flight 7e-2 P-1).
+func TestARestoreAcrossAStoreGoneKeepsTheDaemonsMarks(t *testing.T) {
+	var out syncBuffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	daemonCfg, proxy, srv := etcdSplitServer(t)
+	root := srv.Client(t, "root")
+	ctx := context.Background()
+	startSplitDaemon(t, daemonCfg, &out, 1)
+	key := "/port49/v1/rv/principal/" + url.PathEscape("user:alice@example.com")
+	if _, err := root.Put(ctx, key, `{"kind":"principal","key":"user:alice@example.com",`+
+		`"at":"2026-10-03T03:00:00Z","origin":"test: a broker"}`); err != nil {
+		t.Fatal(err)
+	}
+	waitInForce(t, &out, "principal", 1)
+	proxy.Hang(true)
+	waitWithin(t, &out, "closing every listener so that devices use their local method", 60*time.Second)
+	if _, err := root.Delete(ctx, key); err != nil { // the restore, while this port49d is dark
+		t.Fatal(err)
+	}
+	proxy.Drop()
+	waitCountWithin(t, &out, "port49d: listening on ", 2, 90*time.Second)
+	waitFor(t, &out, "port49d: store: 1 revocation(s) this port49d enforces are missing from the store "+
+		"as it starts again after a store gone")
+	waitInForce(t, &out, "principal", 1)
 }
 
 // restore is an etcd restore as a running port49d's watches see it: with

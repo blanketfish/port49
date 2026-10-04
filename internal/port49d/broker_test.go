@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -32,6 +33,7 @@ import (
 	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/store/memory"
+	"github.com/rhwendt/port49/internal/tacacs/wire"
 	"github.com/rhwendt/port49/internal/testpki"
 )
 
@@ -496,26 +498,44 @@ func runExpectingRefusal(t *testing.T, cfgPath string) (string, error) {
 	}
 }
 
-// A port49d.yaml with policy: and no broker: block is the split daemon,
-// which this build does not run yet: run refuses it before any listener
-// binds, saying so, rather than serving with no admission and panicking on
-// the first connection (Task 13 review I-1). Task 14 lifts the refusal.
-func TestRunRefusesThePolicyOnlyDaemonUntilTask14(t *testing.T) {
-	b := brokerConfig(t, minimalPolicy).Broker
-	raw, err := os.ReadFile(writeRunConfig(t, b))
+// A port49d.yaml with policy: and no broker: block is the split daemon
+// (plan 7e), which admits from the policy in force with no broker beside
+// it: leaf1, which the policy admits, logs alice in with a token the lab
+// seeded, and the listening line counts it admitted. Before Task 14 this
+// file was refused at start (Task 13 review I-1).
+func TestThePolicyOnlyDaemonAdmitsALogin(t *testing.T) {
+	var out syncBuffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	cfgPath, _ := policyOnlyRun(t)
+	seeds := filepath.Join(safeDir(t), "seeds.jsonl")
+	f, err := os.OpenFile(cfgPath, os.O_APPEND|os.O_WRONLY, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := string(raw)
-	body = body[:strings.Index(body, "broker:\n")] + "policy: {file: " + b.PolicyFile + "}\n"
-	cfgPath := filepath.Join(t.TempDir(), "port49d.yaml")
-	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
+	_, err = f.WriteString("lab:\n  seed_token_file: " + seeds + "\n  seed_tokens:\n    - {nas: leaf1, username: alice}\n")
+	f.Close()
+	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := runExpectingRefusal(t, cfgPath)
-	if err == nil || !strings.Contains(err.Error(), "the split daemon") || !strings.Contains(err.Error(), "plan 7e Task 14") ||
-		strings.Contains(out, "listening") {
-		t.Fatalf("run: %v\n%s", err, out)
+	tacacs := startSplitDaemon(t, cfgPath, &out, 1)
+	if !strings.Contains(out.String(), ", 1 devices admitted\n") {
+		t.Fatalf("the listening line: %s", out.String())
+	}
+	raw, err := os.ReadFile(seeds)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var seed struct {
+		Login string `json:"login"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(raw), &seed); err != nil || seed.Login == "" {
+		t.Fatalf("the seed file does not hold one login (%v)", err)
+	}
+	dev := tacacsClient{t: t, addr: tacacs, key: []byte("run-test-secret")}
+	if st := dev.login("alice", seed.Login); st != wire.AuthenStatusPass {
+		t.Fatalf("the split daemon's login: status %d", st)
 	}
 }
 

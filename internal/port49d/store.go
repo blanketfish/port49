@@ -55,16 +55,23 @@ type stores struct {
 	// nil on memory, where nothing is lost.
 	lost <-chan struct{}
 	// follow keeps the ledger following the store's contexts until its
-	// ctx ends (crypt.FollowContexts). runOnce runs it as soon as the stores
-	// are open, and joins it before close. Nil on memory, where every write
-	// is this process's own.
+	// ctx ends (crypt.FollowContexts), and with no broker in the process
+	// the marks too (store.FollowMarks). runOnce runs it as soon as the
+	// stores are open, and joins it before close. Nil on memory, where every
+	// write is this process's own.
 	follow func(ctx context.Context)
 	// keep writes the ledger's raised marks to the ledger record until its
 	// ctx ends (crypt.KeepLedger; plan 7e, Ruling 4): in 7e-1 port49d holds
 	// the keyspace, so it keeps the record, with the broker's identity.
 	// runOnce runs and joins it as it does follow. Nil on memory, where
-	// there is no record.
-	keep  func(ctx context.Context)
+	// there is no record, and with no broker, whose role cannot write it:
+	// the record is the runner's (Task 15).
+	keep func(ctx context.Context)
+	// probe pings the store through the daemon's guard until its ctx ends,
+	// so an idle port49d with no hold still goes dark on a store gone
+	// (probe; plan 7e, Ruling 11). runOnce runs and joins it as it does
+	// follow. Nil but on etcd with no broker.
+	probe func(ctx context.Context)
 	close func()
 }
 
@@ -98,9 +105,12 @@ func (f *storeFault) Unwrap() error { return f.err }
 // process's last hold was taken as, kept across runs: a hold lost when the
 // store stopped answering leaves its lease to expire, so the next run
 // waits on this process's own last run, and says so (final review 7d-2
-// I-2). openStores sets it once it holds the keyspace.
+// I-2). openStores sets it once it holds the keyspace. With no broker in
+// the process there is no hold (openDaemon), and authMarks, the process's,
+// is loaded from the store.
 func openStores(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metrics.Metrics, out io.Writer,
-	rd *readiness, again bool, gone func(error), ledger *crypt.Ledger, alarm *keyAlarm, held *string) (stores, error) {
+	rd *readiness, again bool, gone func(error), ledger *crypt.Ledger, alarm *keyAlarm, held *string,
+	authMarks *store.Marks) (stores, error) {
 	// One sayer for every layer, so a key is said once, not once per layer
 	// (pre-flight M44).
 	say := crypt.OnUnopenable(unopenableSayer(keys, out, time.Now))
@@ -173,6 +183,9 @@ func openStores(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 		fmt.Fprintln(out, "port49d: store.etcd.roles: unenforced: the daemon and the broker are not separated on etcd; "+
 			"a stolen daemon key can lift revocations")
 	}
+	if b == nil {
+		return openDaemon(ctx, cfg, keys, m, out, again, gone, ledger, alarm, authMarks, d, say)
+	}
 	host, _ := os.Hostname()
 	who := fmt.Sprintf("port49d on %s (pid %d, since %s)", host, os.Getpid(), time.Now().UTC().Format(time.RFC3339))
 	m.StoreKeyspaceHeld.Set(0)
@@ -219,7 +232,7 @@ func openStores(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 	// store gone, letting it go.
 	letGo := func() { release(); m.StoreKeyspaceHeld.Set(0); closeAll() }
 	for {
-		err := checkSealKeys(ctx, b, keys, m, out, 4*e.CallTimeout, alarm)
+		err := checkSealKeys(ctx, b, keys, m, out, 4*e.CallTimeout, alarm, true)
 		if err == nil {
 			break
 		}
@@ -303,14 +316,7 @@ func openStores(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 			m.LedgerBehind.Set(b2f(behind))
 		}, func(format string, args ...any) { fmt.Fprintf(out, "port49d: "+format+"\n", args...) })
 	}
-	gc := func(component string) guard.Config {
-		return guard.Config{Component: component, CallTimeout: e.CallTimeout, BulkTimeout: e.BulkTimeout,
-			MaxInFlight: map[guard.Pool]int{guard.Token: e.MaxInFlight.Token, guard.Context: e.MaxInFlight.Context,
-				guard.Bulk: e.MaxInFlight.Bulk},
-			Failures: e.Breaker.Failures, OpenFor: e.Breaker.OpenFor, Metrics: m.StoreGuard(),
-			StopAfter: e.HoldTTL, Unhealthy: func(why string) { gone(&storeGone{why: why}) },
-			Say: func(l string) { fmt.Fprintln(out, l) }}
-	}
+	gc := func(component string) guard.Config { return guardConfig(component, e, m, out, gone) }
 	// One ledger for both layers (re-check IA1): the broker's reads at
 	// start seed it for the daemon's, and either denies another login's
 	// context written back. Each raw store is fenced under its guard
@@ -330,6 +336,159 @@ func openStores(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 		keep:       keep,
 		close:      func() { release(); m.StoreKeyspaceHeld.Set(0); closeAll() },
 	}, nil
+}
+
+// openDaemon is openStores's etcd branch for port49d with no broker in
+// the process (plan 7e, Ruling 11), once d, the daemon's identity, answers.
+// There is no hold: any number of port49d serve one keyspace. With the
+// listeners still closed it reads the seal keys and warns, writing
+// nothing; loads the ledger and the marks, the process's authMarks, each
+// at one revision the feeds then follow from; and on a run after a store
+// gone first keeps every mark it enforced that the store lost while it was
+// dark (keepLost; pre-flight 7e-2 P-1). Each read is bounded, and an outage
+// is said and tried again every 5s. The ledger record is the runner's to
+// keep, and the sweep is the broker's.
+func openDaemon(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metrics.Metrics, out io.Writer,
+	again bool, gone func(error), ledger *crypt.Ledger, alarm *keyAlarm, authMarks *store.Marks,
+	d *etcdstore.Store, say crypt.Option) (stores, error) {
+	e := cfg.Store.Etcd
+	// retry runs f until it returns anything but an outage (or one of
+	// also), saying each outage and trying again in 5s with the
+	// listeners closed. ctx's end ends it.
+	retry := func(f func() error, also ...error) error {
+		for {
+			err := f()
+			if err == nil || ctx.Err() != nil {
+				return err
+			}
+			wait := errors.Is(err, store.ErrUnavailable)
+			for _, a := range also {
+				wait = wait || errors.Is(err, a)
+			}
+			if !wait {
+				return err
+			}
+			fmt.Fprintf(out, "port49d: %v; the listeners stay closed; trying again in 5s\n", err)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(5 * time.Second):
+			}
+		}
+	}
+	fail := func(err error) (stores, error) {
+		d.Close()
+		if ctx.Err() != nil {
+			return stores{}, ctx.Err()
+		}
+		return stores{}, err
+	}
+	// meta/ is the broker's to write: the daemon reads the last start's key
+	// ids and warns, and the runner records them (Task 15).
+	if err := retry(func() error { return checkSealKeys(ctx, d, keys, m, out, 4*e.CallTimeout, alarm, false) }); err != nil {
+		return fail(err)
+	}
+	// The ledger (plan 7e, Rulings 3, 4), as openStores reads it with a
+	// broker: the record's marks, then every live context at one revision,
+	// on the daemon's raw store. A refused read of the record is roles
+	// applied before plan 7e, which waiting does not mend: a store fault
+	// (pre-flight M17).
+	var rev uint64
+	if err := retry(func() error {
+		lctx, cancel := context.WithTimeout(ctx, e.BulkTimeout)
+		defer cancel()
+		var known, recorded int
+		var err error
+		rev, known, recorded, err = crypt.LoadLedger(lctx, d, d, keys, ledger)
+		if err != nil {
+			return fmt.Errorf("store: reading the live contexts for the ledger: %w", err)
+		}
+		fmt.Fprintf(out, "port49d: ledger: %d context key(s) known (%d from the ledger record); following the "+
+			"store from revision %d\n", known, recorded, rev)
+		return nil
+	}, store.ErrCompacted); err != nil {
+		if errors.Is(err, store.ErrRefused) {
+			err = &storeFault{errors.New("store: the daemon's role cannot read lw/, the ledger record: apply " +
+				"port49d store-roles (plan 7e) as etcd's root, then start again")}
+		}
+		return fail(err)
+	}
+	// The marks are the process's, kept across a store gone as the ledger
+	// is (Ruling 11): a run after one first keeps every mark the store lost
+	// while this port49d was dark, which the load would lift otherwise.
+	if again {
+		if err := retry(func() error {
+			if err := keepLost(ctx, d, authMarks, e.BulkTimeout, "as it starts again after a store gone", out); err != nil {
+				return fmt.Errorf("store: %w", err)
+			}
+			return nil
+		}); err != nil {
+			return fail(err)
+		}
+	}
+	var markRev uint64
+	if err := retry(func() error {
+		lctx, cancel := context.WithTimeout(ctx, e.BulkTimeout)
+		defer cancel()
+		var err error
+		if markRev, err = store.LoadMarks(lctx, d, authMarks, nil); err != nil {
+			return fmt.Errorf("store: reading the revocations in force: %w", err)
+		}
+		return nil
+	}); err != nil {
+		return fail(err)
+	}
+	fmt.Fprintf(out, "port49d: store: %d revocation(s) in force from the store\n", authMarks.Len())
+	logf := func(format string, args ...any) { fmt.Fprintf(out, "port49d: "+format+"\n", args...) }
+	upOf := func(feed string) func(bool) {
+		return func(up bool) { m.StoreFeedUp.WithLabelValues(feed).Set(b2f(up)) }
+	}
+	// Both feeds follow from the revisions read above, on the daemon's raw
+	// store. The marks feed tells no one: there is no broker listener here,
+	// and authMarks is what every authorization, enable and replay reads.
+	// Its reload keeps what the store lost (daemonReloadHook; Ruling 5).
+	follow := func(ctx context.Context) {
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			crypt.FollowContexts(ctx, d, d, keys, ledger, rev, upOf("contexts"),
+				func() { m.StoreFeedRescans.WithLabelValues("contexts").Inc() }, logf)
+		}()
+		go func() {
+			defer wg.Done()
+			store.FollowMarks(ctx, d, authMarks, markRev, nil, upOf("marks"),
+				daemonReloadHook(ctx, d, authMarks, m.StoreFeedRescans.WithLabelValues("marks"), e.BulkTimeout, out),
+				logf)
+		}()
+		wg.Wait()
+	}
+	// The daemon's raw store fenced under its guard (crypt.Fenced,
+	// pre-flight C1), as openStores builds it with a broker; the probe pings
+	// through the same guard, so its pings count toward the circuit that
+	// ends the run, and wait for the context feed as a read does.
+	gd := guard.WrapRev(crypt.Fenced(d, ledger), guardConfig("daemon", e, m, out, gone))
+	return stores{
+		daemon:     crypt.Wrap(gd, keys, m.CryptOpenFailures, crypt.WithLedger(ledger), say),
+		etcd:       d,
+		persistent: true,
+		follow:     follow,
+		probe:      func(ctx context.Context) { probe(ctx, gd, e.HoldTTL/6) },
+		close:      func() { d.Close() },
+	}, nil
+}
+
+// guardConfig is component's guard on etcd (Task 8a): store.etcd's
+// bounds and breaker, its lines on out, and a pool's store failing or
+// refusing every call for hold_ttl ending the run as a store gone.
+func guardConfig(component string, e *config.EtcdConfig, m *metrics.Metrics, out io.Writer,
+	gone func(error)) guard.Config {
+	return guard.Config{Component: component, CallTimeout: e.CallTimeout, BulkTimeout: e.BulkTimeout,
+		MaxInFlight: map[guard.Pool]int{guard.Token: e.MaxInFlight.Token, guard.Context: e.MaxInFlight.Context,
+			guard.Bulk: e.MaxInFlight.Bulk},
+		Failures: e.Breaker.Failures, OpenFor: e.Breaker.OpenFor, Metrics: m.StoreGuard(),
+		StopAfter: e.HoldTTL, Unhealthy: func(why string) { gone(&storeGone{why: why}) },
+		Say: func(l string) { fmt.Fprintln(out, l) }}
 }
 
 // b2f is 1 for true, 0 for false: a gauge's reading of a bool.
@@ -462,9 +621,11 @@ func (a *keyAlarm) warn(w storedWindow, say func()) {
 // that does not decode is said and gauged the same, never echoed, and
 // written over: a refused start would hand whoever can write the store a
 // lockout of every start. Only an outage is returned, a call past bound
-// among them. alarm is the process's (keyAlarm).
+// among them. alarm is the process's (keyAlarm). With write false it
+// writes nothing: port49d with no broker reads the record and warns, and
+// its role cannot write meta/ (plan 7e).
 func checkSealKeys(ctx context.Context, s *etcdstore.Store, keys crypt.Keys, m *metrics.Metrics, out io.Writer,
-	bound time.Duration, alarm *keyAlarm) error {
+	bound time.Duration, alarm *keyAlarm, write bool) error {
 	rctx, cancel := context.WithTimeout(ctx, bound)
 	last, ok, err := s.SealKeys(rctx)
 	cancel()
@@ -474,11 +635,14 @@ func checkSealKeys(ctx context.Context, s *etcdstore.Store, keys crypt.Keys, m *
 	}
 	held := !ok || last.Current == keys.Current.ID || keys.Previous != nil && last.Current == keys.Previous.ID
 	if undecodable {
+		over := "; this start's are written over it"
+		if !write {
+			over = ""
+		}
 		alarm.warn(storedWindow{undecodable: true}, func() {
 			fmt.Fprintf(out, "port49d: crypt: the last start's key ids are unreadable (meta/seal_keys does not "+
 				"decode), so records may be sealed under a key this port49d does not hold (%s); any that are are "+
-				"denied store_unavailable, and port49d says each key id as it meets one; this start's are written "+
-				"over it\n", keyWindow(keys))
+				"denied store_unavailable, and port49d says each key id as it meets one%s\n", keyWindow(keys), over)
 		})
 	} else if !held {
 		id := crypt.LineKeyID(last.Current)
@@ -500,6 +664,9 @@ func checkSealKeys(ctx context.Context, s *etcdstore.Store, keys crypt.Keys, m *
 	if alarm.raised {
 		m.CryptStoreKeyUnknown.Set(1)
 	}
+	if !write {
+		return nil
+	}
 	cur := etcdstore.SealKeys{Current: keys.Current.ID, WrittenAt: time.Now().UTC()}
 	if keys.Previous != nil {
 		cur.Previous = keys.Previous.ID
@@ -514,11 +681,13 @@ func checkSealKeys(ctx context.Context, s *etcdstore.Store, keys crypt.Keys, m *
 //  1. load each identity through keyfile, and check its validity and the
 //     CA's;
 //  2. probe the TLS handshake;
-//  3. open both stores, ping, and check the roles.
+//  3. open each store, ping, and check the roles.
 //
-// An outage is store.ErrUnavailable; a configuration fault is a
-// *storeFault naming what is wrong. Each start says each certificate's
-// expiry, once it succeeds.
+// The identities are the daemon's, and the broker's when cfg names it;
+// with no broker in the process (plan 7e) b is nil. An outage is
+// store.ErrUnavailable; a configuration fault is a *storeFault naming
+// what is wrong. Each start says each certificate's expiry, once it
+// succeeds.
 func attempt(ctx context.Context, cfg config.Config, m *metrics.Metrics, out io.Writer) (d, b *etcdstore.Store, err error) {
 	e := cfg.Store.Etcd
 	now := time.Now()
@@ -532,32 +701,20 @@ func attempt(ctx context.Context, cfg config.Config, m *metrics.Metrics, out io.
 				"replace it", e.CAFile, ca.Subject, ca.NotBefore.UTC().Format(time.RFC3339), ca.NotAfter.UTC().Format(time.RFC3339))}
 		}
 	}
-	// What the etcd store skips, it says by key alone and counts (Task 7
-	// review m-5): port49d's lines, and port49_store_index_records_undecodable_total.
-	logf := func(format string, args ...any) { fmt.Fprintf(out, "port49d: store: "+format+"\n", args...) }
 	leaves := map[string]*x509.Certificate{}
-	open := func(name string, id config.EtcdIdentity) (*etcdstore.Store, error) {
-		tc, leaf, err := identity(name, id, pool, now)
-		if err != nil {
-			return nil, err
-		}
-		if err := probeTLS(ctx, e.Endpoints, tc, 4*e.CallTimeout); err != nil {
-			return nil, err
-		}
-		s, err := etcdstore.Open(etcdstore.Config{Endpoints: e.Endpoints, Prefix: e.Prefix, LeaseGrace: e.LeaseGrace,
-			TLS: tc, Logf: logf, IndexUndecodable: m.IndexRecordsUndecodable})
-		if err != nil {
-			return nil, &storeFault{fmt.Errorf("store.etcd.%s: %w", name, err)}
-		}
-		leaves[name] = leaf
-		return s, nil
-	}
-	if d, err = open("daemon", e.Daemon); err != nil {
+	var leaf *x509.Certificate
+	if d, leaf, err = openIdentity(ctx, cfg, m, out, pool, now, "daemon", e.Daemon); err != nil {
 		return nil, nil, err
 	}
-	if b, err = open("broker", *e.Broker); err != nil {
-		d.Close()
-		return nil, nil, err
+	leaves["daemon"] = leaf
+	names := []string{"daemon"}
+	if e.Broker != nil {
+		if b, leaf, err = openIdentity(ctx, cfg, m, out, pool, now, "broker", *e.Broker); err != nil {
+			d.Close()
+			return nil, nil, err
+		}
+		leaves["broker"] = leaf
+		names = append(names, "broker")
 	}
 	pctx, cancel := context.WithTimeout(ctx, 4*e.CallTimeout)
 	err = d.Ping(pctx)
@@ -566,20 +723,46 @@ func attempt(ctx context.Context, cfg config.Config, m *metrics.Metrics, out io.
 		err = checkRoles(ctx, d, b, e, leaves)
 	}
 	if err != nil {
-		b.Close()
+		if b != nil {
+			b.Close()
+		}
 		d.Close()
 		if errors.Is(err, store.ErrUnavailable) {
 			return nil, nil, err
 		}
 		return nil, nil, &storeFault{err}
 	}
-	for _, name := range []string{"daemon", "broker"} {
+	for _, name := range names {
 		leaf := leaves[name]
 		m.StoreCertExpiry.WithLabelValues(name).Set(float64(leaf.NotAfter.Unix()))
 		fmt.Fprintf(out, "port49d: store: the %s's etcd certificate (CN=%s) is valid until %s (%d days)\n", name,
 			leaf.Subject.CommonName, leaf.NotAfter.UTC().Format(time.RFC3339), int(leaf.NotAfter.Sub(now).Hours()/24))
 	}
 	return d, b, nil
+}
+
+// openIdentity opens the store as one component's identity, name in
+// store.etcd: its certificate loaded and checked (identity) against pool
+// at now, and its TLS handshake probed (probeTLS). What the etcd store
+// skips, it says by key alone on out and counts (Task 7 review m-5):
+// port49d's lines, and port49_store_index_records_undecodable_total.
+func openIdentity(ctx context.Context, cfg config.Config, m *metrics.Metrics, out io.Writer, pool *x509.CertPool,
+	now time.Time, name string, id config.EtcdIdentity) (*etcdstore.Store, *x509.Certificate, error) {
+	e := cfg.Store.Etcd
+	tc, leaf, err := identity(name, id, pool, now)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := probeTLS(ctx, e.Endpoints, tc, 4*e.CallTimeout); err != nil {
+		return nil, nil, err
+	}
+	logf := func(format string, args ...any) { fmt.Fprintf(out, "port49d: store: "+format+"\n", args...) }
+	s, err := etcdstore.Open(etcdstore.Config{Endpoints: e.Endpoints, Prefix: e.Prefix, LeaseGrace: e.LeaseGrace,
+		TLS: tc, Logf: logf, IndexUndecodable: m.IndexRecordsUndecodable})
+	if err != nil {
+		return nil, nil, &storeFault{fmt.Errorf("store.etcd.%s: %w", name, err)}
+	}
+	return s, leaf, nil
 }
 
 // identity loads one component's client certificate through keyfile,
@@ -668,7 +851,7 @@ func tlsFault(err error) bool {
 // and the fix. Under store.etcd.roles: unenforced the daemon's is not run,
 // since its roles are not in force by the operator's choice; the broker's
 // still is, so neither identity is etcd's root and the broker's reach is
-// whole (Task 11).
+// whole (Task 11). b is nil with no broker in the process (plan 7e).
 func checkRoles(ctx context.Context, d, b *etcdstore.Store, e *config.EtcdConfig, leaves map[string]*x509.Certificate) error {
 	cctx, cancel := context.WithTimeout(ctx, 4*e.CallTimeout)
 	defer cancel()
@@ -682,6 +865,9 @@ func checkRoles(ctx context.Context, d, b *etcdstore.Store, e *config.EtcdConfig
 			}
 			return fmt.Errorf("store.etcd.daemon: its identity (CN=%s): %w", leaves["daemon"].Subject.CommonName, err)
 		}
+	}
+	if b == nil {
+		return nil
 	}
 	if err := b.CheckIdentity(cctx, true); err != nil {
 		return fmt.Errorf("store.etcd.broker: its identity (CN=%s): %w; give the broker an etcd user of its own and "+

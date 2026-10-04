@@ -29,9 +29,66 @@ import (
 	"github.com/rhwendt/port49/internal/testpki"
 )
 
-// etcdRun is a port49d config on a TLS etcd member with port49's roles,
-// through a proxy the test can hang: the run_test.go config with a store:
-// block and an admin_socket appended (etcd requires one, Ruling 13).
+// rolesMember is a TLS etcd member with port49's roles in force, and a
+// proxy to it the test can hang.
+func rolesMember(t *testing.T) (*etcdtest.Server, *etcdtest.Proxy) {
+	t.Helper()
+	srv := etcdtest.Start(t, etcdtest.Options{TLS: true})
+	var grants []etcdtest.Grant
+	for _, g := range etcd.Roles("/port49/") {
+		grants = append(grants, etcdtest.Grant{Role: g.Role, Key: g.Key, RangeEnd: g.RangeEnd, Write: g.Write})
+	}
+	srv.EnableAuth(t, grants, map[string][]string{"port49-daemon": {etcd.RoleDaemon}, "port49-broker": {etcd.RoleBroker}})
+	return srv, etcdtest.NewProxy(t, strings.TrimPrefix(srv.Endpoint, "https://"))
+}
+
+// etcdSplit is a split daemon's port49d.yaml (plan 7e) on a TLS etcd
+// member with the roles, through a proxy the test can hang: the
+// run_test.go config with policy: in place of broker:, the daemon's
+// identity alone, and an admin_socket (etcd requires one, Ruling 13).
+func etcdSplit(t *testing.T) (daemonCfg string, proxy *etcdtest.Proxy) {
+	t.Helper()
+	daemonCfg, proxy, _ = etcdSplitServer(t)
+	return daemonCfg, proxy
+}
+
+// etcdSplitServer is etcdSplit with the member, for a test that writes the
+// store as its root.
+func etcdSplitServer(t *testing.T) (daemonCfg string, proxy *etcdtest.Proxy, srv *etcdtest.Server) {
+	t.Helper()
+	return etcdSplitServerWith(t, minimalPolicy, nil)
+}
+
+// etcdSplitServerWith is etcdSplitServer on policyBody, with a lab client
+// certificate for each of others (brokerConfigWith), for the broker Task
+// 15 starts beside it.
+func etcdSplitServerWith(t *testing.T, policyBody string, others []string) (daemonCfg string,
+	proxy *etcdtest.Proxy, srv *etcdtest.Server) {
+	t.Helper()
+	srv, proxy = rolesMember(t)
+	dc, dk := srv.ClientFiles(t, "port49-daemon")
+	b := brokerConfigWith(t, policyBody, others).Broker
+	daemonCfg = writeRunConfig(t, b)
+	raw, err := os.ReadFile(daemonCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(raw)
+	body = body[:strings.Index(body, "broker:\n")] + fmt.Sprintf("policy: {file: %s, watch_interval: 1s}\n"+
+		"store:\n  backend: etcd\n  packet_deadline: 1s\n  etcd:\n"+
+		"    endpoints: [https://%s]\n    ca_file: %s\n    daemon: {cert_file: %s, key_file: %s}\n"+
+		"    call_timeout: 200ms\n    hold_ttl: 10s\n    breaker: {failures: 3, open_for: 2s}\n"+
+		"admin_socket: %s\nlimits: {idle_timeout: 2m}\n", b.PolicyFile, proxy.Addr(),
+		filepath.Join(srv.Dir, "ca.pem"), dc, dk, filepath.Join(t.TempDir(), "a.sock"))
+	if err := os.WriteFile(daemonCfg, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return daemonCfg, proxy, srv
+}
+
+// etcdRun is 7d's port49d config on etcd, a broker: block beside the
+// store's two identities, which Task 13 refuses (plan 7e, Ruling 1). Only
+// the tests Task 15 moves onto port49-broker call it, skipped until then.
 func etcdRun(t *testing.T) (cfgPath, pkiDir, revocations string, proxy *etcdtest.Proxy) {
 	t.Helper()
 	cfgPath, pkiDir, revocations, proxy, _ = etcdRunServer(t)
@@ -50,13 +107,7 @@ func etcdRunServer(t *testing.T) (cfgPath, pkiDir, revocations string, proxy *et
 func etcdRunServerWith(t *testing.T, policyBody string, others []string) (cfgPath, pkiDir, revocations string,
 	proxy *etcdtest.Proxy, srv *etcdtest.Server) {
 	t.Helper()
-	srv = etcdtest.Start(t, etcdtest.Options{TLS: true})
-	var grants []etcdtest.Grant
-	for _, g := range etcd.Roles("/port49/") {
-		grants = append(grants, etcdtest.Grant{Role: g.Role, Key: g.Key, RangeEnd: g.RangeEnd, Write: g.Write})
-	}
-	srv.EnableAuth(t, grants, map[string][]string{"port49-daemon": {etcd.RoleDaemon}, "port49-broker": {etcd.RoleBroker}})
-	proxy = etcdtest.NewProxy(t, strings.TrimPrefix(srv.Endpoint, "https://"))
+	srv, proxy = rolesMember(t)
 	dc, dk := srv.ClientFiles(t, "port49-daemon")
 	bc, bk := srv.ClientFiles(t, "port49-broker")
 	b := brokerConfigWith(t, policyBody, others).Broker
@@ -162,7 +213,7 @@ func loginSession(t *testing.T, dev tacacsClient, tok string, log *syncBuffer) {
 // minted again, not answered with that token (Ruling 12; spec §14, "A
 // restart on etcd"; store.Store.SupersedeAll).
 func TestRunOnEtcdKeepsALoginAcrossARestart(t *testing.T) {
-	t.Skip("plan 7e Task 14: the split daemon's etcd fixture; Task 13 refuses a broker: block on etcd")
+	t.Skip("plan 7e Task 15: needs port49-broker")
 	var out, log syncBuffer
 	e, o := stderr, stdout
 	t.Cleanup(func() { stderr, stdout = e, o })
@@ -204,7 +255,7 @@ func TestRunOnEtcdKeepsALoginAcrossARestart(t *testing.T) {
 // live context the store kept, before any listener binds (pre-flight C1;
 // spec §14, "A mark at start").
 func TestAStartAppliesAStandingMarkToAKeptContext(t *testing.T) {
-	t.Skip("plan 7e Task 14: the split daemon's etcd fixture; Task 13 refuses a broker: block on etcd")
+	t.Skip("plan 7e Task 15: needs port49-broker")
 	var out, log syncBuffer
 	e, o := stderr, stdout
 	t.Cleanup(func() { stderr, stdout = e, o })
@@ -244,7 +295,7 @@ func TestAStartAppliesAStandingMarkToAKeptContext(t *testing.T) {
 // first read would take it, and the session it was saved from would be
 // answered again.
 func TestAStartSealsTheLedgerOnceItHasReadTheStore(t *testing.T) {
-	t.Skip("plan 7e Task 14: the split daemon's etcd fixture; Task 13 refuses a broker: block on etcd")
+	t.Skip("plan 7e Task 15: needs port49-broker")
 	var out, log syncBuffer
 	e, o := stderr, stdout
 	t.Cleanup(func() { stderr, stdout = e, o })
@@ -312,38 +363,6 @@ func TestAStartSealsTheLedgerOnceItHasReadTheStore(t *testing.T) {
 	}
 }
 
-// A second port49d on the keyspace binds no listener while the first
-// holds it (Review Focus 4).
-func TestASecondPort49dWaitsForTheKeyspace(t *testing.T) {
-	t.Skip("plan 7e Task 14: the split daemon's etcd fixture; Task 13 refuses a broker: block on etcd")
-	var out, log syncBuffer
-	e, o := stderr, stdout
-	t.Cleanup(func() { stderr, stdout = e, o }) // runs last: after the second run has stopped
-	stderr, stdout = &out, &log
-	cfgPath, _, _, _ := etcdRun(t)
-	startRun(t, cfgPath, &out, 1)
-	n := strings.Count(out.String(), "listening on ")
-
-	// The same file: a copy-pasted config is the case. The second waits for
-	// the keyspace before it binds anything or touches the revocations file.
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- run(ctx, cfgPath) }()
-	t.Cleanup(func() { // pre-flight M38: the run ends before stderr is restored
-		cancel()
-		select {
-		case <-done:
-		case <-time.After(15 * time.Second):
-			t.Error("the second port49d did not stop")
-		}
-	})
-	waitFor(t, &out, `is held by "port49d on`)
-	time.Sleep(2 * time.Second)
-	if got := strings.Count(out.String(), "listening on "); got != n {
-		t.Fatalf("the second port49d bound a listener while the first held the keyspace:\n%s", out.String())
-	}
-}
-
 // A store that hangs in the middle of a login: the device hears ERROR
 // within store.packet_deadline, never silence (Review Focus 1). Then the
 // store has been gone long enough, and port49d closes every listener and
@@ -360,7 +379,7 @@ func TestASecondPort49dWaitsForTheKeyspace(t *testing.T) {
 // ledger's floor: the session's own record, put back after it, is answered
 // revoked, and the session's owner logs in again (final review 7d-2 I-1).
 func TestAHungStoreGoesDarkAndServesAgainWhenItReturns(t *testing.T) {
-	t.Skip("plan 7e Task 14: the split daemon's etcd fixture; Task 13 refuses a broker: block on etcd")
+	t.Skip("plan 7e Task 15: needs port49-broker")
 	var out, log syncBuffer
 	e, o := stderr, stdout
 	t.Cleanup(func() { stderr, stdout = e, o })
@@ -487,7 +506,7 @@ func TestAHungStoreGoesDarkAndServesAgainWhenItReturns(t *testing.T) {
 // in the store alone when port49d starts is in the listener's copy before
 // any connection binds.
 func TestAMarkFromAnotherBrokerProcessReachesThisOne(t *testing.T) {
-	t.Skip("plan 7e Task 14: the split daemon's etcd fixture; Task 13 refuses a broker: block on etcd")
+	t.Skip("plan 7e Task 15: needs port49-broker")
 	var out, log syncBuffer
 	e, o := stderr, stdout
 	t.Cleanup(func() { stderr, stdout = e, o })
@@ -627,7 +646,7 @@ func waitMetric(t *testing.T, out *syncBuffer, line string) {
 // was taken. Two positive controls: alice's own session is permitted
 // before the stop, and after a restart with nothing put back.
 func TestAStartSeededFromTheLedgerRecordDeniesAPutBack(t *testing.T) {
-	t.Skip("plan 7e Task 14: the split daemon's etcd fixture; Task 13 refuses a broker: block on etcd")
+	t.Skip("plan 7e Task 15: needs port49-broker")
 	var out, log syncBuffer
 	e, o := stderr, stdout
 	t.Cleanup(func() { stderr, stdout = e, o })

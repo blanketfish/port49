@@ -587,6 +587,7 @@ func TestASwapThatMovesPrivilegeIsLogged(t *testing.T) {
 	rig := newReloadRig(t, watched)
 	var buf syncBuffer
 	rig.b.Log = decision.NewJSONLines(&buf)
+	rig.r.log = rig.b.Log // the reloader writes its inventory_change records here
 	rig.writeInventory(t, twoDevices)
 	rig.pollTwice()
 	got := buf.String()
@@ -624,6 +625,7 @@ func TestARefusedSwapWritesNoInventoryChange(t *testing.T) {
 	rig.pollTwice()
 	var buf syncBuffer
 	rig.b.Log = decision.NewJSONLines(&buf)
+	rig.r.log = rig.b.Log // the reloader writes its inventory_change records here
 	before := testutil.ToFloat64(rig.m.InventoryChanges.WithLabelValues("address_added"))
 	// An address added to leaf1, in a file that drops half the fleet.
 	rig.writeInventory(t, "devices:\n  - {name: leaf1, platform: arista_eos, addresses: [10.0.0.1, 10.0.0.9], "+
@@ -645,6 +647,7 @@ func TestABenignSwapWritesNoInventoryChange(t *testing.T) {
 	rig.pollTwice()
 	var buf syncBuffer
 	rig.b.Log = decision.NewJSONLines(&buf)
+	rig.r.log = rig.b.Log // the reloader writes its inventory_change records here
 	mark := len(rig.out.String())
 	rig.writeInventory(t, strings.Replace(twoDevices, "addresses: [10.0.0.2],",
 		"addresses: [10.0.0.2], attributes: {site: dc1},", 1))
@@ -671,6 +674,7 @@ func TestAPolicySwapThatMovesPrivilegeIsLogged(t *testing.T) {
 	rig.pollTwice()
 	var buf syncBuffer
 	rig.b.Log = decision.NewJSONLines(&buf)
+	rig.r.log = rig.b.Log // the reloader writes its inventory_change records here
 	rig.write(t, watching("leaf1"))
 	rig.pollTwice()
 	got := buf.String()

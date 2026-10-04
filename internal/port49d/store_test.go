@@ -171,6 +171,17 @@ func TestTheRolesCheckRunsTheBrokersUnderUnenforced(t *testing.T) {
 	if !errors.Is(err, store.ErrRefused) || !strings.Contains(err.Error(), "store.etcd.broker") {
 		t.Fatalf("unenforced, a broker that cannot write meta/: %v", err)
 	}
+	// The daemon's identity alone (plan 7e): unenforced, its check is
+	// skipped and there is no broker's to run; enforced, it is refused as
+	// above.
+	if err := checkRoles(ctx, d, nil, e, map[string]*x509.Certificate{"daemon": dl}); err != nil {
+		t.Fatalf("unenforced, the daemon alone: %v", err)
+	}
+	e.Roles = config.RolesEnforced
+	if err := checkRoles(ctx, d, nil, e, map[string]*x509.Certificate{"daemon": dl}); !errors.Is(err,
+		etcdstore.ErrNotSeparated) || !strings.Contains(err.Error(), "store.etcd.daemon") {
+		t.Fatalf("enforced, the daemon alone with the broker's role: %v", err)
+	}
 }
 
 // After a store gone, a start that fails for any other reason is said
@@ -270,7 +281,7 @@ func TestCheckSealKeysWarnsAboutAKeyNotHeld(t *testing.T) {
 	m := metrics.New(prometheus.NewRegistry())
 	var out bytes.Buffer
 	rotated := crypt.Keys{Current: crypt.Key{ID: "enc3"}}
-	if err := checkSealKeys(ctx, s, rotated, m, &out, time.Second, newKeyAlarm()); err != nil {
+	if err := checkSealKeys(ctx, s, rotated, m, &out, time.Second, newKeyAlarm(), true); err != nil {
 		t.Fatal(err)
 	}
 	// None is revoked for it: the start leaves a context under an unheld
@@ -284,9 +295,32 @@ func TestCheckSealKeysWarnsAboutAKeyNotHeld(t *testing.T) {
 	out.Reset()
 	// Another process: a window holding the store's key.
 	kept := crypt.Keys{Current: crypt.Key{ID: "enc4"}, Previous: &crypt.Key{ID: "enc3"}}
-	if err := checkSealKeys(ctx, s, kept, m, &out, time.Second, newKeyAlarm()); err != nil || out.Len() != 0 ||
+	if err := checkSealKeys(ctx, s, kept, m, &out, time.Second, newKeyAlarm(), true); err != nil || out.Len() != 0 ||
 		testutil.ToFloat64(m.CryptStoreKeyUnknown) != 0 {
 		t.Fatalf("a window holding the store's key: said %q, %v", out.String(), err)
+	}
+}
+
+// port49d with no broker reads the last start's key ids and warns as a
+// broker's start does, and writes nothing over them: its role cannot write
+// meta/, and the runner records them (plan 7e).
+func TestCheckSealKeysWithoutWriteLeavesTheRecord(t *testing.T) {
+	_, s := sealKeysStore(t)
+	ctx := context.Background()
+	if err := s.PutSealKeys(ctx, etcdstore.SealKeys{Current: "enc2"}); err != nil {
+		t.Fatal(err)
+	}
+	m := metrics.New(prometheus.NewRegistry())
+	var out bytes.Buffer
+	if err := checkSealKeys(ctx, s, crypt.Keys{Current: crypt.Key{ID: "enc3"}}, m, &out, time.Second, newKeyAlarm(),
+		false); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), `whose current key is "enc2"`) || testutil.ToFloat64(m.CryptStoreKeyUnknown) != 1 {
+		t.Fatalf("said %q, gauge %v", out.String(), testutil.ToFloat64(m.CryptStoreKeyUnknown))
+	}
+	if got, ok, err := s.SealKeys(ctx); !ok || err != nil || got.Current != "enc2" {
+		t.Fatalf("written over: %+v %v %v", got, ok, err)
 	}
 }
 
@@ -305,7 +339,7 @@ func TestCheckSealKeysKeepsTheAlarmAcrossARun(t *testing.T) {
 	var out bytes.Buffer
 	rotated := crypt.Keys{Current: crypt.Key{ID: "enc3"}}
 	if err := checkSealKeys(ctx, s, rotated, metrics.New(prometheus.NewRegistry()), &out, time.Second,
-		alarm); err != nil {
+		alarm, true); err != nil {
 		t.Fatal(err)
 	}
 	// An outage after the read: the next try reads the same window.
@@ -313,14 +347,14 @@ func TestCheckSealKeysKeepsTheAlarmAcrossARun(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := checkSealKeys(ctx, s, rotated, metrics.New(prometheus.NewRegistry()), &out, time.Second,
-		alarm); err != nil {
+		alarm, true); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Count(out.String(), "\n") != 1 {
 		t.Fatalf("a retry said the same window again: %q", out.String())
 	}
 	again := metrics.New(prometheus.NewRegistry())
-	if err := checkSealKeys(ctx, s, rotated, again, &out, time.Second, alarm); err != nil {
+	if err := checkSealKeys(ctx, s, rotated, again, &out, time.Second, alarm, true); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Count(out.String(), "\n") != 1 || testutil.ToFloat64(again.CryptStoreKeyUnknown) != 1 {
@@ -345,7 +379,7 @@ func TestCheckSealKeysEchoesNoForeignID(t *testing.T) {
 			m := metrics.New(prometheus.NewRegistry())
 			var out bytes.Buffer
 			if err := checkSealKeys(ctx, s, crypt.Keys{Current: crypt.Key{ID: "enc3"}}, m, &out, time.Second,
-				newKeyAlarm()); err != nil {
+				newKeyAlarm(), true); err != nil {
 				t.Fatal(err)
 			}
 			if out.Len() > 1024 || !strings.Contains(out.String(), `whose current key is "?"`) ||
@@ -373,7 +407,7 @@ func TestCheckSealKeysIsBounded(t *testing.T) {
 	defer cancel()
 	start := time.Now()
 	err = checkSealKeys(ctx, s, crypt.Keys{Current: crypt.Key{ID: "enc3"}}, metrics.New(prometheus.NewRegistry()),
-		io.Discard, 200*time.Millisecond, newKeyAlarm())
+		io.Discard, 200*time.Millisecond, newKeyAlarm(), true)
 	if !errors.Is(err, store.ErrUnavailable) || time.Since(start) > 2*time.Second {
 		t.Fatalf("a hung store: %v after %v", err, time.Since(start))
 	}
@@ -486,13 +520,13 @@ func TestTheSayerNamesAPutBackAsBelowTheNewestWrite(t *testing.T) {
 	}
 }
 
-// Every sealing layer openStores builds shares one sayer, so a key the
-// daemon's and the broker's layers both meet is said once (pre-flight M44;
-// review m-2).
+// Every sealing layer openStores builds shares one sayer, so a key is
+// said once, not once per layer or per read (pre-flight M44; review m-2).
+// With no broker in the process the daemon's is the one layer, read
+// twice. The broker's half is Task 15's, on port49-broker.
 func TestOpenStoresSharesOneSayer(t *testing.T) {
-	t.Skip("plan 7e Task 14: the split daemon's etcd fixture; Task 13 refuses a broker: block on etcd")
-	cfgPath, _, _, _, _ := etcdRunServer(t)
-	cfg, err := config.Load(cfgPath)
+	daemonCfg, _ := etcdSplit(t)
+	cfg, err := config.Load(daemonCfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -504,7 +538,7 @@ func TestOpenStoresSharesOneSayer(t *testing.T) {
 	defer cancel()
 	var out syncBuffer
 	sts, err := openStores(ctx, cfg, keys, metrics.New(prometheus.NewRegistry()), &out, newReadiness(), false,
-		func(error) {}, crypt.NewLedger(), newKeyAlarm(), new(string))
+		func(error) {}, crypt.NewLedger(), newKeyAlarm(), new(string), store.NewMarks())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -516,17 +550,73 @@ func TestOpenStoresSharesOneSayer(t *testing.T) {
 	defer func() { stopFollow(); <-followDone }()
 	k := store.ContextKey{NAS: "leaf1", Username: "alice"}
 	retired := crypt.Keys{Current: crypt.Key{ID: "retired", Bytes: [32]byte{7}}}
+	// The daemon's role writes contexts: the test writes one under a key
+	// this port49d does not hold, as an earlier port49d would have.
 	if err := crypt.Wrap(sts.etcd, retired, nil).PutContext(ctx, k, store.Context{CtxID: "c", Principal: "user:alice",
 		Username: "alice", AuthTime: time.Now(), RefreshedAt: time.Now()}, time.Hour); err != nil {
 		t.Fatal(err)
 	}
-	for _, st := range []store.Store{sts.daemon, sts.broker} {
-		if _, err := st.GetContext(ctx, k); !errors.Is(err, crypt.ErrUnknownKey) {
+	for range 2 {
+		if _, err := sts.daemon.GetContext(ctx, k); !errors.Is(err, crypt.ErrUnknownKey) {
 			t.Fatalf("a context under a retired key: %v", err)
 		}
 	}
 	if n := strings.Count(out.String(), `sealed under key id "retired"`); n != 1 {
 		t.Fatalf("said %d times: %q", n, out.String())
+	}
+	if sts.broker != nil || sts.keep != nil || sts.lost != nil || sts.probe == nil {
+		t.Fatalf("the split daemon's stores: broker %v, keep %v, lost %v, probe %v", sts.broker != nil,
+			sts.keep != nil, sts.lost != nil, sts.probe != nil)
+	}
+}
+
+// port49d with no broker on etcd takes no hold and writes nothing under
+// meta/: its role cannot, and any number of port49d share a keyspace
+// (plan 7e, Ruling 11). It reads the seal keys and warns, and
+// port49_store_keyspace_held stays 0. The marks in the store are loaded
+// into the process's marks before the start returns.
+func TestTheSplitDaemonsStartTakesNoHoldAndWritesNoMeta(t *testing.T) {
+	daemonCfg, _, srv := etcdSplitServer(t)
+	root := srv.Client(t, "root")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if _, err := root.Put(ctx, "/port49/v1/meta/seal_keys", `{"current":"enc0","written_at":"2026-10-03T03:00:00Z"}`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := root.Put(ctx, "/port49/v1/rv/principal/user:alice@example.com", `{"kind":"principal",`+
+		`"key":"user:alice@example.com","at":"2026-10-03T03:00:00Z","origin":"test: a broker"}`); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(daemonCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys, err := cfg.EncryptionKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := metrics.New(prometheus.NewRegistry())
+	marks := store.NewMarks()
+	var out syncBuffer
+	sts, err := openStores(ctx, cfg, keys, m, &out, newReadiness(), false, func(error) {}, crypt.NewLedger(),
+		newKeyAlarm(), new(string), marks)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out.String())
+	}
+	defer sts.close()
+	resp, err := root.Get(ctx, "/port49/v1/meta/", clientv3.WithPrefix())
+	if err != nil || len(resp.Kvs) != 1 || string(resp.Kvs[0].Key) != "/port49/v1/meta/seal_keys" ||
+		!strings.Contains(string(resp.Kvs[0].Value), `"enc0"`) {
+		t.Fatalf("meta/ after the split daemon's start: %v %v", resp, err)
+	}
+	if testutil.ToFloat64(m.StoreKeyspaceHeld) != 0 || testutil.ToFloat64(m.CryptStoreKeyUnknown) != 1 ||
+		!strings.Contains(out.String(), `whose current key is "enc0"`) {
+		t.Fatalf("held %v, key unknown %v:\n%s", testutil.ToFloat64(m.StoreKeyspaceHeld),
+			testutil.ToFloat64(m.CryptStoreKeyUnknown), out.String())
+	}
+	if !marks.Holds(store.RevocationPrincipal, "user:alice@example.com") ||
+		!strings.Contains(out.String(), "port49d: store: 1 revocation(s) in force from the store\n") {
+		t.Fatalf("the marks: %v\n%s", marks.All(), out.String())
 	}
 }
 
@@ -534,14 +624,13 @@ func TestOpenStoresSharesOneSayer(t *testing.T) {
 // ends the start as a store fault naming store-roles: waiting does not
 // mend a refusal (pre-flight M17).
 func TestARefusedLedgerRecordReadNamesStoreRoles(t *testing.T) {
-	t.Skip("plan 7e Task 14: the split daemon's etcd fixture; Task 13 refuses a broker: block on etcd")
-	cfgPath, _, _, _, srv := etcdRunServer(t)
+	daemonCfg, _, srv := etcdSplitServer(t)
 	lw := "/port49/v1/lw/"
 	if _, err := srv.Client(t, "root").RoleRevokePermission(context.Background(), etcdstore.RoleDaemon, lw,
 		clientv3.GetPrefixRangeEnd(lw)); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := config.Load(cfgPath)
+	cfg, err := config.Load(daemonCfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -551,23 +640,24 @@ func TestARefusedLedgerRecordReadNamesStoreRoles(t *testing.T) {
 	}
 	var out syncBuffer
 	_, err = openStores(context.Background(), cfg, keys, metrics.New(prometheus.NewRegistry()), &out, newReadiness(),
-		false, func(error) {}, crypt.NewLedger(), newKeyAlarm(), new(string))
+		false, func(error) {}, crypt.NewLedger(), newKeyAlarm(), new(string), store.NewMarks())
 	var fault *storeFault
 	if !errors.As(err, &fault) || !strings.Contains(err.Error(), "apply port49d store-roles (plan 7e)") {
 		t.Fatalf("a refused read of the ledger record: %v", err)
 	}
 }
 
-// openStores fences each layer under its guard (pre-flight C1; review 8a
-// I-1): with the feed not running, a context written after the start's
-// scan is read on neither layer, each a context-pool timeout at
-// call_timeout, though the store answers it, and each counted in
+// openStores fences the daemon's layer under its guard (pre-flight C1;
+// review 8a I-1): with the feed not running, a context written after the
+// start's scan is not read, a context-pool timeout at call_timeout,
+// though the store answers it, and counted in
 // port49_store_fence_timeouts_total, which tells it from an etcd failure
-// (final review 7e-1 M-4).
+// (final review 7e-1 M-4). The probe pings through the same guard and
+// fence, so with the feed stopped its pings time out too (plan 7e, Ruling
+// 11). The broker's half is Task 15's, on port49-broker.
 func TestOpenStoresFencesEachLayerUnderItsGuard(t *testing.T) {
-	t.Skip("plan 7e Task 14: the split daemon's etcd fixture; Task 13 refuses a broker: block on etcd")
-	cfgPath, _, _, _, _ := etcdRunServer(t)
-	cfg, err := config.Load(cfgPath)
+	daemonCfg, _ := etcdSplit(t)
+	cfg, err := config.Load(daemonCfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -579,7 +669,7 @@ func TestOpenStoresFencesEachLayerUnderItsGuard(t *testing.T) {
 	defer cancel()
 	m := metrics.New(prometheus.NewRegistry())
 	sts, err := openStores(ctx, cfg, keys, m, io.Discard, newReadiness(), false, func(error) {}, crypt.NewLedger(),
-		newKeyAlarm(), new(string))
+		newKeyAlarm(), new(string), store.NewMarks())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -594,19 +684,31 @@ func TestOpenStoresFencesEachLayerUnderItsGuard(t *testing.T) {
 		time.Hour); err != nil {
 		t.Fatal(err)
 	}
-	for _, c := range []struct {
-		component string
-		st        store.Store
-	}{{"daemon", sts.daemon}, {"broker", sts.broker}} {
-		if got, err := c.st.GetContext(ctx, k); !errors.Is(err, store.ErrUnavailable) {
-			t.Fatalf("the %s read %q with the feed not running: %v", c.component, got.CtxID, err)
-		}
-		if n := testutil.ToFloat64(m.StoreCalls.WithLabelValues(c.component, "context", "timeout")); n != 1 {
-			t.Fatalf("the %s's guard counted %v context timeouts", c.component, n)
-		}
+	if got, err := sts.daemon.GetContext(ctx, k); !errors.Is(err, store.ErrUnavailable) {
+		t.Fatalf("the daemon read %q with the feed not running: %v", got.CtxID, err)
 	}
-	if n := testutil.ToFloat64(m.StoreFenceTimeouts); n != 2 {
-		t.Fatalf("port49_store_fence_timeouts_total = %v, want 2", n)
+	if n := testutil.ToFloat64(m.StoreCalls.WithLabelValues("daemon", "context", "timeout")); n != 1 {
+		t.Fatalf("the daemon's guard counted %v context timeouts", n)
+	}
+	if n := testutil.ToFloat64(m.StoreFenceTimeouts); n != 1 {
+		t.Fatalf("port49_store_fence_timeouts_total = %v, want 1", n)
+	}
+	// One probe round (hold_ttl/6 is under 2s here): fenced, and counted
+	// by the daemon's guard.
+	pctx, stopProbe := context.WithCancel(ctx)
+	probeDone := make(chan struct{})
+	go func() { defer close(probeDone); sts.probe(pctx) }()
+	deadline := time.Now().Add(10 * time.Second)
+	for testutil.ToFloat64(m.StoreFenceTimeouts) < 2 {
+		if time.Now().After(deadline) {
+			t.Fatal("the probe's ping was not fenced")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	stopProbe()
+	<-probeDone
+	if n := testutil.ToFloat64(m.StoreCalls.WithLabelValues("daemon", "context", "timeout")); n < 2 {
+		t.Fatalf("the daemon's guard counted %v context timeouts with the probe's", n)
 	}
 }
 
@@ -615,9 +717,8 @@ func TestOpenStoresFencesEachLayerUnderItsGuard(t *testing.T) {
 // wait is the outage, and an alert would resolve through it (re-review
 // I-3).
 func TestARaisedAlarmIsGaugedWhileTheStoreIsAway(t *testing.T) {
-	t.Skip("plan 7e Task 14: the split daemon's etcd fixture; Task 13 refuses a broker: block on etcd")
-	cfgPath, _, _, proxy, _ := etcdRunServer(t)
-	cfg, err := config.Load(cfgPath)
+	daemonCfg, proxy := etcdSplit(t)
+	cfg, err := config.Load(daemonCfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -636,7 +737,7 @@ func TestARaisedAlarmIsGaugedWhileTheStoreIsAway(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		_, err := openStores(ctx, cfg, keys, m, &out, newReadiness(), true, func(error) {}, crypt.NewLedger(), alarm,
-			new(string))
+			new(string), store.NewMarks())
 		done <- err
 	}()
 	waitCountWithin(t, &out, "not answering", 1, 10*time.Second)
@@ -653,9 +754,8 @@ func TestARaisedAlarmIsGaugedWhileTheStoreIsAway(t *testing.T) {
 // (final review 7e-1 M-3). The rescan counters are there at 0 too, so the
 // first rescan is an increase.
 func TestBothFeedsReadDownWhileTheStoreIsAway(t *testing.T) {
-	t.Skip("plan 7e Task 14: the split daemon's etcd fixture; Task 13 refuses a broker: block on etcd")
-	cfgPath, _, _, proxy, _ := etcdRunServer(t)
-	cfg, err := config.Load(cfgPath)
+	daemonCfg, proxy := etcdSplit(t)
+	cfg, err := config.Load(daemonCfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -672,7 +772,7 @@ func TestBothFeedsReadDownWhileTheStoreIsAway(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		_, err := openStores(ctx, cfg, keys, m, &out, newReadiness(), false, func(error) {}, crypt.NewLedger(),
-			newKeyAlarm(), new(string))
+			newKeyAlarm(), new(string), store.NewMarks())
 		done <- err
 	}()
 	waitCountWithin(t, &out, "not answering", 1, 10*time.Second)
@@ -703,7 +803,7 @@ func TestCheckSealKeysGoesOnPastAnUndecodableRecord(t *testing.T) {
 	m := metrics.New(prometheus.NewRegistry())
 	var out bytes.Buffer
 	keys := crypt.Keys{Current: crypt.Key{ID: "enc3"}}
-	if err := checkSealKeys(ctx, s, keys, m, &out, time.Second, newKeyAlarm()); err != nil {
+	if err := checkSealKeys(ctx, s, keys, m, &out, time.Second, newKeyAlarm(), true); err != nil {
 		t.Fatalf("an undecodable record refused the start: %v", err)
 	}
 	if !strings.Contains(out.String(), "the last start's key ids are unreadable") ||
@@ -722,7 +822,8 @@ func TestCheckSealKeysGoesOnPastAnUndecodableRecord(t *testing.T) {
 // itself (final review 7d-2 I-2). A holder that is not this process's is
 // named as another port49d.
 func TestAHoldStillOnThisPort49dsLastRunIsSaidAsIts(t *testing.T) {
-	t.Skip("plan 7e Task 14: the split daemon's etcd fixture; Task 13 refuses a broker: block on etcd")
+	t.Skip("plan 7e Task 15: the hold is the runner's; moves to brokerd_test.go as " +
+		"TestAHoldStillOnThisReplicasLastRunIsSaidAsIts")
 	cfgPath, _, _, _, _ := etcdRunServer(t)
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
@@ -737,7 +838,7 @@ func TestAHoldStillOnThisPort49dsLastRunIsSaidAsIts(t *testing.T) {
 	var held string
 	var out syncBuffer
 	last, err := openStores(ctx, cfg, keys, metrics.New(prometheus.NewRegistry()), &out, newReadiness(), false,
-		func(error) {}, crypt.NewLedger(), newKeyAlarm(), &held)
+		func(error) {}, crypt.NewLedger(), newKeyAlarm(), &held, store.NewMarks())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -761,7 +862,7 @@ func TestAHoldStillOnThisPort49dsLastRunIsSaidAsIts(t *testing.T) {
 		done := make(chan error, 1)
 		go func() {
 			_, err := openStores(rctx, cfg, keys, metrics.New(prometheus.NewRegistry()), &out, newReadiness(), true,
-				func(error) {}, crypt.NewLedger(), newKeyAlarm(), &prev)
+				func(error) {}, crypt.NewLedger(), newKeyAlarm(), &prev, store.NewMarks())
 			done <- err
 		}()
 		waitCountWithin(t, &out, "held by", 1, 10*time.Second)

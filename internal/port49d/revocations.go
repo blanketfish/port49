@@ -17,8 +17,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/prometheus/client_golang/prometheus"
-
 	"github.com/rhwendt/port49/internal/broker"
 	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/daemon/admin"
@@ -349,7 +347,8 @@ func restoreRevocations(ctx context.Context, st store.Store, path string) ([]sto
 // another whose lift the feed delivered, and is not put back. A lift the
 // feed did not deliver, made on another process while it was down, cannot
 // be told from a mark the restore lost: it is put back, and the caller's
-// line says to lift it again.
+// line says to lift it again. Since plan 7e no marks feed calls it: on
+// etcd the file is retired, and on memory no feed runs.
 func putBackFileMarks(ctx context.Context, st store.Store, path string, enforced *store.Marks) (int, error) {
 	rs, err := readRevocations(path)
 	if err != nil {
@@ -374,31 +373,6 @@ func putBackFileMarks(ctx context.Context, st store.Store, path string, enforced
 		n++
 	}
 	return n, nil
-}
-
-// marksReloadHook is port49d's rescanned for the marks feed (store.
-// FollowMarks): before a reload reads the store, a mark an etcd restore
-// lost is put back from the file at path, not lifted (final review 7e-1
-// C-1), and said on out. A put-back that fails (the broker's circuit open
-// through the restore, or a file that does not load) refuses the reload:
-// the feed is down, said once per run of failures, until it succeeds
-// (re-review 1 C-2). Each call counts a rescan.
-func marksReloadHook(ctx context.Context, st store.Store, path string, enforced *store.Marks,
-	rescans prometheus.Counter, out io.Writer) func() error {
-	return func() error {
-		rescans.Inc()
-		n, err := putBackFileMarks(ctx, st, path, enforced)
-		if n > 0 {
-			fmt.Fprintf(out, "port49d: broker: %d revocation(s) in broker.revocations_file %s were missing from "+
-				"the store (an etcd restore?) and are put back; lift any lifted on purpose with port49 revoke "+
-				"--lift\n", n, path)
-		}
-		if err != nil {
-			return fmt.Errorf("broker: putting broker.revocations_file %s's marks back into the store before the "+
-				"marks reload: %w; the marks are not reloaded until they are back", path, err)
-		}
-		return nil
-	}
 }
 
 // withHeld is rs, the store's marks, and every mark in held (the file's)
