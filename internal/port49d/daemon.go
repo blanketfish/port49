@@ -41,8 +41,9 @@ func probe(ctx context.Context, s store.RevStore, every time.Duration) {
 // (Ruling 12), so a mark an etcd restore lost cannot be put back here as
 // 7e-1's marksReloadHook put it back (final review 7e-1 C-1). Instead
 // every mark this port49d enforces that the store lacks is kept in force
-// through the reload (store.Marks.Keep), until a lift this feed delivers
-// or a restart, and named on out, once for one set (keptSayer). A lift
+// through the reload (store.Marks.Keep), until it is revoked again and
+// lifted on port49-broker, or a restart, and named on out, once for one
+// set (keptSayer). A lift
 // made on a broker while the feed was down is kept too: that denies more,
 // and the runner's copy puts back what the restore lost. A read that
 // fails refuses the reload (re-review 1 C-2). Each call counts a rescan.
