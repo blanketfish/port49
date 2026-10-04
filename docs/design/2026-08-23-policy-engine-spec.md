@@ -5756,9 +5756,12 @@ purpose; §13, decision 32), when `broker.revocations_file` is a relative path (
 against the caller's directory, not port49d's), or when the file appeared while it ran (another
 init-revocations is running or has just run; nothing written); 2 on usage.
 
-**`port49d store-roles --config port49d.yaml --broker-config port49-broker.yaml`** prints the `etcdctl` commands that create
-port49's two etcd roles and grant them, for the keyspace `store.etcd.prefix` names (plan 7d;
-§13, decision 35).
+**`port49d store-roles --config port49d.yaml --broker-config port49-broker.yaml`** prints the
+`etcdctl` commands that create port49's two etcd roles and grant them, for the keyspace
+`store.etcd.prefix` names (plan 7d; §13, decision 35).
+Each flag defaults to its file under `/etc/port49/`. A 7d port49d.yaml naming both identities
+is still read from `--config` alone, with a line saying to move the broker's; two files naming
+different `store.etcd.prefix` are refused.
 - **`port49_daemon`.** Read-write on the token, receipt, receipt-index, context, index-record,
   lookup and blob families (`t/`, `r/`, `rp/`, `c/`, `x/`, `ip/`, `is/`, `ic/`, `b/`), and
   read-only on the revocation marks (`rv/`) and the keyspace's `meta/`. Nothing on the token
@@ -5787,8 +5790,8 @@ port49's two etcd roles and grant them, for the keyspace `store.etcd.prefix` nam
 The output is run once, by etcd's root user.
 
 `port49-broker --config port49-broker.yaml` is the broker on etcd (plan 7e; decision 36). Its
-one subcommand is `revoke --offline`, for every broker down (decision 36). `port49 revoke --socket <port49-broker's admin_socket>` revokes, lifts and
-lists on it.
+one subcommand, `revoke --offline`, revokes and lifts with every broker down. `port49 revoke
+--socket <port49-broker's admin_socket>` revokes, lifts and lists on it.
 
 **`port49 refresh`** re-authenticates the session the agent holds and extends every live context the
 policy in force still grants (§5.6). The agent signs the broker's nonce with the certificate's key
@@ -6727,7 +6730,10 @@ review (the owner may override them).*
     symlink). Every certificate's validity window, and the CA's, is checked at each start and
     named when it fails: never read as etcd not answering.
 - **One port49d per keyspace in plan 7d.** *Amended by decision 36 (plan 7e):* any number of
-  port49d serve a keyspace and hold nothing; the hold below is port49-broker's runner's.
+  port49d serve a keyspace and hold nothing; the hold below is port49-broker's runner's. Read
+  "port49d" in these sub-bullets as the runner, and "a second port49d" as another
+  port49-broker replica; a runner that loses the hold stops its duties and keeps serving the
+  API, where port49d closed its listeners.
   - **The hold.** port49d holds the keyspace on an etcd lease of `store.etcd.hold_ttl` (15s),
     as the broker. A second port49d waits for it, its listeners closed.
   - **A fence.** Every sixth of `hold_ttl` the holder reads its lock key and its lease's
@@ -6761,7 +6767,12 @@ review (the owner may override them).*
     etcd raises `call_timeout`, `store.packet_deadline` and `hold_ttl` together. Past any
     bound port49d closes every listener: dark, never two port49d on one keyspace (design
     document §13).
-- **A start on etcd.** port49d waits for the store with every listener closed (up to
+- **A start on etcd.** *Amended by decision 36 (plan 7e):* on etcd the hold, the marks put
+  back (step 2, from the runner's `broker.state_dir/marks.json`), the purge (step 5, only when
+  the bundle in force is not the one last judged) and the carry (step 6) are the runner's at
+  its takeover (decision 36, the runner and the purge at a takeover). port49d's own start is
+  decision 36's, and it purges nothing. As plan 7d built it: port49d waits for the store with
+  every listener closed (up to
   `store.etcd.start_timeout`, 30s, then exits 1; `0` waits forever; after a store gone, no
   deadline), and then, retrying while the store errs:
   1. takes the hold;
