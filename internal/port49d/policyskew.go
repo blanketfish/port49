@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync/atomic"
 	"time"
 
 	"github.com/rhwendt/port49/internal/daemon/metrics"
@@ -72,17 +73,50 @@ func keepBundle(ctx context.Context, raw bundleStore, who string, live *policy.L
 	}
 }
 
+// startRecorder is what a replica's start records through (etcd.Store):
+// its bundle's record and, when that is not the bundle last judged, the
+// mark on meta/judged.
+type startRecorder interface {
+	PutBundle(ctx context.Context, who, bundle string, ttl time.Duration) error
+	JudgeInDoubt(ctx context.Context, unless string) (bundle string, marked bool, err error)
+}
+
+// recordStart is recordAtStart, swapped in tests to hold a start there.
+var recordStart = recordAtStart
+
+// recordAtStart is what a replica records before it serves anything that
+// mints: its first bundle record (firstBundle; Task 15a review M-1), then,
+// when meta/judged names another bundle, the record marked in doubt
+// (flagSkew; re-review 1, I-2), so a replica that stops before the
+// runner's watch looks still has the next takeover purge. The record lands
+// first: a runner's PutJudgedSince that read the records before it is
+// refused, and one that read them after it declines.
+func recordAtStart(ctx context.Context, st startRecorder, who, bundle string, ttl, call, wait time.Duration,
+	out io.Writer) error {
+	if err := firstBundle(ctx, st, who, bundle, ttl, call, wait, out); err != nil {
+		return err
+	}
+	return untilLanded(ctx, fmt.Sprintf("marking the bundle last judged in doubt against this replica's (%s)",
+		bundle), call, wait, out, func(ctx context.Context) error { return flagSkew(ctx, st, bundle, out) })
+}
+
 // firstBundle records the bundle this replica serves before it serves
 // anything that mints (Task 15a review M-1): the runner judges meta/judged
 // against the replicas' records, so a replica it cannot see mints nothing.
-// Each put is bounded by call; one the store did not answer is tried again
-// every wait, said each time, until it lands or ctx ends. An error waiting
-// does not mend ends the start.
-func firstBundle(ctx context.Context, raw bundleStore, who, bundle string, ttl, call, wait time.Duration,
+func firstBundle(ctx context.Context, raw startRecorder, who, bundle string, ttl, call, wait time.Duration,
 	out io.Writer) error {
+	return untilLanded(ctx, fmt.Sprintf("recording the bundle this replica serves (%s)", bundle), call, wait, out,
+		func(ctx context.Context) error { return raw.PutBundle(ctx, who, bundle, ttl) })
+}
+
+// untilLanded runs f, each try bounded by call, until it lands or ctx
+// ends: one the store did not answer is tried again every wait, said each
+// time as what. An error waiting does not mend ends it.
+func untilLanded(ctx context.Context, what string, call, wait time.Duration, out io.Writer,
+	f func(ctx context.Context) error) error {
 	for {
 		pctx, cancel := context.WithTimeout(ctx, call)
-		err := raw.PutBundle(pctx, who, bundle, ttl)
+		err := f(pctx)
 		cancel()
 		if err == nil {
 			return nil
@@ -91,13 +125,66 @@ func firstBundle(ctx context.Context, raw bundleStore, who, bundle string, ttl, 
 			return ctx.Err()
 		}
 		if !errors.Is(err, store.ErrUnavailable) {
-			return fmt.Errorf("recording the bundle this replica serves (%s): %w", bundle, err)
+			return fmt.Errorf("%s: %w", what, err)
 		}
-		fmt.Fprintf(out, "port49-broker: policy: recording the bundle this replica serves (%s): %v; nothing that "+
-			"mints is served until it lands, trying again in %s\n", bundle, err, wait)
+		fmt.Fprintf(out, "port49-broker: policy: %s: %v; nothing that mints is served until it lands, trying "+
+			"again in %s\n", what, err, wait)
 		if !sleepCtx(ctx, wait) {
 			return ctx.Err()
 		}
+	}
+}
+
+// flagSkew marks meta/judged in doubt unless it names bundle, the one this
+// replica serves (re-review 1, I-2), and says so when this call marked it.
+// The mark is the replica's own: the runner's watch samples the replicas'
+// records, and skew that comes and goes between two looks is never seen.
+func flagSkew(ctx context.Context, st startRecorder, bundle string, out io.Writer) error {
+	judged, marked, err := st.JudgeInDoubt(ctx, bundle)
+	if err != nil {
+		return err
+	}
+	if marked {
+		fmt.Fprintf(out, "port49-broker: policy: this replica serves bundle %s and the bundle last judged is %s: "+
+			"marked it in doubt, so the next takeover purges the unspent tokens\n", bundle, lineBundle(judged))
+	}
+	return nil
+}
+
+// skewGate is a replica's mint gate (broker.Broker.MintGate; Task 15a
+// re-review 1, I-2): a mint runs only under the bundle this replica last
+// flagged against meta/judged (flagSkew), so a replica that cannot mark
+// the bundle last judged in doubt mints nothing under its own. The start
+// flags its bundle before anything that mints is served; a swap while the
+// replica runs flags at once (its own passes judge it), and one while it
+// does not is flagged by the asker once the mark lands.
+type skewGate struct{ flagged atomic.Pointer[string] }
+
+func (g *skewGate) flag(bundle string) { g.flagged.Store(&bundle) }
+
+func (g *skewGate) allow(pol *policy.Policy) error {
+	if f := g.flagged.Load(); f != nil && *f == pol.Bundle {
+		return nil
+	}
+	return fmt.Errorf("bundle %s is not yet flagged against the bundle last judged", pol.Bundle)
+}
+
+// flagSwap is the asker's half of a swap to bundle while this replica
+// does not run (re-review 1, I-2): it marks meta/judged in doubt when it
+// names another bundle, tried again while the store does not answer, and
+// only then opens gate to mints under bundle. A mark refused otherwise
+// leaves the gate shut, said: a replica that cannot flag its skew mints
+// nothing under it.
+func flagSwap(ctx context.Context, st startRecorder, gate *skewGate, bundle string, call, wait time.Duration,
+	out io.Writer) {
+	err := untilLanded(ctx, fmt.Sprintf("marking the bundle last judged in doubt against this replica's (%s)",
+		bundle), call, wait, out, func(ctx context.Context) error { return flagSkew(ctx, st, bundle, out) })
+	switch {
+	case err == nil:
+		gate.flag(bundle)
+	case ctx.Err() == nil:
+		fmt.Fprintf(out, "port49-broker: policy: %v; this replica mints nothing under bundle %s until a swap or a "+
+			"restart marks it\n", err, bundle)
 	}
 }
 

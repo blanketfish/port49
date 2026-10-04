@@ -54,7 +54,7 @@ type runner struct {
 type judgedStore interface {
 	Judged(ctx context.Context) (etcdstore.JudgedRecord, bool, error)
 	PutJudgedSince(ctx context.Context, bundle string, policy []byte, rev uint64) (bool, error)
-	JudgeInDoubt(ctx context.Context) (bundle string, marked bool, err error)
+	JudgeInDoubt(ctx context.Context, unless string) (bundle string, marked bool, err error)
 	BundlesAt(ctx context.Context) ([]etcdstore.BundleRecord, uint64, error)
 	RefreshOwed(ctx context.Context) (rev uint64, rec etcdstore.BundleRecord, ok bool, err error)
 	ClearRefreshOwed(ctx context.Context, rev uint64) error
@@ -380,7 +380,7 @@ func (r *runner) recordJudged(ctx context.Context, pol *policy.Policy, why strin
 // names, and says so as it marks. A mark that fails is said; the watch
 // (owed) marks again at its next look.
 func (r *runner) doubt(ctx context.Context, b etcdstore.BundleRecord) {
-	bundle, marked, err := r.meta.JudgeInDoubt(ctx)
+	bundle, marked, err := r.meta.JudgeInDoubt(ctx, "")
 	if err != nil {
 		fmt.Fprintf(stderr, "port49-broker: runner: marking the bundle last judged in doubt (%s serves bundle %s): "+
 			"%v; marked again at the next look\n", lineHolder(b.Who), lineBundle(b.Bundle), err)

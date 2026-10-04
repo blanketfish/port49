@@ -510,7 +510,7 @@ func TestRefreshOwedIsClearedOnlyAtItsRevision(t *testing.T) {
 func TestAJudgedRecordGoesInDoubtAndIsReplacedOnlyWhenNothingMoved(t *testing.T) {
 	ctx := context.Background()
 	s := onShared(t, time.Now)
-	if b, marked, err := s.JudgeInDoubt(ctx); b != "" || marked || err != nil {
+	if b, marked, err := s.JudgeInDoubt(ctx, ""); b != "" || marked || err != nil {
 		t.Fatalf("no record to mark: %q %v %v", b, marked, err)
 	}
 	if _, ok, err := s.Judged(ctx); ok || err != nil {
@@ -523,14 +523,20 @@ func TestAJudgedRecordGoesInDoubtAndIsReplacedOnlyWhenNothingMoved(t *testing.T)
 	if got, ok, err := s.Judged(ctx); !ok || err != nil || got.InDoubt {
 		t.Fatalf("a record just put is in doubt: %+v %v %v", got, ok, err)
 	}
-	if b, marked, err := s.JudgeInDoubt(ctx); b != "b1" || !marked || err != nil {
+	if b, marked, err := s.JudgeInDoubt(ctx, "b1"); b != "b1" || marked || err != nil {
+		t.Fatalf("a replica on the bundle judged marked it: %q %v %v", b, marked, err)
+	}
+	if got, _, _ := s.Judged(ctx); got.InDoubt {
+		t.Fatal("a replica on the bundle judged marked it in doubt")
+	}
+	if b, marked, err := s.JudgeInDoubt(ctx, "b9"); b != "b1" || !marked || err != nil {
 		t.Fatalf("the mark: %q %v %v", b, marked, err)
 	}
 	if got, ok, err := s.Judged(ctx); !ok || err != nil || !got.InDoubt || got.Bundle != "b1" ||
 		string(got.Policy) != string(pol) {
 		t.Fatalf("a record marked in doubt: %+v %v %v", got, ok, err)
 	}
-	if b, marked, err := s.JudgeInDoubt(ctx); b != "b1" || marked || err != nil {
+	if b, marked, err := s.JudgeInDoubt(ctx, ""); b != "b1" || marked || err != nil {
 		t.Fatalf("a record already in doubt is marked again: %q %v %v", b, marked, err)
 	}
 	_, rev, err := s.BundlesAt(ctx)
@@ -558,7 +564,7 @@ func TestAJudgedRecordGoesInDoubtAndIsReplacedOnlyWhenNothingMoved(t *testing.T)
 	if _, rev, err = s.BundlesAt(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, marked, err := s.JudgeInDoubt(ctx); !marked || err != nil {
+	if _, marked, err := s.JudgeInDoubt(ctx, ""); !marked || err != nil {
 		t.Fatalf("the mark: %v %v", marked, err)
 	}
 	if put, err := s.PutJudgedSince(ctx, "b1", pol, rev); put || err != nil {

@@ -378,10 +378,13 @@ func (s *Store) PutJudgedSince(ctx context.Context, bundle string, policy []byte
 // JudgeInDoubt withdraws meta/judged while a replica serves another
 // bundle (Task 15a review I-1): it marks the record in doubt, its bundle
 // and policy kept for the guard at a start, so the next takeover purges.
-// It reports the bundle recorded, and marked true only when this call
-// marked it; no record, or one that does not decode, already purges and
-// is left as it is.
-func (s *Store) JudgeInDoubt(ctx context.Context) (bundle string, marked bool, err error) {
+// A record that names unless, when unless is not empty, is left clean: a
+// replica that serves the bundle judged has nothing to withdraw, and the
+// check is made in the same compare-and-swap as the mark (re-review 1,
+// I-2). It reports the bundle recorded, and marked true only when this
+// call marked it; no record, or one that does not decode, already purges
+// and is left as it is.
+func (s *Store) JudgeInDoubt(ctx context.Context, unless string) (bundle string, marked bool, err error) {
 	key := s.k.meta("judged")
 	for {
 		resp, err := s.ctxKV.Get(ctx, key)
@@ -395,7 +398,7 @@ func (s *Store) JudgeInDoubt(ctx context.Context) (bundle string, marked bool, e
 		if json.Unmarshal(resp.Kvs[0].Value, &r) != nil {
 			return "", false, nil
 		}
-		if r.InDoubt {
+		if r.InDoubt || (unless != "" && r.Bundle == unless) {
 			return r.Bundle, false, nil
 		}
 		r.InDoubt = true

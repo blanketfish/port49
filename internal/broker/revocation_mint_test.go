@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/token"
 )
@@ -470,5 +471,42 @@ func TestACAMarkIsAnsweredAsTheCAsAndOffersNoLift(t *testing.T) {
 			strings.Contains(e.Detail, "port49 revoke --lift") != tc.lift {
 			t.Errorf("%s %q: %+v", tc.kind, tc.origin, e)
 		}
+	}
+}
+
+// A mint the gate refuses under the policy in force mints nothing, is
+// answered store_unavailable with a Retry-After, and recorded once; the
+// gate is asked of the policy the mint would run under, and a gate that
+// clears lets the next mint through (Task 15a re-review 1, I-2).
+func TestAMintTheGateRefusesMintsNothing(t *testing.T) {
+	f := newFixture(t, 8)
+	var asked *policy.Policy
+	open := false
+	f.b.MintGate = func(pol *policy.Policy) error {
+		asked = pol
+		if open {
+			return nil
+		}
+		return errors.New("the bundle last judged is not yet marked in doubt")
+	}
+	w := f.post(context.Background(), f.state(f.alice), `{"devices":["leaf1"]}`, "")
+	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), `"store_unavailable"`) ||
+		w.Header().Get("Retry-After") == "" || strings.Contains(w.Body.String(), "marked in doubt") {
+		t.Fatalf("%s %v", answer(w), w.Header())
+	}
+	if asked != f.b.Policy.Load() {
+		t.Fatal("the gate was not asked of the policy in force")
+	}
+	if n := f.live(t, "leaf1"); n != 0 {
+		t.Fatalf("%d tokens minted past the gate", n)
+	}
+	recs := eventsOf(f.records(t), "mint")
+	if len(recs) != 1 || recs[0]["verdict"] != "deny" || recs[0]["reason"] != "store_unavailable" {
+		t.Fatalf("records: %v", recs)
+	}
+	open = true
+	if w := f.post(context.Background(), f.state(f.alice), `{"devices":["leaf1"]}`, ""); w.Code != http.StatusOK ||
+		f.live(t, "leaf1") != 1 {
+		t.Fatalf("an open gate: %s", answer(w))
 	}
 }

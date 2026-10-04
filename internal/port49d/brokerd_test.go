@@ -1173,7 +1173,9 @@ func TestTheBrokersReloadHookKeepsWhatTheStoreLost(t *testing.T) {
 // A replica that minted under a policy the runner had replaced, then
 // reloads, has the runner carry the context its token made: the runner
 // runs a full context pass on its ask. Meanwhile the runner records no
-// bundle as judged (pre-flight I3; Ruling 8 corrected).
+// bundle as judged (pre-flight I3; Ruling 8 corrected). Each replica
+// mints under its swapped bundle: the runner's at once, the late one's
+// once its ask has flagged it (Task 15a re-review 1, I-2).
 func TestALateReplicasContextIsCarriedWhenItReloads(t *testing.T) {
 	var out, log syncBuffer
 	e, o := stderr, stdout
@@ -1181,12 +1183,13 @@ func TestALateReplicasContextIsCarriedWhenItReloads(t *testing.T) {
 	stderr, stdout = &out, &log
 	f := splitFleet(t)
 	tacacs := startSplitDaemon(t, f.daemon, &out, 1)
-	startBroker(t, f.broker, &out, 1)
+	apiA, _ := startBroker(t, f.broker, &out, 1)
 	waitFor(t, &out, "runner: recorded bundle ")
 	cfgB := f.copyBroker(t) // a policy file of its own
 	apiB, _ := startBroker(t, cfgB, &out, 2)
 	f.writePolicyOf(t, f.broker, withdrawnConfigurePolicy) // A's file only: alice loses configure
 	waitFor(t, &out, "policy reloaded")
+	mintOn(t, apiA, f.pki, "leaf1") // the runner's swap opens its gate at once
 	waitFor(t, &out, "this replica serves bundle ")
 	// The runner's settle pass, settleAfter (30s) after its reload.
 	waitWithin(t, &out, "runner: not recording bundle ", 45*time.Second)
@@ -1206,6 +1209,7 @@ func TestALateReplicasContextIsCarriedWhenItReloads(t *testing.T) {
 	}
 	// Every replica serves the bundle now: the full pass records it.
 	waitForCount(t, &out, "runner: recorded bundle ", recorded+1)
+	mintOn(t, apiB, f.pki, "leaf1") // B's ask flagged its swap before the pass it owed
 }
 
 // A start whose policy file the guard refuses against the bundle last
@@ -1280,4 +1284,48 @@ func TestEveryBrokerLineNamesPort49Broker(t *testing.T) {
 			t.Fatalf("a port49-broker line not its own: %q\n%s", l, out.String())
 		}
 	}
+}
+
+// Nothing that mints is served, and no hold is taken, until the start's
+// records land (recordStart): its first bundle record and, when meta/judged
+// names another bundle, the mark (Task 15a review M-1; re-review 1, M-7).
+func TestNothingIsServedUntilTheStartsRecordsLand(t *testing.T) {
+	var out syncBuffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	held := make(chan struct{})
+	reached := make(chan struct{}, 1)
+	rs := recordStart
+	t.Cleanup(func() { recordStart = rs })
+	recordStart = func(ctx context.Context, st startRecorder, who, bundle string, ttl, call, wait time.Duration,
+		w io.Writer) error {
+		select {
+		case reached <- struct{}{}:
+		default:
+		}
+		select {
+		case <-held:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		return rs(ctx, st, who, bundle, ttl, call, wait, w)
+	}
+	f := splitFleet(t)
+	metricsAddr, _ := startBrokerNoWait(t, f.broker, &out, 1)
+	select {
+	case <-reached:
+	case <-time.After(30 * time.Second):
+		t.Fatalf("the start never reached its records:\n%s", out.String())
+	}
+	time.Sleep(time.Second)
+	if strings.Contains(out.String(), "port49-broker: listening on ") ||
+		strings.Contains(out.String(), "runner: took keyspace") {
+		t.Fatalf("served before the start's records landed:\n%s", out.String())
+	}
+	if code := readyzAt(t, metricsAddr); code != http.StatusServiceUnavailable {
+		t.Fatalf("/readyz %d before the start's records landed", code)
+	}
+	close(held)
+	waitFor(t, &out, "port49-broker: listening on ")
 }

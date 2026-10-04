@@ -48,6 +48,69 @@ func TestTheFirstBundleRecordLandsBeforeAnythingIsServed(t *testing.T) {
 	}
 }
 
+// A start marks the bundle last judged in doubt only when it is not the
+// replica's own, after the replica's record lands; a mark the store did
+// not answer is tried again and said, and one refused otherwise ends the
+// start (Task 15a re-review 1, I-2).
+func TestAStartMarksTheJudgedBundleOnlyWhenItIsAnother(t *testing.T) {
+	var out syncBuffer
+	st := &fakeBundles{judged: "b1"}
+	if err := recordAtStart(context.Background(), st, "replica-b", "b1", time.Minute, time.Second,
+		10*time.Millisecond, &out); err != nil || st.inDoubt || st.put("replica-b") != "b1" {
+		t.Fatalf("a start on the bundle judged: %v, in doubt %v", err, st.inDoubt)
+	}
+	st = &fakeBundles{judged: "b1", markFail: 2, failErr: store.ErrUnavailable}
+	if err := recordAtStart(context.Background(), st, "replica-b", "b2", time.Minute, time.Second,
+		10*time.Millisecond, &out); err != nil || !st.inDoubt || st.put("replica-b") != "b2" {
+		t.Fatalf("a start on another bundle: %v, in doubt %v", err, st.inDoubt)
+	}
+	if strings.Count(out.String(), "port49-broker: policy: marking the bundle last judged in doubt against this "+
+		"replica's (b2): ") != 2 || !strings.Contains(out.String(), "port49-broker: policy: this replica serves "+
+		"bundle b2 and the bundle last judged is b1: marked it in doubt, so the next takeover purges the unspent "+
+		"tokens") {
+		t.Fatalf("said: %s", out.String())
+	}
+	refused := errors.New("the mark is refused")
+	st = &fakeBundles{judged: "b1", markFail: 1, failErr: refused}
+	if err := recordAtStart(context.Background(), st, "replica-b", "b2", time.Minute, time.Second,
+		10*time.Millisecond, &out); !errors.Is(err, refused) || st.inDoubt {
+		t.Fatalf("a mark refused: %v", err)
+	}
+}
+
+// A swap while the replica does not run opens the gate to mints under its
+// bundle only once the bundle last judged is marked in doubt, or names it;
+// a mark the store did not answer is tried again, and one refused leaves
+// the gate shut, said (Task 15a re-review 1, I-2).
+func TestASwapMintsOnlyOnceItsSkewIsFlagged(t *testing.T) {
+	var out syncBuffer
+	b1, b2 := policyWithBundle(t, "b1"), policyWithBundle(t, "b2")
+	gate := &skewGate{}
+	gate.flag("b1")
+	if gate.allow(b1) != nil || gate.allow(b2) == nil {
+		t.Fatal("the gate is open only to the bundle flagged")
+	}
+	st := &fakeBundles{judged: "b1", markFail: 1, failErr: store.ErrUnavailable}
+	flagSwap(context.Background(), st, gate, "b2", time.Second, 10*time.Millisecond, &out)
+	if gate.allow(b2) != nil || gate.allow(b1) == nil || !st.inDoubt {
+		t.Fatalf("a swap flagged: in doubt %v; said %s", st.inDoubt, out.String())
+	}
+	st = &fakeBundles{judged: "b3", markFail: 1, failErr: errors.New("the mark is refused")}
+	b3, b4 := policyWithBundle(t, "b3"), policyWithBundle(t, "b4")
+	flagSwap(context.Background(), st, gate, "b4", time.Second, 10*time.Millisecond, &out)
+	if gate.allow(b4) == nil || st.inDoubt ||
+		!strings.Contains(out.String(), "port49-broker: policy: marking the bundle last judged in doubt against "+
+			"this replica's (b4): the mark is refused; this replica mints nothing under bundle b4 until a swap or "+
+			"a restart marks it") {
+		t.Fatalf("a mark refused opened the gate; said %s", out.String())
+	}
+	st = &fakeBundles{judged: "b3"}
+	flagSwap(context.Background(), st, gate, "b3", time.Second, 10*time.Millisecond, &out)
+	if gate.allow(b3) != nil || st.inDoubt {
+		t.Fatalf("a swap onto the bundle judged: in doubt %v", st.inDoubt)
+	}
+}
+
 // A replica whose bundle is not the runner's gauges 0 and says so once per
 // pair; matching, it gauges 1 (pre-flight I3).
 func TestAReplicaServingAnotherBundleSaysSo(t *testing.T) {
@@ -158,6 +221,25 @@ type fakeBundles struct {
 	fail    int
 	failErr error
 	puts    int
+	// judged is meta/judged's bundle, inDoubt its mark; markFail is how
+	// many marks fail next, with failErr.
+	judged   string
+	inDoubt  bool
+	markFail int
+}
+
+func (f *fakeBundles) JudgeInDoubt(_ context.Context, unless string) (string, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.markFail > 0 {
+		f.markFail--
+		return "", false, f.failErr
+	}
+	if f.judged == "" || f.inDoubt || f.judged == unless {
+		return f.judged, false, nil
+	}
+	f.inDoubt = true
+	return f.judged, true, nil
 }
 
 func (f *fakeBundles) PutBundle(_ context.Context, who, bundle string, ttl time.Duration) error {

@@ -140,11 +140,11 @@ func (m *metaOf) BundlesAt(ctx context.Context) ([]etcdstore.BundleRecord, uint6
 	return m.inner.BundlesAt(ctx)
 }
 
-func (m *metaOf) JudgeInDoubt(ctx context.Context) (string, bool, error) {
+func (m *metaOf) JudgeInDoubt(ctx context.Context, unless string) (string, bool, error) {
 	if m.inner == nil {
 		return "", false, nil
 	}
-	return m.inner.JudgeInDoubt(ctx)
+	return m.inner.JudgeInDoubt(ctx, unless)
 }
 
 func (m *metaOf) RefreshOwed(ctx context.Context) (uint64, etcdstore.BundleRecord, bool, error) {
@@ -376,7 +376,7 @@ func (s *skewMeta) PutJudgedSince(ctx context.Context, bundle string, raw []byte
 	return s.metaOf.PutJudgedSince(ctx, bundle, raw, rev)
 }
 
-func (s *skewMeta) JudgeInDoubt(context.Context) (string, bool, error) {
+func (s *skewMeta) JudgeInDoubt(context.Context, string) (string, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.doubted++
@@ -601,5 +601,55 @@ func TestATakeoverPurgesOnceTheBundleJudgedIsInDoubt(t *testing.T) {
 	}
 	if got, ok, err := bs.raw.Judged(ctx); !ok || err != nil || got.InDoubt || got.Bundle != pol.Bundle {
 		t.Fatalf("meta/judged after the carry: %+v %v %v", got, ok, err)
+	}
+}
+
+// A replica that starts on a bundle other than the one last judged marks
+// meta/judged in doubt itself, before anything that mints is served: one
+// that stops before the runner's watch (owed) ever looks leaves no record
+// to see, yet its unspent tokens carry a policy no pass judged, so a
+// takeover on the judged bundle must purge (Task 15a re-review 1, I-2).
+func TestAReplicaThatStartsOnAnotherBundleMarksTheJudgedInDoubt(t *testing.T) {
+	f := splitFleet(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m := metrics.New(prometheus.NewRegistry())
+	bs, keys := openBrokerFor(t, ctx, f.broker, m, io.Discard)
+	cfg, _ := loadBroker(t, f.broker)
+	bcfg := brokerConfig(t, minimalPolicy)
+	_, b, err := buildBroker(bcfg, "inventory_file "+bcfg.InventoryFile, bs.st, seedMinter(),
+		decision.NewJSONLines(io.Discard), m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.Sessions = session.New(bs.st, time.Now, cfg.ContextIdleTTL, cfg.Session.IndexTTL)
+	b.Marks = store.NewMarks()
+	pol := b.Policy.Load()
+	if err := bs.raw.PutJudged(ctx, pol.Bundle, pol.Raw()); err != nil {
+		t.Fatal(err)
+	}
+	var out syncBuffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	c := "port49-broker on c (pid 3, since 2026-10-04T00:00:00Z)"
+	if err := recordAtStart(ctx, bs.raw, c, "b-stale", time.Minute, time.Second, 10*time.Millisecond,
+		&out); err != nil {
+		t.Fatal(err)
+	}
+	if err := bs.raw.DeleteBundle(ctx, c); err != nil { // its graceful stop, before any look
+		t.Fatal(err)
+	}
+	if got, ok, err := bs.raw.Judged(ctx); !ok || err != nil || !got.InDoubt || got.Bundle != pol.Bundle {
+		t.Fatalf("meta/judged after a replica started on another bundle: %s in doubt %v, %v %v\n%s", got.Bundle,
+			got.InDoubt, ok, err, out.String())
+	}
+	r := &runner{cfg: cfg, brk: b, raw: bs.raw, st: bs.st, meta: bs.raw, keys: keys, m: m, alarm: newKeyAlarm()}
+	if _, err := r.takeover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "port49-broker: runner: the bundle the last runner judged ("+pol.Bundle+
+		") is in doubt, a replica having served another since; ") {
+		t.Fatalf("a takeover after a replica served another bundle unseen:\n%s", out.String())
 	}
 }
