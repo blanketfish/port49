@@ -92,6 +92,10 @@ type Server struct {
 	// runs no broker (plan 7e, Ruling 13): port49d on etcd, beside
 	// port49-broker. Empty keeps the memory store's line.
 	RevokeElsewhere string
+	// DiagnoseElsewhere names where keys diagnose is answered when this
+	// process holds no device packets (Held nil): port49-broker, beside
+	// port49d (plan 7e, Ruling 13; pre-flight M16).
+	DiagnoseElsewhere string
 	// OpTimeout bounds revoke and revocations; zero is the package's
 	// OpTimeout. Tests shorten it.
 	OpTimeout time.Duration
@@ -236,6 +240,9 @@ func (s *Server) answer(ctx context.Context, req Request, uid uint32) (resp Resp
 	}()
 	switch req.Op {
 	case "keys_diagnose":
+		if s.Held == nil && s.DiagnoseElsewhere != "" {
+			return Response{Error: "port49-broker holds no device packets; keys diagnose is " + s.DiagnoseElsewhere}
+		}
 		assigned := ""
 		if s.Assigned != nil {
 			assigned = s.Assigned(req.Device)

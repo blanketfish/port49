@@ -137,6 +137,17 @@ func TestARevokeWithNoBrokerNamesWhereItIs(t *testing.T) {
 	}
 }
 
+// port49-broker holds no device packets: a keys diagnose at its socket
+// names port49d's, where the packets are held (plan 7e, Ruling 13;
+// pre-flight M16).
+func TestAKeysDiagnoseWithNoPacketsNamesWhereItIs(t *testing.T) {
+	s := &Server{Now: time.Now, DiagnoseElsewhere: "port49d's admin socket"}
+	r := s.answer(context.Background(), Request{Op: "keys_diagnose", Device: "leaf1"}, 0)
+	if r.Error != "port49-broker holds no device packets; keys diagnose is port49d's admin socket" {
+		t.Fatalf("%+v", r)
+	}
+}
+
 // A revoke's connection outlasts its wait for its turn, its run and the save
 // it waits on; a list's, its one bound. The exported waits are the defaults.
 func TestConnTimeoutCoversTheOpsWorstCase(t *testing.T) {
