@@ -131,6 +131,18 @@ func TestSplitEndToEnd(t *testing.T) {
 			return false
 		}
 
+		// triedA says whether the device was answered by A in a window.
+		triedA := func(from, to time.Time) bool {
+			l.flushCapture(t)
+			as, _ := splitAttempts(capPath, l.p.addr, from, to)
+			for _, a := range as {
+				if a.Server == "172.100.100.1" && strings.HasPrefix(a.Outcome, "accepted") {
+					return true
+				}
+			}
+			return false
+		}
+
 		// times is a cell's request-to-reply times from the capture, each with
 		// the server that replied, and the connections the device opened: the
 		// device's delay before it tried the other server is the second
@@ -227,8 +239,13 @@ func TestSplitEndToEnd(t *testing.T) {
 		}
 
 		// 3. A is back; the broker stops. The session's next command, then a
-		// token minted before the stop.
+		// token minted before the stop. B is stopped for cells 3 and 4's A half:
+		// a device that last asked B (IOS-XE does, and keeps asking it while it
+		// answers) would otherwise never ask A, and these cells measure A.
 		if err := s.StartA(); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.StopB(); err != nil {
 			t.Fatal(err)
 		}
 		said, tok2 := l29Mint(sock, l.p.node)
@@ -245,7 +262,11 @@ func TestSplitEndToEnd(t *testing.T) {
 		_, lerr := l.loginWithin(sliceUser, tok2, 90*time.Second, "show version")
 		recs3 := l.waitForRecords(offA, 30*time.Second, func(rs []map[string]any) bool { return redeemReason(rs, sha(tok2)) != "" })
 		redeem3 := redeemReason(recs3, sha(tok2))
-		wide("3. A started, the broker stopped: the open session's `show version`, then a login with a token minted before the stop",
+		if !triedA(from, time.Now()) {
+			wide("3. validity", "INVALID: the device never connected to A with B stopped")
+			fail("cell 3: the device never connected to A with B stopped")
+		}
+		wide("3. A started, B stopped, the broker stopped: the open session's `show version`, then a login with a token minted before the stop",
 			fmt.Sprintf("%s; record %s %s, ctx_id %s (before: %s); the login: err %v, redeem %q | %s", out3, v3, r3, ctx3,
 				ctx1, lerr, redeem3, times(from, time.Now())))
 		if !strings.HasPrefix(out3, "printed its output") {
@@ -282,6 +303,9 @@ func TestSplitEndToEnd(t *testing.T) {
 		if sessionOnly {
 			wide("4. the session's next command", "not applicable: Junos authorizes no command (decision 21); the "+
 				"revocation's reach on the session is L36's, and its reach on a login through B is measured here")
+			if err := s.StartB(); err != nil {
+				t.Fatal(err)
+			}
 			if err := s.StopA(); err != nil {
 				t.Fatal(err)
 			}
@@ -311,7 +335,7 @@ func TestSplitEndToEnd(t *testing.T) {
 				t.Fatal(err)
 			}
 		} else {
-			offA, offB := l.mark(), s.B.mark()
+			offA := l.mark()
 			from = time.Now()
 			outA := revokeOutcome(l.p.name, sh, "show version", fail, "on A after the revocation")
 			recsA := l.waitForRecords(offA, 30*time.Second, func(rs []map[string]any) bool { return len(reasonsOf(rs, "authorize_command")) > 0 })
@@ -319,6 +343,14 @@ func TestSplitEndToEnd(t *testing.T) {
 			if !strings.HasPrefix(outA, "refused") || !contains(reasonsOf(recsA, "authorize_command"), "deny credential_revoked") {
 				fail("the revocation did not deny the session's next command on A: %s %v", outA, reasonsOf(recsA, "authorize_command"))
 			}
+			if !triedA(from, time.Now()) {
+				wide("4. validity", "INVALID: the device never connected to A with B stopped")
+				fail("cell 4: the device never connected to A with B stopped")
+			}
+			if err := s.StartB(); err != nil {
+				t.Fatal(err)
+			}
+			offB := s.B.mark()
 			if err := s.StopA(); err != nil {
 				t.Fatal(err)
 			}
