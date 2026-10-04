@@ -279,6 +279,12 @@ type Metrics struct {
 	// minute is a store that does not answer, or refuses, the broker's
 	// mark. Readiness never shows it (design §12): it is an alarm.
 	BrokerMintGateClosed prometheus.Gauge
+	// port49_redemption_restore_guarded: 1 while this port49d refuses every
+	// token redemption store_unavailable, having found meta/witness below
+	// the highest it followed (an etcd restore; plan 7e, Task 15d), until
+	// a broker runner's purge is done; 1 too from a run's start after a
+	// store gone until its first read of the witness.
+	RedemptionRestoreGuarded prometheus.Gauge
 	// port49_inventory_reloads_total{outcome}: attempts to put a changed
 	// inventory_file in force (plan 6a) — "applied", "unchanged" (the same
 	// devices, respelled), or "refused" (it could not be read behind the
@@ -520,6 +526,9 @@ func New(reg prometheus.Registerer) *Metrics {
 			Help: "1 while this broker waits to mark the bundle last judged in doubt for a swap, minting nothing " +
 				"under the swapped bundle; 1 for longer than a minute is a store that does not answer, or refuses, " +
 				"the mark."}),
+		RedemptionRestoreGuarded: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_redemption_restore_guarded",
+			Help: "1 while this port49d refuses every token redemption, having found the store restored from a " +
+				"snapshot, until a broker runner's purge is done."}),
 		InventoryReloads: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_inventory_reloads_total",
 			Help: "Attempts to put a changed inventory file in force, by outcome."}, []string{"outcome"}),
 		InventoryFileRefused: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_inventory_file_refused",
@@ -573,7 +582,8 @@ func New(reg prometheus.Registerer) *Metrics {
 		m.ContextsReindexFailures, m.SessionRefreshes, m.TokensSuperseded, m.CeilingWarnings,
 		m.Revocations, m.RevocationsInForce, m.RevocationsFileFailed, m.CertStatusChecks, m.CRLLoads, m.CRLNextUpdate,
 		m.CertStatusUnavailable, m.PolicyReloads, m.PolicyFileRefused,
-		m.PolicyRefreshPending, m.PolicyBundleMatchesRunner, m.BrokerMintGateClosed, m.InventoryReloads,
+		m.PolicyRefreshPending, m.PolicyBundleMatchesRunner, m.BrokerMintGateClosed, m.RedemptionRestoreGuarded,
+		m.InventoryReloads,
 		m.InventoryFileRefused,
 		m.InventorySnapshotAge,
 		m.InventoryChanges, m.InventoryBundleSequence, m.InventoryPersistFailed, m.InventoryBundleRefused,

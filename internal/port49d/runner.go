@@ -632,10 +632,27 @@ func (r *runner) purgeRestored(ctx context.Context, why string, read etcdstore.W
 	if err := retryCtx(ctx, func() (e error) { n, e = r.st.PurgeTokens(ctx); return }); err != nil {
 		return err
 	}
+	if err := r.markPurged(ctx); err != nil {
+		return err
+	}
 	r.witness.Reset(read.ModRevision)
 	fmt.Fprintf(stderr, "port49-broker: runner: %s; every unspent token is purged and must be minted again "+
 		"(port49 token): %d purged\n", why, n)
 	return nil
+}
+
+// markPurged writes meta/purged once a purge of every unspent token is
+// done (Task 15d), retried while the store is unavailable: a port49d that
+// found the store restored serves redemptions again only on one written
+// after it found it. Every whole purge writes it, not only a restore's:
+// any of them, done after the restore, leaves no restored token behind.
+func (r *runner) markPurged(ctx context.Context) error {
+	return retryCtx(ctx, func() error {
+		if _, err := r.raw.PutPurged(ctx, r.who); err != nil {
+			return fmt.Errorf("recording the purge done (meta/purged): %w", err)
+		}
+		return nil
+	})
 }
 
 // retryCtx runs f until it returns nil, an error that is not
@@ -829,6 +846,9 @@ func (r *runner) takeover(ctx context.Context) (*policy.Policy, error) {
 		}
 		var n int
 		if err := retryCtx(ctx, func() (e error) { n, e = r.st.PurgeTokens(ctx); return }); err != nil {
+			return nil, err
+		}
+		if err := r.markPurged(ctx); err != nil {
 			return nil, err
 		}
 		if ok && judged.InDoubt && judged.Bundle == bundle {

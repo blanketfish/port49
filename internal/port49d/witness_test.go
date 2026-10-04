@@ -91,49 +91,54 @@ func TestAWitnessRecordThatCannotBeReadPurgesOnce(t *testing.T) {
 		"does not decode": func(path string) error { return os.WriteFile(path, []byte("{not json"), 0o600) },
 		"cannot be read":  func(path string) error { return os.WriteFile(path, []byte(`{}`), 0o000) },
 	} {
-		dir := safeDir(t)
-		path := filepath.Join(dir, stateWitnessFile)
-		if err := write(path); err != nil {
-			t.Fatal(err)
-		}
-		var out bytes.Buffer
-		w := openWitness(path, "/port49/", &out)
-		if !strings.Contains(out.String(), "moved aside to "+path+".bad-") ||
-			!strings.Contains(out.String(), "the first check purges every unspent token once") {
-			t.Fatalf("%s: the line: %q", name, out.String())
-		}
-		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("%s: not moved aside: %v", name, err)
-		}
-		rec, have := w.Recorded()
-		gone, why := restored(etcdstore.WitnessRead{ModRevision: 1 << 40, Header: 1 << 40}, rec, have)
-		if !gone || !strings.Contains(why, "could not be read") {
-			t.Fatalf("%s: a record that could not be read, against a witness far above: %v %q", name, gone, why)
-		}
-		w.Saw(1 << 41) // a witness followed meanwhile does not clear it
-		if rec, _ := w.Recorded(); rec != unreadWitness {
-			t.Fatalf("%s: following cleared the unread record: %d", name, rec)
-		}
-		// A replica restarted before it ever runs keeps the purge it owes:
-		// the unread record is saved, and read back as one (re-review 1 M-5).
-		ctx, cancel := context.WithCancel(context.Background())
-		cancel()
-		w.keep(ctx)
-		var again bytes.Buffer
-		reopened := openWitness(path, "/port49/", &again)
-		if rec, have := reopened.Recorded(); rec != unreadWitness || !have ||
-			!strings.Contains(again.String(), "the first check purges every unspent token once") {
-			t.Fatalf("%s: reopened before a purge: %d %v %q", name, rec, have, again.String())
-		}
-		if gone, why := restored(etcdstore.WitnessRead{ModRevision: 1 << 40, Header: 1 << 40}, unreadWitness,
-			true); !gone || !strings.Contains(why, "could not be read") {
-			t.Fatalf("%s: reopened, not restored: %v %q", name, gone, why)
-		}
-		w.Reset(812) // the purge done
-		w.keep(ctx)
-		if got, have := openWitness(path, "/port49/", io.Discard).Recorded(); got != 812 || !have {
-			t.Fatalf("%s: after the purge: %d %v", name, got, have)
-		}
+		t.Run(name, func(t *testing.T) {
+			if name == "cannot be read" && os.Geteuid() == 0 {
+				t.Skip("running as root, which reads a mode-0000 file: the unreadable case needs a non-root user")
+			}
+			dir := safeDir(t)
+			path := filepath.Join(dir, stateWitnessFile)
+			if err := write(path); err != nil {
+				t.Fatal(err)
+			}
+			var out bytes.Buffer
+			w := openWitness(path, "/port49/", &out)
+			if !strings.Contains(out.String(), "moved aside to "+path+".bad-") ||
+				!strings.Contains(out.String(), "the first check purges every unspent token once") {
+				t.Fatalf("%s: the line: %q", name, out.String())
+			}
+			if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("%s: not moved aside: %v", name, err)
+			}
+			rec, have := w.Recorded()
+			gone, why := restored(etcdstore.WitnessRead{ModRevision: 1 << 40, Header: 1 << 40}, rec, have)
+			if !gone || !strings.Contains(why, "could not be read") {
+				t.Fatalf("%s: a record that could not be read, against a witness far above: %v %q", name, gone, why)
+			}
+			w.Saw(1 << 41) // a witness followed meanwhile does not clear it
+			if rec, _ := w.Recorded(); rec != unreadWitness {
+				t.Fatalf("%s: following cleared the unread record: %d", name, rec)
+			}
+			// A replica restarted before it ever runs keeps the purge it owes:
+			// the unread record is saved, and read back as one (re-review 1 M-5).
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			w.keep(ctx)
+			var again bytes.Buffer
+			reopened := openWitness(path, "/port49/", &again)
+			if rec, have := reopened.Recorded(); rec != unreadWitness || !have ||
+				!strings.Contains(again.String(), "the first check purges every unspent token once") {
+				t.Fatalf("%s: reopened before a purge: %d %v %q", name, rec, have, again.String())
+			}
+			if gone, why := restored(etcdstore.WitnessRead{ModRevision: 1 << 40, Header: 1 << 40}, unreadWitness,
+				true); !gone || !strings.Contains(why, "could not be read") {
+				t.Fatalf("%s: reopened, not restored: %v %q", name, gone, why)
+			}
+			w.Reset(812) // the purge done
+			w.keep(ctx)
+			if got, have := openWitness(path, "/port49/", io.Discard).Recorded(); got != 812 || !have {
+				t.Fatalf("%s: after the purge: %d %v", name, got, have)
+			}
+		})
 	}
 }
 

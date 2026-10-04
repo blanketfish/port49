@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -1792,6 +1793,105 @@ func TestAWitnessRecordFromAnotherReplicaCatchesTheRestore(t *testing.T) {
 	startBroker(t, cfgB, &out, 4)
 	waitWithin(t, &out, fmt.Sprintf("the store's meta/witness is at revision %d, below the %d this replica saw: "+
 		"the store was restored from a snapshot", w0, recorded), 30*time.Second)
+}
+
+// An etcd restore with port49d running across it and the runbook's token
+// delete skipped: port49d finds meta/witness below what it followed and
+// refuses every redemption store_unavailable, so a token spent since the
+// snapshot is not redeemed again, until the first runner's purge; then
+// a token minted after it logs in (Task 15d).
+func TestPort49dRefusesARestoredTokenUntilTheRunnerPurges(t *testing.T) {
+	var out, log syncBuffer
+	e, o := stderr, stdout
+	t.Cleanup(func() { stderr, stdout = e, o })
+	stderr, stdout = &out, &log
+	f := splitFleet(t)
+	root := f.srv.Client(t, "root")
+	tacacs := startSplitDaemon(t, f.daemon, &out, 1)
+	metricsD := regexp.MustCompile(`port49d: metrics on (127\.0\.0\.1:\d+)`).FindStringSubmatch(out.String())[1]
+	api, stop := startBroker(t, f.broker, &out, 1)
+	waitFor(t, &out, "runner: recorded bundle ")
+	spent := mintOn(t, api, f.pki, "leaf1")
+	waitUntil(t, "a witness", func() bool { return witnessAt(t, root) > 0 })
+	if err := stop(); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := f.srv.Backup(t) // the token is unspent in it
+	w0 := witnessAt(t, root)
+	_, stop = startBroker(t, f.broker, &out, 2)
+	waitForCount(t, &out, "runner: took keyspace /port49/", 2)
+	dev := tacacsClient{t: t, addr: tacacs, key: []byte("run-test-secret")}
+	var st uint8
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(200 * time.Millisecond) {
+		// port49d may still be dark from Backup's restart.
+		if st = dev.login("alice", spent); st == wire.AuthenStatusPass || time.Now().After(deadline) {
+			break
+		}
+	}
+	if st != wire.AuthenStatusPass {
+		t.Fatalf("control: the token's first login: %d", st)
+	}
+	waitUntil(t, "the redemption's witness", func() bool { return witnessAt(t, root) > w0 })
+	time.Sleep(2 * witnessEvery) // port49d follows it
+	if err := stop(); err != nil {
+		t.Fatal(err)
+	}
+	top, err := root.Get(context.Background(), "/port49/v1/meta/witness")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.srv.Restore(t, snapshot) // no token delete, no meta/judged delete
+	// As --bump-revision moves revisions up, so the ledger's fence, which
+	// refuses a context read below what this port49d saw, is not what
+	// refuses the replay.
+	padPast(t, root, uint64(top.Header.Revision))
+	waitWithin(t, &out, fmt.Sprintf("port49d: store: meta/witness is at revision %d, below the ", w0), 20*time.Second)
+	waitBrokerMetricAt(t, metricsD, "port49_redemption_restore_guarded 1")
+	// Refused by the guard, before any token is looked up: the ledger's
+	// fence would refuse this one too, at its context read, since alice's
+	// context was written after the snapshot, but not a token whose
+	// context port49d's ledger no longer keeps.
+	looked := metricAt(t, metricsD, `port49_store_operations_total{op="candidates",outcome="ok"}`)
+	if st := dev.login("alice", spent); st != wire.AuthenStatusError {
+		t.Fatalf("a token spent since the snapshot, presented while guarded: %d", st)
+	}
+	if n := metricAt(t, metricsD, `port49_store_operations_total{op="candidates",outcome="ok"}`); n != looked {
+		t.Fatalf("a redemption while guarded looked up the tokens: %v after %v", n, looked)
+	}
+	if r := records(t, &log, "redeem"); r[len(r)-1]["reason"] != "store_unavailable" {
+		t.Fatalf("the refusal: %v", r[len(r)-1])
+	}
+	api, _ = startBroker(t, f.broker, &out, 3)
+	waitWithin(t, &out, "every unspent token is purged", 30*time.Second)
+	waitWithin(t, &out, "port49d: store: the broker runner's purge after the restore is done", 10*time.Second)
+	waitBrokerMetricAt(t, metricsD, "port49_redemption_restore_guarded 0")
+	if st := dev.login("alice", spent); st == wire.AuthenStatusPass {
+		t.Fatal("a token spent since the snapshot logged in after the purge")
+	}
+	if st := dev.login("alice", mintOn(t, api, f.pki, "leaf1")); st != wire.AuthenStatusPass {
+		t.Fatalf("control: a token minted after the purge: %d", st)
+	}
+}
+
+// metricAt is the value of series in the /metrics at addr, 0 when it is
+// not there.
+func metricAt(t *testing.T, addr, series string) float64 {
+	t.Helper()
+	resp, err := http.Get("http://" + addr + "/metrics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	m := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(series) + ` (\S+)$`).FindSubmatch(body)
+	if m == nil {
+		return 0
+	}
+	v, err := strconv.ParseFloat(string(m[1]), 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v
 }
 
 // witnessAt is meta/witness's ModRevision read as etcd's root, 0 when it

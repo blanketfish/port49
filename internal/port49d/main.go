@@ -554,8 +554,12 @@ func run(parent context.Context, cfgPath string) error {
 	// The daemon's copy of the standing marks, which every authorization,
 	// enable and receipt replay reads (plan 7d; Ruling 17).
 	authMarks := store.NewMarks()
+	// The restore guard is the process's too: a restore that outlasts
+	// hold_ttl ends a run, and the next must still know what was followed
+	// (plan 7e, Task 15d).
+	restored := newRestoreGuard(stderr)
 	return runLoop(parent, func(again bool) error {
-		return runOnce(parent, cfgPath, hup, again, ledger, alarm, authMarks)
+		return runOnce(parent, cfgPath, hup, again, ledger, alarm, authMarks, restored)
 	}, 5*time.Second)
 }
 
@@ -599,9 +603,9 @@ func runLoop(parent context.Context, once func(again bool) error, every time.Dur
 // serves until parent ends — main's is SIGINT or SIGTERM, a test's is its
 // own — or the store is gone, and then shuts down in the order the
 // package comment gives. again says a store gone ended the run before.
-// authMarks is the process's (run).
+// authMarks and restored are the process's (run).
 func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again bool, ledger *crypt.Ledger,
-	alarm *keyAlarm, authMarks *store.Marks) (err error) {
+	alarm *keyAlarm, authMarks *store.Marks, restored *restoreGuard) (err error) {
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		return err
@@ -772,6 +776,16 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		followDone := make(chan struct{})
 		go func() { defer close(followDone); sts.follow(fctx) }()
 		defer func() { stopFollow(); <-followDone }()
+	}
+	if sts.etcd != nil {
+		// The restore guard reads the store at once and every second, and
+		// redemptions wait for that first read once a witness was followed
+		// (Task 15d); joined before sts.close too.
+		restored.begin(m.RedemptionRestoreGuarded)
+		gctx, stopGuard := context.WithCancel(ctx)
+		guardDone := make(chan struct{})
+		go func() { defer close(guardDone); restored.keep(gctx, sts.etcd) }()
+		defer func() { stopGuard(); <-guardDone }()
 	}
 	if sts.probe != nil {
 		// With no hold, the probe is what notices a hung store while no
@@ -991,12 +1005,18 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		}
 		return out
 	}, time.Now)
+	// On etcd, a redemption asks the restore guard first (Task 15d); on
+	// memory nothing is restored.
+	var redeemGuard func() bool
+	if sts.etcd != nil {
+		redeemGuard = restored.Allows
+	}
 	deps := server.Deps{Admission: admit, Quarantined: watchQuarantine(live, m, time.Now), Keys: keySets, KeySeen: seen.Mark,
 		// The context indexes are given the context's own idle TTL: they exist
 		// to let revocation reach a live context, so they need to outlast
 		// nothing the context does not.
 		Authen: authen.New(handlerStore, log, lim, m, time.Now, newCtxID, cfg.ReceiptIdleTTL, cfg.ReceiptMaxAge,
-			cfg.ContextIdleTTL, cfg.Session.IndexTTL, tags).WithMarks(authMarks),
+			cfg.ContextIdleTTL, cfg.Session.IndexTTL, tags).WithMarks(authMarks).WithRedeemGuard(redeemGuard),
 		// `session.staleness_ceiling` defaults to 0 — no staleness check — and
 		// that default is the operational one, not an unfinished wiring: a
 		// finite ceiling denies a steadily working operator `context_stale`,
