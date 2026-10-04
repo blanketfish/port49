@@ -147,3 +147,24 @@ func TestABrokerOnAnotherUsersStateDirDoesNotStart(t *testing.T) {
 		t.Fatalf("%v\n%s", err, out.String())
 	}
 }
+
+// A broker.state_dir that is a symbolic link is refused, as before, but
+// named as one, with where it points, so the refusal does not read as
+// wrong when config.LoadBroker, which follows it, took it (Task 15 review
+// M-7).
+func TestAStateDirThatIsALinkIsNamedAsOne(t *testing.T) {
+	base := t.TempDir()
+	target := filepath.Join(base, "state")
+	if err := os.Mkdir(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(base, "link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	err := ownStateDir(link)
+	if err == nil || !strings.Contains(err.Error(), "is a symbolic link: point broker.state_dir at the directory "+
+		"itself ("+target+")") {
+		t.Fatalf("a state_dir that is a link: %v", err)
+	}
+}

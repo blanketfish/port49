@@ -52,6 +52,10 @@ func ownedHere(what, path string, dir bool) error {
 		return nil
 	case err != nil:
 		return err
+	case dir && fi.Mode()&fs.ModeSymlink != 0:
+		// config.LoadBroker followed it; this check does not, so say why.
+		target, _ := filepath.EvalSymlinks(path)
+		return fmt.Errorf("%s is a symbolic link: point broker.state_dir at the directory itself (%s)", what, target)
 	case dir && !fi.IsDir():
 		return fmt.Errorf("%s is not a directory", what)
 	case dir && fi.Mode().Perm()&0o022 != 0:
