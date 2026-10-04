@@ -508,6 +508,18 @@ func TestAKeptMarkStandsThroughAReloadUntilAWatchedLift(t *testing.T) {
 	}
 }
 
+// Keep of a mark not in force leaves nothing behind: a mark put in force
+// later, and lacking from a load, is lifted as any unkept mark is.
+func TestKeepOfAMarkNotInForceLeavesNothing(t *testing.T) {
+	alice := Revocation{Kind: RevocationPrincipal, Key: "user:alice@example.com", At: time.Unix(10, 0).UTC()}
+	m := NewMarks()
+	m.Keep(alice)
+	m.Set(alice, true)
+	if _, err := LoadMarks(context.Background(), &markFeed{}, m, nil); err != nil || m.Holds(alice.Kind, alice.Key) {
+		t.Fatalf("a Keep before the mark was in force kept it: %v %v", m.All(), err)
+	}
+}
+
 // Put is a correction only: it moves the time of a mark in force, and
 // never puts back one lifted meanwhile (review M2).
 func TestPutCorrectsOnlyAMarkInForce(t *testing.T) {

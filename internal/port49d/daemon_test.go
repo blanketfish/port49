@@ -78,6 +78,12 @@ func askAdmin(t *testing.T, srv *admin.Server, req admin.Request) admin.Response
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	go srv.Serve(ctx, ln)
+	return askSocket(t, p, req)
+}
+
+// askSocket asks the admin socket at p req.
+func askSocket(t *testing.T, p string, req admin.Request) admin.Response {
+	t.Helper()
 	c, err := net.Dial("unix", p)
 	if err != nil {
 		t.Fatal(err)
@@ -170,6 +176,16 @@ func TestTwoDaemonsServeOneKeyspace(t *testing.T) {
 	}
 	waitForCount(t, &out, "port49d: ledger: ", 2)
 	waitForCount(t, &out, "port49d: store: 0 revocation(s) in force from the store", 2)
+	// Its admin socket sends a revocation to port49-broker's (Ruling 13).
+	raw, err := os.ReadFile(daemonCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	socket := regexp.MustCompile(`(?m)^admin_socket: (\S+)$`).FindSubmatch(raw)[1]
+	if r := askSocket(t, string(socket), admin.Request{Op: "revoke", Principal: "user:alice@example.com"}); !strings.Contains(
+		r.Error, "port49-broker's admin socket") {
+		t.Fatalf("a revocation at the daemon's socket: %+v", r)
+	}
 }
 
 // An idle port49d whose store hangs goes dark on its probe alone: no
