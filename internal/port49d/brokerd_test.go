@@ -1,9 +1,439 @@
 package port49d
 
 import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
+	clientv3 "go.etcd.io/etcd/client/v3"
+
+	"github.com/rhwendt/port49/internal/broker"
+	"github.com/rhwendt/port49/internal/config"
+	"github.com/rhwendt/port49/internal/daemon/admin"
+	"github.com/rhwendt/port49/internal/daemon/metrics"
+	"github.com/rhwendt/port49/internal/store"
+	"github.com/rhwendt/port49/internal/store/crypt"
+	"github.com/rhwendt/port49/internal/store/etcd/etcdtest"
+	"github.com/rhwendt/port49/internal/tacacs/wire"
+	"github.com/rhwendt/port49/internal/testpki"
 )
+
+// fleet is the split deployment on one TLS etcd member with port49's
+// roles (plan 7e): a port49d.yaml with the daemon's identity alone
+// (etcdSplitServerWith), and a port49-broker.yaml with the broker's,
+// both reaching etcd through proxy, which the test can hang.
+type fleet struct {
+	daemon, broker string // the two configs
+	pki            string // the lab PKI: the broker's TLS files and the agents' client certificates
+	srv            *etcdtest.Server
+	proxy          *etcdtest.Proxy
+	inventory      string
+	// policy is the policy file a broker copied from f.broker's at its
+	// write starts with; editPolicy rewrites f.broker's own.
+	policy string
+}
+
+// splitFleet is the fleet on minimalPolicy.
+func splitFleet(t *testing.T) *fleet {
+	t.Helper()
+	return splitFleetWith(t, minimalPolicy, nil)
+}
+
+// splitFleetWith is the fleet on policyBody, with a lab client certificate
+// for each of others (brokerConfigWith).
+func splitFleetWith(t *testing.T, policyBody string, others []string) *fleet {
+	t.Helper()
+	f := &fleet{}
+	f.daemon, f.proxy, f.srv = etcdSplitServerWith(t, policyBody, others)
+	raw, err := os.ReadFile(f.daemon)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.inventory = regexp.MustCompile(`(?m)^inventory_file: (\S+)$`).FindStringSubmatch(string(raw))[1]
+	f.policy = regexp.MustCompile(`(?m)^policy: \{file: ([^,]+),`).FindStringSubmatch(string(raw))[1]
+	f.pki = filepath.Dir(f.policy) // brokerConfigWith writes the policy beside the PKI
+	f.broker = f.brokerVia(t, f.proxy.Addr(), "port49-broker", "")
+	f.policy = f.policyOf(t, f.broker)
+	return f
+}
+
+// brokerVia writes a port49-broker.yaml reaching etcd at endpoint as the
+// etcd user cn, with extra appended under store.etcd, and returns its
+// path. Each has its own broker.listen and metrics_listen (both
+// 127.0.0.1:0), its own admin_socket, its own broker.state_dir (mode
+// 0700), and its own broker.policy_file, a copy of f.policy, in a safeDir.
+func (f *fleet) brokerVia(t *testing.T, endpoint, cn, extra string) string {
+	t.Helper()
+	dir := safeDir(t)
+	state := filepath.Join(dir, "state")
+	if err := os.Mkdir(state, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(f.policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pol := filepath.Join(dir, "policy.yaml")
+	writePolicyFile(t, pol, string(body))
+	bc, bk := f.srv.ClientFiles(t, cn)
+	p := filepath.Join(dir, "port49-broker.yaml")
+	if err := os.WriteFile(p, []byte(fmt.Sprintf(`
+metrics_listen: "127.0.0.1:0"
+inventory_file: %s
+key_refs: [k]
+encryption:
+  current: {id: v1, secret_env: T_RUN_ENC}
+admin_socket: %s
+broker:
+  listen: "127.0.0.1:0"
+  tls_cert_file: %s
+  tls_key_file: %s
+  client_ca_file: %s
+  policy_file: %s
+  state_dir: %s
+  policy_watch_interval: 1s
+  certificate_status: {disabled: true}
+store:
+  backend: etcd
+  etcd:
+    endpoints: [https://%s]
+    ca_file: %s
+    broker: {cert_file: %s, key_file: %s}
+    call_timeout: 200ms
+    hold_ttl: 10s
+    breaker: {failures: 3, open_for: 2s}
+%s`, f.inventory, filepath.Join(dir, "b.sock"), filepath.Join(f.pki, testpki.LabServerCert),
+		filepath.Join(f.pki, testpki.LabServerKey), filepath.Join(f.pki, testpki.LabCA), pol, state, endpoint,
+		filepath.Join(f.srv.Dir, "ca.pem"), bc, bk, extra)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// copyBroker writes another replica's port49-broker.yaml: f.broker's, with
+// its own listeners, admin socket, state_dir and policy file.
+func (f *fleet) copyBroker(t *testing.T) string {
+	t.Helper()
+	return f.brokerVia(t, f.proxy.Addr(), "port49-broker", "")
+}
+
+// copyBrokerVia is copyBroker with the endpoint through a proxy of its own,
+// which the test hangs to cut that replica off alone.
+func (f *fleet) copyBrokerVia(t *testing.T) (string, *etcdtest.Proxy) {
+	t.Helper()
+	p := etcdtest.NewProxy(t, strings.TrimPrefix(f.srv.Endpoint, "https://"))
+	return f.brokerVia(t, p.Addr(), "port49-broker", ""), p
+}
+
+// policyOf is the broker.policy_file the port49-broker.yaml at cfg names.
+func (f *fleet) policyOf(t *testing.T, cfg string) string {
+	t.Helper()
+	raw, err := os.ReadFile(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return regexp.MustCompile(`(?m)^  policy_file: (\S+)$`).FindStringSubmatch(string(raw))[1]
+}
+
+// editPolicy rewrites f.broker's policy file with one comment line added,
+// so its bundle differs.
+func (f *fleet) editPolicy(t *testing.T) {
+	t.Helper()
+	body, err := os.ReadFile(f.policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writePolicyFile(t, f.policy, string(body)+"# edited with no broker running\n")
+}
+
+// bundle is the bundle f.broker's policy file loads into, read as
+// loadPolicy reads it.
+func (f *fleet) bundle(t *testing.T) string {
+	t.Helper()
+	cfg, err := config.LoadBroker(f.broker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inv, _, err := fencedInventory(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Inventory = inv
+	pol, err := loadPolicy(cfg, "the test's inventory")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pol.Bundle
+}
+
+// adminSocketOf is the admin_socket the config at cfg names.
+func adminSocketOf(t *testing.T, cfg string) string {
+	t.Helper()
+	raw, err := os.ReadFile(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return regexp.MustCompile(`(?m)^admin_socket: (\S+)$`).FindStringSubmatch(string(raw))[1]
+}
+
+// startBroker runs port49-broker on cfg until the test ends or stop is
+// called, and returns the API address of the nth broker serving in out:
+// it waits for the nth "port49-broker: listening on" line, any replica's,
+// and reads the newest.
+func startBroker(t *testing.T, cfg string, out *syncBuffer, n int) (apiAddr string, stop func() error) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- runBroker(ctx, cfg) }()
+	stopped := false
+	stop = func() error {
+		if stopped {
+			return nil
+		}
+		stopped = true
+		cancel()
+		select {
+		case err := <-done:
+			return err
+		case <-time.After(15 * time.Second):
+			return errDidNotStop
+		}
+	}
+	t.Cleanup(func() { // before stderr is restored: registered after the caller's
+		if err := stop(); errors.Is(err, errDidNotStop) {
+			t.Error(err)
+		}
+	})
+	deadline := time.Now().Add(30 * time.Second)
+	for strings.Count(out.String(), "port49-broker: listening on ") < n {
+		select {
+		case err := <-done:
+			t.Fatalf("port49-broker returned before serving: %v\n%s", err, out.String())
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("waited 30s for port49-broker ×%d; have %q", n, out.String())
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	addrs := brokerLine.FindAllStringSubmatch(out.String(), -1)
+	return addrs[len(addrs)-1][1], stop
+}
+
+// brokerLine is port49-broker's serving line: its API and metrics.
+var brokerLine = regexp.MustCompile(`port49-broker: listening on (127\.0\.0\.1:\d+), metrics on (127\.0\.0\.1:\d+)`)
+
+// waitBrokerMetric waits up to 10s for the newest port49-broker's
+// /metrics to hold line.
+func waitBrokerMetric(t *testing.T, out *syncBuffer, line string) {
+	t.Helper()
+	ms := brokerLine.FindAllStringSubmatch(out.String(), -1)
+	if len(ms) == 0 {
+		t.Fatalf("no port49-broker serves: %s", out.String())
+	}
+	want := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(line) + `$`)
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		scraped, err := http.Get("http://" + ms[len(ms)-1][2] + "/metrics")
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(scraped.Body)
+		scraped.Body.Close()
+		if want.Match(body) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("port49-broker's /metrics lacks %q:\n%s", line, body)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// mintOn is run_test.go's mint, on a port49-broker's API.
+func mintOn(t *testing.T, api, pki, device string) string {
+	t.Helper()
+	return mint(t, api, pki, device)
+}
+
+// mintOnAs is run_test.go's mintAs, on a port49-broker's API.
+func mintOnAs(t *testing.T, api, pki, device, email string) string {
+	t.Helper()
+	return mintAs(t, api, pki, device, email)
+}
+
+// loadBroker loads the port49-broker.yaml at path, and its keys.
+func loadBroker(t *testing.T, path string) (config.Config, crypt.Keys) {
+	t.Helper()
+	cfg, err := config.LoadBroker(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys, err := cfg.EncryptionKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cfg, keys
+}
+
+// openBrokerFor is openBroker on the port49-broker.yaml at path, closed
+// when the test ends.
+func openBrokerFor(t *testing.T, ctx context.Context, path string, m *metrics.Metrics,
+	out io.Writer) (brokerStores, crypt.Keys) {
+	t.Helper()
+	cfg, keys := loadBroker(t, path)
+	bs, err := openBroker(ctx, cfg, keys, m, out, crypt.NewLedger(), store.NewMarks())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { bs.raw.Close() })
+	return bs, keys
+}
+
+// The first port49-broker takes the runner's hold and runs the takeover;
+// a second serves the API and says who runs. When the runner stops, the
+// second takes over within hold_ttl and a third (Review Focus 4; Ruling 6).
+func TestARunnerThatStopsIsReplaced(t *testing.T) {
+	var out syncBuffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	f := splitFleet(t) // hold_ttl 10s
+	_, stopA := startBroker(t, f.broker, &out, 1)
+	waitFor(t, &out, "runner: took keyspace /port49/")
+	apiB, _ := startBroker(t, f.copyBroker(t), &out, 2)
+	waitFor(t, &out, "this replica serves the API and takes over if that one stops")
+	mintOn(t, apiB, f.pki, "leaf1") // the second serves the API before it runs anything
+	start := time.Now()
+	if err := stopA(); err != nil {
+		t.Fatal(err)
+	}
+	waitCountWithin(t, &out, "runner: took keyspace /port49/", 2, 30*time.Second)
+	if d := time.Since(start); d > 10*time.Second+10*time.Second/3+5*time.Second {
+		t.Fatalf("the takeover took %v", d)
+	}
+	// A graceful stop lets go of the lease at once: the second takes the
+	// lock within a second and waits a third of hold_ttl, never the lease's
+	// lapse.
+	if d := time.Since(start); d > 10*time.Second/3+5*time.Second {
+		t.Fatalf("the takeover after a graceful stop took %v: the lease was not let go", d)
+	}
+}
+
+// A runner cut off from etcd, which neither releases its lease nor renews
+// it (a crash, a partition, or a pause past its fence), is replaced once
+// its lease lapses: within hold_ttl and a third. Back, it says it lost the
+// hold and waits behind the new runner; it runs nothing while that one
+// holds (Review Focus 4; pre-flight M9). A graceful stop releases the
+// lease at once, so TestARunnerThatStopsIsReplaced alone never reaches
+// this path.
+func TestARunnerCutOffIsReplacedAfterItsLease(t *testing.T) {
+	var out syncBuffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	f := splitFleet(t)                 // hold_ttl 10s
+	cfgA, proxyA := f.copyBrokerVia(t) // A reaches etcd through a proxy of its own
+	startBroker(t, cfgA, &out, 1)
+	waitFor(t, &out, "runner: took keyspace /port49/")
+	startBroker(t, f.copyBroker(t), &out, 2)
+	waitFor(t, &out, "this replica serves the API and takes over if that one stops")
+	start := time.Now()
+	proxyA.Hang(true)
+	waitWithin(t, &out, "runner: lost the keyspace's hold", 15*time.Second)
+	waitCountWithin(t, &out, "runner: took keyspace /port49/", 2, 30*time.Second)
+	if d := time.Since(start); d > 10*time.Second+10*time.Second/3+5*time.Second {
+		t.Fatalf("the takeover after a lease never released took %v", d)
+	}
+	proxyA.Hang(false)
+	time.Sleep(10 * time.Second) // A tries again every 5s; B holds throughout
+	if n := strings.Count(out.String(), "runner: took keyspace /port49/"); n != 2 {
+		t.Fatalf("a runner cut off and back took the hold while another held it: %d takes", n)
+	}
+}
+
+// A clean takeover, with nothing owed after its carry, records its bundle
+// as judged itself: no reloader pass runs to do it (pre-flight I2). The
+// next takeover on the same bundle purges nothing.
+func TestACleanTakeoverRecordsItsBundleAsJudged(t *testing.T) {
+	var out syncBuffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	f := splitFleet(t)
+	_, stop := startBroker(t, f.broker, &out, 1)
+	waitFor(t, &out, "runner: recorded bundle ")
+	resp, err := f.srv.Client(t, "root").Get(context.Background(), "/port49/v1/meta/judged")
+	if err != nil || len(resp.Kvs) != 1 || !strings.Contains(string(resp.Kvs[0].Value), `"bundle":"`+f.bundle(t)+`"`) {
+		t.Fatalf("meta/judged after a clean takeover: %v %v", resp, err)
+	}
+	// The takeover records this start's seal keys (Ruling 6, step 1).
+	if resp, err := f.srv.Client(t, "root").Get(context.Background(), "/port49/v1/meta/seal_keys"); err != nil ||
+		len(resp.Kvs) != 1 || !strings.Contains(string(resp.Kvs[0].Value), `"current":"v1"`) {
+		t.Fatalf("meta/seal_keys after a takeover: %v %v", resp, err)
+	}
+	if err := stop(); err != nil {
+		t.Fatal(err)
+	}
+	startBroker(t, f.broker, &out, 2)
+	waitFor(t, &out, "is the one the last runner judged; no unspent token purged")
+}
+
+// A takeover purges the unspent tokens only when the bundle in force is
+// not the one the last runner judged (Ruling 7): a broker restart on the
+// same policy keeps a minted token redeemable; an edit made with no
+// broker running purges it, and an idempotent replay mints afresh. Each
+// step waits on the judged line, never on a gauge already at 0 (pre-flight
+// I14).
+func TestATakeoverPurgesOnlyAnUnjudgedBundle(t *testing.T) {
+	var out, log syncBuffer
+	e, o := stderr, stdout
+	t.Cleanup(func() { stderr, stdout = e, o })
+	stderr, stdout = &out, &log
+	f := splitFleet(t)
+	tacacs := startSplitDaemon(t, f.daemon, &out, 1)
+	api, stop := startBroker(t, f.broker, &out, 1)
+	waitForCount(t, &out, "runner: recorded bundle ", 1)
+	kept := mintOn(t, api, f.pki, "leaf1")
+	keyed := mintKeyed(t, api, f.pki, "leaf1", "purge-replay")
+	stop()
+	api, stop = startBroker(t, f.broker, &out, 2)
+	waitFor(t, &out, "is the one the last runner judged; no unspent token purged")
+	dev := tacacsClient{t: t, addr: tacacs, key: []byte("run-test-secret")}
+	if st := dev.login("alice", kept); st != wire.AuthenStatusPass {
+		t.Fatalf("control: a token minted before a broker restart on the same policy: %d", st)
+	}
+	spare := mintOn(t, api, f.pki, "leaf1")
+	stop()
+	f.editPolicy(t) // a grant's comment changed: another bundle
+	api, _ = startBroker(t, f.broker, &out, 3)
+	// The second purge line: the first takeover, with nothing recorded,
+	// said one too.
+	waitForCount(t, &out, "unspent token(s) purged", 2)
+	if st := dev.login("alice", spare); st == wire.AuthenStatusPass {
+		t.Fatal("a token minted under a bundle no runner judged was not purged")
+	}
+	waitForCount(t, &out, "runner: recorded bundle ", 3) // the purge's takeover records the new bundle too
+	replayed := mintKeyed(t, api, f.pki, "leaf1", "purge-replay")
+	if replayed == keyed {
+		t.Fatal("a replay of a mint from before the purge was answered with the purged token")
+	}
+	if st := dev.login("alice", replayed); st != wire.AuthenStatusPass {
+		t.Fatalf("the token a replay minted again: %d", st)
+	}
+}
 
 // A token another replica minted under the replaced policy before it
 // reloaded is judged by the runner's settle pass (Ruling 8). The settle's
@@ -25,4 +455,623 @@ func TestTheSettlePassJudgesALateReplicasTokens(t *testing.T) {
 	if tokenStillRedeemable(t, rig, tok) {
 		t.Fatal("the settle pass kept a token minted under the replaced policy after the first pass")
 	}
+}
+
+// A runner whose hold was lost, and whose lease is live, says the keyspace
+// is still held by this replica's last run, never that it is run by
+// itself; a holder that is another replica's is named as that one (final
+// review 7d-2 I-2, 4001732; pre-flight M7).
+func TestAHoldStillOnThisReplicasLastRunIsSaidAsIts(t *testing.T) {
+	f := splitFleet(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	holding, _ := openBrokerFor(t, ctx, f.broker, metrics.New(prometheus.NewRegistry()), io.Discard)
+	waiting, _ := openBrokerFor(t, ctx, f.copyBroker(t), metrics.New(prometheus.NewRegistry()), io.Discard)
+	cfg, _ := loadBroker(t, f.broker)
+	last := "port49-broker on replica-a (pid 4242, since 2026-10-04T00:00:00Z)"
+	_, release, err := holding.raw.Hold(ctx, cfg.Store.Etcd.HoldTTL, last, func(string) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	for _, c := range []struct {
+		held, want, never string
+	}{
+		{last, fmt.Sprintf("port49-broker: runner: keyspace /port49/ is still held by this replica's last run "+
+			"(%q); waiting up to hold_ttl (10s) for its lease to expire\n", last), "is run by"},
+		{"", fmt.Sprintf("port49-broker: runner: keyspace /port49/ is run by %q; this replica serves the API and "+
+			"takes over if that one stops\n", last), "this replica's last run"},
+	} {
+		var out syncBuffer
+		e := stderr
+		stderr = &out
+		r := &runner{cfg: cfg, raw: waiting.raw, m: metrics.New(prometheus.NewRegistry()), who: last, held: c.held}
+		if c.held == "" {
+			r.who = "port49-broker on replica-b (pid 7, since 2026-10-04T00:00:00Z)"
+		}
+		rctx, rcancel := context.WithCancel(ctx)
+		done := make(chan struct{})
+		go func() { defer close(done); r.run(rctx) }()
+		waitCountWithin(t, &out, "keyspace /port49/", 1, 10*time.Second)
+		rcancel()
+		<-done
+		stderr = e
+		if got := out.String(); !strings.Contains(got, c.want) || strings.Contains(got, c.never) {
+			t.Fatalf("with this replica's last holder %q:\n%s", c.held, got)
+		}
+	}
+}
+
+// Under store.etcd.roles: unenforced the broker's role check still runs:
+// an identity that cannot do the broker's work (the daemon's role, which
+// cannot write meta/) is refused at start, naming store.etcd.broker (Task
+// 11; plan 7e).
+func TestTheBrokersRolesCheckRunsUnderUnenforced(t *testing.T) {
+	f := splitFleet(t)
+	unenforced := f.brokerVia(t, f.proxy.Addr(), "port49-daemon", "    roles: unenforced\n")
+	cfg, keys := loadBroker(t, unenforced)
+	var out syncBuffer
+	_, err := openBroker(context.Background(), cfg, keys, metrics.New(prometheus.NewRegistry()), &out,
+		crypt.NewLedger(), store.NewMarks())
+	var fault *storeFault
+	if !errors.As(err, &fault) || !errors.Is(err, store.ErrRefused) || !strings.Contains(err.Error(), "store.etcd.broker") {
+		t.Fatalf("unenforced, a broker identity with the daemon's role: %v\n%s", err, out.String())
+	}
+	ok := f.brokerVia(t, f.proxy.Addr(), "port49-broker", "    roles: unenforced\n")
+	cfg, keys = loadBroker(t, ok)
+	bs, err := openBroker(context.Background(), cfg, keys, metrics.New(prometheus.NewRegistry()), &out,
+		crypt.NewLedger(), store.NewMarks())
+	if err != nil {
+		t.Fatalf("unenforced, the broker's own identity: %v", err)
+	}
+	bs.raw.Close()
+	if !strings.Contains(out.String(), "port49-broker: store.etcd.roles: unenforced") {
+		t.Fatalf("said %q", out.String())
+	}
+}
+
+// port49-broker's sealing layer is one, and its reads, the runner's
+// included (runner.st), share one sayer: a key is said once, and the line
+// is port49-broker's, never port49d's (unopenableSayer; pre-flight M44).
+func TestTheBrokersStoresShareOneSayer(t *testing.T) {
+	f := splitFleet(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var out syncBuffer
+	bs, _ := openBrokerFor(t, ctx, f.broker, metrics.New(prometheus.NewRegistry()), &out)
+	fctx, stopFollow := context.WithCancel(ctx)
+	followDone := make(chan struct{})
+	go func() { defer close(followDone); bs.followContexts(fctx) }()
+	defer func() { stopFollow(); <-followDone }()
+	k := store.ContextKey{NAS: "leaf1", Username: "alice"}
+	retired := crypt.Keys{Current: crypt.Key{ID: "retired", Bytes: [32]byte{7}}}
+	if err := crypt.Wrap(bs.raw, retired, nil).PutContext(ctx, k, store.Context{CtxID: "c", Principal: "user:alice",
+		Username: "alice", AuthTime: time.Now(), RefreshedAt: time.Now()}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	r := &runner{st: bs.st}
+	for _, read := range []store.Store{bs.st, r.st} {
+		if _, err := read.GetContext(ctx, k); !errors.Is(err, crypt.ErrUnknownKey) {
+			t.Fatalf("a context under a retired key: %v", err)
+		}
+	}
+	got := out.String()
+	if n := strings.Count(got, `sealed under key id "retired"`); n != 1 ||
+		!strings.Contains(got, `port49-broker: crypt: a context is sealed under key id "retired", which this `+
+			`port49-broker does not hold`) || strings.Contains(got, "port49d") {
+		t.Fatalf("said %d times: %q", n, got)
+	}
+}
+
+// The broker half of TestOpenStoresFencesEachLayerUnderItsGuard: the
+// broker's layer is guard.WrapRev(crypt.Fenced(raw, ledger), …), so with
+// its feed not running a context written after the start's scan is not
+// read: a context-pool timeout at call_timeout in the broker's guard,
+// counted in port49_store_fence_timeouts_total (pre-flight C1; final
+// review 7e-1 M-4).
+func TestTheBrokersStoreIsFencedUnderItsGuard(t *testing.T) {
+	f := splitFleet(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m := metrics.New(prometheus.NewRegistry())
+	bs, keys := openBrokerFor(t, ctx, f.broker, m, io.Discard)
+	other := crypt.NewLedger()
+	other.SetBase(bs.raw.Seen() + 1)
+	k := store.ContextKey{NAS: "leaf1", Username: "alice"}
+	if err := crypt.Wrap(bs.raw, keys, nil, crypt.WithLedger(other)).PutContext(ctx, k, store.Context{CtxID: "c",
+		Principal: "user:alice", Username: "alice", AuthTime: time.Now(), RefreshedAt: time.Now()},
+		time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := bs.st.GetContext(ctx, k); !errors.Is(err, store.ErrUnavailable) {
+		t.Fatalf("the broker read %q with its feed not running: %v", got.CtxID, err)
+	}
+	if n := testutil.ToFloat64(m.StoreCalls.WithLabelValues("broker", "context", "timeout")); n != 1 {
+		t.Fatalf("the broker's guard counted %v context timeouts", n)
+	}
+	if n := testutil.ToFloat64(m.StoreFenceTimeouts); n != 1 {
+		t.Fatalf("port49_store_fence_timeouts_total = %v, want 1", n)
+	}
+}
+
+// What the takeover's carry left decides what the takeover does (Rulings
+// T12-a, T12-c, T12-d): an outage or an unvisited principal holds it,
+// returned for the retry to wait on; a busy context goes on owing a pass
+// at once, an unheld key goes on owing the next retry, and anything else
+// is returned to end it (Task 12 review I-1; re-review m-5).
+func TestTheStartsCarryDecidesHoldOrOpen(t *testing.T) {
+	other := errors.New("test: something else")
+	unvisited := fmt.Errorf("pass: %w", broker.ErrPrincipalUnvisited)
+	outage := fmt.Errorf("pass: %w", store.ErrUnavailable)
+	for _, c := range []struct {
+		name  string
+		err   error
+		owed  refreshOwed
+		again error
+		waits error // what the takeover's retry waits on, for a hold
+	}{
+		{"nothing left", nil, refreshOwed{}, nil, nil},
+		{"an unvisited principal holds", unvisited, refreshOwed{}, unvisited, broker.ErrPrincipalUnvisited},
+		{"an outage holds", outage, refreshOwed{}, outage, store.ErrUnavailable},
+		{"a busy context opens owing a pass now", fmt.Errorf("pass: %w", store.ErrConflict),
+			refreshOwed{owed: true, now: true}, nil, nil},
+		{"an unheld key opens owing the next retry", fmt.Errorf("pass: %w", broker.ErrLeftUnderUnheldKey),
+			refreshOwed{owed: true}, nil, nil},
+		{"anything else ends the start", other, refreshOwed{}, other, nil},
+	} {
+		owed, again := startLeftBy(c.err)
+		if owed != c.owed || again != c.again {
+			t.Errorf("%s: startLeftBy = %+v, %v; want %+v, %v", c.name, owed, again, c.owed, c.again)
+		}
+		if c.waits != nil && !errors.Is(again, c.waits) {
+			t.Errorf("%s: the takeover's retry would not wait on %v", c.name, again)
+		}
+	}
+}
+
+// A live session survives a port49d restart on etcd, and a token minted
+// before a broker restart on the same policy survives it too (Ruling 7):
+// the takeover judges nothing changed, and purges nothing
+// (TestATakeoverPurgesOnlyAnUnjudgedBundle has the purge).
+func TestRunOnEtcdKeepsALoginAcrossARestart(t *testing.T) {
+	var out, log syncBuffer
+	e, o := stderr, stdout
+	t.Cleanup(func() { stderr, stdout = e, o })
+	stderr, stdout = &out, &log
+	f := splitFleet(t)
+	api, stopBroker := startBroker(t, f.broker, &out, 1)
+	waitFor(t, &out, "runner: recorded bundle ")
+	tacacs, stopDaemon := runSplitDaemon(t, f.daemon, &out, 1)
+	dev := tacacsClient{t: t, addr: tacacs, key: []byte("run-test-secret")}
+	loginSession(t, dev, mintOn(t, api, f.pki, "leaf1"), &log)
+	spare := mintOn(t, api, f.pki, "leaf1")
+	if !dev.permits("alice", "configure") {
+		t.Fatal("before the restart")
+	}
+	if err := stopDaemon(); err != nil {
+		t.Fatal(err)
+	}
+	tacacs, _ = runSplitDaemon(t, f.daemon, &out, 2)
+	dev = tacacsClient{t: t, addr: tacacs, key: []byte("run-test-secret")}
+	if !dev.permits("alice", "configure") {
+		t.Fatalf("after port49d's restart the session's next command was not answered from its context; log %s",
+			log.String())
+	}
+	if err := stopBroker(); err != nil {
+		t.Fatal(err)
+	}
+	startBroker(t, f.broker, &out, 2)
+	waitFor(t, &out, "is the one the last runner judged; no unspent token purged")
+	waitForCount(t, &out, "live context(s) carried onto the policy in force", 2)
+	if !dev.permits("alice", "configure") {
+		t.Fatalf("after the broker's restart; log %s", log.String())
+	}
+	if st := dev.login("alice", spare); st != wire.AuthenStatusPass {
+		t.Fatalf("a token minted before a broker restart on the same policy: %d", st)
+	}
+}
+
+// A mark put into the store with every port49-broker stopped, as etcd's
+// root (Ruling 13's break-glass with no broker host, in place of 7d's file
+// edit), reaches the live context the store kept at the runner's takeover
+// (pre-flight C1; spec §14, "A mark at start").
+func TestAStartAppliesAStandingMarkToAKeptContext(t *testing.T) {
+	var out, log syncBuffer
+	e, o := stderr, stdout
+	t.Cleanup(func() { stderr, stdout = e, o })
+	stderr, stdout = &out, &log
+	f := splitFleet(t)
+	tacacs := startSplitDaemon(t, f.daemon, &out, 1)
+	api, stop := startBroker(t, f.broker, &out, 1)
+	dev := tacacsClient{t: t, addr: tacacs, key: []byte("run-test-secret")}
+	loginSession(t, dev, mintOn(t, api, f.pki, "leaf1"), &log)
+	principal := lastCommandPrincipal(t, &log) // the principal the session's records name
+	if err := stop(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.srv.Client(t, "root").Put(context.Background(), "/port49/v1/rv/principal/"+principal,
+		fmt.Sprintf(`{"kind":"principal","key":%q,"at":%q,"origin":"etcdctl"}`, principal,
+			time.Now().UTC().Format(time.RFC3339Nano))); err != nil {
+		t.Fatal(err)
+	}
+	startBroker(t, f.broker, &out, 2)
+	// The takeover itself marked it, not only the daemon's marks at request
+	// time (re-check R-M1): without ApplyMarksAtStart this line is absent.
+	waitFor(t, &out, "port49-broker: runner: 1 standing revocation(s) applied to the live contexts the store kept "+
+		"(1 context(s) marked revoked)")
+	if dev.permits("alice", "configure") {
+		t.Fatal("a kept context under a standing mark was permitted")
+	}
+	if r := lastCommand(t, &log); r["reason"] != "credential_revoked" {
+		t.Fatalf("the denial: %v", r)
+	}
+}
+
+// A context put back at a key port49d's start never read is denied: the
+// start sets the ledger's base once it has read every kept context, so a
+// record a store writer puts back afterwards is never taken as that key's
+// (decision 35, a start on etcd, step 7; re-check 2 I1).
+func TestAStartSealsTheLedgerOnceItHasReadTheStore(t *testing.T) {
+	var out, log syncBuffer
+	e, o := stderr, stdout
+	t.Cleanup(func() { stderr, stdout = e, o })
+	stderr, stdout = &out, &log
+	f := splitFleet(t)
+	root := f.srv.Client(t, "root")
+	ctx := context.Background()
+	api, stopBroker := startBroker(t, f.broker, &out, 1)
+	tacacs, stopDaemon := runSplitDaemon(t, f.daemon, &out, 1)
+	dev := tacacsClient{t: t, addr: tacacs, key: []byte("run-test-secret")}
+	loginSession(t, dev, mintOn(t, api, f.pki, "leaf1"), &log)
+	if !dev.permits("alice", "configure") {
+		t.Fatalf("before the restart: %v; out %s", lastCommand(t, &log), out.String())
+	}
+	// Both stopped, the runner's keeper's last write made: nothing writes
+	// the ledger record back after the test deletes it.
+	if err := stopDaemon(); err != nil {
+		t.Fatal(err)
+	}
+	if err := stopBroker(); err != nil {
+		t.Fatal(err)
+	}
+	// A store writer saves alice's sealed context and deletes it, and the
+	// ledger record with it, so the next start finds nothing at its key:
+	// the base alone judges it (the record's own test is
+	// TestAStartSeededFromTheLedgerRecordDeniesAPutBack).
+	resp, err := root.Get(ctx, "/port49/v1/c/", clientv3.WithPrefix())
+	if err != nil || len(resp.Kvs) != 1 {
+		t.Fatalf("the kept contexts: %v %v", resp, err)
+	}
+	saved := resp.Kvs[0]
+	if _, err := root.Delete(ctx, string(saved.Key)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := root.Delete(ctx, "/port49/v1/lw/", clientv3.WithPrefix()); err != nil {
+		t.Fatal(err)
+	}
+	tacacs, _ = runSplitDaemon(t, f.daemon, &out, 2)
+	// Each start's scan says its ledger; neither found a context, so the
+	// base alone judges a record at alice's key.
+	waitForCount(t, &out, "port49d: ledger: 0 context key(s) known (0 from the ledger record); following the "+
+		"store from revision ", 2)
+	// ... and puts it back once the start has read the store.
+	if _, err := root.Put(ctx, string(saved.Key), string(saved.Value)); err != nil {
+		t.Fatal(err)
+	}
+	dev = tacacsClient{t: t, addr: tacacs, key: []byte("run-test-secret")}
+	if dev.permits("alice", "configure") {
+		t.Fatal("a context put back at a key the start never read was taken as that key's")
+	}
+	// Under port49's roles the daemon's identity watches the contexts: the
+	// feed runs, and never stopped.
+	waitMetric(t, &out, `port49_store_feed_up{feed="contexts"} 1`)
+	if strings.Contains(out.String(), "the context feed stopped") {
+		t.Fatalf("the feed stopped: %s", out.String())
+	}
+}
+
+// A store that hangs in the middle of a login: the device hears ERROR
+// within store.packet_deadline, never silence (Review Focus 1). Then the
+// store has been gone long enough, and port49d closes every listener and
+// says why, on its guard and probe, without exiting; port49-broker's
+// runner loses its hold and keeps serving. When the store returns, the
+// same port49d listens again, and the runner takes the hold again (Ruling
+// 11; pre-flight I19; Review Focus 4). While port49d waits, /readyz says
+// so (I19), and an earlier version of the session's own context, which a
+// store writer puts back in the dark, is denied after the return: the run
+// after a store gone keeps the process's ledger (decision 35; Ruling
+// T12-b). The runner's carry revokes the record put back (Ruling T13b-a),
+// and that revocation stands on the key as the ledger's floor: the
+// session's own record, put back after it, is answered revoked (final
+// review 7d-2 I-1).
+func TestAHungStoreGoesDarkAndServesAgainWhenItReturns(t *testing.T) {
+	var out, log syncBuffer
+	e, o := stderr, stdout
+	t.Cleanup(func() { stderr, stdout = e, o })
+	stderr, stdout = &out, &log
+	f := splitFleet(t)
+	root := f.srv.Client(t, "root")
+	sctx := context.Background()
+	api, _ := startBroker(t, f.broker, &out, 1)
+	waitFor(t, &out, "runner: recorded bundle ")
+
+	// An earlier port49d's login, whose record a store writer keeps ...
+	tacacs, stop := runSplitDaemon(t, f.daemon, &out, 1)
+	loginSession(t, tacacsClient{t: t, addr: tacacs, key: []byte("run-test-secret")},
+		mintOn(t, api, f.pki, "leaf1"), &log)
+	if err := stop(); err != nil {
+		t.Fatal(err)
+	}
+	kept, err := root.Get(sctx, "/port49/v1/c/", clientv3.WithPrefix())
+	if err != nil || len(kept.Kvs) != 1 {
+		t.Fatalf("the kept contexts: %v %v", kept, err)
+	}
+	earlier := kept.Kvs[0]
+
+	tacacs, stopDark := runSplitDaemon(t, f.daemon, &out, 2)
+	dev := tacacsClient{t: t, addr: tacacs, key: []byte("run-test-secret")}
+	loginSession(t, dev, mintOn(t, api, f.pki, "leaf1"), &log)
+	ids := map[string]bool{}
+	for _, m := range regexp.MustCompile(`"ctx_id":"([^"]+)"`).FindAllStringSubmatch(log.String(), -1) {
+		ids[m[1]] = true
+	}
+	if len(ids) != 1 {
+		t.Fatalf("the second login did not join the earlier one's context: ctx_ids %v", ids)
+	}
+	tok := mintOn(t, api, f.pki, "leaf1")
+	// A connection a device holds open across the hang (re-check R-M0).
+	held, err := net.DialTimeout("tcp", tacacs, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+
+	f.proxy.Hang(true)
+	start := time.Now()
+	if st := dev.login("alice", tok); st != wire.AuthenStatusError || time.Since(start) > 1500*time.Millisecond {
+		t.Fatalf("a login on a hung store: status %d after %v", st, time.Since(start))
+	}
+	waitCountWithin(t, &out, "closing every listener so that devices use their local method", 1, 30*time.Second)
+	// Reset, not closed with a FIN: L28 measured the fast fall to local on
+	// a reset.
+	held.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if _, err := held.Read(make([]byte, 1)); !errors.Is(err, syscall.ECONNRESET) {
+		t.Fatalf("a held connection on a store gone: %v, want a reset", err)
+	}
+	waitCountWithin(t, &out, "waiting for the store again, as at a start", 1, 20*time.Second)
+	if c, err := net.DialTimeout("tcp", tacacs, time.Second); err == nil {
+		c.Close()
+		t.Fatal("TACACS+ still listens with the store gone")
+	}
+	waitCountWithin(t, &out, "port49d: metrics on ", 3, 20*time.Second)
+	ms := regexp.MustCompile(`port49d: metrics on (127\.0\.0\.1:\d+)`).FindAllStringSubmatch(out.String(), -1)
+	resp, err := http.Get("http://" + ms[len(ms)-1][1] + "/readyz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("/readyz while waiting for the store: %d, want 503", resp.StatusCode)
+	}
+	// The broker's runner loses its hold; its API still answers.
+	waitWithin(t, &out, "runner: lost the keyspace's hold", 30*time.Second)
+	// In the dark, a store writer puts the earlier login's record back at
+	// the session's key, keeping the session's own: the next login joined
+	// it, so both are the same context, under one ctx_id.
+	now, err := root.Get(sctx, string(earlier.Key))
+	if err != nil || len(now.Kvs) != 1 {
+		t.Fatalf("the session's context: %v %v", now, err)
+	}
+	if _, err := root.Put(sctx, string(earlier.Key), string(earlier.Value)); err != nil {
+		t.Fatal(err)
+	}
+
+	f.proxy.Hang(false)
+	waitCountWithin(t, &out, "port49d: listening on ", 3, 60*time.Second)
+	tacacs = regexp.MustCompile(`port49d: listening on (127\.0\.0\.1:\d+)`).FindAllStringSubmatch(out.String(), -1)[2][1]
+	dev = tacacsClient{t: t, addr: tacacs, key: []byte("run-test-secret")}
+	if dev.permits("alice", "configure") {
+		t.Fatalf("a record put back while the store was gone was taken after it returned; log %s", log.String())
+	}
+	// The runner takes the hold again, and its carry revokes the record put
+	// back.
+	waitCountWithin(t, &out, "runner: took keyspace /port49/", 2, 60*time.Second)
+	waitCountWithin(t, &out, "live context(s) carried onto the policy in force", 2, 30*time.Second)
+	// The runner's revocation of the record put back is a floor in its
+	// ledger, and its keeper writes it to the ledger record (Ruling 4):
+	// a port49d started after it is seeded with it, so the session's own
+	// record, put back, is answered revoked there too, and its owner logs
+	// in again (final review 7d-2 I-1). A running port49d holds a floor
+	// only at its mark's sequence (Ruling 3; plan 7e Task 15 report), so
+	// the test restarts it.
+	floorIn(t, root, "/port49/v1/lw/"+strings.TrimPrefix(string(earlier.Key), "/port49/v1/c/"))
+	if err := stopDark(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := root.Put(sctx, string(earlier.Key), string(now.Kvs[0].Value)); err != nil {
+		t.Fatal(err)
+	}
+	tacacs, _ = runSplitDaemon(t, f.daemon, &out, 4)
+	dev = tacacsClient{t: t, addr: tacacs, key: []byte("run-test-secret")}
+	if dev.permits("alice", "configure") {
+		t.Fatalf("the session's own record, put back, lifted the revocation the floor holds; log %s", log.String())
+	}
+	if r := lastCommand(t, &log); r["reason"] != "credential_revoked" {
+		t.Fatalf("the session's own record, put back, was not answered revoked: %v", r)
+	}
+	// A login after it is answered: the system serves again.
+	loginSession(t, dev, mintOn(t, api, f.pki, "leaf1"), &log)
+	if !dev.permits("alice", "configure") {
+		t.Fatalf("after the store returned a new login's command was not permitted; log %s", log.String())
+	}
+}
+
+// A mark made on one port49-broker's admin socket reaches the other
+// replica through the marks feed (plan 7e, Ruling 5): alice's held
+// connection to it is closed, said on port49-broker's stderr through
+// brk.Say (Ruling T9-c), and the daemon's marks deny her next command
+// credential_revoked, its port49_revocations_in_force following. Its lift
+// reaches both. And a mark standing in the store alone when a replica
+// starts is in its listener's copy before any connection binds.
+func TestAMarkFromAnotherBrokerProcessReachesThisOne(t *testing.T) {
+	var out, log syncBuffer
+	e, o := stderr, stdout
+	t.Cleanup(func() { stderr, stdout = e, o })
+	stderr, stdout = &out, &log
+	f := splitFleet(t)
+	root := f.srv.Client(t, "root")
+	tacacs := startSplitDaemon(t, f.daemon, &out, 1)
+	apiA, _ := startBroker(t, f.broker, &out, 1)
+	waitFor(t, &out, "runner: recorded bundle ")
+	cfgB := f.copyBroker(t)
+	apiB, stopB := startBroker(t, cfgB, &out, 2)
+	dev := tacacsClient{t: t, addr: tacacs, key: []byte("run-test-secret")}
+	loginSession(t, dev, mintOn(t, apiA, f.pki, "leaf1"), &log)
+	principal := lastCommandPrincipal(t, &log)
+	waitBrokerMetric(t, &out, `port49_store_feed_up{feed="marks"} 1`) // B's marks feed runs (review M4)
+	conn := heldBrokerConn(t, f.pki, apiB)
+	if r := askSocket(t, adminSocketOf(t, f.broker), admin.Request{Op: "revoke", Principal: principal}); r.Error != "" {
+		t.Fatalf("revoke on A's socket: %+v", r)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	if _, err := conn.Read(make([]byte, 1)); err == nil || errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("alice's held connection to the other replica was not closed: %v", err)
+	}
+	waitFor(t, &out, "port49-broker: broker: a revocation of "+principal+" made on a broker process closed 1 ")
+	waitBrokerMetric(t, &out, `port49_revocations_in_force{by="principal"} 1`)
+	waitInForce(t, &out, "principal", 1) // the daemon's
+	if dev.permits("alice", "configure") {
+		t.Fatal("a command under a mark the feed brought was permitted")
+	}
+	if r := lastCommand(t, &log); r["reason"] != "credential_revoked" {
+		t.Fatalf("the denial: %v", r)
+	}
+	if r := askSocket(t, adminSocketOf(t, f.broker), admin.Request{Op: "revoke", Principal: principal,
+		Lift: true}); r.Error != "" {
+		t.Fatalf("lift on A's socket: %+v", r)
+	}
+	waitBrokerMetric(t, &out, `port49_revocations_in_force{by="principal"} 0`)
+	waitInForce(t, &out, "principal", 0)
+	if err := stopB(); err != nil {
+		t.Fatal(err)
+	}
+
+	// In the store alone: the replica's next start reads it from the
+	// store, and its listener refuses alice as she binds.
+	if _, err := root.Put(context.Background(), "/port49/v1/rv/principal/"+principal,
+		fmt.Sprintf(`{"kind":"principal","key":%q,"at":%q,"origin":"etcdctl"}`, principal,
+			time.Now().UTC().Format(time.RFC3339Nano))); err != nil {
+		t.Fatal(err)
+	}
+	apiB, _ = startBroker(t, cfgB, &out, 3)
+	status, body, err := postAsAlice(f.pki, apiB)
+	if err != nil || status != http.StatusUnauthorized || !strings.Contains(body, `"credential_revoked"`) {
+		t.Fatalf("alice's first connection after the start: %s %v", reply(status, body), err)
+	}
+	waitFor(t, &out, "as it bound: "+principal+" or its certificate is revoked")
+}
+
+// A context put back while port49d was stopped, at a key the ledger record
+// holds a later mark for, is denied after port49d's restart: the start
+// seeds its ledger from the record, which the runner's keeper writes,
+// before it scans (Review Focus 2; Ruling 4).
+//
+// The put-back is a replay of another principal's earlier session at the
+// same key: bob's, over alice's later one, at the username both log in as
+// (sharedUsernamePolicy). The principal the device's command is
+// attributed to shows which record was taken. Two positive controls:
+// alice's own session is permitted before the stop, and after a restart
+// with nothing put back.
+func TestAStartSeededFromTheLedgerRecordDeniesAPutBack(t *testing.T) {
+	var out, log syncBuffer
+	e, o := stderr, stdout
+	t.Cleanup(func() { stderr, stdout = e, o })
+	stderr, stdout = &out, &log
+	f := splitFleetWith(t, sharedUsernamePolicy, []string{"bob@example.com"})
+	root := f.srv.Client(t, "root")
+	ctx := context.Background()
+	api, _ := startBroker(t, f.broker, &out, 1)
+	waitFor(t, &out, "runner: recorded bundle ")
+	tacacs, stop := runSplitDaemon(t, f.daemon, &out, 1)
+	dev := tacacsClient{t: t, addr: tacacs, key: []byte("run-test-secret")}
+	loginSession(t, dev, mintOnAs(t, api, f.pki, "leaf1", "bob@example.com"), &log)
+	resp, err := root.Get(ctx, "/port49/v1/c/leaf1/alice")
+	if err != nil || len(resp.Kvs) != 1 {
+		t.Fatalf("bob's context: %v %v", resp, err)
+	}
+	bobs := resp.Kvs[0]
+	s1 := waitForLedgerSeq(t, root, "/port49/v1/lw/leaf1/alice", 0)
+	loginSession(t, dev, mintOn(t, api, f.pki, "leaf1"), &log) // alice's, later, at the same key
+	waitForLedgerSeq(t, root, "/port49/v1/lw/leaf1/alice", s1) // the runner's keeper holds alice's
+	if !dev.permits("alice", "configure") || lastCommandPrincipal(t, &log) != "user:alice@example.com" {
+		t.Fatal("control: alice's own session was not permitted as alice before the stop")
+	}
+	if err := stop(); err != nil {
+		t.Fatal(err)
+	}
+	tacacs, stop = runSplitDaemon(t, f.daemon, &out, 2) // nothing put back
+	dev = tacacsClient{t: t, addr: tacacs, key: []byte("run-test-secret")}
+	if !dev.permits("alice", "configure") {
+		t.Fatal("control: alice's session was not permitted after a restart with nothing put back")
+	}
+	if err := stop(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := root.Put(ctx, string(bobs.Key), string(bobs.Value)); err != nil {
+		t.Fatal(err)
+	}
+	tacacs, _ = runSplitDaemon(t, f.daemon, &out, 3)
+	dev = tacacsClient{t: t, addr: tacacs, key: []byte("run-test-secret")}
+	if dev.permits("alice", "configure") {
+		t.Fatalf("bob's context put back over alice's while port49d was stopped was taken as the key's: %v",
+			lastCommandPrincipal(t, &log))
+	}
+}
+
+// A replica that does not run judges no context at its reload: its pass is
+// the token half. The runner's is the whole refresh (Ruling 6).
+func TestOnlyTheRunnersPassJudgesContexts(t *testing.T) {
+	rig := newReloadRig(t, minimalPolicy)
+	k := rig.aliceLoggedIn(t)
+	rig.write(t, showOnly)
+	r := &runner{brk: rig.b}
+	rig.r.pass = r.pass
+	rig.with(func() { rig.r.reload(context.Background(), "SIGHUP") })
+	if c, err := rig.st.GetContext(context.Background(), k); err != nil || c.BlobHash != "sha256:before" {
+		t.Fatalf("a replica that does not run judged a context: %+v %v", c, err)
+	}
+	r.on.Store(true)
+	rig.now = rig.r.settle
+	rig.with(func() { rig.r.refresh(context.Background()) })
+	if c, err := rig.st.GetContext(context.Background(), k); err != nil || c.BlobHash == "sha256:before" {
+		t.Fatalf("the runner's pass did not judge the context: %+v %v", c, err)
+	}
+}
+
+// port49-broker takes --config alone: any other argument is refused with
+// exit 2, before anything starts (Task 15b adds revoke --offline).
+func TestBrokerMainTakesConfigAlone(t *testing.T) {
+	for _, args := range [][]string{{"revoke"}, {"--config", "/nonexistent", "extra"}, {"--listen", ":49"}} {
+		if code := BrokerMain(args); code != 2 {
+			t.Errorf("BrokerMain(%q) = %d, want 2", args, code)
+		}
+	}
+	if code := BrokerMain([]string{"--config", filepath.Join(t.TempDir(), "absent.yaml")}); code != 1 {
+		t.Errorf("a config that does not load: exit %d, want 1", code)
+	}
+}
+
+// floorIn polls the ledger record at key, as etcd's root, until it holds a
+// revocation floor, or 10s pass.
+func floorIn(t *testing.T, root *clientv3.Client, key string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if resp, err := root.Get(context.Background(), key); err == nil && len(resp.Kvs) == 1 &&
+			strings.Contains(string(resp.Kvs[0].Value), `"revoked_at":`) {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("the ledger record at %s never held a floor", key)
 }

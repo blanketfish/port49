@@ -17,7 +17,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	clientv3 "go.etcd.io/etcd/client/v3"
 
-	"github.com/rhwendt/port49/internal/broker"
 	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/store"
@@ -221,41 +220,6 @@ func TestAStartAfterAStoreGoneRetriesEveryError(t *testing.T) {
 	}
 }
 
-// What the start's carry left decides what the start does (Rulings T12-a,
-// T12-c, T12-d): an outage or an unvisited principal holds it, returned
-// for the retry to wait on; a busy context opens it owing a pass at once,
-// an unheld key opens it owing the next retry, and anything else is
-// returned to end it (Task 12 review I-1; re-review m-5).
-func TestTheStartsCarryDecidesHoldOrOpen(t *testing.T) {
-	other := errors.New("test: something else")
-	unvisited := fmt.Errorf("pass: %w", broker.ErrPrincipalUnvisited)
-	outage := fmt.Errorf("pass: %w", store.ErrUnavailable)
-	for _, c := range []struct {
-		name  string
-		err   error
-		owed  refreshOwed
-		again error
-		waits error // what the start's retry waits on, for a hold
-	}{
-		{"nothing left", nil, refreshOwed{}, nil, nil},
-		{"an unvisited principal holds", unvisited, refreshOwed{}, unvisited, broker.ErrPrincipalUnvisited},
-		{"an outage holds", outage, refreshOwed{}, outage, store.ErrUnavailable},
-		{"a busy context opens owing a pass now", fmt.Errorf("pass: %w", store.ErrConflict),
-			refreshOwed{owed: true, now: true}, nil, nil},
-		{"an unheld key opens owing the next retry", fmt.Errorf("pass: %w", broker.ErrLeftUnderUnheldKey),
-			refreshOwed{owed: true}, nil, nil},
-		{"anything else ends the start", other, refreshOwed{}, other, nil},
-	} {
-		owed, again := startLeftBy(c.err)
-		if owed != c.owed || again != c.again {
-			t.Errorf("%s: startLeftBy = %+v, %v; want %+v, %v", c.name, owed, again, c.owed, c.again)
-		}
-		if c.waits != nil && !errors.Is(again, c.waits) {
-			t.Errorf("%s: the start's retry would not wait on %v", c.name, again)
-		}
-	}
-}
-
 // sealKeysStore is an etcd store on a server of its own, for the start's
 // key check.
 func sealKeysStore(t *testing.T) (*etcdtest.Server, *etcdstore.Store) {
@@ -418,7 +382,7 @@ func TestCheckSealKeysIsBounded(t *testing.T) {
 func TestUnopenableSayerSaysOncePerKeyPerTenMinutes(t *testing.T) {
 	now := time.Unix(1000, 0)
 	var out bytes.Buffer
-	say := unopenableSayer(crypt.Keys{Current: crypt.Key{ID: "enc3"}}, &out, func() time.Time { return now })
+	say := unopenableSayer("port49d", crypt.Keys{Current: crypt.Key{ID: "enc3"}}, &out, func() time.Time { return now })
 	say("token", "enc2", nil)
 	say("token", "enc2", nil)
 	if strings.Count(out.String(), "\n") != 1 || !strings.Contains(out.String(),
@@ -442,7 +406,7 @@ func TestUnopenableSayerSaysOncePerKeyPerTenMinutes(t *testing.T) {
 // m-3).
 func TestUnopenableSayerCallsANamelessRecordCorrupt(t *testing.T) {
 	var out bytes.Buffer
-	say := unopenableSayer(crypt.Keys{Current: crypt.Key{ID: "enc3"}}, &out, time.Now)
+	say := unopenableSayer("port49d", crypt.Keys{Current: crypt.Key{ID: "enc3"}}, &out, time.Now)
 	say("token", "", nil)
 	if !strings.Contains(out.String(), "it was altered or is corrupt") ||
 		strings.Contains(out.String(), "encryption.previous") {
@@ -461,7 +425,7 @@ func TestUnopenableSayerCallsANamelessRecordCorrupt(t *testing.T) {
 func TestTheSayerNamesAnEarlierFormAsTheUpgrade(t *testing.T) {
 	var out bytes.Buffer
 	keys := crypt.Keys{Current: crypt.Key{ID: "v2"}}
-	say := unopenableSayer(keys, &out, time.Now)
+	say := unopenableSayer("port49d", keys, &out, time.Now)
 	say("context", "v2", fmt.Errorf("crypt: opening context: %w", crypt.ErrEarlierForm))
 	got := out.String()
 	if !strings.Contains(got, "a context sealed by an earlier port49 (form 3) does not open: expected once "+
@@ -477,7 +441,7 @@ func TestTheSayerNamesAnEarlierFormAsTheUpgrade(t *testing.T) {
 func TestAnEarlierFormLineDoesNotSilenceAPutBackLine(t *testing.T) {
 	var out bytes.Buffer
 	keys := crypt.Keys{Current: crypt.Key{ID: "v2"}}
-	say := unopenableSayer(keys, &out, time.Now)
+	say := unopenableSayer("port49d", keys, &out, time.Now)
 	say("context", "v2", fmt.Errorf("crypt: opening context: %w", crypt.ErrEarlierForm))
 	say("context", "v2", crypt.ErrNotLastWritten)
 	say("context", "v2", nil)
@@ -496,7 +460,7 @@ func TestTheSayerGivesTheRotationAdviceUnderAnUnheldKey(t *testing.T) {
 	for _, why := range []error{fmt.Errorf("crypt: opening context: %w", crypt.ErrEarlierForm),
 		crypt.ErrNotLastWritten} {
 		var out bytes.Buffer
-		say := unopenableSayer(crypt.Keys{Current: crypt.Key{ID: "v2"}}, &out, time.Now)
+		say := unopenableSayer("port49d", crypt.Keys{Current: crypt.Key{ID: "v2"}}, &out, time.Now)
 		say("context", "v1", why)
 		got := out.String()
 		if !strings.Contains(got, `set encryption.previous to "v1"`) || strings.Contains(got, "earlier port49") ||
@@ -511,7 +475,7 @@ func TestTheSayerGivesTheRotationAdviceUnderAnUnheldKey(t *testing.T) {
 func TestTheSayerNamesAPutBackAsBelowTheNewestWrite(t *testing.T) {
 	var out bytes.Buffer
 	keys := crypt.Keys{Current: crypt.Key{ID: "v2"}}
-	say := unopenableSayer(keys, &out, time.Now)
+	say := unopenableSayer("port49d", keys, &out, time.Now)
 	say("context", "v2", crypt.ErrNotLastWritten)
 	got := out.String()
 	if !strings.Contains(got, "is sealed below the newest write any port49 process made there") ||
@@ -523,7 +487,7 @@ func TestTheSayerNamesAPutBackAsBelowTheNewestWrite(t *testing.T) {
 // Every sealing layer openStores builds shares one sayer, so a key is
 // said once, not once per layer or per read (pre-flight M44; review m-2).
 // With no broker in the process the daemon's is the one layer, read
-// twice. The broker's half is Task 15's, on port49-broker.
+// twice. The broker's half is TestTheBrokersStoresShareOneSayer.
 func TestOpenStoresSharesOneSayer(t *testing.T) {
 	daemonCfg, _ := etcdSplit(t)
 	cfg, err := config.Load(daemonCfg)
@@ -538,7 +502,7 @@ func TestOpenStoresSharesOneSayer(t *testing.T) {
 	defer cancel()
 	var out syncBuffer
 	sts, err := openStores(ctx, cfg, keys, metrics.New(prometheus.NewRegistry()), &out, newReadiness(), false,
-		func(error) {}, crypt.NewLedger(), newKeyAlarm(), new(string), store.NewMarks())
+		func(error) {}, crypt.NewLedger(), newKeyAlarm(), store.NewMarks())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -564,9 +528,8 @@ func TestOpenStoresSharesOneSayer(t *testing.T) {
 	if n := strings.Count(out.String(), `sealed under key id "retired"`); n != 1 {
 		t.Fatalf("said %d times: %q", n, out.String())
 	}
-	if sts.broker != nil || sts.keep != nil || sts.lost != nil || sts.probe == nil {
-		t.Fatalf("the split daemon's stores: broker %v, keep %v, lost %v, probe %v", sts.broker != nil,
-			sts.keep != nil, sts.lost != nil, sts.probe != nil)
+	if sts.broker != nil || sts.probe == nil {
+		t.Fatalf("the split daemon's stores: broker %v, probe %v", sts.broker != nil, sts.probe != nil)
 	}
 }
 
@@ -599,7 +562,7 @@ func TestTheSplitDaemonsStartTakesNoHoldAndWritesNoMeta(t *testing.T) {
 	marks := store.NewMarks()
 	var out syncBuffer
 	sts, err := openStores(ctx, cfg, keys, m, &out, newReadiness(), false, func(error) {}, crypt.NewLedger(),
-		newKeyAlarm(), new(string), marks)
+		newKeyAlarm(), marks)
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out.String())
 	}
@@ -617,37 +580,6 @@ func TestTheSplitDaemonsStartTakesNoHoldAndWritesNoMeta(t *testing.T) {
 	if !marks.Holds(store.RevocationPrincipal, "user:alice@example.com") ||
 		!strings.Contains(out.String(), "port49d: store: 1 revocation(s) in force from the store\n") {
 		t.Fatalf("the marks: %v\n%s", marks.All(), out.String())
-	}
-}
-
-// A broker identity in port49d's store with no broker in the process is
-// refused before the store is dialed, fail-closed: that start would take
-// the hold and follow no marks (task 14 review M-2). Config refuses it
-// first; this is the guard behind it until Task 15 deletes the branch.
-func TestOpenStoresRefusesABrokerIdentityWithNoBroker(t *testing.T) {
-	daemonCfg, _, srv := etcdSplitServer(t)
-	cfg, err := config.Load(daemonCfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	bc, bk := srv.ClientFiles(t, "port49-broker")
-	cfg.Store.Etcd.Broker = &config.EtcdIdentity{CertFile: bc, KeyFile: bk}
-	keys, err := cfg.EncryptionKeys()
-	if err != nil {
-		t.Fatal(err)
-	}
-	m := metrics.New(prometheus.NewRegistry())
-	var out syncBuffer
-	_, err = openStores(context.Background(), cfg, keys, m, &out, newReadiness(), false, func(error) {},
-		crypt.NewLedger(), newKeyAlarm(), new(string), store.NewMarks())
-	var fault *storeFault
-	if !errors.As(err, &fault) || !strings.Contains(err.Error(), "store.etcd.broker in port49d.yaml") {
-		t.Fatalf("a broker identity with no broker: %v\n%s", err, out.String())
-	}
-	if resp, err := srv.Client(t, "root").Get(context.Background(), "/port49/v1/meta/hold",
-		clientv3.WithPrefix()); err != nil ||
-		len(resp.Kvs) != 0 || testutil.ToFloat64(m.StoreKeyspaceHeld) != 0 {
-		t.Fatalf("the hold was taken: %v %v", resp, err)
 	}
 }
 
@@ -671,7 +603,7 @@ func TestARefusedLedgerRecordReadNamesStoreRoles(t *testing.T) {
 	}
 	var out syncBuffer
 	_, err = openStores(context.Background(), cfg, keys, metrics.New(prometheus.NewRegistry()), &out, newReadiness(),
-		false, func(error) {}, crypt.NewLedger(), newKeyAlarm(), new(string), store.NewMarks())
+		false, func(error) {}, crypt.NewLedger(), newKeyAlarm(), store.NewMarks())
 	var fault *storeFault
 	if !errors.As(err, &fault) || !strings.Contains(err.Error(), "apply port49d store-roles (plan 7e)") {
 		t.Fatalf("a refused read of the ledger record: %v", err)
@@ -685,7 +617,7 @@ func TestARefusedLedgerRecordReadNamesStoreRoles(t *testing.T) {
 // port49_store_fence_timeouts_total, which tells it from an etcd failure
 // (final review 7e-1 M-4). The probe pings through the same guard and
 // fence, so with the feed stopped its pings time out too (plan 7e, Ruling
-// 11). The broker's half is Task 15's, on port49-broker.
+// 11). The broker's half is TestTheBrokersStoreIsFencedUnderItsGuard.
 func TestOpenStoresFencesEachLayerUnderItsGuard(t *testing.T) {
 	daemonCfg, _ := etcdSplit(t)
 	cfg, err := config.Load(daemonCfg)
@@ -700,7 +632,7 @@ func TestOpenStoresFencesEachLayerUnderItsGuard(t *testing.T) {
 	defer cancel()
 	m := metrics.New(prometheus.NewRegistry())
 	sts, err := openStores(ctx, cfg, keys, m, io.Discard, newReadiness(), false, func(error) {}, crypt.NewLedger(),
-		newKeyAlarm(), new(string), store.NewMarks())
+		newKeyAlarm(), store.NewMarks())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -768,7 +700,7 @@ func TestARaisedAlarmIsGaugedWhileTheStoreIsAway(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		_, err := openStores(ctx, cfg, keys, m, &out, newReadiness(), true, func(error) {}, crypt.NewLedger(), alarm,
-			new(string), store.NewMarks())
+			store.NewMarks())
 		done <- err
 	}()
 	waitCountWithin(t, &out, "not answering", 1, 10*time.Second)
@@ -803,7 +735,7 @@ func TestBothFeedsReadDownWhileTheStoreIsAway(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		_, err := openStores(ctx, cfg, keys, m, &out, newReadiness(), false, func(error) {}, crypt.NewLedger(),
-			newKeyAlarm(), new(string), store.NewMarks())
+			newKeyAlarm(), store.NewMarks())
 		done <- err
 	}()
 	waitCountWithin(t, &out, "not answering", 1, 10*time.Second)
@@ -847,73 +779,18 @@ func TestCheckSealKeysGoesOnPastAnUndecodableRecord(t *testing.T) {
 	}
 }
 
-// A run that finds the keyspace held by this process's own last run, whose
-// hold was lost and whose lease has not expired yet, says so and waits for
-// the lease: it never tells the operator to stop "that port49d", which is
-// itself (final review 7d-2 I-2). A holder that is not this process's is
-// named as another port49d.
-func TestAHoldStillOnThisPort49dsLastRunIsSaidAsIts(t *testing.T) {
-	t.Skip("plan 7e Task 15: the hold is the runner's; moves to brokerd_test.go as " +
-		"TestAHoldStillOnThisReplicasLastRunIsSaidAsIts")
-	cfgPath, _, _, _, _ := etcdRunServer(t)
-	cfg, err := config.Load(cfgPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	keys, err := cfg.EncryptionKeys()
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	var held string
-	var out syncBuffer
-	last, err := openStores(ctx, cfg, keys, metrics.New(prometheus.NewRegistry()), &out, newReadiness(), false,
-		func(error) {}, crypt.NewLedger(), newKeyAlarm(), &held, store.NewMarks())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer last.close()
-	if !strings.HasPrefix(held, "port49d on ") {
-		t.Fatalf("the hold's holder was not kept: %q", held)
-	}
-	for _, c := range []struct {
-		held, want string
-	}{
-		{held, fmt.Sprintf("port49d: store: keyspace %s is still held by this port49d's last run (its hold was lost "+
-			"when the store stopped answering); waiting up to hold_ttl (%v) for its lease to expire, with the "+
-			"listeners closed\n", cfg.Store.Etcd.Prefix, cfg.Store.Etcd.HoldTTL)},
-		{"port49d on another (pid 1, since 2026-10-03T00:00:00Z)", fmt.Sprintf("port49d: store: keyspace %s is "+
-			"held by %q; waiting, with the listeners closed: one port49d per keyspace until plan 7e; stop that "+
-			"port49d to move the keyspace, and never delete meta/hold\n", cfg.Store.Etcd.Prefix, held)},
-	} {
-		prev := c.held
-		var out syncBuffer
-		rctx, rcancel := context.WithCancel(ctx)
-		done := make(chan error, 1)
-		go func() {
-			_, err := openStores(rctx, cfg, keys, metrics.New(prometheus.NewRegistry()), &out, newReadiness(), true,
-				func(error) {}, crypt.NewLedger(), newKeyAlarm(), &prev, store.NewMarks())
-			done <- err
-		}()
-		waitCountWithin(t, &out, "held by", 1, 10*time.Second)
-		rcancel()
-		<-done
-		if !strings.Contains(out.String(), c.want) {
-			t.Fatalf("with the last run's holder %q:\n%s", c.held, out.String())
-		}
-	}
-}
-
 // meta/holder is the store's, so the line echoes it only in the shape
-// port49d writes, quoted and cut to 200 bytes, and "?" otherwise (final
-// review 7d-2 m-1).
+// port49-broker writes, or a 7d port49d wrote, quoted and cut to 200
+// bytes, and "?" otherwise (final review 7d-2 m-1).
 func TestLineHolderEchoesOnlyTheShapePort49dWrites(t *testing.T) {
 	ok := "port49d on leaf-host.example.com (pid 4242, since 2026-10-03T01:02:03Z)"
+	broker := "port49-broker on leaf-host.example.com (pid 4242, since 2026-10-03T01:02:03Z)"
 	long := "port49d on " + strings.Repeat("h", 250) + " (pid 4242, since 2026-10-03T01:02:03Z)"
 	for in, want := range map[string]string{
-		ok:   fmt.Sprintf("%q", ok),
-		long: fmt.Sprintf("%q", long[:200]),
+		ok:     fmt.Sprintf("%q", ok),
+		broker: fmt.Sprintf("%q", broker),
+		long:   fmt.Sprintf("%q", long[:200]),
+		"port49-brokers on host (pid 1, since 2026-10-03T01:02:03Z)":                       "?",
 		"port49d on host (pid 1, since 2026-10-03T01:02:03Z)\nport49d: forged line":        "?",
 		"port49d on host (pid 1, since 2026-10-03T01:02:03Z)" + strings.Repeat("x", 1<<20): "?",
 		strings.Repeat("x", 1<<20): "?",

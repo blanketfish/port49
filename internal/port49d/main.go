@@ -546,9 +546,8 @@ func run(parent context.Context, cfgPath string) error {
 	// The daemon's copy of the standing marks, which every authorization,
 	// enable and receipt replay reads (plan 7d; Ruling 17).
 	authMarks := store.NewMarks()
-	var held string // the holder this process's last hold was taken as (openStores)
 	return runLoop(parent, func(again bool) error {
-		return runOnce(parent, cfgPath, hup, again, ledger, alarm, &held, authMarks)
+		return runOnce(parent, cfgPath, hup, again, ledger, alarm, authMarks)
 	}, 5*time.Second)
 }
 
@@ -594,7 +593,7 @@ func runLoop(parent context.Context, once func(again bool) error, every time.Dur
 // package comment gives. again says a store gone ended the run before.
 // authMarks is the process's (run).
 func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again bool, ledger *crypt.Ledger,
-	alarm *keyAlarm, held *string, authMarks *store.Marks) (err error) {
+	alarm *keyAlarm, authMarks *store.Marks) (err error) {
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		return err
@@ -744,13 +743,12 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		m.RevocationsInForce.WithLabelValues(store.RevocationCert).Set(float64(cert))
 	})
 	// The stores (plan 7d): on etcd, waited for with every listener still
-	// closed, the identities and roles checked; with a broker in the
-	// process the keyspace held, and with none the marks loaded into
-	// authMarks (plan 7e); on memory, one store. Each sealing layer is on
-	// the process's ledger, which denies a context another login wrote at a
-	// key (decision 35).
+	// closed, the daemon's identity and role checked, and the marks loaded
+	// into authMarks (plan 7e); on memory, one store. Each sealing layer is
+	// on the process's ledger, which denies a context another login wrote
+	// at a key (decision 35).
 	sts, err := openStores(ctx, cfg, keys, m, stderr, rd, again, func(e error) { cancelRun(e) }, ledger, alarm,
-		held, authMarks)
+		authMarks)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil // stopped while waiting for the store: nothing was served, as coldCopies says
@@ -775,29 +773,10 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		go func() { defer close(probeDone); sts.probe(pctx) }()
 		defer func() { stopProbe(); <-probeDone }()
 	}
-	if sts.keep != nil {
-		// The keeper writes the ledger record from the start on, and is
-		// joined before sts.close: its last write, on the way out, needs
-		// the store (crypt.KeepLedger).
-		kctx, stopKeep := context.WithCancel(ctx)
-		keepDone := make(chan struct{})
-		go func() { defer close(keepDone); sts.keep(kctx) }()
-		defer func() { stopKeep(); <-keepDone }()
-	}
-	if sts.lost != nil {
-		go func() {
-			select {
-			case <-sts.lost:
-				cancelRun(&storeGone{why: fmt.Sprintf("lost this port49d's hold on keyspace %s (its lock key is "+
-					"gone, or etcd stopped answering with half its lease or less left)", cfg.Store.Etcd.Prefix)})
-			case <-ctx.Done():
-			}
-		}()
-	}
 	// The broker's store: the minter, the session manager, the broker, the
 	// lab seeds and the revocations. The daemon's handlers read the
-	// daemon's (sts.daemon), each its own identity on etcd. With no broker
-	// on etcd it is nil, and nothing below writes through it.
+	// daemon's (sts.daemon). On etcd it is nil, the broker being
+	// port49-broker's (plan 7e), and nothing below writes through it.
 	st := sts.broker
 
 	spool, err := acct.NewSpool(cfg.Accounting.SpoolCapacity, cfg.Accounting.SpoolPath, log, m)
@@ -881,26 +860,9 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		// certificate again (spec §13 decision 32). Restored into, and saved
 		// from, the broker's own store, the one every mint reads, so the two
 		// cannot drift apart (Task 9 review M6).
-		// On etcd the store may not answer yet: the marks are put again
-		// until it does, the listeners closed (pre-flight M41). Any other
-		// error is a file that does not load.
-		for {
-			marks, err = restoreRevocations(ctx, brk.Store, cfg.Broker.RevocationsFile)
-			if err == nil || !sts.persistent || !errors.Is(err, store.ErrUnavailable) {
-				break
-			}
-			fmt.Fprintf(stderr, "port49d: broker: putting %s's marks into the store: %v; the listeners stay closed; "+
-				"trying again in 5s\n", cfg.Broker.RevocationsFile, err)
-			select {
-			case <-ctx.Done():
-			case <-time.After(5 * time.Second):
-			}
-			if ctx.Err() != nil {
-				stopSpool()
-				<-spoolDone
-				return nil
-			}
-		}
+		// The in-process broker is on the memory store alone (plan 7e,
+		// Ruling 1), so an error is a file that does not load.
+		marks, err = restoreRevocations(ctx, brk.Store, cfg.Broker.RevocationsFile)
 		if err != nil {
 			stopSpool()
 			<-spoolDone
@@ -911,42 +873,15 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		fmt.Fprintf(stderr, "port49d: broker: %d revocation(s) in force from %s\n", len(marks),
 			cfg.Broker.RevocationsFile)
 	}
-	// A start on a store that persists (decision 35, a start on etcd): with
-	// the listeners closed, the store's marks, the re-index, every mark on
-	// the kept contexts, the purge and the carry. The ledger's base was set
-	// by openStores's scan. Each is the broker's, and with no broker in the
-	// process none runs here (plan 7e): they are the runner's (Task 15).
-	var owed refreshOwed
-	if sts.persistent && brk != nil {
-		if owed, err = startOnPersistentStore(ctx, brk, st, sts.etcd, cfg, &marks, m); err != nil {
-			stopSpool()
-			<-spoolDone
-			if ctx.Err() != nil {
-				return nil
-			}
-			return err
-		}
-		// Joined before sts.close, as every run-scoped goroutine is, so no
-		// sweep of this run is still inside the store when its clients
-		// close and the next run starts (final review 7d-2 m-3).
-		sweepDone := make(chan struct{})
-		go func() {
-			defer close(sweepDone)
-			sweepLoop(ctx, sts.etcd, brk, ledger, cfg.Store.Etcd.SweepInterval, stderr)
-		}()
-		defer func() { cancel(); <-sweepDone }()
-	} else {
-		// The memory store starts empty, so no context is kept to read:
-		// openStores set the ledger's base past it. With no sweep, on memory
-		// or with no broker on etcd, the ledger's marks past their keep are
-		// pruned here, joined as the sweep is.
-		pruneDone := make(chan struct{})
-		go func() {
-			defer close(pruneDone)
-			pruneLoop(ctx, ledger, ledgerPruneEvery)
-		}()
-		defer func() { cancel(); <-pruneDone }()
-	}
+	// The ledger's marks past their keep are pruned here, joined as every
+	// run-scoped goroutine is: the memory store has no sweep, and on etcd
+	// the sweep is port49-broker's runner's (plan 7e).
+	pruneDone := make(chan struct{})
+	go func() {
+		defer close(pruneDone)
+		pruneLoop(ctx, ledger, ledgerPruneEvery)
+	}()
+	defer func() { cancel(); <-pruneDone }()
 	if brk != nil {
 		// The daemon's marks are every mark in force: the file's, on memory,
 		// the one store a broker runs on in this process (Task 13).
@@ -1213,9 +1148,6 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		}
 		r := newReloader(cfg, live, log, pass, m, time.Now)
 		r.inventory, r.cfgPath = inventoryAtStart, cfgPath
-		if owed.owed {
-			r.startLeft(owed.now)
-		}
 		r.startDocument(startDoc, startFrom)
 		r.seen, r.held = seen, deps.Held
 		var fetchDone <-chan struct{}

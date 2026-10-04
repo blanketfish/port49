@@ -24,8 +24,10 @@ const issuerFileMax = 1 << 20
 // (plan 7b Task 11). It reads each issuer_file, one PEM certificate, and
 // refuses one that is neither the anchor nor signed by it, naming the source
 // (pre-flight C1): a list is trusted for the issuer it names, so that issuer
-// must be one the broker trusts already. The kept lists go in stateDir, the
-// directory holding broker.revocations_file (pre-flight I8).
+// must be one the broker trusts already. The kept lists go in stateDir:
+// port49-broker's broker.state_dir (plan 7e, Ruling 12), or for the
+// in-process broker on memory the directory holding
+// broker.revocations_file (pre-flight I8).
 //
 // It lives here rather than as a config method, as the plan has it, because
 // certstatus imports inventory, which imports config.

@@ -31,20 +31,42 @@ import (
 // never an earlier run's, and reading the newest address.
 func startSplitDaemon(t *testing.T, cfgPath string, out *syncBuffer, n int) (tacacs string) {
 	t.Helper()
+	tacacs, _ = runSplitDaemon(t, cfgPath, out, n)
+	return tacacs
+}
+
+// errDidNotStop is a stop that waited 15s for the process to return.
+var errDidNotStop = errors.New("the process did not stop within 15s")
+
+// runSplitDaemon is startSplitDaemon with a stop the test may call before
+// it ends, for a restart.
+func runSplitDaemon(t *testing.T, cfgPath string, out *syncBuffer, n int) (tacacs string, stop func() error) {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- run(ctx, cfgPath) }()
-	t.Cleanup(func() { // before stderr is restored: registered after the caller's
+	stopped := false
+	stop = func() error {
+		if stopped {
+			return nil
+		}
+		stopped = true
 		cancel()
 		select {
-		case <-done:
+		case err := <-done:
+			return err
 		case <-time.After(15 * time.Second):
-			t.Error("port49d did not stop")
+			return errDidNotStop
+		}
+	}
+	t.Cleanup(func() { // before stderr is restored: registered after the caller's
+		if err := stop(); errors.Is(err, errDidNotStop) {
+			t.Error(err)
 		}
 	})
 	waitCountWithin(t, out, "port49d: listening on ", n, 30*time.Second)
 	addrs := regexp.MustCompile(`port49d: listening on (127\.0\.0\.1:\d+)`).FindAllStringSubmatch(out.String(), -1)
-	return addrs[len(addrs)-1][1]
+	return addrs[len(addrs)-1][1], stop
 }
 
 // copyDaemon writes a copy of the daemon config at cfg with its own
