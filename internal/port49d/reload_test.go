@@ -2,9 +2,11 @@ package port49d
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -23,8 +25,10 @@ import (
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/engine"
 	"github.com/rhwendt/port49/internal/platform"
+	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/store/memory"
+	"github.com/rhwendt/port49/internal/token"
 )
 
 // reloadRig is a broker built from its files as port49d builds it, with a
@@ -80,6 +84,78 @@ func (rig *reloadRig) with(fn func()) {
 	defer func(w io.Writer) { stderr = w }(stderr)
 	stderr = rig.out
 	fn()
+}
+
+// swapTo puts body in force as the watch does: written, then two polls
+// that agree, whose reload runs the first refresh pass.
+func swapTo(t *testing.T, rig *reloadRig, body string) {
+	t.Helper()
+	rig.write(t, body)
+	rig.pollTwice()
+}
+
+// mintUnder mints alice a token for leaf1 through a second broker on
+// rig.st holding body: another replica, still on a policy this one
+// replaced (plan 7e, Ruling 8). It returns the login token.
+func mintUnder(t *testing.T, rig *reloadRig, body string) string {
+	t.Helper()
+	cfg := rig.cfg
+	b := *cfg.Broker
+	b.PolicyFile = filepath.Join(safeDir(t), "policy.yaml")
+	if err := os.WriteFile(b.PolicyFile, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Broker = &b
+	cfg.Policy = &config.PolicyConfig{File: b.PolicyFile, WatchInterval: cfg.Policy.WatchInterval}
+	defer func(w io.Writer) { stderr = w }(stderr)
+	stderr = io.Discard
+	minter := token.NewMinter(rig.st, decision.NewJSONLines(io.Discard), rand.Reader,
+		token.TagKey([]byte("late-replica-key")), rig.clock, 8)
+	srv, other, err := buildBroker(cfg, "inventory_file "+cfg.InventoryFile, rig.st, minter,
+		decision.NewJSONLines(io.Discard), metrics.New(prometheus.NewRegistry()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	other.Now = rig.clock
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = srv.ServeTLS(ln, "", "") }()
+	defer srv.Close()
+	return mint(t, ln.Addr().String(), filepath.Dir(cfg.Broker.ClientCAFile), "leaf1")
+}
+
+// runFirstPass runs the reloader's refresh at the instant of the swap, and
+// runSettlePass at the settle pass's due time.
+func runFirstPass(t *testing.T, rig *reloadRig) {
+	t.Helper()
+	rig.with(func() { rig.r.refresh(context.Background()) })
+}
+
+func runSettlePass(t *testing.T, rig *reloadRig) {
+	t.Helper()
+	if rig.r.settle.IsZero() {
+		t.Fatal("no settle pass is owed")
+	}
+	rig.now = rig.r.settle
+	rig.with(func() { rig.r.refresh(context.Background()) })
+}
+
+// tokenStillRedeemable reports whether rig.st still holds tok for alice on
+// leaf1, unexpired.
+func tokenStillRedeemable(t *testing.T, rig *reloadRig, tok string) bool {
+	t.Helper()
+	toks, err := rig.st.Candidates(context.Background(), store.TokenKey{NAS: "leaf1", Username: "alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range toks {
+		if string(c.Secret) == tok {
+			return true
+		}
+	}
+	return false
 }
 
 // A context alice holds on leaf1, as a redemption writes it, naming a blob the
@@ -194,7 +270,7 @@ func TestSIGHUPLoadsAtOnce(t *testing.T) {
 }
 
 // A reload is carried into every live context at once, and again
-// settleAfterReload later for a login that was in flight across the swap
+// the settle pass later for a login that was in flight across the swap
 // (plan 4b). The line after it says what the refresh did.
 func TestAReloadRefreshesLiveContextsAndSchedulesTheSettlePass(t *testing.T) {
 	rig := newReloadRig(t, minimalPolicy)
@@ -205,8 +281,8 @@ func TestAReloadRefreshesLiveContextsAndSchedulesTheSettlePass(t *testing.T) {
 	if err != nil || c.BlobHash == "sha256:before" || c.CtxID != "c1" || !c.RevokedAt.IsZero() || c.MaxPrivilege != 0 {
 		t.Fatalf("alice's context takes the new policy in place: %+v %v", c, err)
 	}
-	if !rig.r.due.Equal(rig.now.Add(settleAfterReload)) {
-		t.Fatalf("the settle pass is due at %v, got %v", rig.now.Add(settleAfterReload), rig.r.due)
+	if !rig.r.due.Equal(rig.now.Add(settleAfter(rig.r.interval))) {
+		t.Fatalf("the settle pass is due at %v, got %v", rig.now.Add(settleAfter(rig.r.interval)), rig.r.due)
 	}
 	if !strings.Contains(rig.out.String(), "port49d: policy refresh: 1 live context(s) updated, 0 revoked") {
 		t.Fatalf("stderr: %q", rig.out.String())
@@ -216,7 +292,7 @@ func TestAReloadRefreshesLiveContextsAndSchedulesTheSettlePass(t *testing.T) {
 	if testutil.ToFloat64(rig.m.PolicyRefreshPending) != 1 {
 		t.Fatal("port49_policy_refresh_pending must hold at 1 until the settle pass completes")
 	}
-	rig.now = rig.now.Add(settleAfterReload)
+	rig.now = rig.now.Add(settleAfter(rig.r.interval))
 	rig.with(func() { rig.r.refresh(context.Background()) })
 	if testutil.ToFloat64(rig.m.PolicyRefreshPending) != 0 || !rig.r.due.IsZero() {
 		t.Fatalf("the settle pass clears the gauge, and nothing is due: due %v", rig.r.due)
@@ -225,7 +301,7 @@ func TestAReloadRefreshesLiveContextsAndSchedulesTheSettlePass(t *testing.T) {
 
 // A grant's expiry is settled as a reload is: a redemption in flight across
 // the expiry pass may write the expired grant after the pass visited its
-// context, so the pass runs again settleAfterReload later, and the expiry is
+// context, so the pass runs again settleAfter later, and the expiry is
 // pending until it completes.
 func TestAnExpiryPassIsSettled(t *testing.T) {
 	lapse := time.Now().Add(time.Hour).Truncate(time.Second)
@@ -233,10 +309,10 @@ func TestAnExpiryPassIsSettled(t *testing.T) {
 		lapse.UTC().Format(time.RFC3339)+"}", 1))
 	rig.now = lapse
 	rig.with(func() { rig.r.refresh(context.Background()) })
-	if !rig.r.due.Equal(lapse.Add(settleAfterReload)) || testutil.ToFloat64(rig.m.PolicyRefreshPending) != 1 {
+	if !rig.r.due.Equal(lapse.Add(settleAfter(rig.r.interval))) || testutil.ToFloat64(rig.m.PolicyRefreshPending) != 1 {
 		t.Fatalf("the expiry pass is settled 30s later and pending until then: due %v", rig.r.due)
 	}
-	rig.now = lapse.Add(settleAfterReload)
+	rig.now = lapse.Add(settleAfter(rig.r.interval))
 	rig.with(func() { rig.r.refresh(context.Background()) })
 	if !rig.r.due.IsZero() || testutil.ToFloat64(rig.m.PolicyRefreshPending) != 0 {
 		t.Fatalf("the settle pass clears it: due %v", rig.r.due)
@@ -776,5 +852,25 @@ func TestAStartThatLeftAContextOwesAPass(t *testing.T) {
 					rig.out.String())
 			}
 		})
+	}
+}
+
+// onSettled is told the policy in force by the settle pass that leaves
+// nothing pending, and by no pass before it: the runner records meta/judged
+// then, and only then (plan 7e, Ruling 7; pre-flight I2).
+func TestOnlyASettledPassTellsOnSettled(t *testing.T) {
+	rig := newReloadRig(t, minimalPolicy)
+	var told []string
+	rig.r.onSettled = func(pol *policy.Policy) { told = append(told, pol.Bundle) }
+	swapTo(t, rig, showOnly)
+	if len(told) != 0 {
+		t.Fatalf("the first pass after a swap owes the settle pass, yet told %v", told)
+	}
+	runSettlePass(t, rig)
+	if len(told) != 1 || told[0] != rig.b.Policy.Load().Bundle || testutil.ToFloat64(rig.m.PolicyRefreshPending) != 0 {
+		t.Fatalf("told %v", told)
+	}
+	if len(rig.r.priors) != 1 || rig.r.priors[0].Policy != rig.b.Policy.Load() {
+		t.Fatalf("the settled pass resets the priors to the policy in force: %+v", rig.r.priors)
 	}
 }

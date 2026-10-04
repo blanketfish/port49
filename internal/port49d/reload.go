@@ -25,19 +25,27 @@ import (
 )
 
 // After a reload, and after a grant's expiry, the refresh runs twice: at
-// once, and again settleAfterReload later. The second pass catches a login
-// that spent a token the first pass was about to supersede and wrote its
+// once, and again settleAfter later. The second pass catches a login that
+// spent a token the first pass was about to supersede and wrote its
 // context after the first pass had visited it — a login in flight across the
 // swap, or across the expiry, finishes on the answer it started with (plan
 // 4b), and this is how its context is brought forward. refreshRetry is how
 // soon a pass the store stopped is run again.
 const (
-	settleAfterReload = 30 * time.Second
-	refreshRetry      = 30 * time.Second
+	settleMin    = 30 * time.Second
+	refreshRetry = 30 * time.Second
 	// stillChangingAfter is how many reads in a row the policy file may
 	// differ at before the watch says it is not settling (reloader.poll).
 	stillChangingAfter = 6
 )
+
+// settleAfter is how long after a swap or an expiry the settle pass runs:
+// settleMin, or two watch intervals and 5s when that is longer, so a
+// replica that reads the file one interval late, and polls twice before it
+// loads, has reloaded by then (plan 7e, Ruling 8).
+func settleAfter(interval time.Duration) time.Duration {
+	return max(settleMin, 2*interval+5*time.Second)
+}
 
 // reloader keeps the bundle in force the one the policy file (plan 4b) and
 // inventory_file (plan 6a) make. It is one goroutine, so a reload, a poll and a scheduled refresh never run
@@ -154,6 +162,14 @@ type reloader struct {
 	// stopped is set while the last refresh pass did not complete, so the
 	// one that does says so whatever it found.
 	stopped bool
+	// onSettled is told the policy in force after each complete pass that
+	// leaves nothing pending: port49-broker's runner records it as judged
+	// (plan 7e, Ruling 7). Nil tells no one.
+	onSettled func(pol *policy.Policy)
+	// owed is how a start that left a pass owed tells run, from another
+	// goroutine: true for a pass at once (startLeft). run is the only
+	// caller of startLeft once it runs.
+	owed chan bool
 }
 
 // combinedFrom is the load that asked loadBoth for a combined try: a SIGHUP,
@@ -173,7 +189,8 @@ func newReloader(cfg config.Config, live *policy.Live, log decision.Emitter,
 	now func() time.Time) *reloader {
 	start := now()
 	r := &reloader{cfg: cfg, live: live, log: log, pass: pass, metrics: m, now: now,
-		interval: cfg.Policy.WatchInterval, priors: []broker.Prior{{Policy: live.Load(), At: start}}}
+		interval: cfg.Policy.WatchInterval, priors: []broker.Prior{{Policy: live.Load(), At: start}},
+		owed: make(chan bool, 1)}
 	// run sets the version the start loaded; this is a test's. In service
 	// mode there is no inventory file.
 	if cfg.InventoryFile != "" {
@@ -286,6 +303,8 @@ func (r *reloader) run(ctx context.Context, hup <-chan os.Signal) {
 			r.poll(ctx)
 		case <-timer.C:
 			r.refresh(ctx)
+		case now := <-r.owed:
+			r.startLeft(now)
 		}
 	}
 }
@@ -1055,7 +1074,7 @@ func (r *reloader) swap(pol *policy.Policy) time.Time {
 		r.priors = append(r.priors, broker.Prior{Policy: pol, At: now})
 	}
 	r.expiry, _ = pol.NextChange(now)
-	r.settle = now.Add(settleAfterReload)
+	r.settle = now.Add(settleAfter(r.interval))
 	if r.pass != nil {
 		r.metrics.PolicyRefreshPending.Set(1)
 	}
@@ -1095,12 +1114,20 @@ func (r *reloader) securityEvents(rep bundle.Report, now time.Time) int {
 // from now. One that completed is scheduled from the instant it judged at
 // (RefreshReport.At), not from the clock after it: the next grant expiry after
 // that instant, which is due at once if it has already passed, and the settle
-// pass settleAfterReload after a pass that crossed an expiry.
+// pass settleAfter after a pass that crossed an expiry.
+//
+// A complete pass resets the priors to the policy in force only once no
+// settle pass is owed. While one is, the priors stay, the newest's span
+// closed at the pass's instant, so the settle pass judges again every
+// token minted under each of them since: another replica that reloads
+// late mints under a replaced policy after the first pass (plan 7e,
+// Ruling 8).
 //
 // port49_policy_refresh_pending is 1 from a swap or an expiry until the settle
 // pass after it completes, and while a pass is owed a retry: while it is, a
 // live context may still hold a policy no longer in force — a withdrawn or
-// expired grant included.
+// expired grant included. A complete pass that leaves it at 0 tells
+// onSettled, when set, the policy in force.
 func (r *reloader) refresh(ctx context.Context) {
 	if r.pass == nil {
 		// No broker in the process: nothing to carry, and nothing scheduled,
@@ -1134,18 +1161,19 @@ func (r *reloader) refresh(ctx context.Context) {
 		return
 	}
 	cur := r.live.Load()
-	r.priors = []broker.Prior{{Policy: cur, At: rep.At}}
 	r.retry = time.Time{}
 	if !r.settle.IsZero() && !rep.At.Before(r.settle) {
 		r.settle = time.Time{}
 	}
 	if !r.expiry.IsZero() && !rep.At.Before(r.expiry) {
-		r.settle = rep.At.Add(settleAfterReload)
+		r.settle = rep.At.Add(settleAfter(r.interval))
 	}
 	r.expiry, _ = cur.NextChange(rep.At)
 	if r.settle.IsZero() {
+		r.priors = []broker.Prior{{Policy: cur, At: rep.At}}
 		r.metrics.PolicyRefreshPending.Set(0)
 	} else {
+		r.priors[len(r.priors)-1].Until = rep.At
 		r.metrics.PolicyRefreshPending.Set(1)
 	}
 	switch {
@@ -1156,6 +1184,9 @@ func (r *reloader) refresh(ctx context.Context) {
 		fmt.Fprintf(stderr, "port49d: policy refresh: %s\n", summary(rep))
 	}
 	r.reschedule()
+	if r.settle.IsZero() && r.onSettled != nil {
+		r.onSettled(cur)
+	}
 }
 
 // startLeft is what a start on a persistent store left unjudged (plan
