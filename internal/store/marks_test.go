@@ -466,6 +466,48 @@ func TestAReloadKeepsAMarkStillUnwritten(t *testing.T) {
 	waitFor(t, func() bool { return !m.Holds(alice.Kind, alice.Key) })
 }
 
+// A kept mark (Keep) stands through a load that lacks it, and tells
+// nothing; a lift the watch delivers lifts it, and so does a later load
+// once a load has seen the store hold it again (plan 7e, Ruling 5). The
+// control: the same load lifts a mark not kept.
+func TestAKeptMarkStandsThroughAReloadUntilAWatchedLift(t *testing.T) {
+	ctx := context.Background()
+	alice := Revocation{Kind: RevocationPrincipal, Key: "user:alice@example.com", At: time.Unix(10, 0).UTC()}
+	var changes []string
+	on := func(c MarkChange) { changes = append(changes, told(c)) }
+
+	unkept := NewMarks()
+	unkept.Set(alice, true)
+	if _, err := LoadMarks(ctx, &markFeed{}, unkept, nil); err != nil || unkept.Holds(alice.Kind, alice.Key) {
+		t.Fatalf("control: a load lacking an unkept mark: %v %v", unkept.All(), err)
+	}
+
+	m := NewMarks()
+	m.Keep(alice) // not in force: nothing
+	if m.Holds(alice.Kind, alice.Key) {
+		t.Fatal("Keep put a mark in force")
+	}
+	m.Set(alice, true)
+	m.Keep(alice)
+	if _, err := LoadMarks(ctx, &markFeed{}, m, on); err != nil || !m.Holds(alice.Kind, alice.Key) || len(changes) != 0 {
+		t.Fatalf("a load lacking a kept mark: %v %v %v", m.All(), changes, err)
+	}
+	back := &markFeed{}
+	back.setMarks([]Revocation{alice}) // the runner put it back
+	if _, err := LoadMarks(ctx, back, m, on); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadMarks(ctx, &markFeed{}, m, on); err != nil || m.Holds(alice.Kind, alice.Key) {
+		t.Fatalf("a mark the store held again was kept past its lift: %v %v", m.All(), err)
+	}
+	m.Set(alice, true)
+	m.Keep(alice)
+	m.Set(alice, false) // a lift the watch delivered
+	if _, err := LoadMarks(ctx, &markFeed{}, m, on); err != nil || m.Holds(alice.Kind, alice.Key) {
+		t.Fatalf("a watched lift: %v %v", m.All(), err)
+	}
+}
+
 // Put is a correction only: it moves the time of a mark in force, and
 // never puts back one lifted meanwhile (review M2).
 func TestPutCorrectsOnlyAMarkInForce(t *testing.T) {

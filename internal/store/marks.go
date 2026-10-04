@@ -110,6 +110,25 @@ func (m *Marks) Pend(r Revocation) {
 	m.unwritten[[2]string{r.Kind, r.Key}] = true
 }
 
+// Keep has a mark in force stand through a load that lacks it, as an
+// unwritten one does (Pend), until a lift (Set false: the feed's, or this
+// process's) or a load that shows the store holds it again: port49d's on
+// etcd, whose role cannot put back a mark an etcd restore lost (plan 7e,
+// Ruling 5). A mark not in force is not put in force. On a broker it
+// marks a mark the copy holds and a reload found missing; a later put or
+// Put clears it as it clears a Pended one.
+func (m *Marks) Keep(r Revocation) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	k := [2]string{r.Kind, r.Key}
+	if _, ok := m.m[k]; ok {
+		m.unwritten[k] = true
+	}
+}
+
 // Unrecorded says r's write failed (Revoke's "could not be recorded"),
 // after Pend: it stays unwritten, and once a load or the feed shows the
 // store holds it (another process's revocation, or this write committed
@@ -265,7 +284,7 @@ type MarkChange struct {
 
 // LoadMarks makes m the store's marks (plan 7e, Ruling 5): every mark feed
 // holds is put in, every mark m holds that feed lacks is lifted, unless it
-// is unwritten (Pend; Ruling T9-b), and on is told of each change, as
+// is unwritten (Pend; Ruling T9-b) or kept (Keep), and on is told of each change, as
 // Reloaded (nil tells nothing). An unrecorded mark the store now holds is
 // told Standing too (Unrecorded). It returns the
 // revision read at, which FollowMarks follows from.
