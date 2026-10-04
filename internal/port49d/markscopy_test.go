@@ -103,6 +103,29 @@ func TestACopiedMarkNotUnderstoodIsSkippedAlone(t *testing.T) {
 	if m, _ := filepath.Glob(path + ".bad-*"); len(m) != 0 {
 		t.Fatalf("a copy that decodes was moved aside: %v", m)
 	}
+	// A later write keeps each entry it did not understand, byte for byte:
+	// a downgrade never erases a revocation a newer port49 wrote.
+	carol := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:carol@example.com", At: time.Unix(11, 0).UTC()}
+	c.Apply(store.MarkChange{Revocation: carol, Standing: true})
+	c.Apply(store.MarkChange{Revocation: store.Revocation{Kind: carol.Kind, Key: "user:alice@example.com"}})
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, kept := range []string{`{"kind":"group","key":"group:ops","at":"2026-10-04T00:00:00Z"}`,
+		`{"kind":"principal","key":"user:bob@example.com"}`, `"user:carol@example.com"`} {
+		if !strings.Contains(string(raw), kept) {
+			t.Fatalf("the copy lost %s at a write: %s", kept, raw)
+		}
+	}
+	if strings.Contains(string(raw), "alice") {
+		t.Fatalf("a watched lift did not drop alice: %s", raw)
+	}
+	out.Reset()
+	if got := openMarksCopy(path, &out).All(); len(got) != 1 || got[0].Key != carol.Key ||
+		!strings.Contains(out.String(), "2 mark(s) in broker.state_dir/marks.json are not understood") {
+		t.Fatalf("reopened: %+v %q", got, out.String())
+	}
 }
 
 // keepCopied's marks stand through a load that lacks them with no hook

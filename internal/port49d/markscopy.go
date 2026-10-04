@@ -43,12 +43,16 @@ type marksCopy struct {
 	m    map[[2]string]store.Revocation
 	// failing is set while writes fail, so a run of them is said once.
 	failing bool
+	// unread is each entry of the file this port49 does not understand, as
+	// read, written back unchanged after the marks it does: a downgrade, or
+	// a field a newer port49 added, never erases a revocation.
+	unread []json.RawMessage
 }
 
 // marksFile is marks.json: every mark the copy holds, sorted by kind and
-// key.
+// key, then each entry it did not understand, unchanged.
 type marksFile struct {
-	Marks []copiedMark `json:"marks"`
+	Marks []json.RawMessage `json:"marks"`
 }
 
 type copiedMark struct {
@@ -67,7 +71,8 @@ type copiedMark struct {
 // the line says, with the way back (review M-1). A file that decodes keeps
 // every mark it holds that this port49 understands; one it does not (no
 // kind it knows, no key, no time: a newer port49's, read after a rollback)
-// is skipped alone and named, never discarding the rest (review M-2).
+// is skipped alone and named, never discarding the rest, and written back
+// unchanged at every write (review M-2).
 func openMarksCopy(path string, out io.Writer) *marksCopy {
 	c := &marksCopy{path: path, out: out, m: map[[2]string]store.Revocation{}}
 	raw, err := os.ReadFile(path)
@@ -83,8 +88,11 @@ func openMarksCopy(path string, out io.Writer) *marksCopy {
 	}
 	if err == nil {
 		var skipped []string
-		for _, m := range f.Marks {
-			if m.Key == "" || (m.Kind != store.RevocationPrincipal && m.Kind != store.RevocationCert) || m.At.IsZero() {
+		for _, e := range f.Marks {
+			var m copiedMark
+			if json.Unmarshal(e, &m) != nil || m.Key == "" || m.At.IsZero() ||
+				(m.Kind != store.RevocationPrincipal && m.Kind != store.RevocationCert) {
+				c.unread = append(c.unread, e)
 				skipped = append(skipped, fmt.Sprintf("%q %q", printsafe.Line(m.Kind, 64), printsafe.Line(m.Key, 256)))
 				continue
 			}
@@ -96,8 +104,8 @@ func openMarksCopy(path string, out io.Writer) *marksCopy {
 				named = append(named[:20:20], fmt.Sprintf("and %d more", len(skipped)-20))
 			}
 			fmt.Fprintf(out, "port49-broker: store: %d mark(s) in broker.state_dir/%s are not understood and are "+
-				"skipped (written by a newer port49, or edited by hand): this replica cannot put them back, and "+
-				"the file is written without them at the next change; revoke again any the store lacks: %s\n",
+				"skipped (written by a newer port49, or edited by hand): this replica neither enforces nor puts "+
+				"them back, and keeps them in the file unchanged; revoke again any the store lacks: %s\n",
 				len(skipped), stateMarksFile, strings.Join(named, ", "))
 		}
 		return c
@@ -172,11 +180,20 @@ func (c *marksCopy) stand(rs []store.Revocation) {
 
 // write rewrites the file from c.m; c.mu is held.
 func (c *marksCopy) write() {
-	f := marksFile{Marks: []copiedMark{}}
+	f := marksFile{Marks: []json.RawMessage{}}
+	var err error
 	for _, r := range c.sorted() {
-		f.Marks = append(f.Marks, copiedMark{Kind: r.Kind, Key: r.Key, At: r.At})
+		var e []byte
+		if e, err = json.Marshal(copiedMark{Kind: r.Kind, Key: r.Key, At: r.At}); err != nil {
+			break
+		}
+		f.Marks = append(f.Marks, e)
 	}
-	body, err := json.Marshal(f)
+	f.Marks = append(f.Marks, c.unread...)
+	var body []byte
+	if err == nil {
+		body, err = json.Marshal(f)
+	}
 	if err == nil {
 		err = writeOwnerOnly(c.path, body)
 	}
