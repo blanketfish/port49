@@ -155,7 +155,7 @@ func openBroker(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 		return fail(err)
 	}
 	fmt.Fprintf(out, "port49-broker: store: %d revocation(s) in force from the store\n", marks.Len())
-	gc := guardConfig("broker", e, m, out, func(error) {})
+	gc := guardConfig(procOf(cfg), "broker", e, m, out, func(error) {})
 	gc.StopAfter, gc.Unhealthy = 0, nil
 	bs.raw = b
 	bs.st = crypt.Wrap(guard.WrapRev(crypt.Fenced(b, ledger), gc), keys, m.CryptOpenFailures,
@@ -206,8 +206,11 @@ func announceBroker(w io.Writer, cfg *config.Config) {
 //  4. broker.state_dir's owner (ownStateDir), the keys and the tag key;
 //  5. the store, the ledger and the marks (openBroker), the context feed
 //     following at once;
-//  6. the broker, its certificate status, its listener with every mark in
-//     it, and only then the marks feed;
+//  6. the broker; the reload guard at a start (passGuardAtStart), which
+//     holds the start, not ready, while the policy file is refused against
+//     the bundle last judged; this replica's bundle record (keepBundle) and
+//     its ask for a full context pass; its certificate status, its
+//     listener with every mark in it, and only then the marks feed;
 //  7. the admin socket, the lab's seeds, and the API serving;
 //  8. the reloader, whose pass is the whole Refresh while this replica
 //     runs and its token half otherwise (Ruling 6);
@@ -282,7 +285,7 @@ func runBroker(parent context.Context, cfgPath string) error {
 			return fmt.Errorf("inventory.service: %w", err)
 		}
 		m.WatchInventoryAge(func() float64 { return math.NaN() })
-		picks, err := coldCopies(ctx, svc, verifyKeysAtStart, client, m, nil)
+		picks, err := coldCopies(ctx, procOf(cfg), svc, verifyKeysAtStart, client, m, nil)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil
@@ -293,7 +296,7 @@ func runBroker(parent context.Context, cfgPath string) error {
 		if err != nil {
 			return err
 		}
-		sayStart(svc, pick)
+		sayStart(procOf(cfg), svc, pick)
 		startDoc, startFrom = pick.p, pick.from
 		cfg.Inventory = startDoc.Inv
 		inventoryFrom = fmt.Sprintf("the inventory service's bundle %d", startDoc.Doc.Sequence)
@@ -344,7 +347,7 @@ func runBroker(parent context.Context, cfgPath string) error {
 		return err
 	}
 	if startDoc != nil {
-		persistStart(cfg.InventoryService, coldPick{startDoc, startFrom}, m)
+		persistStart(procOf(cfg), cfg.InventoryService, coldPick{startDoc, startFrom}, m)
 	}
 	brk.Sessions = session.New(bs.st, time.Now, cfg.ContextIdleTTL, cfg.Session.IndexTTL)
 	brk.Marks = marks
@@ -354,6 +357,68 @@ func runBroker(parent context.Context, cfgPath string) error {
 	// found, go to port49-broker's stderr (Ruling T9-c).
 	brk.Say = func(format string, args ...any) { fmt.Fprintf(stderr, "port49-broker: "+format+"\n", args...) }
 	brokerSay := func(format string, args ...any) { fmt.Fprintf(stderr, "port49-broker: "+format+"\n", args...) }
+
+	// The reload guard at a start (Ruling 17; pre-flight I6): a file the
+	// guard refuses against the bundle last judged holds the start, with
+	// nothing that mints served, until a version passes.
+	if err := passGuardAtStart(ctx, cfg, bs.raw, brk.Policy, inventoryFrom, m); err != nil {
+		return nil // stopped while the file was refused: nothing was served
+	}
+	host, _ := os.Hostname()
+	who := fmt.Sprintf("port49-broker on %s (pid %d, since %s)", host, os.Getpid(),
+		time.Now().UTC().Format(time.RFC3339))
+	// This replica's record of the bundle it serves (Ruling 8 corrected;
+	// pre-flight I3), renewed at every swap (swapped) and deleted at a
+	// graceful stop.
+	swapped := make(chan struct{}, 1)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		keepBundle(ctx, bs.raw, who, brk.Policy, cfg.Store.Etcd.HoldTTL, swapped, m, stderr)
+	}()
+	// A replica's start and each of its swaps while it does not run ask the
+	// runner for a full context pass (runner.owed): a context made from its
+	// token under another bundle is then judged. The writes are this
+	// goroutine's, the latest ask only, so the reloader never waits on the
+	// store (Task 15 review M-5). The start's ask is tried once at once,
+	// before the runner starts, so a takeover's carry covers it.
+	asks := make(chan string, 1)
+	ask := func(bundle string) {
+		select {
+		case <-asks:
+		default:
+		}
+		select {
+		case asks <- bundle:
+		default:
+		}
+	}
+	putAsk := func(ctx context.Context, bundle string) error {
+		actx, cancel := context.WithTimeout(ctx, 4*cfg.Store.Etcd.CallTimeout)
+		defer cancel()
+		if err := bs.raw.PutRefreshOwed(actx, who, bundle); err != nil {
+			return fmt.Errorf("asking the runner for a full context pass (bundle %s): %w", bundle, err)
+		}
+		return nil
+	}
+	if putAsk(ctx, brk.Policy.Load().Bundle) != nil {
+		ask(brk.Policy.Load().Bundle)
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case b := <-asks:
+				if err := retryCtx(ctx, func() error { return putAsk(ctx, b) }); err != nil && ctx.Err() == nil {
+					brokerSay("policy: %v; the runner judges this replica's contexts a token life after it last "+
+						"sees it serve another bundle", err)
+				}
+			}
+		}
+	}()
 
 	// Certificate status (spec §5.1.4; decision 33), its kept lists in
 	// broker.state_dir (Ruling 12): put in force now, fetched once the API
@@ -369,7 +434,7 @@ func runBroker(parent context.Context, cfgPath string) error {
 			return fmt.Errorf("broker.certificate_status.%w", err)
 		}
 		checker = certstatus.New(ccfg, time.Now, m,
-			func(format string, args ...any) { fmt.Fprintf(stderr, format+"\n", args...) })
+			func(format string, args ...any) { fmt.Fprintf(stderr, procOf(cfg)+": "+format+"\n", args...) })
 		checker.OnNewEntry(brk.OnCRLEntry)
 		for _, err := range checker.LoadPersisted() {
 			brokerSay("broker: certificate status: %s", printsafe.Line(err.Error(), 300))
@@ -392,7 +457,9 @@ func runBroker(parent context.Context, cfgPath string) error {
 		broker.ListenerLimits{MaxPendingPerSource: cfg.Broker.MaxPendingConnsPerSource,
 			MaxPerPrincipal:  cfg.Broker.MaxConnsPerPrincipal,
 			HandshakeTimeout: broker.DefaultListenerLimits.HandshakeTimeout},
-		m, time.Now, func(format string, args ...any) { fmt.Fprintf(stderr, format+"\n", args...) })
+		m, time.Now, func(format string, args ...any) {
+			fmt.Fprintf(stderr, procOf(cfg)+": "+format+"\n", args...)
+		})
 	for _, r := range marks.All() {
 		bl.Revoked(r, true)
 	}
@@ -465,17 +532,25 @@ func runBroker(parent context.Context, cfgPath string) error {
 		}()
 	}
 
-	host, _ := os.Hostname()
 	rn := &runner{cfg: cfg, brk: brk, raw: bs.raw, st: bs.st, meta: bs.raw, ledger: ledger, keys: keys, m: m,
-		judge: make(chan *policy.Policy, 1),
-		alarm: newKeyAlarm(), who: fmt.Sprintf("port49-broker on %s (pid %d, since %s)", host, os.Getpid(),
-			time.Now().UTC().Format(time.RFC3339))}
+		judge: make(chan *policy.Policy, 1), alarm: newKeyAlarm(), who: who}
 	// Every replica runs its own reload's token half; the runner the whole
-	// refresh, whose context half is its alone (Ruling 6).
+	// refresh, whose context half is its alone (Ruling 6), and the full
+	// passes a replica owes.
 	rel := newReloader(cfg, brk.Policy, log, rn.pass, m, time.Now)
 	rel.inventory, rel.cfgPath = inventoryAtStart, cfgPath
 	rel.startDocument(startDoc, startFrom)
 	rel.onSettled = rn.settled
+	rel.fullPass, rel.whole = make(chan fullPassOwed), rn.whole
+	rel.onSwap = func(pol *policy.Policy) {
+		select {
+		case swapped <- struct{}{}:
+		default:
+		}
+		if !rn.running() {
+			ask(pol.Bundle)
+		}
+	}
 	rn.rel = rel
 	wg.Add(2)
 	go func() {
@@ -502,7 +577,7 @@ func runBroker(parent context.Context, cfgPath string) error {
 	case <-ctx.Done():
 		fmt.Fprintln(stderr, "port49-broker: signal received, draining")
 	}
-	brk.SetReady(broker.ReadyDraining)
+	brk.SetReady(broker.ReadyDrainingOf(procOf(cfg)))
 	cancel()
 	// Close what Shutdown left at its timeout: the agents' held
 	// connections.

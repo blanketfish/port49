@@ -407,3 +407,96 @@ func TestJudgedIsReadBackAndAbsentIsNotFound(t *testing.T) {
 		t.Fatalf("said: %q", said.String())
 	}
 }
+
+// Each replica's record of the bundle it serves is listed while its ttl
+// lasts, and lapses by its own expiry; a who of any spelling round-trips,
+// and a graceful stop deletes it at once (plan 7e, Ruling 8; pre-flight
+// I3, 7e-2 P-5).
+func TestBundlesAreLeasedAndListed(t *testing.T) {
+	ctx := context.Background()
+	s := onShared(t, time.Now)
+	who := "port49-broker on host a (pid 7, since 2026-10-04T00:00:00Z)"
+	if err := s.PutBundle(ctx, who, "b1", time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutBundle(ctx, "replica-b", "b2", 2*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	recs, err := s.Bundles(ctx)
+	if err != nil || len(recs) != 2 {
+		t.Fatalf("two records: %+v %v", recs, err)
+	}
+	got := map[string]string{}
+	for _, r := range recs {
+		got[r.Who] = r.Bundle
+		if !r.ExpiresAt.After(r.At) {
+			t.Fatalf("a record expiring at %v, written at %v", r.ExpiresAt, r.At)
+		}
+	}
+	if got[who] != "b1" || got["replica-b"] != "b2" {
+		t.Fatalf("listed %v", got)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		recs, err := s.Bundles(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(recs) == 1 && recs[0].Who == who {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("a record past its 2s ttl is still listed after 5s: %+v", recs)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if err := s.DeleteBundle(ctx, who); err != nil {
+		t.Fatal(err)
+	}
+	if recs, err := s.Bundles(ctx); err != nil || len(recs) != 0 {
+		t.Fatalf("a deleted record is listed: %+v %v", recs, err)
+	}
+	if _, err := s.ctx.Put(ctx, s.k.meta("bundles/")+esc("bad"), "not json"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Bundles(ctx); err == nil || !strings.Contains(err.Error(), s.k.meta("bundles/")+"bad") ||
+		strings.Contains(err.Error(), "not json") {
+		t.Fatalf("a record that does not decode: %v", err)
+	}
+}
+
+// The ask for a full context pass is cleared only at the revision the
+// pass read: an ask written during the pass stays (pre-flight I3).
+func TestRefreshOwedIsClearedOnlyAtItsRevision(t *testing.T) {
+	ctx := context.Background()
+	s := onShared(t, time.Now)
+	if _, _, ok, err := s.RefreshOwed(ctx); ok || err != nil {
+		t.Fatalf("a new keyspace owes a pass: %v %v", ok, err)
+	}
+	if err := s.PutRefreshOwed(ctx, "replica-b", "b1"); err != nil {
+		t.Fatal(err)
+	}
+	rev1, rec, ok, err := s.RefreshOwed(ctx)
+	if !ok || err != nil || rec.Who != "replica-b" || rec.Bundle != "b1" {
+		t.Fatalf("%+v %v %v", rec, ok, err)
+	}
+	if err := s.PutRefreshOwed(ctx, "replica-c", "b2"); err != nil {
+		t.Fatal(err)
+	}
+	rev2, rec, ok, err := s.RefreshOwed(ctx)
+	if !ok || err != nil || rev2 <= rev1 || rec.Who != "replica-c" {
+		t.Fatalf("the second ask: %d after %d, %+v %v %v", rev2, rev1, rec, ok, err)
+	}
+	if err := s.ClearRefreshOwed(ctx, rev1); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, ok, err := s.RefreshOwed(ctx); !ok || err != nil {
+		t.Fatalf("a clear at the first ask's revision took the second: %v %v", ok, err)
+	}
+	if err := s.ClearRefreshOwed(ctx, rev2); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, ok, err := s.RefreshOwed(ctx); ok || err != nil {
+		t.Fatalf("a clear at its revision left the ask: %v %v", ok, err)
+	}
+}

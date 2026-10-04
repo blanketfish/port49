@@ -33,6 +33,8 @@ type fetcher struct {
 	url      string
 	interval time.Duration
 	metrics  *metrics.Metrics
+	// proc is the process's name, as its lines begin (procOf).
+	proc string
 	// etag is the last one handed over; failing the last failure said.
 	etag, failing string
 }
@@ -87,7 +89,7 @@ func (f *fetcher) once(ctx context.Context) (received, bool) {
 		f.metrics.InventoryFetches.WithLabelValues("failed").Inc()
 		if msg := oneLine(err); msg != f.failing {
 			f.failing = msg
-			fmt.Fprintf(stderr, "port49d: inventory: the inventory service at %s did not answer (%s); the bundle "+
+			fmt.Fprintf(stderr, f.proc+": inventory: the inventory service at %s did not answer (%s); the bundle "+
 				"in force keeps serving, and port49_inventory_snapshot_age_seconds climbs\n", f.url, msg)
 		}
 		return received{}, false
@@ -115,7 +117,7 @@ func (f *fetcher) once(ctx context.Context) (received, bool) {
 func (f *fetcher) answered() {
 	if f.failing != "" {
 		f.failing = ""
-		fmt.Fprintf(stderr, "port49d: inventory: the inventory service at %s answers again\n", f.url)
+		fmt.Fprintf(stderr, f.proc+": inventory: the inventory service at %s answers again\n", f.url)
 	}
 }
 
@@ -131,7 +133,7 @@ func startFetcher(ctx context.Context, r *reloader, client fetchClient, m *metri
 	r.docs, r.poke = docs, poke
 	svc := r.cfg.InventoryService
 	f := &fetcher{client: client, keys: func() []ed25519.PublicKey { return *r.verifyKeys.Load() },
-		url: svc.URL, interval: svc.PollInterval, metrics: m}
+		url: svc.URL, interval: svc.PollInterval, metrics: m, proc: procOf(r.cfg)}
 	f.etag = r.inForce
 	done := make(chan struct{})
 	go func() { defer close(done); f.run(ctx, docs, poke) }()

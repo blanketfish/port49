@@ -12,6 +12,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
+	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/policy"
@@ -130,6 +131,27 @@ func (m *metaOf) PutJudged(ctx context.Context, bundle string, raw []byte) error
 		return nil
 	}
 	return m.inner.PutJudged(ctx, bundle, raw)
+}
+
+func (m *metaOf) Bundles(ctx context.Context) ([]etcdstore.BundleRecord, error) {
+	if m.inner == nil {
+		return nil, nil
+	}
+	return m.inner.Bundles(ctx)
+}
+
+func (m *metaOf) RefreshOwed(ctx context.Context) (uint64, etcdstore.BundleRecord, bool, error) {
+	if m.inner == nil {
+		return 0, etcdstore.BundleRecord{}, false, nil
+	}
+	return m.inner.RefreshOwed(ctx)
+}
+
+func (m *metaOf) ClearRefreshOwed(ctx context.Context, rev uint64) error {
+	if m.inner == nil {
+		return nil
+	}
+	return m.inner.ClearRefreshOwed(ctx, rev)
 }
 
 func (m *metaOf) recorded() []string {
@@ -302,5 +324,161 @@ func TestAnUnavailableJudgedReadIsTriedAgain(t *testing.T) {
 	if !strings.Contains(out.String(), "is the one the last runner judged; no unspent token purged") ||
 		meta.reads.Load() < 2 {
 		t.Fatalf("an unavailable meta/judged read (%d read(s)):\n%s", meta.reads.Load(), out.String())
+	}
+}
+
+// skewMeta is meta/ for owed: the replicas' records and the ask, which
+// the test sets, and the revisions cleared.
+type skewMeta struct {
+	metaOf
+	mu      sync.Mutex
+	recs    []etcdstore.BundleRecord
+	reads   int
+	askRev  uint64
+	ask     etcdstore.BundleRecord
+	cleared []uint64
+	// kept is a clear that does not land: the ask stays.
+	kept bool
+}
+
+func (s *skewMeta) Bundles(context.Context) ([]etcdstore.BundleRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.reads++
+	return append([]etcdstore.BundleRecord(nil), s.recs...), nil
+}
+
+func (s *skewMeta) RefreshOwed(context.Context) (uint64, etcdstore.BundleRecord, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.askRev, s.ask, s.askRev != 0, nil
+}
+
+func (s *skewMeta) ClearRefreshOwed(_ context.Context, rev uint64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cleared = append(s.cleared, rev)
+	if rev == s.askRev && !s.kept {
+		s.askRev = 0
+	}
+	return nil
+}
+
+func (s *skewMeta) set(f func(s *skewMeta)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f(s)
+}
+
+func (s *skewMeta) bundleReads() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.reads
+}
+
+// The runner's watch over the other replicas (pre-flight I3): a replica
+// seen serving another bundle owes a full context pass once every token it
+// could have minted has expired, though it never asks, as one that dies
+// unreloaded never does; once, not at every look. A replica's ask newer
+// than the one the takeover covered is a full pass, asked again while it
+// fails, and cleared at its revision once it completes; the runner's own
+// record never owes one.
+func TestTheRunnerOwesAFullPassForAReplicaThatNeverAsks(t *testing.T) {
+	rig := newReloadRig(t, minimalPolicy)
+	var clock atomic.Int64
+	start := time.Unix(1_000_000, 0)
+	clock.Store(start.UnixNano())
+	rig.b.Now = func() time.Time { return time.Unix(0, clock.Load()) }
+	cfg := rig.cfg
+	cfg.Policy = &config.PolicyConfig{File: rig.cfg.Policy.File, WatchInterval: 50 * time.Millisecond}
+	meta := &skewMeta{askRev: 3, ask: etcdstore.BundleRecord{Who: "covered"}}
+	rel := &reloader{fullPass: make(chan fullPassOwed)}
+	r := &runner{cfg: cfg, brk: rig.b, meta: meta, rel: rel, who: "runner-a", covered: 3}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() { defer close(done); r.owed(ctx) }()
+	defer func() { cancel(); <-done }()
+	none := func(what string) {
+		t.Helper()
+		select {
+		case o := <-rel.fullPass:
+			t.Fatalf("%s: a full pass owed by %s", what, o.who)
+		case <-time.After(300 * time.Millisecond):
+		}
+	}
+	next := func(what string) fullPassOwed {
+		t.Helper()
+		select {
+		case o := <-rel.fullPass:
+			return o
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%s: no full pass owed", what)
+		}
+		return fullPassOwed{}
+	}
+	none("the ask the takeover covered")
+	mine := rig.b.Policy.Load().Bundle
+	meta.set(func(s *skewMeta) {
+		s.recs = []etcdstore.BundleRecord{{Who: "runner-a", Bundle: "b-runner-lags"}, {Who: "replica-b", Bundle: "b-old"}}
+	})
+	reads := meta.bundleReads()
+	waitUntil(t, "the watch to see the replica", func() bool { return meta.bundleReads() > reads+1 })
+	meta.set(func(s *skewMeta) { s.recs = []etcdstore.BundleRecord{{Who: "runner-a", Bundle: "b-runner-lags"}} })
+	reads = meta.bundleReads()
+	waitUntil(t, "the watch to see it gone", func() bool { return meta.bundleReads() > reads+1 })
+	clock.Store(start.Add(policy.MaxTokenTTL - time.Second).UnixNano())
+	none("a token life not yet past")
+	clock.Store(start.Add(policy.MaxTokenTTL).UnixNano())
+	o := next("a token life after the replica was last seen")
+	if o.who != "a replica that served another bundle" || o.bundle != "b-old" {
+		t.Fatalf("owed by %q (bundle %q)", o.who, o.bundle)
+	}
+	o.done <- nil
+	clock.Store(start.Add(3 * policy.MaxTokenTTL).UnixNano())
+	none("the pass is owed once")
+	clock.Store(start.Add(5 * policy.MaxTokenTTL).UnixNano())
+	none("the runner's own lagging record owes none")
+	meta.set(func(s *skewMeta) {
+		s.recs = []etcdstore.BundleRecord{{Who: "runner-a", Bundle: mine}}
+		s.askRev, s.kept = 7, true // a clear that does not land: handled all the same
+		s.ask = etcdstore.BundleRecord{Who: "port49-broker on b (pid 1, since 2026-10-04T00:00:00Z)", Bundle: "b-new"}
+	})
+	o = next("a replica's ask")
+	if o.who != `"port49-broker on b (pid 1, since 2026-10-04T00:00:00Z)"` || o.bundle != "b-new" {
+		t.Fatalf("owed by %q (bundle %q)", o.who, o.bundle)
+	}
+	o.done <- errors.New("the pass stopped")
+	o = next("an ask whose pass failed")
+	o.done <- nil
+	waitUntil(t, "the ask cleared at its revision", func() bool {
+		meta.mu.Lock()
+		defer meta.mu.Unlock()
+		return len(meta.cleared) == 2 && meta.cleared[0] == 3 && meta.cleared[1] == 7
+	})
+	none("an ask handled")
+}
+
+// No bundle is recorded as judged while any replica's record names
+// another: its tokens, and the contexts they make, carry a policy no pass
+// judged, so the next takeover must purge (Ruling 8 corrected; pre-flight
+// I3).
+func TestNoBundleIsJudgedWhileAReplicaServesAnother(t *testing.T) {
+	rig := newReloadRig(t, minimalPolicy)
+	pol := rig.b.Policy.Load()
+	meta := &skewMeta{recs: []etcdstore.BundleRecord{{Who: "runner-a", Bundle: pol.Bundle}, {Who: "replica-b", Bundle: "b-old"}}}
+	r := &runner{brk: rig.b, meta: meta}
+	rig.with(func() { r.recordJudged(context.Background(), pol, "a test") })
+	if got := meta.recorded(); len(got) != 0 {
+		t.Fatalf("recorded %q while a replica serves another bundle", got)
+	}
+	if !strings.Contains(rig.out.String(), "port49-broker: runner: not recording bundle "+pol.Bundle+
+		" as judged: ? serves bundle b-old") {
+		t.Fatalf("said: %q", rig.out.String())
+	}
+	meta.set(func(s *skewMeta) { s.recs = s.recs[:1] })
+	rig.with(func() { r.recordJudged(context.Background(), pol, "a test") })
+	if got := meta.recorded(); len(got) != 1 || got[0] != pol.Bundle {
+		t.Fatalf("recorded %q once every replica serves %s", got, pol.Bundle)
 	}
 }

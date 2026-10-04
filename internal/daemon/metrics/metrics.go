@@ -263,6 +263,15 @@ type Metrics struct {
 	// beside port49_policy_file_refused: an edit that loaded, and has not yet
 	// reached every live session.
 	PolicyRefreshPending prometheus.Gauge
+	// port49_policy_bundle_matches_runner: 1 while this broker serves the
+	// bundle the runner serves, or this port49d the bundle the runner last
+	// judged (plan 7e, Ruling 8; pre-flight I3; re-check R5). 0 on a broker
+	// is a replica whose policy file differs: its tokens and the contexts
+	// they make carry another policy until it reloads. 0 on a port49d past
+	// the runner's settle pass is a policy file that differs from the
+	// brokers', for admission, quarantine and redaction. It starts at 1:
+	// nothing is known to differ until a read says so.
+	PolicyBundleMatchesRunner prometheus.Gauge
 	// port49_inventory_reloads_total{outcome}: attempts to put a changed
 	// inventory_file in force (plan 6a) — "applied", "unchanged" (the same
 	// devices, respelled), or "refused" (it could not be read behind the
@@ -495,6 +504,11 @@ func New(reg prometheus.Registerer) *Metrics {
 			Help: "1 while the policy file on disk is one port49d refused, or has not stopped changing, and an older policy is serving."}),
 		PolicyRefreshPending: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_policy_refresh_pending",
 			Help: "1 from a policy swap or grant expiry until its settle pass has carried it into every live login context."}),
+		PolicyBundleMatchesRunner: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_policy_bundle_matches_runner",
+			Help: "1 while this broker serves the bundle the runner serves, or this port49d the bundle the runner " +
+				"last judged; 0 on a broker is a replica whose policy file differs: its tokens and the contexts they " +
+				"make carry another policy until it reloads; 0 on a port49d past the runner's settle pass is a " +
+				"policy file that differs from the brokers', for admission, quarantine and redaction."}),
 		InventoryReloads: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_inventory_reloads_total",
 			Help: "Attempts to put a changed inventory file in force, by outcome."}, []string{"outcome"}),
 		InventoryFileRefused: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_inventory_file_refused",
@@ -548,9 +562,13 @@ func New(reg prometheus.Registerer) *Metrics {
 		m.ContextsReindexFailures, m.SessionRefreshes, m.TokensSuperseded, m.CeilingWarnings,
 		m.Revocations, m.RevocationsInForce, m.RevocationsFileFailed, m.CertStatusChecks, m.CRLLoads, m.CRLNextUpdate,
 		m.CertStatusUnavailable, m.PolicyReloads, m.PolicyFileRefused,
-		m.PolicyRefreshPending, m.InventoryReloads, m.InventoryFileRefused, m.InventorySnapshotAge,
+		m.PolicyRefreshPending, m.PolicyBundleMatchesRunner, m.InventoryReloads, m.InventoryFileRefused,
+		m.InventorySnapshotAge,
 		m.InventoryChanges, m.InventoryBundleSequence, m.InventoryPersistFailed, m.InventoryBundleRefused,
 		m.InventoryPolicyMismatch, m.InventoryMirrorUnreadable, m.InventoryFetches)
+	// Nothing is known to differ until a read says so: a process with no
+	// runner to compare with (memory) reads 1.
+	m.PolicyBundleMatchesRunner.Set(1)
 	// process_start_time_seconds among them: an alert on
 	// port49_key_version_devices gates on uptime, because the count starts
 	// at 0 with every restart (spec §10). No labels.

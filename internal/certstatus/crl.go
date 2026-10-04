@@ -177,7 +177,7 @@ func (c *Checker) install(src CRLSource, l *loadedCRL, persist bool) error {
 	c.gaugeOne(l)
 	if persist && c.cfg.StateDir != "" {
 		if err := inventory.WriteAtomic(c.cfg.StateDir, stateFile(src.Name), l.list.Raw, 0o600); err != nil {
-			c.say("persist "+src.Name, "port49d: broker: certificate status: CRL %s could not be kept in %s (%v); "+
+			c.say("persist "+src.Name, "broker: certificate status: CRL %s could not be kept in %s (%v); "+
 				"a restart will fetch it again", src.Name, c.cfg.StateDir, err)
 		}
 	}
@@ -254,11 +254,11 @@ func (c *Checker) loaded(src CRLSource, l *loadedCRL, fresh bool) {
 	}
 	next := c.nextUpdate(l)
 	if !c.now().Before(next) {
-		c.logf("port49d: broker: certificate status: CRL %s loaded, but its next update, %s, has passed: "+
+		c.logf("broker: certificate status: CRL %s loaded, but its next update, %s, has passed: "+
 			"it establishes nothing until the CA publishes a newer list", src.Name, next.UTC().Format(time.RFC3339))
 		return
 	}
-	c.logf("port49d: broker: certificate status: CRL %s loaded (next update %s)", src.Name,
+	c.logf("broker: certificate status: CRL %s loaded (next update %s)", src.Name,
 		next.UTC().Format(time.RFC3339))
 }
 
@@ -321,7 +321,7 @@ func (c *Checker) Run(ctx context.Context) {
 				continue
 			}
 			if err := c.load(ctx, src); err != nil {
-				c.say("load "+src.Name, "port49d: broker: certificate status: CRL %s: %s; the list in force stays "+
+				c.say("load "+src.Name, "broker: certificate status: CRL %s: %s; the list in force stays "+
 					"until its next update", src.Name, printsafe.Line(err.Error(), 300))
 				n.delay = min(max(2*n.delay, retryFirst), c.cfg.RefreshInterval)
 				n.at = c.now().Add(n.delay)

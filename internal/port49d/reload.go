@@ -170,6 +170,31 @@ type reloader struct {
 	// goroutine: true for a pass at once (startLeft). run is the only
 	// caller of startLeft once it runs.
 	owed chan bool
+	// onSwap is told each policy a swap put in force, after the swap, on
+	// this goroutine: port49-broker records the bundle it serves and asks
+	// the runner for a full context pass (plan 7e, Ruling 8 corrected). It
+	// must not wait. Nil tells no one.
+	onSwap func(pol *policy.Policy)
+	// fullPass is how the runner's duties hand run a full context pass a
+	// replica owes (runner.owed), which whole runs (full). Both are
+	// port49-broker's; elsewhere fullPass is nil, and a receive never fires.
+	fullPass chan fullPassOwed
+	whole    func(ctx context.Context, priors []broker.Prior) (broker.RefreshReport, error)
+}
+
+// fullPassOwed is a full context pass the runner owes: who asked, or why
+// it is owed, already safe to print, and the bundle it served. done is
+// told the pass's error, nil once it completed.
+type fullPassOwed struct {
+	who, bundle string
+	done        chan<- error
+}
+
+// sayf writes one of the reloader's lines to stderr, format ending in its
+// newline, prefixed with the name of the process it serves (procOf):
+// port49d's lines read "port49d: ", port49-broker's "port49-broker: ".
+func (r *reloader) sayf(format string, args ...any) {
+	fmt.Fprintf(stderr, procOf(r.cfg)+": "+format, args...)
 }
 
 // combinedFrom is the load that asked loadBoth for a combined try: a SIGHUP,
@@ -244,14 +269,14 @@ func (r *reloader) sayPolicyMatch() {
 		r.metrics.InventoryPolicyMismatch.Set(0)
 		if r.mismatch != "" {
 			r.mismatch = ""
-			fmt.Fprintf(stderr, "port49d: inventory: the service's policy and the policy in force agree again (%s)\n", mine)
+			r.sayf("inventory: the service's policy and the policy in force agree again (%s)\n", mine)
 		}
 		return
 	}
 	r.metrics.InventoryPolicyMismatch.Set(1)
 	if key := r.docPolicy + " " + mine; key != r.mismatch {
 		r.mismatch = key
-		fmt.Fprintf(stderr, "port49d: inventory: the service built bundle %d against policy %s, and the policy in "+
+		r.sayf("inventory: the service built bundle %d against policy %s, and the policy in "+
 			"force is %s; its inventory is applied against the policy in force, and nothing the service sends changes "+
 			"the policy (spec §13, decision 29)\n", r.seq, r.docPolicy, mine)
 	}
@@ -305,7 +330,38 @@ func (r *reloader) run(ctx context.Context, hup <-chan os.Signal) {
 			r.refresh(ctx)
 		case now := <-r.owed:
 			r.startLeft(now)
+		case o := <-r.fullPass:
+			r.full(ctx, o)
 		}
+	}
+}
+
+// full runs a full context pass the runner owes (fullPassOwed): every live
+// context judged against the policy in force, as a takeover's carry
+// judges them, by the whole Refresh, never its token half (whole). A
+// replica that minted under another bundle made contexts no pass of this
+// one's priors reaches; this one does. A pass that does not complete is
+// said and stays owed: the runner asks again at its next look. One that
+// completes with nothing else pending tells onSettled, as a settled pass
+// does, so the bundle can be recorded as judged once every replica serves
+// it.
+func (r *reloader) full(ctx context.Context, o fullPassOwed) {
+	cur := r.live.Load()
+	rep, err := r.whole(ctx, []broker.Prior{{Policy: cur, At: r.now()}})
+	if err != nil {
+		if ctx.Err() == nil {
+			fmt.Fprintf(stderr, "port49-broker: runner: a full context pass owed by %s (bundle %s) stopped "+
+				"(%s so far): %v; it stays owed, and runs again at the runner's next look\n", o.who, o.bundle,
+				summary(rep), err)
+		}
+		o.done <- err
+		return
+	}
+	fmt.Fprintf(stderr, "port49-broker: runner: a full context pass owed by %s (bundle %s): %s\n", o.who, o.bundle,
+		summary(rep))
+	o.done <- nil
+	if r.settle.IsZero() && r.retry.IsZero() && r.onSettled != nil {
+		r.onSettled(cur)
 	}
 }
 
@@ -347,7 +403,7 @@ func (r *reloader) pollPolicy(ctx context.Context) {
 		if r.refused != "" || alarmed {
 			r.refused = ""
 			r.metrics.PolicyFileRefused.Set(0)
-			fmt.Fprintf(stderr, "port49d: policy: %s %s is the policy in force again (%s, bundle %s)\n", policyKey(r.cfg),
+			r.sayf("policy: %s %s is the policy in force again (%s, bundle %s)\n", policyKey(r.cfg),
 				r.cfg.Policy.File, v, r.live.Load().Bundle)
 			r.retryInventory(ctx, "policy file put back")
 		}
@@ -361,7 +417,7 @@ func (r *reloader) pollPolicy(ctx context.Context) {
 		r.pending = v
 		if r.changing++; r.changing == stillChangingAfter {
 			r.metrics.PolicyFileRefused.Set(1)
-			fmt.Fprintf(stderr, "port49d: policy: %s %s has changed at each of the last %d reads, "+
+			r.sayf("policy: %s %s has changed at each of the last %d reads, "+
 				"%s apart, so it is not loaded; still serving %s (bundle %s); write it once, atomically\n",
 				policyKey(r.cfg), r.cfg.Policy.File, stillChangingAfter, r.interval, r.live.Load().Source,
 				r.live.Load().Bundle)
@@ -404,7 +460,7 @@ func (r *reloader) pollInventory(ctx context.Context) {
 		r.metrics.InventoryFileRefused.Set(0)
 		if r.invRefused != "" || alarmed {
 			r.invRefused = ""
-			fmt.Fprintf(stderr, "port49d: inventory: inventory_file %s is the inventory in force again (bundle %s)\n",
+			r.sayf("inventory: inventory_file %s is the inventory in force again (bundle %s)\n",
 				r.cfg.InventoryFile, r.live.Load().Bundle)
 		}
 	case v == r.invRefused:
@@ -413,7 +469,7 @@ func (r *reloader) pollInventory(ctx context.Context) {
 		r.invPending = v
 		if r.invChanging++; r.invChanging == stillChangingAfter {
 			r.metrics.InventoryFileRefused.Set(1)
-			fmt.Fprintf(stderr, "port49d: inventory: inventory_file %s has changed at each of the last %d reads, "+
+			r.sayf("inventory: inventory_file %s has changed at each of the last %d reads, "+
 				"%s apart, so it is not loaded; still serving bundle %s; write it once, atomically\n",
 				r.cfg.InventoryFile, stillChangingAfter, r.interval, r.live.Load().Bundle)
 		}
@@ -591,7 +647,7 @@ func (r *reloader) loadBoth(ctx context.Context, trigger string, from combinedFr
 		}
 		if pair := v + " " + iv; pair != r.together {
 			r.together = pair
-			fmt.Fprintf(stderr, "port49d: policy and inventory reload (%s) refused together; still serving %s "+
+			r.sayf("policy and inventory reload (%s) refused together; still serving %s "+
 				"(bundle %s): %s\n", trigger, old.Source, old.Bundle, refusalLine(err, d == nil, old, pol))
 		}
 		return false
@@ -602,7 +658,7 @@ func (r *reloader) loadBoth(ctx context.Context, trigger string, from combinedFr
 	r.metrics.InventoryReloads.WithLabelValues("applied").Inc()
 	if d != nil {
 		if d.pub.Doc.Sequence < r.seq {
-			fmt.Fprintf(stderr, "port49d: inventory: the service's sequence went back from %d to %d: its state_dir "+
+			r.sayf("inventory: the service's sequence went back from %d to %d: its state_dir "+
 				"was reset; applying it (spec §10)\n", r.seq, d.pub.Doc.Sequence)
 		}
 		r.inForce, r.seq, r.inForceAt, r.latestRaw = d.etag, d.pub.Doc.Sequence, d.pub.Doc.PublishedAt, d.raw
@@ -617,7 +673,7 @@ func (r *reloader) loadBoth(ctx context.Context, trigger string, from combinedFr
 	r.invSeen.Store(r.now().UnixNano())
 	now := r.swap(pol)
 	rep := bundle.Diff(old, pol, now)
-	fmt.Fprintf(stderr, "port49d: policy and inventory reloaded together (%s): %s replaces %s; %s; %d device(s) "+
+	r.sayf("policy and inventory reloaded together (%s): %s replaces %s; %s; %d device(s) "+
 		"quarantined now, %d before; %d refused admission\n", trigger, pol.Source, old.Source, rep.Summary(),
 		quarantinedAt(pol, now), quarantinedAt(old, now), len(pol.AdmissionRefusals()))
 	r.after(ctx, "policy and inventory", rep, pol, now)
@@ -642,10 +698,10 @@ func (r *reloader) rereadBound() {
 	}
 	switch {
 	case err != nil:
-		fmt.Fprintf(stderr, "port49d: SIGHUP: inventory.max_removed_percent not re-read from %s (%s); keeping %d%%\n",
+		r.sayf("SIGHUP: inventory.max_removed_percent not re-read from %s (%s); keeping %d%%\n",
 			r.cfgPath, oneLine(err), r.cfg.MaxRemovedPercent)
 	case n != r.cfg.MaxRemovedPercent:
-		fmt.Fprintf(stderr, "port49d: SIGHUP: inventory.max_removed_percent is now %d%% (was %d%%)\n", n,
+		r.sayf("SIGHUP: inventory.max_removed_percent is now %d%% (was %d%%)\n", n,
 			r.cfg.MaxRemovedPercent)
 		r.cfg.MaxRemovedPercent = n
 	}
@@ -711,7 +767,7 @@ func (r *reloader) confirmed() {
 			r.metrics.InventoryBundleRefused.Set(1)
 			if r.docRefused != r.inForce {
 				r.docRefused = r.inForce
-				fmt.Fprintf(stderr, "port49d: inventory: bundle %d, in force, no longer opens under the verify keys "+
+				r.sayf("inventory: bundle %d, in force, no longer opens under the verify keys "+
 					"in force (%s); it keeps serving until the service sends a document that does, and "+
 					"port49_inventory_bundle_refused stays 1\n", r.seq, oneLine(quotesCut{err}))
 			}
@@ -816,7 +872,7 @@ func (r *reloader) loadDocument(ctx context.Context, trigger string, d received)
 		r.metrics.InventoryBundleRefused.Set(1)
 		if d.etag != r.docRefused {
 			r.docRefused = d.etag
-			fmt.Fprintf(stderr, "port49d: inventory reload (%s) refused; still serving bundle %s (%d): %s\n", label,
+			r.sayf("inventory reload (%s) refused; still serving bundle %s (%d): %s\n", label,
 				old.Bundle, r.seq, oneLine(quotesCut{err}))
 		}
 		return
@@ -824,7 +880,7 @@ func (r *reloader) loadDocument(ctx context.Context, trigger string, d received)
 	r.docRefused = ""
 	r.metrics.InventoryBundleRefused.Set(0)
 	if pub.Doc.Sequence < r.seq {
-		fmt.Fprintf(stderr, "port49d: inventory: the service's sequence went back from %d to %d: its state_dir was "+
+		r.sayf("inventory: the service's sequence went back from %d to %d: its state_dir was "+
 			"reset; applying it (spec §10)\n", r.seq, pub.Doc.Sequence)
 	}
 	r.inForce, r.seq, r.inForceAt, r.latestRaw = bundle.ETag(d.raw), pub.Doc.Sequence, pub.Doc.PublishedAt, d.raw
@@ -842,7 +898,7 @@ func (r *reloader) loadDocument(ctx context.Context, trigger string, d received)
 	now := r.swap(pol)
 	r.refused = ""
 	rep := bundle.Diff(old, pol, now)
-	fmt.Fprintf(stderr, "port49d: inventory reloaded (%s): %s; %d device(s) quarantined now, %d before; %d refused "+
+	r.sayf("inventory reloaded (%s): %s; %d device(s) quarantined now, %d before; %d refused "+
 		"admission\n", label, rep.Summary(), quarantinedAt(pol, now), quarantinedAt(old, now), len(pol.AdmissionRefusals()))
 	r.after(ctx, "inventory", rep, pol, now)
 	r.sayPolicyMatch()
@@ -856,7 +912,7 @@ func (r *reloader) persist(raw []byte) {
 		r.persistOwed = true
 		if r.metrics.InventoryPersistFailed.Set(1); r.persistSaid != oneLine(err) {
 			r.persistSaid = oneLine(err)
-			fmt.Fprintf(stderr, "port49d: inventory: state_dir %s: %s; a restart with the service down would start "+
+			r.sayf("inventory: state_dir %s: %s; a restart with the service down would start "+
 				"from an older copy\n", r.cfg.InventoryService.StateDir, r.persistSaid)
 		}
 		return
@@ -882,7 +938,7 @@ func (r *reloader) rereadVerifyKeys() {
 	}
 	if r.cfg.InventoryService == nil {
 		if err == nil && svc != nil {
-			fmt.Fprintf(stderr, "port49d: SIGHUP: %s has an inventory.service block; the inventory source is read at "+
+			r.sayf("SIGHUP: %s has an inventory.service block; the inventory source is read at "+
 				"start only; still reading inventory_file %s\n", r.cfgPath, r.cfg.InventoryFile)
 		}
 		return
@@ -893,18 +949,18 @@ func (r *reloader) rereadVerifyKeys() {
 	}
 	switch {
 	case err != nil:
-		fmt.Fprintf(stderr, "port49d: SIGHUP: inventory.service.verify_key_files not re-read from %s (%s); keeping "+
+		r.sayf("SIGHUP: inventory.service.verify_key_files not re-read from %s (%s); keeping "+
 			"the keys in force\n", r.cfgPath, oneLine(err))
 	case svc == nil:
-		fmt.Fprintf(stderr, "port49d: SIGHUP: %s has no inventory.service block; the inventory source is read at "+
+		r.sayf("SIGHUP: %s has no inventory.service block; the inventory source is read at "+
 			"start only; keeping the service and the keys in force\n", r.cfgPath)
 	default:
 		r.verifyKeys.Store(&keys)
-		fmt.Fprintf(stderr, "port49d: SIGHUP: %d inventory verify key(s) in force\n", len(keys))
+		r.sayf("SIGHUP: %d inventory verify key(s) in force\n", len(keys))
 		if cur := r.cfg.InventoryService; svc.URL != cur.URL || svc.CAFile != cur.CAFile ||
 			svc.TLSCertFile != cur.TLSCertFile || svc.TLSKeyFile != cur.TLSKeyFile || svc.StateDir != cur.StateDir ||
 			svc.MirrorDir != cur.MirrorDir || svc.PollInterval != cur.PollInterval {
-			fmt.Fprintf(stderr, "port49d: SIGHUP: inventory.service in %s differs from the one in force beyond "+
+			r.sayf("SIGHUP: inventory.service in %s differs from the one in force beyond "+
 				"verify_key_files; those keys are read at start only, so still asking %s every %s\n", r.cfgPath,
 				cur.URL, cur.PollInterval)
 		}
@@ -951,7 +1007,7 @@ func (r *reloader) load(ctx context.Context, trigger string, raw []byte, v strin
 		r.metrics.PolicyReloads.WithLabelValues("refused").Inc()
 		r.metrics.PolicyFileRefused.Set(1)
 		r.refused = v
-		fmt.Fprintf(stderr, "port49d: policy reload (%s) refused; still serving %s (bundle %s): %s\n", trigger,
+		r.sayf("policy reload (%s) refused; still serving %s (bundle %s): %s\n", trigger,
 			old.Source, old.Bundle, refusalLine(err, false, old, pol))
 		return false
 	}
@@ -959,7 +1015,7 @@ func (r *reloader) load(ctx context.Context, trigger string, raw []byte, v strin
 	r.metrics.PolicyFileRefused.Set(0)
 	if pol.Source == old.Source {
 		r.metrics.PolicyReloads.WithLabelValues("unchanged").Inc()
-		fmt.Fprintf(stderr, "port49d: policy reload (%s): %s unchanged, %s in force (bundle %s)\n",
+		r.sayf("policy reload (%s): %s unchanged, %s in force (bundle %s)\n",
 			trigger, policyKey(r.cfg), pol.Source, pol.Bundle)
 		return false
 	}
@@ -969,7 +1025,7 @@ func (r *reloader) load(ctx context.Context, trigger string, raw []byte, v strin
 	// move done in the wrong order, say — is tried again against this one at
 	// the next polls (plan 6a, C3).
 	r.invRefused = ""
-	fmt.Fprintf(stderr, "port49d: policy reloaded (%s): %s replaces %s (bundle %s); %d device(s) quarantined now, %d before\n",
+	r.sayf("policy reloaded (%s): %s replaces %s (bundle %s); %d device(s) quarantined now, %d before\n",
 		trigger, pol.Source, old.Source, pol.Bundle, quarantinedAt(pol, now), quarantinedAt(old, now))
 	r.after(ctx, "policy", bundle.Diff(old, pol, now), pol, now)
 	r.sayPolicyMatch()
@@ -1006,7 +1062,7 @@ func (r *reloader) loadInventory(ctx context.Context, trigger string, raw []byte
 		r.metrics.InventoryReloads.WithLabelValues("refused").Inc()
 		r.metrics.InventoryFileRefused.Set(1)
 		r.invRefused = v
-		fmt.Fprintf(stderr, "port49d: inventory reload (%s) refused; still serving bundle %s: %s\n", trigger,
+		r.sayf("inventory reload (%s) refused; still serving bundle %s: %s\n", trigger,
 			old.Bundle, oneLine(err))
 		return
 	}
@@ -1016,7 +1072,7 @@ func (r *reloader) loadInventory(ctx context.Context, trigger string, raw []byte
 	if pol.Bundle == old.Bundle {
 		// The same devices, respelled: nothing to swap.
 		r.metrics.InventoryReloads.WithLabelValues("unchanged").Inc()
-		fmt.Fprintf(stderr, "port49d: inventory reload (%s): the same inventory, respelled; bundle %s in force\n",
+		r.sayf("inventory reload (%s): the same inventory, respelled; bundle %s in force\n",
 			trigger, old.Bundle)
 		return
 	}
@@ -1026,7 +1082,7 @@ func (r *reloader) loadInventory(ctx context.Context, trigger string, raw []byte
 	// against this one at the next polls, as the other way round (C3).
 	r.refused = ""
 	rep := bundle.Diff(old, pol, now)
-	fmt.Fprintf(stderr, "port49d: inventory reloaded (%s): %s; %d device(s) quarantined now, %d before; %d refused "+
+	r.sayf("inventory reloaded (%s): %s; %d device(s) quarantined now, %d before; %d refused "+
 		"admission\n", trigger, rep.Summary(), quarantinedAt(pol, now), quarantinedAt(old, now),
 		len(pol.AdmissionRefusals()))
 	r.after(ctx, "inventory", rep, pol, now)
@@ -1051,7 +1107,7 @@ func (r *reloader) inventoryBundle(old *policy.Policy, inv admission.Inventory) 
 // swap puts pol in force and opens its span, as every reload does: Swap
 // waits for the mints in flight, which finish on the bundle they started
 // with, so the replaced bundle's span ends when it returns; the next grant
-// expiry is read from pol, and a settle pass is owed.
+// expiry is read from pol, a settle pass is owed, and onSwap is told.
 func (r *reloader) swap(pol *policy.Policy) time.Time {
 	r.live.Swap(pol)
 	assigned := func(device string) string {
@@ -1078,6 +1134,9 @@ func (r *reloader) swap(pol *policy.Policy) time.Time {
 	if r.pass != nil {
 		r.metrics.PolicyRefreshPending.Set(1)
 	}
+	if r.onSwap != nil {
+		r.onSwap(pol)
+	}
 	return now
 }
 
@@ -1088,10 +1147,10 @@ func (r *reloader) swap(pol *policy.Policy) time.Time {
 // says which file changed access.
 func (r *reloader) after(ctx context.Context, file string, rep bundle.Report, pol *policy.Policy, now time.Time) {
 	if n := r.securityEvents(rep, now); n > 0 {
-		fmt.Fprintf(stderr, "port49d: %s: %d security change(s) written as inventory_change records "+
+		r.sayf("%s: %d security change(s) written as inventory_change records "+
 			"(spec §10)\n", file, n)
 	}
-	sayPolicy(pol, now)
+	sayPolicy(procOf(r.cfg), pol, now)
 	r.refresh(ctx)
 }
 
@@ -1150,10 +1209,10 @@ func (r *reloader) refresh(ctx context.Context) {
 		if errors.Is(err, store.ErrConflict) {
 			// Every context was visited and the store answered: only the busy
 			// ones, counted failed, are left.
-			fmt.Fprintf(stderr, "port49d: policy refresh: %d context(s) still changing after every attempt keep "+
+			r.sayf("policy refresh: %d context(s) still changing after every attempt keep "+
 				"their previous policy (%s); trying them again in %s\n", rep.Failed, summary(rep), refreshRetry)
 		} else {
-			fmt.Fprintf(stderr, "port49d: policy refresh stopped (%s so far): %v; the contexts not reached keep "+
+			r.sayf("policy refresh stopped (%s so far): %v; the contexts not reached keep "+
 				"their previous policy; trying again in %s\n", summary(rep), err, refreshRetry)
 		}
 		r.retry = r.now().Add(refreshRetry)
@@ -1179,9 +1238,9 @@ func (r *reloader) refresh(ctx context.Context) {
 	switch {
 	case r.stopped:
 		r.stopped = false
-		fmt.Fprintf(stderr, "port49d: policy refresh finished: %s\n", summary(rep))
+		r.sayf("policy refresh finished: %s\n", summary(rep))
 	case rep.Updated+rep.Revoked+rep.Quarantined+rep.Failed+rep.TokenKeys > 0:
-		fmt.Fprintf(stderr, "port49d: policy refresh: %s\n", summary(rep))
+		r.sayf("policy refresh: %s\n", summary(rep))
 	}
 	r.reschedule()
 	if r.settle.IsZero() && r.onSettled != nil {

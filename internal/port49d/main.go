@@ -133,7 +133,7 @@ func newCtxID() string {
 func mintSeeds(ctx context.Context, cfg config.Config, minter *token.Minter) (logins, enables int, err error) {
 	f, err := os.OpenFile(cfg.Lab.SeedTokenFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|syscall.O_NOFOLLOW, 0o600)
 	if err != nil {
-		return 0, 0, fmt.Errorf("port49d: opening lab.seed_token_file %s (a symlink at that path is refused, "+
+		return 0, 0, fmt.Errorf(procOf(cfg)+": opening lab.seed_token_file %s (a symlink at that path is refused, "+
 			"deliberately: the credentials would land wherever it points): %w", cfg.Lab.SeedTokenFile, err)
 	}
 	defer f.Close()
@@ -165,7 +165,7 @@ func mintSeeds(ctx context.Context, cfg config.Config, minter *token.Minter) (lo
 			},
 			Device: t.NAS, Platform: "lab", WithEnable: t.Enable, TTL: cfg.ContextIdleTTL})
 		if err != nil {
-			return logins, enables, fmt.Errorf("port49d: minting the lab seed for %s on %s: %w", user, t.NAS, err)
+			return logins, enables, fmt.Errorf(procOf(cfg)+": minting the lab seed for %s on %s: %w", user, t.NAS, err)
 		}
 		line, err := json.Marshal(map[string]string{"nas": t.NAS, "username": user,
 			"login": res.Login, "enable": res.Enable, "expires_at": res.ExpiresAt.Format(time.RFC3339)})
@@ -248,7 +248,7 @@ func buildBrokerAnchor(cfg config.Config, inventoryFrom string, st store.Store, 
 		return nil, nil, nil, err
 	}
 	now := time.Now()
-	sayPolicy(pol, now)
+	sayPolicy(procOf(cfg), pol, now)
 	cert, anchorCert, err := broker.LoadTLSAnchor(cfg.Broker.TLSCertFile, cfg.Broker.TLSKeyFile, cfg.Broker.ClientCAFile)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("broker TLS files (tls_cert_file %s, tls_key_file %s, client_ca_file %s): %w",
@@ -260,10 +260,11 @@ func buildBrokerAnchor(cfg config.Config, inventoryFrom string, st store.Store, 
 	if leaf, err := x509.ParseCertificate(cert.Certificate[0]); err == nil {
 		switch {
 		case now.After(leaf.NotAfter):
-			fmt.Fprintf(stderr, "port49d: broker: server certificate expired at %s (tls_cert_file %s); logins will fail\n",
+			fmt.Fprintf(stderr, procOf(cfg)+": broker: server certificate expired at %s (tls_cert_file %s); logins "+
+				"will fail\n",
 				leaf.NotAfter.UTC().Format(time.RFC3339), cfg.Broker.TLSCertFile)
 		case now.Before(leaf.NotBefore):
-			fmt.Fprintf(stderr, "port49d: broker: server certificate is not valid until %s (tls_cert_file %s); "+
+			fmt.Fprintf(stderr, procOf(cfg)+": broker: server certificate is not valid until %s (tls_cert_file %s); "+
 				"logins will fail\n", leaf.NotBefore.UTC().Format(time.RFC3339), cfg.Broker.TLSCertFile)
 		}
 	}
@@ -284,7 +285,7 @@ func buildBrokerAnchor(cfg config.Config, inventoryFrom string, st store.Store, 
 	// or untrusted certificate — through ErrorLog. Left nil it goes to the
 	// standard library's default logger; routed here it lands beside
 	// port49d's other lines, where an operator is already looking.
-	srv.ErrorLog = stdlog.New(stderr, "port49d: broker: ", 0)
+	srv.ErrorLog = stdlog.New(stderr, procOf(cfg)+": broker: ", 0)
 	return srv, b, anchorCert, nil
 }
 
@@ -311,6 +312,12 @@ func loadPolicy(cfg config.Config, inventoryFrom string) (*policy.Policy, error)
 	if err != nil {
 		return nil, fmt.Errorf("%s %s: %w", policyKey(cfg), cfg.Policy.File, err)
 	}
+	return startPolicy(cfg, raw, inventoryFrom)
+}
+
+// startPolicy is loadPolicy on raw, the policy file's bytes already read:
+// what a start compiles and refuses.
+func startPolicy(cfg config.Config, raw []byte, inventoryFrom string) (*policy.Policy, error) {
 	pol, err := parseBundle(cfg, raw, cfg.Inventory)
 	if err != nil {
 		return nil, err
@@ -427,12 +434,13 @@ func (q quotesCut) Error() string {
 // fleet loads (spec §10; §13 decision 20). Each is said, with its cause, so
 // the line names what to fix. Quarantine is time-scoped: one a grant's
 // expiry will bring on is said too, with when, while the device still mints.
-func sayPolicy(pol *policy.Policy, now time.Time) {
+// Each line begins with proc, the process's name (procOf).
+func sayPolicy(proc string, pol *policy.Policy, now time.Time) {
 	// Every line quotes the policy's own text, and stderr is a log: a rule's
 	// secret value is redacted in it (spec §5.8).
 	redact := pol.Redactions()
 	say := func(format string, args ...any) {
-		fmt.Fprintln(stderr, platform.RedactQuoted(redact, fmt.Sprintf(format, args...)))
+		fmt.Fprintln(stderr, platform.RedactQuoted(redact, proc+": "+fmt.Sprintf(format, args...)))
 	}
 	for _, q := range pol.Quarantines(now) {
 		for _, e := range q.Entries {
@@ -440,32 +448,32 @@ func sayPolicy(pol *policy.Policy, now time.Time) {
 			if e.Current(now) {
 				msg = "is " + msg
 			}
-			say("port49d: broker: device %s (%s) %s", q.Device, q.Platform, msg)
+			say("broker: device %s (%s) %s", q.Device, q.Platform, msg)
 		}
 	}
 	// A deny term that matches any argument, because its platform may send
 	// what was typed and its abbreviations cannot be read, over-denies
 	// rather than refusing the device (spec §3 rule 4); say which.
 	for _, f := range pol.WidenedDenies() {
-		say("port49d: broker: %s", f.Message)
+		say("broker: %s", f.Message)
 	}
 	// A permit naming an interface joined never matches where the platform
 	// sends the name and the index apart (spec §3 rule 5); say which.
 	for _, f := range pol.JoinedNamePermits() {
-		say("port49d: broker: %s", f.Message)
+		say("broker: %s", f.Message)
 	}
 	// A rule with a value redaction hides is echoed redacted everywhere
 	// (spec §5.8); say which, in its redacted form.
 	for _, f := range pol.RuleSecretLiterals() {
-		say("port49d: broker: %s", f.Message)
+		say("broker: %s", f.Message)
 	}
 	// A device admission refuses is refused alone (spec §10): named, with
 	// why, so the line says what to fix.
 	for _, r := range pol.AdmissionRefusals() {
-		say("port49d: admission: device %s (%s) is refused: %s", r.Device.Name, r.Device.Platform, r.Refused)
+		say("admission: device %s (%s) is refused: %s", r.Device.Name, r.Device.Platform, r.Refused)
 	}
 	for _, n := range pol.Notices() {
-		say("port49d: policy: %s", n)
+		say("policy: %s", n)
 	}
 }
 
@@ -681,7 +689,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		// age: NaN, never the 0 that reads as fresh, for however long the
 		// wait lasts. The reloader dates it from the document it starts from.
 		m.WatchInventoryAge(func() float64 { return math.NaN() })
-		picks, err := coldCopies(ctx, cfg.InventoryService, verifyKeysAtStart, client, m, rd)
+		picks, err := coldCopies(ctx, procOf(cfg), cfg.InventoryService, verifyKeysAtStart, client, m, rd)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil // stopped while waiting for a bundle: nothing was served
@@ -694,7 +702,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		if err != nil {
 			return err
 		}
-		sayStart(cfg.InventoryService, pick)
+		sayStart(procOf(cfg), cfg.InventoryService, pick)
 		startDoc, startFrom = pick.p, pick.from
 		cfg.Inventory = startDoc.Inv
 		inventoryFrom = fmt.Sprintf("the inventory service's bundle %d", startDoc.Doc.Sequence)
@@ -843,11 +851,23 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 			<-spoolDone
 			return err
 		}
-		sayPolicy(pol, time.Now())
+		sayPolicy(procOf(cfg), pol, time.Now())
 		live = policy.NewLive(pol)
 	}
 	if startDoc != nil {
-		persistStart(cfg.InventoryService, coldPick{startDoc, startFrom}, m)
+		persistStart(procOf(cfg), cfg.InventoryService, coldPick{startDoc, startFrom}, m)
+	}
+	if sts.judged != nil && live != nil {
+		// Whether this port49d's policy is the bundle the runner last judged
+		// (re-check R5), joined before sts.close. The read goes through no
+		// guard: it is a gauge, and a store gone is the probe's to judge.
+		jctx, stopJudged := context.WithCancel(ctx)
+		judgedDone := make(chan struct{})
+		go func() {
+			defer close(judgedDone)
+			keepDaemonBundle(jctx, sts.judged, live, cfg.Policy.WatchInterval, m, stderr)
+		}()
+		defer func() { stopJudged(); <-judgedDone }()
 	}
 	var marks []store.Revocation
 	// authMarks is filled from the restore below, and kept by the broker's
@@ -910,7 +930,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 				return fmt.Errorf("broker.certificate_status.%w", err)
 			}
 			checker = certstatus.New(ccfg, time.Now, m,
-				func(format string, args ...any) { fmt.Fprintf(stderr, format+"\n", args...) })
+				func(format string, args ...any) { fmt.Fprintf(stderr, procOf(cfg)+": "+format+"\n", args...) })
 			checker.OnNewEntry(brk.OnCRLEntry)
 			for _, err := range checker.LoadPersisted() {
 				fmt.Fprintf(stderr, "port49d: broker: certificate status: %s\n", printsafe.Line(err.Error(), 300))
@@ -1034,7 +1054,9 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 			broker.ListenerLimits{MaxPendingPerSource: cfg.Broker.MaxPendingConnsPerSource,
 				MaxPerPrincipal:  cfg.Broker.MaxConnsPerPrincipal,
 				HandshakeTimeout: broker.DefaultListenerLimits.HandshakeTimeout},
-			m, time.Now, func(format string, args ...any) { fmt.Fprintf(stderr, format+"\n", args...) })
+			m, time.Now, func(format string, args ...any) {
+				fmt.Fprintf(stderr, procOf(cfg)+": "+format+"\n", args...)
+			})
 		for _, r := range authMarks.All() {
 			bl.Revoked(r, true)
 		}
@@ -1172,7 +1194,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 	case err := <-metricsErr:
 		rd.draining()
 		if brk != nil {
-			brk.SetReady(broker.ReadyDraining)
+			brk.SetReady(broker.ReadyDrainingOf(procOf(cfg)))
 		}
 		runErr = fmt.Errorf("metrics listener on %s: %w", cfg.MetricsListen, err)
 		cancel()
@@ -1180,7 +1202,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 	case err := <-brokerErr:
 		rd.draining()
 		if brk != nil {
-			brk.SetReady(broker.ReadyDraining)
+			brk.SetReady(broker.ReadyDrainingOf(procOf(cfg)))
 		}
 		runErr = fmt.Errorf("broker listener on %s: %w", cfg.Broker.Listen, err)
 		cancel()
@@ -1188,14 +1210,14 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 	case err := <-serveErr:
 		rd.draining()
 		if brk != nil {
-			brk.SetReady(broker.ReadyDraining)
+			brk.SetReady(broker.ReadyDrainingOf(procOf(cfg)))
 		}
 		runErr = err
 		cancel()
 	case <-ctx.Done():
 		rd.draining()
 		if brk != nil {
-			brk.SetReady(broker.ReadyDraining)
+			brk.SetReady(broker.ReadyDrainingOf(procOf(cfg)))
 		}
 		var gone *storeGone
 		if errors.As(context.Cause(parent), &gone) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -341,5 +342,123 @@ func (s *Store) PutJudged(ctx context.Context, bundle string, policy []byte) err
 		return err
 	}
 	_, err = s.ctxKV.Put(ctx, s.k.meta("judged"), string(body))
+	return unavailable(err)
+}
+
+// Holder reads meta/holder, the who of the replica holding the keyspace
+// (Hold); false when none does.
+func (s *Store) Holder(ctx context.Context) (string, bool, error) {
+	var h holderRec
+	_, ok, err := getJSON(ctx, s.ctxKV, s.k.meta("holder"), &h)
+	return h.Who, ok, err
+}
+
+type bundleRec struct {
+	Who       string    `json:"who"`
+	Bundle    string    `json:"bundle"`
+	At        time.Time `json:"at"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+func (r bundleRec) live(now time.Time) bool { return now.Before(r.ExpiresAt) }
+
+// BundleRecord is meta/bundles/<who>: the bundle one port49-broker replica
+// serves, written At and leased until ExpiresAt (plan 7e, Ruling 8;
+// pre-flight I3), or meta/refresh_owed, a replica's ask for a full
+// context pass, with no expiry.
+type BundleRecord struct {
+	Who, Bundle   string
+	At, ExpiresAt time.Time
+}
+
+// PutBundle records bundle as the one who serves, until now + ttl; its
+// lease is cas's bucket past that, and the expiry decides.
+func (s *Store) PutBundle(ctx context.Context, who, bundle string, ttl time.Duration) error {
+	now := s.now()
+	live := func(r bundleRec) bool { return r.live(now) }
+	return cas(ctx, s.ctxKV, s.ctxLeases, s.k.meta("bundles/")+esc(who), live,
+		func(r *bundleRec, _ bool) (bool, time.Time, bool, error) {
+			*r = bundleRec{Who: who, Bundle: bundle, At: now.UTC(), ExpiresAt: now.Add(ttl).UTC()}
+			return true, r.ExpiresAt, false, nil
+		})
+}
+
+// DeleteBundle deletes who's record, at its graceful stop (pre-flight
+// 7e-2 P-5): a replica that stops mints nothing more.
+func (s *Store) DeleteBundle(ctx context.Context, who string) error {
+	_, err := s.ctxKV.Delete(ctx, s.k.meta("bundles/")+esc(who))
+	return unavailable(err)
+}
+
+// Bundles is every replica's record whose ExpiresAt is after now, read at
+// one revision a page at a time, as LedgerMarks reads. A lease only
+// reclaims (leases.go), so a lapsed record can remain up to a minute and
+// lease_grace past its ttl: it is skipped by its own expiry, as every
+// leased record is. A record that does not decode is an error naming its
+// key.
+func (s *Store) Bundles(ctx context.Context) ([]BundleRecord, error) {
+	prefix := s.k.meta("bundles/")
+	end := clientv3.GetPrefixRangeEnd(prefix)
+	from, rev := prefix, int64(0)
+	now := s.now()
+	var out []BundleRecord
+	for {
+		opts := []clientv3.OpOption{clientv3.WithRange(end), clientv3.WithLimit(500)}
+		if rev > 0 {
+			opts = append(opts, clientv3.WithRev(rev))
+		}
+		resp, err := s.ctxKV.Get(ctx, from, opts...)
+		if err != nil {
+			return nil, unavailable(err)
+		}
+		if rev == 0 {
+			rev = resp.Header.Revision
+		}
+		for _, kv := range resp.Kvs {
+			var r bundleRec
+			if json.Unmarshal(kv.Value, &r) != nil {
+				return nil, notDecoded(fmt.Sprintf("bundle record %q", kv.Key))
+			}
+			if r.live(now) {
+				out = append(out, BundleRecord{Who: r.Who, Bundle: r.Bundle, At: r.At, ExpiresAt: r.ExpiresAt})
+			}
+		}
+		if !resp.More || len(resp.Kvs) == 0 {
+			return out, nil
+		}
+		from = string(resp.Kvs[len(resp.Kvs)-1].Key) + "\x00"
+	}
+}
+
+// PutRefreshOwed records who's ask for a full context pass, made as it
+// reloaded or started serving bundle: the runner carries every live
+// context onto its policy, so a context made from who's token under
+// another bundle is judged (pre-flight I3). A later ask replaces it.
+func (s *Store) PutRefreshOwed(ctx context.Context, who, bundle string) error {
+	body, err := json.Marshal(bundleRec{Who: who, Bundle: bundle, At: s.now().UTC()})
+	if err != nil {
+		return err
+	}
+	_, err = s.ctxKV.Put(ctx, s.k.meta("refresh_owed"), string(body))
+	return unavailable(err)
+}
+
+// RefreshOwed reads the ask, with its mod revision for ClearRefreshOwed;
+// ok is false when none is owed.
+func (s *Store) RefreshOwed(ctx context.Context) (rev uint64, rec BundleRecord, ok bool, err error) {
+	var r bundleRec
+	mod, ok, err := getJSON(ctx, s.ctxKV, s.k.meta("refresh_owed"), &r)
+	if !ok || err != nil {
+		return 0, BundleRecord{}, false, err
+	}
+	return uint64(mod), BundleRecord{Who: r.Who, Bundle: r.Bundle, At: r.At}, true, nil
+}
+
+// ClearRefreshOwed deletes the ask only while its mod revision is still
+// rev, the one the pass read: an ask written during the pass stays, owed.
+func (s *Store) ClearRefreshOwed(ctx context.Context, rev uint64) error {
+	key := s.k.meta("refresh_owed")
+	_, err := s.ctxKV.Txn(ctx).If(clientv3.Compare(clientv3.ModRevision(key), "=", int64(rev))).
+		Then(clientv3.OpDelete(key)).Commit()
 	return unavailable(err)
 }

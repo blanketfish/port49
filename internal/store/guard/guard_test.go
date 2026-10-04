@@ -106,7 +106,7 @@ func (t *told) all() []string {
 }
 
 func config(said, gone *told) Config {
-	return Config{Component: "daemon", CallTimeout: 50 * time.Millisecond, BulkTimeout: time.Second,
+	return Config{Proc: "port49d", Component: "daemon", CallTimeout: 50 * time.Millisecond, BulkTimeout: time.Second,
 		MaxInFlight: map[Pool]int{Token: 2, Context: 2, Bulk: 1}, Failures: 3, OpenFor: 100 * time.Millisecond,
 		StopAfter: time.Hour, Unhealthy: gone.add, Now: time.Now, Metrics: testMetrics(), Say: said.add}
 }
@@ -662,5 +662,29 @@ func TestPingIsTheContextPools(t *testing.T) {
 	}
 	if poolCalls(c.Metrics.Calls, Context) != 1 || poolCalls(c.Metrics.Calls, Token) != 0 || poolCalls(c.Metrics.Calls, Bulk) != 0 {
 		t.Fatal("Ping ran outside the context pool alone")
+	}
+}
+
+// Each circuit line begins with its process's name, and only a guard that
+// ends its process's run says the process closes its listeners:
+// port49-broker's never does (Task 15a C1).
+func TestTheCircuitsLinesNameTheirProcess(t *testing.T) {
+	for _, tc := range []struct {
+		proc      string
+		stopAfter time.Duration
+		closes    bool
+	}{{"port49d", time.Hour, true}, {"port49-broker", 0, false}} {
+		var said, gone told
+		c := config(&said, &gone)
+		c.Proc, c.StopAfter = tc.proc, tc.stopAfter
+		g := Wrap(&stuck{err: store.ErrUnavailable}, c)
+		for i := 0; i < 3; i++ {
+			g.GetContext(context.Background(), k)
+		}
+		l := said.all()
+		if len(l) != 1 || !strings.HasPrefix(l[0], tc.proc+": store: the daemon's context pool's circuit is open") ||
+			strings.Contains(l[0], "closes its listeners") != tc.closes {
+			t.Fatalf("%s: said %q", tc.proc, l)
+		}
 	}
 }

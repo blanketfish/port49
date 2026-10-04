@@ -194,6 +194,28 @@ func adminSocketOf(t *testing.T, cfg string) string {
 // and reads the newest.
 func startBroker(t *testing.T, cfg string, out *syncBuffer, n int) (apiAddr string, stop func() error) {
 	t.Helper()
+	stop = runBrokerUntil(t, cfg, out, "port49-broker: listening on ", n)
+	addrs := brokerLine.FindAllStringSubmatch(out.String(), -1)
+	return addrs[len(addrs)-1][1], stop
+}
+
+// startBrokerNoWait is startBroker that waits for the nth metrics line,
+// any replica's, not the API's, and returns the newest's metrics address:
+// a start the guard holds serves metrics and nothing else.
+func startBrokerNoWait(t *testing.T, cfg string, out *syncBuffer, n int) (metricsAddr string, stop func() error) {
+	t.Helper()
+	stop = runBrokerUntil(t, cfg, out, "port49-broker: metrics on ", n)
+	addrs := metricsLine.FindAllStringSubmatch(out.String(), -1)
+	return addrs[len(addrs)-1][1], stop
+}
+
+// metricsLine is port49-broker's first line once its metrics serve.
+var metricsLine = regexp.MustCompile(`port49-broker: metrics on (127\.0\.0\.1:\d+)\n`)
+
+// runBrokerUntil runs port49-broker on cfg until the test ends or stop is
+// called, once out holds want n times.
+func runBrokerUntil(t *testing.T, cfg string, out *syncBuffer, want string, n int) (stop func() error) {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- runBroker(ctx, cfg) }()
@@ -217,19 +239,40 @@ func startBroker(t *testing.T, cfg string, out *syncBuffer, n int) (apiAddr stri
 		}
 	})
 	deadline := time.Now().Add(30 * time.Second)
-	for strings.Count(out.String(), "port49-broker: listening on ") < n {
+	for strings.Count(out.String(), want) < n {
 		select {
 		case err := <-done:
-			t.Fatalf("port49-broker returned before serving: %v\n%s", err, out.String())
+			t.Fatalf("port49-broker returned before %q: %v\n%s", want, err, out.String())
 		default:
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("waited 30s for port49-broker ×%d; have %q", n, out.String())
+			t.Fatalf("waited 30s for %q ×%d; have %q", want, n, out.String())
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	addrs := brokerLine.FindAllStringSubmatch(out.String(), -1)
-	return addrs[len(addrs)-1][1], stop
+	return stop
+}
+
+// writePolicyOf rewrites the broker.policy_file the port49-broker.yaml at
+// cfg names with body, behind the fence's owner and mode rules.
+func (f *fleet) writePolicyOf(t *testing.T, cfg, body string) {
+	t.Helper()
+	writePolicyFile(t, f.policyOf(t, cfg), body)
+}
+
+// withdrawnConfigurePolicy is minimalPolicy whose role permits `show **`
+// alone: alice loses configure.
+var withdrawnConfigurePolicy = strings.Replace(minimalPolicy, `permit: ["**"]`, `permit: ["show **"]`, 1)
+
+// readyzAt is /readyz's status at addr.
+func readyzAt(t *testing.T, addr string) int {
+	t.Helper()
+	resp, err := http.Get("http://" + addr + "/readyz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	return resp.StatusCode
 }
 
 // brokerLine is port49-broker's serving line: its API and metrics.
@@ -243,10 +286,17 @@ func waitBrokerMetric(t *testing.T, out *syncBuffer, line string) {
 	if len(ms) == 0 {
 		t.Fatalf("no port49-broker serves: %s", out.String())
 	}
+	waitBrokerMetricAt(t, ms[len(ms)-1][2], line)
+}
+
+// waitBrokerMetricAt waits up to 10s for the /metrics at addr to hold
+// line.
+func waitBrokerMetricAt(t *testing.T, addr, line string) {
+	t.Helper()
 	want := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(line) + `$`)
 	deadline := time.Now().Add(10 * time.Second)
 	for {
-		scraped, err := http.Get("http://" + ms[len(ms)-1][2] + "/metrics")
+		scraped, err := http.Get("http://" + addr + "/metrics")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1117,5 +1167,107 @@ func TestTheBrokersReloadHookKeepsWhatTheStoreLost(t *testing.T) {
 	}
 	if n := testutil.ToFloat64(rescans); n != 2 {
 		t.Fatalf("counted %v rescans, want 2", n)
+	}
+}
+
+// A replica that minted under a policy the runner had replaced, then
+// reloads, has the runner carry the context its token made: the runner
+// runs a full context pass on its ask. Meanwhile the runner records no
+// bundle as judged (pre-flight I3; Ruling 8 corrected).
+func TestALateReplicasContextIsCarriedWhenItReloads(t *testing.T) {
+	var out, log syncBuffer
+	e, o := stderr, stdout
+	t.Cleanup(func() { stderr, stdout = e, o })
+	stderr, stdout = &out, &log
+	f := splitFleet(t)
+	tacacs := startSplitDaemon(t, f.daemon, &out, 1)
+	startBroker(t, f.broker, &out, 1)
+	waitFor(t, &out, "runner: recorded bundle ")
+	cfgB := f.copyBroker(t) // a policy file of its own
+	apiB, _ := startBroker(t, cfgB, &out, 2)
+	f.writePolicyOf(t, f.broker, withdrawnConfigurePolicy) // A's file only: alice loses configure
+	waitFor(t, &out, "policy reloaded")
+	waitFor(t, &out, "this replica serves bundle ")
+	// The runner's settle pass, settleAfter (30s) after its reload.
+	waitWithin(t, &out, "runner: not recording bundle ", 45*time.Second)
+	dev := tacacsClient{t: t, addr: tacacs, key: []byte("run-test-secret")}
+	loginSession(t, dev, mintOn(t, apiB, f.pki, "leaf1"), &log) // under B's old policy
+	if !dev.permits("alice", "configure") {
+		t.Fatal("control: the context B's token made should carry the old grant")
+	}
+	// B's start asked for one pass already, and its record was judged:
+	// count from here.
+	recorded := strings.Count(out.String(), "runner: recorded bundle ")
+	passes := strings.Count(out.String(), "runner: a full context pass owed by ")
+	f.writePolicyOf(t, cfgB, withdrawnConfigurePolicy) // B catches up
+	waitForCount(t, &out, "runner: a full context pass owed by ", passes+1)
+	if dev.permits("alice", "configure") {
+		t.Fatal("the context a late replica's token made kept the withdrawn grant after it reloaded")
+	}
+	// Every replica serves the bundle now: the full pass records it.
+	waitForCount(t, &out, "runner: recorded bundle ", recorded+1)
+}
+
+// A start whose policy file the guard refuses against the bundle last
+// judged stays not ready and takes no hold, until the file is fixed
+// (Ruling 17; pre-flight I6). The refused file quarantines leaf1, the
+// whole fleet: one admitting no device is refused by the start itself.
+func TestAStartOnARefusedFileStaysNotReady(t *testing.T) {
+	var out syncBuffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	f := splitFleet(t)
+	_, stop := startBrokerNoWait(t, f.broker, &out, 1)
+	waitFor(t, &out, "runner: recorded bundle ")
+	stop()
+	f.writePolicyOf(t, f.broker, quarantiningLeaf1)
+	metricsAddr, _ := startBrokerNoWait(t, f.broker, &out, 2)
+	waitFor(t, &out, "policy file refused at start against the bundle last judged")
+	if code := readyzAt(t, metricsAddr); code != http.StatusServiceUnavailable {
+		t.Fatalf("/readyz %d while the file is refused", code)
+	}
+	waitBrokerMetricAt(t, metricsAddr, "port49_policy_file_refused 1")
+	if strings.Count(out.String(), "runner: took keyspace") != 1 {
+		t.Fatal("a broker on a refused file took the hold")
+	}
+	if strings.Count(out.String(), "port49-broker: listening on ") != 1 {
+		t.Fatal("a broker on a refused file serves the API")
+	}
+	f.writePolicyOf(t, f.broker, minimalPolicy)
+	waitForCount(t, &out, "runner: took keyspace", 2)
+	// The start goes on with the version that passed in force: the takeover
+	// carries it, and the reloader finds nothing to reload.
+	waitFor(t, &out, "is the one the last runner judged; no unspent token purged")
+	if strings.Contains(out.String(), "port49-broker: policy reloaded") {
+		t.Fatalf("the start went on with the refused version in force:\n%s", out.String())
+	}
+	waitBrokerMetricAt(t, metricsAddr, "port49_policy_file_refused 0")
+	if code := readyzAt(t, metricsAddr); code != http.StatusOK {
+		t.Fatalf("/readyz %d once the file passes", code)
+	}
+}
+
+// port49-broker's lines are its own: every line it writes, the shared
+// paths' among them (the reloader's, the policy's notices, the start's),
+// begins "port49-broker", never "port49d: " (Task 15a C1). port49d's are
+// unchanged: its own tests read them.
+func TestEveryBrokerLineNamesPort49Broker(t *testing.T) {
+	var out syncBuffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	f := splitFleet(t)
+	_, stop := startBroker(t, f.broker, &out, 1)
+	waitFor(t, &out, "runner: recorded bundle ")
+	f.writePolicyOf(t, f.broker, withdrawnConfigurePolicy)
+	waitFor(t, &out, "port49-broker: policy reloaded")
+	if err := stop(); err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range strings.Split(strings.TrimSpace(out.String()), "\n") {
+		if !strings.HasPrefix(l, "port49-broker") {
+			t.Fatalf("a port49-broker line not its own: %q\n%s", l, out.String())
+		}
 	}
 }

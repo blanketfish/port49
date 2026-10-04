@@ -53,7 +53,10 @@ type stores struct {
 	// on etcd.
 	daemon, broker store.Store
 	// etcd is the daemon's raw backend on etcd. Nil on memory.
-	etcd       *etcdstore.Store
+	etcd *etcdstore.Store
+	// judged is etcd as meta/judged's reader, for keepDaemonBundle (re-check
+	// R5): the daemon's role reads meta/. Nil on memory.
+	judged     judgedReader
 	persistent bool
 	// follow keeps the ledger following the store's contexts, and the
 	// marks, until its ctx ends (crypt.FollowContexts, store.FollowMarks).
@@ -312,10 +315,11 @@ func openDaemon(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 	// pre-flight C1), as openStores builds it with a broker; the probe pings
 	// through the same guard, so its pings count toward the circuit that
 	// ends the run, and wait for the context feed as a read does.
-	gd := guard.WrapRev(crypt.Fenced(d, ledger), guardConfig("daemon", e, m, out, gone))
+	gd := guard.WrapRev(crypt.Fenced(d, ledger), guardConfig(procOf(cfg), "daemon", e, m, out, gone))
 	return stores{
 		daemon:     crypt.Wrap(gd, keys, m.CryptOpenFailures, crypt.WithLedger(ledger), say),
 		etcd:       d,
+		judged:     d,
 		persistent: true,
 		follow:     follow,
 		probe:      func(ctx context.Context) { probe(ctx, gd, e.HoldTTL/6) },
@@ -324,11 +328,12 @@ func openDaemon(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 }
 
 // guardConfig is component's guard on etcd (Task 8a): store.etcd's
-// bounds and breaker, its lines on out, and a pool's store failing or
-// refusing every call for hold_ttl ending the run as a store gone.
-func guardConfig(component string, e *config.EtcdConfig, m *metrics.Metrics, out io.Writer,
+// bounds and breaker, its lines on out begun with proc (procOf), and a
+// pool's store failing or refusing every call for hold_ttl ending the run
+// as a store gone.
+func guardConfig(proc, component string, e *config.EtcdConfig, m *metrics.Metrics, out io.Writer,
 	gone func(error)) guard.Config {
-	return guard.Config{Component: component, CallTimeout: e.CallTimeout, BulkTimeout: e.BulkTimeout,
+	return guard.Config{Proc: proc, Component: component, CallTimeout: e.CallTimeout, BulkTimeout: e.BulkTimeout,
 		MaxInFlight: map[guard.Pool]int{guard.Token: e.MaxInFlight.Token, guard.Context: e.MaxInFlight.Context,
 			guard.Bulk: e.MaxInFlight.Bulk},
 		Failures: e.Breaker.Failures, OpenFor: e.Breaker.OpenFor, Metrics: m.StoreGuard(),

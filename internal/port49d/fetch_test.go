@@ -41,7 +41,7 @@ func (s *scriptService) Bundle(_ context.Context, etag string) ([]byte, string, 
 
 func newFetcher(svc fetchClient, keys []ed25519.PublicKey) *fetcher {
 	return &fetcher{client: svc, keys: func() []ed25519.PublicKey { return keys }, url: "https://inv.test:8443",
-		interval: time.Hour, metrics: metrics.New(prometheus.NewRegistry())}
+		interval: time.Hour, metrics: metrics.New(prometheus.NewRegistry()), proc: "port49d"}
 }
 
 func TestAnUnchangedVersionCostsOneSmallRequest(t *testing.T) {

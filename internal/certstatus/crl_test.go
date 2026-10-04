@@ -642,7 +642,7 @@ func TestCRL(t *testing.T) {
 		if n := said(); n != 1 {
 			t.Fatalf("the first load said %d times: %q", n, lg.all())
 		}
-		if got := lg.all()[0]; got != "port49d: broker: certificate status: CRL issuing loaded (next update "+
+		if got := lg.all()[0]; got != "broker: certificate status: CRL issuing loaded (next update "+
 			t0.Add(time.Hour).Format(time.RFC3339)+")" {
 			t.Fatalf("the line: %q", got)
 		}

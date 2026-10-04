@@ -15,6 +15,10 @@ const (
 	ReadyDraining = "draining: port49d is shutting down"
 )
 
+// ReadyDrainingOf is ReadyDraining for the process named proc: "port49d"
+// or "port49-broker".
+func ReadyDrainingOf(proc string) string { return "draining: " + proc + " is shutting down" }
+
 // SetReady sets what /readyz answers: 200 for ReadyServing, 503 with the line
 // for anything else. Before the first call it answers ReadyStarting.
 func (b *Broker) SetReady(state string) { b.ready.Store(&state) }

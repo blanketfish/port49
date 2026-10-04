@@ -188,8 +188,10 @@ type coldPick struct {
 // Every copy is opened against keys before any field of it is read. The
 // document's own bundle ID is never printed or trusted: the one in force is
 // the one port49d computes from its policy and the document's inventory.
-func coldCopies(ctx context.Context, svc *config.InventoryServiceConfig, keys []ed25519.PublicKey,
+func coldCopies(ctx context.Context, proc string, svc *config.InventoryServiceConfig, keys []ed25519.PublicKey,
 	c fetchClient, m *metrics.Metrics, rd *readiness) ([]coldPick, error) {
+	// Each line begins with proc, the process's name (procOf).
+	say := func(format string, args ...any) { fmt.Fprintf(stderr, proc+": "+format, args...) }
 	copies := []coldCopy{{name: "the persisted copy", dir: svc.StateDir,
 		read: func() (*inventory.Published, error) { return readPersisted(svc.StateDir, keys) }}}
 	if svc.MirrorDir != "" {
@@ -228,17 +230,17 @@ func coldCopies(ctx context.Context, svc *config.InventoryServiceConfig, keys []
 			if again {
 				return nil
 			}
-			fmt.Fprintf(stderr, "port49d: inventory: %s is refused until this host's clock reaches it: %s\n", cp.name,
+			say("inventory: %s is refused until this host's clock reaches it: %s\n", cp.name,
 				oneLine(err))
 		case errors.Is(err, inventory.ErrNotOpened):
 			refusedOther = true
 			m.InventoryBundleRefused.Set(1) // refused, said once, and alarmed (spec §10)
-			fmt.Fprintf(stderr, "port49d: inventory: %s is refused: %s\n", cp.name, oneLine(err))
+			say("inventory: %s is refused: %s\n", cp.name, oneLine(err))
 		default:
 			if cp.name == "the mirror's copy" {
 				m.InventoryMirrorUnreadable.Set(1)
 			}
-			fmt.Fprintf(stderr, "port49d: inventory: %s is passed over: %s\n", cp.name, oneLine(err))
+			say("inventory: %s is passed over: %s\n", cp.name, oneLine(err))
 		}
 		why[cp.name] = oneLine(err)
 		return nil
@@ -264,7 +266,7 @@ func coldCopies(ctx context.Context, svc *config.InventoryServiceConfig, keys []
 			// (pre-flight minor 11). Only the mirror's copy follows the
 			// persisted one.
 			best := picks[0].p
-			fmt.Fprintf(stderr, "port49d: inventory: the mirror's bundle %d, published %s, is published later "+
+			say("inventory: the mirror's bundle %d, published %s, is published later "+
 				"than the persisted copy's bundle %d, published %s\n", p.Doc.Sequence,
 				p.Doc.PublishedAt.Format(time.RFC3339), best.Doc.Sequence, best.Doc.PublishedAt.Format(time.RFC3339))
 			picks = append([]coldPick{{p, cp.name}}, picks...)
@@ -301,7 +303,7 @@ func coldCopies(ctx context.Context, svc *config.InventoryServiceConfig, keys []
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		if line := fmt.Sprintf("port49d: inventory: no bundle yet (persisted copy: %s; mirror: %s; service at %s: %s); "+
+		if line := fmt.Sprintf(proc+": inventory: no bundle yet (persisted copy: %s; mirror: %s; service at %s: %s); "+
 			"TACACS+ is not served until one arrives, and /readyz answers 503 (spec §10, cold start)",
 			why["the persisted copy"], why["the mirror's copy"], svc.URL, oneLine(err)); line != said {
 			fmt.Fprintln(stderr, line)
@@ -369,30 +371,31 @@ func startCopy(cfg config.Config, picks []coldPick, m *metrics.Metrics) (coldPic
 			return coldPick{}, err
 		}
 		m.InventoryBundleRefused.Set(1)
-		fmt.Fprintf(stderr, "port49d: inventory: %s, bundle %d, is not taken: %s; trying %s, bundle %d\n", pk.from,
+		fmt.Fprintf(stderr, procOf(cfg)+": inventory: %s, bundle %d, is not taken: %s; trying %s, bundle %d\n", pk.from,
 			pk.p.Doc.Sequence, oneLine(quotesCut{err}), picks[i+1].from, picks[i+1].p.Doc.Sequence)
 	}
-	return coldPick{}, errors.New("port49d: inventory: no copy to start from") // picks is never empty
+	return coldPick{}, errors.New(procOf(cfg) + ": inventory: no copy to start from") // picks is never empty
 }
 
 // persistStart keeps the copy the start serves as port49d's own, once the
 // policy and the broker have accepted it; the persisted copy is already
 // there. A failure is said and alarmed, and the reloader tries again at the
-// first confirmation (startDocument).
-func persistStart(svc *config.InventoryServiceConfig, pk coldPick, m *metrics.Metrics) {
+// first confirmation (startDocument). proc is the process's name, as its
+// lines begin (procOf).
+func persistStart(proc string, svc *config.InventoryServiceConfig, pk coldPick, m *metrics.Metrics) {
 	if pk.from == "the persisted copy" {
 		return
 	}
 	if err := persistBundle(svc.StateDir, pk.p.Raw); err != nil {
 		m.InventoryPersistFailed.Set(1)
-		fmt.Fprintf(stderr, "port49d: inventory: state_dir %s: %s; a restart with the service down will "+
+		fmt.Fprintf(stderr, proc+": inventory: state_dir %s: %s; a restart with the service down will "+
 			"need the mirror\n", svc.StateDir, oneLine(err))
 	}
 }
 
-// sayStart is the start's line for the copy it serves.
-func sayStart(svc *config.InventoryServiceConfig, pk coldPick) {
-	fmt.Fprintf(stderr, "port49d: inventory: starting from bundle %d (%s), published %s; the service at %s is "+
+// sayStart is the start's line for the copy it serves, begun with proc.
+func sayStart(proc string, svc *config.InventoryServiceConfig, pk coldPick) {
+	fmt.Fprintf(stderr, proc+": inventory: starting from bundle %d (%s), published %s; the service at %s is "+
 		"asked every %s\n", pk.p.Doc.Sequence, pk.from, pk.p.Doc.PublishedAt.Format(time.RFC3339), svc.URL,
 		svc.PollInterval)
 }

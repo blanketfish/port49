@@ -43,13 +43,24 @@ type runner struct {
 	// judge is the policy the latest settled pass left nothing pending
 	// under, for the duties to record (settled, judging).
 	judge chan *policy.Policy
+	// covered is the revision of the ask for a full context pass that the
+	// takeover read before its carry, which judged every live context: the
+	// duties' watch (owed) owes nothing for it.
+	covered uint64
 }
 
-// judgedStore is meta/judged (etcd.Store's Judged and PutJudged).
+// judgedStore is meta/ as the runner reads and writes it (etcd.Store):
+// meta/judged, the replicas' bundles and the ask for a full context pass.
 type judgedStore interface {
 	Judged(ctx context.Context) (etcdstore.JudgedRecord, bool, error)
 	PutJudged(ctx context.Context, bundle string, policy []byte) error
+	Bundles(ctx context.Context) ([]etcdstore.BundleRecord, error)
+	RefreshOwed(ctx context.Context) (rev uint64, rec etcdstore.BundleRecord, ok bool, err error)
+	ClearRefreshOwed(ctx context.Context, rev uint64) error
 }
+
+// errNotRunning is a whole pass asked of a replica that does not run.
+var errNotRunning = errors.New("this replica no longer runs the keyspace")
 
 func (r *runner) running() bool { return r.duty.Load() != nil }
 
@@ -61,9 +72,19 @@ func (r *runner) running() bool { return r.duty.Load() != nil }
 // taken over (Task 15 review I-1). A pass cut short so is a stopped one,
 // and the reloader's retry is the token half.
 func (r *runner) pass(ctx context.Context, priors []broker.Prior) (broker.RefreshReport, error) {
+	if r.duty.Load() == nil {
+		return r.brk.RefreshTokens(ctx, priors)
+	}
+	return r.whole(ctx, priors)
+}
+
+// whole is the whole Refresh under the duties' context, and errNotRunning
+// while this replica does not run: a full context pass a replica owes
+// (reloader.full) is never the token half.
+func (r *runner) whole(ctx context.Context, priors []broker.Prior) (broker.RefreshReport, error) {
 	d := r.duty.Load()
 	if d == nil {
-		return r.brk.RefreshTokens(ctx, priors)
+		return broker.RefreshReport{}, errNotRunning
 	}
 	pctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -141,8 +162,9 @@ func (r *runner) duties(ctx context.Context) {
 		return
 	}
 	var wg sync.WaitGroup
-	wg.Add(3)
+	wg.Add(4)
 	go func() { defer wg.Done(); r.judging(ctx) }()
+	go func() { defer wg.Done(); r.owed(ctx) }()
 	go func() {
 		defer wg.Done()
 		sweepLoop(ctx, r.raw, r.brk, r.ledger, r.cfg.Store.Etcd.SweepInterval, stderr)
@@ -211,13 +233,111 @@ func (r *runner) judging(ctx context.Context) {
 	}
 }
 
+// owed is the runner's watch over the other replicas (plan 7e, Ruling 8
+// corrected; pre-flight I3), every policy_watch_interval until ctx ends.
+// A replica minting under another bundle makes contexts the runner's
+// passes, judged against its own priors, never reach. So:
+//   - a replica's ask (meta/refresh_owed), written as it reloads or
+//     starts, newer than the last one handled, is a full context pass,
+//     cleared at its revision once the pass completes; one that fails stays
+//     owed, and the next look asks again;
+//   - a replica seen serving another bundle owes one too, once every token
+//     it could have minted has expired (owedFullPassAt): a replica that
+//     dies unreloaded never asks.
+func (r *runner) owed(ctx context.Context) {
+	every := r.cfg.Policy.WatchInterval
+	bound := func(f func(ctx context.Context) error) error {
+		bctx, cancel := context.WithTimeout(ctx, every)
+		defer cancel()
+		return f(bctx)
+	}
+	handled := r.covered
+	if handled != 0 {
+		_ = bound(func(c context.Context) error { return r.meta.ClearRefreshOwed(c, handled) })
+	}
+	var lastMismatch time.Time
+	var lastBundle string
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		var rev uint64
+		var rec etcdstore.BundleRecord
+		var ok bool
+		err := bound(func(c context.Context) (err error) { rev, rec, ok, err = r.meta.RefreshOwed(c); return })
+		if err == nil && ok && rev > handled &&
+			r.fullPass(ctx, fullPassOwed{who: lineHolder(rec.Who), bundle: lineBundle(rec.Bundle)}) {
+			handled = rev
+			_ = bound(func(c context.Context) error { return r.meta.ClearRefreshOwed(c, rev) })
+		}
+		var recs []etcdstore.BundleRecord
+		err = bound(func(c context.Context) (err error) { recs, err = r.meta.Bundles(c); return })
+		now := r.brk.Now()
+		if err == nil {
+			mine := r.brk.Policy.Load().Bundle
+			for _, b := range recs {
+				// Its own record lags its own swap by a write, and it mints
+				// under the policy in force.
+				if b.Who != r.who && b.Bundle != mine {
+					lastMismatch, lastBundle = now, b.Bundle
+				}
+			}
+		}
+		if !lastMismatch.IsZero() && !now.Before(owedFullPassAt(lastMismatch)) &&
+			r.fullPass(ctx, fullPassOwed{who: "a replica that served another bundle", bundle: lineBundle(lastBundle)}) {
+			lastMismatch = time.Time{}
+		}
+	}
+}
+
+// fullPass hands o to the reloader's goroutine, which runs it
+// (reloader.full), and reports whether it completed; false too when ctx
+// ends first.
+func (r *runner) fullPass(ctx context.Context, o fullPassOwed) bool {
+	done := make(chan error, 1)
+	o.done = done
+	select {
+	case r.rel.fullPass <- o:
+	case <-ctx.Done():
+		return false
+	}
+	select {
+	case err := <-done:
+		return err == nil
+	case <-ctx.Done():
+		return false
+	}
+}
+
 // recordJudged writes meta/judged for pol, the policy every live context
 // was judged against, retried while the store is unavailable and ctx
 // lives, and says so (plan 7e, Ruling 7; pre-flight I2). It is the only
 // writer of the record: the takeover calls it once its carry leaves
-// nothing owed, and judging whenever a pass leaves nothing pending. Task
-// 15a adds that every replica must serve the bundle.
+// nothing owed, and judging whenever a pass leaves nothing pending. It
+// writes nothing while any replica's record names another bundle (Ruling
+// 8 corrected; pre-flight I3): that replica's tokens, and the contexts
+// they make, carry a policy no pass judged, so the next takeover purges,
+// which denies more.
 func (r *runner) recordJudged(ctx context.Context, pol *policy.Policy, why string) {
+	var recs []etcdstore.BundleRecord
+	if err := retryCtx(ctx, func() (err error) { recs, err = r.meta.Bundles(ctx); return }); err != nil {
+		if ctx.Err() == nil {
+			fmt.Fprintf(stderr, "port49-broker: runner: not recording bundle %s as judged: reading the bundles the "+
+				"replicas serve: %v; the next takeover purges the unspent tokens\n", pol.Bundle, err)
+		}
+		return
+	}
+	for _, b := range recs {
+		if b.Bundle != pol.Bundle {
+			fmt.Fprintf(stderr, "port49-broker: runner: not recording bundle %s as judged: %s serves bundle %s\n",
+				pol.Bundle, lineHolder(b.Who), lineBundle(b.Bundle))
+			return
+		}
+	}
 	if err := retryCtx(ctx, func() error { return r.meta.PutJudged(ctx, pol.Bundle, pol.Raw()) }); err != nil {
 		if ctx.Err() == nil {
 			fmt.Fprintf(stderr, "port49-broker: runner: recording bundle %s as judged: %v; the next takeover "+
@@ -394,6 +514,19 @@ func (r *runner) takeover(ctx context.Context) (*policy.Policy, error) {
 		}
 		fmt.Fprintf(stderr, "port49-broker: runner: the bundle in force (%s) is not the one the last runner judged "+
 			"(%s); %d unspent token(s) purged (run 'port49 token' again)\n", bundle, orNone(judged.Bundle, ok), n)
+	}
+	// The carry below judges every live context, so an ask for a full
+	// context pass written before it is owed nothing more (owed). Read
+	// first: an ask written during the carry is newer, and stays owed.
+	r.covered = 0
+	if err := retryCtx(ctx, func() error {
+		rev, _, ok, err := r.meta.RefreshOwed(ctx)
+		if ok {
+			r.covered = rev
+		}
+		return err
+	}); err != nil {
+		return nil, err
 	}
 	var rep broker.RefreshReport
 	var carried *policy.Policy

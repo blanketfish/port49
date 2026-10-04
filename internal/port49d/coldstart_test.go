@@ -55,7 +55,7 @@ func (f *fakeService) Bundle(_ context.Context, _ string) ([]byte, string, bool,
 // word (startCopy).
 func coldStart(ctx context.Context, svc *config.InventoryServiceConfig, keys []ed25519.PublicKey,
 	c fetchClient, m *metrics.Metrics, rd *readiness) (*inventory.Published, string, error) {
-	picks, err := coldCopies(ctx, svc, keys, c, m, rd)
+	picks, err := coldCopies(ctx, "port49d", svc, keys, c, m, rd)
 	if err != nil {
 		return nil, "", err
 	}
@@ -251,7 +251,7 @@ func TestWithNoCopyItWaitsForTheServiceSayingWhyOnce(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(svc.StateDir, "bundle.json")); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("persisted before the policy took it: %v", err)
 	}
-	persistStart(svc, coldPick{p, from}, testMetrics())
+	persistStart("port49d", svc, coldPick{p, from}, testMetrics())
 	fi, err := os.Stat(filepath.Join(svc.StateDir, "bundle.json"))
 	if err != nil || fi.Mode().Perm() != 0o600 {
 		t.Fatalf("not persisted: %v %v", fi, err)
@@ -652,7 +652,7 @@ func TestAPersistThatFailsIsAlarmed(t *testing.T) {
 	if err != nil || from != "the service" {
 		t.Fatalf("%q %v", from, err)
 	}
-	persistStart(svc, coldPick{p, from}, m)
+	persistStart("port49d", svc, coldPick{p, from}, m)
 	if testutil.ToFloat64(m.InventoryPersistFailed) != 1 || !strings.Contains(out.String(), "a restart with the service down") {
 		t.Fatalf("not alarmed: %s", out.String())
 	}
