@@ -288,3 +288,58 @@ func (s *Store) PutSealKeys(ctx context.Context, k SealKeys) error {
 	_, err = s.ctxKV.Put(ctx, s.k.meta("seal_keys"), string(body))
 	return unavailable(err)
 }
+
+// maxJudgedPolicy is the most of a policy file meta/judged carries: under
+// etcd's request limit (1.5 MiB by default) with room for the record.
+const maxJudgedPolicy = 1 << 20
+
+type judgedRec struct {
+	Bundle    string    `json:"bundle"`
+	Policy    []byte    `json:"policy,omitempty"`
+	Omitted   bool      `json:"policy_omitted,omitempty"`
+	WrittenAt time.Time `json:"written_at"`
+}
+
+// JudgedRecord is meta/judged: the bundle a runner last judged every
+// unspent token against (plan 7e, Ruling 7), and its policy file, for the
+// reload guard at a start (Ruling 17). Policy is nil when the file was
+// over maxJudgedPolicy.
+type JudgedRecord struct {
+	Bundle string
+	Policy []byte
+}
+
+// Judged reads meta/judged; ok is false when none was recorded. A record
+// that does not decode is ok false too, said by its key alone: a takeover
+// then purges, which fails closed.
+func (s *Store) Judged(ctx context.Context) (JudgedRecord, bool, error) {
+	key := s.k.meta("judged")
+	resp, err := s.ctxKV.Get(ctx, key)
+	if err != nil {
+		return JudgedRecord{}, false, unavailable(err)
+	}
+	if len(resp.Kvs) == 0 {
+		return JudgedRecord{}, false, nil
+	}
+	var r judgedRec
+	if err := json.Unmarshal(resp.Kvs[0].Value, &r); err != nil {
+		s.logf("etcd: %s does not decode; the takeover purges the unspent tokens", key)
+		return JudgedRecord{}, false, nil
+	}
+	return JudgedRecord{Bundle: r.Bundle, Policy: r.Policy}, true, nil
+}
+
+// PutJudged records bundle as judged, with its policy file unless that is
+// over maxJudgedPolicy, as the broker.
+func (s *Store) PutJudged(ctx context.Context, bundle string, policy []byte) error {
+	r := judgedRec{Bundle: bundle, Policy: policy, WrittenAt: s.now().UTC()}
+	if len(policy) > maxJudgedPolicy {
+		r.Policy, r.Omitted = nil, true
+	}
+	body, err := json.Marshal(r)
+	if err != nil {
+		return err
+	}
+	_, err = s.ctxKV.Put(ctx, s.k.meta("judged"), string(body))
+	return unavailable(err)
+}

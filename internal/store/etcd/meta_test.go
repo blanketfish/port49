@@ -368,3 +368,42 @@ func TestSealKeysUndecodable(t *testing.T) {
 		t.Fatalf("%v %v", ok, err)
 	}
 }
+
+// meta/judged reads back what was put: the bundle and its policy, or the
+// bundle alone when the policy was over maxJudgedPolicy. An absent record
+// is ok false with no error, and so is one that does not decode, said by
+// its key alone, so a takeover purges (plan 7e, Rulings 7, 17).
+func TestJudgedIsReadBackAndAbsentIsNotFound(t *testing.T) {
+	ctx := context.Background()
+	var said syncLines
+	s, err := Open(Config{Endpoints: []string{etcdtest.Endpoint()}, Prefix: etcdtest.Prefix(), Logf: said.logf})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if got, ok, err := s.Judged(ctx); ok || err != nil || got.Bundle != "" {
+		t.Fatalf("a new keyspace has a judged bundle: %+v %v %v", got, ok, err)
+	}
+	if err := s.PutJudged(ctx, "b1", []byte("grants: []\n")); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok, err := s.Judged(ctx); !ok || err != nil || got.Bundle != "b1" || string(got.Policy) != "grants: []\n" {
+		t.Fatalf("%+v %v %v", got, ok, err)
+	}
+	big := []byte(strings.Repeat("#", maxJudgedPolicy+1))
+	if err := s.PutJudged(ctx, "b2", big); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok, err := s.Judged(ctx); !ok || err != nil || got.Bundle != "b2" || got.Policy != nil {
+		t.Fatalf("a policy over maxJudgedPolicy is left out: %v %v %v %d", got.Bundle, ok, err, len(got.Policy))
+	}
+	if _, err := s.ctx.Put(ctx, s.k.meta("judged"), "not json"); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok, err := s.Judged(ctx); ok || err != nil || got.Bundle != "" {
+		t.Fatalf("a record that does not decode: %+v %v %v", got, ok, err)
+	}
+	if said.count(s.k.meta("judged")+" does not decode") != 1 || strings.Contains(said.String(), "not json") {
+		t.Fatalf("said: %q", said.String())
+	}
+}
