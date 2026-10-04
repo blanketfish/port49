@@ -864,6 +864,37 @@ them. The ones to read first are under "Worth reading before the merge".
     - **The roles.** `meta/` is read-only to the daemon, so port49d can neither suppress nor
       forge the witness. The broker's existing `meta/` write covers it; no grant is new.
 
+19. **port49d refuses a redemption while the store is older than it followed** (controller
+    Ruling T15c-c, 2026-10-04, from Task 15c's review I-2 and re-review 1 §5; built by Task
+    15d). A restore brings back every single-use token redeemed since the snapshot, unspent,
+    and a port49d serving before the first runner's purge would redeem it again: a replay
+    window 7d did not have, since 7d purged at a start before any listener bound. The
+    runbook's token delete (design §13, step 3) closes it when followed; this fails closed
+    when it is not.
+    - **What port49d keeps.** The highest `meta/witness` ModRevision it has followed, for the
+      process's life: a restore that outlasts `hold_ttl` ends a run, and the next must still
+      know. It follows the witness and also reads it, with `meta/purged`, at once and every
+      second (`witnessEvery`): a watch can wait across a restore without `--bump-revision` at
+      a revision the store has not reached, and never tell.
+    - **Guarded.** A read that shows the witness below that, or gone after one was seen,
+      refuses every token redemption `store_unavailable` before any token is looked up, and
+      nothing else: marks, live contexts' decisions, the admin socket and metrics go on. A
+      run after a store gone refuses too until its first read, once a witness was followed.
+      `port49_redemption_restore_guarded` is 1, and the line says what to do.
+    - **Released only by a purge.** The runner writes `meta/purged` once a purge of every
+      unspent token is done: at a takeover's purge, either branch, and `purgeRestored`.
+      port49d leaves the guard on a `meta/purged` whose ModRevision is above the header of
+      the read that found the drop, so a snapshot's own `meta/purged` never releases it. A
+      plain witness write is no purge: a runner with no record writes them without purging.
+      Any whole purge after the restore leaves no restored token, so a takeover's purge
+      releases it as well as the witness's (Task 15d's report).
+    - **A failed read** changes nothing, said once per run of failures.
+    - **What it leaves.** A port49d started after the restore has followed nothing and cannot
+      tell; one whose read has not yet come since the store returned (up to a second within a
+      run) may redeem; and a runner's purge that lands before port49d's first read after the
+      restore leaves it guarded until the next purge or its restart. The runbook's token
+      delete covers all three.
+
 ### Open for Ryan
 
 Nothing is open. OR-1 was closed by Ryan on 2026-10-03 ("use your best judgement"), and is now
@@ -904,6 +935,10 @@ anti-escalation default either way.
   purges every unspent token, whether or not the runbook's delete of `meta/judged` was done. A
   replica with no record cannot tell, and a snapshot within about a second of the last witness
   is not caught.
+- **Ruling 19.** A port49d that finds `meta/witness` below what it followed refuses every token
+  redemption `store_unavailable` until a runner's purge writes `meta/purged`
+  (`port49_redemption_restore_guarded` 1 meanwhile). Logins with a token fail, sessions and
+  revocations go on.
 
 ## What the operator sees
 
@@ -10740,6 +10775,54 @@ forgetting it fail closed.
 
 ---
 
+### Task 15d: port49d refuses a redemption while the store is older than it followed
+
+Added by controller Ruling T15c-c (2026-10-04); Ruling 19.
+
+**Files:**
+- Create: `internal/port49d/restoreguard.go`, `internal/port49d/restoreguard_test.go`
+- Modify: `internal/store/etcd/meta.go` (`PutPurged`, `RestoreRead`), `meta_test.go`
+- Modify: `internal/port49d/runner.go` (`markPurged`, after every whole purge),
+  `internal/port49d/main.go` (the guard is `run`'s, begun and kept by each `runOnce`, asked by
+  the authentication handler), `internal/daemon/authen/authen.go` (`WithRedeemGuard`),
+  `internal/daemon/metrics/metrics.go` (`port49_redemption_restore_guarded`), `metrics_test.go`,
+  `internal/port49d/brokerd_test.go`, `internal/port49d/witness_test.go` (the mode-0000 case
+  skipped as root)
+
+**Interfaces:**
+- Consumes: Task 15c's `meta/witness`, `FollowWitness`, `witnessEvery` and `purgeRestored`; the
+  takeover's purge.
+- Produces:
+  - `func (s *etcd.Store) PutPurged(ctx context.Context, who string) (uint64, error)` at
+    `meta/purged`; `type etcd.RestoreRead struct { Witness, Purged, Header uint64 }` and
+    `func (s *etcd.Store) RestoreRead(ctx context.Context) (RestoreRead, error)`, one
+    transaction.
+  - `type restoreGuard struct` with `newRestoreGuard(out io.Writer)`, `begin(gauge)`,
+    `Allows() bool`, `Saw(rev uint64)`, `judge(etcdstore.RestoreRead, error)` and
+    `keep(ctx, *etcdstore.Store)`.
+  - `func (h *authen.Handler) WithRedeemGuard(func() bool) *authen.Handler`.
+
+- [ ] **Step 1: The failing tests.** `TestTheRestoreGuardEntersOnADropAndLeavesOnlyOnAPurge`
+  (enter on a drop and on a witness gone after one was seen; stay on a failed read, said once,
+  on a plain witness write, a followed witness and a purge from before the drop; leave on a
+  purge after it; the gauge 1 then 0), `TestARunAfterAStoreGoneRedeemsOnlyOnceTheStoreIsJudged`,
+  `TestARestoreReadSaysTheWitnessAndThePurge`, and the fleet test
+  `TestPort49dRefusesARestoredTokenUntilTheRunnerPurges`: port49d runs across a restore from a
+  backup taken before a token's redemption, with neither of the runbook's deletes and the
+  revisions padded past the pre-restore ones; the replay is refused `store_unavailable` with no
+  candidate lookup and the gauge at 1, until the runner's purge; then the gauge is 0 and a token
+  minted after the purge logs in.
+- [ ] **Step 2: Mutations**, each caught: the drop compared by header; the witness gone after
+  one was seen ignored; leaving on a plain witness write; leaving on a purge from before the
+  drop; the timer re-read removed; a run that starts checked; the guard not asked at redemption.
+- [ ] **Step 3: Build** what the interfaces name. The guard is asked before the candidates
+  lookup, so a receipt's replay, an `auto` escalation and every other path are untouched.
+- [ ] **Step 4: Run** `make test && make vet && make test-race`, and `go test -race ./cmd/...`.
+- [ ] **Step 5: Commit** `feat(port49d): refuse a redemption while the store is older than it
+  followed`.
+
+---
+
 ### Task 16: The fleet end to end, and `store-roles` for two files
 
 **Files:**
@@ -11475,6 +11558,18 @@ The roadmap's "7e-1's operator notes, as built" (`README.md`) is the full text t
   serving meanwhile redeems a token spent since the snapshot again, which only the runbook's
   `etcdctl del --prefix <prefix>v1/t/`, made while the restored members serve clients on
   loopback only, closes. The runbook above stays the procedure.
+- **A port49d that ran across a restore refuses token logins until the runner purges** (Ruling
+  19). It says `port49d: store: meta/witness is at revision N, below the M this port49d
+  followed: the store was restored from a snapshot, …; every token redemption is refused
+  (store_unavailable) until a broker runner's purge is done`, and
+  `port49_redemption_restore_guarded` is 1. Sessions already open, revocations and the admin
+  socket go on. Start the brokers: once a runner's purge is done, port49d says `the broker
+  runner's purge after the restore is done; token redemptions are served again`, and users mint
+  again. A port49d still guarded after a runner has purged (one that read the store only after
+  the purge) is released by the next purge or by restarting it. A port49d started after the
+  restore cannot tell: the runbook's token delete is what covers it.
+  - **Alarm:** `port49_redemption_restore_guarded` 1 for longer than it takes to start the
+    brokers.
   - **After a restore, start a broker whose `state_dir` survived first.** A broker whose
     `state_dir` was lost or is new, started first after a `--bump-revision` restore, means a
     forgotten `etcdctl del` is never caught.

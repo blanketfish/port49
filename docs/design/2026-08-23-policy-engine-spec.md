@@ -6938,8 +6938,11 @@ sealed write sequence every process follows, and a ledger record the daemon cann
   reads the witness below its replica's record, at a takeover or while it runs, knows the
   store was restored: it takes `meta/judged` as absent and purges every unspent token, so
   the first takeover purges even when the runbook's delete of `meta/judged` was forgotten.
-  It does not cover a port49d serving before that takeover: only the runbook's token delete
-  (or the port49d witness guard, if built) does. It takes the store's witness as its record only once the purge is done. A
+  It does not cover a port49d serving before that takeover: the runbook's token delete does,
+  and so does port49d's own guard: a port49d that finds the witness below what it followed
+  refuses every token redemption `store_unavailable` until a runner, once a purge of every
+  unspent token is done, writes `meta/purged` (plan 7e Task 15d). A port49d started after the
+  restore has followed nothing and cannot tell. It takes the store's witness as its record only once the purge is done. A
   replica with no record says it cannot tell, and goes by `meta/judged`; a snapshot taken
   within about a second of the last witness recorded is not caught.
 - **The settle pass** is 30s or two policy watch intervals and 5s after a swap, whichever is
