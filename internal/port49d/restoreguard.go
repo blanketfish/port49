@@ -73,15 +73,29 @@ func (g *restoreGuard) Saw(rev uint64) {
 	}
 }
 
+// recorded is the witness followed so far, taken before a read, as the
+// runner's readWitness takes its record: a witness followed while the
+// read is in flight is newer than the read, not proof of a drop.
+func (g *restoreGuard) recorded() (high uint64, seen bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.high, g.seen
+}
+
 // judge is one read of the store's witness and purge (RestoreRead), or
-// its error.
-func (g *restoreGuard) judge(r etcdstore.RestoreRead, err error) {
+// its error; high and seen are the record taken before it.
+func (g *restoreGuard) judge(r etcdstore.RestoreRead, err error, high uint64, seen bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if err != nil {
+		// A failed read is no restore, but the outage may be one: once a
+		// witness was followed, redemptions wait for a read that answers.
+		if g.seen {
+			g.checked = false
+		}
 		if !g.failing {
 			fmt.Fprintf(g.out, "port49d: store: reading meta/witness, to tell whether the store was restored: %v; "+
-				"redemptions stay as they are (%s) until a read answers; tried again every %v\n", err,
+				"token redemptions are %s until a read answers; tried again every %v\n", err,
 				g.state(), witnessEvery)
 		}
 		g.failing = true
@@ -96,7 +110,7 @@ func (g *restoreGuard) judge(r etcdstore.RestoreRead, err error) {
 			"redemptions are served again")
 	case g.guarded:
 		g.high = max(g.high, r.Witness)
-	case g.seen && r.Witness < g.high:
+	case seen && r.Witness < high:
 		at := fmt.Sprintf("at revision %d", r.Witness)
 		if r.Witness == 0 {
 			at = "absent"
@@ -105,7 +119,8 @@ func (g *restoreGuard) judge(r etcdstore.RestoreRead, err error) {
 		fmt.Fprintf(g.out, "port49d: store: meta/witness is %s, below the %d this port49d followed: the store was "+
 			"restored from a snapshot, which brings back every token redeemed since it, unspent; every token "+
 			"redemption is refused (store_unavailable) until a broker runner's purge is done: start the brokers, "+
-			"and follow the restore runbook's step 3 (design §13) before another restore\n", at, g.high)
+			"and follow the restore runbook's step 3 (design §13) before another restore; if a broker runner has "+
+			"already said its purge line for this restore, restart this port49d\n", at, high)
 	case r.Witness > g.high:
 		g.high, g.seen = r.Witness, true
 	}
@@ -119,13 +134,13 @@ func (g *restoreGuard) state() string {
 	return "served"
 }
 
-// setGauge sets the run's gauge: 1 while redemptions are refused; g.mu is
-// held.
+// setGauge sets the run's gauge: 1 while guarded, not while a run waits
+// for its first read or a failed read; g.mu is held.
 func (g *restoreGuard) setGauge() {
 	if g.gauge == nil {
 		return
 	}
-	g.gauge.Set(b2f(g.guarded || !g.checked))
+	g.gauge.Set(b2f(g.guarded))
 }
 
 // keep follows meta/witness and reads it, with meta/purged, at once and
@@ -140,13 +155,14 @@ func (g *restoreGuard) keep(ctx context.Context, s *etcdstore.Store) {
 	t := time.NewTicker(witnessEvery)
 	defer t.Stop()
 	for {
+		high, seen := g.recorded()
 		rctx, cancel := context.WithTimeout(ctx, witnessEvery)
 		r, err := s.RestoreRead(rctx)
 		cancel()
 		if ctx.Err() != nil {
 			return
 		}
-		g.judge(r, err)
+		g.judge(r, err, high, seen)
 		select {
 		case <-ctx.Done():
 			return

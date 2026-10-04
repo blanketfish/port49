@@ -465,11 +465,13 @@ func (s *Store) PutWitness(ctx context.Context, who string, over uint64) (uint64
 }
 
 // PutPurged writes meta/purged, as the broker, once a runner's purge of
-// every unspent token is done (Task 15d), and returns the revision it
-// landed at. A port49d that found the store restored serves redemptions
-// again only on a meta/purged written after it found it. It holds no
-// secret: the runner's name and the time.
-func (s *Store) PutPurged(ctx context.Context, who string) (uint64, error) {
+// every unspent token is done (Task 15d), if meta/witness is still at the
+// ModRevision over (0: absent), the witness the purge read: a store
+// restored since has another, and the write fails closed. It returns the
+// revision it landed at, 0 when it was refused. A port49d that found the
+// store restored serves redemptions again only on a meta/purged written
+// after it found it. It holds no secret: the runner's name and the time.
+func (s *Store) PutPurged(ctx context.Context, who string, over uint64) (uint64, error) {
 	body, err := json.Marshal(struct {
 		Who string    `json:"who"`
 		At  time.Time `json:"at"`
@@ -477,9 +479,14 @@ func (s *Store) PutPurged(ctx context.Context, who string) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
-	resp, err := s.ctxKV.Put(ctx, s.k.meta("purged"), string(body))
+	resp, err := s.ctxKV.Txn(ctx).
+		If(clientv3.Compare(clientv3.ModRevision(s.k.meta("witness")), "=", int64(over))).
+		Then(clientv3.OpPut(s.k.meta("purged"), string(body))).Commit()
 	if err != nil {
 		return 0, unavailable(err)
+	}
+	if !resp.Succeeded {
+		return 0, nil
 	}
 	return uint64(resp.Header.Revision), nil
 }

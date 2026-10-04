@@ -595,8 +595,16 @@ func TestATakeoverPurgesOnceTheBundleJudgedIsInDoubt(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := &runner{cfg: cfg, brk: b, raw: bs.raw, st: bs.st, meta: bs.raw, keys: keys, m: m, alarm: newKeyAlarm()}
+	was, err := bs.raw.RestoreRead(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := r.takeover(ctx); err != nil {
 		t.Fatal(err)
+	}
+	// The purge is done: port49d's restore guard leaves on meta/purged (Task 15d).
+	if now, err := bs.raw.RestoreRead(ctx); err != nil || now.Purged <= was.Purged {
+		t.Fatalf("a takeover's whole purge left meta/purged at %d (was %d): %v", now.Purged, was.Purged, err)
 	}
 	if !strings.Contains(out.String(), "port49-broker: runner: the bundle the last runner judged ("+pol.Bundle+
 		") is in doubt, a replica having served another since; 0 unspent token(s) purged") {
@@ -828,4 +836,38 @@ func (f *storeFeed) WatchRevocations(ctx context.Context, _ uint64, _ func(store
 	}
 	<-ctx.Done()
 	return ctx.Err()
+}
+
+// meta/purged is written over the witness the purge read, so a purge that
+// finished on the store before a restore cannot release port49d's guard
+// on the store after it: a refused write says so and writes nothing
+// (Task 15d review M-2).
+func TestAPurgeDoneOnAnotherStoreWritesNoPurgeRecord(t *testing.T) {
+	f := splitFleet(t)
+	ctx := context.Background()
+	bs, _ := openBrokerFor(t, ctx, f.broker, metrics.New(prometheus.NewRegistry()), io.Discard)
+	var out syncBuffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	w, err := bs.raw.PutWitness(ctx, "runner-a", 0)
+	if err != nil || w == 0 {
+		t.Fatalf("%d %v", w, err)
+	}
+	r := &runner{raw: bs.raw, who: "runner-a"}
+	if err := r.markPurged(ctx, w+1); err != nil { // the witness the purge read, not the store's
+		t.Fatal(err)
+	}
+	if got, err := bs.raw.RestoreRead(ctx); err != nil || got.Purged != 0 {
+		t.Fatalf("a purge read at another witness wrote meta/purged: %+v %v", got, err)
+	}
+	if !strings.Contains(out.String(), "meta/purged is not written") {
+		t.Fatalf("a refused meta/purged was not said: %q", out.String())
+	}
+	if err := r.markPurged(ctx, w); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := bs.raw.RestoreRead(ctx); err != nil || got.Purged == 0 {
+		t.Fatalf("a purge read at the store's witness left no meta/purged: %+v %v", got, err)
+	}
 }

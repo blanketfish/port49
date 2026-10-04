@@ -653,7 +653,15 @@ func TestARestoreReadSaysTheWitnessAndThePurge(t *testing.T) {
 	if err != nil || w == 0 {
 		t.Fatalf("%d %v", w, err)
 	}
-	p, err := s.PutPurged(ctx, "runner-a")
+	// Written only over the witness the purge read: a store restored since
+	// has another, and the write fails closed.
+	if p, err := s.PutPurged(ctx, "runner-a", w+1); err != nil || p != 0 {
+		t.Fatalf("meta/purged over another witness: %d %v", p, err)
+	}
+	if r, err := s.RestoreRead(ctx); err != nil || r.Purged != 0 {
+		t.Fatalf("a refused write landed: %+v %v", r, err)
+	}
+	p, err := s.PutPurged(ctx, "runner-a", w)
 	if err != nil || p <= w {
 		t.Fatalf("meta/purged: %d %v", p, err)
 	}

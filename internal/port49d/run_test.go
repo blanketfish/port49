@@ -174,9 +174,34 @@ func postMint(t *testing.T, brokerAddr, pkiDir, device, key, certFile, keyFile s
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("%v%s", err, brokerLines())
 	}
 	return resp
+}
+
+// brokerLines is the broker's own non-secret lines about its connections,
+// from the stderr buffer the fleet test set, so a mint that fails with a
+// reset names its cause (Task 15d review M-6). It never prints anything
+// else: a token is never in these lines, and the rest of the buffer is
+// left out.
+func brokerLines() string {
+	buf, ok := stderr.(*syncBuffer)
+	if !ok {
+		return ""
+	}
+	var keep []string
+	for _, line := range strings.Split(buf.String(), "\n") {
+		for _, m := range []string{"broker: reset a connection", "TLS handshake from", "draining", "drained"} {
+			if strings.Contains(line, m) {
+				keep = append(keep, line)
+				break
+			}
+		}
+	}
+	if len(keep) == 0 {
+		return "\n(no broker connection lines said)"
+	}
+	return "\nbroker lines:\n" + strings.Join(keep, "\n")
 }
 
 // waitFor polls buf until it holds want, or fails the test.
@@ -507,5 +532,19 @@ func TestRunStartsFromThePersistedCopyWithTheServiceDown(t *testing.T) {
 	metrics := regexp.MustCompile(`metrics on (127\.0\.0\.1:\d+)`).FindStringSubmatch(out.String())
 	if resp, err := http.Get("http://" + metrics[1] + "/readyz"); err != nil || resp.StatusCode != 200 {
 		t.Fatalf("readyz: %v %v", resp, err)
+	}
+}
+
+// brokerLines names the broker's connection lines and nothing else.
+func TestBrokerLinesKeepsOnlyTheConnectionLines(t *testing.T) {
+	var buf syncBuffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &buf
+	buf.Write([]byte("port49-broker: reset a connection: source_cap\nsomething else\nport49-broker: TLS handshake from 10.0.0.1: timeout\n"))
+	got := brokerLines()
+	if !strings.Contains(got, "reset a connection") || !strings.Contains(got, "TLS handshake from") ||
+		strings.Contains(got, "something else") {
+		t.Fatalf("%q", got)
 	}
 }

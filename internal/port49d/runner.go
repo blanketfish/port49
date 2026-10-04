@@ -632,7 +632,7 @@ func (r *runner) purgeRestored(ctx context.Context, why string, read etcdstore.W
 	if err := retryCtx(ctx, func() (e error) { n, e = r.st.PurgeTokens(ctx); return }); err != nil {
 		return err
 	}
-	if err := r.markPurged(ctx); err != nil {
+	if err := r.markPurged(ctx, read.ModRevision); err != nil {
 		return err
 	}
 	r.witness.Reset(read.ModRevision)
@@ -646,10 +646,18 @@ func (r *runner) purgeRestored(ctx context.Context, why string, read etcdstore.W
 // found the store restored serves redemptions again only on one written
 // after it found it. Every whole purge writes it, not only a restore's:
 // any of them, done after the restore, leaves no restored token behind.
-func (r *runner) markPurged(ctx context.Context) error {
+// over is the meta/witness ModRevision the purge read: a witness that has
+// changed since means the store may not be the one purged, and nothing is
+// written; the next purge writes it.
+func (r *runner) markPurged(ctx context.Context, over uint64) error {
 	return retryCtx(ctx, func() error {
-		if _, err := r.raw.PutPurged(ctx, r.who); err != nil {
+		at, err := r.raw.PutPurged(ctx, r.who, over)
+		if err != nil {
 			return fmt.Errorf("recording the purge done (meta/purged): %w", err)
+		}
+		if at == 0 {
+			fmt.Fprintf(stderr, "port49-broker: runner: meta/witness changed during the purge, so the store may not "+
+				"be the one purged; meta/purged is not written, and a port49d on guard waits for the next purge\n")
 		}
 		return nil
 	})
@@ -848,7 +856,7 @@ func (r *runner) takeover(ctx context.Context) (*policy.Policy, error) {
 		if err := retryCtx(ctx, func() (e error) { n, e = r.st.PurgeTokens(ctx); return }); err != nil {
 			return nil, err
 		}
-		if err := r.markPurged(ctx); err != nil {
+		if err := r.markPurged(ctx, read.ModRevision); err != nil {
 			return nil, err
 		}
 		if ok && judged.InDoubt && judged.Bundle == bundle {
