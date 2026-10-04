@@ -88,6 +88,10 @@ type Server struct {
 	// port49d runs no broker; the ops are then refused, saying so.
 	Revoke      func(ctx context.Context, op RevokeOp) (text string, partial bool, err error)
 	Revocations func(ctx context.Context) (string, error)
+	// RevokeElsewhere names where revocation is answered when this process
+	// runs no broker (plan 7e, Ruling 13): port49d on etcd, beside
+	// port49-broker. Empty keeps the memory store's line.
+	RevokeElsewhere string
 	// OpTimeout bounds revoke and revocations; zero is the package's
 	// OpTimeout. Tests shorten it.
 	OpTimeout time.Duration
@@ -244,6 +248,10 @@ func (s *Server) answer(ctx context.Context, req Request, uid uint32) (resp Resp
 		return Response{Text: f.Text(now), Finding: &f}
 	case "revoke", "revocations":
 		if s.Revoke == nil || s.Revocations == nil {
+			if s.RevokeElsewhere != "" {
+				return Response{Error: "port49d runs no broker; revocation is " + s.RevokeElsewhere +
+					": run port49 revoke --socket <that path>"}
+			}
 			return Response{Error: "port49d runs no broker (no broker: block in port49d.yaml), so there is nothing to revoke"}
 		}
 		ctx, cancel := context.WithTimeout(ctx, s.opTimeout())

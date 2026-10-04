@@ -115,6 +115,28 @@ func TestRevokeOpsReachTheBroker(t *testing.T) {
 	}
 }
 
+// A revocation asked of port49d with no broker in it, beside
+// port49-broker on etcd, is refused naming where it is answered and how
+// to ask there (plan 7e, Ruling 13); the list is too. Unset, the memory
+// store's line stands.
+func TestARevokeWithNoBrokerNamesWhereItIs(t *testing.T) {
+	ctx := context.Background()
+	s := &Server{Held: &keyring.Held{}, Now: time.Now,
+		RevokeElsewhere: "port49-broker's admin socket (its admin_socket in port49-broker.yaml)"}
+	for _, op := range []string{"revoke", "revocations"} {
+		r := s.answer(ctx, Request{Op: op, Principal: "user:alice@example.com"}, 0)
+		if !strings.Contains(r.Error, "port49 revoke --socket") || !strings.Contains(r.Error, "port49-broker") ||
+			strings.Contains(r.Error, "nothing to revoke") {
+			t.Fatalf("%s: %+v", op, r)
+		}
+	}
+	none := &Server{Held: &keyring.Held{}, Now: time.Now}
+	if r := none.answer(ctx, Request{Op: "revoke", Principal: "user:a@b"}, 0); !strings.Contains(r.Error,
+		"nothing to revoke") {
+		t.Fatalf("%+v", r)
+	}
+}
+
 // A revoke's connection outlasts its wait for its turn, its run and the save
 // it waits on; a list's, its one bound. The exported waits are the defaults.
 func TestConnTimeoutCoversTheOpsWorstCase(t *testing.T) {
