@@ -8,6 +8,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/printsafe"
@@ -196,13 +198,18 @@ func (g *skewGate) allow(pol *policy.Policy) error {
 // under bundle. A mark the store did not answer, or refused (a role
 // edited, then fixed), is tried again every wait until it lands or ctx
 // ends (re-review 2, M-8): a replica that cannot flag its skew mints
-// nothing under it, and is not ready meanwhile (broker.Broker.MintGate).
+// nothing under it (broker.Broker.MintGate). closed, the gauge
+// port49_broker_mint_gate_closed, reads 1 while it waits (re-review 3,
+// I-4); readiness never shows it, a store fault being an alarm (design
+// §12).
 func flagSwap(ctx context.Context, st startRecorder, gate *skewGate, bundle string, call, wait time.Duration,
-	out io.Writer) {
+	closed prometheus.Gauge, out io.Writer) {
+	closed.Set(1)
 	if untilLanded(ctx, fmt.Sprintf("marking the bundle last judged in doubt against this replica's (%s)",
 		bundle), call, wait, out, func(ctx context.Context) error { return (*markSkew.Load())(ctx, st, bundle, out) },
 		store.ErrRefused) == nil {
 		gate.flag(bundle)
+		closed.Set(0)
 	}
 }
 

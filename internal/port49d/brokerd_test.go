@@ -1204,9 +1204,10 @@ func TestALateReplicasContextIsCarriedWhenItReloads(t *testing.T) {
 	// count from here.
 	recorded := strings.Count(out.String(), "runner: recorded bundle ")
 	passes := strings.Count(out.String(), "runner: a full context pass owed by ")
-	// B's swap mints nothing, and B is not ready, until its mark has
-	// landed: held here (markSkew), no store fault needed (re-review 2,
-	// M-9).
+	// B's swap mints nothing until its mark has landed, held here
+	// (markSkew), no store fault needed (re-review 2, M-9): the gate's
+	// gauge says so, and B stays ready, a store fault being an alarm and
+	// never readiness (design §12; re-review 3, I-4).
 	release := make(chan struct{})
 	ms := markSkew.Load()
 	t.Cleanup(func() { markSkew.Store(ms) })
@@ -1228,10 +1229,12 @@ func TestALateReplicasContextIsCarriedWhenItReloads(t *testing.T) {
 	if resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(string(body), `"store_unavailable"`) {
 		t.Fatalf("a mint on B before its swap's mark landed: %d %s", resp.StatusCode, body)
 	}
-	if code := readyzAt(t, metricsB); code != http.StatusServiceUnavailable {
-		t.Fatalf("/readyz %d on B before its swap's mark landed", code)
+	waitBrokerMetricAt(t, metricsB, "port49_broker_mint_gate_closed 1")
+	if code := readyzAt(t, metricsB); code != http.StatusOK {
+		t.Fatalf("/readyz %d on B while its swap's mark is held", code)
 	}
 	close(release)
+	waitBrokerMetricAt(t, metricsB, "port49_broker_mint_gate_closed 0")
 	waitForCount(t, &out, "runner: a full context pass owed by ", passes+1)
 	if dev.permits("alice", "configure") {
 		t.Fatal("the context a late replica's token made kept the withdrawn grant after it reloaded")

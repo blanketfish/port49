@@ -272,6 +272,13 @@ type Metrics struct {
 	// brokers', for admission, quarantine and redaction. It starts at 1:
 	// nothing is known to differ until a read says so.
 	PolicyBundleMatchesRunner prometheus.Gauge
+	// port49_broker_mint_gate_closed: 1 while this port49-broker waits to
+	// mark meta/judged in doubt for a swap, minting nothing under the
+	// swapped bundle meanwhile (Task 15a re-review 1, I-2; re-review 3,
+	// I-4). A swap holds it for a store round trip; 1 for longer than a
+	// minute is a store that does not answer, or refuses, the broker's
+	// mark. Readiness never shows it (design §12): it is an alarm.
+	BrokerMintGateClosed prometheus.Gauge
 	// port49_inventory_reloads_total{outcome}: attempts to put a changed
 	// inventory_file in force (plan 6a) — "applied", "unchanged" (the same
 	// devices, respelled), or "refused" (it could not be read behind the
@@ -509,6 +516,10 @@ func New(reg prometheus.Registerer) *Metrics {
 				"last judged; 0 on a broker is a replica whose policy file differs: its tokens and the contexts they " +
 				"make carry another policy until it reloads; 0 on a port49d past the runner's settle pass is a " +
 				"policy file that differs from the brokers', for admission, quarantine and redaction."}),
+		BrokerMintGateClosed: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_broker_mint_gate_closed",
+			Help: "1 while this broker waits to mark the bundle last judged in doubt for a swap, minting nothing " +
+				"under the swapped bundle; 1 for longer than a minute is a store that does not answer, or refuses, " +
+				"the mark."}),
 		InventoryReloads: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_inventory_reloads_total",
 			Help: "Attempts to put a changed inventory file in force, by outcome."}, []string{"outcome"}),
 		InventoryFileRefused: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_inventory_file_refused",
@@ -562,7 +573,8 @@ func New(reg prometheus.Registerer) *Metrics {
 		m.ContextsReindexFailures, m.SessionRefreshes, m.TokensSuperseded, m.CeilingWarnings,
 		m.Revocations, m.RevocationsInForce, m.RevocationsFileFailed, m.CertStatusChecks, m.CRLLoads, m.CRLNextUpdate,
 		m.CertStatusUnavailable, m.PolicyReloads, m.PolicyFileRefused,
-		m.PolicyRefreshPending, m.PolicyBundleMatchesRunner, m.InventoryReloads, m.InventoryFileRefused,
+		m.PolicyRefreshPending, m.PolicyBundleMatchesRunner, m.BrokerMintGateClosed, m.InventoryReloads,
+		m.InventoryFileRefused,
 		m.InventorySnapshotAge,
 		m.InventoryChanges, m.InventoryBundleSequence, m.InventoryPersistFailed, m.InventoryBundleRefused,
 		m.InventoryPolicyMismatch, m.InventoryMirrorUnreadable, m.InventoryFetches)

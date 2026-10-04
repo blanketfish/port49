@@ -59,6 +59,7 @@ func TestNewRegistersEveryMetric(t *testing.T) {
 	if v := testutil.ToFloat64(m.PolicyBundleMatchesRunner); v != 1 {
 		t.Fatalf("port49_policy_bundle_matches_runner starts at %v; nothing is known to differ", v)
 	}
+	m.BrokerMintGateClosed.Set(0)
 	m.InventoryReloads.WithLabelValues("applied").Inc()
 	m.InventoryFileRefused.Set(0)
 	m.InventoryFetches.WithLabelValues("unchanged").Inc()
@@ -127,6 +128,7 @@ func TestNewRegistersEveryMetric(t *testing.T) {
 		"port49_policy_file_refused":                        false,
 		"port49_policy_refresh_pending":                     false,
 		"port49_policy_bundle_matches_runner":               false,
+		"port49_broker_mint_gate_closed":                    false,
 		"port49_inventory_reloads_total":                    false,
 		"port49_inventory_file_refused":                     false,
 		"port49_inventory_snapshot_age_seconds":             false,

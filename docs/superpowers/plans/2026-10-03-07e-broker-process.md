@@ -11326,6 +11326,12 @@ The roadmap's "7e-1's operator notes, as built" (`README.md`) is the full text t
     broker replica.** A replica serving another bundle says so, and
     `port49_policy_bundle_matches_runner` is 0 there. When it catches up, the runner carries
     every live context.
+  - **Alert on `port49_broker_mint_gate_closed == 1` for longer than a minute.** A broker that
+    swaps its policy marks the bundle last judged in doubt before it mints under the new one
+    (Task 15a). Until the mark lands its mints answer 503 `store_unavailable`, while `/readyz`
+    stays 200 (design §12: a store fault is an alarm, never readiness). A swap holds the gauge
+    at 1 for one store round trip; a minute is a store that does not answer, or refuses, the
+    broker's write to `meta/judged`.
   - **Keep `broker.state_dir` across restarts, and back it up** with each broker. It holds that
     replica's copy of the marks (`marks.json`) and its record of the restore witness
     (`witness.json`). Under systemd it is a directory on the host; in a container, a named

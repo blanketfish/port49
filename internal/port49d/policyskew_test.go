@@ -88,11 +88,12 @@ func TestASwapMintsOnlyOnceItsSkewIsFlagged(t *testing.T) {
 	b1, b2 := policyWithBundle(t, "b1"), policyWithBundle(t, "b2")
 	gate := &skewGate{}
 	gate.flag("b1")
+	closed := prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_broker_mint_gate_closed"})
 	if gate.allow(b1) != nil || gate.allow(b2) == nil {
 		t.Fatal("the gate is open only to the bundle flagged")
 	}
 	st := &fakeBundles{judged: "b1", markFail: 3, failErr: store.ErrUnavailable}
-	flagSwap(context.Background(), st, gate, "b2", time.Second, 10*time.Millisecond, &out)
+	flagSwap(context.Background(), st, gate, "b2", time.Second, 10*time.Millisecond, closed, &out)
 	if gate.allow(b2) != nil || gate.allow(b1) == nil || !st.inDoubt {
 		t.Fatalf("a swap flagged: in doubt %v; said %s", st.inDoubt, out.String())
 	}
@@ -102,7 +103,7 @@ func TestASwapMintsOnlyOnceItsSkewIsFlagged(t *testing.T) {
 	}
 	b4 := policyWithBundle(t, "b4")
 	st = &fakeBundles{judged: "b3", markFail: 1, failErr: store.ErrRefused}
-	flagSwap(context.Background(), st, gate, "b4", time.Second, 10*time.Millisecond, &out)
+	flagSwap(context.Background(), st, gate, "b4", time.Second, 10*time.Millisecond, closed, &out)
 	if gate.allow(b4) != nil || !st.inDoubt || !strings.Contains(out.String(), "(b4): store: refused this identity") {
 		t.Fatalf("a refused mark, then one that lands: in doubt %v; said %s", st.inDoubt, out.String())
 	}
@@ -110,15 +111,15 @@ func TestASwapMintsOnlyOnceItsSkewIsFlagged(t *testing.T) {
 	st = &fakeBundles{judged: "b3", markFail: 1 << 30, failErr: store.ErrRefused}
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	flagSwap(ctx, st, gate, "b5", time.Second, 10*time.Millisecond, &out)
-	if gate.allow(b5) == nil || st.inDoubt {
-		t.Fatal("a mark that never lands opened the gate")
+	flagSwap(ctx, st, gate, "b5", time.Second, 10*time.Millisecond, closed, &out)
+	if gate.allow(b5) == nil || st.inDoubt || testutil.ToFloat64(closed) != 1 {
+		t.Fatalf("a mark that never lands opened the gate (gauge %v)", testutil.ToFloat64(closed))
 	}
 	b3 := policyWithBundle(t, "b3")
 	st = &fakeBundles{judged: "b3"}
-	flagSwap(context.Background(), st, gate, "b3", time.Second, 10*time.Millisecond, &out)
-	if gate.allow(b3) != nil || st.inDoubt {
-		t.Fatalf("a swap onto the bundle judged: in doubt %v", st.inDoubt)
+	flagSwap(context.Background(), st, gate, "b3", time.Second, 10*time.Millisecond, closed, &out)
+	if gate.allow(b3) != nil || st.inDoubt || testutil.ToFloat64(closed) != 0 {
+		t.Fatalf("a swap onto the bundle judged: in doubt %v, gauge %v", st.inDoubt, testutil.ToFloat64(closed))
 	}
 }
 
