@@ -3285,6 +3285,11 @@ Every shape states the same four requirements:
   - systemd: a directory.
   - Docker: a named volume.
   - Kubernetes: a StatefulSet with a volume per replica, never a Deployment's empty directory.
+    The Kubernetes deployment test must prove that a pod restart under the recommended
+    `securityContext` (plan 7e Task 18's notes: no `fsGroup`, or `fsGroupChangePolicy:
+    OnRootMismatch`, and a 0700 subdirectory an initContainer makes) keeps `broker.state_dir`
+    accepted: under the default `Always` the kubelet makes it group-writable at each mount, and
+    port49-broker refuses it.
 - **etcd is port49's own cluster, never the Kubernetes control plane's.** It needs port49's roles,
   compaction, quota and backups (design §13), and a managed control plane does not expose its etcd.
   It runs as VMs under systemd, as containers with volumes, or as a StatefulSet.

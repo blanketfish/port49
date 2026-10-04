@@ -11337,11 +11337,17 @@ The roadmap's "7e-1's operator notes, as built" (`README.md`) is the full text t
     anything else and says why: a group-writable directory, one owned by another uid, a
     `marks.json` or `witness.json` owned by another uid or not a regular file, and a symbolic
     link (point `broker.state_dir` at its target). systemd's `StateDirectory=` and a
-    container's 0700 volume pass as they are. On Kubernetes two common volume shapes are
-    refused: one mounted with `fsGroup` (the kubelet makes it group-writable and setgid) and an
-    `emptyDir` (0777). Make a 0700 subdirectory in the volume with an initContainer
-    (`install -d -m 0700 -o <uid> /var/lib/port49-broker/state`) and point
-    `broker.state_dir` at it, or mount the volume without `fsGroup`.
+    container's 0700 volume pass as they are. On Kubernetes an `emptyDir` (0777) is refused,
+    and so is a volume the kubelet makes group-writable for `fsGroup`. Under the default
+    `fsGroupChangePolicy: Always` the kubelet does that at every mount, to every directory in
+    the volume, so even a 0700 subdirectory turns group-writable and the next start is refused.
+    The recipe, on a StatefulSet's volume per replica mounted at `/var/lib/port49-broker`:
+    - the pod's `securityContext` sets `runAsUser: <uid>` and either no `fsGroup`, or
+      `fsGroup` with `fsGroupChangePolicy: OnRootMismatch` (the kubelet then leaves the volume
+      alone once its root matches);
+    - an initContainer running as root makes the subdirectory:
+      `install -d -m 0700 -o <uid> -g <uid> /var/lib/port49-broker/state`;
+    - `broker.state_dir: /var/lib/port49-broker/state`.
   - **Keep every broker host's clock synchronised (NTP).** A replica whose clock runs behind can
     answer an idempotent replay with a token another replica's revocation or refresh deleted:
     its login fails `token_not_found`. Availability only, never an admission.
