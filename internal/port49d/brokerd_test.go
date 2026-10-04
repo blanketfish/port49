@@ -1557,9 +1557,10 @@ func TestARestartedReplicaKeepsAMarkTheStoreLost(t *testing.T) {
 }
 
 // With every port49-broker stopped, the offline revocation reaches a live
-// session on port49d at its next command, and deletes a token minted
-// before (Ruling 13; pre-flight I4). The next broker start refuses alice
-// before it mints anything: its first request is refused as it binds.
+// session on port49d at its next command, marks its live context and
+// deletes a token minted before (Ruling 13; pre-flight I4). The next
+// broker start refuses alice before it mints anything: its first request
+// is refused as it binds.
 func TestAnOfflineRevokeDeniesWithEveryBrokerStopped(t *testing.T) {
 	var out, log syncBuffer
 	e, o := stderr, stdout
@@ -1577,13 +1578,32 @@ func TestAnOfflineRevokeDeniesWithEveryBrokerStopped(t *testing.T) {
 	if !dev.permits("alice", "configure") {
 		t.Fatal("control: the session runs on with every broker stopped")
 	}
+	root := f.srv.Client(t, "root")
+	tokens := func() int {
+		resp, err := root.Get(context.Background(), "/port49/v1/t/leaf1/alice/", clientv3.WithPrefix(),
+			clientv3.WithCountOnly())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return int(resp.Count)
+	}
+	if tokens() == 0 {
+		t.Fatal("control: the spare token is not in the store")
+	}
 	var rout, rerr bytes.Buffer
 	if code := offlineRevoke([]string{"--offline", "--config", f.broker, "--principal", "user:alice@example.com"},
 		&rout, &rerr); code != 0 {
 		t.Fatalf("exit %d: %s", code, rerr.String())
 	}
-	if !strings.Contains(rerr.String(), "port49-broker: revoke (offline, no API): revoked user:alice@example.com") {
+	// The whole revocation, in decision 32's order, not the mark alone: the
+	// live context marked and the unspent token deleted (review I-1).
+	if !strings.Contains(rerr.String(), "port49-broker: revoke (offline, no API): revoked user:alice@example.com") ||
+		!strings.Contains(rerr.String(), ": 1 live context(s) marked, the unspent tokens under 1 (device, username) "+
+			"key(s) deleted") {
 		t.Fatalf("the report: %s", rerr.String())
+	}
+	if n := tokens(); n != 0 {
+		t.Fatalf("%d unspent token(s) of alice's left in the store after the offline revocation", n)
 	}
 	waitUntil(t, "the device to deny alice configure", func() bool { return !dev.permits("alice", "configure") })
 	if r := lastCommand(t, &log); r["reason"] != "credential_revoked" {

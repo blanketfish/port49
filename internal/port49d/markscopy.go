@@ -9,9 +9,11 @@ import (
 	"io/fs"
 	"os"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/rhwendt/port49/internal/printsafe"
 	"github.com/rhwendt/port49/internal/store"
 )
 
@@ -55,16 +57,24 @@ type copiedMark struct {
 	At   time.Time `json:"at"`
 }
 
-// openMarksCopy reads the copy at path. An absent file is an empty copy.
-// A file that cannot be read or does not decode is said, moved aside to
-// path + ".bad-" + the time, and never trusted: the copy starts empty,
-// the store still holds every mark it holds, and the start's load fills
-// the copy from the store at once. What is lost is a mark an etcd restore
-// had already lost, which the line says.
+// openMarksCopy reads the copy at path. An absent file is an empty copy,
+// said: a first start, or a broker.state_dir not kept across restarts,
+// whose copy protects nothing (Task 15b review M-6). A file that cannot be
+// read or does not decode is said, moved aside to path + ".bad-" + the
+// time, and never trusted: the copy starts empty, the store still holds
+// every mark it holds, and the start's load fills the copy from the store
+// at once. What is lost is a mark an etcd restore had already lost, which
+// the line says, with the way back (review M-1). A file that decodes keeps
+// every mark it holds that this port49 understands; one it does not (no
+// kind it knows, no key, no time: a newer port49's, read after a rollback)
+// is skipped alone and named, never discarding the rest (review M-2).
 func openMarksCopy(path string, out io.Writer) *marksCopy {
 	c := &marksCopy{path: path, out: out, m: map[[2]string]store.Revocation{}}
 	raw, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
+		fmt.Fprintf(out, "port49-broker: store: broker.state_dir/%s is absent: this replica's copy starts from the "+
+			"store (a first start; otherwise broker.state_dir is not kept across restarts, and a mark an etcd "+
+			"restore lost cannot be put back from it)\n", stateMarksFile)
 		return c
 	}
 	var f marksFile
@@ -72,26 +82,39 @@ func openMarksCopy(path string, out io.Writer) *marksCopy {
 		err = json.Unmarshal(raw, &f)
 	}
 	if err == nil {
+		var skipped []string
 		for _, m := range f.Marks {
 			if m.Key == "" || (m.Kind != store.RevocationPrincipal && m.Kind != store.RevocationCert) || m.At.IsZero() {
-				err = fmt.Errorf("a mark with no kind, key or time (%q %q)", m.Kind, m.Key)
-				break
+				skipped = append(skipped, fmt.Sprintf("%q %q", printsafe.Line(m.Kind, 64), printsafe.Line(m.Key, 256)))
+				continue
 			}
 			c.m[[2]string{m.Kind, m.Key}] = store.Revocation{Kind: m.Kind, Key: m.Key, At: m.At}
 		}
-	}
-	if err == nil {
+		if len(skipped) > 0 {
+			named := skipped
+			if len(named) > 20 {
+				named = append(named[:20:20], fmt.Sprintf("and %d more", len(skipped)-20))
+			}
+			fmt.Fprintf(out, "port49-broker: store: %d mark(s) in broker.state_dir/%s are not understood and are "+
+				"skipped (written by a newer port49, or edited by hand): this replica cannot put them back, and "+
+				"the file is written without them at the next change; revoke again any the store lacks: %s\n",
+				len(skipped), stateMarksFile, strings.Join(named, ", "))
+		}
 		return c
 	}
-	c.m = map[[2]string]store.Revocation{}
 	aside := path + ".bad-" + time.Now().UTC().Format("20060102T150405.000000000Z")
 	moved := "moved aside to " + aside
+	back := fmt.Sprintf("if etcd was restored before this start, stop this replica, repair %s and move it back to "+
+		"broker.state_dir/%s, then start it; or revoke again each mark another replica's or port49d's \"missing "+
+		"from the store\" line names", aside, stateMarksFile)
 	if rerr := os.Rename(path, aside); rerr != nil {
 		moved = fmt.Sprintf("could not be moved aside (%v); it is written over at the next change", rerr)
+		back = "if etcd was restored before this start, revoke again each mark another replica's or port49d's " +
+			"\"missing from the store\" line names"
 	}
 	fmt.Fprintf(out, "port49-broker: store: broker.state_dir/%s does not decode or cannot be read (%v); %s, and "+
 		"this replica starts with an empty copy, filled from the store at once: a revocation an etcd restore lost "+
-		"before this start cannot be put back from it\n", stateMarksFile, err, moved)
+		"before this start cannot be put back from it; %s\n", stateMarksFile, err, moved, back)
 	return c
 }
 

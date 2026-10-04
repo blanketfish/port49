@@ -75,7 +75,7 @@ func offlineRevoke(args []string, log, out io.Writer) int {
 	if *lift {
 		rep, err := brk.Lift(ctx, req)
 		if err != nil {
-			fmt.Fprintf(out, "%s%v\n", offlineSay, err)
+			fmt.Fprintln(out, offlineFailed(true, err))
 			return 1
 		}
 		// The copies of the marks hold it still (marksCopy): the next runner
@@ -90,7 +90,7 @@ func offlineRevoke(args []string, log, out io.Writer) int {
 	}
 	rep, err := brk.Revoke(ctx, req)
 	if err != nil {
-		fmt.Fprintf(out, "%s%v\n", offlineSay, err)
+		fmt.Fprintln(out, offlineFailed(false, err))
 		return 1
 	}
 	fmt.Fprintf(out, "%s%s\n", offlineSay, rep.Text())
@@ -98,6 +98,30 @@ func offlineRevoke(args []string, log, out io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+// offlineFailed is the line for a revocation (or a lift) that did not
+// finish, in the tool's own words (Task 15b review M-4): the broker's
+// errors advise on a port49d that denies what the mark names, and here
+// nothing does. A request the broker refused as written, or a lift of no
+// mark, is said as the broker says it. Otherwise the store's error is
+// named, with what may have landed, that running the same command again
+// is safe, and Ruling 13's fallback with no broker host.
+func offlineFailed(lift bool, err error) string {
+	if errors.Is(err, broker.ErrBadRevocation) || errors.Is(err, broker.ErrNotRevoked) {
+		return fmt.Sprintf("%s%v; nothing was changed", offlineSay, err)
+	}
+	cause := err
+	if u := errors.Unwrap(err); u != nil {
+		cause = u
+	}
+	if lift {
+		return fmt.Sprintf("%sthe lift did not finish (%v): the mark may still stand; the same command is safe to run "+
+			"again; with no broker host, delete the mark as etcd's root under rv/", offlineSay, cause)
+	}
+	return fmt.Sprintf("%sthe revocation did not finish (%v): the mark may or may not have landed, and no token was "+
+		"deleted and no context marked; the same command is safe to run again; with no broker host, write the "+
+		"mark as etcd's root under rv/, which every port49d follows", offlineSay, cause)
 }
 
 // offlineBroker is the broker offlineRevoke runs on: port49-broker.yaml

@@ -779,7 +779,7 @@ func TestAnIdleReplicasReloadHookRefusesAFailedReadAndNamesWhatItKeeps(t *testin
 		"marks feed reloads"
 	if s := out.String(); strings.Count(s, line) != 1 || !strings.HasSuffix(s, "revoke it again on "+
 		"port49-broker, then lift it with port49 revoke --lift): principal user:alice@example.com\n") ||
-		strings.Contains(s, "restart") {
+		strings.Contains(s, "or restart this replica") {
 		t.Fatalf("said %q", s)
 	}
 	if _, err := store.LoadMarks(ctx, &storeFeed{st: mem}, marks, nil); err != nil {

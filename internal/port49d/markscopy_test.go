@@ -2,6 +2,7 @@ package port49d
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -38,8 +39,11 @@ func TestTheCopyKeepsAMarkAReloadFoundMissing(t *testing.T) {
 	if miss := again.Missing([]store.Revocation{alice}); len(miss) != 0 {
 		t.Fatalf("missing from a store holding it: %+v", miss)
 	}
-	if out.Len() != 0 {
-		t.Fatalf("said %q", out.String())
+	// An absent copy is said, once, at its open (review M-6); a copy read
+	// whole says nothing.
+	if s := out.String(); strings.Count(s, "broker.state_dir/marks.json is absent: this replica's copy starts from "+
+		"the store") != 1 || !strings.Contains(s, "broker.state_dir is not kept across restarts") {
+		t.Fatalf("said %q", s)
 	}
 }
 
@@ -66,6 +70,57 @@ func TestACopyThatDoesNotDecodeIsMovedAside(t *testing.T) {
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("the bad copy is still at its path: %v", err)
+	}
+	// The way back (review M-1).
+	if s := out.String(); !strings.Contains(s, "if etcd was restored before this start, stop this replica, repair "+
+		m[0]+" and move it back to broker.state_dir/marks.json, then start it; or revoke again each mark another "+
+		"replica's or port49d's \"missing from the store\" line names") {
+		t.Fatalf("no way back: %q", s)
+	}
+}
+
+// A copy that decodes but holds a mark this port49 does not know (a kind
+// a newer one wrote, read after a rollback) skips that mark alone, said
+// and named, and keeps every other: one entry never discards the copy
+// (review M-2).
+func TestACopiedMarkNotUnderstoodIsSkippedAlone(t *testing.T) {
+	path := filepath.Join(safeStateDir(t), "marks.json")
+	if err := os.WriteFile(path, []byte(`{"marks":[`+
+		`{"kind":"principal","key":"user:alice@example.com","at":"2026-10-04T00:00:00Z"},`+
+		`{"kind":"group","key":"group:ops","at":"2026-10-04T00:00:00Z"},`+
+		`{"kind":"principal","key":"user:bob@example.com"}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	c := openMarksCopy(path, &out)
+	if got := c.All(); len(got) != 1 || got[0].Key != "user:alice@example.com" {
+		t.Fatalf("the copy holds %+v", got)
+	}
+	if s := out.String(); !strings.Contains(s, "2 mark(s) in broker.state_dir/marks.json are not understood and are "+
+		"skipped") || !strings.Contains(s, `"group" "group:ops"`) || !strings.Contains(s, `"user:bob@example.com"`) {
+		t.Fatalf("%q", s)
+	}
+	if m, _ := filepath.Glob(path + ".bad-*"); len(m) != 0 {
+		t.Fatalf("a copy that decodes was moved aside: %v", m)
+	}
+}
+
+// keepCopied's marks stand through a load that lacks them with no hook
+// before it: Keep, not only Set (review M-5).
+func TestAMarkKeptAtStartStandsThroughALoadWithNoHook(t *testing.T) {
+	alice := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:alice@example.com", At: time.Unix(10, 0).UTC()}
+	var out bytes.Buffer
+	c := openMarksCopy(filepath.Join(safeStateDir(t), "marks.json"), &out)
+	c.Apply(store.MarkChange{Revocation: alice, Standing: true})
+	marks := store.NewMarks()
+	if kept := keepCopied(c, marks, nil); len(kept) != 1 || kept[0].Key != alice.Key {
+		t.Fatalf("kept %+v", kept)
+	}
+	if _, err := store.LoadMarks(context.Background(), marksIn{}, marks, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !marks.Holds(alice.Kind, alice.Key) {
+		t.Fatal("a load lifted a mark kept at the start")
 	}
 }
 
