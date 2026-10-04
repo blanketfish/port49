@@ -1060,8 +1060,12 @@ in this plan, and the tests named pin it.
   5), and says so once its marks feed reloads:
 
   ```
-  port49d: store: 1 revocation(s) this port49d enforces are missing from the store as its marks feed reloads (an etcd restore, or lifted on port49-broker while the feed was down) and stay in force here until a lift this feed delivers or a restart: principal user:alice@example.com
+  port49d: store: 1 revocation(s) this port49d enforces are missing from the store as its marks feed reloads (an etcd restore, or lifted on port49-broker while the feed was down) and stay in force here (to release one lifted on purpose, revoke it again on port49-broker, then lift it with port49 revoke --lift, or restart this port49d): principal user:alice@example.com
   ```
+
+  (Task 14 review I-2: a lift alone of a mark the store lacks is `ErrNotRevoked` on port49-broker
+  and reaches no feed, so the line names the revoke-then-lift that does. It is said once for one
+  set of kept marks, review M-1.)
 
   A runner whose put-back fails before its marks reload (its store circuit open through the
   restore) does not reload: `port49-broker: store: the marks feed stopped (runner: putting
@@ -7455,7 +7459,8 @@ Ruling 11.
   	}
   	if !strings.Contains(out.String(), "port49d: store: 1 revocation(s) this port49d enforces are missing from "+
   		"the store as its marks feed reloads") || !strings.HasSuffix(out.String(),
-  		"until a lift this feed delivers or a restart: principal user:alice@example.com\n") {
+  		"and stay in force here (to release one lifted on purpose, revoke it again on port49-broker, then lift "+
+  		"it with port49 revoke --lift, or restart this port49d): principal user:alice@example.com\n") {
   		t.Fatalf("said %q", out.String())
   	}
   	if _, err := store.LoadMarks(ctx, feed, enforced, nil); err != nil {
@@ -7595,7 +7600,8 @@ Ruling 11.
   	waitFor(t, &out, "store: the marks feed's revision was compacted")
   	waitFor(t, &out, "port49d: store: 1 revocation(s) this port49d enforces are missing from the store as its "+
   		"marks feed reloads (an etcd restore, or lifted on port49-broker while the feed was down) and stay in "+
-  		"force here until a lift this feed delivers or a restart: principal user:alice@example.com")
+  		"force here (to release one lifted on purpose, revoke it again on port49-broker, then lift it with "+
+  		"port49 revoke --lift, or restart this port49d): principal user:alice@example.com")
   	// A mark put after the restore arrives only once the reload is done and
   	// the feed follows again: then both stand.
   	if _, err := root.Put(ctx, bob, mark("bob")); err != nil {
@@ -7775,7 +7781,8 @@ Ruling 11.
     	if len(kept) > 0 {
     		fmt.Fprintf(out, "port49d: store: %d revocation(s) this port49d enforces are missing from the store "+
     			"%s (an etcd restore, or lifted on port49-broker while the feed was down) and stay in force "+
-    			"here until a lift this feed delivers or a restart: %s\n", len(kept), when, namedMarks(kept))
+    			"here (to release one lifted on purpose, revoke it again on port49-broker, then lift it with "+
+    			"port49 revoke --lift, or restart this port49d): %s\n", len(kept), when, namedMarks(kept))
     	}
     	return nil
     }
@@ -11371,8 +11378,9 @@ The roadmap's "7e-1's operator notes, as built" (`README.md`) is the full text t
   tokens. Lift again anything it put back that was lifted on purpose.
   - **Meanwhile each port49d that ran across the restore keeps the marks it lost in force**, and
     names them: `port49d: store: N revocation(s) this port49d enforces are missing from the
-    store as its marks feed reloads (…) and stay in force here until a lift this feed delivers
-    or a restart: …`; a port49d dark through the restore says `… as it starts again after a
+    store as its marks feed reloads (…) and stay in force here (to release one lifted on purpose,
+    revoke it again on port49-broker, then lift it with port49 revoke --lift, or restart this
+    port49d): …`; a port49d dark through the restore says `… as it starts again after a
     store gone …` instead. The daemon cannot put a mark back; the runner does. A lift made on a
     broker while that port49d's marks feed was down is kept there too: restart that port49d
     (after the runner's put-back line), or revoke and lift again while its feed is up.
