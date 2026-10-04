@@ -114,9 +114,22 @@ func TestAWitnessRecordThatCannotBeReadPurgesOnce(t *testing.T) {
 		if rec, _ := w.Recorded(); rec != unreadWitness {
 			t.Fatalf("%s: following cleared the unread record: %d", name, rec)
 		}
-		w.Reset(812) // the purge done
+		// A replica restarted before it ever runs keeps the purge it owes:
+		// the unread record is saved, and read back as one (re-review 1 M-5).
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
+		w.keep(ctx)
+		var again bytes.Buffer
+		reopened := openWitness(path, "/port49/", &again)
+		if rec, have := reopened.Recorded(); rec != unreadWitness || !have ||
+			!strings.Contains(again.String(), "the first check purges every unspent token once") {
+			t.Fatalf("%s: reopened before a purge: %d %v %q", name, rec, have, again.String())
+		}
+		if gone, why := restored(etcdstore.WitnessRead{ModRevision: 1 << 40, Header: 1 << 40}, unreadWitness,
+			true); !gone || !strings.Contains(why, "could not be read") {
+			t.Fatalf("%s: reopened, not restored: %v %q", name, gone, why)
+		}
+		w.Reset(812) // the purge done
 		w.keep(ctx)
 		if got, have := openWitness(path, "/port49/", io.Discard).Recorded(); got != 812 || !have {
 			t.Fatalf("%s: after the purge: %d %v", name, got, have)

@@ -49,9 +49,9 @@ const unreadWitness = math.MaxUint64
 // prefix's, which says so; the next save replaces it. A file that cannot
 // be read or does not decode is moved aside to path + ".bad-" + the time,
 // as the marks copy's is, and taken as a record above any witness
-// (unreadWitness): this replica cannot rule out a restore, so the first
-// check purges every unspent token once, which costs a re-login, and says
-// why.
+// (unreadWitness), which keep saves: this replica cannot rule out a
+// restore, so the first check, at this start or a later one, purges every
+// unspent token once, which costs a re-login, and says why.
 func openWitness(path, prefix string, out io.Writer) *witnessRecord {
 	w := &witnessRecord{path: path, prefix: prefix, out: out, saved: true}
 	body, err := os.ReadFile(path)
@@ -73,10 +73,15 @@ func openWitness(path, prefix string, out io.Writer) *witnessRecord {
 		}
 		fmt.Fprintf(out, "port49-broker: reading %s: %v; %s; this replica cannot tell whether the store was "+
 			"restored, so the first check purges every unspent token once\n", path, err, moved)
-		w.high, w.have = unreadWitness, true
+		// Saved, so a restart before the purge still owes it (re-review 1 M-5).
+		w.high, w.have, w.saved = unreadWitness, true, false
 	case f.Prefix != prefix:
 		fmt.Fprintf(out, "port49-broker: %s is another prefix's (%s), not %s's; no witness record\n", path,
 			printsafe.Line(f.Prefix, 256), prefix)
+	case f.ModRevision == unreadWitness:
+		fmt.Fprintf(out, "port49-broker: %s records that this replica's earlier witness record could not be read; "+
+			"the first check purges every unspent token once\n", path)
+		w.high, w.have = unreadWitness, true
 	default:
 		w.high, w.have = f.ModRevision, true
 	}
