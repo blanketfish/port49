@@ -2097,6 +2097,7 @@ func (f negativeFinding) render(t *testing.T) string {
 // evidence.
 func (l *lab) result(t *testing.T, entry, claim, observation string) {
 	t.Helper()
+	l.guardClosed(t, entry)
 	dir := filepath.Join(root, "tests", "lab", "results")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("results directory: %v", err)
@@ -3135,14 +3136,15 @@ func denialBefore(rs []authorReply, end time.Time, window time.Duration) bool {
 type darkTimes struct{ Open, Dark time.Duration }
 
 // waitDark polls each process (seen answers whether its stderr, since the
-// hang, holds a substring) every 250ms, until every one has closed its
+// hang, holds a substring; the token pool's circuit or the context pool's
+// opening counts, the bulk pool's does not) every 250ms, until every one has closed its
 // listeners or within has passed.
 func waitDark(hungAt time.Time, within time.Duration, seen ...func(string) bool) []darkTimes {
 	out := make([]darkTimes, len(seen))
 	for time.Since(hungAt) < within {
 		done := true
 		for i, has := range seen {
-			if out[i].Open == 0 && has("context pool's circuit is open") {
+			if out[i].Open == 0 && (has("token pool's circuit is open") || has("context pool's circuit is open")) {
 				out[i].Open = time.Since(hungAt)
 			}
 			if out[i].Dark == 0 && has("closing every listener") {
@@ -3212,4 +3214,51 @@ func (l *lab) appendNote(t *testing.T, entry, section string) {
 		t.Fatalf("append to %s: %v", path, err)
 	}
 	t.Logf("appended to %s", path)
+}
+
+// registerRowClosed reports whether spec §15's row for entry's register ID
+// (the leading L<N>) has a Status that begins "closed".
+func registerRowClosed(spec, entry string) bool {
+	id := regexp.MustCompile(`^L\d+`).FindString(entry)
+	if id == "" {
+		return false
+	}
+	for _, ln := range strings.Split(spec, "\n") {
+		if !strings.HasPrefix(ln, "| **"+id+"** |") {
+			continue
+		}
+		cells := strings.Split(ln, "|")
+		if len(cells) < 3 {
+			return false
+		}
+		return strings.HasPrefix(strings.TrimSpace(cells[len(cells)-2]), "closed")
+	}
+	return false
+}
+
+// guardClosed stops a run that would overwrite a closed register entry's note,
+// evidence or capture. l.capture and l.result both call it, the first before
+// any device time is spent.
+func (l *lab) guardClosed(t *testing.T, entry string) {
+	t.Helper()
+	if msg := l.guardRefusal(entry); msg != "" {
+		t.Fatal(msg)
+	}
+}
+
+// guardRefusal is why entry may not be written, or "": its row is closed in
+// the spec, its note exists, and PORT49_LAB_REMEASURE does not name it.
+func (l *lab) guardRefusal(entry string) string {
+	spec, err := os.ReadFile(filepath.Join(root, "docs", "design", "2026-08-23-policy-engine-spec.md"))
+	if err != nil || !registerRowClosed(string(spec), entry) {
+		return ""
+	}
+	if _, err := os.Stat(filepath.Join(root, "tests", "lab", "results", fmt.Sprintf("%s-%s.md", entry, l.p.name))); err != nil {
+		return ""
+	}
+	if os.Getenv("PORT49_LAB_REMEASURE") == entry {
+		return ""
+	}
+	return fmt.Sprintf("%s is closed and tests/lab/results/%s-%s.md exists: set PORT49_LAB_REMEASURE=%s to re-measure it "+
+		"(or PORT49_LAB_L35_ENTRY=<name> for L35's re-check)", entry, entry, l.p.name, entry)
 }

@@ -684,6 +684,7 @@ func TestJunosReauthorizationAfterRestart(t *testing.T) {
 		w := awaitReauthorization(t, l, sh, capPath, restartAt, 20*time.Minute)
 		switch {
 		case !w.Req.IsZero():
+			l.flushCapture(t)
 			reply := replyTimesFrom(capPath, labKeyDefault, w.Req.Add(-time.Second), w.Req.Add(30*time.Second), true)
 			wide("2. A restarted; the first re-authorization request", fmt.Sprintf("%s after the login, %s after the restart: %s",
 				w.Req.Sub(loginAt).Round(time.Second), w.Req.Sub(restartAt).Round(time.Second), strings.Join(reply, "; ")))
@@ -723,6 +724,7 @@ func TestJunosReauthorizationAfterRestart(t *testing.T) {
 		var denied bool
 		switch {
 		case !w2.Req.IsZero():
+			l.flushCapture(t)
 			reply := replyTimesFrom(capPath, labKeyDefault, w2.Req.Add(-time.Second), w2.Req.Add(30*time.Second), true)
 			wide("3. the next re-authorization request", fmt.Sprintf("%s after the revocation: %s",
 				w2.Req.Sub(revokeAt).Round(time.Second), strings.Join(reply, "; ")))
