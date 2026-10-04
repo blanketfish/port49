@@ -21,12 +21,13 @@ import (
 // 7e, Ruling 6): it takes the hold (etcd.Store.Hold, as the broker),
 // runs the takeover, then the duties, until the hold is lost or ctx ends;
 // then it lets go and tries again every 5s. running is read by the
-// reloader to choose the whole refresh or its token half.
+// reloader's pass to choose the whole refresh or its token half.
 type runner struct {
 	cfg    config.Config
 	brk    *broker.Broker
 	raw    *etcdstore.Store // the broker's own, outside the guard: the hold, the sweep, the record
 	st     store.Store      // the broker's sealed store
+	meta   judgedStore      // meta/judged: raw, but for tests
 	ledger *crypt.Ledger
 	keys   crypt.Keys
 	m      *metrics.Metrics
@@ -34,23 +35,40 @@ type runner struct {
 	who    string
 	held   string // the holder this process last held as, for the waiting line
 	rel    *reloader
-	on     atomic.Bool
 	// duty is the running duties' context, set once the takeover is done
-	// and cleared as they stop: the reloader's onSettled records meta/judged
-	// under it, so a write retried across a lost hold ends with the hold.
+	// and cleared as they stop: this replica runs while it is set. The
+	// pass's context half and meta/judged's writes run under it, so a lost
+	// hold ends them with the duties.
 	duty atomic.Pointer[context.Context]
+	// judge is the policy the latest settled pass left nothing pending
+	// under, for the duties to record (settled, judging).
+	judge chan *policy.Policy
 }
 
-func (r *runner) running() bool { return r.on.Load() }
+// judgedStore is meta/judged (etcd.Store's Judged and PutJudged).
+type judgedStore interface {
+	Judged(ctx context.Context) (etcdstore.JudgedRecord, bool, error)
+	PutJudged(ctx context.Context, bundle string, policy []byte) error
+}
+
+func (r *runner) running() bool { return r.duty.Load() != nil }
 
 // pass is the reloader's refresh pass on port49-broker (Ruling 6): the
 // whole Refresh while this replica runs, whose context half is the
-// runner's alone, and its token half (RefreshTokens) otherwise.
+// runner's alone, and its token half (RefreshTokens) otherwise. The whole
+// Refresh runs under the duties' context too: a lost hold ends it with
+// the duties, so no context write lands after another replica may have
+// taken over (Task 15 review I-1). A pass cut short so is a stopped one,
+// and the reloader's retry is the token half.
 func (r *runner) pass(ctx context.Context, priors []broker.Prior) (broker.RefreshReport, error) {
-	if r.running() {
-		return r.brk.Refresh(ctx, priors)
+	d := r.duty.Load()
+	if d == nil {
+		return r.brk.RefreshTokens(ctx, priors)
 	}
-	return r.brk.RefreshTokens(ctx, priors)
+	pctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	defer context.AfterFunc(*d, cancel)()
+	return r.brk.Refresh(pctx, priors)
 }
 
 // run holds and runs until ctx ends.
@@ -97,7 +115,6 @@ func (r *runner) run(ctx context.Context) {
 		}
 		stop()
 		<-done
-		r.on.Store(false)
 		r.m.StoreKeyspaceHeld.Set(0)
 		// The keeper reports (0, false) as it stops; set them here too, for
 		// a takeover that failed before the keeper started (pre-flight I11).
@@ -108,21 +125,24 @@ func (r *runner) run(ctx context.Context) {
 	}
 }
 
-// duties is the takeover, then the sweep, the ledger record's keeper and
-// the refresh's context half, until ctx ends.
+// duties is the takeover, then the sweep, the ledger record's keeper,
+// meta/judged's writer and the refresh's context half, until ctx ends.
 func (r *runner) duties(ctx context.Context) {
-	if err := r.takeover(ctx); err != nil {
+	carried, err := r.takeover(ctx)
+	if err != nil {
 		if ctx.Err() == nil {
 			fmt.Fprintf(stderr, "port49-broker: runner: the takeover stopped: %v; letting the hold go and trying "+
 				"again\n", err)
 		}
 		return
 	}
-	r.duty.Store(&ctx)
 	defer r.duty.Store(nil)
-	r.on.Store(true)
+	if !r.begin(ctx, carried) {
+		return
+	}
 	var wg sync.WaitGroup
-	wg.Add(2)
+	wg.Add(3)
+	go func() { defer wg.Done(); r.judging(ctx) }()
 	go func() {
 		defer wg.Done()
 		sweepLoop(ctx, r.raw, r.brk, r.ledger, r.cfg.Store.Etcd.SweepInterval, stderr)
@@ -137,24 +157,68 @@ func (r *runner) duties(ctx context.Context) {
 	wg.Wait()
 }
 
-// settled is the reloader's onSettled: while this replica runs, a pass
-// that left nothing pending records the policy in force as judged, under
-// the duties' context, so a lost hold ends the write (recordJudged).
-func (r *runner) settled(*policy.Policy) {
-	if p := r.duty.Load(); p != nil && r.running() {
-		r.recordJudged(*p, "a pass left nothing pending")
+// begin starts this replica's run once the takeover carried carried: it
+// drops a settled pass an earlier run left unwritten, sets duty, and owes
+// a whole pass at once when a policy was swapped in after the carry, whose
+// reload ran its first pass as the token half while duty was unset (Task
+// 15 review M-6). It reports false when ctx ended first.
+func (r *runner) begin(ctx context.Context, carried *policy.Policy) bool {
+	select {
+	case <-r.judge:
+	default:
+	}
+	r.duty.Store(&ctx)
+	if r.brk.Policy.Load() == carried {
+		return true
+	}
+	select {
+	case r.rel.owed <- true:
+		return true
+	case <-ctx.Done():
+		return false
 	}
 }
 
-// recordJudged writes meta/judged for the policy in force, retried while
-// the store is unavailable and ctx lives, and says so (plan 7e, Ruling 7;
-// pre-flight I2). It is the only writer of the record: the takeover calls
-// it once its carry leaves nothing owed, and the reloader's onSettled
-// whenever a pass leaves nothing pending. Task 15a adds that every
-// replica must serve the bundle.
-func (r *runner) recordJudged(ctx context.Context, why string) {
-	pol := r.brk.Policy.Load()
-	if err := retryCtx(ctx, func() error { return r.raw.PutJudged(ctx, pol.Bundle, pol.Raw()) }); err != nil {
+// settled is the reloader's onSettled: while this replica runs, a pass
+// that left nothing pending hands the policy it settled on to the duties
+// (judging), keeping only the latest, and never waits: the reloader's
+// goroutine is the one that serves SIGHUP and the policy watch (Task 15
+// review M-5).
+func (r *runner) settled(p *policy.Policy) {
+	if !r.running() {
+		return
+	}
+	select {
+	case <-r.judge:
+	default:
+	}
+	select {
+	case r.judge <- p:
+	default:
+	}
+}
+
+// judging records each policy a settled pass hands it as judged, under
+// the duties' context, so a lost hold ends the write, until ctx ends.
+func (r *runner) judging(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case p := <-r.judge:
+			r.recordJudged(ctx, p, "a pass left nothing pending")
+		}
+	}
+}
+
+// recordJudged writes meta/judged for pol, the policy every live context
+// was judged against, retried while the store is unavailable and ctx
+// lives, and says so (plan 7e, Ruling 7; pre-flight I2). It is the only
+// writer of the record: the takeover calls it once its carry leaves
+// nothing owed, and judging whenever a pass leaves nothing pending. Task
+// 15a adds that every replica must serve the bundle.
+func (r *runner) recordJudged(ctx context.Context, pol *policy.Policy, why string) {
+	if err := retryCtx(ctx, func() error { return r.meta.PutJudged(ctx, pol.Bundle, pol.Raw()) }); err != nil {
 		if ctx.Err() == nil {
 			fmt.Fprintf(stderr, "port49-broker: runner: recording bundle %s as judged: %v; the next takeover "+
 				"purges the unspent tokens\n", pol.Bundle, err)
@@ -256,16 +320,18 @@ func startLeftBy(err error) (owed refreshOwed, again error) {
 //  6. records the bundle as judged when the carry left no pass owed
 //     (pre-flight I2), and otherwise tells the reloader the pass owed.
 //
+// It returns the policy it carried, for begin.
+//
 // The ledger's base was set before any of it, by runBroker's LoadLedger,
 // and the marks were loaded there before the API served. Each step that
 // reads the store retries every 5s while it is unavailable, and so does
 // step 5 while a principal's contexts cannot be looked up (Ruling T12-c).
-func (r *runner) takeover(ctx context.Context) error {
+func (r *runner) takeover(ctx context.Context) (*policy.Policy, error) {
 	e := r.cfg.Store.Etcd
 	if err := retryCtx(ctx, func() error {
 		return checkSealKeysAs(ctx, "port49-broker", r.raw, r.keys, r.m, stderr, 4*e.CallTimeout, r.alarm, true)
 	}); err != nil {
-		return err
+		return nil, err
 	}
 	var all []store.Revocation
 	if err := retryCtx(ctx, func() (err error) {
@@ -274,7 +340,7 @@ func (r *runner) takeover(ctx context.Context) error {
 		}
 		return nil
 	}); err != nil {
-		return err
+		return nil, err
 	}
 	if err := retryCtx(ctx, func() error {
 		// The broker's raw store, outside the guard, as the sweep's is: the
@@ -290,7 +356,7 @@ func (r *runner) takeover(ctx context.Context) error {
 		}
 		return nil
 	}); err != nil {
-		return err
+		return nil, err
 	}
 	var marked int
 	if err := retryCtx(ctx, func() (err error) {
@@ -299,7 +365,7 @@ func (r *runner) takeover(ctx context.Context) error {
 		}
 		return nil
 	}); err != nil {
-		return err
+		return nil, err
 	}
 	if len(all) > 0 {
 		fmt.Fprintf(stderr, "port49-broker: runner: %d standing revocation(s) applied to the live contexts the store "+
@@ -310,8 +376,8 @@ func (r *runner) takeover(ctx context.Context) error {
 	var ok bool
 	// Retried while unavailable, as every step is: an unavailable read taken
 	// as no record would purge when the store's state did not call for it.
-	if err := retryCtx(ctx, func() (e error) { judged, ok, e = r.raw.Judged(ctx); return }); err != nil {
-		return err
+	if err := retryCtx(ctx, func() (e error) { judged, ok, e = r.meta.Judged(ctx); return }); err != nil {
+		return nil, err
 	}
 	if ok && judged.Bundle == bundle {
 		fmt.Fprintf(stderr, "port49-broker: runner: the bundle in force (%s) is the one the last runner judged; no "+
@@ -320,20 +386,24 @@ func (r *runner) takeover(ctx context.Context) error {
 		at := r.brk.Now()
 		// SupersedeAll first: a replay after any token is gone mints afresh (Task 5).
 		if err := retryCtx(ctx, func() error { return r.st.SupersedeAll(ctx, at) }); err != nil {
-			return err
+			return nil, err
 		}
 		var n int
 		if err := retryCtx(ctx, func() (e error) { n, e = r.st.PurgeTokens(ctx); return }); err != nil {
-			return err
+			return nil, err
 		}
 		fmt.Fprintf(stderr, "port49-broker: runner: the bundle in force (%s) is not the one the last runner judged "+
 			"(%s); %d unspent token(s) purged (run 'port49 token' again)\n", bundle, orNone(judged.Bundle, ok), n)
 	}
 	var rep broker.RefreshReport
+	var carried *policy.Policy
 	var owed refreshOwed
 	var left error
 	if err := retryCtx(ctx, func() error {
 		var err error
+		// Loaded before the carry loads it: a swap between the two records
+		// the earlier bundle, and the next takeover purges, which denies more.
+		carried = r.brk.Policy.Load()
 		rep, err = r.brk.RefreshAtStart(ctx)
 		left = err
 		if owed, err = startLeftBy(err); err != nil {
@@ -341,13 +411,13 @@ func (r *runner) takeover(ctx context.Context) error {
 		}
 		return nil
 	}, broker.ErrPrincipalUnvisited); err != nil {
-		return err
+		return nil, err
 	}
 	fmt.Fprintf(stderr, "port49-broker: runner: %d live context(s) carried onto the policy in force (bundle %s)\n",
-		rep.Contexts()-rep.Failed, r.brk.Policy.Load().Bundle)
+		rep.Contexts()-rep.Failed, carried.Bundle)
 	if !owed.owed {
-		r.recordJudged(ctx, "the takeover's carry left nothing owed")
-		return nil
+		r.recordJudged(ctx, carried, "the takeover's carry left nothing owed")
+		return carried, nil
 	}
 	when := "again at once"
 	if !owed.now {
@@ -360,7 +430,7 @@ func (r *runner) takeover(ctx context.Context) error {
 	select {
 	case r.rel.owed <- owed.now:
 	case <-ctx.Done():
-		return ctx.Err()
+		return nil, ctx.Err()
 	}
-	return nil
+	return carried, nil
 }

@@ -1046,7 +1046,8 @@ func TestOnlyTheRunnersPassJudgesContexts(t *testing.T) {
 	if c, err := rig.st.GetContext(context.Background(), k); err != nil || c.BlobHash != "sha256:before" {
 		t.Fatalf("a replica that does not run judged a context: %+v %v", c, err)
 	}
-	r.on.Store(true)
+	ctx := context.Background()
+	r.duty.Store(&ctx)
 	rig.now = rig.r.settle
 	rig.with(func() { rig.r.refresh(context.Background()) })
 	if c, err := rig.st.GetContext(context.Background(), k); err != nil || c.BlobHash == "sha256:before" {

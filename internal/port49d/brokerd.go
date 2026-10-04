@@ -28,6 +28,7 @@ import (
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/inventory"
+	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/printsafe"
 	"github.com/rhwendt/port49/internal/session"
 	"github.com/rhwendt/port49/internal/store"
@@ -454,7 +455,8 @@ func runBroker(parent context.Context, cfgPath string) error {
 	}
 
 	host, _ := os.Hostname()
-	rn := &runner{cfg: cfg, brk: brk, raw: bs.raw, st: bs.st, ledger: ledger, keys: keys, m: m,
+	rn := &runner{cfg: cfg, brk: brk, raw: bs.raw, st: bs.st, meta: bs.raw, ledger: ledger, keys: keys, m: m,
+		judge: make(chan *policy.Policy, 1),
 		alarm: newKeyAlarm(), who: fmt.Sprintf("port49-broker on %s (pid %d, since %s)", host, os.Getpid(),
 			time.Now().UTC().Format(time.RFC3339))}
 	// Every replica runs its own reload's token half; the runner the whole
