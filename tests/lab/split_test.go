@@ -21,7 +21,7 @@ const splitClaim = "On the split deployment (port49-broker and two port49d repli
 	"listing both replicas as TACACS+ servers): a session opened through one replica has its next command " +
 	"answered by the other once the first stops; with the broker stopped an open session runs on and a token " +
 	"minted before the stop logs in; a revocation made on port49-broker denies the session's next command on " +
-	"either replica; and a port49d with no hold closes its listeners within seconds of its store hanging, " +
+	"either replica; and a port49d with no hold closes its listeners within darkBound (125.5s at the lab's hold_ttl 60s) of its store hanging, " +
 	"after which the device takes break-glass (plan 7e; spec §13 decision 36)."
 
 const iosxeOpenClaim = "On IOS-XE, an open session's `show privilege` and `show version`, typed once both port49d " +
@@ -278,8 +278,8 @@ func TestSplitEndToEnd(t *testing.T) {
 
 		// 3. A is back; the broker stops. The session's next command, then a
 		// token minted before the stop. B is stopped for cells 3 and 4's A half:
-		// a device that last asked B (IOS-XE does, and keeps asking it while it
-		// answers) would otherwise never ask A, and these cells measure A.
+		// a device may keep asking the last replica that answered, which would
+		// leave A unasked, and these cells measure A.
 		if err := s.StartA(); err != nil {
 			t.Fatal(err)
 		}

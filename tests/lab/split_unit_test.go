@@ -356,21 +356,27 @@ func TestGuardClosedRefusesAClosedEntryWithANote(t *testing.T) {
 	}
 	defer func(was string) { root = was }(root)
 	root = r
-	raw, err := os.ReadFile(filepath.Join(root, "docs", "design", "2026-08-23-policy-engine-spec.md"))
-	if err != nil {
-		t.Fatal(err)
+	// A synthetic spec: one closed row, one open row.
+	spec := "| **L7** | claim | doc | all | closed — measured 2026-10-04; notes |\n" +
+		"| **L8** | claim | doc | all | open — added 2026-10-04 |\n"
+	if !registerRowClosed(spec, "L7") || !registerRowClosed(spec, "L7-restore") {
+		t.Error("L7 (and its restore run) is closed and must be refused")
 	}
-	spec := string(raw)
-	if !registerRowClosed(spec, "L35") || !registerRowClosed(spec, "L35-restore") {
-		t.Error("L35 (and its restore run) is closed in the spec and must be refused")
-	}
-	if registerRowClosed(spec, "L39") {
-		t.Error("L39 is open in the spec and must be written")
+	if registerRowClosed(spec, "L8") {
+		t.Error("L8 is open and must be written")
 	}
 	if registerRowClosed(spec, "login") || registerRowClosed(spec, "L999") {
 		t.Error("an entry with no row is not closed")
 	}
-	// The guard itself: L35 with a note is refused unless named; an open row passes.
+	// The real spec: L35 is closed, with notes.
+	raw, err := os.ReadFile(filepath.Join(root, "docs", "design", "2026-08-23-policy-engine-spec.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !registerRowClosed(string(raw), "L35") {
+		t.Error("L35 is closed in the spec")
+	}
+	// The guard itself: L35 with a note is refused unless named; an entry with no row passes.
 	l := &lab{p: platform{name: "arista_eos"}}
 	if _, err := os.Stat(filepath.Join(root, "tests", "lab", "results", "L35-arista_eos.md")); err != nil {
 		t.Fatalf("the closed L35 note is not there to guard: %v", err)
@@ -378,7 +384,7 @@ func TestGuardClosedRefusesAClosedEntryWithANote(t *testing.T) {
 	for _, c := range []struct {
 		entry, remeasure string
 		refused          bool
-	}{{"L35", "", true}, {"L35", "L35", false}, {"L39", "", false}} {
+	}{{"L35", "", true}, {"L35", "L35", false}, {"login", "", false}} {
 		t.Setenv("PORT49_LAB_REMEASURE", c.remeasure)
 		if got := l.guardRefusal(c.entry) != ""; got != c.refused {
 			t.Errorf("%s with REMEASURE=%q: refused %v, want %v", c.entry, c.remeasure, got, c.refused)
