@@ -5764,8 +5764,13 @@ is still read from `--config` alone, with a line saying to move the broker's; tw
 different `store.etcd.prefix` are refused.
 - **`port49_daemon`.** Read-write on the token, receipt, receipt-index, context, index-record,
   lookup and blob families (`t/`, `r/`, `rp/`, `c/`, `x/`, `ip/`, `is/`, `ic/`, `b/`), and
-  read-only on the revocation marks (`rv/`) and the keyspace's `meta/`. Nothing on the token
-  indexes (`tp/`, `tc/`) or the idempotency records (`id/`).
+  read-only on the revocation marks (`rv/`), the ledger record (`lw/`, plan 7e) and five single
+  keys of `meta/`, each granted by itself: `seal_keys` (read at a start), `witness` and `purged`
+  (the restore guard), `judged_bundle` (the name of the bundle last judged, which the skew
+  gauge reads; the runner writes it beside `meta/judged`) and `ping` (the store probe). It has
+  no read on `meta/judged`, which holds the policy file, or on `meta/holder`, `meta/bundles/`
+  or `meta/refresh_owed`. Nothing on the token indexes (`tp/`, `tc/`), the idempotency records
+  (`id/`) or the superseded record (`sp/`). `CheckIdentity` probes a refused read of `meta/judged`.
 - **`port49_broker`.** Read-write on the whole keyspace.
 - **The users.** A user per component, named by the CN of the certificate `store.etcd.daemon`
   (in `--config`) and `store.etcd.broker` (in `--broker-config`) name, granted its role.

@@ -11156,7 +11156,12 @@ Ruling 16. Read "Running the lab" first. **No claim enters a doc before its row'
     the 40-minute watchdog on the Junos images;
   - beehive's root filesystem has 20 GiB free (`df -h /`; 7d's Task 15 died at ENOSPC);
   - `make evidence` passes on the feature branch (7d's L35 captures are on `main`);
-  - the five images are present (`image_check_test.go`).
+  - the five images are present (`image_check_test.go`);
+  - `TestStoreOutageEndToEnd` and `TestStoreSnapshotRestore` start on the split (a dry run on
+    one image). Task 16 left `storeLab` returning both store blocks, and left both tests on a
+    single port49d config that carries `slice/broker.yaml`'s `broker:` block and the lab seeds,
+    which `config.Load` refuses on etcd ("lab seed tokens are minted by port49-broker"). Step 1
+    moves the seeds, the broker block and `store.etcd.broker` into the port49-broker file.
 
 - [ ] **Step 1: The harness, committed first.**
   - **`startSplit(cfg splitCfg)`.** It starts, from the pinned `bin/`:
