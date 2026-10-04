@@ -1287,6 +1287,15 @@ func TestAStartOnARefusedFileStaysNotReady(t *testing.T) {
 	f.writePolicyOf(t, f.broker, quarantiningLeaf1)
 	metricsAddr, _ := startBrokerNoWait(t, f.broker, &out, 2)
 	waitFor(t, &out, "policy file refused at start against the bundle last judged")
+	// The remedy is the held start's own: a SIGHUP is not read until the
+	// start has passed, so the raised bound is read by a restart (Task 18).
+	line := out.String()
+	line = line[strings.Index(line, "policy file refused at start"):]
+	line, _, _ = strings.Cut(line, "\n")
+	if !strings.Contains(line, "raise inventory.max_removed_percent in port49-broker.yaml and restart port49-broker") ||
+		strings.Contains(line, "port49d.yaml") || strings.Contains(line, "send SIGHUP") {
+		t.Fatalf("the start refusal's remedy: %s", line)
+	}
 	if code := readyzAt(t, metricsAddr); code != http.StatusServiceUnavailable {
 		t.Fatalf("/readyz %d while the file is refused", code)
 	}

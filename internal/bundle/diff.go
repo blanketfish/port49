@@ -251,8 +251,7 @@ func CheckFrom(old, new *policy.Policy, maxRemovedPercent int, fix string) error
 				msg += " (if key_groups was deleted from the inventory file, add it to the policy file first)"
 			}
 		}
-		return errors.New(msg + "; " + fix + ", or, if the change is meant, raise inventory.max_removed_percent " +
-			"in port49d.yaml and send SIGHUP, which re-reads it with the reload")
+		return errors.New(msg + "; " + fix + ", or, if the change is meant, " + RaiseBound)
 	}
 	return nil
 }
@@ -349,8 +348,19 @@ func (e *OverBound) Error() string { return e.msg }
 // reloadRemedy ends a guard refusal: how to apply the change on purpose,
 // then undo the raise, since the same bound holds inventory syncs
 // (pre-flight M14).
-const reloadRemedy = "if the change is meant, raise inventory.max_removed_percent in port49d.yaml and send " +
-	"SIGHUP, which re-reads it with the reload, then lower it again, since it bounds inventory syncs too"
+const reloadRemedy = "if the change is meant, " + RaiseBound + ", then lower it again, since it bounds " +
+	"inventory syncs too"
+
+// RaiseBound, KeyRefsFile and StopFleet are the words of these refusals that
+// name port49d: the process that runs a reload says them as its own
+// (port49d's reload guard rewrites them for port49-broker, whose config is
+// port49-broker.yaml and which serves no device). Each is rewritten by its
+// exact text, so a change here is caught by the test that pins both.
+const (
+	RaiseBound  = "raise inventory.max_removed_percent in port49d.yaml and send SIGHUP, which re-reads it with the reload"
+	KeyRefsFile = "the key_refs port49d.yaml defines"
+	StopFleet   = "to take the whole fleet off deliberately, stop port49d"
+)
 
 // share is n of was as a percentage rounded up, so a share over the bound
 // never prints as the bound.
@@ -458,14 +468,14 @@ func admitsNone(what string, p *policy.Policy, hint bool) error {
 	if n == 0 || len(p.AdmissionRefusals()) < n {
 		return nil
 	}
-	check := "check key_groups and the key_refs port49d.yaml defines"
+	check := "check key_groups and " + KeyRefsFile
 	if hint {
 		// The key-group move done in the wrong order (plan 6a, C3).
 		check += " (if key_groups was deleted from the inventory file, add it to the policy file first)"
 	}
 	return fmt.Errorf("the new %s admits none of the %d device(s) in the inventory; a reload that refuses the "+
-		"whole fleet is never loaded, whatever inventory.max_removed_percent says (spec §10); %s, or, to take "+
-		"the whole fleet off deliberately, stop port49d", what, n, check)
+		"whole fleet is never loaded, whatever inventory.max_removed_percent says (spec §10); %s, or, "+StopFleet,
+		what, n, check)
 }
 
 // NewlyRefused is every device in both bundles that old admits and new

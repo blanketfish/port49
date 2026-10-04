@@ -638,6 +638,41 @@ func TestAStartAdmittingNoneAdvisesByTheInventorySource(t *testing.T) {
 	}
 }
 
+// A start that admits none of the inventory advises in the running
+// process's terms (Task 18): port49d.yaml and stopping port49d on port49d;
+// port49-broker.yaml and stopping every port49d on port49-broker, which
+// serves no device.
+func TestAStartAdmittingNoneAdvisesInTheProcessesOwnTerms(t *testing.T) {
+	for _, c := range []struct {
+		role        config.Role
+		has, hasNot []string
+	}{
+		{config.RoleDaemon, []string{"the key_refs port49d.yaml defines", "to take the whole fleet off deliberately, stop port49d"},
+			[]string{"port49-broker", "stop every port49d"}},
+		{config.RoleBroker, []string{"the key_refs port49-broker.yaml defines",
+			"to take the whole fleet off deliberately, stop every port49d (port49-broker serves no device)"},
+			[]string{"port49d.yaml", "stop port49d"}},
+	} {
+		cfg := brokerConfig(t, minimalPolicy)
+		cfg.Inventory.Devices[0].KeyRef = ""
+		cfg.Role = c.role
+		_, err := loadPolicy(cfg, "inventory_file "+cfg.InventoryFile)
+		if err == nil {
+			t.Fatalf("role %v: a bundle admitting nothing started", c.role)
+		}
+		for _, w := range c.has {
+			if !strings.Contains(err.Error(), w) {
+				t.Errorf("role %v: no %q in %v", c.role, w, err)
+			}
+		}
+		for _, w := range c.hasNot {
+			if strings.Contains(err.Error(), w) {
+				t.Errorf("role %v: %q in %v", c.role, w, err)
+			}
+		}
+	}
+}
+
 // C2 at start: with a broker, a world-writable inventory file refuses the
 // start, and a private one is what the reloader starts from.
 func TestAStartReadsTheInventoryBehindTheFence(t *testing.T) {

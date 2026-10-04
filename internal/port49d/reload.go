@@ -1313,17 +1313,12 @@ func summary(rep broker.RefreshReport) string {
 // start would treat them; on port49-broker its remedy names
 // port49-broker.yaml (Task 15a review M-3).
 func refusalLine(proc string, err error, both bool, pols ...*policy.Policy) string {
-	line := err.Error()
-	for _, p := range pols {
-		if p != nil {
-			line = platform.RedactQuoted(p.Redactions(), line)
-		}
+	line := redactedLine(err, pols)
+	if proc == "port49-broker" {
+		line = brokerWording(line)
 	}
-	line = oneLine(quotesCut{errors.New(line)})
 	if over := (*bundle.OverBound)(nil); errors.As(err, &over) {
 		if proc == "port49-broker" {
-			line = strings.ReplaceAll(line, "inventory.max_removed_percent in port49d.yaml",
-				"inventory.max_removed_percent in port49-broker.yaml")
 			if both {
 				return line + brokerUnguardedAtStartBoth
 			}
@@ -1335,6 +1330,46 @@ func refusalLine(proc string, err error, both bool, pols ...*policy.Policy) stri
 		line += unguardedAtStart
 	}
 	return line
+}
+
+// redactedLine is refusalLine's line before any process's wording: err
+// redacted with every rule of pols marks secret, on one line, each quoted
+// value cut.
+func redactedLine(err error, pols []*policy.Policy) string {
+	line := err.Error()
+	for _, p := range pols {
+		if p != nil {
+			line = platform.RedactQuoted(p.Redactions(), line)
+		}
+	}
+	return oneLine(quotesCut{errors.New(line)})
+}
+
+// brokerWording puts the advice of a guard refusal in port49-broker's
+// terms (Task 18; Task 15a carry): its config is port49-broker.yaml, whose
+// inventory.max_removed_percent a SIGHUP re-reads as port49d's does, and it
+// serves no device, so a fleet is taken off by stopping every port49d, not
+// by stopping it. The words are bundle's own, replaced by their text.
+func brokerWording(line string) string {
+	for _, r := range [][2]string{
+		{bundle.RaiseBound, strings.ReplaceAll(bundle.RaiseBound, "port49d.yaml", "port49-broker.yaml")},
+		{bundle.KeyRefsFile, strings.ReplaceAll(bundle.KeyRefsFile, "port49d.yaml", "port49-broker.yaml")},
+		{bundle.StopFleet, "to take the whole fleet off deliberately, stop every port49d (port49-broker serves no device)"},
+	} {
+		line = strings.ReplaceAll(line, r[0], r[1])
+	}
+	return line
+}
+
+// brokerStartWording is brokerWording for a refusal at port49-broker's
+// start, held in passGuardAtStart before anything is served: a SIGHUP is
+// read only once the start has passed, so the raised bound is read by a
+// restart.
+func brokerStartWording(line string) string {
+	return strings.ReplaceAll(brokerWording(line),
+		strings.ReplaceAll(bundle.RaiseBound, "port49d.yaml", "port49-broker.yaml"),
+		"raise inventory.max_removed_percent in port49-broker.yaml and restart port49-broker, which reads it at its "+
+			"start (a SIGHUP is not read until the start has passed)")
 }
 
 // unguardedAtStart ends the line of a reload the guard refused (pre-flight

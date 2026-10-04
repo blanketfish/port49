@@ -337,10 +337,14 @@ func startPolicy(cfg config.Config, raw []byte, inventoryFrom string) (*policy.P
 			fix = "the inventory came from the inventory service, so check the source of truth it syncs from " +
 				"and the service's sync log for what changed"
 		}
+		cause := fmt.Sprintf("the bundle admits none of the %d device(s) in the inventory "+
+			"(%s: %s); check key_groups and "+bundle.KeyRefsFile+", and %s; "+bundle.StopFleet,
+			n, r.Device.Name, r.Refused, fix)
+		if cfg.Role == config.RoleBroker {
+			cause = brokerWording(cause)
+		}
 		return nil, fmt.Errorf("%s %s with %s: %w", policyKey(cfg), cfg.Policy.File,
-			inventoryFrom, quotesCut{fmt.Errorf("the bundle admits none of the %d device(s) in the inventory "+
-				"(%s: %s); check key_groups and the key_refs port49d.yaml defines, and %s; to take the whole "+
-				"fleet off deliberately, stop port49d", n, r.Device.Name, r.Refused, fix)})
+			inventoryFrom, quotesCut{errors.New(cause)})
 	}
 	return pol, nil
 }

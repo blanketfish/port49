@@ -436,6 +436,24 @@ func TestAKeyGroupsTypoCannotLogOutTheFleet(t *testing.T) {
 	}
 }
 
+// Admit-none on port49-broker: the refusal's advice is its own, port49-broker.yaml
+// and stopping every port49d, since it serves no device (Task 18).
+func TestAPolicyThatAdmitsNoDeviceAdvisesPort49BrokerInItsOwnTerms(t *testing.T) {
+	rig := newReloadRig(t, policyWithGroups)
+	rig.r.proc = "port49-broker"
+	rig.writeInventory(t, withoutGroups)
+	rig.pollTwice()
+	rig.write(t, strings.Replace(policyWithGroups, "cidr: 10.0.0.0/8", "cidr: 11.0.0.0/8", 1))
+	rig.sighupWithBound(t, 100)
+	out := rig.out.String()
+	if !strings.Contains(out, "the new policy admits none of the 2 device(s)") ||
+		!strings.Contains(out, "the key_refs port49-broker.yaml defines") ||
+		!strings.Contains(out, "to take the whole fleet off deliberately, stop every port49d (port49-broker serves no device)") ||
+		strings.Contains(out, "port49d.yaml") || strings.Contains(out, "stop port49d") {
+		t.Fatalf("the refusal: %s", out)
+	}
+}
+
 // Admit-none, the policy path: a policy that admits no device is refused
 // whatever the bound, and the live sessions survive it.
 func TestAPolicyThatAdmitsNoDeviceIsRefusedWhateverTheBound(t *testing.T) {
