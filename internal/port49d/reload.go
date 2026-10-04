@@ -1046,8 +1046,14 @@ func (r *reloader) swap(pol *policy.Policy) time.Time {
 		r.held.Keep(assigned)
 	}
 	now := r.now()
-	r.priors[len(r.priors)-1].Until = now
-	r.priors = append(r.priors, broker.Prior{Policy: pol, At: now})
+	if r.pass == nil {
+		// No refresh pass reads the priors: keep only the policy in force,
+		// or every one ever loaded stays in memory (task 14 review I-1).
+		r.priors = []broker.Prior{{Policy: pol, At: now}}
+	} else {
+		r.priors[len(r.priors)-1].Until = now
+		r.priors = append(r.priors, broker.Prior{Policy: pol, At: now})
+	}
 	r.expiry, _ = pol.NextChange(now)
 	r.settle = now.Add(settleAfterReload)
 	if r.pass != nil {

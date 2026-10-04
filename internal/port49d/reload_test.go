@@ -99,6 +99,22 @@ func (rig *reloadRig) aliceLoggedIn(t *testing.T) store.ContextKey {
 	return k
 }
 
+// A reloader with no broker in the process keeps one prior, the policy in
+// force: no refresh pass reads them, and every policy it ever loaded would
+// otherwise stay in memory for the process's life (task 14 review I-1).
+func TestAReloaderWithNoBrokerKeepsOnePrior(t *testing.T) {
+	rig := newReloadRig(t, showOnly)
+	rig.r.pass = nil
+	for range 50 {
+		rig.now = rig.now.Add(time.Second)
+		rig.r.swap(rig.b.Policy.Load())
+		rig.r.refresh(context.Background())
+	}
+	if len(rig.r.priors) != 1 || rig.r.priors[0].Policy != rig.b.Policy.Load() || !rig.r.priors[0].At.Equal(rig.now) {
+		t.Fatalf("%d priors after 50 swaps with no broker, want the one in force", len(rig.r.priors))
+	}
+}
+
 const showOnly = `
 scopes: [{name: all_devices, match: {}}]
 roles: [{name: r, privilege: readonly, permit: [show **]}]
