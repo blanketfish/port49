@@ -69,11 +69,11 @@ const DefaultLedgerKeep = 24 * time.Hour
 // is set by this process's own revocation (revoked), held through the
 // mark and every sequence sealed before the revocation landed, by any
 // record it reads or the feed brings at the mark's sequence with a
-// plaintext revoked_at, and by one the feed brings below the mark, held
-// through the sequences below its revision (revokedBelow); only a later
-// sequence clears it. The ledger record
-// keeps it with the sequence it holds through (store.LedgerMark.FloorSeq),
-// so a restart holds it as far (seedFloor).
+// plaintext revoked_at, and by one the feed or a start's scan brings below
+// the mark, held through the sequences below its revision (revokedBelow);
+// only a later sequence clears it. The ledger record keeps it with the
+// sequence it holds through (store.LedgerMark.FloorSeq), so a restart
+// holds it as far (seedFloor).
 //
 // A mark is kept until keep past the latest sealed ceiling seen at its
 // key; one that saw a context with no ceiling (max_session_age: never) is
@@ -211,38 +211,42 @@ func (l *Ledger) ObserveFollowed(k store.ContextKey, seq, rev uint64, plainRevok
 	l.revokedBelow(k, rev, plainRevokedAt)
 }
 
-// revokedBelow takes a plaintext revocation the feed brought at k,
-// committed at rev, as k's floor through min(mark, rev-1) (Ruling T15-a):
-// another process revoked a record this one holds below its mark, which
-// observe takes no floor from, and the record at the mark may be put back
-// after it.
+// revokedBelow takes a plaintext revocation the feed or a scan brought at
+// k, committed at rev, as k's floor through rev-1 while k's mark is below
+// rev (Ruling T15-a): another process revoked a record this one holds
+// below its mark, which observe takes no floor from, and the record at
+// the mark, or one sealed after it that this process never saw, may be
+// put back after it.
 //
 // Every seal is at most the revision it commits at, so every record that
 // landed before the revocation is sealed at rev-1 or below, and is held.
 // A seal made after it compares on its revision or has seen it (seqFor),
-// so it is sealed at rev or above, and is not held: rev itself is
-// reachable, since a login compares on the revoked record's revision and
-// the store may have told it nothing later, so the bound is rev-1, not
-// rev. A mark above the bound is such a login's, and takes no floor: the
-// revocation brought again, by a re-watch from an older revision or a
-// compacted rescan, revokes nothing written after it.
+// so it is sealed at rev or above, is not held, and clears the floor: rev
+// itself is reachable, since a login compares on the revoked record's
+// revision and the store may have told it nothing later, so the bound is
+// rev-1, not rev. A mark at rev or above is such a login's, and takes no
+// floor: the revocation brought again, by a re-watch from an older
+// revision or a compacted rescan, revokes nothing written after it.
 func (l *Ledger) revokedBelow(k store.ContextKey, rev uint64, at time.Time) {
 	e, ok := l.m[k]
-	if !ok || e.hw == 0 || rev == 0 || at.IsZero() {
-		return
-	}
-	bound := min(e.hw, rev-1)
-	if bound < e.hw {
+	if !ok || e.hw == 0 || rev == 0 || at.IsZero() || e.hw >= rev {
 		return
 	}
 	if at.After(e.floor) {
 		e.floor = at
 		l.dirty[k] = true
 	}
-	if bound > e.floorSeq {
-		e.floorSeq = bound
+	if rev-1 > e.floorSeq {
+		e.floorSeq = rev - 1
 		l.dirty[k] = true
 	}
+}
+
+// floorBelow is revokedBelow under l's lock, for a start's scan.
+func (l *Ledger) floorBelow(k store.ContextKey, rev uint64, at time.Time) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.revokedBelow(k, rev, at)
 }
 
 // Seed is Observe from the ledger record (plan 7e, Ruling 4), and the

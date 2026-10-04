@@ -44,7 +44,8 @@ func LoadLedger(ctx context.Context, feed store.ContextFeed, src store.LedgerSou
 // observe raises k's mark from c, sealed, if it opens: making a mark for
 // any record at a first start's scan, and as ObserveFollowed otherwise.
 // The plaintext revoked_at goes with it, so a revocation another process
-// could not seal is this one's floor once the feed brings it at the mark.
+// could not seal is this one's floor once the feed or the scan brings it,
+// at the mark or below it (revokedBelow).
 func observe(l *Ledger, keys Keys, k store.ContextKey, c store.Context, first bool) {
 	oc, seq, err := openContextWith(keys, k, c)
 	if err != nil {
@@ -52,6 +53,7 @@ func observe(l *Ledger, keys Keys, k store.ContextKey, c store.Context, first bo
 	}
 	if first {
 		l.Observe(k, seq, c.Rev, c.RevokedAt, oc.SessionExpires)
+		l.floorBelow(k, c.Rev, c.RevokedAt)
 		return
 	}
 	l.ObserveFollowed(k, seq, c.Rev, c.RevokedAt, oc.SessionExpires)

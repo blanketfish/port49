@@ -1242,3 +1242,80 @@ func TestALoginAfterAFollowedRevocationStaysAdmittedWhenItIsBroughtAgain(t *test
 		t.Fatalf("a rescan's revoked record holds the later login: %v", l2.floor(ka))
 	}
 }
+
+// The floor holds through R-1, not only through the mark (Ruling T15-a;
+// Task 15 review M-1): a record sealed between the two, landed before the
+// revocation and never seen here, is answered revoked when it is put back,
+// whether it is sealed just above the mark or at R-1 itself.
+func TestAFollowedRevocationHoldsEveryRecordSealedBeforeItsRevision(t *testing.T) {
+	at := time.Unix(1_000_000, 0).UTC()
+	for _, seq := range []uint64{8, 11} {
+		l := NewLedger()
+		l.SetBase(1)
+		l.Observe(ka, 5, 5, time.Time{}, at.Add(time.Hour))
+		l.ObserveFollowed(ka, 3, 12, at, at.Add(time.Hour)) // R = 12
+		if !l.admits(ka, seq) {
+			t.Fatalf("a record sealed at %d, above the mark, is not admitted", seq)
+		}
+		l.Observe(ka, seq, 13, time.Time{}, at.Add(time.Hour)) // put back after R
+		if !l.floor(ka).Equal(at) {
+			t.Fatalf("a record sealed at %d, before R 12, put back after it, lifted the floor", seq)
+		}
+		l.wrote(ka, 12, 14, at.Add(time.Hour)) // a login sealed at R
+		if !l.floor(ka).IsZero() {
+			t.Fatalf("a login sealed at R is held by the floor: %v", l.floor(ka))
+		}
+	}
+}
+
+// The floor a followed revocation takes below the mark is owed to the
+// ledger record, so a restart holds it as far (Task 15 review M-3a).
+func TestAFollowedRevocationsFloorIsOwedToTheRecord(t *testing.T) {
+	at := time.Unix(1_000_000, 0).UTC()
+	l := NewLedger()
+	l.SetBase(1)
+	l.Observe(ka, 10, 10, time.Time{}, at.Add(time.Hour))
+	l.Dirty() // the keeper wrote it
+	l.ObserveFollowed(ka, 5, 12, at, at.Add(time.Hour))
+	ms := l.Dirty()
+	if len(ms) != 1 || !ms[0].RevokedAt.Equal(at) || ms[0].FloorSeq != 11 {
+		t.Fatalf("owed after a followed revocation below the mark: %+v; want revoked_at %v through 11", ms, at)
+	}
+	l.ObserveFollowed(ka, 5, 12, at, at.Add(time.Hour)) // brought again
+	if ms := l.Dirty(); len(ms) != 0 {
+		t.Fatalf("the same revocation brought again is owed again: %+v", ms)
+	}
+	// Each of the floor's two halves is owed alone: a later revision at
+	// the same time, then a later time at the same revision.
+	l.ObserveFollowed(ka, 5, 14, at, at.Add(time.Hour))
+	if ms := l.Dirty(); len(ms) != 1 || ms[0].FloorSeq != 13 {
+		t.Fatalf("owed after a later revision: %+v; want through 13", ms)
+	}
+	l.ObserveFollowed(ka, 5, 14, at.Add(time.Second), at.Add(time.Hour))
+	if ms := l.Dirty(); len(ms) != 1 || !ms[0].RevokedAt.Equal(at.Add(time.Second)) {
+		t.Fatalf("owed after a later revocation time: %+v", ms)
+	}
+}
+
+// A start's scan takes a revocation below the seeded mark as a floor too
+// (Task 15 review M-2): a restart whose ledger record lacks the floor, the
+// keeper not having written it, still answers the record at the mark,
+// put back, revoked. The scan sees each key's latest record, so no later
+// login is over a revoked record it finds.
+func TestAStartsScanTakesARevocationBelowTheSeededMark(t *testing.T) {
+	at := time.Unix(1_000_000, 0).UTC()
+	rv := sealedAt(t, ka, 5)
+	rv.Rev, rv.RevokedAt = 11, at
+	feed := &feedOf{scanned: map[store.ContextKey]store.Context{ka: rv}, rev: 11}
+	l := NewLedger()
+	if _, _, _, err := LoadLedger(context.Background(), feed, marksOf{{Key: ka, Seq: 10}}, keys(), l); err != nil {
+		t.Fatal(err)
+	}
+	if !l.floor(ka).Equal(at) {
+		t.Fatalf("a start's scan took no floor from a revocation below the seeded mark: %v", l.floor(ka))
+	}
+	l.Observe(ka, 10, 12, time.Time{}, at.Add(time.Hour)) // the record at the mark, put back
+	if !l.floor(ka).Equal(at) {
+		t.Fatal("the record at the mark, put back, lifted the floor")
+	}
+}
