@@ -490,7 +490,7 @@ func TestTheSayerNamesAPutBackAsBelowTheNewestWrite(t *testing.T) {
 // daemon's and the broker's layers both meet is said once (pre-flight M44;
 // review m-2).
 func TestOpenStoresSharesOneSayer(t *testing.T) {
-	t.Skip("plan 7e Task 14: its fixture is a broker: block on etcd, which Task 13 refuses; Task 14 moves it to the split daemon")
+	t.Skip("plan 7e Task 14: the split daemon's etcd fixture; Task 13 refuses a broker: block on etcd")
 	cfgPath, _, _, _, _ := etcdRunServer(t)
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
@@ -534,7 +534,7 @@ func TestOpenStoresSharesOneSayer(t *testing.T) {
 // ends the start as a store fault naming store-roles: waiting does not
 // mend a refusal (pre-flight M17).
 func TestARefusedLedgerRecordReadNamesStoreRoles(t *testing.T) {
-	t.Skip("plan 7e Task 14: its fixture is a broker: block on etcd, which Task 13 refuses; Task 14 moves it to the split daemon")
+	t.Skip("plan 7e Task 14: the split daemon's etcd fixture; Task 13 refuses a broker: block on etcd")
 	cfgPath, _, _, _, srv := etcdRunServer(t)
 	lw := "/port49/v1/lw/"
 	if _, err := srv.Client(t, "root").RoleRevokePermission(context.Background(), etcdstore.RoleDaemon, lw,
@@ -565,7 +565,7 @@ func TestARefusedLedgerRecordReadNamesStoreRoles(t *testing.T) {
 // port49_store_fence_timeouts_total, which tells it from an etcd failure
 // (final review 7e-1 M-4).
 func TestOpenStoresFencesEachLayerUnderItsGuard(t *testing.T) {
-	t.Skip("plan 7e Task 14: its fixture is a broker: block on etcd, which Task 13 refuses; Task 14 moves it to the split daemon")
+	t.Skip("plan 7e Task 14: the split daemon's etcd fixture; Task 13 refuses a broker: block on etcd")
 	cfgPath, _, _, _, _ := etcdRunServer(t)
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
@@ -615,7 +615,7 @@ func TestOpenStoresFencesEachLayerUnderItsGuard(t *testing.T) {
 // wait is the outage, and an alert would resolve through it (re-review
 // I-3).
 func TestARaisedAlarmIsGaugedWhileTheStoreIsAway(t *testing.T) {
-	t.Skip("plan 7e Task 14: its fixture is a broker: block on etcd, which Task 13 refuses; Task 14 moves it to the split daemon")
+	t.Skip("plan 7e Task 14: the split daemon's etcd fixture; Task 13 refuses a broker: block on etcd")
 	cfgPath, _, _, proxy, _ := etcdRunServer(t)
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
@@ -653,7 +653,7 @@ func TestARaisedAlarmIsGaugedWhileTheStoreIsAway(t *testing.T) {
 // (final review 7e-1 M-3). The rescan counters are there at 0 too, so the
 // first rescan is an increase.
 func TestBothFeedsReadDownWhileTheStoreIsAway(t *testing.T) {
-	t.Skip("plan 7e Task 14: its fixture is a broker: block on etcd, which Task 13 refuses; Task 14 moves it to the split daemon")
+	t.Skip("plan 7e Task 14: the split daemon's etcd fixture; Task 13 refuses a broker: block on etcd")
 	cfgPath, _, _, proxy, _ := etcdRunServer(t)
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
@@ -722,7 +722,7 @@ func TestCheckSealKeysGoesOnPastAnUndecodableRecord(t *testing.T) {
 // itself (final review 7d-2 I-2). A holder that is not this process's is
 // named as another port49d.
 func TestAHoldStillOnThisPort49dsLastRunIsSaidAsIts(t *testing.T) {
-	t.Skip("plan 7e Task 14: its fixture is a broker: block on etcd, which Task 13 refuses; Task 14 moves it to the split daemon")
+	t.Skip("plan 7e Task 14: the split daemon's etcd fixture; Task 13 refuses a broker: block on etcd")
 	cfgPath, _, _, _, _ := etcdRunServer(t)
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
