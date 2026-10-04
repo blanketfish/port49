@@ -369,3 +369,19 @@ func TestARevocationsFallbackNamesTheProcess(t *testing.T) {
 		}
 	}
 }
+
+// A request that asks for a lift over the API is told where a lift is made:
+// on the serving process's own admin socket (Task 18).
+func TestALiftOverTheAPISaysWhichSocketLiftsPerProcess(t *testing.T) {
+	for _, c := range []struct{ proc, want string }{
+		{"", "a lift is port49d's admin socket's"},
+		{"port49-broker", "a lift is port49-broker's admin socket's"},
+	} {
+		f := newFixtureWithPolicy(t, 8, sharedPolicy)
+		f.b.Proc = c.proc
+		w := f.revokeAs(t, "bob@example.com", `{"principal":"user:alice@example.com","lift":true}`)
+		if w.Code != 400 || !strings.Contains(w.Body.String(), c.want) {
+			t.Errorf("proc %q: %d %s", c.proc, w.Code, w.Body)
+		}
+	}
+}

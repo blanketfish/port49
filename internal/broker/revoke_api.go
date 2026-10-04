@@ -72,7 +72,7 @@ func (b *Broker) tokensRevoke(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "bad_request", "the body is not a revocation request: "+
-			"name mine, a principal, or a device and a username (a lift is port49d's admin socket's)")
+			"name mine, a principal, or a device and a username (a lift is "+b.proc()+"'s admin socket's)")
 		return
 	}
 	origin := "api " + caller
