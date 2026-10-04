@@ -123,6 +123,14 @@ func openStores(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 		return stores{daemon: st, broker: st, close: func() {}}, nil
 	}
 	e := cfg.Store.Etcd
+	if e.Broker != nil && cfg.Broker == nil {
+		// Unreachable: config refuses store.etcd.broker in port49d.yaml
+		// (Ruling 1). Were it reached, the start below would take the hold
+		// and follow no marks, so it is refused, fail-closed, until Task 15
+		// moves the broker's branch to port49-broker (task 14 review M-2).
+		return stores{}, &storeFault{errors.New("store.etcd.broker in port49d.yaml: the broker runs as " +
+			"port49-broker since plan 7e; remove store.etcd.broker from port49d.yaml")}
+	}
 	// Both feeds read down from here until each first runs, so an alert on
 	// port49_store_feed_up == 0 fires through a wait for the store or a
 	// marks load still retrying, not on an absent series; and each rescan

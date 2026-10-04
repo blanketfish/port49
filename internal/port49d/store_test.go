@@ -620,6 +620,37 @@ func TestTheSplitDaemonsStartTakesNoHoldAndWritesNoMeta(t *testing.T) {
 	}
 }
 
+// A broker identity in port49d's store with no broker in the process is
+// refused before the store is dialed, fail-closed: that start would take
+// the hold and follow no marks (task 14 review M-2). Config refuses it
+// first; this is the guard behind it until Task 15 deletes the branch.
+func TestOpenStoresRefusesABrokerIdentityWithNoBroker(t *testing.T) {
+	daemonCfg, _, srv := etcdSplitServer(t)
+	cfg, err := config.Load(daemonCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bc, bk := srv.ClientFiles(t, "port49-broker")
+	cfg.Store.Etcd.Broker = &config.EtcdIdentity{CertFile: bc, KeyFile: bk}
+	keys, err := cfg.EncryptionKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := metrics.New(prometheus.NewRegistry())
+	var out syncBuffer
+	_, err = openStores(context.Background(), cfg, keys, m, &out, newReadiness(), false, func(error) {},
+		crypt.NewLedger(), newKeyAlarm(), new(string), store.NewMarks())
+	var fault *storeFault
+	if !errors.As(err, &fault) || !strings.Contains(err.Error(), "store.etcd.broker in port49d.yaml") {
+		t.Fatalf("a broker identity with no broker: %v\n%s", err, out.String())
+	}
+	if resp, err := srv.Client(t, "root").Get(context.Background(), "/port49/v1/meta/hold",
+		clientv3.WithPrefix()); err != nil ||
+		len(resp.Kvs) != 0 || testutil.ToFloat64(m.StoreKeyspaceHeld) != 0 {
+		t.Fatalf("the hold was taken: %v %v", resp, err)
+	}
+}
+
 // A daemon role without the read on lw/ (roles applied before plan 7e)
 // ends the start as a store fault naming store-roles: waiting does not
 // mend a refusal (pre-flight M17).
