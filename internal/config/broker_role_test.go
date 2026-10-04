@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -78,6 +79,11 @@ func TestABrokerConfigLoads(t *testing.T) {
 		c.MetricsListen != ":9050" || c.Broker.StateDir == "" {
 		t.Fatalf("%+v", c)
 	}
+	// KeyRefs comes back sorted, whatever order the file names them in.
+	c, err = loadBrokerRole(t, strings.Replace(brokerRoleYAML(t), "key_refs: [prod_key]", "key_refs: [zeta_key, prod_key]", 1))
+	if err != nil || strings.Join(c.KeyRefs(), " ") != "prod_key zeta_key" {
+		t.Fatalf("%q %v", c.KeyRefs(), err)
+	}
 }
 
 // The broker never holds a device key, nor the daemon's etcd identity, nor
@@ -111,7 +117,8 @@ func TestTheBrokersConfigNeverNamesADeviceKey(t *testing.T) {
 
 // port49-broker.yaml requires each of these, naming it.
 func TestTheBrokersConfigRequiresItsKeys(t *testing.T) {
-	for _, cut := range []string{"key_refs:", "state_dir:", "admin_socket:", "backend: etcd", "    broker: {"} {
+	for _, cut := range []string{"key_refs:", "state_dir:", "admin_socket:", "backend: etcd", "    broker: {",
+		"  current: {id: v2"} {
 		var lines []string
 		for _, l := range strings.Split(brokerRoleYAML(t), "\n") {
 			if !strings.Contains(l, cut) {
@@ -282,7 +289,17 @@ func TestThePolicyBlock(t *testing.T) {
 			t.Errorf("%s: %v, want %q", strings.TrimSpace(block), err, want)
 		}
 	}
-	raw := strings.Replace(daemonRoleYAML(t), "policy: {file: /etc/port49/policy.yaml}\n",
+	// On etcd the policy is required, so the refusal never advises removing
+	// the block; on memory it may.
+	raw := strings.Replace(daemonRoleYAML(t), "policy: {file: /etc/port49/policy.yaml}\n", "policy: {watch_interval: 10s}\n", 1)
+	if _, err := loadDaemonRole(t, raw); err == nil || !strings.Contains(err.Error(), "name the policy file port49d admits from") ||
+		strings.Contains(err.Error(), "remove the block") {
+		t.Errorf("policy: with no file on etcd: %v", err)
+	}
+	if _, err := loadWith(t, "policy: {watch_interval: 10s}\n"); err == nil || !strings.Contains(err.Error(), "remove the block") {
+		t.Errorf("policy: with no file on memory: %v", err)
+	}
+	raw = strings.Replace(daemonRoleYAML(t), "policy: {file: /etc/port49/policy.yaml}\n",
 		"policy: {file: /p.yaml, watch_interval: 30s}\n", 1)
 	if c, err := loadDaemonRole(t, raw); err != nil || c.Policy.WatchInterval != 30*time.Second {
 		t.Fatalf("30s: %+v %v", c.Policy, err)
@@ -307,5 +324,103 @@ func TestTheBrokersConfigRequiresABrokerBlock(t *testing.T) {
 	}
 	if _, err := loadBrokerRole(t, strings.Join(lines, "\n")); err == nil || !strings.Contains(err.Error(), "broker: is required") {
 		t.Fatalf("port49-broker.yaml with no broker: block: %v", err)
+	}
+}
+
+// inventory.service is applied against the policy in force, so policy:
+// with no broker is enough for it (decision 29; Task 13 review M-4).
+func TestTheInventoryServiceTakesThePolicyBlock(t *testing.T) {
+	c, err := loadService(t, false, false, serviceBlock(t)+"policy: {file: /etc/port49/p.yaml}\n")
+	if err != nil || c.InventoryService == nil || c.Policy == nil || c.Broker != nil {
+		t.Fatalf("%+v %v", c.Policy, err)
+	}
+}
+
+// StoreBlocks refuses a stale seed key with staleSeedKeys' line, naming
+// the minter, before the strict decode can say only that the field is
+// unknown (Task 13 review M-5).
+func TestStoreBlocksSaysWhereAStaleSeedKeyWent(t *testing.T) {
+	raw := storeDoc(storeFiles(t), "") + "lab:\n  seed_tokens:\n    - {nas: leaf-01, username: alice, secret: x}\n"
+	if _, err := StoreBlocks([]byte(raw)); err == nil || !strings.Contains(err.Error(), `"secret" was removed`) {
+		t.Fatalf("%v", err)
+	}
+}
+
+// Under the broker's role the kept CRLs sit in broker.state_dir, so a list
+// whose kept file would be another file the broker names is refused
+// (Task 13 review M-6).
+func TestTheBrokersKeptListsAreInItsStateDir(t *testing.T) {
+	raw := brokerRoleYAML(t)
+	state := regexp.MustCompile(`(?m)^  state_dir: (\S+)$`).FindStringSubmatch(raw)[1]
+	raw = strings.Replace(raw, "  policy_file: /etc/port49/policy.yaml", "  policy_file: "+filepath.Join(state, "crl-main.der"), 1)
+	raw = strings.Replace(raw, "  certificate_status: {disabled: true}",
+		"  certificate_status: {crls: [{name: main, file: /etc/port49/main.crl, issuer_file: /etc/port49/ca.pem}]}", 1)
+	if _, err := loadBrokerRole(t, raw); err == nil || !strings.Contains(err.Error(), "its kept list") ||
+		!strings.Contains(err.Error(), "broker.policy_file") {
+		t.Fatalf("%v", err)
+	}
+}
+
+// broker.state_dir holds what the broker alone writes (its kept CRLs, and
+// from Task 15 its copy of the marks), so it is fenced as the revocations
+// file is: never a directory others can write, and never inside, nor
+// around, a directory the inventory service rewrites (Task 13 review I-2).
+// A 0700 or 0750 directory, as a container or Kubernetes volume mounts
+// one, loads.
+func TestTheBrokersStateDirIsItsOwn(t *testing.T) {
+	stateOf := func(raw string) string {
+		return regexp.MustCompile(`(?m)^  state_dir: (\S+)$`).FindStringSubmatch(raw)[1]
+	}
+	for _, mode := range []os.FileMode{0o770, 0o707, 0o777} {
+		raw := brokerRoleYAML(t)
+		if err := os.Chmod(stateOf(raw), mode); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := loadBrokerRole(t, raw); err == nil || !strings.Contains(err.Error(), "broker.state_dir") ||
+			!strings.Contains(err.Error(), "chmod 0700") {
+			t.Errorf("mode %o: %v", mode, err)
+		}
+	}
+	for _, mode := range []os.FileMode{0o700, 0o750} {
+		raw := brokerRoleYAML(t)
+		if err := os.Chmod(stateOf(raw), mode); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := loadBrokerRole(t, raw); err != nil {
+			t.Errorf("mode %o: %v", mode, err)
+		}
+	}
+	// The inventory service's directories, by key.
+	withService := func(raw, stateDir, mirrorDir string) string {
+		raw = regexp.MustCompile(`(?m)^inventory_file: .*\n`).ReplaceAllString(raw, "")
+		block := strings.Replace(serviceBlock(t), "    state_dir: /var/lib/port49/inventory\n", "    state_dir: "+stateDir+"\n", 1)
+		if mirrorDir != "" {
+			block += "    mirror_dir: " + mirrorDir + "\n"
+		}
+		return raw + block
+	}
+	for _, c := range []struct {
+		name string
+		edit func(state string) (svcState, mirror string)
+		want string
+	}{
+		{"inside the service's state_dir", func(s string) (string, string) { return filepath.Dir(s), "" },
+			"inventory.service.state_dir"},
+		{"around the service's state_dir", func(s string) (string, string) { return filepath.Join(s, "inv"), "" },
+			"inventory.service.state_dir"},
+		{"the service's mirror_dir", func(s string) (string, string) { return "/var/lib/port49/inventory", s },
+			"inventory.service.mirror_dir"},
+	} {
+		raw := brokerRoleYAML(t)
+		svc, mirror := c.edit(stateOf(raw))
+		if _, err := loadBrokerRole(t, withService(raw, svc, mirror)); err == nil || !strings.Contains(err.Error(), "broker.state_dir") ||
+			!strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: %v", c.name, err)
+		}
+	}
+	raw := brokerRoleYAML(t)
+	if c, err := loadBrokerRole(t, withService(raw, "/var/lib/port49/inventory", "/var/lib/port49/mirror")); err != nil ||
+		c.InventoryService == nil {
+		t.Errorf("disjoint directories: %v", err)
 	}
 }

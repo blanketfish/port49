@@ -900,8 +900,13 @@ func load(path string, role Role) (Config, error) {
 	case f.Policy != nil:
 		p := PolicyConfig{File: f.Policy.File, WatchInterval: orD(f.Policy.WatchInterval, 5*time.Second)}
 		if p.File == "" {
-			return Config{}, errors.New("config: policy.file is required when policy: is present: the policy " +
-				"file port49d admits from; remove the block to run port49d on inventory_file's key groups")
+			// On etcd policy: is required, so removing it is no fix there.
+			fix := ""
+			if or(f.Store.Backend, BackendMemory) == BackendMemory {
+				fix = ", or remove the block to run port49d on inventory_file's key groups"
+			}
+			return Config{}, fmt.Errorf("config: policy.file is required when policy: is present: name the policy "+
+				"file port49d admits from%s", fix)
 		}
 		if p.WatchInterval < time.Second || p.WatchInterval > 5*time.Minute {
 			return Config{}, fmt.Errorf("config: policy.watch_interval must be between 1s and 5m; got %s",
@@ -1165,9 +1170,28 @@ func checkBroker(c Config, b BrokerConfig, role Role) (*BrokerConfig, error) {
 		if !filepath.IsAbs(b.StateDir) {
 			return nil, errors.New("config: broker.state_dir must be an absolute path")
 		}
-		if fi, err := os.Stat(b.StateDir); err != nil || !fi.IsDir() {
+		fi, err := os.Stat(b.StateDir)
+		if err != nil || !fi.IsDir() {
 			return nil, fmt.Errorf("config: broker.state_dir %s must be a directory that exists: port49-broker keeps "+
 				"its verified CRLs there; create it, owned by port49-broker's user, mode 0700", b.StateDir)
+		}
+		// Fenced as broker.revocations_file is (ownRevocationsFile): what
+		// the broker keeps there is its own, so no other user may write the
+		// directory. Group read, as a 0750 volume mount has, is no write.
+		if fi.Mode().Perm()&0o022 != 0 {
+			return nil, fmt.Errorf("config: broker.state_dir %s is writable by its group or others (mode %04o): "+
+				"port49-broker's own state is kept there; chmod 0700 it", b.StateDir, fi.Mode().Perm())
+		}
+		// Nor inside, nor around, a directory the inventory service and
+		// port49d rewrite.
+		if svc := c.InventoryService; svc != nil {
+			for _, d := range []struct{ key, dir string }{{"inventory.service.state_dir", svc.StateDir},
+				{"inventory.service.mirror_dir", svc.MirrorDir}} {
+				if d.dir != "" && (within(d.dir, b.StateDir) || within(b.StateDir, d.dir)) {
+					return nil, fmt.Errorf("config: broker.state_dir is port49-broker's own state and may not be "+
+						"inside %s, nor hold it: give each its own directory", d.key)
+				}
+			}
 		}
 	}
 	b.BatchMax = orI(b.BatchMax, 100)
