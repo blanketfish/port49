@@ -4,12 +4,23 @@ package port49d
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net/url"
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	clientv3 "go.etcd.io/etcd/client/v3"
 
+	"github.com/rhwendt/port49/internal/broker"
+	"github.com/rhwendt/port49/internal/config"
+	"github.com/rhwendt/port49/internal/daemon/metrics"
+	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/policy"
+	"github.com/rhwendt/port49/internal/session"
+	"github.com/rhwendt/port49/internal/store"
+	etcdstore "github.com/rhwendt/port49/internal/store/etcd"
 	"github.com/rhwendt/port49/internal/store/etcd/etcdtest"
 )
 
@@ -56,7 +67,8 @@ func TestARestoreUnderARunningDaemonKeepsItsMarks(t *testing.T) {
 	waitFor(t, &out, "store: the marks feed's revision was compacted")
 	waitFor(t, &out, "port49d: store: 1 revocation(s) this port49d enforces are missing from the store as its "+
 		"marks feed reloads (an etcd restore, or lifted on port49-broker while the feed was down) and stay in "+
-		"force here until a lift this feed delivers or a restart: principal user:alice@example.com")
+		"force here (to release one lifted on purpose, revoke it again on port49-broker, then lift it with "+
+		"port49 revoke --lift, or restart this port49d): principal user:alice@example.com")
 	// A mark put after the restore arrives only once the reload is done and
 	// the feed follows again: then both stand.
 	if _, err := root.Put(ctx, bob, mark("bob")); err != nil {
@@ -64,14 +76,45 @@ func TestARestoreUnderARunningDaemonKeepsItsMarks(t *testing.T) {
 	}
 	waitInForce(t, &out, "principal", 2)
 
-	// Released by a revoke and a lift made again while the feed is up.
-	if _, err := root.Put(ctx, key, mark("alice")); err != nil {
+	// The line's remedy, as a broker on the store runs it (task 14 review
+	// I-2). A lift alone finds no mark in the store, lifts nothing, and
+	// reaches no feed; a revoke, then a lift, releases it here.
+	brk := brokerOn(t, srv, daemonCfg)
+	alice := broker.RevokeRequest{Principal: "user:alice@example.com", Origin: "test: the operator"}
+	if _, err := brk.Lift(ctx, alice); !errors.Is(err, broker.ErrNotRevoked) {
+		t.Fatalf("a lift of a mark the store lacks: %v, want ErrNotRevoked", err)
+	}
+	if _, err := brk.Revoke(ctx, alice); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := root.Delete(ctx, key); err != nil {
+	if _, err := brk.Lift(ctx, alice); err != nil {
 		t.Fatal(err)
 	}
 	waitInForce(t, &out, "principal", 1)
+}
+
+// brokerOn is a broker on the store srv serves, as port49-broker's
+// identity, with daemonCfg's policy: what port49 revoke reaches on
+// port49-broker's admin socket.
+func brokerOn(t *testing.T, srv *etcdtest.Server, daemonCfg string) *broker.Broker {
+	t.Helper()
+	cfg, err := config.Load(daemonCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pol, err := loadPolicy(cfg, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := etcdstore.Open(etcdstore.Config{Endpoints: []string{srv.Endpoint}, TLS: srv.TLS(t, "port49-broker"),
+		Logf: t.Logf})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	return &broker.Broker{Policy: policy.NewLive(pol), Store: st, Marks: store.NewMarks(),
+		Log: decision.NewJSONLines(io.Discard), Metrics: metrics.New(prometheus.NewRegistry()), Now: time.Now,
+		Sessions: session.New(st, time.Now, time.Hour, time.Hour)}
 }
 
 // An etcd restore that outlasts hold_ttl takes port49d dark and starts a new

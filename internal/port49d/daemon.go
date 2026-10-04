@@ -42,31 +42,60 @@ func probe(ctx context.Context, s store.RevStore, every time.Duration) {
 // 7e-1's marksReloadHook put it back (final review 7e-1 C-1). Instead
 // every mark this port49d enforces that the store lacks is kept in force
 // through the reload (store.Marks.Keep), until a lift this feed delivers
-// or a restart, and named on out. A lift made on a broker while the feed
-// was down is kept too: that denies more, and the runner's copy puts back
-// what the restore lost. A read that fails refuses the reload (re-review 1
-// C-2). Each call counts a rescan.
+// or a restart, and named on out, once for one set (keptSayer). A lift
+// made on a broker while the feed was down is kept too: that denies more,
+// and the runner's copy puts back what the restore lost. A read that
+// fails refuses the reload (re-review 1 C-2). Each call counts a rescan.
 func daemonReloadHook(ctx context.Context, feed store.MarkFeed, enforced *store.Marks,
 	rescans prometheus.Counter, bound time.Duration, out io.Writer) func() error {
+	say := keptSayer(out, "as its marks feed reloads")
 	return func() error {
 		rescans.Inc()
-		return keepLost(ctx, feed, enforced, bound, "as its marks feed reloads", out)
+		kept, err := keepLost(ctx, feed, enforced, bound)
+		if err != nil {
+			return err
+		}
+		say(kept)
+		return nil
 	}
 }
 
+// loadDaemonMarks is one attempt at a run's marks load on etcd with no
+// broker inside: after a store gone (again), keepLost first, then
+// LoadMarks, so each attempt the start retries keeps what the store lost
+// before it loads, as FollowMarks runs its hook before every load (task
+// 14 review M-3). It returns the revision the load read at.
+func loadDaemonMarks(ctx context.Context, feed store.MarkFeed, enforced *store.Marks, again bool,
+	bound time.Duration, say func([]store.Revocation)) (uint64, error) {
+	if again {
+		kept, err := keepLost(ctx, feed, enforced, bound)
+		if err != nil {
+			return 0, fmt.Errorf("store: %w", err)
+		}
+		say(kept)
+	}
+	lctx, cancel := context.WithTimeout(ctx, bound)
+	defer cancel()
+	rev, err := store.LoadMarks(lctx, feed, enforced, nil)
+	if err != nil {
+		return 0, fmt.Errorf("store: reading the revocations in force: %w", err)
+	}
+	return rev, nil
+}
+
 // keepLost keeps in force every mark enforced holds that the store lacks,
-// and names them on out; when says at which load. The reload hook runs it,
-// and so does a run after a store gone before its LoadMarks: the marks are
-// the process's (Ruling 11), and an etcd restore that outlasts hold_ttl
-// ends the run before the feed can reload (pre-flight 7e-2 P-1). A read
-// that fails returns an error, and the caller loads nothing.
-func keepLost(ctx context.Context, feed store.MarkFeed, enforced *store.Marks, bound time.Duration,
-	when string, out io.Writer) error {
+// and returns them. The reload hook runs it, and so does a run after a
+// store gone before its LoadMarks: the marks are the process's (Ruling
+// 11), and an etcd restore that outlasts hold_ttl ends the run before the
+// feed can reload (pre-flight 7e-2 P-1). A read that fails returns an
+// error, and the caller loads nothing.
+func keepLost(ctx context.Context, feed store.MarkFeed, enforced *store.Marks,
+	bound time.Duration) ([]store.Revocation, error) {
 	rctx, cancel := context.WithTimeout(ctx, bound)
 	_, rs, err := feed.Revocations(rctx)
 	cancel()
 	if err != nil {
-		return fmt.Errorf("reading the marks before the marks reload: %w; the marks are not reloaded "+
+		return nil, fmt.Errorf("reading the marks before the marks reload: %w; the marks are not reloaded "+
 			"until they are read", err)
 	}
 	stored := map[[2]string]bool{}
@@ -80,12 +109,36 @@ func keepLost(ctx context.Context, feed store.MarkFeed, enforced *store.Marks, b
 			kept = append(kept, r)
 		}
 	}
-	if len(kept) > 0 {
-		fmt.Fprintf(out, "port49d: store: %d revocation(s) this port49d enforces are missing from the store "+
-			"%s (an etcd restore, or lifted on port49-broker while the feed was down) and stay in force "+
-			"here until a lift this feed delivers or a restart: %s\n", len(kept), when, namedMarks(kept))
+	return kept, nil
+}
+
+// keptSayer names on out the marks keepLost kept, when says at which
+// load, once for one set: a store that flaps reloads the feed every
+// second, and the line, naming up to 20 marks, would repeat with it (task
+// 14 review M-1). A set that changes is said, and so is one after a call
+// that kept nothing. The remedy it names works: a lift alone of a mark the
+// store lacks lifts nothing on port49-broker (broker.ErrNotRevoked) and
+// reaches no feed, but a revoke puts the mark in the store, which the
+// feed delivers, and a lift after it is delivered as a lift (task 14
+// review I-2).
+func keptSayer(out io.Writer, when string) func([]store.Revocation) {
+	said := ""
+	return func(kept []store.Revocation) {
+		var set strings.Builder
+		for _, r := range kept {
+			set.WriteString(r.Kind + "\x00" + r.Key + "\x00")
+		}
+		if set.String() == said {
+			return
+		}
+		said = set.String()
+		if len(kept) > 0 {
+			fmt.Fprintf(out, "port49d: store: %d revocation(s) this port49d enforces are missing from the store "+
+				"%s (an etcd restore, or lifted on port49-broker while the feed was down) and stay in force "+
+				"here (to release one lifted on purpose, revoke it again on port49-broker, then lift it with "+
+				"port49 revoke --lift, or restart this port49d): %s\n", len(kept), when, namedMarks(kept))
+		}
 	}
-	return nil
 }
 
 // namedMarks names each mark a put-back or keep line lists, its kind and

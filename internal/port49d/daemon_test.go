@@ -297,7 +297,8 @@ func TestTheDaemonsReloadHookKeepsWhatTheStoreLost(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "port49d: store: 1 revocation(s) this port49d enforces are missing from "+
 		"the store as its marks feed reloads") || !strings.HasSuffix(out.String(),
-		"until a lift this feed delivers or a restart: principal user:alice@example.com\n") {
+		"and stay in force here (to release one lifted on purpose, revoke it again on port49-broker, then lift "+
+			"it with port49 revoke --lift, or restart this port49d): principal user:alice@example.com\n") {
 		t.Fatalf("said %q", out.String())
 	}
 	if _, err := store.LoadMarks(ctx, feed, enforced, nil); err != nil {
@@ -309,6 +310,103 @@ func TestTheDaemonsReloadHookKeepsWhatTheStoreLost(t *testing.T) {
 	if n := testutil.ToFloat64(rescans); n != 2 {
 		t.Fatalf("counted %v rescans, want 2", n)
 	}
+}
+
+// On a flapping store FollowMarks calls the hook again a second after a
+// load that failed: the keep line is said once for one set of kept marks,
+// again when the set changes, and again after a call that kept nothing
+// (task 14 review M-1). Each call still keeps.
+func TestTheDaemonsReloadHookSaysOneKeptSetOnce(t *testing.T) {
+	ctx := context.Background()
+	alice := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:alice@example.com", At: time.Unix(10, 0).UTC()}
+	carol := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:carol@example.com", At: time.Unix(11, 0).UTC()}
+	enforced := store.NewMarks()
+	enforced.Set(alice, true)
+	enforced.Set(carol, true)
+	var out bytes.Buffer
+	feed := &marksIn{rs: []store.Revocation{carol}} // the restore lost alice's
+	hook := daemonReloadHook(ctx, feed, enforced, prometheus.NewCounter(prometheus.CounterOpts{Name: "rescans"}),
+		time.Second, &out)
+	call := func(want int) {
+		t.Helper()
+		if err := hook(); err != nil {
+			t.Fatal(err)
+		}
+		if n := strings.Count(out.String(), "enforces are missing from the store"); n != want {
+			t.Fatalf("said the keep line %d times, want %d:\n%s", n, want, out.String())
+		}
+	}
+	for range 6 { // six reloads while the store flaps
+		call(1)
+	}
+	if _, err := store.LoadMarks(ctx, feed, enforced, nil); err != nil || !enforced.Holds(alice.Kind, alice.Key) {
+		t.Fatalf("a repeated call did not keep alice's mark: %v %v", enforced.All(), err)
+	}
+	feed.rs = nil // carol's lost too: a new set
+	call(2)
+	if !strings.Contains(out.String(), "port49d: store: 2 revocation(s)") {
+		t.Fatalf("the new set: %q", out.String())
+	}
+	call(2)
+	feed.rs = []store.Revocation{alice, carol} // put back: nothing kept, nothing said
+	call(2)
+	feed.rs = nil // the same set lost again after a call that kept nothing: said again
+	call(3)
+	if strings.Count(out.String(), "port49d: store: 2 revocation(s)") != 2 {
+		t.Fatalf("the third line: %q", out.String())
+	}
+}
+
+// A run after a store gone keeps, then loads, in one attempt, and each
+// attempt the start retries keeps again first: a restore that lands
+// between an attempt's keep and its load's retry is kept, not lifted
+// (task 14 review M-3). The control: a first start keeps nothing.
+func TestADaemonsMarksLoadKeepsBeforeEachAttempt(t *testing.T) {
+	ctx := context.Background()
+	alice := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:alice@example.com", At: time.Unix(10, 0).UTC()}
+	var out bytes.Buffer
+	say := keptSayer(&out, "as it starts again after a store gone")
+	enforced := store.NewMarks()
+	enforced.Set(alice, true)
+	feed := &marksScript{answers: []marksIn{
+		{rs: []store.Revocation{alice}}, // attempt 1's keep: nothing lost yet
+		{err: store.ErrUnavailable},     // its load: the store goes away
+		{},                              // attempt 2's keep: back, restored without alice's
+		{},                              // its load
+	}}
+	if _, err := loadDaemonMarks(ctx, feed, enforced, true, time.Second, say); !errors.Is(err, store.ErrUnavailable) {
+		t.Fatalf("attempt 1: %v", err)
+	}
+	if _, err := loadDaemonMarks(ctx, feed, enforced, true, time.Second, say); err != nil {
+		t.Fatal(err)
+	}
+	if !enforced.Holds(alice.Kind, alice.Key) || !strings.Contains(out.String(),
+		"port49d: store: 1 revocation(s) this port49d enforces are missing from the store as it starts again "+
+			"after a store gone") {
+		t.Fatalf("a restore between attempts lifted alice's mark: %v\n%s", enforced.All(), out.String())
+	}
+
+	first := store.NewMarks()
+	first.Set(alice, true)
+	if _, err := loadDaemonMarks(ctx, &marksScript{answers: []marksIn{{}}}, first, false, time.Second,
+		keptSayer(io.Discard, "")); err != nil || first.Holds(alice.Kind, alice.Key) {
+		t.Fatalf("control: a first start's load: %v %v", first.All(), err)
+	}
+}
+
+// marksScript is a store.MarkFeed answering each read with the next of
+// answers.
+type marksScript struct{ answers []marksIn }
+
+func (f *marksScript) Revocations(ctx context.Context) (uint64, []store.Revocation, error) {
+	a := f.answers[0]
+	f.answers = f.answers[1:]
+	return a.Revocations(ctx)
+}
+
+func (f *marksScript) WatchRevocations(ctx context.Context, after uint64, fn func(store.Revocation, bool, uint64),
+	progress func(uint64)) error {
+	return marksIn{}.WatchRevocations(ctx, after, fn, progress)
 }
 
 // marksIn is a store.MarkFeed holding rs at revision 7, or failing with

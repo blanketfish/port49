@@ -423,26 +423,14 @@ func openDaemon(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 	}
 	// The marks are the process's, kept across a store gone as the ledger
 	// is (Ruling 11): a run after one first keeps every mark the store lost
-	// while this port49d was dark, which the load would lift otherwise.
-	if again {
-		if err := retry(func() error {
-			if err := keepLost(ctx, d, authMarks, e.BulkTimeout, "as it starts again after a store gone", out); err != nil {
-				return fmt.Errorf("store: %w", err)
-			}
-			return nil
-		}); err != nil {
-			return fail(err)
-		}
-	}
+	// while this port49d was dark, which the load would lift otherwise, at
+	// each attempt (loadDaemonMarks).
+	sayKept := keptSayer(out, "as it starts again after a store gone")
 	var markRev uint64
 	if err := retry(func() error {
-		lctx, cancel := context.WithTimeout(ctx, e.BulkTimeout)
-		defer cancel()
 		var err error
-		if markRev, err = store.LoadMarks(lctx, d, authMarks, nil); err != nil {
-			return fmt.Errorf("store: reading the revocations in force: %w", err)
-		}
-		return nil
+		markRev, err = loadDaemonMarks(ctx, d, authMarks, again, e.BulkTimeout, sayKept)
+		return err
 	}); err != nil {
 		return fail(err)
 	}
