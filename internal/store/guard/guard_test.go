@@ -670,20 +670,28 @@ func TestPingIsTheContextPools(t *testing.T) {
 // port49-broker's never does (Task 15a C1).
 func TestTheCircuitsLinesNameTheirProcess(t *testing.T) {
 	for _, tc := range []struct {
-		proc      string
-		stopAfter time.Duration
-		closes    bool
-	}{{"port49d", time.Hour, true}, {"port49-broker", 0, false}} {
+		proc, component string
+		stopAfter       time.Duration
+		closes          bool
+		impact          string
+	}{
+		{"port49d", "daemon", time.Hour, true, "devices see store_unavailable, and break-glass is refused (L4)"},
+		// The broker's pools serve the API: devices and break-glass are
+		// port49d's (Task 15a review M-4).
+		{"port49-broker", "broker", 0, false, "mints, refreshes and revocations through it fail"},
+	} {
 		var said, gone told
 		c := config(&said, &gone)
-		c.Proc, c.StopAfter = tc.proc, tc.stopAfter
+		c.Proc, c.Component, c.StopAfter = tc.proc, tc.component, tc.stopAfter
 		g := Wrap(&stuck{err: store.ErrUnavailable}, c)
 		for i := 0; i < 3; i++ {
 			g.GetContext(context.Background(), k)
 		}
 		l := said.all()
-		if len(l) != 1 || !strings.HasPrefix(l[0], tc.proc+": store: the daemon's context pool's circuit is open") ||
-			strings.Contains(l[0], "closes its listeners") != tc.closes {
+		if len(l) != 1 || !strings.HasPrefix(l[0], tc.proc+": store: the "+tc.component+"'s context pool's circuit "+
+			"is open") || strings.Contains(l[0], "closes its listeners") != tc.closes ||
+			!strings.Contains(l[0], "succeeds; "+tc.impact) || (tc.component == "broker" &&
+			(strings.Contains(l[0], "break-glass") || strings.Contains(l[0], "devices"))) {
 			t.Fatalf("%s: said %q", tc.proc, l)
 		}
 	}

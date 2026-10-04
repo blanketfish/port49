@@ -1258,8 +1258,18 @@ func TestEveryBrokerLineNamesPort49Broker(t *testing.T) {
 	t.Cleanup(func() { stderr = e })
 	stderr = &out
 	f := splitFleet(t)
-	_, stop := startBroker(t, f.broker, &out, 1)
+	api, stop := startBroker(t, f.broker, &out, 1)
 	waitFor(t, &out, "runner: recorded bundle ")
+	// A refused handshake: the listener's line, which its caller prefixes
+	// (Task 15a review M-6).
+	conn, err := net.Dial("tcp", api)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = conn.Write([]byte("GET / HTTP/1.0\r\n\r\n"))
+	_, _ = io.Copy(io.Discard, conn)
+	conn.Close()
+	waitFor(t, &out, "port49-broker: broker: TLS handshake from ")
 	f.writePolicyOf(t, f.broker, withdrawnConfigurePolicy)
 	waitFor(t, &out, "port49-broker: policy reloaded")
 	if err := stop(); err != nil {

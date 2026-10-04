@@ -353,6 +353,7 @@ func runBroker(parent context.Context, cfgPath string) error {
 	brk.Marks = marks
 	brk.RevokeTimeout = admin.OpTimeout
 	brk.AdminSocket = cfg.AdminSocket
+	brk.Proc = "port49-broker"
 	// MarkChanged's lines, a held connection closed and a lift a reload
 	// found, go to port49-broker's stderr (Ruling T9-c).
 	brk.Say = func(format string, args ...any) { fmt.Fprintf(stderr, "port49-broker: "+format+"\n", args...) }
@@ -496,7 +497,7 @@ func runBroker(parent context.Context, cfgPath string) error {
 		return fmt.Errorf("admin_socket %s: %w", cfg.AdminSocket, err)
 	}
 	asrv := &admin.Server{Revoke: adminRevoke(brk), Revocations: adminRevocations(bs.st), Now: time.Now,
-		DiagnoseElsewhere: "port49d's admin socket"}
+		DiagnoseElsewhere: "port49d's admin socket", Proc: "port49-broker"}
 	wg.Add(1)
 	go func() { defer wg.Done(); asrv.Serve(ctx, aln) }()
 	fmt.Fprintf(stderr, "port49-broker: admin socket on %s (port49 revoke)\n", cfg.AdminSocket)

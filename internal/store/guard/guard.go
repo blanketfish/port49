@@ -414,9 +414,15 @@ func (g *guarded) changed(p Pool, open bool, cause error) {
 		if g.c.StopAfter > 0 {
 			closes = fmt.Sprintf("; %s closes its listeners if the store is gone for store.etcd.hold_ttl", g.c.Proc)
 		}
+		// The broker's pools serve its API; devices and break-glass are the
+		// daemon's (Task 15a review M-4).
+		impact := "devices see store_unavailable, and break-glass is refused (L4)"
+		if g.c.Component == "broker" {
+			impact = "mints, refreshes and revocations through it fail"
+		}
 		g.c.Say(fmt.Sprintf("%s: store: the %s's %s pool's circuit is open after %d consecutive failures (%v); "+
-			"each call on it fails at once until a probe in %v succeeds; devices see store_unavailable, and "+
-			"break-glass is refused (L4)%s", g.c.Proc, g.c.Component, p, g.c.Failures, cause, g.c.OpenFor, closes))
+			"each call on it fails at once until a probe in %v succeeds; %s%s", g.c.Proc, g.c.Component, p,
+			g.c.Failures, cause, g.c.OpenFor, impact, closes))
 		return
 	}
 	g.c.Say(fmt.Sprintf("%s: store: the %s's %s pool's circuit is closed: a probe was answered", g.c.Proc,

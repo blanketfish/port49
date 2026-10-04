@@ -20,6 +20,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/rhwendt/port49/internal/broker"
+	"github.com/rhwendt/port49/internal/bundle"
 	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/decision"
@@ -810,6 +811,33 @@ func TestAReloadThatQuarantinesTheFleetIsRefused(t *testing.T) {
 	}
 }
 
+// On port49-broker a reload refused for the bound tells a broker operator
+// what a restart of port49-broker does with the refused file: the reload
+// guard at a start holds that replica not ready against the bundle last
+// judged, so a rollout onto it serves no mints; and the bound is raised in
+// port49-broker.yaml (Task 15a review M-3). port49d's line is as it was.
+func TestARefusalForTheBoundGivesTheBrokersConsequence(t *testing.T) {
+	rig := newReloadRig(t, minimalPolicy)
+	rig.r.proc = "port49-broker"
+	rig.write(t, unmappedLevel+strings.Replace(minimalPolicy, "privilege: admin", "privilege: unmapped", 1))
+	rig.with(func() { rig.r.reload(context.Background(), "SIGHUP") })
+	out := rig.out.String()
+	if !strings.Contains(out, "port49-broker: policy reload (SIGHUP) refused") ||
+		!strings.Contains(out, "is NOT what is serving: a restart of port49-broker holds that replica not ready "+
+			"against the bundle last judged (and loads it unbounded when meta/judged has no policy), so a rollout "+
+			"onto it serves no mints: revert or fix it now") ||
+		!strings.Contains(out, "raise inventory.max_removed_percent in port49-broker.yaml and send SIGHUP") ||
+		strings.Contains(out, "port49d") {
+		t.Fatalf("stderr: %s", out)
+	}
+	both := refusalLine("port49-broker", &bundle.OverBound{}, true)
+	if !strings.Contains(both, "the refused files are still on disk and are NOT what is serving: a restart of "+
+		"port49-broker holds that replica not ready against the bundle last judged (and loads them unbounded when "+
+		"meta/judged has no policy), so a rollout onto them serves no mints: revert or fix them now") {
+		t.Fatalf("both files: %s", both)
+	}
+}
+
 // A refused reload's line is redacted with the redactions of both the
 // policy in force and the refused one before it reaches stderr, a log, and
 // only then are its quoted values cut, so a cut never leaves a secret's
@@ -823,7 +851,7 @@ func TestARefusedReloadsLineIsRedacted(t *testing.T) {
 	if cutFirst := platform.RedactQuoted(pol.Redactions(), oneLine(quotesCut{err})); !strings.Contains(cutFirst, "Hunter2") {
 		t.Fatalf("the fixture does not tell the order apart: %s", cutFirst)
 	}
-	if line := refusalLine(err, false, pol, nil); strings.Contains(line, "Hunter2") || !strings.Contains(line, "leaf1") {
+	if line := refusalLine("port49d", err, false, pol, nil); strings.Contains(line, "Hunter2") || !strings.Contains(line, "leaf1") {
 		t.Fatalf("%s", line)
 	}
 }

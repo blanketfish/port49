@@ -1,7 +1,9 @@
 package admin
 
 import (
+	"bytes"
 	"context"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -103,8 +105,19 @@ func TestRevokeOpsReachTheBroker(t *testing.T) {
 	boom := &Server{Held: &keyring.Held{}, Now: time.Now,
 		Revoke:      func(context.Context, RevokeOp) (string, bool, error) { panic("boom") },
 		Revocations: func(context.Context) (string, error) { return "", nil }}
-	if r := boom.answer(ctx, Request{Op: "revoke", Principal: "user:a@b"}, 0); !strings.Contains(r.Error, "internal error") {
+	r = boom.answer(ctx, Request{Op: "revoke", Principal: "user:a@b"}, 0)
+	if r.Error != "internal error; port49d's log says what" {
 		t.Fatalf("%+v", r)
+	}
+	// On port49-broker the line and the answer name it (Task 15a review M-6).
+	var logged bytes.Buffer
+	log.SetOutput(&logged)
+	defer log.SetOutput(os.Stderr)
+	boom.Proc = "port49-broker"
+	r = boom.answer(ctx, Request{Op: "revoke", Principal: "user:a@b"}, 0)
+	if r.Error != "internal error; port49-broker's log says what" ||
+		!strings.Contains(logged.String(), "port49-broker: admin socket: op \"revoke\" failed: boom") {
+		t.Fatalf("%+v; logged %q", r, logged.String())
 	}
 	if r := s.answer(ctx, Request{Op: "revocations"}, 0); r.Text != "no revocation is in force" {
 		t.Fatalf("%+v", r)

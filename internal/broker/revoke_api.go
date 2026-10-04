@@ -220,38 +220,48 @@ func writeBusy(w http.ResponseWriter, detail string) {
 }
 
 // unrecordedNote says what to do when a standing mark could not be
-// written: `port49 revoke` on port49d's admin socket, or, with none
-// configured, the one cut there is, as port49d's start line says
+// written: `port49 revoke` on the serving process's admin socket, or,
+// with none configured, the one cut there is, as its start line says
 // (liftNote).
 func (b *Broker) unrecordedNote() string {
 	if b.AdminSocket == "" {
-		return "try again; port49d has no admin_socket configured, so meanwhile have an operator remove the " +
-			"principal's grants from broker.policy_file"
+		return "try again; " + b.proc() + " has no admin_socket configured, so meanwhile have an operator remove " +
+			"the principal's grants from broker.policy_file"
 	}
-	return "try again, or ask an operator to run `port49 revoke` on port49d's admin socket (" + b.AdminSocket + ")"
+	return "try again, or ask an operator to run `port49 revoke` on " + b.proc() + "'s admin socket (" +
+		b.AdminSocket + ")"
 }
 
 // ownNote is the first line of a self revocation asked by the caller's own
 // principal's name: no mark was made, and who can make one.
 func (b *Broker) ownNote() string {
 	if b.AdminSocket == "" {
-		return "this is your own principal: no mark was made; to lock it, port49d needs an admin_socket, or an " +
-			"operator removes your grants from broker.policy_file"
+		return "this is your own principal: no mark was made; to lock it, " + b.proc() + " needs an admin_socket, " +
+			"or an operator removes your grants from broker.policy_file"
 	}
-	return "this is your own principal: no mark was made; to lock it, ask an operator to use port49d's admin " +
-		"socket (" + b.AdminSocket + ")"
+	return "this is your own principal: no mark was made; to lock it, ask an operator to use " + b.proc() +
+		"'s admin socket (" + b.AdminSocket + ")"
 }
 
-// liftNote says where a standing mark made over HTTP is lifted: port49d's
-// admin socket, or, with none configured, the only way there is
-// (pre-flight I7). Revoking stays allowed without one: it is the safe
-// direction.
+// liftNote says where a standing mark made over HTTP is lifted: the
+// serving process's admin socket, or, with none configured, the only way
+// there is (pre-flight I7). Revoking stays allowed without one: it is the
+// safe direction.
 func (b *Broker) liftNote() string {
 	if b.AdminSocket == "" {
-		return "port49d has no admin_socket configured: lifting this needs port49d stopped, the entry removed " +
-			"from broker.revocations_file, and a start"
+		return b.proc() + " has no admin_socket configured: lifting this needs " + b.proc() + " stopped, the " +
+			"entry removed from broker.revocations_file, and a start"
 	}
-	return "the lift is made on port49d's admin socket (" + b.AdminSocket + "), by port49d's user or root"
+	return "the lift is made on " + b.proc() + "'s admin socket (" + b.AdminSocket + "), by " + b.proc() +
+		"'s user or root"
+}
+
+// proc is Proc, "port49d" when empty.
+func (b *Broker) proc() string {
+	if b.Proc == "" {
+		return "port49d"
+	}
+	return b.Proc
 }
 
 // answerRevocation writes rep, with a step's store error, and a standing

@@ -321,3 +321,18 @@ func TestOneSelfOrKeyRevocationInFlightPerCaller(t *testing.T) {
 		t.Fatalf("%d revoke records, want 3: the busy ones write none", n)
 	}
 }
+
+// On port49-broker the notes name its admin socket and its process, not
+// port49d's: on etcd port49d's socket refuses revocations (Task 15a review
+// M-6).
+func TestTheRevokeNotesNameTheBrokersProcess(t *testing.T) {
+	for _, socket := range []string{"", "/run/port49/broker.sock"} {
+		b := &Broker{Proc: "port49-broker", AdminSocket: socket}
+		for _, note := range []string{b.unrecordedNote(), b.ownNote(), b.liftNote()} {
+			if strings.Contains(note, "port49d") || !strings.Contains(note, "port49-broker") ||
+				(socket != "" && !strings.Contains(note, "port49-broker's admin socket ("+socket+")")) {
+				t.Fatalf("admin socket %q: %s", socket, note)
+			}
+		}
+	}
+}

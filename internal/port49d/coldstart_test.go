@@ -258,6 +258,26 @@ func TestWithNoCopyItWaitsForTheServiceSayingWhyOnce(t *testing.T) {
 	}
 }
 
+// port49-broker's wait names what it holds back: its API, not TACACS+
+// (Task 15a review M-5).
+func TestTheBrokersColdStartWaitNamesItsAPI(t *testing.T) {
+	svc, key, keys := coldRig(t)
+	svc.MirrorDir = ""
+	var out syncBuffer
+	e := stderr
+	defer func() { stderr = e }()
+	stderr = &out
+	c := &fakeService{bundles: [][]byte{nil, sealedDoc(t, key, 1, 2)}}
+	if _, err := coldCopies(context.Background(), "port49-broker", svc, keys, c, testMetrics(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "port49-broker: inventory: no bundle yet (") ||
+		!strings.Contains(out.String(), "the API is not served until one arrives, and /readyz answers 503") ||
+		strings.Contains(out.String(), "TACACS+") {
+		t.Fatalf("said: %s", out.String())
+	}
+}
+
 func TestColdStartEndsWithItsContext(t *testing.T) {
 	svc, _, keys := coldRig(t)
 	svc.MirrorDir = ""

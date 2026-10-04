@@ -105,10 +105,13 @@ type Broker struct {
 	// DefaultRevokeTimeout.
 	RevokeTimeout time.Duration
 
-	// AdminSocket is port49d's admin_socket, where a revocation is lifted;
-	// empty when none is configured. Only the HTTP revocation's answer reads
-	// it, to say where its mark is lifted (decision 34).
+	// AdminSocket is the serving process's admin_socket, where a revocation
+	// is lifted; empty when none is configured. Only the HTTP revocation's
+	// answer reads it, to say where its mark is lifted (decision 34).
 	AdminSocket string
+	// Proc names the process serving the API in those answers: "port49d"
+	// when empty, "port49-broker" on the broker (Task 15a review M-6).
+	Proc string
 
 	// CertStatus answers a certificate chain's revocation status (spec
 	// §5.1.4; decision 33): nil checks nothing, port49d's `disabled: true`.

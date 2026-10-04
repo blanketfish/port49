@@ -113,7 +113,8 @@ func passGuardAtStart(ctx context.Context, cfg config.Config, judged judgedReade
 					// what is serving, and nothing serves here yet.
 					fmt.Fprintf(stderr, "port49-broker: policy file refused at start against the bundle last judged "+
 						"(%s): %s; this replica stays not ready, mints nothing and takes no hold until %s is fixed\n",
-						lineBundle(sr.bundle), refusalLine(errors.New(sr.err.Error()), false, sr.old, pol),
+						lineBundle(sr.bundle),
+						refusalLine("port49-broker", errors.New(sr.err.Error()), false, sr.old, pol),
 						policyKey(cfg))
 				}
 			default:
@@ -143,7 +144,7 @@ func passGuardAtStart(ctx context.Context, cfg config.Config, judged judgedReade
 			m.PolicyFileRefused.Set(1)
 			saidFile = version
 			fmt.Fprintf(stderr, "port49-broker: policy: %s; this replica stays not ready until it is fixed\n",
-				refusalLine(err, false, live.Load()))
+				refusalLine("port49-broker", err, false, live.Load()))
 		}
 	}
 }

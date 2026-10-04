@@ -72,6 +72,9 @@ func settleAfter(interval time.Duration) time.Duration {
 // pointer (policy.Live).
 type reloader struct {
 	cfg config.Config
+	// proc names the process its lines are said for, procOf(cfg) when
+	// empty: tests set it, a broker's key_refs being config.Load's alone.
+	proc string
 	// live is the policy in force, which a reload swaps; log is where its
 	// inventory_change records go.
 	live *policy.Live
@@ -194,7 +197,14 @@ type fullPassOwed struct {
 // newline, prefixed with the name of the process it serves (procOf):
 // port49d's lines read "port49d: ", port49-broker's "port49-broker: ".
 func (r *reloader) sayf(format string, args ...any) {
-	fmt.Fprintf(stderr, procOf(r.cfg)+": "+format, args...)
+	fmt.Fprintf(stderr, r.procName()+": "+format, args...)
+}
+
+func (r *reloader) procName() string {
+	if r.proc != "" {
+		return r.proc
+	}
+	return procOf(r.cfg)
 }
 
 // combinedFrom is the load that asked loadBoth for a combined try: a SIGHUP,
@@ -648,7 +658,8 @@ func (r *reloader) loadBoth(ctx context.Context, trigger string, from combinedFr
 		if pair := v + " " + iv; pair != r.together {
 			r.together = pair
 			r.sayf("policy and inventory reload (%s) refused together; still serving %s "+
-				"(bundle %s): %s\n", trigger, old.Source, old.Bundle, refusalLine(err, d == nil, old, pol))
+				"(bundle %s): %s\n", trigger, old.Source, old.Bundle,
+				refusalLine(r.procName(), err, d == nil, old, pol))
 		}
 		return false
 	}
@@ -1008,7 +1019,7 @@ func (r *reloader) load(ctx context.Context, trigger string, raw []byte, v strin
 		r.metrics.PolicyFileRefused.Set(1)
 		r.refused = v
 		r.sayf("policy reload (%s) refused; still serving %s (bundle %s): %s\n", trigger,
-			old.Source, old.Bundle, refusalLine(err, false, old, pol))
+			old.Source, old.Bundle, refusalLine(r.procName(), err, false, old, pol))
 		return false
 	}
 	r.refused = ""
@@ -1150,7 +1161,7 @@ func (r *reloader) after(ctx context.Context, file string, rep bundle.Report, po
 		r.sayf("%s: %d security change(s) written as inventory_change records "+
 			"(spec §10)\n", file, n)
 	}
-	sayPolicy(procOf(r.cfg), pol, now)
+	sayPolicy(r.procName(), pol, now)
 	r.refresh(ctx)
 }
 
@@ -1298,8 +1309,10 @@ func summary(rep broker.RefreshReport) string {
 // pre-flight I3). The guard's causes quote policy text, so the policy in
 // force and the refused one are both given; a nil one (a file that did not
 // parse) is skipped. A refusal for the bound (bundle.OverBound) ends with
-// unguardedAtStart, of both files when both are files on disk.
-func refusalLine(err error, both bool, pols ...*policy.Policy) string {
+// unguardedAtStart, of both files when both are files on disk, as proc's
+// start would treat them; on port49-broker its remedy names
+// port49-broker.yaml (Task 15a review M-3).
+func refusalLine(proc string, err error, both bool, pols ...*policy.Policy) string {
 	line := err.Error()
 	for _, p := range pols {
 		if p != nil {
@@ -1308,6 +1321,14 @@ func refusalLine(err error, both bool, pols ...*policy.Policy) string {
 	}
 	line = oneLine(quotesCut{errors.New(line)})
 	if over := (*bundle.OverBound)(nil); errors.As(err, &over) {
+		if proc == "port49-broker" {
+			line = strings.ReplaceAll(line, "inventory.max_removed_percent in port49d.yaml",
+				"inventory.max_removed_percent in port49-broker.yaml")
+			if both {
+				return line + brokerUnguardedAtStartBoth
+			}
+			return line + brokerUnguardedAtStart
+		}
 		if both {
 			return line + unguardedAtStartBoth
 		}
@@ -1327,6 +1348,19 @@ const unguardedAtStart = "; the refused file is still on disk and is NOT what is
 // mode, which refuses the policy file and the inventory file together.
 const unguardedAtStartBoth = "; the refused files are still on disk and are NOT what is serving: a restart of " +
 	"port49d would load them with no such bound, so revert or fix them now"
+
+// brokerUnguardedAtStart is unguardedAtStart on port49-broker, whose start
+// the reload guard holds not ready against the bundle last judged (Ruling
+// 17): a rollout onto the refused file takes every replica it reaches out
+// of minting, and only with no policy in meta/judged is it loaded unbounded.
+const brokerUnguardedAtStart = "; the refused file is still on disk and is NOT what is serving: a restart of " +
+	"port49-broker holds that replica not ready against the bundle last judged (and loads it unbounded when " +
+	"meta/judged has no policy), so a rollout onto it serves no mints: revert or fix it now"
+
+// brokerUnguardedAtStartBoth is brokerUnguardedAtStart for both files.
+const brokerUnguardedAtStartBoth = "; the refused files are still on disk and are NOT what is serving: a restart " +
+	"of port49-broker holds that replica not ready against the bundle last judged (and loads them unbounded when " +
+	"meta/judged has no policy), so a rollout onto them serves no mints: revert or fix them now"
 
 // oneLine is err's text on one line, the way port49d's other lines are: a YAML
 // error lists what it found on lines of its own.

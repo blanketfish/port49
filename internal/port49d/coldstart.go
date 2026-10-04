@@ -303,9 +303,15 @@ func coldCopies(ctx context.Context, proc string, svc *config.InventoryServiceCo
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
+		// port49-broker holds back its API, port49d TACACS+ (Task 15a
+		// review M-5).
+		held := "TACACS+"
+		if proc == "port49-broker" {
+			held = "the API"
+		}
 		if line := fmt.Sprintf(proc+": inventory: no bundle yet (persisted copy: %s; mirror: %s; service at %s: %s); "+
-			"TACACS+ is not served until one arrives, and /readyz answers 503 (spec §10, cold start)",
-			why["the persisted copy"], why["the mirror's copy"], svc.URL, oneLine(err)); line != said {
+			"%s is not served until one arrives, and /readyz answers 503 (spec §10, cold start)",
+			why["the persisted copy"], why["the mirror's copy"], svc.URL, oneLine(err), held); line != said {
 			fmt.Fprintln(stderr, line)
 			said = line
 		}

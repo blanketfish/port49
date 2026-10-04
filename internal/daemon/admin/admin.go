@@ -96,6 +96,10 @@ type Server struct {
 	// process holds no device packets (Held nil): port49-broker, beside
 	// port49d (plan 7e, Ruling 13; pre-flight M16).
 	DiagnoseElsewhere string
+	// Proc names this process in a failed op's line and answer:
+	// "port49d" when empty, "port49-broker" on the broker (Task 15a review
+	// M-6).
+	Proc string
 	// OpTimeout bounds revoke and revocations; zero is the package's
 	// OpTimeout. Tests shorten it.
 	OpTimeout time.Duration
@@ -234,8 +238,12 @@ func (s *Server) answer(ctx context.Context, req Request, uid uint32) (resp Resp
 	// panic behind an op is an answer, never the end of port49d (M12).
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("port49d: admin socket: op %q failed: %v", printsafe.Line(req.Op, 40), r)
-			resp = Response{Error: "internal error; port49d's log says what"}
+			proc := s.Proc
+			if proc == "" {
+				proc = "port49d"
+			}
+			log.Printf("%s: admin socket: op %q failed: %v", proc, printsafe.Line(req.Op, 40), r)
+			resp = Response{Error: "internal error; " + proc + "'s log says what"}
 		}
 	}()
 	switch req.Op {
