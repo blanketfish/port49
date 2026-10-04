@@ -391,15 +391,19 @@ func runBroker(parent context.Context, cfgPath string) error {
 		defer wg.Done()
 		keepBundle(ctx, bs.raw, who, brk.Policy, cfg.Store.Etcd.HoldTTL, swapped, m, stderr)
 	}()
+	rn := &runner{cfg: cfg, brk: brk, raw: bs.raw, st: bs.st, meta: bs.raw, ledger: ledger, keys: keys, m: m,
+		judge: make(chan *policy.Policy, 1), alarm: newKeyAlarm(), who: who}
 	// A replica's start and each of its swaps while it does not run ask the
 	// runner for a full context pass (runner.owed): a context made from its
-	// token under another bundle is then judged. A swap's ask first marks
-	// meta/judged in doubt when it names another bundle, and only then
-	// opens the gate to mints under the swapped bundle (re-review 1, I-2).
-	// The writes are this goroutine's, the latest ask only, so the reloader
-	// never waits on the store (Task 15 review M-5). The start's ask is
-	// tried once at once, before the runner starts, so a takeover's carry
-	// covers it.
+	// token under another bundle is then judged. Every swap, the runner's
+	// own too, first marks meta/judged in doubt when it names another
+	// bundle, and only then opens the gate to mints under the swapped
+	// bundle (re-review 1, I-2; re-review 2, I-3): a runner that swaps and
+	// stops before its settle pass leaves tokens no pass judged. The writes
+	// are this goroutine's, the latest ask only, so the reloader never
+	// waits on the store (Task 15 review M-5). The start's ask is tried
+	// once at once, before the runner starts, so a takeover's carry covers
+	// it.
 	asks := make(chan string, 1)
 	ask := func(bundle string) {
 		select {
@@ -431,6 +435,9 @@ func runBroker(parent context.Context, cfgPath string) error {
 				return
 			case b := <-asks:
 				flagSwap(ctx, bs.raw, gate, b, 4*cfg.Store.Etcd.CallTimeout, 5*time.Second, stderr)
+				if rn.running() {
+					continue // the runner's own passes judge its contexts
+				}
 				if err := retryCtx(ctx, func() error { return putAsk(ctx, b) }); err != nil && ctx.Err() == nil {
 					brokerSay("policy: %v; the runner judges this replica's contexts a token life after it last "+
 						"sees it serve another bundle", err)
@@ -551,8 +558,6 @@ func runBroker(parent context.Context, cfgPath string) error {
 		}()
 	}
 
-	rn := &runner{cfg: cfg, brk: brk, raw: bs.raw, st: bs.st, meta: bs.raw, ledger: ledger, keys: keys, m: m,
-		judge: make(chan *policy.Policy, 1), alarm: newKeyAlarm(), who: who}
 	// Every replica runs its own reload's token half; the runner the whole
 	// refresh, whose context half is its alone (Ruling 6), and the full
 	// passes a replica owes.
@@ -566,11 +571,7 @@ func runBroker(parent context.Context, cfgPath string) error {
 		case swapped <- struct{}{}:
 		default:
 		}
-		if rn.running() {
-			gate.flag(pol.Bundle) // the runner's own passes judge it
-		} else {
-			ask(pol.Bundle)
-		}
+		ask(pol.Bundle)
 	}
 	rn.rel = rel
 	wg.Add(2)

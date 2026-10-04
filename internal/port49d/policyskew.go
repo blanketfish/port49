@@ -110,10 +110,12 @@ func firstBundle(ctx context.Context, raw startRecorder, who, bundle string, ttl
 }
 
 // untilLanded runs f, each try bounded by call, until it lands or ctx
-// ends: one the store did not answer is tried again every wait, said each
-// time as what. An error waiting does not mend ends it.
+// ends: one the store did not answer, or that is one of also, is tried
+// again every wait, each distinct error said once as what. Any other
+// error ends it.
 func untilLanded(ctx context.Context, what string, call, wait time.Duration, out io.Writer,
-	f func(ctx context.Context) error) error {
+	f func(ctx context.Context) error, also ...error) error {
+	said := ""
 	for {
 		pctx, cancel := context.WithTimeout(ctx, call)
 		err := f(pctx)
@@ -124,15 +126,34 @@ func untilLanded(ctx context.Context, what string, call, wait time.Duration, out
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if !errors.Is(err, store.ErrUnavailable) {
+		retry := errors.Is(err, store.ErrUnavailable)
+		for _, a := range also {
+			retry = retry || errors.Is(err, a)
+		}
+		if !retry {
 			return fmt.Errorf("%s: %w", what, err)
 		}
-		fmt.Fprintf(out, "port49-broker: policy: %s: %v; nothing that mints is served until it lands, trying "+
-			"again in %s\n", what, err, wait)
+		if line := fmt.Sprintf("port49-broker: policy: %s: %v; nothing that mints is served until it lands, "+
+			"trying again every %s", what, err, wait); line != said {
+			fmt.Fprintln(out, line)
+			said = line
+		}
 		if !sleepCtx(ctx, wait) {
 			return ctx.Err()
 		}
 	}
+}
+
+// skewMarker is flagSkew's shape.
+type skewMarker func(ctx context.Context, st startRecorder, bundle string, out io.Writer) error
+
+// markSkew is flagSkew, swapped in tests to hold a swap's mark: while the
+// replica runs, so atomically.
+var markSkew atomic.Pointer[skewMarker]
+
+func init() {
+	f := skewMarker(flagSkew)
+	markSkew.Store(&f)
 }
 
 // flagSkew marks meta/judged in doubt unless it names bundle, the one this
@@ -155,9 +176,9 @@ func flagSkew(ctx context.Context, st startRecorder, bundle string, out io.Write
 // re-review 1, I-2): a mint runs only under the bundle this replica last
 // flagged against meta/judged (flagSkew), so a replica that cannot mark
 // the bundle last judged in doubt mints nothing under its own. The start
-// flags its bundle before anything that mints is served; a swap while the
-// replica runs flags at once (its own passes judge it), and one while it
-// does not is flagged by the asker once the mark lands.
+// flags its bundle before anything that mints is served, and the asker
+// flags each swap's once its mark lands, the runner's included
+// (re-review 2, I-3).
 type skewGate struct{ flagged atomic.Pointer[string] }
 
 func (g *skewGate) flag(bundle string) { g.flagged.Store(&bundle) }
@@ -169,22 +190,19 @@ func (g *skewGate) allow(pol *policy.Policy) error {
 	return fmt.Errorf("bundle %s is not yet flagged against the bundle last judged", pol.Bundle)
 }
 
-// flagSwap is the asker's half of a swap to bundle while this replica
-// does not run (re-review 1, I-2): it marks meta/judged in doubt when it
-// names another bundle, tried again while the store does not answer, and
-// only then opens gate to mints under bundle. A mark refused otherwise
-// leaves the gate shut, said: a replica that cannot flag its skew mints
-// nothing under it.
+// flagSwap is the asker's half of every swap to bundle, the runner's too
+// (re-review 1, I-2; re-review 2, I-3): it marks meta/judged in doubt when
+// it names another bundle (markSkew), and only then opens gate to mints
+// under bundle. A mark the store did not answer, or refused (a role
+// edited, then fixed), is tried again every wait until it lands or ctx
+// ends (re-review 2, M-8): a replica that cannot flag its skew mints
+// nothing under it, and is not ready meanwhile (broker.Broker.MintGate).
 func flagSwap(ctx context.Context, st startRecorder, gate *skewGate, bundle string, call, wait time.Duration,
 	out io.Writer) {
-	err := untilLanded(ctx, fmt.Sprintf("marking the bundle last judged in doubt against this replica's (%s)",
-		bundle), call, wait, out, func(ctx context.Context) error { return flagSkew(ctx, st, bundle, out) })
-	switch {
-	case err == nil:
+	if untilLanded(ctx, fmt.Sprintf("marking the bundle last judged in doubt against this replica's (%s)",
+		bundle), call, wait, out, func(ctx context.Context) error { return (*markSkew.Load())(ctx, st, bundle, out) },
+		store.ErrRefused) == nil {
 		gate.flag(bundle)
-	case ctx.Err() == nil:
-		fmt.Fprintf(out, "port49-broker: policy: %v; this replica mints nothing under bundle %s until a swap or a "+
-			"restart marks it\n", err, bundle)
 	}
 }
 

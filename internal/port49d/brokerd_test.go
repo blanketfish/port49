@@ -1187,6 +1187,8 @@ func TestALateReplicasContextIsCarriedWhenItReloads(t *testing.T) {
 	waitFor(t, &out, "runner: recorded bundle ")
 	cfgB := f.copyBroker(t) // a policy file of its own
 	apiB, _ := startBroker(t, cfgB, &out, 2)
+	lines := brokerLine.FindAllStringSubmatch(out.String(), -1)
+	metricsB := lines[len(lines)-1][2]
 	f.writePolicyOf(t, f.broker, withdrawnConfigurePolicy) // A's file only: alice loses configure
 	waitFor(t, &out, "policy reloaded")
 	mintOn(t, apiA, f.pki, "leaf1") // the runner's swap opens its gate at once
@@ -1202,7 +1204,34 @@ func TestALateReplicasContextIsCarriedWhenItReloads(t *testing.T) {
 	// count from here.
 	recorded := strings.Count(out.String(), "runner: recorded bundle ")
 	passes := strings.Count(out.String(), "runner: a full context pass owed by ")
+	// B's swap mints nothing, and B is not ready, until its mark has
+	// landed: held here (markSkew), no store fault needed (re-review 2,
+	// M-9).
+	release := make(chan struct{})
+	ms := markSkew.Load()
+	t.Cleanup(func() { markSkew.Store(ms) })
+	held := skewMarker(func(ctx context.Context, st startRecorder, bundle string, w io.Writer) error {
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return store.ErrUnavailable // a try past its call timeout, tried again
+		}
+		return (*ms)(ctx, st, bundle, w)
+	})
+	markSkew.Store(&held)
+	reloads := strings.Count(out.String(), "port49-broker: policy reloaded")
 	f.writePolicyOf(t, cfgB, withdrawnConfigurePolicy) // B catches up
+	waitForCount(t, &out, "port49-broker: policy reloaded", reloads+1)
+	resp := postMint(t, apiB, f.pki, "leaf1", "", testpki.LabClientCert, testpki.LabClientKey)
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(string(body), `"store_unavailable"`) {
+		t.Fatalf("a mint on B before its swap's mark landed: %d %s", resp.StatusCode, body)
+	}
+	if code := readyzAt(t, metricsB); code != http.StatusServiceUnavailable {
+		t.Fatalf("/readyz %d on B before its swap's mark landed", code)
+	}
+	close(release)
 	waitForCount(t, &out, "runner: a full context pass owed by ", passes+1)
 	if dev.permits("alice", "configure") {
 		t.Fatal("the context a late replica's token made kept the withdrawn grant after it reloaded")
@@ -1328,4 +1357,34 @@ func TestNothingIsServedUntilTheStartsRecordsLand(t *testing.T) {
 	}
 	close(held)
 	waitFor(t, &out, "port49-broker: listening on ")
+}
+
+// A runner's own swap marks the bundle last judged in doubt, as any
+// replica's does: a runner that swaps, then stops before its settle pass,
+// leaves tokens minted under a bundle no pass judged, so a takeover by a
+// replica still on the judged bundle must purge (Task 15a re-review 2,
+// I-3).
+func TestARunnersSwapMarksTheJudgedBundleInDoubt(t *testing.T) {
+	var out syncBuffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	f := splitFleet(t)
+	_, stopA := startBroker(t, f.broker, &out, 1)
+	waitFor(t, &out, "runner: recorded bundle ")
+	cfgB := f.copyBroker(t) // still on the judged bundle
+	f.writePolicyOf(t, f.broker, withdrawnConfigurePolicy)
+	waitFor(t, &out, "port49-broker: policy reloaded")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	bs, _ := openBrokerFor(t, ctx, f.broker, metrics.New(prometheus.NewRegistry()), io.Discard)
+	waitUntil(t, "meta/judged marked in doubt by the runner's swap", func() bool {
+		j, ok, err := bs.raw.Judged(ctx)
+		return err == nil && ok && j.InDoubt
+	})
+	if err := stopA(); err != nil {
+		t.Fatal(err)
+	}
+	startBroker(t, cfgB, &out, 2)
+	waitWithin(t, &out, "is in doubt, a replica having served another since; ", 30*time.Second)
 }

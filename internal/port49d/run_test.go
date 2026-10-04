@@ -136,6 +136,21 @@ func mintAs(t *testing.T, brokerAddr, pkiDir, device, email string) string {
 // and keyFile in pkiDir.
 func mintWith(t *testing.T, brokerAddr, pkiDir, device, key, certFile, keyFile string) string {
 	t.Helper()
+	resp := postMint(t, brokerAddr, pkiDir, device, key, certFile, keyFile)
+	defer resp.Body.Close()
+	var out api.MintResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Results) != 1 || out.Results[0].Login == "" {
+		t.Fatalf("mint: %+v", out)
+	}
+	return out.Results[0].Login
+}
+
+// postMint posts mintWith's request and returns the answer unread.
+func postMint(t *testing.T, brokerAddr, pkiDir, device, key, certFile, keyFile string) *http.Response {
+	t.Helper()
 	cert, err := tls.LoadX509KeyPair(filepath.Join(pkiDir, certFile), filepath.Join(pkiDir, keyFile))
 	if err != nil {
 		t.Fatal(err)
@@ -161,15 +176,7 @@ func mintWith(t *testing.T, brokerAddr, pkiDir, device, key, certFile, keyFile s
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
-	var out api.MintResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		t.Fatal(err)
-	}
-	if len(out.Results) != 1 || out.Results[0].Login == "" {
-		t.Fatalf("mint: %+v", out)
-	}
-	return out.Results[0].Login
+	return resp
 }
 
 // waitFor polls buf until it holds want, or fails the test.
