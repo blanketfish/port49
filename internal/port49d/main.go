@@ -593,6 +593,17 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 	if err != nil {
 		return err
 	}
+	// policy: with no broker: block is the split daemon (plan 7e), which
+	// admits from the policy in force with no broker beside it. This build
+	// has no such branch: with neither a broker's policy nor an admission
+	// table there is nothing to admit from, so it is refused here, before
+	// any listener binds, never served (Task 13 review I-1). Task 14 lifts
+	// this when it adds the branch.
+	if cfg.Broker == nil && cfg.Policy != nil {
+		return fmt.Errorf("%s %s: port49d.yaml names policy: and no broker: block, which is the split daemon of "+
+			"plan 7e; it arrives with plan 7e Task 14, and this build does not run it: keep the broker: block "+
+			"on the memory store until then", policyKey(cfg), cfg.Policy.File)
+	}
 	// A mark outlives any grace window a context is kept past its ceiling
 	// (crypt.DefaultLedgerKeep), so a record put back is past its ceiling
 	// before its mark goes.

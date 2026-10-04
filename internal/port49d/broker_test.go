@@ -496,6 +496,29 @@ func runExpectingRefusal(t *testing.T, cfgPath string) (string, error) {
 	}
 }
 
+// A port49d.yaml with policy: and no broker: block is the split daemon,
+// which this build does not run yet: run refuses it before any listener
+// binds, saying so, rather than serving with no admission and panicking on
+// the first connection (Task 13 review I-1). Task 14 lifts the refusal.
+func TestRunRefusesThePolicyOnlyDaemonUntilTask14(t *testing.T) {
+	b := brokerConfig(t, minimalPolicy).Broker
+	raw, err := os.ReadFile(writeRunConfig(t, b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(raw)
+	body = body[:strings.Index(body, "broker:\n")] + "policy: {file: " + b.PolicyFile + "}\n"
+	cfgPath := filepath.Join(t.TempDir(), "port49d.yaml")
+	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runExpectingRefusal(t, cfgPath)
+	if err == nil || !strings.Contains(err.Error(), "the split daemon") || !strings.Contains(err.Error(), "plan 7e Task 14") ||
+		strings.Contains(out, "listening") {
+		t.Fatalf("run: %v\n%s", err, out)
+	}
+}
+
 // A broker that cannot load ends run before the TACACS+ listener serves: run
 // returns, with the file named, instead of serving until a signal.
 func TestRunRefusesToStartWithABrokerThatCannotLoad(t *testing.T) {
