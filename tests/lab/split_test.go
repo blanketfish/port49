@@ -193,7 +193,45 @@ func TestSplitEndToEnd(t *testing.T) {
 		// failover: it is measured again, up to storeAttempts times (Ruling
 		// T15-a), and then recorded as what the device did.
 		tried := false
-		for attempt := 1; attempt <= storeAttempts && !tried; attempt++ {
+		if sessionOnly {
+			// Junos authorizes no command, and an open session's next command
+			// sent no TACACS+ at all (L37's first vJunos run: the device opened
+			// no connection), so there is no failover to see in it: it is
+			// recorded once as that fact. B's takeover is measured by a fresh
+			// login through B with A stopped.
+			if err := s.StopA(); err != nil {
+				t.Fatal(err)
+			}
+			from = time.Now()
+			outOpen := shellCell(l, sh, "show version")
+			wide("2. A stopped, the open session's `show version` (recorded: Junos authorizes no command)", outOpen+" | "+times(from, time.Now()))
+			said, tokB := l29Mint(sock, l.p.node)
+			if tokB == "" {
+				t.Fatalf("the agent minted no token for the login through B: %s", said)
+			}
+			for attempt := 1; attempt <= storeAttempts && !tried; attempt++ {
+				offB := s.B.mark()
+				from = time.Now()
+				_, lerr := l.loginWithin(sliceUser, tokB, 90*time.Second, "show version")
+				recsB := waitRecordsOf(s.B.logPath, offB, 30*time.Second, func(rs []map[string]any) bool {
+					return redeemReason(rs, sha(tokB)) != "" && len(reasonsOf(rs, "authorize_session")) > 0
+				})
+				redeemB := redeemReason(recsB, sha(tokB))
+				tried = triedB(from, time.Now())
+				label := fmt.Sprintf("2. A stopped, a fresh login through B (attempt %d)", attempt)
+				if !tried {
+					wide(label, "INVALID: the device never connected to B; measured again | "+times(from, time.Now()))
+					continue
+				}
+				wide(label, fmt.Sprintf("login err %v; B's redeem %q, authorize_session %v | %s", lerr, redeemB,
+					reasonsOf(recsB, "authorize_session"), times(from, time.Now())))
+				if lerr != nil || redeemB != "token_redeemed" || !anyPrefix(reasonsOf(recsB, "authorize_session"), "permit") {
+					fail("B did not log in a token minted through the broker: err %v, redeem %q, %v", lerr, redeemB,
+						reasonsOf(recsB, "authorize_session"))
+				}
+			}
+		}
+		for attempt := 1; !sessionOnly && attempt <= storeAttempts && !tried; attempt++ {
 			var cellFailed []string
 			offB := s.B.mark()
 			if err := s.StopA(); err != nil {
@@ -744,22 +782,39 @@ func TestJunosReauthorizationAfterRestart(t *testing.T) {
 		}
 		wide("2. the session after the re-authorization, `show version`", shellCell(l, sh, "show version"))
 
-		// Revoke the principal and wait for the next re-authorization.
+		// A second session, opened and then revoked at once: the device
+		// re-authorized the first only once in 20 more minutes (L36's first
+		// vJunos run), so the denial is the second session's first
+		// re-authorization. The first is closed so that its own timer cannot
+		// stand in for the second's.
+		said, tok2 := l29Mint(sock, l.p.node)
+		if tok2 == "" {
+			t.Fatalf("the agent minted no token for the second session: %s", said)
+		}
+		sh.Close()
+		offA = l.mark()
+		login2At := time.Now()
+		sh2, err := l.shell(sliceUser, tok2)
+		if err != nil {
+			t.Fatalf("SSH login of the second session through A: %v\nrecords:%s", err, summarize(l.recordsSince(offA)))
+		}
+		defer sh2.Close()
 		revText, revOK := revokeCLI(s.AdminBroker, "--principal", slicePrincipal)
 		if !revOK {
 			fail("port49 revoke --principal: %s", revText)
 		}
 		revokeAt := time.Now()
-		offA = l.mark()
-		wide("3. `port49 revoke --principal` on the broker's socket", firstLine(revText))
-		w2 := awaitReauthorization(t, l, sh, capPath, revokeAt, 20*time.Minute)
+		wide("3. a second session logged in through A, then `port49 revoke --principal` on the broker's socket (the first closed)",
+			fmt.Sprintf("%s; login %s before the revocation", firstLine(revText), revokeAt.Sub(login2At).Round(time.Second)))
+		w2 := awaitReauthorization(t, l, sh2, capPath, revokeAt, 20*time.Minute)
+		sh = sh2
 		var denied bool
 		switch {
 		case !w2.Req.IsZero():
 			l.flushCapture(t)
 			reply := replyTimesFrom(capPath, labKeyDefault, w2.Req.Add(-time.Second), w2.Req.Add(30*time.Second), true)
-			wide("3. the next re-authorization request", fmt.Sprintf("%s after the revocation: %s",
-				w2.Req.Sub(revokeAt).Round(time.Second), strings.Join(reply, "; ")))
+			wide("3. the second session's first re-authorization request", fmt.Sprintf("%s after its login, %s after the revocation: %s",
+				w2.Req.Sub(login2At).Round(time.Second), w2.Req.Sub(revokeAt).Round(time.Second), strings.Join(reply, "; ")))
 			denied = repliesWith(reply, "FAIL", "172.100.100.1")+repliesWith(reply, "ERROR", "172.100.100.1") > 0
 			if !denied {
 				fail("the re-authorization after the revocation was not denied: %s", strings.Join(reply, "; "))
