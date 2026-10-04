@@ -855,7 +855,7 @@ func TestAPurgeDoneOnAnotherStoreWritesNoPurgeRecord(t *testing.T) {
 		t.Fatalf("%d %v", w, err)
 	}
 	r := &runner{raw: bs.raw, who: "runner-a"}
-	if err := r.markPurged(ctx, w+1); err != nil { // the witness the purge read, not the store's
+	if _, err := r.markPurged(ctx, w+1); err != nil { // the witness the purge read, not the store's
 		t.Fatal(err)
 	}
 	if got, err := bs.raw.RestoreRead(ctx); err != nil || got.Purged != 0 {
@@ -864,7 +864,7 @@ func TestAPurgeDoneOnAnotherStoreWritesNoPurgeRecord(t *testing.T) {
 	if !strings.Contains(out.String(), "meta/purged is not written") {
 		t.Fatalf("a refused meta/purged was not said: %q", out.String())
 	}
-	if err := r.markPurged(ctx, w); err != nil {
+	if ok, err := r.markPurged(ctx, w); err != nil || !ok {
 		t.Fatal(err)
 	}
 	if got, err := bs.raw.RestoreRead(ctx); err != nil || got.Purged == 0 {

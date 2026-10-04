@@ -28,7 +28,7 @@ func TestTheRestoreGuardEntersOnADropAndLeavesOnlyOnAPurge(t *testing.T) {
 	var out bytes.Buffer
 	gauge := prometheus.NewGauge(prometheus.GaugeOpts{Name: "g"})
 	g := newRestoreGuard(&out)
-	g.begin(gauge)
+	g.begin(gauge, nil)
 	unavailable := errors.Join(store.ErrUnavailable, errors.New("down"))
 	judgeNow(g, etcdstore.RestoreRead{Witness: 10, Header: 12}, nil)
 	g.Saw(20) // a witness followed
@@ -70,7 +70,7 @@ func TestTheRestoreGuardEntersOnADropAndLeavesOnlyOnAPurge(t *testing.T) {
 
 	// Gone after one was seen guards too; gone before any was seen does not.
 	fresh := newRestoreGuard(&out)
-	fresh.begin(gauge)
+	fresh.begin(gauge, nil)
 	judgeNow(fresh, etcdstore.RestoreRead{Header: 3}, nil)
 	if !fresh.Allows() {
 		t.Fatal("no witness on a new keyspace guarded")
@@ -87,12 +87,12 @@ func TestTheRestoreGuardEntersOnADropAndLeavesOnlyOnAPurge(t *testing.T) {
 func TestARunAfterAStoreGoneRedeemsOnlyOnceTheStoreIsJudged(t *testing.T) {
 	gauge := prometheus.NewGauge(prometheus.GaugeOpts{Name: "g"})
 	g := newRestoreGuard(&bytes.Buffer{})
-	g.begin(gauge)
+	g.begin(gauge, nil)
 	if !g.Allows() {
 		t.Fatal("a cold start with nothing followed refused")
 	}
 	g.Saw(20)
-	g.begin(gauge) // the next run
+	g.begin(gauge, nil) // the next run
 	if g.Allows() {
 		t.Fatal("a run after one that followed a witness redeemed before judging the store")
 	}
@@ -129,7 +129,7 @@ func TestAWitnessFollowedDuringTheGuardsReadIsNoDrop(t *testing.T) {
 func TestAFailedReadRefusesRedemptionsUntilOneAnswers(t *testing.T) {
 	var out bytes.Buffer
 	g := newRestoreGuard(&out)
-	g.begin(prometheus.NewGauge(prometheus.GaugeOpts{Name: "g"}))
+	g.begin(prometheus.NewGauge(prometheus.GaugeOpts{Name: "g"}), nil)
 	g.Saw(20)
 	judgeNow(g, etcdstore.RestoreRead{Witness: 20, Header: 21}, nil)
 	judgeNow(g, etcdstore.RestoreRead{}, errors.New("down"))
@@ -146,9 +146,27 @@ func TestAFailedReadRefusesRedemptionsUntilOneAnswers(t *testing.T) {
 	}
 	// Before any witness was followed, a failed read refuses nothing.
 	fresh := newRestoreGuard(&out)
-	fresh.begin(prometheus.NewGauge(prometheus.GaugeOpts{Name: "g"}))
+	fresh.begin(prometheus.NewGauge(prometheus.GaugeOpts{Name: "g"}), nil)
 	judgeNow(fresh, etcdstore.RestoreRead{}, errors.New("down"))
 	if !fresh.Allows() {
 		t.Fatal("a failed read refused redemptions on a keyspace with no witness")
+	}
+}
+
+// Each read is counted in port49_store_operations_total{op="restore_read"},
+// the failed ones as errors: when only the guard's read fails, every other
+// store metric looks healthy (Task 15d re-review M-7).
+func TestTheGuardsReadsAreCountedByOutcome(t *testing.T) {
+	ops := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "ops"}, []string{"op", "outcome"})
+	g := newRestoreGuard(&bytes.Buffer{})
+	g.begin(prometheus.NewGauge(prometheus.GaugeOpts{Name: "g"}), ops)
+	judgeNow(g, etcdstore.RestoreRead{}, errors.Join(store.ErrUnavailable, errors.New("down")))
+	judgeNow(g, etcdstore.RestoreRead{}, errors.New("down"))
+	judgeNow(g, etcdstore.RestoreRead{Witness: 5, Header: 6}, nil)
+	if got := testutil.ToFloat64(ops.WithLabelValues("restore_read", "error")); got != 2 {
+		t.Fatalf("%v failed reads counted, want 2", got)
+	}
+	if got := testutil.ToFloat64(ops.WithLabelValues("restore_read", "ok")); got != 1 {
+		t.Fatalf("%v good reads counted, want 1", got)
 	}
 }

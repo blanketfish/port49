@@ -41,6 +41,7 @@ type restoreGuard struct {
 	checked bool
 	failing bool
 	gauge   prometheus.Gauge
+	ops     *prometheus.CounterVec // port49_store_operations_total; nil counts nothing
 }
 
 func newRestoreGuard(out io.Writer) *restoreGuard {
@@ -48,12 +49,12 @@ func newRestoreGuard(out io.Writer) *restoreGuard {
 }
 
 // begin starts a run: gauge is its port49_redemption_restore_guarded, set
-// at once, and redemptions wait for the run's first read once a witness
-// was followed.
-func (g *restoreGuard) begin(gauge prometheus.Gauge) {
+// at once, ops counts each read as op "restore_read", and redemptions wait
+// for the run's first read once a witness was followed.
+func (g *restoreGuard) begin(gauge prometheus.Gauge, ops *prometheus.CounterVec) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	g.gauge, g.checked, g.failing = gauge, !g.seen, false
+	g.gauge, g.ops, g.checked, g.failing = gauge, ops, !g.seen, false
 	g.setGauge()
 }
 
@@ -87,6 +88,13 @@ func (g *restoreGuard) recorded() (high uint64, seen bool) {
 func (g *restoreGuard) judge(r etcdstore.RestoreRead, err error, high uint64, seen bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	if g.ops != nil {
+		outcome := "ok"
+		if err != nil {
+			outcome = "error"
+		}
+		g.ops.WithLabelValues("restore_read", outcome).Inc()
+	}
 	if err != nil {
 		// A failed read is no restore, but the outage may be one: once a
 		// witness was followed, redemptions wait for a read that answers.
@@ -144,10 +152,11 @@ func (g *restoreGuard) setGauge() {
 }
 
 // keep follows meta/witness and reads it, with meta/purged, at once and
-// every witnessEvery, until ctx ends: the watch alone can wait at a
+// every witnessEvery, each read given the store's own deadline, the longer
+// of witnessEvery and callTimeout, until ctx ends: the watch alone can wait at a
 // revision a store restored without --bump-revision has not reached, and
 // never tell.
-func (g *restoreGuard) keep(ctx context.Context, s *etcdstore.Store) {
+func (g *restoreGuard) keep(ctx context.Context, s *etcdstore.Store, callTimeout time.Duration) {
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() { defer wg.Done(); s.FollowWitness(ctx, g.Saw) }()
@@ -156,7 +165,7 @@ func (g *restoreGuard) keep(ctx context.Context, s *etcdstore.Store) {
 	defer t.Stop()
 	for {
 		high, seen := g.recorded()
-		rctx, cancel := context.WithTimeout(ctx, witnessEvery)
+		rctx, cancel := context.WithTimeout(ctx, max(witnessEvery, callTimeout))
 		r, err := s.RestoreRead(rctx)
 		cancel()
 		if ctx.Err() != nil {

@@ -632,10 +632,15 @@ func (r *runner) purgeRestored(ctx context.Context, why string, read etcdstore.W
 	if err := retryCtx(ctx, func() (e error) { n, e = r.st.PurgeTokens(ctx); return }); err != nil {
 		return err
 	}
-	if err := r.markPurged(ctx, read.ModRevision); err != nil {
+	written, err := r.markPurged(ctx, read.ModRevision)
+	if err != nil {
 		return err
 	}
-	r.witness.Reset(read.ModRevision)
+	// A refused meta/purged means the store changed under the purge: the
+	// record stays, so the next pass judges the store again and purges once more.
+	if written {
+		r.witness.Reset(read.ModRevision)
+	}
 	fmt.Fprintf(stderr, "port49-broker: runner: %s; every unspent token is purged and must be minted again "+
 		"(port49 token): %d purged\n", why, n)
 	return nil
@@ -648,19 +653,21 @@ func (r *runner) purgeRestored(ctx context.Context, why string, read etcdstore.W
 // any of them, done after the restore, leaves no restored token behind.
 // over is the meta/witness ModRevision the purge read: a witness that has
 // changed since means the store may not be the one purged, and nothing is
-// written; the next purge writes it.
-func (r *runner) markPurged(ctx context.Context, over uint64) error {
-	return retryCtx(ctx, func() error {
+// written; the next purge writes it. It reports whether it wrote.
+func (r *runner) markPurged(ctx context.Context, over uint64) (written bool, err error) {
+	err = retryCtx(ctx, func() error {
 		at, err := r.raw.PutPurged(ctx, r.who, over)
 		if err != nil {
 			return fmt.Errorf("recording the purge done (meta/purged): %w", err)
 		}
+		written = at != 0
 		if at == 0 {
 			fmt.Fprintf(stderr, "port49-broker: runner: meta/witness changed during the purge, so the store may not "+
 				"be the one purged; meta/purged is not written, and a port49d on guard waits for the next purge\n")
 		}
 		return nil
 	})
+	return written, err
 }
 
 // retryCtx runs f until it returns nil, an error that is not
@@ -856,7 +863,7 @@ func (r *runner) takeover(ctx context.Context) (*policy.Policy, error) {
 		if err := retryCtx(ctx, func() (e error) { n, e = r.st.PurgeTokens(ctx); return }); err != nil {
 			return nil, err
 		}
-		if err := r.markPurged(ctx, read.ModRevision); err != nil {
+		if _, err := r.markPurged(ctx, read.ModRevision); err != nil {
 			return nil, err
 		}
 		if ok && judged.InDoubt && judged.Bundle == bundle {

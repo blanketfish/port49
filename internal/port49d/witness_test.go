@@ -294,3 +294,78 @@ func TestARunningRunnerPurgesARestoreAndKeepsTheRecordUntilDone(t *testing.T) {
 		t.Fatalf("%d purges for one restore", n)
 	}
 }
+
+// movesWitness rewrites meta/witness once as a purge ends, as a restore
+// landing inside the purge would change it.
+type movesWitness struct {
+	store.Store
+	raw  *etcdstore.Store
+	move atomic.Bool
+}
+
+func (m *movesWitness) PurgeTokens(ctx context.Context) (int, error) {
+	n, err := m.Store.PurgeTokens(ctx)
+	if err == nil && m.move.CompareAndSwap(true, false) {
+		w, werr := m.raw.Witness(ctx)
+		if werr != nil {
+			return n, werr
+		}
+		if _, werr = m.raw.PutWitness(ctx, "runner-b", w.ModRevision); werr != nil {
+			return n, werr
+		}
+	}
+	return n, err
+}
+
+// A purge whose meta/purged write is refused, because meta/witness
+// changed during it, leaves the record where it is: the next pass judges
+// the store again and purges once more, so port49d's guard is never
+// released over tokens that were not purged (Task 15d re-review M-8).
+func TestARefusedPurgeRecordLeavesTheWitnessRecordForTheNextPass(t *testing.T) {
+	f := splitFleet(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m := metrics.New(prometheus.NewRegistry())
+	bs, keys := openBrokerFor(t, ctx, f.broker, m, io.Discard)
+	cfg, _ := loadBroker(t, f.broker)
+	bcfg := brokerConfig(t, minimalPolicy)
+	_, b, err := buildBroker(bcfg, "inventory_file "+bcfg.InventoryFile, bs.st, seedMinter(),
+		decision.NewJSONLines(io.Discard), m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.Sessions = session.New(bs.st, time.Now, cfg.ContextIdleTTL, cfg.Session.IndexTTL)
+	b.Marks = store.NewMarks()
+	w0, err := bs.raw.PutWitness(ctx, "runner-a", 0)
+	if err != nil || w0 == 0 {
+		t.Fatalf("%d %v", w0, err)
+	}
+	wit := openWitness(filepath.Join(safeDir(t), stateWitnessFile), "/port49/", io.Discard)
+	wit.Saw(w0 + 1000) // a witness the restore lost
+	var out syncBuffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	st := &movesWitness{Store: bs.st, raw: bs.raw}
+	st.move.Store(true)
+	r := &runner{cfg: cfg, brk: b, raw: bs.raw, st: st, meta: bs.raw, keys: keys, m: m, alarm: newKeyAlarm(),
+		who: "runner-a", witness: wit, marksReloaded: make(chan struct{}, 1)}
+	if err := r.witnessPass(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := bs.raw.RestoreRead(ctx); err != nil || got.Purged != 0 {
+		t.Fatalf("a refused purge record landed: %+v %v", got, err)
+	}
+	if rec, _ := wit.Recorded(); rec != w0+1000 {
+		t.Fatalf("a refused purge record reset the witness record to %d", rec)
+	}
+	if err := r.witnessPass(ctx); err != nil { // the witness moved: the record is still above it
+		t.Fatal(err)
+	}
+	if n := strings.Count(out.String(), "every unspent token is purged"); n != 2 {
+		t.Fatalf("%d purges, want a second after the refused one:\n%s", n, out.String())
+	}
+	if got, err := bs.raw.RestoreRead(ctx); err != nil || got.Purged == 0 {
+		t.Fatalf("the second purge wrote no meta/purged: %+v %v", got, err)
+	}
+}
