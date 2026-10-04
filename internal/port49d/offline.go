@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"os/signal"
 	"syscall"
 	"time"
@@ -71,7 +72,9 @@ func offlineRevoke(args []string, log, out io.Writer) int {
 		return 1
 	}
 	defer closeStore()
-	req := broker.RevokeRequest{Principal: *principal, Issuer: *issuer, Serial: *serial, Origin: "offline"}
+	// Who ran it, as the admin socket's origin names its caller (spec §5.7).
+	req := broker.RevokeRequest{Principal: *principal, Issuer: *issuer, Serial: *serial,
+		Origin: fmt.Sprintf("offline uid %d", os.Getuid())}
 	if *lift {
 		rep, err := brk.Lift(ctx, req)
 		if err != nil {

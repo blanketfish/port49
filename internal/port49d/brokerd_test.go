@@ -1602,6 +1602,10 @@ func TestAnOfflineRevokeDeniesWithEveryBrokerStopped(t *testing.T) {
 			"key(s) deleted") {
 		t.Fatalf("the report: %s", rerr.String())
 	}
+	// Who ran it, in the spec's origin vocabulary (Task 15b review M-3).
+	if want := fmt.Sprintf(`"origin":"offline uid %d"`, os.Getuid()); !strings.Contains(rout.String(), want) {
+		t.Fatalf("the revoke record lacks %s: %s", want, rout.String())
+	}
 	if n := tokens(); n != 0 {
 		t.Fatalf("%d unspent token(s) of alice's left in the store after the offline revocation", n)
 	}

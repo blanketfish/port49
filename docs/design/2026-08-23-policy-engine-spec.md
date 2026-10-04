@@ -2033,7 +2033,7 @@ recorded, below): `port49 revoke` reports it and exits 1. Its
 `key` for one `(device, username)` ended; `device` and `username` name a `key` revocation's key,
 or a `self` one limited to a key; `issuer` and `serial` name a certificate (the serial in lower-case hex);
 `at` is when the mark took force, an earlier mark's time when one already stood; `origin` is who
-asked (`admin_socket uid <n>`, e.g. `admin_socket uid 0`, or `api <principal>` over HTTP); `contexts` how many live contexts were marked; `token_keys` how many
+asked (`admin_socket uid <n>`, e.g. `admin_socket uid 0`, `api <principal>` over HTTP, or `offline uid <n>` for a revoke written by `port49-broker revoke --offline` with every broker down); `contexts` how many live contexts were marked; `token_keys` how many
 `(device, username)` keys had their unspent tokens deleted; `connections` how many held broker
 connections were closed; `unreached` each marked context, `{"device", "username"}`, on a platform
 that never asks about a command, or on a device the inventory gives no platform, so an incident
