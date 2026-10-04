@@ -284,15 +284,16 @@ func TestCheckIdentityRefusesAnIdentityItCannotName(t *testing.T) {
 	}
 }
 
-// The roles are no wider than the code uses (plan 7e, Task 16). The
-// golden table is the ceiling: a grant added to Roles that is not here
-// fails, so widening a role is a decision made in this file. The broker
-// holds the keyspace's root alone, the one range every family it touches
-// sits under (spec §12); the daemon holds read-write on the nine families
-// a login, an authorization and accounting touch, and read on the marks,
-// meta/ and the ledger record, and nothing on the idempotency records, the
-// token indexes or the superseded record.
-func TestTheRolesAreNoWiderThanTheCodeUses(t *testing.T) {
+// The roles are the golden ceiling (plan 7e, Task 16): a grant added to
+// Roles that is not here fails, so widening a role is a decision made in
+// this file. The broker holds the keyspace's root alone, the one range
+// every family it touches sits under (spec §12); the daemon holds
+// read-write on the nine families a login, an authorization and
+// accounting touch, read on the marks and the ledger record, and read on
+// five single keys of meta/ (the ones port49d's code reads), and nothing
+// on the idempotency records, the token indexes or the superseded record.
+// What the daemon's code reads is held by TestTheDaemonReadsExactlyItsMetaKeys.
+func TestTheRolesAreTheGoldenCeiling(t *testing.T) {
 	var got []string
 	for _, g := range Roles("/port49/") {
 		perm := "read"
@@ -307,7 +308,10 @@ func TestTheRolesAreNoWiderThanTheCodeUses(t *testing.T) {
 		"port49_daemon readwrite /port49/v1/x/", "port49_daemon readwrite /port49/v1/ip/",
 		"port49_daemon readwrite /port49/v1/is/", "port49_daemon readwrite /port49/v1/ic/",
 		"port49_daemon readwrite /port49/v1/b/",
-		"port49_daemon read /port49/v1/rv/", "port49_daemon read /port49/v1/meta/", "port49_daemon read /port49/v1/lw/",
+		"port49_daemon read /port49/v1/rv/", "port49_daemon read /port49/v1/lw/",
+		"port49_daemon read /port49/v1/meta/seal_keys", "port49_daemon read /port49/v1/meta/witness",
+		"port49_daemon read /port49/v1/meta/purged", "port49_daemon read /port49/v1/meta/judged_bundle",
+		"port49_daemon read /port49/v1/meta/ping",
 		"port49_broker readwrite /port49/v1/",
 	}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
@@ -320,7 +324,7 @@ func TestTheRolesAreNoWiderThanTheCodeUses(t *testing.T) {
 // follows meta/witness but writes none of the three: a stolen daemon key
 // cannot forge a witness a restore is detected by, nor the purge that lets
 // redemptions resume (Task 15d, Ruling 19).
-func TestTheDaemonReadsTheRestorePairAndTheBrokerWritesIt(t *testing.T) {
+func TestTheDaemonReadsExactlyItsMetaKeys(t *testing.T) {
 	const prefix = "/port49/"
 	srv := provisioned(t, prefix)
 	ctx := context.Background()
@@ -350,6 +354,24 @@ func TestTheDaemonReadsTheRestorePairAndTheBrokerWritesIt(t *testing.T) {
 	go d.FollowWitness(fctx, func(rev uint64) { seen <- rev })
 	if got := waitRevision(t, seen, w); got != w {
 		t.Fatalf("the daemon follows meta/witness: %d, want %d", got, w)
+	}
+	if bundle, ok, err := d.JudgedBundle(ctx); err != nil || !ok || bundle != "bundle-1" {
+		t.Fatalf("the daemon reads the bundle last judged: %q %v %v", bundle, ok, err)
+	}
+	if _, _, err := d.Judged(ctx); !errors.Is(err, ErrRefused) {
+		t.Errorf("the daemon read meta/judged, the policy file: %v", err)
+	}
+	if err := d.Ping(ctx); err != nil {
+		t.Errorf("the daemon pings: %v", err)
+	}
+	if _, _, err := d.SealKeys(ctx); err != nil {
+		t.Errorf("the daemon reads meta/seal_keys: %v", err)
+	}
+	if _, _, err := d.Holder(ctx); !errors.Is(err, ErrRefused) {
+		t.Errorf("the daemon read meta/holder: %v", err)
+	}
+	if _, err := d.Bundles(ctx); !errors.Is(err, ErrRefused) {
+		t.Errorf("the daemon read meta/bundles/: %v", err)
 	}
 	if _, err := d.PutWitness(ctx, "daemon", w); !errors.Is(err, ErrRefused) {
 		t.Errorf("the daemon wrote meta/witness: %v", err)

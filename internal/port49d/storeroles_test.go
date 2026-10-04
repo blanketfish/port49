@@ -84,7 +84,11 @@ func TestStoreRolesPrintsTheCommands(t *testing.T) {
 		"etcdctl role add port49_daemon",
 		"etcdctl role grant-permission port49_daemon readwrite --prefix=true /port49/v1/t/",
 		"etcdctl role grant-permission port49_daemon read --prefix=true /port49/v1/rv/",
-		"etcdctl role grant-permission port49_daemon read --prefix=true /port49/v1/meta/",
+		"etcdctl role grant-permission port49_daemon read /port49/v1/meta/witness\n",
+		"etcdctl role grant-permission port49_daemon read /port49/v1/meta/purged\n",
+		"etcdctl role grant-permission port49_daemon read /port49/v1/meta/seal_keys\n",
+		"etcdctl role grant-permission port49_daemon read /port49/v1/meta/judged_bundle\n",
+		"etcdctl role grant-permission port49_daemon read /port49/v1/meta/ping\n",
 		"etcdctl role grant-permission port49_daemon read --prefix=true /port49/v1/lw/",
 		"etcdctl role grant-permission port49_broker readwrite --prefix=true /port49/v1/",
 		"etcdctl user add port49-daemon --no-password",
@@ -103,6 +107,15 @@ func TestStoreRolesPrintsTheCommands(t *testing.T) {
 		if strings.Contains(out.String(), "port49_daemon readwrite --prefix=true "+never) {
 			t.Errorf("the daemon is granted write on %s", never)
 		}
+	}
+	for _, never := range []string{"/port49/v1/meta/ ", "/port49/v1/meta/judged\n", "/port49/v1/meta/holder"} {
+		if strings.Contains(out.String(), "port49_daemon read --prefix=true "+never) ||
+			strings.Contains(out.String(), "port49_daemon read "+never) {
+			t.Errorf("the daemon is granted a read on %s", never)
+		}
+	}
+	if strings.Contains(out.String(), "meta/ ") || strings.Contains(out.String(), "port49_daemon read --prefix=true /port49/v1/meta/\n") {
+		t.Errorf("the daemon is granted meta/ whole:\n%s", out.String())
 	}
 	for _, never := range []string{"/port49/v1/id/", "/port49/v1/tp/", "/port49/v1/tc/"} {
 		if strings.Contains(out.String(), "port49_daemon read --prefix=true "+never) {
@@ -183,7 +196,11 @@ func (f *fleet) sevenDFile(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	block, _, _ := strings.Cut(string(bro)[strings.Index(string(bro), "\nbroker:\n")+1:], "store:\n")
+	i := strings.Index(string(bro), "\nbroker:\n")
+	if i < 0 {
+		t.Fatal("port49-broker.yaml has no broker: block")
+	}
+	block, _, _ := strings.Cut(string(bro)[i+1:], "store:\n")
 	bc, bk := f.srv.ClientFiles(t, "port49-broker")
 	body := strings.Replace(string(raw), "\nstore:\n", "\n"+block+"store:\n", 1)
 	body = strings.Replace(body, "    call_timeout:", "    broker: {cert_file: "+bc+", key_file: "+bk+"}\n    call_timeout:", 1)
@@ -265,5 +282,26 @@ func TestStoreRolesRefusesAFileMissingItsIdentity(t *testing.T) {
 	if code := storeRolesCmd([]string{"--config", f.daemon, "--broker-config", f.daemon}, &out, &errb); code != 1 ||
 		out.Len() != 0 || !strings.Contains(errb.String(), "store.etcd.broker") {
 		t.Fatalf("no broker identity: exit %d, stdout %q, stderr %q", code, out.String(), errb.String())
+	}
+}
+
+// A 7d --config that still names store.etcd.broker, beside a --broker-config,
+// is warned about, naming both CNs, and the --broker-config's wins: the
+// stale identity cannot run (config.Load refuses that file at port49d's
+// start), so the operator mid-migration needs a line, not a refusal.
+func TestStoreRolesWarnsOfAStaleBrokerIdentity(t *testing.T) {
+	f := splitFleet(t)
+	old := f.sevenDFile(t)
+	var out, errb bytes.Buffer
+	if code := storeRolesCmd([]string{"--config", old, "--broker-config", f.broker}, &out, &errb); code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	for _, want := range []string{"still names store.etcd.broker", "CN \"port49-broker\"", f.broker, "port49d refuses at start"} {
+		if !strings.Contains(errb.String(), want) {
+			t.Errorf("stderr lacks %q: %s", want, errb.String())
+		}
+	}
+	if !strings.Contains(out.String(), "etcdctl user add port49-broker --no-password") {
+		t.Fatalf("%s", out.String())
 	}
 }

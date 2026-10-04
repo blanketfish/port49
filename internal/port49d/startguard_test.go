@@ -17,6 +17,8 @@ type judgedAt struct {
 	ok  bool
 }
 
+func (j judgedAt) JudgedBundle(context.Context) (string, bool, error) { return j.rec.Bundle, j.ok, nil }
+
 func (j judgedAt) Judged(context.Context) (etcdstore.JudgedRecord, bool, error) {
 	return j.rec, j.ok, nil
 }

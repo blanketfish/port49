@@ -54,9 +54,10 @@ type stores struct {
 	daemon, broker store.Store
 	// etcd is the daemon's raw backend on etcd. Nil on memory.
 	etcd *etcdstore.Store
-	// judged is etcd as meta/judged's reader, for keepDaemonBundle (re-check
-	// R5): the daemon's role reads meta/. Nil on memory.
-	judged     judgedReader
+	// judged is etcd as meta/judged_bundle's reader, for keepDaemonBundle
+	// (re-check R5): the daemon's role reads that key, not meta/judged. Nil
+	// on memory.
+	judged     judgedBundleReader
 	persistent bool
 	// follow keeps the ledger following the store's contexts, and the
 	// marks, until its ctx ends (crypt.FollowContexts, store.FollowMarks).

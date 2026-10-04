@@ -223,16 +223,22 @@ func lineBundle(b string) string { return printsafe.Line(b, 100) }
 // one of them made (pre-flight I3).
 func owedFullPassAt(lastMismatch time.Time) time.Time { return lastMismatch.Add(policy.MaxTokenTTL) }
 
+// judgedBundleReader reads meta/judged_bundle (etcd.Store): the name of the
+// bundle last judged, which is all port49d's role may read of meta/judged.
+type judgedBundleReader interface {
+	JudgedBundle(ctx context.Context) (bundle string, ok bool, err error)
+}
+
 // keepDaemonBundle is port49d's half (re-check R5): its own policy file
 // decides admission, quarantine and redaction, and can differ from the
 // brokers'. Its role cannot write meta/, so it records nothing; it reads
-// the bundle the runner last judged (meta/judged) every every, gauges
+// the bundle the runner last judged (meta/judged_bundle) every every, gauges
 // whether its own is that one, and says a mismatch once per pair. Right
 // after a rollout the record lags until the runner's settle pass, so a 0
 // then is expected for that long. With no record nothing is known to
 // differ: it gauges 1 and says nothing. A store that does not answer
 // leaves the gauge as it was.
-func keepDaemonBundle(ctx context.Context, judged judgedReader, live *policy.Live, every time.Duration,
+func keepDaemonBundle(ctx context.Context, judged judgedBundleReader, live *policy.Live, every time.Duration,
 	m *metrics.Metrics, out io.Writer) {
 	t := time.NewTicker(every)
 	defer t.Stop()
@@ -240,15 +246,15 @@ func keepDaemonBundle(ctx context.Context, judged judgedReader, live *policy.Liv
 	for {
 		mine := live.Load().Bundle
 		rctx, cancel := context.WithTimeout(ctx, every)
-		rec, ok, err := judged.Judged(rctx)
+		theirs, ok, err := judged.JudgedBundle(rctx)
 		cancel()
 		if err == nil {
-			match := !ok || rec.Bundle == mine
+			match := !ok || theirs == mine
 			m.PolicyBundleMatchesRunner.Set(b2f(match))
-			if pair := mine + " " + rec.Bundle; !match && pair != said {
+			if pair := mine + " " + theirs; !match && pair != said {
 				fmt.Fprintf(out, "port49d: policy: this port49d serves bundle %s and the bundle last judged by "+
 					"the runner is %s; set the same policy file on port49d (policy.file) as on every port49-broker "+
-					"(broker.policy_file)\n", mine, lineBundle(rec.Bundle))
+					"(broker.policy_file)\n", mine, lineBundle(theirs))
 				said = pair
 			} else if match {
 				said = ""

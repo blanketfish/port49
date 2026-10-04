@@ -334,6 +334,20 @@ func (s *Store) Judged(ctx context.Context) (JudgedRecord, bool, error) {
 	return JudgedRecord{Bundle: r.Bundle, Policy: r.Policy, InDoubt: r.InDoubt}, true, nil
 }
 
+// JudgedBundle reads meta/judged_bundle: the bundle's name alone, written
+// with meta/judged so that port49d's gauge need not read the policy file
+// in it. ok is false when none was recorded.
+func (s *Store) JudgedBundle(ctx context.Context) (bundle string, ok bool, err error) {
+	resp, err := s.ctxKV.Get(ctx, s.k.meta("judged_bundle"))
+	if err != nil {
+		return "", false, unavailable(err)
+	}
+	if len(resp.Kvs) == 0 {
+		return "", false, nil
+	}
+	return string(resp.Kvs[0].Value), true, nil
+}
+
 func (s *Store) judgedBody(bundle string, policy []byte) (string, error) {
 	r := judgedRec{Bundle: bundle, Policy: policy, WrittenAt: s.now().UTC()}
 	if len(policy) > maxJudgedPolicy {
@@ -350,7 +364,8 @@ func (s *Store) PutJudged(ctx context.Context, bundle string, policy []byte) err
 	if err != nil {
 		return err
 	}
-	_, err = s.ctxKV.Put(ctx, s.k.meta("judged"), body)
+	_, err = s.ctxKV.Txn(ctx).Then(clientv3.OpPut(s.k.meta("judged"), body),
+		clientv3.OpPut(s.k.meta("judged_bundle"), bundle)).Commit()
 	return unavailable(err)
 }
 
@@ -368,7 +383,7 @@ func (s *Store) PutJudgedSince(ctx context.Context, bundle string, policy []byte
 	resp, err := s.ctxKV.Txn(ctx).If(
 		clientv3.Compare(clientv3.ModRevision(s.k.meta("bundles/")), "<", int64(rev)+1).WithPrefix(),
 		clientv3.Compare(clientv3.ModRevision(key), "<", int64(rev)+1),
-	).Then(clientv3.OpPut(key, body)).Commit()
+	).Then(clientv3.OpPut(key, body), clientv3.OpPut(s.k.meta("judged_bundle"), bundle)).Commit()
 	if err != nil {
 		return false, unavailable(err)
 	}

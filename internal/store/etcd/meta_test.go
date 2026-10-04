@@ -390,9 +390,15 @@ func TestJudgedIsReadBackAndAbsentIsNotFound(t *testing.T) {
 	if got, ok, err := s.Judged(ctx); !ok || err != nil || got.Bundle != "b1" || string(got.Policy) != "grants: []\n" {
 		t.Fatalf("%+v %v %v", got, ok, err)
 	}
+	if b, ok, err := s.JudgedBundle(ctx); err != nil || !ok || b != "b1" {
+		t.Fatalf("meta/judged_bundle beside it: %q %v %v", b, ok, err)
+	}
 	big := []byte(strings.Repeat("#", maxJudgedPolicy+1))
 	if err := s.PutJudged(ctx, "b2", big); err != nil {
 		t.Fatal(err)
+	}
+	if b, _, _ := s.JudgedBundle(ctx); b != "b2" {
+		t.Fatalf("meta/judged_bundle names the bundle even when the policy is left out: %q", b)
 	}
 	if got, ok, err := s.Judged(ctx); !ok || err != nil || got.Bundle != "b2" || got.Policy != nil {
 		t.Fatalf("a policy over maxJudgedPolicy is left out: %v %v %v %d", got.Bundle, ok, err, len(got.Policy))
@@ -560,6 +566,9 @@ func TestAJudgedRecordGoesInDoubtAndIsReplacedOnlyWhenNothingMoved(t *testing.T)
 	}
 	if got, ok, err := s.Judged(ctx); !ok || err != nil || got.InDoubt || got.Bundle != "b1" {
 		t.Fatalf("a record put clears the mark: %+v %v %v", got, ok, err)
+	}
+	if b, ok, err := s.JudgedBundle(ctx); err != nil || !ok || b != "b1" {
+		t.Fatalf("PutJudgedSince writes meta/judged_bundle: %q %v %v", b, ok, err)
 	}
 	if _, rev, err = s.BundlesAt(ctx); err != nil {
 		t.Fatal(err)

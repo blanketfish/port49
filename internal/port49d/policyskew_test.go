@@ -217,6 +217,11 @@ func (j *judgedVar) Judged(context.Context) (etcdstore.JudgedRecord, bool, error
 	return j.rec, j.ok, nil
 }
 
+func (j *judgedVar) JudgedBundle(ctx context.Context) (string, bool, error) {
+	rec, ok, err := j.Judged(ctx)
+	return rec.Bundle, ok, err
+}
+
 func (j *judgedVar) set(rec etcdstore.JudgedRecord, ok bool) {
 	j.mu.Lock()
 	defer j.mu.Unlock()

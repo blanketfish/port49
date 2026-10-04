@@ -51,6 +51,11 @@ func storeRolesCmd(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "port49d store-roles: %s names store.etcd.broker, a 7d layout: move the broker's "+
 			"identity to port49-broker.yaml and pass it with --broker-config\n", *cfgPath)
 	} else {
+		if dsc.Etcd.Broker != nil {
+			stale, _ := commonName(dsc.Etcd.Broker.CertFile)
+			fmt.Fprintf(stderr, "port49d store-roles: %s still names store.etcd.broker (CN %q); the broker's identity "+
+				"is read from %s; remove it from port49d.yaml, which port49d refuses at start\n", *cfgPath, stale, *brokerPath)
+		}
 		bsc, err := storeBlocksOf(*brokerPath)
 		if err != nil {
 			fmt.Fprintf(stderr, "port49d store-roles: the broker's identity is read from port49-broker.yaml, "+
@@ -121,6 +126,10 @@ func storeRolesCmd(args []string, stdout, stderr io.Writer) int {
 		perm := "read"
 		if g.Write {
 			perm = "readwrite"
+		}
+		if g.RangeEnd == "" { // one key: no --prefix, or etcd would grant everything under it
+			fmt.Fprintf(stdout, "etcdctl role grant-permission %s %s %s\n", g.Role, perm, g.Key)
+			continue
 		}
 		fmt.Fprintf(stdout, "etcdctl role grant-permission %s %s --prefix=true %s\n", g.Role, perm, g.Key)
 	}
