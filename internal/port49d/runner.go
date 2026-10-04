@@ -8,6 +8,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/rhwendt/port49/internal/broker"
 	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
@@ -47,6 +49,14 @@ type runner struct {
 	// takeover read before its carry, which judged every live context: the
 	// duties' watch (owed) owes nothing for it.
 	covered uint64
+	// copy is this replica's copy of the marks (broker.state_dir/marks.json),
+	// and marks the ones it enforces, which its marks feed keeps (Ruling 12).
+	copy  *marksCopy
+	marks *store.Marks
+	// marksReloaded is told, buffered one, when the hook before a marks
+	// reload put a mark back: the duties apply the marks to the kept
+	// contexts again (restoreMarks).
+	marksReloaded chan struct{}
 }
 
 // judgedStore is meta/ as the runner reads and writes it (etcd.Store):
@@ -148,7 +158,8 @@ func (r *runner) run(ctx context.Context) {
 }
 
 // duties is the takeover, then the sweep, the ledger record's keeper,
-// meta/judged's writer and the refresh's context half, until ctx ends.
+// meta/judged's writer, the marks' reapplying after a put-back and the
+// refresh's context half, until ctx ends.
 func (r *runner) duties(ctx context.Context) {
 	carried, err := r.takeover(ctx)
 	if err != nil {
@@ -163,8 +174,9 @@ func (r *runner) duties(ctx context.Context) {
 		return
 	}
 	var wg sync.WaitGroup
-	wg.Add(4)
+	wg.Add(5)
 	go func() { defer wg.Done(); r.judging(ctx) }()
+	go func() { defer wg.Done(); r.reapplying(ctx) }()
 	go func() { defer wg.Done(); r.owed(ctx) }()
 	go func() {
 		defer wg.Done()
@@ -219,6 +231,152 @@ func (r *runner) settled(p *policy.Policy) {
 	case r.judge <- p:
 	default:
 	}
+}
+
+// reapplying, on each marksReloaded, puts back what is still missing
+// (restoreMarks) and applies every standing mark the store holds to the
+// live contexts, as the takeover does, until ctx ends: a mark the hook put
+// back before a marks reload reached this replica's marks and listener
+// through the feed, and the contexts the restore put back reach it here.
+func (r *runner) reapplying(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-r.marksReloaded:
+		}
+		if err := r.restoreMarks(ctx); err != nil {
+			if ctx.Err() == nil {
+				fmt.Fprintf(stderr, "port49-broker: runner: after a put-back: %v; put back again before the next "+
+					"marks reload and at the next takeover\n", err)
+			}
+			continue
+		}
+		var all []store.Revocation
+		var marked int
+		if err := retryCtx(ctx, func() (err error) {
+			if all, err = r.st.ListRevocations(ctx); err != nil {
+				return fmt.Errorf("listing the revocations in force: %w", err)
+			}
+			if marked, err = r.brk.ApplyMarksAtStart(ctx, all); err != nil {
+				return fmt.Errorf("applying the standing revocations to the live contexts: %w", err)
+			}
+			return nil
+		}); err != nil {
+			if ctx.Err() == nil {
+				fmt.Fprintf(stderr, "port49-broker: runner: after a put-back: %v; applied again at the next "+
+					"takeover\n", err)
+			}
+			continue
+		}
+		fmt.Fprintf(stderr, "port49-broker: runner: %d standing revocation(s) applied to the live contexts after a "+
+			"put-back (%d context(s) marked revoked)\n", len(all), marked)
+	}
+}
+
+// putBackMissing puts back, once, every mark this replica's copy holds
+// that the store lacks, and returns the ones that landed (plan 7e, Ruling
+// 12; pre-flight I5): an etcd restore's lost revocations, or a lift this
+// copy missed. Both deny more, and the line says how to lift.
+func (r *runner) putBackMissing(ctx context.Context) ([]store.Revocation, error) {
+	stored, err := r.st.ListRevocations(ctx)
+	if err != nil {
+		return nil, err
+	}
+	missing := r.copy.Missing(stored)
+	for i, m := range missing {
+		if err := r.st.PutRevocation(ctx, m); err != nil {
+			return missing[:i], err
+		}
+	}
+	return missing, nil
+}
+
+// restoreMarks is putBackMissing retried while the store is unavailable
+// and ctx lives, said either way: the takeover's step, before it applies
+// every mark to the kept contexts, and reapplying's on each
+// marksReloaded. The marks feed brings what it put back to every process.
+func (r *runner) restoreMarks(ctx context.Context) error {
+	var put []store.Revocation
+	if err := retryCtx(ctx, func() error {
+		p, err := r.putBackMissing(ctx)
+		put = append(put, p...)
+		if err != nil {
+			return fmt.Errorf("putting broker.state_dir/marks.json's marks back into the store: %w", err)
+		}
+		return nil
+	}); err != nil {
+		if len(put) > 0 {
+			sayPutBack(put)
+		}
+		return err
+	}
+	if len(put) == 0 {
+		fmt.Fprintln(stderr, "port49-broker: runner: every revocation in broker.state_dir/marks.json is in the store")
+		return nil
+	}
+	sayPutBack(put)
+	return nil
+}
+
+// reloadHook is the marks feed's rescanned on every replica (store.
+// FollowMarks; plan 7e, Ruling 12). It counts a rescan. While this replica
+// runs, it puts back every mark its copy holds that the store lacks, once
+// and bounded, before the reload reads the store: a reload first would
+// lift each lost mark from this replica's marks and listener. A put-back
+// that fails returns an error, so the reload is refused and the marks
+// feed is down until a put-back lands, tried again every second
+// (re-review 1 C-2). What it put back is applied to the kept contexts by
+// the duties (marksReloaded). A replica that does not run, or runs its
+// takeover still, puts nothing back: it keeps in force (store.Marks.Keep)
+// every mark it enforces that its copy holds and the store lacks, so its
+// listener refuses that principal until the runner's put-back arrives, and
+// names them, once for one set (keptSayerAs); a read that fails refuses
+// the reload (pre-flight 7e-2 P-3).
+func (r *runner) reloadHook(ctx context.Context, rescans prometheus.Counter) func() error {
+	say := keptSayerAs(stderr, "port49-broker", "this replica", "as its marks feed reloads", "")
+	return func() error {
+		rescans.Inc()
+		pctx, cancel := context.WithTimeout(ctx, r.cfg.Store.Etcd.BulkTimeout)
+		defer cancel()
+		if !r.running() {
+			stored, err := r.st.ListRevocations(pctx)
+			if err != nil {
+				return fmt.Errorf("reading the marks before the marks reload: %w; the marks are not reloaded "+
+					"until they are read", err)
+			}
+			var kept []store.Revocation
+			for _, m := range r.copy.Missing(stored) {
+				if r.marks.Holds(m.Kind, m.Key) {
+					r.marks.Keep(m)
+					kept = append(kept, m)
+				}
+			}
+			say(kept)
+			return nil
+		}
+		put, err := r.putBackMissing(pctx)
+		if len(put) > 0 {
+			sayPutBack(put)
+			select {
+			case r.marksReloaded <- struct{}{}:
+			default:
+			}
+		}
+		if err != nil {
+			return fmt.Errorf("runner: putting broker.state_dir/marks.json's marks back into the store before the "+
+				"marks reload: %w; the marks are not reloaded until they are back", err)
+		}
+		return nil
+	}
+}
+
+// sayPutBack is the put-back line, naming each mark (re-check R4).
+func sayPutBack(put []store.Revocation) {
+	fmt.Fprintf(stderr, "port49-broker: runner: %d revocation(s) in broker.state_dir/marks.json were missing from the "+
+		"store (an etcd restore, or a lift made while this replica's watch was compacted away or it was stopped) "+
+		"and are put back: %s; lift any that were lifted on purpose with port49 revoke --lift\n", len(put),
+		namedMarks(put))
 }
 
 // judging records each policy a settled pass hands it as judged, under
@@ -473,10 +631,13 @@ func startLeftBy(err error) (owed refreshOwed, again error) {
 // serving (decision 35, a start on etcd; plan 7e, Ruling 6; pre-flight C1,
 // M41; re-check IA2):
 //  1. records this start's seal keys, warning on the last (checkSealKeys);
-//  2. re-indexes every kept context the index lost (raw.Unindexed, then
-//     ReindexContexts), so the passes below reach it;
-//  3. applies every standing mark the store holds to the live contexts it
-//     kept, by 7a's two context passes;
+//  2. puts back every mark this replica's copy holds that the store lacks
+//     (restoreMarks; Ruling 12), then lists the marks, so those are applied
+//     with the rest;
+//  3. re-indexes every kept context the index lost (raw.Unindexed, then
+//     ReindexContexts), so the passes below reach it, and applies every
+//     standing mark the store holds to the live contexts it kept, by 7a's
+//     two context passes;
 //  4. purges the unspent tokens, and supersedes every key, only when the
 //     bundle in force is not the one meta/judged names (Ruling 7);
 //  5. carries the policy in force into every live context the store
@@ -495,6 +656,11 @@ func (r *runner) takeover(ctx context.Context) (*policy.Policy, error) {
 	if err := retryCtx(ctx, func() error {
 		return checkSealKeysAs(ctx, "port49-broker", r.raw, r.keys, r.m, stderr, 4*e.CallTimeout, r.alarm, true)
 	}); err != nil {
+		return nil, err
+	}
+	// The marks the store lost are put back first, and listed after, so
+	// they are applied with the rest (Ruling 12; pre-flight I5).
+	if err := r.restoreMarks(ctx); err != nil {
 		return nil, err
 	}
 	var all []store.Revocation

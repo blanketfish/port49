@@ -28,7 +28,13 @@ import (
 // proxy to it the test can hang.
 func rolesMember(t *testing.T) (*etcdtest.Server, *etcdtest.Proxy) {
 	t.Helper()
-	srv := etcdtest.Start(t, etcdtest.Options{TLS: true})
+	return rolesMemberOpts(t, etcdtest.Options{TLS: true})
+}
+
+// rolesMemberOpts is rolesMember on a member started with o.
+func rolesMemberOpts(t *testing.T, o etcdtest.Options) (*etcdtest.Server, *etcdtest.Proxy) {
+	t.Helper()
+	srv := etcdtest.Start(t, o)
 	var grants []etcdtest.Grant
 	for _, g := range etcd.Roles("/port49/") {
 		grants = append(grants, etcdtest.Grant{Role: g.Role, Key: g.Key, RangeEnd: g.RangeEnd, Write: g.Write})
@@ -60,7 +66,14 @@ func etcdSplitServer(t *testing.T) (daemonCfg string, proxy *etcdtest.Proxy, srv
 func etcdSplitServerWith(t *testing.T, policyBody string, others []string) (daemonCfg string,
 	proxy *etcdtest.Proxy, srv *etcdtest.Server) {
 	t.Helper()
-	srv, proxy = rolesMember(t)
+	return etcdSplitServerOpts(t, policyBody, others, etcdtest.Options{TLS: true})
+}
+
+// etcdSplitServerOpts is etcdSplitServerWith on a member started with o.
+func etcdSplitServerOpts(t *testing.T, policyBody string, others []string, o etcdtest.Options) (daemonCfg string,
+	proxy *etcdtest.Proxy, srv *etcdtest.Server) {
+	t.Helper()
+	srv, proxy = rolesMemberOpts(t, o)
 	dc, dk := srv.ClientFiles(t, "port49-daemon")
 	b := brokerConfigWith(t, policyBody, others).Broker
 	daemonCfg = writeRunConfig(t, b)

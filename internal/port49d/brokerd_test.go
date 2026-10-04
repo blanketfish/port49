@@ -1,12 +1,15 @@
 package port49d
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -55,8 +58,21 @@ func splitFleet(t *testing.T) *fleet {
 // for each of others (brokerConfigWith).
 func splitFleetWith(t *testing.T, policyBody string, others []string) *fleet {
 	t.Helper()
+	return splitFleetOpts(t, policyBody, others, etcdtest.Options{TLS: true})
+}
+
+// splitFleetProgress is splitFleet on a member that sends a watch asking
+// for them a progress notification every every (final review 7e-1 I-1).
+func splitFleetProgress(t *testing.T, every time.Duration) *fleet {
+	t.Helper()
+	return splitFleetOpts(t, minimalPolicy, nil, etcdtest.Options{TLS: true, ProgressNotify: every})
+}
+
+// splitFleetOpts is splitFleetWith on a member started with o.
+func splitFleetOpts(t *testing.T, policyBody string, others []string, o etcdtest.Options) *fleet {
+	t.Helper()
 	f := &fleet{}
-	f.daemon, f.proxy, f.srv = etcdSplitServerWith(t, policyBody, others)
+	f.daemon, f.proxy, f.srv = etcdSplitServerOpts(t, policyBody, others, o)
 	raw, err := os.ReadFile(f.daemon)
 	if err != nil {
 		t.Fatal(err)
@@ -176,6 +192,52 @@ func (f *fleet) bundle(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return pol.Bundle
+}
+
+// stateDirOf is the broker.state_dir the port49-broker.yaml at cfg names.
+func (f *fleet) stateDirOf(t *testing.T, cfg string) string {
+	t.Helper()
+	raw, err := os.ReadFile(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return regexp.MustCompile(`(?m)^  state_dir: (\S+)$`).FindStringSubmatch(string(raw))[1]
+}
+
+// stateDir is f.broker's broker.state_dir.
+func (f *fleet) stateDir(t *testing.T) string {
+	t.Helper()
+	return f.stateDirOf(t, f.broker)
+}
+
+// copyHolds reads marks.json in the broker.state_dir dir and returns a 1
+// or a 0 per principal key, in order: whether the copy holds its mark.
+func copyHolds(t *testing.T, dir string, keys ...string) string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(dir, stateMarksFile))
+	if errors.Is(err, os.ErrNotExist) {
+		return strings.Repeat("0", len(keys))
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	var f struct {
+		Marks []struct{ Kind, Key string } `json:"marks"`
+	}
+	if err := json.Unmarshal(raw, &f); err != nil {
+		return "" // mid-write it is never partial (a rename), so this fails the wait
+	}
+	var b strings.Builder
+	for _, k := range keys {
+		held := "0"
+		for _, m := range f.Marks {
+			if m.Kind == store.RevocationPrincipal && m.Key == k {
+				held = "1"
+			}
+		}
+		b.WriteString(held)
+	}
+	return b.String()
 }
 
 // adminSocketOf is the admin_socket the config at cfg names.
@@ -1105,8 +1167,9 @@ func TestOnlyTheRunnersPassJudgesContexts(t *testing.T) {
 	}
 }
 
-// port49-broker takes --config alone: any other argument is refused with
-// exit 2, before anything starts (Task 15b adds revoke --offline).
+// port49-broker takes --config alone, or the revoke subcommand: any other
+// argument is refused with exit 2, before anything starts, and so is revoke
+// without --offline (TestARevokeWithoutOfflineNamesTheSocket).
 func TestBrokerMainTakesConfigAlone(t *testing.T) {
 	for _, args := range [][]string{{"revoke"}, {"--config", "/nonexistent", "extra"}, {"--listen", ":49"}} {
 		if code := BrokerMain(args); code != 2 {
@@ -1131,43 +1194,6 @@ func floorIn(t *testing.T, root *clientv3.Client, key string) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	t.Fatalf("the ledger record at %s never held a floor", key)
-}
-
-// Every port49-broker replica's hook before a marks reload, the runner's
-// included, keeps every mark it enforces that the store lacks, so the
-// reload lifts none from its marks or its listener, and names them as
-// this replica's; a read that fails refuses the reload (final review 7e-1
-// C-1; carry C6; Task 15 review M-4). Task 15b's copy also puts back.
-func TestTheBrokersReloadHookKeepsWhatTheStoreLost(t *testing.T) {
-	ctx := context.Background()
-	alice := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:alice@example.com", At: time.Unix(10, 0).UTC()}
-	carol := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:carol@example.com", At: time.Unix(11, 0).UTC()}
-	enforced := store.NewMarks()
-	enforced.Set(alice, true)
-	enforced.Set(carol, true)
-	rescans := prometheus.NewCounter(prometheus.CounterOpts{Name: "rescans"})
-	var out strings.Builder
-	if err := brokerReloadHook(ctx, marksIn{err: store.ErrUnavailable}, enforced, rescans, time.Second, &out)(); err == nil {
-		t.Fatal("a read that failed did not refuse the reload")
-	}
-	feed := marksIn{rs: []store.Revocation{carol}} // the restore lost alice's
-	if err := brokerReloadHook(ctx, feed, enforced, rescans, time.Second, &out)(); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(out.String(), "port49-broker: store: 1 revocation(s) this replica enforces are missing "+
-		"from the store as its marks feed reloads") || !strings.HasSuffix(out.String(),
-		"or restart this replica): principal user:alice@example.com\n") {
-		t.Fatalf("said %q", out.String())
-	}
-	if _, err := store.LoadMarks(ctx, feed, enforced, nil); err != nil {
-		t.Fatal(err)
-	}
-	if !enforced.Holds(alice.Kind, alice.Key) || !enforced.Holds(carol.Kind, carol.Key) {
-		t.Fatalf("the reload lifted a kept mark: %+v", enforced.All())
-	}
-	if n := testutil.ToFloat64(rescans); n != 2 {
-		t.Fatalf("counted %v rescans, want 2", n)
-	}
 }
 
 // A replica that minted under a policy the runner had replaced, then
@@ -1390,4 +1416,237 @@ func TestARunnersSwapMarksTheJudgedBundleInDoubt(t *testing.T) {
 	}
 	startBroker(t, cfgB, &out, 2)
 	waitWithin(t, &out, "is in doubt, a replica having served another since; ", 30*time.Second)
+}
+
+// After a restore loses a revocation, the runner's takeover puts it back
+// from its copy and says so; a mark lifted through the watch is not put
+// back (Ruling 12; pre-flight I5). Both were made and the lift lifted on
+// the runner's own admin socket: its own changes reach its copy too.
+func TestATakeoverPutsBackAMarkTheStoreLost(t *testing.T) {
+	var out syncBuffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	f := splitFleet(t)
+	root := f.srv.Client(t, "root")
+	_, stop := startBroker(t, f.broker, &out, 1)
+	waitFor(t, &out, "runner: recorded bundle ")
+	sock := adminSocketOf(t, f.broker)
+	for _, req := range []admin.Request{
+		{Op: "revoke", Principal: "user:alice@example.com"},
+		{Op: "revoke", Principal: "user:carol@example.com"},
+		{Op: "revoke", Principal: "user:carol@example.com", Lift: true},
+	} {
+		if resp := askSocket(t, sock, req); resp.Error != "" {
+			t.Fatalf("%+v: %+v", req, resp)
+		}
+	}
+	waitUntil(t, "the copy to hold alice and not carol", func() bool {
+		return copyHolds(t, f.stateDir(t), "user:alice@example.com", "user:carol@example.com") == "10"
+	})
+	if err := stop(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := root.Delete(context.Background(), "/port49/v1/rv/principal/user:alice@example.com"); err != nil {
+		t.Fatal(err) // what a restore from before the revocation leaves
+	}
+	startBroker(t, f.broker, &out, 2)
+	waitFor(t, &out, "1 revocation(s) in broker.state_dir/marks.json were missing from the store")
+	waitFor(t, &out, "are put back: principal user:alice@example.com; lift any") // named (re-check R4)
+	resp, err := root.Get(context.Background(), "/port49/v1/rv/principal/", clientv3.WithPrefix())
+	if err != nil || len(resp.Kvs) != 1 || !strings.Contains(string(resp.Kvs[0].Key), "alice") {
+		t.Fatalf("the store's marks after the takeover: %v %v", resp, err)
+	}
+}
+
+// A lift made on another replica while the runner's marks watch is broken
+// for a moment, within the compaction retention, reaches the runner's copy
+// as a lift when its watch resumes from its last progress notification,
+// and is never put back: no reload runs (final review 7e-1 I-1). Resumed
+// from its last change instead, the watch would be compacted and reload,
+// and the runner's hook would put alice back. The negative control of
+// TestATakeoverPutsBackAMarkTheStoreLost.
+func TestALiftAcrossAShortWatchBreakIsNotPutBack(t *testing.T) {
+	var out syncBuffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	f := splitFleetProgress(t, 200*time.Millisecond)
+	root := f.srv.Client(t, "root")
+	ctx := context.Background()
+	cfgA, proxyA := f.copyBrokerVia(t)
+	startBroker(t, cfgA, &out, 1)
+	waitFor(t, &out, "runner: recorded bundle ") // A runs
+	cfgB := f.copyBroker(t)
+	startBroker(t, cfgB, &out, 2)
+	waitFor(t, &out, "this replica serves the API and takes over if that one stops")
+	const alice = "user:alice@example.com"
+	if resp := askSocket(t, adminSocketOf(t, cfgB), admin.Request{Op: "revoke", Principal: alice}); resp.Error != "" {
+		t.Fatalf("revoke on B: %+v", resp)
+	}
+	waitUntil(t, "A's copy to hold alice", func() bool { return copyHolds(t, f.stateDirOf(t, cfgA), alice) == "1" })
+	// Writes elsewhere move the store past alice's mark, A's marks watch is
+	// told a progress at or above them, and the store is compacted there:
+	// above A's last change, at or below its last progress.
+	var top int64
+	for range 3 {
+		resp, err := root.Put(ctx, "/restore-test/bump", "x")
+		if err != nil {
+			t.Fatal(err)
+		}
+		top = resp.Header.Revision
+	}
+	time.Sleep(time.Second) // five progress intervals
+	if _, err := root.Compact(ctx, top); err != nil {
+		t.Fatal(err)
+	}
+	proxyA.Hang(true)
+	if resp := askSocket(t, adminSocketOf(t, cfgB), admin.Request{Op: "revoke", Principal: alice,
+		Lift: true}); resp.Error != "" {
+		t.Fatalf("lift on B: %+v", resp)
+	}
+	proxyA.Drop() // A's streams end, and it reconnects
+	waitUntil(t, "A's copy to drop alice", func() bool { return copyHolds(t, f.stateDirOf(t, cfgA), alice) == "0" })
+	if s := out.String(); strings.Contains(s, "the marks feed's revision was compacted") ||
+		strings.Contains(s, "were missing from the store") {
+		t.Fatalf("a short break reloaded or put back:\n%s", s)
+	}
+	if resp, err := root.Get(ctx, "/port49/v1/rv/principal/"+url.PathEscape(alice)); err != nil || len(resp.Kvs) != 0 {
+		t.Fatalf("the lift was put back: %v %v", resp, err)
+	}
+}
+
+// A replica that does not run, restarted after a restore lost a mark its
+// copy holds, keeps that mark in force from its start: its listener
+// refuses alice as she binds, before any put-back, and the start names
+// it. A restart never lifts a mark the store lost (Ruling 12).
+func TestARestartedReplicaKeepsAMarkTheStoreLost(t *testing.T) {
+	var out syncBuffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	f := splitFleet(t)
+	root := f.srv.Client(t, "root")
+	const alice = "user:alice@example.com"
+	_, stopA := startBroker(t, f.broker, &out, 1)
+	waitFor(t, &out, "runner: recorded bundle ")
+	if resp := askSocket(t, adminSocketOf(t, f.broker), admin.Request{Op: "revoke", Principal: alice}); resp.Error != "" {
+		t.Fatalf("revoke: %+v", resp)
+	}
+	waitUntil(t, "A's copy to hold alice", func() bool { return copyHolds(t, f.stateDir(t), alice) == "1" })
+	if err := stopA(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := root.Delete(context.Background(), "/port49/v1/rv/principal/"+alice); err != nil {
+		t.Fatal(err) // what a restore from before the revocation leaves
+	}
+	cfgB := f.copyBroker(t) // its copy holds nothing: it runs, and puts nothing back
+	startBroker(t, cfgB, &out, 2)
+	waitFor(t, &out, "runner: recorded bundle ")
+	apiA, _ := startBroker(t, f.broker, &out, 3)
+	waitFor(t, &out, "this replica serves the API and takes over if that one stops")
+	waitFor(t, &out, "port49-broker: store: 1 revocation(s) this replica enforces are missing from the store at "+
+		"this start")
+	status, body, err := postAsAlice(f.pki, apiA)
+	if err != nil || status != http.StatusUnauthorized || !strings.Contains(body, `"credential_revoked"`) {
+		t.Fatalf("alice's first connection to the restarted replica: %s %v", reply(status, body), err)
+	}
+	if resp, err := root.Get(context.Background(), "/port49/v1/rv/principal/"+alice); err != nil || len(resp.Kvs) != 0 {
+		t.Fatalf("a replica that does not run put a mark back: %v %v", resp, err)
+	}
+}
+
+// With every port49-broker stopped, the offline revocation reaches a live
+// session on port49d at its next command, and deletes a token minted
+// before (Ruling 13; pre-flight I4). The next broker start refuses alice
+// before it mints anything: its first request is refused as it binds.
+func TestAnOfflineRevokeDeniesWithEveryBrokerStopped(t *testing.T) {
+	var out, log syncBuffer
+	e, o := stderr, stdout
+	t.Cleanup(func() { stderr, stdout = e, o })
+	stderr, stdout = &out, &log
+	f := splitFleet(t)
+	tacacs := startSplitDaemon(t, f.daemon, &out, 1)
+	api, stop := startBroker(t, f.broker, &out, 1)
+	dev := tacacsClient{t: t, addr: tacacs, key: []byte("run-test-secret")}
+	loginSession(t, dev, mintOn(t, api, f.pki, "leaf1"), &log)
+	spare := mintOn(t, api, f.pki, "leaf1")
+	if err := stop(); err != nil {
+		t.Fatal(err)
+	}
+	if !dev.permits("alice", "configure") {
+		t.Fatal("control: the session runs on with every broker stopped")
+	}
+	var rout, rerr bytes.Buffer
+	if code := offlineRevoke([]string{"--offline", "--config", f.broker, "--principal", "user:alice@example.com"},
+		&rout, &rerr); code != 0 {
+		t.Fatalf("exit %d: %s", code, rerr.String())
+	}
+	if !strings.Contains(rerr.String(), "port49-broker: revoke (offline, no API): revoked user:alice@example.com") {
+		t.Fatalf("the report: %s", rerr.String())
+	}
+	waitUntil(t, "the device to deny alice configure", func() bool { return !dev.permits("alice", "configure") })
+	if r := lastCommand(t, &log); r["reason"] != "credential_revoked" {
+		t.Fatalf("the denial: %v", r)
+	}
+	if st := dev.login("alice", spare); st == wire.AuthenStatusPass {
+		t.Fatal("a token minted before the offline revocation still logged in")
+	}
+	api, _ = startBroker(t, f.broker, &out, 2)
+	status, body, err := postAsAlice(f.pki, api)
+	if err != nil || status != http.StatusUnauthorized || !strings.Contains(body, `"credential_revoked"`) {
+		t.Fatalf("alice's first connection after the next start: %s %v", reply(status, body), err)
+	}
+}
+
+// A restore under a running runner, which compacts its marks watch past
+// its last change, is put back by the runner's hook before the marks
+// reload: the store holds alice again, and the reload lifts her from no
+// replica's marks or listener (plan 7e, Ruling 12; final review 7e-1
+// C-1). The runner's hook as runBroker wires it.
+func TestARestoreUnderARunningRunnerIsPutBackBeforeTheReload(t *testing.T) {
+	var out syncBuffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	f := splitFleet(t)
+	root := f.srv.Client(t, "root")
+	ctx := context.Background()
+	const alice = "user:alice@example.com"
+	cfgA, proxyA := f.copyBrokerVia(t)
+	apiA, _ := startBroker(t, cfgA, &out, 1)
+	waitFor(t, &out, "runner: recorded bundle ")
+	if resp := askSocket(t, adminSocketOf(t, cfgA), admin.Request{Op: "revoke", Principal: alice}); resp.Error != "" {
+		t.Fatalf("revoke: %+v", resp)
+	}
+	waitUntil(t, "A's copy to hold alice", func() bool { return copyHolds(t, f.stateDirOf(t, cfgA), alice) == "1" })
+	proxyA.Hang(true)
+	if _, err := root.Delete(ctx, "/port49/v1/rv/principal/"+alice); err != nil {
+		t.Fatal(err) // what a restore from before the revocation leaves
+	}
+	var top int64
+	for range 3 {
+		resp, err := root.Put(ctx, "/restore-test/bump", "x")
+		if err != nil {
+			t.Fatal(err)
+		}
+		top = resp.Header.Revision
+	}
+	if _, err := root.Compact(ctx, top); err != nil {
+		t.Fatal(err)
+	}
+	proxyA.Drop()
+	waitWithin(t, &out, "port49-broker: runner: 1 revocation(s) in broker.state_dir/marks.json were missing from the "+
+		"store", 20*time.Second)
+	if resp, err := root.Get(ctx, "/port49/v1/rv/principal/"+alice); err != nil || len(resp.Kvs) != 1 {
+		t.Fatalf("the runner did not put alice back: %v %v", resp, err)
+	}
+	waitFor(t, &out, "standing revocation(s) applied to the live contexts after a put-back")
+	if strings.Contains(out.String(), "a reload of the marks found the revocation of "+alice+" lifted") {
+		t.Fatalf("the reload lifted alice:\n%s", out.String())
+	}
+	status, body, err := postAsAlice(f.pki, apiA)
+	if err != nil || status != http.StatusUnauthorized || !strings.Contains(body, `"credential_revoked"`) {
+		t.Fatalf("alice after the restore: %s %v", reply(status, body), err)
+	}
 }

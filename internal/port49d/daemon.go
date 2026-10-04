@@ -55,9 +55,9 @@ func daemonReloadHook(ctx context.Context, feed store.MarkFeed, enforced *store.
 // keepingReloadHook is a marks feed's rescanned that puts nothing back:
 // each call counts a rescan, keeps in force every mark enforced holds that
 // the store lacks (keepLost), and tells say which; a read that fails
-// refuses the reload. port49d's (daemonReloadHook), and in Task 15 every
-// port49-broker replica's, the runner's included, until Task 15b's copy
-// puts back what the store lost (plan 7e, Ruling 12).
+// refuses the reload: port49d's (daemonReloadHook). port49-broker's is
+// the runner's (runner.reloadHook), whose copy puts back what the store
+// lost (plan 7e, Ruling 12).
 func keepingReloadHook(ctx context.Context, feed store.MarkFeed, enforced *store.Marks,
 	rescans prometheus.Counter, bound time.Duration, say func([]store.Revocation)) func() error {
 	return func() error {
@@ -133,13 +133,15 @@ func keepLost(ctx context.Context, feed store.MarkFeed, enforced *store.Marks,
 // feed delivers, and a lift after it is delivered as a lift (task 14
 // review I-2).
 func keptSayer(out io.Writer, when string) func([]store.Revocation) {
-	return keptSayerAs(out, "port49d", "this port49d", when)
+	return keptSayerAs(out, "port49d", "this port49d", when, ", or restart this port49d")
 }
 
 // keptSayerAs is keptSayer for proc, the process its lines begin with,
 // which self names: port49d's "this port49d", a port49-broker's "this
-// replica", whose line names the same release (task 14 review I-2).
-func keptSayerAs(out io.Writer, proc, self, when string) func([]store.Revocation) {
+// replica", whose line names the same release (task 14 review I-2), and
+// also after it: port49d's restart, which a port49-broker's lacks, since
+// its copy keeps the mark through a restart too (keepCopied).
+func keptSayerAs(out io.Writer, proc, self, when, also string) func([]store.Revocation) {
 	said := ""
 	return func(kept []store.Revocation) {
 		var set strings.Builder
@@ -154,7 +156,7 @@ func keptSayerAs(out io.Writer, proc, self, when string) func([]store.Revocation
 			fmt.Fprintf(out, "%s: store: %d revocation(s) %s enforces are missing from the store "+
 				"%s (an etcd restore, or lifted on port49-broker while the feed was down) and stay in force "+
 				"here (to release one lifted on purpose, revoke it again on port49-broker, then lift it with "+
-				"port49 revoke --lift, or restart %s): %s\n", proc, len(kept), self, when, self, namedMarks(kept))
+				"port49 revoke --lift%s): %s\n", proc, len(kept), self, when, also, namedMarks(kept))
 		}
 	}
 }

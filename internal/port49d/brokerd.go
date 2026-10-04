@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -41,8 +42,12 @@ import (
 // BrokerMain runs port49-broker with args (os.Args[1:]) and returns its
 // exit code (plan 7e): port49d's broker path as a process of its own on
 // etcd, with no TACACS+ listener, on the broker's identity alone. It takes
-// --config and nothing else; Task 15b adds `revoke --offline`.
+// --config and nothing else, or the subcommand `revoke --offline`
+// (offlineRevoke; Ruling 13).
 func BrokerMain(args []string) int {
+	if len(args) > 0 && args[0] == "revoke" {
+		return offlineRevoke(args[1:], os.Stdout, os.Stderr)
+	}
 	fs := flag.NewFlagSet("port49-broker", flag.ContinueOnError)
 	cfgPath := fs.String("config", "/etc/port49/port49-broker.yaml", "path to port49-broker.yaml")
 	if err := fs.Parse(args); err != nil {
@@ -169,18 +174,6 @@ func openBroker(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 	return bs, nil
 }
 
-// brokerReloadHook is every port49-broker replica's rescanned for its
-// marks feed, the runner's included (carry C6): it keeps every mark this
-// replica enforces that the store lacks, in its marks and so its
-// listener, names them as this replica's, and refuses the reload on a
-// read that fails (keepingReloadHook; final review 7e-1 C-1). Task 15b
-// replaces it with one that also puts back on the runner.
-func brokerReloadHook(ctx context.Context, feed store.MarkFeed, enforced *store.Marks,
-	rescans prometheus.Counter, bound time.Duration, out io.Writer) func() error {
-	return keepingReloadHook(ctx, feed, enforced, rescans, bound,
-		keptSayerAs(out, "port49-broker", "this replica", "as its marks feed reloads"))
-}
-
 // announceBroker is announce for port49-broker.yaml: each notice
 // config.LoadBroker left, and the lab block's warning. Under the broker's
 // role a lab: block holds the seed tokens alone (plan 7e, Ruling 2).
@@ -205,7 +198,9 @@ func announceBroker(w io.Writer, cfg *config.Config) {
 //  3. the inventory service's cold start, when it names one;
 //  4. broker.state_dir's owner (ownStateDir), the keys and the tag key;
 //  5. the store, the ledger and the marks (openBroker), the context feed
-//     following at once;
+//     following at once; this replica's copy of the marks
+//     (broker.state_dir/marks.json), filled from the load, and every mark
+//     it holds that the store lacks kept in force (keepCopied);
 //  6. the broker; the reload guard at a start (passGuardAtStart), which
 //     holds the start, not ready, while the policy file is refused against
 //     the bundle last judged; this replica's bundle record (keepBundle) and
@@ -324,6 +319,8 @@ func runBroker(parent context.Context, cfgPath string) error {
 		m.RevocationsInForce.WithLabelValues(store.RevocationPrincipal).Set(float64(principal))
 		m.RevocationsInForce.WithLabelValues(store.RevocationCert).Set(float64(cert))
 	})
+	// This replica's copy of the marks (Ruling 12), opened before they load.
+	marksCopy := openMarksCopy(filepath.Join(cfg.Broker.StateDir, stateMarksFile), stderr)
 	bs, err := openBroker(ctx, cfg, keys, m, stderr, ledger, marks)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -331,6 +328,14 @@ func runBroker(parent context.Context, cfgPath string) error {
 		}
 		return err
 	}
+	// The load is the store's marks at one revision: the copy adds each, and
+	// every mark the copy holds that the store lacks stays in force here, so
+	// a restart lifts no mark an etcd restore lost, before the listener is
+	// built from the marks (pre-flight I5).
+	stored := marks.All()
+	keptAtStart := keepCopied(marksCopy, marks, stored)
+	marksCopy.stand(stored)
+	keptSayerAs(stderr, "port49-broker", "this replica", "at this start", "")(keptAtStart)
 	// Every goroutine below is joined (wg) before the store closes.
 	var wg sync.WaitGroup
 	defer bs.raw.Close()
@@ -392,7 +397,8 @@ func runBroker(parent context.Context, cfgPath string) error {
 		keepBundle(ctx, bs.raw, who, brk.Policy, cfg.Store.Etcd.HoldTTL, swapped, m, stderr)
 	}()
 	rn := &runner{cfg: cfg, brk: brk, raw: bs.raw, st: bs.st, meta: bs.raw, ledger: ledger, keys: keys, m: m,
-		judge: make(chan *policy.Policy, 1), alarm: newKeyAlarm(), who: who}
+		judge: make(chan *policy.Policy, 1), alarm: newKeyAlarm(), who: who, copy: marksCopy, marks: marks,
+		marksReloaded: make(chan struct{}, 1)}
 	// A replica's start and each of its swaps while it does not run ask the
 	// runner for a full context pass (runner.owed): a context made from its
 	// token under another bundle is then judged. Every swap, the runner's
@@ -495,17 +501,20 @@ func runBroker(parent context.Context, cfgPath string) error {
 	brk.Conns = bl
 	// Only now the marks feed: a change told before brk.Conns was set would
 	// reach no listener, and the listener holds every mark at the load's
-	// revision, which the feed follows from. A reload keeps every mark this
-	// replica enforces that the store lost, refusing the reload when the
-	// marks cannot be read (final review 7e-1 C-1; pre-flight 7e-2 P-3):
-	// Task 15b's copy puts them back on the runner.
+	// revision, which the feed follows from. Keep that order. The feed tells
+	// the copy every change the watch delivers and every mark a reload
+	// reads (copyingFeed), this replica's own revocations and lifts
+	// included. Before a reload the runner's hook puts back what the store
+	// lost, refusing the reload when that fails, and every other replica's
+	// keeps what its copy holds and the store lacks, refusing the reload
+	// when the marks cannot be read (final review 7e-1 C-1; re-review 1
+	// C-2; pre-flight 7e-2 P-3).
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		store.FollowMarks(ctx, bs.raw, marks, bs.markRev, brk.MarkChanged,
+		store.FollowMarks(ctx, copyingFeed{MarkFeed: bs.raw, copy: marksCopy}, marks, bs.markRev, brk.MarkChanged,
 			func(up bool) { m.StoreFeedUp.WithLabelValues("marks").Set(b2f(up)) },
-			brokerReloadHook(ctx, bs.raw, marks, m.StoreFeedRescans.WithLabelValues("marks"),
-				cfg.Store.Etcd.BulkTimeout, stderr),
+			rn.reloadHook(ctx, m.StoreFeedRescans.WithLabelValues("marks")),
 			func(format string, args ...any) { fmt.Fprintf(stderr, "port49-broker: "+format+"\n", args...) })
 	}()
 

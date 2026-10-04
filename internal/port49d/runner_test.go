@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
@@ -19,6 +21,7 @@ import (
 	"github.com/rhwendt/port49/internal/session"
 	"github.com/rhwendt/port49/internal/store"
 	etcdstore "github.com/rhwendt/port49/internal/store/etcd"
+	"github.com/rhwendt/port49/internal/store/memory"
 )
 
 // hangingContexts holds the first context read until released, and lands
@@ -652,4 +655,177 @@ func TestAReplicaThatStartsOnAnotherBundleMarksTheJudgedInDoubt(t *testing.T) {
 		") is in doubt, a replica having served another since; ") {
 		t.Fatalf("a takeover after a replica served another bundle unseen:\n%s", out.String())
 	}
+}
+
+// The runner's hook before a marks reload puts back what its copy holds
+// and the store lost; a put-back that fails returns an error, so
+// FollowMarks reloads nothing and the lost mark is never lifted, and the
+// next compacted round puts it back, then reloads (re-review 1 C-2). A
+// replica that does not run puts nothing back and keeps alice, whom its
+// copy holds; its reload lifts bob, whom its copy lacks (pre-flight 7e-2
+// P-3). Each call counts a rescan.
+func TestTheRunnersReloadHookRefusesTheReloadOnAFailedPutBack(t *testing.T) {
+	alice := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:alice@example.com", At: time.Unix(10, 0).UTC()}
+	var out syncBuffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	rescans := prometheus.NewCounter(prometheus.CounterOpts{Name: "rescans"})
+	bob := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:bob@example.com", At: time.Unix(11, 0).UTC()}
+	// newRunner's copy holds alice; its marks hold alice and bob, whom the
+	// copy lacks.
+	newRunner := func(st store.Store, running bool) *runner {
+		c := openMarksCopy(filepath.Join(safeStateDir(t), "marks.json"), &out)
+		c.Apply(store.MarkChange{Revocation: alice, Standing: true})
+		marks := store.NewMarks()
+		marks.Set(alice, true)
+		marks.Set(bob, true)
+		r := &runner{cfg: config.Config{Store: config.StoreConfig{Etcd: &config.EtcdConfig{BulkTimeout: time.Second}}},
+			st: st, copy: c, marks: marks, marksReloaded: make(chan struct{}, 1)}
+		if running {
+			ctx := context.Background()
+			r.duty.Store(&ctx)
+		}
+		return r
+	}
+	// follow runs FollowMarks over st's marks into r.marks, compacted
+	// rounds times, and records each key a reload lifted.
+	follow := func(r *runner, st store.Store, rounds int32) *sync.Map {
+		var lifted sync.Map
+		feed := &storeFeed{st: st}
+		feed.compacted.Store(rounds)
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			store.FollowMarks(ctx, feed, r.marks, 1, func(c store.MarkChange) {
+				if !c.Standing {
+					lifted.Store(c.Key, true)
+				}
+			}, func(bool) {}, r.reloadHook(ctx, rescans), func(string, ...any) {})
+		}()
+		t.Cleanup(func() { cancel(); <-done })
+		return &lifted
+	}
+
+	idle := memory.New(time.Now)
+	rIdle := newRunner(idle, false)
+	liftedIdle := follow(rIdle, idle, 1)
+	waitUntil(t, "the idle replica's reload lifts bob", func() bool { _, ok := liftedIdle.Load(bob.Key); return ok })
+	if _, ok := liftedIdle.Load(alice.Key); ok || !rIdle.marks.Holds(alice.Kind, alice.Key) {
+		t.Fatal("an idle replica's reload lifted a mark its copy holds and the store lost")
+	}
+	if _, err := idle.GetRevocation(context.Background(), alice.Kind, alice.Key); err == nil {
+		t.Fatal("a replica that does not run put a mark back")
+	}
+
+	st := &putsFailOnce{Store: memory.New(time.Now)}
+	r := newRunner(st, true)
+	lifted := follow(r, st, 2)
+	waitUntil(t, "the runner puts alice back", func() bool {
+		_, err := st.GetRevocation(context.Background(), alice.Kind, alice.Key)
+		return err == nil
+	})
+	waitFor(t, &out, "port49-broker: runner: 1 revocation(s) in broker.state_dir/marks.json were missing from the "+
+		"store")
+	if _, ok := lifted.Load(alice.Key); ok || !r.marks.Holds(alice.Kind, alice.Key) {
+		t.Fatal("a reload after a failed put-back lifted the mark the store lost")
+	}
+	waitUntil(t, "three rescans", func() bool { return testutil.ToFloat64(rescans) == 3 })
+	select {
+	case <-r.marksReloaded:
+	default:
+		t.Fatal("the put-back did not ask the duties to apply what it put back")
+	}
+}
+
+// A replica that does not run, at its hook, refuses the reload when the
+// marks cannot be read, and names the marks it keeps as this replica's,
+// with a release that works (final review 7e-1 C-1; Task 14 review I-2;
+// the intent of Task 15's interim hook's test, which this hook replaced).
+func TestAnIdleReplicasReloadHookRefusesAFailedReadAndNamesWhatItKeeps(t *testing.T) {
+	alice := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:alice@example.com", At: time.Unix(10, 0).UTC()}
+	carol := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:carol@example.com", At: time.Unix(11, 0).UTC()}
+	var out syncBuffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	ctx := context.Background()
+	c := openMarksCopy(filepath.Join(safeStateDir(t), "marks.json"), &out)
+	c.Apply(store.MarkChange{Revocation: alice, Standing: true})
+	c.Apply(store.MarkChange{Revocation: carol, Standing: true})
+	marks := store.NewMarks()
+	marks.Set(alice, true)
+	marks.Set(carol, true)
+	mem := memory.New(time.Now)
+	if err := mem.PutRevocation(ctx, carol); err != nil { // the restore lost alice's
+		t.Fatal(err)
+	}
+	rescans := prometheus.NewCounter(prometheus.CounterOpts{Name: "rescans"})
+	r := &runner{cfg: config.Config{Store: config.StoreConfig{Etcd: &config.EtcdConfig{BulkTimeout: time.Second}}},
+		st: refusingRevocations{mem}, copy: c, marks: marks, marksReloaded: make(chan struct{}, 1)}
+	if err := r.reloadHook(ctx, rescans)(); err == nil {
+		t.Fatal("a read that failed did not refuse the reload")
+	}
+	r.st = mem
+	hook := r.reloadHook(ctx, rescans)
+	if err := hook(); err != nil {
+		t.Fatal(err)
+	}
+	if err := hook(); err != nil { // the same set again: said once
+		t.Fatal(err)
+	}
+	const line = "port49-broker: store: 1 revocation(s) this replica enforces are missing from the store as its " +
+		"marks feed reloads"
+	if s := out.String(); strings.Count(s, line) != 1 || !strings.HasSuffix(s, "revoke it again on "+
+		"port49-broker, then lift it with port49 revoke --lift): principal user:alice@example.com\n") ||
+		strings.Contains(s, "restart") {
+		t.Fatalf("said %q", s)
+	}
+	if _, err := store.LoadMarks(ctx, &storeFeed{st: mem}, marks, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !marks.Holds(alice.Kind, alice.Key) || !marks.Holds(carol.Kind, carol.Key) {
+		t.Fatalf("the reload lifted a kept mark: %+v", marks.All())
+	}
+	if n := testutil.ToFloat64(rescans); n != 3 {
+		t.Fatalf("counted %v rescans, want 3", n)
+	}
+}
+
+// putsFailOnce is a store whose first PutRevocation fails unavailable, as
+// the broker's guarded store does with its Token circuit open through a
+// restore (re-review 1 C-2).
+type putsFailOnce struct {
+	store.Store
+	failed atomic.Bool
+}
+
+func (p *putsFailOnce) PutRevocation(ctx context.Context, r store.Revocation) error {
+	if p.failed.CompareAndSwap(false, true) {
+		return store.ErrUnavailable
+	}
+	return p.Store.PutRevocation(ctx, r)
+}
+
+// storeFeed is a store.MarkFeed over st's marks, at revision 1, whose
+// first compacted watches return store.ErrCompacted; later ones wait for
+// ctx.
+type storeFeed struct {
+	st        store.Store
+	compacted atomic.Int32
+}
+
+func (f *storeFeed) Revocations(ctx context.Context) (uint64, []store.Revocation, error) {
+	rs, err := f.st.ListRevocations(ctx)
+	return 1, rs, err
+}
+
+func (f *storeFeed) WatchRevocations(ctx context.Context, _ uint64, _ func(store.Revocation, bool, uint64),
+	_ func(uint64)) error {
+	if f.compacted.Add(-1) >= 0 {
+		return store.ErrCompacted
+	}
+	<-ctx.Done()
+	return ctx.Err()
 }
