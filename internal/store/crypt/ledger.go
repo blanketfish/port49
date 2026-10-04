@@ -232,11 +232,17 @@ func (l *Ledger) revokedBelow(k store.ContextKey, rev uint64, at time.Time) {
 	if !ok || e.hw == 0 || rev == 0 || at.IsZero() || e.hw >= rev {
 		return
 	}
-	if at.After(e.floor) {
+	later := at.After(e.floor)
+	if later {
 		e.floor = at
 		l.dirty[k] = true
 	}
-	if rev-1 > e.floorSeq {
+	// The same revocation at a later revision is a plaintext bump of the
+	// revoked record (TouchContext, an accounting record's AnnotateContext):
+	// a floor already past the mark holds every record sealed before the
+	// revocation, so the bump raises nothing, and owes the ledger record no
+	// write per packet (Task 15 re-review M-10).
+	if (later || e.floorSeq <= e.hw) && rev-1 > e.floorSeq {
 		e.floorSeq = rev - 1
 		l.dirty[k] = true
 	}

@@ -1285,15 +1285,34 @@ func TestAFollowedRevocationsFloorIsOwedToTheRecord(t *testing.T) {
 	if ms := l.Dirty(); len(ms) != 0 {
 		t.Fatalf("the same revocation brought again is owed again: %+v", ms)
 	}
-	// Each of the floor's two halves is owed alone: a later revision at
-	// the same time, then a later time at the same revision.
-	l.ObserveFollowed(ka, 5, 14, at, at.Add(time.Hour))
-	if ms := l.Dirty(); len(ms) != 1 || ms[0].FloorSeq != 13 {
-		t.Fatalf("owed after a later revision: %+v; want through 13", ms)
+	// A plaintext bump of the revoked record (TouchContext, an accounting
+	// record's AnnotateContext) brings it again at a later revision, with
+	// the same revoked_at: the floor already holds past the mark, so it
+	// owes nothing (Task 15 re-review M-10).
+	for rev := uint64(13); rev < 18; rev++ {
+		l.ObserveFollowed(ka, 5, rev, at, at.Add(time.Hour))
 	}
-	l.ObserveFollowed(ka, 5, 14, at.Add(time.Second), at.Add(time.Hour))
-	if ms := l.Dirty(); len(ms) != 1 || !ms[0].RevokedAt.Equal(at.Add(time.Second)) {
+	if ms := l.Dirty(); len(ms) != 0 {
+		t.Fatalf("a plaintext bump of the revoked record is owed: %+v", ms)
+	}
+	// A later revocation time is owed, and raises the floor's reach.
+	l.ObserveFollowed(ka, 5, 19, at.Add(time.Second), at.Add(time.Hour))
+	if ms := l.Dirty(); len(ms) != 1 || !ms[0].RevokedAt.Equal(at.Add(time.Second)) || ms[0].FloorSeq != 18 {
 		t.Fatalf("owed after a later revocation time: %+v", ms)
+	}
+	// A later time alone, within the floor's reach, is owed too.
+	l.ObserveFollowed(ka, 5, 15, at.Add(2*time.Second), at.Add(time.Hour))
+	if ms := l.Dirty(); len(ms) != 1 || !ms[0].RevokedAt.Equal(at.Add(2*time.Second)) || ms[0].FloorSeq != 18 {
+		t.Fatalf("owed after a later revocation time within the floor's reach: %+v", ms)
+	}
+	// A floor taken at the mark, held through it alone, is raised past it
+	// by a revocation below the mark at the same time: owed for its reach.
+	k := store.ContextKey{NAS: "leaf-02", Username: "bob"}
+	l.Observe(k, 10, 10, at, at.Add(time.Hour))
+	l.Dirty()
+	l.ObserveFollowed(k, 5, 12, at, at.Add(time.Hour))
+	if ms := l.Dirty(); len(ms) != 1 || ms[0].FloorSeq != 11 {
+		t.Fatalf("owed after a floor at the mark is raised past it: %+v; want through 11", ms)
 	}
 }
 
