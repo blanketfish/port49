@@ -37,7 +37,8 @@ func (b *Broker) Forget(ctx context.Context, principal, origin string) (string, 
 	}
 	principal, err := normalPrincipal(principal)
 	if err != nil {
-		return "", fmt.Errorf("broker: %s", strings.TrimPrefix(err.Error(), "broker: "))
+		return "", fmt.Errorf("broker: %q is not a principal as the log spells one: printable ASCII, user: and an email",
+			printsafe.Line(principal, 200))
 	}
 	ctx, cancel := context.WithTimeout(ctx, holdTimeout)
 	defer cancel()

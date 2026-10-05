@@ -733,3 +733,16 @@ func TestExplainRefusalOfTheCallerNamesTheCaller(t *testing.T) {
 		t.Fatalf("%v", recs)
 	}
 }
+
+// Explaining oneself while one's own membership is refused is the caller's
+// refusal: 401 and close, the record naming the caller (re-review 1, P4).
+func TestExplainOfOneselfRefusedIsTheCallersRefusal(t *testing.T) {
+	caller := answerFor(corpAlice, "alice")
+	f, _ := groupFixture(t, map[string]directory.Answer{}, nil)
+	w := f.call(f.pinned(caller), f.state(f.alice), "POST", "/v1/explain", `{"device":"nx1"}`)
+	wantRefused(t, heldAnswer{status: w.Code, body: w.Body.String()}, 401, "identity_unmapped")
+	recs := eventsOf(f.records(t), "explain")
+	if len(recs) != 1 || recs[0]["principal"] != corpAlice || recs[0]["reason"] != "identity_unmapped" {
+		t.Fatalf("%v", recs)
+	}
+}

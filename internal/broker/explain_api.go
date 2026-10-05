@@ -113,6 +113,14 @@ func (b *Broker) explain(w http.ResponseWriter, r *http.Request) {
 			// The directory's "no" about the principal asked about is the
 			// answer, not a refusal of the caller: 200, the connection kept.
 			ref := directoryRefusal(merr)
+			if about == caller {
+				// Their own membership: the caller's refusal, as a mint's.
+				b.emit(decision.Record{TS: now, Event: decision.EventExplain, Verdict: decision.VerdictDeny,
+					Reason: ref.Reason, Principal: caller,
+					Auth: &decision.Auth{Method: cred.Method, Fingerprint: cred.Fingerprint}})
+				b.answerRefusal(w, r, ref)
+				return
+			}
 			rec.Verdict, rec.Reason = decision.VerdictDeny, ref.Reason
 			b.emit(rec)
 			writeJSON(w, http.StatusOK, api.ExplainResponse{Principal: about, Device: req.Device,
