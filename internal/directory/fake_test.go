@@ -30,6 +30,7 @@ func newClock() *fakeClock               { return &fakeClock{now: time.Unix(1_00
 type fakeDir struct {
 	mu       sync.Mutex
 	byFilter map[string][]*ldap.Entry
+	byBase   map[[2]string][]*ldap.Entry // {base DN, filter}: answers a base-scope search per DN
 	err      map[string]error
 	delay    time.Duration
 	slow     map[string]time.Duration
@@ -37,10 +38,15 @@ type fakeDir struct {
 }
 
 func newFakeDir() *fakeDir {
-	return &fakeDir{byFilter: map[string][]*ldap.Entry{}, err: map[string]error{}, slow: map[string]time.Duration{}}
+	return &fakeDir{byFilter: map[string][]*ldap.Entry{}, byBase: map[[2]string][]*ldap.Entry{}, err: map[string]error{}, slow: map[string]time.Duration{}}
 }
 
 func (d *fakeDir) on(filter string, entries ...*ldap.Entry) { d.byFilter[filter] = entries }
+
+// onBase answers a search of exactly base with filter; it wins over on.
+func (d *fakeDir) onBase(base, filter string, entries ...*ldap.Entry) {
+	d.byBase[[2]string{base, filter}] = entries
+}
 
 // search answers req after its delay, or at once with ctx's error when ctx
 // ends first (its own search abandoned, as SearchAsync does), or with a
@@ -53,6 +59,9 @@ func (d *fakeDir) search(ctx context.Context, closed <-chan struct{}, req *ldap.
 		delay = s
 	}
 	e, es := d.err[req.Filter], d.byFilter[req.Filter]
+	if b, ok := d.byBase[[2]string{req.BaseDN, req.Filter}]; ok {
+		es = b
+	}
 	d.mu.Unlock()
 	// A closed connection answers nothing, even with no delay to lose the
 	// select's race to.

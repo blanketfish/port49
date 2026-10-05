@@ -17,7 +17,7 @@ const inChainOID = "1.2.840.113556.1.4.1941"
 type Groups struct {
 	DNs, Names []string // sorted; Names are those verified unique
 	Truncated  bool     // max_depth or the node bound ended the walk with groups unconfirmed
-	Loops      int
+	Loops      int      // groups met again: a loop, or a diamond (two paths to one group); not only cycles
 	Ambiguous  []string // names dropped because two groups share them
 	Unfound    []string // names dropped because their uniqueness search found no group
 }
@@ -124,8 +124,10 @@ func (c Config) groupsOf(s Searcher, userDN string) (Groups, error) {
 	}
 	slices.Sort(g.DNs)
 	var err error
-	g.Names, g.Ambiguous, g.Unfound, err = c.uniqueNames(s, uniq)
-	return g, err
+	if g.Names, g.Ambiguous, g.Unfound, err = c.uniqueNames(s, uniq); err != nil {
+		return Groups{}, err
+	}
+	return g, nil
 }
 
 // memberOfAny is the search for the groups holding any of dns, each value
@@ -176,18 +178,20 @@ func (c Config) uniqueNames(s Searcher, names []string) (unique, ambiguous, unfo
 }
 
 // membersOf is every user DN under groupDN, transitively under the nested
-// mode, at most limit: what pre-warm enumerates (Ruling 20). in_chain asks
-// for limit+1 and stops there, so a huge group is never paged in whole
-// (pre-flight M-8). The walk is bounded by max_depth and maxWalkNodes
-// groups; a bound reached is truncated.
-func (c Config) membersOf(s Searcher, groupDN string, limit int) ([]string, bool, error) {
+// mode, at most limit: what pre-warm enumerates (Ruling 20). capped means
+// the limit was reached and no more is listed. cut means the walk ended at
+// max_depth or the node bound with groups unexpanded, so the list may be
+// short: a different thing, counted apart, which must not stop pre-warm of
+// the next group. in_chain asks for limit+1 and stops there, so a huge
+// group is never paged in whole (pre-flight M-8).
+func (c Config) membersOf(s Searcher, groupDN string, limit int) (dns []string, capped, cut bool, err error) {
 	if c.Nested == "in_chain" {
 		res, err := s.SearchWithPaging(ldap.NewSearchRequest(c.BaseDN, ldap.ScopeWholeSubtree, ldap.NeverDerefAliases,
 			limit+1, int(c.QueryTimeout.Seconds()), false, fmt.Sprintf("(&%s(memberOf:%s:=%s))", c.UserFilter, inChainOID,
 				ldap.EscapeFilter(groupDN)), []string{"dn"}, nil), 500)
 		truncated := ldap.IsErrorWithCode(err, ldap.LDAPResultSizeLimitExceeded)
 		if err != nil && !truncated {
-			return nil, false, err
+			return nil, false, false, err
 		}
 		var out []string
 		if res != nil {
@@ -198,7 +202,7 @@ func (c Config) membersOf(s Searcher, groupDN string, limit int) ([]string, bool
 		if len(out) > limit {
 			out, truncated = out[:limit], true
 		}
-		return out, truncated, nil
+		return out, truncated, false, nil
 	}
 	depth := 1
 	if c.Nested == "recursive" {
@@ -231,7 +235,7 @@ func (c Config) membersOf(s Searcher, groupDN string, limit int) ([]string, bool
 			res, err := s.Search(ldap.NewSearchRequest(g, ldap.ScopeBaseObject, ldap.NeverDerefAliases, 1,
 				int(c.QueryTimeout.Seconds()), false, "(objectClass=*)", []string{c.MemberAttribute}, nil))
 			if err != nil {
-				return nil, false, err
+				return nil, false, false, err
 			}
 			for _, e := range res.Entries {
 				for _, m := range e.GetAttributeValues(c.MemberAttribute) {
@@ -242,24 +246,24 @@ func (c Config) membersOf(s Searcher, groupDN string, limit int) ([]string, bool
 					visited[k] = true
 					isGroup, err := classify(m)
 					if err != nil {
-						return nil, false, err
+						return nil, false, false, err
 					}
 					if isGroup {
 						if groups++; groups > maxWalkNodes {
-							return users, true, nil
+							return users, false, true, nil
 						}
 						next = append(next, m)
 					} else if len(users) < limit {
 						users = append(users, m)
 					} else {
-						return users, true, nil
+						return users, true, false, nil
 					}
 				}
 			}
 		}
 		frontier = next
 	}
-	return users, len(frontier) > 0 && c.Nested == "recursive", nil
+	return users, false, len(frontier) > 0 && c.Nested == "recursive", nil
 }
 
 func (c Config) isGroup(s Searcher, dn string) (bool, error) {

@@ -1,6 +1,7 @@
 package directory
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -132,6 +133,14 @@ func TestASharedGroupNameMatchesNoOne(t *testing.T) {
 		!slices.Equal(got.DNs, []string{evil}) {
 		t.Fatalf("%+v %v", got, err)
 	}
+	// Three sharing it: the fake answers with the size-limit error, which is
+	// ambiguous too, never an error and never unique.
+	d.on(uniqueFilter("netops-oncall"), grp(gOnCall, "netops-oncall"), grp(evil, "netops-oncall"),
+		grp("CN=netops-oncall,OU=More,DC=corp", "netops-oncall"))
+	got, err = c.groupsOf(d, alice)
+	if err != nil || len(got.Names) != 0 || !slices.Equal(got.Ambiguous, []string{"netops-oncall"}) {
+		t.Fatalf("size limit: %+v %v", got, err)
+	}
 }
 
 // A name whose uniqueness search finds no group is dropped and reported,
@@ -155,8 +164,8 @@ func TestMembersOfInChainStopsPastTheLimit(t *testing.T) {
 	d.on(f, entry("CN=A,DC=corp", nil), entry("CN=B,DC=corp", nil), entry("CN=C,DC=corp", nil))
 	c := adCfg()
 	c.Nested = "in_chain"
-	got, truncated, err := c.membersOf(d, gOnCall, 2)
-	if err != nil || !truncated || len(got) != 2 || d.calls[0].SizeLimit != 3 {
+	got, truncated, cut, err := c.membersOf(d, gOnCall, 2)
+	if err != nil || !truncated || cut || len(got) != 2 || d.calls[0].SizeLimit != 3 {
 		t.Fatalf("%v %v %v; size limit %d", got, truncated, err, d.calls[0].SizeLimit)
 	}
 }
@@ -238,5 +247,109 @@ func TestAnInChainAnswerPastTheNodeBoundIsTruncated(t *testing.T) {
 	got, err := c.groupsOf(d, alice)
 	if err != nil || !got.Truncated || len(got.DNs) != maxWalkNodes {
 		t.Fatalf("%d DNs, truncated %v, %v", len(got.DNs), got.Truncated, err)
+	}
+}
+
+// A search failing mid-walk returns nothing: never a partial membership.
+func TestAWalkThatFailsMidwayReturnsNoGroups(t *testing.T) {
+	d := newFakeDir()
+	d.on(memberFilter(alice), grp(gLeaf, "g-leaf"))
+	d.err[memberFilter(gLeaf)] = ldap.NewError(ldap.ErrorNetwork, errors.New("connection closed"))
+	c := adCfg()
+	c.Nested = "recursive"
+	got, err := c.groupsOf(d, alice)
+	if err == nil || len(got.DNs) != 0 || len(got.Names) != 0 {
+		t.Fatalf("%+v %v", got, err)
+	}
+	// The same for the uniqueness search.
+	d = newFakeDir()
+	d.on(memberFilter(alice), grp(gLeaf, "g-leaf"))
+	d.err[uniqueFilter("g-leaf")] = ldap.NewError(ldap.ErrorNetwork, errors.New("connection closed"))
+	c.Nested = "direct"
+	if got, err = c.groupsOf(d, alice); err == nil || len(got.DNs) != 0 || len(got.Names) != 0 {
+		t.Fatalf("%+v %v", got, err)
+	}
+}
+
+const (
+	uIn  = "CN=u-in,OU=G,DC=corp" // inside groups_base_dn: classified by a search
+	anyF = "(objectClass=*)"
+	isGF = "(objectClass=group)"
+)
+
+// members registers groupDN's member attribute for a base-scope read.
+func members(d *fakeDir, groupDN string, ms ...string) {
+	d.onBase(groupDN, anyF, entry(groupDN, map[string][]string{"member": ms}))
+}
+
+func isGroupSearches(d *fakeDir) int {
+	n := 0
+	for _, r := range d.calls {
+		if r.Scope == ldap.ScopeBaseObject && r.Filter == isGF {
+			n++
+		}
+	}
+	return n
+}
+
+func TestMembersOfRecursiveListsNestedUsers(t *testing.T) {
+	d := newFakeDir()
+	members(d, gOnCall, gMid, alice, uIn)
+	members(d, gMid, dave, gOnCall) // a loop back to the start
+	d.onBase(gMid, isGF, grp(gMid, "g-mid"))
+	c := adCfg()
+	c.Nested = "recursive"
+	got, capped, cut, err := c.membersOf(d, gOnCall, 10)
+	if err != nil || capped || cut || !slices.Equal(got, []string{alice, uIn, dave}) {
+		t.Fatalf("%v %v %v %v", got, capped, cut, err)
+	}
+	// gMid and uIn are in groups_base_dn and asked about once each; alice
+	// and dave are outside it and never searched.
+	if n := isGroupSearches(d); n != 2 {
+		t.Fatalf("%d isGroup searches, want 2", n)
+	}
+}
+
+func TestMembersOfLimitIsCappedNotCut(t *testing.T) {
+	d := newFakeDir()
+	members(d, gOnCall, alice, dave, "CN=Eve,OU=Staff,DC=corp")
+	c := adCfg()
+	c.Nested = "recursive"
+	got, capped, cut, err := c.membersOf(d, gOnCall, 2)
+	if err != nil || !capped || cut || len(got) != 2 {
+		t.Fatalf("%v %v %v %v", got, capped, cut, err)
+	}
+}
+
+// A chain deeper than max_depth is cut, never capped: pre-warm goes on to
+// the next group (review I-1).
+func TestMembersOfDeeperThanMaxDepthIsCutNotCapped(t *testing.T) {
+	d := newFakeDir()
+	members(d, gOnCall, gMid)
+	members(d, gMid, dave)
+	d.onBase(gMid, isGF, grp(gMid, "g-mid"))
+	c := adCfg()
+	c.Nested, c.MaxDepth = "recursive", 1
+	got, capped, cut, err := c.membersOf(d, gOnCall, 10)
+	if err != nil || capped || !cut || len(got) != 0 {
+		t.Fatalf("%v %v %v %v", got, capped, cut, err)
+	}
+}
+
+func TestMembersOfDirectDoesNotDescend(t *testing.T) {
+	d := newFakeDir()
+	members(d, gOnCall, gMid, alice)
+	members(d, gMid, dave)
+	d.onBase(gMid, isGF, grp(gMid, "g-mid"))
+	c := adCfg()
+	c.Nested = "direct"
+	got, capped, cut, err := c.membersOf(d, gOnCall, 10)
+	if err != nil || capped || cut || !slices.Equal(got, []string{alice}) {
+		t.Fatalf("%v %v %v %v", got, capped, cut, err)
+	}
+	for _, r := range d.calls {
+		if r.BaseDN == gMid && r.Filter == anyF {
+			t.Fatal("direct read the nested group's members")
+		}
 	}
 }
