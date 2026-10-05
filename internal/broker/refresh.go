@@ -418,6 +418,7 @@ func (b *Broker) supersedeTokens(ctx context.Context, cur *policy.Policy, now ti
 		}
 	}
 	members := map[string]policy.Member{}
+	collided := map[string]bool{}
 	memberOf := func(principal string) (policy.Member, error) {
 		if m, ok := members[principal]; ok {
 			return m, nil
@@ -425,7 +426,9 @@ func (b *Broker) supersedeTokens(ctx context.Context, cur *policy.Policy, now ti
 		m, err := b.storedMember(ctx, principal)
 		if err == nil || errors.Is(err, directory.ErrUsernameTaken) {
 			// A declared-username collision is the refused member the call
-			// returned: it mints nothing, so the scan supersedes by it.
+			// returned: it mints nothing, so the scan cannot name its keys,
+			// and they are cleared by principal below.
+			collided[principal] = errors.Is(err, directory.ErrUsernameTaken)
 			members[principal], err = m, nil
 		}
 		return m, err
@@ -476,6 +479,25 @@ func (b *Broker) supersedeTokens(ctx context.Context, cur *policy.Policy, now ti
 					keys[store.TokenKey{NAS: name, Username: was.username}] = true
 				}
 			}
+		}
+	}
+	// A member whose username a subject now declares must not redeem a token
+	// minted before the declaration: it would log in under the declared
+	// subject's name. Its keys are cleared whole, and only its (never the
+	// tokens a reload deliberately keeps), whether or not it has a context.
+	for _, principal := range held {
+		if _, err := memberOf(principal); err != nil {
+			return err
+		}
+		if !collided[principal] {
+			continue
+		}
+		tks, err := b.Store.TokensByPrincipal(ctx, principal)
+		if err != nil {
+			return err
+		}
+		for _, k := range tks {
+			keys[k] = true
 		}
 	}
 	ordered := make([]store.TokenKey, 0, len(keys))

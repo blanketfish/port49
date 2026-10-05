@@ -9,6 +9,7 @@ import (
 
 	"github.com/rhwendt/port49/internal/directory"
 	"github.com/rhwendt/port49/internal/policy"
+	"github.com/rhwendt/port49/internal/printsafe"
 	"github.com/rhwendt/port49/internal/store"
 )
 
@@ -37,6 +38,7 @@ import (
 func (b *Broker) RefreshDirectory(ctx context.Context) (RefreshReport, error) {
 	var rep RefreshReport
 	rep.At = b.Now()
+	var first error // the first principal the directory failed for in a way that is no outage and no refusal
 	judge := passJudge{
 		member: func(ctx context.Context, principal string) (policy.Member, time.Time, error) {
 			if b.Directory == nil || !directory.IsUser(principal) {
@@ -44,7 +46,7 @@ func (b *Broker) RefreshDirectory(ctx context.Context) (RefreshReport, error) {
 			}
 			a, err := b.Directory.Verify(ctx, principal)
 			if err != nil {
-				return policy.Member{}, time.Time{}, err
+				return policy.Member{}, time.Time{}, b.verifyFailed(ctx, principal, err, &first)
 			}
 			// A declaration made by a reload since the answer was written is
 			// the resolver's collision too (pre-flight M-11).
@@ -65,7 +67,11 @@ func (b *Broker) RefreshDirectory(ctx context.Context) (RefreshReport, error) {
 			}
 		},
 	}
-	err := b.refreshContexts(ctx, b.Policy.Load(), nil, rep.At, &rep, false, judge)
+	// sameSource: this pass is membership and the stamp. A change of policy
+	// source is the policy pass's, at the reload; a context differing only in
+	// the bundle it names is stamped and left, so an inventory swap is never a
+	// fleet-wide rewrite here (plan 6a Decided 3).
+	err := b.refreshContexts(ctx, b.Policy.Load(), nil, rep.At, &rep, true, judge)
 	if err != nil && !errors.Is(err, store.ErrConflict) {
 		// A conflict (a busy context, an unvisited principal, an unheld
 		// key) is left for the next pass; the rest ends this one.
@@ -74,8 +80,15 @@ func (b *Broker) RefreshDirectory(ctx context.Context) (RefreshReport, error) {
 	// Tokens are superseded whatever ended the pass: a context already
 	// written narrower is unchanged at the next pass, which would never name
 	// its principal again.
-	if serr := b.supersedeNarrowed(ctx, &rep); serr != nil && err == nil {
-		err = fmt.Errorf("deleting superseded tokens: %w", serr)
+	if serr := b.supersedeNarrowed(ctx, &rep); serr != nil {
+		if err == nil {
+			err = fmt.Errorf("deleting superseded tokens: %w", serr)
+		} else {
+			b.logf("broker: refresh: deleting superseded tokens failed (%v) after the pass ended (%v)", serr, err)
+		}
+	}
+	if err == nil && first != nil {
+		err = fmt.Errorf("the scheduled refresh: %w", first)
 	}
 	if rep.UnverifiedPrincipals == 0 && err == nil {
 		b.Metrics.DirectoryRefreshLastComplete.Set(float64(rep.At.Unix()))
@@ -87,6 +100,30 @@ func (b *Broker) RefreshDirectory(ctx context.Context) (RefreshReport, error) {
 			rep.At.Sub(rep.OldestUnverified).Round(time.Minute))
 	}
 	return rep, err
+}
+
+// verifyFailed is how the pass takes a Verify error. A refusal, the pass's
+// own cancel or deadline, a store failure and the directory's silence are as
+// refreshContexts reads them. Any other error (an LDAP 50 on a protected
+// account, a referral, a size limit) is one principal's: it is counted as the
+// directory not answering for them, so the pass goes on and every principal
+// after is verified and stamped; theirs reaches context_stale at the ceiling
+// as in an outage. The first is kept for the pass to return, and it is said
+// once an hour per principal, never with a group.
+func (b *Broker) verifyFailed(ctx context.Context, principal string, err error, first *error) error {
+	switch {
+	case errors.Is(err, directory.ErrUnavailable), errors.Is(err, directory.ErrUnmapped),
+		errors.Is(err, directory.ErrAmbiguous), errors.Is(err, directory.ErrUsernameTaken),
+		errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled),
+		errors.Is(err, store.ErrUnavailable), ctx.Err() != nil:
+		return err
+	}
+	if *first == nil {
+		*first = fmt.Errorf("verifying %s: %w", principal, err)
+	}
+	b.sayOnce("refresh-verify:"+principal, time.Hour, "broker: refresh: the directory failed for %s (%s); its "+
+		"contexts are left unstamped and unrevoked, and the pass goes on", principal, printsafe.Line(err.Error(), 300))
+	return fmt.Errorf("%w: %v", directory.ErrUnavailable, printsafe.Line(err.Error(), 300))
 }
 
 // supersedeNarrowed deletes the unspent tokens of every principal the pass

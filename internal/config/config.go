@@ -558,9 +558,6 @@ type InventoryServiceConfig struct {
 }
 
 type Config struct {
-	// StalenessOff is session.staleness_ceiling set to 0s explicitly, for the
-	// start line that says the check is off.
-	StalenessOff bool
 	// Role is which process the file was loaded for: Load's is RoleDaemon,
 	// LoadBroker's RoleBroker.
 	Role Role
@@ -585,7 +582,10 @@ type Config struct {
 	ContextIdleTTL time.Duration
 	Accounting     AccountingConfig
 	Session        SessionConfig
-	Token          TokenConfig
+	// StalenessOff is session.staleness_ceiling set to 0s explicitly, for the
+	// start line that says the check is off.
+	StalenessOff bool
+	Token        TokenConfig
 	// Broker is nil when no broker: block is configured, and Lab when no lab:
 	// block is.
 	Broker *BrokerConfig

@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/netip"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
+	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/directory"
 	"github.com/rhwendt/port49/internal/engine"
 	"github.com/rhwendt/port49/internal/policy"
@@ -98,17 +100,14 @@ func TestTheScheduledPassStamps(t *testing.T) {
 }
 
 // A directory that does not answer leaves every context unstamped and
-// unrevoked, counted unverified (Ruling 12; spec §14 "Directory"). Only the
-// directory's silence is that: any other error ends the pass.
+// unrevoked, counted unverified (Ruling 12; spec §14 "Directory").
 func TestAnOutageStampsNothingAndRevokesNothing(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		err  error
-		ends bool
 	}{
-		{"no server", fmt.Errorf("%w: no server answered", directory.ErrUnavailable), false},
-		{"a deadline", fmt.Errorf("the search: %w", context.DeadlineExceeded), false},
-		{"anything else", errors.New("the pool broke"), true},
+		{"no server", fmt.Errorf("%w: no server answered", directory.ErrUnavailable)},
+		{"a deadline", fmt.Errorf("the search: %w", context.DeadlineExceeded)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a := answerFor(corpAlice, "alice")
@@ -119,11 +118,7 @@ func TestAnOutageStampsNothingAndRevokesNothing(t *testing.T) {
 			f.memberContext(t, a, "nx1", old.Add(-time.Minute))
 			f.advance(time.Minute)
 			rep, err := f.b.RefreshDirectory(context.Background())
-			if tc.ends {
-				if err == nil || rep.Unverified != 0 {
-					t.Fatalf("%+v %v", rep, err)
-				}
-			} else if err != nil || rep.Unverified != 2 || rep.UnverifiedPrincipals != 1 ||
+			if err != nil || rep.Unverified != 2 || rep.UnverifiedPrincipals != 1 ||
 				!rep.OldestUnverified.Equal(old.Add(-time.Minute)) || rep.Updated+rep.Unchanged+rep.Revoked != 0 {
 				t.Fatalf("%+v %v", rep, err)
 			}
@@ -297,11 +292,16 @@ func TestAReloadDuringThePassIsThePolicyItWrites(t *testing.T) {
 	f.memberContext(t, a, "leaf1", f.now.Add(-time.Hour))
 	f.advance(time.Minute)
 	a = f.verifiedNow(a)
+	reloaded, perr := policy.Parse([]byte(withoutOpsGrant), policy.Env{Devices: f.inventory(),
+		Directory: policy.DirectoryOn, Now: f.b.Now()})
+	if perr != nil {
+		t.Fatal(perr)
+	}
 	swapped := false
 	f.b.Directory = directory.ForTestsFuncResolver(f.st, func(string) (directory.Answer, error) {
 		if !swapped {
 			swapped = true
-			f.reloadDir(t, withoutOpsGrant) // blocks while a Hold is held: the pass must hold none here
+			f.b.Policy.Swap(reloaded) // blocks while a Hold is held: the pass must hold none here
 		}
 		return a, nil
 	})
@@ -404,6 +404,121 @@ func TestADeclaredUsernameRefusesTheDirectoryMemberOnEveryPass(t *testing.T) {
 			recs := eventsOf(f.records(t), "refresh")
 			if len(recs) != 1 || recs[0]["reason"] != "username_collision" || strings.Contains(f.log.String(), "secret-group") {
 				t.Fatalf("%v", recs)
+			}
+		})
+	}
+}
+
+// One principal's directory error that is neither a refusal nor an outage (an
+// LDAP 50 on a protected account, say) leaves that principal unverified,
+// unstamped and unrevoked, and the pass goes on: the principals after it are
+// stamped, and the pass still returns the error and is not complete.
+func TestOnePrincipalsDirectoryErrorDoesNotEndThePass(t *testing.T) {
+	aaron := answerFor("user:aaron@corp.example.com", "aaron")
+	bob := answerFor("user:bob@corp.example.com", "bob")
+	f, _ := groupFixture(t, nil, nil)
+	old := f.now.Add(-time.Hour)
+	f.memberContext(t, aaron, "leaf1", old)
+	f.memberContext(t, bob, "leaf1", old)
+	f.advance(time.Minute)
+	bob = f.verifiedNow(bob)
+	f.b.Directory = directory.ForTestsFuncResolver(f.st, func(p string) (directory.Answer, error) {
+		if p == aaron.Principal {
+			return directory.Answer{}, errors.New("LDAP Result Code 50 \"Insufficient Access Rights\"")
+		}
+		return bob, nil
+	})
+	rep, err := f.b.RefreshDirectory(context.Background())
+	if err == nil || rep.UnverifiedPrincipals != 1 || rep.Unverified != 1 || rep.Unchanged != 1 {
+		t.Fatalf("%+v %v", rep, err)
+	}
+	if got := f.context(t, "leaf1", "aaron"); !got.RefreshedAt.Equal(old) || !got.RevokedAt.IsZero() {
+		t.Fatalf("the erroring principal's context moved: %+v", got)
+	}
+	if got := f.context(t, "leaf1", "bob"); !got.RefreshedAt.Equal(bob.VerifiedAt) {
+		t.Fatalf("the principal after the error was not stamped: %+v", got)
+	}
+	if v := testutil.ToFloat64(f.b.Metrics.DirectoryRefreshLastComplete); v != 0 {
+		t.Fatalf("an incomplete pass is complete: %v", v)
+	}
+}
+
+// An inventory-only swap leaves a context alone at the scheduled pass as at
+// the policy pass: stamped, not rewritten, not recorded, its tokens kept
+// (plan 6a Decided 3; spec §5.1.3).
+func TestAnInventoryOnlySwapIsNotARewriteAtTheScheduledPass(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t, 8)
+	f.login(t, alice, "leaf1", "alice")
+	f.post(ctx, f.state(f.alice), `{"devices":["nx1"]}`, "") // an unspent token
+	before := f.context(t, "leaf1", "alice")
+	old := f.b.Policy.Load()
+	extra := admission.Device{Name: "leaf9", Platform: "arista_eos", Addresses: []netip.Addr{netip.MustParseAddr("172.100.100.19")}}
+	pol, err := policy.Parse([]byte(testPolicy), policy.Env{Devices: append(old.Devices(), extra), Now: f.b.Now(),
+		Bundle: "sha256:" + strings.Repeat("b", 64)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.b.Policy.Swap(pol)
+	f.advance(10 * time.Second)
+	f.log.Reset()
+	rep, err := f.b.RefreshDirectory(ctx)
+	if err != nil || rep.Unchanged != 1 || rep.Updated != 0 || rep.TokenKeys != 0 {
+		t.Fatalf("%+v %v", rep, err)
+	}
+	after := f.context(t, "leaf1", "alice")
+	if after.BlobHash != before.BlobHash || !after.RefreshedAt.Equal(rep.At) {
+		t.Fatalf("rewritten or unstamped: %+v", after)
+	}
+	if strings.Contains(f.log.String(), `"event":"refresh"`) {
+		t.Fatalf("an unchanged context was recorded: %s", f.log.String())
+	}
+	if toks, _ := f.st.Candidates(ctx, store.TokenKey{NAS: "nx1", Username: "alice"}); len(toks) != 1 {
+		t.Fatalf("the unspent token was cleared: %d", len(toks))
+	}
+}
+
+// A collided member's unspent tokens are cleared at once, by the policy pass
+// and by every replica's token pass, and an unrelated member's token at its
+// own key stands: a token minted before a subject declared the username must
+// not redeem under it.
+func TestACollidedMembersTokensAreClearedAtOnce(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		run  func(f *fixture, priors []Prior) error
+	}{
+		{"the policy pass", func(f *fixture, priors []Prior) error {
+			_, err := f.b.Refresh(context.Background(), priors)
+			return err
+		}},
+		{"the token pass", func(f *fixture, priors []Prior) error {
+			_, err := f.b.RefreshTokens(context.Background(), priors)
+			return err
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			a, bob := answerFor(corpAlice, "alice"), answerFor("user:bob@corp.example.com", "bob")
+			f, _ := groupFixture(t, nil, nil)
+			r := f.answering(map[string]directory.Answer{corpAlice: a, bob.Principal: bob})
+			f.holdMembership(t, r, a, f.now, false)
+			f.holdMembership(t, r, bob, f.now, false)
+			for _, m := range []directory.Answer{a, bob} {
+				if res := decodeMint(t, f.mintOnPinned(m, `["leaf1"]`)); res.Results[0].Verdict != "permit" {
+					t.Fatalf("%+v", res)
+				}
+			}
+			priors := f.reloadDir(t, aliceDeclared)
+			r.Declared = func() map[string]string { return f.b.Policy.Load().DeclaredUsernames() }
+			f.advance(10 * time.Second)
+			if err := tc.run(f, priors); err != nil {
+				t.Fatal(err)
+			}
+			if toks, _ := f.st.Candidates(ctx, store.TokenKey{NAS: "leaf1", Username: "alice"}); len(toks) != 0 {
+				t.Fatalf("the collided member's token survived: %d", len(toks))
+			}
+			if toks, _ := f.st.Candidates(ctx, store.TokenKey{NAS: "leaf1", Username: "bob"}); len(toks) != 1 {
+				t.Fatalf("an unrelated member's token was cleared: %d", len(toks))
 			}
 		})
 	}
