@@ -833,7 +833,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 	// is answered by the lab's instrument where port49d.yaml has a `lab:`
 	// block, and denied where it has none: port49 never falls back to
 	// permitting everything.
-	authz := &author.Engine{Store: sts.daemon, Metrics: m}
+	authz := &author.Engine{Store: sts.author, Metrics: m}
 	var fault author.LabFault
 	if cfg.Lab != nil {
 		fault = author.LabFault{Path: cfg.Lab.FaultFile}
@@ -1040,7 +1040,8 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		// and kept before the authorizer deletes it (plan 7b). The ceiling
 		// warning rides on permits to the platforms L34 found show it, and
 		// to the operator's own list.
-		Author: author.New(handlerStore, authz, log, m, time.Now, cfg.SessionServices,
+		// the context cache is authorization's alone (plan 7f, Ruling 5): a login's join reads the store
+		Author: author.New(labHandlerStore(sts.author, fault), authz, log, m, time.Now, cfg.SessionServices,
 			cfg.Session.StalenessCeiling, cfg.Session.GraceWindow, cfg.ContextIdleTTL).WithRedactor(redactorFor(live)).
 			WithCeilingWarning(cfg.Session.CeilingWarning, cfg.Session.CeilingWarningPlatforms).WithMarks(authMarks),
 		// The system-user table is injected rather than looked up through a

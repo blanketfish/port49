@@ -52,6 +52,10 @@ type stores struct {
 	// broker is the in-process broker's, the daemon's own on memory; nil
 	// on etcd.
 	daemon, broker store.Store
+	// author is what command and session authorization read through: the
+	// daemon's store, behind a context cache when
+	// store.etcd.context_cache.ttl is set (plan 7f; design §12).
+	author store.Store
 	// etcd is the daemon's raw backend on etcd. Nil on memory.
 	etcd *etcdstore.Store
 	// judged is etcd as meta/judged_bundle's reader, for keepDaemonBundle
@@ -113,7 +117,7 @@ func openStores(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 		mem := memory.New(time.Now)
 		ledger.SetBase(mem.Seen() + 1)
 		st := crypt.Wrap(mem, keys, m.CryptOpenFailures, crypt.WithLedger(ledger), say)
-		return stores{daemon: st, broker: st, close: func() {}}, nil
+		return stores{daemon: st, broker: st, author: st, close: func() {}}, nil
 	}
 	ledger.Fence().OnTimeout(m.StoreFenceTimeouts.Inc)
 	// A run after a store gone shows the alarm a run before raised from
@@ -333,8 +337,22 @@ func openDaemon(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 	h := e.Health
 	fmt.Fprintf(out, "port49d: store: health checked every %v; every listener closes after %d consecutive failed "+
 		"checks and opens again after %d passes (store.etcd.health)\n", h.Interval, h.CloseAfter, h.OpenAfter)
+	daemon := crypt.Wrap(gd, keys, m.CryptOpenFailures, crypt.WithLedger(ledger), say)
+	authorStore := daemon
+	if cc := e.ContextCache; cc.TTL > 0 {
+		ss := &staleSayer{out: out, ttl: cc.TTL}
+		authorStore = crypt.Cached(daemon, ledger, crypt.CacheConfig{TTL: cc.TTL, Max: cc.MaxEntries,
+			IdleTTL: cfg.ContextIdleTTL, Lookups: m.ContextCacheLookups, Entries: m.ContextCacheEntries,
+			Stale: ss.serve, Fresh: ss.fresh})
+		fmt.Fprintf(out, "port49d: store: the context cache is on: a session's context is read from it for up to %v, "+
+			"at most %d entries; a revocation reaches it through the context feed, and through a store outage it is "+
+			"served past %v until the listeners close\n", cc.TTL, cc.MaxEntries, cc.TTL)
+	} else {
+		fmt.Fprintln(out, "port49d: store: the context cache is off (store.etcd.context_cache.ttl is not set)")
+	}
 	return stores{
-		daemon:     crypt.Wrap(gd, keys, m.CryptOpenFailures, crypt.WithLedger(ledger), say),
+		daemon:     daemon,
+		author:     authorStore,
 		etcd:       d,
 		judged:     d,
 		persistent: true,

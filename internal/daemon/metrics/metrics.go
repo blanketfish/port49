@@ -108,6 +108,11 @@ type Metrics struct {
 	// closed after a store gone.
 	StoreHealthChecks   *prometheus.CounterVec
 	StoreHealthFailures prometheus.Gauge
+	// ContextCacheLookups counts the context cache's reads by outcome
+	// (hit, miss, stale; plan 7f): any increase of stale is a replica
+	// answering from contexts the store did not confirm.
+	ContextCacheLookups *prometheus.CounterVec
+	ContextCacheEntries prometheus.Gauge
 	// LedgerPending is how many context keys' marks the ledger record does
 	// not yet hold (plan 7e, Ruling 4). Above 0 for a minute is an alarm:
 	// a context put back at one would be taken after a restart.
@@ -472,6 +477,11 @@ func New(reg prometheus.Registerer) *Metrics {
 			Help: "port49d's store health checks, by outcome (pass, fail)."}, []string{"outcome"}),
 		StoreHealthFailures: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_store_health_failures",
 			Help: "port49d's failed store health checks in a row; at store.etcd.health.close_after every listener closes."}),
+		ContextCacheLookups: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_context_cache_lookups_total",
+			Help: "The context cache's reads by outcome: hit, miss, stale (served past its ttl because the store failed)."},
+			[]string{"outcome"}),
+		ContextCacheEntries: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_context_cache_entries",
+			Help: "Login contexts the context cache holds."}),
 		LedgerPending: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_ledger_pending",
 			Help: "Context keys whose mark the ledger record does not yet hold; above 0 for a minute, a context put back at one would be taken after a restart."}),
 		LedgerBehind: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_ledger_behind",
@@ -588,7 +598,7 @@ func New(reg prometheus.Registerer) *Metrics {
 	})
 	reg.MustRegister(m.Requests, m.Latency, m.Decisions, m.Unvalidated, m.KeyValidations,
 		m.Connections, m.ConnectionEvents, m.AuthFailures, m.SpoolDepth, m.SpoolDrops, m.SpoolQuarantines,
-		m.StoreOps, m.StoreCalls, m.StoreCallSeconds, m.StoreCircuitOpen, m.DecisionLogWriteFailures, m.CryptOpenFailures, m.IndexRecordsUndecodable, m.StoreKeyspaceHeld, m.StoreFeedUp, m.StoreFeedRescans, m.StoreFenceTimeouts, m.StoreHealthChecks, m.StoreHealthFailures, m.LedgerPending, m.LedgerBehind, m.CryptStoreKeyUnknown, m.StoreCertExpiry, m.Attributions, m.BrokerItemErrors, m.BrokerIdempotency,
+		m.StoreOps, m.StoreCalls, m.StoreCallSeconds, m.StoreCircuitOpen, m.DecisionLogWriteFailures, m.CryptOpenFailures, m.IndexRecordsUndecodable, m.StoreKeyspaceHeld, m.StoreFeedUp, m.StoreFeedRescans, m.StoreFenceTimeouts, m.StoreHealthChecks, m.StoreHealthFailures, m.ContextCacheLookups, m.ContextCacheEntries, m.LedgerPending, m.LedgerBehind, m.CryptStoreKeyUnknown, m.StoreCertExpiry, m.Attributions, m.BrokerItemErrors, m.BrokerIdempotency,
 		m.BrokerHandshakeFailures, m.BrokerConnectionEvents, m.BrokerConnections, m.BlobCache,
 		m.DevicesQuarantined, m.DevicesAdmissionRefused, m.ContextRefreshes, m.ContextsReindexed,
 		m.ContextsReindexFailures, m.SessionRefreshes, m.TokensSuperseded, m.CeilingWarnings,
@@ -606,6 +616,9 @@ func New(reg prometheus.Registerer) *Metrics {
 	// Both outcomes exist at 0 from the first scrape.
 	m.StoreHealthChecks.WithLabelValues("pass")
 	m.StoreHealthChecks.WithLabelValues("fail")
+	for _, o := range []string{"hit", "miss", "stale"} {
+		m.ContextCacheLookups.WithLabelValues(o)
+	}
 	// process_start_time_seconds among them: an alert on
 	// port49_key_version_devices gates on uptime, because the count starts
 	// at 0 with every restart (spec §10). No labels.

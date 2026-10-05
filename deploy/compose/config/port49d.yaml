@@ -19,3 +19,11 @@ store:
     endpoints: [https://etcd-1:2379, https://etcd-2:2379, https://etcd-3:2379]
     ca_file: /etc/port49/etcd/ca.pem
     daemon: {cert_file: /etc/port49/etcd/port49d.pem, key_file: /etc/port49/etcd/port49d-key.pem}
+    # Go-dark (decision 37): the defaults, said so an operator sees them.
+    health: {interval: 1s, close_after: 5, open_after: 3}
+    # The context cache (design §12): its ttl is a term in revocation
+    # latency, so it is never on unless set. Through a store outage a cached
+    # session's commands are answered past it until the listeners close.
+    # Off here: port49 never picks a ttl, and a trial that copies this file
+    # should not inherit a revocation gap through outages it did not choose.
+    # context_cache: {ttl: 2s}
