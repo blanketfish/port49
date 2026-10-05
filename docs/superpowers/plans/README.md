@@ -3448,12 +3448,21 @@ path to IOS-XE devices. Plan 7f replaces the probe, and carries the gap.
   `store_unavailable`; `port49_redemption_restore_guarded` is 1; its line says `meta/witness is
   at revision N, below the M this port49d followed: the store was restored from a snapshot, …;
   every token redemption is refused (store_unavailable) until a broker runner's purge is
-  done`. Sessions already open, revocations and the admin socket go on. **What to do:** start
-  the brokers. When a runner's purge is done it says `the broker runner's purge after the
-  restore is done; token redemptions are served again`, and users mint again. A port49d that
-  read the store only after the purge stays guarded: restart it (or the next purge releases
-  it). One started after the restore cannot tell; the runbook's token delete covers it.
-  Alarm: the gauge at 1 for longer than it takes to start the brokers. Token logins refused
+  done`. Sessions already open, revocations and the admin socket go on. **A device whose
+  authentication `ERROR` is final (IOS-XE, L4) refuses break-glass too while the guard
+  stands**, and unlike a hung store a guarded port49d never goes dark, so the lockout lasts as
+  long as the guard: keep a console path to IOS-XE devices, and alarm on
+  `port49_redemption_restore_guarded` at 1 for longer than it takes to start the brokers.
+  **What to do:** start the brokers. When a runner's purge is done it says `the broker runner's
+  purge after the restore is done; token redemptions are served again`, and users mint again.
+  **If no runner says that line** (its purge landed before this port49d's first read, or a
+  first runner with no `witness.json` found `meta/judged` intact because runbook step 3 was
+  skipped, so it purged nothing and wrote no `meta/purged`), there are two ways out: delete
+  the restored tokens as etcd's root (`etcdctl del --prefix <prefix>v1/t/`) and then restart
+  this port49d; or delete `meta/judged` and restart a port49-broker, whose takeover purges
+  and writes `meta/purged`. **Never restart the port49d before the restored tokens are
+  deleted:** a restart forgets the drop and redeems them. A port49d started after the
+  restore cannot tell; the runbook's token delete covers it. Token logins refused
   `store_unavailable` with the gauge at 0 and `restore_read` errors rising mean port49d cannot
   read `meta/witness`.
 - **The runbook** (design §13), in this order:

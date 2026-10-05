@@ -126,9 +126,14 @@ func (g *restoreGuard) judge(r etcdstore.RestoreRead, err error, high uint64, se
 		g.guarded, g.dropAt = true, r.Header
 		fmt.Fprintf(g.out, "port49d: store: meta/witness is %s, below the %d this port49d followed: the store was "+
 			"restored from a snapshot, which brings back every token redeemed since it, unspent; every token "+
-			"redemption is refused (store_unavailable) until a broker runner's purge is done: start the brokers, "+
-			"and follow the restore runbook's step 3 (design §13) before another restore; if a broker runner has "+
-			"already said its purge line for this restore, restart this port49d\n", at, high)
+			"redemption is refused (store_unavailable) until a broker runner's purge is done, and a device whose "+
+			"authentication ERROR is final (IOS-XE) refuses break-glass too: start the brokers; a runner's purge "+
+			"line releases this port49d. If no runner says one (its purge landed before this port49d's first "+
+			"read, or meta/judged survived the restore and no witness record was kept), delete the restored "+
+			"tokens as etcd's root (etcdctl del --prefix <prefix>v1/t/) and then restart this port49d, or delete "+
+			"meta/judged and restart a port49-broker, whose takeover purges; never restart this port49d before "+
+			"the restored tokens are deleted: it forgets the drop and redeems them. Follow the restore runbook's "+
+			"step 3 (design §13) before another restore\n", at, high)
 	case r.Witness > g.high:
 		g.high, g.seen = r.Witness, true
 	}

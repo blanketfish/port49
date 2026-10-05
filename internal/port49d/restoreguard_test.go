@@ -123,6 +123,31 @@ func TestAWitnessFollowedDuringTheGuardsReadIsNoDrop(t *testing.T) {
 	}
 }
 
+// The guard's line gives the way out of every state it can be left in, and
+// never advises a restart before the restored tokens are deleted: a restart
+// forgets the drop and redeems them (final review 7e-2 I-3). It says that a
+// device whose authentication ERROR is final refuses break-glass meanwhile.
+func TestTheGuardLineGivesTheSafeWayOut(t *testing.T) {
+	var out bytes.Buffer
+	g := newRestoreGuard(&out)
+	g.Saw(20)
+	judgeNow(g, etcdstore.RestoreRead{Witness: 12, Header: 30}, nil)
+	line := out.String()
+	for _, want := range []string{
+		"a device whose authentication ERROR is final (IOS-XE) refuses break-glass too",
+		"etcdctl del --prefix <prefix>v1/t/",
+		"delete meta/judged and restart a port49-broker",
+		"never restart this port49d before the restored tokens are deleted",
+	} {
+		if !strings.Contains(line, want) {
+			t.Errorf("the line lacks %q: %s", want, line)
+		}
+	}
+	if strings.Contains(line, "already said its purge line for this restore, restart this port49d") {
+		t.Errorf("the line still advises a bare restart: %s", line)
+	}
+}
+
 // pass takes the record before it reads, never after: a witness followed
 // while the read is in flight (the read here calls Saw, as the watch does)
 // is newer than the read, no drop (final review 7e-2 I-4; mutant m27 moved
