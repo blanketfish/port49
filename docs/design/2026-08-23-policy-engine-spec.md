@@ -432,11 +432,14 @@ When some matching grants set `max_privilege` and others leave it unset, the cei
 max of the ones that set it: a grant that states no ceiling does not lift the ceiling another
 grant states. The result has no ceiling only when no matching grant sets one.
 
-When several subjects compose, a subject whose `enable` is `none` contributes its roles but not
-its `max_privilege`, as long as another composing subject offers escalation (`enable` `token` or
-`auto`): the ceiling that `enable` can reach is the max over the grants of subjects that offer
-it. Otherwise a subject that cannot escalate, stating a high ceiling, would hand it to another
-subject's `enable`, and the composition would reach a level no single subject reaches. The
+When several subjects compose and one of them offers escalation (`enable` `token` or `auto`), a
+subject whose `enable` is `none` contributes to the ceiling that `enable` can reach only the
+level its roles reach, capped by its own `max_privilege`: the level it already holds without
+enabling, never its bare cap, and it never creates a ceiling where the subjects that offer
+escalation state none. Otherwise a subject that cannot escalate, stating a high ceiling,
+would hand it to another subject's `enable`, and the composition would reach a level no single
+subject reaches; and its own login level never sits above the ceiling. A refusal that follows
+from a cap not counted names it. The
 composed `enable` is still the strongest single subject's.
 
 **Several subjects compose.** A principal in two groups, or listed by an identity subject and
@@ -7218,8 +7221,9 @@ every matching subject composes, and a scheduled refresh stamps refreshed_at.** 
   union. A composition of more than one subject is checked at mint with the joint checks of §10,
   and one a check refuses is `composition_refused` for that principal on that device, never a
   quarantine; the refresh revokes a live context the same way. The record lists them as
-  `policy.subjects`. A subject with `enable: none` contributes no `max_privilege` to a
-  composition in which another subject offers escalation, so a composition never reaches a
+  `policy.subjects`. A subject with `enable: none` contributes to a composition in
+  which another subject offers escalation only the level its roles reach, capped by its own
+  `max_privilege`, never its bare cap, so a composition never reaches a
   ceiling no single subject reaches (Ruling PF7g-i; §5.1). Tasks 11 and 13.
 - **6. Nested groups are a required choice of three.** `in_chain`
   (`member:1.2.840.113556.1.4.1941:=`), `recursive` (port49 walks, breadth-first, with a visited
