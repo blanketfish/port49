@@ -93,7 +93,7 @@ context cache that is served past its TTL through an outage and alarmed.
 - Go 1.26, module `github.com/rhwendt/port49`, no cgo.
 - `go.etcd.io/etcd/client/v3` v3.6.15; the compose stack runs `gcr.io/etcd-development/etcd:v3.6.15`,
   the server module's own version in `go.mod`.
-- Docker Engine with Compose v2.24 or later (`!override` in the lab's overlay), BuildKit.
+- Docker Engine with Compose v2.24.4 or later (`!override` in the lab's overlay), BuildKit.
 - GitHub Actions (`ubuntu-24.04`), the repository's first workflow.
 - containerlab on beehive for Tasks 2 and 9, with the five images L37 used.
 
@@ -200,10 +200,19 @@ that need his call.
    - **What the defaults give.**
      - Dark within 5.5s of the store stopping: `close_after` × `interval` + `call_timeout`.
      - Listening again within about 5s + the start + 3s of its return.
-   - **The tested reason.** Task 5's test kills a three-member cluster's leader. It asserts the
-     longest run of failed checks at the default interval stays below 5, so an etcd leader
-     election does not close the listeners. If that test finds a longer run, the default is not
-     raised quietly: the measured run goes to Ryan with OR-1.
+   - **The tested reason.** Two conditions, each with quorum healthy, and each must not close
+     the listeners. Task 5 asserts the longest run of failed checks at the default interval
+     stays below 5 under both:
+     - a three-member cluster's killed leader (a refused connection and one election);
+     - one member hung with its TCP connection alive (defragmenting, wedged or partitioned),
+       through an `etcdtest.Proxy` in front of its client endpoint. clientv3 balances reads
+       round-robin, so each check has a good chance to land a read on that member, and every
+       replica sees the same member. Both pings set `clientv3.WithRequireLeader`, so a
+       leaderless member answers `ErrGRPCNoLeader` at once and clientv3 retries the next
+       endpoint, instead of the read blocking until the caller's deadline.
+
+     If either test finds a run of 5 or more, the default is not raised quietly: the measured
+     run goes to Ryan with OR-1.
    - The trade is OR-1's.
 4. **The idle gap is closed, and break-glass is unchanged.**
    - **What changes.** Going dark on the check's own clock makes idle and loaded the same.
@@ -236,19 +245,29 @@ that need his call.
      - a generation counter keeps a read that raced any eviction from being cached;
      - `ErrNotFound` evicts.
    - **Through an outage.** A read that fails `store.ErrUnavailable` (a timeout, an open
-     circuit, a feed fence that did not arrive) is answered from an entry when both hold:
+     circuit), and is not a fence timeout, is answered from an entry when both hold:
      - the ledger still knows the entry's revision as the latest;
      - the context's own idle TTL from its `LastTouchedAt` has not passed.
 
      It is counted `stale`, and said once per run of stale serves. It ends when a read lands,
-     or when the listeners close (the run, and the cache, end). Never on `ErrNotFound`, and
-     never on an unreadable record (a put-back).
+     or when the listeners close (the run, and the cache, end). Never on `ErrNotFound`, never
+     on an unreadable record (a put-back), and never on a fence timeout: `crypt.Fenced` waits
+     only when the store's record carries a different revision than the ledger's, so a read
+     that failed in the fence wait means etcd *answered* with a later record than the cached
+     one, which may be a `SetRevokedAt`. That is not an outage, so the cached entry is
+     evicted and the read is denied (`crypt.ErrFeedBehind`, kept through the guard's timeout
+     wrap, Task 7).
    - **What revocation does during it.** "Revocation does not function during it, and that is
      documented rather than discovered" (design §12). The window is bounded by go-dark, 5.5s at
      the defaults.
-   - **The fence case.** A feed that is behind while etcd answers cannot be told from an
-     outage once the guard has turned the fence's timeout into its own. It is bounded by the
-     same window, because the health check waits on the fence too.
+   - **The fence case.** A feed that is behind while etcd answers is not an outage and is
+     never served stale (above). The health check waits on the fence too, so a feed behind by
+     more than `call_timeout` for `close_after` checks closes the listeners; an operator who
+     sees dark with etcd healthy looks at `port49_store_fence_timeouts_total`.
+   - **What bounds a hit.** The TTL, not `Up()`. `FollowContexts` sets `Fence().SetUp(true)`
+     before `WatchContexts` has established the watch (`follow.go:137-138`), and a watch hung
+     on a dead connection reads up. The `Up()` condition is a cheap guard, and the
+     revocation window on a hit is the TTL, which the operator chose.
    - **Lifetime.** Per run. A run after a store gone starts empty.
 6. **Blobs: no change.** `author.Engine` caches the compiled program by hash with no invalidation
    (spec §5.1.1). A blob is immutable and named by its hash, so it is served through an outage
@@ -384,7 +403,10 @@ Every line below is printed by a task in this plan, and the tests named pin it.
     listener on the store (design §12); remove it` and the same for `context_cache`.
 - **New metrics** (Tasks 6, 8). No label names a device.
   - `port49_store_health_checks_total{outcome}` (`pass`, `fail`);
-  - `port49_store_health_failures`, the failed checks in a row now;
+  - `port49_store_health_failures`, the failed checks in a row now. The count is held by the
+    process (`healthState`, Task 5), not the run: each run's new registry is set from it, and
+    while a run waits for the store it reads at least `close_after`, so the alert "above 0 for
+    three intervals" does not resolve at the close and holds through the outage;
   - `port49_context_cache_lookups_total{outcome}` (`hit`, `miss`, `stale`), where any increase
     of `stale` is the alarm the design asks for;
   - `port49_context_cache_entries`.
@@ -394,9 +416,11 @@ Every line below is printed by a task in this plan, and the tests named pin it.
   - **Revoke:** `docker compose exec port49-broker port49 revoke --socket
     /run/port49/port49-broker.sock --principal user:bob@example.com`.
   - **Replicas:** never `--scale`.
-  - A broker whose `state_dir` volume was made by hand as root is refused with 7e's line,
-    `broker.state_dir … is owned by uid 0` (or `writable by its group or others`), and the
-    README gives the fix.
+  - A broker whose `state_dir` is a bind mount, or a volume filled by hand, owned by root
+    still starts, because root is an accepted owner (`statedir_linux.go:72`) and 0755 passes
+    (`statedir_linux.go:61`, `internal/config/config.go:1181`). The first `marks.json` or
+    witness write then fails, as the 65532 process cannot write the directory. Only a bind mount or a pre-filled volume can hit it: a fresh named volume copies
+    65532/0700 from the image. The README gives the fix (`chown 65532:65532` and `chmod 0700`).
 
 ## Global Constraints
 
@@ -405,8 +429,9 @@ Every line below is printed by a task in this plan, and the tests named pin it.
 - Reason codes are spec §5.7's closed vocabulary (`internal/decision/reasons.go`). This plan adds
   none.
 - The log never contains a token, password, challenge or response. Credentials appear only as
-  `credential_sha256`. An unvalidated body is never logged. The CI workflow uploads `docker
-  compose logs` on failure, which holds the decision log and stderr and neither of those.
+  `credential_sha256`. An unvalidated body is never logged. The smoke test prints `docker
+  compose logs` itself on failure (Task 1, Step 11), which holds the decision log and stderr
+  and neither of those.
 - No device identity in metric labels.
 - Verify with `make test && make vet` and report the real output. Task 1 adds `make
   compose-smoke`, and Tasks 1 and 2 add `go vet -tags compose ./tests/compose/...` to `make vet`.
@@ -436,9 +461,10 @@ the test that pins each:
    and Task 6's `TestAFlappingStoreDoesNotOpenTheListeners`.
 3. **A context deleted or revoked elsewhere while it is cached.** The operator expects it never
    served, fresh or stale. Pinned by Task 7's `TestAFeedChangeEvictsTheKey`,
-   `TestAReadThatRacedAnEvictionIsNotCached`, `TestASupersededEntryIsNeverServedStale`, and Task
-   8's `TestAContextDeletedElsewhereIsNotAnsweredFromTheCache` and
-   `TestAnEvictedContextIsNotServedThroughAnOutage`.
+   `TestAReadThatRacedAnEvictionIsNotCached`, `TestASupersededEntryIsNeverServedStale`,
+   `TestAFenceTimeoutIsNeverServedStale`, and Task 8's
+   `TestAContextDeletedElsewhereIsNotAnsweredFromTheCache`, `TestARevokedSessionIsDeniedInsideTheTTL`
+   and `TestAnEvictedContextIsNotServedThroughAnOutage`.
 4. **The stack recreated (`docker compose down`, then `up`) with its volumes kept.** The
    operator expects the broker to accept its kept `state_dir`, the session to continue, and a
    token minted before to redeem. Pinned by Task 1's `TestComposeSmoke`.
@@ -465,7 +491,7 @@ the test that pins each:
   Copy raw captures to `main`'s `tests/lab/captures/` before removing the worktree (memory:
   the labpcap audit).
 - Run a background stall watchdog during each run, and re-arm it on wake (memory).
-- Before a run: `df -h` on beehive (7d hygiene), and `docker compose version` ≥ v2.24.
+- Before a run: `df -h` on beehive (7d hygiene), and `docker compose version` ≥ v2.24.4.
 - Each run builds the image from the worktree (`docker compose build`), so the lab measures the
   commit.
 - Task 2's proxy-off half changes `/etc/docker/daemon.json` and restarts Docker: run it last,
@@ -505,7 +531,12 @@ the test that pins each:
 - `.gitignore`: `/deploy/compose/local/`.
 - `internal/config/config.go` (+ `store_test.go`): `EtcdHealth`, `EtcdContextCache`, their
   checks, the broker's refusals.
-- `internal/store/etcd/etcd.go` (+ a test): `PingToken`.
+- `internal/store/etcd/etcd.go` (+ a test): `PingToken`; `Ping` and `PingToken` both set
+  `clientv3.WithRequireLeader`.
+- `internal/store/guard/guard.go` (+ `guard_test.go`): a guarded timeout keeps the inner error
+  wrapped, so `crypt.ErrFeedBehind` survives it (Task 7).
+- `internal/port49d/store_test.go`: `sts.probe` replaced by `sts.health` in the two tests that
+  used it (Task 6).
 - `internal/store/etcd/etcdtest/etcdtest.go`: `Cluster.Kill`, `Cluster.Leader`.
 - `internal/port49d/store.go`: `stores.health` replaces `stores.probe`; `stores.author`.
 - `internal/port49d/daemon.go`: `probe` removed.
@@ -863,21 +894,24 @@ x-etcd: &etcd
   networks: [port49]
   depends_on:
     setup: {condition: service_completed_successfully}
-
-x-etcd-flags: &etcd-flags
-  - --initial-cluster=etcd-1=https://etcd-1:2380,etcd-2=https://etcd-2:2380,etcd-3=https://etcd-3:2380
-  - --initial-cluster-state=new
-  - --initial-cluster-token=port49-compose
-  - --data-dir=/var/lib/etcd
-  - --listen-client-urls=https://0.0.0.0:2379
-  - --listen-peer-urls=https://0.0.0.0:2380
-  - --client-cert-auth
-  - --trusted-ca-file=/etc/etcd-pki/ca.pem
-  - --peer-client-cert-auth
-  - --peer-trusted-ca-file=/etc/etcd-pki/ca.pem
-  # design §13: periodic compaction, since every login and touch writes a revision
-  - --auto-compaction-mode=periodic
-  - --auto-compaction-retention=1h
+  # The settings the three members share. A YAML merge (<<) cannot splice a
+  # list into a member's command:, but it does merge this map, and etcd reads
+  # each ETCD_* variable as the flag of the same name; each member's command:
+  # carries only what differs per member.
+  environment:
+    ETCD_INITIAL_CLUSTER: etcd-1=https://etcd-1:2380,etcd-2=https://etcd-2:2380,etcd-3=https://etcd-3:2380
+    ETCD_INITIAL_CLUSTER_STATE: new
+    ETCD_INITIAL_CLUSTER_TOKEN: port49-compose
+    ETCD_DATA_DIR: /var/lib/etcd
+    ETCD_LISTEN_CLIENT_URLS: https://0.0.0.0:2379
+    ETCD_LISTEN_PEER_URLS: https://0.0.0.0:2380
+    ETCD_CLIENT_CERT_AUTH: "true"
+    ETCD_TRUSTED_CA_FILE: /etc/etcd-pki/ca.pem
+    ETCD_PEER_CLIENT_CERT_AUTH: "true"
+    ETCD_PEER_TRUSTED_CA_FILE: /etc/etcd-pki/ca.pem
+    # design §13: periodic compaction, since every login and touch writes a revision
+    ETCD_AUTO_COMPACTION_MODE: periodic
+    ETCD_AUTO_COMPACTION_RETENTION: 1h
 
 services:
   # One-shot, as root: copies the configuration and the PKI into one volume
@@ -925,6 +959,8 @@ services:
   # enables auth, once; a later `up` finds auth enabled and changes nothing.
   etcd-init:
     image: port49-setup:dev
+    # built here as well as at setup, so no `up` ever tries to pull the tag
+    build: {context: ../.., target: setup}
     command: [/usr/local/bin/etcd-init.sh]
     networks: [port49]
     volumes: [etcd-root:/etcd-root:ro]
@@ -954,6 +990,8 @@ services:
 
   port49d:
     image: port49:dev
+    # built here as well as at port49-broker, so no `up` ever tries to pull the tag
+    build: {context: ../.., target: port49}
     restart: unless-stopped
     networks: [port49]
     # Non-root binds 49: Docker sets this in each container's network
@@ -1055,14 +1093,16 @@ store:
 `deploy/compose/config/policy.yaml`:
 
 ```yaml
-# The trial's policy: alice and bob, each an admin everywhere. The key
+# The trial's policy: alice and bob, each an admin everywhere. A token_ttl
+# of 15m outlasts the smoke test's waits (up to 3m + 3m + 120s) between
+# minting a token and redeeming it after the recreate. The key
 # group admits the stack's own network, whose gateway (172.30.49.1) is the
 # source a host-published connection presents (inventory.yaml).
 scopes: [{name: all_devices, match: {}}]
 roles: [{name: network_admin, privilege: admin, permit: ["**"]}]
 subjects:
-  - {name: alice, identity: ["user:alice@example.com"], username: alice, token_ttl: 5m}
-  - {name: bob, identity: ["user:bob@example.com"], username: bob, token_ttl: 5m}
+  - {name: alice, identity: ["user:alice@example.com"], username: alice, token_ttl: 15m}
+  - {name: bob, identity: ["user:bob@example.com"], username: bob, token_ttl: 15m}
 grants:
   - {subject: alice, scope: all_devices, roles: [network_admin]}
   - {subject: bob, scope: all_devices, roles: [network_admin]}
@@ -1137,6 +1177,11 @@ install -o 0 -g 0 -m 0600 "$L/etcd/root-key.pem" /vol/etcd-root/root-key.pem
 
 # store-roles reads both store: blocks and the files they name, at the
 # paths each container sees them: stage both here, in this container alone.
+# The staged copy holds both components' etcd private keys and the exited
+# container keeps its filesystem layer, so it is removed on every exit
+# (Ruling 1 holds inside the project). Nothing after setup needs it: etcd-init
+# reads roles.sh from the etcd-root volume.
+trap 'rm -rf /etc/port49' EXIT
 dir /etc/port49/etcd
 cp /vol/port49d-etc/port49d.yaml /vol/broker-etc/port49-broker.yaml /etc/port49/
 cp /vol/port49d-etc/etcd/* /vol/broker-etc/etcd/* /etc/port49/etcd/
@@ -1170,14 +1215,39 @@ if etcdctl auth status 2>/dev/null | grep -q 'Authentication Status: true'; then
   echo "etcd-init: auth is already enabled; the roles stand as applied"
   exit 0
 fi
-sh -eu /etcd-root/roles.sh
-etcdctl user add root --no-password
-etcdctl user grant-role root root
+# Each line of roles.sh is one etcdctl command. A run that stopped partway
+# (an etcd restart, a killed container) left some of them applied, and `role
+# add` and `user add` fail on a name that exists: tolerate exactly that, so
+# the next `up` finishes the job instead of failing under `set -e`.
+apply() {
+  if out=$("$@" 2>&1); then
+    return 0
+  fi
+  case "$out" in
+    *"already exists"*) return 0 ;;
+  esac
+  echo "etcd-init: $* failed: $out" >&2
+  exit 1
+}
+while IFS= read -r line; do
+  case "$line" in
+    "" | "#"*) continue ;;
+  esac
+  # shellcheck disable=SC2086 # one etcdctl command per line, split on spaces
+  apply $line
+done < /etcd-root/roles.sh
+apply etcdctl user add root --no-password
+apply etcdctl user grant-role root root
 etcdctl auth enable
 echo "etcd-init: port49's roles applied and auth enabled"
 ```
 
 Mark both executable (`git update-index --chmod=+x` on commit).
+
+Before relying on `etcd-init.sh`'s line loop, run `port49d store-roles` on the example's two
+files and read its output: the loop assumes one `etcdctl …` command per line with no quoted
+space inside an argument. If a line is quoted or wrapped, run it with `sh -c "$line"` in
+`apply` instead, and keep the "already exists" tolerance.
 
 - [ ] **Step 10: The smoke test's client and mint**
 
@@ -1313,7 +1383,9 @@ func mint(t *testing.T, local, addr, device string) string {
 		t.Fatalf("mint: status %d, the body does not decode", resp.StatusCode)
 	}
 	if len(out.Results) != 1 || out.Results[0].Login == "" {
-		t.Fatalf("mint: status %d, %d result(s)", resp.StatusCode, len(out.Results))
+		// MintItem.String withholds tokens (internal/broker/api/api.go:57), so
+		// %v names the refusal and prints no credential.
+		t.Fatalf("mint: status %d, %d result(s): %v", resp.StatusCode, len(out.Results), out.Results)
 	}
 	return out.Results[0].Login
 }
@@ -1409,6 +1481,23 @@ func envValue(t *testing.T, path, name string) string {
 	return ""
 }
 
+// waitMarks waits up to 30s for marks.json to exist and be non-empty in the
+// broker-state volume, looked at from a throwaway container on the image
+// the volume was made from.
+func waitMarks(t *testing.T) {
+	t.Helper()
+	var out []byte
+	var err error
+	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); time.Sleep(time.Second) {
+		out, err = exec.Command("docker", "run", "--rm", "-v", project+"_broker-state:/s", "--entrypoint", "test",
+			"port49-setup:dev", "-s", "/s/marks.json").CombinedOutput()
+		if err == nil {
+			return
+		}
+	}
+	t.Fatalf("broker.state_dir/marks.json was not written in 30s after the revoke: %v\n%s", err, out)
+}
+
 func TestComposeSmoke(t *testing.T) {
 	root, err := filepath.Abs("../..")
 	if err != nil {
@@ -1447,6 +1536,11 @@ func TestComposeSmoke(t *testing.T) {
 	if !strings.Contains(first, "broker.state_dir/marks.json is absent") {
 		t.Fatalf("a first start did not say its copy starts from the store:\n%s", first)
 	}
+
+	// The broker writes its copy from the store's watch, after `port49
+	// revoke` has returned (internal/port49d/markscopy.go:303-311): wait for
+	// marks.json before the recreate, or a fast `down` makes "is absent" flaky.
+	waitMarks(t)
 
 	// Recreate every container; the named volumes stay.
 	s.run("down")
@@ -1495,7 +1589,7 @@ image:
 
 # The compose stack end to end: up, a device login, the stack recreated
 # with its volumes kept, the session and the broker's state_dir kept. Needs
-# Docker with Compose v2.24+; behind the `compose` tag so `go test ./...`
+# Docker with Compose v2.24.4+; behind the `compose` tag so `go test ./...`
 # never needs Docker.
 compose-smoke:
 	go test -tags compose ./tests/compose/ -count=1 -v -timeout 20m
@@ -1568,8 +1662,11 @@ Write the operator's page. It is short, and every fact in it is checked by Step 
 - **`broker.state_dir`:**
   - one named volume per broker; never `--scale`, never `deploy.replicas`, never an
     anonymous volume;
-  - a volume made by hand as root is refused (7e's line), and the fix is `docker run --rm -v
-    <volume>:/s alpine:3.22 sh -c 'chown 65532:65532 /s && chmod 0700 /s'`.
+  - a bind mount, or a volume filled by hand, owned by root is not refused at start (root is
+    an accepted owner), but the first `marks.json` or witness write fails, as the 65532
+    process cannot write it; a fresh named volume copies 65532/0700 from the image and never
+    hits this. The fix is `docker run --rm -v <volume>:/s alpine:3.22 sh -c 'chown
+    65532:65532 /s && chmod 0700 /s'`.
 - **Backups:** each etcd data volume and `broker-state` (design §13's runbook).
 - **What it does not do yet:** plan 12's install page, compaction quota sizing, alarms.
 
@@ -1621,7 +1718,15 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 
   - `const composeGateway = "172.30.49.1"`;
   - `func proxyModeOf(ps string) string`;
-  - `func composeLabFiles(base string, platform string) (map[string]string, error)`.
+  - `func composeLabFiles(base, brokerSlice, policy, inventory string) (map[string]string, error)`:
+    pure, reads no file. `base` arrives already derived for the platform (`startCompose` calls
+    `l.derivedConfig(…, platformSessionAttributes[platform], …)` first, as `prepareSplit`
+    does), so the platform is not applied inside it. `brokerSlice` is
+    `tests/lab/slice/broker.yaml`'s text, and `policy` and `inventory` are
+    `tests/lab/slice/policy.yaml`'s and `tests/lab/inventory-lab.yaml`'s, as `splitBrokerYAML`
+    takes `sliceBroker`. The unit test reads the four files relative to the package, as
+    `split_unit_test.go:28` does, because `root` is set only by `initGlobal`
+    (`harness_test.go:368-374`) and is empty under `make lab-unit`.
 
 - [ ] **Step 1: The compose mode's unit tests**
 
@@ -1634,13 +1739,24 @@ lab-unit`:
 // device at the stack's gateway so a rewritten source is recorded, not
 // refused (L39).
 func TestComposeLabFilesNameTheContainersPaths(t *testing.T) {
-	base, err := os.ReadFile(filepath.Join(root, "tests", "lab", "port49d-lab.yaml"))
+	// Relative to the package: `root` is empty under `make lab-unit`.
+	read := func(name string) string {
+		b, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	files, err := composeLabFiles(read("port49d-lab.yaml"), read(filepath.Join("slice", "broker.yaml")),
+		read(filepath.Join("slice", "policy.yaml")), read("inventory-lab.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	files, err := composeLabFiles(string(base), "arista_eos")
-	if err != nil {
-		t.Fatal(err)
+	// The slice's broker listens on its container's loopback (127.0.0.1:8449);
+	// published through 127.0.0.1:8449:8443 that is unreachable, so the
+	// compose broker listens on every address of its container, on 8443.
+	if b := files["port49-broker.yaml"]; !strings.Contains(b, `listen: ":8443"`) || strings.Contains(b, "127.0.0.1:8449") {
+		t.Errorf("port49-broker.yaml does not listen on :8443 in its container:\n%s", b)
 	}
 	d := files["port49d.yaml"]
 	for _, want := range []string{`listen: ":49"`, "/etc/port49/policy.yaml", "/etc/port49/inventory.yaml",
@@ -1682,7 +1798,7 @@ Expected: FAIL, undefined `composeLabFiles`, `proxyModeOf`, `composeGateway`.
 ```yaml
 # The lab's overlay on deploy/compose (plan 7f, Task 2): port49d on the
 # clab bridge's gateway, where every topology's devices send TACACS+, and
-# the broker on the slice's URL (sliceBrokerURL). Compose v2.24+ (!override).
+# the broker on the slice's URL (sliceBrokerURL). Compose v2.24.4+ (!override).
 services:
   port49d:
     ports: !override
@@ -1697,19 +1813,25 @@ services:
 `tests/lab/compose_test.go` (`//go:build lab`) holds:
 
 - **`composeGateway = "172.30.49.1"`**, and `composeProject = "port49lab"`.
-- **`composeLabFiles(base, platform)`** returns the four YAML files and two env files a run
-  writes:
+- **`composeLabFiles(base, brokerSlice, policy, inventory)`** returns the four YAML files and
+  two env files a run writes:
   - `port49d.yaml`: `splitDaemonYAML(base, splitNode{Listen: ":49", Metrics: ":9049", Admin:
     "/run/port49/port49d.sock", Spool: "/var/spool/port49d/acct.jsonl"}, "/etc/port49/policy.yaml",
     "/etc/port49/inventory.yaml", composeStoreBlock("daemon"))`, where `base` is
     `l.derivedConfig("compose-base", platformSessionAttributes[platform], …)`'s body, as
     `prepareSplit` derives it (harness_test.go:2607).
-  - `port49-broker.yaml`: `splitBrokerYAML(base, sliceBroker, splitBrokerOpts{Policy:
+  - `port49-broker.yaml`: `splitBrokerYAML(base, brokerSlice, splitBrokerOpts{Policy:
     "/etc/port49/policy.yaml", Inventory: "/etc/port49/inventory.yaml", State:
     "/var/lib/port49-broker", Metrics: ":9050", Admin: "/run/port49/port49-broker.sock", Store:
-    composeStoreBlock("broker"), PKI: "/etc/port49/broker"})`.
-  - `policy.yaml`: `tests/lab/slice/policy.yaml`.
-  - `inventory.yaml`: `tests/lab/inventory-lab.yaml` with one device appended, `{name:
+    composeStoreBlock("broker"), PKI: "/etc/port49/broker"})`, then its `broker:` block's
+    `listen:` rewritten to `":8443"`. `splitBrokerYAML` passes the slice's `listen:
+    "127.0.0.1:8449"` (`tests/lab/slice/broker.yaml:6`) through unchanged, and inside the
+    container that loopback address cannot be reached through the published
+    `127.0.0.1:8449:8443`, so every `revokeAgent` and `port49 login` would fail before L39 or
+    L41 measured anything. `composeLabFiles` fails if the string it rewrites is not there,
+    rather than shipping a config that listens on loopback.
+  - `policy.yaml`: the `policy` argument.
+  - `inventory.yaml`: the `inventory` argument with one device appended, `{name:
     l39_gateway, platform: arista_eos, addresses: [172.30.49.1]}`, inside the `devices:` list,
     and a key group for `172.30.49.0/24` → `lab_key`.
   - `port49d.env`: `PORT49_LAB_KEY=<labKeyDefault>` and `PORT49_LAB_ENC_KEY=<the harness's
@@ -1737,7 +1859,11 @@ services:
      - `docker logs -f --since 0s port49lab-port49d-1`, stdout appended to `l.logPath` and
        stderr to `l.errPath`;
      - the same for the broker into `tests/lab/logs/compose-<platform>/broker.{log,err}`.
-  5. Waits for `l.awaitTACACS()` and the broker's `127.0.0.1:9050/readyz` 200.
+  5. Waits for the broker's `127.0.0.1:9050/readyz` and port49d's `127.0.0.1:9049/readyz` to
+     answer 200 (up to 3 minutes), as Task 1's smoke test does, and then for
+     `l.awaitTACACS()`. That call returns nil on every platform except IOS-XE
+     (`adapters_test.go:344-348`), so on its own it proves nothing about port49d on the other
+     four.
   6. At cleanup: `down -v`, then the followers stopped.
 - **`StartDaemon`** starts a fresh follower with `--since <the stop's time>`, so no line is
   doubled in `l.errPath`.
@@ -1815,7 +1941,13 @@ func TestL39DockerSourceAddress(t *testing.T) {
 		fmt.Fprintf(&obs, "| the login | err %v; redeem %q |\n", lerr, redeemReason(recs, sha(tok)))
 		note := obs.String()
 		failed := nas != l.p.addr || lerr != nil
-		if failed {
+		if failed && nas == "" && len(recs) == 0 {
+			// No record at all is "the connection never reached port49d", not a
+			// rewritten source: Docker's bridge isolation can drop traffic
+			// DNAT'd from the clab network to the compose network (Step 5a).
+			note += "\n**No connection reached port49d:** no record of any kind, so this says nothing about the " +
+				"source address. Step 5a's reachability check decides which it is.\n"
+		} else if failed {
 			note += fmt.Sprintf("\n**Not as the claim says:** port49d saw %q, not the device's %s.\n", nas, l.p.addr)
 		}
 		l.result(t, entry, l39Claim, note)
@@ -1829,6 +1961,21 @@ func TestL39DockerSourceAddress(t *testing.T) {
 `sliceRecords`, `str` and `sub` are the harness's record readers (`redeemReason` uses them,
 `revoke_test.go`). `l.p.addr` is the device's management address. Check the field name in
 `harness_test.go`'s platform table and use it.
+
+- [ ] **Step 5a: Can the device reach the published port at all?**
+
+containerlab's management network is a Docker bridge, and Docker's `DOCKER-ISOLATION-STAGE-1/2`
+chains can drop traffic DNAT'd from `172.100.100.0/24` to the compose subnet. Before L39 or L41
+is read, make one device-side TCP connect to `172.100.100.1:49` with the stack up (a throwaway
+test, or by hand through `l.shell` on the device), and check that port49d's log or stderr shows
+that connection (a record, or the line for a source it does not admit).
+- **A connection is seen.** Go on to Step 6. The L39 note then tells a rewritten source apart
+  from this case (see the test above).
+- **Nothing is seen.** Stop. The compose deployment is not reachable from the clab network
+  through its published port, so L39 would record `nas ""` and L41 could not run. The fallback
+  is to attach port49d to the clab management network as an external network in the lab
+  overlay. That changes what the lab measures against what the compose file ships, so it is
+  Ryan's call: take it to Ryan with this check's output and do not add it unasked.
 
 - [ ] **Step 6: Run it with the proxy on (Docker's default)**
 
@@ -1844,7 +1991,11 @@ design §13's container sentence (Step 9) says the source is rewritten.
 As root on beehive, with consent standing for lab runs:
 1. Back up `/etc/docker/daemon.json`.
 2. Set `"userland-proxy": false` in it.
-3. `systemctl restart docker`.
+3. `systemctl restart docker`. This stops every container on beehive, including the clab
+   topology and the compose stack. Run it between tests, with nothing else using beehive, and
+   treat the next step as a cold start: the harness redeploys both (`startCompose`'s `up -d
+   --build`, and the platform's topology deploy, which takes the platform's boot time, several
+   minutes for vEOS).
 4. Run Step 6's command again. Expected: `results/L39-docker-proxy-off-arista_eos.md`.
 5. Restore the file and `systemctl restart docker`.
 6. Check `docker info` answers, and that `ps -eo args | grep docker-proxy` shows the proxy back
@@ -1882,7 +2033,7 @@ Add a section, "The compose mode (plan 7f)", covering:
 - `l.startCompose`, and what it publishes where;
 - its files (`tests/lab/logs/compose-<platform>/`);
 - the store hang (`docker compose pause`);
-- Docker ≥ v2.24;
+- Docker Compose ≥ v2.24.4;
 - that new register rows run on it, and closed rows' re-checks stay on the host harness.
 
 - [ ] **Step 11: Commit**
@@ -1924,8 +2075,18 @@ context cache it is told to keep; and port49 ships a container shape.** *Plan 7f
 - **Closing.** `close_after` consecutive failures (default 5, 2 to 60) are a store gone (decision
   35): every listener closes and held connections are reset. Idle or loaded, port49d is dark
   within `close_after` × `interval` + `call_timeout` of the store stopping (5.5s at the
-  defaults). This replaces decision 36's probe. The guard's `hold_ttl` rule stays as the
-  backstop.
+  defaults, derived from them; §15 L41 measures it). This replaces decision 36's probe. The
+  guard's `hold_ttl` rule stays as the backstop.
+  - **What the defaults were tested against.** Two conditions with quorum healthy, neither of
+    which may close the listeners: a killed leader's election, and one member hung with its
+    TCP connection alive (a defragmenting, wedged or partitioned member). Both pings carry
+    `WithRequireLeader`, so a member with no leader answers at once and the client retries
+    another endpoint, instead of the check waiting out `call_timeout`.
+  - **Feed lag is a trigger.** The context connection's read waits for the context feed, so a
+    feed more than `call_timeout` behind (a mass refresh burst, for example) fails the check,
+    and `close_after` of them close every replica. The same reads are denied
+    `store_unavailable` then. An operator who sees dark with etcd healthy looks at
+    `port49_store_fence_timeouts_total`.
 - **Reopening.** A run after a store gone waits for the store as at a start, re-reading its
   files. It binds TACACS+ only after `open_after` consecutive checks pass (default 3, 1 to 60);
   a failure starts the count again. A cold start is not gated.
@@ -1936,17 +2097,20 @@ context cache it is told to keep; and port49 ships a container shape.** *Plan 7f
   (100ms to 60s), with `max_entries` (default 65536). Only command and session authorization
   read through it: never a login, an enable, accounting or a token redemption.
   - **A hit:** the entry younger than the TTL, the context feed up, and no later record known
-    at the key.
+    at the key. What bounds a hit is the TTL, not the feed's `Up()`: `FollowContexts` marks the
+    feed up before its watch is established, and a watch hung on a dead connection reads up.
   - **Eviction:**
     - a write through it evicts the key;
     - every change the context feed brings evicts its key, a delete included;
     - a compacted rescan clears it.
 
     So a revocation reaches a cached session at the feed's speed.
-  - **Through an outage.** A read the store fails is answered from the entry the ledger still
-    knows, within the context's idle TTL, counted `stale` and said once. A revocation made
-    meanwhile does not reach it, until a read lands or the listeners close. The cache lives
-    for one run.
+  - **Through an outage.** A read the store fails to answer (a timeout, an open circuit) is
+    answered from the entry the ledger still knows, within the context's idle TTL, counted
+    `stale` and said once. Never on a fence timeout: that is the store answering with a later
+    record than the cached one, which may be a revocation, so the read is denied. A
+    revocation made during a true outage does not reach a cached session, until a read lands
+    or the listeners close. The cache lives for one run.
   - **Blobs** were already cached compiled by hash (§5.1.1).
 - **Who sets it.** Both `store.etcd.health` and `store.etcd.context_cache` are port49d's;
   port49-broker.yaml refuses them.
@@ -1966,18 +2130,21 @@ context cache it is told to keep; and port49 ships a container shape.** *Plan 7f
 
 - [ ] **Step 2: Decisions 35 and 36 amended**
 
+The quoted spans below can wrap across lines in the spec file. Match on the sentence's
+beginning and end, never on a quote that spans a line break.
+
 Decision 35, the bullet `- **A store gone is a store that is down.** port49d closes every
 listener when:`. Add a first sub-bullet before `it loses its hold on the keyspace;`:
 
 `its store health checks fail `store.etcd.health.close_after` times in a row (decision 37);`
 
-In the same bullet, replace `the owner's go-dark ruling of 2026-09-24 in its coarse form, which
-plan 7f refines. port49d then waits` with `the owner's go-dark ruling of 2026-09-24, refined by
-decision 37. port49d then waits`. After `retrying any error that start meets.`, add `It binds
+In the same bullet, replace the sentence beginning `the owner's go-dark ruling of 2026-09-24
+in its coarse form` (it ends `port49d then waits`) with `the owner's go-dark ruling of
+2026-09-24, refined by decision 37. port49d then waits`. After `retrying any error that start meets.`, add `It binds
 TACACS+ again only after `store.etcd.health.open_after` checks pass in a row (decision 37).`
 
-Decision 36, the bullet `- **The daemon's start on etcd** …`. Replace from `It probes the store
-every sixth of `hold_ttl` through its context pool and the feed fence,` through `(about 2
+Decision 36, the bullet `- **The daemon's start on etcd** …`. Replace the sentence beginning
+`It probes the store` (it wraps across lines in the spec), from there through `(about 2
 minutes: `L37-*.md`; plan 7f carries the gap), on a store or a context feed that has stopped;`
 with:
 
@@ -2004,8 +2171,8 @@ After L40's row in §15, add:
   `port49d does this itself (owner's ruling 2026-09-24; policy engine spec §13 decision 37): it
   checks the store every `store.etcd.health.interval` (1s) and closes its TACACS+ listener after
   `close_after` (5) failed checks in a row, idle or under load, within `close_after` ×
-  `interval` + `call_timeout` of the store stopping (5.5s at the defaults; policy engine spec
-  §15 L41). Until it does, IOS-XE refuses a break-glass login too (L35), and after it,
+  `interval` + `call_timeout` of the store stopping (5.5s at the defaults, derived from them;
+  policy engine spec §15 L41 measures it). Until it does, IOS-XE refuses a break-glass login too (L35), and after it,
   break-glass logs in. Before plan 7f it closed it once it lost its hold, 12–25s into a hang at
   `hold_ttl` 60s (L35), and on the split deployment 1m43s–2m0s in (L37). With
   `store.etcd.context_cache.ttl` set, a replica that holds a login's context answers its
@@ -2020,21 +2187,23 @@ After L40's row in §15, add:
   an idle port49d took 1m43s–2m0s at `hold_ttl` 60s (L37), because its probe needed five failed
   pings a sixth of `hold_ttl` apart.`
 - **"Consequences".** In the bullet `- **Per-replica read-through cache for login contexts**`,
-  after `Token redemption MUST NOT be cached — it is the single-use authority.`, add:
+  after the sentence beginning `Token redemption MUST NOT be cached` (it wraps across lines at
+  design 1220–1221 and ends `the single-use authority.`), add:
 
   `As built (plan 7f; policy engine spec §13 decision 37): off unless
   `store.etcd.context_cache.ttl` is set; for command and session authorization only; every
   change the context feed brings evicts its key, so a revocation reaches a cached session at the
   feed's speed, not the TTL's; through an outage an entry is served past its TTL, counted
   `port49_context_cache_lookups_total{outcome="stale"}` and said, until the listener closes,
-  which go-dark bounds to `close_after` × `interval` + `call_timeout`.`
+  which go-dark bounds to `close_after` × `interval` + `call_timeout`. A read the store
+  answered with a later record (a context feed behind `call_timeout`) is never served stale.`
 - **"As built on etcd".** Replace the bullet `- The warm context cache stays plan 7f's.` with:
 
   `- **Health checks** (plan 7f): every `store.etcd.health.interval`, a read on each pool's
   connection under the guard; `close_after` failures in a row are a store gone, and a run
   after one binds again after `open_after` passes (decision 37). The context cache is above.`
 - **The paragraph beginning `**Store health MUST NOT be wired into the readiness probe.**`.**
-  Replace `after N consecutive failed checks, reopening after M passes —` with `after
+  (Its quoted spans wrap in the design file: match each on its first words.) Replace `after N consecutive failed checks, reopening after M passes —` with `after
   `store.etcd.health.close_after` consecutive failed checks, reopening after `open_after`
   passes (plan 7f, decision 37) —`. Replace `It is plan 7f's; on etcd, plan 7d already closes
   every listener once the store has been gone for store.etcd.hold_ttl,` with `On etcd, plan 7d
@@ -2056,7 +2225,10 @@ In "Alert on any of:", add:
 
 ```markdown
 - `port49_store_health_failures` above 0 for longer than three `store.etcd.health.interval`s: the
-  store is failing port49d's checks, and the listeners close at `close_after`;
+  store is failing port49d's checks, and the listeners close at `close_after`. The gauge is
+  held by the process, not the run: it carries across the run restart a go-dark causes, and
+  reads at least `close_after` while the next run waits for the store, so the alert does not
+  resolve at the close and stays raised through the whole outage;
 - any increase of `port49_context_cache_lookups_total{outcome="stale"}`: a replica is answering
   commands from contexts the store did not confirm, and revocation does not reach them until the
   store answers or the listeners close. The registry restarts with each run after a store gone,
@@ -2346,8 +2518,21 @@ type health struct {
 	closeAfter, openAfter int
 	check                 func(context.Context) error
 	m                     *metrics.Metrics
+	state                 *healthState // the process's: outlives this run
 	out                   io.Writer
 }
+// healthState is the failed checks in a row, kept by the process across runs
+// (as the alarm, the ledger and the marks are), so the gauge does not drop to 0
+// in a run's new registry while the store is still away.
+type healthState struct {
+	mu      sync.Mutex
+	failing int
+	m       *metrics.Metrics // the current run's registry, set by bind
+}
+func (s *healthState) bind(m *metrics.Metrics) // a run's new registry reads the count at once
+func (s *healthState) set(n int)               // count and gauge
+func (s *healthState) atLeast(n int)           // raises, never lowers
+func (s *healthState) count() int
 func storeCheck(ctxPool interface{ Ping(context.Context) error }, tokPool interface{ PingToken(context.Context) error }) func(context.Context) error
 func (h *health) watch(ctx context.Context, gone func(error))
 func (h *health) passes(ctx context.Context) error
@@ -2408,6 +2593,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -2438,8 +2624,10 @@ func (s *scripted) check(context.Context) error {
 }
 
 func testHealth(check func(context.Context) error) *health {
-	return &health{every: 5 * time.Millisecond, timeout: 50 * time.Millisecond, closeAfter: 3, openAfter: 2,
-		check: check, m: metrics.New(prometheus.NewRegistry()), out: io.Discard}
+	h := &health{every: 5 * time.Millisecond, timeout: 50 * time.Millisecond, closeAfter: 3, openAfter: 2,
+		check: check, m: metrics.New(prometheus.NewRegistry()), state: &healthState{}, out: io.Discard}
+	h.state.bind(h.m)
+	return h
 }
 
 var errCheck = errors.New("no answer")
@@ -2463,6 +2651,58 @@ func TestWatchNeedsTheFailuresInARow(t *testing.T) {
 	}
 	if got := testutil.ToFloat64(h.m.StoreHealthChecks.WithLabelValues("fail")); got != 5 {
 		t.Fatalf("failed checks counted %v, want 5", got)
+	}
+	// The close leaves the gauge at close_after, not 0: the process keeps it.
+	if got := testutil.ToFloat64(h.m.StoreHealthFailures); got != 3 {
+		t.Fatalf("port49_store_health_failures after the close = %v, want 3", got)
+	}
+}
+
+// The failure count is the process's, not the run's: a run after a store gone
+// builds a new registry, whose gauge reads what the last run left, and the
+// passes hold it at close_after until the listeners open (plan 7f, I-1; the
+// shape of TestARaisedAlarmIsGaugedWhileTheStoreIsAway). Without this the
+// "above 0 for three intervals" alert resolves at the close, with the store
+// still down.
+func TestTheFailureCountSurvivesTheRunsRegistry(t *testing.T) {
+	st := &healthState{}
+	first := metrics.New(prometheus.NewRegistry())
+	st.bind(first)
+	st.set(3) // the watch's close_after-th failure
+	next := metrics.New(prometheus.NewRegistry())
+	st.bind(next)
+	if got := testutil.ToFloat64(next.StoreHealthFailures); got != 3 {
+		t.Fatalf("the next run's gauge reads %v, want 3 (the count the last run left)", got)
+	}
+	st.atLeast(2) // never lowers
+	if st.count() != 3 {
+		t.Fatalf("atLeast lowered the count to %d", st.count())
+	}
+	// passes: the gauge reads at least close_after through failures and a pass
+	// between them, and 0 only once the listeners may open.
+	s := &scripted{steps: []error{errCheck, nil, errCheck, nil, nil}}
+	h := &health{every: 5 * time.Millisecond, timeout: 50 * time.Millisecond, closeAfter: 3, openAfter: 2,
+		check: s.check, m: next, state: st, out: io.Discard}
+	lowest := 1 << 30
+	done := make(chan error, 1)
+	go func() { done <- h.passes(context.Background()) }()
+	for {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatal(err)
+			}
+			if lowest < 3 {
+				t.Fatalf("the gauge read %d while the listeners were still closed, under close_after 3", lowest)
+			}
+			if got := testutil.ToFloat64(next.StoreHealthFailures); got != 0 {
+				t.Fatalf("after open_after passes the gauge reads %v, want 0", got)
+			}
+			return
+		default:
+			lowest = min(lowest, int(testutil.ToFloat64(next.StoreHealthFailures)))
+			time.Sleep(time.Millisecond)
+		}
 	}
 }
 
@@ -2512,23 +2752,25 @@ func TestACheckFailsWhenEitherPoolFails(t *testing.T) {
 		name     string
 		ctx, tok error
 	}{{"the context pool", errCheck, nil}, {"the token pool", nil, errCheck}} {
-		check := storeCheck(pinger(c.ctx), tokPinger(c.tok))
+		check := storeCheck(pinger{c.ctx}, tokPinger{c.tok})
 		if err := check(context.Background()); err == nil {
 			t.Errorf("%s failing passed the check", c.name)
 		}
 	}
-	if err := storeCheck(pinger(nil), tokPinger(nil))(context.Background()); err != nil {
+	if err := storeCheck(pinger{}, tokPinger{})(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 }
 
-type pinger error
+// pinger and tokPinger are structs: Go allows no methods on a named
+// interface type such as `type pinger error`.
+type pinger struct{ err error }
 
-func (p pinger) Ping(context.Context) error { return error(p) }
+func (p pinger) Ping(context.Context) error { return p.err }
 
-type tokPinger error
+type tokPinger struct{ err error }
 
-func (p tokPinger) PingToken(context.Context) error { return error(p) }
+func (p tokPinger) PingToken(context.Context) error { return p.err }
 
 // A killed etcd leader does not fail close_after checks in a row at the
 // default interval (Ruling 3, the default's tested reason): an election
@@ -2571,24 +2813,94 @@ func TestAKilledLeaderDoesNotFailFiveChecksInARow(t *testing.T) {
 			"listeners on an election; report to Ryan (OR-1), do not raise the default", worst)
 	}
 }
+
+// A hung minority member, with quorum healthy, does not fail close_after
+// checks in a row either (Ruling 3, the default's second tested reason; the
+// commoner bad day than a crashed leader): one member wedged, defragmenting
+// or partitioned with its TCP connection alive. clientv3 balances reads
+// round-robin and each check reads on two clients, so many checks land a read
+// on that member; every replica sees the same member, so a long run would take
+// the whole fleet dark while etcd has quorum. A proxy in front of one
+// member's client endpoint holds its bytes. The test measures: a run of 5 or
+// more is the finding (report it to Ryan with OR-1, do not raise the default
+// and do not rerun it into passing).
+func TestAHungMinorityMemberDoesNotFailFiveChecksInARow(t *testing.T) {
+	if testing.Short() {
+		t.Skip("runs the default interval for 20s")
+	}
+	c := etcdtest.StartCluster(t)
+	p := etcdtest.NewProxy(t, strings.TrimPrefix(c.Endpoints[0], "http://"))
+	d, err := etcdstore.Open(etcdstore.Config{Endpoints: []string{"http://" + p.Addr(), c.Endpoints[1], c.Endpoints[2]}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	check := storeCheck(d, d)
+	for i := 0; i < 3; i++ { // both connections up before the hang
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		if err := check(ctx); err != nil {
+			t.Fatalf("before the hang: %v", err)
+		}
+		cancel()
+	}
+	p.Hang(true)
+	run, worst, failed, total := 0, 0, 0, 0
+	for end := time.Now().Add(20 * time.Second); time.Now().Before(end); time.Sleep(time.Second) { // the default interval, and call_timeout
+		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		err := check(ctx)
+		cancel()
+		total++
+		if err != nil {
+			run++
+			failed++
+		} else {
+			run = 0
+		}
+		worst = max(worst, run)
+	}
+	t.Logf("with one member hung: %d of %d checks failed, the longest run %d", failed, total, worst)
+	if worst >= 5 {
+		t.Fatalf("%d failed checks in a row with one member hung and quorum healthy: the default close_after (5) "+
+			"would take every replica dark with etcd up; report to Ryan (OR-1), do not raise the default", worst)
+	}
+}
 ```
 
 - [ ] **Step 2: Run them to verify they fail**
 
-Run: `go test ./internal/store/etcd/ -run TestPingToken -count=1 && go test ./internal/port49d/ -run 'TestWatch|TestPasses|TestAHungCheck|TestACheckFails|TestAKilledLeader' -count=1`
-Expected: FAIL, undefined `PingToken`, `health`, `storeCheck`, `Kill`, `Leader`.
+Run: `go test ./internal/store/etcd/ -run TestPingToken -count=1 && go test ./internal/port49d/ -run 'TestWatch|TestPasses|TestTheFailureCount|TestAHungCheck|TestACheckFails|TestAKilledLeader|TestAHungMinority' -count=1`
+Expected: FAIL, undefined `PingToken`, `health`, `healthState`, `storeCheck`, `Kill`, `Leader`.
 
 - [ ] **Step 3: `PingToken`, `Kill`, `Leader`, the two series, `health.go`**
 
-`internal/store/etcd/etcd.go`, after `Ping`:
+`internal/store/etcd/etcd.go`: both pings require a leader, so a member that has lost its
+leader (isolated, or mid-election) answers `ErrGRPCNoLeader` at once instead of the read
+blocking to the caller's deadline. In v3.6.15 the server's unary interceptor returns it
+(`server/etcdserver/api/v3rpc/interceptor.go:67-70`), it is `codes.Unavailable`
+(`api/v3rpc/rpctypes/error.go:77`), and clientv3 retries a Range on the next endpoint
+(`client/v3/retry.go:54-74`): an isolated member costs a retry, not a failed check. Only the
+watches set it today (`feed.go:90,226`, `meta.go:547`). Change `Ping`:
+
+```go
+// Ping is one linearizable read on the context pool: nil when etcd's
+// quorum answers. It requires a leader (plan 7f, Ruling 3): a member that
+// has none fails at once and the client retries another, so one isolated
+// member does not cost a check its whole timeout.
+func (s *Store) Ping(ctx context.Context) error {
+	_, err := s.ctxKV.Get(clientv3.WithRequireLeader(ctx), s.k.meta("ping"))
+	return unavailable(err)
+}
+```
+
+and add, after it:
 
 ```go
 // PingToken is Ping on the token pool's connection (plan 7f, Ruling 1):
 // port49d's health check reads on both, so a store that answers one and
-// not the other is not healthy. Its response does not raise Seen: no
-// context is read on this connection.
+// not the other is not healthy. It requires a leader as Ping does. Its
+// response does not raise Seen: no context is read on this connection.
 func (s *Store) PingToken(ctx context.Context) error {
-	_, err := s.tok.Get(ctx, s.k.meta("ping"))
+	_, err := s.tok.Get(clientv3.WithRequireLeader(ctx), s.k.meta("ping"))
 	return unavailable(err)
 }
 ```
@@ -2625,6 +2937,9 @@ earlier releases).
 	// StoreHealthChecks counts port49d's store health checks by outcome
 	// (pass, fail; plan 7f), and StoreHealthFailures is the failed checks
 	// in a row now: at store.etcd.health.close_after the listeners close.
+	// The count is the process's (healthState): each run's registry is set
+	// from it, and it reads at least close_after while the listeners are
+	// closed after a store gone.
 	StoreHealthChecks   *prometheus.CounterVec
 	StoreHealthFailures prometheus.Gauge
 ```
@@ -2667,7 +2982,60 @@ type health struct {
 	closeAfter, openAfter int
 	check                 func(context.Context) error
 	m                     *metrics.Metrics
+	state                 *healthState
 	out                   io.Writer
+}
+
+// healthState is the failed checks in a row, owned by `run` beside the alarm,
+// the ledger and the marks, so it outlives a run (plan 7f, I-1). The
+// registry is per run (main.go: metrics.New(reg)), and a gauge set only by
+// the run that ended would read 0 in the next run's, resolving the alert
+// "above 0 for three intervals" at the close, while the store is still down
+// and port49d waits for it. The rule: while the listeners are closed the
+// gauge never reads below close_after. A run binds its registry to it with
+// bind, and `passes` holds it until the listeners may open.
+type healthState struct {
+	mu      sync.Mutex
+	failing int
+	m       *metrics.Metrics // the current run's registry
+}
+
+// bind points the state at a run's new registry and gauges the count in it
+// at once, before the run first waits for the store.
+func (s *healthState) bind(m *metrics.Metrics) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.m = m
+	m.StoreHealthFailures.Set(float64(s.failing))
+}
+
+// set records n failed checks in a row, and gauges it.
+func (s *healthState) set(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.failing = n
+	if s.m != nil {
+		s.m.StoreHealthFailures.Set(float64(n))
+	}
+}
+
+// atLeast raises the count to n and never lowers it.
+func (s *healthState) atLeast(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if n > s.failing {
+		s.failing = n
+		if s.m != nil {
+			s.m.StoreHealthFailures.Set(float64(n))
+		}
+	}
+}
+
+// count is the failed checks in a row now.
+func (s *healthState) count() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.failing
 }
 
 // storeCheck is one health check (Ruling 1): a linearizable read on each
@@ -2727,14 +3095,14 @@ func (h *health) watch(ctx context.Context, gone func(error)) {
 		}
 		if err == nil {
 			fails = 0
-			h.m.StoreHealthFailures.Set(0)
+			h.state.set(0)
 			continue
 		}
 		if fails == 0 {
 			first = time.Now()
 		}
 		fails++
-		h.m.StoreHealthFailures.Set(float64(fails))
+		h.state.set(fails) // at the close it stays: the next run's gauge reads it
 		if fails >= h.closeAfter {
 			gone(&storeGone{why: fmt.Sprintf("%d consecutive store health checks failed over %v (the last: %v)",
 				fails, time.Since(first).Round(100*time.Millisecond), err)})
@@ -2745,11 +3113,15 @@ func (h *health) watch(ctx context.Context, gone func(error)) {
 
 // passes checks every h.every until openAfter checks have passed in a
 // row, and returns nil then, or ctx's error. A failure starts the count
-// again and is said once per run of failures.
+// again and is said once per run of failures. Throughout, the failure
+// gauge reads at least closeAfter (the listeners are closed and the store
+// is not yet trusted): failed checks count on from closeAfter, and it is
+// set to 0 only on the way out, when the listeners are about to open.
 func (h *health) passes(ctx context.Context) error {
 	t := time.NewTicker(h.every)
 	defer t.Stop()
-	ok, failing := 0, false
+	h.state.atLeast(h.closeAfter)
+	ok, failing, fails := 0, false, 0
 	for ok < h.openAfter {
 		select {
 		case <-ctx.Done():
@@ -2761,16 +3133,20 @@ func (h *health) passes(ctx context.Context) error {
 			return ctx.Err()
 		}
 		if err == nil {
-			ok, failing = ok+1, false
+			ok, failing, fails = ok+1, false, 0
+			h.state.set(h.closeAfter)
 			continue
 		}
 		ok = 0
+		fails++
+		h.state.set(h.closeAfter + fails)
 		if !failing {
 			fmt.Fprintf(h.out, "port49d: store: a health check failed while the listeners wait to open (%v); "+
 				"counting %d passes again\n", err, h.openAfter)
 			failing = true
 		}
 	}
+	h.state.set(0)
 	return nil
 }
 ```
@@ -2780,10 +3156,12 @@ In `TestWatchNeedsTheFailuresInARow` the script's sixth call is the third failur
 
 - [ ] **Step 4: Run them to verify they pass**
 
-Run: `go test ./internal/store/etcd/ -run TestPingToken -count=1 -v && go test ./internal/port49d/ -run 'TestWatch|TestPasses|TestAHungCheck|TestACheckFails|TestAKilledLeader' -count=1 -v`
-Expected: PASS. Record the logged worst run in the commit message. If
-`TestAKilledLeaderDoesNotFailFiveChecksInARow` fails, stop and report to the controller with the
-run it found (OR-1). Do not change the default.
+Run: `go test ./internal/store/etcd/ -run TestPingToken -count=1 -v && go test ./internal/port49d/ -run 'TestWatch|TestPasses|TestTheFailureCount|TestAHungCheck|TestACheckFails|TestAKilledLeader|TestAHungMinority' -count=1 -v`
+Expected: PASS. Record both logged worst runs in the commit message. If
+`TestAKilledLeaderDoesNotFailFiveChecksInARow` or
+`TestAHungMinorityMemberDoesNotFailFiveChecksInARow` fails (a worst run of 5 or more), stop and
+report to the controller with the run it found (OR-1), for Ryan. Do not change the default, and
+do not rerun the test until it passes.
 
 - [ ] **Step 5: Commit**
 
@@ -2791,7 +3169,9 @@ run it found (OR-1). Do not change the default.
 git add internal/store/etcd internal/port49d/health.go internal/port49d/health_test.go internal/daemon/metrics
 git commit -m "feat(port49d): the store health check, N failures and M passes in a row
 
-A killed leader's longest run of failed checks at 1s: <n> (TestAKilledLeaderDoesNotFailFiveChecksInARow).
+The longest run of failed checks at 1s: <n> after a killed leader
+(TestAKilledLeaderDoesNotFailFiveChecksInARow), <n> with one member hung
+(TestAHungMinorityMemberDoesNotFailFiveChecksInARow). Both pings require a leader.
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
@@ -2808,17 +3188,23 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
   - `internal/port49d/daemon.go` (`probe` removed);
   - `internal/port49d/main.go` (`runOnce`: the pass gate before `net.Listen("tcp", cfg.Listen)`,
     the watch after `rd.serving()`; the probe block removed).
+  - `internal/port49d/main.go` also: `run` owns a `healthState` beside `alarm` and `authMarks`
+    and passes it to `runOnce`, which binds it to each run's registry.
 - Test:
   - `internal/port49d/daemon_test.go` (`TestAnIdleDaemonGoesDarkOnItsProbe` rewritten);
+  - `internal/port49d/store_test.go` (the two places that use `sts.probe`: the split daemon's
+    stores assertion near line 531, and the probe round in
+    `TestOpenStoresFencesEachLayerUnderItsGuard`, near lines 690-708);
   - `internal/port49d/store_e2e_test.go` (a helper);
   - every test that hangs the store: `grep -n "Hang(true)" internal/port49d/*_test.go`.
 
 **Interfaces:**
-- Consumes: Task 5's `health`, `storeCheck`, `PingToken`; Task 4's `cfg.Store.Etcd.Health`;
-  `crypt.Fenced(d, ledger)`; `cancelRun`, `again`, `rd`, `mln`, `stopSpool`, `spoolDone` in
-  `runOnce`.
-- Produces: `stores.health *health` (nil on memory); the lines in "What the operator sees";
-  `addUnderEtcd(t, cfgPath, lines string)` for tests.
+- Consumes: Task 5's `health`, `healthState`, `storeCheck`, `PingToken`; Task 4's
+  `cfg.Store.Etcd.Health`; `crypt.Fenced(d, ledger)`; `cancelRun`, `again`, `rd`, `mln`,
+  `stopSpool`, `spoolDone` in `runOnce`.
+- Produces: `stores.health *health` (nil on memory); `run`'s `healthState`, passed to `runOnce`
+  as a new last parameter `hs *healthState` and bound to each run's registry; the lines in "What
+  the operator sees"; `addUnderEtcd(t, cfgPath, lines string)` for tests.
 
 - [ ] **Step 1: The failing tests**
 
@@ -2896,6 +3282,13 @@ func TestAnIdleDaemonGoesDarkOnItsHealthChecks(t *testing.T) {
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("/readyz while waiting for the store: %d, want 503", resp.StatusCode)
 	}
+	// The alarm holds through the wait (plan 7f, I-1): the new run's registry
+	// reads the count the last run left, at least close_after, before the
+	// store returns, so "above 0 for three intervals" does not resolve at the
+	// close with the store still down.
+	if v := scrapeGauge(t, ms[len(ms)-1][1], "port49_store_health_failures"); v < 3 {
+		t.Fatalf("port49_store_health_failures = %v while the store is away, want at least close_after (3)", v)
+	}
 	proxy.Hang(false)
 	waitCountWithin(t, &out, "port49d: listening on ", 2, 60*time.Second)
 	s := out.String()
@@ -2904,6 +3297,34 @@ func TestAnIdleDaemonGoesDarkOnItsHealthChecks(t *testing.T) {
 	if passed < 0 || passed > second {
 		t.Fatalf("listening again before the passes were said:\n%s", s)
 	}
+	// And 0 once open_after passes have passed and the listeners are open.
+	if v := scrapeGauge(t, ms[len(ms)-1][1], "port49_store_health_failures"); v != 0 {
+		t.Fatalf("port49_store_health_failures = %v with the listeners open again, want 0", v)
+	}
+}
+
+// scrapeGauge is the value of the unlabelled series name in the /metrics
+// of the daemon at addr.
+func scrapeGauge(t *testing.T, addr, name string) float64 {
+	t.Helper()
+	resp, err := http.Get("http://" + addr + "/metrics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(name) + ` (\S+)$`).FindSubmatch(body)
+	if m == nil {
+		t.Fatalf("/metrics at %s has no %s", addr, name)
+	}
+	v, err := strconv.ParseFloat(string(m[1]), 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v
 }
 
 // A store that answers for one check in two never opens the listeners: a
@@ -2923,13 +3344,22 @@ func TestAFlappingStoreDoesNotOpenTheListeners(t *testing.T) {
 	flapped := make(chan struct{})
 	go func() {
 		defer close(flapped)
-		for on := false; ; on = !on {
+		// Asymmetric windows: hung 700ms, open 300ms. Proxy.Hang(false)
+		// releases the bytes it held (etcdtest.go:481-486), so with equal
+		// windows a check that started in the last 100ms of a hang could pass
+		// on the release. With a 700ms hang a whole check pair is held, and
+		// open_after (4) passes at 200ms intervals cannot fit in a 300ms window.
+		for hung := true; ; hung = !hung {
+			proxy.Hang(hung)
+			d := 300 * time.Millisecond
+			if hung {
+				d = 700 * time.Millisecond
+			}
 			select {
 			case <-stop:
 				proxy.Hang(false)
 				return
-			case <-time.After(300 * time.Millisecond):
-				proxy.Hang(on)
+			case <-time.After(d):
 			}
 		}
 	}()
@@ -2967,10 +3397,62 @@ func TestAStopWhileWaitingForPassesEndsTheRun(t *testing.T) {
 }
 ```
 
+`daemon_test.go` needs `io` and `strconv` for `scrapeGauge`; add them to its imports if absent.
+
+In `internal/port49d/store_test.go`, which still uses `sts.probe` and would stop the package
+compiling once Step 3 deletes it:
+
+- The split daemon's stores assertion (near line 531). Replace
+
+```go
+	if sts.broker != nil || sts.probe == nil {
+		t.Fatalf("the split daemon's stores: broker %v, probe %v", sts.broker != nil, sts.probe != nil)
+	}
+```
+
+  with
+
+```go
+	if sts.broker != nil || sts.health == nil {
+		t.Fatalf("the split daemon's stores: broker %v, health %v", sts.broker != nil, sts.health != nil)
+	}
+```
+
+- `TestOpenStoresFencesEachLayerUnderItsGuard` (near lines 690-708), the only test that pins
+  "the check is fenced". In its doc comment replace "The probe pings through the same guard and
+  fence, so with the feed stopped its pings time out too (plan 7e, Ruling 11)." with "The health
+  check waits on the same fence, below the guard (plan 7f, Ruling 1), so with the feed stopped it
+  fails too, and the guard does not count it." Then replace everything from the `// One probe
+  round` comment through the end of the test with:
+
+```go
+	// The health check (plan 7f, Ruling 1) waits for the feed too, below the
+	// guard: with the feed not running and another ledger's write past the
+	// base, it fails at its call_timeout deadline, wrapping ErrFeedBehind, and
+	// counts a fence timeout; the guard's context counter does not move,
+	// because the check takes no slot and trips no circuit.
+	guarded := testutil.ToFloat64(m.StoreCalls.WithLabelValues("daemon", "context", "timeout"))
+	cctx, stopCheck := context.WithTimeout(ctx, cfg.Store.Etcd.CallTimeout)
+	defer stopCheck()
+	if err := sts.health.check(cctx); !errors.Is(err, crypt.ErrFeedBehind) {
+		t.Fatalf("the health check with the feed stopped: %v, want an error wrapping crypt.ErrFeedBehind", err)
+	}
+	if n := testutil.ToFloat64(m.StoreFenceTimeouts); n != 2 {
+		t.Fatalf("port49_store_fence_timeouts_total = %v after the check, want 2", n)
+	}
+	if n := testutil.ToFloat64(m.StoreCalls.WithLabelValues("daemon", "context", "timeout")); n != guarded {
+		t.Fatalf("the guard counted the health check: context timeouts %v, were %v", n, guarded)
+	}
+}
+```
+
+  (Check the field the call timeout is read from against Task 4's resolved `EtcdConfig`.)
+
 - [ ] **Step 2: Run them to verify they fail**
 
-Run: `go test ./internal/port49d/ -run 'TestAnIdleDaemonGoesDarkOnItsHealthChecks|TestAFlappingStoreDoesNotOpenTheListeners|TestAStopWhileWaitingForPassesEndsTheRun' -count=1`
-Expected: FAIL. No start line names the checks, and dark comes at `hold_ttl`, not within 2.8s.
+Run: `go test ./internal/port49d/ -run 'TestAnIdleDaemonGoesDarkOnItsHealthChecks|TestAFlappingStoreDoesNotOpenTheListeners|TestAStopWhileWaitingForPassesEndsTheRun|TestOpenStoresFencesEachLayerUnderItsGuard' -count=1`
+Expected: FAIL. No start line names the checks, dark comes at `hold_ttl`, not within 2.8s, and
+`store_test.go` does not compile against `sts.health`.
 
 - [ ] **Step 3: Wire it**
 
@@ -3002,10 +3484,44 @@ In `openDaemon`:
 
 ```go
 		health: &health{every: h.Interval, timeout: e.CallTimeout, closeAfter: h.CloseAfter, openAfter: h.OpenAfter,
-			check: storeCheck(fd, d), m: m, out: out},
+			check: storeCheck(fd, d), m: m, state: &healthState{}, out: out},
 ```
 
+The `state` here is a private one, so a test that calls `openStores` directly has one. `runOnce`
+replaces it with the process's (below), before `passes` or `watch` run.
+
 `internal/port49d/daemon.go`: delete `probe` and its comment.
+
+`internal/port49d/main.go`:
+- In `run`, beside `ledger, alarm := …` and `authMarks`:
+
+```go
+	// The failed-check count is the process's too: the registry is per run, so
+	// a gauge set only by the run that ended reads 0 in the next one's, and the
+	// alert "above 0 for three intervals" would resolve at the close while the
+	// store is still down (plan 7f, I-1; the shape of the key alarm's gauge).
+	hs := &healthState{}
+```
+
+  and pass it: `runOnce(parent, cfgPath, hup, again, ledger, alarm, authMarks, restored, hs)`.
+- In `runOnce`'s signature, add a last parameter `hs *healthState`. Immediately after `m :=
+  metrics.New(reg)` (line ~652), add:
+
+```go
+	// This run's new registry reads the count the last run left, and a run
+	// after a store gone holds it at close_after for as long as it waits for
+	// the store (openStores' retry), so the alert holds through the whole
+	// outage and resolves only when the listeners open again (passes sets 0).
+	hs.bind(m)
+	if again && cfg.Store.Backend == "etcd" {
+		hs.atLeast(cfg.Store.Etcd.Health.CloseAfter)
+	}
+```
+
+  (Check how `cfg.Store`'s backend and `Etcd` field are spelled, and guard as the neighbouring
+  code does for the memory backend.)
+- Immediately after `sts, err := openStores(…)` returns without error, add `if sts.health != nil
+  { sts.health.state = hs }`, before any use of `sts.health`.
 
 `internal/port49d/main.go`, in `runOnce`:
 - Delete the `if sts.probe != nil { … }` block.
@@ -3049,12 +3565,14 @@ exactly.
 
 - [ ] **Step 4: Run the three tests to verify they pass**
 
-Run: `go test ./internal/port49d/ -run 'TestAnIdleDaemonGoesDarkOnItsHealthChecks|TestAFlappingStoreDoesNotOpenTheListeners|TestAStopWhileWaitingForPassesEndsTheRun' -count=1 -v`
+Run: `go test ./internal/port49d/ -run 'TestAnIdleDaemonGoesDarkOnItsHealthChecks|TestAFlappingStoreDoesNotOpenTheListeners|TestAStopWhileWaitingForPassesEndsTheRun|TestOpenStoresFencesEachLayerUnderItsGuard' -count=1 -v`
 Expected: PASS.
 
 - [ ] **Step 5: Every test that hangs the store**
 
-Run: `grep -n "Hang(true)" internal/port49d/*_test.go`
+Run: `grep -n "Hang(true)" internal/port49d/*_test.go` and `grep -n "\.probe\|probe(" internal/port49d/*_test.go`
+(the second must find nothing but comments by now: `store_test.go`'s two uses were rewritten in
+Step 1).
 
 For each one, read what it expects between the hang and its first assertion:
 - **One that asserts a reply on a hung store before the close** (an `ERROR` login, a `FAIL`
@@ -3097,8 +3615,11 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 - Modify:
   - `internal/store/crypt/ledger.go` (the `Ledger` struct, `attach`, `changed`, `rescanned`);
   - `internal/store/crypt/follow.go` (`FollowContexts` tells the ledger each change and each
-    rescan).
-- Test: `internal/store/crypt/follow_test.go` (one test)
+    rescan);
+  - `internal/store/guard/guard.go:323-325` (a guarded timeout keeps the inner error, so the
+    cache can tell a fence timeout from an outage).
+- Test: `internal/store/crypt/follow_test.go` (one test), `internal/store/guard/guard_test.go`
+  (one test)
 
 **Interfaces:**
 - Consumes:
@@ -3135,6 +3656,7 @@ package crypt
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -3324,6 +3846,45 @@ func TestASupersededEntryIsNeverServedStale(t *testing.T) {
 	}
 }
 
+// A fence timeout is never served stale (plan 7f, I-2). crypt.Fenced waits
+// only when the store's record carries a different revision than the
+// ledger's, so a read that failed in the fence wait means etcd answered with
+// a later record than the cached one, possibly a revocation (SetRevokedAt):
+// that is not an outage. The guard keeps the fence's error inside its own
+// ErrUnavailable, and the cache refuses to serve on it, and evicts the entry.
+func TestAFenceTimeoutIsNeverServedStale(t *testing.T) {
+	b, c, _, now, lookups := cacheRig(t)
+	get(t, c)
+	*now = now.Add(5 * time.Second) // past the TTL, within the idle TTL
+	b.set(store.Context{}, fmt.Errorf("%w: no answer (%w)", store.ErrUnavailable, ErrFeedBehind))
+	got, err := get(t, c)
+	if err == nil || got.CtxID != "" {
+		t.Fatalf("a fence timeout served %q, %v", got.CtxID, err)
+	}
+	if !errors.Is(err, store.ErrUnavailable) || !errors.Is(err, ErrFeedBehind) {
+		t.Fatalf("the error lost its meaning: %v", err)
+	}
+	if n := testutil.ToFloat64(lookups.WithLabelValues("stale")); n != 0 {
+		t.Fatalf("stale serves counted: %v", n)
+	}
+	if n := len(c.(*cache).m); n != 0 {
+		t.Fatalf("%d entries: the superseded one was kept", n)
+	}
+}
+
+// A hit hands out a copy: the entry's SessionDiscriminators slice is shared
+// with no caller (store.Context is returned by value, its slice is not).
+func TestAHitIsACopy(t *testing.T) {
+	b, c, _, _, _ := cacheRig(t)
+	b.c.SessionDiscriminators = []string{"d1", "d2"}
+	first, _ := get(t, c)
+	first.SessionDiscriminators[0] = "edited"
+	second, _ := get(t, c) // a hit
+	if second.SessionDiscriminators[0] != "d1" {
+		t.Fatalf("a caller's edit reached the cached entry: %v", second.SessionDiscriminators)
+	}
+}
+
 func TestTheCacheIsBounded(t *testing.T) {
 	b, c, l, _, _ := cacheRig(t)
 	for i := 0; i < 6; i++ {
@@ -3379,8 +3940,48 @@ func (e evicterFunc) clearAll() {
 
 - [ ] **Step 2: Run them to verify they fail**
 
-Run: `go test ./internal/store/crypt/ -run 'Cache|Cached|TestAWriteAtTheKey|TestAFeedChange|TestARescan|TestALaterRecord|TestNoHit|TestARead|TestAnOutage|TestASuperseded|TestTheFeedTellsTheLedger' -count=1`
-Expected: FAIL, undefined `Cached`, `CacheConfig`, `l.changed`, `l.attach`.
+Run: `go test ./internal/store/crypt/ -run 'Cache|Cached|TestAWriteAtTheKey|TestAFeedChange|TestARescan|TestALaterRecord|TestNoHit|TestARead|TestAnOutage|TestASuperseded|TestAFenceTimeout|TestAHitIsACopy|TestTheFeedTellsTheLedger' -count=1 && go test ./internal/store/guard/ -run TestAGuardedTimeoutKeepsTheInnerError -count=1`
+Expected: FAIL, undefined `Cached`, `CacheConfig`, `l.changed`, `l.attach`, and the guard's
+timeout error not wrapping the inner one.
+
+The guard's test, in `internal/store/guard/guard_test.go` beside
+`TestACallPastItsTimeoutIsUnavailable` (add `fmt` to its imports):
+
+```go
+// feedBehind is a store whose GetContext waits for its context to end and
+// then says why, as crypt.Fenced does when its feed has not arrived.
+type feedBehind struct {
+	store.Store
+	why error
+}
+
+func (f feedBehind) GetContext(ctx context.Context, _ store.ContextKey) (store.Context, error) {
+	<-ctx.Done()
+	return store.Context{}, fmt.Errorf("%w: the feed is behind", f.why)
+}
+
+// A guarded timeout is store.ErrUnavailable and still wraps what the inner call
+// said (plan 7f, I-2): the context cache reads crypt.ErrFeedBehind through it
+// to tell a fence timeout, where etcd answered, from an outage. It is still
+// counted a timeout.
+func TestAGuardedTimeoutKeepsTheInnerError(t *testing.T) {
+	var said, gone told
+	errInner := errors.New("inner")
+	c := config(&said, &gone)
+	g := Wrap(feedBehind{why: errInner}, c)
+	_, err := g.GetContext(context.Background(), k)
+	if !errors.Is(err, store.ErrUnavailable) || !errors.Is(err, errInner) {
+		t.Fatalf("a guarded timeout: %v, want ErrUnavailable wrapping the inner error", err)
+	}
+	if n := testutil.ToFloat64(c.Metrics.Calls.WithLabelValues("daemon", "context", "timeout")); n != 1 {
+		t.Fatalf("timeout outcomes: %v, want 1", n)
+	}
+}
+```
+
+Before changing the guard, `grep -rn "no answer in" internal/store/guard/*_test.go internal/port49d/*_test.go`:
+any test that matches the full message text keeps matching (the new text only appends
+` (…)`), and one that compares the error with `==` or its exact string needs the suffix.
 
 - [ ] **Step 3: The ledger's hooks and the feed's calls**
 
@@ -3389,8 +3990,10 @@ Expected: FAIL, undefined `Cached`, `CacheConfig`, `l.changed`, `l.attach`.
 
 ```go
 	// ev is what each change the context feed brings is told, a context
-	// cache (Cached; plan 7f), or nil. Its own lock: a cache's lock is
-	// never taken under l.mu, nor l.mu under it.
+	// cache (Cached; plan 7f), or nil. Its own lock. Lock order: the cache
+	// takes l.mu (knownAt) under its own lock, so the ledger never calls
+	// the cache (changed, rescanned) with l.mu held; FollowContexts calls
+	// them outside it.
 	evMu sync.Mutex
 	ev   evicter
 ```
@@ -3454,6 +4057,20 @@ func (l *Ledger) rescanned() {
 Clearing before the scan is safe: the cache's generation moves, so a read in flight during the
 scan is not cached either.
 
+`internal/store/guard/guard.go:323-325`, in `call`. The guard replaces a timed-out call's error
+with its own, which drops `crypt.ErrFeedBehind` (`fence.go:134`), the one error that says etcd
+answered with a record the ledger has not caught up to. Keep the inner error inside it:
+
+```go
+	if outcome == "timeout" {
+		// The inner error stays wrapped: the context cache tells a fence
+		// timeout (crypt.ErrFeedBehind: the store answered with a later
+		// record) from an outage by it (plan 7f, I-2). classify has already
+		// run, so what is counted is unchanged.
+		err = fmt.Errorf("%w: no answer in %v (%w)", store.ErrUnavailable, pl.timeout, err)
+	}
+```
+
 - [ ] **Step 4: `cache.go`**
 
 ```go
@@ -3462,6 +4079,7 @@ package crypt
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"time"
 
@@ -3497,7 +4115,14 @@ type CacheConfig struct {
 // A read that fails store.ErrUnavailable is answered from an entry the
 // ledger still knows, within the context's idle TTL: counted stale and
 // told. Revocation does not reach it then (design §12: documented, not
-// discovered), until a read lands or port49d's listeners close.
+// discovered), until a read lands or port49d's listeners close. Never when
+// the failure is ErrFeedBehind: Fenced waits only for a record whose
+// revision differs from the ledger's, so a fence timeout means etcd
+// answered with a later record than the entry, perhaps a revocation. That
+// is not an outage: the entry is evicted and the read denied.
+//
+// A hit hands out a copy, so a caller that edits the SessionDiscriminators
+// slice cannot corrupt the entry.
 func Cached(inner store.Store, l *Ledger, cfg CacheConfig) store.Store {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
@@ -3557,7 +4182,7 @@ func (c *cache) GetContext(ctx context.Context, k store.ContextKey) (store.Conte
 	c.mu.Unlock()
 	if ok && now.Sub(e.at) < c.cfg.TTL && c.l.Fence().Up() && c.l.knownAt(k, e.c.Rev) {
 		c.count("hit")
-		return e.c, nil
+		return cloned(e.c), nil
 	}
 	got, err := c.Store.GetContext(ctx, k)
 	if err == nil {
@@ -3567,7 +4192,7 @@ func (c *cache) GetContext(ctx context.Context, k store.ContextKey) (store.Conte
 			if len(c.m) >= c.cfg.Max {
 				clear(c.m)
 			}
-			c.m[k] = cacheEntry{c: got, at: now}
+			c.m[k] = cacheEntry{c: cloned(got), at: now}
 			c.gauge()
 		}
 		c.mu.Unlock()
@@ -3576,18 +4201,30 @@ func (c *cache) GetContext(ctx context.Context, k store.ContextKey) (store.Conte
 		}
 		return got, nil
 	}
-	if ok && errors.Is(err, store.ErrUnavailable) && c.l.knownAt(k, e.c.Rev) && c.withinIdle(e.c, now) {
+	// A fence timeout is the store answering with a later record than the
+	// entry (plan 7f, I-2): not an outage, so never stale, and the entry is
+	// superseded.
+	behind := errors.Is(err, ErrFeedBehind)
+	if ok && errors.Is(err, store.ErrUnavailable) && !behind && c.l.knownAt(k, e.c.Rev) && c.withinIdle(e.c, now) {
 		c.count("stale")
 		if c.cfg.Stale != nil {
 			c.cfg.Stale(err)
 		}
-		return e.c, nil
+		return cloned(e.c), nil
 	}
 	c.count("miss")
-	if !errors.Is(err, store.ErrUnavailable) {
-		c.evictKey(k) // not found, or a record that will not open: never served again
+	if !errors.Is(err, store.ErrUnavailable) || behind {
+		c.evictKey(k) // not found, a record that will not open, or one the feed is behind: never served again
 	}
 	return got, err
+}
+
+// cloned is ct with its SessionDiscriminators slice copied: store.Context is
+// handed out by value, but that slice is shared with whoever holds the other
+// copy.
+func cloned(ct store.Context) store.Context {
+	ct.SessionDiscriminators = slices.Clone(ct.SessionDiscriminators)
+	return ct
 }
 
 // withinIdle reports whether the context's own idle TTL, from its last
@@ -3718,6 +4355,7 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 package port49d
 
 import (
+	"bytes"
 	"context"
 	"regexp"
 	"strings"
@@ -3797,6 +4435,48 @@ func TestAContextDeletedElsewhereIsNotAnsweredFromTheCache(t *testing.T) {
 	}
 }
 
+// Review Focus 3, revoked: a session revoked through the broker (the path
+// through revokeown.go's SetRevokedAt, the whole revocation in decision 32's
+// order) is denied credential_revoked inside the TTL, because the context's
+// change reached the daemon's feed and evicted its entry, and the daemon's
+// marks hold the principal besides (plan 7f, M-7). The control: the cached
+// session is answered before.
+func TestARevokedSessionIsDeniedInsideTheTTL(t *testing.T) {
+	var out, log syncBuffer
+	e, o := stderr, stdout
+	t.Cleanup(func() { stderr, stdout = e, o })
+	stderr, stdout = &out, &log
+	f := splitFleet(t)
+	addUnderEtcd(t, f.daemon, "    context_cache: {ttl: 30s}\n")
+	api, stopBroker := startBroker(t, f.broker, &out, 1)
+	tacacs := startSplitDaemon(t, f.daemon, &out, 1)
+	dev := tacacsClient{t: t, addr: tacacs, key: []byte("run-test-secret")}
+	loginSession(t, dev, mintOn(t, api, f.pki, "leaf1"), &log)
+	for i := 0; i < 2; i++ {
+		if !dev.permits("alice", "configure") {
+			t.Fatal("control: the cached session's command was refused before the revocation")
+		}
+	}
+	if err := stopBroker(); err != nil {
+		t.Fatal(err)
+	}
+	var rout, rerr bytes.Buffer
+	if code := offlineRevoke([]string{"--offline", "--config", f.broker, "--principal", "user:alice@example.com"},
+		&rout, &rerr); code != 0 {
+		t.Fatalf("exit %d: %s", code, rerr.String())
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for dev.permits("alice", "configure") {
+		if time.Now().After(deadline) {
+			t.Fatal("a revoked session was still answered 5s later, inside a 30s ttl")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if r := lastCommand(t, &log); r["reason"] != "credential_revoked" {
+		t.Fatalf("denied %v, want credential_revoked", r["reason"])
+	}
+}
+
 // Through a store hang the cache answers past its TTL, counted stale and
 // said once, until the listeners close (design §12; Ruling 5).
 func TestAHungStoreServesTheCacheUntilTheListenersClose(t *testing.T) {
@@ -3866,7 +4546,7 @@ must come before the hang. It does in each test. `lastCommand` is `run_test.go`'
 
 - [ ] **Step 2: Run them to verify they fail**
 
-Run: `go test ./internal/port49d/ -run 'TestASessionsCommandsAreAnsweredFromTheCache|TestAContextDeletedElsewhere|TestAHungStoreServesTheCache|TestAnEvictedContext|TestNoCacheWithoutATTL' -count=1`
+Run: `go test ./internal/port49d/ -run 'TestASessionsCommandsAreAnsweredFromTheCache|TestAContextDeletedElsewhere|TestARevokedSessionIsDenied|TestAHungStoreServesTheCache|TestAnEvictedContext|TestNoCacheWithoutATTL' -count=1`
 Expected: FAIL. There is no cache line, and `context_cache` is unknown to the wiring (Task 4
 accepted it; nothing reads it).
 
@@ -3981,7 +4661,7 @@ authorization's alone (plan 7f, Ruling 5): a login's join reads the store".
 
 - [ ] **Step 4: Run them to verify they pass, then the package and race**
 
-Run: `go test ./internal/port49d/ -run 'TestASessionsCommandsAreAnsweredFromTheCache|TestAContextDeletedElsewhere|TestAHungStoreServesTheCache|TestAnEvictedContext|TestNoCacheWithoutATTL' -count=1 -v && go test ./internal/port49d/ -count=1 && go test -race ./internal/port49d/ ./internal/store/... -count=1`
+Run: `go test ./internal/port49d/ -run 'TestASessionsCommandsAreAnsweredFromTheCache|TestAContextDeletedElsewhere|TestARevokedSessionIsDenied|TestAHungStoreServesTheCache|TestAnEvictedContext|TestNoCacheWithoutATTL' -count=1 -v && go test ./internal/port49d/ -count=1 && go test -race ./internal/port49d/ ./internal/store/... -count=1`
 Expected: PASS.
 
 - [ ] **Step 5: The whole suite**
@@ -3999,8 +4679,13 @@ In `deploy/compose/config/port49d.yaml`, under `store.etcd`, add:
     # The context cache (design §12): its ttl is a term in revocation
     # latency, so it is never on unless set. Through a store outage a cached
     # session's commands are answered past it until the listeners close.
-    context_cache: {ttl: 2s}
+    # Off here: port49 never picks a ttl, and a trial that copies this file
+    # should not inherit a revocation gap through outages it did not choose.
+    # context_cache: {ttl: 2s}
 ```
+
+The example ships with `context_cache` commented out, comment kept: the cache is off in the
+trial and in the smoke test, as in any deployment that has not chosen a ttl (Ruling 5).
 
 Run `make compose-smoke` (Task 1's caveat on where), and expect PASS.
 
@@ -4057,8 +4742,10 @@ Expected: FAIL, undefined `healthDarkBound`.
 In `tests/lab/compose_test.go`:
 
 ```go
-// The lab's health checks and cache, which every compose run's port49d.yaml
-// names (decision 37): the defaults, said, and a 2s cache.
+// The lab's health checks, which every compose run's port49d.yaml names
+// (decision 37): the defaults, said. The context cache is off in the lab:
+// L41 measures nothing about it, and a cache would answer cell 3's command
+// from memory and play a part in what the closed listener is measured doing.
 const (
 	labHealthInterval = time.Second
 	labCloseAfter     = 5
@@ -4074,9 +4761,10 @@ func healthDarkBound(interval, callTimeout time.Duration, closeAfter int) time.D
 }
 ```
 
-`composeStoreBlock("daemon")` adds `health: {interval: 1s, close_after: 5, open_after: 3}` and
-`context_cache: {ttl: 2s}` under `etcd:`. Extend `TestComposeLabFilesNameTheContainersPaths` to
-assert both are in `port49d.yaml` and absent from `port49-broker.yaml`.
+`composeStoreBlock("daemon")` adds `health: {interval: 1s, close_after: 5, open_after: 3}` under
+`etcd:`, and no `context_cache:`: the cache is off for L41. Extend
+`TestComposeLabFilesNameTheContainersPaths` to assert `health:` is in `port49d.yaml` and absent
+from `port49-broker.yaml`, and that `context_cache` is in neither.
 
 Run: `make lab-unit`
 Expected: PASS.
@@ -4127,11 +4815,15 @@ func TestL41GoDarkMidSession(t *testing.T) {
 			}
 			return strings.Join(replyTimesFrom(capPath, labKeyDefault, from, to, true), "; ") + " | connections: " + conns
 		}
-		waitLine := func(off int64, s string, within time.Duration) time.Duration {
-			start := time.Now()
-			for time.Since(start) < within {
+		// waitLine is how long after `from` the line s appears on port49d's
+		// stderr past off, or 0 if it does not within `within` of from. Each
+		// call measures from the moment its caller names, never from its own
+		// start: a second wait that begins after the first returned would
+		// otherwise read near 0 for a line that was already there.
+		waitLine := func(off int64, s string, within time.Duration, from time.Time) time.Duration {
+			for time.Since(from) < within {
 				if len(l.errLinesSince(off, s)) > 0 {
-					return time.Since(start)
+					return time.Since(from)
 				}
 				time.Sleep(250 * time.Millisecond)
 			}
@@ -4162,7 +4854,8 @@ func TestL41GoDarkMidSession(t *testing.T) {
 		if err := c.HangStore(); err != nil {
 			t.Fatal(err)
 		}
-		dark := waitLine(errOff, "closing every listener so that devices use their local method", 60*time.Second)
+		hungAt := time.Now()
+		dark := waitLine(errOff, "closing every listener so that devices use their local method", 60*time.Second, hungAt)
 		bound := healthDarkBound(labHealthInterval, labCallTimeout, labCloseAfter)
 		wide("2. the store hangs (the three members paused), no device asking: port49d closes its listener",
 			fmt.Sprintf("%s after the hang (bound %s); the line: %s", dark.Round(100*time.Millisecond), bound,
@@ -4191,8 +4884,9 @@ func TestL41GoDarkMidSession(t *testing.T) {
 		if err := c.ReleaseStore(); err != nil {
 			t.Fatal(err)
 		}
-		passed := waitLine(errOff, fmt.Sprintf("%d consecutive health checks passed", labOpenAfter), 120*time.Second)
-		listening := waitLine(errOff, "listening on", 120*time.Second)
+		releaseAt := time.Now() // both times below are measured from the release
+		passed := waitLine(errOff, fmt.Sprintf("%d consecutive health checks passed", labOpenAfter), 120*time.Second, releaseAt)
+		listening := waitLine(errOff, "listening on", 120*time.Second, releaseAt)
 		if err := l.awaitTACACS(); err != nil {
 			fail("TACACS+ did not answer again: %v", err)
 		}
@@ -4210,6 +4904,7 @@ func TestL41GoDarkMidSession(t *testing.T) {
 		back := time.Now()
 		var asked time.Duration
 		var ctx6, v6, r6 string
+		neverAsked := false // a device that does not ask again within 5 minutes: recorded, the row stays open for it
 		if sessionOnly {
 			said, tok2 := l29Mint(sock, l.p.node)
 			if tok2 == "" {
@@ -4235,7 +4930,13 @@ func TestL41GoDarkMidSession(t *testing.T) {
 			wide("6. the open session's `show version` until port49d is asked again", fmt.Sprintf(
 				"asked %s after listening; record %s %s, ctx_id %s (before: %s) | %s", asked.Round(100*time.Millisecond),
 				v6, r6, ctx6, ctx1, times(back, time.Now())))
-			if ctx6 == "" || v6 != "permit" || ctx6 != ctx1 {
+			switch {
+			case ctx6 == "":
+				// What the device did, not a defect of port49d: no command
+				// reached it in 5 minutes. Recorded, and the row stays open
+				// for this platform (CLAUDE.md, register rule 3).
+				neverAsked = true
+			case v6 != "permit" || ctx6 != ctx1:
 				fail("after the return the session was not answered from its kept context: %s %s %s/%s", v6, r6, ctx6, ctx1)
 			}
 		}
@@ -4257,6 +4958,10 @@ func TestL41GoDarkMidSession(t *testing.T) {
 		wide("3 beside 7", fmt.Sprintf("closed on its checks: %s; stopped: %s", firstLine(out3), firstLine(out7)))
 
 		note := obs.String()
+		if neverAsked {
+			note += "\n**Cell 6 is not measured on this platform:** the device did not ask port49d again within 5 " +
+				"minutes of its listening. That is what the device did, recorded; L41 stays open for " + l.p.name + ".\n"
+		}
 		if len(failed) > 0 {
 			note += "\n**Not as the claim says:**\n\n- " + strings.Join(failed, "\n- ") + "\n"
 		}
@@ -4291,14 +4996,16 @@ Expected: PASS, with `results/L41-arista_eos.md` written. Read the note before g
 
 Run, once per platform (`make lab` would run every test, so use Step 4's form):
 `PORT49_LAB_PLATFORMS=<nxos|iosxe|vjunos|vsrx> go test -tags lab ./tests/lab/ -run TestL41GoDarkMidSession -count=1 -v -timeout 120m`
-Expected: PASS on each. A cell the device makes invalid (a device that never asks again within
-5 minutes) is recorded as what the device did. A row with any platform unmeasured stays open.
+Expected: PASS on each. A device that never asks port49d again within 5 minutes does not fail
+the test: cell 6 is recorded as what the device did, the note says "Cell 6 is not measured on
+this platform", and the row stays open for that platform. A row with any platform unmeasured
+stays open.
 
 - [ ] **Step 6: Evidence, close, design numbers**
 
 Run: `make evidence`, and check each note points at its evidence.
 
-If all five passed, edit L41's Status in spec §15 to:
+If all five passed, and no note says "Cell 6 is not measured", edit L41's Status in spec §15 to:
 
 `closed — measured <date>; tests/lab/results/L41-arista_eos.md, L41-cisco_nxos.md,
 L41-cisco_iosxe.md, L41-juniper_vjunos-router.md, L41-juniper_vsrx.md (run at <sha> from a
@@ -4311,8 +5018,9 @@ followed by the observation per image, from the notes alone:
 - the time to listening;
 - the time until asked again.
 
-In design §12, replace each "(policy engine spec §15 L41)" that Task 3 wrote ahead of the
-measurement with the measured range, citing the notes. If a note contradicts Task 3's text,
+In design §12, replace each "derived from them; policy engine spec §15 L41 measures it" that
+Task 3 wrote ahead of the measurement with the measured range, citing the notes (the same for
+decision 37's "derived from the defaults; §15 L41 measures it"). If a note contradicts Task 3's text,
 fix the text and say so in the commit (CLAUDE.md rule 4).
 
 - [ ] **Step 7: Commit**
@@ -4429,8 +5137,9 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
   binary or `make test` needs Docker.
 - **Placeholders:** the lab notes' sentences and the SHAs are written from the runs, as each
   step says.
-- **Type consistency:** `health{every, timeout, closeAfter, openAfter, check, m, out}`, `storeCheck`, `passes`,
-  `watch`, `crypt.Cached`, `CacheConfig{TTL, Max, IdleTTL, Now, Lookups, Entries, Stale, Fresh}`,
+- **Type consistency:** `health{every, timeout, closeAfter, openAfter, check, m, state, out}`,
+  `healthState{failing, m}` with `bind`/`set`/`atLeast`/`count`, `storeCheck`, `passes`,
+  `watch`, `runOnce(…, restored, hs)`, `composeLabFiles(base, brokerSlice, policy, inventory)`, `crypt.Cached`, `CacheConfig{TTL, Max, IdleTTL, Now, Lookups, Entries, Stale, Fresh}`,
   `Ledger.changed`/`rescanned`/`attach`, `evicter{evictKey, clearAll}`, `stores.health`, `stores.author`,
   `EtcdHealth{Interval, CloseAfter, OpenAfter}`, `EtcdContextCache{TTL, MaxEntries}`, `HealthSet`, `ContextCacheSet`
   are spelled the same in every task.
