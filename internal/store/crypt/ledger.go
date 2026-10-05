@@ -92,6 +92,46 @@ type Ledger struct {
 	keep  time.Duration
 	dirty map[store.ContextKey]bool
 	fence *Fence
+	// ev is what each change the context feed brings is told, a context
+	// cache (Cached; plan 7f), or nil. Its own lock. Lock order: the cache
+	// takes l.mu (knownAt) under its own lock, so the ledger never calls
+	// the cache (changed, rescanned) with l.mu held; FollowContexts calls
+	// them outside it.
+	evMu sync.Mutex
+	ev   evicter
+}
+
+// evicter is a context cache, told by the ledger of every key the feed
+// changes and of every rescan (plan 7f, Ruling 5).
+type evicter interface {
+	evictKey(k store.ContextKey)
+	clearAll()
+}
+
+// attach makes e the cache this ledger tells; a later attach replaces it
+// (a run after a store gone builds a new cache on the process's ledger).
+func (l *Ledger) attach(e evicter) { l.evMu.Lock(); l.ev = e; l.evMu.Unlock() }
+
+// changed tells the cache k changed in the store: a write, a delete, or a
+// record this process cannot open, whatever it raised here.
+func (l *Ledger) changed(k store.ContextKey) {
+	l.evMu.Lock()
+	e := l.ev
+	l.evMu.Unlock()
+	if e != nil {
+		e.evictKey(k)
+	}
+}
+
+// rescanned tells the cache a compacted watch scanned the store again:
+// changes between are not delivered one by one, so every entry goes.
+func (l *Ledger) rescanned() {
+	l.evMu.Lock()
+	e := l.ev
+	l.evMu.Unlock()
+	if e != nil {
+		e.clearAll()
+	}
 }
 
 type ledgerEntry struct {

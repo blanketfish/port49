@@ -321,7 +321,11 @@ func (g *guarded) do(ctx context.Context, p Pool, f func(context.Context) error)
 	}
 	outcome := classify(ctx, cctx, err)
 	if outcome == "timeout" {
-		err = fmt.Errorf("%w: no answer in %v", store.ErrUnavailable, pl.timeout)
+		// The inner error stays wrapped: the context cache tells a fence
+		// timeout (crypt.ErrFeedBehind: the store answered with a later
+		// record) from an outage by it (plan 7f, I-2). classify has already
+		// run, so what is counted is unchanged.
+		err = fmt.Errorf("%w: no answer in %v (%w)", store.ErrUnavailable, pl.timeout, err)
 	}
 	g.count(p, outcome)
 	if changed, open := pl.leave(g.c.Now(), probe, outcome, err, g.c.Failures, g.c.OpenFor); changed {

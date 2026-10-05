@@ -1338,3 +1338,38 @@ func TestAStartsScanTakesARevocationBelowTheSeededMark(t *testing.T) {
 		t.Fatal("the record at the mark, put back, lifted the floor")
 	}
 }
+
+// FollowContexts tells the ledger each change, a delete and a record that
+// does not open included, so a cache evicts them (plan 7f, Ruling 5).
+func TestTheFeedTellsTheLedgerEveryChange(t *testing.T) {
+	l := NewLedger()
+	var mu sync.Mutex
+	var told []store.ContextKey
+	l.attach(evicterFunc{evict: func(k store.ContextKey) { mu.Lock(); told = append(told, k); mu.Unlock() }})
+	feed := &feedOf{changes: make(chan store.ContextChange, 3), compact: make(chan struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go FollowContexts(ctx, feed, nil, keys(), l, 0, func(bool) {}, func() {}, t.Logf)
+	kb := store.ContextKey{NAS: "leaf-02", Username: "bob"}
+	feed.changes <- store.ContextChange{Key: ka, Context: sealedAt(t, ka, 10), Rev: 10}
+	feed.changes <- store.ContextChange{Key: kb, Deleted: true, Rev: 11}
+	feed.changes <- store.ContextChange{Key: ka, Context: store.Context{CtxID: "garbage"}, Rev: 12}
+	eventually(t, func() bool { mu.Lock(); defer mu.Unlock(); return len(told) == 3 })
+}
+
+// evicterFunc is an evicter from funcs, for tests.
+type evicterFunc struct {
+	evict func(store.ContextKey)
+	clear func()
+}
+
+func (e evicterFunc) evictKey(k store.ContextKey) {
+	if e.evict != nil {
+		e.evict(k)
+	}
+}
+func (e evicterFunc) clearAll() {
+	if e.clear != nil {
+		e.clear()
+	}
+}

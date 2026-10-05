@@ -3,6 +3,7 @@ package guard
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"sync"
@@ -694,5 +695,35 @@ func TestTheCircuitsLinesNameTheirProcess(t *testing.T) {
 			(strings.Contains(l[0], "break-glass") || strings.Contains(l[0], "devices"))) {
 			t.Fatalf("%s: said %q", tc.proc, l)
 		}
+	}
+}
+
+// feedBehind is a store whose GetContext waits for its context to end and
+// then says why, as crypt.Fenced does when its feed has not arrived.
+type feedBehind struct {
+	store.Store
+	why error
+}
+
+func (f feedBehind) GetContext(ctx context.Context, _ store.ContextKey) (store.Context, error) {
+	<-ctx.Done()
+	return store.Context{}, fmt.Errorf("%w: the feed is behind", f.why)
+}
+
+// A guarded timeout is store.ErrUnavailable and still wraps what the inner call
+// said (plan 7f, I-2): the context cache reads crypt.ErrFeedBehind through it
+// to tell a fence timeout, where etcd answered, from an outage. It is still
+// counted a timeout.
+func TestAGuardedTimeoutKeepsTheInnerError(t *testing.T) {
+	var said, gone told
+	errInner := errors.New("inner")
+	c := config(&said, &gone)
+	g := Wrap(feedBehind{why: errInner}, c)
+	_, err := g.GetContext(context.Background(), k)
+	if !errors.Is(err, store.ErrUnavailable) || !errors.Is(err, errInner) {
+		t.Fatalf("a guarded timeout: %v, want ErrUnavailable wrapping the inner error", err)
+	}
+	if n := testutil.ToFloat64(c.Metrics.Calls.WithLabelValues("daemon", "context", "timeout")); n != 1 {
+		t.Fatalf("timeout outcomes: %v, want 1", n)
 	}
 }

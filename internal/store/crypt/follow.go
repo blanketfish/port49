@@ -138,6 +138,10 @@ func FollowContexts(ctx context.Context, feed store.ContextFeed, src store.Ledge
 		l.Fence().SetUp(true)
 		l.Fence().askAgain()
 		err := feed.WatchContexts(ctx, from, func(c store.ContextChange) {
+			// Every change, a delete and one that will not open included,
+			// evicts its key from a context cache before anything else
+			// (plan 7f, Ruling 5).
+			l.changed(c.Key)
 			again()
 			if c.Rev > from {
 				from = c.Rev
@@ -159,6 +163,7 @@ func FollowContexts(ctx context.Context, feed store.ContextFeed, src store.Ledge
 			logf("store: the context feed's revision was compacted; seeding from the ledger record and scanning " +
 				"the store again")
 			rescanned()
+			l.rescanned()
 			if rev, serr := rescan(ctx, feed, src, keys, l); serr == nil {
 				l.Fence().Followed(rev) // only once the seed and the scan are in
 				from = max(from, rev)
