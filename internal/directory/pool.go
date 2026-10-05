@@ -79,6 +79,30 @@ func (s Server) Label() string {
 	return u.Host
 }
 
+// ErrBindRefused is what a Dialer wraps a refusal in that is not an LDAP
+// result code (a KDC refusing the principal): the credential was refused,
+// not the server down.
+var ErrBindRefused = errors.New("directory: bind refused")
+
+// Refusal reports whether a dial error is the credential refused rather
+// than the server not answering: invalidCredentials (49),
+// inappropriateAuthentication (48), strongAuthRequired (8),
+// confidentialityRequired (13), authMethodNotSupported (7), or
+// ErrBindRefused. Only a refusal starts the bind hold-off; any other dial
+// error is a fault.
+func Refusal(err error) bool {
+	if errors.Is(err, ErrBindRefused) {
+		return true
+	}
+	for _, code := range []uint16{ldap.LDAPResultInvalidCredentials, ldap.LDAPResultInappropriateAuthentication,
+		ldap.LDAPResultStrongAuthRequired, ldap.LDAPResultConfidentialityRequired, ldap.LDAPResultAuthMethodNotSupported} {
+		if ldap.IsErrorWithCode(err, code) {
+			return true
+		}
+	}
+	return false
+}
+
 type serverState struct {
 	Server
 	conn         Client
@@ -88,6 +112,14 @@ type serverState struct {
 	open         bool      // the breaker
 	openedAt     time.Time // its last probe or opening
 	healthySince time.Time // the first pass since the last fault; zero while faulting
+
+	// This server's own refusal backoff, 1m doubling to 15m, cleared only by
+	// its own accepted bind: a DC that cannot map the certificate, or has
+	// not yet replicated a rotated password, is not dialled again until it
+	// ends, whatever the pool's hold-off says.
+	refuseUntil time.Time
+	refuseStep  time.Duration
+	dialing     chan struct{} // non-nil while a query binds this server; the others wait for it
 }
 
 // Pool is design §10's server pool. One pool per broker process; every
@@ -118,9 +150,6 @@ const (
 	holdoffFirst = time.Minute
 	holdoffCap   = 15 * time.Minute
 )
-
-// errHoldoff is a dial the bind hold-off did not allow: no fault, no refusal.
-var errHoldoff = errors.New("bind hold-off in force")
 
 // NewPool ranks cfg.Servers same-site first, then by priority descending,
 // then in file order. check is the health check's query on a bound
@@ -204,14 +233,13 @@ func (p *Pool) Do(ctx context.Context, f func(Searcher) error) (Server, error) {
 		}
 		tried[i] = true
 		srv := p.srv[i].Server
-		if errors.Is(err, errHoldoff) {
-			last = fmt.Errorf("%s: %v", srv.Label(), err)
-			continue
-		}
+		dialErr := err != nil
 		if err == nil {
 			err = f(bound{ctx: qctx, c: conn})
-		} else if ctx.Err() == nil && !Fault(err) {
-			p.refused(i, err)
+		} else if ctx.Err() == nil && Refusal(err) {
+			// The refusal is counted and the hold-off stepped as the bind
+			// ended (bindDoneLocked); the query fails over to a server
+			// already bound.
 			p.moveFrom(i)
 			last = fmt.Errorf("%s: %v", srv.Label(), err)
 			continue
@@ -230,7 +258,7 @@ func (p *Pool) Do(ctx context.Context, f func(Searcher) error) (Server, error) {
 		case err == nil:
 			p.answered(i, "ok")
 			return srv, nil
-		case !Fault(err):
+		case !dialErr && !Fault(err):
 			p.answered(i, "error")
 			return srv, err
 		}
@@ -286,6 +314,9 @@ func (p *Pool) bestLocked(skip int) int {
 		if s.faults > 0 {
 			tier++
 		}
+		if s.conn == nil && p.now().Before(s.refuseUntil) {
+			tier += 4 // not bindable until its own backoff ends
+		}
 		if best < 0 || tier < bestTier {
 			best, bestTier = j, tier
 		}
@@ -293,63 +324,83 @@ func (p *Pool) bestLocked(skip int) int {
 	return best
 }
 
-// acquire is the server a query tries next: the selected one if its
-// breaker is closed and it is untried, else the best-ranked such, which is
-// then selected. It dials when the server holds no connection; queries
-// racing to dial keep the first connection and close the others
-// (pre-flight M-8). gen is the connection's generation, for fault. -1 is
-// none.
-func (p *Pool) acquire(ctx context.Context, tried map[int]bool) (int, Client, int, error) {
-	p.mu.Lock()
-	i := -1
-	holding := p.holdingLocked()
-	// Under a hold-off only a server with a bound connection is eligible.
-	eligible := func(j int) bool {
-		s := p.srv[j]
-		return !s.open && !tried[j] && (s.conn != nil || !holding)
+// orderLocked is the order servers are tried to bind: those that have not
+// refused first (fewest refusals, then rank), so a probe goes to the
+// best-ranked server not under refusal and a server that has refused is
+// probed again only when none that has not is bindable.
+func (p *Pool) orderLocked() []int {
+	order := make([]int, len(p.srv))
+	for j := range order {
+		order[j] = j
 	}
-	if p.sel >= 0 && eligible(p.sel) {
-		i = p.sel
-	} else {
-		for j := range p.srv {
-			if eligible(j) {
-				i = j
-				break
+	slices.SortStableFunc(order, func(a, b int) int { return int(p.srv[a].refuseStep - p.srv[b].refuseStep) })
+	return order
+}
+
+// acquire is the server a query tries next: the selected one if its
+// breaker is closed, it is untried and it can be used, else the best such,
+// which is then selected. A server with no connection can be used when the
+// bind hold-off and its own backoff allow a bind (bindableLocked). It dials
+// when the server holds no connection; queries racing to dial wait for the
+// one dial rather than each binding (pre-flight M-8, Re-review I-3). gen
+// is the connection's generation, for fault. -1 is none.
+func (p *Pool) acquire(ctx context.Context, tried map[int]bool) (int, Client, int, error) {
+	for {
+		p.mu.Lock()
+		i := -1
+		eligible := func(j int) bool {
+			s := p.srv[j]
+			return !s.open && !tried[j] && (s.conn != nil || s.dialing != nil || p.bindableLocked(s))
+		}
+		if p.sel >= 0 && eligible(p.sel) {
+			i = p.sel
+		} else {
+			for _, j := range p.orderLocked() {
+				if eligible(j) {
+					i = j
+					break
+				}
 			}
 		}
-	}
-	if i < 0 {
+		if i < 0 {
+			p.mu.Unlock()
+			return -1, nil, 0, nil
+		}
+		if i != p.sel {
+			p.selectLocked(i, "")
+		}
+		s := p.srv[i]
+		if s.conn != nil {
+			conn, gen := s.conn, s.gen
+			p.mu.Unlock()
+			return i, conn, gen, nil
+		}
+		if wait := s.dialing; wait != nil {
+			p.mu.Unlock()
+			select {
+			case <-wait:
+				continue
+			case <-ctx.Done():
+				return i, nil, 0, ctx.Err()
+			}
+		}
+		probe := p.beginBindLocked()
+		s.dialing = make(chan struct{})
+		gen := s.gen
 		p.mu.Unlock()
-		return -1, nil, 0, nil
+		conn, err := p.dial(ctx, s.Server)
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		close(s.dialing)
+		s.dialing = nil
+		p.bindDoneLocked(s, probe, err)
+		if err != nil {
+			return i, nil, gen, err
+		}
+		s.conn = conn
+		s.gen++
+		return i, conn, s.gen, nil
 	}
-	if i != p.sel {
-		p.selectLocked(i, "")
-	}
-	s := p.srv[i]
-	conn, gen := s.conn, s.gen
-	if conn != nil {
-		p.mu.Unlock()
-		return i, conn, gen, nil
-	}
-	allowed, probe := p.bindAllowedLocked()
-	p.mu.Unlock()
-	if !allowed {
-		return i, nil, gen, errHoldoff
-	}
-	conn, err := p.dial(ctx, s.Server)
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.bindDoneLocked(s, probe, err)
-	if err != nil {
-		return i, nil, gen, err
-	}
-	if s.conn != nil {
-		_ = conn.Close()
-		return i, s.conn, s.gen, nil
-	}
-	s.conn = conn
-	s.gen++
-	return i, conn, s.gen, nil
 }
 
 func (p *Pool) answered(i int, outcome string) {
@@ -400,39 +451,73 @@ func (p *Pool) fault(i, gen int, err error) {
 	}
 }
 
-// refused is a dial or bind the server refused without a fault
-// (pre-flight I-2): invalid credentials (49), strongAuthRequired,
-// confidentialityRequired, a KDC's refusal. The breaker's count is left as
-// it is, neither raised (a wrong password is not a down server) nor reset.
-//
-// The refusal is the shared service account's, so it starts a pool-wide
-// bind hold-off (Ruling PF7g-g): 1m, doubling per further refusal to 15m.
-// Until it ends no server without a bound connection is dialled, and one
-// probe bind decides after it; AD counts failed binds from every DC toward
-// one lockout, and a locked account stays locked after the password is
-// fixed. Said once per server an hour with the mechanism and the result
-// code, and at each hold-off step with the next attempt's time; the error
-// carries neither the password nor the keytab (Task 7). Operators: exempt
-// the service account from lockout or set its threshold above 6 per 30
-// minutes.
-func (p *Pool) refused(i int, err error) {
-	p.m.DirectoryQueries.WithLabelValues(p.srv[i].Label(), "refused").Inc()
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	s := p.srv[i]
-	// A server that refuses has not passed every check: its stability window
-	// restarts, so failback does not return to it every interval. faults is
-	// left as it is.
-	s.healthySince = time.Time{}
+// bindableLocked reports whether a bind to s may be made now (Ruling
+// PF7g-g). A refusal is the shared service account's, so it starts a
+// pool-wide bind hold-off, 1m doubling per further refusal to 15m, during
+// which no server without a bound connection is dialled; AD counts failed
+// binds from every DC toward one lockout, and a locked account stays
+// locked after the password is fixed. After it exactly one probe bind
+// decides. A refusal is also its server's own: s is not dialled again until
+// its own backoff (the same schedule) ends, and orderLocked tries servers
+// that have not refused first, so one misconfigured DC does not hold off
+// the good ones. Any accepted bind clears the pool's hold-off; a server's
+// own backoff clears only on its own accepted bind.
+func (p *Pool) bindableLocked(s *serverState) bool {
 	now := p.now()
-	p.probing = false
-	if p.holdStep == 0 || !now.Before(p.holdUntil) {
-		switch {
-		case p.holdStep == 0:
-			p.holdStep = holdoffFirst
-		default:
-			p.holdStep = min(2*p.holdStep, holdoffCap)
+	switch {
+	case now.Before(s.refuseUntil):
+		return false
+	case p.holdStep == 0:
+		return true
+	}
+	return !now.Before(p.holdUntil) && !p.probing
+}
+
+// beginBindLocked marks the start of a bind: after a hold-off it is the
+// probe, of which one runs at a time.
+func (p *Pool) beginBindLocked() (probe bool) {
+	if p.holdStep > 0 {
+		p.probing = true
+		return true
+	}
+	return false
+}
+
+// bindDoneLocked ends a bind attempt, under the lock that ended the dial so
+// no other bind starts between the dial's end and the step it causes
+// (Re-review I-3). An accepted bind clears the pool's hold-off and the
+// server's own backoff. A refusal is counted, restarts the server's
+// stability window (it has not passed every check; faults is left as it is,
+// neither raised, since a wrong password is not a down server, nor reset),
+// steps its own backoff, and starts or steps the pool's hold-off: said once
+// per server an hour with the mechanism and the result code, and at each
+// pool step with the next attempt's time. The error carries neither the
+// password nor the keytab (Task 7). Operators: a refused service-account
+// bind holds off every bind, at most 6 failed binds in the first 30
+// minutes and 4 an hour after that; exempt the service account from
+// lockout or set its threshold above that.
+func (p *Pool) bindDoneLocked(s *serverState, probe bool, err error) {
+	if probe {
+		p.probing = false
+	}
+	now := p.now()
+	switch {
+	case err == nil:
+		s.refuseStep, s.refuseUntil = 0, time.Time{}
+		if p.holdStep > 0 {
+			p.holdStep, p.holdUntil = 0, time.Time{}
+			p.say("directory: %s accepted the bind; the bind hold-off cleared", s.Label())
 		}
+		return
+	case !Refusal(err):
+		return
+	}
+	p.m.DirectoryQueries.WithLabelValues(s.Label(), "refused").Inc()
+	s.healthySince = time.Time{}
+	s.refuseStep = nextBackoff(s.refuseStep)
+	s.refuseUntil = now.Add(s.refuseStep)
+	if p.holdStep == 0 || !now.Before(p.holdUntil) {
+		p.holdStep = nextBackoff(p.holdStep)
 		p.holdUntil = now.Add(p.holdStep)
 		p.say("directory: %s refused the bind; no server is bound for %s, until %s (the next attempt is one probe "+
 			"bind); queries on a bound connection continue, and the rest fall to directory.grace",
@@ -446,42 +531,18 @@ func (p *Pool) refused(i int, err error) {
 		printsafe.Line(err.Error(), 300))
 }
 
-// holdingLocked reports whether a dial to a server with no bound
-// connection is barred now: inside the hold-off, or while its probe runs.
-func (p *Pool) holdingLocked() bool {
-	return p.holdStep > 0 && (p.now().Before(p.holdUntil) || p.probing)
+// nextBackoff is the step after d: 1m, doubling to 15m.
+func nextBackoff(d time.Duration) time.Duration {
+	if d == 0 {
+		return holdoffFirst
+	}
+	return min(2*d, holdoffCap)
 }
 
 func (p *Pool) holding() bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.holdingLocked()
-}
-
-// bindAllowedLocked is whether a bind may be made now, and whether it is
-// the probe after a hold-off, of which only one runs at a time.
-func (p *Pool) bindAllowedLocked() (allowed, probe bool) {
-	switch {
-	case p.holdStep == 0:
-		return true, false
-	case p.now().Before(p.holdUntil), p.probing:
-		return false, false
-	}
-	p.probing = true
-	return true, true
-}
-
-// bindDoneLocked ends a bind attempt: an accepted one clears the hold-off
-// and its backoff; a probe that failed otherwise lets the next one probe (a
-// refusal, which doubles the hold-off, is counted by refused).
-func (p *Pool) bindDoneLocked(s *serverState, probe bool, err error) {
-	if probe {
-		p.probing = false
-	}
-	if err == nil && p.holdStep > 0 {
-		p.holdStep, p.holdUntil = 0, time.Time{}
-		p.say("directory: %s accepted the bind; the bind hold-off cleared", s.Label())
-	}
+	return p.holdStep > 0 && (p.now().Before(p.holdUntil) || p.probing)
 }
 
 // holdoffSeconds is what port49_directory_bind_holdoff_seconds reports.
@@ -535,16 +596,19 @@ func (p *Pool) Check(ctx context.Context) {
 		return
 	}
 	now := p.now()
-	for i, s := range p.srv {
+	p.mu.Lock()
+	order := p.orderLocked()
+	p.mu.Unlock()
+	for _, i := range order {
+		s := p.srv[i]
 		p.mu.Lock()
-		skip := s.open && now.Sub(s.openedAt) < p.cfg.ProbeInterval
-		var allowed, probe bool
+		skip := (s.open && now.Sub(s.openedAt) < p.cfg.ProbeInterval) || !p.bindableLocked(s)
+		var probe bool
 		if !skip {
-			allowed, probe = p.bindAllowedLocked()
-			skip = !allowed
-		}
-		if s.open && !skip {
-			s.openedAt = now // a probe resets its clock
+			probe = p.beginBindLocked()
+			if s.open {
+				s.openedAt = now // a probe resets its clock
+			}
 		}
 		p.mu.Unlock()
 		if skip {
@@ -565,8 +629,7 @@ func (p *Pool) Check(ctx context.Context) {
 			return
 		}
 		switch {
-		case err != nil && !dialed && !Fault(err):
-			p.refused(i, err)
+		case err != nil && !dialed && Refusal(err):
 			continue
 		case err != nil:
 			p.fault(i, -1, err)

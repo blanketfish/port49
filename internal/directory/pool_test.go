@@ -715,3 +715,107 @@ func TestBudgetSpentInALaterDialIsNoFault(t *testing.T) {
 		t.Fatalf("dc-02 charged %v faults for a budget it was not given", n)
 	}
 }
+
+// One misconfigured top-ranked DC and one good one (Re-review C-1): the
+// refusal is that server's, so the hold-off's probes go to the other. After
+// the first step logins succeed, the good DC keeps being health-checked, and
+// the bad one is dialled at most once per its own backoff.
+func TestOneRefusingDCDoesNotHoldOffTheGoodOne(t *testing.T) {
+	f := newFakeServers(west1.URI, west2.URI)
+	f.setRefuse(west1.URI, ldap.NewError(ldap.LDAPResultInvalidCredentials, errors.New("invalid credentials")))
+	clk := newClock()
+	p := NewPool(poolCfg("us-west", west1, west2), f.dial, noCheck, clk.Now, metrics.New(prometheus.NewRegistry()),
+		(&lines{}).say)
+	var failed []time.Duration
+	for at := time.Duration(0); at <= time.Hour; at += 30 * time.Second {
+		if at > 0 {
+			clk.Add(30 * time.Second)
+		}
+		p.Check(context.Background())
+		if at%(5*time.Minute) == 0 {
+			if _, err := p.Do(context.Background(), searchFor("(x)")); err != nil {
+				failed = append(failed, at)
+			}
+		}
+	}
+	for _, at := range failed {
+		if at > time.Minute {
+			t.Fatalf("a login at %v failed with a good DC up: %v", at, failed)
+		}
+	}
+	f.mu.Lock()
+	bad, good := f.dials[west1.URI], f.dials[west2.URI]
+	f.mu.Unlock()
+	if bad > 8 { // 0, 1m, 3m, 7m, 15m, 30m, 45m, 60m
+		t.Fatalf("dc-01 dialled %d times in an hour; its own backoff allows 8", bad)
+	}
+	if good < 100 {
+		t.Fatalf("dc-02 was dialled %d times: it is not health-checked", good)
+	}
+}
+
+// 200 concurrent queries at a hold-off's expiry bind exactly once: the
+// probe is one bind, and the step is taken as it ends (Re-review I-3).
+func TestExactlyOneProbeBindsAtExpiry(t *testing.T) {
+	invalid := ldap.NewError(ldap.LDAPResultInvalidCredentials, errors.New("invalid credentials"))
+	f := newFakeServers(west1.URI, west2.URI)
+	f.setRefuse(west1.URI, invalid)
+	f.setRefuse(west2.URI, invalid)
+	clk := newClock()
+	p := NewPool(poolCfg("us-west", west1, west2), f.dial, noCheck, clk.Now, metrics.New(prometheus.NewRegistry()),
+		(&lines{}).say)
+	_, _ = p.Do(context.Background(), searchFor("(x)"))
+	clk.Add(61 * time.Second)
+	f.mu.Lock()
+	f.dialDelay = 20 * time.Millisecond
+	f.mu.Unlock()
+	before := binds(f)
+	var wg sync.WaitGroup
+	for i := 0; i < 200; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); _, _ = p.Do(context.Background(), searchFor("(x)")) }()
+	}
+	wg.Wait()
+	if n := binds(f) - before; n != 1 {
+		t.Fatalf("%d binds at the expiry, want 1", n)
+	}
+}
+
+// The same for the first refusal: 200 concurrent first queries bind once.
+func TestExactlyOneBindOnTheFirstRefusal(t *testing.T) {
+	f := newFakeServers(west1.URI, west2.URI)
+	f.setRefuse(west1.URI, ldap.NewError(ldap.LDAPResultInvalidCredentials, errors.New("invalid credentials")))
+	f.dialDelay = 20 * time.Millisecond
+	p := NewPool(poolCfg("us-west", west1, west2), f.dial, noCheck, newClock().Now, metrics.New(prometheus.NewRegistry()),
+		(&lines{}).say)
+	var wg sync.WaitGroup
+	for i := 0; i < 200; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); _, _ = p.Do(context.Background(), searchFor("(x)")) }()
+	}
+	wg.Wait()
+	if n := binds(f); n != 1 {
+		t.Fatalf("%d binds, want 1", n)
+	}
+}
+
+// Only a refusal starts the hold-off (Re-review N-1): a dial that fails
+// some other way (an unreachable KDC) is a fault, fails over and counts
+// toward the breaker.
+func TestAnUnknownDialErrorIsAFaultNotARefusal(t *testing.T) {
+	f := newFakeServers(west1.URI, west2.URI)
+	f.setRefuse(west1.URI, errors.New("gssapi: KDC unreachable"))
+	m := metrics.New(prometheus.NewRegistry())
+	p := NewPool(poolCfg("us-west", west1, west2), f.dial, noCheck, newClock().Now, m, (&lines{}).say)
+	if srv, err := p.Do(context.Background(), searchFor("(x)")); err != nil || srv != west2 {
+		t.Fatalf("%v %v", srv, err)
+	}
+	if testutil.ToFloat64(m.DirectoryBindHoldoff) != 0 ||
+		testutil.ToFloat64(m.DirectoryQueries.WithLabelValues(west1.Label(), "fault")) != 1 {
+		t.Fatal("an unknown dial error was not a plain fault")
+	}
+	if !Refusal(fmt.Errorf("x: %w", ErrBindRefused)) || !Refusal(ldap.NewError(ldap.LDAPResultStrongAuthRequired, errors.New("x"))) ||
+		Refusal(errors.New("x")) || Refusal(ldap.NewError(ldap.ErrorNetwork, errors.New("x"))) {
+		t.Fatal("Refusal misclassifies")
+	}
+}
