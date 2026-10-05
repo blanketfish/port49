@@ -55,6 +55,8 @@ same change.
   Debian packages:
   - **L42:** nested-group resolution under each mode, loops included;
   - **L43:** the bind mechanisms each directory accepts.
+  - **L44** opens beside them for Windows Server AD, and stays open: no Windows DC runs on
+    beehive (OR-3).
   - Then an end-to-end run on the compose stack: a login granted through a nested group, a
     removal reaching the open session, and a directory outage served from grace until the
     ceiling.
@@ -110,7 +112,7 @@ same change.
   - §5.7: the reason codes, the record fields;
   - §12: the diff's gate on a subject's `group:`;
   - §13: decisions 15, 16, 21, 26, 33, 36 and 37 (read), and the new 38;
-  - §15: the register rules, and the new L42 and L43.
+  - §15: the register rules, and the new L42, L43 and L44.
 - `docs/design/2026-08-21-port49-design.md`:
   - §7: human identity, the certificate-to-directory mapping, trust domains;
   - §9: refresh-ahead, "Directory unavailable";
@@ -167,7 +169,10 @@ same change.
   reasons are on `mint`, `refresh`, `identity`, `explain` and `revoke` (broker events). On the
   device path `context_stale` and `credential_revoked` already exist.
 - **No OIDC** (7h), and no workload-certificate path (plan 8).
-- **No Windows Server AD in the lab.** Samba AD stands in (OR-3).
+- **No Windows Server AD in the lab.** L42 and L43 measure OpenLDAP and Samba AD. L44 opens for
+  Windows Server AD and stays open until the SER8 box measures it (OR-3).
+- **No readiness change.** `/readyz` never follows the store or the directory (design §10,
+  §12): a broker with every DC down and every breaker open stays ready, and serves from grace.
 
 ## Rulings where the design and spec are silent
 
@@ -177,10 +182,16 @@ his call.
 
 1. **The mapping is configured, and it is one of six.**
    - **Shape.** `broker.directory.certificate_mapping` takes `kind` (required) and `attribute`
-     (each kind has a default).
+     (each kind has a default). Repointing a strong kind's `attribute` makes it as strong as
+     the attribute it names, so `attribute` on `issuer_serial` or `sid` is refused at load
+     unless `allow_weak: true` is set, which then also requires the `issuers:` pin.
    - **Strong:**
      - `issuer_serial` looks up `altSecurityIdentities=X509:<I>{issuer}<SR>{serial}`, AD's
-       form (issuer RDNs most-significant first, serial bytes reversed, upper-case hex);
+       form (issuer RDNs most-significant first, serial bytes reversed, upper-case hex). The
+       issuer is rendered from the leaf's raw DER issuer (`RawIssuer`, parsed into a
+       `pkix.RDNSequence`) through an OID short-name table that includes `DC`
+       (0.9.2342.19200300.100.1.25). Go's `pkix.Name` drops `DC=` RDNs and `Issuer.String()`
+       renders them as dotted OIDs, so neither is ever used for a mapping or a pin.
      - `sid` reads the SID from the certificate's `szOID_NTDS_CA_SECURITY_EXT`
        (1.3.6.1.4.1.311.25.2) and looks up `objectSid`.
    - **Weak:**
@@ -191,13 +202,19 @@ his call.
      - `cn`: the subject CN → `cn`.
    - **The weak opt-in.** A weak kind is refused at load without `allow_weak: true` and a
      non-empty `issuers:` list of issuer DNs. The leaf's issuer must equal one of them, compared
-     as parsed RDN sequences. It is checked at every mapping, before any search (design §7:
+     as (OID, value) pairs: the leaf's from `RawIssuer`, the pin's from `ldap.ParseDN` through
+     the same short-name table, values case-folded. It is checked at every mapping, before any search (design §7:
      "Weak mappings MUST be issuer-pinned … require explicit opt-in").
    - **Strong needs no pin.** A strong mapping binds a key-specific value. A strong mapping
      with `issuers:` set still checks the pin, since that only denies more.
    - **Values.** A certificate value the kind cannot find (no SID extension, zero or several
      UPN or email SANs) is `identity_unmapped`. Every value is escaped for the filter with
      `ldap.EscapeFilter`, `objectSid` byte by byte, so a SAN of `*)(uid=*` matches nothing.
+   - **Mapping keys are canonical.** A `MapKey` hashes the kind and the value's canonical form,
+     on both sides (the certificate's at bind, the entry's at pre-warm): a SID as its binary
+     form re-encoded, an `issuer_serial` value upper-cased, a UPN or email lower-cased, a DN
+     through `ldap.ParseDN` re-rendered lower-cased. The key stored for a verification is the
+     one the search was made with (`Lookup.Key`).
 2. **Exactly one entry, or no principal.**
    - **The search.** One search under `base_dn` with `(&{user_filter}({attribute}={value}))`, a
      size limit of 2, and the configured attributes only.
@@ -215,11 +232,35 @@ his call.
      `uid`), lower-cased. It must then pass `token.CanonicalUsername` and not be
      `token.ReservedUsername`. Otherwise `identity_unmapped`, and the line names the value's
      length, never the value when it is unprintable.
+   - **Two people under one principal.** A search, `({principal_attribute}={principal value})`
+     under `base_dn`, with no `user_filter` and size limit 2, must return only this DN. If it
+     does not, the result is `identity_ambiguous`, naming both DNs. Without it, a user who can
+     write their own `mail` sets it to a colleague's address and binds as the colleague's
+     principal: their identity subjects, `api:` rights and per-principal marks. Leaving
+     `user_filter` out finds an entry outside it too, which only denies more.
    - **Two people under one username.** A second search, `({username_attribute}={username})`
-     under `base_dn` with size limit 2, must return only this DN. If it does not, the result is
-     `username_collision`, naming both DNs. Two people under one username would share one
-     `(nas, username)` context, which is impersonation. AD makes `sAMAccountName` unique;
-     OpenLDAP does not make `uid` unique.
+     under `base_dn`, with no `user_filter` and size limit 2, must return only this DN. If it
+     does not, the result is `username_collision`, naming both DNs. Two people under one
+     username would share one `(nas, username)` context, which is impersonation. AD makes
+     `sAMAccountName` unique; OpenLDAP does not make `uid` unique.
+   - **The principal is pinned to its entry.** The stored membership names the entry the
+     principal was verified on, by its immutable id: `objectGUID` (AD, Samba) or `entryUUID`
+     (OpenLDAP), else its DN. Every verification, at a bind (`Map`) as on a re-verification
+     (`Verify`, `Current`, pre-warm), finds the principal's stored record and refuses an entry
+     with another id `identity_unmapped` (the scheduled pass revokes on it): a
+     `principal_attribute` value moving between entries never carries the principal with it.
+     A rename or an OU move keeps the id, so it keeps the principal.
+     - **A refusal keeps the pin.** The refusal record written for a principal carries the
+       entry id it was pinned to, so the refusal never opens the principal to the next
+       claimant.
+     - **How long a pin lasts.** As long as the record: `max(directory.grace, 24h)` after the
+       principal's last verification or refusal. A value no one has verified for longer than
+       that is the directory's to give to another entry, as a reassigned address is.
+   - **Who may write the two attributes.** `principal_attribute` and `username_attribute`
+     must be writable only by directory administrators. The start line and the operator notes
+     say so, with OpenLDAP's default `by self write` on `mail` as the example to remove. The
+     two uniqueness searches are the check that holds when that is not so: a self-edited value
+     equal to someone else's refuses both people, and never makes one the other.
    - **A declared username.** A derived username equal to a username a policy subject declares
      is `username_collision`. The declared one is reviewed policy and stands; the directory's
      is the later claimant (spec §2).
@@ -227,9 +268,17 @@ his call.
    - **Why there.** On the certificate path the session *is* the connection (design §7). The
      listener's per-principal cap, the marks check at bind and every request on the connection
      must agree on one principal.
-   - **How.** `Listener.Map` runs after the certificate checks and before `Status` and `bind`,
-     bounded by `directory.query_timeout`. It puts the principal on the `trackedConn`, and `ConnContext`
-     copies it into the `heldConn`. `authenticate` reads it from there.
+   - **How.** The bind runs in this order: the certificate checks, the certificate-key mark,
+     `Status`, then `Listener.Map`, bounded by `directory.query_timeout`, then `bind`'s
+     principal mark. A revoked certificate is answered 401 `credential_revoked` before the
+     directory is asked, so a directory outage never turns a revocation into a 503 the agent
+     keeps its session on (the invariant at `internal/broker/listen.go:294–297`). `Map` puts
+     the principal on the `trackedConn`, and `ConnContext` copies it into the `heldConn`.
+     `authenticate` reads it from there.
+   - **Marks made before the directory.** A certificate with exactly one email SAN had the
+     principal `user:` + that SAN before a directory was configured. `bind` also checks
+     principal marks against that legacy principal, so turning a directory on never lifts a
+     revocation made by principal. It only denies more.
    - **What the agent sees.** A mapping refused is answered and closed like `Status`'s
      refusals:
      - 401 `identity_unmapped`, 401 `identity_ambiguous`, 401 `username_collision`;
@@ -305,6 +354,16 @@ his call.
      server fault, or its breaker opens.
    - **What a server fault is.** Network errors, timeouts, `busy` (51), `unavailable` (52),
      `unwillingToPerform` (53), `other` (80). Any other LDAP result is the query's answer.
+   - **A refused dial or bind is "this server did not answer".** A rotated bind password
+     (49), `strongAuthRequired`, `confidentialityRequired`, an expired EXTERNAL certificate or
+     a KDC error fails the query over to the next server, and with none answering the query
+     is `ErrUnavailable`, so grace applies. A bind refusal is said once per server per hour
+     with the mechanism and the result code. A 49 is not a breaker fault (a wrong password
+     is not a down server), and it never resets the fault count a health check has built.
+   - **One query's timeout is its own.** Each search runs as `SearchAsync` under its own
+     context, so a query that times out abandons its own message and leaves the shared
+     connection and every other in-flight query alone. An error on a connection the pool
+     closed itself is never counted a fault.
    - **Breakers.** Each server's breaker opens after `failure_threshold` consecutive faults
      (default 3). An open server is tried again only by the health check every `probe_interval`
      (60s), never by a query.
@@ -322,13 +381,36 @@ his call.
        the last selected when crossing back. It is a process-log consistency event naming both
        sites and both servers, counted `port49_directory_site_crossings_total` (design §10:
        "MUST be logged as consistency events").
+     - **With no broker site,** a selection whose server's site differs from the previous
+       selection's is the crossing, said and counted the same way.
 10. **Membership lives in the shared store, sealed, and grace reads it.**
     - **The records.**
       - `mb/<principal>`: sealed, holding the DN, username, group DNs, verified-unique group
-        names, `verified_at`, server and site;
-      - `mk/<sha256(kind, value)>`: plaintext, the principal a mapping key resolved to.
+        names, the mapping keys it answers to, `verified_at`, server and site;
+      - `mk/<sha256(kind, value)>`: the principal a mapping key resolved to. The principal is
+        plaintext so a bind can find the record, but it binds nothing on its own: crypt's
+        `MembershipByKey` opens `mb/<principal>` and requires the key in its sealed list, so a
+        store writer who adds a victim's key to an admin's index entry gets `ErrNotFound`.
     - **Who writes them.** Every successful verification writes both: a bind, a mint, a
       scheduled pass, a pre-warm. The broker's role alone reads or writes them.
+    - **A refusal is written too.** When the directory answers `identity_unmapped`,
+      `identity_ambiguous` or `username_collision`, a refusal record (`Membership.Refused`,
+      sealed, `VerifiedAt` the answer's instant) is written by principal (`Verify`,
+      `Current`; and the entry's own principal when another entry holds its value or
+      username), and by the searched key (`Map`). It keeps the principal's pin (Ruling 3). It supersedes an older grant-bearing record
+      under the same "later `verified_at` wins" rule, on both indexes. Grace treats a refused
+      record as nothing stored (`ErrUnavailable`), and a policy pass judges it as no groups.
+      Without this, a user deleted from AD at T, refused by the pass at T+5m, would mint from
+      grace when the DCs drop at T+10m: the directory answered "no", and grace must never
+      overrule it.
+    - **One key, one principal.** A key a live record of a different principal still lists is
+      not repointed: it is written as an ambiguous marker (`Principal: ""`), which
+      `MembershipByKey` answers `ErrNotFound`, so grace refuses that certificate rather than
+      pick the last writer.
+    - **The grace read has its own budget.** The resolver bounds the pool call by
+      `query_timeout` itself, then reads the store on `context.WithoutCancel` with its own
+      store timeout, so a DC slower than the request's deadline still reaches grace and is
+      never blamed on the store.
     - **The lease** is `max(directory.grace, 24h)`, so a policy reload can judge a context by
       the membership its principal last had, on any replica and after a restart.
     - **Grace.** When no server answers, a bind, a mint or an identity request uses the stored
@@ -351,6 +433,13 @@ his call.
 12. **The scheduled refresh.**
     - **When.** Every `broker.refresh_interval` (default 5m, 1m to 1h), on the runner (or in
       a port49d with a broker inside), whether or not anything changed.
+    - **Which principals.** Only `user:` principals are verified against the directory. A
+      machine principal (`spiffe://`, `system:serviceaccount:`, `app:`) is judged as
+      `policy.MemberOf(principal)` and stamped with the pass's instant, as without a directory;
+      the directory holds no entry for it, and `identity_unmapped` would revoke every one.
+    - **The policy is held.** Per principal, the pass takes `pol, release := b.Policy.Hold()`
+      around judging and writing, as the existing passes do, so a reload in between never has
+      a superseded policy written over its own.
     - **What it does per principal** in `ActivePrincipals`:
       - **Verifies.** `Resolver.Verify`, which searches by `principal_attribute`, fresh, never
         grace.
@@ -363,17 +452,32 @@ his call.
         `unverified`, and said once per outage.
       - **The entry gone** (`identity_unmapped`), **two entries** (`identity_ambiguous`), or
         **a username taken** (`username_collision`): every context of the principal is
-        revoked, with a `refresh` deny record under that reason.
+        revoked, with a `refresh` deny record under that reason, and the refusal is written
+        to the store (Ruling 10).
+      - **Tokens.** The unspent tokens of every principal the pass narrowed or revoked are
+        superseded, as a policy refresh supersedes those of the principals it changed.
     - **The stamp** is the membership's `VerifiedAt`.
     - **Without a directory,** the pass judges on the policy alone and stamps the pass's
       instant. A live broker is what the ceiling's "broker unreachable" half asks for.
     - **A policy-reload pass** (4b's) never stamps (4b: "nothing about the directory was
       re-verified"). It judges with the stored membership. A principal with no stored
-      membership is judged with no groups, which can only remove grants (fail closed).
+      membership, a refused one, or one verified longer ago than `directory.grace`, is
+      judged with no groups, which can only remove grants (fail closed): a reload that adds a
+      grant to a group during a 20h outage never writes it into contexts of members last
+      verified 20h ago.
+    - **Superseded tokens reach group members.** A policy refresh supersedes unspent tokens
+      over the identity-declared principals and every principal holding a membership record
+      (`store.MembershipPrincipals`), so a reload withdrawing a group's grant leaves no member's
+      token redeemable.
 13. **Rights and identity through groups.**
     - **Rights.** `HasRightOf(member, right)` is the union over every matching subject.
       `revoke_others` and `explain_others` held through a group work for its members, from the
       membership verified at that request (grace included).
+    - **Revoking one's own never needs the directory.** A `POST /v1/revoke` naming only the
+      caller's own principal (`mine`) never asks the resolver; the membership is looked up only
+      when the request names another principal or a key. A user can always revoke themselves.
+    - **Machine principals** (`spiffe://`, `system:serviceaccount:`, `app:`) are never sent to
+      the directory: their member is `policy.MemberOf(principal)`.
     - **`GET /v1/identity`** answers the subjects, the group names and DNs that matched, the
       username, and the membership's `verified_at` and source.
 14. **`session.staleness_ceiling` defaults to 4h (OR-1), with an explicit `0s` to disable it.**
@@ -383,9 +487,14 @@ his call.
     - **The lab says `0s`.** The lab's seeded contexts are judged by no broker, so
       `tests/lab/port49d-lab.yaml` sets `session.staleness_ceiling: 0s` explicitly, with a
       comment saying why. The authorizer's check is unchanged.
-    - **One process.** Where port49d runs a broker inside, the load refuses a
-      `refresh_interval` above half the ceiling, and a `directory.grace` above the ceiling. A
-      grace mint past the ceiling would mint a context that is stale at its first command.
+    - **One process.** Where port49d runs a broker inside (port49d's load, `RoleDaemon` with
+      `broker:` set), the load refuses a `refresh_interval` above half the ceiling, and a
+      `directory.grace` above the ceiling. A grace mint past the ceiling would mint a context
+      that is stale at its first command. port49-broker's load shares the schema
+      (`LoadBroker`) but never applies the ceiling, so these checks never run there: a split
+      deployment with grace 8h loads.
+    - **Design §9's "MUST be explicit configuration"** is amended (Task 1): the ceiling
+      defaults to 4h, `0s` disables it, and either is said at every start.
     - **The split deployment.** The two values are in two files, so they are compared by
       neither process. The port49-broker start line states its own values so an operator can.
 15. **The diff gates a changed `group:`.**
@@ -410,7 +519,8 @@ his call.
       when someone else can write the directory.
 19. **The metrics.** No label names a device or a principal. `server` is the configured URI, a
     bounded set.
-    - `port49_directory_queries_total{server,outcome}`: `ok`, `fault`, `error`.
+    - `port49_directory_queries_total{server,outcome}`: `ok`, `fault`, `error`, `refused` (a
+      dial or bind the server refused without a fault).
     - `port49_directory_server_up{server}`: 1 while its breaker is closed.
     - `port49_directory_selected{server}`: 1 for the sticky selection.
     - `port49_directory_site_crossings_total`.
@@ -466,6 +576,16 @@ answer.
 - **Not taken:**
   - 1h, where one long DC maintenance window denies the fleet;
   - 24h, where a removal in an outage waits a day.
+- **The runbook line (Task 19's operator notes, and the spec's alerting paragraph).** At the
+  ceiling, live sessions deny `context_stale` from a reachable port49d, so break-glass does
+  not help on them. The 3am escapes: set `session.staleness_ceiling: 0s` and restart port49d,
+  or stop port49d so devices fall back to break-glass (L4). Alert at half the ceiling,
+  `time() - port49_directory_refresh_last_complete_timestamp_seconds > ceiling / 2`, so the
+  page comes two hours before the fleet denies.
+- **The upgrade order.** Upgrade every broker before port49d. A new port49d (4h default)
+  beside an old broker that never stamps `refreshed_at` denies every session 4h after its
+  login. An operator who cannot order the upgrade sets `session.staleness_ceiling: 0s` on
+  port49d until the brokers are new, then removes it.
 
 **OR-2. GSSAPI through go-ldap's `gssapi` package and gokrb5 v8.**
 - **What it adds.** Pure Go, no cgo. It brings about eight modules: `jcmturner/gokrb5/v8`,
@@ -476,15 +596,20 @@ answer.
   design §10 names as "usually the easiest to get approved" in AD shops.
 - **Recommended:** take it, behind the config's choice. L43 measures it against Samba's KDC.
 
-**OR-3. Samba AD stands in for Windows Server AD in the lab.**
+**OR-3. Windows Server AD is its own register row, L44, open until measured.**
 - **What the lab can measure.** beehive runs Linux containers. Samba 4 implements
-  `LDAP_MATCHING_RULE_IN_CHAIN`, `altSecurityIdentities`, `objectSid` and an AD-compatible KDC,
-  so L42 and L43 measure the AD path on it.
-- **What it cannot.** It does not prove a Windows DC's behaviour: EXTERNAL's certificate mapping
-  on a real DC, or KB5014754's strong-mapping enforcement.
-- **Recommended:** close L42 and L43 on OpenLDAP and Samba AD, with the rows naming Windows
-  Server AD as unmeasured. Then measure a Windows Server evaluation VM on the SER8 lab box before
-  beta, as a register re-check, not a plan.
+  `LDAP_MATCHING_RULE_IN_CHAIN`, `altSecurityIdentities`, `objectSid` and an AD-compatible KDC.
+  L42 and L43 name OpenLDAP and Samba AD as their platforms, and close on those two alone.
+- **What it cannot.** It does not prove a Windows DC's behaviour: `in_chain` on a real DC,
+  EXTERNAL's certificate mapping, GSSAPI against a Windows KDC, `altSecurityIdentities`
+  matching port49's `X509:<I><SR>` form, or KB5014754's strong-mapping enforcement.
+- **So the Windows half is its own row.** Task 1 opens **L44** (Platforms: Windows Server AD)
+  for exactly those claims. Decision 38's `in_chain`, `issuer_serial`/`sid` and bind bullets
+  stay "provisional on L44" for Windows Server AD after L42 and L43 close (CLAUDE.md lab
+  rules 2 and 3). No doc asserts a Windows DC's behaviour from the Samba measurement.
+- **Recommended:** run L44 on a Windows Server evaluation VM on the SER8 lab box before beta,
+  as a register measurement, not a plan. Until then the AD-only mechanisms ship, said as
+  measured on Samba AD only, and the operator notes say so.
 
 **Worth reading before the merge** (rulings, not open questions):
 - **Ruling 5.** Several subjects compose. A principal in two groups can hold a combination no
@@ -505,6 +630,7 @@ Every line below is printed by a task in this plan, and the tests named pin it.
   ```
   port49-broker: directory: 3 servers (ldaps://dc-01.corp.example.com us-west 100, ldaps://dc-02.corp.example.com us-west 90, ldaps://dc-03.corp.example.com us-east 50); this broker's site is us-west (PORT49_SITE); bind gssapi as port49$@CORP.EXAMPLE.COM
   port49-broker: directory: certificates map by issuer_serial (strong) through altSecurityIdentities; principal from userPrincipalName, username from sAMAccountName; nested groups in_chain under OU=port49-groups,DC=corp,DC=example,DC=com
+  port49-broker: directory: userPrincipalName and sAMAccountName must be writable only by directory administrators: two entries holding one value are both refused (identity_ambiguous, username_collision) until it is fixed
   port49-broker: directory: grace 4h0m0s; pre-warm every 1h0m0s; the scheduled refresh every 5m0s stamps refreshed_at (port49d's session.staleness_ceiling denies a session past it)
   port49-broker: directory: selected ldaps://dc-01.corp.example.com (us-west, priority 100)
   ```
@@ -533,6 +659,12 @@ Every line below is printed by a task in this plan, and the tests named pin it.
   port49-broker: directory: consistency event: crossing from site us-west to us-east (ldaps://dc-02.corp.example.com to ldaps://dc-03.corp.example.com); membership read there may lag replication from us-west
   ```
 
+  and a bind the server refuses (Task 6), once an hour per server:
+
+  ```
+  port49-broker: directory: ldaps://dc-01.corp.example.com refused the bind (gssapi): LDAP Result Code 49 "Invalid Credentials": bind gssapi as port49$@CORP.EXAMPLE.COM refused (LDAP result 49); queries fail over, and with no server answering a membership verified within directory.grace serves
+  ```
+
   and back after the window:
 
   ```
@@ -543,6 +675,13 @@ Every line below is printed by a task in this plan, and the tests named pin it.
   ```
   port49-broker: directory: no server answered (the last: ldaps://dc-03.corp.example.com: LDAP Result Code 52 "Unavailable"); minting from memberships verified within 4h0m0s (directory.grace)
   port49-broker: directory: user:alice@corp.example.com minted from a membership verified 1h12m ago (grace)
+  ```
+
+  and for someone the directory refused before it stopped answering (Task 10), as an error the
+  mint's 503 carries, never a grace mint:
+
+  ```
+  directory: no server answered: the directory refused user:mallory@corp.example.com at 2026-10-05T09:12:00Z, before it stopped answering; grace never overrules a refusal
   ```
 
   and once grace has passed for someone:
@@ -593,15 +732,22 @@ Every line below is printed by a task in this plan, and the tests named pin it.
   beehive), so `go test ./...` needs no LDAP server: the unit tests run on `fakeDir`.
 - **Deployment is not prescriptive.** Nothing requires a directory; without one, 7f's behaviour
   is unchanged except the ceiling's new default (Ruling 14).
-- The lab register rules (CLAUDE.md 1–4). L42 and L43 open in Task 1 and close in Task 17 (the lab run)
-  only if their notes exist with platform, image version, observation and a capture pointer.
+- **Readiness never follows the directory** (design §10, §12). No task adds a directory or
+  breaker condition to `/readyz`; Task 16 pins it.
+- **A refusal is never overruled by grace** (Ruling 10), and **a principal is unique to one
+  DN** (Ruling 3). A self-editable attribute can refuse people; it can never make one person
+  another.
+- The lab register rules (CLAUDE.md 1–4). L42, L43 and L44 open in Task 1. L42 and L43 close
+  in Task 17 (the lab run) on OpenLDAP and Samba AD, the platforms they name, only if their
+  notes exist with platform, image version, observation and a capture pointer. L44 (Windows
+  Server AD) stays open.
 - Conventional Commits; commit messages end with
   `Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>` and
   `Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc`.
 
 ## Review Focus
 
-The five inputs or conditions no task's tests exercise by accident and most likely to bite a
+The seven inputs or conditions no task's tests exercise by accident and most likely to bite a
 person, with the test that pins each:
 
 1. **A certificate whose mapped value is a filter metacharacter string** (`*`, `)(`, a NUL, a
@@ -624,6 +770,13 @@ person, with the test that pins each:
    be the membership's verification time, so the ceiling counts from then. Pinned by Task 3's
    `TestALoginTakesTheTokensVerifiedAt` and Task 16's
    `TestAGraceMintsSessionGoesStaleFromItsVerification`.
+6. **A user who edits their own `mail` to a colleague's.** The operator expects neither to be
+   the other: both are refused `identity_ambiguous` while the values collide. Pinned by Task
+   8's `TestAPrincipalTwoEntriesHoldIsAmbiguous` and Task 10's
+   `TestAPrincipalOnAnotherEntryIsUnmapped`.
+7. **A user deleted from the directory, then the directory goes down.** The operator expects
+   the deletion to hold through the outage. Pinned by Task 10's
+   `TestARefusedPrincipalIsNotServedFromGrace`.
 
 ## Conflict scan: where tasks share a file or an interface
 
@@ -638,8 +791,12 @@ person, with the test that pins each:
 - `internal/policy/*`: Task 11 alone.
 - `internal/broker/identity.go`, `listen.go`, `server.go`, `broker.go`: Task 12 (bind) and Task
   13 (mint). Task 13 builds on Task 12's `principalOf(r)`.
-- `internal/broker/refresh.go`: Task 14 (judging with a member) and Task 15 (the scheduled
-  pass).
+- `internal/broker/refresh.go`: Task 14 (judging with a member, the report's new fields,
+  `count`'s `unverified`) and Task 15 (the scheduled pass, which only calls it). Tasks 14 and
+  15 are committed in order on one branch, green after each.
+- `internal/directory/fake_test.go`: Task 6 creates it; Task 10 adds `closeAll`.
+- `internal/broker/listen.go`'s `bind` and `broker.go`'s `revocation`: Task 12 changes their
+  signatures and every caller (tests included) in the same commit.
 - `internal/port49d/runner.go`, `main.go`, `brokerd.go`: Task 16 alone.
 - Spec §5.7, §13, §15: Task 1 writes them; Task 17 closes the rows (a docs commit in that task).
 
@@ -671,7 +828,7 @@ person, with the test that pins each:
   `Current`, `Stored`, grace.
 - `internal/directory/prewarm.go` (+ `prewarm_test.go`): `Prewarm`.
 - `internal/directory/fake_test.go`: an in-memory `Searcher` the unit tests share.
-- `internal/directory/static.go`: `NewStaticResolver`, a resolver answering from a map, for
+- `internal/directory/static.go`: `ForTestsStaticResolver`, a resolver answering from a map, never for production; for
   the broker's and port49d's tests (Task 12).
 - `internal/config/directory.go` (+ `directory_test.go`): `broker.directory`, its checks.
 - `internal/store/storetest/membership.go`, `stamp.go`: the new properties.
@@ -697,7 +854,8 @@ person, with the test that pins each:
 - `internal/store/store.go`, `apply.go`, `memory/memory.go`, `crypt/crypt.go`,
   `etcd/contexts.go`, `etcd/records.go`, `etcd/keys.go`, `etcd/roles.go` (`mb/` and `mk/` in
   `daemonNever`, and their probes; the broker's role already spans the keyspace),
-  `guard/guard.go`, `storetest/storetest.go`.
+  `etcd/roles_test.go` (the daemon refused `mb/` and `mk/`), `guard/guard.go`,
+  `storetest/storetest.go`.
 - `internal/keyfile/keyfile.go`: `ReadSecret`.
 - `internal/token/minter.go`: `Subject.VerifiedAt` onto the token.
 - `internal/daemon/authen/authen.go`: `loginContext`'s `RefreshedAt`.
@@ -707,7 +865,7 @@ person, with the test that pins each:
 - `internal/policy/load.go`, `resolve.go`, `scope.go`, `explain.go`, `diff.go`: `Member`,
   composition, `Env.Directory`, the gate.
 - `internal/broker/identity.go`, `listen.go`, `server.go`, `broker.go`, `identity_api.go`,
-  `explain_api.go`, `revoke_api.go`, `refresh.go`, `sessionrefresh.go`.
+  `explain_api.go`, `revoke_api.go`, `refresh.go`, `sessionrefresh.go`, `reindex.go`.
 - `internal/daemon/metrics/metrics.go`.
 - `internal/port49d/main.go`, `brokerd.go`, `runner.go`.
 - `cmd/port49/policy.go`: `blobSource` through `ResolveSubjects`.
@@ -718,18 +876,18 @@ person, with the test that pins each:
 
 ---
 
-### Task 1: The spec and the design say what 7g builds, and L42 and L43 open
+### Task 1: The spec and the design say what 7g builds, and L42, L43 and L44 open
 
 **Files:**
 - Modify: `docs/design/2026-08-23-policy-engine-spec.md`: §2, §5.1, §5.1.3, §5.7 (reason
   table, record fields), §12 (the diff's group gate), §13 (decision 38), §14 (test
-  assertions), §15 (L42, L43)
-- Modify: `docs/design/2026-08-21-port49-design.md`: §7, §10, §12
+  assertions), §15 (L42, L43, L44)
+- Modify: `docs/design/2026-08-21-port49-design.md`: §7, §9, §10, §12
 
 **Interfaces:**
 - Consumes: Rulings 1–20 above.
 - Produces: the four reason codes' rows (Tasks 2, 8, 10, 11, 13, 15 cite them), decision 38,
-  register rows L42 and L43 (Task 17 closes them).
+  register rows L42 and L43 (Task 17 closes them) and L44 (Windows Server AD; stays open).
 
 - [ ] **Step 1: The reason table (spec §5.7, "Reason codes")**
 
@@ -738,8 +896,8 @@ After the `username_collision` row, add four rows, and widen `username_collision
 
 ```markdown
 | `username_collision` | `mint`: the derived username is already held by a subject in another trust domain (§2); or the directory derives a username a policy subject declares, or a second directory entry holds the same username under `broker.directory.username_attribute` (§13 decision 38). At the broker's bind and on `refresh` likewise; on `refresh` every context of the principal is revoked. The process log names both claimants |
-| `identity_unmapped` | at the broker's bind, and on `mint`, `identity`, `explain` and `revoke`: the client certificate maps to no directory entry under `broker.directory.certificate_mapping`; or the value the mapping reads is not in the certificate (no SID extension; zero or several UPN or email SANs); or a weak mapping's issuer is not one its `issuers:` pins (design §7); or the entry's `principal_attribute` or `username_attribute` is absent, has several values, is not printable ASCII, gives a principal with no `@`, or a username that is not already canonical or is reserved (§2). The API answers 401 and the connection is closed. On `refresh`: the principal's entry is gone or no longer usable, and every context of it is revoked |
-| `identity_ambiguous` | as `identity_unmapped`, when the certificate maps to two or more entries, or the server refuses the search for its size limit. Never resolved to the first entry (design §7). MUST be alertable on its own: two people matching one certificate is an impersonation path. On `refresh`: every context of the principal is revoked |
+| `identity_unmapped` | at the broker's bind, and on `mint`, `identity`, `explain` and `revoke`: the client certificate maps to no directory entry under `broker.directory.certificate_mapping`; or the value the mapping reads is not in the certificate (no SID extension; zero or several UPN or email SANs); or a weak mapping's issuer is not one its `issuers:` pins (design §7); or the entry's `principal_attribute` or `username_attribute` is absent, has several values, is not printable ASCII, gives a principal with no `@`, or a username that is not already canonical or is reserved (§2); or the principal it gives is pinned to another entry, by `objectGUID` or `entryUUID` (else DN), for as long as that principal's membership record lives (§13 decision 38). The API answers 401 and the connection is closed. On `refresh`: the principal's entry is gone or no longer usable, and every context of it is revoked |
+| `identity_ambiguous` | as `identity_unmapped`, when the certificate maps to two or more entries, or the server refuses the search for its size limit; or when a second entry holds the same `broker.directory.principal_attribute` value as the mapped entry, so two people would share one principal (§13 decision 38). Never resolved to the first entry (design §7). MUST be alertable on its own: two people matching one certificate is an impersonation path. On `refresh`: every context of the principal is revoked |
 | `directory_unavailable` | at the broker's bind, and on `mint`, `identity`, `explain` and `revoke`: no directory server answered within `broker.directory.query_timeout`, and the membership the store holds for the principal or the certificate was verified longer ago than `broker.directory.grace`, or there is none (§13 decision 38). Nothing is minted. The API answers 503 with `Retry-After`, to be retried, and no agent session is ended. Never on `refresh`: a principal the directory does not answer for keeps its contexts unstamped, and `context_stale` takes over at the ceiling |
 | `composition_refused` | `mint`: the principal matches more than one subject, and their grants together compose on this device to a session reply a joint check refuses (§10): a level above the grants' ceiling, a reply over 255 bytes, an attribute the platform does not accept, or a blob the daemon would refuse. Refused for this principal on this device alone, never a quarantine. On `refresh`: the live context is revoked the same way. The process log names the subjects and the check |
 ```
@@ -748,7 +906,11 @@ In `credential_revoked`'s list of causes, after "a subject's username changed", 
 principal's directory entry gone, ambiguous or renamed to a username another holds, their
 subjects' composition refused". In the paragraph after the table, add: "`identity_ambiguous`
 MUST be alertable on its own, as `credential_revoked` is; a rise in `directory_unavailable`
-means no directory server has answered for longer than `broker.directory.grace` for someone."
+means no directory server has answered for longer than `broker.directory.grace` for someone.
+Alert at half the ceiling, `time() - port49_directory_refresh_last_complete_timestamp_seconds >
+session.staleness_ceiling / 2`: at the ceiling every live session denies `context_stale` from a
+reachable port49d, and the escapes are `session.staleness_ceiling: 0s` with a port49d restart,
+or stopping port49d so break-glass applies (L4)."
 
 - [ ] **Step 2: The record fields (spec §5.7, "Events")**
 
@@ -814,8 +976,15 @@ unstamped, counted `unverified` in `port49_context_refreshes_total`, and its ses
 or ambiguous has every context revoked. Without `broker.directory`, the pass judges against the
 policy alone and stamps its own instant: the ceiling then bounds a broker outage. A policy
 refresh never stamps `refreshed_at`, and judges a group member by the membership last verified
-(held in the store; design §12), or by no groups where none is held.
+(held in the store; design §12), or by no groups where none is held, where the directory refused
+the principal, or where it was verified longer ago than `broker.directory.grace`: a policy
+refresh can narrow on an old membership, never widen.
 ```
+
+In §5.1.1, replace "`refreshed_at` is written at creation and on every refresh." with
+"`refreshed_at` is written at creation (the membership's verification time, on a directory
+login) and on every scheduled refresh that verified the membership (§5.1.3); a policy refresh
+never writes it."
 
 Add rows to the refresh's record table:
 
@@ -846,16 +1015,23 @@ no principal, membership kept in the store, every matching subject composes, and
 refresh stamps refreshed_at.** *Plan 7g, 2026-10-05.*` Then one bullet per Ruling 1–20 of this
 plan, in the plan's words, each ending with the task that builds it. Its first line states the
 defaults OR-1 asks about, "provisional on Ryan's answer to OR-1". The nested-modes bullet ends
-"provisional on L42"; the bind bullet ends "provisional on L43".
+"provisional on L42; on Windows Server AD, on L44"; the bind bullet ends "provisional on L43;
+on Windows Server AD, on L44"; the mapping bullet's `issuer_serial` and `sid` end "provisional
+on L44 (Windows Server AD)". The principal-uniqueness and refusal-record bullets (Rulings 3 and
+10) are rulings, not device claims, and are not provisional.
 
 - [ ] **Step 7: The register (spec §15)**
 
 Append:
 
 ```markdown
-| **L42** | Nested-group resolution, per directory. The fixture: a user three levels below a granted group (`alice` ∈ `g-leaf` ∈ `g-mid` ∈ `netops-oncall`), a loop (`dave` ∈ `g-loop-a` ∈ `g-loop-b` ∈ `g-loop-a`), and a user in the granted group directly (`carol` ∈ `netops-oncall`). For each user: which groups a search under the groups base returns with `member:1.2.840.113556.1.4.1941:=<user DN>` (`in_chain`), whether that search answers, errors or is refused on the loop, and how long it takes; whether the user entry's `memberOf` lists only its direct groups; what port49's `recursive` walk and `direct` read return; and whether a directory that does not implement the matching rule refuses the filter or answers it empty. | `broker.directory.nested_groups` and its three modes (§13 decision 38); design §10's "`memberOf` is not transitive" | OpenLDAP (slapd 2.5, `memberof` overlay), Samba AD (4.17). Windows Server AD unmeasured: no image on the lab (plan 7g, OR-3) | open — added 2026-10-05 (plan 7g) |
-| **L43** | Which bind mechanisms each directory accepts from port49-broker, and how each refusal reads: SASL EXTERNAL over LDAPS with a client certificate (OpenLDAP mapping it by `olcAuthzRegexp`); GSSAPI with a keytab and no SASL security layer, over LDAPS (Samba AD's KDC); simple bind over LDAPS; and a simple bind over plain LDAP to a directory configured to require TLS. | `broker.directory.bind` (§13 decision 38); design §10's three mechanisms | OpenLDAP (EXTERNAL, simple), Samba AD (EXTERNAL, GSSAPI, simple). Windows Server AD unmeasured (OR-3) | open — added 2026-10-05 (plan 7g) |
+| **L42** | Nested-group resolution, per directory. The fixture: a user three levels below a granted group (`alice` ∈ `g-leaf` ∈ `g-mid` ∈ `netops-oncall`), a loop (`dave` ∈ `g-loop-a` ∈ `g-loop-b` ∈ `g-loop-a`), and a user in the granted group directly (`carol` ∈ `netops-oncall`). For each user: which groups a search under the groups base returns with `member:1.2.840.113556.1.4.1941:=<user DN>` (`in_chain`), whether that search answers, errors or is refused on the loop, and how long it takes; whether the user entry's `memberOf` lists only its direct groups; what port49's `recursive` walk and `direct` read return; and whether a directory that does not implement the matching rule refuses the filter or answers it empty. | `broker.directory.nested_groups` and its three modes (§13 decision 38); design §10's "`memberOf` is not transitive" | OpenLDAP (slapd 2.5, `memberof` overlay), Samba AD (4.17) | open — added 2026-10-05 (plan 7g) |
+| **L43** | Which bind mechanisms each directory accepts from port49-broker, and how each refusal reads: SASL EXTERNAL over LDAPS with a client certificate (OpenLDAP mapping it by `olcAuthzRegexp`); GSSAPI with a keytab and no SASL security layer, over LDAPS (Samba AD's KDC); simple bind over LDAPS; and a simple bind over plain LDAP to a directory configured to require TLS. | `broker.directory.bind` (§13 decision 38); design §10's three mechanisms | OpenLDAP (EXTERNAL, simple), Samba AD (EXTERNAL, GSSAPI, simple) | open — added 2026-10-05 (plan 7g) |
+| **L44** | The Active Directory claims on a Windows DC: on L42's fixture and its loop, which groups `member:1.2.840.113556.1.4.1941:=<user DN>` returns and how the loop is answered; SASL EXTERNAL over LDAPS with a client certificate; GSSAPI with a keytab and no SASL security layer against the Windows KDC; whether `altSecurityIdentities` values written in port49's `X509:<I>{issuer}<SR>{serial}` form (issuer from the raw DER, `DC=` included) match the certificate the DC itself maps; whether the SID extension's value equals `objectSid`; and how KB5014754's strong-mapping enforcement treats each. | `broker.directory.nested_groups: in_chain`, the strong mappings `issuer_serial` and `sid`, and `broker.directory.bind` on AD (§13 decision 38, provisional on this row) | Windows Server AD | open — added 2026-10-05 (plan 7g); for the SER8 lab box |
 ```
+
+L42 and L43 name OpenLDAP and Samba AD only. Samba stands in for nothing: what a Windows DC
+does is L44's, and no doc asserts it before L44 closes (OR-3).
 
 - [ ] **Step 8: Test assertions (spec §14)**
 
@@ -870,7 +1046,9 @@ filter metacharacters matches only its literal entry." Add a "Directory" heading
   nothing. A principal in two subjects holds the union of their grants, the least `token_ttl`
   and the most demanding `enable`. A group name two groups share matches no one. A recursive
   walk ends on a loop. A broker restarted in a directory outage mints within grace from the
-  store and refuses past it.
+  store and refuses past it. A principal the directory refused before an outage is refused
+  through it. Two entries holding one `principal_attribute` value are both
+  `identity_ambiguous`. A policy refresh never widens on a membership older than grace.
 ```
 
 - [ ] **Step 9: The design**
@@ -880,7 +1058,16 @@ filter metacharacters matches only its literal entry." Add a "Directory" heading
   ones are `issuer_serial` (AD's `altSecurityIdentities`) and `sid` (the SID extension, on
   `objectSid`). The weak ones are `san_upn`, `san_email`, `subject_dn` and `cn`, each refused
   at load without `allow_weak: true` and an `issuers:` pin. The mapping runs once per held
-  connection and is pinned to it."
+  connection and is pinned to it. The entry's principal and username must each be held by
+  that entry alone, or both people are refused; the attributes they come from must be
+  writable only by directory administrators. A Windows DC's behaviour is register row L44's,
+  open until measured."
+- **§9, "Directory unavailable".** Replace "The ceiling is a security parameter and MUST be
+  explicit configuration:" with "The ceiling is a security parameter: it defaults to 4h, `0s`
+  disables it, and either is said at every start (plan 7g; policy engine spec §13 decision
+  38):". After "Revocation does not function during the grace window", add "except for a
+  principal the directory refused before the outage: a refusal is stored and grace never
+  overrules it".
 - **§10, after "Replication lag".** Add an "As built (plan 7g)" paragraph:
   - the pool's ranking, breakers, health checks, failback and site crossings (Ruling 9);
   - the three binds, TLS-only (Ruling 8);
@@ -898,8 +1085,8 @@ filter metacharacters matches only its literal entry." Add a "Directory" heading
 - **§12's store interface table.** Add two rows:
 
   ```markdown
-  | membership | `principal` | broker, at each verification (bind, mint, scheduled refresh, pre-warm); keeps the later `verified_at` | broker: grace, a policy refresh's judgement | `max(directory.grace, 24h)` | yes — DN, username, groups and `verified_at` |
-  | membership key | `sha256(kind, value)` of a mapping value | broker, with the membership | broker, at a bind in grace | as the membership | no — a principal |
+  | membership | `principal` | broker, at each verification (bind, mint, scheduled refresh, pre-warm), and at each refusal (a refusal record); keeps the later `verified_at` | broker: grace, a policy refresh's judgement, token supersession | `max(directory.grace, 24h)` | yes — DN, entry id (the pin), username, groups, mapping keys, `verified_at`, refused |
+  | membership key | `sha256(kind, canonical value)` of a mapping value | broker, with the membership; a key two principals claim is written ambiguous | broker, at a bind in grace, honoured only if the sealed record lists the key | as the membership | no — a principal |
   ```
 
 - [ ] **Step 10: Check and commit**
@@ -909,7 +1096,7 @@ Expected: the four rows in §5.7, decision 38's bullets, §5.1.3's table.
 
 ```bash
 git add docs/design/2026-08-23-policy-engine-spec.md docs/design/2026-08-21-port49-design.md
-git commit -m "docs: spec and design for plan 7g, decision 38, four reason codes, L42 and L43 opened" \
+git commit -m "docs: spec and design for plan 7g, decision 38, four reason codes, L42, L43 and L44 opened" \
   -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>" \
   -m "Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 ```
@@ -1589,8 +1776,21 @@ func TestDirectoryRefusals(t *testing.T) {
 		}, "broker.directory.health_check.timeout 20s: must be at most health_check.interval (10s)"},
 		{"no servers", func(d *directoryYAML) { d.Servers = nil }, "broker.directory.servers: list at least one"},
 		{"no base", func(d *directoryYAML) { d.BaseDN = "" }, "broker.directory.base_dn is required"},
-		{"a depth of 0 under recursive", func(d *directoryYAML) { d.NestedGroups = "recursive"; d.MaxDepth = -1 },
+		{"a negative depth under recursive", func(d *directoryYAML) { d.NestedGroups = "recursive"; d.MaxDepth = -1 },
 			"broker.directory.max_depth -1: must be 1 to 64"},
+		{"a user_filter that does not compile", func(d *directoryYAML) { d.UserFilter = "(objectClass=person" },
+			`broker.directory.user_filter "(objectClass=person": `},
+		{"a group_filter that does not compile", func(d *directoryYAML) { d.GroupFilter = "objectClass=group" },
+			`broker.directory.group_filter "objectClass=group": `},
+		{"an attribute that is no descriptor", func(d *directoryYAML) { d.PrincipalAttribute = "mail)(uid=*" },
+			`broker.directory.principal_attribute "mail)(uid=*": not an attribute descriptor`},
+		{"a strong kind repointed without opt-in", func(d *directoryYAML) {
+			d.CertificateMapping = mappingYAML{Kind: "sid", Attribute: "description"}
+		}, "broker.directory.certificate_mapping.attribute description: repointing sid makes it as strong as description; " +
+			"set allow_weak: true and list the issuers it is pinned to (design §7)"},
+		{"a strong kind repointed with opt-in and no issuers", func(d *directoryYAML) {
+			d.CertificateMapping = mappingYAML{Kind: "issuer_serial", Attribute: "description", AllowWeak: true}
+		}, "certificate_mapping.issuers"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			d := dirYAML(t)
@@ -1721,7 +1921,7 @@ package config
 import (
 	"fmt"
 	"net/url"
-	"os"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -1971,11 +2171,22 @@ func checkMapping(m mappingYAML) (directory.Mapping, error) {
 		return directory.Mapping{}, fmt.Errorf("config: %skind %s: one of %s", p, or(m.Kind, `""`), strings.Join(names, ", "))
 	}
 	out := directory.Mapping{Kind: kind, Attribute: or(m.Attribute, kind.DefaultAttribute()), AllowWeak: m.AllowWeak}
+	// A strong kind repointed at another attribute is as strong as that
+	// attribute (pre-flight M-4): it takes the weak opt-in and its pin.
+	repointed := kind.Strong() && m.Attribute != "" && m.Attribute != kind.DefaultAttribute()
+	if repointed && !m.AllowWeak {
+		return directory.Mapping{}, fmt.Errorf("config: %sattribute %s: repointing %s makes it as strong as %s; set "+
+			"allow_weak: true and list the issuers it is pinned to (design §7)", p, m.Attribute, kind, m.Attribute)
+	}
 	for i, iss := range m.Issuers {
 		if _, err := ldap.ParseDN(iss); err != nil || !strings.Contains(iss, "=") {
 			return directory.Mapping{}, fmt.Errorf("config: %sissuers[%d] %q: not an RFC 4514 DN", p, i, iss)
 		}
 		out.Issuers = append(out.Issuers, iss)
+	}
+	if repointed && len(out.Issuers) == 0 {
+		return directory.Mapping{}, fmt.Errorf("config: %sissuers: a repointed strong mapping is pinned to its "+
+			"issuers; list at least one (design §7)", p)
 	}
 	if !kind.Strong() {
 		if !m.AllowWeak {
@@ -1999,8 +2210,32 @@ func refreshInterval(d time.Duration) (time.Duration, error) {
 	return d, nil
 }
 
-var _ = os.Getenv
+// descriptor is an LDAP attribute description: a name or a numeric OID
+// (RFC 4512 §1.4). A value outside it would be pasted into a filter.
+var descriptor = regexp.MustCompile(`^([A-Za-z][A-Za-z0-9-]*|[0-9]+(\.[0-9]+)+)$`)
+
+// checkSearchShape refuses, at load, a filter that does not compile and an
+// attribute that is no descriptor: otherwise a typo is an "error" on every
+// query and never a load error.
+func checkSearchShape(d *directory.Config) error {
+	const p = "broker.directory."
+	for _, f := range []struct{ key, v string }{{"user_filter", d.UserFilter}, {"group_filter", d.GroupFilter}} {
+		if _, err := ldap.CompileFilter(f.v); err != nil {
+			return fmt.Errorf("config: %s%s %q: %v", p, f.key, f.v, err)
+		}
+	}
+	for _, a := range []struct{ key, v string }{{"principal_attribute", d.PrincipalAttribute},
+		{"username_attribute", d.UsernameAttribute}, {"group_name_attribute", d.GroupNameAttribute},
+		{"member_attribute", d.MemberAttribute}, {"certificate_mapping.attribute", d.Mapping.Attribute}} {
+		if !descriptor.MatchString(a.v) {
+			return fmt.Errorf("config: %s%s %q: not an attribute descriptor", p, a.key, a.v)
+		}
+	}
+	return nil
+}
 ```
+
+Call `checkSearchShape(d)` in `checkDirectory` just before `return d, nil`, returning its error.
 
 (`go-ldap` is added to `go.mod` here: `go get github.com/go-ldap/ldap/v3@v3.4.14`, then `go mod
 tidy`. Task 7 adds the `gssapi` import.)
@@ -2071,12 +2306,13 @@ git commit -m "feat(config): broker.directory and broker.refresh_interval" \
   `internal/store/guard/guard.go`
 - Create: `internal/store/etcd/membership.go`
 - Modify: `internal/store/etcd/keys.go:35-50` (two families), `internal/store/etcd/roles.go:47`
-  (`daemonNever`), `:130-143` (two probes)
+  (`daemonNever`), `:130-143` (four probes)
 - Create: `internal/store/storetest/membership.go`; Modify: `storetest.go` (`Run`)
+- Test: `internal/store/crypt/crypt_test.go`, `internal/store/etcd/roles_test.go:165-190`
 
 **Interfaces:**
-- Consumes: `cas` (`etcd/commit.go:96`), `(*wrapped).keys.SealBound/OpenBound`, `guard`'s
-  `Token` pool.
+- Consumes: `cas` (`etcd/commit.go:96`), `(*wrapped).keys.SealBound/OpenBound`,
+  `(*wrapped).openErr` (`crypt.go:346`), `guard`'s `Token` pool.
 - Produces:
 
 ```go
@@ -2084,27 +2320,42 @@ git commit -m "feat(config): broker.directory and broker.refresh_interval" \
 type Membership struct {
 	Principal  string
 	DN         string   // sealed
+	EntryID    string   // sealed: the entry's immutable id, the principal's pin (Ruling 3)
 	Username   string   // sealed
 	GroupDNs   []string // sealed
 	GroupNames []string // sealed: names verified unique under groups_base_dn
-	MapKeys    []string // MapKey of every mapping value the entry answers to
+	MapKeys    []string // sealed and in the clear: MapKey of every mapping value the entry answers to
+	Refused    bool     // sealed and in the clear: the directory answered no (Ruling 10)
 	VerifiedAt time.Time
 	Server     string
 	Site       string
 	Sealed     []byte
 }
-func MapKey(kind, value string) string
+func MapKey(kind, canonicalValue string) string
 // PutMembership writes m under m.Principal and indexes each of m.MapKeys,
-// keeping a record verified later than m whole; ttl from now.
+// keeping a record verified later than m whole; ttl from now. A key a live
+// record of another principal still lists is written ambiguous. A refused
+// m (Refused, no groups) supersedes an older record the same way.
 PutMembership(ctx context.Context, m Membership, ttl time.Duration) error
+// RefuseMapKeys marks each key refused as of at, unless a later
+// verification holds it: MembershipByKey then answers ErrNotFound.
+RefuseMapKeys(ctx context.Context, mapKeys []string, at time.Time, ttl time.Duration) error
 // GetMembership is the record for principal, or ErrNotFound.
 GetMembership(ctx context.Context, principal string) (Membership, error)
 // MembershipByKey is the record a mapping key indexes, or ErrNotFound when
-// none does or the record no longer lists the key.
+// none does, the key is ambiguous or refused, or the record no longer
+// lists the key.
 MembershipByKey(ctx context.Context, mapKey string) (Membership, error)
+// MembershipPrincipals is every principal with a live membership record,
+// refused ones included, sorted: the set a policy refresh supersedes
+// group members' tokens over.
+MembershipPrincipals(ctx context.Context) ([]string, error)
 
 // storetest
 func MembershipKeepsTheLaterAndIsFoundByKey(t *testing.T, b Backend)
+func MembershipKeyClaimedTwiceIsAmbiguous(t *testing.T, b Backend)
+func MembershipRefusalSupersedes(t *testing.T, b Backend)
+func MembershipPrincipalsListsTheLive(t *testing.T, b Backend)
 func MembershipExpires(t *testing.T, b Backend)
 ```
 
@@ -2129,22 +2380,24 @@ import (
 // MembershipKeepsTheLaterAndIsFoundByKey: a membership is read back whole
 // by principal and by each mapping key it lists; a write verified earlier
 // than the one held never replaces it (a slow replica's stale answer must
-// not undo a removal another replica verified); a key moved to another
-// principal finds the other, and a record that stopped listing a key is
-// not found by it (plan 7g, Ruling 10).
+// not undo a removal another replica verified); a record that stopped
+// listing a key is not found by it (plan 7g, Ruling 10).
 func MembershipKeepsTheLaterAndIsFoundByKey(t *testing.T, b Backend) {
 	ctx := context.Background()
 	s := b.New(t, func() time.Time { return t0 })
 	k1, k2 := store.MapKey("issuer_serial", "X509:<I>CN=CA<SR>01"), store.MapKey("issuer_serial", "X509:<I>CN=CA<SR>02")
 	alice := store.Membership{Principal: "user:alice@corp.example.com", DN: "CN=Alice,OU=Staff,DC=corp",
-		Username: "alice", GroupDNs: []string{"CN=netops-oncall,OU=G,DC=corp"}, GroupNames: []string{"netops-oncall"},
-		MapKeys: []string{k1}, VerifiedAt: t0.Add(-time.Minute), Server: "ldaps://dc-01", Site: "us-west"}
+		EntryID: "guid:0a1b2c3d", Username: "alice", GroupDNs: []string{"CN=netops-oncall,OU=G,DC=corp"},
+		GroupNames: []string{"netops-oncall"}, MapKeys: []string{k1}, VerifiedAt: t0.Add(-time.Minute),
+		Server: "ldaps://dc-01", Site: "us-west"}
 	if err := s.PutMembership(ctx, alice, time.Hour); err != nil {
 		t.Fatal(err)
 	}
 	got, err := s.GetMembership(ctx, alice.Principal)
-	if err != nil || got.DN != alice.DN || got.Username != "alice" || !slices.Equal(got.GroupDNs, alice.GroupDNs) ||
-		!slices.Equal(got.GroupNames, alice.GroupNames) || !got.VerifiedAt.Equal(alice.VerifiedAt) || got.Site != "us-west" {
+	if err != nil || got.DN != alice.DN || got.EntryID != alice.EntryID || got.Username != "alice" ||
+		!slices.Equal(got.GroupDNs, alice.GroupDNs) ||
+		!slices.Equal(got.GroupNames, alice.GroupNames) || !slices.Equal(got.MapKeys, alice.MapKeys) ||
+		!got.VerifiedAt.Equal(alice.VerifiedAt) || got.Site != "us-west" || got.Refused {
 		t.Fatalf("by principal: %+v %v", got, err)
 	}
 	if byKey, err := s.MembershipByKey(ctx, k1); err != nil || byKey.Principal != alice.Principal {
@@ -2166,16 +2419,116 @@ func MembershipKeepsTheLaterAndIsFoundByKey(t *testing.T, b Backend) {
 	if _, err := s.MembershipByKey(ctx, k1); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("a key the record no longer lists: %v, want ErrNotFound", err)
 	}
-	bob := store.Membership{Principal: "user:bob@corp.example.com", DN: "CN=Bob,DC=corp", Username: "bob",
-		MapKeys: []string{k2}, VerifiedAt: t0}
-	if err := s.PutMembership(ctx, bob, time.Hour); err != nil {
-		t.Fatal(err)
-	}
-	if byKey, _ := s.MembershipByKey(ctx, k2); byKey.Principal != bob.Principal {
-		t.Fatalf("a key re-pointed by a later verification: %+v", byKey)
-	}
 	if _, err := s.GetMembership(ctx, "user:nobody@corp.example.com"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("no record: %v", err)
+	}
+}
+
+// MembershipKeyClaimedTwiceIsAmbiguous: a key a live record of another
+// principal still lists is never repointed to the last writer. It is
+// ambiguous, MembershipByKey answers ErrNotFound, and grace refuses the
+// certificate (pre-flight I-5). Once the first record stops listing the
+// key, the next verification of the second points it there.
+func MembershipKeyClaimedTwiceIsAmbiguous(t *testing.T, b Backend) {
+	ctx := context.Background()
+	s := b.New(t, func() time.Time { return t0 })
+	k := store.MapKey("san_email", "shared@corp.example.com")
+	alice := store.Membership{Principal: "user:alice@corp.example.com", DN: "CN=Alice,DC=corp", Username: "alice",
+		MapKeys: []string{k}, VerifiedAt: t0.Add(-2 * time.Minute)}
+	bob := store.Membership{Principal: "user:bob@corp.example.com", DN: "CN=Bob,DC=corp", Username: "bob",
+		MapKeys: []string{k}, VerifiedAt: t0.Add(-time.Minute)}
+	for _, m := range []store.Membership{alice, bob} {
+		if err := s.PutMembership(ctx, m, time.Hour); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if m, err := s.MembershipByKey(ctx, k); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("a key two live records list: %+v %v, want ErrNotFound", m, err)
+	}
+	alice.MapKeys, alice.VerifiedAt = nil, t0.Add(-30*time.Second)
+	bob.VerifiedAt = t0
+	for _, m := range []store.Membership{alice, bob} {
+		if err := s.PutMembership(ctx, m, time.Hour); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if m, err := s.MembershipByKey(ctx, k); err != nil || m.Principal != bob.Principal {
+		t.Fatalf("once alice stops listing it: %+v %v, want bob", m, err)
+	}
+}
+
+// MembershipRefusalSupersedes: a refusal (the directory answered
+// identity_unmapped, identity_ambiguous or username_collision) replaces an
+// older grant-bearing record on both indexes, and an older grant-bearing
+// write after it never brings the groups back (pre-flight C-1). A key
+// refused by itself answers ErrNotFound while the principal's record by
+// name stands.
+func MembershipRefusalSupersedes(t *testing.T, b Backend) {
+	ctx := context.Background()
+	s := b.New(t, func() time.Time { return t0 })
+	k1, k3 := store.MapKey("sid", "S-1-5-21-1-2-3-1104"), store.MapKey("sid", "S-1-5-21-1-2-3-1105")
+	alice := store.Membership{Principal: "user:alice@corp.example.com", DN: "CN=Alice,DC=corp", Username: "alice",
+		GroupDNs: []string{"CN=netops-oncall,DC=corp"}, MapKeys: []string{k1}, VerifiedAt: t0.Add(-time.Minute)}
+	if err := s.PutMembership(ctx, alice, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	refusal := store.Membership{Principal: alice.Principal, EntryID: "guid:0a1b", Refused: true, VerifiedAt: t0}
+	if err := s.PutMembership(ctx, refusal, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	stale := alice
+	stale.VerifiedAt = t0.Add(-30 * time.Second)
+	if err := s.PutMembership(ctx, stale, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.GetMembership(ctx, alice.Principal); err != nil || !got.Refused || len(got.GroupDNs) != 0 ||
+		got.EntryID != "guid:0a1b" {
+		t.Fatalf("by principal after a refusal: %+v %v, want refused with no groups and its pin", got, err)
+	}
+	if _, err := s.MembershipByKey(ctx, k1); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("by key after a refusal: %v, want ErrNotFound", err)
+	}
+	carol := store.Membership{Principal: "user:carol@corp.example.com", DN: "CN=Carol,DC=corp", Username: "carol",
+		MapKeys: []string{k3}, VerifiedAt: t0.Add(-time.Minute)}
+	if err := s.PutMembership(ctx, carol, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RefuseMapKeys(ctx, []string{k3}, t0, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.MembershipByKey(ctx, k3); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("a refused key: %v, want ErrNotFound", err)
+	}
+	if got, err := s.GetMembership(ctx, carol.Principal); err != nil || got.Refused {
+		t.Fatalf("a key refused leaves the principal's record: %+v %v", got, err)
+	}
+}
+
+// MembershipPrincipalsListsTheLive: every principal with a live record,
+// refused ones included, sorted (pre-flight I-13).
+func MembershipPrincipalsListsTheLive(t *testing.T, b Backend) {
+	ctx := context.Background()
+	var mu sync.Mutex
+	now := t0
+	s := b.New(t, func() time.Time { mu.Lock(); defer mu.Unlock(); return now })
+	for _, m := range []store.Membership{
+		{Principal: "user:bob@corp.example.com", Username: "bob", VerifiedAt: t0},
+		{Principal: "user:alice@corp.example.com", Refused: true, VerifiedAt: t0},
+	} {
+		if err := s.PutMembership(ctx, m, time.Hour); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.PutMembership(ctx, store.Membership{Principal: "user:gone@corp.example.com", VerifiedAt: t0},
+		time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	now = now.Add(2 * time.Minute)
+	mu.Unlock()
+	got, err := s.MembershipPrincipals(ctx)
+	if err != nil || !slices.Equal(got, []string{"user:alice@corp.example.com", "user:bob@corp.example.com"}) {
+		t.Fatalf("%v %v", got, err)
 	}
 }
 
@@ -2204,21 +2557,43 @@ func MembershipExpires(t *testing.T, b Backend) {
 }
 ```
 
-Add both to `Run`'s list. For etcd, read how `SupersededIsTheLaterAndExpires` gets expiry
+Add all five to `Run`'s list. For etcd, read how `SupersededIsTheLaterAndExpires` gets expiry
 from a moved clock (the `etcd` backend's `now` drives `live`), and use the same: expiry is
 judged on read against the record's `expires_at`, with the lease as the reclaim.
 
-Add one crypt-only test in `internal/store/crypt/crypt_test.go`:
-`TestAMembershipsVerifiedAtMovedInTheClearIsRefused`. It puts a membership through
-`crypt.Wrap` over memory, rewrites the inner record's plaintext `VerifiedAt` an hour later,
-and asserts `GetMembership` returns an error and the alarm counter
-`port49_crypt_open_failures_total{record="membership"}` moved. A store write must not extend
-grace.
+Add two crypt-only tests in `internal/store/crypt/crypt_test.go`, each through `crypt.Wrap`
+over memory, each asserting the alarm counter
+`port49_crypt_open_failures_total{record="membership"}` moved:
+- `TestAMembershipsVerifiedAtMovedInTheClearIsRefused`: rewrite the inner record's plaintext
+  `VerifiedAt` an hour later; `GetMembership` returns an error. A store write must not extend
+  grace.
+- `TestAMembershipKeyAddedInTheClearIsRefused` (pre-flight I-6): put alice (an admin, key
+  `k1`) through crypt. On the inner memory store, read alice's record with
+  `inner.GetMembership`, append a victim's key `k2` to its plaintext `MapKeys`, and put it back
+  on the inner store with the same `VerifiedAt` (an equal-time write replaces the held one, and
+  claims `k2` for alice). `MembershipByKey(k2)` through crypt answers an error, never alice's
+  membership. Then put a refusal for carol through crypt, flip the inner record's plaintext
+  `Refused` to false the same way, and assert `GetMembership(carol)` through crypt returns an
+  error.
+
+Extend `TestCheckIdentityRefusesADaemonThatCanWriteTheLedgerRecord`
+(`internal/store/etcd/roles_test.go:165-190`) with two cases (pre-flight I-7):
+
+```go
+		{etcdtest.Grant{Role: RoleDaemon, Key: membership, RangeEnd: clientv3.GetPrefixRangeEnd(membership)},
+			"it was allowed reading " + membership},
+		{etcdtest.Grant{Role: RoleDaemon, Key: membershipK, RangeEnd: clientv3.GetPrefixRangeEnd(membershipK)},
+			"it was allowed reading " + membershipK},
+```
+
+with `membership, membershipK := newKeys(prefix).family(famMembership), newKeys(prefix).family(famMembershipK)`
+beside `ledger, superseded`, and the doc comment's first sentence extended: "… or any access to
+sp/, mb/ or mk/ …: the last two hold every principal's groups (plan 7g, Ruling 10)".
 
 - [ ] **Step 2: Run them to verify they fail**
 
-Run: `go test ./internal/store/... -run 'Membership' -count=1`
-Expected: FAIL, undefined `PutMembership`, `MapKey`.
+Run: `go test ./internal/store/... -run 'Membership|CheckIdentityRefuses' -count=1`
+Expected: FAIL, undefined `PutMembership`, `MapKey`, `famMembership`.
 
 - [ ] **Step 3: The type, the key, the interface**
 
@@ -2230,14 +2605,26 @@ In `store.go`, after `SupersededFor`:
 // the username and groups read from it, and when and where. The broker's
 // role alone reads or writes it.
 type Membership struct {
-	Principal  string
-	DN         string   // sealed
+	Principal string
+	DN        string // sealed
+	// EntryID is the entry's immutable id ("guid:" + objectGUID hex,
+	// "uuid:" + entryUUID, else "dn:" + the canonical DN): the entry the
+	// principal is pinned to (Ruling 3). A refusal keeps it.
+	EntryID    string   // sealed
 	Username   string   // sealed
 	GroupDNs   []string // sealed: every group the entry is in, under the nested mode
 	GroupNames []string // sealed: their names, those verified unique under groups_base_dn
 	// MapKeys are MapKey(kind, value) for every certificate-mapping value the
 	// entry answers to: the index a bind in grace finds the principal by.
-	MapKeys    []string
+	// Sealed, and in the clear for the backend's index; crypt refuses a
+	// record whose two differ, so a store write cannot add a victim's key
+	// to an admin's record.
+	MapKeys []string
+	// Refused is the directory's "no" (identity_unmapped,
+	// identity_ambiguous, username_collision) as of VerifiedAt: no groups,
+	// and grace never serves it (Ruling 10). Sealed and in the clear, as
+	// MapKeys.
+	Refused    bool
 	VerifiedAt time.Time // sealed too: in the clear alone, a store write could extend grace
 	Server     string
 	Site       string
@@ -2245,43 +2632,67 @@ type Membership struct {
 }
 
 // MapKey is the index key of one certificate-mapping value: a hash, so the
-// plaintext index names no certificate value.
-func MapKey(kind, value string) string {
-	sum := sha256.Sum256([]byte(kind + "\x00" + value))
+// plaintext index names no certificate value. canonicalValue is the
+// mapping's canonical form (the directory package's canonicalValue), the
+// same on the certificate's side and the entry's.
+func MapKey(kind, canonicalValue string) string {
+	sum := sha256.Sum256([]byte(kind + "\x00" + canonicalValue))
 	return hex.EncodeToString(sum[:])
 }
 ```
 
-and the three methods in the interface, after `SupersededAt`, with the comments of Interfaces.
+and the five methods in the interface, after `SupersededAt`, with the comments of Interfaces.
 
 - [ ] **Step 4: memory, crypt, guard**
 
 `memory.go`: two maps under `s.mu`, `memberships map[string]membershipEntry` (the record and
-its expiry) and `memberKeys map[string]string`. Write `PutMembership` (keep the held record
-when its `VerifiedAt` is after `m.VerifiedAt`; else store a deep copy, with slices cloned,
-and set each key to `m.Principal`), `GetMembership` (expired → delete, `ErrNotFound`) and
-`MembershipByKey` (key → principal → record; `ErrNotFound` unless
-`slices.Contains(rec.MapKeys, key)`).
+its expiry) and `memberKeys map[string]memberKeyEntry` (`principal`, `prior`, `verifiedAt`,
+`expires`). It mirrors etcd's rules exactly (pre-flight M-2):
+- `PutMembership`: keep the held, live record when its `VerifiedAt` is after `m.VerifiedAt`
+  (and then write no key); else store a deep copy, slices cloned, and for each of `m.MapKeys`
+  apply `claimKey` below.
+- `claimKey(key, m)`: a held, live entry verified after `m` stands. One naming `m.Principal`
+  is renewed. Otherwise let `other` be the entry's `principal`, or its `prior` when that is
+  empty. If `other` is non-empty and `other`'s live, unrefused record lists `key`, write the
+  ambiguous entry `{principal: "", prior: other, verifiedAt: m.VerifiedAt}`; else point the key
+  at `m.Principal`.
+- `RefuseMapKeys`: for each key, unless a held, live entry is verified after `at`, write
+  `{principal: "", prior: "", verifiedAt: at}`.
+- `GetMembership`: expired → delete, `ErrNotFound`.
+- `MembershipByKey`: key → entry; `ErrNotFound` when absent, expired or `principal == ""`;
+  then the record, `ErrNotFound` unless it is unrefused and `slices.Contains(rec.MapKeys, key)`.
+- `MembershipPrincipals`: the live records' principals, sorted.
 
 `crypt.go`:
 
 ```go
 // membershipSecret is a membership's sealed part, bound to its principal.
+// MapKeys and Refused are sealed as well as kept in the clear: the clear
+// copies are the backend's index, the sealed ones the truth.
 type membershipSecret struct {
 	DN         string    `json:"dn"`
+	EntryID    string    `json:"entry_id"`
 	Username   string    `json:"username"`
 	GroupDNs   []string  `json:"group_dns"`
 	GroupNames []string  `json:"group_names"`
+	MapKeys    []string  `json:"map_keys"`
+	Refused    bool      `json:"refused"`
 	VerifiedAt time.Time `json:"verified_at"`
 }
 
-var errVerifiedMoved = errors.New("crypt: a membership's plaintext verified_at differs from its sealed one")
+var (
+	errVerifiedMoved = errors.New("crypt: a membership's plaintext verified_at differs from its sealed one")
+	errMembershipMoved = errors.New("crypt: a membership's plaintext map keys or refusal differ from its sealed ones")
+	// errKeyNotSealed is a key the index points at a record whose sealed
+	// list does not hold it: a store write, answered as no membership.
+	errKeyNotSealed = fmt.Errorf("crypt: a membership key its sealed record does not list: %w", store.ErrNotFound)
+)
 
 func membershipAAD(principal string) []byte { return []byte("membership\x00" + principal) }
 
 func (w *wrapped) PutMembership(ctx context.Context, m store.Membership, ttl time.Duration) error {
-	b, err := json.Marshal(membershipSecret{DN: m.DN, Username: m.Username, GroupDNs: m.GroupDNs,
-		GroupNames: m.GroupNames, VerifiedAt: m.VerifiedAt})
+	b, err := json.Marshal(membershipSecret{DN: m.DN, EntryID: m.EntryID, Username: m.Username, GroupDNs: m.GroupDNs,
+		GroupNames: m.GroupNames, MapKeys: m.MapKeys, Refused: m.Refused, VerifiedAt: m.VerifiedAt})
 	if err != nil {
 		return err
 	}
@@ -2290,7 +2701,11 @@ func (w *wrapped) PutMembership(ctx context.Context, m store.Membership, ttl tim
 		return err
 	}
 	return w.inner.PutMembership(ctx, store.Membership{Principal: m.Principal, MapKeys: m.MapKeys,
-		VerifiedAt: m.VerifiedAt, Server: m.Server, Site: m.Site, Sealed: sealed}, ttl)
+		Refused: m.Refused, VerifiedAt: m.VerifiedAt, Server: m.Server, Site: m.Site, Sealed: sealed}, ttl)
+}
+
+func (w *wrapped) RefuseMapKeys(ctx context.Context, mapKeys []string, at time.Time, ttl time.Duration) error {
+	return w.inner.RefuseMapKeys(ctx, mapKeys, at, ttl)
 }
 
 func (w *wrapped) openMembership(m store.Membership, err error) (store.Membership, error) {
@@ -2308,7 +2723,11 @@ func (w *wrapped) openMembership(m store.Membership, err error) (store.Membershi
 	if !ms.VerifiedAt.Equal(m.VerifiedAt) {
 		return store.Membership{}, w.openErr("membership", m.Sealed, errVerifiedMoved)
 	}
-	m.DN, m.Username, m.GroupDNs, m.GroupNames, m.Sealed = ms.DN, ms.Username, ms.GroupDNs, ms.GroupNames, nil
+	if ms.Refused != m.Refused || !slices.Equal(ms.MapKeys, m.MapKeys) {
+		return store.Membership{}, w.openErr("membership", m.Sealed, errMembershipMoved)
+	}
+	m.DN, m.EntryID, m.Username, m.GroupDNs, m.GroupNames, m.Sealed = ms.DN, ms.EntryID, ms.Username, ms.GroupDNs,
+		ms.GroupNames, nil
 	return m, nil
 }
 
@@ -2317,17 +2736,31 @@ func (w *wrapped) GetMembership(ctx context.Context, principal string) (store.Me
 }
 
 func (w *wrapped) MembershipByKey(ctx context.Context, mapKey string) (store.Membership, error) {
-	return w.openMembership(w.inner.MembershipByKey(ctx, mapKey))
+	m, err := w.openMembership(w.inner.MembershipByKey(ctx, mapKey))
+	if err != nil {
+		return store.Membership{}, err
+	}
+	// The sealed list is the truth (pre-flight I-6): the inner backend
+	// checked the clear one, which openMembership has proved equal, and this
+	// check stands should that ever change.
+	if m.Refused || !slices.Contains(m.MapKeys, mapKey) {
+		return store.Membership{}, w.openErr("membership", nil, errKeyNotSealed)
+	}
+	return m, nil
+}
+
+func (w *wrapped) MembershipPrincipals(ctx context.Context) ([]string, error) {
+	return w.inner.MembershipPrincipals(ctx)
 }
 ```
 
-Read `openErr` (`crypt.go:346`) first: it counts `crypt_open_failures_total{record}`, so
-`"membership"` must be a record label the counter accepts. If it pre-registers labels, add
-`membership` there.
+Read `openErr` (`crypt.go:346`) first: it counts `crypt_open_failures_total{record}` and calls
+`onUnopenable(record, SealedKeyID(sealed), err)`; `SealedKeyID(nil)` returns `""`
+(`crypt.go:300`). If the counter pre-registers labels, add `membership` there.
 
-`guard.go`: `"PutMembership": Token, "GetMembership": Token, "MembershipByKey": Token` in the
-table (the broker's pool; never the context pool authorization reads), and three wrappers
-through `g.do(ctx, Token, …)`.
+`guard.go`: `"PutMembership": Token, "RefuseMapKeys": Token, "GetMembership": Token,
+"MembershipByKey": Token, "MembershipPrincipals": Token` in the table (the broker's pool; never
+the context pool authorization reads), and five wrappers through `g.do(ctx, Token, …)`.
 
 - [ ] **Step 5: etcd**
 
@@ -2343,9 +2776,10 @@ func (k keys) membership(principal string) string { return k.root + famMembershi
 func (k keys) membershipKey(mapKey string) string { return k.root + famMembershipK + esc(mapKey) }
 ```
 
-In `roles.go`, add both to `daemonNever`, and add `reading`/`writing` probes for each to
-`CheckIdentity`'s list, after the superseded ones. The broker must hold them, and the daemon
-must be refused them; a daemon allowed either fails its start with `ErrNotSeparated`.
+In `roles.go`, add both to `daemonNever`, and add four probes to `CheckIdentity`'s list,
+after the superseded ones: `reading` and `writing` for each of `famMembership` and
+`famMembershipK`. The broker must hold them, and the daemon must be refused them; a daemon
+allowed either fails its start with `ErrNotSeparated`.
 
 Create `internal/store/etcd/membership.go`:
 
@@ -2357,7 +2791,10 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"sort"
 	"time"
+
+	clientv3 "go.etcd.io/etcd/client/v3"
 
 	"github.com/rhwendt/port49/internal/store"
 )
@@ -2367,10 +2804,12 @@ import (
 type membershipRec struct {
 	Principal  string    `json:"principal"`
 	DN         string    `json:"dn,omitempty"`
+	EntryID    string    `json:"entry_id,omitempty"`
 	Username   string    `json:"username,omitempty"`
 	GroupDNs   []string  `json:"group_dns,omitempty"`
 	GroupNames []string  `json:"group_names,omitempty"`
 	MapKeys    []string  `json:"map_keys,omitempty"`
+	Refused    bool      `json:"refused,omitempty"`
 	VerifiedAt time.Time `json:"verified_at"`
 	Server     string    `json:"server,omitempty"`
 	Site       string    `json:"site,omitempty"`
@@ -2379,17 +2818,20 @@ type membershipRec struct {
 }
 
 // membershipKeyRec is mk/<map key>: the principal, and the verification
-// that pointed it there, so a later one wins.
+// that pointed it there, so a later one wins. Principal "" is a key no
+// grace bind may use: ambiguous (Prior names the principal whose live
+// record still claims it) or refused (Prior "").
 type membershipKeyRec struct {
 	Principal  string    `json:"principal"`
+	Prior      string    `json:"prior,omitempty"`
 	VerifiedAt time.Time `json:"verified_at"`
 	ExpiresAt  time.Time `json:"expires_at"`
 }
 
 // PutMembership keeps the later verification at mb/, by a compare on the
-// record's revision, then points each key at it the same way. The two are
-// not one transaction: a reader finding a key whose record no longer lists
-// it is answered ErrNotFound (MembershipByKey), so a torn write is a miss,
+// record's revision, then claims each key the same way. The two are not
+// one transaction: a reader finding a key whose record no longer lists it
+// is answered ErrNotFound (MembershipByKey), so a torn write is a miss,
 // never another principal's membership.
 func (s *Store) PutMembership(ctx context.Context, m store.Membership, ttl time.Duration) error {
 	now := s.now()
@@ -2400,24 +2842,69 @@ func (s *Store) PutMembership(ctx context.Context, m store.Membership, ttl time.
 		func(r *membershipRec, found bool) (bool, time.Time, bool, error) {
 			if found && r.VerifiedAt.After(m.VerifiedAt) {
 				kept = true
-				return false, time.Time{}, true, nil
+				return false, time.Time{}, false, nil
 			}
-			*r = membershipRec{Principal: m.Principal, DN: m.DN, Username: m.Username, GroupDNs: m.GroupDNs,
-				GroupNames: m.GroupNames, MapKeys: m.MapKeys, VerifiedAt: m.VerifiedAt, Server: m.Server,
-				Site: m.Site, Sealed: m.Sealed, ExpiresAt: exp}
+			*r = membershipRec{Principal: m.Principal, DN: m.DN, EntryID: m.EntryID, Username: m.Username, GroupDNs: m.GroupDNs,
+				GroupNames: m.GroupNames, MapKeys: m.MapKeys, Refused: m.Refused, VerifiedAt: m.VerifiedAt,
+				Server: m.Server, Site: m.Site, Sealed: m.Sealed, ExpiresAt: exp}
 			return true, exp, false, nil
 		})
 	if err != nil || kept {
 		return err
 	}
 	for _, key := range m.MapKeys {
+		if err := s.claimKey(ctx, key, m.Principal, m.VerifiedAt, exp, now); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// claimKey points key at principal as of at, unless a later verification
+// holds it, or a live record of another principal still lists it: then the
+// key is ambiguous (pre-flight I-5), never the last writer's.
+func (s *Store) claimKey(ctx context.Context, key, principal string, at, exp, now time.Time) error {
+	return cas(ctx, s.tok, s.tokLeases, s.k.membershipKey(key),
+		func(r membershipKeyRec) bool { return r.ExpiresAt.After(now) },
+		func(r *membershipKeyRec, found bool) (bool, time.Time, bool, error) {
+			if found && r.VerifiedAt.After(at) {
+				return false, time.Time{}, false, nil
+			}
+			other := ""
+			if found && r.Principal != principal {
+				other = r.Principal
+				if other == "" {
+					other = r.Prior
+				}
+			}
+			if other != "" {
+				held, err := s.GetMembership(ctx, other)
+				switch {
+				case err == nil && !held.Refused && slices.Contains(held.MapKeys, key):
+					*r = membershipKeyRec{Principal: "", Prior: other, VerifiedAt: at, ExpiresAt: exp}
+					return true, exp, false, nil
+				case err != nil && !errors.Is(err, store.ErrNotFound):
+					return false, time.Time{}, false, err
+				}
+			}
+			*r = membershipKeyRec{Principal: principal, VerifiedAt: at, ExpiresAt: exp}
+			return true, exp, false, nil
+		})
+}
+
+// RefuseMapKeys marks each key refused as of at (Ruling 10): the
+// directory answered no for it, and grace must not answer yes.
+func (s *Store) RefuseMapKeys(ctx context.Context, mapKeys []string, at time.Time, ttl time.Duration) error {
+	now := s.now()
+	exp := now.Add(ttl)
+	for _, key := range mapKeys {
 		if err := cas(ctx, s.tok, s.tokLeases, s.k.membershipKey(key),
 			func(r membershipKeyRec) bool { return r.ExpiresAt.After(now) },
 			func(r *membershipKeyRec, found bool) (bool, time.Time, bool, error) {
-				if found && r.VerifiedAt.After(m.VerifiedAt) {
-					return false, time.Time{}, true, nil
+				if found && r.VerifiedAt.After(at) {
+					return false, time.Time{}, false, nil
 				}
-				*r = membershipKeyRec{Principal: m.Principal, VerifiedAt: m.VerifiedAt, ExpiresAt: exp}
+				*r = membershipKeyRec{VerifiedAt: at, ExpiresAt: exp}
 				return true, exp, false, nil
 			}); err != nil {
 			return err
@@ -2431,9 +2918,9 @@ func (s *Store) GetMembership(ctx context.Context, principal string) (store.Memb
 	if err := s.getLive(ctx, s.k.membership(principal), &r, func() bool { return r.ExpiresAt.After(s.now()) }); err != nil {
 		return store.Membership{}, err
 	}
-	return store.Membership{Principal: r.Principal, DN: r.DN, Username: r.Username, GroupDNs: r.GroupDNs,
-		GroupNames: r.GroupNames, MapKeys: r.MapKeys, VerifiedAt: r.VerifiedAt, Server: r.Server, Site: r.Site,
-		Sealed: r.Sealed}, nil
+	return store.Membership{Principal: r.Principal, DN: r.DN, EntryID: r.EntryID, Username: r.Username,
+		GroupDNs: r.GroupDNs, GroupNames: r.GroupNames, MapKeys: r.MapKeys, Refused: r.Refused, VerifiedAt: r.VerifiedAt,
+		Server: r.Server, Site: r.Site, Sealed: r.Sealed}, nil
 }
 
 func (s *Store) MembershipByKey(ctx context.Context, mapKey string) (store.Membership, error) {
@@ -2441,14 +2928,47 @@ func (s *Store) MembershipByKey(ctx context.Context, mapKey string) (store.Membe
 	if err := s.getLive(ctx, s.k.membershipKey(mapKey), &kr, func() bool { return kr.ExpiresAt.After(s.now()) }); err != nil {
 		return store.Membership{}, err
 	}
+	if kr.Principal == "" {
+		return store.Membership{}, store.ErrNotFound
+	}
 	m, err := s.GetMembership(ctx, kr.Principal)
 	if err != nil {
 		return store.Membership{}, err
 	}
-	if !slices.Contains(m.MapKeys, mapKey) {
+	if m.Refused || !slices.Contains(m.MapKeys, mapKey) {
 		return store.Membership{}, store.ErrNotFound
 	}
 	return m, nil
+}
+
+// MembershipPrincipals pages mb/ as eachIndexed pages ix/: 500 at a time,
+// a record that does not decode skipped and said.
+func (s *Store) MembershipPrincipals(ctx context.Context) ([]string, error) {
+	prefix := s.k.family(famMembership)
+	end := clientv3.GetPrefixRangeEnd(prefix)
+	now := s.now()
+	var out []string
+	for from := prefix; ; {
+		resp, err := s.tok.Get(ctx, from, clientv3.WithRange(end), clientv3.WithLimit(500))
+		if err != nil {
+			return nil, unavailable(err)
+		}
+		for _, kv := range resp.Kvs {
+			var r membershipRec
+			if json.Unmarshal(kv.Value, &r) != nil {
+				continue // the key names the principal; supersession over it is said by the caller's miss
+			}
+			if r.ExpiresAt.After(now) {
+				out = append(out, r.Principal)
+			}
+		}
+		if !resp.More || len(resp.Kvs) == 0 {
+			break
+		}
+		from = string(resp.Kvs[len(resp.Kvs)-1].Key) + "\x00"
+	}
+	sort.Strings(out)
+	return out, nil
 }
 
 // getLive reads key into v on the token pool, ErrNotFound when absent or
@@ -2469,25 +2989,25 @@ func (s *Store) getLive(ctx context.Context, key string, v any, live func() bool
 	}
 	return nil
 }
-
-var _ = errors.New
 ```
 
-Read `cas`'s comment for the meaning of its callback's three results (`write`, `exp`,
-`keep`) before relying on the order above. If `keep` means something other than "leave the
-record and return nil", mirror `superseded.go`'s use exactly and adapt.
+`cas`'s callback returns `(write, exp, keep,
+err)` (`commit.go:89-96`): `write false` leaves the record and returns nil, `exp` is the
+lease's expiry, and `keep false` gives the write a fresh lease at `exp`. A record that does
+not decode in `MembershipPrincipals` is skipped: say it through the store's existing
+`undecodableIndex`-style line if one fits (read `indexes.go:111`), never its body.
 
 - [ ] **Step 6: Run them to verify they pass**
 
 Run: `go test ./internal/store/... -count=1 && go vet ./internal/store/...`
-Expected: PASS: the two properties on memory, crypt, etcd and crypt-over-etcd; the crypt
-tamper test; `roles_test.go` with the two new families refused to the daemon.
+Expected: PASS: the five properties on memory, crypt, etcd and crypt-over-etcd; the two
+crypt tamper tests; `roles_test.go` with `mb/` and `mk/` refused to the daemon.
 
 - [ ] **Step 7: Commit**
 
 ```bash
 git add internal/store
-git commit -m "feat(store): a directory membership record, sealed, indexed by mapping key, the broker's alone" \
+git commit -m "feat(store): a directory membership record, sealed, indexed by mapping key, refusable, the broker's alone" \
   -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>" \
   -m "Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 ```
@@ -2507,15 +3027,23 @@ git commit -m "feat(store): a directory membership record, sealed, indexed by ma
 - Produces:
 
 ```go
-// Searcher is one connection to one directory server, as everything above
-// the pool uses it. *ldap.Conn satisfies it.
+// Searcher is what one query sees: a connection whose searches are bounded
+// by that query's deadline. Everything above the pool uses it.
 type Searcher interface {
 	Search(req *ldap.SearchRequest) (*ldap.SearchResult, error)
 	SearchWithPaging(req *ldap.SearchRequest, pagingSize uint32) (*ldap.SearchResult, error)
+}
+// Client is one bound connection to one server, shared by concurrent
+// queries. SearchContext past ctx abandons its own message and returns
+// ctx.Err(), leaving the connection and every other search on it alone
+// (pre-flight I-3). pagingSize 0 is one unpaged search. Task 7's dial
+// returns one over *ldap.Conn's SearchAsync.
+type Client interface {
+	SearchContext(ctx context.Context, req *ldap.SearchRequest, pagingSize uint32) (*ldap.SearchResult, error)
 	Close() error
 }
 // Dialer opens and binds a connection to s within ctx.
-type Dialer func(ctx context.Context, s Server) (Searcher, error)
+type Dialer func(ctx context.Context, s Server) (Client, error)
 var ErrUnavailable = errors.New("directory: no server answered")
 func Fault(err error) bool
 func NewPool(cfg Config, dial Dialer, check func(ctx context.Context, s Searcher) error,
@@ -2527,7 +3055,7 @@ func (p *Pool) Selected() (Server, bool)
 func (p *Pool) Ranked() []Server
 
 // metrics.Metrics gains
-DirectoryQueries        *prometheus.CounterVec // port49_directory_queries_total{server,outcome}
+DirectoryQueries        *prometheus.CounterVec // port49_directory_queries_total{server,outcome}: ok, fault, error, refused
 DirectoryServerUp       *prometheus.GaugeVec   // port49_directory_server_up{server}
 DirectorySelected       *prometheus.GaugeVec   // port49_directory_selected{server}
 DirectorySiteCrossings  prometheus.Counter     // port49_directory_site_crossings_total
@@ -2559,61 +3087,86 @@ func (c *fakeClock) Now() time.Time          { c.mu.Lock(); defer c.mu.Unlock();
 func (c *fakeClock) Add(d time.Duration)     { c.mu.Lock(); c.now = c.now.Add(d); c.mu.Unlock() }
 func newClock() *fakeClock                   { return &fakeClock{now: time.Unix(1_000_000, 0).UTC()} }
 
-// fakeDir answers a search by its exact filter string: what a test
-// registers is the filter port49 must send, so a test asserts the filter
-// as well as what is done with the answer. An unregistered filter answers
-// no entries. err, keyed by filter, answers that error instead.
+// fakeDir is one directory server's data and behaviour, shared by every
+// connection dialled to it. It answers a search by its exact filter
+// string: what a test registers is the filter port49 must send, so a test
+// asserts the filter as well as what is done with the answer. An
+// unregistered filter answers no entries. err, keyed by filter, answers
+// that error instead. delay holds every answer; slow, keyed by filter,
+// holds that filter's alone. A fakeDir is itself a Searcher with no
+// deadline, for the tests of Tasks 8 and 9 that search it directly.
 type fakeDir struct {
 	mu       sync.Mutex
 	byFilter map[string][]*ldap.Entry
 	err      map[string]error
 	delay    time.Duration
+	slow     map[string]time.Duration
 	calls    []*ldap.SearchRequest
-	closed   chan struct{} // closed by Close; a dial makes a new one
 }
 
 func newFakeDir() *fakeDir {
-	return &fakeDir{byFilter: map[string][]*ldap.Entry{}, err: map[string]error{}, closed: make(chan struct{})}
+	return &fakeDir{byFilter: map[string][]*ldap.Entry{}, err: map[string]error{}, slow: map[string]time.Duration{}}
 }
 
 func (d *fakeDir) on(filter string, entries ...*ldap.Entry) { d.byFilter[filter] = entries }
 
-// Search answers after delay, or at once with a network error once the
-// connection is closed, as go-ldap does: the pool's run closes a
-// connection past its deadline and must not wait out the delay.
-func (d *fakeDir) Search(req *ldap.SearchRequest) (*ldap.SearchResult, error) {
+// search answers req after its delay, or at once with ctx's error when ctx
+// ends first (its own search abandoned, as SearchAsync does), or with a
+// network error when closed is closed (the connection under it went).
+func (d *fakeDir) search(ctx context.Context, closed <-chan struct{}, req *ldap.SearchRequest) (*ldap.SearchResult, error) {
 	d.mu.Lock()
 	d.calls = append(d.calls, req)
-	delay, closed := d.delay, d.closed
+	delay := d.delay
+	if s, ok := d.slow[req.Filter]; ok {
+		delay = s
+	}
+	e, es := d.err[req.Filter], d.byFilter[req.Filter]
 	d.mu.Unlock()
 	select {
 	case <-closed:
 		return nil, ldap.NewError(ldap.ErrorNetwork, errors.New("connection closed"))
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	case <-time.After(delay):
 	}
-	if err := d.err[req.Filter]; err != nil {
-		return nil, err
+	if e != nil {
+		return nil, e
 	}
-	es := d.byFilter[req.Filter]
 	if req.SizeLimit > 0 && len(es) > req.SizeLimit {
 		return &ldap.SearchResult{Entries: es[:req.SizeLimit]}, ldap.NewError(ldap.LDAPResultSizeLimitExceeded, errors.New("size limit"))
 	}
 	return &ldap.SearchResult{Entries: es}, nil
 }
 
+func (d *fakeDir) Search(req *ldap.SearchRequest) (*ldap.SearchResult, error) {
+	return d.search(context.Background(), nil, req)
+}
+
 func (d *fakeDir) SearchWithPaging(req *ldap.SearchRequest, _ uint32) (*ldap.SearchResult, error) {
 	return d.Search(req)
 }
 
-func (d *fakeDir) Close() error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
+// fakeConn is one dialled connection to a fakeDir, with its own close, so
+// a test sees what closing one connection does to the searches on it.
+type fakeConn struct {
+	d      *fakeDir
+	closed chan struct{}
+	once   sync.Once
+}
+
+func (c *fakeConn) SearchContext(ctx context.Context, req *ldap.SearchRequest, _ uint32) (*ldap.SearchResult, error) {
+	return c.d.search(ctx, c.closed, req)
+}
+
+func (c *fakeConn) Close() error { c.once.Do(func() { close(c.closed) }); return nil }
+
+func (c *fakeConn) isClosed() bool {
 	select {
-	case <-d.closed:
+	case <-c.closed:
+		return true
 	default:
-		close(d.closed)
+		return false
 	}
-	return nil
 }
 
 // entry builds an entry from attribute pairs.
@@ -2621,40 +3174,63 @@ func entry(dn string, attrs map[string][]string) *ldap.Entry {
 	return ldap.NewEntry(dn, attrs)
 }
 
-// fakeServers is a Dialer over per-URI behaviour: down refuses the dial,
-// slow answers after delay, dirs[uri] is what a dial returns.
+// fakeServers is a Dialer over per-URI behaviour: down refuses the dial
+// with a network error, refuse[uri] refuses the bind with that error,
+// dirs[uri] is the server a dial reaches, and each dial is a fresh
+// fakeConn to it (pre-flight I-3), kept in conns. dialDelay holds each
+// dial, so concurrent queries race to dial.
 type fakeServers struct {
-	mu    sync.Mutex
-	dirs  map[string]*fakeDir
-	down  map[string]bool
-	dials map[string]int
+	mu        sync.Mutex
+	dirs      map[string]*fakeDir
+	down      map[string]bool
+	refuse    map[string]error
+	dials     map[string]int
+	conns     map[string][]*fakeConn
+	dialDelay time.Duration
 }
 
 func newFakeServers(uris ...string) *fakeServers {
-	f := &fakeServers{dirs: map[string]*fakeDir{}, down: map[string]bool{}, dials: map[string]int{}}
+	f := &fakeServers{dirs: map[string]*fakeDir{}, down: map[string]bool{}, refuse: map[string]error{},
+		dials: map[string]int{}, conns: map[string][]*fakeConn{}}
 	for _, u := range uris {
 		f.dirs[u] = newFakeDir()
 	}
 	return f
 }
 
-func (f *fakeServers) dial(ctx context.Context, s Server) (Searcher, error) {
+func (f *fakeServers) dial(ctx context.Context, s Server) (Client, error) {
+	f.mu.Lock()
+	f.dials[s.URI]++
+	down, refuse, delay := f.down[s.URI], f.refuse[s.URI], f.dialDelay
+	f.mu.Unlock()
+	time.Sleep(delay)
+	switch {
+	case down:
+		return nil, ldap.NewError(ldap.ErrorNetwork, errors.New("dial tcp: connection refused"))
+	case refuse != nil:
+		return nil, refuse
+	}
+	c := &fakeConn{d: f.dirs[s.URI], closed: make(chan struct{})}
+	f.mu.Lock()
+	f.conns[s.URI] = append(f.conns[s.URI], c)
+	f.mu.Unlock()
+	return c, nil
+}
+
+// open is how many of uri's dialled connections are not closed.
+func (f *fakeServers) open(uri string) int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.dials[s.URI]++
-	if f.down[s.URI] {
-		return nil, ldap.NewError(ldap.ErrorNetwork, errors.New("dial tcp: connection refused"))
+	n := 0
+	for _, c := range f.conns[uri] {
+		if !c.isClosed() {
+			n++
+		}
 	}
-	d := f.dirs[s.URI]
-	d.mu.Lock()
-	select {
-	case <-d.closed:
-		d.closed = make(chan struct{})
-	default:
-	}
-	d.mu.Unlock()
-	return d, nil
+	return n
 }
+
+func (f *fakeServers) setRefuse(uri string, err error) { f.mu.Lock(); f.refuse[uri] = err; f.mu.Unlock() }
 
 func (f *fakeServers) setDown(uri string, down bool) { f.mu.Lock(); f.down[uri] = down; f.mu.Unlock() }
 ```
@@ -2693,6 +3269,18 @@ type lines struct {
 }
 
 func (s *lines) say(f string, a ...any) { s.mu.Lock(); s.l = append(s.l, fmt.Sprintf(f, a...)); s.mu.Unlock() }
+func (s *lines) count(sub string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for _, l := range s.l {
+		if strings.Contains(l, sub) {
+			n++
+		}
+	}
+	return n
+}
+
 func (s *lines) has(sub string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -2919,6 +3507,137 @@ func TestFaultClassifies(t *testing.T) {
 		t.Error("a deadline is a fault")
 	}
 }
+
+func searchFor(filter string) func(Searcher) error {
+	return func(s Searcher) error {
+		_, err := s.Search(&ldap.SearchRequest{Filter: filter})
+		return err
+	}
+}
+
+// One query slow past query_timeout among twenty fast ones on the same
+// connection: the slow one abandons its own search, the fast ones answer,
+// the connection is never closed under them, and the breaker stays closed
+// (pre-flight I-3).
+func TestOneSlowQueryLeavesTheOthersAlone(t *testing.T) {
+	f := newFakeServers(west1.URI, west2.URI)
+	f.dirs[west1.URI].delay = 50 * time.Millisecond
+	f.dirs[west1.URI].slow["(slow)"] = 2 * time.Second
+	cfg := poolCfg("us-west", west1, west2)
+	cfg.QueryTimeout = 500 * time.Millisecond
+	m := metrics.New(prometheus.NewRegistry())
+	p := NewPool(cfg, f.dial, noCheck, newClock().Now, m, (&lines{}).say)
+	if _, err := p.Do(context.Background(), searchFor("(x)")); err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	errs := make(chan error, 20)
+	wg.Add(1)
+	go func() { defer wg.Done(); _, _ = p.Do(context.Background(), searchFor("(slow)")) }()
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := p.Do(context.Background(), searchFor("(x)")); err != nil {
+				errs <- err
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Errorf("a fast query: %v", err)
+	}
+	if testutil.ToFloat64(m.DirectoryServerUp.WithLabelValues(west1.URI)) != 1 {
+		t.Fatal("one slow query opened dc-01's breaker")
+	}
+	if n := testutil.ToFloat64(m.DirectoryQueries.WithLabelValues(west1.URI, "fault")); n > 1 {
+		t.Fatalf("%v faults counted on dc-01; one slow query is one", n)
+	}
+	if f.dials[west1.URI] != 1 || f.open(west1.URI) != 1 {
+		t.Fatalf("dc-01 dialled %d times, %d open: its connection was closed under the others",
+			f.dials[west1.URI], f.open(west1.URI))
+	}
+}
+
+// Queries racing to dial an idle server keep one connection and close the
+// rest (pre-flight M-8).
+func TestRacingQueriesKeepOneConnection(t *testing.T) {
+	f := newFakeServers(west1.URI)
+	f.dialDelay = 50 * time.Millisecond
+	p := NewPool(poolCfg("us-west", west1), f.dial, noCheck, newClock().Now, metrics.New(prometheus.NewRegistry()),
+		(&lines{}).say)
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); _, _ = p.Do(context.Background(), searchFor("(x)")) }()
+	}
+	wg.Wait()
+	if n := f.open(west1.URI); n != 1 {
+		t.Fatalf("%d connections to dc-01 left open, want 1", n)
+	}
+}
+
+// A refused bind is this server not answering (pre-flight I-2): the query
+// fails over; with every server refusing it is ErrUnavailable, so grace
+// applies above; the refusal is said once an hour per server with the
+// mechanism and the result code; and a refusal neither opens the breaker
+// nor resets the fault count the health checks built.
+func TestABindRefusalFailsOverAndReachesUnavailable(t *testing.T) {
+	f := newFakeServers(west1.URI, west2.URI)
+	invalid := ldap.NewError(ldap.LDAPResultInvalidCredentials, errors.New("invalid credentials"))
+	f.setRefuse(west1.URI, invalid)
+	cfg := poolCfg("us-west", west1, west2)
+	cfg.Bind.Mechanism = "simple"
+	m := metrics.New(prometheus.NewRegistry())
+	say := &lines{}
+	p := NewPool(cfg, f.dial, noCheck, newClock().Now, m, say.say)
+	if srv, err := p.Do(context.Background(), searchFor("(x)")); err != nil || srv != west2 {
+		t.Fatalf("a refusal on dc-01 did not fail over: %v %v", srv, err)
+	}
+	f.setRefuse(west2.URI, invalid)
+	for i := 0; i < 3; i++ {
+		if _, err := p.Do(context.Background(), searchFor("(x)")); !errors.Is(err, ErrUnavailable) {
+			t.Fatalf("every server refusing: %v, want ErrUnavailable", err)
+		}
+	}
+	if n := say.count("ldaps://dc-01 refused the bind (simple): LDAP Result Code 49"); n != 1 {
+		t.Fatalf("the refusal said %d times in the hour: %v", n, say.l)
+	}
+	if testutil.ToFloat64(m.DirectoryServerUp.WithLabelValues(west1.URI)) != 1 {
+		t.Fatal("invalid credentials opened the breaker")
+	}
+	f.setRefuse(west1.URI, nil)
+	f.setDown(west1.URI, true)
+	p.Check(context.Background())
+	p.Check(context.Background()) // two faults in a row
+	f.setDown(west1.URI, false)
+	f.setRefuse(west1.URI, invalid)
+	p.Check(context.Background()) // a refusal between: neither counted nor a reset
+	f.setRefuse(west1.URI, nil)
+	f.setDown(west1.URI, true)
+	p.Check(context.Background()) // the third fault
+	if testutil.ToFloat64(m.DirectoryServerUp.WithLabelValues(west1.URI)) != 0 {
+		t.Fatal("a refusal reset the fault count the health checks built")
+	}
+}
+
+// With no broker site, a selection whose server's site differs from the
+// previous selection's is a crossing, said and counted (pre-flight M-7).
+func TestACrossingWithNoBrokerSiteIsCounted(t *testing.T) {
+	f := newFakeServers(east.URI, west1.URI)
+	m := metrics.New(prometheus.NewRegistry())
+	say := &lines{}
+	p := NewPool(poolCfg("", east, west1), f.dial, noCheck, newClock().Now, m, say.say)
+	f.setDown(east.URI, true)
+	if srv, err := p.Do(context.Background(), searchFor("(x)")); err != nil || srv != west1 {
+		t.Fatalf("%v %v", srv, err)
+	}
+	if testutil.ToFloat64(m.DirectorySiteCrossings) != 1 ||
+		!say.has("consistency event: crossing from site us-east to us-west (ldaps://dc-03 to ldaps://dc-01)") {
+		t.Fatalf("%v", say.l)
+	}
+}
 ```
 
 A query that times out on dc-01 has no budget left for dc-02 within the same
@@ -2931,8 +3650,8 @@ pins:
 
 - [ ] **Step 3: Run them to verify they fail**
 
-Run: `go test ./internal/directory/ -run 'Ranking|Sticky|Slow|Failback|Breaker|SiteCrossing|WentAway|FaultClassifies' -count=1`
-Expected: FAIL, undefined `NewPool`, `Fault`, `metrics.Metrics.DirectoryQueries`.
+Run: `go test ./internal/directory/ -run 'Ranking|Sticky|Slow|Failback|Breaker|SiteCrossing|Crossing|WentAway|FaultClassifies|Racing|BindRefusal' -count=1`
+Expected: FAIL, undefined `NewPool`, `Fault`, `Client`, `metrics.Metrics.DirectoryQueries`.
 
 - [ ] **Step 4: The metrics**
 
@@ -2941,7 +3660,7 @@ In `metrics.go`, add the four fields with their `Help` and register them in the 
 
 ```go
 		DirectoryQueries: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_directory_queries_total",
-			Help: "Directory queries by server (a configured URI) and outcome: ok, fault (the server's), error (the query's answer)."},
+			Help: "Directory queries by server (a configured URI) and outcome: ok, fault (the server's), error (the query's answer), refused (the server refused the dial or bind without a fault)."},
 			[]string{"server", "outcome"}),
 		DirectoryServerUp: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "port49_directory_server_up",
 			Help: "1 while the directory server's breaker is closed."}, []string{"server"}),
@@ -2973,15 +3692,24 @@ import (
 	"github.com/rhwendt/port49/internal/printsafe"
 )
 
-// Searcher is one bound connection to one directory server.
+// Searcher is what one query sees: a connection whose searches are
+// bounded by that query's deadline.
 type Searcher interface {
 	Search(req *ldap.SearchRequest) (*ldap.SearchResult, error)
 	SearchWithPaging(req *ldap.SearchRequest, pagingSize uint32) (*ldap.SearchResult, error)
+}
+
+// Client is one bound connection to one server, shared by concurrent
+// queries. SearchContext past ctx abandons its own message and returns
+// ctx.Err(), leaving the connection and every other search on it alone
+// (pre-flight I-3). pagingSize 0 is one unpaged search.
+type Client interface {
+	SearchContext(ctx context.Context, req *ldap.SearchRequest, pagingSize uint32) (*ldap.SearchResult, error)
 	Close() error
 }
 
 // Dialer opens and binds a connection to s within ctx.
-type Dialer func(ctx context.Context, s Server) (Searcher, error)
+type Dialer func(ctx context.Context, s Server) (Client, error)
 
 // ErrUnavailable is no server answering a query within query_timeout:
 // directory_unavailable unless grace serves it (spec §5.7).
@@ -3009,7 +3737,9 @@ func Fault(err error) bool {
 
 type serverState struct {
 	Server
-	conn         Searcher
+	conn         Client
+	gen          int       // bumped each time the pool closes or replaces conn
+	refusedSaid  time.Time // the last bind refusal said (once an hour)
 	faults       int       // consecutive
 	open         bool      // the breaker
 	openedAt     time.Time // its last probe or opening
@@ -3081,8 +3811,11 @@ func (p *Pool) Selected() (Server, bool) {
 // Do runs f on the selected server, failing over to the next closed one
 // in rank on a server fault, within query_timeout for the whole query. A
 // query error that is the server's answer is returned as it is, from the
-// server that gave it. No server answering is ErrUnavailable, wrapping the
-// last fault. A caller that went away is no fault (its ctx's error).
+// server that gave it. A dial or bind the server refused is that server
+// not answering (pre-flight I-2): the query fails over. No server
+// answering is ErrUnavailable, wrapping the last fault or refusal, so
+// grace applies above. A caller that went away is no fault (its ctx's
+// error).
 func (p *Pool) Do(ctx context.Context, f func(Searcher) error) (Server, error) {
 	qctx, cancel := context.WithTimeout(ctx, p.cfg.QueryTimeout)
 	defer cancel()
@@ -3097,7 +3830,7 @@ func (p *Pool) Do(ctx context.Context, f func(Searcher) error) (Server, error) {
 			// was never given.
 			return Server{}, fmt.Errorf("%w (the last: %v)", ErrUnavailable, last)
 		}
-		i, conn, err := p.acquire(qctx, tried)
+		i, conn, gen, err := p.acquire(qctx, tried)
 		if i < 0 {
 			if last == nil {
 				last = errors.New("every server's breaker is open")
@@ -3105,14 +3838,20 @@ func (p *Pool) Do(ctx context.Context, f func(Searcher) error) (Server, error) {
 			return Server{}, fmt.Errorf("%w (the last: %v)", ErrUnavailable, last)
 		}
 		tried[i] = true
+		srv := p.srv[i].Server
 		if err == nil {
-			err = run(qctx, conn, f)
+			err = f(bound{ctx: qctx, c: conn})
+		} else if ctx.Err() == nil && !Fault(err) {
+			p.refused(i, err)
+			p.moveFrom(i)
+			last = fmt.Errorf("%s: %v", srv.URI, err)
+			continue
 		}
 		if ctx.Err() != nil {
-			p.drop(i) // a caller that went away is no fault; its closed connection is not reused
+			// A caller that went away is no fault. Its own search was
+			// abandoned; the connection stays for every other query.
 			return Server{}, ctx.Err()
 		}
-		srv := p.srv[i].Server
 		switch {
 		case err == nil:
 			p.answered(i, "ok")
@@ -3121,20 +3860,25 @@ func (p *Pool) Do(ctx context.Context, f func(Searcher) error) (Server, error) {
 			p.answered(i, "error")
 			return srv, err
 		}
-		p.fault(i, err)
+		p.fault(i, gen, err)
 		p.moveFrom(i)
 		last = fmt.Errorf("%s: %v", srv.URI, err)
 	}
 }
 
-// drop forgets i's connection without counting anything against it.
-func (p *Pool) drop(i int) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if c := p.srv[i].conn; c != nil {
-		_ = c.Close()
-		p.srv[i].conn = nil
-	}
+// bound is a Client as one query sees it: every search under the query's
+// deadline.
+type bound struct {
+	ctx context.Context
+	c   Client
+}
+
+func (b bound) Search(req *ldap.SearchRequest) (*ldap.SearchResult, error) {
+	return b.c.SearchContext(b.ctx, req, 0)
+}
+
+func (b bound) SearchWithPaging(req *ldap.SearchRequest, pagingSize uint32) (*ldap.SearchResult, error) {
+	return b.c.SearchContext(b.ctx, req, pagingSize)
 }
 
 // moveFrom ends the sticky selection of i after a query's fault on it:
@@ -3169,25 +3913,13 @@ func (p *Pool) bestLocked(skip int) int {
 	return fallback
 }
 
-// run is f on conn, bounded by ctx: a search past it closes the connection,
-// which is what unblocks go-ldap.
-func run(ctx context.Context, conn Searcher, f func(Searcher) error) error {
-	done := make(chan error, 1)
-	go func() { done <- f(conn) }()
-	select {
-	case err := <-done:
-		return err
-	case <-ctx.Done():
-		_ = conn.Close()
-		<-done
-		return ctx.Err()
-	}
-}
-
 // acquire is the server a query tries next: the selected one if its
 // breaker is closed and it is untried, else the best-ranked such, which is
-// then selected. It dials when the server holds no connection. -1 is none.
-func (p *Pool) acquire(ctx context.Context, tried map[int]bool) (int, Searcher, error) {
+// then selected. It dials when the server holds no connection; queries
+// racing to dial keep the first connection and close the others
+// (pre-flight M-8). gen is the connection's generation, for fault. -1 is
+// none.
+func (p *Pool) acquire(ctx context.Context, tried map[int]bool) (int, Client, int, error) {
 	p.mu.Lock()
 	i := -1
 	if p.sel >= 0 && !p.srv[p.sel].open && !tried[p.sel] {
@@ -3202,24 +3934,30 @@ func (p *Pool) acquire(ctx context.Context, tried map[int]bool) (int, Searcher, 
 	}
 	if i < 0 {
 		p.mu.Unlock()
-		return -1, nil, nil
+		return -1, nil, 0, nil
 	}
 	if i != p.sel {
 		p.selectLocked(i, "")
 	}
-	conn := p.srv[i].conn
+	s := p.srv[i]
+	conn, gen := s.conn, s.gen
 	p.mu.Unlock()
 	if conn != nil {
-		return i, conn, nil
+		return i, conn, gen, nil
 	}
-	conn, err := p.dial(ctx, p.srv[i].Server)
+	conn, err := p.dial(ctx, s.Server)
 	if err != nil {
-		return i, nil, err
+		return i, nil, gen, err
 	}
 	p.mu.Lock()
-	p.srv[i].conn = conn
-	p.mu.Unlock()
-	return i, conn, nil
+	defer p.mu.Unlock()
+	if s.conn != nil {
+		_ = conn.Close()
+		return i, s.conn, s.gen, nil
+	}
+	s.conn = conn
+	s.gen++
+	return i, conn, s.gen, nil
 }
 
 func (p *Pool) answered(i int, outcome string) {
@@ -3229,17 +3967,31 @@ func (p *Pool) answered(i int, outcome string) {
 	p.srv[i].faults = 0
 }
 
-// fault counts a server fault against i: its connection is dropped, its
-// stability window restarts, and failure_threshold in a row open its
-// breaker.
-func (p *Pool) fault(i int, err error) {
-	p.m.DirectoryQueries.WithLabelValues(p.srv[i].URI, "fault").Inc()
+// broken reports whether err leaves the connection unusable: a network
+// error. A deadline abandons its own search alone (pre-flight I-3), and a
+// server's busy or unavailable answer arrived on a working connection.
+func broken(err error) bool {
+	var ne net.Error
+	return ldap.IsErrorWithCode(err, ldap.ErrorNetwork) || (errors.As(err, &ne) && !ne.Timeout())
+}
+
+// fault counts a server fault against i: a broken connection is dropped,
+// its stability window restarts, and failure_threshold in a row open its
+// breaker. gen is the generation of the connection the fault came on; an
+// error on a connection the pool has since closed or replaced is no fault
+// of the server's and counts nothing. A health check passes gen -1.
+func (p *Pool) fault(i, gen int, err error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	s := p.srv[i]
-	if s.conn != nil {
+	if gen >= 0 && gen != s.gen {
+		return
+	}
+	p.m.DirectoryQueries.WithLabelValues(s.URI, "fault").Inc()
+	if s.conn != nil && gen >= 0 && broken(err) {
 		_ = s.conn.Close()
 		s.conn = nil
+		s.gen++
 	}
 	s.faults++
 	s.healthySince = time.Time{}
@@ -3248,10 +4000,34 @@ func (p *Pool) fault(i int, err error) {
 		p.m.DirectoryServerUp.WithLabelValues(s.URI).Set(0)
 		p.say("directory: %s: %d faults in a row (the last: %s); its breaker is open; probed every %s", s.URI,
 			s.faults, printsafe.Line(err.Error(), 300), p.cfg.ProbeInterval)
+		if s.conn != nil {
+			_ = s.conn.Close()
+			s.conn = nil
+			s.gen++
+		}
 	}
-	if s.open && s.openedAt.IsZero() {
-		s.openedAt = p.now()
+}
+
+// refused is a dial or bind the server refused without a fault
+// (pre-flight I-2): invalid credentials (49), strongAuthRequired,
+// confidentialityRequired, a KDC's refusal. The query fails over; the
+// breaker's count is left as it is, neither raised (a wrong password is
+// not a down server) nor reset. Said once per server an hour, with the
+// mechanism and the result code; the error carries neither the password
+// nor the keytab (Task 7).
+func (p *Pool) refused(i int, err error) {
+	p.m.DirectoryQueries.WithLabelValues(p.srv[i].URI, "refused").Inc()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	s := p.srv[i]
+	now := p.now()
+	if !s.refusedSaid.IsZero() && now.Sub(s.refusedSaid) < time.Hour {
+		return
 	}
+	s.refusedSaid = now
+	p.say("directory: %s refused the bind (%s): %s; queries fail over, and with no server answering a "+
+		"membership verified within directory.grace serves", s.URI, p.cfg.Bind.Mechanism,
+		printsafe.Line(err.Error(), 300))
 }
 
 // selectLocked makes i the sticky selection, saying so, and a site
@@ -3274,7 +4050,9 @@ func (p *Pool) selectLocked(i int, why string) {
 	if prev >= 0 {
 		from, fromURI = p.srv[prev].Site, p.srv[prev].URI
 	}
-	if p.cfg.Site != "" && s.Site != from && (s.Site != p.cfg.Site || from != p.cfg.Site) {
+	// With a broker site, the first selection is measured from it; without
+	// one, a change between two selections is the crossing (pre-flight M-7).
+	if (p.cfg.Site != "" || prev >= 0) && s.Site != from {
 		p.m.DirectorySiteCrossings.Inc()
 		p.say("directory: consistency event: crossing from site %s to %s (%s to %s); membership read there may lag "+
 			"replication from %s", or(from, "none"), or(s.Site, "none"), or(fromURI, "none"), s.URI, or(from, "none"))
@@ -3283,9 +4061,11 @@ func (p *Pool) selectLocked(i int, why string) {
 
 // Check is one round of health checks (Ruling 9): every server whose
 // breaker is closed, or open past probe_interval, is dialled, bound and
-// checked within health_check.timeout. Then failback: a server ranked
-// above the selection that has passed every check for stability_window is
-// selected. With nothing selected, the best closed server is.
+// checked within health_check.timeout, on a connection of its own that it
+// closes. A refused bind is said and counts nothing. Then failback: a
+// server ranked above the selection that has passed every check for
+// stability_window is selected. With nothing selected, the best closed
+// server is.
 func (p *Pool) Check(ctx context.Context) {
 	now := p.now()
 	for i, s := range p.srv {
@@ -3300,16 +4080,21 @@ func (p *Pool) Check(ctx context.Context) {
 		}
 		cctx, cancel := context.WithTimeout(ctx, p.cfg.HealthTimeout)
 		conn, err := p.dial(cctx, s.Server)
-		if err == nil {
-			err = run(cctx, conn, func(c Searcher) error { return p.check(cctx, c) })
+		dialed := err == nil
+		if dialed {
+			err = p.check(cctx, bound{ctx: cctx, c: conn})
 			_ = conn.Close()
 		}
 		cancel()
 		if ctx.Err() != nil {
 			return
 		}
-		if err != nil {
-			p.fault(i, err)
+		switch {
+		case err != nil && !dialed && !Fault(err):
+			p.refused(i, err)
+			continue
+		case err != nil:
+			p.fault(i, -1, err)
 			continue
 		}
 		p.mu.Lock()
@@ -3368,6 +4153,11 @@ func or(s, d string) string {
 back. A query never moves the selection *up*: only `Check` does, after the window. That is
 the "no flapping" property design §10 asks for.
 
+Nothing in the pool closes a shared connection on a query's timeout: only a network error
+(the connection is broken) or the breaker opening drops it, and the generation it bumps keeps
+every other query's error on that connection from counting as a further fault. `NewPool`
+also needs `cfg.Bind.Mechanism` for the refusal line; Task 4's `Config` carries it.
+
 - [ ] **Step 6: Run them to verify they pass**
 
 Run: `go test ./internal/directory/ -race -count=1`
@@ -3391,8 +4181,8 @@ git commit -m "feat(directory): the server pool: same-site then priority, sticky
 - Modify: `go.mod`, `go.sum` (the `gssapi` import pulls gokrb5 v8.4.4 into the build)
 
 **Interfaces:**
-- Consumes: `directory.Config`, `Bind`, `Server` (Task 4); `Searcher`, `Dialer` (Task 6);
-  `keyfile.LoadX509KeyPair`, `keyfile.ReadSecret`.
+- Consumes: `directory.Config`, `Bind`, `Server` (Task 4); `Searcher`, `Client`, `Dialer`
+  (Task 6); `keyfile.LoadX509KeyPair`, `keyfile.ReadSecret`.
 - Produces:
 
 ```go
@@ -3403,6 +4193,7 @@ func (c *Credentials) GoString() string
 func (c *Credentials) Who() string       // "port49$@CORP.EXAMPLE.COM", a bind DN, or the cert's subject
 func NewDialer(cfg Config, cr *Credentials) (Dialer, error)
 func RootDSE(ctx context.Context, s Searcher) error
+type ldapClient struct{ c *ldap.Conn } // Client over SearchAsync
 func tlsConfig(cfg Config, s Server, cr *Credentials) (*tls.Config, error)
 ```
 
@@ -3606,10 +4397,11 @@ func tlsConfig(cfg Config, s Server, cr *Credentials) (*tls.Config, error) {
 }
 
 // NewDialer dials, secures and binds one connection per call. Every
-// search on it is bounded by query_timeout on the wire as well
-// (SetTimeout), and the pool's run closes it past the query's deadline.
+// search on it runs through SearchAsync under its query's deadline
+// (ldapClient), and is bounded by query_timeout on the wire as well
+// (SetTimeout). Nothing closes the connection on one query's timeout.
 func NewDialer(cfg Config, cr *Credentials) (Dialer, error) {
-	return func(ctx context.Context, s Server) (Searcher, error) {
+	return func(ctx context.Context, s Server) (Client, error) {
 		tc, err := tlsConfig(cfg, s, cr)
 		if err != nil {
 			return nil, err
@@ -3639,8 +4431,54 @@ func NewDialer(cfg Config, cr *Credentials) (Dialer, error) {
 			conn.Close()
 			return nil, err
 		}
-		return conn, nil
+		return ldapClient{c: conn}, nil
 	}, nil
+}
+
+// ldapClient is a bound *ldap.Conn as a Client (pre-flight I-3): every
+// search runs through SearchAsync under the query's ctx, so a deadline
+// abandons that search's message alone and the connection serves every
+// other query on it. SearchAsync reports a cancelled search as no error
+// (go-ldap search.go:625-630), so ctx's error is returned in its place.
+// Paging follows SearchWithPaging (search.go:503): a paging control, the
+// cookie from each page's done result, until it comes back empty.
+type ldapClient struct{ c *ldap.Conn }
+
+func (l ldapClient) Close() error { return l.c.Close() }
+
+func (l ldapClient) SearchContext(ctx context.Context, req *ldap.SearchRequest, pagingSize uint32) (*ldap.SearchResult, error) {
+	out := &ldap.SearchResult{}
+	var paging *ldap.ControlPaging
+	if pagingSize > 0 {
+		paging = ldap.NewControlPaging(pagingSize)
+		req.Controls = append(req.Controls, paging)
+	}
+	for {
+		r := l.c.SearchAsync(ctx, req, 0)
+		var controls []ldap.Control
+		for r.Next() {
+			if e := r.Entry(); e != nil {
+				out.Entries = append(out.Entries, e)
+			}
+			if c := r.Controls(); len(c) > 0 {
+				controls = c
+			}
+		}
+		if err := ctx.Err(); err != nil {
+			return out, err
+		}
+		if err := r.Err(); err != nil {
+			return out, err
+		}
+		if paging == nil {
+			return out, nil
+		}
+		pc, ok := ldap.FindControl(controls, ldap.ControlTypePaging).(*ldap.ControlPaging)
+		if !ok || len(pc.Cookie) == 0 {
+			return out, nil
+		}
+		paging.SetCookie(pc.Cookie)
+	}
 }
 
 // bind authenticates conn as the broker. Its error names the server, the
@@ -3687,8 +4525,16 @@ func timeLeft(ctx context.Context) time.Duration {
 
 `bind` rewraps an LDAP error so the server's diagnostic message, which a directory may fill
 with anything, never reaches a line. It keeps the result code: `Fault` classifies the bind
-on that (a `busy` DC fails over; invalid credentials does not open every breaker as a fault,
-it is the query's answer, said loudly at start by Task 16).
+on that. A `busy` DC is a fault and fails over. Invalid credentials, `strongAuthRequired` or
+`confidentialityRequired` is a refusal (Task 6's `refused`): the query fails over too, the
+breaker's count is untouched, and the refusal is said once an hour per server with the
+mechanism and the code. With every server refusing, the query is `ErrUnavailable` and grace
+applies (pre-flight I-2). A gokrb5 error that is not a network error (a KDC refusing the
+keytab) is a refusal the same way.
+
+`ldapClient` needs a server, so it is exercised by Task 17's lab run (L43's binds, L42's
+searches, one with a size limit). The pool's handling of the `Client` contract is pinned by
+Task 6's `fakeConn`, which honours the same contract.
 
 Run `go get github.com/go-ldap/ldap/v3/gssapi@v3.4.14 github.com/jcmturner/gokrb5/v8@v8.4.4 &&
 go mod tidy` and check `go list -deps ./internal/directory | grep -c cgo` prints nothing
@@ -3732,16 +4578,23 @@ var (
 type Lookup struct{ Attribute, Filter, Key string }
 func (m Mapping) Lookup(leaf *x509.Certificate, userFilter string) (Lookup, error)
 func (m Mapping) KeysOf(e *ldap.Entry) []string  // every mapping key the entry answers to
-func ADIssuerSerial(leaf *x509.Certificate) string
+func ADIssuerSerial(leaf *x509.Certificate) string // "" when the issuer does not parse
 func SIDOf(leaf *x509.Certificate) (string, error)
+func rdnsOf(raw []byte) (pkix.RDNSequence, error)  // RawIssuer / RawSubject, DER order
+func nameString(raw []byte) string                 // RFC 4514, DC= kept
+func pinned(leaf *x509.Certificate, issuers []string) bool
+func canonicalValue(k MappingKind, v string) string
 func sidBytes(sid string) ([]byte, error)
 func sidString(b []byte) (string, error)
 
 // entry.go
-type Identity struct{ DN, Principal, Username string }
+type Identity struct{ DN, EntryID, Principal, Username string }
+func entryID(e *ldap.Entry) string // "guid:", "uuid:" or "dn:" (Ruling 3's pin)
 func (c Config) oneEntry(s Searcher, filter string, attrs []string) (*ldap.Entry, error)
 func (c Config) identityOf(e *ldap.Entry) (Identity, error)
-func (c Config) usernameUnique(s Searcher, id Identity) error
+func (c Config) usernameUnique(s Searcher, id Identity) error  // ErrUsernameTaken
+func (c Config) principalUnique(s Searcher, id Identity) error // ErrAmbiguous (pre-flight C-2)
+func (c Config) heldElsewhere(s Searcher, attr, value, dn string) (string, error)
 func (c Config) entryAttrs() []string
 ```
 
@@ -3753,6 +4606,10 @@ Create `internal/directory/mapping_test.go`:
 package directory
 
 import (
+	"crypto"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
@@ -3760,29 +4617,101 @@ import (
 	"math/big"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/go-ldap/ldap/v3"
 )
 
-func leaf(t *testing.T, mut func(*x509.Certificate)) *x509.Certificate {
+var (
+	oidCN = asn1.ObjectIdentifier{2, 5, 4, 3}
+	oidDC = asn1.ObjectIdentifier{0, 9, 2342, 19200300, 100, 1, 25}
+)
+
+// issuingCA is a CA whose subject is rdns, written in DER as given (most
+// significant first), so a DC= RDN reaches the leaf's RawIssuer as AD CS
+// writes it and Go's pkix.Name cannot hide it (pre-flight I-1).
+func issuingCA(t *testing.T, rdns pkix.RDNSequence) (*x509.Certificate, crypto.Signer) {
 	t.Helper()
-	c := &x509.Certificate{SerialNumber: big.NewInt(0x1200000000AC11),
-		Issuer:  pkix.Name{CommonName: "Corp Users CA", Organization: []string{"Example"}},
-		Subject: pkix.Name{CommonName: "Alice Smith"}, EmailAddresses: []string{"alice@corp.example.com"}}
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := asn1.Marshal(rdns)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(1), RawSubject: raw, NotBefore: time.Now().Add(-time.Hour),
+		NotAfter: time.Now().Add(time.Hour), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, key.Public(), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ca, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ca, key
+}
+
+// corpCA is CN=corp-DC01-CA,DC=corp,DC=com.
+func corpCA(t *testing.T) (*x509.Certificate, crypto.Signer) {
+	return issuingCA(t, pkix.RDNSequence{{{Type: oidDC, Value: "com"}}, {{Type: oidDC, Value: "corp"}},
+		{{Type: oidCN, Value: "corp-DC01-CA"}}})
+}
+
+// issue is a client certificate from ca after mut edits its template,
+// parsed back from DER: every mapping test reads what a real certificate
+// carries, never a pkix.Name built in memory.
+func issue(t *testing.T, ca *x509.Certificate, caKey crypto.Signer, mut func(*x509.Certificate)) *x509.Certificate {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(0x1200000000AC11), Subject: pkix.Name{CommonName: "Alice Smith"},
+		EmailAddresses: []string{"alice@corp.example.com"}, NotBefore: time.Now().Add(-time.Hour),
+		NotAfter: time.Now().Add(time.Hour)}
 	if mut != nil {
-		mut(c)
+		mut(tmpl)
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, ca, key.Public(), caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
 	}
 	return c
 }
 
-var pin = []string{"CN=Corp Users CA,O=Example"}
+func leaf(t *testing.T, mut func(*x509.Certificate)) *x509.Certificate {
+	ca, key := corpCA(t)
+	return issue(t, ca, key, mut)
+}
+
+var pin = []string{"CN=corp-DC01-CA,DC=corp,DC=com"}
 
 // A weak mapping refuses a certificate from an issuer it is not pinned to,
-// before any search (design §7).
+// before any search (design §7). The pin compares the issuer's DER RDNs,
+// DC= included, case-folded: a pin naming the CN alone is another issuer.
 func TestAWeakMappingRefusesAnUnpinnedIssuer(t *testing.T) {
 	m := Mapping{Kind: MapSANEmail, Attribute: "mail", AllowWeak: true, Issuers: pin}
 	if _, err := m.Lookup(leaf(t, nil), "(objectClass=person)"); err != nil {
 		t.Fatal(err)
 	}
-	other := leaf(t, func(c *x509.Certificate) { c.Issuer = pkix.Name{CommonName: "Partner CA"} })
+	folded := Mapping{Kind: MapSANEmail, Attribute: "mail", AllowWeak: true, Issuers: []string{"cn=CORP-dc01-ca,dc=CORP,dc=com"}}
+	if _, err := folded.Lookup(leaf(t, nil), "(objectClass=person)"); err != nil {
+		t.Fatalf("a pin in another case: %v", err)
+	}
+	for _, issuers := range [][]string{{"CN=corp-DC01-CA"}, {"CN=corp-DC01-CA,DC=other,DC=com"}} {
+		cnOnly := Mapping{Kind: MapSANEmail, Attribute: "mail", AllowWeak: true, Issuers: issuers}
+		if _, err := cnOnly.Lookup(leaf(t, nil), "(objectClass=person)"); !errors.Is(err, ErrUnmapped) {
+			t.Fatalf("pin %v matched CN=corp-DC01-CA,DC=corp,DC=com: %v", issuers, err)
+		}
+	}
+	partner, partnerKey := issuingCA(t, pkix.RDNSequence{{{Type: oidCN, Value: "Partner CA"}}})
+	other := issue(t, partner, partnerKey, nil)
 	if _, err := m.Lookup(other, "(objectClass=person)"); !errors.Is(err, ErrUnmapped) ||
 		!strings.Contains(err.Error(), "not one broker.directory.certificate_mapping.issuers pins") {
 		t.Fatalf("%v", err)
@@ -3800,21 +4729,36 @@ func TestAMappedValueIsEscapedInTheFilter(t *testing.T) {
 	if l.Filter != `(&(objectClass=person)(cn=\2a\29\28uid=\2a))` {
 		t.Fatalf("%s", l.Filter)
 	}
-	if _, err := m.Lookup(leaf(t, func(c *x509.Certificate) { c.Subject.CommonName = "a\x00b" }), "(objectClass=person)"); !errors.Is(err, ErrUnmapped) {
+	nul := leaf(t, nil)
+	nul.Subject.CommonName = "a\x00b" // set after parsing: CN is read from Subject.CommonName
+	if _, err := m.Lookup(nul, "(objectClass=person)"); !errors.Is(err, ErrUnmapped) {
 		t.Fatalf("a control character in a weak value: %v", err)
 	}
 }
 
-// AD's altSecurityIdentities form: issuer RDNs most significant first,
-// serial bytes reversed, upper-case hex.
+// AD's altSecurityIdentities form: the issuer's DER RDNs most significant
+// first, DC= included, serial bytes reversed, upper-case hex (KB5014754's
+// own example has the DCs first).
 func TestADIssuerSerial(t *testing.T) {
 	got := ADIssuerSerial(leaf(t, nil))
-	if got != "X509:<I>O=Example,CN=Corp Users CA<SR>11AC0000000012" {
+	if got != "X509:<I>DC=com,DC=corp,CN=corp-DC01-CA<SR>11AC0000000012" {
 		t.Fatalf("%s", got)
 	}
 	l, _ := Mapping{Kind: MapIssuerSerial, Attribute: "altSecurityIdentities"}.Lookup(leaf(t, nil), "(objectClass=person)")
-	if !strings.HasPrefix(l.Filter, "(&(objectClass=person)(altSecurityIdentities=X509:<I>O=Example,CN=Corp Users CA<SR>") {
+	if !strings.HasPrefix(l.Filter, "(&(objectClass=person)(altSecurityIdentities=X509:<I>DC=com,DC=corp,CN=corp-DC01-CA<SR>") {
 		t.Fatalf("%s", l.Filter)
+	}
+}
+
+// subject_dn reads the subject's DER RDNs too, so a subject under DC=
+// keeps them.
+func TestASubjectDNKeepsItsDCs(t *testing.T) {
+	m := Mapping{Kind: MapSubjectDN, Attribute: "distinguishedName", AllowWeak: true, Issuers: pin}
+	raw, _ := asn1.Marshal(pkix.RDNSequence{{{Type: oidDC, Value: "com"}}, {{Type: oidDC, Value: "corp"}},
+		{{Type: oidCN, Value: "Alice Smith"}}})
+	l, err := m.Lookup(leaf(t, func(c *x509.Certificate) { c.RawSubject = raw }), "(objectClass=person)")
+	if err != nil || l.Filter != "(&(objectClass=person)(distinguishedName=cn=Alice Smith,dc=corp,dc=com))" {
+		t.Fatalf("%s %v", l.Filter, err)
 	}
 }
 
@@ -3823,7 +4767,7 @@ func TestADIssuerSerial(t *testing.T) {
 func TestAnObjectSidIsEscapedByteByByte(t *testing.T) {
 	sid := "S-1-5-21-1004336348-1177238915-682003330-512"
 	l, err := Mapping{Kind: MapSID, Attribute: "objectSid"}.Lookup(leaf(t, func(c *x509.Certificate) {
-		c.Extensions = append(c.Extensions, sidExtension(t, sid))
+		c.ExtraExtensions = append(c.ExtraExtensions, sidExtension(t, sid))
 	}), "(objectClass=person)")
 	if err != nil {
 		t.Fatal(err)
@@ -3837,6 +4781,26 @@ func TestAnObjectSidIsEscapedByteByByte(t *testing.T) {
 	}
 	if _, err := (Mapping{Kind: MapSID, Attribute: "objectSid"}).Lookup(leaf(t, nil), "(objectClass=person)"); !errors.Is(err, ErrUnmapped) {
 		t.Fatalf("no SID extension: %v", err)
+	}
+}
+
+// The key a certificate searches with equals the key its entry answers to
+// (pre-flight M-2): a SID re-canonicalized from its binary form, an
+// issuer_serial upper-cased, as AD matches it.
+func TestMapKeysAreCanonicalOnBothSides(t *testing.T) {
+	sid := "S-1-5-21-1004336348-1177238915-682003330-512"
+	c := leaf(t, func(c *x509.Certificate) { c.ExtraExtensions = append(c.ExtraExtensions, sidExtension(t, sid)) })
+	b, _ := sidBytes(sid)
+	sm := Mapping{Kind: MapSID, Attribute: "objectSid"}
+	l, _ := sm.Lookup(c, "(objectClass=person)")
+	if keys := sm.KeysOf(ldap.NewEntry("CN=Alice,DC=corp", map[string][]string{"objectSid": {string(b)}})); len(keys) != 1 || keys[0] != l.Key {
+		t.Fatalf("sid: %v vs %s", keys, l.Key)
+	}
+	im := Mapping{Kind: MapIssuerSerial, Attribute: "altSecurityIdentities"}
+	l, _ = im.Lookup(c, "(objectClass=person)")
+	lower := strings.ToLower(ADIssuerSerial(c))
+	if keys := im.KeysOf(ldap.NewEntry("CN=Alice,DC=corp", map[string][]string{"altSecurityIdentities": {lower}})); len(keys) != 1 || keys[0] != l.Key {
+		t.Fatalf("issuer_serial: %v vs %s", keys, l.Key)
 	}
 }
 
@@ -3904,13 +4868,20 @@ func TestOneEntryOrNone(t *testing.T) {
 	}
 }
 
-// The principal and username are derived and checked (Ruling 3).
+// The principal and username are derived and checked (Ruling 3), and the
+// entry's immutable id is its pin: objectGUID, else entryUUID, else the DN.
 func TestIdentityOfAnEntry(t *testing.T) {
 	c := adCfg()
 	id, err := c.identityOf(entry("CN=Alice,DC=corp", map[string][]string{"userPrincipalName": {"Alice@Corp.Example.com"},
-		"sAMAccountName": {"Alice"}}))
-	if err != nil || id.Principal != "user:alice@corp.example.com" || id.Username != "alice" {
+		"sAMAccountName": {"Alice"}, "objectGUID": {"\x0a\x1b\x2c\x3d"}}))
+	if err != nil || id.Principal != "user:alice@corp.example.com" || id.Username != "alice" || id.EntryID != "guid:0a1b2c3d" {
 		t.Fatalf("%+v %v", id, err)
+	}
+	if got := entryID(entry("CN=B,DC=corp", map[string][]string{"entryUUID": {"5F0E-AB"}})); got != "uuid:5f0e-ab" {
+		t.Fatalf("entryUUID: %s", got)
+	}
+	if got := entryID(entry("CN=B,DC=Corp", nil)); got != "dn:cn=b,dc=corp" {
+		t.Fatalf("no id attribute: %s", got)
 	}
 	for name, attrs := range map[string]map[string][]string{
 		"no upn":            {"sAMAccountName": {"alice"}},
@@ -3931,21 +4902,44 @@ func TestIdentityOfAnEntry(t *testing.T) {
 // (Ruling 3): two people under one username share one context.
 func TestAUsernameTwoEntriesHoldCollides(t *testing.T) {
 	d := newFakeDir()
-	d.on("(&(objectClass=person)(sAMAccountName=alice))", entry("CN=Alice,DC=corp", nil), entry("CN=Alice2,DC=corp", nil))
+	d.on("(sAMAccountName=alice)", entry("CN=Alice,DC=corp", nil), entry("CN=Alice2,DC=corp", nil))
 	err := adCfg().usernameUnique(d, Identity{DN: "CN=Alice,DC=corp", Username: "alice"})
 	if !errors.Is(err, ErrUsernameTaken) || !strings.Contains(err.Error(), "CN=Alice2,DC=corp") {
 		t.Fatalf("%v", err)
 	}
-	d.on("(&(objectClass=person)(sAMAccountName=bob))", entry("CN=Bob,DC=corp", nil))
+	d.on("(sAMAccountName=bob)", entry("CN=Bob,DC=corp", nil))
 	if err := adCfg().usernameUnique(d, Identity{DN: "cn=bob,dc=corp", Username: "bob"}); err != nil {
 		t.Fatalf("the same DN in another case: %v", err)
+	}
+	if f := d.calls[0].Filter; strings.Contains(f, "objectClass") {
+		t.Fatalf("the uniqueness search is narrowed by user_filter: %s (pre-flight M-5)", f)
+	}
+}
+
+// A principal another entry holds is identity_ambiguous, naming both DNs
+// (pre-flight C-2): a user who sets their own mail or UPN to a colleague's
+// never becomes the colleague, and the colleague is refused too while the
+// two collide. Searched without user_filter, which finds more.
+func TestAPrincipalTwoEntriesHoldIsAmbiguous(t *testing.T) {
+	d := newFakeDir()
+	d.on("(userPrincipalName=victim@corp.example.com)", entry("CN=Victim,DC=corp", nil), entry("CN=Mallory,DC=corp", nil))
+	for _, dn := range []string{"CN=Mallory,DC=corp", "CN=Victim,DC=corp"} {
+		err := adCfg().principalUnique(d, Identity{DN: dn, Principal: "user:victim@corp.example.com"})
+		if !errors.Is(err, ErrAmbiguous) || !strings.Contains(err.Error(), "CN=Victim,DC=corp") ||
+			!strings.Contains(err.Error(), "CN=Mallory,DC=corp") {
+			t.Fatalf("%s: %v", dn, err)
+		}
+	}
+	d.on("(userPrincipalName=bob@corp.example.com)", entry("CN=Bob,DC=corp", nil))
+	if err := adCfg().principalUnique(d, Identity{DN: "cn=bob,dc=corp", Principal: "user:bob@corp.example.com"}); err != nil {
+		t.Fatalf("one entry: %v", err)
 	}
 }
 ```
 
 - [ ] **Step 2: Run them to verify they fail**
 
-Run: `go test ./internal/directory/ -run 'Weak|Escaped|ADIssuer|ObjectSid|SeveralSANs|OneEntry|IdentityOf|UsernameTwo' -count=1`
+Run: `go test ./internal/directory/ -run 'Weak|Escaped|ADIssuer|SubjectDN|ObjectSid|Canonical|SeveralSANs|OneEntry|IdentityOf|UsernameTwo|PrincipalTwo' -count=1`
 Expected: FAIL, undefined `Lookup`, `ADIssuerSerial`, `oneEntry`.
 
 - [ ] **Step 3: The mapping**
@@ -3971,6 +4965,7 @@ import (
 
 	"github.com/go-ldap/ldap/v3"
 
+	"github.com/rhwendt/port49/internal/printsafe"
 	"github.com/rhwendt/port49/internal/store"
 )
 
@@ -4003,13 +4998,12 @@ func unmapped(format string, args ...any) error {
 func (m Mapping) Lookup(leaf *x509.Certificate, userFilter string) (Lookup, error) {
 	if len(m.Issuers) > 0 && !pinned(leaf, m.Issuers) {
 		return Lookup{}, unmapped("the certificate's issuer %q is not one broker.directory.certificate_mapping.issuers "+
-			"pins", leaf.Issuer.String())
+			"pins", printsafe.Line(nameString(leaf.RawIssuer), 300))
 	}
-	var value, key string
+	var value string
 	switch m.Kind {
 	case MapIssuerSerial:
 		value = ADIssuerSerial(leaf)
-		key = store.MapKey(string(m.Kind), value)
 	case MapSID:
 		sid, err := SIDOf(leaf)
 		if err != nil {
@@ -4020,7 +5014,7 @@ func (m Mapping) Lookup(leaf *x509.Certificate, userFilter string) (Lookup, erro
 			return Lookup{}, unmapped("the SID extension holds %v", err)
 		}
 		return Lookup{Attribute: m.Attribute, Filter: fmt.Sprintf("(&%s(%s=%s))", userFilter, m.Attribute, escapeBytes(b)),
-			Key: store.MapKey(string(m.Kind), sid)}, nil
+			Key: store.MapKey(string(m.Kind), canonicalValue(m.Kind, sid))}, nil
 	case MapSANUPN:
 		upns, err := upnsOf(leaf)
 		if err != nil || len(upns) != 1 {
@@ -4033,7 +5027,7 @@ func (m Mapping) Lookup(leaf *x509.Certificate, userFilter string) (Lookup, erro
 		}
 		value = leaf.EmailAddresses[0]
 	case MapSubjectDN:
-		value = leaf.Subject.String()
+		value = nameString(leaf.RawSubject)
 	case MapCN:
 		value = leaf.Subject.CommonName
 	default:
@@ -4042,11 +5036,8 @@ func (m Mapping) Lookup(leaf *x509.Certificate, userFilter string) (Lookup, erro
 	if value == "" || !printable(value) {
 		return Lookup{}, unmapped("the certificate's %s value is empty or not printable (%d bytes)", m.Kind, len(value))
 	}
-	if key == "" {
-		key = store.MapKey(string(m.Kind), canonicalValue(m.Kind, value))
-	}
 	return Lookup{Attribute: m.Attribute, Filter: fmt.Sprintf("(&%s(%s=%s))", userFilter, m.Attribute,
-		ldap.EscapeFilter(value)), Key: key}, nil
+		ldap.EscapeFilter(value)), Key: store.MapKey(string(m.Kind), canonicalValue(m.Kind, value))}, nil
 }
 
 // KeysOf is every mapping key entry e answers to under m: what pre-warm
@@ -4057,7 +5048,7 @@ func (m Mapping) KeysOf(e *ldap.Entry) []string {
 	case MapSID:
 		for _, raw := range e.GetRawAttributeValues(m.Attribute) {
 			if s, err := sidString(raw); err == nil {
-				out = append(out, store.MapKey(string(m.Kind), s))
+				out = append(out, store.MapKey(string(m.Kind), canonicalValue(m.Kind, s)))
 			}
 		}
 	case MapSubjectDN:
@@ -4071,11 +5062,21 @@ func (m Mapping) KeysOf(e *ldap.Entry) []string {
 	return slices.Compact(out)
 }
 
-// canonicalValue is the form a key hashes: a DN as parsed RDNs lower-cased,
-// a name lower-cased (each of those attributes matches case-insensitively),
-// issuer and serial as it is.
+// canonicalValue is the form a key hashes, the same on the certificate's
+// side and the entry's (pre-flight M-2): a DN as parsed RDNs lower-cased, a
+// name lower-cased, an issuer_serial upper-cased (each of those matches
+// case-insensitively in AD), a SID through its binary form and back.
 func canonicalValue(k MappingKind, v string) string {
 	switch k {
+	case MapIssuerSerial:
+		return strings.ToUpper(v)
+	case MapSID:
+		if b, err := sidBytes(v); err == nil {
+			if s, err := sidString(b); err == nil {
+				return s
+			}
+		}
+		return v
 	case MapSubjectDN:
 		if dn, err := ldap.ParseDN(v); err == nil {
 			var parts []string
@@ -4093,13 +5094,111 @@ func canonicalValue(k MappingKind, v string) string {
 	return v
 }
 
+// oidNames is each attribute type a mapping or a pin names, by OID, as AD
+// and RFC 4514 write it. nameOIDs is the reverse, with the aliases a pin
+// may use.
+var (
+	oidNames = map[string]string{"2.5.4.3": "CN", "2.5.4.6": "C", "2.5.4.7": "L", "2.5.4.8": "S", "2.5.4.10": "O",
+		"2.5.4.11": "OU", "2.5.4.9": "STREET", "0.9.2342.19200300.100.1.25": "DC", "0.9.2342.19200300.100.1.1": "UID",
+		"1.2.840.113549.1.9.1": "E"}
+	nameOIDs = func() map[string]string {
+		m := map[string]string{"ST": "2.5.4.8", "EMAILADDRESS": "1.2.840.113549.1.9.1", "DOMAINCOMPONENT": "0.9.2342.19200300.100.1.25"}
+		for oid, n := range oidNames {
+			m[n] = oid
+		}
+		return m
+	}()
+)
+
+// rdnsOf parses raw, a certificate's RawIssuer or RawSubject, as its DER
+// RDN sequence, most significant first. Go's pkix.Name drops DC= RDNs and
+// Issuer.String() renders them as dotted OIDs (pre-flight I-1), so neither
+// is used for a mapping or a pin.
+func rdnsOf(raw []byte) (pkix.RDNSequence, error) {
+	var seq pkix.RDNSequence
+	rest, err := asn1.Unmarshal(raw, &seq)
+	if err != nil || len(rest) > 0 {
+		return nil, errors.New("a malformed name")
+	}
+	return seq, nil
+}
+
+func typeName(oid asn1.ObjectIdentifier) string {
+	if t, ok := oidNames[oid.String()]; ok {
+		return t
+	}
+	return "OID." + oid.String()
+}
+
+// nameString is raw as an RFC 4514 DN, least significant first, each type
+// by its short name (DC kept) and each value escaped by go-ldap's
+// DN.String, which lower-cases the types; "" when raw does not parse.
+func nameString(raw []byte) string {
+	seq, err := rdnsOf(raw)
+	if err != nil {
+		return ""
+	}
+	dn := &ldap.DN{}
+	for i := len(seq) - 1; i >= 0; i-- {
+		rdn := &ldap.RelativeDN{}
+		for _, atv := range seq[i] {
+			rdn.Attributes = append(rdn.Attributes, &ldap.AttributeTypeAndValue{Type: typeName(atv.Type), Value: fmt.Sprint(atv.Value)})
+		}
+		dn.RDNs = append(dn.RDNs, rdn)
+	}
+	return dn.String()
+}
+
+// rdnKeys is a name as the pin compares it: per RDN, most significant
+// first, its (OID, case-folded value) pairs sorted.
+func rdnKeys(seq pkix.RDNSequence) [][]string {
+	out := make([][]string, len(seq))
+	for i, rdn := range seq {
+		for _, atv := range rdn {
+			out[i] = append(out[i], atv.Type.String()+"="+strings.ToLower(fmt.Sprint(atv.Value)))
+		}
+		slices.Sort(out[i])
+	}
+	return out
+}
+
+// pinKeys is an RFC 4514 pin as rdnKeys, its RDNs reversed into DER order
+// and each type through nameOIDs (or written as an OID); false for a type
+// neither names, which then matches nothing.
+func pinKeys(pin string) ([][]string, bool) {
+	dn, err := ldap.ParseDN(pin)
+	if err != nil {
+		return nil, false
+	}
+	out := make([][]string, len(dn.RDNs))
+	for i, rdn := range dn.RDNs {
+		j := len(dn.RDNs) - 1 - i
+		for _, a := range rdn.Attributes {
+			t := strings.ToUpper(a.Type)
+			oid, ok := nameOIDs[t]
+			if !ok {
+				oid = strings.TrimPrefix(t, "OID.")
+				if strings.Trim(oid, "0123456789.") != "" || !strings.Contains(oid, ".") {
+					return nil, false
+				}
+			}
+			out[j] = append(out[j], oid+"="+strings.ToLower(a.Value))
+		}
+		slices.Sort(out[j])
+	}
+	return out, true
+}
+
+// pinned reports whether leaf's issuer, read from its DER, equals one of
+// issuers (Ruling 1).
 func pinned(leaf *x509.Certificate, issuers []string) bool {
-	got, err := ldap.ParseDN(leaf.Issuer.String())
+	seq, err := rdnsOf(leaf.RawIssuer)
 	if err != nil {
 		return false
 	}
+	got := rdnKeys(seq)
 	for _, iss := range issuers {
-		if want, err := ldap.ParseDN(iss); err == nil && want.EqualFold(got) {
+		if want, ok := pinKeys(iss); ok && slices.EqualFunc(got, want, slices.Equal[[]string]) {
 			return true
 		}
 	}
@@ -4111,13 +5210,19 @@ func printable(s string) bool {
 }
 
 // ADIssuerSerial is AD's altSecurityIdentities strong form: X509:<I> the
-// issuer's RDNs most significant first, <SR> the serial's bytes reversed in
-// upper-case hex (KB5014754). L43's run checks it against Samba's form.
+// issuer's RDNs most significant first, read from RawIssuer so DC= is kept,
+// <SR> the serial's bytes reversed in upper-case hex (KB5014754). L43's run
+// checks it against Samba's form, and L44 against a Windows DC's. "" when
+// the issuer does not parse, which Lookup refuses.
 func ADIssuerSerial(leaf *x509.Certificate) string {
+	seq, err := rdnsOf(leaf.RawIssuer)
+	if err != nil {
+		return ""
+	}
 	var parts []string
-	for _, rdn := range leaf.Issuer.ToRDNSequence() {
+	for _, rdn := range seq {
 		for _, atv := range rdn {
-			parts = append(parts, adType(atv.Type)+"="+fmt.Sprint(atv.Value))
+			parts = append(parts, typeName(atv.Type)+"="+fmt.Sprint(atv.Value))
 		}
 	}
 	b := leaf.SerialNumber.Bytes()
@@ -4126,16 +5231,6 @@ func ADIssuerSerial(leaf *x509.Certificate) string {
 		r[i] = b[len(b)-1-i]
 	}
 	return "X509:<I>" + strings.Join(parts, ",") + "<SR>" + strings.ToUpper(hex.EncodeToString(r))
-}
-
-var adTypes = map[string]string{"2.5.4.3": "CN", "2.5.4.6": "C", "2.5.4.7": "L", "2.5.4.8": "S", "2.5.4.10": "O",
-	"2.5.4.11": "OU", "2.5.4.9": "STREET", "0.9.2342.19200300.100.1.25": "DC", "1.2.840.113549.1.9.1": "E"}
-
-func adType(oid asn1.ObjectIdentifier) string {
-	if t, ok := adTypes[oid.String()]; ok {
-		return t
-	}
-	return "OID." + oid.String()
 }
 
 // SIDOf is the SID string in leaf's szOID_NTDS_CA_SECURITY_EXT, exactly one.
@@ -4247,8 +5342,6 @@ func escapeBytes(b []byte) string {
 	}
 	return sb.String()
 }
-
-var _ = pkix.Name{}
 ```
 
 - [ ] **Step 4: One entry, its identity**
@@ -4259,6 +5352,7 @@ Create `internal/directory/entry.go`:
 package directory
 
 import (
+	"encoding/hex"
 	"fmt"
 	"strings"
 
@@ -4268,13 +5362,28 @@ import (
 	"github.com/rhwendt/port49/internal/token"
 )
 
-// Identity is one directory entry as a principal (Ruling 3).
-type Identity struct{ DN, Principal, Username string }
+// Identity is one directory entry as a principal (Ruling 3). EntryID is
+// the entry's immutable id, the pin a principal keeps.
+type Identity struct{ DN, EntryID, Principal, Username string }
 
 // entryAttrs is what an entry search reads: the principal and username
-// attributes, and the mapping's, for KeysOf.
+// attributes, the mapping's, for KeysOf, and both immutable ids, of which
+// a directory holds one.
 func (c Config) entryAttrs() []string {
-	return []string{c.PrincipalAttribute, c.UsernameAttribute, c.Mapping.Attribute}
+	return []string{c.PrincipalAttribute, c.UsernameAttribute, c.Mapping.Attribute, "objectGUID", "entryUUID"}
+}
+
+// entryID is e's immutable id (Ruling 3): objectGUID's bytes in hex (AD,
+// Samba), else entryUUID lower-cased (OpenLDAP, RFC 4530), else the DN
+// canonicalized, which an OU move changes.
+func entryID(e *ldap.Entry) string {
+	if raw := e.GetRawAttributeValue("objectGUID"); len(raw) > 0 {
+		return "guid:" + hex.EncodeToString(raw)
+	}
+	if u := e.GetAttributeValue("entryUUID"); u != "" {
+		return "uuid:" + strings.ToLower(u)
+	}
+	return "dn:" + canonicalValue(MapSubjectDN, e.DN)
 }
 
 // oneEntry is the one entry filter finds under base_dn, size limit 2:
@@ -4333,39 +5442,75 @@ func (c Config) identityOf(e *ldap.Entry) (Identity, error) {
 		return Identity{}, fmt.Errorf("%w: entry %s's %s %q is reserved: the device's own account (spec §2)",
 			ErrUnmapped, printsafe.Line(e.DN, 200), c.UsernameAttribute, u)
 	}
-	return Identity{DN: e.DN, Principal: "user:" + p, Username: u}, nil
+	return Identity{DN: e.DN, EntryID: entryID(e), Principal: "user:" + p, Username: u}, nil
+}
+
+// heldElsewhere is the DN of an entry under base_dn other than dn whose
+// attr equals value, "" for none: one search, size limit 2, and no
+// user_filter, so an entry outside it is found too, which only denies more
+// (pre-flight M-5). DNs compare as DNs.
+func (c Config) heldElsewhere(s Searcher, attr, value, dn string) (string, error) {
+	res, err := s.Search(ldap.NewSearchRequest(c.BaseDN, ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 2,
+		int(c.QueryTimeout.Seconds()), false, fmt.Sprintf("(%s=%s)", attr, ldap.EscapeFilter(value)), []string{"dn"}, nil))
+	if err != nil && !ldap.IsErrorWithCode(err, ldap.LDAPResultSizeLimitExceeded) {
+		return "", err
+	}
+	mine, _ := ldap.ParseDN(dn)
+	if res != nil {
+		for _, e := range res.Entries {
+			if other, perr := ldap.ParseDN(e.DN); perr != nil || mine == nil || !other.EqualFold(mine) {
+				return e.DN, nil
+			}
+		}
+	}
+	if err != nil { // more than two entries, none of the two returned another: still another
+		return "(further entries past the size limit)", nil
+	}
+	return "", nil
 }
 
 // usernameUnique is ErrUsernameTaken when another entry under base_dn
-// holds id's username (Ruling 3). DNs compare as DNs.
+// holds id's username (Ruling 3): two people under one username would
+// share one (nas, username) context.
 func (c Config) usernameUnique(s Searcher, id Identity) error {
-	res, err := s.Search(ldap.NewSearchRequest(c.BaseDN, ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 2,
-		int(c.QueryTimeout.Seconds()), false,
-		fmt.Sprintf("(&%s(%s=%s))", c.UserFilter, c.UsernameAttribute, ldap.EscapeFilter(id.Username)), []string{"dn"}, nil))
-	if err != nil && !ldap.IsErrorWithCode(err, ldap.LDAPResultSizeLimitExceeded) {
+	other, err := c.heldElsewhere(s, c.UsernameAttribute, id.Username, id.DN)
+	if err != nil || other == "" {
 		return err
 	}
-	mine, _ := ldap.ParseDN(id.DN)
-	for _, e := range res.Entries {
-		if other, perr := ldap.ParseDN(e.DN); perr != nil || mine == nil || !other.EqualFold(mine) {
-			return fmt.Errorf("%w: username %q is held by %s and by %s", ErrUsernameTaken, id.Username,
-				printsafe.Line(id.DN, 200), printsafe.Line(e.DN, 200))
-		}
+	return fmt.Errorf("%w: username %q is held by %s and by %s", ErrUsernameTaken, id.Username,
+		printsafe.Line(id.DN, 200), printsafe.Line(other, 200))
+}
+
+// principalUnique is ErrAmbiguous when another entry under base_dn holds
+// id's principal_attribute value (pre-flight C-2). Without it, a user who
+// can write their own mail sets it to a colleague's address and binds as
+// the colleague's principal; with it, both are refused while the two
+// collide, and neither becomes the other.
+func (c Config) principalUnique(s Searcher, id Identity) error {
+	value := strings.TrimPrefix(id.Principal, "user:")
+	other, err := c.heldElsewhere(s, c.PrincipalAttribute, value, id.DN)
+	if err != nil || other == "" {
+		return err
 	}
-	return nil
+	return fmt.Errorf("%w: %s %q is held by %s and by %s: two people under one principal is an impersonation path",
+		ErrAmbiguous, c.PrincipalAttribute, value, printsafe.Line(id.DN, 200), printsafe.Line(other, 200))
 }
 ```
 
 (`QueryTimeout` is zero in `adCfg()`; the request's time limit is then 0, no limit, which
 the fake ignores.)
 
+The two uniqueness searches run on every verification (Task 10's `verify`), after the
+mapping's search, on the same server. They are what makes a self-editable attribute safe:
+the operator note still says the attributes must be writable only by directory
+administrators (Ruling 3), because a collision refuses both people until it is fixed.
+
 - [ ] **Step 5: Run them to verify they pass**
 
 Run: `go test ./internal/directory/ -count=1`
-Expected: PASS. If `TestADIssuerSerial`'s expected string disagrees with what
-`ToRDNSequence` yields for that `pkix.Name`, print `leaf.Issuer.ToRDNSequence()` and fix the
-expected string to the encoding order, which is the one AD uses. The rule is "most
-significant first", and L43 checks it against Samba.
+Expected: PASS. `TestADIssuerSerial`'s expected string is the issuer's DER order, which is
+the order KB5014754's own example uses (`X509:<I>DC=com,DC=contoso,CN=CONTOSO-DC-CA<SR>…`).
+L43 checks it against Samba, and L44 against a Windows DC.
 
 - [ ] **Step 6: Commit**
 
@@ -4395,10 +5540,11 @@ type Groups struct {
 	Truncated  bool
 	Loops      int
 	Ambiguous  []string // names dropped because two groups share them
+	Unfound    []string // names dropped because their uniqueness search found no group
 }
 const inChainOID = "1.2.840.113556.1.4.1941"
 func (c Config) groupsOf(s Searcher, userDN string) (Groups, error)
-func (c Config) uniqueNames(s Searcher, names []string) (unique, ambiguous []string, err error)
+func (c Config) uniqueNames(s Searcher, names []string) (unique, ambiguous, unfound []string, err error)
 func (c Config) membersOf(s Searcher, groupDN string, limit int) (dns []string, truncated bool, err error)
 ```
 
@@ -4454,6 +5600,15 @@ func TestInChainIsOneSearch(t *testing.T) {
 	}
 	if d.calls[0].BaseDN != "OU=G,DC=corp" {
 		t.Fatalf("searched under %s", d.calls[0].BaseDN)
+	}
+	n := 0
+	for _, c := range d.calls {
+		if strings.Contains(c.Filter, inChainOID) {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("the matching-rule search was sent %d times, want once (pre-flight M-10)", n)
 	}
 }
 
@@ -4529,13 +5684,40 @@ func TestASharedGroupNameMatchesNoOne(t *testing.T) {
 		t.Fatalf("%+v %v", got, err)
 	}
 }
+
+// A name whose uniqueness search finds no group is dropped and reported,
+// never silently (pre-flight M-9).
+func TestANameNoGroupAnswersIsReported(t *testing.T) {
+	d := newFakeDir()
+	d.on(memberFilter(alice), grp(gLeaf, "g-leaf")) // uniqueFilter("g-leaf") unregistered: no group
+	c := adCfg()
+	c.Nested = "direct"
+	got, err := c.groupsOf(d, alice)
+	if err != nil || len(got.Names) != 0 || !slices.Equal(got.Unfound, []string{"g-leaf"}) {
+		t.Fatalf("%+v %v", got, err)
+	}
+}
+
+// in_chain pre-warm asks for one more than the limit and stops there
+// (pre-flight M-8): a 50,000-member group is never paged in whole.
+func TestMembersOfInChainStopsPastTheLimit(t *testing.T) {
+	d := newFakeDir()
+	f := "(&(objectClass=person)(memberOf:1.2.840.113556.1.4.1941:=" + gOnCall + "))"
+	d.on(f, entry("CN=A,DC=corp", nil), entry("CN=B,DC=corp", nil), entry("CN=C,DC=corp", nil))
+	c := adCfg()
+	c.Nested = "in_chain"
+	got, truncated, err := c.membersOf(d, gOnCall, 2)
+	if err != nil || !truncated || len(got) != 2 || d.calls[0].SizeLimit != 3 {
+		t.Fatalf("%v %v %v; size limit %d", got, truncated, err, d.calls[0].SizeLimit)
+	}
+}
 ```
 
-(Add `"github.com/go-ldap/ldap/v3"` to its imports.)
+(Add `"strings"` and `"github.com/go-ldap/ldap/v3"` to its imports.)
 
 - [ ] **Step 2: Run them to verify they fail**
 
-Run: `go test ./internal/directory/ -run 'InChain|RecursiveWalk|MaxDepth|SharedGroupName' -count=1`
+Run: `go test ./internal/directory/ -run 'InChain|RecursiveWalk|MaxDepth|SharedGroupName|NameNoGroup|MembersOfInChain' -count=1`
 Expected: FAIL, undefined `groupsOf`.
 
 - [ ] **Step 3: The walk**
@@ -4630,7 +5812,7 @@ func (c Config) groupsOf(s Searcher, userDN string) (Groups, error) {
 	}
 	slices.Sort(g.DNs)
 	var err error
-	g.Names, g.Ambiguous, err = c.uniqueNames(s, uniq)
+	g.Names, g.Ambiguous, g.Unfound, err = c.uniqueNames(s, uniq)
 	return g, err
 }
 
@@ -4646,9 +5828,12 @@ func memberOfAny(c Config, dns []string) string {
 }
 
 // uniqueNames splits names into those exactly one group under
-// groups_base_dn has, and those two or more share (Ruling 7). Compared
+// groups_base_dn has, those two or more share (Ruling 7), and those whose
+// search found no group at all (a group renamed between the two searches,
+// or a group_name_attribute that does not match as written): the last two
+// are dropped and reported, never silently (pre-flight M-9). Compared
 // lower-cased; returned as the directory spells them, sorted.
-func (c Config) uniqueNames(s Searcher, names []string) (unique, ambiguous []string, err error) {
+func (c Config) uniqueNames(s Searcher, names []string) (unique, ambiguous, unfound []string, err error) {
 	seen := map[string]bool{}
 	for _, n := range names {
 		k := strings.ToLower(n)
@@ -4663,35 +5848,65 @@ func (c Config) uniqueNames(s Searcher, names []string) (unique, ambiguous []str
 		case ldap.IsErrorWithCode(err, ldap.LDAPResultSizeLimitExceeded), err == nil && len(res.Entries) > 1:
 			ambiguous = append(ambiguous, n)
 		case err != nil:
-			return nil, nil, err
+			return nil, nil, nil, err
 		case len(res.Entries) == 1:
 			unique = append(unique, n)
+		default:
+			unfound = append(unfound, n)
 		}
 	}
 	slices.Sort(unique)
 	slices.Sort(ambiguous)
-	return unique, ambiguous, nil
+	slices.Sort(unfound)
+	return unique, ambiguous, unfound, nil
 }
 
 // membersOf is every user DN under groupDN, transitively under the nested
-// mode, at most limit: what pre-warm enumerates (Ruling 20).
+// mode, at most limit: what pre-warm enumerates (Ruling 20). in_chain asks
+// for limit+1 and stops there, so a huge group is never paged in whole
+// (pre-flight M-8).
 func (c Config) membersOf(s Searcher, groupDN string, limit int) ([]string, bool, error) {
 	if c.Nested == "in_chain" {
 		res, err := s.SearchWithPaging(ldap.NewSearchRequest(c.BaseDN, ldap.ScopeWholeSubtree, ldap.NeverDerefAliases,
-			0, int(c.QueryTimeout.Seconds()), false, fmt.Sprintf("(&%s(memberOf:%s:=%s))", c.UserFilter, inChainOID,
+			limit+1, int(c.QueryTimeout.Seconds()), false, fmt.Sprintf("(&%s(memberOf:%s:=%s))", c.UserFilter, inChainOID,
 				ldap.EscapeFilter(groupDN)), []string{"dn"}, nil), 500)
-		if err != nil {
+		truncated := ldap.IsErrorWithCode(err, ldap.LDAPResultSizeLimitExceeded)
+		if err != nil && !truncated {
 			return nil, false, err
 		}
 		var out []string
-		for _, e := range res.Entries {
-			out = append(out, e.DN)
+		if res != nil {
+			for _, e := range res.Entries {
+				out = append(out, e.DN)
+			}
 		}
-		return out[:min(len(out), limit)], len(out) > limit, nil
+		if len(out) > limit {
+			out, truncated = out[:limit], true
+		}
+		return out, truncated, nil
 	}
 	depth := 1
 	if c.Nested == "recursive" {
 		depth = c.MaxDepth
+	}
+	// A member outside groups_base_dn is never a group the walk follows
+	// (groupsOf searches only under it), so it is a user without a search;
+	// inside, isGroup's answer is kept for the call (pre-flight M-8).
+	groupsBase, _ := ldap.ParseDN(c.GroupsBaseDN)
+	kind := map[string]bool{}
+	classify := func(dn string) (bool, error) {
+		if d, err := ldap.ParseDN(dn); err == nil && groupsBase != nil && !groupsBase.AncestorOfFold(d) {
+			return false, nil
+		}
+		k := strings.ToLower(dn)
+		if g, ok := kind[k]; ok {
+			return g, nil
+		}
+		g, err := c.isGroup(s, dn)
+		if err == nil {
+			kind[k] = g
+		}
+		return g, err
 	}
 	visited := map[string]bool{strings.ToLower(groupDN): true}
 	frontier, users := []string{groupDN}, []string{}
@@ -4709,7 +5924,7 @@ func (c Config) membersOf(s Searcher, groupDN string, limit int) ([]string, bool
 						continue
 					}
 					visited[strings.ToLower(m)] = true
-					isGroup, err := c.isGroup(s, m)
+					isGroup, err := classify(m)
 					if err != nil {
 						return nil, false, err
 					}
@@ -4772,13 +5987,16 @@ git commit -m "feat(directory): nested groups by configuration, loop-safe and de
 
 **Interfaces:**
 - Consumes: `Pool.Do` (Task 6); `Mapping.Lookup`, `KeysOf`, `oneEntry`, `identityOf`,
-  `usernameUnique` (Task 8); `groupsOf`, `membersOf` (Task 9); `store.Membership`,
-  `PutMembership`, `GetMembership`, `MembershipByKey`, `store.ErrNotFound` (Task 5).
+  `usernameUnique`, `principalUnique` (Task 8); `groupsOf`, `membersOf` (Task 9);
+  `store.Membership`, `PutMembership`, `RefuseMapKeys`, `GetMembership`, `MembershipByKey`,
+  `store.ErrNotFound` (Task 5).
 - Produces:
 
 ```go
 type Source string
 const (Fresh Source = "fresh"; Grace Source = "grace")
+var ErrNotUser = errors.New("directory: not a user: principal")
+func IsUser(principal string) bool
 type Answer struct {
 	store.Membership
 	Source Source
@@ -4792,8 +6010,11 @@ type Resolver struct {
 	Say      func(format string, args ...any)
 	// Declared is the usernames policy subjects declare, by username, the
 	// subject's name the value; a derived one equal to any is
-	// ErrUsernameTaken (Ruling 3). Nil declares none.
+	// ErrUsernameTaken (Ruling 3), fresh or from grace. Nil declares none.
 	Declared func() map[string]string
+	// StoreTimeout bounds the resolver's own store reads and writes (the
+	// grace read, a refusal); 10s when zero.
+	StoreTimeout time.Duration
 }
 func (r *Resolver) Map(ctx context.Context, leaf *x509.Certificate) (Answer, error)
 func (r *Resolver) Verify(ctx context.Context, principal string) (Answer, error)
@@ -4820,6 +6041,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-ldap/ldap/v3"
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/rhwendt/port49/internal/daemon/metrics"
@@ -4828,25 +6050,28 @@ import (
 )
 
 type world struct {
-	clk  *fakeClock
-	srv  *fakeServers
-	dir  *fakeDir
-	st   store.Store
-	say  *lines
-	r    *Resolver
+	clk *fakeClock
+	srv *fakeServers
+	dir *fakeDir
+	st  store.Store
+	say *lines
+	r   *Resolver
 }
+
+const dc01 = "ldaps://dc-01"
 
 // newWorld is one directory server holding alice (in netops-oncall,
 // directly) and a resolver over a memory store, mapping by san_email.
 func newWorld(t *testing.T) *world {
 	t.Helper()
-	w := &world{clk: newClock(), srv: newFakeServers("ldaps://dc-01"), say: &lines{}}
-	w.dir = w.srv.dirs["ldaps://dc-01"]
+	w := &world{clk: newClock(), srv: newFakeServers(dc01), say: &lines{}}
+	w.dir = w.srv.dirs[dc01]
 	cfg := adCfg()
-	cfg.Servers = []Server{{URI: "ldaps://dc-01", Priority: 100}}
+	cfg.Servers = []Server{{URI: dc01, Priority: 100}}
 	cfg.Nested, cfg.Grace, cfg.QueryTimeout = "direct", 4*time.Hour, time.Second
 	cfg.FailureThreshold, cfg.ProbeInterval, cfg.HealthInterval, cfg.HealthTimeout = 3, time.Minute, 30*time.Second, time.Second
 	cfg.Mapping = Mapping{Kind: MapSANEmail, Attribute: "mail", AllowWeak: true, Issuers: pin}
+	cfg.Bind.Mechanism = "simple"
 	m := metrics.New(prometheus.NewRegistry())
 	w.st = memory.New(w.clk.Now)
 	w.r = &Resolver{Cfg: cfg, Pool: NewPool(cfg, w.srv.dial, noCheck, w.clk.Now, m, w.say.say), Store: w.st,
@@ -4855,19 +6080,28 @@ func newWorld(t *testing.T) *world {
 		"sAMAccountName": {"alice"}, "mail": {"alice@corp.example.com"}})
 	w.dir.on("(&(objectClass=person)(mail=alice@corp.example.com))", a)
 	w.dir.on("(&(objectClass=person)(userPrincipalName=alice@corp.example.com))", a)
-	w.dir.on("(&(objectClass=person)(sAMAccountName=alice))", a)
+	w.dir.on("(userPrincipalName=alice@corp.example.com)", a) // principalUnique
+	w.dir.on("(sAMAccountName=alice)", a)                      // usernameUnique
 	w.dir.on(memberFilter(alice), grp(gOnCall, "netops-oncall"))
 	w.dir.on(uniqueFilter("netops-oncall"), grp(gOnCall, "netops-oncall"))
 	return w
 }
 
+// down takes dc-01 away: every connection to it closed, every dial refused.
+func (w *world) down() {
+	w.srv.setDown(dc01, true)
+	w.srv.closeAll(dc01)
+}
+
 func aliceCert(t *testing.T) *x509.Certificate { return leaf(t, nil) }
+
+const alicePrincipal = "user:alice@corp.example.com"
 
 // A fresh mapping is written to the store, by principal and by key.
 func TestMapVerifiesAndStores(t *testing.T) {
 	w := newWorld(t)
 	a, err := w.r.Map(context.Background(), aliceCert(t))
-	if err != nil || a.Source != Fresh || a.Principal != "user:alice@corp.example.com" || a.Username != "alice" ||
+	if err != nil || a.Source != Fresh || a.Principal != alicePrincipal || a.Username != "alice" ||
 		!slices.Equal(a.GroupNames, []string{"netops-oncall"}) || !a.VerifiedAt.Equal(w.clk.Now()) {
 		t.Fatalf("%+v %v", a, err)
 	}
@@ -4885,13 +6119,12 @@ func TestGraceReadsTheStoreAfterARestart(t *testing.T) {
 	if _, err := w.r.Map(context.Background(), aliceCert(t)); err != nil {
 		t.Fatal(err)
 	}
-	w.srv.setDown("ldaps://dc-01", true)
-	w.dir.Close()
+	w.down()
 	restarted := &Resolver{Cfg: w.r.Cfg, Pool: NewPool(w.r.Cfg, w.srv.dial, noCheck, w.clk.Now, w.r.M, w.say.say),
 		Store: w.st, Now: w.clk.Now, M: w.r.M, Say: w.say.say}
 	w.clk.Add(3 * time.Hour)
 	a, err := restarted.Map(context.Background(), aliceCert(t))
-	if err != nil || a.Source != Grace || a.Principal != "user:alice@corp.example.com" {
+	if err != nil || a.Source != Grace || a.Principal != alicePrincipal {
 		t.Fatalf("within grace: %+v %v", a, err)
 	}
 	if c, err := restarted.Current(context.Background(), a.Principal); err != nil || c.Source != Grace {
@@ -4904,6 +6137,134 @@ func TestGraceReadsTheStoreAfterARestart(t *testing.T) {
 	}
 }
 
+// A principal the directory refused before an outage is refused through
+// it (pre-flight C-1): the refusal is stored, by principal and by key, and
+// grace never overrules it. Without it, a user deleted at T and refused at
+// T+5m would mint from grace when the DCs drop at T+10m.
+func TestARefusedPrincipalIsNotServedFromGrace(t *testing.T) {
+	w := newWorld(t)
+	if _, err := w.r.Map(context.Background(), aliceCert(t)); err != nil {
+		t.Fatal(err)
+	}
+	w.clk.Add(5 * time.Minute)
+	w.dir.on("(&(objectClass=person)(userPrincipalName=alice@corp.example.com))") // deleted
+	if _, err := w.r.Verify(context.Background(), alicePrincipal); !errors.Is(err, ErrUnmapped) {
+		t.Fatalf("verify after the deletion: %v", err)
+	}
+	w.clk.Add(5 * time.Minute)
+	w.down()
+	if a, err := w.r.Map(context.Background(), aliceCert(t)); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("a bind in the outage: %+v %v, want ErrUnavailable", a, err)
+	}
+	if a, err := w.r.Current(context.Background(), alicePrincipal); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("a mint in the outage: %+v %v, want ErrUnavailable", a, err)
+	}
+	if m, _ := w.st.GetMembership(context.Background(), alicePrincipal); !m.Refused {
+		t.Fatalf("the refusal was not stored: %+v", m)
+	}
+}
+
+// A bind refused by the key the certificate searched with (no entry maps)
+// is stored by that key, so grace refuses the certificate too.
+func TestAnUnmappedCertificateIsRefusedByKey(t *testing.T) {
+	w := newWorld(t)
+	if _, err := w.r.Map(context.Background(), aliceCert(t)); err != nil {
+		t.Fatal(err)
+	}
+	w.clk.Add(time.Minute)
+	w.dir.on("(&(objectClass=person)(mail=alice@corp.example.com))") // mail removed
+	if _, err := w.r.Map(context.Background(), aliceCert(t)); !errors.Is(err, ErrUnmapped) {
+		t.Fatalf("%v", err)
+	}
+	w.down()
+	if _, err := w.r.Map(context.Background(), aliceCert(t)); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("a bind in the outage: %v, want ErrUnavailable", err)
+	}
+}
+
+// A principal claimed by another entry than the one it was verified on is
+// identity_unmapped, at a bind and on a re-verification (pre-flight C-2):
+// alice's UPN moves off her entry and mallory sets hers to it, and
+// mallory's own certificate never becomes user:alice@. The refusal keeps
+// alice's pin, so a second try fails the same way.
+func TestAPrincipalOnAnotherEntryIsUnmapped(t *testing.T) {
+	w := newWorld(t)
+	if _, err := w.r.Map(context.Background(), aliceCert(t)); err != nil {
+		t.Fatal(err)
+	}
+	w.clk.Add(time.Minute)
+	mallory := entry("CN=Mallory,OU=Staff,DC=corp", map[string][]string{"userPrincipalName": {"alice@corp.example.com"},
+		"sAMAccountName": {"mallory"}, "mail": {"mallory@corp.example.com"}})
+	w.dir.on("(&(objectClass=person)(mail=mallory@corp.example.com))", mallory)
+	w.dir.on("(&(objectClass=person)(userPrincipalName=alice@corp.example.com))", mallory)
+	w.dir.on("(userPrincipalName=alice@corp.example.com)", mallory) // alice's own entry no longer holds it
+	w.dir.on("(sAMAccountName=mallory)", mallory)
+	mcert := leaf(t, func(c *x509.Certificate) { c.EmailAddresses = []string{"mallory@corp.example.com"} })
+	for i := 0; i < 2; i++ {
+		a, err := w.r.Map(context.Background(), mcert)
+		if !errors.Is(err, ErrUnmapped) || !strings.Contains(err.Error(), "CN=Mallory") {
+			t.Fatalf("mallory's bind %d: %+v %v", i, a, err)
+		}
+		if _, err := w.r.Verify(context.Background(), alicePrincipal); !errors.Is(err, ErrUnmapped) {
+			t.Fatalf("re-verifying alice %d: %v", i, err)
+		}
+	}
+	if m, _ := w.st.GetMembership(context.Background(), alicePrincipal); m.EntryID != "dn:"+strings.ToLower(alice) {
+		t.Fatalf("the refusal dropped alice's pin: %+v", m)
+	}
+}
+
+// Two entries holding one principal value are both refused (pre-flight
+// C-2), at a bind as on a re-verification.
+func TestAPrincipalTwoEntriesHoldIsRefusedAtBind(t *testing.T) {
+	w := newWorld(t)
+	mallory := entry("CN=Mallory,OU=Staff,DC=corp", map[string][]string{"userPrincipalName": {"alice@corp.example.com"},
+		"sAMAccountName": {"mallory"}})
+	a := entry(alice, map[string][]string{"userPrincipalName": {"alice@corp.example.com"}, "sAMAccountName": {"alice"}})
+	w.dir.on("(userPrincipalName=alice@corp.example.com)", a, mallory)
+	if _, err := w.r.Map(context.Background(), aliceCert(t)); !errors.Is(err, ErrAmbiguous) {
+		t.Fatalf("%v", err)
+	}
+}
+
+// A rotated bind password is the server not answering (pre-flight I-2):
+// a request in it is served from grace.
+func TestABindRefusalFailsOverAndReachesGrace(t *testing.T) {
+	w := newWorld(t)
+	if _, err := w.r.Map(context.Background(), aliceCert(t)); err != nil {
+		t.Fatal(err)
+	}
+	w.srv.setRefuse(dc01, ldap.NewError(ldap.LDAPResultInvalidCredentials, errors.New("invalid credentials")))
+	w.srv.closeAll(dc01) // the held connection drops; the next dial is refused
+	for i := 0; i < 2; i++ {
+		if a, err := w.r.Current(context.Background(), alicePrincipal); err != nil || a.Source != Grace {
+			t.Fatalf("request %d: %+v %v, want grace", i, a, err)
+		}
+	}
+	if !w.say.has("refused the bind (simple)") {
+		t.Fatalf("%v", w.say.l)
+	}
+}
+
+// A server slower than query_timeout, asked under a caller deadline
+// shorter still, reaches grace: the directory call is bounded by
+// query_timeout alone and the grace read has its own budget (pre-flight
+// I-8), so a slow DC is never blamed on the store.
+func TestASlowServerReachesGrace(t *testing.T) {
+	w := newWorld(t)
+	if _, err := w.r.Map(context.Background(), aliceCert(t)); err != nil {
+		t.Fatal(err)
+	}
+	w.dir.mu.Lock()
+	w.dir.delay = 3 * time.Second
+	w.dir.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	if a, err := w.r.Current(ctx, alicePrincipal); err != nil || a.Source != Grace {
+		t.Fatalf("%+v %v, want grace", a, err)
+	}
+}
+
 // Verify never answers from grace: the scheduled refresh stamps only what
 // a server said (Ruling 12).
 func TestVerifyNeverServesGrace(t *testing.T) {
@@ -4911,9 +6272,8 @@ func TestVerifyNeverServesGrace(t *testing.T) {
 	if _, err := w.r.Map(context.Background(), aliceCert(t)); err != nil {
 		t.Fatal(err)
 	}
-	w.srv.setDown("ldaps://dc-01", true)
-	w.dir.Close()
-	if _, err := w.r.Verify(context.Background(), "user:alice@corp.example.com"); !errors.Is(err, ErrUnavailable) {
+	w.down()
+	if _, err := w.r.Verify(context.Background(), alicePrincipal); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("%v", err)
 	}
 }
@@ -4927,13 +6287,40 @@ func TestVerifyAGoneEntryIsUnmapped(t *testing.T) {
 	}
 }
 
-// A derived username a policy subject declares collides (Ruling 3).
-func TestADeclaredUsernameCollides(t *testing.T) {
+// A machine principal is never searched for, and never a refusal: the
+// directory holds no entry for it (pre-flight I-10).
+func TestAMachinePrincipalIsNeverSearched(t *testing.T) {
 	w := newWorld(t)
-	w.r.Declared = func() map[string]string { return map[string]string{"alice": "svc_alice"} }
+	for _, p := range []string{"app:deploy", "spiffe://corp/ns/x", "system:serviceaccount:ns:sa"} {
+		_, err := w.r.Verify(context.Background(), p)
+		if err == nil || errors.Is(err, ErrUnmapped) || !errors.Is(err, ErrNotUser) {
+			t.Fatalf("%s: %v, want ErrNotUser", p, err)
+		}
+	}
+	if len(w.dir.calls) != 0 {
+		t.Fatalf("%d searches for machine principals", len(w.dir.calls))
+	}
+}
+
+// A derived username a policy subject declares collides (Ruling 3), on a
+// fresh answer and on a grace one (pre-flight M-11): a declaration made
+// in a policy reload during an outage still refuses the stored membership.
+func TestADeclaredUsernameCollides(t *testing.T) {
+	declared := func() map[string]string { return map[string]string{"alice": "svc_alice"} }
+	w := newWorld(t)
+	w.r.Declared = declared
 	if _, err := w.r.Map(context.Background(), aliceCert(t)); !errors.Is(err, ErrUsernameTaken) ||
 		!strings.Contains(err.Error(), "svc_alice") {
-		t.Fatalf("%v", err)
+		t.Fatalf("fresh: %v", err)
+	}
+	w = newWorld(t)
+	if _, err := w.r.Map(context.Background(), aliceCert(t)); err != nil {
+		t.Fatal(err)
+	}
+	w.down()
+	w.r.Declared = declared
+	if _, err := w.r.Current(context.Background(), alicePrincipal); !errors.Is(err, ErrUsernameTaken) {
+		t.Fatalf("grace: %v", err)
 	}
 }
 
@@ -4941,20 +6328,38 @@ func TestADeclaredUsernameCollides(t *testing.T) {
 // slow answer cannot undo a removal (Ruling 10).
 func TestAStaleVerificationDoesNotWin(t *testing.T) {
 	w := newWorld(t)
-	if _, err := w.r.Verify(context.Background(), "user:alice@corp.example.com"); err != nil {
+	if _, err := w.r.Verify(context.Background(), alicePrincipal); err != nil {
 		t.Fatal(err)
 	}
 	w.clk.Add(-time.Minute)
 	w.dir.on(memberFilter(alice)) // no groups any more, but verified "earlier"
-	if _, err := w.r.Verify(context.Background(), "user:alice@corp.example.com"); err != nil {
-		t.Fatal(err)
+	a, err := w.r.Verify(context.Background(), alicePrincipal)
+	if err != nil || len(a.GroupDNs) != 0 {
+		t.Fatalf("the second answer: %+v %v, want no groups (pre-flight M-10)", a, err)
 	}
-	m, _ := w.st.GetMembership(context.Background(), "user:alice@corp.example.com")
+	m, _ := w.st.GetMembership(context.Background(), alicePrincipal)
 	if len(m.GroupDNs) != 1 {
 		t.Fatalf("an earlier answer replaced the later one: %+v", m)
 	}
 }
 ```
+
+Add to `fake_test.go`:
+
+```go
+// closeAll closes every connection dialled to uri, as a server going away
+// or dropping its clients does.
+func (f *fakeServers) closeAll(uri string) {
+	f.mu.Lock()
+	cs := slices.Clone(f.conns[uri])
+	f.mu.Unlock()
+	for _, c := range cs {
+		_ = c.Close()
+	}
+}
+```
+
+(with `"slices"` in its imports).
 
 Create `internal/directory/prewarm_test.go`. It asserts that `Prewarm` with `[]string{gOnCall}`
 under `direct` reads the group's `member` (base scope, `(objectClass=*)`) and classifies each
@@ -4964,7 +6369,7 @@ two members stops at one and reports `Capped`.
 
 - [ ] **Step 2: Run them to verify they fail**
 
-Run: `go test ./internal/directory/ -run 'MapVerifies|Grace|VerifyNever|VerifyAGone|DeclaredUsername|StaleVerification|Prewarm' -count=1`
+Run: `go test ./internal/directory/ -run 'MapVerifies|Grace|Refused|Unmapped|AnotherEntry|TwoEntriesHold|BindRefusal|SlowServer|VerifyNever|VerifyAGone|MachinePrincipal|DeclaredUsername|StaleVerification|Prewarm' -count=1`
 Expected: FAIL, undefined `Resolver`.
 
 - [ ] **Step 3: The resolver**
@@ -4979,6 +6384,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -4997,6 +6403,15 @@ const (
 	Grace Source = "grace"
 )
 
+// ErrNotUser is a principal the directory holds no entry for: a machine
+// principal (spiffe://, system:serviceaccount:, app:). It is never a
+// refusal, so nothing revokes on it (pre-flight I-10).
+var ErrNotUser = errors.New("directory: not a user: principal")
+
+// IsUser reports whether principal is one the directory resolves: a
+// user: principal (design §7). Every other is policy.MemberOf alone.
+func IsUser(principal string) bool { return strings.HasPrefix(principal, "user:") }
+
 // Answer is a membership and where it came from.
 type Answer struct {
 	store.Membership
@@ -5012,6 +6427,10 @@ type Resolver struct {
 	M        *metrics.Metrics
 	Say      func(format string, args ...any)
 	Declared func() map[string]string
+	// StoreTimeout bounds each store read and write the resolver makes
+	// on its own budget (the grace read, a refusal); 10s when zero, as
+	// the broker's holdTimeout.
+	StoreTimeout time.Duration
 
 	mu   sync.Mutex
 	said map[string]time.Time
@@ -5020,6 +6439,23 @@ type Resolver struct {
 // TTL is a membership record's lease: past grace, so a policy reload
 // judges a context by the membership its principal last had (Ruling 10).
 func (r *Resolver) TTL() time.Duration { return max(r.Cfg.Grace, 24*time.Hour) }
+
+func (r *Resolver) storeCtx(ctx context.Context) (context.Context, context.CancelFunc) {
+	d := r.StoreTimeout
+	if d == 0 {
+		d = 10 * time.Second
+	}
+	return context.WithTimeout(context.WithoutCancel(ctx), d)
+}
+
+// lookup is one verification: how the entry is found, and what it must
+// still be.
+type lookup struct {
+	find   func(Searcher) (*ldap.Entry, error)
+	want   string // the principal the entry must still give; "" at a bind or a pre-warm
+	mapKey string // the key a bind searched with: indexed on success, refused on a refusal
+	say    string // what names the lookup in a line said once
+}
 
 // Map maps a client certificate to its membership at a bind (Ruling 4):
 // from a server, written to the store; with no server answering, from the
@@ -5030,20 +6466,25 @@ func (r *Resolver) Map(ctx context.Context, leaf *x509.Certificate) (Answer, err
 		r.count("unmapped")
 		return Answer{}, err
 	}
-	a, err := r.verify(ctx, r.byFilter(l.Filter), "", l.Filter)
+	a, err := r.verify(ctx, lookup{find: r.byFilter(l.Filter), mapKey: l.Key, say: l.Filter})
 	if !errors.Is(err, ErrUnavailable) {
 		return a, err
 	}
-	m, gerr := r.Store.MembershipByKey(ctx, l.Key)
-	return r.grace(m, gerr, err, "this certificate")
+	return r.grace(ctx, func(ctx context.Context) (store.Membership, error) {
+		return r.Store.MembershipByKey(ctx, l.Key)
+	}, err, "this certificate")
 }
 
 // Verify reads principal's entry and groups from a server, never from
-// grace: the scheduled refresh and an explicit re-check (Ruling 12).
+// grace: the scheduled refresh and an explicit re-check (Ruling 12). The
+// entry must be the one the principal is pinned to (verify's pin check).
 func (r *Resolver) Verify(ctx context.Context, principal string) (Answer, error) {
+	if !IsUser(principal) {
+		return Answer{}, fmt.Errorf("%w: %s", ErrNotUser, printsafe.Line(principal, 200))
+	}
 	v := strings.TrimPrefix(principal, "user:")
 	filter := fmt.Sprintf("(&%s(%s=%s))", r.Cfg.UserFilter, r.Cfg.PrincipalAttribute, ldap.EscapeFilter(v))
-	return r.verify(ctx, r.byFilter(filter), principal, filter)
+	return r.verify(ctx, lookup{find: r.byFilter(filter), want: principal, say: filter})
 }
 
 // byFilter finds the one entry filter matches under base_dn.
@@ -5075,12 +6516,13 @@ func (r *Resolver) Current(ctx context.Context, principal string) (Answer, error
 	if !errors.Is(err, ErrUnavailable) {
 		return a, err
 	}
-	m, gerr := r.Store.GetMembership(ctx, principal)
-	return r.grace(m, gerr, err, principal)
+	return r.grace(ctx, func(ctx context.Context) (store.Membership, error) {
+		return r.Store.GetMembership(ctx, principal)
+	}, err, principal)
 }
 
-// Stored is the membership the store holds, whatever its age: what a
-// policy refresh judges by (Ruling 12). false with none.
+// Stored is the membership the store holds, whatever its age, refused or
+// not: what a policy refresh judges by (Ruling 12). false with none.
 func (r *Resolver) Stored(ctx context.Context, principal string) (store.Membership, bool, error) {
 	m, err := r.Store.GetMembership(ctx, principal)
 	if errors.Is(err, store.ErrNotFound) {
@@ -5089,32 +6531,58 @@ func (r *Resolver) Stored(ctx context.Context, principal string) (store.Membersh
 	return m, err == nil, err
 }
 
-// verify finds the entry, derives its identity, checks its username's
-// uniqueness and reads its groups, on the pool, then writes the store.
-// want, when set, is the principal the entry must still give; key names
-// the lookup in a line said once.
-func (r *Resolver) verify(ctx context.Context, find func(Searcher) (*ldap.Entry, error), want, key string) (Answer, error) {
+// verify finds the entry, derives its identity, checks that its principal
+// and username are its alone and reads its groups, on the pool; then
+// checks the entry is the one the principal is pinned to, and writes the
+// store. The
+// pool call is bounded by query_timeout alone, never by the caller's
+// shorter deadline (pre-flight I-8), so a slow DC reaches grace. A
+// refusal (unmapped, ambiguous, collision) is written too (pre-flight
+// C-1): by the principal asked for, by the principal the entry gave when
+// it is that principal's own (its value or username held twice), and by
+// the key a bind searched with.
+func (r *Resolver) verify(ctx context.Context, q lookup) (Answer, error) {
 	var id Identity
 	var g Groups
 	var keys []string
-	srv, err := r.Pool.Do(ctx, func(s Searcher) error {
-		e, err := find(s)
+	refuse := ""
+	srv, err := r.Pool.Do(context.WithoutCancel(ctx), func(s Searcher) error {
+		e, err := q.find(s)
 		if err != nil {
 			return err
 		}
 		if id, err = r.Cfg.identityOf(e); err != nil {
 			return err
 		}
-		if want != "" && id.Principal != want {
+		if q.want != "" && id.Principal != q.want {
 			return fmt.Errorf("%w: the entry now gives %s", ErrUnmapped, id.Principal)
 		}
+		if err := r.Cfg.principalUnique(s, id); err != nil {
+			refuse = id.Principal
+			return err
+		}
 		if err := r.Cfg.usernameUnique(s, id); err != nil {
+			refuse = id.Principal
 			return err
 		}
 		keys = r.Cfg.Mapping.KeysOf(e)
 		g, err = r.Cfg.groupsOf(s, id.DN)
 		return err
 	})
+	if err == nil {
+		// The pin (Ruling 3; pre-flight C-2): a principal the store holds
+		// for another entry is refused, at a bind as on a re-verification.
+		// No refusal is written for the principal here at a bind: it is
+		// another person's, and its record (with its pin) stands.
+		err = r.pinned(ctx, id)
+	}
+	if err == nil {
+		if who, ok := r.declared()[id.Username]; ok {
+			refuse = id.Principal
+			err = fmt.Errorf("%w: the directory derives username %q for %s, which subject %q declares",
+				ErrUsernameTaken, id.Username, id.Principal, who)
+		}
+	}
 	switch {
 	case errors.Is(err, ErrUnavailable):
 		r.sayOnce("unavailable", time.Hour, "directory: no server answered (%s); serving memberships verified within "+
@@ -5122,22 +6590,20 @@ func (r *Resolver) verify(ctx context.Context, find func(Searcher) (*ldap.Entry,
 		return Answer{}, err
 	case errors.Is(err, ErrAmbiguous):
 		r.count("ambiguous")
-		r.sayOnce("ambiguous:"+key, time.Hour, "directory: identity_ambiguous: %s; refusing it: two people "+
+		r.sayOnce("ambiguous:"+q.say, time.Hour, "directory: identity_ambiguous: %s; refusing it: two people "+
 			"matching one certificate is an impersonation path (design §7)", printsafe.Line(err.Error(), 400))
+		r.refuse(ctx, q, refuse, id)
 		return Answer{}, err
 	case errors.Is(err, ErrUsernameTaken):
 		r.count("collision")
+		r.refuse(ctx, q, refuse, id)
 		return Answer{}, err
 	case errors.Is(err, ErrUnmapped):
 		r.count("unmapped")
+		r.refuse(ctx, q, "", id)
 		return Answer{}, err
 	case err != nil:
 		return Answer{}, err
-	}
-	if who, ok := r.declared()[id.Username]; ok {
-		r.count("collision")
-		return Answer{}, fmt.Errorf("%w: the directory derives username %q for %s, which subject %q declares",
-			ErrUsernameTaken, id.Username, id.Principal, who)
 	}
 	if g.Truncated {
 		r.M.DirectoryWalksTruncated.Inc()
@@ -5153,24 +6619,105 @@ func (r *Resolver) verify(ctx context.Context, find func(Searcher) (*ldap.Entry,
 			"two or more groups under %s; a subject naming one matches no one (use its DN)",
 			strings.Join(g.Ambiguous, ", "), r.Cfg.GroupsBaseDN)
 	}
-	m := store.Membership{Principal: id.Principal, DN: id.DN, Username: id.Username, GroupDNs: g.DNs,
-		GroupNames: g.Names, MapKeys: keys, VerifiedAt: r.Now(), Server: srv.URI, Site: srv.Site}
-	if err := r.Store.PutMembership(ctx, m, r.TTL()); err != nil {
+	if len(g.Unfound) > 0 {
+		r.sayOnce("unfound:"+strings.Join(g.Unfound, ","), time.Hour, "directory: group name(s) %s matched no group "+
+			"under %s by %s when checked for uniqueness; a subject naming one matches no one until it does",
+			strings.Join(g.Unfound, ", "), r.Cfg.GroupsBaseDN, r.Cfg.GroupNameAttribute)
+	}
+	if q.mapKey != "" && !slices.Contains(keys, q.mapKey) {
+		keys = append(keys, q.mapKey) // the key the bind searched with is indexed too (pre-flight M-2)
+		slices.Sort(keys)
+	}
+	m := store.Membership{Principal: id.Principal, DN: id.DN, EntryID: id.EntryID, Username: id.Username,
+		GroupDNs: g.DNs, GroupNames: g.Names, MapKeys: keys, VerifiedAt: r.Now(), Server: srv.URI, Site: srv.Site}
+	sctx, cancel := r.storeCtx(ctx)
+	defer cancel()
+	if err := r.Store.PutMembership(sctx, m, r.TTL()); err != nil {
 		return Answer{}, err
 	}
 	r.count("fresh")
 	return Answer{Membership: m, Source: Fresh}, nil
 }
 
-// grace answers from a stored membership verified within grace, or
-// ErrUnavailable saying why not.
-func (r *Resolver) grace(m store.Membership, gerr, cause error, who string) (Answer, error) {
+// pinned is ErrUnmapped when the store holds id.Principal pinned to
+// another entry (Ruling 3): a principal_attribute value moved between
+// entries never carries the principal with it. A refused record keeps its
+// pin and is checked the same way.
+func (r *Resolver) pinned(ctx context.Context, id Identity) error {
+	sctx, cancel := r.storeCtx(ctx)
+	defer cancel()
+	m, err := r.Store.GetMembership(sctx, id.Principal)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return nil
+	case err != nil:
+		return err
+	case m.EntryID == "" || m.EntryID == id.EntryID:
+		return nil
+	}
+	return fmt.Errorf("%w: %s is pinned to entry %s and is now claimed by %s (%s); a %s value moved "+
+		"between entries never carries a principal with it (Ruling 3)", ErrUnmapped, id.Principal,
+		printsafe.Line(m.EntryID, 120), printsafe.Line(id.DN, 200), printsafe.Line(id.EntryID, 120),
+		r.Cfg.PrincipalAttribute)
+}
+
+// refuse stores the directory's "no" (pre-flight C-1) for q.want, for
+// also (a principal the entry gave whose value or username another entry
+// holds), and for q.mapKey, so grace never answers yes in an outage that
+// follows. Each principal's refusal keeps the pin its record held, or the
+// refused entry's own id when none was held, so a refusal never frees the
+// principal for the next claimant. A failed write is said; the refusal
+// itself stands either way.
+func (r *Resolver) refuse(ctx context.Context, q lookup, also string, id Identity) {
+	now := r.Now()
+	sctx, cancel := r.storeCtx(ctx)
+	defer cancel()
+	ps := []string{q.want}
+	if also != q.want {
+		ps = append(ps, also)
+	}
+	for _, p := range ps {
+		if p == "" {
+			continue
+		}
+		pin := ""
+		if held, err := r.Store.GetMembership(sctx, p); err == nil {
+			pin = held.EntryID
+		} else if p == id.Principal {
+			pin = id.EntryID
+		}
+		if err := r.Store.PutMembership(sctx, store.Membership{Principal: p, EntryID: pin, Refused: true,
+			VerifiedAt: now}, r.TTL()); err != nil {
+			r.sayOnce("refuse:"+p, time.Hour, "directory: %s: storing the directory's refusal failed (%v); grace "+
+				"may serve its older membership in an outage until the store takes the write", p, err)
+		}
+	}
+	if q.mapKey != "" {
+		if err := r.Store.RefuseMapKeys(sctx, []string{q.mapKey}, now, r.TTL()); err != nil {
+			r.sayOnce("refusekey:"+q.mapKey, time.Hour, "directory: storing a certificate's refusal failed (%v)", err)
+		}
+	}
+}
+
+// grace answers from a stored membership verified within grace, read on
+// its own budget, or ErrUnavailable saying why not. A refused record is
+// never served (pre-flight C-1), and a declared username still collides
+// (pre-flight M-11).
+func (r *Resolver) grace(ctx context.Context, read func(context.Context) (store.Membership, error), cause error,
+	who string) (Answer, error) {
+	sctx, cancel := r.storeCtx(ctx)
+	defer cancel()
+	m, gerr := read(sctx)
 	switch {
 	case errors.Is(gerr, store.ErrNotFound):
 		r.count("unavailable")
 		return Answer{}, fmt.Errorf("%w: no membership is stored for %s (%v)", ErrUnavailable, who, cause)
 	case gerr != nil:
 		return Answer{}, gerr
+	case m.Refused:
+		r.count("unavailable")
+		return Answer{}, fmt.Errorf("%w: the directory refused %s at %s, before it stopped answering; grace never "+
+			"overrules a refusal", ErrUnavailable, m.Principal, m.VerifiedAt.UTC().Format(time.RFC3339))
 	}
 	age := r.Now().Sub(m.VerifiedAt)
 	if r.Cfg.Grace == 0 || age > r.Cfg.Grace {
@@ -5180,6 +6727,11 @@ func (r *Resolver) grace(m store.Membership, gerr, cause error, who string) (Ans
 			age.Round(time.Minute), r.Cfg.Grace)
 		return Answer{}, fmt.Errorf("%w: the membership stored for %s was verified %s ago, past directory.grace (%s)",
 			ErrUnavailable, m.Principal, age.Round(time.Minute), r.Cfg.Grace)
+	}
+	if subj, ok := r.declared()[m.Username]; ok {
+		r.count("collision")
+		return Answer{}, fmt.Errorf("%w: the stored membership gives username %q for %s, which subject %q declares",
+			ErrUsernameTaken, m.Username, m.Principal, subj)
 	}
 	r.count("grace")
 	r.sayOnce("grace:"+m.Principal, time.Hour, "directory: %s minted from a membership verified %s ago (grace)",
@@ -5216,6 +6768,12 @@ func (r *Resolver) sayOnce(key string, every time.Duration, format string, args 
 `sayOnce`'s map is bounded by the population: one key per principal, filter and DN, hourly.
 That is the same bound as `Broker.said` (7c).
 
+A user whose entry moves OU keeps their principal, since the pin is `objectGUID` or
+`entryUUID`. On a directory that returns neither, the pin is the DN, and a move is
+`identity_unmapped` until the record lapses (`max(grace, 24h)` after the last verification or
+refusal). A re-created entry for the same person (a new id) is refused the same way: fail
+closed, said with both ids.
+
 - [ ] **Step 4: Pre-warm**
 
 Create `internal/directory/prewarm.go`:
@@ -5250,7 +6808,7 @@ func (r *Resolver) Prewarm(ctx context.Context, groups []string) (PrewarmReport,
 	var dns []string
 	_, err := r.Pool.Do(ctx, func(s Searcher) error {
 		for _, g := range groups {
-			if strings.Contains(g, "=") {
+			if isDN(g) {
 				dns = append(dns, g)
 				continue
 			}
@@ -5294,7 +6852,7 @@ func (r *Resolver) Prewarm(ctx context.Context, groups []string) (PrewarmReport,
 		if ctx.Err() != nil {
 			return rep, ctx.Err()
 		}
-		if _, err := r.verify(ctx, r.byDN(dn), "", dn); err != nil {
+		if _, err := r.verify(ctx, lookup{find: r.byDN(dn), say: dn}); err != nil {
 			if errors.Is(err, ErrUnavailable) {
 				return rep, err
 			}
@@ -5306,6 +6864,17 @@ func (r *Resolver) Prewarm(ctx context.Context, groups []string) (PrewarmReport,
 	r.M.DirectoryPrewarmPrincipals.Set(float64(rep.Principals))
 	r.M.DirectoryPrewarmLastSuccess.Set(float64(r.Now().Unix()))
 	return rep, nil
+}
+
+// isDN is Ruling 7's test, shared with the policy's group match: a value
+// holding "=" that ldap.ParseDN accepts is a DN; anything else is a name
+// (pre-flight M-9).
+func isDN(g string) bool {
+	if !strings.Contains(g, "=") {
+		return false
+	}
+	_, err := ldap.ParseDN(g)
+	return err == nil
 }
 ```
 
@@ -5842,11 +7411,13 @@ git commit -m "feat(policy): resolve a member: every matching subject composes, 
 - Modify: `internal/broker/identity.go:22-94` (`Identity`, `principalOf`): split out
   `CertIdentity`
 - Modify: `internal/broker/listen.go:100-110` (`Listener` fields), `:149-158` (`trackedConn`),
-  `:276-330` (`handshake`), `:643-650` (`acceptedAt` beside a new `mappedOf`)
+  `:276-330` (`handshake`), `:392-415` (`bind`: the legacy principal's mark), `:643-650`
+  (`acceptedAt` beside a new `mappedOf`)
 - Modify: `internal/broker/server.go:85-91` (`VerifyConnection`), `:93` (`ConnContext`)
 - Modify: `internal/broker/broker.go:60-80` (`Broker.Directory`), `:199-237` (`heldConn`),
-  `:415-463` (`authenticate`)
-- Create: `internal/broker/member.go`, `internal/broker/member_test.go`
+  `:415-463` (`authenticate`), `:514-529` (`revocation`: further principals)
+- Create: `internal/broker/member.go`, `internal/broker/member_test.go`,
+  `internal/directory/static.go`
 
 **Interfaces:**
 - Consumes: `directory.Resolver.Map`, `Current`, `directory.Answer`, `directory.ErrUnmapped`,
@@ -5866,6 +7437,17 @@ Map func(ctx context.Context, cs tls.ConnectionState, cred store.Credential) (di
 func mappedOf(c net.Conn) *directory.Answer
 // directoryRefusal is the API's answer for a resolver error.
 func directoryRefusal(err error) *BindRefusal
+// legacyPrincipal is the principal the certificate had before a directory:
+// "user:" + its one email SAN, or "" (pre-flight I-16).
+func legacyPrincipal(leaf *x509.Certificate) string
+func (l *Listener) markedOf(certKey, legacy string) *store.Revocation
+// bind gains legacy, a further principal whose mark refuses
+func (l *Listener) bind(c *trackedConn, principal, legacy, certKey string, refused bool) (*store.Revocation, bool)
+// revocation gains further principals, each read when non-empty
+func (b *Broker) revocation(ctx context.Context, principal string, cred store.Credential, also ...string) (store.Revocation, bool, error)
+
+// internal/directory (static.go)
+func ForTestsStaticResolver(st store.Store, answers map[string]Answer, err error) *Resolver
 ```
 
 - [ ] **Step 1: The failing tests**
@@ -5874,14 +7456,19 @@ Create `internal/broker/member_test.go`. Build the broker's test fixture (the on
 `identity_api_test.go` uses: a `Broker` over memory, a test PKI client certificate). Set
 `b.Directory` to a `directory.Resolver` whose `Pool` dials the in-package fake of Task 6.
 That fake is in `directory`'s `_test` files, so add a small exported test double in a new
-non-test file, `internal/directory/static.go`:
+non-test file, `internal/directory/static.go`. Its name says what it is (pre-flight M-14):
+nothing in production may call it, and Task 16's wiring test asserts no non-test file outside
+`internal/directory` names it (`grep -rn ForTestsStaticResolver --include='*.go' | grep -v _test.go`
+finds only its definition).
 
 ```go
-// NewStaticResolver is a Resolver for the tests of the packages that call
-// one: Map, Verify and Current answer from answers by principal (Map reads
-// the principal as "user:" and the leaf's one email SAN), or err when it is
+// ForTestsStaticResolver is a Resolver for the tests of the packages that
+// call one, and never for production: it answers without a directory.
+// Map, Verify and Current answer from answers by principal (Map reads the
+// principal as "user:" and the leaf's one email SAN), or err when it is
 // set; Stored and grace read st as a real resolver does. It never dials.
-func NewStaticResolver(st store.Store, answers map[string]Answer, err error) *Resolver {
+// Calls counts the answers it gave, so a test asserts it was not asked.
+func ForTestsStaticResolver(st store.Store, answers map[string]Answer, err error) *Resolver {
 	return &Resolver{Store: st, Now: time.Now, M: metrics.New(prometheus.NewRegistry()),
 		Say: func(string, ...any) {}, static: func(principal string) (Answer, error) {
 			if err != nil {
@@ -5896,9 +7483,10 @@ func NewStaticResolver(st store.Store, answers map[string]Answer, err error) *Re
 }
 ```
 
-`Resolver` gains the unexported field `static func(principal string) (Answer, error)`. `Map`,
-`Verify` and `Current` answer from it first when it is set. A test changes an answer between
-calls by mutating the map, guarded by the test's own mutex. Then:
+`Resolver` gains the unexported field `static func(principal string) (Answer, error)` and an
+exported `Calls atomic.Int64` the static path increments. `Map`, `Verify` and `Current`
+answer from it first when it is set. A test changes an answer between calls by mutating the
+map, guarded by the test's own mutex. Then:
 
 ```go
 // With a directory, the principal is the mapping's, pinned at bind, and
@@ -5932,6 +7520,20 @@ func TestNoDirectoryKeepsTheEmailPrincipal(t *testing.T)
 // A certificate with no email SAN passes the handshake when a directory
 // maps it (VerifyConnection checks the chain, not the mapping).
 func TestACertificateWithoutAnEmailSANBindsWithADirectory(t *testing.T)
+
+// A certificate marked by its key, with every directory server down, is
+// answered 401 credential_revoked, never 503 directory_unavailable, and
+// the resolver is never asked (pre-flight I-4; listen.go:294-297's
+// invariant): the static resolver's err is directory.ErrUnavailable and
+// its Calls stays 0.
+func TestAMarkedCertificateIsRevokedBeforeTheDirectoryIsAsked(t *testing.T)
+
+// A mark made by principal before a directory was configured (the
+// certificate's email-SAN principal) still refuses the certificate once
+// the directory maps it to another principal (pre-flight I-16): 401
+// credential_revoked at the bind, and on a request whose held connection
+// bound before the mark.
+func TestAMarkOnTheLegacyPrincipalStillHolds(t *testing.T)
 ```
 
 Write the bodies against the listener tests' helpers (`listen_test.go` dials a `Listener`
@@ -6029,15 +7631,23 @@ func mappedOf(c net.Conn) *directory.Answer {
 In `listen.go`:
 - `trackedConn` gains `mapped *directory.Answer`;
 - `Listener` gains `Map`, with a comment mirroring `Status`'s;
-- in `handshake`, after `Identity`, when `l.Map != nil`, the principal comes from the
-  mapping.
+- `bind` gains `legacy`, checked as a principal mark beside `principal` and the certificate
+  key when non-empty (every existing caller passes `""`);
+- `markedOf(certKey, legacy)` reads `l.marked` under `l.mu` for the certificate key's mark,
+  then the legacy principal's, and returns the first, or nil;
+- in `handshake`, under a directory, the bind runs in Ruling 4's order (pre-flight I-4): the
+  certificate's own marks, then `Status`'s refusal, then `Map`, then `bind`'s principal mark.
 
 ```go
+		var principal, legacy string
 		var cred store.Credential
-		var principal string
 		var err error
 		if l.Map != nil {
-			cred, _, err = CertIdentity(&cs, l.now())
+			var leaf *x509.Certificate
+			cred, leaf, err = CertIdentity(&cs, l.now())
+			if err == nil {
+				legacy = legacyPrincipal(leaf)
+			}
 		} else {
 			principal, cred, err = Identity(&cs, l.now())
 		}
@@ -6045,19 +7655,48 @@ In `listen.go`:
 			l.refuse(c, tc, "identity_refused", err)
 			return
 		}
+		certKey := store.CertKey(cred.Issuer, cred.Serial)
+		var ref *BindRefusal
+		if l.Status != nil {
+			ref = l.Status(cs, cmp.Or(principal, legacy), cred)
+		}
 		if l.Map != nil {
-			mctx, cancel := context.WithTimeout(context.Background(), l.lim.MapTimeout)
-			a, ref := l.Map(mctx, cs, cred)
-			cancel()
-			if ref != nil {
-				l.m.BrokerConnectionEvents.WithLabelValues("identity_refused").Inc()
-				l.answerRefused(tc, ref.Status, api.Error{Error: ref.Error, Detail: ref.Detail}, ref.RetryAfter,
-					"", cred, ref.Reason)
+			// The marks the certificate itself answers to (its key, and the
+			// principal its email SAN gave before a directory: pre-flight
+			// I-16) are decided before the directory is asked, so a revoked
+			// certificate is answered credential_revoked and never a
+			// directory_unavailable the agent keeps its session on
+			// (pre-flight I-4; the invariant above).
+			if rv := l.markedOf(certKey, legacy); rv != nil {
+				if ref != nil && ref.queue != nil {
+					ref.queue()
+				}
+				l.m.BrokerConnectionEvents.WithLabelValues("revoked_refused").Inc()
+				l.answerRefused(tc, http.StatusUnauthorized, revokedError(*rv), 0, legacy, cred,
+					decision.CredentialRevoked)
 				return
 			}
-			principal, c.mapped = a.Principal, &a
+			if ref == nil {
+				mctx, cancel := context.WithTimeout(context.Background(), l.lim.MapTimeout)
+				a, mref := l.Map(mctx, cs, cred)
+				cancel()
+				if mref != nil {
+					l.m.BrokerConnectionEvents.WithLabelValues("identity_refused").Inc()
+					l.answerRefused(tc, mref.Status, api.Error{Error: mref.Error, Detail: mref.Detail},
+						mref.RetryAfter, "", cred, mref.Reason)
+					return
+				}
+				principal, c.mapped = a.Principal, &a
+			}
 		}
+		rv, ok := l.bind(c, principal, legacy, certKey, ref != nil)
 ```
+
+and the rest of the block (queueing `ref`, the `switch` on `ok`, `rv` and `ref`) is unchanged.
+`listen.go` gains the imports `cmp` and `crypto/x509`.
+With `Status` refusing under a directory, `principal` is empty and `bind` decides on the
+certificate's marks, as before. `legacyPrincipal` is `principalOf(leaf)`'s answer, or `""`
+when it errs.
 
 `ListenerLimits` gains `MapTimeout time.Duration` (port49d sets the directory's
 `query_timeout` plus 1s; a zero is `HandshakeTimeout`). The `"identity_refused"` label is
@@ -6095,8 +7734,13 @@ held connection (a handler driven without `Server`, as the tests do), it maps no
 answered with `answerRefusal(w, r, directoryRefusal(err))` and recorded under the event with
 its reason, as `certRefusal` is.
 
-Every other line of `authenticate` (the session age, the marks by principal and
-certificate, the certificate status) is unchanged, and it now runs on the mapped principal.
+Under a directory, `authenticate` keeps Ruling 4's order too: the session age; then
+`b.revocation(ctx, "", cred, legacy)` (the certificate's key and its legacy principal) and
+`certRefusal`, both before `pinnedPrincipal`, so a request with no held connection never maps
+a revoked certificate; then `pinnedPrincipal`; then `b.revocation(ctx, principal, cred)` for
+the mapped principal. `revocation` gains `also ...string`, read as principal marks after
+`principal`, and skips an empty principal. Without a directory every line of `authenticate`
+is unchanged.
 
 - [ ] **Step 4: Run them to verify they pass**
 
@@ -6132,8 +7776,12 @@ git commit -m "feat(broker): map the certificate at bind and pin the principal t
 
 ```go
 // memberFor is the membership a request uses (Ruling 10): Current for the
-// pinned principal, fresh or grace; no directory is MemberOf(principal).
+// pinned principal, fresh or grace; no directory, or a machine principal,
+// is MemberOf(principal).
 func (b *Broker) memberFor(ctx context.Context, principal string) (policy.Member, *directory.Answer, error)
+// memberBudget is the deadline memberFor is given: query_timeout plus
+// holdTimeout under a directory (pre-flight I-8), holdTimeout without.
+func (b *Broker) memberBudget() time.Duration
 func directoryAuth(a *directory.Answer) *decision.Directory
 ```
 
@@ -6165,10 +7813,20 @@ func TestRevokeOthersThroughAGroup(t *testing.T)
 // /v1/identity answers the subjects, groups, username, verified_at and
 // source.
 func TestIdentityAnswersTheMembership(t *testing.T)
+
+// POST /v1/revoke {mine: true} works with the directory unavailable and
+// nothing stored: revoking oneself never asks the directory (pre-flight
+// I-9). The static resolver's err is directory.ErrUnavailable and its
+// Calls stays 0 across the request.
+func TestRevokeMineNeedsNoDirectory(t *testing.T)
+
+// A machine principal (an app: identity subject) mints under a directory
+// without the directory being asked (pre-flight I-10).
+func TestAMachinePrincipalMintsWithoutTheDirectory(t *testing.T)
 ```
 
 Each body drives the handler through the fixture of Task 12, with
-`directory.NewStaticResolver` answering per principal. A policy loaded with
+`directory.ForTestsStaticResolver` answering per principal. A policy loaded with
 `policy.Env{Directory: policy.DirectoryOn}` holds one group subject and grant. Assert as
 follows:
 - **The token's `VerifiedAt`.** `Candidates` on the minted key reads it.
@@ -6192,7 +7850,8 @@ In `member.go`:
 // bind. The answer is the pinned one only when no server answers and the
 // store holds nothing newer.
 func (b *Broker) memberFor(ctx context.Context, principal string) (policy.Member, *directory.Answer, error) {
-	if b.Directory == nil {
+	if b.Directory == nil || !directory.IsUser(principal) {
+		// A machine principal has no directory entry (pre-flight I-10).
 		return policy.MemberOf(principal), nil, nil
 	}
 	a, err := b.Directory.Current(ctx, principal)
@@ -6200,6 +7859,16 @@ func (b *Broker) memberFor(ctx context.Context, principal string) (policy.Member
 		return policy.Member{}, nil, err
 	}
 	return member(a), &a, nil
+}
+
+// memberBudget is memberFor's deadline: the directory's own query_timeout
+// plus a store read's holdTimeout, so a DC slower than holdTimeout still
+// reaches grace and is never answered store_unavailable (pre-flight I-8).
+func (b *Broker) memberBudget() time.Duration {
+	if b.Directory == nil {
+		return holdTimeout
+	}
+	return b.Directory.Cfg.QueryTimeout + holdTimeout
 }
 
 // directoryAuth is auth.directory for a record (spec §5.7).
@@ -6216,7 +7885,7 @@ In `broker.go`'s `tokens`, after `authenticate` and before `Reserve`, resolve th
 once for the whole batch:
 
 ```go
-	dctx, dcancel := context.WithTimeout(r.Context(), holdTimeout)
+	dctx, dcancel := context.WithTimeout(r.Context(), b.memberBudget())
 	m, answer, err := b.memberFor(dctx, principal)
 	dcancel()
 	if err != nil {
@@ -6267,8 +7936,30 @@ In `explain_api.go`:
   `memberFor(ctx, about)`, so the explanation answers as their mint would. A refusal there is
   the record's reason and the API's answer, as for a mint.
 
-In `revoke_api.go:98`, `pol.HasRight(caller, policy.RightRevokeOthers)` becomes
-`pol.HasRightOf(callerMember, …)`. In `revoke.go:237`, `SubjectOf(key)` names the subject on
+In `revoke_api.go:98`, `mayOthers := pol.HasRight(caller, policy.RightRevokeOthers)` becomes a
+function evaluated only in the two branches that act on someone else, the `case mayOthers:`
+of a key request (after `case req.Mine:`) and the `if !mayOthers` before revoking another
+principal:
+
+```go
+	// mayOthers asks the directory only when the request names another
+	// principal or a key: a caller revoking themselves never waits on the
+	// directory, and can always end their own sessions (pre-flight I-9).
+	mayOthers := func() (bool, *BindRefusal) {
+		ctx, cancel := context.WithTimeout(r.Context(), b.memberBudget())
+		defer cancel()
+		m, _, err := b.memberFor(ctx, caller)
+		if err != nil {
+			return false, directoryRefusal(err)
+		}
+		return pol.HasRightOf(m, policy.RightRevokeOthers), nil
+	}
+```
+
+The key branch becomes `default:` with `ok, ref := mayOthers()` inside it: a refusal is
+answered with `b.answerRefusal(w, r, ref)`, `ok` revokes the key, and neither refuses the right
+as today. The principal branch's `if !mayOthers` becomes the same call after the
+`target == caller` case, so `mine` and a caller naming themselves never call it. In `revoke.go:237`, `SubjectOf(key)` names the subject on
 the revoke record. With a directory, it reads `SubjectsOf(memberFor(key))` from the stored
 membership (`Directory.Stored`) and never queries a server, since a revocation must not wait
 on the directory. With none stored, it names none.
@@ -6292,30 +7983,60 @@ git commit -m "feat(broker): mint, explain, identify and revoke through the dire
 
 ### Task 14: The refresh judges a member: the stored membership on a policy pass, and a session refresh verifies
 
+Tasks 14 and 15 are committed on one branch in order, and the build and `make test` are green
+after each commit: Task 14 adds the judge with every caller passing a stamp of zero, and Task
+15 adds the pass that passes one (pre-flight I-12).
+
 **Files:**
-- Modify: `internal/broker/refresh.go:320-360` (`mintedBy`), `:375-` (`supersedeTokens`),
-  `:478-` (`refreshContexts`, `refreshContext`), `:901-998` (`decideRefresh`), `:1017-1019`
-  (`resolveFor`)
-- Modify: `internal/broker/sessionrefresh.go:290-320`
-- Test: `internal/broker/refresh_test.go`, `internal/broker/sessionrefresh_test.go`
+- Modify: `internal/broker/refresh.go:55-85` (`RefreshReport`: `Unverified`,
+  `UnverifiedPrincipals`, `OldestUnverified`), `:320-360` (`mintedBy`), `:375-` (`supersedeTokens`),
+  `:478-` (`refreshContexts`, `refreshContext`), `:901-998` (`decideRefresh`), `:999-`
+  (`count`), `:1017-1023` (`resolveFor`, `mintedFor`)
+- Modify: `internal/broker/sessionrefresh.go:220-320` (`RefreshSession`), the `/v1/refresh`
+  handler that calls it, `internal/broker/reindex.go:123`
+- Test: `internal/broker/refresh_test.go` (and `:1013`'s `mintedFor` stand-in),
+  `internal/broker/sessionrefresh_test.go`
 
 **Interfaces:**
-- Consumes: `policy.Member`, `ResolveMember`, `ErrCompositionRefused` (Task 11);
-  `directory.Resolver.Stored`, `Current` (Task 10); `store.ContextPolicy.RefreshedAt` (Task 3).
+- Consumes: `policy.Member`, `MemberOf`, `ResolveMember`, `ErrCompositionRefused` (Task 11);
+  `directory.Resolver.Stored`, `Current`, `IsUser`, `ErrUnavailable` (Task 10);
+  `store.ContextPolicy.RefreshedAt`, `StampRefreshed` (Task 3); `store.MembershipPrincipals`
+  (Task 5); `b.memberFor` (Task 13).
 - Produces:
 
 ```go
 // storedMember is the membership a policy pass judges principal by: the
-// store's, whatever its age; none stored is no groups (Ruling 12).
+// store's, if it is unrefused and verified within directory.grace; else
+// no groups (Ruling 12; pre-flight I-14). A machine principal is MemberOf.
 func (b *Broker) storedMember(ctx context.Context, principal string) (policy.Member, error)
 var resolveFor = (*policy.Policy).ResolveMember
+var mintedFor = mintedBy
 func (b *Broker) decideRefresh(cur *policy.Policy, now time.Time, m policy.Member, ref store.ContextRef,
 	c store.Context) refreshStep
 func mintedBy(p *policy.Policy, m policy.Member, d admission.Device, at time.Time, def time.Duration) (minted, bool)
-// refreshContexts and refreshContext gain a `judge passJudge` parameter:
+// passJudge is how a pass learns each principal's member, and under which
+// policy it judges it.
 type passJudge struct {
-	member func(ctx context.Context, principal string) (policy.Member, time.Time, error) // the stamp's time; zero: none
+	// member is principal's member and the stamp's time; a zero time stamps nothing.
+	member func(ctx context.Context, principal string) (policy.Member, time.Time, error)
+	// hold, when set, is the policy each principal is judged under: taken
+	// after member answers, released once that principal's contexts are
+	// written (pre-flight I-11). Unset, cur judges every principal.
+	hold func() (*policy.Policy, func())
 }
+func (b *Broker) refreshContexts(ctx context.Context, cur *policy.Policy, priors []Prior, now time.Time,
+	rep *RefreshReport, sameSource bool, judge passJudge) error
+func (b *Broker) refreshContext(ctx context.Context, cur *policy.Policy, priors []Prior, now time.Time,
+	m policy.Member, ref store.ContextRef, rep *RefreshReport, quarantined map[string]bool,
+	sameSource bool, stamp time.Time) (outcome string, err error)
+// RefreshReport gains
+Unverified           int       // contexts left unstamped: the directory did not answer for their principal
+UnverifiedPrincipals int
+OldestUnverified     time.Time // the least refreshed_at among them
+Narrowed             []string  // principals a pass revoked or narrowed a context of, for token supersession
+// RefreshSession takes the member its handler resolved
+func (b *Broker) RefreshSession(ctx context.Context, m policy.Member, answer *directory.Answer,
+	cred store.Credential, at time.Time) (SessionRefreshReport, error)
 ```
 
 - [ ] **Step 1: The failing tests**
@@ -6328,14 +8049,27 @@ Append to `internal/broker/refresh_test.go`:
 // (Ruling 12), and refreshed_at is not touched.
 func TestAReloadJudgesTheStoredMembership(t *testing.T)
 
-// A principal with no stored membership is judged with no groups: a
-// context it holds only through a group is revoked (fail closed).
-func TestNoStoredMembershipIsNoGroups(t *testing.T)
+// A principal with no stored membership, a refused one, or one verified
+// longer ago than directory.grace, is judged with no groups: a reload that
+// adds a grant to their group writes nothing into their context
+// (pre-flight I-14), and a context held only through a group is revoked.
+func TestAnAbsentRefusedOrOldMembershipIsNoGroups(t *testing.T)
 
 // A context whose subjects' composition a joint check now refuses is
 // revoked composition_refused.
 func TestARefusedCompositionRevokesOnRefresh(t *testing.T)
+
+// A machine principal (app:) is judged as MemberOf under a directory, and
+// keeps its context (pre-flight I-10).
+func TestAMachinePrincipalIsJudgedWithoutTheDirectory(t *testing.T)
+
+// A reload that withdraws a group's grant supersedes its members' unspent
+// tokens, though no identity subject names them (pre-flight I-13).
+func TestAReloadSupersedesAGroupMembersTokens(t *testing.T)
 ```
+
+Update `TestASettlePassComparesNoPolicyWithItself` (`refresh_test.go:1013`): its `mintedFor`
+stand-in takes `m policy.Member` and calls `was(p, m, d, at, def)`.
 
 Append to `internal/broker/sessionrefresh_test.go`:
 
@@ -6347,12 +8081,12 @@ Append to `internal/broker/sessionrefresh_test.go`:
 func TestASessionRefreshVerifiesTheMembership(t *testing.T)
 ```
 
-Write them on the fixtures those files already use, with a `directory.NewStaticResolver` and
+Write them on the fixtures those files already use, with a `directory.ForTestsStaticResolver` and
 a memory store holding the memberships (`PutMembership`).
 
 - [ ] **Step 2: Run them to verify they fail**
 
-Run: `go test ./internal/broker/ -run 'ReloadJudgesTheStored|NoStoredMembership|RefusedCompositionRevokes|SessionRefreshVerifies' -count=1`
+Run: `go test ./internal/broker/ -run 'ReloadJudgesTheStored|AbsentRefusedOrOld|RefusedCompositionRevokes|MachinePrincipalIsJudged|SupersedesAGroupMember|SessionRefreshVerifies' -count=1`
 Expected: FAIL.
 
 - [ ] **Step 3: The pass judges a member**
@@ -6370,19 +8104,65 @@ In `refresh.go`:
 		return refreshStep{revoke: true, rec: rec, outcome: "revoked"}
 ```
 
-- `refreshContexts(ctx, cur, priors, now, rep, sameSource, judge passJudge)` asks
-  `judge.member(ctx, principal)` once per principal, before its contexts:
-  - a `directory.ErrUnavailable` is counted `unverified` per context, left and not stamped
-    (Task 15 says the line);
-  - `ErrUnmapped`, `ErrAmbiguous` and `ErrUsernameTaken` revoke every context of the
-    principal with that reason;
-  - any other error is returned, as a store error is today.
-- `refreshContext` passes `m` to `decideRefresh`. When `judge` gives a non-zero stamp time:
+- `RefreshReport` gains the four fields of Interfaces, and `count` passes `unverified` to
+  `port49_context_refreshes_total` (spec §5.1.3's new outcome).
+- `refreshContexts` gains `judge passJudge`. Per principal, after `ContextsByPrincipal`:
+
+```go
+		m, stamp, jerr := judge.member(ctx, principal)
+		switch {
+		case errors.Is(jerr, directory.ErrUnavailable):
+			// The directory did not answer for this principal: its contexts
+			// are left as they are and unstamped, and context_stale takes
+			// over at the ceiling (Ruling 12). Task 15 says the line.
+			rep.UnverifiedPrincipals++
+			for _, ref := range refs {
+				b.count(rep, "unverified")
+				rep.Unverified++
+				if c, err := b.Store.GetContext(ctx, store.ContextKey{NAS: ref.NAS, Username: ref.Username}); err == nil &&
+					(rep.OldestUnverified.IsZero() || c.RefreshedAt.Before(rep.OldestUnverified)) {
+					rep.OldestUnverified = c.RefreshedAt
+				}
+			}
+			continue
+		case errors.Is(jerr, directory.ErrUnmapped), errors.Is(jerr, directory.ErrAmbiguous),
+			errors.Is(jerr, directory.ErrUsernameTaken):
+			// The directory answered no: every context of the principal is
+			// revoked under that reason, and its tokens superseded.
+			for _, ref := range refs {
+				if err := b.revokeFor(ctx, principal, ref, refusalReason(jerr), now, rep); err != nil {
+					return err
+				}
+			}
+			rep.Narrowed = append(rep.Narrowed, principal)
+			continue
+		case jerr != nil:
+			return jerr
+		}
+		pol, release := cur, func() {}
+		if judge.hold != nil {
+			pol, release = judge.hold()
+		}
+		for _, ref := range refs {
+			// refreshContext(ctx, pol, priors, now, m, ref, rep, quarantined, sameSource, stamp) …
+		}
+		release()
+```
+
+  `revokeFor` is `refreshContext`'s revoke step for one context with a fixed reason (read
+  the context, write `RevokedAt` compared on `PolicyRev`, one `refresh` deny record);
+  lift it from `refreshContext`'s revoke branch rather than duplicating the write.
+  `refusalReason` maps the three errors to `decision.IdentityUnmapped`, `IdentityAmbiguous`
+  and `UsernameCollision`. `refreshContext` appends `m.Principal` to `rep.Narrowed` whenever
+  its step revokes or narrows a context.
+- `refreshContext` takes `m` and `stamp` in place of the principal string, passes `m` to
+  `decideRefresh`, and when `stamp` is non-zero:
   - an `"unchanged"` step is stamped with `StampRefreshed(ctx, k, c.PolicyRev, stamp)`,
     retried on `ErrConflict` as `SetContextPolicy` is;
   - an `"updated"` step's `ContextPolicy` carries `RefreshedAt: stamp`.
 - The policy reload's pass (`Refresh`, `RefreshAtStart`) passes
-  `passJudge{member: b.storedJudge}`:
+  `passJudge{member: b.storedJudge}`, no hold: its `cur` is the reload's own policy.
+- `reindex.go:123` passes `b.storedMember`'s member for `c.Principal` and a zero stamp.
 
 ```go
 // storedJudge is a policy pass's member: the stored membership, no stamp.
@@ -6392,30 +8172,43 @@ func (b *Broker) storedJudge(ctx context.Context, principal string) (policy.Memb
 }
 
 func (b *Broker) storedMember(ctx context.Context, principal string) (policy.Member, error) {
-	if b.Directory == nil {
-		return policy.MemberOf(principal), nil
+	if b.Directory == nil || !directory.IsUser(principal) {
+		return policy.MemberOf(principal), nil // a machine principal has no entry (pre-flight I-10)
 	}
 	sm, ok, err := b.Directory.Stored(ctx, principal)
 	switch {
 	case err != nil:
 		return policy.Member{}, err
-	case !ok:
-		return policy.Member{Principal: principal, Directory: true}, nil // no groups: fail closed
+	case !ok, sm.Refused, b.Now().Sub(sm.VerifiedAt) > b.Directory.Cfg.Grace:
+		// None stored, the directory's refusal, or a membership older than
+		// grace: no groups, which can only narrow. A reload during a long
+		// outage never widens a context on a membership nobody has verified
+		// for longer than grace (pre-flight I-14).
+		return policy.Member{Principal: principal, Directory: true}, nil
 	}
 	return policy.Member{Principal: principal, Directory: true, Username: sm.Username, GroupDNs: sm.GroupDNs,
 		GroupNames: sm.GroupNames}, nil
 }
 ```
 
-- With no username stored (`!ok`), a context's username differs from the resolution's empty
-  one, so `decideRefresh`'s username check revokes it. That is the same fail-closed answer,
-  and the test asserts it.
-- `mintedBy` takes `m policy.Member`. `supersedeTokens` builds it per principal through
-  `b.storedMember`, cached in the pass's `current` map by principal.
+- With no username stored, a context's username differs from the resolution's empty one, so
+  `decideRefresh`'s username check revokes it. That is the same fail-closed answer, and the
+  test asserts it.
+- `mintedBy` takes `m policy.Member` and resolves with `p.ResolveMember(m, d, at)`;
+  `policy.MintCheck(res, m.Principal, d.Name)` keeps the principal string.
+- `supersedeTokens` builds each principal's member through `b.storedMember`, cached by
+  principal for the pass. Its principal set is `pr.Policy.Principals()` (identity-declared)
+  together with `b.Store.MembershipPrincipals(ctx)` once per pass, de-duplicated and sorted,
+  so a group member's unspent tokens are superseded when a reload withdraws the group's grant
+  (pre-flight I-13). Without a directory the second set is not read.
 
 In `sessionrefresh.go` (`/v1/refresh`, a fresh authentication):
-- before the `RefreshContext`, `m, answer, err := b.memberFor(ctx, principal)`;
+- the handler resolves `m, answer, err := b.memberFor(ctx, principal)` under
+  `b.memberBudget()`, before `RefreshSession` takes its `Hold`, so no directory query runs
+  under a held policy;
 - a refusal answers as `tokens` does and extends nothing;
+- `RefreshSession` takes `m` and `answer`, and passes `m` and a zero stamp to `refreshContext`
+  (the session refresh writes `RefreshedAt` through its own `RefreshContext`, below);
 - `pol.Resolve(principal, dev, at)` becomes `pol.ResolveMember(m, dev, at)`;
 - `RefreshedAt` is `refreshedAt(answer, at)`, the answer's `VerifiedAt` when it is before
   `at`, else `at`. A session refresh must not reset the staleness clock past the directory's
@@ -6445,23 +8238,24 @@ default lands in the same task as the pass that keeps contexts under it.
 
 **Files:**
 - Create: `internal/broker/scheduled.go`, `internal/broker/scheduled_test.go`
-- Modify: `internal/broker/refresh.go:55-85` (`RefreshReport.Unverified`), `:999-` (`count`)
-- Modify: `internal/config/config.go:116-153` (`SessionConfig`), `:482-486` (`sessionYAML`),
-  `:815-835` (the default), `:2244-2260` (the checks)
+- Modify: `internal/config/config.go:116-153` (`SessionConfig`), `:479-486` (`sessionYAML`),
+  `:815-835` (the default), `:2244-2260` (the checks), the one-process checks beside them
 - Modify: `internal/daemon/metrics/metrics.go` (`DirectoryRefreshLastComplete`)
 - Modify: `tests/lab/port49d-lab.yaml` (`staleness_ceiling: 0s`, commented)
 - Test: `internal/config/config_test.go`
 
 **Interfaces:**
-- Consumes: `refreshContexts` with `passJudge` (Task 14); `directory.Resolver.Verify`.
+- Consumes: `refreshContexts` with `passJudge`, `RefreshReport.Unverified*`, `Narrowed`
+  (Task 14); `directory.Resolver.Verify`, `directory.IsUser`; `b.Policy.Hold`
+  (`internal/policy/live.go:42`); `b.sayOnce` (`internal/broker/certcheck.go:303`);
+  `store.TokensByPrincipal`, `DeleteTokens`.
 - Produces:
 
 ```go
 // RefreshDirectory is the scheduled pass (spec §5.1.3; Ruling 12).
 func (b *Broker) RefreshDirectory(ctx context.Context) (RefreshReport, error)
-// RefreshReport gains: Unverified int; UnverifiedPrincipals int; OldestUnverified time.Time
-// config: SessionConfig.StalenessCeiling's default 4h; an explicit 0s is off
-func DefaultStalenessCeiling = 4 * time.Hour  (a const)
+// config
+const DefaultStalenessCeiling = 4 * time.Hour
 // config.Config gains: StalenessOff bool // the ceiling was set to 0s explicitly, for the start line
 ```
 
@@ -6480,21 +8274,34 @@ func TestTheScheduledPassStamps(t *testing.T)
 func TestAnOutageStampsNothingAndRevokesNothing(t *testing.T)
 
 // An entry gone revokes identity_unmapped; two entries identity_ambiguous;
-// a username taken username_collision.
+// a username taken username_collision; and each principal's unspent
+// tokens are superseded (pre-flight I-13).
 func TestAGoneOrAmbiguousEntryRevokes(t *testing.T)
 
 // Without a directory the pass judges on the policy and stamps its own
 // instant: the ceiling bounds a broker outage (Ruling 12).
 func TestWithoutADirectoryThePassStampsItsInstant(t *testing.T)
 
+// A machine principal's context under a directory is judged as MemberOf,
+// stamped with the pass's instant, and never revoked identity_unmapped
+// (pre-flight I-10).
+func TestAMachinePrincipalIsStampedAndKept(t *testing.T)
+
 // A removal from a group reaches the live context at the next pass:
 // revoked no_grants_matched, the next command denied credential_revoked.
 func TestARemovalReachesTheSessionAtTheNextPass(t *testing.T)
+
+// A reload that lands while the pass is verifying a principal is the
+// policy that principal is judged and written under: the pass never
+// writes a superseded policy over a reload's (pre-flight I-11). The
+// static resolver's answer for the principal swaps the policy (b.Policy.Swap)
+// before returning.
+func TestAReloadDuringThePassIsThePolicyItWrites(t *testing.T)
 ```
 
 Each runs `b.RefreshDirectory(ctx)` over a memory store holding contexts written as a login
 writes them (`store.Context{Principal, Username, BlobHash, AuthTime, RefreshedAt}`), with
-`directory.NewStaticResolver`'s per-principal answers or error. It asserts `RefreshedAt` read
+`directory.ForTestsStaticResolver`'s per-principal answers or error. It asserts `RefreshedAt` read
 back, `RevokedAt`, the records in the fixture's log, and the report's counts.
 
 Append to `internal/config/config_test.go`:
@@ -6504,7 +8311,7 @@ Append to `internal/config/config_test.go`:
 // stamps refreshed_at (plan 2's hand-off; OR-1); 0s is off and said.
 func TestTheStalenessCeilingDefault(t *testing.T) {
 	c := loadWith(t, "") // no session: block
-	if c.Session.StalenessCeiling != 4*time.Hour || c.StalenessOff {
+	if c.Session.StalenessCeiling != DefaultStalenessCeiling || c.StalenessOff {
 		t.Fatalf("%v %v", c.Session.StalenessCeiling, c.StalenessOff)
 	}
 	c = loadWith(t, "session: {staleness_ceiling: 0s}")
@@ -6527,15 +8334,25 @@ func TestOneProcessChecksRefreshAndGraceAgainstTheCeiling(t *testing.T) {
 		}
 	}
 }
+
+// port49-broker's load shares the schema but never applies the ceiling, so
+// the one-process checks never refuse a split deployment's broker file
+// (pre-flight I-15): grace 8h loads there.
+func TestTheBrokersLoadSkipsTheOneProcessChecks(t *testing.T) {
+	if _, err := loadBrokerErr(t, "broker: {directory: {grace: 8h}}"); err != nil {
+		t.Fatalf("port49-broker.yaml with grace 8h: %v", err)
+	}
+}
 ```
 
 (`loadWith`, `loadErr`: the file's helpers that write a port49d.yaml with a broker block and
-load it; use the existing ones, adding the keys to their base config. The directory case
-needs Task 4's directory fixture merged into the YAML.)
+load it; `loadBrokerErr` the same through `LoadBroker`. Use the existing ones, adding the keys
+to their base config. The directory cases need Task 4's directory fixture merged into the
+YAML.)
 
 - [ ] **Step 2: Run them to verify they fail**
 
-Run: `go test ./internal/broker/ ./internal/config/ -run 'ScheduledPass|AnOutageStamps|GoneOrAmbiguous|WithoutADirectoryThePass|RemovalReaches|StalenessCeilingDefault|OneProcessChecks' -count=1`
+Run: `go test ./internal/broker/ ./internal/config/ -run 'ScheduledPass|AnOutageStamps|GoneOrAmbiguous|WithoutADirectoryThePass|MachinePrincipalIsStamped|RemovalReaches|ReloadDuringThePass|StalenessCeilingDefault|OneProcessChecks|BrokersLoadSkips' -count=1`
 Expected: FAIL.
 
 - [ ] **Step 3: The pass**
@@ -6549,7 +8366,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"slices"
 	"time"
 
 	"github.com/rhwendt/port49/internal/directory"
@@ -6561,68 +8378,119 @@ import (
 // directory, from a server and never from grace, its contexts judged on
 // that membership and stamped with its verification time. A principal the
 // directory does not answer for is left and unstamped; its contexts
-// deny context_stale past session.staleness_ceiling. Without a directory
-// the pass judges on the policy alone and stamps its own instant.
+// deny context_stale past session.staleness_ceiling. A machine principal,
+// and every principal without a directory, is judged on the policy alone
+// and stamped with the pass's instant.
+//
+// Each principal is verified first, with no policy held, then judged and
+// written under b.Policy.Hold, so a reload between two principals is the
+// policy the next is judged by, and a reload never waits on a directory
+// query (pre-flight I-11). Records go to a held log flushed after each
+// release, as RefreshSession's do (plan 7e, Ruling 10).
 //
 // It writes contexts, so it is the runner's alone, as the policy pass's
 // context half is (plan 7e, Ruling 6).
 func (b *Broker) RefreshDirectory(ctx context.Context) (RefreshReport, error) {
-	cur := b.Policy.Load()
 	var rep RefreshReport
 	rep.At = b.Now()
-	judge := passJudge{member: func(ctx context.Context, principal string) (policy.Member, time.Time, error) {
-		if b.Directory == nil {
-			return policy.MemberOf(principal), rep.At, nil
-		}
-		a, err := b.Directory.Verify(ctx, principal)
-		if err != nil {
-			return policy.Member{}, time.Time{}, err
-		}
-		return member(a), a.VerifiedAt, nil
-	}}
-	err := b.refreshContexts(ctx, cur, nil, rep.At, &rep, false, judge)
+	judge := passJudge{
+		member: func(ctx context.Context, principal string) (policy.Member, time.Time, error) {
+			if b.Directory == nil || !directory.IsUser(principal) {
+				return policy.MemberOf(principal), rep.At, nil
+			}
+			a, err := b.Directory.Verify(ctx, principal)
+			if err != nil {
+				return policy.Member{}, time.Time{}, err
+			}
+			return member(a), a.VerifiedAt, nil
+		},
+		hold: func() (*policy.Policy, func()) {
+			buf := newHeldLog()
+			rep.log = buf
+			pol, release := b.Policy.Hold()
+			return pol, func() {
+				release()
+				rep.log = nil
+				buf.Flush(b.Log, b.blobLanded)
+			}
+		},
+	}
+	err := b.refreshContexts(ctx, b.Policy.Load(), nil, rep.At, &rep, false, judge)
 	if err != nil && !errors.Is(err, ErrPrincipalUnvisited) && !errors.Is(err, ErrLeftUnderUnheldKey) {
 		return rep, fmt.Errorf("the scheduled refresh: %w", err)
+	}
+	if serr := b.supersedeNarrowed(ctx, &rep); serr != nil && err == nil {
+		err = serr
 	}
 	if rep.UnverifiedPrincipals == 0 && err == nil {
 		b.Metrics.DirectoryRefreshLastComplete.Set(float64(rep.At.Unix()))
 	}
 	if rep.UnverifiedPrincipals > 0 {
-		b.say("refresh: the directory did not answer for %d principals; their %d contexts keep their last "+
-			"verification (oldest %s ago) and deny context_stale past port49d's session.staleness_ceiling",
-			rep.UnverifiedPrincipals, rep.Unverified, rep.At.Sub(rep.OldestUnverified).Round(time.Minute))
+		b.sayOnce("refresh-unverified", time.Hour, "broker: refresh: the directory did not answer for %d principals; "+
+			"their %d contexts keep their last verification (oldest %s ago) and deny context_stale past port49d's "+
+			"session.staleness_ceiling", rep.UnverifiedPrincipals, rep.Unverified,
+			rep.At.Sub(rep.OldestUnverified).Round(time.Minute))
 	}
 	return rep, err
 }
 
-var _ = directory.ErrUnavailable
-var _ = log.Printf
+// supersedeNarrowed deletes the unspent tokens of every principal the pass
+// revoked or changed a context of (pre-flight I-13): a token minted on the
+// membership the pass just withdrew must not be redeemable after it. A
+// key is cleared whole, as supersedeTokens clears one.
+func (b *Broker) supersedeNarrowed(ctx context.Context, rep *RefreshReport) error {
+	slices.Sort(rep.Narrowed)
+	for _, principal := range slices.Compact(rep.Narrowed) {
+		keys, err := b.Store.TokensByPrincipal(ctx, principal)
+		if err != nil {
+			return err
+		}
+		for _, k := range keys {
+			toks, err := b.Store.Candidates(ctx, k)
+			if err != nil {
+				return err
+			}
+			if err := b.Store.DeleteTokens(ctx, k); err != nil {
+				return err
+			}
+			b.supersede(ctx, k, b.Now())
+			if len(toks) > 0 {
+				rep.TokenKeys++
+				b.Metrics.TokensSuperseded.Inc()
+			}
+		}
+	}
+	return nil
+}
 ```
 
-In `refreshContexts` (Task 14's `judge` branch for `directory.ErrUnavailable`), count each of
-the principal's contexts `unverified` (`b.count(rep, "unverified")` and `rep.Unverified++`),
-`rep.UnverifiedPrincipals++`, and keep `rep.OldestUnverified` the least `RefreshedAt` read
-among them. Reading them costs one `GetContext` each; the pass already reads every context.
-`count` passes `unverified` to `port49_context_refreshes_total`.
-
-`b.say` is the broker's once-per-key line helper (`sayOnce`, 7c). Use it with the key
-`"refresh-unverified"` and a 1h spacing, so a long outage says it hourly, not every 5
-minutes.
+`rep.log` is the held-log field `RefreshSession` already sets on its report
+(`sessionrefresh.go:241`); read how `refreshContext` writes through it and follow that. The
+`unverified` counting is Task 14's (the `directory.ErrUnavailable` branch of
+`refreshContexts`).
 
 - [ ] **Step 4: The ceiling's default**
 
 In `config.go`:
+- `const DefaultStalenessCeiling = 4 * time.Hour`, beside `DefaultMaxSessionAge`.
 - `SessionConfig.StalenessCeiling`'s comment becomes "denies a context whose `refreshed_at`
   is older than this, `context_stale`. Default 4h (plan 7g; OR-1): the broker's scheduled
   refresh stamps `refreshed_at` every `broker.refresh_interval`. An explicit `0s` turns it
-  off, which every start says."
-- `sessionYAML` reads `staleness_ceiling` as a `*time.Duration`, the way it already tells
-  `ceiling_warning`'s explicit 0 from absent, and resolves:
-  - absent → `DefaultStalenessCeiling` (4h);
+  off, which every start says." Its tag becomes `yaml:"-"`: the YAML key is read through
+  `sessionYAML` alone, since `SessionConfig` is inlined there and two fields may not share
+  the `staleness_ceiling` key (pre-flight M-12).
+- `sessionYAML` gains `StalenessCeiling *time.Duration \`yaml:"staleness_ceiling"\``, the way
+  it already tells `ceiling_warning`'s explicit 0 from absent, and the load resolves:
+  - absent → `DefaultStalenessCeiling`;
   - `0s` → 0 and `c.StalenessOff = true`.
-- The two existing checks stay (negative refused; positive under 1m refused).
-- Where the config holds a broker block (`c.Broker != nil`) and the ceiling is positive, add
-  the two refusals the test names:
+- The two existing checks stay (negative refused; positive under 1m refused). Their advice
+  "omit the key to disable the check" (`config.go:2253` and `:2257`) becomes "set it to 0s to
+  disable the check": omitting it now takes the 4h default (pre-flight M-12). The comment
+  above them ("its zero … is the default") is rewritten the same way.
+- The two one-process refusals the test names run only for port49d's load with a broker in
+  the process, `role == RoleDaemon && c.Broker != nil`, and a positive ceiling (pre-flight
+  I-15). port49-broker's load (`RoleBroker`) shares the schema but never applies the
+  ceiling, so a split deployment's broker file is compared by neither:
   - `RefreshInterval > StalenessCeiling/2`;
   - `Directory != nil && Directory.Grace > StalenessCeiling`.
 
@@ -6679,8 +8547,11 @@ func openDirectory(cfg config.Config, st store.Store, live *policy.Live, m *metr
 func announceDirectory(w io.Writer, proc string, cfg config.Config, pol *policy.Policy)
 // scheduled runs RefreshDirectory every interval until ctx ends.
 func scheduled(ctx context.Context, brk *broker.Broker, every time.Duration, say func(string, ...any))
-// prewarm runs Prewarm every interval, the first 30s in.
+// prewarm runs Prewarm every interval, the first 30s in; nil r or a zero
+// interval returns at once.
 func prewarm(ctx context.Context, r *directory.Resolver, live *policy.Live, every time.Duration, say func(string, ...any))
+// prewarmInterval is broker.directory.prewarm.interval, 0 without a directory.
+func prewarmInterval(cfg config.Config) time.Duration
 func policyEnv(cfg config.Config) policy.Env // KeyRefs and Directory
 ```
 
@@ -6708,11 +8579,27 @@ func TestTheScheduledLoop(t *testing.T)
 // verification, and its command is denied context_stale once the ceiling
 // passes from then, not from the login (Review Focus 5).
 func TestAGraceMintsSessionGoesStaleFromItsVerification(t *testing.T)
+
+// /readyz stays ready with every directory server down and every breaker
+// open: readiness never follows the directory (design §10, §12; pre-flight
+// M-15). port49-broker's /readyz, over a resolver whose pool dials a
+// refusing fake, after enough health checks to open each breaker.
+func TestReadinessNeverFollowsTheDirectory(t *testing.T)
+
+// The runner's duties start and stop cleanly with no directory: the
+// pre-warm goroutine returns at once and wg.Wait does not hang
+// (pre-flight M-13).
+func TestTheDutiesRunWithoutADirectory(t *testing.T)
+
+// A bind credential that does not load (an unreadable keytab, a missing
+// password variable) stops the start, naming the key, never the secret
+// (pre-flight M-3).
+func TestABindCredentialThatDoesNotLoadStopsTheStart(t *testing.T)
 ```
 
 `TestAGraceMintsSessionGoesStaleFromItsVerification` uses the port49d end-to-end harness the
 reload tests use (`reload_test.go`'s daemon with a broker block and a fake clock). It
-injects a `directory.NewStaticResolver` through a test hook, `openDirectoryHook` (a package
+injects a `directory.ForTestsStaticResolver` through a test hook, `openDirectoryHook` (a package
 variable defaulting to `openDirectory`), answering alice from grace verified 3h50m ago. It
 then:
 - mints and logs in over the in-process TACACS+ client;
@@ -6721,7 +8608,7 @@ then:
 
 - [ ] **Step 2: Run them to verify they fail**
 
-Run: `go test ./internal/port49d/ -run 'DirectoryStartLines|SimpleBindIsSaid|GroupSubjectsWithout|ScheduledLoop|GraceMintsSession' -count=1`
+Run: `go test ./internal/port49d/ -run 'DirectoryStartLines|SimpleBindIsSaid|GroupSubjectsWithout|ScheduledLoop|GraceMintsSession|ReadinessNever|DutiesRunWithout|BindCredentialThatDoesNot' -count=1`
 Expected: FAIL.
 
 - [ ] **Step 3: Building and running it**
@@ -6732,9 +8619,11 @@ Create `internal/port49d/directory.go`:
 package port49d
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
 
@@ -6759,7 +8648,10 @@ func openDirectory(cfg config.Config, st store.Store, live *policy.Live, m *metr
 	}
 	cr, err := directory.LoadCredentials(d.Bind, os.Getenv)
 	if err != nil {
-		return nil, err
+		// The error names the key (keytab_file, tls_cert_file,
+		// password_env), never the secret; the start stops on it, as on a
+		// config refusal (pre-flight M-3).
+		return nil, fmt.Errorf("config: %w", err)
 	}
 	dial, err := directory.NewDialer(*d, cr)
 	if err != nil {
@@ -6796,7 +8688,7 @@ func announceDirectory(w io.Writer, proc string, cfg config.Config, pol *policy.
 	}
 	var servers []string
 	for _, s := range d.Servers {
-		servers = append(servers, fmt.Sprintf("%s %s %d", s.URI, or(s.Site, "-"), s.Priority))
+		servers = append(servers, fmt.Sprintf("%s %s %d", s.URI, cmp.Or(s.Site, "-"), s.Priority))
 	}
 	site := "none: servers rank by priority alone (set broker.directory.site or PORT49_SITE)"
 	if d.Site != "" {
@@ -6815,6 +8707,9 @@ func announceDirectory(w io.Writer, proc string, cfg config.Config, pol *policy.
 	fmt.Fprintf(w, "%s: directory: certificates map by %s (%s) through %s; principal from %s, username from %s; "+
 		"nested groups %s under %s\n", proc, d.Mapping.Kind, strength, d.Mapping.Attribute, d.PrincipalAttribute,
 		d.UsernameAttribute, d.Nested, d.GroupsBaseDN)
+	fmt.Fprintf(w, "%s: directory: %s and %s must be writable only by directory administrators: two entries "+
+		"holding one value are both refused (identity_ambiguous, username_collision) until it is fixed\n", proc,
+		d.PrincipalAttribute, d.UsernameAttribute)
 	fmt.Fprintf(w, "%s: directory: grace %s; pre-warm %s; the scheduled refresh every %s stamps refreshed_at "+
 		"(port49d's session.staleness_ceiling denies a session past it)\n", proc, d.Grace,
 		every(d.PrewarmInterval), cfg.Broker.RefreshInterval)
@@ -6860,6 +8755,16 @@ func scheduled(ctx context.Context, brk *broker.Broker, interval time.Duration, 
 	}
 }
 
+// prewarmInterval is broker.directory.prewarm.interval, 0 (off) without a
+// directory, so a caller never dereferences a nil directory (pre-flight
+// M-13).
+func prewarmInterval(cfg config.Config) time.Duration {
+	if cfg.Broker == nil || cfg.Broker.Directory == nil {
+		return 0
+	}
+	return cfg.Broker.Directory.PrewarmInterval
+}
+
 // prewarm runs pre-warm every interval, the first 30s after the start.
 func prewarm(ctx context.Context, r *directory.Resolver, live *policy.Live, interval time.Duration,
 	say func(string, ...any)) {
@@ -6892,8 +8797,8 @@ func prewarm(ctx context.Context, r *directory.Resolver, live *policy.Live, inte
 }
 ```
 
-(Add `"os"` to the imports; `or` and `summary` exist in the package. `summary` is
-`reload.go`'s.)
+(`summary` is `reload.go:1295`'s. The package has no `or`, which is `internal/config`'s, so the
+file uses `cmp.Or`.)
 
 The wiring:
 - **Both builders** (`main.go`'s `buildBroker`/`buildBrokerAnchor`, and `brokerd.go`'s
@@ -6904,12 +8809,20 @@ The wiring:
     `lim.MapTimeout = d.QueryTimeout + time.Second`;
   - a goroutine runs `brk.Directory.Pool.Run(ctx)`, the health checks, on every process with
     a directory: each replica selects for its own queries.
-- **port49-broker.** `runner.duties` gains two goroutines (`wg.Add(8)`):
+- **port49-broker.** `runner.duties` (`runner.go:181`) gains two goroutines, `wg.Add(6)`
+  becoming `wg.Add(8)`, both started unconditionally so the count always matches:
   `scheduled(ctx, r.brk, r.cfg.Broker.RefreshInterval, sayf)` and
-  `prewarm(ctx, r.brk.Directory, r.brk.Policy, r.cfg.Broker.Directory.PrewarmInterval, sayf)`.
-  The second runs only with a directory. Both are the runner's alone.
+  `prewarm(ctx, r.brk.Directory, r.brk.Policy, prewarmInterval(r.cfg), sayf)`. Without a
+  directory `prewarm` returns at once and its `wg.Done` runs; nothing dereferences
+  `r.cfg.Broker.Directory` (pre-flight M-13). Both are the runner's alone.
+- **A credential that does not load** stops the start: `openDirectory`'s error is returned by
+  `buildBroker` and `openBroker` as a config error is, and the process exits non-zero naming
+  the key (`broker.directory.bind.keytab_file …`). `LoadCredentials` reads the keytab, the
+  EXTERNAL certificate and key, and the password variable once, here (pre-flight M-3).
+- **Readiness** is unchanged: neither builder adds a directory or breaker condition to
+  `/readyz` (`brokerd.go:252-260`). The test pins it.
 - **port49d with a broker inside** (`main.go:1225`, the memory store's single process) starts
-  the same two goroutines beside `r.run(ctx, hup)`.
+  the same two goroutines beside `r.run(ctx, hup)`, with `prewarmInterval(cfg)` as above.
 - **The reloader's three `bundle.Parse` calls** take `policyEnv(r.cfg)` in place of
   `policy.Env{KeyRefs: r.cfg.KeyRefs()}`. So does `startPolicy`'s, wherever port49d and
   port49-broker load the policy (`loadPolicy`, `parseBundle`).
@@ -6952,16 +8865,22 @@ git commit -m "feat(port49d): run the directory: the resolver, health checks, th
 - Create: `tests/lab/results/L42-openldap.md`, `L42-samba_ad.md`, `L43-openldap.md`,
   `L43-samba_ad.md`; `tests/lab/evidence/L42-*.json`, `L43-*.json`
 - Modify: `tests/lab/README.md` ("Directories"), `Makefile` (`lab-directory`)
-- Modify: `docs/design/2026-08-23-policy-engine-spec.md` §15 (L42, L43 Status), §13
-  decision 38 (the provisional marks, if they close)
+- Modify: `docs/design/2026-08-23-policy-engine-spec.md` §15 (L42, L43 Status; L44 untouched),
+  §13 decision 38 (the L42 and L43 provisional marks, if they close; the L44 marks stay)
 
 **Interfaces:**
 - Consumes: `directory.NewDialer`, `LoadCredentials`, `Config`, `Pool`, `Resolver`,
   `Mapping.Lookup`, `ADIssuerSerial`, `groupsOf` through `Resolver.Verify` (Tasks 6–10);
   `internal/testpki` for the directories' server certificates and the broker's client
   certificate.
-- Produces: the four results notes and their evidence; L42 and L43 closed, or narrowed with
-  what was measured.
+- Produces: the four results notes and their evidence; L42 and L43 closed on OpenLDAP and
+  Samba AD, the platforms they name, or narrowed with what was measured. L44 (Windows Server
+  AD) stays open: nothing here measures a Windows DC.
+
+**The users CA** that issues the lab's client certificates for these runs has a subject with
+`DC=` RDNs (`CN=lab-users-CA,DC=corp,DC=example,DC=com`), built in `directory_test.go` with
+`x509.CreateCertificate` over a `RawSubject`, as Task 8's `issuingCA` does. So `issuer_serial`
+and the issuer pin meet `DC=` on real directories (pre-flight I-1).
 
 **The fixture** (both directories, the same shape):
 
@@ -7083,8 +9002,9 @@ and `20088` (Kerberos, TCP and UDP). It mounts `tests/lab/logs/directory/pki` re
   base, scope, filter, the DNs returned, the result code and the duration. No password, no
   keytab, no ticket. The evidence is what a reader can follow, since LDAPS captures are
   encrypted.
-  - **How it records.** A `Searcher` wrapper, `recording`, logs each search and passes it on.
-    It wraps the dialer: `directory.Dialer` returns it around the real connection.
+  - **How it records.** A `directory.Client` wrapper, `recording`, logs each
+    `SearchContext` and passes it on. It wraps the dialer: the lab's `directory.Dialer`
+    returns it around the real connection `NewDialer` gave.
 
 - [ ] **Step 4: L42**
 
@@ -7150,13 +9070,18 @@ Each outcome is the LDAP result code and go-ldap's error, never a secret. The te
 port49's side only:
 - every refusal is said with the mechanism and the code;
 - a refusal does not open the pool's breaker as a fault when it is invalid credentials
-  (result 49).
+  (result 49), and a query against a directory refusing the bind returns
+  `directory.ErrUnavailable`, so grace would apply (pre-flight I-2).
 
 Then, on each directory, it checks the mapping end to end through `Resolver.Map`:
 - alice's certificate under `san_email` (pinned to the lab CA) maps to her;
 - under `issuer_serial` (Samba, the `altSecurityIdentities` the seed wrote) maps to her;
 - under `sid` (Samba) maps to her;
 - eve's certificate under `san_email` is `identity_ambiguous`, naming both DNs;
+- on Samba with `principal_attribute: mail`, `samba-tool user edit` gives `bob` alice's `mail`;
+  alice's certificate under `issuer_serial` is then `identity_ambiguous` naming both DNs, and
+  so is a `Verify` of `user:alice@corp.example.com`; the `mail` is then restored (pre-flight
+  C-2: a self-editable attribute refuses both people and makes neither the other);
 - a group subject named `netops-oncall` matches no one, because two groups share the name,
   and the DN form matches carol.
 
@@ -7177,18 +9102,23 @@ note before closing anything.
 
 - [ ] **Step 7: Close or narrow, and commit**
 
-A row closes only when every platform in its Platforms cell has a note. L42 and L43 list
-OpenLDAP and Samba AD, and name Windows Server AD as unmeasured. Per OR-3, close them on the
-two:
+A row closes only when every platform in its Platforms cell has a note with no INVALID cell
+(CLAUDE.md lab rule 3). L42 and L43 name OpenLDAP and Samba AD, and nothing else, so each
+closes on those two notes:
 
 ```
-closed — measured <date>; tests/lab/results/L42-openldap.md, L42-samba_ad.md (Windows Server AD unmeasured, plan 7g OR-3)
+closed — measured <date>; tests/lab/results/L42-openldap.md, L42-samba_ad.md
 ```
 
-If Ryan answers OR-3 the other way, the row stays open: change only the text after `open —`
-to name what was measured. In decision 38:
-- remove "provisional on L42" from the nested-modes bullet if L42 closed;
-- remove "provisional on L43" from the bind bullet if L43 closed.
+A row with one of its two platforms measured stays open: change only the text after `open —`
+to name what was measured. L44 is not touched: its platform is Windows Server AD, and no note
+here measures one. In decision 38:
+- "provisional on L42" leaves the nested-modes bullet if L42 closed; its "on Windows Server
+  AD, on L44" stays;
+- "provisional on L43" leaves the bind bullet if L43 closed; its "on Windows Server AD, on
+  L44" stays;
+- the mapping bullet's `issuer_serial` and `sid` stay "provisional on L44 (Windows Server
+  AD)". A Samba result never removes an L44 mark (CLAUDE.md lab rule 2).
 
 If a result contradicts the plan, the doc is wrong. Fix the doc, cite the note, and say so in
 the commit. For example: OpenLDAP may answer `in_chain` in full (a dynlist-backed `memberOf`),
@@ -7281,10 +9211,11 @@ table:
 5. **A broker restart in an outage.**
    - Stop the `openldap` container, then `docker compose restart port49-broker`.
    - `port49 login` and `port49 token` for alice within grace succeed from the store.
-   - Bob's mint is refused `directory_unavailable`: no membership is stored for him if he
-     never logged in and pre-warm has not run. Make sure it has not; the overlay's 5m
-     interval and the 30s first wait are why the test does this step first after a fresh
-     `up`, or deletes his record. Record which.
+   - Bob's mint is refused `directory_unavailable`: he has never logged in, so no membership
+     is stored for him. Pre-warm does not change that: it enumerates the members of the
+     groups a policy names, and bob is in none (he is an identity subject), so pre-warm never
+     verifies or stores him, whatever its timing (pre-flight M-16). Assert his
+     `mb/` record is absent before stopping the container.
 
 - [ ] **Step 3: Run it**
 
@@ -7333,7 +9264,8 @@ It follows 7f's shape:
     - any increase of `port49_directory_lookups_total{outcome="ambiguous"}`;
     - `port49_directory_server_up == 0`;
     - `port49_directory_group_names_ambiguous > 0`.
-  - **Unassigned:** Windows Server AD (OR-3).
+  - **Unassigned:** L44, Windows Server AD (OR-3): open until the SER8 box measures it;
+    decision 38's L44 marks stay until then.
 
 - [ ] **Step 2: Commit**
 
@@ -7354,12 +9286,36 @@ git commit -m "docs: plan 7g as built" \
     not been verified for 4h (the directory or every broker unreachable that long) is denied
     `context_stale` at its next command, and resumes at the next pass after they return.
   - **The opt-out.** `staleness_ceiling: 0s` turns it off, said at every start.
+  - **Upgrade order.** Upgrade every broker before port49d. A new port49d (4h default) beside
+    an old broker that never stamps `refreshed_at` denies every session 4h after its login.
+    If the order cannot be kept, set `staleness_ceiling: 0s` on port49d until the brokers are
+    new, then remove it.
+  - **At 3am, at the ceiling.** Live sessions are denied `context_stale` by a reachable
+    port49d, so break-glass does not help on them. The escapes: set
+    `session.staleness_ceiling: 0s` and restart port49d, or stop port49d so devices fall back
+    to break-glass (L4). Alert at half the ceiling, `time() -
+    port49_directory_refresh_last_complete_timestamp_seconds > ceiling / 2`, to get two hours'
+    warning at the default.
+  - **A grace mint near the ceiling** opens a session whose `refreshed_at` is the membership's
+    verification, so it can go `context_stale` minutes after it opens. That is the ceiling
+    counting from the last time the directory vouched for the person, as designed.
 - **Upgrading: principals change with a directory.** With `broker.directory` set:
   - a human principal is `user:` + the entry's `principal_attribute`, no longer the email
     SAN;
   - a `user:` identity subject declares no `username:` (the broker refuses one at load).
-  - Revocation marks by principal written before the change name the old string, and should
-    be re-made.
+  - Revocation marks by principal made before the change still apply: the broker checks a
+    certificate against the principal its email SAN gave as well as the mapped one, so turning
+    a directory on never lifts a revocation. Marks made from now on name the mapped principal.
+- **Directory hygiene, required.** `principal_attribute` and `username_attribute` must be
+  writable only by directory administrators (on OpenLDAP, remove `by self write` on `mail`).
+  port49 refuses both people when two entries hold one value (`identity_ambiguous`,
+  `username_collision`), so a self-edit can lock a colleague out until it is fixed, but can
+  never make one person another. A principal is pinned to the entry it was verified on, by
+  `objectGUID` or `entryUUID`: another entry later given the same value is refused
+  `identity_unmapped` for as long as the principal's record lives (`max(grace, 24h)` after its
+  last verification). An OU move keeps the pin; on a directory that returns neither id, the
+  pin is the DN and a moved user is refused until the record lapses. A person whose entry is
+  deleted and re-created is refused the same way.
 - **New: `broker.directory`.**
   - **Servers:** `servers` (`uri`, `priority`, `site`, `start_tls`), `site` or `site_env`
     (default `PORT49_SITE`), `ca_file`.
@@ -7391,10 +9347,22 @@ git commit -m "docs: plan 7g as built" \
   `verified_at` and source.
 - **A directory outage.**
   - **Logins.** New logins and mints continue from the membership verified within
-    `directory.grace` (4h), held in the store, so a broker restart keeps them.
+    `directory.grace` (4h), held in the store, so a broker restart keeps them. A person the
+    directory refused before the outage (deleted, ambiguous, a username taken) stays refused
+    through it.
   - **Live sessions** continue until the ceiling.
-  - **Revocation.** `port49 revoke` works throughout and needs no directory.
-- **Lab:** L42 and L43 (OpenLDAP, Samba AD). Windows Server AD is unmeasured.
+  - **Revocation.** `port49 revoke` works throughout and needs no directory; revoking your
+    own sessions never asks it.
+  - **A rotated bind password or an expired bind certificate** is treated as the directory
+    not answering: queries fail over, grace serves, and the broker says the refusal hourly per
+    server with the result code. Fix the credential; it is not a down server.
+  - **Every breaker open.** Queries are refused at once until the next probe, up to
+    `circuit_breaker.probe_interval` plus `health_check.interval` (90s at the defaults) after
+    the DCs return. Grace serves meanwhile.
+  - **Readiness** never follows the directory: a broker with every DC down stays ready.
+- **Lab:** L42 and L43 measured on OpenLDAP and Samba AD. L44, Windows Server AD (`in_chain`,
+  EXTERNAL, GSSAPI, `altSecurityIdentities`, strong-mapping enforcement), is open until
+  measured: the AD-only mechanisms are measured on Samba alone.
 
 ## Self-review against the spec
 
@@ -7431,13 +9399,24 @@ git commit -m "docs: plan 7g as built" \
   which file to read for its name. Those helpers' names were not verified here and exist in
   the files named.
 - **Types.** These names match across tasks:
-  - `directory.Answer`, `Source`, `Resolver.Map/Verify/Current/Stored`;
-  - `store.Membership`, `MapKey`, `StampRefreshed`, `ContextPolicy.RefreshedAt`,
-    `Token.VerifiedAt`;
+  - `directory.Answer`, `Source`, `Resolver.Map/Verify/Current/Stored`, `IsUser`,
+    `ErrNotUser`, `Client`, `ForTestsStaticResolver`;
+  - `store.Membership` (with `Refused`), `MapKey`, `RefuseMapKeys`, `MembershipPrincipals`,
+    `StampRefreshed`, `ContextPolicy.RefreshedAt`, `Token.VerifiedAt`;
   - `policy.Member`, `ResolveMember`, `HasRightOf`, `SubjectsOf`, `ErrCompositionRefused`;
   - `broker.BindMap`, `memberFor`, `storedMember`, `passJudge`, `RefreshDirectory`.
 
   `Listener.Map`'s signature in Task 12 returns `(directory.Answer, *BindRefusal)`, as
   `BindMap` does. ✓
-- **Review Focus:** each of the five has its test named in its owning task (Tasks 3, 6, 8, 9,
-  10, 13, 16). ✓
+- **Review Focus:** each of the seven has its test named in its owning task (Tasks 3, 6, 8,
+  9, 10, 13, 16). ✓
+- **Pre-flight (2026-10-05, READY WITH FIXES, 2C/17I/17M):** every finding is applied in the
+  task it names; the per-finding table is
+  `.superpowers/sdd/2026-10-05-07g-the-directory/planfix-report.md`.
+  - **C-1:** a refusal is stored (`Membership.Refused`, `RefuseMapKeys`) and grace never
+    serves it (Rulings 10, 12; Tasks 5, 10, 14). ✓
+  - **C-2:** a principal must be one entry's alone (`principalUnique`), and is pinned to its
+    entry's immutable id at every verification, a bind included; a refusal keeps the pin
+    (Ruling 3; Tasks 5, 8, 10, 16, 17). ✓
+  - **I-17 / OR-3:** L44 opens for Windows Server AD and stays open; L42 and L43 close on the
+    platforms they name (Tasks 1, 17). ✓
