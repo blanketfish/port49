@@ -6706,10 +6706,10 @@ review (the owner may override them).*
   The bulk pool's circuit is alarmed, never a store gone: a slow scan while logins and
   commands are answered does not close the listeners. Held TACACS+ connections are reset.
   Devices then find the connection refused and use their local method: the owner's go-dark
-  ruling of 2026-09-24, refined by decision 37. port49d then waits
-  in-process for the store, `/readyz` 503, with no deadline, and starts again as below,
-  retrying any error that start meets. It binds
-  TACACS+ again only after `store.etcd.health.open_after` checks pass in a row (decision 37). Once it has served, it never exits for an outage.
+  ruling of 2026-09-24, refined by decision 37. port49d then waits in-process for the store,
+  `/readyz` 503, with no deadline, and starts again as below, retrying any error that start
+  meets. It binds TACACS+ again only after `store.etcd.health.open_after` checks pass in a
+  row (decision 37). Once it has served, it never exits for an outage.
   - **The ledger is the process's.** That start keeps the ledger (above) that the first
     start built and sealed: it is never rebuilt, so a start after a store gone does not reopen
     the first-read rule. A record written while port49d was dark, at a key it has not seen or
@@ -6969,10 +6969,11 @@ sealed write sequence every process follows, and a ledger record the daemon cann
 - **The daemon's start on etcd** waits for the store and checks its identity, reads (never
   writes) the seal-key record, loads the marks, seeds the ledger from the record and a scan, starts
   both feeds and binds. It reloads its policy file for admission, quarantine and redaction and
-  carries nothing into live contexts. It checks the store's health every `store.etcd.health.interval` (decision 37), which replaced
-  plan 7e's probe: under 7e's probe an idle port49d went dark about 2 minutes into a hang at
-  `hold_ttl` 60s (`L37-*.md`); under the checks, within `close_after` × `interval` +
-  `call_timeout`, idle or not (§15 L41), on a store or a context feed that has stopped; a run after a store gone keeps the ledger and the
+  carries nothing into live contexts. It checks the store's health every
+  `store.etcd.health.interval` (decision 37), which replaced plan 7e's probe: under 7e's probe
+  an idle port49d went dark about 2 minutes into a hang at `hold_ttl` 60s (`L37-*.md`); under
+  the checks, within `close_after` × `interval` + `call_timeout`, idle or not (§15 L41), on a
+  store or a context feed that has stopped; a run after a store gone keeps the ledger and the
   marks.
 - **The revocations file is retired on etcd**, which persists the marks; it stays for the memory
   store, with `port49d init-revocations`. Each broker process keeps its own copy of the marks it
@@ -7023,11 +7024,15 @@ context cache it is told to keep; and port49 ships a container shape.** *Plan 7f
   within `close_after` × `interval` + `call_timeout` of the store stopping (5.5s at the
   defaults, derived from them; §15 L41 measures it). This replaces decision 36's probe. The
   guard's `hold_ttl` rule stays as the backstop.
-  - **What the defaults were tested against.** Two conditions with quorum healthy, neither of
-    which may close the listeners: a killed leader's election, and one member hung with its
-    TCP connection alive (a defragmenting, wedged or partitioned member). Both pings carry
-    `WithRequireLeader`, so a member with no leader answers at once and the client retries
-    another endpoint, instead of the check waiting out `call_timeout`.
+  - **What the defaults must survive.** Two conditions with quorum healthy, neither of which
+    may close the listeners: a killed leader's election, and one member hung with its TCP
+    connection alive (a defragmenting, wedged or partitioned member). port49d's tests assert
+    the longest run of failed checks at the defaults stays below `close_after` under both.
+    Both pings carry `WithRequireLeader`, so a member with no leader answers at once and the
+    client retries another endpoint. A member that does not answer at all costs a check its
+    `call_timeout`; clientv3's round-robin puts the next reads on other members. An operator
+    with a defragmenting member should expect an occasional `outcome="fail"` and a nonzero
+    `port49_store_health_failures`, not zero.
   - **Feed lag is a trigger.** The context connection's read waits for the context feed, so a
     feed more than `call_timeout` behind (a mass refresh burst, for example) fails the check,
     and `close_after` of them close every replica. The same reads are denied
