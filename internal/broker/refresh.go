@@ -423,8 +423,10 @@ func (b *Broker) supersedeTokens(ctx context.Context, cur *policy.Policy, now ti
 			return m, nil
 		}
 		m, err := b.storedMember(ctx, principal)
-		if err == nil {
-			members[principal] = m
+		if err == nil || errors.Is(err, directory.ErrUsernameTaken) {
+			// A declared-username collision is the refused member the call
+			// returned: it mints nothing, so the scan supersedes by it.
+			members[principal], err = m, nil
 		}
 		return m, err
 	}
@@ -824,7 +826,10 @@ type passJudge struct {
 // storedJudge is a policy pass's member: the stored membership, no stamp.
 func (b *Broker) storedJudge(ctx context.Context, principal string) (policy.Member, time.Time, error) {
 	m, err := b.storedMember(ctx, principal)
-	if err != nil {
+	switch {
+	case errors.Is(err, directory.ErrUsernameTaken):
+		return policy.Member{}, time.Time{}, err // the pass revokes username_collision
+	case err != nil:
 		// A store read failing is a failed pass, never the directory's
 		// silence: the chain is cut so no deadline reads as unverified.
 		return policy.Member{}, time.Time{}, fmt.Errorf("reading the stored membership of %s: %v", principal, err)
@@ -835,6 +840,12 @@ func (b *Broker) storedJudge(ctx context.Context, principal string) (policy.Memb
 // storedMember is the membership a policy pass judges principal by: the
 // store's, if it is unrefused and verified within directory.grace; else no
 // groups (Ruling 12; pre-flight I-14). A machine principal is MemberOf.
+//
+// A stored username a subject now declares is the resolver's collision
+// (pre-flight M-11), within grace or past it: the member comes back with no
+// groups and no username, and the error is directory.ErrUsernameTaken, so a
+// caller revokes it username_collision (storedJudge) or judges the refused
+// member (the token scan, the re-index); never keeps it.
 func (b *Broker) storedMember(ctx context.Context, principal string) (policy.Member, error) {
 	if b.Directory == nil || !directory.IsUser(principal) {
 		return policy.MemberOf(principal), nil // a machine principal has no entry (pre-flight I-10)
@@ -847,6 +858,12 @@ func (b *Broker) storedMember(ctx context.Context, principal string) (policy.Mem
 		// None stored, or the directory's refusal: no groups and no username,
 		// so nothing the principal holds stands (pre-flight C-1).
 		return policy.Member{Principal: principal, Directory: true}, nil
+	}
+	if who, ok := b.Directory.DeclaredBy(sm.Username); ok {
+		return policy.Member{Principal: principal, Directory: true}, fmt.Errorf("%w: the stored membership gives "+
+			"username %q for %s, which subject %q declares", directory.ErrUsernameTaken, sm.Username, principal, who)
+	}
+	switch {
 	case b.Now().Sub(sm.VerifiedAt) > b.Directory.Cfg.Grace:
 		// Older than grace: no groups, which can only narrow. A reload during
 		// a long outage never widens a context on a membership nobody has

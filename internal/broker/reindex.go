@@ -6,6 +6,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/rhwendt/port49/internal/directory"
 	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/store"
 )
@@ -122,8 +123,8 @@ func (b *Broker) reindexContext(ctx context.Context, cur *policy.Policy, r store
 		return true, nil
 	}
 	m, err := b.storedMember(ctx, c.Principal)
-	if err != nil {
-		return true, err
+	if err != nil && !errors.Is(err, directory.ErrUsernameTaken) {
+		return true, err // a collision is the refused member m, which the judgment revokes
 	}
 	if _, err := b.refreshContext(ctx, cur, nil, rep.At, m, r.ContextRef, rep, map[string]bool{},
 		false, time.Time{}); err != nil && !errors.Is(err, store.ErrConflict) {

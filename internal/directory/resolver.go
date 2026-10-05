@@ -400,6 +400,14 @@ func (r *Resolver) grace(ctx context.Context, read func(context.Context) (store.
 	return Answer{Membership: m, Source: Grace}, nil
 }
 
+// DeclaredBy is the subject that declares username, and false when none
+// does: the collision check Verify and grace apply (pre-flight M-11), for a
+// pass that judges by a stored membership and asks no server.
+func (r *Resolver) DeclaredBy(username string) (string, bool) {
+	who, ok := r.declared()[username]
+	return who, ok
+}
+
 func (r *Resolver) declared() map[string]string {
 	if r.Declared == nil {
 		return nil

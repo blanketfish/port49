@@ -1024,6 +1024,10 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 	if sts.etcd != nil {
 		redeemGuard = restored.Allows
 	}
+	if cfg.StalenessOff {
+		fmt.Fprintln(stderr, procOf(cfg)+": session.staleness_ceiling is 0s: no context ever goes context_stale, so a "+
+			"context the broker stopped refreshing keeps its last answer until its own session ends")
+	}
 	deps := server.Deps{Admission: admit, Quarantined: watchQuarantine(live, m, time.Now), Keys: keySets, KeySeen: seen.Mark,
 		// The context indexes are given the context's own idle TTL: they exist
 		// to let revocation reach a live context, so they need to outlast
@@ -1032,12 +1036,10 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		// login's join reads the store.
 		Authen: authen.New(handlerStore, log, lim, m, time.Now, newCtxID, cfg.ReceiptIdleTTL, cfg.ReceiptMaxAge,
 			cfg.ContextIdleTTL, cfg.Session.IndexTTL, tags).WithMarks(authMarks).WithRedeemGuard(redeemGuard),
-		// `session.staleness_ceiling` defaults to 0 — no staleness check — and
-		// that default is the operational one, not an unfinished wiring: a
-		// finite ceiling denies a steadily working operator `context_stale`,
-		// "the broker is unreachable", at login plus the ceiling, whether or
-		// not any broker exists to refresh from. It is worth setting only once
-		// something is calling session.Manager.Refresh on a schedule.
+		// `session.staleness_ceiling` defaults to 4h (plan 7g; OR-1): the
+		// broker's scheduled refresh stamps `refreshed_at` every
+		// `broker.refresh_interval`. An explicit 0s turns the check off, which
+		// the start says (cfg.StalenessOff).
 		//
 		// The grace window is how long past the ceiling a context is denied
 		// and kept before the authorizer deletes it (plan 7b). The ceiling

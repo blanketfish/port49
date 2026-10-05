@@ -20,17 +20,23 @@ import (
 // read st as a real resolver does. It never dials. Calls counts the
 // answers it gave, so a test asserts it was not asked.
 func ForTestsStaticResolver(st store.Store, answers map[string]Answer, err error) *Resolver {
+	return ForTestsFuncResolver(st, func(principal string) (Answer, error) {
+		if err != nil {
+			return Answer{}, err
+		}
+		a, ok := answers[principal]
+		if !ok {
+			return Answer{}, fmt.Errorf("%w: no entry for %s", ErrUnmapped, principal)
+		}
+		return a, nil
+	})
+}
+
+// ForTestsFuncResolver is ForTestsStaticResolver with answer computed per
+// call, for a test that must act while a principal is being verified.
+func ForTestsFuncResolver(st store.Store, answer func(principal string) (Answer, error)) *Resolver {
 	return &Resolver{Store: st, Now: time.Now, M: metrics.New(prometheus.NewRegistry()),
-		Say: func(string, ...any) {}, static: func(principal string) (Answer, error) {
-			if err != nil {
-				return Answer{}, err
-			}
-			a, ok := answers[principal]
-			if !ok {
-				return Answer{}, fmt.Errorf("%w: no entry for %s", ErrUnmapped, principal)
-			}
-			return a, nil
-		}}
+		Say: func(string, ...any) {}, static: answer}
 }
 
 // staticKey is the principal a static Map reads leaf as.
