@@ -281,10 +281,13 @@ func TestCachedBoundsAreTrustedNoFurtherThanTheirDefaults(t *testing.T) {
 	l.Observe(ka, 7, 7, time.Time{}, time.Time{})
 	l.Fence().SetUp(true)
 	c := Cached(b, l, CacheConfig{TTL: time.Second, Max: 0, IdleTTL: time.Hour, Now: func() time.Time { return now }})
-	get(t, c)
-	get(t, c)
-	if b.count() != 1 {
-		t.Fatalf("reads %d: Max 0 cleared the cache at each fill", b.count())
+	kb := store.ContextKey{NAS: "leaf-02", Username: "bob"}
+	l.Observe(kb, 7, 7, time.Time{}, time.Time{})
+	for _, k := range []store.ContextKey{ka, kb, ka, kb} {
+		c.GetContext(context.Background(), k)
+	}
+	if b.count() != 2 {
+		t.Fatalf("reads %d: Max 0 kept fewer than two entries", b.count())
 	}
 	// TTL 0: nothing is a hit and nothing is ever served stale.
 	b2 := &backing{Store: memory.New(time.Now), c: store.Context{CtxID: "c1", Rev: 7, LastTouchedAt: now}}
@@ -297,5 +300,26 @@ func TestCachedBoundsAreTrustedNoFurtherThanTheirDefaults(t *testing.T) {
 	b2.set(store.Context{}, store.ErrUnavailable)
 	if _, err := get(t, c2); !errors.Is(err, store.ErrUnavailable) {
 		t.Fatalf("TTL 0 served stale: %v", err)
+	}
+}
+
+// A read still waiting on the fence, not yet timed out, is the store having
+// answered with a record the feed has not reached: an open circuit or
+// saturated slots meanwhile are no outage either (plan 7f, review m-1).
+func TestNoStaleServeWhileAReadWaitsOnTheFence(t *testing.T) {
+	b, c, l, now, lookups := cacheRig(t)
+	get(t, c)
+	l.Fence().Attach(5)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go l.Fence().Wait(ctx, 99)
+	eventually(t, func() bool { return l.Fence().Behind() })
+	*now = now.Add(5 * time.Second)
+	b.set(store.Context{}, fmt.Errorf("%w: the context pool's circuit is open", store.ErrUnavailable))
+	if _, err := get(t, c); !errors.Is(err, store.ErrUnavailable) {
+		t.Fatalf("served while a read waited on the fence: %v", err)
+	}
+	if n := testutil.ToFloat64(lookups.WithLabelValues("stale")); n != 0 {
+		t.Fatalf("stale serves counted: %v", n)
 	}
 }

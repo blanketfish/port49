@@ -32,7 +32,8 @@ type Fence struct {
 	asks    chan struct{}
 	// timedOut is told each ErrFeedBehind (OnTimeout).
 	timedOut func()
-	// behind is the highest revision a Wait gave up on; Behind is true while
+	// behind is the highest revision a Wait has waited on, from the moment it
+	// starts waiting, not only once it gives up; Behind is true while
 	// the feed has not passed it.
 	behind uint64
 }
@@ -124,6 +125,7 @@ func (f *Fence) Wait(ctx context.Context, rev uint64) error {
 		if !counted {
 			f.waiting++
 			counted = true
+			f.behind = max(f.behind, rev) // etcd has answered with a record the feed has not reached
 		}
 		wake, at := f.wake, f.at
 		f.mu.Unlock()
@@ -136,7 +138,6 @@ func (f *Fence) Wait(ctx context.Context, rev uint64) error {
 		case <-ctx.Done():
 			f.mu.Lock()
 			timedOut := f.timedOut
-			f.behind = max(f.behind, rev)
 			f.mu.Unlock()
 			if timedOut != nil {
 				timedOut()
