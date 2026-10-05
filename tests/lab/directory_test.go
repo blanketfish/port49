@@ -591,7 +591,7 @@ func (l *labDir) resolverWith(t *testing.T, cfg directory.Config, password strin
 		t.Fatalf("%s: %v", l.name, err)
 	}
 	if ev != nil {
-		dial = recordingDialer(dial, ev)
+		dial = recordingDialer(dial, ev, string(cfg.Bind.Mechanism))
 	}
 	m := metrics.New(prometheus.NewRegistry())
 	say := func(format string, args ...any) {
@@ -815,11 +815,14 @@ func (r recordingClient) SearchContext(ctx context.Context, req *ldap.SearchRequ
 	return res, err
 }
 
-// recordingDialer returns inner's connections wrapped in a recorder.
-func recordingDialer(inner directory.Dialer, ev *evidenceLog) directory.Dialer {
+// recordingDialer returns inner's connections wrapped in a recorder, and records
+// a dial that fails (a refused bind) as a bind line.
+func recordingDialer(inner directory.Dialer, ev *evidenceLog, mechanism string) directory.Dialer {
 	return func(ctx context.Context, s directory.Server) (directory.Client, error) {
+		start := time.Now()
 		c, err := inner(ctx, s)
 		if err != nil {
+			ev.bind(mechanism, err, time.Since(start))
 			return nil, err
 		}
 		return recordingClient{Client: c, ev: ev}, nil
@@ -871,4 +874,79 @@ func writeResult(t *testing.T, d *directories, row, platform, claim, version, ob
 		t.Fatalf("write %s: %v", path, err)
 	}
 	t.Logf("wrote %s", path)
+}
+
+// configNote is what the directory was configured to do that a note's rows
+// depend on: the lab's accommodations, which a reader of the note alone must
+// see. None is evidence about a Windows DC (L44).
+func (l *labDir) configNote() string {
+	if l.name == platOpenLDAP {
+		return "### How this directory was configured\n\n" +
+			"- `olcSecurity: tls=1` (every operation must be under TLS), set after the seed was loaded over ldapi.\n" +
+			"- `olcTLSVerifyClient: try`: a client certificate is requested and verified when presented.\n" +
+			"- `olcAuthzRegexp: \"^cn=port49-broker,o=port49 lab$\" -> cn=port49,ou=Svc,dc=corp,dc=example,dc=com`.\n" +
+			"- The `memberof` overlay with `olcMemberOfRefInt: TRUE`; the seed was loaded with `ldapadd` so the overlay ran.\n" +
+			"- `cn=port49` has read access to everything; anonymous has none beyond the root DSE and authentication.\n\n"
+	}
+	return "### How this directory was configured\n\n" +
+		"- `ldap server require strong auth` is `yes` at start; L43's GSSAPI and plain-LDAP cells are measured under it and again " +
+		"under the setting that permits SASL over TLS, each row naming the value in force.\n" +
+		"- TLS from the lab PKI (`tls certfile`, `tls keyfile`, `tls cafile`); sysvol ACLs in `user.NTACL` (a lab accommodation).\n" +
+		"- The DC's account `DC1$` carries the extra SPN `ldap/localhost`, because port49 binds GSSAPI to `ldap/<the URI's host>` and the " +
+		"lab's URIs name `localhost`; the client `krb5.conf` maps `localhost` to `CORP.EXAMPLE.COM` and reaches the KDC at 127.0.0.1:20088 over TCP.\n" +
+		"- `port49` is an ordinary domain user with its default rights.\n\n"
+}
+
+// setStrongAuth switches the DC's `ldap server require strong auth` to value,
+// restarts it and waits for LDAPS; it returns the value testparm then reports.
+func (l *labDir) setStrongAuth(t *testing.T, value string) string {
+	t.Helper()
+	if out, err := l.exec("sed", "-i", "s/^\\(\\s*ldap server require strong auth\\s*=\\s*\\).*/\\1"+value+"/", "/etc/samba/smb.conf"); err != nil {
+		t.Fatalf("setting ldap server require strong auth: %v\n%s", err, tailOf(out, 400))
+	}
+	if b, err := l.d.dockerCompose("restart", "-t", "5", l.service).CombinedOutput(); err != nil {
+		t.Fatalf("restarting %s: %v\n%s", l.service, err, tailOf(string(b), 400))
+	}
+	deadline := time.Now().Add(2 * time.Minute)
+	for {
+		err := l.d.rootDSE(l)
+		if err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s: LDAPS did not answer after the restart: %v", l.name, err)
+		}
+		time.Sleep(2 * time.Second)
+	}
+	got, err := l.exec("sh", "-c", "testparm -s --parameter-name='ldap server require strong auth' 2>/dev/null")
+	if err != nil {
+		t.Fatalf("reading the setting back: %v\n%s", err, tailOf(got, 400))
+	}
+	return "ldap server require strong auth = " + strings.TrimSpace(got)
+}
+
+// certRequested says whether l's LDAPS asked a connecting client for a
+// certificate, and how many CA names it listed: without a request, Go's TLS
+// client sends none, and an EXTERNAL bind has nothing to map.
+func (l *labDir) certRequested(t *testing.T) string {
+	t.Helper()
+	tc, err := l.d.pki.clientTLS(l.uri)
+	if err != nil {
+		t.Fatal(err)
+	}
+	asked, names := false, 0
+	tc.GetClientCertificate = func(ri *tls.CertificateRequestInfo) (*tls.Certificate, error) {
+		asked, names = true, len(ri.AcceptableCAs)
+		return &tls.Certificate{}, nil
+	}
+	host := strings.TrimPrefix(l.uri, "ldaps://")
+	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: 5 * time.Second}, "tcp", host, tc)
+	if err != nil {
+		return "the probe's handshake failed: " + oneLineMax(err.Error(), 120)
+	}
+	conn.Close()
+	if !asked {
+		return "the server sent no CertificateRequest, so a client certificate is never presented to it"
+	}
+	return fmt.Sprintf("the server sent a CertificateRequest listing %d acceptable CA name(s)", names)
 }

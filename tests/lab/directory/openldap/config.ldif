@@ -10,9 +10,9 @@ olcTLSCACertificateFile: /etc/ldap/tls/ca.pem
 olcTLSCertificateFile: /etc/ldap/tls/server.pem
 olcTLSCertificateKeyFile: /etc/ldap/tls/server-key.pem
 olcTLSVerifyClient: try
-# Plan 7g's brief says tls=1. ssf=1 refuses the same plain-LDAP simple bind
-# (confidentialityRequired) and still admits the ldapi:/// socket the seed is
-# loaded through, which carries no TLS but a local SSF of 71.
+# The seed is loaded over the ldapi:/// socket, which carries no TLS but a local
+# SSF of 71, so the lab starts at ssf=1; the entrypoint switches this to tls=1
+# (L43: "a directory configured to require TLS") once the seed is in.
 olcSecurity: ssf=1
 olcAuthzRegexp: {0}"^cn=port49-broker,o=port49 lab$" "cn=port49,ou=Svc,dc=corp,dc=example,dc=com"
 

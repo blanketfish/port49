@@ -452,11 +452,12 @@ What each directory is configured to do, and where the lab departs from the plan
 - **OpenLDAP** loads its seed through `ldapadd` on the `ldapi:///` socket, not `slapadd -n1`:
   the `memberof` overlay writes `memberOf` only for an operation that runs through it. The
   broker's certificate maps to `cn=port49,ou=Svc,...` by `olcAuthzRegexp`. `olcSecurity` is
-  `ssf=1`, not `tls=1`: both refuse a simple bind over plain LDAP, and `tls=1` would refuse the
-  seed's own `ldapi:///` connection too.
+  `ssf=1` while the seed loads (`tls=1` would refuse the seed's own `ldapi:///` connection), then
+  the entrypoint sets `olcSecurity: tls=1` with `ldapmodify` on `cn=config`, so every operation the tests make is under TLS.
 - **Samba AD** is provisioned at first start, with the sysvol ACLs kept in `user.NTACL` (a
   container cannot write `security.NTACL`; the lab reads nothing from sysvol). It sets
-  `ldap server require strong auth = yes`. The DC's account has the extra SPN `ldap/localhost`,
+  `ldap server require strong auth = yes`; L43 measures GSSAPI and the plain-LDAP bind under it and again after
+  switching `smb.conf` to `allow_sasl_over_tls` and restarting the DC. The DC's account has the extra SPN `ldap/localhost`,
   because port49 binds GSSAPI to `ldap/<the URI's host>` and the lab's URIs name `localhost`,
   which the test certificate carries. `bob`'s `mail` is edited with `ldbmodify` on the DC's own
   database (`/lab/set-attr.sh`), the non-interactive form of `samba-tool user edit`.
@@ -464,7 +465,7 @@ What each directory is configured to do, and where the lab departs from the plan
 Two environment variables are for debugging the harness: `PORT49_LAB_DIRECTORY_OUT=<dir>`
 writes the notes and evidence under `<dir>/tests/lab/` instead of the repository, so a dry run
 leaves nothing to commit; `PORT49_LAB_DIRECTORY_KEEP=1` leaves the containers up afterwards
-(take them down with `docker compose -p port49labdir -f tests/lab/directory/compose.yaml down -v`).
+(take them down with `docker compose -p port49labdir -f tests/lab/directory/compose.yaml down -v`; `lab.env` is optional there).
 
 A recorded run is made from a detached worktree pinned at the commit under test, as every
 lab run is.

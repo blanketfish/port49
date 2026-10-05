@@ -31,5 +31,13 @@ until ldapsearch -Y EXTERNAL -H ldapi:/// -b '' -s base -LLL namingContexts >/de
 done
 ldapadd -Y EXTERNAL -H ldapi:/// -f /tmp/seed.ldif >/dev/null
 rm -f /tmp/seed.ldif
+# From here on every operation must be under TLS: a simple bind over plain LDAP
+# is refused, and so is anything over ldapi, which nothing later uses.
+ldapmodify -Y EXTERNAL -H ldapi:/// >/dev/null <<'LDIF'
+dn: cn=config
+changetype: modify
+replace: olcSecurity
+olcSecurity: tls=1
+LDIF
 echo "lab: openldap fixture loaded"
 wait $pid

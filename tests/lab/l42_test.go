@@ -34,6 +34,7 @@ func TestL42NestedGroups(t *testing.T) {
 		t.Run(dir.name, func(t *testing.T) {
 			ev := evidence(t, d, "L42-"+dir.name)
 			var obs strings.Builder
+			obs.WriteString(dir.configNote())
 			obs.WriteString("| user | mode | groups returned | result | time |\n|---|---|---|---|---|\n")
 			for _, mode := range []directory.Nested{"in_chain", "recursive", "direct"} {
 				for _, user := range []string{"alice", "carol", "dave"} {
@@ -44,7 +45,11 @@ func TestL42NestedGroups(t *testing.T) {
 					a, err := r.Verify(ctx, dir.principal(user))
 					took := time.Since(start)
 					cancel()
-					fmt.Fprintf(&obs, "| %s | %s | %s | %s | %s |\n", user, mode, strings.Join(a.GroupNames, ", "),
+					groups := strings.Join(a.GroupNames, ", ")
+					if groups == "" {
+						groups = "(none)"
+					}
+					fmt.Fprintf(&obs, "| %s | %s | %s | %s | %s |\n", user, mode, groups,
 						errOrOK(err), took.Round(time.Millisecond))
 					if want, ok := l42Want[user][mode]; ok {
 						if err != nil || !slices.Equal(a.GroupNames, want) {
@@ -55,6 +60,7 @@ func TestL42NestedGroups(t *testing.T) {
 			}
 			ev.mark("L42 memberOf on alice's entry")
 			fmt.Fprintf(&obs, "\nmemberOf on alice's entry: %s\n", strings.Join(dir.memberOf(t, "alice"), ", "))
+			ev.assertClean(t, d.password)
 			writeResult(t, d, "L42", dir.name, l42Claim, dir.version(t), obs.String(), "tests/lab/evidence/L42-"+dir.name+".json")
 		})
 	}

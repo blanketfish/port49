@@ -9,7 +9,9 @@ services:
     build: ./openldap
     image: port49lab/openldap:bookworm
     hostname: openldap
-    env_file: ../logs/directory/lab.env
+    env_file:
+      - path: ../logs/directory/lab.env
+        required: false
     volumes:
       - ../logs/directory/pki:/pki:ro
     ports:
@@ -23,7 +25,9 @@ services:
     build: ./samba
     image: port49lab/samba:bookworm
     hostname: dc1
-    env_file: ../logs/directory/lab.env
+    env_file:
+      - path: ../logs/directory/lab.env
+        required: false
     volumes:
       - ../logs/directory/pki:/pki:ro
       - ../logs/directory/out:/out
