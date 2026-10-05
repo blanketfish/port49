@@ -272,6 +272,14 @@ type Metrics struct {
 	// hold-off after a refused bind, 0 when clear. No labels.
 	DirectoryBindHoldoff prometheus.GaugeFunc
 	directoryBindHoldoff atomic.Pointer[func() float64]
+	// port49_directory_walks_truncated_total: nested-group walks that ended
+	// at max_depth or the node bound with groups unconfirmed, and so grant
+	// none of them. No labels.
+	DirectoryWalksTruncated prometheus.Counter
+	// port49_directory_group_names_ambiguous: group names dropped from
+	// matching because two groups share them, at the last resolution. No
+	// labels.
+	DirectoryGroupNamesAmbiguous prometheus.Gauge
 	// port49_policy_reloads_total{outcome}: attempts to put a changed policy
 	// file in force (plan 4b) — "applied", "unchanged" (a SIGHUP with nothing
 	// new), or "refused" (the file does not load; the policy in force keeps
@@ -563,6 +571,10 @@ func New(reg prometheus.Registerer) *Metrics {
 			Help: "1 for the directory server queries are sent to (sticky selection)."}, []string{"server"}),
 		DirectorySiteCrossings: prometheus.NewCounter(prometheus.CounterOpts{Name: "port49_directory_site_crossings_total",
 			Help: "Selections that crossed sites: consistency events, membership read there may lag replication (design §10)."}),
+		DirectoryWalksTruncated: prometheus.NewCounter(prometheus.CounterOpts{Name: "port49_directory_walks_truncated_total",
+			Help: "Nested-group walks that ended at max_depth or the node bound with groups unconfirmed; those groups are not granted."}),
+		DirectoryGroupNamesAmbiguous: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_directory_group_names_ambiguous",
+			Help: "Group names that match no one because two groups under groups_base_dn share them."}),
 		PolicyReloads: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_policy_reloads_total",
 			Help: "Attempts to put a changed policy file in force, by outcome."}, []string{"outcome"}),
 		PolicyFileRefused: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_policy_file_refused",
@@ -640,7 +652,7 @@ func New(reg prometheus.Registerer) *Metrics {
 		m.DevicesQuarantined, m.DevicesAdmissionRefused, m.ContextRefreshes, m.ContextsReindexed,
 		m.ContextsReindexFailures, m.SessionRefreshes, m.TokensSuperseded, m.CeilingWarnings,
 		m.Revocations, m.RevocationsInForce, m.RevocationsFileFailed, m.CertStatusChecks, m.CRLLoads, m.CRLNextUpdate,
-		m.CertStatusUnavailable, m.DirectoryQueries, m.DirectoryServerUp, m.DirectorySelected, m.DirectorySiteCrossings, m.DirectoryBindHoldoff, m.PolicyReloads, m.PolicyFileRefused,
+		m.CertStatusUnavailable, m.DirectoryQueries, m.DirectoryServerUp, m.DirectorySelected, m.DirectorySiteCrossings, m.DirectoryBindHoldoff, m.DirectoryWalksTruncated, m.DirectoryGroupNamesAmbiguous, m.PolicyReloads, m.PolicyFileRefused,
 		m.PolicyRefreshPending, m.PolicyBundleMatchesRunner, m.BrokerMintGateClosed, m.RedemptionRestoreGuarded,
 		m.InventoryReloads,
 		m.InventoryFileRefused,
