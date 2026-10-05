@@ -40,7 +40,7 @@ const (
 var pools = map[string]Pool{
 	"GetContext": Context, "PutContext": Context, "SwapContext": Context, "SwapLogin": Context,
 	"RewriteContext": Context, "TouchContext": Context, "SetPrivilege": Context, "AnnotateContext": Context,
-	"RefreshContext": Context, "SetRevokedAt": Context, "SetContextPolicy": Context, "DeleteContext": Context,
+	"RefreshContext": Context, "SetRevokedAt": Context, "SetContextPolicy": Context, "StampRefreshed": Context, "DeleteContext": Context,
 	"DeleteContextIf": Context, "GetBlob": Context, "BumpBlob": Context, "IndexContext": Context,
 	"UnindexContext": Context, "UnindexRef": Context, "ContextsByPrincipal": Context, "ContextsBySid": Context,
 	"ContextsByCert": Context, "ReindexSid": Context,
@@ -517,6 +517,10 @@ func (g *guarded) RefreshContext(ctx context.Context, k store.ContextKey, r stor
 
 func (g *guarded) SetRevokedAt(ctx context.Context, k store.ContextKey, at time.Time) error {
 	return g.do(ctx, Context, func(ctx context.Context) error { return g.inner.SetRevokedAt(ctx, k, at) })
+}
+
+func (g *guarded) StampRefreshed(ctx context.Context, k store.ContextKey, policyRev uint64, at time.Time) error {
+	return g.do(ctx, Context, func(ctx context.Context) error { return g.inner.StampRefreshed(ctx, k, policyRev, at) })
 }
 
 func (g *guarded) SetContextPolicy(ctx context.Context, k store.ContextKey, policyRev uint64, p store.ContextPolicy) error {

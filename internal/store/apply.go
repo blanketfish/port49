@@ -100,4 +100,12 @@ func ApplyContextPolicy(c *Context, p ContextPolicy) {
 			c.SessionExpires = ceiling
 		}
 	}
+	ApplyStamp(c, p.RefreshedAt)
+}
+
+// ApplyStamp raises RefreshedAt to at, never lowering it (plan 7g).
+func ApplyStamp(c *Context, at time.Time) {
+	if at.After(c.RefreshedAt) {
+		c.RefreshedAt = at
+	}
 }

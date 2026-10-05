@@ -815,6 +815,25 @@ func (s *Store) SetContextPolicy(_ context.Context, k store.ContextKey, policyRe
 	return nil
 }
 
+// StampRefreshed is the scheduled refresh's stamp under the one lock: it
+// compares the policy revision and moves only Rev (store.Store).
+func (s *Store) StampRefreshed(_ context.Context, k store.ContextKey, policyRev uint64, at time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok := s.contexts[k]
+	if !ok || !e.exp.After(s.now()) {
+		delete(s.contexts, k)
+		return store.ErrNotFound
+	}
+	if e.policyRev != policyRev {
+		return store.ErrConflict
+	}
+	store.ApplyStamp(&e.c, at)
+	e.rev = s.nextRevLocked()
+	s.contexts[k] = e
+	return nil
+}
+
 // RewriteContext writes c over the live record at k only while its
 // revision is rev, under the one lock (store.Store): the sealing layer's
 // narrow setter.

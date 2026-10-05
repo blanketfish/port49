@@ -178,6 +178,7 @@ type tokenSecret struct {
 	MaxPrivilege  uint8            `json:"max_privilege"`
 	AuthTime      time.Time        `json:"auth_time"`
 	MintedAt      time.Time        `json:"minted_at"`
+	VerifiedAt    time.Time        `json:"verified_at"`
 }
 
 // receiptSecret is a receipt's sealed part. FirstRedeemedAt anchors the
@@ -367,7 +368,7 @@ func (w *wrapped) sealToken(k store.TokenKey, t store.Token) (store.Token, error
 	b, err := json.Marshal(tokenSecret{Secret: t.Secret, Principal: t.Principal, Username: t.Username,
 		Credential: t.Credential, Kind: t.Kind, ExpiresAt: t.ExpiresAt, BlobHash: t.BlobHash,
 		MaxSessionAge: t.MaxSessionAge, Enable: t.Enable, MaxPrivilege: t.MaxPrivilege, AuthTime: t.AuthTime,
-		MintedAt: t.MintedAt})
+		MintedAt: t.MintedAt, VerifiedAt: t.VerifiedAt})
 	if err != nil {
 		return store.Token{}, err
 	}
@@ -392,7 +393,8 @@ func (w *wrapped) openToken(k store.TokenKey, t store.Token) (store.Token, error
 	}
 	return store.Token{ID: t.ID, Secret: ts.Secret, Kind: ts.Kind, ExpiresAt: ts.ExpiresAt, Principal: ts.Principal,
 		Username: ts.Username, BlobHash: ts.BlobHash, MaxSessionAge: ts.MaxSessionAge, Enable: ts.Enable,
-		MaxPrivilege: ts.MaxPrivilege, Credential: ts.Credential, AuthTime: ts.AuthTime, MintedAt: ts.MintedAt}, nil
+		MaxPrivilege: ts.MaxPrivilege, Credential: ts.Credential, AuthTime: ts.AuthTime, MintedAt: ts.MintedAt,
+		VerifiedAt: ts.VerifiedAt}, nil
 }
 
 func (w *wrapped) PutToken(ctx context.Context, k store.TokenKey, t store.Token) (int, error) {
@@ -813,6 +815,18 @@ func (w *wrapped) SetContextPolicy(ctx context.Context, k store.ContextKey, poli
 		return w.inner.SetContextPolicy(ctx, k, policyRev, store.ContextPolicy{RevokedAt: p.RevokedAt})
 	}
 	return err
+}
+
+// StampRefreshed is a rewrite compared on the policy revision that does
+// not move it: RefreshedAt is sealed, and a stamp is no policy write.
+func (w *wrapped) StampRefreshed(ctx context.Context, k store.ContextKey, policyRev uint64, at time.Time) error {
+	return w.rewrite(ctx, k, 0, store.MaxJoinAttempts, func(c *store.Context) (bool, error) {
+		if c.PolicyRev != policyRev {
+			return false, store.ErrConflict
+		}
+		store.ApplyStamp(c, at)
+		return false, nil
+	})
 }
 
 // RewriteContext seals c for k and passes the write through, telling

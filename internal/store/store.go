@@ -126,6 +126,11 @@ type Token struct {
 	// RevokedAt (spec §5.6). Zero reads as "minted before any revocation",
 	// which keeps the mark.
 	MintedAt time.Time
+	// VerifiedAt is when the directory membership this token was minted on
+	// was verified (plan 7g, Ruling 11): the login writes it as the
+	// context's RefreshedAt, so a grace mint never resets the staleness
+	// clock. Zero is a mint with no directory: the redemption's now.
+	VerifiedAt time.Time
 
 	Sealed []byte // written by internal/store/crypt; zero in plaintext form
 }
@@ -542,6 +547,11 @@ type ContextPolicy struct {
 	// as a login gives a token with none: it denies, loudly, rather than
 	// passing for a legitimate never.
 	MaxSessionAge time.Duration
+	// RefreshedAt, when non-zero, raises the context's RefreshedAt to it:
+	// the scheduled refresh verified the directory (plan 7g, Ruling 12). A
+	// policy reload leaves it zero: nothing about the directory was
+	// re-verified (spec §5.1.3).
+	RefreshedAt time.Time
 }
 
 // ContextRef is what the indexes hold: the context key, nothing more.
@@ -850,7 +860,8 @@ type Store interface {
 	//
 	// It does not extend the expiry or stamp LastTouchedAt: a policy edit is
 	// not activity, or every reload would keep every idle context alive. It
-	// does not touch AuthTime or RefreshedAt, nor lengthen SessionExpires:
+	// does not touch AuthTime, nor RefreshedAt unless p carries one, nor
+	// lengthen SessionExpires:
 	// nothing about the operator's authentication or the directory was
 	// re-verified. And it never clears RevokedAt, for the reason
 	// RefreshContext never does, nor moves it earlier: a revoking write onto
@@ -859,6 +870,14 @@ type Store interface {
 	//
 	// ErrNotFound if the key is absent or already expired.
 	SetContextPolicy(ctx context.Context, k ContextKey, policyRev uint64, p ContextPolicy) error
+
+	// StampRefreshed raises k's RefreshedAt to at, only while its PolicyRev
+	// is still policyRev, and moves neither PolicyRev nor the expiry: the
+	// scheduled refresh's stamp on a context whose answer it found
+	// unchanged (plan 7g, Ruling 12). A context changed since the read is
+	// ErrConflict, read again; an earlier at than the one held leaves it.
+	// ErrNotFound if the key is absent or expired.
+	StampRefreshed(ctx context.Context, k ContextKey, policyRev uint64, at time.Time) error
 	// DeleteContext has no production caller today: the caller it had was
 	// author's `username_mismatch` branch, which under the old `(nas, port)`
 	// key could delete a live operator's context on an uncredentialed request.

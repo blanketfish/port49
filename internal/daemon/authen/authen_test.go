@@ -506,6 +506,10 @@ func (noStore) SetContextPolicy(context.Context, store.ContextKey, uint64, store
 	panic("store called")
 }
 
+func (noStore) StampRefreshed(context.Context, store.ContextKey, uint64, time.Time) error {
+	panic("store called")
+}
+
 func (noStore) SupersedeTokens(context.Context, store.TokenKey, time.Time) error {
 	panic("store called")
 }
@@ -3088,5 +3092,58 @@ func TestATokenMintedBeforeTheCeilingDoesNotRedeemAfterIt(t *testing.T) {
 	}
 	if _, err := f.st.GetContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "bob"}); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("a context was written past the ceiling: %v", err)
+	}
+}
+
+// A token minted from a membership verified earlier (a grace mint, plan
+// 7g Ruling 11) gives its context that instant as refreshed_at, so the
+// staleness ceiling counts from the directory's last answer, not the
+// redemption. A token with none (no directory) is the redemption's now.
+func TestALoginTakesTheTokensVerifiedAt(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		verified time.Duration // before f.now; 0 is none
+		want     time.Duration
+	}{{"a grace mint", 3 * time.Hour, 3 * time.Hour}, {"no directory", 0, 0}} {
+		t.Run(c.name, func(t *testing.T) {
+			f := setup(t)
+			secret := f.tag() + "veriveriveriveriveri0123"
+			tok := store.Token{ID: "v", Secret: []byte(secret), Kind: store.KindLogin, Username: "alice",
+				Principal: "user:alice@example.com", BlobHash: "sha256:b", AuthTime: f.now, Enable: "token",
+				MaxPrivilege: 15, ExpiresAt: f.now.Add(time.Minute)}
+			if c.verified > 0 {
+				tok.VerifiedAt = f.now.Add(-c.verified)
+			}
+			if _, err := f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"}, tok); err != nil {
+				t.Fatal(err)
+			}
+			f.h.NewSession(f.peer).Start(context.Background(), wire.AuthenStart{Action: wire.AuthenActionLogin,
+				AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceLogin, User: []byte("alice"),
+				Port: []byte("ssh"), RemAddr: []byte("198.51.100.4"), Data: []byte(secret)})
+			got, err := f.st.GetContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"})
+			if err != nil || !got.RefreshedAt.Equal(f.now.Add(-c.want)) {
+				t.Fatalf("refreshed_at %v, want %v (%v)", got.RefreshedAt, f.now.Add(-c.want), err)
+			}
+		})
+	}
+}
+
+// A VerifiedAt after the redemption (a broker clock ahead of port49d's)
+// is never written: the context is not given a staleness clock in the
+// future.
+func TestAVerifiedAtAheadOfTheDaemonIsNow(t *testing.T) {
+	f := setup(t)
+	secret := f.tag() + "aheadaheadaheadahead0123"
+	if _, err := f.st.PutToken(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"},
+		store.Token{ID: "a", Secret: []byte(secret), Kind: store.KindLogin, Username: "alice",
+			Principal: "user:alice@example.com", BlobHash: "sha256:b", AuthTime: f.now, VerifiedAt: f.now.Add(time.Hour),
+			ExpiresAt: f.now.Add(time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	f.h.NewSession(f.peer).Start(context.Background(), wire.AuthenStart{Action: wire.AuthenActionLogin,
+		AuthenType: wire.AuthenTypePAP, Service: wire.AuthenServiceLogin, User: []byte("alice"),
+		Port: []byte("ssh"), RemAddr: []byte("198.51.100.4"), Data: []byte(secret)})
+	if got, _ := f.st.GetContext(context.Background(), store.ContextKey{NAS: "leaf-01", Username: "alice"}); !got.RefreshedAt.Equal(f.now) {
+		t.Fatalf("refreshed_at %v, want now", got.RefreshedAt)
 	}
 }

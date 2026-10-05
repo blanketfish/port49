@@ -139,6 +139,7 @@ type Subject struct {
 	MaxSessionAge       time.Duration
 	Credential          store.Credential
 	AuthTime            time.Time
+	VerifiedAt          time.Time // the membership's verification; zero: none
 }
 
 // Request is one mint: a Subject, the device the tokens are cut for, and the
@@ -453,6 +454,7 @@ func (m *Minter) Mint(ctx context.Context, r Request) (Result, error) {
 			Principal: r.Subject.Principal, Username: r.Subject.Username, BlobHash: r.BlobHash,
 			MaxSessionAge: r.Subject.MaxSessionAge, Enable: r.Subject.Enable, MaxPrivilege: r.Subject.MaxPrivilege,
 			Credential: r.Subject.Credential, AuthTime: r.Subject.AuthTime, MintedAt: mintedAt,
+			VerifiedAt: r.Subject.VerifiedAt,
 		}); err != nil {
 			return "", err
 		}

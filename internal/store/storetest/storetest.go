@@ -1063,6 +1063,8 @@ func Run(t *testing.T, b Backend) {
 		{"RedeemOrDeleteNotBoth", RedeemOrDeleteNotBoth},
 		{"IndexKeysAreExact", IndexKeysAreExact},
 		{"SupersededIsTheLaterAndExpires", SupersededIsTheLaterAndExpires},
+		{"StampRaisesRefreshedAtAndKeepsPolicyRev", StampRaisesRefreshedAtAndKeepsPolicyRev},
+		{"APolicyWriteCarriesItsRefreshedAt", APolicyWriteCarriesItsRefreshedAt},
 	} {
 		p := p
 		t.Run(p.name, func(t *testing.T) { p.run(t, b) })
