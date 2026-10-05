@@ -2,9 +2,11 @@ package port49d
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -118,6 +120,30 @@ func TestAWitnessFollowedDuringTheGuardsReadIsNoDrop(t *testing.T) {
 	g.judge(etcdstore.RestoreRead{Witness: 100, Header: 150}, nil, high, seen)
 	if !g.Allows() {
 		t.Fatalf("a routine witness write guarded port49d: %q", out.String())
+	}
+}
+
+// pass takes the record before it reads, never after: a witness followed
+// while the read is in flight (the read here calls Saw, as the watch does)
+// is newer than the read, no drop (final review 7e-2 I-4; mutant m27 moved
+// the record after the read and survived every other guard test).
+func TestAPassTakesTheRecordBeforeItReads(t *testing.T) {
+	var out bytes.Buffer
+	g := newRestoreGuard(&out)
+	g.Saw(100)
+	g.pass(context.Background(), time.Second, func(context.Context) (etcdstore.RestoreRead, error) {
+		g.Saw(160) // the runner's next witness, followed while the read is in flight
+		return etcdstore.RestoreRead{Witness: 100, Header: 150}, nil
+	})
+	if !g.Allows() {
+		t.Fatalf("a routine witness write followed during a read guarded port49d: %q", out.String())
+	}
+	// A real drop is still caught by the same pass.
+	g.pass(context.Background(), time.Second, func(context.Context) (etcdstore.RestoreRead, error) {
+		return etcdstore.RestoreRead{Witness: 40, Header: 200}, nil
+	})
+	if g.Allows() {
+		t.Fatal("a pass that read the witness below the record did not guard")
 	}
 }
 

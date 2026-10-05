@@ -164,18 +164,29 @@ func (g *restoreGuard) keep(ctx context.Context, s *etcdstore.Store, callTimeout
 	t := time.NewTicker(witnessEvery)
 	defer t.Stop()
 	for {
-		high, seen := g.recorded()
-		rctx, cancel := context.WithTimeout(ctx, max(witnessEvery, callTimeout))
-		r, err := s.RestoreRead(rctx)
-		cancel()
-		if ctx.Err() != nil {
+		if !g.pass(ctx, callTimeout, s.RestoreRead) {
 			return
 		}
-		g.judge(r, err, high, seen)
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
 		}
 	}
+}
+
+// pass is one read and its judgment: the record is taken before the read
+// (recorded), so a witness followed while it is in flight is no drop. It
+// reports false once ctx ended, with nothing judged.
+func (g *restoreGuard) pass(ctx context.Context, callTimeout time.Duration,
+	read func(context.Context) (etcdstore.RestoreRead, error)) bool {
+	high, seen := g.recorded()
+	rctx, cancel := context.WithTimeout(ctx, max(witnessEvery, callTimeout))
+	r, err := read(rctx)
+	cancel()
+	if ctx.Err() != nil {
+		return false
+	}
+	g.judge(r, err, high, seen)
+	return true
 }
