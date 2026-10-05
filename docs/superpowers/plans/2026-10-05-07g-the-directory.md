@@ -256,6 +256,24 @@ his call.
      - **How long a pin lasts.** As long as the record: `max(directory.grace, 24h)` after the
        principal's last verification or refusal. A value no one has verified for longer than
        that is the directory's to give to another entry, as a reassigned address is.
+     - **The way out: `port49 directory forget <principal>`.** An entry deleted and re-created
+       (a rehire, an AD restore from backup without its tombstones) has a new `objectGUID` or
+       `entryUUID`, so it is refused like any other claimant. Each refusal renews the record,
+       so a rehire who keeps trying never ages out. The operator's escape is an op on the
+       broker's admin socket, the same socket as `port49 revoke` (mode 0600, `SO_PEERCRED`: the
+       broker's own uid or root):
+       - **What it does.** It deletes the principal's membership record, pin included, and
+         writes a `directory_forget` record (spec §5.7, a report like `inventory_change`). The
+         record names the principal, the entry id and DN it was pinned to, its last
+         verification, and `origin: admin_socket uid <n>`.
+       - **What happens next.** The principal's next verification pins whatever entry the
+         directory then gives it.
+       - **The rule for the operator.** It never asks the directory and grants nothing, so it
+         is safe to run only after confirming the new entry is the same person.
+       - **Where it is named.** The refusal's line names the command, so a 3am operator reading
+         the log finds the way out without the docs.
+
+       Built in Task 5 (`DeleteMembership`) and Task 13 (the op, the record, the command).
    - **Who may write the two attributes.** `principal_attribute` and `username_attribute`
      must be writable only by directory administrators. The start line and the operator notes
      say so, with OpenLDAP's default `by self write` on `mail` as the example to remove. The
@@ -699,6 +717,19 @@ Every line below is printed by a task in this plan, and the tests named pin it.
   ```
   port49-broker: directory: identity_ambiguous: a certificate (issuer CN=Corp Users CA, serial 3a9f…) maps by san_email to 2 entries (CN=Alice Smith,OU=Staff,…; CN=Alice Smith,OU=Contractors,…); refusing it: two people matching one certificate is an impersonation path (design §7)
   ```
+- **A principal claimed by another entry** (Task 10), once per principal per hour. A rehire
+  or a restored entry reads the same way, with the same DN:
+
+  ```
+  port49-broker: directory: identity_unmapped: user:alice@corp.example.com is pinned to entry guid:0a1b2c3d and is now claimed by CN=Alice Smith,OU=Staff,DC=corp,DC=example,DC=com (guid:9f8e7d6c); a userPrincipalName value moved between entries never carries a principal with it (Ruling 3); if this is the same person's entry re-created (a rehire, a restore), confirm that and run `port49 directory forget user:alice@corp.example.com` against the broker's admin_socket
+  ```
+
+  and the escape (Task 13), printed by `port49 directory forget` and logged by the broker:
+
+  ```
+  forgot user:alice@corp.example.com: it was pinned to entry guid:0a1b2c3d (CN=Alice Smith,OU=Staff,DC=corp,DC=example,DC=com), last verified 2026-10-05T09:12:00Z; its next verification pins the entry the directory gives it then
+  port49-broker: directory: admin_socket uid 0 forgot user:alice@corp.example.com, pinned to entry guid:0a1b2c3d (CN=Alice Smith,OU=Staff,DC=corp,DC=example,DC=com)
+  ```
 - **New config refusals** (Task 4; the one-process checks, Task 15):
   - `broker.directory.nested_groups is required: in_chain (Active Directory), recursive (port49 walks member) or direct (the groups are flat); design §10`;
   - `broker.directory.certificate_mapping.kind san_email is a weak mapping: set allow_weak: true and list the issuers it is pinned to (design §7)`;
@@ -797,7 +828,13 @@ person, with the test that pins each:
 - `internal/directory/fake_test.go`: Task 6 creates it; Task 10 adds `closeAll`.
 - `internal/broker/listen.go`'s `bind` and `broker.go`'s `revocation`: Task 12 changes their
   signatures and every caller (tests included) in the same commit.
-- `internal/port49d/runner.go`, `main.go`, `brokerd.go`: Task 16 alone.
+- `internal/port49d/runner.go`: Task 16 alone. `main.go`, `brokerd.go`: Task 13 sets the
+  admin socket's `Forget` (one field each, beside `Revoke`), and Task 16 builds the directory.
+  Task 16 builds on Task 13.
+- `internal/decision/log.go`, `reasons.go`: Task 2 (reasons, `Policy.Subjects`,
+  `Auth.Directory`) and Task 13 (`EventDirectoryForget`, `Record.Forget`), in that order.
+- `internal/store/*`: Task 5's `DeleteMembership` is the op Task 13 calls; nothing else calls
+  it.
 - Spec §5.7, §13, §15: Task 1 writes them; Task 17 closes the rows (a docs commit in that task).
 
 ## Running the lab (Tasks 17 and 18)
@@ -836,6 +873,8 @@ person, with the test that pins each:
 - `internal/broker/member.go` (+ `member_test.go`): `BindMap`, `directoryRefusal`, `memberFor`,
   `directoryAuth`, the pinned principal.
 - `internal/broker/scheduled.go` (+ `scheduled_test.go`): `RefreshDirectory`.
+- `internal/broker/forget.go` (+ `forget_test.go`): `Forget`, Ruling 3's escape.
+- `cmd/port49/directory.go` (+ `directory_linux_test.go`): `port49 directory forget`.
 - `internal/port49d/directory.go` (+ `directory_test.go`): building the resolver, the start
   lines, the scheduled and pre-warm loops.
 - `tests/lab/directory/openldap/` (`Dockerfile`, `config.ldif`, `seed.ldif`, `entrypoint.sh`),
@@ -848,7 +887,8 @@ person, with the test that pins each:
 **Modify:**
 - `go.mod`, `go.sum`: go-ldap, gokrb5.
 - `Makefile`: `lab-directory` (Tasks 17 and 18's runs).
-- `internal/decision/reasons.go`, `log.go`: four reasons, `Policy.Subjects`, `Auth.Directory`.
+- `internal/decision/reasons.go`, `log.go`: four reasons, `Policy.Subjects`, `Auth.Directory`;
+  the `directory_forget` report (`EventDirectoryForget`, `Forget`).
 - `internal/broker/api/identity.go`: `Subjects`, `Username`, `GroupDNs`, `VerifiedAt`,
   `Source`.
 - `internal/store/store.go`, `apply.go`, `memory/memory.go`, `crypt/crypt.go`,
@@ -867,8 +907,10 @@ person, with the test that pins each:
 - `internal/broker/identity.go`, `listen.go`, `server.go`, `broker.go`, `identity_api.go`,
   `explain_api.go`, `revoke_api.go`, `refresh.go`, `sessionrefresh.go`, `reindex.go`.
 - `internal/daemon/metrics/metrics.go`.
-- `internal/port49d/main.go`, `brokerd.go`, `runner.go`.
+- `internal/port49d/main.go`, `brokerd.go`, `runner.go`, `revocations.go` (`adminForget`).
+- `internal/daemon/admin/admin.go` (+ `admin_test.go`): the `directory_forget` op.
 - `cmd/port49/policy.go`: `blobSource` through `ResolveSubjects`.
+- `cmd/port49/main.go`: `directory` in the usage and the dispatch.
 - `deploy/compose/config/port49-broker.yaml`, `port49d.yaml`, `deploy/compose/README.md`.
 - `docs/design/2026-08-23-policy-engine-spec.md`, `docs/design/2026-08-21-port49-design.md`.
 - `tests/lab/README.md`, `tests/lab/compose/lab.yaml`.
@@ -896,7 +938,7 @@ After the `username_collision` row, add four rows, and widen `username_collision
 
 ```markdown
 | `username_collision` | `mint`: the derived username is already held by a subject in another trust domain (§2); or the directory derives a username a policy subject declares, or a second directory entry holds the same username under `broker.directory.username_attribute` (§13 decision 38). At the broker's bind and on `refresh` likewise; on `refresh` every context of the principal is revoked. The process log names both claimants |
-| `identity_unmapped` | at the broker's bind, and on `mint`, `identity`, `explain` and `revoke`: the client certificate maps to no directory entry under `broker.directory.certificate_mapping`; or the value the mapping reads is not in the certificate (no SID extension; zero or several UPN or email SANs); or a weak mapping's issuer is not one its `issuers:` pins (design §7); or the entry's `principal_attribute` or `username_attribute` is absent, has several values, is not printable ASCII, gives a principal with no `@`, or a username that is not already canonical or is reserved (§2); or the principal it gives is pinned to another entry, by `objectGUID` or `entryUUID` (else DN), for as long as that principal's membership record lives (§13 decision 38). The API answers 401 and the connection is closed. On `refresh`: the principal's entry is gone or no longer usable, and every context of it is revoked |
+| `identity_unmapped` | at the broker's bind, and on `mint`, `identity`, `explain` and `revoke`: the client certificate maps to no directory entry under `broker.directory.certificate_mapping`; or the value the mapping reads is not in the certificate (no SID extension; zero or several UPN or email SANs); or a weak mapping's issuer is not one its `issuers:` pins (design §7); or the entry's `principal_attribute` or `username_attribute` is absent, has several values, is not printable ASCII, gives a principal with no `@`, or a username that is not already canonical or is reserved (§2); or the principal it gives is pinned to another entry, by `objectGUID` or `entryUUID` (else DN), for as long as that principal's membership record lives or until an operator runs `port49 directory forget` (§13 decision 38). The API answers 401 and the connection is closed. On `refresh`: the principal's entry is gone or no longer usable, and every context of it is revoked |
 | `identity_ambiguous` | as `identity_unmapped`, when the certificate maps to two or more entries, or the server refuses the search for its size limit; or when a second entry holds the same `broker.directory.principal_attribute` value as the mapped entry, so two people would share one principal (§13 decision 38). Never resolved to the first entry (design §7). MUST be alertable on its own: two people matching one certificate is an impersonation path. On `refresh`: every context of the principal is revoked |
 | `directory_unavailable` | at the broker's bind, and on `mint`, `identity`, `explain` and `revoke`: no directory server answered within `broker.directory.query_timeout`, and the membership the store holds for the principal or the certificate was verified longer ago than `broker.directory.grace`, or there is none (§13 decision 38). Nothing is minted. The API answers 503 with `Retry-After`, to be retried, and no agent session is ended. Never on `refresh`: a principal the directory does not answer for keeps its contexts unstamped, and `context_stale` takes over at the ceiling |
 | `composition_refused` | `mint`: the principal matches more than one subject, and their grants together compose on this device to a session reply a joint check refuses (§10): a level above the grants' ceiling, a reply over 255 bytes, an attribute the platform does not accept, or a blob the daemon would refuse. Refused for this principal on this device alone, never a quarantine. On `refresh`: the live context is revoked the same way. The process log names the subjects and the check |
@@ -924,6 +966,14 @@ Where the `auth` object's fields are listed, add:
 
 ```markdown
 - `auth.directory`: on a broker event decided with a directory membership, `{source, verified_at, server, site}`: `source` is `fresh` (read from a directory server for this request) or `grace` (the store's, verified at `verified_at`, no server answering); `server` and `site` are where it was read. It names no group: `policy.subjects` says which subjects matched.
+```
+
+In the events intro, "plus four report events (`account`, `account_gap`, `blob`,
+`inventory_change`)" becomes "plus five report events (`account`, `account_gap`, `blob`,
+`inventory_change`, `directory_forget`)". After the `inventory_change` paragraph, add:
+
+```markdown
+A fourteenth, `directory_forget`, is a report too: an operator ran `port49 directory forget <principal>` on the broker's admin socket, deleting the principal's directory membership and with it the entry the principal was pinned to (§13 decision 38) — `{"principal": ..., "forget": {"entry_id": ..., "dn": ..., "verified_at": ..., "refused": true|absent, "origin": "admin_socket uid N"}}`. `verified_at` is the record's last verification or refusal. The principal's next verification pins the entry the directory gives it then, so this record is the trail for a principal moving to another entry by an operator's hand.
 ```
 
 - [ ] **Step 3: Subjects, plural (spec §2 and §5.1)**
@@ -1060,8 +1110,10 @@ filter metacharacters matches only its literal entry." Add a "Directory" heading
   at load without `allow_weak: true` and an `issuers:` pin. The mapping runs once per held
   connection and is pinned to it. The entry's principal and username must each be held by
   that entry alone, or both people are refused; the attributes they come from must be
-  writable only by directory administrators. A Windows DC's behaviour is register row L44's,
-  open until measured."
+  writable only by directory administrators. A principal is pinned to the entry's immutable
+  id; an entry deleted and re-created is refused until an operator who has confirmed it is
+  the same person runs `port49 directory forget <principal>` on the broker's admin socket. A
+  Windows DC's behaviour is register row L44's, open until measured."
 - **§9, "Directory unavailable".** Replace "The ceiling is a security parameter and MUST be
   explicit configuration:" with "The ceiling is a security parameter: it defaults to 4h, `0s`
   disables it, and either is said at every start (plan 7g; policy engine spec §13 decision
@@ -2350,6 +2402,13 @@ MembershipByKey(ctx context.Context, mapKey string) (Membership, error)
 // refused ones included, sorted: the set a policy refresh supersedes
 // group members' tokens over.
 MembershipPrincipals(ctx context.Context) ([]string, error)
+// DeleteMembership removes principal's record, refused or not, and with
+// it the entry the principal is pinned to, and returns what it held; or
+// ErrNotFound when no live record is held. Its mapping keys are left to
+// expire: MembershipByKey answers ErrNotFound for a key whose record is
+// gone, and a claim treats it as unclaimed. `port49 directory forget`
+// alone calls it (Ruling 3's escape; Task 13).
+DeleteMembership(ctx context.Context, principal string) (Membership, error)
 
 // storetest
 func MembershipKeepsTheLaterAndIsFoundByKey(t *testing.T, b Backend)
@@ -2357,6 +2416,7 @@ func MembershipKeyClaimedTwiceIsAmbiguous(t *testing.T, b Backend)
 func MembershipRefusalSupersedes(t *testing.T, b Backend)
 func MembershipPrincipalsListsTheLive(t *testing.T, b Backend)
 func MembershipExpires(t *testing.T, b Backend)
+func MembershipForgetRemovesThePin(t *testing.T, b Backend)
 ```
 
 - [ ] **Step 1: The failing properties**
@@ -2555,9 +2615,66 @@ func MembershipExpires(t *testing.T, b Backend) {
 		t.Fatalf("by key past ttl: %v", err)
 	}
 }
+
+// MembershipForgetRemovesThePin: DeleteMembership returns the record it
+// removed, pin included, and leaves nothing to find by principal, by key or
+// in the list. A refusal record is forgotten like a membership. A second
+// forget finds nothing. Afterwards a write verified earlier than the
+// forgotten record is taken, and pins the principal to another entry, and a
+// key the forgotten record listed is another principal's to claim, never
+// ambiguous (plan 7g, Ruling 3's escape).
+func MembershipForgetRemovesThePin(t *testing.T, b Backend) {
+	ctx := context.Background()
+	s := b.New(t, func() time.Time { return t0 })
+	k := store.MapKey("san_email", "alice@corp.example.com")
+	alice := store.Membership{Principal: "user:alice@corp.example.com", DN: "CN=Alice,OU=Staff,DC=corp",
+		EntryID: "guid:0a1b", Username: "alice", MapKeys: []string{k}, VerifiedAt: t0}
+	if err := s.PutMembership(ctx, alice, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutMembership(ctx, store.Membership{Principal: alice.Principal, EntryID: "guid:0a1b", Refused: true,
+		VerifiedAt: t0.Add(time.Second)}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.DeleteMembership(ctx, alice.Principal)
+	if err != nil || got.EntryID != "guid:0a1b" || !got.Refused || !got.VerifiedAt.Equal(t0.Add(time.Second)) {
+		t.Fatalf("forget: %+v %v, want the refusal with its pin", got, err)
+	}
+	if _, err := s.GetMembership(ctx, alice.Principal); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("by principal after forget: %v", err)
+	}
+	if _, err := s.MembershipByKey(ctx, k); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("by key after forget: %v", err)
+	}
+	if ps, err := s.MembershipPrincipals(ctx); err != nil || slices.Contains(ps, alice.Principal) {
+		t.Fatalf("listed after forget: %v %v", ps, err)
+	}
+	if _, err := s.DeleteMembership(ctx, alice.Principal); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("a second forget: %v", err)
+	}
+	rehired := alice
+	rehired.EntryID, rehired.VerifiedAt = "guid:9f8e", t0.Add(-time.Minute)
+	if err := s.PutMembership(ctx, rehired, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.GetMembership(ctx, alice.Principal); err != nil || got.EntryID != "guid:9f8e" {
+		t.Fatalf("after forget, the next write pins: %+v %v", got, err)
+	}
+	if got, err := s.DeleteMembership(ctx, alice.Principal); err != nil || got.EntryID != "guid:9f8e" {
+		t.Fatalf("forget again: %+v %v", got, err)
+	}
+	bob := store.Membership{Principal: "user:bob@corp.example.com", EntryID: "guid:b0b0", Username: "bob",
+		MapKeys: []string{k}, VerifiedAt: t0.Add(2 * time.Second)}
+	if err := s.PutMembership(ctx, bob, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.MembershipByKey(ctx, k); err != nil || got.Principal != bob.Principal {
+		t.Fatalf("a forgotten record's key: %+v %v, want bob's", got, err)
+	}
+}
 ```
 
-Add all five to `Run`'s list. For etcd, read how `SupersededIsTheLaterAndExpires` gets expiry
+Add all six to `Run`'s list. For etcd, read how `SupersededIsTheLaterAndExpires` gets expiry
 from a moved clock (the `etcd` backend's `now` drives `live`), and use the same: expiry is
 judged on read against the record's `expires_at`, with the lease as the reclaim.
 
@@ -2641,7 +2758,7 @@ func MapKey(kind, canonicalValue string) string {
 }
 ```
 
-and the five methods in the interface, after `SupersededAt`, with the comments of Interfaces.
+and the six methods in the interface, after `SupersededAt`, with the comments of Interfaces.
 
 - [ ] **Step 4: memory, crypt, guard**
 
@@ -2662,6 +2779,9 @@ its expiry) and `memberKeys map[string]memberKeyEntry` (`principal`, `prior`, `v
 - `MembershipByKey`: key → entry; `ErrNotFound` when absent, expired or `principal == ""`;
   then the record, `ErrNotFound` unless it is unrefused and `slices.Contains(rec.MapKeys, key)`.
 - `MembershipPrincipals`: the live records' principals, sorted.
+- `DeleteMembership`: remove the record and return a deep copy of it; an absent or expired
+  one is `ErrNotFound` (an expired one is removed all the same). `memberKeys` is left alone,
+  as etcd leaves `mk/`.
 
 `crypt.go`:
 
@@ -2752,6 +2872,23 @@ func (w *wrapped) MembershipByKey(ctx context.Context, mapKey string) (store.Mem
 func (w *wrapped) MembershipPrincipals(ctx context.Context) ([]string, error) {
 	return w.inner.MembershipPrincipals(ctx)
 }
+
+// DeleteMembership removes the record whatever it holds, and returns it
+// opened. A record that does not open has been removed all the same: it
+// served nothing, and forgetting it is what the operator asked. It is
+// returned with its sealed part empty, its failure counted by openErr.
+func (w *wrapped) DeleteMembership(ctx context.Context, principal string) (store.Membership, error) {
+	m, err := w.inner.DeleteMembership(ctx, principal)
+	if err != nil {
+		return store.Membership{}, err
+	}
+	opened, err := w.openMembership(m, nil)
+	if err != nil {
+		m.Sealed = nil
+		return m, nil
+	}
+	return opened, nil
+}
 ```
 
 Read `openErr` (`crypt.go:346`) first: it counts `crypt_open_failures_total{record}` and calls
@@ -2759,8 +2896,9 @@ Read `openErr` (`crypt.go:346`) first: it counts `crypt_open_failures_total{reco
 (`crypt.go:300`). If the counter pre-registers labels, add `membership` there.
 
 `guard.go`: `"PutMembership": Token, "RefuseMapKeys": Token, "GetMembership": Token,
-"MembershipByKey": Token, "MembershipPrincipals": Token` in the table (the broker's pool; never
-the context pool authorization reads), and five wrappers through `g.do(ctx, Token, …)`.
+"MembershipByKey": Token, "MembershipPrincipals": Token, "DeleteMembership": Token` in the table
+(the broker's pool; never the context pool authorization reads), and six wrappers through
+`g.do(ctx, Token, …)`.
 
 - [ ] **Step 5: etcd**
 
@@ -2918,9 +3056,36 @@ func (s *Store) GetMembership(ctx context.Context, principal string) (store.Memb
 	if err := s.getLive(ctx, s.k.membership(principal), &r, func() bool { return r.ExpiresAt.After(s.now()) }); err != nil {
 		return store.Membership{}, err
 	}
+	return r.membership(), nil
+}
+
+func (r membershipRec) membership() store.Membership {
 	return store.Membership{Principal: r.Principal, DN: r.DN, EntryID: r.EntryID, Username: r.Username,
 		GroupDNs: r.GroupDNs, GroupNames: r.GroupNames, MapKeys: r.MapKeys, Refused: r.Refused, VerifiedAt: r.VerifiedAt,
-		Server: r.Server, Site: r.Site, Sealed: r.Sealed}, nil
+		Server: r.Server, Site: r.Site, Sealed: r.Sealed}
+}
+
+// DeleteMembership deletes mb/<principal> in one op that returns what it
+// held (Ruling 3's escape). Its mk/ keys stay until their leases end:
+// MembershipByKey answers ErrNotFound for a key whose record is gone, and
+// claimKey treats it as unclaimed. A record that does not decode is
+// deleted all the same and returned as its principal alone.
+func (s *Store) DeleteMembership(ctx context.Context, principal string) (store.Membership, error) {
+	resp, err := s.tok.Delete(ctx, s.k.membership(principal), clientv3.WithPrevKV())
+	if err != nil {
+		return store.Membership{}, unavailable(err)
+	}
+	if len(resp.PrevKvs) == 0 {
+		return store.Membership{}, store.ErrNotFound
+	}
+	var r membershipRec
+	if json.Unmarshal(resp.PrevKvs[0].Value, &r) != nil {
+		return store.Membership{Principal: principal}, nil
+	}
+	if !r.ExpiresAt.After(s.now()) {
+		return store.Membership{}, store.ErrNotFound
+	}
+	return r.membership(), nil
 }
 
 func (s *Store) MembershipByKey(ctx context.Context, mapKey string) (store.Membership, error) {
@@ -3000,7 +3165,7 @@ not decode in `MembershipPrincipals` is skipped: say it through the store's exis
 - [ ] **Step 6: Run them to verify they pass**
 
 Run: `go test ./internal/store/... -count=1 && go vet ./internal/store/...`
-Expected: PASS: the five properties on memory, crypt, etcd and crypt-over-etcd; the two
+Expected: PASS: the six properties on memory, crypt, etcd and crypt-over-etcd; the two
 crypt tamper tests; `roles_test.go` with `mb/` and `mk/` refused to the daemon.
 
 - [ ] **Step 7: Commit**
@@ -6214,6 +6379,56 @@ func TestAPrincipalOnAnotherEntryIsUnmapped(t *testing.T) {
 	}
 }
 
+// An entry deleted and re-created (a rehire, a restore) keeps its DN and
+// values and gets a new objectGUID: it is refused while the old pin's
+// record lives, each refusal renewing it, and the line says once an hour
+// how to end it. Once the record is forgotten (DeleteMembership, what
+// `port49 directory forget` calls) the next bind pins the new entry
+// (Ruling 3's escape).
+func TestARecreatedEntryIsRefusedUntilForgotten(t *testing.T) {
+	w := newWorld(t)
+	seed := func(guid string) {
+		a := entry(alice, map[string][]string{"objectGUID": {guid}, "userPrincipalName": {"alice@corp.example.com"},
+			"sAMAccountName": {"alice"}, "mail": {"alice@corp.example.com"}})
+		for _, f := range []string{"(&(objectClass=person)(mail=alice@corp.example.com))",
+			"(&(objectClass=person)(userPrincipalName=alice@corp.example.com))",
+			"(userPrincipalName=alice@corp.example.com)", "(sAMAccountName=alice)"} {
+			w.dir.on(f, a)
+		}
+	}
+	seed("\x0a\x1b")
+	if _, err := w.r.Map(context.Background(), aliceCert(t)); err != nil {
+		t.Fatal(err)
+	}
+	seed("\x9f\x8e")
+	way := "port49 directory forget " + alicePrincipal
+	for i := 0; i < 2; i++ {
+		w.clk.Add(time.Minute)
+		if _, err := w.r.Map(context.Background(), aliceCert(t)); !errors.Is(err, ErrUnmapped) ||
+			!strings.Contains(err.Error(), "guid:0a1b") || !strings.Contains(err.Error(), way) {
+			t.Fatalf("the re-created entry's bind %d: %v", i, err)
+		}
+		if _, err := w.r.Verify(context.Background(), alicePrincipal); !errors.Is(err, ErrUnmapped) {
+			t.Fatalf("re-verifying alice %d: %v", i, err)
+		}
+	}
+	if n := w.say.count(way); n != 1 {
+		t.Fatalf("the line naming the way out was said %d times, want once in the hour", n)
+	}
+	old, err := w.st.DeleteMembership(context.Background(), alicePrincipal)
+	if err != nil || old.EntryID != "guid:0a1b" || !old.Refused {
+		t.Fatalf("forget: %+v %v, want the refusal pinned to the old entry", old, err)
+	}
+	w.clk.Add(time.Minute)
+	if a, err := w.r.Map(context.Background(), aliceCert(t)); err != nil || a.Source != Fresh ||
+		a.Principal != alicePrincipal {
+		t.Fatalf("after forget: %+v %v", a, err)
+	}
+	if m, err := w.st.GetMembership(context.Background(), alicePrincipal); err != nil || m.EntryID != "guid:9f8e" {
+		t.Fatalf("after forget, the pin: %+v %v, want the new entry's", m, err)
+	}
+}
+
 // Two entries holding one principal value are both refused (pre-flight
 // C-2), at a bind as on a re-verification.
 func TestAPrincipalTwoEntriesHoldIsRefusedAtBind(t *testing.T) {
@@ -6369,7 +6584,7 @@ two members stops at one and reports `Capped`.
 
 - [ ] **Step 2: Run them to verify they fail**
 
-Run: `go test ./internal/directory/ -run 'MapVerifies|Grace|Refused|Unmapped|AnotherEntry|TwoEntriesHold|BindRefusal|SlowServer|VerifyNever|VerifyAGone|MachinePrincipal|DeclaredUsername|StaleVerification|Prewarm' -count=1`
+Run: `go test ./internal/directory/ -run 'MapVerifies|Grace|Refused|Unmapped|AnotherEntry|RecreatedEntry|TwoEntriesHold|BindRefusal|SlowServer|VerifyNever|VerifyAGone|MachinePrincipal|DeclaredUsername|StaleVerification|Prewarm' -count=1`
 Expected: FAIL, undefined `Resolver`.
 
 - [ ] **Step 3: The resolver**
@@ -6573,8 +6788,11 @@ func (r *Resolver) verify(ctx context.Context, q lookup) (Answer, error) {
 		// The pin (Ruling 3; pre-flight C-2): a principal the store holds
 		// for another entry is refused, at a bind as on a re-verification.
 		// No refusal is written for the principal here at a bind: it is
-		// another person's, and its record (with its pin) stands.
-		err = r.pinned(ctx, id)
+		// another person's, and its record (with its pin) stands. The line
+		// is said once an hour per principal, naming the way out.
+		if err = r.pinned(ctx, id); errors.Is(err, ErrUnmapped) {
+			r.sayOnce("pin:"+id.Principal, time.Hour, "%s", printsafe.Line(err.Error(), 900))
+		}
 	}
 	if err == nil {
 		if who, ok := r.declared()[id.Username]; ok {
@@ -6655,10 +6873,14 @@ func (r *Resolver) pinned(ctx context.Context, id Identity) error {
 	case m.EntryID == "" || m.EntryID == id.EntryID:
 		return nil
 	}
+	// The line names the way out (Ruling 3's escape): an entry deleted and
+	// re-created reads exactly like another person's, and only the operator
+	// can tell them apart.
 	return fmt.Errorf("%w: %s is pinned to entry %s and is now claimed by %s (%s); a %s value moved "+
-		"between entries never carries a principal with it (Ruling 3)", ErrUnmapped, id.Principal,
-		printsafe.Line(m.EntryID, 120), printsafe.Line(id.DN, 200), printsafe.Line(id.EntryID, 120),
-		r.Cfg.PrincipalAttribute)
+		"between entries never carries a principal with it (Ruling 3); if this is the same person's entry "+
+		"re-created (a rehire, a restore), confirm that and run `port49 directory forget %s` against the "+
+		"broker's admin_socket", ErrUnmapped, id.Principal, printsafe.Line(m.EntryID, 120),
+		printsafe.Line(id.DN, 200), printsafe.Line(id.EntryID, 120), r.Cfg.PrincipalAttribute, id.Principal)
 }
 
 // refuse stores the directory's "no" (pre-flight C-1) for q.want, for
@@ -7767,9 +7989,19 @@ git commit -m "feat(broker): map the certificate at bind and pin the principal t
   `revoke.go:230-240`
 - Modify: `internal/broker/member.go` (`memberFor`)
 - Test: `internal/broker/member_test.go`, `internal/broker/broker_test.go`
+- The pin's escape (Steps 6–10):
+  - Create: `internal/broker/forget.go` (+ `forget_test.go`), `cmd/port49/directory.go`
+    (+ `directory_linux_test.go`).
+  - Modify: `internal/decision/reasons.go` (after `EventInventoryChange`) and `log.go`
+    (`Record`, after `Change`).
+  - Modify: `internal/daemon/admin/admin.go` (`Server`, `handle`, `connTimeout`, `answer`)
+    and `admin_test.go`.
+  - Modify: `internal/port49d/revocations.go:529` (beside `adminRevoke`),
+    `brokerd.go:535`, `main.go:1135-1141`.
+  - Modify: `cmd/port49/main.go` (usage, `run`'s switch).
 
 **Interfaces:**
-- Consumes: Task 12's pinned answer; `directory.Resolver.Current`; `policy.ResolveMember`,
+- Consumes: Task 5's `DeleteMembership`; Task 12's pinned answer; `directory.Resolver.Current`; `policy.ResolveMember`,
   `HasRightOf`, `ExplainMember`, `SubjectsOf`, `ErrCompositionRefused` (Task 11);
   `token.Subject.VerifiedAt` (Task 3); `decision.Directory`, `Policy.Subjects` (Task 2).
 - Produces:
@@ -7783,6 +8015,33 @@ func (b *Broker) memberFor(ctx context.Context, principal string) (policy.Member
 // holdTimeout under a directory (pre-flight I-8), holdTimeout without.
 func (b *Broker) memberBudget() time.Duration
 func directoryAuth(a *directory.Answer) *decision.Directory
+
+// Forget is `port49 directory forget` (Ruling 3's escape): it deletes
+// principal's membership record, pin included, and writes a
+// directory_forget record naming origin. It never asks the directory.
+func (b *Broker) Forget(ctx context.Context, principal, origin string) (string, error)
+
+// decision
+const EventDirectoryForget = "directory_forget"
+type Forget struct {
+	EntryID    string `json:"entry_id,omitempty"`
+	DN         string `json:"dn,omitempty"`
+	VerifiedAt string `json:"verified_at"`
+	Refused    bool   `json:"refused,omitempty"`
+	Origin     string `json:"origin"`
+}
+// Record gains: Forget *Forget `json:"forget,omitempty"`
+
+// admin
+// Server gains:
+Forget func(ctx context.Context, principal string, uid uint32) (string, error)
+// op "directory_forget", naming Request.Principal
+
+// port49d
+func adminForget(brk *broker.Broker) func(context.Context, string, uint32) (string, error)
+
+// cmd/port49
+func directoryCmd(args []string, stdout, stderr io.Writer) int
 ```
 
 - [ ] **Step 1: The failing tests**
@@ -7975,6 +8234,433 @@ Expected: PASS: the new tests and every existing broker test (no directory: `mem
 ```bash
 git add internal/broker
 git commit -m "feat(broker): mint, explain, identify and revoke through the directory membership, grace and composition_refused" \
+  -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>" \
+  -m "Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+```
+
+- [ ] **Step 6: The failing tests for the pin's escape (Ruling 3)**
+
+Create `internal/broker/forget_test.go`:
+
+```go
+package broker
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/rhwendt/port49/internal/directory"
+	"github.com/rhwendt/port49/internal/store"
+)
+
+// port49 directory forget deletes the principal's membership, pin
+// included, writes one directory_forget record naming the old entry and
+// who asked, and says what it removed. A second forget finds nothing and
+// writes nothing. It never asks the directory (Ruling 3's escape).
+func TestForgetRemovesThePinAndIsRecorded(t *testing.T) {
+	f := newFixture(t, 8)
+	r := directory.ForTestsStaticResolver(f.st, nil, directory.ErrUnavailable)
+	f.b.Directory = r
+	ctx := context.Background()
+	verified := f.b.Now().Add(-time.Hour)
+	if err := f.st.PutMembership(ctx, store.Membership{Principal: alice, DN: "CN=Alice,OU=Staff,DC=corp",
+		EntryID: "guid:0a1b", Refused: true, VerifiedAt: verified}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	text, err := f.b.Forget(ctx, alice, "admin_socket uid 0")
+	if err != nil || !strings.Contains(text, "guid:0a1b") || !strings.Contains(text, "CN=Alice,OU=Staff,DC=corp") {
+		t.Fatalf("%q %v", text, err)
+	}
+	if _, err := f.st.GetMembership(ctx, alice); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("the record outlived the forget: %v", err)
+	}
+	forgetsIn := func() []map[string]any {
+		var out []map[string]any
+		for _, rec := range f.records(t) {
+			if rec["event"] == "directory_forget" {
+				out = append(out, rec)
+			}
+		}
+		return out
+	}
+	forgets := forgetsIn()
+	if len(forgets) != 1 {
+		t.Fatalf("%d directory_forget records, want 1", len(forgets))
+	}
+	body, _ := forgets[0]["forget"].(map[string]any)
+	if forgets[0]["principal"] != alice || forgets[0]["verdict"] != nil || body["entry_id"] != "guid:0a1b" ||
+		body["dn"] != "CN=Alice,OU=Staff,DC=corp" || body["refused"] != true || body["origin"] != "admin_socket uid 0" {
+		t.Fatalf("%v", forgets[0])
+	}
+	if text, err := f.b.Forget(ctx, alice, "admin_socket uid 0"); err != nil || !strings.Contains(text, "no membership is held") {
+		t.Fatalf("a second forget: %q %v", text, err)
+	}
+	if n := len(forgetsIn()); n != 1 {
+		t.Fatalf("%d directory_forget records after a forget of nothing, want the one", n)
+	}
+	if n := r.Calls.Load(); n != 0 {
+		t.Fatalf("forget asked the directory %d times", n)
+	}
+}
+
+// Forget refuses what holds no membership: no directory configured, and a
+// principal that is not user: (pre-flight I-10's machine principals).
+func TestForgetRefusesWhatHoldsNoMembership(t *testing.T) {
+	f := newFixture(t, 8)
+	if _, err := f.b.Forget(context.Background(), alice, "admin_socket uid 0"); err == nil ||
+		!strings.Contains(err.Error(), "no broker.directory") {
+		t.Fatalf("without a directory: %v", err)
+	}
+	f.b.Directory = directory.ForTestsStaticResolver(f.st, nil, nil)
+	if _, err := f.b.Forget(context.Background(), "app:ci-runner", "admin_socket uid 0"); err == nil ||
+		!strings.Contains(err.Error(), "not a user: principal") {
+		t.Fatalf("a machine principal: %v", err)
+	}
+}
+```
+
+`r.Calls` is the static resolver's `atomic.Int64` count of answers given (Task 12), as
+`TestRevokeMineNeedsNoDirectory` reads it.
+
+In `internal/daemon/admin/admin_test.go`:
+- update `TestAnswerRefusesAnUnknownOpAndAnUnheldDevice`'s expected line to
+  `"unknown op; the ops are keys_diagnose, revoke, revocations and directory_forget"`;
+- extend `TestConnTimeoutCoversTheOpsWorstCase` with
+  `s.connTimeout("directory_forget") == ListWait`;
+- add:
+
+```go
+// directory_forget reaches the broker with the caller's uid; with no
+// broker it names where it is answered; a request naming no principal is
+// refused before the broker is asked (plan 7g, Ruling 3's escape).
+func TestDirectoryForgetReachesTheBroker(t *testing.T) {
+	ctx := context.Background()
+	var gotP string
+	var gotUID uint32
+	s := &Server{Held: &keyring.Held{}, Now: time.Now,
+		Forget: func(_ context.Context, principal string, uid uint32) (string, error) {
+			gotP, gotUID = principal, uid
+			return "forgot it", nil
+		}}
+	if r := s.answer(ctx, Request{Op: "directory_forget", Principal: "user:alice@example.com"}, 1000); r.Text != "forgot it" ||
+		gotP != "user:alice@example.com" || gotUID != 1000 {
+		t.Fatalf("%+v %q %d", r, gotP, gotUID)
+	}
+	if r := s.answer(ctx, Request{Op: "directory_forget"}, 0); !strings.Contains(r.Error, "names a principal") {
+		t.Fatalf("%+v", r)
+	}
+	beside := &Server{Held: &keyring.Held{}, Now: time.Now, RevokeElsewhere: "port49-broker's admin socket"}
+	if r := beside.answer(ctx, Request{Op: "directory_forget", Principal: "user:a@b"}, 0); !strings.Contains(r.Error,
+		"port49-broker's admin socket") || !strings.Contains(r.Error, "port49 directory forget --socket") {
+		t.Fatalf("%+v", r)
+	}
+	none := &Server{Held: &keyring.Held{}, Now: time.Now}
+	if r := none.answer(ctx, Request{Op: "directory_forget", Principal: "user:a@b"}, 0); !strings.Contains(r.Error, "runs no broker") {
+		t.Fatalf("%+v", r)
+	}
+}
+```
+
+Create `cmd/port49/directory_linux_test.go` (`//go:build linux`, as `revoke_linux_test.go`):
+
+```go
+// port49 directory forget sends one directory_forget op naming the
+// principal and prints the answer; a refusal exits 1 on stderr; a missing
+// or extra argument is a usage error (plan 7g, Ruling 3's escape).
+func TestDirectoryForgetAsksTheAdminSocket(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), "port49-broker.sock")
+	ln, err := admin.Listen(socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var mu sync.Mutex
+	var got []string
+	srv := &admin.Server{Held: &keyring.Held{}, Now: time.Now,
+		Forget: func(_ context.Context, principal string, _ uint32) (string, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			got = append(got, principal)
+			if principal == "app:ci" {
+				return "", errors.New("broker: \"app:ci\" is not a user: principal")
+			}
+			return "forgot " + principal, nil
+		}}
+	go srv.Serve(ctx, ln)
+
+	var out, errb bytes.Buffer
+	if code := run([]string{"directory", "forget", "--socket", socket, "user:alice@example.com"}, &out, &errb); code != 0 ||
+		strings.TrimSpace(out.String()) != "forgot user:alice@example.com" {
+		t.Fatalf("exit %d: %q %q", code, out.String(), errb.String())
+	}
+	out.Reset()
+	if code := run([]string{"directory", "forget", "--socket", socket, "app:ci"}, &out, &errb); code != 1 ||
+		!strings.Contains(errb.String(), "not a user: principal") {
+		t.Fatalf("exit %d: %q", code, errb.String())
+	}
+	for _, args := range [][]string{{"directory", "forget", "--socket", socket}, {"directory", "forget", "--socket",
+		socket, "user:a@b", "user:c@d"}, {"directory"}, {"directory", "remember", "user:a@b"}} {
+		if code := run(args, &out, &errb); code != 2 {
+			t.Fatalf("%v: exit %d, want 2", args, code)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(got) != 2 {
+		t.Fatalf("the broker was asked %d times, want 2: %v", len(got), got)
+	}
+}
+```
+
+with the imports it needs (`bytes`, `context`, `errors`, `path/filepath`, `strings`, `sync`,
+`testing`, `time`, `admin`, `keyring`).
+
+- [ ] **Step 7: Run them to verify they fail**
+
+Run: `go test ./internal/broker/ -run 'Forget' -count=1; go test ./internal/daemon/admin/ ./cmd/port49/ -run 'Forget|UnknownOp|ConnTimeout' -count=1`
+Expected: FAIL, undefined `Forget`, `directoryCmd`; the unknown-op line differs.
+
+- [ ] **Step 8: The record, the broker's op, the socket and the command**
+
+In `internal/decision/reasons.go`, after `EventInventoryChange`:
+
+```go
+// EventDirectoryForget is not a decision: an operator removed a
+// principal's directory membership, and with it the entry the principal
+// was pinned to (spec §5.7; plan 7g, Ruling 3's escape).
+const EventDirectoryForget = "directory_forget"
+```
+
+In `log.go`, `Record` gains, after `Change`:
+
+```go
+	// Forget is the directory_forget record's body (spec §5.7).
+	Forget *Forget `json:"forget,omitempty"`
+```
+
+and, beside `Revocation`:
+
+```go
+// Forget is what a directory_forget record says: the entry the principal
+// was pinned to, its last verification or refusal, and who asked. It names
+// no group and no mapping value.
+type Forget struct {
+	EntryID    string `json:"entry_id,omitempty"`
+	DN         string `json:"dn,omitempty"`
+	VerifiedAt string `json:"verified_at"`
+	Refused    bool   `json:"refused,omitempty"`
+	Origin     string `json:"origin"`
+}
+```
+
+If `reasons_test.go` or the log's schema test lists the events, add `directory_forget` to it.
+
+Create `internal/broker/forget.go`:
+
+```go
+package broker
+
+import (
+	"context"
+	"errors"
+	"fmt"
+
+	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/directory"
+	"github.com/rhwendt/port49/internal/printsafe"
+	"github.com/rhwendt/port49/internal/store"
+)
+
+// Forget is `port49 directory forget` (Ruling 3's escape). An entry
+// deleted and re-created, a rehire or a directory restore, has a new
+// objectGUID or entryUUID, and is refused identity_unmapped while its
+// principal's record lives: max(directory.grace, 24h) after the last
+// verification or refusal, and every refusal renews it. Forget deletes the
+// record, pin included, so the principal's next verification pins the
+// entry the directory gives it then. It writes one directory_forget record
+// naming origin and the entry the principal was pinned to. It never asks
+// the directory and grants nothing; whether the new entry is the same
+// person is the operator's to confirm before running it.
+//
+// A broker verifying the principal as this runs may write a refusal
+// pinned to the old entry after the delete, from a read made before it;
+// the next bind then reads the same refusal line, and running this again
+// ends it.
+func (b *Broker) Forget(ctx context.Context, principal, origin string) (string, error) {
+	if b.Directory == nil {
+		return "", errors.New("broker: no broker.directory is configured, so no membership is held to forget")
+	}
+	if !directory.IsUser(principal) {
+		return "", fmt.Errorf("broker: %q is not a user: principal; only a directory principal has a membership",
+			printsafe.Line(principal, 200))
+	}
+	ctx, cancel := context.WithTimeout(ctx, holdTimeout)
+	defer cancel()
+	m, err := b.Store.DeleteMembership(ctx, principal)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return fmt.Sprintf("no membership is held for %s, so nothing pins it; its next verification pins the "+
+			"entry the directory gives it then", principal), nil
+	case err != nil:
+		return "", fmt.Errorf("broker: forgetting %s failed (%w); the record may or may not be gone: run it again",
+			principal, err)
+	}
+	entry := m.EntryID
+	if entry == "" {
+		entry = "unknown (the record did not open)"
+	}
+	b.emit(decision.Record{TS: b.Now(), Event: decision.EventDirectoryForget, Principal: principal,
+		Forget: &decision.Forget{EntryID: m.EntryID, DN: m.DN, VerifiedAt: decision.FormatTime(m.VerifiedAt),
+			Refused: m.Refused, Origin: origin}})
+	b.say("directory: %s forgot %s, pinned to entry %s (%s)", origin, principal,
+		printsafe.Line(entry, 120), printsafe.Line(m.DN, 200))
+	return fmt.Sprintf("forgot %s: it was pinned to entry %s (%s), last verified %s; its next verification "+
+		"pins the entry the directory gives it then", principal, printsafe.Line(entry, 120),
+		printsafe.Line(m.DN, 200), decision.FormatTime(m.VerifiedAt)), nil
+}
+```
+
+`b.say` (`broker.go:1041`) is `Say`, which both processes set (`brokerd.go:373`,
+`main.go:919`), so the line reads as "What the operator sees" has it (`port49-broker:
+directory: admin_socket uid 0 forgot …`, or `port49d: …` on the memory store), its quoted
+values redacted as every broker line's are.
+
+In `internal/daemon/admin/admin.go`:
+- the package comment's op list adds "and directory_forget (plan 7g), which deletes a
+  principal's directory membership and its pin";
+- `Server` gains, after `Revocations`:
+
+```go
+	// Forget answers `port49 directory forget` (plan 7g, Ruling 3's
+	// escape): it deletes a principal's directory membership, pin
+	// included. Nil when this process runs no broker.
+	Forget func(ctx context.Context, principal string, uid uint32) (string, error)
+```
+
+- `handle` holds a `directory_forget` connection open as a list's: its condition becomes
+  `req.Op == "revoke" || req.Op == "revocations" || req.Op == "directory_forget"`;
+- `connTimeout` answers `s.opTimeout() + answerMargin` for any op but `revoke`;
+- `answer` gains, before the final return, whose list becomes "keys_diagnose, revoke,
+  revocations and directory_forget":
+
+```go
+	case "directory_forget":
+		if s.Forget == nil {
+			if s.RevokeElsewhere != "" {
+				return Response{Error: "port49d runs no broker; directory forget is " + s.RevokeElsewhere +
+					": run port49 directory forget --socket <that path>"}
+			}
+			return Response{Error: "this process runs no broker, so it holds no directory membership"}
+		}
+		if req.Principal == "" {
+			return Response{Error: "directory_forget names a principal"}
+		}
+		ctx, cancel := context.WithTimeout(ctx, s.opTimeout())
+		defer cancel()
+		text, err := s.Forget(ctx, req.Principal, uid)
+		if err != nil {
+			return Response{Error: err.Error()}
+		}
+		return Response{Text: text}
+```
+
+In `internal/port49d/revocations.go`, after `adminRevocations`:
+
+```go
+// adminForget is the admin socket's directory_forget (plan 7g, Ruling 3's
+// escape), its origin the caller's uid as a revocation's is.
+func adminForget(brk *broker.Broker) func(context.Context, string, uint32) (string, error) {
+	return func(ctx context.Context, principal string, uid uint32) (string, error) {
+		return brk.Forget(ctx, principal, fmt.Sprintf("admin_socket uid %d", uid))
+	}
+}
+```
+
+Wire it beside `Revoke` in both processes:
+- `brokerd.go:535`: `asrv := &admin.Server{Revoke: adminRevoke(brk), Revocations: …,
+  Forget: adminForget(brk), …}`, and the start line becomes `admin socket on %s (port49
+  revoke, port49 directory forget)`;
+- `main.go:1140`: `srv.Revoke, srv.Revocations, srv.Forget = adminRevoke(brk),
+  adminRevocations(brk.Store), adminForget(brk)`.
+
+`Forget` refuses without a directory itself, so the wiring is unconditional.
+
+Create `cmd/port49/directory.go`:
+
+```go
+package main
+
+import (
+	"flag"
+	"fmt"
+	"io"
+
+	"github.com/rhwendt/port49/internal/daemon/admin"
+)
+
+// directoryCmd is `port49 directory forget` (plan 7g, Ruling 3's escape):
+// it asks the broker, over its admin socket, to forget a principal's
+// directory membership and the entry the principal is pinned to, so its
+// next verification pins the entry the directory gives it then. It is for
+// an entry deleted and re-created: confirm the new entry is the same
+// person first.
+func directoryCmd(args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 || args[0] != "forget" {
+		fmt.Fprint(stderr, usage)
+		return 2
+	}
+	fs := flag.NewFlagSet("port49 directory forget", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	socket := fs.String("socket", "/run/port49/port49d.sock", "the admin_socket of the process running the broker")
+	if err := fs.Parse(args[1:]); err != nil {
+		return 2
+	}
+	if fs.NArg() != 1 {
+		fmt.Fprint(stderr, usage)
+		return 2
+	}
+	resp, err := askAdmin(*socket, admin.Request{Op: "directory_forget", Principal: fs.Arg(0)}, listWait)
+	if err != nil {
+		fmt.Fprintln(stderr, "port49 directory forget:", err, "(a forget that was not answered may have run: "+
+			"the broker's log names each, event directory_forget; running it again is safe)")
+		return 1
+	}
+	if resp.Error != "" {
+		fmt.Fprintln(stderr, "port49 directory forget:", resp.Error)
+		return 1
+	}
+	fmt.Fprintln(stdout, resp.Text)
+	return 0
+}
+```
+
+The default socket is `port49 revoke`'s, for the same reason (7e OR-1): one process holds
+both on the memory store; beside `port49-broker`, port49d's answer names the broker's socket.
+
+In `cmd/port49/main.go`, add `case "directory": return directoryCmd(args[1:], stdout, stderr)`
+to `run`, and to `usage`, after the `revoke` lines:
+
+```
+  port49 directory forget [--socket PATH] PRINCIPAL
+                (forget a principal's directory membership and the entry it is pinned to: for an
+                entry deleted and re-created, once you have confirmed it is the same person)
+```
+
+- [ ] **Step 9: Run them to verify they pass**
+
+Run: `go test ./internal/broker/ ./internal/daemon/admin/ ./internal/decision/ ./internal/port49d/ ./cmd/port49/ -race -count=1 && go vet ./...`
+Expected: PASS: the new tests, and every existing test (the unknown-op line updated).
+
+- [ ] **Step 10: Commit**
+
+```bash
+git add internal/broker/forget.go internal/broker/forget_test.go internal/decision internal/daemon/admin \
+  internal/port49d/revocations.go internal/port49d/brokerd.go internal/port49d/main.go cmd/port49
+git commit -m "feat(broker): port49 directory forget, the pin's escape for an entry re-created" \
   -m "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>" \
   -m "Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 ```
@@ -9316,6 +10002,14 @@ git commit -m "docs: plan 7g as built" \
   last verification). An OU move keeps the pin; on a directory that returns neither id, the
   pin is the DN and a moved user is refused until the record lapses. A person whose entry is
   deleted and re-created is refused the same way.
+- **New: `port49 directory forget <principal>`, the pin's way out.** A rehire, or an entry
+  restored without its tombstone, has a new `objectGUID`/`entryUUID`. It is refused
+  `identity_unmapped`, and each refusal renews the record. The broker's line names the
+  command. Once you have confirmed the new entry is the same person, run it on the broker's
+  admin socket (`--socket <its admin_socket>`; the broker's uid or root). It deletes the
+  principal's membership, pin included, and writes a `directory_forget` record naming your
+  uid and the old entry id. The next bind pins the new entry. It grants nothing and needs no
+  directory; if a bind is still refused naming the old entry, run it again.
 - **New: `broker.directory`.**
   - **Servers:** `servers` (`uri`, `priority`, `site`, `start_tls`), `site` or `site_env`
     (default `PORT49_SITE`), `ca_file`.
@@ -9402,9 +10096,12 @@ git commit -m "docs: plan 7g as built" \
   - `directory.Answer`, `Source`, `Resolver.Map/Verify/Current/Stored`, `IsUser`,
     `ErrNotUser`, `Client`, `ForTestsStaticResolver`;
   - `store.Membership` (with `Refused`), `MapKey`, `RefuseMapKeys`, `MembershipPrincipals`,
+    `DeleteMembership`,
     `StampRefreshed`, `ContextPolicy.RefreshedAt`, `Token.VerifiedAt`;
   - `policy.Member`, `ResolveMember`, `HasRightOf`, `SubjectsOf`, `ErrCompositionRefused`;
-  - `broker.BindMap`, `memberFor`, `storedMember`, `passJudge`, `RefreshDirectory`.
+  - `broker.BindMap`, `memberFor`, `storedMember`, `passJudge`, `RefreshDirectory`, `Forget`;
+  - `decision.EventDirectoryForget`, `decision.Forget`, `admin.Server.Forget`, `adminForget`,
+    `directoryCmd`.
 
   `Listener.Map`'s signature in Task 12 returns `(directory.Answer, *BindRefusal)`, as
   `BindMap` does. ✓
@@ -9418,5 +10115,11 @@ git commit -m "docs: plan 7g as built" \
   - **C-2:** a principal must be one entry's alone (`principalUnique`), and is pinned to its
     entry's immutable id at every verification, a bind included; a refusal keeps the pin
     (Ruling 3; Tasks 5, 8, 10, 16, 17). ✓
+  - **The pin's escape (controller, after pre-flight):** an entry deleted and re-created is
+    refused until `port49 directory forget <principal>`, on the broker's admin socket, deletes
+    the record and writes `directory_forget` naming the uid and the old entry id. The refusal
+    line names the command (Ruling 3; Tasks 1, 5, 10, 13; `TestARecreatedEntryIsRefusedUntilForgotten`,
+    `TestForgetRemovesThePinAndIsRecorded`, `TestDirectoryForgetReachesTheBroker`,
+    `TestDirectoryForgetAsksTheAdminSocket`, `MembershipForgetRemovesThePin`). ✓
   - **I-17 / OR-3:** L44 opens for Windows Server AD and stays open; L42 and L43 close on the
     platforms they name (Tasks 1, 17). ✓
