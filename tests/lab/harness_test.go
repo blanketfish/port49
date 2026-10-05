@@ -21,6 +21,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"io/fs"
@@ -1953,8 +1954,9 @@ func (l *lab) stoppedCaptureLine(t *testing.T) string {
 		// every capture with loopback probes and adds one more pair when it
 		// stops the capture, after this note is written. Counting only what
 		// crossed the bridge gives a number the reader can reproduce.
-		line += fmt.Sprintf(" — %d packets to or from the device, countable with "+
-			"`tcpdump -r %s -n 'net %s' | wc -l`.", device, l.evidencePath, labSubnet)
+		line += fmt.Sprintf(" — %d packets to or from the device when this note was written (the finished file holds a "+
+			"few more: stopping the capture adds a probe pair), countable with `tcpdump -r %s -n 'net %s' | wc -l`.",
+			device, l.evidencePath, labSubnet)
 	}
 	key := "the lab key (`tests/lab/README.md`)"
 	if labcreds.CaptureKey(filepath.Base(l.evidencePath)) != "" {
@@ -2092,6 +2094,20 @@ func (f negativeFinding) render(t *testing.T) string {
 	return b.String()
 }
 
+// runLine is the commit the lab ran at and the test selection, for a note's
+// Run line: the commit of the working tree the test binary ran from.
+func runLine() string {
+	sha := "unknown"
+	if out, err := exec.Command("git", "-C", root, "rev-parse", "HEAD").Output(); err == nil {
+		sha = strings.TrimSpace(string(out))
+	}
+	run := ""
+	if f := flag.Lookup("test.run"); f != nil {
+		run = f.Value.String()
+	}
+	return fmt.Sprintf("commit `%s`, `PORT49_LAB_PLATFORMS=%s`, `-run %s`", sha, os.Getenv("PORT49_LAB_PLATFORMS"), run)
+}
+
 // result writes tests/lab/results/L<N>-<platform>.md in the form spec §15 rule
 // 3 requires: platform, image version, observation, and a pointer to the
 // evidence.
@@ -2112,6 +2128,7 @@ func (l *lab) result(t *testing.T, entry, claim, observation string) {
 	fmt.Fprintf(&b, "- **Topology:** `tests/lab/%s`\n", l.p.topo)
 	fmt.Fprintf(&b, "- **Capture:** %s\n", capLine)
 	fmt.Fprintf(&b, "- **Transport:** SSH\n")
+	fmt.Fprintf(&b, "- **Run:** %s\n", runLine())
 	if l.configWarn != "" {
 		fmt.Fprintf(&b, "- **Caveat:** %s\n", l.configWarn)
 	}

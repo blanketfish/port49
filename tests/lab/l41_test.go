@@ -24,6 +24,12 @@ func TestL41GoDarkMidSession(t *testing.T) {
 		sessionOnly := strings.HasPrefix(l.p.name, "juniper_")
 		var obs strings.Builder
 		wide := func(cell, what string) { fmt.Fprintf(&obs, "| %s | %s |\n", cell, wideCell(what)) }
+		// The capture sees both legs of the published port's DNAT: the device
+		// to 172.100.100.1, and to the container's 172.30.49.x. Each exchange
+		// is listed once per leg while port49d's container exists, and once
+		// (the host leg) after it is stopped.
+		obs.WriteString("Each connection and reply below appears once per bridge leg (the device to 172.100.100.1, then " +
+			"to port49d's container at 172.30.49.x) while the container exists, and once after it is stopped.\n\n")
 		obs.WriteString("| cell | observed |\n|---|---|\n")
 
 		c := l.startCompose(t)
@@ -70,8 +76,12 @@ func TestL41GoDarkMidSession(t *testing.T) {
 		from := time.Now()
 		before := storeOutcome(l.p.name, sh, "show version", fail, "baseline")
 		ctx1, v1, r1 := ctxIDOf(l.waitForRecords(off, 30*time.Second, hasCtx(sessionOnly)), sliceUser)
-		wide("1. login through the compose port49d, `show version`", fmt.Sprintf("%s; record %s %s, ctx_id %s | %s",
-			before, v1, r1, ctx1, times(from, time.Now())))
+		recorded := fmt.Sprintf("record %s %s, ctx_id %s", v1, r1, ctx1)
+		if sessionOnly {
+			recorded = "no command authorization on Junos (decision 21), so no ctx_id"
+		}
+		wide("1. login through the compose port49d, `show version`", fmt.Sprintf("%s; %s | %s",
+			before, recorded, times(from, time.Now())))
 
 		// 2. The store hangs; no device asks. When port49d closes.
 		errOff := l.errLogSize()
