@@ -1,0 +1,43 @@
+# The directory lab (plan 7g, Task 17): OpenLDAP and Samba AD on a network of
+# their own, no network devices. Run from tests/lab/directory_test.go, which
+# writes the PKI and lab.env first (both under tests/lab/logs/directory,
+# git-ignored) and brings it up with `docker compose -p port49labdir`.
+name: port49labdir
+
+services:
+  openldap:
+    build: ./openldap
+    image: port49lab/openldap:bookworm
+    hostname: openldap
+    env_file: ../logs/directory/lab.env
+    volumes:
+      - ../logs/directory/pki:/pki:ro
+    ports:
+      - "127.0.0.1:10389:389"
+      - "127.0.0.1:10636:636"
+    networks:
+      lab:
+        ipv4_address: 172.30.42.10
+
+  samba:
+    build: ./samba
+    image: port49lab/samba:bookworm
+    hostname: dc1
+    env_file: ../logs/directory/lab.env
+    volumes:
+      - ../logs/directory/pki:/pki:ro
+      - ../logs/directory/out:/out
+    ports:
+      - "127.0.0.1:20389:389"
+      - "127.0.0.1:20636:636"
+      - "127.0.0.1:20088:88/tcp"
+      - "127.0.0.1:20088:88/udp"
+    networks:
+      lab:
+        ipv4_address: 172.30.42.20
+
+networks:
+  lab:
+    ipam:
+      config:
+        - subnet: 172.30.42.0/24
