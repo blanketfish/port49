@@ -243,6 +243,37 @@ func TestAnotherUIDCannotRevokeLiftOrList(t *testing.T) {
 	}
 }
 
+// directory_forget answers the same peers as a revoke: another uid is
+// refused before its request is read, and nothing is forgotten.
+func TestAnotherUIDCannotForget(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root is always answered")
+	}
+	called := make(chan string, 1)
+	p := serve(t, &Server{Held: &keyring.Held{}, Now: time.Now,
+		ownUID: func() uint32 { return uint32(os.Geteuid()) + 1 },
+		Forget: func(_ context.Context, principal string, _ uint32) (string, error) {
+			called <- principal
+			return "forgot", nil
+		}})
+	c, err := net.Dial("unix", p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	json.NewEncoder(c).Encode(Request{Op: "directory_forget", Principal: "user:alice@example.com"})
+	var r Response
+	if err := json.NewDecoder(c).Decode(&r); err != nil ||
+		!strings.HasPrefix(r.Error, fmt.Sprintf("refused: uid %d is neither port49d's", os.Geteuid())) || r.Text != "" {
+		t.Fatalf("%+v, %v", r, err)
+	}
+	select {
+	case p := <-called:
+		t.Fatalf("a refused caller forgot %s", p)
+	default:
+	}
+}
+
 // A revocation that cannot finish gives up at the server's deadline, and
 // the caller is told so, not left waiting.
 func TestARevocationGivesUpAtTheDeadlineAndSaysSo(t *testing.T) {

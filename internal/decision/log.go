@@ -37,6 +37,8 @@ type Record struct {
 	Gap         *Gap         `json:"gap,omitempty"`
 	// Change is the inventory_change record's body (spec §5.7, §10).
 	Change *Change `json:"change,omitempty"`
+	// Forget is the directory_forget record's body (spec §5.7).
+	Forget *Forget `json:"forget,omitempty"`
 	// Revocation is the revoke record's body (spec §5.7).
 	Revocation *Revocation `json:"revocation,omitempty"`
 	// Explain is an explain record's own (spec §5.7): who asked, and whether
@@ -277,6 +279,17 @@ type Change struct {
 	To         string `json:"to,omitempty"`
 	FromBundle string `json:"from_bundle"`
 	ToBundle   string `json:"to_bundle"`
+}
+
+// Forget is what a directory_forget record says: the entry the principal
+// was pinned to, its last verification or refusal, and who asked. It names
+// no group and no mapping value.
+type Forget struct {
+	EntryID    string `json:"entry_id,omitempty"`
+	DN         string `json:"dn,omitempty"`
+	VerifiedAt string `json:"verified_at"`
+	Refused    bool   `json:"refused,omitempty"`
+	Origin     string `json:"origin"`
 }
 
 // Revocation is what a revocation reached (spec §5.7): identity, never a

@@ -532,11 +532,12 @@ func runBroker(parent context.Context, cfgPath string) error {
 		bln.Close()
 		return fmt.Errorf("admin_socket %s: %w", cfg.AdminSocket, err)
 	}
-	asrv := &admin.Server{Revoke: adminRevoke(brk), Revocations: adminRevocations(bs.st), Now: time.Now,
+	asrv := &admin.Server{Revoke: adminRevoke(brk), Revocations: adminRevocations(bs.st),
+		Forget: adminForget(brk), Now: time.Now,
 		DiagnoseElsewhere: "port49d's admin socket", Proc: "port49-broker"}
 	wg.Add(1)
 	go func() { defer wg.Done(); asrv.Serve(ctx, aln) }()
-	fmt.Fprintf(stderr, "port49-broker: admin socket on %s (port49 revoke)\n", cfg.AdminSocket)
+	fmt.Fprintf(stderr, "port49-broker: admin socket on %s (port49 revoke, port49 directory forget)\n", cfg.AdminSocket)
 
 	if cfg.Lab != nil && len(cfg.Lab.SeedTokens) > 0 {
 		logins, enables, err := mintSeeds(ctx, cfg, minter)

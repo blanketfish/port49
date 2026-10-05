@@ -15,7 +15,7 @@ import (
 
 func TestAnswerRefusesAnUnknownOpAndAnUnheldDevice(t *testing.T) {
 	s := &Server{Held: &keyring.Held{}, Keys: map[string]keyring.Set{}, Now: time.Now}
-	if r := s.answer(context.Background(), Request{Op: "keys_show", Device: "x"}, 0); r.Error != "unknown op; the ops are keys_diagnose, revoke and revocations" {
+	if r := s.answer(context.Background(), Request{Op: "keys_show", Device: "x"}, 0); r.Error != "unknown op; the ops are keys_diagnose, revoke, revocations and directory_forget" {
 		t.Fatalf("%+v", r)
 	}
 	if r := s.answer(context.Background(), Request{Op: "keys_diagnose", Device: "x"}, 0); !strings.Contains(r.Error, "holds no unvalidated packet") {
@@ -170,5 +170,39 @@ func TestConnTimeoutCoversTheOpsWorstCase(t *testing.T) {
 	}
 	if got := s.connTimeout("revocations"); got != ListWait || got <= OpTimeout {
 		t.Fatalf("revocations: %v", got)
+	}
+	if got := s.connTimeout("directory_forget"); got != ListWait {
+		t.Fatalf("directory_forget: %v", got)
+	}
+}
+
+// directory_forget reaches the broker with the caller's uid; with no
+// broker it names where it is answered; a request naming no principal is
+// refused before the broker is asked (plan 7g, Ruling 3's escape).
+func TestDirectoryForgetReachesTheBroker(t *testing.T) {
+	ctx := context.Background()
+	var gotP string
+	var gotUID uint32
+	s := &Server{Held: &keyring.Held{}, Now: time.Now,
+		Forget: func(_ context.Context, principal string, uid uint32) (string, error) {
+			gotP, gotUID = principal, uid
+			return "forgot it", nil
+		}}
+	if r := s.answer(ctx, Request{Op: "directory_forget", Principal: "user:alice@example.com"}, 1000); r.Text != "forgot it" ||
+		gotP != "user:alice@example.com" || gotUID != 1000 {
+		t.Fatalf("%+v %q %d", r, gotP, gotUID)
+	}
+	gotP = ""
+	if r := s.answer(ctx, Request{Op: "directory_forget"}, 0); !strings.Contains(r.Error, "names a principal") || gotP != "" {
+		t.Fatalf("%+v", r)
+	}
+	beside := &Server{Held: &keyring.Held{}, Now: time.Now, RevokeElsewhere: "port49-broker's admin socket"}
+	if r := beside.answer(ctx, Request{Op: "directory_forget", Principal: "user:a@b"}, 0); !strings.Contains(r.Error,
+		"port49-broker's admin socket") || !strings.Contains(r.Error, "port49 directory forget --socket") {
+		t.Fatalf("%+v", r)
+	}
+	none := &Server{Held: &keyring.Held{}, Now: time.Now}
+	if r := none.answer(ctx, Request{Op: "directory_forget", Principal: "user:a@b"}, 0); !strings.Contains(r.Error, "runs no broker") {
+		t.Fatalf("%+v", r)
 	}
 }

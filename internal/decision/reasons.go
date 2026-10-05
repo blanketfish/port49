@@ -101,6 +101,10 @@ const (
 	// bundle swap made, written by the component that swapped (spec §5.7,
 	// §10).
 	EventInventoryChange = "inventory_change"
+	// EventDirectoryForget is not a decision: an operator removed a
+	// principal's directory membership, and with it the entry the principal
+	// was pinned to (spec §5.7; plan 7g, Ruling 3's escape).
+	EventDirectoryForget = "directory_forget"
 )
 
 // EventRefresh is the broker carrying the policy in force into a live login
