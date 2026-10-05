@@ -49,7 +49,9 @@ so no volume holds both etcd identities (plan 7e, Ruling 1):
 | `port49d-spool` | the accounting spool | port49d |
 
 The device key and the encryption key come from env files: `port49d.env` holds both,
-`port49-broker.env` only the encryption key.
+`port49-broker.env` only the encryption key. Both values show in `docker inspect` of the
+running and exited containers; Docker API access is root-equivalent, so guard it as you would
+the env files. A `secret_file` source is plan 12's to weigh.
 
 ## A deployment
 
@@ -57,7 +59,10 @@ The device key and the encryption key come from env files: `port49d.env` holds b
   (`etcd/`, `broker/`, the two env files). Edit `config/` for your policy and CRL or OCSP
   (the example sets `certificate_status.disabled`, which a deployment must not).
 - List devices in `inventory.yaml` by the address port49d sees (design §13). A published port
-  may change that address; what it does is policy engine spec §15 L39 (a), not yet measured.
+  may change that address; what it does is policy engine spec §15 L39 (a). Measured: kept for an off-host device
+  (modelled; `tests/lab/results/L39-docker-proxy-on-arista_eos.md` and `-off-`), masqueraded to
+  the compose gateway for a device on another Docker network on the same host. A connection
+  docker-proxy itself relays is unmeasured.
 - `etcd-init` applies `port49d store-roles`' output once and enables auth. After a port49
   upgrade that changes the roles, re-apply `store-roles`' output by hand; it is never done
   silently.
