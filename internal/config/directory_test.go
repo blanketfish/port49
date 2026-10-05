@@ -255,3 +255,14 @@ func TestALoadedBrokerResolvesItsDirectory(t *testing.T) {
 		t.Fatalf("%+v", c.Broker)
 	}
 }
+
+// Two servers that share a host:port would share one metric label and one
+// selection gauge: refused at load.
+func TestServersSharingAHostPortAreRefused(t *testing.T) {
+	d := dirYAML(t)
+	d.Servers[1].URI = d.Servers[0].URI + "/"
+	if _, err := checkDirectory(d, env(map[string]string{"PORT49_LDAP_PASSWORD": "x"})); err == nil ||
+		!strings.Contains(err.Error(), "servers[1]") || !strings.Contains(err.Error(), "same host:port") {
+		t.Fatalf("%v", err)
+	}
+}

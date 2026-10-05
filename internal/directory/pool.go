@@ -59,14 +59,24 @@ func Fault(err error) bool {
 	return false
 }
 
-// label names a server in the log and in metric labels: its host:port. The
-// config refuses userinfo in a URI, but nothing past the authority is
+// Label names a server in the log and in metric labels: its host:port, the
+// scheme's default port when the URI has none. The config refuses userinfo
+// in a URI and two servers with one label, and nothing past the authority is
 // needed to tell servers apart.
-func (s Server) label() string {
-	if u, err := url.Parse(s.URI); err == nil && u.Host != "" {
-		return u.Host
+func (s Server) Label() string {
+	u, err := url.Parse(s.URI)
+	if err != nil || u.Host == "" {
+		return s.URI
 	}
-	return s.URI
+	if u.Port() == "" {
+		switch u.Scheme {
+		case "ldaps":
+			return net.JoinHostPort(u.Hostname(), "636")
+		case "ldap":
+			return net.JoinHostPort(u.Hostname(), "389")
+		}
+	}
+	return u.Host
 }
 
 type serverState struct {
@@ -103,8 +113,8 @@ func NewPool(cfg Config, dial Dialer, check func(ctx context.Context, s Searcher
 	p := &Pool{cfg: cfg, dial: dial, check: check, now: now, m: m, say: say, sel: -1}
 	for _, s := range cfg.Servers {
 		p.srv = append(p.srv, &serverState{Server: s})
-		m.DirectoryServerUp.WithLabelValues(s.label()).Set(1)
-		m.DirectorySelected.WithLabelValues(s.label()).Set(0)
+		m.DirectoryServerUp.WithLabelValues(s.Label()).Set(1)
+		m.DirectorySelected.WithLabelValues(s.Label()).Set(0)
 	}
 	slices.SortStableFunc(p.srv, func(a, b *serverState) int {
 		if cfg.Site != "" {
@@ -178,13 +188,18 @@ func (p *Pool) Do(ctx context.Context, f func(Searcher) error) (Server, error) {
 		} else if ctx.Err() == nil && !Fault(err) {
 			p.refused(i, err)
 			p.moveFrom(i)
-			last = fmt.Errorf("%s: %v", srv.label(), err)
+			last = fmt.Errorf("%s: %v", srv.Label(), err)
 			continue
 		}
 		if ctx.Err() != nil {
 			// A caller that went away is no fault. Its own search was
 			// abandoned; the connection stays for every other query.
 			return Server{}, ctx.Err()
+		}
+		if err != nil && last != nil && qctx.Err() != nil {
+			// The budget ran out inside this later server's turn: it was
+			// never given the time, so it is charged no fault.
+			return Server{}, fmt.Errorf("%w (the last: %v)", ErrUnavailable, err)
 		}
 		switch {
 		case err == nil:
@@ -196,7 +211,7 @@ func (p *Pool) Do(ctx context.Context, f func(Searcher) error) (Server, error) {
 		}
 		p.fault(i, gen, err)
 		p.moveFrom(i)
-		last = fmt.Errorf("%s: %v", srv.label(), err)
+		last = fmt.Errorf("%s: %v", srv.Label(), err)
 	}
 }
 
@@ -229,22 +244,28 @@ func (p *Pool) moveFrom(i int) {
 	}
 }
 
-// bestLocked is the best-ranked closed server other than skip, one with
-// no faults in a row before one with some; -1 for none.
+// bestLocked is the best closed server other than skip: same-site before
+// remote (a local server with a fault still beats crossing sites), and
+// within a site one with no faults in a row before one with some, in rank
+// order; -1 for none.
 func (p *Pool) bestLocked(skip int) int {
-	fallback := -1
+	best, bestTier := -1, 0
 	for j, s := range p.srv {
 		if j == skip || s.open {
 			continue
 		}
-		if s.faults == 0 {
-			return j
+		tier := 0
+		if p.cfg.Site != "" && s.Site != p.cfg.Site {
+			tier += 2
 		}
-		if fallback < 0 {
-			fallback = j
+		if s.faults > 0 {
+			tier++
+		}
+		if best < 0 || tier < bestTier {
+			best, bestTier = j, tier
 		}
 	}
-	return fallback
+	return best
 }
 
 // acquire is the server a query tries next: the selected one if its
@@ -295,7 +316,7 @@ func (p *Pool) acquire(ctx context.Context, tried map[int]bool) (int, Client, in
 }
 
 func (p *Pool) answered(i int, outcome string) {
-	p.m.DirectoryQueries.WithLabelValues(p.srv[i].label(), outcome).Inc()
+	p.m.DirectoryQueries.WithLabelValues(p.srv[i].Label(), outcome).Inc()
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.srv[i].faults = 0
@@ -321,7 +342,7 @@ func (p *Pool) fault(i, gen int, err error) {
 	if gen >= 0 && gen != s.gen {
 		return
 	}
-	p.m.DirectoryQueries.WithLabelValues(s.label(), "fault").Inc()
+	p.m.DirectoryQueries.WithLabelValues(s.Label(), "fault").Inc()
 	if s.conn != nil && gen >= 0 && broken(err) {
 		_ = s.conn.Close()
 		s.conn = nil
@@ -331,8 +352,8 @@ func (p *Pool) fault(i, gen int, err error) {
 	s.healthySince = time.Time{}
 	if !s.open && s.faults >= p.cfg.FailureThreshold {
 		s.open, s.openedAt = true, p.now()
-		p.m.DirectoryServerUp.WithLabelValues(s.label()).Set(0)
-		p.say("directory: %s: %d faults in a row (the last: %s); its breaker is open; probed every %s", s.label(),
+		p.m.DirectoryServerUp.WithLabelValues(s.Label()).Set(0)
+		p.say("directory: %s: %d faults in a row (the last: %s); its breaker is open; probed every %s", s.Label(),
 			s.faults, printsafe.Line(err.Error(), 300), p.cfg.ProbeInterval)
 		if s.conn != nil {
 			_ = s.conn.Close()
@@ -348,19 +369,25 @@ func (p *Pool) fault(i, gen int, err error) {
 // breaker's count is left as it is, neither raised (a wrong password is
 // not a down server) nor reset. Said once per server an hour, with the
 // mechanism and the result code; the error carries neither the password
-// nor the keytab (Task 7).
+// nor the keytab (Task 7). Refusals open no breaker, so with every server
+// refusing each query binds against each: an operator exempts the service
+// account from lockout (docs note).
 func (p *Pool) refused(i int, err error) {
-	p.m.DirectoryQueries.WithLabelValues(p.srv[i].label(), "refused").Inc()
+	p.m.DirectoryQueries.WithLabelValues(p.srv[i].Label(), "refused").Inc()
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	s := p.srv[i]
+	// A server that refuses has not passed every check: its stability window
+	// restarts, so failback does not return to it every interval. faults is
+	// left as it is.
+	s.healthySince = time.Time{}
 	now := p.now()
 	if !s.refusedSaid.IsZero() && now.Sub(s.refusedSaid) < time.Hour {
 		return
 	}
 	s.refusedSaid = now
 	p.say("directory: %s refused the bind (%s): %s; queries fail over, and with no server answering a "+
-		"membership verified within directory.grace serves", s.label(), p.cfg.Bind.Mechanism,
+		"membership verified within directory.grace serves", s.Label(), p.cfg.Bind.Mechanism,
 		printsafe.Line(err.Error(), 300))
 }
 
@@ -372,24 +399,24 @@ func (p *Pool) selectLocked(i int, why string) {
 	p.sel = i
 	s := p.srv[i]
 	for _, o := range p.srv {
-		p.m.DirectorySelected.WithLabelValues(o.label()).Set(0)
+		p.m.DirectorySelected.WithLabelValues(o.Label()).Set(0)
 	}
-	p.m.DirectorySelected.WithLabelValues(s.label()).Set(1)
+	p.m.DirectorySelected.WithLabelValues(s.Label()).Set(1)
 	if why != "" {
 		p.say("%s", why)
 	} else {
-		p.say("directory: selected %s (%s, priority %d)", s.label(), or(s.Site, "no site"), s.Priority)
+		p.say("directory: selected %s (%s, priority %d)", s.Label(), or(s.Site, "no site"), s.Priority)
 	}
 	from, fromURI := p.cfg.Site, ""
 	if prev >= 0 {
-		from, fromURI = p.srv[prev].Site, p.srv[prev].label()
+		from, fromURI = p.srv[prev].Site, p.srv[prev].Label()
 	}
 	// With a broker site, the first selection is measured from it; without
 	// one, a change between two selections is the crossing (pre-flight M-7).
 	if (p.cfg.Site != "" || prev >= 0) && s.Site != from {
 		p.m.DirectorySiteCrossings.Inc()
 		p.say("directory: consistency event: crossing from site %s to %s (%s to %s); membership read there may lag "+
-			"replication from %s", or(from, "none"), or(s.Site, "none"), or(fromURI, "none"), s.label(), or(from, "none"))
+			"replication from %s", or(from, "none"), or(s.Site, "none"), or(fromURI, "none"), s.Label(), or(from, "none"))
 	}
 }
 
@@ -438,8 +465,8 @@ func (p *Pool) Check(ctx context.Context) {
 		s.faults = 0
 		if s.open {
 			s.open = false
-			p.m.DirectoryServerUp.WithLabelValues(s.label()).Set(1)
-			p.say("directory: %s answers its health check again; its breaker is closed", s.label())
+			p.m.DirectoryServerUp.WithLabelValues(s.Label()).Set(1)
+			p.say("directory: %s answers its health check again; its breaker is closed", s.Label())
 		}
 		if s.healthySince.IsZero() {
 			s.healthySince = now
@@ -458,14 +485,16 @@ func (p *Pool) Check(ctx context.Context) {
 		s := p.srv[j]
 		if !s.open && !s.healthySince.IsZero() && now.Sub(s.healthySince) >= p.cfg.StabilityWindow {
 			p.selectLocked(j, fmt.Sprintf("directory: %s passed every health check for %s (failback.stability_window); "+
-				"selected again", s.label(), p.cfg.StabilityWindow))
+				"selected again", s.Label(), p.cfg.StabilityWindow))
 			return
 		}
 	}
 }
 
-// Run checks every health_check.interval until ctx ends, starting at once.
+// Run checks every health_check.interval until ctx ends, starting at once,
+// and closes every bound connection when it returns.
 func (p *Pool) Run(ctx context.Context) {
+	defer p.closeConns()
 	t := time.NewTicker(p.cfg.HealthInterval)
 	defer t.Stop()
 	for {
@@ -474,6 +503,20 @@ func (p *Pool) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+		}
+	}
+}
+
+// closeConns closes every bound connection, bumping gen so an error on one
+// counts as no fault.
+func (p *Pool) closeConns() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, s := range p.srv {
+		if s.conn != nil {
+			_ = s.conn.Close()
+			s.conn = nil
+			s.gen++
 		}
 	}
 }

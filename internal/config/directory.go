@@ -111,6 +111,7 @@ func checkDirectory(y directoryYAML, getenv func(string) string) (*directory.Con
 	if len(y.Servers) == 0 {
 		return nil, fmt.Errorf("config: %sservers: list at least one", p)
 	}
+	labels := map[string]int{}
 	for i, s := range y.Servers {
 		// Userinfo first: every other message here echoes the URI. Any "@"
 		// is refused, so a URI that does not parse cannot carry one into a
@@ -129,7 +130,13 @@ func checkDirectory(y directoryYAML, getenv func(string) string) (*directory.Con
 		case u.Scheme == "ldaps" && s.StartTLS:
 			return nil, fmt.Errorf("config: %sservers[%d]: start_tls is for ldap://; %s is TLS already", p, i, s.URI)
 		}
-		d.Servers = append(d.Servers, directory.Server{URI: s.URI, Priority: s.Priority, Site: s.Site, StartTLS: s.StartTLS})
+		srv := directory.Server{URI: s.URI, Priority: s.Priority, Site: s.Site, StartTLS: s.StartTLS}
+		if j, dup := labels[srv.Label()]; dup {
+			return nil, fmt.Errorf("config: %sservers[%d].uri %s: the same host:port as servers[%d]; a server is named by it in the log and in metrics",
+				p, i, s.URI, j)
+		}
+		labels[srv.Label()] = i
+		d.Servers = append(d.Servers, srv)
 	}
 	switch {
 	case y.Site != "":

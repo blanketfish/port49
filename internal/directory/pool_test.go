@@ -148,7 +148,7 @@ func TestASlowServerFailsOverWithinTheQueryTimeout(t *testing.T) {
 	for i := 0; i < 3; i++ { // dc-01 answers each check too late
 		p.Check(context.Background())
 	}
-	if testutil.ToFloat64(m.DirectoryServerUp.WithLabelValues(west1.label())) != 0 || !say.has("its breaker is open") {
+	if testutil.ToFloat64(m.DirectoryServerUp.WithLabelValues(west1.Label())) != 0 || !say.has("its breaker is open") {
 		t.Fatalf("the breaker did not open on slow checks: %v", say.l)
 	}
 }
@@ -229,7 +229,7 @@ func TestASiteCrossingIsAConsistencyEvent(t *testing.T) {
 		t.Fatalf("%v %v", srv, err)
 	}
 	if testutil.ToFloat64(m.DirectorySiteCrossings) != 1 ||
-		!say.has("consistency event: crossing from site us-west to us-east (dc-01 to dc-03)") {
+		!say.has("consistency event: crossing from site us-west to us-east (dc-01:636 to dc-03:636)") {
 		t.Fatalf("%v", say.l)
 	}
 }
@@ -239,7 +239,8 @@ func TestASiteCrossingIsAConsistencyEvent(t *testing.T) {
 func TestACallerThatWentAwayIsNoFault(t *testing.T) {
 	f := newFakeServers(west1.URI)
 	f.dirs[west1.URI].delay = 200 * time.Millisecond
-	p := NewPool(poolCfg("us-west", west1), f.dial, noCheck, newClock().Now, metrics.New(prometheus.NewRegistry()), (&lines{}).say)
+	m := metrics.New(prometheus.NewRegistry())
+	p := NewPool(poolCfg("us-west", west1), f.dial, noCheck, newClock().Now, m, (&lines{}).say)
 	for i := 0; i < 5; i++ {
 		ctx, cancel := context.WithCancel(context.Background())
 		go func() { time.Sleep(20 * time.Millisecond); cancel() }()
@@ -250,6 +251,10 @@ func TestACallerThatWentAwayIsNoFault(t *testing.T) {
 	}
 	if sel, ok := p.Selected(); !ok || sel != west1 {
 		t.Fatalf("cancelled callers moved the selection: %v %v", sel, ok)
+	}
+	if testutil.ToFloat64(m.DirectoryServerUp.WithLabelValues(west1.Label())) != 1 ||
+		testutil.ToFloat64(m.DirectoryQueries.WithLabelValues(west1.Label(), "fault")) != 0 {
+		t.Fatal("cancelled callers counted as faults against dc-01")
 	}
 }
 
@@ -310,10 +315,10 @@ func TestOneSlowQueryLeavesTheOthersAlone(t *testing.T) {
 	for err := range errs {
 		t.Errorf("a fast query: %v", err)
 	}
-	if testutil.ToFloat64(m.DirectoryServerUp.WithLabelValues(west1.label())) != 1 {
+	if testutil.ToFloat64(m.DirectoryServerUp.WithLabelValues(west1.Label())) != 1 {
 		t.Fatal("one slow query opened dc-01's breaker")
 	}
-	if n := testutil.ToFloat64(m.DirectoryQueries.WithLabelValues(west1.label(), "fault")); n > 1 {
+	if n := testutil.ToFloat64(m.DirectoryQueries.WithLabelValues(west1.Label(), "fault")); n > 1 {
 		t.Fatalf("%v faults counted on dc-01; one slow query is one", n)
 	}
 	if f.dials[west1.URI] != 1 || f.open(west1.URI) != 1 {
@@ -366,10 +371,10 @@ func TestABindRefusalFailsOverAndReachesUnavailable(t *testing.T) {
 			t.Fatalf("every server refusing: %v, want ErrUnavailable", err)
 		}
 	}
-	if n := say.count("dc-01 refused the bind (simple): LDAP Result Code 49"); n != 1 {
+	if n := say.count("dc-01:636 refused the bind (simple): LDAP Result Code 49"); n != 1 {
 		t.Fatalf("the refusal said %d times in the hour: %v", n, say.l)
 	}
-	if testutil.ToFloat64(m.DirectoryServerUp.WithLabelValues(west1.label())) != 1 {
+	if testutil.ToFloat64(m.DirectoryServerUp.WithLabelValues(west1.Label())) != 1 {
 		t.Fatal("invalid credentials opened the breaker")
 	}
 	f.setRefuse(west1.URI, nil)
@@ -382,7 +387,7 @@ func TestABindRefusalFailsOverAndReachesUnavailable(t *testing.T) {
 	f.setRefuse(west1.URI, nil)
 	f.setDown(west1.URI, true)
 	p.Check(context.Background()) // the third fault
-	if testutil.ToFloat64(m.DirectoryServerUp.WithLabelValues(west1.label())) != 0 {
+	if testutil.ToFloat64(m.DirectoryServerUp.WithLabelValues(west1.Label())) != 0 {
 		t.Fatal("a refusal reset the fault count the health checks built")
 	}
 }
@@ -399,7 +404,7 @@ func TestACrossingWithNoBrokerSiteIsCounted(t *testing.T) {
 		t.Fatalf("%v %v", srv, err)
 	}
 	if testutil.ToFloat64(m.DirectorySiteCrossings) != 1 ||
-		!say.has("consistency event: crossing from site us-east to us-west (dc-03 to dc-01)") {
+		!say.has("consistency event: crossing from site us-east to us-west (dc-03:636 to dc-01:636)") {
 		t.Fatalf("%v", say.l)
 	}
 }
@@ -427,9 +432,14 @@ func TestEveryBreakerOpenFailsFast(t *testing.T) {
 // A server's name in the log and in metrics is its host:port, never the
 // URI.
 func TestServersAreNamedByHostPort(t *testing.T) {
-	s := Server{URI: "ldaps://dc-01.example.net:3269/ou=x?y"}
-	if s.label() != "dc-01.example.net:3269" {
-		t.Fatal(s.label())
+	for uri, want := range map[string]string{
+		"ldaps://dc-01.example.net:3269/ou=x?y": "dc-01.example.net:3269",
+		"ldaps://dc-01.example.net":             "dc-01.example.net:636",
+		"ldap://dc-01.example.net/":             "dc-01.example.net:389",
+	} {
+		if got := (Server{URI: uri}).Label(); got != want {
+			t.Errorf("%s: %s", uri, got)
+		}
 	}
 }
 
@@ -466,5 +476,99 @@ func TestRunStopsWithItsContext(t *testing.T) {
 	defer f.mu.Unlock()
 	if f.dials[west1.URI] != before {
 		t.Fatal("Check dialled on a done context")
+	}
+}
+
+// A server that healthy past the window and then refuses the bind is not
+// failed back to at the next check (it has not passed every check), and is
+// selected again only after a whole window of passes since its last refusal.
+func TestARefusingServerIsNotFailedBackTo(t *testing.T) {
+	f := newFakeServers(west1.URI, west2.URI)
+	clk := newClock()
+	say := &lines{}
+	p := NewPool(poolCfg("us-west", west1, west2), f.dial, noCheck, clk.Now, metrics.New(prometheus.NewRegistry()), say.say)
+	p.Check(context.Background())
+	clk.Add(6 * time.Minute)
+	p.Check(context.Background())
+	f.setRefuse(west1.URI, ldap.NewError(ldap.LDAPResultInvalidCredentials, errors.New("invalid credentials")))
+	if srv, err := p.Do(context.Background(), searchFor("(x)")); err != nil || srv != west2 {
+		t.Fatalf("%v %v", srv, err)
+	}
+	for i := 0; i < 5; i++ {
+		clk.Add(30 * time.Second)
+		p.Check(context.Background())
+		if sel, _ := p.Selected(); sel != west2 {
+			t.Fatalf("round %d: failed back to a server that refuses: %v", i, sel)
+		}
+	}
+	f.setRefuse(west1.URI, nil)
+	p.Check(context.Background())
+	clk.Add(6 * time.Minute)
+	p.Check(context.Background())
+	if sel, _ := p.Selected(); sel != west1 {
+		t.Fatalf("not selected after a full window of passes: %v", sel)
+	}
+}
+
+// When Run returns the pool holds no connection: each bound connection is
+// closed, so a rebuilt pool leaks none.
+func TestRunClosesTheConnectionsOnExit(t *testing.T) {
+	f := newFakeServers(west1.URI, west2.URI)
+	p := NewPool(poolCfg("us-west", west1, west2), f.dial, noCheck, newClock().Now, metrics.New(prometheus.NewRegistry()),
+		(&lines{}).say)
+	if _, err := p.Do(context.Background(), searchFor("(x)")); err != nil {
+		t.Fatal(err)
+	}
+	if f.open(west1.URI) != 1 {
+		t.Fatal("the query left no connection")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { p.Run(ctx); close(done) }()
+	cancel()
+	<-done
+	if f.open(west1.URI)+f.open(west2.URI) != 0 {
+		t.Fatalf("%d connections left open after Run", f.open(west1.URI)+f.open(west2.URI))
+	}
+}
+
+// With a same-site server that has one fault and a remote one with none,
+// the same-site server is tried before the selection crosses sites.
+func TestSameSiteWithAFaultBeatsARemoteServer(t *testing.T) {
+	f := newFakeServers(west1.URI, west2.URI, east.URI)
+	p := NewPool(poolCfg("us-west", west1, west2, east), f.dial, noCheck, newClock().Now,
+		metrics.New(prometheus.NewRegistry()), (&lines{}).say)
+	p.mu.Lock()
+	p.srv[1].faults = 1 // dc-02
+	p.mu.Unlock()
+	p.mu.Lock()
+	j := p.bestLocked(0)
+	p.mu.Unlock()
+	if p.srv[j].Server != west2 {
+		t.Fatalf("crossed to %v with a same-site server closed", p.srv[j].Server)
+	}
+}
+
+// A query whose budget ran out in a later server's dial charges that server
+// no fault.
+func TestBudgetSpentInALaterDialIsNoFault(t *testing.T) {
+	f := newFakeServers(west1.URI, west2.URI)
+	f.setDown(west1.URI, true)
+	cfg := poolCfg("us-west", west1, west2)
+	cfg.QueryTimeout = 500 * time.Millisecond
+	m := metrics.New(prometheus.NewRegistry())
+	dial := func(ctx context.Context, s Server) (Client, error) {
+		if s == west2 {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		return f.dial(ctx, s)
+	}
+	p := NewPool(cfg, dial, noCheck, newClock().Now, m, (&lines{}).say)
+	if _, err := p.Do(context.Background(), searchFor("(x)")); err == nil {
+		t.Fatal("want an error")
+	}
+	if n := testutil.ToFloat64(m.DirectoryQueries.WithLabelValues(west2.Label(), "fault")); n != 0 {
+		t.Fatalf("dc-02 charged %v faults for a budget it was not given", n)
 	}
 }
