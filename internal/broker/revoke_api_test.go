@@ -165,7 +165,7 @@ func TestRevokeOthersMarksAPrincipalAndEndsAKey(t *testing.T) {
 	}
 	if w := f.post(ctx, f.state(f.alice), `{"devices":["leaf1"]}`, ""); w.Code != 401 ||
 		!strings.Contains(w.Body.String(), "credential_revoked") {
-		t.Fatalf("alice's mint after the mark: %d %s", w.Code, w.Body)
+		t.Fatalf("alice's mint after the mark: %s", answer(w))
 	}
 	f.b.AdminSocket = "/run/port49/port49d.sock"
 	again := decodeRevoke(t, f.revokeAs(t, "bob@example.com", `{"principal":"`+alice2+`"}`))

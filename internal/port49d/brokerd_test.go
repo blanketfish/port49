@@ -1254,7 +1254,7 @@ func TestALateReplicasContextIsCarriedWhenItReloads(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(string(body), `"store_unavailable"`) {
-		t.Fatalf("a mint on B before its swap's mark landed: %d %s", resp.StatusCode, body)
+		t.Fatalf("a mint on B before its swap's mark landed: %s", reply(resp.StatusCode, string(body)))
 	}
 	waitBrokerMetricAt(t, metricsB, "port49_broker_mint_gate_closed 1")
 	if code := readyzAt(t, metricsB); code != http.StatusOK {

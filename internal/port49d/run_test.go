@@ -143,7 +143,7 @@ func mintWith(t *testing.T, brokerAddr, pkiDir, device, key, certFile, keyFile s
 		t.Fatal(err)
 	}
 	if len(out.Results) != 1 || out.Results[0].Login == "" {
-		t.Fatalf("mint: %+v", out)
+		t.Fatalf("mint: %d result(s); a mint answer carries tokens and is not printed", len(out.Results))
 	}
 	return out.Results[0].Login
 }

@@ -70,7 +70,7 @@ func (f *fixture) login(t *testing.T, principal, device, username string) store.
 		cert = f.client(t, strings.TrimPrefix(principal, "user:"), f.now.Add(24*time.Hour))
 	}
 	if it := decodeMint(t, f.post(context.Background(), f.state(cert), `{"devices":["`+device+`"]}`, "")).Results[0]; it.Verdict != "permit" {
-		t.Fatalf("mint for %s on %s: %+v", principal, device, it)
+		t.Fatalf("mint for %s on %s: verdict %q, reason %q", principal, device, it.Verdict, it.Reason)
 	}
 	ctx := context.Background()
 	tk := store.TokenKey{NAS: device, Username: username}
@@ -609,7 +609,7 @@ func TestASupersededPolicyIsJudgedAtEveryExpiryItSpanned(t *testing.T) {
 	f.reload(t, edit(t, roleList, readOnly)+extra+", expires: "+lapse.UTC().Format(time.RFC3339)+"}\n")
 	f.advance(2 * time.Hour)
 	if it := decodeMint(t, f.post(context.Background(), f.state(f.alice), `{"devices":["leaf1"]}`, "")).Results[0]; it.Verdict != "permit" {
-		t.Fatalf("mint after the lapse: %+v", it)
+		t.Fatalf("mint after the lapse: verdict %q, reason %q", it.Verdict, it.Reason)
 	}
 	pol, err := policy.Parse([]byte(edit(t, roleList, readOnly)+extra+"}\n"), policy.Env{Devices: []admission.Device{
 		f.devices["leaf1"], f.devices["nx1"], f.devices["bare"]}, Now: f.b.Now()})
@@ -1143,7 +1143,8 @@ func TestARetryAfterASupersedeIsNotAnsweredWithTheDeletedToken(t *testing.T) {
 		t.Fatalf("the mint record says the replay was abandoned: %v", mints)
 	}
 	if replay := decodeMint(t, f.post(bg, f.state(f.alice), body, "retry-1")).Results[0]; replay.Login != again.Login {
-		t.Fatalf("a retry after the fresh mint replays it: %+v", replay)
+		t.Fatalf("a retry after the fresh mint replays it: verdict %q, same login as the fresh mint: %v", replay.Verdict,
+			replay.Login == again.Login)
 	}
 }
 
@@ -1203,7 +1204,7 @@ func TestARefusedDeviceIsNotMintedForAndItsContextIsRevoked(t *testing.T) {
 	priors := []Prior{{Policy: f.b.Policy.Swap(pol), At: f.b.Now()}}
 	it := decodeMint(t, f.post(context.Background(), f.state(f.alice), `{"devices":["leaf1"]}`, "")).Results[0]
 	if it.Verdict != "deny" || it.Reason != "device_unknown" {
-		t.Fatalf("a refused device was minted for: %+v", it)
+		t.Fatalf("a refused device was minted for: verdict %q, reason %q", it.Verdict, it.Reason)
 	}
 	rep, err := f.b.Refresh(context.Background(), priors)
 	if err != nil || rep.Revoked != 1 {
