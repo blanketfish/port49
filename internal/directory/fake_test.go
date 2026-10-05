@@ -3,6 +3,7 @@ package directory
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"time"
 
@@ -185,3 +186,14 @@ func (f *fakeServers) setRefuse(uri string, err error) {
 }
 
 func (f *fakeServers) setDown(uri string, down bool) { f.mu.Lock(); f.down[uri] = down; f.mu.Unlock() }
+
+// closeAll closes every connection dialled to uri, as a server going away
+// or dropping its clients does.
+func (f *fakeServers) closeAll(uri string) {
+	f.mu.Lock()
+	cs := slices.Clone(f.conns[uri])
+	f.mu.Unlock()
+	for _, c := range cs {
+		_ = c.Close()
+	}
+}

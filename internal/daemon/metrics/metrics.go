@@ -280,6 +280,17 @@ type Metrics struct {
 	// matching because two groups share them, at the last resolution. No
 	// labels.
 	DirectoryGroupNamesAmbiguous prometheus.Gauge
+	// port49_directory_lookups_total{outcome}: directory resolutions by
+	// outcome: fresh (a server answered), grace (the store's membership,
+	// within directory.grace), unavailable (no server and no grace),
+	// unmapped, ambiguous, collision (the directory's refusals).
+	DirectoryLookups *prometheus.CounterVec
+	// port49_directory_prewarm_principals: principals the last pre-warm
+	// pass verified and stored.
+	DirectoryPrewarmPrincipals prometheus.Gauge
+	// port49_directory_prewarm_last_success_timestamp_seconds: the Unix time
+	// the last pre-warm pass finished, 0 before one has.
+	DirectoryPrewarmLastSuccess prometheus.Gauge
 	// port49_policy_reloads_total{outcome}: attempts to put a changed policy
 	// file in force (plan 4b) — "applied", "unchanged" (a SIGHUP with nothing
 	// new), or "refused" (the file does not load; the policy in force keeps
@@ -575,6 +586,13 @@ func New(reg prometheus.Registerer) *Metrics {
 			Help: "Nested-group walks that ended at max_depth or the node bound with groups unconfirmed; those groups are not granted."}),
 		DirectoryGroupNamesAmbiguous: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_directory_group_names_ambiguous",
 			Help: "Group names that match no one because two groups under groups_base_dn share them."}),
+		DirectoryLookups: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_directory_lookups_total",
+			Help: "Directory resolutions by outcome: fresh, grace, unavailable, unmapped, ambiguous, collision."},
+			[]string{"outcome"}),
+		DirectoryPrewarmPrincipals: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_directory_prewarm_principals",
+			Help: "Principals the last pre-warm pass verified and stored."}),
+		DirectoryPrewarmLastSuccess: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_directory_prewarm_last_success_timestamp_seconds",
+			Help: "The Unix time the last pre-warm pass finished; 0 before one has."}),
 		PolicyReloads: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_policy_reloads_total",
 			Help: "Attempts to put a changed policy file in force, by outcome."}, []string{"outcome"}),
 		PolicyFileRefused: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_policy_file_refused",
@@ -652,7 +670,7 @@ func New(reg prometheus.Registerer) *Metrics {
 		m.DevicesQuarantined, m.DevicesAdmissionRefused, m.ContextRefreshes, m.ContextsReindexed,
 		m.ContextsReindexFailures, m.SessionRefreshes, m.TokensSuperseded, m.CeilingWarnings,
 		m.Revocations, m.RevocationsInForce, m.RevocationsFileFailed, m.CertStatusChecks, m.CRLLoads, m.CRLNextUpdate,
-		m.CertStatusUnavailable, m.DirectoryQueries, m.DirectoryServerUp, m.DirectorySelected, m.DirectorySiteCrossings, m.DirectoryBindHoldoff, m.DirectoryWalksTruncated, m.DirectoryGroupNamesAmbiguous, m.PolicyReloads, m.PolicyFileRefused,
+		m.CertStatusUnavailable, m.DirectoryQueries, m.DirectoryServerUp, m.DirectorySelected, m.DirectorySiteCrossings, m.DirectoryBindHoldoff, m.DirectoryWalksTruncated, m.DirectoryGroupNamesAmbiguous, m.DirectoryLookups, m.DirectoryPrewarmPrincipals, m.DirectoryPrewarmLastSuccess, m.PolicyReloads, m.PolicyFileRefused,
 		m.PolicyRefreshPending, m.PolicyBundleMatchesRunner, m.BrokerMintGateClosed, m.RedemptionRestoreGuarded,
 		m.InventoryReloads,
 		m.InventoryFileRefused,
