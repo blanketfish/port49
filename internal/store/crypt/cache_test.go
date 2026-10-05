@@ -345,3 +345,20 @@ func TestNoHitWhileTheFeedIsBehindARead(t *testing.T) {
 		t.Fatalf("hits counted while the feed was behind a read: %v", n)
 	}
 }
+
+// A change the feed brings while a read is in flight evicts the entry; the
+// read then failing as unavailable must not serve that evicted entry stale
+// (plan 7f, final review M-1). A delete does not move the ledger, so knownAt
+// alone would not refuse it.
+func TestAnEntryEvictedDuringTheReadIsNotServedStale(t *testing.T) {
+	b, c, l, now, _ := cacheRig(t)
+	get(t, c)
+	*now = now.Add(5 * time.Second) // past the TTL, so the read goes to the store
+	b.mu.Lock()
+	b.hook = func() { l.changed(ka) }
+	b.mu.Unlock()
+	b.set(store.Context{}, store.ErrUnavailable)
+	if got, err := get(t, c); !errors.Is(err, store.ErrUnavailable) {
+		t.Fatalf("served an entry the feed evicted mid-read: %v %v", got, err)
+	}
+}

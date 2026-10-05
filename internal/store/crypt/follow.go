@@ -139,15 +139,16 @@ func FollowContexts(ctx context.Context, feed store.ContextFeed, src store.Ledge
 		l.Fence().askAgain()
 		err := feed.WatchContexts(ctx, from, func(c store.ContextChange) {
 			// Every change, a delete and one that will not open included,
-			// evicts its key from a context cache before anything else
-			// (plan 7f, Ruling 5).
+			// evicts its key from a context cache (plan 7f, Ruling 5). The
+			// ledger moves first, so an in-flight read's stale serve fails
+			// knownAt in the window before the eviction (final review M-1).
+			if !c.Deleted {
+				observe(l, keys, c.Key, c.Context, false)
+			}
 			l.changed(c.Key)
 			again()
 			if c.Rev > from {
 				from = c.Rev
-			}
-			if !c.Deleted {
-				observe(l, keys, c.Key, c.Context, false)
 			}
 		}, func(rev uint64) {
 			again()

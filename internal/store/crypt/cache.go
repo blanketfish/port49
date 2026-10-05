@@ -135,7 +135,7 @@ func (c *cache) GetContext(ctx context.Context, k store.ContextKey) (store.Conte
 	// entry (plan 7f, I-2): not an outage, so never stale, and the entry is
 	// superseded.
 	behind := errors.Is(err, ErrFeedBehind)
-	if ok && errors.Is(err, store.ErrUnavailable) && !behind && c.cfg.TTL > 0 && !c.l.Fence().Behind() && c.l.knownAt(k, e.c.Rev) && c.withinIdle(e.c, now) {
+	if ok && errors.Is(err, store.ErrUnavailable) && !behind && c.cfg.TTL > 0 && !c.l.Fence().Behind() && c.l.knownAt(k, e.c.Rev) && c.withinIdle(e.c, now) && c.stillCached(k, e) {
 		c.count("stale")
 		if c.cfg.Stale != nil {
 			c.cfg.Stale(err)
@@ -147,6 +147,16 @@ func (c *cache) GetContext(ctx context.Context, k store.ContextKey) (store.Conte
 		c.evictKey(k) // not found, a record that will not open, or one the feed is behind: never served again
 	}
 	return got, err
+}
+
+// stillCached reports whether e is still k's entry: a change the feed brought
+// during the store read evicted it, and a delete does not move the ledger, so
+// knownAt alone would serve it once more (plan 7f, final review M-1).
+func (c *cache) stillCached(k store.ContextKey, e cacheEntry) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	cur, ok := c.m[k]
+	return ok && cur.at.Equal(e.at)
 }
 
 // cloned is ct with its SessionDiscriminators slice copied: store.Context is
