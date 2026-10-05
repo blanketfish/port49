@@ -7228,8 +7228,14 @@ every matching subject composes, and a scheduled refresh stamps refreshed_at.** 
   `start_tls`. The password, the keytab and a ticket are never logged. Provisional on L43; on
   Windows Server AD, on L44. Tasks 4 and 7.
 - **9. The server pool.** Ranked same-site first, then `priority` descending, then file order;
-  sticky until a server fault or an open breaker; a refused dial or bind is "this server did not
-  answer" and fails over (a 49 is no breaker fault); each search runs under its own context;
+  sticky until a server fault or an open breaker; a refused dial (network) is "this server did not
+  answer" and fails over; a refused bind (LDAP 49, 48, 8, 13 or 7, a KDC's refusal) is no breaker
+  fault but holds off every new bind across the pool, 1m doubling on a server's repeat refusal
+  to 15m, each refusing server on its own backoff, one probe bind per step, any accepted bind
+  clearing it, bound connections still serving (the one service account, which AD locks out
+  on failed binds counted across every DC; with N servers all refusing, at most N+4 failed
+  binds in the first 30 minutes, then one per 15; gauge
+  `port49_directory_bind_holdoff_seconds`); each search runs under its own context;
   breakers open after `failure_threshold` (3) and are tried again only by the health check
   (`probe_interval`, 60s); health checks every 30s, 2s each; failback after
   `stability_window` (5m); a site crossing is a logged, counted consistency event.
