@@ -41,6 +41,11 @@ const maxKeySize = 1 << 20
 // geteuid is os.Geteuid, swapped in tests: CI has no second uid to own a file.
 var geteuid = os.Geteuid
 
+// ReadSecret reads a secret file with ReadX509KeyPair's checks: no symlink,
+// owned by port49's user or root, no group or other mode bit, at most
+// 1 MiB. The directory's keytab is read through it (plan 7g, Ruling 8).
+func ReadSecret(path string) ([]byte, error) { return readPrivate(path) }
+
 func readPrivate(path string) ([]byte, error) {
 	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if errors.Is(err, syscall.ELOOP) {

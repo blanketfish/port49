@@ -31,6 +31,7 @@ import (
 
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/daemon/limits"
+	"github.com/rhwendt/port49/internal/directory"
 	"github.com/rhwendt/port49/internal/fence"
 	"github.com/rhwendt/port49/internal/keyring"
 	"github.com/rhwendt/port49/internal/platform"
@@ -231,6 +232,15 @@ type BrokerConfig struct {
 	// crl-<name>.der; required under the broker's role, which has no
 	// revocations file (plan 7e, Ruling 12).
 	StateDir string `yaml:"state_dir"`
+	// Directory is broker.directory resolved (plan 7g): nil is no
+	// directory, and the slice's email-SAN principal and declared human
+	// usernames stand.
+	Directory    *directory.Config `yaml:"-"`
+	DirectorySet *directoryYAML    `yaml:"directory"`
+	// RefreshInterval is how often the runner re-verifies every live
+	// principal and stamps refreshed_at (spec §5.1.3; plan 7g Ruling 12).
+	// Default 5m; 1m to 1h.
+	RefreshInterval time.Duration `yaml:"refresh_interval"`
 }
 
 // Role is which process a configuration is for (plan 7e, Ruling 2):
@@ -1263,6 +1273,18 @@ func checkBroker(c Config, b BrokerConfig, role Role) (*BrokerConfig, error) {
 		return nil, err
 	}
 	b.CertificateStatus = &cs
+	if b.DirectorySet != nil {
+		d, err := checkDirectory(*b.DirectorySet, os.Getenv)
+		if err != nil {
+			return nil, err
+		}
+		b.Directory = d
+	}
+	ri, err := refreshInterval(b.RefreshInterval)
+	if err != nil {
+		return nil, err
+	}
+	b.RefreshInterval = ri
 	return &b, nil
 }
 

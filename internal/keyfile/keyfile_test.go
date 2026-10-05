@@ -127,3 +127,21 @@ func TestAnOversizedKeyIsRefused(t *testing.T) {
 		t.Fatalf("an oversized key: %v", err)
 	}
 }
+
+// ReadSecret is readPrivate's rule for a secret that is not a key pair: the
+// directory's keytab (plan 7g, Ruling 8).
+func TestReadSecretRefusesAGroupReadableFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "svc.keytab")
+	if err := os.WriteFile(path, []byte("keytab"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := ReadSecret(path); err != nil || string(b) != "keytab" {
+		t.Fatalf("a 0600 file: %q %v", b, err)
+	}
+	if err := os.Chmod(path, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadSecret(path); err == nil || !strings.Contains(err.Error(), "chmod 600") {
+		t.Fatalf("a group-readable file: %v", err)
+	}
+}

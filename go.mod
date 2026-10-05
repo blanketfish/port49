@@ -3,6 +3,7 @@ module github.com/rhwendt/port49
 go 1.26
 
 require (
+	github.com/go-ldap/ldap/v3 v3.4.14
 	go.etcd.io/etcd/api/v3 v3.6.15
 	go.etcd.io/etcd/client/pkg/v3 v3.6.15
 	go.etcd.io/etcd/client/v3 v3.6.15
@@ -14,10 +15,12 @@ require (
 )
 
 require (
+	github.com/Azure/go-ntlmssp v0.1.1 // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/coreos/go-semver v0.3.1 // indirect
 	github.com/coreos/go-systemd/v22 v22.5.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
+	github.com/go-asn1-ber/asn1-ber v1.5.8 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
