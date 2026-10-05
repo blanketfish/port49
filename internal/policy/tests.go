@@ -83,6 +83,12 @@ func (p *Policy) Decide(subject, principal string, d admission.Device, line stri
 	if err != nil {
 		return res, engine.Outcome{}, err
 	}
+	return p.decideResolved(res, d, line)
+}
+
+// decideResolved decides line against a resolution's blob, with the evaluator
+// the daemon runs.
+func (p *Policy) decideResolved(res Resolution, d admission.Device, line string) (Resolution, engine.Outcome, error) {
 	body, hash, err := engine.Encode(res.Blob)
 	if err != nil {
 		return res, engine.Outcome{}, err

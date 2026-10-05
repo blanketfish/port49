@@ -21,10 +21,12 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/go-ldap/ldap/v3"
 	"gopkg.in/yaml.v3"
 
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/directory"
 	"github.com/rhwendt/port49/internal/engine"
 	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/token"
@@ -61,6 +63,11 @@ type Env struct {
 	// has the unpinned set's generic adapter.
 	Sets     map[string]map[string]platform.Dialect
 	Generics map[string]platform.Dialect
+	// Directory is whether the process loading this policy resolves humans
+	// through a directory (plan 7g, Ruling 16): its broker's, on or off. An
+	// offline tool or the inventory service does not know, and checks no
+	// human subject's username for it.
+	Directory DirectoryMode
 	// Now is the present the joint checks start from: a grant already expired
 	// by then is not checked. Zero is the clock at load; tests fix it.
 	Now time.Time
@@ -166,6 +173,9 @@ type Subject struct {
 	Enable   string
 	TokenTTL time.Duration
 	API      []string
+	// groupDN is a group: given as a DN, in the directory package's canonical
+	// form, parsed at load; empty for a group given as a name.
+	groupDN string
 }
 
 // Grant is one flat row: subject × scope × roles (spec §13, decision 2).
@@ -1240,6 +1250,12 @@ func (p *Policy) buildSubjects(f file) error {
 			// people, and each member's username comes from the same query
 			// (spec §2). Declaring one would give every member the same name.
 			sub.Domain = "humans"
+			if strings.Contains(s.Group, "=") {
+				if _, err := ldap.ParseDN(s.Group); err != nil {
+					return fmt.Errorf("subject %q: group %q holds = but is not a DN", s.Name, s.Group)
+				}
+				sub.groupDN = directory.CanonicalDN(s.Group)
+			}
 			if s.Username != "" {
 				return fmt.Errorf("subject %q: a group's usernames come from the directory, one per member; "+
 					"remove username", s.Name)
@@ -1263,6 +1279,10 @@ func (p *Policy) buildSubjects(f file) error {
 					"resolve to one subject", id, other, s.Name)
 			}
 			p.byID[id] = s.Name
+			if domain == "humans" && s.Username != "" && p.env.Directory == DirectoryOn {
+				return fmt.Errorf("subject %q: the directory supplies human usernames (spec §2; decision 38); "+
+					"remove username", s.Name)
+			}
 		}
 		// Whether a username is required depends on whether a grant names the
 		// subject, which checkMinters settles once the grants are read.
@@ -1398,10 +1418,10 @@ func (p *Policy) buildGrants(f file) error {
 func (p *Policy) checkMinters(file) error {
 	for _, g := range p.grants {
 		s := p.subs[g.Subject]
-		if len(s.Identity) > 0 && s.Username == "" {
+		if len(s.Identity) > 0 && s.Username == "" && (s.Domain == "machines" || p.env.Directory == DirectoryOff) {
 			// A machine has no directory entry, so it declares its username
-			// (spec §2). A literal human identity declares one too until plan 7
-			// derives it through the certificate-to-directory mapping.
+			// (spec §2). A human identity declares one too when no directory
+			// supplies it (plan 7g, Ruling 16).
 			return fmt.Errorf("subject %q: username is required: a grant names it, and an identity-list subject "+
 				"has no directory to derive one from (spec §2; §14, \"Username resolution\")", s.Name)
 		}
@@ -1678,7 +1698,7 @@ func (p *Policy) ConfigDialect(platformName string) (platform.Dialect, error) {
 }
 
 // SubjectOf names the subject a principal resolves to, by its identity lists.
-// A group subject is matched through the directory, which is plan 7's.
+// A group subject is matched through a Member (SubjectsOf).
 func (p *Policy) SubjectOf(principal string) (string, bool) {
 	name, ok := p.byID[principal]
 	return name, ok
@@ -1689,11 +1709,7 @@ func (p *Policy) SubjectOf(principal string) (string, bool) {
 // group subject's members are resolved through the directory (plan 7g), so
 // until then a right is held through an identity list alone, as a mint is.
 func (p *Policy) HasRight(principal, right string) bool {
-	name, ok := p.byID[principal]
-	if !ok {
-		return false
-	}
-	return slices.Contains(p.subs[name].API, right)
+	return p.HasRightOf(MemberOf(principal), right)
 }
 
 // Subject returns a declared subject.

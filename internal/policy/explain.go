@@ -62,18 +62,34 @@ type Explanation struct {
 // no_grants_matched, as the broker does, or it tells the caller which devices
 // exist (design §17).
 func (p *Policy) Explain(subject, principal, device, line string, now time.Time) (Explanation, error) {
+	if principal != "" {
+		return p.ExplainMember(MemberOf(principal), device, line, now)
+	}
+	return p.explain(subject, nil, device, line, now)
+}
+
+// ExplainMember is Explain for a principal as the broker resolves it: every
+// subject m matches composes, and a composition a joint check refuses is
+// composition_refused (plan 7g, Ruling 5).
+func (p *Policy) ExplainMember(m Member, device, line string, now time.Time) (Explanation, error) {
+	return p.explain("", &m, device, line, now)
+}
+
+// explain is Explain for a named subject, or, with m, for a member.
+func (p *Policy) explain(subject string, m *Member, device, line string, now time.Time) (Explanation, error) {
 	d, ok := p.device(device)
 	if !ok {
 		return Explanation{}, fmt.Errorf("device %q is not in the inventory", device)
 	}
-	if principal != "" {
-		name, ok := p.byID[principal]
-		if !ok {
+	principal := ""
+	if m != nil {
+		principal = m.Principal
+		names := p.SubjectsOf(*m)
+		if len(names) == 0 {
 			return Explanation{Subject: principal, Device: device, Platform: d.Platform, Command: line, NoGrants: true}, nil
 		}
-		subject = name
-	}
-	if _, ok := p.subs[subject]; !ok {
+		subject = strings.Join(names, ", ")
+	} else if _, ok := p.subs[subject]; !ok {
 		return Explanation{}, fmt.Errorf("subject %q is not declared", subject)
 	}
 	e := Explanation{Subject: subject, Device: device, Platform: d.Platform, Command: line}
@@ -83,12 +99,20 @@ func (p *Policy) Explain(subject, principal, device, line string, now time.Time)
 	var err error
 	// Resolve answers in the mint's order: no grant on the device before the
 	// quarantine, so explain names a quarantine only to a subject granted there.
-	if line == "" {
+	switch {
+	case m != nil:
+		if res, err = p.ResolveMember(*m, d, now); err == nil && line != "" {
+			res, o, err = p.decideResolved(res, d, line)
+		}
+	case line == "":
 		res, err = p.ResolveSubject(subject, d, now)
-	} else {
+	default:
 		res, o, err = p.Decide(subject, "", d, line, now)
 	}
 	switch {
+	case errors.Is(err, ErrCompositionRefused):
+		e.MintError, e.MintDetail = "composition_refused", err.Error()
+		return e, nil
 	case errors.Is(err, ErrNoGrants):
 		e.NoGrants = true
 		return e, nil

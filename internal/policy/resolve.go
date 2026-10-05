@@ -26,7 +26,10 @@ var ErrNoGrants = errors.New("policy: no declared grant for this principal selec
 // policy for one principal on one device (spec §5.1).
 type Resolution struct {
 	Subject, Username, Enable string
-	TokenTTL                  time.Duration
+	// Subjects are every subject that composed, when more than one did;
+	// Subject is then empty (spec §5.7, policy.subjects).
+	Subjects []string
+	TokenTTL time.Duration
 	// Level is the level the roles compose to; Ceiling the max_privilege the
 	// grants compose to. MaxPrivilege is Ceiling as this platform's priv-lvl
 	// number, the form the token and the daemon compare; HasCeiling says
@@ -97,11 +100,7 @@ type AttributeSource struct {
 // have not expired, every role they and the device's scopes carry, and the
 // compiled blob.
 func (p *Policy) Resolve(principal string, d admission.Device, now time.Time) (Resolution, error) {
-	name, ok := p.byID[principal]
-	if !ok {
-		return Resolution{}, ErrNoGrants
-	}
-	return p.resolveNow(p.subs[name], d, now)
+	return p.ResolveMember(MemberOf(principal), d, now)
 }
 
 // ResolveSubject is Resolve for a subject named directly, as the offline
@@ -709,6 +708,13 @@ func (p *Policy) checkDeviceAt(sub *Subject, d admission.Device, at time.Time) s
 	if err != nil {
 		return err.Error()
 	}
+	return p.jointCheck(res, d)
+}
+
+// jointCheck is the joint checks of a resolution on its device: "" when it
+// passes, else what refuses it. ResolveMember runs it on a composition of
+// subjects no load-time check saw (plan 7g, Ruling 5).
+func (p *Policy) jointCheck(res Resolution, d admission.Device) string {
 	if _, _, err := engine.Encode(res.Blob); err != nil {
 		return fmt.Sprintf("its compiled blob for %s is refused, so no mint could carry it: %v",
 			platformName(d.Platform), err)
@@ -843,7 +849,7 @@ func (p *Policy) checkDeviceAt(sub *Subject, d admission.Device, at time.Time) s
 			}
 		}
 	}
-	if sub.Enable == "auto" {
+	if res.Enable == "auto" {
 		if p.dialect(d.Platform).EnableUsername != platform.EnablePrincipal {
 			return fmt.Sprintf("enable: auto reaches this device, whose platform %s does not put the operator's "+
 				"own username on the enable exchange; use token or none (spec §5.6, \"Why enable: auto is "+

@@ -144,6 +144,10 @@ func canonicalValue(k MappingKind, v string) string {
 	return v
 }
 
+// CanonicalDN is canonicalDN for the policy, which compares a group: given as
+// a DN with the DNs a directory returned (plan 7g): one form on both sides.
+func CanonicalDN(v string) string { return canonicalDN(v) }
+
 // canonicalDN is a DN in the one form both sides key (review C-1, I-1): per
 // RDN its attributes as type OID and lower-cased value, DN-escaped, sorted
 // and joined with "+", the RDNs joined with ",". Escaping every DN

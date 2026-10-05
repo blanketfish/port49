@@ -121,9 +121,18 @@ type composition struct {
 // access (spec §5.5). A zero now expires nothing, which is how the load-time
 // checks see every grant.
 func (p *Policy) compose(sub *Subject, d admission.Device, now time.Time) composition {
+	return p.composeAll([]*Subject{sub}, d, now)
+}
+
+// composeAll is compose for every subject a principal matches (plan 7g,
+// Ruling 5): the grants of any of subs, composed as one. Every subject a human
+// principal matches is in the humans domain, so subs[0]'s domain is the one
+// attached roles read.
+func (p *Policy) composeAll(subs []*Subject, d admission.Device, now time.Time) composition {
+	sub := subs[0]
 	c := composition{subject: sub, attached: map[string][]string{}}
 	for _, g := range p.grants {
-		if g.Subject != sub.Name {
+		if !slices.ContainsFunc(subs, func(s *Subject) bool { return s.Name == g.Subject }) {
 			continue
 		}
 		if !g.Expires.IsZero() && !now.IsZero() && !now.Before(g.Expires) {
@@ -181,6 +190,18 @@ func (p *Policy) compose(sub *Subject, d admission.Device, now time.Time) compos
 	}
 	sort.Strings(c.roles)
 	return c
+}
+
+// granting is the subjects of subs, in order, with at least one grant in the
+// composition.
+func (c composition) granting(subs []*Subject) []*Subject {
+	var out []*Subject
+	for _, s := range subs {
+		if slices.ContainsFunc(c.grants, func(g *Grant) bool { return g.Subject == s.Name }) {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // grantsOn reports whether one of the composition's grants is on scope.
