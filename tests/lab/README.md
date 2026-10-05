@@ -403,8 +403,15 @@ the published port.
 New register rows run on it. Rows already closed keep their re-checks on the host harness
 (`startSplit` and the standing daemon), so a closed row's note stays comparable.
 
-What a published port does to a device's source address is L39 (a): the device's connection
-reaches port49d with the compose network's gateway as its source, so a device is seen as
-`l39_gateway`, which the overlay's inventory lists for that reason. A login through the compose
-mode is therefore refused `device_mismatch` for any device but that one
-(`results/L39-docker-proxy-*-arista_eos.md`).
+What a published port does to a device's source address is L39 (a)
+(`results/L39-docker-proxy-*-arista_eos.md`). The overlay's inventory lists the compose gateway
+as the device `l39_gateway`, so a rewritten source is recorded rather than refused.
+
+`startCompose` also inserts, with `sudo -n`, `iptables -t nat -I POSTROUTING 1 -s
+172.100.100.0/24 -d 172.30.49.0/24 -j RETURN`, and deletes it at cleanup (both are in
+`compose.log`, with the POSTROUTING rules in force). The clab management network is itself a
+Docker bridge network, so Docker masquerades everything from 172.100.100.0/24 that leaves by
+another interface: without the rule a device's packet DNAT'd to the compose bridge reaches
+port49d from the compose gateway, which is the lab's own rule at work and not what a device
+off the host would meet. The rule models an off-host device. A first L39 run without it
+(5ee1137) saw only the gateway and is recorded as invalid in the notes.

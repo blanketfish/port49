@@ -361,6 +361,31 @@ func (l *lab) startCompose(t *testing.T) *composeStack {
 		}
 	}
 
+	// The clab management network is itself a Docker bridge network, so Docker
+	// masquerades everything from 172.100.100.0/24 that leaves by another
+	// interface: a device's packet DNAT'd to the compose bridge would reach
+	// port49d from the compose gateway. A device off the host never matches that
+	// rule (its source is not a Docker network), so this models one: traffic from the clab subnet to the
+	// compose subnet is not masqueraded. Without it L39 would measure the
+	// lab's own rule, not the published port.
+	rule := []string{"-s", "172.100.100.0/24", "-d", "172.30.49.0/24", "-j", "RETURN"}
+	sudoIptables := func(args ...string) error {
+		out, err := exec.Command("sudo", append([]string{"-n", "iptables"}, args...)...).CombinedOutput()
+		c.note(fmt.Sprintf("$ sudo iptables %s\n%s(exit: %v)\n", strings.Join(args, " "), out, err))
+		return err
+	}
+	// registered before the insert, which may fail half way; a missing rule's
+	// delete is reported, never fatal
+	t.Cleanup(func() {
+		if err := sudoIptables(append([]string{"-t", "nat", "-D", "POSTROUTING"}, rule...)...); err != nil {
+			t.Logf("removing the RETURN rule for the clab subnet: %v (see compose.log)", err)
+		}
+	})
+	if err := sudoIptables(append([]string{"-t", "nat", "-I", "POSTROUTING", "1"}, rule...)...); err != nil {
+		t.Fatalf("inserting the RETURN rule that keeps the clab masquerade off device traffic: %v\n%s", err, c.tail(10))
+	}
+	_ = sudoIptables("-t", "nat", "-S", "POSTROUTING") // the rules in force, for the note
+
 	if out, err := c.run("up", "-d", "--build"); err != nil {
 		t.Fatalf("docker compose up: %v\n%s\ncompose.log (tail):\n%s", err, out, c.tail(40))
 	}
