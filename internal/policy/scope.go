@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"fmt"
 	"slices"
 	"sort"
 	"strings"
@@ -114,6 +115,10 @@ type composition struct {
 	// because a version could not be compared (spec §5.5: reported, never
 	// silent).
 	incomparable []string
+	// notCounted names the max_privilege of a grant of a subject with enable
+	// none that the ceiling counts only up to the level its roles reach
+	// (spec §5.1), for the refusal that follows from it.
+	notCounted []string
 }
 
 // compose resolves sub on d at now. No selecting grant is an empty
@@ -156,23 +161,44 @@ func (p *Policy) composeAll(subs []*Subject, d admission.Device, now time.Time) 
 	})
 	// Composed subjects reach by enable no ceiling that none of them offers
 	// escalation to alone: where one of them offers it, a subject with enable
-	// none contributes its roles but not its max_privilege (Ruling PF7g-i;
-	// spec §5.1).
+	// none contributes to the ceiling only the level its roles reach, capped
+	// by its own max_privilege, what it holds without enabling (Ruling
+	// PF7g-i; spec §5.1). It never creates a ceiling: with none stated by
+	// the subjects that offer escalation there is none.
 	escalates := false
 	for _, g := range c.grants {
 		escalates = escalates || p.subs[g.Subject].Enable != "none"
 	}
+	composed := len(subs) > 1 && escalates
+	held := "" // the none subjects' contribution
 	roles := map[string]bool{}
 	for _, g := range c.grants {
+		level := ""
 		for _, r := range g.Roles {
 			roles[r] = true
+			if p.levelIndex(p.roles[r].Privilege) > p.levelIndex(level) {
+				level = p.roles[r].Privilege
+			}
 		}
-		if len(subs) > 1 && escalates && p.subs[g.Subject].Enable == "none" {
+		if !composed || p.subs[g.Subject].Enable != "none" {
+			if p.levelIndex(g.MaxPrivilege) > p.levelIndex(c.ceiling) {
+				c.ceiling = g.MaxPrivilege
+			}
 			continue
 		}
-		if p.levelIndex(g.MaxPrivilege) > p.levelIndex(c.ceiling) {
-			c.ceiling = g.MaxPrivilege
+		limit := level
+		if g.MaxPrivilege != "" && p.levelIndex(g.MaxPrivilege) < p.levelIndex(level) {
+			limit = g.MaxPrivilege
 		}
+		if g.MaxPrivilege != "" && p.levelIndex(g.MaxPrivilege) > p.levelIndex(limit) {
+			c.notCounted = append(c.notCounted, fmt.Sprintf("%s's max_privilege %s", g.Subject, g.MaxPrivilege))
+		}
+		if p.levelIndex(limit) > p.levelIndex(held) {
+			held = limit
+		}
+	}
+	if c.ceiling != "" && p.levelIndex(held) > p.levelIndex(c.ceiling) {
+		c.ceiling = held
 	}
 	names := make([]string, 0, len(p.scopes))
 	for name := range p.scopes {

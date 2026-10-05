@@ -233,18 +233,21 @@ scopes: [{name: all_devices, match: {}}]
 roles:
   - {name: ro, privilege: readonly, permit: ["show **"]}
   - {name: ops, privilege: operator, permit: ["clear counters"]}
+  - {name: adm, privilege: admin, permit: ["**"]}
 subjects:
   - {name: a, group: ga, enable: none, token_ttl: 5m}
+  - {name: d, group: gd, enable: none, token_ttl: 5m}
   - {name: b, group: gb, enable: token, token_ttl: 5m}
   - {name: c, group: gc, enable: auto, token_ttl: 5m}
 grants:
   - {subject: a, scope: all_devices, roles: [ro], max_privilege: admin}
   - {subject: b, scope: all_devices, roles: [ops], max_privilege: operator}
   - {subject: c, scope: all_devices, roles: [ro], max_privilege: admin}
+  - {subject: d, scope: all_devices, roles: [adm], max_privilege: admin}
 `
 
-// A subject with enable none never raises the ceiling enable can reach: a
-// composition reaches nothing no single subject reaches (Ruling PF7g-i).
+// A subject with enable none contributes to the ceiling enable can reach only
+// the level its roles reach, capped by its own max_privilege: a composition reaches nothing no single subject reaches (Ruling PF7g-i).
 func TestComposingNeverRaisesTheEnableCeiling(t *testing.T) {
 	p, err := loadText(t, escalationYAML, DirectoryOn)
 	if err != nil {
@@ -255,6 +258,11 @@ func TestComposingNeverRaisesTheEnableCeiling(t *testing.T) {
 	}
 	res, err := p.ResolveMember(member("ga", "gb"), device(t, p, "leaf-01"), now)
 	if err != nil || res.Enable != "token" || res.Ceiling != "operator" || res.Level != "operator" {
+		t.Fatalf("%+v %v", res, err)
+	}
+	// A none subject already holding admin adds no reach: not refused.
+	res, err = p.ResolveMember(member("gd", "gb"), device(t, p, "leaf-01"), now)
+	if err != nil || res.Enable != "token" || res.Ceiling != "admin" || res.Level != "admin" {
 		t.Fatalf("%+v %v", res, err)
 	}
 	// Both offer escalation: the max of their ceilings.

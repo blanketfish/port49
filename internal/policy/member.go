@@ -156,6 +156,10 @@ func (p *Policy) resolveAll(subs []*Subject, username string, d admission.Device
 		}
 		if check {
 			if cause := p.jointCheck(res, d); cause != "" {
+				if len(c.notCounted) > 0 {
+					cause += "; not counted beyond the level its roles reach, because its enable is none and " +
+						"another subject offers escalation (spec §5.1): " + strings.Join(c.notCounted, ", ")
+				}
 				return Resolution{}, fmt.Errorf("%w: subjects %s on %s: %s", ErrCompositionRefused,
 					strings.Join(res.Subjects, ", "), d.Name, cause)
 			}
