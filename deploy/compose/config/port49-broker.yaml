@@ -29,8 +29,8 @@ broker:
   # keytab 0600 and owned by 65532; set PORT49_SITE per broker container.
   # directory:
   #   servers:
-  #     - {uri: "ldaps://dc1.corp.example.com:636", site: hq, priority: 1}
-  #     - {uri: "ldaps://dc2.corp.example.com:636", site: hq, priority: 2}
+  #     - {uri: "ldaps://dc1.corp.example.com:636", site: hq, priority: 100}
+  #     - {uri: "ldaps://dc2.corp.example.com:636", site: hq, priority: 90}
   #   site_env: PORT49_SITE       # this broker's site; the default variable
   #   ca_file: /etc/port49/directory/ca.pem
   #   bind:

@@ -77,7 +77,7 @@ one (port49-broker says so at its start). `config/port49-broker.yaml` carries a 
 key does:
 
 - `servers`: the pool, each `uri` (`ldaps://`, or `ldap://` with `start_tls: true`), a `site`
-  and a `priority`. The broker prefers servers in its own site, then the lowest priority.
+  and a `priority`. The broker prefers servers in its own site, then the highest `priority`, then file order.
 - `site` or `site_env` (default `PORT49_SITE`): this broker's site. Set `PORT49_SITE` per
   broker container, in `port49-broker.env` or the service's `environment:`; replicas in
   different sites set different values.

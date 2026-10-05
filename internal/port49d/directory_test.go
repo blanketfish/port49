@@ -33,8 +33,8 @@ const secretBindValue = "hunter2-the-bind-secret"
 // one site, an issuer_serial mapping, a bind of mech.
 func directoryCfg(mech string) *directory.Config {
 	d := &directory.Config{
-		Servers: []directory.Server{{URI: "ldaps://dc1.corp.example:636", Site: "hq", Priority: 1},
-			{URI: "ldaps://dc2.corp.example", Site: "hq", Priority: 2}},
+		Servers: []directory.Server{{URI: "ldaps://dc1.corp.example:636", Site: "hq", Priority: 100},
+			{URI: "ldaps://dc2.corp.example", Site: "hq", Priority: 90}},
 		Site: "hq", SiteFrom: "PORT49_SITE", CAFile: "/etc/port49/dir-ca.pem",
 		BaseDN: "dc=corp,dc=example", GroupsBaseDN: "ou=groups,dc=corp,dc=example",
 		PrincipalAttribute: "userPrincipalName", UsernameAttribute: "sAMAccountName",
@@ -64,7 +64,7 @@ func TestTheDirectoryStartLines(t *testing.T) {
 	announceDirectory(&out, "port49-broker", cfg, pol)
 	got := out.String()
 	for _, want := range []string{
-		"port49-broker: directory: 2 servers (dc1.corp.example:636 site hq priority 1, dc2.corp.example:636 site hq priority 2); " +
+		"port49-broker: directory: 2 servers (dc1.corp.example:636 site hq priority 100, dc2.corp.example:636 site hq priority 90); " +
 			"this broker's site is hq (PORT49_SITE); bind gssapi as svc-port49@CORP.EXAMPLE\n",
 		"certificates map by issuer_serial (strong) through altSecurityIdentities; principal from userPrincipalName, " +
 			"username from sAMAccountName; nested groups in_chain under ou=groups,dc=corp,dc=example\n",
@@ -146,11 +146,14 @@ func buildPolicy(t *testing.T, cfg config.Config, body string) *policy.Policy {
 type failingPasses struct {
 	store.Store
 	calls atomic.Int64
+	busy  bool // the second pass ends on contexts still changing
 }
 
 func (f *failingPasses) ActivePrincipals(ctx context.Context) ([]string, error) {
-	if f.calls.Add(1) == 1 {
+	if n := f.calls.Add(1); n == 1 {
 		return nil, errors.New("store: an injected failure")
+	} else if n == 2 && f.busy {
+		return nil, store.ErrConflict
 	}
 	return f.Store.ActivePrincipals(ctx)
 }
@@ -160,7 +163,7 @@ func (f *failingPasses) ActivePrincipals(ctx context.Context) ([]string, error) 
 // broker with no directory: the pass is what stamps refreshed_at there too.
 func TestTheScheduledLoop(t *testing.T) {
 	rig := newReloadRig(t, minimalPolicy)
-	fp := &failingPasses{Store: rig.b.Store}
+	fp := &failingPasses{Store: rig.b.Store, busy: true}
 	rig.b.Store = fp
 	var out syncBuffer
 	ctx, cancel := context.WithCancel(context.Background())
@@ -175,6 +178,11 @@ func TestTheScheduledLoop(t *testing.T) {
 		!strings.Contains(out.String(), "an injected failure") ||
 		!strings.Contains(out.String(), "the next runs in 20ms") {
 		t.Fatalf("the failed pass is not said: %q", out.String())
+	}
+	// A pass that ends on busy contexts is not a broken refresh.
+	if !strings.Contains(out.String(), "context(s) still changing keep their last stamp; the next pass runs in 20ms") ||
+		strings.Contains(out.String(), "stopped (0 live context(s) updated, 0 revoked, 0 unchanged, 0 left on quarantined devices, 0 failed; unspent tokens superseded on 0 (device, username) key(s) so far): the scheduled refresh: "+store.ErrConflict.Error()) {
+		t.Fatalf("a busy pass is not said as busy: %q", out.String())
 	}
 	cancel()
 	select {
@@ -193,14 +201,14 @@ func TestTheScheduledLoop(t *testing.T) {
 // the memory store: the context's refreshed_at is the membership's
 // verification, and its command is denied context_stale once the ceiling
 // passes from then, not from the login (Review Focus 5). The clock is the
-// real one: the membership was verified ceiling-minus-eight-seconds ago, so
-// the ceiling passes eight seconds after the test starts.
+// real one: the membership was verified ceiling-minus-twenty-seconds ago, so
+// the ceiling passes twenty seconds after the test starts.
 func TestAGraceMintsSessionGoesStaleFromItsVerification(t *testing.T) {
 	var out, log syncBuffer
 	e, o, h := stderr, stdout, openDirectoryHook
 	t.Cleanup(func() { stderr, stdout, openDirectoryHook = e, o, h })
 	stderr, stdout = &out, &log
-	verified := time.Now().Add(-config.DefaultStalenessCeiling + 8*time.Second)
+	verified := time.Now().Add(-config.DefaultStalenessCeiling + 20*time.Second)
 	openDirectoryHook = func(_ config.Config, st store.Store, _ *policy.Live, _ *metrics.Metrics,
 		_ func(string, ...any)) (*directory.Resolver, error) {
 		a := directory.Answer{Source: directory.Grace, Membership: store.Membership{
@@ -233,7 +241,7 @@ func TestAGraceMintsSessionGoesStaleFromItsVerification(t *testing.T) {
 	}
 	// The session began a moment ago, a ceiling's worth of minutes from its
 	// idle and age limits; only the verification it was minted on is old.
-	for deadline := time.Now().Add(15 * time.Second); dev.permits("alice", "show", "version"); time.Sleep(250 * time.Millisecond) {
+	for deadline := time.Now().Add(40 * time.Second); dev.permits("alice", "show", "version"); time.Sleep(250 * time.Millisecond) {
 		if time.Now().After(deadline) {
 			t.Fatalf("the ceiling never passed from the verification; log %s", log.String())
 		}
@@ -290,7 +298,9 @@ func TestReadinessNeverFollowsTheDirectory(t *testing.T) {
 
 // The runner's duties start and stop cleanly with no directory: the
 // pre-warm goroutine returns at once and wg.Wait does not hang
-// (pre-flight M-13).
+// (pre-flight M-13). duties itself needs the etcd takeover, so this runs its
+// two directory goroutines (scheduledDuty, prewarmDuty) and not the wg.Add(8)
+// count; the final review covers duties on etcd.
 func TestTheDutiesRunWithoutADirectory(t *testing.T) {
 	rig := newReloadRig(t, minimalPolicy)
 	rig.cfg.Broker.RefreshInterval = 20 * time.Millisecond

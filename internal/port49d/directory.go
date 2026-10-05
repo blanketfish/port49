@@ -3,6 +3,7 @@ package port49d
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -143,6 +144,10 @@ func scheduled(ctx context.Context, brk *broker.Broker, interval time.Duration, 
 		switch {
 		case ctx.Err() != nil:
 			return
+		case errors.Is(err, store.ErrConflict):
+			// Every context was visited: only the busy ones are left.
+			say("refresh: %d context(s) still changing keep their last stamp; the next pass runs in %s", rep.Failed,
+				interval)
 		case err != nil:
 			say("refresh: the scheduled refresh stopped (%s so far): %v; the next runs in %s", summary(rep), err, interval)
 		case rep.Updated+rep.Revoked+rep.Failed > 0:
