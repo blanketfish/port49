@@ -243,6 +243,25 @@ func TestTokenMintedAtSurvivesTheSealingLayer(t *testing.T) {
 	}
 }
 
+// VerifiedAt is what a login writes as its context's RefreshedAt (plan 7g,
+// Ruling 11). If the round trip dropped it, every grace login would read as
+// verified now and get a fresh staleness clock.
+func TestTokenVerifiedAtSurvivesTheSealingLayer(t *testing.T) {
+	s := Wrap(memory.New(time.Now), keys(), nil)
+	ctx := context.Background()
+	k := store.TokenKey{NAS: "leaf-01", Username: "alice"}
+	verified := time.Unix(1_757_041_495, 0)
+	if _, err := s.PutToken(ctx, k, store.Token{ID: "t1", Secret: []byte("p49_secret"), Kind: store.KindLogin,
+		Principal: "user:alice@example.com", Username: "alice", ExpiresAt: time.Now().Add(time.Minute),
+		VerifiedAt: verified}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Candidates(ctx, k)
+	if err != nil || len(got) != 1 || !got[0].VerifiedAt.Equal(verified) {
+		t.Fatalf("VerifiedAt lost through the sealing layer: %+v %v", got, err)
+	}
+}
+
 // A token sealed under a key that has since been retired is unreadable, and
 // therefore unredeemable. It must not be returned as a candidate with a zero
 // secret, which would match a zero-length credential.
@@ -625,7 +644,7 @@ func TestTheTokensTrustedFieldsAreSealed(t *testing.T) {
 	k := store.TokenKey{NAS: "leaf-01", Username: "alice"}
 	minted := store.Token{ID: "t1", Secret: []byte("p49_secret"), Kind: store.KindLogin, ExpiresAt: now.Add(time.Minute),
 		Principal: "user:alice@example.com", Username: "alice", BlobHash: "sha256:narrow", MaxSessionAge: time.Hour,
-		Enable: "token", MaxPrivilege: 1, AuthTime: now, MintedAt: now}
+		Enable: "token", MaxPrivilege: 1, AuthTime: now, MintedAt: now, VerifiedAt: now}
 	if _, err := s.PutToken(ctx, k, minted); err != nil {
 		t.Fatal(err)
 	}
@@ -635,7 +654,7 @@ func TestTheTokensTrustedFieldsAreSealed(t *testing.T) {
 	}
 	raw := raws[0]
 	if raw.Kind != "" || raw.BlobHash != "" || raw.MaxSessionAge != 0 || raw.Enable != "" || raw.MaxPrivilege != 0 ||
-		!raw.AuthTime.IsZero() || !raw.MintedAt.IsZero() || !raw.ExpiresAt.Equal(minted.ExpiresAt) {
+		!raw.AuthTime.IsZero() || !raw.MintedAt.IsZero() || !raw.VerifiedAt.IsZero() || !raw.ExpiresAt.Equal(minted.ExpiresAt) {
 		t.Fatalf("the backend holds a trusted token field in the clear: %+v", raw)
 	}
 	putRaw := func(k store.TokenKey, r store.Token) {

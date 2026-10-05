@@ -812,7 +812,10 @@ func TestEveryTokenCarriesItsVerifiedAt(t *testing.T) {
 	if _, err := m.Mint(context.Background(), Request{Subject: s, Device: "leaf-01", WithEnable: true, TTL: time.Minute}); err != nil {
 		t.Fatal(err)
 	}
-	c, _ := st.Candidates(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"})
+	c, err := st.Candidates(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"})
+	if err != nil || len(c) != 2 {
+		t.Fatalf("%d tokens, want a login and an enable: %v", len(c), err)
+	}
 	for _, tok := range c {
 		if !tok.VerifiedAt.Equal(s.VerifiedAt) {
 			t.Fatalf("%s token: verified_at %v, want %v", tok.Kind, tok.VerifiedAt, s.VerifiedAt)

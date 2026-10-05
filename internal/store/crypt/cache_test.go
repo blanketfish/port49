@@ -94,6 +94,21 @@ func TestAWriteAtTheKeyEvictsIt(t *testing.T) {
 	}
 }
 
+// A stamp is a context write like any other: the next read is the store's,
+// not the cached record with the older refreshed_at.
+func TestAStampAtTheKeyEvictsIt(t *testing.T) {
+	b, c, _, _, _ := cacheRig(t)
+	get(t, c)
+	if err := c.StampRefreshed(context.Background(), ka, 1, time.Now()); err != nil && !errors.Is(err, store.ErrNotFound) &&
+		!errors.Is(err, store.ErrConflict) {
+		t.Fatal(err)
+	}
+	get(t, c)
+	if b.count() != 2 {
+		t.Fatalf("reads %d: a stamp did not evict", b.count())
+	}
+}
+
 // Review Focus 3: every change the feed brings evicts, a delete included.
 func TestAFeedChangeEvictsTheKey(t *testing.T) {
 	b, c, l, _, _ := cacheRig(t)

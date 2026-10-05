@@ -231,6 +231,11 @@ func (c *cache) SetContextPolicy(ctx context.Context, k store.ContextKey, policy
 	return c.Store.SetContextPolicy(ctx, k, policyRev, p)
 }
 
+func (c *cache) StampRefreshed(ctx context.Context, k store.ContextKey, policyRev uint64, at time.Time) error {
+	defer c.evictKey(k)
+	return c.Store.StampRefreshed(ctx, k, policyRev, at)
+}
+
 func (c *cache) DeleteContext(ctx context.Context, k store.ContextKey) error {
 	defer c.evictKey(k)
 	return c.Store.DeleteContext(ctx, k)
