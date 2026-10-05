@@ -72,3 +72,15 @@ func TestTheAPIRecordsShapes(t *testing.T) {
 		t.Fatalf("revoke: %s", lines[1])
 	}
 }
+
+// The directory's four reasons are in §5.7's vocabulary (plan 7g), so a
+// policy test may expect them and the metrics count them.
+func TestTheDirectoryReasonsAreKnown(t *testing.T) {
+	for r, want := range map[Reason]string{IdentityUnmapped: "identity_unmapped",
+		IdentityAmbiguous: "identity_ambiguous", DirectoryUnavailable: "directory_unavailable",
+		CompositionRefused: "composition_refused"} {
+		if !Known(r) || string(r) != want {
+			t.Errorf("%q", r)
+		}
+	}
+}

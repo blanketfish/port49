@@ -5,14 +5,23 @@ package api
 // the subject's unexpired at the request, by scope: never a device list,
 // since the API does not enumerate the fleet.
 type Identity struct {
-	Principal   string          `json:"principal"`
-	Method      string          `json:"method"`
-	Fingerprint string          `json:"fingerprint,omitempty"`
-	Subject     string          `json:"subject,omitempty"`
-	Groups      []string        `json:"groups"`
-	Grants      []IdentityGrant `json:"grants"`
-	API         []string        `json:"api"`
-	AuthTime    string          `json:"auth_time"`
+	Principal   string `json:"principal"`
+	Method      string `json:"method"`
+	Fingerprint string `json:"fingerprint,omitempty"`
+	Subject     string `json:"subject,omitempty"`
+	// Subjects, Username, GroupDNs, VerifiedAt and Source are what the
+	// directory contributed (plan 7g): every matched subject when several
+	// match, the directory's username, the group DNs it gave, and when and
+	// from where ("fresh" or "grace") the membership was verified.
+	Subjects   []string        `json:"subjects,omitempty"`
+	Username   string          `json:"username,omitempty"`
+	GroupDNs   []string        `json:"group_dns,omitempty"`
+	VerifiedAt string          `json:"verified_at,omitempty"`
+	Source     string          `json:"source,omitempty"`
+	Groups     []string        `json:"groups"`
+	Grants     []IdentityGrant `json:"grants"`
+	API        []string        `json:"api"`
+	AuthTime   string          `json:"auth_time"`
 	// ConnectionEndsAt is auth_time plus max_session_age: when this
 	// connection must authenticate again. A device's own session ceiling
 	// may end a session sooner (pre-flight M16).

@@ -133,3 +133,31 @@ func TestAnInventoryChangeRecordEncodes(t *testing.T) {
 		t.Errorf("a record no key validated names no key: %s", got)
 	}
 }
+
+// policy.subjects replaces policy.subject when several matched, and
+// auth.directory names where the membership came from and never a group
+// (spec §5.7; decision 38).
+func TestSubjectsAndDirectoryShapes(t *testing.T) {
+	var b bytes.Buffer
+	l := NewJSONLines(&b)
+	l.Emit(Record{TS: time.Unix(1_000_000, 0), Event: EventMint, Verdict: VerdictPermit, Reason: GrantsMatched,
+		Principal: "user:alice@corp.example.com",
+		Auth: &Auth{Method: "cert", Directory: &Directory{Source: "grace", VerifiedAt: "1970-01-12T13:46:40Z",
+			Server: "ldaps://dc-01", Site: "us-west"}},
+		Policy: &Policy{Bundle: "sha256:b", Subjects: []string{"netops_oncall", "netops_ro"}}})
+	var m map[string]any
+	if err := json.Unmarshal(b.Bytes(), &m); err != nil {
+		t.Fatal(err)
+	}
+	p := m["policy"].(map[string]any)
+	if _, ok := p["subject"]; ok || len(p["subjects"].([]any)) != 2 {
+		t.Fatalf("policy %v", p)
+	}
+	d := m["auth"].(map[string]any)["directory"].(map[string]any)
+	if d["source"] != "grace" || d["verified_at"] != "1970-01-12T13:46:40Z" || d["server"] != "ldaps://dc-01" {
+		t.Fatalf("auth.directory %v", d)
+	}
+	if strings.Contains(b.String(), "group") {
+		t.Fatalf("a record names no group: %s", b.String())
+	}
+}

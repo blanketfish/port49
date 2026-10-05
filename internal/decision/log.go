@@ -66,6 +66,20 @@ type Auth struct {
 	// one email SAN): on a `mint deny trust_domain_unresolved` it says whose
 	// certificate it was. Identity, not a secret (spec §5.1.4).
 	Fingerprint string `json:"fingerprint,omitempty"`
+	// Directory is where the membership this decision used came from. It
+	// names no group: Policy.Subjects says which subjects matched (spec
+	// §5.7; decision 38).
+	Directory *Directory `json:"directory,omitempty"`
+}
+
+// Directory says where a broker event's directory membership was read:
+// fresh from a server for this request, or the store's (grace), verified at
+// VerifiedAt. Server and Site are where it was read.
+type Directory struct {
+	Source     string `json:"source"`      // "fresh" | "grace"
+	VerifiedAt string `json:"verified_at"` // FormatTime
+	Server     string `json:"server,omitempty"`
+	Site       string `json:"site,omitempty"`
 }
 
 type Device struct {
@@ -188,9 +202,12 @@ type Policy struct {
 	// publishes versioned bundles it is the sha256 of the policy file.
 	Bundle string `json:"bundle,omitempty"`
 	// Blob is the hash of the compiled blob the decision was made against.
-	Blob    string        `json:"blob,omitempty"`
-	Subject string        `json:"subject,omitempty"`
-	Grants  []PolicyGrant `json:"grants,omitempty"`
+	Blob    string `json:"blob,omitempty"`
+	Subject string `json:"subject,omitempty"`
+	// Subjects is every subject matched, sorted, when the principal matches
+	// more than one; Subject is then absent (spec §5.7).
+	Subjects []string      `json:"subjects,omitempty"`
+	Grants   []PolicyGrant `json:"grants,omitempty"`
 	// MatchedDeny is the deny that decided a no_permit_dominates_deny, or the
 	// most specific deny a permit overrode.
 	MatchedDeny *PolicyRule `json:"matched_deny,omitempty"`
