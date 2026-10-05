@@ -522,6 +522,30 @@ func (noStore) SupersededAt(context.Context, store.TokenKey) (time.Time, error) 
 	panic("store called")
 }
 
+func (noStore) PutMembership(context.Context, store.Membership, time.Duration) error {
+	panic("store called")
+}
+
+func (noStore) RefuseMapKeys(context.Context, []string, time.Time, time.Duration) error {
+	panic("store called")
+}
+
+func (noStore) GetMembership(context.Context, string) (store.Membership, error) {
+	panic("store called")
+}
+
+func (noStore) MembershipByKey(context.Context, string) (store.Membership, error) {
+	panic("store called")
+}
+
+func (noStore) MembershipPrincipals(context.Context) ([]string, error) {
+	panic("store called")
+}
+
+func (noStore) DeleteMembership(context.Context, string) (store.Membership, error) {
+	panic("store called")
+}
+
 var _ store.Store = noStore{}
 
 func TestEmptyCanonicalUsernameFailsWithoutStoreLookup(t *testing.T) {

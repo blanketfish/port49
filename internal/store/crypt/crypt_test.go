@@ -1915,3 +1915,78 @@ func TestAPutBackIsNotReadAgain(t *testing.T) {
 		t.Fatalf("a put-back: %v after %d reads", err, inner.reads.Load())
 	}
 }
+
+func TestAMembershipsVerifiedAtMovedInTheClearIsRefused(t *testing.T) {
+	ctx := context.Background()
+	inner := memory.New(time.Now)
+	failures := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "t"}, []string{"record"})
+	s := Wrap(inner, keys(), failures)
+	at := time.Now().Add(-time.Hour)
+	m := store.Membership{Principal: "user:alice@corp.example.com", DN: "CN=Alice,DC=corp", Username: "alice",
+		GroupDNs: []string{"CN=netops,DC=corp"}, VerifiedAt: at}
+	if err := s.PutMembership(ctx, m, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := inner.GetMembership(ctx, m.Principal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw.VerifiedAt = at.Add(time.Hour) // a store write extending grace
+	if err := inner.PutMembership(ctx, raw, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.GetMembership(ctx, m.Principal); err == nil {
+		t.Fatalf("a membership whose verified_at moved opened: %v", got.VerifiedAt)
+	}
+	if n := testutil.ToFloat64(failures.WithLabelValues("membership")); n != 1 {
+		t.Fatalf(`crypt_open_failures_total{record="membership"} = %v, want 1`, n)
+	}
+}
+
+func TestAMembershipKeyAddedInTheClearIsRefused(t *testing.T) {
+	ctx := context.Background()
+	inner := memory.New(time.Now)
+	failures := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "t"}, []string{"record"})
+	s := Wrap(inner, keys(), failures)
+	at := time.Now().Add(-time.Hour)
+	k1, k2 := store.MapKey("san_email", "alice@corp.example.com"), store.MapKey("san_email", "victim@corp.example.com")
+	alice := store.Membership{Principal: "user:alice@corp.example.com", DN: "CN=Alice,DC=corp", Username: "alice",
+		GroupDNs: []string{"CN=admins,DC=corp"}, MapKeys: []string{k1}, VerifiedAt: at}
+	if err := s.PutMembership(ctx, alice, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := inner.GetMembership(ctx, alice.Principal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw.MapKeys = append(raw.MapKeys, k2)
+	if err := inner.PutMembership(ctx, raw, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.MembershipByKey(ctx, k2); err == nil {
+		t.Fatalf("a key added in the clear resolved to %q", got.Principal)
+	}
+	if n := testutil.ToFloat64(failures.WithLabelValues("membership")); n < 1 {
+		t.Fatalf(`crypt_open_failures_total{record="membership"} = %v, want it moved`, n)
+	}
+
+	carol := store.Membership{Principal: "user:carol@corp.example.com", EntryID: "guid:c", Refused: true, VerifiedAt: at}
+	if err := s.PutMembership(ctx, carol, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	before := testutil.ToFloat64(failures.WithLabelValues("membership"))
+	raw, err = inner.GetMembership(ctx, carol.Principal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw.Refused = false
+	if err := inner.PutMembership(ctx, raw, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.GetMembership(ctx, carol.Principal); err == nil {
+		t.Fatalf("a refusal flipped in the clear opened: refused=%v", got.Refused)
+	}
+	if n := testutil.ToFloat64(failures.WithLabelValues("membership")); n != before+1 {
+		t.Fatalf(`crypt_open_failures_total{record="membership"} = %v, want %v`, n, before+1)
+	}
+}

@@ -47,6 +47,8 @@ const (
 	famMark        = "rv/" // rv/<kind>/<key>: a revocation mark
 	famSuperseded  = "sp/" // sp/<nas>/<user>: when its tokens were last superseded
 	famLedger      = "lw/" // lw/<nas>/<user>: the ledger record (plan 7e)
+	famMembership  = "mb/" // mb/<principal>: a directory membership (plan 7g), the broker's alone
+	famMembershipK = "mk/" // mk/<map key>: the principal a mapping value resolved to
 	famMeta        = "meta/"
 )
 
@@ -89,6 +91,9 @@ func (k keys) ledgerOf(c store.ContextKey) string { return k.root + famLedger + 
 func (k keys) superseded(t store.TokenKey) string {
 	return k.root + famSuperseded + esc(t.NAS, t.Username)
 }
+
+func (k keys) membership(principal string) string { return k.root + famMembership + esc(principal) }
+func (k keys) membershipKey(mapKey string) string { return k.root + famMembershipK + esc(mapKey) }
 
 // lastTwo unescapes the last two parts of key: the (NAS, Username) every
 // lookup entry and token-index entry ends in.

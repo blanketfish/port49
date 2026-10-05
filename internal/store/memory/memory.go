@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -60,6 +61,12 @@ type Store struct {
 	// kept SupersededFor from its last write, and the sweep drops it then.
 	superseded    map[store.TokenKey]supersededEntry
 	supersededAll supersededEntry
+
+	// memberships and memberKeys are the directory's (plan 7g): a record by
+	// principal, or the tombstone a forget left, and the principal a
+	// mapping key resolved to. Each is judged live against its own expiry.
+	memberships map[string]membershipEntry
+	memberKeys  map[string]memberKeyEntry
 
 	writes int // incremented on every write; triggers sweep at sweepEvery
 	// revs is the last context revision handed out. It is store-wide rather
@@ -271,6 +278,18 @@ func (s *Store) sweepLocked() {
 	}
 	if !now.Before(s.supersededAll.until) {
 		s.supersededAll = supersededEntry{}
+	}
+
+	// Sweep the directory's records and keys past their expiry.
+	for p, e := range s.memberships {
+		if !e.exp.After(now) {
+			delete(s.memberships, p)
+		}
+	}
+	for k, e := range s.memberKeys {
+		if !e.expires.After(now) {
+			delete(s.memberKeys, k)
+		}
 	}
 
 	// Sweep the context indexes: an entry expires on its own TTL, and a key
@@ -1470,4 +1489,176 @@ func (s *Store) SupersededAt(_ context.Context, k store.TokenKey) (time.Time, er
 		}
 	}
 	return at, nil
+}
+
+// membershipEntry is one principal's record and its expiry, or, with
+// forgottenAt set, the tombstone a forget left: no record, only the time a
+// write must not be verified before.
+type membershipEntry struct {
+	m           store.Membership
+	exp         time.Time
+	forgottenAt time.Time
+}
+
+// memberKeyEntry is one mapping key's: the principal it points at, "" for
+// a key no grace bind may use. prior names the principal whose live
+// record still claims an ambiguous key.
+type memberKeyEntry struct {
+	principal, prior string
+	verifiedAt       time.Time
+	expires          time.Time
+}
+
+func cloneMembership(m store.Membership) store.Membership {
+	m.GroupDNs, m.GroupNames, m.MapKeys = slices.Clone(m.GroupDNs), slices.Clone(m.GroupNames), slices.Clone(m.MapKeys)
+	m.Sealed = bytes.Clone(m.Sealed)
+	return m
+}
+
+// liveMembershipLocked is principal's record, not a tombstone and not past
+// its expiry; one past it is dropped.
+func (s *Store) liveMembershipLocked(principal string) (membershipEntry, bool) {
+	e, ok := s.memberships[principal]
+	if !ok {
+		return membershipEntry{}, false
+	}
+	if !e.exp.After(s.now()) {
+		delete(s.memberships, principal)
+		return membershipEntry{}, false
+	}
+	return e, true
+}
+
+// PutMembership keeps the later verification at principal, drops one from
+// before the principal's forget, then claims each key.
+func (s *Store) PutMembership(_ context.Context, m store.Membership, ttl time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.memberships == nil || s.memberKeys == nil {
+		s.memberships = map[string]membershipEntry{}
+		s.memberKeys = map[string]memberKeyEntry{}
+	}
+	now := s.now()
+	if e, ok := s.liveMembershipLocked(m.Principal); ok {
+		if !e.forgottenAt.IsZero() {
+			if m.VerifiedAt.Before(e.forgottenAt) {
+				return nil
+			}
+		} else if e.m.VerifiedAt.After(m.VerifiedAt) {
+			return nil
+		}
+	}
+	exp := now.Add(ttl)
+	s.memberships[m.Principal] = membershipEntry{m: cloneMembership(m), exp: exp}
+	for _, key := range m.MapKeys {
+		s.claimKeyLocked(key, m, exp)
+	}
+	s.touchLocked()
+	return nil
+}
+
+// claimKeyLocked points key at m's principal as of m.VerifiedAt, unless a
+// later verification holds it, or a live, unrefused record of another
+// principal still lists it: then it is ambiguous, never the last writer's.
+func (s *Store) claimKeyLocked(key string, m store.Membership, exp time.Time) {
+	now := s.now()
+	held, ok := s.memberKeys[key]
+	if ok && !held.expires.After(now) {
+		ok = false
+	}
+	if ok && held.verifiedAt.After(m.VerifiedAt) {
+		return
+	}
+	if ok && held.principal != m.Principal {
+		other := held.principal
+		if other == "" {
+			other = held.prior
+		}
+		if e, live := s.liveMembershipLocked(other); other != "" && live && e.forgottenAt.IsZero() &&
+			!e.m.Refused && slices.Contains(e.m.MapKeys, key) {
+			s.memberKeys[key] = memberKeyEntry{prior: other, verifiedAt: m.VerifiedAt, expires: exp}
+			return
+		}
+	}
+	s.memberKeys[key] = memberKeyEntry{principal: m.Principal, verifiedAt: m.VerifiedAt, expires: exp}
+}
+
+// RefuseMapKeys marks each key refused as of at, unless a later
+// verification holds it.
+func (s *Store) RefuseMapKeys(_ context.Context, mapKeys []string, at time.Time, ttl time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.memberKeys == nil || s.memberships == nil {
+		s.memberships = map[string]membershipEntry{}
+		s.memberKeys = map[string]memberKeyEntry{}
+	}
+	now := s.now()
+	for _, key := range mapKeys {
+		if held, ok := s.memberKeys[key]; ok && held.expires.After(now) && held.verifiedAt.After(at) {
+			continue
+		}
+		s.memberKeys[key] = memberKeyEntry{verifiedAt: at, expires: now.Add(ttl)}
+	}
+	s.touchLocked()
+	return nil
+}
+
+func (s *Store) GetMembership(_ context.Context, principal string) (store.Membership, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok := s.liveMembershipLocked(principal)
+	if !ok || !e.forgottenAt.IsZero() {
+		return store.Membership{}, store.ErrNotFound
+	}
+	return cloneMembership(e.m), nil
+}
+
+func (s *Store) MembershipByKey(_ context.Context, mapKey string) (store.Membership, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	k, ok := s.memberKeys[mapKey]
+	if !ok || !k.expires.After(s.now()) || k.principal == "" {
+		return store.Membership{}, store.ErrNotFound
+	}
+	e, ok := s.liveMembershipLocked(k.principal)
+	if !ok || !e.forgottenAt.IsZero() || e.m.Refused || !slices.Contains(e.m.MapKeys, mapKey) {
+		return store.Membership{}, store.ErrNotFound
+	}
+	return cloneMembership(e.m), nil
+}
+
+func (s *Store) MembershipPrincipals(context.Context) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []string
+	for p := range s.memberships {
+		if e, ok := s.liveMembershipLocked(p); ok && e.forgottenAt.IsZero() {
+			out = append(out, p)
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// DeleteMembership replaces the record with a tombstone of the forget's
+// time, kept for what the record had left. memberKeys is left alone, as
+// etcd leaves mk/.
+func (s *Store) DeleteMembership(_ context.Context, principal string) (store.Membership, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok := s.liveMembershipLocked(principal)
+	if !ok || !e.forgottenAt.IsZero() {
+		return store.Membership{}, store.ErrNotFound
+	}
+	s.memberships[principal] = membershipEntry{forgottenAt: s.now(), exp: e.exp}
+	s.touchLocked()
+	return cloneMembership(e.m), nil
+}
+
+// touchLocked counts a write, and sweeps every sweepEvery of them.
+func (s *Store) touchLocked() {
+	s.writes++
+	if s.writes%sweepEvery == 0 {
+		s.sweepLocked()
+	}
 }

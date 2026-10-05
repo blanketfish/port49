@@ -49,6 +49,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"slices"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -1007,6 +1008,110 @@ func (w *wrapped) SupersedeAll(ctx context.Context, at time.Time) error {
 
 func (w *wrapped) SupersededAt(ctx context.Context, k store.TokenKey) (time.Time, error) {
 	return w.inner.SupersededAt(ctx, k)
+}
+
+// membershipSecret is a membership's sealed part, bound to its principal.
+// MapKeys and Refused are sealed as well as kept in the clear: the clear
+// copies are the backend's index, the sealed ones the truth.
+type membershipSecret struct {
+	DN         string    `json:"dn"`
+	EntryID    string    `json:"entry_id"`
+	Username   string    `json:"username"`
+	GroupDNs   []string  `json:"group_dns"`
+	GroupNames []string  `json:"group_names"`
+	MapKeys    []string  `json:"map_keys"`
+	Refused    bool      `json:"refused"`
+	VerifiedAt time.Time `json:"verified_at"`
+}
+
+var (
+	errVerifiedMoved   = errors.New("crypt: a membership's plaintext verified_at differs from its sealed one")
+	errMembershipMoved = errors.New("crypt: a membership's plaintext map keys or refusal differ from its sealed ones")
+	// errKeyNotSealed is a key the index points at a record whose sealed
+	// list does not hold it: a store write, answered as no membership.
+	errKeyNotSealed = fmt.Errorf("crypt: a membership key its sealed record does not list: %w", store.ErrNotFound)
+)
+
+func membershipAAD(principal string) []byte { return []byte("membership\x00" + principal) }
+
+func (w *wrapped) PutMembership(ctx context.Context, m store.Membership, ttl time.Duration) error {
+	b, err := json.Marshal(membershipSecret{DN: m.DN, EntryID: m.EntryID, Username: m.Username, GroupDNs: m.GroupDNs,
+		GroupNames: m.GroupNames, MapKeys: m.MapKeys, Refused: m.Refused, VerifiedAt: m.VerifiedAt})
+	if err != nil {
+		return err
+	}
+	sealed, err := w.keys.SealBound(b, membershipAAD(m.Principal))
+	if err != nil {
+		return err
+	}
+	return w.inner.PutMembership(ctx, store.Membership{Principal: m.Principal, MapKeys: m.MapKeys,
+		Refused: m.Refused, VerifiedAt: m.VerifiedAt, Server: m.Server, Site: m.Site, Sealed: sealed}, ttl)
+}
+
+func (w *wrapped) RefuseMapKeys(ctx context.Context, mapKeys []string, at time.Time, ttl time.Duration) error {
+	return w.inner.RefuseMapKeys(ctx, mapKeys, at, ttl)
+}
+
+func (w *wrapped) openMembership(m store.Membership, err error) (store.Membership, error) {
+	if err != nil {
+		return store.Membership{}, err
+	}
+	b, err := w.keys.OpenBound(m.Sealed, membershipAAD(m.Principal))
+	if err != nil {
+		return store.Membership{}, w.openErr("membership", m.Sealed, err)
+	}
+	var ms membershipSecret
+	if err := json.Unmarshal(b, &ms); err != nil {
+		return store.Membership{}, w.openErr("membership", m.Sealed, err)
+	}
+	if !ms.VerifiedAt.Equal(m.VerifiedAt) {
+		return store.Membership{}, w.openErr("membership", m.Sealed, errVerifiedMoved)
+	}
+	if ms.Refused != m.Refused || !slices.Equal(ms.MapKeys, m.MapKeys) {
+		return store.Membership{}, w.openErr("membership", m.Sealed, errMembershipMoved)
+	}
+	m.DN, m.EntryID, m.Username, m.GroupDNs, m.GroupNames, m.Sealed = ms.DN, ms.EntryID, ms.Username, ms.GroupDNs,
+		ms.GroupNames, nil
+	return m, nil
+}
+
+func (w *wrapped) GetMembership(ctx context.Context, principal string) (store.Membership, error) {
+	return w.openMembership(w.inner.GetMembership(ctx, principal))
+}
+
+func (w *wrapped) MembershipByKey(ctx context.Context, mapKey string) (store.Membership, error) {
+	m, err := w.openMembership(w.inner.MembershipByKey(ctx, mapKey))
+	if err != nil {
+		return store.Membership{}, err
+	}
+	// The sealed list is the truth (pre-flight I-6): the inner backend
+	// checked the clear one, which openMembership has proved equal, and this
+	// check stands should that ever change.
+	if m.Refused || !slices.Contains(m.MapKeys, mapKey) {
+		return store.Membership{}, w.openErr("membership", nil, errKeyNotSealed)
+	}
+	return m, nil
+}
+
+func (w *wrapped) MembershipPrincipals(ctx context.Context) ([]string, error) {
+	return w.inner.MembershipPrincipals(ctx)
+}
+
+// DeleteMembership removes the record whatever it holds, and returns it
+// opened. A record that does not open has been removed all the same: it
+// served nothing, and forgetting it is what the operator asked. It is
+// returned with its sealed part empty, its failure counted by openErr.
+func (w *wrapped) DeleteMembership(ctx context.Context, principal string) (store.Membership, error) {
+	m, err := w.inner.DeleteMembership(ctx, principal)
+	if err != nil {
+		return store.Membership{}, err
+	}
+	opened, err := w.openMembership(m, nil)
+	if err != nil {
+		m.Sealed = nil
+		return m, nil
+	}
+	return opened, nil
 }
 
 var _ store.Store = (*wrapped)(nil)

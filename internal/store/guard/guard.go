@@ -54,6 +54,8 @@ var pools = map[string]Pool{
 	"TokensByPrincipal": Token, "TokensByCert": Token, "ReserveIdempotency": Token, "CompleteIdempotency": Token,
 	"ReleaseIdempotency": Token, "PutRevocation": Token, "GetRevocation": Token, "DeleteRevocation": Token,
 	"SupersedeTokens": Token, "SupersedeAll": Token, "SupersededAt": Token,
+	"PutMembership": Token, "RefuseMapKeys": Token, "GetMembership": Token, "MembershipByKey": Token,
+	"MembershipPrincipals": Token, "DeleteMembership": Token,
 }
 
 // PoolOf is the pool method runs in, and "" for a name the table does not
@@ -642,6 +644,34 @@ func (g *guarded) SupersedeAll(ctx context.Context, at time.Time) error {
 
 func (g *guarded) SupersededAt(ctx context.Context, k store.TokenKey) (at time.Time, err error) {
 	err = g.do(ctx, Token, func(ctx context.Context) (e error) { at, e = g.inner.SupersededAt(ctx, k); return })
+	return
+}
+
+func (g *guarded) PutMembership(ctx context.Context, m store.Membership, ttl time.Duration) error {
+	return g.do(ctx, Token, func(ctx context.Context) error { return g.inner.PutMembership(ctx, m, ttl) })
+}
+
+func (g *guarded) RefuseMapKeys(ctx context.Context, mapKeys []string, at time.Time, ttl time.Duration) error {
+	return g.do(ctx, Token, func(ctx context.Context) error { return g.inner.RefuseMapKeys(ctx, mapKeys, at, ttl) })
+}
+
+func (g *guarded) GetMembership(ctx context.Context, principal string) (m store.Membership, err error) {
+	err = g.do(ctx, Token, func(ctx context.Context) (e error) { m, e = g.inner.GetMembership(ctx, principal); return })
+	return
+}
+
+func (g *guarded) MembershipByKey(ctx context.Context, mapKey string) (m store.Membership, err error) {
+	err = g.do(ctx, Token, func(ctx context.Context) (e error) { m, e = g.inner.MembershipByKey(ctx, mapKey); return })
+	return
+}
+
+func (g *guarded) MembershipPrincipals(ctx context.Context) (ps []string, err error) {
+	err = g.do(ctx, Token, func(ctx context.Context) (e error) { ps, e = g.inner.MembershipPrincipals(ctx); return })
+	return
+}
+
+func (g *guarded) DeleteMembership(ctx context.Context, principal string) (m store.Membership, err error) {
+	err = g.do(ctx, Token, func(ctx context.Context) (e error) { m, e = g.inner.DeleteMembership(ctx, principal); return })
 	return
 }
 
