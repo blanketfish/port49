@@ -345,12 +345,12 @@ func TestRacingQueriesKeepOneConnection(t *testing.T) {
 	}
 }
 
-// A refused bind is this server not answering (pre-flight I-2): the query
-// fails over; with every server refusing it is ErrUnavailable, so grace
-// applies above; the refusal is said once an hour per server with the
-// mechanism and the result code; and a refusal neither opens the breaker
-// nor resets the fault count the health checks built.
-func TestABindRefusalFailsOverAndReachesUnavailable(t *testing.T) {
+// A refused bind is the credential refused, shared by every server: the
+// query is ErrUnavailable (grace applies above) and no other server is
+// bound meanwhile (Ruling PF7g-g); the refusal is said once an hour per
+// server with the mechanism and the result code; and a refusal neither
+// opens the breaker nor resets the fault count the health checks built.
+func TestABindRefusalReachesUnavailableAndBindsNoOtherServer(t *testing.T) {
 	f := newFakeServers(west1.URI, west2.URI)
 	invalid := ldap.NewError(ldap.LDAPResultInvalidCredentials, errors.New("invalid credentials"))
 	f.setRefuse(west1.URI, invalid)
@@ -358,18 +358,15 @@ func TestABindRefusalFailsOverAndReachesUnavailable(t *testing.T) {
 	cfg.Bind.Mechanism = "simple"
 	m := metrics.New(prometheus.NewRegistry())
 	say := &lines{}
-	p := NewPool(cfg, f.dial, noCheck, newClock().Now, m, say.say)
-	if srv, err := p.Do(context.Background(), searchFor("(x)")); err != nil || srv != west2 {
-		t.Fatalf("a refusal on dc-01 did not fail over: %v %v", srv, err)
-	}
-	f.setRefuse(west2.URI, invalid)
-	for _, c := range f.conns[west2.URI] { // dc-02's bound connection goes with the next bind refused
-		_ = c.Close()
-	}
+	clk := newClock()
+	p := NewPool(cfg, f.dial, noCheck, clk.Now, m, say.say)
 	for i := 0; i < 3; i++ {
 		if _, err := p.Do(context.Background(), searchFor("(x)")); !errors.Is(err, ErrUnavailable) {
-			t.Fatalf("every server refusing: %v, want ErrUnavailable", err)
+			t.Fatalf("a refused bind: %v, want ErrUnavailable", err)
 		}
+	}
+	if f.dials[west2.URI] != 0 || f.dials[west1.URI] != 1 {
+		t.Fatalf("binds: dc-01 %d, dc-02 %d; the refusal holds every bind off", f.dials[west1.URI], f.dials[west2.URI])
 	}
 	if n := say.count("dc-01:636 refused the bind (simple): LDAP Result Code 49"); n != 1 {
 		t.Fatalf("the refusal said %d times in the hour: %v", n, say.l)
@@ -378,6 +375,8 @@ func TestABindRefusalFailsOverAndReachesUnavailable(t *testing.T) {
 		t.Fatal("invalid credentials opened the breaker")
 	}
 	f.setRefuse(west1.URI, nil)
+	clk.Add(2 * time.Minute)
+	p.Check(context.Background()) // the probe: accepted, the hold-off is clear
 	f.setDown(west1.URI, true)
 	p.Check(context.Background())
 	p.Check(context.Background()) // two faults in a row
@@ -386,9 +385,143 @@ func TestABindRefusalFailsOverAndReachesUnavailable(t *testing.T) {
 	p.Check(context.Background()) // a refusal between: neither counted nor a reset
 	f.setRefuse(west1.URI, nil)
 	f.setDown(west1.URI, true)
+	clk.Add(2 * time.Minute)
 	p.Check(context.Background()) // the third fault
 	if testutil.ToFloat64(m.DirectoryServerUp.WithLabelValues(west1.Label())) != 0 {
 		t.Fatal("a refusal reset the fault count the health checks built")
+	}
+}
+
+func binds(f *fakeServers) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, c := range f.dials {
+		n += c
+	}
+	return n
+}
+
+// A wrong password over 10 minutes and 100 queries across three servers is
+// at most 5 bind attempts (1m, then doubling): AD counts every DC's failed
+// binds toward one lockout.
+func TestAWrongPasswordBindsAtMostFiveTimesInTenMinutes(t *testing.T) {
+	invalid := ldap.NewError(ldap.LDAPResultInvalidCredentials, errors.New("invalid credentials"))
+	f := newFakeServers(west1.URI, west2.URI, east.URI)
+	for _, s := range []Server{west1, west2, east} {
+		f.setRefuse(s.URI, invalid)
+	}
+	clk := newClock()
+	p := NewPool(poolCfg("us-west", west1, west2, east), f.dial, noCheck, clk.Now, metrics.New(prometheus.NewRegistry()),
+		(&lines{}).say)
+	for i := 0; i < 100; i++ {
+		if _, err := p.Do(context.Background(), searchFor("(x)")); !errors.Is(err, ErrUnavailable) {
+			t.Fatalf("query %d: %v", i, err)
+		}
+		if i%5 == 4 {
+			p.Check(context.Background())
+		}
+		clk.Add(6 * time.Second)
+	}
+	if n := binds(f); n > 5 {
+		t.Fatalf("%d bind attempts in 10 minutes, want at most 5", n)
+	}
+}
+
+// The password fixed: the first bind after the hold-off is the probe, it
+// succeeds, and queries resume at once and keep their connection.
+func TestTheFirstProbeAfterTheHoldoffResumesQueries(t *testing.T) {
+	invalid := ldap.NewError(ldap.LDAPResultInvalidCredentials, errors.New("invalid credentials"))
+	f := newFakeServers(west1.URI, west2.URI)
+	f.setRefuse(west1.URI, invalid)
+	f.setRefuse(west2.URI, invalid)
+	clk := newClock()
+	say := &lines{}
+	m := metrics.New(prometheus.NewRegistry())
+	p := NewPool(poolCfg("us-west", west1, west2), f.dial, noCheck, clk.Now, m, say.say)
+	if _, err := p.Do(context.Background(), searchFor("(x)")); !errors.Is(err, ErrUnavailable) {
+		t.Fatal(err)
+	}
+	f.setRefuse(west1.URI, nil)
+	f.setRefuse(west2.URI, nil)
+	clk.Add(30 * time.Second)
+	if _, err := p.Do(context.Background(), searchFor("(x)")); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("inside the hold-off: %v", err)
+	}
+	if binds(f) != 1 {
+		t.Fatalf("%d binds inside the hold-off", binds(f))
+	}
+	clk.Add(31 * time.Second)
+	if srv, err := p.Do(context.Background(), searchFor("(x)")); err != nil {
+		t.Fatalf("the probe: %v %v", srv, err)
+	}
+	if testutil.ToFloat64(m.DirectoryBindHoldoff) != 0 || !say.has("hold-off cleared") {
+		t.Fatalf("the hold-off is not clear: %v", say.l)
+	}
+	before := binds(f)
+	for i := 0; i < 3; i++ {
+		if _, err := p.Do(context.Background(), searchFor("(x)")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if binds(f) != before {
+		t.Fatal("queries after the probe bound again")
+	}
+}
+
+// A connection already bound keeps serving through a hold-off that another
+// server's refusal started, and Check binds nothing meanwhile.
+func TestABoundConnectionServesThroughTheHoldoff(t *testing.T) {
+	f := newFakeServers(west1.URI, west2.URI)
+	clk := newClock()
+	p := NewPool(poolCfg("us-west", west1, west2), f.dial, noCheck, clk.Now, metrics.New(prometheus.NewRegistry()),
+		(&lines{}).say)
+	if srv, err := p.Do(context.Background(), searchFor("(x)")); err != nil || srv != west1 {
+		t.Fatalf("%v %v", srv, err)
+	}
+	f.setRefuse(west2.URI, ldap.NewError(ldap.LDAPResultInvalidCredentials, errors.New("invalid credentials")))
+	p.Check(context.Background()) // dc-02 refuses: the hold-off starts
+	before := binds(f)
+	clk.Add(10 * time.Second)
+	p.Check(context.Background())
+	for i := 0; i < 5; i++ {
+		if srv, err := p.Do(context.Background(), searchFor("(x)")); err != nil || srv != west1 {
+			t.Fatalf("query %d: %v %v", i, srv, err)
+		}
+	}
+	if binds(f) != before {
+		t.Fatal("a bind was made during the hold-off")
+	}
+}
+
+// The hold-off is 1m, doubling per further refusal to a 15m cap, and the
+// gauge reports what is left of it.
+func TestTheHoldoffDoublesToACapAndTheGaugeReportsIt(t *testing.T) {
+	f := newFakeServers(west1.URI)
+	f.setRefuse(west1.URI, ldap.NewError(ldap.LDAPResultInvalidCredentials, errors.New("invalid credentials")))
+	clk := newClock()
+	m := metrics.New(prometheus.NewRegistry())
+	say := &lines{}
+	p := NewPool(poolCfg("us-west", west1), f.dial, noCheck, clk.Now, m, say.say)
+	if testutil.ToFloat64(m.DirectoryBindHoldoff) != 0 {
+		t.Fatal("not clear at the start")
+	}
+	for _, want := range []float64{60, 120, 240, 480, 900, 900} {
+		_, _ = p.Do(context.Background(), searchFor("(x)"))
+		if got := testutil.ToFloat64(m.DirectoryBindHoldoff); got != want {
+			t.Fatalf("holdoff %v, want %v", got, want)
+		}
+		clk.Add(time.Duration(want/2) * time.Second)
+		if got := testutil.ToFloat64(m.DirectoryBindHoldoff); got != want/2 {
+			t.Fatalf("half way: %v, want %v", got, want/2)
+		}
+		clk.Add(time.Duration(want/2) * time.Second)
+		if got := testutil.ToFloat64(m.DirectoryBindHoldoff); got != 0 {
+			t.Fatalf("expired: %v", got)
+		}
+	}
+	if !say.has("dc-01:636 refused the bind; no server is bound for 15m0s, until ") {
+		t.Fatalf("%v", say.l)
 	}
 }
 
@@ -487,6 +620,15 @@ func TestARefusingServerIsNotFailedBackTo(t *testing.T) {
 	clk := newClock()
 	say := &lines{}
 	p := NewPool(poolCfg("us-west", west1, west2), f.dial, noCheck, clk.Now, metrics.New(prometheus.NewRegistry()), say.say)
+	p.mu.Lock()
+	p.sel = 1
+	p.mu.Unlock()
+	if _, err := p.Do(context.Background(), searchFor("(x)")); err != nil { // dc-02 bound
+		t.Fatal(err)
+	}
+	p.mu.Lock()
+	p.sel = 0
+	p.mu.Unlock()
 	p.Check(context.Background())
 	clk.Add(6 * time.Minute)
 	p.Check(context.Background())
@@ -502,6 +644,7 @@ func TestARefusingServerIsNotFailedBackTo(t *testing.T) {
 		}
 	}
 	f.setRefuse(west1.URI, nil)
+	clk.Add(20 * time.Minute) // past the hold-off
 	p.Check(context.Background())
 	clk.Add(6 * time.Minute)
 	p.Check(context.Background())

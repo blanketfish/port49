@@ -268,6 +268,10 @@ type Metrics struct {
 	// port49_directory_site_crossings_total: selections that crossed sites,
 	// consistency events (design §10). No labels.
 	DirectorySiteCrossings prometheus.Counter
+	// port49_directory_bind_holdoff_seconds: seconds left in the pool-wide
+	// hold-off after a refused bind, 0 when clear. No labels.
+	DirectoryBindHoldoff prometheus.GaugeFunc
+	directoryBindHoldoff atomic.Pointer[func() float64]
 	// port49_policy_reloads_total{outcome}: attempts to put a changed policy
 	// file in force (plan 4b) — "applied", "unchanged" (a SIGHUP with nothing
 	// new), or "refused" (the file does not load; the policy in force keeps
@@ -426,6 +430,11 @@ func (m *Metrics) WatchInventoryAge(age func() float64) { m.inventoryAge.Store(&
 
 // CountQuarantined sets what port49_devices_quarantined reports at each scrape.
 func (m *Metrics) CountQuarantined(count func() int) { m.quarantined.Store(&count) }
+
+// SetDirectoryBindHoldoff sets what port49_directory_bind_holdoff_seconds reports.
+func (m *Metrics) SetDirectoryBindHoldoff(remaining func() float64) {
+	m.directoryBindHoldoff.Store(&remaining)
+}
 
 // CountAdmissionRefused sets what port49_devices_admission_refused reports.
 func (m *Metrics) CountAdmissionRefused(count func() int) { m.admissionRefused.Store(&count) }
@@ -617,6 +626,13 @@ func New(reg prometheus.Registerer) *Metrics {
 		}
 		return 0
 	})
+	m.DirectoryBindHoldoff = prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "port49_directory_bind_holdoff_seconds",
+		Help: "Seconds left in the hold-off after a directory server refused the broker's bind, during which no unbound server is dialled; 0 when clear."}, func() float64 {
+		if remaining := m.directoryBindHoldoff.Load(); remaining != nil {
+			return (*remaining)()
+		}
+		return 0
+	})
 	reg.MustRegister(m.Requests, m.Latency, m.Decisions, m.Unvalidated, m.KeyValidations,
 		m.Connections, m.ConnectionEvents, m.AuthFailures, m.SpoolDepth, m.SpoolDrops, m.SpoolQuarantines,
 		m.StoreOps, m.StoreCalls, m.StoreCallSeconds, m.StoreCircuitOpen, m.DecisionLogWriteFailures, m.CryptOpenFailures, m.IndexRecordsUndecodable, m.StoreKeyspaceHeld, m.StoreFeedUp, m.StoreFeedRescans, m.StoreFenceTimeouts, m.StoreHealthChecks, m.StoreHealthFailures, m.ContextCacheLookups, m.ContextCacheEntries, m.LedgerPending, m.LedgerBehind, m.CryptStoreKeyUnknown, m.StoreCertExpiry, m.Attributions, m.BrokerItemErrors, m.BrokerIdempotency,
@@ -624,7 +640,7 @@ func New(reg prometheus.Registerer) *Metrics {
 		m.DevicesQuarantined, m.DevicesAdmissionRefused, m.ContextRefreshes, m.ContextsReindexed,
 		m.ContextsReindexFailures, m.SessionRefreshes, m.TokensSuperseded, m.CeilingWarnings,
 		m.Revocations, m.RevocationsInForce, m.RevocationsFileFailed, m.CertStatusChecks, m.CRLLoads, m.CRLNextUpdate,
-		m.CertStatusUnavailable, m.DirectoryQueries, m.DirectoryServerUp, m.DirectorySelected, m.DirectorySiteCrossings, m.PolicyReloads, m.PolicyFileRefused,
+		m.CertStatusUnavailable, m.DirectoryQueries, m.DirectoryServerUp, m.DirectorySelected, m.DirectorySiteCrossings, m.DirectoryBindHoldoff, m.PolicyReloads, m.PolicyFileRefused,
 		m.PolicyRefreshPending, m.PolicyBundleMatchesRunner, m.BrokerMintGateClosed, m.RedemptionRestoreGuarded,
 		m.InventoryReloads,
 		m.InventoryFileRefused,
