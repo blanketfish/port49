@@ -1,4 +1,4 @@
-.PHONY: test test-race lab-unit vet fuzz lab build evidence
+.PHONY: test test-race lab-unit vet fuzz lab build evidence image compose-smoke
 
 build:
 	go build -o bin/port49d ./cmd/port49d
@@ -32,6 +32,7 @@ vet:
 # `make test && make vet > log 2>&1` is writing.
 	gofmt -l . | (! grep .)
 	go vet ./...
+	go vet -tags compose ./tests/compose/...
 
 # Short fuzz pass for every FuzzXxx in the packages that parse bytes off an
 # unauthenticated connection; CI-sized. keyring is here because Resolve runs
@@ -96,3 +97,14 @@ lab:
 	    exit 1; \
 	  fi; \
 	done
+
+# The container image (plan 7f, Task 1): one peer shape, never required.
+image:
+	docker build --target port49 -t port49:dev .
+
+# The compose stack end to end: up, a device login, the stack recreated
+# with its volumes kept, the session and the broker's state_dir kept. Needs
+# Docker with Compose v2.24.4+; behind the `compose` tag so `go test ./...`
+# never needs Docker.
+compose-smoke:
+	go test -tags compose ./tests/compose/ -count=1 -v -timeout 20m

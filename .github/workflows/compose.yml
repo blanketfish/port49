@@ -1,0 +1,18 @@
+# The container shape's smoke test (plan 7f, Task 1). The repository's
+# only workflow: `make test` needs the lab's captures, which live on the
+# lab machine alone (the labpcap audit), so it is run there and by hand.
+name: compose
+on:
+  push: {branches: [main]}
+  pull_request:
+permissions: {contents: read}
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version-file: go.mod}
+      - run: docker compose version
+      - run: make compose-smoke

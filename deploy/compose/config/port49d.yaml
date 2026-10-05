@@ -1,0 +1,21 @@
+# port49d in the compose stack (plan 7f, Task 1). Paths are inside the
+# container: setup.sh copies this file and the files it names into the
+# port49d-etc volume, mounted read-only at /etc/port49.
+listen: ":49"
+metrics_listen: ":9049"
+inventory_file: /etc/port49/inventory.yaml
+policy: {file: /etc/port49/policy.yaml, watch_interval: 5s}
+keys:
+  k:
+    current: {version: 1, secret_env: PORT49_TACACS_KEY}
+encryption:
+  current: {id: c1, secret_env: PORT49_ENC_KEY}
+admin_socket: /run/port49/port49d.sock
+accounting:
+  spool_path: /var/spool/port49d/acct.jsonl
+store:
+  backend: etcd
+  etcd:
+    endpoints: [https://etcd-1:2379, https://etcd-2:2379, https://etcd-3:2379]
+    ca_file: /etc/port49/etcd/ca.pem
+    daemon: {cert_file: /etc/port49/etcd/port49d.pem, key_file: /etc/port49/etcd/port49d-key.pem}

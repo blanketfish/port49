@@ -1,0 +1,14 @@
+# The trial's policy: alice and bob, each an admin everywhere. A token_ttl
+# of 15m outlasts the smoke test's waits (up to 3m + 3m + 120s) between
+# minting a token and redeeming it after the recreate. The key
+# group admits the stack's own network, whose gateway (172.30.49.1) is the
+# source a host-published connection presents (inventory.yaml).
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: network_admin, privilege: admin, permit: ["**"]}]
+subjects:
+  - {name: alice, identity: ["user:alice@example.com"], username: alice, token_ttl: 15m}
+  - {name: bob, identity: ["user:bob@example.com"], username: bob, token_ttl: 15m}
+grants:
+  - {subject: alice, scope: all_devices, roles: [network_admin]}
+  - {subject: bob, scope: all_devices, roles: [network_admin]}
+key_groups: [{match: {cidr: 172.30.49.0/24}, key_ref: k}]

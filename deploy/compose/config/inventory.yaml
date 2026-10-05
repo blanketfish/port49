@@ -1,0 +1,5 @@
+# The trial's one device: whatever connects through the published port
+# from this host, which the stack's network presents as its gateway. A
+# deployment lists its devices by the addresses port49d sees (design §13).
+devices:
+  - {name: smoke1, platform: arista_eos, addresses: [172.30.49.1]}
