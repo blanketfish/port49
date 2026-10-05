@@ -256,6 +256,18 @@ type Metrics struct {
 	// port49_cert_status_unavailable_total: checks whose status could not be
 	// established. No labels.
 	CertStatusUnavailable prometheus.Counter
+	// port49_directory_queries_total{server, outcome}: directory queries by
+	// server (host:port) and outcome: ok, fault (the server's), error (the
+	// query's answer), refused (the dial or bind was refused, no fault).
+	DirectoryQueries *prometheus.CounterVec
+	// port49_directory_server_up{server}: 1 while the server's breaker is
+	// closed.
+	DirectoryServerUp *prometheus.GaugeVec
+	// port49_directory_selected{server}: 1 for the server queries go to.
+	DirectorySelected *prometheus.GaugeVec
+	// port49_directory_site_crossings_total: selections that crossed sites,
+	// consistency events (design §10). No labels.
+	DirectorySiteCrossings prometheus.Counter
 	// port49_policy_reloads_total{outcome}: attempts to put a changed policy
 	// file in force (plan 4b) — "applied", "unchanged" (a SIGHUP with nothing
 	// new), or "refused" (the file does not load; the policy in force keeps
@@ -533,6 +545,15 @@ func New(reg prometheus.Registerer) *Metrics {
 			Help: "The Unix time the CRL in force passes its next update."}, []string{"crl"}),
 		CertStatusUnavailable: prometheus.NewCounter(prometheus.CounterOpts{Name: "port49_cert_status_unavailable_total",
 			Help: "Certificate status checks whose status could not be established."}),
+		DirectoryQueries: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_directory_queries_total",
+			Help: "Directory queries by server (host:port) and outcome: ok, fault (the server's), error (the query's answer), refused (the server refused the dial or bind without a fault)."},
+			[]string{"server", "outcome"}),
+		DirectoryServerUp: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "port49_directory_server_up",
+			Help: "1 while the directory server's breaker is closed."}, []string{"server"}),
+		DirectorySelected: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "port49_directory_selected",
+			Help: "1 for the directory server queries are sent to (sticky selection)."}, []string{"server"}),
+		DirectorySiteCrossings: prometheus.NewCounter(prometheus.CounterOpts{Name: "port49_directory_site_crossings_total",
+			Help: "Selections that crossed sites: consistency events, membership read there may lag replication (design §10)."}),
 		PolicyReloads: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_policy_reloads_total",
 			Help: "Attempts to put a changed policy file in force, by outcome."}, []string{"outcome"}),
 		PolicyFileRefused: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_policy_file_refused",
@@ -603,7 +624,7 @@ func New(reg prometheus.Registerer) *Metrics {
 		m.DevicesQuarantined, m.DevicesAdmissionRefused, m.ContextRefreshes, m.ContextsReindexed,
 		m.ContextsReindexFailures, m.SessionRefreshes, m.TokensSuperseded, m.CeilingWarnings,
 		m.Revocations, m.RevocationsInForce, m.RevocationsFileFailed, m.CertStatusChecks, m.CRLLoads, m.CRLNextUpdate,
-		m.CertStatusUnavailable, m.PolicyReloads, m.PolicyFileRefused,
+		m.CertStatusUnavailable, m.DirectoryQueries, m.DirectoryServerUp, m.DirectorySelected, m.DirectorySiteCrossings, m.PolicyReloads, m.PolicyFileRefused,
 		m.PolicyRefreshPending, m.PolicyBundleMatchesRunner, m.BrokerMintGateClosed, m.RedemptionRestoreGuarded,
 		m.InventoryReloads,
 		m.InventoryFileRefused,
