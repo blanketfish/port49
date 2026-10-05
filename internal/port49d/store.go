@@ -52,6 +52,10 @@ type stores struct {
 	// broker is the in-process broker's, the daemon's own on memory; nil
 	// on etcd.
 	daemon, broker store.Store
+	// author is what command and session authorization read through: the
+	// daemon's store, behind a context cache when
+	// store.etcd.context_cache.ttl is set (plan 7f; design §12).
+	author store.Store
 	// etcd is the daemon's raw backend on etcd. Nil on memory.
 	etcd *etcdstore.Store
 	// judged is etcd as meta/judged_bundle's reader, for keepDaemonBundle
@@ -64,12 +68,12 @@ type stores struct {
 	// runOnce runs it as soon as the stores are open, and joins it before
 	// close. Nil on memory, where every write is this process's own.
 	follow func(ctx context.Context)
-	// probe pings the store through the daemon's guard until its ctx ends,
-	// so an idle port49d still goes dark on a store gone (probe; plan 7e,
-	// Ruling 11). runOnce runs and joins it as it does follow. Nil on
-	// memory.
-	probe func(ctx context.Context)
-	close func()
+	// health is the store health check (plan 7f; decision 37): runOnce
+	// waits on its passes before binding TACACS+ in a run after a store
+	// gone, and runs its watch from the bind, which ends the run on
+	// close_after failures in a row. Nil on memory.
+	health *health
+	close  func()
 }
 
 // storeGone ends one run of port49d on etcd (Ruling 11; pre-flight I10,
@@ -113,7 +117,7 @@ func openStores(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 		mem := memory.New(time.Now)
 		ledger.SetBase(mem.Seen() + 1)
 		st := crypt.Wrap(mem, keys, m.CryptOpenFailures, crypt.WithLedger(ledger), say)
-		return stores{daemon: st, broker: st, close: func() {}}, nil
+		return stores{daemon: st, broker: st, author: st, close: func() {}}, nil
 	}
 	ledger.Fence().OnTimeout(m.StoreFenceTimeouts.Inc)
 	// A run after a store gone shows the alarm a run before raised from
@@ -325,18 +329,38 @@ func openDaemon(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 		wg.Wait()
 	}
 	// The daemon's raw store fenced under its guard (crypt.Fenced,
-	// pre-flight C1), as openStores builds it with a broker; the probe pings
-	// through the same guard, so its pings count toward the circuit that
-	// ends the run, and wait for the context feed as a read does.
-	gd := guard.WrapRev(crypt.Fenced(d, ledger), guardConfig(procOf(cfg), "daemon", e, m, out, gone))
+	// pre-flight C1), as openStores builds it with a broker; the health check
+	// reads the fenced store below the guard (storeCheck), so it waits for the
+	// context feed as a read does and takes no slot and trips no circuit.
+	fd := crypt.Fenced(d, ledger)
+	gd := guard.WrapRev(fd, guardConfig(procOf(cfg), "daemon", e, m, out, gone))
+	h := e.Health
+	fmt.Fprintf(out, "port49d: store: health checked every %v; every listener closes after %d consecutive failed "+
+		"checks and opens again after %d passes (store.etcd.health)\n", h.Interval, h.CloseAfter, h.OpenAfter)
+	daemon := crypt.Wrap(gd, keys, m.CryptOpenFailures, crypt.WithLedger(ledger), say)
+	authorStore := daemon
+	if cc := e.ContextCache; cc.TTL > 0 {
+		ss := &staleSayer{out: out, ttl: cc.TTL}
+		authorStore = crypt.Cached(daemon, ledger, crypt.CacheConfig{TTL: cc.TTL, Max: cc.MaxEntries,
+			IdleTTL: cfg.ContextIdleTTL, Lookups: m.ContextCacheLookups, Entries: m.ContextCacheEntries,
+			Stale: ss.serve, Fresh: ss.fresh})
+		fmt.Fprintf(out, "port49d: store: the context cache is on: a session's context is read from it for up to %v, "+
+			"at most %d entries; a revocation reaches it through the context feed, and through a store outage it is "+
+			"served past %v until the listeners close\n", cc.TTL, cc.MaxEntries, cc.TTL)
+	} else {
+		ledger.DetachCache()
+		fmt.Fprintln(out, "port49d: store: the context cache is off (store.etcd.context_cache.ttl is not set)")
+	}
 	return stores{
-		daemon:     crypt.Wrap(gd, keys, m.CryptOpenFailures, crypt.WithLedger(ledger), say),
+		daemon:     daemon,
+		author:     authorStore,
 		etcd:       d,
 		judged:     d,
 		persistent: true,
 		follow:     follow,
-		probe:      func(ctx context.Context) { probe(ctx, gd, e.HoldTTL/6) },
-		close:      func() { d.Close() },
+		health: &health{every: h.Interval, timeout: e.CallTimeout, closeAfter: h.CloseAfter, openAfter: h.OpenAfter,
+			check: storeCheck(fd, d), m: m, state: &healthState{}, out: out},
+		close: func() { d.Close() },
 	}, nil
 }
 

@@ -1,0 +1,25 @@
+# port49-broker in the compose stack (plan 7f, Task 1); paths inside the
+# container (broker-etc, mounted read-only at /etc/port49).
+metrics_listen: ":9050"
+inventory_file: /etc/port49/inventory.yaml
+key_refs: [k]
+encryption:
+  current: {id: c1, secret_env: PORT49_ENC_KEY}
+admin_socket: /run/port49/port49-broker.sock
+broker:
+  listen: ":8443"
+  tls_cert_file: /etc/port49/broker/broker.pem
+  tls_key_file: /etc/port49/broker/broker-key.pem
+  client_ca_file: /etc/port49/broker/broker-ca.pem
+  policy_file: /etc/port49/policy.yaml
+  # the broker-state volume; 0700 and owned by uid 65532 from the image
+  state_dir: /var/lib/port49-broker
+  # A trial PKI publishes no CRL. A deployment names its CRL (or OCSP) here
+  # and leaves on_unavailable at refuse (spec §5.1.4).
+  certificate_status: {disabled: true}
+store:
+  backend: etcd
+  etcd:
+    endpoints: [https://etcd-1:2379, https://etcd-2:2379, https://etcd-3:2379]
+    ca_file: /etc/port49/etcd/ca.pem
+    broker: {cert_file: /etc/port49/etcd/port49-broker.pem, key_file: /etc/port49/etcd/port49-broker-key.pem}

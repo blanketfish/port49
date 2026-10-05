@@ -528,8 +528,8 @@ func TestOpenStoresSharesOneSayer(t *testing.T) {
 	if n := strings.Count(out.String(), `sealed under key id "retired"`); n != 1 {
 		t.Fatalf("said %d times: %q", n, out.String())
 	}
-	if sts.broker != nil || sts.probe == nil {
-		t.Fatalf("the split daemon's stores: broker %v, probe %v", sts.broker != nil, sts.probe != nil)
+	if sts.broker != nil || sts.health == nil {
+		t.Fatalf("the split daemon's stores: broker %v, health %v", sts.broker != nil, sts.health != nil)
 	}
 }
 
@@ -648,9 +648,10 @@ func TestARefusedWitnessReadNamesStoreRoles(t *testing.T) {
 // start's scan is not read, a context-pool timeout at call_timeout,
 // though the store answers it, and counted in
 // port49_store_fence_timeouts_total, which tells it from an etcd failure
-// (final review 7e-1 M-4). The probe pings through the same guard and
-// fence, so with the feed stopped its pings time out too (plan 7e, Ruling
-// 11). The broker's half is TestTheBrokersStoreIsFencedUnderItsGuard.
+// (final review 7e-1 M-4). The health check waits on the same fence, below
+// the guard (plan 7f, Ruling 1), so with the feed stopped it fails too, and
+// the guard does not count it. The broker's half is
+// TestTheBrokersStoreIsFencedUnderItsGuard.
 func TestOpenStoresFencesEachLayerUnderItsGuard(t *testing.T) {
 	daemonCfg, _ := etcdSplit(t)
 	cfg, err := config.Load(daemonCfg)
@@ -689,22 +690,22 @@ func TestOpenStoresFencesEachLayerUnderItsGuard(t *testing.T) {
 	if n := testutil.ToFloat64(m.StoreFenceTimeouts); n != 1 {
 		t.Fatalf("port49_store_fence_timeouts_total = %v, want 1", n)
 	}
-	// One probe round (hold_ttl/6 is under 2s here): fenced, and counted
-	// by the daemon's guard.
-	pctx, stopProbe := context.WithCancel(ctx)
-	probeDone := make(chan struct{})
-	go func() { defer close(probeDone); sts.probe(pctx) }()
-	deadline := time.Now().Add(10 * time.Second)
-	for testutil.ToFloat64(m.StoreFenceTimeouts) < 2 {
-		if time.Now().After(deadline) {
-			t.Fatal("the probe's ping was not fenced")
-		}
-		time.Sleep(50 * time.Millisecond)
+	// The health check (plan 7f, Ruling 1) waits for the feed too, below the
+	// guard: with the feed not running and another ledger's write past the
+	// base, it fails at its call_timeout deadline, wrapping ErrFeedBehind, and
+	// counts a fence timeout; the guard's context counter does not move,
+	// because the check takes no slot and trips no circuit.
+	guarded := testutil.ToFloat64(m.StoreCalls.WithLabelValues("daemon", "context", "timeout"))
+	cctx, stopCheck := context.WithTimeout(ctx, cfg.Store.Etcd.CallTimeout)
+	defer stopCheck()
+	if err := sts.health.check(cctx); !errors.Is(err, crypt.ErrFeedBehind) {
+		t.Fatalf("the health check with the feed stopped: %v, want an error wrapping crypt.ErrFeedBehind", err)
 	}
-	stopProbe()
-	<-probeDone
-	if n := testutil.ToFloat64(m.StoreCalls.WithLabelValues("daemon", "context", "timeout")); n < 2 {
-		t.Fatalf("the daemon's guard counted %v context timeouts with the probe's", n)
+	if n := testutil.ToFloat64(m.StoreFenceTimeouts); n != 2 {
+		t.Fatalf("port49_store_fence_timeouts_total = %v after the check, want 2", n)
+	}
+	if n := testutil.ToFloat64(m.StoreCalls.WithLabelValues("daemon", "context", "timeout")); n != guarded {
+		t.Fatalf("the guard counted the health check: context timeouts %v, were %v", n, guarded)
 	}
 }
 

@@ -886,7 +886,8 @@ func TestAStartSealsTheLedgerOnceItHasReadTheStore(t *testing.T) {
 // A store that hangs in the middle of a login: the device hears ERROR
 // within store.packet_deadline, never silence (Review Focus 1). Then the
 // store has been gone long enough, and port49d closes every listener and
-// says why, on its guard and probe, without exiting; port49-broker's
+// says why, on its health checks (close_after failures, which come before
+// the guard's hold_ttl) or its guard, without exiting; port49-broker's
 // runner loses its hold and keeps serving. When the store returns, the
 // same port49d listens again, and the runner takes the hold again (Ruling
 // 11; pre-flight I19; Review Focus 4). While port49d waits, /readyz says
@@ -2005,6 +2006,9 @@ func TestPort49dRefusesARestoredTokenUntilTheRunnerPurges(t *testing.T) {
 	t.Cleanup(func() { stderr, stdout = e, o })
 	stderr, stdout = &out, &log
 	f := splitFleet(t)
+	// The restore keeps etcd away for over five seconds; the checks would
+	// close the listeners first, and this test measures the restore guard.
+	addUnderEtcd(t, f.daemon, "    health: {close_after: 60}\n")
 	root := f.srv.Client(t, "root")
 	tacacs := startSplitDaemon(t, f.daemon, &out, 1)
 	metricsD := regexp.MustCompile(`port49d: metrics on (127\.0\.0\.1:\d+)`).FindStringSubmatch(out.String())[1]
@@ -2070,6 +2074,108 @@ func TestPort49dRefusesARestoredTokenUntilTheRunnerPurges(t *testing.T) {
 	if st := dev.login("alice", mintOn(t, api, f.pki, "leaf1")); st != wire.AuthenStatusPass {
 		t.Fatalf("control: a token minted after the purge: %d", st)
 	}
+}
+
+// The same restore on the default health settings, which is what production
+// runs: the restore keeps etcd away for over close_after seconds, so the
+// checks take port49d dark, the run ends as a store gone, and the next run
+// binds again only after open_after passes. The restore guard is the
+// process's, so the token spent since the snapshot is still refused
+// store_unavailable on that new run until the runner purges, and then
+// allowed (plan 7f, T6-a; the in-run path is the test above's).
+func TestPort49dRefusesARestoredTokenAcrossAStoreGoneUntilThePurge(t *testing.T) {
+	var out, log syncBuffer
+	e, o := stderr, stdout
+	t.Cleanup(func() { stderr, stdout = e, o })
+	stderr, stdout = &out, &log
+	f := splitFleet(t)
+	root := f.srv.Client(t, "root")
+	tacacs := startSplitDaemon(t, f.daemon, &out, 1)
+	metricsD := regexp.MustCompile(`port49d: metrics on (127\.0\.0\.1:\d+)`).FindStringSubmatch(out.String())[1]
+	api, stop := startBroker(t, f.broker, &out, 1)
+	waitFor(t, &out, "runner: recorded bundle ")
+	spent := mintOn(t, api, f.pki, "leaf1")
+	waitUntil(t, "a witness", func() bool { return witnessAt(t, root) > 0 })
+	if err := stop(); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := f.srv.Backup(t) // the token is unspent in it
+	w0 := witnessAt(t, root)
+	_, stop = startBroker(t, f.broker, &out, 2)
+	waitForCount(t, &out, "runner: took keyspace /port49/", 2)
+	dev := tacacsClient{t: t, addr: tacacs, key: []byte("run-test-secret")}
+	var st uint8
+	for deadline := time.Now().Add(40 * time.Second); ; time.Sleep(200 * time.Millisecond) {
+		// Backup's restart takes port49d dark too, and each run binds a new port.
+		dev.addr = newestMatch(&out, `port49d: listening on (127\.0\.0\.1:\d+)`)
+		if c, err := net.DialTimeout("tcp", dev.addr, time.Second); err == nil {
+			c.Close()
+			if st = dev.login("alice", spent); st == wire.AuthenStatusPass {
+				break
+			}
+		}
+		if time.Now().After(deadline) {
+			break
+		}
+	}
+	if st != wire.AuthenStatusPass {
+		t.Fatalf("control: the token's first login: %d", st)
+	}
+	waitUntil(t, "the redemption's witness", func() bool { return witnessAt(t, root) > w0 })
+	time.Sleep(2 * witnessEvery) // port49d follows it
+	if err := stop(); err != nil {
+		t.Fatal(err)
+	}
+	top, err := root.Get(context.Background(), "/port49/v1/meta/witness")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dark, bound := strings.Count(out.String(), "waiting for the store again, as at a start"),
+		strings.Count(out.String(), "port49d: listening on ")
+	f.srv.Restore(t, snapshot) // no token delete, no meta/judged delete
+	// As --bump-revision moves revisions up, so the ledger's fence, which
+	// refuses a context read below what this port49d saw, is not what
+	// refuses the replay.
+	padPast(t, root, uint64(top.Header.Revision))
+	waitCountWithin(t, &out, "waiting for the store again, as at a start", dark+1, 30*time.Second)
+	waitCountWithin(t, &out, "port49d: listening on ", bound+1, 60*time.Second)
+	metricsD = newestMatch(&out, `port49d: metrics on (127\.0\.0\.1:\d+)`) // the new run's
+	dev.addr = newestMatch(&out, `port49d: listening on (127\.0\.0\.1:\d+)`)
+	waitWithin(t, &out, fmt.Sprintf("port49d: store: meta/witness is at revision %d, below the ", w0), 20*time.Second)
+	waitBrokerMetricAt(t, metricsD, "port49_redemption_restore_guarded 1")
+	// Refused by the guard, before any token is looked up: the ledger's
+	// fence would refuse this one too, at its context read, since alice's
+	// context was written after the snapshot, but not a token whose
+	// context port49d's ledger no longer keeps.
+	looked := metricAt(t, metricsD, `port49_store_operations_total{op="candidates",outcome="ok"}`)
+	if st := dev.login("alice", spent); st != wire.AuthenStatusError {
+		t.Fatalf("a token spent since the snapshot, presented while guarded: %d", st)
+	}
+	if n := metricAt(t, metricsD, `port49_store_operations_total{op="candidates",outcome="ok"}`); n != looked {
+		t.Fatalf("a redemption while guarded looked up the tokens: %v after %v", n, looked)
+	}
+	if r := records(t, &log, "redeem"); r[len(r)-1]["reason"] != "store_unavailable" {
+		t.Fatalf("the refusal: %v", r[len(r)-1])
+	}
+	api, _ = startBroker(t, f.broker, &out, 3)
+	waitWithin(t, &out, "every unspent token is purged", 30*time.Second)
+	waitWithin(t, &out, "port49d: store: the broker runner's purge after the restore is done", 10*time.Second)
+	waitBrokerMetricAt(t, metricsD, "port49_redemption_restore_guarded 0")
+	if st := dev.login("alice", spent); st == wire.AuthenStatusPass {
+		t.Fatal("a token spent since the snapshot logged in after the purge")
+	}
+	if st := dev.login("alice", mintOn(t, api, f.pki, "leaf1")); st != wire.AuthenStatusPass {
+		t.Fatalf("control: a token minted after the purge: %d", st)
+	}
+}
+
+// newestMatch is the first group of the last match of re in out.
+func newestMatch(out *syncBuffer, re string) string {
+	ms := regexp.MustCompile(re).FindAllStringSubmatch(out.String(), -1)
+	if len(ms) == 0 {
+		return ""
+	}
+	return ms[len(ms)-1][1]
 }
 
 // metricAt is the value of series in the /metrics at addr, 0 when it is

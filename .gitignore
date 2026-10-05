@@ -27,3 +27,5 @@ coverage.out
 /tests/lab/logs/
 # containerlab's per-lab working directory, created beside the topology it runs
 /tests/lab/topologies/clab-*/
+# deploy/compose's trial PKI and env files (go run ./tests/compose/cmd/compose-pki)
+/deploy/compose/local/

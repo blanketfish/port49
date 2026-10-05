@@ -1,0 +1,159 @@
+# port49 on etcd as containers (plan 7f, Task 1): port49d, port49-broker
+# and a three-member etcd with client-certificate auth. One peer shape
+# beside systemd and Kubernetes (roadmap, "Deployment shapes"). Read
+# README.md beside this file first.
+#
+# Inputs (environment, each with a default):
+#   PORT49_COMPOSE_LOCAL   the PKI and the env files (default ./local; a trial
+#                          writes it with `go run ./tests/compose/cmd/compose-pki`)
+#   PORT49_COMPOSE_CONFIG  the four YAML files (default ./config)
+#   PORT49_COMPOSE_SUBNET  the stack's network (default 172.30.49.0/24)
+#   PORT49_TACACS_PUBLISH  host address:port for TACACS+ (default 127.0.0.1:49)
+#   PORT49_BROKER_PUBLISH  host address:port for the broker's API (default 127.0.0.1:8443)
+
+name: port49
+
+x-etcd: &etcd
+  image: gcr.io/etcd-development/etcd:v3.6.15
+  user: "65532:65532"
+  restart: unless-stopped
+  networks: [port49]
+  depends_on:
+    setup: {condition: service_completed_successfully}
+  # The settings the three members share. A YAML merge (<<) cannot splice a
+  # list into a member's command:, but it does merge this map, and etcd reads
+  # each ETCD_* variable as the flag of the same name; each member's command:
+  # carries only what differs per member.
+  environment:
+    ETCD_INITIAL_CLUSTER: etcd-1=https://etcd-1:2380,etcd-2=https://etcd-2:2380,etcd-3=https://etcd-3:2380
+    ETCD_INITIAL_CLUSTER_STATE: new
+    ETCD_INITIAL_CLUSTER_TOKEN: port49-compose
+    ETCD_DATA_DIR: /var/lib/etcd
+    ETCD_LISTEN_CLIENT_URLS: https://0.0.0.0:2379
+    ETCD_LISTEN_PEER_URLS: https://0.0.0.0:2380
+    ETCD_CLIENT_CERT_AUTH: "true"
+    ETCD_TRUSTED_CA_FILE: /etc/etcd-pki/ca.pem
+    ETCD_PEER_CLIENT_CERT_AUTH: "true"
+    ETCD_PEER_TRUSTED_CA_FILE: /etc/etcd-pki/ca.pem
+    # design §13: periodic compaction, since every login and touch writes a revision
+    ETCD_AUTO_COMPACTION_MODE: periodic
+    ETCD_AUTO_COMPACTION_RETENTION: 1h
+
+services:
+  # One-shot, as root: copies the configuration and the PKI into one volume
+  # per component, owned as port49's readers require, and stages store-roles'
+  # output for etcd-init. Idempotent: it runs at every `up`.
+  setup:
+    image: port49-setup:dev
+    build: {context: ../.., target: setup}
+    command: [/usr/local/bin/setup.sh]
+    network_mode: none
+    # the staged copy of both components' etcd keys lives in memory, never in
+    # a layer a killed container would leave behind (setup.sh)
+    tmpfs: [/etc/port49]
+    volumes:
+      - ${PORT49_COMPOSE_CONFIG:-./config}:/src/config:ro
+      - ${PORT49_COMPOSE_LOCAL:-./local}:/src/local:ro
+      - port49d-etc:/vol/port49d-etc
+      - broker-etc:/vol/broker-etc
+      - etcd-pki:/vol/etcd-pki
+      - etcd-root:/vol/etcd-root
+      - etcd-1-data:/vol/etcd-1-data
+      - etcd-2-data:/vol/etcd-2-data
+      - etcd-3-data:/vol/etcd-3-data
+
+  etcd-1:
+    <<: *etcd
+    command: [/usr/local/bin/etcd, --name=etcd-1, --advertise-client-urls=https://etcd-1:2379,
+      --initial-advertise-peer-urls=https://etcd-1:2380, --cert-file=/etc/etcd-pki/etcd-1.pem,
+      --key-file=/etc/etcd-pki/etcd-1-key.pem, --peer-cert-file=/etc/etcd-pki/etcd-1.pem,
+      --peer-key-file=/etc/etcd-pki/etcd-1-key.pem]
+    volumes: [etcd-pki:/etc/etcd-pki:ro, etcd-1-data:/var/lib/etcd]
+  etcd-2:
+    <<: *etcd
+    command: [/usr/local/bin/etcd, --name=etcd-2, --advertise-client-urls=https://etcd-2:2379,
+      --initial-advertise-peer-urls=https://etcd-2:2380, --cert-file=/etc/etcd-pki/etcd-2.pem,
+      --key-file=/etc/etcd-pki/etcd-2-key.pem, --peer-cert-file=/etc/etcd-pki/etcd-2.pem,
+      --peer-key-file=/etc/etcd-pki/etcd-2-key.pem]
+    volumes: [etcd-pki:/etc/etcd-pki:ro, etcd-2-data:/var/lib/etcd]
+  etcd-3:
+    <<: *etcd
+    command: [/usr/local/bin/etcd, --name=etcd-3, --advertise-client-urls=https://etcd-3:2379,
+      --initial-advertise-peer-urls=https://etcd-3:2380, --cert-file=/etc/etcd-pki/etcd-3.pem,
+      --key-file=/etc/etcd-pki/etcd-3-key.pem, --peer-cert-file=/etc/etcd-pki/etcd-3.pem,
+      --peer-key-file=/etc/etcd-pki/etcd-3-key.pem]
+    volumes: [etcd-pki:/etc/etcd-pki:ro, etcd-3-data:/var/lib/etcd]
+
+  # One-shot, as etcd's root: applies port49d store-roles' output and
+  # enables auth, once; a later `up` finds auth enabled and changes nothing.
+  etcd-init:
+    image: port49-setup:dev
+    # setup builds this tag; building it here too races two builds on the
+    # one tag, and `never` keeps `up` from trying to pull it
+    pull_policy: never
+    command: [/usr/local/bin/etcd-init.sh]
+    networks: [port49]
+    volumes: [etcd-root:/etcd-root:ro]
+    depends_on:
+      etcd-1: {condition: service_started}
+      etcd-2: {condition: service_started}
+      etcd-3: {condition: service_started}
+
+  port49-broker:
+    image: port49:dev
+    build: {context: ../.., target: port49}
+    entrypoint: [/usr/local/bin/port49-broker]
+    restart: unless-stopped
+    networks: [port49]
+    env_file: [{path: "${PORT49_COMPOSE_LOCAL:-./local}/port49-broker.env"}]
+    ports:
+      - ${PORT49_BROKER_PUBLISH:-127.0.0.1:8443}:8443
+      - 127.0.0.1:9050:9050
+    volumes:
+      - broker-etc:/etc/port49:ro
+      # broker.state_dir: one named volume per broker, never shared, never
+      # an anonymous volume (plan 7e, Rulings 12 and 18). A second broker is
+      # a second service with a volume of its own; never --scale.
+      - broker-state:/var/lib/port49-broker
+    depends_on:
+      etcd-init: {condition: service_completed_successfully}
+
+  port49d:
+    image: port49:dev
+    # port49-broker builds this tag; building it here too races two builds
+    # on the one tag, and `never` keeps `up` from trying to pull it
+    pull_policy: never
+    restart: unless-stopped
+    networks: [port49]
+    # Non-root binds 49: Docker sets this in each container's network
+    # namespace already; it is stated so a runtime that does not is caught.
+    sysctls: {net.ipv4.ip_unprivileged_port_start: 0}
+    env_file: [{path: "${PORT49_COMPOSE_LOCAL:-./local}/port49d.env"}]
+    ports:
+      # port49d must see the device's true source address (design §13);
+      # what a published port does to it is policy engine spec §15 L39 (a).
+      - ${PORT49_TACACS_PUBLISH:-127.0.0.1:49}:49
+      - 127.0.0.1:9049:9049
+    volumes:
+      - port49d-etc:/etc/port49:ro
+      # the accounting spool: on an ephemeral layer a record acknowledged to
+      # a device is lost at a recreate
+      - port49d-spool:/var/spool/port49d
+    depends_on:
+      etcd-init: {condition: service_completed_successfully}
+
+networks:
+  port49:
+    ipam:
+      config: [{subnet: "${PORT49_COMPOSE_SUBNET:-172.30.49.0/24}"}]
+
+volumes:
+  port49d-etc: {}
+  broker-etc: {}
+  etcd-pki: {}
+  etcd-root: {}
+  etcd-1-data: {}
+  etcd-2-data: {}
+  etcd-3-data: {}
+  broker-state: {}
+  port49d-spool: {}

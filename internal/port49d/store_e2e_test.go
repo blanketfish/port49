@@ -220,3 +220,20 @@ func waitForLedgerSeq(t *testing.T, root *clientv3.Client, key string, above uin
 	t.Fatalf("the ledger record at %s never rose above %d", key, above)
 	return 0
 }
+
+// addUnderEtcd inserts lines (each indented four spaces, newline-ended)
+// under store.etcd in the config at cfgPath.
+func addUnderEtcd(t *testing.T, cfgPath, lines string) {
+	t.Helper()
+	raw, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := strings.Replace(string(raw), "  etcd:\n", "  etcd:\n"+lines, 1)
+	if body == string(raw) {
+		t.Fatalf("%s has no store.etcd block", cfgPath)
+	}
+	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}

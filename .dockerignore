@@ -1,0 +1,11 @@
+.git
+bin/
+tests/lab/captures/
+tests/lab/logs/
+tests/lab/evidence/
+deploy/compose/local/
+*.test
+*.out
+.worktrees/
+.superpowers/
+**/deploy/compose/local/

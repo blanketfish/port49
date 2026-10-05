@@ -197,7 +197,8 @@ func TestACompactedFeedScansAgainAndOnlyRaises(t *testing.T) {
 		kd: sealedAt(t, kd, 400), // unseen, above the base: an entry
 	}, 500)
 	feed.compact <- struct{}{}
-	var rescans atomic.Int32
+	var rescans, cleared atomic.Int32
+	l.attach(evicterFunc{clear: func() { cleared.Add(1) }})
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
 		until(func() bool { return rescans.Load() > 0 && l.next(kd) == 401 && l.Fence().At() >= 500 },
@@ -207,6 +208,11 @@ func TestACompactedFeedScansAgainAndOnlyRaises(t *testing.T) {
 	FollowContexts(ctx, feed, nil, keys(), l, 150, func(bool) {}, func() { rescans.Add(1) }, t.Logf)
 	if rescans.Load() != 1 || l.next(kd) != 401 {
 		t.Fatalf("rescans %d, next at an unseen key above the base %d", rescans.Load(), l.next(kd))
+	}
+	// A compacted watch delivers no delete, so the rescan's clear is what
+	// evicts a deleted context from a cache (plan 7f, review M-1).
+	if cleared.Load() != 1 {
+		t.Fatalf("the cache was told of the rescan %d times, want 1", cleared.Load())
 	}
 	if l.Fence().At() < 500 {
 		t.Fatalf("the rescan at 500 left the fence at %d", l.Fence().At())
@@ -1336,5 +1342,40 @@ func TestAStartsScanTakesARevocationBelowTheSeededMark(t *testing.T) {
 	l.Observe(ka, 10, 12, time.Time{}, at.Add(time.Hour)) // the record at the mark, put back
 	if !l.floor(ka).Equal(at) {
 		t.Fatal("the record at the mark, put back, lifted the floor")
+	}
+}
+
+// FollowContexts tells the ledger each change, a delete and a record that
+// does not open included, so a cache evicts them (plan 7f, Ruling 5).
+func TestTheFeedTellsTheLedgerEveryChange(t *testing.T) {
+	l := NewLedger()
+	var mu sync.Mutex
+	var told []store.ContextKey
+	l.attach(evicterFunc{evict: func(k store.ContextKey) { mu.Lock(); told = append(told, k); mu.Unlock() }})
+	feed := &feedOf{changes: make(chan store.ContextChange, 3), compact: make(chan struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go FollowContexts(ctx, feed, nil, keys(), l, 0, func(bool) {}, func() {}, t.Logf)
+	kb := store.ContextKey{NAS: "leaf-02", Username: "bob"}
+	feed.changes <- store.ContextChange{Key: ka, Context: sealedAt(t, ka, 10), Rev: 10}
+	feed.changes <- store.ContextChange{Key: kb, Deleted: true, Rev: 11}
+	feed.changes <- store.ContextChange{Key: ka, Context: store.Context{CtxID: "garbage"}, Rev: 12}
+	eventually(t, func() bool { mu.Lock(); defer mu.Unlock(); return len(told) == 3 })
+}
+
+// evicterFunc is an evicter from funcs, for tests.
+type evicterFunc struct {
+	evict func(store.ContextKey)
+	clear func()
+}
+
+func (e evicterFunc) evictKey(k store.ContextKey) {
+	if e.evict != nil {
+		e.evict(k)
+	}
+}
+func (e evicterFunc) clearAll() {
+	if e.clear != nil {
+		e.clear()
 	}
 }

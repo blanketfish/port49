@@ -98,7 +98,7 @@ Tasks 8b–16 plus a new Task 13b, each reviewed). It delivers:
 - the agent's one connection.
 
 L35 is measured and closed on five images. The lab's snapshot restore found a ledger bug, fixed
-in 79812ef (Plan 7d — As built, below). **7e written 2026-10-03** (`2026-10-03-07e-broker-process.md`, twenty-three tasks in two merges (eighteen, and 8a, 15a, 15b, 15c and 15d): 7e-1, Tasks 1–10 and 8a, the store a fleet of processes shares (a sealed write sequence and a high-water ledger per key, the context and marks feeds, the ledger record the daemon cannot write, `superseded` in the store, the decision-log emits under the hold, two carried fixes); 7e-2, Tasks 11–18 and 15a–15d, `port49-broker`, port49d on etcd with no broker inside, one runner per keyspace, the revocations file retired on etcd, and the lab; nineteen rulings recorded as decision 36; one question for Ryan, OR-1, `port49 revoke`'s default socket, closed by Ryan 2026-10-03 as recommended (unchanged); it opens L37 and L38 and measures them with L36); **7e-1 executed 2026-10-03** on `feature/broker-process`, each task reviewed (Plan 7e — As built, below). **7e-2 executed 2026-10-04** on `feature/broker-split`, each task reviewed, L36, L37 and L38 closed and L40 opened (Plan 7e — As built, "7e-2", below); **merged 2026-10-05** as PR #27, merge 6438e26. **7f written 2026-10-05** (`2026-10-05-07f-go-dark-and-context-cache.md`, ten tasks: the container shape (image, compose stack on etcd, CI smoke test), the lab on the compose stack with L39 (a), one docs, three code for go-dark on store health checks (N failures, M passes; the idle gap closed), two code for the context cache, one lab (L41, opened by it), one docs; nine rulings recorded as decision 37; two questions for Ryan, OR-1 the health defaults and OR-2 keeping close-and-wait, each with a recommendation). 7g–7h and 8–13 not yet.
+in 79812ef (Plan 7d — As built, below). **7e written 2026-10-03** (`2026-10-03-07e-broker-process.md`, twenty-three tasks in two merges (eighteen, and 8a, 15a, 15b, 15c and 15d): 7e-1, Tasks 1–10 and 8a, the store a fleet of processes shares (a sealed write sequence and a high-water ledger per key, the context and marks feeds, the ledger record the daemon cannot write, `superseded` in the store, the decision-log emits under the hold, two carried fixes); 7e-2, Tasks 11–18 and 15a–15d, `port49-broker`, port49d on etcd with no broker inside, one runner per keyspace, the revocations file retired on etcd, and the lab; nineteen rulings recorded as decision 36; one question for Ryan, OR-1, `port49 revoke`'s default socket, closed by Ryan 2026-10-03 as recommended (unchanged); it opens L37 and L38 and measures them with L36); **7e-1 executed 2026-10-03** on `feature/broker-process`, each task reviewed (Plan 7e — As built, below). **7e-2 executed 2026-10-04** on `feature/broker-split`, each task reviewed, L36, L37 and L38 closed and L40 opened (Plan 7e — As built, "7e-2", below); **merged 2026-10-05** as PR #27, merge 6438e26. **7f written 2026-10-05** (`2026-10-05-07f-go-dark-and-context-cache.md`, ten tasks: the container shape (image, compose stack on etcd, CI smoke test), the lab on the compose stack with L39 (a), one docs, three code for go-dark on store health checks (N failures, M passes; the idle gap closed), two code for the context cache, one lab (L41, opened by it), one docs; nine rulings recorded as decision 37; two questions for Ryan, OR-1 the health defaults and OR-2 keeping close-and-wait, each with a recommendation, both approved by Ryan 2026-10-05 as recommended); **7f executed 2026-10-05** on `feature/go-dark-and-context-cache`, each task reviewed, L39 (a) measured and L41 opened and closed (Plan 7f — As built, below); built, awaiting final review. 7g–7h and 8–13 not yet.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -1599,7 +1599,8 @@ until 7c merges to be made. Every sub-plan is separately mergeable and leaves `m
   config changes the compose file in the same plan. Kubernetes stays plan 12's, after plan 10.
   the per-replica read-through cache of contexts and blobs, TTL in seconds, served past its TTL
   through an outage and alarmed (design §12). Lab: a new register row, what each image does when
-  port49d closes its listener mid-session, beside port49d stopped.
+  port49d closes its listener mid-session, beside port49d stopped. **As built:** "Plan 7f — As
+  built", below.
 - **Plan 7g — the directory.** LDAP and Active Directory group resolution with design §10's server
   pool (priority, sticky selection, circuit breaker, failback hysteresis, site awareness), nested
   groups by configuration, SASL EXTERNAL, GSSAPI or simple bind; the certificate-to-directory mapping
@@ -3640,6 +3641,147 @@ harness (`startSplit`).
   - **7c's M3** (a `revoke` record for a mark that could not be written) and the bulk lift stay
     unassigned, as the carries table said.
 
+### Plan 7f — As built
+
+Executed from `2026-10-05-07f-go-dark-and-context-cache.md` on `feature/go-dark-and-context-cache`
+(base `6299148`), each task reviewed. The ledger is
+`.superpowers/sdd/2026-10-05-07f-go-dark-and-context-cache/progress.md`, with each task's brief,
+report and review beside it. A pre-flight review (2 critical, 10 important, 20 minor) revised the
+plan before Task 1 (6299148). What differs from the plan's text, task by task:
+
+- **Task 1 (the container shape; 4982f8c, 879b3eb).** The build host had no BuildKit client, so
+  `COPY --chmod` failed; the Dockerfile makes the three writable directories 0700 in the build
+  stage and carries each with `COPY --chown=65532:65532`, which builds under both builders, and
+  the smoke test asserts the mode. `etcd-init` and `port49d` carry `pull_policy: never` rather
+  than a second `build:` of one tag (a race on the classic builder). The setup staging is a
+  tmpfs, emptied at exit; the README gains a first-build note. CI's BuildKit build was not run
+  here.
+- **Task 2 (L39 (a); 5ee1137, 438f364, 93f9471, c02a1b5, fac5dda).** The first run was invalid:
+  both proxy modes showed the compose gateway as the source. The cause was the lab's own
+  containerlab masquerade rule, which rewrites DNAT'd traffic leaving by the compose bridge, so
+  an off-host device never matched. The harness inserts a `nat POSTROUTING RETURN` for the
+  device's subnet toward the compose subnet and purges it after (Ruling T2-a); the re-run passes
+  in both modes. The claim says only what was measured (below).
+- **Task 3 (spec and design; 36dc632, cc64764).** Decision 37 states the health defaults as a
+  requirement, not a result; L41 is opened.
+- **Task 4 (config; ec7314b, 006cb34).** `store.etcd.health` and `store.etcd.context_cache`. The
+  `interval >= call_timeout` check lives in port49d's own store check, not the shape check the
+  brief named, which would have refused a broker with `call_timeout` above 1s (Ruling T4-a).
+- **Task 5 (the check; 2899c32).** `PingToken`, `watch`, `passes`, `WithRequireLeader` on both
+  pings. Survival at the defaults, five runs each: a killed leader's worst run of failed checks
+  was 1; one member hung with its connection alive, 2 (4 to 7 of about 18 checks failed). Neither
+  reaches `close_after`, so OR-1 holds with no escalation (Ruling 3).
+- **Task 6 (go dark; d27d55a, 783c832, 816fe99).** A check cut short by the run ending is not a
+  failed check. The restore-guard test needed `close_after` 60, because a restore now keeps etcd
+  away for longer than 5s; a sibling at the defaults proves dark, rebind, and a restored token
+  still refused until the purge (Ruling T6-a). The cold-start test uses the `open_after` maximum,
+  60, not the brief's 600.
+- **Task 7 (the cache; f9bdc84, aea763e, e35bf1b, bce0ee7).** Review found the circuit and
+  fence timeouts could serve stale past the TTL while etcd answered. `Fence.Behind()` now
+  records a feed behind from the moment a read waits on the fence, and clears when the feed
+  passes it. An undecodable change evicts what it cannot name; `max_entries` is bounded. The
+  etcdtest cluster's restart no longer closes a halted member twice, and retries `EADDRINUSE`.
+- **Task 8 (authorization through the cache; e6f1bce, 397090b).** `authz.Engine.Store` also reads
+  the cached handle. port49d on etcd has no context revocation writer (the broker's are the
+  broker's), so Task 7's carry of routing port49d's own revocation writes was moot. The
+  revocation tests pin eviction, not the mark, including a markless revocation (the owner's own
+  form). `make compose-smoke` passed at e6f1bce (56s).
+- **Task 9 (L41; 9620e03, ebb6f32, 8aed1fc).** Closed on five images. The vEOS image tagged
+  4.32.2F reports 4.31.2F; the note says both. Review scoped two sentences that over-claimed
+  (design §12's refusal, the spec's dark time against 5.5s).
+- **Task 10 (this section).**
+
+**The rulings, as made** (decision 37; Rulings 1–9 of the plan). All nine stood as written. The
+two questions for Ryan were answered 2026-10-05 ("yep sounds good, keep going"):
+
+- **OR-1, the health defaults `interval` 1s, `close_after` 5, `open_after` 3:** approved as
+  recommended. Task 5's survival runs are the tested reason; none reached 5.
+- **OR-2, keep close-and-wait:** approved as recommended. The next run re-reads its files, so a
+  certificate renewed or roles applied while dark are picked up with no restart (7d Ruling 12).
+
+Rulings made during execution: PF-a, every pre-flight fix applied to the plan text first; PF-b,
+the health state is process-level, the failure gauge carried across runs; PF-c,
+`WithRequireLeader` on both pings; PF-d, the compose example ships `context_cache` commented
+out and the cache is off for L41; T2-a, T4-a, T5-a, T6-a above.
+
+**Operator notes, as built:**
+
+- **Upgrading.** A port49d config whose `store.etcd.call_timeout` is above 1s now fails to load
+  until `store.etcd.health.interval` is raised to at least `call_timeout`. The broker is
+  unaffected: it refuses `health` and `context_cache` outright.
+- **Go-dark.** Every listener closes within `close_after` × `interval` + `call_timeout` (5.5s at
+  the defaults) of the store stopping, idle or loaded: measured 4.8 to 5.5s on five images
+  (L41). It was about 2 minutes for an idle port49d at `hold_ttl` 60s. IOS-XE's break-glass
+  lockout on a store fault shrinks to that window; nothing port49 answers changes. After the
+  store returns, port49d listens again after `open_after` passes in a row, measured 3.5s later.
+  Break-glass works while it is dark. The next run re-reads its configuration at a store gone,
+  so an edit to `store.etcd.health` or `store.etcd.context_cache`, the policy or the certs,
+  made without a restart, takes effect at the next outage.
+- **A restore (design §13's runbook) now takes port49d dark** for its duration: the checks fail
+  and the listeners close after `close_after` failures, and it listens again after `open_after`
+  passes. The restore guard is unchanged: restored tokens are still refused until the runner
+  purges.
+- **The context cache** is off unless `store.etcd.context_cache.ttl` is set, and the compose
+  example ships it commented out. When on, a revocation reaches a cached session at feed speed;
+  a hit is also refused while the feed is behind a read (that read goes to the store); through a
+  true outage a cached context is served past its TTL only until the listeners close, which
+  go-dark bounds to `close_after` × `interval` + `call_timeout` while the health checks fail
+  (when the context pool's circuit is open or its slots are refused while etcd answers, the
+  bound is `hold_ttl`; the feed's evictions still apply). A failed write through the cache
+  (`TouchContext`, `SetPrivilege`) evicts that session's entry, so it stops being served stale
+  at once. That is counted
+  `port49_context_cache_lookups_total{outcome="stale"}` and said once:
+  `serving cached login contexts past store.etcd.context_cache.ttl`. Alert on any increase.
+  Dark with etcd healthy: look at `port49_store_fence_timeouts_total`.
+- **New metrics:** `port49_store_health_checks_total{outcome}`; `port49_store_health_failures`
+  (page on `>= close_after`, held through the outage and resolved at reopen; an
+  `increase(port49_store_health_checks_total{outcome="fail"}[10m])` above your threshold is a
+  ticket, not a page: `close_after` × `interval` is shorter than any scrape interval, so
+  nothing warns before the close); `port49_context_cache_lookups_total{outcome}`;
+  `port49_context_cache_entries`.
+- **New config refusals:** the health and cache bounds; a `context_cache:` block with no `ttl`;
+  either block in `port49-broker.yaml`.
+- **Removed:** 7e Ruling 11's probe, and its two-minute idle go-dark.
+- **The container shape.** An image (uid 65532; `port49d`, `port49-broker`, `port49`,
+  `port49-inventory`) and a compose stack in `deploy/compose`: three etcd members with
+  client-certificate auth and port49's roles, one configuration volume per component (no
+  container holds both etcd identities; the device key is port49d's alone), and a named
+  `broker.state_dir` volume per broker, 0700 and owned by 65532. Never `--scale` the broker.
+  CI brings it up, logs a device in, recreates it, and checks the session, a token minted
+  before, and `broker.state_dir` were kept.
+- **L39 (a), measured; the row stays open.** Through a published Docker port, an off-host
+  device's source is kept (modelled with a RETURN rule on the lab host), with the userland proxy
+  on and off; a device on another Docker network on the same host is masqueraded to the compose
+  gateway and refused `device_mismatch`. A connection docker-proxy itself relays is unmeasured
+  (the kernel's DNAT carried both modes). (b) and (c) are plan 12's.
+- **L41, closed** on five images (`tests/lab/results/L41-*.md`): dark in 4.8 to 5.5s, listening
+  again 3.5s after the store returns, break-glass works while dark. One thing stays recorded, not
+  measured: a device that never asks again after the listener returns.
+
+**Interfaces 7f added:** `health` (`every`, `timeout`, `closeAfter`, `openAfter`, `check`) and
+`healthState`; `storeCheck`; `passes`; `etcd.Store.PingToken`; `crypt.Cached`,
+`crypt.CacheConfig` and `Fence.Behind`; `Ledger.changed`, `rescanned`, `attach`;
+`config.EtcdHealth`, `EtcdContextCache`, `HealthSet`, `ContextCacheSet`; the four metrics
+above; the lab's `startCompose`.
+
+**Carried, for later plans:**
+- **12:**
+  - the systemd and Kubernetes shapes, each with its CI test (roadmap, "Deployment shapes");
+    the container shape's install page;
+  - L39 (b) and (c): Kubernetes behind a Service with `externalTrafficPolicy` `Cluster` and
+    `Local`, and with host networking;
+  - the alert for `port49_context_cache_lookups_total{outcome="stale"}` and
+    `port49_store_health_failures`.
+- **Unassigned follow-ups:**
+  - **The restore guard's IOS-XE lockout.** A port49d that ran across a restore refuses token
+    logins until the purge, and IOS-XE treats the `ERROR` as final, break-glass included.
+    Nothing assigned.
+  - **A device that never asks again** after the listener returns (L41, recorded not measured).
+  - **No port49d end-to-end test of the fence-behind refusal;** the crypt unit test covers it
+    (Task 8 review M-3), for the final review.
+  - **`passes` is entered only after a store gone,** never at a cold start (Task 5 review M-3).
+  - **Counters restart at each dark** (the per-run registry, 7d's known cost; Ruling 2).
+
 ## Plan 8 — Workload certificates (§19 step 8)
 
 Design §7 "Machine identity" option 2: enrollment, self-renewal, multi-identity subjects,
@@ -3720,7 +3862,8 @@ required. Supporting every shape well matters for adoption. So "supported" means
 - its own install page in plan 13's operator guide.
 
 A shape without its test is not shipped. This plan ships all three shapes and treats them as peers.
-The container shape arrives early, in 7f's Task 1. This plan adds the other two and finishes the
+The container shape arrives early, in 7f's Task 1: the image, `deploy/compose` and its CI smoke
+test (`make compose-smoke`) exist and passed in 7f. This plan adds the other two and finishes the
 container's install page:
 
 1. **Binaries under systemd.** Units for port49d and, on etcd, port49-broker.
@@ -3730,8 +3873,10 @@ container's install page:
 Every shape states the same four requirements:
 
 - **The device's source address reaches port49d unrewritten** (design §13). On Kubernetes that means
-  `externalTrafficPolicy: Local` or host networking. Under Docker, the userland proxy and port
-  publishing can rewrite it. Both are unmeasured, so neither is stated as fact until L39 closes.
+  `externalTrafficPolicy: Local` or host networking is expected to be needed (L39 (b), (c), open). Under Docker, for a device off the Docker host, a published port left it
+  unchanged with the userland proxy on and off (L39 (a), 2026-10-05; modelled: a device on the clab bridge with an iptables RETURN rule keeping
+  that bridge's own masquerade off its traffic, `tests/lab/results/L39-docker-proxy-*-arista_eos.md`). A device on another Docker network on the same
+  host is masqueraded to the compose gateway by Docker's rule for its own network (the notes' first run). Kubernetes is unmeasured until plan 12.
 - **On etcd, two processes.** port49d and port49-broker run apart (plan 7e). The memory store stays one
   process.
 - **`broker.state_dir` survives a restart** (plan 7e Rulings 12 and 18). It holds `marks.json` and

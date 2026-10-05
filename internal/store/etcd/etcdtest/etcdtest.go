@@ -20,6 +20,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -200,7 +201,11 @@ func Start(t testing.TB, o Options) *Server {
 		t.Fatal(err)
 	}
 	s.e = e
-	t.Cleanup(func() { s.e.Close() }) // a restore replaces s.e
+	t.Cleanup(func() { // a restore replaces s.e; a failed one leaves it nil
+		if s.e != nil {
+			s.e.Close()
+		}
+	})
 	scheme := "http://"
 	if o.TLS {
 		scheme = "https://"
@@ -247,10 +252,19 @@ func (s *Server) Restore(t testing.TB, from string) {
 func (s *Server) restart(t testing.TB, between func(dir string) error) {
 	t.Helper()
 	halt(s.e)
+	s.e = nil // halted: a failure below must not have the cleanup close it again
 	if err := between(filepath.Join(s.spec.dir, s.spec.name)); err != nil {
 		t.Fatal(err)
 	}
-	e, err := member(s.spec)
+	// The halted member's ports can take a moment to free.
+	var e *embed.Etcd
+	var err error
+	for i := 0; i < 5; i++ {
+		if e, err = member(s.spec); err == nil || !(errors.Is(err, syscall.EADDRINUSE) || strings.Contains(err.Error(), "address already in use")) {
+			break
+		}
+		time.Sleep(time.Duration(i+1) * 200 * time.Millisecond)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -433,6 +447,24 @@ func startCluster(t testing.TB) (*Cluster, error) {
 
 // Stop stops member i; stopping two of three loses the quorum.
 func (c *Cluster) Stop(i int) { c.once[i].Do(func() { c.members[i].Close() }) }
+
+// Kill stops member i at once, as a crash does: Stop's Close hands the
+// leadership to a peer first, which an election test must not have.
+func (c *Cluster) Kill(i int) { c.once[i].Do(func() { halt(c.members[i]) }) }
+
+// Leader is the index of the member that leads now.
+func (c *Cluster) Leader(t testing.TB) int {
+	t.Helper()
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+		for i, m := range c.members {
+			if m.Server.Leader() == m.Server.MemberID() {
+				return i
+			}
+		}
+	}
+	t.Fatal("no member leads")
+	return -1
+}
 
 // freePort is a var so a test can hand StartCluster a port already taken.
 var freePort = func(t testing.TB) string {

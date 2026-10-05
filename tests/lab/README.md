@@ -371,3 +371,49 @@ all. Nothing in the launcher log said anything was wrong; it simply stopped.
 Write `--` for an em dash and `'` for a curly quote. The check costs nothing and the failure
 it prevents costs a ten-minute boot and a results note about a device that was never
 configured.
+
+## The compose mode (plan 7f)
+
+`l.startCompose(t)` (tests/lab/compose_test.go) runs the lab on `deploy/compose` instead of
+host processes: port49d, port49-broker and a three-member etcd as the compose project
+`port49lab`, with `tests/lab/compose/lab.yaml` as the overlay. It stops the standing host
+port49d first and puts it back at cleanup, and it needs Docker Compose v2.24.4 or later (the
+overlay's `!override`).
+
+It publishes port49d's TACACS+ port on `172.100.100.1:49`, the clab management bridge's
+gateway, where every topology's devices already send it; port49d's metrics on
+`127.0.0.1:9049`; the broker on `127.0.0.1:8449` (the slice's `sliceBrokerURL`, mapped to the
+container's `:8443`) and its metrics on `127.0.0.1:9050`. The topology must be deployed first,
+as the host harness needs it for the bridge address.
+
+Its files are under `tests/lab/logs/compose-<platform>/` (git-ignored): `config/` and `local/`
+(the YAML files and the PKI and env files the stack reads, written by `composeLabFiles` and
+`testpki.WriteCompose`), `compose.log` (every command the harness ran, with its output),
+`decisions-<platform>.jsonl` and `port49d-<platform>.log` (port49d's stdout and stderr, followed
+with `docker logs -f` into `l.logPath` and `l.errPath`, so the host harness's `mark`,
+`waitForRecords` and `errLinesSince` read them unchanged), and `broker.log` and `broker.err`.
+
+`composeStack` carries what a test does to the stack: `HangStore()` is `docker compose pause`
+on the three etcd members (the store stops answering without a reset) and `ReleaseStore()`
+unpauses them; `StopDaemon()` and `StartDaemon()` stop and start port49d's container, the
+follower resuming from the stop's time; `Revoke(args...)` runs `port49 revoke` on the broker's
+admin socket inside its container; `ProxyMode()` says whether Docker's userland proxy serves
+the published port.
+
+New register rows run on it. Rows already closed keep their re-checks on the host harness
+(`startSplit` and the standing daemon), so a closed row's note stays comparable.
+
+What a published port does to a device's source address is L39 (a)
+(`results/L39-docker-proxy-*-arista_eos.md`). The overlay's inventory lists the compose gateway
+as the device `l39_gateway`, so a rewritten source is recorded rather than refused.
+
+`startCompose` also inserts, with `sudo -n`, `iptables -t nat -I POSTROUTING 1 -s
+172.100.100.0/24 -d 172.30.49.0/24 -j RETURN`, and deletes it at cleanup (both are in
+`compose.log`, with the POSTROUTING rules in force once the stack is up). Stale copies of the rule
+from a killed run are purged before the insert; after a run, `iptables -t nat -S POSTROUTING` must
+show no `172.30.49.0/24 -j RETURN`. The clab management network is itself a
+Docker bridge network, so Docker masquerades everything from 172.100.100.0/24 that leaves by
+another interface: without the rule a device's packet DNAT'd to the compose bridge reaches
+port49d from the compose gateway, which is the lab's own rule at work and not what a device
+off the host would meet. The rule models an off-host device. A first L39 run without it
+(5ee1137) saw only the gateway and is recorded as invalid in the notes.

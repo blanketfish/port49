@@ -1,0 +1,12 @@
+# The lab's overlay on deploy/compose (plan 7f, Task 2): port49d on the
+# clab bridge's gateway, where every topology's devices send TACACS+, and
+# the broker on the slice's URL (sliceBrokerURL). Compose v2.24.4+ (!override).
+services:
+  port49d:
+    ports: !override
+      - "172.100.100.1:49:49"
+      - "127.0.0.1:9049:9049"
+  port49-broker:
+    ports: !override
+      - "127.0.0.1:8449:8443"
+      - "127.0.0.1:9050:9050"

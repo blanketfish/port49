@@ -200,9 +200,20 @@ func (s *Store) Close() error {
 }
 
 // Ping is one linearizable read on the context pool: nil when etcd's
-// quorum answers.
+// quorum answers. It requires a leader (plan 7f, Ruling 3): a member that
+// has none fails at once and the client retries another, so one isolated
+// member does not cost a check its whole timeout.
 func (s *Store) Ping(ctx context.Context) error {
-	_, err := s.ctxKV.Get(ctx, s.k.meta("ping"))
+	_, err := s.ctxKV.Get(clientv3.WithRequireLeader(ctx), s.k.meta("ping"))
+	return unavailable(err)
+}
+
+// PingToken is Ping on the token pool's connection (plan 7f, Ruling 1):
+// port49d's health check reads on both, so a store that answers one and
+// not the other is not healthy. It requires a leader as Ping does. Its
+// response does not raise Seen: no context is read on this connection.
+func (s *Store) PingToken(ctx context.Context) error {
+	_, err := s.tok.Get(clientv3.WithRequireLeader(ctx), s.k.meta("ping"))
 	return unavailable(err)
 }
 
