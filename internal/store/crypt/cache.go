@@ -33,8 +33,9 @@ type CacheConfig struct {
 // session authorization alone: a login, an enable, accounting and a token
 // redemption never read through it.
 //
-// A hit is an entry younger than TTL, read while the context feed is up,
-// whose revision the ledger still knows as the latest at its key. An
+// A hit is an entry younger than TTL, read while the context feed is up
+// and not behind a read (Fence.Behind), whose revision the ledger still
+// knows as the latest at its key. An
 // entry is evicted by a write through this cache, by every change the
 // feed brings (Ledger.changed), by a rescan (Ledger.rescanned) and by not
 // found; a read that raced any eviction is not cached (gen).
