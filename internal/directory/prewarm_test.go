@@ -110,3 +110,30 @@ func TestPrewarmInAnOutage(t *testing.T) {
 		t.Fatalf("last success = %v", v)
 	}
 }
+
+// A member an earlier group already counted never counts again: with a
+// limit of two, {alice} and {alice, dave} pre-warm both.
+func TestPrewarmCountsDistinctUsersOnly(t *testing.T) {
+	w := newWorld(t)
+	w.r.Cfg.PrewarmMax = 2
+	w.dir.onBase(gMid, "(objectClass=*)", memberEntry(alice))
+	w.dir.onBase(gOnCall, "(objectClass=*)", memberEntry(alice, dave))
+	addUser(w, alice, "alice", grp(gOnCall, "netops-oncall"))
+	addUser(w, dave, "dave")
+	rep, err := w.r.Prewarm(context.Background(), []string{gMid, gOnCall})
+	if err != nil || rep.Principals != 2 || rep.Capped {
+		t.Fatalf("%+v %v", rep, err)
+	}
+}
+
+// A name that matches no group, or two, is said.
+func TestPrewarmSaysAGroupNameThatMatchesNoOne(t *testing.T) {
+	w := newWorld(t)
+	w.r.Cfg.PrewarmMax = 2
+	if _, err := w.r.Prewarm(context.Background(), []string{"no-such-group"}); err != nil {
+		t.Fatal(err)
+	}
+	if !w.say.has("no-such-group") {
+		t.Fatalf("%v", w.say.l)
+	}
+}

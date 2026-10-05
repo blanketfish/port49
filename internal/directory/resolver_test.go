@@ -6,6 +6,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -244,6 +245,13 @@ func TestAPrincipalTwoEntriesHoldIsRefusedAtBind(t *testing.T) {
 	if _, err := w.r.Map(context.Background(), aliceCert(t)); !errors.Is(err, ErrAmbiguous) {
 		t.Fatalf("%v", err)
 	}
+	if m, _ := w.st.GetMembership(context.Background(), alicePrincipal); !m.Refused {
+		t.Fatalf("the principal's refusal was not stored: %+v", m)
+	}
+	w.down()
+	if _, err := w.r.Map(context.Background(), aliceCert(t)); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("a bind in the outage: %v, want ErrUnavailable", err)
+	}
 }
 
 // A rotated bind password is the server not answering (pre-flight I-2):
@@ -370,11 +378,8 @@ func TestAVerificationIsOneConnectionAndNamesTheServerByLabel(t *testing.T) {
 	if err != nil || a.Server != "dc-01:636" {
 		t.Fatalf("%+v %v, want server dc-01:636", a, err)
 	}
-	w.srv.mu.Lock()
-	dials, conns := w.srv.dials[dc01], len(w.srv.conns[dc01])
-	w.srv.mu.Unlock()
-	if dials != 1 || conns != 1 {
-		t.Fatalf("%d dials, %d connections for one bind, want 1", dials, conns)
+	if v := testutil.ToFloat64(w.r.M.DirectoryQueries.WithLabelValues("dc-01:636", "ok")); v != 1 {
+		t.Fatalf("%v pool queries for one bind, want 1 (one Do)", v)
 	}
 	if len(w.dir.calls) < 4 {
 		t.Fatalf("%d searches: the mapping and both uniqueness searches did not all run", len(w.dir.calls))
@@ -454,9 +459,8 @@ func TestAForgottenPrincipalHasNoGrace(t *testing.T) {
 	}
 }
 
-// A principal's refusal and an outage are different: a refused principal
-// never reaches grace, but a mapped-fine certificate whose servers all
-// time out does, with the metric saying so.
+// Each outcome is counted: a refusal is unmapped and never grace, an
+// outage is grace or unavailable.
 func TestLookupOutcomesAreCounted(t *testing.T) {
 	w := newWorld(t)
 	if _, err := w.r.Map(context.Background(), aliceCert(t)); err != nil {
@@ -466,9 +470,99 @@ func TestLookupOutcomesAreCounted(t *testing.T) {
 	if _, err := w.r.Current(context.Background(), alicePrincipal); err != nil {
 		t.Fatal(err)
 	}
-	for outcome, want := range map[string]float64{"fresh": 1, "grace": 1} {
+	w.dir.on("(&(objectClass=person)(userPrincipalName=alice@corp.example.com))")
+	w.srv.setDown(dc01, false)
+	w.clk.Add(time.Minute)
+	if _, err := w.r.Verify(context.Background(), alicePrincipal); !errors.Is(err, ErrUnmapped) {
+		t.Fatal(err)
+	}
+	w.down()
+	if _, err := w.r.Current(context.Background(), alicePrincipal); !errors.Is(err, ErrUnavailable) {
+		t.Fatal(err)
+	}
+	for outcome, want := range map[string]float64{"fresh": 1, "grace": 1, "unmapped": 1, "unavailable": 1} {
 		if v := testutil.ToFloat64(w.r.M.DirectoryLookups.WithLabelValues(outcome)); v != want {
 			t.Errorf("%s = %v, want %v", outcome, v, want)
 		}
+	}
+}
+
+// getFails makes the store's membership reads fail, as a timeout, an etcd
+// hiccup or a record that will not open does.
+type getFails struct {
+	store.Store
+	fail atomic.Bool
+}
+
+func (g *getFails) GetMembership(ctx context.Context, p string) (store.Membership, error) {
+	if g.fail.Load() {
+		return store.Membership{}, errors.New("store: read failed")
+	}
+	return g.Store.GetMembership(ctx, p)
+}
+
+// A refusal written while the store cannot be read keeps the principal
+// held: its pin is one no entry matches, so mallory, who then sets her UPN
+// to alice's, never becomes alice, and `port49 directory forget` frees it.
+func TestARefusalWithAnUnreadablePinStillHoldsThePrincipal(t *testing.T) {
+	w := newWorld(t)
+	g := &getFails{Store: w.st}
+	w.r.Store = g
+	if _, err := w.r.Map(context.Background(), aliceCert(t)); err != nil {
+		t.Fatal(err)
+	}
+	w.clk.Add(time.Minute)
+	w.dir.on("(&(objectClass=person)(userPrincipalName=alice@corp.example.com))") // deleted
+	g.fail.Store(true)
+	if _, err := w.r.Verify(context.Background(), alicePrincipal); !errors.Is(err, ErrUnmapped) {
+		t.Fatalf("%v", err)
+	}
+	g.fail.Store(false)
+	if m, _ := w.st.GetMembership(context.Background(), alicePrincipal); !m.Refused || m.EntryID == "" {
+		t.Fatalf("the refusal: %+v, want refused with a pin", m)
+	}
+	if !w.say.has("port49 directory forget "+alicePrincipal) || !w.say.has("could not be read") {
+		t.Fatalf("%v", w.say.l)
+	}
+	w.clk.Add(time.Minute)
+	mallory := entry("CN=Mallory,OU=Staff,DC=corp", map[string][]string{"userPrincipalName": {"alice@corp.example.com"},
+		"sAMAccountName": {"mallory"}, "mail": {"mallory@corp.example.com"}})
+	w.dir.on("(&(objectClass=person)(mail=mallory@corp.example.com))", mallory)
+	w.dir.on("(userPrincipalName=alice@corp.example.com)", mallory)
+	w.dir.on("(sAMAccountName=mallory)", mallory)
+	mcert := leaf(t, func(c *x509.Certificate) { c.EmailAddresses = []string{"mallory@corp.example.com"} })
+	if a, err := w.r.Map(context.Background(), mcert); !errors.Is(err, ErrUnmapped) {
+		t.Fatalf("mallory bound as %+v %v", a.Principal, err)
+	}
+	if _, err := w.r.Current(context.Background(), alicePrincipal); !errors.Is(err, ErrUnmapped) {
+		t.Fatalf("alice is held refused: %v", err)
+	}
+	if _, err := w.st.DeleteMembership(context.Background(), alicePrincipal); err != nil {
+		t.Fatal(err)
+	}
+	if a, err := w.r.Map(context.Background(), mcert); err != nil || a.Principal != alicePrincipal {
+		t.Fatalf("after forget: %+v %v", a, err)
+	}
+}
+
+// State from a server that faulted never reaches the refusal a later
+// server's answer causes: dc-01 maps alice and faults in the principal's
+// uniqueness search, dc-02 finds the certificate ambiguous; only the
+// certificate's key is refused, never user:alice@.
+func TestAFailedOverQueryRefusesOnTheLaterAnswerAlone(t *testing.T) {
+	const dc02 = "ldaps://dc-02"
+	w := newWorld(t)
+	w.srv.dirs[dc02] = newFakeDir()
+	w.r.Cfg.Servers = []Server{{URI: dc01, Priority: 100}, {URI: dc02, Priority: 50}}
+	w.r.Pool = NewPool(w.r.Cfg, w.srv.dial, noCheck, w.clk.Now, w.r.M, w.say.say)
+	w.dir.err["(userPrincipalName=alice@corp.example.com)"] = ldap.NewError(ldap.ErrorNetwork, errors.New("reset"))
+	a := entry(alice, map[string][]string{"userPrincipalName": {"alice@corp.example.com"}, "mail": {"alice@corp.example.com"}})
+	b := entry("CN=Alice2,OU=Staff,DC=corp", map[string][]string{"mail": {"alice@corp.example.com"}})
+	w.srv.dirs[dc02].on("(&(objectClass=person)(mail=alice@corp.example.com))", a, b)
+	if _, err := w.r.Map(context.Background(), aliceCert(t)); !errors.Is(err, ErrAmbiguous) {
+		t.Fatalf("%v", err)
+	}
+	if m, err := w.st.GetMembership(context.Background(), alicePrincipal); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("dc-01's partial answer wrote a refusal for alice: %+v %v", m, err)
 	}
 }

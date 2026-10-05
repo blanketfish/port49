@@ -40,7 +40,10 @@ func (r *Resolver) Prewarm(ctx context.Context, groups []string) (PrewarmReport,
 				return err
 			}
 			if res == nil || len(res.Entries) != 1 {
-				continue // none, or shared: it matches no one (Ruling 7)
+				// none, or shared: it matches no one (Ruling 7)
+				r.sayOnce("prewarmname:"+g, time.Hour, "directory: pre-warm: group name %q matched no group, or two or "+
+					"more, under %s; it is skipped (use its DN)", printsafe.Line(g, 200), r.Cfg.GroupsBaseDN)
+				continue
 			}
 			dns = append(dns, res.Entries[0].DN)
 		}
@@ -57,7 +60,7 @@ func (r *Resolver) Prewarm(ctx context.Context, groups []string) (PrewarmReport,
 		var capped, cut bool
 		if _, err := r.Pool.Do(ctx, func(s Searcher) error {
 			var err error
-			members, capped, cut, err = r.Cfg.membersOf(s, g, r.Cfg.PrewarmMax-len(users))
+			members, capped, cut, err = r.Cfg.membersOf(s, g, r.Cfg.PrewarmMax)
 			return err
 		}); err != nil {
 			return rep, err
@@ -67,6 +70,9 @@ func (r *Resolver) Prewarm(ctx context.Context, groups []string) (PrewarmReport,
 				seen[k] = true
 				users = append(users, m)
 			}
+		}
+		if len(users) > r.Cfg.PrewarmMax { // distinct users only: each walk is bounded by the limit alone
+			users, capped = users[:r.Cfg.PrewarmMax], true
 		}
 		if cut {
 			// A walk that ended at max_depth or the node bound lists short;

@@ -167,6 +167,9 @@ func (r *Resolver) verify(ctx context.Context, q lookup) (Answer, error) {
 	var keys []string
 	refuse := ""
 	srv, err := r.Pool.Do(context.WithoutCancel(ctx), func(s Searcher) error {
+		// Pool.Do reruns this on the next server after a fault: nothing a
+		// faulted server's partial answer set may reach what follows.
+		id, g, keys, refuse = Identity{}, Groups{}, nil, ""
 		e, err := q.find(s)
 		if err != nil {
 			return err
@@ -240,12 +243,12 @@ func (r *Resolver) verify(ctx context.Context, q lookup) (Answer, error) {
 	if len(g.Ambiguous) > 0 {
 		r.sayOnce("names:"+strings.Join(g.Ambiguous, ","), time.Hour, "directory: group name(s) %s are shared by "+
 			"two or more groups under %s; a subject naming one matches no one (use its DN)",
-			strings.Join(g.Ambiguous, ", "), r.Cfg.GroupsBaseDN)
+			printsafe.Line(strings.Join(g.Ambiguous, ", "), 400), r.Cfg.GroupsBaseDN)
 	}
 	if len(g.Unfound) > 0 {
 		r.sayOnce("unfound:"+strings.Join(g.Unfound, ","), time.Hour, "directory: group name(s) %s matched no group "+
 			"under %s by %s when checked for uniqueness; a subject naming one matches no one until it does",
-			strings.Join(g.Unfound, ", "), r.Cfg.GroupsBaseDN, r.Cfg.GroupNameAttribute)
+			printsafe.Line(strings.Join(g.Unfound, ", "), 400), r.Cfg.GroupsBaseDN, r.Cfg.GroupNameAttribute)
 	}
 	if q.mapKey != "" && !slices.Contains(keys, q.mapKey) {
 		keys = append(keys, q.mapKey) // the key the bind searched with is indexed too (pre-flight M-2)
@@ -288,6 +291,10 @@ func (r *Resolver) pinned(ctx context.Context, id Identity) error {
 		printsafe.Line(id.DN, 200), printsafe.Line(id.EntryID, 120), r.Cfg.PrincipalAttribute, id.Principal)
 }
 
+// unreadPin is the entry id of a refusal whose held pin could not be read:
+// no entry's id is this, so every claimant of the principal is refused.
+const unreadPin = "unread:"
+
 // refuse stores the directory's "no" (pre-flight C-1) for q.want, for
 // also (a principal the entry gave whose value or username another entry
 // holds), and for q.mapKey, so grace never answers yes in an outage that
@@ -308,10 +315,21 @@ func (r *Resolver) refuse(ctx context.Context, q lookup, also string, id Identit
 			continue
 		}
 		pin := ""
-		if held, err := r.Store.GetMembership(sctx, p); err == nil {
+		switch held, err := r.Store.GetMembership(sctx, p); {
+		case err == nil:
 			pin = held.EntryID
-		} else if p == id.Principal {
-			pin = id.EntryID
+		case errors.Is(err, store.ErrNotFound):
+			if p == id.Principal {
+				pin = id.EntryID
+			}
+		default:
+			// The pin the record held cannot be read, and a refusal with no pin
+			// frees the principal for the next claimant. Hold it on a pin no
+			// entry matches until an operator forgets it.
+			pin = unreadPin
+			r.sayOnce("unreadpin:"+p, time.Hour, "directory: %s: the pin it was held to could not be read (%v); "+
+				"the principal is held refused to every entry; once the store is healthy, `port49 directory forget %s` "+
+				"against the broker's admin_socket frees it", p, err, p)
 		}
 		if err := r.Store.PutMembership(sctx, store.Membership{Principal: p, EntryID: pin, Refused: true,
 			VerifiedAt: now}, r.TTL()); err != nil {
