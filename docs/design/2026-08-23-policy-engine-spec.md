@@ -6996,7 +6996,10 @@ sealed write sequence every process follows, and a ledger record the daemon cann
   through the store on the broker's identity, with no API and no hold, in decision 32's order.
   With no broker host, a mark written as etcd's root under `rv/` is followed by every port49d,
   which denies the session's next command; tokens are deleted only by the next revocation that
-  reaches them.
+  reaches them. The offline tool also stands the mark in that host's `broker.state_dir/marks.json`
+  (and drops a lifted one), run as the user port49-broker runs as; the etcdctl path leaves no
+  copy, so after an etcd restore every revocation made with every broker down is revoked again
+  while every broker is stopped (design §13).
 
 (§5.1.3, §5.1.4, §5.6, §5.7, §12, §14, §15; design document §6, §8, §12, §13, §15, §17,
 §19)

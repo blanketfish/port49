@@ -3461,8 +3461,8 @@ path to IOS-XE devices. Plan 7f replaces the probe, and carries the gap.
   first runner with no `witness.json` found `meta/judged` intact because runbook step 3 was
   skipped, so it purged nothing and wrote no `meta/purged`), there are two ways out: delete
   the restored tokens as etcd's root (`etcdctl del --prefix <prefix>v1/t/`) and then restart
-  this port49d; or delete `meta/judged` and restart a port49-broker, whose takeover purges
-  and writes `meta/purged`. **Never restart the port49d before the restored tokens are
+  this port49d; or stop every port49-broker, delete `meta/judged`, and start them, so a takeover
+  purges and writes `meta/purged`. **Never restart the port49d before the restored tokens are
   deleted:** a restart forgets the drop and redeems them. A port49d started after the
   restore cannot tell; the runbook's token delete covers it. Token logins refused
   `store_unavailable` with the gauge at 0 and `restore_read` errors rising mean port49d cannot
@@ -3476,16 +3476,19 @@ path to IOS-XE devices. Plan 7f replaces the probe, and carries the gap.
      token redeemed since the snapshot, and a port49d that reaches the store first would redeem
      it again), then `etcdctl del <prefix>v1/meta/judged` and `etcdctl del
      <prefix>v1/meta/judged_bundle`; only then restart the members on their usual client URLs;
-  4. start the brokers, one whose `broker.state_dir` survived first: a broker whose
+  4. while every broker is still stopped, revoke again every revocation made with every
+     broker down since the snapshot: `sudo -u <port49-broker's user> port49-broker revoke
+     --offline --config … --principal <p>` (as that user, never root: a state directory the
+     broker's user owns is refused to root, and it is never to be chowned to root), or
+     `etcdctl put` as root. No broker saw it, so no copy holds it. The offline tool also
+     stands its mark in that host's `broker.state_dir/marks.json`; `etcdctl put` leaves no
+     copy. Revoked before any broker starts, a broker without the mark never mints for the
+     principal, and a port49d restarted at any later step follows the mark from the store;
+  5. start the brokers, one whose `broker.state_dir` survived first: a broker whose
      `state_dir` was lost or is new, started first after a `--bump-revision` restore, means a
      forgotten `etcdctl del` is never caught.
   The first runner puts back the marks the restore lost, says how many (naming up to 20), and
   purges the unspent tokens. Lift again anything it put back that was lifted on purpose.
-  Then revoke again every revocation made with every broker down since the snapshot
-  (`port49-broker revoke --offline`, or `etcdctl put` as root): no broker saw it, so no copy
-  holds it. The offline tool stands its mark in that host's `broker.state_dir/marks.json`, so a
-  broker started there puts it back; `etcdctl put` leaves no copy. Without it, a port49d
-  restart after the restore forgets the mark and the principal mints again with no line.
 - **A forgotten `etcdctl del` still purges.** Each broker records the latest `meta/witness` it
   saw in `broker.state_dir/witness.json`. A runner that finds the store's witness below it says
   `the store was restored from a snapshot`, naming both revisions, and purges every unspent
@@ -3555,13 +3558,14 @@ edit changed, including tokens minted under the new policy. Availability only.
 admin_socket>`, on the broker's host, container or pod. `port49 revoke`'s default stays
 port49d's socket (OR-1); on etcd a revocation sent there says which socket to use and exits 1.
 port49d's socket answers `keys diagnose`; the broker's says to use port49d's. With every
-broker down: `port49-broker revoke --offline --config /etc/port49/port49-broker.yaml
---principal <p>` on a broker host; with none, as etcd's root `etcdctl put
+broker down: `sudo -u <port49-broker's user> port49-broker revoke --offline --config
+/etc/port49/port49-broker.yaml --principal <p>` on a broker host (as that user, so it can write
+the state directory it owns; never chown that directory to root); with none, as etcd's root `etcdctl put
 <prefix>v1/rv/principal/<p> '{"kind":"principal","key":"<p>","at":"<now>","origin":"etcdctl"}'`.
 Either way every port49d denies the session's next command. The offline tool also stands the
 mark in that host's `broker.state_dir/marks.json` (and drops a lifted one), and says so; the
 etcdctl path leaves no copy, and an etcd restore from before either loses it until it is revoked
-again (runbook, above). A broker that is busy says `or stop
+again, before any broker starts (runbook, above). A broker that is busy says `or stop
 every port49d`, never port49-broker.
 
 *Other.*
