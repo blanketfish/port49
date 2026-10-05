@@ -40,10 +40,13 @@ type membershipRec struct {
 // that pointed it there, so a later one wins. Principal "" is a key no
 // grace bind may use: ambiguous (Claimants names every principal that
 // claimed it; a read answers the one still listing it, if exactly one) or
-// refused (no claimants).
+// Refused, which keeps the claimants it replaced and any claim older than
+// it, so a later claim cannot take the key while another live record still
+// lists it.
 type membershipKeyRec struct {
 	Principal  string    `json:"principal"`
 	Claimants  []string  `json:"claimants,omitempty"`
+	Refused    bool      `json:"refused,omitempty"`
 	VerifiedAt time.Time `json:"verified_at"`
 	ExpiresAt  time.Time `json:"expires_at"`
 }
@@ -108,6 +111,16 @@ func (s *Store) claimKey(ctx context.Context, key, principal string, at, exp, no
 		func(r membershipKeyRec) bool { return r.ExpiresAt.After(now) },
 		func(r *membershipKeyRec, found bool) (bool, time.Time, bool, error) {
 			if found {
+				if r.Refused && !r.VerifiedAt.Before(at) {
+					// The refusal stands, and remembers this claimant too.
+					if slices.Contains(r.Claimants, principal) {
+						return false, time.Time{}, false, nil
+					}
+					r.Claimants = append(r.Claimants, principal)
+					sort.Strings(r.Claimants)
+					r.ExpiresAt = laterOf(r.ExpiresAt, exp)
+					return true, r.ExpiresAt, false, nil
+				}
 				var others []string
 				for _, c := range append([]string{r.Principal}, r.Claimants...) {
 					if c == "" || c == principal || slices.Contains(others, c) {
@@ -124,11 +137,11 @@ func (s *Store) claimKey(ctx context.Context, key, principal string, at, exp, no
 				if len(others) > 0 {
 					others = append(others, principal)
 					sort.Strings(others)
-					*r = membershipKeyRec{Claimants: others, VerifiedAt: laterOf(r.VerifiedAt, at), ExpiresAt: exp}
-					return true, exp, false, nil
+					*r = membershipKeyRec{Claimants: others, VerifiedAt: laterOf(r.VerifiedAt, at),
+						ExpiresAt: laterOf(r.ExpiresAt, exp)}
+					return true, r.ExpiresAt, false, nil
 				}
-				refusal := r.Principal == "" && len(r.Claimants) == 0
-				if (refusal && !r.VerifiedAt.Before(at)) || (r.Principal == principal && r.VerifiedAt.After(at)) {
+				if r.Principal == principal && r.VerifiedAt.After(at) {
 					return false, time.Time{}, false, nil
 				}
 				at = laterOf(r.VerifiedAt, at)
@@ -157,8 +170,17 @@ func (s *Store) RefuseMapKeys(ctx context.Context, mapKeys []string, at time.Tim
 				if found && r.VerifiedAt.After(at) {
 					return false, time.Time{}, false, nil
 				}
-				*r = membershipKeyRec{VerifiedAt: at, ExpiresAt: exp}
-				return true, exp, false, nil
+				refused := membershipKeyRec{Refused: true, VerifiedAt: at, ExpiresAt: exp}
+				if found {
+					refused.Claimants = slices.Clone(r.Claimants)
+					if r.Principal != "" {
+						refused.Claimants = append(refused.Claimants, r.Principal)
+						sort.Strings(refused.Claimants)
+					}
+					refused.ExpiresAt = laterOf(r.ExpiresAt, exp)
+				}
+				*r = refused
+				return true, refused.ExpiresAt, false, nil
 			}); err != nil {
 			return err
 		}
@@ -241,6 +263,9 @@ func (s *Store) MembershipByKey(ctx context.Context, mapKey string) (store.Membe
 	var kr membershipKeyRec
 	if err := s.getLive(ctx, s.k.membershipKey(mapKey), &kr, func() bool { return kr.ExpiresAt.After(s.now()) }); err != nil {
 		return store.Membership{}, err
+	}
+	if kr.Refused {
+		return store.Membership{}, store.ErrNotFound
 	}
 	cands := kr.Claimants
 	if kr.Principal != "" {

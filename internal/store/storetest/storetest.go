@@ -1075,6 +1075,7 @@ func Run(t *testing.T, b Backend) {
 		{"MembershipKeyClaimedInEitherOrderIsAmbiguous", MembershipKeyClaimedInEitherOrderIsAmbiguous},
 		{"MembershipAmbiguityHealsToTheSoleClaimant", MembershipAmbiguityHealsToTheSoleClaimant},
 		{"MembershipTieKeepsTheRefusal", MembershipTieKeepsTheRefusal},
+		{"MembershipRefusedKeyKeepsItsClaimants", MembershipRefusedKeyKeepsItsClaimants},
 		{"MembershipForgetTombstoneOutlivesTheRecord", MembershipForgetTombstoneOutlivesTheRecord},
 	} {
 		p := p

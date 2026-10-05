@@ -432,3 +432,79 @@ func MembershipForgetTombstoneOutlivesTheRecord(t *testing.T, b Backend) {
 		t.Fatalf("a verification from before the forget wrote past the old record's ttl: %+v %v", got, err)
 	}
 }
+
+// MembershipRefusedKeyKeepsItsClaimants: a refusal of a key does not forget
+// who claimed it. A principal claiming the key afterwards, while another's
+// live record still lists it, leaves it ambiguous, never the later
+// claimant's; a claim older than the refusal is remembered too; and the
+// marker lives as long as the record that claimed it (the directory said
+// identity_ambiguous for the key).
+func MembershipRefusedKeyKeepsItsClaimants(t *testing.T, b Backend) {
+	ctx := context.Background()
+	var mu sync.Mutex
+	now := t0
+	s := b.New(t, func() time.Time { mu.Lock(); defer mu.Unlock(); return now })
+	advance := func(d time.Duration) { mu.Lock(); now = now.Add(d); mu.Unlock() }
+	put := func(m store.Membership, ttl time.Duration) {
+		t.Helper()
+		if err := s.PutMembership(ctx, m, ttl); err != nil {
+			t.Fatal(err)
+		}
+	}
+	byKeyIs := func(k, want, what string) {
+		t.Helper()
+		m, err := s.MembershipByKey(ctx, k)
+		switch {
+		case want == "" && !errors.Is(err, store.ErrNotFound):
+			t.Fatalf("%s: answered %q %v, want ErrNotFound", what, m.Principal, err)
+		case want != "" && (err != nil || m.Principal != want):
+			t.Fatalf("%s: %q %v, want %q", what, m.Principal, err, want)
+		}
+	}
+	const alicep, bobp = "user:alice@corp.example.com", "user:bob@corp.example.com"
+
+	// A claim after the refusal.
+	k := store.MapKey("san_email", "shared@corp.example.com")
+	alice := store.Membership{Principal: alicep, Username: "alice", MapKeys: []string{k}, VerifiedAt: t0.Add(-2 * time.Minute)}
+	bob := store.Membership{Principal: bobp, Username: "bob", MapKeys: []string{k}, VerifiedAt: t0}
+	put(alice, time.Hour)
+	if err := s.RefuseMapKeys(ctx, []string{k}, t0.Add(-time.Minute), time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	byKeyIs(k, "", "a refused key")
+	put(bob, time.Hour)
+	byKeyIs(k, "", "bob claims a refused key alice's live record still lists")
+	bob.MapKeys, bob.VerifiedAt = nil, t0.Add(time.Second)
+	put(bob, time.Hour)
+	byKeyIs(k, alicep, "bob stopped listing it")
+
+	// A claim older than the refusal arrives after it.
+	k2 := store.MapKey("san_email", "other@corp.example.com")
+	alice2 := store.Membership{Principal: alicep, Username: "alice", MapKeys: []string{k2}, VerifiedAt: t0.Add(2 * time.Second)}
+	bob2 := store.Membership{Principal: bobp, Username: "bob", MapKeys: []string{k2}, VerifiedAt: t0.Add(2 * time.Second)}
+	if err := s.RefuseMapKeys(ctx, []string{k2}, t0.Add(10*time.Second), time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	put(bob2, time.Hour) // older than the refusal: it stands
+	byKeyIs(k2, "", "a claim older than the refusal")
+	alice2.VerifiedAt = t0.Add(20 * time.Second) // alice claims after it
+	put(alice2, time.Hour)
+	byKeyIs(k2, "", "alice claims after a refusal bob's record still lists the key under")
+	bob2.MapKeys, bob2.VerifiedAt = nil, t0.Add(30*time.Second)
+	put(bob2, time.Hour)
+	byKeyIs(k2, alicep, "bob stopped listing it")
+
+	// The marker outlives a shorter refusal while the claimant's record lives.
+	k3 := store.MapKey("san_email", "third@corp.example.com")
+	carol := store.Membership{Principal: "user:carol@corp.example.com", Username: "carol", MapKeys: []string{k3},
+		VerifiedAt: t0.Add(time.Minute)}
+	put(carol, time.Hour)
+	if err := s.RefuseMapKeys(ctx, []string{k3}, t0.Add(2*time.Minute), time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	advance(5 * time.Minute)
+	dave := store.Membership{Principal: "user:dave@corp.example.com", Username: "dave", MapKeys: []string{k3},
+		VerifiedAt: now}
+	put(dave, time.Hour)
+	byKeyIs(k3, "", "dave claims after a short refusal expired, carol's record still lists the key")
+}
