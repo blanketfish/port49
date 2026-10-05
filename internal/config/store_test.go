@@ -293,3 +293,83 @@ func TestAStoreIdentityNamedRootIsRefused(t *testing.T) {
 		t.Errorf("LoadBroker, the broker's: %v", err)
 	}
 }
+
+// store.etcd.health takes its defaults, and the cache is off until its
+// ttl is set (plan 7f, Rulings 3, 5): the design asks for the TTL as
+// explicit configuration, so port49 never picks one.
+func TestHealthDefaultsAndTheCacheIsOffUntilSet(t *testing.T) {
+	s, err := checkStoreShape(etcdYAML(storeFiles(t)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h := s.Etcd.Health; h.Interval != time.Second || h.CloseAfter != 5 || h.OpenAfter != 3 {
+		t.Fatalf("health %+v", h)
+	}
+	if c := s.Etcd.ContextCache; c.TTL != 0 || c.MaxEntries != 65536 {
+		t.Fatalf("context_cache %+v", c)
+	}
+	y := etcdYAML(storeFiles(t))
+	y.Etcd.ContextCacheSet = &EtcdContextCache{TTL: 2 * time.Second}
+	y.Etcd.HealthSet = &EtcdHealth{Interval: 500 * time.Millisecond, CloseAfter: 3}
+	s, err = checkStoreShape(y)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Etcd.ContextCache.TTL != 2*time.Second || s.Etcd.ContextCache.MaxEntries != 65536 ||
+		s.Etcd.Health.Interval != 500*time.Millisecond || s.Etcd.Health.CloseAfter != 3 || s.Etcd.Health.OpenAfter != 3 {
+		t.Fatalf("%+v %+v", s.Etcd.Health, s.Etcd.ContextCache)
+	}
+}
+
+func TestHealthAndCacheBounds(t *testing.T) {
+	dir := storeFiles(t)
+	for _, c := range []struct {
+		name string
+		edit func(*storeYAML)
+		want string
+	}{
+		{"an interval too short", func(s *storeYAML) { s.Etcd.HealthSet = &EtcdHealth{Interval: 100 * time.Millisecond} },
+			"store.etcd.health.interval 100ms: must be 200ms to 10s"},
+		{"an interval below the call timeout", func(s *storeYAML) {
+			s.Etcd.CallTimeout = time.Second
+			s.Etcd.HealthSet = &EtcdHealth{Interval: 500 * time.Millisecond}
+		}, "must be at least store.etcd.call_timeout (1s), which bounds each check"},
+		{"close after one", func(s *storeYAML) { s.Etcd.HealthSet = &EtcdHealth{CloseAfter: 1} },
+			"store.etcd.health.close_after 1: must be 2 to 60"},
+		{"open after too many", func(s *storeYAML) { s.Etcd.HealthSet = &EtcdHealth{OpenAfter: 61} },
+			"store.etcd.health.open_after 61: must be 1 to 60"},
+		{"a cache ttl of minutes", func(s *storeYAML) { s.Etcd.ContextCacheSet = &EtcdContextCache{TTL: 2 * time.Minute} },
+			`store.etcd.context_cache.ttl 2m0s: must be 100ms to 1m0s ("seconds, not minutes": design §12)`},
+		{"a cache with no ttl", func(s *storeYAML) { s.Etcd.ContextCacheSet = &EtcdContextCache{MaxEntries: 10} },
+			"store.etcd.context_cache.ttl is not set: the cache's ttl is explicit configuration (design §12)"},
+		{"a cache too large", func(s *storeYAML) {
+			s.Etcd.ContextCacheSet = &EtcdContextCache{TTL: time.Second, MaxEntries: 1 << 21}
+		}, "store.etcd.context_cache.max_entries 2097152: must be 1 to 1048576"},
+	} {
+		y := etcdYAML(dir)
+		c.edit(&y)
+		if _, err := checkStoreShape(y); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: %v, want %q", c.name, err, c.want)
+		}
+	}
+}
+
+// Both blocks are port49d's: the broker never closes a listener on the
+// store and serves no device (Ruling 7).
+func TestTheBrokerRefusesTheDaemonsStoreBlocks(t *testing.T) {
+	dir := storeFiles(t)
+	for _, c := range []struct {
+		edit func(*storeYAML)
+		want string
+	}{
+		{func(s *storeYAML) { s.Etcd.HealthSet = &EtcdHealth{} }, "store.etcd.health is port49d's"},
+		{func(s *storeYAML) { s.Etcd.ContextCacheSet = &EtcdContextCache{TTL: time.Second} }, "store.etcd.context_cache is port49d's"},
+	} {
+		y := etcdYAML(dir)
+		y.Etcd.Daemon = EtcdIdentity{}
+		c.edit(&y)
+		if _, err := checkStore(y, RoleBroker, true, false, true); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%v, want %q", err, c.want)
+		}
+	}
+}

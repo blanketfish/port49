@@ -357,6 +357,15 @@ type EtcdConfig struct {
 	// for its windows. StartTimeout is its resolved value: 0, or 5s to 10m.
 	StartTimeoutSet *zeroDuration `yaml:"start_timeout"`
 	StartTimeout    time.Duration `yaml:"-"`
+	// HealthSet is the health key, a pointer so port49-broker.yaml can
+	// refuse it present (Ruling 7); Health is its resolved value, set on
+	// every etcd store.
+	HealthSet *EtcdHealth `yaml:"health"`
+	Health    EtcdHealth  `yaml:"-"`
+	// ContextCacheSet is the context_cache key, absent for no cache;
+	// ContextCache is its resolved value, TTL 0 when off.
+	ContextCacheSet *EtcdContextCache `yaml:"context_cache"`
+	ContextCache    EtcdContextCache  `yaml:"-"`
 }
 
 // zeroDuration is a duration that may also be written as a bare 0, as
@@ -394,6 +403,29 @@ type EtcdInFlight struct {
 	Token   int `yaml:"token"`
 	Context int `yaml:"context"`
 	Bulk    int `yaml:"bulk"`
+}
+
+// EtcdHealth is store.etcd.health (plan 7f; spec §13, decision 37):
+// port49d checks the store every Interval (default 1s, 200ms to 10s, at
+// least call_timeout, which bounds each check), closes every listener after
+// CloseAfter consecutive failed checks (default 5, 2 to 60), and, in a run
+// after that, listens again after OpenAfter consecutive passes (default 3,
+// 1 to 60). port49d's alone.
+type EtcdHealth struct {
+	Interval   time.Duration `yaml:"interval"`
+	CloseAfter int           `yaml:"close_after"`
+	OpenAfter  int           `yaml:"open_after"`
+}
+
+// EtcdContextCache is store.etcd.context_cache (plan 7f; design §12):
+// command and session authorization read a context from it for up to TTL
+// (100ms to 60s; "seconds, not minutes"), at most MaxEntries (default
+// 65536, 1 to 1048576). Absent, there is no cache: its TTL is a term in
+// revocation latency, which the design makes explicit configuration, so a
+// block with no ttl is refused. port49d's alone.
+type EtcdContextCache struct {
+	TTL        time.Duration `yaml:"ttl"`
+	MaxEntries int           `yaml:"max_entries"`
 }
 
 // encKeyYAML names one encryption-at-rest key: the id that travels with every
@@ -1894,6 +1926,27 @@ func checkStoreShape(s storeYAML) (StoreConfig, error) {
 		return StoreConfig{}, fmt.Errorf("store.etcd.start_timeout %v: must be 0 (wait for as long as it takes), "+
 			"or 5s to 10m", e.StartTimeout)
 	}
+	// health: each value its default when absent (plan 7f, Ruling 3).
+	if e.HealthSet != nil {
+		e.Health = *e.HealthSet
+	}
+	e.Health.Interval = orD(e.Health.Interval, time.Second)
+	if e.Health.Interval < 200*time.Millisecond || e.Health.Interval > 10*time.Second {
+		return StoreConfig{}, fmt.Errorf("store.etcd.health.interval %v: must be 200ms to 10s", e.Health.Interval)
+	}
+	// context_cache: absent is no cache; present, its ttl is required
+	// (Ruling 5).
+	if c := e.ContextCacheSet; c != nil {
+		if c.TTL == 0 {
+			return StoreConfig{}, errors.New("store.etcd.context_cache.ttl is not set: the cache's ttl is explicit " +
+				"configuration (design §12); set it, or remove store.etcd.context_cache for no cache")
+		}
+		if c.TTL < 100*time.Millisecond || c.TTL > time.Minute {
+			return StoreConfig{}, fmt.Errorf("store.etcd.context_cache.ttl %v: must be 100ms to 1m0s (\"seconds, not "+
+				"minutes\": design §12)", c.TTL)
+		}
+		e.ContextCache = *c
+	}
 	for _, n := range []struct {
 		name          string
 		v             *int
@@ -1903,11 +1956,18 @@ func checkStoreShape(s storeYAML) (StoreConfig, error) {
 		{"store.etcd.max_in_flight.token", &e.MaxInFlight.Token, 64, 1, 4096},
 		{"store.etcd.max_in_flight.context", &e.MaxInFlight.Context, 128, 1, 4096},
 		{"store.etcd.max_in_flight.bulk", &e.MaxInFlight.Bulk, 4, 1, 4096},
+		{"store.etcd.health.close_after", &e.Health.CloseAfter, 5, 2, 60},
+		{"store.etcd.health.open_after", &e.Health.OpenAfter, 3, 1, 60},
+		{"store.etcd.context_cache.max_entries", &e.ContextCache.MaxEntries, 65536, 1, 1 << 20},
 	} {
 		*n.v = orI(*n.v, n.def)
 		if *n.v < n.min || *n.v > n.max {
 			return StoreConfig{}, fmt.Errorf("%s %d: must be %d to %d", n.name, *n.v, n.min, n.max)
 		}
+	}
+	if e.Health.Interval < e.CallTimeout {
+		return StoreConfig{}, fmt.Errorf("store.etcd.health.interval %v: must be at least store.etcd.call_timeout "+
+			"(%v), which bounds each check", e.Health.Interval, e.CallTimeout)
 	}
 	if out.PacketDeadline < e.CallTimeout {
 		return StoreConfig{}, fmt.Errorf("store.packet_deadline %v: must be at least store.etcd.call_timeout (%v)",
@@ -1945,6 +2005,14 @@ func checkStore(s storeYAML, role Role, hasBroker, hasPolicy, hasAdminSocket boo
 		if e.Daemon != (EtcdIdentity{}) {
 			return StoreConfig{}, errors.New("store.etcd.daemon: the daemon's identity is port49d's alone; remove " +
 				"it from port49-broker.yaml (plan 7e)")
+		}
+		if s.Etcd.HealthSet != nil {
+			return StoreConfig{}, errors.New("store.etcd.health is port49d's: port49-broker never closes a listener " +
+				"on the store (design §12); remove it from port49-broker.yaml")
+		}
+		if s.Etcd.ContextCacheSet != nil {
+			return StoreConfig{}, errors.New("store.etcd.context_cache is port49d's: port49-broker serves no device; " +
+				"remove it from port49-broker.yaml")
 		}
 	default:
 		if hasBroker {
