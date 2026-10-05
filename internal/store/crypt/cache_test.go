@@ -323,3 +323,25 @@ func TestNoStaleServeWhileAReadWaitsOnTheFence(t *testing.T) {
 		t.Fatalf("stale serves counted: %v", n)
 	}
 }
+
+// A cached key is no hit while a read waits on the fence: the feed is behind
+// a read, so the entry may predate a change the store already holds (plan 7f,
+// final review I-3). The read goes through to the store.
+func TestNoHitWhileTheFeedIsBehindARead(t *testing.T) {
+	b, c, l, _, lookups := cacheRig(t)
+	get(t, c)
+	l.Fence().Attach(5)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go l.Fence().Wait(ctx, 99)
+	eventually(t, func() bool { return l.Fence().Behind() })
+	if _, err := get(t, c); err != nil {
+		t.Fatal(err)
+	}
+	if b.count() != 2 {
+		t.Fatalf("the backing was read %d times, want 2 (the second a read-through)", b.count())
+	}
+	if n := testutil.ToFloat64(lookups.WithLabelValues("hit")); n != 0 {
+		t.Fatalf("hits counted while the feed was behind a read: %v", n)
+	}
+}

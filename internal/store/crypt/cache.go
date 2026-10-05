@@ -110,7 +110,7 @@ func (c *cache) GetContext(ctx context.Context, k store.ContextKey) (store.Conte
 	e, ok := c.m[k]
 	gen := c.gen
 	c.mu.Unlock()
-	if ok && now.Sub(e.at) < c.cfg.TTL && c.l.Fence().Up() && c.l.knownAt(k, e.c.Rev) {
+	if ok && now.Sub(e.at) < c.cfg.TTL && c.l.Fence().Up() && !c.l.Fence().Behind() && c.l.knownAt(k, e.c.Rev) {
 		c.count("hit")
 		return cloned(e.c), nil
 	}
