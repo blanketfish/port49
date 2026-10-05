@@ -22,8 +22,8 @@ import (
 // New register rows run on it; closed rows' re-checks stay on the host
 // harness (tests/lab/README.md, "The compose mode").
 const (
-	// composeGateway is the compose network's gateway: the source address a
-	// published port gives a connection when the userland proxy dials port49d.
+	// composeGateway is the compose network's gateway, listed as l39_gateway
+	// so a source rewritten to it is recorded rather than refused.
 	composeGateway = "172.30.49.1"
 	composeProject = "port49lab"
 )
@@ -381,10 +381,17 @@ func (l *lab) startCompose(t *testing.T) *composeStack {
 			t.Logf("removing the RETURN rule for the clab subnet: %v (see compose.log)", err)
 		}
 	})
+	// A run killed before its cleanup (a timeout, SIGQUIT, SIGKILL) leaves its
+	// rule in place: purge every stale copy first, so one delete removes the
+	// only one.
+	purged := 0
+	for sudoIptables(append([]string{"-t", "nat", "-D", "POSTROUTING"}, rule...)...) == nil {
+		purged++
+	}
+	c.note(fmt.Sprintf("stale RETURN rules purged before the insert: %d\n", purged))
 	if err := sudoIptables(append([]string{"-t", "nat", "-I", "POSTROUTING", "1"}, rule...)...); err != nil {
 		t.Fatalf("inserting the RETURN rule that keeps the clab masquerade off device traffic: %v\n%s", err, c.tail(10))
 	}
-	_ = sudoIptables("-t", "nat", "-S", "POSTROUTING") // the rules in force, for the note
 
 	if out, err := c.run("up", "-d", "--build"); err != nil {
 		t.Fatalf("docker compose up: %v\n%s\ncompose.log (tail):\n%s", err, out, c.tail(40))
@@ -409,5 +416,8 @@ func (l *lab) startCompose(t *testing.T) *composeStack {
 	if err := l.awaitTACACS(); err != nil {
 		t.Fatal(err)
 	}
+	// The rules in force with the stack up, for the note: the compose bridge's
+	// own rules exist only now.
+	_ = sudoIptables("-t", "nat", "-S", "POSTROUTING")
 	return c
 }

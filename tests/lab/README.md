@@ -409,7 +409,9 @@ as the device `l39_gateway`, so a rewritten source is recorded rather than refus
 
 `startCompose` also inserts, with `sudo -n`, `iptables -t nat -I POSTROUTING 1 -s
 172.100.100.0/24 -d 172.30.49.0/24 -j RETURN`, and deletes it at cleanup (both are in
-`compose.log`, with the POSTROUTING rules in force). The clab management network is itself a
+`compose.log`, with the POSTROUTING rules in force once the stack is up). Stale copies of the rule
+from a killed run are purged before the insert; after a run, `iptables -t nat -S POSTROUTING` must
+show no `172.30.49.0/24 -j RETURN`. The clab management network is itself a
 Docker bridge network, so Docker masquerades everything from 172.100.100.0/24 that leaves by
 another interface: without the rule a device's packet DNAT'd to the compose bridge reaches
 port49d from the compose gateway, which is the lab's own rule at work and not what a device

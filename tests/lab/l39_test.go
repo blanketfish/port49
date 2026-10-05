@@ -4,6 +4,7 @@ package lab
 
 import (
 	"fmt"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -50,6 +51,8 @@ func TestL39DockerSourceAddress(t *testing.T) {
 		obs.WriteString("| cell | observed |\n|---|---|\n")
 		fmt.Fprintf(&obs, "| Docker's userland proxy | %s (a docker-proxy process %s 172.100.100.1:49) |\n", mode,
 			map[string]string{"on": "serves", "off": "does not serve"}[mode])
+		dv, _ := exec.Command("docker", "version", "--format", "{{.Server.Version}}").Output()
+		fmt.Fprintf(&obs, "| Docker engine | %s |\n", strings.TrimSpace(string(dv)))
 		fmt.Fprintf(&obs, "| the redeem record's device | nas %q, name %q (the device's address: %s) |\n", nas, name, l.p.addr)
 		fmt.Fprintf(&obs, "| the login | err %v; redeem %q |\n", lerr, redeemReason(recs, sha(tok)))
 		note := obs.String()
