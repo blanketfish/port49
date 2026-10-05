@@ -1976,3 +1976,63 @@ func TestAPassTellsTheDirectoryNotAnsweringFromNo(t *testing.T) {
 		t.Fatalf("%+v %v", got, recs)
 	}
 }
+
+// identityPolicy is groupPolicy with alice also listed by identity.
+var identityPolicy = strings.Replace(groupPolicy,
+	"  - {name: ci, identity: [\"app:ci-runner\"], username: ci, token_ttl: 60s}\n",
+	"  - {name: ci, identity: [\"app:ci-runner\"], username: ci, token_ttl: 60s}\n"+
+		"  - {name: alice_id, identity: [\""+corpAlice+"\"], token_ttl: 60s}\n", 1) +
+	"  - {subject: alice_id, scope: all_devices, roles: [ro], max_privilege: readonly}\n"
+
+// A directory principal listed by identity keeps her context through a
+// reload during an outage longer than grace: the membership is judged with
+// no groups, never with no username, and a grant added to her group in that
+// reload is not written into it (spec §5.1.3; pre-flight I-14). The context
+// is left unstamped, for context_stale to take over.
+func TestAPastGraceMembershipStillKeysAnIdentityContext(t *testing.T) {
+	a := answerFor(corpAlice, "alice")
+	f, r := groupFixture(t, map[string]directory.Answer{corpAlice: a}, nil)
+	f.reloadDir(t, identityPolicy)
+	a.GroupDNs, a.GroupNames = nil, nil // held through identity alone
+	before := f.memberContext(t, a, "leaf1", f.now.Add(-time.Hour))
+	f.holdMembership(t, r, a, f.now.Add(-2*time.Hour), false)
+	widened := strings.Replace(identityPolicy,
+		"  - {subject: ops, scope: all_devices, roles: [ro], max_privilege: readonly}\n",
+		"  - {subject: ops, scope: all_devices, roles: [network_admin], max_privilege: admin}\n", 1)
+	if rep, err := f.b.Refresh(context.Background(), []Prior{{Policy: f.b.Policy.Load(), At: f.now}}); err != nil ||
+		rep.Revoked != 0 || rep.Updated != 0 || rep.Unchanged != 1 {
+		t.Fatalf("a reload of nothing during the outage: %+v %v", rep, err)
+	}
+	rep, err := f.b.Refresh(context.Background(), f.reloadDir(t, widened))
+	got := f.context(t, "leaf1", "alice")
+	if err != nil || rep.Revoked != 0 || !got.RevokedAt.IsZero() || got.MaxPrivilege != before.MaxPrivilege ||
+		!got.RefreshedAt.Equal(before.RefreshedAt) {
+		t.Fatalf("%+v %v: %+v", rep, err, got)
+	}
+	// Her group's new grant is not in her context: the past-grace member has no groups.
+	if !f.decides(t, got, "show", "version") || f.decides(t, got, "configure", "terminal") {
+		t.Fatal("the context was widened by a grant to a group the membership is too old to claim")
+	}
+}
+
+// A store failing mid-pass is a failed pass, not the directory's silence:
+// a deadline from the store must not count the principal unverified and let
+// the pass end complete.
+func TestAStoreDeadlineInAPassIsNotUnverified(t *testing.T) {
+	a := answerFor(corpAlice, "alice")
+	f, _ := groupFixture(t, map[string]directory.Answer{corpAlice: a}, nil)
+	f.memberContext(t, a, "leaf1", f.now.Add(-time.Hour))
+	f.b.Store = membershipDeadline{f.b.Store}
+	f.b.Directory.Store = f.b.Store
+	rep, err := f.b.Refresh(context.Background(), []Prior{{Policy: f.b.Policy.Load(), At: f.now}})
+	if err == nil || rep.Unverified != 0 {
+		t.Fatalf("%+v %v", rep, err)
+	}
+}
+
+// membershipDeadline fails every membership read with a store deadline.
+type membershipDeadline struct{ store.Store }
+
+func (membershipDeadline) GetMembership(context.Context, string) (store.Membership, error) {
+	return store.Membership{}, context.DeadlineExceeded
+}

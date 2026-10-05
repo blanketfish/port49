@@ -551,6 +551,9 @@ func (b *Broker) refreshContexts(ctx context.Context, cur *policy.Policy, priors
 		m, stamp, jerr := judge.member(ctx, principal)
 		switch {
 		case errors.Is(jerr, directory.ErrUnavailable), errors.Is(jerr, context.DeadlineExceeded):
+			if err := ctx.Err(); err != nil {
+				return err // the pass's own deadline or cancel: not the directory's silence
+			}
 			// The directory did not answer for this principal: its contexts
 			// are left as they are and unstamped, and context_stale takes
 			// over at the ceiling (Ruling 12).
@@ -821,7 +824,12 @@ type passJudge struct {
 // storedJudge is a policy pass's member: the stored membership, no stamp.
 func (b *Broker) storedJudge(ctx context.Context, principal string) (policy.Member, time.Time, error) {
 	m, err := b.storedMember(ctx, principal)
-	return m, time.Time{}, err
+	if err != nil {
+		// A store read failing is a failed pass, never the directory's
+		// silence: the chain is cut so no deadline reads as unverified.
+		return policy.Member{}, time.Time{}, fmt.Errorf("reading the stored membership of %s: %v", principal, err)
+	}
+	return m, time.Time{}, nil
 }
 
 // storedMember is the membership a policy pass judges principal by: the
@@ -835,12 +843,17 @@ func (b *Broker) storedMember(ctx context.Context, principal string) (policy.Mem
 	switch {
 	case err != nil:
 		return policy.Member{}, err
-	case !ok, sm.Refused, b.Now().Sub(sm.VerifiedAt) > b.Directory.Cfg.Grace:
-		// None stored, the directory's refusal, or a membership older than
-		// grace: no groups, which can only narrow. A reload during a long
-		// outage never widens a context on a membership nobody has verified
-		// for longer than grace (pre-flight I-14).
+	case !ok, sm.Refused:
+		// None stored, or the directory's refusal: no groups and no username,
+		// so nothing the principal holds stands (pre-flight C-1).
 		return policy.Member{Principal: principal, Directory: true}, nil
+	case b.Now().Sub(sm.VerifiedAt) > b.Directory.Cfg.Grace:
+		// Older than grace: no groups, which can only narrow. A reload during
+		// a long outage never widens a context on a membership nobody has
+		// verified for longer than grace (pre-flight I-14), but the username
+		// it last verified still keys the principal's contexts, so an
+		// outage revokes none (spec §5.1.3; context_stale takes over).
+		return policy.Member{Principal: principal, Directory: true, Username: sm.Username}, nil
 	}
 	return member(directory.Answer{Membership: sm}), nil
 }
