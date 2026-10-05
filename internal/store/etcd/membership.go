@@ -95,7 +95,7 @@ func (s *Store) claimsKey(ctx context.Context, principal, key string) (bool, err
 // whether or not the claimant was there already.
 func (s *Store) registerKey(ctx context.Context, key, principal string, exp, now time.Time) error {
 	return cas(ctx, s.tok, s.tokLeases, s.k.membershipKey(key),
-		func(r membershipKeyRec) bool { return r.ExpiresAt.After(now) },
+		func(membershipKeyRec) bool { return true }, // a present marker keeps its claimants, whatever this clock says
 		func(r *membershipKeyRec, found bool) (bool, time.Time, bool, error) {
 			if !slices.Contains(r.Claimants, principal) {
 				r.Claimants = append(r.Claimants, principal)
@@ -121,7 +121,7 @@ func (s *Store) RefuseMapKeys(ctx context.Context, mapKeys []string, at time.Tim
 	exp := now.Add(ttl)
 	for _, key := range mapKeys {
 		if err := cas(ctx, s.tok, s.tokLeases, s.k.membershipKey(key),
-			func(r membershipKeyRec) bool { return r.ExpiresAt.After(now) },
+			func(membershipKeyRec) bool { return true }, // a present marker keeps its claimants, whatever this clock says
 			func(r *membershipKeyRec, found bool) (bool, time.Time, bool, error) {
 				r.RefusedAt, r.ExpiresAt = laterOf(r.RefusedAt, at), laterOf(r.ExpiresAt, exp)
 				return true, r.ExpiresAt, false, nil
