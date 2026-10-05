@@ -1072,6 +1072,10 @@ func Run(t *testing.T, b Backend) {
 		{"MembershipExpires", MembershipExpires},
 		{"MembershipForgetRemovesThePin", MembershipForgetRemovesThePin},
 		{"MembershipForgetBeatsAnInFlightVerification", MembershipForgetBeatsAnInFlightVerification},
+		{"MembershipKeyClaimedInEitherOrderIsAmbiguous", MembershipKeyClaimedInEitherOrderIsAmbiguous},
+		{"MembershipAmbiguityHealsToTheSoleClaimant", MembershipAmbiguityHealsToTheSoleClaimant},
+		{"MembershipTieKeepsTheRefusal", MembershipTieKeepsTheRefusal},
+		{"MembershipForgetTombstoneOutlivesTheRecord", MembershipForgetTombstoneOutlivesTheRecord},
 	} {
 		p := p
 		t.Run(p.name, func(t *testing.T) { p.run(t, b) })

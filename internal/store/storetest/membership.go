@@ -42,8 +42,8 @@ func MembershipKeepsTheLaterAndIsFoundByKey(t *testing.T, b Backend) {
 	if err := s.PutMembership(ctx, older, time.Hour); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := s.GetMembership(ctx, alice.Principal); len(got.GroupDNs) != 1 {
-		t.Fatalf("an earlier verification replaced a later one: %+v", got)
+	if got, err := s.GetMembership(ctx, alice.Principal); err != nil || len(got.GroupDNs) != 1 {
+		t.Fatalf("an earlier verification replaced a later one: %+v %v", got, err)
 	}
 	moved := alice
 	moved.MapKeys, moved.VerifiedAt = []string{k2}, t0
@@ -301,5 +301,134 @@ func MembershipForgetBeatsAnInFlightVerification(t *testing.T, b Backend) {
 	}
 	if got, err := s.MembershipByKey(ctx, k); err != nil || got.EntryID != "guid:B" {
 		t.Fatalf("by key after the rehire: %+v %v", got, err)
+	}
+}
+
+// MembershipKeyClaimedInEitherOrderIsAmbiguous: whichever of two records
+// listing a key is written last, the key is ambiguous while both are live
+// (pre-flight I-5): a verification dated earlier that arrives second does
+// not leave the key with the other principal.
+func MembershipKeyClaimedInEitherOrderIsAmbiguous(t *testing.T, b Backend) {
+	ctx := context.Background()
+	k := store.MapKey("san_email", "shared@corp.example.com")
+	carol := store.Membership{Principal: "user:carol@corp.example.com", Username: "carol", MapKeys: []string{k}, VerifiedAt: t0}
+	dave := store.Membership{Principal: "user:dave@corp.example.com", Username: "dave", MapKeys: []string{k},
+		VerifiedAt: t0.Add(-time.Minute)}
+	for _, order := range [][]store.Membership{{carol, dave}, {dave, carol}} {
+		s := b.New(t, func() time.Time { return t0 })
+		for _, m := range order {
+			if err := s.PutMembership(ctx, m, time.Hour); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if m, err := s.MembershipByKey(ctx, k); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("written %s first: a key two live records list answered %q %v, want ErrNotFound",
+				order[0].Username, m.Principal, err)
+		}
+	}
+}
+
+// MembershipAmbiguityHealsToTheSoleClaimant: an ambiguous key answers the
+// one principal still claiming it once the others stop listing it, with no
+// further verification, and a principal re-verifying with the key never
+// keeps it ambiguous by itself.
+func MembershipAmbiguityHealsToTheSoleClaimant(t *testing.T, b Backend) {
+	ctx := context.Background()
+	s := b.New(t, func() time.Time { return t0 })
+	k := store.MapKey("san_email", "shared@corp.example.com")
+	alice := store.Membership{Principal: "user:alice@corp.example.com", Username: "alice", MapKeys: []string{k},
+		VerifiedAt: t0.Add(-3 * time.Minute)}
+	bob := store.Membership{Principal: "user:bob@corp.example.com", Username: "bob", MapKeys: []string{k},
+		VerifiedAt: t0.Add(-2 * time.Minute)}
+	put := func(m store.Membership) {
+		t.Helper()
+		if err := s.PutMembership(ctx, m, time.Hour); err != nil {
+			t.Fatal(err)
+		}
+	}
+	put(alice)
+	put(bob)
+	if _, err := s.MembershipByKey(ctx, k); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("two claimants: %v, want ErrNotFound", err)
+	}
+	bob.MapKeys, bob.VerifiedAt = nil, t0.Add(-time.Minute)
+	put(bob)
+	if m, err := s.MembershipByKey(ctx, k); err != nil || m.Principal != alice.Principal {
+		t.Fatalf("bob stopped listing it: %+v %v, want alice", m, err)
+	}
+	alice.VerifiedAt = t0
+	put(alice)
+	if m, err := s.MembershipByKey(ctx, k); err != nil || m.Principal != alice.Principal {
+		t.Fatalf("alice re-verified, the sole claimant: %+v %v, want alice", m, err)
+	}
+	bob.MapKeys, bob.VerifiedAt = []string{k}, t0
+	put(bob)
+	if _, err := s.MembershipByKey(ctx, k); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("bob claims it again: %v, want ErrNotFound", err)
+	}
+	if _, err := s.DeleteMembership(ctx, bob.Principal); err != nil {
+		t.Fatal(err)
+	}
+	if m, err := s.MembershipByKey(ctx, k); err != nil || m.Principal != alice.Principal {
+		t.Fatalf("bob forgotten: %+v %v, want alice", m, err)
+	}
+}
+
+// MembershipTieKeepsTheRefusal: a grant and a refusal verified at the same
+// instant leave the refusal, whichever is written last, on the record and on
+// a key.
+func MembershipTieKeepsTheRefusal(t *testing.T, b Backend) {
+	ctx := context.Background()
+	k := store.MapKey("sid", "S-1-5-21-1-2-3-1104")
+	grant := store.Membership{Principal: "user:alice@corp.example.com", Username: "alice", MapKeys: []string{k}, VerifiedAt: t0}
+	refusal := store.Membership{Principal: grant.Principal, Refused: true, VerifiedAt: t0}
+	for _, order := range [][]store.Membership{{grant, refusal}, {refusal, grant}} {
+		s := b.New(t, func() time.Time { return t0 })
+		for _, m := range order {
+			if err := s.PutMembership(ctx, m, time.Hour); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if got, err := s.GetMembership(ctx, grant.Principal); err != nil || !got.Refused {
+			t.Fatalf("a tie, refused=%v written first: %+v %v, want the refusal", order[0].Refused, got, err)
+		}
+	}
+	s := b.New(t, func() time.Time { return t0 })
+	if err := s.RefuseMapKeys(ctx, []string{k}, t0, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutMembership(ctx, grant, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if m, err := s.MembershipByKey(ctx, k); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("a key refused at the instant a grant was verified: %+v %v, want ErrNotFound", m, err)
+	}
+}
+
+// MembershipForgetTombstoneOutlivesTheRecord: a record forgotten seconds
+// before its ttl ends still blocks a verification that began before the
+// forget, a while after the record would have gone.
+func MembershipForgetTombstoneOutlivesTheRecord(t *testing.T, b Backend) {
+	ctx := context.Background()
+	var mu sync.Mutex
+	now := t0
+	s := b.New(t, func() time.Time { mu.Lock(); defer mu.Unlock(); return now })
+	advance := func(d time.Duration) { mu.Lock(); now = now.Add(d); mu.Unlock() }
+	alice := store.Membership{Principal: "user:alice@corp.example.com", EntryID: "guid:A", Username: "alice", VerifiedAt: t0}
+	if err := s.PutMembership(ctx, alice, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	advance(50 * time.Second)
+	if _, err := s.DeleteMembership(ctx, alice.Principal); err != nil {
+		t.Fatal(err)
+	}
+	advance(time.Hour)
+	inFlight := alice
+	inFlight.VerifiedAt = t0.Add(40 * time.Second)
+	if err := s.PutMembership(ctx, inFlight, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.GetMembership(ctx, alice.Principal); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("a verification from before the forget wrote past the old record's ttl: %+v %v", got, err)
 	}
 }

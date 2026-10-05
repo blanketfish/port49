@@ -1501,12 +1501,13 @@ type membershipEntry struct {
 }
 
 // memberKeyEntry is one mapping key's: the principal it points at, "" for
-// a key no grace bind may use. prior names the principal whose live
-// record still claims an ambiguous key.
+// a key no grace bind may use. An ambiguous key names every principal that
+// claimed it (claimants); a refused key has none.
 type memberKeyEntry struct {
-	principal, prior string
-	verifiedAt       time.Time
-	expires          time.Time
+	principal  string
+	claimants  []string
+	verifiedAt time.Time
+	expires    time.Time
 }
 
 func cloneMembership(m store.Membership) store.Membership {
@@ -1544,8 +1545,9 @@ func (s *Store) PutMembership(_ context.Context, m store.Membership, ttl time.Du
 			if m.VerifiedAt.Before(e.forgottenAt) {
 				return nil
 			}
-		} else if e.m.VerifiedAt.After(m.VerifiedAt) {
-			return nil
+		} else if e.m.VerifiedAt.After(m.VerifiedAt) ||
+			(e.m.VerifiedAt.Equal(m.VerifiedAt) && e.m.Refused && !m.Refused) {
+			return nil // a refusal outranks a grant verified at its instant
 		}
 	}
 	exp := now.Add(ttl)
@@ -1557,30 +1559,51 @@ func (s *Store) PutMembership(_ context.Context, m store.Membership, ttl time.Du
 	return nil
 }
 
+// claimsKeyLocked is whether principal has a live, unrefused record that
+// lists key.
+func (s *Store) claimsKeyLocked(principal, key string) bool {
+	e, live := s.liveMembershipLocked(principal)
+	return live && e.forgottenAt.IsZero() && !e.m.Refused && slices.Contains(e.m.MapKeys, key)
+}
+
 // claimKeyLocked points key at m's principal as of m.VerifiedAt, unless a
-// later verification holds it, or a live, unrefused record of another
-// principal still lists it: then it is ambiguous, never the last writer's.
+// live, unrefused record of another principal still lists it, whichever
+// verification is later: then it is ambiguous and names every claimant,
+// never the last writer's. A later refusal, or a later claim by m's own
+// principal, stands.
 func (s *Store) claimKeyLocked(key string, m store.Membership, exp time.Time) {
-	now := s.now()
 	held, ok := s.memberKeys[key]
-	if ok && !held.expires.After(now) {
+	if ok && !held.expires.After(s.now()) {
 		ok = false
 	}
-	if ok && held.verifiedAt.After(m.VerifiedAt) {
-		return
-	}
-	if ok && held.principal != m.Principal {
-		other := held.principal
-		if other == "" {
-			other = held.prior
+	at := m.VerifiedAt
+	if ok {
+		var others []string
+		for _, c := range append([]string{held.principal}, held.claimants...) {
+			if c != "" && c != m.Principal && !slices.Contains(others, c) && s.claimsKeyLocked(c, key) {
+				others = append(others, c)
+			}
 		}
-		if e, live := s.liveMembershipLocked(other); other != "" && live && e.forgottenAt.IsZero() &&
-			!e.m.Refused && slices.Contains(e.m.MapKeys, key) {
-			s.memberKeys[key] = memberKeyEntry{prior: other, verifiedAt: m.VerifiedAt, expires: exp}
+		if len(others) > 0 {
+			others = append(others, m.Principal)
+			sort.Strings(others)
+			s.memberKeys[key] = memberKeyEntry{claimants: others, verifiedAt: laterOf(held.verifiedAt, at), expires: exp}
 			return
 		}
+		refusal := held.principal == "" && len(held.claimants) == 0
+		if (refusal && !held.verifiedAt.Before(at)) || (held.principal == m.Principal && held.verifiedAt.After(at)) {
+			return
+		}
+		at = laterOf(held.verifiedAt, at)
 	}
-	s.memberKeys[key] = memberKeyEntry{principal: m.Principal, verifiedAt: m.VerifiedAt, expires: exp}
+	s.memberKeys[key] = memberKeyEntry{principal: m.Principal, verifiedAt: at, expires: exp}
+}
+
+func laterOf(a, b time.Time) time.Time {
+	if a.After(b) {
+		return a
+	}
+	return b
 }
 
 // RefuseMapKeys marks each key refused as of at, unless a later
@@ -1613,17 +1636,31 @@ func (s *Store) GetMembership(_ context.Context, principal string) (store.Member
 	return cloneMembership(e.m), nil
 }
 
+// MembershipByKey answers the one principal a key points at, or, for an
+// ambiguous key, the one of its claimants that still lists it; none or more
+// than one is ErrNotFound.
 func (s *Store) MembershipByKey(_ context.Context, mapKey string) (store.Membership, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	k, ok := s.memberKeys[mapKey]
-	if !ok || !k.expires.After(s.now()) || k.principal == "" {
+	if !ok || !k.expires.After(s.now()) {
 		return store.Membership{}, store.ErrNotFound
 	}
-	e, ok := s.liveMembershipLocked(k.principal)
-	if !ok || !e.forgottenAt.IsZero() || e.m.Refused || !slices.Contains(e.m.MapKeys, mapKey) {
+	principal := k.principal
+	if principal == "" {
+		for _, c := range k.claimants {
+			if s.claimsKeyLocked(c, mapKey) {
+				if principal != "" {
+					return store.Membership{}, store.ErrNotFound
+				}
+				principal = c
+			}
+		}
+	}
+	if principal == "" || !s.claimsKeyLocked(principal, mapKey) {
 		return store.Membership{}, store.ErrNotFound
 	}
+	e, _ := s.liveMembershipLocked(principal)
 	return cloneMembership(e.m), nil
 }
 
@@ -1650,7 +1687,8 @@ func (s *Store) DeleteMembership(_ context.Context, principal string) (store.Mem
 	if !ok || !e.forgottenAt.IsZero() {
 		return store.Membership{}, store.ErrNotFound
 	}
-	s.memberships[principal] = membershipEntry{forgottenAt: s.now(), exp: e.exp}
+	now := s.now()
+	s.memberships[principal] = membershipEntry{forgottenAt: now, exp: laterOf(e.exp, now.Add(store.TombstoneFloor))}
 	s.touchLocked()
 	return cloneMembership(e.m), nil
 }

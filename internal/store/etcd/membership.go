@@ -38,11 +38,12 @@ type membershipRec struct {
 
 // membershipKeyRec is mk/<map key>: the principal, and the verification
 // that pointed it there, so a later one wins. Principal "" is a key no
-// grace bind may use: ambiguous (Prior names the principal whose live
-// record still claims it) or refused (Prior "").
+// grace bind may use: ambiguous (Claimants names every principal that
+// claimed it; a read answers the one still listing it, if exactly one) or
+// refused (no claimants).
 type membershipKeyRec struct {
 	Principal  string    `json:"principal"`
-	Prior      string    `json:"prior,omitempty"`
+	Claimants  []string  `json:"claimants,omitempty"`
 	VerifiedAt time.Time `json:"verified_at"`
 	ExpiresAt  time.Time `json:"expires_at"`
 }
@@ -63,7 +64,8 @@ func (s *Store) PutMembership(ctx context.Context, m store.Membership, ttl time.
 				kept = true // verified before the forget: never writes the old pin back
 				return false, time.Time{}, false, nil
 			}
-			if found && !r.tombstone() && r.VerifiedAt.After(m.VerifiedAt) {
+			if found && !r.tombstone() && (r.VerifiedAt.After(m.VerifiedAt) ||
+				(r.VerifiedAt.Equal(m.VerifiedAt) && r.Refused && !m.Refused)) { // a refusal outranks a grant at its instant
 				kept = true
 				return false, time.Time{}, false, nil
 			}
@@ -83,36 +85,64 @@ func (s *Store) PutMembership(ctx context.Context, m store.Membership, ttl time.
 	return nil
 }
 
-// claimKey points key at principal as of at, unless a later verification
-// holds it, or a live record of another principal still lists it: then the
-// key is ambiguous (pre-flight I-5), never the last writer's.
+// claimsKey is whether principal has a live, unrefused record that lists
+// key; an error only when the store could not say.
+func (s *Store) claimsKey(ctx context.Context, principal, key string) (bool, error) {
+	held, err := s.GetMembership(ctx, principal)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return false, nil
+	case err != nil:
+		return false, err
+	}
+	return !held.Refused && slices.Contains(held.MapKeys, key), nil
+}
+
+// claimKey points key at principal as of at, unless a live, unrefused
+// record of another principal still lists it, whichever verification is
+// later: then the key is ambiguous and names every claimant (pre-flight
+// I-5), never the last writer's. A later refusal, or a later claim by
+// principal itself, stands.
 func (s *Store) claimKey(ctx context.Context, key, principal string, at, exp, now time.Time) error {
 	return cas(ctx, s.tok, s.tokLeases, s.k.membershipKey(key),
 		func(r membershipKeyRec) bool { return r.ExpiresAt.After(now) },
 		func(r *membershipKeyRec, found bool) (bool, time.Time, bool, error) {
-			if found && r.VerifiedAt.After(at) {
-				return false, time.Time{}, false, nil
-			}
-			other := ""
-			if found && r.Principal != principal {
-				other = r.Principal
-				if other == "" {
-					other = r.Prior
+			if found {
+				var others []string
+				for _, c := range append([]string{r.Principal}, r.Claimants...) {
+					if c == "" || c == principal || slices.Contains(others, c) {
+						continue
+					}
+					lists, err := s.claimsKey(ctx, c, key)
+					if err != nil {
+						return false, time.Time{}, false, err
+					}
+					if lists {
+						others = append(others, c)
+					}
 				}
-			}
-			if other != "" {
-				held, err := s.GetMembership(ctx, other)
-				switch {
-				case err == nil && !held.Refused && slices.Contains(held.MapKeys, key):
-					*r = membershipKeyRec{Principal: "", Prior: other, VerifiedAt: at, ExpiresAt: exp}
+				if len(others) > 0 {
+					others = append(others, principal)
+					sort.Strings(others)
+					*r = membershipKeyRec{Claimants: others, VerifiedAt: laterOf(r.VerifiedAt, at), ExpiresAt: exp}
 					return true, exp, false, nil
-				case err != nil && !errors.Is(err, store.ErrNotFound):
-					return false, time.Time{}, false, err
 				}
+				refusal := r.Principal == "" && len(r.Claimants) == 0
+				if (refusal && !r.VerifiedAt.Before(at)) || (r.Principal == principal && r.VerifiedAt.After(at)) {
+					return false, time.Time{}, false, nil
+				}
+				at = laterOf(r.VerifiedAt, at)
 			}
 			*r = membershipKeyRec{Principal: principal, VerifiedAt: at, ExpiresAt: exp}
 			return true, exp, false, nil
 		})
+}
+
+func laterOf(a, b time.Time) time.Time {
+	if a.After(b) {
+		return a
+	}
+	return b
 }
 
 // RefuseMapKeys marks each key refused as of at (Ruling 10): the
@@ -141,6 +171,9 @@ func (s *Store) GetMembership(ctx context.Context, principal string) (store.Memb
 	if err := s.getLive(ctx, s.k.membership(principal), &r, func() bool { return r.ExpiresAt.After(s.now()) }); err != nil {
 		return store.Membership{}, err
 	}
+	if r.Principal != principal {
+		return store.Membership{}, notDecoded(s.k.membership(principal)) // a record copied under another key
+	}
 	if r.tombstone() {
 		return store.Membership{}, store.ErrNotFound
 	}
@@ -158,7 +191,7 @@ func (r membershipRec) membership() store.Membership {
 // DeleteMembership replaces mb/<principal> with a tombstone of the forget's
 // time, in one compare on the record's revision, and returns what it held
 // (Ruling 3's escape). The tombstone is kept as long as the record had left
-// (a day when that is unknown): PutMembership drops a write verified before
+// (at least store.TombstoneFloor): PutMembership drops a write verified before
 // it, so a verification in flight at the forget cannot put the pin back.
 // Its mk/ keys stay until their leases end: MembershipByKey answers
 // ErrNotFound for a key whose record is gone, and claimKey treats it as
@@ -177,14 +210,14 @@ func (s *Store) DeleteMembership(ctx context.Context, principal string) (store.M
 		}
 		var r membershipRec
 		var held store.Membership
-		exp := now.Add(unknownTombstoneFor)
-		if json.Unmarshal(resp.Kvs[0].Value, &r) != nil {
+		exp := now.Add(store.TombstoneFloor)
+		if json.Unmarshal(resp.Kvs[0].Value, &r) != nil || r.Principal != principal {
 			held = store.Membership{Principal: principal}
 		} else {
 			if !r.ExpiresAt.After(now) || r.tombstone() {
 				return store.Membership{}, store.ErrNotFound
 			}
-			held, exp = r.membership(), r.ExpiresAt
+			held, exp = r.membership(), laterOf(r.ExpiresAt, exp)
 		}
 		body, err := json.Marshal(membershipRec{Principal: principal, ForgottenAt: now, ExpiresAt: exp})
 		if err != nil {
@@ -201,26 +234,39 @@ func (s *Store) DeleteMembership(ctx context.Context, principal string) (store.M
 	}
 }
 
-// unknownTombstoneFor is a forget's tombstone over a record that does not
-// decode, so has no expiry to follow.
-const unknownTombstoneFor = 24 * time.Hour
-
+// MembershipByKey answers the one principal a key points at, or, for an
+// ambiguous key, the one of its claimants that still lists it; none or more
+// than one is ErrNotFound.
 func (s *Store) MembershipByKey(ctx context.Context, mapKey string) (store.Membership, error) {
 	var kr membershipKeyRec
 	if err := s.getLive(ctx, s.k.membershipKey(mapKey), &kr, func() bool { return kr.ExpiresAt.After(s.now()) }); err != nil {
 		return store.Membership{}, err
 	}
-	if kr.Principal == "" {
+	cands := kr.Claimants
+	if kr.Principal != "" {
+		cands = []string{kr.Principal}
+	}
+	var found *store.Membership
+	for _, c := range cands {
+		m, err := s.GetMembership(ctx, c)
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+			continue
+		case err != nil:
+			return store.Membership{}, err
+		}
+		if m.Refused || !slices.Contains(m.MapKeys, mapKey) {
+			continue
+		}
+		if found != nil {
+			return store.Membership{}, store.ErrNotFound
+		}
+		found = &m
+	}
+	if found == nil {
 		return store.Membership{}, store.ErrNotFound
 	}
-	m, err := s.GetMembership(ctx, kr.Principal)
-	if err != nil {
-		return store.Membership{}, err
-	}
-	if m.Refused || !slices.Contains(m.MapKeys, mapKey) {
-		return store.Membership{}, store.ErrNotFound
-	}
-	return m, nil
+	return *found, nil
 }
 
 // MembershipPrincipals pages mb/ as eachIndexed pages ix/: 500 at a time,

@@ -1013,7 +1013,7 @@ type Store interface {
 	// expire: MembershipByKey answers ErrNotFound for a key whose record is
 	// gone, and a claim treats it as unclaimed. It leaves a tombstone for
 	// principal holding the time of the forget, for what the record had left
-	// to live (24h when that is unknown): a PutMembership verified before it
+	// to live, and at least TombstoneFloor: a PutMembership verified before it
 	// is dropped, so a verification in flight when the operator forgot can
 	// never write the old pin back. A tombstone is no record: no read
 	// returns it. `port49 directory forget` alone calls it (Ruling 3's
@@ -1049,6 +1049,11 @@ type RevStore interface {
 // longest token_ttl (policy.MaxTokenTTL, 15m) and so past the life of any
 // idempotency record whose replay it governs (plan 7e, Ruling 9; 4b m10).
 const SupersededFor = 20 * time.Minute
+
+// TombstoneFloor is the least a forget's tombstone is kept: a verification
+// in flight at the forget must find it however little of the record's ttl
+// was left.
+const TombstoneFloor = 24 * time.Hour
 
 // Membership is one principal's directory answer as the broker last
 // verified it (plan 7g; decision 38): the entry its certificate mapped to,

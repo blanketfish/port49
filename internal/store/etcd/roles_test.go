@@ -187,6 +187,10 @@ func TestCheckIdentityRefusesADaemonThatCanWriteTheLedgerRecord(t *testing.T) {
 			"it was allowed reading " + membership},
 		{etcdtest.Grant{Role: RoleDaemon, Key: membershipK, RangeEnd: clientv3.GetPrefixRangeEnd(membershipK)},
 			"it was allowed reading " + membershipK},
+		{etcdtest.Grant{Role: RoleDaemon, Key: membership, RangeEnd: clientv3.GetPrefixRangeEnd(membership), Write: true},
+			"it was allowed reading " + membership}, // a write grant is read-write: the reading probe runs first
+		{etcdtest.Grant{Role: RoleDaemon, Key: membershipK, RangeEnd: clientv3.GetPrefixRangeEnd(membershipK), Write: true},
+			"it was allowed reading " + membershipK},
 	} {
 		loose := provisionedWith(t, prefix, []etcdtest.Grant{c.extra}, nil)
 		err := openAs(t, loose, "port49-daemon", prefix).CheckIdentity(context.Background(), false)

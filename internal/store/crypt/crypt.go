@@ -1075,8 +1075,13 @@ func (w *wrapped) openMembership(m store.Membership, err error) (store.Membershi
 	return m, nil
 }
 
+// GetMembership opens the record with the principal asked for, not the one
+// the record names: a record a store writer copied under another key
+// fails to open there (the same bound every other record has).
 func (w *wrapped) GetMembership(ctx context.Context, principal string) (store.Membership, error) {
-	return w.openMembership(w.inner.GetMembership(ctx, principal))
+	m, err := w.inner.GetMembership(ctx, principal)
+	m.Principal = principal
+	return w.openMembership(m, err)
 }
 
 func (w *wrapped) MembershipByKey(ctx context.Context, mapKey string) (store.Membership, error) {
@@ -1106,10 +1111,10 @@ func (w *wrapped) DeleteMembership(ctx context.Context, principal string) (store
 	if err != nil {
 		return store.Membership{}, err
 	}
+	m.Principal = principal
 	opened, err := w.openMembership(m, nil)
 	if err != nil {
-		m.Sealed = nil
-		return m, nil
+		return store.Membership{Principal: principal, VerifiedAt: m.VerifiedAt, Server: m.Server, Site: m.Site}, nil
 	}
 	return opened, nil
 }
