@@ -7050,6 +7050,8 @@ context cache it is told to keep; and port49 ships a container shape.** *Plan 7f
   - **A hit:** the entry younger than the TTL, the context feed up, and no later record known
     at the key. What bounds a hit is the TTL, not the feed's `Up()`: `FollowContexts` marks the
     feed up before its watch is established, and a watch hung on a dead connection reads up.
+    A hit is also refused while the feed is behind a read (`Fence.Behind()`, a fence wait in
+    flight): that read goes to the store, a miss for the milliseconds a wait lasts.
   - **Eviction:**
     - a write through it evicts the key;
     - every change the context feed brings evicts its key, a delete included;

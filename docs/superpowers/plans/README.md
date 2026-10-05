@@ -3714,20 +3714,30 @@ out and the cache is off for L41; T2-a, T4-a, T5-a, T6-a above.
   (L41). It was about 2 minutes for an idle port49d at `hold_ttl` 60s. IOS-XE's break-glass
   lockout on a store fault shrinks to that window; nothing port49 answers changes. After the
   store returns, port49d listens again after `open_after` passes in a row, measured 3.5s later.
-  Break-glass works while it is dark.
+  Break-glass works while it is dark. The next run re-reads its configuration at a store gone,
+  so an edit to `store.etcd.health` or `store.etcd.context_cache`, the policy or the certs,
+  made without a restart, takes effect at the next outage.
 - **A restore (design §13's runbook) now takes port49d dark** for its duration: the checks fail
   and the listeners close after `close_after` failures, and it listens again after `open_after`
   passes. The restore guard is unchanged: restored tokens are still refused until the runner
   purges.
 - **The context cache** is off unless `store.etcd.context_cache.ttl` is set, and the compose
   example ships it commented out. When on, a revocation reaches a cached session at feed speed;
-  a hit is never served while the feed is behind a read; through a true outage a cached context
-  is served past its TTL only until the listeners close. That is counted
+  a hit is also refused while the feed is behind a read (that read goes to the store); through a
+  true outage a cached context is served past its TTL only until the listeners close, which
+  go-dark bounds to `close_after` × `interval` + `call_timeout` while the health checks fail
+  (when the context pool's circuit is open or its slots are refused while etcd answers, the
+  bound is `hold_ttl`; the feed's evictions still apply). A failed write through the cache
+  (`TouchContext`, `SetPrivilege`) evicts that session's entry, so it stops being served stale
+  at once. That is counted
   `port49_context_cache_lookups_total{outcome="stale"}` and said once:
   `serving cached login contexts past store.etcd.context_cache.ttl`. Alert on any increase.
   Dark with etcd healthy: look at `port49_store_fence_timeouts_total`.
 - **New metrics:** `port49_store_health_checks_total{outcome}`; `port49_store_health_failures`
-  (above 0 for three intervals is the alarm); `port49_context_cache_lookups_total{outcome}`;
+  (page on `>= close_after`, held through the outage and resolved at reopen; an
+  `increase(port49_store_health_checks_total{outcome="fail"}[10m])` above your threshold is a
+  ticket, not a page: `close_after` × `interval` is shorter than any scrape interval, so
+  nothing warns before the close); `port49_context_cache_lookups_total{outcome}`;
   `port49_context_cache_entries`.
 - **New config refusals:** the health and cache bounds; a `context_cache:` block with no `ttl`;
   either block in `port49-broker.yaml`.
@@ -3863,7 +3873,7 @@ container's install page:
 Every shape states the same four requirements:
 
 - **The device's source address reaches port49d unrewritten** (design §13). On Kubernetes that means
-  `externalTrafficPolicy: Local` or host networking. Under Docker, for a device off the Docker host, a published port left it
+  `externalTrafficPolicy: Local` or host networking is expected to be needed (L39 (b), (c), open). Under Docker, for a device off the Docker host, a published port left it
   unchanged with the userland proxy on and off (L39 (a), 2026-10-05; modelled: a device on the clab bridge with an iptables RETURN rule keeping
   that bridge's own masquerade off its traffic, `tests/lab/results/L39-docker-proxy-*-arista_eos.md`). A device on another Docker network on the same
   host is masqueraded to the compose gateway by Docker's rule for its own network (the notes' first run). Kubernetes is unmeasured until plan 12.
