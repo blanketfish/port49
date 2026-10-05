@@ -167,6 +167,7 @@ type trackedConn struct {
 	principal  string
 	certKey    string
 	mapped     *directory.Answer
+	legacy     string // the email-SAN principal the certificate had before a directory, "" without one
 	gone       bool
 	closeOnce  sync.Once
 }
@@ -480,7 +481,7 @@ func (l *Listener) bind(c *trackedConn, principal, legacy, certKey string, refus
 		return nil, true
 	}
 	l.unpendLocked(c.src)
-	c.principal, c.certKey = principal, certKey
+	c.principal, c.certKey, c.legacy = principal, certKey, legacy
 	held := append(l.held[principal], c)
 	var evicted *trackedConn
 	if len(held) > l.lim.MaxPerPrincipal {
@@ -579,7 +580,9 @@ func (l *Listener) CloseHeld(match func(principal, certKey string) bool) int {
 	var hit []*trackedConn
 	for _, conns := range l.held {
 		for _, c := range conns {
-			if match(c.principal, c.certKey) {
+			// A mark on the principal the certificate had before a directory
+			// closes it too: bind refuses on it (pre-flight I-16).
+			if match(c.principal, c.certKey) || (c.legacy != "" && match(c.legacy, "")) {
 				hit = append(hit, c)
 			}
 		}

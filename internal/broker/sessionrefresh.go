@@ -31,7 +31,7 @@ const (
 // connection that refreshed within refreshEvery is told to wait.
 func (b *Broker) refreshChallenge(w http.ResponseWriter, r *http.Request) {
 	now := b.Now()
-	principal, cred, err := Identity(r.TLS, now)
+	principal, _, cred, err := b.callerOf(r, now)
 	if err != nil {
 		b.refuseRefresh(w, now, principal, cred, decision.TrustDomainUnresolved, string(decision.TrustDomainUnresolved), err.Error())
 		return
@@ -66,7 +66,7 @@ func (b *Broker) refreshChallenge(w http.ResponseWriter, r *http.Request) {
 // sessions (spec §5.6). The nonce is taken whatever the outcome: single use.
 func (b *Broker) refresh(w http.ResponseWriter, r *http.Request) {
 	now := b.Now()
-	principal, cred, err := Identity(r.TLS, now)
+	principal, legacy, cred, err := b.callerOf(r, now)
 	if err != nil {
 		b.refuseRefresh(w, now, principal, cred, decision.TrustDomainUnresolved, string(decision.TrustDomainUnresolved), err.Error())
 		return
@@ -112,7 +112,7 @@ func (b *Broker) refresh(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), holdTimeout)
 	defer cancel()
-	rv, revoked, err := b.revocation(ctx, principal, cred)
+	rv, revoked, err := b.revocation(ctx, principal, cred, legacy)
 	switch {
 	case err != nil:
 		b.refreshStoreError(w, now, principal, cred, refreshEvery,
@@ -151,7 +151,7 @@ func (b *Broker) refresh(w http.ResponseWriter, r *http.Request) {
 	// The marks again, after the extension's writes, as a mint reads them
 	// after its last token write (revokedSince): a revocation that landed
 	// while this refresh extended is answered, not reported as extended.
-	switch rv, revoked, err := b.revocation(ctx, principal, cred); {
+	switch rv, revoked, err := b.revocation(ctx, principal, cred, legacy); {
 	case err != nil:
 		b.refreshStoreError(w, at, principal, cred, refreshEvery, partialRefreshText)
 		return

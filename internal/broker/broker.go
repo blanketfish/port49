@@ -524,14 +524,54 @@ func (b *Broker) authenticate(w http.ResponseWriter, r *http.Request, event, not
 	return principal, cred, true
 }
 
+// callerOf is the caller of a request that does not map: the principal and
+// credential of the connection's verified certificate, and legacy, the
+// principal its email SAN gave before a directory ("" without one). Under a
+// directory the principal is the one pinned to the held connection at bind
+// (Ruling 4), never the email SAN's; a connection with no pin is refused
+// (ErrUntrusted), as a mapping that did not happen proves nothing.
+func (b *Broker) callerOf(r *http.Request, now time.Time) (principal, legacy string, cred store.Credential, err error) {
+	if b.Directory == nil {
+		principal, cred, err = Identity(r.TLS, now)
+		return principal, "", cred, err
+	}
+	var leaf *x509.Certificate
+	cred, leaf, err = CertIdentity(r.TLS, now)
+	if leaf != nil {
+		legacy = legacyPrincipal(leaf)
+	}
+	if err != nil {
+		return "", legacy, cred, err
+	}
+	if h := heldOf(r); h != nil && h.answer != nil {
+		return h.answer.Principal, legacy, cred, nil
+	}
+	return "", legacy, cred, fmt.Errorf("%w: this connection has no directory principal pinned to it", ErrUntrusted)
+}
+
+// legacyOf is the principal r's certificate had before a directory, "" when
+// there is no directory or none: the mark a re-read after a write also reads.
+func (b *Broker) legacyOf(r *http.Request) string {
+	if b.Directory == nil || r.TLS == nil || len(r.TLS.VerifiedChains) == 0 || len(r.TLS.VerifiedChains[0]) == 0 {
+		return ""
+	}
+	return legacyPrincipal(r.TLS.VerifiedChains[0][0])
+}
+
 // pinnedPrincipal is the principal the listener mapped at bind and pinned to
 // r's connection: it is never mapped again for the life of the connection
 // (Ruling 4). A request with no held connection (a handler driven without
 // Server) maps now, bounded as the listener's bind is, or returns the
-// mapping's refusal.
+// mapping's refusal. A held connection with no pin is a wiring fault (a
+// directory without Listener.Map): it is refused directory_unavailable, never
+// mapped per request.
 func (b *Broker) pinnedPrincipal(r *http.Request, cred store.Credential) (string, *BindRefusal) {
-	if h := heldOf(r); h != nil && h.answer != nil {
-		return h.answer.Principal, nil
+	if h := heldOf(r); h != nil {
+		if h.answer != nil {
+			return h.answer.Principal, nil
+		}
+		b.logf("broker: a held connection has no directory principal pinned (the listener has no Map); refusing it")
+		return "", directoryRefusal(directory.ErrUnavailable)
 	}
 	timeout := holdTimeout
 	if q := b.Directory.Cfg.QueryTimeout; q > 0 {
@@ -568,7 +608,7 @@ func (b *Broker) revokedSince(w http.ResponseWriter, r *http.Request, principal 
 	items []api.MintItem) bool {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), holdTimeout)
 	defer cancel()
-	rv, revoked, err := b.revocation(ctx, principal, cred)
+	rv, revoked, err := b.revocation(ctx, principal, cred, b.legacyOf(r))
 	switch {
 	case err != nil:
 		now := b.Now()

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -204,15 +205,16 @@ func TestACertificateWithoutAnEmailSANBindsWithADirectory(t *testing.T) {
 	if got := principalOnWire(t, getOn(t, c, br, "/v1/identity")); got != "user:bob@corp.example.com" {
 		t.Fatalf("principal %q", got)
 	}
-	// Without a directory the same certificate is refused at the handshake.
+	// Without a directory the same certificate is refused at the handshake,
+	// which TLS 1.3 reports to the client after its own handshake: the
+	// dial succeeds, and the connection is closed before it is answered.
 	f2 := newFixture(t, 8)
 	addr2, _ := serveThrough(t, f2, DefaultListenerLimits, nil)
-	if c2, err := tls.Dial("tcp", addr2, &tls.Config{Certificates: []tls.Certificate{bob}, RootCAs: f2.ca.Pool(),
-		MinVersion: tls.VersionTLS13}); err == nil {
-		defer c2.Close()
-		if _, err := io.WriteString(c2, "GET /v1/config HTTP/1.1\r\nHost: broker\r\n\r\n"); err == nil && !closedByPeer(c2) {
-			t.Fatal("a certificate with no email SAN was served without a directory")
-		}
+	c2 := dialAs(t, f2, addr2, bob)
+	_, werr := io.WriteString(c2, "GET /v1/config HTTP/1.1\r\nHost: broker\r\n\r\n")
+	_ = c2.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if resp, rerr := http.ReadResponse(bufio.NewReader(c2), nil); rerr == nil {
+		t.Fatalf("a certificate with no email SAN was answered %d without a directory (write: %v)", resp.StatusCode, werr)
 	}
 }
 
@@ -295,5 +297,117 @@ func TestAMachinePrincipalNeverTouchesTheDirectory(t *testing.T) {
 	if _, ref := f.b.BindMap(context.Background(), *f.state(f.alice), store.Credential{}); ref == nil ||
 		ref.Error != "identity_unmapped" {
 		t.Fatalf("%+v", ref)
+	}
+}
+
+// A refresh on a mapped connection acts as the pinned principal, never as
+// the email-SAN principal the certificate had before a directory: a mark on
+// the pinned principal refuses it, and no context of the legacy principal is
+// extended (review I-1).
+func TestARefreshActsAsThePinnedPrincipal(t *testing.T) {
+	f := newFixture(t, 8)
+	withDirectory(f, map[string]directory.Answer{alicePrincipal: answerFor(corpAlice, "alice")}, nil)
+	addr, _ := serveMapped(t, f)
+	c, br := held(t, f, addr, f.alice)
+	auth := f.now
+	f.liveContextAt(t, "nx1", "legacy_alice", alicePrincipal, certKey(f.alice), auth, auth.Add(8*time.Hour))
+	f.liveContextAt(t, "leaf1", "alice", corpAlice, certKey(f.alice), auth, auth.Add(8*time.Hour))
+	before, err := f.st.GetContext(context.Background(), store.ContextKey{NAS: "nx1", Username: "legacy_alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.advance(time.Hour)
+	// Unmarked: the pinned principal's context is the one visited, and the
+	// legacy principal's is never touched.
+	status, resp := refreshOn(t, c, br, f.alice)
+	if status != 200 {
+		t.Fatalf("%d %+v", status, resp)
+	}
+	for _, s := range resp.Sessions {
+		if s.Device == "nx1" {
+			t.Fatalf("a refresh on a connection pinned to %s reported the legacy principal's context: %+v", corpAlice, resp)
+		}
+	}
+	after, _ := f.st.GetContext(context.Background(), store.ContextKey{NAS: "nx1", Username: "legacy_alice"})
+	if !after.SessionExpires.Equal(before.SessionExpires) || !after.RefreshedAt.Equal(before.RefreshedAt) {
+		t.Fatalf("the legacy principal's context was extended: %+v -> %+v", before, after)
+	}
+	// A mark on the pinned principal refuses the refresh and extends nothing.
+	if err := f.st.PutRevocation(context.Background(), store.Revocation{Kind: store.RevocationPrincipal,
+		Key: corpAlice, At: f.now, Origin: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	f.advance(time.Minute)
+	f.advance(refreshEvery)
+	status, _ = refreshOn(t, c, br, f.alice)
+	if status != 401 {
+		t.Fatalf("a refresh on a marked pinned principal: %d, want 401", status)
+	}
+	after, _ = f.st.GetContext(context.Background(), store.ContextKey{NAS: "nx1", Username: "legacy_alice"})
+	if !after.SessionExpires.Equal(before.SessionExpires) {
+		t.Fatalf("the legacy principal's context was extended under a mark on the pinned one: %+v", after)
+	}
+}
+
+// A mark on the legacy principal refuses a refresh on the mapped connection.
+func TestARefreshReadsTheLegacyMark(t *testing.T) {
+	f := newFixture(t, 8)
+	withDirectory(f, map[string]directory.Answer{alicePrincipal: answerFor(corpAlice, "alice")}, nil)
+	addr, _ := serveMapped(t, f)
+	c, br := held(t, f, addr, f.alice)
+	if err := f.st.PutRevocation(context.Background(), store.Revocation{Kind: store.RevocationPrincipal,
+		Key: alicePrincipal, At: f.now, Origin: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	if status, _ := refreshOn(t, c, br, f.alice); status != 401 {
+		t.Fatalf("%d, want 401", status)
+	}
+}
+
+// A held connection with no pin under a directory is never re-mapped per
+// request (review M-1): it is refused 503 directory_unavailable.
+func TestAHeldConnectionWithNoPinIsNotRemapped(t *testing.T) {
+	f := newFixture(t, 8)
+	res := withDirectory(f, map[string]directory.Answer{alicePrincipal: answerFor(corpAlice, "alice")}, nil)
+	ctx := withHeldConn(context.Background(), f.now, nil)
+	w := f.call(ctx, f.state(f.alice), "GET", "/v1/identity", "")
+	wantRefused(t, heldAnswer{status: w.Code, body: w.Body.String()}, 503, "directory_unavailable")
+	if res.Calls.Load() != 0 {
+		t.Fatalf("a held connection was mapped per request: %d calls", res.Calls.Load())
+	}
+}
+
+// A legacy-principal mark landing while a mint runs is read by the re-read
+// after the mint (review M-3), and closes the mapped connection (M-2).
+func TestALegacyMarkClosesTheMappedConnection(t *testing.T) {
+	f := newFixture(t, 8)
+	withDirectory(f, map[string]directory.Answer{alicePrincipal: answerFor(corpAlice, "alice")}, nil)
+	addr, bl := serveMapped(t, f)
+	c, _ := held(t, f, addr, f.alice)
+	if n := bl.CloseHeld(func(principal, _ string) bool { return principal == alicePrincipal }); n != 1 {
+		t.Fatalf("a mark on the legacy principal closed %d connections, want 1", n)
+	}
+	if !closedByPeer(c) {
+		t.Fatal("not closed")
+	}
+}
+
+// The re-read after a mint reads the legacy principal's mark too (review M-3).
+func TestTheRereadAfterAMintReadsTheLegacyMark(t *testing.T) {
+	f := newFixture(t, 8)
+	withDirectory(f, map[string]directory.Answer{alicePrincipal: answerFor(corpAlice, "alice")}, nil)
+	if err := f.st.PutRevocation(context.Background(), store.Revocation{Kind: store.RevocationPrincipal,
+		Key: alicePrincipal, At: f.now, Origin: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequest("POST", "/v1/tokens", nil)
+	r.TLS = f.state(f.alice)
+	w := httptest.NewRecorder()
+	_, cred, err := Identity(r.TLS, f.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !f.b.revokedSince(w, r, corpAlice, cred, nil) || w.Code != 401 {
+		t.Fatalf("revokedSince under a legacy mark: %d %s", w.Code, w.Body)
 	}
 }
