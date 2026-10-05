@@ -32,6 +32,9 @@ type Fence struct {
 	asks    chan struct{}
 	// timedOut is told each ErrFeedBehind (OnTimeout).
 	timedOut func()
+	// behind is the highest revision a Wait gave up on; Behind is true while
+	// the feed has not passed it.
+	behind uint64
 }
 
 func newFence() *Fence { return &Fence{wake: make(chan struct{}), asks: make(chan struct{}, 1)} }
@@ -71,6 +74,12 @@ func (f *Fence) OnTimeout(fn func()) { f.mu.Lock(); f.timedOut = fn; f.mu.Unlock
 // SetUp records whether the feed's watch runs; Up reads it.
 func (f *Fence) SetUp(up bool) { f.mu.Lock(); f.up = up; f.mu.Unlock() }
 func (f *Fence) Up() bool      { f.mu.Lock(); defer f.mu.Unlock(); return f.up }
+
+// Behind reports a read Wait gave up on that the feed has not yet passed: etcd
+// answered with a record this process cannot vouch for, so a failure that does
+// not say so (an open circuit, saturated slots) is no outage (plan 7f, review
+// I-1). It clears itself once the feed passes that revision.
+func (f *Fence) Behind() bool { f.mu.Lock(); defer f.mu.Unlock(); return f.behind > f.at }
 
 // At is the revision the feed has delivered through.
 func (f *Fence) At() uint64 { f.mu.Lock(); defer f.mu.Unlock(); return f.at }
@@ -127,6 +136,7 @@ func (f *Fence) Wait(ctx context.Context, rev uint64) error {
 		case <-ctx.Done():
 			f.mu.Lock()
 			timedOut := f.timedOut
+			f.behind = max(f.behind, rev)
 			f.mu.Unlock()
 			if timedOut != nil {
 				timedOut()

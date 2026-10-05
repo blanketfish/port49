@@ -132,7 +132,10 @@ func (s *Store) WatchContexts(ctx context.Context, after uint64, fn func(store.C
 			}
 			var r ctxRec
 			if json.Unmarshal(ev.Kv.Value, &r) != nil {
-				s.logf("etcd: a change to the context at %q does not decode; the feed skipped it", ev.Kv.Key)
+				// Still told, with no Context: a cache evicts the key, and the
+				// ledger cannot open it, so it raises nothing (plan 7f, review M-2).
+				s.logf("etcd: a change to the context at %q does not decode; the feed brings it with no body", ev.Kv.Key)
+				fn(c)
 				continue
 			}
 			c.Context = r.context(ev.Kv.ModRevision)

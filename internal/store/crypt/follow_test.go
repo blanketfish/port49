@@ -197,7 +197,8 @@ func TestACompactedFeedScansAgainAndOnlyRaises(t *testing.T) {
 		kd: sealedAt(t, kd, 400), // unseen, above the base: an entry
 	}, 500)
 	feed.compact <- struct{}{}
-	var rescans atomic.Int32
+	var rescans, cleared atomic.Int32
+	l.attach(evicterFunc{clear: func() { cleared.Add(1) }})
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
 		until(func() bool { return rescans.Load() > 0 && l.next(kd) == 401 && l.Fence().At() >= 500 },
@@ -207,6 +208,11 @@ func TestACompactedFeedScansAgainAndOnlyRaises(t *testing.T) {
 	FollowContexts(ctx, feed, nil, keys(), l, 150, func(bool) {}, func() { rescans.Add(1) }, t.Logf)
 	if rescans.Load() != 1 || l.next(kd) != 401 {
 		t.Fatalf("rescans %d, next at an unseen key above the base %d", rescans.Load(), l.next(kd))
+	}
+	// A compacted watch delivers no delete, so the rescan's clear is what
+	// evicts a deleted context from a cache (plan 7f, review M-1).
+	if cleared.Load() != 1 {
+		t.Fatalf("the cache was told of the rescan %d times, want 1", cleared.Load())
 	}
 	if l.Fence().At() < 500 {
 		t.Fatalf("the rescan at 500 left the fence at %d", l.Fence().At())

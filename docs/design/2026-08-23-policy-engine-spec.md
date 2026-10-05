@@ -7059,7 +7059,8 @@ context cache it is told to keep; and port49 ships a container shape.** *Plan 7f
   - **Through an outage.** A read the store fails to answer (a timeout, an open circuit) is
     answered from the entry the ledger still knows, within the context's idle TTL, counted
     `stale` and said once. Never on a fence timeout: that is the store answering with a later
-    record than the cached one, which may be a revocation, so the read is denied. A
+    record than the cached one, which may be a revocation, so the read is denied, nor while the
+    feed is behind a read it timed out (an open circuit or saturated slots then is no outage). A
     revocation made during a true outage does not reach a cached session, until a read lands
     or the listeners close. The cache lives for one run.
   - **Blobs** were already cached compiled by hash (§5.1.1).

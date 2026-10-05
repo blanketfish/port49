@@ -497,3 +497,37 @@ func TestAQuietFeedResumesFromItsProgressNotARescan(t *testing.T) {
 		t.Fatalf("%d reload(s) after a re-watch within the progress etcd sent", n)
 	}
 }
+
+// A change that does not decode is still delivered, with a zero Context, so a
+// cache evicts its key; the ledger cannot open it and raises nothing (plan 7f,
+// review M-2).
+func TestAChangeThatDoesNotDecodeIsStillDelivered(t *testing.T) {
+	ctx := context.Background()
+	s := onShared(t, time.Now)
+	k := store.ContextKey{NAS: "leaf-01", Username: "alice"}
+	rev, err := s.ScanContexts(ctx, func(store.ContextKey, store.Context) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ctx.Put(ctx, s.k.context(k), "not json"); err != nil {
+		t.Fatal(err)
+	}
+	wctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	got := make(chan store.ContextChange, 1)
+	go s.WatchContexts(wctx, rev, func(c store.ContextChange) {
+		select {
+		case got <- c:
+		default:
+		}
+		cancel()
+	}, func(uint64) {}, nil)
+	select {
+	case c := <-got:
+		if c.Key != k || c.Deleted || c.Rev == 0 || c.Context.CtxID != "" {
+			t.Fatalf("change %+v", c)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("an undecodable change was skipped, so a cache would not evict it")
+	}
+}

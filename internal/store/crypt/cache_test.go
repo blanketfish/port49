@@ -244,3 +244,58 @@ func TestTheCacheIsBounded(t *testing.T) {
 	}
 	_ = b
 }
+
+// A read the fence timed out leaves the feed behind: until it catches up, an
+// ErrUnavailable that is not itself ErrFeedBehind (an open circuit, saturated
+// slots) is no outage either, and no entry is served stale (plan 7f, review
+// I-1). A true outage, with the feed not behind, still serves.
+func TestNoStaleServeWhileTheFeedIsBehindATimedOutRead(t *testing.T) {
+	b, c, l, now, lookups := cacheRig(t)
+	get(t, c)
+	l.Fence().Attach(5)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := l.Fence().Wait(ctx, 99); !errors.Is(err, ErrFeedBehind) {
+		t.Fatal(err)
+	}
+	*now = now.Add(5 * time.Second)
+	b.set(store.Context{}, fmt.Errorf("%w: the context pool's circuit is open", store.ErrUnavailable))
+	if _, err := get(t, c); !errors.Is(err, store.ErrUnavailable) {
+		t.Fatalf("served while the feed was behind: %v", err)
+	}
+	if n := testutil.ToFloat64(lookups.WithLabelValues("stale")); n != 0 {
+		t.Fatalf("stale serves counted: %v", n)
+	}
+	// The feed catches up: the entry was refused, not evicted, and an outage serves again.
+	l.Fence().Followed(99)
+	b.set(store.Context{}, store.ErrUnavailable)
+	if got, err := get(t, c); err != nil || got.CtxID != "c1" {
+		t.Fatalf("an outage with the feed caught up: %v %v", got, err)
+	}
+}
+
+func TestCachedBoundsAreTrustedNoFurtherThanTheirDefaults(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	b := &backing{Store: memory.New(time.Now), c: store.Context{CtxID: "c1", Rev: 7, LastTouchedAt: now}}
+	l := NewLedger()
+	l.Observe(ka, 7, 7, time.Time{}, time.Time{})
+	l.Fence().SetUp(true)
+	c := Cached(b, l, CacheConfig{TTL: time.Second, Max: 0, IdleTTL: time.Hour, Now: func() time.Time { return now }})
+	get(t, c)
+	get(t, c)
+	if b.count() != 1 {
+		t.Fatalf("reads %d: Max 0 cleared the cache at each fill", b.count())
+	}
+	// TTL 0: nothing is a hit and nothing is ever served stale.
+	b2 := &backing{Store: memory.New(time.Now), c: store.Context{CtxID: "c1", Rev: 7, LastTouchedAt: now}}
+	c2 := Cached(b2, l, CacheConfig{TTL: 0, Max: 4, IdleTTL: time.Hour, Now: func() time.Time { return now }})
+	get(t, c2)
+	get(t, c2)
+	if b2.count() != 2 {
+		t.Fatalf("reads %d: TTL 0 served a hit", b2.count())
+	}
+	b2.set(store.Context{}, store.ErrUnavailable)
+	if _, err := get(t, c2); !errors.Is(err, store.ErrUnavailable) {
+		t.Fatalf("TTL 0 served stale: %v", err)
+	}
+}

@@ -12,6 +12,9 @@ import (
 	"github.com/rhwendt/port49/internal/store"
 )
 
+// DefaultCacheMax is a cache's Max when none is set (spec §13, decision 37).
+const DefaultCacheMax = 65536
+
 // CacheConfig is a context cache's bounds and its witnesses (plan 7f;
 // design §12; spec §13, decision 37).
 type CacheConfig struct {
@@ -50,6 +53,9 @@ type CacheConfig struct {
 func Cached(inner store.Store, l *Ledger, cfg CacheConfig) store.Store {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
+	}
+	if cfg.Max <= 0 {
+		cfg.Max = DefaultCacheMax
 	}
 	c := &cache{Store: inner, l: l, cfg: cfg, m: map[store.ContextKey]cacheEntry{}}
 	l.attach(c)
@@ -129,7 +135,7 @@ func (c *cache) GetContext(ctx context.Context, k store.ContextKey) (store.Conte
 	// entry (plan 7f, I-2): not an outage, so never stale, and the entry is
 	// superseded.
 	behind := errors.Is(err, ErrFeedBehind)
-	if ok && errors.Is(err, store.ErrUnavailable) && !behind && c.l.knownAt(k, e.c.Rev) && c.withinIdle(e.c, now) {
+	if ok && errors.Is(err, store.ErrUnavailable) && !behind && c.cfg.TTL > 0 && !c.l.Fence().Behind() && c.l.knownAt(k, e.c.Rev) && c.withinIdle(e.c, now) {
 		c.count("stale")
 		if c.cfg.Stale != nil {
 			c.cfg.Stale(err)
