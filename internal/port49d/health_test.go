@@ -130,6 +130,19 @@ func TestPassesNeedsThePassesInARow(t *testing.T) {
 	}
 }
 
+// A check that the run's end cut short is not a failed check: the metric
+// counts the store's answers, not a shutdown.
+func TestACheckCutShortByTheRunEndingIsNotCounted(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	h := testHealth(func(c context.Context) error { cancel(); <-c.Done(); return c.Err() })
+	if err := h.once(ctx); err == nil {
+		t.Fatal("a cut-short check passed")
+	}
+	if got := testutil.ToFloat64(h.m.StoreHealthChecks.WithLabelValues("fail")); got != 0 {
+		t.Fatalf("a check cut short by the run ending counted as failed: %v", got)
+	}
+}
+
 // A check that never returns is a failure at the timeout, not a hang
 // of the watch.
 func TestAHungCheckFailsAtItsTimeout(t *testing.T) {
@@ -206,19 +219,21 @@ func TestAKilledLeaderDoesNotFailFiveChecksInARow(t *testing.T) {
 		cancel()
 	}
 	c.Kill(c.Leader(t))
-	run, worst := 0, 0
+	run, worst, failed, total := 0, 0, 0, 0
 	for end := time.Now().Add(15 * time.Second); time.Now().Before(end); time.Sleep(time.Second) {
 		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 		err := check(ctx)
 		cancel()
+		total++
 		if err != nil {
 			run++
+			failed++
 		} else {
 			run = 0
 		}
 		worst = max(worst, run)
 	}
-	t.Logf("the longest run of failed checks after the leader was killed: %d", worst)
+	t.Logf("after the leader was killed: %d of %d checks failed, the longest run %d", failed, total, worst)
 	if worst >= 5 {
 		t.Fatalf("%d failed checks in a row after a leader was killed: the default close_after (5) would close the "+
 			"listeners on an election; report to Ryan (OR-1), do not raise the default", worst)

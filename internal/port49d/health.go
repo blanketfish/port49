@@ -101,11 +101,15 @@ func storeCheck(ctxPool interface{ Ping(context.Context) error },
 	}
 }
 
-// once is one check within h.timeout, counted.
+// once is one check within h.timeout, counted. A check that ctx's end cut
+// short is not counted: the run ending is not the store failing.
 func (h *health) once(ctx context.Context) error {
 	cctx, cancel := context.WithTimeout(ctx, h.timeout)
 	defer cancel()
 	err := h.check(cctx)
+	if ctx.Err() != nil {
+		return err
+	}
 	outcome := "pass"
 	if err != nil {
 		outcome = "fail"
