@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net/netip"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -15,6 +17,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/rhwendt/port49/internal/admission"
+	"github.com/rhwendt/port49/internal/directory"
 	"github.com/rhwendt/port49/internal/engine"
 	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/policy"
@@ -689,11 +692,11 @@ func TestACompileFaultRevokesThatContextAndSaysSo(t *testing.T) {
 	f.login(t, alice, "nx1", "alice")
 	priors := f.reload(t, edit(t, roleList, readOnly, aliceGrant, "roles: [read_only], max_privilege: admin"))
 	resolve := resolveFor
-	resolveFor = func(p *policy.Policy, principal string, d admission.Device, at time.Time) (policy.Resolution, error) {
+	resolveFor = func(p *policy.Policy, m policy.Member, d admission.Device, at time.Time) (policy.Resolution, error) {
 		if d.Name == "leaf1" {
 			return policy.Resolution{}, errors.New("policy: a composition the load never compiled")
 		}
-		return resolve(p, principal, d, at)
+		return resolve(p, m, d, at)
 	}
 	t.Cleanup(func() { resolveFor = resolve })
 	f.log.Reset()
@@ -1011,10 +1014,10 @@ func TestASettlePassComparesNoPolicyWithItself(t *testing.T) {
 	f := newFixture(t, 8)
 	mints := 0
 	was := mintedFor
-	mintedFor = func(p *policy.Policy, principal string, d admission.Device, at time.Time,
+	mintedFor = func(p *policy.Policy, m policy.Member, d admission.Device, at time.Time,
 		def time.Duration) (minted, bool) {
 		mints++
-		return was(p, principal, d, at, def)
+		return was(p, m, d, at, def)
 	}
 	t.Cleanup(func() { mintedFor = was })
 	if _, err := f.b.Refresh(context.Background(), []Prior{{Policy: f.b.Policy.Load(), At: f.now}}); err != nil {
@@ -1709,5 +1712,267 @@ func TestApplyMarksAtStartSkipsAnUnreadableContext(t *testing.T) {
 	}
 	if got, _ := f.st.GetContext(ctx, k); got.RevokedAt.IsZero() {
 		t.Fatal("the unreadable context was not marked")
+	}
+}
+
+// withoutOpsGrant is groupPolicy with the grant secret-group's members held
+// through withdrawn.
+var withoutOpsGrant = strings.Replace(groupPolicy,
+	"  - {subject: ops, scope: all_devices, roles: [ro], max_privilege: readonly}\n", "", 1)
+
+// reloadDir parses body for a directory and swaps it in, returning the
+// prior, as reload does without one.
+func (f *fixture) reloadDir(t *testing.T, body string) []Prior {
+	t.Helper()
+	pol, err := policy.Parse([]byte(body), policy.Env{Devices: f.inventory(), Directory: policy.DirectoryOn,
+		Now: f.b.Now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return []Prior{{Policy: f.b.Policy.Swap(pol), At: f.b.Now()}}
+}
+
+// holdMembership stores a's membership as verified at verified, refused or
+// not, under a grace of an hour.
+func (f *fixture) holdMembership(t *testing.T, r *directory.Resolver, a directory.Answer, verified time.Time,
+	refused bool) {
+	t.Helper()
+	r.Cfg.Grace = time.Hour
+	m := a.Membership
+	m.VerifiedAt, m.Refused = verified, refused
+	if err := f.st.PutMembership(context.Background(), m, 24*time.Hour); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// memberContext writes a live context for member a on device, as the policy
+// in force compiles it for her, refreshed at refreshed.
+func (f *fixture) memberContext(t *testing.T, a directory.Answer, device string, refreshed time.Time) store.Context {
+	t.Helper()
+	ctx := context.Background()
+	pol := f.b.Policy.Load()
+	dev, _ := pol.Device(device)
+	res, err := pol.ResolveMember(member(a), dev, f.b.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, hash, err := engine.Encode(res.Blob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.b.putBlobLogged(ctx, hash, body, 24*time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	k := store.ContextKey{NAS: device, Username: a.Username}
+	if err := f.st.PutContext(ctx, k, store.Context{CtxID: "ctx_" + device, Principal: a.Principal,
+		Username: a.Username, PrivLvl: 1, BlobHash: hash, MaxPrivilege: res.MaxPrivilege, Enable: res.Enable, AuthTime: f.now,
+		SessionExpires: f.now.Add(12 * time.Hour), RefreshedAt: refreshed, LastTouchedAt: f.now}, 24*time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.IndexContext(ctx, a.Principal, "", "", store.ContextRef{NAS: device, Username: a.Username},
+		24*time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	return f.context(t, device, a.Username)
+}
+
+// A policy reload judges a group member by the stored membership: a grant
+// withdrawn from their group revokes their context with no server asked
+// (Ruling 12), and refreshed_at is not touched.
+func TestAReloadJudgesTheStoredMembership(t *testing.T) {
+	a := answerFor(corpAlice, "alice")
+	f, r := groupFixture(t, map[string]directory.Answer{corpAlice: a}, nil)
+	f.holdMembership(t, r, a, f.now.Add(-10*time.Minute), false)
+	before := f.memberContext(t, a, "leaf1", f.now.Add(-time.Hour))
+	if rep, err := f.b.Refresh(context.Background(), []Prior{{Policy: f.b.Policy.Load(), At: f.now}}); err != nil ||
+		rep.Revoked != 0 || rep.Unchanged != 1 {
+		t.Fatalf("a reload that changes nothing keeps the member's context: %+v %v", rep, err)
+	}
+	if got := f.context(t, "leaf1", "alice"); !got.RefreshedAt.Equal(before.RefreshedAt) || !got.RevokedAt.IsZero() {
+		t.Fatalf("a policy pass moved refreshed_at or revoked: %+v", got)
+	}
+	priors := f.reloadDir(t, withoutOpsGrant)
+	f.log.Reset()
+	rep, err := f.b.Refresh(context.Background(), priors)
+	if err != nil || rep.Revoked != 1 {
+		t.Fatalf("%+v %v", rep, err)
+	}
+	got := f.context(t, "leaf1", "alice")
+	if got.RevokedAt.IsZero() || !got.RefreshedAt.Equal(before.RefreshedAt) {
+		t.Fatalf("the withdrawn grant revokes the member's context, refreshed_at untouched: %+v", got)
+	}
+	if n := r.Calls.Load(); n != 0 {
+		t.Fatalf("the pass asked the directory %d times", n)
+	}
+	recs := eventsOf(f.records(t), "refresh")
+	if len(recs) != 1 || recs[0]["reason"] != "no_grants_matched" || recs[0]["principal"] != corpAlice ||
+		strings.Contains(f.log.String(), "secret-group") {
+		t.Fatalf("%v", recs)
+	}
+}
+
+// A principal with no stored membership, a refused one, or one verified
+// longer ago than directory.grace, is judged with no groups: a context held
+// only through a group is revoked, and a refused membership's stored groups
+// are never read (pre-flight C-1, I-14).
+func TestAnAbsentRefusedOrOldMembershipIsNoGroups(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		store    bool
+		verified time.Duration
+		refused  bool
+	}{
+		{"absent", false, 0, false},
+		{"refused", true, -time.Minute, true},
+		{"past grace", true, -2 * time.Hour, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := answerFor(corpAlice, "alice")
+			f, r := groupFixture(t, map[string]directory.Answer{corpAlice: a}, nil)
+			f.memberContext(t, a, "leaf1", f.now.Add(-time.Hour))
+			if tc.store {
+				f.holdMembership(t, r, a, f.now.Add(tc.verified), tc.refused)
+			}
+			f.log.Reset()
+			rep, err := f.b.Refresh(context.Background(), []Prior{{Policy: f.b.Policy.Load(), At: f.now}})
+			if err != nil || rep.Revoked != 1 {
+				t.Fatalf("%+v %v", rep, err)
+			}
+			if got := f.context(t, "leaf1", "alice"); got.RevokedAt.IsZero() {
+				t.Fatalf("a member with no groups keeps a context held through one: %+v", got)
+			}
+			if rep.Unverified != 0 {
+				t.Fatalf("an unverified membership is judged, not unverified: %+v", rep)
+			}
+		})
+	}
+}
+
+// A context whose subjects' composition a joint check now refuses is
+// revoked composition_refused.
+func TestARefusedCompositionRevokesOnRefresh(t *testing.T) {
+	f := newFixture(t, 8)
+	f.login(t, alice, "leaf1", "alice")
+	resolve := resolveFor
+	resolveFor = func(p *policy.Policy, m policy.Member, d admission.Device, at time.Time) (policy.Resolution, error) {
+		return policy.Resolution{}, policy.ErrCompositionRefused
+	}
+	t.Cleanup(func() { resolveFor = resolve })
+	f.log.Reset()
+	rep, err := f.b.Refresh(context.Background(), []Prior{{Policy: f.b.Policy.Load(), At: f.now}})
+	if err != nil || rep.Revoked != 1 || rep.Failed != 0 {
+		t.Fatalf("%+v %v", rep, err)
+	}
+	if got := f.context(t, "leaf1", "alice"); got.RevokedAt.IsZero() {
+		t.Fatalf("not revoked: %+v", got)
+	}
+	recs := eventsOf(f.records(t), "refresh")
+	if len(recs) != 1 || recs[0]["verdict"] != "deny" || recs[0]["reason"] != "composition_refused" {
+		t.Fatalf("%v", recs)
+	}
+}
+
+// A machine principal (app:) is judged as MemberOf under a directory, and
+// keeps its context (pre-flight I-10).
+func TestAMachinePrincipalIsJudgedWithoutTheDirectory(t *testing.T) {
+	f, r := groupFixture(t, nil, nil)
+	ci := directory.Answer{Membership: store.Membership{Principal: "app:ci-runner", Username: "ci"}}
+	pol := f.b.Policy.Load()
+	dev, _ := pol.Device("leaf1")
+	res, err := pol.ResolveMember(policy.MemberOf("app:ci-runner"), dev, f.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, hash, err := engine.Encode(res.Blob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := f.b.putBlobLogged(ctx, hash, body, 24*time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.PutContext(ctx, store.ContextKey{NAS: "leaf1", Username: "ci"}, store.Context{CtxID: "ctx_ci",
+		Principal: ci.Principal, Username: "ci", PrivLvl: 1, BlobHash: hash, MaxPrivilege: res.MaxPrivilege, Enable: res.Enable,
+		AuthTime: f.now, SessionExpires: f.now.Add(12 * time.Hour), RefreshedAt: f.now}, 24*time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.IndexContext(ctx, ci.Principal, "", "", store.ContextRef{NAS: "leaf1", Username: "ci"},
+		24*time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := f.b.Refresh(ctx, []Prior{{Policy: pol, At: f.now}})
+	if err != nil || rep.Unchanged != 1 || rep.Revoked != 0 {
+		t.Fatalf("%+v %v", rep, err)
+	}
+	if got := f.context(t, "leaf1", "ci"); !got.RevokedAt.IsZero() {
+		t.Fatalf("a machine principal's context was revoked: %+v", got)
+	}
+	if n := r.Calls.Load(); n != 0 {
+		t.Fatalf("a machine principal reached the directory %d times", n)
+	}
+}
+
+// A reload that withdraws a group's grant supersedes its members' unspent
+// tokens, though no identity subject names them (pre-flight I-13).
+func TestAReloadSupersedesAGroupMembersTokens(t *testing.T) {
+	a := answerFor(corpAlice, "alice")
+	f, r := groupFixture(t, map[string]directory.Answer{corpAlice: a}, nil)
+	f.holdMembership(t, r, a, f.now, false)
+	if r := decodeMint(t, f.mintOnPinned(a, `["leaf1"]`)); r.Results[0].Verdict != "permit" {
+		t.Fatalf("%+v", r)
+	}
+	k := store.TokenKey{NAS: "leaf1", Username: "alice"}
+	if toks, _ := f.st.Candidates(context.Background(), k); len(toks) != 1 {
+		t.Fatalf("%d tokens minted", len(toks))
+	}
+	priors := f.reloadDir(t, withoutOpsGrant)
+	rep, err := f.b.Refresh(context.Background(), priors)
+	if err != nil || rep.TokenKeys != 1 {
+		t.Fatalf("%+v %v", rep, err)
+	}
+	if toks, _ := f.st.Candidates(context.Background(), k); len(toks) != 0 {
+		t.Fatalf("the group member's token survived the withdrawn grant: %d", len(toks))
+	}
+}
+
+// A pass's judge that gets no answer from the directory leaves the
+// principal's contexts as they are and unstamped, counted unverified; one
+// the directory answered no revokes them under its reason; any other error
+// ends the pass (Ruling 12).
+func TestAPassTellsTheDirectoryNotAnsweringFromNo(t *testing.T) {
+	judge := func(err error) passJudge {
+		return passJudge{member: func(context.Context, string) (policy.Member, time.Time, error) {
+			return policy.Member{}, time.Time{}, err
+		}}
+	}
+	run := func(f *fixture, err error) (RefreshReport, error) {
+		rep := RefreshReport{At: f.now}
+		return rep, f.b.refreshContexts(context.Background(), f.b.Policy.Load(), nil, f.now, &rep, false, judge(err))
+	}
+	f := newFixture(t, 8)
+	before := f.login(t, alice, "leaf1", "alice")
+	rep, err := run(f, fmt.Errorf("%w: no server", directory.ErrUnavailable))
+	if err != nil || rep.Unverified != 1 || rep.UnverifiedPrincipals != 1 || !rep.OldestUnverified.Equal(before.RefreshedAt) ||
+		rep.Revoked != 0 {
+		t.Fatalf("%+v %v", rep, err)
+	}
+	if got := f.context(t, "leaf1", "alice"); !got.RevokedAt.IsZero() || got.PolicyRev != before.PolicyRev {
+		t.Fatalf("an unverified context moved: %+v", got)
+	}
+	if _, err := run(f, errors.New("the store broke")); err == nil {
+		t.Fatal("any other error ends the pass")
+	}
+	if got := f.context(t, "leaf1", "alice"); !got.RevokedAt.IsZero() {
+		t.Fatalf("another error revoked: %+v", got)
+	}
+	f.log.Reset()
+	rep, err = run(f, directory.ErrAmbiguous)
+	if err != nil || rep.Revoked != 1 || !slices.Equal(rep.Narrowed, []string{alice}) {
+		t.Fatalf("%+v %v", rep, err)
+	}
+	recs := eventsOf(f.records(t), "refresh")
+	if got := f.context(t, "leaf1", "alice"); got.RevokedAt.IsZero() ||
+		len(recs) != 1 || recs[0]["reason"] != "identity_ambiguous" {
+		t.Fatalf("%+v %v", got, recs)
 	}
 }

@@ -6,12 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"slices"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/directory"
 	"github.com/rhwendt/port49/internal/engine"
 	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/store"
@@ -63,6 +65,16 @@ type RefreshReport struct {
 	// receipt replay, but the live session keeps what it had at login until
 	// logout. It counts contexts the other counts already count.
 	Unreached int
+	// Unverified is the contexts left unstamped: the directory did not
+	// answer for their principal. UnverifiedPrincipals counts those
+	// principals, and OldestUnverified is the least refreshed_at among the
+	// contexts (zero with none).
+	Unverified           int
+	UnverifiedPrincipals int
+	OldestUnverified     time.Time
+	// Narrowed is the principals a pass revoked or narrowed a context of,
+	// for token supersession.
+	Narrowed []string
 	// At is the instant the pass judged every token and context at. A caller
 	// schedules the next grant expiry from it (policy.NextChange(At)), not
 	// from its own clock after the pass, and runs another pass at once when
@@ -168,7 +180,7 @@ func (b *Broker) Refresh(ctx context.Context, priors []Prior) (RefreshReport, er
 	var rep RefreshReport
 	for {
 		rep.At = b.Now()
-		busy := b.refreshContexts(ctx, cur, priors, rep.At, &rep, sameSource)
+		busy := b.refreshContexts(ctx, cur, priors, rep.At, &rep, sameSource, passJudge{member: b.storedJudge})
 		if busy != nil && !errors.Is(busy, store.ErrConflict) {
 			return rep, fmt.Errorf("refreshing live contexts: %w", busy)
 		}
@@ -243,7 +255,7 @@ func (b *Broker) RefreshTokens(ctx context.Context, priors []Prior) (RefreshRepo
 func (b *Broker) RefreshAtStart(ctx context.Context) (RefreshReport, error) {
 	var rep RefreshReport
 	rep.At = b.Now()
-	err := b.refreshContexts(ctx, b.Policy.Load(), nil, rep.At, &rep, false)
+	err := b.refreshContexts(ctx, b.Policy.Load(), nil, rep.At, &rep, false, passJudge{member: b.storedJudge})
 	return rep, err
 }
 
@@ -326,16 +338,16 @@ type minted struct {
 	age      time.Duration
 }
 
-// mintedBy is what p would mint for principal on d at at, and false when it
+// mintedBy is what p would mint for m on d at at, and false when it
 // would mint nothing: no grant, a quarantine, or a refusal the broker makes as
 // an item error (policy.MintCheck). def is port49d's max_session_age.
-func mintedBy(p *policy.Policy, principal string, d admission.Device, at time.Time,
+func mintedBy(p *policy.Policy, m policy.Member, d admission.Device, at time.Time,
 	def time.Duration) (minted, bool) {
-	res, err := p.Resolve(principal, d, at)
+	res, err := p.ResolveMember(m, d, at)
 	if err != nil {
 		return minted{}, false
 	}
-	if code, _ := policy.MintCheck(res, principal, d.Name); code != "" {
+	if code, _ := policy.MintCheck(res, m.Principal, d.Name); code != "" {
 		return minted{}, false
 	}
 	blob := res.Blob
@@ -394,6 +406,28 @@ func (b *Broker) supersedeTokens(ctx context.Context, cur *policy.Policy, now ti
 	}
 	current := map[[2]string]answer{} // the policy in force's, by (principal, device), computed once
 	keys := map[store.TokenKey]bool{}
+	// A group member is named by no identity subject, so the principals the
+	// scan judges are those a prior declares and those the store holds a
+	// membership for (pre-flight I-13); read once per pass, and only under a
+	// directory.
+	var held []string
+	if b.Directory != nil {
+		var err error
+		if held, err = b.Store.MembershipPrincipals(ctx); err != nil {
+			return err
+		}
+	}
+	members := map[string]policy.Member{}
+	memberOf := func(principal string) (policy.Member, error) {
+		if m, ok := members[principal]; ok {
+			return m, nil
+		}
+		m, err := b.storedMember(ctx, principal)
+		if err == nil {
+			members[principal] = m
+		}
+		return m, err
+	}
 	for _, pr := range priors {
 		instants := pr.instants(now)
 		if pr.Policy == cur && len(instants) == 1 {
@@ -401,8 +435,18 @@ func (b *Broker) supersedeTokens(ctx context.Context, cur *policy.Policy, now ti
 			// settle pass, or a retry: every answer is the one it gives now.
 			continue
 		}
-		for _, principal := range pr.Policy.Principals() {
+		principals := pr.Policy.Principals()
+		if len(held) > 0 {
+			principals = append(slices.Clone(principals), held...)
+			sort.Strings(principals)
+			principals = slices.Compact(principals)
+		}
+		for _, principal := range principals {
 			if err := ctx.Err(); err != nil {
+				return err
+			}
+			m, err := memberOf(principal)
+			if err != nil {
 				return err
 			}
 			for _, name := range names {
@@ -411,7 +455,7 @@ func (b *Broker) supersedeTokens(ctx context.Context, cur *policy.Policy, now ti
 					continue // the prior did not know it, so it minted nothing for it
 				}
 				for _, at := range instants {
-					was, ok := mintedFor(pr.Policy, principal, d, at, b.MaxSessionAge)
+					was, ok := mintedFor(pr.Policy, m, d, at, b.MaxSessionAge)
 					if !ok {
 						continue // nothing was minted then, so nothing is superseded
 					}
@@ -420,7 +464,7 @@ func (b *Broker) supersedeTokens(ctx context.Context, cur *policy.Policy, now ti
 						// A device the inventory in force no longer names mints
 						// nothing now, so every token for it is superseded.
 						if nd, ok := cur.Device(name); ok {
-							is.m, is.ok = mintedFor(cur, principal, nd, now, b.MaxSessionAge)
+							is.m, is.ok = mintedFor(cur, m, nd, now, b.MaxSessionAge)
 						}
 						current[[2]string{principal, name}] = is
 					}
@@ -476,7 +520,7 @@ func (b *Broker) supersedeTokens(ctx context.Context, cur *policy.Policy, now ti
 // ErrPrincipalUnvisited over a context still changing, and that over
 // ErrLeftUnderUnheldKey, whatever order the pass met them in.
 func (b *Broker) refreshContexts(ctx context.Context, cur *policy.Policy, priors []Prior, now time.Time,
-	rep *RefreshReport, sameSource bool) error {
+	rep *RefreshReport, sameSource bool, judge passJudge) error {
 	principals, err := b.Store.ActivePrincipals(ctx)
 	if err != nil {
 		return err
@@ -504,8 +548,43 @@ func (b *Broker) refreshContexts(ctx context.Context, cur *policy.Policy, priors
 			unvisited = true
 			continue
 		}
+		m, stamp, jerr := judge.member(ctx, principal)
+		switch {
+		case errors.Is(jerr, directory.ErrUnavailable), errors.Is(jerr, context.DeadlineExceeded):
+			// The directory did not answer for this principal: its contexts
+			// are left as they are and unstamped, and context_stale takes
+			// over at the ceiling (Ruling 12).
+			rep.UnverifiedPrincipals++
+			for _, ref := range refs {
+				b.count(rep, "unverified")
+				rep.Unverified++
+				if c, err := b.Store.GetContext(ctx, store.ContextKey{NAS: ref.NAS, Username: ref.Username}); err == nil &&
+					(rep.OldestUnverified.IsZero() || c.RefreshedAt.Before(rep.OldestUnverified)) {
+					rep.OldestUnverified = c.RefreshedAt
+				}
+			}
+			continue
+		case errors.Is(jerr, directory.ErrUnmapped), errors.Is(jerr, directory.ErrAmbiguous),
+			errors.Is(jerr, directory.ErrUsernameTaken):
+			// The directory answered no: every context of the principal is
+			// revoked under that reason, and its tokens superseded.
+			for _, ref := range refs {
+				if err := b.revokeFor(ctx, principal, ref, refusalReason(jerr), now, rep); err != nil {
+					return err
+				}
+			}
+			rep.Narrowed = append(rep.Narrowed, principal)
+			continue
+		case jerr != nil:
+			return jerr
+		}
+		pol, release := cur, func() {}
+		if judge.hold != nil {
+			pol, release = judge.hold()
+		}
 		for _, ref := range refs {
-			switch _, err := b.refreshContext(ctx, cur, priors, now, principal, ref, rep, quarantined, sameSource); {
+			_, err := b.refreshContext(ctx, pol, priors, now, m, ref, rep, quarantined, sameSource, stamp)
+			switch {
 			case errors.Is(err, ErrLeftUnderUnheldKey):
 				unheld = err
 			case errors.Is(err, store.ErrConflict):
@@ -513,9 +592,11 @@ func (b *Broker) refreshContexts(ctx context.Context, cur *policy.Policy, priors
 					busy = err
 				}
 			case err != nil:
+				release()
 				return err
 			}
 		}
+		release()
 	}
 	// Every live context was visited, so a quarantine this pass did not see
 	// is over, or its context is: forget it, and a context quarantined again
@@ -544,8 +625,9 @@ func (b *Broker) refreshContexts(ctx context.Context, cur *policy.Policy, priors
 // judging (gone, another principal's, the lab's, or revoked already), and ""
 // with a store error.
 func (b *Broker) refreshContext(ctx context.Context, cur *policy.Policy, priors []Prior, now time.Time,
-	principal string, ref store.ContextRef, rep *RefreshReport, quarantined map[string]bool,
-	sameSource bool) (outcome string, err error) {
+	m policy.Member, ref store.ContextRef, rep *RefreshReport, quarantined map[string]bool,
+	sameSource bool, stamp time.Time) (outcome string, err error) {
+	principal := m.Principal
 	k := store.ContextKey{NAS: ref.NAS, Username: ref.Username}
 	known, plat := knownPlatform(cur, priors, ref.NAS)
 	for attempt := 0; attempt < store.MaxJoinAttempts; attempt++ {
@@ -575,7 +657,7 @@ func (b *Broker) refreshContext(ctx context.Context, cur *policy.Policy, priors 
 		if c.Principal != principal || c.BlobHash == "" || !c.RevokedAt.IsZero() {
 			return "skipped", nil
 		}
-		step := b.decideRefresh(cur, now, principal, ref, c)
+		step := b.decideRefresh(cur, now, m, ref, c)
 		step.sessionOnly = sessionOnly(known, plat)
 		if step.rec.Session != nil { // an unchanged step carries no record (pre-flight I13)
 			step.rec.Session.Unreached = step.sessionOnly
@@ -589,11 +671,20 @@ func (b *Broker) refreshContext(ctx context.Context, cur *policy.Policy, priors 
 			// An inventory-only swap that left this context's answer as it
 			// was: nothing is written and nothing recorded, and it goes on
 			// naming the bundle that compiled it, which is still true.
+			switch err := b.stamp(ctx, k, c.PolicyRev, stamp); {
+			case errors.Is(err, store.ErrConflict):
+				continue
+			case errors.Is(err, store.ErrNotFound):
+				return "skipped", nil
+			case err != nil:
+				return "", err
+			}
 			b.count(rep, "unchanged")
 			return "unchanged", nil
 		}
 		switch {
 		case step.revoke:
+			rep.Narrowed = append(rep.Narrowed, principal)
 			return b.revoke(ctx, k, c.Rev, now, step, rep)
 		case step.outcome == "quarantined":
 			quarantined[c.CtxID] = true
@@ -603,9 +694,20 @@ func (b *Broker) refreshContext(ctx context.Context, cur *policy.Policy, priors 
 			b.count(rep, step.outcome)
 			return step.outcome, nil
 		case step.write == nil:
+			if step.outcome == "unchanged" {
+				switch err := b.stamp(ctx, k, c.PolicyRev, stamp); {
+				case errors.Is(err, store.ErrConflict):
+					continue
+				case errors.Is(err, store.ErrNotFound):
+					return "skipped", nil
+				case err != nil:
+					return "", err
+				}
+			}
 			b.count(rep, step.outcome)
 			return step.outcome, nil
 		}
+		step.write.RefreshedAt = stamp
 		// The blob is in the store before any context names it: the
 		// daemon's next command reads it by that name. It is kept as long
 		// as the context can live, as at mint: an idle context outliving
@@ -640,6 +742,7 @@ func (b *Broker) refreshContext(ctx context.Context, cur *policy.Policy, priors 
 		case err != nil:
 			return "", err
 		}
+		rep.Narrowed = append(rep.Narrowed, principal)
 		b.emitTo(b.passLog(rep), step.rec)
 		b.count(rep, step.outcome)
 		b.unreached(step, rep)
@@ -658,6 +761,88 @@ func (b *Broker) refreshContext(ctx context.Context, cur *policy.Policy, priors 
 	b.count(rep, "failed")
 	return "failed", fmt.Errorf("the context for %q on %q was still changing after %d attempts: %w", ref.Username,
 		ref.NAS, store.MaxJoinAttempts, store.ErrConflict)
+}
+
+// stamp is StampRefreshed for a pass that verified the directory; a zero at
+// stamps nothing.
+func (b *Broker) stamp(ctx context.Context, k store.ContextKey, policyRev uint64, at time.Time) error {
+	if at.IsZero() {
+		return nil
+	}
+	return b.Store.StampRefreshed(ctx, k, policyRev, at)
+}
+
+// revokeFor revokes one context of principal under reason, as a refresh's
+// revoking step does: the directory answered no for the principal, so none
+// of its contexts stands. A context gone, revoked already, or another
+// principal's now is left.
+func (b *Broker) revokeFor(ctx context.Context, principal string, ref store.ContextRef, reason decision.Reason,
+	now time.Time, rep *RefreshReport) error {
+	k := store.ContextKey{NAS: ref.NAS, Username: ref.Username}
+	c, err := b.Store.GetContext(ctx, k)
+	var unreadable *store.UnreadableContextError
+	switch {
+	case errors.Is(err, store.ErrNotFound), errors.As(err, &unreadable):
+		return nil // gone, or unopenable: its own judgment revokes it
+	case err != nil:
+		return err
+	case c.Principal != principal || !c.RevokedAt.IsZero():
+		return nil
+	}
+	rec := decision.Record{TS: now, Event: decision.EventRefresh, Verdict: decision.VerdictDeny, Reason: reason,
+		Principal: principal, Device: &decision.Device{Name: ref.NAS},
+		Session: &decision.Session{CtxID: c.CtxID, Username: c.Username, Privilege: c.PrivLvl}}
+	_, err = b.revoke(ctx, k, c.Rev, now, refreshStep{revoke: true, rec: rec, outcome: "revoked"}, rep)
+	return err
+}
+
+// refusalReason is the reason a directory refusal is recorded under.
+func refusalReason(err error) decision.Reason {
+	switch {
+	case errors.Is(err, directory.ErrAmbiguous):
+		return decision.IdentityAmbiguous
+	case errors.Is(err, directory.ErrUsernameTaken):
+		return decision.UsernameCollision
+	}
+	return decision.IdentityUnmapped
+}
+
+// passJudge is how a pass learns each principal's member, and under which
+// policy it judges it.
+type passJudge struct {
+	// member is principal's member and the stamp's time; a zero time stamps nothing.
+	member func(ctx context.Context, principal string) (policy.Member, time.Time, error)
+	// hold, when set, is the policy each principal is judged under: taken
+	// after member answers, released once that principal's contexts are
+	// written (pre-flight I-11). Unset, cur judges every principal.
+	hold func() (*policy.Policy, func())
+}
+
+// storedJudge is a policy pass's member: the stored membership, no stamp.
+func (b *Broker) storedJudge(ctx context.Context, principal string) (policy.Member, time.Time, error) {
+	m, err := b.storedMember(ctx, principal)
+	return m, time.Time{}, err
+}
+
+// storedMember is the membership a policy pass judges principal by: the
+// store's, if it is unrefused and verified within directory.grace; else no
+// groups (Ruling 12; pre-flight I-14). A machine principal is MemberOf.
+func (b *Broker) storedMember(ctx context.Context, principal string) (policy.Member, error) {
+	if b.Directory == nil || !directory.IsUser(principal) {
+		return policy.MemberOf(principal), nil // a machine principal has no entry (pre-flight I-10)
+	}
+	sm, ok, err := b.Directory.Stored(ctx, principal)
+	switch {
+	case err != nil:
+		return policy.Member{}, err
+	case !ok, sm.Refused, b.Now().Sub(sm.VerifiedAt) > b.Directory.Cfg.Grace:
+		// None stored, the directory's refusal, or a membership older than
+		// grace: no groups, which can only narrow. A reload during a long
+		// outage never widens a context on a membership nobody has verified
+		// for longer than grace (pre-flight I-14).
+		return policy.Member{Principal: principal, Directory: true}, nil
+	}
+	return member(directory.Answer{Membership: sm}), nil
 }
 
 // sameButBundle reports whether the blob a context names is the new one but
@@ -898,13 +1083,14 @@ type refreshStep struct {
 
 // decideRefresh is what the policy in force says about principal on the
 // context's device now. It reads no store.
-func (b *Broker) decideRefresh(cur *policy.Policy, now time.Time, principal string, ref store.ContextRef,
+func (b *Broker) decideRefresh(cur *policy.Policy, now time.Time, m policy.Member, ref store.ContextRef,
 	c store.Context) refreshStep {
+	principal := m.Principal
 	rec := decision.Record{TS: now, Event: decision.EventRefresh, Principal: principal,
 		Device:  &decision.Device{Name: ref.NAS},
 		Session: &decision.Session{CtxID: c.CtxID, Username: c.Username, Privilege: c.PrivLvl},
 		Policy:  &decision.Policy{Bundle: cur.Bundle}}
-	rec.Policy.Subject, _ = cur.SubjectOf(principal)
+	rec.Policy.Subject, rec.Policy.Subjects = subjectNames(cur, m)
 	revoke := func() refreshStep {
 		rec.Verdict, rec.Reason = decision.VerdictDeny, decision.NoGrantsMatched
 		return refreshStep{revoke: true, rec: rec, outcome: "revoked"}
@@ -930,7 +1116,7 @@ func (b *Broker) decideRefresh(cur *policy.Policy, now time.Time, principal stri
 		return revoke()
 	}
 	rec.Device.Platform = dev.Platform
-	res, err := resolveFor(cur, principal, dev, now)
+	res, err := resolveFor(cur, m, dev, now)
 	if err == nil {
 		rec.Policy.Grants = res.Grants
 	}
@@ -944,6 +1130,17 @@ func (b *Broker) decideRefresh(cur *policy.Policy, now time.Time, principal stri
 		// Not live (spec §5.7, device_unknown): the device cannot reach
 		// port49d, so the context is revoked as for a removed device.
 		rec.Verdict, rec.Reason = decision.VerdictDeny, decision.DeviceUnknown
+		return refreshStep{revoke: true, rec: rec, outcome: "revoked"}
+	case errors.Is(err, policy.ErrNoUsername):
+		// The directory gave this principal no username (none stored, or the
+		// membership is refused or past grace): the context is revoked, as a
+		// mint would refuse it (spec §2, decision 38).
+		rec.Policy.Grants = nil
+		rec.Verdict, rec.Reason = decision.VerdictDeny, decision.IdentityUnmapped
+		return refreshStep{revoke: true, rec: rec, outcome: "revoked"}
+	case errors.Is(err, policy.ErrCompositionRefused):
+		b.logf("broker: refresh: %v; revoking the context (ctx_id %s)", err, c.CtxID)
+		rec.Verdict, rec.Reason = decision.VerdictDeny, decision.CompositionRefused
 		return refreshStep{revoke: true, rec: rec, outcome: "revoked"}
 	case err != nil:
 		return fault("resolving the policy in force", err)
@@ -1009,6 +1206,7 @@ func (b *Broker) count(rep *RefreshReport, outcome string) {
 	case "failed":
 		rep.Failed++
 	}
+	// "unverified" is counted by its caller in the report's own fields.
 	if !rep.session {
 		b.Metrics.ContextRefreshes.WithLabelValues(outcome).Inc()
 	}
@@ -1016,7 +1214,7 @@ func (b *Broker) count(rep *RefreshReport, outcome string) {
 
 // resolveFor is how the refresh resolves a context's principal, swapped in
 // tests to stand in for a composition the load never compiled.
-var resolveFor = (*policy.Policy).Resolve
+var resolveFor = (*policy.Policy).ResolveMember
 
 // mintedFor is mintedBy for the token scan, swapped in tests to count what it
 // compiles.

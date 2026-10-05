@@ -18,6 +18,7 @@ import (
 
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/rhwendt/port49/internal/directory"
 	"github.com/rhwendt/port49/internal/store"
 )
 
@@ -449,4 +450,55 @@ func (s markingStore) ContextsByPrincipal(ctx context.Context, principal string)
 		return nil, err
 	}
 	return s.Store.ContextsByPrincipal(ctx, principal)
+}
+
+// A session refresh with a directory verifies the membership (fresh, or
+// grace) and writes refreshed_at as the membership's verification, never
+// later; a refresh the directory refuses extends nothing.
+func TestASessionRefreshVerifiesTheMembership(t *testing.T) {
+	a := answerFor(corpAlice, "alice")
+	a.Source, a.VerifiedAt = directory.Grace, time.Now().Add(-10*time.Minute).Truncate(time.Second)
+	answers := map[string]directory.Answer{alicePrincipal: a, corpAlice: a}
+	f, _ := groupFixture(t, answers, nil)
+	f.b.Directory = directory.ForTestsStaticResolver(f.st, answers, nil) // answers stays the test's to change
+	addr, _ := serveMapped(t, f)
+	c, br := held(t, f, addr, f.alice)
+	before := f.memberContext(t, a, "leaf1", f.now.Add(-time.Hour))
+	f.advance(time.Minute)
+	status, resp := refreshOn(t, c, br, f.alice)
+	if status != 200 || len(resp.Sessions) != 1 || resp.Sessions[0].Outcome != "extended" {
+		t.Fatalf("%d %+v", status, resp)
+	}
+	got := f.context(t, "leaf1", "alice")
+	if !got.RefreshedAt.Equal(a.VerifiedAt) || !got.AuthTime.Equal(f.b.Now()) || !got.RefreshedAt.After(before.RefreshedAt) {
+		t.Fatalf("refreshed_at %v, want the membership's verification %v (auth_time %v)", got.RefreshedAt,
+			a.VerifiedAt, got.AuthTime)
+	}
+	// A membership verified just now stamps the refresh's own time.
+	a.Source, a.VerifiedAt = directory.Fresh, f.b.Now().Add(time.Hour) // not before at: at wins
+	answers[alicePrincipal], answers[corpAlice] = a, a
+	f.advance(refreshEvery)
+	if status, _ := refreshOn(t, c, br, f.alice); status != 200 {
+		t.Fatalf("%d", status)
+	}
+	if got := f.context(t, "leaf1", "alice"); !got.RefreshedAt.Equal(f.b.Now()) {
+		t.Fatalf("refreshed_at %v, want at %v", got.RefreshedAt, f.b.Now())
+	}
+	// The directory refuses the principal: nothing is extended.
+	delete(answers, corpAlice)
+	prev := f.context(t, "leaf1", "alice")
+	f.advance(refreshEvery)
+	nonce, text := challengeOn(t, c, br)
+	status, body := answerOn(t, c, br, c, f.alice, nonce, text)
+	var e api.Error
+	if err := json.Unmarshal([]byte(body), &e); err != nil || status != 401 || e.Error != "identity_unmapped" {
+		t.Fatalf("%d %s", status, body)
+	}
+	if after := f.context(t, "leaf1", "alice"); !after.AuthTime.Equal(prev.AuthTime) ||
+		!after.SessionExpires.Equal(prev.SessionExpires) || !after.RefreshedAt.Equal(prev.RefreshedAt) {
+		t.Fatalf("a refused refresh extended the context: %+v", after)
+	}
+	if strings.Contains(f.log.String(), "secret-group") {
+		t.Fatal("a group reached the log")
+	}
 }

@@ -10,6 +10,7 @@ import (
 
 	"github.com/rhwendt/port49/internal/broker/api"
 	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/store"
 )
 
@@ -128,7 +129,7 @@ func TestNoRightWidensAMintOrARefresh(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.advance(30 * time.Minute)
-	if _, err := f.b.RefreshSession(ctx, alicePrincipal, store.Credential{Method: "cert"}, f.b.Now()); err != nil {
+	if _, err := f.b.RefreshSession(ctx, policy.MemberOf(alicePrincipal), nil, store.Credential{Method: "cert"}, f.b.Now()); err != nil {
 		t.Fatal(err)
 	}
 	c, err := f.st.GetContext(ctx, store.ContextKey{NAS: "nx1", Username: "carol"})

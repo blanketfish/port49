@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"time"
 
 	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/store"
@@ -120,8 +121,12 @@ func (b *Broker) reindexContext(ctx context.Context, cur *policy.Policy, r store
 		b.logf("broker: re-index: the context for %q on %q stands revoked by a mark; marked it", r.Username, r.NAS)
 		return true, nil
 	}
-	if _, err := b.refreshContext(ctx, cur, nil, rep.At, c.Principal, r.ContextRef, rep, map[string]bool{},
-		false); err != nil && !errors.Is(err, store.ErrConflict) {
+	m, err := b.storedMember(ctx, c.Principal)
+	if err != nil {
+		return true, err
+	}
+	if _, err := b.refreshContext(ctx, cur, nil, rep.At, m, r.ContextRef, rep, map[string]bool{},
+		false, time.Time{}); err != nil && !errors.Is(err, store.ErrConflict) {
 		return true, err
 	}
 	return true, nil
