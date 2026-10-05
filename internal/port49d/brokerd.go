@@ -363,6 +363,11 @@ func runBroker(parent context.Context, cfgPath string) error {
 	if startDoc != nil {
 		persistStart(procOf(cfg), cfg.InventoryService, coldPick{startDoc, startFrom}, m)
 	}
+	// Every replica runs its pool's health checks and selects for its own
+	// queries; the pool closes its connections when Run returns, which is
+	// before the store does (wg).
+	wg.Add(1)
+	go func() { defer wg.Done(); runPool(ctx, brk.Directory) }()
 	brk.Sessions = session.New(bs.st, time.Now, cfg.ContextIdleTTL, cfg.Session.IndexTTL)
 	brk.Marks = marks
 	brk.RevokeTimeout = admin.OpTimeout
@@ -496,9 +501,7 @@ func runBroker(parent context.Context, cfgPath string) error {
 	// It accepts nothing until Serve's first Accept, so every mark the load
 	// read is in it before any connection binds.
 	bl := broker.NewListener(broker.Limit(bln, broker.MaxConns), brokerSrv.TLSConfig,
-		broker.ListenerLimits{MaxPendingPerSource: cfg.Broker.MaxPendingConnsPerSource,
-			MaxPerPrincipal:  cfg.Broker.MaxConnsPerPrincipal,
-			HandshakeTimeout: broker.DefaultListenerLimits.HandshakeTimeout},
+		brokerLimits(cfg, brk),
 		m, time.Now, func(format string, args ...any) {
 			fmt.Fprintf(stderr, procOf(cfg)+": "+format+"\n", args...)
 		})
@@ -507,6 +510,9 @@ func runBroker(parent context.Context, cfgPath string) error {
 	}
 	bl.Refused = brk.RefusedAtBind
 	bl.Status = brk.BindStatus
+	if brk.Directory != nil {
+		bl.Map = brk.BindMap
+	}
 	brk.Conns = bl
 	// Only now the marks feed: a change told before brk.Conns was set would
 	// reach no listener, and the listener holds every mark at the load's

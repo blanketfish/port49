@@ -66,7 +66,42 @@ the env files. A `secret_file` source is plan 12's to weigh.
 - `etcd-init` applies `port49d store-roles`' output once and enables auth. After a port49
   upgrade that changes the roles, re-apply `store-roles`' output by hand; it is never done
   silently.
-- `context_cache` is off here, as everywhere by default.
+- `context_cache` is off here, as everywhere by default, and so is `broker.directory` (see
+  Directory below).
+
+## Directory
+
+The trial has no directory: a subject names its username, and a group subject mints for no
+one (port49-broker says so at its start). `config/port49-broker.yaml` carries a commented
+`broker.directory:` block to resolve humans and their groups from LDAP instead. What each
+key does:
+
+- `servers`: the pool, each `uri` (`ldaps://`, or `ldap://` with `start_tls: true`), a `site`
+  and a `priority`. The broker prefers servers in its own site, then the lowest priority.
+- `site` or `site_env` (default `PORT49_SITE`): this broker's site. Set `PORT49_SITE` per
+  broker container, in `port49-broker.env` or the service's `environment:`; replicas in
+  different sites set different values.
+- `ca_file`: verifies the servers' certificates.
+- `bind`: how the broker authenticates. `gssapi` (`principal`, `keytab_file`, `krb5_conf`),
+  `external` (`tls_cert_file`, `tls_key_file`) or `simple` (`bind_dn` and `password_env`, the
+  weakest: the password is an environment variable, named at the start, never printed).
+- `base_dn`, `groups_base_dn`, `principal_attribute`, `username_attribute`: where a person
+  and their groups are found, and which attributes name them. Only directory administrators
+  may write the two attributes: two entries holding one value are both refused.
+- `certificate_mapping`: how a client certificate finds its entry. `issuer_serial` and `sid`
+  are strong; the others need `allow_weak: true` and `issuers`.
+- `nested_groups`: `in_chain` (Active Directory), `recursive` or `direct`.
+- `grace`: how long a stored membership answers when no server does.
+- `prewarm`: how often, and for how many principals, group members are looked up ahead of
+  their first login.
+- `broker.refresh_interval`: the scheduled re-verification of every live principal.
+
+The keytab and `krb5.conf` go in the broker's configuration volume (`broker-etc`, under
+`/etc/port49/`), the keytab mode 0600 and owned by uid 65532, as the image runs. A keytab
+that cannot be read, or holds no key for the principal, stops the start with the key named.
+A directory outage never makes `/readyz` fail: a session on a stored membership goes on
+within `grace`, and past `session.staleness_ceiling` (default 4h) a command is denied
+`context_stale`.
 
 ## Revoking
 
