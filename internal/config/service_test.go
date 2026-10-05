@@ -81,7 +81,7 @@ func TestTheInventoryServiceBlockIsRefusedWhereItCannotWork(t *testing.T) {
 		"neither": {func() (Config, error) { return loadService(t, false, true, "") },
 			"inventory_file or inventory.service is required"},
 		"no broker": {func() (Config, error) { return loadService(t, false, false, block) },
-			"inventory.service needs a broker: block"},
+			"inventory.service needs a policy (broker.policy_file or policy.file)"},
 		"plain http": {func() (Config, error) {
 			return loadService(t, false, true, strings.Replace(block, "https://", "http://", 1))
 		}, "inventory.service.url must be https"},

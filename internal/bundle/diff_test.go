@@ -617,3 +617,29 @@ func TestCheckPrintsTheShareRoundedUp(t *testing.T) {
 		t.Fatalf("%v", err)
 	}
 }
+
+// port49d's reload guard rewrites three phrases of these refusals for
+// port49-broker by their exact text (RaiseBound, KeyRefsFile, StopFleet):
+// each refusal must still carry its phrase, or the broker's advice is
+// port49d's again (Task 18).
+func TestTheRefusalsCarryTheWordsThatArePerProcess(t *testing.T) {
+	devs := []admission.Device{dev("a", "10.0.3.1", nil), dev("b", "10.0.3.2", nil)}
+	old := mustBundle(t, devs...)
+	typo, err := Parse([]byte(strings.Replace(withScopes, "cidr: 10.0.0.0/8", "cidr: 11.0.0.0/8", 1)),
+		admission.Inventory{Devices: devs}, policy.Env{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	none := CheckAdmission(old, typo, 100, time.Now())
+	if none == nil || !strings.Contains(none.Error(), KeyRefsFile) || !strings.Contains(none.Error(), StopFleet) {
+		t.Fatalf("admits none: %v", none)
+	}
+	outside := mustBundle(t, dev("a", "192.0.2.1", nil), dev("b", "192.0.2.2", nil))
+	if err := Check(old, outside, 100); err == nil || !strings.Contains(err.Error(), KeyRefsFile) ||
+		!strings.Contains(err.Error(), StopFleet) {
+		t.Fatalf("inventory admits none: %v", err)
+	}
+	if !strings.Contains(reloadRemedy, RaiseBound) {
+		t.Fatalf("the bound's remedy: %s", reloadRemedy)
+	}
+}

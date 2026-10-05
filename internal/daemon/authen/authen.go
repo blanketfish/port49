@@ -84,6 +84,11 @@ type Handler struct {
 	// (store.Marks): the enable gate and a receipt's replay read it beside
 	// the context's own revocation. Nil names none.
 	marks *store.Marks
+	// redeemable, when set, is asked before a token is looked up: false
+	// refuses the redemption store_unavailable, the token untouched (the
+	// restore guard; plan 7e, Task 15d). A receipt's replay is not a
+	// redemption, and is not asked.
+	redeemable func() bool
 }
 
 // New builds the authentication handler. tags are the keys the token tag may be
@@ -102,6 +107,13 @@ func New(s store.Store, e decision.Emitter, l *limits.Limiter, m *metrics.Metric
 // receipt's replay read (plan 7d; Ruling 17).
 func (h *Handler) WithMarks(m *store.Marks) *Handler {
 	h.marks = m
+	return h
+}
+
+// WithRedeemGuard sets the check every token redemption asks first (plan
+// 7e, Task 15d).
+func (h *Handler) WithRedeemGuard(redeemable func() bool) *Handler {
+	h.redeemable = redeemable
 	return h
 }
 
@@ -394,6 +406,12 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 		}
 		return s.replay(ctx, rec, r)
 	case !errors.Is(err, store.ErrNotFound):
+		return s.storeError(rec)
+	}
+
+	// A store restored from a snapshot holds every token redeemed since it,
+	// unspent: none is redeemed until the runner's purge (plan 7e, Task 15d).
+	if s.h.redeemable != nil && !s.h.redeemable() {
 		return s.storeError(rec)
 	}
 

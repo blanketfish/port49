@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -286,5 +287,404 @@ func (s *Store) PutSealKeys(ctx context.Context, k SealKeys) error {
 		return err
 	}
 	_, err = s.ctxKV.Put(ctx, s.k.meta("seal_keys"), string(body))
+	return unavailable(err)
+}
+
+// maxJudgedPolicy is the most of a policy file meta/judged carries: under
+// etcd's request limit (1.5 MiB by default) with room for the record.
+const maxJudgedPolicy = 1 << 20
+
+type judgedRec struct {
+	Bundle    string    `json:"bundle"`
+	Policy    []byte    `json:"policy,omitempty"`
+	Omitted   bool      `json:"policy_omitted,omitempty"`
+	InDoubt   bool      `json:"in_doubt,omitempty"`
+	WrittenAt time.Time `json:"written_at"`
+}
+
+// JudgedRecord is meta/judged: the bundle a runner last judged every
+// unspent token against (plan 7e, Ruling 7), and its policy file, for the
+// reload guard at a start (Ruling 17). Policy is nil when the file was
+// over maxJudgedPolicy. InDoubt is a record withdrawn while a replica
+// served another bundle (JudgeInDoubt): the takeover purges as though
+// there were none, and the guard at a start still judges against it.
+type JudgedRecord struct {
+	Bundle  string
+	Policy  []byte
+	InDoubt bool
+}
+
+// Judged reads meta/judged; ok is false when none was recorded. A record
+// that does not decode is ok false too, said by its key alone: a takeover
+// then purges, which fails closed.
+func (s *Store) Judged(ctx context.Context) (JudgedRecord, bool, error) {
+	key := s.k.meta("judged")
+	resp, err := s.ctxKV.Get(ctx, key)
+	if err != nil {
+		return JudgedRecord{}, false, unavailable(err)
+	}
+	if len(resp.Kvs) == 0 {
+		return JudgedRecord{}, false, nil
+	}
+	var r judgedRec
+	if err := json.Unmarshal(resp.Kvs[0].Value, &r); err != nil {
+		s.logf("etcd: %s does not decode; the takeover purges the unspent tokens", key)
+		return JudgedRecord{}, false, nil
+	}
+	return JudgedRecord{Bundle: r.Bundle, Policy: r.Policy, InDoubt: r.InDoubt}, true, nil
+}
+
+// JudgedBundle reads meta/judged_bundle: the bundle's name alone, written
+// with meta/judged so that port49d's gauge need not read the policy file
+// in it. ok is false when none was recorded.
+func (s *Store) JudgedBundle(ctx context.Context) (bundle string, ok bool, err error) {
+	resp, err := s.ctxKV.Get(ctx, s.k.meta("judged_bundle"))
+	if err != nil {
+		return "", false, unavailable(err)
+	}
+	if len(resp.Kvs) == 0 {
+		return "", false, nil
+	}
+	return string(resp.Kvs[0].Value), true, nil
+}
+
+func (s *Store) judgedBody(bundle string, policy []byte) (string, error) {
+	r := judgedRec{Bundle: bundle, Policy: policy, WrittenAt: s.now().UTC()}
+	if len(policy) > maxJudgedPolicy {
+		r.Policy, r.Omitted = nil, true
+	}
+	body, err := json.Marshal(r)
+	return string(body), err
+}
+
+// PutJudged records bundle as judged, with its policy file unless that is
+// over maxJudgedPolicy, as the broker, whatever was written before it.
+func (s *Store) PutJudged(ctx context.Context, bundle string, policy []byte) error {
+	body, err := s.judgedBody(bundle, policy)
+	if err != nil {
+		return err
+	}
+	_, err = s.ctxKV.Txn(ctx).Then(clientv3.OpPut(s.k.meta("judged"), body),
+		clientv3.OpPut(s.k.meta("judged_bundle"), bundle)).Commit()
+	return unavailable(err)
+}
+
+// PutJudgedSince is PutJudged, written only while no replica's record
+// and no meta/judged was written after rev, the revision BundlesAt read
+// the records the runner judged at (Task 15a review I-1): a replica that
+// started or swapped in between, or a mark in doubt, leaves the record
+// as it is, and put is false. A record deleted since mints nothing more.
+func (s *Store) PutJudgedSince(ctx context.Context, bundle string, policy []byte, rev uint64) (put bool, err error) {
+	body, err := s.judgedBody(bundle, policy)
+	if err != nil {
+		return false, err
+	}
+	key := s.k.meta("judged")
+	resp, err := s.ctxKV.Txn(ctx).If(
+		clientv3.Compare(clientv3.ModRevision(s.k.meta("bundles/")), "<", int64(rev)+1).WithPrefix(),
+		clientv3.Compare(clientv3.ModRevision(key), "<", int64(rev)+1),
+	).Then(clientv3.OpPut(key, body), clientv3.OpPut(s.k.meta("judged_bundle"), bundle)).Commit()
+	if err != nil {
+		return false, unavailable(err)
+	}
+	return resp.Succeeded, nil
+}
+
+// JudgeInDoubt withdraws meta/judged while a replica serves another
+// bundle (Task 15a review I-1): it marks the record in doubt, its bundle
+// and policy kept for the guard at a start, so the next takeover purges.
+// A record that names unless, when unless is not empty, is left clean: a
+// replica that serves the bundle judged has nothing to withdraw, and the
+// check is made in the same compare-and-swap as the mark (re-review 1,
+// I-2). It reports the bundle recorded, and marked true only when this
+// call marked it; no record, or one that does not decode, already purges
+// and is left as it is.
+func (s *Store) JudgeInDoubt(ctx context.Context, unless string) (bundle string, marked bool, err error) {
+	key := s.k.meta("judged")
+	for {
+		resp, err := s.ctxKV.Get(ctx, key)
+		if err != nil {
+			return "", false, unavailable(err)
+		}
+		if len(resp.Kvs) == 0 {
+			return "", false, nil
+		}
+		var r judgedRec
+		if json.Unmarshal(resp.Kvs[0].Value, &r) != nil {
+			return "", false, nil
+		}
+		if r.InDoubt || (unless != "" && r.Bundle == unless) {
+			return r.Bundle, false, nil
+		}
+		r.InDoubt = true
+		body, err := json.Marshal(r)
+		if err != nil {
+			return "", false, err
+		}
+		tr, err := s.ctxKV.Txn(ctx).If(clientv3.Compare(clientv3.ModRevision(key), "=", resp.Kvs[0].ModRevision)).
+			Then(clientv3.OpPut(key, string(body))).Commit()
+		if err != nil {
+			return "", false, unavailable(err)
+		}
+		if tr.Succeeded {
+			return r.Bundle, true, nil
+		}
+	}
+}
+
+// WitnessRead is meta/witness as one read found it (plan 7e, Ruling 18):
+// the key's ModRevision, 0 when it is absent, and the revision etcd
+// answered the read at. A restored key keeps its ModRevision, with or
+// without --bump-revision; the header rises under the bump.
+type WitnessRead struct {
+	ModRevision uint64
+	Header      uint64
+}
+
+// Witness reads meta/witness, as the broker.
+func (s *Store) Witness(ctx context.Context) (WitnessRead, error) {
+	resp, err := s.ctxKV.Get(ctx, s.k.meta("witness"))
+	if err != nil {
+		return WitnessRead{}, unavailable(err)
+	}
+	w := WitnessRead{Header: uint64(resp.Header.Revision)}
+	if len(resp.Kvs) > 0 {
+		w.ModRevision = uint64(resp.Kvs[0].ModRevision)
+	}
+	return w, nil
+}
+
+// PutWitness rewrites meta/witness, as the broker, if it is still at the
+// ModRevision over (0: absent), and returns the revision it landed at, 0
+// when another write got there first: two runners for a moment never
+// write one over the other. It holds no secret: the runner's name and the
+// time.
+func (s *Store) PutWitness(ctx context.Context, who string, over uint64) (uint64, error) {
+	key := s.k.meta("witness")
+	body, err := json.Marshal(struct {
+		Who string    `json:"who"`
+		At  time.Time `json:"at"`
+	}{who, s.now().UTC()})
+	if err != nil {
+		return 0, err
+	}
+	resp, err := s.ctxKV.Txn(ctx).If(clientv3.Compare(clientv3.ModRevision(key), "=", int64(over))).
+		Then(clientv3.OpPut(key, string(body))).Commit()
+	if err != nil {
+		return 0, unavailable(err)
+	}
+	if !resp.Succeeded {
+		return 0, nil
+	}
+	return uint64(resp.Header.Revision), nil
+}
+
+// PutPurged writes meta/purged, as the broker, once a runner's purge of
+// every unspent token is done (Task 15d), if meta/witness is still at the
+// ModRevision over (0: absent), the witness the purge read: a store
+// restored since has another, and the write fails closed. It returns the
+// revision it landed at, 0 when it was refused. A port49d that found the
+// store restored serves redemptions again only on a meta/purged written
+// after it found it. It holds no secret: the runner's name and the time.
+func (s *Store) PutPurged(ctx context.Context, who string, over uint64) (uint64, error) {
+	body, err := json.Marshal(struct {
+		Who string    `json:"who"`
+		At  time.Time `json:"at"`
+	}{who, s.now().UTC()})
+	if err != nil {
+		return 0, err
+	}
+	resp, err := s.ctxKV.Txn(ctx).
+		If(clientv3.Compare(clientv3.ModRevision(s.k.meta("witness")), "=", int64(over))).
+		Then(clientv3.OpPut(s.k.meta("purged"), string(body))).Commit()
+	if err != nil {
+		return 0, unavailable(err)
+	}
+	if !resp.Succeeded {
+		return 0, nil
+	}
+	return uint64(resp.Header.Revision), nil
+}
+
+// RestoreRead is meta/witness's and meta/purged's ModRevisions, 0 for one
+// absent, and the revision etcd answered at, read at one revision (Task
+// 15d).
+type RestoreRead struct {
+	Witness, Purged, Header uint64
+}
+
+// RestoreRead reads meta/witness and meta/purged in one transaction, as
+// the daemon or the broker.
+func (s *Store) RestoreRead(ctx context.Context) (RestoreRead, error) {
+	resp, err := s.ctxKV.Txn(ctx).Then(clientv3.OpGet(s.k.meta("witness")), clientv3.OpGet(s.k.meta("purged"))).
+		Commit()
+	if err != nil {
+		return RestoreRead{}, unavailable(err)
+	}
+	r := RestoreRead{Header: uint64(resp.Header.Revision)}
+	at := func(i int) uint64 {
+		if kvs := resp.Responses[i].GetResponseRange().GetKvs(); len(kvs) > 0 {
+			return uint64(kvs[0].ModRevision)
+		}
+		return 0
+	}
+	r.Witness, r.Purged = at(0), at(1)
+	return r, nil
+}
+
+// FollowWitness tells saw the ModRevision of meta/witness as it reads and
+// watches it, until ctx ends (plan 7e, Ruling 18): one read, then a watch
+// from the read's revision, and a read again a second after the watch
+// ends (a compaction, or etcd gone). A lower revision than before, a
+// restore's, is told too: saw keeps the highest.
+func (s *Store) FollowWitness(ctx context.Context, saw func(uint64)) {
+	key := s.k.meta("witness")
+	for {
+		if resp, err := s.ctxKV.Get(ctx, key); err == nil {
+			if len(resp.Kvs) > 0 {
+				saw(uint64(resp.Kvs[0].ModRevision))
+			}
+			wctx, cancel := context.WithCancel(clientv3.WithRequireLeader(ctx))
+			for wr := range s.ctx.Watch(wctx, key, clientv3.WithRev(resp.Header.Revision+1)) {
+				if wr.Err() != nil {
+					break
+				}
+				for _, ev := range wr.Events {
+					if ev.Type == clientv3.EventTypePut {
+						saw(uint64(ev.Kv.ModRevision))
+					}
+				}
+			}
+			cancel()
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(time.Second):
+		}
+	}
+}
+
+// Holder reads meta/holder, the who of the replica holding the keyspace
+// (Hold); false when none does.
+func (s *Store) Holder(ctx context.Context) (string, bool, error) {
+	var h holderRec
+	_, ok, err := getJSON(ctx, s.ctxKV, s.k.meta("holder"), &h)
+	return h.Who, ok, err
+}
+
+type bundleRec struct {
+	Who       string    `json:"who"`
+	Bundle    string    `json:"bundle"`
+	At        time.Time `json:"at"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+func (r bundleRec) live(now time.Time) bool { return now.Before(r.ExpiresAt) }
+
+// BundleRecord is meta/bundles/<who>: the bundle one port49-broker replica
+// serves, written At and leased until ExpiresAt (plan 7e, Ruling 8;
+// pre-flight I3), or meta/refresh_owed, a replica's ask for a full
+// context pass, with no expiry.
+type BundleRecord struct {
+	Who, Bundle   string
+	At, ExpiresAt time.Time
+}
+
+// PutBundle records bundle as the one who serves, until now + ttl; its
+// lease is cas's bucket past that, and the expiry decides.
+func (s *Store) PutBundle(ctx context.Context, who, bundle string, ttl time.Duration) error {
+	now := s.now()
+	live := func(r bundleRec) bool { return r.live(now) }
+	return cas(ctx, s.ctxKV, s.ctxLeases, s.k.meta("bundles/")+esc(who), live,
+		func(r *bundleRec, _ bool) (bool, time.Time, bool, error) {
+			*r = bundleRec{Who: who, Bundle: bundle, At: now.UTC(), ExpiresAt: now.Add(ttl).UTC()}
+			return true, r.ExpiresAt, false, nil
+		})
+}
+
+// DeleteBundle deletes who's record, at its graceful stop (pre-flight
+// 7e-2 P-5): a replica that stops mints nothing more.
+func (s *Store) DeleteBundle(ctx context.Context, who string) error {
+	_, err := s.ctxKV.Delete(ctx, s.k.meta("bundles/")+esc(who))
+	return unavailable(err)
+}
+
+// Bundles is every replica's record whose ExpiresAt is after now, read at
+// one revision a page at a time, as LedgerMarks reads. A lease only
+// reclaims (leases.go), so a lapsed record can remain up to a minute and
+// lease_grace past its ttl: it is skipped by its own expiry, as every
+// leased record is. A record that does not decode is an error naming its
+// key.
+func (s *Store) Bundles(ctx context.Context) ([]BundleRecord, error) {
+	recs, _, err := s.BundlesAt(ctx)
+	return recs, err
+}
+
+// BundlesAt is Bundles, with the revision it read at, for PutJudgedSince.
+func (s *Store) BundlesAt(ctx context.Context) ([]BundleRecord, uint64, error) {
+	prefix := s.k.meta("bundles/")
+	end := clientv3.GetPrefixRangeEnd(prefix)
+	from, rev := prefix, int64(0)
+	now := s.now()
+	var out []BundleRecord
+	for {
+		opts := []clientv3.OpOption{clientv3.WithRange(end), clientv3.WithLimit(500)}
+		if rev > 0 {
+			opts = append(opts, clientv3.WithRev(rev))
+		}
+		resp, err := s.ctxKV.Get(ctx, from, opts...)
+		if err != nil {
+			return nil, 0, unavailable(err)
+		}
+		if rev == 0 {
+			rev = resp.Header.Revision
+		}
+		for _, kv := range resp.Kvs {
+			var r bundleRec
+			if json.Unmarshal(kv.Value, &r) != nil {
+				return nil, 0, notDecoded(fmt.Sprintf("bundle record %q", kv.Key))
+			}
+			if r.live(now) {
+				out = append(out, BundleRecord{Who: r.Who, Bundle: r.Bundle, At: r.At, ExpiresAt: r.ExpiresAt})
+			}
+		}
+		if !resp.More || len(resp.Kvs) == 0 {
+			return out, uint64(rev), nil
+		}
+		from = string(resp.Kvs[len(resp.Kvs)-1].Key) + "\x00"
+	}
+}
+
+// PutRefreshOwed records who's ask for a full context pass, made as it
+// reloaded or started serving bundle: the runner carries every live
+// context onto its policy, so a context made from who's token under
+// another bundle is judged (pre-flight I3). A later ask replaces it.
+func (s *Store) PutRefreshOwed(ctx context.Context, who, bundle string) error {
+	body, err := json.Marshal(bundleRec{Who: who, Bundle: bundle, At: s.now().UTC()})
+	if err != nil {
+		return err
+	}
+	_, err = s.ctxKV.Put(ctx, s.k.meta("refresh_owed"), string(body))
+	return unavailable(err)
+}
+
+// RefreshOwed reads the ask, with its mod revision for ClearRefreshOwed;
+// ok is false when none is owed.
+func (s *Store) RefreshOwed(ctx context.Context) (rev uint64, rec BundleRecord, ok bool, err error) {
+	var r bundleRec
+	mod, ok, err := getJSON(ctx, s.ctxKV, s.k.meta("refresh_owed"), &r)
+	if !ok || err != nil {
+		return 0, BundleRecord{}, false, err
+	}
+	return uint64(mod), BundleRecord{Who: r.Who, Bundle: r.Bundle, At: r.At}, true, nil
+}
+
+// ClearRefreshOwed deletes the ask only while its mod revision is still
+// rev, the one the pass read: an ask written during the pass stays, owed.
+func (s *Store) ClearRefreshOwed(ctx context.Context, rev uint64) error {
+	key := s.k.meta("refresh_owed")
+	_, err := s.ctxKV.Txn(ctx).If(clientv3.Compare(clientv3.ModRevision(key), "=", int64(rev))).
+		Then(clientv3.OpDelete(key)).Commit()
 	return unavailable(err)
 }

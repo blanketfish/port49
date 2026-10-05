@@ -98,7 +98,7 @@ Tasks 8b–16 plus a new Task 13b, each reviewed). It delivers:
 - the agent's one connection.
 
 L35 is measured and closed on five images. The lab's snapshot restore found a ledger bug, fixed
-in 79812ef (Plan 7d — As built, below). **7e written 2026-10-03** (`2026-10-03-07e-broker-process.md`, twenty-two tasks in two merges (eighteen, and 8a, 15a, 15b and 15c): 7e-1, Tasks 1–10 and 8a, the store a fleet of processes shares (a sealed write sequence and a high-water ledger per key, the context and marks feeds, the ledger record the daemon cannot write, `superseded` in the store, the decision-log emits under the hold, two carried fixes); 7e-2, Tasks 11–18 and 15a–15c, `port49-broker`, port49d on etcd with no broker inside, one runner per keyspace, the revocations file retired on etcd, and the lab; eighteen rulings recorded as decision 36; one question for Ryan, OR-1, `port49 revoke`'s default socket, recommended unchanged; it opens L37 and L38 and measures them with L36); **7e-1 executed 2026-10-03** on `feature/broker-process`, each task reviewed (Plan 7e — As built, below). 7f–7h and 8–13 not yet.
+in 79812ef (Plan 7d — As built, below). **7e written 2026-10-03** (`2026-10-03-07e-broker-process.md`, twenty-three tasks in two merges (eighteen, and 8a, 15a, 15b, 15c and 15d): 7e-1, Tasks 1–10 and 8a, the store a fleet of processes shares (a sealed write sequence and a high-water ledger per key, the context and marks feeds, the ledger record the daemon cannot write, `superseded` in the store, the decision-log emits under the hold, two carried fixes); 7e-2, Tasks 11–18 and 15a–15d, `port49-broker`, port49d on etcd with no broker inside, one runner per keyspace, the revocations file retired on etcd, and the lab; nineteen rulings recorded as decision 36; one question for Ryan, OR-1, `port49 revoke`'s default socket, closed by Ryan 2026-10-03 as recommended (unchanged); it opens L37 and L38 and measures them with L36); **7e-1 executed 2026-10-03** on `feature/broker-process`, each task reviewed (Plan 7e — As built, below). **7e-2 executed 2026-10-04** on `feature/broker-split`, each task reviewed, L36, L37 and L38 closed and L40 opened (Plan 7e — As built, "7e-2", below; merge and PR number to be added at the merge). 7f–7h and 8–13 not yet.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -1584,7 +1584,7 @@ until 7c merges to be made. Every sub-plan is separately mergeable and leaves `m
   TACACS+ with no broker inside; `b.superseded` and `b.blobsSeen` moved into the store and bounded
   (4b final review m10); decision-log emits under the policy hold bounded (4b Task 4); one refresh
   runner across broker replicas; `broker.revocations_file` retired if D1's backend persists. Lab:
-  the slice on the split deployment.
+  the slice on the split deployment. **As built:** "Plan 7e — As built", below.
 - **Plan 7f — go-dark and the warm context cache.** The owner's ruling of 2026-09-24: `port49d`
   health-checks the store and closes its TACACS+ listener after N failed checks, reopening after M;
   **its Task 1 (Ryan, 2026-10-03):** the container shape, pulled forward from plan 12, before 7f's
@@ -2827,9 +2827,15 @@ the same session, written back, is denied too: `store_unavailable`, counted as
     - **A pending reservation.** One a stopped port49d left blocks its key for up to a minute.
   - **Editing `broker.revocations_file` with port49d stopped no longer lifts a mark on etcd:**
     the store's copy comes back. Lift with `port49 revoke --lift` on the admin socket.
-  - **Junos re-authorization on etcd is unmeasured.** On the memory store a restart denied
-    every live Junos session's next re-authorization (`authorization-time-interval`). On etcd
-    the contexts survive, but L35 did not measure a re-authorization (§15 L36, open).
+  - **Junos re-authorization on etcd (§15 L36, measured on both Junos images).** On the memory
+    store a restart denied every live Junos session's next re-authorization
+    (`authorization-time-interval`). On etcd the contexts survive: with the interval at 15 minutes
+    a restarted port49d answered the open session's re-authorization `PASS_ADD` from the kept
+    context, and a session revoked before its first re-authorization was denied at it (`FAIL`,
+    `credential_revoked`). The device did not end the session on the denial: its next command
+    printed an error. Revocation reaches a Junos session at its first re-authorization, up to
+    the interval after login. Whether a later one comes is unmeasured (§15 L40); until then
+    treat a session past its first re-authorization as not reached.
 - **What an etcd outage does.**
   - **At start:** nothing listens, and `/readyz` says `waiting for the store`. Devices use their
     local method, and break-glass works. port49d waits up to `start_timeout`, then exits 1. With
@@ -2986,14 +2992,20 @@ labpcap audit fails.
   - `broker.revocations_file` is retired.
   - One refresh runner.
   - The decision-log emits under a policy hold are bounded (4b Task 4).
-  - A lab run to settle why IOS-XE refused an open session's command once port49d went dark
-    (`L35-cisco_iosxe.md`), when `quarantine-cisco_iosxe.md` ran one with port49d stopped.
-- **Lab, unassigned:** §15 L36 (open), whether a live Junos session's re-authorization
-  (`authorization-time-interval`) after a port49d restart on etcd is answered from the kept
-  context, and whether a denial then ends it. L35 did not measure it.
+  - IOS-XE's refusal once port49d went dark (`L35-cisco_iosxe.md`), against `quarantine-cisco_iosxe.md`'s
+    `show privilege` that ran with port49d stopped: L38 settled that neither the command nor the
+    session's last answer changes the refusal; why quarantine's ran is unexplained.
+- **Lab, unassigned:** §15 L40 (open), whether a Junos session is re-authorized more than once
+  (L36 measured the first re-authorization after login only).
 - **7f:**
   - Go-dark proper: the N-failures/M-passes listener control replaces Ruling 11's coarse
     close-and-wait.
+  - The idle-detection gap (L37, measured 2026-10-04): an idle port49d on a hung store goes dark
+    about 2 minutes in at `hold_ttl` 60s (circuit open 43–50s, listeners closed 1m43s–2m0s), because the
+    probe needs five failed pings, a sixth of `hold_ttl` apart, to open the circuit; under load it
+    should be about `hold_ttl` plus a probe period (about 70s; derived from the guard's rule, not measured). IOS-XE is locked out for all of it (its
+    break-glass `ERROR` is final). A probe that re-pings at `breaker.open_for` cadence after one
+    failure is the mitigation to weigh, Ryan's and 7f's call.
   - The warm context cache.
 - **12:**
   - The etcd deployment artifacts: the members, compaction, the quota, and the roles applied
@@ -3185,6 +3197,449 @@ plan's text, task by task:
   not delivered the record's revision in time: rising with `feed_up` 1 and etcd answering, the
   feed lags; it is not the store (final review M-4).
 
+**7e-2** (`feature/broker-split`, base `d06a391`, 2026-10-04): the two processes. Task by task; two
+plan-amendment commits (`670bb7a`, amending 7e-2 to 7e-1 as built, and `1bb593d`, the pre-flight's
+fixes) precede Task 11:
+
+- **Task 11 (docs, decision 36's 7e-2 part; cd4b520, 509eb9b).** Differs from the plan's text:
+  - §12 says `port49-broker`'s one subcommand is `revoke --offline`, not "no subcommand";
+  - the stale "the hold not held while port49d runs" alarm is replaced by the keyspace-held-sum
+    alarm, since no port49d holds the keyspace now;
+  - the spec's other "until plan 7e" clause (store-roles' stolen-daemon-key paragraph) is
+    rewritten as decision 35's is;
+  - two more revocations-file statements in the design (the failure matrix, the record table)
+    now say the memory store only;
+  - review fix round: §13 has one restore answer, the runner's bounds are named, and decision
+    35's "a start on etcd" carries the decision 36 amendment.
+- **Task 12 (port49d's code into `internal/port49d`; e7b2d00).** `Main(args) int` with a
+  `FlagSet` in place of `os.Exit`; `cmd/port49d` is a shim. The 244 test names are the same
+  before and after. `git log --follow` does not reach `main.go`'s earlier history (it shows as
+  a modification of the shim).
+- **Task 13 (two configurations; ee5dcd2, 1bf4cc3, e3d98d3, ad69c38, 9bb5fec).**
+  - `port49d.yaml` refuses `key_refs` and `broker.state_dir`, as well as a `broker:` block on
+    etcd; `port49-broker.yaml` refuses `store.etcd.daemon`, `policy:` beside `broker:`, and
+    each key a broker has no use for, naming it.
+  - `broker.state_dir` is fenced at load: absolute, an existing directory, writable by no group
+    or other user, never inside or around `inventory.service`'s `state_dir` or `mirror_dir`.
+  - Fourteen etcd tests built on the 7d shape were skipped until Task 14 rewrote them
+    (Ruling T13-a); none is skipped now.
+- **Task 14 (port49d on etcd with no broker; 04d481f, cdef83f, d39416b, fd8cde7, 2a2b16b,
+  8e313f8, e3bb99a, 84c0c90, f935ef6).**
+  - `Marks.Keep` holds a mark in force through a reload that lacks it. The reproducing tests
+    ran first: without `keep` the daemon's gauge fell from 2 to 1 on a restore, and to 0 after
+    a store gone (Ruling A-1, P-1).
+  - The daemon's keep line says how a kept mark is released: revoke it again on port49-broker,
+    then lift it with `port49 revoke --lift`, or restart. The plan's "or a lift this feed
+    delivers" cannot work: a lift of a mark the store lacks is `ErrNotRevoked`, and nothing is
+    written.
+  - The split branch is `openDaemon`; `pruneLoop` runs on the split daemon, since the sweep that
+    pruned its ledger is the broker's. A reloader with no broker keeps one prior, not every
+    policy it loaded. `store.etcd.broker` with no broker in the process is refused.
+  - The marks load in `openDaemon` is bounded by `bulk_timeout`.
+- **Task 15 (`port49-broker`, the runner; 8f1958f, 3854c95, bcbdae5, a0d038e, 9226966, 439cd58,
+  b9fd336, ebed469, b0d01e4, 3b4478e, bd7570d, cd06ed0, 24eeb4d, eb6203f, 1af9b7c, 0764d08).**
+  - `run` also selects on the duties ending: a takeover that fails for good lets go of the hold
+    and takes it again after 5s. `meta/judged` is written under the duties' context, so a
+    non-runner never writes it.
+  - **The cross-process floor** (Ruling T15-a). A session's own record, put back after the
+    runner revoked an older put-back, was admitted by a running port49d. The floor is now
+    `min(hw, R-1)`, `R` being the revision of the plaintext `revoked_at` write: a record that
+    landed before it is denied, a login after it is admitted. The plan's `seq > R` does not
+    hold (`seqFor` gives `seq == R`; reproduced).
+  - A symbolic link as `broker.state_dir` is refused as one. The writer refuses `marks.json`,
+    `witness.json` and the directory owned by anyone but the process's uid or root.
+- **Task 15a (policy across replicas, the guard at a start; c7fc3c8, 92d6388, aa0fbf9, 9ebd86a,
+  2177ef2, 8daae43, 972e76a).**
+  - Every `port49d:` prefix in a shared path is the running process's (`procOf`); no
+    package-global, since the fleet tests run both in one process.
+  - A replica serving another bundle than `meta/judged` names marks `meta/judged` in doubt
+    itself and mints nothing until the mark lands (the mint gate). The runner marks it at every
+    swap of its own too.
+  - The guard fails closed on a read error. A policy that admits no device is refused by
+    `loadPolicy` before the guard runs; `quarantiningLeaf1` is the test's refused file.
+  - Readiness never follows the gate (design §12: a store fault is an alarm, never readiness).
+    A fix round that made `/readyz` 503 while the gate was shut was withdrawn for that reason
+    (re-review 3, I-4); the gauge `port49_broker_mint_gate_closed` is the alarm.
+- **Task 15b (the marks copy, revoking with every broker down; 9f4e941, 8eab80c, 7a8c624,
+  290dd85).**
+  - The copy is fed from the watch (`copyingFeed`), not from `FollowMarks`' `on`: a revocation
+    or lift made on the replica itself never reaches `on`.
+  - Every replica keeps what its copy holds and the store lost, at its start as well as at a
+    reload (`keepCopied`), so a restarted non-runner does not admit a principal at its listener
+    while the runner's put-back keeps failing.
+  - The takeover's put-back runs before the re-index (the plan's order panicked a test with no
+    broker).
+  - `port49-broker revoke --offline` loads the policy and writes the origin `offline uid <n>`,
+    added to spec decision 34's list of origins. An entry in the copy the replica does not
+    understand is kept raw and written back unchanged.
+- **Task 15c (the restore witness; c6a62f9, ab3076e, b351d95, fd18968, b3b60e1).** An unreadable
+  `witness.json` is moved aside and purges once, and the unread state is saved so a restart
+  before the purge still owes it. Review fixed the purge's order. The restore runbook deletes
+  the unspent tokens before any process starts and restores on loopback only until both
+  deletes land (design §13; spec decision 36 names the token delete).
+- **Task 15d (new: port49d's restore guard; 79e09c5, 97a4838, d7c705a, 56324c1, 29b4a40).**
+  Ruling 19. port49d reads `meta/witness` through the guard and refuses a token redemption
+  `store_unavailable` while the store is older than it followed, until the runner's purge
+  writes `meta/purged`. A read that fails refuses too. A refused `meta/purged` write leaves the
+  witness record alone, so a restart does not release the guard over unpurged tokens.
+  `port49_redemption_restore_guarded` is 1 while it stands. No new reason code.
+- **Task 16 (the fleet end to end, `store-roles` for two files; 8b10c83, 84e7f55, 4d9a123,
+  450f8b1, 2d56958).** Five fleet tests ran green at first and found no defect. The daemon's
+  role reads five keys of `meta/` and no more (`seal_keys`, `witness`, `purged`,
+  `judged_bundle`, `ping`): the policy text in `meta/judged` stays the broker's, so the skew
+  gauge compares `meta/judged_bundle`, the bundle's name alone (Ruling T16-a). The gauge reads
+  1, not 0, where no bundle has been judged yet. The L35 tests were ported to the split in
+  Task 17.
+- **Task 17 (lab; 107a41e, 87d7b73, 0cff0d0, 2a74f88, 20fb9fa, c855c3a, 229eb4b, f3f2f11,
+  58d0bd1, 1c52903, 651e185).** L36, L37 and L38 closed, run on the five images from pinned
+  worktrees. Differs from the plan's text:
+  - IOS-XE sticks to the last server it used, so L37's cells 3 and 4 ask A with B stopped;
+  - a Junos session sends no TACACS+ per command, so L37 cell 2 on Junos is a fresh login
+    through B, and L36 revokes a second session instead of the first;
+  - the dark wait is bounded by `darkBound` (125.5s at `hold_ttl` 60s), not 7d's 12s;
+  - the L35 re-check needs `PORT49_LAB_L35_ENTRY=L35-recheck`, or it would overwrite the
+    closed note, and the harness refuses to;
+  - review cut every claim to what its note says. L40 was opened for what L36 did not measure.
+- **Task 18 (this section; b5fc4a7, 65c0a18, 69b41e7, and the docs commit).** The wording sweep
+  is code (below), and this section.
+  - `internal/bundle`'s refusals name `port49d` in three phrases (`RaiseBound`, `KeyRefsFile`,
+    `StopFleet`, exported). On port49-broker they now read `port49-broker.yaml`, and "stop
+    every port49d (port49-broker serves no device)". A reload keeps "send SIGHUP", which
+    re-reads `inventory.max_removed_percent` from `port49-broker.yaml` as port49d's does
+    (tested). The refusal at a held start says "restart port49-broker, which reads it at its
+    start (a SIGHUP is not read until the start has passed)", because that is true there.
+  - `broker.Revoke`'s busy and refused-write errors said "or stop port49d" and "this port49d
+    denies"; on port49-broker they say "stop every port49d (port49-broker serves no device)"
+    and "this port49-broker denies". The API's lift hint names the serving process's admin
+    socket.
+  - Each changed message is tested for both processes.
+
+**The rulings as made, against Rulings 1–19 and OR-1** (decision 36 records each):
+- **Rulings 1, 2, 3, 9, 10, 15, 16:** as planned.
+- **Ruling 4 (the ledger record):** as planned. T15-a closed one more case (the floor `min(hw,
+  R-1)` above). The residual stands, exactly: a key written within the keeper's lag and put
+  back inside it; a key written while no runner ran, put back before a runner recorded it; a
+  key written while the runner's own context feed was down; the same three for a process
+  whose watch was compacted. Not closed: tokens put back, a receipt's sliding bound, the idle
+  clock and the index. Closing those needs a revocation record the daemon's role cannot write
+  for every kind, a spec change to decision 34.
+- **Ruling 5 (the marks across processes):** amended by A-1: a mark a reload finds missing
+  stays in force on port49d, which cannot put it back and says so by name. Spec decision 36's
+  "applies the difference" is amended for port49d. Ryan's rule of 2026-10-03 was that a
+  deviation needs data, or a glaring gap; the reproducing tests failed first, so A-1 rests on
+  both.
+- **Ruling 6 (the runner):** as planned, with the settle pass keeping the priors until it runs.
+- **Ruling 7 (a purge only when the bundle changed hands unjudged):** as planned, plus a
+  replica marks `meta/judged` in doubt at every swap and the runner at its own (Task 15a,
+  I-1 to I-3).
+- **Ruling 8 (the settle pass):** as planned; its cost is named in the notes below.
+- **Ruling 11 (port49d holds no hold, and probes the store):** as planned; L37 measured it.
+- **Ruling 12 (the revocations file retired on etcd):** as planned; every replica keeps what
+  its copy holds and the store lost, at a start as well as a reload (Task 15b).
+- **Ruling 13 (the admin sockets, revoking with every broker down):** as planned; the offline
+  origin is `offline uid <n>` (T15b-a).
+- **Ruling 14 (`store-roles` reads both files):** as planned; the daemon's `meta/` read is five
+  keys, not the prefix (T16-a).
+- **Ruling 17 (the guard at a start):** as planned; a read error holds the start (fails
+  closed).
+- **Ruling 18 (the restore witness):** as planned; an unreadable record purges once (T15c-a).
+- **Ruling 19 (new, Task 15d):** port49d refuses redemption while the store is older than it
+  followed.
+- **Rulings made during execution:** A-1 (above); T13-b and T15-b, a group-writable
+  `broker.state_dir` is refused even on a volume the kubelet makes group-writable for
+  `fsGroup` (another pod sharing the GID could write `marks.json`), so Kubernetes needs the
+  recipe below; T15c-b and T15c-c, the runbook's token delete and the Task 15d guard; T17's
+  dark time is by design (decision 36: the runner holds, and an idle port49d goes dark after
+  the probe opens its circuit and `hold_ttl` passes).
+- **OR-1 (`port49 revoke`'s default socket), closed by Ryan on 2026-10-03 ("use your best
+  judgement"), made:** it keeps port49d's socket as its default, and on etcd port49d's socket
+  names the broker's, and exits 1. Nothing is left under "Open for Ryan".
+
+**The deployment consequences 7e-2 adds, for each of plan 12's three shapes** (roadmap,
+"Deployment shapes"; L39 stays open):
+
+| | systemd | containers | Kubernetes |
+|---|---|---|---|
+| `broker.state_dir` | a directory on the host, kept across restarts and backed up with the broker's host. `StateDirectory=` passes as it is | a named volume per broker, owned by the user the container runs as, 0700 | a volume per replica that outlives the pod (a StatefulSet's `volumeClaimTemplates`), never an `emptyDir`. No `fsGroup`, or `fsGroupChangePolicy: OnRootMismatch`; an initContainer as root makes a 0700 subdirectory the broker uses (`install -d -m 0700 -o <uid> -g <uid> …/state`) |
+| where each admin socket is reached | on its host: `port49 revoke --socket <the broker's admin_socket>`; port49d's own socket answers `keys diagnose`. Two port49d on one host have a socket each | inside the container: `docker exec <broker container> port49 revoke --socket …`. The image must carry `port49` | inside the pod: `kubectl exec <broker pod> -- port49 revoke --socket …` |
+| port49d replicas replace one at a time, the new beside the old | a second unit starts beside the first (its own `listen`, `admin_socket`, `metrics_listen` and spool), then the first stops | a second container starts beside the first, then the first stops | a rolling update with a surge, never `Recreate` |
+
+Each shape's port49d must see the device's true source address (design §13; L39 measures it).
+The same recipe holds for each: a `broker.state_dir` that is group-writable, owned by another
+uid, or a link is refused at the start, and the line says which.
+
+**The lab, per image** (`tests/lab/results/L36-*`, `L37-*`, `L38-*`, all closed 2026-10-04;
+the pinned runs are in each note). L37 cell 1 is a login through A with B stopped; 2, A stopped
+and the open session's next command answered by B; 3, the broker stopped; 4, a revocation on
+port49-broker; 5, the store hung (`hold_ttl` 60s, `darkBound` 125.5s).
+
+| image | 1 | 2 | 3 | 4 | 5, circuit open / listeners closed (A; B) | break-glass after 5 |
+|---|---|---|---|---|---|---|
+| vEOS-lab 4.31.2F | `permit` | B answered, same `ctx_id`, `PASS_ADD` 3ms | session ran; `token_redeemed` | `credential_revoked` on A and on B | 50.4s / 2m0.4s; 49.4s / 1m49.4s | logged in |
+| N9Kv 10.4(2)F | `permit` | B answered, same `ctx_id`, `PASS_ADD` 3ms | session ran; `token_redeemed` | `credential_revoked` on A and on B | 50.4s / 2m0.4s; 49.4s / 1m49.3s | logged in |
+| C8000V 17.13.01a | `permit` | B answered after two refused connections to A, same `ctx_id` | session ran; `token_redeemed` | `credential_revoked` on A and on B | 44.9s / 1m54.8s; 43.6s / 1m53.8s | logged in |
+| vJunos-router 23.4R2-S2.1 | login, `show version` | no TACACS+ sent by the device (decision 21); a fresh login through B: `token_redeemed` | session ran; `token_redeemed` | a token minted before it, through B: `token_not_found` | 50.4s / 1m50.3s; 42.9s / 1m52.8s | logged in |
+| vSRX3 21.4R3.15 | login, `show version` | as vJunos | as vJunos | as vJunos | 50.4s / 2m0.3s; 42.9s / 1m43s | logged in |
+
+L38 (C8000V 17.13.01a): with both port49d replicas stopped, `show privilege` and `show version`,
+each typed first and second in a session, after a permit and after a `FAIL store_unavailable`
+(four cells, confirmed by a record and on the wire), were all refused `% Authorization failed.`
+The device opened three connections per command, every one refused, and sent no payload. Why
+`quarantine-cisco_iosxe.md`'s `show privilege` ran is unexplained.
+
+L36 (vJunos-router and vSRX3, `authorization-time-interval 15`): 15m0s after login, with A
+restarted, the device re-authorized the open session and A answered `PASS_ADD` from the
+context the store kept. A second session, revoked 1s after its login, was denied at its first
+re-authorization (`FAIL`, record `deny credential_revoked`, 1ms) and the device left the session
+open: its next `show version` printed an 83-byte error. L40 is open: nothing here says whether
+a second re-authorization ever comes.
+
+**7e-2's operator notes, as built.** Each is what an operator sees and does.
+
+*New binary and migration.*
+- **`port49-broker`** runs beside `port49d` from `port49-broker.yaml`. Any number of each run
+  on one keyspace.
+- **Migrating a 7d etcd deployment.**
+  - port49d.yaml with a `broker:` block is refused. Move the block, with `store.etcd.broker`,
+    into `port49-broker.yaml`; there add `key_refs:` (the names of your `keys:`, no secrets)
+    and `broker.state_dir`, remove `broker.revocations_file`, and keep `encryption:`, the
+    inventory and `admin_socket`.
+  - In port49d.yaml add `policy: {file: <the same policy file>, watch_interval: 5s}` and remove
+    `store.etcd.broker`. The marks are already in etcd: every 7d start put the file's there.
+  - Run `port49d store-roles --config port49d.yaml --broker-config port49-broker.yaml` and apply
+    its output. On the 7d file alone it still works, and says to move the broker's identity.
+  - A 7e-2 port49d refused on its config can be rolled back to the 7e-1 binary, which still
+    reads the 7d file.
+- **Set the same `broker.policy_file` content and `broker.policy_watch_interval` on every
+  broker.**
+
+*The mint gate.* **What you see:** after a policy edit reaches a broker, its mints answer 503
+`store_unavailable` for one store round trip and `port49_broker_mint_gate_closed` reads 1; the line
+says `marking the bundle last judged in doubt against this replica's (<bundle>); nothing that
+mints is served until it lands, trying again every <wait>`. `/readyz` stays 200, because a
+store fault is an alarm and never readiness (design §12). **What to do:** alert on the gauge
+at 1 for longer than a minute. That means the store does not answer, or refuses, the broker's
+write to `meta/judged`; look at the store and at the broker's etcd role (`port49d store-roles`).
+Users cannot mint on that broker meanwhile, but sessions, revocations and the other brokers go
+on. It is never an admission.
+
+*A stale-policy replica.* **What you see:** a broker whose policy file lags the others (an edit
+not yet rolled out, a file nobody updated) keeps minting under the file it has, until it
+reloads. `port49_policy_bundle_matches_runner` reads 0 on it, and it says so. The skew is bounded
+only by how long that file stays stale: not by a token's life. **What to do:** alert on the
+gauge at 0 for twice `broker.policy_watch_interval` on a broker, and on a port49d for its
+settle delay and one `policy.watch_interval` more; fix the file on that host. Right after a
+rollout the gauge is 0 until the runner's settle pass, which is expected. Meanwhile the next
+takeover purges every unspent token, since no bundle is judged while a replica serves another;
+and a context a stale replica's token made is carried by the full pass the replica asks for
+when it reloads. On port49d the gauge reads 1 where no bundle has been judged yet.
+
+*An idle port49d goes dark late.* **What you see:** the store hangs and no device is asking.
+port49d's probe (one read every `hold_ttl`/6, through the feed fence) opens its circuit after
+five failures and it closes its listeners `hold_ttl` later: measured, 1m43s to 2m0s into the
+hang at `hold_ttl` 60s, and about 31s at the 15s default (derived from the same rule, not
+measured). Until then a device is answered `FAIL store_unavailable` at once. **IOS-XE is locked
+out for all of it, a break-glass login too** (its authentication `ERROR` is final, L4/L35); after
+the listeners close, break-glass logs in, and an open session's command is refused
+`% Authorization failed.` (L38). vEOS, the N9Kv and both Junos images log break-glass in
+once the listeners close (L37). **What to do:** nothing shortens it today; keep a console
+path to IOS-XE devices. Plan 7f replaces the probe, and carries the gap.
+
+*After an etcd restore: the guard and the runbook.*
+- **What you see on a port49d that ran across the restore:** it refuses every token login
+  `store_unavailable`; `port49_redemption_restore_guarded` is 1; its line says `meta/witness is
+  at revision N, below the M this port49d followed: the store was restored from a snapshot, …;
+  every token redemption is refused (store_unavailable) until a broker runner's purge is
+  done`. Sessions already open, revocations and the admin socket go on. **A device whose
+  authentication `ERROR` is final (IOS-XE, L4) refuses break-glass too while the guard
+  stands**, and unlike a hung store a guarded port49d never goes dark, so the lockout lasts as
+  long as the guard: keep a console path to IOS-XE devices, and alarm on
+  `port49_redemption_restore_guarded` at 1 for longer than it takes to start the brokers.
+  **What to do:** start the brokers. When a runner's purge is done it says `the broker runner's
+  purge after the restore is done; token redemptions are served again`, and users mint again.
+  **If no runner says that line** (its purge landed before this port49d's first read, or a
+  first runner with no `witness.json` found `meta/judged` intact because runbook step 3 was
+  skipped, so it purged nothing and wrote no `meta/purged`), there are two ways out: delete
+  the restored tokens as etcd's root (`etcdctl del --prefix <prefix>v1/t/`) and then restart
+  this port49d; or stop every port49-broker, delete `meta/judged`, and start them, so a takeover
+  purges and writes `meta/purged`. **Never restart the port49d before the restored tokens are
+  deleted:** a restart forgets the drop and redeems them. A port49d started after the
+  restore cannot tell; the runbook's token delete covers it. Token logins refused
+  `store_unavailable` with the gauge at 0 and `restore_read` errors rising mean port49d cannot
+  read `meta/witness`.
+- **The runbook** (design §13), in this order:
+  1. stop every broker;
+  2. restore with `--bump-revision` and `--mark-compacted`, the restored members serving
+     clients on loopback only (without those flags, restart every port49d too once the first
+     runner has said which marks it put back, never before);
+  3. there, as etcd's root: `etcdctl del --prefix <prefix>v1/t/` (a restore brings back every
+     token redeemed since the snapshot, and a port49d that reaches the store first would redeem
+     it again), then `etcdctl del <prefix>v1/meta/judged` and `etcdctl del
+     <prefix>v1/meta/judged_bundle`; only then restart the members on their usual client URLs;
+  4. while every broker is still stopped, revoke again every revocation made with every
+     broker down since the snapshot: `sudo -u <port49-broker's user> port49-broker revoke
+     --offline --config … --principal <p>` (as that user, never root: a state directory the
+     broker's user owns is refused to root, and it is never to be chowned to root), or
+     `etcdctl put` as root. No broker saw it, so no copy holds it. The offline tool also
+     stands its mark in that host's `broker.state_dir/marks.json`; `etcdctl put` leaves no
+     copy. Revoked before any broker starts, a broker without the mark never mints for the
+     principal, and a port49d restarted at any later step follows the mark from the store;
+  5. start the brokers, one whose `broker.state_dir` survived first: a broker whose
+     `state_dir` was lost or is new, started first after a `--bump-revision` restore, means a
+     forgotten `etcdctl del` is never caught.
+  The first runner puts back the marks the restore lost, says how many (naming up to 20), and
+  purges the unspent tokens. Lift again anything it put back that was lifted on purpose.
+- **A forgotten `etcdctl del` still purges.** Each broker records the latest `meta/witness` it
+  saw in `broker.state_dir/witness.json`. A runner that finds the store's witness below it says
+  `the store was restored from a snapshot`, naming both revisions, and purges every unspent
+  token. A replica with no `witness.json` says it cannot tell; one whose file cannot be read
+  moves it aside (`witness.json.bad-<time>`) and purges once. A snapshot taken within about a
+  second of the last witness (two, if a broker was killed rather than stopped) is not caught.
+  After a restore without `--bump-revision`, a later takeover by another broker may purge once
+  more and say the store was restored. The witness purges at the first takeover, not before: a
+  port49d serving meanwhile is what the guard and the token delete close.
+- **Meanwhile each port49d that ran across the restore keeps the marks it lost in force** and
+  names them (`… are missing from the store as its marks feed reloads (…) and stay in force
+  here (to release one lifted on purpose, revoke it again on port49-broker, then lift it with
+  port49 revoke --lift, or restart this port49d): …`). Each broker that is not the runner keeps
+  what its copy holds and names it, so its listener refuses those principals until the put-back
+  arrives. A runner whose put-back fails (its store circuit open through the restore) does
+  not reload its marks: `port49_store_feed_up{feed="marks"}` is 0 and the line says `… the
+  marks are not reloaded until they are back`, tried again every second. Mints and refreshes
+  still read the store's marks, so logins are refused; a held connection on that replica is
+  not closed by a mark made elsewhere.
+- **A lift can be undone.** A lift made while one broker was stopped, or offline with every
+  broker down, is put back by that broker's copy when it takes over, and the line names the
+  mark. Lift it again while every broker runs (`port49 revoke --lift`). A mark's origin is
+  `offline uid <n>` when `port49-broker revoke --offline` made it.
+- **A copy that does not decode** is moved aside (`marks.json.bad-<time>`) and the replica
+  starts with an empty copy filled from the store: marks the store had already lost before that
+  start cannot be put back from it. The line says so, and gives the way back: if etcd was
+  restored before the start, stop the replica, repair the moved-aside file and move it back, or
+  revoke again each mark another process's "missing from the store" line names. Entries the
+  replica does not understand are kept in the file unchanged.
+- **After the runbook deletes `meta/judged`,** the first broker start has no judged bundle for
+  the reload guard, and says so: check the policy file on every broker host before starting.
+  A keyspace judged for the first time purges the unspent tokens at its first takeover.
+- **A `meta/superseded_all` that does not decode** fails idempotent replays: delete it as
+  etcd's root, and the next purge writes it again.
+
+*`broker.state_dir`.* Keep it across restarts, and back it up with each broker; it holds the
+replica's copy of the marks (`marks.json`) and its record of the restore witness. It must be the
+directory itself, owned by the user port49-broker runs as (or root), and writable by no group or
+other user; a start refuses a symbolic link (point it at the target), a group-writable
+directory, and a `marks.json` or `witness.json` owned by another uid or not a regular file,
+and says why. A `witness.json` restored from an older backup only weakens the check; it never
+purges wrongly. Kubernetes' recipe is in the table above: the default `fsGroupChangePolicy:
+Always` makes every directory in the volume group-writable at each mount, so the next start
+is refused.
+
+*Running more than one of each.*
+- **A second port49d serves beside the first.** List several on each device and replace them
+  one at a time; 7d's `Recreate` advice is withdrawn.
+- **A login in flight while another process starts** can be denied `store_unavailable` once on
+  the process that started. The next login is admitted.
+- **`port49_store_keyspace_held`** is 1 on the one port49-broker running the start, the sweep
+  and the policy refresh. Alert on its sum over the brokers being 0 for twice `hold_ttl`.
+- **Keep every broker host's clock synchronised (NTP).** A replica whose clock runs behind can
+  answer an idempotent replay with a token another replica's revocation or refresh deleted:
+  its login fails `token_not_found`. Availability only.
+
+*Tokens and policy edits.* A broker rollout keeps everyone's tokens: the runner that takes
+over purges unspent tokens only when it finds a policy in force that no runner judged. A token
+minted in the moment of such a purge fails `token_not_found`, and `port49 token` works again.
+**A policy edit's settle pass deletes more than its first pass.** At max(30s, 2 ×
+`broker.policy_watch_interval` + 5s) after a replica swaps in an edit, the runner judges the
+tokens again, so one a slower replica minted under the replaced policy is deleted. It deletes
+every unspent token minted since the first pass for each (principal, device) whose answer the
+edit changed, including tokens minted under the new policy. Availability only.
+
+*Revoking.* Revocation lives on port49-broker's admin socket: `port49 revoke --socket <its
+admin_socket>`, on the broker's host, container or pod. `port49 revoke`'s default stays
+port49d's socket (OR-1); on etcd a revocation sent there says which socket to use and exits 1.
+port49d's socket answers `keys diagnose`; the broker's says to use port49d's. With every
+broker down: `sudo -u <port49-broker's user> port49-broker revoke --offline --config
+/etc/port49/port49-broker.yaml --principal <p>` on a broker host (as that user, so it can write
+the state directory it owns; never chown that directory to root); with none, as etcd's root `etcdctl put
+<prefix>v1/rv/principal/<p> '{"kind":"principal","key":"<p>","at":"<now>","origin":"etcdctl"}'`.
+Either way every port49d denies the session's next command. The offline tool also stands the
+mark in that host's `broker.state_dir/marks.json` (and drops a lifted one), and says so; the
+etcdctl path leaves no copy, and an etcd restore from before either loses it until it is revoked
+again, before any broker starts (runbook, above). A broker that is busy says `or stop
+every port49d`, never port49-broker.
+
+*Other.*
+- **A broker restart on a policy file the reload guard refuses** stays not ready (`/readyz` 503)
+  and takes no hold until the file is fixed; it says the guard's reason and
+  `port49_policy_file_refused` is 1. To apply a deliberate large removal, raise
+  `inventory.max_removed_percent` in `port49-broker.yaml` and restart port49-broker, then lower it
+  again.
+- **With every broker stopped,** open sessions run on, a token already minted logs in, and a
+  policy edit changes admission at once and live sessions when a broker returns (L37).
+- **New alarms:** `port49_broker_mint_gate_closed` 1 for a minute; `port49_policy_bundle_matches_runner`
+  0 as above; `port49_redemption_restore_guarded` 1; `port49_ledger_behind` 1 on the runner;
+  `port49_store_keyspace_held` summed 0. The daemon's alarm for its own hold is gone.
+- **Floor-only `lw/` records** (a key revoked with no context mark) persist leaseless, at most
+  one per (device, username) (7e-1, Task 10).
+
+*Upgrading to 7e-2.*
+- **From 7d on etcd:** everything in "Migrating" above, and 7e-1's two notes (the sessions end
+  once; `port49d store-roles` is re-applied).
+- **From 7e-1 on etcd:** the daemon's role is narrower. The 7e-1 `store-roles` output granted
+  `port49_daemon` read on `meta/` by prefix, and 7e-2's port49d refuses to start on it
+  (`allowed reading <prefix>v1/meta/judged`). Revoke that grant, then apply the new output:
+  `etcdctl role revoke-permission port49_daemon <prefix>v1/meta/ --prefix=true`, then
+  `port49d store-roles --config port49d.yaml --broker-config port49-broker.yaml`.
+- A keyspace never judged by a 7e-2 runner has no `meta/judged_bundle`: the port49d skew
+  gauge reads 1 until the first runner judges. Not an alarm in the first minutes.
+- **Rolling back** to 7e-1 is possible while port49d is still on the 7d file; to 7d it ends
+  every session again (7e-1's note).
+
+**Interfaces 7e-2 added:** `internal/port49d.Main` and `BrokerMain` (`cmd/port49d` and
+`cmd/port49-broker` are shims); `config.LoadBroker`, `Config.Role`, `Config.Policy`,
+`Config.KeyRefs`, `BrokerConfig.StateDir`; `store.Marks.Keep`; `etcd.Store.Judged`,
+`PutJudged`, `PutBundle`, `DeleteBundle`, `Bundles`, `Witness`, `PutWitness`, `FollowWitness`,
+`JudgeInDoubt`, `PutJudgedSince`, `BundlesAt`, `JudgedBundle`, `PutPurged`, `RestoreRead`, `Holder`,
+`PutRefreshOwed`, `RefreshOwed`, `ClearRefreshOwed`; `authen.Handler.WithRedeemGuard`;
+`guard.Config.Proc`; the gauges `port49_broker_mint_gate_closed`, `port49_redemption_restore_guarded`
+and `port49_policy_bundle_matches_runner` in `metrics.Metrics`;
+`broker.Broker.RefreshTokens`, `Proc`, `MintGate`, `Say`; `bundle.RaiseBound`, `KeyRefsFile`,
+`StopFleet`; the runner and its `markscopy`, `witness` and `restoreguard`; the lab's split
+harness (`startSplit`).
+
+**Carried, for later plans:**
+- **7f:**
+  - the idle go-dark gap (above, L37): a probe that re-pings at `breaker.open_for` after one
+    failure is the mitigation to weigh;
+  - go-dark proper and the warm context cache, as before;
+  - the container shape (Task 1), with a compose test that restarts a broker and keeps its
+    `broker.state_dir`.
+- **12:**
+  - the three shapes' artifacts and tests (roadmap, "Deployment shapes"), each proving a
+    restart keeps `broker.state_dir` accepted;
+  - the store alarms, now including `port49_broker_mint_gate_closed` and
+    `port49_redemption_restore_guarded`.
+- **Unassigned follow-ups:**
+  - **Ruling 4's residual,** named exactly in the rulings above.
+  - **The per-replica self/key bound and revocation slot** (7c's carry). Each replica bounds its
+    own callers, so N replicas allow N at once: a rate bound, not a security boundary, since
+    every revocation is idempotent. A shared bound needs one more store record per call.
+  - **`putBackFileMarks` and `withHeld`** are kept for the memory store's file, which no marks
+    feed has called since Task 14. Remove them if the file never returns to etcd.
+  - **Gaps in the restore guard** (Ruling 19): a port49d started after the restore has followed
+    nothing and cannot tell; a redemption can arrive in the second between the store
+    answering again and the next read (closing it needs the redemption transaction to compare
+    `meta/witness`, which changes `RedeemAndReceipt` across the store layers); a runner that
+    purges before a port49d's first read leaves it guarded until the next purge or a restart.
+    The runbook's token delete covers all three.
+  - **A copy's extra fields** on a readable entry are lost at the rewrite; the revocation
+    survives.
+  - **Per-image device behaviour not measured:** a Junos session's re-authorization after the
+    first (L40, open). The vJunos-router's first run (a note in `L36-juniper_vjunos-router.md`) is
+    one observation with no capture; it asserts nothing here.
+  - **7c's M3** (a `revoke` record for a mark that could not be written) and the bulk lift stay
+    unassigned, as the carries table said.
+
 ## Plan 8 — Workload certificates (§19 step 8)
 
 Design §7 "Machine identity" option 2: enrollment, self-renewal, multi-identity subjects,
@@ -3285,6 +3740,11 @@ Every shape states the same four requirements:
   - systemd: a directory.
   - Docker: a named volume.
   - Kubernetes: a StatefulSet with a volume per replica, never a Deployment's empty directory.
+    The Kubernetes deployment test must prove that a pod restart under the recommended
+    `securityContext` (plan 7e Task 18's notes: no `fsGroup`, or `fsGroupChangePolicy:
+    OnRootMismatch`, and a 0700 subdirectory an initContainer makes) keeps `broker.state_dir`
+    accepted: under the default `Always` the kubelet makes it group-writable at each mount, and
+    port49-broker refuses it.
 - **etcd is port49's own cluster, never the Kubernetes control plane's.** It needs port49's roles,
   compaction, quota and backups (design §13), and a managed control plane does not expose its etcd.
   It runs as VMs under systemd, as containers with volumes, or as a StatefulSet.

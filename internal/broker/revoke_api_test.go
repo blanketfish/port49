@@ -165,7 +165,7 @@ func TestRevokeOthersMarksAPrincipalAndEndsAKey(t *testing.T) {
 	}
 	if w := f.post(ctx, f.state(f.alice), `{"devices":["leaf1"]}`, ""); w.Code != 401 ||
 		!strings.Contains(w.Body.String(), "credential_revoked") {
-		t.Fatalf("alice's mint after the mark: %d %s", w.Code, w.Body)
+		t.Fatalf("alice's mint after the mark: %s", answer(w))
 	}
 	f.b.AdminSocket = "/run/port49/port49d.sock"
 	again := decodeRevoke(t, f.revokeAs(t, "bob@example.com", `{"principal":"`+alice2+`"}`))
@@ -319,5 +319,69 @@ func TestOneSelfOrKeyRevocationInFlightPerCaller(t *testing.T) {
 	}
 	if n := len(eventsOf(f.records(t), "revoke")); n != 3 {
 		t.Fatalf("%d revoke records, want 3: the busy ones write none", n)
+	}
+}
+
+// On port49-broker the notes name its admin socket and its process, not
+// port49d's: on etcd port49d's socket refuses revocations (Task 15a review
+// M-6).
+func TestTheRevokeNotesNameTheBrokersProcess(t *testing.T) {
+	for _, socket := range []string{"", "/run/port49/broker.sock"} {
+		b := &Broker{Proc: "port49-broker", AdminSocket: socket}
+		for _, note := range []string{b.unrecordedNote(), b.ownNote(), b.liftNote()} {
+			if strings.Contains(note, "port49d") || !strings.Contains(note, "port49-broker") ||
+				(socket != "" && !strings.Contains(note, "port49-broker's admin socket ("+socket+")")) {
+				t.Fatalf("admin socket %q: %s", socket, note)
+			}
+		}
+	}
+}
+
+// The fallback a refused revocation names is the process's own: port49d's
+// is to stop port49d, port49-broker's to stop every port49d, since the
+// broker serves no device and stopping it cuts nothing. The busy error and
+// the unrecorded one both carry it, and the unrecorded one names the
+// process whose listener denies what the mark names (Task 18).
+func TestARevocationsFallbackNamesTheProcess(t *testing.T) {
+	for _, c := range []struct{ proc, stop, wrong string }{
+		{"", "or stop port49d", "stop every port49d"},
+		{"port49-broker", "or stop every port49d (port49-broker serves no device)", "this port49d"},
+	} {
+		f := newFixtureWithPolicy(t, 8, sharedPolicy)
+		f.b.Proc = c.proc
+		release, err := f.b.acquireRevoke(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		wait, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		_, err = f.b.Revoke(wait, RevokeRequest{Principal: alicePrincipal})
+		cancel()
+		release()
+		if !errors.Is(err, ErrRevocationBusy) || !strings.HasSuffix(err.Error(), c.stop) ||
+			strings.Contains(err.Error(), c.wrong) {
+			t.Errorf("proc %q busy: %v", c.proc, err)
+		}
+		f.b.Store = putRevocationFails{f.st}
+		_, err = f.b.Revoke(context.Background(), RevokeRequest{Principal: alicePrincipal})
+		if err == nil || !strings.HasSuffix(err.Error(), c.stop) || strings.Contains(err.Error(), c.wrong) ||
+			!strings.Contains(err.Error(), "this "+f.b.proc()+" denies what it names until a lift on this "+f.b.proc()) {
+			t.Errorf("proc %q unrecorded: %v", c.proc, err)
+		}
+	}
+}
+
+// A request that asks for a lift over the API is told where a lift is made:
+// on the serving process's own admin socket (Task 18).
+func TestALiftOverTheAPISaysWhichSocketLiftsPerProcess(t *testing.T) {
+	for _, c := range []struct{ proc, want string }{
+		{"", "a lift is port49d's admin socket's"},
+		{"port49-broker", "a lift is port49-broker's admin socket's"},
+	} {
+		f := newFixtureWithPolicy(t, 8, sharedPolicy)
+		f.b.Proc = c.proc
+		w := f.revokeAs(t, "bob@example.com", `{"principal":"user:alice@example.com","lift":true}`)
+		if w.Code != 400 || !strings.Contains(w.Body.String(), c.want) {
+			t.Errorf("proc %q: %d %s", c.proc, w.Code, w.Body)
+		}
 	}
 }

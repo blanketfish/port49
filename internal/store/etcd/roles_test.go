@@ -283,3 +283,120 @@ func TestCheckIdentityRefusesAnIdentityItCannotName(t *testing.T) {
 		}
 	}
 }
+
+// The roles are the golden ceiling (plan 7e, Task 16): a grant added to
+// Roles that is not here fails, so widening a role is a decision made in
+// this file. The broker holds the keyspace's root alone, the one range
+// every family it touches sits under (spec §12); the daemon holds
+// read-write on the nine families a login, an authorization and
+// accounting touch, read on the marks and the ledger record, and read on
+// five single keys of meta/ (the ones port49d's code reads), and nothing
+// on the idempotency records, the token indexes or the superseded record.
+// What the daemon's code reads is held by TestTheDaemonReadsExactlyItsMetaKeys.
+func TestTheRolesAreTheGoldenCeiling(t *testing.T) {
+	var got []string
+	for _, g := range Roles("/port49/") {
+		perm := "read"
+		if g.Write {
+			perm = "readwrite"
+		}
+		got = append(got, g.Role+" "+perm+" "+g.Key)
+	}
+	want := []string{
+		"port49_daemon readwrite /port49/v1/t/", "port49_daemon readwrite /port49/v1/r/",
+		"port49_daemon readwrite /port49/v1/rp/", "port49_daemon readwrite /port49/v1/c/",
+		"port49_daemon readwrite /port49/v1/x/", "port49_daemon readwrite /port49/v1/ip/",
+		"port49_daemon readwrite /port49/v1/is/", "port49_daemon readwrite /port49/v1/ic/",
+		"port49_daemon readwrite /port49/v1/b/",
+		"port49_daemon read /port49/v1/rv/", "port49_daemon read /port49/v1/lw/",
+		"port49_daemon read /port49/v1/meta/seal_keys", "port49_daemon read /port49/v1/meta/witness",
+		"port49_daemon read /port49/v1/meta/purged", "port49_daemon read /port49/v1/meta/judged_bundle",
+		"port49_daemon read /port49/v1/meta/ping",
+		"port49_broker readwrite /port49/v1/",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("the grants are not the ceiling:\n got %q\nwant %q", got, want)
+	}
+}
+
+// Under the roles etcd enforces, the broker writes meta/judged,
+// meta/witness and meta/purged, and the daemon reads the restore pair and
+// follows meta/witness but writes none of the three: a stolen daemon key
+// cannot forge a witness a restore is detected by, nor the purge that lets
+// redemptions resume (Task 15d, Ruling 19).
+func TestTheDaemonReadsExactlyItsMetaKeys(t *testing.T) {
+	const prefix = "/port49/"
+	srv := provisioned(t, prefix)
+	ctx := context.Background()
+	d, b := openAs(t, srv, "port49-daemon", prefix), openAs(t, srv, "port49-broker", prefix)
+
+	if err := b.PutJudged(ctx, "bundle-1", []byte("policy")); err != nil {
+		t.Fatalf("the broker writes meta/judged: %v", err)
+	}
+	w, err := b.PutWitness(ctx, "broker-a", 0)
+	if err != nil || w == 0 {
+		t.Fatalf("the broker writes meta/witness: %d, %v", w, err)
+	}
+	p, err := b.PutPurged(ctx, "broker-a", w)
+	if err != nil || p == 0 {
+		t.Fatalf("the broker writes meta/purged: %d, %v", p, err)
+	}
+	r, err := d.RestoreRead(ctx)
+	if err != nil || r.Witness != w || r.Purged != p {
+		t.Fatalf("the daemon reads the restore pair: %+v, %v (witness %d, purged %d)", r, err, w, p)
+	}
+	if wr, err := d.Witness(ctx); err != nil || wr.ModRevision != w {
+		t.Fatalf("the daemon reads meta/witness: %+v, %v", wr, err)
+	}
+	fctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	seen := make(chan uint64, 4)
+	go d.FollowWitness(fctx, func(rev uint64) { seen <- rev })
+	if got := waitRevision(t, seen, w); got != w {
+		t.Fatalf("the daemon follows meta/witness: %d, want %d", got, w)
+	}
+	if bundle, ok, err := d.JudgedBundle(ctx); err != nil || !ok || bundle != "bundle-1" {
+		t.Fatalf("the daemon reads the bundle last judged: %q %v %v", bundle, ok, err)
+	}
+	if _, _, err := d.Judged(ctx); !errors.Is(err, ErrRefused) {
+		t.Errorf("the daemon read meta/judged, the policy file: %v", err)
+	}
+	if err := d.Ping(ctx); err != nil {
+		t.Errorf("the daemon pings: %v", err)
+	}
+	if _, _, err := d.SealKeys(ctx); err != nil {
+		t.Errorf("the daemon reads meta/seal_keys: %v", err)
+	}
+	if _, _, err := d.Holder(ctx); !errors.Is(err, ErrRefused) {
+		t.Errorf("the daemon read meta/holder: %v", err)
+	}
+	if _, err := d.Bundles(ctx); !errors.Is(err, ErrRefused) {
+		t.Errorf("the daemon read meta/bundles/: %v", err)
+	}
+	if _, err := d.PutWitness(ctx, "daemon", w); !errors.Is(err, ErrRefused) {
+		t.Errorf("the daemon wrote meta/witness: %v", err)
+	}
+	if _, err := d.PutPurged(ctx, "daemon", w); !errors.Is(err, ErrRefused) {
+		t.Errorf("the daemon wrote meta/purged: %v", err)
+	}
+	if err := d.PutJudged(ctx, "bundle-2", []byte("policy")); !errors.Is(err, ErrRefused) {
+		t.Errorf("the daemon wrote meta/judged: %v", err)
+	}
+}
+
+// waitRevision returns the first revision on ch that is want, or the last
+// one read when 5s pass.
+func waitRevision(t *testing.T, ch <-chan uint64, want uint64) uint64 {
+	t.Helper()
+	var last uint64
+	for {
+		select {
+		case r := <-ch:
+			if last = r; r == want {
+				return r
+			}
+		case <-time.After(5 * time.Second):
+			return last
+		}
+	}
+}

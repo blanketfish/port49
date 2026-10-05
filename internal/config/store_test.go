@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -31,14 +32,14 @@ func etcdYAML(dir string) storeYAML {
 }
 
 func TestTheStoreDefaultsToMemoryWithAPacketDeadline(t *testing.T) {
-	s, err := checkStore(storeYAML{}, true, false)
+	s, err := checkStore(storeYAML{}, RoleDaemon, false, false, false)
 	if err != nil || s.Backend != BackendMemory || s.PacketDeadline != 2*time.Second || s.Etcd != nil {
 		t.Fatalf("%+v %v", s, err)
 	}
 }
 
 func TestEtcdTakesItsDefaults(t *testing.T) {
-	s, err := checkStore(etcdYAML(storeFiles(t)), true, true)
+	s, err := checkStoreShape(etcdYAML(storeFiles(t)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +60,7 @@ func TestAStartTimeoutOfZeroWaitsForever(t *testing.T) {
 	y := etcdYAML(storeFiles(t))
 	zero := zeroDuration(0)
 	y.Etcd.StartTimeoutSet = &zero
-	s, err := checkStore(y, true, true)
+	s, err := checkStoreShape(y)
 	if err != nil || s.Etcd.StartTimeout != 0 {
 		t.Fatalf("%+v %v", s.Etcd, err)
 	}
@@ -68,54 +69,101 @@ func TestAStartTimeoutOfZeroWaitsForever(t *testing.T) {
 func TestTheStoreRefusesWhatWouldRunUnsafely(t *testing.T) {
 	dir := storeFiles(t)
 	for _, c := range []struct {
-		name          string
-		edit          func(*storeYAML)
-		broker, admin bool
-		want          string
+		name string
+		edit func(*storeYAML)
+		want string
 	}{
-		{"unknown backend", func(s *storeYAML) { s.Backend = "redis" }, true, true, `store.backend "redis": must be memory or etcd`},
-		{"etcd with no block", func(s *storeYAML) { s.Etcd = nil }, true, true, "store.etcd is missing"},
-		{"a block on memory", func(s *storeYAML) { s.Backend = "memory" }, true, true, "store.etcd is set but store.backend is memory"},
-		{"plain http", func(s *storeYAML) { s.Etcd.Endpoints = []string{"http://etcd-0:2379"} }, true, true, "must be https://"},
-		{"no endpoints", func(s *storeYAML) { s.Etcd.Endpoints = nil }, true, true, "store.etcd.endpoints is empty"},
-		{"a key file missing", func(s *storeYAML) { s.Etcd.Daemon.KeyFile = filepath.Join(dir, "nope.pem") }, true, true,
+		{"unknown backend", func(s *storeYAML) { s.Backend = "redis" }, `store.backend "redis": must be memory or etcd`},
+		{"etcd with no block", func(s *storeYAML) { s.Etcd = nil }, "store.etcd is missing"},
+		{"a block on memory", func(s *storeYAML) { s.Backend = "memory" }, "store.etcd is set but store.backend is memory"},
+		{"plain http", func(s *storeYAML) { s.Etcd.Endpoints = []string{"http://etcd-0:2379"} }, "must be https://"},
+		{"no endpoints", func(s *storeYAML) { s.Etcd.Endpoints = nil }, "store.etcd.endpoints is empty"},
+		{"a key file missing", func(s *storeYAML) { s.Etcd.Daemon.KeyFile = filepath.Join(dir, "nope.pem") },
 			"store.etcd.daemon.key_file"},
-		{"no broker identity", func(s *storeYAML) { s.Etcd.Broker = nil }, true, true, "store.etcd.broker is missing"},
-		{"etcd with no broker", func(s *storeYAML) {}, false, true, "store.backend etcd needs a broker: block"},
-		{"etcd with no admin socket", func(s *storeYAML) {}, true, false, "store.backend etcd needs admin_socket"},
-		{"roles misspelt", func(s *storeYAML) { s.Etcd.Roles = "off" }, true, true, `store.etcd.roles "off"`},
-		{"a deadline past 2s", func(s *storeYAML) { s.PacketDeadline = 2500 * time.Millisecond }, true, true,
+		{"roles misspelt", func(s *storeYAML) { s.Etcd.Roles = "off" }, `store.etcd.roles "off"`},
+		{"a deadline past 2s", func(s *storeYAML) { s.PacketDeadline = 2500 * time.Millisecond },
 			"store.packet_deadline"},
 		{"a deadline under the call's", func(s *storeYAML) {
 			s.PacketDeadline, s.Etcd.CallTimeout = 200*time.Millisecond, time.Second
-		}, true, true, "at least store.etcd.call_timeout"},
-		{"a prefix not absolute", func(s *storeYAML) { s.Etcd.Prefix = "port49/" }, true, true, "store.etcd.prefix"},
-		{"an endpoint with a path", func(s *storeYAML) { s.Etcd.Endpoints = []string{"https://etcd-0:2379/v3"} }, true, true,
+		}, "at least store.etcd.call_timeout"},
+		{"a prefix not absolute", func(s *storeYAML) { s.Etcd.Prefix = "port49/" }, "store.etcd.prefix"},
+		{"an endpoint with a path", func(s *storeYAML) { s.Etcd.Endpoints = []string{"https://etcd-0:2379/v3"} },
 			"store.etcd.endpoints[0] must be https://host:port, with no user information, path, query or fragment"},
-		{"an endpoint with a query", func(s *storeYAML) { s.Etcd.Endpoints = []string{"https://etcd-0:2379?x=1"} }, true,
-			true, "store.etcd.endpoints[0] must be https://host:port"},
+		{"an endpoint with a query", func(s *storeYAML) { s.Etcd.Endpoints = []string{"https://etcd-0:2379?x=1"} },
+			"store.etcd.endpoints[0] must be https://host:port"},
 		// port49d's working directory is not a place its trust roots should
 		// depend on, as inventory.service's files (checkService).
-		{"a relative ca_file", func(s *storeYAML) { s.Etcd.CAFile = "ca.pem" }, true, true,
+		{"a relative ca_file", func(s *storeYAML) { s.Etcd.CAFile = "ca.pem" },
 			"store.etcd.ca_file must be an absolute path"},
-		{"a relative key_file", func(s *storeYAML) { s.Etcd.Broker.KeyFile = "b-key.pem" }, true, true,
+		{"a relative key_file", func(s *storeYAML) { s.Etcd.Broker.KeyFile = "b-key.pem" },
 			"store.etcd.broker.key_file must be an absolute path"},
-		{"a hold too short", func(s *storeYAML) { s.Etcd.HoldTTL = time.Second }, true, true, "store.etcd.hold_ttl"},
+		{"a hold too short", func(s *storeYAML) { s.Etcd.HoldTTL = time.Second }, "store.etcd.hold_ttl"},
 		// The floor (8b re-review 2 R2-I1, round 3b): clientv3's keepalive
 		// loop checks every 500ms, so a healthy lease can report as little as
 		// floor(2*ttl/3 - 0.5s - RTT); at 10s that stays at half of ttl or
 		// more for a round trip up to about 1.17s, and below 10s the bound
 		// shrinks to 0.5s or less.
-		{"a hold under 10s", func(s *storeYAML) { s.Etcd.HoldTTL = 9 * time.Second }, true, true,
+		{"a hold under 10s", func(s *storeYAML) { s.Etcd.HoldTTL = 9 * time.Second },
 			"store.etcd.hold_ttl 9s: must be 10s to 1m0s"},
-		{"a start timeout too short", func(s *storeYAML) { d := zeroDuration(time.Second); s.Etcd.StartTimeoutSet = &d }, true, true,
+		{"a start timeout too short", func(s *storeYAML) { d := zeroDuration(time.Second); s.Etcd.StartTimeoutSet = &d },
 			"store.etcd.start_timeout"},
 	} {
 		y := etcdYAML(dir)
 		c.edit(&y)
-		if _, err := checkStore(y, c.broker, c.admin); err == nil || !strings.Contains(err.Error(), c.want) {
+		if _, err := checkStoreShape(y); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: %v, want %q", c.name, err, c.want)
 		}
+	}
+}
+
+// Each role on etcd holds its own identity alone (plan 7e, Rulings 1, 2):
+// port49d.yaml names the daemon's, its policy and an admin socket, and no
+// broker; port49-broker.yaml names the broker's and an admin socket, and
+// never runs on memory. Each refusal names the key.
+func TestEachRoleHoldsItsOwnIdentityAlone(t *testing.T) {
+	dir := storeFiles(t)
+	daemon := func(s *storeYAML) { s.Etcd.Broker = nil }
+	brk := func(s *storeYAML) { s.Etcd.Daemon = EtcdIdentity{} }
+	for _, c := range []struct {
+		name                 string
+		role                 Role
+		edit                 func(*storeYAML)
+		broker, policy, sock bool
+		want                 string
+	}{
+		{"the daemon with a broker block", RoleDaemon, daemon, true, false, true, "move the broker: block"},
+		{"the daemon with no policy", RoleDaemon, daemon, false, false, true, "under policy: (file, watch_interval)"},
+		{"the daemon naming the broker's identity", RoleDaemon, func(*storeYAML) {}, false, true, true,
+			"store.etcd.broker: the broker's identity is port49-broker's alone"},
+		{"the daemon with no identity", RoleDaemon, func(s *storeYAML) { daemon(s); s.Etcd.Daemon = EtcdIdentity{} },
+			false, true, true, "store.etcd.daemon is missing"},
+		{"the daemon with no admin socket", RoleDaemon, daemon, false, true, false, "store.backend etcd needs admin_socket"},
+		{"the broker with no identity", RoleBroker, func(s *storeYAML) { brk(s); s.Etcd.Broker = nil }, true, false, true,
+			"store.etcd.broker is missing"},
+		{"the broker naming the daemon's identity", RoleBroker, func(*storeYAML) {}, true, false, true,
+			"store.etcd.daemon: the daemon's identity is port49d's alone"},
+		{"the broker on memory", RoleBroker, func(s *storeYAML) { *s = storeYAML{} }, true, false, true,
+			"port49-broker runs on etcd"},
+		{"the broker with no admin socket", RoleBroker, brk, true, false, false, "store.backend etcd needs admin_socket"},
+	} {
+		y := etcdYAML(dir)
+		c.edit(&y)
+		if _, err := checkStore(y, c.role, c.broker, c.policy, c.sock); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: %v, want %q", c.name, err, c.want)
+		}
+	}
+	y := etcdYAML(dir)
+	daemon(&y)
+	if s, err := checkStore(y, RoleDaemon, false, true, true); err != nil || s.Etcd.Broker != nil {
+		t.Errorf("the split daemon: %+v %v", s, err)
+	}
+	y = etcdYAML(dir)
+	brk(&y)
+	if s, err := checkStore(y, RoleBroker, true, false, true); err != nil || s.Etcd.Broker == nil {
+		t.Errorf("the broker: %+v %v", s, err)
+	}
+	if s, err := checkStore(storeYAML{}, RoleDaemon, true, false, false); err != nil || s.Backend != BackendMemory {
+		t.Errorf("the in-process broker on memory: %+v %v", s, err)
 	}
 }
 
@@ -126,7 +174,7 @@ func TestAnEndpointsCredentialIsNeverPrinted(t *testing.T) {
 	for _, ep := range []string{"https://alice:hunter2@etcd-0:2379", "http://alice:hunter2@etcd-0:2379"} {
 		y := etcdYAML(storeFiles(t))
 		y.Etcd.Endpoints = []string{"https://etcd-1:2379", ep}
-		_, err := checkStore(y, true, true)
+		_, err := checkStoreShape(y)
 		if err == nil || !strings.Contains(err.Error(), "store.etcd.endpoints[1]") ||
 			strings.Contains(err.Error(), "alice") || strings.Contains(err.Error(), "hunter2") {
 			t.Fatalf("%s: %v", ep, err)
@@ -155,17 +203,17 @@ func TestABareZeroStartTimeoutWaitsForever(t *testing.T) {
 		line string
 		want time.Duration
 	}{{"0", 0}, {"0s", 0}, {"45s", 45 * time.Second}, {"", 30 * time.Second}} {
-		s, err := StoreOf([]byte(storeDoc(dir, c.line)))
+		s, err := StoreBlocks([]byte(storeDoc(dir, c.line)))
 		if err != nil || s.Etcd.StartTimeout != c.want {
 			t.Fatalf("start_timeout %q: %+v %v, want %v", c.line, s.Etcd, err, c.want)
 		}
 	}
-	if _, err := StoreOf([]byte(storeDoc(dir, "5"))); err == nil {
+	if _, err := StoreBlocks([]byte(storeDoc(dir, "5"))); err == nil {
 		t.Fatal("start_timeout: 5 loaded: a bare number other than 0 has no unit")
 	}
 	// The unmarshaler is the scalar's alone, so store.etcd is still decoded
 	// strictly: a misspelt key beside it is refused, never ignored.
-	if _, err := StoreOf([]byte(storeDoc(dir, "0") + "    start_timout: 0\n")); err == nil ||
+	if _, err := StoreBlocks([]byte(storeDoc(dir, "0") + "    start_timout: 0\n")); err == nil ||
 		!strings.Contains(err.Error(), "an unknown field") {
 		t.Fatalf("a misspelt key beside start_timeout: %v", err)
 	}
@@ -173,7 +221,7 @@ func TestABareZeroStartTimeoutWaitsForever(t *testing.T) {
 
 // A store refusal reads as every other load refusal does (review M1).
 func TestAStoreRefusalIsAConfigError(t *testing.T) {
-	_, err := StoreOf([]byte("store: {backend: redis}\n"))
+	_, err := StoreBlocks([]byte("store: {backend: redis}\n"))
 	if err == nil || !strings.HasPrefix(err.Error(), `config: store.backend "redis"`) {
 		t.Fatalf("%v", err)
 	}
@@ -215,13 +263,33 @@ func TestAStoreIdentityNamedRootIsRefused(t *testing.T) {
 	} {
 		y := etcdYAML(dir)
 		c.edit(&y)
-		if _, err := checkStore(y, true, true); err == nil || !strings.Contains(err.Error(), c.want) {
+		if _, err := checkStoreShape(y); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: %v, want %q", c.name, err, c.want)
 		}
 	}
 	y := etcdYAML(dir)
 	y.Etcd.Daemon.CertFile = filepath.Join(dir, "port49-x.pem")
-	if _, err := checkStore(y, true, true); err != nil {
+	if _, err := checkStoreShape(y); err != nil {
 		t.Errorf("another CN: %v", err)
+	}
+	// checkStoreShape holds the check, so StoreBlocks refuses it as Load
+	// and LoadBroker do (pre-flight I8).
+	root := filepath.Join(dir, "root.pem")
+	if _, err := StoreBlocks([]byte(strings.Replace(storeDoc(dir, ""), filepath.Join(dir, "d.pem"), root, 1))); err == nil ||
+		!strings.Contains(err.Error(), `store.etcd.daemon.cert_file: its CN is "root"`) {
+		t.Errorf("StoreBlocks, the daemon's: %v", err)
+	}
+	if _, err := StoreBlocks([]byte(strings.Replace(storeDoc(dir, ""), filepath.Join(dir, "b.pem"), root, 1))); err == nil ||
+		!strings.Contains(err.Error(), `store.etcd.broker.cert_file: its CN is "root"`) {
+		t.Errorf("StoreBlocks, the broker's: %v", err)
+	}
+	certAt := regexp.MustCompile(`cert_file: \S+,`)
+	if _, err := loadDaemonRole(t, certAt.ReplaceAllString(daemonRoleYAML(t), "cert_file: "+root+",")); err == nil ||
+		!strings.Contains(err.Error(), `store.etcd.daemon.cert_file: its CN is "root"`) {
+		t.Errorf("Load, the daemon's: %v", err)
+	}
+	if _, err := loadBrokerRole(t, certAt.ReplaceAllString(brokerRoleYAML(t), "cert_file: "+root+",")); err == nil ||
+		!strings.Contains(err.Error(), `store.etcd.broker.cert_file: its CN is "root"`) {
+		t.Errorf("LoadBroker, the broker's: %v", err)
 	}
 }

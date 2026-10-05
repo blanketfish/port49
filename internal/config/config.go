@@ -227,6 +227,33 @@ type BrokerConfig struct {
 	MaxPendingConnsPerSource int `yaml:"max_pending_conns_per_source"`
 	// CertificateStatus is required (plan 7b); see CertificateStatusConfig.
 	CertificateStatus *CertificateStatusConfig `yaml:"certificate_status"`
+	// StateDir is where port49-broker keeps the CRLs it verified,
+	// crl-<name>.der; required under the broker's role, which has no
+	// revocations file (plan 7e, Ruling 12).
+	StateDir string `yaml:"state_dir"`
+}
+
+// Role is which process a configuration is for (plan 7e, Ruling 2):
+// port49d's, the zero value, or port49-broker's.
+type Role int
+
+const (
+	RoleDaemon Role = iota
+	RoleBroker
+)
+
+// PolicyConfig is the policy file a process admits from, quarantines by and
+// redacts with: broker.policy_file with a broker in the process, or policy:
+// in a port49d.yaml with none (plan 7e).
+type PolicyConfig struct {
+	File          string
+	WatchInterval time.Duration
+}
+
+// policyYAML is policy:, the policy a port49d with no broker admits from.
+type policyYAML struct {
+	File          string        `yaml:"file"`
+	WatchInterval time.Duration `yaml:"watch_interval"`
 }
 
 // CertificateStatusConfig is broker.certificate_status (spec §5.1.4;
@@ -236,8 +263,9 @@ type BrokerConfig struct {
 // Each CRL is read from a file or fetched over http(s), and names the CA
 // certificate that signs it (issuer_file): the trust anchor, or one the
 // anchor signed, byte for byte the certificate in a client's chain. Each
-// verified list is kept beside broker.revocations_file as crl-<name>.der, so
-// a restart keeps it. A status that cannot be established is refused (503,
+// verified list is kept beside broker.revocations_file, or in
+// broker.state_dir under port49-broker, as crl-<name>.der, so a restart
+// keeps it. A status that cannot be established is refused (503,
 // retried) under on_unavailable: refuse, the default, or admitted and said
 // under allow.
 type CertificateStatusConfig struct {
@@ -269,8 +297,8 @@ type CertificateStatusOCSP struct {
 // StoreConfig is `store:`, resolved (plan 7d; spec §13, decision 35): the
 // backend and every packet's store deadline, and on etcd its client.
 type StoreConfig struct {
-	// Backend is memory (the default) or etcd. etcd requires a broker:
-	// block and admin_socket.
+	// Backend is memory (the default) or etcd. etcd requires admin_socket,
+	// and in port49d.yaml policy: and no broker: block (plan 7e).
 	Backend string
 	// PacketDeadline bounds every TACACS+ packet's store work: default 2s,
 	// 100ms to 2s (Junos times out a reply at about 3s; spec §15, L13), and
@@ -303,8 +331,8 @@ type EtcdConfig struct {
 	// Prefix is the keyspace: default /port49/, and it must start with /.
 	Prefix string `yaml:"prefix"`
 	// Daemon and Broker are each component's own identity, its CN etcd's
-	// user. Broker is required: until plan 7e the one port49d on a keyspace
-	// is its broker too.
+	// user. Each file names its own alone: port49d.yaml the daemon's, and
+	// port49-broker.yaml the broker's (plan 7e, Ruling 1).
 	Daemon EtcdIdentity  `yaml:"daemon"`
 	Broker *EtcdIdentity `yaml:"broker"`
 	// Roles is enforced (the default) or unenforced: whether port49d
@@ -448,6 +476,10 @@ type fileConfig struct {
 	InventoryOpts  inventoryYAML             `yaml:"inventory"`
 	AdminSocket    string                    `yaml:"admin_socket"`
 	Store          storeYAML                 `yaml:"store"`
+	Policy         *policyYAML               `yaml:"policy"`
+	// KeyRefs is port49-broker.yaml's in place of keys: the names a policy
+	// may assign, and never a secret (plan 7e, Ruling 2).
+	KeyRefs []string `yaml:"key_refs"`
 }
 
 // inventoryYAML is how port49d bounds an inventory reload (spec §10). The
@@ -484,6 +516,13 @@ type InventoryServiceConfig struct {
 }
 
 type Config struct {
+	// Role is which process the file was loaded for: Load's is RoleDaemon,
+	// LoadBroker's RoleBroker.
+	Role Role
+	// Policy is the policy file in force: broker.policy_file with a broker
+	// block, policy: with none, and nil with neither.
+	Policy *PolicyConfig
+
 	Listen        string
 	MetricsListen string
 	InventoryFile string
@@ -537,10 +576,13 @@ type Config struct {
 
 	// Inventory and Admission are read and built once, here, so the daemon
 	// never re-reads the file and the two can never disagree. Admission is
-	// nil with a broker: port49d admits from the policy in force
+	// nil with a policy: port49d admits from the policy in force
 	// (policy.Policy.Admission).
 	Inventory admission.Inventory
 	Admission *admission.Trie
+
+	// keyRefs is key_refs under the broker's role: the names alone.
+	keyRefs []string
 
 	// encCurrent and encPrevious are the key references, not the keys: the
 	// bytes live in secrets, which Load fills from the environment, so a
@@ -685,7 +727,16 @@ func ReadRegular(path string, max int64) ([]byte, error) {
 	return raw, nil
 }
 
-func Load(path string) (Config, error) {
+// Load reads port49d.yaml, under the daemon's role.
+func Load(path string) (Config, error) { return load(path, RoleDaemon) }
+
+// LoadBroker reads port49-broker.yaml: port49d.yaml's schema under the
+// broker's role (plan 7e, Ruling 2). It names key_refs in place of keys:,
+// broker.state_dir in place of the revocations file, and the broker's etcd
+// identity alone, and refuses what is port49d's (brokerRefusals).
+func LoadBroker(path string) (Config, error) { return load(path, RoleBroker) }
+
+func load(path string, role Role) (Config, error) {
 	raw, err := ReadRegular(path, MaxConfigSize)
 	if err != nil {
 		return Config{}, err
@@ -707,14 +758,21 @@ func Load(path string) (Config, error) {
 	if err := dec.Decode(&f); err != nil && err != io.EOF {
 		return Config{}, fmt.Errorf("config: %s: %w; check the key spelling against the port49d.yaml schema", path, decodeFault(err))
 	}
-
-	malformedWindow, err := window("malformed_window", f.Limits.MalformedWindow)
-	if err != nil {
-		return Config{}, err
-	}
-	authFailureWindow, err := window("auth_failure_window", f.Limits.AuthFailureWindow)
-	if err != nil {
-		return Config{}, err
+	switch role {
+	case RoleBroker:
+		if err := brokerRefusals(f); err != nil {
+			return Config{}, err
+		}
+	default:
+		// Each is port49-broker.yaml's, and would be ignored here.
+		if len(f.KeyRefs) > 0 {
+			return Config{}, errors.New("config: key_refs is port49-broker.yaml's: port49d names its keys, with " +
+				"their secrets, under keys:; remove it (plan 7e)")
+		}
+		if f.Broker != nil && f.Broker.StateDir != "" {
+			return Config{}, errors.New("config: broker.state_dir is port49-broker.yaml's: the in-process broker " +
+				"keeps its CRLs beside broker.revocations_file; remove it (plan 7e)")
+		}
 	}
 
 	if f.ReceiptTTL != 0 {
@@ -724,14 +782,11 @@ func Load(path string) (Config, error) {
 	}
 
 	c := Config{
-		Listen:         or(f.Listen, ":49"),
+		Role:           role,
 		MetricsListen:  or(f.MetricsListen, ":9049"),
 		InventoryFile:  f.InventoryFile,
 		Keys:           f.Keys,
-		ReceiptIdleTTL: orD(f.ReceiptIdleTTL, 15*time.Minute),
-		ReceiptMaxAge:  orD(f.ReceiptMaxAge, 2*time.Hour),
 		ContextIdleTTL: orD(f.ContextIdleTTL, 12*time.Hour),
-		Accounting:     f.Accounting,
 		Lab:            f.Lab,
 		AdminSocket:    f.AdminSocket,
 		// staleness_ceiling has no default: 0 means the check is off, which is
@@ -749,31 +804,20 @@ func Load(path string) (Config, error) {
 		encPrevious: f.Encryption.Previous,
 		hasPrevious: f.Encryption.Previous.SecretEnv != "",
 		secrets:     map[string]string{},
-		Limits: limits.Config{
-			PerNASConnections:    orI(f.Limits.PerNASConnections, 32),
-			IdleTimeout:          orD(f.Limits.IdleTimeout, 30*time.Second),
-			MalformedBackoffBase: orD(f.Limits.MalformedBackoffBase, 100*time.Millisecond),
-			MalformedBackoffMax:  orD(f.Limits.MalformedBackoffMax, 5*time.Second),
-			MalformedWindow:      malformedWindow,
-			AuthFailureDelayBase: orD(f.Limits.AuthFailureDelayBase, 500*time.Millisecond),
-			// 2s, not 5s: the ceiling has to stay under the reply timeout of the
-			// devices being answered, or the FAIL it delays arrives after the
-			// device has given up and is read as an unreachable server — which
-			// falls through to the local password, so the brake undoes the
-			// denial. The shortest timeout measured is about 3s (spec §15, L13;
-			// tests/lab/results/L13-*.md). An operator who raises this above
-			// their own shortest device timeout converts denials into
-			// fall-through.
-			AuthFailureDelayMax: orD(f.Limits.AuthFailureDelayMax, 2*time.Second),
-			AuthFailureWindow:   authFailureWindow,
-		},
 	}
-	if c.Accounting.SpoolCapacity == 0 {
-		c.Accounting.SpoolCapacity = 10000
+	switch role {
+	case RoleBroker:
+		// The broker speaks no TACACS+: no listener, receipt or limit, and
+		// metrics beside port49d's on one host.
+		c.MetricsListen = or(f.MetricsListen, ":9050")
+	default:
+		if err := daemonDefaults(&c, f); err != nil {
+			return Config{}, err
+		}
 	}
-	if c.Accounting.SpoolPath == "" {
-		c.Accounting.SpoolPath = defaultSpoolPath
-	}
+	// inventory.service is applied against the policy in force (decision
+	// 29), whichever block names it.
+	hasPolicy := f.Broker != nil || f.Policy != nil
 	switch svc := f.InventoryOpts.Service; {
 	case svc != nil && c.InventoryFile != "":
 		return Config{}, fmt.Errorf("config: name inventory_file or inventory.service, not both: two inventory " +
@@ -781,9 +825,10 @@ func Load(path string) (Config, error) {
 	case svc == nil && c.InventoryFile == "":
 		return Config{}, fmt.Errorf("config: inventory_file or inventory.service is required")
 	case svc != nil:
-		if f.Broker == nil {
-			return Config{}, fmt.Errorf("config: inventory.service needs a broker: block: port49d applies the " +
-				"service's inventory against its own broker.policy_file (spec §13, decision 29)")
+		if !hasPolicy {
+			return Config{}, fmt.Errorf("config: inventory.service needs a policy (broker.policy_file or " +
+				"policy.file): port49d applies the service's inventory against the policy it admits from (spec §13, " +
+				"decision 29)")
 		}
 		if c.InventoryService, err = checkService(*svc); err != nil {
 			return Config{}, err
@@ -808,11 +853,13 @@ func Load(path string) (Config, error) {
 	if err := checkPositive(c); err != nil {
 		return Config{}, err
 	}
-	if err := resolveSessionServices(&c, f.Platforms); err != nil {
-		return Config{}, err
-	}
-	if err := moveEnableUsernames(&c, f.Platforms); err != nil {
-		return Config{}, err
+	if role == RoleDaemon {
+		if err := resolveSessionServices(&c, f.Platforms); err != nil {
+			return Config{}, err
+		}
+		if err := moveEnableUsernames(&c, f.Platforms); err != nil {
+			return Config{}, err
+		}
 	}
 	// No lab: block is a production daemon: Lab stays nil, the policy engine
 	// answers every context the broker minted, and a context with no blob is
@@ -834,85 +881,54 @@ func Load(path string) (Config, error) {
 		}
 	}
 
-	if f.Broker != nil {
-		b := *f.Broker
-		for _, req := range []struct{ key, v string }{
-			{"broker.listen", b.Listen}, {"broker.tls_cert_file", b.TLSCertFile}, {"broker.tls_key_file", b.TLSKeyFile},
-			{"broker.client_ca_file", b.ClientCAFile}, {"broker.policy_file", b.PolicyFile},
-			{"broker.revocations_file", b.RevocationsFile},
-		} {
-			if req.v == "" {
-				return Config{}, fmt.Errorf("config: %s is required when broker: is present; remove the block to run "+
-					"port49d without a broker", req.key)
-			}
-		}
-		b.BatchMax = orI(b.BatchMax, 100)
-		if b.BatchMax < 1 || b.BatchMax > 1000 {
-			return Config{}, fmt.Errorf("config: broker.batch_max must be between 1 and 1000; got %d", b.BatchMax)
-		}
-		b.PolicyWatchInterval = orD(b.PolicyWatchInterval, 5*time.Second)
-		if b.PolicyWatchInterval < time.Second || b.PolicyWatchInterval > 5*time.Minute {
-			return Config{}, fmt.Errorf("config: broker.policy_watch_interval must be between 1s and 5m; got %s",
-				b.PolicyWatchInterval)
-		}
-		// orI maps 0 alone to the default, so a negative value reaches the
-		// bound and is refused.
-		b.MaxConnsPerPrincipal = orI(b.MaxConnsPerPrincipal, 4)
-		if b.MaxConnsPerPrincipal < 1 || b.MaxConnsPerPrincipal > 64 {
-			return Config{}, fmt.Errorf("config: broker.max_conns_per_principal must be between 1 and 64; got %d",
-				b.MaxConnsPerPrincipal)
-		}
-		b.MaxPendingConnsPerSource = orI(b.MaxPendingConnsPerSource, 16)
-		if b.MaxPendingConnsPerSource < 1 || b.MaxPendingConnsPerSource > 256 {
-			return Config{}, fmt.Errorf("config: broker.max_pending_conns_per_source must be between 1 and 256; got %d",
-				b.MaxPendingConnsPerSource)
-		}
-		if err := ownRevocationsFile(c, b); err != nil {
-			return Config{}, err
-		}
-		if b.CertificateStatus == nil {
-			return Config{}, fmt.Errorf("config: broker.certificate_status is required when broker: is present: " +
-				"name the CRLs or OCSP responder that say whether a client certificate is revoked, or set " +
-				"certificate_status: {disabled: true} to check none (spec §5.1.4)")
-		}
-		cs := *b.CertificateStatus
-		if err := checkCertificateStatus(&cs, b); err != nil {
-			return Config{}, err
-		}
-		b.CertificateStatus = &cs
-		c.Broker = &b
+	if role == RoleBroker && f.Broker == nil {
+		return Config{}, errors.New("config: broker: is required in port49-broker.yaml: its listener, TLS files, " +
+			"policy_file and state_dir (plan 7e, Ruling 2)")
 	}
-	if c.Store, err = checkStore(f.Store, f.Broker != nil, f.AdminSocket != ""); err != nil {
+	if f.Broker != nil {
+		if c.Broker, err = checkBroker(c, *f.Broker, role); err != nil {
+			return Config{}, err
+		}
+	}
+	switch {
+	case f.Policy != nil && f.Broker != nil:
+		// Under the broker's role brokerRefusals has refused policy: already.
+		return Config{}, errors.New("config: policy: beside a broker: block: the in-process broker's policy is " +
+			"broker.policy_file; remove policy:")
+	case f.Broker != nil:
+		c.Policy = &PolicyConfig{File: c.Broker.PolicyFile, WatchInterval: c.Broker.PolicyWatchInterval}
+	case f.Policy != nil:
+		p := PolicyConfig{File: f.Policy.File, WatchInterval: orD(f.Policy.WatchInterval, 5*time.Second)}
+		if p.File == "" {
+			// On etcd policy: is required, so removing it is no fix there.
+			fix := ""
+			if or(f.Store.Backend, BackendMemory) == BackendMemory {
+				fix = ", or remove the block to run port49d on inventory_file's key groups"
+			}
+			return Config{}, fmt.Errorf("config: policy.file is required when policy: is present: name the policy "+
+				"file port49d admits from%s", fix)
+		}
+		if p.WatchInterval < time.Second || p.WatchInterval > 5*time.Minute {
+			return Config{}, fmt.Errorf("config: policy.watch_interval must be between 1s and 5m; got %s",
+				p.WatchInterval)
+		}
+		c.Policy = &p
+	}
+	if c.Store, err = checkStore(f.Store, role, f.Broker != nil, f.Policy != nil, f.AdminSocket != ""); err != nil {
 		return Config{}, fmt.Errorf("config: %w", err)
 	}
+	if role == RoleDaemon && c.Store.Backend == BackendEtcd && c.Lab != nil && len(c.Lab.SeedTokens) > 0 {
+		return Config{}, errors.New("config: lab.seed_tokens: lab seed tokens are minted by port49-broker on etcd; " +
+			"move lab.seed_tokens and lab.seed_token_file into port49-broker.yaml (plan 7e)")
+	}
 
-	if c.Keys, err = checkKeySets(c.Keys, raw); err != nil {
+	if role == RoleBroker {
+		if c.keyRefs, err = checkKeyRefList(f.KeyRefs); err != nil {
+			return Config{}, err
+		}
+	} else if err := resolveKeys(&c, raw); err != nil {
 		return Config{}, err
 	}
-	for ref, ks := range c.Keys {
-		for _, v := range allVersions(ks) {
-			s, ok := os.LookupEnv(v.SecretEnv)
-			if !ok || s == "" {
-				return Config{}, fmt.Errorf("config: key %s version %d: its secret_env names an environment variable "+
-					"that is not set", ref, v.Version)
-			}
-			c.secrets[v.SecretEnv] = s
-		}
-	}
-	now := time.Now()
-	for _, ref := range sortedKeySets(c.Keys) {
-		for _, v := range c.Keys[ref].Accept {
-			switch {
-			case v.RetireAt.IsZero():
-				c.Notices = append(c.Notices, fmt.Sprintf("key %s version %d has no retire_after; an indefinitely "+
-					"accepted version is what rotation exists to prevent (spec §10)", ref, v.Version))
-			case !now.Before(v.RetireAt):
-				c.Notices = append(c.Notices, fmt.Sprintf("key %s version %d: retire_after %s has passed, so it "+
-					"identifies devices and admits none; move it to retired, or remove it", ref, v.Version, v.RetireAfter))
-			}
-		}
-	}
-
 	// The encryption keys go into c.secrets alongside the shared secrets,
 	// because that map is the one place a secret is held and EncryptionKeys
 	// reads it. Without this the map is empty for those names, key32 is handed
@@ -984,8 +1000,8 @@ func Load(path string) (Config, error) {
 			"never tried", f.Encryption.Current.ID)
 	}
 
-	if c.Broker != nil {
-		// With a broker the inventory is live, and port49d reads it behind
+	if c.Policy != nil {
+		// With a policy the inventory is live, and port49d reads it behind
 		// the policy file's fence (fencedInventory, plan 6a C2), so it is not
 		// read here at all: a plain read first would hang on a FIFO, or read
 		// a link to a huge file whole, before the fence could refuse it. Key
@@ -1054,9 +1070,242 @@ func Load(path string) (Config, error) {
 	return c, nil
 }
 
-// KeyRefs names every key_ref keys defines, sorted and never nil: a device
-// the policy assigns any other is refused admission (spec §10). Names only.
+// daemonDefaults fills what port49d alone has: the TACACS+ listener, the
+// receipt bounds, the limits and the accounting spool.
+func daemonDefaults(c *Config, f fileConfig) error {
+	malformedWindow, err := window("malformed_window", f.Limits.MalformedWindow)
+	if err != nil {
+		return err
+	}
+	authFailureWindow, err := window("auth_failure_window", f.Limits.AuthFailureWindow)
+	if err != nil {
+		return err
+	}
+	c.Listen = or(f.Listen, ":49")
+	c.ReceiptIdleTTL = orD(f.ReceiptIdleTTL, 15*time.Minute)
+	c.ReceiptMaxAge = orD(f.ReceiptMaxAge, 2*time.Hour)
+	c.Accounting = f.Accounting
+	c.Limits = limits.Config{
+		PerNASConnections:    orI(f.Limits.PerNASConnections, 32),
+		IdleTimeout:          orD(f.Limits.IdleTimeout, 30*time.Second),
+		MalformedBackoffBase: orD(f.Limits.MalformedBackoffBase, 100*time.Millisecond),
+		MalformedBackoffMax:  orD(f.Limits.MalformedBackoffMax, 5*time.Second),
+		MalformedWindow:      malformedWindow,
+		AuthFailureDelayBase: orD(f.Limits.AuthFailureDelayBase, 500*time.Millisecond),
+		// 2s, not 5s: the ceiling has to stay under the reply timeout of the
+		// devices being answered, or the FAIL it delays arrives after the
+		// device has given up and is read as an unreachable server — which
+		// falls through to the local password, so the brake undoes the
+		// denial. The shortest timeout measured is about 3s (spec §15, L13;
+		// tests/lab/results/L13-*.md). An operator who raises this above
+		// their own shortest device timeout converts denials into
+		// fall-through.
+		AuthFailureDelayMax: orD(f.Limits.AuthFailureDelayMax, 2*time.Second),
+		AuthFailureWindow:   authFailureWindow,
+	}
+	if c.Accounting.SpoolCapacity == 0 {
+		c.Accounting.SpoolCapacity = 10000
+	}
+	if c.Accounting.SpoolPath == "" {
+		c.Accounting.SpoolPath = defaultSpoolPath
+	}
+	return nil
+}
+
+// resolveKeys checks keys: and reads each version's secret from the
+// environment (port49d's role), and notes an accept version with no
+// retire_after or one past it.
+func resolveKeys(c *Config, raw []byte) error {
+	var err error
+	if c.Keys, err = checkKeySets(c.Keys, raw); err != nil {
+		return err
+	}
+	for ref, ks := range c.Keys {
+		for _, v := range allVersions(ks) {
+			s, ok := os.LookupEnv(v.SecretEnv)
+			if !ok || s == "" {
+				return fmt.Errorf("config: key %s version %d: its secret_env names an environment variable "+
+					"that is not set", ref, v.Version)
+			}
+			c.secrets[v.SecretEnv] = s
+		}
+	}
+	now := time.Now()
+	for _, ref := range sortedKeySets(c.Keys) {
+		for _, v := range c.Keys[ref].Accept {
+			switch {
+			case v.RetireAt.IsZero():
+				c.Notices = append(c.Notices, fmt.Sprintf("key %s version %d has no retire_after; an indefinitely "+
+					"accepted version is what rotation exists to prevent (spec §10)", ref, v.Version))
+			case !now.Before(v.RetireAt):
+				c.Notices = append(c.Notices, fmt.Sprintf("key %s version %d: retire_after %s has passed, so it "+
+					"identifies devices and admits none; move it to retired, or remove it", ref, v.Version, v.RetireAfter))
+			}
+		}
+	}
+	return nil
+}
+
+// checkBroker checks a broker: block and applies its defaults. Under the
+// broker's role broker.state_dir takes the revocations file's place
+// (Ruling 12): required, absolute, a directory that exists.
+func checkBroker(c Config, b BrokerConfig, role Role) (*BrokerConfig, error) {
+	required := []struct{ key, v string }{
+		{"broker.listen", b.Listen}, {"broker.tls_cert_file", b.TLSCertFile}, {"broker.tls_key_file", b.TLSKeyFile},
+		{"broker.client_ca_file", b.ClientCAFile}, {"broker.policy_file", b.PolicyFile},
+	}
+	fix := "is required when broker: is present; remove the block to run port49d without a broker"
+	if role == RoleBroker {
+		required = append(required, struct{ key, v string }{"broker.state_dir", b.StateDir})
+		fix = "is required in port49-broker.yaml"
+	} else {
+		required = append(required, struct{ key, v string }{"broker.revocations_file", b.RevocationsFile})
+	}
+	for _, req := range required {
+		if req.v == "" {
+			return nil, fmt.Errorf("config: %s %s", req.key, fix)
+		}
+	}
+	if role == RoleBroker {
+		if !filepath.IsAbs(b.StateDir) {
+			return nil, errors.New("config: broker.state_dir must be an absolute path")
+		}
+		fi, err := os.Stat(b.StateDir)
+		if err != nil || !fi.IsDir() {
+			return nil, fmt.Errorf("config: broker.state_dir %s must be a directory that exists: port49-broker keeps "+
+				"its verified CRLs there; create it, owned by port49-broker's user, mode 0700", b.StateDir)
+		}
+		// Fenced as broker.revocations_file is (ownRevocationsFile): what
+		// the broker keeps there is its own, so no other user may write the
+		// directory. Group read, as a 0750 volume mount has, is no write.
+		if fi.Mode().Perm()&0o022 != 0 {
+			return nil, fmt.Errorf("config: broker.state_dir %s is writable by its group or others (mode %04o): "+
+				"port49-broker's own state is kept there; chmod 0700 it, or point broker.state_dir at a 0700 directory "+
+				"of its own inside the volume", b.StateDir, fi.Mode().Perm())
+		}
+		// Nor inside, nor around, a directory the inventory service and
+		// port49d rewrite.
+		if svc := c.InventoryService; svc != nil {
+			for _, d := range []struct{ key, dir string }{{"inventory.service.state_dir", svc.StateDir},
+				{"inventory.service.mirror_dir", svc.MirrorDir}} {
+				if d.dir != "" && (within(d.dir, b.StateDir) || within(b.StateDir, d.dir)) {
+					return nil, fmt.Errorf("config: broker.state_dir is port49-broker's own state and may not be "+
+						"inside %s, nor hold it: give each its own directory", d.key)
+				}
+			}
+		}
+	}
+	b.BatchMax = orI(b.BatchMax, 100)
+	if b.BatchMax < 1 || b.BatchMax > 1000 {
+		return nil, fmt.Errorf("config: broker.batch_max must be between 1 and 1000; got %d", b.BatchMax)
+	}
+	b.PolicyWatchInterval = orD(b.PolicyWatchInterval, 5*time.Second)
+	if b.PolicyWatchInterval < time.Second || b.PolicyWatchInterval > 5*time.Minute {
+		return nil, fmt.Errorf("config: broker.policy_watch_interval must be between 1s and 5m; got %s",
+			b.PolicyWatchInterval)
+	}
+	// orI maps 0 alone to the default, so a negative value reaches the
+	// bound and is refused.
+	b.MaxConnsPerPrincipal = orI(b.MaxConnsPerPrincipal, 4)
+	if b.MaxConnsPerPrincipal < 1 || b.MaxConnsPerPrincipal > 64 {
+		return nil, fmt.Errorf("config: broker.max_conns_per_principal must be between 1 and 64; got %d",
+			b.MaxConnsPerPrincipal)
+	}
+	b.MaxPendingConnsPerSource = orI(b.MaxPendingConnsPerSource, 16)
+	if b.MaxPendingConnsPerSource < 1 || b.MaxPendingConnsPerSource > 256 {
+		return nil, fmt.Errorf("config: broker.max_pending_conns_per_source must be between 1 and 256; got %d",
+			b.MaxPendingConnsPerSource)
+	}
+	if role == RoleDaemon {
+		if err := ownRevocationsFile(c, b); err != nil {
+			return nil, err
+		}
+	}
+	if b.CertificateStatus == nil {
+		return nil, fmt.Errorf("config: broker.certificate_status is required when broker: is present: " +
+			"name the CRLs or OCSP responder that say whether a client certificate is revoked, or set " +
+			"certificate_status: {disabled: true} to check none (spec §5.1.4)")
+	}
+	cs := *b.CertificateStatus
+	if err := checkCertificateStatus(&cs, b); err != nil {
+		return nil, err
+	}
+	b.CertificateStatus = &cs
+	return &b, nil
+}
+
+// checkKeyRefList is key_refs, port49-broker.yaml's key names (plan 7e,
+// Ruling 2): at least one, each a key_ref name (admission.KeyRefShape) and
+// named once. One that is not a name is refused by its index and never
+// printed, as checkKeyRefs refuses one under keys:. It returns them sorted.
+func checkKeyRefList(refs []string) ([]string, error) {
+	if len(refs) == 0 {
+		return nil, errors.New("config: key_refs is required in port49-broker.yaml: the key_ref names a policy " +
+			"may assign, as port49d.yaml's keys: names them, never their secrets (plan 7e)")
+	}
+	seen := map[string]bool{}
+	for i, ref := range refs {
+		if !admission.KeyRefShape.MatchString(ref) {
+			return nil, fmt.Errorf("config: key_refs[%d] is not a valid key_ref name (%s): it names the key, never "+
+				"holds it", i, admission.KeyRefShapeRule)
+		}
+		if seen[ref] {
+			return nil, fmt.Errorf("config: key_refs[%d] %s is named twice; name each key once", i, ref)
+		}
+		seen[ref] = true
+	}
+	out := append([]string(nil), refs...)
+	sort.Strings(out)
+	return out, nil
+}
+
+// brokerRefusals refuses, by key, what a port49-broker.yaml must never name
+// (plan 7e, Rulings 1, 2): the broker never speaks TACACS+, never holds a
+// device key or the daemon's etcd identity, and on etcd keeps no
+// revocations file.
+func brokerRefusals(f fileConfig) error {
+	lab := f.Lab
+	if lab == nil {
+		lab = &LabConfig{}
+	}
+	for _, c := range []struct {
+		key string
+		set bool
+		why string
+	}{
+		{"listen", f.Listen != "", "port49-broker never speaks TACACS+; that is port49d's"},
+		{"keys:", len(f.Keys) > 0, "device keys are port49d's alone; name the key references under key_refs"},
+		{"accounting", f.Accounting != (AccountingConfig{}), "accounting is port49d's"},
+		{"limits", f.Limits != (limitsYAML{}), "TACACS+ limits are port49d's"},
+		{"receipt_idle_ttl", f.ReceiptIdleTTL != 0, "receipts are port49d's"},
+		{"receipt_max_age", f.ReceiptMaxAge != 0, "receipts are port49d's"},
+		{"platforms", len(f.Platforms) > 0, "session services are port49d's"},
+		{"policy:", f.Policy != nil, "port49-broker's policy is broker.policy_file"},
+		{"broker.revocations_file", f.Broker != nil && f.Broker.RevocationsFile != "",
+			"on etcd the store keeps the marks (decision 36); remove it"},
+		{"store.etcd.daemon", f.Store.Etcd != nil && (f.Store.Etcd.Daemon != EtcdIdentity{}),
+			"the daemon's etcd identity is port49d's alone"},
+		{"lab.fault_file", lab.FaultFile != "", "the lab's fault switch is port49d's"},
+		{"lab.session_attributes", len(lab.SessionAttributes) > 0, "the lab's answers are port49d's"},
+		{"lab.command_attributes", len(lab.CommandAttributes) > 0, "the lab's answers are port49d's"},
+		{"lab.deny_prefixes", len(lab.DenyPrefixes) > 0, "the lab's answers are port49d's"},
+		{"lab.deny_message_length", lab.DenyMessageLength != 0, "the lab's answers are port49d's"},
+		{"lab.deny_session", lab.DenySession, "the lab's answers are port49d's"},
+	} {
+		if c.set {
+			return fmt.Errorf("config: %s is not port49-broker.yaml's: %s (plan 7e)", c.key, c.why)
+		}
+	}
+	return nil
+}
+
+// KeyRefs names every key_ref keys defines, or under the broker's role
+// key_refs names, sorted and never nil: a device the policy assigns any
+// other is refused admission (spec §10). Names only.
 func (c Config) KeyRefs() []string {
+	if c.Role == RoleBroker {
+		return append(make([]string, 0, len(c.keyRefs)), c.keyRefs...)
+	}
 	out := make([]string, 0, len(c.Keys))
 	for ref := range c.Keys {
 		out = append(out, ref)
@@ -1396,11 +1645,16 @@ func checkCertificateStatus(cs *CertificateStatusConfig, b BrokerConfig) error {
 	if len(cs.CRLs) == 0 && cs.OCSP == nil {
 		return fmt.Errorf("config: %s: name at least one crls entry or an ocsp block, or set disabled: true", key)
 	}
-	revAbs, err := filepath.Abs(b.RevocationsFile)
-	if err != nil {
-		return fmt.Errorf("config: broker.revocations_file: %w", err)
+	// The kept lists sit in broker.state_dir under the broker's role, and
+	// beside broker.revocations_file under the daemon's (plan 7e, Ruling 12).
+	stateDir := b.StateDir
+	if stateDir == "" {
+		revAbs, err := filepath.Abs(b.RevocationsFile)
+		if err != nil {
+			return fmt.Errorf("config: broker.revocations_file: %w", err)
+		}
+		stateDir = filepath.Dir(revAbs)
 	}
-	stateDir := filepath.Dir(revAbs)
 	seen := map[string]bool{}
 	for i, src := range cs.CRLs {
 		at := fmt.Sprintf("%s.crls[%d]", key, i)
@@ -1421,8 +1675,12 @@ func checkCertificateStatus(cs *CertificateStatusConfig, b BrokerConfig) error {
 		// The kept list is port49d's own state, written beside the
 		// revocations file: it may be no file an operator gave it.
 		kept := filepath.Join(stateDir, "crl-"+src.Name+".der")
+		marker := ""
+		if b.RevocationsFile != "" {
+			marker = b.RevocationsFile + ".created"
+		}
 		for _, o := range []struct{ key, path string }{
-			{"broker.revocations_file", b.RevocationsFile}, {"broker.revocations_file's marker", b.RevocationsFile + ".created"},
+			{"broker.revocations_file", b.RevocationsFile}, {"broker.revocations_file's marker", marker},
 			{"broker.policy_file", b.PolicyFile}, {"broker.tls_cert_file", b.TLSCertFile},
 			{"broker.tls_key_file", b.TLSKeyFile}, {"broker.client_ca_file", b.ClientCAFile},
 			{at + ".file", src.File}, {at + ".issuer_file", src.IssuerFile},
@@ -1519,19 +1777,17 @@ func InventoryServiceOf(raw []byte) (*InventoryServiceConfig, error) {
 // line and a fixed category, and no text from the document (yamlfault).
 func decodeFault(err error) error { return yamlfault.Of(err) }
 
-// checkStore resolves `store:` (plan 7d; spec §13, decision 35): the
+// checkStoreShape resolves `store:` (plan 7d; spec §13, decision 35): the
 // backend, the packet deadline, and on etcd every key's default and
-// bound. It refuses what would run unsafely:
+// bound. It holds every check that is not a role's, and refuses what
+// would run unsafely in any file:
 //   - an endpoint that is not https;
-//   - an identity missing, or a file it names absent;
-//   - etcd with no broker (until plan 7e the one port49d on a keyspace
-//     is its broker too);
-//   - etcd with no admin_socket (there is no other way to lift a mark;
-//     Ruling 13).
+//   - a file an identity names absent, or a certificate whose CN is root.
 //
-// A key file's mode, owner and symlink are refused where it is read,
-// by internal/keyfile (Task 12).
-func checkStore(s storeYAML, hasBroker, hasAdminSocket bool) (StoreConfig, error) {
+// Either identity may be named or absent: which a file must name is its
+// role's (checkStore). A key file's mode, owner and symlink are refused
+// where it is read, by internal/keyfile (Task 12).
+func checkStoreShape(s storeYAML) (StoreConfig, error) {
 	out := StoreConfig{Backend: or(s.Backend, BackendMemory), PacketDeadline: orD(s.PacketDeadline, 2*time.Second)}
 	if out.PacketDeadline < 100*time.Millisecond || out.PacketDeadline > 2*time.Second {
 		return StoreConfig{}, fmt.Errorf("store.packet_deadline %v: must be 100ms to 2s, so a device hears port49's "+
@@ -1550,15 +1806,6 @@ func checkStore(s storeYAML, hasBroker, hasAdminSocket bool) (StoreConfig, error
 	}
 	if s.Etcd == nil {
 		return StoreConfig{}, errors.New("store.backend is etcd and store.etcd is missing")
-	}
-	if !hasBroker {
-		return StoreConfig{}, errors.New("store.backend etcd needs a broker: block: until plan 7e the one port49d " +
-			"on a keyspace is its broker too")
-	}
-	if !hasAdminSocket {
-		return StoreConfig{}, errors.New("store.backend etcd needs admin_socket: on etcd a mark is kept in the store " +
-			"as well as broker.revocations_file, so editing the file no longer lifts one; a lift is " +
-			"'port49 revoke --lift' on the admin socket (decision 35)")
 	}
 	e := *s.Etcd
 	if len(e.Endpoints) == 0 {
@@ -1583,17 +1830,26 @@ func checkStore(s storeYAML, hasBroker, hasAdminSocket bool) (StoreConfig, error
 	if !strings.HasSuffix(e.Prefix, "/") {
 		e.Prefix += "/"
 	}
-	if e.Broker == nil {
-		return StoreConfig{}, errors.New("store.etcd.broker is missing: the broker authenticates to etcd as " +
-			"itself (decision 35)")
-	}
 	if err := readableFile("store.etcd.ca_file", e.CAFile); err != nil {
 		return StoreConfig{}, err
 	}
-	for _, id := range []struct {
+	var ids []struct {
 		name string
 		id   EtcdIdentity
-	}{{"store.etcd.daemon", e.Daemon}, {"store.etcd.broker", *e.Broker}} {
+	}
+	if e.Daemon != (EtcdIdentity{}) {
+		ids = append(ids, struct {
+			name string
+			id   EtcdIdentity
+		}{"store.etcd.daemon", e.Daemon})
+	}
+	if e.Broker != nil {
+		ids = append(ids, struct {
+			name string
+			id   EtcdIdentity
+		}{"store.etcd.broker", *e.Broker})
+	}
+	for _, id := range ids {
 		for _, f := range [][2]string{{".cert_file", id.id.CertFile}, {".key_file", id.id.KeyFile}} {
 			if err := readableFile(id.name+f[0], f[1]); err != nil {
 				return StoreConfig{}, err
@@ -1661,6 +1917,62 @@ func checkStore(s storeYAML, hasBroker, hasAdminSocket bool) (StoreConfig, error
 	return out, nil
 }
 
+// checkStore is checkStoreShape and then the role's requirements (plan 7e,
+// Rulings 1, 2): no host holds both etcd identities.
+//   - port49d on etcd names its own identity alone, the policy it admits
+//     from under policy:, and no broker: block;
+//   - port49-broker names its own identity alone, and runs on etcd;
+//   - either on etcd names admin_socket.
+func checkStore(s storeYAML, role Role, hasBroker, hasPolicy, hasAdminSocket bool) (StoreConfig, error) {
+	out, err := checkStoreShape(s)
+	if err != nil {
+		return StoreConfig{}, err
+	}
+	if out.Backend != BackendEtcd {
+		if role == RoleBroker {
+			return StoreConfig{}, errors.New("store.backend: port49-broker runs on etcd: with the memory store, run " +
+				"the broker in port49d (a broker: block in port49d.yaml)")
+		}
+		return out, nil
+	}
+	e := out.Etcd
+	switch role {
+	case RoleBroker:
+		if e.Broker == nil {
+			return StoreConfig{}, errors.New("store.etcd.broker is missing: port49-broker authenticates to etcd as " +
+				"itself (decision 35)")
+		}
+		if e.Daemon != (EtcdIdentity{}) {
+			return StoreConfig{}, errors.New("store.etcd.daemon: the daemon's identity is port49d's alone; remove " +
+				"it from port49-broker.yaml (plan 7e)")
+		}
+	default:
+		if hasBroker {
+			return StoreConfig{}, errors.New("store.backend: etcd runs the broker as its own process (plan 7e): " +
+				"move the broker: block, with store.etcd.broker, into port49-broker.yaml and start port49-broker; " +
+				"name the policy port49d admits from under policy: (file, watch_interval)")
+		}
+		if !hasPolicy {
+			return StoreConfig{}, errors.New("store.backend etcd needs the policy port49d admits from: name it " +
+				"under policy: (file, watch_interval) (plan 7e)")
+		}
+		if e.Broker != nil {
+			return StoreConfig{}, errors.New("store.etcd.broker: the broker's identity is port49-broker's alone; " +
+				"remove it from port49d.yaml (plan 7e)")
+		}
+		if e.Daemon == (EtcdIdentity{}) {
+			return StoreConfig{}, errors.New("store.etcd.daemon is missing: port49d authenticates to etcd as " +
+				"itself (decision 35)")
+		}
+	}
+	if !hasAdminSocket {
+		return StoreConfig{}, errors.New("store.backend etcd needs admin_socket: port49-broker's answers " +
+			"'port49 revoke', the one way to lift a mark on etcd, and port49d's 'port49 keys diagnose' " +
+			"(decision 35; plan 7e)")
+	}
+	return out, nil
+}
+
 // certCN is the subject CN of the first certificate in the PEM file at
 // path, or "" when there is none or it does not parse: port49d's start
 // names that (Task 12).
@@ -1705,10 +2017,14 @@ func readableFile(name, path string) error {
 	return nil
 }
 
-// StoreOf is `store:` from port49d.yaml's bytes, checked as Load checks
-// it (the stale seed keys first, as Load refuses them), for `port49d
-// store-roles`, which reads nothing else (plan 7d; pre-flight M35).
-func StoreOf(raw []byte) (StoreConfig, error) {
+// StoreBlocks is `store:` from either file's bytes, port49d.yaml's or
+// port49-broker.yaml's, decoded as strictly as Load (the stale seed keys
+// first, as Load refuses them) and checked for its shape alone
+// (checkStoreShape): either identity may be named or absent (plan 7e,
+// pre-flight I8). It is for `port49d store-roles`, which reads nothing
+// else, and which reads a 7d port49d.yaml naming both identities that
+// Load under the daemon's role refuses.
+func StoreBlocks(raw []byte) (StoreConfig, error) {
 	if err := staleSeedKeys(raw); err != nil {
 		return StoreConfig{}, err
 	}
@@ -1718,7 +2034,7 @@ func StoreOf(raw []byte) (StoreConfig, error) {
 	if err := dec.Decode(&f); err != nil && err != io.EOF {
 		return StoreConfig{}, fmt.Errorf("config: %w; check the key spelling against the port49d.yaml schema", decodeFault(err))
 	}
-	s, err := checkStore(f.Store, f.Broker != nil, f.AdminSocket != "")
+	s, err := checkStoreShape(f.Store)
 	if err != nil {
 		return StoreConfig{}, fmt.Errorf("config: %w", err)
 	}
@@ -1850,13 +2166,6 @@ func checkPositive(c Config) error {
 		name string
 		d    time.Duration
 	}{
-		{"limits.idle_timeout", c.Limits.IdleTimeout},
-		{"limits.malformed_backoff_base", c.Limits.MalformedBackoffBase},
-		{"limits.malformed_backoff_max", c.Limits.MalformedBackoffMax},
-		{"limits.auth_failure_delay_base", c.Limits.AuthFailureDelayBase},
-		{"limits.auth_failure_delay_max", c.Limits.AuthFailureDelayMax},
-		{"receipt_idle_ttl", c.ReceiptIdleTTL},
-		{"receipt_max_age", c.ReceiptMaxAge},
 		{"context_idle_ttl", c.ContextIdleTTL},
 		{"session.grace_window", c.Session.GraceWindow},
 		{"session.index_ttl", c.Session.IndexTTL},
@@ -1881,6 +2190,25 @@ func checkPositive(c Config) error {
 	}
 	if c.Token.CandidateCap < 1 {
 		return fmt.Errorf("config: token.candidate_cap must be at least 1; got %d", c.Token.CandidateCap)
+	}
+	if c.Role == RoleBroker {
+		return nil // the rest is port49d's, which port49-broker.yaml refuses (brokerRefusals)
+	}
+	for _, f := range []struct {
+		name string
+		d    time.Duration
+	}{
+		{"limits.idle_timeout", c.Limits.IdleTimeout},
+		{"limits.malformed_backoff_base", c.Limits.MalformedBackoffBase},
+		{"limits.malformed_backoff_max", c.Limits.MalformedBackoffMax},
+		{"limits.auth_failure_delay_base", c.Limits.AuthFailureDelayBase},
+		{"limits.auth_failure_delay_max", c.Limits.AuthFailureDelayMax},
+		{"receipt_idle_ttl", c.ReceiptIdleTTL},
+		{"receipt_max_age", c.ReceiptMaxAge},
+	} {
+		if f.d <= 0 {
+			return fmt.Errorf("config: %s must be greater than zero; got %s", f.name, f.d)
+		}
 	}
 	if c.ReceiptIdleTTL > c.ReceiptMaxAge {
 		return fmt.Errorf("config: receipt_idle_ttl (%s) is longer than receipt_max_age (%s): "+

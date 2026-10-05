@@ -95,7 +95,8 @@ type Checker struct {
 }
 
 // New builds a Checker with nothing loaded: LoadPersisted, then Run, put
-// lists in force.
+// lists in force. logf says its lines, each begun "broker: certificate
+// status: ", for the caller to begin with its process's name.
 func New(cfg Config, now func() time.Time, m *metrics.Metrics, logf func(string, ...any)) *Checker {
 	if cfg.RefreshInterval <= 0 {
 		cfg.RefreshInterval = defaultRefresh

@@ -41,6 +41,7 @@ import (
 // note reports.
 func (l *lab) capture(t *testing.T, name string) func() {
 	t.Helper()
+	l.guardClosed(t, name)
 	dir := filepath.Join(root, "tests", "lab", "captures")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("captures directory: %v", err)

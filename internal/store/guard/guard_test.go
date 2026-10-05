@@ -106,7 +106,7 @@ func (t *told) all() []string {
 }
 
 func config(said, gone *told) Config {
-	return Config{Component: "daemon", CallTimeout: 50 * time.Millisecond, BulkTimeout: time.Second,
+	return Config{Proc: "port49d", Component: "daemon", CallTimeout: 50 * time.Millisecond, BulkTimeout: time.Second,
 		MaxInFlight: map[Pool]int{Token: 2, Context: 2, Bulk: 1}, Failures: 3, OpenFor: 100 * time.Millisecond,
 		StopAfter: time.Hour, Unhealthy: gone.add, Now: time.Now, Metrics: testMetrics(), Say: said.add}
 }
@@ -662,5 +662,37 @@ func TestPingIsTheContextPools(t *testing.T) {
 	}
 	if poolCalls(c.Metrics.Calls, Context) != 1 || poolCalls(c.Metrics.Calls, Token) != 0 || poolCalls(c.Metrics.Calls, Bulk) != 0 {
 		t.Fatal("Ping ran outside the context pool alone")
+	}
+}
+
+// Each circuit line begins with its process's name, and only a guard that
+// ends its process's run says the process closes its listeners:
+// port49-broker's never does (Task 15a C1).
+func TestTheCircuitsLinesNameTheirProcess(t *testing.T) {
+	for _, tc := range []struct {
+		proc, component string
+		stopAfter       time.Duration
+		closes          bool
+		impact          string
+	}{
+		{"port49d", "daemon", time.Hour, true, "devices see store_unavailable, and break-glass is refused (L4)"},
+		// The broker's pools serve the API: devices and break-glass are
+		// port49d's (Task 15a review M-4).
+		{"port49-broker", "broker", 0, false, "mints, refreshes and revocations through it fail"},
+	} {
+		var said, gone told
+		c := config(&said, &gone)
+		c.Proc, c.Component, c.StopAfter = tc.proc, tc.component, tc.stopAfter
+		g := Wrap(&stuck{err: store.ErrUnavailable}, c)
+		for i := 0; i < 3; i++ {
+			g.GetContext(context.Background(), k)
+		}
+		l := said.all()
+		if len(l) != 1 || !strings.HasPrefix(l[0], tc.proc+": store: the "+tc.component+"'s context pool's circuit "+
+			"is open") || strings.Contains(l[0], "closes its listeners") != tc.closes ||
+			!strings.Contains(l[0], "succeeds; "+tc.impact) || (tc.component == "broker" &&
+			(strings.Contains(l[0], "break-glass") || strings.Contains(l[0], "devices"))) {
+			t.Fatalf("%s: said %q", tc.proc, l)
+		}
 	}
 }

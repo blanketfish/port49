@@ -766,6 +766,12 @@ hand back a token that no longer exists. It is minted afresh under the policy in
 superseded answer after the refresh has passed its context, so the refresh runs again a
 settle interval (30s) after every reload, and after every pass at a grant's expiry.
 
+With several port49-broker processes on one store (plan 7e), the one holding the keyspace (the
+runner) carries each policy into the live contexts; every process deletes the unspent tokens
+its own policies minted that the policy in force would not give. port49d carries nothing: it
+reloads its policy for admission, quarantine and redaction alone. With every broker stopped, an
+edit changes admission at once and live contexts when a runner returns (§13, decision 36).
+
 **A grant's expiry is a scheduled edit.** A resolution changes with no edit to the file when a
 grant expires (§5.1), so the refresh also runs at every expiry instant; otherwise a live context
 would keep an expired grant's rules until the next edit. A pass judges every context at one
@@ -2027,7 +2033,7 @@ recorded, below): `port49 revoke` reports it and exits 1. Its
 `key` for one `(device, username)` ended; `device` and `username` name a `key` revocation's key,
 or a `self` one limited to a key; `issuer` and `serial` name a certificate (the serial in lower-case hex);
 `at` is when the mark took force, an earlier mark's time when one already stood; `origin` is who
-asked (`admin_socket uid <n>`, e.g. `admin_socket uid 0`, or `api <principal>` over HTTP); `contexts` how many live contexts were marked; `token_keys` how many
+asked (`admin_socket uid <n>`, e.g. `admin_socket uid 0`, `api <principal>` over HTTP, or `offline uid <n>` for a revoke written by `port49-broker revoke --offline` with every broker down); `contexts` how many live contexts were marked; `token_keys` how many
 `(device, username)` keys had their unspent tokens deleted; `connections` how many held broker
 connections were closed; `unreached` each marked context, `{"device", "username"}`, on a platform
 that never asks about a command, or on a device the inventory gives no platform, so an incident
@@ -2077,7 +2083,7 @@ refused request named; any other path is recorded `mint`.
 | `permit_dominates` | a permit dominated every matching deny (§5.4) |
 | `pipe_stage_denied` | a pipeline stage matched no pipe permit (§4) |
 | `service_unsupported` | the authorization `service` is not one the platform authorizes; on `redeem`, the authentication action or type is not one port49 serves (only `login` with ASCII, PAP, or CHAP) and the reply is `ERROR` |
-| `store_unavailable` | any event: the store did not answer or returned an error. On `redeem` and on accounting the reply is `ERROR`; on an authorization it is `FAIL` — fail closed, a break-glass account's commands included (plan 4, owner's ruling 2026-09-24), because an authorization `ERROR` hands the N9Kv's command to its local role checks and permits every command under IOS-XE's `if-authenticated` (§15, L4). Whether the device then falls through to its next method is per platform and is not what this reason promises: an authentication `ERROR` is final on IOS-XE and on Junos with `tacplus` alone, and where it does fall through (vEOS, the N9Kv) the authorization `FAIL` that follows leaves break-glass logged in and unable to run a command (§15, L4; `tests/lab/results/L4-error-*.md`). So a store outage is not the break-glass case; an unreachable port49 is. The operator's escape is to stop port49d, or reject TCP 49 with a reset, so each device finds the connection refused and treats the server as down. A break-glass account then logs in with its local password, under a method list that ends in `local` (measured over SSH on all five images, §15 L4 and L17). A firewall that drops TCP 49 silently is unmeasured as an escape (a silent server costs 5s per command on the Cisco and Arista images, L4), and so is whether commands in a session already open fall to local authorization. port49d will do this itself by closing its TACACS+ listener while the store is unhealthy (owner's ruling 2026-09-24; plan 7f). On etcd (plan 7d) it already closes every listener once its hold on the store is lost, or the token or context pool's circuit has stayed open, or every call on one has been refused, for `store.etcd.hold_ttl`, and opens them again when the store returns (§13, decision 35). Before then a store that does not answer, or a pool's open circuit, is answered within `store.packet_deadline`, never left for the device to time out (what each image does then: §15 L35). The log line is the evidence an operator needs at 3am |
+| `store_unavailable` | any event: the store did not answer or returned an error, or, on `redeem`, port49d found the store restored from a snapshot and refuses every token redemption until a broker runner's purge is done (decision 36, the restore guard). On `redeem` and on accounting the reply is `ERROR`; on an authorization it is `FAIL` — fail closed, a break-glass account's commands included (plan 4, owner's ruling 2026-09-24), because an authorization `ERROR` hands the N9Kv's command to its local role checks and permits every command under IOS-XE's `if-authenticated` (§15, L4). Whether the device then falls through to its next method is per platform and is not what this reason promises: an authentication `ERROR` is final on IOS-XE and on Junos with `tacplus` alone, and where it does fall through (vEOS, the N9Kv) the authorization `FAIL` that follows leaves break-glass logged in and unable to run a command (§15, L4; `tests/lab/results/L4-error-*.md`). So a store outage is not the break-glass case; an unreachable port49 is. The operator's escape is to stop port49d, or reject TCP 49 with a reset, so each device finds the connection refused and treats the server as down. A break-glass account then logs in with its local password, under a method list that ends in `local` (measured over SSH on all five images, §15 L4 and L17). A firewall that drops TCP 49 silently is unmeasured as an escape (a silent server costs 5s per command on the Cisco and Arista images, L4), and so is whether commands in a session already open fall to local authorization. port49d will do this itself by closing its TACACS+ listener while the store is unhealthy (owner's ruling 2026-09-24; plan 7f). On etcd (plan 7d) it already closes every listener once its hold on the store is lost, or the token or context pool's circuit has stayed open, or every call on one has been refused, for `store.etcd.hold_ttl`, and opens them again when the store returns (§13, decision 35). Before then a store that does not answer, or a pool's open circuit, is answered within `store.packet_deadline`, never left for the device to time out (what each image does then: §15 L35). The log line is the evidence an operator needs at 3am |
 | `token_redeemed` | `redeem`: a presented credential matched an unspent token |
 | `token_not_found` | `redeem`: the device tag matched but no unspent token for `(nas, username)` did — expired, spent, or mistyped, or its receipt deleted by an operator's revocation (§5.1.4) |
 | `token_spent` | `redeem`/`escalate`: the credential matched a receipt whose sliding window (`receipt_idle_ttl`) or absolute cap (`receipt_max_age`) had passed, or whose `ctx_id` is no longer the live context's — the context was replaced or reclaimed since, so the stored decision describes nothing that exists (§5.6); FAIL on the wire, distinguishable only in the log |
@@ -5750,16 +5756,24 @@ purpose; §13, decision 32), when `broker.revocations_file` is a relative path (
 against the caller's directory, not port49d's), or when the file appeared while it ran (another
 init-revocations is running or has just run; nothing written); 2 on usage.
 
-**`port49d store-roles [--config <port49d.yaml>]`** prints the `etcdctl` commands that create
-port49's two etcd roles and grant them, for the keyspace `store.etcd.prefix` names (plan 7d;
-§13, decision 35).
+**`port49d store-roles --config port49d.yaml --broker-config port49-broker.yaml`** prints the
+`etcdctl` commands that create port49's two etcd roles and grant them, for the keyspace
+`store.etcd.prefix` names (plan 7d; §13, decision 35).
+Each flag defaults to its file under `/etc/port49/`. A 7d port49d.yaml naming both identities
+is still read from `--config` alone, with a line saying to move the broker's; two files naming
+different `store.etcd.prefix` are refused.
 - **`port49_daemon`.** Read-write on the token, receipt, receipt-index, context, index-record,
   lookup and blob families (`t/`, `r/`, `rp/`, `c/`, `x/`, `ip/`, `is/`, `ic/`, `b/`), and
-  read-only on the revocation marks (`rv/`) and the keyspace's `meta/`. Nothing on the token
-  indexes (`tp/`, `tc/`) or the idempotency records (`id/`).
+  read-only on the revocation marks (`rv/`), the ledger record (`lw/`, plan 7e) and five single
+  keys of `meta/`, each granted by itself: `seal_keys` (read at a start), `witness` and `purged`
+  (the restore guard), `judged_bundle` (the name of the bundle last judged, which the skew
+  gauge reads; the runner writes it beside `meta/judged`) and `ping` (the store probe). It has
+  no read on `meta/judged`, which holds the policy file, or on `meta/holder`, `meta/bundles/`
+  or `meta/refresh_owed`. Nothing on the token indexes (`tp/`, `tc/`), the idempotency records
+  (`id/`) or the superseded record (`sp/`). `CheckIdentity` probes a refused read of `meta/judged`.
 - **`port49_broker`.** Read-write on the whole keyspace.
 - **The users.** A user per component, named by the CN of the certificate `store.etcd.daemon`
-  and `store.etcd.broker` name, granted its role.
+  (in `--config`) and `store.etcd.broker` (in `--broker-config`) name, granted its role.
 - **What a stolen daemon key yields under these roles:** decision 35's residual, replay of
   records it cannot forge. While port49d runs that is a deleted token for a holder of its
   secret, or a receipt's sliding bound; across a restart, a context put back while port49d was
@@ -5767,9 +5781,9 @@ port49's two etcd roles and grant them, for the keyspace `store.etcd.prefix` nam
   also hide a context from the index until the next sweep re-indexes it, and deny by deleting.
   It cannot write a revocation mark, so it cannot lift a revocation by principal or
   certificate: this role is what makes that true, since a credential holding the whole
-  keyspace could delete the marks. That holds for the daemon's credential taken alone: until
-  plan 7e port49d also holds the broker's, whose role is the whole keyspace, marks included,
-  and under `store.etcd.roles: unenforced` the daemon's is too.
+  keyspace could delete the marks. That holds for the daemon's credential, which since plan 7e
+  is all a port49d host holds (decision 36): the broker's, whose role is the whole keyspace, is
+  port49-broker's, and under `store.etcd.roles: unenforced` the daemon's is too.
 - **The command itself.** It reads the config and those certificates, holds no etcd
   credential, and changes nothing. It refuses a CN or prefix holding a character outside
   `[A-Za-z0-9._@/-]`, one CN for both components, and a CN of `root` for either (etcd's
@@ -5779,6 +5793,10 @@ port49's two etcd roles and grant them, for the keyspace `store.etcd.prefix` nam
   It exits 0, 1 naming what it could not read or refused, or 2 on usage.
 
 The output is run once, by etcd's root user.
+
+`port49-broker --config port49-broker.yaml` is the broker on etcd (plan 7e; decision 36). Its
+one subcommand, `revoke --offline`, revokes and lifts with every broker down. `port49 revoke
+--socket <port49-broker's admin_socket>` revokes, lifts and lists on it.
 
 **`port49 refresh`** re-authenticates the session the agent holds and extends every live context the
 policy in force still grants (§5.6). The agent signs the broker's nonce with the certificate's key
@@ -6397,7 +6415,9 @@ loss read as a loss rather than as a first install. Writing `{"revocations": []}
 the way to start empty on purpose. Revocation is an admin-socket operation open to port49d's user
 and root, and over HTTP `POST /v1/tokens/revoke` under `api:` rights (plan 7c; decision 34).
 The store's marks are read at mint, not at the handshake, so `port49 login` still touches no
-store; a revoked operator's login is refused at the agent's first request, from the listener's copy. (§5.1.4, §5.7, §12; design document §11, §12, §17)
+store; a revoked operator's login is refused at the agent's first request, from the listener's copy. *Amended by decision 36 (plan 7e):*
+on etcd the store keeps the marks, each broker process a copy, and the file is retired; a lift
+is port49-broker's admin socket's, or its offline command's. (§5.1.4, §5.7, §12; design document §11, §12, §17)
 
 **33. A session ends where its roles say, warns before, refreshes by a signed nonce, and every
 certificate's revocation status is checked at every use.** *Plan 7b, 2026-10-01, rulings where the
@@ -6501,7 +6521,8 @@ the design was silent, each the option that denies more.*
   unguarded: a start has no policy in force to bound against. An inventory-only reload stays
   decision 20's.
 - **The revocations file.** A start never creates it (decision 32, amended the same day), and
-  `port49d init-revocations` runs once, as the directory's owner, never on a start path.
+  `port49d init-revocations` runs once, as the directory's owner, never on a start path. On
+  etcd it is retired (decision 36).
 
 (§2, §5.1.3, §5.1.4, §5.7, §12, §14; design document §12, §17)
 
@@ -6594,8 +6615,8 @@ review (the owner may override them).*
   move a token, receipt or context, raise a privilege past what port49 wrote, or, under the
   daemon's etcd role (below; §12, `port49d store-roles`), lift a revocation by principal or
   certificate: before that role a daemon credential can write the marks themselves.
-  That holds for the daemon's credential taken alone: until plan 7e port49d also holds the
-  broker's, whose role is the whole keyspace, marks included, and under
+  That holds for the daemon's credential, which since plan 7e is all a port49d host holds
+  (decision 36): the broker's, whose role is the whole keyspace, is port49-broker's, and under
   `store.etcd.roles: unenforced` the daemon's is too.
   Deleting a record, or making a write conflict, is a denial, except that a write conflict
   on a policy refresh postpones its judgement. What it can do is replay:
@@ -6698,8 +6719,8 @@ review (the owner may override them).*
     revocation marks, or write `meta/` (the keyspace hold and the seal-key record). That role
     is what makes "cannot lift a revocation by principal or certificate" (above) true: before
     it, a daemon credential is the whole keyspace's. That holds for the daemon's credential
-    taken alone: until plan 7e port49d also holds the broker's, whose role is the whole
-    keyspace, marks included, and under `store.etcd.roles: unenforced` the daemon's is too.
+    alone, which since plan 7e is all a port49d host holds (decision 36); under
+    `store.etcd.roles: unenforced` the daemon's is the whole keyspace too.
   - **Neither identity is etcd's root.** A certificate whose CN is `root` is etcd's
     administrator, past every role. It is refused for the daemon and the broker alike: at
     config load, by `port49d store-roles`, and by the start check, which also refuses a user
@@ -6713,7 +6734,11 @@ review (the owner may override them).*
   - **Keys and certificates.** Key files load as the broker's key does (owner-only, no
     symlink). Every certificate's validity window, and the CA's, is checked at each start and
     named when it fails: never read as etcd not answering.
-- **One port49d per keyspace until plan 7e.**
+- **One port49d per keyspace in plan 7d.** *Amended by decision 36 (plan 7e):* any number of
+  port49d serve a keyspace and hold nothing; the hold below is port49-broker's runner's. Read
+  "port49d" in these sub-bullets as the runner, and "a second port49d" as another
+  port49-broker replica; a runner that loses the hold stops its duties and keeps serving the
+  API, where port49d closed its listeners.
   - **The hold.** port49d holds the keyspace on an etcd lease of `store.etcd.hold_ttl` (15s),
     as the broker. A second port49d waits for it, its listeners closed.
   - **A fence.** Every sixth of `hold_ttl` the holder reads its lock key and its lease's
@@ -6747,7 +6772,12 @@ review (the owner may override them).*
     etcd raises `call_timeout`, `store.packet_deadline` and `hold_ttl` together. Past any
     bound port49d closes every listener: dark, never two port49d on one keyspace (design
     document §13).
-- **A start on etcd.** port49d waits for the store with every listener closed (up to
+- **A start on etcd.** *Amended by decision 36 (plan 7e):* on etcd the hold, the marks put
+  back (step 2, from the runner's `broker.state_dir/marks.json`), the purge (step 5, only when
+  the bundle in force is not the one last judged) and the carry (step 6) are the runner's at
+  its takeover (decision 36, the runner and the purge at a takeover). port49d's own start is
+  decision 36's, and it purges nothing. As plan 7d built it: port49d waits for the store with
+  every listener closed (up to
   `store.etcd.start_timeout`, 30s, then exits 1; `0` waits forever; after a store gone, no
   deadline), and then, retrying while the store errs:
   1. takes the hold;
@@ -6869,8 +6899,110 @@ sealed write sequence every process follows, and a ledger record the daemon cann
   emitted once its record has landed.
 - **An encryption key id** is 1 to 64 of `A-Z a-z 0-9 . _ -`, refused at load otherwise: it is
   in every sealed record's header and every line about one that will not open.
+- **Two processes.** `port49-broker` serves the API and holds the broker's etcd identity alone;
+  `port49d` serves TACACS+ and holds the daemon's identity and the device keys alone. Any
+  number of each run on one keyspace. port49d holds no hold, and a second one serves beside the
+  first. The in-process broker stays for `store.backend: memory` only; on etcd a `broker:`
+  block in port49d.yaml is refused, naming the move. A stolen port49d host therefore holds the
+  daemon's role alone, which cannot write a mark, `meta/`, the ledger record or the superseded
+  record, and a stolen broker host holds no device key.
+- **The configuration.** `port49-broker.yaml` is port49d.yaml's schema under the broker's role:
+  it requires `broker:` (with `broker.state_dir`, where the persisted CRLs are kept),
+  `store.backend: etcd` with `store.etcd.broker`, `encryption:`, an inventory, `key_refs:` (the
+  names a policy may assign, no secrets) and `admin_socket`; it refuses `listen`, `keys:`,
+  `store.etcd.daemon`, `accounting`, `limits`, the receipt windows, `platforms`, `policy:`,
+  `broker.revocations_file`, and any `lab:` key but the seed tokens. port49d.yaml on etcd
+  requires `policy: {file, watch_interval}` and refuses `broker:`, `store.etcd.broker` and
+  `lab.seed_tokens`.
+- **The runner.** The keyspace hold is the runner's: one port49-broker at a time. On taking it,
+  it records the seal keys, re-indexes the contexts the index lost, puts back every revocation
+  its copy of the marks holds and the store lacks, applies every standing mark to the kept
+  contexts, purges the unspent tokens only as below, and carries the policy in force into every
+  kept context; then it runs the sweep, the re-index, the ledger record's keeper, the context
+  half of every refresh pass, and a full context pass whenever another replica asks for one.
+  Every replica serves the API and the admin socket, runs the token half of its own reload's
+  passes and certificate status, and follows the contexts and the marks. A runner that loses
+  the hold stops those duties at once, keeps serving the API, and tries to take the hold again
+  every 5s; a broker's readiness is never the store's.
+- **The purge at a takeover.** The runner records in `meta/judged` the bundle in force, with its
+  policy, when a pass leaves `port49_policy_refresh_pending` at 0 and every broker process
+  serves that bundle, and at a takeover whose carry leaves nothing owed. A runner taking the
+  hold with another bundle in force (an edit made while none ran, a runner gone before its
+  settle pass, or a replica serving another bundle) purges every unspent token and records the
+  instant for every key; with the same, it purges none, so a rolling restart of the brokers
+  keeps everyone's tokens. A token minted in the moment between that instant and the purge is
+  purged too, and its login fails `token_not_found`. After an etcd restore, the unspent tokens
+  (`<prefix>v1/t/`), `meta/judged` and `meta/judged_bundle` are deleted before any port49 process reaches the
+  restored store (design §13's runbook): a restore brings back every token redeemed since the
+  snapshot, unspent, and a port49d, one that ran across the restore too, would redeem it again
+  until the first takeover purges, minutes later.
+- **The restore witness.** The runner rewrites `meta/witness` (its name and the time, no
+  secret) at most once a second, whenever the store has moved past it. Every broker follows
+  it and keeps the highest `ModRevision` it has seen in `broker.state_dir/witness.json`. A
+  restored key keeps its `ModRevision`, with or without `--bump-revision`, so a runner that
+  reads the witness below its replica's record, at a takeover or while it runs, knows the
+  store was restored: it takes `meta/judged` as absent and purges every unspent token, so
+  the first takeover purges even when the runbook's delete of `meta/judged` was forgotten.
+  It does not cover a port49d serving before that takeover: the runbook's token delete does,
+  and so does port49d's own guard: a port49d that finds the witness below what it followed
+  refuses every token redemption `store_unavailable` until a runner, once a purge of every
+  unspent token is done, writes `meta/purged` (plan 7e Task 15d). A port49d started after the
+  restore has followed nothing and cannot tell. It takes the store's witness as its record only once the purge is done. A
+  replica with no record says it cannot tell, and goes by `meta/judged`; a snapshot taken
+  within about a second of the last witness recorded is not caught.
+- **The settle pass** is 30s or two policy watch intervals and 5s after a swap, whichever is
+  longer, and the policies since the last settled pass are kept until it completes, so a token
+  another replica minted under the replaced policy before it reloaded is judged.
+- **Policy across replicas.** Every broker process records the bundle it serves, leased, and
+  says when it is not the runner's (`port49_policy_bundle_matches_runner`). A replica that
+  swaps, or starts, while it is not the runner asks the runner for a full context pass, which
+  judges every live context against the policy in force; a replica that dies unreloaded is
+  covered by a full pass the runner owes once its tokens have expired, `token_ttl` (at most
+  15 minutes) after it last saw that replica's bundle. Until then the runner records no bundle
+  as judged. Each port49d, whose role cannot write `meta/`, reads the bundle last judged and
+  sets the same gauge, saying when its own policy differs.
+- **The reload guard at a start.** A broker process whose policy file the reload guard would
+  refuse against the policy `meta/judged` records stays not ready, mints nothing and takes no
+  hold until the file is fixed, so a restart cannot load a file a running broker refused.
+- **The daemon's start on etcd** waits for the store and checks its identity, reads (never
+  writes) the seal-key record, loads the marks, seeds the ledger from the record and a scan, starts
+  both feeds and binds. It reloads its policy file for admission, quarantine and redaction and
+  carries nothing into live contexts. It probes the store every sixth of `hold_ttl` through its
+  context pool and the feed fence, so an idle port49d goes dark: under load five real failures open the circuit within seconds and it should go dark about `hold_ttl` plus a probe period later (about 70s at 60s, derived from the guard's rule, not measured), and idle it takes up to 5 · `hold_ttl`/6 longer (about 2 minutes: `L37-*.md`; plan 7f carries the gap), on a
+  store or a context feed that has stopped; a run after a store gone keeps the ledger and the
+  marks.
+- **The revocations file is retired on etcd**, which persists the marks; it stays for the memory
+  store, with `port49d init-revocations`. Each broker process keeps its own copy of the marks it
+  followed, adding each mark and removing a mark only on a lift the watch delivered. The runner
+  puts back any mark in its copy the store lacks, at a takeover and before its marks feed
+  reloads, and says how many: an etcd restore's lost revocations are revoked again, and a lift
+  a copy missed is revoked again too, which the line says how to lift. A put-back that fails
+  refuses the reload, so the marks feed stays down and is tried again, rather than lifting
+  what the restore lost.
+- **A mark a reload finds missing stays in force on port49d.** The daemon's role cannot put a
+  mark back, so each port49d keeps every mark it enforces that its marks feed's reload finds
+  missing, until a lift its feed delivers or its restart, and says how many and which. An
+  etcd restore under a running port49d therefore lifts nothing there before the runner puts
+  the marks back; a lift made on a broker while that port49d's feed was down is kept too,
+  which denies more. This amends "a compacted watch loads them again and applies the
+  difference" above for port49d alone (final review 7e-1 C-1).
+- **A reconnect is not a reload.** Both feeds ask etcd for progress notifications and resume a
+  re-watch from the last change or progress delivered, so a reconnect within the compaction
+  retention reloads nothing, and a lift made meanwhile arrives as a lift.
+- **The sockets.** port49-broker's admin socket answers `port49 revoke` (revoke, lift, list).
+  port49d's answers `port49 keys diagnose`, and, with no broker in it, a revocation there is
+  refused naming port49-broker's socket.
+- **Revoking with every broker down.** `port49-broker revoke --offline` revokes and lifts
+  through the store on the broker's identity, with no API and no hold, in decision 32's order.
+  With no broker host, a mark written as etcd's root under `rv/` is followed by every port49d,
+  which denies the session's next command; tokens are deleted only by the next revocation that
+  reaches them. The offline tool also stands the mark in that host's `broker.state_dir/marks.json`
+  (and drops a lifted one), run as the user port49-broker runs as; the etcdctl path leaves no
+  copy, so after an etcd restore every revocation made with every broker down is revoked again
+  while every broker is stopped (design §13).
 
-(§5.1.4, §5.6, §5.7, §14; design document §8, §12, §17)
+(§5.1.3, §5.1.4, §5.6, §5.7, §12, §14, §15; design document §6, §8, §12, §13, §15, §17,
+§19)
 
 ### Deferred, with reasons
 
@@ -7398,6 +7530,25 @@ Beyond those already listed in the design document's §14:
   and both ledger gauges are 0 once its duties stop.
 - **The emits**: a log sink that stalls during a mint never stalls a reload, and every mint
   record follows its blob record.
+- **The split**: port49d.yaml on etcd naming the broker's identity, or a `broker:` block, is
+  refused; port49-broker.yaml naming `keys:` or the daemon's identity is refused. A login on
+  one port49d is answered on another. A revocation made on one port49-broker closes the held
+  connections it names on another, and every port49d denies the session's next command. A
+  runner that stops, or is cut off from etcd without releasing its lease, is replaced within
+  `hold_ttl` and a third; a takeover purges only when the bundle in force is not the one last
+  judged, and a clean takeover records its bundle as judged. With every broker stopped, an
+  open session's next command is answered, and a revocation made offline, or as etcd's root,
+  denies it.
+- **Across replicas**: a replica serving another bundle than the runner's says so, and its
+  reload has the runner carry a context it made under the old policy. A start whose policy
+  file the reload guard refuses against the judged bundle stays not ready and takes no hold. A
+  mark in a broker's copy that the store lost is put back by the runner, named in its line,
+  and a mark lifted through the watch is not. A port49d whose policy is not the bundle last
+  judged says so.
+- **The restore witness**: an etcd restore with `meta/judged` left as the snapshot's still
+  purges, at the takeover or under a running runner, when a broker's `witness.json` recorded
+  a later `meta/witness` than the store holds, with `--bump-revision` too; a token redeemed
+  after the snapshot stays spent.
 - **The index lost**: a context whose index record is deleted, or rewritten to name another
   principal or another sid, or whose lookup entry is deleted, is found, re-indexed and judged
   against the policy in force, and a revocation by principal or sid reaches it again. An index record that does not decode is skipped, logged and
@@ -7492,9 +7643,12 @@ implemented against a guess. This section is the one place the distinction is ke
 | **L32** | What the inventory service's NetBox and Nautobot connectors read as built (plan 6c), from each measured release: the GraphQL list query with every field the connector asks for (`status`, `primary_ip4`, `primary_ip6`, the map's paths, every interface address), paged as the profile pages it, returning every device once and matching REST's `count`; the REST fallback (`?depth=1` under the `nautobot_2` profile) to a null `next`; and both through a TLS-terminating reverse proxy that sends the client's host as `Host` alone, and through one that sends the upstream's name as `Host` and the client's as `X-Forwarded-Host`: which header each release builds `next` from, and whether the connector reads every device through each, following `next` or rebuilding it on its `url`. | Plan 6c's connectors: the query per profile, the count check, following or rebuilding `next` (§10, "Connectors and sync cadence"; §13, decision 31) | NetBox 3.7 and 4.x; Nautobot 1.6, 2.x and 3.x | closed — measured 2026-10-01; tests/lab/results/L32-netbox.md, L32-nautobot.md. NetBox 3.7.8 and 4.7.1 build `next` from `X-Forwarded-Host` when the proxy sends it and from `Host` otherwise, and take `https` only from `X-Forwarded-Proto`; behind a proxy that sends neither, both named their own `http://netbox:8080`. Nautobot 1.6.32, 2.4.43 and 3.2.6 do the same, naming `http://nautobot:8080`. The connector as built read all 120 devices of each stack, once each, through all three TLS-terminating nginx 1.27 proxies (the client's host as `Host`; the upstream's as `Host` and the client's as `X-Forwarded-Host`; a bare `proxy_pass`), over GraphQL and over REST, 50 to a page; through the bare proxy it rebuilt every REST `next` on its `url`, said so once, and read all 120 on all five. Every release's GraphQL device list gives `id`, a string, which the connector keys the list by. *Unmeasured:* a proxy sending `X-Forwarded-Host` without `X-Forwarded-Proto`, a `next` naming another path, a GraphQL list above a server cap, and a list changing between pages; see below |
 | **L33** | What NetBox and Nautobot do delivering a webhook to port49-inventory's `webhook_listen`, per measured release: whether each delivers to an `https` payload URL whose certificate a private CA issued (`ca_file_path`, `ssl_verification` on); whether port49-inventory authenticates every delivery as it arrives (HMAC-SHA512 of the body, `X-Hook-Signature`) and finds its `timestamp` inside the 5-minute window; how long a change takes from the API write to the published bundle; whether a delivery port49-inventory refuses (HTTP 401) is sent again; and, end to end on one device, how long a NetBox and a Nautobot change takes to reach port49d's admission through the webhook. | Plan 6c's webhook trigger: TLS on the webhook listener, the freshness window, the 401 answer (§10; §13, decision 31) | NetBox 3.7 and 4.x; Nautobot 1.6, 2.x and 3.x; vEOS-lab for the device run | closed — measured 2026-10-01; tests/lab/results/L33-netbox.md, L33-nautobot.md, L33-e2e-netbox-arista_eos.md, L33-e2e-nautobot-arista_eos.md. NetBox 3.7.8 and 4.7.1 and Nautobot 1.6.32, 2.4.43 and 3.2.6 each delivered to an `https` payload URL under a private CA's certificate, `ssl_verification` on, from the first change; port49-inventory authenticated every delivery, and none was stale. From the API write to the published bundle, the 2 s settle included, took 2.43–2.73 s on NetBox and 3.57–4.07 s on Nautobot. A delivery refused 401 was not sent again within 120 s on any release, nor one a stand-in listener answered 503 (port49-inventory itself never answers a delivery 503; final review M1): at their defaults neither product retries a webhook (NetBox's `RQ_RETRY_MAX` is 0; Nautobot's `process_webhook` has no retry). End to end on vEOS-lab 4.31.2F (image tagged 4.32.2F), a NetBox 4.7.1 change reached port49d's reload in 2.53–4.95 s and a Nautobot 3.2.6 change in 4.49–6.98 s; a status the default filter removes left the device with no grant, break-glass logged in, and the status restored let token logins in again. *Unmeasured:* a certificate from the worker's default trust store, a burst inside the 30 s gap, NetBox with `RQ_RETRY_MAX` set, and a delivery while port49-inventory shuts down or is down, which the next start's sync covers; see below |
 | **L34** | Whether a device shows the `server_msg` port49 puts on a **permitted** authorization reply — the session reply at login, and a per-command reply — and still treats the reply as a permit: the command's output appears and the session goes on. | The session-ceiling warning (§5.6, plan 7b; decision 33): sent only to the platforms this row finds show it and still permit (`platform.CeilingWarning`, an allow-list), or that an operator lists | EOS, NX-OS, IOS-XE, Junos | closed — measured 2026-10-01; tests/lab/results/L34-cisco_iosxe.md, L34-arista_eos.md, L34-cisco_nxos.md, L34-juniper_vjunos-router.md, L34-juniper_vsrx.md. Inside a 2m `session.ceiling_warning`, the session permit at login and each command permit carried the warning (the records), and every image still treated the reply as a permit: the login reached a prompt and `show version`'s output appeared. **IOS-XE 17.13.01a: shown**, before the prompt at login and with `show version`'s output, the one command checked; on the allow-list. **vEOS-lab 4.31.2F (image tagged 4.32.2F): not shown**, at login or on a command. **NX-OS 10.4(2)F: not shown**, at login or on a command. **vJunos-router 23.4R2-S2.1 and vSRX 21.4R3.15: not shown** at login, and there is no per-command reply to show it (decision 21). EOS, NX-OS and Junos stay off the allow-list, and their operators are warned by `port49 token` (§5.6); see below |
-| **L35** | What a device does when port49d's store hangs rather than refuses (etcd cut off from port49d, or past its quorum): each request's time from the device's send to port49d's reply, against the device's own TACACS+ timeout (§15 L4, L13); what it shows for `FAIL` (a command) and `ERROR` (a login) `store_unavailable`, against L4's store outage (`tests/lab/results/L4-error-*.md`); whether break-glass logs in while the store hangs; what it does once port49d closes its listeners on losing the store; and, once the store returns and port49d listens again, whether an open session's next command is answered from its context. | `store.packet_deadline`'s default and bound, and the store rows of the failure model (§13, decision 35; design document §12) | EOS, NX-OS, IOS-XE, vJunos-router, vSRX | closed — measured 2026-10-03; tests/lab/results/L35-arista_eos.md, L35-cisco_nxos.md, L35-cisco_iosxe.md, L35-juniper_vjunos-router.md, L35-juniper_vsrx.md (run at 0eee340 from a pinned worktree, `hold_ttl` 60s; every step-3 cell valid on its first hang). With the store hung port49d answered every request in 500–502ms in the capture (each store call is bounded by `store.etcd.call_timeout`, 500ms), far inside every device's own timeout (about 3s on Junos, L13; 5s on the Cisco and Arista images, L4), so `store.packet_deadline`'s 2s default stands. **vEOS-lab 4.31.2F (image tagged 4.32.2F):** the open session's command `FAIL` in 501ms, `% Authorization denied for command 'show version': port49: authorization store unavailable`; a token login `ERROR` in 501ms, refused; break-glass `ERROR`, falls through to `local` and logs in, its command `FAIL` (`Authorization denied: port49: authorization store unavailable`), as on L4's store outage; the listeners closed 12s into a fresh hang; with them closed the open session's command ran under local authorization and break-glass logged in and ran `show version`; listening again 56s after the store returned, the session's next command permitted from the same `ctx_id`. **Nexus 9300v 10.4(2)F:** the command `FAIL` in 501ms, `Error: AAA authorization failed AAA_AUTHOR_STATUS_METHOD=16(0x10)`; a token login `ERROR` in 501ms on each of its two tries (password, then keyboard-interactive), refused; break-glass logs in and its command `FAIL`s, as L4; closed 25s into the hang; closed, the open session's command and break-glass ran; listening 38s after, same `ctx_id`. **Catalyst 8000V 17.13.01a:** the command `FAIL` in 501ms, and the device printed nothing, not even port49's text (as `L4-error-cisco_iosxe.md` (b)); a token login `ERROR` in 501ms, refused; break-glass `ERROR`, final, refused, as L4; closed 20s into the hang; **closed, the open session's command was refused `% Authorization failed.`**, unlike `quarantine-cisco_iosxe.md`, where an open session's `show privilege` ran with port49d stopped; break-glass logged in and ran `show version`; listening 1m27s after, same `ctx_id`. **vJunos-router 23.4R2-S2.1 and vSRX3 21.4R3.15:** the open session ran on throughout (Junos authorizes no command with port49, decision 21); a token login `ERROR` in 500–501ms, refused; break-glass `ERROR`, falls through to `password` and logs in; closed 17s and 14s into the hang; closed, the session and break-glass ran; listening 55s and 53s after. On every image a restart on the same store kept the open session (the next command permitted from the same `ctx_id` on the three that authorize commands) and refused a token minted before it `token_not_found` (purged). Listening again takes the lost hold's lease (60s) to expire, then a third of `hold_ttl`. A `--bump-revision` restore under a running port49d (`L35-restore-arista_eos.md`, `-cisco_nxos.md`, `-cisco_iosxe.md`) found the ledger dropping the next login's write, fixed in 79812ef |
-| **L36** | On etcd, whether a live Junos session's re-authorization (`authorization-time-interval`, 15 min) after a port49d restart is answered from the context the store kept, and whether a denial then ends the session. | The operator note on Junos re-authorization on etcd (plan 7d), and §15 L17's note on a restart's denied re-authorization | vJunos-router, vSRX | open — added 2026-10-03 (final review 7d-2 m-2). L35 did not measure it: its runs set no `authorization-time-interval`, and its Junos rows show no authorization record |
-| **L39** | Whether port49d sees a device's true source address in each deployment shape: (a) Docker with a published port, with the userland proxy on and off; (b) Kubernetes behind a Service with `externalTrafficPolicy: Cluster` and with `Local`; (c) Kubernetes with host networking. Measured by the device-binding check passing or failing for a known device. | Design §13's source-address requirement, applied to plan 12's deployment shapes (roadmap, Plan 12) | any one device platform per shape; the observation is the server's, not the device's | open — added 2026-10-03 (deployment shapes, Ryan). L37 and L38 are reserved by plan 7e |
+| **L35** | What a device does when port49d's store hangs rather than refuses (etcd cut off from port49d, or past its quorum): each request's time from the device's send to port49d's reply, against the device's own TACACS+ timeout (§15 L4, L13); what it shows for `FAIL` (a command) and `ERROR` (a login) `store_unavailable`, against L4's store outage (`tests/lab/results/L4-error-*.md`); whether break-glass logs in while the store hangs; what it does once port49d closes its listeners on losing the store; and, once the store returns and port49d listens again, whether an open session's next command is answered from its context. | `store.packet_deadline`'s default and bound, and the store rows of the failure model (§13, decision 35; design document §12) | EOS, NX-OS, IOS-XE, vJunos-router, vSRX | closed — measured 2026-10-03; tests/lab/results/L35-arista_eos.md, L35-cisco_nxos.md, L35-cisco_iosxe.md, L35-juniper_vjunos-router.md, L35-juniper_vsrx.md (run at 0eee340 from a pinned worktree, `hold_ttl` 60s; every step-3 cell valid on its first hang). With the store hung port49d answered every request in 500–502ms in the capture (each store call is bounded by `store.etcd.call_timeout`, 500ms), far inside every device's own timeout (about 3s on Junos, L13; 5s on the Cisco and Arista images, L4), so `store.packet_deadline`'s 2s default stands. **vEOS-lab 4.31.2F (image tagged 4.32.2F):** the open session's command `FAIL` in 501ms, `% Authorization denied for command 'show version': port49: authorization store unavailable`; a token login `ERROR` in 501ms, refused; break-glass `ERROR`, falls through to `local` and logs in, its command `FAIL` (`Authorization denied: port49: authorization store unavailable`), as on L4's store outage; the listeners closed 12s into a fresh hang; with them closed the open session's command ran under local authorization and break-glass logged in and ran `show version`; listening again 56s after the store returned, the session's next command permitted from the same `ctx_id`. **Nexus 9300v 10.4(2)F:** the command `FAIL` in 501ms, `Error: AAA authorization failed AAA_AUTHOR_STATUS_METHOD=16(0x10)`; a token login `ERROR` in 501ms on each of its two tries (password, then keyboard-interactive), refused; break-glass logs in and its command `FAIL`s, as L4; closed 25s into the hang; closed, the open session's command and break-glass ran; listening 38s after, same `ctx_id`. **Catalyst 8000V 17.13.01a:** the command `FAIL` in 501ms, and the device printed nothing, not even port49's text (as `L4-error-cisco_iosxe.md` (b)); a token login `ERROR` in 501ms, refused; break-glass `ERROR`, final, refused, as L4; closed 20s into the hang; **closed, the open session's command was refused `% Authorization failed.`**, the same refusal whether the session's last command was a permit or a `FAIL store_unavailable` and whichever of `show privilege` and `show version` is typed (`L38-cisco_iosxe.md`; `quarantine-cisco_iosxe.md`'s `show privilege`, which ran with port49d stopped, is unexplained by either); break-glass logged in and ran `show version`; listening 1m27s after, same `ctx_id`. **vJunos-router 23.4R2-S2.1 and vSRX3 21.4R3.15:** the open session ran on throughout (Junos authorizes no command with port49, decision 21); a token login `ERROR` in 500–501ms, refused; break-glass `ERROR`, falls through to `password` and logs in; closed 17s and 14s into the hang; closed, the session and break-glass ran; listening 55s and 53s after. On every image a restart on the same store kept the open session (the next command permitted from the same `ctx_id` on the three that authorize commands) and refused a token minted before it `token_not_found` (purged). Listening again takes the lost hold's lease (60s) to expire, then a third of `hold_ttl`. A `--bump-revision` restore under a running port49d (`L35-restore-arista_eos.md`, `-cisco_nxos.md`, `-cisco_iosxe.md`) found the ledger dropping the next login's write, fixed in 79812ef |
+| **L36** | On etcd, whether a live Junos session's re-authorization (`authorization-time-interval`, 15 min) after a port49d restart is answered from the context the store kept, and whether a denial then ends the session. | The operator note on Junos re-authorization on etcd (plan 7d), and §15 L17's note on a restart's denied re-authorization | vJunos-router, vSRX | closed — measured 2026-10-04; tests/lab/results/L36-juniper_vjunos-router.md, L36-juniper_vsrx.md (run at 20fb9fa from a pinned worktree). Both images, `authorization-time-interval 15`, B stopped, A restarted: the device re-authorized the open session 15m0s after its login (14m59s after the restart), and A answered `PASS_ADD` from the context the store kept (`permit context_matched`); the session ran on. A second session logged in and revoked at once (`port49 revoke --principal` on the broker) was denied at its first re-authorization, 15m0s after its login: `AUTHOR` `FAIL` in 1ms, record `deny credential_revoked`; the device did not end the session, and the session's next `show version` printed an 83-byte error (first line `^`) on both images. On vJunos-router's first run (0cff0d0; `L36-juniper_vjunos-router.md`, "Earlier run", one observation, capture not kept) a session revoked after its first re-authorization sent no second request in 20 minutes; L40 is open on whether a second ever comes |
+| **L37** | On the split deployment (plan 7e; two port49d replicas and port49-broker on one etcd, each device listing both replicas as TACACS+ servers): whether a session opened through one replica has its next command answered by the other once the first stops; whether, with every broker stopped, an open session runs on and a token minted before the stop logs in; whether a revocation made on port49-broker denies the session's next command on either replica; and how long after its store hangs a port49d with no hold closes its listeners. | The failure model's "Broker unavailable" and store rows on the split deployment (design §12), and decision 36 | EOS, NX-OS, IOS-XE, vJunos-router, vSRX | closed — measured 2026-10-04; tests/lab/results/L37-arista_eos.md, L37-cisco_nxos.md, L37-cisco_iosxe.md, L37-juniper_vjunos-router.md, L37-juniper_vsrx.md (EOS, NX-OS and IOS-XE run at 2a74f88, the Junos images at 20fb9fa, from pinned worktrees). With A stopped the device tried B and B answered the open session from the context A wrote (`permit`, the same `ctx_id`, `AUTHOR` `PASS_ADD` in 3ms) on vEOS, the N9Kv and the C8000V, after one refused connection to A (two on the C8000V); on Junos the question does not arise: an open session's command sent no TACACS+ at all (`L37-juniper_*.md` cell 2, the device opened no connection; a device fact, decision 21). A fresh login through B with A stopped was measured instead and logged in (`token_redeemed`, `permit context_matched`). Whether a Junos re-authorization for a session A wrote is answered by B is unmeasured. With the broker stopped the open session ran on and a token minted before the stop logged in on all five (`token_redeemed`). A revocation on port49-broker denied the session's next command `credential_revoked` on A and on B on vEOS, the N9Kv and the C8000V; on Junos, which authorizes no command, a token minted before it was refused on B (`token_not_found`: the revocation deleted it). On a hung store each port49d said its circuit open 43–50s in and closed its listeners 1m43s–2m0s in (circuit open to dark 59.9s–1m10s), inside the 125.5s bound the configuration gives, and break-glass then logged in on every image. Idle, the probe is what opens the circuit (5 failed pings, hold_ttl/6 apart), so an idle port49d goes dark in about 2 minutes at `hold_ttl` 60s; under load it should be about `hold_ttl` plus a probe period, which is derived from the guard's rule and not measured. That gap is plan 7f's. The L35 re-check on vEOS with the second server removed matched L35's step-3 cells (appended to L37-arista_eos.md) |
+| **L38** | On IOS-XE, whether an open session's command runs under local authorization once port49 is unreachable, by the command (`show privilege`, `show version`) and by what port49 answered before it went away (nothing; a `FAIL store_unavailable`): `quarantine-cisco_iosxe.md` ran `show privilege` with port49d stopped, and `L35-cisco_iosxe.md` refused `show version` once port49d went dark on a hung store. | Design §12's IOS-XE cells for a store outage and an unreachable port49 | IOS-XE | closed — measured 2026-10-04; tests/lab/results/L38-cisco_iosxe.md (run at 2a74f88 from a pinned worktree). With both port49d replicas stopped, an open session's `show privilege` and `show version` were refused `% Authorization failed.` in both orders and in both columns, after a permit and after a `FAIL store_unavailable` (confirmed by a record and on the wire), so neither the command nor what came before changes the answer; the device opened three connections per command, every one refused, and sent no payload. Why `quarantine-cisco_iosxe.md`'s `show privilege` ran is unexplained: L38 rules out the command and the session's last answer, at the same privilege level (15) |
+| **L39** | Whether port49d sees a device's true source address in each deployment shape: (a) Docker with a published port, with the userland proxy on and off; (b) Kubernetes behind a Service with `externalTrafficPolicy: Cluster` and with `Local`; (c) Kubernetes with host networking. Measured by the device-binding check passing or failing for a known device. | Design §13's source-address requirement, applied to plan 12's deployment shapes (roadmap, Plan 12) | any one device platform per shape; the observation is the server's, not the device's | open — added 2026-10-03 (deployment shapes, Ryan). L37 and L38 are plan 7e's |
+| **L40** | On Junos, whether `authorization-time-interval` re-authorizes a session more than once: after the first re-authorization (`L36-*.md` saw one, 15 minutes after login), whether a second request comes one interval later, and so whether a revocation made after the first reaches the session. | The operator note on Junos re-authorization on etcd (plans README, plan 7d's notes) and §15 L36 | vJunos-router, vSRX | open — added 2026-10-04 (plan 7e Task 17 review; L36 measured only the first re-authorization after login) |
 
 **What has been measured so far, per row.** The measurements exist and the notes are in the
 repository. NX-OS was measured on 2026-09-20 and is no longer outstanding; **IOS-XE was

@@ -1275,3 +1275,26 @@ func TestAnEncryptionKeyIDOutsideTheCharsetIsRefused(t *testing.T) {
 		}
 	}
 }
+
+// With the broker in the process, on memory, Config.Policy is
+// broker.policy_file and its interval: the code reads one field whichever
+// block named the policy (plan 7e, Ruling 2).
+func TestAnInProcessBrokerSetsThePolicy(t *testing.T) {
+	c, err := loadWith(t, brokerBlock+"  policy_watch_interval: 30s\n")
+	if err != nil || c.Policy == nil || c.Policy.File != "/etc/port49/policy.yaml" ||
+		c.Policy.WatchInterval != 30*time.Second || c.Admission != nil {
+		t.Fatalf("%+v %v", c.Policy, err)
+	}
+	if c, err := loadWith(t, ""); err != nil || c.Policy != nil {
+		t.Fatalf("no broker and no policy: %+v %v", c.Policy, err)
+	}
+}
+
+// policy: beside a broker: block is two policies: the in-process broker's
+// is broker.policy_file, so policy: is refused, named.
+func TestPolicyIsRefusedBesideABrokerBlock(t *testing.T) {
+	if _, err := loadWith(t, brokerBlock+"policy: {file: /etc/port49/p.yaml}\n"); err == nil ||
+		!strings.Contains(err.Error(), "policy:") {
+		t.Fatalf("policy: beside broker: %v", err)
+	}
+}

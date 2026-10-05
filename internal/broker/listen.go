@@ -161,7 +161,8 @@ type trackedConn struct {
 // marks a caller hands it (Revoked) before srv.Serve are all in place before
 // any connection can bind; from then on it accepts on its own, and
 // connections whose handshake is done wait for Accept. cfg is the broker's
-// (Broker.Server's TLSConfig). logf says the listener's lines; nil says
+// (Broker.Server's TLSConfig). logf says the listener's lines, each begun
+// "broker: ", for the caller to begin with its process's name; nil says
 // nothing.
 func NewListener(inner net.Listener, cfg *tls.Config, lim ListenerLimits, m *metrics.Metrics, now func() time.Time,
 	logf func(format string, args ...any)) *Listener {
@@ -230,7 +231,7 @@ func (l *Listener) acceptLoop() {
 			// As net/http's Serve does for a failing Accept (EMFILE among
 			// them): back off, up to a second, and go on.
 			delay = min(max(2*delay, 5*time.Millisecond), time.Second)
-			l.say("accept", "port49d: broker: accept failed: %v; retrying in %s", err, delay)
+			l.say("accept", "broker: accept failed: %v; retrying in %s", err, delay)
 			time.Sleep(delay)
 			continue
 		}
@@ -259,7 +260,7 @@ func (l *Listener) admit(raw net.Conn) *trackedConn {
 		l.mu.Unlock()
 		reset(raw)
 		l.m.BrokerConnectionEvents.WithLabelValues("source_cap_refused").Inc()
-		l.say("source_cap", "port49d: broker: reset a connection from %s: it holds %d connections not yet "+
+		l.say("source_cap", "broker: reset a connection from %s: it holds %d connections not yet "+
 			"authenticated (broker.max_pending_conns_per_source)", src, l.lim.MaxPendingPerSource)
 		return nil
 	}
@@ -322,7 +323,7 @@ func (l *Listener) handshake(c *trackedConn) {
 				event = "status_unavailable_refused"
 			}
 			l.m.BrokerConnectionEvents.WithLabelValues(event).Inc()
-			l.say(event, "port49d: broker: answering a connection from %s %s and closing it before it "+
+			l.say(event, "broker: answering a connection from %s %s and closing it before it "+
 				"bound: %s", c.src, ref.Error, printsafe.Line(ref.Detail, 300))
 			l.answerRefused(tc, ref.Status, api.Error{Error: ref.Error, Detail: ref.Detail}, ref.RetryAfter,
 				principal, cred, ref.Reason)
@@ -354,7 +355,7 @@ func (l *Listener) refuse(c *trackedConn, tc *tls.Conn, reason string, err error
 	}
 	// Said before counted: a reader that sees the count sees the line
 	// said or held back (fixA N1).
-	l.say("handshake_"+reason, "port49d: broker: TLS handshake from %s failed (%s): %s", c.src, reason,
+	l.say("handshake_"+reason, "broker: TLS handshake from %s failed (%s): %s", c.src, reason,
 		printsafe.Line(err.Error(), 300))
 	l.m.BrokerHandshakeFailures.WithLabelValues(reason).Inc()
 	_ = tc.Close()
@@ -408,7 +409,7 @@ func (l *Listener) bind(c *trackedConn, principal, certKey string, refused bool)
 		// that.
 		l.mu.Unlock()
 		l.m.BrokerConnectionEvents.WithLabelValues("revoked_refused").Inc()
-		l.say("revoked_refused", "port49d: broker: answering a connection from %s credential_revoked and "+
+		l.say("revoked_refused", "broker: answering a connection from %s credential_revoked and "+
 			"closing it as it bound: %s or its certificate is revoked", c.src, principal)
 		return &rv, true
 	}
@@ -438,7 +439,7 @@ func (l *Listener) bind(c *trackedConn, principal, certKey string, refused bool)
 	l.mu.Unlock()
 	if evicted != nil {
 		l.m.BrokerConnectionEvents.WithLabelValues("principal_cap_evicted").Inc()
-		l.say("principal_cap", "port49d: broker: %s opened more than %d held connections "+
+		l.say("principal_cap", "broker: %s opened more than %d held connections "+
 			"(broker.max_conns_per_principal); its oldest, from %s and open since %s, is closed", principal,
 			l.lim.MaxPerPrincipal, evicted.src, evicted.acceptedAt.UTC().Format(time.RFC3339))
 		_ = evicted.Close()

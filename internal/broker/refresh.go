@@ -194,6 +194,29 @@ func (b *Broker) Refresh(ctx context.Context, priors []Prior) (RefreshReport, er
 	}
 }
 
+// RefreshTokens is Refresh's token half alone (plan 7e, Ruling 6): every
+// broker process runs it at its own reload, for the policies it minted
+// under, and the runner runs Refresh, whose context half is the runner's
+// alone. It deletes the unspent tokens priors minted that the policy in
+// force would not, at every grant expiry in their spans, and judges no
+// context. Like Refresh it runs again at once over an expiry the pass
+// crossed.
+func (b *Broker) RefreshTokens(ctx context.Context, priors []Prior) (RefreshReport, error) {
+	cur := b.Policy.Load()
+	var rep RefreshReport
+	for {
+		rep.At = b.Now()
+		if err := b.supersedeTokens(ctx, cur, rep.At, priors, &rep); err != nil {
+			return rep, fmt.Errorf("deleting superseded tokens: %w", err)
+		}
+		next, ok := cur.NextChange(rep.At)
+		if !ok || next.After(b.Now()) || b.Policy.Load() != cur {
+			return rep, nil
+		}
+		priors = []Prior{{Policy: cur, At: rep.At}}
+	}
+}
+
 // RefreshAtStart carries the policy in force into every live context a
 // persistent store kept across a restart (plan 7d; spec §13, decision
 // 35). No policy those contexts were written under is one this port49d

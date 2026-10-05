@@ -1,7 +1,9 @@
 package admin
 
 import (
+	"bytes"
 	"context"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -103,14 +105,58 @@ func TestRevokeOpsReachTheBroker(t *testing.T) {
 	boom := &Server{Held: &keyring.Held{}, Now: time.Now,
 		Revoke:      func(context.Context, RevokeOp) (string, bool, error) { panic("boom") },
 		Revocations: func(context.Context) (string, error) { return "", nil }}
-	if r := boom.answer(ctx, Request{Op: "revoke", Principal: "user:a@b"}, 0); !strings.Contains(r.Error, "internal error") {
+	r = boom.answer(ctx, Request{Op: "revoke", Principal: "user:a@b"}, 0)
+	if r.Error != "internal error; port49d's log says what" {
 		t.Fatalf("%+v", r)
+	}
+	// On port49-broker the line and the answer name it (Task 15a review M-6).
+	var logged bytes.Buffer
+	log.SetOutput(&logged)
+	defer log.SetOutput(os.Stderr)
+	boom.Proc = "port49-broker"
+	r = boom.answer(ctx, Request{Op: "revoke", Principal: "user:a@b"}, 0)
+	if r.Error != "internal error; port49-broker's log says what" ||
+		!strings.Contains(logged.String(), "port49-broker: admin socket: op \"revoke\" failed: boom") {
+		t.Fatalf("%+v; logged %q", r, logged.String())
 	}
 	if r := s.answer(ctx, Request{Op: "revocations"}, 0); r.Text != "no revocation is in force" {
 		t.Fatalf("%+v", r)
 	}
 	none := &Server{Held: &keyring.Held{}, Now: time.Now}
 	if r := none.answer(ctx, Request{Op: "revoke", Principal: "user:a@b"}, 0); !strings.Contains(r.Error, "runs no broker") {
+		t.Fatalf("%+v", r)
+	}
+}
+
+// A revocation asked of port49d with no broker in it, beside
+// port49-broker on etcd, is refused naming where it is answered and how
+// to ask there (plan 7e, Ruling 13); the list is too. Unset, the memory
+// store's line stands.
+func TestARevokeWithNoBrokerNamesWhereItIs(t *testing.T) {
+	ctx := context.Background()
+	s := &Server{Held: &keyring.Held{}, Now: time.Now,
+		RevokeElsewhere: "port49-broker's admin socket (its admin_socket in port49-broker.yaml)"}
+	for _, op := range []string{"revoke", "revocations"} {
+		r := s.answer(ctx, Request{Op: op, Principal: "user:alice@example.com"}, 0)
+		if !strings.Contains(r.Error, "port49 revoke --socket") || !strings.Contains(r.Error, "port49-broker") ||
+			strings.Contains(r.Error, "nothing to revoke") {
+			t.Fatalf("%s: %+v", op, r)
+		}
+	}
+	none := &Server{Held: &keyring.Held{}, Now: time.Now}
+	if r := none.answer(ctx, Request{Op: "revoke", Principal: "user:a@b"}, 0); !strings.Contains(r.Error,
+		"nothing to revoke") {
+		t.Fatalf("%+v", r)
+	}
+}
+
+// port49-broker holds no device packets: a keys diagnose at its socket
+// names port49d's, where the packets are held (plan 7e, Ruling 13;
+// pre-flight M16).
+func TestAKeysDiagnoseWithNoPacketsNamesWhereItIs(t *testing.T) {
+	s := &Server{Now: time.Now, DiagnoseElsewhere: "port49d's admin socket"}
+	r := s.answer(context.Background(), Request{Op: "keys_diagnose", Device: "leaf1"}, 0)
+	if r.Error != "port49-broker holds no device packets; keys diagnose is port49d's admin socket" {
 		t.Fatalf("%+v", r)
 	}
 }

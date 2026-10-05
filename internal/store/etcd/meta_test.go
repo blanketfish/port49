@@ -368,3 +368,313 @@ func TestSealKeysUndecodable(t *testing.T) {
 		t.Fatalf("%v %v", ok, err)
 	}
 }
+
+// meta/judged reads back what was put: the bundle and its policy, or the
+// bundle alone when the policy was over maxJudgedPolicy. An absent record
+// is ok false with no error, and so is one that does not decode, said by
+// its key alone, so a takeover purges (plan 7e, Rulings 7, 17).
+func TestJudgedIsReadBackAndAbsentIsNotFound(t *testing.T) {
+	ctx := context.Background()
+	var said syncLines
+	s, err := Open(Config{Endpoints: []string{etcdtest.Endpoint()}, Prefix: etcdtest.Prefix(), Logf: said.logf})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if got, ok, err := s.Judged(ctx); ok || err != nil || got.Bundle != "" {
+		t.Fatalf("a new keyspace has a judged bundle: %+v %v %v", got, ok, err)
+	}
+	if err := s.PutJudged(ctx, "b1", []byte("grants: []\n")); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok, err := s.Judged(ctx); !ok || err != nil || got.Bundle != "b1" || string(got.Policy) != "grants: []\n" {
+		t.Fatalf("%+v %v %v", got, ok, err)
+	}
+	if b, ok, err := s.JudgedBundle(ctx); err != nil || !ok || b != "b1" {
+		t.Fatalf("meta/judged_bundle beside it: %q %v %v", b, ok, err)
+	}
+	big := []byte(strings.Repeat("#", maxJudgedPolicy+1))
+	if err := s.PutJudged(ctx, "b2", big); err != nil {
+		t.Fatal(err)
+	}
+	if b, _, _ := s.JudgedBundle(ctx); b != "b2" {
+		t.Fatalf("meta/judged_bundle names the bundle even when the policy is left out: %q", b)
+	}
+	if got, ok, err := s.Judged(ctx); !ok || err != nil || got.Bundle != "b2" || got.Policy != nil {
+		t.Fatalf("a policy over maxJudgedPolicy is left out: %v %v %v %d", got.Bundle, ok, err, len(got.Policy))
+	}
+	if _, err := s.ctx.Put(ctx, s.k.meta("judged"), "not json"); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok, err := s.Judged(ctx); ok || err != nil || got.Bundle != "" {
+		t.Fatalf("a record that does not decode: %+v %v %v", got, ok, err)
+	}
+	if said.count(s.k.meta("judged")+" does not decode") != 1 || strings.Contains(said.String(), "not json") {
+		t.Fatalf("said: %q", said.String())
+	}
+}
+
+// Each replica's record of the bundle it serves is listed while its ttl
+// lasts, and lapses by its own expiry; a who of any spelling round-trips,
+// and a graceful stop deletes it at once (plan 7e, Ruling 8; pre-flight
+// I3, 7e-2 P-5).
+func TestBundlesAreLeasedAndListed(t *testing.T) {
+	ctx := context.Background()
+	s := onShared(t, time.Now)
+	who := "port49-broker on host a (pid 7, since 2026-10-04T00:00:00Z)"
+	if err := s.PutBundle(ctx, who, "b1", time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutBundle(ctx, "replica-b", "b2", 2*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	recs, err := s.Bundles(ctx)
+	if err != nil || len(recs) != 2 {
+		t.Fatalf("two records: %+v %v", recs, err)
+	}
+	got := map[string]string{}
+	for _, r := range recs {
+		got[r.Who] = r.Bundle
+		if !r.ExpiresAt.After(r.At) {
+			t.Fatalf("a record expiring at %v, written at %v", r.ExpiresAt, r.At)
+		}
+	}
+	if got[who] != "b1" || got["replica-b"] != "b2" {
+		t.Fatalf("listed %v", got)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		recs, err := s.Bundles(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(recs) == 1 && recs[0].Who == who {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("a record past its 2s ttl is still listed after 5s: %+v", recs)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if err := s.DeleteBundle(ctx, who); err != nil {
+		t.Fatal(err)
+	}
+	if recs, err := s.Bundles(ctx); err != nil || len(recs) != 0 {
+		t.Fatalf("a deleted record is listed: %+v %v", recs, err)
+	}
+	if _, err := s.ctx.Put(ctx, s.k.meta("bundles/")+esc("bad"), "not json"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Bundles(ctx); err == nil || !strings.Contains(err.Error(), s.k.meta("bundles/")+"bad") ||
+		strings.Contains(err.Error(), "not json") {
+		t.Fatalf("a record that does not decode: %v", err)
+	}
+}
+
+// The ask for a full context pass is cleared only at the revision the
+// pass read: an ask written during the pass stays (pre-flight I3).
+func TestRefreshOwedIsClearedOnlyAtItsRevision(t *testing.T) {
+	ctx := context.Background()
+	s := onShared(t, time.Now)
+	if _, _, ok, err := s.RefreshOwed(ctx); ok || err != nil {
+		t.Fatalf("a new keyspace owes a pass: %v %v", ok, err)
+	}
+	if err := s.PutRefreshOwed(ctx, "replica-b", "b1"); err != nil {
+		t.Fatal(err)
+	}
+	rev1, rec, ok, err := s.RefreshOwed(ctx)
+	if !ok || err != nil || rec.Who != "replica-b" || rec.Bundle != "b1" {
+		t.Fatalf("%+v %v %v", rec, ok, err)
+	}
+	if err := s.PutRefreshOwed(ctx, "replica-c", "b2"); err != nil {
+		t.Fatal(err)
+	}
+	rev2, rec, ok, err := s.RefreshOwed(ctx)
+	if !ok || err != nil || rev2 <= rev1 || rec.Who != "replica-c" {
+		t.Fatalf("the second ask: %d after %d, %+v %v %v", rev2, rev1, rec, ok, err)
+	}
+	if err := s.ClearRefreshOwed(ctx, rev1); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, ok, err := s.RefreshOwed(ctx); !ok || err != nil {
+		t.Fatalf("a clear at the first ask's revision took the second: %v %v", ok, err)
+	}
+	if err := s.ClearRefreshOwed(ctx, rev2); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, ok, err := s.RefreshOwed(ctx); ok || err != nil {
+		t.Fatalf("a clear at its revision left the ask: %v %v", ok, err)
+	}
+}
+
+// meta/judged is withdrawn, not deleted, while a replica serves another
+// bundle: marked in doubt with its bundle and policy kept for the reload
+// guard at a start, so the next takeover purges (Task 15a review I-1). A
+// runner's record replaces it only while no replica's record and no mark
+// was written after the replicas' records it judged were read; a record
+// deleted since mints nothing more.
+func TestAJudgedRecordGoesInDoubtAndIsReplacedOnlyWhenNothingMoved(t *testing.T) {
+	ctx := context.Background()
+	s := onShared(t, time.Now)
+	if b, marked, err := s.JudgeInDoubt(ctx, ""); b != "" || marked || err != nil {
+		t.Fatalf("no record to mark: %q %v %v", b, marked, err)
+	}
+	if _, ok, err := s.Judged(ctx); ok || err != nil {
+		t.Fatalf("a mark with no record wrote one: %v %v", ok, err)
+	}
+	pol := []byte("grants: []\n")
+	if err := s.PutJudged(ctx, "b1", pol); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok, err := s.Judged(ctx); !ok || err != nil || got.InDoubt {
+		t.Fatalf("a record just put is in doubt: %+v %v %v", got, ok, err)
+	}
+	if b, marked, err := s.JudgeInDoubt(ctx, "b1"); b != "b1" || marked || err != nil {
+		t.Fatalf("a replica on the bundle judged marked it: %q %v %v", b, marked, err)
+	}
+	if got, _, _ := s.Judged(ctx); got.InDoubt {
+		t.Fatal("a replica on the bundle judged marked it in doubt")
+	}
+	if b, marked, err := s.JudgeInDoubt(ctx, "b9"); b != "b1" || !marked || err != nil {
+		t.Fatalf("the mark: %q %v %v", b, marked, err)
+	}
+	if got, ok, err := s.Judged(ctx); !ok || err != nil || !got.InDoubt || got.Bundle != "b1" ||
+		string(got.Policy) != string(pol) {
+		t.Fatalf("a record marked in doubt: %+v %v %v", got, ok, err)
+	}
+	if b, marked, err := s.JudgeInDoubt(ctx, ""); b != "b1" || marked || err != nil {
+		t.Fatalf("a record already in doubt is marked again: %q %v %v", b, marked, err)
+	}
+	_, rev, err := s.BundlesAt(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutBundle(ctx, "replica-c", "b2", time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if put, err := s.PutJudgedSince(ctx, "b1", pol, rev); put || err != nil {
+		t.Fatalf("recorded over a replica's record written since: %v %v", put, err)
+	}
+	if got, _, _ := s.Judged(ctx); !got.InDoubt {
+		t.Fatal("a refused record cleared the mark")
+	}
+	if _, rev, err = s.BundlesAt(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if put, err := s.PutJudgedSince(ctx, "b1", pol, rev); !put || err != nil {
+		t.Fatalf("nothing moved since: %v %v", put, err)
+	}
+	if got, ok, err := s.Judged(ctx); !ok || err != nil || got.InDoubt || got.Bundle != "b1" {
+		t.Fatalf("a record put clears the mark: %+v %v %v", got, ok, err)
+	}
+	if b, ok, err := s.JudgedBundle(ctx); err != nil || !ok || b != "b1" {
+		t.Fatalf("PutJudgedSince writes meta/judged_bundle: %q %v %v", b, ok, err)
+	}
+	if _, rev, err = s.BundlesAt(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, marked, err := s.JudgeInDoubt(ctx, ""); !marked || err != nil {
+		t.Fatalf("the mark: %v %v", marked, err)
+	}
+	if put, err := s.PutJudgedSince(ctx, "b1", pol, rev); put || err != nil {
+		t.Fatalf("recorded over a mark written since: %v %v", put, err)
+	}
+	if _, rev, err = s.BundlesAt(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteBundle(ctx, "replica-c"); err != nil {
+		t.Fatal(err)
+	}
+	if put, err := s.PutJudgedSince(ctx, "b1", pol, rev); !put || err != nil {
+		t.Fatalf("refused over a record deleted since: %v %v", put, err)
+	}
+}
+
+// A witness lands only over the revision it was given, so two runners
+// for a moment cannot write one over the other, and a read says both
+// its revision and the store's (Ruling 18).
+func TestAWitnessLandsOnlyOverTheOneRead(t *testing.T) {
+	ctx := context.Background()
+	s := onShared(t, time.Now)
+	if w, err := s.Witness(ctx); err != nil || w.ModRevision != 0 || w.Header == 0 {
+		t.Fatalf("no witness yet: %+v %v", w, err)
+	}
+	first, err := s.PutWitness(ctx, "runner-a", 0)
+	if err != nil || first == 0 {
+		t.Fatalf("the first witness: %d %v", first, err)
+	}
+	if got, err := s.PutWitness(ctx, "runner-b", 0); err != nil || got != 0 {
+		t.Fatalf("a witness over an absent one that is there now: %d %v", got, err)
+	}
+	if w, err := s.Witness(ctx); err != nil || w.ModRevision != first || w.Header < first {
+		t.Fatalf("the witness read back: %+v %v", w, err)
+	}
+	if got, err := s.PutWitness(ctx, "runner-a", first); err != nil || got <= first {
+		t.Fatalf("a witness over the one read: %d %v", got, err)
+	}
+}
+
+// FollowWitness tells every ModRevision the witness is written at, from
+// its first read on, until ctx ends (Ruling 18).
+func TestFollowWitnessTellsEachWrite(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	s := onShared(t, time.Now)
+	first, err := s.PutWitness(ctx, "runner-a", 0)
+	if err != nil || first == 0 {
+		t.Fatalf("the first witness: %d %v", first, err)
+	}
+	var mu sync.Mutex
+	var saw []uint64
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.FollowWitness(ctx, func(rev uint64) { mu.Lock(); saw = append(saw, rev); mu.Unlock() })
+	}()
+	next, err := s.PutWitness(ctx, "runner-a", first)
+	if err != nil || next == 0 {
+		t.Fatalf("the next witness: %d %v", next, err)
+	}
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		mu.Lock()
+		got := append([]uint64(nil), saw...)
+		mu.Unlock()
+		if len(got) > 0 && got[len(got)-1] == next {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("followed %v; the witness is at %d", got, next)
+		}
+	}
+	cancel()
+	<-done
+}
+
+// A restore read is the witness's and meta/purged's revisions, and the
+// store's, at one revision; meta/purged is written by the runner after a
+// whole purge (Task 15d).
+func TestARestoreReadSaysTheWitnessAndThePurge(t *testing.T) {
+	ctx := context.Background()
+	s := onShared(t, time.Now)
+	if r, err := s.RestoreRead(ctx); err != nil || r.Witness != 0 || r.Purged != 0 || r.Header == 0 {
+		t.Fatalf("nothing yet: %+v %v", r, err)
+	}
+	w, err := s.PutWitness(ctx, "runner-a", 0)
+	if err != nil || w == 0 {
+		t.Fatalf("%d %v", w, err)
+	}
+	// Written only over the witness the purge read: a store restored since
+	// has another, and the write fails closed.
+	if p, err := s.PutPurged(ctx, "runner-a", w+1); err != nil || p != 0 {
+		t.Fatalf("meta/purged over another witness: %d %v", p, err)
+	}
+	if r, err := s.RestoreRead(ctx); err != nil || r.Purged != 0 {
+		t.Fatalf("a refused write landed: %+v %v", r, err)
+	}
+	p, err := s.PutPurged(ctx, "runner-a", w)
+	if err != nil || p <= w {
+		t.Fatalf("meta/purged: %d %v", p, err)
+	}
+	if r, err := s.RestoreRead(ctx); err != nil || r.Witness != w || r.Purged != p || r.Header < p {
+		t.Fatalf("the read: %+v %v (witness %d, purged %d)", r, err, w, p)
+	}
+}

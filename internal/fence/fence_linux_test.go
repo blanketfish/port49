@@ -16,7 +16,7 @@ import (
 )
 
 // maxPolicySize and maxInventorySize are port49d's bounds for its two files
-// (cmd/port49d/policyfile.go), which these tests read as port49d does.
+// (internal/port49d/policyfile.go), which these tests read as port49d does.
 const (
 	maxPolicySize    = 1 << 20
 	maxInventorySize = 64 << 20

@@ -63,6 +63,7 @@ func PoolOf(method string) Pool { return pools[method] }
 
 // Config is one component's guard.
 type Config struct {
+	Proc        string        // "port49d" or "port49-broker": the process whose lines these are
 	Component   string        // "daemon" or "broker": the metrics' label and the lines' subject
 	CallTimeout time.Duration // the token and context pools' deadline per call
 	BulkTimeout time.Duration // the bulk pool's
@@ -401,19 +402,31 @@ func (g *guarded) changed(p Pool, open bool, cause error) {
 		return
 	}
 	if open && p == Bulk {
-		g.c.Say(fmt.Sprintf("port49d: store: the %s's bulk pool's circuit is open after %d consecutive failures (%v); "+
+		g.c.Say(fmt.Sprintf("%s: store: the %s's bulk pool's circuit is open after %d consecutive failures (%v); "+
 			"the scans (the refresh, a revocation by principal, a start's purge) fail until a probe in %v succeeds; "+
-			"logins and commands are unaffected", g.c.Component, g.c.Failures, cause, g.c.OpenFor))
+			"logins and commands are unaffected", g.c.Proc, g.c.Component, g.c.Failures, cause, g.c.OpenFor))
 		return
 	}
 	if open {
-		g.c.Say(fmt.Sprintf("port49d: store: the %s's %s pool's circuit is open after %d consecutive failures (%v); "+
-			"each call on it fails at once until a probe in %v succeeds; devices see store_unavailable, and "+
-			"break-glass is refused (L4); port49d closes its listeners if the store is gone for store.etcd.hold_ttl",
-			g.c.Component, p, g.c.Failures, cause, g.c.OpenFor))
+		// Only a guard that tells Unhealthy closes its process's listeners;
+		// port49-broker's never does (StopAfter 0).
+		closes := ""
+		if g.c.StopAfter > 0 {
+			closes = fmt.Sprintf("; %s closes its listeners if the store is gone for store.etcd.hold_ttl", g.c.Proc)
+		}
+		// The broker's pools serve its API; devices and break-glass are the
+		// daemon's (Task 15a review M-4).
+		impact := "devices see store_unavailable, and break-glass is refused (L4)"
+		if g.c.Component == "broker" {
+			impact = "mints, refreshes and revocations through it fail"
+		}
+		g.c.Say(fmt.Sprintf("%s: store: the %s's %s pool's circuit is open after %d consecutive failures (%v); "+
+			"each call on it fails at once until a probe in %v succeeds; %s%s", g.c.Proc, g.c.Component, p,
+			g.c.Failures, cause, g.c.OpenFor, impact, closes))
 		return
 	}
-	g.c.Say(fmt.Sprintf("port49d: store: the %s's %s pool's circuit is closed: a probe was answered", g.c.Component, p))
+	g.c.Say(fmt.Sprintf("%s: store: the %s's %s pool's circuit is closed: a probe was answered", g.c.Proc,
+		g.c.Component, p))
 }
 
 func (g *guarded) PutToken(ctx context.Context, k store.TokenKey, t store.Token) (n int, err error) {

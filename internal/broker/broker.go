@@ -105,10 +105,21 @@ type Broker struct {
 	// DefaultRevokeTimeout.
 	RevokeTimeout time.Duration
 
-	// AdminSocket is port49d's admin_socket, where a revocation is lifted;
-	// empty when none is configured. Only the HTTP revocation's answer reads
-	// it, to say where its mark is lifted (decision 34).
+	// AdminSocket is the serving process's admin_socket, where a revocation
+	// is lifted; empty when none is configured. Only the HTTP revocation's
+	// answer reads it, to say where its mark is lifted (decision 34).
 	AdminSocket string
+	// Proc names the process serving the API in those answers: "port49d"
+	// when empty, "port49-broker" on the broker (Task 15a review M-6).
+	Proc string
+
+	// MintGate, when set, is asked of the policy a mint would run under,
+	// with the policy held: an error refuses the whole batch
+	// store_unavailable, minting nothing. port49-broker refuses until a
+	// replica serving a bundle other than the one last judged has marked
+	// meta/judged in doubt (Task 15a re-review 1, I-2). Its error is never
+	// the caller's to read: the gate's owner says why, once, as it waits.
+	MintGate func(pol *policy.Policy) error
 
 	// CertStatus answers a certificate chain's revocation status (spec
 	// §5.1.4; decision 33): nil checks nothing, port49d's `disabled: true`.
@@ -349,6 +360,17 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	defer release()
+	if b.MintGate != nil {
+		if err := b.MintGate(pol); err != nil {
+			release()
+			b.emit(decision.Record{TS: now, Event: decision.EventMint, Verdict: decision.VerdictDeny,
+				Reason: decision.StoreUnavailable, Principal: principal, Auth: &decision.Auth{Method: cred.Method}})
+			w.Header().Set("Retry-After", "5")
+			writeError(w, http.StatusServiceUnavailable, string(decision.StoreUnavailable),
+				"the broker could not record what it serves in the store, so it minted nothing; retry shortly")
+			return
+		}
+	}
 	// Nothing under the hold takes a second one: a pending Swap blocks every
 	// new Hold, so a nested one would wait on the swap that waits on this.
 	ctx, cancel := context.WithTimeout(r.Context(), holdTimeout)

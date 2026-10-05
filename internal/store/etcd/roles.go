@@ -13,17 +13,16 @@ import (
 // The roles port49 runs under on etcd (plan 7d, Ruling 10; spec §12 and
 // §13, decision 35). The daemon reads and writes what a login, an
 // authorization and accounting touch, and reads the marks a login
-// compares, the keyspace's meta records and the ledger record (lw/, plan
-// 7e, Ruling 4); it cannot write a mark, read or write an idempotency
+// compares, the ledger record (lw/, plan 7e, Ruling 4) and five single
+// keys of meta/ (daemonMetaReads); it cannot write a mark, read or write an idempotency
 // record (which holds minted tokens), read or write the token indexes or
 // the superseded record (sp/, Ruling 9), or write meta/ or the ledger
 // record — so a stolen daemon key cannot lift a revocation by principal or
 // certificate, delete the keyspace hold (pre-flight I15) or the seal-key
 // record, lower the ledger record a start seeds from, or forge a replay's
 // superseded instant. That holds for the
-// daemon's credential taken alone: until plan 7e port49d also holds the
-// broker's, whose role is the whole keyspace, marks included, and under
-// store.etcd.roles: unenforced the daemon's is too. What a stolen daemon
+// daemon's credential, which port49d holds alone (plan 7e); under
+// store.etcd.roles: unenforced the daemon's is as wide as the broker's. What a stolen daemon
 // key can still do to a token, a receipt or a context is bounded by the
 // seals, the ledger and the marks, record family by record family
 // (Ruling 17's table).
@@ -39,12 +38,19 @@ type Grant struct {
 }
 
 // The daemon's families: read-write on daemonWrites, read-only on
-// daemonReads, nothing on daemonNever (spec §12).
+// daemonReads and on the keys of daemonMetaReads, nothing on daemonNever
+// (spec §12).
 var (
 	daemonWrites = []string{famToken, famReceipt, famReceiptBy, famContext, famIndexed, famByPrincipal,
 		famBySid, famByCert, famBlob}
-	daemonReads = []string{famMark, famMeta, famLedger}
+	daemonReads = []string{famMark, famLedger}
 	daemonNever = []string{famIdem, famTokByPrin, famTokByCert, famSuperseded}
+	// daemonMetaReads are the keys of meta/ port49d's code reads, each
+	// granted by itself: seal_keys at a start, witness and purged by the
+	// restore guard, judged_bundle by the skew gauge (the bundle's name
+	// alone, so the policy text in meta/judged stays the broker's), and ping
+	// by the store probe.
+	daemonMetaReads = []string{"seal_keys", "witness", "purged", "judged_bundle", "ping"}
 )
 
 // Roles is every grant the two roles need for prefix's keyspace.
@@ -58,6 +64,9 @@ func Roles(prefix string) []Grant {
 	for _, fam := range daemonReads {
 		p := k.family(fam)
 		out = append(out, Grant{Role: RoleDaemon, Key: p, RangeEnd: clientv3.GetPrefixRangeEnd(p)})
+	}
+	for _, name := range daemonMetaReads {
+		out = append(out, Grant{Role: RoleDaemon, Key: k.meta(name)}) // the one key: no RangeEnd
 	}
 	out = append(out, Grant{Role: RoleBroker, Key: k.root, RangeEnd: clientv3.GetPrefixRangeEnd(k.root), Write: true})
 	return out
@@ -133,6 +142,10 @@ func (s *Store) CheckIdentity(ctx context.Context, broker bool) error {
 		{"writing " + s.k.family(famSuperseded), func() error { return write(famSuperseded) }},
 		{"writing " + s.k.family(famLedger), func() error { return write(famLedger) }},
 		{"writing " + s.k.family(famMeta), func() error { return write(famMeta) }},
+		{"reading " + s.k.meta("judged"), func() error {
+			_, err := s.tok.Get(ctx, s.k.meta("judged"), clientv3.WithKeysOnly())
+			return unavailable(err)
+		}},
 	}
 	for _, p := range probes {
 		err := p.do()

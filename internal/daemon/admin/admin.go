@@ -88,6 +88,18 @@ type Server struct {
 	// port49d runs no broker; the ops are then refused, saying so.
 	Revoke      func(ctx context.Context, op RevokeOp) (text string, partial bool, err error)
 	Revocations func(ctx context.Context) (string, error)
+	// RevokeElsewhere names where revocation is answered when this process
+	// runs no broker (plan 7e, Ruling 13): port49d on etcd, beside
+	// port49-broker. Empty keeps the memory store's line.
+	RevokeElsewhere string
+	// DiagnoseElsewhere names where keys diagnose is answered when this
+	// process holds no device packets (Held nil): port49-broker, beside
+	// port49d (plan 7e, Ruling 13; pre-flight M16).
+	DiagnoseElsewhere string
+	// Proc names this process in a failed op's line and answer:
+	// "port49d" when empty, "port49-broker" on the broker (Task 15a review
+	// M-6).
+	Proc string
 	// OpTimeout bounds revoke and revocations; zero is the package's
 	// OpTimeout. Tests shorten it.
 	OpTimeout time.Duration
@@ -226,12 +238,19 @@ func (s *Server) answer(ctx context.Context, req Request, uid uint32) (resp Resp
 	// panic behind an op is an answer, never the end of port49d (M12).
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("port49d: admin socket: op %q failed: %v", printsafe.Line(req.Op, 40), r)
-			resp = Response{Error: "internal error; port49d's log says what"}
+			proc := s.Proc
+			if proc == "" {
+				proc = "port49d"
+			}
+			log.Printf("%s: admin socket: op %q failed: %v", proc, printsafe.Line(req.Op, 40), r)
+			resp = Response{Error: "internal error; " + proc + "'s log says what"}
 		}
 	}()
 	switch req.Op {
 	case "keys_diagnose":
+		if s.Held == nil && s.DiagnoseElsewhere != "" {
+			return Response{Error: "port49-broker holds no device packets; keys diagnose is " + s.DiagnoseElsewhere}
+		}
 		assigned := ""
 		if s.Assigned != nil {
 			assigned = s.Assigned(req.Device)
@@ -244,6 +263,10 @@ func (s *Server) answer(ctx context.Context, req Request, uid uint32) (resp Resp
 		return Response{Text: f.Text(now), Finding: &f}
 	case "revoke", "revocations":
 		if s.Revoke == nil || s.Revocations == nil {
+			if s.RevokeElsewhere != "" {
+				return Response{Error: "port49d runs no broker; revocation is " + s.RevokeElsewhere +
+					": run port49 revoke --socket <that path>"}
+			}
 			return Response{Error: "port49d runs no broker (no broker: block in port49d.yaml), so there is nothing to revoke"}
 		}
 		ctx, cancel := context.WithTimeout(ctx, s.opTimeout())

@@ -70,7 +70,7 @@ func (f *fixture) login(t *testing.T, principal, device, username string) store.
 		cert = f.client(t, strings.TrimPrefix(principal, "user:"), f.now.Add(24*time.Hour))
 	}
 	if it := decodeMint(t, f.post(context.Background(), f.state(cert), `{"devices":["`+device+`"]}`, "")).Results[0]; it.Verdict != "permit" {
-		t.Fatalf("mint for %s on %s: %+v", principal, device, it)
+		t.Fatalf("mint for %s on %s: verdict %q, reason %q", principal, device, it.Verdict, it.Reason)
 	}
 	ctx := context.Background()
 	tk := store.TokenKey{NAS: device, Username: username}
@@ -214,6 +214,36 @@ func TestARefreshRevokesAContextWhoseGrantIsGone(t *testing.T) {
 	}
 	if n := testutil.ToFloat64(f.b.Metrics.TokensSuperseded); n != 1 {
 		t.Fatalf("port49_tokens_superseded_total = %v", n)
+	}
+}
+
+// RefreshTokens is Refresh's token half alone (plan 7e, Ruling 6): the
+// unspent token the withdrawn grant superseded is deleted, and the context
+// on that grant is left as it was, for the runner's pass to judge.
+func TestRefreshTokensJudgesTokensAndNoContext(t *testing.T) {
+	f := newFixture(t, 8)
+	before := f.login(t, alice, "leaf1", "alice")
+	decodeMint(t, f.post(context.Background(), f.state(f.alice), `{"devices":["nx1"]}`, ""))
+	priors := f.reload(t, edit(t, "  - {subject: netops, scope: all_devices, "+aliceGrant+"}\n",
+		"  - {subject: idle, scope: all_devices, roles: [network_admin]}\n"))
+	f.log.Reset()
+	rep, err := f.b.RefreshTokens(context.Background(), priors)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if toks, _ := f.st.Candidates(context.Background(), store.TokenKey{NAS: "nx1", Username: "alice"}); len(toks) != 0 {
+		t.Fatalf("alice's unspent nx1 token must be deleted: %d left", len(toks))
+	}
+	after := f.context(t, "leaf1", "alice")
+	if !after.RevokedAt.IsZero() || after.BlobHash != before.BlobHash || !after.RefreshedAt.Equal(before.RefreshedAt) {
+		t.Fatalf("the context on the withdrawn grant is the runner's to judge: %+v", after)
+	}
+	if rep.TokenKeys != 1 || rep.Contexts() != 0 || rep.Updated+rep.Unchanged+rep.Revoked+rep.Quarantined+rep.Failed+
+		rep.Unreached != 0 {
+		t.Fatalf("report: %+v", rep)
+	}
+	if recs := eventsOf(f.records(t), "refresh"); len(recs) != 0 {
+		t.Fatalf("no context judged, so no refresh record: %v", recs)
 	}
 }
 
@@ -579,7 +609,7 @@ func TestASupersededPolicyIsJudgedAtEveryExpiryItSpanned(t *testing.T) {
 	f.reload(t, edit(t, roleList, readOnly)+extra+", expires: "+lapse.UTC().Format(time.RFC3339)+"}\n")
 	f.advance(2 * time.Hour)
 	if it := decodeMint(t, f.post(context.Background(), f.state(f.alice), `{"devices":["leaf1"]}`, "")).Results[0]; it.Verdict != "permit" {
-		t.Fatalf("mint after the lapse: %+v", it)
+		t.Fatalf("mint after the lapse: verdict %q, reason %q", it.Verdict, it.Reason)
 	}
 	pol, err := policy.Parse([]byte(edit(t, roleList, readOnly)+extra+"}\n"), policy.Env{Devices: []admission.Device{
 		f.devices["leaf1"], f.devices["nx1"], f.devices["bare"]}, Now: f.b.Now()})
@@ -1113,7 +1143,8 @@ func TestARetryAfterASupersedeIsNotAnsweredWithTheDeletedToken(t *testing.T) {
 		t.Fatalf("the mint record says the replay was abandoned: %v", mints)
 	}
 	if replay := decodeMint(t, f.post(bg, f.state(f.alice), body, "retry-1")).Results[0]; replay.Login != again.Login {
-		t.Fatalf("a retry after the fresh mint replays it: %+v", replay)
+		t.Fatalf("a retry after the fresh mint replays it: verdict %q, same login as the fresh mint: %v", replay.Verdict,
+			replay.Login == again.Login)
 	}
 }
 
@@ -1173,7 +1204,7 @@ func TestARefusedDeviceIsNotMintedForAndItsContextIsRevoked(t *testing.T) {
 	priors := []Prior{{Policy: f.b.Policy.Swap(pol), At: f.b.Now()}}
 	it := decodeMint(t, f.post(context.Background(), f.state(f.alice), `{"devices":["leaf1"]}`, "")).Results[0]
 	if it.Verdict != "deny" || it.Reason != "device_unknown" {
-		t.Fatalf("a refused device was minted for: %+v", it)
+		t.Fatalf("a refused device was minted for: verdict %q, reason %q", it.Verdict, it.Reason)
 	}
 	rep, err := f.b.Refresh(context.Background(), priors)
 	if err != nil || rep.Revoked != 1 {

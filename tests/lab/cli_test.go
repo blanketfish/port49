@@ -36,6 +36,10 @@ type cliConn struct {
 	// done is closed when the remote shell exits (an SSH CLI only; nil on the
 	// console): the positive evidence that a session ended, as `exit` ends it.
 	done <-chan struct{}
+	// keepalive sends an SSH-level keepalive request and waits for its reply
+	// at most within (an SSH CLI only; nil elsewhere). It is neither CLI input
+	// nor TACACS+ traffic, so it cannot change what the device authorizes.
+	keepalive func(within time.Duration) error
 }
 
 // syncBuf collects device output. The ssh package writes to it from its own
@@ -158,6 +162,19 @@ func (l *lab) sshCLI(user, password string) (*cliConn, error) {
 		in:   in,
 		out:  buf,
 		done: done,
+		keepalive: func(within time.Duration) error {
+			res := make(chan error, 1)
+			go func() {
+				_, _, err := c.SendRequest("keepalive@openssh.com", true, nil)
+				res <- err
+			}()
+			select {
+			case err := <-res:
+				return err
+			case <-time.After(within):
+				return fmt.Errorf("no reply to the keepalive within %s", within)
+			}
+		},
 		close: func() {
 			in.Close()
 			s.Close()

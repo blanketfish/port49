@@ -263,6 +263,28 @@ type Metrics struct {
 	// beside port49_policy_file_refused: an edit that loaded, and has not yet
 	// reached every live session.
 	PolicyRefreshPending prometheus.Gauge
+	// port49_policy_bundle_matches_runner: 1 while this broker serves the
+	// bundle the runner serves, or this port49d the bundle the runner last
+	// judged (plan 7e, Ruling 8; pre-flight I3; re-check R5). 0 on a broker
+	// is a replica whose policy file differs: its tokens and the contexts
+	// they make carry another policy until it reloads. 0 on a port49d past
+	// the runner's settle pass is a policy file that differs from the
+	// brokers', for admission, quarantine and redaction. It starts at 1:
+	// nothing is known to differ until a read says so.
+	PolicyBundleMatchesRunner prometheus.Gauge
+	// port49_broker_mint_gate_closed: 1 while this port49-broker waits to
+	// mark meta/judged in doubt for a swap, minting nothing under the
+	// swapped bundle meanwhile (Task 15a re-review 1, I-2; re-review 3,
+	// I-4). A swap holds it for a store round trip; 1 for longer than a
+	// minute is a store that does not answer, or refuses, the broker's
+	// mark. Readiness never shows it (design §12): it is an alarm.
+	BrokerMintGateClosed prometheus.Gauge
+	// port49_redemption_restore_guarded: 1 while this port49d refuses every
+	// token redemption store_unavailable, having found meta/witness below
+	// the highest it followed (an etcd restore; plan 7e, Task 15d), until
+	// a broker runner's purge is done; 1 too from a run's start after a
+	// store gone until its first read of the witness.
+	RedemptionRestoreGuarded prometheus.Gauge
 	// port49_inventory_reloads_total{outcome}: attempts to put a changed
 	// inventory_file in force (plan 6a) — "applied", "unchanged" (the same
 	// devices, respelled), or "refused" (it could not be read behind the
@@ -495,6 +517,18 @@ func New(reg prometheus.Registerer) *Metrics {
 			Help: "1 while the policy file on disk is one port49d refused, or has not stopped changing, and an older policy is serving."}),
 		PolicyRefreshPending: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_policy_refresh_pending",
 			Help: "1 from a policy swap or grant expiry until its settle pass has carried it into every live login context."}),
+		PolicyBundleMatchesRunner: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_policy_bundle_matches_runner",
+			Help: "1 while this broker serves the bundle the runner serves, or this port49d the bundle the runner " +
+				"last judged; 0 on a broker is a replica whose policy file differs: its tokens and the contexts they " +
+				"make carry another policy until it reloads; 0 on a port49d past the runner's settle pass is a " +
+				"policy file that differs from the brokers', for admission, quarantine and redaction."}),
+		BrokerMintGateClosed: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_broker_mint_gate_closed",
+			Help: "1 while this broker waits to mark the bundle last judged in doubt for a swap, minting nothing " +
+				"under the swapped bundle; 1 for longer than a minute is a store that does not answer, or refuses, " +
+				"the mark."}),
+		RedemptionRestoreGuarded: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_redemption_restore_guarded",
+			Help: "1 while this port49d refuses every token redemption, having found the store restored from a " +
+				"snapshot, until a broker runner's purge is done."}),
 		InventoryReloads: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_inventory_reloads_total",
 			Help: "Attempts to put a changed inventory file in force, by outcome."}, []string{"outcome"}),
 		InventoryFileRefused: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_inventory_file_refused",
@@ -548,9 +582,15 @@ func New(reg prometheus.Registerer) *Metrics {
 		m.ContextsReindexFailures, m.SessionRefreshes, m.TokensSuperseded, m.CeilingWarnings,
 		m.Revocations, m.RevocationsInForce, m.RevocationsFileFailed, m.CertStatusChecks, m.CRLLoads, m.CRLNextUpdate,
 		m.CertStatusUnavailable, m.PolicyReloads, m.PolicyFileRefused,
-		m.PolicyRefreshPending, m.InventoryReloads, m.InventoryFileRefused, m.InventorySnapshotAge,
+		m.PolicyRefreshPending, m.PolicyBundleMatchesRunner, m.BrokerMintGateClosed, m.RedemptionRestoreGuarded,
+		m.InventoryReloads,
+		m.InventoryFileRefused,
+		m.InventorySnapshotAge,
 		m.InventoryChanges, m.InventoryBundleSequence, m.InventoryPersistFailed, m.InventoryBundleRefused,
 		m.InventoryPolicyMismatch, m.InventoryMirrorUnreadable, m.InventoryFetches)
+	// Nothing is known to differ until a read says so: a process with no
+	// runner to compare with (memory) reads 1.
+	m.PolicyBundleMatchesRunner.Set(1)
 	// process_start_time_seconds among them: an alert on
 	// port49_key_version_devices gates on uptime, because the count starts
 	// at 0 with every restart (spec §10). No labels.
