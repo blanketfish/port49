@@ -13,28 +13,6 @@ import (
 	"github.com/rhwendt/port49/internal/store"
 )
 
-// probe pings the store through the daemon's guard every every until ctx
-// ends (plan 7e, Ruling 11). With no hold, nothing else asks the store while
-// no device does, so a hung store would go unnoticed until the first
-// packet, which a device would hear as store_unavailable rather than as a
-// closed port. Each ping counts toward the context pool's circuit, which,
-// open for hold_ttl, ends the run as a store gone (guard.Config.StopAfter),
-// as 7d's fence did. Plan 7f replaces it with go-dark proper.
-func probe(ctx context.Context, s store.RevStore, every time.Duration) {
-	t := time.NewTicker(every)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			pctx, cancel := context.WithTimeout(ctx, every)
-			s.Ping(pctx) // its outcome is the guard's to count
-			cancel()
-		}
-	}
-}
-
 // daemonReloadHook is port49d's rescanned for its marks feed on etcd with
 // no broker inside (store.FollowMarks; plan 7e, Ruling 5). The daemon's
 // role cannot write rv/, and broker.revocations_file is retired on etcd

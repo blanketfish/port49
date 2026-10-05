@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -213,25 +214,37 @@ func TestTwoDaemonsServeOneKeyspace(t *testing.T) {
 	}
 }
 
-// An idle port49d whose store hangs goes dark on its probe alone: no
-// device asks, and it closes its listeners within hold_ttl of the
-// circuit opening, and listens again when the store returns (Ruling 11).
-// In the dark, a connection a device held is reset (L28: the fast fall to
-// local), TACACS+ takes no new one, and /readyz reads 503.
-func TestAnIdleDaemonGoesDarkOnItsProbe(t *testing.T) {
+// An idle port49d whose store hangs goes dark on its health checks alone:
+// no device asks, and it closes its listeners within close_after × interval
+// + call_timeout (plan 7f, Ruling 4: 7e's idle gap closed), not hold_ttl
+// later. In the dark a held connection is reset (L28: the fast fall to
+// local), TACACS+ takes none, and /readyz is 503. When the store returns
+// it listens again only after open_after checks pass in a row.
+func TestAnIdleDaemonGoesDarkOnItsHealthChecks(t *testing.T) {
 	var out syncBuffer
 	e := stderr
 	t.Cleanup(func() { stderr = e })
 	stderr = &out
 	daemonCfg, proxy := etcdSplit(t)
+	addUnderEtcd(t, daemonCfg, "    health: {interval: 200ms, close_after: 3, open_after: 2}\n")
 	tacacs := startSplitDaemon(t, daemonCfg, &out, 1)
+	waitFor(t, &out, "every listener closes after 3 consecutive failed checks and opens again after 2 passes")
 	held, err := net.DialTimeout("tcp", tacacs, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer held.Close()
 	proxy.Hang(true)
-	waitWithin(t, &out, "closing every listener so that devices use their local method", 60*time.Second)
+	hungAt := time.Now()
+	waitWithin(t, &out, "closing every listener so that devices use their local method", 10*time.Second)
+	// 3 × 200ms + 200ms, with 2s for the process; hold_ttl is 10s here, so
+	// a close this early is the checks', not the guard's.
+	if d := time.Since(hungAt); d > 2800*time.Millisecond {
+		t.Fatalf("dark %v after the hang, past close_after × interval + call_timeout + 2s", d)
+	}
+	if !strings.Contains(out.String(), "3 consecutive store health checks failed") {
+		t.Fatalf("the close does not name the checks:\n%s", out.String())
+	}
 	held.SetReadDeadline(time.Now().Add(5 * time.Second))
 	if _, err := held.Read(make([]byte, 1)); !errors.Is(err, syscall.ECONNRESET) {
 		t.Fatalf("a held connection on a store gone: %v, want a reset", err)
@@ -251,8 +264,134 @@ func TestAnIdleDaemonGoesDarkOnItsProbe(t *testing.T) {
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("/readyz while waiting for the store: %d, want 503", resp.StatusCode)
 	}
+	// The alarm holds through the wait (plan 7f, I-1): the new run's registry
+	// reads the count the last run left, at least close_after, before the
+	// store returns, so "above 0 for three intervals" does not resolve at the
+	// close with the store still down.
+	if v := scrapeGauge(t, ms[len(ms)-1][1], "port49_store_health_failures"); v < 3 {
+		t.Fatalf("port49_store_health_failures = %v while the store is away, want at least close_after (3)", v)
+	}
 	proxy.Hang(false)
-	waitCountWithin(t, &out, "port49d: listening on ", 2, 90*time.Second)
+	waitCountWithin(t, &out, "port49d: listening on ", 2, 60*time.Second)
+	s := out.String()
+	passed := strings.Index(s, "2 consecutive health checks passed")
+	second := strings.LastIndex(s, "port49d: listening on ")
+	if passed < 0 || passed > second {
+		t.Fatalf("listening again before the passes were said:\n%s", s)
+	}
+	// And 0 once open_after passes have passed and the listeners are open.
+	if v := scrapeGauge(t, ms[len(ms)-1][1], "port49_store_health_failures"); v != 0 {
+		t.Fatalf("port49_store_health_failures = %v with the listeners open again, want 0", v)
+	}
+}
+
+// scrapeGauge is the value of the unlabelled series name in the /metrics
+// of the daemon at addr.
+func scrapeGauge(t *testing.T, addr, name string) float64 {
+	t.Helper()
+	resp, err := http.Get("http://" + addr + "/metrics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(name) + ` (\S+)$`).FindSubmatch(body)
+	if m == nil {
+		t.Fatalf("/metrics at %s has no %s", addr, name)
+	}
+	v, err := strconv.ParseFloat(string(m[1]), 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+
+// A store that answers for one check in two never opens the listeners: a
+// failure starts open_after's count again (Review Focus 2). Once it
+// answers steadily, they open.
+func TestAFlappingStoreDoesNotOpenTheListeners(t *testing.T) {
+	var out syncBuffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	daemonCfg, proxy := etcdSplit(t)
+	addUnderEtcd(t, daemonCfg, "    health: {interval: 200ms, close_after: 3, open_after: 4}\n")
+	startSplitDaemon(t, daemonCfg, &out, 1)
+	proxy.Hang(true)
+	waitWithin(t, &out, "waiting for the store again, as at a start", 15*time.Second)
+	stop := make(chan struct{})
+	flapped := make(chan struct{})
+	go func() {
+		defer close(flapped)
+		// Asymmetric windows: hung 700ms, open 300ms. Proxy.Hang(false)
+		// releases the bytes it held (etcdtest.go:481-486), so with equal
+		// windows a check that started in the last 100ms of a hang could pass
+		// on the release. With a 700ms hang a whole check pair is held, and
+		// open_after (4) passes at 200ms intervals cannot fit in a 300ms window.
+		for hung := true; ; hung = !hung {
+			proxy.Hang(hung)
+			d := 300 * time.Millisecond
+			if hung {
+				d = 700 * time.Millisecond
+			}
+			select {
+			case <-stop:
+				proxy.Hang(false)
+				return
+			case <-time.After(d):
+			}
+		}
+	}()
+	waitWithin(t, &out, "a health check failed while the listeners wait to open", 30*time.Second)
+	time.Sleep(3 * time.Second)
+	if strings.Count(out.String(), "port49d: listening on ") != 1 {
+		t.Fatalf("the listeners opened on a flapping store:\n%s", out.String())
+	}
+	close(stop)
+	<-flapped
+	waitCountWithin(t, &out, "port49d: listening on ", 2, 60*time.Second)
+}
+
+// SIGTERM while port49d waits for its passes ends it at once (Review
+// Focus 5).
+func TestAStopWhileWaitingForPassesEndsTheRun(t *testing.T) {
+	var out syncBuffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	daemonCfg, proxy := etcdSplit(t)
+	addUnderEtcd(t, daemonCfg, "    health: {interval: 200ms, close_after: 2, open_after: 60}\n")
+	_, stop := runSplitDaemon(t, daemonCfg, &out, 1)
+	proxy.Hang(true)
+	waitWithin(t, &out, "waiting for the store again, as at a start", 15*time.Second)
+	proxy.Hang(false)
+	waitWithin(t, &out, "the listeners open again after 60 consecutive health checks pass", 30*time.Second)
+	start := time.Now()
+	if err := stop(); err != nil {
+		t.Fatal(err)
+	}
+	if d := time.Since(start); d > 3*time.Second {
+		t.Fatalf("a stop while waiting for passes took %v", d)
+	}
+}
+
+// A cold start is not gated on passes (decision 37): with open_after far
+// past what could pass in the test, the first run listens at once and never
+// says it is waiting for passes. Only a run after a store gone waits.
+func TestAColdStartDoesNotWaitForHealthPasses(t *testing.T) {
+	var out syncBuffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	daemonCfg, _ := etcdSplit(t)
+	addUnderEtcd(t, daemonCfg, "    health: {interval: 200ms, close_after: 3, open_after: 60}\n")
+	startSplitDaemon(t, daemonCfg, &out, 1)
+	if strings.Contains(out.String(), "consecutive health checks pass") {
+		t.Fatalf("a cold start waited for passes:\n%s", out.String())
+	}
 }
 
 // A revocation sent to port49d's socket with no broker in it is refused,

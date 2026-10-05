@@ -886,7 +886,8 @@ func TestAStartSealsTheLedgerOnceItHasReadTheStore(t *testing.T) {
 // A store that hangs in the middle of a login: the device hears ERROR
 // within store.packet_deadline, never silence (Review Focus 1). Then the
 // store has been gone long enough, and port49d closes every listener and
-// says why, on its guard and probe, without exiting; port49-broker's
+// says why, on its health checks (close_after failures, which come before
+// the guard's hold_ttl) or its guard, without exiting; port49-broker's
 // runner loses its hold and keeps serving. When the store returns, the
 // same port49d listens again, and the runner takes the hold again (Ruling
 // 11; pre-flight I19; Review Focus 4). While port49d waits, /readyz says
@@ -2005,6 +2006,9 @@ func TestPort49dRefusesARestoredTokenUntilTheRunnerPurges(t *testing.T) {
 	t.Cleanup(func() { stderr, stdout = e, o })
 	stderr, stdout = &out, &log
 	f := splitFleet(t)
+	// The restore keeps etcd away for over five seconds; the checks would
+	// close the listeners first, and this test measures the restore guard.
+	addUnderEtcd(t, f.daemon, "    health: {close_after: 60}\n")
 	root := f.srv.Client(t, "root")
 	tacacs := startSplitDaemon(t, f.daemon, &out, 1)
 	metricsD := regexp.MustCompile(`port49d: metrics on (127\.0\.0\.1:\d+)`).FindStringSubmatch(out.String())[1]

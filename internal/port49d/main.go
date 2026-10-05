@@ -562,8 +562,13 @@ func run(parent context.Context, cfgPath string) error {
 	// hold_ttl ends a run, and the next must still know what was followed
 	// (plan 7e, Task 15d).
 	restored := newRestoreGuard(stderr)
+	// The failed-check count is the process's too: the registry is per run, so
+	// a gauge set only by the run that ended reads 0 in the next one's, and the
+	// alert "above 0 for three intervals" would resolve at the close while the
+	// store is still down (plan 7f, I-1; the shape of the key alarm's gauge).
+	hs := &healthState{}
 	return runLoop(parent, func(again bool) error {
-		return runOnce(parent, cfgPath, hup, again, ledger, alarm, authMarks, restored)
+		return runOnce(parent, cfgPath, hup, again, ledger, alarm, authMarks, restored, hs)
 	}, 5*time.Second)
 }
 
@@ -609,7 +614,7 @@ func runLoop(parent context.Context, once func(again bool) error, every time.Dur
 // package comment gives. again says a store gone ended the run before.
 // authMarks and restored are the process's (run).
 func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again bool, ledger *crypt.Ledger,
-	alarm *keyAlarm, authMarks *store.Marks, restored *restoreGuard) (err error) {
+	alarm *keyAlarm, authMarks *store.Marks, restored *restoreGuard, hs *healthState) (err error) {
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		return err
@@ -650,6 +655,14 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 
 	reg := prometheus.NewRegistry()
 	m := metrics.New(reg)
+	// This run's new registry reads the count the last run left, and a run
+	// after a store gone holds it at close_after for as long as it waits for
+	// the store (openStores' retry), so the alert holds through the whole
+	// outage and resolves only when the listeners open again (passes sets 0).
+	hs.bind(m)
+	if again && cfg.Store.Backend == config.BackendEtcd {
+		hs.atLeast(cfg.Store.Etcd.Health.CloseAfter)
+	}
 
 	// A dead metrics listener is not a detail: without it nobody can see the
 	// daemon at all, so its error ends the process rather than disappearing.
@@ -772,6 +785,9 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		return err
 	}
 	defer sts.close()
+	if sts.health != nil {
+		sts.health.state = hs
+	}
 	if sts.follow != nil {
 		// The ledger follows the store from the start's scan at once, before
 		// anything reads a context, the start's reads included (plan 7e,
@@ -790,14 +806,6 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		guardDone := make(chan struct{})
 		go func() { defer close(guardDone); restored.keep(gctx, sts.etcd, cfg.Store.Etcd.CallTimeout) }()
 		defer func() { stopGuard(); <-guardDone }()
-	}
-	if sts.probe != nil {
-		// With no hold, the probe is what notices a hung store while no
-		// device asks (plan 7e, Ruling 11); joined before sts.close too.
-		pctx, stopProbe := context.WithCancel(ctx)
-		probeDone := make(chan struct{})
-		go func() { defer close(probeDone); sts.probe(pctx) }()
-		defer func() { stopProbe(); <-probeDone }()
 	}
 	// The broker's store: the minter, the session manager, the broker, the
 	// lab seeds and the revocations. The daemon's handlers read the
@@ -1046,6 +1054,21 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		// A store gone resets the held connections (re-check R-M0).
 		Abort: func() bool { var g *storeGone; return errors.As(context.Cause(parent), &g) }}
 
+	// After a store gone, TACACS+ binds only once open_after health checks
+	// pass in a row (plan 7f; decision 37): the start's own reads are not
+	// enough to say a store that just returned will stay. A cold start is
+	// not gated. A stop meanwhile ends the run at once.
+	if sts.health != nil && again {
+		fmt.Fprintf(stderr, "port49d: store: the store answers; the listeners open again after %d consecutive "+
+			"health checks pass (store.etcd.health.open_after)\n", sts.health.openAfter)
+		if err := sts.health.passes(ctx); err != nil {
+			mln.Close()
+			stopSpool()
+			<-spoolDone
+			return nil
+		}
+		fmt.Fprintf(stderr, "port49d: store: %d consecutive health checks passed\n", sts.health.openAfter)
+	}
 	ln, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
 		mln.Close()
@@ -1135,6 +1158,15 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 	fmt.Fprintf(stderr, "port49d: listening on %s, metrics on %s, %d devices admitted\n",
 		ln.Addr(), mln.Addr(), admitted)
 	rd.serving()
+	if sts.health != nil {
+		// From the bind on, close_after failures in a row end the run as a
+		// store gone, idle or not (plan 7f, Ruling 4); joined before
+		// sts.close, as the feeds are.
+		hctx, stopHealth := context.WithCancel(ctx)
+		healthDone := make(chan struct{})
+		go func() { defer close(healthDone); sts.health.watch(hctx, func(e error) { cancelRun(e) }) }()
+		defer func() { stopHealth(); <-healthDone }()
+	}
 
 	brokerErr := make(chan error, 1)
 	if brokerSrv != nil {
