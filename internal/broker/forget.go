@@ -4,9 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/directory"
 	"github.com/rhwendt/port49/internal/printsafe"
 	"github.com/rhwendt/port49/internal/store"
 )
@@ -29,9 +29,15 @@ func (b *Broker) Forget(ctx context.Context, principal, origin string) (string, 
 	if b.Directory == nil {
 		return "", errors.New("broker: no broker.directory is configured, so no membership is held to forget")
 	}
-	if !directory.IsUser(principal) {
+	// The principal as the log spells it (the mark's own rule), so a
+	// mixed-case name finds the record it names.
+	if !strings.HasPrefix(strings.ToLower(principal), "user:") {
 		return "", fmt.Errorf("broker: %q is not a user: principal; only a directory principal has a membership",
 			printsafe.Line(principal, 200))
+	}
+	principal, err := normalPrincipal(principal)
+	if err != nil {
+		return "", fmt.Errorf("broker: %s", strings.TrimPrefix(err.Error(), "broker: "))
 	}
 	ctx, cancel := context.WithTimeout(ctx, holdTimeout)
 	defer cancel()

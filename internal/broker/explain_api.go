@@ -12,7 +12,6 @@ import (
 
 	"github.com/rhwendt/port49/internal/broker/api"
 	"github.com/rhwendt/port49/internal/decision"
-	"github.com/rhwendt/port49/internal/directory"
 	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/store"
 )
@@ -71,24 +70,18 @@ func (b *Broker) explain(w http.ResponseWriter, r *http.Request) {
 	rec := decision.Record{TS: now, Event: decision.EventExplain, Principal: about,
 		Device: &decision.Device{Name: req.Device}, Policy: &decision.Policy{Bundle: pol.Bundle},
 		Explain: &decision.Explain{AskedBy: caller, AskedByFingerprint: cred.Fingerprint, Command: req.Command != ""}}
-	// resolve is a principal's membership, or the refusal it is answered
-	// with, recorded and written as a mint's is.
-	resolve := func(principal string) (policy.Member, *directory.Answer, bool) {
+	if about != caller {
+		// The caller's own membership: a refusal is the caller's, recorded
+		// and answered as a mint's is (their certificate, their connection).
 		ctx, cancel := context.WithTimeout(r.Context(), b.memberBudget())
-		defer cancel()
-		m, answer, err := b.memberFor(ctx, principal)
+		callerMember, _, err := b.memberFor(ctx, caller)
+		cancel()
 		if err != nil {
 			ref := directoryRefusal(err)
-			rec.Verdict, rec.Reason = decision.VerdictDeny, ref.Reason
-			b.emit(rec)
+			b.emit(decision.Record{TS: now, Event: decision.EventExplain, Verdict: decision.VerdictDeny,
+				Reason: ref.Reason, Principal: caller,
+				Auth: &decision.Auth{Method: cred.Method, Fingerprint: cred.Fingerprint}})
 			b.answerRefusal(w, r, ref)
-			return policy.Member{}, nil, false
-		}
-		return m, answer, true
-	}
-	if about != caller {
-		callerMember, _, ok := resolve(caller)
-		if !ok {
 			return
 		}
 		if !pol.HasRightOf(callerMember, policy.RightExplainOthers) {
@@ -113,8 +106,19 @@ func (b *Broker) explain(w http.ResponseWriter, r *http.Request) {
 	if revoked {
 		e = policy.Explanation{Subject: about, Device: req.Device, Command: req.Command, Revoked: rv.At}
 	} else {
-		aboutMember, _, ok := resolve(about)
-		if !ok {
+		ctx, cancel := context.WithTimeout(r.Context(), b.memberBudget())
+		aboutMember, _, merr := b.memberFor(ctx, about)
+		cancel()
+		if merr != nil {
+			// The directory's "no" about the principal asked about is the
+			// answer, not a refusal of the caller: 200, the connection kept.
+			ref := directoryRefusal(merr)
+			rec.Verdict, rec.Reason = decision.VerdictDeny, ref.Reason
+			b.emit(rec)
+			writeJSON(w, http.StatusOK, api.ExplainResponse{Principal: about, Device: req.Device,
+				Verdict: decision.VerdictDeny, Reason: string(ref.Reason),
+				Text: fmt.Sprintf("%s would be refused %s: the directory's answer about %s, not about you", about,
+					ref.Reason, about)})
 			return
 		}
 		rec.Policy.Subject, rec.Policy.Subjects = subjectNames(pol, aboutMember)

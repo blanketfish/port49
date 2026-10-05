@@ -542,9 +542,11 @@ func TestAGroupMemberMints(t *testing.T) {
 	}
 }
 
-// Past grace the whole request is refused 503 directory_unavailable with
-// Retry-After, nothing minted, one mint deny record (Review Focus 4).
-func TestAMintPastGraceIsRefused(t *testing.T) {
+// A directory that answers unavailable (no server, nothing within grace;
+// the resolver's own tests drive grace) refuses the whole request 503
+// directory_unavailable with Retry-After, nothing minted, one mint deny
+// record (Review Focus 4).
+func TestAMintTheDirectoryRefusesUnavailableIsRefused(t *testing.T) {
 	a := answerFor(corpAlice, "alice")
 	f, _ := groupFixture(t, nil, directory.ErrUnavailable)
 	w := f.mintOnPinned(a, `["leaf1","nx1"]`)
@@ -694,5 +696,40 @@ func TestExplainAnswersForTheirMembership(t *testing.T) {
 	var e api.ExplainResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &e); err != nil || w.Code != 200 || e.Verdict != "permit" || e.Subject != "ops" {
 		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+}
+
+// Explaining a principal the directory refuses answers that principal's
+// reason in the body, 200, the connection kept; it is never the caller's own
+// 401 and close (review I-1).
+func TestExplainOfARefusedPrincipalIsAnswerNotARefusalOfTheCaller(t *testing.T) {
+	caller := answerFor(corpAlice, "alice")
+	caller.GroupNames = []string{"oncall-group"}
+	f, _ := groupFixture(t, map[string]directory.Answer{corpAlice: caller}, nil) // no entry for ghost
+	w := f.call(f.pinned(caller), f.state(f.alice), "POST", "/v1/explain",
+		`{"device":"nx1","principal":"user:ghost@corp.example.com"}`)
+	var e api.ExplainResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &e); err != nil || w.Code != 200 || w.Header().Get("Connection") == "close" ||
+		e.Verdict != "deny" || e.Reason != "identity_unmapped" || e.Principal != "user:ghost@corp.example.com" ||
+		!strings.Contains(e.Text, "ghost") || strings.Contains(e.Text, "this certificate") {
+		t.Fatalf("%d %v %s", w.Code, w.Header(), w.Body)
+	}
+	recs := eventsOf(f.records(t), "explain")
+	if len(recs) != 1 || recs[0]["principal"] != "user:ghost@corp.example.com" || recs[0]["reason"] != "identity_unmapped" {
+		t.Fatalf("%v", recs)
+	}
+}
+
+// The caller's own refused membership is the caller's: 401, and the record
+// names the caller, never the principal being explained (review I-2).
+func TestExplainRefusalOfTheCallerNamesTheCaller(t *testing.T) {
+	caller := answerFor(corpAlice, "alice")
+	f, _ := groupFixture(t, map[string]directory.Answer{}, nil) // nothing for anyone
+	w := f.call(f.pinned(caller), f.state(f.alice), "POST", "/v1/explain",
+		`{"device":"nx1","principal":"user:bob@corp.example.com"}`)
+	wantRefused(t, heldAnswer{status: w.Code, body: w.Body.String()}, 401, "identity_unmapped")
+	recs := eventsOf(f.records(t), "explain")
+	if len(recs) != 1 || recs[0]["principal"] != corpAlice || recs[0]["reason"] != "identity_unmapped" {
+		t.Fatalf("%v", recs)
 	}
 }

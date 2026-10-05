@@ -320,7 +320,7 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		ref := directoryRefusal(err)
 		b.emit(decision.Record{TS: now, Event: decision.EventMint, Verdict: decision.VerdictDeny, Reason: ref.Reason,
-			Principal: principal, Auth: &decision.Auth{Method: cred.Method}})
+			Principal: principal, Auth: &decision.Auth{Method: cred.Method, Fingerprint: cred.Fingerprint}})
 		b.answerRefusal(w, r, ref)
 		return
 	}

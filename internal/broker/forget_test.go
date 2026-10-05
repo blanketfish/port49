@@ -25,7 +25,8 @@ func TestForgetRemovesThePinAndIsRecorded(t *testing.T) {
 		EntryID: "guid:0a1b", Refused: true, VerifiedAt: verified, GroupNames: nil}, time.Hour); err != nil {
 		t.Fatal(err)
 	}
-	text, err := f.b.Forget(ctx, alice, "admin_socket uid 0")
+	// Mixed case names the same principal: the broker spells it as the log does.
+	text, err := f.b.Forget(ctx, "user:Alice@Example.COM", "admin_socket uid 0")
 	if err != nil || !strings.Contains(text, "guid:0a1b") || !strings.Contains(text, "CN=Alice,OU=Staff,DC=corp") {
 		t.Fatalf("%q %v", text, err)
 	}
