@@ -98,7 +98,7 @@ Tasks 8b–16 plus a new Task 13b, each reviewed). It delivers:
 - the agent's one connection.
 
 L35 is measured and closed on five images. The lab's snapshot restore found a ledger bug, fixed
-in 79812ef (Plan 7d — As built, below). **7e written 2026-10-03** (`2026-10-03-07e-broker-process.md`, twenty-two tasks in two merges (eighteen, and 8a, 15a, 15b and 15c): 7e-1, Tasks 1–10 and 8a, the store a fleet of processes shares (a sealed write sequence and a high-water ledger per key, the context and marks feeds, the ledger record the daemon cannot write, `superseded` in the store, the decision-log emits under the hold, two carried fixes); 7e-2, Tasks 11–18 and 15a–15c, `port49-broker`, port49d on etcd with no broker inside, one runner per keyspace, the revocations file retired on etcd, and the lab; eighteen rulings recorded as decision 36; one question for Ryan, OR-1, `port49 revoke`'s default socket, closed by Ryan 2026-10-03 as recommended (unchanged); it opens L37 and L38 and measures them with L36); **7e-1 executed 2026-10-03** on `feature/broker-process`, each task reviewed (Plan 7e — As built, below). **7e-2 executed 2026-10-04** on `feature/broker-split`, each task reviewed, L36, L37 and L38 closed and L40 opened (Plan 7e — As built, "7e-2", below; merge and PR number to be added at the merge). 7f–7h and 8–13 not yet.
+in 79812ef (Plan 7d — As built, below). **7e written 2026-10-03** (`2026-10-03-07e-broker-process.md`, twenty-three tasks in two merges (eighteen, and 8a, 15a, 15b, 15c and 15d): 7e-1, Tasks 1–10 and 8a, the store a fleet of processes shares (a sealed write sequence and a high-water ledger per key, the context and marks feeds, the ledger record the daemon cannot write, `superseded` in the store, the decision-log emits under the hold, two carried fixes); 7e-2, Tasks 11–18 and 15a–15d, `port49-broker`, port49d on etcd with no broker inside, one runner per keyspace, the revocations file retired on etcd, and the lab; nineteen rulings recorded as decision 36; one question for Ryan, OR-1, `port49 revoke`'s default socket, closed by Ryan 2026-10-03 as recommended (unchanged); it opens L37 and L38 and measures them with L36); **7e-1 executed 2026-10-03** on `feature/broker-process`, each task reviewed (Plan 7e — As built, below). **7e-2 executed 2026-10-04** on `feature/broker-split`, each task reviewed, L36, L37 and L38 closed and L40 opened (Plan 7e — As built, "7e-2", below; merge and PR number to be added at the merge). 7f–7h and 8–13 not yet.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -3197,7 +3197,9 @@ plan's text, task by task:
   not delivered the record's revision in time: rising with `feed_up` 1 and etcd answering, the
   feed lags; it is not the store (final review M-4).
 
-**7e-2** (`feature/broker-split`, base `d06a391`, 2026-10-04): the two processes. Task by task:
+**7e-2** (`feature/broker-split`, base `d06a391`, 2026-10-04): the two processes. Task by task; two
+plan-amendment commits (`670bb7a`, amending 7e-2 to 7e-1 as built, and `1bb593d`, the pre-flight's
+fixes) precede Task 11:
 
 - **Task 11 (docs, decision 36's 7e-2 part; cd4b520, 509eb9b).** Differs from the plan's text:
   - §12 says `port49-broker`'s one subcommand is `revoke --offline`, not "no subcommand";
@@ -3312,7 +3314,7 @@ plan's text, task by task:
     socket.
   - Each changed message is tested for both processes.
 
-**The rulings as made, against Rulings 1–18 and OR-1** (decision 36 records each):
+**The rulings as made, against Rulings 1–19 and OR-1** (decision 36 records each):
 - **Rulings 1, 2, 3, 9, 10, 15, 16:** as planned.
 - **Ruling 4 (the ledger record):** as planned. T15-a closed one more case (the floor `min(hw,
   R-1)` above). The residual stands, exactly: a key written within the keeper's lag and put
@@ -3592,7 +3594,11 @@ every port49d`, never port49-broker.
 **Interfaces 7e-2 added:** `internal/port49d.Main` and `BrokerMain` (`cmd/port49d` and
 `cmd/port49-broker` are shims); `config.LoadBroker`, `Config.Role`, `Config.Policy`,
 `Config.KeyRefs`, `BrokerConfig.StateDir`; `store.Marks.Keep`; `etcd.Store.Judged`,
-`PutJudged`, `PutBundle`, `DeleteBundle`, `Bundles`, `Witness`, `PutWitness`, `FollowWitness`;
+`PutJudged`, `PutBundle`, `DeleteBundle`, `Bundles`, `Witness`, `PutWitness`, `FollowWitness`,
+`JudgeInDoubt`, `PutJudgedSince`, `BundlesAt`, `JudgedBundle`, `PutPurged`, `RestoreRead`, `Holder`,
+`PutRefreshOwed`, `RefreshOwed`, `ClearRefreshOwed`; `authen.Handler.WithRedeemGuard`;
+`guard.Config.Proc`; the gauges `port49_broker_mint_gate_closed`, `port49_redemption_restore_guarded`
+and `port49_policy_bundle_matches_runner` in `metrics.Metrics`;
 `broker.Broker.RefreshTokens`, `Proc`, `MintGate`, `Say`; `bundle.RaiseBound`, `KeyRefsFile`,
 `StopFleet`; the runner and its `markscopy`, `witness` and `restoreguard`; the lab's split
 harness (`startSplit`).
