@@ -434,6 +434,24 @@ func startCluster(t testing.TB) (*Cluster, error) {
 // Stop stops member i; stopping two of three loses the quorum.
 func (c *Cluster) Stop(i int) { c.once[i].Do(func() { c.members[i].Close() }) }
 
+// Kill stops member i at once, as a crash does: Stop's Close hands the
+// leadership to a peer first, which an election test must not have.
+func (c *Cluster) Kill(i int) { c.once[i].Do(func() { halt(c.members[i]) }) }
+
+// Leader is the index of the member that leads now.
+func (c *Cluster) Leader(t testing.TB) int {
+	t.Helper()
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+		for i, m := range c.members {
+			if m.Server.Leader() == m.Server.MemberID() {
+				return i
+			}
+		}
+	}
+	t.Fatal("no member leads")
+	return -1
+}
+
 // freePort is a var so a test can hand StartCluster a port already taken.
 var freePort = func(t testing.TB) string {
 	t.Helper()
