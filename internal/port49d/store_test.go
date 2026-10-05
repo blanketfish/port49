@@ -648,9 +648,10 @@ func TestARefusedWitnessReadNamesStoreRoles(t *testing.T) {
 // start's scan is not read, a context-pool timeout at call_timeout,
 // though the store answers it, and counted in
 // port49_store_fence_timeouts_total, which tells it from an etcd failure
-// (final review 7e-1 M-4). The health
-// check waits on the same fence, below the guard (plan 7f, Ruling 1), so with
-// the feed stopped it fails too, and the guard does not count it. The broker's half is TestTheBrokersStoreIsFencedUnderItsGuard.
+// (final review 7e-1 M-4). The health check waits on the same fence, below
+// the guard (plan 7f, Ruling 1), so with the feed stopped it fails too, and
+// the guard does not count it. The broker's half is
+// TestTheBrokersStoreIsFencedUnderItsGuard.
 func TestOpenStoresFencesEachLayerUnderItsGuard(t *testing.T) {
 	daemonCfg, _ := etcdSplit(t)
 	cfg, err := config.Load(daemonCfg)
