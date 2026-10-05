@@ -124,8 +124,8 @@ func TestAMappedValueIsEscapedInTheFilter(t *testing.T) {
 	if l.Filter != `(&(objectClass=person)(cn=\2a\29\28uid=\2a))` {
 		t.Fatalf("%s", l.Filter)
 	}
-	nul := leaf(t, nil)
-	nul.Subject.CommonName = "a\x00b" // set after parsing: CN is read from Subject.CommonName
+	raw, _ := asn1.Marshal(pkix.RDNSequence{{{Type: oidCN, Value: "a\x00b"}}})
+	nul := leaf(t, func(c *x509.Certificate) { c.RawSubject = raw })
 	if _, err := m.Lookup(nul, "(objectClass=person)"); !errors.Is(err, ErrUnmapped) {
 		t.Fatalf("a control character in a weak value: %v", err)
 	}
@@ -227,13 +227,9 @@ func sidExtension(t *testing.T, sid string) pkix.Extension {
 	return pkix.Extension{Id: oidSIDExtension, Value: names}
 }
 
-// upnExtension is a SAN holding one UPN otherName (UTF8String).
-func upnExtension(t *testing.T, upn string) pkix.Extension {
+// upnOtherName is one UPN otherName whose [0] EXPLICIT value is inner (DER).
+func upnOtherName(t *testing.T, inner []byte) []byte {
 	t.Helper()
-	inner, err := asn1.MarshalWithParams(upn, "utf8")
-	if err != nil {
-		t.Fatal(err)
-	}
 	other, err := asn1.Marshal(struct {
 		ID    asn1.ObjectIdentifier
 		Value asn1.RawValue
@@ -242,8 +238,27 @@ func upnExtension(t *testing.T, upn string) pkix.Extension {
 		t.Fatal(err)
 	}
 	other[0] = 0xa0
-	names, _ := asn1.Marshal(asn1.RawValue{Class: asn1.ClassUniversal, Tag: asn1.TagSequence, IsCompound: true, Bytes: other})
+	return other
+}
+
+// sanOf is a SAN extension holding the given otherNames.
+func sanOf(otherNames ...[]byte) pkix.Extension {
+	var body []byte
+	for _, o := range otherNames {
+		body = append(body, o...)
+	}
+	names, _ := asn1.Marshal(asn1.RawValue{Class: asn1.ClassUniversal, Tag: asn1.TagSequence, IsCompound: true, Bytes: body})
 	return pkix.Extension{Id: oidSAN, Value: names}
+}
+
+// upnExtension is a SAN holding one UPN otherName (UTF8String).
+func upnExtension(t *testing.T, upn string) pkix.Extension {
+	t.Helper()
+	inner, err := asn1.MarshalWithParams(upn, "utf8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sanOf(upnOtherName(t, inner))
 }
 
 // onlyEscaped fails unless value, the part of f after "attr=", holds no
@@ -341,4 +356,122 @@ func TestEveryKindEscapesHostileValues(t *testing.T) {
 			}
 		}
 	})
+}
+
+// subject_dn keys are injective: a CN holding DN syntax never keys as the
+// entry whose DN that syntax spells (review C-1; grace looks a principal up
+// by this key).
+func TestSubjectDNKeysAreInjective(t *testing.T) {
+	m := Mapping{Kind: MapSubjectDN, Attribute: "distinguishedName", AllowWeak: true, Issuers: pin}
+	subj := func(rdns ...[]pkix.AttributeTypeAndValue) string {
+		seq := pkix.RDNSequence{{{Type: oidDC, Value: "com"}}, {{Type: oidDC, Value: "corp"}}}
+		for _, r := range rdns {
+			seq = append(seq, r)
+		}
+		raw, _ := asn1.Marshal(seq)
+		l, err := m.Lookup(leaf(t, func(c *x509.Certificate) { c.RawSubject = raw }), "(objectClass=person)")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return l.Key
+	}
+	ou := asn1.ObjectIdentifier{2, 5, 4, 11}
+	comma := subj([]pkix.AttributeTypeAndValue{{Type: oidCN, Value: "alice,OU=admins"}})
+	plus := subj([]pkix.AttributeTypeAndValue{{Type: oidCN, Value: "alice+OU=admins"}})
+	multi := subj([]pkix.AttributeTypeAndValue{{Type: oidCN, Value: "alice"}, {Type: ou, Value: "admins"}})
+	two := subj([]pkix.AttributeTypeAndValue{{Type: ou, Value: "admins"}}, []pkix.AttributeTypeAndValue{{Type: oidCN, Value: "alice"}})
+	if comma == two || plus == two || multi == two || comma == plus || comma == multi || plus == multi {
+		t.Fatal("distinct subjects share a key")
+	}
+	entryKey := func(dn string) string { return m.KeysOf(ldap.NewEntry(dn, nil))[0] }
+	if entryKey("CN=alice,OU=admins,DC=corp,DC=com") != two {
+		t.Fatal("the entry's key is not the certificate's for the same name")
+	}
+	if entryKey(`CN=alice\,OU=admins,DC=corp,DC=com`) != comma || entryKey("CN=alice+OU=admins,DC=corp,DC=com") != multi {
+		t.Fatal("an escaped or multi-valued entry DN does not key as its certificate")
+	}
+	if entryKey(`CN=alice\,OU=admins,DC=corp,DC=com`) == entryKey("CN=alice,OU=admins,DC=corp,DC=com") {
+		t.Fatal("an escaped comma keys as an RDN boundary")
+	}
+}
+
+// A subject with two CNs is no cn mapping, never the last (review I-3).
+func TestTwoCNsAreUnmapped(t *testing.T) {
+	m := Mapping{Kind: MapCN, Attribute: "cn", AllowWeak: true, Issuers: pin}
+	raw, _ := asn1.Marshal(pkix.RDNSequence{{{Type: oidCN, Value: "mallory"}}, {{Type: oidCN, Value: "alice"}}})
+	if l, err := m.Lookup(leaf(t, func(c *x509.Certificate) { c.RawSubject = raw }), "(objectClass=person)"); !errors.Is(err, ErrUnmapped) {
+		t.Fatalf("%s %v", l.Filter, err)
+	}
+	raw, _ = asn1.Marshal(pkix.RDNSequence{{{Type: oidCN, Value: "mallory"}, {Type: oidCN, Value: "alice"}}})
+	if _, err := m.Lookup(leaf(t, func(c *x509.Certificate) { c.RawSubject = raw }), "(objectClass=person)"); !errors.Is(err, ErrUnmapped) {
+		t.Fatalf("one RDN holding two CNs: %v", err)
+	}
+	raw, _ = asn1.Marshal(pkix.RDNSequence{{{Type: oidDC, Value: "com"}}})
+	if _, err := m.Lookup(leaf(t, func(c *x509.Certificate) { c.RawSubject = raw }), "(objectClass=person)"); !errors.Is(err, ErrUnmapped) {
+		t.Fatalf("no CN: %v", err)
+	}
+}
+
+// A UPN otherName that does not parse counts, and fails closed (review I-4).
+func TestAMalformedUPNOrSIDIsNeverSkipped(t *testing.T) {
+	m := Mapping{Kind: MapSANUPN, Attribute: "userPrincipalName", AllowWeak: true, Issuers: pin}
+	good, _ := asn1.MarshalWithParams("alice@x", "utf8")
+	notString, _ := asn1.Marshal(7)
+	trailing := append(append([]byte{}, good...), 0x05, 0x00)
+	for name, inner := range map[string][]byte{"an INTEGER value": notString, "trailing bytes": trailing} {
+		c := leaf(t, func(c *x509.Certificate) {
+			c.EmailAddresses = nil
+			c.ExtraExtensions = append(c.ExtraExtensions, sanOf(upnOtherName(t, good), upnOtherName(t, inner)))
+		})
+		if l, err := m.Lookup(c, "(objectClass=person)"); !errors.Is(err, ErrUnmapped) {
+			t.Fatalf("%s: %s %v", name, l.Filter, err)
+		}
+		alone := leaf(t, func(c *x509.Certificate) {
+			c.EmailAddresses = nil
+			c.ExtraExtensions = append(c.ExtraExtensions, sanOf(upnOtherName(t, inner)))
+		})
+		if _, err := m.Lookup(alone, "(objectClass=person)"); !errors.Is(err, ErrUnmapped) {
+			t.Fatalf("%s alone: %v", name, err)
+		}
+	}
+	// two good UPNs: several
+	c := leaf(t, func(c *x509.Certificate) {
+		c.EmailAddresses = nil
+		c.ExtraExtensions = append(c.ExtraExtensions, sanOf(upnOtherName(t, good), upnOtherName(t, good)))
+	})
+	if _, err := m.Lookup(c, "(objectClass=person)"); !errors.Is(err, ErrUnmapped) {
+		t.Fatalf("two UPNs: %v", err)
+	}
+	// a SID extension with a sibling that is not an octet string
+	sidM := Mapping{Kind: MapSID, Attribute: "objectSid"}
+	one := sidExtension(t, "S-1-5-21-1")
+	var names []asn1.RawValue
+	asn1.Unmarshal(one.Value, &names)
+	bad, _ := asn1.Marshal(struct {
+		ID    asn1.ObjectIdentifier
+		Value asn1.RawValue
+	}{oidSIDValue, asn1.RawValue{Class: asn1.ClassContextSpecific, Tag: 0, IsCompound: true, Bytes: notString}})
+	bad[0] = 0xa0
+	body := append(append([]byte{}, names[0].FullBytes...), bad...)
+	seq, _ := asn1.Marshal(asn1.RawValue{Class: asn1.ClassUniversal, Tag: asn1.TagSequence, IsCompound: true, Bytes: body})
+	c = leaf(t, func(c *x509.Certificate) {
+		c.ExtraExtensions = append(c.ExtraExtensions, pkix.Extension{Id: oidSIDExtension, Value: seq})
+	})
+	if _, err := sidM.Lookup(c, "(objectClass=person)"); !errors.Is(err, ErrUnmapped) {
+		t.Fatalf("a malformed SID sibling: %v", err)
+	}
+}
+
+// ValidPin names only attribute types a pin can match (review M-5).
+func TestValidPin(t *testing.T) {
+	for _, ok := range []string{"CN=a,DC=b", "2.5.4.3=a", "OID.2.5.4.3=a,DOMAINCOMPONENT=com"} {
+		if !ValidPin(ok) {
+			t.Errorf("%q refused", ok)
+		}
+	}
+	for _, bad := range []string{"SERIALNUMBER=1,DC=b", "nonsense", "CN"} {
+		if ValidPin(bad) {
+			t.Errorf("%q accepted", bad)
+		}
+	}
 }

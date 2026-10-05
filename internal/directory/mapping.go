@@ -31,6 +31,7 @@ var (
 	oidSIDValue     = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 311, 25, 2, 1}
 	oidUPN          = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 311, 20, 2, 3}
 	oidSAN          = asn1.ObjectIdentifier{2, 5, 29, 17}
+	oidCNType       = asn1.ObjectIdentifier{2, 5, 4, 3}
 )
 
 // Lookup is one certificate's search under the mapping.
@@ -68,7 +69,10 @@ func (m Mapping) Lookup(leaf *x509.Certificate, userFilter string) (Lookup, erro
 			Key: store.MapKey(string(m.Kind), canonicalValue(m.Kind, sid))}, nil
 	case MapSANUPN:
 		upns, err := upnsOf(leaf)
-		if err != nil || len(upns) != 1 {
+		if err != nil {
+			return Lookup{}, unmapped("%v", err)
+		}
+		if len(upns) != 1 {
 			return Lookup{}, unmapped("the certificate carries %d UPN SANs; exactly one maps", len(upns))
 		}
 		value = upns[0]
@@ -80,7 +84,11 @@ func (m Mapping) Lookup(leaf *x509.Certificate, userFilter string) (Lookup, erro
 	case MapSubjectDN:
 		value = nameString(leaf.RawSubject)
 	case MapCN:
-		value = leaf.Subject.CommonName
+		cn, err := commonNameOf(leaf)
+		if err != nil {
+			return Lookup{}, unmapped("%v", err)
+		}
+		value = cn
 	default:
 		return Lookup{}, unmapped("mapping kind %q", m.Kind)
 	}
@@ -129,20 +137,66 @@ func canonicalValue(k MappingKind, v string) string {
 		}
 		return v
 	case MapSubjectDN:
-		if dn, err := ldap.ParseDN(v); err == nil {
-			var parts []string
-			for _, rdn := range dn.RDNs {
-				for _, a := range rdn.Attributes {
-					parts = append(parts, strings.ToLower(a.Type)+"="+strings.ToLower(a.Value))
-				}
-			}
-			return strings.Join(parts, ",")
-		}
-		return strings.ToLower(v)
+		return canonicalDN(v)
 	case MapSANUPN, MapSANEmail, MapCN:
 		return strings.ToLower(v)
 	}
 	return v
+}
+
+// canonicalDN is a DN in the one form both sides key (review C-1, I-1): per
+// RDN its attributes as type OID and lower-cased value, DN-escaped, sorted
+// and joined with "+", the RDNs joined with ",". Escaping every DN
+// metacharacter in a value keeps a comma, a plus or an equals sign in a value
+// from spelling an RDN boundary, so two DNs never share a form. A DN that does
+// not parse keys as itself behind a "?" no parsed form starts with.
+func canonicalDN(v string) string {
+	dn, err := ldap.ParseDN(v)
+	if err != nil {
+		return "?" + strings.ToLower(v)
+	}
+	rdns := make([]string, len(dn.RDNs))
+	for i, rdn := range dn.RDNs {
+		attrs := make([]string, len(rdn.Attributes))
+		for j, a := range rdn.Attributes {
+			attrs[j] = typeOID(a.Type) + "=" + escapeDNValue(strings.ToLower(a.Value))
+		}
+		slices.Sort(attrs)
+		rdns[i] = strings.Join(attrs, "+")
+	}
+	return strings.Join(rdns, ",")
+}
+
+// typeOID is an attribute type, a short name or an OID, as its canonical
+// lower-case short name when oidNames knows it, else its OID.
+func typeOID(t string) string {
+	t = strings.ToUpper(t)
+	oid, ok := nameOIDs[t]
+	if !ok {
+		oid = strings.TrimPrefix(t, "OID.")
+	}
+	if n, ok := oidNames[oid]; ok {
+		return strings.ToLower(n)
+	}
+	return strings.ToLower(oid)
+}
+
+// escapeDNValue backslash-escapes every character RFC 4514 reserves, and
+// the NUL it writes as \00, anywhere in v.
+func escapeDNValue(v string) string {
+	var sb strings.Builder
+	for _, r := range v {
+		switch r {
+		case 0:
+			sb.WriteString(`\00`)
+		case '\\', ',', '+', '"', '<', '>', ';', '=', '#':
+			sb.WriteByte('\\')
+			sb.WriteRune(r)
+		default:
+			sb.WriteRune(r)
+		}
+	}
+	return sb.String()
 }
 
 // oidNames is each attribute type a mapping or a pin names, by OID, as AD
@@ -240,6 +294,14 @@ func pinKeys(pin string) ([][]string, bool) {
 	return out, true
 }
 
+// ValidPin reports whether pin is an RFC 4514 DN whose every attribute type
+// a pin can match (a short name nameOIDs knows, or an OID): a pin naming
+// another type would never match and refuse every certificate (review M-5).
+func ValidPin(pin string) bool {
+	_, ok := pinKeys(pin)
+	return ok
+}
+
 // pinned reports whether leaf's issuer, read from its DER, equals one of
 // issuers (Ruling 1).
 func pinned(leaf *x509.Certificate, issuers []string) bool {
@@ -284,6 +346,33 @@ func ADIssuerSerial(leaf *x509.Certificate) string {
 	return "X509:<I>" + strings.Join(parts, ",") + "<SR>" + strings.ToUpper(hex.EncodeToString(r))
 }
 
+// commonNameOf is the one CN in leaf's subject, read from its DER: several
+// CNs, in one RDN or many, or a CN that is not a string is no mapping, never
+// the last (design §7; Go's pkix.Name keeps only one).
+func commonNameOf(leaf *x509.Certificate) (string, error) {
+	seq, err := rdnsOf(leaf.RawSubject)
+	if err != nil {
+		return "", err
+	}
+	var cns []string
+	for _, rdn := range seq {
+		for _, atv := range rdn {
+			if !atv.Type.Equal(oidCNType) {
+				continue
+			}
+			v, ok := atv.Value.(string)
+			if !ok {
+				return "", errors.New("the certificate's CN is not a string")
+			}
+			cns = append(cns, v)
+		}
+	}
+	if len(cns) != 1 {
+		return "", fmt.Errorf("the certificate's subject carries %d CNs; exactly one maps", len(cns))
+	}
+	return cns[0], nil
+}
+
 // SIDOf is the SID string in leaf's szOID_NTDS_CA_SECURITY_EXT, exactly one.
 func SIDOf(leaf *x509.Certificate) (string, error) {
 	var found []string
@@ -291,11 +380,16 @@ func SIDOf(leaf *x509.Certificate) (string, error) {
 		if !ext.Id.Equal(oidSIDExtension) {
 			continue
 		}
-		for _, v := range otherNames(ext.Value, oidSIDValue) {
+		vals, err := otherNames(ext.Value, oidSIDValue)
+		if err != nil {
+			return "", fmt.Errorf("the SID extension is malformed: %w", err)
+		}
+		for _, v := range vals {
 			var s []byte
-			if _, err := asn1.Unmarshal(v, &s); err == nil {
-				found = append(found, string(s))
+			if rest, err := asn1.Unmarshal(v, &s); err != nil || len(rest) > 0 {
+				return "", errors.New("the SID extension holds a value that is not one octet string")
 			}
+			found = append(found, string(s))
 		}
 	}
 	if len(found) != 1 {
@@ -304,18 +398,24 @@ func SIDOf(leaf *x509.Certificate) (string, error) {
 	return found[0], nil
 }
 
-// upnsOf is every UPN otherName in leaf's SAN.
+// upnsOf is every UPN otherName in leaf's SAN; one that does not parse is an
+// error, never skipped, so "several" cannot count as one.
 func upnsOf(leaf *x509.Certificate) ([]string, error) {
 	var out []string
 	for _, ext := range leaf.Extensions {
 		if !ext.Id.Equal(oidSAN) {
 			continue
 		}
-		for _, v := range otherNames(ext.Value, oidUPN) {
+		vals, err := otherNames(ext.Value, oidUPN)
+		if err != nil {
+			return nil, fmt.Errorf("the SAN is malformed: %w", err)
+		}
+		for _, v := range vals {
 			var s string
-			if _, err := asn1.UnmarshalWithParams(v, &s, "utf8"); err == nil {
-				out = append(out, s)
+			if rest, err := asn1.UnmarshalWithParams(v, &s, "utf8"); err != nil || len(rest) > 0 {
+				return nil, errors.New("the certificate carries a UPN SAN that is not one UTF8 string")
 			}
+			out = append(out, s)
 		}
 	}
 	return out, nil
@@ -323,27 +423,34 @@ func upnsOf(leaf *x509.Certificate) ([]string, error) {
 
 // otherNames is the inner value of every otherName of type id in a
 // GeneralNames: each GeneralName [0] IMPLICIT OtherName {type-id, [0]
-// EXPLICIT value}.
-func otherNames(der []byte, id asn1.ObjectIdentifier) [][]byte {
+// EXPLICIT value}. An otherName that does not parse to that shape, of any
+// type, is an error: it could be the second value of the one wanted.
+func otherNames(der []byte, id asn1.ObjectIdentifier) ([][]byte, error) {
 	var names []asn1.RawValue
-	if _, err := asn1.Unmarshal(der, &names); err != nil {
-		return nil
+	if rest, err := asn1.Unmarshal(der, &names); err != nil || len(rest) > 0 {
+		return nil, errors.New("not a GeneralNames")
 	}
 	var out [][]byte
 	for _, n := range names {
 		if n.Class != asn1.ClassContextSpecific || n.Tag != 0 {
 			continue
 		}
-		var on struct {
-			ID    asn1.ObjectIdentifier
-			Value asn1.RawValue `asn1:"explicit,tag:0"`
+		var typeID asn1.ObjectIdentifier
+		rest, err := asn1.Unmarshal(n.Bytes, &typeID)
+		if err != nil {
+			return nil, errors.New("an otherName with no type")
 		}
-		if _, err := asn1.UnmarshalWithParams(n.FullBytes, &on, "tag:0"); err != nil || !on.ID.Equal(id) {
+		if !typeID.Equal(id) {
 			continue
 		}
-		out = append(out, on.Value.Bytes)
+		var val asn1.RawValue
+		if rest, err = asn1.Unmarshal(rest, &val); err != nil || len(rest) > 0 ||
+			val.Class != asn1.ClassContextSpecific || val.Tag != 0 || !val.IsCompound {
+			return nil, errors.New("an otherName whose value is not [0] EXPLICIT")
+		}
+		out = append(out, val.Bytes)
 	}
-	return out
+	return out, nil
 }
 
 // sidBytes is a SID string in objectSid's binary form: revision, count,

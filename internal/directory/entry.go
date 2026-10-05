@@ -22,15 +22,16 @@ func (c Config) entryAttrs() []string {
 	return []string{c.PrincipalAttribute, c.UsernameAttribute, c.Mapping.Attribute, "objectGUID", "entryUUID"}
 }
 
-// entryID is e's immutable id (Ruling 3): objectGUID's bytes in hex (AD,
-// Samba), else entryUUID lower-cased (OpenLDAP, RFC 4530), else the DN
-// canonicalized, which an OU move changes.
+// entryID is e's immutable id (Ruling 3): entryUUID lower-cased (RFC 4530,
+// server-assigned: OpenLDAP, 389), else objectGUID's bytes in hex (AD, which
+// has no entryUUID), else the DN canonicalized, which an OU move changes.
+// entryUUID wins because some schemas let a user write objectGUID (review M-4).
 func entryID(e *ldap.Entry) string {
-	if raw := e.GetRawAttributeValue("objectGUID"); len(raw) > 0 {
-		return "guid:" + hex.EncodeToString(raw)
-	}
 	if u := e.GetAttributeValue("entryUUID"); u != "" {
 		return "uuid:" + strings.ToLower(u)
+	}
+	if raw := e.GetRawAttributeValue("objectGUID"); len(raw) > 0 {
+		return "guid:" + hex.EncodeToString(raw)
 	}
 	return "dn:" + canonicalValue(MapSubjectDN, e.DN)
 }
@@ -73,6 +74,10 @@ func (c Config) identityOf(e *ldap.Entry) (Identity, error) {
 	if err != nil {
 		return Identity{}, err
 	}
+	if !asciiName(p) {
+		return Identity{}, fmt.Errorf("%w: entry %s's %s is not printable ASCII (%d bytes)", ErrUnmapped,
+			printsafe.Line(e.DN, 200), c.PrincipalAttribute, len(p))
+	}
 	p = strings.ToLower(p)
 	if !printable(p) || strings.ContainsAny(p, " \t") || !strings.Contains(p, "@") {
 		return Identity{}, fmt.Errorf("%w: entry %s's %s is not a printable name with an @ (%d bytes)", ErrUnmapped,
@@ -81,6 +86,10 @@ func (c Config) identityOf(e *ldap.Entry) (Identity, error) {
 	u, err := one(c.UsernameAttribute)
 	if err != nil {
 		return Identity{}, err
+	}
+	if !asciiName(u) {
+		return Identity{}, fmt.Errorf("%w: entry %s's %s is not printable ASCII (%d bytes)", ErrUnmapped,
+			printsafe.Line(e.DN, 200), c.UsernameAttribute, len(u))
 	}
 	u = strings.ToLower(u)
 	switch {
@@ -94,26 +103,44 @@ func (c Config) identityOf(e *ldap.Entry) (Identity, error) {
 	return Identity{DN: e.DN, EntryID: entryID(e), Principal: "user:" + p, Username: u}, nil
 }
 
+// asciiName is whether s is bytes 0x21-0x7E only (spec §5.7), checked before
+// any case folding: Go folds U+212A to k, a directory's matching rule need
+// not (review I-2).
+func asciiName(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < 0x21 || s[i] > 0x7e {
+			return false
+		}
+	}
+	return true
+}
+
 // heldElsewhere is the DN of an entry under base_dn other than dn whose
 // attr equals value, "" for none: one search, size limit 2, and no
 // user_filter, so an entry outside it is found too, which only denies more
 // (pre-flight M-5). DNs compare as DNs.
 func (c Config) heldElsewhere(s Searcher, attr, value, dn string) (string, error) {
 	res, err := s.Search(ldap.NewSearchRequest(c.BaseDN, ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 2,
-		int(c.QueryTimeout.Seconds()), false, fmt.Sprintf("(%s=%s)", attr, ldap.EscapeFilter(value)), []string{"dn"}, nil))
+		int(c.QueryTimeout.Seconds()), false, fmt.Sprintf("(%s=%s)", attr, ldap.EscapeFilter(value)), []string{"1.1"}, nil))
 	if err != nil && !ldap.IsErrorWithCode(err, ldap.LDAPResultSizeLimitExceeded) {
 		return "", err
 	}
 	mine, _ := ldap.ParseDN(dn)
+	sawMine := false
 	if res != nil {
 		for _, e := range res.Entries {
 			if other, perr := ldap.ParseDN(e.DN); perr != nil || mine == nil || !other.EqualFold(mine) {
 				return e.DN, nil
 			}
+			sawMine = true
 		}
 	}
 	if err != nil { // more than two entries, none of the two returned another: still another
 		return "(further entries past the size limit)", nil
+	}
+	if !sawMine { // the server's matching rule disagrees with the value: not proof of uniqueness (review M-2)
+		return "", fmt.Errorf("%w: the search for %s=%q did not return %s itself; its matching rule must be case-insensitive",
+			ErrAmbiguous, attr, printsafe.Line(value, 200), printsafe.Line(dn, 200))
 	}
 	return "", nil
 }
@@ -142,5 +169,5 @@ func (c Config) principalUnique(s Searcher, id Identity) error {
 		return err
 	}
 	return fmt.Errorf("%w: %s %q is held by %s and by %s: two people under one principal is an impersonation path",
-		ErrAmbiguous, c.PrincipalAttribute, value, printsafe.Line(id.DN, 200), printsafe.Line(other, 200))
+		ErrAmbiguous, c.PrincipalAttribute, printsafe.Line(value, 200), printsafe.Line(id.DN, 200), printsafe.Line(other, 200))
 }

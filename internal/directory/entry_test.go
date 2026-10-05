@@ -45,14 +45,20 @@ func TestIdentityOfAnEntry(t *testing.T) {
 	if got := entryID(entry("CN=B,DC=Corp", nil)); got != "dn:cn=b,dc=corp" {
 		t.Fatalf("no id attribute: %s", got)
 	}
+	both := entry("CN=B,DC=corp", map[string][]string{"objectGUID": {"\x01"}, "entryUUID": {"AB"}})
+	if got := entryID(both); got != "uuid:ab" {
+		t.Fatalf("the server-assigned entryUUID wins over a possibly writable objectGUID: %s", got)
+	}
 	for name, attrs := range map[string]map[string][]string{
-		"no upn":          {"sAMAccountName": {"alice"}},
-		"two upns":        {"userPrincipalName": {"a@x", "b@x"}, "sAMAccountName": {"alice"}},
-		"a upn with no @": {"userPrincipalName": {"alice"}, "sAMAccountName": {"alice"}},
-		"a reserved name": {"userPrincipalName": {"r@x"}, "sAMAccountName": {"remote"}},
-		"a p49- name":     {"userPrincipalName": {"r@x"}, "sAMAccountName": {"p49-admin"}},
-		"a domain prefix": {"userPrincipalName": {"r@x"}, "sAMAccountName": {`CORP\alice`}},
-		"an unprintable":  {"userPrincipalName": {"r@x"}, "sAMAccountName": {"al\tice"}},
+		"no upn":           {"sAMAccountName": {"alice"}},
+		"two upns":         {"userPrincipalName": {"a@x", "b@x"}, "sAMAccountName": {"alice"}},
+		"a upn with no @":  {"userPrincipalName": {"alice"}, "sAMAccountName": {"alice"}},
+		"a reserved name":  {"userPrincipalName": {"r@x"}, "sAMAccountName": {"remote"}},
+		"a p49- name":      {"userPrincipalName": {"r@x"}, "sAMAccountName": {"p49-admin"}},
+		"a domain prefix":  {"userPrincipalName": {"r@x"}, "sAMAccountName": {`CORP\alice`}},
+		"a non-ascii upn":  {"userPrincipalName": {"\u212aate@corp.example.com"}, "sAMAccountName": {"mallory"}}, // U+212A KELVIN SIGN
+		"a non-ascii name": {"userPrincipalName": {"r@x"}, "sAMAccountName": {"\u0130van"}},
+		"an unprintable":   {"userPrincipalName": {"r@x"}, "sAMAccountName": {"al\tice"}},
 	} {
 		if _, err := c.identityOf(entry("CN=X,DC=corp", attrs)); !errors.Is(err, ErrUnmapped) {
 			t.Errorf("%s: %v", name, err)
@@ -102,6 +108,8 @@ func TestAPrincipalTwoEntriesHoldIsAmbiguous(t *testing.T) {
 // of filter metacharacters cannot widen them into a match of every entry.
 func TestUniquenessSearchesEscapeTheirValue(t *testing.T) {
 	d := newFakeDir()
+	d.on(`(userPrincipalName=\2a\29\28uid=\2a@x)`, entry("CN=X,DC=corp", nil))
+	d.on(`(sAMAccountName=a\2a)`, entry("CN=X,DC=corp", nil))
 	if err := adCfg().principalUnique(d, Identity{DN: "CN=X,DC=corp", Principal: "user:*)(uid=*@x"}); err != nil {
 		t.Fatal(err)
 	}
@@ -133,5 +141,35 @@ func TestUniquenessSearchErrorFailsClosed(t *testing.T) {
 	d.err["(sAMAccountName=alice)"] = errors.New("boom")
 	if err := adCfg().usernameUnique(d, Identity{DN: "CN=Alice,DC=corp", Username: "alice"}); err == nil {
 		t.Fatal("a failed uniqueness search passed")
+	}
+}
+
+// dn: entry ids are injective (review I-1): an escaped comma, an RDN
+// boundary and a multi-valued RDN are three DNs, three ids.
+func TestEntryIDDNIsInjective(t *testing.T) {
+	a := entryID(entry(`CN=alice\,OU=admins,DC=corp`, nil))
+	b := entryID(entry(`CN=alice,OU=admins,DC=corp`, nil))
+	c := entryID(entry(`CN=alice+OU=admins,DC=corp`, nil))
+	if a == b || b == c || a == c {
+		t.Fatalf("%s %s %s", a, b, c)
+	}
+	if entryID(entry("CN=B,DC=Corp", nil)) != entryID(entry("cn=b, dc=corp", nil)) {
+		t.Fatal("the same DN in another case or spacing is another id")
+	}
+}
+
+// A uniqueness search that does not return this entry is refused, not
+// passed (review M-2): the server's matching rule disagrees with the
+// canonical value.
+func TestUniquenessSearchThatMissesTheEntryItselfFailsClosed(t *testing.T) {
+	d := newFakeDir()
+	if err := adCfg().principalUnique(d, Identity{DN: "CN=A,DC=corp", Principal: "user:kate@corp"}); !errors.Is(err, ErrAmbiguous) {
+		t.Fatalf("%v", err)
+	}
+	if err := adCfg().usernameUnique(d, Identity{DN: "CN=A,DC=corp", Username: "kate"}); !errors.Is(err, ErrAmbiguous) {
+		t.Fatalf("%v", err)
+	}
+	if f := d.calls[0].Attributes; len(f) != 1 || f[0] != "1.1" {
+		t.Fatalf("attributes: %v", f)
 	}
 }

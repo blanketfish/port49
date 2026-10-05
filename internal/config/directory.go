@@ -300,7 +300,7 @@ func checkMapping(m mappingYAML) (directory.Mapping, error) {
 			"allow_weak: true and list the issuers it is pinned to (design §7)", p, m.Attribute, kind, m.Attribute)
 	}
 	for i, iss := range m.Issuers {
-		if _, err := ldap.ParseDN(iss); err != nil || !strings.Contains(iss, "=") {
+		if _, err := ldap.ParseDN(iss); err != nil || !strings.Contains(iss, "=") || !directory.ValidPin(iss) {
 			return directory.Mapping{}, fmt.Errorf("config: %sissuers[%d] %q: not an RFC 4514 DN", p, i, iss)
 		}
 		out.Issuers = append(out.Issuers, iss)
