@@ -209,6 +209,13 @@ func (c *marksCopy) write() {
 	}
 }
 
+// broken reports whether the last write of the file failed.
+func (c *marksCopy) broken() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.failing
+}
+
 // sorted is every mark held, sorted by kind and key; c.mu is held.
 func (c *marksCopy) sorted() []store.Revocation {
 	out := make([]store.Revocation, 0, len(c.m))

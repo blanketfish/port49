@@ -1682,6 +1682,100 @@ func TestAnOfflineRevokeGoesOnWhenThePolicyFileDoesNotLoad(t *testing.T) {
 	}
 }
 
+// A revocation made with every broker down stands in that host's
+// broker.state_dir/marks.json too, so an etcd restore from before it, which
+// no broker saw, does not lose it: the first broker started there puts it
+// back, naming alice (final review 7e-2 I-2).
+func TestAnOfflineRevokeSurvivesAnEtcdRestoreThroughTheHostsCopy(t *testing.T) {
+	var out syncBuffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	f := splitFleet(t)
+	const alice = "user:alice@example.com"
+	var rout, rerr bytes.Buffer
+	if code := offlineRevoke([]string{"--offline", "--config", f.broker, "--principal", alice}, &rout, &rerr); code != 0 {
+		t.Fatalf("exit %d: %s", code, rerr.String())
+	}
+	if !strings.Contains(rerr.String(), "stands in this host's broker.state_dir/"+stateMarksFile) ||
+		!strings.Contains(rerr.String(), "an etcd restore from before now loses this mark unless a port49-broker "+
+			"has run since") {
+		t.Fatalf("the report does not name the copy and the residual: %s", rerr.String())
+	}
+	if got := copyHolds(t, f.stateDir(t), alice); got != "1" {
+		t.Fatalf("the host's copy does not hold alice: %q", got)
+	}
+	root := f.srv.Client(t, "root")
+	ctx := context.Background()
+	if _, err := root.Delete(ctx, "/port49/v1/rv/principal/"+alice); err != nil {
+		t.Fatal(err) // what a restore from before the revocation leaves
+	}
+	startBroker(t, f.broker, &out, 1)
+	waitFor(t, &out, "port49-broker: runner: 1 revocation(s) in broker.state_dir/marks.json were missing from the store")
+	if !strings.Contains(out.String(), alice) {
+		t.Fatalf("the put-back line does not name alice:\n%s", out.String())
+	}
+	if resp, err := root.Get(ctx, "/port49/v1/rv/principal/"+alice); err != nil || len(resp.Kvs) != 1 {
+		t.Fatalf("the store lacks alice's mark after the takeover: %v %v", resp, err)
+	}
+}
+
+// A copy that cannot be written is said, and the revocation still stands in
+// the store (final review 7e-2 I-2).
+func TestAnOfflineRevokeSaysWhenTheHostsCopyCannotBeWritten(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root writes a directory its mode forbids")
+	}
+	f := splitFleet(t)
+	const alice = "user:alice@example.com"
+	dir := f.stateDir(t)
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(dir, 0o700) })
+	var rout, rerr bytes.Buffer
+	if code := offlineRevoke([]string{"--offline", "--config", f.broker, "--principal", alice}, &rout, &rerr); code != 0 {
+		t.Fatalf("exit %d: %s", code, rerr.String())
+	}
+	if !strings.Contains(rerr.String(), "the mark is NOT in this host's broker.state_dir/"+stateMarksFile) {
+		t.Fatalf("the failed write is not said: %s", rerr.String())
+	}
+	if resp, err := f.srv.Client(t, "root").Get(context.Background(), "/port49/v1/rv/principal/"+alice); err != nil ||
+		len(resp.Kvs) != 1 {
+		t.Fatalf("the store lacks the mark: %v %v", resp, err)
+	}
+}
+
+// An offline lift drops the mark from that host's copy, so its next takeover
+// does not put the lifted mark back (final review 7e-2 I-2).
+func TestAnOfflineLiftDropsTheMarkFromTheHostsCopy(t *testing.T) {
+	var out syncBuffer
+	e := stderr
+	t.Cleanup(func() { stderr = e })
+	stderr = &out
+	f := splitFleet(t)
+	const alice = "user:alice@example.com"
+	var rout, rerr bytes.Buffer
+	if code := offlineRevoke([]string{"--offline", "--config", f.broker, "--principal", alice}, &rout, &rerr); code != 0 {
+		t.Fatalf("exit %d: %s", code, rerr.String())
+	}
+	if got := copyHolds(t, f.stateDir(t), alice); got != "1" {
+		t.Fatalf("control: the host's copy does not hold alice after the revocation: %q", got)
+	}
+	rerr.Reset()
+	if code := offlineRevoke([]string{"--offline", "--config", f.broker, "--principal", alice, "--lift"}, &rout,
+		&rerr); code != 0 {
+		t.Fatalf("lift: exit %d: %s", code, rerr.String())
+	}
+	if got := copyHolds(t, f.stateDir(t), alice); got != "0" {
+		t.Fatalf("the host's copy still holds the lifted mark: %q\n%s", got, rerr.String())
+	}
+	startBroker(t, f.broker, &out, 1)
+	if strings.Contains(out.String(), "were missing from the store") {
+		t.Fatalf("the takeover put a lifted mark back:\n%s", out.String())
+	}
+}
+
 // A restore under a running runner, which compacts its marks watch past
 // its last change, is put back by the runner's hook before the marks
 // reload: the store holds alice again, and the reload lifts her from no

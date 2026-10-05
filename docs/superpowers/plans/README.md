@@ -3470,6 +3470,11 @@ path to IOS-XE devices. Plan 7f replaces the probe, and carries the gap.
      forgotten `etcdctl del` is never caught.
   The first runner puts back the marks the restore lost, says how many (naming up to 20), and
   purges the unspent tokens. Lift again anything it put back that was lifted on purpose.
+  Then revoke again every revocation made with every broker down since the snapshot
+  (`port49-broker revoke --offline`, or `etcdctl put` as root): no broker saw it, so no copy
+  holds it. The offline tool stands its mark in that host's `broker.state_dir/marks.json`, so a
+  broker started there puts it back; `etcdctl put` leaves no copy. Without it, a port49d
+  restart after the restore forgets the mark and the principal mints again with no line.
 - **A forgotten `etcdctl del` still purges.** Each broker records the latest `meta/witness` it
   saw in `broker.state_dir/witness.json`. A runner that finds the store's witness below it says
   `the store was restored from a snapshot`, naming both revisions, and purges every unspent
@@ -3542,7 +3547,10 @@ port49d's socket answers `keys diagnose`; the broker's says to use port49d's. Wi
 broker down: `port49-broker revoke --offline --config /etc/port49/port49-broker.yaml
 --principal <p>` on a broker host; with none, as etcd's root `etcdctl put
 <prefix>v1/rv/principal/<p> '{"kind":"principal","key":"<p>","at":"<now>","origin":"etcdctl"}'`.
-Either way every port49d denies the session's next command. A broker that is busy says `or stop
+Either way every port49d denies the session's next command. The offline tool also stands the
+mark in that host's `broker.state_dir/marks.json` (and drops a lifted one), and says so; the
+etcdctl path leaves no copy, and an etcd restore from before either loses it until it is revoked
+again (runbook, above). A broker that is busy says `or stop
 every port49d`, never port49-broker.
 
 *Other.*

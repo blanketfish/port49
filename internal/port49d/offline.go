@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -22,6 +23,7 @@ import (
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/session"
+	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/store/crypt"
 	"github.com/rhwendt/port49/internal/store/guard"
 )
@@ -67,13 +69,14 @@ func offlineRevoke(args []string, log, out io.Writer) int {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	brk, noPolicy, closeStore, err := offlineBroker(ctx, *cfgPath, log, out)
+	run, err := offlineBroker(ctx, *cfgPath, log, out)
 	if err != nil {
 		fmt.Fprintf(out, "%s%v; nothing was revoked; with no broker host, write the mark as etcd's root under rv/, "+
 			"which every port49d follows\n", offlineSay, err)
 		return 1
 	}
-	defer closeStore()
+	defer run.close()
+	brk := run.brk
 	// Who ran it, as the admin socket's origin names its caller (spec §5.7).
 	req := broker.RevokeRequest{Principal: *principal, Issuer: *issuer, Serial: *serial,
 		Origin: fmt.Sprintf("offline uid %d", os.Getuid())}
@@ -83,11 +86,17 @@ func offlineRevoke(args []string, log, out io.Writer) int {
 			fmt.Fprintln(out, offlineFailed(true, err))
 			return 1
 		}
-		// The copies of the marks hold it still (marksCopy): the next runner
-		// puts it back, as it would a mark an etcd restore lost.
-		fmt.Fprintf(out, "%s%s\nevery port49-broker's broker.state_dir/%s still holds it: the next runner puts it "+
+		// This host's copy drops it. Every other host's holds it still
+		// (marksCopy): its next runner puts it back, as it would a mark an
+		// etcd restore lost.
+		copied := "this host's broker.state_dir/" + stateMarksFile + " no longer holds it"
+		if err := offlineCopy(run.stateDir, rep.Mark, true, out); err != nil {
+			copied = fmt.Sprintf("this host's broker.state_dir/%s could not be updated (%v) and still holds it",
+				stateMarksFile, err)
+		}
+		fmt.Fprintf(out, "%s%s\n%s; every other host's broker.state_dir/%s still holds it: its next runner puts it "+
 			"back; once a port49-broker runs, lift it again with port49 revoke --lift\n", offlineSay,
-			rep.LiftedText(), stateMarksFile)
+			rep.LiftedText(), copied, stateMarksFile)
 		if rep.Partial() {
 			return 1
 		}
@@ -99,12 +108,45 @@ func offlineRevoke(args []string, log, out io.Writer) int {
 		return 1
 	}
 	// No policy was read, so whether it names the principal is unknown, not no.
-	rep.Unnamed = rep.Unnamed && !noPolicy
-	fmt.Fprintf(out, "%s%s\n", offlineSay, rep.Text())
+	rep.Unnamed = rep.Unnamed && !run.noPolicy
+	// The mark also stands in this host's copy, which no broker has seen: an
+	// etcd restore from before it would lose it, and the runbook's restart
+	// after the restore would let the principal mint again (final review 7e-2
+	// I-2).
+	copied := fmt.Sprintf("the mark stands in this host's broker.state_dir/%s, which the next port49-broker started "+
+		"here keeps in force and puts back; an etcd restore from before now loses this mark unless a port49-broker "+
+		"has run since, so revoke again after such a restore", stateMarksFile)
+	if err := offlineCopy(run.stateDir, rep.Mark, false, out); err != nil {
+		copied = fmt.Sprintf("the mark is NOT in this host's broker.state_dir/%s (%v): an etcd restore from before "+
+			"now loses it unless another port49-broker's copy holds it, so revoke again after such a restore",
+			stateMarksFile, err)
+	}
+	fmt.Fprintf(out, "%s%s\n%s%s\n", offlineSay, rep.Text(), offlineSay, copied)
 	if rep.Partial() {
 		return 1
 	}
 	return 0
+}
+
+// offlineCopy stands mark in this host's broker.state_dir/marks.json, or
+// drops it when lifted, through the copy port49-broker keeps (openMarksCopy),
+// after the same owner checks a start makes (ownStateDir): the copy is what a
+// takeover puts back after an etcd restore, and no broker ran to write it.
+// The error is why it was not written.
+func offlineCopy(stateDir string, mark store.Revocation, lifted bool, out io.Writer) error {
+	if err := ownStateDir(stateDir); err != nil {
+		return err
+	}
+	c := openMarksCopy(filepath.Join(stateDir, stateMarksFile), out)
+	if lifted {
+		c.Apply(store.MarkChange{Revocation: mark, Standing: false})
+	} else {
+		c.stand([]store.Revocation{mark})
+	}
+	if c.broken() {
+		return errors.New("the write failed, as the line above says")
+	}
+	return nil
 }
 
 // offlineFailed is the line for a revocation (or a lift) that did not
@@ -131,6 +173,16 @@ func offlineFailed(lift bool, err error) string {
 		"mark as etcd's root under rv/, which every port49d follows", offlineSay, cause)
 }
 
+// offlineRun is what offlineBroker builds: the broker, whether it runs on the
+// empty policy (the real one did not load), this host's broker.state_dir, and
+// the close of the store.
+type offlineRun struct {
+	brk      *broker.Broker
+	noPolicy bool
+	stateDir string
+	close    func()
+}
+
 // offlineBroker is the broker offlineRevoke runs on: port49-broker.yaml
 // at cfgPath, the policy in force there, and one attempt at the store on
 // the broker's identity, its roles checked (attempt; Ruling 10), under the
@@ -144,18 +196,18 @@ func offlineFailed(lift bool, err error) string {
 // report's note that no subject names the principal and its list of live
 // contexts to close on the device. So it goes on with a policy that names no
 // subject and no device, says so once, and noPolicy is true.
-func offlineBroker(ctx context.Context, cfgPath string, log, out io.Writer) (brk *broker.Broker, noPolicy bool,
-	closeStore func(), err error) {
+func offlineBroker(ctx context.Context, cfgPath string, log, out io.Writer) (run offlineRun, err error) {
 	cfg, err := config.LoadBroker(cfgPath)
 	if err != nil {
-		return nil, false, nil, err
+		return offlineRun{}, err
 	}
 	keys, err := cfg.EncryptionKeys()
 	if err != nil {
-		return nil, false, nil, err
+		return offlineRun{}, err
 	}
 	inventoryFrom := "inventory_file " + cfg.InventoryFile
 	var pol *policy.Policy
+	noPolicy := false
 	if svc := cfg.InventoryService; svc == nil {
 		if cfg.Inventory, _, err = fencedInventory(cfg); err != nil {
 			pol, noPolicy = offlineNoPolicy(out, err), true
@@ -173,26 +225,28 @@ func offlineBroker(ctx context.Context, cfgPath string, log, out io.Writer) (brk
 			pol, noPolicy = offlineNoPolicy(out, err), true
 		}
 	}
+	run.noPolicy = noPolicy
 	m := metrics.New(prometheus.NewRegistry())
 	b, err := attempt(ctx, cfg, m, out)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
-			return nil, false, nil, errors.New("stopped")
+			return offlineRun{}, errors.New("stopped")
 		}
-		return nil, false, nil, fmt.Errorf("store: %w", err)
+		return offlineRun{}, fmt.Errorf("store: %w", err)
 	}
 	gc := guardConfig(procOf(cfg), "broker", cfg.Store.Etcd, m, out, func(error) {})
 	gc.StopAfter, gc.Unhealthy = 0, nil
 	st := crypt.Wrap(guard.WrapRev(b, gc), keys, m.CryptOpenFailures, crypt.WithLedger(crypt.NewLedger()),
 		crypt.OnUnopenable(unopenableSayer("port49-broker", keys, out, time.Now)))
-	brk = &broker.Broker{Policy: policy.NewLive(pol), Store: st, Now: time.Now, Metrics: m,
+	brk := &broker.Broker{Policy: policy.NewLive(pol), Store: st, Now: time.Now, Metrics: m,
 		Log:            decision.NewJSONLinesWithFailureHook(log, m.DecisionLogWriteFailures.Inc),
 		ContextIdleTTL: cfg.ContextIdleTTL, GraceWindow: cfg.Session.GraceWindow, RevokeTimeout: admin.OpTimeout,
 		Proc: "port49-broker"}
 	brk.Redact = redactorFor(brk.Policy)
 	brk.Sessions = session.New(st, time.Now, cfg.ContextIdleTTL, cfg.Session.IndexTTL)
 	brk.Say = func(format string, args ...any) { fmt.Fprintf(out, "port49-broker: "+format+"\n", args...) }
-	return brk, noPolicy, func() { b.Close() }, nil
+	run.brk, run.stateDir, run.close = brk, cfg.Broker.StateDir, func() { b.Close() }
+	return run, nil
 }
 
 // offlineNoPolicy is the policy offlineBroker goes on with when the policy
