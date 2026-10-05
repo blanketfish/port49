@@ -376,7 +376,10 @@ func TestABindRefusalReachesUnavailableAndBindsNoOtherServer(t *testing.T) {
 	}
 	f.setRefuse(west1.URI, nil)
 	clk.Add(2 * time.Minute)
-	p.Check(context.Background()) // the probe: accepted, the hold-off is clear
+	p.Check(context.Background())                                           // the probe: accepted, the hold-off is clear
+	if _, err := p.Do(context.Background(), searchFor("(x)")); err != nil { // dc-02 bound: dc-01 is checked again
+		t.Fatal(err)
+	}
 	f.setDown(west1.URI, true)
 	p.Check(context.Background())
 	p.Check(context.Background()) // two faults in a row
@@ -402,29 +405,110 @@ func binds(f *fakeServers) int {
 	return n
 }
 
-// A wrong password over 10 minutes and 100 queries across three servers is
-// at most 5 bind attempts (1m, then doubling): AD counts every DC's failed
-// binds toward one lockout.
-func TestAWrongPasswordBindsAtMostFiveTimesInTenMinutes(t *testing.T) {
+// dcs is n servers of one site, ranked in order.
+func dcs(n int) []Server {
+	out := make([]Server, n)
+	for i := range out {
+		out[i] = Server{URI: fmt.Sprintf("ldaps://dc-%02d", i+1), Priority: 1000 - i, Site: "us-west"}
+	}
+	return out
+}
+
+// failedBinds runs a wrong password over d, a query every 6s and a Check
+// every 30s, and counts the binds.
+func failedBinds(t *testing.T, servers []Server, d time.Duration) int {
+	t.Helper()
 	invalid := ldap.NewError(ldap.LDAPResultInvalidCredentials, errors.New("invalid credentials"))
-	f := newFakeServers(west1.URI, west2.URI, east.URI)
-	for _, s := range []Server{west1, west2, east} {
+	f := newFakeServers()
+	for _, s := range servers {
+		f.dirs[s.URI] = newFakeDir()
 		f.setRefuse(s.URI, invalid)
 	}
 	clk := newClock()
-	p := NewPool(poolCfg("us-west", west1, west2, east), f.dial, noCheck, clk.Now, metrics.New(prometheus.NewRegistry()),
+	p := NewPool(poolCfg("us-west", servers...), f.dial, noCheck, clk.Now, metrics.New(prometheus.NewRegistry()),
 		(&lines{}).say)
-	for i := 0; i < 100; i++ {
+	for at := time.Duration(0); at < d; at += 6 * time.Second {
 		if _, err := p.Do(context.Background(), searchFor("(x)")); !errors.Is(err, ErrUnavailable) {
-			t.Fatalf("query %d: %v", i, err)
+			t.Fatalf("at %v: %v", at, err)
 		}
-		if i%5 == 4 {
+		if (at/(6*time.Second))%5 == 4 {
 			p.Check(context.Background())
 		}
 		clk.Add(6 * time.Second)
 	}
-	if n := binds(f); n > 5 {
-		t.Fatalf("%d bind attempts in 10 minutes, want at most 5", n)
+	return binds(f)
+}
+
+// A wrong password everywhere: AD counts every DC's failed binds toward one
+// lockout. With N servers the bound is N+4 failed binds in the first 30
+// minutes (each server's first refusal holds the pool at 1m, so N binds in
+// the first N minutes; then probes at N, N+2, N+6 and N+14 minutes, the
+// hold-off doubling per refusal from a server that had refused before, to
+// its 15m cap) and then one per 15 minutes: 6 for three servers in 10
+// minutes, 9 for five servers in 30.
+func TestAWrongPasswordBindsAtMostNPlusFourTimesInThirtyMinutes(t *testing.T) {
+	if n := failedBinds(t, dcs(3), 10*time.Minute); n > 6 {
+		t.Fatalf("%d bind attempts in 10 minutes across 3 servers, want at most 6", n)
+	}
+	if n := failedBinds(t, dcs(5), 30*time.Minute); n > 9 {
+		t.Fatalf("%d bind attempts in 30 minutes across 5 servers, want at most 9 (N+4)", n)
+	}
+	if n := failedBinds(t, dcs(1), 30*time.Minute); n > 5 {
+		t.Fatalf("%d bind attempts in 30 minutes on one server, want at most 5", n)
+	}
+}
+
+// Five misconfigured DCs ranked above one good one (Re-review I-4): each
+// first refusal holds the pool at 1m without doubling it, so the probe
+// walks them one a minute and reaches the good DC at once; 120 logins over
+// two hours lose only those first minutes.
+func TestFiveBadDCsAboveAGoodOneCostFiveMinutes(t *testing.T) {
+	servers := dcs(6)
+	f := newFakeServers()
+	for _, s := range servers {
+		f.dirs[s.URI] = newFakeDir()
+	}
+	for _, s := range servers[:5] {
+		f.setRefuse(s.URI, ldap.NewError(ldap.LDAPResultInvalidCredentials, errors.New("invalid credentials")))
+	}
+	clk := newClock()
+	say := &lines{}
+	p := NewPool(poolCfg("us-west", servers...), f.dial, noCheck, clk.Now, metrics.New(prometheus.NewRegistry()), say.say)
+	failed := 0
+	for at := time.Duration(0); at < 2*time.Hour; at += 30 * time.Second {
+		p.Check(context.Background())
+		if at%time.Minute == 0 {
+			if _, err := p.Do(context.Background(), searchFor("(x)")); err != nil {
+				failed++
+				if at > 6*time.Minute {
+					t.Fatalf("a login at %v failed: %v\n%s", at, err, strings.Join(say.l, "\n"))
+				}
+			}
+		}
+		clk.Add(30 * time.Second)
+	}
+	if failed > 6 {
+		t.Fatalf("%d logins failed, want only the first minutes", failed)
+	}
+}
+
+// One slow dial charges one fault, not one per query waiting on it
+// (Re-review N-4).
+func TestOneSlowDialChargesOneFault(t *testing.T) {
+	f := newFakeServers(west1.URI)
+	f.dialDelay = 300 * time.Millisecond
+	cfg := poolCfg("us-west", west1)
+	cfg.QueryTimeout = 100 * time.Millisecond
+	m := metrics.New(prometheus.NewRegistry())
+	p := NewPool(cfg, f.dial, noCheck, newClock().Now, m, (&lines{}).say)
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); _, _ = p.Do(context.Background(), searchFor("(x)")) }()
+	}
+	wg.Wait()
+	if n := testutil.ToFloat64(m.DirectoryQueries.WithLabelValues(west1.Label(), "fault")); n > 1 {
+		t.Fatalf("%v faults charged for one slow dial", n)
 	}
 }
 

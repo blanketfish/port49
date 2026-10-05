@@ -79,6 +79,10 @@ func (s Server) Label() string {
 	return u.Host
 }
 
+// errWaitEnded is a query's budget ending while it waited for another
+// query's dial: that dial's outcome is the only one charged to the server.
+var errWaitEnded = errors.New("budget spent waiting for another query's dial")
+
 // ErrBindRefused is what a Dialer wraps a refusal in that is not an LDAP
 // result code (a KDC refusing the principal): the credential was refused,
 // not the server down.
@@ -233,6 +237,12 @@ func (p *Pool) Do(ctx context.Context, f func(Searcher) error) (Server, error) {
 		}
 		tried[i] = true
 		srv := p.srv[i].Server
+		if errors.Is(err, errWaitEnded) {
+			if ctx.Err() != nil {
+				return Server{}, ctx.Err()
+			}
+			return Server{}, fmt.Errorf("%w (the last: %s: %v)", ErrUnavailable, srv.Label(), err)
+		}
 		dialErr := err != nil
 		if err == nil {
 			err = f(bound{ctx: qctx, c: conn})
@@ -352,7 +362,9 @@ func (p *Pool) acquire(ctx context.Context, tried map[int]bool) (int, Client, in
 			s := p.srv[j]
 			return !s.open && !tried[j] && (s.conn != nil || s.dialing != nil || p.bindableLocked(s))
 		}
-		if p.sel >= 0 && eligible(p.sel) {
+		// The selection is kept unless it is an unbound server that has
+		// refused: then the order below finds a better one to bind.
+		if p.sel >= 0 && eligible(p.sel) && (p.srv[p.sel].conn != nil || p.srv[p.sel].refuseStep == 0) {
 			i = p.sel
 		} else {
 			for _, j := range p.orderLocked() {
@@ -381,7 +393,7 @@ func (p *Pool) acquire(ctx context.Context, tried map[int]bool) (int, Client, in
 			case <-wait:
 				continue
 			case <-ctx.Done():
-				return i, nil, 0, ctx.Err()
+				return i, nil, 0, errWaitEnded
 			}
 		}
 		probe := p.beginBindLocked()
@@ -473,6 +485,28 @@ func (p *Pool) bindableLocked(s *serverState) bool {
 	return !now.Before(p.holdUntil) && !p.probing
 }
 
+// leaveRefuserLocked is whether Check leaves a server that has refused
+// alone this round: nothing is bound yet and another closed server has
+// never refused, so a query is about to bind that one and a refusal here
+// would start a hold-off in its way. Once a server is bound, or when every
+// server has refused, a refuser is retried per its own backoff.
+func (p *Pool) leaveRefuserLocked(s *serverState) bool {
+	if s.refuseStep == 0 {
+		return false
+	}
+	good := false
+	for _, o := range p.srv {
+		switch {
+		case o == s:
+		case o.conn != nil:
+			return false
+		case !o.open && o.refuseStep == 0:
+			good = true
+		}
+	}
+	return good
+}
+
 // beginBindLocked marks the start of a bind: after a hold-off it is the
 // probe, of which one runs at a time.
 func (p *Pool) beginBindLocked() (probe bool) {
@@ -492,10 +526,16 @@ func (p *Pool) beginBindLocked() (probe bool) {
 // steps its own backoff, and starts or steps the pool's hold-off: said once
 // per server an hour with the mechanism and the result code, and at each
 // pool step with the next attempt's time. The error carries neither the
-// password nor the keytab (Task 7). Operators: a refused service-account
-// bind holds off every bind, at most 6 failed binds in the first 30
-// minutes and 4 an hour after that; exempt the service account from
-// lockout or set its threshold above that.
+// password nor the keytab (Task 7).
+//
+// Operators: with every one of N servers refusing, the pool makes at most
+// N+4 failed binds in the first 30 minutes (N, one a minute, as each
+// server's first refusal holds the pool at 1m; then probes at N, N+2, N+6
+// and N+14 minutes as the hold-off doubles to its 15m cap) and one per 15
+// minutes after: 9 for five servers. Once any server accepts, each server
+// that keeps refusing is bound again only per its own backoff, 1m doubling
+// to 15m, so at most 4 an hour each at the cap. Exempt the service account
+// from lockout, or set its threshold above N+4 per 30 minutes.
 func (p *Pool) bindDoneLocked(s *serverState, probe bool, err error) {
 	if probe {
 		p.probing = false
@@ -514,10 +554,16 @@ func (p *Pool) bindDoneLocked(s *serverState, probe bool, err error) {
 	}
 	p.m.DirectoryQueries.WithLabelValues(s.Label(), "refused").Inc()
 	s.healthySince = time.Time{}
+	first := s.refuseStep == 0
 	s.refuseStep = nextBackoff(s.refuseStep)
 	s.refuseUntil = now.Add(s.refuseStep)
 	if p.holdStep == 0 || !now.Before(p.holdUntil) {
-		p.holdStep = nextBackoff(p.holdStep)
+		// A server's first refusal holds the pool at its current step (1m
+		// from clear) without doubling it, so a probe walks the servers that
+		// have not refused at one a minute (Re-review I-4).
+		if p.holdStep == 0 || !first {
+			p.holdStep = nextBackoff(p.holdStep)
+		}
 		p.holdUntil = now.Add(p.holdStep)
 		p.say("directory: %s refused the bind; no server is bound for %s, until %s (the next attempt is one probe "+
 			"bind); queries on a bound connection continue, and the rest fall to directory.grace",
@@ -602,7 +648,7 @@ func (p *Pool) Check(ctx context.Context) {
 	for _, i := range order {
 		s := p.srv[i]
 		p.mu.Lock()
-		skip := (s.open && now.Sub(s.openedAt) < p.cfg.ProbeInterval) || !p.bindableLocked(s)
+		skip := (s.open && now.Sub(s.openedAt) < p.cfg.ProbeInterval) || !p.bindableLocked(s) || p.leaveRefuserLocked(s)
 		var probe bool
 		if !skip {
 			probe = p.beginBindLocked()
