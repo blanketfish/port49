@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The lab's compose files name in-container paths and the lab's keys by
@@ -46,8 +47,29 @@ func TestComposeLabFilesNameTheContainersPaths(t *testing.T) {
 	if !strings.Contains(files["inventory.yaml"], composeGateway) {
 		t.Errorf("inventory.yaml lists no device at the gateway %s", composeGateway)
 	}
+	// The health checks are the daemon's alone (decision 37), and the context
+	// cache is off in the lab: L41 measures nothing about it.
+	if !strings.Contains(d, "health: {interval: 1s, close_after: 5, open_after: 3}") {
+		t.Errorf("port49d.yaml names no health checks:\n%s", d)
+	}
+	if strings.Contains(files["port49-broker.yaml"], "health:") {
+		t.Errorf("port49-broker.yaml names health checks:\n%s", files["port49-broker.yaml"])
+	}
+	for _, name := range []string{"port49d.yaml", "port49-broker.yaml"} {
+		if strings.Contains(files[name], "context_cache") {
+			t.Errorf("%s names a context cache:\n%s", name, files[name])
+		}
+	}
 	if strings.Contains(files["port49-broker.env"], "PORT49_LAB_KEY") || !strings.Contains(files["port49d.env"], "PORT49_LAB_KEY=") {
 		t.Errorf("the device key is not port49d's alone")
+	}
+}
+
+// The dark bound under the health checks (decision 37): close_after ×
+// interval + call_timeout, with 5s for the 250ms poll and the process.
+func TestHealthDarkBound(t *testing.T) {
+	if got, want := healthDarkBound(time.Second, 500*time.Millisecond, 5), 10500*time.Millisecond; got != want {
+		t.Fatalf("healthDarkBound = %s, want %s", got, want)
 	}
 }
 

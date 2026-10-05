@@ -28,17 +28,40 @@ const (
 	composeProject = "port49lab"
 )
 
+// The lab's health checks, which every compose run's port49d.yaml names
+// (decision 37): the defaults, said. The context cache is off in the lab:
+// L41 measures nothing about it, and a cache would answer cell 3's command
+// from memory and play a part in what the closed listener is measured doing.
+const (
+	labHealthInterval = time.Second
+	labCloseAfter     = 5
+	labOpenAfter      = 3
+)
+
+// healthDarkBound is the longest an idle port49d on a hung store takes to
+// close its listeners under its health checks (decision 37): closeAfter
+// checks interval apart, the last bounded by callTimeout; 5s is slack for
+// the 250ms poll and the process.
+func healthDarkBound(interval, callTimeout time.Duration, closeAfter int) time.Duration {
+	return time.Duration(closeAfter)*interval + callTimeout + 5*time.Second
+}
+
 // composeStoreBlock is the store: block deploy/compose's configs name for
 // component ("daemon" or "broker"), with the three in-container endpoints
-// and the lab's hold_ttl (storeLab's).
+// and the lab's hold_ttl (storeLab's). The daemon's also names the health
+// checks; the broker has none.
 func composeStoreBlock(component string) string {
 	identity := "port49d"
+	health := ""
 	if component == "broker" {
 		identity = "port49-broker"
+	} else {
+		health = fmt.Sprintf("    health: {interval: %s, close_after: %d, open_after: %d}\n",
+			labHealthInterval, labCloseAfter, labOpenAfter)
 	}
 	return fmt.Sprintf("\nstore:\n  backend: etcd\n  etcd:\n    endpoints: [https://etcd-1:2379, https://etcd-2:2379, https://etcd-3:2379]\n"+
 		"    ca_file: /etc/port49/etcd/ca.pem\n    %s: {cert_file: /etc/port49/etcd/%s.pem, key_file: /etc/port49/etcd/%s-key.pem}\n"+
-		"    hold_ttl: 60s\n", component, identity, identity)
+		"    hold_ttl: 60s\n%s", component, identity, identity, health)
 }
 
 // composeLabFiles is the lab's version of deploy/compose's four YAML files
