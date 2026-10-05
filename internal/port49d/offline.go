@@ -15,6 +15,7 @@ import (
 
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/broker"
+	"github.com/rhwendt/port49/internal/bundle"
 	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/daemon/admin"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
@@ -66,9 +67,10 @@ func offlineRevoke(args []string, log, out io.Writer) int {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	brk, closeStore, err := offlineBroker(ctx, *cfgPath, log, out)
+	brk, noPolicy, closeStore, err := offlineBroker(ctx, *cfgPath, log, out)
 	if err != nil {
-		fmt.Fprintf(out, "%s%v; nothing was revoked\n", offlineSay, err)
+		fmt.Fprintf(out, "%s%v; nothing was revoked; with no broker host, write the mark as etcd's root under rv/, "+
+			"which every port49d follows\n", offlineSay, err)
 		return 1
 	}
 	defer closeStore()
@@ -96,6 +98,8 @@ func offlineRevoke(args []string, log, out io.Writer) int {
 		fmt.Fprintln(out, offlineFailed(false, err))
 		return 1
 	}
+	// No policy was read, so whether it names the principal is unknown, not no.
+	rep.Unnamed = rep.Unnamed && !noPolicy
 	fmt.Fprintf(out, "%s%s\n", offlineSay, rep.Text())
 	if rep.Partial() {
 		return 1
@@ -133,19 +137,28 @@ func offlineFailed(lift bool, err error) string {
 // broker's guard and sealing layer with a ledger of its own and no fence:
 // nothing follows the store here, and it only writes marks and revokes. No
 // listener and no minter. closeStore closes the store.
-func offlineBroker(ctx context.Context, cfgPath string, log, out io.Writer) (*broker.Broker, func(), error) {
+//
+// A policy or inventory that does not load does not stop it (final review
+// 7e-2 I-1): that is when every broker crash-loops, and the policy decides
+// nothing about access here. It reads the policy for two things only, the
+// report's note that no subject names the principal and its list of live
+// contexts to close on the device. So it goes on with a policy that names no
+// subject and no device, says so once, and noPolicy is true.
+func offlineBroker(ctx context.Context, cfgPath string, log, out io.Writer) (brk *broker.Broker, noPolicy bool,
+	closeStore func(), err error) {
 	cfg, err := config.LoadBroker(cfgPath)
 	if err != nil {
-		return nil, nil, err
+		return nil, false, nil, err
 	}
 	keys, err := cfg.EncryptionKeys()
 	if err != nil {
-		return nil, nil, err
+		return nil, false, nil, err
 	}
 	inventoryFrom := "inventory_file " + cfg.InventoryFile
+	var pol *policy.Policy
 	if svc := cfg.InventoryService; svc == nil {
 		if cfg.Inventory, _, err = fencedInventory(cfg); err != nil {
-			return nil, nil, err
+			pol, noPolicy = offlineNoPolicy(out, err), true
 		}
 	} else if cfg.Inventory, inventoryFrom, err = persistedInventory(cfg); err != nil {
 		// The report's reach is the policy's to read, not the mark's: every
@@ -155,31 +168,56 @@ func offlineBroker(ctx context.Context, cfgPath string, log, out io.Writer) (*br
 			"one to close on the device\n", offlineSay, err)
 		inventoryFrom = "no inventory"
 	}
-	pol, err := loadPolicy(cfg, inventoryFrom)
-	if err != nil {
-		return nil, nil, err
+	if pol == nil {
+		if pol, err = loadPolicy(cfg, inventoryFrom); err != nil {
+			pol, noPolicy = offlineNoPolicy(out, err), true
+		}
 	}
 	m := metrics.New(prometheus.NewRegistry())
 	b, err := attempt(ctx, cfg, m, out)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
-			return nil, nil, errors.New("stopped")
+			return nil, false, nil, errors.New("stopped")
 		}
-		return nil, nil, fmt.Errorf("store: %w", err)
+		return nil, false, nil, fmt.Errorf("store: %w", err)
 	}
 	gc := guardConfig(procOf(cfg), "broker", cfg.Store.Etcd, m, out, func(error) {})
 	gc.StopAfter, gc.Unhealthy = 0, nil
 	st := crypt.Wrap(guard.WrapRev(b, gc), keys, m.CryptOpenFailures, crypt.WithLedger(crypt.NewLedger()),
 		crypt.OnUnopenable(unopenableSayer("port49-broker", keys, out, time.Now)))
-	brk := &broker.Broker{Policy: policy.NewLive(pol), Store: st, Now: time.Now, Metrics: m,
+	brk = &broker.Broker{Policy: policy.NewLive(pol), Store: st, Now: time.Now, Metrics: m,
 		Log:            decision.NewJSONLinesWithFailureHook(log, m.DecisionLogWriteFailures.Inc),
 		ContextIdleTTL: cfg.ContextIdleTTL, GraceWindow: cfg.Session.GraceWindow, RevokeTimeout: admin.OpTimeout,
 		Proc: "port49-broker"}
 	brk.Redact = redactorFor(brk.Policy)
 	brk.Sessions = session.New(st, time.Now, cfg.ContextIdleTTL, cfg.Session.IndexTTL)
 	brk.Say = func(format string, args ...any) { fmt.Fprintf(out, "port49-broker: "+format+"\n", args...) }
-	return brk, func() { b.Close() }, nil
+	return brk, noPolicy, func() { b.Close() }, nil
 }
+
+// offlineNoPolicy is the policy offlineBroker goes on with when the policy
+// or the inventory does not load: one subject no principal matches and no
+// device, said once, with the cause. The report then lists every live context
+// as one to close on the device.
+func offlineNoPolicy(out io.Writer, cause error) *policy.Policy {
+	fmt.Fprintf(out, "%sthe policy does not load (%v): the report names every live context as one to close on the "+
+		"device, and cannot say whether the policy names the principal; the revocation does not depend on it\n",
+		offlineSay, cause)
+	pol, err := bundle.Parse([]byte(noPolicyBody), admission.Inventory{}, policy.Env{})
+	if err != nil {
+		panic("port49d: the offline revocation's empty policy does not compile: " + err.Error())
+	}
+	return pol
+}
+
+// noPolicyBody is the smallest policy that compiles: it names no subject
+// any principal spells and holds no grant.
+const noPolicyBody = `
+scopes: [{name: none, match: {}}]
+roles: [{name: none, privilege: readonly, permit: []}]
+subjects: [{name: none, identity: ["app:offline-no-policy"], username: none, token_ttl: 60s}]
+grants: [{subject: none, scope: none, roles: [none]}]
+`
 
 // persistedInventory is the inventory service's persisted copy, read and
 // verified as a start reads it (readPersisted), with no service asked.

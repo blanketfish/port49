@@ -1633,6 +1633,55 @@ func TestAnOfflineRevokeDeniesWithEveryBrokerStopped(t *testing.T) {
 	}
 }
 
+// With every port49-broker stopped because the policy file does not load,
+// which is why they crash-loop, the offline revocation still revokes: it
+// goes on with a policy that names no subject and no device, says so once,
+// writes the mark, deletes the token, marks the live context, and lists the
+// context as one to close on the device (final review 7e-2 I-1). It does
+// not tell the operator the principal is unnamed: the file that would name
+// it is the one that failed.
+func TestAnOfflineRevokeGoesOnWhenThePolicyFileDoesNotLoad(t *testing.T) {
+	var out, log syncBuffer
+	e, o := stderr, stdout
+	t.Cleanup(func() { stderr, stdout = e, o })
+	stderr, stdout = &out, &log
+	f := splitFleet(t)
+	tacacs := startSplitDaemon(t, f.daemon, &out, 1)
+	api, stop := startBroker(t, f.broker, &out, 1)
+	dev := tacacsClient{t: t, addr: tacacs, key: []byte("run-test-secret")}
+	loginSession(t, dev, mintOn(t, api, f.pki, "leaf1"), &log)
+	mintOn(t, api, f.pki, "leaf1") // a spare token
+	if err := stop(); err != nil {
+		t.Fatal(err)
+	}
+	f.writePolicyOf(t, f.broker, "subjects: [this is not yaml\n")
+	var rout, rerr bytes.Buffer
+	code := offlineRevoke([]string{"--offline", "--config", f.broker, "--principal", "user:alice@example.com"},
+		&rout, &rerr)
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, rerr.String())
+	}
+	say := rerr.String()
+	if strings.Count(say, "broker.policy_file") != 1 ||
+		!strings.Contains(say, "does not load") ||
+		!strings.Contains(say, "every live context as one to close on the device") ||
+		!strings.Contains(say, "revoked user:alice@example.com") ||
+		!strings.Contains(say, "1 live context(s) marked") ||
+		!strings.Contains(say, "not reached, on a platform that never asks port49 about a command") ||
+		strings.Contains(say, "no subject in the policy in force names") {
+		t.Fatalf("the report: %s", say)
+	}
+	root := f.srv.Client(t, "root")
+	ctx := context.Background()
+	if resp, err := root.Get(ctx, "/port49/v1/rv/principal/user:alice@example.com"); err != nil || len(resp.Kvs) != 1 {
+		t.Fatalf("the store lacks the mark: %v %v", resp, err)
+	}
+	if resp, err := root.Get(ctx, "/port49/v1/t/leaf1/alice/", clientv3.WithPrefix(), clientv3.WithCountOnly()); err != nil ||
+		resp.Count != 0 {
+		t.Fatalf("alice's tokens remain: %v %v", resp, err)
+	}
+}
+
 // A restore under a running runner, which compacts its marks watch past
 // its last change, is put back by the runner's hook before the marks
 // reload: the store holds alice again, and the reload lifts her from no

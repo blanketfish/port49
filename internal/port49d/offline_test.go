@@ -33,7 +33,7 @@ func TestAnOfflineRevokeRefusesWhatItCannotRun(t *testing.T) {
 			2, "name --principal, or --cert-issuer and --cert-serial"},
 		{[]string{"--offline", "--config", "/nonexistent", "extra"}, 2, "usage: port49-broker revoke --offline"},
 		{[]string{"--offline", "--config", filepath.Join(t.TempDir(), "absent.yaml"), "--principal",
-			"user:a@example.com"}, 1, "port49-broker: revoke (offline, no API): "},
+			"user:a@example.com"}, 1, "with no broker host, write the mark as etcd's root under rv/"},
 	} {
 		var o, e bytes.Buffer
 		if code := offlineRevoke(c.args, &o, &e); code != c.code || !strings.Contains(e.String(), c.says) {
