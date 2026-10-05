@@ -610,6 +610,39 @@ func TestARefusedLedgerRecordReadNamesStoreRoles(t *testing.T) {
 	}
 }
 
+// A daemon role without the read on meta/witness or meta/purged (roles
+// applied by 7e-1's output, or by hand) leaves the restore guard silently
+// off on a fresh process, and refuses every redemption for good if the
+// grant is lost after a witness was followed. The start probes both reads
+// and ends as a store fault naming store-roles (final review 7e-2 M-7).
+func TestARefusedWitnessReadNamesStoreRoles(t *testing.T) {
+	for _, key := range []string{"witness", "purged"} {
+		t.Run(key, func(t *testing.T) {
+			daemonCfg, _, srv := etcdSplitServer(t)
+			if _, err := srv.Client(t, "root").RoleRevokePermission(context.Background(), etcdstore.RoleDaemon,
+				"/port49/v1/meta/"+key, ""); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := config.Load(daemonCfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			keys, err := cfg.EncryptionKeys()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var out syncBuffer
+			_, err = openStores(context.Background(), cfg, keys, metrics.New(prometheus.NewRegistry()), &out,
+				newReadiness(), false, func(error) {}, crypt.NewLedger(), newKeyAlarm(), store.NewMarks())
+			var fault *storeFault
+			if !errors.As(err, &fault) || !strings.Contains(err.Error(), "meta/witness and meta/purged") ||
+				!strings.Contains(err.Error(), "port49d store-roles") {
+				t.Fatalf("a refused read of meta/%s: %v", key, err)
+			}
+		})
+	}
+}
+
 // openStores fences the daemon's layer under its guard (pre-flight C1;
 // review 8a I-1): with the feed not running, a context written after the
 // start's scan is not read, a context-pool timeout at call_timeout,
