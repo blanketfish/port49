@@ -94,26 +94,22 @@ func TestTheFailureCountSurvivesTheRunsRegistry(t *testing.T) {
 	s := &scripted{steps: []error{errCheck, nil, errCheck, nil, nil}}
 	h := &health{every: 5 * time.Millisecond, timeout: 50 * time.Millisecond, closeAfter: 3, openAfter: 2,
 		check: s.check, m: next, state: st, out: io.Discard}
+	// Sampled inside the check: the only points where the gauge is defined
+	// while the listeners are closed. A free-running poll can read the 0
+	// that passes sets on its way out, before it returns.
 	lowest := 1 << 30
-	done := make(chan error, 1)
-	go func() { done <- h.passes(context.Background()) }()
-	for {
-		select {
-		case err := <-done:
-			if err != nil {
-				t.Fatal(err)
-			}
-			if lowest < 3 {
-				t.Fatalf("the gauge read %d while the listeners were still closed, under close_after 3", lowest)
-			}
-			if got := testutil.ToFloat64(next.StoreHealthFailures); got != 0 {
-				t.Fatalf("after open_after passes the gauge reads %v, want 0", got)
-			}
-			return
-		default:
-			lowest = min(lowest, int(testutil.ToFloat64(next.StoreHealthFailures)))
-			time.Sleep(time.Millisecond)
-		}
+	h.check = func(ctx context.Context) error {
+		lowest = min(lowest, int(testutil.ToFloat64(next.StoreHealthFailures)))
+		return s.check(ctx)
+	}
+	if err := h.passes(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if lowest < 3 {
+		t.Fatalf("the gauge read %d while the listeners were still closed, under close_after 3", lowest)
+	}
+	if got := testutil.ToFloat64(next.StoreHealthFailures); got != 0 {
+		t.Fatalf("after open_after passes the gauge reads %v, want 0", got)
 	}
 }
 
