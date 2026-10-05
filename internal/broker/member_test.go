@@ -411,3 +411,36 @@ func TestTheRereadAfterAMintReadsTheLegacyMark(t *testing.T) {
 		t.Fatalf("revokedSince under a legacy mark: %d %s", w.Code, w.Body)
 	}
 }
+
+// On a connection with no pin (a directory without Listener.Map), a
+// challenge, a refresh and a mint all answer 503 directory_unavailable with
+// Retry-After, the session kept, and no context moves (spec §5.7).
+func TestAnUnpinnedConnectionIsTheDirectoryNotAnswering(t *testing.T) {
+	f := newFixture(t, 8)
+	withDirectory(f, map[string]directory.Answer{alicePrincipal: answerFor(corpAlice, "alice")}, nil)
+	addr, _ := serveThrough(t, f, DefaultListenerLimits, nil) // no Map: nothing pins
+	c, br := held(t, f, addr, f.alice)
+	f.liveContextAt(t, "nx1", "legacy_alice", alicePrincipal, certKey(f.alice), f.now, f.now.Add(8*time.Hour))
+	before, _ := f.st.GetContext(context.Background(), store.ContextKey{NAS: "nx1", Username: "legacy_alice"})
+	for _, tc := range []struct{ path, body string }{
+		{"/v1/refresh/challenge", ""},
+		{"/v1/refresh", `{"nonce":"AAAA","signature":"AAAA"}`},
+		{"/v1/tokens", `{"devices":["leaf1"]}`},
+	} {
+		a := postOn(t, c, br, tc.path, tc.body)
+		wantRefused(t, a, 503, "directory_unavailable")
+		if a.retryAfter != "30" {
+			t.Fatalf("%s: Retry-After %q", tc.path, a.retryAfter)
+		}
+	}
+	after, _ := f.st.GetContext(context.Background(), store.ContextKey{NAS: "nx1", Username: "legacy_alice"})
+	if !after.SessionExpires.Equal(before.SessionExpires) || !after.RefreshedAt.Equal(before.RefreshedAt) {
+		t.Fatalf("a context moved: %+v -> %+v", before, after)
+	}
+	for _, ev := range []string{"refresh", "mint"} {
+		recs := eventsOf(f.records(t), ev)
+		if len(recs) == 0 || recs[len(recs)-1]["reason"] != "directory_unavailable" {
+			t.Fatalf("%s records: %v", ev, recs)
+		}
+	}
+}

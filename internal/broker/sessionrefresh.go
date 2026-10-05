@@ -15,6 +15,7 @@ import (
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/broker/api"
 	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/directory"
 	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/store"
 )
@@ -33,7 +34,7 @@ func (b *Broker) refreshChallenge(w http.ResponseWriter, r *http.Request) {
 	now := b.Now()
 	principal, _, cred, err := b.callerOf(r, now)
 	if err != nil {
-		b.refuseRefresh(w, now, principal, cred, decision.TrustDomainUnresolved, string(decision.TrustDomainUnresolved), err.Error())
+		b.refuseCaller(w, r, now, principal, cred, err)
 		return
 	}
 	h := heldOf(r)
@@ -68,7 +69,7 @@ func (b *Broker) refresh(w http.ResponseWriter, r *http.Request) {
 	now := b.Now()
 	principal, legacy, cred, err := b.callerOf(r, now)
 	if err != nil {
-		b.refuseRefresh(w, now, principal, cred, decision.TrustDomainUnresolved, string(decision.TrustDomainUnresolved), err.Error())
+		b.refuseCaller(w, r, now, principal, cred, err)
 		return
 	}
 	h := heldOf(r)
@@ -182,6 +183,23 @@ func (b *Broker) refreshStoreError(w http.ResponseWriter, now time.Time, princip
 		w.Header().Set("Retry-After", strconv.Itoa(int(retry/time.Second)))
 	}
 	writeError(w, http.StatusServiceUnavailable, string(decision.StoreUnavailable), text)
+}
+
+// refuseCaller answers a refresh whose caller callerOf could not name: a
+// connection with no pin is the directory not answering (503
+// directory_unavailable, the session kept, as a mint is answered; spec
+// §5.7); anything else is the certificate's own refusal.
+func (b *Broker) refuseCaller(w http.ResponseWriter, r *http.Request, now time.Time, principal string,
+	cred store.Credential, err error) {
+	if !errors.Is(err, errNoPin) {
+		b.refuseRefresh(w, now, principal, cred, decision.TrustDomainUnresolved, string(decision.TrustDomainUnresolved), err.Error())
+		return
+	}
+	ref := directoryRefusal(directory.ErrUnavailable)
+	b.Metrics.SessionRefreshes.WithLabelValues("refused").Inc()
+	b.emit(decision.Record{TS: now, Event: decision.EventRefresh, Verdict: decision.VerdictDeny, Reason: ref.Reason,
+		Principal: principal, Auth: &decision.Auth{Method: cred.Method, Fingerprint: cred.Fingerprint}})
+	b.answerRefusal(w, r, ref)
 }
 
 // refuseRefresh answers a refresh that proved nothing, and records it

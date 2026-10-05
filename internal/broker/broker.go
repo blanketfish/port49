@@ -529,7 +529,7 @@ func (b *Broker) authenticate(w http.ResponseWriter, r *http.Request, event, not
 // principal its email SAN gave before a directory ("" without one). Under a
 // directory the principal is the one pinned to the held connection at bind
 // (Ruling 4), never the email SAN's; a connection with no pin is refused
-// (ErrUntrusted), as a mapping that did not happen proves nothing.
+// (errNoPin).
 func (b *Broker) callerOf(r *http.Request, now time.Time) (principal, legacy string, cred store.Credential, err error) {
 	if b.Directory == nil {
 		principal, cred, err = Identity(r.TLS, now)
@@ -546,8 +546,14 @@ func (b *Broker) callerOf(r *http.Request, now time.Time) (principal, legacy str
 	if h := heldOf(r); h != nil && h.answer != nil {
 		return h.answer.Principal, legacy, cred, nil
 	}
-	return "", legacy, cred, fmt.Errorf("%w: this connection has no directory principal pinned to it", ErrUntrusted)
+	b.logf("broker: a held connection has no directory principal pinned (the listener has no Map); refusing it")
+	return "", legacy, cred, errNoPin
 }
+
+// errNoPin is a connection under a directory with no principal pinned to it:
+// a wiring fault, answered as the directory not answering (503
+// directory_unavailable), never as the certificate's fault.
+var errNoPin = errors.New("broker: this connection has no directory principal pinned to it")
 
 // legacyOf is the principal r's certificate had before a directory, "" when
 // there is no directory or none: the mark a re-read after a write also reads.
