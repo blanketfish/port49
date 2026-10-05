@@ -330,10 +330,12 @@ func TestHealthAndCacheBounds(t *testing.T) {
 	}{
 		{"an interval too short", func(s *storeYAML) { s.Etcd.HealthSet = &EtcdHealth{Interval: 100 * time.Millisecond} },
 			"store.etcd.health.interval 100ms: must be 200ms to 10s"},
-		{"an interval below the call timeout", func(s *storeYAML) {
-			s.Etcd.CallTimeout = time.Second
-			s.Etcd.HealthSet = &EtcdHealth{Interval: 500 * time.Millisecond}
-		}, "must be at least store.etcd.call_timeout (1s), which bounds each check"},
+		{"an interval too long", func(s *storeYAML) { s.Etcd.HealthSet = &EtcdHealth{Interval: 11 * time.Second} },
+			"store.etcd.health.interval 11s: must be 200ms to 10s"},
+		{"close after negative", func(s *storeYAML) { s.Etcd.HealthSet = &EtcdHealth{CloseAfter: -1} },
+			"store.etcd.health.close_after -1: must be 2 to 60"},
+		{"a cache ttl too short", func(s *storeYAML) { s.Etcd.ContextCacheSet = &EtcdContextCache{TTL: 50 * time.Millisecond} },
+			"store.etcd.context_cache.ttl 50ms: must be 100ms to 1m0s"},
 		{"close after one", func(s *storeYAML) { s.Etcd.HealthSet = &EtcdHealth{CloseAfter: 1} },
 			"store.etcd.health.close_after 1: must be 2 to 60"},
 		{"open after too many", func(s *storeYAML) { s.Etcd.HealthSet = &EtcdHealth{OpenAfter: 61} },
@@ -371,5 +373,60 @@ func TestTheBrokerRefusesTheDaemonsStoreBlocks(t *testing.T) {
 		if _, err := checkStore(y, RoleBroker, true, false, true); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%v, want %q", err, c.want)
 		}
+	}
+}
+
+// max_entries 0 in a present block is the default, like every other key.
+func TestCacheMaxEntriesZeroIsTheDefault(t *testing.T) {
+	y := etcdYAML(storeFiles(t))
+	y.Etcd.ContextCacheSet = &EtcdContextCache{TTL: time.Second, MaxEntries: 0}
+	s, err := checkStoreShape(y)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Etcd.ContextCache.MaxEntries != 65536 {
+		t.Fatalf("%+v", s.Etcd.ContextCache)
+	}
+}
+
+// The health interval bounds each check, which is port49d's: a daemon whose
+// call_timeout exceeds the interval is refused; the broker, which runs no
+// check and cannot set health, loads with any call_timeout.
+func TestHealthIntervalAgainstCallTimeoutIsPort49dsAlone(t *testing.T) {
+	y := etcdYAML(storeFiles(t))
+	y.Etcd.Broker = nil
+	y.Etcd.CallTimeout = 2 * time.Second
+	if _, err := checkStore(y, RoleDaemon, false, true, true); err == nil ||
+		!strings.Contains(err.Error(), "store.etcd.health.interval 1s: must be at least store.etcd.call_timeout (2s), which bounds each check") {
+		t.Errorf("daemon: %v", err)
+	}
+	y.Etcd.HealthSet = &EtcdHealth{Interval: 2 * time.Second}
+	if _, err := checkStore(y, RoleDaemon, false, true, true); err != nil {
+		t.Errorf("daemon with interval raised: %v", err)
+	}
+	b := etcdYAML(storeFiles(t))
+	b.Etcd.Daemon = EtcdIdentity{}
+	b.Etcd.CallTimeout = 2 * time.Second
+	if _, err := checkStore(b, RoleBroker, true, false, true); err != nil {
+		t.Errorf("broker: %v", err)
+	}
+}
+
+// The yaml tags: both blocks decode from a real port49d.yaml, and the
+// broker's file refuses health.
+func TestHealthAndCacheDecodeFromYAML(t *testing.T) {
+	raw := daemonRoleYAML(t) + "    health: {interval: 2s, close_after: 4}\n    context_cache: {ttl: 5s}\n"
+	c, err := loadDaemonRole(t, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := c.Store.Etcd
+	if e.Health.Interval != 2*time.Second || e.Health.CloseAfter != 4 || e.Health.OpenAfter != 3 ||
+		e.ContextCache.TTL != 5*time.Second || e.ContextCache.MaxEntries != 65536 {
+		t.Fatalf("%+v %+v", e.Health, e.ContextCache)
+	}
+	if _, err := loadBrokerRole(t, brokerRoleYAML(t)+"    health: {}\n"); err == nil ||
+		!strings.Contains(err.Error(), "store.etcd.health is port49d's") {
+		t.Errorf("broker: %v", err)
 	}
 }

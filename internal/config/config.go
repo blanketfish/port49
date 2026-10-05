@@ -1965,10 +1965,6 @@ func checkStoreShape(s storeYAML) (StoreConfig, error) {
 			return StoreConfig{}, fmt.Errorf("%s %d: must be %d to %d", n.name, *n.v, n.min, n.max)
 		}
 	}
-	if e.Health.Interval < e.CallTimeout {
-		return StoreConfig{}, fmt.Errorf("store.etcd.health.interval %v: must be at least store.etcd.call_timeout "+
-			"(%v), which bounds each check", e.Health.Interval, e.CallTimeout)
-	}
 	if out.PacketDeadline < e.CallTimeout {
 		return StoreConfig{}, fmt.Errorf("store.packet_deadline %v: must be at least store.etcd.call_timeout (%v)",
 			out.PacketDeadline, e.CallTimeout)
@@ -2031,6 +2027,12 @@ func checkStore(s storeYAML, role Role, hasBroker, hasPolicy, hasAdminSocket boo
 		if e.Daemon == (EtcdIdentity{}) {
 			return StoreConfig{}, errors.New("store.etcd.daemon is missing: port49d authenticates to etcd as " +
 				"itself (decision 35)")
+		}
+		// The checks are port49d's, so the bound is too: the broker cannot
+		// set health and loads with any call_timeout.
+		if e.Health.Interval < e.CallTimeout {
+			return StoreConfig{}, fmt.Errorf("store.etcd.health.interval %v: must be at least store.etcd.call_timeout "+
+				"(%v), which bounds each check", e.Health.Interval, e.CallTimeout)
 		}
 	}
 	if !hasAdminSocket {
