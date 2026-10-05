@@ -35,11 +35,12 @@ func (b *Broker) Forget(ctx context.Context, principal, origin string) (string, 
 		return "", fmt.Errorf("broker: %q is not a user: principal; only a directory principal has a membership",
 			printsafe.Line(principal, 200))
 	}
-	principal, err := normalPrincipal(principal)
+	normal, err := normalPrincipal(principal)
 	if err != nil {
 		return "", fmt.Errorf("broker: %q is not a principal as the log spells one: printable ASCII, user: and an email",
 			printsafe.Line(principal, 200))
 	}
+	principal = normal
 	ctx, cancel := context.WithTimeout(ctx, holdTimeout)
 	defer cancel()
 	m, err := b.Store.DeleteMembership(ctx, principal)
