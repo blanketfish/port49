@@ -417,3 +417,54 @@ another interface: without the rule a device's packet DNAT'd to the compose brid
 port49d from the compose gateway, which is the lab's own rule at work and not what a device
 off the host would meet. The rule models an off-host device. A first L39 run without it
 (5ee1137) saw only the gateway and is recorded as invalid in the notes.
+
+## Directories (plan 7g)
+
+`make lab-directory` runs L42 and L43 on two containers, OpenLDAP (Debian's slapd 2.5, the
+`memberof` overlay) and Samba AD (Debian's samba 4.17 as a DC), with no network device and no
+containerlab. It needs Docker, Compose v2.24.4 or later, and the base image
+`debian:bookworm-slim`; the first run builds both images (a few minutes of `apt`). In a shell
+that is not in the `docker` group the test runs docker as `sg docker -c`.
+
+`tests/lab/directory_test.go` writes the PKI with `internal/testpki`, brings the compose
+project `port49labdir` up (`tests/lab/directory/compose.yaml`, network `172.30.42.0/24`,
+published on `127.0.0.1`: OpenLDAP 10389 and 10636, Samba 20389, 20636 and 20088 for the KDC),
+waits for each directory's fixture and for LDAPS to answer, and takes the project down with its
+volumes at the end of the test. Both tests read the fixture of the plan's Task 17 (`alice`,
+`carol`, `dave`, `bob`, `eve`, `eve2`, the groups `g-leaf`, `g-mid`, `netops-oncall`,
+`g-loop-a`, `g-loop-b`, a second `netops-oncall` under `OU=Users-Can-Create`, and the broker's
+account `port49` under `OU=Svc`) and drive it through `internal/directory`, the broker's own
+dialer, pool and resolver.
+
+Files, under `tests/lab/logs/directory/` (git-ignored; a run starts from an empty directory):
+`pki/` (the lab CA, the directories' server certificate for `localhost`, the broker's
+certificate `CN=port49-broker,O=port49 lab`), `out/` (the keytab Samba exports, chowned to the
+test's user, and the `krb5.conf` the test writes), `lab.env` (the passwords the containers read,
+mode 0600, generated for the run; the test never prints one and refuses to write a note or
+evidence file that holds the bind password) and `openldap.log`, `samba.log`.
+
+The users CA that signs alice's and eve's certificates has the subject
+`CN=lab-users-CA,DC=corp,DC=example,DC=com`, written in DER with its `DC=` RDNs, so
+`issuer_serial` and the issuer pin meet them on real directories.
+
+What each directory is configured to do, and where the lab departs from the plan's text:
+
+- **OpenLDAP** loads its seed through `ldapadd` on the `ldapi:///` socket, not `slapadd -n1`:
+  the `memberof` overlay writes `memberOf` only for an operation that runs through it. The
+  broker's certificate maps to `cn=port49,ou=Svc,...` by `olcAuthzRegexp`. `olcSecurity` is
+  `ssf=1`, not `tls=1`: both refuse a simple bind over plain LDAP, and `tls=1` would refuse the
+  seed's own `ldapi:///` connection too.
+- **Samba AD** is provisioned at first start, with the sysvol ACLs kept in `user.NTACL` (a
+  container cannot write `security.NTACL`; the lab reads nothing from sysvol). It sets
+  `ldap server require strong auth = yes`. The DC's account has the extra SPN `ldap/localhost`,
+  because port49 binds GSSAPI to `ldap/<the URI's host>` and the lab's URIs name `localhost`,
+  which the test certificate carries. `bob`'s `mail` is edited with `ldbmodify` on the DC's own
+  database (`/lab/set-attr.sh`), the non-interactive form of `samba-tool user edit`.
+
+Two environment variables are for debugging the harness: `PORT49_LAB_DIRECTORY_OUT=<dir>`
+writes the notes and evidence under `<dir>/tests/lab/` instead of the repository, so a dry run
+leaves nothing to commit; `PORT49_LAB_DIRECTORY_KEEP=1` leaves the containers up afterwards
+(take them down with `docker compose -p port49labdir -f tests/lab/directory/compose.yaml down -v`).
+
+A recorded run is made from a detached worktree pinned at the commit under test, as every
+lab run is.

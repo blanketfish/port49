@@ -1,4 +1,4 @@
-.PHONY: test test-race lab-unit vet fuzz lab build evidence image compose-smoke
+.PHONY: test test-race lab-unit vet fuzz lab lab-directory build evidence image compose-smoke
 
 build:
 	go build -o bin/port49d ./cmd/port49d
@@ -60,6 +60,12 @@ fuzz:
 # regenerate the evidence from captures already on disk.
 evidence:
 	go run ./tests/lab/cmd/redact-pcap
+
+# The directory lab (plan 7g): OpenLDAP and Samba AD as containers, no devices, so
+# no containerlab and no image beyond debian:bookworm-slim. Needs Docker with
+# Compose v2.24.4+; see tests/lab/README.md, "Directories".
+lab-directory:
+	go test -tags lab ./tests/lab/ -run 'TestL42|TestL43' -count=1 -v -timeout 30m
 
 # Requires containerlab and device images; see tests/lab/README.md.
 #
