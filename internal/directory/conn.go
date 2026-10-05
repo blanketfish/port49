@@ -9,15 +9,17 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/go-ldap/ldap/v3"
 	"github.com/go-ldap/ldap/v3/gssapi"
 	krbclient "github.com/jcmturner/gokrb5/v8/client"
 	krbconfig "github.com/jcmturner/gokrb5/v8/config"
+	"github.com/jcmturner/gokrb5/v8/iana/nametype"
 	"github.com/jcmturner/gokrb5/v8/keytab"
+	"github.com/jcmturner/gokrb5/v8/types"
 
 	"github.com/rhwendt/port49/internal/keyfile"
 )
@@ -28,10 +30,9 @@ import (
 type Credentials struct {
 	mech     BindMechanism
 	who      string
-	cert     *tls.Certificate // external
-	krb      *gssapi.Client   // gssapi
-	krbMu    sync.Mutex       // a gssapi.Client holds one security context at a time
-	password string           // simple
+	cert     *tls.Certificate  // external
+	krb      *krbclient.Client // gssapi; shared by every bind, each of which has a gssapi.Client (a security context) of its own
+	password string            // simple
 }
 
 func (c *Credentials) String() string             { return fmt.Sprintf("directory bind %s as %s", c.mech, c.who) }
@@ -72,8 +73,29 @@ func LoadCredentials(b Bind, getenv func(string) string) (*Credentials, error) {
 		if err != nil {
 			return nil, fmt.Errorf("broker.directory.bind.krb5_conf %s: %v", b.KRB5Conf, err)
 		}
+		// Everything a bind would otherwise discover from a KDC's or a
+		// directory's answer, and read as a refusal, is a start error here.
 		user, realm := splitPrincipal(b.Principal)
-		c.krb = &gssapi.Client{Client: krbclient.NewWithKeytab(user, realm, kt, kc, krbclient.DisablePAFXFAST(true))}
+		if user == "" || realm == "" {
+			return nil, fmt.Errorf("broker.directory.bind.principal %q: want user@REALM", b.Principal)
+		}
+		name := types.NewPrincipalName(nametype.KRB_NT_PRINCIPAL, user)
+		held := false
+		for _, et := range kc.LibDefaults.DefaultTktEnctypeIDs {
+			if _, _, err := kt.GetEncryptionKey(name, realm, 0, et); err == nil {
+				held = true
+				break
+			}
+		}
+		if !held {
+			return nil, fmt.Errorf("broker.directory.bind.keytab_file %s holds no key for %s in an enctype krb5_conf allows",
+				b.KeytabFile, b.Principal)
+		}
+		cl := krbclient.NewWithKeytab(user, realm, kt, kc, krbclient.DisablePAFXFAST(true))
+		if ok, err := cl.IsConfigured(); !ok {
+			return nil, fmt.Errorf("broker.directory.bind.krb5_conf %s: %v", b.KRB5Conf, err)
+		}
+		c.krb = cl
 		c.who = b.Principal
 	case "simple":
 		c.password, c.who = getenv(b.PasswordEnv), b.BindDN
@@ -124,7 +146,7 @@ func tlsConfig(cfg Config, s Server, cr *Credentials) (*tls.Config, error) {
 // query's timeout.
 func NewDialer(cfg Config, cr *Credentials) (Dialer, error) {
 	return func(ctx context.Context, s Server) (Client, error) {
-		if !s.StartTLS && !strings.HasPrefix(s.URI, "ldaps://") {
+		if u, err := url.Parse(s.URI); err != nil || (!s.StartTLS && u.Scheme != "ldaps") {
 			return nil, fmt.Errorf("directory %s: ldap:// needs start_tls; no connection is made in clear", s.Label())
 		}
 		tc, err := tlsConfig(cfg, s, cr)
@@ -154,7 +176,7 @@ func NewDialer(cfg Config, cr *Credentials) (Dialer, error) {
 				return nil, err
 			}
 		}
-		if err := bind(conn, s, cr); err != nil {
+		if err := bind(ctx, conn, s, cr); err != nil {
 			conn.Close()
 			return nil, err
 		}
@@ -175,10 +197,14 @@ func (l ldapClient) Close() error { return l.c.Close() }
 
 func (l ldapClient) SearchContext(ctx context.Context, req *ldap.SearchRequest, pagingSize uint32) (*ldap.SearchResult, error) {
 	out := &ldap.SearchResult{}
+	// A copy: a failover reuses the caller's request, and an appended paging
+	// control would carry the last server's cookie.
+	r0 := *req
+	req = &r0
 	var paging *ldap.ControlPaging
 	if pagingSize > 0 {
 		paging = ldap.NewControlPaging(pagingSize)
-		req.Controls = append(req.Controls, paging)
+		req.Controls = append(slices.Clip(req.Controls), paging)
 	}
 	for {
 		r := l.c.SearchAsync(ctx, req, 0)
@@ -208,33 +234,50 @@ func (l ldapClient) SearchContext(ctx context.Context, req *ldap.SearchRequest, 
 	}
 }
 
-// bind authenticates conn as the broker. Its error names the mechanism, who
-// and the result code, never a secret or the server's diagnostic. A refusal
-// (an LDAP result Refusal knows, or a KDC refusing the principal as
-// ErrBindRefused) starts the pool's bind hold-off; anything else is a fault.
-func bind(conn *ldap.Conn, s Server, cr *Credentials) error {
+// bind authenticates conn as the broker within ctx. Its error names the
+// mechanism, who and the result code, never a secret or the server's
+// diagnostic. A refusal (an LDAP result Refusal knows, or a KDC refusing the
+// principal as ErrBindRefused) starts the pool's bind hold-off; anything
+// else is a fault.
+//
+// gokrb5 takes no context and a blackholed KDC holds it for its own timeouts
+// (5s a KDC and transport), so the bind runs in a goroutine and ctx ends the
+// wait: the connection is closed, which ends an LDAP exchange at once, and
+// the goroutine ends when gokrb5's timeouts do.
+func bind(ctx context.Context, conn *ldap.Conn, s Server, cr *Credentials) error {
+	done := make(chan error, 1)
+	go func() {
+		switch cr.mech {
+		case "external":
+			done <- conn.ExternalBind()
+		case "gssapi":
+			u, _ := url.Parse(s.URI)
+			done <- conn.GSSAPIBind(&gssapi.Client{Client: cr.krb}, "ldap/"+u.Hostname(), "")
+		default:
+			done <- conn.Bind(cr.who, cr.password)
+		}
+	}()
 	var err error
-	switch cr.mech {
-	case "external":
-		err = conn.ExternalBind()
-	case "gssapi":
-		u, _ := url.Parse(s.URI)
-		cr.krbMu.Lock()
-		err = conn.GSSAPIBind(cr.krb, "ldap/"+u.Hostname(), "")
-		cr.krbMu.Unlock()
-	case "simple":
-		err = conn.Bind(cr.who, cr.password)
+	select {
+	case err = <-done:
+	case <-ctx.Done():
+		_ = conn.Close()
+		return fmt.Errorf("bind %s as %s: %w", cr.mech, cr.who, ctx.Err())
 	}
 	if err == nil {
 		return nil
 	}
 	// The directory's own answer keeps its code, which Refusal and Fault
 	// classify on, and drops its message, which a directory may fill with
-	// anything.
+	// anything. A client-side code (200 and up: the network, the TLS
+	// handshake) is local text and stays.
 	var le *ldap.Error
 	if errors.As(err, &le) {
-		return &ldap.Error{ResultCode: le.ResultCode, MatchedDN: le.MatchedDN,
-			Err: fmt.Errorf("bind %s as %s: LDAP result %d", cr.mech, cr.who, le.ResultCode)}
+		cause := fmt.Errorf("bind %s as %s: LDAP result %d", cr.mech, cr.who, le.ResultCode)
+		if le.ResultCode >= 200 && le.Err != nil {
+			cause = fmt.Errorf("bind %s as %s: LDAP result %d: %v", cr.mech, cr.who, le.ResultCode, le.Err)
+		}
+		return &ldap.Error{ResultCode: le.ResultCode, MatchedDN: le.MatchedDN, Err: cause}
 	}
 	if cr.mech == "gssapi" && kerberosRefused(err) {
 		return fmt.Errorf("bind gssapi as %s refused: %w (%v)", cr.who, ErrBindRefused, err)
@@ -247,7 +290,8 @@ func bind(conn *ldap.Conn, s Server, cr *Credentials) error {
 // clock skew) rather than the KDC not answering. gokrb5 flattens its errors
 // to text, so the class is read from its root-cause tags: a networking or
 // configuration error, a transport error or a deadline is the infrastructure,
-// and anything else is the credential refused.
+// and anything else is the credential refused. TestAGSSAPIBindClassifiesTheKDC
+// is the gate for a gokrb5 upgrade: it runs these tags against a real KDC exchange.
 func kerberosRefused(err error) bool {
 	var ne net.Error
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || errors.As(err, &ne) {

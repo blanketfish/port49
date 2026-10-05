@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -43,19 +44,48 @@ func TestCredentialsWithholdTheirSecrets(t *testing.T) {
 	}
 }
 
-// A keytab another user could read is refused, before gokrb5 sees it.
+// A keytab another user could read is refused, before gokrb5 sees it: the
+// keytab here is valid, so only the permission check can say no.
 func TestAGroupReadableKeytabIsRefused(t *testing.T) {
 	dir := t.TempDir()
-	kt := filepath.Join(dir, "port49.keytab")
-	if err := os.WriteFile(kt, []byte{0x05, 0x02}, 0o640); err != nil {
+	kt := writeKeytab(t, dir)
+	if err := os.Chmod(kt, 0o640); err != nil {
 		t.Fatal(err)
 	}
 	krb := filepath.Join(dir, "krb5.conf")
-	os.WriteFile(krb, []byte("[libdefaults]\n default_realm = CORP.EXAMPLE.COM\n"), 0o644)
+	os.WriteFile(krb, []byte(krb5conf("127.0.0.1:88")), 0o644)
 	_, err := LoadCredentials(Bind{Mechanism: "gssapi", KeytabFile: kt, Principal: "port49$@CORP.EXAMPLE.COM",
 		KRB5Conf: krb}, os.Getenv)
-	if err == nil || !strings.Contains(err.Error(), "keytab_file") {
+	if err == nil || !strings.Contains(err.Error(), "keytab_file") || !strings.Contains(err.Error(), "mode") {
 		t.Fatalf("%v", err)
+	}
+}
+
+// Start refuses what a bind would otherwise read as the KDC's refusal: a
+// principal without a realm, a keytab with no key for it, a realm no KDC is
+// configured for.
+func TestGSSAPICredentialsAreCheckedAtStart(t *testing.T) {
+	dir := t.TempDir()
+	kt := writeKeytab(t, dir)
+	conf := func(body string) string {
+		p := filepath.Join(t.TempDir(), "krb5.conf")
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	for name, tc := range map[string]struct {
+		principal, conf, want string
+	}{
+		"no realm":    {"port49$", conf("[libdefaults]\n default_realm = CORP.EXAMPLE.COM\n"), "principal"},
+		"empty realm": {"port49$@", conf(krb5conf("127.0.0.1:88")), "principal"},
+		"no key":      {"someone-else@CORP.EXAMPLE.COM", conf(krb5conf("127.0.0.1:88")), "no key"},
+		"no KDC":      {"port49$@CORP.EXAMPLE.COM", conf("[libdefaults]\n default_realm = CORP.EXAMPLE.COM\n[realms]\n CORP.EXAMPLE.COM = {\n }\n"), "KDC"},
+	} {
+		_, err := LoadCredentials(Bind{Mechanism: "gssapi", KeytabFile: kt, Principal: tc.principal, KRB5Conf: tc.conf}, os.Getenv)
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: %v", name, err)
+		}
 	}
 }
 
@@ -129,7 +159,7 @@ func TestASimpleBindClassifiesItsResult(t *testing.T) {
 		{ldap.LDAPResultStrongAuthRequired, true, false},
 		{ldap.LDAPResultBusy, false, true},
 	} {
-		err := bind(ldapBindServer(t, tc.code, "80090308: LdapErr data 52e, hunter2-very-secret"), Server{URI: "ldaps://dc-01"}, cr)
+		err := bind(context.Background(), ldapBindServer(t, tc.code, "80090308: LdapErr data 52e, hunter2-very-secret"), Server{URI: "ldaps://dc-01"}, cr)
 		if err == nil || Refusal(err) != tc.refusal || Fault(err) != tc.fault {
 			t.Fatalf("code %d: refusal %v fault %v: %v", tc.code, Refusal(err), Fault(err), err)
 		}
@@ -157,14 +187,18 @@ func writeKeytab(t *testing.T, dir string) string {
 	return path
 }
 
+// krb5conf is a krb5.conf for CORP.EXAMPLE.COM with one KDC, TCP only.
+func krb5conf(kdc string) string {
+	return fmt.Sprintf("[libdefaults]\n default_realm = CORP.EXAMPLE.COM\n udp_preference_limit = 1\n"+
+		"[realms]\n CORP.EXAMPLE.COM = {\n  kdc = %s\n }\n", kdc)
+}
+
 // gssapiCredentials is credentials for a KDC at kdc (host:port), TCP only.
 func gssapiCredentials(t *testing.T, kdc string) *Credentials {
 	t.Helper()
 	dir := t.TempDir()
 	krb := filepath.Join(dir, "krb5.conf")
-	conf := fmt.Sprintf("[libdefaults]\n default_realm = CORP.EXAMPLE.COM\n udp_preference_limit = 1\n"+
-		"[realms]\n CORP.EXAMPLE.COM = {\n  kdc = %s\n }\n", kdc)
-	if err := os.WriteFile(krb, []byte(conf), 0o644); err != nil {
+	if err := os.WriteFile(krb, []byte(krb5conf(kdc)), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	cr, err := LoadCredentials(Bind{Mechanism: "gssapi", KeytabFile: writeKeytab(t, dir), Principal: "port49$@CORP.EXAMPLE.COM",
@@ -226,7 +260,7 @@ func TestAGSSAPIBindClassifiesTheKDC(t *testing.T) {
 	for _, code := range []int32{errorcode.KDC_ERR_C_PRINCIPAL_UNKNOWN, errorcode.KRB_AP_ERR_SKEW,
 		errorcode.KDC_ERR_PREAUTH_FAILED} {
 		cr := gssapiCredentials(t, fakeKDC(t, code))
-		err := bind(idleConn(t), Server{URI: "ldaps://dc-01.corp.example.com"}, cr)
+		err := bind(context.Background(), idleConn(t), Server{URI: "ldaps://dc-01.corp.example.com"}, cr)
 		if err == nil || !errors.Is(err, ErrBindRefused) || !Refusal(err) || Fault(err) {
 			t.Fatalf("KDC error %d: %v", code, err)
 		}
@@ -241,8 +275,8 @@ func TestAGSSAPIBindClassifiesTheKDC(t *testing.T) {
 	}
 	dead := ln.Addr().String()
 	ln.Close()
-	err = bind(idleConn(t), Server{URI: "ldaps://dc-01.corp.example.com"}, gssapiCredentials(t, dead))
-	if err == nil || errors.Is(err, ErrBindRefused) || Refusal(err) {
+	err = bind(context.Background(), idleConn(t), Server{URI: "ldaps://dc-01.corp.example.com"}, gssapiCredentials(t, dead))
+	if err == nil || errors.Is(err, ErrBindRefused) || Refusal(err) || !strings.Contains(err.Error(), "Networking_Error") {
 		t.Fatalf("an unreachable KDC is no refusal: %v", err)
 	}
 }
@@ -264,5 +298,76 @@ func TestKerberosErrorClassification(t *testing.T) {
 		if got := kerberosRefused(tc.err); got != tc.refused {
 			t.Errorf("%v: refused %v", tc.err, got)
 		}
+	}
+}
+
+// stalledKDC accepts and never answers.
+func stalledKDC(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var conns []net.Conn
+	var mu sync.Mutex
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			conns = append(conns, c)
+			mu.Unlock()
+		}
+	}()
+	t.Cleanup(func() {
+		ln.Close()
+		mu.Lock()
+		defer mu.Unlock()
+		for _, c := range conns {
+			c.Close()
+		}
+	})
+	return ln.Addr().String()
+}
+
+// A KDC that never answers holds a bind only to its own query's deadline:
+// the error is no refusal, the connection is closed, and two binds at once
+// are not queued behind each other (no lock is held across the KDC).
+func TestAStalledKDCHoldsABindOnlyToItsDeadline(t *testing.T) {
+	cr := gssapiCredentials(t, stalledKDC(t))
+	srv := Server{URI: "ldaps://dc-01.corp.example.com"}
+	start := time.Now()
+	errs := make(chan error, 2)
+	for range 2 {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+			defer cancel()
+			errs <- bind(ctx, idleConn(t), srv, cr)
+		}()
+	}
+	for range 2 {
+		if err := <-errs; err == nil || Refusal(err) || !errors.Is(err, context.DeadlineExceeded) || !Fault(err) {
+			t.Fatalf("%v", err)
+		}
+	}
+	if d := time.Since(start); d > 550*time.Millisecond {
+		t.Fatalf("the binds took %v: one waited on the other", d)
+	}
+}
+
+// The search a failover repeats is not changed by the first: the caller's
+// request keeps its controls.
+func TestSearchContextLeavesTheRequestAlone(t *testing.T) {
+	req := ldap.NewSearchRequest("dc=corp", ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 0, 0, false, "(a=b)", nil, nil)
+	cc, sc := net.Pipe()
+	sc.Close()
+	conn := ldap.NewConn(cc, false)
+	conn.Start()
+	defer conn.Close()
+	_, _ = ldapClient{c: conn}.SearchContext(context.Background(), req, 100)
+	if len(req.Controls) != 0 {
+		t.Fatalf("%d controls", len(req.Controls))
 	}
 }
