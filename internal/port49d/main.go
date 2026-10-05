@@ -809,7 +809,8 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 	}
 	// The broker's store: the minter, the session manager, the broker, the
 	// lab seeds and the revocations. The daemon's handlers read the
-	// daemon's (sts.daemon). On etcd it is nil, the broker being
+	// daemon's (sts.daemon; authorization through sts.author, the context
+	// cache when one is set). On etcd it is nil, the broker being
 	// port49-broker's (plan 7e), and nothing below writes through it.
 	st := sts.broker
 
@@ -1027,6 +1028,8 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		// The context indexes are given the context's own idle TTL: they exist
 		// to let revocation reach a live context, so they need to outlast
 		// nothing the context does not.
+		// The context cache is authorization's alone (plan 7f, Ruling 5): a
+		// login's join reads the store.
 		Authen: authen.New(handlerStore, log, lim, m, time.Now, newCtxID, cfg.ReceiptIdleTTL, cfg.ReceiptMaxAge,
 			cfg.ContextIdleTTL, cfg.Session.IndexTTL, tags).WithMarks(authMarks).WithRedeemGuard(redeemGuard),
 		// `session.staleness_ceiling` defaults to 0 — no staleness check — and
@@ -1040,7 +1043,6 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		// and kept before the authorizer deletes it (plan 7b). The ceiling
 		// warning rides on permits to the platforms L34 found show it, and
 		// to the operator's own list.
-		// the context cache is authorization's alone (plan 7f, Ruling 5): a login's join reads the store
 		Author: author.New(labHandlerStore(sts.author, fault), authz, log, m, time.Now, cfg.SessionServices,
 			cfg.Session.StalenessCeiling, cfg.Session.GraceWindow, cfg.ContextIdleTTL).WithRedactor(redactorFor(live)).
 			WithCeilingWarning(cfg.Session.CeilingWarning, cfg.Session.CeilingWarningPlatforms).WithMarks(authMarks),

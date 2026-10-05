@@ -3,10 +3,17 @@ package port49d
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"net/http"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/rhwendt/port49/internal/testpki"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
@@ -81,12 +88,77 @@ func TestAContextDeletedElsewhereIsNotAnsweredFromTheCache(t *testing.T) {
 	}
 }
 
-// Review Focus 3, revoked: a session revoked through the broker (the path
-// through revokeown.go's SetRevokedAt, the whole revocation in decision 32's
-// order) is denied credential_revoked inside the TTL, because the context's
-// change reached the daemon's feed and evicted its entry, and the daemon's
-// marks hold the principal besides (plan 7f, M-7). The control: the cached
-// session is answered before.
+// hits is the context cache's hit count on the daemon's metrics now.
+func hits(t *testing.T, out *syncBuffer) float64 {
+	t.Helper()
+	return metricAt(t, daemonMetrics(t, out), `port49_context_cache_lookups_total{outcome="hit"}`)
+}
+
+// postRevoke posts body to the broker's /v1/tokens/revoke as the lab's
+// operator (alice), whose client certificate it presents.
+func postRevoke(t *testing.T, api, pkiDir, body string) {
+	t.Helper()
+	cert, err := tls.LoadX509KeyPair(filepath.Join(pkiDir, testpki.LabClientCert), filepath.Join(pkiDir, testpki.LabClientKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+	caPEM, err := os.ReadFile(filepath.Join(pkiDir, testpki.LabCA))
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots := x509.NewCertPool()
+	roots.AppendCertsFromPEM(caPEM)
+	client := &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{
+		Certificates: []tls.Certificate{cert}, RootCAs: roots, MinVersion: tls.VersionTLS13}}}
+	resp, err := client.Post("https://"+api+"/v1/tokens/revoke", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("revoke: status %d", resp.StatusCode)
+	}
+}
+
+// Review Focus 3, revoked (plan 7f, M-7): a session revoked with no mark, by
+// its owner's own form through the broker (revokeown.go's SetRevokedAt on
+// the context alone), is denied credential_revoked inside the TTL: the
+// context's change reached the daemon's feed and evicted its entry, and
+// nothing else stands against it. The control: the cached session was
+// answered from the cache before.
+func TestAMarklessRevocationIsDeniedInsideTheTTL(t *testing.T) {
+	var out, log syncBuffer
+	e, o := stderr, stdout
+	t.Cleanup(func() { stderr, stdout = e, o })
+	stderr, stdout = &out, &log
+	f, dev, api := cachedFleet(t, &out, "30s", "")
+	loginSession(t, dev, mintOn(t, api, f.pki, "leaf1"), &log)
+	for i := 0; i < 3; i++ {
+		if !dev.permits("alice", "configure") {
+			t.Fatal("control: the cached session's command was refused before the revocation")
+		}
+	}
+	if h := hits(t, &out); h < 1 {
+		t.Fatalf("control: %v cache hits before the revocation, want at least 1", h)
+	}
+	postRevoke(t, api, f.pki, `{"mine":true,"device":"leaf1","username":"alice"}`)
+	deadline := time.Now().Add(5 * time.Second)
+	for dev.permits("alice", "configure") {
+		if time.Now().After(deadline) {
+			t.Fatal("a revoked session was still answered 5s later, inside a 30s ttl")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if r := lastCommand(t, &log); r["reason"] != "credential_revoked" {
+		t.Fatalf("denied %v, want credential_revoked", r["reason"])
+	}
+}
+
+// Review Focus 3, revoked: a session revoked by principal through the broker
+// (broker.Revoke: a standing mark and session.Manager's SetRevokedAt) is
+// denied credential_revoked inside the TTL. The marks hold the principal
+// besides, so this pins the principal's denial; the mark-free case above
+// pins the eviction.
 func TestARevokedSessionIsDeniedInsideTheTTL(t *testing.T) {
 	var out, log syncBuffer
 	e, o := stderr, stdout
@@ -98,10 +170,13 @@ func TestARevokedSessionIsDeniedInsideTheTTL(t *testing.T) {
 	tacacs := startSplitDaemon(t, f.daemon, &out, 1)
 	dev := tacacsClient{t: t, addr: tacacs, key: []byte("run-test-secret")}
 	loginSession(t, dev, mintOn(t, api, f.pki, "leaf1"), &log)
-	for i := 0; i < 2; i++ {
+	for i := 0; i < 3; i++ {
 		if !dev.permits("alice", "configure") {
 			t.Fatal("control: the cached session's command was refused before the revocation")
 		}
+	}
+	if h := hits(t, &out); h < 1 {
+		t.Fatalf("control: %v cache hits before the revocation, want at least 1", h)
 	}
 	if err := stopBroker(); err != nil {
 		t.Fatal(err)
@@ -184,4 +259,23 @@ func TestNoCacheWithoutATTL(t *testing.T) {
 	daemonCfg, _ := etcdSplit(t)
 	startSplitDaemon(t, daemonCfg, &out, 1)
 	waitFor(t, &out, "the context cache is off (store.etcd.context_cache.ttl is not set)")
+}
+
+// The stale line is said once per run of stale serves, and the fresh line
+// once when the store answers again.
+func TestTheStaleSayerSaysEachRunOnce(t *testing.T) {
+	var out syncBuffer
+	ss := &staleSayer{out: &out, ttl: time.Second}
+	ss.fresh() // no run, nothing said
+	ss.serve(context.DeadlineExceeded)
+	ss.serve(context.DeadlineExceeded)
+	ss.fresh()
+	ss.fresh()
+	ss.serve(context.DeadlineExceeded)
+	if n := strings.Count(out.String(), "serving cached login contexts past"); n != 2 {
+		t.Fatalf("stale said %d times, want 2:\n%s", n, out.String())
+	}
+	if n := strings.Count(out.String(), "answered by the store again"); n != 1 {
+		t.Fatalf("fresh said %d times, want 1:\n%s", n, out.String())
+	}
 }
