@@ -476,7 +476,10 @@ func MembershipRefusedKeyKeepsItsClaimants(t *testing.T, b Backend) {
 	byKeyIs(k, "", "bob claims a refused key alice's live record still lists")
 	bob.MapKeys, bob.VerifiedAt = nil, t0.Add(time.Second)
 	put(bob, time.Hour)
-	byKeyIs(k, alicep, "bob stopped listing it")
+	byKeyIs(k, "", "bob stopped listing it, alice not verified since the refusal")
+	alice.VerifiedAt = t0.Add(2 * time.Second)
+	put(alice, time.Hour)
+	byKeyIs(k, alicep, "alice verified after the refusal, the sole claimant")
 
 	// A claim older than the refusal arrives after it.
 	k2 := store.MapKey("san_email", "other@corp.example.com")
@@ -507,4 +510,42 @@ func MembershipRefusedKeyKeepsItsClaimants(t *testing.T, b Backend) {
 		VerifiedAt: now}
 	put(dave, time.Hour)
 	byKeyIs(k3, "", "dave claims after a short refusal expired, carol's record still lists the key")
+}
+
+// MembershipKeyOutlivesNoRecord: a key's marker lasts as long as the longest
+// record that claimed it, however the claim arrived: a verification that
+// leaves the key's holder unchanged still extends it, so a record never
+// outlives the marker that keeps another principal from taking its key
+// (review R2-a).
+func MembershipKeyOutlivesNoRecord(t *testing.T, b Backend) {
+	ctx := context.Background()
+	var mu sync.Mutex
+	now := t0
+	s := b.New(t, func() time.Time { mu.Lock(); defer mu.Unlock(); return now })
+	advance := func(d time.Duration) { mu.Lock(); now = now.Add(d); mu.Unlock() }
+	put := func(m store.Membership) {
+		t.Helper()
+		if err := s.PutMembership(ctx, m, time.Hour); err != nil {
+			t.Fatal(err)
+		}
+	}
+	k := store.MapKey("san_email", "shared@corp.example.com")
+	p := store.Membership{Principal: "user:p@corp.example.com", Username: "p", MapKeys: []string{k}, VerifiedAt: t0.Add(-10 * time.Minute)}
+	q := store.Membership{Principal: "user:q@corp.example.com", Username: "q", MapKeys: []string{k}, VerifiedAt: t0}
+	put(p)
+	put(q)
+	q.MapKeys, q.VerifiedAt = nil, t0.Add(time.Second)
+	put(q)
+	advance(30 * time.Minute)
+	p.VerifiedAt = t0.Add(-5 * time.Minute)
+	put(p)
+	advance(10 * time.Minute)
+	p.VerifiedAt = t0.Add(-4 * time.Minute)
+	put(p)
+	advance(55 * time.Minute) // past the marker p's first write set, inside p's record
+	q.MapKeys, q.VerifiedAt = []string{k}, now
+	put(q)
+	if m, err := s.MembershipByKey(ctx, k); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("q claimed a key p's live record still lists: answered %q %v, want ErrNotFound", m.Principal, err)
+	}
 }

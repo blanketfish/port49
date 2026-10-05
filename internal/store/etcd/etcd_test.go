@@ -1148,3 +1148,32 @@ func TestSeenIsRaisedByEveryContextClientResponse(t *testing.T) {
 		t.Errorf("PutContextRev: Seen %d, below the revision %d it committed at", got, rev)
 	}
 }
+
+// A PutMembership torn after a key was registered and before its record was
+// written leaves a claimant with no record: another principal's claim then
+// answers alone, as nothing lists the key, and the claimant's own record,
+// written later, makes the key ambiguous. The reverse tear, a record listing
+// a key its index does not know, cannot happen: the registration comes first
+// (review R2-b).
+func TestATornMembershipWriteOnlyDeniesAKey(t *testing.T) {
+	ctx := context.Background()
+	s := onShared(t, func() time.Time { return t0 })
+	k := store.MapKey("san_email", "shared@corp.example.com")
+	p := store.Membership{Principal: "user:p@corp.example.com", Username: "p", MapKeys: []string{k}, VerifiedAt: t0}
+	q := store.Membership{Principal: "user:q@corp.example.com", Username: "q", MapKeys: []string{k}, VerifiedAt: t0}
+	if err := s.registerKey(ctx, k, p.Principal, t0.Add(time.Hour), t0); err != nil { // p's put, torn after its claim
+		t.Fatal(err)
+	}
+	if err := s.PutMembership(ctx, q, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if m, err := s.MembershipByKey(ctx, k); err != nil || m.Principal != q.Principal {
+		t.Fatalf("a claimant with no record: %+v %v, want q's", m, err)
+	}
+	if err := s.PutMembership(ctx, p, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if m, err := s.MembershipByKey(ctx, k); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("both listed it: %q %v, want ErrNotFound", m.Principal, err)
+	}
+}
