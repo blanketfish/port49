@@ -23,6 +23,9 @@ port49 login --broker https://127.0.0.1:8443 \
   --broker-ca deploy/compose/local/broker/broker-ca.pem
 ```
 
+Bring the whole stack up the first time, or run `docker compose build` first: only `setup` and
+`port49-broker` build, and `etcd-init` and `port49d` reuse their tags.
+
 The trial PKI protects nothing real. TACACS+ is published on `127.0.0.1:49`, the broker on
 `127.0.0.1:8443`, and each component's metrics on `127.0.0.1:9049` and `127.0.0.1:9050`.
 

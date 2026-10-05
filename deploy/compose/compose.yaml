@@ -48,6 +48,9 @@ services:
     build: {context: ../.., target: setup}
     command: [/usr/local/bin/setup.sh]
     network_mode: none
+    # the staged copy of both components' etcd keys lives in memory, never in
+    # a layer a killed container would leave behind (setup.sh)
+    tmpfs: [/etc/port49]
     volumes:
       - ${PORT49_COMPOSE_CONFIG:-./config}:/src/config:ro
       - ${PORT49_COMPOSE_LOCAL:-./local}:/src/local:ro

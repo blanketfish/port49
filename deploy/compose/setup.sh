@@ -52,10 +52,11 @@ install -o 0 -g 0 -m 0600 "$L/etcd/root-key.pem" /vol/etcd-root/root-key.pem
 # store-roles reads both store: blocks and the files they name, at the
 # paths each container sees them: stage both here, in this container alone.
 # The staged copy holds both components' etcd private keys and the exited
-# container keeps its filesystem layer, so it is removed on every exit
+# container keeps its filesystem layer, so /etc/port49 is a tmpfs (compose.yaml)
+# and is emptied on every exit
 # (Ruling 1 holds inside the project). Nothing after setup needs it: etcd-init
 # reads roles.sh from the etcd-root volume.
-trap 'rm -rf /etc/port49' EXIT
+trap 'rm -rf /etc/port49/*' EXIT
 dir /etc/port49/etcd
 cp /vol/port49d-etc/port49d.yaml /vol/broker-etc/port49-broker.yaml /etc/port49/
 cp /vol/port49d-etc/etcd/* /vol/broker-etc/etcd/* /etc/port49/etcd/

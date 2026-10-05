@@ -170,5 +170,10 @@ func TestComposeSmoke(t *testing.T) {
 	if len(lines) != 2 || lines[0] != "65532 65532 700" || !strings.HasPrefix(lines[1], "65532 ") {
 		t.Fatalf("broker-state: %q, want the directory 65532 65532 700 and marks.json owned by 65532", lines)
 	}
+	sp, err := exec.Command("docker", "run", "--rm", "-v", project+"_port49d-spool:/s", "--entrypoint", "stat",
+		"port49-setup:dev", "-c", "%u %g %a", "/s").CombinedOutput()
+	if err != nil || strings.TrimSpace(string(sp)) != "65532 65532 700" {
+		t.Fatalf("port49d-spool: %q (%v), want 65532 65532 700", sp, err)
+	}
 	fmt.Fprintln(os.Stderr, "compose smoke: login, recreate, session kept, token redeemed, state_dir kept")
 }
