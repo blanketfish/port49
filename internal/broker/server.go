@@ -86,12 +86,20 @@ func (b *Broker) Server(addr string, cert tls.Certificate, anchor *x509.CertPool
 				if len(cs.PeerCertificates) == 0 {
 					return nil // /v1/config only; /v1/tokens refuses it
 				}
+				if b.Directory != nil {
+					// The chain is checked here, the mapping at bind: a leaf
+					// with no email SAN is a person a directory may know.
+					_, _, err := CertIdentity(&cs, b.Now())
+					return err
+				}
 				_, _, err := Identity(&cs, b.Now())
 				return err
 			},
 		},
-		TLSNextProto:      map[string]func(*http.Server, *tls.Conn, http.Handler){},
-		ConnContext:       func(ctx context.Context, c net.Conn) context.Context { return withHeldConn(ctx, acceptedAt(c, b.Now)) },
+		TLSNextProto: map[string]func(*http.Server, *tls.Conn, http.Handler){},
+		ConnContext: func(ctx context.Context, c net.Conn) context.Context {
+			return withHeldConn(ctx, acceptedAt(c, b.Now), mappedOf(c))
+		},
 		ConnState:         closeIdleWithoutCertificate,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       readTimeout,

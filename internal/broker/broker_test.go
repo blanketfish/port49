@@ -206,7 +206,7 @@ func fingerprint(c tls.Certificate) string {
 // the next request is a new handshake.
 func TestAConnectionPastTheCeilingIsRefused(t *testing.T) {
 	f := newFixture(t, 8)
-	ctx := withHeldConn(context.Background(), f.now)
+	ctx := withHeldConn(context.Background(), f.now, nil)
 	decodeMint(t, f.post(ctx, f.state(f.alice), `{"devices":["leaf1"]}`, ""))
 	f.now = f.now.Add(12*time.Hour + time.Second)
 	w := f.post(ctx, f.state(f.alice), `{"devices":["leaf1"]}`, "")

@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-ldap/ldap/v3"
@@ -52,6 +53,12 @@ type Resolver struct {
 	// on its own budget (the grace read, a refusal); 10s when zero, as
 	// the broker's holdTimeout.
 	StoreTimeout time.Duration
+	// Calls counts the answers a ForTestsStaticResolver gave: nothing
+	// else sets it.
+	Calls atomic.Int64
+
+	// static, when set, answers Map, Verify and Current (static.go).
+	static func(principal string) (Answer, error)
 
 	mu   sync.Mutex
 	said map[string]time.Time
@@ -82,6 +89,9 @@ type lookup struct {
 // from a server, written to the store; with no server answering, from the
 // store by the certificate's mapping key within grace.
 func (r *Resolver) Map(ctx context.Context, leaf *x509.Certificate) (Answer, error) {
+	if r.static != nil {
+		return r.answerStatic(staticKey(leaf))
+	}
 	l, err := r.Cfg.Mapping.Lookup(leaf, r.Cfg.UserFilter)
 	if err != nil {
 		r.count("unmapped")
@@ -102,6 +112,9 @@ func (r *Resolver) Map(ctx context.Context, leaf *x509.Certificate) (Answer, err
 func (r *Resolver) Verify(ctx context.Context, principal string) (Answer, error) {
 	if !IsUser(principal) {
 		return Answer{}, fmt.Errorf("%w: %s", ErrNotUser, printsafe.Line(principal, 200))
+	}
+	if r.static != nil {
+		return r.answerStatic(principal)
 	}
 	v := strings.TrimPrefix(principal, "user:")
 	filter := fmt.Sprintf("(&%s(%s=%s))", r.Cfg.UserFilter, r.Cfg.PrincipalAttribute, ldap.EscapeFilter(v))
@@ -133,6 +146,9 @@ func (r *Resolver) byDN(dn string) func(Searcher) (*ldap.Entry, error) {
 // Current is the membership a request uses: Verify, else the store's
 // within grace (Ruling 10).
 func (r *Resolver) Current(ctx context.Context, principal string) (Answer, error) {
+	if r.static != nil && IsUser(principal) {
+		return r.answerStatic(principal)
+	}
 	a, err := r.Verify(ctx, principal)
 	if !errors.Is(err, ErrUnavailable) {
 		return a, err

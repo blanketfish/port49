@@ -20,7 +20,7 @@ import (
 func TestIdentityAnswersTheCallerAlone(t *testing.T) {
 	f := newFixture(t, 8)
 	at := f.now.Add(-time.Hour)
-	w := f.call(withHeldConn(context.Background(), at), f.state(f.alice), "GET",
+	w := f.call(withHeldConn(context.Background(), at, nil), f.state(f.alice), "GET",
 		"/v1/identity?principal=user:carol@example.com", "")
 	if w.Code != http.StatusOK {
 		t.Fatalf("%d %s", w.Code, w.Body)
@@ -77,7 +77,7 @@ func TestIdentityIsRefusedAsAMintIs(t *testing.T) {
 		!strings.Contains(w.Body.String(), "trust_domain_unresolved") {
 		t.Fatalf("expired: %d %s", w.Code, w.Body)
 	}
-	old := withHeldConn(ctx, f.now.Add(-13*time.Hour))
+	old := withHeldConn(ctx, f.now.Add(-13*time.Hour), nil)
 	if w := f.call(old, f.state(f.alice), "GET", "/v1/identity", ""); w.Code != 401 ||
 		!strings.Contains(w.Body.String(), "session_expired") {
 		t.Fatalf("past max_session_age: %d %s", w.Code, w.Body)
