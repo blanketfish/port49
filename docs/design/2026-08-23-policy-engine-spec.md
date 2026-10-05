@@ -46,7 +46,11 @@ Scopes are authored and describe intent. Keeping them separate is what makes
 or `system:serviceaccount:netops:oxidized`. A subject is how policy addresses a set of
 them, and it has exactly two forms — an LDAP group, or one or more literal identities. That
 single mechanism covers both directory-driven human access and hand-maintained service
-accounts.
+accounts. A group is named by its name (the entry's `broker.directory.group_name_attribute`, `cn` by
+default), matched only while exactly one group under `broker.directory.groups_base_dn` has it,
+or by its DN. A principal matches every subject whose group it is in, transitively under
+`broker.directory.nested_groups`, and the one identity subject that lists it, if any; the
+grants of all of them compose (§5.1; §13 decision 38).
 
 **A subject MAY list several identities.** Matching already resolves a set — an LDAP group
 yields many principals — so accepting a list costs nothing and makes credential migration a
@@ -79,7 +83,7 @@ the policy string are the same string and the subject matcher is a comparison:
 
 | Verifier | Principal string |
 |---|---|
-| human x509 | `user:` + the directory attribute the certificate maps to (design document §7) |
+| human x509 | `user:` + the entry's `principal_attribute` (default `userPrincipalName`), lower-cased, from the certificate-to-directory mapping (design document §7); without `broker.directory`, `user:` + the certificate's one email SAN |
 | human OIDC | `user:` + `preferred_username` (or `email` where the deployment says so) |
 | workload x509 | the SAN URI verbatim — `spiffe://…` |
 | Kubernetes | `system:serviceaccount:<namespace>:<name>` from the token's `sub` |
@@ -139,6 +143,9 @@ fetches groups. No additional query:
 | LDAP or AD | `sAMAccountName` / `uid`, from the group-resolution query |
 | OIDC | the `preferred_username` claim |
 | certificate | via the certificate-to-directory mapping (§7 of the design document) |
+
+With `broker.directory`, a `user:` identity subject declares no `username:`; the broker refuses
+one at load. Without it, one is required, as before plan 7g.
 
 **Machine identities have no directory entry**, so the subject declares one:
 
@@ -425,6 +432,15 @@ When some matching grants set `max_privilege` and others leave it unset, the cei
 max of the ones that set it: a grant that states no ceiling does not lift the ceiling another
 grant states. The result has no ceiling only when no matching grant sets one.
 
+**Several subjects compose.** A principal in two groups, or listed by an identity subject and
+in a group, holds the union of their grants, as one subject's grants compose. What a subject
+declares for itself composes so as never to weaken any one subject's demand: `token_ttl` is
+the least, among the matching subjects with a grant on the device; `enable` is the mechanism
+demanding the most proof among those that offer one (`token`, then `auto`, then `none`); `api:`
+rights are the union. The joint checks of §10 run per subject at load; a composition of more
+than one subject is checked at mint, and one a check refuses is `composition_refused` for that
+principal on that device (§13 decision 38).
+
 Failure to match any grant means the device is unreachable for that principal, and the mint
 fails **before an SSH connection is opened**.
 
@@ -491,7 +507,9 @@ ctx:(nas, username)
   accounting_state  open | closing       advisory (5.8); never authorizes or denies
 ```
 
-`refreshed_at` is written at creation and on every refresh. When `now - refreshed_at`
+`refreshed_at` is written at creation (the membership's verification time, on a directory
+login) and on every scheduled refresh that verified the membership (§5.1.3); a policy refresh
+never writes it. When `now - refreshed_at`
 exceeds the configured `staleness_ceiling` (design document §9 and §12) the daemon denies
 with `context_stale`, which is how "serve stale up to a ceiling, then fail closed" reaches
 the command path.
@@ -741,9 +759,16 @@ the context's `ctx_id`, so the record before a command's changed answer says why
 | revoked it: the policy in force could not be resolved or compiled for it | `deny` | `blob_unavailable` |
 | revoked it: the context could not be opened, failing authentication (the record names no principal) | `deny` | `blob_unavailable` |
 | left it as it was: the device is quarantined (recorded once per context per bundle) | `deny` | `device_quarantined` |
+| revoked it: the principal's directory entry is gone, or no longer gives a usable principal or username | `deny` | `identity_unmapped` |
+| revoked it: the principal now maps to two or more entries | `deny` | `identity_ambiguous` |
+| revoked it: another entry, or a declared subject, now holds the principal's username | `deny` | `username_collision` |
+| revoked it: the principal's subjects compose on the device to a reply a joint check refuses | `deny` | `composition_refused` |
+
+A scheduled pass that stamps `refreshed_at` on a context whose answer did not change writes no
+record.
 
 Each context is counted once per pass in `port49_context_refreshes_total{outcome}`: `updated`,
-`unchanged`, `revoked`, `quarantined`, `failed`. A context already on the answer, and one a
+`unchanged`, `revoked`, `quarantined`, `failed`, `unverified`. A context already on the answer, and one a
 store error stopped the pass at, has no record (§5.7).
 
 A swap that changed only the inventory — every policy since the last complete refresh read from
@@ -793,8 +818,22 @@ pass reaches that context — the alert for a policy in force that has not yet r
 session. It is never 0 while a settle pass is outstanding: until then a login in flight may
 still write the superseded answer. A context revoked for a compile fault is
 done: revoked is its answer under the policy in force, so it does not hold the gauge, and it is
-counted `failed` in `port49_context_refreshes_total`, which is its alarm. The directory-driven scheduled
-refresh through `active_principals` is plan 7's.
+counted `failed` in `port49_context_refreshes_total`, which is its alarm.
+
+**The scheduled refresh** (plan 7g; §13 decision 38) runs every `broker.refresh_interval`
+(default 5m) on the broker holding the keyspace. For each principal in `active_principals` it
+reads the principal's directory entry and groups again, from a server, never from grace; judges
+each live context against the policy in force with that membership, writing as a policy refresh
+does; and stamps `refreshed_at` with the membership's verification time on every context it
+judged, changed or not. A principal the directory did not answer for is left as it is and
+unstamped, counted `unverified` in `port49_context_refreshes_total`, and its sessions deny
+`context_stale` once `session.staleness_ceiling` passes (§5.1.1). A principal whose entry is gone
+or ambiguous has every context revoked. Without `broker.directory`, the pass judges against the
+policy alone and stamps its own instant: the ceiling then bounds a broker outage. A policy
+refresh never stamps `refreshed_at`, and judges a group member by the membership last verified
+(held in the store; design §12), or by no groups where none is held, where the directory refused
+the principal, or where it was verified longer ago than `broker.directory.grace`: a policy
+refresh can narrow on an old membership, never widen.
 
 **A context that keeps changing does not stop the pass.** The compare-and-set is on
 `policy_rev`, which only a write to what the refresh decides advances: a login's join or
@@ -1939,8 +1978,8 @@ of the product, not a problem to optimize away.
 
 #### Events
 
-One envelope. Nine decision events, one at each point a decision is made, plus four report
-events (`account`, `account_gap`, `blob`, `inventory_change`) that share the envelope and carry no verdict:
+One envelope. Nine decision events, one at each point a decision is made, plus five report
+events (`account`, `account_gap`, `blob`, `inventory_change`, `directory_forget`) that share the envelope and carry no verdict:
 
 | `event` | Emitted by | Decides |
 |---|---|---|
@@ -1985,6 +2024,8 @@ addresses are new capture targets. Its `device` block names the device. It is wh
 source-of-truth edit that moves privilege visible in the log it moved (§10), and
 `port49_inventory_changes_total{kind}` is its alarm.
 
+A fourteenth, `directory_forget`, is a report too: an operator ran `port49 directory forget <principal>` on the broker's admin socket, deleting the principal's directory membership and with it the entry the principal was pinned to (§13 decision 38) — `{"principal": ..., "forget": {"entry_id": ..., "dn": ..., "verified_at": ..., "refused": true|absent, "origin": "admin_socket uid N"}}`. `verified_at` is the record's last verification or refusal. The principal's next verification pins the entry the directory gives it then, so this record is the trail for a principal moving to another entry by an operator's hand.
+
 `escalate` exists as its own event because the device-facing username on those platforms is
 `$enab{level}$`, not a person. The record carries the principal resolved from login context,
 which is the only place that attribution is recoverable.
@@ -2020,6 +2061,11 @@ refused later for expiry, a missing `clientAuth` usage, or not exactly one well-
 SAN — says whose certificate it was: `auth.fingerprint` (the certificate's `sha256:`, §5.1.4)
 always, and `principal` when the one email SAN maps to one. Those fields are anchor-vouched,
 not an unvalidated body. A connection with no verified chain names no one.
+
+Two fields carry what a directory contributed (plan 7g):
+
+- `policy.subjects`: on `mint`, `refresh`, `identity` and `explain`, when the principal matches more than one subject, every one of them, sorted; `policy.subject` is then absent. With one subject, `policy.subject` alone, as before (§13 decision 38).
+- `auth.directory`: on a broker event decided with a directory membership, `{source, verified_at, server, site}`: `source` is `fresh` (read from a directory server for this request) or `grace` (the store's, verified at `verified_at`, no server answering); `server` and `site` are where it was read. It names no group: `policy.subjects` says which subjects matched.
 
 A `revoke` record (plan 7a) is written once per revocation or lift that takes force: `deny
 credential_revoked` for a revocation, `permit revocation_lifted` for a lift. A revocation that took
@@ -2075,7 +2121,11 @@ refused request named; any other path is recorded `mint`.
 |---|---|
 | `grants_matched` | `mint`: at least one declared grant selected the device; blob written. `refresh`: the policy in force was written into the live context; or, on a session refresh, the context was extended. `identity`: the caller's subject holds a grant unexpired now |
 | `no_grants_matched` | `mint`: no declared grant for this principal selects the device. `refresh`: none does any more, and the live context is revoked. `identity`: it holds none |
-| `username_collision` | `mint`: the derived username is already held by a subject in another trust domain (§2) |
+| `username_collision` | `mint`: the derived username is already held by a subject in another trust domain (§2); or the directory derives a username a policy subject declares, or a second directory entry holds the same username under `broker.directory.username_attribute` (§13 decision 38). At the broker's bind and on `refresh` likewise; on `refresh` every context of the principal is revoked. The process log names both claimants |
+| `identity_unmapped` | at the broker's bind, and on `mint`, `identity`, `explain` and `revoke`: the client certificate maps to no directory entry under `broker.directory.certificate_mapping`; or the value the mapping reads is not in the certificate (no SID extension; zero or several UPN or email SANs); or a weak mapping's issuer is not one its `issuers:` pins (design §7); or the entry's `principal_attribute` or `username_attribute` is absent, has several values, is not printable ASCII, gives a principal with no `@`, or a username that is not already canonical or is reserved (§2); or the principal it gives is pinned to another entry, by `objectGUID` or `entryUUID` (else DN), for as long as that principal's membership record lives or until an operator runs `port49 directory forget` (§13 decision 38). The API answers 401 and the connection is closed. On `refresh`: the principal's entry is gone or no longer usable, and every context of it is revoked |
+| `identity_ambiguous` | as `identity_unmapped`, when the certificate maps to two or more entries, or the server refuses the search for its size limit; or when a second entry holds the same `broker.directory.principal_attribute` value as the mapped entry, so two people would share one principal (§13 decision 38). Never resolved to the first entry (design §7). MUST be alertable on its own: two people matching one certificate is an impersonation path. On `refresh`: every context of the principal is revoked |
+| `directory_unavailable` | at the broker's bind, and on `mint`, `identity`, `explain` and `revoke`: no directory server answered within `broker.directory.query_timeout`, and the membership the store holds for the principal or the certificate was verified longer ago than `broker.directory.grace`, or there is none (§13 decision 38). Nothing is minted. The API answers 503 with `Retry-After`, to be retried, and no agent session is ended. Never on `refresh`: a principal the directory does not answer for keeps its contexts unstamped, and `context_stale` takes over at the ceiling |
+| `composition_refused` | `mint`: the principal matches more than one subject, and their grants together compose on this device to a session reply a joint check refuses (§10): a level above the grants' ceiling, a reply over 255 bytes, an attribute the platform does not accept, or a blob the daemon would refuse. Refused for this principal on this device alone, never a quarantine. On `refresh`: the live context is revoked the same way. The process log names the subjects and the check |
 | `trust_domain_unresolved` | `mint`: no configured verifier accepted the credential (design document §7); or the revocation status of the certificate or one above it could not be established (a stale CRL, an OCSP responder that did not answer, an issuer no configured source covers) and `broker.certificate_status.on_unavailable` is `refuse` (§5.1.4). The API then answers 503 `certificate_status_unavailable`, to be retried, never a final 401. On `refresh`: the refresh challenge was not answered by the connection's key, or the certificate's status could not be established as on `mint` (503) |
 | `candidate_cap_reached` | `mint`: `token.candidate_cap` unspent tokens already stand for this `(device, username)`; the mint is refused, never a redemption, and every token already issued stays usable (design document §8) |
 | `context_matched` | `authorize_session`: context found, attributes returned |
@@ -2101,7 +2151,7 @@ refused request named; any other path is recorded `mint`.
 | `privilege_exceeded` | the request is above the session's granted level |
 | `session_expired` | the session ceiling was reached; context retained through the grace window (§5.6). On `mint`: the held connection's authentication is older than `session.max_session_age_default`, and the caller must authenticate again (§13, decision 17). Per item on `mint`: the device's ceiling (the least `max_session_age` of its roles, §5.6) has passed since the connection authenticated; run `port49 refresh`. On `refresh`: the context is past its grace window and is not extended. On `redeem`: the token's ceiling has passed; the login is refused FAIL, the token is not spent, and no context is written (§5.6). |
 | `context_stale` | the broker has been unreachable past `staleness_ceiling`; context retained, denies until refreshed (§5.1.1, design document §9) |
-| `credential_revoked` | the context's `revoked_at` is set — CRL, OCSP, back-channel logout, every grant on the device withdrawn, a subject's username changed, the policy in force not compiling for the context, or a refresh finding a context it could not open, where the `refresh` record before it says which (§5.1.3, §5.6); on `redeem`, a login whose resulting context is revoked because its token was not minted after the revocation, or a retransmission answered while the context it names is revoked (§5.6); on `mint`, a revocation by principal or by this certificate stands (§5.1.4) or a CRL or OCSP response names the certificate or an intermediate above it, so nothing is minted and the connection is closed; on `refresh`, the caller's certificate is marked, or a CRL or OCSP response names it or an intermediate above it, so nothing is extended; on `revoke`, a revocation's own record |
+| `credential_revoked` | the context's `revoked_at` is set — CRL, OCSP, back-channel logout, every grant on the device withdrawn, a subject's username changed, the principal's directory entry gone, ambiguous or renamed to a username another holds, their subjects' composition refused, the policy in force not compiling for the context, or a refresh finding a context it could not open, where the `refresh` record before it says which (§5.1.3, §5.6); on `redeem`, a login whose resulting context is revoked because its token was not minted after the revocation, or a retransmission answered while the context it names is revoked (§5.6); on `mint`, a revocation by principal or by this certificate stands (§5.1.4) or a CRL or OCSP response names the certificate or an intermediate above it, so nothing is minted and the connection is closed; on `refresh`, the caller's certificate is marked, or a CRL or OCSP response names it or an intermediate above it, so nothing is extended; on `revoke`, a revocation's own record |
 | `revocation_lifted` | `revoke`: an operator lifted a revocation (§5.1.4). Mints by the principal or certificate are made again; a context the revocation marked stays revoked until a login whose token was minted after the revocation joins it (§5.6; §13, decision 15): for a principal's mark, after the lift; for a certificate's, by any of the principal's other certificates at any time |
 | `api_right_missing` | `revoke`, `explain`: the caller asked to act on another principal's tokens, sessions or decisions, or on a `(device, username)` whoever holds it, and its subject declares no `api:` right that unlocks it (§2). The API answers 403 `api_right_missing`; nothing is done |
 | `device_unknown` | the source address is not in the admission trie (§10). On an `unvalidated` record: a reload refused, removed, renamed, re-keyed or re-platformed the device an open connection was admitted as, so that admission is no longer one port49d knows, and the connection is reset with no strike (§10, "How a daemon refreshes its snapshot"). On `mint` and `refresh`: the device is in inventory and admission refuses it — no key group admits it, two tie on it, or its `key_ref` is one port49d holds no key for (§10) — so no token is minted for it and its live contexts are revoked: it cannot reach port49d, and a token for it would only be a login that falls to the device's local method (`tests/lab/results/quarantine-*.md`). As with a quarantine, a subject with no grant on the device is answered `no_grants_matched` first, so the API tells no caller which devices exist |
@@ -2118,7 +2168,13 @@ denial whose reason is `context_missing`, `context_stale`, `device_unknown`, or
 separately alertable — a rise in `context_missing` means sessions are being authenticated
 somewhere other than port49, and any `context_stale` means the broker has been down longer
 than the ceiling. `credential_revoked` MUST be alertable on its own: a revoked operator still
-typing is an incident signal. `session_expired` is a further category: expected, and a signal
+typing is an incident signal. `identity_ambiguous` MUST be alertable on its own, as
+`credential_revoked` is; a rise in `directory_unavailable` means no directory server has
+answered for longer than `broker.directory.grace` for someone. Alert at half the ceiling,
+`time() - port49_directory_refresh_last_complete_timestamp_seconds > session.staleness_ceiling / 2`:
+at the ceiling every live session denies `context_stale` from a reachable port49d, and the
+escapes are `session.staleness_ceiling: 0s` with a port49d restart, or stopping port49d so
+break-glass applies (L4). `session_expired` is a further category: expected, and a signal
 that the re-authentication warning is not reaching operators (§5.6).
 
 #### Credentials never appear
@@ -5571,8 +5627,10 @@ resolves to a subject it did not (added to a subject, or moved from another), an
 `username:` changed. Each fails the gate unless a passing session test naming that `principal:`
 in the new policy asserts the access it resolves to; for a `username:` change, a session test
 naming one of the subject's principals. A principal removed from every subject is reported and
-does not fail. A subject's `group:` changing is reported; group subjects mint for no one until the
-directory arrives (plan 7), and the gate on them is that plan's.
+does not fail. A subject's `group:`
+changing fails the gate unless a passing session test naming that subject asserts the access it
+resolves to, as a changed `username:` does: who holds a group subject's access is the group (§13
+decision 38).
 
 **A broker API right gained fails the gate** (owner's ruling 2026-09-24, review M6). A subject's
 `api:` rights (§2) let it act on other people's sessions, so the diff compares them per subject,
@@ -7081,6 +7139,140 @@ context cache it is told to keep; and port49 ships a container shape.** *Plan 7f
   - **Source addresses.** What a published port does to a device's source address is §15 L39
     (a).
 
+**38. The directory: one entry per certificate or no principal, membership kept in the store,
+every matching subject composes, and a scheduled refresh stamps refreshed_at.** *Plan 7g,
+2026-10-05.*
+
+- **The defaults.** `session.staleness_ceiling` 4h (`0s` disables it, said at every start),
+  `broker.directory.grace` 4h and `broker.refresh_interval` 5m: provisional on Ryan's answer to
+  OR-1. The runbook line: at the ceiling live sessions deny `context_stale` from a reachable
+  port49d, so break-glass does not help on them; the escapes are `session.staleness_ceiling: 0s`
+  with a port49d restart, or stopping port49d so devices fall back to break-glass (L4). Alert at
+  half the ceiling (§5.7). Upgrade every broker before port49d: a new port49d beside an old
+  broker that never stamps `refreshed_at` denies every session at the ceiling after its login.
+  Design §9's "MUST be explicit configuration" is amended to match (Task 1); Task 15 builds the
+  default.
+- **1. The mapping is configured, and it is one of six.** `broker.directory.certificate_mapping`
+  takes `kind` and `attribute` (each kind has a default). The strong kinds are `issuer_serial`
+  (`altSecurityIdentities`, AD's `X509:<I>{issuer}<SR>{serial}` form, the issuer rendered from the
+  leaf's raw DER with `DC=` included, never from `pkix.Name`) and `sid` (the SID extension,
+  1.3.6.1.4.1.311.25.2, on `objectSid`). The weak kinds are `san_upn`, `san_email`, `subject_dn`
+  and `cn`. A weak kind, or an `attribute` repointed on a strong one, is refused at load without
+  `allow_weak: true` and a non-empty `issuers:` pin, which is checked at every mapping, before
+  any search, comparing (OID, value) pairs. A value the kind cannot find is `identity_unmapped`;
+  every value is escaped for the filter; a mapping key is a hash of the kind and the value's
+  canonical form on both sides. `issuer_serial` and `sid` are provisional on L44 (Windows Server
+  AD). Tasks 4 and 8.
+- **2. Exactly one entry, or no principal.** One search under `base_dn` with a size limit of 2.
+  Zero entries is `identity_unmapped`; two or more, or the server's size-limit-exceeded, is
+  `identity_ambiguous` and never the first; a server fault is `directory_unavailable`. Task 8.
+- **3. The principal and the username come from the entry, and each must be held by that entry
+  alone.** The principal is `user:` + `principal_attribute` lower-cased (one value, printable
+  ASCII, an `@`); the username is `username_attribute` lower-cased, canonical and not reserved;
+  otherwise `identity_unmapped`. A second entry holding the principal's value is
+  `identity_ambiguous`; a second holding the username is `username_collision`; both searches run
+  with no `user_filter`, so an entry outside it counts. A derived username a policy subject
+  declares is `username_collision`; the declared one stands. A principal is pinned to its entry by
+  `objectGUID` or `entryUUID` (else DN), for the life of its membership record, `max(grace, 24h)`
+  after its last verification or refusal; another entry claiming it is `identity_unmapped`, and a
+  refusal keeps the pin. The escape is `port49 directory forget <principal>` on the broker's admin
+  socket, which deletes the record and writes a `directory_forget` report (§5.7); it asks the
+  directory nothing and grants nothing, so it is run only after confirming the new entry is the
+  same person. The two attributes must be writable only by directory administrators; the
+  uniqueness searches hold when they are not. This is a ruling, not a device claim, and is not
+  provisional. Tasks 5, 8 and 13.
+- **4. The mapping runs once per held connection, at bind, and is pinned.** The order is the
+  certificate checks, the certificate-key mark, `Status`, the mapping bounded by
+  `query_timeout`, then the principal's mark, so a revoked certificate is answered 401
+  `credential_revoked` before the directory is asked. Marks made against the legacy
+  email-SAN principal still apply. A refusal is answered 401 `identity_unmapped`,
+  `identity_ambiguous` or `username_collision`, or 503 `directory_unavailable` with `Retry-After:
+  30`, which the agent retries with no session ended. Task 12.
+- **5. A principal matches every subject that names it, and their grants compose.** The grants
+  are unioned; `token_ttl` is the least among matching subjects with a grant on the device;
+  `enable` the mechanism demanding the most proof (`token`, `auto`, `none`); `api:` rights the
+  union. A composition of more than one subject is checked at mint with the joint checks of §10,
+  and one a check refuses is `composition_refused` for that principal on that device, never a
+  quarantine; the refresh revokes a live context the same way. The record lists them as
+  `policy.subjects`. Tasks 11 and 13.
+- **6. Nested groups are a required choice of three.** `in_chain`
+  (`member:1.2.840.113556.1.4.1941:=`), `recursive` (port49 walks, breadth-first, with a visited
+  set and `max_depth` default 16, 1 to 64, a truncated walk only dropping memberships) and
+  `direct`. There is no default: an absent `nested_groups` is refused at load, naming the three.
+  Provisional on L42; on Windows Server AD, on L44. Tasks 4 and 9.
+- **7. A group subject's `group:` is a name or a DN, and a name must be unique.** A DN matches
+  by `EqualFold`; a name matches only while exactly one group under `groups_base_dn` has it, and
+  a name two groups share matches no one, said and counted. `groups_base_dn` defaults to
+  `base_dn`. Ambiguity fails closed. Tasks 9 and 11.
+- **8. Binding is one of three mechanisms, always over TLS.** `external` (the broker's own
+  client certificate), `gssapi` (a keytab read through `keyfile.ReadSecret`, no SASL security
+  layer, pure Go: OR-2) and `simple` (the password from the environment by name, said at start
+  as the weakest). `ca_file` is required, server names are verified, `ldap://` needs
+  `start_tls`. The password, the keytab and a ticket are never logged. Provisional on L43; on
+  Windows Server AD, on L44. Tasks 4 and 7.
+- **9. The server pool.** Ranked same-site first, then `priority` descending, then file order;
+  sticky until a server fault or an open breaker; a refused dial or bind is "this server did not
+  answer" and fails over (a 49 is no breaker fault); each search runs under its own context;
+  breakers open after `failure_threshold` (3) and are tried again only by the health check
+  (`probe_interval`, 60s); health checks every 30s, 2s each; failback after
+  `stability_window` (5m); a site crossing is a logged, counted consistency event. Task 6.
+- **10. Membership lives in the shared store, sealed, and grace reads it.** `mb/<principal>` is
+  sealed (DN, entry id, username, group DNs, verified-unique names, mapping keys, `verified_at`,
+  server, site); `mk/<hash>` indexes the principal a mapping key resolved to and binds nothing
+  alone; a key two principals claim is written ambiguous. Every successful verification writes
+  both. A refusal is written too, and grace never overrules it. The lease is `max(grace, 24h)`.
+  When no server answers, a bind, mint or identity request uses the stored membership if
+  `now - verified_at <= grace`; past it, or with none, `directory_unavailable`. Grace is read on
+  its own budget, after the pool call's `query_timeout`. Why the store: a process cache would
+  deny every operator a broker restart catches in an outage and let two replicas differ. The
+  refusal-record rule is a ruling, not a device claim, and is not provisional. Tasks 5 and 10.
+- **11. A grace mint never resets the staleness clock.** The token carries `VerifiedAt`; the
+  login writes `refreshed_at` as the earlier of that and now; a join takes the joining login's.
+  Tasks 3, 10 and 13.
+- **12. The scheduled refresh.** Every `refresh_interval` (default 5m, 1m to 1h), for each
+  `active_principals` entry, under `Policy.Hold()`: `user:` principals are verified fresh and
+  their contexts judged and stamped with the membership's `VerifiedAt`; a machine principal is
+  judged by `policy.MemberOf` and stamped with the pass's instant. A fault leaves the contexts
+  unstamped, counted `unverified`; an entry gone, ambiguous or a username taken revokes every
+  context. Tokens of narrowed or revoked principals are superseded. Without a directory the pass
+  stamps its own instant. A policy-reload pass never stamps and judges by the stored membership,
+  or by no groups where none is held, it is refused or it is older than grace. Tasks 14 and 15.
+- **13. Rights and identity through groups.** `HasRightOf` is the union over every matching
+  subject; `revoke_others` and `explain_others` work through a group from the membership
+  verified at that request. A caller revoking only their own principal never asks the
+  directory. Machine principals are never sent to it. `GET /v1/identity` answers the subjects,
+  the group names and DNs, the username, and the membership's `verified_at` and source. Task 13.
+- **14. `session.staleness_ceiling` defaults to 4h, with an explicit `0s` to disable it.** In
+  one process, port49d's load refuses a `refresh_interval` above half the ceiling and a
+  `directory.grace` above the ceiling; port49-broker's load never applies the ceiling, and its
+  start line states its own values. The lab says `0s`. Provisional on Ryan's answer to OR-1.
+  Task 15.
+- **15. The diff gates a changed `group:`.** A subject whose `group:` changed fails the gate
+  unless a passing session test naming it asserts the access it resolves to (§12); a new group
+  subject is gated as a new subject's principals are. Task 11.
+- **16. A directory-derived username never meets a declared human one.** With a directory, a
+  `user:` identity subject declaring `username:` is refused at the broker's load; without one it
+  is required; the offline tools load either. Task 11.
+- **17. Group subjects with no directory mint for no one, and the start says so,** naming
+  them. The policy still loads. Task 16.
+- **18. What is never logged.** The bind password, the keytab, a ticket, a server's message
+  beyond `printsafe.Line`'s 300 bytes, a certificate value the mapping found unprintable. A
+  principal, a DN and a group DN may be logged, each through `printsafe.Line`. Tasks 7, 8 and 10.
+- **19. The metrics.** No label names a device or a principal; `server` is the configured URI.
+  `port49_directory_queries_total{server,outcome}`, `port49_directory_server_up`,
+  `port49_directory_selected`, `port49_directory_site_crossings_total`,
+  `port49_directory_lookups_total{outcome}`, `port49_directory_walks_truncated_total`,
+  `port49_directory_group_names_ambiguous`, `port49_directory_prewarm_principals`,
+  `port49_directory_prewarm_last_success_timestamp_seconds` and
+  `port49_directory_refresh_last_complete_timestamp_seconds`; `port49_context_refreshes_total`
+  gains `unverified`. Tasks 6, 9, 10, 15 and 16.
+- **20. Pre-warm.** Every `prewarm.interval` (default 1h, `0s` off), starting 30s after the runner
+  takes the keyspace, it verifies the members of every group a policy group subject names,
+  enumerated under the nested mode, one query at a time on the sticky server, at most
+  `prewarm.max_principals` (default 10000), writing each with every mapping key its entry
+  answers to. An operator who has never logged in before can then log in during an outage
+  within grace. Task 10.
+
 ### Deferred, with reasons
 
 Neither of these is an open question about the design. Both are closed for v1 on the
@@ -7221,6 +7413,10 @@ Beyond those already listed in the design document's §14:
 - **Username resolution**: a human principal's device-facing username is derived at mint from
   the directory or the OIDC claim; a machine subject uses its declared `username`; a subject
   with neither fails at policy load.
+  With `broker.directory`, a certificate mapping to zero entries is `identity_unmapped`, to two
+  `identity_ambiguous`; a derived username a declared subject holds, or a second entry holds, is
+  `username_collision`; a mapped value carrying filter metacharacters matches only its literal
+  entry.
 - **Username uniqueness**: two subjects declaring the same username fail at policy load.
 - **Username normalization**: `alice`, `ALICE`, `DOMAIN\alice`, and `alice@corp.example.com`
   all match a canonical `alice`.
@@ -7651,6 +7847,17 @@ Beyond those already listed in the design document's §14:
   inside it.
 - **The bulk pool**: its circuit open for `store.etcd.hold_ttl` closes no listener.
 
+#### Directory
+
+- **Directory.** A grace mint's context has `refreshed_at` equal to the membership's
+  verification time. A scheduled pass with no server answering stamps nothing and revokes
+  nothing. A principal in two subjects holds the union of their grants, the least `token_ttl`
+  and the most demanding `enable`. A group name two groups share matches no one. A recursive
+  walk ends on a loop. A broker restarted in a directory outage mints within grace from the
+  store and refuses past it. A principal the directory refused before an outage is refused
+  through it. Two entries holding one `principal_attribute` value are both
+  `identity_ambiguous`. A policy refresh never widens on a membership older than grace.
+
 ---
 
 ## 15. Lab register
@@ -7727,6 +7934,9 @@ implemented against a guess. This section is the one place the distinction is ke
 | **L39** | Whether port49d sees a device's true source address in each deployment shape: (a) Docker with a published port, with the userland proxy on and off; (b) Kubernetes behind a Service with `externalTrafficPolicy: Cluster` and with `Local`; (c) Kubernetes with host networking. Measured by the device-binding check passing or failing for a known device. | Design §13's source-address requirement, applied to plan 12's deployment shapes (roadmap, Plan 12) | any one device platform per shape; the observation is the server's, not the device's | open — (a) measured 2026-10-05, on vEOS-lab 4.31.2F (image tagged 4.32.2F) through deploy/compose (plan 7f), Docker 29.1.3, the device on the clab management bridge and port49d published on its gateway address, with the clab network's own masquerade of its subnet kept off the device's traffic (a RETURN rule, modelling a device off the host): tests/lab/results/L39-docker-proxy-on-arista_eos.md, tests/lab/results/L39-docker-proxy-off-arista_eos.md. With the userland proxy on, and with `userland-proxy: false`, port49d saw the device's own address (172.100.100.11) as the source and the redeem passed `token_redeemed`; in both modes the kernel's DNAT carried the connection (the capture keeps the device's sequence number and source port), and docker-proxy carried none, so a connection docker-proxy relays is unmeasured. A first run without the RETURN rule saw the compose gateway in both modes; that was the lab's own masquerade, not the published port, and is recorded in the notes as invalid. A device on another host is modelled, not measured. (b) and (c), Kubernetes, are plan 12's |
 | **L40** | On Junos, whether `authorization-time-interval` re-authorizes a session more than once: after the first re-authorization (`L36-*.md` saw one, 15 minutes after login), whether a second request comes one interval later, and so whether a revocation made after the first reaches the session. | The operator note on Junos re-authorization on etcd (plans README, plan 7d's notes) and §15 L36 | vJunos-router, vSRX | open — added 2026-10-04 (plan 7e Task 17 review; L36 measured only the first re-authorization after login) |
 | **L41** | On the compose deployment (decision 37), what a device does when port49d closes its TACACS+ listener mid-session on its store health checks, beside port49d stopped: how long after the store hangs an idle port49d closes it (against `close_after` × `interval` + `call_timeout`); an open session's next command once it is closed, and with port49d stopped; break-glass once it is closed; once the store returns, how long until port49d listens again (after `open_after` passes) and until the device asks it again; and whether the session's next command port49d is asked is answered from the context the store kept. | Decision 37's defaults and design §12's store rows (the go-dark timing and what follows it) | EOS, NX-OS, IOS-XE, vJunos-router, vSRX | closed — measured 2026-10-05; tests/lab/results/L41-arista_eos.md, L41-cisco_nxos.md, L41-cisco_iosxe.md, L41-juniper_vjunos-router.md, L41-juniper_vsrx.md (run at 9620e03 from a pinned worktree). Dark time after the hang: EOS 5.5s, NX-OS 5s, IOS-XE 5.3s, vJunos-router 5s, vSRX 4.8s, 4.8–5.5s, at or inside decision 37's 5.5s (read by a 250ms poll of port49d's followed `docker logs` from the moment `docker compose pause` returned, so ±~0.25s; the test failed only above its 10.5s harness bound). Cell 3 beside cell 7: the open session's `show version` ran on EOS, NX-OS and both Junos images and was refused `% Authorization failed.` on IOS-XE, identically with the listener closed and with port49d stopped. Break-glass logged in with the listener closed on all five and with port49d stopped. Time to listening: 3.5s after the release on every image (the `open_after` passes said at the same moment). Until asked again: EOS 100ms, NX-OS 800ms, IOS-XE 300ms after listening, answered from the kept context (same `ctx_id`, `permit`); vJunos-router and vSRX send no command, a fresh login 300ms after listening succeeded |
+| **L42** | Nested-group resolution, per directory. The fixture: a user three levels below a granted group (`alice` ∈ `g-leaf` ∈ `g-mid` ∈ `netops-oncall`), a loop (`dave` ∈ `g-loop-a` ∈ `g-loop-b` ∈ `g-loop-a`), and a user in the granted group directly (`carol` ∈ `netops-oncall`). For each user: which groups a search under the groups base returns with `member:1.2.840.113556.1.4.1941:=<user DN>` (`in_chain`), whether that search answers, errors or is refused on the loop, and how long it takes; whether the user entry's `memberOf` lists only its direct groups; what port49's `recursive` walk and `direct` read return; and whether a directory that does not implement the matching rule refuses the filter or answers it empty. | `broker.directory.nested_groups` and its three modes (§13 decision 38); design §10's "`memberOf` is not transitive" | OpenLDAP (slapd 2.5, `memberof` overlay), Samba AD (4.17) | open — added 2026-10-05 (plan 7g) |
+| **L43** | Which bind mechanisms each directory accepts from port49-broker, and how each refusal reads: SASL EXTERNAL over LDAPS with a client certificate (OpenLDAP mapping it by `olcAuthzRegexp`); GSSAPI with a keytab and no SASL security layer, over LDAPS (Samba AD's KDC); simple bind over LDAPS; and a simple bind over plain LDAP to a directory configured to require TLS. | `broker.directory.bind` (§13 decision 38); design §10's three mechanisms | OpenLDAP (EXTERNAL, simple), Samba AD (EXTERNAL, GSSAPI, simple) | open — added 2026-10-05 (plan 7g) |
+| **L44** | The Active Directory claims on a Windows DC: on L42's fixture and its loop, which groups `member:1.2.840.113556.1.4.1941:=<user DN>` returns and how the loop is answered; SASL EXTERNAL over LDAPS with a client certificate; GSSAPI with a keytab and no SASL security layer against the Windows KDC; whether `altSecurityIdentities` values written in port49's `X509:<I>{issuer}<SR>{serial}` form (issuer from the raw DER, `DC=` included) match the certificate the DC itself maps; whether the SID extension's value equals `objectSid`; and how KB5014754's strong-mapping enforcement treats each. | `broker.directory.nested_groups: in_chain`, the strong mappings `issuer_serial` and `sid`, and `broker.directory.bind` on AD (§13 decision 38, provisional on this row) | Windows Server AD | open — added 2026-10-05 (plan 7g); for the SER8 lab box |
 
 **What has been measured so far, per row.** The measurements exist and the notes are in the
 repository. NX-OS was measured on 2026-09-20 and is no longer outstanding; **IOS-XE was
