@@ -4,7 +4,7 @@
 - **Platform:** arista_eos (containerlab node `leaf1`, 172.100.100.11)
 - **Image version:** vEOS-lab 4.31.2F (image tagged 4.32.2F) (`vrnetlab/arista_veos:4.32.2F`)
 - **Topology:** `tests/lab/topologies/eos.clab.yml`
-- **Capture:** `tests/lab/evidence/L39-docker-proxy-off-arista_eos.pcap` — 31 packets to or from the device, countable with `tcpdump -r tests/lab/evidence/L39-docker-proxy-off-arista_eos.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
+- **Capture:** `tests/lab/evidence/L39-docker-proxy-off-arista_eos.pcap` — 240 packets to or from the device, countable with `tcpdump -r tests/lab/evidence/L39-docker-proxy-off-arista_eos.pcap -n 'net 172.100.100.0/24' | wc -l`. A redacted copy of this run's capture: credential bytes overwritten with `x`, everything else byte-identical, decodable with the lab key (`tests/lab/README.md`).
 - **Transport:** SSH
 
 ## Claim
@@ -16,8 +16,10 @@ On the compose deployment (plan 7f; deploy/compose), with port49d's TACACS+ port
 | cell | observed |
 |---|---|
 | Docker's userland proxy | off (a docker-proxy process does not serve 172.100.100.1:49) |
-| the redeem record's device | nas "172.30.49.1", name "l39_gateway" (the device's address: 172.100.100.11) |
-| the login | err ssh: handshake failed: ssh: unable to authenticate, attempted methods [none keyboard-interactive], no supported methods remain; redeem "device_mismatch" |
+| the redeem record's device | nas "172.100.100.11", name "leaf1" (the device's address: 172.100.100.11) |
+| the login | err <nil>; redeem "token_redeemed" |
 
-**Not as the claim says:** port49d saw "172.30.49.1", not the device's 172.100.100.11.
+## Earlier run (5ee1137) — INVALID
+
+The first run, 2026-10-05 at commit 5ee1137, with the userland proxy off, saw nas `172.30.49.1` (`l39_gateway`) and refused the login `device_mismatch`. It is not a measurement of the published port: its precondition, device traffic routed as an off-host device's is, did not hold. The clab management network `port49-lab` (172.100.100.0/24) is itself a Docker bridge network, so Docker installs `-t nat -A POSTROUTING -s 172.100.100.0/24 ! -o br-<clab> -j MASQUERADE`. The device's packet, DNAT'd to the compose bridge, left by another interface, matched that rule and was masqueraded to the compose gateway 172.30.49.1 with its source port kept (the first run's capture showed exactly that). A device off the host has a source that is no Docker network's, and never matches the rule. The run above, at the fix commit, inserts `iptables -t nat -I POSTROUTING 1 -s 172.100.100.0/24 -d 172.30.49.0/24 -j RETURN` for the run (`startCompose`; recorded in compose.log with the rules in force) and removes it after.
 

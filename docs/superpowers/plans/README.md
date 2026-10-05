@@ -3730,9 +3730,9 @@ container's install page:
 Every shape states the same four requirements:
 
 - **The device's source address reaches port49d unrewritten** (design §13). On Kubernetes that means
-  `externalTrafficPolicy: Local` or host networking. Under Docker, a published port rewrote it to the
-  compose network's gateway with the userland proxy on and off (L39 (a), measured 2026-10-05,
-  `tests/lab/results/L39-docker-proxy-*-arista_eos.md`); Kubernetes is unmeasured until plan 12.
+  `externalTrafficPolicy: Local` or host networking. Under Docker, a published port left it unchanged
+  with the userland proxy on and off (L39 (a), measured 2026-10-05, a device on another bridge with that bridge's own
+  masquerade kept off its traffic, `tests/lab/results/L39-docker-proxy-*-arista_eos.md`); Kubernetes is unmeasured until plan 12.
 - **On etcd, two processes.** port49d and port49-broker run apart (plan 7e). The memory store stays one
   process.
 - **`broker.state_dir` survives a restart** (plan 7e Rulings 12 and 18). It holds `marks.json` and
