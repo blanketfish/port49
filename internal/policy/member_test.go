@@ -227,3 +227,92 @@ func TestExplainMemberRefusedComposition(t *testing.T) {
 		t.Fatalf("replay: %v", err)
 	}
 }
+
+const escalationYAML = `
+scopes: [{name: all_devices, match: {}}]
+roles:
+  - {name: ro, privilege: readonly, permit: ["show **"]}
+  - {name: ops, privilege: operator, permit: ["clear counters"]}
+subjects:
+  - {name: a, group: ga, enable: none, token_ttl: 5m}
+  - {name: b, group: gb, enable: token, token_ttl: 5m}
+  - {name: c, group: gc, enable: auto, token_ttl: 5m}
+grants:
+  - {subject: a, scope: all_devices, roles: [ro], max_privilege: admin}
+  - {subject: b, scope: all_devices, roles: [ops], max_privilege: operator}
+  - {subject: c, scope: all_devices, roles: [ro], max_privilege: admin}
+`
+
+// A subject with enable none never raises the ceiling enable can reach: a
+// composition reaches nothing no single subject reaches (Ruling PF7g-i).
+func TestComposingNeverRaisesTheEnableCeiling(t *testing.T) {
+	p, err := loadText(t, escalationYAML, DirectoryOn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	member := func(groups ...string) Member {
+		return Member{Principal: "user:e@corp.example.com", Directory: true, Username: "e", GroupNames: groups}
+	}
+	res, err := p.ResolveMember(member("ga", "gb"), device(t, p, "leaf-01"), now)
+	if err != nil || res.Enable != "token" || res.Ceiling != "operator" || res.Level != "operator" {
+		t.Fatalf("%+v %v", res, err)
+	}
+	// Both offer escalation: the max of their ceilings.
+	res, err = p.ResolveMember(member("gb", "gc"), device(t, p, "leaf-01"), now)
+	if err != nil || res.Enable != "token" || res.Ceiling != "admin" {
+		t.Fatalf("%+v %v", res, err)
+	}
+	// One subject alone keeps its own ceiling, enable none or not.
+	res, err = p.ResolveMember(member("ga"), device(t, p, "leaf-01"), now)
+	if err != nil || res.Ceiling != "admin" {
+		t.Fatalf("%+v %v", res, err)
+	}
+}
+
+// The directory gives the username: an empty one is refused, never filled in
+// from a declared name; replay, which has no directory, may.
+func TestADirectoryMemberWithNoUsernameIsRefused(t *testing.T) {
+	p := memberPolicy(t, DirectoryOn)
+	m := Member{Principal: "user:alice@corp.example.com", Directory: true, GroupNames: []string{"netops-ro"}}
+	if _, err := p.ResolveMember(m, device(t, p, "leaf-01"), now); !errors.Is(err, ErrNoUsername) {
+		t.Fatalf("%v", err)
+	}
+	// Offline-loaded, with alice_direct declaring a username, still refused.
+	off, err := loadText(t, strings.Replace(memberYAML, `identity: ["user:alice@corp.example.com"],`,
+		`identity: ["user:alice@corp.example.com"], username: alice,`, 1), DirectoryUnknown)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := off.ResolveMember(m, device(t, off, "leaf-01"), now); !errors.Is(err, ErrNoUsername) {
+		t.Fatalf("declared name must not fill in: %v", err)
+	}
+	res, err := off.ResolveSubjects([]string{"alice_direct", "netops_ro"}, "", device(t, off, "leaf-01"), now)
+	if err != nil || res.Username != "alice" {
+		t.Fatalf("replay falls back to the declared name: %+v %v", res, err)
+	}
+}
+
+// A policy loaded with the directory off matches no group, whatever the
+// caller flags.
+func TestNoGroupMatchesWithTheDirectoryOff(t *testing.T) {
+	p, err := loadText(t, strings.Replace(memberYAML, `identity: ["user:alice@corp.example.com"],`,
+		`identity: ["user:alice@corp.example.com"], username: alice,`, 1), DirectoryOff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := Member{Principal: "user:alice@corp.example.com", Directory: true, Username: "alice", GroupNames: []string{"netops-ro"}}
+	if got := p.SubjectsOf(m); !slices.Equal(got, []string{"alice_direct"}) {
+		t.Fatalf("%v", got)
+	}
+}
+
+// Explain names the subjects that composed on the device, not every match.
+func TestExplainMemberNamesTheGrantingSubjects(t *testing.T) {
+	p := memberPolicy(t, DirectoryOn)
+	m := Member{Principal: "user:alice@corp.example.com", Directory: true, Username: "alice",
+		GroupDNs: []string{"CN=netops-oncall,OU=G,DC=corp"}, GroupNames: []string{"netops-ro"}}
+	e, err := p.ExplainMember(m, "spine-01", "", now)
+	if err != nil || e.Subject != "netops_ro" {
+		t.Fatalf("%q %v", e.Subject, err)
+	}
+}

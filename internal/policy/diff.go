@@ -510,17 +510,19 @@ func (c *comparison) principals(now time.Time) {
 			was = &Subject{Username: is.Username}
 		}
 		apiGained := gained(was.API, is.API)
-		if was.Username == is.Username && was.Group == is.Group && slices.Equal(sortedRights(was.API), sortedRights(is.API)) {
+		// A group given as a DN is the same group in any spelling.
+		sameGroup := was.Group == is.Group || (was.groupDN != "" && was.groupDN == is.groupDN)
+		if was.Username == is.Username && sameGroup && slices.Equal(sortedRights(was.API), sortedRights(is.API)) {
 			continue
 		}
 		ch := SubjectChange{Subject: name, OldUsername: was.Username, NewUsername: is.Username, OldGroup: was.Group,
 			NewGroup: is.Group, OldAPI: sortedRights(was.API), NewAPI: sortedRights(is.API), APIGained: apiGained,
-			Gated: was.Username != is.Username || was.Group != is.Group || len(apiGained) > 0}
+			Gated: was.Username != is.Username || !sameGroup || len(apiGained) > 0}
 		names := slices.Clone(is.Identity)
 		usernameOK := was.Username == is.Username || slices.ContainsFunc(names, func(id string) bool { return tested[id] })
 		apiOK := len(apiGained) == 0 || apiTested["subject:"+name] ||
 			slices.ContainsFunc(names, func(id string) bool { return apiTested["principal:"+id] })
-		groupOK := was.Group == is.Group || subjectTested[name]
+		groupOK := sameGroup || subjectTested[name]
 		ch.Acknowledged = ch.Gated && usernameOK && apiOK && groupOK
 		c.d.Subjects = append(c.d.Subjects, ch)
 	}

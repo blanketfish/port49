@@ -38,6 +38,10 @@ func MemberOf(principal string) Member { return Member{Principal: principal} }
 // subjects compose on the device to a reply a joint check refuses.
 var ErrCompositionRefused = errors.New("policy: the principal's subjects compose to a reply a joint check refuses")
 
+// ErrNoUsername is a directory member with no username: the broker answers
+// identity_unmapped (spec §5.7), and nothing is minted.
+var ErrNoUsername = errors.New("policy: the directory gave this principal no username")
+
 // subjectsOf is every subject m matches, by name: the identity subject
 // listing it, and each group subject whose group m is in (spec §2;
 // decision 38).
@@ -47,7 +51,7 @@ func (p *Policy) subjectsOf(m Member) []*Subject {
 		out = append(out, p.subs[name])
 	}
 	// A group subject matches people, never a machine principal.
-	if m.Directory && strings.HasPrefix(m.Principal, "user:") {
+	if m.Directory && p.env.Directory != DirectoryOff && strings.HasPrefix(m.Principal, "user:") {
 		for _, name := range sortedKeys(p.subs) {
 			if sub := p.subs[name]; sub.Group != "" && sub.matches(m) {
 				out = append(out, sub)
@@ -90,6 +94,12 @@ func (p *Policy) ResolveMember(m Member, d admission.Device, now time.Time) (Res
 	if len(subs) == 0 {
 		return Resolution{}, ErrNoGrants
 	}
+	// The directory gives the username (spec §2, decision 38); one it did not
+	// give is identity_unmapped at the broker, and nothing falls back to a
+	// declared name.
+	if m.Directory && m.Username == "" {
+		return Resolution{}, ErrNoUsername
+	}
 	if len(subs) == 1 && !m.Directory {
 		return p.resolveNow(subs[0], d, now)
 	}
@@ -127,7 +137,7 @@ func (p *Policy) resolveAll(subs []*Subject, username string, d admission.Device
 	}
 	granting := c.granting(subs)
 	merged := &Subject{Name: granting[0].Name, Domain: granting[0].Domain, Username: username}
-	if username == "" {
+	if username == "" && !check { // replay of a record with no session username
 		for _, s := range granting {
 			if s.Username != "" {
 				merged.Username = s.Username

@@ -1281,3 +1281,12 @@ func TestAChangedGroupIsGated(t *testing.T) {
 		t.Fatalf("a new group subject: %+v", d.Subjects)
 	}
 }
+
+// A DN respelled with the same meaning is not a changed group.
+func TestARespelledGroupDNIsNotAChange(t *testing.T) {
+	a := loadDiff(t, `subjects: [{name: oncall, group: "CN=a,DC=x", token_ttl: 5m}]`+grantOnCall)
+	b := loadDiff(t, `subjects: [{name: oncall, group: "cn=A, dc=x", token_ttl: 5m}]`+grantOnCall)
+	if d := Compare(a, b, noon); len(d.Subjects) != 0 || d.UnacknowledgedPrincipals() != 0 {
+		t.Fatalf("%+v", d.Subjects)
+	}
+}

@@ -154,10 +154,21 @@ func (p *Policy) composeAll(subs []*Subject, d admission.Device, now time.Time) 
 		}
 		return strings.Join(a.Roles, ",") < strings.Join(b.Roles, ",")
 	})
+	// Composed subjects reach by enable no ceiling that none of them offers
+	// escalation to alone: where one of them offers it, a subject with enable
+	// none contributes its roles but not its max_privilege (Ruling PF7g-i;
+	// spec §5.1).
+	escalates := false
+	for _, g := range c.grants {
+		escalates = escalates || p.subs[g.Subject].Enable != "none"
+	}
 	roles := map[string]bool{}
 	for _, g := range c.grants {
 		for _, r := range g.Roles {
 			roles[r] = true
+		}
+		if len(subs) > 1 && escalates && p.subs[g.Subject].Enable == "none" {
+			continue
 		}
 		if p.levelIndex(g.MaxPrivilege) > p.levelIndex(c.ceiling) {
 			c.ceiling = g.MaxPrivilege

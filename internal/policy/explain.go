@@ -142,6 +142,13 @@ func (p *Policy) explain(subject string, m *Member, device, line string, now tim
 	// answers now, and the note says from when it will not.
 	_, e.Caveats = p.quarantineAt(d.Name, now)
 	e.Resolution = res
+	if m != nil {
+		// Only the subjects that granted on this device composed.
+		e.Subject = res.Subject
+		if len(res.Subjects) > 0 {
+			e.Subject = strings.Join(res.Subjects, ", ")
+		}
+	}
 	principals := p.principalsOf(subject, principal)
 	if e.MintError, e.MintDetail = mintCheck(res, principals, device); e.MintError != "" {
 		return e, nil
