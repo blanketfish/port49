@@ -133,6 +133,17 @@ func TestMappingKindsAndPins(t *testing.T) {
 	}
 }
 
+// A pin that is a DN but names an attribute type no pin can match is a load
+// error (directory.ValidPin), not a pin that refuses every certificate.
+func TestAnIssuerPinNoCertificateCanMatchIsRefused(t *testing.T) {
+	d := dirYAML(t)
+	d.CertificateMapping = mappingYAML{Kind: "cn", AllowWeak: true, Issuers: []string{"SERIALNUMBER=1,DC=corp"}}
+	if _, err := checkDirectory(d, env(map[string]string{"PORT49_LDAP_PASSWORD": "x"})); err == nil ||
+		!strings.Contains(err.Error(), `broker.directory.certificate_mapping.issuers[0] "SERIALNUMBER=1,DC=corp"`) {
+		t.Fatalf("%v", err)
+	}
+}
+
 // broker.refresh_interval: 5m by default, 1m to 1h (Ruling 12).
 func TestRefreshIntervalBounds(t *testing.T) {
 	for _, c := range []struct {
