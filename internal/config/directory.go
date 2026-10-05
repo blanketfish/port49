@@ -159,6 +159,12 @@ func checkDirectory(y directoryYAML, getenv func(string) string) (*directory.Con
 		return nil, err
 	}
 	d.Bind = b
+	// The site is logged as auth.directory.site: a password must never be
+	// read from the variable it comes from.
+	if b.PasswordEnv != "" && b.PasswordEnv == or(y.SiteEnv, "PORT49_SITE") {
+		return nil, fmt.Errorf("config: %ssite_env %s is also bind.password_env: the site is logged, a password "+
+			"never is; name different variables", p, b.PasswordEnv)
+	}
 	m, err := checkMapping(y.CertificateMapping)
 	if err != nil {
 		return nil, err
@@ -238,12 +244,20 @@ func checkBind(b bindYAML, getenv func(string) string) (directory.Bind, error) {
 		if b.TLSCertFile == "" || b.TLSKeyFile == "" {
 			return out, fmt.Errorf("config: %stls_cert_file and tls_key_file are required for external", p)
 		}
+		// A missing file stops the start, not the first bind at 3am.
+		for _, f := range []struct{ key, path string }{{"tls_cert_file", b.TLSCertFile}, {"tls_key_file", b.TLSKeyFile}} {
+			if err := readableFile(p+f.key, f.path); err != nil {
+				return out, err
+			}
+		}
 	case "gssapi":
 		if b.KeytabFile == "" || b.Principal == "" || b.KRB5Conf == "" {
 			return out, fmt.Errorf("config: %skeytab_file, principal and krb5_conf are required for gssapi", p)
 		}
-		if err := readableFile(p+"krb5_conf", b.KRB5Conf); err != nil {
-			return out, err
+		for _, f := range []struct{ key, path string }{{"keytab_file", b.KeytabFile}, {"krb5_conf", b.KRB5Conf}} {
+			if err := readableFile(p+f.key, f.path); err != nil {
+				return out, err
+			}
 		}
 	case "simple":
 		if b.BindDN == "" || b.PasswordEnv == "" {

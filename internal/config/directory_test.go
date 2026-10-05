@@ -188,3 +188,70 @@ func TestServerURICredentialsAreRefusedAndNeverPrinted(t *testing.T) {
 }
 
 var _ = directory.MapCN
+
+// The site is logged as auth.directory.site, so it may never be read from the
+// variable that holds the bind password.
+func TestSiteEnvIsNotThePasswordEnv(t *testing.T) {
+	for _, siteEnv := range []string{"PORT49_LDAP_PASSWORD", ""} {
+		d := dirYAML(t)
+		d.SiteEnv = siteEnv
+		if siteEnv == "" {
+			d.Bind.PasswordEnv = "PORT49_SITE"
+		}
+		_, err := checkDirectory(d, env(map[string]string{"PORT49_LDAP_PASSWORD": "hunter2secret", "PORT49_SITE": "hunter2secret"}))
+		if err == nil || !strings.Contains(err.Error(), "is also bind.password_env") || strings.Contains(err.Error(), "hunter2secret") {
+			t.Errorf("site_env %q: %v", siteEnv, err)
+		}
+	}
+}
+
+// A bind's key and keytab are checked at load: a missing file stops the
+// start, not the first bind.
+func TestBindFilesAreCheckedAtLoad(t *testing.T) {
+	ok := writeTemp(t, "f", []byte("x"))
+	for _, c := range []struct {
+		name string
+		bind bindYAML
+		want string
+	}{
+		{"external cert", bindYAML{Mechanism: "external", TLSCertFile: "/nonexistent/c.pem", TLSKeyFile: ok}, "broker.directory.bind.tls_cert_file"},
+		{"external key", bindYAML{Mechanism: "external", TLSCertFile: ok, TLSKeyFile: "/nonexistent/k.pem"}, "broker.directory.bind.tls_key_file"},
+		{"gssapi keytab", bindYAML{Mechanism: "gssapi", KeytabFile: "/nonexistent/kt", Principal: "p@R", KRB5Conf: ok}, "broker.directory.bind.keytab_file"},
+	} {
+		d := dirYAML(t)
+		d.Bind = c.bind
+		if _, err := checkDirectory(d, env(nil)); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: %v", c.name, err)
+		}
+	}
+	d := dirYAML(t)
+	d.Bind = bindYAML{Mechanism: "external", TLSCertFile: ok, TLSKeyFile: ok}
+	if _, err := checkDirectory(d, env(nil)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// broker.directory through Load, the whole path from YAML to Broker.Directory.
+func TestALoadedBrokerResolvesItsDirectory(t *testing.T) {
+	ca := writeTemp(t, "ca.pem", testCAPEM(t))
+	t.Setenv("PORT49_LDAP_PASSWORD", "x")
+	c, err := loadWith(t, strings.Replace(brokerBlock, "  certificate_status: {disabled: true}\n", `  certificate_status: {disabled: true}
+  refresh_interval: 10m
+  directory:
+    servers:
+      - {uri: "ldaps://dc-01.corp.example.com", priority: 100}
+    ca_file: `+ca+`
+    bind: {mechanism: simple, bind_dn: "CN=port49,DC=corp", password_env: PORT49_LDAP_PASSWORD}
+    base_dn: "DC=corp,DC=example,DC=com"
+    certificate_mapping: {kind: issuer_serial}
+    nested_groups: in_chain
+`, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b := c.Broker; b == nil || b.Directory == nil || b.RefreshInterval != 10*time.Minute ||
+		b.Directory.Grace != defaultGrace || b.Directory.Nested != directory.Nested("in_chain") ||
+		len(b.Directory.Servers) != 1 {
+		t.Fatalf("%+v", c.Broker)
+	}
+}
