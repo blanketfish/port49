@@ -194,7 +194,8 @@ func (g *skewGate) allow(pol *policy.Policy) error {
 
 // flagSwap is the asker's half of every swap to bundle, the runner's too
 // (re-review 1, I-2; re-review 2, I-3): it marks meta/judged in doubt when
-// it names another bundle (markSkew), and only then opens gate to mints
+// it names another bundle (markSkew), after recording bundle for this
+// replica, and only then opens gate to mints
 // under bundle. A mark the store did not answer, or refused (a role
 // edited, then fixed), is tried again every wait until it lands or ctx
 // ends (re-review 2, M-8): a replica that cannot flag its skew mints
@@ -202,9 +203,17 @@ func (g *skewGate) allow(pol *policy.Policy) error {
 // port49_broker_mint_gate_closed, reads 1 while it waits (re-review 3,
 // I-4); readiness never shows it, a store fault being an alarm (design
 // §12).
-func flagSwap(ctx context.Context, st startRecorder, gate *skewGate, bundle string, call, wait time.Duration,
+func flagSwap(ctx context.Context, st startRecorder, gate *skewGate, who, bundle string, ttl, call, wait time.Duration,
 	closed prometheus.Gauge, out io.Writer) {
 	closed.Set(1)
+	// The record lands first, as the start's does (recordAtStart): a runner
+	// whose PutJudgedSince read the records before it is refused, and one
+	// that read after it declines. Marked first, a runner could clear the
+	// mark with this replica's record still on the old bundle (final review
+	// 7e-2 M-1).
+	if firstBundle(ctx, st, who, bundle, ttl, call, wait, out) != nil {
+		return
+	}
 	if untilLanded(ctx, fmt.Sprintf("marking the bundle last judged in doubt against this replica's (%s)",
 		bundle), call, wait, out, func(ctx context.Context) error { return (*markSkew.Load())(ctx, st, bundle, out) },
 		store.ErrRefused) == nil {

@@ -449,8 +449,8 @@ func runBroker(parent context.Context, cfgPath string) error {
 			case <-ctx.Done():
 				return
 			case b := <-asks:
-				flagSwap(ctx, bs.raw, gate, b, 4*cfg.Store.Etcd.CallTimeout, 5*time.Second, m.BrokerMintGateClosed,
-					stderr)
+				flagSwap(ctx, bs.raw, gate, who, b, cfg.Store.Etcd.HoldTTL, 4*cfg.Store.Etcd.CallTimeout,
+					5*time.Second, m.BrokerMintGateClosed, stderr)
 				if rn.running() {
 					continue // the runner's own passes judge its contexts
 				}

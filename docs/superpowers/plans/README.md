@@ -3622,9 +3622,6 @@ harness (`startSplit`).
     `meta/witness`, which changes `RedeemAndReceipt` across the store layers); a runner that
     purges before a port49d's first read leaves it guarded until the next purge or a restart.
     The runbook's token delete covers all three.
-  - **`recordJudged`'s one-round-trip race** (Task 15a): a replica could start or reload with
-    another bundle between the `Bundles` read and the `PutJudged`; closing it needs a
-    compare-and-set over all `meta/bundles/` keys.
   - **A copy's extra fields** on a readable entry are lost at the rewrite; the revocation
     survives.
   - **Per-image device behaviour not measured:** a Junos session's re-authorization after the
