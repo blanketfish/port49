@@ -1746,6 +1746,52 @@ func TestAnOfflineRevokeSaysWhenTheHostsCopyCannotBeWritten(t *testing.T) {
 	}
 }
 
+// The inventory half of the same: an inventory_file that does not load is no
+// reason to stop the revocation either (re-review 1, M-2). The tool's lines
+// on the host's copy are its own, never a broker start's, and name the
+// order the runbook needs: before any broker starts (R1-I-1, R1-M-1).
+func TestAnOfflineRevokeGoesOnWhenTheInventoryFileDoesNotLoad(t *testing.T) {
+	f := splitFleet(t)
+	const alice = "user:alice@example.com"
+	writePolicyFile(t, f.inventory, "devices: [this is not yaml\n")
+	var rout, rerr bytes.Buffer
+	if code := offlineRevoke([]string{"--offline", "--config", f.broker, "--principal", alice}, &rout, &rerr); code != 0 {
+		t.Fatalf("exit %d: %s", code, rerr.String())
+	}
+	say := rerr.String()
+	if !strings.Contains(say, "the policy does not load (inventory_file") ||
+		!strings.Contains(say, "revoke again after such a restore, before any broker starts") ||
+		strings.Contains(say, "this replica") || strings.Contains(say, "is absent") {
+		t.Fatalf("the report: %s", say)
+	}
+	if resp, err := f.srv.Client(t, "root").Get(context.Background(), "/port49/v1/rv/principal/"+alice); err != nil ||
+		len(resp.Kvs) != 1 {
+		t.Fatalf("the store lacks the mark: %v %v", resp, err)
+	}
+}
+
+// A marks.json that does not decode is said in the offline tool's words,
+// not a replica start's, and the mark still stands in a copy (R1-M-1).
+func TestAnOfflineRevokeSaysAnUnreadableCopyInItsOwnWords(t *testing.T) {
+	f := splitFleet(t)
+	const alice = "user:alice@example.com"
+	if err := os.WriteFile(filepath.Join(f.stateDir(t), stateMarksFile), []byte("not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var rout, rerr bytes.Buffer
+	if code := offlineRevoke([]string{"--offline", "--config", f.broker, "--principal", alice}, &rout, &rerr); code != 0 {
+		t.Fatalf("exit %d: %s", code, rerr.String())
+	}
+	say := rerr.String()
+	if !strings.Contains(say, "did not read as written") || strings.Contains(say, "stop this replica") ||
+		strings.Contains(say, "this replica") {
+		t.Fatalf("the report: %s", say)
+	}
+	if got := copyHolds(t, f.stateDir(t), alice); got != "1" {
+		t.Fatalf("the copy: %q", got)
+	}
+}
+
 // An offline lift drops the mark from that host's copy, so its next takeover
 // does not put the lifted mark back (final review 7e-2 I-2).
 func TestAnOfflineLiftDropsTheMarkFromTheHostsCopy(t *testing.T) {

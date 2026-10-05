@@ -42,6 +42,16 @@ func TestAnOfflineRevokeRefusesWhatItCannotRun(t *testing.T) {
 	}
 }
 
+// A state directory another user owns is refused in the tool's words: run it
+// as the owner, never chown the directory (R1-I-2).
+func TestAnOfflineOwnerRefusalNeverAdvisesAChown(t *testing.T) {
+	s := offlineOwnerHint(&wrongOwnerError{what: "broker.state_dir /var/lib/port49", uid: 996, euid: 0}).Error()
+	if strings.Contains(s, "chown it") || !strings.Contains(s, "run it as the user that owns broker.state_dir (uid 996)") ||
+		!strings.Contains(s, "do not chown the directory") {
+		t.Fatal(s)
+	}
+}
+
 // A revocation or lift the store refused says the tool's own words: what
 // may have landed, that the same command is safe again, and Ruling 13's
 // fallback, never the broker's advice about a port49d that is not here

@@ -1,6 +1,7 @@
 package port49d
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"flag"
@@ -115,10 +116,11 @@ func offlineRevoke(args []string, log, out io.Writer) int {
 	// I-2).
 	copied := fmt.Sprintf("the mark stands in this host's broker.state_dir/%s, which the next port49-broker started "+
 		"here keeps in force and puts back; an etcd restore from before now loses this mark unless a port49-broker "+
-		"has run since, so revoke again after such a restore", stateMarksFile)
+		"has run since, so revoke again after such a restore, before any broker starts", stateMarksFile)
 	if err := offlineCopy(run.stateDir, rep.Mark, false, out); err != nil {
 		copied = fmt.Sprintf("the mark is NOT in this host's broker.state_dir/%s (%v): an etcd restore from before "+
-			"now loses it unless another port49-broker's copy holds it, so revoke again after such a restore",
+			"now loses it unless another port49-broker's copy holds it, so revoke again after such a restore, before any "+
+			"broker starts",
 			stateMarksFile, err)
 	}
 	fmt.Fprintf(out, "%s%s\n%s%s\n", offlineSay, rep.Text(), offlineSay, copied)
@@ -132,21 +134,42 @@ func offlineRevoke(args []string, log, out io.Writer) int {
 // drops it when lifted, through the copy port49-broker keeps (openMarksCopy),
 // after the same owner checks a start makes (ownStateDir): the copy is what a
 // takeover puts back after an etcd restore, and no broker ran to write it.
-// The error is why it was not written.
+// openMarksCopy's lines are the broker's start's, so they are taken and
+// said in the tool's words (said). The error is why it was not written; a
+// directory another user owns is never to be chowned, and the tool says to
+// run it as the owner.
 func offlineCopy(stateDir string, mark store.Revocation, lifted bool, out io.Writer) error {
 	if err := ownStateDir(stateDir); err != nil {
+		var wo *wrongOwnerError
+		if errors.As(err, &wo) {
+			return offlineOwnerHint(wo)
+		}
 		return err
 	}
-	c := openMarksCopy(filepath.Join(stateDir, stateMarksFile), out)
+	path := filepath.Join(stateDir, stateMarksFile)
+	_, statErr := os.Stat(path)
+	var said bytes.Buffer
+	c := openMarksCopy(path, &said)
+	if statErr == nil && said.Len() > 0 {
+		// A file that did not decode is moved aside by openMarksCopy, and one with
+		// entries this port49 does not understand keeps them unchanged.
+		fmt.Fprintf(out, "%sbroker.state_dir/%s did not read as written (moved aside as %s.bad-<time>, or entries "+
+			"this port49 does not understand kept unchanged): the mark stands in a copy of what could be read; a "+
+			"broker started here fills it from the store\n", offlineSay, stateMarksFile, stateMarksFile)
+	}
 	if lifted {
 		c.Apply(store.MarkChange{Revocation: mark, Standing: false})
 	} else {
 		c.stand([]store.Revocation{mark})
 	}
-	if c.broken() {
-		return errors.New("the write failed, as the line above says")
-	}
-	return nil
+	return c.writeErr()
+}
+
+// offlineOwnerHint is the refusal of a state path another user owns, in the
+// tool's words: run it as the owner, never chown the directory.
+func offlineOwnerHint(wo *wrongOwnerError) error {
+	return fmt.Errorf("%s is owned by uid %d and this runs as uid %d: run it as the user that owns "+
+		"broker.state_dir (uid %d), and do not chown the directory", wo.what, wo.uid, wo.euid, wo.uid)
 }
 
 // offlineFailed is the line for a revocation (or a lift) that did not

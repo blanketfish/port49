@@ -136,7 +136,7 @@ func TestTheGuardLineGivesTheSafeWayOut(t *testing.T) {
 	for _, want := range []string{
 		"a device whose authentication ERROR is final (IOS-XE) refuses break-glass too",
 		"etcdctl del --prefix <prefix>v1/t/",
-		"delete meta/judged and restart a port49-broker",
+		"stop every port49-broker, delete meta/judged and start them",
 		"never restart this port49d before the restored tokens are deleted",
 	} {
 		if !strings.Contains(line, want) {

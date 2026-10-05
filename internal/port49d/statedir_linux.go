@@ -70,9 +70,7 @@ func ownedHere(what, path string, dir bool) error {
 		return fmt.Errorf("%s: cannot read its owner", what)
 	}
 	if euid := fence.Geteuid(); uid != uint32(euid) && uid != 0 {
-		return fmt.Errorf("%s is owned by uid %d: port49-broker's own state is kept there, and whoever owns it "+
-			"could put back or drop a revocation; it must belong to the user port49-broker runs as (uid %d) or "+
-			"to root - chown it", what, uid, euid)
+		return &wrongOwnerError{what: what, uid: uid, euid: uint32(euid)}
 	}
 	return nil
 }

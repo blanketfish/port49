@@ -130,8 +130,8 @@ func (g *restoreGuard) judge(r etcdstore.RestoreRead, err error, high uint64, se
 			"authentication ERROR is final (IOS-XE) refuses break-glass too: start the brokers; a runner's purge "+
 			"line releases this port49d. If no runner says one (its purge landed before this port49d's first "+
 			"read, or meta/judged survived the restore and no witness record was kept), delete the restored "+
-			"tokens as etcd's root (etcdctl del --prefix <prefix>v1/t/) and then restart this port49d, or delete "+
-			"meta/judged and restart a port49-broker, whose takeover purges; never restart this port49d before "+
+			"tokens as etcd's root (etcdctl del --prefix <prefix>v1/t/) and then restart this port49d, or stop every "+
+			"port49-broker, delete meta/judged and start them, so a takeover purges; never restart this port49d before "+
 			"the restored tokens are deleted: it forgets the drop and redeems them. Follow the restore runbook's "+
 			"step 3 (design §13) before another restore\n", at, high)
 	case r.Witness > g.high:

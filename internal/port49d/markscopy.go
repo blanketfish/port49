@@ -43,6 +43,8 @@ type marksCopy struct {
 	m    map[[2]string]store.Revocation
 	// failing is set while writes fail, so a run of them is said once.
 	failing bool
+	// lastErr is the last write's error, nil when it landed.
+	lastErr error
 	// unread is each entry of the file this port49 does not understand, as
 	// read, written back unchanged after the marks it does: a downgrade, or
 	// a field a newer port49 added, never erases a revocation.
@@ -59,6 +61,20 @@ type copiedMark struct {
 	Kind string    `json:"kind"`
 	Key  string    `json:"key"`
 	At   time.Time `json:"at"`
+}
+
+// wrongOwnerError is ownStateDir's refusal of a path another user owns: the
+// start's words are for a service whose directory may be chowned to its
+// user, and the offline tool words it for itself (offlineCopy).
+type wrongOwnerError struct {
+	what      string
+	uid, euid uint32
+}
+
+func (e *wrongOwnerError) Error() string {
+	return fmt.Sprintf("%s is owned by uid %d: port49-broker's own state is kept there, and whoever owns it "+
+		"could put back or drop a revocation; it must belong to the user port49-broker runs as (uid %d) or "+
+		"to root - chown it", e.what, e.uid, e.euid)
 }
 
 // openMarksCopy reads the copy at path. An absent file is an empty copy,
@@ -197,6 +213,7 @@ func (c *marksCopy) write() {
 	if err == nil {
 		err = writeOwnerOnly(c.path, body)
 	}
+	c.lastErr = err
 	switch {
 	case err != nil && !c.failing:
 		c.failing = true
@@ -209,11 +226,11 @@ func (c *marksCopy) write() {
 	}
 }
 
-// broken reports whether the last write of the file failed.
-func (c *marksCopy) broken() bool {
+// writeErr is the last write's error, nil when it landed.
+func (c *marksCopy) writeErr() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.failing
+	return c.lastErr
 }
 
 // sorted is every mark held, sorted by kind and key; c.mu is held.
