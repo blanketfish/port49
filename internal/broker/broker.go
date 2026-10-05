@@ -312,6 +312,19 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
 	sum := sha256.Sum256(body)
 	bodyHash := hex.EncodeToString(sum[:])
 
+	// Group membership is resolved here, once for the batch, as the pinned
+	// principal's (Ruling 10): a refusal denies the whole request.
+	dctx, dcancel := context.WithTimeout(r.Context(), b.memberBudget())
+	m, answer, err := b.memberFor(dctx, principal)
+	dcancel()
+	if err != nil {
+		ref := directoryRefusal(err)
+		b.emit(decision.Record{TS: now, Event: decision.EventMint, Verdict: decision.VerdictDeny, Reason: ref.Reason,
+			Principal: principal, Auth: &decision.Auth{Method: cred.Method}})
+		b.answerRefusal(w, r, ref)
+		return
+	}
+
 	// Every device's record is reserved before the first is minted (design
 	// §17; plan 7a), atomically: two requests under one key cannot both pass,
 	// and a conflict on any device refuses the whole batch before a token, a
@@ -385,9 +398,9 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), holdTimeout)
 	defer cancel()
 	resp := api.MintResponse{Principal: principal}
-	resp.Subject, _ = pol.SubjectOf(principal)
+	resp.Subject, resp.Subjects = subjectNames(pol, m)
 	for _, name := range req.Devices {
-		item, err := b.mintOne(ctx, buf, pol, principal, cred, authTime, name, req, res, bodyHash)
+		item, err := b.mintOne(ctx, buf, pol, m, answer, cred, authTime, name, req, res, bodyHash)
 		if errors.Is(err, token.ErrIdempotencyInProgress) {
 			// This device's hold was taken by another request under the
 			// key, or lapsed before its turn: two retries that both
@@ -867,13 +880,19 @@ func (b *Broker) supersededAt(ctx context.Context, k store.TokenKey) (time.Time,
 // ErrIdempotencyInProgress, which is the whole request's; every other refusal
 // is an item. Every record it writes goes to buf, the request's buffer
 // (tokens).
-func (b *Broker) mintOne(ctx context.Context, buf *heldLog, pol *policy.Policy, principal string,
-	cred store.Credential, authTime time.Time, name string, req api.MintRequest, hold *token.Reservation,
+func (b *Broker) mintOne(ctx context.Context, buf *heldLog, pol *policy.Policy, m policy.Member,
+	answer *directory.Answer, cred store.Credential, authTime time.Time, name string, req api.MintRequest, hold *token.Reservation,
 	bodyHash string) (api.MintItem, error) {
+	principal := m.Principal
+	var res policy.Resolution
 	deny := func(reason decision.Reason, platform string) api.MintItem {
-		b.emitTo(buf, decision.Record{TS: b.Now(), Event: decision.EventMint, Verdict: decision.VerdictDeny, Reason: reason,
-			Principal: principal, Auth: &decision.Auth{Method: cred.Method},
-			Device: &decision.Device{Name: name, Platform: platform}})
+		rec := decision.Record{TS: b.Now(), Event: decision.EventMint, Verdict: decision.VerdictDeny, Reason: reason,
+			Principal: principal, Auth: &decision.Auth{Method: cred.Method, Directory: directoryAuth(answer)},
+			Device: &decision.Device{Name: name, Platform: platform}}
+		if len(res.Subjects) > 0 {
+			rec.Policy = &decision.Policy{Bundle: pol.Bundle, Subjects: res.Subjects}
+		}
+		b.emitTo(buf, rec)
 		return api.MintItem{Device: name, Verdict: decision.VerdictDeny, Reason: string(reason)}
 	}
 	dev, ok := pol.Device(name)
@@ -883,10 +902,20 @@ func (b *Broker) mintOne(ctx context.Context, buf *heldLog, pol *policy.Policy, 
 		// device and no platform, which is what tells an operator which.
 		return deny(decision.NoGrantsMatched, ""), nil
 	}
-	res, err := pol.Resolve(principal, dev, b.Now())
+	res, err := pol.ResolveMember(m, dev, b.Now())
 	switch {
 	case errors.Is(err, policy.ErrNoGrants):
 		return deny(decision.NoGrantsMatched, dev.Platform), nil
+	case errors.Is(err, policy.ErrNoUsername):
+		// The directory gave this principal no username: nothing falls back
+		// to a declared name (spec §2, decision 38).
+		b.logf("broker: %v", err)
+		return deny(decision.IdentityUnmapped, dev.Platform), nil
+	case errors.Is(err, policy.ErrCompositionRefused):
+		// The principal's subjects compose here to a reply a joint check
+		// refuses: this device alone, never a quarantine (Ruling 5).
+		b.logf("broker: %v", err)
+		return deny(decision.CompositionRefused, dev.Platform), nil
 	case dev.Platform == "":
 		// Inventory may name a device with no platform (admission.LoadFile
 		// does not require one), and no blob can be compiled for it. That is
@@ -971,11 +1000,12 @@ func (b *Broker) mintOne(ctx context.Context, buf *heldLog, pol *policy.Policy, 
 	out, err := b.Minter.Mint(ctx, token.Request{
 		Subject: token.Subject{Principal: principal, Username: res.Username, TokenTTL: res.TokenTTL,
 			Enable: res.Enable, MaxPrivilege: res.MaxPrivilege, MaxSessionAge: age,
-			Credential: cred, AuthTime: authTime},
+			Credential: cred, AuthTime: authTime, VerifiedAt: verifiedAt(answer)},
 		Device: name, Platform: dev.Platform, BlobHash: hash, WithEnable: req.Enable,
 		TTL:         time.Duration(req.TTLSeconds) * time.Second,
 		Reservation: hold, BodyHash: bodyHash, SupersededAt: supersededAt,
-		Policy: &decision.Policy{Bundle: pol.Bundle, Subject: res.Subject, Grants: res.Grants}, Log: buf})
+		Policy:    &decision.Policy{Bundle: pol.Bundle, Subject: res.Subject, Subjects: res.Subjects, Grants: res.Grants},
+		Directory: directoryAuth(answer), Log: buf})
 	var capped *token.ErrTooManyOutstanding
 	switch {
 	case errors.Is(err, token.ErrIdempotencyInProgress):

@@ -75,9 +75,12 @@ func withheld(s string) string {
 // MintResponse is POST /v1/tokens' 200: partial failure is per item, never at
 // the top level (design §17).
 type MintResponse struct {
-	Principal string     `json:"principal"`
-	Subject   string     `json:"subject,omitempty"`
-	Results   []MintItem `json:"results"`
+	Principal string `json:"principal"`
+	Subject   string `json:"subject,omitempty"`
+	// Subjects is every subject the principal matched, when it matched
+	// more than one; Subject is then absent (plan 7g).
+	Subjects []string   `json:"subjects,omitempty"`
+	Results  []MintItem `json:"results"`
 }
 
 // Error is every non-200 body.

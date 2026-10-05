@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"time"
 
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/directory"
@@ -62,6 +63,75 @@ func (b *Broker) BindMap(ctx context.Context, cs tls.ConnectionState, _ store.Cr
 func member(a directory.Answer) policy.Member {
 	return policy.Member{Principal: a.Principal, Directory: true, Username: a.Username, GroupDNs: a.GroupDNs,
 		GroupNames: a.GroupNames}
+}
+
+// memberFor is the membership one request resolves with. A request on a
+// held connection reads the pinned principal's membership again (fresh, or
+// grace): group membership is resolved at mint time (design §7), not at
+// bind. Without a directory, or for a machine principal, it is
+// MemberOf(principal) and the answer is nil (pre-flight I-10).
+func (b *Broker) memberFor(ctx context.Context, principal string) (policy.Member, *directory.Answer, error) {
+	if b.Directory == nil || !directory.IsUser(principal) {
+		return policy.MemberOf(principal), nil, nil
+	}
+	a, err := b.Directory.Current(ctx, principal)
+	if err != nil {
+		return policy.Member{}, nil, err
+	}
+	return member(a), &a, nil
+}
+
+// memberBudget is memberFor's deadline: the directory's own query_timeout
+// plus a store read's holdTimeout, so a DC slower than holdTimeout still
+// reaches grace and is never answered store_unavailable (pre-flight I-8).
+func (b *Broker) memberBudget() time.Duration {
+	if b.Directory == nil {
+		return holdTimeout
+	}
+	return b.Directory.Cfg.QueryTimeout + holdTimeout
+}
+
+// directoryAuth is auth.directory for a record (spec §5.7).
+func directoryAuth(a *directory.Answer) *decision.Directory {
+	if a == nil {
+		return nil
+	}
+	return &decision.Directory{Source: string(a.Source), VerifiedAt: decision.FormatTime(a.VerifiedAt),
+		Server: a.Server, Site: a.Site}
+}
+
+// storedMemberOf is principal's membership as the store holds it, for a
+// revocation's answer: it never asks a server, since a revocation must not
+// wait on the directory. With none stored, or none readable, it is
+// identity subjects alone.
+func (b *Broker) storedMemberOf(ctx context.Context, principal string) policy.Member {
+	if b.Directory == nil || !directory.IsUser(principal) {
+		return policy.MemberOf(principal)
+	}
+	m, ok, err := b.Directory.Stored(ctx, principal)
+	if err != nil || !ok || m.Refused {
+		return policy.MemberOf(principal)
+	}
+	return member(directory.Answer{Membership: m})
+}
+
+// verifiedAt is the instant a membership was verified: the stored one under
+// grace, never the clock; zero without a directory.
+func verifiedAt(a *directory.Answer) time.Time {
+	if a == nil {
+		return time.Time{}
+	}
+	return a.VerifiedAt
+}
+
+// subjectNames splits a member's matched subjects into the one name a
+// record and a response carry alone, or the several.
+func subjectNames(pol *policy.Policy, m policy.Member) (one string, several []string) {
+	names := pol.SubjectsOf(m)
+	if len(names) == 1 {
+		return names[0], nil
+	}
+	return "", names
 }
 
 // mappedOf is the answer the listener pinned to c at bind, nil without one.

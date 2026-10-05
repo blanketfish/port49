@@ -95,7 +95,23 @@ func (b *Broker) tokensRevoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pol := b.Policy.Load()
-	mayOthers := pol.HasRight(caller, policy.RightRevokeOthers)
+	// mayOthers asks the directory only when the request names another
+	// principal or a key: a caller revoking themselves never waits on the
+	// directory, and can always end their own sessions (pre-flight I-9).
+	mayOthers := func() (bool, *BindRefusal) {
+		ctx, cancel := context.WithTimeout(r.Context(), b.memberBudget())
+		defer cancel()
+		m, _, err := b.memberFor(ctx, caller)
+		if err != nil {
+			return false, directoryRefusal(err)
+		}
+		return pol.HasRightOf(m, policy.RightRevokeOthers), nil
+	}
+	refused := func(ref *BindRefusal, rec decision.Record) {
+		rec.Verdict, rec.Reason = decision.VerdictDeny, ref.Reason
+		b.emit(rec)
+		b.answerRefusal(w, r, ref)
+	}
 	if byKey {
 		k := store.TokenKey{NAS: req.Device, Username: req.Username}
 		switch {
@@ -103,16 +119,23 @@ func (b *Broker) tokensRevoke(w http.ResponseWriter, r *http.Request) {
 			b.revokeOwnOrKey(w, pol, caller, origin, func() RevokeReport {
 				return b.RevokeOwn(r.Context(), caller, &k, origin)
 			})
-		case mayOthers:
-			b.revokeOwnOrKey(w, pol, caller, origin, func() RevokeReport {
-				return b.RevokeKey(r.Context(), k, origin)
-			})
 		default:
 			now := b.Now()
-			b.refuseRight(w, decision.Record{TS: now, Event: decision.EventRevoke,
+			rec := decision.Record{TS: now, Event: decision.EventRevoke,
 				Revocation: &decision.Revocation{By: ByKey, Device: k.NAS, Username: k.Username,
-					At: decision.FormatTime(now), Origin: origin}},
-				policy.RightRevokeOthers, "ending a (device, username) whoever holds it")
+					At: decision.FormatTime(now), Origin: origin}}
+			ok, ref := mayOthers()
+			switch {
+			case ref != nil:
+				rec.Principal = caller // the key names no one; whose request it was
+				refused(ref, rec)
+			case ok:
+				b.revokeOwnOrKey(w, pol, caller, origin, func() RevokeReport {
+					return b.RevokeKey(r.Context(), k, origin)
+				})
+			default:
+				b.refuseRight(w, rec, policy.RightRevokeOthers, "ending a (device, username) whoever holds it")
+			}
 		}
 		return
 	}
@@ -137,11 +160,15 @@ func (b *Broker) tokensRevoke(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	if !mayOthers {
-		now := b.Now()
-		b.refuseRight(w, decision.Record{TS: now, Event: decision.EventRevoke, Principal: target,
-			Revocation: &decision.Revocation{By: ByPrincipal, At: decision.FormatTime(now), Origin: origin}},
-			policy.RightRevokeOthers, "revoking another principal")
+	now := b.Now()
+	rec := decision.Record{TS: now, Event: decision.EventRevoke, Principal: target,
+		Revocation: &decision.Revocation{By: ByPrincipal, At: decision.FormatTime(now), Origin: origin}}
+	switch ok, ref := mayOthers(); {
+	case ref != nil:
+		refused(ref, rec)
+		return
+	case !ok:
+		b.refuseRight(w, rec, policy.RightRevokeOthers, "revoking another principal")
 		return
 	}
 	// The wait for the revocation slot is bounded; once Revoke holds it, it
@@ -281,7 +308,9 @@ func (b *Broker) answerRevocation(w http.ResponseWriter, pol *policy.Policy, rep
 	}
 	out := rep.response()
 	if rep.By != ByOwn && rep.Request.Principal != "" {
-		out.Subject, _ = pol.SubjectOf(rep.Request.Principal)
+		ctx, cancel := context.WithTimeout(context.Background(), holdTimeout)
+		out.Subject, out.Subjects = subjectNames(pol, b.storedMemberOf(ctx, rep.Request.Principal))
+		cancel()
 	}
 	writeJSON(w, http.StatusOK, out)
 }

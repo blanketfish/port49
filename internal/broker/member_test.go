@@ -10,12 +10,17 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/directory"
+	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/testpki"
 )
@@ -31,6 +36,14 @@ func answerFor(principal, username string) directory.Answer {
 // withDirectory gives f's broker a static resolver over answers (keyed as
 // ForTestsStaticResolver reads a certificate) answering err when set.
 func withDirectory(f *fixture, answers map[string]directory.Answer, err error) *directory.Resolver {
+	// Current reads a request's membership by the pinned principal, so each
+	// answer is also held under the principal it names.
+	byPrincipal := map[string]directory.Answer{}
+	for k, a := range answers {
+		byPrincipal[k] = a
+		byPrincipal[a.Principal] = a
+	}
+	answers = byPrincipal
 	r := directory.ForTestsStaticResolver(f.st, answers, err)
 	f.b.Directory = r
 	return r
@@ -90,8 +103,10 @@ func TestThePrincipalIsPinnedAtBind(t *testing.T) {
 	if got := principalOnWire(t, getOn(t, c, br, "/v1/identity")); got != corpAlice {
 		t.Fatalf("after the directory changed its answer, principal %q: not pinned", got)
 	}
-	if n := res.Calls.Load(); n != 1 {
-		t.Fatalf("the directory was asked %d times, want once at bind", n)
+	// One mapping at bind; each identity request then reads the pinned
+	// principal's membership (Current) and never maps again.
+	if n := res.Calls.Load(); n != 3 {
+		t.Fatalf("the directory was asked %d times, want the bind's mapping and one membership per request", n)
 	}
 }
 
@@ -172,7 +187,7 @@ func TestARequestWithNoHeldConnectionMapsAndRefusesAsTheBindDoes(t *testing.T) {
 		t.Fatalf("calls %d", res.Calls.Load())
 	}
 	f.b.Directory = directory.ForTestsStaticResolver(f.st, map[string]directory.Answer{
-		alicePrincipal: answerFor(corpAlice, "alice")}, nil)
+		alicePrincipal: answerFor(corpAlice, "alice"), corpAlice: answerFor(corpAlice, "alice")}, nil)
 	w = f.call(context.Background(), f.state(f.alice), "GET", "/v1/identity", "")
 	var id api.Identity
 	if err := json.Unmarshal(w.Body.Bytes(), &id); err != nil || w.Code != 200 || id.Principal != corpAlice {
@@ -442,5 +457,242 @@ func TestAnUnpinnedConnectionIsTheDirectoryNotAnswering(t *testing.T) {
 		if len(recs) == 0 || recs[len(recs)-1]["reason"] != "directory_unavailable" {
 			t.Fatalf("%s records: %v", ev, recs)
 		}
+	}
+}
+
+const groupPolicy = `
+scopes:
+  - {name: all_devices, match: {}}
+  - {name: eos, match: {platform: arista_eos}, on_missing: exclude}
+roles:
+  - {name: network_admin, privilege: admin, permit: ["**"]}
+  - {name: ro, privilege: readonly, permit: ["show **"]}
+subjects:
+  - {name: ops, group: secret-group, token_ttl: 60s}
+  - {name: oncall, group: oncall-group, token_ttl: 60s, api: [explain_others, revoke_others]}
+  - {name: ci, identity: ["app:ci-runner"], username: ci, token_ttl: 60s}
+grants:
+  - {subject: ops, scope: all_devices, roles: [ro], max_privilege: readonly}
+  - {subject: oncall, scope: eos, roles: [network_admin]}
+  - {subject: ci, scope: all_devices, roles: [ro]}
+`
+
+// groupFixture is a fixture whose policy is groupPolicy loaded for a
+// directory, with a static resolver answering answers.
+func groupFixture(t *testing.T, answers map[string]directory.Answer, err error) (*fixture, *directory.Resolver) {
+	t.Helper()
+	f := newFixtureWithPolicy(t, 8, testPolicy)
+	path := filepath.Join(t.TempDir(), "policy.yaml")
+	if werr := os.WriteFile(path, []byte(groupPolicy), 0o600); werr != nil {
+		t.Fatal(werr)
+	}
+	pol, lerr := policy.Load(path, policy.Env{Devices: f.inventory(), Directory: policy.DirectoryOn})
+	if lerr != nil {
+		t.Fatal(lerr)
+	}
+	f.b.Policy.Swap(pol)
+	return f, withDirectory(f, answers, err)
+}
+
+// pinned is ctx with a connection that authenticated at f.now and was pinned
+// to a at bind (Task 12): a request on it acts as a.Principal.
+func (f *fixture) pinned(a directory.Answer) context.Context {
+	return withHeldConn(context.Background(), f.now, &a)
+}
+
+func (f *fixture) mintOnPinned(a directory.Answer, devices string) *httptest.ResponseRecorder {
+	return f.post(f.pinned(a), f.state(f.alice), `{"devices":`+devices+`}`, "")
+}
+
+// A group member mints on a device the group's grant selects, and the
+// token carries the membership's verification time (Rulings 5, 11).
+func TestAGroupMemberMints(t *testing.T) {
+	a := answerFor(corpAlice, "alice")
+	a.VerifiedAt = time.Now().Add(-5 * time.Minute).Truncate(time.Second)
+	f, _ := groupFixture(t, map[string]directory.Answer{corpAlice: a}, nil)
+	// The certificate's email SAN is alice@example.com: the pinned
+	// principal, not that, is who mints.
+	r := decodeMint(t, f.mintOnPinned(a, `["leaf1"]`))
+	if r.Principal != corpAlice || r.Subject != "ops" || len(r.Results) != 1 || r.Results[0].Verdict != "permit" ||
+		r.Results[0].Username != "alice" {
+		t.Fatalf("%+v", r)
+	}
+	toks, err := f.st.Candidates(context.Background(), store.TokenKey{NAS: "leaf1", Username: "alice"})
+	if err != nil || len(toks) == 0 {
+		t.Fatalf("%v %v", toks, err)
+	}
+	for _, tok := range toks {
+		if !tok.VerifiedAt.Equal(a.VerifiedAt) || tok.Principal != corpAlice {
+			t.Fatalf("token %+v, want verified_at %s", tok, a.VerifiedAt)
+		}
+	}
+	mints := eventsOf(f.records(t), "mint")
+	if len(mints) != 1 {
+		t.Fatalf("%v", mints)
+	}
+	pol, _ := mints[0]["policy"].(map[string]any)
+	auth, _ := mints[0]["auth"].(map[string]any)
+	dir, _ := auth["directory"].(map[string]any)
+	if mints[0]["principal"] != corpAlice || pol["subject"] != "ops" || dir["source"] != "fresh" ||
+		dir["verified_at"] != decision.FormatTime(a.VerifiedAt) {
+		t.Fatalf("%v", mints[0])
+	}
+	if strings.Contains(f.log.String(), "secret-group") {
+		t.Fatal("a group reached the log")
+	}
+}
+
+// Past grace the whole request is refused 503 directory_unavailable with
+// Retry-After, nothing minted, one mint deny record (Review Focus 4).
+func TestAMintPastGraceIsRefused(t *testing.T) {
+	a := answerFor(corpAlice, "alice")
+	f, _ := groupFixture(t, nil, directory.ErrUnavailable)
+	w := f.mintOnPinned(a, `["leaf1","nx1"]`)
+	if w.Code != 503 || w.Header().Get("Retry-After") != "30" || !strings.Contains(w.Body.String(), "directory_unavailable") {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	mints := eventsOf(f.records(t), "mint")
+	if len(mints) != 1 || mints[0]["verdict"] != "deny" || mints[0]["reason"] != "directory_unavailable" ||
+		mints[0]["principal"] != corpAlice {
+		t.Fatalf("%v", mints)
+	}
+	if toks, _ := f.st.Candidates(context.Background(), store.TokenKey{NAS: "leaf1", Username: "alice"}); len(toks) != 0 {
+		t.Fatalf("minted %d tokens", len(toks))
+	}
+}
+
+// A grace mint mints, its record says source grace and verified_at, and
+// the token's VerifiedAt is that instant, not now (Ruling 11).
+func TestAGraceMintCarriesItsVerification(t *testing.T) {
+	a := answerFor(corpAlice, "alice")
+	a.Source = directory.Grace
+	a.VerifiedAt = time.Now().Add(-2 * time.Hour).Truncate(time.Second)
+	f, _ := groupFixture(t, map[string]directory.Answer{corpAlice: a}, nil)
+	if r := decodeMint(t, f.mintOnPinned(a, `["leaf1"]`)); r.Results[0].Verdict != "permit" {
+		t.Fatalf("%+v", r)
+	}
+	toks, _ := f.st.Candidates(context.Background(), store.TokenKey{NAS: "leaf1", Username: "alice"})
+	if len(toks) == 0 || !toks[0].VerifiedAt.Equal(a.VerifiedAt) {
+		t.Fatalf("%+v, want verified_at %s", toks, a.VerifiedAt)
+	}
+	mints := eventsOf(f.records(t), "mint")
+	auth, _ := mints[0]["auth"].(map[string]any)
+	dir, _ := auth["directory"].(map[string]any)
+	if dir["source"] != "grace" || dir["verified_at"] != decision.FormatTime(a.VerifiedAt) {
+		t.Fatalf("%v", mints[0])
+	}
+}
+
+// Two subjects whose composition a joint check refuses: that device is
+// denied composition_refused, the rest of the batch minted (Ruling 5).
+func TestARefusedCompositionDeniesThatDeviceAlone(t *testing.T) {
+	a := answerFor(corpAlice, "alice")
+	a.GroupNames = []string{"secret-group", "oncall-group"} // ro capped at readonly + admin on eos
+	f, _ := groupFixture(t, map[string]directory.Answer{corpAlice: a}, nil)
+	r := decodeMint(t, f.mintOnPinned(a, `["leaf1","nx1"]`))
+	if len(r.Results) != 2 || r.Results[0].Verdict != "deny" || r.Results[0].Reason != "composition_refused" ||
+		r.Results[1].Verdict != "permit" {
+		t.Fatalf("%+v", r.Results)
+	}
+	mints := eventsOf(f.records(t), "mint")
+	if len(mints) != 2 || mints[0]["reason"] != "composition_refused" {
+		t.Fatalf("%v", mints)
+	}
+}
+
+// A directory member with no username is identity_unmapped, per device.
+func TestANoUsernameIsIdentityUnmapped(t *testing.T) {
+	a := answerFor(corpAlice, "")
+	f, _ := groupFixture(t, map[string]directory.Answer{corpAlice: a}, nil)
+	r := decodeMint(t, f.mintOnPinned(a, `["nx1"]`))
+	if r.Results[0].Verdict != "deny" || r.Results[0].Reason != "identity_unmapped" {
+		t.Fatalf("%+v", r.Results)
+	}
+}
+
+// revoke_others held through a group lets a member revoke another
+// principal; without the group it is api_right_missing (Ruling 13).
+func TestRevokeOthersThroughAGroup(t *testing.T) {
+	a := answerFor(corpAlice, "alice")
+	a.GroupNames = []string{"oncall-group"}
+	f, _ := groupFixture(t, map[string]directory.Answer{corpAlice: a}, nil)
+	body := `{"principal":"user:victim@corp.example.com"}`
+	w := f.call(f.pinned(a), f.state(f.alice), "POST", "/v1/tokens/revoke", body)
+	if w.Code != 200 {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	if r := decodeRevoke(t, w); r.By != ByPrincipal || r.Principal != "user:victim@corp.example.com" {
+		t.Fatalf("%+v", r)
+	}
+	b := answerFor(corpAlice, "alice")
+	f.b.Directory = directory.ForTestsStaticResolver(f.st, map[string]directory.Answer{corpAlice: b}, nil)
+	w = f.call(f.pinned(b), f.state(f.alice), "POST", "/v1/tokens/revoke", body)
+	if w.Code != 403 || !strings.Contains(w.Body.String(), "api_right_missing") {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+}
+
+// /v1/identity answers the subjects, groups, username, verified_at and
+// source.
+func TestIdentityAnswersTheMembership(t *testing.T) {
+	a := answerFor(corpAlice, "alice")
+	a.GroupNames = []string{"secret-group", "oncall-group"}
+	a.GroupDNs = []string{"cn=secret-group,dc=corp"}
+	a.VerifiedAt = time.Now().Add(-time.Minute).Truncate(time.Second)
+	f, _ := groupFixture(t, map[string]directory.Answer{corpAlice: a}, nil)
+	w := f.call(f.pinned(a), f.state(f.alice), "GET", "/v1/identity", "")
+	var id api.Identity
+	if err := json.Unmarshal(w.Body.Bytes(), &id); err != nil || w.Code != 200 {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	if id.Principal != corpAlice || id.Subject != "" || !slices.Equal(id.Subjects, []string{"oncall", "ops"}) || id.Username != "alice" || id.Source != "fresh" ||
+		id.VerifiedAt != decision.FormatTime(a.VerifiedAt) || !slices.Equal(id.Groups, a.GroupNames) ||
+		!slices.Equal(id.GroupDNs, a.GroupDNs) || !slices.Equal(id.API, []string{"explain_others", "revoke_others"}) || len(id.Grants) != 2 {
+		t.Fatalf("%+v", id)
+	}
+}
+
+// POST /v1/revoke {mine: true} works with the directory unavailable and
+// nothing stored: revoking oneself never asks the directory (pre-flight
+// I-9). The static resolver's err is directory.ErrUnavailable and its
+// Calls stays 0 across the request.
+func TestRevokeMineNeedsNoDirectory(t *testing.T) {
+	a := answerFor(corpAlice, "alice")
+	f, res := groupFixture(t, nil, directory.ErrUnavailable)
+	w := f.call(f.pinned(a), f.state(f.alice), "POST", "/v1/tokens/revoke", `{"mine":true}`)
+	if w.Code != 200 {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	if n := res.Calls.Load(); n != 0 {
+		t.Fatalf("the directory was asked %d times", n)
+	}
+}
+
+// A machine principal (an app: identity subject) mints under a directory
+// without the directory being asked (pre-flight I-10).
+func TestAMachinePrincipalMintsWithoutTheDirectory(t *testing.T) {
+	f, res := groupFixture(t, nil, directory.ErrUnavailable)
+	ci := directory.Answer{Membership: store.Membership{Principal: "app:ci-runner"}}
+	r := decodeMint(t, f.mintOnPinned(ci, `["leaf1"]`))
+	if r.Principal != "app:ci-runner" || r.Subject != "ci" || r.Results[0].Verdict != "permit" {
+		t.Fatalf("%+v", r)
+	}
+	if n := res.Calls.Load(); n != 0 {
+		t.Fatalf("the directory was asked %d times", n)
+	}
+}
+
+// An explain about another principal resolves their membership, and the
+// caller's right is read through the caller's own groups.
+func TestExplainAnswersForTheirMembership(t *testing.T) {
+	caller := answerFor(corpAlice, "alice")
+	caller.GroupNames = []string{"oncall-group"}
+	bob := answerFor("user:bob@corp.example.com", "bob")
+	f, _ := groupFixture(t, map[string]directory.Answer{corpAlice: caller, bob.Principal: bob}, nil)
+	w := f.call(f.pinned(caller), f.state(f.alice), "POST", "/v1/explain",
+		`{"device":"nx1","principal":"user:bob@corp.example.com"}`)
+	var e api.ExplainResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &e); err != nil || w.Code != 200 || e.Verdict != "permit" || e.Subject != "ops" {
+		t.Fatalf("%d %s", w.Code, w.Body)
 	}
 }

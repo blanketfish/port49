@@ -40,6 +40,7 @@ type RevokeResponse struct {
 	By          string       `json:"by"`
 	Principal   string       `json:"principal,omitempty"`
 	Subject     string       `json:"subject,omitempty"`
+	Subjects    []string     `json:"subjects,omitempty"`
 	Device      string       `json:"device,omitempty"`
 	Username    string       `json:"username,omitempty"`
 	Standing    bool         `json:"standing"`

@@ -1,6 +1,7 @@
 package broker
 
 import (
+	"context"
 	"net/http"
 	"slices"
 	"time"
@@ -27,24 +28,48 @@ func (b *Broker) identity(w http.ResponseWriter, r *http.Request) {
 	rec := decision.Record{TS: now, Event: decision.EventIdentity, Verdict: decision.VerdictDeny,
 		Reason: decision.NoGrantsMatched, Principal: principal,
 		Auth: &decision.Auth{Method: cred.Method, Fingerprint: cred.Fingerprint}}
+	ctx, cancel := context.WithTimeout(r.Context(), b.memberBudget())
+	m, answer, err := b.memberFor(ctx, principal)
+	cancel()
+	if err != nil {
+		ref := directoryRefusal(err)
+		rec.Reason = ref.Reason
+		b.emit(rec)
+		b.answerRefusal(w, r, ref)
+		return
+	}
+	if answer != nil {
+		rec.Auth.Directory = directoryAuth(answer)
+		out.Username, out.GroupDNs, out.VerifiedAt, out.Source = answer.Username, slices.Clone(answer.GroupDNs),
+			decision.FormatTime(answer.VerifiedAt), string(answer.Source)
+		if len(answer.GroupNames) > 0 {
+			out.Groups = slices.Clone(answer.GroupNames)
+		}
+	}
 	pol := b.Policy.Load()
-	if name, ok := pol.SubjectOf(principal); ok {
-		out.Subject = name
-		if sub, ok := pol.Subject(name); ok {
-			out.API = append(out.API, sub.API...)
-			slices.Sort(out.API)
-		}
-		for _, g := range pol.Grants(name) {
-			if !g.Expires.IsZero() && !now.Before(g.Expires) {
-				continue // expired: it selects nothing now
+	if names := pol.SubjectsOf(m); len(names) > 0 {
+		out.Subject, out.Subjects = subjectNames(pol, m)
+		for _, name := range names {
+			if sub, ok := pol.Subject(name); ok {
+				for _, right := range sub.API {
+					if !slices.Contains(out.API, right) {
+						out.API = append(out.API, right)
+					}
+				}
 			}
-			ig := api.IdentityGrant{Scope: g.Scope, Roles: slices.Clone(g.Roles), MaxPrivilege: g.MaxPrivilege}
-			if !g.Expires.IsZero() {
-				ig.Expires = g.Expires.UTC().Format(time.RFC3339)
+			for _, g := range pol.Grants(name) {
+				if !g.Expires.IsZero() && !now.Before(g.Expires) {
+					continue // expired: it selects nothing now
+				}
+				ig := api.IdentityGrant{Scope: g.Scope, Roles: slices.Clone(g.Roles), MaxPrivilege: g.MaxPrivilege}
+				if !g.Expires.IsZero() {
+					ig.Expires = g.Expires.UTC().Format(time.RFC3339)
+				}
+				out.Grants = append(out.Grants, ig)
 			}
-			out.Grants = append(out.Grants, ig)
 		}
-		rec.Policy = &decision.Policy{Bundle: pol.Bundle, Subject: name}
+		slices.Sort(out.API)
+		rec.Policy = &decision.Policy{Bundle: pol.Bundle, Subject: out.Subject, Subjects: out.Subjects}
 		if len(out.Grants) > 0 {
 			rec.Verdict, rec.Reason = decision.VerdictPermit, decision.GrantsMatched
 		}

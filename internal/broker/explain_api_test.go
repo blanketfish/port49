@@ -188,10 +188,10 @@ func TestExplainingAnotherNeedsTheRight(t *testing.T) {
 // alone, whatever the policy would have done.
 func TestAnExplainFaultIsRecordedAndARevokedTargetSkipsThePolicy(t *testing.T) {
 	f := newFixtureWithPolicy(t, 8, explainPolicy)
-	defer func(of func(*policy.Policy, string, string, string, time.Time) (policy.Explanation, error)) {
+	defer func(of func(*policy.Policy, policy.Member, string, string, time.Time) (policy.Explanation, error)) {
 		explanationOf = of
 	}(explanationOf)
-	explanationOf = func(*policy.Policy, string, string, string, time.Time) (policy.Explanation, error) {
+	explanationOf = func(*policy.Policy, policy.Member, string, string, time.Time) (policy.Explanation, error) {
 		return policy.Explanation{Platform: "arista_eos"}, errors.New("a compile defect")
 	}
 	if w := f.explainAs(t, "alice@example.com", `{"device":"leaf1","command":"show version"}`); w.Code != 500 ||
