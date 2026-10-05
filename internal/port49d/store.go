@@ -348,6 +348,7 @@ func openDaemon(ctx context.Context, cfg config.Config, keys crypt.Keys, m *metr
 			"at most %d entries; a revocation reaches it through the context feed, and through a store outage it is "+
 			"served past %v until the listeners close\n", cc.TTL, cc.MaxEntries, cc.TTL)
 	} else {
+		ledger.DetachCache()
 		fmt.Fprintln(out, "port49d: store: the context cache is off (store.etcd.context_cache.ttl is not set)")
 	}
 	return stores{

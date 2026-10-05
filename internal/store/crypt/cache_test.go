@@ -362,3 +362,16 @@ func TestAnEntryEvictedDuringTheReadIsNotServedStale(t *testing.T) {
 		t.Fatalf("served an entry the feed evicted mid-read: %v %v", got, err)
 	}
 }
+
+// A run with the cache off drops the last run's cache from the process's
+// ledger (plan 7f, final review M-10): the feed's changes no longer reach it.
+func TestDetachCacheStopsTheLedgerTellingTheLastRunsCache(t *testing.T) {
+	_, c, l, _, _ := cacheRig(t)
+	get(t, c)
+	l.DetachCache()
+	l.changed(ka)
+	l.rescanned()
+	if n := len(c.(*cache).m); n != 1 {
+		t.Fatalf("the detached cache holds %d entries, want its 1 untouched", n)
+	}
+}

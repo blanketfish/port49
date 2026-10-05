@@ -112,6 +112,10 @@ type evicter interface {
 // (a run after a store gone builds a new cache on the process's ledger).
 func (l *Ledger) attach(e evicter) { l.evMu.Lock(); l.ev = e; l.evMu.Unlock() }
 
+// DetachCache stops this ledger telling a cache: a run with the context cache
+// off drops the last run's, which is dead weight on the process's ledger.
+func (l *Ledger) DetachCache() { l.attach(nil) }
+
 // changed tells the cache k changed in the store: a write, a delete, or a
 // record this process cannot open, whatever it raised here.
 func (l *Ledger) changed(k store.ContextKey) {

@@ -472,7 +472,7 @@ func New(reg prometheus.Registerer) *Metrics {
 		StoreFeedRescans: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_store_feed_rescans_total",
 			Help: "Rescans of the store after a feed's watch was compacted, by feed."}, []string{"feed"}),
 		StoreFenceTimeouts: prometheus.NewCounter(prometheus.CounterOpts{Name: "port49_store_fence_timeouts_total",
-			Help: "Context reads denied because this process's context feed had not delivered the record's revision by the read's deadline."}),
+			Help: "Context reads and store health checks denied because this process's context feed had not delivered the record's revision by the deadline."}),
 		StoreHealthChecks: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_store_health_checks_total",
 			Help: "port49d's store health checks, by outcome (pass, fail)."}, []string{"outcome"}),
 		StoreHealthFailures: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_store_health_failures",
