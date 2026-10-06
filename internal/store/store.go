@@ -1098,6 +1098,28 @@ func MapKey(kind, canonicalValue string) string {
 // CertKey is the index key a CRL or OCSP response names (spec §5.1.4).
 func CertKey(issuer, serial string) string { return issuer + "|" + serial }
 
+// The kinds of OIDCKey (plan 7h; spec §13 decision 39).
+const (
+	OIDCSid = "sid"
+	OIDCSub = "sub"
+)
+
+// OIDCKey names an OIDC session (kind OIDCSid) or subject (OIDCSub) at one
+// issuer: the key of an owner record, a logout record, and, through
+// SidKey, the context index by sid. Each part is length-prefixed, so no
+// issuer or value can forge another's key. An empty value has no key.
+func OIDCKey(kind, issuer, value string) string {
+	if value == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s %d:%s %d:%s", kind, len(issuer), issuer, len(value), value)
+}
+
+// SidKey is the issuer-qualified sid a login context is indexed by
+// (Credential.Sid): one issuer's logout never reaches a session another
+// issuer authorized.
+func SidKey(issuer, sid string) string { return OIDCKey(OIDCSid, issuer, sid) }
+
 // BlankCertKey reports whether certKey is CertKey of an empty issuer or an
 // empty serial, or is not a CertKey at all (no "|"). It names no
 // certificate: every OIDC login's credential has neither, so "|" would be

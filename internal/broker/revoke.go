@@ -80,10 +80,11 @@ type RevokeReport struct {
 	decimal bool
 }
 
-// principalPrefixes are the forms Identity and the policy give a principal
-// (spec §2). Only user: is minted for today; the others are refused until
-// their verifier exists, rather than marked under a key nothing spells.
-var principalPrefixes = []string{"user:"}
+// principalPrefixes are the forms a verifier gives a principal (spec §2):
+// user: for people, app: for an OIDC machine (plan 7h). spiffe:// and
+// system:serviceaccount: are refused until their verifiers exist (plans 8
+// and 10), rather than marked under a key nothing spells.
+var principalPrefixes = []string{"user:", "app:"}
 
 // normal checks req and puts it in the form a mark holds (pre-flight I2,
 // M16, M17): a principal as Identity spells it, user: and the lower-cased
@@ -141,10 +142,13 @@ func normalPrincipal(p string) (string, error) {
 	}
 	for _, pre := range principalPrefixes {
 		if strings.HasPrefix(strings.ToLower(p), pre) && len(p) > len(pre) {
+			if pre == "app:" {
+				return pre + p[len(pre):], nil // a client id is case-sensitive
+			}
 			return pre + strings.ToLower(p[len(pre):]), nil
 		}
 	}
-	return "", fmt.Errorf("%w: a principal begins %s, as the log names it (user:alice@example.com)",
+	return "", fmt.Errorf("%w: a principal begins %s, as the log names it (user:alice@example.com, app:port49-ci)",
 		ErrBadRevocation, strings.Join(principalPrefixes, " or "))
 }
 

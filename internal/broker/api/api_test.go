@@ -23,3 +23,30 @@ func TestAMintItemPrintsNoToken(t *testing.T) {
 		t.Fatal("the wire form lost its login token")
 	}
 }
+
+func TestConfigNamesHumanOIDCVerifiers(t *testing.T) {
+	b, err := json.Marshal(Config{Methods: []string{"x509", "oidc"},
+		OIDC: []OIDCProvider{{Issuer: "https://sso.example.com/realms/corp", ClientID: "port49-cli",
+			Scopes: []string{"openid", "email"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `"oidc":[{"issuer":"https://sso.example.com/realms/corp","client_id":"port49-cli","scopes":["openid","email"]}]`
+	if !strings.Contains(string(b), want) {
+		t.Fatalf("%s lacks %s", b, want)
+	}
+	b, _ = json.Marshal(Config{Methods: []string{"x509"}})
+	if strings.Contains(string(b), `"oidc"`) {
+		t.Fatalf("a certificate-only config names oidc: %s", b)
+	}
+}
+
+func TestRevokeRequestTakesAnIssuer(t *testing.T) {
+	var r RevokeRequest
+	if err := json.Unmarshal([]byte(`{"sid":"3c1f","issuer":"https://sso.example.com/realms/corp"}`), &r); err != nil {
+		t.Fatal(err)
+	}
+	if r.Sid != "3c1f" || r.Issuer != "https://sso.example.com/realms/corp" {
+		t.Fatalf("decoded %+v", r)
+	}
+}
