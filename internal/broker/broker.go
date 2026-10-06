@@ -693,7 +693,7 @@ func (b *Broker) revokedSince(w http.ResponseWriter, r *http.Request, c caller, 
 			"confirm that no revocation landed during this mint, so it returns nothing; try again")
 		return true
 	case revoked:
-		if b.unmint(ctx, principal, cred, items) == 0 {
+		if b.unmint(ctx, principal, cred, c.auth(), items) == 0 {
 			rec := revokedRecord(b.Now(), principal, cred)
 			rec.Auth = c.auth()
 			b.emit(rec)
@@ -701,7 +701,7 @@ func (b *Broker) revokedSince(w http.ResponseWriter, r *http.Request, c caller, 
 		answerRevoked(w, rv)
 		return true
 	case out:
-		if b.unmint(ctx, principal, cred, items) == 0 {
+		if b.unmint(ctx, principal, cred, c.auth(), items) == 0 {
 			rec := revokedRecord(b.Now(), principal, cred)
 			rec.Auth = c.auth()
 			b.emit(rec)
@@ -857,7 +857,8 @@ func revokedError(rv store.Revocation) api.Error {
 // request recorded no permit for it, and the permit a device deny would
 // follow is the original mint's, whose tokens were returned then and so
 // were issued (port49 capability; Task 7 review N1).
-func (b *Broker) unmint(ctx context.Context, principal string, cred store.Credential, items []api.MintItem) int {
+func (b *Broker) unmint(ctx context.Context, principal string, cred store.Credential, auth *decision.Auth,
+	items []api.MintItem) int {
 	now := b.Now()
 	n := 0
 	for _, it := range items {
@@ -875,6 +876,7 @@ func (b *Broker) unmint(ctx context.Context, principal string, cred store.Creden
 			continue
 		}
 		rec := revokedRecord(now, principal, cred)
+		rec.Auth = auth
 		rec.Device = &decision.Device{Name: it.Device, Platform: it.Platform}
 		if err != nil {
 			rec.IndexError = fmt.Sprintf("tokens not deleted: %v; they expire at their TTL", err)

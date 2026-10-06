@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +19,16 @@ import (
 	"github.com/rhwendt/port49/internal/token"
 )
 
+// shown is a mint response as a failure message may print it: the code is the
+// caller's, and the decoded items withhold their tokens (MintItem.String).
+func shown(w *httptest.ResponseRecorder) string {
+	var r api.MintResponse
+	if json.Unmarshal(w.Body.Bytes(), &r) != nil {
+		return fmt.Sprintf("code %d, not a mint response", w.Code)
+	}
+	return fmt.Sprintf("code %d, %v", w.Code, r.Results)
+}
+
 const mintLeaf1 = `{"devices":["leaf1"],"ttl_seconds":60}`
 
 func TestAnOIDCPersonMints(t *testing.T) {
@@ -26,7 +37,7 @@ func TestAnOIDCPersonMints(t *testing.T) {
 	w := f.bearer(context.Background(), "POST", "/v1/tokens", mintLeaf1, f.idToken(t, iss, nil))
 	resp := decodeMint(t, w)
 	if w.Code != 200 || resp.Principal != alicePrincipal || resp.Results[0].Verdict != decision.VerdictPermit {
-		t.Fatalf("%d %s", w.Code, w.Body)
+		t.Fatalf("%d %s", w.Code, shown(w))
 	}
 	toks, err := f.st.Candidates(context.Background(), store.TokenKey{NAS: "leaf1", Username: "alice"})
 	if err != nil || len(toks) != 1 {
@@ -73,7 +84,7 @@ func TestTheOIDCSessionClockIsAuthTime(t *testing.T) {
 	ahead := f.idToken(t, iss, map[string]any{"auth_time": f.b.Now().Add(30 * time.Second).Unix(),
 		"iat": f.b.Now().Add(30 * time.Second).Unix()})
 	if w := f.bearer(context.Background(), "POST", "/v1/tokens", `{"devices":["nx1"],"ttl_seconds":60}`, ahead); w.Code != 200 {
-		t.Fatalf("an auth_time 30s ahead: %d %s", w.Code, w.Body)
+		t.Fatalf("an auth_time 30s ahead: %d %s", w.Code, shown(w))
 	}
 	toks, _ = f.st.Candidates(context.Background(), store.TokenKey{NAS: "nx1", Username: "alice"})
 	if len(toks) != 1 || toks[0].AuthTime.After(f.b.Now()) {
@@ -103,12 +114,21 @@ func TestAMachineMintsAsApp(t *testing.T) {
 	w := f.bearer(context.Background(), "POST", "/v1/tokens", mintLeaf1, raw)
 	resp := decodeMint(t, w)
 	if w.Code != 200 || resp.Principal != "app:Oxidized-01" || resp.Results[0].Username != "svc-backup" {
-		t.Fatalf("%d %s", w.Code, w.Body)
+		t.Fatalf("%d %s", w.Code, shown(w))
 	}
 	// A machine has no session a provider logs out: it writes no owner
 	// record (pre-flight M-16).
 	if _, err := f.st.OIDCOwner(context.Background(), store.OIDCKey(store.OIDCSub, iss.URL, "svc")); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("a machine's mint wrote an owner record: %v", err)
+	}
+	// Nor does a logout under its sub refuse it: a machine has no session a
+	// provider logs out (pre-flight M-16).
+	if err := f.st.PutLogout(context.Background(), store.Logout{Key: store.OIDCKey(store.OIDCSub, iss.URL, "svc"),
+		At: f.b.Now(), Origin: "backchannel_logout " + iss.URL}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if w := f.bearer(context.Background(), "POST", "/v1/tokens", `{"devices":["nx1"],"ttl_seconds":60}`, raw); w.Code != 200 {
+		t.Fatalf("a logout under a machine's sub refused its mint: %s", shown(w))
 	}
 }
 
@@ -152,9 +172,9 @@ func TestARefusedBearerIsRecordedWithNoPrincipalAndNotQuoted(t *testing.T) {
 	if last["principal"] != nil || last["auth"].(map[string]any)["method"] != "oidc" || last["auth"].(map[string]any)["oidc"] != nil {
 		t.Fatalf("the refusal's record: %v", last)
 	}
-	for _, s := range []string{f.log.String(), said.String(), w.Body.String()} {
+	for name, s := range map[string]string{"the log": f.log.String(), "said": said.String(), "the body": w.Body.String()} {
 		if strings.Contains(s, "sub-marker") || strings.Contains(s, forged) {
-			t.Fatalf("an unverified token's claim or the token itself was written: %s", s)
+			t.Fatalf("an unverified token's claim or the token itself was written to %s", name)
 		}
 	}
 }
@@ -229,9 +249,14 @@ func TestALoggedOutSessionIsRefusedEverywhere(t *testing.T) {
 	if w := f2.bearer(ctx, "POST", "/v1/tokens", mintLeaf1, f2.idToken(t, iss2, nil)); w.Code != 401 {
 		t.Fatalf("a token issued at the sub's logout: %d %s", w.Code, w.Body)
 	}
-	f2.advance(2 * time.Minute)
+	// Inside clock_skew after the logout is still the old session's.
+	f2.advance(30 * time.Second)
+	if w := f2.bearer(ctx, "POST", "/v1/tokens", mintLeaf1, f2.idToken(t, iss2, nil)); w.Code != 401 {
+		t.Fatalf("a token issued 30s after the sub's logout: %s", shown(w))
+	}
+	f2.advance(90 * time.Second)
 	if w := f2.bearer(ctx, "POST", "/v1/tokens", mintLeaf1, f2.idToken(t, iss2, nil)); w.Code != 200 {
-		t.Fatalf("a token issued 2m after the sub's logout: %d %s", w.Code, w.Body)
+		t.Fatalf("a token issued 2m after the sub's logout: %d %s", w.Code, shown(w))
 	}
 }
 
@@ -277,6 +302,20 @@ func TestAMintRacingALogoutLeavesNoToken(t *testing.T) {
 	if toks, _ := f.st.Candidates(ctx, store.TokenKey{NAS: "leaf1", Username: "alice"}); len(toks) != 0 {
 		t.Fatalf("%d tokens survived a logout that landed mid-mint", len(toks))
 	}
+	// The per-device records say which session was ended.
+	var seen int
+	for _, rec := range eventsOf(f.records(t), decision.EventMint) {
+		if rec["reason"] != string(decision.CredentialRevoked) {
+			continue
+		}
+		seen++
+		if o, _ := rec["auth"].(map[string]any)["oidc"].(map[string]any); o["sid"] != "s-sub-alice" {
+			t.Fatalf("a credential_revoked record without auth.oidc: %v", rec["auth"])
+		}
+	}
+	if seen == 0 {
+		t.Fatal("no credential_revoked record")
+	}
 }
 
 // No token exists that a logout cannot find (Ruling 11): the owner write
@@ -318,7 +357,7 @@ func TestAnOIDCPrincipalResolvesThroughTheDirectory(t *testing.T) {
 	w := f.bearer(context.Background(), "POST", "/v1/tokens", mintLeaf1, f.idToken(t, iss, nil))
 	resp := decodeMint(t, w)
 	if w.Code != 200 || resp.Results[0].Username != "alice2" || res.Calls.Load() != 1 {
-		t.Fatalf("%d %s, calls %d", w.Code, w.Body, res.Calls.Load())
+		t.Fatalf("%d %s, calls %d", w.Code, shown(w), res.Calls.Load())
 	}
 }
 
@@ -329,5 +368,26 @@ func TestABearerWithNoOIDCIsRefused(t *testing.T) {
 	raw := iss.IDToken(t, "k1", testClientID, "x", f.b.Now(), map[string]any{"preferred_username": "alice@example.com"})
 	if w := f.bearer(context.Background(), "POST", "/v1/tokens", mintLeaf1, raw); w.Code != 401 {
 		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+}
+
+// An owner entry is written again once it is ownerFresh old, so someone who
+// keeps minting never outlives their own record (Ruling 11).
+func TestTheOwnerEntryIsRenewedAsItAges(t *testing.T) {
+	f := newFixture(t, 8)
+	iss := f.withOIDC(t)
+	ctx := context.Background()
+	key := store.SidKey(iss.URL, "s-sub-alice")
+	if w := f.bearer(ctx, "POST", "/v1/tokens", mintLeaf1, f.idToken(t, iss, nil)); w.Code != 200 {
+		t.Fatalf("the first mint: %s", shown(w))
+	}
+	f.advance(2 * time.Hour)
+	if w := f.bearer(ctx, "POST", "/v1/tokens", `{"devices":["nx1"],"ttl_seconds":60}`, f.idToken(t, iss, nil)); w.Code != 200 {
+		t.Fatalf("the second mint: %s", shown(w))
+	}
+	own, err := f.st.OIDCOwner(ctx, key)
+	e, ok := own.Entry(alicePrincipal)
+	if err != nil || !ok || !e.WrittenAt.Equal(f.b.Now()) {
+		t.Fatalf("the owner entry %+v (found %v, err %v) was not written at %v", e, ok, err, f.b.Now())
 	}
 }
