@@ -883,6 +883,20 @@ func TestWindowsScriptsCheckNativeExitCodes(t *testing.T) {
 	}
 }
 
+// enroll_as registers the DC's WSMAN SPNs before it turns CredSSP on: without
+// them CredSSP refuses the DC as an untrusted target (measured, gate run 5).
+func TestWindowsEnrollAsRegistersWSMANSPNsFirst(t *testing.T) {
+	b, _ := winScriptFS.ReadFile("directory/windows/scripts/enroll_as.ps1")
+	s := string(b)
+	spn, credssp := strings.Index(s, `"WSMAN/$env:COMPUTERNAME", "WSMAN/$fqdn"`), strings.Index(s, "Enable-WSManCredSSP")
+	if spn < 0 || !strings.Contains(s, "setspn.exe -S $s $env:COMPUTERNAME") {
+		t.Fatal("enroll_as.ps1 does not register WSMAN/<host> and WSMAN/<fqdn>")
+	}
+	if credssp < 0 || spn > credssp {
+		t.Error("enroll_as.ps1 registers the WSMAN SPNs after it enables CredSSP")
+	}
+}
+
 // A result value read from a file is a plain string. Get-Content decorates
 // what it returns with PSPath, PSProvider and the rest, and Windows
 // PowerShell 5.1's ConvertTo-Json serializes those notes to -Depth 8: measured

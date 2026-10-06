@@ -13,6 +13,18 @@ function New-LabPlain {
   'Aa1!' + (($b | ForEach-Object { $_.ToString('x2') }) -join '')
 }
 $fqdn = "$env:COMPUTERNAME.corp.example.com"
+# CredSSP delegates only to a target Kerberos can verify, by its WSMAN SPN.
+# WinRM registers that SPN itself on a member server; on the L44 DC it had
+# not (measured: setspn -L listed no WSMAN/, and CredSSP refused the target as
+# not trusted). Registered once, kept: the DC is the lab's.
+$spns = (setspn.exe -L $env:COMPUTERNAME | Out-String)
+if ($LASTEXITCODE -ne 0) { throw "setspn -L: exit $LASTEXITCODE" }
+foreach ($s in "WSMAN/$env:COMPUTERNAME", "WSMAN/$fqdn") {
+  if ($spns -notmatch "(?m)^\s*$([regex]::Escape($s))\s*$") {
+    setspn.exe -S $s $env:COMPUTERNAME | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "setspn -S ${s}: exit $LASTEXITCODE" }
+  }
+}
 $sid = (Get-ADUser $user).SID.Value
 $plain = New-LabPlain
 $sec = ConvertTo-SecureString $plain -AsPlainText -Force
