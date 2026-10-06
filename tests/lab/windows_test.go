@@ -756,11 +756,16 @@ func winSessionCut(err error) bool {
 const winAuthStall = 10 * time.Minute
 
 // winAuthWatch tells a password sshd refuses for good from a VM that is still
-// starting: since is the first of an unbroken run of refusals.
-type winAuthWatch struct{ since time.Time }
+// starting: since is the first of an unbroken run of refusals, and stall how
+// long they may go on (zero: never a stall, once a session has proved the
+// password).
+type winAuthWatch struct {
+	since time.Time
+	stall time.Duration
+}
 
 // observe takes each attempt's error and the time, true when refusals have
-// gone on for winAuthStall. Any other outcome starts the count again.
+// gone on for a.stall. Any other outcome starts the count again.
 func (a *winAuthWatch) observe(err error, now time.Time) bool {
 	if err == nil || !strings.Contains(err.Error(), "unable to authenticate") {
 		a.since = time.Time{}
@@ -769,7 +774,7 @@ func (a *winAuthWatch) observe(err error, now time.Time) bool {
 	if a.since.IsZero() {
 		a.since = now
 	}
-	return now.Sub(a.since) >= winAuthStall
+	return a.stall > 0 && now.Sub(a.since) >= a.stall
 }
 
 // winRegistryWithin outlasts registry.ps1's own five-minute wait for NTDS.
@@ -938,11 +943,13 @@ func (w *winDC) logTail(n int) string {
 // run a script, saying every two minutes what dockur last said: Windows
 // Setup is silent for long stretches. A script that ran and failed means
 // the VM is up and the bootstrap is broken, which no wait mends: three in a
-// row fail the run at once, not after the whole wait.
-func (w *winDC) waitSSH(t *testing.T, within time.Duration) {
+// row fail the run at once, not after the whole wait. authStall is how long a
+// refused password may last (winAuthWatch); after the promotion's reboot the
+// password is proved, so that wait passes zero and never stalls on it.
+func (w *winDC) waitSSH(t *testing.T, within, authStall time.Duration) {
 	t.Helper()
 	deadline, next, ran := time.Now().Add(within), time.Now(), 0
-	var auth winAuthWatch
+	auth := winAuthWatch{stall: authStall}
 	for {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		_, err := w.ps(ctx, "clock", nil)
@@ -952,10 +959,10 @@ func (w *winDC) waitSSH(t *testing.T, within time.Duration) {
 		}
 		if auth.observe(err, time.Now()) {
 			t.Fatalf("windows: sshd has refused the Administrator's password for %s: dockur's PASSWORD (windows.env) may not "+
-				"reach the built-in Administrator; see dockur's log: %s", winAuthStall, w.logTail(1500))
+				"reach the built-in Administrator; see dockur's log: %s", authStall, w.logTail(1500))
 		}
 		var se *winScriptErr
-		if errors.As(err, &se) {
+		if errors.As(err, &se) && !se.cut {
 			if ran++; ran >= 3 {
 				t.Fatalf("windows: the VM answers SSH but the bootstrap fails, three times in a row: %v", err)
 			}
@@ -1066,10 +1073,11 @@ func winEnsureISO(t *testing.T) string {
 		t.Fatal(err)
 	}
 	part := path + ".part"
-	t.Logf("windows: downloading the evaluation ISO (%d bytes) to %s, within %s", winISOSize, dir, winISODeadline)
+	t.Logf("windows: downloading the evaluation ISO (%d bytes) to %s, within %s, failing after %s without a byte",
+		winISOSize, dir, winISODeadline, winISOIdle)
 	ctx, cancel := context.WithTimeout(context.Background(), winISODeadline)
 	defer cancel()
-	if err := winDownloadTo(ctx, winISOURL, part, 1<<30, t.Logf); err != nil {
+	if err := winDownloadTo(ctx, winISOURL, part, 1<<30, winISOIdle, t.Logf); err != nil {
 		_ = os.Remove(part)
 		t.Fatalf("windows: fetching the ISO: %v", err)
 	}
@@ -1083,12 +1091,33 @@ func winEnsureISO(t *testing.T) string {
 	return path
 }
 
-// winISODeadline bounds the 8 GB download, so a stall fails the run cleanly.
-const winISODeadline = 60 * time.Minute
+// winISODeadline bounds the 8 GB download as a whole, long enough for a slow
+// line (about 5 Mbit/s); winISOIdle is how long it may go without a byte, so
+// a stall fails the run in minutes and a slow but moving download does not.
+const (
+	winISODeadline = 4 * time.Hour
+	winISOIdle     = 2 * time.Minute
+)
 
 // winDownloadTo fetches url to part under ctx, saying every `every` bytes how
-// far it is: a stalled read ends with ctx, not never.
-func winDownloadTo(ctx context.Context, url, part string, every int64, logf func(string, ...any)) error {
+// far it is: a read that brings nothing for idle ends the download, as does
+// ctx, so a stall ends and never hangs.
+func winDownloadTo(ctx context.Context, url, part string, every int64, idle time.Duration, logf func(string, ...any)) error {
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	stalled := fmt.Errorf("no byte for %s", idle)
+	timer := time.AfterFunc(idle, func() { cancel(stalled) })
+	defer timer.Stop()
+	err := winDownloadBody(ctx, url, part, every, logf, func() { timer.Reset(idle) })
+	if c := context.Cause(ctx); err != nil && c != nil && errors.Is(c, stalled) {
+		return fmt.Errorf("%w (%v)", c, err)
+	}
+	return err
+}
+
+// winDownloadBody is winDownloadTo's transfer; moved runs after each read
+// that brought bytes.
+func winDownloadBody(ctx context.Context, url, part string, every int64, logf func(string, ...any), moved func()) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
@@ -1111,6 +1140,7 @@ func winDownloadTo(ctx context.Context, url, part string, every int64, logf func
 	for {
 		k, rerr := resp.Body.Read(buf)
 		if k > 0 {
+			moved()
 			if _, err := f.Write(buf[:k]); err != nil {
 				f.Close()
 				return err
@@ -1218,10 +1248,10 @@ func startWindowsDC(t *testing.T, d *directories) *labDir {
 		if b, err := w.dockerCompose("up", "-d", "dc").CombinedOutput(); err != nil {
 			t.Fatalf("docker compose up dc: %v\n%s", err, w.scrubbedTail(string(b), 2000))
 		}
-		w.waitSSH(t, 150*time.Minute)
+		w.waitSSH(t, 150*time.Minute, winAuthStall)
 		w.run(t, "promote", map[string]any{"dsrm_password": w.sec.DSRMPassword}, 30*time.Minute, nil)
 		time.Sleep(90 * time.Second) // promote.ps1's timer reboots the VM 15s after it answers
-		w.waitSSH(t, 40*time.Minute)
+		w.waitSSH(t, 40*time.Minute, 0)
 		w.waitReady(t, 20*time.Minute)
 		var seed struct {
 			Loop         string    `json:"loop"`

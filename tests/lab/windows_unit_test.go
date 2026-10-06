@@ -1156,14 +1156,14 @@ func TestWindowsAuthWatch(t *testing.T) {
 	refused := errors.New("windows clock: ssh: ssh: handshake failed: ssh: unable to authenticate, attempted methods [none password keyboard-interactive], no supported methods remain")
 	other := errors.New("windows clock: ssh: dial tcp 127.0.0.1:30022: connect: connection refused")
 	t0 := time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC)
-	var a winAuthWatch
+	a := winAuthWatch{stall: winAuthStall}
 	if a.observe(refused, t0) || a.observe(refused, t0.Add(9*time.Minute+59*time.Second)) {
 		t.Error("a refusal under ten minutes stalls the wait")
 	}
 	if !a.observe(refused, t0.Add(10*time.Minute)) {
 		t.Error("a refusal of ten minutes does not stall the wait")
 	}
-	a = winAuthWatch{}
+	a = winAuthWatch{stall: winAuthStall}
 	a.observe(refused, t0)
 	a.observe(other, t0.Add(5*time.Minute)) // the VM is not answering at all: not a refusal
 	if a.observe(refused, t0.Add(10*time.Minute)) || a.observe(refused, t0.Add(19*time.Minute)) {
@@ -1174,6 +1174,11 @@ func TestWindowsAuthWatch(t *testing.T) {
 	}
 	if a.observe(nil, t0.Add(time.Hour)) || a.observe(refused, t0.Add(time.Hour+time.Minute)) {
 		t.Error("a success did not reset the count")
+	}
+	// After the promotion's reboot the password is proved: no stall at all.
+	a = winAuthWatch{}
+	if a.observe(refused, t0) || a.observe(refused, t0.Add(time.Hour)) {
+		t.Error("a wait with no stall set stalled on a refusal")
 	}
 }
 
@@ -1246,10 +1251,26 @@ func TestWindowsStatfsUp(t *testing.T) {
 	}
 }
 
-// The ISO's download has a deadline and says how far it got.
+// The ISO's download fails on its deadline, or when no byte comes for idle;
+// a slow download that keeps moving goes on; it says how far it got.
 func TestWindowsDownloadStallsAndLogs(t *testing.T) {
 	body := strings.Repeat("x", 3000)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/silent" {
+			w.Header().Set("Content-Length", "100000")
+			w.WriteHeader(http.StatusOK)
+			w.(http.Flusher).Flush()
+			<-r.Context().Done()
+			return
+		}
+		if r.URL.Path == "/slow" {
+			for i := 0; i < 6; i++ {
+				_, _ = w.Write([]byte("y"))
+				w.(http.Flusher).Flush()
+				time.Sleep(100 * time.Millisecond)
+			}
+			return
+		}
 		if r.URL.Path == "/stall" {
 			w.Header().Set("Content-Length", "100000")
 			_, _ = w.Write([]byte("start"))
@@ -1266,10 +1287,25 @@ func TestWindowsDownloadStallsAndLogs(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
 	start := time.Now()
-	if err := winDownloadTo(ctx, srv.URL+"/stall", part, 1000, logf); err == nil || time.Since(start) > 5*time.Second {
+	if err := winDownloadTo(ctx, srv.URL+"/stall", part, 1000, time.Hour, logf); err == nil || time.Since(start) > 5*time.Second {
 		t.Errorf("a stalled download did not fail at its deadline: %v after %s", err, time.Since(start))
 	}
-	if err := winDownloadTo(context.Background(), srv.URL+"/ok", part, 1000, logf); err != nil {
+	start = time.Now()
+	if err := winDownloadTo(context.Background(), srv.URL+"/stall", part, 1000, 300*time.Millisecond, logf); err == nil ||
+		!strings.Contains(err.Error(), "no byte for") || time.Since(start) > 5*time.Second {
+		t.Errorf("a stalled download did not fail when idle: %v after %s", err, time.Since(start))
+	}
+	start = time.Now()
+	if err := winDownloadTo(context.Background(), srv.URL+"/silent", part, 1000, 300*time.Millisecond, logf); err == nil ||
+		!strings.Contains(err.Error(), "no byte for") || time.Since(start) > 5*time.Second {
+		t.Errorf("a download that never sent a byte did not fail when idle: %v after %s", err, time.Since(start))
+	}
+	// Slow but moving: a byte every 100ms for 600ms, with idle 300ms, completes.
+	start = time.Now()
+	if err := winDownloadTo(context.Background(), srv.URL+"/slow", part, 1000, 300*time.Millisecond, logf); err != nil {
+		t.Errorf("a slow download that kept moving failed: %v after %s", err, time.Since(start))
+	}
+	if err := winDownloadTo(context.Background(), srv.URL+"/ok", part, 1000, time.Hour, logf); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := os.ReadFile(part); string(got) != body {
