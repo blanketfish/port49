@@ -23,6 +23,7 @@ import (
 	"github.com/rhwendt/port49/internal/directory"
 	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/store"
+	"github.com/rhwendt/port49/internal/tacacs/wire"
 )
 
 // secretBindValue is a bind password's value in these tests: no line the
@@ -212,7 +213,7 @@ func TestAGraceMintsSessionGoesStaleFromItsVerification(t *testing.T) {
 	openDirectoryHook = func(_ config.Config, st store.Store, _ *policy.Live, _ *metrics.Metrics,
 		_ func(string, ...any)) (*directory.Resolver, error) {
 		a := directory.Answer{Source: directory.Grace, Membership: store.Membership{
-			Principal: "user:alice@example.com", EntryID: "dn:cn=alice", Username: "alice", VerifiedAt: verified}}
+			Principal: "user:alice@example.com", EntryID: "dn:cn=alice", Username: "corp_alice", VerifiedAt: verified}}
 		return directory.ForTestsStaticResolver(st, map[string]directory.Answer{
 			"user:alice@example.com": a}, nil), nil
 	}
@@ -235,13 +236,21 @@ func TestAGraceMintsSessionGoesStaleFromItsVerification(t *testing.T) {
 		t.Fatalf("stderr: %q", out.String())
 	}
 	dev := tacacsClient{t: t, addr: addrs[0][1], key: []byte("run-test-secret")}
-	loginSession(t, dev, mint(t, addrs[1][1], pkiDir, "leaf1"), &log)
-	if !dev.permits("alice", "show", "version") {
+	// The directory's username for her, one no subject declares: the mint
+	// refuses username_collision under the held policy.
+	tok := mint(t, addrs[1][1], pkiDir, "leaf1")
+	if st := dev.login("corp_alice", tok); st != wire.AuthenStatusPass {
+		t.Fatalf("login: %d; log %s", st, log.String())
+	}
+	if r := dev.authorize("corp_alice"); r.Status != wire.AuthorStatusPassAdd {
+		t.Fatalf("session authorization: %+v", r)
+	}
+	if !dev.permits("corp_alice", "show", "version") {
 		t.Fatalf("a command before the ceiling is denied; log %s", log.String())
 	}
 	// The session began a moment ago, a ceiling's worth of minutes from its
 	// idle and age limits; only the verification it was minted on is old.
-	for deadline := time.Now().Add(40 * time.Second); dev.permits("alice", "show", "version"); time.Sleep(250 * time.Millisecond) {
+	for deadline := time.Now().Add(40 * time.Second); dev.permits("corp_alice", "show", "version"); time.Sleep(250 * time.Millisecond) {
 		if time.Now().After(deadline) {
 			t.Fatalf("the ceiling never passed from the verification; log %s", log.String())
 		}
