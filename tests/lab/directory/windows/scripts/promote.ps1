@@ -10,4 +10,5 @@ Install-ADDSForest -DomainName 'corp.example.com' -DomainNetbiosName 'CORP' -Ins
   -SafeModeAdministratorPassword $dsrm -NoRebootOnCompletion -Force -WarningAction SilentlyContinue | Out-Null
 # The reboot is left to a timer so this session can answer first.
 shutdown.exe /r /t 15 /c 'L44: AD DS promotion' | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "shutdown /r: exit $LASTEXITCODE" }
 @{ promoted = 'now' }

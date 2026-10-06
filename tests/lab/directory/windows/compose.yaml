@@ -24,7 +24,11 @@
 # pkinit/*-key.pem. The run removes them unless PORT49_LAB_WINDOWS_KEEP is set.
 #
 # Never run `docker compose config` or `docker inspect` on this project: both
-# print the environment, and it holds the password.
+# print the environment, and it holds the password (dockur reads it from
+# there; TestLabNeverPrintsAContainerEnvironment keeps the harness off both).
+# That is accepted: docker on the lab box is root-equivalent, the ports are
+# loopback-only, and the lab is single-occupant, so what is left to guard
+# against is a careless print.
 name: port49labwin
 
 services:

@@ -7,4 +7,4 @@ Import-Module ActiveDirectory
 $vals = @($values | Where-Object { $_ })
 if ($vals.Count -gt 0) { Set-ADObject -Identity $dn -Replace @{ $attribute = [string[]]$vals } }
 else { Set-ADObject -Identity $dn -Clear $attribute }
-@{ values = @((Get-ADObject -Identity $dn -Properties $attribute).$attribute | ForEach-Object { "$_" }) }
+@{ values = @((Get-ADObject -Identity $dn -Properties $attribute).$attribute | Where-Object { $null -ne $_ } | ForEach-Object { "$_" }) }

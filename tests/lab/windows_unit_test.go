@@ -486,21 +486,50 @@ func TestWindowsScriptsTakeTheirParams(t *testing.T) {
 var (
 	// winPSEcho is every way a PowerShell line can write a value somewhere an
 	// operator, a transcript or the harness's log could read it.
-	winPSEcho = regexp.MustCompile(`(?i)write-|out-file|out-string|out-host|set-content|add-content|tee-object|start-transcript|format-|convertfrom-securestring|\bthrow\b|\becho\b`)
-	// winPSAssign is a variable assigned on one line: its name and right side.
-	winPSAssign = regexp.MustCompile(`^\s*\$([A-Za-z0-9_]+)\s*=\s*(.*)$`)
+	winPSEcho = regexp.MustCompile(`(?i)write-|out-file|out-string|out-host|out-default|out-printer|set-content|add-content|tee-object|start-transcript|format-|export-|convertto-(?:json|csv|xml|html)|convertfrom-securestring|-value\b|set-variable|\[console\]::|\$host\.ui|\[io\.file\]::|writeobject|\bthrow\b|\breturn\b|\becho\b`)
+	// winPSAssign is a variable (or one of its members or elements) assigned on
+	// one line: its name and right side.
+	winPSAssign = regexp.MustCompile(`^\s*\$([A-Za-z0-9_:]+)(?:\.\w+|\[[^\]]*\])*\s*\+?=\s*(.*)$`)
 	// winPSKey is a hashtable key on a line (a result key), never a variable.
 	winPSKey = regexp.MustCompile(`(?:^\s*|[;{]\s*)[a-z_][a-z0-9_]*\s*=\s`)
 	winPSMkr = regexp.MustCompile(`New-Lab(?:Secret|Plain)`)
 	winPSDQ  = regexp.MustCompile(`"[^"]*"`)
-	// winPSBuild starts an expression that wraps its arguments into a secret.
-	winPSBuild = regexp.MustCompile(`^(?:ConvertTo-SecureString|New-Object)\b`)
+	// winPSRedirect writes to a file or a stream other than $null.
+	winPSRedirect = regexp.MustCompile(`\*?>>?\s*(?:[^$\s]|\$[^n])`)
+	// winPSConsumes starts an expression whose result is not its arguments:
+	// what these cmdlets are given does not come back out.
+	winPSConsumes = regexp.MustCompile(`^(?:Invoke-Command|Set-ADAccountPassword|New-ADUser|Install-ADDSForest)\b`)
 )
+
+// winJoinContinued joins each line that ends in a backtick or a pipe onto the
+// next, so a statement is scanned whole; a joined line sits at its first
+// line's index and the lines it ate are empty.
+func winJoinContinued(lines []string) []string {
+	out := make([]string, len(lines))
+	for i := 0; i < len(lines); i++ {
+		l := strings.TrimRight(lines[i], " \t\r")
+		j := i
+		for j+1 < len(lines) && (strings.HasSuffix(l, "`") || strings.HasSuffix(l, "|")) {
+			j++
+			if strings.HasSuffix(l, "`") {
+				l = strings.TrimSuffix(l, "`")
+			}
+			l += " " + strings.TrimSpace(lines[j])
+			l = strings.TrimRight(l, " \t\r")
+		}
+		out[i] = l
+		i = j
+	}
+	return out
+}
 
 // winSecretVars is the variables of a script that hold a secret: its secret
 // parameters, whatever is assigned from New-LabSecret or New-LabPlain, and
-// whatever is assigned from an expression using one of those.
+// whatever is assigned from any expression that uses one of those (a
+// concatenation, a conversion, a member), except the result of a cmdlet that
+// only consumes it.
 func winSecretVars(lines []string) []string {
+	lines = winJoinContinued(lines)
 	vars := append([]string(nil), winSecretParams...)
 	for changed := true; changed; {
 		changed = false
@@ -509,13 +538,11 @@ func winSecretVars(lines []string) []string {
 			if m == nil || slices.Contains(vars, m[1]) {
 				continue
 			}
-			// A value is a secret when it is made by or built from one; a cmdlet's
-			// result that merely took one as an argument (Invoke-Command -Credential
-			// $cred) is not.
 			rhs := strings.TrimLeft(m[2], "( ")
-			if winPSMkr.MatchString(rhs) && strings.HasPrefix(rhs, "New-Lab") ||
-				winPSBuild.MatchString(rhs) && winUsesAny(m[2], vars) != "" ||
-				strings.HasPrefix(rhs, "$") && winUsesAny(rhs[:strings.IndexAny(rhs+" ", " ")], vars) != "" {
+			if winPSConsumes.MatchString(rhs) {
+				continue
+			}
+			if winPSMkr.MatchString(m[2]) || winUsesAny(m[2], vars) != "" {
 				vars = append(vars, m[1])
 				changed = true
 			}
@@ -552,13 +579,15 @@ func winVarName(v string) string {
 }
 
 // winSecretLeaks names each line of a script (by number and variable name,
-// never by content) that writes a secret: an echoing cmdlet, a string that
-// interpolates it, or a result key that carries it.
+// never by content) that writes a secret: an echoing cmdlet or .NET writer,
+// a redirection, a string that interpolates it, a result key that carries it,
+// or the variable alone on a line, which is pipeline output.
 func winSecretLeaks(src string) []string {
-	lines := strings.Split(src, "\n")
-	vars := winSecretVars(lines)
+	src = strings.ReplaceAll(src, "\r\n", "\n")
+	raw := strings.Split(src, "\n")
+	vars := winSecretVars(raw)
 	var out []string
-	for i, l := range lines {
+	for i, l := range winJoinContinued(raw) {
 		tl := strings.TrimSpace(l)
 		if strings.HasPrefix(tl, "param(") || strings.HasPrefix(tl, "function ") || strings.HasPrefix(tl, "#") {
 			continue
@@ -570,13 +599,18 @@ func winSecretLeaks(src string) []string {
 		if v == "" {
 			continue
 		}
+		bare := strings.HasPrefix(tl, "$") && !winPSAssign.MatchString(l) && !strings.Contains(l, "Out-Null") && !strings.Contains(l, "$null")
 		switch {
 		case winPSEcho.MatchString(l):
 			out = append(out, fmt.Sprintf("line %d echoes %s", i+1, winVarName(v)))
+		case winPSRedirect.MatchString(l):
+			out = append(out, fmt.Sprintf("line %d redirects %s", i+1, winVarName(v)))
 		case v != "New-Lab*" && winInDQString(l, v):
 			out = append(out, fmt.Sprintf("line %d interpolates %s into a string", i+1, winVarName(v)))
 		case winPSKey.MatchString(l) && !winPSAssign.MatchString(l):
 			out = append(out, fmt.Sprintf("line %d makes %s a result key's value", i+1, winVarName(v)))
+		case bare:
+			out = append(out, fmt.Sprintf("line %d leaves %s on the pipeline", i+1, winVarName(v)))
 		}
 	}
 	return out
@@ -617,12 +651,171 @@ func TestWindowsSecretScanFlagsALeak(t *testing.T) {
 		{"$m = \"pw=$p\"", true},
 		{"@{ password = $q }", true},
 		{"@{ a = 1; b = New-LabPlain }", true},
+		// Each of these passed the first scan.
+		{"$p", true},
+		{"$p.Length; $p", true},
+		{"$p > C:\\x.txt", true},
+		{"$p >> C:\\x.txt", true},
+		{"[Console]::Out.WriteLine($p)", true},
+		{"$host.UI.WriteLine($p)", true},
+		{"[IO.File]::WriteAllText('C:\\x', $p)", true},
+		{"[IO.File]::AppendAllText('C:\\x', $p)", true},
+		{"$PSCmdlet.WriteObject($p)", true},
+		{"$p | ConvertTo-Json", true},
+		{"Export-Clixml -InputObject $p", true},
+		{"Out-Default -InputObject $p", true},
+		{"New-ItemProperty -Path HKLM:\\x -Name n -Value $p", true},
+		{"$r = @{}\n$r.pw = $p\n$r", true},
+		{"Write-Output `\n$p", true},
+		{"$p |\nOut-File C:\\x", true},
+		{"$x = 'pw' + $p\n@{ k = $x }", true},
+		{"$x = 'pw' + $p\n$x", true},
+		{"$x = 'pw' + $p\nWrite-Output $x", true},
+		{"return $p", true},
 		{"ConvertTo-SecureString $p -AsPlainText -Force | Out-Null", false},
 		{"& ktpass.exe -pass $port49_password *> $null", false},
+		{"& ktpass.exe `\n  -pass $port49_password *> $null", false},
+		{"$p | Out-Null", false},
+		{"$p > $null", false},
+		{"$x = 'pw' + $p", false},
+		{"$pem = Invoke-Command -ComputerName c -Credential $p\n@{ cert_pem = \"$pem\" }", false},
+		{"$r = @{}\n$r.k = 'v'\n$r", false},
 		{"@{ ok = $true }", false},
 	} {
 		if got := winSecretLeaks(base + c.line + "\n"); (len(got) > 0) != c.bad {
 			t.Errorf("%q: flagged=%v, want %v", c.line, len(got) > 0, c.bad)
 		}
+	}
+}
+
+// ktpass runs in a child scope that does not stop on its first stderr line (it
+// does under Windows PowerShell 5.1), all its text is thrown away unread, and
+// success is its exit code and the file: no text of ktpass's, which can carry
+// the derived key, reaches a variable, the result or an exception.
+func TestWindowsKeytabDiscardsKtpassText(t *testing.T) {
+	b, _ := winScriptFS.ReadFile("directory/windows/scripts/keytab.ps1")
+	src := strings.ReplaceAll(string(b), "\r\n", "\n")
+	joined := strings.Join(winJoinContinued(strings.Split(src, "\n")), "\n")
+	var kt string
+	for _, l := range strings.Split(joined, "\n") {
+		if strings.Contains(l, "ktpass.exe") && !strings.HasPrefix(strings.TrimSpace(l), "#") {
+			kt = l
+		}
+	}
+	if kt == "" {
+		t.Fatal("keytab.ps1 does not run ktpass.exe")
+	}
+	if !strings.HasPrefix(strings.TrimSpace(kt), "& ktpass.exe") || !strings.HasSuffix(strings.TrimSpace(kt), "*> $null") {
+		t.Error("ktpass's call is not a bare statement ending in *> $null: its output could reach a variable or the result")
+	}
+	scope := strings.Index(src, "& {")
+	cont := strings.Index(src, "$ErrorActionPreference = 'Continue'")
+	if scope < 0 || cont < scope || cont > strings.Index(src, "ktpass.exe -princ") {
+		t.Error("ktpass does not run in a child scope with $ErrorActionPreference = 'Continue'")
+	}
+	for _, want := range []string{"$LASTEXITCODE", "Test-Path $out"} {
+		if !strings.Contains(src, want) {
+			t.Errorf("keytab.ps1 does not judge ktpass by %s", want)
+		}
+	}
+	for _, l := range strings.Split(src, "\n") {
+		m := regexp.MustCompile(`throw\s+("[^"]*"|'[^']*')`).FindStringSubmatch(l)
+		if m == nil {
+			continue
+		}
+		for _, v := range winPSNameRe.FindAllStringSubmatch(strings.ToLower(m[1]), -1) {
+			if v[1] != "code" {
+				t.Errorf("keytab.ps1 throws with $%s, not only ktpass's exit code", v[1])
+			}
+		}
+	}
+}
+
+// Every native command's exit code is checked within the lines after it.
+func TestWindowsScriptsCheckNativeExitCodes(t *testing.T) {
+	ents, _ := winScriptFS.ReadDir("directory/windows/scripts")
+	native := regexp.MustCompile(`^\s*(?:&\s*)?[a-z]+\.exe\b`)
+	for _, e := range ents {
+		b, _ := winScriptFS.ReadFile("directory/windows/scripts/" + e.Name())
+		lines := strings.Split(strings.ReplaceAll(string(b), "\r\n", "\n"), "\n")
+		for i, l := range lines {
+			if !native.MatchString(l) {
+				continue
+			}
+			ok := false
+			for _, n := range lines[i+1 : min(i+4, len(lines))] {
+				ok = ok || strings.Contains(n, "LASTEXITCODE")
+			}
+			if !ok {
+				t.Errorf("%s:%d: no $LASTEXITCODE check follows the native command", e.Name(), i+1)
+			}
+		}
+	}
+}
+
+// A cleared attribute reads back as no values, not one empty string: a
+// single-valued attribute that is unset is $null, and $null piped to
+// ForEach-Object still runs once.
+func TestWindowsSetAttrReadsBackNoValues(t *testing.T) {
+	b, _ := winScriptFS.ReadFile("directory/windows/scripts/set_attr.ps1")
+	if !strings.Contains(string(b), "Where-Object { $null -ne $_ } | ForEach-Object") {
+		t.Error("set_attr.ps1 does not drop a $null attribute before it stringifies the values")
+	}
+}
+
+// install.bat is a batch file: cmd.exe wants CRLF, and git keeps it so.
+func TestWindowsInstallBatIsCRLF(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("directory", "windows", "oem", "install.bat"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bare := strings.Count(strings.ReplaceAll(string(b), "\r\n", ""), "\n"); bare != 0 {
+		t.Errorf("install.bat has %d lines without CR", bare)
+	}
+	ga, err := os.ReadFile(filepath.Join("..", "..", ".gitattributes"))
+	if err != nil || !strings.Contains(string(ga), "tests/lab/directory/windows/oem/*.bat text eol=crlf") {
+		t.Error(".gitattributes does not pin the oem batch files to CRLF")
+	}
+}
+
+// The PKINIT image records the MIT Kerberos versions it was built with, in
+// a file the note reads: the packages are not pinned, so the run must say.
+func TestWindowsPKINITImageRecordsItsVersions(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("directory", "windows", "pkinit", "Dockerfile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), "dpkg-query -W krb5-user krb5-pkinit libkrb5-3 > /etc/pkinit-versions") {
+		t.Error("the pkinit Dockerfile does not record the installed versions in /etc/pkinit-versions")
+	}
+}
+
+// The DC's password is in its container's environment (dockur reads it there),
+// which docker's inspect and compose's config would print. No lab code runs
+// either: docker on the lab box is root-equivalent and the lab single-occupant,
+// so what is left is a careless print.
+func TestLabNeverPrintsAContainerEnvironment(t *testing.T) {
+	bad := regexp.MustCompile("docker\\s+inspect|docker\\s+compose\\s+config|compose\\s+config\\b|" +
+		`"docker",\s*"inspect"|"container",\s*"inspect"|dockerCmd\("inspect"|"compose"[^\n)]*"config"`)
+	files, _ := filepath.Glob("*.go")
+	for _, f := range files {
+		b, _ := os.ReadFile(f)
+		if m := bad.FindIndex(b); m != nil {
+			t.Errorf("%s:%d prints a container environment", f, 1+strings.Count(string(b[:m[0]]), "\n"))
+		}
+	}
+}
+
+// Windows PowerShell 5.1 writes [Console]::Out in the OEM code page, so the
+// bootstrap sets UTF-8 (without a BOM, which would precede the JSON) before
+// anything can be written.
+func TestWindowsBootstrapSetsUTF8Output(t *testing.T) {
+	set := "[Console]::OutputEncoding = New-Object Text.UTF8Encoding $false"
+	i := strings.Index(winBootstrap, set)
+	if i < 0 {
+		t.Fatal("the bootstrap does not set [Console]::OutputEncoding to UTF-8 without a BOM")
+	}
+	if w := strings.Index(winBootstrap, "WriteLine"); w >= 0 && w < i {
+		t.Error("the bootstrap writes before it sets the output encoding")
 	}
 }
