@@ -7439,7 +7439,11 @@ that leaves no mark.** *Plan 7h, 2026-10-06.* Rulings rest on reasoning unless t
   exactly one must accept, two is `trust_domain_unresolved`. A human verifier needs `aud` ∋
   `client_id`, `azp` = `client_id` when present and when `aud` has several values, and refuses
   `typ: at+jwt`; a machine verifier needs `aud` ∋ `audience` and ruling 21's client checks.
-  A bearer with an `events` claim is refused (RFC 8725 §2.8). Task 5.
+  A bearer with an `events` claim is refused (RFC 8725 §2.8). The header `typ`, compared
+  case-insensitively with any `application/` prefix removed, is allowed, never denied (RFC 8725
+  §3.11; Task 5 review): absent or `jwt` for a human verifier; absent, `jwt` or `at+jwt` for a
+  machine verifier; any other `typ` is refused (provisional on L45 and L47). A claim name
+  outside printable ASCII is refused, as `encoding/json` would match it to another. Task 5.
 - **3. The signature** (data: RFC 7515, 7518, 8725). Compact JWS only, 16 KiB at most;
   `algorithms` per verifier, default `[RS256]`, from `RS256`, `PS256`, `ES256`, `ES384`,
   `EdDSA`; `none` and `HS*` refused at load and at parse; algorithm and key type agree, and a
@@ -7533,7 +7537,8 @@ that leaves no mark.** *Plan 7h, 2026-10-06.* Rulings rest on reasoning unless t
   OIDC Core §2; provisional on L46 and L47). `clients: [{client_id, sub}]`, required; the
   client (`azp`, else `client_id`) listed and the `sub` its pinned one; `azp` and `client_id`
   differing refused; a token carrying `auth_time`, `sid`, `nonce`, `scp` or `amr`, or an `idtyp`
-  other than `app`, refused: a person's delegated token never becomes `app:`. Tasks 5 and 7.
+  other than `app`, refused: a person's delegated token never becomes `app:`. A token carrying
+  `act` or `may_act` (RFC 8693 §4.1, delegation) is refused as well (Task 5 review). Tasks 5 and 7.
 - **22. `principal_domains`.** Each human `oidc` verifier lists the domains whose principals it
   may give, required; a principal outside them is `identity_unmapped`; two verifiers on
   different issuers with overlapping domains are refused at load; a logout reaches only
