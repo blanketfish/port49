@@ -424,7 +424,7 @@ func TestTheRereadAfterAMintReadsTheLegacyMark(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !f.b.revokedSince(w, r, corpAlice, cred, nil) || w.Code != 401 {
+	if !f.b.revokedSince(w, r, caller{principal: corpAlice, cred: cred}, nil) || w.Code != 401 {
 		t.Fatalf("revokedSince under a legacy mark: %d %s", w.Code, w.Body)
 	}
 }

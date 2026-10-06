@@ -34,6 +34,7 @@ import (
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/directory"
 	"github.com/rhwendt/port49/internal/engine"
+	"github.com/rhwendt/port49/internal/oidc"
 	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/printsafe"
@@ -69,7 +70,10 @@ type Broker struct {
 	// Directory maps a certificate to a directory principal at the TLS bind
 	// and reads its membership (plan 7g). Nil: no directory, and the
 	// certificate's email SAN is the principal.
-	Directory     *directory.Resolver
+	Directory *directory.Resolver
+	// Identity verifies OIDC bearer tokens (plan 7h): nil when no oidc
+	// verifier is configured, and a bearer is then refused.
+	Identity      *oidc.Set
 	Minter        *token.Minter
 	Store         store.Store
 	Log           decision.Emitter
@@ -264,12 +268,12 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
 	// body has no field that names one, and DisallowUnknownFields refuses a
 	// body that tries. The marks authenticate read are read again after the
 	// last token write, below.
-	principal, cred, ok := b.authenticate(w, r, decision.EventMint, "minted nothing")
+	c, ok := b.authenticate(w, r, decision.EventMint, "minted nothing")
 	if !ok {
 		return
 	}
+	principal := c.principal
 	now := b.Now()
-	authTime := b.authTime(r)
 
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxBody+1))
 	if err != nil || len(body) > maxBody {
@@ -320,9 +324,23 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		ref := directoryRefusal(err)
 		b.emit(decision.Record{TS: now, Event: decision.EventMint, Verdict: decision.VerdictDeny, Reason: ref.Reason,
-			Principal: principal, Auth: &decision.Auth{Method: cred.Method, Fingerprint: cred.Fingerprint}})
+			Principal: principal, Auth: c.auth()})
 		b.answerRefusal(w, r, ref)
 		return
+	}
+
+	// No token exists that a logout cannot find (Ruling 11).
+	if c.oidc != nil {
+		octx, ocancel := context.WithTimeout(r.Context(), holdTimeout)
+		err := b.noteOwner(octx, *c.oidc)
+		ocancel()
+		if err != nil {
+			b.emit(decision.Record{TS: now, Event: decision.EventMint, Verdict: decision.VerdictDeny,
+				Reason: decision.StoreUnavailable, Principal: principal, Auth: c.auth()})
+			writeError(w, http.StatusServiceUnavailable, string(decision.StoreUnavailable),
+				"the broker could not record your session for a logout to find, so it minted nothing; try again")
+			return
+		}
 	}
 
 	// Every device's record is reserved before the first is minted (design
@@ -345,7 +363,7 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		b.Metrics.BrokerIdempotency.WithLabelValues("store_error").Inc()
 		b.emit(decision.Record{TS: now, Event: decision.EventMint, Verdict: decision.VerdictDeny,
-			Reason: decision.StoreUnavailable, Principal: principal, Auth: &decision.Auth{Method: cred.Method}})
+			Reason: decision.StoreUnavailable, Principal: principal, Auth: c.auth()})
 		writeError(w, http.StatusServiceUnavailable, string(decision.StoreUnavailable),
 			"the broker could not reserve the Idempotency-Key, so it minted nothing; retry under the same key")
 		return
@@ -390,7 +408,7 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
 		release()
 		ref := directoryRefusal(directory.ErrUsernameTaken)
 		b.emit(decision.Record{TS: now, Event: decision.EventMint, Verdict: decision.VerdictDeny, Reason: ref.Reason,
-			Principal: principal, Auth: &decision.Auth{Method: cred.Method, Fingerprint: cred.Fingerprint}})
+			Principal: principal, Auth: c.auth()})
 		b.answerRefusal(w, r, ref)
 		return
 	}
@@ -398,7 +416,7 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
 		if err := b.MintGate(pol); err != nil {
 			release()
 			b.emit(decision.Record{TS: now, Event: decision.EventMint, Verdict: decision.VerdictDeny,
-				Reason: decision.StoreUnavailable, Principal: principal, Auth: &decision.Auth{Method: cred.Method}})
+				Reason: decision.StoreUnavailable, Principal: principal, Auth: c.auth()})
 			w.Header().Set("Retry-After", "5")
 			writeError(w, http.StatusServiceUnavailable, string(decision.StoreUnavailable),
 				"the broker has not yet recorded what it serves in the store, so it minted nothing; retry shortly")
@@ -412,7 +430,7 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
 	resp := api.MintResponse{Principal: principal}
 	resp.Subject, resp.Subjects = subjectNames(pol, m)
 	for _, name := range req.Devices {
-		item, err := b.mintOne(ctx, buf, pol, m, answer, cred, authTime, name, req, res, bodyHash)
+		item, err := b.mintOne(ctx, buf, pol, m, answer, c, name, req, res, bodyHash)
 		if errors.Is(err, token.ErrIdempotencyInProgress) {
 			// This device's hold was taken by another request under the
 			// key, or lapsed before its turn: two retries that both
@@ -421,7 +439,7 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
 			// already minted are completed records a retry replays — unless
 			// a revocation landed while they were written.
 			release()
-			if b.revokedSince(w, r, principal, cred, resp.Results) {
+			if b.revokedSince(w, r, c, resp.Results) {
 				return
 			}
 			b.writeInProgress(w)
@@ -430,7 +448,7 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
 		resp.Results = append(resp.Results, item)
 	}
 	release()
-	if b.revokedSince(w, r, principal, cred, resp.Results) {
+	if b.revokedSince(w, r, c, resp.Results) {
 		return
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -446,7 +464,22 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
 // these refuses is answered here, recorded once under event with a mint's
 // reasons and meanings (spec §5.7; decision 34), and ok is false. nothing
 // completes the marks-unreadable answer: "so it minted nothing".
-func (b *Broker) authenticate(w http.ResponseWriter, r *http.Request, event, nothing string) (string, store.Credential, bool) {
+func (b *Broker) authenticate(w http.ResponseWriter, r *http.Request, event, nothing string) (caller, bool) {
+	raw, hasBearer, berr := bearerOf(r)
+	hasCert := r.TLS != nil && (len(r.TLS.PeerCertificates) > 0 || len(r.TLS.VerifiedChains) > 0)
+	switch {
+	case hasBearer && hasCert:
+		writeError(w, http.StatusBadRequest, "bad_request", "one credential per request: a client certificate or "+
+			"an Authorization header, not both")
+		return caller{}, false
+	case hasBearer && berr != nil:
+		b.emit(decision.Record{TS: b.Now(), Event: event, Verdict: decision.VerdictDeny,
+			Reason: decision.TrustDomainUnresolved, Auth: &decision.Auth{Method: "oidc"}})
+		writeError(w, http.StatusUnauthorized, string(decision.TrustDomainUnresolved), berr.Error())
+		return caller{}, false
+	case hasBearer:
+		return b.bearerCaller(w, r, event, nothing, raw)
+	}
 	now := b.Now()
 	authTime := b.authTime(r)
 	var principal, legacy string
@@ -474,7 +507,7 @@ func (b *Broker) authenticate(w http.ResponseWriter, r *http.Request, event, not
 			Reason: decision.TrustDomainUnresolved, Principal: named,
 			Auth: &decision.Auth{Method: "cert", Fingerprint: cred.Fingerprint}})
 		writeError(w, http.StatusUnauthorized, string(decision.TrustDomainUnresolved), err.Error())
-		return "", store.Credential{}, false
+		return caller{}, false
 	}
 	if b.MaxSessionAge > 0 && now.Sub(authTime) > b.MaxSessionAge {
 		b.emit(decision.Record{TS: now, Event: event, Verdict: decision.VerdictDeny,
@@ -485,7 +518,7 @@ func (b *Broker) authenticate(w http.ResponseWriter, r *http.Request, event, not
 		writeError(w, http.StatusUnauthorized, string(decision.SessionExpired), fmt.Sprintf(
 			"this connection authenticated at %s, more than max_session_age (%s) ago; authenticate again",
 			authTime.UTC().Format(time.RFC3339), b.MaxSessionAge))
-		return "", store.Credential{}, false
+		return caller{}, false
 	}
 	// marked reads the marks on principal (and also) and the certificate,
 	// and answers the request when one stands or none can be read.
@@ -521,9 +554,9 @@ func (b *Broker) authenticate(w http.ResponseWriter, r *http.Request, event, not
 	}
 	if b.Directory == nil {
 		if marked(principal) || status() {
-			return "", store.Credential{}, false
+			return caller{}, false
 		}
-		return principal, cred, true
+		return caller{principal: principal, cred: cred, authTime: authTime}, true
 	}
 	// Under a directory the certificate's own marks (its key, and the
 	// principal its email SAN gave before a directory: pre-flight I-16) and
@@ -531,7 +564,7 @@ func (b *Broker) authenticate(w http.ResponseWriter, r *http.Request, event, not
 	// connection never maps a revoked certificate (pre-flight I-4); the
 	// mapped principal's mark after (Ruling 4).
 	if marked("", legacy) || status() {
-		return "", store.Credential{}, false
+		return caller{}, false
 	}
 	if principal == "" {
 		var ref *BindRefusal
@@ -539,14 +572,14 @@ func (b *Broker) authenticate(w http.ResponseWriter, r *http.Request, event, not
 			b.emit(decision.Record{TS: now, Event: event, Verdict: decision.VerdictDeny, Reason: ref.Reason,
 				Principal: legacy, Auth: &decision.Auth{Method: cred.Method, Fingerprint: cred.Fingerprint}})
 			b.answerRefusal(w, r, ref)
-			return "", store.Credential{}, false
+			return caller{}, false
 		}
 		named = principal
 	}
 	if marked(principal) {
-		return "", store.Credential{}, false
+		return caller{}, false
 	}
-	return principal, cred, true
+	return caller{principal: principal, legacy: legacy, cred: cred, authTime: authTime}, true
 }
 
 // callerOf is the caller of a request that does not map: the principal and
@@ -618,7 +651,8 @@ func (b *Broker) pinnedPrincipal(r *http.Request, cred store.Credential) (string
 }
 
 // revokedSince reads the marks again after a request's last token write,
-// and answers the request when one stands. A revocation that landed while
+// and answers the request when one stands (and, on the OIDC path, the
+// logouts: Ruling 13). A revocation that landed while
 // this request minted may have read the token index before these tokens
 // were indexed; reading the marks now closes that: whichever of the two
 // read the other's write, no token survives (spec §5.1.4; decision 32). A
@@ -635,11 +669,16 @@ func (b *Broker) pinnedPrincipal(r *http.Request, cred store.Credential) (string
 //
 // It runs on its own deadline, without the caller's cancel: a caller that
 // hung up must not leave its tokens behind.
-func (b *Broker) revokedSince(w http.ResponseWriter, r *http.Request, principal string, cred store.Credential,
-	items []api.MintItem) bool {
+func (b *Broker) revokedSince(w http.ResponseWriter, r *http.Request, c caller, items []api.MintItem) bool {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), holdTimeout)
 	defer cancel()
+	principal, cred := c.principal, c.cred
 	rv, revoked, err := b.revocation(ctx, principal, cred, b.legacyOf(r))
+	var l store.Logout
+	var out bool
+	if err == nil && !revoked && c.oidc != nil {
+		l, out, err = b.loggedOut(ctx, *c.oidc)
+	}
 	switch {
 	case err != nil:
 		now := b.Now()
@@ -649,15 +688,25 @@ func (b *Broker) revokedSince(w http.ResponseWriter, r *http.Request, principal 
 			}
 		}
 		b.emit(decision.Record{TS: now, Event: decision.EventMint, Verdict: decision.VerdictDeny,
-			Reason: decision.StoreUnavailable, Principal: principal, Auth: &decision.Auth{Method: cred.Method}})
+			Reason: decision.StoreUnavailable, Principal: principal, Auth: c.auth()})
 		writeError(w, http.StatusServiceUnavailable, string(decision.StoreUnavailable), "the broker could not "+
 			"confirm that no revocation landed during this mint, so it returns nothing; try again")
 		return true
 	case revoked:
 		if b.unmint(ctx, principal, cred, items) == 0 {
-			b.emit(revokedRecord(b.Now(), principal, cred))
+			rec := revokedRecord(b.Now(), principal, cred)
+			rec.Auth = c.auth()
+			b.emit(rec)
 		}
 		answerRevoked(w, rv)
+		return true
+	case out:
+		if b.unmint(ctx, principal, cred, items) == 0 {
+			rec := revokedRecord(b.Now(), principal, cred)
+			rec.Auth = c.auth()
+			b.emit(rec)
+		}
+		answerLoggedOut(w, l)
 		return true
 	}
 	return false
@@ -893,13 +942,13 @@ func (b *Broker) supersededAt(ctx context.Context, k store.TokenKey) (time.Time,
 // is an item. Every record it writes goes to buf, the request's buffer
 // (tokens).
 func (b *Broker) mintOne(ctx context.Context, buf *heldLog, pol *policy.Policy, m policy.Member,
-	answer *directory.Answer, cred store.Credential, authTime time.Time, name string, req api.MintRequest, hold *token.Reservation,
+	answer *directory.Answer, c caller, name string, req api.MintRequest, hold *token.Reservation,
 	bodyHash string) (api.MintItem, error) {
 	principal := m.Principal
 	var res policy.Resolution
 	deny := func(reason decision.Reason, platform string) api.MintItem {
 		rec := decision.Record{TS: b.Now(), Event: decision.EventMint, Verdict: decision.VerdictDeny, Reason: reason,
-			Principal: principal, Auth: &decision.Auth{Method: cred.Method, Directory: directoryAuth(answer)},
+			Principal: principal, Auth: &decision.Auth{Method: c.cred.Method, Directory: directoryAuth(answer), OIDC: c.auth().OIDC},
 			Device: &decision.Device{Name: name, Platform: platform}}
 		if len(res.Subjects) > 0 {
 			rec.Policy = &decision.Policy{Bundle: pol.Bundle, Subjects: res.Subjects}
@@ -989,7 +1038,7 @@ func (b *Broker) mintOne(ctx context.Context, buf *heldLog, pol *policy.Policy, 
 	// context born expired: refused for this device alone, and `port49
 	// refresh` resumes it (decision 33).
 	age := res.SessionAge.Of(b.MaxSessionAge)
-	if age > 0 && !b.Now().Before(authTime.Add(age)) {
+	if age > 0 && !b.Now().Before(c.authTime.Add(age)) {
 		item := deny(decision.SessionExpired, dev.Platform)
 		item.Detail = "this device's session ceiling has passed since you authenticated; run 'port49 refresh'"
 		return item, nil
@@ -1012,12 +1061,12 @@ func (b *Broker) mintOne(ctx context.Context, buf *heldLog, pol *policy.Policy, 
 	out, err := b.Minter.Mint(ctx, token.Request{
 		Subject: token.Subject{Principal: principal, Username: res.Username, TokenTTL: res.TokenTTL,
 			Enable: res.Enable, MaxPrivilege: res.MaxPrivilege, MaxSessionAge: age,
-			Credential: cred, AuthTime: authTime, VerifiedAt: verifiedAt(answer)},
+			Credential: c.cred, AuthTime: c.authTime, VerifiedAt: verifiedAt(answer)},
 		Device: name, Platform: dev.Platform, BlobHash: hash, WithEnable: req.Enable,
 		TTL:         time.Duration(req.TTLSeconds) * time.Second,
 		Reservation: hold, BodyHash: bodyHash, SupersededAt: supersededAt,
 		Policy:    &decision.Policy{Bundle: pol.Bundle, Subject: res.Subject, Subjects: res.Subjects, Grants: res.Grants},
-		Directory: directoryAuth(answer), Log: buf})
+		Directory: directoryAuth(answer), OIDC: c.auth().OIDC, Log: buf})
 	var capped *token.ErrTooManyOutstanding
 	switch {
 	case errors.Is(err, token.ErrIdempotencyInProgress):
@@ -1048,7 +1097,7 @@ func (b *Broker) mintOne(ctx context.Context, buf *heldLog, pol *policy.Policy, 
 	case !out.SessionExpiresAt.IsZero():
 		item.SessionExpiresAt = out.SessionExpiresAt.UTC().Format(time.RFC3339)
 	case age > 0:
-		item.SessionExpiresAt = authTime.Add(age).UTC().Format(time.RFC3339)
+		item.SessionExpiresAt = c.authTime.Add(age).UTC().Format(time.RFC3339)
 	}
 	if len(dev.Addresses) > 0 {
 		// A fact from the source of truth; the client must not trust it
