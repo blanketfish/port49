@@ -15,3 +15,7 @@ func ParseProxyForTest(raw string) (*url.URL, error) { return parseProxy(raw) }
 // SetLoadForTest points a key set at another file, for a restore over a set
 // already held.
 func (s *KeySet) SetLoadForTest(load func() ([]byte, error)) { s.c.Load = load }
+
+// SetAfterFirstTryForTest runs f in Key between its first look at the set
+// and the minute gate, where another caller's fetch can land.
+func (s *KeySet) SetAfterFirstTryForTest(f func()) { s.afterFirstTry = f }

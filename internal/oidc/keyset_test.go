@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -718,5 +719,90 @@ func TestAProxyURLIsValidatedAndNeverPrinted(t *testing.T) {
 		if got := oidc.DescribeProxy(u); got != want || strings.Contains(got, pw) {
 			t.Errorf("DescribeProxy = %q, want %q", got, want)
 		}
+	}
+}
+
+// Review N1: a fetch that completes between a caller's first look and the
+// minute gate turning it away is looked at again, so a key it rotated in is
+// found, not refused 401.
+func TestAKeyRotatedInByAFetchDuringTheGateIsFound(t *testing.T) {
+	iss, c, s := oidctest.NewIssuer(t), newClock(), &said{}
+	ks := keySet(t, iss, c, s)
+	ctx := context.Background()
+	if err := ks.Fetch(ctx); err != nil {
+		t.Fatal(err)
+	}
+	c.Add(2 * time.Minute)
+	iss.AddKey(t, "k2", oidc.ES256)
+	ks.SetAfterFirstTryForTest(func() {
+		if err := ks.Fetch(ctx); err != nil {
+			t.Error(err)
+		}
+	})
+	if _, err := ks.Key(ctx, "k2", oidc.ES256); err != nil {
+		t.Fatalf("a key a fetch rotated in just before the gate: %v", err)
+	}
+}
+
+// Review N2: with Save hung, successive fetches leave one pending file, not
+// a goroutine each, and the newest is what is written once Save returns.
+func TestAHungSaveKeepsOnePendingFile(t *testing.T) {
+	iss, c, s := oidctest.NewIssuer(t), newClock(), &said{}
+	var mu sync.Mutex
+	var files [][]byte
+	first, gate := make(chan struct{}), make(chan struct{})
+	ks := oidc.NewKeySet(oidc.KeySetConfig{Issuer: iss.URL, Client: oidc.NewClient(iss.Roots()), Refresh: time.Hour,
+		MaxAge: 24 * time.Hour, Now: c.Now, Say: s.Say, M: metrics.New(prometheus.NewRegistry()),
+		Save: func(b []byte) error {
+			mu.Lock()
+			files = append(files, append([]byte(nil), b...))
+			n := len(files)
+			mu.Unlock()
+			if n == 1 {
+				close(first)
+				<-gate
+			}
+			return nil
+		}})
+	ctx := context.Background()
+	if err := ks.Fetch(ctx); err != nil {
+		t.Fatal(err)
+	}
+	<-first
+	before := runtime.NumGoroutine()
+	const n = 30
+	for range n {
+		c.Add(time.Hour)
+		if err := ks.Fetch(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Each fetch's goroutine has returned or is the one pending file's.
+	time.Sleep(50 * time.Millisecond)
+	if grew := runtime.NumGoroutine() - before; grew > 3 {
+		t.Fatalf("%d fetches behind a hung Save grew the goroutines by %d", n, grew)
+	}
+	close(gate)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		mu.Lock()
+		got := len(files)
+		mu.Unlock()
+		if got >= 2 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	time.Sleep(50 * time.Millisecond)
+	mu.Lock()
+	defer mu.Unlock()
+	if len(files) != 2 {
+		t.Fatalf("%d saves, want the first and the newest", len(files))
+	}
+	var p struct {
+		FetchedAt time.Time `json:"fetched_at"`
+	}
+	if err := json.Unmarshal(files[1], &p); err != nil || !p.FetchedAt.Equal(c.Now()) {
+		t.Fatalf("the second save is fetched_at %v, want the newest %v (%v)", p.FetchedAt, c.Now(), err)
 	}
 }

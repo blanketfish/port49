@@ -153,8 +153,10 @@ type KeySet struct {
 	skipped   []string      // the last fetch's skips, said when they change (pre-flight M-3)
 	flight    chan struct{} // a fetch in progress; nil when none
 
-	saveMu  sync.Mutex // Save runs one at a time, outside the flight
-	savedAt time.Time  // the newest file Save was given
+	afterFirstTry func()     // test hook, nil in production
+	saveMu        sync.Mutex // guards saving and pending
+	saving        bool       // a goroutine is in Save, outside the flight
+	pending       []byte     // the newest file given while it was: at most one
 }
 
 // NewKeySet holds no key until Restore or Fetch. Its issuer's last-success
@@ -310,21 +312,32 @@ func (s *KeySet) fetchOnce(ctx context.Context, ch chan struct{}) {
 	}
 	if s.c.Save != nil {
 		file, _ := json.Marshal(persisted{Issuer: iss, FetchedAt: now, JWKS: body})
-		if err := s.save(file, now); err != nil {
-			s.c.Say("identity: %s: the keys were fetched but could not be kept for a restart: %v", iss, err)
-		}
+		s.save(file)
 	}
 }
 
-// save gives Save one file at a time, never an older one after a newer.
-func (s *KeySet) save(file []byte, at time.Time) error {
+// save gives Save one file at a time, outside the flight. While a Save is
+// running, a newer file replaces the one pending, and the running saver
+// writes it next: a hung Save holds one goroutine and one file, however many
+// fetches come, and the newest file is the last written.
+func (s *KeySet) save(file []byte) {
 	s.saveMu.Lock()
-	defer s.saveMu.Unlock()
-	if at.Before(s.savedAt) {
-		return nil
+	if s.saving {
+		s.pending = file
+		s.saveMu.Unlock()
+		return
 	}
-	s.savedAt = at
-	return s.c.Save(file)
+	s.saving = true
+	s.saveMu.Unlock()
+	for file != nil {
+		if err := s.c.Save(file); err != nil {
+			s.c.Say("identity: %s: the keys were fetched but could not be kept for a restart: %v", s.c.Issuer, err)
+		}
+		s.saveMu.Lock()
+		file, s.pending = s.pending, nil
+		s.saving = file != nil
+		s.saveMu.Unlock()
+	}
 }
 
 func (s *KeySet) sayStale(fetched time.Time, held int, err error, now time.Time) {
@@ -455,15 +468,20 @@ func (s *KeySet) Key(ctx context.Context, kid string, alg Alg) (Key, error) {
 	if st.ok && st.fresh {
 		return st.k, nil
 	}
+	if s.afterFirstTry != nil {
+		s.afterFirstTry()
+	}
 	if ch, _ := s.begin(false); ch != nil {
 		select {
 		case <-ch:
 		case <-ctx.Done():
 			return Key{}, ctx.Err()
 		}
-		if st = try(); st.ok && st.fresh {
-			return st.k, nil
-		}
+	}
+	// Whether the gate turned the caller away or its fetch is done, judge the
+	// set as it is now: a fetch that landed since the first look counts.
+	if st = try(); st.ok && st.fresh {
+		return st.k, nil
 	}
 	if !st.fresh || st.lastErr != nil {
 		return Key{}, ErrUnavailable
