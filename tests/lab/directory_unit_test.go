@@ -200,4 +200,31 @@ func TestDirectoryLabSIDString(t *testing.T) {
 	if _, err := labSIDString([]byte{1, 2, 0}); err == nil {
 		t.Fatal("a short objectSid read as a SID")
 	}
+	if _, err := labSIDString([]byte{2, 1, 0, 0, 0, 0, 0, 5, 21, 0, 0, 0}); err == nil {
+		t.Fatal("revision 2 read as a SID")
+	}
+	if _, err := labSIDString(append(append([]byte{}, b...), 0)); err == nil {
+		t.Fatal("an objectSid with a trailing byte read as a SID")
+	}
+}
+
+// A platform's own Platform, Credentials and Run lines reach the note, and a
+// secret of the run's extra set in the observation is caught.
+func TestDirectoryNoteTakesThePlatformsLinesAndRefusesExtraSecrets(t *testing.T) {
+	d := &directories{password: "Aa1!pw", runSel: "TestL44", extra: []string{"dc-secret-1"}}
+	l := &labDir{name: "x", where: "W", credentials: "C", d: d}
+	note, held := noteText(d, "L44", l, "claim", "v", "obs", "e.json")
+	if held {
+		t.Fatal("a clean note read as holding a secret")
+	}
+	for _, want := range []string{"- **Platform:** x, W\n", "- **Credentials:** C\n", "-run 'TestL44'"} {
+		if !strings.Contains(note, want) {
+			t.Errorf("note lacks %q", want)
+		}
+	}
+	for _, secret := range []string{"Aa1!pw", "dc-secret-1"} {
+		if _, held := noteText(d, "L44", l, "claim", "v", "saw "+secret, "e.json"); !held {
+			t.Errorf("a note holding %q was not caught", secret)
+		}
+	}
 }

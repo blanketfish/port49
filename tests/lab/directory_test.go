@@ -773,10 +773,8 @@ func (e *evidenceLog) assertClean(t *testing.T, secrets ...string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, s := range secrets {
-		if s != "" && strings.Contains(string(b), s) {
-			t.Fatalf("%s holds a credential; it must hold none", e.Path)
-		}
+	if noteHoldsSecret(string(b), secrets...) {
+		t.Fatalf("%s holds a credential; it must hold none", e.Path)
 	}
 }
 
@@ -893,6 +891,20 @@ func writeResult(t *testing.T, d *directories, row string, l *labDir, claim, ver
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("results directory: %v", err)
 	}
+	note, held := noteText(d, row, l, claim, version, observation, evidencePath)
+	if held {
+		t.Fatalf("the %s-%s note holds a credential; it must hold none", row, l.name)
+	}
+	path := filepath.Join(dir, fmt.Sprintf("%s-%s.md", row, l.name))
+	if err := os.WriteFile(path, []byte(labcreds.RedactNote(note)), 0o644); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+	t.Logf("wrote %s", path)
+}
+
+// noteText is the note's text, and whether it holds the run's bind password
+// or any of d.extra.
+func noteText(d *directories, row string, l *labDir, claim, version, observation, evidencePath string) (string, bool) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# %s — %s\n\n", row, l.name)
 	fmt.Fprintf(&b, "- **Date measured:** %s\n", time.Now().UTC().Format("2006-01-02"))
@@ -909,14 +921,7 @@ func writeResult(t *testing.T, d *directories, row string, l *labDir, claim, ver
 			"never printed; the keytab and every ticket stay on the host that ran it.\n")
 	}
 	fmt.Fprintf(&b, "\n## Claim\n\n%s\n\n## Observation\n\n%s\n", claim, observation)
-	if noteHoldsSecret(b.String(), append([]string{d.password}, d.extra...)...) {
-		t.Fatalf("the %s-%s note holds a credential; it must hold none", row, l.name)
-	}
-	path := filepath.Join(dir, fmt.Sprintf("%s-%s.md", row, l.name))
-	if err := os.WriteFile(path, []byte(labcreds.RedactNote(b.String())), 0o644); err != nil {
-		t.Fatalf("write %s: %v", path, err)
-	}
-	t.Logf("wrote %s", path)
+	return b.String(), noteHoldsSecret(b.String(), append([]string{d.password}, d.extra...)...)
 }
 
 // configNote is what the directory was configured to do that a note's rows
