@@ -195,7 +195,7 @@ func TestL43BindMechanisms(t *testing.T) {
 			obs.WriteString(refusals)
 			obs.WriteString(dir.mappingChecks(t, ev))
 			ev.assertClean(t, d.password, bad)
-			writeResult(t, d, "L43", dir.name, l43Claim, dir.version(t), obs.String(), "tests/lab/evidence/L43-"+dir.name+".json")
+			writeResult(t, d, "L43", dir, l43Claim, dir.version(t), obs.String(), "tests/lab/evidence/L43-"+dir.name+".json")
 		})
 	}
 }
@@ -291,7 +291,7 @@ func (l *labDir) mappingChecks(t *testing.T, ev *evidenceLog) string {
 	row("alice's certificate under `san_email`, issuer pinned to `"+dirUsersCAIssuer+"`",
 		fmt.Sprintf("%s as `%s`, username `%s`, DN `%s`", errOrOK(err), a.Principal, a.Username, a.DN))
 
-	if l.name == platSamba {
+	if l.name != platOpenLDAP {
 		ev.mark("L43 mapping issuer_serial alice")
 		r = l.resolverWith(t, cfgFor(directory.Mapping{Kind: directory.MapIssuerSerial}, l.groupsBaseDN), l.d.password, ev)
 		a, err = r.Map(ctx, l.d.pki.alice)
@@ -326,7 +326,7 @@ func (l *labDir) mappingChecks(t *testing.T, ev *evidenceLog) string {
 	}
 	row("eve's certificate under `san_email` (`eve` and `eve2` hold one `mail`)", "`"+errOrOK(err)+"`")
 
-	if l.name == platSamba {
+	if l.name != platOpenLDAP {
 		l.mailCollision(t, ev, &b, cfgFor(directory.Mapping{Kind: directory.MapIssuerSerial}, l.groupsBaseDN))
 	}
 
@@ -361,11 +361,7 @@ func (l *labDir) mappingChecks(t *testing.T, ev *evidenceLog) string {
 func (l *labDir) mailCollision(t *testing.T, ev *evidenceLog, b *strings.Builder, cfg directory.Config) {
 	t.Helper()
 	bobDN := "CN=bob,OU=Staff," + dirBase
-	set := func(mail string) {
-		if out, err := l.exec("/lab/set-attr.sh", bobDN, "mail", mail); err != nil {
-			t.Fatalf("setting bob's mail: %v\n%s", err, tailOf(out, 400))
-		}
-	}
+	set := func(mail string) { l.setAttr(t, bobDN, "mail", mail) }
 	set("alice@corp.example.com")
 	restored := false
 	restore := func() {
@@ -392,7 +388,11 @@ func (l *labDir) mailCollision(t *testing.T, ev *evidenceLog, b *strings.Builder
 	if err3 != nil {
 		t.Errorf("with bob's mail restored alice's certificate still does not map: %v", err3)
 	}
-	fmt.Fprintf(b, "| `principal_attribute: mail`; `samba-tool`-equivalent edit gives bob alice's `mail`; alice's certificate under `issuer_serial` | `%s` |\n", errOrOK(err1))
+	tool := "`samba-tool`-equivalent edit" // Samba's row, byte for byte as L43's note has it
+	if l.name == platWindows {
+		tool = "`Set-ADObject` edit"
+	}
+	fmt.Fprintf(b, "| `principal_attribute: mail`; %s gives bob alice's `mail`; alice's certificate under `issuer_serial` | `%s` |\n", tool, errOrOK(err1))
 	fmt.Fprintf(b, "| the same, `Verify` of `user:alice@corp.example.com` | `%s` |\n", errOrOK(err2))
 	fmt.Fprintf(b, "| bob's `mail` restored, alice's certificate again | %s |\n", errOrOK(err3))
 }

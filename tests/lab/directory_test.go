@@ -11,6 +11,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -64,6 +65,9 @@ const (
 	platSamba    = "samba_ad"
 )
 
+// containerWhere is the Platform line of the two containers' notes.
+const containerWhere = "as a container on `tests/lab/directory/compose.yaml` (no network device)"
+
 // labDir is one directory in the lab and the shape its entries take.
 type labDir struct {
 	name, service string
@@ -76,6 +80,13 @@ type labDir struct {
 	groupsBaseDN  string // OU=G: where the fixture's groups live and one name each is unique
 	image         string
 	d             *directories
+
+	where       string // the note's Platform line after the name: what ran, and on what
+	credentials string // the note's Credentials line; "" is the containers' line
+	keytabFile  string // the broker's keytab for GSSAPI
+	krb5File    string // the client krb5.conf naming the platform's KDC
+	loopRefused string // the directory's refusal to make L42's loop, when it refused
+	win         *winDC // the Windows DC's runner (L44); nil for the containers
 }
 
 // directories is the running pair and what the run wrote for them.
@@ -87,6 +98,8 @@ type directories struct {
 	password string // port49's bind password in both; generated for this run
 	mu       sync.Mutex
 	said     []string
+	runSel   string   // the -run selection the notes name (dirRunLine)
+	extra    []string // other secrets a note or the evidence must never hold (the Windows DC's)
 	openldap *labDir
 	samba    *labDir
 }
@@ -98,6 +111,7 @@ func (d *directories) all() []*labDir { return []*labDir{d.openldap, d.samba} }
 // that issues the people's.
 type dirPKI struct {
 	dir                   string
+	ca                    *testpki.CA // the lab CA: it signs the directories' server certificates
 	caFile                string
 	brokerCert, brokerKey string
 	usersCA               *x509.Certificate
@@ -116,11 +130,10 @@ func directoryOut() (string, error) {
 	return repoRoot()
 }
 
-// startDirectories writes the PKI, brings both directories up, waits for the
-// fixture and for each LDAPS port, and registers the cleanup that keeps the
-// logs and takes both down. A precondition that fails here is the harness's
-// fault, not a measurement.
-func startDirectories(t *testing.T) *directories {
+// newDirectories writes the run's PKI, bind password, lab.env and krb5.conf
+// under a fresh tests/lab/logs/directory and describes the two containers,
+// starting nothing: L44 builds its DC on the same PKI and password.
+func newDirectories(t *testing.T) *directories {
 	t.Helper()
 	repo, err := repoRoot()
 	if err != nil {
@@ -131,7 +144,7 @@ func startDirectories(t *testing.T) *directories {
 		t.Fatal(err)
 	}
 	d := &directories{dir: filepath.Join(repo, "tests", "lab", "logs", "directory"),
-		compose: filepath.Join(repo, "tests", "lab", "directory", "compose.yaml"), out: out}
+		compose: filepath.Join(repo, "tests", "lab", "directory", "compose.yaml"), out: out, runSel: "TestL42|TestL43"}
 	// A fresh tree each run: keys are 0600 and written fresh, and a keytab
 	// or an env file from an earlier run never serves this one.
 	if err := os.RemoveAll(d.dir); err != nil {
@@ -162,13 +175,24 @@ func startDirectories(t *testing.T) *directories {
 		plainURI: "ldap://localhost:10389", bindDN: "cn=port49,ou=Svc," + strings.ToLower(dirBase),
 		userFilter: "(objectClass=inetOrgPerson)", groupFilter: "(objectClass=groupOfNames)", usernameAttr: "uid",
 		baseDN: strings.ToLower(dirBase), groupsBaseDN: "ou=G," + strings.ToLower(dirBase),
-		image: "port49lab/openldap:bookworm", d: d}
+		image: "port49lab/openldap:bookworm", d: d, where: containerWhere,
+		keytabFile: filepath.Join(d.dir, "out", "port49.keytab"), krb5File: filepath.Join(d.dir, "out", "krb5.conf")}
 	d.samba = &labDir{name: platSamba, service: "samba", uri: "ldaps://localhost:20636",
 		plainURI: "ldap://localhost:20389", bindDN: "CN=port49,OU=Svc," + dirBase,
 		userFilter: "(&(objectCategory=person)(objectClass=user))", groupFilter: "(objectClass=group)",
 		usernameAttr: "sAMAccountName", baseDN: dirBase, groupsBaseDN: "OU=G," + dirBase,
-		image: "port49lab/samba:bookworm", d: d}
+		image: "port49lab/samba:bookworm", d: d, where: containerWhere,
+		keytabFile: filepath.Join(d.dir, "out", "port49.keytab"), krb5File: filepath.Join(d.dir, "out", "krb5.conf")}
+	return d
+}
 
+// startDirectories writes the PKI, brings both directories up, waits for the
+// fixture and for each LDAPS port, and registers the cleanup that keeps the
+// logs and takes both down. A precondition that fails here is the harness's
+// fault, not a measurement.
+func startDirectories(t *testing.T) *directories {
+	t.Helper()
+	d := newDirectories(t)
 	if os.Getenv("PORT49_LAB_DIRECTORY_KEEP") == "" {
 		t.Cleanup(func() { d.down(t) })
 	}
@@ -469,7 +493,7 @@ func writeDirectoryPKI(dir string, now time.Time) (*dirPKI, error) {
 	if err != nil {
 		return nil, err
 	}
-	p := &dirPKI{dir: dir, caFile: filepath.Join(dir, "ca.pem"), brokerCert: filepath.Join(dir, "broker.pem"),
+	p := &dirPKI{dir: dir, ca: ca, caFile: filepath.Join(dir, "ca.pem"), brokerCert: filepath.Join(dir, "broker.pem"),
 		brokerKey: filepath.Join(dir, "broker-key.pem"), usersCA: usersCA, usersKey: usersKey}
 	if p.alice, p.aliceKey, err = p.personCert("alice", "alice@corp.example.com", "", now); err != nil {
 		return nil, err
@@ -509,6 +533,9 @@ func parseObjectSID(out string) string {
 // aliceSID is alice's objectSid on Samba, read back from the DC.
 func (l *labDir) aliceSID(t *testing.T) string {
 	t.Helper()
+	if l.name == platWindows {
+		return l.ldapObjectSID(t, "(sAMAccountName=alice)")
+	}
 	out, err := l.exec("samba-tool", "user", "show", "alice", "--attributes=objectSid")
 	if err != nil {
 		t.Fatalf("reading alice's objectSid: %v\n%s", err, tailOf(out, 500))
@@ -545,8 +572,7 @@ func (l *labDir) bindExternal() directory.Bind {
 }
 
 func (l *labDir) bindGSSAPI() directory.Bind {
-	return directory.Bind{Mechanism: "gssapi", KeytabFile: filepath.Join(l.d.dir, "out", "port49.keytab"),
-		Principal: "port49@" + dirRealm, KRB5Conf: filepath.Join(l.d.dir, "out", "krb5.conf")}
+	return directory.Bind{Mechanism: "gssapi", KeytabFile: l.keytabFile, Principal: "port49@" + dirRealm, KRB5Conf: l.krb5File}
 }
 
 // sanEmail is the weak mapping pinned to the users CA.
@@ -645,6 +671,8 @@ func (l *labDir) version(t *testing.T) string {
 	case platOpenLDAP:
 		out, _ := l.exec("slapd", "-VV")
 		ver = strings.TrimSpace(strings.SplitN(strings.TrimSpace(out), "\n", 2)[0])
+	case platWindows:
+		return l.win.version()
 	default:
 		out, _ := l.exec("samba", "--version")
 		ver = "Samba " + strings.TrimSpace(out)
@@ -717,6 +745,7 @@ type evidenceLine struct {
 	ResultCode *int     `json:"result_code,omitempty"`
 	Error      string   `json:"error,omitempty"`
 	DurationMS float64  `json:"duration_ms,omitempty"`
+	DCEvents   []string `json:"dc_events,omitempty"`
 }
 
 // evidence opens tests/lab/evidence/<name>.json under the run's output root,
@@ -834,42 +863,56 @@ func recordingDialer(inner directory.Dialer, ev *evidenceLog, mechanism string) 
 // ---------------------------------------------------------------------------
 
 // dirRunLine is the commit the run was made at and the test selection.
-func dirRunLine() string {
+func dirRunLine(sel string) string {
 	sha := "unknown"
 	if root, err := repoRoot(); err == nil {
 		if out, err := exec.Command("git", "-C", root, "rev-parse", "HEAD").Output(); err == nil {
 			sha = strings.TrimSpace(string(out))
 		}
 	}
-	return fmt.Sprintf("commit `%s`, `go test -tags lab ./tests/lab/ -run 'TestL42|TestL43'`", sha)
+	return fmt.Sprintf("commit `%s`, `go test -tags lab ./tests/lab/ -run '%s'`", sha, sel)
+}
+
+// noteHoldsSecret reports whether note holds any non-empty secret.
+func noteHoldsSecret(note string, secrets ...string) bool {
+	for _, s := range secrets {
+		if s != "" && strings.Contains(note, s) {
+			return true
+		}
+	}
+	return false
 }
 
 // writeResult writes tests/lab/results/<row>-<platform>.md under the run's
 // output root in the form spec §15 rule 3 requires: the platform, the image
 // version, the claim, the observation and a pointer to the evidence. The
 // whole note passes through labcreds.RedactNote, as every lab note does.
-func writeResult(t *testing.T, d *directories, row, platform, claim, version, observation, evidencePath string) {
+func writeResult(t *testing.T, d *directories, row string, l *labDir, claim, version, observation, evidencePath string) {
 	t.Helper()
 	dir := filepath.Join(d.out, "tests", "lab", "results")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("results directory: %v", err)
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "# %s — %s\n\n", row, platform)
+	fmt.Fprintf(&b, "# %s — %s\n\n", row, l.name)
 	fmt.Fprintf(&b, "- **Date measured:** %s\n", time.Now().UTC().Format("2006-01-02"))
-	fmt.Fprintf(&b, "- **Platform:** %s, as a container on `tests/lab/directory/compose.yaml` (no network device)\n", platform)
+	fmt.Fprintf(&b, "- **Platform:** %s, %s\n", l.name, l.where)
 	fmt.Fprintf(&b, "- **Image version:** %s\n", version)
-	fmt.Fprintf(&b, "- **Run:** %s\n", dirRunLine())
+	fmt.Fprintf(&b, "- **Run:** %s\n", dirRunLine(d.runSel))
 	fmt.Fprintf(&b, "- **Capture:** `%s`: one JSON line per search, bind and step, with the base, scope, filter, the DNs returned, "+
 		"the LDAP result code and the duration, recorded by the broker's own client (the wire is LDAPS, so a pcap would be "+
 		"encrypted).\n", evidencePath)
-	fmt.Fprintf(&b, "- **Credentials:** none appear here or in the evidence. The bind password is generated for each run and "+
-		"never printed; the keytab and every ticket stay on the host that ran it.\n")
-	fmt.Fprintf(&b, "\n## Claim\n\n%s\n\n## Observation\n\n%s\n", claim, observation)
-	if strings.Contains(b.String(), d.password) {
-		t.Fatalf("the %s-%s note holds the bind password; it must hold none", row, platform)
+	if l.credentials != "" {
+		fmt.Fprintf(&b, "- **Credentials:** %s\n", l.credentials)
+	} else {
+		fmt.Fprintf(&b, "- **Credentials:** none appear here or in the evidence. The bind password is generated for each run and "+
+			"never printed; the keytab and every ticket stay on the host that ran it.\n")
 	}
-	path := filepath.Join(dir, fmt.Sprintf("%s-%s.md", row, platform))
+	fmt.Fprintf(&b, "\n## Claim\n\n%s\n\n## Observation\n\n%s\n", claim, observation)
+	if noteHoldsSecret(b.String(), append([]string{d.password}, d.extra...)...) {
+		t.Fatalf("the %s-%s note holds a credential; it must hold none", row, l.name)
+	}
+	path := filepath.Join(dir, fmt.Sprintf("%s-%s.md", row, l.name))
 	if err := os.WriteFile(path, []byte(labcreds.RedactNote(b.String())), 0o644); err != nil {
 		t.Fatalf("write %s: %v", path, err)
 	}
@@ -880,6 +923,9 @@ func writeResult(t *testing.T, d *directories, row, platform, claim, version, ob
 // depend on: the lab's accommodations, which a reader of the note alone must
 // see. None is evidence about a Windows DC (L44).
 func (l *labDir) configNote() string {
+	if l.name == platWindows {
+		return l.win.configNote()
+	}
 	if l.name == platOpenLDAP {
 		return "### How this directory was configured\n\n" +
 			"- `olcSecurity: tls=1` (every operation must be under TLS), set after the seed was loaded over ldapi.\n" +
@@ -950,3 +996,107 @@ func (l *labDir) certRequested(t *testing.T) string {
 	}
 	return fmt.Sprintf("the server sent a CertificateRequest listing %d acceptable CA name(s)", names)
 }
+
+// capabilities is the root DSE's supportedCapabilities, sorted, read through
+// the broker's pool over LDAPS (plan 7g's carried question a).
+func (l *labDir) capabilities(t *testing.T) []string {
+	t.Helper()
+	r := l.resolver(t, "direct")
+	var out []string
+	_, err := r.Pool.Do(context.Background(), func(s directory.Searcher) error {
+		res, err := s.Search(ldap.NewSearchRequest("", ldap.ScopeBaseObject, ldap.NeverDerefAliases, 1, 15, false,
+			"(objectClass=*)", []string{"supportedCapabilities"}, nil))
+		if err == nil && len(res.Entries) == 1 {
+			out = res.Entries[0].GetAttributeValues("supportedCapabilities")
+		}
+		return err
+	})
+	if err != nil {
+		t.Fatalf("%s: the root DSE's supportedCapabilities: %v", l.name, err)
+	}
+	slices.Sort(out)
+	return out
+}
+
+// setAttr replaces one attribute of one entry: by the DC's own tools on Samba,
+// by Set-ADObject on Windows. The value is never printed.
+func (l *labDir) setAttr(t *testing.T, dn, attr, value string) {
+	t.Helper()
+	switch l.name {
+	case platSamba:
+		if out, err := l.exec("/lab/set-attr.sh", dn, attr, value); err != nil {
+			t.Fatalf("setting %s on %s: %v\n%s", attr, dn, err, tailOf(out, 400))
+		}
+	case platWindows:
+		l.win.setValues(t, dn, attr, []string{value})
+	default:
+		t.Fatalf("%s: setAttr is for directories with altSecurityIdentities", l.name)
+	}
+}
+
+// ldapObjectSID is the objectSid of the one entry filter finds, read as bytes
+// over LDAPS through the broker's pool: the attribute port49's sid mapping
+// compares.
+func (l *labDir) ldapObjectSID(t *testing.T, filter string) string {
+	t.Helper()
+	r := l.resolver(t, "direct")
+	var raw []byte
+	_, err := r.Pool.Do(context.Background(), func(s directory.Searcher) error {
+		res, err := s.Search(ldap.NewSearchRequest(l.baseDN, ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 2, 15, false,
+			filter, []string{"objectSid"}, nil))
+		if err == nil && len(res.Entries) == 1 {
+			raw = res.Entries[0].GetRawAttributeValue("objectSid")
+		}
+		return err
+	})
+	if err != nil || len(raw) == 0 {
+		t.Fatalf("%s: objectSid of %s: %v (%d bytes)", l.name, filter, err, len(raw))
+	}
+	sid, err := labSIDString(raw)
+	if err != nil {
+		t.Fatalf("%s: objectSid of %s: %v", l.name, filter, err)
+	}
+	return sid
+}
+
+// labSIDString is objectSid's binary form as a SID string: revision 1, the
+// count, the 48-bit authority big-endian, each sub-authority little-endian.
+func labSIDString(b []byte) (string, error) {
+	if len(b) < 8 || b[0] != 1 || len(b) != 8+4*int(b[1]) {
+		return "", errors.New("a malformed objectSid")
+	}
+	var auth uint64
+	for i := 0; i < 6; i++ {
+		auth = auth<<8 | uint64(b[2+i])
+	}
+	s := fmt.Sprintf("S-1-%d", auth)
+	for i := 0; i < int(b[1]); i++ {
+		s += fmt.Sprintf("-%d", binary.LittleEndian.Uint32(b[8+4*i:]))
+	}
+	return s, nil
+}
+
+// waitLDAPS waits for l's LDAPS to answer a root DSE read under the lab CA.
+func (l *labDir) waitLDAPS(t *testing.T, within time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(within)
+	for {
+		err := l.d.rootDSE(l)
+		if err == nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s: LDAPS did not answer within %s: %v", l.name, within, err)
+		}
+		time.Sleep(2 * time.Second)
+	}
+}
+
+// winDC is the Windows DC's runner (Task 4 of the L44 plan replaces this).
+type winDC struct{}
+
+func (*winDC) version() string                                { return "" }
+func (*winDC) configNote() string                             { return "" }
+func (*winDC) setValues(*testing.T, string, string, []string) {}
+
+const platWindows = "windows_ad"

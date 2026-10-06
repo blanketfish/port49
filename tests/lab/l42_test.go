@@ -33,35 +33,48 @@ func TestL42NestedGroups(t *testing.T) {
 	for _, dir := range d.all() { // openldap, samba_ad
 		t.Run(dir.name, func(t *testing.T) {
 			ev := evidence(t, d, "L42-"+dir.name)
-			var obs strings.Builder
-			obs.WriteString(dir.configNote())
-			obs.WriteString("| user | mode | groups returned | result | time |\n|---|---|---|---|---|\n")
-			for _, mode := range []directory.Nested{"in_chain", "recursive", "direct"} {
-				for _, user := range []string{"alice", "carol", "dave"} {
-					ev.mark("L42 %s %s", user, mode)
-					r := dir.resolverWith(t, dir.config(mode, dir.groupsBaseDN, dir.bindSimple(), sanEmail()), d.password, ev)
-					ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
-					start := time.Now()
-					a, err := r.Verify(ctx, dir.principal(user))
-					took := time.Since(start)
-					cancel()
-					groups := strings.Join(a.GroupNames, ", ")
-					if groups == "" {
-						groups = "(none)"
-					}
-					fmt.Fprintf(&obs, "| %s | %s | %s | %s | %s |\n", user, mode, groups,
-						errOrOK(err), took.Round(time.Millisecond))
-					if want, ok := l42Want[user][mode]; ok {
-						if err != nil || !slices.Equal(a.GroupNames, want) {
-							t.Errorf("%s %s: groups %v, err %v; port49's %s walk returns %v", user, mode, a.GroupNames, err, mode, want)
-						}
-					}
-				}
-			}
-			ev.mark("L42 memberOf on alice's entry")
-			fmt.Fprintf(&obs, "\nmemberOf on alice's entry: %s\n", strings.Join(dir.memberOf(t, "alice"), ", "))
+			obs := dir.configNote() + dir.l42Observe(t, ev)
 			ev.assertClean(t, d.password)
-			writeResult(t, d, "L42", dir.name, l42Claim, dir.version(t), obs.String(), "tests/lab/evidence/L42-"+dir.name+".json")
+			writeResult(t, d, "L42", dir, l42Claim, dir.version(t), obs, "tests/lab/evidence/L42-"+dir.name+".json")
 		})
 	}
+}
+
+// l42Observe is L42's table on l: each user under each nested mode, port49's
+// recursive and direct walks asserted, then memberOf on alice's entry.
+func (l *labDir) l42Observe(t *testing.T, ev *evidenceLog) string {
+	t.Helper()
+	var obs strings.Builder
+	obs.WriteString("| user | mode | groups returned | result | time |\n|---|---|---|---|---|\n")
+	for _, mode := range []directory.Nested{"in_chain", "recursive", "direct"} {
+		for _, user := range []string{"alice", "carol", "dave"} {
+			ev.mark("L42 %s %s", user, mode)
+			r := l.resolverWith(t, l.config(mode, l.groupsBaseDN, l.bindSimple(), sanEmail()), l.d.password, ev)
+			ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
+			start := time.Now()
+			a, err := r.Verify(ctx, l.principal(user))
+			took := time.Since(start)
+			cancel()
+			groups := strings.Join(a.GroupNames, ", ")
+			if groups == "" {
+				groups = "(none)"
+			}
+			fmt.Fprintf(&obs, "| %s | %s | %s | %s | %s |\n", user, mode, groups, errOrOK(err), took.Round(time.Millisecond))
+			if user == "dave" && l.loopRefused != "" {
+				continue // the loop was never made: the observation says so below
+			}
+			if want, ok := l42Want[user][mode]; ok {
+				if err != nil || !slices.Equal(a.GroupNames, want) {
+					t.Errorf("%s %s: groups %v, err %v; port49's %s walk returns %v", user, mode, a.GroupNames, err, mode, want)
+				}
+			}
+		}
+	}
+	if l.loopRefused != "" {
+		fmt.Fprintf(&obs, "\nThe loop (`g-loop-a` ∈ `g-loop-b` ∈ `g-loop-a`) was not made: the directory refused it: `%s`.\n",
+			oneLineMax(l.loopRefused, 300))
+	}
+	ev.mark("L42 memberOf on alice's entry")
+	fmt.Fprintf(&obs, "\nmemberOf on alice's entry: %s\n", strings.Join(l.memberOf(t, "alice"), ", "))
+	return obs.String()
 }

@@ -83,6 +83,9 @@ func TestDirectoryPKIShape(t *testing.T) {
 	if got := directory.ADIssuerSerial(p.alice); !strings.HasPrefix(got, "X509:<I>DC=com,DC=example,DC=corp,CN=lab-users-CA<SR>") {
 		t.Errorf("issuer_serial form: %s", got)
 	}
+	if p.ca == nil || !p.ca.Cert.IsCA {
+		t.Fatal("dirPKI keeps no CA")
+	}
 	m := directory.Mapping{Kind: directory.MapSANEmail, Attribute: "mail", AllowWeak: true, Issuers: []string{dirUsersCAIssuer}}
 	if l, err := m.Lookup(p.alice, "(objectClass=person)"); err != nil || !strings.Contains(l.Filter, "alice@corp.example.com") {
 		t.Errorf("the pin on the users CA's DC= issuer: %+v %v", l, err)
@@ -148,5 +151,53 @@ func TestDirectoryLDAPCode(t *testing.T) {
 	}
 	if got := ldapCode(os.ErrClosed); got != -1 {
 		t.Errorf("non-LDAP: %d", got)
+	}
+}
+
+// The run line names the selection the note came from, so an L44 note never
+// claims L42's command.
+func TestDirectoryRunLineNamesTheSelection(t *testing.T) {
+	if got := dirRunLine("TestL44"); !strings.Contains(got, "-run 'TestL44'") {
+		t.Fatalf("%s", got)
+	}
+}
+
+// The containers' notes keep the lines they were written with: the refactor
+// for a third platform changes nothing a committed L42 or L43 note says.
+func TestDirectoryNoteKeepsTheContainersLines(t *testing.T) {
+	out := t.TempDir()
+	d := &directories{out: out, password: "Aa1!pw", runSel: "TestL42|TestL43"}
+	l := &labDir{name: platSamba, where: containerWhere, d: d}
+	writeResult(t, d, "L42", l, "claim", "v", "obs", "tests/lab/evidence/x.json")
+	b, err := os.ReadFile(filepath.Join(out, "tests", "lab", "results", "L42-samba_ad.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"- **Platform:** samba_ad, as a container on `tests/lab/directory/compose.yaml` (no network device)\n",
+		"- **Credentials:** none appear here or in the evidence. The bind password is generated for each run and never printed; the keytab and every ticket stay on the host that ran it.\n",
+		"-run 'TestL42|TestL43'",
+	} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("note lacks %q", want)
+		}
+	}
+}
+
+// A note naming any of the run's secrets is refused, whichever secret it is.
+func TestDirectoryNoteHoldsSecret(t *testing.T) {
+	if !noteHoldsSecret("x Aa1!b y", "", "Aa1!b") || noteHoldsSecret("clean", "Aa1!b", "") {
+		t.Fatal("noteHoldsSecret")
+	}
+}
+
+// objectSid's binary form reads back as the SID string AD prints.
+func TestDirectoryLabSIDString(t *testing.T) {
+	b := []byte{1, 5, 0, 0, 0, 0, 0, 5, 21, 0, 0, 0, 111, 0, 0, 0, 222, 0, 0, 0, 77, 1, 0, 0, 81, 4, 0, 0}
+	if got, err := labSIDString(b); err != nil || got != "S-1-5-21-111-222-333-1105" {
+		t.Fatalf("%q %v", got, err)
+	}
+	if _, err := labSIDString([]byte{1, 2, 0}); err == nil {
+		t.Fatal("a short objectSid read as a SID")
 	}
 }
