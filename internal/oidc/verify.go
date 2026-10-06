@@ -279,23 +279,34 @@ func humanAudience(auds []string, azp, clientID string) *refusal {
 	return nil
 }
 
-// verify is one verifier's whole check of j (Rulings 2, 3, 5, 6, 21, 22).
-func (v *Verifier) verify(ctx context.Context, j *JWS, t Timing, now time.Time) (Assertion, error) {
+// signature is Ruling 3 for one verifier: an algorithm it pins, the one key
+// of its issuer's set the token's kid names, and a signature that key
+// verifies. Its refusals name the configured issuer alone.
+func (v *Verifier) signature(ctx context.Context, j *JWS) error {
 	iss := v.Issuer
 	if !slices.Contains(v.Algorithms, j.Header.Alg) {
-		return Assertion{}, refuse(ErrInvalid, "invalid", "its algorithm is not one %s's %s verifier pins", iss, v.Domain)
+		return refuse(ErrInvalid, "invalid", "its algorithm is not one %s's %s verifier pins", iss, v.Domain)
 	}
 	key, err := v.Keys.Key(ctx, j.Header.Kid, j.Header.Alg)
 	switch {
 	case errors.Is(err, ErrUnavailable), err != nil && ctx.Err() != nil:
 		// A caller's own deadline waiting on a refetch is the provider's
 		// unavailability to it, to be retried, never a bad token.
-		return Assertion{}, refuse(ErrUnavailable, "unavailable", "the keys of %s are not available", iss)
+		return refuse(ErrUnavailable, "unavailable", "the keys of %s are not available", iss)
 	case err != nil:
-		return Assertion{}, refuse(ErrInvalid, "invalid", "no one key of %s matches its key id", iss)
+		return refuse(ErrInvalid, "invalid", "no one key of %s matches its key id", iss)
 	}
 	if err := j.Verify(key, v.Algorithms); err != nil {
-		return Assertion{}, refuse(ErrInvalid, "invalid", "its signature does not verify under the keys of %s", iss)
+		return refuse(ErrInvalid, "invalid", "its signature does not verify under the keys of %s", iss)
+	}
+	return nil
+}
+
+// verify is one verifier's whole check of j (Rulings 2, 3, 5, 6, 21, 22).
+func (v *Verifier) verify(ctx context.Context, j *JWS, t Timing, now time.Time) (Assertion, error) {
+	iss := v.Issuer
+	if err := v.signature(ctx, j); err != nil {
+		return Assertion{}, err
 	}
 	// From here every claim is the provider's, and may be said.
 	// typ is an allowlist (RFC 8725 §3.11; decision 39 ruling 2).
