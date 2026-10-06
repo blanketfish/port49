@@ -222,9 +222,9 @@ func TestDirectoryNoteTakesThePlatformsLinesAndRefusesExtraSecrets(t *testing.T)
 			t.Errorf("note lacks %q", want)
 		}
 	}
-	for _, secret := range []string{"Aa1!pw", "dc-secret-1"} {
+	for i, secret := range []string{"Aa1!pw", "dc-secret-1"} {
 		if _, held := noteText(d, "L44", l, "claim", "v", "saw "+secret, "e.json"); !held {
-			t.Errorf("a note holding %q was not caught", secret)
+			t.Errorf("a note holding secret %d was not caught", i)
 		}
 	}
 }
