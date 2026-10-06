@@ -19,7 +19,19 @@ while ((Get-Service CertSvc).Status -ne 'Running') {
   Start-Sleep 5
 }
 Import-Module ADCSAdministration
-if (-not (Get-CATemplate | Where-Object Name -eq 'OfflineRouter')) { Add-CATemplate -Name OfflineRouter -Force }
+# CertSvc reports Running before its RPC endpoint answers (measured: the first
+# Get-CATemplate after a fresh install got RPC_S_SERVER_UNAVAILABLE), so the CA
+# calls are retried until it does.
+$deadline = (Get-Date).AddMinutes(10)
+while ($true) {
+  try {
+    if (-not (Get-CATemplate | Where-Object Name -eq 'OfflineRouter')) { Add-CATemplate -Name OfflineRouter -Force }
+    break
+  } catch {
+    if ((Get-Date) -gt $deadline) { throw }
+    Start-Sleep 10
+  }
+}
 $kdcEku = '1.3.6.1.5.2.3.5'
 # A certificate with the KDC Authentication EKU from the machine's store: not
 # necessarily the one the KDC presents (the note says so; control-ski proves
@@ -28,8 +40,13 @@ function Get-KdcCert {
   Get-ChildItem Cert:\LocalMachine\My | Where-Object { $_.EnhancedKeyUsageList.ObjectId -contains $kdcEku } | Select-Object -First 1
 }
 if (-not (Get-KdcCert)) {
-  certreq.exe -enroll -machine -q KerberosAuthentication | Out-Null
-  if ($LASTEXITCODE -ne 0) { throw "certreq -enroll KerberosAuthentication: exit $LASTEXITCODE" }
+  $deadline = (Get-Date).AddMinutes(10)
+  while ($true) {
+    certreq.exe -enroll -machine -q KerberosAuthentication | Out-Null
+    if ($LASTEXITCODE -eq 0) { break }
+    if ((Get-Date) -gt $deadline) { throw "certreq -enroll KerberosAuthentication: exit $LASTEXITCODE" }
+    Start-Sleep 10
+  }
 }
 $kdc = Get-KdcCert
 if (-not $kdc) { throw 'no certificate with the KDC Authentication EKU after enrollment' }
