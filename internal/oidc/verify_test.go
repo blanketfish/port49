@@ -2,6 +2,7 @@ package oidc_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -432,20 +433,155 @@ func TestARepeatedClaimIsRefused(t *testing.T) {
 		t.Fatalf("the spliced machine baseline: %v", err)
 	}
 	for name, body := range map[string]string{
-		"sub twice":         humanBody(member("sub", `"victim"`)),
-		"iss twice":         humanBody(member("iss", fmt.Sprintf("%q", iss.URL))),
-		"aud twice":         humanBody(member("aud", fmt.Sprintf("%q", clientID))),
-		"sid twice":         humanBody(member("sid", `"a"`) + member("sid", `"b"`)),
-		"azp twice":         humanBody(member("azp", fmt.Sprintf("%q", clientID)) + member("azp", fmt.Sprintf("%q", clientID))),
-		"Sub in two cases":  humanBody(member("Sub", `"victim"`)),
-		"machine sub":       machineBody(member("sub", `"svc-sub"`)),
-		"machine azp":       machineBody(member("azp", `"Oxidized-01"`)),
-		"machine client_id": machineBody(member("client_id", `"svc-a"`) + member("client_id", `"svc-a"`)),
-		"machine Sub":       machineBody(member("Sub", `"svc-sub"`)),
+		"sub twice":                humanBody(member("sub", `"victim"`)),
+		"iss twice":                humanBody(member("iss", fmt.Sprintf("%q", iss.URL))),
+		"aud twice":                humanBody(member("aud", fmt.Sprintf("%q", clientID))),
+		"sid twice":                humanBody(member("sid", `"a"`) + member("sid", `"b"`)),
+		"azp twice":                humanBody(member("azp", fmt.Sprintf("%q", clientID)) + member("azp", fmt.Sprintf("%q", clientID))),
+		"Sub in two cases":         humanBody(member("Sub", `"victim"`)),
+		"machine sub":              machineBody(member("sub", `"svc-sub"`)),
+		"machine azp":              machineBody(member("azp", `"Oxidized-01"`)),
+		"machine client_id":        machineBody(member("client_id", `"svc-a"`) + member("client_id", `"svc-a"`)),
+		"machine Sub":              machineBody(member("Sub", `"svc-sub"`)),
+		"preferred_username twice": humanBody(member("preferred_username", `"mallory@corp.example.com"`)),
+		"ISS and iss":              humanBody(member("ISS", fmt.Sprintf("%q", iss.URL))),
+		"Aud and aud":              humanBody(member("Aud", fmt.Sprintf("%q", clientID))),
+		"AZP and azp":              humanBody(member("azp", fmt.Sprintf("%q", clientID)) + member("AZP", fmt.Sprintf("%q", clientID))),
+		"SID and sid":              humanBody(member("sid", `"a"`) + member("SID", `"b"`)),
+		"Preferred_Username":       humanBody(member("Preferred_Username", `"mallory@corp.example.com"`)),
+		"a long-s sub":             humanBody(member("\u017fub", `"victim"`)),
+		"a kelvin-sign kid":        humanBody(member("\u212aid", `"x"`)),
+		"machine client_id no azp": strings.Replace(machineBody(member("client_id", `"svc-a"`)+member("client_id", `"svc-a"`)),
+			`"azp":"Oxidized-01",`, "", 1),
+		"machine Client_ID": machineBody(member("client_id", `"Oxidized-01"`) + member("Client_ID", `"Oxidized-01"`)),
 	} {
 		_, err := set.Verify(context.Background(), iss.TokenRaw(t, "k1", body))
 		if !errors.Is(err, oidc.ErrInvalid) {
 			t.Errorf("%s: %v", name, err)
 		}
+	}
+}
+
+// The repeats that matter most: the claim the principal comes from, and the
+// one that makes an email trustworthy (an earlier last-wins read took the
+// second email_verified).
+func TestARepeatedPrincipalClaimIsRefused(t *testing.T) {
+	iss, c := oidctest.NewIssuer(t), newClock()
+	now := c.Now()
+	body := func(extra string) string {
+		return fmt.Sprintf(`{"iss":%q,"aud":%q,"sub":"x","iat":%d,"exp":%d,"auth_time":%d%s}`, iss.URL, clientID,
+			now.Unix(), now.Add(time.Minute).Unix(), now.Unix(), extra)
+	}
+	for name, k := range map[string]struct{ claim, extra string }{
+		"email twice":          {oidc.ClaimEmail, `,"email":"a@corp.example.com","email":"b@corp.example.com","email_verified":true`},
+		"email_verified twice": {oidc.ClaimEmail, `,"email":"a@corp.example.com","email_verified":false,"email_verified":true`},
+		"Email_Verified pair":  {oidc.ClaimEmail, `,"email":"a@corp.example.com","email_verified":false,"Email_Verified":true`},
+		"upn twice":            {oidc.ClaimUPN, `,"upn":"a@corp.example.com","upn":"b@corp.example.com"`},
+	} {
+		set := newSet(t, iss, c, human(iss, k.claim))
+		if _, err := set.Verify(context.Background(), iss.TokenRaw(t, "k1", body(k.extra))); !errors.Is(err, oidc.ErrInvalid) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
+
+// Ruling 2: typ is an allowlist, compared case-insensitively after an
+// application/ prefix.
+func TestTheTypIsAnAllowlist(t *testing.T) {
+	iss, c := oidctest.NewIssuer(t), newClock()
+	set := newSet(t, iss, c, human(iss, oidc.ClaimPreferredUsername))
+	mset := newSet(t, iss, c, machine(iss))
+	now := c.Now()
+	hc := map[string]any{"iss": iss.URL, "aud": clientID, "sub": "x", "iat": now.Unix(), "exp": now.Add(time.Minute).Unix(),
+		"auth_time": now.Unix(), "preferred_username": "alice@corp.example.com"}
+	mc := map[string]any{"iss": iss.URL, "aud": "api://port49-svc", "sub": "svc-sub", "azp": "Oxidized-01",
+		"iat": now.Unix(), "exp": now.Add(time.Hour).Unix()}
+	for typ, humanOK := range map[string]bool{"JWT": true, "application/jwt": true, "jwt": true, "at+jwt": false,
+		"secevent+jwt": false, "dpop+jwt": false, "token-introspection+jwt": false, "logout+jwt": false, "x": false} {
+		_, err := set.Verify(context.Background(), iss.TokenWith(t, "k1", map[string]any{"kid": "k1", "typ": typ}, hc))
+		if (err == nil) != humanOK || (err != nil && !errors.Is(err, oidc.ErrInvalid)) {
+			t.Errorf("human, typ %s: %v", typ, err)
+		}
+	}
+	for typ, ok := range map[string]bool{"JWT": true, "at+jwt": true, "application/at+jwt": true, "secevent+jwt": false,
+		"dpop+jwt": false, "token-introspection+jwt": false, "logout+jwt": false} {
+		_, err := mset.Verify(context.Background(), iss.TokenWith(t, "k1", map[string]any{"kid": "k1", "typ": typ}, mc))
+		if (err == nil) != ok {
+			t.Errorf("machine, typ %s: %v", typ, err)
+		}
+	}
+	long := strings.Repeat("A", 5000) + "+jwt"
+	_, err := set.Verify(context.Background(), iss.TokenWith(t, "k1", map[string]any{"kid": "k1", "typ": long}, hc))
+	if err == nil || len(err.Error()) > 400 {
+		t.Errorf("an unbounded typ in the refusal: %v", err)
+	}
+}
+
+// Ruling 21: delegation markers (RFC 8693) are a person's.
+func TestAMachineTokenWithActIsRefused(t *testing.T) {
+	iss, c := oidctest.NewIssuer(t), newClock()
+	set := newSet(t, iss, c, machine(iss))
+	for _, claim := range []string{"act", "may_act"} {
+		raw := iss.Token(t, "k1", map[string]any{"iss": iss.URL, "aud": "api://port49-svc", "sub": "svc-sub",
+			"azp": "Oxidized-01", "iat": c.Now().Unix(), "exp": c.Now().Add(time.Hour).Unix(),
+			claim: map[string]any{"sub": "alice"}})
+		if _, err := set.Verify(context.Background(), raw); !errors.Is(err, oidc.ErrInvalid) || !strings.Contains(err.Error(), claim) {
+			t.Errorf("%s: %v", claim, err)
+		}
+	}
+}
+
+// M2: an issuer one of whose verifiers cannot get its keys is unavailable,
+// whatever another accepted.
+func TestAnUnavailableVerifierBeatsAnAcceptance(t *testing.T) {
+	iss, c := oidctest.NewIssuer(t), newClock()
+	m := metrics.New(prometheus.NewRegistry())
+	good := oidc.NewKeySet(oidc.KeySetConfig{Issuer: iss.URL, Client: oidc.NewClient(iss.Roots()),
+		Refresh: time.Hour, MaxAge: 24 * time.Hour, Now: c.Now, M: m})
+	bad := oidc.NewKeySet(oidc.KeySetConfig{Issuer: iss.URL, Client: oidc.NewClient(iss.Roots()),
+		Refresh: time.Hour, MaxAge: 24 * time.Hour, Now: c.Now, M: m})
+	// bad's provider is a closed one: its keys are never fetched.
+	dead := oidctest.NewIssuer(t)
+	dead.Close()
+	bad = oidc.NewKeySet(oidc.KeySetConfig{Issuer: dead.URL, Client: oidc.NewClient(dead.Roots()),
+		Refresh: time.Hour, MaxAge: 24 * time.Hour, Now: c.Now, M: m})
+	other := machine(iss)
+	other.Audience = "api://port49-other"
+	set := &oidc.Set{Timing: oidc.DefaultTiming, Now: c.Now, M: m, Verifiers: []*oidc.Verifier{
+		{VerifierConfig: machine(iss), Keys: good}, {VerifierConfig: other, Keys: bad}}}
+	raw := iss.Token(t, "k1", map[string]any{"iss": iss.URL, "aud": "api://port49-svc", "sub": "svc-sub",
+		"azp": "Oxidized-01", "iat": c.Now().Unix(), "exp": c.Now().Add(time.Hour).Unix()})
+	if _, err := set.Verify(context.Background(), raw); !errors.Is(err, oidc.ErrUnavailable) {
+		t.Fatalf("one accepts, one has no keys: %v", err)
+	}
+}
+
+func TestPrincipalNormalizationAndBoundaries(t *testing.T) {
+	iss, c := oidctest.NewIssuer(t), newClock()
+	set := newSet(t, iss, c, human(iss, oidc.ClaimPreferredUsername))
+	now := c.Now()
+	try := func(extra map[string]any) error {
+		_, err := set.Verify(context.Background(), iss.IDToken(t, "k1", clientID, "x", now, extra))
+		return err
+	}
+	for name, pu := range map[string]string{"NUL": "alice\x00@corp.example.com", "tab": "al\tice@corp.example.com",
+		"trailing newline": "alice@corp.example.com\n", "cyrillic a": "\u0430lice@corp.example.com"} {
+		if err := try(map[string]any{"preferred_username": pu}); !errors.Is(err, oidc.ErrUnmapped) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if err := try(map[string]any{"preferred_username": "alice@corp.example.com", "nbf": now.Add(30 * time.Second).Unix()}); err != nil {
+		t.Errorf("nbf 30s ahead: %v", err)
+	}
+	if err := try(map[string]any{"preferred_username": "alice@corp.example.com", "iat": now.Add(-time.Hour - 59*time.Minute).Unix(),
+		"exp": now.Add(time.Hour).Unix()}); err != nil {
+		t.Errorf("iat 1h59m ago: %v", err)
+	}
+}
+
+func TestTheAssertionIsNeverJSONWithItsNonce(t *testing.T) {
+	b, err := json.Marshal(oidc.Assertion{Principal: "user:a@b", Nonce: "nonce-marker"})
+	if err != nil || strings.Contains(string(b), "nonce-marker") {
+		t.Fatalf("%s %v", b, err)
 	}
 }

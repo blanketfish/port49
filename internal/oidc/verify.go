@@ -100,7 +100,7 @@ type Assertion struct {
 	Issuer    string
 	Subject   string
 	Sid       string // the provider's own; Credential qualifies it
-	Nonce     string
+	Nonce     string `json:"-"`
 	AMR       []string
 	ACR       string
 	AuthTime  time.Time
@@ -181,15 +181,17 @@ func (s *Set) verify(ctx context.Context, raw string) (Assertion, string, error)
 	if first == nil {
 		first = refuse(ErrInvalid, "invalid", "no configured verifier accepts it")
 	}
+	// An issuer whose keys one verifier could not get is unavailable, whatever
+	// another accepted: a lost race is never a pass (fail closed).
 	switch {
+	case unavailable && (len(accepted) > 0 || !errors.Is(first, ErrUnmapped)):
+		return Assertion{}, head.Iss, refuse(ErrUnavailable, "unavailable", "the keys of %s are not available "+
+			"(none fetched, or none refreshed within broker.identity.jwks_max_age)", head.Iss)
 	case len(accepted) == 1:
 		return accepted[0], head.Iss, nil
 	case len(accepted) > 1:
 		return Assertion{}, head.Iss, refuse(ErrInvalid, "invalid", "two verifiers of %s accept it, so neither "+
 			"does (decision 39)", head.Iss)
-	case unavailable && !errors.Is(first, ErrUnmapped):
-		return Assertion{}, head.Iss, refuse(ErrUnavailable, "unavailable", "the keys of %s are not available "+
-			"(none fetched, or none refreshed within broker.identity.jwks_max_age)", head.Iss)
 	}
 	return Assertion{}, head.Iss, first
 }
@@ -232,6 +234,10 @@ func payload(b []byte) (map[string]json.RawMessage, error) {
 	}
 	seen := make(map[string]bool, len(all))
 	for k := range all {
+		// encoding/json folds ſ to s and K to k; no claim name is outside ASCII.
+		if strings.IndexFunc(k, func(r rune) bool { return r < 0x20 || r > 0x7e }) >= 0 {
+			return nil, errors.New("it names a claim outside printable ASCII")
+		}
 		l := strings.ToLower(k)
 		if seen[l] {
 			return nil, errors.New("it names one claim twice, in two cases")
@@ -292,9 +298,11 @@ func (v *Verifier) verify(ctx context.Context, j *JWS, t Timing, now time.Time) 
 		return Assertion{}, refuse(ErrInvalid, "invalid", "its signature does not verify under the keys of %s", iss)
 	}
 	// From here every claim is the provider's, and may be said.
-	typ := strings.ToLower(strings.TrimPrefix(strings.ToLower(j.Header.Typ), "application/"))
-	if typ == "logout+jwt" || (v.Domain == Humans && typ == "at+jwt") {
-		return Assertion{}, refuse(ErrInvalid, "invalid", "its typ %q is not an ID token's (RFC 8725 §2.8)", typ)
+	// typ is an allowlist (RFC 8725 §3.11; decision 39 ruling 2).
+	typ := strings.TrimPrefix(strings.ToLower(j.Header.Typ), "application/")
+	if !(typ == "" || typ == "jwt" || (v.Domain == Machines && typ == "at+jwt")) {
+		return Assertion{}, refuse(ErrInvalid, "invalid", "its typ %q is not one a %s verifier accepts (RFC 8725 §3.11)",
+			printsafe.Line(typ, 40), v.Domain)
 	}
 	all, err := payload(j.Payload)
 	if err != nil {

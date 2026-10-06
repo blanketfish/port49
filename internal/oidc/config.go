@@ -23,7 +23,7 @@ const (
 
 // MachineSessionClaims mark a person's authentication or a delegated grant:
 // a token carrying one is never a machine's (Ruling 21).
-var MachineSessionClaims = []string{"auth_time", "sid", "nonce", "scp", "amr"}
+var MachineSessionClaims = []string{"auth_time", "sid", "nonce", "scp", "amr", "act", "may_act"}
 
 // MachineClient is one client a machine verifier accepts, and the sub its
 // client-credentials tokens carry: the client's own identity at the
