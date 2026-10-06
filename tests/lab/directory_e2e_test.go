@@ -45,6 +45,13 @@ const (
 	e2eRefreshInterval = time.Minute
 	e2eCeiling         = 3 * time.Minute
 	e2eGrace           = 3 * time.Minute
+	// A directory server whose breaker opened is tried again only by the health
+	// check, every circuit_breaker.probe_interval (default 1m, spec §13), so the
+	// first scheduled pass that can reach it is the one after the probe: the
+	// brief's refresh_interval + 30s bound left the probe out (run 4 of Task 18
+	// measured 2m10s).
+	e2eProbeInterval = time.Minute
+	e2eRecoveryBound = e2eRefreshInterval + e2eProbeInterval + 30*time.Second
 	// e2eDirDir is where the broker container sees the directory's files
 	// (tests/lab/compose/directory.yaml's directory-pki volume).
 	e2eDirDir = "/etc/port49-directory"
@@ -780,20 +787,20 @@ func directoryEndToEnd(t *testing.T, l *lab) {
 	readyAt := time.Now()
 	moved := time.Duration(0)
 	var gaugeAfter float64
-	for deadline := startedAt.Add(e2eRefreshInterval + 30*time.Second + 2*time.Minute); time.Now().Before(deadline); time.Sleep(2 * time.Second) {
+	for deadline := startedAt.Add(e2eRecoveryBound + 2*time.Minute); time.Now().Before(deadline); time.Sleep(2 * time.Second) {
 		if g, err := gauge(brokerMetrics, refreshComplete); err == nil && g > gaugeBefore {
 			gaugeAfter, moved = g, time.Since(startedAt)
 			break
 		}
 	}
 	stamps := e2eRecords(recordsAt(c.brokerLog, boff4), "refresh", e2eAlice)
-	cell("4a. the directory is started again: the scheduled pass", fmt.Sprintf("%s moved from %.0f to %.0f %s after the start (%s after its fixture loaded; bound %s); refresh records for alice since the start: %d",
-		refreshComplete, gaugeBefore, gaugeAfter, rd(moved), rd(moved-readyAt.Sub(startedAt)), e2eRefreshInterval+30*time.Second, len(stamps)))
+	cell("4a. the directory is started again: the scheduled pass", fmt.Sprintf("%s moved from %.0f to %.0f %s after the start (%s after its fixture loaded; bound %s = refresh_interval + the breaker's probe_interval + 30s, since the breaker the outage opened is closed only by its health check); refresh records for alice since the start: %d",
+		refreshComplete, gaugeBefore, gaugeAfter, rd(moved), rd(moved-readyAt.Sub(startedAt)), e2eRecoveryBound, len(stamps)))
 	switch {
 	case moved == 0:
-		fail("%s did not move within %s of the directory's start", refreshComplete, e2eRefreshInterval+30*time.Second+2*time.Minute)
-	case moved-readyAt.Sub(startedAt) > e2eRefreshInterval+30*time.Second:
-		fail("the scheduled pass completed %s after the directory was ready; the brief's bound is refresh_interval + 30s", rd(moved-readyAt.Sub(startedAt)))
+		fail("%s did not move within %s of the directory's start", refreshComplete, e2eRecoveryBound+2*time.Minute)
+	case moved-readyAt.Sub(startedAt) > e2eRecoveryBound:
+		fail("the scheduled pass completed %s after the directory was ready; the bound is refresh_interval + probe_interval + 30s (%s)", rd(moved-readyAt.Sub(startedAt)), e2eRecoveryBound)
 	}
 	if len(stamps) != 0 {
 		fail("the stamping pass wrote %d refresh record(s) for alice; it writes none", len(stamps))
@@ -849,8 +856,14 @@ func directoryEndToEnd(t *testing.T, l *lab) {
 	if _, err := c.run("stop", "-t", "5", "openldap"); err != nil {
 		t.Fatalf("stopping openldap before the restart: %v", err)
 	}
+	restartSince := time.Now().UTC().Format(time.RFC3339Nano)
 	if out, err := c.run("restart", "port49-broker"); err != nil {
 		t.Fatalf("restarting the broker: %v\n%s", err, tailOf(out, 400))
+	}
+	// docker logs -f ends with the container it followed; the restarted broker's
+	// records and lines are followed again from the instant before the restart
+	if err := c.follow(composeProject+"-port49-broker-1", restartSince, c.brokerLog, c.brokerErr); err != nil {
+		t.Fatalf("following the restarted broker: %v", err)
 	}
 	restartedAt := time.Now()
 	for deadline := time.Now().Add(3 * time.Minute); !httpOK("http://127.0.0.1:9050/readyz"); time.Sleep(time.Second) {
