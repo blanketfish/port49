@@ -51,7 +51,7 @@ const (
 	// brief's refresh_interval + 30s bound left the probe out (run 4 of Task 18
 	// measured 2m10s).
 	e2eProbeInterval = time.Minute
-	e2eRecoveryBound = e2eRefreshInterval + e2eProbeInterval + 30*time.Second
+	e2eRecoveryBound = e2eRefreshInterval + e2eProbeInterval + 30*time.Second /* health_check.interval: the probe waits for a tick */ + 30*time.Second
 	// e2eDirDir is where the broker container sees the directory's files
 	// (tests/lab/compose/directory.yaml's directory-pki volume).
 	e2eDirDir = "/etc/port49-directory"
@@ -498,6 +498,14 @@ func (c *composeStack) openLDAPReady(n int, within time.Duration) error {
 	}
 }
 
+// paren is s in parentheses with a leading space, nothing for an empty s.
+func paren(s string) string {
+	if s == "" {
+		return ""
+	}
+	return " (" + s + ")"
+}
+
 func rd(d time.Duration) time.Duration { return d.Round(100 * time.Millisecond) }
 
 // ---------------------------------------------------------------------------
@@ -578,7 +586,7 @@ func directoryEndToEnd(t *testing.T, l *lab) {
 		"`certificate_mapping: san_email` (weak, pinned to the users CA), `prewarm: {interval: 5m}`. "+
 		"The lab policy grants `netops-oncall` (a group subject) and bob (an identity subject, no `username:`) "+
 		"`network_admin` on every device. The directory is stopped and started with `docker compose stop`/`start`; "+
-		"its entrypoint reloads the fixture at each start.\n\n",
+		"its entrypoint keeps the seeded data and every entryUUID across a restart (a reloaded fixture would change them, which the pin refuses).\n\n",
 		oneLineMax(strings.SplitN(strings.TrimSpace(slapd), "\n", 2)[0], 120), imageID("port49lab/openldap:bookworm"),
 		e2eRefreshInterval, e2eGrace, e2eCeiling)
 
@@ -794,7 +802,7 @@ func directoryEndToEnd(t *testing.T, l *lab) {
 		}
 	}
 	stamps := e2eRecords(recordsAt(c.brokerLog, boff4), "refresh", e2eAlice)
-	cell("4a. the directory is started again: the scheduled pass", fmt.Sprintf("%s moved from %.0f to %.0f %s after the start (%s after its fixture loaded; bound %s = refresh_interval + the breaker's probe_interval + 30s, since the breaker the outage opened is closed only by its health check); refresh records for alice since the start: %d",
+	cell("4a. the directory is started again: the scheduled pass", fmt.Sprintf("%s moved from %.0f to %.0f %s after the start (%s after its fixture loaded; bound %s = refresh_interval + the breaker's probe_interval + one 30s health-check tick + 30s, since the breaker the outage opened is closed only by its health check); refresh records for alice since the start: %d",
 		refreshComplete, gaugeBefore, gaugeAfter, rd(moved), rd(moved-readyAt.Sub(startedAt)), e2eRecoveryBound, len(stamps)))
 	switch {
 	case moved == 0:
@@ -880,7 +888,7 @@ func directoryEndToEnd(t *testing.T, l *lab) {
 		said, tok = l29Mint(agentSock, l.p.node)
 		recs = waitRecordsOf(c.brokerLog, boff5, 30*time.Second, func(rs []map[string]any) bool { return e2eMint(rs, e2eAlice) != nil })
 		m5 := e2eMint(recs, e2eAlice)
-		cell("5c. alice: `port49 login`, `port49 token` after the restart, within grace", fmt.Sprintf("minted %v (%s); %s", tok != "", oneLineMax(said, 150), e2eMintSaid(m5)))
+		cell("5c. alice: `port49 login`, `port49 token` after the restart, within grace", fmt.Sprintf("minted %v%s; %s", tok != "", paren(oneLineMax(said, 150)), e2eMintSaid(m5)))
 		if tok == "" || m5 == nil || str(sub(sub(m5, "auth"), "directory"), "source") != "grace" {
 			fail("alice's mint after the restart: token %v (%s), %s", tok != "", said, e2eMintSaid(m5))
 		}
