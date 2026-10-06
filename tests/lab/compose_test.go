@@ -142,19 +142,29 @@ type composeStack struct {
 	logPath   string // compose.log: every command this stack ran
 	brokerLog string
 	brokerErr string
+	overlays  []string // compose files after lab.yaml, by name under tests/lab/compose
 	mu        sync.Mutex
 	followers []*exec.Cmd
 	stoppedAt time.Time
 }
 
-// run runs docker compose on the stack's two files and records what it ran
-// in compose.log.
-func (c *composeStack) run(args ...string) (string, error) {
-	full := append([]string{"compose", "-p", composeProject, "-f", filepath.Join(root, "deploy", "compose", "compose.yaml"),
-		"-f", filepath.Join(root, "tests", "lab", "compose", "lab.yaml")}, args...)
-	cmd := exec.Command("docker", full...)
+// run runs docker compose on the stack's files and records what it ran in
+// compose.log.
+func (c *composeStack) run(args ...string) (string, error) { return c.runIn("", args...) }
+
+// runIn is run with stdin fed to the command.
+func (c *composeStack) runIn(stdin string, args ...string) (string, error) {
+	full := []string{"compose", "-p", composeProject, "-f", filepath.Join(root, "deploy", "compose", "compose.yaml"),
+		"-f", filepath.Join(root, "tests", "lab", "compose", "lab.yaml")}
+	for _, o := range c.overlays {
+		full = append(full, "-f", filepath.Join(root, "tests", "lab", "compose", o))
+	}
+	cmd := exec.Command("docker", append(full, args...)...)
 	cmd.Dir = root
 	cmd.Env = append(os.Environ(), "PORT49_COMPOSE_LOCAL="+c.local, "PORT49_COMPOSE_CONFIG="+c.config)
+	if stdin != "" {
+		cmd.Stdin = strings.NewReader(stdin)
+	}
 	out, err := cmd.CombinedOutput()
 	c.note(fmt.Sprintf("$ docker compose %s\n%s\n(exit: %v)\n", strings.Join(args, " "), out, err))
 	return strings.TrimSpace(string(out)), err
@@ -280,6 +290,20 @@ func (c *composeStack) ProxyMode() (string, error) {
 	return mode, nil
 }
 
+// composeOptions is what a test adds to the lab's compose stack beyond the
+// trial's: the plan 7g directory's overlay and configuration. The zero value
+// is startCompose's stack.
+type composeOptions struct {
+	// Overlay is a compose file under tests/lab/compose, merged after lab.yaml.
+	Overlay string
+	// Files may change the config files (by name, as composeLabFiles makes
+	// them) before they are written.
+	Files func(files map[string]string) error
+	// Prepare runs once the stack's PKI is written and before `up`, to write
+	// what the overlay's files read under c.local and slicePKIDir.
+	Prepare func(c *composeStack) error
+}
+
 // startCompose brings the lab's compose stack up for this platform: the
 // standing host port49d stopped, the PKI and the files written, the stack
 // built and started, its logs followed into l.logPath and l.errPath, and
@@ -287,7 +311,16 @@ func (c *composeStack) ProxyMode() (string, error) {
 // puts the standing daemon back.
 func (l *lab) startCompose(t *testing.T) *composeStack {
 	t.Helper()
+	return l.startComposeWith(t, composeOptions{})
+}
+
+// startComposeWith is startCompose with o's additions.
+func (l *lab) startComposeWith(t *testing.T, o composeOptions) *composeStack {
+	t.Helper()
 	c := &composeStack{l: l, t: t}
+	if o.Overlay != "" {
+		c.overlays = []string{o.Overlay}
+	}
 	c.dir = filepath.Join(root, "tests", "lab", "logs", "compose-"+l.p.name)
 	c.local, c.config = filepath.Join(c.dir, "local"), filepath.Join(c.dir, "config")
 	c.logPath = filepath.Join(c.dir, "compose.log")
@@ -321,6 +354,11 @@ func (l *lab) startCompose(t *testing.T) *composeStack {
 		read("tests/lab/inventory-lab.yaml"))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if o.Files != nil {
+		if err := o.Files(files); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	// Registered before anything is changed, so a test that fails half way
@@ -380,6 +418,12 @@ func (l *lab) startCompose(t *testing.T) *composeStack {
 			dst = filepath.Join(c.local, name)
 		}
 		if err := os.WriteFile(dst, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if o.Prepare != nil {
+		if err := o.Prepare(c); err != nil {
 			t.Fatal(err)
 		}
 	}

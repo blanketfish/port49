@@ -31,6 +31,30 @@ until ldapsearch -Y EXTERNAL -H ldapi:/// -b '' -s base -LLL namingContexts >/de
 done
 ldapadd -Y EXTERNAL -H ldapi:/// -f /tmp/seed.ldif >/dev/null
 rm -f /tmp/seed.ldif
+# The end-to-end lab (plan 7g, Task 18) changes group membership while the
+# directory runs, and ldapi is closed once tls=1 is set: with LAB_OPENLDAP_WRITER
+# set, one account may write over LDAPS, bound with LAB_ADMIN_PASSWORD (a random
+# value no other lab reads). L42 and L43 never set it.
+if [ -n "${LAB_OPENLDAP_WRITER:-}" ]; then
+  whash=$(slappasswd -h '{SSHA}' -s "$LAB_ADMIN_PASSWORD")
+  ldapadd -Y EXTERNAL -H ldapi:/// >/dev/null <<LDIF
+dn: cn=lab-writer,ou=Svc,dc=corp,dc=example,dc=com
+objectClass: inetOrgPerson
+cn: lab-writer
+sn: lab-writer
+userPassword: $whash
+LDIF
+  unset whash
+  ldapmodify -Y EXTERNAL -H ldapi:/// >/dev/null <<'LDIF'
+dn: olcDatabase={1}mdb,cn=config
+changetype: modify
+delete: olcAccess
+olcAccess: {2}
+-
+add: olcAccess
+olcAccess: {2}to * by dn.exact="cn=lab-writer,ou=Svc,dc=corp,dc=example,dc=com" write by dn.exact="cn=port49,ou=Svc,dc=corp,dc=example,dc=com" read by * none
+LDIF
+fi
 # From here on every operation must be under TLS: a simple bind over plain LDAP
 # is refused, and so is anything over ldapi, which nothing later uses.
 ldapmodify -Y EXTERNAL -H ldapi:/// >/dev/null <<'LDIF'

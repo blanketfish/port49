@@ -59,7 +59,8 @@ func TestDirectoryEnvCoversWhatTheScriptsRead(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, v := range regexp.MustCompile(`\$\{?(LAB_[A-Z0-9_]+)`).FindAllStringSubmatch(string(b), -1) {
-			if !strings.Contains(env, v[1]+"=") {
+			// the end-to-end overlay's, not lab.env's (TestDirectoryE2EOverlayNamesWhatTheTestWrites)
+			if v[1] != "LAB_OPENLDAP_WRITER" && !strings.Contains(env, v[1]+"=") {
 				t.Errorf("%s reads %s, which lab.env does not set", f, v[1])
 			}
 		}
