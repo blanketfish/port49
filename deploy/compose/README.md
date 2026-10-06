@@ -85,6 +85,9 @@ key does:
 - `bind`: how the broker authenticates. `gssapi` (`principal`, `keytab_file`, `krb5_conf`),
   `external` (`tls_cert_file`, `tls_key_file`) or `simple` (`bind_dn` and `password_env`, the
   weakest: the password is an environment variable, named at the start, never printed).
+  Samba AD (lab L43): `external` is refused with LDAP result 1, which port49 counts as a server fault (every
+  breaker opens, `port49_directory_server_up` drops to 0), so use `simple` or `gssapi`; `gssapi` is refused
+  under `ldap server require strong auth = yes` and accepted under `allow_sasl_over_tls`. Windows Server AD: L44.
 - `base_dn`, `groups_base_dn`, `principal_attribute`, `username_attribute`: where a person
   and their groups are found, and which attributes name them. Only directory administrators
   may write the two attributes: two entries holding one value are both refused.

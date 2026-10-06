@@ -7244,7 +7244,7 @@ every matching subject composes, and a scheduled refresh stamps refreshed_at.** 
   `start_tls`. The password, the keytab and a ticket are never logged. Measured on OpenLDAP and
   Samba AD (L43, closed): OpenLDAP accepts EXTERNAL (by `olcAuthzRegexp`) and simple over LDAPS
   and refuses plain LDAP with 13; Samba accepts simple and refuses plain LDAP (8), refuses EXTERNAL
-  (1), and refuses GSSAPI over LDAPS with no SASL security layer (8) under
+  (1, under `strong auth = yes`; port49 counts 1 as a server fault, so configure `simple` or `gssapi` against Samba), and refuses GSSAPI over LDAPS with no SASL security layer (8) under
   `ldap server require strong auth = yes`, accepting it under `allow_sasl_over_tls`. On Windows
   Server AD, provisional on L44. Tasks 4 and 7.
 - **9. The server pool.** Ranked same-site first, then `priority` descending, then file order;

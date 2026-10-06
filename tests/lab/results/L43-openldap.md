@@ -30,7 +30,7 @@ Which bind mechanisms each directory accepts from port49-broker, and how each re
 | GSSAPI | not run: the OpenLDAP container has no KDC | n/a | n/a |
 | simple bind over plain LDAP, built by hand | refused: `LDAP Result Code 13 "Confidentiality Required": TLS confidentiality required` | 13 | 0s |
 
-Whether the directory's LDAPS asked the client for a certificate (what EXTERNAL needs): the server sent a CertificateRequest listing 1 acceptable CA name(s). A Samba refusal of EXTERNAL says nothing about a Windows DC (L44).
+Whether the directory's LDAPS asked the client for a certificate (what EXTERNAL needs): the server sent a CertificateRequest listing 1 acceptable CA name(s).
 
 ### A refused bind through the pool (a wrong password)
 

@@ -33,6 +33,8 @@ broker:
   #     - {uri: "ldaps://dc2.corp.example.com:636", site: hq, priority: 90}
   #   site_env: PORT49_SITE       # this broker's site; the default variable
   #   ca_file: /etc/port49/directory/ca.pem
+  #   # Samba AD (lab L43): external is refused with result 1, which counts as a server fault (breakers
+  #   # open, server_up 0): use simple or gssapi; gssapi needs ldap server require strong auth = allow_sasl_over_tls.
   #   bind:
   #     mechanism: gssapi         # external | gssapi | simple (the weakest)
   #     principal: svc-port49@CORP.EXAMPLE.COM
