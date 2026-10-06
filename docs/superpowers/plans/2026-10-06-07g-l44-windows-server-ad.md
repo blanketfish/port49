@@ -4,7 +4,8 @@
 
 **Goal:** Measure every claim in lab register row L44 on a real Windows Server domain controller
 on beehive (the SER8 box). Answer plan 7g's two carried questions on the same DC. Close the row
-and decision 38's L44 marks only if every cell is measured.
+and decision 38's L44 marks only if every cell is measured, and only in Task 8: a docs-only
+commit to `main` after plan 7h merges (see "Sequencing").
 
 **Architecture:** The plan adds a third platform, `windows_ad`, to the 7g directory harness
 (`tests/lab/directory_test.go`). It does not fork it.
@@ -53,12 +54,43 @@ notes, "Carried" and "Open for the final review". Also read `docs/design/2026-08
   `internal/oidc`, `internal/broker`, `internal/store`, `internal/policy`, `internal/decision`,
   `internal/daemon/metrics`, `cmd/port49d` or port49d wiring.
   - Code: `tests/lab/` and, only through Task 7's defect path, `internal/directory/`.
-  - Text shared with 7h: the `Makefile` (`.PHONY` plus a new target), `tests/lab/README.md` (a new
-    subsection), the spec (§13 decision 38 and the §15 L44 row) and the roadmap README. Each gives
-    a text conflict at merge, resolved by keeping both sides.
-  - Every new top-level identifier in `package lab` starts with `win` or `l44`, so it cannot
-    collide with 7h's `oidc*` harness.
+  - **This plan never edits the `Makefile` or `tests/lab/README.md`** (7h's Task 15 edits both).
+    L44 runs through a documented `go test` command, written in `TestL44WindowsAD`'s comment and
+    in the note's Run line. Operator notes go in the results note's configuration section and in
+    the header comment of `tests/lab/directory/windows/compose.yaml`.
+  - Text shared with 7h: none on the branch. The spec, design and roadmap edits are Task 8's,
+    on `main` after 7h merges (controller R2), and so is any spec text Task 7 needs.
+  - Every new top-level identifier in `package lab` starts with `win` or `l44`, except Task 1's
+    harness helpers (`containerWhere`, `newDirectories`, `noteHoldsSecret`, `labSIDString`). 7h's
+    plan uses none of those names, and none of this plan's names starts with `oidc`, so nothing
+    can collide with 7h's harness.
 - Every **lab run** follows the "Lab rules" section below.
+
+### Sequencing (controller R1–R4)
+
+The owner allows this plan to run beside 7h only while the two share no code. A rebase counts
+as a dependency. The controller's rulings, written here as "controller R1" to "controller R4"
+(`.superpowers/sdd/2026-10-06-l44-windows-server-ad/progress.md`), are not this plan's own
+R1–R8. They bind this plan in this order:
+
+1. **On `feature/l44-windows-ad`:** Tasks 1–6 (the harness, the run, the note and its evidence).
+   Task 7's code parts are also on this branch, if a Task 6 Step 3 rule fires: they touch only
+   `internal/directory` and `tests/lab`, which 7h does not touch. No commit on this branch
+   touches the spec, the design, the roadmap README, the `Makefile` or `tests/lab/README.md`.
+2. **The L44 PR** carries Tasks 1–6, plus any Task 7 code part. Its description says, in a
+   section "Docs pending on main after 7h":
+   - the §15 row, decision 38's L44 marks and the design sentences are Task 8's, committed to
+     `main` after 7h merges;
+   - for each Task 7 part that ran, the spec text it needs, word for word.
+   - **No Task 7 part ran:** the PR merges on its own (controller R3), before or after 7h.
+   - **A Task 7 part ran:** its spec text goes first (spec first). The text is drafted before the
+     fix commit, in the PR description. After 7h merges, it is committed to `main` as a docs-only
+     commit, and only then is the L44 PR merged. The PR's files are disjoint from 7h's, so it
+     merges without a rebase; the wait is on merge order alone, and it keeps `main` from holding
+     code its spec contradicts.
+3. **Task 8, on `main`,** after 7h has merged and the L44 PR has merged (rule 3 needs the note on
+   `main`). It is a docs-only commit in the main checkout, never on `feature/l44-windows-ad`. It
+   leaves the roadmap's status line alone: the controller updates that line (controller R4).
 
 ## Rulings
 
@@ -78,8 +110,15 @@ would change one goes through Task 7, spec first.
 - **R3. Setup only over OpenSSH, with password authentication as the domain Administrator.**
   - The password gives a full logon with network credentials, which AD CS enrollment and
     `Install-AdcsCertificationAuthority` use.
-  - Each script is one PowerShell script block. Parameters travel as JSON on the session's stdin;
-    nothing secret is ever on a command line or in a file inside the VM.
+  - Each script is one PowerShell script block. Parameters travel as JSON on the session's stdin.
+    Nothing secret is ever on a host command line or in a file inside the VM.
+  - **One exception: `ktpass`'s own argv inside the VM** carries port49's password
+    (`keytab.ps1`). That password is the run's own, the VM is destroyed at the end of the run,
+    and nothing reads the VM's process list or its Security log.
+    - The keytab is made by `ktpass` because that is how an operator makes one. Building it on
+      the host from the password and AD's salt would take that password off the VM's command
+      line. It would also measure a keytab no operator makes, and a wrong salt or kvno would
+      read as a GSSAPI result.
 - **R4. "The certificate the DC itself maps" is measured two ways.**
   - Through the KDC by PKINIT. That is KB5014754's own path, and MIT documents it against an AD
     KDC.
@@ -95,19 +134,36 @@ would change one goes through Task 7, spec first.
   - **A CA whose CN holds a comma:** plan 7g's carried question, whether Windows quotes a `,` in
     `<I>`.
   - Every key is RSA-2048 and stays on the host. The key type is no part of the claim.
-- **R6. A setup failure is never a mapping result.**
-  - These invalidate a cell: KDC events 19, 21 or 29 (no KDC certificate, or a client
-    certificate that did not validate), a clock skew over 60 s, or a certificate that predates
-    alice's account.
-  - Such a cell is INVALID, re-run up to three times, and keeps the row open.
+- **R6. A setup failure is never a mapping result.** Each of these makes a cell INVALID:
+  - **Events and preconditions.**
+    - KDC events 19, 21 or 29: no KDC certificate, or a client certificate that did not validate.
+    - A clock skew over 60 s.
+    - A certificate that predates alice's account.
+  - **KDC errors.** A KDC error that is a PKINIT certificate-validation code: 62
+    (`CLIENT_NOT_TRUSTED`), 63, 64, 65, 70, 71, 72, 73, 74, 75, 76, 77 or 78.
+    - 66 (`CERTIFICATE_MISMATCH`) is a mapping verdict and stays one.
+  - **A failure the KDC never answered.** A PKINIT failure where the KDC sent no error past
+    preauth-required: the client failed, so the KDC refused nothing.
+  - **The block's control failed.** `control-ski` is alice's AD CS certificate under a strong
+    `X509:<SKI>` mapping, which is not under test. If it got no TGT, every PKINIT cell in that
+    block is INVALID.
+  - **EXTERNAL that proves nothing.**
+    - The certificate would not be presented: Go's TLS client sends none when the DC's
+      CertificateRequest rules it out.
+    - The bind was accepted, but WhoAmI does not name `CORP\port49`.
+  - **A setup step that failed three times.** `enroll_as` (the `sid-*` cells), or `ktpass` (the
+    GSSAPI cells).
+  - An INVALID cell is never "refused" and never a verdict. Re-run it up to three times; after
+    that it is recorded INVALID, and it keeps the row open.
 - **R7. The run that closes L44 is a fresh DC at the pinned commit.**
   `PORT49_LAB_WINDOWS_REUSE` is for developing the harness only. A note written from a reused DC
   says so, and Task 6 does not accept it.
 - **R8. Plan 7g's two carried questions are answered with data, not code.**
   - **(a)** The run records `supportedCapabilities` on Windows, and on OpenLDAP and Samba for
     comparison. The warning itself stays parked for the final review.
-  - **(b)** The run records the LDAP result Windows gives an EXTERNAL bind it refuses. If that
-    result is 1, Task 7c widens `Refusal` for EXTERNAL alone, spec first (OR-1).
+  - **(b)** The run records the LDAP result Windows gives an EXTERNAL bind it refuses. It also
+    records the result a mapped certificate gets while the DC's KDC is stopped. What follows
+    from the two codes is OR-1's measured branches. Task 7c runs only in branch (ii).
 
 ## Review Focus
 
@@ -117,8 +173,13 @@ would change one goes through Task 7, spec first.
    formats as key names, and that no script writes a secret parameter.
 2. **A setup failure read as KB5014754's verdict.** A missing KDC certificate, an unknown
    revocation status, a skewed clock or a backdated certificate would each look like "refused".
-   Task 2 tests `winKDCPrecondition`, `winSkewOK` and `winIssuedAfter`. Task 5 marks such a cell
-   INVALID with `t.Errorf`.
+   So would a PKINIT client that failed on its own side, a KDC certificate-validation error, or
+   an EXTERNAL certificate Go never sent.
+   - Task 2 tests `winKDCPrecondition`, `winKDCSetupCode`, `winPKINITResult.kdcRefused`,
+     `winSkewOK` and `winIssuedAfter`.
+   - Task 5 tests `l44Judge`, runs `control-ski` first in each block, and probes every EXTERNAL
+     cell with `certPresented` and WhoAmI.
+   - Task 5 marks each such cell INVALID with `t.Errorf`.
 3. **A stale `altSecurityIdentities` value from the previous case.** The attribute is multi-valued,
    so a leftover value would answer for the next case. Task 4's `setAltSec` reads the attribute
    back and asserts exactly the one value with `winOnlyValue`, which Task 2 tests.
@@ -140,7 +201,8 @@ Adapted from plan 7h's lab rules (`.superpowers/sdd/2026-10-06-l44-windows-serve
 - Follow CLAUDE.md's lab register rules 1–4.
 - A result that contradicts a doc means the doc is wrong (rule 4).
 - A result that shows port49 wrong is a defect. Fix it on the branch, with a unit test, in a
-  `fix(directory)` commit (Task 7), and re-run from a worktree pinned to the fix.
+  `fix(directory)` commit (Task 7), and re-run from a worktree pinned to the fix. The spec text
+  for the fix is written first, but it is committed to `main` only after 7h merges ("Sequencing").
 - A cell whose precondition failed (R6) is re-run up to three times. After that it is recorded
   INVALID, and a row with an INVALID cell stays open.
 
@@ -177,8 +239,9 @@ Adapted from plan 7h's lab rules (`.superpowers/sdd/2026-10-06-l44-windows-serve
   - About 17 GB transient while dockur extracts and rebuilds the ISO in its volume.
   - Up to about 25 GB for the VM disk (64 GB sparse).
   - 1 GB for the images.
-  - The root LV has 19 GB free today. The controller grows it first with
-    `sudo lvextend -r -L +80G /dev/ubuntu-vg/ubuntu-lv` (the VG has 828 GB free).
+  - The root LV is already grown. `/`, `/home` and `/var/lib/docker` are one filesystem, with
+    95 GB free on 2026-10-06. The harness's `winDiskCheck` guards each run, before the ISO
+    download.
 - **RAM.** The VM takes 6 GB plus QEMU's overhead. The comparison containers take under 1 GB.
   Beehive has 30 GB.
 - **Time.** A fresh run takes about 1.5–2.5 h: download on first use, Setup, promotion, AD CS,
@@ -189,9 +252,11 @@ Adapted from plan 7h's lab rules (`.superpowers/sdd/2026-10-06-l44-windows-serve
 - Run Docker through `sg docker -c "..."`. Bash calls that touch Docker need the sandbox disabled.
 - **Watchdog.** A background stall watchdog runs for the whole run and is re-armed on every wake.
   - It watches the `go test -v` log and `docker compose -p port49labwin logs --tail 5 dc`.
-  - The stall threshold is 40 minutes until the first SSH session answers (Windows Setup is
-    silent for long stretches; the harness logs dockur's last line every 2 minutes). After that it
-    is 25 minutes.
+  - The stall threshold is 40 minutes until the first SSH session answers. Windows Setup is
+    silent for long stretches, so the harness logs dockur's last line every 2 minutes.
+  - After that the threshold is 25 minutes. Every script step logs
+    `windows: <script> still running` every 2 minutes, so a long, silent step such as promote or
+    adcs (each up to 30 minutes) never looks like a stall.
   - Wait on the run in a foreground loop with a deadline. Never end a turn waiting on a background
     notification.
   - On a hang, send `kill -QUIT` to the exact test process
@@ -211,9 +276,12 @@ Adapted from plan 7h's lab rules (`.superpowers/sdd/2026-10-06-l44-windows-serve
   the credentials statement and the observation tables.
 - **Stop rule.** Stop and report, with the dockur log tail and the step that failed, if either of
   these holds:
-  - the bring-up (Task 4 Step 6) fails three times: no SSH within 150 minutes, or the promotion,
-    AD CS, LDAPS, keytab or enrollment step failing;
+  - the bring-up (Task 4 Step 6) fails three times: no SSH within 150 minutes, a bootstrap that
+    fails three times in a row, or the promotion, AD CS or LDAPS step failing;
   - a DC comes up but a cell can never be measured.
+
+  An `enroll_as` or `ktpass` failure does not stop the run. After the harness's three tries, its
+  cells are INVALID (R6), the run measures the rest, and L44 stays open.
 
   L44 stays open, and the fallback is Ryan's call. **Never weaken L44 to fit.**
 
@@ -228,16 +296,17 @@ Adapted from plan 7h's lab rules (`.superpowers/sdd/2026-10-06-l44-windows-serve
 | `tests/lab/directory_unit_test.go` (modify) | Unit tests for Task 1. |
 | `tests/lab/windows_test.go` (create) | The Windows platform. Task 2 adds the pure helpers (secrets, the PowerShell bootstrap, ISO check, `altSecurityIdentities` forms, CSRs, the PKINIT parser and the precondition judges). Task 3 adds the embedded scripts' registry. Task 4 adds the DC's bring-up, SSH runner and certificate issuance. |
 | `tests/lab/windows_unit_test.go` (create) | Unit tests for Tasks 2, 3 and 5. They run in `make test` (`LAB_UNIT_TESTS`). |
-| `tests/lab/directory/windows/compose.yaml` (create) | The `port49labwin` project: the `dc` service (dockur) and the `pkinit` tool. |
+| `tests/lab/directory/windows/compose.yaml` (create) | The `port49labwin` project: the `dc` service (dockur) and the `pkinit` tool. Its header comment is the operator's note: the run command, the files that hold secrets, the two commands never to run, KEEP and REUSE, the viewer, and the ISO cache. |
 | `tests/lab/directory/windows/oem/install.bat` (create) | dockur's first-logon hook: sshd on, firewall off, Windows Update off. |
 | `tests/lab/directory/windows/pkinit/Dockerfile` (create) | MIT `kinit` with PKINIT, on pinned Debian bookworm. |
-| `tests/lab/directory/windows/scripts/*.ps1` (create, 15) | One setup or measurement step each, embedded into the test binary. |
-| `tests/lab/l44_test.go` (create) | `TestL44WindowsAD` and its sections; `TestL44Bringup`. |
+| `tests/lab/directory/windows/scripts/*.ps1` (create, 16) | One setup or measurement step each, embedded into the test binary. |
+| `tests/lab/l44_test.go` (create) | `TestL44WindowsAD` and its sections, with the run command in its comment; `TestL44Bringup`. |
 | `tests/lab/results/L44-windows_ad.md`, `tests/lab/evidence/L44-windows_ad.json` (created by the run) | The note and its evidence. |
-| `Makefile` (modify) | `lab-windows`. |
-| `tests/lab/README.md` (modify) | "Windows Server AD (L44)" under "Directories (plan 7g)". |
-| `internal/directory/mapping.go`, `conn.go` and their tests (modify, **only on Task 7's defect path**) | |
-| `docs/design/2026-08-23-policy-engine-spec.md`, `docs/design/2026-08-21-port49-design.md`, `docs/superpowers/plans/README.md` (modify, Task 8) | |
+| `internal/directory/mapping.go`, `conn.go` and their tests (modify, **only on Task 7's defect path**, on the branch) | |
+| `docs/design/2026-08-23-policy-engine-spec.md`, `docs/design/2026-08-21-port49-design.md`, `docs/superpowers/plans/README.md` (modify, **only on `main` after 7h merges**: Task 8, and any Task 7 spec text) | |
+
+This plan does not modify the `Makefile` or `tests/lab/README.md` (controller
+R1). If Ryan wants a README subsection for L44, it goes in Task 8's commit on `main`.
 
 ---
 
@@ -549,8 +618,8 @@ Add `"encoding/binary"` to the imports.
 // winDC is the Windows DC's runner (Task 4 of the L44 plan replaces this).
 type winDC struct{}
 
-func (*winDC) version() string                              { return "" }
-func (*winDC) configNote() string                           { return "" }
+func (*winDC) version() string                                { return "" }
+func (*winDC) configNote() string                             { return "" }
 func (*winDC) setValues(*testing.T, string, string, []string) {}
 
 const platWindows = "windows_ad"
@@ -616,6 +685,15 @@ In `tests/lab/l43_test.go`:
 - In `mappingChecks`, both `if l.name == platSamba {` become `if l.name != platOpenLDAP {`. Both
   Samba and Windows hold `altSecurityIdentities` and `objectSid`.
 - In `mailCollision`, `set` becomes `set := func(mail string) { l.setAttr(t, bobDN, "mail", mail) }`.
+- In `mailCollision`'s first row, the tool is named for `l`:
+  ```go
+  	tool := "`samba-tool`-equivalent edit" // Samba's row, byte for byte as L43's note has it
+  	if l.name == platWindows {
+  		tool = "`Set-ADObject` edit"
+  	}
+  	fmt.Fprintf(b, "| `principal_attribute: mail`; %s gives bob alice's `mail`; alice's certificate under `issuer_serial` | `%s` |\n", tool, errOrOK(err1))
+  ```
+  Step 6's regression diff confirms Samba's row is unchanged.
 
 - [ ] **Step 5: Run the unit tests and the package build**
 
@@ -681,24 +759,28 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
     `winPassword() (string, error)`, `newWinSecrets() (*winSecrets, error)`,
     `winEnv(*winSecrets) string`, `winBootstrap`, `winCommand() string`,
     `winPayload(script string, params map[string]any) ([]byte, error)`,
-    `winResult(out []byte) (json.RawMessage, error)` and
-    `winScrub(s string, secrets ...string) string`.
+    `winResult(out []byte) (json.RawMessage, error)` (a script's own error is a
+    `*winThrownError`) and `winScrub(s string, secrets ...string) string`.
   - The ISO: `winISOOK(path string, size int64, sum string) error`.
   - `altSecurityIdentities` forms: `winRDNs(raw []byte) ([][2]string, error)`, `winQuote(v string) string`,
-    `winForm{forward, quoted, unreversed, signByte bool}.of(*x509.Certificate) (string, error)`,
-    and the variables `winAltSecForward`, `winAltSecUnreversed`, `winAltSecQuoted` and
-    `winAltSecSignByte`.
+    `winEscape(v string) string`,
+    `winForm{forward, quoted, escaped, unreversed, signByte bool}.of(*x509.Certificate) (string, error)`,
+    the variables `winAltSecForward`, `winAltSecUnreversed`, `winAltSecQuoted`,
+    `winAltSecEscaped` and `winAltSecSignByte`, and `winAltSecSKI(*x509.Certificate) (string, error)`
+    (the strong `X509:<SKI>` mapping, `control-ski`'s).
   - Certificates: `winUPNExtension(upn string) (pkix.Extension, error)`,
     `winCSR(cn, upn string) ([]byte, *rsa.PrivateKey, error)`,
     `(p *dirPKI) signServerCSR(csrPEM []byte, now time.Time) ([]byte, error)`,
     `winCommaCA(now time.Time) (*x509.Certificate, *ecdsa.PrivateKey, error)`,
     `winPersonCert(parent *x509.Certificate, signer crypto.Signer, cn, upn string, serial *big.Int, now time.Time) (*x509.Certificate, *rsa.PrivateKey, error)`,
-    `winHighBitSerial() *big.Int`, `pemCert(*x509.Certificate) []byte`, `pemKey(*rsa.PrivateKey) []byte`
-    and `parsePEMCert([]byte) (*x509.Certificate, error)`.
-  - PKINIT: `pkinitResult{ok bool; kdcErrs []string; last string; took time.Duration}`,
-    `parseKinit(out string) pkinitResult`, `(pkinitResult) kdcSaid() string` and
-    `winPKINITConf(kdc string) string`.
+    `winHighBitSerial() *big.Int`, `winPEMCert(*x509.Certificate) []byte`, `winPEMKey(*rsa.PrivateKey) []byte`
+    and `winParsePEMCert([]byte) (*x509.Certificate, error)`.
+  - PKINIT: `winPKINITResult{ok bool; kdcErrs []string; last string; took time.Duration}`,
+    `winParseKinit(out string) winPKINITResult`, `(winPKINITResult) kdcSaid() string`,
+    `(winPKINITResult) kdcRefused() bool`, `(winPKINITResult) setupCodes() []int`,
+    `winKDCErrCode(e string) (int, bool)` and `winPKINITConf(kdc string) string`.
   - Judges: `winEvent{ID int; Provider, Time, Message string}`, `winKDCPrecondition(id int) bool`,
+    `winKDCSetupCode(code int) bool`,
     `winSkewOK(dc, host time.Time, limit time.Duration) bool`,
     `winIssuedAfter(created time.Time, certs ...*x509.Certificate) error` and
     `winOnlyValue(vals []string, want string) bool`.
@@ -717,10 +799,12 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/big"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -809,11 +893,12 @@ func TestWindowsPayloadAndResult(t *testing.T) {
 	if r, err := winResult([]byte("noise\r\n{\"b\":\"x\"}\r\n")); err != nil || string(r) != `{"b":"x"}` {
 		t.Fatalf("%s %v", r, err)
 	}
-	if _, err := winResult([]byte(`{"error":"Access is denied."}`)); err == nil || err.Error() != "Access is denied." {
+	var thrown *winThrownError
+	if _, err := winResult([]byte(`{"error":"Access is denied."}`)); err == nil || err.Error() != "Access is denied." || !errors.As(err, &thrown) {
 		t.Fatalf("%v", err)
 	}
-	if _, err := winResult([]byte("\r\n")); err == nil {
-		t.Fatal("no output read as a result")
+	if _, err := winResult([]byte("\r\n")); err == nil || errors.As(err, &thrown) {
+		t.Fatal("no output read as a result, or as the script's own error")
 	}
 }
 
@@ -851,6 +936,30 @@ func TestWindowsQuote(t *testing.T) {
 	}
 }
 
+// RFC 4514's backslash form: the third way a Windows DC may want a comma in
+// <I> written (pre-flight I6).
+func TestWindowsEscape(t *testing.T) {
+	for in, want := range map[string]string{
+		"plain": "plain", "a,b": `a\,b`, `say "hi"`: `say \"hi\"`, "a+b": `a\+b`, "a=b": `a\=b`, "a;b": `a\;b`,
+		"a<b>": `a\<b\>`, `a\b`: `a\\b`, "#lead": `\#lead`, "a#b": "a#b", " lead": `\ lead`, "trail ": `trail\ `,
+	} {
+		if got := winEscape(in); got != want {
+			t.Errorf("winEscape(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// control-ski's mapping is the certificate's own SubjectKeyId in hex; a
+// certificate with none gives no control, never an empty mapping.
+func TestWindowsAltSecSKI(t *testing.T) {
+	if got, err := winAltSecSKI(&x509.Certificate{SubjectKeyId: []byte{0xab, 0x01, 0xff}}); err != nil || got != "X509:<SKI>ab01ff" {
+		t.Fatalf("%q %v", got, err)
+	}
+	if _, err := winAltSecSKI(&x509.Certificate{}); err == nil {
+		t.Fatal("a certificate with no SubjectKeyId gave a mapping")
+	}
+}
+
 // Each offered form differs from port49's in the one respect it names, and
 // the lab's reading of the issuer is port49's own.
 func TestWindowsAltSecForms(t *testing.T) {
@@ -872,6 +981,7 @@ func TestWindowsAltSecForms(t *testing.T) {
 		"forward":    {winAltSecForward, "X509:<I>CN=lab-users, comma-CA,DC=corp,DC=example,DC=com<SR>020180"},
 		"unreversed": {winAltSecUnreversed, "X509:<I>" + issuer + "<SR>800102"},
 		"quoted":     {winAltSecQuoted, `X509:<I>DC=com,DC=example,DC=corp,CN="lab-users, comma-CA"<SR>020180`},
+		"escaped":    {winAltSecEscaped, `X509:<I>DC=com,DC=example,DC=corp,CN=lab-users\, comma-CA<SR>020180`},
 		"signbyte":   {winAltSecSignByte, "X509:<I>" + issuer + "<SR>02018000"},
 	} {
 		if got, err := tc.f(c); err != nil || got != tc.want {
@@ -907,13 +1017,13 @@ func TestWindowsCSR(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	csr, err := parseCSR(b)
+	csr, err := winParseCSR(b)
 	if err != nil || csr.CheckSignature() != nil || csr.Subject.CommonName != "alice" || key.N.BitLen() != 2048 {
 		t.Fatalf("%v", err)
 	}
 	found := false
 	for _, e := range csr.Extensions {
-		found = found || e.Id.Equal(oidWinSAN)
+		found = found || e.Id.Equal(winOIDSAN)
 	}
 	if !found {
 		t.Fatal("the request carries no SAN")
@@ -935,7 +1045,7 @@ func TestWindowsSignServerCSR(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c, err := parsePEMCert(certPEM)
+	c, err := winParsePEMCert(certPEM)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -959,16 +1069,46 @@ func TestWindowsHighBitSerial(t *testing.T) {
 func TestWindowsParseKinit(t *testing.T) {
 	ok := "[7] 1.2: Received error from KDC: -1765328359/Additional pre-authentication required\nlab: kinit exit 0\n" +
 		"Ticket cache: FILE:/tmp/krb5cc_0\n  krbtgt/CORP.EXAMPLE.COM@CORP.EXAMPLE.COM\n"
-	if r := parseKinit(ok); !r.ok || r.kdcSaid() != "—" {
+	if r := winParseKinit(ok); !r.ok || r.kdcSaid() != "—" {
 		t.Fatalf("%+v %q", r, r.kdcSaid())
 	}
 	bad := "[7] 1.2: Received error from KDC: -1765328359/Additional pre-authentication required\n" +
 		"[7] 1.3: Received error from KDC: -1765328360/Preauthentication failed\n" +
 		"kinit: Preauthentication failed while getting initial credentials\nlab: kinit exit 1\nklist: No credentials cache found\n"
-	r := parseKinit(bad)
+	r := winParseKinit(bad)
 	if r.ok || !strings.Contains(r.kdcSaid(), "-1765328360/Preauthentication failed") || strings.Contains(r.kdcSaid(), "-1765328359") ||
 		!strings.Contains(r.kdcSaid(), "kinit: Preauthentication failed") {
 		t.Fatalf("%+v %q", r, r.kdcSaid())
+	}
+	if !r.kdcRefused() || len(r.setupCodes()) != 0 {
+		t.Fatalf("the KDC's own refusal (24) read as no refusal or as a setup failure: %+v", r)
+	}
+	if winParseKinit(ok).kdcRefused() {
+		t.Fatal("preauth-required alone, the ordinary first answer, read as a refusal")
+	}
+	// The client failed on its own side: MIT could not verify the KDC's
+	// certificate, and the KDC sent nothing past preauth-required. That is
+	// no refusal, so the cell is INVALID, never "refused" (pre-flight C3).
+	client := "[7] 1.2: Received error from KDC: -1765328359/Additional pre-authentication required\n" +
+		"kinit: Certificate verification failed while verifying KDC certificate\nlab: kinit exit 1\nklist: No credentials cache found\n"
+	if c := winParseKinit(client); c.ok || c.kdcRefused() {
+		t.Fatalf("a client-side failure read as the KDC's refusal: %+v", c)
+	}
+	// A PKINIT certificate-validation code from the KDC is a setup failure;
+	// 66, CERTIFICATE_MISMATCH, is the mapping's verdict.
+	trust := "[7] 1.3: Received error from KDC: -1765328322/Client not trusted\nlab: kinit exit 1\n"
+	if c := winParseKinit(trust); !c.kdcRefused() || !slices.Equal(c.setupCodes(), []int{62}) {
+		t.Fatalf("CLIENT_NOT_TRUSTED (62): %+v %v", c, c.setupCodes())
+	}
+	mismatch := "[7] 1.3: Received error from KDC: -1765328318/KDC_ERR_CERTIFICATE_MISMATCH\nlab: kinit exit 1\n"
+	if c := winParseKinit(mismatch); !c.kdcRefused() || len(c.setupCodes()) != 0 {
+		t.Fatalf("CERTIFICATE_MISMATCH (66) read as a setup failure: %+v", c)
+	}
+	if n, ok := winKDCErrCode("-1765328318/KDC_ERR_CERTIFICATE_MISMATCH"); !ok || n != 66 {
+		t.Fatalf("%d %v", n, ok)
+	}
+	if _, ok := winKDCErrCode("garbage"); ok {
+		t.Fatal("a line with no code read as one")
 	}
 }
 
@@ -986,6 +1126,12 @@ func TestWindowsJudges(t *testing.T) {
 	for id, want := range map[int]bool{19: true, 21: true, 29: true, 39: false, 40: false, 41: false, 48: false, 49: false} {
 		if winKDCPrecondition(id) != want {
 			t.Errorf("event %d", id)
+		}
+	}
+	for code, want := range map[int]bool{62: true, 63: true, 64: true, 65: true, 66: false, 70: true, 71: true, 72: true,
+		73: true, 74: true, 75: true, 76: true, 77: true, 78: true, 24: false, 6: false, 18: false} {
+		if winKDCSetupCode(code) != want {
+			t.Errorf("KDC error %d", code)
 		}
 	}
 	now := time.Now()
@@ -1040,6 +1186,7 @@ import (
 	"os"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf16"
@@ -1061,9 +1208,9 @@ const (
 	winISOSHA256 = "7b052573ba7894c9924e3e87ba732ccd354d18cb75a883efa9b900ea125bfd51"
 	winISOSize   = 8152356864
 
-	winSSH      = "127.0.0.1:30022"  // the VM's sshd, published on loopback
-	winKDC      = "127.0.0.1:30088"  // the KDC, for port49's GSSAPI
-	winKDCInNet = "172.30.44.10:88"  // the KDC as the pkinit container reaches it
+	winSSH      = "127.0.0.1:30022" // the VM's sshd, published on loopback
+	winKDC      = "127.0.0.1:30088" // the KDC, for port49's GSSAPI
+	winKDCInNet = "172.30.44.10:88" // the KDC as the pkinit container reaches it
 	winDCHost   = "dc1.corp.example.com"
 	winCAName   = "corp-L44-CA"
 )
@@ -1143,8 +1290,14 @@ func winPayload(script string, params map[string]any) ([]byte, error) {
 	}{script, params})
 }
 
+// winThrownError is the error a script itself threw, as the bootstrap
+// reported it: the script ran, so the VM, sshd and the bootstrap all work.
+type winThrownError struct{ msg string }
+
+func (e *winThrownError) Error() string { return e.msg }
+
 // winResult reads the bootstrap's answer, the last non-empty line: the
-// script's result, or the error it threw.
+// script's result, or the error it threw (a *winThrownError).
 func winResult(out []byte) (json.RawMessage, error) {
 	var line string
 	for _, l := range strings.Split(strings.ReplaceAll(string(out), "\r\n", "\n"), "\n") {
@@ -1159,7 +1312,7 @@ func winResult(out []byte) (json.RawMessage, error) {
 		Error *string `json:"error"`
 	}
 	if json.Unmarshal([]byte(line), &e) == nil && e.Error != nil {
-		return nil, errors.New(*e.Error)
+		return nil, &winThrownError{*e.Error}
 	}
 	if !json.Valid([]byte(line)) {
 		return nil, fmt.Errorf("the script's last line is not JSON (%d bytes)", len(line))
@@ -1237,9 +1390,22 @@ func winQuote(v string) string {
 	return v
 }
 
+// winEscape is an RDN value in RFC 4514's backslash form: , + " \ < > ; =
+// escaped, and a leading # or space and a trailing space.
+func winEscape(v string) string {
+	var b strings.Builder
+	for i, r := range v {
+		if strings.ContainsRune(",+\"\\<>;=", r) || (i == 0 && (r == '#' || r == ' ')) || (i == len(v)-1 && r == ' ') {
+			b.WriteByte('\\')
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
 // winForm is an altSecurityIdentities X509IssuerSerialNumber value with each
 // way it may differ from port49's own: the zero winForm is port49's form.
-type winForm struct{ forward, quoted, unreversed, signByte bool }
+type winForm struct{ forward, quoted, escaped, unreversed, signByte bool }
 
 func (f winForm) of(c *x509.Certificate) (string, error) {
 	rdns, err := winRDNs(c.RawIssuer)
@@ -1252,8 +1418,11 @@ func (f winForm) of(c *x509.Certificate) (string, error) {
 	parts := make([]string, len(rdns))
 	for i, r := range rdns {
 		v := r[1]
-		if f.quoted {
+		switch {
+		case f.quoted:
 			v = winQuote(v)
+		case f.escaped:
+			v = winEscape(v)
 		}
 		parts[i] = r[0] + "=" + v
 	}
@@ -1273,12 +1442,23 @@ var (
 	winAltSecForward    = winForm{forward: true}.of    // the issuer least significant RDN first, as Windows' UI prints it
 	winAltSecUnreversed = winForm{unreversed: true}.of // the serial in certificate byte order
 	winAltSecQuoted     = winForm{quoted: true}.of     // values quoted as CertNameToStr quotes them
+	winAltSecEscaped    = winForm{escaped: true}.of    // values escaped as RFC 4514 escapes them
 	winAltSecSignByte   = winForm{signByte: true}.of   // the serial with its DER sign byte
 )
 
+// winAltSecSKI is KB5014754's strong X509SKI mapping for c, the hex of its
+// SubjectKeyId as the KB's example writes it: control-ski's mapping, which
+// no part of L44's claim is about.
+func winAltSecSKI(c *x509.Certificate) (string, error) {
+	if len(c.SubjectKeyId) == 0 {
+		return "", errors.New("the certificate has no SubjectKeyId")
+	}
+	return "X509:<SKI>" + hex.EncodeToString(c.SubjectKeyId), nil
+}
+
 var (
-	oidWinSAN = asn1.ObjectIdentifier{2, 5, 29, 17}
-	oidWinUPN = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 311, 20, 2, 3}
+	winOIDSAN = asn1.ObjectIdentifier{2, 5, 29, 17}
+	winOIDUPN = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 311, 20, 2, 3}
 )
 
 // winUPNExtension is a subjectAltName holding one UPN otherName, a
@@ -1291,13 +1471,13 @@ func winUPNExtension(upn string) (pkix.Extension, error) {
 	other, err := asn1.Marshal(struct {
 		ID    asn1.ObjectIdentifier
 		Value asn1.RawValue
-	}{oidWinUPN, asn1.RawValue{Class: asn1.ClassContextSpecific, Tag: 0, IsCompound: true, Bytes: inner}})
+	}{winOIDUPN, asn1.RawValue{Class: asn1.ClassContextSpecific, Tag: 0, IsCompound: true, Bytes: inner}})
 	if err != nil {
 		return pkix.Extension{}, err
 	}
 	other[0] = 0xa0 // [0] IMPLICIT, constructed: the GeneralName otherName choice
 	names, err := asn1.Marshal(asn1.RawValue{Class: asn1.ClassUniversal, Tag: asn1.TagSequence, IsCompound: true, Bytes: other})
-	return pkix.Extension{Id: oidWinSAN, Value: names}, err
+	return pkix.Extension{Id: winOIDSAN, Value: names}, err
 }
 
 // winCSR is a PKCS #10 request for cn, with a UPN SAN when upn is not "", on
@@ -1323,7 +1503,7 @@ func winCSR(cn, upn string) ([]byte, *rsa.PrivateKey, error) {
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: der}), key, nil
 }
 
-func parseCSR(b []byte) (*x509.CertificateRequest, error) {
+func winParseCSR(b []byte) (*x509.CertificateRequest, error) {
 	blk, _ := pem.Decode(b)
 	if blk == nil {
 		return nil, errors.New("no PEM block")
@@ -1331,7 +1511,7 @@ func parseCSR(b []byte) (*x509.CertificateRequest, error) {
 	return x509.ParseCertificateRequest(blk.Bytes)
 }
 
-func parsePEMCert(b []byte) (*x509.Certificate, error) {
+func winParsePEMCert(b []byte) (*x509.Certificate, error) {
 	blk, _ := pem.Decode(b)
 	if blk == nil {
 		return nil, errors.New("no PEM block")
@@ -1339,11 +1519,11 @@ func parsePEMCert(b []byte) (*x509.Certificate, error) {
 	return x509.ParseCertificate(blk.Bytes)
 }
 
-func pemCert(c *x509.Certificate) []byte {
+func winPEMCert(c *x509.Certificate) []byte {
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: c.Raw})
 }
 
-func pemKey(k *rsa.PrivateKey) []byte {
+func winPEMKey(k *rsa.PrivateKey) []byte {
 	der, _ := x509.MarshalPKCS8PrivateKey(k)
 	return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
 }
@@ -1352,7 +1532,7 @@ func pemKey(k *rsa.PrivateKey) []byte {
 // DC generated, for the names the lab's URIs and the DC itself use, whatever
 // the request asked for.
 func (p *dirPKI) signServerCSR(csrPEM []byte, now time.Time) ([]byte, error) {
-	csr, err := parseCSR(csrPEM)
+	csr, err := winParseCSR(csrPEM)
 	if err != nil {
 		return nil, err
 	}
@@ -1360,7 +1540,7 @@ func (p *dirPKI) signServerCSR(csrPEM []byte, now time.Time) ([]byte, error) {
 		return nil, err
 	}
 	tmpl := &x509.Certificate{SerialNumber: dirSerial(), Subject: pkix.Name{CommonName: winDCHost},
-		DNSNames: []string{"localhost", winDCHost}, IPAddresses: testpkiLoopback(), NotBefore: now.Add(-time.Hour),
+		DNSNames: []string{"localhost", winDCHost}, IPAddresses: winLoopback(), NotBefore: now.Add(-time.Hour),
 		NotAfter: now.Add(24 * time.Hour), KeyUsage: x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, p.ca.Cert, csr.PublicKey, p.ca.Key)
@@ -1426,24 +1606,24 @@ func winHighBitSerial() *big.Int {
 	return new(big.Int).SetBytes(b)
 }
 
-// pkinitResult is one kinit: whether the KDC issued a TGT and, if not, what
+// winPKINITResult is one kinit: whether the KDC issued a TGT and, if not, what
 // it said, from MIT's trace and kinit's own last line.
-type pkinitResult struct {
+type winPKINITResult struct {
 	ok      bool
 	kdcErrs []string // "<code>/<text>" from each "Received error from KDC", in order
 	last    string   // kinit's own last line
 	took    time.Duration
 }
 
-var kdcErrRe = regexp.MustCompile(`Received error from KDC: (-?\d+/[^\r\n]*)`)
+var winKDCErrRe = regexp.MustCompile(`Received error from KDC: (-?\d+/[^\r\n]*)`)
 
-// preauthRequired is the KDC's ordinary first answer to an AS-REQ, on
+// winPreauthRequired is the KDC's ordinary first answer to an AS-REQ, on
 // success too.
-const preauthRequired = "-1765328359/"
+const winPreauthRequired = "-1765328359/"
 
-func parseKinit(out string) pkinitResult {
-	r := pkinitResult{ok: strings.Contains(out, "lab: kinit exit 0") && strings.Contains(out, "krbtgt/"+dirRealm+"@"+dirRealm)}
-	for _, m := range kdcErrRe.FindAllStringSubmatch(out, -1) {
+func winParseKinit(out string) winPKINITResult {
+	r := winPKINITResult{ok: strings.Contains(out, "lab: kinit exit 0") && strings.Contains(out, "krbtgt/"+dirRealm+"@"+dirRealm)}
+	for _, m := range winKDCErrRe.FindAllStringSubmatch(out, -1) {
 		r.kdcErrs = append(r.kdcErrs, oneLineMax(m[1], 160))
 	}
 	for _, line := range strings.Split(out, "\n") {
@@ -1456,10 +1636,10 @@ func parseKinit(out string) pkinitResult {
 
 // kdcSaid is what a cell shows: the KDC's errors past the ordinary first
 // one, and kinit's last line on a failure; "—" when there is nothing.
-func (r pkinitResult) kdcSaid() string {
+func (r winPKINITResult) kdcSaid() string {
 	var parts []string
 	for _, e := range r.kdcErrs {
-		if !strings.HasPrefix(e, preauthRequired) {
+		if !strings.HasPrefix(e, winPreauthRequired) {
 			parts = append(parts, e)
 		}
 	}
@@ -1470,6 +1650,46 @@ func (r pkinitResult) kdcSaid() string {
 		return "—"
 	}
 	return strings.Join(parts, "; ")
+}
+
+// kdcRefused reports whether the KDC itself sent an error past the ordinary
+// preauth-required. A failed kinit without one failed on the client's side
+// (the KDC's certificate unverified, a DH or etype mismatch, a missing file):
+// the KDC refused nothing, and the cell is INVALID (R6).
+func (r winPKINITResult) kdcRefused() bool {
+	for _, e := range r.kdcErrs {
+		if !strings.HasPrefix(e, winPreauthRequired) {
+			return true
+		}
+	}
+	return false
+}
+
+// setupCodes is each KDC error among r's that is a PKINIT certificate-
+// validation failure (winKDCSetupCode): the run's setup, not the mapping.
+func (r winPKINITResult) setupCodes() []int {
+	var out []int
+	for _, e := range r.kdcErrs {
+		if n, ok := winKDCErrCode(e); ok && winKDCSetupCode(n) {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// winKDCErrCode is the RFC 4120 error number in one of MIT's
+// "<com_err code>/<text>" entries: MIT numbers KDC error n as
+// -1765328384 + n.
+func winKDCErrCode(e string) (int, bool) {
+	num, _, ok := strings.Cut(e, "/")
+	if !ok {
+		return 0, false
+	}
+	n, err := strconv.Atoi(num)
+	if err != nil {
+		return 0, false
+	}
+	return n + 1765328384, true
 }
 
 // winPKINITConf is the PKINIT client's krb5.conf: the realm's KDC on the
@@ -1504,6 +1724,20 @@ type winEvent struct {
 // and 21 (the client certificate did not validate: its chain or revocation).
 func winKDCPrecondition(id int) bool { return id == 19 || id == 21 || id == 29 }
 
+// winKDCSetupCode reports whether a KDC error is a PKINIT certificate-
+// validation failure (RFC 4556 and RFC 4120's 62–78 range), which says the
+// run's trust, chain, revocation or names are wrong rather than the mapping:
+// 62 CLIENT_NOT_TRUSTED, 63 KDC_NOT_TRUSTED, 64 INVALID_SIG, 65
+// DH_KEY_PARAMETERS_NOT_ACCEPTED, 70 CANT_VERIFY_CERTIFICATE, 71
+// INVALID_CERTIFICATE, 72 REVOKED_CERTIFICATE, 73 REVOCATION_STATUS_UNKNOWN,
+// 74 REVOCATION_STATUS_UNAVAILABLE, 75 CLIENT_NAME_MISMATCH, 76
+// KDC_NAME_MISMATCH, 77 INCONSISTENT_KEY_PURPOSE, 78
+// DIGEST_IN_CERT_NOT_ACCEPTED. 66 CERTIFICATE_MISMATCH is the mapping's
+// verdict and is not one.
+func winKDCSetupCode(code int) bool {
+	return (code >= 62 && code <= 65) || (code >= 70 && code <= 78)
+}
+
 // winSkewOK reports whether the DC's clock is within limit of ours: past five
 // minutes Kerberos refuses everything, and a skewed run would read that as a
 // mapping's verdict.
@@ -1537,7 +1771,7 @@ func winOnlyValue(vals []string, want string) bool {
 }
 ```
 
-Add `func testpkiLoopback() []net.IP { return testpki.Loopback() }` with its imports
+Add `func winLoopback() []net.IP { return testpki.Loopback() }` with its imports
 (`net`, `internal/testpki`). The helper keeps the pure file's dependency explicit.
 
 Delete Task 1's `const platWindows = "windows_ad"` from `directory_test.go`.
@@ -1571,7 +1805,7 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 **Files:**
 - Create: `tests/lab/directory/windows/compose.yaml`, `tests/lab/directory/windows/oem/install.bat`,
   `tests/lab/directory/windows/pkinit/Dockerfile`
-- Create: `tests/lab/directory/windows/scripts/{promote,ready,seed,reset,adcs,ldaps,keytab,trust,issue,enroll_as,set_attr,registry,events,facts,clock}.ps1`
+- Create: `tests/lab/directory/windows/scripts/{promote,ready,seed,reset,adcs,ldaps,keytab,trust,issue,enroll_as,set_attr,registry,service,events,facts,clock}.ps1`
 - Modify: `tests/lab/windows_test.go` (`winScripts`, `winSecretParams`, `winScriptFS`)
 - Test: `tests/lab/windows_unit_test.go`
 
@@ -1584,7 +1818,7 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
   - Each script's JSON result (keys below), which Task 4 reads.
 
 - [ ] **Step 1: Write the failing tests** (append to `tests/lab/windows_unit_test.go`, and add
-`"regexp"` and `"slices"` to its imports)
+`"regexp"` to its imports; `"slices"` is there since Task 2)
 
 ```go
 // The DC's image is pinned by digest, the ISO is mounted read-only from the
@@ -1608,8 +1842,8 @@ func TestWindowsComposePinsTheImage(t *testing.T) {
 }
 
 var (
-	psParamRe = regexp.MustCompile(`(?m)^param\(([^)]*)\)\s*$`)
-	psNameRe  = regexp.MustCompile(`\$([a-z_]+)`)
+	winPSParamRe = regexp.MustCompile(`(?m)^param\(([^)]*)\)\s*$`)
+	winPSNameRe  = regexp.MustCompile(`\$([a-z0-9_]+)`) // port49_password has a digit
 )
 
 // Every script is in winScripts with the params its param() block declares,
@@ -1629,13 +1863,13 @@ func TestWindowsScriptsTakeTheirParams(t *testing.T) {
 			continue
 		}
 		seen[name] = true
-		m := psParamRe.FindSubmatchIndex(src)
+		m := winPSParamRe.FindSubmatchIndex(src)
 		if m == nil {
 			t.Errorf("%s: no param() line", name)
 			continue
 		}
 		var got []string
-		for _, n := range psNameRe.FindAllStringSubmatch(string(src[m[2]:m[3]]), -1) {
+		for _, n := range winPSNameRe.FindAllStringSubmatch(string(src[m[2]:m[3]]), -1) {
 			got = append(got, n[1])
 		}
 		if !slices.Equal(got, want) {
@@ -1687,9 +1921,29 @@ Expected: a build failure (`winScriptFS`, `winScripts` and `winSecretParams` are
 # KVM VM inside dockur/windows, the first DC of corp.example.com, on a network
 # of its own. Run from tests/lab/windows_test.go, which verifies the ISO and
 # writes windows.env (the Administrator's password, 0600) and compose.env (the
-# ISO's path) under tests/lab/logs/windows (git-ignored) first. Never run
-# `docker compose config` or `docker inspect` on this project: both print the
-# environment, and it holds the password.
+# ISO's path) under tests/lab/logs/windows (git-ignored) first.
+#
+# Run it, from a worktree pinned at the commit under test, with
+#   go test -tags lab ./tests/lab/ -run '^TestL44WindowsAD$' -count=1 -v -timeout 240m
+# (TestL44Bringup alone is the bring-up with no measurement). It needs
+# /dev/kvm, Docker with Compose v2.24.4+, 6 GB of RAM and 66 GiB free on the
+# lab's filesystem. A fresh run takes 1.5 to 2.5 hours, most of it Windows
+# Setup; Setup can be watched at http://127.0.0.1:8006.
+#
+# The evaluation ISO is cached in PORT49_LAB_ISO_DIR (default
+# ~/.cache/port49-lab/iso), checked by size and SHA-256 every run, and never
+# committed or redistributed.
+#
+# PORT49_LAB_WINDOWS_KEEP leaves the DC and its secrets up after the run;
+# PORT49_LAB_WINDOWS_REUSE runs on a kept DC. Both are for developing the
+# harness only: a note from a reused DC says so and never closes L44 (R7).
+#
+# Under tests/lab/logs/windows, these hold secrets and are never printed:
+# windows.env, secrets.json, port49.keytab, broker-adcs-key.pem and
+# pkinit/*-key.pem. The run removes them unless PORT49_LAB_WINDOWS_KEEP is set.
+#
+# Never run `docker compose config` or `docker inspect` on this project: both
+# print the environment, and it holds the password.
 name: port49labwin
 
 services:
@@ -1770,7 +2024,7 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
       krb5-user krb5-pkinit ca-certificates && rm -rf /var/lib/apt/lists/*
 ```
 
-- [ ] **Step 4: Write the fifteen scripts** in `tests/lab/directory/windows/scripts/`
+- [ ] **Step 4: Write the sixteen scripts** in `tests/lab/directory/windows/scripts/`
 
 Rules for every script:
 - The first non-comment line is `param(...)` on one line.
@@ -1913,6 +2167,9 @@ while ((Get-Service CertSvc).Status -ne 'Running') {
 Import-Module ADCSAdministration
 if (-not (Get-CATemplate | Where-Object Name -eq 'OfflineRouter')) { Add-CATemplate -Name OfflineRouter -Force }
 $kdcEku = '1.3.6.1.5.2.3.5'
+# A certificate with the KDC Authentication EKU from the machine's store: not
+# necessarily the one the KDC presents (the note says so; control-ski proves
+# the KDC's PKINIT works).
 function Get-KdcCert {
   Get-ChildItem Cert:\LocalMachine\My | Where-Object { $_.EnhancedKeyUsageList.ObjectId -contains $kdcEku } | Select-Object -First 1
 }
@@ -2103,7 +2360,9 @@ else { Set-ADObject -Identity $dn -Clear $attribute }
 
 ```powershell
 # L44: set (or, with value -1, delete) one of the DC settings the run varies,
-# restart the service that reads it and its dependents, and return what is in
+# restart the service that reads it, then start again every service that
+# depends on it and was running before (Restart-Service -Force stops them all;
+# restarting the service guarantees the value is read), and return what is in
 # force after.
 param([string]$name, [int]$value)
 $ErrorActionPreference = 'Stop'
@@ -2116,9 +2375,10 @@ if (-not $known.ContainsKey($name)) { throw "not a setting this lab varies: $nam
 $path, $svc = $known[$name]
 if ($value -lt 0) { Remove-ItemProperty -Path $path -Name $name -ErrorAction SilentlyContinue }
 else { New-ItemProperty -Path $path -Name $name -PropertyType DWord -Value $value -Force | Out-Null }
+$running = @(@($svc) + @((Get-Service $svc).DependentServices | Where-Object Status -eq 'Running' | ForEach-Object Name))
 Restart-Service $svc -Force
-$deadline = (Get-Date).AddMinutes(3)
-foreach ($s in @($svc, 'Kdc', 'NTDS', 'DNS') | Select-Object -Unique) {
+$deadline = (Get-Date).AddMinutes(5)
+foreach ($s in $running) {
   Start-Service $s -ErrorAction SilentlyContinue
   while ((Get-Service $s).Status -ne 'Running') {
     if ((Get-Date) -gt $deadline) { throw "$s did not come back" }
@@ -2127,7 +2387,27 @@ foreach ($s in @($svc, 'Kdc', 'NTDS', 'DNS') | Select-Object -Unique) {
 }
 $now = (Get-ItemProperty -Path $path -Name $name -ErrorAction SilentlyContinue).$name
 $inForce = if ($null -eq $now) { 'absent' } else { "$now" }
-@{ name = $name; value = $inForce; restarted = $svc }
+@{ name = $name; value = $inForce; restarted = $svc; started_again = $running }
+```
+
+`service.ps1`:
+
+```powershell
+# L44: stop or start the DC's KDC, for OR-1's cell: a mapped certificate's
+# EXTERNAL bind while the KDC that Schannel's S4U2Self needs is down. Kdc is
+# the only service this lab stops; the run starts it again at once.
+param([string]$name, [string]$state)
+$ErrorActionPreference = 'Stop'
+if ($name -ne 'Kdc') { throw "not a service this lab stops: $name" }
+if ($state -eq 'stop') { Stop-Service Kdc -Force; $want = 'Stopped' }
+elseif ($state -eq 'start') { Start-Service Kdc; $want = 'Running' }
+else { throw "not a state: $state" }
+$deadline = (Get-Date).AddMinutes(3)
+while ((Get-Service Kdc).Status -ne $want) {
+  if ((Get-Date) -gt $deadline) { throw "Kdc did not reach $want" }
+  Start-Sleep 2
+}
+@{ name = 'Kdc'; status = "$((Get-Service Kdc).Status)" }
 ```
 
 `events.ps1`:
@@ -2206,7 +2486,7 @@ var winScripts = map[string][]string{
 	"reset": {"port49_password", "alice_altsecid"}, "adcs": nil, "ldaps": {"step", "cert_pem", "lab_ca_pem"},
 	"keytab": {"port49_password"}, "trust": {"ca_pem", "name"}, "issue": {"csr_pem", "template"},
 	"enroll_as": {"csr_pem", "user"}, "set_attr": {"dn", "attribute", "values"}, "registry": {"name", "value"},
-	"events": {"since"}, "facts": nil,
+	"service": {"name", "state"}, "events": {"since"}, "facts": nil,
 }
 
 // winSecretParams are the parameters that carry a secret: no script may
@@ -2228,7 +2508,7 @@ git -C /home/rwendt/git/port49/.worktrees/l44 commit -m "test(lab): the Windows 
 
 dockurr/windows 6.06 by digest on its own network, ports on loopback only;
 the first-logon hook that starts sshd; MIT kinit with PKINIT on pinned Debian;
-and fifteen PowerShell steps, each taking its params on stdin and writing
+and sixteen PowerShell steps, each taking its params on stdin and writing
 none that is secret.
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
@@ -2244,26 +2524,35 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
   `directory_test.go`)
 - Modify: `tests/lab/directory_test.go` (delete the placeholder `winDC`)
 - Create: `tests/lab/l44_test.go` (`TestL44Bringup` only; Task 5 adds the measurement)
-- Modify: `Makefile` (`.PHONY` and `lab-windows`), `tests/lab/README.md`
-  ("Windows Server AD (L44)")
+- Test: `tests/lab/windows_unit_test.go` (`TestWindowsDCPrintsNoSecret`)
+- Not modified: the `Makefile` and `tests/lab/README.md` (controller R1). The run command lives in
+  the comments of `TestL44WindowsAD` and `compose.yaml`, and in the note's Run line.
 
 **Interfaces:**
 - Consumes: Tasks 1–3.
 - Produces:
   - `type winDC struct` with `dir`, `compose`, `sec`, `port49`, `state winState`,
-    `facts winFacts`, `certs winCerts` and `adcsRoot *x509.Certificate`.
+    `facts winFacts`, `certs winCerts`, `adcsRoot *x509.Certificate` and `invalid []string`
+    (each a setup step that failed three times, as `"<area>: <scrubbed error>"`; `<area>` is
+    `sid` or `keytab`). It formats as its project name only (`String`, `GoString`, `Format`).
   - `startWindowsDC(t, d) *labDir`.
+  - `type winScriptErr struct{ name string; thrown bool; msg string }`: a script that ran, which
+    proves the VM, sshd and the session all work.
   - Commands: `(w *winDC) dockerCompose(args...) *exec.Cmd`,
-    `(w *winDC) ps(ctx, name string, params map[string]any) (json.RawMessage, error)` and
-    `(w *winDC) run(t, name string, params map[string]any, within time.Duration, into any)`.
+    `(w *winDC) ps(ctx, name string, params map[string]any) (json.RawMessage, error)`,
+    `(w *winDC) try(t, name string, params map[string]any, within time.Duration, into any) error`
+    (it never fails the test), `(w *winDC) run(...)` (`try`, but fatal),
+    `(w *winDC) invalidFor(area string) string`, `(w *winDC) service(t, name, state string)` and
+    `(w *winDC) removeSecrets()`.
   - Queries: `(w *winDC) clock(t) string`, `(w *winDC) checkSkew(t)` and
     `(w *winDC) events(t, since string) []winEvent`.
   - Changes: `(w *winDC) setValues(t, dn, attr string, vals []string)`,
     `(w *winDC) setAltSec(t, dn, value string)` and `(l *labDir) setRegistry(t, name string, value int) string`.
   - Certificates and PKINIT:
-    `(w *winDC) kinit(t, label, principal string, c *x509.Certificate, key *rsa.PrivateKey) pkinitResult`,
+    `(w *winDC) kinit(t, label, principal string, c *x509.Certificate, key *rsa.PrivateKey) winPKINITResult`,
     `(w *winDC) issue(t, cn, upn, template string) (*x509.Certificate, *rsa.PrivateKey)` and
-    `(w *winDC) enrollAs(t, user string) (*x509.Certificate, *rsa.PrivateKey)`.
+    `(w *winDC) enrollAs(t, user string) (*x509.Certificate, *rsa.PrivateKey)`. The latter
+    returns `nil, nil` after three failed tries and records `sid: ...` in `w.invalid`.
   - Notes: `(w *winDC) version() string`, `(w *winDC) configNote() string` and
     `(w *winDC) factsSection() string`.
   - `winCerts` fields: `brokerADCS`, `aliceADCS`, `aliceSID`, `aliceComma`, `aliceHighBit` and
@@ -2271,6 +2560,24 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
     `aliceCommaKey` and `aliceHighBitKey`; and the files `brokerCertFile` and `brokerKeyFile`.
 
 - [ ] **Step 1: Write the bring-up** in `tests/lab/windows_test.go`.
+
+First append this test to `tests/lab/windows_unit_test.go`. It fails to build until `winDC` and
+its `Format` exist:
+
+```go
+// The DC's runner holds every password and private key of the run; no format
+// verb may print one (pre-flight M11).
+func TestWindowsDCPrintsNoSecret(t *testing.T) {
+	w := &winDC{sec: &winSecrets{AdminPassword: "Aa1!admin", DSRMPassword: "Aa1!dsrm"}, port49: "Aa1!port49",
+		invalid: []string{"sid: x"}}
+	out := fmt.Sprintf("%v %+v %#v %s %v", w, w, w, w, *w)
+	for _, s := range []string{"Aa1!admin", "Aa1!dsrm", "Aa1!port49"} {
+		if strings.Contains(out, s) {
+			t.Fatalf("a secret printed: %s", out)
+		}
+	}
+}
+```
 
 Delete the placeholder `winDC` type and its three methods from `directory_test.go`. Then add:
 
@@ -2287,7 +2594,37 @@ type winDC struct {
 	facts        winFacts
 	certs        winCerts
 	adcsRoot     *x509.Certificate
+	invalid      []string // "<area>: <scrubbed error>" for each setup step that failed three times (R6)
 }
+
+// winDC holds every password and private key of the run, so it prints as its
+// project's name whatever the verb, as a value or a pointer.
+func (w winDC) String() string             { return "windows dc (" + winProject + ")" }
+func (w winDC) GoString() string           { return w.String() }
+func (w winDC) Format(f fmt.State, _ rune) { fmt.Fprint(f, w.String()) }
+
+// invalidFor is why area's cells are INVALID (R6), or "" when its setup
+// step succeeded.
+func (w *winDC) invalidFor(area string) string {
+	for _, s := range w.invalid {
+		if rest, ok := strings.CutPrefix(s, area+": "); ok {
+			return rest
+		}
+	}
+	return ""
+}
+
+// winScriptErr is a script that ran: the SSH session opened and the command
+// returned, so the VM and sshd are up and what failed is the script or the
+// bootstrap. thrown is the script's own error ({"error": ...}); otherwise the
+// bootstrap wrote no result at all. msg is scrubbed.
+type winScriptErr struct {
+	name   string
+	thrown bool
+	msg    string
+}
+
+func (e *winScriptErr) Error() string { return "windows " + e.name + ": " + e.msg }
 
 // winState is what a built DC keeps between runs (state.json, no secret).
 type winState struct {
@@ -2316,9 +2653,9 @@ type winFacts struct {
 
 // winCerts is the run's client certificates, each key on this host only.
 type winCerts struct {
-	brokerADCS, aliceADCS, aliceSID, aliceComma, aliceHighBit, dcKDC  *x509.Certificate
+	brokerADCS, aliceADCS, aliceSID, aliceComma, aliceHighBit, dcKDC     *x509.Certificate
 	brokerKey, aliceADCSKey, aliceSIDKey, aliceCommaKey, aliceHighBitKey *rsa.PrivateKey
-	brokerCertFile, brokerKeyFile                                     string
+	brokerCertFile, brokerKeyFile                                        string
 }
 
 func (w *winDC) dockerCompose(args ...string) *exec.Cmd {
@@ -2395,31 +2732,72 @@ func (w *winDC) ps(ctx context.Context, name string, params map[string]any) (jso
 		c.Close()
 		return nil, fmt.Errorf("windows %s: %w", name, ctx.Err())
 	}
+	// From here the session ran the command: every error is a *winScriptErr.
 	res, rerr := winResult(out.Bytes())
 	if rerr != nil {
-		return nil, fmt.Errorf("windows %s: %s (stderr: %s)", name, winScrub(rerr.Error(), w.secrets()...),
-			winScrub(oneLineMax(errb.String(), 300), w.secrets()...))
+		var thrown *winThrownError
+		return nil, &winScriptErr{name: name, thrown: errors.As(rerr, &thrown), msg: fmt.Sprintf("%s (stderr: %s)",
+			winScrub(rerr.Error(), w.secrets()...), winScrub(oneLineMax(errb.String(), 300), w.secrets()...))}
 	}
 	if err != nil {
-		return nil, fmt.Errorf("windows %s: %s", name, winScrub(err.Error(), w.secrets()...))
+		return nil, &winScriptErr{name: name, msg: winScrub(err.Error(), w.secrets()...)}
 	}
 	return res, nil
 }
 
-// run is ps under a deadline, fatal on error: a setup step's failure is the
-// harness's, never a measurement. into, when not nil, receives the result.
-func (w *winDC) run(t *testing.T, name string, params map[string]any, within time.Duration, into any) {
+// try is ps under a deadline, saying every two minutes that the step is
+// still running (a promotion or AD CS install is silent for up to half an
+// hour, and the watchdog must not read that as a stall). It never fails the
+// test; into, when not nil, receives the result.
+func (w *winDC) try(t *testing.T, name string, params map[string]any, within time.Duration, into any) error {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), within)
 	defer cancel()
+	start, done := time.Now(), make(chan struct{})
+	defer close(done)
+	go func() {
+		tick := time.NewTicker(2 * time.Minute)
+		defer tick.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-tick.C:
+				t.Logf("windows: %s still running (%s)", name, time.Since(start).Round(time.Second))
+			}
+		}
+	}()
 	res, err := w.ps(ctx, name, params)
 	if err != nil {
-		t.Fatalf("%v", err)
+		return err
 	}
 	if into != nil {
 		if err := json.Unmarshal(res, into); err != nil {
-			t.Fatalf("windows %s: reading its result: %v", name, err)
+			return fmt.Errorf("windows %s: reading its result: %v", name, err)
 		}
+	}
+	return nil
+}
+
+// run is try, fatal on error: a setup step's failure is the harness's, never
+// a measurement.
+func (w *winDC) run(t *testing.T, name string, params map[string]any, within time.Duration, into any) {
+	t.Helper()
+	if err := w.try(t, name, params, within, into); err != nil {
+		t.Fatalf("%v", err)
+	}
+}
+
+// service stops or starts the DC's KDC (service.ps1), fatal unless it
+// reaches the state asked.
+func (w *winDC) service(t *testing.T, name, state string) {
+	t.Helper()
+	var r struct {
+		Status string `json:"status"`
+	}
+	w.run(t, "service", map[string]any{"name": name, "state": state}, 5*time.Minute, &r)
+	if want := map[string]string{"stop": "Stopped", "start": "Running"}[state]; r.Status != want {
+		t.Fatalf("windows: %s is %s after %s, want %s", name, r.Status, state, want)
 	}
 }
 
@@ -2431,16 +2809,26 @@ func (w *winDC) logTail(n int) string {
 
 // waitSSH waits for the VM's sshd to take the Administrator's password and
 // run a script, saying every two minutes what dockur last said: Windows
-// Setup is silent for long stretches.
+// Setup is silent for long stretches. A script that ran and failed means
+// the VM is up and the bootstrap is broken, which no wait mends: three in a
+// row fail the run at once, not after the whole wait.
 func (w *winDC) waitSSH(t *testing.T, within time.Duration) {
 	t.Helper()
-	deadline, next := time.Now().Add(within), time.Now()
+	deadline, next, ran := time.Now().Add(within), time.Now(), 0
 	for {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		_, err := w.ps(ctx, "clock", nil)
 		cancel()
 		if err == nil {
 			return
+		}
+		var se *winScriptErr
+		if errors.As(err, &se) {
+			if ran++; ran >= 3 {
+				t.Fatalf("windows: the VM answers SSH but the bootstrap fails, three times in a row: %v", err)
+			}
+		} else {
+			ran = 0
 		}
 		if up, _ := w.dockerCompose("ps", "--status", "running", "-q", "dc").Output(); strings.TrimSpace(string(up)) == "" {
 			t.Fatalf("windows: the dc container is not running; dockur: %s", w.logTail(1500))
@@ -2456,15 +2844,27 @@ func (w *winDC) waitSSH(t *testing.T, within time.Duration) {
 	}
 }
 
+// waitReady waits for AD DS to answer after the promotion's reboot. ready.ps1
+// throws while AD Web Services starts, which is the wait's own business; a
+// bootstrap that wrote no result at all, three times in a row, is broken and
+// fails the run at once (waitSSH's rule, for the bootstrap only).
 func (w *winDC) waitReady(t *testing.T, within time.Duration) {
 	t.Helper()
-	deadline := time.Now().Add(within)
+	deadline, broken := time.Now().Add(within), 0
 	for {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		_, err := w.ps(ctx, "ready", nil)
 		cancel()
 		if err == nil {
 			return
+		}
+		var se *winScriptErr
+		if errors.As(err, &se) && !se.thrown {
+			if broken++; broken >= 3 {
+				t.Fatalf("windows: the bootstrap wrote no result three times in a row after the reboot: %v", err)
+			}
+		} else {
+			broken = 0
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("windows: AD DS did not answer within %s of the promotion's reboot: %v", within, err)
@@ -2473,21 +2873,21 @@ func (w *winDC) waitReady(t *testing.T, within time.Duration) {
 	}
 }
 
-// writeFile0600 writes body to path, owner-only.
-func writeFile0600(t *testing.T, path string, body []byte) {
+// winWriteFile0600 writes body to path, owner-only.
+func winWriteFile0600(t *testing.T, path string, body []byte) {
 	t.Helper()
 	if err := os.WriteFile(path, body, 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func writeJSON0600(t *testing.T, path string, v any) {
+func winWriteJSON0600(t *testing.T, path string, v any) {
 	t.Helper()
 	b, err := json.Marshal(v)
 	if err != nil {
 		t.Fatal(err)
 	}
-	writeFile0600(t, path, b)
+	winWriteFile0600(t, path, b)
 }
 
 // loadKept reads a kept DC's secrets and state, true when both are there, it
@@ -2507,11 +2907,11 @@ func (w *winDC) loadKept() bool {
 	return strings.TrimSpace(string(up)) != ""
 }
 
-// ensureWindowsISO is the pinned evaluation ISO's path in the cache
+// winEnsureISO is the pinned evaluation ISO's path in the cache
 // (PORT49_LAB_ISO_DIR, default ~/.cache/port49-lab/iso), downloaded from
 // Microsoft on first use and checked by size and SHA-256 every time: a file
 // that does not match is never handed to the VM.
-func ensureWindowsISO(t *testing.T) string {
+func winEnsureISO(t *testing.T) string {
 	t.Helper()
 	dir := os.Getenv("PORT49_LAB_ISO_DIR")
 	if dir == "" {
@@ -2582,7 +2982,7 @@ func winDiskCheck(t *testing.T, dir string, need uint64) {
 		t.Fatal(err)
 	}
 	if free := st.Bavail * uint64(st.Bsize) >> 30; free < need {
-		t.Fatalf("windows: %d GiB free on the lab's filesystem, the run needs %d (grow the root LV first)", free, need)
+		t.Fatalf("windows: %d GiB free on the lab's filesystem, the run needs %d (stop and report: Lab rules)", free, need)
 	}
 }
 
@@ -2609,17 +3009,23 @@ func startWindowsDC(t *testing.T, d *directories) *labDir {
 		if w.sec, err = newWinSecrets(); err != nil {
 			t.Fatal(err)
 		}
-		writeJSON0600(t, filepath.Join(w.dir, "secrets.json"), w.sec)
-		writeFile0600(t, filepath.Join(w.dir, "windows.env"), []byte(winEnv(w.sec)))
+		winWriteJSON0600(t, filepath.Join(w.dir, "secrets.json"), w.sec)
+		winWriteFile0600(t, filepath.Join(w.dir, "windows.env"), []byte(winEnv(w.sec)))
+		// Registered at once, so a failed disk check or ISO download leaves no
+		// secret behind; down repeats it. Not with KEEP: a kept DC needs them.
+		if os.Getenv("PORT49_LAB_WINDOWS_KEEP") == "" {
+			t.Cleanup(w.removeSecrets)
+		}
+		// Before the ISO: a first run downloads 8.2 GB.
+		winDiskCheck(t, w.dir, 66)
 	}
 	d.extra = append(d.extra, w.sec.all()...)
-	iso := ensureWindowsISO(t)
-	writeFile0600(t, filepath.Join(w.dir, "compose.env"), []byte("PORT49_LAB_WINDOWS_ISO="+iso+"\n"))
+	iso := winEnsureISO(t)
+	winWriteFile0600(t, filepath.Join(w.dir, "compose.env"), []byte("PORT49_LAB_WINDOWS_ISO="+iso+"\n"))
 	if os.Getenv("PORT49_LAB_WINDOWS_KEEP") == "" {
 		t.Cleanup(func() { w.down(t) })
 	}
 	if !w.reused {
-		winDiskCheck(t, w.dir, 66)
 		_ = w.dockerCompose("--profile", "tools", "down", "-v", "--remove-orphans", "-t", "120").Run()
 		if b, err := w.dockerCompose("--profile", "tools", "build", "pkinit").CombinedOutput(); err != nil {
 			t.Fatalf("building the pkinit image: %v\n%s", err, tailOf(string(b), 2000))
@@ -2638,7 +3044,7 @@ func startWindowsDC(t *testing.T, d *directories) *labDir {
 		}
 		w.run(t, "seed", map[string]any{"port49_password": w.port49}, 15*time.Minute, &seed)
 		w.state = winState{Built: true, AliceCreated: seed.AliceCreated, Loop: seed.Loop}
-		writeJSON0600(t, filepath.Join(w.dir, "state.json"), w.state)
+		winWriteJSON0600(t, filepath.Join(w.dir, "state.json"), w.state)
 	}
 	l := &labDir{name: platWindows, service: "dc", uri: "ldaps://localhost:30636", plainURI: "ldap://localhost:30389",
 		bindDN: "CN=port49,OU=Svc," + dirBase, userFilter: "(&(objectCategory=person)(objectClass=user))",
@@ -2648,8 +3054,9 @@ func startWindowsDC(t *testing.T, d *directories) *labDir {
 			"`tests/lab/directory/windows/compose.yaml` (no network device)",
 		credentials: "none appear here or in the evidence. The Administrator, DSRM and port49 passwords are generated for " +
 			"each run, held only in 0600 files under `tests/lab/logs/windows`, and reach the VM on an SSH session's stdin, " +
-			"never on a command line; alice's is made on the DC and never leaves it. The keytab and every private key stay " +
-			"on the host that ran it, 0600, and are removed at the end of the run.",
+			"never on a host command line; the one command line that carries one is `ktpass`'s own, inside the VM, which " +
+			"is destroyed at the end of the run. Alice's is made on the DC and never leaves it. The keytab and every " +
+			"private key stay on the host that ran it, 0600, and are removed at the end of the run.",
 		keytabFile: filepath.Join(w.dir, "port49.keytab"), krb5File: filepath.Join(w.dir, "krb5.conf")}
 	if w.state.Loop != "made" {
 		l.loopRefused = w.state.Loop
@@ -2676,10 +3083,10 @@ func (w *winDC) perRun(t *testing.T, l *labDir) {
 	}
 	w.run(t, "adcs", nil, 30*time.Minute, &adcs)
 	var err error
-	if w.adcsRoot, err = parsePEMCert([]byte(adcs.CAPEM)); err != nil {
+	if w.adcsRoot, err = winParsePEMCert([]byte(adcs.CAPEM)); err != nil {
 		t.Fatalf("windows: the enterprise CA's certificate: %v", err)
 	}
-	if w.certs.dcKDC, err = parsePEMCert([]byte(adcs.KDCPEM)); err != nil {
+	if w.certs.dcKDC, err = winParsePEMCert([]byte(adcs.KDCPEM)); err != nil {
 		t.Fatalf("windows: the DC's KDC certificate: %v", err)
 	}
 	var req struct {
@@ -2692,16 +3099,27 @@ func (w *winDC) perRun(t *testing.T, l *labDir) {
 	}
 	w.run(t, "ldaps", map[string]any{"step": "install", "cert_pem": string(certPEM), "lab_ca_pem": string(d.pki.ca.PEM())},
 		5*time.Minute, nil)
-	var kt struct {
-		KeytabB64 string `json:"keytab_b64"`
+	// The keytab: three tries, then the GSSAPI cells are INVALID (R6) and the
+	// run goes on to the cells that need no keytab.
+	var kerr error
+	for try := 0; try < 3; try++ {
+		var kt struct {
+			KeytabB64 string `json:"keytab_b64"`
+		}
+		if kerr = w.try(t, "keytab", map[string]any{"port49_password": w.port49}, 5*time.Minute, &kt); kerr == nil {
+			raw, err := base64.StdEncoding.DecodeString(kt.KeytabB64)
+			if err == nil && len(raw) > 0 {
+				winWriteFile0600(t, l.keytabFile, raw)
+				break
+			}
+			kerr = fmt.Errorf("the keytab did not come back (%d bytes): %v", len(raw), err)
+		}
+		t.Logf("windows: keytab, try %d of 3: %s", try+1, winScrub(kerr.Error(), w.secrets()...))
 	}
-	w.run(t, "keytab", map[string]any{"port49_password": w.port49}, 5*time.Minute, &kt)
-	raw, err := base64.StdEncoding.DecodeString(kt.KeytabB64)
-	if err != nil || len(raw) == 0 {
-		t.Fatalf("windows: the keytab did not come back (%d bytes): %v", len(raw), err)
+	if kerr != nil {
+		w.invalid = append(w.invalid, "keytab: "+winScrub(oneLineMax(kerr.Error(), 300), w.secrets()...))
 	}
-	writeFile0600(t, l.keytabFile, raw)
-	writeFile0600(t, l.krb5File, []byte(krb5Conf(winKDC)))
+	winWriteFile0600(t, l.krb5File, []byte(krb5Conf(winKDC)))
 	comma, commaKey, err := winCommaCA(time.Now())
 	if err != nil {
 		t.Fatal(err)
@@ -2710,10 +3128,10 @@ func (w *winDC) perRun(t *testing.T, l *labDir) {
 		name string
 		c    *x509.Certificate
 	}{{"lab-users-ca", d.pki.usersCA}, {"lab-users-comma-ca", comma}} {
-		w.run(t, "trust", map[string]any{"ca_pem": string(pemCert(ca.c)), "name": ca.name}, 5*time.Minute, nil)
+		w.run(t, "trust", map[string]any{"ca_pem": string(winPEMCert(ca.c)), "name": ca.name}, 5*time.Minute, nil)
 	}
-	writeFile0600(t, filepath.Join(w.dir, "pkinit", "krb5.conf"), []byte(winPKINITConf(winKDCInNet)))
-	writeFile0600(t, filepath.Join(w.dir, "pkinit", "adcs-root.pem"), pemCert(w.adcsRoot))
+	winWriteFile0600(t, filepath.Join(w.dir, "pkinit", "krb5.conf"), []byte(winPKINITConf(winKDCInNet)))
+	winWriteFile0600(t, filepath.Join(w.dir, "pkinit", "adcs-root.pem"), winPEMCert(w.adcsRoot))
 	w.issueCerts(t, d, comma, commaKey)
 	w.run(t, "facts", nil, 5*time.Minute, &w.facts)
 }
@@ -2741,13 +3159,17 @@ func (w *winDC) issueCerts(t *testing.T, d *directories, comma *x509.Certificate
 		winHighBitSerial(), now); err != nil {
 		t.Fatal(err)
 	}
-	if err := winIssuedAfter(w.state.AliceCreated, c.aliceADCS, c.aliceSID, c.aliceComma, c.aliceHighBit); err != nil {
+	people := []*x509.Certificate{c.aliceADCS, c.aliceComma, c.aliceHighBit}
+	if c.aliceSID != nil { // nil when enroll_as failed three times: the sid cells are INVALID
+		people = append(people, c.aliceSID)
+	}
+	if err := winIssuedAfter(w.state.AliceCreated, people...); err != nil {
 		t.Fatalf("windows: precondition: %v", err)
 	}
 	c.brokerCertFile = filepath.Join(w.dir, "broker-adcs.pem")
 	c.brokerKeyFile = filepath.Join(w.dir, "broker-adcs-key.pem")
-	writeFile0600(t, c.brokerCertFile, pemCert(c.brokerADCS))
-	writeFile0600(t, c.brokerKeyFile, pemKey(c.brokerKey))
+	winWriteFile0600(t, c.brokerCertFile, winPEMCert(c.brokerADCS))
+	winWriteFile0600(t, c.brokerKeyFile, winPEMKey(c.brokerKey))
 }
 
 // issue has the enterprise CA sign a request for cn (and upn) under template,
@@ -2762,7 +3184,7 @@ func (w *winDC) issue(t *testing.T, cn, upn, template string) (*x509.Certificate
 		CertPEM string `json:"cert_pem"`
 	}
 	w.run(t, "issue", map[string]any{"csr_pem": string(csr), "template": template}, 5*time.Minute, &r)
-	c, err := parsePEMCert([]byte(r.CertPEM))
+	c, err := winParsePEMCert([]byte(r.CertPEM))
 	if err != nil {
 		t.Fatalf("windows: the %s certificate for %s: %v", template, cn, err)
 	}
@@ -2770,21 +3192,31 @@ func (w *winDC) issue(t *testing.T, cn, upn, template string) (*x509.Certificate
 }
 
 // enrollAs is user's own User certificate, requested as user (enroll_as.ps1).
+// It is the riskiest step: after three failed tries it returns nil, nil and
+// records why in w.invalid, so the sid cells are INVALID (R6) and the run goes
+// on to every cell that does not need the certificate.
 func (w *winDC) enrollAs(t *testing.T, user string) (*x509.Certificate, *rsa.PrivateKey) {
 	t.Helper()
-	csr, key, err := winCSR(user, "")
-	if err != nil {
-		t.Fatal(err)
+	var err error
+	for try := 0; try < 3; try++ {
+		var csr []byte
+		var key *rsa.PrivateKey
+		if csr, key, err = winCSR(user, ""); err != nil {
+			t.Fatal(err)
+		}
+		var r struct {
+			CertPEM string `json:"cert_pem"`
+		}
+		if err = w.try(t, "enroll_as", map[string]any{"csr_pem": string(csr), "user": user}, 10*time.Minute, &r); err == nil {
+			var c *x509.Certificate
+			if c, err = winParsePEMCert([]byte(r.CertPEM)); err == nil {
+				return c, key
+			}
+		}
+		t.Logf("windows: enroll_as %s, try %d of 3: %s", user, try+1, winScrub(err.Error(), w.secrets()...))
 	}
-	var r struct {
-		CertPEM string `json:"cert_pem"`
-	}
-	w.run(t, "enroll_as", map[string]any{"csr_pem": string(csr), "user": user}, 10*time.Minute, &r)
-	c, err := parsePEMCert([]byte(r.CertPEM))
-	if err != nil {
-		t.Fatalf("windows: %s's User certificate: %v", user, err)
-	}
-	return c, key
+	w.invalid = append(w.invalid, "sid: enroll_as: "+winScrub(oneLineMax(err.Error(), 300), w.secrets()...))
+	return nil, nil
 }
 
 // clock is the DC's UTC time, ISO 8601: the "since" of an events read, on
@@ -2867,17 +3299,17 @@ func (l *labDir) setRegistry(t *testing.T, name string, value int) string {
 // the Debian container on the project network, and reads the answer from
 // MIT's trace, which is parsed and never printed. The key file is 0600 and
 // removed after.
-func (w *winDC) kinit(t *testing.T, label, principal string, c *x509.Certificate, key *rsa.PrivateKey) pkinitResult {
+func (w *winDC) kinit(t *testing.T, label, principal string, c *x509.Certificate, key *rsa.PrivateKey) winPKINITResult {
 	t.Helper()
 	base := filepath.Join(w.dir, "pkinit", label)
-	writeFile0600(t, base+".pem", pemCert(c))
-	writeFile0600(t, base+"-key.pem", pemKey(key))
+	winWriteFile0600(t, base+".pem", winPEMCert(c))
+	winWriteFile0600(t, base+"-key.pem", winPEMKey(key))
 	defer os.Remove(base + "-key.pem")
 	script := fmt.Sprintf(`export KRB5_CONFIG=/l44/krb5.conf; KRB5_TRACE=/dev/stdout kinit -X X509_user_identity=FILE:/l44/%[1]s.pem,/l44/%[1]s-key.pem %[2]s </dev/null 2>&1; echo "lab: kinit exit $?"; klist 2>&1`,
 		label, principal)
 	start := time.Now()
 	out, _ := w.dockerCompose("--profile", "tools", "run", "--rm", "-T", "pkinit", "sh", "-c", script).CombinedOutput()
-	r := parseKinit(string(out))
+	r := winParseKinit(string(out))
 	r.took = time.Since(start)
 	return r
 }
@@ -2893,6 +3325,12 @@ func (w *winDC) down(t *testing.T) {
 	if b, err := w.dockerCompose("--profile", "tools", "down", "-v", "--remove-orphans", "-t", "120").CombinedOutput(); err != nil {
 		t.Errorf("docker compose down (windows): %v\n%s", err, tailOf(string(b), 2000))
 	}
+	w.removeSecrets()
+}
+
+// removeSecrets removes every secret, key and keytab the run wrote, and the
+// kept DC's state. It is safe to call twice.
+func (w *winDC) removeSecrets() {
 	for _, f := range []string{"pkinit", "port49.keytab", "broker-adcs-key.pem", "secrets.json", "windows.env", "state.json"} {
 		_ = os.RemoveAll(filepath.Join(w.dir, f))
 	}
@@ -2949,17 +3387,34 @@ func (w *winDC) configNote() string {
 		"- The DC's account carries the extra SPN `ldap/localhost`, as on Samba; the client `krb5.conf` reaches the KDC at " +
 		"127.0.0.1:30088 over TCP.\n" +
 		"- `port49` is an ordinary domain user, AES only; its keytab is made with `ktpass` (AES256-SHA1, " +
-		"`-mapuser CORP\\port49`), which also sets its UPN.\n" +
+		"`-mapuser CORP\\port49`), which also sets its UPN. `ktpass` takes the password on its own command line inside " +
+		"the VM, the one place a secret is on a command line.\n" +
 		"- AD CS: an enterprise root CA `corp-L44-CA` on the DC, `OfflineRouter` published for requests whose subject the " +
 		"harness supplies, and the DC's `KerberosAuthentication` certificate enrolled for PKINIT. The lab users CA and a " +
 		"second CA whose CN holds a comma are in the DC's Root store and in NTAuth.\n" +
+		"- Each KB5014754 block starts with a control, `control-ski`: alice's AD CS certificate under the strong " +
+		"`X509:<SKI>` mapping, which no part of the claim is about. A block whose control got no TGT is INVALID.\n" +
+		"- The KDC is stopped for one EXTERNAL cell (OR-1) and started again at once; the next cell repeats the mapped " +
+		"bind to show the DC recovered.\n" +
 		"- Alice's `User` certificate is requested as alice over WinRM with CredSSP, under a session configuration only she " +
 		"may use; all of it is removed after, and her password for it is made on the DC, used once and replaced.\n" +
 		"- During the KB5014754 table only, `UseCachedCRLOnlyAndIgnoreRevocationUnknownErrors = 1` on the KDC: the " +
 		"harness's own CAs publish no CRL, and revocation is no part of the claim. Removed after.\n" +
 		"- LDAP interface diagnostics at level 2 (`16 LDAP Interface Events`), so the DC logs bind and channel-binding events.\n" +
 		"- PKINIT's client is MIT Kerberos 1.20 (`kinit`, Debian bookworm's `krb5-pkinit`) on the project network, with " +
-		"`pkinit_kdc_hostname`, as MIT documents for an Active Directory KDC.\n\n"
+		"`pkinit_kdc_hostname`, as MIT documents for an Active Directory KDC.\n\n" +
+		"### Running it again\n\n" +
+		"- From a worktree pinned at the commit under test: `go test -tags lab ./tests/lab/ -run '^TestL44WindowsAD$' " +
+		"-count=1 -v -timeout 240m`. It needs `/dev/kvm`, Docker with Compose v2.24.4+, 6 GB of RAM and 66 GiB free; a " +
+		"fresh run takes 1.5 to 2.5 hours. Windows Setup can be watched at `http://127.0.0.1:8006`.\n" +
+		"- The evaluation ISO is cached in `PORT49_LAB_ISO_DIR` (default `~/.cache/port49-lab/iso`), checked by size and " +
+		"SHA-256 on every run, and never committed or redistributed.\n" +
+		"- `PORT49_LAB_WINDOWS_KEEP` leaves the DC and its secrets up; `PORT49_LAB_WINDOWS_REUSE` runs on a kept DC. Both " +
+		"are for developing the harness: a note from a reused DC says so and never closes L44.\n" +
+		"- Under `tests/lab/logs/windows`, `windows.env`, `secrets.json`, `port49.keytab`, `broker-adcs-key.pem` and " +
+		"`pkinit/*-key.pem` hold secrets: never print them. The run removes them unless `PORT49_LAB_WINDOWS_KEEP` is set.\n" +
+		"- Never run `docker compose config` or `docker inspect` on project `port49labwin`: both print the " +
+		"Administrator's password from the environment.\n\n"
 }
 ```
 
@@ -2967,7 +3422,7 @@ Imports to add to `windows_test.go`: `bytes`, `context`, `net`, `net/http`, `os/
 `path/filepath`, `syscall`, `testing`, `golang.org/x/crypto/ssh` and
 `github.com/rhwendt/port49/internal/directory`.
 
-- [ ] **Step 2: The feasibility gate test and the make target**
+- [ ] **Step 2: The feasibility gate test**
 
 Create `tests/lab/l44_test.go`:
 
@@ -2984,13 +3439,22 @@ import (
 
 // TestL44Bringup is the DC's bring-up alone, with no measurement: everything
 // L44 needs before it measures anything. It writes no note. Run it with
-// -run '^TestL44Bringup$'; make lab-windows runs TestL44WindowsAD alone.
+//
+//	go test -tags lab ./tests/lab/ -run '^TestL44Bringup$' -count=1 -v -timeout 240m
+//
+// TestL44WindowsAD is the measurement (its comment has its command).
 func TestL44Bringup(t *testing.T) {
 	d := newDirectories(t)
 	dc := startWindowsDC(t, d)
 	c := dc.win.certs
-	if _, err := directory.SIDOf(c.aliceSID); err != nil {
-		t.Errorf("alice's User certificate carries no SID extension: %v", err)
+	// Not a failed bring-up: the run goes on, those cells INVALID (Step 6).
+	for _, why := range dc.win.invalid {
+		t.Logf("windows: INVALID (R6): a setup step failed three times; its cells will be INVALID: %s", why)
+	}
+	if c.aliceSID != nil {
+		if _, err := directory.SIDOf(c.aliceSID); err != nil {
+			t.Errorf("alice's User certificate carries no SID extension: %v", err)
+		}
 	}
 	if _, err := directory.SIDOf(c.aliceADCS); err == nil {
 		t.Errorf("alice's OfflineRouter certificate carries a SID extension; the matrix needs one without")
@@ -2999,54 +3463,36 @@ func TestL44Bringup(t *testing.T) {
 	if r := dc.tryBind(t, ev, "simple", dc.bindSimple(), d.password); !r.ok || r.read != 1 {
 		t.Errorf("the simple bind over LDAPS, the lab's premise: %+v", r)
 	}
-	if r := dc.tryBind(t, ev, "gssapi", dc.bindGSSAPI(), ""); !r.ok {
+	if why := dc.win.invalidFor("keytab"); why != "" {
+		t.Logf("GSSAPI: no keytab (%s); its cells will be INVALID", why)
+	} else if r := dc.tryBind(t, ev, "gssapi", dc.bindGSSAPI(), ""); !r.ok {
 		t.Logf("GSSAPI as installed: %s (measured in TestL44WindowsAD, not a bring-up failure)", r.text)
 	}
 	t.Logf("windows: %s; fixture loaded, LDAPS verified, keytab and certificates issued", dc.win.version())
 }
 ```
 
-In the `Makefile`, add `lab-windows` to `.PHONY`. After `lab-directory`, add:
-
-```make
-# The Windows Server AD lab (L44): Windows Server 2025 Evaluation as a KVM VM in
-# dockurr/windows, set up as a DC over SSH; no network device. Needs /dev/kvm,
-# Docker with Compose v2.24.4+ and 66 GiB free on / (tests/lab/README.md,
-# "Windows Server AD (L44)"). A fresh run takes one and a half to two and a half
-# hours, most of it Windows Setup.
-lab-windows:
-	go test -tags lab ./tests/lab/ -run '^TestL44WindowsAD$$' -count=1 -v -timeout 240m
-```
-
-In `tests/lab/README.md`, under "Directories (plan 7g)", add a subsection
-"### Windows Server AD (L44)" stating:
-- what runs (the compose project, the image digest, the ISO URL, size and SHA-256, the cache dir
-  and `PORT49_LAB_ISO_DIR`);
-- the disk, RAM and time needs from "Lab rules";
-- `PORT49_LAB_WINDOWS_KEEP` and `PORT49_LAB_WINDOWS_REUSE`, with R7's warning;
-- the files under `tests/lab/logs/windows`, and which hold secrets (`windows.env`,
-  `secrets.json`, `port49.keytab`, `broker-adcs-key.pem`, `pkinit/*-key.pem`);
-- the two commands never to run (`docker compose config` and `docker inspect` on
-  `port49labwin`);
-- the web viewer on `http://127.0.0.1:8006` for watching Setup;
-- every accommodation in `configNote`, so a reader of the README alone sees them.
+The run command lives in the comments of `TestL44Bringup` and `TestL44WindowsAD` (Task 5), in
+`compose.yaml`'s header and in the note. The `Makefile` and `tests/lab/README.md` are not edited
+(controller R1).
 
 - [ ] **Step 3: Compile and unit-test**
 
 Run: `make lab-unit && go vet -tags lab ./tests/lab/ && gofmt -l tests/lab`
 
-Expected: PASS, with vet silent and gofmt printing nothing.
+Expected: PASS, including `TestWindowsDCPrintsNoSecret`, with vet silent and gofmt printing
+nothing.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git -C /home/rwendt/git/port49/.worktrees/l44 add tests/lab/windows_test.go tests/lab/directory_test.go tests/lab/l44_test.go Makefile tests/lab/README.md
+git -C /home/rwendt/git/port49/.worktrees/l44 add tests/lab/windows_test.go tests/lab/windows_unit_test.go tests/lab/directory_test.go tests/lab/l44_test.go
 git -C /home/rwendt/git/port49/.worktrees/l44 commit -m "test(lab): bring up a Windows Server 2025 DC for L44
 
 dockur installs the pinned evaluation ISO; the harness promotes it over SSH,
 loads L42's fixture, installs AD CS, serves LDAPS on the lab CA's certificate,
 makes port49's keytab with ktpass and issues the run's client certificates.
-make lab-windows; TestL44Bringup is the bring-up alone.
+TestL44Bringup is the bring-up alone; its comment holds the command.
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
@@ -3055,7 +3501,7 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 - [ ] **Step 5: Before the gate run, check the host**
 
 ```bash
-df -h / | tail -1                      # at least 66G Avail; else the controller extends the LV first
+df -h / | tail -1                      # at least 66G Avail; else stop and report (Lab rules)
 ls -l /dev/kvm /dev/net/tun            # both present
 sg docker -c "docker ps --format '{{.Names}}'"   # no other lab running
 ss -ltn | grep -E ':(8006|30022|30088|30389|30636)\b' || echo "ports free"
@@ -3077,20 +3523,37 @@ Start the background stall watchdog first (Lab rules). Then wait in a foreground
 Expected: `--- PASS: TestL44Bringup`. The log shows the build from `version()`, and no other line
 beyond the progress lines.
 
+A `windows: INVALID (R6)` line means `enroll_as` or `ktpass` failed three times. That is not a
+failed bring-up: the gate passes, and Task 6 will record those cells INVALID, which keeps L44
+open. Try the harness fixes below for it first. If none works, go on to Task 5 and report the
+INVALID cells to the controller.
+
 **If it fails,** read `tests/lab/logs/windows/dc.log` with `tail`; it holds no secret. Fix the
 harness on `.worktrees/l44` in a `fix(lab):` commit, re-pin `lab-l44` at the fix, and run again.
 The likely causes and their fixes, in order of likelihood:
 - **No SSH, but dockur says Setup finished.** `install.bat` did not run. Check `C:\OEM` through
   the viewer at `http://127.0.0.1:8006`. Fallback: dockur's `COMMAND` variable with the same
   PowerShell line.
+- **The VM answers SSH, but the bootstrap fails three times in a row.** `waitSSH` fails at once
+  with the scrubbed error and stderr; it does not wait out the 150 minutes. Check, from the viewer,
+  that `powershell.exe -EncodedCommand` reads stdin through `[Console]::In` over Win32-OpenSSH.
 - **dockur did not detect the custom ISO.** Fallback, recorded in the note's configuration
   section: `VERSION: "2025"` and `VERIFY: "Y"` in place of the `/custom.iso` mount. dockur then
-  downloads the same URL and checks the same SHA-256 (`define.sh`, `win2025-eval`).
-- **`enroll_as` is refused,** by WinRM, CredSSP or the CA. Try three times. If it still fails,
-  the SID cells will be INVALID (R6), and the plan continues. The SID extension is still compared
-  on the DC's own certificate.
-- **`ktpass` or GSSAPI fails** because of the key version or the salt. The keytab cell becomes
-  INVALID after three tries; report the `ktpass` exit code and nothing more.
+  downloads the same URL and checks the same SHA-256 (`define.sh`, `win2025-eval`). This
+  fallback has two costs, and both go in the same `fix(lab):` commit:
+  - It breaks `TestWindowsComposePinsTheImage`'s `:/custom.iso:ro` check, which then asserts
+    `VERIFY: "Y"` and the version instead.
+  - It downloads 8 GB on every fresh run, because the `storage` volume is removed at teardown.
+- **`enroll_as` is refused,** by WinRM, CredSSP or the CA. `enrollAs` tries three times. If it
+  still fails, it records why in `w.invalid`, and the `sid-*` cells are INVALID (R6). The run
+  goes on, and the gate reports the failure as a `t.Errorf`. The SID extension is still compared
+  on the KDC-EKU certificate. A fallback for a harness fix is AD CS's own enroll-on-behalf-of with
+  an Enrollment Agent certificate, a standard feature. Another is a scheduled task run as alice
+  with a temporary SeBatchLogonRight. Neither is verified to write the SID extension; the run
+  checks it with `SIDOf`, as it does now.
+- **`ktpass` or GSSAPI fails** because of the key version or the salt. The keytab is tried three
+  times, then recorded in `w.invalid`, and the GSSAPI cells are INVALID. Report the `ktpass` exit
+  code and nothing more.
 
 **Stop rule:** three failed bring-ups with no harness fix left means stop and report to the
 controller, with the failing step and the dockur log tail. L44 stays open.
@@ -3108,13 +3571,23 @@ After the run, check the "After every run, confirm" list, then
 
 **Interfaces:**
 - Consumes:
-  - Task 4: `startWindowsDC`, `winDC.kinit`, `setAltSec`, `setRegistry`, `events`, `clock`,
-    `checkSkew` and `certs`.
+  - Task 4: `startWindowsDC`, `winDC.kinit`, `setAltSec`, `setRegistry`, `service`, `events`,
+    `clock`, `checkSkew`, `invalidFor` and `certs`.
+  - Task 2: `winAltSecSKI`, `winAltSecEscaped`, `winPKINITResult.kdcRefused` and `setupCodes`.
   - Task 1: `l42Observe`, `capabilities`, `ldapObjectSID` and `writeResult`.
   - L43's helpers: `tryBind`, `tryPlain`, `refusalChecks`, `mappingChecks` and `certRequested`.
 - Produces:
-  - `l44MatrixRow(enforcement, what, held string, r pkinitResult, evs []winEvent) string`.
-  - `l44ExternalRow(enforcement string, c l43Cell, evs []winEvent) string`.
+  - `l44Judge(r winPKINITResult, evs []winEvent, control string) string`: a PKINIT cell's outcome,
+    `**TGT issued**`, `refused` or `INVALID (R6): <why>`.
+  - `l44MatrixRow(enforcement, what, held, outcome string, r winPKINITResult, evs []winEvent) string`.
+  - `type l44Ext struct{ l43Cell; invalid, authzID string }`: one EXTERNAL cell.
+  - `(l *labDir) certPresented(t, certFile, keyFile string) (bool, string)`: whether Go's TLS
+    client would send the certificate to l's LDAPS.
+  - `(l *labDir) l44WhoAmI(t, bind directory.Bind) (string, error)`: the identity an EXTERNAL bind
+    with `bind`'s certificate gets.
+  - `(l *labDir) l44External(t, ev, label string, bind directory.Bind, mapped bool) l44Ext`.
+  - `l44ExtRow(label string, x l44Ext) string` and
+    `l44ExternalRow(enforcement string, x l44Ext, evs []winEvent) string`.
   - `l44EventsCell(evs []winEvent) string`.
   - `l44PreconditionIDs(evs []winEvent) []int`.
   - The note `L44-windows_ad.md` and its evidence.
@@ -3138,28 +3611,73 @@ func TestL44EventsCell(t *testing.T) {
 }
 
 func TestL44MatrixRow(t *testing.T) {
-	r := pkinitResult{ok: false, kdcErrs: []string{"-1765328359/Additional pre-authentication required", "-1765328318/KDC_ERR_CERTIFICATE_MISMATCH"},
+	r := winPKINITResult{ok: false, kdcErrs: []string{"-1765328359/Additional pre-authentication required", "-1765328318/KDC_ERR_CERTIFICATE_MISMATCH"},
 		last: "kinit: Certificate mismatch while getting initial credentials", took: 1500 * time.Millisecond}
-	row := l44MatrixRow("2", "AD CS `OfflineRouter`", "", r, nil)
+	row := l44MatrixRow("2", "AD CS `OfflineRouter`", "", l44Judge(r, nil, ""), r, nil)
 	for _, want := range []string{"| 2 | AD CS `OfflineRouter` | (none) | refused |", "KDC_ERR_CERTIFICATE_MISMATCH", "| (none) | 1.5s |"} {
 		if !strings.Contains(row, want) {
 			t.Errorf("row lacks %q: %s", want, row)
 		}
 	}
-	if !strings.Contains(l44MatrixRow("absent", "x", "X509:<I>A<SR>01", pkinitResult{ok: true}, nil), "**TGT issued**") {
+	ok := winPKINITResult{ok: true}
+	if !strings.Contains(l44MatrixRow("absent", "x", "X509:<I>A<SR>01", l44Judge(ok, nil, ""), ok, nil), "**TGT issued**") {
 		t.Error("an accepted cell does not say so")
+	}
+}
+
+// A refusal is the KB5014754 verdict only when its cause is proven: the
+// block's control got a TGT, the KDC itself refused, and nothing it said or
+// logged is a setup failure. Anything else is INVALID, never "refused"
+// (pre-flight C3).
+func TestL44Judge(t *testing.T) {
+	pre := "-1765328359/Additional pre-authentication required"
+	mismatch := winPKINITResult{kdcErrs: []string{pre, "-1765328318/KDC_ERR_CERTIFICATE_MISMATCH"}}
+	client := winPKINITResult{kdcErrs: []string{pre}, last: "kinit: Certificate verification failed while verifying KDC certificate"}
+	trust := winPKINITResult{kdcErrs: []string{pre, "-1765328322/Client not trusted"}}
+	kdc21 := []winEvent{{ID: 21, Provider: "Microsoft-Windows-Kerberos-Key-Distribution-Center"}}
+	for name, tc := range map[string]struct {
+		r       winPKINITResult
+		evs     []winEvent
+		control string
+		want    string
+	}{
+		"verdict":             {mismatch, nil, "", "refused"},
+		"tgt":                 {winPKINITResult{ok: true}, nil, "", "**TGT issued**"},
+		"client side":         {client, nil, "", "INVALID (R6): the KDC refused nothing"},
+		"validation code":     {trust, nil, "", "INVALID (R6): KDC error 62"},
+		"setup event":         {mismatch, kdc21, "", "INVALID (R6): the KDC logged [21]"},
+		"control failed":      {mismatch, nil, "control-ski got no TGT", "INVALID (R6): control-ski got no TGT"},
+		"tgt, control failed": {winPKINITResult{ok: true}, nil, "control-ski got no TGT", "INVALID (R6): control-ski got no TGT"},
+	} {
+		if got := l44Judge(tc.r, tc.evs, tc.control); !strings.HasPrefix(got, tc.want) {
+			t.Errorf("%s: %q, want a prefix %q", name, got, tc.want)
+		}
+	}
+}
+
+// An EXTERNAL cell says why it is INVALID, or what the DC mapped the
+// certificate to when it bound (pre-flight I2, M12).
+func TestL44ExtRow(t *testing.T) {
+	x := l44Ext{l43Cell: l43Cell{mech: "external", code: -1}, invalid: "the certificate was never presented: the server sent no CertificateRequest"}
+	if row := l44ExtRow("e1", x); !strings.Contains(row, "| e1 | INVALID (R6): the certificate was never presented") {
+		t.Errorf("%s", row)
+	}
+	b := l44Ext{l43Cell: l43Cell{mech: "external", ok: true, read: 1}, authzID: `u:CORP\port49`}
+	if row := l44ExtRow("e1", b); !strings.Contains(row, "accepted") || !strings.Contains(row, "WhoAmI `u:CORP\\port49`") {
+		t.Errorf("%s", row)
 	}
 }
 ```
 
 - [ ] **Step 2: Run them and see them fail**
 
-Run: `go test -tags lab ./tests/lab/ -run '^TestL44(EventsCell|MatrixRow)$' -count=1`
+Run: `go test -tags lab ./tests/lab/ -run '^TestL44(EventsCell|MatrixRow|Judge|ExtRow)$' -count=1`
 
 Expected: a build failure (`l44EventsCell` and the other builders are undefined).
 
 - [ ] **Step 3: Implement** (append to `tests/lab/l44_test.go`, adding imports `context`,
-`crypto/rsa`, `crypto/x509`, `fmt`, `slices`, `strings` and `time`)
+`crypto/rsa`, `crypto/tls`, `crypto/x509`, `fmt`, `net`, `slices`, `strings`, `time` and
+`github.com/go-ldap/ldap/v3`)
 
 ```go
 const l44Claim = "The Active Directory claims on a Windows DC: on L42's fixture and its loop, which groups " +
@@ -3171,7 +3689,7 @@ const l44Claim = "The Active Directory claims on a Windows DC: on L42's fixture 
 	"plan 7g carried: whether the DC advertises the AD capability 1.2.840.113556.1.4.800, and the LDAP result an EXTERNAL " +
 	"bind it refuses carries."
 
-const adCapability = "1.2.840.113556.1.4.800"
+const l44ADCapability = "1.2.840.113556.1.4.800"
 
 // l44Case is one certificate offered to the DC's KDC by PKINIT, with the
 // altSecurityIdentities alice holds while it is (none when altsec is nil).
@@ -3182,6 +3700,11 @@ type l44Case struct {
 	altsec      func(*x509.Certificate) (string, error)
 }
 
+// TestL44WindowsAD is lab register row L44 on a Windows Server 2025 DC. Run it,
+// from a worktree pinned at the commit under test (tests/lab/directory/windows/
+// compose.yaml's header has the operator's notes), with
+//
+//	go test -tags lab ./tests/lab/ -run '^TestL44WindowsAD$' -count=1 -v -timeout 240m
 func TestL44WindowsAD(t *testing.T) {
 	compare := l44CompareCapabilities(t) // first: the containers share tests/lab/logs/directory
 	d := newDirectories(t)
@@ -3204,7 +3727,8 @@ func TestL44WindowsAD(t *testing.T) {
 
 // l44CompareCapabilities is the root DSE's supportedCapabilities on OpenLDAP
 // and Samba AD, for plan 7g's carried question (a). Not a register cell: L42
-// and L43 are closed.
+// and L43 are closed. A directory the subtest did not read is absent from the
+// map, never an empty list.
 func l44CompareCapabilities(t *testing.T) map[string][]string {
 	out := map[string][]string{}
 	t.Run("compare", func(t *testing.T) {
@@ -3221,19 +3745,26 @@ func (l *labDir) l44Capabilities(t *testing.T, ev *evidenceLog, compare map[stri
 	ev.mark("L44 root DSE supportedCapabilities")
 	var b strings.Builder
 	b.WriteString("\n### The AD capability (plan 7g's carried question a)\n\n" +
-		"| directory | advertises `" + adCapability + "` | `in_chain` (L42) | supportedCapabilities |\n|---|---|---|---|\n")
-	row := func(name, inChain string, caps []string) {
-		fmt.Fprintf(&b, "| %s | %v | %s | %s |\n", name, slices.Contains(caps, adCapability), inChain, strings.Join(caps, ", "))
+		"| directory | advertises `" + l44ADCapability + "` | `in_chain` (L42) | supportedCapabilities |\n|---|---|---|---|\n")
+	row := func(name, inChain string, caps []string, read bool) {
+		if !read {
+			fmt.Fprintf(&b, "| %s | not measured (compare failed) | %s | not measured (compare failed) |\n", name, inChain)
+			return
+		}
+		fmt.Fprintf(&b, "| %s | %v | %s | %s |\n", name, slices.Contains(caps, l44ADCapability), inChain, strings.Join(caps, ", "))
 	}
-	row(platWindows, "the table above", l.capabilities(t))
-	row(platOpenLDAP, "answers empty, no error (`L42-openldap.md`)", compare[platOpenLDAP])
-	row(platSamba, "answers in full (`L42-samba_ad.md`)", compare[platSamba])
+	row(platWindows, "the table above", l.capabilities(t), true)
+	caps, read := compare[platOpenLDAP]
+	row(platOpenLDAP, "answers empty, no error (`L42-openldap.md`)", caps, read)
+	caps, read = compare[platSamba]
+	row(platSamba, "answers in full (`L42-samba_ad.md`)", caps, read)
 	return b.String()
 }
 
 // l44Binds is L43's binds on the DC, EXTERNAL with the broker's AD CS
-// certificate mapped and unmapped, and GSSAPI as installed and under
-// LdapEnforceChannelBinding 2.
+// certificate mapped and unmapped, GSSAPI as installed and under
+// LdapEnforceChannelBinding 2, and OR-1's cell: a mapped certificate while
+// the DC's KDC is stopped.
 func (l *labDir) l44Binds(t *testing.T, ev *evidenceLog) string {
 	t.Helper()
 	w := l.win
@@ -3244,6 +3775,16 @@ func (l *labDir) l44Binds(t *testing.T, ev *evidenceLog) string {
 	if cbt == "" {
 		cbt = "absent (this build's default)"
 	}
+	// GSSAPI needs the keytab; without one its cells are INVALID (R6), never
+	// a refusal.
+	noKeytab := w.invalidFor("keytab")
+	gssapi := func(label, what string) string {
+		if noKeytab != "" {
+			t.Errorf("L44 %s: no keytab (%s); the cell is INVALID (R6)", label, noKeytab)
+			return fmt.Sprintf("| %s | INVALID (R6): no keytab: `%s` | n/a | — |\n", what, l44MDCell(noKeytab))
+		}
+		return l.tryBind(t, ev, label, l.bindGSSAPI(), "").row(what)
+	}
 	var b strings.Builder
 	b.WriteString("\n### Binds\n\n| mechanism | outcome | LDAP result | time |\n|---|---|---|---|\n")
 	ev.mark("L44 simple over LDAPS")
@@ -3251,42 +3792,58 @@ func (l *labDir) l44Binds(t *testing.T, ev *evidenceLog) string {
 	b.WriteString(simple.row("simple bind over LDAPS"))
 	ev.mark("L44 simple over plain LDAP")
 	plain := l.tryPlain(t, ev, "simple over plain LDAP, by hand")
-	b.WriteString(plain.row("simple bind over plain LDAP, built by hand"))
+	b.WriteString(plain.row("simple bind over plain LDAP, built by hand (an observation of this build's default)"))
 	ev.mark("L44 gssapi, LdapEnforceChannelBinding %s", cbt)
-	gss := l.tryBind(t, ev, "gssapi", l.bindGSSAPI(), "")
-	b.WriteString(gss.row("GSSAPI over LDAPS, keytab, no SASL security layer, `LdapEnforceChannelBinding` " + cbt))
+	b.WriteString(gssapi("gssapi", "GSSAPI over LDAPS, keytab, no SASL security layer, `LdapEnforceChannelBinding` "+cbt))
 
 	w.setAltSec(t, brokerDN, directory.ADIssuerSerial(w.certs.brokerADCS))
 	ev.mark("L44 external, AD CS certificate, port49's form on port49")
-	e1 := l.tryBind(t, ev, "external", adcsExt, "")
-	b.WriteString(e1.row("SASL EXTERNAL over LDAPS, the broker's AD CS certificate, `altSecurityIdentities` on port49 in port49's form"))
+	e1 := l.l44External(t, ev, "external", adcsExt, true)
+	b.WriteString(l44ExtRow("SASL EXTERNAL over LDAPS, the broker's AD CS certificate, `altSecurityIdentities` on port49 in port49's form", e1))
 	w.setAltSec(t, brokerDN, "")
 	ev.mark("L44 external, AD CS certificate, no mapping")
-	e2 := l.tryBind(t, ev, "external, unmapped", adcsExt, "")
-	b.WriteString(e2.row("SASL EXTERNAL over LDAPS, the same certificate, no `altSecurityIdentities` on port49 (carried question b)"))
+	e2 := l.l44External(t, ev, "external, unmapped", adcsExt, false)
+	b.WriteString(l44ExtRow("SASL EXTERNAL over LDAPS, the same certificate, no `altSecurityIdentities` on port49 (carried question b)", e2))
 	ev.mark("L44 external, a certificate from the lab directory CA")
-	e3 := l.tryBind(t, ev, "external, lab CA", l.bindExternal(), "")
-	b.WriteString(e3.row("SASL EXTERNAL over LDAPS, a certificate from the lab directory CA (in the DC's Root store, not in NTAuth), unmapped (carried question b)"))
+	e3 := l.l44External(t, ev, "external, lab CA", l.bindExternal(), false)
+	b.WriteString(l44ExtRow("SASL EXTERNAL over LDAPS, a certificate from the lab directory CA (in the DC's Root store, not in NTAuth), unmapped (carried question b)", e3))
 
 	got := l.setRegistry(t, "LdapEnforceChannelBinding", 2)
 	ev.mark("L44 gssapi, LdapEnforceChannelBinding %s", got)
-	gss2 := l.tryBind(t, ev, "gssapi, channel binding 2", l.bindGSSAPI(), "")
-	b.WriteString(gss2.row("GSSAPI over LDAPS, keytab, no SASL security layer, `LdapEnforceChannelBinding` " + got + " (port49 sends no channel binding token)"))
+	b.WriteString(gssapi("gssapi, channel binding 2", "GSSAPI over LDAPS, keytab, no SASL security layer, `LdapEnforceChannelBinding` "+got+" (port49 sends no channel binding token)"))
 	w.setAltSec(t, brokerDN, directory.ADIssuerSerial(w.certs.brokerADCS))
-	e4 := l.tryBind(t, ev, "external, channel binding 2", adcsExt, "")
-	b.WriteString(e4.row("SASL EXTERNAL over LDAPS, mapped, `LdapEnforceChannelBinding` " + got))
+	e4 := l.l44External(t, ev, "external, channel binding 2", adcsExt, true)
+	b.WriteString(l44ExtRow("SASL EXTERNAL over LDAPS, mapped, `LdapEnforceChannelBinding` "+got, e4))
 	simple2 := l.tryBind(t, ev, "simple, channel binding 2", l.bindSimple(), l.d.password)
 	b.WriteString(simple2.row("simple bind over LDAPS, `LdapEnforceChannelBinding` " + got))
-	w.setAltSec(t, brokerDN, "")
 	l.setRegistry(t, "LdapEnforceChannelBinding", -1)
+
+	// OR-1 (pre-flight I5): result 1 is a generic server-side code. If a DC
+	// whose own mapping path is broken (here: its KDC, which Schannel's
+	// S4U2Self needs, stopped) answers a mapped certificate with the same code
+	// an unmapped one gets, that code cannot tell "the broker's certificate is
+	// refused" from "this DC is broken". e5 is valid only when the same mapped
+	// bind succeeds with the KDC up, before (e1) and after (e6).
+	ev.mark("L44 external, mapped, the DC's KDC stopped")
+	w.service(t, "Kdc", "stop")
+	e5 := l.l44External(t, ev, "external, KDC stopped", adcsExt, true)
+	w.service(t, "Kdc", "start")
+	ev.mark("L44 external, mapped, the DC's KDC started again")
+	e6 := l.l44External(t, ev, "external, KDC started again", adcsExt, true)
+	if e5.invalid == "" && (!e1.ok || !e6.ok || e1.invalid != "" || e6.invalid != "") {
+		e5.invalid = "the mapped bind did not succeed with the KDC up (e1 and e6), so a KDC-down answer shows nothing about the KDC"
+		t.Errorf("L44 external, KDC stopped: %s; the cell is INVALID (R6)", e5.invalid)
+	}
+	b.WriteString(l44ExtRow("SASL EXTERNAL over LDAPS, mapped, **the DC's KDC stopped** (OR-1)", e5))
+	b.WriteString(l44ExtRow("SASL EXTERNAL over LDAPS, mapped, the KDC started again (e5's control)", e6))
+	w.setAltSec(t, brokerDN, "")
 
 	fmt.Fprintf(&b, "\nWhether the DC's LDAPS asked the client for a certificate (what EXTERNAL needs): %s.\n", l.certRequested(t))
 	if !simple.ok || simple.read != 1 || !simple2.ok {
 		t.Errorf("the simple bind over LDAPS is the lab's premise and was not accepted: %+v %+v", simple, simple2)
 	}
-	if plain.ok {
-		t.Errorf("the DC accepted a simple bind over plain LDAP: %+v", plain)
-	}
+	// The plain-LDAP simple bind is this build's default, recorded above; on
+	// Windows it is an observation, not the harness's premise.
 	refusals, bad := l.refusalChecks(t, ev)
 	b.WriteString(refusals)
 	fmt.Fprintf(&b, "\nWhat the DC logged during the binds: %s\n", l44EventsCell(w.events(t, since)))
@@ -3303,7 +3860,13 @@ func (l *labDir) l44SID(t *testing.T, ev *evidenceLog) string {
 	c := w.certs
 	var b strings.Builder
 	b.WriteString("\n### The SID extension and objectSid\n\n| certificate | SID extension | objectSid | equal |\n|---|---|---|---|\n")
+	noSID := w.invalidFor("sid") // enroll_as failed three times: alice's User certificate does not exist
 	row := func(what string, cert *x509.Certificate, filter string) {
+		if cert == nil {
+			t.Errorf("L44 %s: %s; the cell is INVALID (R6)", what, noSID)
+			fmt.Fprintf(&b, "| %s | INVALID (R6): `%s` | — | — |\n", what, l44MDCell(noSID))
+			return
+		}
 		ext, err := directory.SIDOf(cert)
 		obj := l.ldapObjectSID(t, filter)
 		cell := "`" + ext + "`"
@@ -3314,24 +3877,29 @@ func (l *labDir) l44SID(t *testing.T, ev *evidenceLog) string {
 	}
 	ev.mark("L44 SID extensions against objectSid")
 	row("alice's, AD CS `User` template, requested as alice", c.aliceSID, "(sAMAccountName=alice)")
-	row("the DC's own `KerberosAuthentication`", c.dcKDC, "(sAMAccountName=DC1$)")
+	row("a KDC-EKU certificate from the DC's store (`KerberosAuthentication`; not necessarily the one the KDC presents)", c.dcKDC, "(sAMAccountName=DC1$)")
 	row("alice's, AD CS `OfflineRouter` (subject from the request)", c.aliceADCS, "(sAMAccountName=alice)")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	b.WriteString("\n| port49's mapping on the DC's certificates (asserted: port49's guarantees, not the DC's) | observed |\n|---|---|\n")
-	ev.mark("L44 port49 sid mapping on alice's User certificate")
-	r := l.resolverWith(t, l.config("direct", l.groupsBaseDN, l.bindSimple(), directory.Mapping{Kind: directory.MapSID, Attribute: "objectSid"}), l.d.password, ev)
-	a, err := r.Map(ctx, c.aliceSID)
-	if err != nil || a.Principal != l.principal("alice") {
-		t.Errorf("sid did not map alice's User certificate to her: %+v %v", a, err)
+	if c.aliceSID == nil {
+		t.Errorf("L44 sid mapping: %s; the cell is INVALID (R6)", noSID)
+		fmt.Fprintf(&b, "| `sid`, alice's `User` certificate | INVALID (R6): `%s` |\n", l44MDCell(noSID))
+	} else {
+		ev.mark("L44 port49 sid mapping on alice's User certificate")
+		r := l.resolverWith(t, l.config("direct", l.groupsBaseDN, l.bindSimple(), directory.Mapping{Kind: directory.MapSID, Attribute: "objectSid"}), l.d.password, ev)
+		a, err := r.Map(ctx, c.aliceSID)
+		if err != nil || a.Principal != l.principal("alice") {
+			t.Errorf("sid did not map alice's User certificate to her: %+v %v", a, err)
+		}
+		fmt.Fprintf(&b, "| `sid`, alice's `User` certificate | %s as `%s` |\n", errOrOK(err), a.Principal)
 	}
-	fmt.Fprintf(&b, "| `sid`, alice's `User` certificate | %s as `%s` |\n", errOrOK(err), a.Principal)
 	aliceDN := "CN=alice,OU=Staff," + dirBase
 	w.setAltSec(t, aliceDN, directory.ADIssuerSerial(c.aliceADCS))
 	ev.mark("L44 port49 issuer_serial mapping on alice's OfflineRouter certificate")
-	r = l.resolverWith(t, l.config("direct", l.groupsBaseDN, l.bindSimple(), directory.Mapping{Kind: directory.MapIssuerSerial, Attribute: "altSecurityIdentities"}), l.d.password, ev)
-	a, err = r.Map(ctx, c.aliceADCS)
+	r := l.resolverWith(t, l.config("direct", l.groupsBaseDN, l.bindSimple(), directory.Mapping{Kind: directory.MapIssuerSerial, Attribute: "altSecurityIdentities"}), l.d.password, ev)
+	a, err := r.Map(ctx, c.aliceADCS)
 	if err != nil || a.Principal != l.principal("alice") {
 		t.Errorf("issuer_serial did not map alice's AD CS certificate to her: %+v %v", a, err)
 	}
@@ -3349,13 +3917,17 @@ func (l *labDir) l44SID(t *testing.T, ev *evidenceLog) string {
 // l44Matrix offers each certificate to the DC's KDC by PKINIT under each
 // KB5014754 setting, alice holding only the altSecurityIdentities the case
 // names, and the broker's AD CS certificate to LDAPS by EXTERNAL, recording
-// what the KDC answered and logged. A setup failure marks the cell INVALID (R6).
+// what the KDC answered and logged. Each block starts with control-ski, a
+// strong mapping no part of the claim is about: if it gets no TGT, the
+// block's PKINIT is broken and every cell in it is INVALID. A setup failure
+// marks a cell INVALID (R6); only l44Judge's "refused" is a verdict.
 func (l *labDir) l44Matrix(t *testing.T, ev *evidenceLog) string {
 	t.Helper()
 	w := l.win
 	c := w.certs
 	port49Form := func(x *x509.Certificate) (string, error) { return directory.ADIssuerSerial(x), nil }
 	cases := []l44Case{
+		{"control-ski", "control: AD CS `OfflineRouter`, alice holding the strong `X509:<SKI>` mapping", c.aliceADCS, c.aliceADCSKey, winAltSecSKI},
 		{"adcs-none", "AD CS `OfflineRouter` (UPN SAN, no SID extension)", c.aliceADCS, c.aliceADCSKey, nil},
 		{"adcs-port49", "the same, alice holding port49's form", c.aliceADCS, c.aliceADCSKey, port49Form},
 		{"adcs-forward", "the same, alice holding the issuer least significant RDN first", c.aliceADCS, c.aliceADCSKey, winAltSecForward},
@@ -3363,6 +3935,7 @@ func (l *labDir) l44Matrix(t *testing.T, ev *evidenceLog) string {
 		{"sid-none", "AD CS `User`, requested as alice (SID extension)", c.aliceSID, c.aliceSIDKey, nil},
 		{"comma-port49", "a CA whose CN holds a comma (`lab-users, comma-CA`), alice holding port49's form", c.aliceComma, c.aliceCommaKey, port49Form},
 		{"comma-quoted", "the same, alice holding the value quoted as CertNameToStr quotes it", c.aliceComma, c.aliceCommaKey, winAltSecQuoted},
+		{"comma-escaped", "the same, alice holding the value escaped as RFC 4514 escapes it", c.aliceComma, c.aliceCommaKey, winAltSecEscaped},
 		{"highbit-port49", "the lab users CA, a serial whose top bit is set, alice holding port49's form", c.aliceHighBit, c.aliceHighBitKey, port49Form},
 		{"highbit-signbyte", "the same, alice holding the serial with its DER sign byte", c.aliceHighBit, c.aliceHighBitKey, winAltSecSignByte},
 	}
@@ -3373,21 +3946,34 @@ func (l *labDir) l44Matrix(t *testing.T, ev *evidenceLog) string {
 	b.WriteString("\n### KB5014754: what the DC itself maps\n\n" +
 		"Each certificate is offered to the KDC by PKINIT (MIT `kinit`) as `alice@CORP.EXAMPLE.COM`, alice holding exactly " +
 		"the `altSecurityIdentities` the row names; the KDC is restarted after each `StrongCertificateBindingEnforcement` " +
-		"change. The last row of each block is the broker's AD CS certificate by SASL EXTERNAL over LDAPS, port49's form on " +
-		"its account.\n\n" +
+		"change. The first row of each block is the control. \"refused\" means the KDC itself refused, for no setup reason, " +
+		"while the control got a TGT; anything else is INVALID (R6), with the reason. The last row of each block is the " +
+		"broker's AD CS certificate by SASL EXTERNAL over LDAPS, port49's form on its account.\n\n" +
 		"| `StrongCertificateBindingEnforcement` | certificate | `altSecurityIdentities` held | outcome | the KDC said | DC events | time |\n" +
 		"|---|---|---|---|---|---|---|\n")
+	noSID := w.invalidFor("sid")
 	l.setRegistry(t, "UseCachedCRLOnlyAndIgnoreRevocationUnknownErrors", 1)
-	defer l.setRegistry(t, "UseCachedCRLOnlyAndIgnoreRevocationUnknownErrors", -1)
 	for _, mode := range []int{-1, 1, 2} {
 		inForce := l.setRegistry(t, "StrongCertificateBindingEnforcement", mode)
 		w.checkSkew(t)
+		control := "" // why the block's control failed; "" while it holds
 		for _, cs := range cases {
+			if cs.cert == nil { // the sid cells, when enroll_as failed three times
+				t.Errorf("L44 %s under %s: %s; the cell is INVALID (R6)", cs.label, inForce, noSID)
+				fmt.Fprintf(&b, "| %s | %s | — | INVALID (R6): `%s` | — | — | — |\n", inForce, cs.what, l44MDCell(noSID))
+				continue
+			}
 			held := ""
 			if cs.altsec != nil {
 				v, err := cs.altsec(cs.cert)
 				if err != nil {
-					t.Fatalf("%s: %v", cs.label, err)
+					outcome := "INVALID (R6): the mapping could not be written: " + oneLineMax(err.Error(), 120)
+					t.Errorf("L44 %s under %s: %s", cs.label, inForce, outcome)
+					fmt.Fprintf(&b, "| %s | %s | — | %s | — | — | — |\n", inForce, cs.what, l44MDCell(outcome))
+					if cs.label == "control-ski" {
+						control = "control-ski could not be offered"
+					}
+					continue
 				}
 				held = v
 			}
@@ -3398,47 +3984,194 @@ func (l *labDir) l44Matrix(t *testing.T, ev *evidenceLog) string {
 			evs := w.events(t, since)
 			ev.add(evidenceLine{Event: "kinit", Label: cs.label + ", enforcement " + inForce, Error: r.kdcSaid(),
 				DurationMS: ms(r.took), DCEvents: l44EventStrings(evs)})
-			b.WriteString(l44MatrixRow(inForce, cs.what, held, r, evs))
-			if ids := l44PreconditionIDs(evs); len(ids) > 0 {
-				t.Errorf("L44 %s under %s: the KDC logged %v, a setup failure; the cell is INVALID (R6)", cs.label, inForce, ids)
+			outcome := l44Judge(r, evs, control)
+			if cs.label == "control-ski" && !strings.HasPrefix(outcome, "**TGT issued**") {
+				control = "control-ski got no TGT (" + outcome + ")"
+				outcome = "INVALID (R6): " + control
+			}
+			b.WriteString(l44MatrixRow(inForce, cs.what, held, outcome, r, evs))
+			if strings.HasPrefix(outcome, "INVALID") {
+				t.Errorf("L44 %s under %s: %s", cs.label, inForce, outcome)
 			}
 		}
 		w.setAltSec(t, brokerDN, directory.ADIssuerSerial(c.brokerADCS))
 		since := w.clock(t)
 		ev.mark("L44 external under StrongCertificateBindingEnforcement %s", inForce)
-		e := l.tryBind(t, ev, "external, enforcement "+inForce, adcsExt, "")
+		e := l.l44External(t, ev, "external, enforcement "+inForce, adcsExt, true)
 		evs := w.events(t, since)
 		b.WriteString(l44ExternalRow(inForce, e, evs))
 		w.setAltSec(t, brokerDN, "")
 	}
+	// Not deferred: a restore that fails while a failure unwinds would only
+	// add a second t.Fatalf, and the DC is destroyed at the end anyway.
 	l.setRegistry(t, "StrongCertificateBindingEnforcement", -1)
+	l.setRegistry(t, "UseCachedCRLOnlyAndIgnoreRevocationUnknownErrors", -1)
 	w.setAltSec(t, aliceDN, directory.ADIssuerSerial(l.d.pki.alice))
 	return b.String()
 }
 
-// l44MatrixRow is one PKINIT cell.
-func l44MatrixRow(enforcement, what, held string, r pkinitResult, evs []winEvent) string {
-	outcome := "refused"
-	if r.ok {
-		outcome = "**TGT issued**"
+// l44Judge is a PKINIT cell's outcome. A refusal is KB5014754's verdict only
+// when its cause is proven: the block's control got a TGT (control is ""),
+// the KDC logged no setup event, said no certificate-validation code, and
+// itself refused. Anything else is INVALID (R6), never "refused".
+func l44Judge(r winPKINITResult, evs []winEvent, control string) string {
+	switch ids, codes := l44PreconditionIDs(evs), r.setupCodes(); {
+	case control != "":
+		return "INVALID (R6): " + control
+	case len(ids) > 0:
+		return fmt.Sprintf("INVALID (R6): the KDC logged %v, a setup failure", ids)
+	case r.ok:
+		return "**TGT issued**"
+	case len(codes) > 0:
+		return fmt.Sprintf("INVALID (R6): KDC error %s, a certificate-validation failure", strings.Trim(fmt.Sprint(codes), "[]"))
+	case !r.kdcRefused():
+		return "INVALID (R6): the KDC refused nothing; the client failed on its own side"
 	}
+	return "refused"
+}
+
+// l44MatrixRow is one PKINIT cell, its outcome l44Judge's.
+func l44MatrixRow(enforcement, what, held, outcome string, r winPKINITResult, evs []winEvent) string {
 	if held == "" {
 		held = "(none)"
 	} else {
 		held = "`" + held + "`"
 	}
-	return fmt.Sprintf("| %s | %s | %s | %s | %s | %s | %s |\n", enforcement, what, held, outcome,
-		mdCell(r.kdcSaid()), l44EventsCell(evs), r.took.Round(time.Millisecond))
+	return fmt.Sprintf("| %s | %s | %s | %s | %s | %s | %s |\n", enforcement, what, held, l44MDCell(outcome),
+		l44MDCell(r.kdcSaid()), l44EventsCell(evs), r.took.Round(time.Millisecond))
+}
+
+// l44Ext is one EXTERNAL cell: port49's bind, why it is INVALID (R6) when it
+// is, and on an accepted bind the identity the DC mapped the certificate to.
+type l44Ext struct {
+	l43Cell
+	invalid string
+	authzID string
+}
+
+// certPresented reports whether Go's TLS client, configured as port49's
+// dialer configures it (tls.Config.Certificates), would send certFile to
+// l's LDAPS. When the DC's CertificateRequest lists acceptable CAs, Go sends
+// a certificate only if SupportsCertificate passes and otherwise silently
+// sends none; the bind is then refused for "no certificate", which is no
+// answer about the mapping (pre-flight I2).
+func (l *labDir) certPresented(t *testing.T, certFile, keyFile string) (bool, string) {
+	t.Helper()
+	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		t.Fatalf("%s: loading %s: %v", l.name, certFile, err)
+	}
+	tc, err := l.d.pki.clientTLS(l.uri)
+	if err != nil {
+		t.Fatal(err)
+	}
+	asked, sent, why := false, false, ""
+	tc.GetClientCertificate = func(ri *tls.CertificateRequestInfo) (*tls.Certificate, error) {
+		asked = true
+		if err := ri.SupportsCertificate(&cert); err != nil {
+			why = oneLineMax(err.Error(), 160)
+			return &tls.Certificate{}, nil
+		}
+		sent = true
+		return &cert, nil
+	}
+	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: 5 * time.Second}, "tcp", strings.TrimPrefix(l.uri, "ldaps://"), tc)
+	if err != nil {
+		return false, "the probe's handshake failed: " + oneLineMax(err.Error(), 120)
+	}
+	conn.Close()
+	switch {
+	case !asked:
+		return false, "the server sent no CertificateRequest"
+	case !sent:
+		return false, "Go would send no certificate: " + why
+	}
+	return true, ""
+}
+
+// l44WhoAmI is the identity the DC gives an EXTERNAL bind with bind's
+// certificate (RFC 4532, which AD supports as 1.3.6.1.4.1.4203.1.11.3), on a
+// connection built by hand: port49's Client exposes searches only.
+func (l *labDir) l44WhoAmI(t *testing.T, bind directory.Bind) (string, error) {
+	t.Helper()
+	cert, err := tls.LoadX509KeyPair(bind.TLSCertFile, bind.TLSKeyFile)
+	if err != nil {
+		return "", err
+	}
+	tc, err := l.d.pki.clientTLS(l.uri)
+	if err != nil {
+		return "", err
+	}
+	tc.Certificates = []tls.Certificate{cert}
+	conn, err := ldap.DialURL(l.uri, ldap.DialWithTLSConfig(tc))
+	if err != nil {
+		return "", err
+	}
+	defer conn.Close()
+	conn.SetTimeout(15 * time.Second)
+	if err := conn.ExternalBind(); err != nil {
+		return "", err
+	}
+	r, err := conn.WhoAmI(nil)
+	if err != nil {
+		return "", err
+	}
+	return r.AuthzID, nil
+}
+
+// l44External is one EXTERNAL cell. A certificate Go would not present makes
+// it INVALID before any bind. On an accepted bind, WhoAmI names the account
+// the DC mapped; when mapped (port49's form on port49), anything but
+// CORP\port49 makes it INVALID: "bound" alone does not prove port49's form
+// mapped it (pre-flight M12).
+func (l *labDir) l44External(t *testing.T, ev *evidenceLog, label string, bind directory.Bind, mapped bool) l44Ext {
+	t.Helper()
+	if ok, why := l.certPresented(t, bind.TLSCertFile, bind.TLSKeyFile); !ok {
+		x := l44Ext{l43Cell: l43Cell{mech: "external", code: -1}, invalid: "the certificate was never presented: " + why}
+		t.Errorf("L44 %s: %s; the cell is INVALID (R6)", label, x.invalid)
+		return x
+	}
+	x := l44Ext{l43Cell: l.tryBind(t, ev, label, bind, "")}
+	if !x.ok {
+		return x
+	}
+	id, err := l.l44WhoAmI(t, bind)
+	switch {
+	case err != nil:
+		x.authzID = "WhoAmI failed: " + oneLineMax(err.Error(), 120)
+	default:
+		x.authzID = id
+	}
+	if mapped && !strings.EqualFold(x.authzID, `u:CORP\port49`) {
+		x.invalid = fmt.Sprintf("bound, but WhoAmI says %q, not u:CORP\\port49", x.authzID)
+		t.Errorf("L44 %s: %s; the cell is INVALID (R6)", label, x.invalid)
+	}
+	return x
+}
+
+// l44ExtRow is an EXTERNAL cell in the Binds table.
+func l44ExtRow(label string, x l44Ext) string {
+	switch {
+	case x.invalid != "":
+		return fmt.Sprintf("| %s | INVALID (R6): %s | %d | %s |\n", label, l44MDCell(x.invalid), x.code, x.took.Round(time.Millisecond))
+	case x.ok:
+		return fmt.Sprintf("| %s | accepted; WhoAmI `%s`; a search for alice found %d entry | 0 | %s |\n", label,
+			l44MDCell(x.authzID), x.read, x.took.Round(time.Millisecond))
+	}
+	return x.row(label)
 }
 
 // l44ExternalRow is one EXTERNAL cell in the matrix.
-func l44ExternalRow(enforcement string, c l43Cell, evs []winEvent) string {
-	outcome := fmt.Sprintf("refused, LDAP result %d", c.code)
-	if c.ok {
-		outcome = "**bound**"
+func l44ExternalRow(enforcement string, x l44Ext, evs []winEvent) string {
+	outcome := fmt.Sprintf("refused, LDAP result %d", x.code)
+	switch {
+	case x.invalid != "":
+		outcome = "INVALID (R6): " + x.invalid
+	case x.ok:
+		outcome = "**bound** as `" + x.authzID + "`"
 	}
 	return fmt.Sprintf("| %s | the broker's AD CS certificate, SASL EXTERNAL over LDAPS | port49's form, on port49 | %s | %s | %s | %s |\n",
-		enforcement, outcome, mdCell(c.text), l44EventsCell(evs), c.took.Round(time.Millisecond))
+		enforcement, l44MDCell(outcome), l44MDCell(x.text), l44EventsCell(evs), x.took.Round(time.Millisecond))
 }
 
 // l44EventsCell is a cell's events, each "<source> <id>: <message's first
@@ -3447,7 +4180,7 @@ func l44EventsCell(evs []winEvent) string {
 	if len(evs) == 0 {
 		return "(none)"
 	}
-	return mdCell(strings.Join(l44EventStrings(evs), "; "))
+	return l44MDCell(strings.Join(l44EventStrings(evs), "; "))
 }
 
 func l44EventStrings(evs []winEvent) []string {
@@ -3477,7 +4210,7 @@ func l44PreconditionIDs(evs []winEvent) []int {
 	return out
 }
 
-func mdCell(s string) string { return strings.ReplaceAll(s, "|", `\|`) }
+func l44MDCell(s string) string { return strings.ReplaceAll(s, "|", `\|`) }
 ```
 
 Notes for the implementer:
@@ -3485,6 +4218,12 @@ Notes for the implementer:
 - `mappingChecks` uses alice's users-CA mapping, which `reset.ps1` set and `l44SID` restores
   before returning.
 - `tryBind` asserts that every refusal names its mechanism and result code (port49's side).
+- Every EXTERNAL cell goes through `l44External`, never `tryBind` directly. That is how R6's
+  "never presented" and WhoAmI rules reach every cell: e1–e6 and the matrix's EXTERNAL rows.
+- Stopping the KDC (e5) is unverified on this build in two ways:
+  - whether the SSH logon that starts it again still works, through NTLM, with the KDC down;
+  - whether Schannel's S4U2Self is the path that fails.
+  If `service start` fails, the run fails, and the DC is destroyed at the end as always.
 
 - [ ] **Step 4: Run them and see them pass**
 
@@ -3500,9 +4239,11 @@ git -C /home/rwendt/git/port49/.worktrees/l44 commit -m "test(lab): L44's measur
 
 L42's fixture through port49's three nested modes; the root DSE's
 capabilities beside OpenLDAP's and Samba's; simple, plain, GSSAPI (as
-installed and under LdapEnforceChannelBinding 2) and EXTERNAL mapped and
-unmapped; the SID extension against objectSid; and the DC's own mapping by
-PKINIT and EXTERNAL under each StrongCertificateBindingEnforcement value.
+installed and under LdapEnforceChannelBinding 2) and EXTERNAL mapped,
+unmapped and with the KDC stopped; the SID extension against objectSid; and
+the DC's own mapping by PKINIT and EXTERNAL under each
+StrongCertificateBindingEnforcement value, each block behind a control. A
+refusal whose cause is not proven is INVALID, never a verdict.
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
@@ -3528,7 +4269,7 @@ holds the ISO from the gate run; the harness re-checks its SHA-256.
 ```bash
 git -C /home/rwendt/git/port49 worktree add --detach /home/rwendt/git/port49/.worktrees/lab-l44 "$(git -C /home/rwendt/git/port49/.worktrees/l44 rev-parse HEAD)"
 cd /home/rwendt/git/port49/.worktrees/lab-l44
-sg docker -c "make lab-windows" > /tmp/claude-1000/l44-run.log 2>&1
+sg docker -c "go test -tags lab ./tests/lab/ -run '^TestL44WindowsAD\$' -count=1 -v -timeout 240m" > /tmp/claude-1000/l44-run.log 2>&1
 ```
 
 Use the watchdog and a foreground wait with a 240-minute deadline, as in the "Lab rules".
@@ -3549,23 +4290,35 @@ Each cell of the L44 row needs an observation in the note.
 
 | L44 cell | Where in the note | Measured when |
 |---|---|---|
+| (precondition) the block's PKINIT works | the matrix: `control-ski`, first row of each block | **`control-ski` got a TGT in each block**; else every PKINIT cell in that block is INVALID |
 | `in_chain` on L42's fixture | "Nested groups", rows `in_chain` | three users' rows present, with a result and a time |
 | how the loop is answered | dave's `in_chain` row, or the "loop was not made" line | either present |
-| EXTERNAL over LDAPS | "Binds", the three EXTERNAL rows, and the matrix's EXTERNAL rows | a result in each |
-| GSSAPI, keytab, no security layer | "Binds", both GSSAPI rows | a result in each |
+| EXTERNAL over LDAPS | "Binds", the EXTERNAL rows e1–e6, and the matrix's EXTERNAL rows | a result in each, none INVALID; each accepted mapped row's WhoAmI is `u:CORP\port49` |
+| GSSAPI, keytab, no security layer | "Binds", both GSSAPI rows | a result in each, neither INVALID |
 | `altSecurityIdentities` in port49's form matches what the DC maps | the matrix: `adcs-port49`, `comma-*`, `highbit-*` | none INVALID under any value |
 | SID extension = `objectSid` | "The SID extension and objectSid", alice's `User` row | a SID on both sides |
 | KB5014754's treatment of each | the matrix, three blocks | none INVALID |
-| carried (a) | "The AD capability" | three rows |
-| carried (b) | the EXTERNAL rows' LDAP results | present |
+| carried (a) | "The AD capability" | three rows, none "not measured" |
+| carried (b) | the unmapped EXTERNAL rows' LDAP results (e2, e3), and the KDC-stopped row (e5) | present, and e5 not INVALID |
 
-Decide the defects, one rule each:
-- **7a.** In the block where `adcs-port49` gets a TGT, if `comma-quoted` gets one and
-  `comma-port49` does not, port49's `<I>` must quote.
-- **7b.** Under the same condition, if `highbit-signbyte` gets a TGT and `highbit-port49` does
-  not, port49's `<SR>` must keep the sign byte.
-- **7c.** If the unmapped EXTERNAL rows are refused with LDAP result 1, run Task 7c (OR-1).
-- **Rule 4.** A doc that says otherwise is fixed in Task 8.
+"refused" in the matrix is a verdict only as `l44Judge` writes it: the control held, the KDC
+itself refused, and nothing it said or logged was a setup failure. Read every INVALID cell's
+reason. A cell that is INVALID in all three tries stays INVALID. It is never re-read as
+"refused", and it keeps L44 open.
+
+Decide the defects, one rule each. Each rule reads only a block where `control-ski` and
+`adcs-port49` both got a TGT, and where none of the cells it names is INVALID:
+- **7a.** `comma-port49` got no TGT, and exactly one non-port49 form did (`comma-quoted` or
+  `comma-escaped`). Then port49's `<I>` must use that form: 7a-quoted or 7a-escaped.
+  - If both got one, port49 adopts the quoted form, which is what Windows' own `CertNameToStr`
+    writes.
+  - If neither got one, the comma question stays unanswered. Record it, change no code, and
+    carry it to Ryan.
+- **7b.** `highbit-signbyte` got a TGT and `highbit-port49` did not. Then port49's `<SR>` must
+  keep the sign byte.
+- **7c.** Read OR-1's branches against e2, e3 and e5. Task 7c runs only in branch (ii). In
+  branch (iii) or (iv), no code changes: record the codes and carry OR-1 to Ryan with them.
+- **Rule 4.** A doc that says otherwise is fixed in Task 8, on `main` after 7h merges.
 
 - [ ] **Step 4: Copy back, confirm cleanup, remove the pinned worktree**
 
@@ -3598,16 +4351,26 @@ Task 8 cites.
 ### Task 7: (only on the defect path) Fixes a Windows result calls for
 
 Each part runs only when Task 6 Step 3's rule for it held. A part that did not run is listed in
-Task 8's as-built with the rows that ruled it out. Each part edits the spec first: a `docs:`
-commit citing the note. Then comes the `fix(directory)` commit with its unit test, then Task 6 is
-re-run at the fix.
+Task 8's as-built with the rows that ruled it out. Its order, per "Sequencing":
+
+1. **Spec text first, drafted, not committed on the branch.** Write the part's spec text word for
+   word into the L44 PR description, under "Docs pending on main after 7h". The spec and design
+   files are 7h's too, so no commit on `feature/l44-windows-ad` touches them.
+2. **The `fix(directory)` commit, on `feature/l44-windows-ad`,** with its unit test. It touches
+   only `internal/directory` and `tests/lab/windows_unit_test.go`, which 7h does not touch.
+3. **Task 6 is re-run at the fix.**
+4. **After 7h merges,** the drafted spec text is committed to `main` as a docs-only commit, in
+   the main checkout. Only then is the L44 PR merged. The PR merges with no rebase, because its
+   files are disjoint from 7h's, and `main` never holds the fix ahead of its spec.
 
 **Files (by part):**
 - 7a and 7b: modify `internal/directory/mapping.go` (`ADIssuerSerial`) and
-  `internal/directory/mapping_test.go`.
-- 7c: modify `internal/directory/conn.go` (`bind`) and `internal/directory/conn_test.go`.
-- All parts: modify `docs/design/2026-08-23-policy-engine-spec.md` §13 decision 38 (item 1 for
-  7a and 7b, items 8 and 9 for 7c) and `docs/design/2026-08-21-port49-design.md` §10 (7c).
+  `internal/directory/mapping_test.go`, on the branch.
+- 7c: modify `internal/directory/conn.go` (`bind`) and `internal/directory/conn_test.go`, on the
+  branch.
+- All parts, **on `main` after 7h merges only**: modify `docs/design/2026-08-23-policy-engine-spec.md`
+  §13 decision 38 (item 1 for 7a and 7b, items 8 and 9 for 7c) and
+  `docs/design/2026-08-21-port49-design.md` §10 (7c).
 
 **Interfaces:**
 - 7a and 7b keep `directory.ADIssuerSerial(*x509.Certificate) string` and change only its
@@ -3616,6 +4379,10 @@ re-run at the fix.
   `ErrBindRefused`.
 
 - [ ] **7a, Step 1: The failing test** (append to `internal/directory/mapping_test.go`)
+
+7a has two variants, and Task 6 Step 3's rule picks one: **7a-quoted**, when `comma-quoted`
+got the TGT (or both forms did), or **7a-escaped**, when only `comma-escaped` did. Write only
+the chosen variant's test and code. 7a-quoted:
 
 ```go
 // A Windows DC maps an issuer whose RDN value holds a comma only in the form
@@ -3629,10 +4396,26 @@ func TestADIssuerSerialQuotesAsWindowsDoes(t *testing.T) {
 }
 ```
 
-Run: `go test ./internal/directory/ -run TestADIssuerSerial -count=1`. Expected: FAIL (the value
-is unquoted).
+7a-escaped:
 
-- [ ] **7a, Step 2: Implement** in `mapping.go`. In `ADIssuerSerial`, change
+```go
+// A Windows DC maps an issuer whose RDN value holds a comma only in RFC 4514's
+// backslash form (L44, tests/lab/results/L44-windows_ad.md).
+func TestADIssuerSerialEscapesAsWindowsDoes(t *testing.T) {
+	ca, key := issuingCA(t, pkix.RDNSequence{{{Type: oidDC, Value: "com"}}, {{Type: oidDC, Value: "corp"}},
+		{{Type: oidCN, Value: `corp, "east" CA`}}})
+	if got := ADIssuerSerial(issue(t, ca, key, nil)); got != `X509:<I>DC=com,DC=corp,CN=corp\, \"east\" CA<SR>11AC0000000012` {
+		t.Fatalf("%s", got)
+	}
+}
+```
+
+Run: `go test ./internal/directory/ -run TestADIssuerSerial -count=1`. Expected: FAIL (the value
+is unquoted, or unescaped).
+
+- [ ] **7a, Step 2: Implement** in `mapping.go`. For 7a-escaped, use `adEscape`, with
+`tests/lab/windows_test.go`'s `winEscape` as its body, in place of `adQuote` below; `winForm{escaped: true}`
+in place of `winForm{quoted: true}`. Otherwise the step is the same. For 7a-quoted, in `ADIssuerSerial`, change
 `typeName(atv.Type)+"="+fmt.Sprint(atv.Value)` to `typeName(atv.Type)+"="+adQuote(fmt.Sprint(atv.Value))`
 and add:
 
@@ -3687,11 +4470,17 @@ The existing `TestADIssuerSerial` (`0x1200000000AC11`) is unchanged. In
 
 - [ ] **7c (OR-1), Step 1: The failing test** (append to `internal/directory/conn_test.go`)
 
+7c runs **only in OR-1's branch (ii)**: the unmapped EXTERNAL rows (e2, e3) were refused with
+LDAP result 1, and the valid KDC-stopped row (e5) was answered with a different code. In any
+other branch, skip 7c: OR-1 goes to Ryan with the measured codes, and no code changes in this
+plan.
+
 ```go
 // An EXTERNAL bind the directory will not map is answered 1 (operations
-// error) by Samba and Windows (L43, L44): the broker's certificate refused,
-// not the server down, so it starts the hold-off and opens no breaker. On a
-// simple bind, 1 is still neither.
+// error) by Samba and Windows (L43, L44), and a Windows DC whose KDC is down
+// answers otherwise (L44): the broker's certificate refused, not the server
+// down, so it starts the hold-off and opens no breaker. On a simple bind, 1
+// is still neither.
 func TestAnExternalBindAnsweredOneIsARefusal(t *testing.T) {
 	ext := &Credentials{mech: "external", who: "CN=port49-broker"}
 	err := bind(context.Background(), ldapBindServer(t, ldap.LDAPResultOperationsError, "unmapped"), Server{URI: "ldaps://dc-01"}, ext)
@@ -3732,26 +4521,26 @@ return with:
 
 Update `Refusal`'s comment to name "or an EXTERNAL bind answered 1 (L43, L44)".
 
-Spec first (`docs:` commit):
+The spec text, drafted first in the PR description and committed to `main` after 7h merges
+(Step 4):
 - Decision 38 item 9's list becomes "(LDAP 49, 48, 8, 13 or 7, 1 on an EXTERNAL bind (L43, L44),
   a KDC's refusal)".
 - Item 8's "port49 counts 1 as a server fault, so configure `simple` or `gssapi` against Samba"
-  becomes "port49 counts 1 on an EXTERNAL bind as a refusal (L44): the hold-off, not a dark pool".
+  becomes "port49 counts 1 on an EXTERNAL bind as a refusal (L44): the hold-off, not a dark pool.
+  A Windows DC whose KDC is down answers <e5's code> (L44), so that fault is not read as a
+  refusal."
 - Design §10 item 1 is changed to match.
+- The operator note names the residual: a DC whose mapping path is broken in a way L44 did not
+  measure, such as a stale NTAuth cache, may still answer 1, and that would start the hold-off.
 
 Run: `go test ./internal/directory/ -count=1 && make test && make vet`. Expected: PASS.
 
-- [ ] **Each part, Step 3: Commit** (one `docs:` commit, then one `fix(directory)` commit per
-part)
+- [ ] **Each part, Step 3: Commit the fix on the branch** (one `fix(directory)` commit per
+part; no `docs:` commit on the branch)
+
+Before this commit, the part's spec text is in the PR description (Step 1 of the order above).
 
 ```bash
-git -C /home/rwendt/git/port49/.worktrees/l44 add docs/design/2026-08-23-policy-engine-spec.md docs/design/2026-08-21-port49-design.md
-git -C /home/rwendt/git/port49/.worktrees/l44 commit -m "docs: <the rule> as a Windows DC measured it (L44)
-
-tests/lab/results/L44-windows_ad.md: <the rows>. Rule 4: the doc followed the lab.
-
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 git -C /home/rwendt/git/port49/.worktrees/l44 add internal/directory tests/lab/windows_unit_test.go
 git -C /home/rwendt/git/port49/.worktrees/l44 commit -m "fix(directory): <7a: quote <I> values as Windows does | 7b: keep the serial's sign byte in <SR> | 7c: an EXTERNAL bind answered 1 is a refusal>
 
@@ -3762,23 +4551,62 @@ Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 ```
 
 Then re-run Task 6 at the fix. Expected: the matrix's `comma-port49` (7a) or `highbit-port49`
-(7b) row gets the TGT its quoted or sign-byte twin got. For 7c, `tryBind`'s refusal text is
-unchanged.
+(7b) row gets the TGT its quoted, escaped or sign-byte twin got. For 7c, `tryBind`'s refusal
+text is unchanged.
+
+- [ ] **Each part, Step 4: The spec text on `main`, after 7h merges** (main checkout; docs only)
+
+Wait until `feature/oidc-and-trust-domains` has merged. Then, in `/home/rwendt/git/port49` on
+`main`, apply the drafted spec text against `main` as it then stands:
+
+```bash
+git -C /home/rwendt/git/port49 pull --ff-only
+git -C /home/rwendt/git/port49 add docs/design/2026-08-23-policy-engine-spec.md docs/design/2026-08-21-port49-design.md
+git -C /home/rwendt/git/port49 commit -m "docs: <the rule> as a Windows DC measured it (L44)
+
+tests/lab/results/L44-windows_ad.md (on feature/l44-windows-ad, merging next):
+<the rows>. Rule 4: the doc followed the lab. The fix is <the fix commit>.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+```
+
+Then merge the L44 PR, with no rebase.
 
 ---
 
-### Task 8: Close L44 (or narrow it) and record what was built
+### Task 8: Close L44 (or narrow it) and record what was built — docs only, on `main`, after 7h merges
+
+**This task is a docs-only commit to `main`, made after 7h merges (controller R2). It is never
+on `feature/l44-windows-ad`.** It runs once both of these hold:
+- `feature/oidc-and-trust-domains` has merged;
+- the L44 PR has merged, so the note it cites is on `main` (rule 3).
+
+Its commands run in the main checkout, `/home/rwendt/git/port49`. Each edit is made against
+`main` as it then stands: 7h will have added L45–L47 directly under the L44 row in §15, and will
+have edited the design file at other lines.
 
 **Files:**
 - Modify: `docs/design/2026-08-23-policy-engine-spec.md`: §15 row L44, and §13 decision 38
-  items 1, 6 and 8 (and 9 if 7c ran).
+  items 1, 6 and 8 (and 9 if 7c ran, already committed by Task 7 Step 4).
 - Modify: `docs/design/2026-08-21-port49-design.md`: §7 (the "A Windows DC's behaviour is
   register row L44's" sentence) and §10 items 1 and 2.
-- Modify: `docs/superpowers/plans/README.md`: the status line; "Plan 7g — As built" (the "Lab"
-  bullet, "Unassigned", the operator notes "Nested groups" and "The binds", and "Open for the
-  final review" (a) and (b)); a new "L44 — As built" subsection after "Plan 7g — As built".
+- Modify: `docs/superpowers/plans/README.md`: "Plan 7g — As built" (the "Lab" bullet,
+  "Unassigned", the operator notes "Nested groups" and "The binds", and "Open for the final
+  review" (a) and (b)), and a new "L44 — As built" subsection after "Plan 7g — As built". **Not
+  the status line:** the controller updates that (controller R4).
 
 **Interfaces:** none (docs).
+
+- [ ] **Step 0: Confirm the order**
+
+```bash
+git -C /home/rwendt/git/port49 switch main && git -C /home/rwendt/git/port49 pull --ff-only
+git -C /home/rwendt/git/port49 log --oneline -1 --grep 'from rhwendt/feature/oidc-and-trust-domains' main | grep -q . && echo "7h merged"
+test -f /home/rwendt/git/port49/tests/lab/results/L44-windows_ad.md && echo "L44 note on main"
+```
+
+Expected: both lines print. Otherwise stop: Task 8 waits.
 
 - [ ] **Step 1: The register row (rule 3)**
 
@@ -3800,12 +4628,17 @@ sentence states what the note shows.
   - for `sid`: whether the `User` certificate's SID extension equalled alice's `objectSid`, and
     whether the KDC accepted it with no `altSecurityIdentities`;
   - whether `StrongCertificateBindingEnforcement` 1 changed anything on this build.
+  - Only `l44Judge`'s "refused" or "TGT issued" is a verdict, in a block whose `control-ski`
+    held. An INVALID cell asserts nothing, and it keeps its claim provisional (rule 2).
 - **Item 6.** Replace "On Windows Server AD, provisional on L44." with what `in_chain` returned
   for the three users, how the loop was answered, the time, and whether `memberOf` listed direct
   groups only.
-- **Item 8.** Replace "On Windows Server AD, provisional on L44." with the EXTERNAL results
-  (mapped, unmapped and their codes), GSSAPI as installed and under `LdapEnforceChannelBinding 2`,
-  and the plain-LDAP simple bind's code.
+- **Item 8.** Replace "On Windows Server AD, provisional on L44." with:
+  - the EXTERNAL results: mapped, unmapped, and mapped with the KDC stopped, with their codes;
+  - GSSAPI as installed and under `LdapEnforceChannelBinding 2`;
+  - the plain-LDAP simple bind's code.
+  Item 9's refusal list changes only if 7c ran (Task 7 Step 4), or if Ryan has answered OR-1
+  branch (iii). Otherwise it stays as it is.
 - **Rule 4.** A result that contradicts any existing sentence of items 1, 6, 8 or 9 rewrites
   that sentence, and the commit message says so.
 
@@ -3817,9 +4650,7 @@ a DC that requires one (`LdapEnforceChannelBinding = 2`) refuses its GSSAPI bind
 or `simple` there (L44)."
 
 - [ ] **Step 4: The roadmap README**
-- **Status line.** After the "7h pre-flight" sentence, add "**L44 executed <date>** on
-  `feature/l44-windows-ad`, each task reviewed; L44 <closed | narrowed> on Windows Server 2025
-  AD (L44 — As built, below)."
+- **Status line:** left alone. The controller updates it on `main` (controller R4).
 - **"Plan 7g — As built".**
   - The "Lab" bullet's L44 sentence becomes the outcome.
   - "Unassigned: L44 ..." is deleted.
@@ -3830,17 +4661,20 @@ or `simple` there (L44)."
   - **(a)** becomes: "Measured (L44): `1.2.840.113556.1.4.800` is advertised by <Windows: yes/no>,
     <Samba: yes/no>, <OpenLDAP: yes/no>; a warning keyed on it would <tell in_chain's directories
     apart | not>." The warning stays parked.
-  - **(b)** becomes the measured codes, and 7c's outcome (OR-1).
+  - **(b)** becomes the measured codes (e2, e3 and e5), OR-1's branch, and 7c's outcome.
 - **"L44 — As built".** One bullet per task with its commits, the deviations from this plan, the
   rulings R1–R8 as they stood, and the Ryan answers OR-1 to OR-3.
+- If Ryan wants a "Windows Server AD (L44)" subsection in `tests/lab/README.md`, it is added here,
+  in this commit on `main`. It holds the same text as `compose.yaml`'s header.
 
-- [ ] **Step 5: Verify and commit**
+- [ ] **Step 5: Verify and commit** (main checkout)
 
-Run: `make test && make vet` in `.worktrees/l44`, and report the real output. Expected: PASS.
+Run: `make test && make vet` in `/home/rwendt/git/port49`, and report the real output.
+Expected: PASS.
 
 ```bash
-git -C /home/rwendt/git/port49/.worktrees/l44 add docs/design/2026-08-23-policy-engine-spec.md docs/design/2026-08-21-port49-design.md docs/superpowers/plans/README.md
-git -C /home/rwendt/git/port49/.worktrees/l44 commit -m "docs: close lab register entry L44 on Windows Server 2025 AD
+git -C /home/rwendt/git/port49 add docs/design/2026-08-23-policy-engine-spec.md docs/design/2026-08-21-port49-design.md docs/superpowers/plans/README.md
+git -C /home/rwendt/git/port49 commit -m "docs: close lab register entry L44 on Windows Server 2025 AD
 
 tests/lab/results/L44-windows_ad.md. Decision 38 items 1, 6 and 8 state what
 the DC measured; design §7 and §10 follow (rule 4 where they differed).
@@ -3854,18 +4688,54 @@ If the row stays open, the subject is `docs: narrow lab register entry L44 to wh
 
 ---
 
-## Questions for Ryan (each with a recommendation; the plan proceeds on the recommendation)
+## Questions for Ryan (each with a recommendation; the plan proceeds on the recommendation, except where OR-1 says it waits)
 
-- **OR-1. Carried question (b): if a Windows DC answers an unmapped EXTERNAL bind with LDAP
-  result 1, should `Refusal` count it?**
-  - **Recommended: yes, for EXTERNAL only** (Task 7c), with the spec edited first.
-  - Today, result 1 opens every DC's breaker, so the pool goes dark and grace serves; the operator
-    sees "server down".
-  - As a refusal, it starts PF7g-g's hold-off, which says "refused" with the code hourly. That
-    names the real fault, an unmapped or rotated broker certificate. No lockout counter applies
-    to a certificate.
-  - If Windows answers 49, 48 or 7 instead, nothing changes, and the Samba note stands as
-    Samba's alone.
+- **OR-1. Carried question (b): what should port49 do when a Windows DC answers an EXTERNAL
+  bind with LDAP result 1? The answer is measured first.**
+  - **Why "count 1 as a refusal" is not sound unmeasured.**
+    - PF7g-g's hold-off is pool-wide because failed binds of the one service account count
+      toward AD lockout on every DC. A certificate has no lockout counter, so that reason does
+      not carry to EXTERNAL.
+    - Result 1 (operationsError) is also a generic server-side code. A DC whose own mapping path
+      is broken may answer it too: its KDC down (Schannel's S4U2Self needs it), or its NTAuth
+      cache stale.
+    - Under a pool-wide hold-off, that one DC's fault would stop binds to every unbound DC for
+      up to 15 minutes, instead of failing over to a healthy one.
+  - **What the run measures.**
+    - e2 and e3: the unmapped certificate's code.
+    - e5: a mapped certificate's code while the DC's KDC is stopped.
+    - e5 is valid only when the same mapped bind succeeds with the KDC up, before it (e1) and
+      after it (e6).
+  - **The branches, read in Task 6 Step 3:**
+    - **(i) Unmapped is refused with a code that is already a refusal** (49, 48, 8, 13 or 7).
+      Nothing changes, no 7c, and the Samba note stands as Samba's alone.
+    - **(ii) Unmapped gets 1, and a valid e5 gets a different code.** Then 1 tells "certificate
+      refused" from "this DC's KDC is down".
+      - **Recommended: Task 7c,** `Refusal` counting 1 on EXTERNAL only, spec text first
+        ("Sequencing"). The plan proceeds on this.
+      - At 3am, an unmapped or rotated broker certificate reads "refused, LDAP result 1" hourly
+        through the hold-off, not "server down" with every breaker open.
+      - A DC with its KDC down answers e5's code, which stays a fault: that DC's breaker opens,
+        and the pool fails over.
+      - Residual: other broken mapping paths, such as a stale NTAuth cache, are unmeasured and
+        may still answer 1. The operator note says a refusal with result 1 from one DC, while
+        the others bind, is that DC's fault.
+    - **(iii) Unmapped and a valid e5 both get 1.** Then 1 cannot tell the two apart.
+      - **Recommended: do not widen `Refusal`.** Make result 1 on EXTERNAL a per-server refusal
+        instead. That server is skipped for the bind, its breaker stays shut, and no pool-wide
+        hold-off starts. At 3am, a broken DC is failed over, and an unmapped certificate shows
+        "refused, LDAP result 1" on every DC at once, which names it.
+      - The alternative is the status quo: 1 stays a fault, with an operator note saying "result
+        1 on EXTERNAL: check the broker certificate's `altSecurityIdentities` first, then that
+        DC's KDC". At 3am that still reads as "server down", with the pool dark and grace
+        serving.
+      - Either is a spec change (decision 38 items 8 and 9, design §10), and it is Ryan's call.
+        Neither is in this plan: **the plan waits on Ryan here.** The chosen one is a follow-up
+        on `main` after 7h merges, spec first.
+    - **(iv) e5 INVALID.** OR-1 stays open and no 7c. The status quo holds until a valid KDC-down
+      cell exists. Report it to Ryan with e2's and e3's codes.
+    - **Anything else,** such as an unmapped certificate that binds, or a code outside these
+      branches: record it, no 7c, and report it to Ryan.
 - **OR-2. Close L44 on Windows Server 2025 alone?**
   - **Recommended: yes** (R1). The 2022 evaluation media predate KB5014754 entirely and would need
     online updates that no run can reproduce.
