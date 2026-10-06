@@ -806,3 +806,54 @@ func TestAHungSaveKeepsOnePendingFile(t *testing.T) {
 		t.Fatalf("the second save is fetched_at %v, want the newest %v (%v)", p.FetchedAt, c.Now(), err)
 	}
 }
+
+// Review R2-I1: fetches are ordered by the flight, but each reaches Save
+// after its own Say. A fetch held in Say must not write its older file after
+// a newer fetch's.
+func TestAnOlderFileIsNeverSavedAfterANewerOne(t *testing.T) {
+	iss, c := oidctest.NewIssuer(t), newClock()
+	var mu sync.Mutex
+	var files [][]byte
+	inSay, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	ks := oidc.NewKeySet(oidc.KeySetConfig{Issuer: iss.URL, Client: oidc.NewClient(iss.Roots()), Refresh: time.Hour,
+		MaxAge: 24 * time.Hour, Now: c.Now, M: metrics.New(prometheus.NewRegistry()),
+		Say: func(f string, a ...any) {
+			if strings.Contains(fmt.Sprintf(f, a...), "keys from") {
+				once.Do(func() { close(inSay); <-release })
+			}
+		},
+		Save: func(b []byte) error {
+			mu.Lock()
+			files = append(files, append([]byte(nil), b...))
+			mu.Unlock()
+			return nil
+		}})
+	ctx := context.Background()
+	if err := ks.Fetch(ctx); err != nil {
+		t.Fatal(err)
+	}
+	<-inSay
+	c.Add(time.Hour)
+	if err := ks.Fetch(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for end := time.Now().Add(5 * time.Second); time.Now().Before(end); time.Sleep(time.Millisecond) {
+		mu.Lock()
+		n := len(files)
+		mu.Unlock()
+		if n >= 1 {
+			break
+		}
+	}
+	close(release)
+	time.Sleep(100 * time.Millisecond)
+	mu.Lock()
+	defer mu.Unlock()
+	var p struct {
+		FetchedAt time.Time `json:"fetched_at"`
+	}
+	if len(files) == 0 || json.Unmarshal(files[len(files)-1], &p) != nil || !p.FetchedAt.Equal(c.Now()) {
+		t.Fatalf("%d files; the last is fetched_at %v, want the newest %v", len(files), p.FetchedAt, c.Now())
+	}
+}

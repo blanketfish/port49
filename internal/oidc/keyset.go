@@ -154,9 +154,10 @@ type KeySet struct {
 	flight    chan struct{} // a fetch in progress; nil when none
 
 	afterFirstTry func()     // test hook, nil in production
-	saveMu        sync.Mutex // guards saving and pending
+	saveMu        sync.Mutex // guards saving, pending and newest
 	saving        bool       // a goroutine is in Save, outside the flight
 	pending       []byte     // the newest file given while it was: at most one
+	newest        time.Time  // the fetch time of the newest file given to save
 }
 
 // NewKeySet holds no key until Restore or Fetch. Its issuer's last-success
@@ -312,7 +313,7 @@ func (s *KeySet) fetchOnce(ctx context.Context, ch chan struct{}) {
 	}
 	if s.c.Save != nil {
 		file, _ := json.Marshal(persisted{Issuer: iss, FetchedAt: now, JWKS: body})
-		s.save(file)
+		s.save(file, now)
 	}
 }
 
@@ -320,8 +321,17 @@ func (s *KeySet) fetchOnce(ctx context.Context, ch chan struct{}) {
 // running, a newer file replaces the one pending, and the running saver
 // writes it next: a hung Save holds one goroutine and one file, however many
 // fetches come, and the newest file is the last written.
-func (s *KeySet) save(file []byte) {
+//
+// Fetches reach save in the order their Say lines let them, not the order the
+// flight ran them, so a file older than one already given is dropped: an
+// older set never replaces a newer one on disk.
+func (s *KeySet) save(file []byte, at time.Time) {
 	s.saveMu.Lock()
+	if !at.After(s.newest) {
+		s.saveMu.Unlock()
+		return
+	}
+	s.newest = at
 	if s.saving {
 		s.pending = file
 		s.saveMu.Unlock()
