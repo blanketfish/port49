@@ -1227,7 +1227,7 @@ func TestWindowsLDAPSRemovesEarlierLabCertificates(t *testing.T) {
 	src := strings.ReplaceAll(string(b), "\r\n", "\n")
 	after := strings.Index(src, "$t = ")
 	rm := strings.Index(src[after:], "Remove-Item") + after
-	cp := strings.Index(src, "reg.exe copy")
+	cp := strings.Index(src, "Invoke-Bounded 'reg_copy'")
 	if after < 0 || rm < after || cp < rm {
 		t.Fatal("ldaps.ps1 does not remove earlier certificates before it copies the new one")
 	}
