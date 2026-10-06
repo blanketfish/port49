@@ -16,6 +16,16 @@ const (
 	// for this (device, username). The mint is refused, never a redemption
 	// (design §8).
 	CandidateCapReached Reason = "candidate_cap_reached"
+	// IdentityUnmapped: the client certificate maps to no usable
+	// directory entry (spec §5.7; decision 38). IdentityAmbiguous: to two
+	// or more, never the first (design §7). DirectoryUnavailable: no
+	// directory server answered and no membership verified within
+	// directory.grace is held. CompositionRefused: the principal's
+	// subjects compose on the device to a reply a joint check refuses.
+	IdentityUnmapped     Reason = "identity_unmapped"
+	IdentityAmbiguous    Reason = "identity_ambiguous"
+	DirectoryUnavailable Reason = "directory_unavailable"
+	CompositionRefused   Reason = "composition_refused"
 
 	// redeem
 	TokenRedeemed Reason = "token_redeemed"
@@ -91,6 +101,10 @@ const (
 	// bundle swap made, written by the component that swapped (spec §5.7,
 	// §10).
 	EventInventoryChange = "inventory_change"
+	// EventDirectoryForget is not a decision: an operator removed a
+	// principal's directory membership, and with it the entry the principal
+	// was pinned to (spec §5.7; plan 7g, Ruling 3's escape).
+	EventDirectoryForget = "directory_forget"
 )
 
 // EventRefresh is the broker carrying the policy in force into a live login
@@ -121,6 +135,7 @@ const (
 // reasons is every Reason above; reasons_test.go keeps it complete.
 var reasons = []Reason{
 	GrantsMatched, NoGrantsMatched, UsernameCollision, TrustDomainUnresolved, CandidateCapReached,
+	IdentityUnmapped, IdentityAmbiguous, DirectoryUnavailable, CompositionRefused,
 	TokenRedeemed, TokenNotFound, TokenSpent, DeviceMismatch, CredentialMismatch, ReceiptReplayed,
 	TokenKindMismatch, StoreUnavailable,
 	ContextMatched, EscalationGranted, PermitDominates, PipeStageDenied, ServiceUnsupported, EnableRefused,

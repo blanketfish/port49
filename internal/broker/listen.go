@@ -3,8 +3,10 @@ package broker
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +22,7 @@ import (
 	"github.com/rhwendt/port49/internal/broker/api"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/directory"
 	"github.com/rhwendt/port49/internal/printsafe"
 	"github.com/rhwendt/port49/internal/store"
 )
@@ -39,6 +42,9 @@ type ListenerLimits struct {
 	MaxPerPrincipal int
 	// HandshakeTimeout bounds a TLS handshake.
 	HandshakeTimeout time.Duration
+	// MapTimeout bounds the directory mapping at bind (Listener.Map): port49d
+	// sets the directory's query_timeout plus 1s. Zero is HandshakeTimeout.
+	MapTimeout time.Duration
 }
 
 // DefaultListenerLimits are port49d's defaults (broker.max_pending_conns_per_source,
@@ -106,6 +112,13 @@ type Listener struct {
 	// owner's connections. port49d sets it to Broker.BindStatus; nil checks
 	// nothing.
 	Status func(cs tls.ConnectionState, principal string, cred store.Credential) *BindRefusal
+	// Map maps the certificate to its directory principal once, at bind,
+	// after the certificate's own marks and Status and before the principal's
+	// mark (Ruling 4): its answer is pinned to the connection, and a refusal
+	// is answered and closed as Status's is. port49d sets it to
+	// Broker.BindMap when a directory is configured; nil keeps the email-SAN
+	// principal.
+	Map func(ctx context.Context, cs tls.ConnectionState, cred store.Credential) (directory.Answer, *BindRefusal)
 
 	ready     chan *tls.Conn
 	done      chan struct{}
@@ -153,6 +166,8 @@ type trackedConn struct {
 	src        netip.Addr
 	principal  string
 	certKey    string
+	mapped     *directory.Answer
+	legacy     string // the email-SAN principal the certificate had before a directory, "" without one
 	gone       bool
 	closeOnce  sync.Once
 }
@@ -286,11 +301,23 @@ func (l *Listener) handshake(c *trackedConn) {
 	if cs := tc.ConnectionState(); len(cs.PeerCertificates) > 0 {
 		// The handshake's VerifyConnection ran Identity a moment ago; this
 		// reads the same answer, which a clock step alone could change.
-		principal, cred, err := Identity(&cs, l.now())
+		var principal, legacy string
+		var cred store.Credential
+		var err error
+		if l.Map != nil {
+			var leaf *x509.Certificate
+			cred, leaf, err = CertIdentity(&cs, l.now())
+			if err == nil {
+				legacy = legacyPrincipal(leaf)
+			}
+		} else {
+			principal, cred, err = Identity(&cs, l.now())
+		}
 		if err != nil {
 			l.refuse(c, tc, "identity_refused", err)
 			return
 		}
+		certKey := store.CertKey(cred.Issuer, cred.Serial)
 		// The status is asked first, and bind decides under one lock: a
 		// mark, then the status's refusal, then the hold. A mark lifted while
 		// the status was asked leaves no connection held unchecked, and a
@@ -298,9 +325,41 @@ func (l *Listener) handshake(c *trackedConn) {
 		// must not turn into a 503 the agent keeps its session on.
 		var ref *BindRefusal
 		if l.Status != nil {
-			ref = l.Status(cs, principal, cred)
+			ref = l.Status(cs, cmp.Or(principal, legacy), cred)
 		}
-		rv, ok := l.bind(c, principal, store.CertKey(cred.Issuer, cred.Serial), ref != nil)
+		if l.Map != nil {
+			// The marks the certificate itself answers to (its key, and the
+			// principal its email SAN gave before a directory: pre-flight
+			// I-16) are decided before the directory is asked, so a revoked
+			// certificate is answered credential_revoked and never a
+			// directory_unavailable the agent keeps its session on
+			// (pre-flight I-4; the invariant above).
+			if rv := l.markedOf(certKey, legacy); rv != nil {
+				if ref != nil && ref.queue != nil {
+					ref.queue()
+				}
+				l.m.BrokerConnectionEvents.WithLabelValues("revoked_refused").Inc()
+				l.answerRefused(tc, http.StatusUnauthorized, revokedError(*rv), 0, legacy, cred,
+					decision.CredentialRevoked)
+				return
+			}
+			if ref == nil {
+				timeout := cmp.Or(l.lim.MapTimeout, l.lim.HandshakeTimeout)
+				mctx, cancel := context.WithTimeout(context.Background(), timeout)
+				a, mref := l.Map(mctx, cs, cred)
+				cancel()
+				if mref != nil {
+					l.m.BrokerConnectionEvents.WithLabelValues("identity_refused").Inc()
+					l.say("identity_"+mref.Error, "broker: answering a connection from %s %s and closing it "+
+						"before it bound", c.src, mref.Error)
+					l.answerRefused(tc, mref.Status, api.Error{Error: mref.Error, Detail: mref.Detail},
+						mref.RetryAfter, "", cred, mref.Reason)
+					return
+				}
+				principal, c.mapped = a.Principal, &a
+			}
+		}
+		rv, ok := l.bind(c, principal, legacy, certKey, ref != nil)
 		// Bind has chosen the answer, so the revocation the refusal carries
 		// is queued now and its mark cannot change it (BindStatus); every
 		// branch queues it, as the status named the certificate whatever
@@ -389,13 +448,17 @@ func handshakeReason(err error) string {
 // principal or certificate: c is then left charged to its source, never
 // held, for answerRefused to answer and close. refused (Status refused c)
 // leaves c the same way once no mark names it, and bind returns nil, true.
-func (l *Listener) bind(c *trackedConn, principal, certKey string, refused bool) (*store.Revocation, bool) {
+func (l *Listener) bind(c *trackedConn, principal, legacy, certKey string, refused bool) (*store.Revocation, bool) {
 	l.mu.Lock()
 	if c.gone {
 		l.mu.Unlock()
 		return nil, false
 	}
-	for _, k := range [][2]string{{store.RevocationPrincipal, principal}, {store.RevocationCert, certKey}} {
+	keys := [][2]string{{store.RevocationPrincipal, principal}, {store.RevocationCert, certKey}}
+	if legacy != "" {
+		keys = append(keys, [2]string{store.RevocationPrincipal, legacy})
+	}
+	for _, k := range keys {
 		rv, marked := l.marked[k]
 		if !marked {
 			continue
@@ -418,7 +481,7 @@ func (l *Listener) bind(c *trackedConn, principal, certKey string, refused bool)
 		return nil, true
 	}
 	l.unpendLocked(c.src)
-	c.principal, c.certKey = principal, certKey
+	c.principal, c.certKey, c.legacy = principal, certKey, legacy
 	held := append(l.held[principal], c)
 	var evicted *trackedConn
 	if len(held) > l.lim.MaxPerPrincipal {
@@ -446,6 +509,24 @@ func (l *Listener) bind(c *trackedConn, principal, certKey string, refused bool)
 	}
 	l.gauge()
 	return nil, true
+}
+
+// markedOf is the mark naming the certificate's key, else the principal its
+// email SAN gave before a directory (legacy, when non-empty), or nil: the
+// marks a certificate answers to before any directory is asked.
+func (l *Listener) markedOf(certKey, legacy string) *store.Revocation {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	keys := [][2]string{{store.RevocationCert, certKey}}
+	if legacy != "" {
+		keys = append(keys, [2]string{store.RevocationPrincipal, legacy})
+	}
+	for _, k := range keys {
+		if rv, ok := l.marked[k]; ok {
+			return &rv
+		}
+	}
+	return nil
 }
 
 // answerRefused reads one request from a connection refused as it bound,
@@ -499,7 +580,9 @@ func (l *Listener) CloseHeld(match func(principal, certKey string) bool) int {
 	var hit []*trackedConn
 	for _, conns := range l.held {
 		for _, c := range conns {
-			if match(c.principal, c.certKey) {
+			// A mark on the principal the certificate had before a directory
+			// closes it too: bind refuses on it (pre-flight I-16).
+			if match(c.principal, c.certKey) || (c.legacy != "" && match(c.legacy, "")) {
 				hit = append(hit, c)
 			}
 		}

@@ -11,6 +11,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
+	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/store"
 	"github.com/rhwendt/port49/internal/store/crypt"
 )
@@ -379,7 +380,7 @@ func TestAContextUnderAnUnheldKeyIsNeverRevoked(t *testing.T) {
 		// The session refresh reports it not_judged, never revoked: the
 		// caller is told what was left, not that a session ended (bd4ae7f).
 		{"session refresh", func(t *testing.T, f *fixture) {
-			rep, err := f.b.RefreshSession(context.Background(), alicePrincipal, store.Credential{Method: "cert"},
+			rep, err := f.b.RefreshSession(context.Background(), policy.MemberOf(alicePrincipal), nil, store.Credential{Method: "cert"},
 				f.b.Now())
 			if err != nil || len(rep.Sessions) != 1 || rep.Sessions[0].Outcome != "not_judged" {
 				t.Fatalf("a session refresh: %+v %v", rep, err)

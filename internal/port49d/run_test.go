@@ -138,12 +138,21 @@ func mintWith(t *testing.T, brokerAddr, pkiDir, device, key, certFile, keyFile s
 	t.Helper()
 	resp := postMint(t, brokerAddr, pkiDir, device, key, certFile, keyFile)
 	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var out api.MintResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := json.Unmarshal(raw, &out); err != nil {
 		t.Fatal(err)
 	}
 	if len(out.Results) != 1 || out.Results[0].Login == "" {
-		t.Fatalf("mint: %d result(s); a mint answer carries tokens and is not printed", len(out.Results))
+		// The status and the error code only: a mint answer carries tokens
+		// and is not printed.
+		var e api.Error
+		_ = json.Unmarshal(raw, &e)
+		t.Fatalf("mint: %d result(s); status %d, error %q; a mint answer carries tokens and is not printed",
+			len(out.Results), resp.StatusCode, e.Error)
 	}
 	return out.Results[0].Login
 }

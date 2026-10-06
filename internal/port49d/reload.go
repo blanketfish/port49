@@ -630,7 +630,7 @@ func (r *reloader) loadBoth(ctx context.Context, trigger string, from combinedFr
 		// takes out is Check's, quarantined as decision 20 says, and the
 		// line blames the policy file only for what the policy does. A base
 		// that does not parse leaves every device the policy's (nil).
-		base, berr := bundle.Parse(old.Raw(), inv, policy.Env{KeyRefs: r.cfg.KeyRefs()})
+		base, berr := bundle.Parse(old.Raw(), inv, policyEnv(r.cfg))
 		if berr != nil {
 			base = nil
 		}
@@ -862,7 +862,7 @@ func (r *reloader) loadDocument(ctx context.Context, trigger string, d received)
 	r.latestAhead = ahead
 	opened := err == nil
 	if err == nil {
-		pol, err = bundle.Parse(old.Raw(), pub.Inv, policy.Env{KeyRefs: r.cfg.KeyRefs()})
+		pol, err = bundle.Parse(old.Raw(), pub.Inv, policyEnv(r.cfg))
 	}
 	if err == nil {
 		err = bundle.CheckFrom(old, pol, r.cfg.MaxRemovedPercent, "fix the source of truth")
@@ -1104,7 +1104,7 @@ func (r *reloader) loadInventory(ctx context.Context, trigger string, raw []byte
 // inventory's, not the policy file's: the policy in force loaded before (plan
 // 6a, M5).
 func (r *reloader) inventoryBundle(old *policy.Policy, inv admission.Inventory) (*policy.Policy, error) {
-	pol, err := bundle.Parse(old.Raw(), inv, policy.Env{KeyRefs: r.cfg.KeyRefs()})
+	pol, err := bundle.Parse(old.Raw(), inv, policyEnv(r.cfg))
 	if err == nil {
 		err = bundle.Check(old, pol, r.cfg.MaxRemovedPercent)
 	}

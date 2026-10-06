@@ -3,6 +3,8 @@
 // and serves keys_diagnose (spec §10), which is read-only, and revoke and
 // revocations (plan 7a), which put a revocation in force or lift it: the
 // same people can already rewrite the policy file and cut anyone's access.
+// directory_forget (plan 7g) deletes a principal's directory membership and
+// its pin.
 // It is off unless admin_socket is set. No answer carries a key, a held
 // body, a token or a credential: a diagnosis names key versions and nothing
 // else, and a revocation names what it revoked and what it reached.
@@ -92,6 +94,10 @@ type Server struct {
 	// runs no broker (plan 7e, Ruling 13): port49d on etcd, beside
 	// port49-broker. Empty keeps the memory store's line.
 	RevokeElsewhere string
+	// Forget answers `port49 directory forget` (plan 7g, Ruling 3's
+	// escape): it deletes a principal's directory membership, pin
+	// included. Nil when this process runs no broker.
+	Forget func(ctx context.Context, principal string, uid uint32) (string, error)
 	// DiagnoseElsewhere names where keys diagnose is answered when this
 	// process holds no device packets (Held nil): port49-broker, beside
 	// port49d (plan 7e, Ruling 13; pre-flight M16).
@@ -202,7 +208,7 @@ func (s *Server) handle(c net.Conn) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	if req.Op == "revoke" || req.Op == "revocations" {
+	if req.Op == "revoke" || req.Op == "revocations" || req.Op == "directory_forget" {
 		_ = c.SetDeadline(time.Now().Add(s.connTimeout(req.Op)))
 		go func() {
 			defer cancel()
@@ -217,10 +223,11 @@ func (s *Server) handle(c net.Conn) {
 	_ = enc.Encode(s.answer(ctx, req, uid))
 }
 
-// connTimeout is how long a revoke's or revocations' connection is held
-// open: RevokeWait or ListWait, at the Server's OpTimeout.
+// connTimeout is how long a revoke's, revocations' or directory_forget's
+// connection is held open: RevokeWait for a revoke, ListWait otherwise, at
+// the Server's OpTimeout.
 func (s *Server) connTimeout(op string) time.Duration {
-	if op == "revocations" {
+	if op != "revoke" {
 		return s.opTimeout() + answerMargin
 	}
 	return 2*s.opTimeout() + PersistTimeout + answerMargin
@@ -284,8 +291,26 @@ func (s *Server) answer(ctx context.Context, req Request, uid uint32) (resp Resp
 			return Response{Error: err.Error()}
 		}
 		return Response{Text: text, Partial: partial}
+	case "directory_forget":
+		if s.Forget == nil {
+			if s.RevokeElsewhere != "" {
+				return Response{Error: "port49d runs no broker; directory forget is " + s.RevokeElsewhere +
+					": run port49 directory forget --socket <that path>"}
+			}
+			return Response{Error: "this process runs no broker, so it holds no directory membership"}
+		}
+		if req.Principal == "" {
+			return Response{Error: "directory_forget names a principal"}
+		}
+		ctx, cancel := context.WithTimeout(ctx, s.opTimeout())
+		defer cancel()
+		text, err := s.Forget(ctx, req.Principal, uid)
+		if err != nil {
+			return Response{Error: err.Error()}
+		}
+		return Response{Text: text}
 	}
-	return Response{Error: "unknown op; the ops are keys_diagnose, revoke and revocations"}
+	return Response{Error: "unknown op; the ops are keys_diagnose, revoke, revocations and directory_forget"}
 }
 
 // uidAllowed is the rule peerAllowed applies: port49d's own uid, and root.

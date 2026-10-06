@@ -659,6 +659,18 @@ func (s *Session) redeem(ctx context.Context, method string, presented []byte, m
 	return s.finish(rec, wire.AuthenStatusPass, decision.TokenRedeemed)
 }
 
+// refreshedAt is a new context's staleness clock (spec §5.1.1): the
+// directory membership's verification when the token carries one and it
+// is not after now, else now. A grace mint must not hand a session a
+// fresh ceiling on membership verified hours ago (plan 7g, Ruling 11),
+// and a broker clock ahead of this one must not hand it one in the future.
+func refreshedAt(verified, now time.Time) time.Time {
+	if !verified.IsZero() && verified.Before(now) {
+		return verified
+	}
+	return now
+}
+
 // loginContext is the context this login would create on its own, in its
 // §5.1.1 shape: everything a later authorization has to answer from without
 // reaching the broker again. Its CtxID is left for the caller. JoinContext
@@ -671,7 +683,7 @@ func (s *Session) loginContext(winner *store.Token, credHash [32]byte, username,
 	now := s.h.now()
 	c := store.Context{Principal: winner.Principal, Username: username,
 		Port: port, RemAddr: remAddr, PrivLvl: s.start.PrivLvl, BlobHash: winner.BlobHash,
-		Credential: winner.Credential, AuthTime: winner.AuthTime, RefreshedAt: now,
+		Credential: winner.Credential, AuthTime: winner.AuthTime, RefreshedAt: refreshedAt(winner.VerifiedAt, now),
 		LastTouchedAt: now, Enable: winner.Enable, MaxPrivilege: winner.MaxPrivilege, CreatedAt: now,
 		Logins: []string{store.LoginWitness(credHash)}}
 	// A zero MaxSessionAge is `max_session_age: never` and must stay

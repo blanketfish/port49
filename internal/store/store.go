@@ -126,6 +126,11 @@ type Token struct {
 	// RevokedAt (spec §5.6). Zero reads as "minted before any revocation",
 	// which keeps the mark.
 	MintedAt time.Time
+	// VerifiedAt is when the directory membership this token was minted on
+	// was verified (plan 7g, Ruling 11): the login writes it as the
+	// context's RefreshedAt, so a grace mint never resets the staleness
+	// clock. Zero is a mint with no directory: the redemption's now.
+	VerifiedAt time.Time
 
 	Sealed []byte // written by internal/store/crypt; zero in plaintext form
 }
@@ -542,6 +547,11 @@ type ContextPolicy struct {
 	// as a login gives a token with none: it denies, loudly, rather than
 	// passing for a legitimate never.
 	MaxSessionAge time.Duration
+	// RefreshedAt, when non-zero, raises the context's RefreshedAt to it:
+	// the scheduled refresh verified the directory (plan 7g, Ruling 12). A
+	// policy reload leaves it zero: nothing about the directory was
+	// re-verified (spec §5.1.3).
+	RefreshedAt time.Time
 }
 
 // ContextRef is what the indexes hold: the context key, nothing more.
@@ -850,7 +860,8 @@ type Store interface {
 	//
 	// It does not extend the expiry or stamp LastTouchedAt: a policy edit is
 	// not activity, or every reload would keep every idle context alive. It
-	// does not touch AuthTime or RefreshedAt, nor lengthen SessionExpires:
+	// does not touch AuthTime, nor RefreshedAt unless p carries one, nor
+	// lengthen SessionExpires:
 	// nothing about the operator's authentication or the directory was
 	// re-verified. And it never clears RevokedAt, for the reason
 	// RefreshContext never does, nor moves it earlier: a revoking write onto
@@ -859,6 +870,14 @@ type Store interface {
 	//
 	// ErrNotFound if the key is absent or already expired.
 	SetContextPolicy(ctx context.Context, k ContextKey, policyRev uint64, p ContextPolicy) error
+
+	// StampRefreshed raises k's RefreshedAt to at, only while its PolicyRev
+	// is still policyRev, and moves neither PolicyRev nor the expiry: the
+	// scheduled refresh's stamp on a context whose answer it found
+	// unchanged (plan 7g, Ruling 12). A context changed since the read is
+	// ErrConflict, read again; an earlier at than the one held leaves it.
+	// ErrNotFound if the key is absent or expired.
+	StampRefreshed(ctx context.Context, k ContextKey, policyRev uint64, at time.Time) error
 	// DeleteContext has no production caller today: the caller it had was
 	// author's `username_mismatch` branch, which under the old `(nas, port)`
 	// key could delete a live operator's context on an uncredentialed request.
@@ -967,6 +986,39 @@ type Store interface {
 	// zero when neither stands or both are past SupersededFor. Never
 	// ErrNotFound.
 	SupersededAt(ctx context.Context, k TokenKey) (time.Time, error)
+
+	// PutMembership writes m under m.Principal and indexes each of m.MapKeys,
+	// keeping a record verified later than m whole; ttl from now. A key a live
+	// record of another principal still lists is written ambiguous. A refused
+	// m (Refused, no groups) supersedes an older record the same way. A write
+	// verified before the principal's last forget is dropped, with no error:
+	// the forget left a tombstone holding its time (DeleteMembership).
+	PutMembership(ctx context.Context, m Membership, ttl time.Duration) error
+	// RefuseMapKeys marks each key refused as of at, unless a later
+	// verification holds it: MembershipByKey then answers ErrNotFound.
+	RefuseMapKeys(ctx context.Context, mapKeys []string, at time.Time, ttl time.Duration) error
+	// GetMembership is the record for principal, or ErrNotFound.
+	GetMembership(ctx context.Context, principal string) (Membership, error)
+	// MembershipByKey is the record a mapping key indexes, or ErrNotFound when
+	// none does, the key is ambiguous or refused, or the record no longer
+	// lists the key.
+	MembershipByKey(ctx context.Context, mapKey string) (Membership, error)
+	// MembershipPrincipals is every principal with a live membership record,
+	// refused ones included, sorted: the set a policy refresh supersedes
+	// group members' tokens over.
+	MembershipPrincipals(ctx context.Context) ([]string, error)
+	// DeleteMembership removes principal's record, refused or not, and with
+	// it the entry the principal is pinned to, and returns what it held; or
+	// ErrNotFound when no live record is held. Its mapping keys are left to
+	// expire: MembershipByKey answers ErrNotFound for a key whose record is
+	// gone, and a claim treats it as unclaimed. It leaves a tombstone for
+	// principal holding the time of the forget, for what the record had left
+	// to live, and at least TombstoneFloor: a PutMembership verified before it
+	// is dropped, so a verification in flight when the operator forgot can
+	// never write the old pin back. A tombstone is no record: no read
+	// returns it. `port49 directory forget` alone calls it (Ruling 3's
+	// escape; Task 13).
+	DeleteMembership(ctx context.Context, principal string) (Membership, error)
 }
 
 // RevStore is a Store whose whole-context writes also return the revision
@@ -997,6 +1049,51 @@ type RevStore interface {
 // longest token_ttl (policy.MaxTokenTTL, 15m) and so past the life of any
 // idempotency record whose replay it governs (plan 7e, Ruling 9; 4b m10).
 const SupersededFor = 20 * time.Minute
+
+// TombstoneFloor is the least a forget's tombstone is kept: a verification
+// in flight at the forget must find it however little of the record's ttl
+// was left.
+const TombstoneFloor = 24 * time.Hour
+
+// Membership is one principal's directory answer as the broker last
+// verified it (plan 7g; decision 38): the entry its certificate mapped to,
+// the username and groups read from it, and when and where. The broker's
+// role alone reads or writes it.
+type Membership struct {
+	Principal string
+	DN        string // sealed
+	// EntryID is the entry's immutable id ("guid:" + objectGUID hex,
+	// "uuid:" + entryUUID, else "dn:" + the canonical DN): the entry the
+	// principal is pinned to (Ruling 3). A refusal keeps it.
+	EntryID    string   // sealed
+	Username   string   // sealed
+	GroupDNs   []string // sealed: every group the entry is in, under the nested mode
+	GroupNames []string // sealed: their names, those verified unique under groups_base_dn
+	// MapKeys are MapKey(kind, value) for every certificate-mapping value the
+	// entry answers to: the index a bind in grace finds the principal by.
+	// Sealed, and in the clear for the backend's index; crypt refuses a
+	// record whose two differ, so a store write cannot add a victim's key
+	// to an admin's record.
+	MapKeys []string
+	// Refused is the directory's "no" (identity_unmapped,
+	// identity_ambiguous, username_collision) as of VerifiedAt: no groups,
+	// and grace never serves it (Ruling 10). Sealed and in the clear, as
+	// MapKeys.
+	Refused    bool
+	VerifiedAt time.Time // sealed too: in the clear alone, a store write could extend grace
+	Server     string
+	Site       string
+	Sealed     []byte // written by internal/store/crypt; nil in plaintext form
+}
+
+// MapKey is the index key of one certificate-mapping value: a hash, so the
+// plaintext index names no certificate value. canonicalValue is the
+// mapping's canonical form (the directory package's canonicalValue), the
+// same on the certificate's side and the entry's.
+func MapKey(kind, canonicalValue string) string {
+	sum := sha256.Sum256([]byte(kind + "\x00" + canonicalValue))
+	return hex.EncodeToString(sum[:])
+}
 
 // CertKey is the index key a CRL or OCSP response names (spec §5.1.4).
 func CertKey(issuer, serial string) string { return issuer + "|" + serial }

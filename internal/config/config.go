@@ -31,6 +31,7 @@ import (
 
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/daemon/limits"
+	"github.com/rhwendt/port49/internal/directory"
 	"github.com/rhwendt/port49/internal/fence"
 	"github.com/rhwendt/port49/internal/keyring"
 	"github.com/rhwendt/port49/internal/platform"
@@ -115,14 +116,12 @@ type LabConfig struct {
 // SessionConfig is the set of clocks a context lives by (spec §5.6).
 type SessionConfig struct {
 	// StalenessCeiling denies a context whose `refreshed_at` is older than
-	// this, `context_stale`. It defaults to 0, which disables the check, and
-	// that default is a wiring fact rather than a taste: nothing moves
-	// `refreshed_at` until the broker refreshes contexts (plans 3 and 7), so
-	// `refreshed_at` is stamped once at login. Any finite ceiling before then
-	// denies a steadily working operator "the broker is unreachable" at login
-	// plus the ceiling, with no broker to reach. Whoever wires the broker sets
-	// this key; set, it must be at least a minute.
-	StalenessCeiling time.Duration `yaml:"staleness_ceiling"`
+	// this, `context_stale`. Default 4h (plan 7g; OR-1): the broker's
+	// scheduled refresh stamps `refreshed_at` every `broker.refresh_interval`.
+	// An explicit `0s` turns it off, which every start says. The YAML key is
+	// read through sessionYAML alone (a pointer there tells 0s from absent),
+	// so this field takes none.
+	StalenessCeiling time.Duration `yaml:"-"`
 
 	// GraceWindow is how long past `session_expires` a context is kept: the
 	// authorizer denies through it and then deletes the context (plan 7b);
@@ -231,6 +230,15 @@ type BrokerConfig struct {
 	// crl-<name>.der; required under the broker's role, which has no
 	// revocations file (plan 7e, Ruling 12).
 	StateDir string `yaml:"state_dir"`
+	// Directory is broker.directory resolved (plan 7g): nil is no
+	// directory, and the slice's email-SAN principal and declared human
+	// usernames stand.
+	Directory    *directory.Config `yaml:"-"`
+	DirectorySet *directoryYAML    `yaml:"directory"`
+	// RefreshInterval is how often the runner re-verifies every live
+	// principal and stamps refreshed_at (spec §5.1.3; plan 7g Ruling 12).
+	// Default 5m; 1m to 1h.
+	RefreshInterval time.Duration `yaml:"refresh_interval"`
 }
 
 // Role is which process a configuration is for (plan 7e, Ruling 2):
@@ -478,10 +486,12 @@ type limitsYAML struct {
 
 // sessionYAML mirrors the session block. ceiling_warning is a pointer so an
 // absent key (take the 30m default) is told from an explicit 0s (off), as
-// limitsYAML does for its windows.
+// limitsYAML does for its windows; staleness_ceiling is one for the same
+// reason (absent takes the 4h default).
 type sessionYAML struct {
-	SessionConfig  `yaml:",inline"`
-	CeilingWarning *time.Duration `yaml:"ceiling_warning"`
+	SessionConfig    `yaml:",inline"`
+	CeilingWarning   *time.Duration `yaml:"ceiling_warning"`
+	StalenessCeiling *time.Duration `yaml:"staleness_ceiling"`
 }
 
 type fileConfig struct {
@@ -572,7 +582,10 @@ type Config struct {
 	ContextIdleTTL time.Duration
 	Accounting     AccountingConfig
 	Session        SessionConfig
-	Token          TokenConfig
+	// StalenessOff is session.staleness_ceiling set to 0s explicitly, for the
+	// start line that says the check is off.
+	StalenessOff bool
+	Token        TokenConfig
 	// Broker is nil when no broker: block is configured, and Lab when no lab:
 	// block is.
 	Broker *BrokerConfig
@@ -641,6 +654,10 @@ var platformNameShape = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 // DefaultMaxSessionAge is session.max_session_age_default where the file
 // sets none (spec §5.6: "The default is 12h").
 const DefaultMaxSessionAge = 12 * time.Hour
+
+// DefaultStalenessCeiling is session.staleness_ceiling where the file sets
+// none (plan 7g; OR-1): the scheduled refresh keeps contexts well under it.
+const DefaultStalenessCeiling = 4 * time.Hour
 
 // MaxSessionAge reads session.max_session_age_default from a port49d.yaml's
 // bytes, with Load's default and its refusal of a value that is not
@@ -821,10 +838,8 @@ func load(path string, role Role) (Config, error) {
 		ContextIdleTTL: orD(f.ContextIdleTTL, 12*time.Hour),
 		Lab:            f.Lab,
 		AdminSocket:    f.AdminSocket,
-		// staleness_ceiling has no default: 0 means the check is off, which is
-		// what SessionConfig.StalenessCeiling argues for.
 		Session: SessionConfig{
-			StalenessCeiling:        f.Session.StalenessCeiling,
+			StalenessCeiling:        DefaultStalenessCeiling,
 			GraceWindow:             orD(f.Session.GraceWindow, 10*time.Minute),
 			IndexTTL:                orD(f.Session.IndexTTL, 12*time.Hour),
 			MaxSessionAgeDefault:    orD(f.Session.MaxSessionAgeDefault, DefaultMaxSessionAge),
@@ -871,6 +886,10 @@ func load(path string, role Role) (Config, error) {
 	}
 	if f.Session.CeilingWarning != nil {
 		c.Session.CeilingWarning = *f.Session.CeilingWarning
+	}
+	if sc := f.Session.StalenessCeiling; sc != nil {
+		c.Session.StalenessCeiling = *sc
+		c.StalenessOff = *sc == 0
 	}
 	if c.Session.CeilingWarning < 0 || c.Session.CeilingWarning > maxCeilingWarning {
 		return Config{}, fmt.Errorf("config: session.ceiling_warning is %s: set 0s to turn the warning off, or up to %s",
@@ -920,6 +939,15 @@ func load(path string, role Role) (Config, error) {
 	if f.Broker != nil {
 		if c.Broker, err = checkBroker(c, *f.Broker, role); err != nil {
 			return Config{}, err
+		}
+		// One process: the ceiling and the broker's clocks are one file's, so
+		// they are compared here. port49-broker.yaml never carries the
+		// ceiling (it is port49d's), so a split deployment is compared by
+		// neither (pre-flight I-15).
+		if role == RoleDaemon {
+			if err := checkCeilingAgainstBroker(c.Session.StalenessCeiling, c.Broker); err != nil {
+				return Config{}, err
+			}
 		}
 	}
 	switch {
@@ -1263,6 +1291,18 @@ func checkBroker(c Config, b BrokerConfig, role Role) (*BrokerConfig, error) {
 		return nil, err
 	}
 	b.CertificateStatus = &cs
+	if b.DirectorySet != nil {
+		d, err := checkDirectory(*b.DirectorySet, os.Getenv)
+		if err != nil {
+			return nil, err
+		}
+		b.Directory = d
+	}
+	ri, err := refreshInterval(b.RefreshInterval)
+	if err != nil {
+		return nil, err
+	}
+	b.RefreshInterval = ri
 	return &b, nil
 }
 
@@ -2245,17 +2285,18 @@ func checkPositive(c Config) error {
 			return fmt.Errorf("config: %s must be greater than zero; got %s", f.name, f.d)
 		}
 	}
-	// staleness_ceiling is the one duration here whose zero is meaningful: it
-	// is the default and it means the check is off. A positive one still has to
-	// outlast a refresh interval — under a minute it denies everyone
-	// `context_stale` about as fast as the broker can refresh them.
+	// staleness_ceiling is the one duration here whose zero is meaningful: an
+	// explicit 0s means the check is off (omitting the key takes the 4h
+	// default). A positive one still has to outlast a refresh interval — under
+	// a minute it denies everyone `context_stale` about as fast as the broker
+	// can refresh them.
 	if c.Session.StalenessCeiling < 0 {
-		return fmt.Errorf("config: session.staleness_ceiling must not be negative; got %s (omit the key to disable the check)",
+		return fmt.Errorf("config: session.staleness_ceiling must not be negative; got %s (set it to 0s to disable the check)",
 			c.Session.StalenessCeiling)
 	}
 	if c.Session.StalenessCeiling > 0 && c.Session.StalenessCeiling < time.Minute {
-		return fmt.Errorf("config: session.staleness_ceiling is %s: set it to at least 1m, or omit it to disable "+
-			"the staleness check; a ceiling shorter than a refresh interval denies every live context context_stale",
+		return fmt.Errorf("config: session.staleness_ceiling is %s: set it to at least 1m, or set it to 0s to "+
+			"disable the staleness check; a ceiling shorter than a refresh interval denies every live context context_stale",
 			c.Session.StalenessCeiling)
 	}
 	if c.Token.CandidateCap < 1 {
@@ -2289,6 +2330,25 @@ func checkPositive(c Config) error {
 	}
 	if c.Accounting.SpoolCapacity < 1 {
 		return fmt.Errorf("config: accounting.spool_capacity must be at least 1; got %d", c.Accounting.SpoolCapacity)
+	}
+	return nil
+}
+
+// checkCeilingAgainstBroker is the one-process refusals (plan 7g, Ruling 14):
+// the refresh must fit the ceiling twice, or a context goes stale between two
+// passes; and grace must not outlive it, or a grace mint would be stale at its
+// first command. An off ceiling (0s) is compared with nothing.
+func checkCeilingAgainstBroker(ceiling time.Duration, b *BrokerConfig) error {
+	if ceiling <= 0 {
+		return nil
+	}
+	if b.RefreshInterval > ceiling/2 {
+		return fmt.Errorf("config: broker.refresh_interval %s: above half session.staleness_ceiling (%s); a context "+
+			"would go stale between two passes", b.RefreshInterval, ceiling)
+	}
+	if b.Directory != nil && b.Directory.Grace > ceiling {
+		return fmt.Errorf("config: broker.directory.grace %s: above session.staleness_ceiling (%s), a grace mint would "+
+			"be stale at its first command", b.Directory.Grace, ceiling)
 	}
 	return nil
 }

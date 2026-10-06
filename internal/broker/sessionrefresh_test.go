@@ -14,10 +14,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/rhwendt/port49/internal/daemon/metrics"
+	"github.com/rhwendt/port49/internal/directory"
 	"github.com/rhwendt/port49/internal/store"
 )
 
@@ -449,4 +452,121 @@ func (s markingStore) ContextsByPrincipal(ctx context.Context, principal string)
 		return nil, err
 	}
 	return s.Store.ContextsByPrincipal(ctx, principal)
+}
+
+// A session refresh with a directory verifies the membership (fresh, or
+// grace) and writes refreshed_at as the membership's verification, never
+// later; a refresh the directory refuses extends nothing.
+func TestASessionRefreshVerifiesTheMembership(t *testing.T) {
+	a := answerFor(corpAlice, "alice")
+	a.Source, a.VerifiedAt = directory.Grace, time.Now().Add(-10*time.Minute).Truncate(time.Second)
+	answers := map[string]directory.Answer{alicePrincipal: a, corpAlice: a}
+	f, _ := groupFixture(t, answers, nil)
+	f.b.Directory = directory.ForTestsStaticResolver(f.st, answers, nil) // answers stays the test's to change
+	addr, _ := serveMapped(t, f)
+	c, br := held(t, f, addr, f.alice)
+	before := f.memberContext(t, a, "leaf1", f.now.Add(-time.Hour))
+	f.advance(time.Minute)
+	status, resp := refreshOn(t, c, br, f.alice)
+	if status != 200 || len(resp.Sessions) != 1 || resp.Sessions[0].Outcome != "extended" {
+		t.Fatalf("%d %+v", status, resp)
+	}
+	got := f.context(t, "leaf1", "alice")
+	if !got.RefreshedAt.Equal(a.VerifiedAt) || !got.AuthTime.Equal(f.b.Now()) || !got.RefreshedAt.After(before.RefreshedAt) {
+		t.Fatalf("refreshed_at %v, want the membership's verification %v (auth_time %v)", got.RefreshedAt,
+			a.VerifiedAt, got.AuthTime)
+	}
+	// A membership verified just now stamps the refresh's own time.
+	a.Source, a.VerifiedAt = directory.Fresh, f.b.Now().Add(time.Hour) // not before at: at wins
+	answers[alicePrincipal], answers[corpAlice] = a, a
+	f.advance(refreshEvery)
+	if status, _ := refreshOn(t, c, br, f.alice); status != 200 {
+		t.Fatalf("%d", status)
+	}
+	if got := f.context(t, "leaf1", "alice"); !got.RefreshedAt.Equal(f.b.Now()) {
+		t.Fatalf("refreshed_at %v, want at %v", got.RefreshedAt, f.b.Now())
+	}
+	// The directory refuses the principal: nothing is extended.
+	delete(answers, corpAlice)
+	prev := f.context(t, "leaf1", "alice")
+	f.advance(refreshEvery)
+	nonce, text := challengeOn(t, c, br)
+	status, body := answerOn(t, c, br, c, f.alice, nonce, text)
+	var e api.Error
+	if err := json.Unmarshal([]byte(body), &e); err != nil || status != 401 || e.Error != "identity_unmapped" {
+		t.Fatalf("status %d, error %q", status, e.Error)
+	}
+	if after := f.context(t, "leaf1", "alice"); !after.AuthTime.Equal(prev.AuthTime) ||
+		!after.SessionExpires.Equal(prev.SessionExpires) || !after.RefreshedAt.Equal(prev.RefreshedAt) {
+		t.Fatalf("a refused refresh extended the context: %+v", after)
+	}
+	if strings.Contains(f.log.String(), "secret-group") {
+		t.Fatal("a group reached the log")
+	}
+}
+
+// probeDownResolver is a real Resolver whose every server refuses to dial,
+// so Current reaches grace through the store, as in an outage.
+func probeDownResolver(f *fixture) *directory.Resolver {
+	cfg := directory.Config{Servers: []directory.Server{{URI: "ldaps://dc-down", Priority: 100}},
+		UserFilter: "(objectClass=person)", PrincipalAttribute: "userPrincipalName", UsernameAttribute: "sAMAccountName",
+		QueryTimeout: 200 * time.Millisecond, Grace: time.Hour, FailureThreshold: 3, ProbeInterval: time.Minute,
+		HealthInterval: 30 * time.Second, HealthTimeout: time.Second, Nested: "direct"}
+	m := metrics.New(prometheus.NewRegistry())
+	dial := func(context.Context, directory.Server) (directory.Client, error) {
+		return nil, errors.New("connection refused")
+	}
+	check := func(context.Context, directory.Searcher) error { return nil }
+	return &directory.Resolver{Cfg: cfg, Pool: directory.NewPool(cfg, dial, check, f.b.Now, m, func(string, ...any) {}),
+		Store: f.st, Now: f.b.Now, M: m, Say: func(string, ...any) {}}
+}
+
+// With every directory server down, a session refresh within grace extends
+// with refreshed_at the stored verification; past grace, or on a refused
+// membership, it is 503 directory_unavailable and extends nothing, revokes
+// nothing (pre-flight C-1).
+func TestASessionRefreshInAnOutageUsesGraceOrRefuses(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		advance time.Duration
+		refused bool
+		want    int
+	}{{"within grace", time.Minute, false, 200}, {"past grace", 2 * time.Hour, false, 503},
+		{"refused in grace", time.Minute, true, 503}} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := answerFor(corpAlice, "alice")
+			f, _ := groupFixture(t, map[string]directory.Answer{alicePrincipal: a, corpAlice: a}, nil)
+			addr, _ := serveMapped(t, f)
+			c, br := held(t, f, addr, f.alice)
+			f.memberContext(t, a, "leaf1", f.now.Add(-time.Hour))
+			f.b.Directory = probeDownResolver(f)
+			m := a.Membership
+			m.VerifiedAt, m.Refused = f.now.Add(-10*time.Minute).Truncate(time.Second), tc.refused
+			if err := f.st.PutMembership(context.Background(), m, 24*time.Hour); err != nil {
+				t.Fatal(err)
+			}
+			f.advance(tc.advance)
+			prev := f.context(t, "leaf1", "alice")
+			nonce, text := challengeOn(t, c, br)
+			status, body := answerOn(t, c, br, c, f.alice, nonce, text)
+			after := f.context(t, "leaf1", "alice")
+			if status != tc.want {
+				t.Fatalf("status %d, want %d", status, tc.want)
+			}
+			if tc.want == 200 {
+				if !after.RefreshedAt.Equal(m.VerifiedAt) {
+					t.Fatalf("refreshed_at %v, want %v", after.RefreshedAt, m.VerifiedAt)
+				}
+				return
+			}
+			var e api.Error
+			if err := json.Unmarshal([]byte(body), &e); err != nil || e.Error != "directory_unavailable" {
+				t.Fatalf("error %q", e.Error)
+			}
+			if !after.AuthTime.Equal(prev.AuthTime) || !after.SessionExpires.Equal(prev.SessionExpires) ||
+				!after.RefreshedAt.Equal(prev.RefreshedAt) || !after.RevokedAt.IsZero() {
+				t.Fatal("the context moved")
+			}
+		})
+	}
 }

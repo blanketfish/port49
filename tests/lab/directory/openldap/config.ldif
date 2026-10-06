@@ -1,0 +1,69 @@
+# slapd's cn=config for the lab, in the LDIF form slapd-config(5) bootstraps
+# from (slapadd -n0). Nothing here is a secret: the broker's password is hashed
+# into seed.ldif at start, and the database has no rootpw.
+dn: cn=config
+objectClass: olcGlobal
+cn: config
+olcPidFile: /run/slapd/slapd.pid
+olcLogLevel: stats
+olcTLSCACertificateFile: /etc/ldap/tls/ca.pem
+olcTLSCertificateFile: /etc/ldap/tls/server.pem
+olcTLSCertificateKeyFile: /etc/ldap/tls/server-key.pem
+olcTLSVerifyClient: try
+# The seed is loaded over the ldapi:/// socket, which carries no TLS but a local
+# SSF of 71, so the lab starts at ssf=1; the entrypoint switches this to tls=1
+# (L43: "a directory configured to require TLS") once the seed is in.
+olcSecurity: ssf=1
+olcAuthzRegexp: {0}"^cn=port49-broker,o=port49 lab$" "cn=port49,ou=Svc,dc=corp,dc=example,dc=com"
+
+dn: cn=module{0},cn=config
+objectClass: olcModuleList
+cn: module{0}
+olcModulePath: /usr/lib/ldap
+olcModuleLoad: {0}back_mdb
+olcModuleLoad: {1}memberof
+
+dn: cn=schema,cn=config
+objectClass: olcSchemaConfig
+cn: schema
+
+include: file:///etc/ldap/schema/core.ldif
+
+include: file:///etc/ldap/schema/cosine.ldif
+
+include: file:///etc/ldap/schema/inetorgperson.ldif
+
+dn: olcDatabase={-1}frontend,cn=config
+objectClass: olcDatabaseConfig
+objectClass: olcFrontendConfig
+olcDatabase: {-1}frontend
+
+dn: olcDatabase={0}config,cn=config
+objectClass: olcDatabaseConfig
+olcDatabase: {0}config
+olcAccess: {0}to * by dn.base="gidNumber=0+uidNumber=0,cn=peercred,cn=external,cn=auth" manage by * none
+
+dn: olcDatabase={1}mdb,cn=config
+objectClass: olcDatabaseConfig
+objectClass: olcMdbConfig
+olcDatabase: {1}mdb
+olcDbDirectory: /var/lib/ldap
+olcSuffix: dc=corp,dc=example,dc=com
+# No rootpw: the root DN is the container's own root on the ldapi socket, which loads the seed.
+olcRootDN: gidNumber=0+uidNumber=0,cn=peercred,cn=external,cn=auth
+olcDbMaxSize: 104857600
+olcDbIndex: objectClass eq
+olcDbIndex: cn,uid,mail eq
+olcDbIndex: member,memberOf eq
+olcAccess: {0}to dn.base="" by * read
+olcAccess: {1}to attrs=userPassword by anonymous auth by * none
+olcAccess: {2}to * by dn.exact="cn=port49,ou=Svc,dc=corp,dc=example,dc=com" read by * none
+
+dn: olcOverlay={0}memberof,olcDatabase={1}mdb,cn=config
+objectClass: olcOverlayConfig
+objectClass: olcMemberOf
+olcOverlay: {0}memberof
+olcMemberOfRefInt: TRUE
+olcMemberOfGroupOC: groupOfNames
+olcMemberOfMemberAD: member
+olcMemberOfMemberOfAD: memberOf

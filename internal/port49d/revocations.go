@@ -524,6 +524,14 @@ func persister(st store.Store, path string, held []store.Revocation, enforced *s
 	}
 }
 
+// adminForget is the admin socket's directory_forget (plan 7g, Ruling 3's
+// escape), its origin the caller's uid as a revocation's is.
+func adminForget(brk *broker.Broker) func(context.Context, string, uint32) (string, error) {
+	return func(ctx context.Context, principal string, uid uint32) (string, error) {
+		return brk.Forget(ctx, principal, fmt.Sprintf("admin_socket uid %d", uid))
+	}
+}
+
 // adminRevoke is the admin socket's revoke op over brk (plan 7a). The
 // record's origin is the uid the socket read off the caller.
 func adminRevoke(brk *broker.Broker) func(context.Context, admin.RevokeOp) (string, bool, error) {

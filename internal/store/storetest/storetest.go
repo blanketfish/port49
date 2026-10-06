@@ -1063,6 +1063,21 @@ func Run(t *testing.T, b Backend) {
 		{"RedeemOrDeleteNotBoth", RedeemOrDeleteNotBoth},
 		{"IndexKeysAreExact", IndexKeysAreExact},
 		{"SupersededIsTheLaterAndExpires", SupersededIsTheLaterAndExpires},
+		{"StampRaisesRefreshedAtAndKeepsPolicyRev", StampRaisesRefreshedAtAndKeepsPolicyRev},
+		{"APolicyWriteCarriesItsRefreshedAt", APolicyWriteCarriesItsRefreshedAt},
+		{"MembershipKeepsTheLaterAndIsFoundByKey", MembershipKeepsTheLaterAndIsFoundByKey},
+		{"MembershipKeyClaimedTwiceIsAmbiguous", MembershipKeyClaimedTwiceIsAmbiguous},
+		{"MembershipRefusalSupersedes", MembershipRefusalSupersedes},
+		{"MembershipPrincipalsListsTheLive", MembershipPrincipalsListsTheLive},
+		{"MembershipExpires", MembershipExpires},
+		{"MembershipForgetRemovesThePin", MembershipForgetRemovesThePin},
+		{"MembershipForgetBeatsAnInFlightVerification", MembershipForgetBeatsAnInFlightVerification},
+		{"MembershipKeyClaimedInEitherOrderIsAmbiguous", MembershipKeyClaimedInEitherOrderIsAmbiguous},
+		{"MembershipAmbiguityHealsToTheSoleClaimant", MembershipAmbiguityHealsToTheSoleClaimant},
+		{"MembershipTieKeepsTheRefusal", MembershipTieKeepsTheRefusal},
+		{"MembershipKeyOutlivesNoRecord", MembershipKeyOutlivesNoRecord},
+		{"MembershipRefusedKeyKeepsItsClaimants", MembershipRefusedKeyKeepsItsClaimants},
+		{"MembershipForgetTombstoneOutlivesTheRecord", MembershipForgetTombstoneOutlivesTheRecord},
 	} {
 		p := p
 		t.Run(p.name, func(t *testing.T) { p.run(t, b) })

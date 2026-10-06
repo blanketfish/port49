@@ -52,29 +52,47 @@ var ErrUntrusted = errors.New("broker: no trusted client certificate")
 // refused certificate; they authorize nothing. With no verified chain both
 // are empty.
 func Identity(cs *tls.ConnectionState, now time.Time) (string, store.Credential, error) {
+	cred, leaf, err := CertIdentity(cs, now)
+	if leaf == nil {
+		return "", cred, err
+	}
+	principal, mapErr := principalOf(leaf)
+	if err != nil {
+		return principal, cred, err
+	}
+	if mapErr != nil {
+		return "", cred, mapErr
+	}
+	return principal, cred, nil
+}
+
+// CertIdentity is Identity up to and including the clientAuth check, for a
+// broker with a directory: the credential and the leaf of the connection's
+// verified chain, with no principal, which the directory's mapping gives
+// (plan 7g). A leaf with no email SAN is fine here. Its refusals are
+// Identity's, and a refusal of a chain the anchor verified returns the
+// credential as Identity does; with no verified chain
+// the credential is zero and the leaf nil.
+func CertIdentity(cs *tls.ConnectionState, now time.Time) (store.Credential, *x509.Certificate, error) {
 	if cs == nil || len(cs.VerifiedChains) == 0 || len(cs.VerifiedChains[0]) == 0 {
-		return "", store.Credential{}, fmt.Errorf("%w: the connection presented no certificate the trust anchor verified", ErrUntrusted)
+		return store.Credential{}, nil, fmt.Errorf("%w: the connection presented no certificate the trust anchor verified", ErrUntrusted)
 	}
 	chain := cs.VerifiedChains[0]
 	leaf := chain[0]
 	sum := sha256.Sum256(leaf.Raw)
 	cred := store.Credential{Method: "cert", Fingerprint: "sha256:" + hex.EncodeToString(sum[:]),
 		Issuer: leaf.Issuer.String(), Serial: leaf.SerialNumber.Text(16), Subject: leaf.Subject.String()}
-	principal, mapErr := principalOf(leaf)
 	for _, c := range chain {
 		if now.Before(c.NotBefore) || now.After(c.NotAfter) {
-			return principal, cred, fmt.Errorf("%w: certificate %q is valid %s to %s", ErrUntrusted,
+			return cred, leaf, fmt.Errorf("%w: certificate %q is valid %s to %s", ErrUntrusted,
 				c.Subject.String(), c.NotBefore.UTC().Format(time.RFC3339), c.NotAfter.UTC().Format(time.RFC3339))
 		}
 	}
 	if !clientAuth(leaf) {
-		return principal, cred, fmt.Errorf("%w: the certificate is not issued for client authentication",
+		return cred, leaf, fmt.Errorf("%w: the certificate is not issued for client authentication",
 			ErrUntrusted)
 	}
-	if mapErr != nil {
-		return "", cred, mapErr
-	}
-	return principal, cred, nil
+	return cred, leaf, nil
 }
 
 // principalOf is `user:` and the leaf's one email SAN, lower-cased, or why

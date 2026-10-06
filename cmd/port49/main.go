@@ -71,6 +71,9 @@ const usage = `usage:
   port49 revoke --via-agent [--yes] (--principal PRINCIPAL | --device NAME --username NAME) [--agent-socket PATH]
                 (through your agent, under your api: rights; --mine leaves no mark; --via-agent needs
                 api: revoke_others, and asks first on a terminal unless --yes)
+  port49 directory forget [--socket PATH] PRINCIPAL
+                (forget a principal's directory membership and the entry it is pinned to: for an
+                entry deleted and re-created, once you have confirmed it is the same person)
 `
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
@@ -119,6 +122,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return keysCmd(args[1:], stdout, stderr)
 	case "revoke":
 		return revokeCmd(args[1:], stdout, stderr)
+	case "directory":
+		return directoryCmd(args[1:], stdout, stderr)
 	}
 	fmt.Fprint(stderr, usage)
 	return 2

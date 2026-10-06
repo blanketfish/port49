@@ -820,7 +820,24 @@ func blobSource(p *policy.Policy) replay.Source {
 		if !ok {
 			return nil, false
 		}
-		res, err := p.Resolve(rec.Principal, d, at)
+		// A record names the subjects its principal matched (the directory's
+		// groups are not at hand to match again); one from before plan 7g
+		// names neither, and resolves by identity.
+		subjects := rec.Policy.Subjects
+		if len(subjects) == 0 && rec.Policy.Subject != "" {
+			subjects = []string{rec.Policy.Subject}
+		}
+		var res policy.Resolution
+		var err error
+		if len(subjects) > 0 {
+			username := ""
+			if rec.Session != nil {
+				username = rec.Session.Username
+			}
+			res, err = p.ResolveSubjects(subjects, username, d, at)
+		} else {
+			res, err = p.Resolve(rec.Principal, d, at)
+		}
 		if err != nil {
 			return nil, false
 		}

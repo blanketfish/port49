@@ -566,6 +566,19 @@ func (s *Store) SetContextPolicy(ctx context.Context, k store.ContextKey, policy
 	})
 }
 
+// StampRefreshed is SetContextPolicy's compare with ApplyStamp's write,
+// and PolicyMoved left as it was (applyTo keeps it), so the policy
+// revision stays.
+func (s *Store) StampRefreshed(ctx context.Context, k store.ContextKey, policyRev uint64, at time.Time) error {
+	return s.mutate(ctx, k, func(r *ctxRec, rev int64, _ time.Time) (bool, error) {
+		if uint64(r.PolicyRev) != policyRev {
+			return false, store.ErrConflict
+		}
+		applyTo(r, rev, func(c *store.Context) (bool, error) { store.ApplyStamp(c, at); return true, nil })
+		return false, nil
+	})
+}
+
 // DeleteContext deletes the context alone, as the memory store's does.
 func (s *Store) DeleteContext(ctx context.Context, k store.ContextKey) error {
 	_, err := s.ctxKV.Delete(ctx, s.k.context(k))

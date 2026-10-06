@@ -13,8 +13,10 @@ package broker
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -30,6 +32,7 @@ import (
 	"github.com/rhwendt/port49/internal/broker/api"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/directory"
 	"github.com/rhwendt/port49/internal/engine"
 	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/policy"
@@ -62,7 +65,11 @@ type Broker struct {
 	// Policy is the policy in force. port49d swaps it when the file changes
 	// (plan 4b), and a request resolves against the one version it held from
 	// its first mint to its last, never half of each.
-	Policy        *policy.Live
+	Policy *policy.Live
+	// Directory maps a certificate to a directory principal at the TLS bind
+	// and reads its membership (plan 7g). Nil: no directory, and the
+	// certificate's email SAN is the principal.
+	Directory     *directory.Resolver
 	Minter        *token.Minter
 	Store         store.Store
 	Log           decision.Emitter
@@ -199,6 +206,7 @@ func (b *Broker) Handler() http.Handler {
 type heldConn struct {
 	mu          sync.Mutex
 	at          time.Time
+	answer      *directory.Answer // the directory's answer pinned at bind; nil without a directory
 	nonce       []byte
 	nonceExp    time.Time
 	lastRefresh time.Time
@@ -214,9 +222,10 @@ type heldConnKey struct{}
 
 // withHeldConn gives a connection its session state, authenticated at at.
 // Server installs it as http.Server.ConnContext, so every request on one
-// connection shares it.
-func withHeldConn(ctx context.Context, at time.Time) context.Context {
-	return context.WithValue(ctx, heldConnKey{}, &heldConn{at: at})
+// connection shares it. a is the answer the listener pinned at bind (nil
+// without a directory): the connection's principal for its life (Ruling 4).
+func withHeldConn(ctx context.Context, at time.Time, a *directory.Answer) context.Context {
+	return context.WithValue(ctx, heldConnKey{}, &heldConn{at: at, answer: a})
 }
 
 // authTime is when this request's connection authenticated. A request with
@@ -303,6 +312,19 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
 	sum := sha256.Sum256(body)
 	bodyHash := hex.EncodeToString(sum[:])
 
+	// Group membership is resolved here, once for the batch, as the pinned
+	// principal's (Ruling 10): a refusal denies the whole request.
+	dctx, dcancel := context.WithTimeout(r.Context(), b.memberBudget())
+	m, answer, err := b.memberFor(dctx, principal)
+	dcancel()
+	if err != nil {
+		ref := directoryRefusal(err)
+		b.emit(decision.Record{TS: now, Event: decision.EventMint, Verdict: decision.VerdictDeny, Reason: ref.Reason,
+			Principal: principal, Auth: &decision.Auth{Method: cred.Method, Fingerprint: cred.Fingerprint}})
+		b.answerRefusal(w, r, ref)
+		return
+	}
+
 	// Every device's record is reserved before the first is minted (design
 	// §17; plan 7a), atomically: two requests under one key cannot both pass,
 	// and a conflict on any device refuses the whole batch before a token, a
@@ -360,6 +382,18 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	defer release()
+	// A reload can land between the membership read and the hold, and
+	// declare the username the directory gave this member: the collision
+	// is judged again under the policy the mint holds, as verify judged it
+	// under the one it saw (final review M-1).
+	if m.Directory && pol.DeclaredUsernames()[m.Username] != "" {
+		release()
+		ref := directoryRefusal(directory.ErrUsernameTaken)
+		b.emit(decision.Record{TS: now, Event: decision.EventMint, Verdict: decision.VerdictDeny, Reason: ref.Reason,
+			Principal: principal, Auth: &decision.Auth{Method: cred.Method, Fingerprint: cred.Fingerprint}})
+		b.answerRefusal(w, r, ref)
+		return
+	}
 	if b.MintGate != nil {
 		if err := b.MintGate(pol); err != nil {
 			release()
@@ -376,9 +410,9 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), holdTimeout)
 	defer cancel()
 	resp := api.MintResponse{Principal: principal}
-	resp.Subject, _ = pol.SubjectOf(principal)
+	resp.Subject, resp.Subjects = subjectNames(pol, m)
 	for _, name := range req.Devices {
-		item, err := b.mintOne(ctx, buf, pol, principal, cred, authTime, name, req, res, bodyHash)
+		item, err := b.mintOne(ctx, buf, pol, m, answer, cred, authTime, name, req, res, bodyHash)
 		if errors.Is(err, token.ErrIdempotencyInProgress) {
 			// This device's hold was taken by another request under the
 			// key, or lapsed before its turn: two retries that both
@@ -415,19 +449,36 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
 func (b *Broker) authenticate(w http.ResponseWriter, r *http.Request, event, nothing string) (string, store.Credential, bool) {
 	now := b.Now()
 	authTime := b.authTime(r)
-	principal, cred, err := Identity(r.TLS, now)
+	var principal, legacy string
+	var cred store.Credential
+	var err error
+	if b.Directory != nil {
+		var leaf *x509.Certificate
+		cred, leaf, err = CertIdentity(r.TLS, now)
+		if leaf != nil {
+			legacy = legacyPrincipal(leaf)
+		}
+		if h := heldOf(r); h != nil && h.answer != nil {
+			principal = h.answer.Principal // already mapped: it names the refusal's caller
+		}
+	} else {
+		principal, cred, err = Identity(r.TLS, now)
+	}
+	// named is whose request a refusal records: the principal when known,
+	// else the one the certificate's email SAN gave before a directory.
+	named := cmp.Or(principal, legacy)
 	if err != nil {
 		// A chain the anchor verified is named on the refusal (principal when
 		// it maps to one, the fingerprint always); no chain names no one.
 		b.emit(decision.Record{TS: now, Event: event, Verdict: decision.VerdictDeny,
-			Reason: decision.TrustDomainUnresolved, Principal: principal,
+			Reason: decision.TrustDomainUnresolved, Principal: named,
 			Auth: &decision.Auth{Method: "cert", Fingerprint: cred.Fingerprint}})
 		writeError(w, http.StatusUnauthorized, string(decision.TrustDomainUnresolved), err.Error())
 		return "", store.Credential{}, false
 	}
 	if b.MaxSessionAge > 0 && now.Sub(authTime) > b.MaxSessionAge {
 		b.emit(decision.Record{TS: now, Event: event, Verdict: decision.VerdictDeny,
-			Reason: decision.SessionExpired, Principal: principal, Auth: &decision.Auth{Method: cred.Method}})
+			Reason: decision.SessionExpired, Principal: named, Auth: &decision.Auth{Method: cred.Method}})
 		// Closing the connection is what makes the next request a handshake,
 		// and the handshake is the fresh authentication decision 17 requires.
 		w.Header().Set("Connection", "close")
@@ -436,30 +487,134 @@ func (b *Broker) authenticate(w http.ResponseWriter, r *http.Request, event, not
 			authTime.UTC().Format(time.RFC3339), b.MaxSessionAge))
 		return "", store.Credential{}, false
 	}
-	checkCtx, cancelCheck := context.WithTimeout(r.Context(), holdTimeout)
-	rv, revoked, err := b.revocation(checkCtx, principal, cred)
-	cancelCheck()
-	switch {
-	case err != nil:
-		b.emit(decision.Record{TS: now, Event: event, Verdict: decision.VerdictDeny,
-			Reason: decision.StoreUnavailable, Principal: principal, Auth: &decision.Auth{Method: cred.Method}})
-		writeError(w, http.StatusServiceUnavailable, string(decision.StoreUnavailable),
-			"the broker could not read the revocations in force, so it "+nothing+"; try again")
-		return "", store.Credential{}, false
-	case revoked:
-		b.refuseRevokedAs(w, event, now, principal, cred, rv)
+	// marked reads the marks on principal (and also) and the certificate,
+	// and answers the request when one stands or none can be read.
+	marked := func(principal string, also ...string) bool {
+		checkCtx, cancelCheck := context.WithTimeout(r.Context(), holdTimeout)
+		rv, revoked, err := b.revocation(checkCtx, principal, cred, also...)
+		cancelCheck()
+		switch {
+		case err != nil:
+			b.emit(decision.Record{TS: now, Event: event, Verdict: decision.VerdictDeny,
+				Reason: decision.StoreUnavailable, Principal: named, Auth: &decision.Auth{Method: cred.Method}})
+			writeError(w, http.StatusServiceUnavailable, string(decision.StoreUnavailable),
+				"the broker could not read the revocations in force, so it "+nothing+"; try again")
+			return true
+		case revoked:
+			b.refuseRevokedAs(w, event, now, named, cred, rv)
+			return true
+		}
+		return false
+	}
+	// status answers the certificate's status refusal, if any (decision 33).
+	status := func() bool {
+		statusCtx, cancelStatus := context.WithTimeout(r.Context(), holdTimeout)
+		ref := b.certRefusal(statusCtx, r.TLS, cred)
+		cancelStatus()
+		if ref == nil {
+			return false
+		}
+		b.emit(decision.Record{TS: now, Event: event, Verdict: decision.VerdictDeny, Reason: ref.Reason,
+			Principal: named, Auth: &decision.Auth{Method: cred.Method, Fingerprint: cred.Fingerprint}})
+		b.answerRefusal(w, r, ref)
+		return true
+	}
+	if b.Directory == nil {
+		if marked(principal) || status() {
+			return "", store.Credential{}, false
+		}
+		return principal, cred, true
+	}
+	// Under a directory the certificate's own marks (its key, and the
+	// principal its email SAN gave before a directory: pre-flight I-16) and
+	// its status are decided before the mapping, so a request with no held
+	// connection never maps a revoked certificate (pre-flight I-4); the
+	// mapped principal's mark after (Ruling 4).
+	if marked("", legacy) || status() {
 		return "", store.Credential{}, false
 	}
-	statusCtx, cancelStatus := context.WithTimeout(r.Context(), holdTimeout)
-	ref := b.certRefusal(statusCtx, r.TLS, cred)
-	cancelStatus()
-	if ref != nil {
-		b.emit(decision.Record{TS: now, Event: event, Verdict: decision.VerdictDeny, Reason: ref.Reason,
-			Principal: principal, Auth: &decision.Auth{Method: cred.Method, Fingerprint: cred.Fingerprint}})
-		b.answerRefusal(w, r, ref)
+	if principal == "" {
+		var ref *BindRefusal
+		if principal, ref = b.pinnedPrincipal(r, cred); ref != nil {
+			b.emit(decision.Record{TS: now, Event: event, Verdict: decision.VerdictDeny, Reason: ref.Reason,
+				Principal: legacy, Auth: &decision.Auth{Method: cred.Method, Fingerprint: cred.Fingerprint}})
+			b.answerRefusal(w, r, ref)
+			return "", store.Credential{}, false
+		}
+		named = principal
+	}
+	if marked(principal) {
 		return "", store.Credential{}, false
 	}
 	return principal, cred, true
+}
+
+// callerOf is the caller of a request that does not map: the principal and
+// credential of the connection's verified certificate, and legacy, the
+// principal its email SAN gave before a directory ("" without one). Under a
+// directory the principal is the one pinned to the held connection at bind
+// (Ruling 4), never the email SAN's; a connection with no pin is refused
+// (errNoPin).
+func (b *Broker) callerOf(r *http.Request, now time.Time) (principal, legacy string, cred store.Credential, err error) {
+	if b.Directory == nil {
+		principal, cred, err = Identity(r.TLS, now)
+		return principal, "", cred, err
+	}
+	var leaf *x509.Certificate
+	cred, leaf, err = CertIdentity(r.TLS, now)
+	if leaf != nil {
+		legacy = legacyPrincipal(leaf)
+	}
+	if err != nil {
+		return "", legacy, cred, err
+	}
+	if h := heldOf(r); h != nil && h.answer != nil {
+		return h.answer.Principal, legacy, cred, nil
+	}
+	b.logf("broker: a held connection has no directory principal pinned (the listener has no Map); refusing it")
+	return "", legacy, cred, errNoPin
+}
+
+// errNoPin is a connection under a directory with no principal pinned to it:
+// a wiring fault, answered as the directory not answering (503
+// directory_unavailable), never as the certificate's fault.
+var errNoPin = errors.New("broker: this connection has no directory principal pinned to it")
+
+// legacyOf is the principal r's certificate had before a directory, "" when
+// there is no directory or none: the mark a re-read after a write also reads.
+func (b *Broker) legacyOf(r *http.Request) string {
+	if b.Directory == nil || r.TLS == nil || len(r.TLS.VerifiedChains) == 0 || len(r.TLS.VerifiedChains[0]) == 0 {
+		return ""
+	}
+	return legacyPrincipal(r.TLS.VerifiedChains[0][0])
+}
+
+// pinnedPrincipal is the principal the listener mapped at bind and pinned to
+// r's connection: it is never mapped again for the life of the connection
+// (Ruling 4). A request with no held connection (a handler driven without
+// Server) maps now, bounded as the listener's bind is, or returns the
+// mapping's refusal. A held connection with no pin is a wiring fault (a
+// directory without Listener.Map): it is refused directory_unavailable, never
+// mapped per request.
+func (b *Broker) pinnedPrincipal(r *http.Request, cred store.Credential) (string, *BindRefusal) {
+	if h := heldOf(r); h != nil {
+		if h.answer != nil {
+			return h.answer.Principal, nil
+		}
+		b.logf("broker: a held connection has no directory principal pinned (the listener has no Map); refusing it")
+		return "", directoryRefusal(directory.ErrUnavailable)
+	}
+	timeout := holdTimeout
+	if q := b.Directory.Cfg.QueryTimeout; q > 0 {
+		timeout = q + time.Second
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), timeout)
+	defer cancel()
+	a, ref := b.BindMap(ctx, *r.TLS, cred)
+	if ref != nil {
+		return "", ref
+	}
+	return a.Principal, nil
 }
 
 // revokedSince reads the marks again after a request's last token write,
@@ -484,7 +639,7 @@ func (b *Broker) revokedSince(w http.ResponseWriter, r *http.Request, principal 
 	items []api.MintItem) bool {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), holdTimeout)
 	defer cancel()
-	rv, revoked, err := b.revocation(ctx, principal, cred)
+	rv, revoked, err := b.revocation(ctx, principal, cred, b.legacyOf(r))
 	switch {
 	case err != nil:
 		now := b.Now()
@@ -509,10 +664,17 @@ func (b *Broker) revokedSince(w http.ResponseWriter, r *http.Request, principal 
 }
 
 // revocation is the mark refusing this caller, if any: one on the
-// principal, then one on the certificate (spec §5.1.4). A certificate with
-// no issuer or serial is never a mark's key.
-func (b *Broker) revocation(ctx context.Context, principal string, cred store.Credential) (store.Revocation, bool, error) {
-	keys := [][2]string{{store.RevocationPrincipal, principal}}
+// principal, then one on each further principal (the legacy email-SAN
+// principal of a certificate a directory maps: pre-flight I-16), then one
+// on the certificate (spec §5.1.4). An empty principal is never read. A
+// certificate with no issuer or serial is never a mark's key.
+func (b *Broker) revocation(ctx context.Context, principal string, cred store.Credential, also ...string) (store.Revocation, bool, error) {
+	var keys [][2]string
+	for _, p := range append([]string{principal}, also...) {
+		if p != "" {
+			keys = append(keys, [2]string{store.RevocationPrincipal, p})
+		}
+	}
 	if cred.Issuer != "" && cred.Serial != "" {
 		keys = append(keys, [2]string{store.RevocationCert, store.CertKey(cred.Issuer, cred.Serial)})
 	}
@@ -730,13 +892,19 @@ func (b *Broker) supersededAt(ctx context.Context, k store.TokenKey) (time.Time,
 // ErrIdempotencyInProgress, which is the whole request's; every other refusal
 // is an item. Every record it writes goes to buf, the request's buffer
 // (tokens).
-func (b *Broker) mintOne(ctx context.Context, buf *heldLog, pol *policy.Policy, principal string,
-	cred store.Credential, authTime time.Time, name string, req api.MintRequest, hold *token.Reservation,
+func (b *Broker) mintOne(ctx context.Context, buf *heldLog, pol *policy.Policy, m policy.Member,
+	answer *directory.Answer, cred store.Credential, authTime time.Time, name string, req api.MintRequest, hold *token.Reservation,
 	bodyHash string) (api.MintItem, error) {
+	principal := m.Principal
+	var res policy.Resolution
 	deny := func(reason decision.Reason, platform string) api.MintItem {
-		b.emitTo(buf, decision.Record{TS: b.Now(), Event: decision.EventMint, Verdict: decision.VerdictDeny, Reason: reason,
-			Principal: principal, Auth: &decision.Auth{Method: cred.Method},
-			Device: &decision.Device{Name: name, Platform: platform}})
+		rec := decision.Record{TS: b.Now(), Event: decision.EventMint, Verdict: decision.VerdictDeny, Reason: reason,
+			Principal: principal, Auth: &decision.Auth{Method: cred.Method, Directory: directoryAuth(answer)},
+			Device: &decision.Device{Name: name, Platform: platform}}
+		if len(res.Subjects) > 0 {
+			rec.Policy = &decision.Policy{Bundle: pol.Bundle, Subjects: res.Subjects}
+		}
+		b.emitTo(buf, rec)
 		return api.MintItem{Device: name, Verdict: decision.VerdictDeny, Reason: string(reason)}
 	}
 	dev, ok := pol.Device(name)
@@ -746,10 +914,20 @@ func (b *Broker) mintOne(ctx context.Context, buf *heldLog, pol *policy.Policy, 
 		// device and no platform, which is what tells an operator which.
 		return deny(decision.NoGrantsMatched, ""), nil
 	}
-	res, err := pol.Resolve(principal, dev, b.Now())
+	res, err := pol.ResolveMember(m, dev, b.Now())
 	switch {
 	case errors.Is(err, policy.ErrNoGrants):
 		return deny(decision.NoGrantsMatched, dev.Platform), nil
+	case errors.Is(err, policy.ErrNoUsername):
+		// The directory gave this principal no username: nothing falls back
+		// to a declared name (spec §2, decision 38).
+		b.logf("broker: %v", err)
+		return deny(decision.IdentityUnmapped, dev.Platform), nil
+	case errors.Is(err, policy.ErrCompositionRefused):
+		// The principal's subjects compose here to a reply a joint check
+		// refuses: this device alone, never a quarantine (Ruling 5).
+		b.logf("broker: %v", err)
+		return deny(decision.CompositionRefused, dev.Platform), nil
 	case dev.Platform == "":
 		// Inventory may name a device with no platform (admission.LoadFile
 		// does not require one), and no blob can be compiled for it. That is
@@ -834,11 +1012,12 @@ func (b *Broker) mintOne(ctx context.Context, buf *heldLog, pol *policy.Policy, 
 	out, err := b.Minter.Mint(ctx, token.Request{
 		Subject: token.Subject{Principal: principal, Username: res.Username, TokenTTL: res.TokenTTL,
 			Enable: res.Enable, MaxPrivilege: res.MaxPrivilege, MaxSessionAge: age,
-			Credential: cred, AuthTime: authTime},
+			Credential: cred, AuthTime: authTime, VerifiedAt: verifiedAt(answer)},
 		Device: name, Platform: dev.Platform, BlobHash: hash, WithEnable: req.Enable,
 		TTL:         time.Duration(req.TTLSeconds) * time.Second,
 		Reservation: hold, BodyHash: bodyHash, SupersededAt: supersededAt,
-		Policy: &decision.Policy{Bundle: pol.Bundle, Subject: res.Subject, Grants: res.Grants}, Log: buf})
+		Policy:    &decision.Policy{Bundle: pol.Bundle, Subject: res.Subject, Subjects: res.Subjects, Grants: res.Grants},
+		Directory: directoryAuth(answer), Log: buf})
 	var capped *token.ErrTooManyOutstanding
 	switch {
 	case errors.Is(err, token.ErrIdempotencyInProgress):

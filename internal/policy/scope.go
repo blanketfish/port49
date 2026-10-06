@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"fmt"
 	"slices"
 	"sort"
 	"strings"
@@ -114,6 +115,10 @@ type composition struct {
 	// because a version could not be compared (spec §5.5: reported, never
 	// silent).
 	incomparable []string
+	// notCounted names the max_privilege of a grant of a subject with enable
+	// none that the ceiling counts only up to the level its roles reach
+	// (spec §5.1), for the refusal that follows from it.
+	notCounted []string
 }
 
 // compose resolves sub on d at now. No selecting grant is an empty
@@ -121,9 +126,18 @@ type composition struct {
 // access (spec §5.5). A zero now expires nothing, which is how the load-time
 // checks see every grant.
 func (p *Policy) compose(sub *Subject, d admission.Device, now time.Time) composition {
+	return p.composeAll([]*Subject{sub}, d, now)
+}
+
+// composeAll is compose for every subject a principal matches (plan 7g,
+// Ruling 5): the grants of any of subs, composed as one. Every subject a human
+// principal matches is in the humans domain, so subs[0]'s domain is the one
+// attached roles read.
+func (p *Policy) composeAll(subs []*Subject, d admission.Device, now time.Time) composition {
+	sub := subs[0]
 	c := composition{subject: sub, attached: map[string][]string{}}
 	for _, g := range p.grants {
-		if g.Subject != sub.Name {
+		if !slices.ContainsFunc(subs, func(s *Subject) bool { return s.Name == g.Subject }) {
 			continue
 		}
 		if !g.Expires.IsZero() && !now.IsZero() && !now.Before(g.Expires) {
@@ -145,14 +159,46 @@ func (p *Policy) compose(sub *Subject, d admission.Device, now time.Time) compos
 		}
 		return strings.Join(a.Roles, ",") < strings.Join(b.Roles, ",")
 	})
+	// Composed subjects reach by enable no ceiling that none of them offers
+	// escalation to alone: where one of them offers it, a subject with enable
+	// none contributes to the ceiling only the level its roles reach, capped
+	// by its own max_privilege, what it holds without enabling (Ruling
+	// PF7g-i; spec §5.1). It never creates a ceiling: with none stated by
+	// the subjects that offer escalation there is none.
+	escalates := false
+	for _, g := range c.grants {
+		escalates = escalates || p.subs[g.Subject].Enable != "none"
+	}
+	composed := len(subs) > 1 && escalates
+	held := "" // the none subjects' contribution
 	roles := map[string]bool{}
 	for _, g := range c.grants {
+		level := ""
 		for _, r := range g.Roles {
 			roles[r] = true
+			if p.levelIndex(p.roles[r].Privilege) > p.levelIndex(level) {
+				level = p.roles[r].Privilege
+			}
 		}
-		if p.levelIndex(g.MaxPrivilege) > p.levelIndex(c.ceiling) {
-			c.ceiling = g.MaxPrivilege
+		if !composed || p.subs[g.Subject].Enable != "none" {
+			if p.levelIndex(g.MaxPrivilege) > p.levelIndex(c.ceiling) {
+				c.ceiling = g.MaxPrivilege
+			}
+			continue
 		}
+		limit := level
+		if g.MaxPrivilege != "" && p.levelIndex(g.MaxPrivilege) < p.levelIndex(level) {
+			limit = g.MaxPrivilege
+		}
+		if g.MaxPrivilege != "" && p.levelIndex(g.MaxPrivilege) > p.levelIndex(limit) {
+			c.notCounted = append(c.notCounted, fmt.Sprintf("%s's max_privilege %s", g.Subject, g.MaxPrivilege))
+		}
+		if p.levelIndex(limit) > p.levelIndex(held) {
+			held = limit
+		}
+	}
+	if c.ceiling != "" && p.levelIndex(held) > p.levelIndex(c.ceiling) {
+		c.ceiling = held
 	}
 	names := make([]string, 0, len(p.scopes))
 	for name := range p.scopes {
@@ -181,6 +227,18 @@ func (p *Policy) compose(sub *Subject, d admission.Device, now time.Time) compos
 	}
 	sort.Strings(c.roles)
 	return c
+}
+
+// granting is the subjects of subs, in order, with at least one grant in the
+// composition.
+func (c composition) granting(subs []*Subject) []*Subject {
+	var out []*Subject
+	for _, s := range subs {
+		if slices.ContainsFunc(c.grants, func(g *Grant) bool { return g.Subject == s.Name }) {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // grantsOn reports whether one of the composition's grants is on scope.

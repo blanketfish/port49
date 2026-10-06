@@ -70,9 +70,24 @@ func (b *Broker) explain(w http.ResponseWriter, r *http.Request) {
 	rec := decision.Record{TS: now, Event: decision.EventExplain, Principal: about,
 		Device: &decision.Device{Name: req.Device}, Policy: &decision.Policy{Bundle: pol.Bundle},
 		Explain: &decision.Explain{AskedBy: caller, AskedByFingerprint: cred.Fingerprint, Command: req.Command != ""}}
-	if about != caller && !pol.HasRight(caller, policy.RightExplainOthers) {
-		b.refuseRight(w, rec, policy.RightExplainOthers, "explaining another principal")
-		return
+	if about != caller {
+		// The caller's own membership: a refusal is the caller's, recorded
+		// and answered as a mint's is (their certificate, their connection).
+		ctx, cancel := context.WithTimeout(r.Context(), b.memberBudget())
+		callerMember, _, err := b.memberFor(ctx, caller)
+		cancel()
+		if err != nil {
+			ref := directoryRefusal(err)
+			b.emit(decision.Record{TS: now, Event: decision.EventExplain, Verdict: decision.VerdictDeny,
+				Reason: ref.Reason, Principal: caller,
+				Auth: &decision.Auth{Method: cred.Method, Fingerprint: cred.Fingerprint}})
+			b.answerRefusal(w, r, ref)
+			return
+		}
+		if !pol.HasRightOf(callerMember, policy.RightExplainOthers) {
+			b.refuseRight(w, rec, policy.RightExplainOthers, "explaining another principal")
+			return
+		}
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), holdTimeout)
 	rv, revoked, err := b.revocation(ctx, about, store.Credential{})
@@ -90,7 +105,34 @@ func (b *Broker) explain(w http.ResponseWriter, r *http.Request) {
 	var e policy.Explanation
 	if revoked {
 		e = policy.Explanation{Subject: about, Device: req.Device, Command: req.Command, Revoked: rv.At}
-	} else if e, err = explanationOf(pol, about, req.Device, req.Command, now); err != nil {
+	} else {
+		ctx, cancel := context.WithTimeout(r.Context(), b.memberBudget())
+		aboutMember, _, merr := b.memberFor(ctx, about)
+		cancel()
+		if merr != nil {
+			// The directory's "no" about the principal asked about is the
+			// answer, not a refusal of the caller: 200, the connection kept.
+			ref := directoryRefusal(merr)
+			if about == caller {
+				// Their own membership: the caller's refusal, as a mint's.
+				b.emit(decision.Record{TS: now, Event: decision.EventExplain, Verdict: decision.VerdictDeny,
+					Reason: ref.Reason, Principal: caller,
+					Auth: &decision.Auth{Method: cred.Method, Fingerprint: cred.Fingerprint}})
+				b.answerRefusal(w, r, ref)
+				return
+			}
+			rec.Verdict, rec.Reason = decision.VerdictDeny, ref.Reason
+			b.emit(rec)
+			writeJSON(w, http.StatusOK, api.ExplainResponse{Principal: about, Device: req.Device,
+				Verdict: decision.VerdictDeny, Reason: string(ref.Reason),
+				Text: fmt.Sprintf("%s would be refused %s: the directory's answer about %s, not about you", about,
+					ref.Reason, about)})
+			return
+		}
+		rec.Policy.Subject, rec.Policy.Subjects = subjectNames(pol, aboutMember)
+		e, err = explanationOf(pol, aboutMember, req.Device, req.Command, now)
+	}
+	if err != nil {
 		// The mint refuses the same fault with this item error, which is no
 		// decision; the call is still recorded (decision 34).
 		rec.Device.Platform = e.Platform
@@ -128,15 +170,15 @@ var explanationOf = explanationIn
 // inventory does not name is no_grants_matched, built here because
 // policy.Explain names a missing device (an offline tool's operator holds
 // the inventory); a no-grant answer carries no platform.
-func explanationIn(pol *policy.Policy, principal, device, line string, now time.Time) (policy.Explanation, error) {
-	subject, ok := pol.SubjectOf(principal)
-	if !ok {
-		subject = principal
+func explanationIn(pol *policy.Policy, m policy.Member, device, line string, now time.Time) (policy.Explanation, error) {
+	subject := m.Principal
+	if names := pol.SubjectsOf(m); len(names) > 0 {
+		subject = strings.Join(names, ", ")
 	}
 	if _, ok := pol.Device(device); !ok {
 		return policy.Explanation{Subject: subject, Device: device, Command: line, NoGrants: true}, nil
 	}
-	e, err := pol.Explain("", principal, device, line, now)
+	e, err := pol.ExplainMember(m, device, line, now)
 	if err != nil {
 		return e, err
 	}

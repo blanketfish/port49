@@ -139,6 +139,7 @@ type Subject struct {
 	MaxSessionAge       time.Duration
 	Credential          store.Credential
 	AuthTime            time.Time
+	VerifiedAt          time.Time // the membership's verification; zero: none
 }
 
 // Request is one mint: a Subject, the device the tokens are cut for, and the
@@ -166,6 +167,9 @@ type Request struct {
 	// Policy is the subject and grants that allowed this mint. The minter
 	// judges none of it and copies it onto the mint record (spec §5.7).
 	Policy *decision.Policy
+	// Directory is where the membership this mint used was read, for the
+	// record's auth.directory; nil without a directory (spec §5.7).
+	Directory *decision.Directory
 	// Log is where Mint writes its permit record; nil is the minter's own
 	// log. The broker passes a per-request decision.Buffer, flushed once
 	// the request lets go of the policy (plan 7e, Ruling 10).
@@ -453,6 +457,7 @@ func (m *Minter) Mint(ctx context.Context, r Request) (Result, error) {
 			Principal: r.Subject.Principal, Username: r.Subject.Username, BlobHash: r.BlobHash,
 			MaxSessionAge: r.Subject.MaxSessionAge, Enable: r.Subject.Enable, MaxPrivilege: r.Subject.MaxPrivilege,
 			Credential: r.Subject.Credential, AuthTime: r.Subject.AuthTime, MintedAt: mintedAt,
+			VerifiedAt: r.Subject.VerifiedAt,
 		}); err != nil {
 			return "", err
 		}
@@ -487,7 +492,7 @@ func (m *Minter) Mint(ctx context.Context, r Request) (Result, error) {
 	}
 	log.Emit(decision.Record{TS: m.now(), Event: decision.EventMint, Verdict: decision.VerdictPermit,
 		Reason: decision.GrantsMatched, Principal: r.Subject.Principal,
-		Auth:       &decision.Auth{Method: r.Subject.Credential.Method},
+		Auth:       &decision.Auth{Method: r.Subject.Credential.Method, Directory: r.Directory},
 		Device:     &decision.Device{Name: r.Device, Platform: r.Platform},
 		Mint:       &decision.Mint{TokenSHA256: hashes, TTLSeconds: int(ttl.Seconds()), BlobHash: r.BlobHash},
 		Policy:     r.Policy,

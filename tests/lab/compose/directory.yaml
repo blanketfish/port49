@@ -1,0 +1,50 @@
+# The directory's overlay on the lab's compose stack (plan 7g, Task 18): the
+# OpenLDAP of tests/lab/directory on the stack's own network, and the files the
+# broker's broker.directory: block reads. Merged after lab.yaml by
+# startComposeWith. Everything under ${PORT49_COMPOSE_LOCAL}/directory is
+# written by TestDirectoryEndToEnd before `up`; relative paths here are
+# relative to deploy/compose, the project directory.
+services:
+  openldap:
+    build: ../../tests/lab/directory/openldap
+    image: port49lab/openldap:bookworm
+    hostname: openldap
+    networks: [port49]
+    env_file: [{path: "${PORT49_COMPOSE_LOCAL}/openldap.env"}]
+    # one account that may write over LDAPS, so the test can move a member
+    environment: {LAB_OPENLDAP_WRITER: "1"}
+    volumes:
+      - ${PORT49_COMPOSE_LOCAL}/directory/openldap-pki:/pki:ro
+
+  # One-shot, as root, as setup is: the broker's directory files into a volume
+  # of their own, the key 0600 owned by uid 65532 (the write fence).
+  directory-pki:
+    image: port49-setup:dev
+    # setup builds this tag
+    pull_policy: never
+    network_mode: none
+    # the image's entrypoint is /bin/sh
+    command:
+      - -c
+      - |
+        set -eu
+        install -d -o 0 -g 0 -m 0755 /vol
+        install -o 0 -g 0 -m 0644 /src/directory-ca.pem /vol/directory-ca.pem
+        install -o 0 -g 0 -m 0644 /src/users-ca.pem /vol/users-ca.pem
+        install -o 0 -g 0 -m 0644 /src/directory-client.pem /vol/directory-client.pem
+        install -o 65532 -g 65532 -m 0600 /src/directory-client-key.pem /vol/directory-client-key.pem
+    volumes:
+      - ${PORT49_COMPOSE_LOCAL}/directory/broker:/src:ro
+      - directory-pki:/vol
+    depends_on:
+      setup: {condition: service_completed_successfully}
+
+  port49-broker:
+    volumes:
+      - directory-pki:/etc/port49-directory:ro
+    depends_on:
+      directory-pki: {condition: service_completed_successfully}
+      openldap: {condition: service_started}
+
+volumes:
+  directory-pki: {}

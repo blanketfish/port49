@@ -17,6 +17,37 @@ broker:
   # A trial PKI publishes no CRL. A deployment names its CRL (or OCSP) here
   # and leaves on_unavailable at refuse (spec §5.1.4).
   certificate_status: {disabled: true}
+  # How often the broker re-verifies every live principal and stamps
+  # refreshed_at, 1m to 1h. It runs with or without a directory, and the
+  # daemon's session.staleness_ceiling (default 4h) denies a session the
+  # stamp has not reached.
+  # refresh_interval: 5m
+  #
+  # The directory (spec §14; design §10) is off here: the trial has none, and
+  # a subject names its username. Uncomment and adapt to resolve humans and
+  # their groups from LDAP. Put the keytab and krb5.conf in broker-etc, the
+  # keytab 0600 and owned by 65532; set PORT49_SITE per broker container.
+  # directory:
+  #   servers:
+  #     - {uri: "ldaps://dc1.corp.example.com:636", site: hq, priority: 100}
+  #     - {uri: "ldaps://dc2.corp.example.com:636", site: hq, priority: 90}
+  #   site_env: PORT49_SITE       # this broker's site; the default variable
+  #   ca_file: /etc/port49/directory/ca.pem
+  #   # Samba AD (lab L43): external is refused with result 1, which counts as a server fault (breakers
+  #   # open, server_up 0): use simple or gssapi; gssapi needs ldap server require strong auth = allow_sasl_over_tls.
+  #   bind:
+  #     mechanism: gssapi         # external | gssapi | simple (the weakest)
+  #     principal: svc-port49@CORP.EXAMPLE.COM
+  #     keytab_file: /etc/port49/directory/svc-port49.keytab
+  #     krb5_conf: /etc/port49/directory/krb5.conf
+  #   base_dn: dc=corp,dc=example,dc=com
+  #   groups_base_dn: ou=groups,dc=corp,dc=example,dc=com
+  #   principal_attribute: userPrincipalName
+  #   username_attribute: sAMAccountName
+  #   certificate_mapping: {kind: issuer_serial}   # strong; no allow_weak needed
+  #   nested_groups: in_chain     # in_chain (Active Directory; OpenLDAP answers it empty, use recursive) | recursive | direct
+  #   grace: 4h                   # how long a stored membership answers when no server does
+  #   prewarm: {interval: 1h, max_principals: 10000}
 store:
   backend: etcd
   etcd:

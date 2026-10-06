@@ -28,6 +28,11 @@ limits:
   idle_timeout: 5m
   malformed_window: 10m
 
+session:
+  # The lab's seeded contexts are judged by no broker, so nothing stamps
+  # refreshed_at; the 4h default would deny a long run's seeds context_stale.
+  staleness_ceiling: 0s
+
 accounting:
   spool_path: /tmp/port49-lab-acct.jsonl
 

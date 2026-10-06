@@ -1,0 +1,116 @@
+# The directory fixture (plan 7g, Task 17). Loaded with ldapadd, not slapadd:
+# the memberof overlay writes memberOf only for an operation that runs through
+# it, and slapadd bypasses the overlays. Users go first, then groups from the
+# leaf upward, so each member exists when its group is added.
+dn: dc=corp,dc=example,dc=com
+objectClass: dcObject
+objectClass: organization
+dc: corp
+o: corp
+
+dn: ou=Staff,dc=corp,dc=example,dc=com
+objectClass: organizationalUnit
+ou: Staff
+
+dn: ou=Contractors,dc=corp,dc=example,dc=com
+objectClass: organizationalUnit
+ou: Contractors
+
+dn: ou=G,dc=corp,dc=example,dc=com
+objectClass: organizationalUnit
+ou: G
+
+dn: ou=Users-Can-Create,dc=corp,dc=example,dc=com
+objectClass: organizationalUnit
+ou: Users-Can-Create
+
+dn: ou=Svc,dc=corp,dc=example,dc=com
+objectClass: organizationalUnit
+ou: Svc
+
+dn: cn=port49,ou=Svc,dc=corp,dc=example,dc=com
+objectClass: inetOrgPerson
+cn: port49
+sn: port49
+uid: port49
+userPassword: @PORT49_PASSWORD_HASH@
+
+dn: uid=alice,ou=Staff,dc=corp,dc=example,dc=com
+objectClass: inetOrgPerson
+cn: alice
+sn: alice
+uid: alice
+mail: alice@corp.example.com
+
+dn: uid=carol,ou=Staff,dc=corp,dc=example,dc=com
+objectClass: inetOrgPerson
+cn: carol
+sn: carol
+uid: carol
+mail: carol@corp.example.com
+
+dn: uid=dave,ou=Staff,dc=corp,dc=example,dc=com
+objectClass: inetOrgPerson
+cn: dave
+sn: dave
+uid: dave
+mail: dave@corp.example.com
+
+dn: uid=bob,ou=Staff,dc=corp,dc=example,dc=com
+objectClass: inetOrgPerson
+cn: bob
+sn: bob
+uid: bob
+mail: bob@corp.example.com
+
+dn: uid=eve,ou=Staff,dc=corp,dc=example,dc=com
+objectClass: inetOrgPerson
+cn: eve
+sn: eve
+uid: eve
+mail: eve@corp.example.com
+
+dn: uid=eve2,ou=Contractors,dc=corp,dc=example,dc=com
+objectClass: inetOrgPerson
+cn: eve2
+sn: eve2
+uid: eve2
+mail: eve@corp.example.com
+
+dn: cn=g-leaf,ou=G,dc=corp,dc=example,dc=com
+objectClass: groupOfNames
+cn: g-leaf
+member: uid=alice,ou=Staff,dc=corp,dc=example,dc=com
+
+dn: cn=g-mid,ou=G,dc=corp,dc=example,dc=com
+objectClass: groupOfNames
+cn: g-mid
+member: cn=g-leaf,ou=G,dc=corp,dc=example,dc=com
+
+dn: cn=netops-oncall,ou=G,dc=corp,dc=example,dc=com
+objectClass: groupOfNames
+cn: netops-oncall
+member: uid=carol,ou=Staff,dc=corp,dc=example,dc=com
+member: cn=g-mid,ou=G,dc=corp,dc=example,dc=com
+
+dn: cn=g-loop-a,ou=G,dc=corp,dc=example,dc=com
+objectClass: groupOfNames
+cn: g-loop-a
+member: uid=dave,ou=Staff,dc=corp,dc=example,dc=com
+
+dn: cn=g-loop-b,ou=G,dc=corp,dc=example,dc=com
+objectClass: groupOfNames
+cn: g-loop-b
+member: cn=g-loop-a,ou=G,dc=corp,dc=example,dc=com
+
+dn: cn=g-loop-a,ou=G,dc=corp,dc=example,dc=com
+changetype: modify
+add: member
+member: cn=g-loop-b,ou=G,dc=corp,dc=example,dc=com
+
+# The second netops-oncall, where an ordinary user could have made one. A
+# groupOfNames needs a member; the placeholder names no entry.
+dn: cn=netops-oncall,ou=Users-Can-Create,dc=corp,dc=example,dc=com
+objectClass: groupOfNames
+cn: netops-oncall
+member: cn=nobody,ou=Users-Can-Create,dc=corp,dc=example,dc=com

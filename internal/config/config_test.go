@@ -703,22 +703,17 @@ func TestKey32RefusesAShortSecretRatherThanZeroPadding(t *testing.T) {
 	}
 }
 
-// TestStalenessCeilingDefaultsToDisabled pins the default at 0, which means no
-// staleness check at all, and that is a wiring fact rather than a taste: until
-// plan 3/7's broker refreshes a context, `refreshed_at` is stamped once at login
-// and nothing moves it. Any finite ceiling before then denies a steadily working
-// operator `context_stale` — "the broker is unreachable" — at login plus the
-// ceiling, with no broker to reach. Whoever wires the broker sets this key and
-// changes this test with it.
-func TestStalenessCeilingDefaultsToDisabled(t *testing.T) {
+// TestStalenessCeilingDefaultsTo4h: the ceiling takes its default now that the
+// broker's scheduled refresh stamps `refreshed_at` (plan 7g; OR-1).
+func TestStalenessCeilingDefaultsTo4h(t *testing.T) {
 	setKeyEnv(t)
 	invPath := write(t, "inventory.yaml", inv)
 	c, err := Load(write(t, "c.yaml", fmt.Sprintf(sample, invPath)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Session.StalenessCeiling != 0 {
-		t.Fatalf("session.staleness_ceiling must default to 0 (disabled), got %s", c.Session.StalenessCeiling)
+	if c.Session.StalenessCeiling != DefaultStalenessCeiling {
+		t.Fatalf("session.staleness_ceiling must default to 4h, got %s", c.Session.StalenessCeiling)
 	}
 	if c.Token.CandidateCap != 8 {
 		t.Fatalf("token.candidate_cap must default to 8, got %d", c.Token.CandidateCap)
@@ -1296,5 +1291,90 @@ func TestPolicyIsRefusedBesideABrokerBlock(t *testing.T) {
 	if _, err := loadWith(t, brokerBlock+"policy: {file: /etc/port49/p.yaml}\n"); err == nil ||
 		!strings.Contains(err.Error(), "policy:") {
 		t.Fatalf("policy: beside broker: %v", err)
+	}
+}
+
+// session.staleness_ceiling defaults to 4h now that the scheduled refresh
+// stamps refreshed_at (plan 2's hand-off; OR-1); 0s is off and said.
+func TestTheStalenessCeilingDefault(t *testing.T) {
+	c, err := loadWith(t, "") // no session: block
+	if err != nil || c.Session.StalenessCeiling != DefaultStalenessCeiling || c.StalenessOff {
+		t.Fatalf("%v %v %v", c.Session.StalenessCeiling, c.StalenessOff, err)
+	}
+	c, err = loadWith(t, "session: {staleness_ceiling: 0s}")
+	if err != nil || c.Session.StalenessCeiling != 0 || !c.StalenessOff {
+		t.Fatalf("explicit 0s: %v %v %v", c.Session.StalenessCeiling, c.StalenessOff, err)
+	}
+	if _, err := loadWith(t, "session: {staleness_ceiling: 30s}"); err == nil ||
+		!strings.Contains(err.Error(), "set it to 0s to disable") {
+		t.Fatalf("under a minute: %v", err)
+	}
+}
+
+// brokerDirectory is a broker block with refresh_interval and a directory
+// whose grace are the arguments.
+func brokerDirectory(t *testing.T, refresh, grace string) string {
+	t.Helper()
+	ca := writeTemp(t, "ca.pem", testCAPEM(t))
+	t.Setenv("PORT49_LDAP_PASSWORD", "x")
+	return strings.Replace(brokerBlock, "  certificate_status: {disabled: true}\n", `  certificate_status: {disabled: true}
+  refresh_interval: `+refresh+`
+  directory:
+    servers:
+      - {uri: "ldaps://dc-01.corp.example.com", priority: 100}
+    ca_file: `+ca+`
+    bind: {mechanism: simple, bind_dn: "CN=port49,DC=corp", password_env: PORT49_LDAP_PASSWORD}
+    base_dn: "DC=corp,DC=example,DC=com"
+    certificate_mapping: {kind: issuer_serial}
+    nested_groups: in_chain
+    grace: `+grace+`
+`, 1)
+}
+
+// In one process, the refresh must fit the ceiling twice, and grace must
+// not outlive it (Ruling 14).
+func TestOneProcessChecksRefreshAndGraceAgainstTheCeiling(t *testing.T) {
+	for _, c := range []struct{ session, refresh, grace, want string }{
+		{"session: {staleness_ceiling: 8m}\n", "5m", "1m",
+			"broker.refresh_interval 5m0s: above half session.staleness_ceiling (8m0s); a context would go stale between two passes"},
+		{"session: {staleness_ceiling: 1h}\n", "5m", "2h",
+			"broker.directory.grace 2h0m0s: above session.staleness_ceiling (1h0m0s), a grace mint would be stale at its first command"},
+	} {
+		if _, err := loadWith(t, c.session+brokerDirectory(t, c.refresh, c.grace)); err == nil ||
+			!strings.Contains(err.Error(), c.want) {
+			t.Errorf("%v, want %q", err, c.want)
+		}
+	}
+	// The default ceiling (4h) holds the defaults, and a ceiling of 0s compares nothing.
+	if _, err := loadWith(t, brokerDirectory(t, "5m", "4h")); err != nil {
+		t.Errorf("defaults: %v", err)
+	}
+	if _, err := loadWith(t, "session: {staleness_ceiling: 0s}\n"+brokerDirectory(t, "1h", "24h")); err != nil {
+		t.Errorf("an off ceiling: %v", err)
+	}
+}
+
+// port49-broker's load shares the schema but never applies the ceiling, so
+// the one-process checks never refuse a split deployment's broker file
+// (pre-flight I-15): grace 8h loads there, with the ceiling's default 4h.
+func TestTheBrokersLoadSkipsTheOneProcessChecks(t *testing.T) {
+	ca := writeTemp(t, "ca.pem", testCAPEM(t))
+	t.Setenv("PORT49_LDAP_PASSWORD", "x")
+	raw := strings.Replace(brokerRoleYAML(t), "  certificate_status: {disabled: true}\n",
+		`  certificate_status: {disabled: true}
+  refresh_interval: 1h
+  directory:
+    servers:
+      - {uri: "ldaps://dc-01.corp.example.com", priority: 100}
+    ca_file: `+ca+`
+    bind: {mechanism: simple, bind_dn: "CN=port49,DC=corp", password_env: PORT49_LDAP_PASSWORD}
+    base_dn: "DC=corp,DC=example,DC=com"
+    certificate_mapping: {kind: issuer_serial}
+    nested_groups: in_chain
+    grace: 8h
+`, 1)
+	c, err := loadBrokerRole(t, raw)
+	if err != nil || c.Broker.Directory == nil || c.Broker.Directory.Grace != 8*time.Hour {
+		t.Fatalf("port49-broker.yaml with grace 8h: %v", err)
 	}
 }

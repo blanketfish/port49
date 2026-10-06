@@ -243,6 +243,25 @@ func TestTokenMintedAtSurvivesTheSealingLayer(t *testing.T) {
 	}
 }
 
+// VerifiedAt is what a login writes as its context's RefreshedAt (plan 7g,
+// Ruling 11). If the round trip dropped it, every grace login would read as
+// verified now and get a fresh staleness clock.
+func TestTokenVerifiedAtSurvivesTheSealingLayer(t *testing.T) {
+	s := Wrap(memory.New(time.Now), keys(), nil)
+	ctx := context.Background()
+	k := store.TokenKey{NAS: "leaf-01", Username: "alice"}
+	verified := time.Unix(1_757_041_495, 0)
+	if _, err := s.PutToken(ctx, k, store.Token{ID: "t1", Secret: []byte("p49_secret"), Kind: store.KindLogin,
+		Principal: "user:alice@example.com", Username: "alice", ExpiresAt: time.Now().Add(time.Minute),
+		VerifiedAt: verified}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Candidates(ctx, k)
+	if err != nil || len(got) != 1 || !got[0].VerifiedAt.Equal(verified) {
+		t.Fatalf("VerifiedAt lost through the sealing layer: %+v %v", got, err)
+	}
+}
+
 // A token sealed under a key that has since been retired is unreadable, and
 // therefore unredeemable. It must not be returned as a candidate with a zero
 // secret, which would match a zero-length credential.
@@ -625,7 +644,7 @@ func TestTheTokensTrustedFieldsAreSealed(t *testing.T) {
 	k := store.TokenKey{NAS: "leaf-01", Username: "alice"}
 	minted := store.Token{ID: "t1", Secret: []byte("p49_secret"), Kind: store.KindLogin, ExpiresAt: now.Add(time.Minute),
 		Principal: "user:alice@example.com", Username: "alice", BlobHash: "sha256:narrow", MaxSessionAge: time.Hour,
-		Enable: "token", MaxPrivilege: 1, AuthTime: now, MintedAt: now}
+		Enable: "token", MaxPrivilege: 1, AuthTime: now, MintedAt: now, VerifiedAt: now}
 	if _, err := s.PutToken(ctx, k, minted); err != nil {
 		t.Fatal(err)
 	}
@@ -635,7 +654,7 @@ func TestTheTokensTrustedFieldsAreSealed(t *testing.T) {
 	}
 	raw := raws[0]
 	if raw.Kind != "" || raw.BlobHash != "" || raw.MaxSessionAge != 0 || raw.Enable != "" || raw.MaxPrivilege != 0 ||
-		!raw.AuthTime.IsZero() || !raw.MintedAt.IsZero() || !raw.ExpiresAt.Equal(minted.ExpiresAt) {
+		!raw.AuthTime.IsZero() || !raw.MintedAt.IsZero() || !raw.VerifiedAt.IsZero() || !raw.ExpiresAt.Equal(minted.ExpiresAt) {
 		t.Fatalf("the backend holds a trusted token field in the clear: %+v", raw)
 	}
 	putRaw := func(k store.TokenKey, r store.Token) {
@@ -1894,5 +1913,130 @@ func TestAPutBackIsNotReadAgain(t *testing.T) {
 	inner.reads.Store(0)
 	if _, err := s.GetContext(ctx, ka); !errors.Is(err, ErrNotLastWritten) || inner.reads.Load() != 1 {
 		t.Fatalf("a put-back: %v after %d reads", err, inner.reads.Load())
+	}
+}
+
+func TestAMembershipsVerifiedAtMovedInTheClearIsRefused(t *testing.T) {
+	ctx := context.Background()
+	inner := memory.New(time.Now)
+	failures := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "t"}, []string{"record"})
+	s := Wrap(inner, keys(), failures)
+	at := time.Now().Add(-time.Hour)
+	m := store.Membership{Principal: "user:alice@corp.example.com", DN: "CN=Alice,DC=corp", Username: "alice",
+		GroupDNs: []string{"CN=netops,DC=corp"}, VerifiedAt: at}
+	if err := s.PutMembership(ctx, m, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := inner.GetMembership(ctx, m.Principal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw.VerifiedAt = at.Add(time.Hour) // a store write extending grace
+	if err := inner.PutMembership(ctx, raw, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.GetMembership(ctx, m.Principal); err == nil {
+		t.Fatalf("a membership whose verified_at moved opened: %v", got.VerifiedAt)
+	}
+	if n := testutil.ToFloat64(failures.WithLabelValues("membership")); n != 1 {
+		t.Fatalf(`crypt_open_failures_total{record="membership"} = %v, want 1`, n)
+	}
+}
+
+func TestAMembershipKeyAddedInTheClearIsRefused(t *testing.T) {
+	ctx := context.Background()
+	inner := memory.New(time.Now)
+	failures := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "t"}, []string{"record"})
+	s := Wrap(inner, keys(), failures)
+	at := time.Now().Add(-time.Hour)
+	k1, k2 := store.MapKey("san_email", "alice@corp.example.com"), store.MapKey("san_email", "victim@corp.example.com")
+	alice := store.Membership{Principal: "user:alice@corp.example.com", DN: "CN=Alice,DC=corp", Username: "alice",
+		GroupDNs: []string{"CN=admins,DC=corp"}, MapKeys: []string{k1}, VerifiedAt: at}
+	if err := s.PutMembership(ctx, alice, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := inner.GetMembership(ctx, alice.Principal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw.MapKeys = append(raw.MapKeys, k2)
+	if err := inner.PutMembership(ctx, raw, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.MembershipByKey(ctx, k2); err == nil {
+		t.Fatalf("a key added in the clear resolved to %q", got.Principal)
+	}
+	if n := testutil.ToFloat64(failures.WithLabelValues("membership")); n < 1 {
+		t.Fatalf(`crypt_open_failures_total{record="membership"} = %v, want it moved`, n)
+	}
+
+	// The same flip on a refusal: a refusal outranks a grant verified at its
+	// instant, so the store writer removes the record first (a tombstone at the
+	// clock's instant, which a write verified then is not before).
+	inner = memory.New(func() time.Time { return at })
+	s = Wrap(inner, keys(), failures)
+	carol := store.Membership{Principal: "user:carol@corp.example.com", EntryID: "guid:c", Refused: true, VerifiedAt: at}
+	if err := s.PutMembership(ctx, carol, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	before := testutil.ToFloat64(failures.WithLabelValues("membership"))
+	raw, err = inner.DeleteMembership(ctx, carol.Principal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw.Refused = false
+	if err := inner.PutMembership(ctx, raw, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.GetMembership(ctx, carol.Principal); err == nil {
+		t.Fatalf("a refusal flipped in the clear opened: refused=%v", got.Refused)
+	}
+	if n := testutil.ToFloat64(failures.WithLabelValues("membership")); n != before+1 {
+		t.Fatalf(`crypt_open_failures_total{record="membership"} = %v, want %v`, n, before+1)
+	}
+}
+
+// copiedMembership is an inner store whose record for mallory is whatever
+// alice's is: a store writer copying mb/alice's bytes to mb/mallory.
+type copiedMembership struct {
+	*memory.Store
+	from, to string
+}
+
+func (c copiedMembership) GetMembership(ctx context.Context, principal string) (store.Membership, error) {
+	if principal == c.to {
+		principal = c.from
+	}
+	return c.Store.GetMembership(ctx, principal)
+}
+
+func (c copiedMembership) DeleteMembership(ctx context.Context, principal string) (store.Membership, error) {
+	if principal == c.to {
+		principal = c.from
+	}
+	return c.Store.DeleteMembership(ctx, principal)
+}
+
+func TestAMembershipCopiedToAnotherPrincipalIsRefused(t *testing.T) {
+	ctx := context.Background()
+	mem := memory.New(time.Now)
+	failures := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "t"}, []string{"record"})
+	alice := store.Membership{Principal: "user:alice@corp.example.com", DN: "CN=Alice,DC=corp", Username: "alice",
+		GroupDNs: []string{"CN=admins,DC=corp"}, VerifiedAt: time.Now().Add(-time.Minute)}
+	if err := Wrap(mem, keys(), failures).PutMembership(ctx, alice, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	s := Wrap(copiedMembership{Store: mem, from: alice.Principal, to: "user:mallory@corp.example.com"}, keys(), failures)
+	got, err := s.GetMembership(ctx, "user:mallory@corp.example.com")
+	if err == nil || len(got.GroupDNs) != 0 || got.Username != "" {
+		t.Fatalf("alice's record opened for mallory: err=%v groups=%d", err, len(got.GroupDNs))
+	}
+	if n := testutil.ToFloat64(failures.WithLabelValues("membership")); n != 1 {
+		t.Fatalf(`crypt_open_failures_total{record="membership"} = %v, want 1`, n)
+	}
+	// A forget of mallory removes alice's record here, and returns nothing of it opened.
+	if got, err := s.DeleteMembership(ctx, "user:mallory@corp.example.com"); err != nil || got.Username != "" ||
+		len(got.GroupDNs) != 0 {
+		t.Fatalf("forgetting mallory returned alice's record opened: %+v %v", got, err)
 	}
 }

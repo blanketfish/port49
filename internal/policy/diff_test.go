@@ -1248,3 +1248,45 @@ grants:
 		t.Fatalf("adapters %+v", d.Adapters)
 	}
 }
+
+const grantOnCall = `
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: ro, privilege: readonly, permit: [show **]}]
+grants: [{subject: oncall, scope: all_devices, roles: [ro]}]
+`
+
+func loadDiff(t *testing.T, body string) *Policy {
+	t.Helper()
+	return mustParse(t, body)
+}
+
+// A changed group: fails the gate until a passing session test names the
+// subject; a new group subject is gated too (Ruling 15).
+func TestAChangedGroupIsGated(t *testing.T) {
+	before := loadDiff(t, `subjects: [{name: oncall, group: netops-oncall, token_ttl: 5m}]`+grantOnCall)
+	after := loadDiff(t, `subjects: [{name: oncall, group: netops-admins, token_ttl: 5m}]`+grantOnCall)
+	d := Compare(before, after, noon)
+	if d.UnacknowledgedPrincipals() != 1 {
+		t.Fatalf("%+v", d.Subjects)
+	}
+	tested := loadDiff(t, `subjects: [{name: oncall, group: netops-admins, token_ttl: 5m}]`+grantOnCall+
+		"\ntests: [{subject: oncall, device: leaf-01, level: readonly}]")
+	if d := Compare(before, tested, noon); d.UnacknowledgedPrincipals() != 0 {
+		t.Fatalf("a session test naming the subject acknowledges it: %+v", d.Subjects)
+	}
+	// A new group subject is gated as well.
+	added := loadDiff(t, `subjects: [{name: oncall, group: netops-oncall, token_ttl: 5m}, {name: other, group: x, token_ttl: 5m}]`+
+		grantOnCall)
+	if d := Compare(before, added, noon); d.UnacknowledgedPrincipals() != 1 {
+		t.Fatalf("a new group subject: %+v", d.Subjects)
+	}
+}
+
+// A DN respelled with the same meaning is not a changed group.
+func TestARespelledGroupDNIsNotAChange(t *testing.T) {
+	a := loadDiff(t, `subjects: [{name: oncall, group: "CN=a,DC=x", token_ttl: 5m}]`+grantOnCall)
+	b := loadDiff(t, `subjects: [{name: oncall, group: "cn=A, dc=x", token_ttl: 5m}]`+grantOnCall)
+	if d := Compare(a, b, noon); len(d.Subjects) != 0 || d.UnacknowledgedPrincipals() != 0 {
+		t.Fatalf("%+v", d.Subjects)
+	}
+}

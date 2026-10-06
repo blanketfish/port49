@@ -275,6 +275,16 @@ func buildBrokerAnchor(cfg config.Config, inventoryFrom string, st store.Store, 
 	// The blob event's rule text is redacted as the daemon's records are,
 	// with the policy in force's patterns (spec §5.8).
 	b.Redact = redactorFor(b.Policy)
+	// The directory, when broker.directory is configured: its bind's
+	// credentials are read now, so one that does not load ends the start with
+	// the key named (plan 7g, pre-flight M-3).
+	proc := procOf(cfg)
+	if b.Directory, err = openDirectoryHook(cfg, st, b.Policy, m, func(format string, args ...any) {
+		fmt.Fprintf(stderr, proc+": "+format+"\n", args...)
+	}); err != nil {
+		return nil, nil, nil, err
+	}
+	announceDirectory(stderr, proc, cfg, pol)
 	anchor := x509.NewCertPool()
 	anchor.AddCert(anchorCert)
 	srv, err := b.Server(cfg.Broker.Listen, cert, anchor)
@@ -375,7 +385,7 @@ func fencedInventory(cfg config.Config) (admission.Inventory, string, error) {
 // the other in force, so the version it remembers refusing is the version it
 // refused.
 func parseBundle(cfg config.Config, raw []byte, inv admission.Inventory) (*policy.Policy, error) {
-	pol, err := bundle.Parse(raw, inv, policy.Env{KeyRefs: cfg.KeyRefs()})
+	pol, err := bundle.Parse(raw, inv, policyEnv(cfg))
 	if err != nil {
 		return nil, fmt.Errorf("%s %s: %w", policyKey(cfg), cfg.Policy.File, quotesCut{err})
 	}
@@ -1024,6 +1034,10 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 	if sts.etcd != nil {
 		redeemGuard = restored.Allows
 	}
+	if cfg.StalenessOff {
+		fmt.Fprintln(stderr, procOf(cfg)+": session.staleness_ceiling is 0s: no context ever goes context_stale, so a "+
+			"context the broker stopped refreshing keeps its last answer until its own session ends")
+	}
 	deps := server.Deps{Admission: admit, Quarantined: watchQuarantine(live, m, time.Now), Keys: keySets, KeySeen: seen.Mark,
 		// The context indexes are given the context's own idle TTL: they exist
 		// to let revocation reach a live context, so they need to outlast
@@ -1032,12 +1046,10 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		// login's join reads the store.
 		Authen: authen.New(handlerStore, log, lim, m, time.Now, newCtxID, cfg.ReceiptIdleTTL, cfg.ReceiptMaxAge,
 			cfg.ContextIdleTTL, cfg.Session.IndexTTL, tags).WithMarks(authMarks).WithRedeemGuard(redeemGuard),
-		// `session.staleness_ceiling` defaults to 0 — no staleness check — and
-		// that default is the operational one, not an unfinished wiring: a
-		// finite ceiling denies a steadily working operator `context_stale`,
-		// "the broker is unreachable", at login plus the ceiling, whether or
-		// not any broker exists to refresh from. It is worth setting only once
-		// something is calling session.Manager.Refresh on a schedule.
+		// `session.staleness_ceiling` defaults to 4h (plan 7g; OR-1): the
+		// broker's scheduled refresh stamps `refreshed_at` every
+		// `broker.refresh_interval`. An explicit 0s turns the check off, which
+		// the start says (cfg.StalenessOff).
 		//
 		// The grace window is how long past the ceiling a context is denied
 		// and kept before the authorizer deletes it (plan 7b). The ceiling
@@ -1101,9 +1113,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		// credential_revoked and closed as it binds, from the first
 		// connection on.
 		bl = broker.NewListener(broker.Limit(bln, broker.MaxConns), brokerSrv.TLSConfig,
-			broker.ListenerLimits{MaxPendingPerSource: cfg.Broker.MaxPendingConnsPerSource,
-				MaxPerPrincipal:  cfg.Broker.MaxConnsPerPrincipal,
-				HandshakeTimeout: broker.DefaultListenerLimits.HandshakeTimeout},
+			brokerLimits(cfg, brk),
 			m, time.Now, func(format string, args ...any) {
 				fmt.Fprintf(stderr, procOf(cfg)+": "+format+"\n", args...)
 			})
@@ -1112,6 +1122,9 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		}
 		bl.Refused = brk.RefusedAtBind
 		bl.Status = brk.BindStatus
+		if brk.Directory != nil {
+			bl.Map = brk.BindMap
+		}
 		brk.Conns = bl
 	}
 	// The admin socket binds before anything says "listening", as the broker
@@ -1137,7 +1150,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 			// for both, so they cannot drift apart.
 			brk.RevokeTimeout = admin.OpTimeout
 			brk.AdminSocket = cfg.AdminSocket
-			srv.Revoke, srv.Revocations = adminRevoke(brk), adminRevocations(brk.Store)
+			srv.Revoke, srv.Revocations, srv.Forget = adminRevoke(brk), adminRevocations(brk.Store), adminForget(brk)
 		} else if sts.persistent {
 			// Beside port49-broker on etcd (plan 7e, Ruling 13).
 			srv.RevokeElsewhere = "port49-broker's admin socket (its admin_socket in port49-broker.yaml)"
@@ -1203,6 +1216,22 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 					brk.RetryPending()
 				}
 			}
+		}()
+	}
+
+	// The directory's duties, joined with certificate status's: the pool's
+	// health checks, pre-warm, and the scheduled refresh. The refresh runs
+	// with no directory too: it is what stamps refreshed_at, so without it a
+	// session goes context_stale at session.staleness_ceiling. port49d's
+	// own broker is the only minter here, so the pass is its own.
+	if brk != nil {
+		sayDir := func(format string, args ...any) { fmt.Fprintf(stderr, "port49d: "+format+"\n", args...) }
+		statusDone.Add(3)
+		go func() { defer statusDone.Done(); runPool(ctx, brk.Directory) }()
+		go func() { defer statusDone.Done(); scheduled(ctx, brk, cfg.Broker.RefreshInterval, sayDir) }()
+		go func() {
+			defer statusDone.Done()
+			prewarm(ctx, brk.Directory, brk.Policy, prewarmInterval(cfg), sayDir)
 		}()
 	}
 

@@ -41,6 +41,7 @@ type tokenRec struct {
 	Credential    credRec       `json:"credential"`
 	AuthTime      time.Time     `json:"auth_time"`
 	MintedAt      time.Time     `json:"minted_at"`
+	VerifiedAt    time.Time     `json:"verified_at"`
 	Sealed        []byte        `json:"sealed,omitempty"`
 }
 
@@ -48,14 +49,14 @@ func tokenRecOf(t store.Token) tokenRec {
 	return tokenRec{ID: t.ID, Secret: t.Secret, Kind: t.Kind, ExpiresAt: t.ExpiresAt, Principal: t.Principal,
 		Username: t.Username, BlobHash: t.BlobHash, MaxSessionAge: t.MaxSessionAge, Enable: t.Enable,
 		MaxPrivilege: t.MaxPrivilege, Credential: credRec(t.Credential), AuthTime: t.AuthTime, MintedAt: t.MintedAt,
-		Sealed: t.Sealed}
+		VerifiedAt: t.VerifiedAt, Sealed: t.Sealed}
 }
 
 func (r tokenRec) token() store.Token {
 	return store.Token{ID: r.ID, Secret: r.Secret, Kind: r.Kind, ExpiresAt: r.ExpiresAt, Principal: r.Principal,
 		Username: r.Username, BlobHash: r.BlobHash, MaxSessionAge: r.MaxSessionAge, Enable: r.Enable,
 		MaxPrivilege: r.MaxPrivilege, Credential: store.Credential(r.Credential), AuthTime: r.AuthTime,
-		MintedAt: r.MintedAt, Sealed: r.Sealed}
+		MintedAt: r.MintedAt, VerifiedAt: r.VerifiedAt, Sealed: r.Sealed}
 }
 
 type receiptRec struct {

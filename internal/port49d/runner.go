@@ -163,7 +163,8 @@ func (r *runner) run(ctx context.Context) {
 
 // duties is the takeover, then the sweep, the ledger record's keeper, the
 // restore witness's keeper, meta/judged's writer, the marks' reapplying
-// after a put-back and the refresh's context half, until ctx ends.
+// after a put-back, the refresh's context half, the scheduled refresh and
+// the directory's pre-warm, until ctx ends.
 func (r *runner) duties(ctx context.Context) {
 	carried, err := r.takeover(ctx)
 	if err != nil {
@@ -178,7 +179,7 @@ func (r *runner) duties(ctx context.Context) {
 		return
 	}
 	var wg sync.WaitGroup
-	wg.Add(6)
+	wg.Add(8)
 	go func() { defer wg.Done(); r.judging(ctx) }()
 	go func() { defer wg.Done(); r.keepWitness(ctx) }()
 	go func() { defer wg.Done(); r.reapplying(ctx) }()
@@ -194,7 +195,28 @@ func (r *runner) duties(ctx context.Context) {
 			r.m.LedgerBehind.Set(b2f(behind))
 		}, func(f string, a ...any) { fmt.Fprintf(stderr, "port49-broker: "+f+"\n", a...) })
 	}()
+	// The scheduled refresh runs with no directory too: it stamps
+	// refreshed_at, which session.staleness_ceiling reads. Pre-warm returns
+	// at once without one, and its wg.Done runs (pre-flight M-13).
+	go func() { defer wg.Done(); r.scheduledDuty(ctx) }()
+	go func() { defer wg.Done(); r.prewarmDuty(ctx) }()
 	wg.Wait()
+}
+
+// scheduledDuty is the scheduled refresh, every broker.refresh_interval,
+// under the duties' context.
+func (r *runner) scheduledDuty(ctx context.Context) {
+	scheduled(ctx, r.brk, r.cfg.Broker.RefreshInterval, runnerSay)
+}
+
+// prewarmDuty is the directory's pre-warm; it returns at once without a
+// directory, and nothing here reads r.cfg.Broker.Directory.
+func (r *runner) prewarmDuty(ctx context.Context) {
+	prewarm(ctx, r.brk.Directory, r.brk.Policy, prewarmInterval(r.cfg), runnerSay)
+}
+
+func runnerSay(format string, args ...any) {
+	fmt.Fprintf(stderr, "port49-broker: "+format+"\n", args...)
 }
 
 // begin starts this replica's run once the takeover carried carried: it

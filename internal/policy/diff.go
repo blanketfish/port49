@@ -167,8 +167,8 @@ type PrincipalChange struct {
 // passing session test naming one of the subject's principals; API rights
 // gained are gated, and acknowledged by a passing test asserting the whole
 // list with api:, naming the subject or one of its principals; a group change
-// and rights lost are reported, since a group subject mints for no one until
-// plan 7 and a right lost widens nothing.
+// is gated, and acknowledged by a passing session test naming the subject
+// (decision 38); rights lost are reported, since a right lost widens nothing.
 type SubjectChange struct {
 	Subject, OldUsername, NewUsername, OldGroup, NewGroup string
 	OldAPI, NewAPI, APIGained                             []string
@@ -457,12 +457,15 @@ func Compare(before, after *Policy, now time.Time) Diff {
 // subject in both by its username and group. A principal session test is the
 // acknowledgment, at now: it names the person and asserts what they get.
 func (c *comparison) principals(now time.Time) {
-	tested, apiTested := map[string]bool{}, map[string]bool{}
+	tested, apiTested, subjectTested := map[string]bool{}, map[string]bool{}, map[string]bool{}
 	for _, r := range c.after.RunTests(now) {
 		if !r.Pass || !r.Test.Session() {
 			continue
 		}
 		who := "subject:" + r.Test.Subject
+		if r.Test.Principal == "" && !r.Test.onlyAPI() {
+			subjectTested[r.Test.Subject] = true
+		}
 		if r.Test.Principal != "" {
 			who = "principal:" + r.Test.Principal
 			// A test asserting API rights alone needs no mint, so it says
@@ -503,21 +506,24 @@ func (c *comparison) principals(now time.Time) {
 		was, ok := c.before.subs[name]
 		if !ok {
 			// A new subject's principals are gated above; a new group
-			// subject's rights have no principal to carry them.
-			was = &Subject{Username: is.Username, Group: is.Group}
+			// subject's members are not, so its group counts as changed.
+			was = &Subject{Username: is.Username}
 		}
 		apiGained := gained(was.API, is.API)
-		if was.Username == is.Username && was.Group == is.Group && slices.Equal(sortedRights(was.API), sortedRights(is.API)) {
+		// A group given as a DN is the same group in any spelling.
+		sameGroup := was.Group == is.Group || (was.groupDN != "" && was.groupDN == is.groupDN)
+		if was.Username == is.Username && sameGroup && slices.Equal(sortedRights(was.API), sortedRights(is.API)) {
 			continue
 		}
 		ch := SubjectChange{Subject: name, OldUsername: was.Username, NewUsername: is.Username, OldGroup: was.Group,
 			NewGroup: is.Group, OldAPI: sortedRights(was.API), NewAPI: sortedRights(is.API), APIGained: apiGained,
-			Gated: was.Username != is.Username || len(apiGained) > 0}
+			Gated: was.Username != is.Username || !sameGroup || len(apiGained) > 0}
 		names := slices.Clone(is.Identity)
 		usernameOK := was.Username == is.Username || slices.ContainsFunc(names, func(id string) bool { return tested[id] })
 		apiOK := len(apiGained) == 0 || apiTested["subject:"+name] ||
 			slices.ContainsFunc(names, func(id string) bool { return apiTested["principal:"+id] })
-		ch.Acknowledged = ch.Gated && usernameOK && apiOK
+		groupOK := sameGroup || subjectTested[name]
+		ch.Acknowledged = ch.Gated && usernameOK && apiOK && groupOK
 		c.d.Subjects = append(c.d.Subjects, ch)
 	}
 }

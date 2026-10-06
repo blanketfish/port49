@@ -262,7 +262,7 @@ func (f *fixture) post(ctx context.Context, cs *tls.ConnectionState, body, key s
 // ConnContext gives every request on one connection.
 func (f *fixture) postAt(ctx context.Context, cs *tls.ConnectionState, body, key string,
 	at time.Time) *httptest.ResponseRecorder {
-	return f.post(withHeldConn(ctx, at), cs, body, key)
+	return f.post(withHeldConn(ctx, at, nil), cs, body, key)
 }
 
 // call sends one request to path through the broker's handler on a

@@ -256,6 +256,46 @@ type Metrics struct {
 	// port49_cert_status_unavailable_total: checks whose status could not be
 	// established. No labels.
 	CertStatusUnavailable prometheus.Counter
+	// port49_directory_queries_total{server, outcome}: directory queries by
+	// server (host:port) and outcome: ok, fault (the server's), error (the
+	// query's answer), refused (the dial or bind was refused, no fault).
+	DirectoryQueries *prometheus.CounterVec
+	// port49_directory_server_up{server}: 1 while the server's breaker is
+	// closed.
+	DirectoryServerUp *prometheus.GaugeVec
+	// port49_directory_selected{server}: 1 for the server queries go to.
+	DirectorySelected *prometheus.GaugeVec
+	// port49_directory_site_crossings_total: selections that crossed sites,
+	// consistency events (design §10). No labels.
+	DirectorySiteCrossings prometheus.Counter
+	// port49_directory_bind_holdoff_seconds: seconds left in the pool-wide
+	// hold-off after a refused bind, 0 when clear. No labels.
+	DirectoryBindHoldoff prometheus.GaugeFunc
+	directoryBindHoldoff atomic.Pointer[func() float64]
+	// port49_directory_walks_truncated_total: nested-group walks that ended
+	// at max_depth or the node bound with groups unconfirmed, and so grant
+	// none of them. No labels.
+	DirectoryWalksTruncated prometheus.Counter
+	// port49_directory_group_names_ambiguous: group names dropped from
+	// matching because two groups share them, seen in the last hour. No
+	// labels.
+	DirectoryGroupNamesAmbiguous prometheus.GaugeFunc
+	directoryGroupNamesAmbiguous atomic.Pointer[func() float64]
+	// port49_directory_lookups_total{outcome}: directory resolutions by
+	// outcome: fresh (a server answered), grace (the store's membership,
+	// within directory.grace), unavailable (no server and no grace),
+	// unmapped, ambiguous, collision (the directory's refusals).
+	DirectoryLookups *prometheus.CounterVec
+	// port49_directory_prewarm_principals: principals the last pre-warm
+	// pass verified and stored.
+	DirectoryPrewarmPrincipals prometheus.Gauge
+	// port49_directory_prewarm_last_success_timestamp_seconds: the Unix time
+	// the last pre-warm pass finished, 0 before one has.
+	DirectoryPrewarmLastSuccess prometheus.Gauge
+	// port49_directory_refresh_last_complete_timestamp_seconds: the Unix
+	// time of the last scheduled refresh that verified every principal, 0
+	// before one has. No labels: no principal or device.
+	DirectoryRefreshLastComplete prometheus.Gauge
 	// port49_policy_reloads_total{outcome}: attempts to put a changed policy
 	// file in force (plan 4b) — "applied", "unchanged" (a SIGHUP with nothing
 	// new), or "refused" (the file does not load; the policy in force keeps
@@ -415,6 +455,16 @@ func (m *Metrics) WatchInventoryAge(age func() float64) { m.inventoryAge.Store(&
 // CountQuarantined sets what port49_devices_quarantined reports at each scrape.
 func (m *Metrics) CountQuarantined(count func() int) { m.quarantined.Store(&count) }
 
+// SetDirectoryBindHoldoff sets what port49_directory_bind_holdoff_seconds reports.
+func (m *Metrics) SetDirectoryBindHoldoff(remaining func() float64) {
+	m.directoryBindHoldoff.Store(&remaining)
+}
+
+// SetDirectoryGroupNamesAmbiguous sets what port49_directory_group_names_ambiguous reports.
+func (m *Metrics) SetDirectoryGroupNamesAmbiguous(count func() float64) {
+	m.directoryGroupNamesAmbiguous.Store(&count)
+}
+
 // CountAdmissionRefused sets what port49_devices_admission_refused reports.
 func (m *Metrics) CountAdmissionRefused(count func() int) { m.admissionRefused.Store(&count) }
 
@@ -533,6 +583,26 @@ func New(reg prometheus.Registerer) *Metrics {
 			Help: "The Unix time the CRL in force passes its next update."}, []string{"crl"}),
 		CertStatusUnavailable: prometheus.NewCounter(prometheus.CounterOpts{Name: "port49_cert_status_unavailable_total",
 			Help: "Certificate status checks whose status could not be established."}),
+		DirectoryQueries: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_directory_queries_total",
+			Help: "Directory queries by server (host:port) and outcome: ok, fault (the server's), error (the query's answer), refused (the server refused the dial or bind without a fault)."},
+			[]string{"server", "outcome"}),
+		DirectoryServerUp: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "port49_directory_server_up",
+			Help: "1 while the directory server's breaker is closed."}, []string{"server"}),
+		DirectorySelected: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "port49_directory_selected",
+			Help: "1 for the directory server queries are sent to (sticky selection)."}, []string{"server"}),
+		DirectorySiteCrossings: prometheus.NewCounter(prometheus.CounterOpts{Name: "port49_directory_site_crossings_total",
+			Help: "Selections that crossed sites: consistency events, membership read there may lag replication (design §10)."}),
+		DirectoryWalksTruncated: prometheus.NewCounter(prometheus.CounterOpts{Name: "port49_directory_walks_truncated_total",
+			Help: "Nested-group walks that ended at max_depth or the node bound with groups unconfirmed; those groups are not granted."}),
+		DirectoryLookups: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_directory_lookups_total",
+			Help: "Directory resolutions by outcome: fresh, grace, unavailable, unmapped, ambiguous, collision."},
+			[]string{"outcome"}),
+		DirectoryPrewarmPrincipals: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_directory_prewarm_principals",
+			Help: "Principals the last pre-warm pass verified and stored."}),
+		DirectoryPrewarmLastSuccess: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_directory_prewarm_last_success_timestamp_seconds",
+			Help: "The Unix time the last pre-warm pass finished; 0 before one has."}),
+		DirectoryRefreshLastComplete: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_directory_refresh_last_complete_timestamp_seconds",
+			Help: "The Unix time of the last scheduled refresh that verified every principal; 0 before one has."}),
 		PolicyReloads: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_policy_reloads_total",
 			Help: "Attempts to put a changed policy file in force, by outcome."}, []string{"outcome"}),
 		PolicyFileRefused: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_policy_file_refused",
@@ -596,6 +666,20 @@ func New(reg prometheus.Registerer) *Metrics {
 		}
 		return 0
 	})
+	m.DirectoryBindHoldoff = prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "port49_directory_bind_holdoff_seconds",
+		Help: "Seconds left in the hold-off after a directory server refused the broker's bind, during which no unbound server is dialled; 0 when clear."}, func() float64 {
+		if remaining := m.directoryBindHoldoff.Load(); remaining != nil {
+			return (*remaining)()
+		}
+		return 0
+	})
+	m.DirectoryGroupNamesAmbiguous = prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "port49_directory_group_names_ambiguous",
+		Help: "Group names that match no one because two groups under groups_base_dn share them, seen in the last hour."}, func() float64 {
+		if count := m.directoryGroupNamesAmbiguous.Load(); count != nil {
+			return (*count)()
+		}
+		return 0
+	})
 	reg.MustRegister(m.Requests, m.Latency, m.Decisions, m.Unvalidated, m.KeyValidations,
 		m.Connections, m.ConnectionEvents, m.AuthFailures, m.SpoolDepth, m.SpoolDrops, m.SpoolQuarantines,
 		m.StoreOps, m.StoreCalls, m.StoreCallSeconds, m.StoreCircuitOpen, m.DecisionLogWriteFailures, m.CryptOpenFailures, m.IndexRecordsUndecodable, m.StoreKeyspaceHeld, m.StoreFeedUp, m.StoreFeedRescans, m.StoreFenceTimeouts, m.StoreHealthChecks, m.StoreHealthFailures, m.ContextCacheLookups, m.ContextCacheEntries, m.LedgerPending, m.LedgerBehind, m.CryptStoreKeyUnknown, m.StoreCertExpiry, m.Attributions, m.BrokerItemErrors, m.BrokerIdempotency,
@@ -603,7 +687,7 @@ func New(reg prometheus.Registerer) *Metrics {
 		m.DevicesQuarantined, m.DevicesAdmissionRefused, m.ContextRefreshes, m.ContextsReindexed,
 		m.ContextsReindexFailures, m.SessionRefreshes, m.TokensSuperseded, m.CeilingWarnings,
 		m.Revocations, m.RevocationsInForce, m.RevocationsFileFailed, m.CertStatusChecks, m.CRLLoads, m.CRLNextUpdate,
-		m.CertStatusUnavailable, m.PolicyReloads, m.PolicyFileRefused,
+		m.CertStatusUnavailable, m.DirectoryQueries, m.DirectoryServerUp, m.DirectorySelected, m.DirectorySiteCrossings, m.DirectoryBindHoldoff, m.DirectoryWalksTruncated, m.DirectoryGroupNamesAmbiguous, m.DirectoryLookups, m.DirectoryPrewarmPrincipals, m.DirectoryPrewarmLastSuccess, m.DirectoryRefreshLastComplete, m.PolicyReloads, m.PolicyFileRefused,
 		m.PolicyRefreshPending, m.PolicyBundleMatchesRunner, m.BrokerMintGateClosed, m.RedemptionRestoreGuarded,
 		m.InventoryReloads,
 		m.InventoryFileRefused,

@@ -1148,3 +1148,77 @@ func TestSeenIsRaisedByEveryContextClientResponse(t *testing.T) {
 		t.Errorf("PutContextRev: Seen %d, below the revision %d it committed at", got, rev)
 	}
 }
+
+// A PutMembership torn after a key was registered and before its record was
+// written leaves a claimant with no record: another principal's claim then
+// answers alone, as nothing lists the key, and the claimant's own record,
+// written later, makes the key ambiguous. The reverse tear, a record listing
+// a key its index does not know, cannot happen: the registration comes first
+// (review R2-b).
+func TestATornMembershipWriteOnlyDeniesAKey(t *testing.T) {
+	ctx := context.Background()
+	s := onShared(t, func() time.Time { return t0 })
+	k := store.MapKey("san_email", "shared@corp.example.com")
+	p := store.Membership{Principal: "user:p@corp.example.com", Username: "p", MapKeys: []string{k}, VerifiedAt: t0}
+	q := store.Membership{Principal: "user:q@corp.example.com", Username: "q", MapKeys: []string{k}, VerifiedAt: t0}
+	if err := s.registerKey(ctx, k, p.Principal, t0.Add(time.Hour), t0); err != nil { // p's put, torn after its claim
+		t.Fatal(err)
+	}
+	if err := s.PutMembership(ctx, q, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if m, err := s.MembershipByKey(ctx, k); err != nil || m.Principal != q.Principal {
+		t.Fatalf("a claimant with no record: %+v %v, want q's", m, err)
+	}
+	if err := s.PutMembership(ctx, p, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if m, err := s.MembershipByKey(ctx, k); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("both listed it: %q %v, want ErrNotFound", m.Principal, err)
+	}
+}
+
+// A broker whose clock runs ahead judges a key's marker dead while another
+// broker's live claimant is still on it: its claim must keep that claimant,
+// not start the set afresh. Reads drop the dead claimants and the lease
+// reclaims the key, so a present marker always keeps its claimants.
+func TestAFastClockNeverZeroesAKeysClaimants(t *testing.T) {
+	ctx := context.Background()
+	cli := etcdtest.Client(t)
+	prefix := etcdtest.Prefix()
+	slow := newStore(cli, cli, Config{Prefix: prefix, Now: func() time.Time { return t0 }})
+	fast := newStore(cli, cli, Config{Prefix: prefix, Now: func() time.Time { return t0.Add(2 * time.Hour) }})
+	k := store.MapKey("san_email", "shared@corp.example.com")
+	p := store.Membership{Principal: "user:p@corp.example.com", Username: "p", MapKeys: []string{k}, VerifiedAt: t0}
+	q := store.Membership{Principal: "user:q@corp.example.com", Username: "q", MapKeys: []string{k},
+		VerifiedAt: t0.Add(2 * time.Hour)}
+	if err := slow.PutMembership(ctx, p, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	// p's marker ends at t0+1h: dead on the fast clock, live on the slow one.
+	if err := fast.PutMembership(ctx, q, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if m, err := slow.MembershipByKey(ctx, k); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("p's live record and q's list the key: %q %v, want ErrNotFound", m.Principal, err)
+	}
+}
+
+func TestAFastClockRefusalKeepsAKeysClaimants(t *testing.T) {
+	ctx := context.Background()
+	cli := etcdtest.Client(t)
+	prefix := etcdtest.Prefix()
+	slow := newStore(cli, cli, Config{Prefix: prefix, Now: func() time.Time { return t0 }})
+	fast := newStore(cli, cli, Config{Prefix: prefix, Now: func() time.Time { return t0.Add(2 * time.Hour) }})
+	k := store.MapKey("san_email", "shared@corp.example.com")
+	p := store.Membership{Principal: "user:p@corp.example.com", Username: "p", MapKeys: []string{k}, VerifiedAt: t0}
+	if err := slow.PutMembership(ctx, p, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := fast.RefuseMapKeys(ctx, []string{k}, t0.Add(-time.Minute), time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if m, err := slow.MembershipByKey(ctx, k); err != nil || m.Principal != p.Principal {
+		t.Fatalf("a refusal older than p's verification, from a fast clock: %q %v, want p", m.Principal, err)
+	}
+}

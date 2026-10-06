@@ -160,12 +160,15 @@ func TestCheckIdentityRefusesADaemonWithTheBrokersReach(t *testing.T) {
 	}
 }
 
-// A daemon role granted a write on lw/, or any access to sp/, is refused at
-// the start: either would let a stolen daemon key lower the ledger record
-// or forge a replay's superseded instant (Review Focus 8; Rulings 4, 9).
+// A daemon role granted a write on lw/, or any access to sp/, mb/ or mk/, is
+// refused at the start: the first would let a stolen daemon key lower the
+// ledger record, the second forge a replay's superseded instant (Review
+// Focus 8; Rulings 4, 9), and the last two hold every principal's groups
+// (plan 7g, Ruling 10).
 func TestCheckIdentityRefusesADaemonThatCanWriteTheLedgerRecord(t *testing.T) {
 	const prefix = "/port49/"
 	ledger, superseded := newKeys(prefix).family(famLedger), newKeys(prefix).family(famSuperseded)
+	membership, membershipK := newKeys(prefix).family(famMembership), newKeys(prefix).family(famMembershipK)
 	srv := provisioned(t, prefix)
 	if err := openAs(t, srv, "port49-daemon", prefix).CheckIdentity(context.Background(), false); err != nil {
 		t.Fatalf("the daemon as itself, with its read on lw/: %v", err)
@@ -180,6 +183,14 @@ func TestCheckIdentityRefusesADaemonThatCanWriteTheLedgerRecord(t *testing.T) {
 			"it was allowed writing " + ledger},
 		{etcdtest.Grant{Role: RoleDaemon, Key: superseded, RangeEnd: clientv3.GetPrefixRangeEnd(superseded)},
 			"it was allowed reading " + superseded},
+		{etcdtest.Grant{Role: RoleDaemon, Key: membership, RangeEnd: clientv3.GetPrefixRangeEnd(membership)},
+			"it was allowed reading " + membership},
+		{etcdtest.Grant{Role: RoleDaemon, Key: membershipK, RangeEnd: clientv3.GetPrefixRangeEnd(membershipK)},
+			"it was allowed reading " + membershipK},
+		{etcdtest.Grant{Role: RoleDaemon, Key: membership, RangeEnd: clientv3.GetPrefixRangeEnd(membership), Write: true},
+			"it was allowed reading " + membership}, // a write grant is read-write: the reading probe runs first
+		{etcdtest.Grant{Role: RoleDaemon, Key: membershipK, RangeEnd: clientv3.GetPrefixRangeEnd(membershipK), Write: true},
+			"it was allowed reading " + membershipK},
 	} {
 		loose := provisionedWith(t, prefix, []etcdtest.Grant{c.extra}, nil)
 		err := openAs(t, loose, "port49-daemon", prefix).CheckIdentity(context.Background(), false)

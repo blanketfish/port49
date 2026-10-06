@@ -800,3 +800,25 @@ func TestAMintWritesItsRecordWhereTheRequestSays(t *testing.T) {
 type emitTo func(decision.Record)
 
 func (f emitTo) Emit(r decision.Record) { f(r) }
+
+// A token carries the membership's verification time the broker hands
+// it (plan 7g, Ruling 11), on both kinds.
+func TestEveryTokenCarriesItsVerifiedAt(t *testing.T) {
+	at := time.Unix(1_757_041_495, 0)
+	st := memory.New(func() time.Time { return at })
+	m := NewMinter(st, decision.NewJSONLines(&bytes.Buffer{}), rand.Reader, TagKey([]byte("k")), func() time.Time { return at }, 3)
+	s := subject()
+	s.AuthTime, s.VerifiedAt = at.Add(-time.Hour), at.Add(-2*time.Hour)
+	if _, err := m.Mint(context.Background(), Request{Subject: s, Device: "leaf-01", WithEnable: true, TTL: time.Minute}); err != nil {
+		t.Fatal(err)
+	}
+	c, err := st.Candidates(context.Background(), store.TokenKey{NAS: "leaf-01", Username: "alice"})
+	if err != nil || len(c) != 2 {
+		t.Fatalf("%d tokens, want a login and an enable: %v", len(c), err)
+	}
+	for _, tok := range c {
+		if !tok.VerifiedAt.Equal(s.VerifiedAt) {
+			t.Fatalf("%s token: verified_at %v, want %v", tok.Kind, tok.VerifiedAt, s.VerifiedAt)
+		}
+	}
+}

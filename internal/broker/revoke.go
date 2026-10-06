@@ -234,8 +234,7 @@ func (b *Broker) Revoke(ctx context.Context, req RevokeRequest) (RevokeReport, e
 	// undone, and the listener is not marked for it (review M2).
 	stands := b.Marks == nil || b.Marks.Put(rep.Mark)
 	if kind == store.RevocationPrincipal {
-		_, named := b.Policy.Load().SubjectOf(key)
-		rep.Unnamed = !named
+		rep.Unnamed = len(b.Policy.Load().SubjectsOf(b.storedMemberOf(ctx, key))) == 0
 	}
 	note := func(err error) {
 		if err != nil && rep.Err == nil {

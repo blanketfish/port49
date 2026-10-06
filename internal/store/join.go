@@ -73,8 +73,9 @@ func Joinable(live, login Context, now time.Time) bool {
 // from the first: the ctx_id, the privilege already granted, the session
 // discriminators and the accounting state are kept. What the newest broker
 // decision says — the policy blob, the ceiling, the enable mechanism, the
-// credential — comes from the login. The clock fields take the later of the
-// two. mintedAt is the login token's store.Token.MintedAt.
+// credential — comes from the login. AuthTime takes the later of the two.
+// RefreshedAt is the login's, even when earlier: the blob it brings rests on
+// the membership verified then (plan 7g, Ruling 11). mintedAt is the login token's store.Token.MintedAt.
 func Join(live, login Context, mintedAt time.Time) Context {
 	out := live
 	out.Port, out.RemAddr = login.Port, login.RemAddr

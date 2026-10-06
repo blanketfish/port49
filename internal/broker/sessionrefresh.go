@@ -15,6 +15,7 @@ import (
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/broker/api"
 	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/directory"
 	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/store"
 )
@@ -31,9 +32,9 @@ const (
 // connection that refreshed within refreshEvery is told to wait.
 func (b *Broker) refreshChallenge(w http.ResponseWriter, r *http.Request) {
 	now := b.Now()
-	principal, cred, err := Identity(r.TLS, now)
+	principal, _, cred, err := b.callerOf(r, now)
 	if err != nil {
-		b.refuseRefresh(w, now, principal, cred, decision.TrustDomainUnresolved, string(decision.TrustDomainUnresolved), err.Error())
+		b.refuseCaller(w, r, now, principal, cred, err)
 		return
 	}
 	h := heldOf(r)
@@ -66,9 +67,9 @@ func (b *Broker) refreshChallenge(w http.ResponseWriter, r *http.Request) {
 // sessions (spec §5.6). The nonce is taken whatever the outcome: single use.
 func (b *Broker) refresh(w http.ResponseWriter, r *http.Request) {
 	now := b.Now()
-	principal, cred, err := Identity(r.TLS, now)
+	principal, legacy, cred, err := b.callerOf(r, now)
 	if err != nil {
-		b.refuseRefresh(w, now, principal, cred, decision.TrustDomainUnresolved, string(decision.TrustDomainUnresolved), err.Error())
+		b.refuseCaller(w, r, now, principal, cred, err)
 		return
 	}
 	h := heldOf(r)
@@ -112,7 +113,7 @@ func (b *Broker) refresh(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), holdTimeout)
 	defer cancel()
-	rv, revoked, err := b.revocation(ctx, principal, cred)
+	rv, revoked, err := b.revocation(ctx, principal, cred, legacy)
 	switch {
 	case err != nil:
 		b.refreshStoreError(w, now, principal, cred, refreshEvery,
@@ -136,6 +137,20 @@ func (b *Broker) refresh(w http.ResponseWriter, r *http.Request) {
 		b.answerRefusal(w, r, ref)
 		return
 	}
+	// Group membership is read again here, as a mint reads it, before the
+	// policy is held (Ruling 10): a refusal extends nothing, and a refresh
+	// is a fresh authentication only as far as the directory verified it.
+	dctx, dcancel := context.WithTimeout(r.Context(), b.memberBudget())
+	m, answer, err := b.memberFor(dctx, principal)
+	dcancel()
+	if err != nil {
+		dref := directoryRefusal(err)
+		b.Metrics.SessionRefreshes.WithLabelValues("refused").Inc()
+		b.emit(decision.Record{TS: now, Event: decision.EventRefresh, Verdict: decision.VerdictDeny, Reason: dref.Reason,
+			Principal: principal, Auth: &decision.Auth{Method: cred.Method, Fingerprint: cred.Fingerprint}})
+		b.answerRefusal(w, r, dref)
+		return
+	}
 	at := b.Now() // the broker's verification time: the one clock §5.6 gives it
 	// The connection's clock moves before the extension, and stays moved if
 	// the extension fails: the signature and the marks verified, so this was
@@ -143,7 +158,15 @@ func (b *Broker) refresh(w http.ResponseWriter, r *http.Request) {
 	h.mu.Lock()
 	h.at, h.lastRefresh = at, at
 	h.mu.Unlock()
-	rep, err := b.RefreshSession(ctx, principal, cred, at)
+	rep, err := b.RefreshSession(ctx, m, answer, cred, at)
+	if errors.Is(err, directory.ErrUsernameTaken) {
+		dref := directoryRefusal(err)
+		b.Metrics.SessionRefreshes.WithLabelValues("refused").Inc()
+		b.emit(decision.Record{TS: at, Event: decision.EventRefresh, Verdict: decision.VerdictDeny, Reason: dref.Reason,
+			Principal: principal, Auth: &decision.Auth{Method: cred.Method, Fingerprint: cred.Fingerprint}})
+		b.answerRefusal(w, r, dref)
+		return
+	}
 	if err != nil {
 		b.refreshStoreError(w, at, principal, cred, refreshEvery, partialRefreshText) // fixed text (M5)
 		return
@@ -151,7 +174,7 @@ func (b *Broker) refresh(w http.ResponseWriter, r *http.Request) {
 	// The marks again, after the extension's writes, as a mint reads them
 	// after its last token write (revokedSince): a revocation that landed
 	// while this refresh extended is answered, not reported as extended.
-	switch rv, revoked, err := b.revocation(ctx, principal, cred); {
+	switch rv, revoked, err := b.revocation(ctx, principal, cred, legacy); {
 	case err != nil:
 		b.refreshStoreError(w, at, principal, cred, refreshEvery, partialRefreshText)
 		return
@@ -182,6 +205,23 @@ func (b *Broker) refreshStoreError(w http.ResponseWriter, now time.Time, princip
 		w.Header().Set("Retry-After", strconv.Itoa(int(retry/time.Second)))
 	}
 	writeError(w, http.StatusServiceUnavailable, string(decision.StoreUnavailable), text)
+}
+
+// refuseCaller answers a refresh whose caller callerOf could not name: a
+// connection with no pin is the directory not answering (503
+// directory_unavailable, the session kept, as a mint is answered; spec
+// §5.7); anything else is the certificate's own refusal.
+func (b *Broker) refuseCaller(w http.ResponseWriter, r *http.Request, now time.Time, principal string,
+	cred store.Credential, err error) {
+	if !errors.Is(err, errNoPin) {
+		b.refuseRefresh(w, now, principal, cred, decision.TrustDomainUnresolved, string(decision.TrustDomainUnresolved), err.Error())
+		return
+	}
+	ref := directoryRefusal(directory.ErrUnavailable)
+	b.Metrics.SessionRefreshes.WithLabelValues("refused").Inc()
+	b.emit(decision.Record{TS: now, Event: decision.EventRefresh, Verdict: decision.VerdictDeny, Reason: ref.Reason,
+		Principal: principal, Auth: &decision.Auth{Method: cred.Method, Fingerprint: cred.Fingerprint}})
+	b.answerRefusal(w, r, ref)
 }
 
 // refuseRefresh answers a refresh that proved nothing, and records it
@@ -222,7 +262,9 @@ type SessionRefreshReport struct {
 // go of the policy and before the caller answers: a log sink that stalls
 // must not hold a reload (plan 7e, Ruling 10). A policy refresh, the pass
 // after a reload, holds no policy and writes at once.
-func (b *Broker) RefreshSession(ctx context.Context, principal string, cred store.Credential, at time.Time) (SessionRefreshReport, error) {
+func (b *Broker) RefreshSession(ctx context.Context, m policy.Member, answer *directory.Answer,
+	cred store.Credential, at time.Time) (SessionRefreshReport, error) {
+	principal := m.Principal
 	buf := newHeldLog()
 	pol, hold := b.Policy.Hold()
 	defer func() {
@@ -230,6 +272,11 @@ func (b *Broker) RefreshSession(ctx context.Context, principal string, cred stor
 		buf.Flush(b.Log, b.blobLanded)
 	}()
 	rep := SessionRefreshReport{At: at}
+	// The member was read before the hold: a reload since may declare its
+	// username (final review M-1). The caller answers username_collision.
+	if m.Directory && pol.DeclaredUsernames()[m.Username] != "" {
+		return rep, directory.ErrUsernameTaken
+	}
 	refs, err := b.Store.ContextsByPrincipal(ctx, principal)
 	if err != nil {
 		return rep, err
@@ -241,7 +288,7 @@ func (b *Broker) RefreshSession(ctx context.Context, principal string, cred stor
 		dev, known := pol.Device(ref.NAS)
 		unreached := !known || dev.Platform == "" || sessionOnly(pol, dev.Platform)
 		visit := RefreshedContext{Ref: ref, Unreached: unreached}
-		outcome, err := b.refreshContext(ctx, pol, nil, at, principal, ref, &pass, quarantined, false)
+		outcome, err := b.refreshContext(ctx, pol, nil, at, m, ref, &pass, quarantined, false, time.Time{})
 		switch {
 		case err != nil && !errors.Is(err, store.ErrConflict):
 			return rep, err
@@ -256,7 +303,7 @@ func (b *Broker) RefreshSession(ctx context.Context, principal string, cred stor
 			visit.Outcome = "not_judged"
 		}
 		if visit.Outcome == "" {
-			visit.Outcome, visit.SessionExpires, err = b.extend(ctx, buf, pol, principal, cred, ref, dev, at, unreached)
+			visit.Outcome, visit.SessionExpires, err = b.extend(ctx, buf, pol, m, answer, cred, ref, dev, at, unreached)
 			if err != nil {
 				return rep, err
 			}
@@ -274,8 +321,10 @@ func (b *Broker) RefreshSession(ctx context.Context, principal string, cred stor
 // it past its grace window, both bound to the revision read, and writes its
 // record to out, the refresh's buffer. It returns "" for a context gone or
 // no longer the caller's.
-func (b *Broker) extend(ctx context.Context, out decision.Emitter, pol *policy.Policy, principal string, cred store.Credential,
-	ref store.ContextRef, dev admission.Device, at time.Time, unreached bool) (string, time.Time, error) {
+func (b *Broker) extend(ctx context.Context, out decision.Emitter, pol *policy.Policy, m policy.Member,
+	answer *directory.Answer, cred store.Credential, ref store.ContextRef, dev admission.Device, at time.Time,
+	unreached bool) (string, time.Time, error) {
+	principal := m.Principal
 	k := store.ContextKey{NAS: ref.NAS, Username: ref.Username}
 	c, err := b.Store.GetContext(ctx, k)
 	switch {
@@ -304,12 +353,12 @@ func (b *Broker) extend(ctx context.Context, out decision.Emitter, pol *policy.P
 		return "past_grace", time.Time{}, nil
 	}
 	age := time.Duration(0)
-	if res, err := pol.Resolve(principal, dev, at); err == nil {
+	if res, err := pol.ResolveMember(m, dev, at); err == nil {
 		age = res.SessionAge.Of(b.MaxSessionAge)
 	} else {
 		age = b.MaxSessionAge // a device with no platform: the default, as its mint would have
 	}
-	switch err := b.Store.RefreshContext(ctx, k, store.ContextRefresh{AuthTime: at, RefreshedAt: at,
+	switch err := b.Store.RefreshContext(ctx, k, store.ContextRefresh{AuthTime: at, RefreshedAt: refreshedAt(answer, at),
 		SessionAge: &age, GraceCutoff: at.Add(-b.GraceWindow), ExpectRev: c.Rev}, b.ContextIdleTTL); {
 	case errors.Is(err, store.ErrPastGrace):
 		return "past_grace", time.Time{}, nil
@@ -330,6 +379,17 @@ func (b *Broker) extend(ctx context.Context, out decision.Emitter, pol *policy.P
 	rec.Verdict, rec.Reason = decision.VerdictPermit, decision.GrantsMatched
 	b.emitTo(out, rec)
 	return "extended", expires, nil
+}
+
+// refreshedAt is the staleness clock a session refresh writes: the
+// directory's last verification (the stored one under grace), never later
+// than at, and at without a directory. A session refresh must not reset the
+// clock past the directory's last answer (Ruling 11).
+func refreshedAt(answer *directory.Answer, at time.Time) time.Time {
+	if v := verifiedAt(answer); !v.IsZero() && v.Before(at) {
+		return v
+	}
+	return at
 }
 
 // livePrincipalContext reports whether k still holds a live context of

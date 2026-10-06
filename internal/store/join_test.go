@@ -62,6 +62,19 @@ func TestJoinFieldRules(t *testing.T) {
 	}
 }
 
+// A grace login's refreshed_at is its membership's instant, and the join
+// takes it over a later one on the live context: the blob it brings rests on
+// that membership (plan 7g, Ruling 11).
+func TestJoinRefreshedAtIsTheLoginsEvenWhenEarlier(t *testing.T) {
+	l := login()
+	l.RefreshedAt = t0.Add(-3 * time.Hour)
+	lv := live()
+	lv.RefreshedAt = t0.Add(-time.Minute)
+	if got := store.Join(lv, l, t0); !got.RefreshedAt.Equal(l.RefreshedAt) {
+		t.Fatalf("refreshed_at %v, want the login's %v", got.RefreshedAt, l.RefreshedAt)
+	}
+}
+
 // The login's level raises, and the result is bounded by the newest ceiling —
 // SetPrivilege's rule (spec §5.3). Zero MaxPrivilege is no ceiling.
 func TestJoinPrivilegeIsRaiseOnlyAndClamped(t *testing.T) {

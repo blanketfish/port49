@@ -206,7 +206,7 @@ func fingerprint(c tls.Certificate) string {
 // the next request is a new handshake.
 func TestAConnectionPastTheCeilingIsRefused(t *testing.T) {
 	f := newFixture(t, 8)
-	ctx := withHeldConn(context.Background(), f.now)
+	ctx := withHeldConn(context.Background(), f.now, nil)
 	decodeMint(t, f.post(ctx, f.state(f.alice), `{"devices":["leaf1"]}`, ""))
 	f.now = f.now.Add(12*time.Hour + time.Second)
 	w := f.post(ctx, f.state(f.alice), `{"devices":["leaf1"]}`, "")
@@ -780,7 +780,7 @@ func TestAStalledLogNeverHoldsAReloadThroughASessionRefresh(t *testing.T) {
 	b.Log = sink
 	done := make(chan error, 1)
 	go func() {
-		_, err := b.RefreshSession(context.Background(), alicePrincipal, store.Credential{Method: "cert"}, b.Now())
+		_, err := b.RefreshSession(context.Background(), policy.MemberOf(alicePrincipal), nil, store.Credential{Method: "cert"}, b.Now())
 		done <- err
 	}()
 	select {
@@ -859,7 +859,7 @@ func TestASessionRefreshWritesEachBlobOnce(t *testing.T) {
 	f.liveContextAt(t, "leaf2", "alice", alicePrincipal, "", f.now, f.now.Add(time.Hour))
 	f.loadPolicy(t, strings.Replace(testPolicy, `deny: ["reload **"]`, `deny: ["reload **", "write erase"]`, 1))
 	f.log.Reset()
-	rep, err := f.b.RefreshSession(context.Background(), alicePrincipal, store.Credential{Method: "cert"}, f.b.Now())
+	rep, err := f.b.RefreshSession(context.Background(), policy.MemberOf(alicePrincipal), nil, store.Credential{Method: "cert"}, f.b.Now())
 	if err != nil || len(rep.Sessions) != 2 {
 		t.Fatalf("the refresh: %+v %v", rep, err)
 	}
