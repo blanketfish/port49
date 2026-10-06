@@ -5,8 +5,9 @@
 # ISO's path) under tests/lab/logs/windows (git-ignored) first.
 #
 # Run it, from a worktree pinned at the commit under test, with
-#   go test -tags lab ./tests/lab/ -run '^TestL44WindowsAD$' -count=1 -v -timeout 240m
-# (TestL44Bringup alone is the bring-up with no measurement). It needs
+#   PORT49_LAB_L44=1 go test -tags lab ./tests/lab/ -run '^TestL44WindowsAD$' -count=1 -v -timeout 240m
+# (TestL44Bringup alone is the bring-up with no measurement; both skip without
+# PORT49_LAB_L44=1). It needs
 # /dev/kvm, Docker with Compose v2.24.4+, 6 GB of RAM and 66 GiB free on the
 # lab's filesystem. A fresh run takes 1.5 to 2.5 hours, most of it Windows
 # Setup; Setup can be watched at http://127.0.0.1:8006.

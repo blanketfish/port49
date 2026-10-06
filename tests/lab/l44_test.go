@@ -9,7 +9,9 @@ import (
 	"crypto/x509"
 	"fmt"
 	"net"
+	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -22,7 +24,7 @@ import (
 // TestL44Bringup is the DC's bring-up alone, with no measurement: everything
 // L44 needs before it measures anything. It writes no note. Run it with
 //
-//	go test -tags lab ./tests/lab/ -run '^TestL44Bringup$' -count=1 -v -timeout 240m
+//	PORT49_LAB_L44=1 go test -tags lab ./tests/lab/ -run '^TestL44Bringup$' -count=1 -v -timeout 240m
 //
 // Its evidence file, L44-bringup.json, goes under tests/lab/evidence of the run's
 // output root: set PORT49_LAB_DIRECTORY_OUT to keep a dry run out of the
@@ -30,6 +32,7 @@ import (
 //
 // TestL44WindowsAD is the measurement (its comment has its command).
 func TestL44Bringup(t *testing.T) {
+	l44RequireOptIn(t)
 	d := newDirectories(t)
 	dc := startWindowsDC(t, d)
 	c := dc.win.certs
@@ -52,7 +55,7 @@ func TestL44Bringup(t *testing.T) {
 	if why := dc.win.invalidFor("keytab"); why != "" {
 		t.Logf("GSSAPI: no keytab (%s); its cells will be INVALID", why)
 	} else if r := dc.tryBind(t, ev, "gssapi", dc.bindGSSAPI(), ""); !r.ok {
-		t.Logf("GSSAPI as installed: %s (measured in TestL44WindowsAD, not a bring-up failure)", r.text)
+		t.Logf("GSSAPI as installed: %s (measured in TestL44WindowsAD, not a bring-up failure)", winScrub(r.text, dc.l44Secrets()...))
 	}
 	ev.assertClean(t, append([]string{d.password}, d.extra...)...)
 	t.Logf("windows: %s; fixture loaded, LDAPS verified, keytab and certificates issued", dc.win.version())
@@ -66,6 +69,16 @@ const l44Claim = "The Active Directory claims on a Windows DC: on L42's fixture 
 	"how KB5014754's strong-mapping enforcement treats each (policy engine spec §15 L44). Also measured, for two questions " +
 	"plan 7g carried: whether the DC advertises the AD capability 1.2.840.113556.1.4.800, and the LDAP result an EXTERNAL " +
 	"bind it refuses carries."
+
+// l44RequireOptIn skips a test that starts the Windows DC unless the operator
+// asked for it: a pattern that matches by accident must not start a lab (and
+// destroy a live run's).
+func l44RequireOptIn(t *testing.T) {
+	t.Helper()
+	if os.Getenv("PORT49_LAB_L44") != "1" {
+		t.Skip("starts the Windows DC; set PORT49_LAB_L44=1 to run it")
+	}
+}
 
 const l44ADCapability = "1.2.840.113556.1.4.800"
 
@@ -82,8 +95,9 @@ type l44Case struct {
 // from a worktree pinned at the commit under test (tests/lab/directory/windows/
 // compose.yaml's header has the operator's notes), with
 //
-//	go test -tags lab ./tests/lab/ -run '^TestL44WindowsAD$' -count=1 -v -timeout 240m
+//	PORT49_LAB_L44=1 go test -tags lab ./tests/lab/ -run '^TestL44WindowsAD$' -count=1 -v -timeout 240m
 func TestL44WindowsAD(t *testing.T) {
+	l44RequireOptIn(t)
 	compare := l44CompareCapabilities(t) // first: the containers share tests/lab/logs/directory
 	d := newDirectories(t)
 	d.runSel = "^TestL44WindowsAD$"
@@ -99,6 +113,7 @@ func TestL44WindowsAD(t *testing.T) {
 	obs.WriteString(dc.l44SID(t, ev))
 	obs.WriteString(dc.mappingChecks(t, ev))
 	obs.WriteString(dc.l44Matrix(t, ev))
+	obs.WriteString(dc.l44OR1(t, ev)) // last: its KDC restart needs a logon the stopped KDC may break
 	ev.assertClean(t, dc.l44Secrets()...)
 	writeResult(t, d, "L44", dc, l44Claim, dc.version(t), obs.String(), "tests/lab/evidence/L44-"+platWindows+".json")
 }
@@ -188,7 +203,8 @@ func (l *labDir) l44Binds(t *testing.T, ev *evidenceLog) string {
 	since := w.clock(t)
 	brokerDN := "CN=port49,OU=Svc," + dirBase
 	adcsExt := directory.Bind{Mechanism: "external", TLSCertFile: w.certs.brokerCertFile, TLSKeyFile: w.certs.brokerKeyFile}
-	cbt := w.facts.NTDSLDAP["LdapEnforceChannelBinding"]
+	cbtInstalled := w.facts.NTDSLDAP["LdapEnforceChannelBinding"]
+	cbt := cbtInstalled
 	if cbt == "" {
 		cbt = "absent (this build's default)"
 	}
@@ -225,6 +241,8 @@ func (l *labDir) l44Binds(t *testing.T, ev *evidenceLog) string {
 	e3 := l.l44External(t, ev, "external, lab CA", l.bindExternal(), false)
 	b.WriteString(l44ExtRow("SASL EXTERNAL over LDAPS, a certificate from the lab directory CA (in the DC's Root store, not in NTAuth), unmapped (carried question b)", e3))
 
+	restoreCBT := l.l44GuardRegistry(t, "LdapEnforceChannelBinding", l44AsInstalled(cbtInstalled))
+	defer restoreCBT()
 	got := l.setRegistry(t, "LdapEnforceChannelBinding", 2)
 	ev.mark("L44 gssapi, LdapEnforceChannelBinding %s", got)
 	b.WriteString(gssapi("gssapi, channel binding 2", "GSSAPI over LDAPS, keytab, no SASL security layer, `LdapEnforceChannelBinding` "+got+" (port49 sends no channel binding token)"))
@@ -233,28 +251,8 @@ func (l *labDir) l44Binds(t *testing.T, ev *evidenceLog) string {
 	b.WriteString(l44ExtRow("SASL EXTERNAL over LDAPS, mapped, `LdapEnforceChannelBinding` "+got, e4))
 	simple2 := l.tryBind(t, ev, "simple, channel binding 2", l.bindSimple(), l.d.password)
 	b.WriteString(simple2.row("simple bind over LDAPS, `LdapEnforceChannelBinding` " + got))
-	l.setRegistry(t, "LdapEnforceChannelBinding", -1)
-
-	// OR-1 (pre-flight I5): result 1 is a generic server-side code. If a DC
-	// whose own mapping path is broken (here: its KDC, which Schannel's
-	// S4U2Self needs, stopped) answers a mapped certificate with the same code
-	// an unmapped one gets, that code cannot tell "the broker's certificate is
-	// refused" from "this DC is broken". e5 is valid only when the same mapped
-	// bind succeeds with the KDC up, before (e1) and after (e6).
-	ev.mark("L44 external, mapped, the DC's KDC stopped")
-	w.service(t, "Kdc", "stop")
-	e5 := l.l44External(t, ev, "external, KDC stopped", adcsExt, true)
-	w.service(t, "Kdc", "start")
-	ev.mark("L44 external, mapped, the DC's KDC started again")
-	e6 := l.l44External(t, ev, "external, KDC started again", adcsExt, true)
-	if e5.invalid == "" {
-		if e5.invalid = l44KDCDownInvalid(e1, e6); e5.invalid != "" {
-			t.Errorf("L44 external, KDC stopped: %s; the cell is INVALID (R6)", e5.invalid)
-		}
-	}
-	b.WriteString(l44ExtRow("SASL EXTERNAL over LDAPS, mapped, **the DC's KDC stopped** (OR-1)", e5))
-	b.WriteString(l44ExtRow("SASL EXTERNAL over LDAPS, mapped, the KDC started again (e5's control)", e6))
-	w.setAltSec(t, brokerDN, "")
+	restoreCBT()
+	l.waitLDAPS(t, 3*time.Minute) // the restore restarted NTDS
 
 	fmt.Fprintf(&b, "\nWhether the DC's LDAPS asked the client for a certificate (what EXTERNAL needs): %s.\n", l.certRequested(t))
 	if !simple.ok || simple.read != 1 || !simple2.ok {
@@ -266,6 +264,57 @@ func (l *labDir) l44Binds(t *testing.T, ev *evidenceLog) string {
 	b.WriteString(refusals)
 	fmt.Fprintf(&b, "\nWhat the DC logged during the binds: %s\n", l44EventsCell(l.l44Events(t, since)))
 	ev.assertClean(t, bad)
+	return b.String()
+}
+
+// l44OR1 is OR-1 (pre-flight I5): result 1 is a generic server-side code. If a
+// DC whose own mapping path is broken (here: its KDC, which Schannel's S4U2Self
+// needs, stopped) answers a mapped certificate with the same code an unmapped
+// one gets, that code cannot tell "the broker's certificate is refused" from
+// "this DC is broken". The cell is valid only when the same mapped bind
+// succeeds with the KDC up, just before and just after. It runs last: the
+// start needs an SSH logon the stopped KDC may break, and nothing after it
+// needs the KDC. A start that fails is the cell's INVALID, never the run's.
+func (l *labDir) l44OR1(t *testing.T, ev *evidenceLog) string {
+	t.Helper()
+	w := l.win
+	brokerDN := "CN=port49,OU=Svc," + dirBase
+	adcsExt := directory.Bind{Mechanism: "external", TLSCertFile: w.certs.brokerCertFile, TLSKeyFile: w.certs.brokerKeyFile}
+	stopped := false
+	defer func() { // the backstop: a fatal between the stop and the start still starts it
+		if stopped {
+			if err := l.l44StartKDC(t); err != nil {
+				t.Errorf("L44 OR-1: the KDC could not be started again: %s", l.l44Err(err))
+			}
+		}
+	}()
+	w.setAltSec(t, brokerDN, directory.ADIssuerSerial(w.certs.brokerADCS))
+	ev.mark("L44 OR-1 external, mapped, the DC's KDC up")
+	e0 := l.l44External(t, ev, "external, KDC up", adcsExt, true)
+	ev.mark("L44 OR-1 external, mapped, the DC's KDC stopped")
+	stopped = true
+	w.service(t, "Kdc", "stop")
+	e5 := l.l44External(t, ev, "external, KDC stopped", adcsExt, true)
+	var e6 l44Ext
+	if err := l.l44StartKDC(t); err != nil {
+		e6 = l44Ext{l43Cell: l43Cell{mech: "external", code: -1}, invalid: "the KDC could not be started again: " + l.l44Err(err)}
+		t.Errorf("L44 OR-1: %s; the cell is INVALID (R6)", e6.invalid)
+	} else {
+		stopped = false
+		ev.mark("L44 OR-1 external, mapped, the DC's KDC started again")
+		e6 = l.l44External(t, ev, "external, KDC started again", adcsExt, true)
+	}
+	if e5.invalid == "" {
+		if e5.invalid = l44KDCDownInvalid(e0, e6); e5.invalid != "" {
+			t.Errorf("L44 external, KDC stopped: %s; the cell is INVALID (R6)", e5.invalid)
+		}
+	}
+	w.setAltSec(t, brokerDN, "")
+	var b strings.Builder
+	b.WriteString("\n### OR-1: a mapped certificate while the DC's KDC is stopped\n\n| mechanism | outcome | LDAP result | time |\n|---|---|---|---|\n")
+	b.WriteString(l44ExtRow("SASL EXTERNAL over LDAPS, mapped, the KDC up (e5's control, before)", e0))
+	b.WriteString(l44ExtRow("SASL EXTERNAL over LDAPS, mapped, **the DC's KDC stopped**", e5))
+	b.WriteString(l44ExtRow("SASL EXTERNAL over LDAPS, mapped, the KDC started again (e5's control, after)", e6))
 	return b.String()
 }
 
@@ -380,6 +429,11 @@ func (l *labDir) l44Matrix(t *testing.T, ev *evidenceLog) string {
 		"| `StrongCertificateBindingEnforcement` | certificate | `altSecurityIdentities` held | outcome | the KDC said | DC events | time |\n" +
 		"|---|---|---|---|---|---|---|\n")
 	noSID := w.invalidFor("sid")
+	// The CRL setting is not in the facts table; the harness's DC ships without it.
+	restoreCRL := l.l44GuardRegistry(t, "UseCachedCRLOnlyAndIgnoreRevocationUnknownErrors", -1)
+	defer restoreCRL()
+	restoreMode := l.l44GuardRegistry(t, "StrongCertificateBindingEnforcement", l44AsInstalled(w.facts.StrongBinding))
+	defer restoreMode()
 	l.setRegistry(t, "UseCachedCRLOnlyAndIgnoreRevocationUnknownErrors", 1)
 	for _, mode := range []int{-1, 1, 2} {
 		inForce := l.setRegistry(t, "StrongCertificateBindingEnforcement", mode)
@@ -430,10 +484,8 @@ func (l *labDir) l44Matrix(t *testing.T, ev *evidenceLog) string {
 		b.WriteString(l44ExternalRow(inForce, e, evs))
 		w.setAltSec(t, brokerDN, "")
 	}
-	// Not deferred: a restore that fails while a failure unwinds would only
-	// add a second t.Fatalf, and the DC is destroyed at the end anyway.
-	l.setRegistry(t, "StrongCertificateBindingEnforcement", -1)
-	l.setRegistry(t, "UseCachedCRLOnlyAndIgnoreRevocationUnknownErrors", -1)
+	restoreMode()
+	restoreCRL()
 	w.setAltSec(t, aliceDN, directory.ADIssuerSerial(l.d.pki.alice))
 	return b.String()
 }
@@ -559,6 +611,14 @@ func (l *labDir) l44External(t *testing.T, ev *evidenceLog, label string, bind d
 		t.Errorf("L44 %s: %s; the cell is INVALID (R6)", label, x.invalid)
 		return x
 	}
+	// tryBind cuts its error text before this scrub, and that is safe: no
+	// password reaches a bind error. The admin and DSRM passwords never enter the
+	// LDAP path; port49's own reaches the directory code only through
+	// LoadCredentials, whose errors name the variable and not the value; the
+	// dialer's refusals are port49's formatted text plus AD's diagnostic; and
+	// refusalChecks asserts, against this DC, that nothing the pool said holds a
+	// password. A half-password needs a password in the text first. Do not
+	// "fix" L43's cut.
 	x := l44Ext{l43Cell: l.tryBind(t, ev, label, bind, "")}
 	x.text = winScrub(x.text, l.l44Secrets()...)
 	if !x.ok {
@@ -641,3 +701,48 @@ func l44PreconditionIDs(evs []winEvent) []int {
 }
 
 func l44MDCell(s string) string { return strings.ReplaceAll(s, "|", `\|`) }
+
+// l44AsInstalled is the registry value a facts-table entry records, as
+// registry.ps1 sets it (-1 deletes): "absent" is the only value that means none.
+func l44AsInstalled(v string) int {
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 {
+		return -1
+	}
+	return n
+}
+
+// l44GuardRegistry returns the restore of a setting the run is about to
+// change: it puts name back to installed (a value from the facts table, -1 for
+// absent). Callers defer it before the change and call it on the normal path;
+// it runs once, and never fails the test fatally, because it may run while a
+// failure unwinds (t.Fatalf there would re-enter Goexit).
+func (l *labDir) l44GuardRegistry(t *testing.T, name string, installed int) func() {
+	done := false
+	return func() {
+		if done {
+			return
+		}
+		done = true
+		if err := l.win.try(t, "registry", map[string]any{"name": name, "value": installed}, winRegistryWithin, nil); err != nil {
+			t.Errorf("L44: restoring %s to the value installed: %s", name, l.l44Err(err))
+		}
+	}
+}
+
+// l44StartKDC starts the DC's KDC and says why it could not, never failing the
+// test: the SSH logon it needs is unmeasured with the KDC down (OR-1).
+func (l *labDir) l44StartKDC(t *testing.T) error {
+	t.Helper()
+	w := l.win
+	var r struct {
+		Status string `json:"status"`
+	}
+	if err := w.try(t, "service", map[string]any{"name": "Kdc", "state": "start"}, 5*time.Minute, &r); err != nil {
+		return err
+	}
+	if r.Status != "Running" {
+		return fmt.Errorf("the KDC is %s after the start", r.Status)
+	}
+	return nil
+}

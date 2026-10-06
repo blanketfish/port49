@@ -1201,6 +1201,13 @@ func winDiskCheck(t *testing.T, dir string, need uint64) {
 	}
 }
 
+// winLabHeld is whether a fresh run must refuse to start: the project's dc
+// container is running (psOut is `docker ps -q` of it) and the run is not a
+// REUSE of a kept DC, which is meant to find it up.
+func winLabHeld(reused bool, psOut string) bool {
+	return !reused && strings.TrimSpace(psOut) != ""
+}
+
 // startWindowsDC builds the DC on d's PKI and password and returns it as a
 // directory. With PORT49_LAB_WINDOWS_REUSE set and a kept DC up, it re-runs
 // only the per-run steps (R7: a reused DC never closes L44).
@@ -1213,6 +1220,15 @@ func startWindowsDC(t *testing.T, d *directories) *labDir {
 	w := &winDC{dir: filepath.Join(repo, "tests", "lab", "logs", "windows"),
 		compose: filepath.Join(repo, "tests", "lab", "directory", "windows", "compose.yaml"), port49: d.password}
 	w.reused = os.Getenv("PORT49_LAB_WINDOWS_REUSE") != "" && w.loadKept()
+	// Before the fresh tree below, and before any compose command: both would
+	// destroy a DC another run is using.
+	if !w.reused {
+		up, _ := dockerCmd("ps", "--filter", "label=com.docker.compose.project="+winProject,
+			"--filter", "label=com.docker.compose.service=dc", "--filter", "status=running", "-q").Output()
+		if winLabHeld(w.reused, string(up)) {
+			t.Fatalf("another L44 run holds the lab (%s dc is running); stop it with `docker compose -p %s down -v` if it is a leftover", winProject, winProject)
+		}
+	}
 	if !w.reused {
 		// A fresh tree: no secret, key or state of an earlier run serves this one.
 		if err := os.RemoveAll(w.dir); err != nil {

@@ -1485,3 +1485,146 @@ func TestL44ScrubsBeforeItCuts(t *testing.T) {
 		t.Error("the scan found no oneLineMax call: it checks nothing")
 	}
 }
+
+// A setting is restored to the value the facts table recorded, not deleted:
+// "absent" is the only value that means delete (fix round 1, M2).
+func TestL44AsInstalled(t *testing.T) {
+	for in, want := range map[string]int{"absent": -1, "": -1, "0": 0, "1": 1, "2": 2, "garbage": -1} {
+		if got := l44AsInstalled(in); got != want {
+			t.Errorf("%q: %d, want %d", in, got, want)
+		}
+	}
+}
+
+// l44Func is the source of the top-level function name in l44_test.go.
+func l44Func(t *testing.T, name string) string {
+	t.Helper()
+	b, err := os.ReadFile("l44_test.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	i := strings.Index(s, "\nfunc "+name+"(")
+	if i < 0 {
+		i = strings.Index(s, ") "+name+"(")
+		if i < 0 {
+			t.Fatalf("no func %s in l44_test.go", name)
+		}
+	}
+	rest := s[i+1:]
+	if end := strings.Index(rest, "\n}\n"); end >= 0 {
+		return rest[:end]
+	}
+	return rest
+}
+
+// OR-1 stops the KDC, and the start of it needs an SSH logon the KDC's absence
+// may break: it runs after everything else needs the KDC, its start is
+// non-fatal, and a deferred restart is registered before the stop (fix round 1, I1).
+func TestL44OR1RunsLastAndStartsNonFatally(t *testing.T) {
+	top := l44Func(t, "TestL44WindowsAD")
+	or1, matrix := strings.Index(top, "l44OR1("), strings.Index(top, "l44Matrix(")
+	if or1 < 0 || matrix < 0 || or1 < matrix {
+		t.Fatalf("OR-1 must run after the matrix: l44OR1 at %d, l44Matrix at %d", or1, matrix)
+	}
+	if after := top[or1:]; strings.Contains(after[strings.Index(after, "\n"):], "obs.WriteString(dc.") {
+		t.Error("a section runs after OR-1")
+	}
+	b, _ := os.ReadFile("l44_test.go")
+	if strings.Contains(string(b), `service(t, "Kdc", "start")`) {
+		t.Error("the KDC is started with w.service, which is fatal")
+	}
+	start := l44Func(t, "l44StartKDC")
+	if !strings.Contains(start, "w.try(") || strings.Contains(start, "Fatal") || strings.Contains(start, "w.run(") {
+		t.Error("l44StartKDC must use w.try and never fail the test fatally")
+	}
+	body := l44Func(t, "l44OR1")
+	d, s := strings.Index(body, "defer "), strings.Index(body, `"stop"`)
+	if d < 0 || s < 0 || d > s {
+		t.Errorf("the deferred restart must be registered before the stop: defer at %d, stop at %d", d, s)
+	}
+	if !strings.Contains(body, "could not be started again") {
+		t.Error("a failed start does not mark e6 INVALID")
+	}
+}
+
+// Every registry change is guarded by a deferred restore registered before
+// it, and a guard never fails fatally (it may run while a failure unwinds).
+func TestL44RegistryChangesAreGuarded(t *testing.T) {
+	g := l44Func(t, "l44GuardRegistry")
+	if strings.Contains(g, "Fatal") || strings.Contains(g, "setRegistry(") || strings.Contains(g, "w.run(") {
+		t.Error("l44GuardRegistry must restore with w.try and never fail fatally")
+	}
+	for _, fn := range []string{"l44Binds", "l44Matrix"} {
+		body := l44Func(t, fn)
+		for _, name := range []string{"LdapEnforceChannelBinding", "StrongCertificateBindingEnforcement", "UseCachedCRLOnlyAndIgnoreRevocationUnknownErrors"} {
+			set := strings.Index(body, `setRegistry(t, "`+name+`", `)
+			if set < 0 {
+				continue
+			}
+			guard := strings.Index(body, `l44GuardRegistry(t, "`+name+`"`)
+			if guard < 0 || guard > set {
+				t.Errorf("%s: %s is changed before its restore is guarded", fn, name)
+			}
+			if i := strings.Index(body, `l44GuardRegistry(t, "`+name+`"`); i >= 0 && !strings.Contains(body[i:], "defer ") {
+				t.Errorf("%s: %s's restore is not deferred", fn, name)
+			}
+			if name != "UseCachedCRLOnlyAndIgnoreRevocationUnknownErrors" && !strings.Contains(body[guard:guard+strings.Index(body[guard:], "\n")], "l44AsInstalled(") {
+				t.Errorf("%s: %s's guard does not restore the value the facts table recorded", fn, name)
+			}
+			if strings.Contains(body, `setRegistry(t, "`+name+`", -1)`) {
+				t.Errorf("%s: %s is restored by deleting it, not to the value installed", fn, name)
+			}
+		}
+	}
+}
+
+// A fresh run must not start on a running DC (it would `down -v` it), and a
+// REUSE run is meant to find one.
+func TestWinLabHeld(t *testing.T) {
+	for _, c := range []struct {
+		reused bool
+		ps     string
+		want   bool
+	}{
+		{false, "", false}, {false, "\n", false}, {false, "3f2a9c\n", true}, {true, "3f2a9c\n", false}, {true, "", false},
+	} {
+		if got := winLabHeld(c.reused, c.ps); got != c.want {
+			t.Errorf("reused=%v ps=%q: %v, want %v", c.reused, c.ps, got, c.want)
+		}
+	}
+}
+
+// Both lab tests that start the DC check PORT49_LAB_L44 as their first
+// statement, so no pattern can start a lab by accident.
+func TestL44LabTestsCheckTheOptInFirst(t *testing.T) {
+	for _, name := range []string{"TestL44Bringup", "TestL44WindowsAD"} {
+		body := l44Func(t, name)
+		lines := strings.Split(body, "\n")
+		if len(lines) < 2 || strings.TrimSpace(lines[1]) != "l44RequireOptIn(t)" {
+			t.Errorf("%s: the first statement is not l44RequireOptIn(t)", name)
+		}
+	}
+	if g := l44Func(t, "l44RequireOptIn"); !strings.Contains(g, `"PORT49_LAB_L44"`) || !strings.Contains(g, "t.Skip(") {
+		t.Error("l44RequireOptIn does not skip on PORT49_LAB_L44")
+	}
+}
+
+// startWindowsDC checks for a held lab before it touches the tree or compose.
+func TestStartWindowsDCChecksHeldLabFirst(t *testing.T) {
+	b, err := os.ReadFile("windows_test.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	i := strings.Index(s, "\nfunc startWindowsDC(")
+	body := s[i:]
+	held := strings.Index(body, "\t\tif winLabHeld(w.reused, string(up)) {\n\t\t\tt.Fatalf(")
+	rm, comp := strings.Index(body, "os.RemoveAll("), strings.Index(body, "dockerCompose(")
+	if held < 0 || held > rm || held > comp {
+		t.Errorf("winLabHeld at %d must precede RemoveAll (%d) and dockerCompose (%d)", held, rm, comp)
+	}
+	if !strings.Contains(body, "another L44 run holds the lab (%s dc is running)") {
+		t.Error("the refusal text is missing")
+	}
+}
