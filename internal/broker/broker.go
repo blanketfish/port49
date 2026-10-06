@@ -401,7 +401,7 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
 				Reason: decision.StoreUnavailable, Principal: principal, Auth: &decision.Auth{Method: cred.Method}})
 			w.Header().Set("Retry-After", "5")
 			writeError(w, http.StatusServiceUnavailable, string(decision.StoreUnavailable),
-				"the broker could not record what it serves in the store, so it minted nothing; retry shortly")
+				"the broker has not yet recorded what it serves in the store, so it minted nothing; retry shortly")
 			return
 		}
 	}
