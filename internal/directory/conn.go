@@ -207,6 +207,14 @@ func (l ldapClient) SearchContext(ctx context.Context, req *ldap.SearchRequest, 
 		req.Controls = append(slices.Clip(req.Controls), paging)
 	}
 	for {
+		// SearchAsync on a connection the server has closed returns no
+		// results and no error (go-ldap response.go, IsClosing): an empty
+		// answer the resolver would read as "no such entry". A closed
+		// connection is the server's fault, so the pool drops it and fails
+		// over, and grace serves.
+		if l.c.IsClosing() {
+			return out, ldap.NewError(ldap.ErrorNetwork, errors.New("ldap: connection closed"))
+		}
 		r := l.c.SearchAsync(ctx, req, 0)
 		var controls []ldap.Control
 		for r.Next() {
@@ -222,6 +230,10 @@ func (l ldapClient) SearchContext(ctx context.Context, req *ldap.SearchRequest, 
 		}
 		if err := r.Err(); err != nil {
 			return out, err
+		}
+		if len(out.Entries) == 0 && l.c.IsClosing() {
+			// closed under the search: nothing answered
+			return out, ldap.NewError(ldap.ErrorNetwork, errors.New("ldap: connection closed"))
 		}
 		if paging == nil {
 			return out, nil

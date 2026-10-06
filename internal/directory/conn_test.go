@@ -371,3 +371,28 @@ func TestSearchContextLeavesTheRequestAlone(t *testing.T) {
 		t.Fatalf("%d controls", len(req.Controls))
 	}
 }
+
+// A connection the server closed answers a search with a fault, never with
+// an empty result: go-ldap's SearchAsync returns no results and no error on
+// a closing connection, which the resolver would read as "no such entry"
+// (identity_unmapped, a refusal stored over grace) for as long as the pool
+// kept the connection (plan 7g Task 18, found on a stopped OpenLDAP).
+func TestASearchOnAClosedConnectionIsAFault(t *testing.T) {
+	cc, sc := net.Pipe()
+	conn := ldap.NewConn(cc, false)
+	conn.Start()
+	t.Cleanup(func() { conn.Close() })
+	sc.Close()
+	for i := 0; !conn.IsClosing(); i++ {
+		if i > 200 {
+			t.Fatal("the connection never noticed the server had closed it")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	req := ldap.NewSearchRequest("dc=corp", ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 2, 5, false,
+		"(mail=alice@corp.example.com)", []string{"dn"}, nil)
+	res, err := ldapClient{c: conn}.SearchContext(context.Background(), req, 0)
+	if err == nil || !Fault(err) {
+		t.Fatalf("a search on a closed connection answered %+v, %v; want a fault", res, err)
+	}
+}
