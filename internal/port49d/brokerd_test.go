@@ -1212,6 +1212,7 @@ func TestALateReplicasContextIsCarriedWhenItReloads(t *testing.T) {
 	f := splitFleet(t)
 	tacacs := startSplitDaemon(t, f.daemon, &out, 1)
 	apiA, _ := startBroker(t, f.broker, &out, 1)
+	metricsA := brokerLine.FindAllStringSubmatch(out.String(), -1)[0][2]
 	waitFor(t, &out, "runner: recorded bundle ")
 	cfgB := f.copyBroker(t) // a policy file of its own
 	apiB, _ := startBroker(t, cfgB, &out, 2)
@@ -1219,8 +1220,11 @@ func TestALateReplicasContextIsCarriedWhenItReloads(t *testing.T) {
 	metricsB := lines[len(lines)-1][2]
 	f.writePolicyOf(t, f.broker, withdrawnConfigurePolicy) // A's file only: alice loses configure
 	waitFor(t, &out, "policy reloaded")
-	mintOn(t, apiA, f.pki, "leaf1") // the runner's swap opens its gate at once
+	// The swap's gate opens once its mark has landed in the store, a round
+	// trip after the reload line: the mark's line, then the gauge at 0.
 	waitFor(t, &out, "this replica serves bundle ")
+	waitBrokerMetricAt(t, metricsA, "port49_broker_mint_gate_closed 0")
+	mintOn(t, apiA, f.pki, "leaf1")
 	// The runner's settle pass, settleAfter (30s) after its reload.
 	waitWithin(t, &out, "runner: not recording bundle ", 45*time.Second)
 	dev := tacacsClient{t: t, addr: tacacs, key: []byte("run-test-secret")}
