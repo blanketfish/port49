@@ -10,6 +10,16 @@ for f in server.pem server-key.pem ca.pem; do
   install -o openldap -g openldap -m 0640 "/pki/$f" "/etc/ldap/tls/$f"
 done
 
+# The end-to-end lab restarts this container to end a directory outage, and the
+# directory it brings back is the same one: a reloaded fixture gives every entry
+# a new entryUUID, which port49 correctly refuses (a principal is pinned to its
+# entry, Ruling 3). With LAB_OPENLDAP_WRITER set and a database already seeded,
+# the configuration and data stay as they were. L42 and L43 never set it.
+if [ -n "${LAB_OPENLDAP_WRITER:-}" ] && [ -e /var/lib/ldap/.seeded ]; then
+  echo "lab: openldap fixture loaded (kept from the first start; every entryUUID is unchanged)"
+  exec slapd -d 256 -F /etc/ldap/slapd.d -h "ldap:/// ldaps:/// ldapi:///" -u openldap -g openldap
+fi
+
 rm -rf /etc/ldap/slapd.d /var/lib/ldap
 install -d -o openldap -g openldap -m 0750 /etc/ldap/slapd.d /var/lib/ldap /run/slapd
 slapadd -n0 -F /etc/ldap/slapd.d -l /lab/config.ldif
@@ -63,5 +73,6 @@ changetype: modify
 replace: olcSecurity
 olcSecurity: tls=1
 LDIF
+[ -z "${LAB_OPENLDAP_WRITER:-}" ] || touch /var/lib/ldap/.seeded
 echo "lab: openldap fixture loaded"
 wait $pid
