@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -26,9 +27,9 @@ import (
 // answers 503 identity_provider_unavailable, to be retried.
 var ErrUnavailable = errors.New("oidc: the identity provider's keys are not available")
 
-// ErrUnknownKey is a token whose kid names no key of a set fetched within
-// the last RefetchEvery, or names two, or, with no kid, a set holding other
-// than one key of the algorithm's type: 401.
+// ErrUnknownKey is a token whose kid names no key of the fresh set after the
+// refetch Key may do (at most one per RefetchEvery), or names two, or, with
+// no kid, a set holding other than one key of the algorithm's type: 401.
 var ErrUnknownKey = errors.New("oidc: no one key in the provider's set matches the token")
 
 // RefetchEvery bounds the fetches an unknown kid triggers: one per issuer
@@ -72,9 +73,44 @@ func NewClient(roots *x509.CertPool) *http.Client {
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 }
 
+// errBadProxy names no part of the value: a proxy URL carries a password.
+var errBadProxy = errors.New("HTTPS_PROXY does not parse as a proxy URL; percent-encode '#', '/', '?' and '%' in its password")
+
+// parseProxy reads an HTTPS_PROXY value the way the transport will, and
+// refuses what the transport would misread: a '#', '/' or '?' in a password
+// moves the credentials into the fragment, path or query, or into a host such
+// as "http:", and a proxy then fails with a host nobody configured. The error
+// never carries the value.
+func parseProxy(raw string) (*url.URL, error) {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		// A bare host:port is read as http://host:port.
+		if u, err = url.Parse("http://" + raw); err != nil {
+			return nil, errBadProxy
+		}
+	}
+	switch {
+	case u.Opaque != "", u.RawQuery != "", u.ForceQuery, u.Fragment != "", u.Path != "" && u.Path != "/",
+		u.Hostname() == "", strings.HasSuffix(u.Host, ":"), strings.Contains(u.Hostname(), ":") && !strings.HasPrefix(u.Host, "["):
+		return nil, errBadProxy
+	}
+	return u, nil
+}
+
 // ProxyFor is the proxy NewClient's transport takes to reach issuer: the
-// environment's, or nil for none.
+// environment's, or nil for none. An HTTPS_PROXY that does not parse as a
+// proxy URL is an error, never "no proxy": the transport would drop it
+// silently or dial a host nobody configured.
 func ProxyFor(issuer string) (*url.URL, error) {
+	raw := os.Getenv("HTTPS_PROXY")
+	if raw == "" {
+		raw = os.Getenv("https_proxy")
+	}
+	if raw != "" {
+		if _, err := parseProxy(raw); err != nil {
+			return nil, err
+		}
+	}
 	req, err := http.NewRequest(http.MethodGet, issuer, nil)
 	if err != nil {
 		return nil, err
@@ -82,13 +118,17 @@ func ProxyFor(issuer string) (*url.URL, error) {
 	return http.ProxyFromEnvironment(req)
 }
 
-// DescribeProxy is the start line's words for u: its URL with any password
-// redacted, or directly.
+// DescribeProxy is the start line's words for u: its scheme and host, and
+// that it carries credentials, never the credentials; or directly.
 func DescribeProxy(u *url.URL) string {
 	if u == nil {
 		return "directly (no HTTPS_PROXY)"
 	}
-	return "through the proxy " + u.Redacted() + " (HTTPS_PROXY)"
+	with := ""
+	if u.User != nil {
+		with = " (with credentials)"
+	}
+	return "through the proxy " + u.Scheme + "://" + u.Host + with + " (HTTPS_PROXY)"
 }
 
 // KeyFileName is the name of the file an issuer's fetched keys are kept in,
@@ -112,6 +152,9 @@ type KeySet struct {
 	jwksURI   string        // the last fetch's, said when it changes (pre-flight M-7)
 	skipped   []string      // the last fetch's skips, said when they change (pre-flight M-3)
 	flight    chan struct{} // a fetch in progress; nil when none
+
+	saveMu  sync.Mutex // Save runs one at a time, outside the flight
+	savedAt time.Time  // the newest file Save was given
 }
 
 // NewKeySet holds no key until Restore or Fetch. Its issuer's last-success
@@ -122,6 +165,7 @@ func NewKeySet(c KeySetConfig) *KeySet {
 		c.Say = func(string, ...any) {}
 	}
 	c.M.OIDCKeysLastSuccess.WithLabelValues(c.Issuer).Set(0)
+	c.M.OIDCKeysFetchFailures.WithLabelValues(c.Issuer).Add(0)
 	return &KeySet{c: c}
 }
 
@@ -167,6 +211,12 @@ func (s *KeySet) Restore() (int, time.Time, error) {
 		return 0, time.Time{}, errors.New("the kept key file holds no usable key")
 	}
 	s.mu.Lock()
+	if !s.fetched.IsZero() && !p.FetchedAt.After(s.fetched) {
+		// The set held is newer than the file: a restore never replaces it.
+		fetched := s.fetched
+		s.mu.Unlock()
+		return 0, fetched, nil
+	}
 	s.keys, s.fetched = keys, p.FetchedAt
 	s.mu.Unlock()
 	// The gauge carries the kept set's age, so the staleness alert keeps
@@ -182,14 +232,7 @@ func (s *KeySet) Restore() (int, time.Time, error) {
 // ctx.Err() if that ends first. A caller's cancellation is never stored as
 // the issuer's last error (pre-flight I-3).
 func (s *KeySet) Fetch(ctx context.Context) error {
-	s.mu.Lock()
-	ch := s.flight
-	if ch == nil {
-		ch = make(chan struct{})
-		s.flight, s.lastTry = ch, s.c.Now()
-		go s.fetchOnce(context.WithoutCancel(ctx), ch)
-	}
-	s.mu.Unlock()
+	ch, _ := s.begin(true)
 	select {
 	case <-ch:
 	case <-ctx.Done():
@@ -200,8 +243,28 @@ func (s *KeySet) Fetch(ctx context.Context) error {
 	return s.lastErr
 }
 
-// fetchOnce is one fetch, its outcome recorded and its effects done before
-// ch closes. A success
+// begin joins the fetch in progress, or starts one: always when force, else
+// only when none has begun within RefetchEvery. That check and the start are
+// one step under the lock, so however many callers come at once, one fetch a
+// minute begins. ch is nil when no fetch is joined or started.
+func (s *KeySet) begin(force bool) (ch chan struct{}, started bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.flight != nil {
+		return s.flight, false
+	}
+	now := s.c.Now()
+	if !force && !s.lastTry.IsZero() && now.Sub(s.lastTry) < RefetchEvery {
+		return nil, false
+	}
+	ch = make(chan struct{})
+	s.flight, s.lastTry = ch, now
+	go s.fetchOnce(context.WithoutCancel(context.Background()), ch)
+	return ch, true
+}
+
+// fetchOnce is one fetch, its outcome recorded before ch closes. What is said
+// and saved comes after: a hung Save holds nothing a fetch waits for. A success
 // replaces the set whole, so a key the provider dropped is dropped. A
 // failure, a set with no usable key among them (pre-flight M-2), keeps the
 // last good set and says so once an hour. Skips and the jwks_uri are said
@@ -210,6 +273,7 @@ func (s *KeySet) fetchOnce(ctx context.Context, ch chan struct{}) {
 	uri, body, keys, skipped, err := s.fetch(ctx)
 	now := s.c.Now()
 	s.mu.Lock()
+	s.flight = nil
 	s.lastErr = err
 	if err == nil {
 		s.keys, s.fetched = keys, now
@@ -225,14 +289,7 @@ func (s *KeySet) fetchOnce(ctx context.Context, ch chan struct{}) {
 		s.saidStale, s.jwksURI, s.skipped = time.Time{}, uri, skipped
 	}
 	s.mu.Unlock()
-	// The side effects finish before the fetch is done, so a Fetch that
-	// returns has saved what it fetched.
-	defer func() {
-		s.mu.Lock()
-		s.flight = nil
-		s.mu.Unlock()
-		close(ch)
-	}()
+	close(ch)
 
 	iss := s.c.Issuer
 	if err != nil {
@@ -253,10 +310,21 @@ func (s *KeySet) fetchOnce(ctx context.Context, ch chan struct{}) {
 	}
 	if s.c.Save != nil {
 		file, _ := json.Marshal(persisted{Issuer: iss, FetchedAt: now, JWKS: body})
-		if err := s.c.Save(file); err != nil {
+		if err := s.save(file, now); err != nil {
 			s.c.Say("identity: %s: the keys were fetched but could not be kept for a restart: %v", iss, err)
 		}
 	}
+}
+
+// save gives Save one file at a time, never an older one after a newer.
+func (s *KeySet) save(file []byte, at time.Time) error {
+	s.saveMu.Lock()
+	defer s.saveMu.Unlock()
+	if at.Before(s.savedAt) {
+		return nil
+	}
+	s.savedAt = at
+	return s.c.Save(file)
 }
 
 func (s *KeySet) sayStale(fetched time.Time, held int, err error, now time.Time) {
@@ -307,8 +375,8 @@ func (s *KeySet) fetch(ctx context.Context) (string, []byte, []Key, []string, er
 	}
 	jwksURI, _ := discoveryMember(doc, "jwks_uri")
 	u, err := url.Parse(jwksURI)
-	if err != nil || u.Scheme != "https" || u.Host == "" {
-		return "", nil, nil, nil, errors.New("the discovery document's jwks_uri is not an https URL")
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil {
+		return "", nil, nil, nil, errors.New("the discovery document's jwks_uri is not an https URL without credentials")
 	}
 	body, err := s.get(ctx, u.String())
 	if err != nil {
@@ -372,24 +440,25 @@ func pick(keys []Key, kid string, alg Alg) (Key, bool) {
 // ctx.Err() when the caller's own context ends while it waits.
 func (s *KeySet) Key(ctx context.Context, kid string, alg Alg) (Key, error) {
 	type state struct {
-		k                   Key
-		ok, fresh, inFlight bool
-		lastErr             error
-		lastTry             time.Time
+		k         Key
+		ok, fresh bool
+		lastErr   error
 	}
 	try := func() state {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		k, ok := pick(s.keys, kid, alg)
 		fresh := !s.fetched.IsZero() && s.c.Now().Sub(s.fetched) <= s.c.MaxAge
-		return state{k, ok, fresh, s.flight != nil, s.lastErr, s.lastTry}
+		return state{k, ok, fresh, s.lastErr}
 	}
 	st := try()
 	if st.ok && st.fresh {
 		return st.k, nil
 	}
-	if st.inFlight || st.lastTry.IsZero() || s.c.Now().Sub(st.lastTry) >= RefetchEvery {
-		if err := s.Fetch(ctx); err != nil && ctx.Err() != nil {
+	if ch, _ := s.begin(false); ch != nil {
+		select {
+		case <-ch:
+		case <-ctx.Done():
 			return Key{}, ctx.Err()
 		}
 		if st = try(); st.ok && st.fresh {

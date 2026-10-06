@@ -43,6 +43,50 @@ func (s *said) Say(format string, args ...any) {
 }
 func (s *said) all() string { s.mu.Lock(); defer s.mu.Unlock(); return strings.Join(s.lines, "\n") }
 
+// keep is a Save that records the file it was given: Save runs after Fetch
+// returns, so a test waits for it.
+type keep struct {
+	mu   sync.Mutex
+	b    []byte
+	n    int
+	done chan struct{}
+}
+
+func newKeep() *keep { return &keep{done: make(chan struct{}, 16)} }
+
+func (k *keep) Save(b []byte) error {
+	k.mu.Lock()
+	k.b, k.n = append([]byte(nil), b...), k.n+1
+	k.mu.Unlock()
+	k.done <- struct{}{}
+	return nil
+}
+
+// wait returns once a Save has run.
+func (k *keep) wait(t *testing.T) {
+	t.Helper()
+	select {
+	case <-k.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the fetched set was never saved")
+	}
+}
+
+func (k *keep) file() []byte { k.mu.Lock(); defer k.mu.Unlock(); return k.b }
+func (k *keep) saves() int   { k.mu.Lock(); defer k.mu.Unlock(); return k.n }
+
+// await waits for the said lines to hold at least n of sub: a fetch says
+// its lines after it returns.
+func (s *said) await(t *testing.T, sub string, n int) {
+	t.Helper()
+	for end := time.Now().Add(5 * time.Second); time.Now().Before(end); time.Sleep(time.Millisecond) {
+		if strings.Count(s.all(), sub) >= n {
+			return
+		}
+	}
+	t.Fatalf("%d lines with %q never said:\n%s", n, sub, s.all())
+}
+
 func keySet(t *testing.T, iss *oidctest.Issuer, c *clock, s *said) *oidc.KeySet {
 	t.Helper()
 	return oidc.NewKeySet(oidc.KeySetConfig{Issuer: iss.URL, Client: oidc.NewClient(iss.Roots()),
@@ -65,6 +109,7 @@ func TestAFetchReadsDiscoveryThenKeys(t *testing.T) {
 	}
 	// The jwks_uri is said at the first fetch, and not again while it stands
 	// (pre-flight M-7).
+	s.await(t, "keys from "+iss.URL+"/jwks", 1)
 	c.Add(time.Hour)
 	if err := ks.Fetch(context.Background()); err != nil {
 		t.Fatal(err)
@@ -126,10 +171,9 @@ func TestACallerHangingUpDoesNotPoisonTheRefetch(t *testing.T) {
 func TestTheLastSuccessGaugeSurvivesARestart(t *testing.T) {
 	iss, c, s := oidctest.NewIssuer(t), newClock(), &said{}
 	m := metrics.New(prometheus.NewRegistry())
-	var saved []byte
+	kept := newKeep()
 	cfg := oidc.KeySetConfig{Issuer: iss.URL, Client: oidc.NewClient(iss.Roots()), Refresh: time.Hour,
-		MaxAge: 24 * time.Hour, Now: c.Now, Say: s.Say, M: m,
-		Save: func(b []byte) error { saved = append([]byte(nil), b...); return nil }}
+		MaxAge: 24 * time.Hour, Now: c.Now, Say: s.Say, M: m, Save: kept.Save}
 	ks := oidc.NewKeySet(cfg)
 	if n := testutil.CollectAndCount(m.OIDCKeysLastSuccess); n != 1 {
 		t.Fatalf("%d series before any fetch: absent() would be the only alert", n)
@@ -140,11 +184,12 @@ func TestTheLastSuccessGaugeSurvivesARestart(t *testing.T) {
 	if err := ks.Fetch(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	kept.wait(t)
 	fetched := c.Now()
 	iss.Fail(503)
 	c.Add(10 * time.Hour)
 	m2 := metrics.New(prometheus.NewRegistry())
-	cfg.M, cfg.Save, cfg.Load = m2, nil, func() ([]byte, error) { return saved, nil }
+	cfg.M, cfg.Save, cfg.Load = m2, nil, func() ([]byte, error) { return kept.file(), nil }
 	if _, _, err := oidc.NewKeySet(cfg).Restore(); err != nil {
 		t.Fatal(err)
 	}
@@ -158,13 +203,14 @@ func TestTheLastSuccessGaugeSurvivesARestart(t *testing.T) {
 func TestAJWKSWithNoUsableKeyKeepsTheLastGoodSet(t *testing.T) {
 	iss, c, s := oidctest.NewIssuer(t), newClock(), &said{}
 	m := metrics.New(prometheus.NewRegistry())
-	saves := 0
+	kept := newKeep()
 	ks := oidc.NewKeySet(oidc.KeySetConfig{Issuer: iss.URL, Client: oidc.NewClient(iss.Roots()), Refresh: time.Hour,
-		MaxAge: 24 * time.Hour, Now: c.Now, Say: s.Say, M: m, Save: func([]byte) error { saves++; return nil }})
+		MaxAge: 24 * time.Hour, Now: c.Now, Say: s.Say, M: m, Save: kept.Save})
 	ctx := context.Background()
 	if err := ks.Fetch(ctx); err != nil {
 		t.Fatal(err)
 	}
+	kept.wait(t)
 	for _, body := range []string{`{"keys":[]}`, `{"keys":[{"kty":"oct","kid":"h","k":"c2VjcmV0"}]}`} {
 		iss.ServeJWKS([]byte(body))
 		c.Add(time.Hour)
@@ -175,7 +221,7 @@ func TestAJWKSWithNoUsableKeyKeepsTheLastGoodSet(t *testing.T) {
 			t.Fatalf("%s: the last good key: %v", body, err)
 		}
 	}
-	if saves != 1 {
+	if saves := kept.saves(); saves != 1 {
 		t.Fatalf("%d saves: an unusable set was kept over the good one", saves)
 	}
 	if got := testutil.ToFloat64(m.OIDCKeysFetchFailures.WithLabelValues(iss.URL)); got != 2 {
@@ -230,6 +276,7 @@ func TestASkipIsSaidWhenTheSkipsChange(t *testing.T) {
 		}
 		c.Add(time.Hour)
 	}
+	s.await(t, "is skipped", 1)
 	if n := strings.Count(s.all(), "is skipped"); n != 1 {
 		t.Fatalf("one unchanged skip said %d times:\n%s", n, s.all())
 	}
@@ -237,6 +284,7 @@ func TestASkipIsSaidWhenTheSkipsChange(t *testing.T) {
 	if err := ks.Fetch(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	s.await(t, "is skipped", 3)
 	if n := strings.Count(s.all(), "is skipped"); n != 3 {
 		t.Fatalf("a changed set of skips is said whole: %d lines:\n%s", n, s.all())
 	}
@@ -362,6 +410,7 @@ func TestAStaleSetRefusesAfterMaxAge(t *testing.T) {
 	if err := ks.Fetch(ctx); err == nil {
 		t.Fatal("a failing provider fetched")
 	}
+	s.await(t, "keys not refreshed since", 1)
 	if !strings.Contains(s.all(), "keys not refreshed since "+fetched.UTC().Format(time.RFC3339)) ||
 		!strings.Contains(s.all(), "accepted until "+fetched.Add(24*time.Hour).UTC().Format(time.RFC3339)) {
 		t.Fatalf("the stale line:\n%s", s.all())
@@ -389,6 +438,7 @@ func TestAFailedFetchIsSaidOnceAnHour(t *testing.T) {
 		c.Add(2 * time.Minute)
 		_ = ks.Fetch(context.Background())
 	}
+	s.await(t, "keys not refreshed since", 1)
 	if n := strings.Count(s.all(), "keys not refreshed since"); n != 1 {
 		t.Fatalf("%d lines in 20 minutes:\n%s", n, s.all())
 	}
@@ -398,13 +448,15 @@ func TestAFailedFetchIsSaidOnceAnHour(t *testing.T) {
 // jwks_max_age after its own fetch, never longer.
 func TestARestoredSetServesUntilMaxAge(t *testing.T) {
 	iss, c, s := oidctest.NewIssuer(t), newClock(), &said{}
-	var saved []byte
+	kept := newKeep()
 	cfg := oidc.KeySetConfig{Issuer: iss.URL, Client: oidc.NewClient(iss.Roots()), Refresh: time.Hour,
 		MaxAge: 24 * time.Hour, Now: c.Now, Say: s.Say, M: metrics.New(prometheus.NewRegistry()),
-		Save: func(b []byte) error { saved = append([]byte(nil), b...); return nil }}
+		Save: kept.Save}
 	if err := oidc.NewKeySet(cfg).Fetch(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	kept.wait(t)
+	saved := kept.file()
 	fetched := c.Now()
 	iss.Fail(503)
 	c.Add(20 * time.Hour)
@@ -492,5 +544,179 @@ func TestAKidNamingTwoKeysIsRefused(t *testing.T) {
 	}
 	if _, err := ks.Key(context.Background(), "dup", oidc.RS256); !errors.Is(err, oidc.ErrUnknownKey) {
 		t.Fatalf("a kid two keys share: %v", err)
+	}
+}
+
+// A Save that never returns holds nothing the fetches need (review I2): the
+// next fetch an hour later reaches the provider, failures are still counted
+// and the key is still served.
+func TestAHungSaveDoesNotWedgeTheRefresh(t *testing.T) {
+	iss, c, s := oidctest.NewIssuer(t), newClock(), &said{}
+	m := metrics.New(prometheus.NewRegistry())
+	stuck := make(chan struct{})
+	t.Cleanup(func() { close(stuck) })
+	ks := oidc.NewKeySet(oidc.KeySetConfig{Issuer: iss.URL, Client: oidc.NewClient(iss.Roots()), Refresh: time.Hour,
+		MaxAge: 24 * time.Hour, Now: c.Now, Say: s.Say, M: m, Save: func([]byte) error { <-stuck; return nil }})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := ks.Fetch(ctx); err != nil {
+		t.Fatal(err)
+	}
+	n := iss.JWKSFetches()
+	c.Add(time.Hour)
+	if err := ks.Fetch(ctx); err != nil {
+		t.Fatalf("a second fetch behind a hung Save: %v", err)
+	}
+	if got := iss.JWKSFetches(); got != n+1 {
+		t.Fatalf("the second fetch never reached the provider (%d fetches)", got-n)
+	}
+	iss.Fail(503)
+	c.Add(time.Hour)
+	if err := ks.Fetch(ctx); err == nil {
+		t.Fatal("a failing provider fetched")
+	}
+	if got := testutil.ToFloat64(m.OIDCKeysFetchFailures.WithLabelValues(iss.URL)); got != 1 {
+		t.Fatalf("%v failures counted", got)
+	}
+	if _, err := ks.Key(ctx, "k1", oidc.RS256); err != nil {
+		t.Fatalf("the held key: %v", err)
+	}
+}
+
+// Review M2, spec 5.7's third 503: a fresh set, an unknown kid and a refetch
+// that fails is unavailable at once, not a 401.
+func TestAnUnknownKidWithAFailingRefetchIsUnavailable(t *testing.T) {
+	iss, c, s := oidctest.NewIssuer(t), newClock(), &said{}
+	ks := keySet(t, iss, c, s)
+	ctx := context.Background()
+	if err := ks.Fetch(ctx); err != nil {
+		t.Fatal(err)
+	}
+	iss.Fail(503)
+	c.Add(2 * time.Minute)
+	if _, err := ks.Key(ctx, "k2", oidc.RS256); !errors.Is(err, oidc.ErrUnavailable) {
+		t.Fatalf("an unknown kid, the refetch failing: %v", err)
+	}
+}
+
+// Review M1: forged kids arriving together cause one fetch, not one for
+// each caller that read the clock before the first fetch began.
+func TestConcurrentForgedKidsFetchOnce(t *testing.T) {
+	iss, c, s := oidctest.NewIssuer(t), newClock(), &said{}
+	ks := keySet(t, iss, c, s)
+	ctx := context.Background()
+	if err := ks.Fetch(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for round := range 20 {
+		c.Add(2 * time.Minute)
+		n := iss.JWKSFetches()
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		for range 200 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				_, _ = ks.Key(ctx, "forged", oidc.RS256)
+			}()
+		}
+		close(start)
+		wg.Wait()
+		if got := iss.JWKSFetches() - n; got != 1 {
+			t.Fatalf("round %d: %d fetches for one minute's forged kids", round, got)
+		}
+	}
+}
+
+// Review M3: a jwks_uri with userinfo is refused, and nothing says it.
+func TestAJWKSURIWithCredentialsIsRefused(t *testing.T) {
+	iss, c, s := oidctest.NewIssuer(t), newClock(), &said{}
+	iss.Discovery(func(d map[string]any) {
+		d["jwks_uri"] = strings.Replace(d["jwks_uri"].(string), "https://", "https://svc:fake-pw@", 1)
+	})
+	ks := keySet(t, iss, c, s)
+	err := ks.Fetch(context.Background())
+	if err == nil || strings.Contains(err.Error(), "fake-pw") || strings.Contains(s.all(), "fake-pw") {
+		t.Fatalf("fetch: %v\n%s", err, s.all())
+	}
+}
+
+// Review M4: a restore never replaces a set fetched after the file was.
+func TestARestoreNeverReplacesANewerSet(t *testing.T) {
+	iss, c, s := oidctest.NewIssuer(t), newClock(), &said{}
+	kept := newKeep()
+	cfg := oidc.KeySetConfig{Issuer: iss.URL, Client: oidc.NewClient(iss.Roots()), Refresh: time.Hour,
+		MaxAge: 24 * time.Hour, Now: c.Now, Say: s.Say, M: metrics.New(prometheus.NewRegistry()), Save: kept.Save}
+	ks := oidc.NewKeySet(cfg)
+	if err := ks.Fetch(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	kept.wait(t)
+	c.Add(time.Hour)
+	if err := ks.Fetch(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	kept.wait(t)
+	newer := c.Now()
+	old := kept.file()
+	// The file the restore reads is the first one: an hour older.
+	first := strings.Replace(string(old), newer.UTC().Format(time.RFC3339), newer.Add(-time.Hour).UTC().Format(time.RFC3339), 1)
+	cfg.Load = func() ([]byte, error) { return []byte(first), nil }
+	ks.SetLoadForTest(cfg.Load)
+	if _, _, err := ks.Restore(); err != nil {
+		t.Fatal(err)
+	}
+	if _, fetched, _ := ks.Status(); !fetched.Equal(newer) {
+		t.Fatalf("a restore moved fetched back to %v from %v", fetched, newer)
+	}
+}
+
+// Review M5: the failure counter exists at 0 from construction.
+func TestTheFailureCounterExistsFromTheStart(t *testing.T) {
+	iss, c, s := oidctest.NewIssuer(t), newClock(), &said{}
+	m := metrics.New(prometheus.NewRegistry())
+	oidc.NewKeySet(oidc.KeySetConfig{Issuer: iss.URL, Client: oidc.NewClient(iss.Roots()), Refresh: time.Hour,
+		MaxAge: 24 * time.Hour, Now: c.Now, Say: s.Say, M: m})
+	if n := testutil.CollectAndCount(m.OIDCKeysFetchFailures); n != 1 {
+		t.Fatalf("%d failure series before any failure", n)
+	}
+}
+
+// Review I1: a proxy URL that does not parse as one is refused without
+// saying any of it, and the start line names scheme and host only.
+func TestAProxyURLIsValidatedAndNeverPrinted(t *testing.T) {
+	const pw = "fake-pw"
+	for _, raw := range []string{
+		"http://svc:" + pw + "#x@proxy.example.com:3128",
+		"http://svc:" + pw + "/x@proxy.example.com:3128",
+		"http://svc:" + pw + "?x@proxy.example.com:3128",
+		"http://svc:" + pw + "@proxy.example.com:3128:badport",
+		"http://svc:" + pw + "@proxy.example.com:badport",
+		"http://svc:" + pw + "%zz@proxy.example.com:3128",
+		"http://svc:" + pw + "@proxy.example.com:3128/path",
+	} {
+		u, err := oidc.ParseProxyForTest(raw)
+		if err == nil || strings.Contains(err.Error(), pw) {
+			t.Errorf("%q: %v, %v", strings.ReplaceAll(raw, pw, "***"), u, err)
+		}
+		t.Setenv("HTTPS_PROXY", raw)
+		if got, err := oidc.ProxyFor("https://idp.example.com"); err == nil || got != nil || strings.Contains(err.Error(), pw) {
+			t.Errorf("ProxyFor with %q: %v, %v", strings.ReplaceAll(raw, pw, "***"), got, err)
+		}
+	}
+	for raw, want := range map[string]string{
+		"http://svc:" + pw + "@proxy.example.com:3128": "through the proxy http://proxy.example.com:3128 (with credentials) (HTTPS_PROXY)",
+		"http://proxy.example.com:3128":                "through the proxy http://proxy.example.com:3128 (HTTPS_PROXY)",
+		"proxy.example.com:3128":                       "through the proxy http://proxy.example.com:3128 (HTTPS_PROXY)",
+	} {
+		u, err := oidc.ParseProxyForTest(raw)
+		if err != nil {
+			t.Errorf("%q: %v", strings.ReplaceAll(raw, pw, "***"), err)
+			continue
+		}
+		if got := oidc.DescribeProxy(u); got != want || strings.Contains(got, pw) {
+			t.Errorf("DescribeProxy = %q, want %q", got, want)
+		}
 	}
 }
