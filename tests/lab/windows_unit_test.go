@@ -1628,3 +1628,77 @@ func TestStartWindowsDCChecksHeldLabFirst(t *testing.T) {
 		t.Error("the refusal text is missing")
 	}
 }
+
+// A second lock on the same path, through its own fd, fails while the first is
+// held and succeeds after its release. Uses a temp path: the real lock may be held.
+func TestWinLock(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "sub", "windows.lock")
+	rel, err := winLock(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rel2, err := winLock(p); err == nil {
+		rel2()
+		t.Fatal("a second lock on a held path succeeded")
+	}
+	rel()
+	rel3, err := winLock(p)
+	if err != nil {
+		t.Fatalf("the lock is not free after its release: %v", err)
+	}
+	rel3()
+}
+
+// startWindowsDC takes the lock before it checks for a held DC or touches docker.
+func TestStartWindowsDCLocksFirst(t *testing.T) {
+	b, err := os.ReadFile("windows_test.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(b)[strings.Index(string(b), "\nfunc startWindowsDC("):]
+	lock, held, ps := strings.Index(body, "winLock("), strings.Index(body, "winLabHeld("), strings.Index(body, "dockerCmd(")
+	if lock < 0 || lock > held || lock > ps {
+		t.Errorf("winLock at %d must precede winLabHeld (%d) and docker (%d)", lock, held, ps)
+	}
+	if !strings.Contains(body, "another L44 run holds the lab (windows.lock)") {
+		t.Error("the lock refusal text is missing")
+	}
+}
+
+// After the KDC start in OR-1, a fatal SSH call (run, service, setAltSec) may
+// run only in the branch where the KDC came back: otherwise it loses the note.
+func TestL44OR1NothingFatalAfterAFailedStart(t *testing.T) {
+	body := l44Func(t, "l44OR1")
+	i := strings.LastIndex(body, "l44StartKDC(t); err != nil") // the backstop defer has its own
+	if i < 0 {
+		t.Fatal("no l44StartKDC call in l44OR1")
+	}
+	after := body[i:]
+	back := strings.Index(after, "} else {")
+	if back < 0 {
+		t.Fatal("no KDC-is-back branch")
+	}
+	for _, call := range []string{"w.run(", "w.service(", "setAltSec("} {
+		for off, rest := 0, after; ; {
+			j := strings.Index(rest, call)
+			if j < 0 {
+				break
+			}
+			if off+j < back {
+				t.Errorf("%s runs before the KDC-is-back branch", call)
+			}
+			off, rest = off+j+len(call), rest[j+len(call):]
+		}
+		if !strings.Contains(after[back:], call) && call == "setAltSec(" {
+			t.Error("the mapping is never cleared")
+		}
+	}
+	// the cleanup after the branch must not call them either
+	if end := strings.Index(after[back:], "\n\t}\n"); end >= 0 {
+		for _, call := range []string{"w.run(", "w.service(", "setAltSec("} {
+			if strings.Contains(after[back+end:], call) {
+				t.Errorf("%s runs after the branches", call)
+			}
+		}
+	}
+}

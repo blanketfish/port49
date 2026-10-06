@@ -299,17 +299,20 @@ func (l *labDir) l44OR1(t *testing.T, ev *evidenceLog) string {
 	if err := l.l44StartKDC(t); err != nil {
 		e6 = l44Ext{l43Cell: l43Cell{mech: "external", code: -1}, invalid: "the KDC could not be started again: " + l.l44Err(err)}
 		t.Errorf("L44 OR-1: %s; the cell is INVALID (R6)", e6.invalid)
+		t.Logf("L44 OR-1: the broker's altSecurityIdentities is left set; the DC is destroyed at teardown")
 	} else {
 		stopped = false
 		ev.mark("L44 OR-1 external, mapped, the DC's KDC started again")
 		e6 = l.l44External(t, ev, "external, KDC started again", adcsExt, true)
+		// Only with the KDC back: a failed SSH call here is fatal and would lose the
+		// note. Otherwise the mapping stays; the DC is destroyed at teardown.
+		w.setAltSec(t, brokerDN, "")
 	}
 	if e5.invalid == "" {
 		if e5.invalid = l44KDCDownInvalid(e0, e6); e5.invalid != "" {
 			t.Errorf("L44 external, KDC stopped: %s; the cell is INVALID (R6)", e5.invalid)
 		}
 	}
-	w.setAltSec(t, brokerDN, "")
 	var b strings.Builder
 	b.WriteString("\n### OR-1: a mapped certificate while the DC's KDC is stopped\n\n| mechanism | outcome | LDAP result | time |\n|---|---|---|---|\n")
 	b.WriteString(l44ExtRow("SASL EXTERNAL over LDAPS, mapped, the KDC up (e5's control, before)", e0))

@@ -1201,6 +1201,23 @@ func winDiskCheck(t *testing.T, dir string, need uint64) {
 	}
 }
 
+// winLock takes the exclusive, non-blocking lock on path (made 0600 with its
+// directory) and returns its release.
+func winLock(path string) (func(), error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	return func() { _ = f.Close() }, nil
+}
+
 // winLabHeld is whether a fresh run must refuse to start: the project's dc
 // container is running (psOut is `docker ps -q` of it) and the run is not a
 // REUSE of a kept DC, which is meant to find it up.
@@ -1213,6 +1230,17 @@ func winLabHeld(reused bool, psOut string) bool {
 // only the per-run steps (R7: a reused DC never closes L44).
 func startWindowsDC(t *testing.T, d *directories) *labDir {
 	t.Helper()
+	// First: before G2 and before any docker or compose call. The kernel drops
+	// it if the process dies; the cleanup drops it when the test ends.
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	release, err := winLock(filepath.Join(home, ".cache", "port49-lab", "windows.lock"))
+	if err != nil {
+		t.Fatalf("another L44 run holds the lab (windows.lock): %v", err)
+	}
+	t.Cleanup(release)
 	repo, err := repoRoot()
 	if err != nil {
 		t.Fatal(err)
