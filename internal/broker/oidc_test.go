@@ -22,6 +22,10 @@ import (
 // shown is a mint response as a failure message may print it: the code is the
 // caller's, and the decoded items withhold their tokens (MintItem.String).
 func shown(w *httptest.ResponseRecorder) string {
+	var e api.Error
+	if json.Unmarshal(w.Body.Bytes(), &e) == nil && e.Error != "" {
+		return fmt.Sprintf("code %d, error %q, detail %q", w.Code, e.Error, e.Detail)
+	}
 	var r api.MintResponse
 	if json.Unmarshal(w.Body.Bytes(), &r) != nil {
 		return fmt.Sprintf("code %d, not a mint response", w.Code)
@@ -37,7 +41,7 @@ func TestAnOIDCPersonMints(t *testing.T) {
 	w := f.bearer(context.Background(), "POST", "/v1/tokens", mintLeaf1, f.idToken(t, iss, nil))
 	resp := decodeMint(t, w)
 	if w.Code != 200 || resp.Principal != alicePrincipal || resp.Results[0].Verdict != decision.VerdictPermit {
-		t.Fatalf("%d %s", w.Code, shown(w))
+		t.Fatalf("%s", shown(w))
 	}
 	toks, err := f.st.Candidates(context.Background(), store.TokenKey{NAS: "leaf1", Username: "alice"})
 	if err != nil || len(toks) != 1 {
@@ -68,7 +72,7 @@ func TestTheOIDCSessionClockIsAuthTime(t *testing.T) {
 	authAt := f.b.Now().Add(-2 * time.Hour)
 	w := f.bearer(context.Background(), "POST", "/v1/tokens", mintLeaf1, f.idToken(t, iss, map[string]any{"auth_time": authAt.Unix()}))
 	if w.Code != 200 {
-		t.Fatalf("%d %s", w.Code, w.Body)
+		t.Fatalf("%s", shown(w))
 	}
 	toks, _ := f.st.Candidates(context.Background(), store.TokenKey{NAS: "leaf1", Username: "alice"})
 	if len(toks) != 1 || !toks[0].AuthTime.Equal(authAt.Truncate(time.Second)) {
@@ -77,14 +81,14 @@ func TestTheOIDCSessionClockIsAuthTime(t *testing.T) {
 	old := f.idToken(t, iss, map[string]any{"auth_time": f.b.Now().Add(-13 * time.Hour).Unix()})
 	if w := f.bearer(context.Background(), "POST", "/v1/tokens", mintLeaf1, old); w.Code != 401 ||
 		!strings.Contains(w.Body.String(), string(decision.SessionExpired)) || !strings.Contains(w.Body.String(), "port49 login") {
-		t.Fatalf("an authentication 13h ago: %d %s", w.Code, w.Body)
+		t.Fatalf("an authentication 13h ago: %s", shown(w))
 	}
 	// An auth_time ahead of the broker's clock, within clock_skew, is now: a
 	// session clock never starts in the future (pre-flight M-18).
 	ahead := f.idToken(t, iss, map[string]any{"auth_time": f.b.Now().Add(30 * time.Second).Unix(),
 		"iat": f.b.Now().Add(30 * time.Second).Unix()})
 	if w := f.bearer(context.Background(), "POST", "/v1/tokens", `{"devices":["nx1"],"ttl_seconds":60}`, ahead); w.Code != 200 {
-		t.Fatalf("an auth_time 30s ahead: %d %s", w.Code, shown(w))
+		t.Fatalf("an auth_time 30s ahead: %s", shown(w))
 	}
 	toks, _ = f.st.Candidates(context.Background(), store.TokenKey{NAS: "nx1", Username: "alice"})
 	if len(toks) != 1 || toks[0].AuthTime.After(f.b.Now()) {
@@ -114,7 +118,7 @@ func TestAMachineMintsAsApp(t *testing.T) {
 	w := f.bearer(context.Background(), "POST", "/v1/tokens", mintLeaf1, raw)
 	resp := decodeMint(t, w)
 	if w.Code != 200 || resp.Principal != "app:Oxidized-01" || resp.Results[0].Username != "svc-backup" {
-		t.Fatalf("%d %s", w.Code, shown(w))
+		t.Fatalf("%s", shown(w))
 	}
 	// A machine has no session a provider logs out: it writes no owner
 	// record (pre-flight M-16).
@@ -140,14 +144,14 @@ func TestOneCredentialPerRequest(t *testing.T) {
 	both.Header.Set("Authorization", "Bearer "+f.idToken(t, iss, nil))
 	w := httptestServe(f, both)
 	if w.Code != 400 || !strings.Contains(w.Body.String(), "one credential per request") {
-		t.Fatalf("a certificate and a bearer: %d %s", w.Code, w.Body)
+		t.Fatalf("a certificate and a bearer: %s", shown(w))
 	}
 	for _, h := range []string{"Basic YWxpY2U6eA==", "Bearer", "Bearer a b", "bearer"} {
 		q := httptestRequest("POST", "/v1/tokens", mintLeaf1)
 		q.Header.Set("Authorization", h)
 		w := httptestServe(f, q)
 		if w.Code != 401 || !strings.Contains(w.Body.String(), string(decision.TrustDomainUnresolved)) {
-			t.Errorf("Authorization %q: %d %s", h, w.Code, w.Body)
+			t.Errorf("Authorization %q: %s", h, shown(w))
 		}
 	}
 }
@@ -165,7 +169,7 @@ func TestARefusedBearerIsRecordedWithNoPrincipalAndNotQuoted(t *testing.T) {
 		"exp": f.b.Now().Add(time.Minute).Unix(), "auth_time": f.b.Now().Unix()})
 	w := f.bearer(context.Background(), "POST", "/v1/tokens", mintLeaf1, forged)
 	if w.Code != 401 || !strings.Contains(w.Body.String(), string(decision.TrustDomainUnresolved)) {
-		t.Fatalf("%d %s", w.Code, w.Body)
+		t.Fatalf("%s", shown(w))
 	}
 	recs := eventsOf(f.records(t), decision.EventMint)
 	last := recs[len(recs)-1]
@@ -187,7 +191,7 @@ func TestAProviderOutageIsRetriable(t *testing.T) {
 	w := f.bearer(context.Background(), "POST", "/v1/tokens", mintLeaf1, raw)
 	if w.Code != 503 || w.Header().Get("Retry-After") != "30" ||
 		!strings.Contains(w.Body.String(), "identity_provider_unavailable") {
-		t.Fatalf("%d %v %s", w.Code, w.Header(), w.Body)
+		t.Fatalf("%s, Retry-After %q", shown(w), w.Header().Get("Retry-After"))
 	}
 }
 
@@ -197,7 +201,7 @@ func TestAnUnusablePrincipalClaimIsUnmapped(t *testing.T) {
 	w := f.bearer(context.Background(), "POST", "/v1/tokens", mintLeaf1, f.idToken(t, iss,
 		map[string]any{"preferred_username": "alice"}))
 	if w.Code != 401 || !strings.Contains(w.Body.String(), string(decision.IdentityUnmapped)) {
-		t.Fatalf("%d %s", w.Code, w.Body)
+		t.Fatalf("%s", shown(w))
 	}
 }
 
@@ -212,7 +216,7 @@ func TestAMarkRefusesTheOIDCPath(t *testing.T) {
 	}
 	w := f.bearer(context.Background(), "POST", "/v1/tokens", mintLeaf1, f.idToken(t, iss, nil))
 	if w.Code != 401 || !strings.Contains(w.Body.String(), string(decision.CredentialRevoked)) {
-		t.Fatalf("%d %s", w.Code, w.Body)
+		t.Fatalf("%s", shown(w))
 	}
 }
 
@@ -234,7 +238,7 @@ func TestALoggedOutSessionIsRefusedEverywhere(t *testing.T) {
 		w := f.bearer(ctx, c.method, c.path, c.body, raw)
 		if w.Code != 401 || !strings.Contains(w.Body.String(), string(decision.CredentialRevoked)) ||
 			!strings.Contains(w.Body.String(), "identity provider ended this session") {
-			t.Errorf("%s %s: %d %s", c.method, c.path, w.Code, w.Body)
+			t.Errorf("%s %s: %s", c.method, c.path, shown(w))
 		}
 	}
 	// By sub: a token issued at the logout is refused; one issued after it,
@@ -247,7 +251,7 @@ func TestALoggedOutSessionIsRefusedEverywhere(t *testing.T) {
 		t.Fatal(err)
 	}
 	if w := f2.bearer(ctx, "POST", "/v1/tokens", mintLeaf1, f2.idToken(t, iss2, nil)); w.Code != 401 {
-		t.Fatalf("a token issued at the sub's logout: %d %s", w.Code, w.Body)
+		t.Fatalf("a token issued at the sub's logout: %s", shown(w))
 	}
 	// Inside clock_skew after the logout is still the old session's.
 	f2.advance(30 * time.Second)
@@ -256,7 +260,7 @@ func TestALoggedOutSessionIsRefusedEverywhere(t *testing.T) {
 	}
 	f2.advance(90 * time.Second)
 	if w := f2.bearer(ctx, "POST", "/v1/tokens", mintLeaf1, f2.idToken(t, iss2, nil)); w.Code != 200 {
-		t.Fatalf("a token issued 2m after the sub's logout: %d %s", w.Code, shown(w))
+		t.Fatalf("a token issued 2m after the sub's logout: %s", shown(w))
 	}
 }
 
@@ -297,7 +301,7 @@ func TestAMintRacingALogoutLeavesNoToken(t *testing.T) {
 	f.b.Minter = token.NewMinter(hooked, f.b.Log, rand.Reader, token.TagKey([]byte("k")), f.b.Now, 8)
 	w := f.bearer(ctx, "POST", "/v1/tokens", mintLeaf1, f.idToken(t, iss, nil))
 	if w.Code != 401 || !strings.Contains(w.Body.String(), string(decision.CredentialRevoked)) {
-		t.Fatalf("%d %s", w.Code, w.Body)
+		t.Fatalf("%s", shown(w))
 	}
 	if toks, _ := f.st.Candidates(ctx, store.TokenKey{NAS: "leaf1", Username: "alice"}); len(toks) != 0 {
 		t.Fatalf("%d tokens survived a logout that landed mid-mint", len(toks))
@@ -327,7 +331,7 @@ func TestAnOwnerWriteFailureRefusesTheMint(t *testing.T) {
 		"PutOIDCOwner": func() error { return store.ErrUnavailable }}}
 	w := f.bearer(context.Background(), "POST", "/v1/tokens", mintLeaf1, f.idToken(t, iss, nil))
 	if w.Code != 503 || !strings.Contains(w.Body.String(), string(decision.StoreUnavailable)) {
-		t.Fatalf("%d %s", w.Code, w.Body)
+		t.Fatalf("%s", shown(w))
 	}
 	if toks, _ := f.st.Candidates(context.Background(), store.TokenKey{NAS: "leaf1", Username: "alice"}); len(toks) != 0 {
 		t.Fatal("a token was written without its owner record")
@@ -340,7 +344,7 @@ func TestIdentityAnswersAnOIDCCaller(t *testing.T) {
 	w := f.bearer(context.Background(), "GET", "/v1/identity", "", f.idToken(t, iss, nil))
 	var id api.Identity
 	if err := json.Unmarshal(w.Body.Bytes(), &id); err != nil || w.Code != 200 {
-		t.Fatalf("%d %s", w.Code, w.Body)
+		t.Fatalf("%s", shown(w))
 	}
 	if id.Principal != alicePrincipal || id.Method != "oidc" || id.OIDC == nil || id.OIDC.Issuer != iss.URL ||
 		id.OIDC.Sid != "s-sub-alice" || id.AuthTime != f.b.Now().UTC().Format(time.RFC3339) {
@@ -357,7 +361,7 @@ func TestAnOIDCPrincipalResolvesThroughTheDirectory(t *testing.T) {
 	w := f.bearer(context.Background(), "POST", "/v1/tokens", mintLeaf1, f.idToken(t, iss, nil))
 	resp := decodeMint(t, w)
 	if w.Code != 200 || resp.Results[0].Username != "alice2" || res.Calls.Load() != 1 {
-		t.Fatalf("%d %s, calls %d", w.Code, shown(w), res.Calls.Load())
+		t.Fatalf("%s, calls %d", shown(w), res.Calls.Load())
 	}
 }
 
@@ -367,7 +371,7 @@ func TestABearerWithNoOIDCIsRefused(t *testing.T) {
 	iss := oidctest.NewIssuer(t)
 	raw := iss.IDToken(t, "k1", testClientID, "x", f.b.Now(), map[string]any{"preferred_username": "alice@example.com"})
 	if w := f.bearer(context.Background(), "POST", "/v1/tokens", mintLeaf1, raw); w.Code != 401 {
-		t.Fatalf("%d %s", w.Code, w.Body)
+		t.Fatalf("%s", shown(w))
 	}
 }
 
