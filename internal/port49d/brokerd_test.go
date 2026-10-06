@@ -1198,6 +1198,45 @@ func floorIn(t *testing.T, root *clientv3.Client, key string) {
 	t.Fatalf("the ledger record at %s never held a floor", key)
 }
 
+// The runner's own swap opens its mint gate only once its mark on
+// meta/judged has landed: held here (markSkew), a mint answers 503
+// store_unavailable and the gate's gauge reads 1, and once the mark is
+// released the mint succeeds (flake review, M-3).
+func TestTheRunnersSwapMintsNothingUntilItsMarkLands(t *testing.T) {
+	var out, log syncBuffer
+	e, o := stderr, stdout
+	t.Cleanup(func() { stderr, stdout = e, o })
+	stderr, stdout = &out, &log
+	f := splitFleet(t)
+	api, _ := startBroker(t, f.broker, &out, 1)
+	metrics := brokerLine.FindAllStringSubmatch(out.String(), -1)[0][2]
+	waitFor(t, &out, "runner: recorded bundle ")
+	release := make(chan struct{})
+	ms := markSkew.Load()
+	t.Cleanup(func() { markSkew.Store(ms) })
+	held := skewMarker(func(ctx context.Context, st startRecorder, bundle string, w io.Writer) error {
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return store.ErrUnavailable // a try past its call timeout, tried again
+		}
+		return (*ms)(ctx, st, bundle, w)
+	})
+	markSkew.Store(&held)
+	f.writePolicyOf(t, f.broker, withdrawnConfigurePolicy)
+	waitFor(t, &out, "policy reloaded")
+	waitBrokerMetricAt(t, metrics, "port49_broker_mint_gate_closed 1")
+	resp := postMint(t, api, f.pki, "leaf1", "", testpki.LabClientCert, testpki.LabClientKey)
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(string(body), `"store_unavailable"`) {
+		t.Fatalf("a mint on the runner before its swap's mark landed: %s", reply(resp.StatusCode, string(body)))
+	}
+	close(release)
+	waitBrokerMetricAt(t, metrics, "port49_broker_mint_gate_closed 0")
+	mintOn(t, api, f.pki, "leaf1")
+}
+
 // A replica that minted under a policy the runner had replaced, then
 // reloads, has the runner carry the context its token made: the runner
 // runs a full context pass on its ask. Meanwhile the runner records no
