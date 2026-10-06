@@ -961,13 +961,30 @@ func TestWindowsEnrollAsRegistersWSMANSPNsFirst(t *testing.T) {
 // PowerShell 5.1's ConvertTo-Json serializes those notes to -Depth 8: measured
 // on the L44 DC, one CSR's Get-Content -Raw ran the bootstrap's ConvertTo-Json
 // past 285 CPU seconds and 4.8 GB, where [IO.File]::ReadAllText took 18 ms.
+// winGetContentRe is Get-Content, or its 5.1 aliases gc, cat and type, used as
+// a command: at the line's start or after ( = | ; or {.
+var winGetContentRe = regexp.MustCompile(`(?i)(?:^|[(=|;{])\s*(?:get-content|gc|cat|type)(?:\s|$)`)
+
 func TestWindowsScriptResultsAreNotGetContent(t *testing.T) {
+	for _, l := range []string{"Get-Content $out -Raw", "  @{ x = (gc $out -Raw) }", "$t = cat $f", "x | type", "{ type $p }"} {
+		if !winGetContentRe.MatchString(l) {
+			t.Errorf("the pattern misses %q", l)
+		}
+	}
+	for _, l := range []string{"'RequestType = PKCS10'", "-PropertyType DWord", "$ca.Subject", "Set-Content $in $csr"} {
+		if winGetContentRe.MatchString(l) {
+			t.Errorf("the pattern flags %q", l)
+		}
+	}
 	ents, _ := winScriptFS.ReadDir("directory/windows/scripts")
 	for _, e := range ents {
 		b, _ := winScriptFS.ReadFile("directory/windows/scripts/" + e.Name())
 		for i, l := range strings.Split(strings.ReplaceAll(string(b), "\r\n", "\n"), "\n") {
-			if strings.Contains(strings.ToLower(l), "get-content") {
-				t.Errorf("%s:%d: a file is read with Get-Content; read it with [IO.File]::ReadAllText", e.Name(), i+1)
+			if strings.HasPrefix(strings.TrimSpace(l), "#") {
+				continue
+			}
+			if winGetContentRe.MatchString(l) {
+				t.Errorf("%s:%d: a file is read with Get-Content or an alias of it; read it with [IO.File]::ReadAllText", e.Name(), i+1)
 			}
 		}
 	}
