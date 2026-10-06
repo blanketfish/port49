@@ -3943,7 +3943,7 @@ fix round 4 stayed with the Sonnet implementer instead of escalating (the model 
 **Operator notes, as built** (the plan's notes, corrected):
 
 - **Upgrading: the staleness ceiling is on.** `session.staleness_ceiling` defaults to 4h
-  (provisional on OR-1).
+  (OR-1, approved by Ryan 2026-10-06).
   - **What it does.** Every minting process's scheduled pass re-verifies every live principal
     every `broker.refresh_interval` (5m) and stamps `refreshed_at`, a directory-less broker's
     included. A session whose principal has not been verified for 4h is denied `context_stale` at
