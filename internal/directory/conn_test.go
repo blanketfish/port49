@@ -21,7 +21,9 @@ import (
 	"github.com/jcmturner/gokrb5/v8/keytab"
 	"github.com/jcmturner/gokrb5/v8/messages"
 	"github.com/jcmturner/gokrb5/v8/types"
+	"github.com/prometheus/client_golang/prometheus"
 
+	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/testpki"
 )
 
@@ -394,5 +396,177 @@ func TestASearchOnAClosedConnectionIsAFault(t *testing.T) {
 	res, err := ldapClient{c: conn}.SearchContext(context.Background(), req, 0)
 	if err == nil || !Fault(err) {
 		t.Fatalf("a search on a closed connection answered %+v, %v; want a fault", res, err)
+	}
+}
+
+// scriptedConn is a searchConn scripted page by page: a page is its entries and
+// whether the connection is closing after it, so a server that closes between
+// two pages is exercised deterministically (the race with go-ldap's own check
+// is the one a real server hits).
+type scriptedConn struct {
+	pages   []scriptedPage
+	n       int
+	closing bool
+}
+
+type scriptedPage struct {
+	entries []*ldap.Entry
+	cookie  []byte
+	err     error
+	close   bool // the server closes during this page: it ends with no result at all
+}
+
+func (f *scriptedConn) IsClosing() bool { return f.closing }
+func (f *scriptedConn) Close() error    { f.closing = true; return nil }
+func (f *scriptedConn) SearchAsync(_ context.Context, _ *ldap.SearchRequest, _ int) ldap.Response {
+	p := f.pages[f.n]
+	f.n++
+	if p.close {
+		f.closing = true
+	}
+	return &scriptedResponse{page: p}
+}
+
+type scriptedResponse struct {
+	page scriptedPage
+	i    int
+	cur  *ldap.Entry
+	ctl  []ldap.Control
+}
+
+func (r *scriptedResponse) Next() bool {
+	r.cur, r.ctl = nil, nil
+	if r.page.close {
+		return false
+	}
+	if r.i < len(r.page.entries) {
+		r.cur = r.page.entries[r.i]
+		r.i++
+		return true
+	}
+	if r.i == len(r.page.entries) && r.page.err == nil {
+		r.i++
+		pc := ldap.NewControlPaging(1)
+		pc.SetCookie(r.page.cookie)
+		r.ctl = []ldap.Control{pc}
+		return true
+	}
+	return false
+}
+func (r *scriptedResponse) Entry() *ldap.Entry       { return r.cur }
+func (r *scriptedResponse) Referral() string         { return "" }
+func (r *scriptedResponse) Controls() []ldap.Control { return r.ctl }
+func (r *scriptedResponse) Err() error {
+	if r.i >= len(r.page.entries) {
+		return r.page.err
+	}
+	return nil
+}
+
+func pageEntry(dn string) *ldap.Entry { return &ldap.Entry{DN: dn} }
+
+func searchReq() *ldap.SearchRequest {
+	return ldap.NewSearchRequest("dc=corp", ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 0, 5, false,
+		"(objectClass=group)", []string{"dn"}, nil)
+}
+
+// A server that closes between two pages is a fault, never a truncated list
+// read as complete: a narrowed group list revokes (Task 18 review, C1).
+func TestAPagedSearchClosedBetweenPagesIsAFault(t *testing.T) {
+	f := &scriptedConn{pages: []scriptedPage{{entries: []*ldap.Entry{pageEntry("cn=a")}, cookie: []byte("next")}, {close: true}}}
+	res, err := ldapClient{c: f}.SearchContext(context.Background(), searchReq(), 1)
+	if err == nil || !Fault(err) {
+		t.Fatalf("answered %d entries, %v; want a fault", len(res.Entries), err)
+	}
+}
+
+// Healthy answers stay answers: two pages, and an empty one (no such entry is
+// an answer, and means unmapped or no groups).
+func TestAHealthyPagedOrEmptySearchStaysAnAnswer(t *testing.T) {
+	f := &scriptedConn{pages: []scriptedPage{{entries: []*ldap.Entry{pageEntry("cn=a")}, cookie: []byte("next")}, {entries: []*ldap.Entry{pageEntry("cn=b")}}}}
+	res, err := ldapClient{c: f}.SearchContext(context.Background(), searchReq(), 1)
+	if err != nil || len(res.Entries) != 2 {
+		t.Fatalf("two pages: %d entries, %v", len(res.Entries), err)
+	}
+	f = &scriptedConn{pages: []scriptedPage{{}}}
+	res, err = ldapClient{c: f}.SearchContext(context.Background(), searchReq(), 1)
+	if err != nil || len(res.Entries) != 0 {
+		t.Fatalf("empty: %d entries, %v", len(res.Entries), err)
+	}
+}
+
+// A server that closes during a search ends it with a plain-text read error,
+// which is the server's fault: it is an ErrorNetwork, so the query fails over,
+// grace serves, and the dead connection leaves the pool (Task 18 review, I1).
+// An LDAP result on the same connection is the server's answer and stays.
+func TestAServerCloseMidSearchIsAFault(t *testing.T) {
+	read := errors.New("unable to read LDAP response packet: EOF")
+	for name, pages := range map[string][]scriptedPage{
+		"before an entry": {{err: read, close: false}},
+		"after an entry":  {{entries: []*ldap.Entry{pageEntry("cn=a")}, err: read}},
+		"on a later page": {{entries: []*ldap.Entry{pageEntry("cn=a")}, cookie: []byte("n")}, {err: read}},
+	} {
+		f := &scriptedConn{pages: pages, closing: false}
+		// the reader marks the connection closing before it reports the read
+		cc := &closingAfterErr{scriptedConn: f}
+		_, err := ldapClient{c: cc}.SearchContext(context.Background(), searchReq(), 1)
+		if err == nil || !Fault(err) {
+			t.Errorf("%s: %v is not a fault", name, err)
+		}
+	}
+	f := &scriptedConn{pages: []scriptedPage{{err: ldap.NewError(ldap.LDAPResultNoSuchObject, errors.New("x"))}}, closing: true}
+	f.closing = false
+	cc := &closingAfterErr{scriptedConn: f}
+	if _, err := (ldapClient{c: cc}).SearchContext(context.Background(), searchReq(), 1); err == nil || Fault(err) {
+		t.Errorf("an LDAP result is an answer, not a fault: %v", err)
+	}
+}
+
+// closingAfterErr marks the connection closing once a page's error is read.
+type closingAfterErr struct{ *scriptedConn }
+
+func (c *closingAfterErr) SearchAsync(ctx context.Context, r *ldap.SearchRequest, n int) ldap.Response {
+	resp := c.scriptedConn.SearchAsync(ctx, r, n)
+	return &closeOnErr{Response: resp, c: c.scriptedConn}
+}
+
+type closeOnErr struct {
+	ldap.Response
+	c *scriptedConn
+}
+
+func (r *closeOnErr) Err() error {
+	err := r.Response.Err()
+	if err != nil {
+		r.c.closing = true
+	}
+	return err
+}
+
+// A mid-search close through the pool: the query is ErrUnavailable (so grace
+// serves above it), the dead connection leaves the pool, and the next query
+// dials a fresh one that answers (Task 18 review, I1).
+func TestAMidSearchCloseServesGraceAndTheNextSearchDialsFresh(t *testing.T) {
+	w := newWorld(t)
+	dials := 0
+	dial := func(context.Context, Server) (Client, error) {
+		dials++
+		if dials == 1 {
+			return ldapClient{c: &closingAfterErr{scriptedConn: &scriptedConn{pages: []scriptedPage{
+				{entries: []*ldap.Entry{pageEntry("cn=a")}, err: errors.New("unable to read LDAP response packet: EOF")}}}}}, nil
+		}
+		return ldapClient{c: &scriptedConn{pages: []scriptedPage{{entries: []*ldap.Entry{pageEntry("cn=a")}}}}}, nil
+	}
+	p := NewPool(w.r.Cfg, dial, noCheck, w.clk.Now, metrics.New(prometheus.NewRegistry()), w.say.say)
+	q := func() (*ldap.SearchResult, error) {
+		var res *ldap.SearchResult
+		_, err := p.Do(context.Background(), func(s Searcher) (err error) { res, err = s.Search(searchReq()); return })
+		return res, err
+	}
+	if _, err := q(); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("the mid-search close: %v, want ErrUnavailable", err)
+	}
+	if res, err := q(); err != nil || len(res.Entries) != 1 || dials != 2 {
+		t.Fatalf("the next search: %v %v after %d dial(s), want one entry on a fresh dial", res, err, dials)
 	}
 }

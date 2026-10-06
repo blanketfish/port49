@@ -191,7 +191,15 @@ func NewDialer(cfg Config, cr *Credentials) (Dialer, error) {
 // (go-ldap search.go:625-630), so ctx's error is returned in its place.
 // Paging follows SearchWithPaging (search.go:503): a paging control, the
 // cookie from each page's done result, until it comes back empty.
-type ldapClient struct{ c *ldap.Conn }
+type ldapClient struct{ c searchConn }
+
+// searchConn is the *ldap.Conn a search needs, so a test can close the
+// connection between two pages deterministically.
+type searchConn interface {
+	IsClosing() bool
+	SearchAsync(ctx context.Context, req *ldap.SearchRequest, bufferSize int) ldap.Response
+	Close() error
+}
 
 func (l ldapClient) Close() error { return l.c.Close() }
 
@@ -217,7 +225,9 @@ func (l ldapClient) SearchContext(ctx context.Context, req *ldap.SearchRequest, 
 		}
 		r := l.c.SearchAsync(ctx, req, 0)
 		var controls []ldap.Control
+		got := false // a healthy page delivers at least its entries or its done control's paging
 		for r.Next() {
+			got = true
 			if e := r.Entry(); e != nil {
 				out.Entries = append(out.Entries, e)
 			}
@@ -229,10 +239,21 @@ func (l ldapClient) SearchContext(ctx context.Context, req *ldap.SearchRequest, 
 			return out, err
 		}
 		if err := r.Err(); err != nil {
+			// The reader's failure on a connection the server closed is plain
+			// text (go-ldap conn.go, "unable to read LDAP response packet"),
+			// neither an LDAP result nor a net.Error: it is the server's fault,
+			// so the pool drops the connection and grace serves. An LDAP
+			// result is the server's answer and stays as it is.
+			var le *ldap.Error
+			if l.c.IsClosing() && !(errors.As(err, &le) && le.ResultCode < 200) {
+				return out, ldap.NewError(ldap.ErrorNetwork, err)
+			}
 			return out, err
 		}
-		if len(out.Entries) == 0 && l.c.IsClosing() {
-			// closed under the search: nothing answered
+		if !got && l.c.IsClosing() {
+			// This page is judged by itself, never by the entries of earlier
+			// pages: a server that closes between two pages must not leave a
+			// truncated list read as complete (a narrowed group list revokes).
 			return out, ldap.NewError(ldap.ErrorNetwork, errors.New("ldap: connection closed"))
 		}
 		if paging == nil {
