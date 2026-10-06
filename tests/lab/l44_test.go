@@ -13,6 +13,10 @@ import (
 //
 //	go test -tags lab ./tests/lab/ -run '^TestL44Bringup$' -count=1 -v -timeout 240m
 //
+// Its evidence file, L44-bringup.json, goes under tests/lab/evidence of the run's
+// output root: set PORT49_LAB_DIRECTORY_OUT to keep a dry run out of the
+// repository, and never `git add` it.
+//
 // TestL44WindowsAD is the measurement (its comment has its command).
 func TestL44Bringup(t *testing.T) {
 	d := newDirectories(t)
@@ -39,5 +43,6 @@ func TestL44Bringup(t *testing.T) {
 	} else if r := dc.tryBind(t, ev, "gssapi", dc.bindGSSAPI(), ""); !r.ok {
 		t.Logf("GSSAPI as installed: %s (measured in TestL44WindowsAD, not a bring-up failure)", r.text)
 	}
+	ev.assertClean(t, append([]string{d.password}, d.extra...)...)
 	t.Logf("windows: %s; fixture loaded, LDAPS verified, keytab and certificates issued", dc.win.version())
 }

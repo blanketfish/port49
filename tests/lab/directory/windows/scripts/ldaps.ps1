@@ -25,6 +25,13 @@ Set-Content "$dir\ldaps.cer" $cert_pem -Encoding ascii
 certreq.exe -accept -q -machine "$dir\ldaps.cer" | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "certreq -accept: exit $LASTEXITCODE" }
 $t = (New-Object Security.Cryptography.X509Certificates.X509Certificate2 "$dir\ldaps.cer").Thumbprint
+# A kept DC holds each earlier run's certificate in the NTDS store, and Schannel
+# need not pick the newest: remove the ones the lab CA issued (by its name, which
+# every run's CA shares), never the rest of the store.
+$labCA = New-Object Security.Cryptography.X509Certificates.X509Certificate2 "$dir\lab-ca.cer"
+Get-ChildItem Cert:\LocalMachine\My | Where-Object { $_.Issuer -eq $labCA.Subject -and $_.Thumbprint -ne $t } | ForEach-Object {
+  Remove-Item "HKLM:\SOFTWARE\Microsoft\Cryptography\Services\NTDS\SystemCertificates\My\Certificates\$($_.Thumbprint)" -Recurse -ErrorAction SilentlyContinue
+}
 $src = "HKLM\SOFTWARE\Microsoft\SystemCertificates\MY\Certificates\$t"
 $dst = "HKLM\SOFTWARE\Microsoft\Cryptography\Services\NTDS\SystemCertificates\My\Certificates\$t"
 reg.exe copy $src $dst /s /f | Out-Null

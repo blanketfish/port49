@@ -735,8 +735,45 @@ func (w *winDC) invalidFor(area string) string {
 type winScriptErr struct {
 	name   string
 	thrown bool
+	cut    bool // the session ended without an exit status: the VM was going down, not the bootstrap failing
 	msg    string
 }
+
+// bootstrapBroke reports whether the bootstrap itself failed: it ran to an
+// exit and wrote no result, which no wait mends.
+func (e *winScriptErr) bootstrapBroke() bool { return !e.thrown && !e.cut }
+
+// winSessionCut reports whether a finished session ended without an exit
+// status (the connection dropped or the server closed it), as a reboot does.
+func winSessionCut(err error) bool {
+	var exit *ssh.ExitError
+	return err != nil && !errors.As(err, &exit)
+}
+
+// winAuthStall is how long sshd may keep refusing the Administrator's password
+// before the wait gives up: the transient refusals after the promotion's reboot
+// end well within it, and a refusal that outlasts it never mends.
+const winAuthStall = 10 * time.Minute
+
+// winAuthWatch tells a password sshd refuses for good from a VM that is still
+// starting: since is the first of an unbroken run of refusals.
+type winAuthWatch struct{ since time.Time }
+
+// observe takes each attempt's error and the time, true when refusals have
+// gone on for winAuthStall. Any other outcome starts the count again.
+func (a *winAuthWatch) observe(err error, now time.Time) bool {
+	if err == nil || !strings.Contains(err.Error(), "unable to authenticate") {
+		a.since = time.Time{}
+		return false
+	}
+	if a.since.IsZero() {
+		a.since = now
+	}
+	return now.Sub(a.since) >= winAuthStall
+}
+
+// winRegistryWithin outlasts registry.ps1's own five-minute wait for NTDS.
+const winRegistryWithin = 8 * time.Minute
 
 func (e *winScriptErr) Error() string { return "windows " + e.name + ": " + e.msg }
 
@@ -818,7 +855,7 @@ func (w *winDC) ps(ctx context.Context, name string, params map[string]any) (jso
 	res, rerr := winResult(out.Bytes())
 	if rerr != nil {
 		var thrown *winThrownError
-		return nil, &winScriptErr{name: name, thrown: errors.As(rerr, &thrown), msg: fmt.Sprintf("%s (stderr: %s)",
+		return nil, &winScriptErr{name: name, thrown: errors.As(rerr, &thrown), cut: winSessionCut(err), msg: fmt.Sprintf("%s (stderr: %s)",
 			winScrub(rerr.Error(), w.secrets()...), oneLineMax(winScrub(errb.String(), w.secrets()...), 300))}
 	}
 	if err != nil {
@@ -905,12 +942,17 @@ func (w *winDC) logTail(n int) string {
 func (w *winDC) waitSSH(t *testing.T, within time.Duration) {
 	t.Helper()
 	deadline, next, ran := time.Now().Add(within), time.Now(), 0
+	var auth winAuthWatch
 	for {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		_, err := w.ps(ctx, "clock", nil)
 		cancel()
 		if err == nil {
 			return
+		}
+		if auth.observe(err, time.Now()) {
+			t.Fatalf("windows: sshd has refused the Administrator's password for %s: dockur's PASSWORD (windows.env) may not "+
+				"reach the built-in Administrator; see dockur's log: %s", winAuthStall, w.logTail(1500))
 		}
 		var se *winScriptErr
 		if errors.As(err, &se) {
@@ -928,7 +970,11 @@ func (w *winDC) waitSSH(t *testing.T, within time.Duration) {
 				oneLineMax(winScrub(err.Error(), w.secrets()...), 200), w.logTail(1500))
 		}
 		if time.Now().After(next) {
-			t.Logf("windows: waiting for SSH; dockur: %s", oneLineMax(winScrub(w.logTail(300), w.secrets()...), 300))
+			refused := ""
+			if !auth.since.IsZero() {
+				refused = fmt.Sprintf(" (refused auth since %s ago)", time.Since(auth.since).Round(time.Second))
+			}
+			t.Logf("windows: waiting for SSH%s; dockur: %s", refused, oneLineMax(winScrub(w.logTail(300), w.secrets()...), 300))
 			next = time.Now().Add(2 * time.Minute)
 		}
 		time.Sleep(15 * time.Second)
@@ -950,7 +996,7 @@ func (w *winDC) waitReady(t *testing.T, within time.Duration) {
 			return
 		}
 		var se *winScriptErr
-		if errors.As(err, &se) && !se.thrown {
+		if errors.As(err, &se) && se.bootstrapBroke() {
 			if broken++; broken >= 3 {
 				t.Fatalf("windows: the bootstrap wrote no result three times in a row after the reboot: %v", err)
 			}
@@ -1020,40 +1066,12 @@ func winEnsureISO(t *testing.T) string {
 		t.Fatal(err)
 	}
 	part := path + ".part"
-	t.Logf("windows: downloading the evaluation ISO (%d bytes) to %s", winISOSize, dir)
-	resp, err := http.Get(winISOURL)
-	if err != nil || resp.StatusCode != http.StatusOK {
-		t.Fatalf("windows: fetching the ISO: %v %v", err, resp)
-	}
-	defer resp.Body.Close()
-	f, err := os.Create(part)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var n int64
-	next := int64(1 << 30)
-	buf := make([]byte, 1<<20)
-	for {
-		k, rerr := resp.Body.Read(buf)
-		if k > 0 {
-			if _, err := f.Write(buf[:k]); err != nil {
-				t.Fatal(err)
-			}
-			n += int64(k)
-			if n >= next {
-				t.Logf("windows: ISO %d MiB of %d", n>>20, winISOSize>>20)
-				next += 1 << 30
-			}
-		}
-		if rerr == io.EOF {
-			break
-		}
-		if rerr != nil {
-			t.Fatalf("windows: reading the ISO: %v", rerr)
-		}
-	}
-	if err := f.Close(); err != nil {
-		t.Fatal(err)
+	t.Logf("windows: downloading the evaluation ISO (%d bytes) to %s, within %s", winISOSize, dir, winISODeadline)
+	ctx, cancel := context.WithTimeout(context.Background(), winISODeadline)
+	defer cancel()
+	if err := winDownloadTo(ctx, winISOURL, part, 1<<30, t.Logf); err != nil {
+		_ = os.Remove(part)
+		t.Fatalf("windows: fetching the ISO: %v", err)
 	}
 	if err := winISOOK(part, winISOSize, winISOSHA256); err != nil {
 		_ = os.Remove(part)
@@ -1065,15 +1083,91 @@ func winEnsureISO(t *testing.T) string {
 	return path
 }
 
-// winDiskCheck fails the run when / has less than need GiB free (Lab rules).
+// winISODeadline bounds the 8 GB download, so a stall fails the run cleanly.
+const winISODeadline = 60 * time.Minute
+
+// winDownloadTo fetches url to part under ctx, saying every `every` bytes how
+// far it is: a stalled read ends with ctx, not never.
+func winDownloadTo(ctx context.Context, url, part string, every int64, logf func(string, ...any)) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("status %s", resp.Status)
+	}
+	f, err := os.Create(part)
+	if err != nil {
+		return err
+	}
+	var n int64
+	next := every
+	buf := make([]byte, 1<<20)
+	for {
+		k, rerr := resp.Body.Read(buf)
+		if k > 0 {
+			if _, err := f.Write(buf[:k]); err != nil {
+				f.Close()
+				return err
+			}
+			n += int64(k)
+			if n >= next {
+				logf("windows: ISO %d MiB downloaded", n>>20)
+				next += every
+			}
+		}
+		if rerr == io.EOF {
+			return f.Close()
+		}
+		if rerr != nil {
+			f.Close()
+			return rerr
+		}
+	}
+}
+
+// winStatfsUp is the free space (GiB) of the filesystem holding p, read at the
+// nearest ancestor that can be read: Docker's data root is not readable by the
+// lab's user, though its filesystem is the one the VM's disk fills.
+func winStatfsUp(p string) (uint64, string, error) {
+	for {
+		var st syscall.Statfs_t
+		err := syscall.Statfs(p, &st)
+		if err == nil {
+			return st.Bavail * uint64(st.Bsize) >> 30, p, nil
+		}
+		parent := filepath.Dir(p)
+		if parent == p {
+			return 0, "", err
+		}
+		p = parent
+	}
+}
+
+// winDiskCheck fails the run when the filesystem under dir, or Docker's data
+// root (where the VM's disk lives, which may be another one), has less than
+// need GiB free (Lab rules).
 func winDiskCheck(t *testing.T, dir string, need uint64) {
 	t.Helper()
-	var st syscall.Statfs_t
-	if err := syscall.Statfs(dir, &st); err != nil {
-		t.Fatal(err)
+	paths := []string{dir}
+	if b, err := dockerCmd("info", "-f", "{{.DockerRootDir}}").Output(); err == nil && strings.TrimSpace(string(b)) != "" {
+		paths = append(paths, strings.TrimSpace(string(b)))
+	} else {
+		t.Logf("windows: Docker's data root was not read (%v); only %s is checked for space", err, dir)
 	}
-	if free := st.Bavail * uint64(st.Bsize) >> 30; free < need {
-		t.Fatalf("windows: %d GiB free on the lab's filesystem, the run needs %d (stop and report: Lab rules)", free, need)
+	for _, p := range paths {
+		free, at, err := winStatfsUp(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if free < need {
+			t.Fatalf("windows: %d GiB free on the filesystem of %s, the run needs %d (stop and report: Lab rules)", free, at, need)
+		}
 	}
 }
 
@@ -1119,10 +1213,10 @@ func startWindowsDC(t *testing.T, d *directories) *labDir {
 	if !w.reused {
 		_ = w.dockerCompose("--profile", "tools", "down", "-v", "--remove-orphans", "-t", "120").Run()
 		if b, err := w.dockerCompose("--profile", "tools", "build", "pkinit").CombinedOutput(); err != nil {
-			t.Fatalf("building the pkinit image: %v\n%s", err, tailOf(string(b), 2000))
+			t.Fatalf("building the pkinit image: %v\n%s", err, w.scrubbedTail(string(b), 2000))
 		}
 		if b, err := w.dockerCompose("up", "-d", "dc").CombinedOutput(); err != nil {
-			t.Fatalf("docker compose up dc: %v\n%s", err, tailOf(string(b), 2000))
+			t.Fatalf("docker compose up dc: %v\n%s", err, w.scrubbedTail(string(b), 2000))
 		}
 		w.waitSSH(t, 150*time.Minute)
 		w.run(t, "promote", map[string]any{"dsrm_password": w.sec.DSRMPassword}, 30*time.Minute, nil)
@@ -1407,7 +1501,7 @@ func (l *labDir) setRegistry(t *testing.T, name string, value int) string {
 		Value     string `json:"value"`
 		Restarted string `json:"restarted"`
 	}
-	l.win.run(t, "registry", map[string]any{"name": name, "value": value}, 5*time.Minute, &r)
+	l.win.run(t, "registry", map[string]any{"name": name, "value": value}, winRegistryWithin, &r)
 	if r.Restarted == "NTDS" {
 		l.waitLDAPS(t, 3*time.Minute)
 	}

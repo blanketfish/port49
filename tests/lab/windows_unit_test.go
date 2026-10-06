@@ -3,6 +3,7 @@
 package lab
 
 import (
+	"context"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
@@ -12,15 +13,21 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"math/big"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 	"unicode/utf16"
+
+	"golang.org/x/crypto/ssh"
 
 	"github.com/rhwendt/port49/internal/directory"
 )
@@ -1100,18 +1107,36 @@ func TestWindowsMITVersions(t *testing.T) {
 	}
 }
 
-// A failed step's text is scrubbed before oneLineMax cuts it: cut first and
-// half a password survives the scrub. Every oneLineMax in the DC's runner
-// takes a winScrub, but the two that read the KDC's trace (no secret in it).
+// A failed step's text is scrubbed before it is cut: cut first and half a
+// password survives the scrub. Every oneLineMax in the DC's runner takes a
+// winScrub, but the two that read the KDC's trace (no secret in it), and the
+// only tailOf is the one inside scrubbedTail, which scrubs first (so logTail,
+// the compose failures and down all go through it).
 func TestWindowsScrubsBeforeItCuts(t *testing.T) {
 	b, err := os.ReadFile("windows_test.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	var seen int
+	var seen, tails int
+	inScrubbedTail := false
 	for i, l := range strings.Split(string(b), "\n") {
+		trim := strings.TrimSpace(l)
+		switch {
+		case strings.HasPrefix(l, "func (w *winDC) scrubbedTail("):
+			inScrubbedTail = true
+		case l == "}":
+			inScrubbedTail = false
+		}
+		if strings.HasPrefix(trim, "//") {
+			continue
+		}
+		if strings.Contains(l, "tailOf(") && !strings.HasPrefix(l, "func tailOf") {
+			if tails++; !inScrubbedTail {
+				t.Errorf("windows_test.go:%d: tailOf cuts text outside scrubbedTail", i+1)
+			}
+		}
 		_, rest, ok := strings.Cut(l, "oneLineMax(")
-		if !ok || strings.HasPrefix(strings.TrimSpace(l), "//") || strings.HasPrefix(strings.TrimSpace(l), "func oneLineMax") {
+		if !ok || strings.HasPrefix(trim, "func oneLineMax") {
 			continue
 		}
 		if seen++; strings.HasPrefix(rest, "m[1], ") || strings.HasPrefix(rest, "s, ") || strings.HasPrefix(rest, "winScrub(") {
@@ -1119,7 +1144,138 @@ func TestWindowsScrubsBeforeItCuts(t *testing.T) {
 		}
 		t.Errorf("windows_test.go:%d: oneLineMax is not given a winScrub", i+1)
 	}
-	if seen == 0 {
-		t.Error("the scan found no oneLineMax call: it checks nothing")
+	if seen == 0 || tails == 0 {
+		t.Error("the scan found no oneLineMax or tailOf call: it checks nothing")
+	}
+}
+
+// A password sshd refuses is not the VM still starting: it never mends. A
+// refusal that lasts ten minutes fails the wait at once; any other error, or
+// a refusal after one, starts the count again.
+func TestWindowsAuthWatch(t *testing.T) {
+	refused := errors.New("windows clock: ssh: ssh: handshake failed: ssh: unable to authenticate, attempted methods [none password keyboard-interactive], no supported methods remain")
+	other := errors.New("windows clock: ssh: dial tcp 127.0.0.1:30022: connect: connection refused")
+	t0 := time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC)
+	var a winAuthWatch
+	if a.observe(refused, t0) || a.observe(refused, t0.Add(9*time.Minute+59*time.Second)) {
+		t.Error("a refusal under ten minutes stalls the wait")
+	}
+	if !a.observe(refused, t0.Add(10*time.Minute)) {
+		t.Error("a refusal of ten minutes does not stall the wait")
+	}
+	a = winAuthWatch{}
+	a.observe(refused, t0)
+	a.observe(other, t0.Add(5*time.Minute)) // the VM is not answering at all: not a refusal
+	if a.observe(refused, t0.Add(10*time.Minute)) || a.observe(refused, t0.Add(19*time.Minute)) {
+		t.Error("another error did not start the count again")
+	}
+	if !a.observe(refused, t0.Add(20*time.Minute)) {
+		t.Error("ten minutes after the first refusal since the other error is not a stall")
+	}
+	if a.observe(nil, t0.Add(time.Hour)) || a.observe(refused, t0.Add(time.Hour+time.Minute)) {
+		t.Error("a success did not reset the count")
+	}
+}
+
+// A session the reboot cut (no exit status) is not a bootstrap that wrote
+// nothing; one that exited (with a status) and wrote nothing is.
+func TestWindowsSessionCut(t *testing.T) {
+	for _, c := range []struct {
+		err  error
+		cut  bool
+		name string
+	}{{nil, false, "ran to the end"}, {&ssh.ExitError{}, false, "exited with a status"},
+		{&ssh.ExitMissingError{}, true, "ended without a status"}, {io.EOF, true, "the connection dropped"}} {
+		if got := winSessionCut(c.err); got != c.cut {
+			t.Errorf("%s: cut = %v, want %v", c.name, got, c.cut)
+		}
+	}
+	for _, c := range []struct {
+		e      winScriptErr
+		broken bool
+	}{{winScriptErr{}, true}, {winScriptErr{thrown: true}, false}, {winScriptErr{cut: true}, false}} {
+		if got := c.e.bootstrapBroke(); got != c.broken {
+			t.Errorf("%+v: bootstrapBroke = %v, want %v", c.e, got, c.broken)
+		}
+	}
+}
+
+// registry.ps1 waits up to N minutes for NTDS itself; the Go side outlasts it,
+// or a cell would read a DC that is still restarting.
+func TestWindowsRegistryDeadlineOutlastsTheScript(t *testing.T) {
+	b, _ := winScriptFS.ReadFile("directory/windows/scripts/registry.ps1")
+	m := regexp.MustCompile(`AddMinutes\((\d+)\)`).FindSubmatch(b)
+	if m == nil {
+		t.Fatal("registry.ps1 has no AddMinutes deadline to compare")
+	}
+	n, _ := strconv.Atoi(string(m[1]))
+	if winRegistryWithin < time.Duration(n+2)*time.Minute {
+		t.Errorf("registry's deadline %s does not outlast the script's %d minutes by two", winRegistryWithin, n)
+	}
+}
+
+// A kept DC holds each earlier run's LDAPS certificate: ldaps.ps1 removes the
+// ones the lab CA issued from the NTDS store, by name and never the rest, before
+// it installs the new one.
+func TestWindowsLDAPSRemovesEarlierLabCertificates(t *testing.T) {
+	b, _ := winScriptFS.ReadFile("directory/windows/scripts/ldaps.ps1")
+	src := strings.ReplaceAll(string(b), "\r\n", "\n")
+	after := strings.Index(src, "$t = ")
+	rm := strings.Index(src[after:], "Remove-Item") + after
+	cp := strings.Index(src, "reg.exe copy")
+	if after < 0 || rm < after || cp < rm {
+		t.Fatal("ldaps.ps1 does not remove earlier certificates before it copies the new one")
+	}
+	block := src[strings.LastIndex(src[:cp], "Get-ChildItem"):cp]
+	for _, want := range []string{"Cert:\\LocalMachine\\My", "$_.Issuer -eq $labCA.Subject", "$_.Thumbprint -ne $t",
+		"Services\\NTDS\\SystemCertificates\\My\\Certificates\\$($_.Thumbprint)"} {
+		if !strings.Contains(block, want) {
+			t.Errorf("the removal does not hold %q", want)
+		}
+	}
+}
+
+// The VM's disk lives in Docker's data root, which may be another filesystem
+// than the repository's: its free space is read from the nearest directory
+// that can be read (the root itself is not world-readable).
+func TestWindowsStatfsUp(t *testing.T) {
+	dir := t.TempDir()
+	free, at, err := winStatfsUp(filepath.Join(dir, "no", "such", "dir"))
+	if err != nil || free == 0 || at != dir {
+		t.Errorf("free %d at %q (want %q), err %v", free, at, dir, err)
+	}
+}
+
+// The ISO's download has a deadline and says how far it got.
+func TestWindowsDownloadStallsAndLogs(t *testing.T) {
+	body := strings.Repeat("x", 3000)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/stall" {
+			w.Header().Set("Content-Length", "100000")
+			_, _ = w.Write([]byte("start"))
+			w.(http.Flusher).Flush()
+			<-r.Context().Done()
+			return
+		}
+		_, _ = w.Write([]byte(body))
+	}))
+	defer srv.Close()
+	part := filepath.Join(t.TempDir(), "x.part")
+	var logs []string
+	logf := func(f string, a ...any) { logs = append(logs, fmt.Sprintf(f, a...)) }
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if err := winDownloadTo(ctx, srv.URL+"/stall", part, 1000, logf); err == nil || time.Since(start) > 5*time.Second {
+		t.Errorf("a stalled download did not fail at its deadline: %v after %s", err, time.Since(start))
+	}
+	if err := winDownloadTo(context.Background(), srv.URL+"/ok", part, 1000, logf); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(part); string(got) != body {
+		t.Errorf("the download wrote %d bytes, want %d", len(got), len(body))
+	}
+	if len(logs) == 0 {
+		t.Error("the download logged no progress")
 	}
 }
