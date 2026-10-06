@@ -23,8 +23,8 @@ services:
     # setup builds this tag
     pull_policy: never
     network_mode: none
+    # the image's entrypoint is /bin/sh
     command:
-      - sh
       - -c
       - |
         set -eu
