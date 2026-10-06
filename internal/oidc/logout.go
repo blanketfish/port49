@@ -25,9 +25,10 @@ const MaxLogoutAge = 24 * time.Hour
 // accepting verifier's principal_domains: a logout reaches no principal
 // outside them (Ruling 22).
 type LogoutToken struct {
-	Issuer, Subject, Sid, JTI string
-	IssuedAt, Expires         time.Time
-	Domains                   []string
+	Issuer, Subject, Sid string
+	JTI                  string `json:"-"`
+	IssuedAt, Expires    time.Time
+	Domains              []string
 }
 
 // String withholds the jti, which a replay check keys on (Ruling 18).
@@ -95,15 +96,18 @@ func (s *Set) VerifyLogout(ctx context.Context, raw string) (LogoutToken, error)
 			}
 		}
 	}
-	// An issuer whose keys one verifier could not get is unavailable, whatever
-	// another accepted: a lost race is never a pass (fail closed).
+	// Unlike a bearer, which an unavailable verifier fails closed, a logout
+	// that one verifier validated is applied: it ends sessions and never
+	// grants anything, so refusing it would be the fail-open side. Task 7
+	// gives an issuer's human verifiers distinct client_ids, so at most one
+	// accepts.
 	switch {
-	case unavailable:
-		return LogoutToken{}, refuse(ErrUnavailable, "unavailable", "the keys of %s are not available", iss)
 	case len(got) == 1:
 		return got[0], nil
 	case len(got) > 1:
 		return LogoutToken{}, refuse(ErrInvalid, "invalid", "two human verifiers of %s accept it", iss)
+	case unavailable:
+		return LogoutToken{}, refuse(ErrUnavailable, "unavailable", "the keys of %s are not available", iss)
 	case first == nil:
 		return LogoutToken{}, refuse(ErrInvalid, "invalid", "no human OIDC verifier accepts it")
 	}

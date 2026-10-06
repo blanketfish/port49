@@ -226,6 +226,7 @@ func TestAnotherClientsIDTokenIsRefused(t *testing.T) {
 		"another aud":           {"aud": "other-app"},
 		"two auds, no azp":      {"aud": []string{clientID, "other-app"}},
 		"azp another client":    {"azp": "other-app"},
+		"aud lists an empty":    {"aud": []string{clientID, ""}, "azp": clientID},
 		"two auds, azp another": {"aud": []string{clientID, "other-app"}, "azp": "other-app"},
 	} {
 		extra["preferred_username"] = "alice@corp.example.com"

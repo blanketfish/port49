@@ -2,6 +2,7 @@ package oidc_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -61,6 +62,13 @@ func TestALogoutTokenNeedsWhatBCLRequires(t *testing.T) {
 		"no events":             {"events": nil},
 		"events without member": {"events": map[string]any{"http://example.com/other": map[string]any{}}},
 		"member not an object":  {"events": map[string]any{oidc.BackchannelLogoutEvent: "yes"}},
+		"aud an empty string":   {"aud": []string{""}},
+		"aud lists an empty":    {"aud": []string{clientID, ""}, "azp": clientID},
+		"sid with a space":      {"sid": "s 1"},
+		"sub with a NUL":        {"sub": "a\x00b"},
+		"jti with a space":      {"jti": "j 1"},
+		"jti of 256 bytes":      {"jti": strings.Repeat("j", 256)},
+		"jti a number":          {"jti": 5},
 		"member null":           {"events": map[string]any{oidc.BackchannelLogoutEvent: nil}},
 		"a nonce":               {"nonce": "n"},
 		"neither sub nor sid":   {"sub": nil, "sid": nil},
@@ -119,6 +127,11 @@ func TestAMachineVerifierTakesNoLogout(t *testing.T) {
 	if _, err := set.VerifyLogout(context.Background(), raw); !errors.Is(err, oidc.ErrInvalid) {
 		t.Fatalf("a logout for a machine audience: %v", err)
 	}
+	// A machine verifier has no client_id: an aud of "" must not match it.
+	raw = logoutToken(t, iss, c.Now(), map[string]any{"aud": []string{""}})
+	if _, err := set.VerifyLogout(context.Background(), raw); !errors.Is(err, oidc.ErrInvalid) {
+		t.Fatalf("a logout with an empty aud: %v", err)
+	}
 }
 
 func TestALogoutWithTheProviderDownIsUnavailable(t *testing.T) {
@@ -137,6 +150,9 @@ func TestALogoutTokenWithholdsItsJTI(t *testing.T) {
 		if strings.Contains(fmt.Sprintf(verb, l), "jti-marker") {
 			t.Fatalf("%s prints the jti", verb)
 		}
+	}
+	if b, err := json.Marshal(l); err != nil || strings.Contains(string(b), "jti-marker") {
+		t.Fatalf("json.Marshal encodes the jti: %v", err)
 	}
 }
 
@@ -180,9 +196,11 @@ func TestALogoutTokenTypIsCaseInsensitive(t *testing.T) {
 }
 
 // Two human verifiers of one issuer that both accept a logout token accept
-// none (Ruling 2's rule, for a logout); one that cannot get the keys makes
-// the logout unavailable, whatever the other accepted (fail closed).
-func TestALogoutNeedsExactlyOneVerifierAndAllTheKeys(t *testing.T) {
+// none. Task 7 refuses two with one client_id, so this is defense in depth,
+// not a reachable config. A logout ends sessions and never grants anything,
+// so a verifier that validated it applies it though another verifier of the
+// issuer has no keys: refusing it would be the fail-open side.
+func TestALogoutIsAppliedByTheVerifierThatValidatedIt(t *testing.T) {
 	iss, other, c := oidctest.NewIssuer(t), oidctest.NewIssuer(t), newClock()
 	a, b := human(iss, oidc.ClaimEmail), human(iss, oidc.ClaimEmail)
 	b.PrincipalDomains = []string{"other.example.com"}
@@ -191,12 +209,19 @@ func TestALogoutNeedsExactlyOneVerifierAndAllTheKeys(t *testing.T) {
 	if _, err := set.VerifyLogout(context.Background(), raw); !errors.Is(err, oidc.ErrInvalid) {
 		t.Errorf("two accepting verifiers: %v", err)
 	}
-	// The second verifier's keys are fetched from an issuer that is down.
+	// Distinct client_ids, as Task 7 requires: only a's accepts. b's keys are
+	// fetched from an issuer that is down.
+	set.Verifiers[1].ClientID = "other-app"
 	other.Close()
-	blind := oidc.NewKeySet(oidc.KeySetConfig{Issuer: other.URL, Client: oidc.NewClient(other.Roots()),
+	set.Verifiers[1].Keys = oidc.NewKeySet(oidc.KeySetConfig{Issuer: other.URL, Client: oidc.NewClient(other.Roots()),
 		Refresh: time.Hour, MaxAge: 24 * time.Hour, Now: c.Now, M: set.M})
-	set.Verifiers[1].Keys = blind
+	l, err := set.VerifyLogout(context.Background(), raw)
+	if err != nil || strings.Join(l.Domains, ",") != "corp.example.com" {
+		t.Errorf("one verifier validated it, the other has no keys: %v, %v", l.Domains, err)
+	}
+	// Where no verifier validated it and one has no keys, it is unavailable.
+	set.Verifiers[0].Keys = set.Verifiers[1].Keys
 	if _, err := set.VerifyLogout(context.Background(), raw); !errors.Is(err, oidc.ErrUnavailable) {
-		t.Errorf("one verifier without keys, one accepting: %v", err)
+		t.Errorf("no keys at all: %v", err)
 	}
 }

@@ -442,7 +442,7 @@ func audiences(raw json.RawMessage) ([]string, bool) {
 		return []string{one}, true
 	}
 	var many []string
-	if json.Unmarshal(raw, &many) == nil && len(many) > 0 {
+	if json.Unmarshal(raw, &many) == nil && len(many) > 0 && !slices.Contains(many, "") {
 		return many, true
 	}
 	return nil, false
