@@ -137,3 +137,27 @@ func TestPrewarmSaysAGroupNameThatMatchesNoOne(t *testing.T) {
 		t.Fatalf("%v", w.say.l)
 	}
 }
+
+// A policy group name that two groups share is skipped, and moves the
+// ambiguous gauge; a name that matches no group does not.
+func TestPrewarmASharedNameMovesTheAmbiguousGauge(t *testing.T) {
+	w := newWorld(t)
+	evil := "CN=shared,OU=Users-Can-Create,DC=corp"
+	w.dir.on(uniqueFilter("shared"), grp(gOnCall, "shared"), grp(evil, "shared"))
+	if _, err := w.r.Prewarm(context.Background(), []string{"nobody-has-this"}); err != nil {
+		t.Fatal(err)
+	}
+	if v := testutil.ToFloat64(w.r.M.DirectoryGroupNamesAmbiguous); v != 0 {
+		t.Fatalf("a name matching no group: %v, want 0", v)
+	}
+	if _, err := w.r.Prewarm(context.Background(), []string{"shared"}); err != nil {
+		t.Fatal(err)
+	}
+	if v := testutil.ToFloat64(w.r.M.DirectoryGroupNamesAmbiguous); v != 1 {
+		t.Fatalf("a shared name: %v, want 1", v)
+	}
+	w.clk.Add(time.Hour + time.Minute)
+	if v := testutil.ToFloat64(w.r.M.DirectoryGroupNamesAmbiguous); v != 0 {
+		t.Fatalf("an hour on: %v, want 0", v)
+	}
+}

@@ -277,9 +277,10 @@ type Metrics struct {
 	// none of them. No labels.
 	DirectoryWalksTruncated prometheus.Counter
 	// port49_directory_group_names_ambiguous: group names dropped from
-	// matching because two groups share them, at the last resolution. No
+	// matching because two groups share them, seen in the last hour. No
 	// labels.
-	DirectoryGroupNamesAmbiguous prometheus.Gauge
+	DirectoryGroupNamesAmbiguous prometheus.GaugeFunc
+	directoryGroupNamesAmbiguous atomic.Pointer[func() float64]
 	// port49_directory_lookups_total{outcome}: directory resolutions by
 	// outcome: fresh (a server answered), grace (the store's membership,
 	// within directory.grace), unavailable (no server and no grace),
@@ -459,6 +460,11 @@ func (m *Metrics) SetDirectoryBindHoldoff(remaining func() float64) {
 	m.directoryBindHoldoff.Store(&remaining)
 }
 
+// SetDirectoryGroupNamesAmbiguous sets what port49_directory_group_names_ambiguous reports.
+func (m *Metrics) SetDirectoryGroupNamesAmbiguous(count func() float64) {
+	m.directoryGroupNamesAmbiguous.Store(&count)
+}
+
 // CountAdmissionRefused sets what port49_devices_admission_refused reports.
 func (m *Metrics) CountAdmissionRefused(count func() int) { m.admissionRefused.Store(&count) }
 
@@ -588,8 +594,6 @@ func New(reg prometheus.Registerer) *Metrics {
 			Help: "Selections that crossed sites: consistency events, membership read there may lag replication (design §10)."}),
 		DirectoryWalksTruncated: prometheus.NewCounter(prometheus.CounterOpts{Name: "port49_directory_walks_truncated_total",
 			Help: "Nested-group walks that ended at max_depth or the node bound with groups unconfirmed; those groups are not granted."}),
-		DirectoryGroupNamesAmbiguous: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_directory_group_names_ambiguous",
-			Help: "Group names that match no one because two groups under groups_base_dn share them."}),
 		DirectoryLookups: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_directory_lookups_total",
 			Help: "Directory resolutions by outcome: fresh, grace, unavailable, unmapped, ambiguous, collision."},
 			[]string{"outcome"}),
@@ -666,6 +670,13 @@ func New(reg prometheus.Registerer) *Metrics {
 		Help: "Seconds left in the hold-off after a directory server refused the broker's bind, during which no unbound server is dialled; 0 when clear."}, func() float64 {
 		if remaining := m.directoryBindHoldoff.Load(); remaining != nil {
 			return (*remaining)()
+		}
+		return 0
+	})
+	m.DirectoryGroupNamesAmbiguous = prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: "port49_directory_group_names_ambiguous",
+		Help: "Group names that match no one because two groups under groups_base_dn share them, seen in the last hour."}, func() float64 {
+		if count := m.directoryGroupNamesAmbiguous.Load(); count != nil {
+			return (*count)()
 		}
 		return 0
 	})

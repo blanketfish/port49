@@ -62,7 +62,14 @@ type Resolver struct {
 
 	mu   sync.Mutex
 	said map[string]time.Time
+	// ambiguous is each shared group name's last sighting, by verify and
+	// by pre-warm: the gauge counts those seen within ambiguousWindow.
+	ambiguous map[string]time.Time
 }
+
+// ambiguousWindow is how long a shared group name counts as ambiguous
+// after it was last seen: the hourly cadence of its log line.
+const ambiguousWindow = time.Hour
 
 // TTL is a membership record's lease: past grace, so a policy reload
 // judges a context by the membership its principal last had (Ruling 10).
@@ -257,6 +264,7 @@ func (r *Resolver) verify(ctx context.Context, q lookup) (Answer, error) {
 			"each path ended at the revisit", printsafe.Line(id.DN, 200), g.Loops)
 	}
 	if len(g.Ambiguous) > 0 {
+		r.noteAmbiguous(g.Ambiguous...)
 		r.sayOnce("names:"+strings.Join(g.Ambiguous, ","), time.Hour, "directory: group name(s) %s are shared by "+
 			"two or more groups under %s; a subject naming one matches no one (use its DN)",
 			printsafe.Line(strings.Join(g.Ambiguous, ", "), 400), r.Cfg.GroupsBaseDN)
@@ -431,4 +439,34 @@ func (r *Resolver) sayOnce(key string, every time.Duration, format string, args 
 	r.said[key] = now
 	r.mu.Unlock()
 	r.Say(format, args...)
+}
+
+// noteAmbiguous records names as shared by two or more groups, seen now,
+// and hands the gauge its count on the first sighting.
+func (r *Resolver) noteAmbiguous(names ...string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.ambiguous == nil {
+		r.ambiguous = map[string]time.Time{}
+		r.M.SetDirectoryGroupNamesAmbiguous(r.ambiguousCount)
+	}
+	now := r.Now()
+	for _, n := range names {
+		r.ambiguous[n] = now
+	}
+}
+
+// ambiguousCount is the names seen shared within ambiguousWindow, the
+// older ones dropped. It is what a scrape reads, so the gauge falls back
+// to 0 with no resolution to reset it.
+func (r *Resolver) ambiguousCount() float64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	now := r.Now()
+	for n, seen := range r.ambiguous {
+		if now.Sub(seen) >= ambiguousWindow {
+			delete(r.ambiguous, n)
+		}
+	}
+	return float64(len(r.ambiguous))
 }

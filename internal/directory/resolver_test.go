@@ -566,3 +566,34 @@ func TestAFailedOverQueryRefusesOnTheLaterAnswerAlone(t *testing.T) {
 		t.Fatalf("dc-01's partial answer wrote a refusal for alice: %+v %v", m, err)
 	}
 }
+
+// A name two groups share moves port49_directory_group_names_ambiguous, and
+// it stays up through resolutions that see no shared name (an alert on it
+// must not flap); an hour after the last sighting it is 0 again.
+func TestASharedGroupNameMovesTheAmbiguousGauge(t *testing.T) {
+	w := newWorld(t)
+	evil := "CN=netops-oncall,OU=Users-Can-Create,DC=corp"
+	w.dir.on(uniqueFilter("netops-oncall"), grp(gOnCall, "netops-oncall"), grp(evil, "netops-oncall"))
+	gauge := func() float64 { return testutil.ToFloat64(w.r.M.DirectoryGroupNamesAmbiguous) }
+	if gauge() != 0 {
+		t.Fatalf("before: %v", gauge())
+	}
+	if _, err := w.r.Map(context.Background(), aliceCert(t)); err != nil {
+		t.Fatal(err)
+	}
+	if gauge() != 1 {
+		t.Fatalf("after a walk with a shared name: %v, want 1", gauge())
+	}
+	w.dir.on(uniqueFilter("netops-oncall"), grp(gOnCall, "netops-oncall")) // fixed in the directory
+	w.clk.Add(30 * time.Minute)
+	if _, err := w.r.Verify(context.Background(), alicePrincipal); err != nil {
+		t.Fatal(err)
+	}
+	if gauge() != 1 {
+		t.Fatalf("a clean resolution reset it: %v, want 1", gauge())
+	}
+	w.clk.Add(31 * time.Minute)
+	if gauge() != 0 {
+		t.Fatalf("an hour after the last sighting: %v, want 0", gauge())
+	}
+}

@@ -39,6 +39,9 @@ func (r *Resolver) Prewarm(ctx context.Context, groups []string) (PrewarmReport,
 			if err != nil && !ldap.IsErrorWithCode(err, ldap.LDAPResultSizeLimitExceeded) {
 				return err
 			}
+			if err != nil || (res != nil && len(res.Entries) > 1) {
+				r.noteAmbiguous(g) // the size-limit error, or two entries: shared
+			}
 			if res == nil || len(res.Entries) != 1 {
 				// none, or shared: it matches no one (Ruling 7)
 				r.sayOnce("prewarmname:"+g, time.Hour, "directory: pre-warm: group name %q matched no group, or two or "+

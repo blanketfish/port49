@@ -746,3 +746,46 @@ func TestExplainOfOneselfRefusedIsTheCallersRefusal(t *testing.T) {
 		t.Fatalf("%v", recs)
 	}
 }
+
+// A reload that declares the member's username lands between the membership
+// read and the policy hold: the mint refuses username_collision under the
+// policy it holds, and mints nothing (final review M-1).
+func TestAReloadBetweenTheMemberAndTheHoldRefusesAMint(t *testing.T) {
+	a := answerFor(corpAlice, "alice")
+	f, _ := groupFixture(t, nil, nil)
+	var reloaded bool
+	f.b.Directory = directory.ForTestsFuncResolver(f.st, func(principal string) (directory.Answer, error) {
+		if !reloaded {
+			reloaded = true
+			f.reloadDir(t, aliceDeclared) // lands after memberFor reads, before Hold
+		}
+		return a, nil
+	})
+	w := f.mintOnPinned(a, `["leaf1"]`)
+	if w.Code != 401 || !strings.Contains(w.Body.String(), "username_collision") {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	if toks, _ := f.st.Candidates(context.Background(), store.TokenKey{NAS: "leaf1", Username: "alice"}); len(toks) != 0 {
+		t.Fatalf("minted %d tokens", len(toks))
+	}
+	mints := eventsOf(f.records(t), "mint")
+	if len(mints) != 1 || mints[0]["verdict"] != "deny" || mints[0]["reason"] != "username_collision" {
+		t.Fatalf("%v", mints)
+	}
+}
+
+// The same for a session refresh: the member read under the old policy is
+// refused under the held one, and nothing is extended.
+func TestAReloadBetweenTheMemberAndTheHoldRefusesARefresh(t *testing.T) {
+	a := answerFor(corpAlice, "alice")
+	f, _ := groupFixture(t, map[string]directory.Answer{corpAlice: a}, nil)
+	before := f.memberContext(t, a, "leaf1", f.now.Add(-time.Hour))
+	f.reloadDir(t, aliceDeclared)
+	_, err := f.b.RefreshSession(context.Background(), member(a), &a, store.Credential{Method: "cert"}, f.b.Now())
+	if !errors.Is(err, directory.ErrUsernameTaken) {
+		t.Fatalf("%v", err)
+	}
+	if got := f.context(t, "leaf1", "alice"); !got.RefreshedAt.Equal(before.RefreshedAt) || !got.RevokedAt.IsZero() {
+		t.Fatalf("a refused refresh touched the context: %+v", got)
+	}
+}

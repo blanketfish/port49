@@ -382,6 +382,18 @@ func (b *Broker) tokens(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	defer release()
+	// A reload can land between the membership read and the hold, and
+	// declare the username the directory gave this member: the collision
+	// is judged again under the policy the mint holds, as verify judged it
+	// under the one it saw (final review M-1).
+	if m.Directory && pol.DeclaredUsernames()[m.Username] != "" {
+		release()
+		ref := directoryRefusal(directory.ErrUsernameTaken)
+		b.emit(decision.Record{TS: now, Event: decision.EventMint, Verdict: decision.VerdictDeny, Reason: ref.Reason,
+			Principal: principal, Auth: &decision.Auth{Method: cred.Method, Fingerprint: cred.Fingerprint}})
+		b.answerRefusal(w, r, ref)
+		return
+	}
 	if b.MintGate != nil {
 		if err := b.MintGate(pol); err != nil {
 			release()

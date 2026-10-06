@@ -159,6 +159,14 @@ func (b *Broker) refresh(w http.ResponseWriter, r *http.Request) {
 	h.at, h.lastRefresh = at, at
 	h.mu.Unlock()
 	rep, err := b.RefreshSession(ctx, m, answer, cred, at)
+	if errors.Is(err, directory.ErrUsernameTaken) {
+		dref := directoryRefusal(err)
+		b.Metrics.SessionRefreshes.WithLabelValues("refused").Inc()
+		b.emit(decision.Record{TS: at, Event: decision.EventRefresh, Verdict: decision.VerdictDeny, Reason: dref.Reason,
+			Principal: principal, Auth: &decision.Auth{Method: cred.Method, Fingerprint: cred.Fingerprint}})
+		b.answerRefusal(w, r, dref)
+		return
+	}
 	if err != nil {
 		b.refreshStoreError(w, at, principal, cred, refreshEvery, partialRefreshText) // fixed text (M5)
 		return
@@ -264,6 +272,11 @@ func (b *Broker) RefreshSession(ctx context.Context, m policy.Member, answer *di
 		buf.Flush(b.Log, b.blobLanded)
 	}()
 	rep := SessionRefreshReport{At: at}
+	// The member was read before the hold: a reload since may declare its
+	// username (final review M-1). The caller answers username_collision.
+	if m.Directory && pol.DeclaredUsernames()[m.Username] != "" {
+		return rep, directory.ErrUsernameTaken
+	}
 	refs, err := b.Store.ContextsByPrincipal(ctx, principal)
 	if err != nil {
 		return rep, err
