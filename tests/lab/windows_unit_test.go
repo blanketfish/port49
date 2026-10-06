@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -880,6 +881,47 @@ func TestWindowsScriptsCheckNativeExitCodes(t *testing.T) {
 			if !ok {
 				t.Errorf("%s:%d: no $LASTEXITCODE check follows the native command", e.Name(), i+1)
 			}
+		}
+	}
+}
+
+// The DC's name resolves to 127.0.0.1 in this process, in any case, and no
+// other name resolves by way of it; localhost still comes from /etc/hosts.
+func TestWindowsResolveDC(t *testing.T) {
+	winResolveDC(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for _, name := range []string{winDCHost, strings.ToUpper(winDCHost)} {
+		if got, err := net.DefaultResolver.LookupHost(ctx, name); err != nil || len(got) != 1 || got[0] != "127.0.0.1" {
+			t.Errorf("%s resolves to %v (%v), want [127.0.0.1]", name, got, err)
+		}
+	}
+	if got, err := net.DefaultResolver.LookupHost(ctx, "dc2.corp.example.com"); err == nil {
+		t.Errorf("dc2.corp.example.com resolves to %v, want no such host", got)
+	}
+	if got, err := net.DefaultResolver.LookupHost(ctx, "localhost"); err != nil || len(got) == 0 {
+		t.Errorf("localhost resolves to %v (%v)", got, err)
+	}
+}
+
+// The Windows URIs name the DC, and no script adds an SPN for another name:
+// port49's GSSAPI bind asks for ldap/<the URI's host>.
+func TestWindowsURIsNameTheDC(t *testing.T) {
+	src, _ := os.ReadFile("windows_test.go")
+	for _, want := range []string{`uri: "ldaps://" + winDCHost + ":30636"`, `plainURI: "ldap://" + winDCHost + ":30389"`} {
+		if !strings.Contains(string(src), want) {
+			t.Errorf("windows_test.go does not set %s", want)
+		}
+	}
+	run, res := strings.Index(string(src), "winResolveDC(t)"), strings.Index(string(src), "l := &labDir{name: platWindows")
+	if run < 0 || res < 0 || run > res {
+		t.Error("startWindowsDC does not call winResolveDC before it makes the Windows labDir")
+	}
+	ents, _ := winScriptFS.ReadDir("directory/windows/scripts")
+	for _, e := range ents {
+		b, _ := winScriptFS.ReadFile("directory/windows/scripts/" + e.Name())
+		if strings.Contains(string(b), "ldap/localhost") {
+			t.Errorf("%s adds ldap/localhost, which the DC does not keep", e.Name())
 		}
 	}
 }

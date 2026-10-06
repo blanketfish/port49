@@ -1312,7 +1312,10 @@ func startWindowsDC(t *testing.T, d *directories) *labDir {
 		w.state = winState{Built: true, AliceCreated: seed.AliceCreated, Loop: seed.Loop}
 		winWriteJSON0600(t, filepath.Join(w.dir, "state.json"), w.state)
 	}
-	l := &labDir{name: platWindows, service: "dc", uri: "ldaps://localhost:30636", plainURI: "ldap://localhost:30389",
+	// The URIs name the DC, as an operator's would; this process resolves that
+	// name to the published ports (windows_resolve_test.go says why).
+	winResolveDC(t)
+	l := &labDir{name: platWindows, service: "dc", uri: "ldaps://" + winDCHost + ":30636", plainURI: "ldap://" + winDCHost + ":30389",
 		bindDN: "CN=port49,OU=Svc," + dirBase, userFilter: "(&(objectCategory=person)(objectClass=user))",
 		groupFilter: "(objectClass=group)", usernameAttr: "sAMAccountName", baseDN: dirBase, groupsBaseDN: "OU=G," + dirBase,
 		image: winImage, d: d, win: w,
@@ -1680,8 +1683,10 @@ func (w *winDC) configNote() string {
 		"as on Samba.\n" +
 		"- LDAPS serves a certificate from the lab CA (`localhost`, `dc1.corp.example.com`, 127.0.0.1), placed in the NTDS " +
 		"service's own store; the lab CA is in the DC's Root store.\n" +
-		"- The DC's account carries the extra SPN `ldap/localhost`, as on Samba; the client `krb5.conf` reaches the KDC at " +
-		"127.0.0.1:30088 over TCP.\n" +
+		"- The URIs name the DC, `dc1.corp.example.com`, which the test process alone resolves to 127.0.0.1, so port49's " +
+		"GSSAPI bind asks for `ldap/dc1.corp.example.com`, an SPN the DC keeps itself. `ldap/localhost`, added to `DC1$` " +
+		"as on Samba, left the account within minutes twice, with no 4742 event naming who removed it. The client " +
+		"`krb5.conf` reaches the KDC at 127.0.0.1:30088 over TCP.\n" +
 		"- `port49` is an ordinary domain user, AES only; its keytab is made with `ktpass` (AES256-SHA1, " +
 		"`-mapuser CORP\\port49`), which also sets its UPN. `ktpass` takes the password on its own command line inside " +
 		"the VM, the one place a secret is on a command line.\n" +

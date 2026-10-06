@@ -40,7 +40,4 @@ try { Add-ADGroupMember g-loop-b -Members g-loop-a } catch { $loop = 'refused: '
 # under another and its CN renamed, as samba/seed.sh does.
 Add-LabGroup netops-oncall-uc Users-Can-Create
 Rename-ADObject "CN=netops-oncall-uc,OU=Users-Can-Create,$base" -NewName netops-oncall
-# port49 binds GSSAPI to ldap/<the URI's host>, and the lab's URI host is localhost.
-setspn.exe -S ldap/localhost DC1 | Out-Null
-if ($LASTEXITCODE -ne 0) { throw "setspn ldap/localhost: exit $LASTEXITCODE" }
 @{ loop = $loop; alice_created = (Get-ADUser alice -Properties whenCreated).whenCreated.ToUniversalTime().ToString('o') }
