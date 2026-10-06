@@ -7306,7 +7306,7 @@ every matching subject composes, and a scheduled refresh stamps refreshed_at.** 
 - **18. What is never logged.** The bind password, the keytab, a ticket, a server's message
   beyond `printsafe.Line`'s 300 bytes, a certificate value the mapping found unprintable. A
   principal, a DN and a group DN may be logged, each through `printsafe.Line`. Tasks 7, 8 and 10.
-- **19. The metrics.** No label names a device or a principal; `server` is the configured URI.
+- **19. The metrics.** No label names a device or a principal; `server` is the configured URI's `host:port`.
   `port49_directory_queries_total{server,outcome}`, `port49_directory_server_up`,
   `port49_directory_selected`, `port49_directory_site_crossings_total`,
   `port49_directory_lookups_total{outcome}`, `port49_directory_walks_truncated_total`,

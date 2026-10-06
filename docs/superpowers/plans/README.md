@@ -3978,6 +3978,11 @@ fix round 4 stayed with the Sonnet implementer instead of escalating (the model 
   - Revocation marks made before the change still apply: a certificate is checked against the
     principal its email SAN gave as well as the mapped one. Marks made from now on name the
     mapped principal.
+  - **The first scheduled pass after a directory is turned on revokes every live session
+    `identity_unmapped`** when `principal_attribute` differs from the email SAN: each session's
+    principal is the legacy one, and `Verify` finds no entry for it. That pass also stores a 24h
+    refusal for each legacy principal; its pin is empty, so it blocks no one. People log in
+    again.
   - **`port49 policy check` does not know the broker's mode** (`DirectoryUnknown`), so CI can pass
     a policy a directory broker (a human `username`) or a directory-less one (no human
     `username`) refuses at reload. Check the mode in the pipeline until a flag exists.
@@ -3988,8 +3993,10 @@ fix round 4 stayed with the Sonnet implementer instead of escalating (the model 
     colleague out until fixed, but never make one person another.
   - Both attributes need a **case-insensitive equality matching rule**. port49 searches for the
     value to check it is one entry's alone, and a rule that is case-sensitive can miss the entry
-    itself; a search that does not return the entry itself is
-    `identity_ambiguous`. A principal and username are printable ASCII only.
+    itself. At a bind that search not returning the entry itself is `identity_ambiguous`; at a
+    re-check (`Verify`, which searches the lower-cased value) it finds nothing and answers
+    `identity_unmapped`, so the scheduled pass revokes the session under that code. A principal
+    and username are printable ASCII only.
   - A principal is pinned to the entry it was verified on (`objectGUID` or `entryUUID`): another
     entry later given the same value is refused `identity_unmapped` for as long as the record
     lives (`max(grace, 24h)` after its last verification). An OU move keeps the pin; where the
@@ -4084,7 +4091,14 @@ fix round 4 stayed with the Sonnet implementer instead of escalating (the model 
     (deleted, ambiguous, a username taken) stays refused through it. Past grace: 503
     `directory_unavailable`.
   - **Live sessions** continue until the ceiling; a past-grace member keeps the last username, so
-    the session is not revoked in a long outage.
+    the session is not revoked in a long outage. **That holds for 24h.** The stored membership
+    lives `max(grace, 24h)` from its last write and an outage writes nothing, so past 24h a broker
+    restart or any policy reload revokes every directory session (`identity_unmapped` or
+    `no_grants_matched`), whatever `staleness_ceiling` is set to, `0s` included. Carried to the
+    pre-beta review.
+  - **A removed member's tokens.** A member removed from a group who holds a token and no context
+    is not reached by the scheduled pass; the exposure is bounded by `token_ttl` +
+    `refresh_interval`. `port49 revoke` cuts someone off at once.
   - **Revocation.** `port49 revoke` works throughout and needs no directory; revoking your own
     sessions never asks it.
   - **A stopped directory** is a fault, not "no such person": a close before, between or during a
@@ -4143,6 +4157,10 @@ fix round 4 stayed with the Sonnet implementer instead of escalating (the model 
   username (Task 15 P5); a fail-closed nuisance. There is no unlabeled count of unverified
   principals, every pass reads every stored membership, and a removed member with a token and no
   context is not reached by the scheduled pass (m-2).
+- Past 24h of directory outage the membership record expires and a restart or reload revokes
+  every directory session (final review M-2); the fix is to keep a live context's `c.Username`
+  when no record is stored, or to renew the record's lease, not its `VerifiedAt`, while the
+  directory is silent. Docs say so now; the code is carried to the pre-beta review.
 - `Narrowed` is set on a widening too (Task 14 M-2); it costs a re-mint.
 - `duties` has no test of its own beyond the etcd one (Task 16); `ldapClient` is exercised by the
   lab only.

@@ -535,7 +535,7 @@ his call.
     - **What may be logged.** A principal, a DN and a group DN are identity, not secrets, and
       may be logged. Each is passed through `printsafe.Line`: a DN is attacker-influenced text
       when someone else can write the directory.
-19. **The metrics.** No label names a device or a principal. `server` is the configured URI, a
+19. **The metrics.** No label names a device or a principal. `server` is the configured URI's `host:port`, a
     bounded set.
     - `port49_directory_queries_total{server,outcome}`: `ok`, `fault`, `error`, `refused` (a
       dial or bind the server refused without a fault).
