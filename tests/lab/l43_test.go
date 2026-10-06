@@ -171,8 +171,12 @@ func TestL43BindMechanisms(t *testing.T) {
 					t.Errorf("Samba accepted a simple bind over plain LDAP under allow_sasl_over_tls: %+v", plain2)
 				}
 			}
-			fmt.Fprintf(&obs, "\nWhether the directory's LDAPS asked the client for a certificate (what EXTERNAL needs): %s. "+
-				"A Samba refusal of EXTERNAL says nothing about a Windows DC (L44).\n", dir.certRequested(t))
+			fmt.Fprintf(&obs, "\nWhether the directory's LDAPS asked the client for a certificate (what EXTERNAL needs): %s.",
+				dir.certRequested(t))
+			if dir.name == platSamba {
+				obs.WriteString(" A Samba refusal of EXTERNAL says nothing about a Windows DC (L44).")
+			}
+			obs.WriteString("\n")
 
 			// The harness's own preconditions: a directory this lab
 			// configured to accept a mechanism, and that does not, is a
