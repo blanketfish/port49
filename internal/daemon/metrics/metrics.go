@@ -296,6 +296,16 @@ type Metrics struct {
 	// time of the last scheduled refresh that verified every principal, 0
 	// before one has. No labels: no principal or device.
 	DirectoryRefreshLastComplete prometheus.Gauge
+	// port49_oidc_keys_last_success_timestamp_seconds{issuer}: the Unix
+	// time the keys held were fetched: 0 from the key set's creation until
+	// a fetch or a restore, and after a restore the kept set's fetched_at,
+	// so a restart during an outage keeps the alert firing (plan 7h,
+	// pre-flight I-4). Alert on time() - it > jwks_max_age / 2 or absent(it),
+	// with a for: of a few minutes to pass a start's first fetch.
+	OIDCKeysLastSuccess *prometheus.GaugeVec
+	// port49_oidc_keys_fetch_failures_total{issuer}: discovery or JWKS
+	// fetches that failed.
+	OIDCKeysFetchFailures *prometheus.CounterVec
 	// port49_policy_reloads_total{outcome}: attempts to put a changed policy
 	// file in force (plan 4b) — "applied", "unchanged" (a SIGHUP with nothing
 	// new), or "refused" (the file does not load; the policy in force keeps
@@ -603,6 +613,12 @@ func New(reg prometheus.Registerer) *Metrics {
 			Help: "The Unix time the last pre-warm pass finished; 0 before one has."}),
 		DirectoryRefreshLastComplete: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_directory_refresh_last_complete_timestamp_seconds",
 			Help: "The Unix time of the last scheduled refresh that verified every principal; 0 before one has."}),
+		OIDCKeysLastSuccess: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "port49_oidc_keys_last_success_timestamp_seconds",
+			Help: "Unix time the OIDC issuer's held keys were fetched (restored included), 0 before any."}, []string{"issuer"}),
+		OIDCKeysFetchFailures: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "port49_oidc_keys_fetch_failures_total",
+			Help: "OIDC discovery or JWKS fetches that failed, by configured issuer."}, []string{"issuer"}),
 		PolicyReloads: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_policy_reloads_total",
 			Help: "Attempts to put a changed policy file in force, by outcome."}, []string{"outcome"}),
 		PolicyFileRefused: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_policy_file_refused",
@@ -687,7 +703,7 @@ func New(reg prometheus.Registerer) *Metrics {
 		m.DevicesQuarantined, m.DevicesAdmissionRefused, m.ContextRefreshes, m.ContextsReindexed,
 		m.ContextsReindexFailures, m.SessionRefreshes, m.TokensSuperseded, m.CeilingWarnings,
 		m.Revocations, m.RevocationsInForce, m.RevocationsFileFailed, m.CertStatusChecks, m.CRLLoads, m.CRLNextUpdate,
-		m.CertStatusUnavailable, m.DirectoryQueries, m.DirectoryServerUp, m.DirectorySelected, m.DirectorySiteCrossings, m.DirectoryBindHoldoff, m.DirectoryWalksTruncated, m.DirectoryGroupNamesAmbiguous, m.DirectoryLookups, m.DirectoryPrewarmPrincipals, m.DirectoryPrewarmLastSuccess, m.DirectoryRefreshLastComplete, m.PolicyReloads, m.PolicyFileRefused,
+		m.CertStatusUnavailable, m.DirectoryQueries, m.DirectoryServerUp, m.DirectorySelected, m.DirectorySiteCrossings, m.DirectoryBindHoldoff, m.DirectoryWalksTruncated, m.DirectoryGroupNamesAmbiguous, m.DirectoryLookups, m.DirectoryPrewarmPrincipals, m.DirectoryPrewarmLastSuccess, m.DirectoryRefreshLastComplete, m.OIDCKeysLastSuccess, m.OIDCKeysFetchFailures, m.PolicyReloads, m.PolicyFileRefused,
 		m.PolicyRefreshPending, m.PolicyBundleMatchesRunner, m.BrokerMintGateClosed, m.RedemptionRestoreGuarded,
 		m.InventoryReloads,
 		m.InventoryFileRefused,
