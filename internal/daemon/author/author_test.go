@@ -525,6 +525,11 @@ func TestStaleContextDenies(t *testing.T) {
 	if resp.Status != wire.AuthorStatusFail || lastRecord(t, log)["reason"] != "context_stale" {
 		t.Fatalf("%+v %v", resp, lastRecord(t, log))
 	}
+	// port49d cannot tell a broker outage from a directory it cannot verify
+	// against: the message blames neither alone (plan 7g Task 18 review, I2).
+	if !strings.Contains(string(resp.ServerMsg), "broker is unreachable or cannot verify your directory membership") {
+		t.Fatalf("server_msg %q", resp.ServerMsg)
+	}
 }
 
 // The name says what it asserts: the context is still there afterwards,

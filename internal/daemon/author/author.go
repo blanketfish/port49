@@ -295,7 +295,7 @@ func (h *Handler) Handle(ctx context.Context, peer authen.Peer, req wire.AuthorR
 	// that only ever moves at login denies a steadily working operator "the
 	// broker is unreachable" at login + the ceiling, with no broker to reach.
 	if h.stalenessCeiling > 0 && !c.RefreshedAt.IsZero() && now.Sub(c.RefreshedAt) > h.stalenessCeiling {
-		return h.deny(rec, decision.ContextStale, "port49: policy has not been refreshed within the staleness ceiling - the broker is unreachable")
+		return h.deny(rec, decision.ContextStale, "port49: policy has not been refreshed within the staleness ceiling - the broker is unreachable or cannot verify your directory membership")
 	}
 	if req.PrivLvl > c.PrivLvl {
 		return h.deny(rec, decision.PrivilegeExceeded, "port49: request is above the session's privilege level")
