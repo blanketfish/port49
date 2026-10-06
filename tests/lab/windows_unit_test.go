@@ -32,7 +32,10 @@ func TestWindowsSecretsPrintAsNames(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Every verb, on the pointer and on the value.
-	out := fmt.Sprintf("%v %+v %#v %s %v %+v %#v %s", s, s, s, s, *s, *s, *s, *s)
+	var out string
+	for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%q", "%x", "%X", "%d"} {
+		out += fmt.Sprintf(verb+" "+verb+" ", s, *s)
+	}
 	for i, v := range s.all() {
 		if v == "" || strings.Contains(out, v) {
 			t.Fatalf("secret %d is empty or printed", i)
@@ -345,6 +348,14 @@ func TestWindowsParseKinit(t *testing.T) {
 		"kinit: Certificate verification failed while verifying KDC certificate\nlab: kinit exit 1\n"
 	if c := winParseKinit(big); c.ok || c.kdcRefused() || strings.Contains(c.kdcSaid(), "-1765328332") {
 		t.Fatalf("a UDP size retry read as the KDC's refusal: %+v", c)
+	}
+	// The skip is per line: a real refusal in the same trace still counts.
+	bigThenMismatch := "[7] 1.2: Received error from KDC: -1765328359/Additional pre-authentication required\n" +
+		"[7] 1.3: Received error from KDC: -1765328332/Response too big for UDP, retry with TCP\n" +
+		"[7] 1.4: Received error from KDC: -1765328318/KDC_ERR_CERTIFICATE_MISMATCH\nlab: kinit exit 1\n"
+	if c := winParseKinit(bigThenMismatch); !c.kdcRefused() || !strings.Contains(c.kdcSaid(), "-1765328318") ||
+		strings.Contains(c.kdcSaid(), "-1765328332") {
+		t.Fatalf("a UDP size retry hid the KDC's refusal (66): %+v", c)
 	}
 	// A PKINIT certificate-validation code from the KDC is a setup failure;
 	// 66, CERTIFICATE_MISMATCH, is the mapping's verdict.
