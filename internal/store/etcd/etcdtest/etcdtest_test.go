@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"go.etcd.io/etcd/server/v3/storage/wal"
 )
 
 // A port another process takes between the pick and the bind is the
@@ -182,5 +184,34 @@ func TestARestoreTakesTheStoreBack(t *testing.T) {
 	if err != nil || len(resp.Kvs) != 0 || resp.Header.Revision != at.Header.Revision {
 		t.Fatalf("after a restore: %v at revision %d, the backup's %d: %v", resp.Kvs, resp.Header.Revision,
 			at.Header.Revision, err)
+	}
+}
+
+// The sweep at Main's start removes a data directory only when its name
+// says it is a port49-etcd one, names a pid, and that pid is dead: a live
+// run's directory and any other name are left alone.
+func TestStaleDirDecision(t *testing.T) {
+	alive := func(pid int) bool { return pid == 4242 }
+	for name, want := range map[string]bool{
+		"port49-etcd-1111-998877": true,  // a dead pid
+		"port49-etcd-4242-998877": false, // a live pid
+		"port49-etcd-998877":      false, // the old name: no pid, not ours to judge
+		"port49-etcd-x-998877":    false, // not a pid
+		"port49-etcd-1111":        false, // no suffix: not MkdirTemp's
+		"TestSomething123":        false, // a foreign name
+		"other-port49-etcd-1-2":   false,
+		"port49-etcd-0-998877":    false, // pid 0 is no process to judge
+		"port49-etcd--5-998877":   false,
+	} {
+		if got := staleDir(name, alive); got != want {
+			t.Errorf("staleDir(%q) = %v, want %v", name, got, want)
+		}
+	}
+}
+
+// The WAL segment is small, so a member the tests leak costs megabytes.
+func TestTheWALSegmentIsSmall(t *testing.T) {
+	if wal.SegmentSizeBytes > 1<<20 {
+		t.Fatalf("wal.SegmentSizeBytes = %d", wal.SegmentSizeBytes)
 	}
 }
