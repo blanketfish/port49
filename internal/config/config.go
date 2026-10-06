@@ -1668,6 +1668,11 @@ func ownRevocationsFile(c Config, b BrokerConfig) error {
 		others = append(others, struct{ key, path string }{"broker.identity's kept keys for " + iss,
 			filepath.Join(BrokerStateDir(&b), oidc.KeyFileName(iss))})
 	}
+	if b.Identity != nil {
+		for _, v := range b.Identity.OIDC {
+			others = append(others, struct{ key, path string }{"broker.identity's ca_file for " + v.Issuer, v.CAFile})
+		}
+	}
 	if c.Lab != nil {
 		others = append(others, struct{ key, path string }{"lab.seed_token_file", c.Lab.SeedTokenFile},
 			struct{ key, path string }{"lab.fault_file", c.Lab.FaultFile})

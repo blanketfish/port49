@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -119,11 +121,11 @@ func TestIdentityRefusals(t *testing.T) {
 		"no principal_claim": {"  identity:\n    humans: [{type: oidc, " + iss + ", client_id: c, principal_domains: [corp.example.com]}]\n",
 			"broker.identity.humans[0].principal_claim is required: one of preferred_username, email or upn"},
 		"bad claim": {"  identity:\n    humans: [{type: oidc, " + iss + ", client_id: c, principal_claim: groups}]\n",
-			"broker.identity.humans[0].principal_claim groups: one of preferred_username, email or upn"},
+			"broker.identity.humans[0].principal_claim \"groups\": one of preferred_username, email or upn"},
 		"no principal_domains": {"  identity:\n    humans: [{type: oidc, " + iss + ", client_id: c, principal_claim: email}]\n",
 			"broker.identity.humans[0].principal_domains is required"},
 		"a domain with an @": {"  identity:\n    humans: [{type: oidc, " + iss + ", client_id: c, principal_claim: email, principal_domains: [a@corp.example.com]}]\n",
-			"broker.identity.humans[0].principal_domains: a@corp.example.com is not a domain"},
+			"broker.identity.humans[0].principal_domains: \"a@corp.example.com\" is not a domain"},
 		"domains overlap across issuers": {"  identity:\n    humans: [{" + hum + "}, {" + other + ", principal_domains: [Corp.Example.com]}]\n",
 			"broker.identity.humans[1].principal_domains: corp.example.com is also broker.identity.humans[0]'s, at another issuer"},
 		"two claims at one issuer": {"  identity:\n    humans: [{" + hum + "}, {type: oidc, " + iss + ", client_id: c2, principal_claim: upn, principal_domains: [corp.example.com]}]\n",
@@ -170,7 +172,22 @@ func TestIdentityRefusals(t *testing.T) {
 		"humans at one issuer and client_id, other domains": {"  identity:\n    humans: [{" + hum + "}, {type: oidc, " + iss +
 			", client_id: c, principal_claim: email, principal_domains: [eng.corp.example.com]}]\n",
 			"broker.identity.humans[1] repeats broker.identity.humans[0]"},
-		"unknown type": {"  identity:\n    humans: [{type: saml}]\n", "broker.identity.humans[0].type saml"},
+		"issuer with userinfo": {"  identity:\n    humans: [{type: oidc, issuer: \"https://user:pw@sso.example.com/realms/corp\", client_id: c, principal_claim: email, principal_domains: [corp.example.com]}]\n",
+			"broker.identity.humans[0].issuer must be an https URL"},
+		"issuer opaque": {"  identity:\n    humans: [{type: oidc, issuer: \"https:sso.example.com\", client_id: c, principal_claim: email, principal_domains: [corp.example.com]}]\n",
+			"broker.identity.humans[0].issuer must be an https URL"},
+		"type with a newline": {"  identity:\n    humans: [{type: \"saml\\nforged: line\"}]\n", `broker.identity.humans[0].type "saml\nforged: line"`},
+		"claim with a newline": {"  identity:\n    humans: [{type: oidc, " + iss + ", client_id: c, principal_claim: \"a\\nb\", principal_domains: [corp.example.com]}]\n",
+			`broker.identity.humans[0].principal_claim "a\nb"`},
+		"domain with a newline": {"  identity:\n    humans: [{type: oidc, " + iss + ", client_id: c, principal_claim: email, principal_domains: [\"a.example.com\\nb\"]}]\n",
+			`broker.identity.humans[0].principal_domains: "a.example.com\nb" is not a domain`},
+		"issuer twice, trailing slash": {"  identity:\n    humans: [{" + hum + "}, {type: oidc, issuer: \"https://sso.corp.example.com/realms/corp/\", client_id: c2, principal_claim: email, principal_domains: [other.example.com]}]\n",
+			"broker.identity.humans[1].issuer and broker.identity.humans[0].issuer differ only by a trailing slash or by case in the scheme or host"},
+		"issuer twice, host case": {"  identity:\n    humans: [{" + hum + "}]\n    machines: [{type: oidc, issuer: \"https://SSO.Corp.Example.com/realms/corp\", audience: a, clients: [{client_id: svc, sub: s1}]}]\n",
+			"broker.identity.machines[0].issuer and broker.identity.humans[0].issuer differ only by a trailing slash or by case in the scheme or host"},
+		"issuer twice, scheme case": {"  identity:\n    humans: [{" + hum + "}]\n    machines: [{type: oidc, issuer: \"HTTPS://sso.corp.example.com/realms/corp\", audience: a, clients: [{client_id: svc, sub: s1}]}]\n",
+			"broker.identity.machines[0].issuer and broker.identity.humans[0].issuer differ only"},
+		"unknown type": {"  identity:\n    humans: [{type: saml}]\n", "broker.identity.humans[0].type \"saml\""},
 	} {
 		block := c.block
 		cfg := brokerWithIdentity(block) // the client_ca_file case carries its own line in block
@@ -210,5 +227,86 @@ func TestAKeptKeyFileCollidesWithNothing(t *testing.T) {
 		"/var/lib/port49/"+oidc.KeyFileName("https://sso.corp.example.com/realms/corp"), 1)
 	if _, err := loadWith(t, cfg); err == nil || !strings.Contains(err.Error(), "kept keys") {
 		t.Fatalf("a revocations_file that is an issuer's kept key file: %v", err)
+	}
+}
+
+func TestIdentityIssuersDifferingInPathCaseAreDistinct(t *testing.T) {
+	block := `  identity:
+    humans:
+      - {type: oidc, issuer: "https://sso.corp.example.com/Realms/corp", client_id: c, principal_claim: email, principal_domains: [a.example.com]}
+      - {type: oidc, issuer: "https://sso.corp.example.com/realms/corp", client_id: c, principal_claim: email, principal_domains: [b.example.com]}
+`
+	if _, err := loadWith(t, strings.Replace(brokerWithIdentity(block), "  certificate_status: {disabled: true}\n", "", 1)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestIdentityTimingDefaultsWhenUnset(t *testing.T) {
+	block := `  identity:
+    humans: [{type: oidc, issuer: "https://sso.corp.example.com/realms/corp", client_id: c, principal_claim: email, principal_domains: [corp.example.com]}]
+`
+	c, err := loadWith(t, strings.Replace(brokerWithIdentity(block), "  certificate_status: {disabled: true}\n", "", 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := oidc.Timing{ClockSkew: time.Minute, MaxTokenAge: 2 * time.Hour, JWKSRefresh: time.Hour, JWKSMaxAge: 24 * time.Hour}
+	if c.Broker.Identity.Timing != want {
+		t.Fatalf("timing %+v", c.Broker.Identity.Timing)
+	}
+}
+
+func TestIdentityTimingBounds(t *testing.T) {
+	// A short max age needs a short refresh beside it (twice the refresh).
+	const fast = "    jwks_refresh_interval: 5m\n"
+	for _, c := range []struct {
+		key, v, extra string
+		ok            bool
+	}{
+		{"clock_skew", "0s", "", true}, {"clock_skew", "5m", "", true}, {"clock_skew", "301s", "", false}, {"clock_skew", "-1s", "", false},
+		{"max_token_age", "5m", "", true}, {"max_token_age", "24h", "", true}, {"max_token_age", "299s", "", false}, {"max_token_age", "25h", "", false},
+		{"jwks_refresh_interval", "5m", "", true}, {"jwks_refresh_interval", "12h", "", true}, {"jwks_refresh_interval", "299s", "", false},
+		{"jwks_refresh_interval", "25h", "    jwks_max_age: 720h\n", false},
+		{"jwks_max_age", "10m", fast, true}, {"jwks_max_age", "9m", fast, false},
+		{"jwks_max_age", "720h", "", true}, {"jwks_max_age", "721h", "", false},
+	} {
+		block := "  identity:\n    " + c.key + ": " + c.v + "\n" + c.extra + "    humans: [{type: oidc, issuer: \"https://sso.corp.example.com/realms/corp\", client_id: c, principal_claim: email, principal_domains: [corp.example.com]}]\n"
+		_, err := loadWith(t, strings.Replace(brokerWithIdentity(block), "  certificate_status: {disabled: true}\n", "", 1))
+		if c.ok != (err == nil) {
+			t.Errorf("%s: %s: ok=%v, err %v", c.key, c.v, c.ok, err)
+		}
+		if !c.ok && err != nil && !strings.Contains(err.Error(), "broker.identity."+c.key+" must be between") {
+			t.Errorf("%s: %s: error names no bound: %v", c.key, c.v, err)
+		}
+	}
+}
+
+// Twice the refresh interval is the least max age: one missed refresh must
+// not refuse every token.
+func TestIdentityMaxAgeIsAtLeastTwiceRefresh(t *testing.T) {
+	for _, c := range []struct {
+		refresh, maxAge string
+		ok              bool
+	}{{"1h", "2h", true}, {"1h", "119m", false}, {"12h", "24h", true}, {"12h", "23h", false}} {
+		block := "  identity:\n    jwks_refresh_interval: " + c.refresh + "\n    jwks_max_age: " + c.maxAge +
+			"\n    humans: [{type: oidc, issuer: \"https://sso.corp.example.com/realms/corp\", client_id: c, principal_claim: email, principal_domains: [corp.example.com]}]\n"
+		_, err := loadWith(t, strings.Replace(brokerWithIdentity(block), "  certificate_status: {disabled: true}\n", "", 1))
+		if c.ok != (err == nil) || (!c.ok && !strings.Contains(err.Error(), "is under twice jwks_refresh_interval")) {
+			t.Errorf("refresh %s max age %s: ok=%v err %v", c.refresh, c.maxAge, c.ok, err)
+		}
+	}
+}
+
+// A verifier's ca_file is a file the broker reads: broker.revocations_file
+// may not be it.
+func TestAVerifiersCAFileIsNotTheRevocationsFile(t *testing.T) {
+	ca := filepath.Join(t.TempDir(), "idp-ca.pem")
+	if err := os.WriteFile(ca, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	block := "  identity:\n    humans: [{type: oidc, issuer: \"https://sso.corp.example.com/realms/corp\", client_id: c, principal_claim: email, principal_domains: [corp.example.com], ca_file: " + ca + "}]\n"
+	cfg := strings.Replace(brokerWithIdentity(block), "  certificate_status: {disabled: true}\n", "", 1)
+	cfg = strings.Replace(cfg, "/var/lib/port49/revocations.json", ca, 1)
+	if _, err := loadWith(t, cfg); err == nil || !strings.Contains(err.Error(), "broker.identity's ca_file for") {
+		t.Fatalf("a revocations_file that is a verifier's ca_file: %v", err)
 	}
 }

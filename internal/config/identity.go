@@ -93,7 +93,7 @@ func checkIdentity(y *identityYAML, clientCAFile string) (*oidc.Config, error) {
 				}
 				out.OIDC = append(out.OIDC, vc)
 			default:
-				return nil, fmt.Errorf("config: %s.type %s: one of x509 or oidc (k8s is plan 10's)", at, v.Type)
+				return nil, fmt.Errorf("config: %s.type %q: one of x509 or oidc (k8s is plan 10's)", at, v.Type)
 			}
 		}
 	}
@@ -109,8 +109,8 @@ func checkIdentity(y *identityYAML, clientCAFile string) (*oidc.Config, error) {
 
 func checkOIDCVerifier(at string, d oidc.Domain, v identityVerifierYAML) (oidc.VerifierConfig, error) {
 	u, err := url.Parse(v.Issuer)
-	if v.Issuer == "" || err != nil || u.Scheme != "https" || u.Host == "" || u.RawQuery != "" || u.Fragment != "" {
-		return oidc.VerifierConfig{}, fmt.Errorf("config: %s.issuer must be an https URL with no query or fragment "+
+	if v.Issuer == "" || err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.Opaque != "" || u.RawQuery != "" || u.Fragment != "" {
+		return oidc.VerifierConfig{}, fmt.Errorf("config: %s.issuer must be an https URL with no userinfo, query or fragment "+
 			"(OpenID Connect Discovery §2)", at)
 	}
 	if v.TrustAnchorFile != "" {
@@ -146,7 +146,7 @@ func checkOIDCVerifier(at string, d oidc.Domain, v identityVerifierYAML) (oidc.V
 			return oidc.VerifierConfig{}, fmt.Errorf("config: %s.principal_claim is required: one of "+
 				"preferred_username, email or upn, whichever only your provider's administrators can set", at)
 		case !slices.Contains([]string{oidc.ClaimPreferredUsername, oidc.ClaimEmail, oidc.ClaimUPN}, v.PrincipalClaim):
-			return oidc.VerifierConfig{}, fmt.Errorf("config: %s.principal_claim %s: one of preferred_username, "+
+			return oidc.VerifierConfig{}, fmt.Errorf("config: %s.principal_claim %q: one of preferred_username, "+
 				"email or upn", at, v.PrincipalClaim)
 		}
 		domains, err := principalDomains(at, v.PrincipalDomains)
@@ -207,7 +207,7 @@ func principalDomains(at string, ds []string) ([]string, error) {
 	for _, d := range ds {
 		l := strings.ToLower(d)
 		if !printableKey(l) || strings.ContainsAny(l, "@/") || strings.HasPrefix(l, ".") || !strings.Contains(l, ".") {
-			return nil, fmt.Errorf("config: %s.principal_domains: %s is not a domain (a name with a dot, no @)", at, d)
+			return nil, fmt.Errorf("config: %s.principal_domains: %q is not a domain (a name with a dot, no @)", at, d)
 		}
 		if !slices.Contains(out, l) {
 			out = append(out, l)
@@ -251,6 +251,11 @@ func distinctVerifiers(vs []oidc.VerifierConfig, y identityYAML) error {
 	for i := range vs {
 		for j := range i {
 			a, b := vs[j], vs[i]
+			if a.Issuer != b.Issuer && issuerForm(a.Issuer) == issuerForm(b.Issuer) {
+				return fmt.Errorf("config: %s.issuer and %s.issuer differ only by a trailing slash or by case in the "+
+					"scheme or host: the provider's discovery document names one spelling, so the other would "+
+					"never get keys; list each issuer once, spelled as the provider spells it", name(at[i]), name(at[j]))
+			}
 			humans := a.Domain == oidc.Humans && b.Domain == oidc.Humans
 			if a.Issuer != b.Issuer {
 				if a.Domain == oidc.Machines && b.Domain == oidc.Machines {
@@ -343,4 +348,15 @@ func BrokerStateDir(b *BrokerConfig) string {
 		return b.StateDir
 	}
 	return filepath.Dir(b.RevocationsFile)
+}
+
+// issuerForm is an issuer with the spellings discovery treats as one
+// removed: the scheme and host in lower case, no trailing slash. The path
+// stays case-sensitive.
+func issuerForm(iss string) string {
+	u, err := url.Parse(iss)
+	if err != nil {
+		return iss
+	}
+	return strings.ToLower(u.Scheme) + "://" + strings.ToLower(u.Host) + strings.TrimSuffix(u.EscapedPath(), "/")
 }
