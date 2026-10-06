@@ -832,7 +832,7 @@ done: revoked is its answer under the policy in force, so it does not hold the g
 counted `failed` in `port49_context_refreshes_total`, which is its alarm.
 
 **The scheduled refresh** (plan 7g; §13 decision 38) runs every `broker.refresh_interval` (default
-5m; provisional on Ryan's answer to OR-1, §13 decision 38) on the broker holding the keyspace. For
+5m; approved by Ryan, OR-1, §13 decision 38) on the broker holding the keyspace. For
 each `user:` principal in `active_principals` it reads the principal's directory entry and groups
 again, from a server, never from grace; judges each live context against the policy in force with
 that membership, writing as a policy refresh does; and stamps `refreshed_at` with the membership's
@@ -7172,7 +7172,7 @@ every matching subject composes, and a scheduled refresh stamps refreshed_at.** 
 2026-10-05.*
 
 - **The defaults.** `session.staleness_ceiling` 4h (`0s` disables it, said at every start),
-  `broker.directory.grace` 4h and `broker.refresh_interval` 5m: provisional on Ryan's answer to
+  `broker.directory.grace` 4h and `broker.refresh_interval` 5m: approved by Ryan (2026-10-06), as
   OR-1. The runbook line: at the ceiling live sessions deny `context_stale` from a reachable
   port49d, so break-glass does not help on them; the escapes are `session.staleness_ceiling: 0s`
   with a port49d restart, or stopping port49d so devices fall back to break-glass (L4). Alert at
@@ -7293,7 +7293,7 @@ every matching subject composes, and a scheduled refresh stamps refreshed_at.** 
 - **14. `session.staleness_ceiling` defaults to 4h, with an explicit `0s` to disable it.** In
   one process, port49d's load refuses a `refresh_interval` above half the ceiling and a
   `directory.grace` above the ceiling; port49-broker's load never applies the ceiling, and its
-  start line states its own values. The lab says `0s`. Provisional on Ryan's answer to OR-1.
+  start line states its own values. The lab says `0s`. Approved by Ryan, OR-1 (2026-10-06).
   Task 15.
 - **15. The diff gates a changed `group:`.** A subject whose `group:` changed fails the gate
   unless a passing session test naming it asserts the access it resolves to (§12); a new group

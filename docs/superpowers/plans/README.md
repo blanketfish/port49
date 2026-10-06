@@ -98,7 +98,7 @@ Tasks 8b–16 plus a new Task 13b, each reviewed). It delivers:
 - the agent's one connection.
 
 L35 is measured and closed on five images. The lab's snapshot restore found a ledger bug, fixed
-in 79812ef (Plan 7d — As built, below). **7e written 2026-10-03** (`2026-10-03-07e-broker-process.md`, twenty-three tasks in two merges (eighteen, and 8a, 15a, 15b, 15c and 15d): 7e-1, Tasks 1–10 and 8a, the store a fleet of processes shares (a sealed write sequence and a high-water ledger per key, the context and marks feeds, the ledger record the daemon cannot write, `superseded` in the store, the decision-log emits under the hold, two carried fixes); 7e-2, Tasks 11–18 and 15a–15d, `port49-broker`, port49d on etcd with no broker inside, one runner per keyspace, the revocations file retired on etcd, and the lab; nineteen rulings recorded as decision 36; one question for Ryan, OR-1, `port49 revoke`'s default socket, closed by Ryan 2026-10-03 as recommended (unchanged); it opens L37 and L38 and measures them with L36); **7e-1 executed 2026-10-03** on `feature/broker-process`, each task reviewed (Plan 7e — As built, below). **7e-2 executed 2026-10-04** on `feature/broker-split`, each task reviewed, L36, L37 and L38 closed and L40 opened (Plan 7e — As built, "7e-2", below); **merged 2026-10-05** as PR #27, merge 6438e26. **7f written 2026-10-05** (`2026-10-05-07f-go-dark-and-context-cache.md`, ten tasks: the container shape (image, compose stack on etcd, CI smoke test), the lab on the compose stack with L39 (a), one docs, three code for go-dark on store health checks (N failures, M passes; the idle gap closed), two code for the context cache, one lab (L41, opened by it), one docs; nine rulings recorded as decision 37; two questions for Ryan, OR-1 the health defaults and OR-2 keeping close-and-wait, each with a recommendation, both approved by Ryan 2026-10-05 as recommended); **7f executed 2026-10-05** on `feature/go-dark-and-context-cache`, each task reviewed, L39 (a) measured and L41 opened and closed (Plan 7f — As built, below); **merged 2026-10-05** as PR #28, merge 0cd6926. **7g written 2026-10-05** (`2026-10-05-07g-the-directory.md`, nineteen tasks: one docs, fifteen code, two lab, one docs; twenty rulings recorded as decision 38; three questions for Ryan, each with a recommendation: OR-1 the defaults (`session.staleness_ceiling` 4h, `directory.grace` 4h, `broker.refresh_interval` 5m), OR-2 GSSAPI through go-ldap and gokrb5 (pure Go), OR-3 Samba AD standing in for Windows Server AD in the lab; it opens L42 and L43); **7g pre-flight 2026-10-05**, READY WITH FIXES (2 Critical, 17 Important, 17 Minor), every finding applied to the plan: a refusal is stored and never served from grace, a principal is one entry's alone and pinned to its immutable id (`port49 directory forget` is the operator's way out for an entry re-created), and OR-3 split so L42 and L43 close on OpenLDAP and Samba AD while a new L44 (Windows Server AD) stays open until measured. **7g executed 2026-10-05 to 2026-10-06** on `feature/the-directory` (base `ad4edff`), each task reviewed, L42 and L43 closed on OpenLDAP and Samba AD and L44 (Windows Server AD) left open for the SER8 box (Plan 7g — As built, below); not yet merged. **Open for Ryan, unanswered:** OR-1 (the 4h/4h/5m defaults), OR-2 (GSSAPI through gokrb5) and OR-3 (L44), each built on its recommendation; PF7g-g (the per-server bind hold-off, which deviates from design §10) and PF7g-i (the composition rule, a spec §5.1 change) await sign-off. Next: the final review and merge of 7g, then 7h. 8–13 not yet.
+in 79812ef (Plan 7d — As built, below). **7e written 2026-10-03** (`2026-10-03-07e-broker-process.md`, twenty-three tasks in two merges (eighteen, and 8a, 15a, 15b, 15c and 15d): 7e-1, Tasks 1–10 and 8a, the store a fleet of processes shares (a sealed write sequence and a high-water ledger per key, the context and marks feeds, the ledger record the daemon cannot write, `superseded` in the store, the decision-log emits under the hold, two carried fixes); 7e-2, Tasks 11–18 and 15a–15d, `port49-broker`, port49d on etcd with no broker inside, one runner per keyspace, the revocations file retired on etcd, and the lab; nineteen rulings recorded as decision 36; one question for Ryan, OR-1, `port49 revoke`'s default socket, closed by Ryan 2026-10-03 as recommended (unchanged); it opens L37 and L38 and measures them with L36); **7e-1 executed 2026-10-03** on `feature/broker-process`, each task reviewed (Plan 7e — As built, below). **7e-2 executed 2026-10-04** on `feature/broker-split`, each task reviewed, L36, L37 and L38 closed and L40 opened (Plan 7e — As built, "7e-2", below); **merged 2026-10-05** as PR #27, merge 6438e26. **7f written 2026-10-05** (`2026-10-05-07f-go-dark-and-context-cache.md`, ten tasks: the container shape (image, compose stack on etcd, CI smoke test), the lab on the compose stack with L39 (a), one docs, three code for go-dark on store health checks (N failures, M passes; the idle gap closed), two code for the context cache, one lab (L41, opened by it), one docs; nine rulings recorded as decision 37; two questions for Ryan, OR-1 the health defaults and OR-2 keeping close-and-wait, each with a recommendation, both approved by Ryan 2026-10-05 as recommended); **7f executed 2026-10-05** on `feature/go-dark-and-context-cache`, each task reviewed, L39 (a) measured and L41 opened and closed (Plan 7f — As built, below); **merged 2026-10-05** as PR #28, merge 0cd6926. **7g written 2026-10-05** (`2026-10-05-07g-the-directory.md`, nineteen tasks: one docs, fifteen code, two lab, one docs; twenty rulings recorded as decision 38; three questions for Ryan, each with a recommendation: OR-1 the defaults (`session.staleness_ceiling` 4h, `directory.grace` 4h, `broker.refresh_interval` 5m), OR-2 GSSAPI through go-ldap and gokrb5 (pure Go), OR-3 Samba AD standing in for Windows Server AD in the lab; it opens L42 and L43); **7g pre-flight 2026-10-05**, READY WITH FIXES (2 Critical, 17 Important, 17 Minor), every finding applied to the plan: a refusal is stored and never served from grace, a principal is one entry's alone and pinned to its immutable id (`port49 directory forget` is the operator's way out for an entry re-created), and OR-3 split so L42 and L43 close on OpenLDAP and Samba AD while a new L44 (Windows Server AD) stays open until measured. **7g executed 2026-10-05 to 2026-10-06** on `feature/the-directory` (base `ad4edff`), each task reviewed, L42 and L43 closed on OpenLDAP and Samba AD and L44 (Windows Server AD) left open for the SER8 box (Plan 7g — As built, below); not yet merged. **Ryan answered 2026-10-06:** OR-1 (the 4h/4h/5m defaults), OR-2 (GSSAPI through gokrb5), PF7g-g (the bind hold-off) and OR-3 (L44 on SER8, after a usage reset, not before 2026-10-06 15:00) approved; PF7g-i (the composition rule) confirmed. L44 stays open. Next: the final review and merge of 7g, then 7h. 8–13 not yet.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -3906,34 +3906,29 @@ each recorded in the spec or the design:
 - Decision 38 items 6 and 8, and design §10, on GSSAPI and EXTERNAL against AD, were corrected by
   L43's results (rule 4).
 
-**Open for Ryan.** None of these has been answered. The build uses the provisional value, and
-nothing below is Ryan's word:
+**Ryan's answers, 2026-10-06.** The build used each recommendation; Ryan's word follows.
 
 - **OR-1, the defaults** `session.staleness_ceiling` 4h, `directory.grace` 4h,
-  `broker.refresh_interval` 5m: **open.** The build uses the recommendation. Every place that
-  states a default is tagged "provisional on Ryan's answer to OR-1" (decision 38, spec §5.1.3,
-  design §9 and §12).
-- **OR-2, GSSAPI through go-ldap and gokrb5 (pure Go):** **open.** The build uses the
-  recommendation (no cgo). A gokrb5 upgrade must re-run the classification tests of Task 7.
-- **OR-3, Samba AD standing in for Windows Server AD:** **open as worded**, and the build does
-  not use it. Under register rule 3, L42 and L43 close on the platforms they name (OpenLDAP and
-  Samba AD) and **L44 stays open** for Windows Server AD (below).
-- **PF7g-g, the per-server bind hold-off: awaiting Ryan's sign-off.** It rests on reasoning,
-  not data, and deviates from design §10, which says a refusal opens no breaker and fails over.
-  With N servers there are N binds per query and per 30s check on one service account, and AD
-  keeps the account locked after the password is fixed. A refused bind now starts a pool-wide
-  hold-off of 1m doubling to 15m, with one probe bind per step; each server also has its own
-  refusal backoff, and a probe goes to the best-ranked server that has not refused, so one bad DC
-  does not lock the pool (the first version did, 12 of 12 logins failed in an hour). Queries with
-  no bound connection fail at once, `directory_unavailable`, and grace serves. The cost if wrong:
-  up to 15m of grace after a password is fixed.
-- **PF7g-i, the composition rule (a spec §5.1 change): awaiting Ryan's sign-off.** A member of
-  several group subjects holds the union of their grants; the composed `enable` ceiling is the
-  highest over subjects whose own `enable` offers escalation. An `enable: none` subject
-  contributes only the level it holds without enabling (the lesser of its roles' level and its
-  cap) and never creates a ceiling. Without this, a subject (`enable: none`, max admin) and
-  another (`token`, max operator) composed to token-to-admin, which neither grants alone. The
-  cost if wrong: a member in two such groups escalates only as far as the better single subject.
+  `broker.refresh_interval` 5m: **approved by Ryan.** The "provisional on OR-1" tags are lifted.
+- **OR-2, GSSAPI through go-ldap and gokrb5 (pure Go):** **approved by Ryan.** A gokrb5 upgrade
+  must re-run the classification tests of Task 7.
+- **OR-3, Windows Server AD (L44):** **approved by Ryan**, to run on SER8 with a Windows Server
+  evaluation image after a usage reset (not before 2026-10-06 15:00). Under register rule 3, L42
+  and L43 closed on OpenLDAP and Samba AD, and **L44 stays open** until that run.
+- **PF7g-g, the per-server bind hold-off: approved by Ryan.** It deviates from design §10, which
+  says a refusal opens no breaker and fails over. With N servers there are N binds per query and
+  per 30s check on one service account, and AD keeps the account locked after the password is
+  fixed. A refused bind starts a pool-wide hold-off of 1m doubling to 15m, with one probe bind
+  per step; each server also has its own refusal backoff, and a probe goes to the best-ranked
+  server that has not refused, so one bad DC does not lock the pool. Queries with no bound
+  connection fail at once, `directory_unavailable`, and grace serves. The cost: up to 15m of
+  grace after a password is fixed.
+- **PF7g-i, the composition rule (a spec §5.1 change): confirmed by Ryan.** A member of several
+  group subjects holds the union of their grants; the composed `enable` ceiling is the highest
+  over subjects whose own `enable` offers escalation. An `enable: none` subject contributes only
+  the level it holds without enabling (the lesser of its roles' level and its cap) and never
+  creates a ceiling. Without this, a subject (`enable: none`, max admin) and another (`token`,
+  max operator) composed to token-to-admin, which neither grants alone.
 
 **Rulings made during execution.** PF7g-a, every pre-flight finding applied to the plan text
 first. PF7g-b, the pin's escape. PF7g-c, a `uri` with userinfo is refused at load. PF7g-d, the
@@ -4066,7 +4061,7 @@ fix round 4 stayed with the Sonnet implementer instead of escalating (the model 
   `circuit_breaker.probe_interval` plus `health_check.interval` (90s at the defaults) after the
   DCs return. Grace serves meanwhile. A cancelled caller is held up to `query_timeout` plus the
   store budgets, so a burst of cancelled callers is not a hang.
-- **New: `broker.refresh_interval`** (5m, provisional on OR-1).
+- **New: `broker.refresh_interval`** (5m, approved: OR-1).
 - **New reason codes:** `identity_unmapped`, `identity_ambiguous` (alert on it),
   `directory_unavailable`, `composition_refused`. New record fields: `policy.subjects`,
   `auth.directory`, and the `directory_forget` event.
@@ -4086,7 +4081,7 @@ fix round 4 stayed with the Sonnet implementer instead of escalating (the model 
   and source.
 - **A directory outage.**
   - **Logins.** New logins and mints continue from the membership verified within
-    `directory.grace` (4h, provisional on OR-1), held in the store, so a broker restart keeps
+    `directory.grace` (4h, approved: OR-1), held in the store, so a broker restart keeps
     them (checked on the compose stack). A person the directory refused before the outage
     (deleted, ambiguous, a username taken) stays refused through it. Past grace: 503
     `directory_unavailable`.
