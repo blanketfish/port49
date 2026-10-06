@@ -2741,7 +2741,7 @@ func (w *winDC) ps(ctx context.Context, name string, params map[string]any) (jso
 	if rerr != nil {
 		var thrown *winThrownError
 		return nil, &winScriptErr{name: name, thrown: errors.As(rerr, &thrown), msg: fmt.Sprintf("%s (stderr: %s)",
-			winScrub(rerr.Error(), w.secrets()...), winScrub(oneLineMax(errb.String(), 300), w.secrets()...))}
+			winScrub(rerr.Error(), w.secrets()...), oneLineMax(winScrub(errb.String(), w.secrets()...), 300))}
 	}
 	if err != nil {
 		return nil, &winScriptErr{name: name, msg: winScrub(err.Error(), w.secrets()...)}
@@ -3121,7 +3121,7 @@ func (w *winDC) perRun(t *testing.T, l *labDir) {
 		t.Logf("windows: keytab, try %d of 3: %s", try+1, winScrub(kerr.Error(), w.secrets()...))
 	}
 	if kerr != nil {
-		w.invalid = append(w.invalid, "keytab: "+winScrub(oneLineMax(kerr.Error(), 300), w.secrets()...))
+		w.invalid = append(w.invalid, "keytab: "+oneLineMax(winScrub(kerr.Error(), w.secrets()...), 300))
 	}
 	winWriteFile0600(t, l.krb5File, []byte(krb5Conf(winKDC)))
 	comma, commaKey, err := winCommaCA(time.Now())
@@ -3219,7 +3219,7 @@ func (w *winDC) enrollAs(t *testing.T, user string) (*x509.Certificate, *rsa.Pri
 		}
 		t.Logf("windows: enroll_as %s, try %d of 3: %s", user, try+1, winScrub(err.Error(), w.secrets()...))
 	}
-	w.invalid = append(w.invalid, "sid: enroll_as: "+winScrub(oneLineMax(err.Error(), 300), w.secrets()...))
+	w.invalid = append(w.invalid, "sid: enroll_as: "+oneLineMax(winScrub(err.Error(), w.secrets()...), 300))
 	return nil, nil
 }
 
