@@ -95,6 +95,14 @@ func unchanged(key string, mod int64) clientv3.Cmp {
 // key's own lease, or an error to stop.
 func cas[R any](ctx context.Context, cli clientv3.KV, ls *leases, key string, live func(R) bool,
 	f func(r *R, found bool) (write bool, exp time.Time, keep bool, err error)) error {
+	return casAs(ctx, cli, ls, key, key, live, f)
+}
+
+// casAs is cas that names a record that does not decode as what, not by
+// key: for the records whose key is a jti, a sid or a sub, which no error
+// carries (plan 7h).
+func casAs[R any](ctx context.Context, cli clientv3.KV, ls *leases, key, what string, live func(R) bool,
+	f func(r *R, found bool) (write bool, exp time.Time, keep bool, err error)) error {
 	for {
 		resp, err := cli.Get(ctx, key)
 		if err != nil {
@@ -105,7 +113,7 @@ func cas[R any](ctx context.Context, cli clientv3.KV, ls *leases, key string, li
 		found := false
 		if len(resp.Kvs) == 1 {
 			if err := json.Unmarshal(resp.Kvs[0].Value, &r); err != nil {
-				return notDecoded(key)
+				return notDecoded(what)
 			}
 			mod, found = resp.Kvs[0].ModRevision, live(r)
 			if !found {
@@ -135,6 +143,11 @@ func notDecoded(what string) error { return fmt.Errorf("etcd: %s does not decode
 
 // getJSON reads key into v; false when it is absent.
 func getJSON(ctx context.Context, cli clientv3.KV, key string, v any) (mod int64, ok bool, err error) {
+	return getJSONAs(ctx, cli, key, key, v)
+}
+
+// getJSONAs is getJSON that names a record that does not decode as what.
+func getJSONAs(ctx context.Context, cli clientv3.KV, key, what string, v any) (mod int64, ok bool, err error) {
 	resp, err := cli.Get(ctx, key)
 	if err != nil {
 		return 0, false, unavailable(err)
@@ -143,7 +156,7 @@ func getJSON(ctx context.Context, cli clientv3.KV, key string, v any) (mod int64
 		return 0, false, nil
 	}
 	if err := json.Unmarshal(resp.Kvs[0].Value, v); err != nil {
-		return 0, false, notDecoded(key)
+		return 0, false, notDecoded(what)
 	}
 	return resp.Kvs[0].ModRevision, true, nil
 }

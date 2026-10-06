@@ -8,6 +8,7 @@ import (
 	"errors"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -45,6 +46,12 @@ type Store struct {
 	// could not find it".
 	indexedAs map[store.ContextRef]indexKeys
 	idem      map[string]store.Idempotency
+
+	// once, owners and logout are plan 7h's records: the once-only keys, the
+	// principals minting under an OIDC sid or sub, and back-channel logouts.
+	once   map[string]onceEntry
+	owners map[string]map[string]store.OwnerPrincipal // key, then principal
+	logout map[string]logoutEntry
 
 	// tokensByPrincipal and tokensByCert are the token indexes (plan 7a):
 	// each key's set of TokenKeys, each with the expiry of the longest token
@@ -164,6 +171,9 @@ func New(now func() time.Time) *Store {
 		byCert:              make(map[string]map[store.ContextRef]time.Time),
 		indexedAs:           make(map[store.ContextRef]indexKeys),
 		idem:                make(map[string]store.Idempotency),
+		once:                make(map[string]onceEntry),
+		owners:              make(map[string]map[string]store.OwnerPrincipal),
+		logout:              make(map[string]logoutEntry),
 		tokensByPrincipal:   make(map[string]map[store.TokenKey]time.Time),
 		tokensByCert:        make(map[string]map[store.TokenKey]time.Time),
 		revocations:         make(map[[2]string]store.Revocation),
@@ -267,6 +277,29 @@ func (s *Store) sweepLocked() {
 	for k, r := range s.idem {
 		if !r.ExpiresAt.After(now) {
 			delete(s.idem, k)
+		}
+	}
+
+	// Sweep the once-only, owner and logout records past their expiry; an
+	// owner key whose every entry lapsed goes whole.
+	for k, e := range s.once {
+		if !now.Before(e.exp) {
+			delete(s.once, k)
+		}
+	}
+	for k, set := range s.owners {
+		for p, e := range set {
+			if !now.Before(e.ExpiresAt) {
+				delete(set, p)
+			}
+		}
+		if len(set) == 0 {
+			delete(s.owners, k)
+		}
+	}
+	for k, e := range s.logout {
+		if !now.Before(e.exp) {
+			delete(s.logout, k)
 		}
 	}
 
@@ -1684,4 +1717,115 @@ func (s *Store) touchLocked() {
 	if s.writes%sweepEvery == 0 {
 		s.sweepLocked()
 	}
+}
+
+type onceEntry struct {
+	value []byte
+	exp   time.Time
+}
+
+type logoutEntry struct {
+	l   store.Logout
+	exp time.Time
+}
+
+func (s *Store) PutOnce(_ context.Context, key string, value []byte, ttl time.Duration) (bool, error) {
+	if key == "" {
+		return false, store.ErrNoKey
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	if e, ok := s.once[key]; ok && now.Before(e.exp) {
+		return false, nil
+	}
+	s.once[key] = onceEntry{value: append([]byte(nil), value...), exp: now.Add(ttl)}
+	s.wroteLocked()
+	return true, nil
+}
+
+func (s *Store) TakeOnce(_ context.Context, key string) ([]byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok := s.once[key]
+	delete(s.once, key)
+	if !ok || !s.now().Before(e.exp) {
+		return nil, store.ErrNotFound
+	}
+	s.wroteLocked()
+	return e.value, nil
+}
+
+func (s *Store) PutOIDCOwner(_ context.Context, key, principal string, ttl time.Duration) error {
+	if key == "" {
+		return store.ErrNoKey
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	set := s.owners[key]
+	if set == nil {
+		set = map[string]store.OwnerPrincipal{}
+		s.owners[key] = set
+	}
+	for p, e := range set {
+		if !now.Before(e.ExpiresAt) {
+			delete(set, p)
+		}
+	}
+	exp := now.Add(ttl)
+	if e, ok := set[principal]; ok && e.ExpiresAt.After(exp) {
+		exp = e.ExpiresAt
+	}
+	set[principal] = store.OwnerPrincipal{Principal: principal, WrittenAt: now, ExpiresAt: exp}
+	s.wroteLocked()
+	return nil
+}
+
+func (s *Store) OIDCOwner(_ context.Context, key string) (store.OIDCOwner, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	var o store.OIDCOwner
+	for _, e := range s.owners[key] {
+		if now.Before(e.ExpiresAt) {
+			o.Principals = append(o.Principals, e)
+		}
+	}
+	if len(o.Principals) == 0 {
+		return store.OIDCOwner{}, store.ErrNotFound
+	}
+	slices.SortFunc(o.Principals, func(a, b store.OwnerPrincipal) int { return strings.Compare(a.Principal, b.Principal) })
+	return o, nil
+}
+
+func (s *Store) PutLogout(_ context.Context, l store.Logout, ttl time.Duration) error {
+	if l.Key == "" {
+		return store.ErrNoKey
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	next := logoutEntry{l: l, exp: now.Add(ttl)}
+	if e, ok := s.logout[l.Key]; ok && now.Before(e.exp) {
+		if e.l.At.After(l.At) {
+			next.l = e.l
+		}
+		if e.exp.After(next.exp) {
+			next.exp = e.exp
+		}
+	}
+	s.logout[l.Key] = next
+	s.wroteLocked()
+	return nil
+}
+
+func (s *Store) GetLogout(_ context.Context, key string) (store.Logout, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok := s.logout[key]
+	if !ok || !s.now().Before(e.exp) {
+		return store.Logout{}, store.ErrNotFound
+	}
+	return e.l, nil
 }

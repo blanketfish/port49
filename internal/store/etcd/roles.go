@@ -44,7 +44,8 @@ var (
 	daemonWrites = []string{famToken, famReceipt, famReceiptBy, famContext, famIndexed, famByPrincipal,
 		famBySid, famByCert, famBlob}
 	daemonReads = []string{famMark, famLedger}
-	daemonNever = []string{famIdem, famTokByPrin, famTokByCert, famSuperseded, famMembership, famMembershipK}
+	daemonNever = []string{famIdem, famTokByPrin, famTokByCert, famSuperseded, famMembership, famMembershipK,
+		famOnce, famOIDCOwner, famLogout}
 	// daemonMetaReads are the keys of meta/ port49d's code reads, each
 	// granted by itself: seal_keys at a start, witness and purged by the
 	// restore guard, judged_bundle by the skew gauge (the bundle's name
@@ -144,6 +145,12 @@ func (s *Store) CheckIdentity(ctx context.Context, broker bool) error {
 		{"writing " + s.k.family(famMembership), func() error { return write(famMembership) }},
 		{"reading " + s.k.family(famMembershipK), func() error { return read(famMembershipK) }},
 		{"writing " + s.k.family(famMembershipK), func() error { return write(famMembershipK) }},
+		{"reading " + s.k.family(famOnce), func() error { return read(famOnce) }},
+		{"writing " + s.k.family(famOnce), func() error { return write(famOnce) }},
+		{"reading " + s.k.family(famOIDCOwner), func() error { return read(famOIDCOwner) }},
+		{"writing " + s.k.family(famOIDCOwner), func() error { return write(famOIDCOwner) }},
+		{"reading " + s.k.family(famLogout), func() error { return read(famLogout) }},
+		{"writing " + s.k.family(famLogout), func() error { return write(famLogout) }},
 		{"writing " + s.k.family(famLedger), func() error { return write(famLedger) }},
 		{"writing " + s.k.family(famMeta), func() error { return write(famMeta) }},
 		{"reading " + s.k.meta("judged"), func() error {

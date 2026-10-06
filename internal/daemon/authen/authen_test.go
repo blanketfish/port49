@@ -546,6 +546,22 @@ func (noStore) DeleteMembership(context.Context, string) (store.Membership, erro
 	panic("store called")
 }
 
+func (noStore) PutOnce(context.Context, string, []byte, time.Duration) (bool, error) {
+	panic("store called")
+}
+
+func (noStore) TakeOnce(context.Context, string) ([]byte, error) { panic("store called") }
+
+func (noStore) PutOIDCOwner(context.Context, string, string, time.Duration) error {
+	panic("store called")
+}
+
+func (noStore) OIDCOwner(context.Context, string) (store.OIDCOwner, error) { panic("store called") }
+
+func (noStore) PutLogout(context.Context, store.Logout, time.Duration) error { panic("store called") }
+
+func (noStore) GetLogout(context.Context, string) (store.Logout, error) { panic("store called") }
+
 var _ store.Store = noStore{}
 
 func TestEmptyCanonicalUsernameFailsWithoutStoreLookup(t *testing.T) {

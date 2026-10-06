@@ -56,6 +56,8 @@ var pools = map[string]Pool{
 	"SupersedeTokens": Token, "SupersedeAll": Token, "SupersededAt": Token,
 	"PutMembership": Token, "RefuseMapKeys": Token, "GetMembership": Token, "MembershipByKey": Token,
 	"MembershipPrincipals": Token, "DeleteMembership": Token,
+	"PutOnce": Token, "TakeOnce": Token, "PutOIDCOwner": Token, "OIDCOwner": Token, "PutLogout": Token,
+	"GetLogout": Token,
 }
 
 // PoolOf is the pool method runs in, and "" for a name the table does not
@@ -672,6 +674,34 @@ func (g *guarded) MembershipPrincipals(ctx context.Context) (ps []string, err er
 
 func (g *guarded) DeleteMembership(ctx context.Context, principal string) (m store.Membership, err error) {
 	err = g.do(ctx, Token, func(ctx context.Context) (e error) { m, e = g.inner.DeleteMembership(ctx, principal); return })
+	return
+}
+
+func (g *guarded) PutOnce(ctx context.Context, key string, value []byte, ttl time.Duration) (ok bool, err error) {
+	err = g.do(ctx, Token, func(ctx context.Context) (e error) { ok, e = g.inner.PutOnce(ctx, key, value, ttl); return })
+	return
+}
+
+func (g *guarded) TakeOnce(ctx context.Context, key string) (v []byte, err error) {
+	err = g.do(ctx, Token, func(ctx context.Context) (e error) { v, e = g.inner.TakeOnce(ctx, key); return })
+	return
+}
+
+func (g *guarded) PutOIDCOwner(ctx context.Context, key, principal string, ttl time.Duration) error {
+	return g.do(ctx, Token, func(ctx context.Context) error { return g.inner.PutOIDCOwner(ctx, key, principal, ttl) })
+}
+
+func (g *guarded) OIDCOwner(ctx context.Context, key string) (o store.OIDCOwner, err error) {
+	err = g.do(ctx, Token, func(ctx context.Context) (e error) { o, e = g.inner.OIDCOwner(ctx, key); return })
+	return
+}
+
+func (g *guarded) PutLogout(ctx context.Context, l store.Logout, ttl time.Duration) error {
+	return g.do(ctx, Token, func(ctx context.Context) error { return g.inner.PutLogout(ctx, l, ttl) })
+}
+
+func (g *guarded) GetLogout(ctx context.Context, key string) (l store.Logout, err error) {
+	err = g.do(ctx, Token, func(ctx context.Context) (e error) { l, e = g.inner.GetLogout(ctx, key); return })
 	return
 }
 

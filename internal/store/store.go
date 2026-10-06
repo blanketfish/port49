@@ -1019,6 +1019,31 @@ type Store interface {
 	// returns it. `port49 directory forget` alone calls it (Ruling 3's
 	// escape; Task 13).
 	DeleteMembership(ctx context.Context, principal string) (Membership, error)
+	// PutOnce writes value under key for ttl when no live record is there,
+	// in one atomic step, and reports whether it wrote (plan 7h): a logout
+	// token's jti, a refresh challenge, a principal's refresh pacing. The
+	// broker's role alone reads or writes them. value is plaintext:
+	// identity, never a credential.
+	PutOnce(ctx context.Context, key string, value []byte, ttl time.Duration) (bool, error)
+	// TakeOnce removes the live record under key and returns its value, in
+	// one atomic step: of two callers one gets it and the other
+	// ErrNotFound, as does a caller after it expired.
+	TakeOnce(ctx context.Context, key string) ([]byte, error)
+	// PutOIDCOwner records that principal minted under key (OIDCKey: an
+	// issuer's sid or sub) until ttl from now: it adds principal to the
+	// record's set, or renews its entry (WrittenAt the store's clock, the
+	// later expiry kept), by compare-and-set, never replacing another
+	// principal's entry; lapsed entries are dropped (Rulings 11, 24).
+	PutOIDCOwner(ctx context.Context, key, principal string, ttl time.Duration) error
+	// OIDCOwner is the live entries under key, sorted by principal, or
+	// ErrNotFound when none lives.
+	OIDCOwner(ctx context.Context, key string) (OIDCOwner, error)
+	// PutLogout keeps l under l.Key until ttl from now: of two writes, the
+	// later At stands and the later expiry (Ruling 13). An empty key is
+	// refused.
+	PutLogout(ctx context.Context, l Logout, ttl time.Duration) error
+	// GetLogout is the live logout record under key, or ErrNotFound.
+	GetLogout(ctx context.Context, key string) (Logout, error)
 }
 
 // RevStore is a Store whose whole-context writes also return the revision
@@ -1175,6 +1200,52 @@ type Revocation struct {
 	// Origin says who asked: "admin_socket uid 0".
 	Origin string
 }
+
+// OIDCOwner is every principal minting under an OIDC sid or sub (plan 7h,
+// Rulings 11 and 24): one (issuer, sub) can name more than one, across a
+// rename, and a logout reaches each.
+type OIDCOwner struct {
+	Principals []OwnerPrincipal
+}
+
+// OwnerPrincipal is one principal of an owner record, when the store last
+// wrote it, and when it lapses.
+type OwnerPrincipal struct {
+	Principal            string
+	WrittenAt, ExpiresAt time.Time
+}
+
+// Entry is principal's entry, if the record holds one.
+func (o OIDCOwner) Entry(principal string) (OwnerPrincipal, bool) {
+	for _, e := range o.Principals {
+		if e.Principal == principal {
+			return e, true
+		}
+	}
+	return OwnerPrincipal{}, false
+}
+
+// Names is the record's principals, in its order.
+func (o OIDCOwner) Names() []string {
+	out := make([]string, 0, len(o.Principals))
+	for _, e := range o.Principals {
+		out = append(out, e.Principal)
+	}
+	return out
+}
+
+// Logout is a back-channel logout's record (plan 7h, Ruling 13): its key
+// (OIDCKey), when the logout took force (the logout token's iat), and who
+// asked. By sid it refuses every token naming the session; by sub, every
+// token issued at or before At plus clock_skew.
+type Logout struct {
+	Key    string
+	At     time.Time
+	Origin string
+}
+
+// ErrNoKey is a record written with an empty key.
+var ErrNoKey = errors.New("store: a record with no key")
 
 // HasCeiling reports whether this context carries a session ceiling.
 func (c Context) HasCeiling() bool { return !c.SessionExpires.IsZero() && !c.AuthTime.IsZero() }

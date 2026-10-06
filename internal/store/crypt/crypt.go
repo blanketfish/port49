@@ -1010,6 +1010,44 @@ func (w *wrapped) SupersededAt(ctx context.Context, k store.TokenKey) (time.Time
 	return w.inner.SupersededAt(ctx, k)
 }
 
+// PutOnce, TakeOnce, PutOIDCOwner, OIDCOwner, PutLogout and GetLogout pass
+// through unsealed: each holds identity (an issuer, a sid, a sub, a
+// principal, a time), never a credential, as the indexes do (plan 7h).
+//
+// Not sealed, on purpose (pre-flight M-9). A store writer could repoint an
+// oo/ owner record, so a logout deletes another principal's unspent tokens
+// (a denial, never a grant), or delete an lo/ logout record, so a logged-out
+// session's token passes again. Both are what a store writer can already do
+// to the marks (rv/, which pass through unsealed: crypt.go's PutRevocation)
+// and to the tokens themselves, so sealing these would close no path the
+// marks leave open. A logout, like a revocation, must not depend on the
+// encryption key, and sealing the owner set would need a deterministic seal
+// to merge entries by compare-and-set. The store's write access is the
+// boundary here, as it is for the marks (spec §5.1.4).
+func (w *wrapped) PutOnce(ctx context.Context, key string, value []byte, ttl time.Duration) (bool, error) {
+	return w.inner.PutOnce(ctx, key, value, ttl)
+}
+
+func (w *wrapped) TakeOnce(ctx context.Context, key string) ([]byte, error) {
+	return w.inner.TakeOnce(ctx, key)
+}
+
+func (w *wrapped) PutOIDCOwner(ctx context.Context, key, principal string, ttl time.Duration) error {
+	return w.inner.PutOIDCOwner(ctx, key, principal, ttl)
+}
+
+func (w *wrapped) OIDCOwner(ctx context.Context, key string) (store.OIDCOwner, error) {
+	return w.inner.OIDCOwner(ctx, key)
+}
+
+func (w *wrapped) PutLogout(ctx context.Context, l store.Logout, ttl time.Duration) error {
+	return w.inner.PutLogout(ctx, l, ttl)
+}
+
+func (w *wrapped) GetLogout(ctx context.Context, key string) (store.Logout, error) {
+	return w.inner.GetLogout(ctx, key)
+}
+
 // membershipSecret is a membership's sealed part, bound to its principal.
 // MapKeys and Refused are sealed as well as kept in the clear: the clear
 // copies are the backend's index, the sealed ones the truth.

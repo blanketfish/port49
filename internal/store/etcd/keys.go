@@ -49,6 +49,9 @@ const (
 	famLedger      = "lw/" // lw/<nas>/<user>: the ledger record (plan 7e)
 	famMembership  = "mb/" // mb/<principal>: a directory membership (plan 7g), the broker's alone
 	famMembershipK = "mk/" // mk/<map key>: the principal a mapping value resolved to
+	famOnce        = "on/" // on/<key>: a once-only record (plan 7h), the broker's alone
+	famOIDCOwner   = "oo/" // oo/<OIDCKey>: the principal minting under an OIDC sid or sub
+	famLogout      = "lo/" // lo/<OIDCKey>: a back-channel logout's record
 	famMeta        = "meta/"
 )
 
@@ -94,6 +97,10 @@ func (k keys) superseded(t store.TokenKey) string {
 
 func (k keys) membership(principal string) string { return k.root + famMembership + esc(principal) }
 func (k keys) membershipKey(mapKey string) string { return k.root + famMembershipK + esc(mapKey) }
+
+func (k keys) once(key string) string      { return k.root + famOnce + esc(key) }
+func (k keys) oidcOwner(key string) string { return k.root + famOIDCOwner + esc(key) }
+func (k keys) logout(key string) string    { return k.root + famLogout + esc(key) }
 
 // lastTwo unescapes the last two parts of key: the (NAS, Username) every
 // lookup entry and token-index entry ends in.
