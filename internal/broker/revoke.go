@@ -88,7 +88,8 @@ var principalPrefixes = []string{"user:", "app:"}
 
 // normal checks req and puts it in the form a mark holds (pre-flight I2,
 // M16, M17): a principal as Identity spells it, user: and the lower-cased
-// email (the mapping is case-insensitive by construction), refusing one
+// email (the mapping is case-insensitive by construction), or app: and the
+// client id verbatim (a client id is case-sensitive), refusing one
 // without that prefix or with nothing after it; an issuer of valid UTF-8
 // with no control or format character (C0, C1, a bidi override), which the
 // log would carry raw; a serial in lower-case hex as big.Int.Text(16)
@@ -131,7 +132,8 @@ func (req RevokeRequest) normal() (RevokeRequest, string, string, error) {
 }
 
 // normalPrincipal is p as Identity spells it: user: and the lower-cased
-// email, the mapping being case-insensitive by construction. One that is
+// email, the mapping being case-insensitive by construction, or app: and the
+// client id verbatim (a client id is case-sensitive). One that is
 // not printable ASCII, has no known prefix, or nothing after it, is refused
 // (pre-flight I2, M16). The HTTP endpoints compare a caller to a principal
 // a request names only after this, so no spelling makes another principal

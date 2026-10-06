@@ -57,7 +57,7 @@ func (b *Broker) explain(w http.ResponseWriter, r *http.Request) {
 		p, err := normalPrincipal(req.Principal)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "bad_request", "the principal is not one the broker spells: "+
-				"user: and an email, as the log names it")
+				"user: and an email, or app: and a client id, as the log names it")
 			return
 		}
 		about = p

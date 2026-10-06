@@ -38,6 +38,9 @@ func TestOIDCKeysAreIssuerQualified(t *testing.T) {
 		store.OIDCKey(store.OIDCSid, "https://a.example.com", "s 1") {
 		t.Fatal("the key is ambiguous across its parts")
 	}
+	if store.SidKey("", "s1") != "" {
+		t.Fatal("an empty issuer has a key: a blank half must not become one index entry (ruling P8)")
+	}
 	if store.SidKey("https://a.example.com", "") != "" {
 		t.Fatal("an empty sid has a key: every OIDC login without one would share it (spec §5.6)")
 	}

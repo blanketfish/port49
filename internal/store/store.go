@@ -1107,9 +1107,9 @@ const (
 // OIDCKey names an OIDC session (kind OIDCSid) or subject (OIDCSub) at one
 // issuer: the key of an owner record, a logout record, and, through
 // SidKey, the context index by sid. Each part is length-prefixed, so no
-// issuer or value can forge another's key. An empty value has no key.
+// issuer or value can forge another's key. An empty issuer or value has no key.
 func OIDCKey(kind, issuer, value string) string {
-	if value == "" {
+	if value == "" || issuer == "" {
 		return ""
 	}
 	return fmt.Sprintf("%s %d:%s %d:%s", kind, len(issuer), issuer, len(value), value)
