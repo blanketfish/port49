@@ -956,7 +956,7 @@ func TestWindowsEnrollAsRegistersWSMANSPNsFirst(t *testing.T) {
 	}
 }
 
-// A result value read from a file is a plain string. Get-Content decorates
+// A file is read as a plain string, never with Get-Content, which decorates
 // what it returns with PSPath, PSProvider and the rest, and Windows
 // PowerShell 5.1's ConvertTo-Json serializes those notes to -Depth 8: measured
 // on the L44 DC, one CSR's Get-Content -Raw ran the bootstrap's ConvertTo-Json
@@ -966,8 +966,8 @@ func TestWindowsScriptResultsAreNotGetContent(t *testing.T) {
 	for _, e := range ents {
 		b, _ := winScriptFS.ReadFile("directory/windows/scripts/" + e.Name())
 		for i, l := range strings.Split(strings.ReplaceAll(string(b), "\r\n", "\n"), "\n") {
-			if strings.Contains(l, "@{") && strings.Contains(l, "Get-Content") {
-				t.Errorf("%s:%d: a result value comes from Get-Content; read it with [IO.File]::ReadAllText", e.Name(), i+1)
+			if strings.Contains(strings.ToLower(l), "get-content") {
+				t.Errorf("%s:%d: a file is read with Get-Content; read it with [IO.File]::ReadAllText", e.Name(), i+1)
 			}
 		}
 	}

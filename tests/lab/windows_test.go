@@ -1698,7 +1698,9 @@ func (w *winDC) configNote() string {
 		"- The KDC is stopped for one EXTERNAL cell (OR-1) and started again at once; the next cell repeats the mapped " +
 		"bind to show the DC recovered.\n" +
 		"- Alice's `User` certificate is requested as alice over WinRM with CredSSP, under a session configuration only she " +
-		"may use; all of it is removed after, and her password for it is made on the DC, used once and replaced.\n" +
+		"may use; all of it is removed after, and her password for it is made on the DC, used once and replaced. " +
+		"`enroll_as` first registers `WSMAN/DC1` and `WSMAN/dc1.corp.example.com` on `DC1$` (this build's WinRM had " +
+		"registered none, and without them CredSSP refuses the DC as a target); they stay on the lab DC.\n" +
 		"- During the KB5014754 table only, `UseCachedCRLOnlyAndIgnoreRevocationUnknownErrors = 1` on the KDC: the " +
 		"harness's own CAs publish no CRL, and revocation is no part of the claim. Removed after.\n" +
 		"- LDAP interface diagnostics at level 2 (`16 LDAP Interface Events`), so the DC logs bind and channel-binding events.\n" +

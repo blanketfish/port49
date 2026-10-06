@@ -9,7 +9,9 @@ $dir = 'C:\l44'
 New-Item -ItemType Directory -Force $dir | Out-Null
 # Each native step is bounded and named: a hang (gate run 3 timed out in this
 # script, at no known step) fails at once and says which step it was. The
-# steps take no secret, so their output files hold none.
+# steps take no secret, so their output files hold none. Windows PowerShell
+# 5.1 joins -ArgumentList with spaces and quotes nothing, so no argument may
+# hold a space (none does: C:\l44 paths, HKLM keys, store names).
 function Invoke-Bounded([string]$label, [string]$exe, [string[]]$argv) {
   $p = Start-Process -FilePath $exe -ArgumentList $argv -NoNewWindow -PassThru `
     -RedirectStandardOutput "$dir\$label.out" -RedirectStandardError "$dir\$label.err"

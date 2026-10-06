@@ -242,6 +242,7 @@ func krb5Conf(kdc string) string {
 
 [domain_realm]
   localhost = %[1]s
+  .corp.example.com = %[1]s
 `, dirRealm, kdc)
 }
 
