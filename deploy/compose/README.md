@@ -90,7 +90,7 @@ key does:
   may write the two attributes: two entries holding one value are both refused.
 - `certificate_mapping`: how a client certificate finds its entry. `issuer_serial` and `sid`
   are strong; the others need `allow_weak: true` and `issuers`.
-- `nested_groups`: `in_chain` (Active Directory), `recursive` or `direct`.
+- `nested_groups`: `in_chain` (Active Directory; OpenLDAP answers it empty, so use `recursive` there), `recursive` or `direct`.
 - `grace`: how long a stored membership answers when no server does.
 - `prewarm`: how often, and for how many principals, group members are looked up ahead of
   their first login.

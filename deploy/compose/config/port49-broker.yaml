@@ -43,7 +43,7 @@ broker:
   #   principal_attribute: userPrincipalName
   #   username_attribute: sAMAccountName
   #   certificate_mapping: {kind: issuer_serial}   # strong; no allow_weak needed
-  #   nested_groups: in_chain     # in_chain (Active Directory) | recursive | direct
+  #   nested_groups: in_chain     # in_chain (Active Directory; OpenLDAP answers it empty, use recursive) | recursive | direct
   #   grace: 4h                   # how long a stored membership answers when no server does
   #   prewarm: {interval: 1h, max_principals: 10000}
 store:
