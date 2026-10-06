@@ -3,6 +3,8 @@
 package lab
 
 import (
+	"bytes"
+	"context"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -23,14 +25,23 @@ import (
 	"io"
 	"math/big"
 	"net"
+	"net/http"
 	"os"
+	"os/exec"
+	"path"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
+	"testing"
 	"time"
 	"unicode/utf16"
 
+	"golang.org/x/crypto/ssh"
+
+	"github.com/rhwendt/port49/internal/directory"
 	"github.com/rhwendt/port49/internal/testpki"
 )
 
@@ -650,4 +661,879 @@ func winOnlyValue(vals []string, want string) bool {
 		return len(vals) == 0
 	}
 	return len(vals) == 1 && strings.EqualFold(vals[0], want)
+}
+
+// winDC is the Windows Server DC the L44 run measures: a KVM VM in a dockur
+// container on the compose project port49labwin, set up over SSH as the
+// domain's Administrator, every step one script from directory/windows/scripts.
+type winDC struct {
+	dir, compose string // tests/lab/logs/windows; tests/lab/directory/windows/compose.yaml
+	sec          *winSecrets
+	port49       string // port49's password: the run's d.password
+	reused       bool
+	state        winState
+	facts        winFacts
+	certs        winCerts
+	adcsRoot     *x509.Certificate
+	invalid      []string // "<area>: <scrubbed error>" for each setup step that failed three times (R6)
+}
+
+// winState is what a built DC keeps between runs (state.json, no secret).
+type winState struct {
+	Built        bool      `json:"built"`
+	AliceCreated time.Time `json:"alice_created"`
+	Loop         string    `json:"loop"`
+}
+
+// winFacts is what facts.ps1 answers.
+type winFacts struct {
+	Caption          string            `json:"caption"`
+	Version          string            `json:"version"`
+	Build            string            `json:"build"`
+	DisplayVersion   string            `json:"display_version"`
+	Edition          string            `json:"edition"`
+	Hotfixes         []string          `json:"hotfixes"`
+	DomainMode       string            `json:"domain_mode"`
+	ForestMode       string            `json:"forest_mode"`
+	UTCNow           string            `json:"utc_now"`
+	StrongBinding    string            `json:"strong_certificate_binding_enforcement"`
+	Backdating       string            `json:"certificate_backdating_compensation"`
+	MappingMethods   string            `json:"certificate_mapping_methods"`
+	NTDSLDAP         map[string]string `json:"ntds_ldap_settings"`
+	LockoutThreshold int               `json:"lockout_threshold"`
+	MIT              string            `json:"-"` // the PKINIT client's measured versions, read from its image
+}
+
+// winCerts is the run's client certificates, each key on this host only.
+type winCerts struct {
+	brokerADCS, aliceADCS, aliceSID, aliceComma, aliceHighBit, dcKDC     *x509.Certificate
+	brokerKey, aliceADCSKey, aliceSIDKey, aliceCommaKey, aliceHighBitKey *rsa.PrivateKey
+	brokerCertFile, brokerKeyFile                                        string
+}
+
+// winDC holds every password and private key of the run, so it prints as its
+// project's name whatever the verb, as a value or a pointer.
+func (w winDC) String() string             { return "windows dc (" + winProject + ")" }
+func (w winDC) GoString() string           { return w.String() }
+func (w winDC) Format(f fmt.State, _ rune) { fmt.Fprint(f, w.String()) }
+
+// invalidFor is why area's cells are INVALID (R6), or "" when its setup
+// step succeeded.
+func (w *winDC) invalidFor(area string) string {
+	for _, s := range w.invalid {
+		if rest, ok := strings.CutPrefix(s, area+": "); ok {
+			return rest
+		}
+	}
+	return ""
+}
+
+// winScriptErr is a script that ran: the SSH session opened and the command
+// returned, so the VM and sshd are up and what failed is the script or the
+// bootstrap. thrown is the script's own error ({"error": ...}); otherwise the
+// bootstrap wrote no result at all. msg is scrubbed.
+type winScriptErr struct {
+	name   string
+	thrown bool
+	msg    string
+}
+
+func (e *winScriptErr) Error() string { return "windows " + e.name + ": " + e.msg }
+
+func (w *winDC) dockerCompose(args ...string) *exec.Cmd {
+	return dockerCmd(append([]string{"compose", "-p", winProject, "-f", w.compose, "--env-file",
+		filepath.Join(w.dir, "compose.env")}, args...)...)
+}
+
+func (w *winDC) secrets() []string { return append(w.sec.all(), w.port49) }
+
+// dial is one SSH connection as the Administrator, with a deadline on the
+// handshake too. The host key is not checked: the VM is new each run and is
+// reached only on loopback.
+func (w *winDC) dial(timeout time.Duration) (*ssh.Client, error) {
+	nc, err := net.DialTimeout("tcp", winSSH, timeout)
+	if err != nil {
+		return nil, err
+	}
+	_ = nc.SetDeadline(time.Now().Add(timeout))
+	pw := w.sec.AdminPassword
+	cfg := &ssh.ClientConfig{User: "Administrator", HostKeyCallback: ssh.InsecureIgnoreHostKey(), Timeout: timeout,
+		Auth: []ssh.AuthMethod{ssh.Password(pw), ssh.KeyboardInteractive(func(_, _ string, q []string, _ []bool) ([]string, error) {
+			a := make([]string, len(q))
+			for i := range a {
+				a[i] = pw
+			}
+			return a, nil
+		})}}
+	c, chans, reqs, err := ssh.NewClientConn(nc, winSSH, cfg)
+	if err != nil {
+		nc.Close()
+		return nil, err
+	}
+	_ = nc.SetDeadline(time.Time{})
+	return ssh.NewClient(c, chans, reqs), nil
+}
+
+// ps runs one script on the DC with params on stdin and returns its result.
+// Every error it returns has had the run's secrets scrubbed from it.
+func (w *winDC) ps(ctx context.Context, name string, params map[string]any) (json.RawMessage, error) {
+	want, ok := winScripts[name]
+	if !ok {
+		return nil, fmt.Errorf("no windows script %q", name)
+	}
+	for k := range params {
+		if !slices.Contains(want, k) {
+			return nil, fmt.Errorf("windows script %s takes no %q", name, k)
+		}
+	}
+	src, err := winScriptFS.ReadFile("directory/windows/scripts/" + name + ".ps1")
+	if err != nil {
+		return nil, err
+	}
+	body, err := winPayload(string(src), params)
+	if err != nil {
+		return nil, err
+	}
+	c, err := w.dial(30 * time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("windows %s: ssh: %s", name, winScrub(err.Error(), w.secrets()...))
+	}
+	defer c.Close()
+	s, err := c.NewSession()
+	if err != nil {
+		return nil, fmt.Errorf("windows %s: session: %s", name, winScrub(err.Error(), w.secrets()...))
+	}
+	defer s.Close()
+	var out, errb bytes.Buffer
+	s.Stdin, s.Stdout, s.Stderr = bytes.NewReader(body), &out, &errb
+	done := make(chan error, 1)
+	go func() { done <- s.Run(winCommand()) }()
+	select {
+	case err = <-done:
+	case <-ctx.Done():
+		c.Close()
+		return nil, fmt.Errorf("windows %s: %w", name, ctx.Err())
+	}
+	// From here the session ran the command: every error is a *winScriptErr.
+	res, rerr := winResult(out.Bytes())
+	if rerr != nil {
+		var thrown *winThrownError
+		return nil, &winScriptErr{name: name, thrown: errors.As(rerr, &thrown), msg: fmt.Sprintf("%s (stderr: %s)",
+			winScrub(rerr.Error(), w.secrets()...), oneLineMax(winScrub(errb.String(), w.secrets()...), 300))}
+	}
+	if err != nil {
+		return nil, &winScriptErr{name: name, msg: winScrub(err.Error(), w.secrets()...)}
+	}
+	return res, nil
+}
+
+// try is ps under a deadline, saying every two minutes that the step is
+// still running (a promotion or AD CS install is silent for up to half an
+// hour, and the watchdog must not read that as a stall). It never fails the
+// test; into, when not nil, receives the result.
+func (w *winDC) try(t *testing.T, name string, params map[string]any, within time.Duration, into any) error {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), within)
+	defer cancel()
+	start, done := time.Now(), make(chan struct{})
+	defer close(done)
+	go func() {
+		tick := time.NewTicker(2 * time.Minute)
+		defer tick.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-tick.C:
+				t.Logf("windows: %s still running (%s)", name, time.Since(start).Round(time.Second))
+			}
+		}
+	}()
+	res, err := w.ps(ctx, name, params)
+	if err != nil {
+		return err
+	}
+	if into != nil {
+		if err := json.Unmarshal(res, into); err != nil {
+			return fmt.Errorf("windows %s: reading its result: %v", name, err)
+		}
+	}
+	return nil
+}
+
+// run is try, fatal on error: a setup step's failure is the harness's, never
+// a measurement.
+func (w *winDC) run(t *testing.T, name string, params map[string]any, within time.Duration, into any) {
+	t.Helper()
+	if err := w.try(t, name, params, within, into); err != nil {
+		t.Fatalf("%v", err)
+	}
+}
+
+// service stops or starts the DC's KDC (service.ps1), fatal unless it
+// reaches the state asked.
+func (w *winDC) service(t *testing.T, name, state string) {
+	t.Helper()
+	var r struct {
+		Status string `json:"status"`
+	}
+	w.run(t, "service", map[string]any{"name": name, "state": state}, 5*time.Minute, &r)
+	if want := map[string]string{"stop": "Stopped", "start": "Running"}[state]; r.Status != want {
+		t.Fatalf("windows: %s is %s after %s, want %s", name, r.Status, state, want)
+	}
+}
+
+// scrubbedTail is raw's last n bytes with the run's secrets scrubbed first:
+// cutting first could leave half of a password that the scrub no longer
+// matches.
+func (w *winDC) scrubbedTail(raw string, n int) string {
+	return tailOf(strings.TrimSpace(winScrub(raw, w.secrets()...)), n)
+}
+
+// logTail is dockur's last n bytes of log: install progress. That it never
+// holds a password is unmeasured, so it is scrubbed like any other output.
+func (w *winDC) logTail(n int) string {
+	b, _ := w.dockerCompose("logs", "--no-color", "--tail", "20", "dc").CombinedOutput()
+	return w.scrubbedTail(string(b), n)
+}
+
+// waitSSH waits for the VM's sshd to take the Administrator's password and
+// run a script, saying every two minutes what dockur last said: Windows
+// Setup is silent for long stretches. A script that ran and failed means
+// the VM is up and the bootstrap is broken, which no wait mends: three in a
+// row fail the run at once, not after the whole wait.
+func (w *winDC) waitSSH(t *testing.T, within time.Duration) {
+	t.Helper()
+	deadline, next, ran := time.Now().Add(within), time.Now(), 0
+	for {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		_, err := w.ps(ctx, "clock", nil)
+		cancel()
+		if err == nil {
+			return
+		}
+		var se *winScriptErr
+		if errors.As(err, &se) {
+			if ran++; ran >= 3 {
+				t.Fatalf("windows: the VM answers SSH but the bootstrap fails, three times in a row: %v", err)
+			}
+		} else {
+			ran = 0
+		}
+		if up, _ := w.dockerCompose("ps", "--status", "running", "-q", "dc").Output(); strings.TrimSpace(string(up)) == "" {
+			t.Fatalf("windows: the dc container is not running; dockur: %s", w.logTail(1500))
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("windows: no SSH session within %s (%s); dockur: %s", within,
+				oneLineMax(winScrub(err.Error(), w.secrets()...), 200), w.logTail(1500))
+		}
+		if time.Now().After(next) {
+			t.Logf("windows: waiting for SSH; dockur: %s", oneLineMax(winScrub(w.logTail(300), w.secrets()...), 300))
+			next = time.Now().Add(2 * time.Minute)
+		}
+		time.Sleep(15 * time.Second)
+	}
+}
+
+// waitReady waits for AD DS to answer after the promotion's reboot. ready.ps1
+// throws while AD Web Services starts, which is the wait's own business; a
+// bootstrap that wrote no result at all, three times in a row, is broken and
+// fails the run at once (waitSSH's rule, for the bootstrap only).
+func (w *winDC) waitReady(t *testing.T, within time.Duration) {
+	t.Helper()
+	deadline, broken := time.Now().Add(within), 0
+	for {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		_, err := w.ps(ctx, "ready", nil)
+		cancel()
+		if err == nil {
+			return
+		}
+		var se *winScriptErr
+		if errors.As(err, &se) && !se.thrown {
+			if broken++; broken >= 3 {
+				t.Fatalf("windows: the bootstrap wrote no result three times in a row after the reboot: %v", err)
+			}
+		} else {
+			broken = 0
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("windows: AD DS did not answer within %s of the promotion's reboot: %v", within, err)
+		}
+		time.Sleep(15 * time.Second)
+	}
+}
+
+// winWriteFile0600 writes body to path, owner-only.
+func winWriteFile0600(t *testing.T, path string, body []byte) {
+	t.Helper()
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func winWriteJSON0600(t *testing.T, path string, v any) {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	winWriteFile0600(t, path, b)
+}
+
+// loadKept reads a kept DC's secrets and state, true when both are there, it
+// was built, and its container runs.
+func (w *winDC) loadKept() bool {
+	var s winSecrets
+	b, err := os.ReadFile(filepath.Join(w.dir, "secrets.json"))
+	if err != nil || json.Unmarshal(b, &s) != nil {
+		return false
+	}
+	st, err := os.ReadFile(filepath.Join(w.dir, "state.json"))
+	if err != nil || json.Unmarshal(st, &w.state) != nil || !w.state.Built {
+		return false
+	}
+	w.sec = &s
+	up, _ := w.dockerCompose("ps", "--status", "running", "-q", "dc").Output()
+	return strings.TrimSpace(string(up)) != ""
+}
+
+// winEnsureISO is the pinned evaluation ISO's path in the cache
+// (PORT49_LAB_ISO_DIR, default ~/.cache/port49-lab/iso), downloaded from
+// Microsoft on first use and checked by size and SHA-256 every time: a file
+// that does not match is never handed to the VM.
+func winEnsureISO(t *testing.T) string {
+	t.Helper()
+	dir := os.Getenv("PORT49_LAB_ISO_DIR")
+	if dir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			t.Fatal(err)
+		}
+		dir = filepath.Join(home, ".cache", "port49-lab", "iso")
+	}
+	path := filepath.Join(dir, "windows-server-2025-eval-26100.32230.iso")
+	if winISOOK(path, winISOSize, winISOSHA256) == nil {
+		return path
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	part := path + ".part"
+	t.Logf("windows: downloading the evaluation ISO (%d bytes) to %s", winISOSize, dir)
+	resp, err := http.Get(winISOURL)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("windows: fetching the ISO: %v %v", err, resp)
+	}
+	defer resp.Body.Close()
+	f, err := os.Create(part)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var n int64
+	next := int64(1 << 30)
+	buf := make([]byte, 1<<20)
+	for {
+		k, rerr := resp.Body.Read(buf)
+		if k > 0 {
+			if _, err := f.Write(buf[:k]); err != nil {
+				t.Fatal(err)
+			}
+			n += int64(k)
+			if n >= next {
+				t.Logf("windows: ISO %d MiB of %d", n>>20, winISOSize>>20)
+				next += 1 << 30
+			}
+		}
+		if rerr == io.EOF {
+			break
+		}
+		if rerr != nil {
+			t.Fatalf("windows: reading the ISO: %v", rerr)
+		}
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := winISOOK(part, winISOSize, winISOSHA256); err != nil {
+		_ = os.Remove(part)
+		t.Fatalf("windows: the downloaded ISO is not the pinned one: %v", err)
+	}
+	if err := os.Rename(part, path); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// winDiskCheck fails the run when / has less than need GiB free (Lab rules).
+func winDiskCheck(t *testing.T, dir string, need uint64) {
+	t.Helper()
+	var st syscall.Statfs_t
+	if err := syscall.Statfs(dir, &st); err != nil {
+		t.Fatal(err)
+	}
+	if free := st.Bavail * uint64(st.Bsize) >> 30; free < need {
+		t.Fatalf("windows: %d GiB free on the lab's filesystem, the run needs %d (stop and report: Lab rules)", free, need)
+	}
+}
+
+// startWindowsDC builds the DC on d's PKI and password and returns it as a
+// directory. With PORT49_LAB_WINDOWS_REUSE set and a kept DC up, it re-runs
+// only the per-run steps (R7: a reused DC never closes L44).
+func startWindowsDC(t *testing.T, d *directories) *labDir {
+	t.Helper()
+	repo, err := repoRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := &winDC{dir: filepath.Join(repo, "tests", "lab", "logs", "windows"),
+		compose: filepath.Join(repo, "tests", "lab", "directory", "windows", "compose.yaml"), port49: d.password}
+	w.reused = os.Getenv("PORT49_LAB_WINDOWS_REUSE") != "" && w.loadKept()
+	if !w.reused {
+		// A fresh tree: no secret, key or state of an earlier run serves this one.
+		if err := os.RemoveAll(w.dir); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Join(w.dir, "pkinit"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if w.sec, err = newWinSecrets(); err != nil {
+			t.Fatal(err)
+		}
+		winWriteJSON0600(t, filepath.Join(w.dir, "secrets.json"), w.sec)
+		winWriteFile0600(t, filepath.Join(w.dir, "windows.env"), []byte(winEnv(w.sec)))
+		// Registered at once, so a failed disk check or ISO download leaves no
+		// secret behind; down repeats it. Not with KEEP: a kept DC needs them.
+		if os.Getenv("PORT49_LAB_WINDOWS_KEEP") == "" {
+			t.Cleanup(w.removeSecrets)
+		}
+		// Before the ISO: a first run downloads 8.2 GB.
+		winDiskCheck(t, w.dir, 66)
+	}
+	d.extra = append(d.extra, w.sec.all()...)
+	iso := winEnsureISO(t)
+	winWriteFile0600(t, filepath.Join(w.dir, "compose.env"), []byte("PORT49_LAB_WINDOWS_ISO="+iso+"\n"))
+	if os.Getenv("PORT49_LAB_WINDOWS_KEEP") == "" {
+		t.Cleanup(func() { w.down(t) })
+	}
+	if !w.reused {
+		_ = w.dockerCompose("--profile", "tools", "down", "-v", "--remove-orphans", "-t", "120").Run()
+		if b, err := w.dockerCompose("--profile", "tools", "build", "pkinit").CombinedOutput(); err != nil {
+			t.Fatalf("building the pkinit image: %v\n%s", err, tailOf(string(b), 2000))
+		}
+		if b, err := w.dockerCompose("up", "-d", "dc").CombinedOutput(); err != nil {
+			t.Fatalf("docker compose up dc: %v\n%s", err, tailOf(string(b), 2000))
+		}
+		w.waitSSH(t, 150*time.Minute)
+		w.run(t, "promote", map[string]any{"dsrm_password": w.sec.DSRMPassword}, 30*time.Minute, nil)
+		time.Sleep(90 * time.Second) // promote.ps1's timer reboots the VM 15s after it answers
+		w.waitSSH(t, 40*time.Minute)
+		w.waitReady(t, 20*time.Minute)
+		var seed struct {
+			Loop         string    `json:"loop"`
+			AliceCreated time.Time `json:"alice_created"`
+		}
+		w.run(t, "seed", map[string]any{"port49_password": w.port49}, 15*time.Minute, &seed)
+		w.state = winState{Built: true, AliceCreated: seed.AliceCreated, Loop: seed.Loop}
+		winWriteJSON0600(t, filepath.Join(w.dir, "state.json"), w.state)
+	}
+	l := &labDir{name: platWindows, service: "dc", uri: "ldaps://localhost:30636", plainURI: "ldap://localhost:30389",
+		bindDN: "CN=port49,OU=Svc," + dirBase, userFilter: "(&(objectCategory=person)(objectClass=user))",
+		groupFilter: "(objectClass=group)", usernameAttr: "sAMAccountName", baseDN: dirBase, groupsBaseDN: "OU=G," + dirBase,
+		image: winImage, d: d, win: w,
+		where: "Windows Server 2025 Standard Evaluation as a KVM VM in `dockurr/windows`, on " +
+			"`tests/lab/directory/windows/compose.yaml` (no network device)",
+		credentials: "none appear here or in the evidence. The Administrator, DSRM and port49 passwords are generated for " +
+			"each run, held only in 0600 files under `tests/lab/logs/windows`, and reach the VM on an SSH session's stdin, " +
+			"never on a host command line; the one command line that carries one is `ktpass`'s own, inside the VM, which " +
+			"is destroyed at the end of the run. Alice's is made on the DC and never leaves it. The keytab and every " +
+			"private key stay on the host that ran it, 0600, and are removed at the end of the run.",
+		keytabFile: filepath.Join(w.dir, "port49.keytab"), krb5File: filepath.Join(w.dir, "krb5.conf")}
+	if w.state.Loop != "made" {
+		l.loopRefused = w.state.Loop
+	}
+	w.perRun(t, l)
+	l.waitLDAPS(t, 3*time.Minute)
+	l.checkFixture(t)
+	return l
+}
+
+// perRun is what every run does, on a fresh DC or a kept one: the clock
+// checked, port49's password and alice's mapping set, AD CS ensured, LDAPS on
+// the run's certificate, the keytab, the run's CAs trusted, the client
+// certificates issued, the facts read.
+func (w *winDC) perRun(t *testing.T, l *labDir) {
+	t.Helper()
+	d := l.d
+	w.checkSkew(t)
+	w.run(t, "reset", map[string]any{"port49_password": w.port49,
+		"alice_altsecid": directory.ADIssuerSerial(d.pki.alice)}, 5*time.Minute, nil)
+	var adcs struct {
+		CAPEM  string `json:"ca_pem"`
+		KDCPEM string `json:"kdc_pem"`
+	}
+	w.run(t, "adcs", nil, 30*time.Minute, &adcs)
+	var err error
+	if w.adcsRoot, err = winParsePEMCert([]byte(adcs.CAPEM)); err != nil {
+		t.Fatalf("windows: the enterprise CA's certificate: %v", err)
+	}
+	if w.certs.dcKDC, err = winParsePEMCert([]byte(adcs.KDCPEM)); err != nil {
+		t.Fatalf("windows: the DC's KDC certificate: %v", err)
+	}
+	var req struct {
+		CSRPEM string `json:"csr_pem"`
+	}
+	w.run(t, "ldaps", map[string]any{"step": "request"}, 5*time.Minute, &req)
+	certPEM, err := d.pki.signServerCSR([]byte(req.CSRPEM), time.Now())
+	if err != nil {
+		t.Fatalf("windows: signing the DC's LDAPS request: %v", err)
+	}
+	w.run(t, "ldaps", map[string]any{"step": "install", "cert_pem": string(certPEM), "lab_ca_pem": string(d.pki.ca.PEM())},
+		5*time.Minute, nil)
+	// The keytab: three tries, then the GSSAPI cells are INVALID (R6) and the
+	// run goes on to the cells that need no keytab. keytab.ps1 reports only
+	// ktpass's exit code, and that is all a failure says here.
+	var kerr error
+	for try := 0; try < 3; try++ {
+		var kt struct {
+			KeytabB64 string `json:"keytab_b64"`
+		}
+		if kerr = w.try(t, "keytab", map[string]any{"port49_password": w.port49}, 5*time.Minute, &kt); kerr == nil {
+			raw, err := base64.StdEncoding.DecodeString(kt.KeytabB64)
+			if err == nil && len(raw) > 0 {
+				winWriteFile0600(t, l.keytabFile, raw)
+				break
+			}
+			kerr = fmt.Errorf("the keytab did not come back (%d bytes)", len(raw))
+		}
+		t.Logf("windows: keytab, try %d of 3: %s", try+1, oneLineMax(winScrub(kerr.Error(), w.secrets()...), 300))
+	}
+	if kerr != nil {
+		w.invalid = append(w.invalid, "keytab: "+oneLineMax(winScrub(kerr.Error(), w.secrets()...), 300))
+	}
+	winWriteFile0600(t, l.krb5File, []byte(krb5Conf(winKDC)))
+	comma, commaKey, err := winCommaCA(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ca := range []struct {
+		name string
+		c    *x509.Certificate
+	}{{"lab-users-ca", d.pki.usersCA}, {"lab-users-comma-ca", comma}} {
+		w.run(t, "trust", map[string]any{"ca_pem": string(winPEMCert(ca.c)), "name": ca.name}, 5*time.Minute, nil)
+	}
+	winWriteFile0600(t, filepath.Join(w.dir, "pkinit", "krb5.conf"), []byte(winPKINITConf(winKDCInNet)))
+	winWriteFile0600(t, filepath.Join(w.dir, "pkinit", "adcs-root.pem"), winPEMCert(w.adcsRoot))
+	w.issueCerts(t, d, comma, commaKey)
+	w.run(t, "facts", nil, 5*time.Minute, &w.facts)
+	w.facts.MIT = w.mitVersions(t)
+}
+
+// mitVersions is the MIT Kerberos the PKINIT client really runs: the versions
+// its image recorded when it was built (the packages are not pinned).
+func (w *winDC) mitVersions(t *testing.T) string {
+	t.Helper()
+	b, err := w.dockerCompose("--profile", "tools", "run", "--rm", "-T", "pkinit", "cat", "/etc/pkinit-versions").Output()
+	v := winMITVersions(string(b))
+	if err != nil || v == "" {
+		t.Logf("windows: the PKINIT image's versions were not read: %v", err)
+		return "not read"
+	}
+	return v
+}
+
+// winMITVersions is /etc/pkinit-versions (dpkg-query's "name<TAB>version"
+// lines) as "name version, ...": any other line is dropped, so an error's
+// text never stands for a version.
+func winMITVersions(out string) string {
+	var parts []string
+	for _, l := range strings.Split(out, "\n") {
+		if f := strings.Split(strings.TrimSpace(l), "\t"); len(f) == 2 && f[0] != "" && f[1] != "" && !strings.Contains(l, " ") {
+			parts = append(parts, f[0]+" "+f[1])
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
+// issueCerts issues the run's client certificates (R5) and checks none
+// predates alice's account.
+func (w *winDC) issueCerts(t *testing.T, d *directories, comma *x509.Certificate, commaKey *ecdsa.PrivateKey) {
+	t.Helper()
+	// AD CS backdates NotBefore ten minutes. A certificate older than alice's
+	// account meets KB5014754's backdating check, which is no part of the claim.
+	if wait := time.Until(w.state.AliceCreated.Add(11 * time.Minute)); wait > 0 {
+		t.Logf("windows: waiting %s so AD CS's certificates do not predate alice's account", wait.Round(time.Second))
+		time.Sleep(wait)
+	}
+	c := &w.certs
+	c.brokerADCS, c.brokerKey = w.issue(t, "port49-broker", "", "OfflineRouter")
+	c.aliceADCS, c.aliceADCSKey = w.issue(t, "alice", "alice@corp.example.com", "OfflineRouter")
+	c.aliceSID, c.aliceSIDKey = w.enrollAs(t, "alice")
+	now := time.Now()
+	var err error
+	if c.aliceComma, c.aliceCommaKey, err = winPersonCert(comma, commaKey, "alice", "alice@corp.example.com", dirSerial(), now); err != nil {
+		t.Fatal(err)
+	}
+	if c.aliceHighBit, c.aliceHighBitKey, err = winPersonCert(d.pki.usersCA, d.pki.usersKey, "alice", "alice@corp.example.com",
+		winHighBitSerial(), now); err != nil {
+		t.Fatal(err)
+	}
+	people := []*x509.Certificate{c.aliceADCS, c.aliceComma, c.aliceHighBit}
+	if c.aliceSID != nil { // nil when enroll_as failed three times: the sid cells are INVALID
+		people = append(people, c.aliceSID)
+	}
+	if err := winIssuedAfter(w.state.AliceCreated, people...); err != nil {
+		t.Fatalf("windows: precondition: %v", err)
+	}
+	c.brokerCertFile = filepath.Join(w.dir, "broker-adcs.pem")
+	c.brokerKeyFile = filepath.Join(w.dir, "broker-adcs-key.pem")
+	winWriteFile0600(t, c.brokerCertFile, winPEMCert(c.brokerADCS))
+	winWriteFile0600(t, c.brokerKeyFile, winPEMKey(c.brokerKey))
+}
+
+// issue has the enterprise CA sign a request for cn (and upn) under template,
+// the key made here.
+func (w *winDC) issue(t *testing.T, cn, upn, template string) (*x509.Certificate, *rsa.PrivateKey) {
+	t.Helper()
+	csr, key, err := winCSR(cn, upn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var r struct {
+		CertPEM string `json:"cert_pem"`
+	}
+	w.run(t, "issue", map[string]any{"csr_pem": string(csr), "template": template}, 5*time.Minute, &r)
+	c, err := winParsePEMCert([]byte(r.CertPEM))
+	if err != nil {
+		t.Fatalf("windows: the %s certificate for %s: %v", template, cn, err)
+	}
+	return c, key
+}
+
+// enrollAs is user's own User certificate, requested as user (enroll_as.ps1).
+// It is the riskiest step: after three failed tries it returns nil, nil and
+// records why in w.invalid, so the sid cells are INVALID (R6) and the run goes
+// on to every cell that does not need the certificate.
+func (w *winDC) enrollAs(t *testing.T, user string) (*x509.Certificate, *rsa.PrivateKey) {
+	t.Helper()
+	var err error
+	for try := 0; try < 3; try++ {
+		var csr []byte
+		var key *rsa.PrivateKey
+		if csr, key, err = winCSR(user, ""); err != nil {
+			t.Fatal(err)
+		}
+		var r struct {
+			CertPEM string `json:"cert_pem"`
+		}
+		if err = w.try(t, "enroll_as", map[string]any{"csr_pem": string(csr), "user": user}, 10*time.Minute, &r); err == nil {
+			var c *x509.Certificate
+			if c, err = winParsePEMCert([]byte(r.CertPEM)); err == nil {
+				return c, key
+			}
+		}
+		t.Logf("windows: enroll_as %s, try %d of 3: %s", user, try+1, oneLineMax(winScrub(err.Error(), w.secrets()...), 300))
+	}
+	w.invalid = append(w.invalid, "sid: enroll_as: "+oneLineMax(winScrub(err.Error(), w.secrets()...), 300))
+	return nil, nil
+}
+
+// clock is the DC's UTC time, ISO 8601: the "since" of an events read, on
+// the DC's own clock.
+func (w *winDC) clock(t *testing.T) string {
+	t.Helper()
+	var r struct {
+		UTCNow string `json:"utc_now"`
+	}
+	w.run(t, "clock", nil, time.Minute, &r)
+	return r.UTCNow
+}
+
+// checkSkew fails the run, as a precondition, when the DC's clock is more
+// than 60s from ours (R6).
+func (w *winDC) checkSkew(t *testing.T) {
+	t.Helper()
+	dc, err := time.Parse(time.RFC3339Nano, w.clock(t))
+	if err != nil {
+		t.Fatalf("windows: the DC's clock: %v", err)
+	}
+	if now := time.Now(); !winSkewOK(dc, now, time.Minute) {
+		t.Fatalf("windows: precondition: the DC's clock is %s from ours", dc.Sub(now).Round(time.Second))
+	}
+}
+
+// events is what the DC logged since (its own clock).
+func (w *winDC) events(t *testing.T, since string) []winEvent {
+	t.Helper()
+	var r struct {
+		Events []winEvent `json:"events"`
+	}
+	w.run(t, "events", map[string]any{"since": since}, 2*time.Minute, &r)
+	return r.Events
+}
+
+// setValues replaces attr on dn with vals (clears it when vals holds none)
+// and asserts the DC holds exactly that afterwards (Review Focus 3).
+func (w *winDC) setValues(t *testing.T, dn, attr string, vals []string) {
+	t.Helper()
+	var r struct {
+		Values []string `json:"values"`
+	}
+	w.run(t, "set_attr", map[string]any{"dn": dn, "attribute": attr, "values": vals}, 2*time.Minute, &r)
+	want := ""
+	if len(vals) == 1 {
+		want = vals[0]
+	}
+	if !winOnlyValue(r.Values, want) {
+		t.Fatalf("windows: %s on %s holds %d value(s) after the set, not exactly the one asked", attr, dn, len(r.Values))
+	}
+}
+
+// setAltSec gives dn exactly value as altSecurityIdentities, or none for "".
+func (w *winDC) setAltSec(t *testing.T, dn, value string) {
+	t.Helper()
+	var vals []string
+	if value != "" {
+		vals = []string{value}
+	}
+	w.setValues(t, dn, "altSecurityIdentities", vals)
+}
+
+// setRegistry sets one of the DC settings the run varies (-1 deletes it),
+// waits for LDAPS when NTDS restarted, and returns the value in force.
+func (l *labDir) setRegistry(t *testing.T, name string, value int) string {
+	t.Helper()
+	var r struct {
+		Value     string `json:"value"`
+		Restarted string `json:"restarted"`
+	}
+	l.win.run(t, "registry", map[string]any{"name": name, "value": value}, 5*time.Minute, &r)
+	if r.Restarted == "NTDS" {
+		l.waitLDAPS(t, 3*time.Minute)
+	}
+	return r.Value
+}
+
+// kinit asks the DC's KDC for principal's TGT by PKINIT with c and key, from
+// the Debian container on the project network, and reads the answer from
+// MIT's trace, which is parsed and never printed. The key file is 0600 and
+// removed after.
+func (w *winDC) kinit(t *testing.T, label, principal string, c *x509.Certificate, key *rsa.PrivateKey) winPKINITResult {
+	t.Helper()
+	base := filepath.Join(w.dir, "pkinit", label)
+	winWriteFile0600(t, base+".pem", winPEMCert(c))
+	winWriteFile0600(t, base+"-key.pem", winPEMKey(key))
+	defer os.Remove(base + "-key.pem")
+	script := fmt.Sprintf(`export KRB5_CONFIG=/l44/krb5.conf; KRB5_TRACE=/dev/stdout kinit -X X509_user_identity=FILE:/l44/%[1]s.pem,/l44/%[1]s-key.pem %[2]s </dev/null 2>&1; echo "lab: kinit exit $?"; klist 2>&1`,
+		label, principal)
+	start := time.Now()
+	out, _ := w.dockerCompose("--profile", "tools", "run", "--rm", "-T", "pkinit", "sh", "-c", script).CombinedOutput()
+	r := winParseKinit(string(out))
+	r.took = time.Since(start)
+	return r
+}
+
+// down keeps dockur's log (0600, scrubbed: that it prints no password is
+// unmeasured) and takes the project down with its volumes, the VM's disk
+// among them. Without PORT49_LAB_WINDOWS_KEEP it also removes every secret
+// and key the run wrote.
+func (w *winDC) down(t *testing.T) {
+	t.Helper()
+	if b, err := w.dockerCompose("logs", "--no-color", "dc").CombinedOutput(); err == nil {
+		_ = os.WriteFile(filepath.Join(w.dir, "dc.log"), []byte(winScrub(string(b), w.secrets()...)), 0o600)
+	}
+	if b, err := w.dockerCompose("--profile", "tools", "down", "-v", "--remove-orphans", "-t", "120").CombinedOutput(); err != nil {
+		t.Errorf("docker compose down (windows): %v\n%s", err, w.scrubbedTail(string(b), 2000))
+	}
+	w.removeSecrets()
+}
+
+// removeSecrets removes every secret, key and keytab the run wrote, and the
+// kept DC's state. It is safe to call twice.
+func (w *winDC) removeSecrets() {
+	for _, f := range []string{"pkinit", "port49.keytab", "broker-adcs-key.pem", "secrets.json", "windows.env", "state.json"} {
+		_ = os.RemoveAll(filepath.Join(w.dir, f))
+	}
+}
+
+// version is the note's image line: the build the DC reports, the ISO and the image.
+func (w *winDC) version() string {
+	f := w.facts
+	return fmt.Sprintf("%s (%s), build %s; ISO `%s` (SHA-256 `%s`); image `%s`%s", f.Caption, f.Edition, f.Build,
+		path.Base(winISOURL), winISOSHA256, winImage, map[bool]string{true: "; **a reused DC (not a closing run, R7)**"}[w.reused])
+}
+
+// factsSection is the note's table of what the DC was, as the run found it.
+func (w *winDC) factsSection() string {
+	f := w.facts
+	keys := make([]string, 0, len(f.NTDSLDAP))
+	for k := range f.NTDSLDAP {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	var ldapSet []string
+	for _, k := range keys {
+		ldapSet = append(ldapSet, fmt.Sprintf("`%s` = %s", k, f.NTDSLDAP[k]))
+	}
+	if len(ldapSet) == 0 {
+		ldapSet = []string{"none set"}
+	}
+	var b strings.Builder
+	b.WriteString("### The DC, as the run found it\n\n| fact | value |\n|---|---|\n")
+	fmt.Fprintf(&b, "| build | %s %s (%s), %s |\n", f.Caption, f.DisplayVersion, f.Edition, f.Build)
+	fmt.Fprintf(&b, "| updates | %s |\n", strings.Join(f.Hotfixes, ", "))
+	fmt.Fprintf(&b, "| domain and forest modes | %s, %s |\n", f.DomainMode, f.ForestMode)
+	fmt.Fprintf(&b, "| `StrongCertificateBindingEnforcement` as installed | %s |\n", f.StrongBinding)
+	fmt.Fprintf(&b, "| `CertificateBackdatingCompensation` | %s |\n", f.Backdating)
+	fmt.Fprintf(&b, "| Schannel `CertificateMappingMethods` | %s |\n", f.MappingMethods)
+	fmt.Fprintf(&b, "| NTDS LDAP settings in the registry | %s |\n", strings.Join(ldapSet, "; "))
+	fmt.Fprintf(&b, "| account lockout threshold | %d |\n", f.LockoutThreshold)
+	fmt.Fprintf(&b, "| PKINIT client (MIT Kerberos, Debian bookworm), as installed in its image | %s |\n\n", f.MIT)
+	return b.String()
+}
+
+// configNote is what the DC was set up to do that the note's rows depend on.
+func (w *winDC) configNote() string {
+	return "### How this directory was configured\n\n" +
+		"- Windows Server 2025 Standard Evaluation, installed unattended by `dockurr/windows` from the pinned ISO into a " +
+		"KVM VM (6 GB, 4 vCPUs), and promoted to the first DC of a new forest `corp.example.com` by `Install-ADDSForest` " +
+		"with this build's defaults.\n" +
+		"- Set up only over OpenSSH (installed by Windows, started by `oem/install.bat`) as the domain's Administrator. The " +
+		"Windows firewall is off and Windows Update disabled, so the build measured is the ISO's. Ports are published on " +
+		"127.0.0.1 only.\n" +
+		"- L42's fixture, made by `scripts/seed.ps1` with global security groups; the second `netops-oncall` is renamed in, " +
+		"as on Samba.\n" +
+		"- LDAPS serves a certificate from the lab CA (`localhost`, `dc1.corp.example.com`, 127.0.0.1), placed in the NTDS " +
+		"service's own store; the lab CA is in the DC's Root store.\n" +
+		"- The DC's account carries the extra SPN `ldap/localhost`, as on Samba; the client `krb5.conf` reaches the KDC at " +
+		"127.0.0.1:30088 over TCP.\n" +
+		"- `port49` is an ordinary domain user, AES only; its keytab is made with `ktpass` (AES256-SHA1, " +
+		"`-mapuser CORP\\port49`), which also sets its UPN. `ktpass` takes the password on its own command line inside " +
+		"the VM, the one place a secret is on a command line.\n" +
+		"- AD CS: an enterprise root CA `corp-L44-CA` on the DC, `OfflineRouter` published for requests whose subject the " +
+		"harness supplies, and the DC's `KerberosAuthentication` certificate enrolled for PKINIT. The lab users CA and a " +
+		"second CA whose CN holds a comma are in the DC's Root store and in NTAuth.\n" +
+		"- Each KB5014754 block starts with a control, `control-ski`: alice's AD CS certificate under the strong " +
+		"`X509:<SKI>` mapping, which no part of the claim is about. A block whose control got no TGT is INVALID.\n" +
+		"- The KDC is stopped for one EXTERNAL cell (OR-1) and started again at once; the next cell repeats the mapped " +
+		"bind to show the DC recovered.\n" +
+		"- Alice's `User` certificate is requested as alice over WinRM with CredSSP, under a session configuration only she " +
+		"may use; all of it is removed after, and her password for it is made on the DC, used once and replaced.\n" +
+		"- During the KB5014754 table only, `UseCachedCRLOnlyAndIgnoreRevocationUnknownErrors = 1` on the KDC: the " +
+		"harness's own CAs publish no CRL, and revocation is no part of the claim. Removed after.\n" +
+		"- LDAP interface diagnostics at level 2 (`16 LDAP Interface Events`), so the DC logs bind and channel-binding events.\n" +
+		"- PKINIT's client is MIT Kerberos (`kinit`, Debian bookworm's `krb5-pkinit`, the versions its image recorded are in " +
+		"the facts table) on the project network, with `pkinit_kdc_hostname`, as MIT documents for an Active Directory KDC.\n\n" +
+		"### Running it again\n\n" +
+		"- From a worktree pinned at the commit under test: `go test -tags lab ./tests/lab/ -run '^TestL44WindowsAD$' " +
+		"-count=1 -v -timeout 240m`. It needs `/dev/kvm`, Docker with Compose v2.24.4+, 6 GB of RAM and 66 GiB free; a " +
+		"fresh run takes 1.5 to 2.5 hours. Windows Setup can be watched at `http://127.0.0.1:8006`.\n" +
+		"- The evaluation ISO is cached in `PORT49_LAB_ISO_DIR` (default `~/.cache/port49-lab/iso`), checked by size and " +
+		"SHA-256 on every run, and never committed or redistributed.\n" +
+		"- `PORT49_LAB_WINDOWS_KEEP` leaves the DC and its secrets up; `PORT49_LAB_WINDOWS_REUSE` runs on a kept DC. Both " +
+		"are for developing the harness: a note from a reused DC says so and never closes L44.\n" +
+		"- Under `tests/lab/logs/windows`, `windows.env`, `secrets.json`, `port49.keytab`, `broker-adcs-key.pem` and " +
+		"`pkinit/*-key.pem` hold secrets: never print them. The run removes them unless `PORT49_LAB_WINDOWS_KEEP` is set.\n" +
+		"- Never print the project's resolved compose file or inspect its containers: both show the " +
+		"Administrator's password from the environment.\n\n"
 }

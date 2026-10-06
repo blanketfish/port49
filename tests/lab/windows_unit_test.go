@@ -1041,3 +1041,85 @@ func TestWindowsBootstrapNeverTouchesError(t *testing.T) {
 		t.Error("the bootstrap's error line is not just $_.Exception.Message")
 	}
 }
+
+// The DC's runner holds every password and private key of the run; no format
+// verb may print one (pre-flight M11), as a value or a pointer, and none may
+// print a secret the runner reaches through its fields.
+func TestWindowsDCPrintsNoSecret(t *testing.T) {
+	secrets := []string{"Aa1!admin", "Aa1!dsrm", "Aa1!port49"}
+	w := &winDC{sec: &winSecrets{AdminPassword: secrets[0], DSRMPassword: secrets[1]}, port49: secrets[2],
+		invalid: []string{"sid: x"}}
+	var out string
+	for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%q", "%x", "%X", "%d"} {
+		out += fmt.Sprintf(verb+" "+verb+" ", w, *w)
+	}
+	for _, s := range secrets {
+		if strings.Contains(out, s) || strings.Contains(out, hex.EncodeToString([]byte(s))) {
+			t.Fatal("a secret printed")
+		}
+	}
+	if !strings.Contains(out, winProject) {
+		t.Fatalf("the runner does not print as its project: %s", out)
+	}
+}
+
+// dockur's log is scrubbed of the run's secrets before it is cut: "never a
+// password" in it is unmeasured, and cutting first could leave half of one.
+func TestWindowsLogTailScrubsBeforeItTruncates(t *testing.T) {
+	secrets := []string{"Aa1!adminpw0000", "Aa1!dsrmpw00000", "Aa1!port49pw000"}
+	w := &winDC{sec: &winSecrets{AdminPassword: secrets[0], DSRMPassword: secrets[1]}, port49: secrets[2]}
+	raw := "setup done\nPASSWORD=" + secrets[0] + "\nrestart " + secrets[1] + " ok\nsvc bind " + secrets[2]
+	for n := 1; n <= len(raw)+1; n++ {
+		got := w.scrubbedTail(raw, n)
+		for _, s := range secrets {
+			for i := 0; i+5 <= len(s); i++ {
+				if strings.Contains(got, s[i:i+5]) {
+					t.Fatalf("tail of %d bytes holds a piece of a secret", n)
+				}
+			}
+		}
+	}
+	if got := w.scrubbedTail(raw, 1000); !strings.Contains(got, "setup done") || !strings.Contains(got, "<secret>") {
+		t.Errorf("the tail lost the log or its marker: %q", got)
+	}
+}
+
+// pkinit's /etc/pkinit-versions is dpkg-query's "name<TAB>version" lines: the
+// note records the versions the run measured, and drops any other text.
+func TestWindowsMITVersions(t *testing.T) {
+	got := winMITVersions("krb5-user\t1.20.1-2+deb12u2\nkrb5-pkinit\t1.20.1-2+deb12u2\nlibkrb5-3\t1.20.1-2+deb12u2\n")
+	want := "krb5-user 1.20.1-2+deb12u2, krb5-pkinit 1.20.1-2+deb12u2, libkrb5-3 1.20.1-2+deb12u2"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	if got := winMITVersions("cat: /etc/pkinit-versions: No such file or directory\n"); got != "" {
+		t.Errorf("an error's text is not a version: %q", got)
+	}
+	if got := winMITVersions(""); got != "" {
+		t.Errorf("nothing read is not a version: %q", got)
+	}
+}
+
+// A failed step's text is scrubbed before oneLineMax cuts it: cut first and
+// half a password survives the scrub. Every oneLineMax in the DC's runner
+// takes a winScrub, but the two that read the KDC's trace (no secret in it).
+func TestWindowsScrubsBeforeItCuts(t *testing.T) {
+	b, err := os.ReadFile("windows_test.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var seen int
+	for i, l := range strings.Split(string(b), "\n") {
+		_, rest, ok := strings.Cut(l, "oneLineMax(")
+		if !ok || strings.HasPrefix(strings.TrimSpace(l), "//") || strings.HasPrefix(strings.TrimSpace(l), "func oneLineMax") {
+			continue
+		}
+		if seen++; strings.HasPrefix(rest, "m[1], ") || strings.HasPrefix(rest, "s, ") || strings.HasPrefix(rest, "winScrub(") {
+			continue
+		}
+		t.Errorf("windows_test.go:%d: oneLineMax is not given a winScrub", i+1)
+	}
+	if seen == 0 {
+		t.Error("the scan found no oneLineMax call: it checks nothing")
+	}
+}

@@ -1096,10 +1096,3 @@ func (l *labDir) waitLDAPS(t *testing.T, within time.Duration) {
 		time.Sleep(2 * time.Second)
 	}
 }
-
-// winDC is the Windows DC's runner (Task 4 of the L44 plan replaces this).
-type winDC struct{}
-
-func (*winDC) version() string                                { return "" }
-func (*winDC) configNote() string                             { return "" }
-func (*winDC) setValues(*testing.T, string, string, []string) {}
