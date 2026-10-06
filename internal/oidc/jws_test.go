@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/sha512"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
@@ -297,8 +298,12 @@ func TestADERECDSASignatureIsRefused(t *testing.T) {
 		k := oidctest.NewKey(t, alg).(*ecdsa.PrivateKey)
 		good := oidctest.Sign(t, alg, k, nil, map[string]any{"sub": "x"})
 		parts := strings.Split(good, ".")
-		digest := sha256.Sum256([]byte(parts[0] + "." + parts[1]))
-		der, err := ecdsa.SignASN1(rand.Reader, k, digest[:])
+		input := []byte(parts[0] + "." + parts[1])
+		digest := func() []byte { d := sha256.Sum256(input); return d[:] }()
+		if alg == oidc.ES384 {
+			digest = func() []byte { d := sha512.Sum384(input); return d[:] }()
+		}
+		der, err := ecdsa.SignASN1(rand.Reader, k, digest)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -316,7 +321,6 @@ func TestADERECDSASignatureIsRefused(t *testing.T) {
 // nil key and for an Ed25519 key of the wrong length (M7).
 func TestAHandBuiltKeyFitsNothingUnlessItIsWhole(t *testing.T) {
 	all := []oidc.Alg{oidc.RS256, oidc.PS256, oidc.ES256, oidc.ES384, oidc.EdDSA}
-	good := oidctest.NewKey(t, oidc.ES256)
 	for name, k := range map[string]oidc.Key{
 		"no key":                 {},
 		"a nil RSA key":          {Pub: (*rsa.PublicKey)(nil)},
@@ -343,5 +347,4 @@ func TestAHandBuiltKeyFitsNothingUnlessItIsWhole(t *testing.T) {
 			}
 		}
 	}
-	_ = good
 }

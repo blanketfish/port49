@@ -79,7 +79,7 @@ func TestJWKSSkipsWhatIsNotAVerificationKey(t *testing.T) {
 }
 
 func TestJWKSThatIsNotASetIsAnError(t *testing.T) {
-	for _, body := range []string{`[]`, `{"keys": {}}`, `{}`, `not json`} {
+	for _, body := range []string{`[]`, `{"keys": {}}`, `{}`, `not json`, `{"KEYS":[]}`, `{"keys":[],"keys":[]}`, `{"keys":null}`} {
 		if _, _, err := oidc.ParseJWKS([]byte(body)); err == nil {
 			t.Errorf("%s parsed", body)
 		}

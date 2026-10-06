@@ -71,16 +71,18 @@ const MaxKeys = 100
 // kid and why; the rest stand. A body that is not a set, or holds more
 // than MaxKeys keys, is an error.
 func ParseJWKS(b []byte) (keys []Key, skipped []string, err error) {
-	var set struct {
-		Keys []json.RawMessage `json:"keys"`
+	var members []json.RawMessage
+	top, err := exactObject(b)
+	if err == nil {
+		err = json.Unmarshal(top["keys"], &members)
 	}
-	if json.Unmarshal(b, &set) != nil || set.Keys == nil {
-		return nil, nil, errors.New("oidc: the JWKS is not a JSON object with a keys array")
+	if err != nil || members == nil {
+		return nil, nil, errors.New("oidc: the JWKS is not a JSON object with one keys array")
 	}
-	if len(set.Keys) > MaxKeys {
-		return nil, nil, fmt.Errorf("oidc: the JWKS holds %d keys, over %d keys", len(set.Keys), MaxKeys)
+	if len(members) > MaxKeys {
+		return nil, nil, fmt.Errorf("oidc: the JWKS holds %d keys, over %d keys", len(members), MaxKeys)
 	}
-	for _, raw := range set.Keys {
+	for _, raw := range members {
 		j, ok := readJWK(raw)
 		if !ok {
 			skipped = append(skipped, "a key that is not a JSON object of distinct members")

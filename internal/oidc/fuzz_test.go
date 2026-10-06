@@ -17,7 +17,11 @@ func FuzzParseCompact(f *testing.F) {
 		oidc.ES256: oidctest.NewKey(f, oidc.ES256), oidc.EdDSA: oidctest.NewKey(f, oidc.EdDSA)}
 	var keys []oidc.Key
 	for alg, s := range signers {
-		f.Add(oidctest.Sign(f, alg, s, map[string]any{"kid": "k"}, map[string]any{"sub": "x"}))
+		tok := oidctest.Sign(f, alg, s, map[string]any{"kid": "k"}, map[string]any{"sub": "x"})
+		f.Add(tok)
+		// Validly signed, but not canonical: the invariant below must hold on these (I1).
+		f.Add(tok[:len(tok)-5] + "\r\n" + tok[len(tok)-5:])
+		f.Add(tok + "=")
 		keys = append(keys, oidc.Key{Pub: s.Public()})
 	}
 	for _, seed := range []string{"", "a.b.c", "a.b.c.d.e", "...", "eyJhbGciOiJub25lIn0.e30."} {
