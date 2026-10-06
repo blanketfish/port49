@@ -1002,6 +1002,35 @@ func TestWindowsBootstrapSetsUTF8Output(t *testing.T) {
 	}
 }
 
+// The script runs in a child scope, which reads its caller's variables: every
+// one the bootstrap sets before it runs the script holds the params, secrets
+// included, so each is private, and none is filled in a ForEach-Object block
+// (a child scope of its own).
+func TestWindowsBootstrapHidesTheParamsFromTheScript(t *testing.T) {
+	run := strings.Index(winBootstrap, "$r = & $sb @p")
+	if run < 0 {
+		t.Fatal("the bootstrap does not run the script as $r = & $sb @p")
+	}
+	before := winBootstrap[:run]
+	for _, m := range regexp.MustCompile(`(?m)^\s*\$(?:private:)?(\w+)\s*=`).FindAllStringSubmatch(before, -1) {
+		switch m[1] {
+		case "ErrorActionPreference", "ProgressPreference":
+			continue
+		}
+		if !strings.Contains(before, "$private:"+m[1]+" =") {
+			t.Errorf("$%s is set before the script runs, and is not private", m[1])
+		}
+	}
+	for _, name := range []string{"in", "p", "prop", "sb"} {
+		if !strings.Contains(before, "$private:"+name+" =") {
+			t.Errorf("$%s is not declared private", name)
+		}
+	}
+	if strings.Contains(winBootstrap, "ForEach-Object") || strings.Contains(winBootstrap, "$_.Name") {
+		t.Error("the bootstrap fills the params in a ForEach-Object block")
+	}
+}
+
 // $Error holds every record a redirected native command made, ktpass's text
 // included: the bootstrap must never serialize or print it.
 func TestWindowsBootstrapNeverTouchesError(t *testing.T) {

@@ -118,15 +118,20 @@ func winEnv(s *winSecrets) string { return "USERNAME=Docker\nPASSWORD=" + s.Admi
 // winBootstrap is the one command the SSH session runs. It reads
 // {"script": ..., "params": {...}} from stdin, runs the script with the params
 // splatted, and writes its result as one line of JSON, or {"error": ...} and
-// exit 1. Params, secrets included, travel on stdin only.
+// exit 1. Params, secrets included, travel on stdin only. Every variable that
+// holds them is private, so the script, run in a child scope, cannot read
+// them by name; a foreach statement fills $p in this scope, where a
+// ForEach-Object block would not.
 const winBootstrap = `$ErrorActionPreference = 'Stop'
 try { [Console]::OutputEncoding = New-Object Text.UTF8Encoding $false; [Console]::InputEncoding = New-Object Text.UTF8Encoding $false } catch { }
 $ProgressPreference = 'SilentlyContinue'
 try {
-  $in = [Console]::In.ReadToEnd() | ConvertFrom-Json
-  $p = @{}
-  if ($in.params) { $in.params.psobject.Properties | ForEach-Object { $p[$_.Name] = $_.Value } }
-  $r = & ([scriptblock]::Create($in.script)) @p
+  $private:in = [Console]::In.ReadToEnd() | ConvertFrom-Json
+  $private:p = @{}
+  $private:prop = $null
+  if ($in.params) { foreach ($prop in $in.params.psobject.Properties) { $p[$prop.Name] = $prop.Value } }
+  $private:sb = [scriptblock]::Create($in.script)
+  $r = & $sb @p
   [Console]::Out.WriteLine((ConvertTo-Json -InputObject $r -Depth 8 -Compress))
 } catch {
   [Console]::Out.WriteLine((ConvertTo-Json -InputObject @{ error = $_.Exception.Message } -Compress))
