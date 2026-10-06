@@ -53,13 +53,16 @@ notes, "Carried" and "Open for the final review". Also read `docs/design/2026-08
 - **Stay disjoint from plan 7h** (`feature/oidc-and-trust-domains`). This plan never touches
   `internal/oidc`, `internal/broker`, `internal/store`, `internal/policy`, `internal/decision`,
   `internal/daemon/metrics`, `cmd/port49d` or port49d wiring.
-  - Code: `tests/lab/` and, only through Task 7's defect path, `internal/directory/`.
+  - Code on this plan's branch: `tests/lab/` only. Task 7's `internal/directory` fixes, if any,
+    are follow-ups on their own `fix/l44-<part>` branches from `main` after 7h merges
+    ("Sequencing").
   - **This plan never edits the `Makefile` or `tests/lab/README.md`** (7h's Task 15 edits both).
     L44 runs through a documented `go test` command, written in `TestL44WindowsAD`'s comment and
     in the note's Run line. Operator notes go in the results note's configuration section and in
     the header comment of `tests/lab/directory/windows/compose.yaml`.
   - Text shared with 7h: none on the branch. The spec, design and roadmap edits are Task 8's,
     on `main` after 7h merges (controller R2), and so is any spec text Task 7 needs.
+    Task 7's code is not on this branch at all.
   - Every new top-level identifier in `package lab` starts with `win` or `l44`, except Task 1's
     harness helpers (`containerWhere`, `newDirectories`, `noteHoldsSecret`, `labSIDString`). 7h's
     plan uses none of those names, and none of this plan's names starts with `oidc`, so nothing
@@ -73,24 +76,25 @@ as a dependency. The controller's rulings, written here as "controller R1" to "c
 (`.superpowers/sdd/2026-10-06-l44-windows-server-ad/progress.md`), are not this plan's own
 R1–R8. They bind this plan in this order:
 
-1. **On `feature/l44-windows-ad`:** Tasks 1–6 (the harness, the run, the note and its evidence).
-   Task 7's code parts are also on this branch, if a Task 6 Step 3 rule fires: they touch only
-   `internal/directory` and `tests/lab`, which 7h does not touch. No commit on this branch
-   touches the spec, the design, the roadmap README, the `Makefile` or `tests/lab/README.md`.
-2. **The L44 PR** carries Tasks 1–6, plus any Task 7 code part. Its description says, in a
-   section "Docs pending on main after 7h":
-   - the §15 row, decision 38's L44 marks and the design sentences are Task 8's, committed to
-     `main` after 7h merges;
-   - for each Task 7 part that ran, the spec text it needs, word for word.
-   - **No Task 7 part ran:** the PR merges on its own (controller R3), before or after 7h.
-   - **A Task 7 part ran:** its spec text goes first (spec first). The text is drafted before the
-     fix commit, in the PR description. After 7h merges, it is committed to `main` as a docs-only
-     commit, and only then is the L44 PR merged. The PR's files are disjoint from 7h's, so it
-     merges without a rebase; the wait is on merge order alone, and it keeps `main` from holding
-     code its spec contradicts.
-3. **Task 8, on `main`,** after 7h has merged and the L44 PR has merged (rule 3 needs the note on
-   `main`). It is a docs-only commit in the main checkout, never on `feature/l44-windows-ad`. It
-   leaves the roadmap's status line alone: the controller updates that line (controller R4).
+1. **On `feature/l44-windows-ad`: Tasks 1–6 only** (the harness, the run, the note and its
+   evidence). No commit on this branch touches `internal/`, the spec, the design, the roadmap
+   README, the `Makefile` or `tests/lab/README.md`.
+2. **The L44 PR carries Tasks 1–6 only** and merges on its own (controller R3), before or after
+   7h; it never waits on another PR. Its description lists, under "Follow-ups after 7h":
+   - Task 8's closing docs (the §15 row, decision 38's L44 marks, the design sentences);
+   - each Task 7 part that Task 6 Step 3's rules fired, with the rows that fired it.
+3. **Task 7, a follow-up per part, after 7h merges and after the L44 PR merges** (the fix needs
+   the harness on `main`). For each part, in this order:
+   1. its spec text, a docs-only commit to `main` in the main checkout (spec first);
+   2. a `fix/l44-<part>` branch from `main`, with the code in `internal/directory` and its unit
+      test, and its own PR;
+   3. Task 6 re-run at the fix, from a pinned worktree; the re-run's note and evidence are
+      committed on the `fix/` branch.
+   No rebase is ever needed: each branch starts from `main` as it then stands.
+4. **Task 8, on `main`,** after 7h has merged, the L44 PR has merged (rule 3 needs the note on
+   `main`), and every Task 7 `fix/` PR has merged (Task 8 cites the last note). It is a
+   docs-only commit in the main checkout, never on a feature branch. It leaves the roadmap's
+   status line alone: the controller updates that line (controller R4).
 
 ## Rulings
 
@@ -200,9 +204,9 @@ Adapted from plan 7h's lab rules (`.superpowers/sdd/2026-10-06-l44-windows-serve
 
 - Follow CLAUDE.md's lab register rules 1–4.
 - A result that contradicts a doc means the doc is wrong (rule 4).
-- A result that shows port49 wrong is a defect. Fix it on the branch, with a unit test, in a
-  `fix(directory)` commit (Task 7), and re-run from a worktree pinned to the fix. The spec text
-  for the fix is written first, but it is committed to `main` only after 7h merges ("Sequencing").
+- A result that shows port49 wrong is a defect. It is fixed in Task 7, after 7h merges: the spec
+  text on `main` first, then a `fix(directory)` commit with a unit test on a `fix/l44-<part>`
+  branch from `main`, then a re-run from a worktree pinned to the fix ("Sequencing").
 - A cell whose precondition failed (R6) is re-run up to three times. After that it is recorded
   INVALID, and a row with an INVALID cell stays open.
 
@@ -302,7 +306,7 @@ Adapted from plan 7h's lab rules (`.superpowers/sdd/2026-10-06-l44-windows-serve
 | `tests/lab/directory/windows/scripts/*.ps1` (create, 16) | One setup or measurement step each, embedded into the test binary. |
 | `tests/lab/l44_test.go` (create) | `TestL44WindowsAD` and its sections, with the run command in its comment; `TestL44Bringup`. |
 | `tests/lab/results/L44-windows_ad.md`, `tests/lab/evidence/L44-windows_ad.json` (created by the run) | The note and its evidence. |
-| `internal/directory/mapping.go`, `conn.go` and their tests (modify, **only on Task 7's defect path**, on the branch) | |
+| `internal/directory/mapping.go`, `conn.go` and their tests (modify, **only on Task 7's defect path**, on a `fix/l44-<part>` branch from `main` after 7h merges, never on `feature/l44-windows-ad`) | |
 | `docs/design/2026-08-23-policy-engine-spec.md`, `docs/design/2026-08-21-port49-design.md`, `docs/superpowers/plans/README.md` (modify, **only on `main` after 7h merges**: Task 8, and any Task 7 spec text) | |
 
 This plan does not modify the `Makefile` or `tests/lab/README.md` (controller
@@ -4343,32 +4347,36 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 ```
 
-After any Task 7 fix, re-run Steps 1–5 at the fix's commit. The note committed last is the one
-Task 8 cites.
+A Task 7 fix re-runs Steps 1–5 at the fix's commit, with `.worktrees/l44-fix-<part>` (the
+`fix/` branch's worktree) in place of `.worktrees/l44` in the pin, copy-back and commit
+commands. The note committed last is the one Task 8 cites.
 
 ---
 
 ### Task 7: (only on the defect path) Fixes a Windows result calls for
 
 Each part runs only when Task 6 Step 3's rule for it held. A part that did not run is listed in
-Task 8's as-built with the rows that ruled it out. Its order, per "Sequencing":
+Task 8's as-built with the rows that ruled it out.
 
-1. **Spec text first, drafted, not committed on the branch.** Write the part's spec text word for
-   word into the L44 PR description, under "Docs pending on main after 7h". The spec and design
-   files are 7h's too, so no commit on `feature/l44-windows-ad` touches them.
-2. **The `fix(directory)` commit, on `feature/l44-windows-ad`,** with its unit test. It touches
-   only `internal/directory` and `tests/lab/windows_unit_test.go`, which 7h does not touch.
-3. **Task 6 is re-run at the fix.**
-4. **After 7h merges,** the drafted spec text is committed to `main` as a docs-only commit, in
-   the main checkout. Only then is the L44 PR merged. The PR merges with no rebase, because its
-   files are disjoint from 7h's, and `main` never holds the fix ahead of its spec.
+**Task 7 is a follow-up, never part of the L44 PR.** It starts after 7h has merged and the L44
+PR (Tasks 1–6) has merged. Each part runs in this order, per "Sequencing":
+
+1. **Spec text first, on `main`** (Step 0): a docs-only commit in the main checkout.
+2. **A `fix/l44-<part>` branch from `main`** (`fix/l44-quote`, `fix/l44-escape`,
+   `fix/l44-signbyte` or `fix/l44-external-one`), in the worktree
+   `/home/rwendt/git/port49/.worktrees/l44-fix-<part>`. It holds the `fix(directory)` commit,
+   with its unit test (Steps 1–3).
+3. **Task 6 re-run at the fix** (Step 4). The new note and evidence are committed on the `fix/`
+   branch, which then has its own PR.
+
+No PR waits on another, and no branch is rebased: each starts from `main` as it then stands.
 
 **Files (by part):**
 - 7a and 7b: modify `internal/directory/mapping.go` (`ADIssuerSerial`) and
-  `internal/directory/mapping_test.go`, on the branch.
+  `internal/directory/mapping_test.go`, on the `fix/` branch.
 - 7c: modify `internal/directory/conn.go` (`bind`) and `internal/directory/conn_test.go`, on the
-  branch.
-- All parts, **on `main` after 7h merges only**: modify `docs/design/2026-08-23-policy-engine-spec.md`
+  `fix/` branch.
+- All parts, **on `main`, before the `fix/` branch**: modify `docs/design/2026-08-23-policy-engine-spec.md`
   §13 decision 38 (item 1 for 7a and 7b, items 8 and 9 for 7c) and
   `docs/design/2026-08-21-port49-design.md` §10 (7c).
 
@@ -4377,6 +4385,25 @@ Task 8's as-built with the rows that ruled it out. Its order, per "Sequencing":
   output.
 - 7c keeps `directory.Refusal(error) bool`. An EXTERNAL bind answered 1 now `errors.Is`
   `ErrBindRefused`.
+
+- [ ] **Each part, Step 0: Spec text on `main`, then the `fix/` branch** (main checkout; docs only)
+
+Check that 7h and the L44 PR have both merged. Apply the part's spec text, given under its
+steps below, against `main` as it then stands. Then branch:
+
+```bash
+git -C /home/rwendt/git/port49 switch main && git -C /home/rwendt/git/port49 pull --ff-only
+git -C /home/rwendt/git/port49 add docs/design/2026-08-23-policy-engine-spec.md docs/design/2026-08-21-port49-design.md
+git -C /home/rwendt/git/port49 commit -m "docs: <the rule> as a Windows DC measured it (L44)
+
+tests/lab/results/L44-windows_ad.md: <the rows>. Rule 4: the doc follows the
+lab; the fix follows on fix/l44-<part>.
+
+Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
+git -C /home/rwendt/git/port49 push
+git -C /home/rwendt/git/port49 worktree add -b fix/l44-<part> /home/rwendt/git/port49/.worktrees/l44-fix-<part> main
+```
 
 - [ ] **7a, Step 1: The failing test** (append to `internal/directory/mapping_test.go`)
 
@@ -4521,8 +4548,8 @@ return with:
 
 Update `Refusal`'s comment to name "or an EXTERNAL bind answered 1 (L43, L44)".
 
-The spec text, drafted first in the PR description and committed to `main` after 7h merges
-(Step 4):
+The spec text, committed to `main` in Step 0 before the `fix/` branch exists (e5's code is in
+the L44 note already on `main`):
 - Decision 38 item 9's list becomes "(LDAP 49, 48, 8, 13 or 7, 1 on an EXTERNAL bind (L43, L44),
   a KDC's refusal)".
 - Item 8's "port49 counts 1 as a server fault, so configure `simple` or `gssapi` against Samba"
@@ -4535,14 +4562,12 @@ The spec text, drafted first in the PR description and committed to `main` after
 
 Run: `go test ./internal/directory/ -count=1 && make test && make vet`. Expected: PASS.
 
-- [ ] **Each part, Step 3: Commit the fix on the branch** (one `fix(directory)` commit per
-part; no `docs:` commit on the branch)
-
-Before this commit, the part's spec text is in the PR description (Step 1 of the order above).
+- [ ] **Each part, Step 3: Commit the fix on `fix/l44-<part>`** (one `fix(directory)` commit;
+no `docs:` commit on the branch: the spec text is already on `main` from Step 0)
 
 ```bash
-git -C /home/rwendt/git/port49/.worktrees/l44 add internal/directory tests/lab/windows_unit_test.go
-git -C /home/rwendt/git/port49/.worktrees/l44 commit -m "fix(directory): <7a: quote <I> values as Windows does | 7b: keep the serial's sign byte in <SR> | 7c: an EXTERNAL bind answered 1 is a refusal>
+git -C /home/rwendt/git/port49/.worktrees/l44-fix-<part> add internal/directory tests/lab/windows_unit_test.go
+git -C /home/rwendt/git/port49/.worktrees/l44-fix-<part> commit -m "fix(directory): <7a: quote <I> values as Windows does | 7b: keep the serial's sign byte in <SR> | 7c: an EXTERNAL bind answered 1 is a refusal>
 
 L44 (tests/lab/results/L44-windows_ad.md) <the rows that showed it>.
 
@@ -4550,37 +4575,25 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
 ```
 
-Then re-run Task 6 at the fix. Expected: the matrix's `comma-port49` (7a) or `highbit-port49`
-(7b) row gets the TGT its quoted, escaped or sign-byte twin got. For 7c, `tryBind`'s refusal
-text is unchanged.
+- [ ] **Each part, Step 4: Re-run Task 6 at the fix, and open the `fix/` PR**
 
-- [ ] **Each part, Step 4: The spec text on `main`, after 7h merges** (main checkout; docs only)
+Re-run Task 6 Steps 1–5 pinned at the fix's commit, with `.worktrees/l44-fix-<part>` in place of
+`.worktrees/l44`. The re-run's note and evidence are committed on `fix/l44-<part>`. Expected:
+the matrix's `comma-port49` (7a) or `highbit-port49` (7b) row gets the TGT its quoted, escaped
+or sign-byte twin got. For 7c, `tryBind`'s refusal text is unchanged.
 
-Wait until `feature/oidc-and-trust-domains` has merged. Then, in `/home/rwendt/git/port49` on
-`main`, apply the drafted spec text against `main` as it then stands:
-
-```bash
-git -C /home/rwendt/git/port49 pull --ff-only
-git -C /home/rwendt/git/port49 add docs/design/2026-08-23-policy-engine-spec.md docs/design/2026-08-21-port49-design.md
-git -C /home/rwendt/git/port49 commit -m "docs: <the rule> as a Windows DC measured it (L44)
-
-tests/lab/results/L44-windows_ad.md (on feature/l44-windows-ad, merging next):
-<the rows>. Rule 4: the doc followed the lab. The fix is <the fix commit>.
-
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01KRDnCbmkhchGxXvV99W4mc"
-```
-
-Then merge the L44 PR, with no rebase.
+Then open the `fix/l44-<part>` PR against `main`. It merges on its own, with no rebase; Task 8
+waits for it.
 
 ---
 
 ### Task 8: Close L44 (or narrow it) and record what was built — docs only, on `main`, after 7h merges
 
 **This task is a docs-only commit to `main`, made after 7h merges (controller R2). It is never
-on `feature/l44-windows-ad`.** It runs once both of these hold:
+on `feature/l44-windows-ad` or a `fix/` branch.** It runs once all of these hold:
 - `feature/oidc-and-trust-domains` has merged;
-- the L44 PR has merged, so the note it cites is on `main` (rule 3).
+- the L44 PR has merged, so the note it cites is on `main` (rule 3);
+- every Task 7 `fix/l44-<part>` PR has merged, so the note on `main` is the last one measured.
 
 Its commands run in the main checkout, `/home/rwendt/git/port49`. Each edit is made against
 `main` as it then stands: 7h will have added L45–L47 directly under the L44 row in §15, and will
@@ -4588,7 +4601,7 @@ have edited the design file at other lines.
 
 **Files:**
 - Modify: `docs/design/2026-08-23-policy-engine-spec.md`: §15 row L44, and §13 decision 38
-  items 1, 6 and 8 (and 9 if 7c ran, already committed by Task 7 Step 4).
+  items 1, 6 and 8 (and 9 if 7c ran, already committed by Task 7 Step 0).
 - Modify: `docs/design/2026-08-21-port49-design.md`: §7 (the "A Windows DC's behaviour is
   register row L44's" sentence) and §10 items 1 and 2.
 - Modify: `docs/superpowers/plans/README.md`: "Plan 7g — As built" (the "Lab" bullet,
@@ -4606,7 +4619,8 @@ git -C /home/rwendt/git/port49 log --oneline -1 --grep 'from rhwendt/feature/oid
 test -f /home/rwendt/git/port49/tests/lab/results/L44-windows_ad.md && echo "L44 note on main"
 ```
 
-Expected: both lines print. Otherwise stop: Task 8 waits.
+Expected: both lines print, and no `fix/l44-*` PR is open (`gh pr list --search "head:fix/l44"`
+lists none). Otherwise stop: Task 8 waits.
 
 - [ ] **Step 1: The register row (rule 3)**
 
@@ -4637,7 +4651,7 @@ sentence states what the note shows.
   - the EXTERNAL results: mapped, unmapped, and mapped with the KDC stopped, with their codes;
   - GSSAPI as installed and under `LdapEnforceChannelBinding 2`;
   - the plain-LDAP simple bind's code.
-  Item 9's refusal list changes only if 7c ran (Task 7 Step 4), or if Ryan has answered OR-1
+  Item 9's refusal list changes only if 7c ran (Task 7 Step 0), or if Ryan has answered OR-1
   branch (iii). Otherwise it stays as it is.
 - **Rule 4.** A result that contradicts any existing sentence of items 1, 6, 8 or 9 rewrites
   that sentence, and the commit message says so.
