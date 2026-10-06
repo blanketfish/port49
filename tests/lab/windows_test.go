@@ -120,7 +120,7 @@ func winEnv(s *winSecrets) string { return "USERNAME=Docker\nPASSWORD=" + s.Admi
 // splatted, and writes its result as one line of JSON, or {"error": ...} and
 // exit 1. Params, secrets included, travel on stdin only.
 const winBootstrap = `$ErrorActionPreference = 'Stop'
-[Console]::OutputEncoding = New-Object Text.UTF8Encoding $false
+try { [Console]::OutputEncoding = New-Object Text.UTF8Encoding $false } catch { }
 $ProgressPreference = 'SilentlyContinue'
 try {
   $in = [Console]::In.ReadToEnd() | ConvertFrom-Json

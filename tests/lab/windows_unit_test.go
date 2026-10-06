@@ -484,21 +484,17 @@ func TestWindowsScriptsTakeTheirParams(t *testing.T) {
 }
 
 var (
-	// winPSEcho is every way a PowerShell line can write a value somewhere an
-	// operator, a transcript or the harness's log could read it.
-	winPSEcho = regexp.MustCompile(`(?i)write-|out-file|out-string|out-host|out-default|out-printer|set-content|add-content|tee-object|start-transcript|format-|export-|convertto-(?:json|csv|xml|html)|convertfrom-securestring|-value\b|set-variable|\[console\]::|\$host\.ui|\[io\.file\]::|writeobject|\bthrow\b|\breturn\b|\becho\b`)
 	// winPSAssign is a variable (or one of its members or elements) assigned on
 	// one line: its name and right side.
 	winPSAssign = regexp.MustCompile(`^\s*\$([A-Za-z0-9_:]+)(?:\.\w+|\[[^\]]*\])*\s*\+?=\s*(.*)$`)
-	// winPSKey is a hashtable key on a line (a result key), never a variable.
-	winPSKey = regexp.MustCompile(`(?:^\s*|[;{]\s*)[a-z_][a-z0-9_]*\s*=\s`)
-	winPSMkr = regexp.MustCompile(`New-Lab(?:Secret|Plain)`)
-	winPSDQ  = regexp.MustCompile(`"[^"]*"`)
-	// winPSRedirect writes to a file or a stream other than $null.
-	winPSRedirect = regexp.MustCompile(`\*?>>?\s*(?:[^$\s]|\$[^n])`)
+	winPSMkr    = regexp.MustCompile(`New-Lab(?:Secret|Plain)`)
 	// winPSConsumes starts an expression whose result is not its arguments:
 	// what these cmdlets are given does not come back out.
 	winPSConsumes = regexp.MustCompile(`^(?:Invoke-Command|Set-ADAccountPassword|New-ADUser|Install-ADDSForest)\b`)
+	// winPSIndirect reaches a variable by a name or through the call, so the
+	// scan cannot see which one: no script does.
+	winPSIndirect = regexp.MustCompile(`(?i)PSBoundParameters|MyInvocation|Get-Variable|\bgv\b|variable:|\$args\b|\$input\b|Invoke-Expression|\biex\b`)
+	winPSFnDef    = regexp.MustCompile(`^function New-Lab(?:Secret|Plain) \{$`)
 )
 
 // winJoinContinued joins each line that ends in a backtick or a pipe onto the
@@ -523,6 +519,16 @@ func winJoinContinued(lines []string) []string {
 	return out
 }
 
+// winUseRe finds a use of any of vars: $v, ${v}, or $using:v, $script:v and
+// the like. Group 1 is the name.
+func winUseRe(vars []string) *regexp.Regexp {
+	q := make([]string, len(vars))
+	for i, v := range vars {
+		q[i] = regexp.QuoteMeta(v)
+	}
+	return regexp.MustCompile(`\$\{?(?:(?:using|script|global|local|private):)?(` + strings.Join(q, "|") + `)\b`)
+}
+
 // winSecretVars is the variables of a script that hold a secret: its secret
 // parameters, whatever is assigned from New-LabSecret or New-LabPlain, and
 // whatever is assigned from any expression that uses one of those (a
@@ -533,16 +539,16 @@ func winSecretVars(lines []string) []string {
 	vars := append([]string(nil), winSecretParams...)
 	for changed := true; changed; {
 		changed = false
+		use := winUseRe(vars)
 		for _, l := range lines {
 			m := winPSAssign.FindStringSubmatch(l)
 			if m == nil || slices.Contains(vars, m[1]) {
 				continue
 			}
-			rhs := strings.TrimLeft(m[2], "( ")
-			if winPSConsumes.MatchString(rhs) {
+			if winPSConsumes.MatchString(strings.TrimLeft(m[2], "( ")) {
 				continue
 			}
-			if winPSMkr.MatchString(m[2]) || winUsesAny(m[2], vars) != "" {
+			if winPSMkr.MatchString(m[2]) || use.MatchString(m[2]) {
 				vars = append(vars, m[1])
 				changed = true
 			}
@@ -551,24 +557,36 @@ func winSecretVars(lines []string) []string {
 	return vars
 }
 
-// winUsesAny names the first of vars that line uses, or "".
-func winUsesAny(line string, vars []string) string {
-	for _, v := range vars {
-		if regexp.MustCompile(`\$` + regexp.QuoteMeta(v) + `\b`).MatchString(line) {
-			return v
-		}
-	}
-	return ""
+// winSecretForm is a line shape a secret may appear in, and how many uses of a
+// secret (a secret variable, or a New-Lab call) the line has.
+type winSecretForm struct {
+	re   *regexp.Regexp
+	uses int
 }
 
-// winInDQString reports whether a double-quoted string on the line uses $v.
-func winInDQString(line, v string) bool {
-	for _, q := range winPSDQ.FindAllString(line, -1) {
-		if winUsesAny(q, []string{v}) != "" {
-			return true
-		}
+// winSecretForms are the eight shapes the scripts use a secret in; {S} is a
+// secret variable. Each hands the secret to a cmdlet or exe that consumes it and
+// cannot print it; anything else that touches one is refused, so a new use is
+// reviewed and added here on purpose.
+func winSecretForms(sv string) []winSecretForm {
+	var out []winSecretForm
+	for _, f := range []struct {
+		re   string
+		uses int
+	}{
+		{`^\$\w+ = New-LabPlain$`, 1},
+		{`^\$\w+ = ConvertTo-SecureString {S} -AsPlainText -Force$`, 1},
+		{`^Set-ADAccountPassword (?:\$user|port49) -Reset -NewPassword {S}$`, 1},
+		{`^Set-ADAccountPassword \$user -Reset -NewPassword \(ConvertTo-SecureString \(New-LabPlain\) -AsPlainText -Force\)$`, 1},
+		{`^\$\w+ = New-Object Management\.Automation\.PSCredential \("CORP\\\$user", {S}\)$`, 1},
+		{`^\$\w+ = Invoke-Command [^{|;]*-Credential {S} [^{|;]*-ScriptBlock \{$`, 1},
+		{`^& ktpass\.exe [^|;>]*-pass {S} [^|;>]*\*> \$null$`, 1},
+		{`^Install-ADDSForest [^|;>]*-SafeModeAdministratorPassword {S} [^|;>]*\| Out-Null$`, 1},
+		{`^New-ADUser [^|;>]*-AccountPassword (?:{S}|\(New-LabSecret\))(?: [^|;>]*)?$`, 1},
+	} {
+		out = append(out, winSecretForm{regexp.MustCompile(strings.ReplaceAll(f.re, "{S}", sv)), f.uses})
 	}
-	return false
+	return out
 }
 
 func winVarName(v string) string {
@@ -579,38 +597,56 @@ func winVarName(v string) string {
 }
 
 // winSecretLeaks names each line of a script (by number and variable name,
-// never by content) that writes a secret: an echoing cmdlet or .NET writer,
-// a redirection, a string that interpolates it, a result key that carries it,
-// or the variable alone on a line, which is pipeline output.
+// never by content) that uses a secret, or a variable built from one, in a form
+// no winSecretForms entry allows. The bodies of New-LabSecret and New-LabPlain
+// are exempt: they make the secret.
 func winSecretLeaks(src string) []string {
 	src = strings.ReplaceAll(src, "\r\n", "\n")
 	raw := strings.Split(src, "\n")
 	vars := winSecretVars(raw)
+	use := winUseRe(vars)
+	q := make([]string, len(vars))
+	for i, v := range vars {
+		q[i] = regexp.QuoteMeta(v)
+	}
+	forms := winSecretForms(`\$(?:` + strings.Join(q, "|") + `)\b`)
 	var out []string
+	inFn := false
 	for i, l := range winJoinContinued(raw) {
 		tl := strings.TrimSpace(l)
-		if strings.HasPrefix(tl, "param(") || strings.HasPrefix(tl, "function ") || strings.HasPrefix(tl, "#") {
-			continue
-		}
-		v := winUsesAny(l, vars)
-		if v == "" && winPSMkr.MatchString(l) {
-			v = "New-Lab*"
-		}
-		if v == "" {
-			continue
-		}
-		bare := strings.HasPrefix(tl, "$") && !winPSAssign.MatchString(l) && !strings.Contains(l, "Out-Null") && !strings.Contains(l, "$null")
 		switch {
-		case winPSEcho.MatchString(l):
-			out = append(out, fmt.Sprintf("line %d echoes %s", i+1, winVarName(v)))
-		case winPSRedirect.MatchString(l):
-			out = append(out, fmt.Sprintf("line %d redirects %s", i+1, winVarName(v)))
-		case v != "New-Lab*" && winInDQString(l, v):
-			out = append(out, fmt.Sprintf("line %d interpolates %s into a string", i+1, winVarName(v)))
-		case winPSKey.MatchString(l) && !winPSAssign.MatchString(l):
-			out = append(out, fmt.Sprintf("line %d makes %s a result key's value", i+1, winVarName(v)))
-		case bare:
-			out = append(out, fmt.Sprintf("line %d leaves %s on the pipeline", i+1, winVarName(v)))
+		case inFn:
+			inFn = tl != "}"
+			continue
+		case winPSFnDef.MatchString(tl):
+			inFn = true
+			continue
+		case strings.HasPrefix(tl, "param(") || strings.HasPrefix(tl, "#"):
+			continue
+		}
+		if winPSIndirect.MatchString(l) {
+			out = append(out, fmt.Sprintf("line %d reaches a variable by name or through the call", i+1))
+			continue
+		}
+		rhs := l
+		if m := winPSAssign.FindStringSubmatch(l); m != nil {
+			rhs = m[2]
+		}
+		uses := use.FindAllStringSubmatch(rhs, -1)
+		n := len(uses) + len(winPSMkr.FindAllString(rhs, -1))
+		if n == 0 {
+			continue
+		}
+		ok := false
+		for _, f := range forms {
+			ok = ok || f.uses == n && f.re.MatchString(tl)
+		}
+		if !ok {
+			v := "New-Lab*"
+			if len(uses) > 0 {
+				v = uses[0][1]
+			}
+			out = append(out, fmt.Sprintf("line %d uses %s in a form no approved pattern allows", i+1, winVarName(v)))
 		}
 	}
 	return out
@@ -629,8 +665,9 @@ func TestWindowsScriptsNeverEchoASecret(t *testing.T) {
 	}
 }
 
-// The scan finds the variables the scripts make secret, and flags a bad line
-// of each kind (and not a good one).
+// The scan finds the variables the scripts make secret, passes the eight forms
+// the scripts use a secret in, and fails any other use of a secret or of a
+// variable built from one.
 func TestWindowsSecretScanFlagsALeak(t *testing.T) {
 	src, _ := winScriptFS.ReadFile("directory/windows/scripts/enroll_as.ps1")
 	got := winSecretVars(strings.Split(string(src), "\n"))
@@ -639,19 +676,25 @@ func TestWindowsSecretScanFlagsALeak(t *testing.T) {
 			t.Errorf("enroll_as: $%s is not seen as a secret", want)
 		}
 	}
-	base := "param([string]$port49_password)\n$ErrorActionPreference = 'Stop'\n$p = New-LabPlain\n$q = $p + 'x'\n"
+	// $p and $s are secrets (made, and built from one); $port49_password is a param.
+	base := "param([string]$port49_password)\n$ErrorActionPreference = 'Stop'\n$p = New-LabPlain\n" +
+		"$s = ConvertTo-SecureString $p -AsPlainText -Force\n"
+	if got := winSecretLeaks(base); len(got) != 0 {
+		t.Fatalf("the base of the table leaks: %v", got)
+	}
 	for _, c := range []struct {
 		line string
 		bad  bool
 	}{
+		// What the first deny-list scan caught.
 		{"Write-Output $port49_password", true},
 		{"Write-Host $p", true},
 		{"$p | Out-File C:\\x", true},
-		{"throw \"bad: $q\"", true},
+		{"throw \"bad: $s\"", true},
 		{"$m = \"pw=$p\"", true},
-		{"@{ password = $q }", true},
+		{"@{ password = $s }", true},
 		{"@{ a = 1; b = New-LabPlain }", true},
-		// Each of these passed the first scan.
+		// What the second caught.
 		{"$p", true},
 		{"$p.Length; $p", true},
 		{"$p > C:\\x.txt", true},
@@ -670,17 +713,47 @@ func TestWindowsSecretScanFlagsALeak(t *testing.T) {
 		{"$p |\nOut-File C:\\x", true},
 		{"$x = 'pw' + $p\n@{ k = $x }", true},
 		{"$x = 'pw' + $p\n$x", true},
-		{"$x = 'pw' + $p\nWrite-Output $x", true},
 		{"return $p", true},
-		{"ConvertTo-SecureString $p -AsPlainText -Force | Out-Null", false},
-		{"& ktpass.exe -pass $port49_password *> $null", false},
+		// What only an allow-list catches.
+		{"($p)", true},
+		{"@($p)", true},
+		{",$p", true},
+		{"[string]$p", true},
+		{"\"{0}\" -f $p", true},
+		{"'{0}' -f $p", true},
+		{"write $p", true},
+		{"sc C:\\x $p", true},
+		{"if ($true) { $p }", true},
+		{"& { $p }", true},
+		{"foreach ($c in $p.ToCharArray()) { $c }", true},
+		{"[Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($s))", true},
+		{"$s", true},
+		{"write $s", true},
+		{"function f($x) { $x }\nf $p", true},
+		{"$x = Invoke-Command { $using:p }\n@{ k = $x }", true},
+		{"Invoke-Command { param($a) $a } -ArgumentList $p", true},
+		{"Set-ADUser alice -Description $p", true},
+		{"Set-ADUser alice -Description $s", true},
+		{"${p}", true},
+		{"$script:p", true},
+		{"Write-Output $PSBoundParameters", true},
+		{"(Get-Variable p).Value", true},
+		{"$x = Invoke-Command -ComputerName c -Credential $s -ArgumentList $p -ScriptBlock {", true},
+		// The eight forms.
+		{"$q = New-LabPlain", false},
+		{"$q = ConvertTo-SecureString $p -AsPlainText -Force", false},
+		{"Set-ADAccountPassword $user -Reset -NewPassword $s", false},
+		{"Set-ADAccountPassword port49 -Reset -NewPassword $s", false},
+		{"Set-ADAccountPassword $user -Reset -NewPassword (ConvertTo-SecureString (New-LabPlain) -AsPlainText -Force)", false},
+		{"$c = New-Object Management.Automation.PSCredential (\"CORP\\$user\", $s)", false},
+		{"$pem = Invoke-Command -ComputerName c -Credential $s -Authentication Credssp -ScriptBlock {\n}", false},
+		{"& ktpass.exe -pass $port49_password -out $o *> $null", false},
 		{"& ktpass.exe `\n  -pass $port49_password *> $null", false},
-		{"$p | Out-Null", false},
-		{"$p > $null", false},
-		{"$x = 'pw' + $p", false},
-		{"$pem = Invoke-Command -ComputerName c -Credential $p\n@{ cert_pem = \"$pem\" }", false},
-		{"$r = @{}\n$r.k = 'v'\n$r", false},
+		{"Install-ADDSForest -DomainName x -SafeModeAdministratorPassword $s -Force | Out-Null", false},
+		{"New-ADUser -Name a -AccountPassword $s -Enabled $true", false},
+		{"New-ADUser -Name a -AccountPassword (New-LabSecret) -Enabled $true", false},
 		{"@{ ok = $true }", false},
+		{"function New-LabSecret {\n  $b = New-Object byte[] 12\n}", false},
 	} {
 		if got := winSecretLeaks(base + c.line + "\n"); (len(got) > 0) != c.bad {
 			t.Errorf("%q: flagged=%v, want %v", c.line, len(got) > 0, c.bad)
@@ -791,31 +864,92 @@ func TestWindowsPKINITImageRecordsItsVersions(t *testing.T) {
 }
 
 // The DC's password is in its container's environment (dockur reads it there),
-// which docker's inspect and compose's config would print. No lab code runs
-// either: docker on the lab box is root-equivalent and the lab single-occupant,
-// so what is left is a careless print.
+// which docker's inspect and compose's config would print, and a command run in
+// the container could print too. No lab code does any of them: docker on the lab
+// box is root-equivalent and the lab single-occupant, so what is left is a
+// careless print.
 func TestLabNeverPrintsAContainerEnvironment(t *testing.T) {
-	bad := regexp.MustCompile("docker\\s+inspect|docker\\s+compose\\s+config|compose\\s+config\\b|" +
-		`"docker",\s*"inspect"|"container",\s*"inspect"|dockerCmd\("inspect"|"compose"[^\n)]*"config"`)
 	files, _ := filepath.Glob("*.go")
 	for _, f := range files {
 		b, _ := os.ReadFile(f)
-		if m := bad.FindIndex(b); m != nil {
+		if m := labEnvPrint.FindIndex(b); m != nil {
 			t.Errorf("%s:%d prints a container environment", f, 1+strings.Count(string(b[:m[0]]), "\n"))
 		}
 	}
 }
 
+// The guard's pattern finds each way to print one, and passes the docker calls
+// the lab does make. (Written with single quotes for double, so this file does
+// not match itself.)
+func TestLabEnvPrintPattern(t *testing.T) {
+	q := func(s string) string { return strings.ReplaceAll(s, "'", "\"") }
+	for _, c := range []struct {
+		src string
+		bad bool
+	}{
+		{"sg docker -c 'docker\tinspect c'", true},
+		{"sg docker -c 'docker\tcompose -p x config'", true},
+		{"exec.Command('docker', 'inspect', c)", true},
+		{"dockerCmd('inspect', c)", true},
+		{"dockerCmd('container', 'inspect', c)", true},
+		{"d.dockerCompose('config')", true},
+		{"w.dockerCompose('--profile', 'tools', 'config')", true},
+		{"dockerCompose('-p', x, 'config', '--no-interpolate')", true},
+		{"dockerCmd('compose', '-p', x, 'config')", true},
+		{"dockerCmd('exec', c, 'env')", true},
+		{"dockerCmd('exec', c, 'printenv', 'PASSWORD')", true},
+		{"dockerCmd('exec', c, 'set')", true},
+		{"dockerCmd('exec', '-i', c, 'sh', '-c', 'env')", true},
+		{"d.dockerCompose('exec', 'dc', 'printenv')", true},
+		{"exec.Command('docker', 'exec', c, 'env')", true},
+		{"run('docker\texec c printenv PASSWORD')", true},
+		{"run('docker\texec c env')", true},
+		{"dockerCmd('image', 'inspect', '--format', f, image)", false},
+		{"exec.Command('docker', 'image', 'inspect', image)", false},
+		{"exec.Command('sudo', '-n', 'containerlab', 'inspect', '-t', topo)", false},
+		{"d.dockerCompose('up', '-d', '--wait')", false},
+		{"d.dockerCompose('config_files')", false},
+		{"dockerCmd('exec', c, 'cat', '/etc/pkinit-versions')", false},
+		{"dockerCmd('exec', c, 'sh', '-c', 'cat /etc/hosts')", false},
+		{"cfg := loadConfig('config')", false},
+	} {
+		if got := labEnvPrint.MatchString(q(c.src)); got != c.bad {
+			t.Errorf("%q: matched=%v, want %v", c.src, got, c.bad)
+		}
+	}
+}
+
+// labEnvPrint is each way a lab file could print a container's environment:
+// docker's inspect (not an image's), compose's config, or env, printenv or set
+// run in the container by exec.
+var labEnvPrint = regexp.MustCompile(`docker\s+inspect|docker\s+compose\b[^\n'"]*\bconfig\b|compose\s+config\b|` +
+	`docker\s+exec\b[^\n'"]*\b(?:printenv|env|set)\b|` +
+	`[dD]ocker\w*\(\s*(?:"container",\s*)?"inspect"|"docker",\s*"inspect"|` +
+	`[dD]ocker\w*\([^)\n]*"config"|"compose"[^\n)]*"config"|` +
+	`"exec"[^)\n]*"(?:printenv|env|set)(?:\s[^"]*)?"`)
+
 // Windows PowerShell 5.1 writes [Console]::Out in the OEM code page, so the
 // bootstrap sets UTF-8 (without a BOM, which would precede the JSON) before
-// anything can be written.
+// anything can be written. Setting it throws without a console, so the line
+// carries its own silent try/catch: a missing console must not stop a script.
 func TestWindowsBootstrapSetsUTF8Output(t *testing.T) {
-	set := "[Console]::OutputEncoding = New-Object Text.UTF8Encoding $false"
+	set := "try { [Console]::OutputEncoding = New-Object Text.UTF8Encoding $false } catch { }"
 	i := strings.Index(winBootstrap, set)
 	if i < 0 {
-		t.Fatal("the bootstrap does not set [Console]::OutputEncoding to UTF-8 without a BOM")
+		t.Fatal("the bootstrap does not set [Console]::OutputEncoding to UTF-8 without a BOM, in its own try/catch { }")
 	}
 	if w := strings.Index(winBootstrap, "WriteLine"); w >= 0 && w < i {
 		t.Error("the bootstrap writes before it sets the output encoding")
+	}
+}
+
+// $Error holds every record a redirected native command made, ktpass's text
+// included: the bootstrap must never serialize or print it.
+func TestWindowsBootstrapNeverTouchesError(t *testing.T) {
+	if regexp.MustCompile(`(?i)\$error\b|\$global:error|Get-Variable|\$_\.(?:ErrorRecord|InvocationInfo|ScriptStackTrace)`).MatchString(winBootstrap) {
+		t.Error("the bootstrap uses $Error or an error record's detail: only Exception.Message may leave")
+	}
+	if !strings.Contains(winBootstrap, "$_.Exception.Message") {
+		t.Error("the bootstrap's error line is not just $_.Exception.Message")
 	}
 }
