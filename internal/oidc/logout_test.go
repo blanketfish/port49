@@ -132,6 +132,16 @@ func TestAMachineVerifierTakesNoLogout(t *testing.T) {
 	if _, err := set.VerifyLogout(context.Background(), raw); !errors.Is(err, oidc.ErrInvalid) {
 		t.Fatalf("a logout with an empty aud: %v", err)
 	}
+	// With the provider down, an issuer of machine verifiers alone still
+	// refuses a logout 400, never 503: no verifier could ever apply it, so a
+	// retry is pointless.
+	down, dc := oidctest.NewIssuer(t), newClock()
+	downSet := newSet(t, down, dc, machine(down))
+	raw = logoutToken(t, down, dc.Now(), map[string]any{"aud": "api://port49-svc"})
+	down.Close()
+	if _, err := downSet.VerifyLogout(context.Background(), raw); !errors.Is(err, oidc.ErrInvalid) {
+		t.Fatalf("a logout to machine verifiers alone, keys down: %v", err)
+	}
 }
 
 func TestALogoutWithTheProviderDownIsUnavailable(t *testing.T) {
