@@ -625,6 +625,10 @@ anti-impersonation side of decision 16.
     - **At load.** Two human verifiers on different issuers whose domains overlap are refused:
       no two issuers can give one principal. An `x509` verifier takes no domains: a person on
       both paths is one principal by design (Ruling 6).
+    - **Machines too** (Task 2 review; reasoning). `app:` + the client id carries no issuer,
+      so two machine verifiers on different issuers that list one `client_id` are refused at
+      load: else an administrator at the second issuer who creates a client by that name gets
+      the first's grants.
     - **The logout.** A `sub` or `sid` logout reaches only principals in its verifier's
       domains (Ruling 13).
 23. **`principal_claim` is required, with no default** (pre-flight I-6; data: OIDC Core §5.7,
@@ -5745,6 +5749,8 @@ func TestIdentityRefusals(t *testing.T) {
 			"broker.identity.machines[0].clients is required"},
 		"a client without its sub": {"  identity:\n    machines: [{type: oidc, " + iss + ", audience: a, clients: [{client_id: svc}]}]\n",
 			"broker.identity.machines[0].clients[0].sub is required"},
+		"one client at two issuers": {"  identity:\n    machines: [{" + mach + "}, {type: oidc, issuer: \"https://contractor.example.net/realms/x\", audience: a, clients: [{client_id: svc, sub: s9}]}]\n",
+			"broker.identity.machines[1].clients: svc is also broker.identity.machines[0]'s, at another issuer"},
 		"a client twice": {"  identity:\n    machines: [{type: oidc, " + iss + ", audience: a, clients: [{client_id: svc, sub: s1}, {client_id: svc, sub: s2}]}]\n",
 			"broker.identity.machines[0].clients[1] repeats client_id svc"},
 		"one key twice": {"  identity:\n    humans: [{" + hum + "}]\n    machines: [{type: oidc, " + iss + ", audience: c, clients: [{client_id: svc, sub: s1}]}]\n",
@@ -6059,6 +6065,14 @@ func distinctVerifiers(vs []oidc.VerifierConfig, y identityYAML) error {
 			a, b := vs[j], vs[i]
 			humans := a.Domain == oidc.Humans && b.Domain == oidc.Humans
 			if a.Issuer != b.Issuer {
+				if a.Domain == oidc.Machines && b.Domain == oidc.Machines {
+					for _, c := range b.Clients {
+						if slices.ContainsFunc(a.Clients, func(x oidc.MachineClient) bool { return x.ClientID == c.ClientID }) {
+							return fmt.Errorf("config: %s.clients: %s is also %s's, at another issuer: two issuers "+
+								"would give one principal (decision 39 ruling 22)", name(at[i]), c.ClientID, name(at[j]))
+						}
+					}
+				}
 				if !humans {
 					continue
 				}

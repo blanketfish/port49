@@ -101,7 +101,9 @@ A principal's trust domain is the list its verifier is in, `broker.identity.huma
 `broker.identity.machines` (§13 decisions 16 and 39), and nothing in the credential decides it.
 A token two verifiers would accept is refused. A person's delegated token never becomes a
 machine principal, and no two OIDC issuers can give one human principal: each human verifier
-names the `principal_domains` it is authoritative for, and two that overlap are refused.
+names the `principal_domains` it is authoritative for, and two that overlap are refused. Nor
+can two issuers give one machine principal: `app:` carries no issuer, so two machine
+verifiers on different issuers that list one `client_id` are refused.
 
 **What a subject may do through the broker API.** The API (design document §17) authorizes
 the caller as a principal and, by default, lets a principal act only on its own tokens and
@@ -7535,7 +7537,9 @@ that leaves no mark.** *Plan 7h, 2026-10-06.* Rulings rest on reasoning unless t
 - **22. `principal_domains`.** Each human `oidc` verifier lists the domains whose principals it
   may give, required; a principal outside them is `identity_unmapped`; two verifiers on
   different issuers with overlapping domains are refused at load; a logout reaches only
-  principals in its verifier's domains. Tasks 5, 7 and 12.
+  principals in its verifier's domains. Machines likewise: two machine verifiers on different
+  issuers that list one `client_id` are refused at load, since `app:` + the client id names
+  no issuer (Task 2 review). Tasks 5, 7 and 12.
 - **23. `principal_claim` is required** (data: OIDC Core §5.7). No default; spec §2's
   "`preferred_username` by default" is withdrawn. Task 7.
 - **24. Owner records hold every principal.** One record, a set of `{principal, expires_at}`
