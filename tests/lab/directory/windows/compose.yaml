@@ -1,0 +1,79 @@
+# The Windows Server AD lab (L44): Windows Server 2025 Standard Evaluation as a
+# KVM VM inside dockur/windows, the first DC of corp.example.com, on a network
+# of its own. Run from tests/lab/windows_test.go, which verifies the ISO and
+# writes windows.env (the Administrator's password, 0600) and compose.env (the
+# ISO's path) under tests/lab/logs/windows (git-ignored) first.
+#
+# Run it, from a worktree pinned at the commit under test, with
+#   go test -tags lab ./tests/lab/ -run '^TestL44WindowsAD$' -count=1 -v -timeout 240m
+# (TestL44Bringup alone is the bring-up with no measurement). It needs
+# /dev/kvm, Docker with Compose v2.24.4+, 6 GB of RAM and 66 GiB free on the
+# lab's filesystem. A fresh run takes 1.5 to 2.5 hours, most of it Windows
+# Setup; Setup can be watched at http://127.0.0.1:8006.
+#
+# The evaluation ISO is cached in PORT49_LAB_ISO_DIR (default
+# ~/.cache/port49-lab/iso), checked by size and SHA-256 every run, and never
+# committed or redistributed.
+#
+# PORT49_LAB_WINDOWS_KEEP leaves the DC and its secrets up after the run;
+# PORT49_LAB_WINDOWS_REUSE runs on a kept DC. Both are for developing the
+# harness only: a note from a reused DC says so and never closes L44 (R7).
+#
+# Under tests/lab/logs/windows, these hold secrets and are never printed:
+# windows.env, secrets.json, port49.keytab, broker-adcs-key.pem and
+# pkinit/*-key.pem. The run removes them unless PORT49_LAB_WINDOWS_KEEP is set.
+#
+# Never run `docker compose config` or `docker inspect` on this project: both
+# print the environment, and it holds the password.
+name: port49labwin
+
+services:
+  dc:
+    image: dockurr/windows:6.06@sha256:16fd7c39a3e48bb946d29c59dc6015942e5b900a1fa5d7e5552053bfc48ee2ea
+    environment:
+      HOST: DC1
+      RAM_SIZE: 6G
+      CPU_CORES: "4"
+      DISK_SIZE: 64G
+      SAMBA: "N"
+    env_file:
+      - path: ../../logs/windows/windows.env
+        required: true
+    devices:
+      - /dev/kvm
+      - /dev/net/tun
+    cap_add:
+      - NET_ADMIN
+    ports:
+      - "127.0.0.1:8006:8006"
+      - "127.0.0.1:30022:22"
+      - "127.0.0.1:30088:88/tcp"
+      - "127.0.0.1:30389:389"
+      - "127.0.0.1:30636:636"
+    volumes:
+      - storage:/storage
+      - ${PORT49_LAB_WINDOWS_ISO:?the harness sets the verified ISO's path}:/custom.iso:ro
+      - ./oem:/oem:ro
+    stop_grace_period: 2m
+    networks:
+      lab:
+        ipv4_address: 172.30.44.10
+
+  # MIT kinit with PKINIT, run once per certificate by the test.
+  pkinit:
+    build: ./pkinit
+    image: port49lab/pkinit:bookworm
+    profiles: [tools]
+    volumes:
+      - ../../logs/windows/pkinit:/l44:ro
+    networks:
+      lab: {}
+
+volumes:
+  storage:
+
+networks:
+  lab:
+    ipam:
+      config:
+        - subnet: 172.30.44.0/24

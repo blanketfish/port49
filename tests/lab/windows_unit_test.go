@@ -15,6 +15,7 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -414,5 +415,214 @@ func TestWindowsJudges(t *testing.T) {
 	if !winOnlyValue([]string{"X509:<I>A<SR>01"}, "x509:<i>a<sr>01") || winOnlyValue([]string{"a", "b"}, "a") ||
 		!winOnlyValue(nil, "") || winOnlyValue([]string{"a"}, "") {
 		t.Error("winOnlyValue")
+	}
+}
+
+// The DC's image is pinned by digest, the ISO is mounted read-only from the
+// verified cache, and every published port is on loopback.
+func TestWindowsComposePinsTheImage(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("directory", "windows", "compose.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	if !strings.Contains(s, "image: "+winImage+"\n") || !strings.Contains(s, ":/custom.iso:ro") {
+		t.Fatal("compose.yaml does not pin the image or mount the ISO read-only")
+	}
+	for _, line := range strings.Split(s, "\n") {
+		if m := regexp.MustCompile(`^\s+- "(\S+)"$`).FindStringSubmatch(line); m != nil && regexp.MustCompile(`^\d`).MatchString(m[1]) {
+			if !strings.HasPrefix(m[1], "127.0.0.1:") {
+				t.Errorf("a port published beyond loopback: %s", m[1])
+			}
+		}
+	}
+}
+
+var (
+	winPSParamRe = regexp.MustCompile(`(?m)^param\(([^)]*)\)\s*$`)
+	winPSNameRe  = regexp.MustCompile(`\$([a-z0-9_]+)`) // port49_password has a digit
+)
+
+// Every script is in winScripts with the params its param() block declares,
+// in order, and stops on its first error.
+func TestWindowsScriptsTakeTheirParams(t *testing.T) {
+	ents, err := winScriptFS.ReadDir("directory/windows/scripts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, e := range ents {
+		name := strings.TrimSuffix(e.Name(), ".ps1")
+		src, _ := winScriptFS.ReadFile("directory/windows/scripts/" + e.Name())
+		want, ok := winScripts[name]
+		if !ok {
+			t.Errorf("%s is not in winScripts", name)
+			continue
+		}
+		seen[name] = true
+		m := winPSParamRe.FindSubmatchIndex(src)
+		if m == nil {
+			t.Errorf("%s: no param() line", name)
+			continue
+		}
+		var got []string
+		for _, n := range winPSNameRe.FindAllStringSubmatch(string(src[m[2]:m[3]]), -1) {
+			got = append(got, n[1])
+		}
+		if !slices.Equal(got, want) {
+			t.Errorf("%s declares %v, winScripts says %v", name, got, want)
+		}
+		if !strings.HasPrefix(strings.TrimLeft(string(src[m[1]:]), "\r\n"), "$ErrorActionPreference = 'Stop'") {
+			t.Errorf("%s: the line after param() is not $ErrorActionPreference = 'Stop'", name)
+		}
+	}
+	for name := range winScripts {
+		if !seen[name] {
+			t.Errorf("winScripts names %s, which has no script", name)
+		}
+	}
+}
+
+var (
+	// winPSEcho is every way a PowerShell line can write a value somewhere an
+	// operator, a transcript or the harness's log could read it.
+	winPSEcho = regexp.MustCompile(`(?i)write-|out-file|out-string|out-host|set-content|add-content|tee-object|start-transcript|format-|convertfrom-securestring|\bthrow\b|\becho\b`)
+	// winPSAssign is a variable assigned on one line: its name and right side.
+	winPSAssign = regexp.MustCompile(`^\s*\$([A-Za-z0-9_]+)\s*=\s*(.*)$`)
+	// winPSKey is a hashtable key on a line (a result key), never a variable.
+	winPSKey = regexp.MustCompile(`(?:^\s*|[;{]\s*)[a-z_][a-z0-9_]*\s*=\s`)
+	winPSMkr = regexp.MustCompile(`New-Lab(?:Secret|Plain)`)
+	winPSDQ  = regexp.MustCompile(`"[^"]*"`)
+	// winPSBuild starts an expression that wraps its arguments into a secret.
+	winPSBuild = regexp.MustCompile(`^(?:ConvertTo-SecureString|New-Object)\b`)
+)
+
+// winSecretVars is the variables of a script that hold a secret: its secret
+// parameters, whatever is assigned from New-LabSecret or New-LabPlain, and
+// whatever is assigned from an expression using one of those.
+func winSecretVars(lines []string) []string {
+	vars := append([]string(nil), winSecretParams...)
+	for changed := true; changed; {
+		changed = false
+		for _, l := range lines {
+			m := winPSAssign.FindStringSubmatch(l)
+			if m == nil || slices.Contains(vars, m[1]) {
+				continue
+			}
+			// A value is a secret when it is made by or built from one; a cmdlet's
+			// result that merely took one as an argument (Invoke-Command -Credential
+			// $cred) is not.
+			rhs := strings.TrimLeft(m[2], "( ")
+			if winPSMkr.MatchString(rhs) && strings.HasPrefix(rhs, "New-Lab") ||
+				winPSBuild.MatchString(rhs) && winUsesAny(m[2], vars) != "" ||
+				strings.HasPrefix(rhs, "$") && winUsesAny(rhs[:strings.IndexAny(rhs+" ", " ")], vars) != "" {
+				vars = append(vars, m[1])
+				changed = true
+			}
+		}
+	}
+	return vars
+}
+
+// winUsesAny names the first of vars that line uses, or "".
+func winUsesAny(line string, vars []string) string {
+	for _, v := range vars {
+		if regexp.MustCompile(`\$` + regexp.QuoteMeta(v) + `\b`).MatchString(line) {
+			return v
+		}
+	}
+	return ""
+}
+
+// winInDQString reports whether a double-quoted string on the line uses $v.
+func winInDQString(line, v string) bool {
+	for _, q := range winPSDQ.FindAllString(line, -1) {
+		if winUsesAny(q, []string{v}) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func winVarName(v string) string {
+	if v == "New-Lab*" {
+		return v
+	}
+	return "$" + v
+}
+
+// winSecretLeaks names each line of a script (by number and variable name,
+// never by content) that writes a secret: an echoing cmdlet, a string that
+// interpolates it, or a result key that carries it.
+func winSecretLeaks(src string) []string {
+	lines := strings.Split(src, "\n")
+	vars := winSecretVars(lines)
+	var out []string
+	for i, l := range lines {
+		tl := strings.TrimSpace(l)
+		if strings.HasPrefix(tl, "param(") || strings.HasPrefix(tl, "function ") || strings.HasPrefix(tl, "#") {
+			continue
+		}
+		v := winUsesAny(l, vars)
+		if v == "" && winPSMkr.MatchString(l) {
+			v = "New-Lab*"
+		}
+		if v == "" {
+			continue
+		}
+		switch {
+		case winPSEcho.MatchString(l):
+			out = append(out, fmt.Sprintf("line %d echoes %s", i+1, winVarName(v)))
+		case v != "New-Lab*" && winInDQString(l, v):
+			out = append(out, fmt.Sprintf("line %d interpolates %s into a string", i+1, winVarName(v)))
+		case winPSKey.MatchString(l) && !winPSAssign.MatchString(l):
+			out = append(out, fmt.Sprintf("line %d makes %s a result key's value", i+1, winVarName(v)))
+		}
+	}
+	return out
+}
+
+// No script writes a secret anywhere: not to the output, a file, a result key
+// or an exception's text. Per-user passwords are made inside the VM, where the
+// host can never scrub them, so this is the only guard they have.
+func TestWindowsScriptsNeverEchoASecret(t *testing.T) {
+	ents, _ := winScriptFS.ReadDir("directory/windows/scripts")
+	for _, e := range ents {
+		src, _ := winScriptFS.ReadFile("directory/windows/scripts/" + e.Name())
+		for _, leak := range winSecretLeaks(string(src)) {
+			t.Errorf("%s: %s", e.Name(), leak)
+		}
+	}
+}
+
+// The scan finds the variables the scripts make secret, and flags a bad line
+// of each kind (and not a good one).
+func TestWindowsSecretScanFlagsALeak(t *testing.T) {
+	src, _ := winScriptFS.ReadFile("directory/windows/scripts/enroll_as.ps1")
+	got := winSecretVars(strings.Split(string(src), "\n"))
+	for _, want := range []string{"plain", "sec", "cred"} {
+		if !slices.Contains(got, want) {
+			t.Errorf("enroll_as: $%s is not seen as a secret", want)
+		}
+	}
+	base := "param([string]$port49_password)\n$ErrorActionPreference = 'Stop'\n$p = New-LabPlain\n$q = $p + 'x'\n"
+	for _, c := range []struct {
+		line string
+		bad  bool
+	}{
+		{"Write-Output $port49_password", true},
+		{"Write-Host $p", true},
+		{"$p | Out-File C:\\x", true},
+		{"throw \"bad: $q\"", true},
+		{"$m = \"pw=$p\"", true},
+		{"@{ password = $q }", true},
+		{"@{ a = 1; b = New-LabPlain }", true},
+		{"ConvertTo-SecureString $p -AsPlainText -Force | Out-Null", false},
+		{"& ktpass.exe -pass $port49_password *> $null", false},
+		{"@{ ok = $true }", false},
+	} {
+		if got := winSecretLeaks(base + c.line + "\n"); (len(got) > 0) != c.bad {
+			t.Errorf("%q: flagged=%v, want %v", c.line, len(got) > 0, c.bad)
+		}
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"embed"
 	"encoding/asn1"
 	"encoding/base64"
 	"encoding/binary"
@@ -55,6 +56,25 @@ const (
 	winDCHost   = "dc1.corp.example.com"
 	winCAName   = "corp-L44-CA"
 )
+
+// winScriptFS holds every setup and measurement step the DC runs.
+//
+//go:embed directory/windows/scripts/*.ps1
+var winScriptFS embed.FS
+
+// winScripts is each script's parameters, in the order its param() names
+// them: ps refuses a parameter a script does not declare.
+var winScripts = map[string][]string{
+	"clock": nil, "promote": {"dsrm_password"}, "ready": nil, "seed": {"port49_password"},
+	"reset": {"port49_password", "alice_altsecid"}, "adcs": nil, "ldaps": {"step", "cert_pem", "lab_ca_pem"},
+	"keytab": {"port49_password"}, "trust": {"ca_pem", "name"}, "issue": {"csr_pem", "template"},
+	"enroll_as": {"csr_pem", "user"}, "set_attr": {"dn", "attribute", "values"}, "registry": {"name", "value"},
+	"service": {"name", "state"}, "events": {"since"}, "facts": nil,
+}
+
+// winSecretParams are the parameters that carry a secret: no script may
+// write one (TestWindowsScriptsNeverEchoASecret).
+var winSecretParams = []string{"dsrm_password", "port49_password"}
 
 // winSecrets is every password the DC is built with, generated for the run.
 // It prints as its key names only, so no format verb can leak a value.
