@@ -23,6 +23,9 @@ func (s *Store) PutOnce(ctx context.Context, key string, value []byte, ttl time.
 	if key == "" {
 		return false, store.ErrNoKey
 	}
+	if ttl <= 0 {
+		return false, store.ErrBadTTL
+	}
 	now := s.now()
 	wrote := false
 	err := casAs(ctx, s.tok, s.tokLeases, s.k.once(key), "once-only record", func(r onceRec) bool { return now.Before(r.ExpiresAt) },
@@ -85,6 +88,12 @@ func (s *Store) PutOIDCOwner(ctx context.Context, key, principal string, ttl tim
 	if key == "" {
 		return store.ErrNoKey
 	}
+	if principal == "" {
+		return store.ErrNoPrincipal
+	}
+	if ttl <= 0 {
+		return store.ErrBadTTL
+	}
 	now := s.now()
 	return casAs(ctx, s.tok, s.tokLeases, s.k.oidcOwner(key), "OIDC owner record", func(r ownerRec) bool { return now.Before(r.ExpiresAt) },
 		func(r *ownerRec, found bool) (bool, time.Time, bool, error) {
@@ -144,6 +153,9 @@ type logoutRec struct {
 func (s *Store) PutLogout(ctx context.Context, l store.Logout, ttl time.Duration) error {
 	if l.Key == "" {
 		return store.ErrNoKey
+	}
+	if ttl <= 0 {
+		return store.ErrBadTTL
 	}
 	now := s.now()
 	return casAs(ctx, s.tok, s.tokLeases, s.k.logout(l.Key), "logout record", func(r logoutRec) bool { return now.Before(r.ExpiresAt) },

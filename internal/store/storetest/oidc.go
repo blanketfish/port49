@@ -199,3 +199,65 @@ func LogoutKeepsTheLaterAndExpires(t *testing.T, b Backend) {
 		t.Fatal("a logout with no key was written")
 	}
 }
+
+// LogoutMergesUnderARace: of concurrent logouts under one key, whatever
+// order they land in, the latest At stands with its origin, and a write that
+// reads, merges and writes without a compare would let an older one win.
+func LogoutMergesUnderARace(t *testing.T, b Backend) {
+	ctx := context.Background()
+	s := b.New(t, func() time.Time { return t0 })
+	for round := range 20 {
+		key := store.OIDCKey(store.OIDCSub, "https://sso.example.com", fmt.Sprintf("sub-race-%d", round))
+		var wg sync.WaitGroup
+		for i := range 8 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				l := store.Logout{Key: key, At: t0.Add(time.Duration(i) * time.Minute), Origin: fmt.Sprintf("origin %d", i)}
+				if err := s.PutLogout(ctx, l, time.Duration(i+1)*time.Hour); err != nil {
+					t.Error(err)
+				}
+			}()
+		}
+		wg.Wait()
+		l, err := s.GetLogout(ctx, key)
+		if err != nil || !l.At.Equal(t0.Add(7*time.Minute)) || l.Origin != "origin 7" {
+			t.Fatalf("round %d: logout %+v %v: the latest At must stand", round, l, err)
+		}
+	}
+}
+
+// OIDCRecordsRefuseWhatCannotBeKept: an owner with no principal, and a
+// record with no life, are refused with an error naming neither key nor
+// value, and write nothing.
+func OIDCRecordsRefuseWhatCannotBeKept(t *testing.T, b Backend) {
+	ctx := context.Background()
+	s := b.New(t, func() time.Time { return t0 })
+	key := store.OIDCKey(store.OIDCSub, "https://sso.example.com", "8b2e")
+	const secret = "jti-never-in-an-error"
+	if err := s.PutOIDCOwner(ctx, key, "", time.Hour); !errors.Is(err, store.ErrNoPrincipal) {
+		t.Fatalf("an owner with no principal: %v", err)
+	}
+	for _, ttl := range []time.Duration{0, -time.Second} {
+		_, onceErr := s.PutOnce(ctx, secret, []byte(secret), ttl)
+		ownerErr := s.PutOIDCOwner(ctx, key, "user:a@example.com", ttl)
+		logoutErr := s.PutLogout(ctx, store.Logout{Key: key, At: t0}, ttl)
+		for name, err := range map[string]error{"PutOnce": onceErr, "PutOIDCOwner": ownerErr, "PutLogout": logoutErr} {
+			if !errors.Is(err, store.ErrBadTTL) {
+				t.Fatalf("%s with a ttl of %v: %v", name, ttl, err)
+			}
+			if strings.Contains(err.Error(), secret) || strings.Contains(err.Error(), "8b2e") {
+				t.Fatalf("%s's error names a key or value: %v", name, err)
+			}
+		}
+	}
+	if _, err := s.TakeOnce(ctx, secret); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("a refused put wrote: %v", err)
+	}
+	if _, err := s.OIDCOwner(ctx, key); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("a refused put wrote an owner: %v", err)
+	}
+	if _, err := s.GetLogout(ctx, key); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("a refused put wrote a logout: %v", err)
+	}
+}

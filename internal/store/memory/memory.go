@@ -1733,6 +1733,9 @@ func (s *Store) PutOnce(_ context.Context, key string, value []byte, ttl time.Du
 	if key == "" {
 		return false, store.ErrNoKey
 	}
+	if ttl <= 0 {
+		return false, store.ErrBadTTL
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now()
@@ -1759,6 +1762,12 @@ func (s *Store) TakeOnce(_ context.Context, key string) ([]byte, error) {
 func (s *Store) PutOIDCOwner(_ context.Context, key, principal string, ttl time.Duration) error {
 	if key == "" {
 		return store.ErrNoKey
+	}
+	if principal == "" {
+		return store.ErrNoPrincipal
+	}
+	if ttl <= 0 {
+		return store.ErrBadTTL
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1802,6 +1811,9 @@ func (s *Store) OIDCOwner(_ context.Context, key string) (store.OIDCOwner, error
 func (s *Store) PutLogout(_ context.Context, l store.Logout, ttl time.Duration) error {
 	if l.Key == "" {
 		return store.ErrNoKey
+	}
+	if ttl <= 0 {
+		return store.ErrBadTTL
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()

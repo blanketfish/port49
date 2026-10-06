@@ -1247,6 +1247,12 @@ type Logout struct {
 // ErrNoKey is a record written with an empty key.
 var ErrNoKey = errors.New("store: a record with no key")
 
+// ErrNoPrincipal is an owner written with no principal.
+var ErrNoPrincipal = errors.New("store: an owner record with no principal")
+
+// ErrBadTTL is a record written with a life of zero or less.
+var ErrBadTTL = errors.New("store: a record with no life")
+
 // HasCeiling reports whether this context carries a session ceiling.
 func (c Context) HasCeiling() bool { return !c.SessionExpires.IsZero() && !c.AuthTime.IsZero() }
 
