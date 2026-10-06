@@ -1103,5 +1103,3 @@ type winDC struct{}
 func (*winDC) version() string                                { return "" }
 func (*winDC) configNote() string                             { return "" }
 func (*winDC) setValues(*testing.T, string, string, []string) {}
-
-const platWindows = "windows_ad"
