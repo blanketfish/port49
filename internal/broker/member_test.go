@@ -321,12 +321,14 @@ func TestAMachinePrincipalNeverTouchesTheDirectory(t *testing.T) {
 // extended (review I-1).
 func TestARefreshActsAsThePinnedPrincipal(t *testing.T) {
 	f := newFixture(t, 8)
-	withDirectory(f, map[string]directory.Answer{alicePrincipal: answerFor(corpAlice, "alice")}, nil)
+	// The directory's username is one no subject declares: the refresh
+	// refuses a collision under the held policy (final review M-1).
+	withDirectory(f, map[string]directory.Answer{alicePrincipal: answerFor(corpAlice, "corp_alice")}, nil)
 	addr, _ := serveMapped(t, f)
 	c, br := held(t, f, addr, f.alice)
 	auth := f.now
 	f.liveContextAt(t, "nx1", "legacy_alice", alicePrincipal, certKey(f.alice), auth, auth.Add(8*time.Hour))
-	f.liveContextAt(t, "leaf1", "alice", corpAlice, certKey(f.alice), auth, auth.Add(8*time.Hour))
+	f.liveContextAt(t, "leaf1", "corp_alice", corpAlice, certKey(f.alice), auth, auth.Add(8*time.Hour))
 	before, err := f.st.GetContext(context.Background(), store.ContextKey{NAS: "nx1", Username: "legacy_alice"})
 	if err != nil {
 		t.Fatal(err)
