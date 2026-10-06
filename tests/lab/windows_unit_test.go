@@ -884,6 +884,22 @@ func TestWindowsScriptsCheckNativeExitCodes(t *testing.T) {
 	}
 }
 
+// Every certreq -submit writes to names of its own and removes them: certreq
+// refuses an output file that exists (0x80070050), so a fixed name fails every
+// try after the first (measured, gate run 8's enroll_as).
+func TestWindowsCertreqSubmitUsesFreshNames(t *testing.T) {
+	for _, name := range []string{"enroll_as.ps1", "issue.ps1"} {
+		b, _ := winScriptFS.ReadFile("directory/windows/scripts/" + name)
+		s := string(b)
+		if !strings.Contains(s, "certreq.exe -submit") {
+			t.Fatalf("%s runs no certreq -submit", name)
+		}
+		if !strings.Contains(s, "[guid]::NewGuid()") || !strings.Contains(s, "Remove-Item $in, $out, $rsp") {
+			t.Errorf("%s does not name its request files by a fresh GUID and remove them", name)
+		}
+	}
+}
+
 // enroll_as registers the DC's WSMAN SPNs before it turns CredSSP on: without
 // them CredSSP refuses the DC as an untrusted target (measured, gate run 5).
 func TestWindowsEnrollAsRegistersWSMANSPNsFirst(t *testing.T) {

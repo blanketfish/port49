@@ -48,11 +48,18 @@ try {
   $pem = Invoke-Command -ComputerName $fqdn -ConfigurationName $name -Credential $cred -Authentication Credssp `
     -ArgumentList $csr_pem, "$fqdn\corp-L44-CA" -ScriptBlock {
       param($csr, $config)
-      $in = Join-Path $env:TEMP 'l44.req'; $out = Join-Path $env:TEMP 'l44.cer'
-      Set-Content $in $csr -Encoding ascii
-      certreq.exe -submit -q -config $config -attrib 'CertificateTemplate:User' $in $out | Out-Null
-      if ($LASTEXITCODE -ne 0) { throw "certreq -submit User: exit $LASTEXITCODE" }
-      Get-Content $out -Raw
+      # Names of this request's own: certreq -submit refuses an output file
+      # that exists (0x80070050), and an earlier try's would.
+      $id = [guid]::NewGuid()
+      $in = Join-Path $env:TEMP "l44-$id.req"; $out = Join-Path $env:TEMP "l44-$id.cer"; $rsp = Join-Path $env:TEMP "l44-$id.rsp"
+      try {
+        Set-Content $in $csr -Encoding ascii
+        certreq.exe -submit -q -config $config -attrib 'CertificateTemplate:User' $in $out | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "certreq -submit User: exit $LASTEXITCODE" }
+        [IO.File]::ReadAllText($out)
+      } finally {
+        Remove-Item $in, $out, $rsp -ErrorAction SilentlyContinue
+      }
     }
   @{ cert_pem = "$pem" }
 } finally {
