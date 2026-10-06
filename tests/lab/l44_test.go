@@ -3,7 +3,18 @@
 package lab
 
 import (
+	"context"
+	"crypto/rsa"
+	"crypto/tls"
+	"crypto/x509"
+	"fmt"
+	"net"
+	"slices"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/go-ldap/ldap/v3"
 
 	"github.com/rhwendt/port49/internal/directory"
 )
@@ -46,3 +57,587 @@ func TestL44Bringup(t *testing.T) {
 	ev.assertClean(t, append([]string{d.password}, d.extra...)...)
 	t.Logf("windows: %s; fixture loaded, LDAPS verified, keytab and certificates issued", dc.win.version())
 }
+
+const l44Claim = "The Active Directory claims on a Windows DC: on L42's fixture and its loop, which groups " +
+	"`member:1.2.840.113556.1.4.1941:=<user DN>` returns and how the loop is answered; SASL EXTERNAL over LDAPS with a " +
+	"client certificate; GSSAPI with a keytab and no SASL security layer against the Windows KDC; whether " +
+	"`altSecurityIdentities` values written in port49's `X509:<I>{issuer}<SR>{serial}` form (issuer from the raw DER, " +
+	"`DC=` included) match the certificate the DC itself maps; whether the SID extension's value equals `objectSid`; and " +
+	"how KB5014754's strong-mapping enforcement treats each (policy engine spec §15 L44). Also measured, for two questions " +
+	"plan 7g carried: whether the DC advertises the AD capability 1.2.840.113556.1.4.800, and the LDAP result an EXTERNAL " +
+	"bind it refuses carries."
+
+const l44ADCapability = "1.2.840.113556.1.4.800"
+
+// l44Case is one certificate offered to the DC's KDC by PKINIT, with the
+// altSecurityIdentities alice holds while it is (none when altsec is nil).
+type l44Case struct {
+	label, what string
+	cert        *x509.Certificate
+	key         *rsa.PrivateKey
+	altsec      func(*x509.Certificate) (string, error)
+}
+
+// TestL44WindowsAD is lab register row L44 on a Windows Server 2025 DC. Run it,
+// from a worktree pinned at the commit under test (tests/lab/directory/windows/
+// compose.yaml's header has the operator's notes), with
+//
+//	go test -tags lab ./tests/lab/ -run '^TestL44WindowsAD$' -count=1 -v -timeout 240m
+func TestL44WindowsAD(t *testing.T) {
+	compare := l44CompareCapabilities(t) // first: the containers share tests/lab/logs/directory
+	d := newDirectories(t)
+	d.runSel = "^TestL44WindowsAD$"
+	dc := startWindowsDC(t, d)
+	ev := evidence(t, d, "L44-"+platWindows)
+	var obs strings.Builder
+	obs.WriteString(dc.win.configNote())
+	obs.WriteString(dc.win.factsSection())
+	obs.WriteString("### Nested groups: L42's fixture\n\n")
+	obs.WriteString(dc.l42Observe(t, ev))
+	obs.WriteString(dc.l44Capabilities(t, ev, compare))
+	obs.WriteString(dc.l44Binds(t, ev))
+	obs.WriteString(dc.l44SID(t, ev))
+	obs.WriteString(dc.mappingChecks(t, ev))
+	obs.WriteString(dc.l44Matrix(t, ev))
+	ev.assertClean(t, dc.l44Secrets()...)
+	writeResult(t, d, "L44", dc, l44Claim, dc.version(t), obs.String(), "tests/lab/evidence/L44-"+platWindows+".json")
+}
+
+// l44CompareCapabilities is the root DSE's supportedCapabilities on OpenLDAP
+// and Samba AD, for plan 7g's carried question (a). Not a register cell: L42
+// and L43 are closed. A directory the subtest did not read is absent from the
+// map, never an empty list.
+func l44CompareCapabilities(t *testing.T) map[string][]string {
+	out := map[string][]string{}
+	t.Run("compare", func(t *testing.T) {
+		d := startDirectories(t)
+		for _, dir := range d.all() {
+			out[dir.name] = dir.capabilities(t)
+		}
+	})
+	return out
+}
+
+// l44Secrets is every secret of the run: the text of an error, a kinit trace
+// or a DC event is scrubbed of them (winScrub) before it is cut or shown.
+func (l *labDir) l44Secrets() []string { return append([]string{l.d.password}, l.d.extra...) }
+
+// l44Err is err's text, scrubbed and on one line, for a log or a cell.
+func (l *labDir) l44Err(err error) string {
+	if err == nil {
+		return "ok"
+	}
+	return oneLineMax(winScrub(err.Error(), l.l44Secrets()...), 200)
+}
+
+// l44Events is what the DC logged since, each message scrubbed and cut.
+func (l *labDir) l44Events(t *testing.T, since string) []winEvent {
+	t.Helper()
+	return l44CleanEvents(l.win.events(t, since), l.l44Secrets()...)
+}
+
+// l44CleanEvents scrubs each event's message, then cuts it to 160 characters.
+func l44CleanEvents(evs []winEvent, secrets ...string) []winEvent {
+	out := make([]winEvent, len(evs))
+	for i, e := range evs {
+		e.Message = oneLineMax(winScrub(e.Message, secrets...), 160)
+		out[i] = e
+	}
+	return out
+}
+
+// l44CleanResult scrubs what a kinit's trace and last line said.
+func l44CleanResult(r winPKINITResult, secrets ...string) winPKINITResult {
+	errs := make([]string, len(r.kdcErrs))
+	for i, e := range r.kdcErrs {
+		errs[i] = oneLineMax(winScrub(e, secrets...), 160)
+	}
+	r.kdcErrs = errs
+	r.last = oneLineMax(winScrub(r.last, secrets...), 200)
+	return r
+}
+
+func (l *labDir) l44Capabilities(t *testing.T, ev *evidenceLog, compare map[string][]string) string {
+	t.Helper()
+	ev.mark("L44 root DSE supportedCapabilities")
+	var b strings.Builder
+	b.WriteString("\n### The AD capability (plan 7g's carried question a)\n\n" +
+		"| directory | advertises `" + l44ADCapability + "` | `in_chain` (L42) | supportedCapabilities |\n|---|---|---|---|\n")
+	row := func(name, inChain string, caps []string, read bool) {
+		if !read {
+			fmt.Fprintf(&b, "| %s | not measured (compare failed) | %s | not measured (compare failed) |\n", name, inChain)
+			return
+		}
+		fmt.Fprintf(&b, "| %s | %v | %s | %s |\n", name, slices.Contains(caps, l44ADCapability), inChain, strings.Join(caps, ", "))
+	}
+	row(platWindows, "the table above", l.capabilities(t), true)
+	caps, read := compare[platOpenLDAP]
+	row(platOpenLDAP, "answers empty, no error (`L42-openldap.md`)", caps, read)
+	caps, read = compare[platSamba]
+	row(platSamba, "answers in full (`L42-samba_ad.md`)", caps, read)
+	return b.String()
+}
+
+// l44Binds is L43's binds on the DC, EXTERNAL with the broker's AD CS
+// certificate mapped and unmapped, GSSAPI as installed and under
+// LdapEnforceChannelBinding 2, and OR-1's cell: a mapped certificate while
+// the DC's KDC is stopped.
+func (l *labDir) l44Binds(t *testing.T, ev *evidenceLog) string {
+	t.Helper()
+	w := l.win
+	since := w.clock(t)
+	brokerDN := "CN=port49,OU=Svc," + dirBase
+	adcsExt := directory.Bind{Mechanism: "external", TLSCertFile: w.certs.brokerCertFile, TLSKeyFile: w.certs.brokerKeyFile}
+	cbt := w.facts.NTDSLDAP["LdapEnforceChannelBinding"]
+	if cbt == "" {
+		cbt = "absent (this build's default)"
+	}
+	// GSSAPI needs the keytab; without one its cells are INVALID (R6), never
+	// a refusal.
+	noKeytab := w.invalidFor("keytab")
+	gssapi := func(label, what string) string {
+		if noKeytab != "" {
+			t.Errorf("L44 %s: no keytab (%s); the cell is INVALID (R6)", label, noKeytab)
+			return fmt.Sprintf("| %s | INVALID (R6): no keytab: `%s` | n/a | — |\n", what, l44MDCell(noKeytab))
+		}
+		return l.tryBind(t, ev, label, l.bindGSSAPI(), "").row(what)
+	}
+	var b strings.Builder
+	b.WriteString("\n### Binds\n\n| mechanism | outcome | LDAP result | time |\n|---|---|---|---|\n")
+	ev.mark("L44 simple over LDAPS")
+	simple := l.tryBind(t, ev, "simple", l.bindSimple(), l.d.password)
+	b.WriteString(simple.row("simple bind over LDAPS"))
+	ev.mark("L44 simple over plain LDAP")
+	plain := l.tryPlain(t, ev, "simple over plain LDAP, by hand")
+	b.WriteString(plain.row("simple bind over plain LDAP, built by hand (an observation of this build's default)"))
+	ev.mark("L44 gssapi, LdapEnforceChannelBinding %s", cbt)
+	b.WriteString(gssapi("gssapi", "GSSAPI over LDAPS, keytab, no SASL security layer, `LdapEnforceChannelBinding` "+cbt))
+
+	w.setAltSec(t, brokerDN, directory.ADIssuerSerial(w.certs.brokerADCS))
+	ev.mark("L44 external, AD CS certificate, port49's form on port49")
+	e1 := l.l44External(t, ev, "external", adcsExt, true)
+	b.WriteString(l44ExtRow("SASL EXTERNAL over LDAPS, the broker's AD CS certificate, `altSecurityIdentities` on port49 in port49's form", e1))
+	w.setAltSec(t, brokerDN, "")
+	ev.mark("L44 external, AD CS certificate, no mapping")
+	e2 := l.l44External(t, ev, "external, unmapped", adcsExt, false)
+	b.WriteString(l44ExtRow("SASL EXTERNAL over LDAPS, the same certificate, no `altSecurityIdentities` on port49 (carried question b)", e2))
+	ev.mark("L44 external, a certificate from the lab directory CA")
+	e3 := l.l44External(t, ev, "external, lab CA", l.bindExternal(), false)
+	b.WriteString(l44ExtRow("SASL EXTERNAL over LDAPS, a certificate from the lab directory CA (in the DC's Root store, not in NTAuth), unmapped (carried question b)", e3))
+
+	got := l.setRegistry(t, "LdapEnforceChannelBinding", 2)
+	ev.mark("L44 gssapi, LdapEnforceChannelBinding %s", got)
+	b.WriteString(gssapi("gssapi, channel binding 2", "GSSAPI over LDAPS, keytab, no SASL security layer, `LdapEnforceChannelBinding` "+got+" (port49 sends no channel binding token)"))
+	w.setAltSec(t, brokerDN, directory.ADIssuerSerial(w.certs.brokerADCS))
+	e4 := l.l44External(t, ev, "external, channel binding 2", adcsExt, true)
+	b.WriteString(l44ExtRow("SASL EXTERNAL over LDAPS, mapped, `LdapEnforceChannelBinding` "+got, e4))
+	simple2 := l.tryBind(t, ev, "simple, channel binding 2", l.bindSimple(), l.d.password)
+	b.WriteString(simple2.row("simple bind over LDAPS, `LdapEnforceChannelBinding` " + got))
+	l.setRegistry(t, "LdapEnforceChannelBinding", -1)
+
+	// OR-1 (pre-flight I5): result 1 is a generic server-side code. If a DC
+	// whose own mapping path is broken (here: its KDC, which Schannel's
+	// S4U2Self needs, stopped) answers a mapped certificate with the same code
+	// an unmapped one gets, that code cannot tell "the broker's certificate is
+	// refused" from "this DC is broken". e5 is valid only when the same mapped
+	// bind succeeds with the KDC up, before (e1) and after (e6).
+	ev.mark("L44 external, mapped, the DC's KDC stopped")
+	w.service(t, "Kdc", "stop")
+	e5 := l.l44External(t, ev, "external, KDC stopped", adcsExt, true)
+	w.service(t, "Kdc", "start")
+	ev.mark("L44 external, mapped, the DC's KDC started again")
+	e6 := l.l44External(t, ev, "external, KDC started again", adcsExt, true)
+	if e5.invalid == "" {
+		if e5.invalid = l44KDCDownInvalid(e1, e6); e5.invalid != "" {
+			t.Errorf("L44 external, KDC stopped: %s; the cell is INVALID (R6)", e5.invalid)
+		}
+	}
+	b.WriteString(l44ExtRow("SASL EXTERNAL over LDAPS, mapped, **the DC's KDC stopped** (OR-1)", e5))
+	b.WriteString(l44ExtRow("SASL EXTERNAL over LDAPS, mapped, the KDC started again (e5's control)", e6))
+	w.setAltSec(t, brokerDN, "")
+
+	fmt.Fprintf(&b, "\nWhether the DC's LDAPS asked the client for a certificate (what EXTERNAL needs): %s.\n", l.certRequested(t))
+	if !simple.ok || simple.read != 1 || !simple2.ok {
+		t.Errorf("the simple bind over LDAPS is the lab's premise and was not accepted: ok %v/%v, read %d", simple.ok, simple2.ok, simple.read)
+	}
+	// The plain-LDAP simple bind is this build's default, recorded above; on
+	// Windows it is an observation, not the harness's premise.
+	refusals, bad := l.refusalChecks(t, ev)
+	b.WriteString(refusals)
+	fmt.Fprintf(&b, "\nWhat the DC logged during the binds: %s\n", l44EventsCell(l.l44Events(t, since)))
+	ev.assertClean(t, bad)
+	return b.String()
+}
+
+// l44KDCDownInvalid is why the KDC-stopped cell (OR-1's e5) shows nothing, or
+// "" when it is valid: the same mapped bind must have succeeded, and mapped
+// as port49, with the KDC up before (e1) and after (e6).
+func l44KDCDownInvalid(e1, e6 l44Ext) string {
+	if !e1.ok || !e6.ok || e1.invalid != "" || e6.invalid != "" {
+		return "the mapped bind did not succeed with the KDC up (e1 and e6), so a KDC-down answer shows nothing about the KDC"
+	}
+	return ""
+}
+
+// l44SID compares the SID extension of the certificates AD CS issued with
+// the objectSid of the account each names, and runs port49's sid and
+// issuer_serial mappings on them (port49's guarantees, asserted).
+func (l *labDir) l44SID(t *testing.T, ev *evidenceLog) string {
+	t.Helper()
+	w := l.win
+	c := w.certs
+	var b strings.Builder
+	b.WriteString("\n### The SID extension and objectSid\n\n| certificate | SID extension | objectSid | equal |\n|---|---|---|---|\n")
+	noSID := w.invalidFor("sid") // enroll_as failed three times: alice's User certificate does not exist
+	row := func(what string, cert *x509.Certificate, filter string) {
+		if cert == nil {
+			t.Errorf("L44 %s: %s; the cell is INVALID (R6)", what, noSID)
+			fmt.Fprintf(&b, "| %s | INVALID (R6): `%s` | — | — |\n", what, l44MDCell(noSID))
+			return
+		}
+		ext, err := directory.SIDOf(cert)
+		obj := l.ldapObjectSID(t, filter)
+		cell := "`" + ext + "`"
+		if err != nil {
+			cell = "none: " + oneLineMax(winScrub(err.Error(), l.l44Secrets()...), 120)
+		}
+		fmt.Fprintf(&b, "| %s | %s | `%s` | %v |\n", what, cell, obj, err == nil && ext == obj)
+	}
+	ev.mark("L44 SID extensions against objectSid")
+	row("alice's, AD CS `User` template, requested as alice", c.aliceSID, "(sAMAccountName=alice)")
+	row("a KDC-EKU certificate from the DC's store (`KerberosAuthentication`; not necessarily the one the KDC presents)", c.dcKDC, "(sAMAccountName=DC1$)")
+	row("alice's, AD CS `OfflineRouter` (subject from the request)", c.aliceADCS, "(sAMAccountName=alice)")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	b.WriteString("\n| port49's mapping on the DC's certificates (asserted: port49's guarantees, not the DC's) | observed |\n|---|---|\n")
+	if c.aliceSID == nil {
+		t.Errorf("L44 sid mapping: %s; the cell is INVALID (R6)", noSID)
+		fmt.Fprintf(&b, "| `sid`, alice's `User` certificate | INVALID (R6): `%s` |\n", l44MDCell(noSID))
+	} else {
+		ev.mark("L44 port49 sid mapping on alice's User certificate")
+		r := l.resolverWith(t, l.config("direct", l.groupsBaseDN, l.bindSimple(), directory.Mapping{Kind: directory.MapSID, Attribute: "objectSid"}), l.d.password, ev)
+		a, err := r.Map(ctx, c.aliceSID)
+		if err != nil || a.Principal != l.principal("alice") {
+			t.Errorf("sid did not map alice's User certificate to her: %q, %s", a.Principal, l.l44Err(err))
+		}
+		fmt.Fprintf(&b, "| `sid`, alice's `User` certificate | %s as `%s` |\n", l.l44Err(err), a.Principal)
+	}
+	aliceDN := "CN=alice,OU=Staff," + dirBase
+	w.setAltSec(t, aliceDN, directory.ADIssuerSerial(c.aliceADCS))
+	ev.mark("L44 port49 issuer_serial mapping on alice's OfflineRouter certificate")
+	r := l.resolverWith(t, l.config("direct", l.groupsBaseDN, l.bindSimple(), directory.Mapping{Kind: directory.MapIssuerSerial, Attribute: "altSecurityIdentities"}), l.d.password, ev)
+	a, err := r.Map(ctx, c.aliceADCS)
+	if err != nil || a.Principal != l.principal("alice") {
+		t.Errorf("issuer_serial did not map alice's AD CS certificate to her: %q, %s", a.Principal, l.l44Err(err))
+	}
+	fmt.Fprintf(&b, "| `issuer_serial`, alice's `OfflineRouter` certificate, alice holding port49's form | %s as `%s` |\n", l.l44Err(err), a.Principal)
+	if q, qerr := winAltSecQuoted(c.aliceComma); qerr == nil {
+		w.setAltSec(t, aliceDN, q)
+		ev.mark("L44 port49 issuer_serial on the comma CA's certificate, alice holding the quoted form")
+		_, err = r.Map(ctx, c.aliceComma)
+		fmt.Fprintf(&b, "| `issuer_serial`, the comma CA's certificate, alice holding the quoted form | %s |\n", l.l44Err(err))
+	}
+	w.setAltSec(t, aliceDN, directory.ADIssuerSerial(l.d.pki.alice))
+	return b.String()
+}
+
+// l44Matrix offers each certificate to the DC's KDC by PKINIT under each
+// KB5014754 setting, alice holding only the altSecurityIdentities the case
+// names, and the broker's AD CS certificate to LDAPS by EXTERNAL, recording
+// what the KDC answered and logged. Each block starts with control-ski, a
+// strong mapping no part of the claim is about: if it gets no TGT, the
+// block's PKINIT is broken and every cell in it is INVALID. A setup failure
+// marks a cell INVALID (R6); only l44Judge's "refused" is a verdict.
+func (l *labDir) l44Matrix(t *testing.T, ev *evidenceLog) string {
+	t.Helper()
+	w := l.win
+	c := w.certs
+	port49Form := func(x *x509.Certificate) (string, error) { return directory.ADIssuerSerial(x), nil }
+	cases := []l44Case{
+		{"control-ski", "control: AD CS `OfflineRouter`, alice holding the strong `X509:<SKI>` mapping", c.aliceADCS, c.aliceADCSKey, winAltSecSKI},
+		{"adcs-none", "AD CS `OfflineRouter` (UPN SAN, no SID extension)", c.aliceADCS, c.aliceADCSKey, nil},
+		{"adcs-port49", "the same, alice holding port49's form", c.aliceADCS, c.aliceADCSKey, port49Form},
+		{"adcs-forward", "the same, alice holding the issuer least significant RDN first", c.aliceADCS, c.aliceADCSKey, winAltSecForward},
+		{"adcs-unreversed", "the same, alice holding the serial in certificate byte order", c.aliceADCS, c.aliceADCSKey, winAltSecUnreversed},
+		{"sid-none", "AD CS `User`, requested as alice (SID extension)", c.aliceSID, c.aliceSIDKey, nil},
+		{"comma-port49", "a CA whose CN holds a comma (`lab-users, comma-CA`), alice holding port49's form", c.aliceComma, c.aliceCommaKey, port49Form},
+		{"comma-quoted", "the same, alice holding the value quoted as CertNameToStr quotes it", c.aliceComma, c.aliceCommaKey, winAltSecQuoted},
+		{"comma-escaped", "the same, alice holding the value escaped as RFC 4514 escapes it", c.aliceComma, c.aliceCommaKey, winAltSecEscaped},
+		{"highbit-port49", "the lab users CA, a serial whose top bit is set, alice holding port49's form", c.aliceHighBit, c.aliceHighBitKey, port49Form},
+		{"highbit-signbyte", "the same, alice holding the serial with its DER sign byte", c.aliceHighBit, c.aliceHighBitKey, winAltSecSignByte},
+	}
+	aliceDN := "CN=alice,OU=Staff," + dirBase
+	brokerDN := "CN=port49,OU=Svc," + dirBase
+	adcsExt := directory.Bind{Mechanism: "external", TLSCertFile: c.brokerCertFile, TLSKeyFile: c.brokerKeyFile}
+	var b strings.Builder
+	b.WriteString("\n### KB5014754: what the DC itself maps\n\n" +
+		"Each certificate is offered to the KDC by PKINIT (MIT `kinit`) as `alice@CORP.EXAMPLE.COM`, alice holding exactly " +
+		"the `altSecurityIdentities` the row names; the KDC is restarted after each `StrongCertificateBindingEnforcement` " +
+		"change. The first row of each block is the control. \"refused\" means the KDC itself refused, for no setup reason, " +
+		"while the control got a TGT; anything else is INVALID (R6), with the reason. The last row of each block is the " +
+		"broker's AD CS certificate by SASL EXTERNAL over LDAPS, port49's form on its account.\n\n" +
+		"| `StrongCertificateBindingEnforcement` | certificate | `altSecurityIdentities` held | outcome | the KDC said | DC events | time |\n" +
+		"|---|---|---|---|---|---|---|\n")
+	noSID := w.invalidFor("sid")
+	l.setRegistry(t, "UseCachedCRLOnlyAndIgnoreRevocationUnknownErrors", 1)
+	for _, mode := range []int{-1, 1, 2} {
+		inForce := l.setRegistry(t, "StrongCertificateBindingEnforcement", mode)
+		w.checkSkew(t)
+		control := "" // why the block's control failed; "" while it holds
+		for _, cs := range cases {
+			if cs.cert == nil { // the sid cells, when enroll_as failed three times
+				t.Errorf("L44 %s under %s: %s; the cell is INVALID (R6)", cs.label, inForce, noSID)
+				fmt.Fprintf(&b, "| %s | %s | — | INVALID (R6): `%s` | — | — | — |\n", inForce, cs.what, l44MDCell(noSID))
+				continue
+			}
+			held := ""
+			if cs.altsec != nil {
+				v, err := cs.altsec(cs.cert)
+				if err != nil {
+					outcome := "INVALID (R6): the mapping could not be written: " + l.l44Err(err)
+					t.Errorf("L44 %s under %s: %s", cs.label, inForce, outcome)
+					fmt.Fprintf(&b, "| %s | %s | — | %s | — | — | — |\n", inForce, cs.what, l44MDCell(outcome))
+					if cs.label == "control-ski" {
+						control = "control-ski could not be offered"
+					}
+					continue
+				}
+				held = v
+			}
+			w.setAltSec(t, aliceDN, held)
+			since := w.clock(t)
+			ev.mark("L44 pkinit %s, StrongCertificateBindingEnforcement %s", cs.label, inForce)
+			r := l44CleanResult(w.kinit(t, cs.label, "alice@"+dirRealm, cs.cert, cs.key), l.l44Secrets()...)
+			evs := l.l44Events(t, since)
+			ev.add(evidenceLine{Event: "kinit", Label: cs.label + ", enforcement " + inForce, Error: r.kdcSaid(),
+				DurationMS: ms(r.took), DCEvents: l44EventStrings(evs)})
+			outcome := l44Judge(r, evs, control)
+			if cs.label == "control-ski" && !strings.HasPrefix(outcome, "**TGT issued**") {
+				control = "control-ski got no TGT (" + outcome + ")"
+				outcome = "INVALID (R6): " + control
+			}
+			b.WriteString(l44MatrixRow(inForce, cs.what, held, outcome, r, evs))
+			if strings.HasPrefix(outcome, "INVALID") {
+				t.Errorf("L44 %s under %s: %s", cs.label, inForce, outcome)
+			}
+		}
+		w.setAltSec(t, brokerDN, directory.ADIssuerSerial(c.brokerADCS))
+		since := w.clock(t)
+		ev.mark("L44 external under StrongCertificateBindingEnforcement %s", inForce)
+		e := l.l44External(t, ev, "external, enforcement "+inForce, adcsExt, true)
+		evs := l.l44Events(t, since)
+		b.WriteString(l44ExternalRow(inForce, e, evs))
+		w.setAltSec(t, brokerDN, "")
+	}
+	// Not deferred: a restore that fails while a failure unwinds would only
+	// add a second t.Fatalf, and the DC is destroyed at the end anyway.
+	l.setRegistry(t, "StrongCertificateBindingEnforcement", -1)
+	l.setRegistry(t, "UseCachedCRLOnlyAndIgnoreRevocationUnknownErrors", -1)
+	w.setAltSec(t, aliceDN, directory.ADIssuerSerial(l.d.pki.alice))
+	return b.String()
+}
+
+// l44Judge is a PKINIT cell's outcome. A refusal is KB5014754's verdict only
+// when its cause is proven: the block's control got a TGT (control is ""),
+// the KDC logged no setup event, said no certificate-validation code, and
+// itself refused. Anything else is INVALID (R6), never "refused".
+func l44Judge(r winPKINITResult, evs []winEvent, control string) string {
+	switch ids, codes := l44PreconditionIDs(evs), r.setupCodes(); {
+	case control != "":
+		return "INVALID (R6): " + control
+	case len(ids) > 0:
+		return fmt.Sprintf("INVALID (R6): the KDC logged %v, a setup failure", ids)
+	case r.ok:
+		return "**TGT issued**"
+	case len(codes) > 0:
+		return fmt.Sprintf("INVALID (R6): KDC error %s, a certificate-validation failure", strings.Trim(fmt.Sprint(codes), "[]"))
+	case !r.kdcRefused():
+		return "INVALID (R6): the KDC refused nothing; the client failed on its own side"
+	}
+	return "refused"
+}
+
+// l44MatrixRow is one PKINIT cell, its outcome l44Judge's.
+func l44MatrixRow(enforcement, what, held, outcome string, r winPKINITResult, evs []winEvent) string {
+	if held == "" {
+		held = "(none)"
+	} else {
+		held = "`" + held + "`"
+	}
+	return fmt.Sprintf("| %s | %s | %s | %s | %s | %s | %s |\n", enforcement, what, held, l44MDCell(outcome),
+		l44MDCell(r.kdcSaid()), l44EventsCell(evs), r.took.Round(time.Millisecond))
+}
+
+// l44Ext is one EXTERNAL cell: port49's bind, why it is INVALID (R6) when it
+// is, and on an accepted bind the identity the DC mapped the certificate to.
+type l44Ext struct {
+	l43Cell
+	invalid string
+	authzID string
+}
+
+// certPresented reports whether Go's TLS client, configured as port49's
+// dialer configures it (tls.Config.Certificates), would send certFile to
+// l's LDAPS. When the DC's CertificateRequest lists acceptable CAs, Go sends
+// a certificate only if SupportsCertificate passes and otherwise silently
+// sends none; the bind is then refused for "no certificate", which is no
+// answer about the mapping (pre-flight I2).
+func (l *labDir) certPresented(t *testing.T, certFile, keyFile string) (bool, string) {
+	t.Helper()
+	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		t.Fatalf("%s: loading %s: %s", l.name, certFile, l.l44Err(err))
+	}
+	tc, err := l.d.pki.clientTLS(l.uri)
+	if err != nil {
+		t.Fatal(l.l44Err(err))
+	}
+	asked, sent, why := false, false, ""
+	tc.GetClientCertificate = func(ri *tls.CertificateRequestInfo) (*tls.Certificate, error) {
+		asked = true
+		if err := ri.SupportsCertificate(&cert); err != nil {
+			why = oneLineMax(winScrub(err.Error(), l.l44Secrets()...), 160)
+			return &tls.Certificate{}, nil
+		}
+		sent = true
+		return &cert, nil
+	}
+	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: 5 * time.Second}, "tcp", strings.TrimPrefix(l.uri, "ldaps://"), tc)
+	if err != nil {
+		return false, "the probe's handshake failed: " + oneLineMax(winScrub(err.Error(), l.l44Secrets()...), 120)
+	}
+	conn.Close()
+	switch {
+	case !asked:
+		return false, "the server sent no CertificateRequest"
+	case !sent:
+		return false, "Go would send no certificate: " + why
+	}
+	return true, ""
+}
+
+// l44WhoAmI is the identity the DC gives an EXTERNAL bind with bind's
+// certificate (RFC 4532, which AD supports as 1.3.6.1.4.1.4203.1.11.3), on a
+// connection built by hand: port49's Client exposes searches only.
+func (l *labDir) l44WhoAmI(t *testing.T, bind directory.Bind) (string, error) {
+	t.Helper()
+	cert, err := tls.LoadX509KeyPair(bind.TLSCertFile, bind.TLSKeyFile)
+	if err != nil {
+		return "", err
+	}
+	tc, err := l.d.pki.clientTLS(l.uri)
+	if err != nil {
+		return "", err
+	}
+	tc.Certificates = []tls.Certificate{cert}
+	conn, err := ldap.DialURL(l.uri, ldap.DialWithTLSConfig(tc))
+	if err != nil {
+		return "", err
+	}
+	defer conn.Close()
+	conn.SetTimeout(15 * time.Second)
+	if err := conn.ExternalBind(); err != nil {
+		return "", err
+	}
+	r, err := conn.WhoAmI(nil)
+	if err != nil {
+		return "", err
+	}
+	return r.AuthzID, nil
+}
+
+// l44External is one EXTERNAL cell. A certificate Go would not present makes
+// it INVALID before any bind. On an accepted bind, WhoAmI names the account
+// the DC mapped; when mapped (port49's form on port49), anything but
+// CORP\port49 makes it INVALID: "bound" alone does not prove port49's form
+// mapped it (pre-flight M12).
+func (l *labDir) l44External(t *testing.T, ev *evidenceLog, label string, bind directory.Bind, mapped bool) l44Ext {
+	t.Helper()
+	if ok, why := l.certPresented(t, bind.TLSCertFile, bind.TLSKeyFile); !ok {
+		x := l44Ext{l43Cell: l43Cell{mech: "external", code: -1}, invalid: "the certificate was never presented: " + why}
+		t.Errorf("L44 %s: %s; the cell is INVALID (R6)", label, x.invalid)
+		return x
+	}
+	x := l44Ext{l43Cell: l.tryBind(t, ev, label, bind, "")}
+	x.text = winScrub(x.text, l.l44Secrets()...)
+	if !x.ok {
+		return x
+	}
+	id, err := l.l44WhoAmI(t, bind)
+	switch {
+	case err != nil:
+		x.authzID = "WhoAmI failed: " + oneLineMax(winScrub(err.Error(), l.l44Secrets()...), 120)
+	default:
+		x.authzID = winScrub(id, l.l44Secrets()...)
+	}
+	if mapped && !strings.EqualFold(x.authzID, `u:CORP\port49`) {
+		x.invalid = fmt.Sprintf("bound, but WhoAmI says %q, not u:CORP\\port49", x.authzID)
+		t.Errorf("L44 %s: %s; the cell is INVALID (R6)", label, x.invalid)
+	}
+	return x
+}
+
+// l44ExtRow is an EXTERNAL cell in the Binds table.
+func l44ExtRow(label string, x l44Ext) string {
+	switch {
+	case x.invalid != "":
+		return fmt.Sprintf("| %s | INVALID (R6): %s | %d | %s |\n", label, l44MDCell(x.invalid), x.code, x.took.Round(time.Millisecond))
+	case x.ok:
+		return fmt.Sprintf("| %s | accepted; WhoAmI `%s`; a search for alice found %d entry | 0 | %s |\n", label,
+			l44MDCell(x.authzID), x.read, x.took.Round(time.Millisecond))
+	}
+	return x.row(label)
+}
+
+// l44ExternalRow is one EXTERNAL cell in the matrix.
+func l44ExternalRow(enforcement string, x l44Ext, evs []winEvent) string {
+	outcome := fmt.Sprintf("refused, LDAP result %d", x.code)
+	switch {
+	case x.invalid != "":
+		outcome = "INVALID (R6): " + x.invalid
+	case x.ok:
+		outcome = "**bound** as `" + x.authzID + "`"
+	}
+	return fmt.Sprintf("| %s | the broker's AD CS certificate, SASL EXTERNAL over LDAPS | port49's form, on port49 | %s | %s | %s | %s |\n",
+		enforcement, l44MDCell(outcome), l44MDCell(x.text), l44EventsCell(evs), x.took.Round(time.Millisecond))
+}
+
+// l44EventsCell is a cell's events, each "<source> <id>: <message>", pipes
+// escaped; "(none)" when there are none. The events come from l44Events,
+// whose messages are scrubbed and cut already.
+func l44EventsCell(evs []winEvent) string {
+	if len(evs) == 0 {
+		return "(none)"
+	}
+	return l44MDCell(strings.Join(l44EventStrings(evs), "; "))
+}
+
+func l44EventStrings(evs []winEvent) []string {
+	out := make([]string, 0, len(evs))
+	for _, e := range evs {
+		src := e.Provider
+		switch {
+		case strings.Contains(src, "Kerberos-Key-Distribution-Center") || src == "KDC":
+			src = "KDC"
+		case strings.Contains(src, "DomainService") || strings.Contains(src, "Directory"):
+			src = "DS"
+		}
+		out = append(out, fmt.Sprintf("%s %d: %s", src, e.ID, strings.Join(strings.Fields(e.Message), " ")))
+	}
+	return out
+}
+
+// l44PreconditionIDs is every KDC event among evs that means the setup
+// failed, not the mapping (winKDCPrecondition).
+func l44PreconditionIDs(evs []winEvent) []int {
+	var out []int
+	for _, e := range evs {
+		if (strings.Contains(e.Provider, "Kerberos-Key-Distribution-Center") || e.Provider == "KDC") && winKDCPrecondition(e.ID) {
+			out = append(out, e.ID)
+		}
+	}
+	return out
+}
+
+func l44MDCell(s string) string { return strings.ReplaceAll(s, "|", `\|`) }

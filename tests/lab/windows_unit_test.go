@@ -1315,3 +1315,173 @@ func TestWindowsDownloadStallsAndLogs(t *testing.T) {
 		t.Error("the download logged no progress")
 	}
 }
+
+func TestL44EventsCell(t *testing.T) {
+	evs := []winEvent{{ID: 39, Provider: "Microsoft-Windows-Kerberos-Key-Distribution-Center", Message: "No strong | mapping for alice"},
+		{ID: 3075, Provider: "Microsoft-Windows-ActiveDirectory_DomainService", Message: "x"}}
+	got := l44EventsCell(evs)
+	if !strings.Contains(got, "KDC 39: No strong \\| mapping") || !strings.Contains(got, "DS 3075") || strings.Contains(got, " | ") {
+		t.Fatalf("%q", got)
+	}
+	if l44EventsCell(nil) != "(none)" {
+		t.Fatal("none")
+	}
+	if ids := l44PreconditionIDs([]winEvent{{ID: 21, Provider: "Microsoft-Windows-Kerberos-Key-Distribution-Center"}, {ID: 21, Provider: "Schannel"}}); len(ids) != 1 {
+		t.Fatalf("%v: only a KDC's 19, 21 or 29 is a setup failure", ids)
+	}
+}
+
+func TestL44MatrixRow(t *testing.T) {
+	r := winPKINITResult{ok: false, kdcErrs: []string{"-1765328359/Additional pre-authentication required", "-1765328318/KDC_ERR_CERTIFICATE_MISMATCH"},
+		last: "kinit: Certificate mismatch while getting initial credentials", took: 1500 * time.Millisecond}
+	row := l44MatrixRow("2", "AD CS `OfflineRouter`", "", l44Judge(r, nil, ""), r, nil)
+	for _, want := range []string{"| 2 | AD CS `OfflineRouter` | (none) | refused |", "KDC_ERR_CERTIFICATE_MISMATCH", "| (none) | 1.5s |"} {
+		if !strings.Contains(row, want) {
+			t.Errorf("row lacks %q: %s", want, row)
+		}
+	}
+	ok := winPKINITResult{ok: true}
+	if !strings.Contains(l44MatrixRow("absent", "x", "X509:<I>A<SR>01", l44Judge(ok, nil, ""), ok, nil), "**TGT issued**") {
+		t.Error("an accepted cell does not say so")
+	}
+}
+
+// A refusal is the KB5014754 verdict only when its cause is proven: the
+// block's control got a TGT, the KDC itself refused, and nothing it said or
+// logged is a setup failure. Anything else is INVALID, never "refused"
+// (pre-flight C3).
+func TestL44Judge(t *testing.T) {
+	pre := "-1765328359/Additional pre-authentication required"
+	big := "-1765328332/Response too big for UDP, retry with TCP"
+	mismatch := winPKINITResult{kdcErrs: []string{pre, "-1765328318/KDC_ERR_CERTIFICATE_MISMATCH"}}
+	client := winPKINITResult{kdcErrs: []string{pre}, last: "kinit: Certificate verification failed while verifying KDC certificate"}
+	trust := winPKINITResult{kdcErrs: []string{pre, "-1765328322/Client not trusted"}}
+	retryThenRefused := winPKINITResult{kdcErrs: []string{pre, big, pre, "-1765328318/KDC_ERR_CERTIFICATE_MISMATCH"}}
+	retryOnly := winPKINITResult{kdcErrs: []string{pre, big}, last: "kinit: Cannot contact any KDC"}
+	retryThenTGT := winPKINITResult{ok: true, kdcErrs: []string{pre, big}}
+	kdc21 := []winEvent{{ID: 21, Provider: "Microsoft-Windows-Kerberos-Key-Distribution-Center"}}
+	for name, tc := range map[string]struct {
+		r       winPKINITResult
+		evs     []winEvent
+		control string
+		want    string
+	}{
+		"verdict":                {mismatch, nil, "", "refused"},
+		"tgt":                    {winPKINITResult{ok: true}, nil, "", "**TGT issued**"},
+		"client side":            {client, nil, "", "INVALID (R6): the KDC refused nothing"},
+		"validation code":        {trust, nil, "", "INVALID (R6): KDC error 62"},
+		"setup event":            {mismatch, kdc21, "", "INVALID (R6): the KDC logged [21]"},
+		"control failed":         {mismatch, nil, "control-ski got no TGT", "INVALID (R6): control-ski got no TGT"},
+		"tgt, control failed":    {winPKINITResult{ok: true}, nil, "control-ski got no TGT", "INVALID (R6): control-ski got no TGT"},
+		"udp retry then refused": {retryThenRefused, nil, "", "refused"},
+		"udp retry alone":        {retryOnly, nil, "", "INVALID (R6): the KDC refused nothing"},
+		"udp retry then tgt":     {retryThenTGT, nil, "", "**TGT issued**"},
+	} {
+		if got := l44Judge(tc.r, tc.evs, tc.control); !strings.HasPrefix(got, tc.want) {
+			t.Errorf("%s: %q, want a prefix %q", name, got, tc.want)
+		}
+	}
+	if got := l44Judge(mismatch, nil, ""); got != "refused" {
+		t.Errorf("a verdict is exactly %q, got %q", "refused", got)
+	}
+}
+
+// An EXTERNAL cell says why it is INVALID, or what the DC mapped the
+// certificate to when it bound (pre-flight I2, M12).
+func TestL44ExtRow(t *testing.T) {
+	x := l44Ext{l43Cell: l43Cell{mech: "external", code: -1}, invalid: "the certificate was never presented: the server sent no CertificateRequest"}
+	if row := l44ExtRow("e1", x); !strings.Contains(row, "| e1 | INVALID (R6): the certificate was never presented") {
+		t.Errorf("%s", row)
+	}
+	b := l44Ext{l43Cell: l43Cell{mech: "external", ok: true, read: 1}, authzID: `u:CORP\port49`}
+	if row := l44ExtRow("e1", b); !strings.Contains(row, "accepted") || !strings.Contains(row, "WhoAmI `u:CORP\\port49`") {
+		t.Errorf("%s", row)
+	}
+}
+
+func TestL44ExternalRow(t *testing.T) {
+	evs := []winEvent{{ID: 39, Provider: "KDC", Message: "m"}}
+	inv := l44Ext{l43Cell: l43Cell{mech: "external", code: -1}, invalid: "bound, but WhoAmI says \"x|y\""}
+	if row := l44ExternalRow("2", inv, nil); !strings.Contains(row, "| INVALID (R6): bound, but WhoAmI says \"x\\|y\" |") {
+		t.Errorf("an invalid cell, its pipe escaped: %s", row)
+	}
+	bound := l44Ext{l43Cell: l43Cell{mech: "external", ok: true}, authzID: `u:CORP\port49`}
+	if row := l44ExternalRow("2", bound, evs); !strings.Contains(row, "**bound** as `u:CORP\\port49`") || !strings.Contains(row, "KDC 39: m") {
+		t.Errorf("%s", row)
+	}
+	refused := l44Ext{l43Cell: l43Cell{mech: "external", code: 1, text: "bind external: LDAP result 1"}}
+	if row := l44ExternalRow("2", refused, nil); !strings.Contains(row, "| refused, LDAP result 1 |") {
+		t.Errorf("%s", row)
+	}
+}
+
+// OR-1: a KDC-down answer shows something about the KDC only when the same
+// mapped bind succeeded with it up, before (e1) and after (e6).
+func TestL44KDCDownInvalid(t *testing.T) {
+	good := l44Ext{l43Cell: l43Cell{ok: true}}
+	refused := l44Ext{l43Cell: l43Cell{code: 1}}
+	invalid := l44Ext{l43Cell: l43Cell{ok: true}, invalid: "bound, but WhoAmI says x"}
+	for name, tc := range map[string]struct {
+		e1, e6 l44Ext
+		bad    bool
+	}{
+		"both up":         {good, good, false},
+		"e1 refused":      {refused, good, true},
+		"e6 refused":      {good, refused, true},
+		"e1 invalid":      {invalid, good, true},
+		"e6 invalid":      {good, invalid, true},
+		"neither is fine": {refused, refused, true},
+	} {
+		if got := l44KDCDownInvalid(tc.e1, tc.e6); (got != "") != tc.bad {
+			t.Errorf("%s: %q", name, got)
+		}
+	}
+}
+
+// What a failed kinit or an event says may carry a secret: it is scrubbed, then
+// cut, before it reaches a cell, the evidence or a log (pre-flight, Tasks 2-4).
+func TestL44CleanScrubs(t *testing.T) {
+	const sec = "Aa1!SecretValueForTest"
+	evs := l44CleanEvents([]winEvent{{ID: 21, Provider: "KDC", Message: "pw " + sec + " " + strings.Repeat("x", 300)}}, sec)
+	if got := l44EventsCell(evs); strings.Contains(got, sec) || !strings.Contains(got, "<secret>") {
+		t.Errorf("an event cell holds the secret or lost its mark: %d bytes", len(got))
+	}
+	// A secret that straddles the cut is scrubbed whole, not cut in half.
+	evs = l44CleanEvents([]winEvent{{ID: 21, Provider: "KDC", Message: strings.Repeat("y", 150) + sec}}, sec)
+	if got := l44EventsCell(evs); strings.Contains(got, sec[:8]) {
+		t.Error("a secret that straddles the cut was cut, not scrubbed")
+	}
+	r := l44CleanResult(winPKINITResult{kdcErrs: []string{"-1765328318/mismatch " + sec}, last: "kinit: " + sec}, sec)
+	if got := r.kdcSaid(); strings.Contains(got, sec) || !strings.Contains(got, "<secret>") {
+		t.Errorf("what the KDC said holds the secret or lost its mark: %d bytes", len(got))
+	}
+}
+
+// The scan of windows_test.go (TestWindowsScrubsBeforeItCuts), over l44_test.go:
+// every oneLineMax is given a winScrub, so no secret is cut in half before it
+// is scrubbed.
+func TestL44ScrubsBeforeItCuts(t *testing.T) {
+	b, err := os.ReadFile("l44_test.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var seen int
+	for i, l := range strings.Split(string(b), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(l), "//") {
+			continue
+		}
+		if strings.Contains(l, "tailOf(") {
+			t.Errorf("l44_test.go:%d: tailOf cuts text outside scrubbedTail", i+1)
+		}
+		_, rest, ok := strings.Cut(l, "oneLineMax(")
+		if !ok {
+			continue
+		}
+		if seen++; !strings.HasPrefix(rest, "winScrub(") {
+			t.Errorf("l44_test.go:%d: oneLineMax is not given a winScrub", i+1)
+		}
+	}
+	if seen == 0 {
+		t.Error("the scan found no oneLineMax call: it checks nothing")
+	}
+}
