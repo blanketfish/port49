@@ -127,7 +127,9 @@ func newWinSecrets() (*winSecrets, error) {
 func winEnv(s *winSecrets) string { return "USERNAME=Docker\nPASSWORD=" + s.AdminPassword + "\n" }
 
 // winBootstrap is the one command the SSH session runs. It reads
-// {"script": ..., "params": {...}} from stdin, runs the script with the params
+// {"script": ..., "params": {...}} from stdin as one line (never to stdin's
+// end: Windows OpenSSH can lose the end, and gate run 6's install step sat
+// idle waiting for it), runs the script with the params
 // splatted, and writes its result as one line of JSON, or {"error": ...} and
 // exit 1. Params, secrets included, travel on stdin only. Every variable that
 // holds them is private, so the script, run in a child scope, cannot read
@@ -137,7 +139,7 @@ const winBootstrap = `$ErrorActionPreference = 'Stop'
 try { [Console]::OutputEncoding = New-Object Text.UTF8Encoding $false; [Console]::InputEncoding = New-Object Text.UTF8Encoding $false } catch { }
 $ProgressPreference = 'SilentlyContinue'
 try {
-  $private:in = [Console]::In.ReadToEnd() | ConvertFrom-Json
+  $private:in = [Console]::In.ReadLine() | ConvertFrom-Json
   $private:p = @{}
   $private:prop = $null
   if ($in.params) { foreach ($prop in $in.params.psobject.Properties) { $p[$prop.Name] = $prop.Value } }
@@ -161,12 +163,17 @@ func winCommand() string {
 		base64.StdEncoding.EncodeToString(b)
 }
 
-// winPayload is the stdin document for script with params.
+// winPayload is the stdin document for script with params: one line of JSON
+// (which escapes every newline in it) and the newline the bootstrap reads to.
 func winPayload(script string, params map[string]any) ([]byte, error) {
-	return json.Marshal(struct {
+	b, err := json.Marshal(struct {
 		Script string         `json:"script"`
 		Params map[string]any `json:"params"`
 	}{script, params})
+	if err != nil {
+		return nil, err
+	}
+	return append(b, '\n'), nil
 }
 
 // winThrownError is the error a script itself threw, as the bootstrap

@@ -3,6 +3,7 @@
 package lab
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/x509"
@@ -1022,6 +1023,23 @@ var labEnvPrint = regexp.MustCompile(`docker\s+inspect|docker\s+compose\b[^\n'"]
 	`[dD]ocker\w*\([^)\n]*"(?:config|convert)"|"compose"[^\n)]*"(?:config|convert)"|` +
 	`"exec"[^)\n]*"(?:printenv|env|set)(?:\s[^"]*)?"`)
 
+// The payload is one line, ended: the bootstrap reads up to the newline and
+// never waits for stdin's end, which Windows OpenSSH lost in gate run 6 (the
+// install step's powershell sat idle before its script began). A PEM's
+// newlines travel escaped inside the JSON.
+func TestWindowsPayloadIsOneEndedLine(t *testing.T) {
+	b, err := winPayload("param($a)\r\n@{ b = $a }\n", map[string]any{"a": "-----BEGIN-----\nx\n-----END-----\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.HasSuffix(b, []byte("\n")) || bytes.Count(b, []byte("\n")) != 1 || bytes.ContainsRune(b, '\r') {
+		t.Errorf("the payload is not one line ended by a newline: %d newlines", bytes.Count(b, []byte("\n")))
+	}
+	if !strings.Contains(winBootstrap, "[Console]::In.ReadLine()") || strings.Contains(winBootstrap, "ReadToEnd") {
+		t.Error("the bootstrap does not read its payload as one line with [Console]::In.ReadLine()")
+	}
+}
+
 // Windows PowerShell 5.1 writes [Console]::Out in the OEM code page, so the
 // bootstrap sets UTF-8 (without a BOM, which would precede the JSON) before
 // anything is read or written (stdin carries the params in the same page). Setting it throws without a console, so the line
@@ -1033,7 +1051,7 @@ func TestWindowsBootstrapSetsUTF8Output(t *testing.T) {
 	if i < 0 {
 		t.Fatal("the bootstrap does not set [Console]::OutputEncoding and InputEncoding to UTF-8 without a BOM, in one try/catch { }")
 	}
-	for _, first := range []string{"WriteLine", "ReadToEnd"} {
+	for _, first := range []string{"WriteLine", "ReadLine"} {
 		if w := strings.Index(winBootstrap, first); w >= 0 && w < i {
 			t.Errorf("the bootstrap reaches %s before it sets the encodings", first)
 		}
