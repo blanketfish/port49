@@ -110,3 +110,61 @@ func TestJWKSOverMaxKeysIsAnError(t *testing.T) {
 		t.Fatalf("%d keys: %v", len(many), err)
 	}
 }
+
+// Keys that parse but cannot be verification keys (M4, M5): each is skipped
+// with its reason, never kept.
+func TestJWKSSkipsTheOddRSAAndOKPKeys(t *testing.T) {
+	rk := oidctest.NewKey(t, oidc.RS256).Public().(*rsa.PublicKey)
+	n := base64.RawURLEncoding.EncodeToString(rk.N.Bytes())
+	b64 := base64.RawURLEncoding.EncodeToString
+	rsaKey := func(kid, e string) map[string]any { return map[string]any{"kty": "RSA", "kid": kid, "n": n, "e": e} }
+	okp := func(kid string, size int) map[string]any {
+		return map[string]any{"kty": "OKP", "crv": "Ed25519", "kid": kid, "x": b64(make([]byte, size))}
+	}
+	keys, skipped, err := oidc.ParseJWKS(jwks(t,
+		rsaKey("e1", "AQ"), // e = 1
+		rsaKey("e2", "Ag"), // e = 2, even
+
+		rsaKey("big", "_____w"), // e = 2^32-1, over what the standard library takes
+		rsaKey("ok", "AQAB"),
+		okp("o31", 31), okp("o33", 33), okp("o32", 32)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kept []string
+	for _, k := range keys {
+		kept = append(kept, k.Kid)
+	}
+	if strings.Join(kept, ",") != "ok,o32" {
+		t.Fatalf("kept %v", kept)
+	}
+	joined := strings.Join(skipped, "\n")
+	for _, want := range []string{`"e1": an RSA exponent that is not odd`, `"e2": an RSA exponent that is not odd`,
+		`"big": an RSA exponent over`, `"o31": an OKP key that is not an Ed25519`, `"o33": an OKP key that is not an Ed25519`} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("no skip reason %q in:\n%s", want, joined)
+		}
+	}
+}
+
+// A JWK member is its exact name, and a repeated member skips the key (the
+// same rule as a JWS header, I2): "N" is not n, and the last "d" does not win.
+func TestJWKMembersAreExactAndNeverRepeated(t *testing.T) {
+	pub := oidctest.NewKey(t, oidc.ES256).Public()
+	good := oidctest.JWK("good", "", pub)
+	b, _ := json.Marshal(good)
+	body := func(raw ...string) []byte { return []byte(`{"keys":[` + strings.Join(raw, ",") + `]}`) }
+	upper := `{"KTY":"EC","kid":"upper","crv":"P-256","x":"` + good["x"].(string) + `","y":"` + good["y"].(string) + `"}`
+	dup := strings.Replace(string(b), `{`, `{"d":"AAAA","d":"",`, 1)
+	dupKid := strings.Replace(string(b), `{`, `{"kid":"a","kid":"good",`, 1)
+	keys, skipped, err := oidc.ParseJWKS(body(string(b), upper, dup, dupKid))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(keys) != 1 || keys[0].Kid != "good" {
+		t.Fatalf("kept %+v, skipped %v", keys, skipped)
+	}
+	if len(skipped) != 3 {
+		t.Fatalf("skipped %v", skipped)
+	}
+}

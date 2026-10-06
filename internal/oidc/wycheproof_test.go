@@ -109,6 +109,12 @@ func TestWycheproof(t *testing.T) {
 							t.Errorf("tc %d (%s; %v): an invalid signature verifies", tc.TcID, tc.Comment, tc.Flags)
 						}
 					case "acceptable":
+						// Either answer is safe; port49 pins the stricter one, so a
+						// standard-library change that starts accepting a legacy
+						// encoding (RSA tc 8, MissingNull) is seen here.
+						if err == nil {
+							t.Errorf("tc %d (%s; %v): an acceptable legacy encoding verifies", tc.TcID, tc.Comment, tc.Flags)
+						}
 					default:
 						t.Fatalf("tc %d: result %q", tc.TcID, tc.Result)
 					}

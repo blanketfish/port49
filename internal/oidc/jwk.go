@@ -27,13 +27,15 @@ type Key struct {
 // Fits reports whether k is a key of a's type: RSA for RS256 and PS256,
 // P-256 for ES256, P-384 for ES384, Ed25519 for EdDSA.
 func (k Key) Fits(a Alg) bool {
+	// A key built by hand is checked whole, so Verify cannot panic on it.
 	switch pub := k.Pub.(type) {
 	case *rsa.PublicKey:
-		return a == RS256 || a == PS256
+		return pub != nil && pub.N != nil && (a == RS256 || a == PS256)
 	case *ecdsa.PublicKey:
-		return (a == ES256 && pub.Curve == elliptic.P256()) || (a == ES384 && pub.Curve == elliptic.P384())
+		return pub != nil && pub.Curve != nil && pub.X != nil && pub.Y != nil &&
+			((a == ES256 && pub.Curve == elliptic.P256()) || (a == ES384 && pub.Curve == elliptic.P384()))
 	case ed25519.PublicKey:
-		return a == EdDSA
+		return len(pub) == ed25519.PublicKeySize && a == EdDSA
 	}
 	return false
 }
@@ -79,9 +81,9 @@ func ParseJWKS(b []byte) (keys []Key, skipped []string, err error) {
 		return nil, nil, fmt.Errorf("oidc: the JWKS holds %d keys, over %d keys", len(set.Keys), MaxKeys)
 	}
 	for _, raw := range set.Keys {
-		var j jwk
-		if json.Unmarshal(raw, &j) != nil {
-			skipped = append(skipped, "a key that is not a JSON object")
+		j, ok := readJWK(raw)
+		if !ok {
+			skipped = append(skipped, "a key that is not a JSON object of distinct members")
 			continue
 		}
 		k, why := j.key()
@@ -92,6 +94,23 @@ func ParseJWKS(b []byte) (keys []Key, skipped []string, err error) {
 		keys = append(keys, k)
 	}
 	return keys, skipped, nil
+}
+
+// readJWK reads a JWK's members by exact name, none repeated (the rule of a
+// JWS header): "N" is not n, and the last of two "d" does not win.
+func readJWK(raw []byte) (jwk, bool) {
+	var j jwk
+	fields, err := exactObject(raw)
+	if err != nil {
+		return j, false
+	}
+	for name, dst := range map[string]any{"kty": &j.Kty, "kid": &j.Kid, "use": &j.Use, "alg": &j.Alg,
+		"key_ops": &j.KeyOps, "crv": &j.Crv, "n": &j.N, "e": &j.E, "x": &j.X, "y": &j.Y, "d": &j.D} {
+		if v, ok := fields[name]; ok && json.Unmarshal(v, dst) != nil {
+			return j, false
+		}
+	}
+	return j, true
 }
 
 // key is j as a verification key, or why it is not one.
@@ -121,6 +140,9 @@ func (j jwk) key() (Key, string) {
 		}
 		if pub.N.BitLen() > MaxRSABits {
 			return Key{}, fmt.Sprintf("RSA key of %d bits, over %d", pub.N.BitLen(), MaxRSABits)
+		}
+		if e := new(big.Int).SetBytes(e); !e.IsInt64() || e.Int64() > 1<<31-1 {
+			return Key{}, "an RSA exponent over 2^31-1, more than the standard library takes"
 		}
 		if pub.E < 3 || pub.E%2 == 0 {
 			return Key{}, "an RSA exponent that is not odd and at least 3"

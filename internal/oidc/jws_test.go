@@ -3,9 +3,11 @@ package oidc_test
 import (
 	"crypto"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/hmac"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
@@ -155,6 +157,18 @@ func TestAnEncryptedOrMalformedTokenIsRefused(t *testing.T) {
 		"no alg":            base64.RawURLEncoding.EncodeToString([]byte(`{"kid":"k"}`)) + "." + parts[1] + "." + parts[2],
 		"oversized":         strings.Repeat("a", oidc.MaxToken+1),
 		"empty signature":   parts[0] + "." + parts[1] + ".",
+		// Go's base64 decoder skips CR and LF, so these decode to the same bytes (I1).
+		"CRLF in the header":       parts[0][:5] + "\r\n" + parts[0][5:] + "." + parts[1] + "." + parts[2],
+		"LF in the payload":        parts[0] + "." + parts[1][:5] + "\n" + parts[1][5:] + "." + parts[2],
+		"CRLF in the signature":    parts[0] + "." + parts[1] + "." + parts[2][:5] + "\r\n" + parts[2][5:],
+		"CR in the signature":      parts[0] + "." + parts[1] + "." + parts[2] + "\r",
+		"space in the header":      parts[0][:5] + " " + parts[0][5:] + "." + parts[1] + "." + parts[2],
+		"space in the payload":     parts[0] + "." + parts[1] + " ." + parts[2],
+		"space in the signature":   parts[0] + "." + parts[1] + "." + parts[2][:5] + " " + parts[2][5:],
+		"padding in the payload":   parts[0] + "." + parts[1] + "=." + parts[2],
+		"padding in the signature": parts[0] + "." + parts[1] + "." + parts[2] + "==",
+		// "c2l" decodes leniently to the same two bytes as "c2k": trailing bits are not zero.
+		"non-canonical trailing bits": parts[0] + "." + parts[1] + ".c2l",
 	} {
 		if _, err := oidc.ParseCompact(raw); !errors.Is(err, oidc.ErrMalformed) {
 			t.Errorf("%s: %v", name, err)
@@ -243,4 +257,91 @@ func TestAJWSStringSaysNothingItCarries(t *testing.T) {
 	if s := j.String(); strings.Contains(s, "forged") || strings.Contains(s, "RS256") {
 		t.Fatalf("String says the unverified alg: %q", s)
 	}
+}
+
+// A header member is its exact name (RFC 7515 §4: names are case-sensitive),
+// and a repeated member is refused whatever its case (I2).
+func TestHeaderMembersAreExactAndNeverRepeated(t *testing.T) {
+	enc := func(s string) string { return base64.RawURLEncoding.EncodeToString([]byte(s)) }
+	tok := func(h string) string { return enc(h) + "." + enc(`{"sub":"x"}`) + ".c2ln" }
+	for name, h := range map[string]string{
+		"ALG alone":             `{"ALG":"ES256"}`,
+		"Alg alone":             `{"Alg":"ES256"}`,
+		"alg twice, none first": `{"alg":"none","alg":"ES256"}`,
+		"alg twice, same value": `{"alg":"ES256","alg":"ES256"}`,
+		"kid twice":             `{"alg":"ES256","kid":"a","kid":"b"}`,
+		"unknown member twice":  `{"alg":"ES256","x":1,"x":2}`,
+		"a trailing value":      `{"alg":"ES256"} {}`,
+		"a null header":         `null`,
+		"a non-string alg":      `{"alg":5}`,
+	} {
+		if _, err := oidc.ParseCompact(tok(h)); !errors.Is(err, oidc.ErrMalformed) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	// A case variant is an unknown member: it neither supplies nor overrides.
+	j, err := oidc.ParseCompact(tok(`{"alg":"RS256","Alg":"ES256","KID":"k","Typ":"t"}`))
+	if err != nil || j.Header.Alg != oidc.RS256 || j.Header.Kid != "" || j.Header.Typ != "" {
+		t.Fatalf("%+v, %v", j, err)
+	}
+	// CRIT is not crit: it is an unknown member.
+	if _, err := oidc.ParseCompact(tok(`{"alg":"ES256","CRIT":["x"]}`)); err != nil {
+		t.Fatalf("CRIT: %v", err)
+	}
+}
+
+// An ECDSA signature in ASN.1 DER, the form most libraries emit, is not the
+// r||s of RFC 7518 §3.4 and never verifies.
+func TestADERECDSASignatureIsRefused(t *testing.T) {
+	for _, alg := range []oidc.Alg{oidc.ES256, oidc.ES384} {
+		k := oidctest.NewKey(t, alg).(*ecdsa.PrivateKey)
+		good := oidctest.Sign(t, alg, k, nil, map[string]any{"sub": "x"})
+		parts := strings.Split(good, ".")
+		digest := sha256.Sum256([]byte(parts[0] + "." + parts[1]))
+		der, err := ecdsa.SignASN1(rand.Reader, k, digest[:])
+		if err != nil {
+			t.Fatal(err)
+		}
+		j, err := oidc.ParseCompact(parts[0] + "." + parts[1] + "." + base64.RawURLEncoding.EncodeToString(der))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := j.Verify(oidc.Key{Pub: k.Public()}, []oidc.Alg{alg}); !errors.Is(err, oidc.ErrSignature) {
+			t.Errorf("%s: a DER signature: %v", alg, err)
+		}
+	}
+}
+
+// A Key a caller builds by hand never panics Verify: Fits is false for a
+// nil key and for an Ed25519 key of the wrong length (M7).
+func TestAHandBuiltKeyFitsNothingUnlessItIsWhole(t *testing.T) {
+	all := []oidc.Alg{oidc.RS256, oidc.PS256, oidc.ES256, oidc.ES384, oidc.EdDSA}
+	good := oidctest.NewKey(t, oidc.ES256)
+	for name, k := range map[string]oidc.Key{
+		"no key":                 {},
+		"a nil RSA key":          {Pub: (*rsa.PublicKey)(nil)},
+		"an RSA key, no N":       {Pub: &rsa.PublicKey{E: 65537}},
+		"a nil ECDSA key":        {Pub: (*ecdsa.PublicKey)(nil)},
+		"an ECDSA key, no XY":    {Pub: &ecdsa.PublicKey{Curve: elliptic.P256()}},
+		"an ECDSA key, no curve": {Pub: &ecdsa.PublicKey{}},
+		"a 2-byte Ed25519 key":   {Pub: ed25519.PublicKey{1, 2}},
+		"a 33-byte Ed25519 key":  {Pub: ed25519.PublicKey(make([]byte, 33))},
+		"a nil Ed25519 key":      {Pub: ed25519.PublicKey(nil)},
+	} {
+		for _, a := range all {
+			if k.Fits(a) {
+				t.Errorf("%s fits %s", name, a)
+			}
+		}
+		for _, a := range all {
+			j, err := oidc.ParseCompact(oidctest.Sign(t, a, oidctest.NewKey(t, a), nil, map[string]any{"sub": "x"}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := j.Verify(k, all); !errors.Is(err, oidc.ErrAlgorithm) {
+				t.Errorf("%s, %s token: %v", name, a, err)
+			}
+		}
+	}
+	_ = good
 }

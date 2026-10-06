@@ -2,6 +2,7 @@ package oidc_test
 
 import (
 	"crypto"
+	"encoding/base64"
 	"strings"
 	"testing"
 
@@ -34,8 +35,25 @@ func FuzzParseCompact(f *testing.F) {
 		if j == nil || len(raw) > oidc.MaxToken || strings.Count(raw, ".") != 2 || j.Header.Alg == "" {
 			t.Fatalf("parsed %d bytes, %d dots, alg %q", len(raw), strings.Count(raw, "."), j.Header.Alg)
 		}
+		// A token that verifies is the canonical encoding of its parts: one
+		// signed token has one byte string (I1), so nothing may key on a
+		// hash of the raw token to mean "this token".
+		verified := 0
 		for _, k := range keys {
-			_ = j.Verify(k, all)
+			if j.Verify(k, all) == nil {
+				verified++
+			}
+		}
+		if verified > 1 {
+			t.Fatalf("%d keys verify one token", verified)
+		}
+		if verified == 1 {
+			for i, part := range strings.Split(raw, ".") {
+				b, err := base64.RawURLEncoding.DecodeString(part)
+				if err != nil || base64.RawURLEncoding.EncodeToString(b) != part {
+					t.Fatalf("a verified token's part %d is not canonical base64url", i)
+				}
+			}
 		}
 	})
 }
