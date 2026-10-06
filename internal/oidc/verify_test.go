@@ -441,7 +441,7 @@ func TestARepeatedClaimIsRefused(t *testing.T) {
 		"Sub in two cases":         humanBody(member("Sub", `"victim"`)),
 		"machine sub":              machineBody(member("sub", `"svc-sub"`)),
 		"machine azp":              machineBody(member("azp", `"Oxidized-01"`)),
-		"machine client_id":        machineBody(member("client_id", `"svc-a"`) + member("client_id", `"svc-a"`)),
+		"machine client_id":        machineBody(member("client_id", `"Oxidized-01"`) + member("client_id", `"Oxidized-01"`)),
 		"machine Sub":              machineBody(member("Sub", `"svc-sub"`)),
 		"preferred_username twice": humanBody(member("preferred_username", `"mallory@corp.example.com"`)),
 		"ISS and iss":              humanBody(member("ISS", fmt.Sprintf("%q", iss.URL))),
@@ -451,7 +451,7 @@ func TestARepeatedClaimIsRefused(t *testing.T) {
 		"Preferred_Username":       humanBody(member("Preferred_Username", `"mallory@corp.example.com"`)),
 		"a long-s sub":             humanBody(member("\u017fub", `"victim"`)),
 		"a kelvin-sign kid":        humanBody(member("\u212aid", `"x"`)),
-		"machine client_id no azp": strings.Replace(machineBody(member("client_id", `"svc-a"`)+member("client_id", `"svc-a"`)),
+		"machine client_id no azp": strings.Replace(machineBody(member("client_id", `"Oxidized-01"`)+member("client_id", `"Oxidized-01"`)),
 			`"azp":"Oxidized-01",`, "", 1),
 		"machine Client_ID": machineBody(member("client_id", `"Oxidized-01"`) + member("Client_ID", `"Oxidized-01"`)),
 	} {
@@ -538,12 +538,10 @@ func TestAnUnavailableVerifierBeatsAnAcceptance(t *testing.T) {
 	m := metrics.New(prometheus.NewRegistry())
 	good := oidc.NewKeySet(oidc.KeySetConfig{Issuer: iss.URL, Client: oidc.NewClient(iss.Roots()),
 		Refresh: time.Hour, MaxAge: 24 * time.Hour, Now: c.Now, M: m})
-	bad := oidc.NewKeySet(oidc.KeySetConfig{Issuer: iss.URL, Client: oidc.NewClient(iss.Roots()),
-		Refresh: time.Hour, MaxAge: 24 * time.Hour, Now: c.Now, M: m})
 	// bad's provider is a closed one: its keys are never fetched.
 	dead := oidctest.NewIssuer(t)
 	dead.Close()
-	bad = oidc.NewKeySet(oidc.KeySetConfig{Issuer: dead.URL, Client: oidc.NewClient(dead.Roots()),
+	bad := oidc.NewKeySet(oidc.KeySetConfig{Issuer: dead.URL, Client: oidc.NewClient(dead.Roots()),
 		Refresh: time.Hour, MaxAge: 24 * time.Hour, Now: c.Now, M: m})
 	other := machine(iss)
 	other.Audience = "api://port49-other"
@@ -583,5 +581,29 @@ func TestTheAssertionIsNeverJSONWithItsNonce(t *testing.T) {
 	b, err := json.Marshal(oidc.Assertion{Principal: "user:a@b", Nonce: "nonce-marker"})
 	if err != nil || strings.Contains(string(b), "nonce-marker") {
 		t.Fatalf("%s %v", b, err)
+	}
+}
+
+// A refusal for a claim name says which, bounded: an operator whose provider
+// adds a mapper needs to find it.
+func TestAClaimNameRefusalNamesTheClaim(t *testing.T) {
+	iss, c := oidctest.NewIssuer(t), newClock()
+	set := newSet(t, iss, c, human(iss, oidc.ClaimPreferredUsername))
+	now := c.Now()
+	body := func(extra string) string {
+		return fmt.Sprintf(`{"iss":%q,"aud":%q,"sub":"x","iat":%d,"exp":%d,"auth_time":%d,"preferred_username":"a@corp.example.com"%s}`,
+			iss.URL, clientID, now.Unix(), now.Add(time.Minute).Unix(), now.Unix(), extra)
+	}
+	_, err := set.Verify(context.Background(), iss.TokenRaw(t, "k1", body(`,"Sub":"y"`)))
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), `"sub"`) {
+		t.Errorf("a two-case pair: %v", err)
+	}
+	_, err = set.Verify(context.Background(), iss.TokenRaw(t, "k1", body(`,"roles\u00e9":"y"`)))
+	if err == nil || !strings.Contains(err.Error(), "rolesé") {
+		t.Errorf("a non-ASCII name: %v", err)
+	}
+	_, err = set.Verify(context.Background(), iss.TokenRaw(t, "k1", body(`,"`+strings.Repeat("\u00e9", 3000)+`":"y"`)))
+	if err == nil || len(err.Error()) > 300 {
+		t.Errorf("an unbounded claim name: %v", err)
 	}
 }

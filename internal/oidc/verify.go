@@ -236,11 +236,11 @@ func payload(b []byte) (map[string]json.RawMessage, error) {
 	for k := range all {
 		// encoding/json folds ſ to s and K to k; no claim name is outside ASCII.
 		if strings.IndexFunc(k, func(r rune) bool { return r < 0x20 || r > 0x7e }) >= 0 {
-			return nil, errors.New("it names a claim outside printable ASCII")
+			return nil, fmt.Errorf("it names a claim outside printable ASCII (%q)", printsafe.Line(k, 40))
 		}
 		l := strings.ToLower(k)
 		if seen[l] {
-			return nil, errors.New("it names one claim twice, in two cases")
+			return nil, fmt.Errorf("it names the claim %q twice, in two cases", printsafe.Line(k, 40))
 		}
 		seen[l] = true
 	}
