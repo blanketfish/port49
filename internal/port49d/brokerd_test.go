@@ -1241,8 +1241,9 @@ func TestTheRunnersSwapMintsNothingUntilItsMarkLands(t *testing.T) {
 // reloads, has the runner carry the context its token made: the runner
 // runs a full context pass on its ask. Meanwhile the runner records no
 // bundle as judged (pre-flight I3; Ruling 8 corrected). Each replica
-// mints under its swapped bundle: the runner's at once, the late one's
-// once its ask has flagged it (Task 15a re-review 1, I-2).
+// mints under its swapped bundle, each once its swap's mark has landed
+// (the runner's: TestTheRunnersSwapMintsNothingUntilItsMarkLands), the
+// late one's once its ask has flagged it (Task 15a re-review 1, I-2).
 func TestALateReplicasContextIsCarriedWhenItReloads(t *testing.T) {
 	var out, log syncBuffer
 	e, o := stderr, stdout
