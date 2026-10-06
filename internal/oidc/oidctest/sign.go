@@ -47,6 +47,17 @@ func NewKey(t testing.TB, alg oidc.Alg) crypto.Signer {
 // signed by key as alg says.
 func Sign(t testing.TB, alg oidc.Alg, key crypto.Signer, header, claims map[string]any) string {
 	t.Helper()
+	b, err := json.Marshal(claims)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return SignRaw(t, alg, key, header, b)
+}
+
+// SignRaw is Sign over a payload given as bytes, to be exactly what the
+// caller wrote: a member named twice, which a map cannot say.
+func SignRaw(t testing.TB, alg oidc.Alg, key crypto.Signer, header map[string]any, payload []byte) string {
+	t.Helper()
 	h := map[string]any{"alg": string(alg)}
 	for k, v := range header {
 		h[k] = v
@@ -58,7 +69,7 @@ func Sign(t testing.TB, alg oidc.Alg, key crypto.Signer, header, claims map[stri
 		}
 		return base64.RawURLEncoding.EncodeToString(b)
 	}
-	input := enc(h) + "." + enc(claims)
+	input := enc(h) + "." + base64.RawURLEncoding.EncodeToString(payload)
 	var sig []byte
 	var err error
 	switch alg {

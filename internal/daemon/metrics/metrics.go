@@ -306,6 +306,10 @@ type Metrics struct {
 	// port49_oidc_keys_fetch_failures_total{issuer}: discovery or JWKS
 	// fetches that failed.
 	OIDCKeysFetchFailures *prometheus.CounterVec
+	// port49_oidc_tokens_total{issuer, outcome}: OIDC bearer tokens by the
+	// configured issuer ("unknown" for any other) and outcome: accepted,
+	// invalid, expired, unavailable, unmapped, logged_out (plan 7h).
+	OIDCTokens *prometheus.CounterVec
 	// port49_policy_reloads_total{outcome}: attempts to put a changed policy
 	// file in force (plan 4b) — "applied", "unchanged" (a SIGHUP with nothing
 	// new), or "refused" (the file does not load; the policy in force keeps
@@ -619,6 +623,9 @@ func New(reg prometheus.Registerer) *Metrics {
 		OIDCKeysFetchFailures: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "port49_oidc_keys_fetch_failures_total",
 			Help: "OIDC discovery or JWKS fetches that failed, by configured issuer."}, []string{"issuer"}),
+		OIDCTokens: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_oidc_tokens_total",
+			Help: "OIDC bearer tokens by configured issuer and outcome: accepted, invalid, expired, unavailable, unmapped, logged_out."},
+			[]string{"issuer", "outcome"}),
 		PolicyReloads: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "port49_policy_reloads_total",
 			Help: "Attempts to put a changed policy file in force, by outcome."}, []string{"outcome"}),
 		PolicyFileRefused: prometheus.NewGauge(prometheus.GaugeOpts{Name: "port49_policy_file_refused",
@@ -703,7 +710,7 @@ func New(reg prometheus.Registerer) *Metrics {
 		m.DevicesQuarantined, m.DevicesAdmissionRefused, m.ContextRefreshes, m.ContextsReindexed,
 		m.ContextsReindexFailures, m.SessionRefreshes, m.TokensSuperseded, m.CeilingWarnings,
 		m.Revocations, m.RevocationsInForce, m.RevocationsFileFailed, m.CertStatusChecks, m.CRLLoads, m.CRLNextUpdate,
-		m.CertStatusUnavailable, m.DirectoryQueries, m.DirectoryServerUp, m.DirectorySelected, m.DirectorySiteCrossings, m.DirectoryBindHoldoff, m.DirectoryWalksTruncated, m.DirectoryGroupNamesAmbiguous, m.DirectoryLookups, m.DirectoryPrewarmPrincipals, m.DirectoryPrewarmLastSuccess, m.DirectoryRefreshLastComplete, m.OIDCKeysLastSuccess, m.OIDCKeysFetchFailures, m.PolicyReloads, m.PolicyFileRefused,
+		m.CertStatusUnavailable, m.DirectoryQueries, m.DirectoryServerUp, m.DirectorySelected, m.DirectorySiteCrossings, m.DirectoryBindHoldoff, m.DirectoryWalksTruncated, m.DirectoryGroupNamesAmbiguous, m.DirectoryLookups, m.DirectoryPrewarmPrincipals, m.DirectoryPrewarmLastSuccess, m.DirectoryRefreshLastComplete, m.OIDCKeysLastSuccess, m.OIDCKeysFetchFailures, m.OIDCTokens, m.PolicyReloads, m.PolicyFileRefused,
 		m.PolicyRefreshPending, m.PolicyBundleMatchesRunner, m.BrokerMintGateClosed, m.RedemptionRestoreGuarded,
 		m.InventoryReloads,
 		m.InventoryFileRefused,

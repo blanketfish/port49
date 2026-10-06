@@ -177,6 +177,18 @@ func (i *Issuer) TokenWith(t testing.TB, kid string, header, claims map[string]a
 	return Sign(t, h.alg, h.key, header, claims)
 }
 
+// TokenRaw signs the payload body exactly as written, the header naming kid.
+func (i *Issuer) TokenRaw(t testing.TB, kid, body string) string {
+	t.Helper()
+	i.mu.Lock()
+	h, ok := i.keys[kid]
+	i.mu.Unlock()
+	if !ok {
+		t.Fatalf("oidctest: no key %q", kid)
+	}
+	return SignRaw(t, h.alg, h.key, map[string]any{"kid": kid}, []byte(body))
+}
+
 // IDToken is a human's ID token for clientID at now: iss, aud, sub, iat,
 // exp (now+5m), auth_time (now), sid "s-"+sub, and extra, where a nil
 // value deletes a claim.
