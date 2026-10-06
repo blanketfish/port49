@@ -502,7 +502,7 @@ ctx:(nas, username)
   credential        see 5.1.4
   auth_time         1757041495           when the human actually authenticated
   session_expires   1757070295           auth_time + max_session_age
-  refreshed_at      1757041495           last broker refresh (5.1.3); the staleness clock
+  refreshed_at      1757041495           last verification (5.1.3); the staleness clock
   revoked_at        —                    set by revocation (5.6); denies until idle TTL reclaims
   policy_rev        7                    advanced only by a write to what the refresh decides
                                          (5.1.3): a join or replace, a revocation, a privilege
@@ -2197,7 +2197,8 @@ principal's directory membership, longer than the ceiling. `credential_revoked` 
 typing is an incident signal. `identity_ambiguous` MUST be alertable on its own, as
 `credential_revoked` is; a rise in `directory_unavailable` means no directory server has
 answered for longer than `broker.directory.grace` for someone, or that no membership is stored
-for them (never pre-warmed, or refused), so check the store before chasing a DC outage. Alert at half the ceiling,
+for them (never pre-warmed, or refused), so check the store before chasing a DC outage.
+Alert at half the ceiling,
 `time() - port49_directory_refresh_last_complete_timestamp_seconds > session.staleness_ceiling / 2`:
 at the ceiling every live session denies `context_stale` from a reachable port49d, and the
 escapes are `session.staleness_ceiling: 0s` with a port49d restart, or stopping port49d so

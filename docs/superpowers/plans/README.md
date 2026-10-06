@@ -98,7 +98,7 @@ Tasks 8b–16 plus a new Task 13b, each reviewed). It delivers:
 - the agent's one connection.
 
 L35 is measured and closed on five images. The lab's snapshot restore found a ledger bug, fixed
-in 79812ef (Plan 7d — As built, below). **7e written 2026-10-03** (`2026-10-03-07e-broker-process.md`, twenty-three tasks in two merges (eighteen, and 8a, 15a, 15b, 15c and 15d): 7e-1, Tasks 1–10 and 8a, the store a fleet of processes shares (a sealed write sequence and a high-water ledger per key, the context and marks feeds, the ledger record the daemon cannot write, `superseded` in the store, the decision-log emits under the hold, two carried fixes); 7e-2, Tasks 11–18 and 15a–15d, `port49-broker`, port49d on etcd with no broker inside, one runner per keyspace, the revocations file retired on etcd, and the lab; nineteen rulings recorded as decision 36; one question for Ryan, OR-1, `port49 revoke`'s default socket, closed by Ryan 2026-10-03 as recommended (unchanged); it opens L37 and L38 and measures them with L36); **7e-1 executed 2026-10-03** on `feature/broker-process`, each task reviewed (Plan 7e — As built, below). **7e-2 executed 2026-10-04** on `feature/broker-split`, each task reviewed, L36, L37 and L38 closed and L40 opened (Plan 7e — As built, "7e-2", below); **merged 2026-10-05** as PR #27, merge 6438e26. **7f written 2026-10-05** (`2026-10-05-07f-go-dark-and-context-cache.md`, ten tasks: the container shape (image, compose stack on etcd, CI smoke test), the lab on the compose stack with L39 (a), one docs, three code for go-dark on store health checks (N failures, M passes; the idle gap closed), two code for the context cache, one lab (L41, opened by it), one docs; nine rulings recorded as decision 37; two questions for Ryan, OR-1 the health defaults and OR-2 keeping close-and-wait, each with a recommendation, both approved by Ryan 2026-10-05 as recommended); **7f executed 2026-10-05** on `feature/go-dark-and-context-cache`, each task reviewed, L39 (a) measured and L41 opened and closed (Plan 7f — As built, below); **merged 2026-10-05** as PR #28, merge 0cd6926. **7g written 2026-10-05** (`2026-10-05-07g-the-directory.md`, nineteen tasks: one docs, fifteen code, two lab, one docs; twenty rulings recorded as decision 38; three questions for Ryan, each with a recommendation: OR-1 the defaults (`session.staleness_ceiling` 4h, `directory.grace` 4h, `broker.refresh_interval` 5m), OR-2 GSSAPI through go-ldap and gokrb5 (pure Go), OR-3 Samba AD standing in for Windows Server AD in the lab; it opens L42 and L43); **7g pre-flight 2026-10-05**, READY WITH FIXES (2 Critical, 17 Important, 17 Minor), every finding applied to the plan: a refusal is stored and never served from grace, a principal is one entry's alone and pinned to its immutable id (`port49 directory forget` is the operator's way out for an entry re-created), and OR-3 split so L42 and L43 close on OpenLDAP and Samba AD while a new L44 (Windows Server AD) stays open until measured. Next: execute 7g. 7h and 8–13 not yet.
+in 79812ef (Plan 7d — As built, below). **7e written 2026-10-03** (`2026-10-03-07e-broker-process.md`, twenty-three tasks in two merges (eighteen, and 8a, 15a, 15b, 15c and 15d): 7e-1, Tasks 1–10 and 8a, the store a fleet of processes shares (a sealed write sequence and a high-water ledger per key, the context and marks feeds, the ledger record the daemon cannot write, `superseded` in the store, the decision-log emits under the hold, two carried fixes); 7e-2, Tasks 11–18 and 15a–15d, `port49-broker`, port49d on etcd with no broker inside, one runner per keyspace, the revocations file retired on etcd, and the lab; nineteen rulings recorded as decision 36; one question for Ryan, OR-1, `port49 revoke`'s default socket, closed by Ryan 2026-10-03 as recommended (unchanged); it opens L37 and L38 and measures them with L36); **7e-1 executed 2026-10-03** on `feature/broker-process`, each task reviewed (Plan 7e — As built, below). **7e-2 executed 2026-10-04** on `feature/broker-split`, each task reviewed, L36, L37 and L38 closed and L40 opened (Plan 7e — As built, "7e-2", below); **merged 2026-10-05** as PR #27, merge 6438e26. **7f written 2026-10-05** (`2026-10-05-07f-go-dark-and-context-cache.md`, ten tasks: the container shape (image, compose stack on etcd, CI smoke test), the lab on the compose stack with L39 (a), one docs, three code for go-dark on store health checks (N failures, M passes; the idle gap closed), two code for the context cache, one lab (L41, opened by it), one docs; nine rulings recorded as decision 37; two questions for Ryan, OR-1 the health defaults and OR-2 keeping close-and-wait, each with a recommendation, both approved by Ryan 2026-10-05 as recommended); **7f executed 2026-10-05** on `feature/go-dark-and-context-cache`, each task reviewed, L39 (a) measured and L41 opened and closed (Plan 7f — As built, below); **merged 2026-10-05** as PR #28, merge 0cd6926. **7g written 2026-10-05** (`2026-10-05-07g-the-directory.md`, nineteen tasks: one docs, fifteen code, two lab, one docs; twenty rulings recorded as decision 38; three questions for Ryan, each with a recommendation: OR-1 the defaults (`session.staleness_ceiling` 4h, `directory.grace` 4h, `broker.refresh_interval` 5m), OR-2 GSSAPI through go-ldap and gokrb5 (pure Go), OR-3 Samba AD standing in for Windows Server AD in the lab; it opens L42 and L43); **7g pre-flight 2026-10-05**, READY WITH FIXES (2 Critical, 17 Important, 17 Minor), every finding applied to the plan: a refusal is stored and never served from grace, a principal is one entry's alone and pinned to its immutable id (`port49 directory forget` is the operator's way out for an entry re-created), and OR-3 split so L42 and L43 close on OpenLDAP and Samba AD while a new L44 (Windows Server AD) stays open until measured. **7g executed 2026-10-05 to 2026-10-06** on `feature/the-directory` (base `ad4edff`), each task reviewed, L42 and L43 closed on OpenLDAP and Samba AD and L44 (Windows Server AD) left open for the SER8 box (Plan 7g — As built, below); not yet merged. **Open for Ryan, unanswered:** OR-1 (the 4h/4h/5m defaults), OR-2 (GSSAPI through gokrb5) and OR-3 (L44), each built on its recommendation; PF7g-g (the per-server bind hold-off, which deviates from design §10) and PF7g-i (the composition rule, a spec §5.1 change) await sign-off. Next: the final review and merge of 7g, then 7h. 8–13 not yet.
 **2b merged 2026-09-23** (PR #7; `2026-09-23-02b-context-join.md`, nine tasks, reviewed
 per task and whole-branch): a second login by the same principal joins the live context
 instead of replacing it, stored privilege is raise-only, and accounting attribution gets a
@@ -3783,6 +3783,369 @@ above; the lab's `startCompose`.
     (Task 8 review M-3), for the final review.
   - **`passes` is entered only after a store gone,** never at a cold start (Task 5 review M-3).
   - **Counters restart at each dark** (the per-run registry, 7d's known cost; Ruling 2).
+
+### Plan 7g — As built
+
+Executed from `2026-10-05-07g-the-directory.md` on `feature/the-directory` (base `ad4edff`, 63
+commits at `fb94981` before this one), each task reviewed, most through several fix rounds. The
+ledger is `.superpowers/sdd/2026-10-05-07g-the-directory/progress.md`, with each task's brief,
+report and review beside it. A pre-flight review (2 critical, 17 important, 17 minor) revised the
+plan before Task 1 (`c4132fa`), and the pin's escape was added after it (`ad4edff`). What differs
+from the plan's text, task by task:
+
+- **Task 1 (spec and design; a95b9fc, 35d16ee).** Review fixed eight Important and seven Minor
+  findings: the pass takes `user:` principals only and machine principals are exempt; the session
+  refresh writes `refreshed_at`; `context_stale` has its own row; readiness never follows the
+  directory. Task 19 fixed the residual nits (the `refreshed_at` field comment
+  now reads "last verification", design §12's active-login cell carries the OR-1 tag, three
+  over-width lines rewrapped).
+- **Task 2 (reasons and record fields; d5396e9).** As written.
+- **Task 3 (the stamp; ee309a0, 6b2a12a).** `Token.VerifiedAt` rides the seal (a round-trip
+  test was missing), a stamp evicts 7f's cache entry, and `Join`'s `RefreshedAt` is the login's.
+- **Task 4 (config; f0493b5, 9699846).** `broker.directory` and `broker.refresh_interval`. A
+  server `uri` with userinfo is refused at load and no error echoes one (PF7g-c); the simple bind
+  keeps `password_env`, the variable by name (PF7g-d); `site_env` naming the password's variable is
+  refused, since it would log the password as the site; unreadable bind files stop the start at
+  load, not at the first bind.
+- **Task 5 (the membership record; 283d91f, 6cfa32b, aadb0f1, 561a93f, 1490676).** Five rounds.
+  `DeleteMembership` leaves a tombstone in the record and a `PutMembership` verified before it is
+  dropped, one CAS in etcd (PF7g-e): `forget` cannot lose to an in-flight re-verification. The
+  record opens with the principal asked for, so a copy under another key opens as nothing (the
+  critical finding). The mapping-key index is a claimant set, registered before the record is
+  written (PF7g-f): a key is answered only when exactly one claimant has a live, unrefused record
+  listing it, so a refused key stays refused and an ambiguous one heals only to its sole claimant.
+  Claimants are not pruned on claim (a prune cannot tell a gone record from one about to be
+  written); stale ones are filtered at read and lapse with the key.
+- **Task 6 (the pool; ad859df, a400a60, 907e61f, 3599969, 7fb4146).** Servers are logged and
+  labelled `host:port` (`Server.Label()`, default port added; two servers with one label are refused
+  at load). A refused bind starts a pool-wide bind hold-off (PF7g-g, below), which departs from
+  design §10; the first refusal does not double it, a repeat does. `Run`'s context is the pool's
+  lifecycle: no `Close`, and `Run` closes every bound connection on return.
+- **Task 7 (the connection; e1a760f, c83717e, 9005f88, ec8bf0b).** `ldap://` without `start_tls`
+  is refused before any dial. A bind keeps the LDAP result code and drops the server's diagnostic.
+  gokrb5 flattens its errors to text, so `kerberosRefused` classifies by root-cause tags (pinned
+  by tests against a fake KDC; re-run them on a gokrb5 upgrade): a KDC refusal wraps
+  `ErrBindRefused`, an unreachable KDC is a fault. A bind holds no lock across the KDC and obeys
+  its deadline; `LoadCredentials` refuses at start a principal without a realm, a keytab with no
+  key for it, or a `krb5_conf` with no KDC.
+- **Task 8 (the mapping; 7cadadc, 11dd432).** Review found that `subject_dn` keys built from
+  unescaped DN parts let `alice,OU=admins` bind as alice in grace. Keys and `dn:` ids are now
+  built from a canonical DN (each RDN sorted, every RFC 4514 metacharacter and NUL escaped,
+  exported as `directory.CanonicalDN`). A principal or username is bytes 0x21-0x7E before any case
+  folding; `cn` reads the DER subject and one CN only; a malformed `otherName` fails closed;
+  `entryUUID` wins over `objectGUID`. The brief's `sidExtension` test helper omitted the `[0]`
+  EXPLICIT wrapper and was fixed (the parser was right). `ValidPin` is exported and config load
+  uses it.
+- **Task 9 (nested groups; 0eb5f67, c6af69a).** A total-node bound of 2000 and visited sets keyed
+  on the canonical DN. `max_depth` truncation is exact: one probe asks whether the last frontier
+  has an unvisited parent, so a chain that ends at `max_depth` is not "truncated". `membersOf`
+  returns `(dns, capped, cut, err)`; a failing walk returns no groups (a partial result on error
+  was a real bug the new tests found).
+- **Task 10 (the resolver; 70f9aad, de9ec67, 62b8da4, b3c4bc4).** The mapping and both uniqueness
+  searches are one pool `Do`. Only `ErrUnavailable` reaches grace; a refusal is written as a
+  stored refusal that grace never overrules. On a store read error at a refusal the record carries
+  an unmatchable pin, `unread:` (PF7g-h, below). Pre-warm counts distinct users. Spec §5.7's
+  `identity_ambiguous` row also covers a uniqueness search that does not return the entry itself.
+- **Task 11 (group subjects; b630ca7, 136ac32, c6089cf, 2ad0ca2, b029248).** `Subject.groupDN` is
+  a canonical-form string, so `policy` imports `directory`. A group subject needs a `user:`
+  principal. A directory answer with no username is refused (`ErrNoUsername`, mapped to
+  `identity_unmapped`); the declared-username fallback is for replay only. The composition ceiling
+  rule is PF7g-i (below).
+- **Task 12 (the bind; 19b597c, 17ceb7b, 13c37ab).** The principal is mapped at bind and pinned to
+  the held connection. A refresh acts as the pinned principal and reads the marks on the pinned
+  principal, the legacy email-SAN principal and the key. A connection with no pin under a directory
+  is 503 `directory_unavailable` (session kept), never a re-map. `CloseHeld` matches the legacy
+  principal. `directory.ForTestsStaticResolver` is the test resolver.
+- **Task 13 (mint, explain, identity, revoke, forget; 35e754b, 878d0e1, a2e1b3d, b14a62b,
+  74f848d).** `storedMemberOf`: revocation answers read the stored membership and never ask a
+  server. Explaining another principal the directory refuses answers 200 with that principal's
+  reason in the body; explaining oneself with a refused membership is the caller's refusal (401,
+  connection closed). Records name the caller. `port49 directory forget` normalizes its principal;
+  the brief's "run it twice" text is gone (PF7g-e). The forget record is emitted without being
+  counted as a decision.
+- **Task 14 (the policy pass; e8d939a, 0b86155).** The pass judges a member by its stored
+  membership. A past-grace, unrefused membership keeps its last-verified username and drops only
+  its groups, so an identity-held context is kept, not revoked `identity_unmapped`, in a long
+  outage. A store deadline fails the pass; it is not "unverified".
+- **Task 15 (the scheduled refresh; 5f8d9df, b967e28).** `RefreshDirectory` verifies with no
+  policy held and judges and writes under the hold per principal. `storedMember` applies the
+  declared-username check within and past grace (`Resolver.DeclaredBy`). A collided member's
+  unspent tokens are cleared at once, in both passes. The scheduled pass passes `sameSource`, so an
+  inventory-only swap rewrites nothing. One principal's non-outage directory error leaves that
+  principal unverified and the pass continues. `Narrowed` is also set on a widening, which costs a
+  re-mint and never revokes (a test pins it). `DefaultStalenessCeiling` is 4h.
+- **Task 16 (wiring; e621114, b20f47e).** Both processes open the directory; `Declared` is the
+  live policy's declared usernames. The scheduled pass runs in every minting process, a
+  directory-less one included (the 4h default would otherwise deny it `context_stale`). The
+  grace end-to-end test uses the real clock (about 8s). `policyEnv` now refuses a human subject
+  with no `username` on a broker with no directory, and one that declares a `username` on a
+  broker with one.
+- **Task 17 (L42, L43; a1fe9e9, 4786b4b, 1deabaa, 03f868f, 8668ee2, 19895d1).** Phase 1 built the
+  harness and Phase 2 measured it, after an Opus review of each. Deviations: the OpenLDAP seed is
+  loaded by `ldapadd` over `ldapi`; Samba needed the SPN `ldap/localhost` and an `acl_xattr`
+  setting for the container; the second Samba `netops-oncall` is renamed in after creation. Samba
+  GSSAPI over LDAPS is measured under both `ldap server require strong auth` settings (Task 17's
+  ruling). Rule 4 corrected design §10 and decision 38 items 6 and 8 (below).
+- **Task 18 (end to end; 38197d0, 3c92b5e, b1df1d4, 31f8709, f8f049d, 175d7c3, 77f01e6, f5b4d06,
+  fb94981).** The run found a port49 defect: go-ldap returns no results and no error from a
+  search on a connection it has marked closing, which the resolver read as "no such entry", so a
+  stopped directory answered `identity_unmapped`, revoked an open session and stored refusals
+  grace never overrules. A close before, between or during a search is now a fault, judged per
+  page (b1df1d4, 77f01e6; 0 of 30000 probes truncated, also under `-race`). The `context_stale`
+  `server_msg` blamed the broker alone and now names both causes (f5b4d06). The brief's recovery
+  bound (`refresh_interval` + 30s) was wrong; see the operator notes. EOS (4.31.2F, tagged
+  4.32.2F) and vJunos-router (23.4R2-S2.1) pass.
+- **Task 19 (this section).**
+
+**The rulings, as made** (decision 38; Rulings 1–20 of the plan). They stood, with these changes,
+each recorded in the spec or the design:
+
+- Ruling 3 gained the pin's escape (`ad4edff`, PF7g-b): `port49 directory forget <principal>`.
+- Ruling 5 gained PF7g-i.
+- Design §10's pool text carries PF7g-g.
+- Decision 38 items 6 and 8, and design §10, on GSSAPI and EXTERNAL against AD, were corrected by
+  L43's results (rule 4).
+
+**Open for Ryan.** None of these has been answered. The build uses the provisional value, and
+nothing below is Ryan's word:
+
+- **OR-1, the defaults** `session.staleness_ceiling` 4h, `directory.grace` 4h,
+  `broker.refresh_interval` 5m: **open.** The build uses the recommendation. Every place that
+  states a default is tagged "provisional on Ryan's answer to OR-1" (decision 38, spec §5.1.3,
+  design §9 and §12).
+- **OR-2, GSSAPI through go-ldap and gokrb5 (pure Go):** **open.** The build uses the
+  recommendation (no cgo). A gokrb5 upgrade must re-run the classification tests of Task 7.
+- **OR-3, Samba AD standing in for Windows Server AD:** **open as worded**, and the build does
+  not use it. Under register rule 3, L42 and L43 close on the platforms they name (OpenLDAP and
+  Samba AD) and **L44 stays open** for Windows Server AD (below).
+- **PF7g-g, the per-server bind hold-off: awaiting Ryan's sign-off.** It rests on reasoning,
+  not data, and deviates from design §10, which says a refusal opens no breaker and fails over.
+  With N servers there are N binds per query and per 30s check on one service account, and AD
+  keeps the account locked after the password is fixed. A refused bind now starts a pool-wide
+  hold-off of 1m doubling to 15m, with one probe bind per step; each server also has its own
+  refusal backoff, and a probe goes to the best-ranked server that has not refused, so one bad DC
+  does not lock the pool (the first version did, 12 of 12 logins failed in an hour). Queries with
+  no bound connection fail at once, `directory_unavailable`, and grace serves. The cost if wrong:
+  up to 15m of grace after a password is fixed.
+- **PF7g-i, the composition rule (a spec §5.1 change): awaiting Ryan's sign-off.** A member of
+  several group subjects holds the union of their grants; the composed `enable` ceiling is the
+  highest over subjects whose own `enable` offers escalation. An `enable: none` subject
+  contributes only the level it holds without enabling (the lesser of its roles' level and its
+  cap) and never creates a ceiling. Without this, a subject (`enable: none`, max admin) and
+  another (`token`, max operator) composed to token-to-admin, which neither grants alone. The
+  cost if wrong: a member in two such groups escalates only as far as the better single subject.
+
+**Rulings made during execution.** PF7g-a, every pre-flight finding applied to the plan text
+first. PF7g-b, the pin's escape. PF7g-c, a `uri` with userinfo is refused at load. PF7g-d, the
+simple bind keeps `password_env`; c's "files only" clause is withdrawn. PF7g-e, the forget race is
+closed in the store by a tombstone. PF7g-f, the mapping-key index is a claimant set. PF7g-g, i,
+above. PF7g-h, on a store read error at a refusal the pin is unmatchable (`unread:`), so mallory
+cannot bind as alice and the real alice is held refused until `forget`: security over
+availability. Task 17, Samba GSSAPI measured under both strong-auth settings. Task 14, keep the
+last-verified username past grace. Task 15, one principal's error does not end the pass. Task 6,
+fix round 4 stayed with the Sonnet implementer instead of escalating (the model split).
+
+**Operator notes, as built** (the plan's notes, corrected):
+
+- **Upgrading: the staleness ceiling is on.** `session.staleness_ceiling` defaults to 4h
+  (provisional on OR-1).
+  - **What it does.** Every minting process's scheduled pass re-verifies every live principal
+    every `broker.refresh_interval` (5m) and stamps `refreshed_at`, a directory-less broker's
+    included. A session whose principal has not been verified for 4h is denied `context_stale` at
+    its next command, with a `server_msg` that says the broker is unreachable or cannot verify the
+    person's directory membership. It resumes at the next pass after the cause clears.
+  - **The opt-out.** `staleness_ceiling: 0s` turns it off, said at every start.
+  - **Upgrade order.** Upgrade every broker before port49d. A new port49d (4h default) beside an
+    old broker that never stamps `refreshed_at` denies every session 4h after its login. If the
+    order cannot be kept, set `staleness_ceiling: 0s` on port49d until the brokers are new.
+  - **At 3am, at the ceiling.** Live sessions are denied `context_stale` by a reachable port49d,
+    so break-glass does not help on them. The escapes: `session.staleness_ceiling: 0s` and a
+    port49d restart, or stop port49d so devices fall back to break-glass (L4). Alert at half the
+    ceiling, `time() - port49_directory_refresh_last_complete_timestamp_seconds > ceiling / 2`.
+  - **A grace mint near the ceiling** opens a session whose `refreshed_at` is the membership's
+    verification, so it can go `context_stale` minutes after it opens, as designed.
+  - **Recovery.** After the directory returns, a session resumes within `refresh_interval` +
+    `circuit_breaker.probe_interval` + 30s (the health-check tick) at the longest: a server whose
+    breaker opened is tried again by the probe, so the first good pass can be a probe interval
+    late. The lab measured 1m12s with a 3m ceiling.
+  - **A quarantined device's contexts are not stamped.** After a quarantine longer than the
+    ceiling lifts, they can be stale for up to one interval. Harmless: the daemon answers nothing
+    from a quarantined device meanwhile.
+- **Upgrading: principals change with a directory.**
+  - A human principal is `user:` + the entry's `principal_attribute`, no longer the email SAN.
+    A `user:` identity subject declares no `username:` (refused at load); on a broker with no
+    directory a human subject must declare one.
+  - Revocation marks made before the change still apply: a certificate is checked against the
+    principal its email SAN gave as well as the mapped one. Marks made from now on name the
+    mapped principal.
+  - **`port49 policy check` does not know the broker's mode** (`DirectoryUnknown`), so CI can pass
+    a policy a directory broker (a human `username`) or a directory-less one (no human
+    `username`) refuses at reload. Check the mode in the pipeline until a flag exists.
+- **Directory hygiene, required.**
+  - `principal_attribute` and `username_attribute` must be writable only by directory
+    administrators (on OpenLDAP, remove `by self write` on `mail`). Two entries holding one value
+    are both refused (`identity_ambiguous`, `username_collision`), so a self-edit can lock a
+    colleague out until fixed, but never make one person another.
+  - Both attributes need a **case-insensitive equality matching rule**. port49 searches for the
+    value to check it is one entry's alone, and a rule that is case-sensitive can miss the entry
+    itself; a search that does not return the entry itself is
+    `identity_ambiguous`. A principal and username are printable ASCII only.
+  - A principal is pinned to the entry it was verified on (`objectGUID` or `entryUUID`): another
+    entry later given the same value is refused `identity_unmapped` for as long as the record
+    lives (`max(grace, 24h)` after its last verification). An OU move keeps the pin; where the
+    directory returns neither id the pin is the DN. A deleted and re-created entry is refused the
+    same way, and **so is every user after a directory is restored from scratch**, which changes
+    every `entryUUID`: run `forget` for each.
+- **`port49 directory forget <principal>`, the pin's way out.** A rehire, or an entry restored
+  without its tombstone, has a new id and is refused `identity_unmapped`, and each refusal renews
+  the record. The refusal line names the command. Once you have confirmed the new entry is the
+  same person, run it on the broker's admin socket (`--socket <its admin_socket>`; the broker's
+  uid or root). It deletes the principal's membership, pin included, and writes a
+  `directory_forget` record naming your uid and the old entry id. The next bind pins the new
+  entry. It grants nothing and needs no directory. A re-verification already in flight cannot
+  re-pin the old entry: the delete leaves a tombstone. A principal with no stored record answers
+  not found, and nothing is written. If the store write fails the command says so: run it again.
+- **A refusal when the store could not be read.** If the store cannot be read at the moment a
+  refusal is written, the pin cannot be read either. The record is written with an unmatchable
+  pin and the line says so: the principal is held refused, the real person included, until
+  `forget`.
+- **A principal you explain is verified and pinned.** `explain_others` verifies and pins the
+  principal it names, so a **typo stores a 24h refusal** for a name that never existed (and
+  verifying a real principal for the first time pins its entry). The refusal is `forget`-able.
+- **New: `broker.directory`.** As the plan listed it:
+  - **Servers:** `servers` (`uri`, `priority`, `site`, `start_tls`), `site` or `site_env`
+    (default `PORT49_SITE`), `ca_file`. Servers rank same-site first, then by descending
+    `priority`, then in file order. A `uri` carries no userinfo.
+  - **`bind`:** `external` with `tls_cert_file`/`tls_key_file`; `gssapi` with
+    `keytab_file`/`principal`/`krb5_conf`; or `simple` with `bind_dn`/`password_env` (the
+    variable's name; the password is never in the file).
+  - **Where to search:** `base_dn`, `groups_base_dn`, `user_filter`, `group_filter`.
+  - **Attributes:** `principal_attribute`, `username_attribute`, `group_name_attribute`,
+    `member_attribute`.
+  - **`certificate_mapping`:** `kind`, `attribute`, `allow_weak`, `issuers`.
+  - **Nesting:** `nested_groups` (required: `in_chain`, `recursive` or `direct`), `max_depth`.
+    The walk stops at 2000 groups.
+  - **Timing:** `query_timeout`, `health_check` (`timeout` has **no lower bound**: a tiny or
+    negative value fails every probe, opens every breaker and the pool is dark, failing closed),
+    `circuit_breaker`, `failback`. The `failback.stability_window` default (5m) is not OR-1's.
+  - **Outages:** `grace`, `prewarm`.
+- **Nested groups need the right mode per directory** (L42).
+  - **OpenLDAP needs `recursive`.** `in_chain` answers an empty set with no error (it fails
+    closed), and `memberOf` is direct-only. Samba AD answers `in_chain` in full, loop included.
+  - Group names must be unique: a name that matches several groups is dropped and counted
+    (`port49_directory_group_names_ambiguous`). The walk's log line says `revisits` (loops or
+    diamonds), not loops. A walk cut by `max_depth` or the node bound is counted in
+    `port49_directory_walks_truncated_total`, and pre-warm goes on to the next group.
+- **The binds** (L43). Always over TLS; plain LDAP needs `start_tls`.
+  - **OpenLDAP:** `external` (mapped by `olcAuthzRegexp`) and `simple` over LDAPS are accepted;
+    plain LDAP simple is refused (13).
+  - **Samba AD refuses SASL EXTERNAL** (LDAP result 1, operations error). port49 reads result 1
+    as a server fault, not a refusal, so **it opens every breaker**: the pool is dark and grace
+    serves. Use `simple` or `gssapi` on Samba.
+  - **Samba GSSAPI needs `ldap server require strong auth = allow_sasl_over_tls`.** Under `yes` it
+    is refused (8) after the KDC issued the tickets.
+  - The password and the keytab are never logged.
+- **A refused bind holds off every bind** (PF7g-g; Task 6). A rotated bind password or an
+  expired bind certificate is a refusal by the server (LDAP 49, 48, 8, 13 or 7; a KDC refusal),
+  not a down server: queries fail over only to servers already bound, grace serves, and the broker
+  says the refusal hourly per server with the result code. The pool holds off every bind for 1m,
+  doubling to 15m, one probe bind per step. With N servers all refusing, at most N+4 binds fail
+  in the first 30 minutes, then one per 15 minutes; a single misconfigured DC is retried at most
+  4 an hour once another accepts. **Exempt the service account from lockout, or set its threshold
+  above N+4 per 30 minutes.** After you fix the credential the next probe succeeds within the
+  current step, up to 15m; restarting the broker clears it. `port49_directory_bind_holdoff_seconds`
+  is the time left.
+- **Every breaker open.** Queries are refused at once until the next probe, up to
+  `circuit_breaker.probe_interval` plus `health_check.interval` (90s at the defaults) after the
+  DCs return. Grace serves meanwhile. A cancelled caller is held up to `query_timeout` plus the
+  store budgets, so a burst of cancelled callers is not a hang.
+- **New: `broker.refresh_interval`** (5m, provisional on OR-1).
+- **New reason codes:** `identity_unmapped`, `identity_ambiguous` (alert on it),
+  `directory_unavailable`, `composition_refused`. New record fields: `policy.subjects`,
+  `auth.directory`, and the `directory_forget` event.
+- **New metrics.** Alert on:
+  - `port49_directory_lookups_total{outcome="ambiguous"}` increasing;
+  - `time() - port49_directory_refresh_last_complete_timestamp_seconds > 3 × refresh_interval`
+    (and at half the ceiling, above);
+  - `port49_directory_server_up == 0` for a while;
+  - `port49_directory_group_names_ambiguous > 0`.
+- **The diff:** a changed `group:` now fails `port49 policy diff` until a session test names the
+  subject.
+- **Group subjects mint** for their members (nested per `nested_groups`). A member of several
+  subjects holds the union of their grants, the least `token_ttl` and the most demanding
+  `enable`; the composed ceiling is PF7g-i's. A combination a joint check refuses is
+  `composition_refused` on that device.
+- **`/v1/identity`** answers the subjects, groups, username, and the membership's `verified_at`
+  and source.
+- **A directory outage.**
+  - **Logins.** New logins and mints continue from the membership verified within
+    `directory.grace` (4h, provisional on OR-1), held in the store, so a broker restart keeps
+    them (checked on the compose stack). A person the directory refused before the outage
+    (deleted, ambiguous, a username taken) stays refused through it. Past grace: 503
+    `directory_unavailable`.
+  - **Live sessions** continue until the ceiling; a past-grace member keeps the last username, so
+    the session is not revoked in a long outage.
+  - **Revocation.** `port49 revoke` works throughout and needs no directory; revoking your own
+    sessions never asks it.
+  - **A stopped directory** is a fault, not "no such person": a close before, between or during a
+    search is judged per page. A defect that read it as `identity_unmapped` was found by the
+    end-to-end run and fixed.
+  - **Readiness** never follows the directory: a broker with every DC down stays ready.
+- **Lab:** L42 and L43 **closed** on OpenLDAP and Samba AD, 2026-10-05
+  (`tests/lab/results/L42-openldap.md`, `L42-samba_ad.md`, `L43-openldap.md`, `L43-samba_ad.md`).
+  L44, Windows Server AD (`in_chain`, EXTERNAL, GSSAPI, `altSecurityIdentities`, strong-mapping
+  enforcement), is **open**, with decision 38's L44 marks, until the SER8 box measures it. The
+  `issuer_serial` and `sid` rows on Samba show only that port49's form finds the attribute it
+  wrote; a DC's acceptance is L44. One question for it: Windows quotes a `,` in `<I>`, and
+  port49's form does not. The end-to-end on the compose stack (a nested grant, a removal, grace to
+  the ceiling, recovery) ran on EOS and vJunos-router
+  (`tests/lab/results/directory-e2e-*.md`); it is not a register row.
+
+**Interfaces 7g added:** `directory.Resolver` (`Map`, `Verify`, `Current`, `Stored`, `DeclaredBy`,
+`Prewarm`), `directory.Answer`, `Source`, `Pool` (`Do`, `Check`, `Run`), `Server.Label`,
+`Credentials`/`LoadCredentials`, `Dialer`, `Refusal`, `CanonicalDN`, `ValidPin`, `IsUser`,
+`ErrNotUser`, `ForTestsStaticResolver`, `ForTestsFuncResolver`; `store.Membership` (with
+`Refused`), `MapKey`, `PutMembership`, `GetMembership`, `DeleteMembership`,
+`RefuseMapKeys`, `MembershipByKey`, `MembershipPrincipals`, `TombstoneFloor`, `StampRefreshed`,
+`ContextPolicy.RefreshedAt`, `Token.VerifiedAt`; `policy.Member`, `ResolveMember`, `HasRightOf`,
+`SubjectsOf`, `ExplainMember`, `ErrCompositionRefused`, `ErrNoUsername`; `broker.BindMap`,
+`CertIdentity`, `callerOf`, `memberFor`, `storedMember`, `storedMemberOf`, `passJudge`,
+`RefreshDirectory`, `Forget`; `decision.EventDirectoryForget`, `decision.Forget`,
+`admin.Server.Forget`, `adminForget`, `directoryCmd`; `config.DefaultStalenessCeiling`,
+`StalenessOff`; the metrics above and `port49_directory_bind_holdoff_seconds`.
+
+**Carried, for later plans:**
+- **7h:** OIDC principals resolve groups through `Resolver.Verify` (`user:` + the claim the
+  deployment names), and `/v1/logout`.
+- **8:** the workload verifier calls `Resolver.Map` for a workload certificate's directory entry,
+  where decision 16 allows one.
+- **12:** the directory alerts, and the systemd and Kubernetes shapes' keytab and `PORT49_SITE`:
+  - `port49_directory_refresh_last_complete_timestamp_seconds` older than 3 × `refresh_interval`;
+  - any increase of `port49_directory_lookups_total{outcome="ambiguous"}`;
+  - `port49_directory_server_up == 0`;
+  - `port49_directory_group_names_ambiguous > 0`.
+- **Unassigned:** L44, Windows Server AD (OR-3): open until the SER8 box measures it; decision 38's
+  L44 marks stay until then.
+
+**Open for the final review** (parked, not fixed here):
+- A startup warning when `nested_groups: in_chain` meets a root DSE without the AD capability
+  `1.2.840.113556.1.4.800` (OpenLDAP answers empty with no error today).
+- Samba's EXTERNAL result 1 is classified a fault, so it opens every breaker; `Refusal` was not
+  widened. Consider wording that names the mechanism.
+- `port49 policy check` could take `--directory on|off`.
+- The etcd claimant read has no single-revision `WithRev` read (Task 5 n1).
+- Stray gssapi goroutines are bounded at about servers × (10s or the deadline), only when the
+  caller's context is shorter than `query_timeout` (Task 7); a ctx-aware slot channel would end
+  them.
+- `held` is per grant, not per subject: an odd policy can be locked out, never escalated; the
+  `notCounted` note is untested (Task 11).
+- After a collision, for up to 15m each pass deletes tokens the declaring subject mints under that
+  username (Task 15 P5); a fail-closed nuisance. There is no unlabeled count of unverified
+  principals, every pass reads every stored membership, and a removed member with a token and no
+  context is not reached by the scheduled pass (m-2).
+- `Narrowed` is set on a widening too (Task 14 M-2); it costs a re-mint.
+- `duties` has no test of its own beyond the etcd one (Task 16); `ldapClient` is exercised by the
+  lab only.
 
 ## Plan 8 — Workload certificates (§19 step 8)
 
