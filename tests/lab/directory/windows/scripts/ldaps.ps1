@@ -25,7 +25,7 @@ if ($step -eq 'request') {
   ) | Set-Content "$dir\ldaps.inf" -Encoding ascii
   Remove-Item "$dir\ldaps.req" -ErrorAction SilentlyContinue
   Invoke-Bounded 'certreq_new' 'certreq.exe' @('-new', '-q', '-machine', "$dir\ldaps.inf", "$dir\ldaps.req")
-  return @{ csr_pem = (Get-Content "$dir\ldaps.req" -Raw) }
+  return @{ csr_pem = [IO.File]::ReadAllText("$dir\ldaps.req") }
 }
 Set-Content "$dir\lab-ca.cer" $lab_ca_pem -Encoding ascii
 Invoke-Bounded 'certutil_addstore' 'certutil.exe' @('-f', '-addstore', 'Root', "$dir\lab-ca.cer")

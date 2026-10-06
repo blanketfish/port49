@@ -883,6 +883,23 @@ func TestWindowsScriptsCheckNativeExitCodes(t *testing.T) {
 	}
 }
 
+// A result value read from a file is a plain string. Get-Content decorates
+// what it returns with PSPath, PSProvider and the rest, and Windows
+// PowerShell 5.1's ConvertTo-Json serializes those notes to -Depth 8: measured
+// on the L44 DC, one CSR's Get-Content -Raw ran the bootstrap's ConvertTo-Json
+// past 285 CPU seconds and 4.8 GB, where [IO.File]::ReadAllText took 18 ms.
+func TestWindowsScriptResultsAreNotGetContent(t *testing.T) {
+	ents, _ := winScriptFS.ReadDir("directory/windows/scripts")
+	for _, e := range ents {
+		b, _ := winScriptFS.ReadFile("directory/windows/scripts/" + e.Name())
+		for i, l := range strings.Split(strings.ReplaceAll(string(b), "\r\n", "\n"), "\n") {
+			if strings.Contains(l, "@{") && strings.Contains(l, "Get-Content") {
+				t.Errorf("%s:%d: a result value comes from Get-Content; read it with [IO.File]::ReadAllText", e.Name(), i+1)
+			}
+		}
+	}
+}
+
 // A cleared attribute reads back as no values, not one empty string: a
 // single-valued attribute that is unset is $null, and $null piped to
 // ForEach-Object still runs once.
