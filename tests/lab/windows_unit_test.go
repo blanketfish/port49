@@ -493,8 +493,9 @@ var (
 	winPSConsumes = regexp.MustCompile(`^(?:Invoke-Command|Set-ADAccountPassword|New-ADUser|Install-ADDSForest)\b`)
 	// winPSIndirect reaches a variable by a name or through the call, so the
 	// scan cannot see which one: no script does.
-	winPSIndirect = regexp.MustCompile(`(?i)PSBoundParameters|MyInvocation|Get-Variable|\bgv\b|variable:|\$args\b|\$input\b|Invoke-Expression|\biex\b`)
-	winPSFnDef    = regexp.MustCompile(`^function New-Lab(?:Secret|Plain) \{$`)
+	winPSIndirect = regexp.MustCompile(`(?i)PSBoundParameters|MyInvocation|Get-Variable|\bgv\b|variable:|\$args\b|\$input\b|` +
+		`Invoke-Expression|\biex\b|ExecutionContext|PSVariable|GetValue|ExpandString|\[scriptblock\]::Create|NewScriptBlock`)
+	winPSFnDef = regexp.MustCompile(`^function (New-Lab(?:Secret|Plain)) \{$`)
 )
 
 // winJoinContinued joins each line that ends in a backtick or a pipe onto the
@@ -519,14 +520,15 @@ func winJoinContinued(lines []string) []string {
 	return out
 }
 
-// winUseRe finds a use of any of vars: $v, ${v}, or $using:v, $script:v and
-// the like. Group 1 is the name.
+// winUseRe finds a use of any of vars, in any case (PowerShell's names are
+// case-insensitive): $v, ${v}, or $using:v, $script:v and the like. Group 1 is
+// the name as written.
 func winUseRe(vars []string) *regexp.Regexp {
 	q := make([]string, len(vars))
 	for i, v := range vars {
 		q[i] = regexp.QuoteMeta(v)
 	}
-	return regexp.MustCompile(`\$\{?(?:(?:using|script|global|local|private):)?(` + strings.Join(q, "|") + `)\b`)
+	return regexp.MustCompile(`(?i)\$\{?(?:(?:using|script|global|local|private):)?(` + strings.Join(q, "|") + `)\b`)
 }
 
 // winSecretVars is the variables of a script that hold a secret: its secret
@@ -542,14 +544,14 @@ func winSecretVars(lines []string) []string {
 		use := winUseRe(vars)
 		for _, l := range lines {
 			m := winPSAssign.FindStringSubmatch(l)
-			if m == nil || slices.Contains(vars, m[1]) {
+			if m == nil || slices.Contains(vars, strings.ToLower(m[1])) {
 				continue
 			}
 			if winPSConsumes.MatchString(strings.TrimLeft(m[2], "( ")) {
 				continue
 			}
 			if winPSMkr.MatchString(m[2]) || use.MatchString(m[2]) {
-				vars = append(vars, m[1])
+				vars = append(vars, strings.ToLower(m[1]))
 				changed = true
 			}
 		}
@@ -584,7 +586,7 @@ func winSecretForms(sv string) []winSecretForm {
 		{`^Install-ADDSForest [^|;>]*-SafeModeAdministratorPassword {S} [^|;>]*\| Out-Null$`, 1},
 		{`^New-ADUser [^|;>]*-AccountPassword (?:{S}|\(New-LabSecret\))(?: [^|;>]*)?$`, 1},
 	} {
-		out = append(out, winSecretForm{regexp.MustCompile(strings.ReplaceAll(f.re, "{S}", sv)), f.uses})
+		out = append(out, winSecretForm{regexp.MustCompile("(?i)" + strings.ReplaceAll(f.re, "{S}", sv)), f.uses})
 	}
 	return out
 }
@@ -599,7 +601,7 @@ func winVarName(v string) string {
 // winSecretLeaks names each line of a script (by number and variable name,
 // never by content) that uses a secret, or a variable built from one, in a form
 // no winSecretForms entry allows. The bodies of New-LabSecret and New-LabPlain
-// are exempt: they make the secret.
+// make the secret, so each must be exactly its reviewed text.
 func winSecretLeaks(src string) []string {
 	src = strings.ReplaceAll(src, "\r\n", "\n")
 	raw := strings.Split(src, "\n")
@@ -611,17 +613,28 @@ func winSecretLeaks(src string) []string {
 	}
 	forms := winSecretForms(`\$(?:` + strings.Join(q, "|") + `)\b`)
 	var out []string
-	inFn := false
+	pinned := map[string]string{"New-LabSecret": winLabSecretFn, "New-LabPlain": winLabPlainFn}
+	exempt := map[int]bool{}
+	for i := 0; i < len(raw); i++ {
+		m := winPSFnDef.FindStringSubmatch(strings.TrimRight(raw[i], " \t"))
+		if m == nil {
+			continue
+		}
+		j := i
+		for j+1 < len(raw) && strings.TrimRight(raw[j], " \t") != "}" {
+			j++
+		}
+		if strings.Join(raw[i:j+1], "\n")+"\n" != pinned[m[1]] {
+			out = append(out, fmt.Sprintf("line %d: %s is not its reviewed text", i+1, m[1]))
+		}
+		for k := i; k <= j; k++ {
+			exempt[k] = true
+		}
+		i = j
+	}
 	for i, l := range winJoinContinued(raw) {
 		tl := strings.TrimSpace(l)
-		switch {
-		case inFn:
-			inFn = tl != "}"
-			continue
-		case winPSFnDef.MatchString(tl):
-			inFn = true
-			continue
-		case strings.HasPrefix(tl, "param(") || strings.HasPrefix(tl, "#"):
+		if exempt[i] || strings.HasPrefix(tl, "param(") || strings.HasPrefix(tl, "#") {
 			continue
 		}
 		if winPSIndirect.MatchString(l) {
@@ -664,6 +677,24 @@ func TestWindowsScriptsNeverEchoASecret(t *testing.T) {
 		}
 	}
 }
+
+// The two functions that make a secret, as the scripts carry them. The scan
+// compares each body with these, so a change to one (a debugging Write-Host,
+// say) fails and is reviewed.
+const (
+	winLabSecretFn = `function New-LabSecret {
+  $b = New-Object byte[] 12
+  [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b)
+  ConvertTo-SecureString ('Aa1!' + (($b | ForEach-Object { $_.ToString('x2') }) -join '')) -AsPlainText -Force
+}
+`
+	winLabPlainFn = `function New-LabPlain {
+  $b = New-Object byte[] 12
+  [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b)
+  'Aa1!' + (($b | ForEach-Object { $_.ToString('x2') }) -join '')
+}
+`
+)
 
 // The scan finds the variables the scripts make secret, passes the eight forms
 // the scripts use a secret in, and fails any other use of a secret or of a
@@ -753,7 +784,26 @@ func TestWindowsSecretScanFlagsALeak(t *testing.T) {
 		{"New-ADUser -Name a -AccountPassword $s -Enabled $true", false},
 		{"New-ADUser -Name a -AccountPassword (New-LabSecret) -Enabled $true", false},
 		{"@{ ok = $true }", false},
-		{"function New-LabSecret {\n  $b = New-Object byte[] 12\n}", false},
+		{winLabSecretFn, false},
+		{winLabPlainFn, false},
+		{"$Q = New-LabPlain", false},
+		{"set-adaccountpassword $USER -Reset -NewPassword $S", false},
+		// Round 3: case, reaching a variable without naming it, the two function bodies.
+		{"Write-Output $P", true},
+		{"Write-Output $PORT49_PASSWORD", true},
+		{"$S | ConvertFrom-SecureString", true},
+		{"$q = New-LabPlain\n$Q", true},
+		{"$q = New-LabPlain\nWrite-Output $Q", true},
+		{"$ExecutionContext.SessionState.PSVariable.GetValue('p')", true},
+		{"$ExecutionContext.InvokeCommand.ExpandString('$' + 'p')", true},
+		{"& ([scriptblock]::Create('$' + 'p'))", true},
+		{"Get-Item variable:p", true},
+		{"Invoke-Expression '$p'", true},
+		{"iex '$p'", true},
+		{"function New-LabSecret {\n  Write-Output $port49_password\n}", true},
+		{"function New-LabPlain {\n  [Console]::WriteLine($p)\n}", true},
+		{strings.Replace(winLabPlainFn, "12", "13", 1), true},
+		{winLabSecretFn + "Write-Output $p", true},
 	} {
 		if got := winSecretLeaks(base + c.line + "\n"); (len(got) > 0) != c.bad {
 			t.Errorf("%q: flagged=%v, want %v", c.line, len(got) > 0, c.bad)
@@ -904,12 +954,18 @@ func TestLabEnvPrintPattern(t *testing.T) {
 		{"exec.Command('docker', 'exec', c, 'env')", true},
 		{"run('docker\texec c printenv PASSWORD')", true},
 		{"run('docker\texec c env')", true},
+		{"d.dockerCompose('convert')", true},
+		{"sg docker -c 'docker\tcompose\tconvert'", true},
+		{"dockerCmd('compose', '-p', x, 'convert')", true},
+		{"dockerCmd('exec', c, 'cat', '/proc/1/" + "environ')", true},
+		{"run('docker\texec c cat /proc/self/" + "environ')", true},
 		{"dockerCmd('image', 'inspect', '--format', f, image)", false},
 		{"exec.Command('docker', 'image', 'inspect', image)", false},
 		{"exec.Command('sudo', '-n', 'containerlab', 'inspect', '-t', topo)", false},
 		{"d.dockerCompose('up', '-d', '--wait')", false},
 		{"d.dockerCompose('config_files')", false},
 		{"dockerCmd('exec', c, 'cat', '/etc/pkinit-versions')", false},
+		{"os.ReadFile('/proc/meminfo')", false},
 		{"dockerCmd('exec', c, 'sh', '-c', 'cat /etc/hosts')", false},
 		{"cfg := loadConfig('config')", false},
 	} {
@@ -920,26 +976,29 @@ func TestLabEnvPrintPattern(t *testing.T) {
 }
 
 // labEnvPrint is each way a lab file could print a container's environment:
-// docker's inspect (not an image's), compose's config, or env, printenv or set
-// run in the container by exec.
-var labEnvPrint = regexp.MustCompile(`docker\s+inspect|docker\s+compose\b[^\n'"]*\bconfig\b|compose\s+config\b|` +
+// docker's inspect (not an image's), compose's config or its alias convert, a
+// read of the process environment under /proc, or env, printenv or set run in the container by exec.
+var labEnvPrint = regexp.MustCompile(`docker\s+inspect|docker\s+compose\b[^\n'"]*\b(?:config|convert)\b|compose\s+(?:config|convert)\b|/proc/[^"'\s]*environ|` +
 	`docker\s+exec\b[^\n'"]*\b(?:printenv|env|set)\b|` +
 	`[dD]ocker\w*\(\s*(?:"container",\s*)?"inspect"|"docker",\s*"inspect"|` +
-	`[dD]ocker\w*\([^)\n]*"config"|"compose"[^\n)]*"config"|` +
+	`[dD]ocker\w*\([^)\n]*"(?:config|convert)"|"compose"[^\n)]*"(?:config|convert)"|` +
 	`"exec"[^)\n]*"(?:printenv|env|set)(?:\s[^"]*)?"`)
 
 // Windows PowerShell 5.1 writes [Console]::Out in the OEM code page, so the
 // bootstrap sets UTF-8 (without a BOM, which would precede the JSON) before
-// anything can be written. Setting it throws without a console, so the line
+// anything is read or written (stdin carries the params in the same page). Setting it throws without a console, so the line
 // carries its own silent try/catch: a missing console must not stop a script.
 func TestWindowsBootstrapSetsUTF8Output(t *testing.T) {
-	set := "try { [Console]::OutputEncoding = New-Object Text.UTF8Encoding $false } catch { }"
+	set := "try { [Console]::OutputEncoding = New-Object Text.UTF8Encoding $false; " +
+		"[Console]::InputEncoding = New-Object Text.UTF8Encoding $false } catch { }"
 	i := strings.Index(winBootstrap, set)
 	if i < 0 {
-		t.Fatal("the bootstrap does not set [Console]::OutputEncoding to UTF-8 without a BOM, in its own try/catch { }")
+		t.Fatal("the bootstrap does not set [Console]::OutputEncoding and InputEncoding to UTF-8 without a BOM, in one try/catch { }")
 	}
-	if w := strings.Index(winBootstrap, "WriteLine"); w >= 0 && w < i {
-		t.Error("the bootstrap writes before it sets the output encoding")
+	for _, first := range []string{"WriteLine", "ReadToEnd"} {
+		if w := strings.Index(winBootstrap, first); w >= 0 && w < i {
+			t.Errorf("the bootstrap reaches %s before it sets the encodings", first)
+		}
 	}
 }
 
