@@ -9,6 +9,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"math/big"
@@ -30,7 +31,8 @@ func TestWindowsSecretsPrintAsNames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out := fmt.Sprintf("%v %+v %#v %s", s, s, s, s)
+	// Every verb, on the pointer and on the value.
+	out := fmt.Sprintf("%v %+v %#v %s %v %+v %#v %s", s, s, s, s, *s, *s, *s, *s)
 	for i, v := range s.all() {
 		if v == "" || strings.Contains(out, v) {
 			t.Fatalf("secret %d is empty or printed", i)
@@ -145,7 +147,7 @@ func TestWindowsISOCheck(t *testing.T) {
 func TestWindowsQuote(t *testing.T) {
 	for in, want := range map[string]string{
 		"plain": "plain", "a,b": `"a,b"`, `say "hi"`: `"say ""hi"""`, " lead": `" lead"`, "trail ": `"trail "`,
-		"a+b": `"a+b"`, "a=b": `"a=b"`, "a#b": `"a#b"`, "a;b": `"a;b"`, "a<b": `"a<b"`, "a>b": `"a>b"`, `a\b`: `"a\b"`, "": `""`,
+		"a+b": `"a+b"`, "a=b": `"a=b"`, "a#b": `"a#b"`, "a;b": `"a;b"`, "a<b": `"a<b"`, "a>b": `"a>b"`, `a\b`: `"a\b"`, "": `""`, "a\nb": "\"a\nb\"",
 	} {
 		if got := winQuote(in); got != want {
 			t.Errorf("winQuote(%q) = %q, want %q", in, got, want)
@@ -240,10 +242,24 @@ func TestWindowsCSR(t *testing.T) {
 	}
 	found := false
 	for _, e := range csr.Extensions {
-		found = found || e.Id.Equal(winOIDSAN)
+		if e.Id.Equal(winOIDSAN) {
+			found = true
+			want, err := winUPNExtension("alice@corp.example.com")
+			if err != nil || !slices.Equal(e.Value, want.Value) {
+				t.Fatal("the request's SAN is not the UPN it was given")
+			}
+		}
 	}
 	if !found {
 		t.Fatal("the request carries no SAN")
+	}
+	// No UPN, no SAN: the DC's own request names none.
+	b, _, err = winCSR("dc", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if csr, err = winParseCSR(b); err != nil || len(csr.Extensions) != 0 {
+		t.Fatalf("a request with no UPN carries extensions: %v", err)
 	}
 }
 
@@ -273,6 +289,12 @@ func TestWindowsSignServerCSR(t *testing.T) {
 	}
 	if !key.PublicKey.Equal(c.PublicKey) {
 		t.Error("the certificate is not on the request's key")
+	}
+	// A request whose signature does not verify is refused.
+	blk, _ := pem.Decode(b)
+	blk.Bytes[len(blk.Bytes)-1] ^= 0xff
+	if _, err := p.signServerCSR(pem.EncodeToMemory(blk), time.Now()); err == nil {
+		t.Error("a request with a bad signature was signed")
 	}
 }
 
@@ -316,6 +338,14 @@ func TestWindowsParseKinit(t *testing.T) {
 	if c := winParseKinit(client); c.ok || c.kdcRefused() {
 		t.Fatalf("a client-side failure read as the KDC's refusal: %+v", c)
 	}
+	// "Response too big for UDP" (52) is the transport asking for TCP, not a
+	// refusal: with a client-side failure after it, the cell is INVALID.
+	big := "[7] 1.2: Received error from KDC: -1765328359/Additional pre-authentication required\n" +
+		"[7] 1.3: Received error from KDC: -1765328332/Response too big for UDP, retry with TCP\n" +
+		"kinit: Certificate verification failed while verifying KDC certificate\nlab: kinit exit 1\n"
+	if c := winParseKinit(big); c.ok || c.kdcRefused() || strings.Contains(c.kdcSaid(), "-1765328332") {
+		t.Fatalf("a UDP size retry read as the KDC's refusal: %+v", c)
+	}
 	// A PKINIT certificate-validation code from the KDC is a setup failure;
 	// 66, CERTIFICATE_MISMATCH, is the mapping's verdict.
 	trust := "[7] 1.3: Received error from KDC: -1765328322/Client not trusted\nlab: kinit exit 1\n"
@@ -337,7 +367,7 @@ func TestWindowsParseKinit(t *testing.T) {
 func TestWindowsPKINITConf(t *testing.T) {
 	c := winPKINITConf(winKDCInNet)
 	for _, want := range []string{"default_realm = CORP.EXAMPLE.COM", "kdc = 172.30.44.10:88", "pkinit_anchors = FILE:/l44/adcs-root.pem",
-		"pkinit_kdc_hostname = dc1.corp.example.com"} {
+		"pkinit_kdc_hostname = dc1.corp.example.com", "udp_preference_limit = 1", "dns_lookup_kdc = false"} {
 		if !strings.Contains(c, want) {
 			t.Errorf("lacks %q", want)
 		}
@@ -364,6 +394,9 @@ func TestWindowsJudges(t *testing.T) {
 	created := now.Add(-time.Hour)
 	young := &x509.Certificate{NotBefore: now.Add(-time.Minute)}
 	old := &x509.Certificate{NotBefore: now.Add(-2 * time.Hour)}
+	if winIssuedAfter(created, &x509.Certificate{NotBefore: created}) == nil {
+		t.Error("a certificate issued the instant the account was created reads as after it")
+	}
 	if winIssuedAfter(created, young) != nil || winIssuedAfter(created, young, old) == nil {
 		t.Error("backdating")
 	}

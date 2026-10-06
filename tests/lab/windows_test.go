@@ -63,10 +63,11 @@ type winSecrets struct {
 	DSRMPassword  string `json:"dsrm_password"`  // Directory Services Restore Mode
 }
 
-func (s *winSecrets) String() string             { return "windows secrets: admin_password, dsrm_password" }
-func (s *winSecrets) GoString() string           { return s.String() }
-func (s *winSecrets) Format(f fmt.State, _ rune) { fmt.Fprint(f, s.String()) }
-func (s *winSecrets) all() []string              { return []string{s.AdminPassword, s.DSRMPassword} }
+// Value receivers, so a value prints as names as well as a pointer.
+func (s winSecrets) String() string             { return "windows secrets: admin_password, dsrm_password" }
+func (s winSecrets) GoString() string           { return s.String() }
+func (s winSecrets) Format(f fmt.State, _ rune) { fmt.Fprint(f, s.String()) }
+func (s winSecrets) all() []string              { return []string{s.AdminPassword, s.DSRMPassword} }
 
 // winPassword is a password Windows' complexity rule accepts: the four
 // classes first, then 24 random hex digits.
@@ -465,6 +466,17 @@ var winKDCErrRe = regexp.MustCompile(`Received error from KDC: (-?\d+/[^\r\n]*)`
 // success too.
 const winPreauthRequired = "-1765328359/"
 
+// winResponseTooBig is the KDC's "Response too big for UDP, retry with TCP":
+// the transport asking for TCP, not a refusal. The client config forces TCP,
+// so it should not appear, and it is no verdict if it does.
+const winResponseTooBig = "-1765328332/"
+
+// winKDCOrdinary reports whether a trace entry is one the KDC sends on a
+// success or a transport retry, so it says nothing about the mapping.
+func winKDCOrdinary(e string) bool {
+	return strings.HasPrefix(e, winPreauthRequired) || strings.HasPrefix(e, winResponseTooBig)
+}
+
 func winParseKinit(out string) winPKINITResult {
 	r := winPKINITResult{ok: strings.Contains(out, "lab: kinit exit 0") && strings.Contains(out, "krbtgt/"+dirRealm+"@"+dirRealm)}
 	for _, m := range winKDCErrRe.FindAllStringSubmatch(out, -1) {
@@ -483,7 +495,7 @@ func winParseKinit(out string) winPKINITResult {
 func (r winPKINITResult) kdcSaid() string {
 	var parts []string
 	for _, e := range r.kdcErrs {
-		if !strings.HasPrefix(e, winPreauthRequired) {
+		if !winKDCOrdinary(e) {
 			parts = append(parts, e)
 		}
 	}
@@ -497,12 +509,12 @@ func (r winPKINITResult) kdcSaid() string {
 }
 
 // kdcRefused reports whether the KDC itself sent an error past the ordinary
-// preauth-required. A failed kinit without one failed on the client's side
+// preauth-required and the UDP size retry. A failed kinit without one failed on the client's side
 // (the KDC's certificate unverified, a DH or etype mismatch, a missing file):
 // the KDC refused nothing, and the cell is INVALID (R6).
 func (r winPKINITResult) kdcRefused() bool {
 	for _, e := range r.kdcErrs {
-		if !strings.HasPrefix(e, winPreauthRequired) {
+		if !winKDCOrdinary(e) {
 			return true
 		}
 	}
