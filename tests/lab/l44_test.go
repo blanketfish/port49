@@ -238,7 +238,11 @@ func (l *labDir) l44Binds(t *testing.T, ev *evidenceLog) string {
 	// EXTERNAL on the LDAPS port, where the DC maps the certificate itself.
 	ev.mark("L44 external over LDAPS, mapped, a documented observation")
 	eL := l.l44ExternalOn(t, ev, "external over LDAPS", adcsExt, false)
-	b.WriteString(l44ExtRow("SASL EXTERNAL over LDAPS, the same mapped certificate (a documented observation: [MS-ADTS] 5.1.1.2 forbids it there)", eL))
+	b.WriteString(l44ExtRow("SASL EXTERNAL over LDAPS, the same mapped certificate (a documented observation; [MS-ADTS] 5.1.1.2 says EXTERNAL is rejected there)", eL))
+	if eL.ok {
+		b.WriteString("\nLDAPS accepted EXTERNAL here, contrary to [MS-ADTS] 5.1.1.2.\n\n")
+		t.Logf("L44: LDAPS accepted an EXTERNAL bind, contrary to MS-ADTS 5.1.1.2 (an observation, not a harness fault)")
+	}
 	b.WriteString(l.l44LDAPSNoBind(t, adcsExt))
 	w.setAltSec(t, brokerDN, "")
 	ev.mark("L44 external, AD CS certificate, no mapping")
@@ -711,6 +715,9 @@ func (l *labDir) l44ExternalOn(t *testing.T, ev *evidenceLog, label string, bind
 	x := l44Ext{l43Cell: l.tryBind(t, ev, label, bind, "")}
 	x.text = winScrub(x.text, l.l44Secrets()...)
 	if !x.ok {
+		if x.invalid = l44ConnFailed(x.l43Cell); x.invalid != "" {
+			t.Errorf("L44 %s: %s; the cell is INVALID (R6)", label, x.invalid)
+		}
 		return x
 	}
 	id, err := l.l44WhoAmI(t, bind, true)
@@ -751,9 +758,21 @@ func l44NoBindRow(id string, err error) string {
 	case err != nil:
 		return fmt.Sprintf("| %s | WhoAmI failed: `%s` | — | — |\n", what[:len(what)-len("WhoAmI is ")], l44MDCell(err.Error()))
 	case id == "":
-		return fmt.Sprintf("| %sanonymous (empty) | — | — |\n", what)
+		return fmt.Sprintf("| %sanonymous (empty) | — | — | — |\n", what)
 	}
 	return fmt.Sprintf("| %s`%s` | — | — | — |\n", what, l44MDCell(id))
+}
+
+// l44ConnFailed is why a refused EXTERNAL cell is no refusal, or "" when it is
+// one: only port49's own bind refusal ("bind external as ...") carrying the
+// directory's result code (1 to 199) is the DC saying no. A TLS or StartTLS
+// failure before the bind (port49 returns it unwrapped, and a server can refuse
+// StartTLS with an LDAP result too) and a timeout say nothing about the mapping.
+func l44ConnFailed(c l43Cell) string {
+	if strings.HasPrefix(c.text, "bind external as ") && c.code > 0 && c.code < 200 {
+		return ""
+	}
+	return "the connection failed before the bind (TLS, StartTLS or a timeout): " + c.text
 }
 
 // l44ExtRow is an EXTERNAL cell in the Binds table.

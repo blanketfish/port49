@@ -2215,7 +2215,36 @@ func TestL44ExternalRowsOverStartTLS(t *testing.T) {
 	}
 }
 
+// A refused EXTERNAL cell is a refusal only when port49's own bind said so with
+// the directory's code; a failure before the bind or a timeout is INVALID.
+func TestL44ConnFailed(t *testing.T) {
+	for name, tc := range map[string]struct {
+		c   l43Cell
+		bad bool
+	}{
+		"startls refused, 52": {l43Cell{code: 52, text: "LDAP Result Code 52 \"Unavailable\": start tls"}, true},
+		"tls error":           {l43Cell{code: -1, text: "tls: failed to verify certificate"}, true},
+		"bind refusal 49":     {l43Cell{code: 49, text: "bind external as CN=port49: LDAP result 49"}, false},
+		"bind refusal 7":      {l43Cell{code: 7, text: "bind external as CN=port49: LDAP result 7"}, false},
+		"bind timeout":        {l43Cell{code: -1, text: "bind external as CN=port49: context deadline exceeded"}, true},
+		"bind, no code":       {l43Cell{code: 0, text: "bind external as CN=port49: x"}, true},
+		"load failure":        {l43Cell{code: -1, atLoad: true, text: "reading the key"}, true},
+	} {
+		if got := l44ConnFailed(tc.c); (got != "") != tc.bad {
+			t.Errorf("%s: %q", name, got)
+		}
+	}
+	if !strings.Contains(l44Func(t, "l44ExternalOn"), "l44ConnFailed(") {
+		t.Error("l44ExternalOn does not judge a failed bind with l44ConnFailed")
+	}
+}
+
 func TestL44NoBindRow(t *testing.T) {
+	for name, r := range map[string]string{"id": l44NoBindRow(`u:CORP\port49`, nil), "err": l44NoBindRow("", errors.New("boom")), "anon": l44NoBindRow("", nil)} {
+		if n := strings.Count(r, "|"); n != 5 {
+			t.Errorf("%s: %d pipes, want 5 (four columns): %s", name, n, r)
+		}
+	}
 	if r := l44NoBindRow(`u:CORP\port49`, nil); !strings.Contains(r, "`u:CORP\\port49`") || !strings.Contains(r, "no bind") {
 		t.Errorf("%s", r)
 	}
@@ -2229,7 +2258,7 @@ func TestL44NoBindRow(t *testing.T) {
 
 func TestWindowsNoteCitesWhyStartTLS(t *testing.T) {
 	n := (&winDC{}).configNote()
-	for _, want := range []string{"MS-ADTS", "5.1.1.2", "StartTLS", "7"} {
+	for _, want := range []string{"[MS-ADTS] 5.1.1.2", "rejects an EXTERNAL bind", "EXTERNAL is measured over StartTLS"} {
 		if !strings.Contains(n, want) {
 			t.Errorf("the note does not say %q", want)
 		}
