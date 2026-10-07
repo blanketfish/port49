@@ -449,7 +449,8 @@ func (p *dirPKI) signServerCSR(csrPEM []byte, now time.Time) ([]byte, error) {
 // winQuirk is a CA whose CN holds one character in question for <I>'s quoting
 // (plan 7g's carried question, and Task 7a's): the comma (measured in run 8)
 // and the backslash, slash, plus, inner quote and leading space, which Microsoft's
-// CertNameToStr page documents inconsistently or not at all. slug names the
+// CertNameToStr page documents inconsistently or not at all; winQuirkWant
+// holds what each measured. slug names the
 // CA's file and its matrix rows.
 type winQuirk struct{ slug, cn, holds string }
 
@@ -460,6 +461,33 @@ var winQuirks = []winQuirk{
 	{"plus", "lab-users+plus-CA", "a plus sign"},
 	{"quote", `lab-users "q" CA`, "an inner quote"},
 	{"lead", " lab-users lead-CA", "a leading space"},
+}
+
+// winQuirkWant is the verdict L44 measured for each quirk CA's row (run at
+// ad1e4a9, the same under every StrongCertificateBindingEnforcement value),
+// keyed by slug and form (the label's suffix): true is a TGT, false a refusal.
+// The comma has no raw row.
+var winQuirkWant = map[string]map[string]bool{
+	"comma": {"port49": true, "quoted": true, "escaped": false},
+	"back":  {"port49": false, "quoted": false, "escaped": false, "raw": true},
+	"slash": {"port49": false, "quoted": false, "escaped": true, "raw": true},
+	"plus":  {"port49": true, "quoted": true, "escaped": false, "raw": false},
+	"quote": {"port49": true, "quoted": true, "escaped": false, "raw": false},
+	"lead":  {"port49": true, "quoted": true, "escaped": false, "raw": false},
+}
+
+// l44QuirkWant is the l44Judge outcome a quirk row's label must get, and
+// whether the label is a quirk row at all.
+func l44QuirkWant(label string) (string, bool) {
+	slug, form, _ := strings.Cut(label, "-")
+	tgt, ok := winQuirkWant[slug][form]
+	switch {
+	case !ok:
+		return "", false
+	case tgt:
+		return "**TGT issued**", true
+	}
+	return "refused", true
 }
 
 // file is the CA's name in the DC's C:\l44, in the pkinit directory and in

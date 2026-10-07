@@ -456,8 +456,11 @@ func (l *labDir) l44SID(t *testing.T, ev *evidenceLog) string {
 	if q, qerr := winAltSecQuoted(c.quirk["comma"].cert); qerr == nil {
 		w.setAltSec(t, aliceDN, q)
 		ev.mark("L44 port49 issuer_serial on the comma CA's certificate, alice holding the quoted form")
-		_, err = r.Map(ctx, c.quirk["comma"].cert)
-		fmt.Fprintf(&b, "| `issuer_serial`, the comma CA's certificate, alice holding the quoted form (recorded, not asserted (Task 7a)) | %s |\n", l.l44Err(err))
+		a, err = r.Map(ctx, c.quirk["comma"].cert)
+		if err != nil || a.Principal != l.principal("alice") {
+			t.Errorf("issuer_serial did not map the comma CA's certificate to alice: %q, %s", a.Principal, l.l44Err(err))
+		}
+		fmt.Fprintf(&b, "| `issuer_serial`, the comma CA's certificate, alice holding the quoted form | %s as `%s` |\n", l.l44Err(err), a.Principal)
 	}
 	w.setAltSec(t, aliceDN, directory.ADIssuerSerial(l.d.pki.alice))
 	return b.String()
@@ -467,26 +470,21 @@ func (l *labDir) l44SID(t *testing.T, ev *evidenceLog) string {
 // certificate under port49's form (through directory.ADIssuerSerial), the
 // value quoted as CertNameToStr quotes it, and the value escaped as RFC 4514
 // escapes it; and, for every CA but the comma's (run 8 measured the unquoted
-// comma), the value as it is, since Microsoft's page does not settle whether a
-// backslash or a slash is quoted. The comma's rows are as run 8 recorded them;
-// every other quirk row is recorded, not asserted.
+// comma), the value as it is. Every row is asserted against winQuirkWant, the
+// verdict L44 measured.
 func l44QuirkCases(c winCerts, port49Form func(*x509.Certificate) (string, error)) []l44Case {
 	var cases []l44Case
 	for _, q := range winQuirks {
 		qc := c.quirk[q.slug]
-		note := ""
-		if q.slug != "comma" {
-			note = " (recorded, not asserted (Task 7a))"
-		}
 		cases = append(cases,
-			l44Case{q.slug + "-port49", fmt.Sprintf("a CA whose CN holds %s (`%s`), alice holding port49's form%s", q.holds, q.cn, note),
+			l44Case{q.slug + "-port49", fmt.Sprintf("a CA whose CN holds %s (`%s`), alice holding port49's form", q.holds, q.cn),
 				qc.cert, qc.key, port49Form},
-			l44Case{q.slug + "-quoted", "the same, alice holding the value quoted as CertNameToStr quotes it" + note,
+			l44Case{q.slug + "-quoted", "the same, alice holding the value quoted as CertNameToStr quotes it",
 				qc.cert, qc.key, winAltSecQuoted},
-			l44Case{q.slug + "-escaped", "the same, alice holding the value escaped as RFC 4514 escapes it" + note,
+			l44Case{q.slug + "-escaped", "the same, alice holding the value escaped as RFC 4514 escapes it",
 				qc.cert, qc.key, winAltSecEscaped})
 		if q.slug != "comma" {
-			cases = append(cases, l44Case{q.slug + "-raw", "the same, alice holding the value as it is, neither quoted nor escaped" + note,
+			cases = append(cases, l44Case{q.slug + "-raw", "the same, alice holding the value as it is, neither quoted nor escaped",
 				qc.cert, qc.key, winAltSecRaw})
 		}
 	}
@@ -593,6 +591,8 @@ func (l *labDir) l44Matrix(t *testing.T, ev *evidenceLog) string {
 			b.WriteString(l44MatrixRow(inForce, cs.what, held, outcome, r, evs))
 			if strings.HasPrefix(outcome, "INVALID") {
 				t.Errorf("L44 %s under %s: %s", cs.label, inForce, outcome)
+			} else if want, ok := l44QuirkWant(cs.label); ok && outcome != want {
+				t.Errorf("L44 %s under %s: %s, measured %s", cs.label, inForce, outcome, want)
 			}
 		}
 		w.setAltSec(t, brokerDN, directory.ADIssuerSerial(c.brokerADCS))

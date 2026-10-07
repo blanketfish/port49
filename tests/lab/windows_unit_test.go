@@ -2430,8 +2430,8 @@ func TestWindowsQuirkForms(t *testing.T) {
 	}
 	const pre = "X509:<I>DC=com,DC=example,DC=corp,CN="
 	want := map[string]struct{ port49, quoted, escaped, raw string }{
-		"back":  {`"lab-users\back-CA"`, `"lab-users\back-CA"`, `lab-users\\back-CA`, `lab-users\back-CA`},
-		"slash": {`"lab-users/slash-CA"`, `"lab-users/slash-CA"`, `lab-users/slash-CA`, `lab-users/slash-CA`},
+		"back":  {`lab-users\back-CA`, `"lab-users\back-CA"`, `lab-users\\back-CA`, `lab-users\back-CA`},
+		"slash": {`lab-users/slash-CA`, `"lab-users/slash-CA"`, `lab-users/slash-CA`, `lab-users/slash-CA`},
 		"plus":  {`"lab-users+plus-CA"`, `"lab-users+plus-CA"`, `lab-users\+plus-CA`, `lab-users+plus-CA`},
 		"quote": {`"lab-users ""q"" CA"`, `"lab-users ""q"" CA"`, `lab-users \"q\" CA`, `lab-users "q" CA`},
 		"lead":  {`" lab-users lead-CA"`, `" lab-users lead-CA"`, `\ lab-users lead-CA`, ` lab-users lead-CA`},
@@ -2468,8 +2468,7 @@ func TestWindowsQuirkForms(t *testing.T) {
 
 // The matrix has every quirk CA's rows once: port49's, quoted and escaped, and
 // the as-is row for each CA but the comma's; each row's label is a safe file
-// name (the kinit files carry it) and every new row says it is recorded, not
-// asserted.
+// name (the kinit files carry it) and has a measured verdict in winQuirkWant.
 func TestL44QuirkCases(t *testing.T) {
 	c := winCerts{quirk: map[string]winQuirkCert{}}
 	for _, q := range winQuirks {
@@ -2487,10 +2486,27 @@ func TestL44QuirkCases(t *testing.T) {
 			t.Errorf("%q: repeated, unsafe, or another CA's certificate", cs.label)
 		}
 		seen[cs.label] = true
-		recorded := strings.Contains(cs.what, "recorded, not asserted (Task 7a)")
-		if recorded != !strings.HasPrefix(cs.label, "comma-") {
-			t.Errorf("%q: recorded-not-asserted label is %v", cs.label, recorded)
+		if strings.Contains(cs.what, "recorded, not asserted") {
+			t.Errorf("%q: still says it is recorded, not asserted", cs.label)
 		}
+		if _, ok := l44QuirkWant(cs.label); !ok {
+			t.Errorf("%q: no measured verdict in winQuirkWant", cs.label)
+		}
+	}
+	for slug, forms := range winQuirkWant {
+		for form := range forms {
+			if !seen[slug+"-"+form] {
+				t.Errorf("winQuirkWant has %s-%s, no case generates it", slug, form)
+			}
+		}
+	}
+	for want, label := range map[string]string{"**TGT issued**": "back-raw", "refused": "back-port49"} {
+		if got, ok := l44QuirkWant(label); !ok || got != want {
+			t.Errorf("l44QuirkWant(%q) = %q, %v, want %q", label, got, ok, want)
+		}
+	}
+	if _, ok := l44QuirkWant("control-ski"); ok {
+		t.Error("control-ski has a quirk verdict")
 	}
 	for _, q := range winQuirks {
 		for _, f := range []string{"port49", "quoted", "escaped"} {
