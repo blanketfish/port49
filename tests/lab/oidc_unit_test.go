@@ -122,18 +122,21 @@ func TestOIDCClaimCell(t *testing.T) {
 
 // The compose file's image is the reference oidc_test.go records in a note.
 func TestOIDCComposeImageIsThePinnedOne(t *testing.T) {
-	b, err := os.ReadFile(filepath.Join("oidc", "compose.yaml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(b), "image: "+kcImage+"\n") {
-		t.Fatalf("compose.yaml's image is not kcImage %s", kcImage)
-	}
 	if !strings.Contains(kcImage, "@sha256:") {
 		t.Fatal("kcImage is not pinned by digest")
 	}
-	if strings.Contains(string(b), "KC_BOOTSTRAP_ADMIN_PASSWORD:") {
-		t.Fatal("compose.yaml holds the admin password")
+	// the standalone stack and the end-to-end's overlay run the same image
+	for _, name := range []string{filepath.Join("oidc", "compose.yaml"), filepath.Join("compose", "oidc.yaml")} {
+		b, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(b), "image: "+kcImage+"\n") {
+			t.Fatalf("%s's image is not kcImage %s", name, kcImage)
+		}
+		if strings.Contains(string(b), "KC_BOOTSTRAP_ADMIN_PASSWORD:") {
+			t.Fatalf("%s holds the admin password", name)
+		}
 	}
 }
 
