@@ -1433,11 +1433,27 @@ func TestL44RowsUnder2(t *testing.T) {
 	for name, c := range map[string]struct {
 		after string
 		err   error
-	}{"rebooted": {later, nil}, "unread": {"", errors.New("ssh: handshake failed: EOF")}} {
+	}{"rebooted": {later, nil}, "unread": {"", errors.New("ssh: handshake failed: EOF")},
+		"both unread": {"", errors.Join(errors.New("windows ready: ssh: EOF"), errors.New("windows ready: line one\nline two"))}} {
 		rows, reason := l44RowsUnder2(cells, b, c.after, c.err)
 		if reason == "" || strings.Count(rows, "INVALID (R6)") != 2 || strings.Contains(rows, "refused") ||
-			!strings.Contains(rows, `simple \| under 2`) {
+			!strings.Contains(rows, `simple \| under 2`) || strings.Count(rows, "\n") != 2 {
 			t.Errorf("%s: reason %q, rows %q", name, reason, rows)
+		}
+	}
+}
+
+// No fatal step runs between the boot reads around the cells under 2: a DC
+// going down there must make the cells INVALID, not end the run first.
+func TestL44NothingFatalBetweenTheBootReads(t *testing.T) {
+	body := l44Func(t, "l44Binds")
+	i, j := strings.Index(body, "bootBefore, berr := w.bootNow()"), strings.Index(body, "bootAfter, aerr := w.bootNow()")
+	if i < 0 || j < i {
+		t.Fatal("l44Binds does not read the boot around the cells under 2")
+	}
+	for _, fatal := range []string{"setAltSec(", "w.run(", "Fatal", "setRegistry(", "waitLDAPS("} {
+		if strings.Contains(body[i:j], fatal) {
+			t.Errorf("l44Binds runs %s between the boot reads", fatal)
 		}
 	}
 }

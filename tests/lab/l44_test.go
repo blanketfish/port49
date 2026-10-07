@@ -244,6 +244,10 @@ func (l *labDir) l44Binds(t *testing.T, ev *evidenceLog) string {
 
 	restoreCBT := l.l44GuardRegistry(t, "LdapEnforceChannelBinding", l44AsInstalled(cbtInstalled))
 	defer restoreCBT()
+	// The broker's mapping for the EXTERNAL cell under 2 is set before the
+	// change: it survives the reboot, and no fatal step then runs between the
+	// boot reads around the cells.
+	w.setAltSec(t, brokerDN, directory.ADIssuerSerial(w.certs.brokerADCS))
 	got := l.setRegistry(t, "LdapEnforceChannelBinding", 2)
 	// Measured once: lsass crashed 15s after NTDS restarted on 2, and which
 	// set it off was not separated. A cell under 2 that met a DC going down
@@ -254,7 +258,6 @@ func (l *labDir) l44Binds(t *testing.T, ev *evidenceLog) string {
 	ev.mark("L44 gssapi, LdapEnforceChannelBinding %s", got)
 	what := "GSSAPI over LDAPS, keytab, no SASL security layer, `LdapEnforceChannelBinding` " + got + " (port49 sends no channel binding token)"
 	under2 = append(under2, l44Cell{what, gssapi("gssapi, channel binding 2", what)})
-	w.setAltSec(t, brokerDN, directory.ADIssuerSerial(w.certs.brokerADCS))
 	e4 := l.l44External(t, ev, "external, channel binding 2", adcsExt, true)
 	what = "SASL EXTERNAL over LDAPS, mapped, `LdapEnforceChannelBinding` " + got
 	under2 = append(under2, l44Cell{what, l44ExtRow(what, e4)})
@@ -262,7 +265,11 @@ func (l *labDir) l44Binds(t *testing.T, ev *evidenceLog) string {
 	what = "simple bind over LDAPS, `LdapEnforceChannelBinding` " + got
 	under2 = append(under2, l44Cell{what, simple2.row(what)})
 	bootAfter, aerr := w.bootNow()
-	rows, invalid := l44RowsUnder2(under2, bootBefore, bootAfter, errors.Join(berr, aerr))
+	var bootErr error
+	if err := errors.Join(berr, aerr); err != nil {
+		bootErr = errors.New(oneLineMax(winScrub(err.Error(), l.l44Secrets()...), 300))
+	}
+	rows, invalid := l44RowsUnder2(under2, bootBefore, bootAfter, bootErr)
 	if invalid != "" {
 		t.Errorf("L44: the cells under LdapEnforceChannelBinding 2 are INVALID (R6): %s", invalid)
 	}
@@ -726,7 +733,8 @@ type l44Cell struct{ what, row string }
 
 // l44RowsUnder2 is the rows of the cells measured under
 // LdapEnforceChannelBinding 2, or, when the DC booted again during them or a
-// boot could not be read, an INVALID (R6) row for each and the reason.
+// boot could not be read, an INVALID (R6) row for each and the reason. err
+// arrives scrubbed and on one line; a row never spans lines regardless.
 func l44RowsUnder2(cells []l44Cell, before, after string, err error) (string, string) {
 	reason := ""
 	switch {
@@ -740,7 +748,7 @@ func l44RowsUnder2(cells []l44Cell, before, after string, err error) (string, st
 		if reason == "" {
 			b.WriteString(c.row)
 		} else {
-			fmt.Fprintf(&b, "| %s | INVALID (R6): %s | n/a | — |\n", l44MDCell(c.what), l44MDCell(reason))
+			fmt.Fprintf(&b, "| %s | INVALID (R6): %s | n/a | — |\n", l44MDCell(c.what), l44MDCell(strings.Join(strings.Fields(reason), " ")))
 		}
 	}
 	return b.String(), reason
