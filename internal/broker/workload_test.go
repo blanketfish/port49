@@ -1,11 +1,15 @@
 package broker
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
 	"errors"
+	"math/big"
 	"net/url"
 	"strings"
 	"testing"
@@ -242,6 +246,84 @@ func TestARawSANThatIsAGoodIDIsTheWorkload(t *testing.T) {
 	}
 	cc, err := f.b.CertCallerOf(chainState(c, wca), f.now)
 	if err != nil || cc.Principal != workloadID {
+		t.Fatalf("%+v %v", cc, err)
+	}
+}
+
+// rawNames is a subjectAltName extension of the given GeneralNames as written.
+func rawNames(t *testing.T, gns ...asn1.RawValue) []pkix.Extension {
+	t.Helper()
+	der, err := asn1.Marshal(gns)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return []pkix.Extension{{Id: asn1.ObjectIdentifier{2, 5, 29, 17}, Value: der}}
+}
+
+// constructedURI is a [6] GeneralName in the constructed form (0xA6), which
+// crypto/x509 skips: it is no URI to it, and no URI to a name constraint.
+func constructedURI(id string) asn1.RawValue {
+	return asn1.RawValue{Class: asn1.ClassContextSpecific, Tag: 6, IsCompound: true, Bytes: []byte(id)}
+}
+
+func TestAConstructedURISANIsRefused(t *testing.T) {
+	f := newFixture(t, 8)
+	wca := f.withWorkload(t)
+	c, err := wca.Issue(testpki.Leaf{CommonName: "x", Client: true, NotBefore: f.now.Add(-time.Hour),
+		NotAfter: f.now.Add(time.Hour), ExtraExtensions: rawNames(t, constructedURI(workloadID))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Leaf.URIs) != 0 {
+		t.Fatalf("crypto/x509 read %v; the premise of the test is that it reads none", c.Leaf.URIs)
+	}
+	_, err = f.b.CertCallerOf(chainState(c, wca), f.now)
+	if !errors.Is(err, ErrWorkloadUnmapped) {
+		t.Fatalf("got %v", err)
+	}
+}
+
+// A workload CA name-constrained to other.example.com must not name a
+// workload in corp.example.com by a form its name-constraint check skips.
+func TestANameConstrainedCAMayNotNameAWorkloadByAConstructedSAN(t *testing.T) {
+	f := newFixture(t, 8)
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(77), Subject: pkix.Name{CommonName: "constrained workloads ca"},
+		NotBefore: f.now.Add(-time.Hour), NotAfter: f.now.Add(48 * time.Hour), IsCA: true, BasicConstraintsValid: true,
+		KeyUsage: x509.KeyUsageCertSign, PermittedURIDomains: []string{"other.example.com"}, PermittedDNSDomainsCritical: true}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wca := &testpki.CA{Cert: cert, Key: key}
+	f.b.Workload = &Workload{Anchor: cert, TrustDomains: []string{"corp.example.com"}}
+	pool := x509.NewCertPool()
+	pool.AddCert(cert)
+	verify := func(ext []pkix.Extension) ([][]*x509.Certificate, error) {
+		c, err := wca.Issue(testpki.Leaf{CommonName: "x", Client: true, NotBefore: f.now.Add(-time.Hour),
+			NotAfter: f.now.Add(time.Hour), ExtraExtensions: ext})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c.Leaf.Verify(x509.VerifyOptions{Roots: pool, CurrentTime: f.now,
+			KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}})
+	}
+	if _, err := verify(rawURISAN(t, workloadID)); err == nil {
+		t.Fatal("the primitive form passed the name constraint; the premise is that it does not")
+	}
+	chains, err := verify(rawNames(t, constructedURI(workloadID)))
+	if err != nil {
+		t.Skipf("this Go refuses the constructed form at Verify already: %v", err)
+	}
+	cc, err := f.b.CertCallerOf(&tls.ConnectionState{VerifiedChains: chains}, f.now)
+	if !errors.Is(err, ErrWorkloadUnmapped) || cc.Principal != "" {
 		t.Fatalf("%+v %v", cc, err)
 	}
 }

@@ -145,6 +145,12 @@ func WorkloadPrincipal(leaf *x509.Certificate, trustDomains []string) (string, e
 	if err != nil {
 		return "", fmt.Errorf("%w: its subjectAltName cannot be read: %v", ErrWorkloadUnmapped, err)
 	}
+	// The parser that enforced the name constraints must read what this one
+	// reads; any disagreement is a refusal.
+	if len(uris) != len(leaf.URIs) {
+		return "", fmt.Errorf("%w: its URI SANs read %d ways in the raw extension and %d to crypto/x509",
+			ErrWorkloadUnmapped, len(uris), len(leaf.URIs))
+	}
 	if len(uris) != 1 {
 		return "", fmt.Errorf("%w: it carries %d URI SANs; exactly one SPIFFE ID names a workload",
 			ErrWorkloadUnmapped, len(uris))
@@ -192,6 +198,11 @@ func rawURISANs(leaf *x509.Certificate) ([]string, error) {
 			return nil, err
 		}
 		if gn.Class == asn1.ClassContextSpecific && gn.Tag == 6 { // uniformResourceIdentifier
+			// An IA5String is primitive. crypto/x509 skips the constructed
+			// form, so a name constraint never sees it: refuse it, never count it.
+			if gn.IsCompound {
+				return nil, errors.New("a URI name in the constructed form")
+			}
 			uris = append(uris, string(gn.Bytes))
 		}
 	}
