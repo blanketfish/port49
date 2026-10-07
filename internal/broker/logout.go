@@ -95,14 +95,13 @@ func (b *Broker) logout(w http.ResponseWriter, r *http.Request) {
 			outcome = "partial"
 		}
 		b.say("logout: a logout token from %s could not be applied: the store did not answer; answered 503 so the "+
-			"provider may retry; if it does not, once the store returns: %s", lt.Issuer, b.logoutByHand(lt, rep))
+			"provider may retry; if it does not, once the store returns: %s", lt.Issuer, b.logoutByHand(lt, rep, err == nil))
 		if terr != nil && !errors.Is(terr, store.ErrNotFound) {
 			// The provider's retry will be answered 200 "replayed" and do
 			// nothing (pre-flight M-13): say how to end it by hand.
-			what, byHand := "sub "+printsafe.Line(lt.Subject, 80), b.logoutByHand(lt, rep)
+			what, byHand := "sub "+printsafe.Line(lt.Subject, 80), b.logoutByHand(lt, rep, err == nil)
 			if lt.Sid != "" {
 				what = "sid " + printsafe.Line(lt.Sid, 80)
-				byHand = fmt.Sprintf(`POST /v1/tokens/revoke {"sid": %q, "issuer": %q} or %s`, lt.Sid, lt.Issuer, byHand)
 			}
 			b.say("logout: the logout of %s from %s could not be given back for a retry (%s): the provider's retry "+
 				"will be answered 200 and do nothing; end it by hand with %s", what, lt.Issuer,
@@ -120,24 +119,53 @@ func (b *Broker) logout(w http.ResponseWriter, r *http.Request) {
 }
 
 // logoutByHand is how an operator ends what a logout that could not be
-// applied would have: logoutRecovery's form for each principal the logout
-// reached, never a bare port49 revoke (a logout is not a ban). A logout that
-// failed before it read its owner record names none, so the operator finds
-// them in the decision log.
-func (b *Broker) logoutByHand(lt oidc.LogoutToken, rep RevokeReport) string {
-	if len(rep.Principals) == 0 {
-		what := "sub"
-		if lt.Sid != "" {
-			what = "sid"
-		}
-		return "for each principal the decision log's mint records name for this " + what + ", and with its name for " +
-			"<principal> below, " + b.logoutRecovery("<principal>")
+// applied would have, never a bare port49 revoke (a logout is not a ban).
+// For a sid it leads with the API call that runs the whole logout again.
+// applied is whether Logout got as far as writing its record: when it did
+// (a later step failed), logoutRecovery's form holds, its revoke record
+// being in the log; when it did not, nothing was written, so the form is
+// unconditional and lifts only once no held ID token could still mint.
+func (b *Broker) logoutByHand(lt oidc.LogoutToken, rep RevokeReport, applied bool) string {
+	who := []string{"<principal>"}
+	lead := "for each principal the decision log's mint records name for this sub, and with its name for " +
+		"<principal> below, "
+	if lt.Sid != "" {
+		lead = "for each principal the decision log's mint records name for this sid, and with its name for " +
+			"<principal> below, "
+	}
+	if len(rep.Principals) > 0 {
+		who, lead = rep.Principals, ""
 	}
 	var each []string
-	for _, p := range rep.Principals {
-		each = append(each, b.logoutRecovery(p))
+	for _, p := range who {
+		if applied {
+			each = append(each, b.logoutRecovery(p))
+		} else {
+			each = append(each, b.logoutUnapplied(p, b.Now().Add(b.Identity.Timing.MaxTokenAge+2*b.Identity.Timing.ClockSkew)))
+		}
 	}
-	return strings.Join(each, "; and ")
+	out := lead + strings.Join(each, "; and ")
+	if lt.Sid != "" {
+		out = fmt.Sprintf(`POST /v1/tokens/revoke {"sid": %q, "issuer": %q} (needs revoke_others), or %s`, lt.Sid, lt.Issuer, out)
+	}
+	return out
+}
+
+// logoutUnapplied is the recovery for a logout nothing of which was written:
+// no logout record refuses the session's held ID token, so the contexts are
+// ended and the mark is lifted only after lift, when that token has expired.
+func (b *Broker) logoutUnapplied(principal string, lift time.Time) string {
+	at := lift.UTC().Format(time.RFC3339)
+	if b.AdminSocket == "" {
+		return b.proc() + " has no admin_socket configured, so end " + principal + "'s contexts: remove " + principal +
+			"'s grants from broker.policy_file (live within two watch intervals), and restore them only after " + at +
+			", when no ID token the logout would have refused can still mint; or configure admin_socket and revoke there"
+	}
+	where := b.proc() + "'s admin socket (" + b.AdminSocket + ")"
+	return "end " + principal + "'s contexts with `port49 revoke --principal " + principal + "` on " + where +
+		", and lift it with `port49 revoke --principal " + principal + " --lift` there only after " + at +
+		": no logout record refuses the session's held ID token until then; last check that `port49 revoke --list` " +
+		"there shows no mark for " + principal
 }
 
 // RevokeSid ends one OIDC session as a back-channel logout by sid does, at

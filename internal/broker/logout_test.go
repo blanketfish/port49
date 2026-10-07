@@ -460,9 +460,9 @@ func TestLogoutAndRevokeSidWithNoIdentityFailClosed(t *testing.T) {
 	}
 }
 
-// The say lines of a failed logout end with logoutRecovery's form, never a
-// bare port49 revoke: a logout is not a ban (M5).
-func TestAFailedLogoutSaysTheRecoveryNotABan(t *testing.T) {
+// A logout that wrote nothing says an unconditional recovery: no revoke
+// record to look for, a lift time, and the sid API call first (N1, N2).
+func TestAStoreFailedLogoutSaysAnUnconditionalRecovery(t *testing.T) {
 	f, iss, _ := oidcLoggedIn(t)
 	var said strings.Builder
 	f.b.Say = func(format string, args ...any) { said.WriteString(fmt.Sprintf(format, args...) + "\n") }
@@ -470,12 +470,44 @@ func TestAFailedLogoutSaysTheRecoveryNotABan(t *testing.T) {
 	f.b.Store = hookStore{Store: f.st, before: map[string]func() error{
 		"PutLogout": func() error { return store.ErrUnavailable },
 		"TakeOnce":  func() error { return store.ErrUnavailable }}}
+	lift := f.b.Now().Add(f.b.Identity.Timing.MaxTokenAge + 2*f.b.Identity.Timing.ClockSkew).UTC().Format(time.RFC3339)
 	if w := f.postLogout(logoutFor(t, f, iss, "s-sub-alice", "j-hand")); w.Code != 503 {
 		t.Fatalf("%s", lshown(w))
 	}
 	out := said.String()
-	if !strings.Contains(out, "--lift") || !strings.Contains(out, "port49 revoke --list") ||
-		strings.Contains(out, "revoke the principal with port49 revoke") || strings.Contains(out, "port49 revoke <principal>") {
+	first, _, _ := strings.Cut(out, "\n")
+	if strings.Contains(out, "if the decision log has a revoke record") || !strings.Contains(out, "--lift` there only after "+lift) ||
+		!strings.Contains(out, "port49 revoke --list") || strings.Contains(out, "port49 revoke <principal>") ||
+		!strings.Contains(first, `POST /v1/tokens/revoke {"sid": "s-sub-alice"`) || !strings.Contains(first, "(needs revoke_others)") {
 		t.Fatalf("the recovery said:\n%s", out)
 	}
+}
+
+// A logout that wrote its record and failed after says logoutRecovery's
+// form, its revoke record being in the log (N1).
+func TestAPartialLogoutSaysTheRecoveryOfItsRecord(t *testing.T) {
+	f, iss, _ := oidcLoggedIn(t)
+	var said strings.Builder
+	f.b.Say = func(format string, args ...any) { said.WriteString(fmt.Sprintf(format, args...) + "\n") }
+	f.b.AdminSocket = "/run/port49/admin.sock"
+	f.b.Store = hookStore{Store: f.st, before: map[string]func() error{
+		"TakeOnce": func() error { return store.ErrUnavailable }}}
+	st := &partialStore{Store: f.b.Store}
+	f.b.Store = st
+	if w := f.postLogout(logoutFor(t, f, iss, "s-sub-alice", "j-part")); w.Code != 503 {
+		t.Fatalf("%s", lshown(w))
+	}
+	out := said.String()
+	if !strings.Contains(out, "if the decision log has a revoke record with origin backchannel_logout for "+alicePrincipal) ||
+		!strings.Contains(out, "--lift") || strings.Contains(out, "only after") {
+		t.Fatalf("the recovery said:\n%s", out)
+	}
+}
+
+// partialStore fails a later step of a logout, the tokens read, after its
+// record is written.
+type partialStore struct{ store.Store }
+
+func (s *partialStore) TokensByPrincipal(ctx context.Context, principal string) ([]store.TokenKey, error) {
+	return nil, store.ErrUnavailable
 }
