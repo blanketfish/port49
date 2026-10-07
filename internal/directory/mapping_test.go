@@ -535,17 +535,25 @@ func TestADIssuerSerialRefusesAMultiValuedIssuerRDN(t *testing.T) {
 	}
 }
 
-// The quoting set is as Microsoft documents CertNameToStr, and the backslash,
-// slash and newline members are unmeasured: its table says "\n" and its
-// remarks say "Backslash (/)". Until the re-run decides, all three quote.
+// The quoting set is what L44 measured (comma, plus, inner quote, leading
+// space) plus CertNameToStr's unmeasured members; a backslash and a slash are
+// not in it (L44 at ad1e4a9).
 func TestADQuoteSet(t *testing.T) {
 	for in, want := range map[string]string{
 		"plain": "plain", "a,b": `"a,b"`, `say "hi"`: `"say ""hi"""`, " lead": `" lead"`, "trail ": `"trail "`,
 		"a+b": `"a+b"`, "a=b": `"a=b"`, "a#b": `"a#b"`, "a;b": `"a;b"`, "a<b": `"a<b"`, "a>b": `"a>b"`,
-		`a\b`: `"a\b"`, "a/b": `"a/b"`, "a\nb": "\"a\nb\"", "": `""`,
+		`a\b`: `a\b`, "a/b": "a/b", "a\nb": "\"a\nb\"", "": `""`,
 	} {
 		if got := adQuote(in); got != want {
 			t.Errorf("adQuote(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// A comma still forces quoting, and a backslash inside the quotes is kept
+// verbatim, not doubled or escaped.
+func TestADQuoteKeepsABackslashInsideAQuotedValue(t *testing.T) {
+	if got, want := adQuote(`a\b, c/d`), `"a\b, c/d"`; got != want {
+		t.Errorf("adQuote = %q, want %q", got, want)
 	}
 }

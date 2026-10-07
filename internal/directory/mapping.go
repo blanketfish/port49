@@ -366,17 +366,16 @@ func ADIssuerSerial(leaf *x509.Certificate) string {
 	return "X509:<I>" + strings.Join(parts, ",") + "<SR>" + strings.ToUpper(hex.EncodeToString(r))
 }
 
-// adQuote is an RDN value as Windows' CertNameToStr writes it in
-// altSecurityIdentities: quoted when it is empty, starts or ends with white
-// space, or holds , + = " < > # ; or a backslash, a slash or a newline, an
-// inner quote doubled. Only the comma is measured (L44 run 8). Microsoft's
-// page is inconsistent about the rest: its table lists "backslash followed by
-// the letter n" and its remarks list "Backslash (/)", so the backslash, slash
-// and newline members are unmeasured, provisional on L44, and the 7a re-run
-// decides them. White space beyond ' ' (tab, NBSP, ...) is unmeasured too;
-// the re-run's leading-space CA measures ' '.
+// adQuote is an RDN value as Windows writes it in altSecurityIdentities:
+// quoted when it holds a comma, a plus or an inner quote (doubled), or starts
+// with a space (L44 measured all four). A backslash and a slash are written as
+// they are, not quoted (L44 at ad1e4a9; Microsoft's CertNameToStr page is
+// inconsistent about them, and the measurement refutes quoting). The rest is
+// per CertNameToStr and unmeasured: an empty value, trailing white space, and
+// = < > # ; or a newline. White space beyond ' ' (tab, NBSP, ...) is
+// unmeasured too.
 func adQuote(v string) string {
-	if v == "" || strings.ContainsAny(v, ",+=\"<>#;\\/\n") || strings.TrimSpace(v) != v {
+	if v == "" || strings.ContainsAny(v, ",+=\"<>#;\n") || strings.TrimSpace(v) != v {
 		return `"` + strings.ReplaceAll(v, `"`, `""`) + `"`
 	}
 	return v
