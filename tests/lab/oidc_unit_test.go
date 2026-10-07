@@ -5,6 +5,11 @@ package lab
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -48,7 +53,7 @@ func TestOIDCClaimsOfIsNilForWhatIsNotAJWS(t *testing.T) {
 }
 
 func TestOIDCEvidenceLineHoldsClaimsNeverAJWS(t *testing.T) {
-	b, err := oidcEvidenceLine("(a) end-session", map[string]any{"claims": map[string]any{"sid": "s1"}})
+	b, err := oidcEvidenceLine("(a) end-session", map[string]any{"claims": map[string]any{"sid": "s1"}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +61,7 @@ func TestOIDCEvidenceLineHoldsClaimsNeverAJWS(t *testing.T) {
 		t.Fatalf("line %q", b)
 	}
 	tok := jwsOf(map[string]any{"alg": "RS256"}, map[string]any{"sub": "u1"})
-	if _, err := oidcEvidenceLine("leak", map[string]any{"id_token": tok}); err == nil {
+	if _, err := oidcEvidenceLine("leak", map[string]any{"id_token": tok}, nil); err == nil {
 		t.Fatal("a compact JWS was written to evidence")
 	} else if strings.Contains(err.Error(), tok) {
 		t.Fatal("the refusal repeats the token")
@@ -75,18 +80,19 @@ func TestOIDCNoteForm(t *testing.T) {
 }
 
 func TestOIDCNoteLeakRefusesTheAdminPasswordAndAnyJWS(t *testing.T) {
-	if err := oidcNoteLeak("fine", "adm-secret"); err != nil {
+	secrets := []string{"adm-secret"}
+	if err := oidcNoteLeak("fine", secrets); err != nil {
 		t.Fatal(err)
 	}
-	err := oidcNoteLeak("x adm-secret y", "adm-secret")
+	err := oidcNoteLeak("x adm-secret y", secrets)
 	if err == nil || strings.Contains(err.Error(), "adm-secret") {
 		t.Fatalf("admin password: %v", err)
 	}
-	if err := oidcNoteLeak("x "+jwsOf(map[string]any{"alg": "none"}, map[string]any{"a": 1}), ""); err == nil {
+	if err := oidcNoteLeak("x "+jwsOf(map[string]any{"alg": "none"}, map[string]any{"a": 1}), nil); err == nil {
 		t.Fatal("a compact JWS passed")
 	}
-	// an unset admin password must not refuse every note
-	if err := oidcNoteLeak("anything", ""); err != nil {
+	// an empty registered value must not refuse every note
+	if err := oidcNoteLeak("anything", []string{""}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -184,5 +190,110 @@ func TestOIDCKeycloakClientFollowsNoRedirect(t *testing.T) {
 	c := keycloakClient(ca)
 	if err := c.CheckRedirect(nil, nil); err == nil {
 		t.Fatal("the client follows redirects")
+	}
+}
+
+// A planted authorization code: three dot-joined UUIDs, no eyJ prefix, which
+// the JWS shape does not see.
+const plantedCode = "0b1c2d3e-1111-4222-8333-444455556666.9a8b7c6d-1111-4222-8333-444455556666.5f3c2d1e-0000-4000-8000-000000000049"
+
+func TestOIDCKnownSecretsAreRefusedInNotesAndEvidence(t *testing.T) {
+	k := &keycloak{}
+	k.know("short", plantedCode, plantedCode, "refresh-token-value-0123")
+	if got := k.known(); len(got) != 2 {
+		t.Fatalf("know kept %d values (short ones skipped, duplicates once): %v", len(got), got)
+	}
+	for _, text := range []string{"a note with " + plantedCode + " in it", "x refresh-token-value-0123"} {
+		err := oidcNoteLeak(text, k.known())
+		if err == nil || strings.Contains(err.Error(), plantedCode) || strings.Contains(err.Error(), "refresh-token-value") {
+			t.Errorf("note %q: %v", text, err)
+		}
+		if _, err := oidcEvidenceLine("s", map[string]any{"v": text}, k.known()); err == nil {
+			t.Errorf("evidence %q was written", text)
+		}
+	}
+	if err := oidcNoteLeak("a clean note", k.known()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestOIDCErrCauseDropsTheURL(t *testing.T) {
+	const tok = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1MSJ9.c2ln"
+	err := &url.Error{Op: "Get", URL: "https://keycloak.port49.lab:18443/x?id_token_hint=" + tok + "&state=planted-state-value",
+		Err: errors.New("context deadline exceeded")}
+	for _, e := range []error{err, fmt.Errorf("wrapped: %w", err)} {
+		got := errCause(e)
+		if strings.Contains(got, tok) || strings.Contains(got, "planted-state-value") || strings.Contains(got, "keycloak.port49.lab") {
+			t.Fatalf("errCause kept the URL: %q", got)
+		}
+		if !strings.Contains(got, "context deadline exceeded") {
+			t.Fatalf("errCause lost the cause: %q", got)
+		}
+	}
+	if errCause(nil) != "" || errCause(errors.New("plain")) != "plain" {
+		t.Fatal("errCause on plain errors")
+	}
+}
+
+type failingTransport struct{ saw *http.Request }
+
+func (f *failingTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	f.saw = r
+	return nil, errors.New("connection refused")
+}
+
+// The ID token goes in the POST body and in no URL, and a failed end-session
+// prints neither the token nor a URL.
+func TestOIDCEndSessionKeepsTheIDTokenOutOfURLsAndErrors(t *testing.T) {
+	const tok = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1MSJ9.c2ln"
+	ft := &failingTransport{}
+	k := &keycloak{URL: "https://keycloak.port49.lab:18443/realms/port49-lab", HTTP: &http.Client{Transport: ft}}
+	req, err := k.endSessionRequest(tok)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req.Method != "POST" || strings.Contains(req.URL.String(), "eyJ") || req.URL.RawQuery != "" {
+		t.Fatalf("request %s %s", req.Method, req.URL)
+	}
+	body, _ := io.ReadAll(req.Body)
+	if !strings.Contains(string(body), "id_token_hint=") {
+		t.Fatalf("the token is not in the body: %s", body)
+	}
+	code, err := k.EndSessionStatus(t, tok)
+	if code != 0 || err == nil {
+		t.Fatalf("code %d err %v", code, err)
+	}
+	if strings.Contains(err.Error(), tok) || strings.Contains(err.Error(), "keycloak.port49.lab") || strings.Contains(err.Error(), "http") {
+		t.Fatalf("the error carries the token or the URL: %v", err)
+	}
+	if ft.saw == nil || strings.Contains(ft.saw.URL.String(), "eyJ") {
+		t.Fatal("the request that went out had the token in its URL")
+	}
+}
+
+func TestOIDCLocShapeDropsTheQuery(t *testing.T) {
+	u, _ := url.Parse("http://127.0.0.1:18749/callback?code=" + plantedCode + "&state=planted-state-value")
+	if got := locShape(u); got != "http://127.0.0.1:18749/callback" || locShape(nil) == "" {
+		t.Fatalf("locShape %q", got)
+	}
+}
+
+func TestOIDCCheckLogoutToken(t *testing.T) {
+	iss := "https://keycloak.port49.lab:18443/realms/port49-lab"
+	ok := func(c map[string]any) received { return received{Claims: c} }
+	for name, tc := range map[string]struct {
+		g    received
+		good bool
+	}{
+		"string aud":       {ok(map[string]any{"iss": iss, "aud": "port49-cli"}), true},
+		"array aud":        {ok(map[string]any{"iss": iss, "aud": []any{"x", "port49-cli"}}), true},
+		"no claims":        {received{}, false},
+		"another issuer":   {ok(map[string]any{"iss": "https://evil/realms/x", "aud": "port49-cli"}), false},
+		"another audience": {ok(map[string]any{"iss": iss, "aud": "other"}), false},
+		"no audience":      {ok(map[string]any{"iss": iss}), false},
+	} {
+		if err := checkLogoutToken(iss, tc.g); (err == nil) != tc.good {
+			t.Errorf("%s: %v", name, err)
+		}
 	}
 }

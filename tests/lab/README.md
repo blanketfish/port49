@@ -491,11 +491,16 @@ the end, keeping `keycloak.log`.
 - Keycloak posts back-channel logouts to the receiver the test starts on the host's port 18750.
   `host.port49.lab` must reach it from the container: compose maps it to `host-gateway`.
 - Evidence (`tests/lab/evidence/L45-keycloak.json`, `L46-keycloak.json`) holds decoded JWS
-  headers and claims, never a signature: the writer refuses any value that holds a compact JWS.
+  headers and claims, never a signature: the writer (and the note writer) refuse any value that holds a
+  compact JWS or a value the run registered as secret (the admin password, each code, state, token and
+  cookie value the flow handled). Failure messages carry no URL, Location query or page body.
   The wire is TLS, so there is no pcap.
 - `realm.json` fixes `port49-svc`'s service-account user id, so its client-credentials tokens'
   `sub` is known before Keycloak starts and the broker config can pin it (Ruling 21). L46 fails
   if Keycloak did not keep that id, after writing its note.
+- L45 stops as INVALID, writing no note, if the receiver gets nothing within 20s of the first
+  end-session logout, or gets a request whose `iss`/`aud` are not this realm's and `port49-cli`'s.
+  The end-session request is a POST form, so the ID token is never in a URL.
 - L46 stops without writing its note if its SSO control (step 1b, a plain second login that must
   reuse the session) fails: without it, "prompt=login asked for the password" proves nothing.
 - `PORT49_LAB_DIRECTORY_OUT=<dir>` redirects notes and evidence here too, for a dry run.

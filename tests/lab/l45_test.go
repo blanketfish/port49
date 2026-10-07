@@ -55,7 +55,16 @@ func TestL45LogoutToken(t *testing.T) {
 	a := k.Login(t, "alice", "lab-only-alice-password", nil)
 	n := len(rcv.Got())
 	k.EndSession(t, a.IDToken)
-	row("(a) end-session endpoint", a.IDToken, rcv.waitGot(n, 20*time.Second)[n:])
+	gotA := rcv.waitGot(n, 20*time.Second)[n:]
+	// The precondition for every later count: Keycloak reached the receiver.
+	// Without it, a "0 tokens, no retry" below is a setup fault (host-gateway,
+	// the receiver's certificate, the logout URL), not a measurement.
+	if len(gotA) == 0 {
+		t.Fatalf("INVALID: the receiver got no request within 20s of an end-session logout: host.port49.lab, " +
+			"the receiver's certificate, or the client's logout URL; no note is written")
+	}
+	mustBeLogoutTokens(t, k, gotA)
+	row("(a) end-session endpoint", a.IDToken, gotA)
 
 	// (b) an administrator signs alice out of every session (two open).
 	b1 := k.Login(t, "alice", "lab-only-alice-password", nil)
@@ -104,5 +113,17 @@ func TestL45LogoutToken(t *testing.T) {
 			fmt.Fprintf(&obs, "- Keycloak's log: `%s`\n", oneLineMax(line, 240))
 		}
 	}
+	mustBeLogoutTokens(t, k, rcv.Got()) // a stray POST to the receiver is never a row
 	writeOIDCResult(t, k, "L45", l45Claim, obs.String(), evPath)
+}
+
+// mustBeLogoutTokens stops the run, as INVALID, at a request that is not a
+// logout token from this realm for port49-cli.
+func mustBeLogoutTokens(t *testing.T, k *keycloak, got []received) {
+	t.Helper()
+	for i, g := range got {
+		if err := checkLogoutToken(k.URL, g); err != nil {
+			t.Fatalf("INVALID: request %d to the receiver is %v; no note is written", i, err)
+		}
+	}
 }

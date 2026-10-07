@@ -9,6 +9,7 @@ import (
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -18,6 +19,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -56,6 +58,59 @@ type keycloak struct {
 	pki    string // tests/lab/logs/oidc/pki
 	admin  string // the admin password, generated per run, never printed
 	ca     *testpki.CA
+
+	mu      sync.Mutex
+	secrets []string // every value no note, evidence line or message may hold
+}
+
+// labSecrets are realm.json's published values: not secret, but nothing the
+// lab writes has a reason to carry them either.
+var labSecrets = []string{"lab-only-alice-password", "lab-only-svc-secret"}
+
+// know registers values the run must never write out: the admin password, and
+// each code, verifier, state, token and cookie value the flow handles. A value
+// under 8 bytes is skipped, since it would match ordinary text.
+func (k *keycloak) know(vals ...string) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	for _, v := range vals {
+		if len(v) >= 8 && !slices.Contains(k.secrets, v) {
+			k.secrets = append(k.secrets, v)
+		}
+	}
+}
+
+func (k *keycloak) known() []string {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return append([]string(nil), k.secrets...)
+}
+
+// errCause is err without the request URL a *url.Error carries: a query string
+// holds a state, a challenge or a session code. Its Op and its cause remain.
+func errCause(err error) string {
+	if err == nil {
+		return ""
+	}
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		return ue.Op + ": " + ue.Err.Error()
+	}
+	return err.Error()
+}
+
+// leakIn says whether text holds a compact JWS or any of secrets, and what
+// kind, never which.
+func leakIn(text string, secrets []string) error {
+	if jwsShape.MatchString(text) {
+		return fmt.Errorf("it holds a compact JWS")
+	}
+	for _, v := range secrets {
+		if v != "" && strings.Contains(text, v) {
+			return fmt.Errorf("it holds a value the run registered as secret")
+		}
+	}
+	return nil
 }
 
 // startKeycloak writes the PKI and the admin password, brings Keycloak up
@@ -73,6 +128,11 @@ func startKeycloak(t *testing.T) *keycloak {
 	}
 	k := &keycloak{out: out, dir: filepath.Join(repo, "tests", "lab", "oidc"),
 		pki: filepath.Join(repo, "tests", "lab", "logs", "oidc", "pki"), URL: "https://" + kcHost + ":" + kcPort + "/realms/" + kcRealm}
+	// A run starts from an empty directory: the key below is chowned to
+	// Keycloak's uid, and a file owned by another uid could not be rewritten.
+	if err := os.RemoveAll(k.pki); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.MkdirAll(k.pki, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -93,14 +153,20 @@ func startKeycloak(t *testing.T) *keycloak {
 		if err != nil {
 			t.Fatal(err)
 		}
-		// Keycloak reads the files as its own uid: world-readable inside a
-		// directory only this run writes, under a git-ignored path.
+		// Keys are 0600; Keycloak's own is chowned to its uid below. The
+		// certificates are public.
 		writeLab(t, filepath.Join(k.pki, name+".pem"), cert, 0o644)
-		writeLab(t, filepath.Join(k.pki, name+"-key.pem"), key, 0o644)
+		writeLab(t, filepath.Join(k.pki, name+"-key.pem"), key, 0o600)
 	}
 	k.CAFile = filepath.Join(k.pki, "lab-ca.pem")
 	writeLab(t, k.CAFile, k.ca.PEM(), 0o644)
+	// Keycloak reads its key as uid 1000 in the container, not as this user.
+	if o, err := dockerCmd("run", "--rm", "--user", "root", "--entrypoint", "chown", "-v", k.pki+":/pki", kcImage,
+		"1000:0", "/pki/keycloak-key.pem").CombinedOutput(); err != nil {
+		t.Fatalf("chown of Keycloak's key: %v\n%s", err, tailOf(string(o), 500))
+	}
 	k.admin = randomSecret(t)
+	k.know(append([]string{k.admin}, labSecrets...)...)
 	writeLab(t, filepath.Join(filepath.Dir(k.pki), "admin.env"), []byte("KC_BOOTSTRAP_ADMIN_PASSWORD="+k.admin+"\n"), 0o600)
 
 	k.HTTP = keycloakClient(k.ca)
@@ -200,7 +266,7 @@ func (k *keycloak) adminDo(t *testing.T, method, path string, body any, out any)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := k.HTTP.Do(req)
 	if err != nil {
-		t.Fatalf("%s %s: %v", method, path, err)
+		t.Fatalf("%s %s: %s", method, path, errCause(err))
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
@@ -226,6 +292,13 @@ func (k *keycloak) SetLogoutURL(t *testing.T, u string) {
 	attrs, _ := c["attributes"].(map[string]any)
 	attrs["backchannel.logout.url"] = u
 	k.adminDo(t, "PUT", "/clients/"+c["id"].(string), c, nil)
+	// Read it back: a PUT that did not take would send every logout to
+	// receiver.invalid, and read as a measured "Keycloak sends nothing".
+	clients = nil
+	k.adminDo(t, "GET", "/clients?clientId="+kcClient, nil, &clients)
+	if got, _ := clients[0]["attributes"].(map[string]any)["backchannel.logout.url"].(string); len(clients) != 1 || got != u {
+		t.Fatalf("INVALID: %s's backchannel.logout.url did not take the receiver's URL; no note is written", kcClient)
+	}
 }
 
 func (k *keycloak) UserID(t *testing.T, username string) string {
@@ -252,7 +325,7 @@ func (k *keycloak) postForm(t *testing.T, u string, form url.Values, out any) {
 	t.Helper()
 	resp, err := k.HTTP.PostForm(u, form)
 	if err != nil {
-		t.Fatalf("POST %s: %v", u, err)
+		t.Fatalf("POST %s: %s", strings.SplitN(u, "?", 2)[0], errCause(err))
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
@@ -337,6 +410,30 @@ func (r *receiver) Got() []received {
 	return append([]received(nil), r.got...)
 }
 
+// checkLogoutToken says why a request the receiver took is not a logout
+// token from this realm for port49-cli. The receiver listens on every
+// interface and records any POST, so a stray one must stop the run, never
+// become a row.
+func checkLogoutToken(issuer string, g received) error {
+	if g.Claims == nil {
+		return fmt.Errorf("a request with no decodable logout_token")
+	}
+	if g.Claims["iss"] != issuer {
+		return fmt.Errorf("a logout token whose iss is not the realm's")
+	}
+	named := false
+	switch aud := g.Claims["aud"].(type) {
+	case string:
+		named = aud == kcClient
+	case []any:
+		named = slices.Contains(aud, any(kcClient))
+	}
+	if !named {
+		return fmt.Errorf("a logout token whose aud does not name %s", kcClient)
+	}
+	return nil
+}
+
 // waitGot waits until the receiver holds more than n requests, or within.
 func (r *receiver) waitGot(n int, within time.Duration) []received {
 	deadline := time.Now().Add(within)
@@ -358,7 +455,7 @@ func writeOIDCResult(t *testing.T, k *keycloak, row, claim, observation, evidenc
 		t.Fatal(err)
 	}
 	note := oidcNote(row, claim, observation, evidencePath, runLine(), k.Version())
-	if err := oidcNoteLeak(note, k.admin); err != nil {
+	if err := oidcNoteLeak(note, k.known()); err != nil {
 		t.Fatalf("the %s note: %v", row, err)
 	}
 	path := filepath.Join(dir, row+"-keycloak.md")
@@ -387,7 +484,7 @@ func oidcEvidence(t *testing.T, k *keycloak, name string) (func(step string, v a
 	return func(step string, v any) {
 		mu.Lock()
 		defer mu.Unlock()
-		b, err := oidcEvidenceLine(step, v)
+		b, err := oidcEvidenceLine(step, v, k.known())
 		if err != nil {
 			t.Errorf("evidence step %q: %v", step, err)
 			return
@@ -399,13 +496,13 @@ func oidcEvidence(t *testing.T, k *keycloak, name string) (func(step string, v a
 // oidcEvidenceLine is one evidence line, newline included. It refuses a value
 // that holds a compact JWS: evidence is decoded headers and claims, never a
 // token or its signature.
-func oidcEvidenceLine(step string, v any) ([]byte, error) {
+func oidcEvidenceLine(step string, v any, secrets []string) ([]byte, error) {
 	b, err := json.Marshal(map[string]any{"step": step, "value": v})
 	if err != nil {
 		return nil, err
 	}
-	if jwsShape.Match(b) {
-		return nil, fmt.Errorf("the value holds a compact JWS")
+	if err := leakIn(string(b), secrets); err != nil {
+		return nil, err
 	}
 	return append(b, '\n'), nil
 }
@@ -426,17 +523,9 @@ func oidcNote(row, claim, observation, evidencePath, run, version string) string
 	return b.String()
 }
 
-// oidcNoteLeak says why a note must not be written: it holds the admin
-// password, or a compact JWS.
-func oidcNoteLeak(note, admin string) error {
-	if admin != "" && strings.Contains(note, admin) {
-		return fmt.Errorf("the note holds the admin password")
-	}
-	if jwsShape.MatchString(note) {
-		return fmt.Errorf("the note holds a compact JWS")
-	}
-	return nil
-}
+// oidcNoteLeak says why a note must not be written: it holds a compact JWS or
+// a value the run registered as secret (the admin password, a code, a token).
+func oidcNoteLeak(note string, secrets []string) error { return leakIn(note, secrets) }
 
 func writeLab(t *testing.T, path string, body []byte, mode os.FileMode) {
 	t.Helper()

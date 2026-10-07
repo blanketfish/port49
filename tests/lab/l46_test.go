@@ -93,11 +93,13 @@ func TestL46FreshAuthentication(t *testing.T) {
 	fmt.Fprintf(&obs, "\n- Ruling 21's markers on the client-credentials token: %v (the ruling rests on none).\n", markers)
 	fmt.Fprintf(&obs, "- The client-credentials token's sub is the service account's fixed id %s: %v.\n",
 		kcServiceAccountID, sc["sub"] == kcServiceAccountID)
-	writeOIDCResult(t, k, "L46", l46Claim, obs.String(), evPath)
+	// A realm-import fault, not part of L46's claim: stop before any note, so
+	// the note never reads "the sub is the fixed id: false" as a measurement.
 	if sc["sub"] != kcServiceAccountID {
-		t.Errorf("the service account's sub is %v, not realm.json's fixed id: Task 16's clients pin would refuse it; "+
-			"fix the realm import, never the pin", sc["sub"])
+		t.Fatalf("INVALID: Keycloak did not keep realm.json's service-account id (the token's sub is %v): Task 16's "+
+			"clients pin would refuse it; fix the realm import, never the pin; no note is written", sc["sub"])
 	}
+	writeOIDCResult(t, k, "L46", l46Claim, obs.String(), evPath)
 }
 
 // claimCell is a claim's cell: its value when short, "present" when long, or
