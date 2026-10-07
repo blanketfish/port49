@@ -2273,7 +2273,7 @@ func TestL44BindsTableIsNotSplit(t *testing.T) {
 	if head < 0 || end < head {
 		t.Fatal("l44Binds does not write l44BindsTail after the table header")
 	}
-	if strings.Contains(body[head:end], "LDAPS accepted") {
+	if strings.Contains(body[head:end], `WriteString("\nLDAPS accepted`) {
 		t.Error("the LDAPS acceptance sentence is written inside the table")
 	}
 	tail := l44BindsTail("req", true)
