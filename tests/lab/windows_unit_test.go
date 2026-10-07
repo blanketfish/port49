@@ -212,7 +212,7 @@ func TestWindowsAltSecForms(t *testing.T) {
 		f    func(*x509.Certificate) (string, error)
 		want string
 	}{
-		"port49":     {winForm{quoted: true}.of, "X509:<I>" + quotedIssuer + "<SR>020180"},
+		"port49":     {winForm{quoted: true, signByte: true}.of, "X509:<I>" + quotedIssuer + "<SR>02018000"},
 		"forward":    {winAltSecForward, "X509:<I>CN=lab-users, comma-CA,DC=corp,DC=example,DC=com<SR>020180"},
 		"unreversed": {winAltSecUnreversed, "X509:<I>" + issuer + "<SR>800102"},
 		"quoted":     {winAltSecQuoted, `X509:<I>DC=com,DC=example,DC=corp,CN="lab-users, comma-CA"<SR>020180`},
@@ -223,7 +223,7 @@ func TestWindowsAltSecForms(t *testing.T) {
 			t.Errorf("%s: %q %v, want %q", name, got, err, tc.want)
 		}
 	}
-	if got, _ := (winForm{quoted: true}).of(c); got != directory.ADIssuerSerial(c) {
+	if got, _ := (winForm{quoted: true, signByte: true}).of(c); got != directory.ADIssuerSerial(c) {
 		t.Errorf("the lab's port49 form %q is not directory.ADIssuerSerial's %q", got, directory.ADIssuerSerial(c))
 	}
 }

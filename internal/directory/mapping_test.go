@@ -485,3 +485,12 @@ func TestADIssuerSerialQuotesAsWindowsDoes(t *testing.T) {
 		t.Fatalf("%s", got)
 	}
 }
+
+// A Windows DC maps a serial whose top bit is set only with its DER sign byte
+// kept in <SR> (L44, tests/lab/results/L44-windows_ad.md).
+func TestADIssuerSerialKeepsTheSignByte(t *testing.T) {
+	c := leaf(t, func(c *x509.Certificate) { c.SerialNumber = new(big.Int).SetBytes([]byte{0x80, 0x01, 0x02}) })
+	if got := ADIssuerSerial(c); !strings.HasSuffix(got, "<SR>02018000") {
+		t.Fatalf("%s", got)
+	}
+}

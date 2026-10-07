@@ -343,6 +343,11 @@ func ADIssuerSerial(leaf *x509.Certificate) string {
 		}
 	}
 	b := leaf.SerialNumber.Bytes()
+	// DER keeps a 00 before a serial whose top bit is set; Windows' <SR> is
+	// the encoded bytes reversed, that 00 included (L44).
+	if len(b) > 0 && b[0]&0x80 != 0 {
+		b = append([]byte{0}, b...)
+	}
 	r := make([]byte, len(b))
 	for i := range b {
 		r[i] = b[len(b)-1-i]
