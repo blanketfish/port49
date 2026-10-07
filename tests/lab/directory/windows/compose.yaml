@@ -67,7 +67,7 @@ services:
   # MIT kinit with PKINIT, run once per certificate by the test.
   pkinit:
     build: ./pkinit
-    image: port49lab/pkinit:bookworm
+    image: port49lab/pkinit:fedora43
     profiles: [tools]
     volumes:
       - ../../logs/windows/pkinit:/l44:ro

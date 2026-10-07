@@ -438,6 +438,9 @@ func TestWindowsComposePinsTheImage(t *testing.T) {
 	if !strings.Contains(s, "image: "+winImage+"\n") || !strings.Contains(s, ":/custom.iso:ro") {
 		t.Fatal("compose.yaml does not pin the image or mount the ISO read-only")
 	}
+	if !strings.Contains(s, "image: port49lab/pkinit:fedora43\n") {
+		t.Error("compose.yaml does not tag the pkinit image fedora43")
+	}
 	for _, line := range strings.Split(s, "\n") {
 		if m := regexp.MustCompile(`^\s+- "(\S+)"$`).FindStringSubmatch(line); m != nil && regexp.MustCompile(`^\d`).MatchString(m[1]) {
 			if !strings.HasPrefix(m[1], "127.0.0.1:") {
@@ -1022,8 +1025,30 @@ func TestWindowsPKINITImageRecordsItsVersions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(b), "dpkg-query -W krb5-user krb5-pkinit libkrb5-3 > /etc/pkinit-versions") {
+	if !strings.Contains(string(b), "krb5-workstation krb5-pkinit krb5-libs > /etc/pkinit-versions") || !strings.Contains(string(b), "rpm -q --qf") {
 		t.Error("the pkinit Dockerfile does not record the installed versions in /etc/pkinit-versions")
+	}
+}
+
+// Windows Server 2025's KDC refuses FFDH PKINIT without MS-PKCA's paChecksum2
+// (KDC error 79), which MIT added in 1.22 (commit 310793b). Debian stable has
+// 1.20 and 1.21: the image must be one that ships 1.22 or later, pinned by digest.
+func TestWindowsPKINITImageIsMIT122(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("directory", "windows", "pkinit", "Dockerfile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	if !regexp.MustCompile(`(?m)^FROM fedora:43@sha256:[0-9a-f]{64}$`).MatchString(s) {
+		t.Error("the pkinit image is not Fedora 43 pinned by digest")
+	}
+	for _, want := range []string{"krb5-workstation", "krb5-pkinit", "paChecksum2", "310793b"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("the pkinit Dockerfile lacks %q", want)
+		}
+	}
+	if strings.Contains(s, "debian") || strings.Contains(s, "apt-get") {
+		t.Error("the pkinit Dockerfile still builds on Debian")
 	}
 }
 
@@ -1215,16 +1240,19 @@ func TestWindowsLogTailScrubsBeforeItTruncates(t *testing.T) {
 	}
 }
 
-// pkinit's /etc/pkinit-versions is dpkg-query's "name<TAB>version" lines: the
+// pkinit's /etc/pkinit-versions is rpm's "name<TAB>version-release" lines: the
 // note records the versions the run measured, and drops any other text.
 func TestWindowsMITVersions(t *testing.T) {
-	got := winMITVersions("krb5-user\t1.20.1-2+deb12u2\nkrb5-pkinit\t1.20.1-2+deb12u2\nlibkrb5-3\t1.20.1-2+deb12u2\n")
-	want := "krb5-user 1.20.1-2+deb12u2, krb5-pkinit 1.20.1-2+deb12u2, libkrb5-3 1.20.1-2+deb12u2"
+	got := winMITVersions("krb5-workstation\t1.22.2-4.fc43\nkrb5-pkinit\t1.22.2-4.fc43\nkrb5-libs\t1.22.2-4.fc43\n")
+	want := "krb5-workstation 1.22.2-4.fc43, krb5-pkinit 1.22.2-4.fc43, krb5-libs 1.22.2-4.fc43"
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
 	if got := winMITVersions("cat: /etc/pkinit-versions: No such file or directory\n"); got != "" {
 		t.Errorf("an error's text is not a version: %q", got)
+	}
+	if got := winMITVersions("package krb5-pkinit is not installed\n"); got != "" {
+		t.Errorf("rpm's complaint is not a version: %q", got)
 	}
 	if got := winMITVersions(""); got != "" {
 		t.Errorf("nothing read is not a version: %q", got)

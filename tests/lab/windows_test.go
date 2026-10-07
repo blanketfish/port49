@@ -1499,7 +1499,7 @@ func (w *winDC) mitVersions(t *testing.T) string {
 	return v
 }
 
-// winMITVersions is /etc/pkinit-versions (dpkg-query's "name<TAB>version"
+// winMITVersions is /etc/pkinit-versions (rpm's "name<TAB>version-release"
 // lines) as "name version, ...": any other line is dropped, so an error's
 // text never stands for a version.
 func winMITVersions(out string) string {
@@ -1680,7 +1680,7 @@ func (l *labDir) setRegistry(t *testing.T, name string, value int) string {
 }
 
 // kinit asks the DC's KDC for principal's TGT by PKINIT with c and key, from
-// the Debian container on the project network, and reads the answer from
+// the Fedora container on the project network, and reads the answer from
 // MIT's trace, which is parsed and never printed. The key file is 0600 and
 // removed after.
 func (w *winDC) kinit(t *testing.T, label, principal string, c *x509.Certificate, key *rsa.PrivateKey) winPKINITResult {
@@ -1753,7 +1753,7 @@ func (w *winDC) factsSection() string {
 	fmt.Fprintf(&b, "| Schannel `CertificateMappingMethods` | %s |\n", f.MappingMethods)
 	fmt.Fprintf(&b, "| NTDS LDAP settings in the registry | %s |\n", strings.Join(ldapSet, "; "))
 	fmt.Fprintf(&b, "| account lockout threshold | %d |\n", f.LockoutThreshold)
-	fmt.Fprintf(&b, "| PKINIT client (MIT Kerberos, Debian bookworm), as installed in its image | %s |\n\n", f.MIT)
+	fmt.Fprintf(&b, "| PKINIT client (MIT Kerberos 1.22+, Fedora 43), as installed in its image | %s |\n\n", f.MIT)
 	return b.String()
 }
 
@@ -1796,8 +1796,10 @@ func (w *winDC) configNote() string {
 		"- During the KB5014754 table only, `UseCachedCRLOnlyAndIgnoreRevocationUnknownErrors = 1` on the KDC: the " +
 		"harness's own CAs publish no CRL, and revocation is no part of the claim. Removed after.\n" +
 		"- LDAP interface diagnostics at level 2 (`16 LDAP Interface Events`), so the DC logs bind and channel-binding events.\n" +
-		"- PKINIT's client is MIT Kerberos (`kinit`, Debian bookworm's `krb5-pkinit`, the versions its image recorded are in " +
-		"the facts table) on the project network, with `pkinit_kdc_hostname`, as MIT documents for an Active Directory KDC.\n\n" +
+		"- PKINIT's client is MIT Kerberos (`kinit` from Fedora 43's `krb5-workstation` and `krb5-pkinit`, the versions its image recorded are in " +
+		"the facts table) on the project network, with `pkinit_kdc_hostname`, as MIT documents for an Active Directory KDC. " +
+		"MIT 1.22 or later is required: Windows Server 2025's KDC answers FFDH PKINIT without MS-PKCA's `paChecksum2` with " +
+		"KDC error 79 (\"Checksum must be included\"), and MIT added the field in 1.22 (krb5 commit 310793b); Debian stable's 1.20 and 1.21 fail every cell with it.\n\n" +
 		"### Running it again\n\n" +
 		"- From a worktree pinned at the commit under test: `go test -tags lab ./tests/lab/ -run '^TestL44WindowsAD$' " +
 		"-count=1 -v -timeout 240m`. It needs `/dev/kvm`, Docker with Compose v2.24.4+, 6 GB of RAM and 66 GiB free; a " +
