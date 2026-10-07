@@ -33,6 +33,9 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/go-ldap/ldap/v3"
+	"github.com/jcmturner/gokrb5/v8/iana/errorcode"
+	"github.com/jcmturner/gokrb5/v8/krberror"
+	"github.com/jcmturner/gokrb5/v8/messages"
 	"github.com/rhwendt/port49/internal/directory"
 )
 
@@ -2250,6 +2253,16 @@ func TestL44ConnFailed(t *testing.T) {
 	}
 }
 
+// kdcRefusal is the error conn.go's bind returns when the KDC answers a
+// gokrb5 exchange with a KRB-ERROR: gokrb5's own wrapping (krberror.Errorf
+// over messages.KRBError, as ASExchange.go and TGSExchange.go build it),
+// flattened to text under ErrBindRefused.
+func kdcRefusal(code int32, exchange string) error {
+	kerr := krberror.Errorf(messages.KRBError{ErrorCode: code}, krberror.KDCError,
+		"%s: kerberos error response from KDC", exchange)
+	return fmt.Errorf("bind gssapi as port49@CORP.LAB refused: %w (%v)", directory.ErrBindRefused, kerr)
+}
+
 // A GSSAPI cell is a refusal only when AD answered the bind with a code or
 // port49's own KDC classification says the principal was refused; a KDC that
 // does not answer, a timeout or a network error is INVALID, as for EXTERNAL.
@@ -2269,6 +2282,12 @@ func TestL44GSSAPIFailed(t *testing.T) {
 		"AD refusal 8":  {bindErr(8, "LDAP result 8"), false},
 		"KDC refused the principal": {fmt.Errorf("bind gssapi as port49@CORP.LAB refused: %w (%v)",
 			directory.ErrBindRefused, errors.New("[Root cause: KDC_Error] KRB5KDC_ERR_PREAUTH_FAILED")), false},
+		"KDC refused the client principal": {kdcRefusal(errorcode.KDC_ERR_C_PRINCIPAL_UNKNOWN, "AS Exchange Error"), false},
+		"KDC revoked the client":           {kdcRefusal(errorcode.KDC_ERR_CLIENT_REVOKED, "AS Exchange Error"), false},
+		// The service ticket and the clock are the lab's setup failing (gate
+		// runs 8 and 9: ldap/localhost off DC1$), not AD refusing port49.
+		"KDC does not know the service": {kdcRefusal(errorcode.KDC_ERR_S_PRINCIPAL_UNKNOWN, "TGS Exchange Error"), true},
+		"clock skew":                    {kdcRefusal(errorcode.KRB_AP_ERR_SKEW, "AS Exchange Error"), true},
 		"KDC does not answer": {fmt.Errorf("bind gssapi as port49@CORP.LAB: %w",
 			errors.New("[Root cause: Networking_Error] dial tcp 127.0.0.1:30088: connect: connection refused")), true},
 		"network error code":              {ldap.NewError(ldap.ErrorNetwork, errors.New("connection reset")), true},
