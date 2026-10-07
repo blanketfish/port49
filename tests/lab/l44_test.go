@@ -801,11 +801,25 @@ func l44ConnFailed(c l43Cell) string {
 
 // l44GSSAPIFailed is why a refused GSSAPI cell is no refusal, or "" when it is
 // one: AD's answer to the bind (port49's own bind error with a code from 1 to
-// 199) or the KDC refusing the principal (directory.ErrBindRefused). A KDC that
-// does not answer, a timeout and a network error are the setup failing.
+// 199) or the KDC refusing port49's own principal (directory.ErrBindRefused,
+// and the KDC's text names the client). conn.go reads every KDC error that is
+// not infrastructure as ErrBindRefused, which includes the service ticket
+// (KDC_ERR_S_PRINCIPAL_UNKNOWN, as when ldap/localhost dropped off DC1$ in gate
+// runs 8 and 9) and the clock (KRB_AP_ERR_SKEW): those are the lab failing, not
+// a verdict on port49. A KDC that does not answer, a timeout and a network
+// error are the setup failing too.
 func l44GSSAPIFailed(c l43Cell) string {
-	if c.kdcRefused || (c.fromBind && c.code > 0 && c.code < 200) {
+	if c.fromBind && c.code > 0 && c.code < 200 {
 		return ""
+	}
+	if c.kdcRefused {
+		for _, client := range []string{"KDC_ERR_C_PRINCIPAL_UNKNOWN", "KDC_ERR_PREAUTH_FAILED", "KDC_ERR_CLIENT_REVOKED"} {
+			if strings.Contains(c.text, client) {
+				return ""
+			}
+		}
+		return "the connection or the KDC failed before the bind (the KDC refused something other than port49's principal, " +
+			"such as the service ticket or the clock): " + c.text
 	}
 	return "the connection or the KDC failed before the bind: " + c.text
 }

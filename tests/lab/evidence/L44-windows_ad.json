@@ -1,217 +1,221 @@
 {"event":"mark","label":"L42 alice in_chain"}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(&(objectCategory=person)(objectClass=user))(mail=alice@corp.example.com))","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.652}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(mail=alice@corp.example.com)","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.446}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(sAMAccountName=alice)","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.336}
-{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(member:1.2.840.113556.1.4.1941:=CN=alice,OU=Staff,DC=corp,DC=example,DC=com))","dns":["CN=g-leaf,OU=G,DC=corp,DC=example,DC=com","CN=g-mid,OU=G,DC=corp,DC=example,DC=com","CN=netops-oncall,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.362}
-{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(cn=g-leaf))","dns":["CN=g-leaf,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.24}
-{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(cn=g-mid))","dns":["CN=g-mid,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.219}
-{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(cn=netops-oncall))","dns":["CN=netops-oncall,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.23}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(&(objectCategory=person)(objectClass=user))(mail=alice@corp.example.com))","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.564}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(mail=alice@corp.example.com)","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.364}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(sAMAccountName=alice)","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.316}
+{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(member:1.2.840.113556.1.4.1941:=CN=alice,OU=Staff,DC=corp,DC=example,DC=com))","dns":["CN=g-leaf,OU=G,DC=corp,DC=example,DC=com","CN=g-mid,OU=G,DC=corp,DC=example,DC=com","CN=netops-oncall,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.715}
+{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(cn=g-leaf))","dns":["CN=g-leaf,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.402}
+{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(cn=g-mid))","dns":["CN=g-mid,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.335}
+{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(cn=netops-oncall))","dns":["CN=netops-oncall,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.257}
 {"event":"mark","label":"L42 carol in_chain"}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(&(objectCategory=person)(objectClass=user))(mail=carol@corp.example.com))","dns":["CN=carol,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.333}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(mail=carol@corp.example.com)","dns":["CN=carol,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.287}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(sAMAccountName=carol)","dns":["CN=carol,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.399}
-{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(member:1.2.840.113556.1.4.1941:=CN=carol,OU=Staff,DC=corp,DC=example,DC=com))","dns":["CN=netops-oncall,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.575}
-{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(cn=netops-oncall))","dns":["CN=netops-oncall,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.315}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(&(objectCategory=person)(objectClass=user))(mail=carol@corp.example.com))","dns":["CN=carol,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.578}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(mail=carol@corp.example.com)","dns":["CN=carol,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.301}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(sAMAccountName=carol)","dns":["CN=carol,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.269}
+{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(member:1.2.840.113556.1.4.1941:=CN=carol,OU=Staff,DC=corp,DC=example,DC=com))","dns":["CN=netops-oncall,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.365}
+{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(cn=netops-oncall))","dns":["CN=netops-oncall,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.256}
 {"event":"mark","label":"L42 dave in_chain"}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(&(objectCategory=person)(objectClass=user))(mail=dave@corp.example.com))","dns":["CN=dave,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.588}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(mail=dave@corp.example.com)","dns":["CN=dave,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.401}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(sAMAccountName=dave)","dns":["CN=dave,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.317}
-{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(member:1.2.840.113556.1.4.1941:=CN=dave,OU=Staff,DC=corp,DC=example,DC=com))","dns":["CN=g-loop-a,OU=G,DC=corp,DC=example,DC=com","CN=g-loop-b,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.341}
-{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(cn=g-loop-a))","dns":["CN=g-loop-a,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.295}
-{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(cn=g-loop-b))","dns":["CN=g-loop-b,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.241}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(&(objectCategory=person)(objectClass=user))(mail=dave@corp.example.com))","dns":["CN=dave,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.355}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(mail=dave@corp.example.com)","dns":["CN=dave,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.27}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(sAMAccountName=dave)","dns":["CN=dave,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.271}
+{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(member:1.2.840.113556.1.4.1941:=CN=dave,OU=Staff,DC=corp,DC=example,DC=com))","dns":["CN=g-loop-a,OU=G,DC=corp,DC=example,DC=com","CN=g-loop-b,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.368}
+{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(cn=g-loop-a))","dns":["CN=g-loop-a,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.211}
+{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(cn=g-loop-b))","dns":["CN=g-loop-b,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.201}
 {"event":"mark","label":"L42 alice recursive"}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(&(objectCategory=person)(objectClass=user))(mail=alice@corp.example.com))","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.408}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(mail=alice@corp.example.com)","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.421}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(sAMAccountName=alice)","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.389}
-{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(member=CN=alice,OU=Staff,DC=corp,DC=example,DC=com))","dns":["CN=g-leaf,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.64}
-{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(member=CN=g-leaf,OU=G,DC=corp,DC=example,DC=com))","dns":["CN=g-mid,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.291}
-{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(member=CN=g-mid,OU=G,DC=corp,DC=example,DC=com))","dns":["CN=netops-oncall,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.337}
-{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(member=CN=netops-oncall,OU=G,DC=corp,DC=example,DC=com))","result_code":0,"duration_ms":0.264}
-{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(cn=netops-oncall))","dns":["CN=netops-oncall,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.231}
-{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(cn=g-leaf))","dns":["CN=g-leaf,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.215}
-{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(cn=g-mid))","dns":["CN=g-mid,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.262}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(&(objectCategory=person)(objectClass=user))(mail=alice@corp.example.com))","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.371}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(mail=alice@corp.example.com)","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.304}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(sAMAccountName=alice)","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.318}
+{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(member=CN=alice,OU=Staff,DC=corp,DC=example,DC=com))","dns":["CN=g-leaf,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.322}
+{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(member=CN=g-leaf,OU=G,DC=corp,DC=example,DC=com))","dns":["CN=g-mid,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.295}
+{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(member=CN=g-mid,OU=G,DC=corp,DC=example,DC=com))","dns":["CN=netops-oncall,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.207}
+{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(member=CN=netops-oncall,OU=G,DC=corp,DC=example,DC=com))","result_code":0,"duration_ms":0.182}
+{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(cn=g-leaf))","dns":["CN=g-leaf,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.183}
+{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(cn=g-mid))","dns":["CN=g-mid,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.178}
+{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(cn=netops-oncall))","dns":["CN=netops-oncall,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.179}
 {"event":"mark","label":"L42 carol recursive"}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(&(objectCategory=person)(objectClass=user))(mail=carol@corp.example.com))","dns":["CN=carol,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.335}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(mail=carol@corp.example.com)","dns":["CN=carol,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.286}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(sAMAccountName=carol)","dns":["CN=carol,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.288}
-{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(member=CN=carol,OU=Staff,DC=corp,DC=example,DC=com))","dns":["CN=netops-oncall,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.326}
-{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(member=CN=netops-oncall,OU=G,DC=corp,DC=example,DC=com))","result_code":0,"duration_ms":0.277}
-{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(cn=netops-oncall))","dns":["CN=netops-oncall,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.281}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(&(objectCategory=person)(objectClass=user))(mail=carol@corp.example.com))","dns":["CN=carol,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.403}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(mail=carol@corp.example.com)","dns":["CN=carol,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.305}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(sAMAccountName=carol)","dns":["CN=carol,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.307}
+{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(member=CN=carol,OU=Staff,DC=corp,DC=example,DC=com))","dns":["CN=netops-oncall,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.302}
+{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(member=CN=netops-oncall,OU=G,DC=corp,DC=example,DC=com))","result_code":0,"duration_ms":0.309}
+{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(cn=netops-oncall))","dns":["CN=netops-oncall,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.259}
 {"event":"mark","label":"L42 dave recursive"}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(&(objectCategory=person)(objectClass=user))(mail=dave@corp.example.com))","dns":["CN=dave,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.59}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(mail=dave@corp.example.com)","dns":["CN=dave,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.524}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(sAMAccountName=dave)","dns":["CN=dave,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.501}
-{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(member=CN=dave,OU=Staff,DC=corp,DC=example,DC=com))","dns":["CN=g-loop-a,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.305}
-{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(member=CN=g-loop-a,OU=G,DC=corp,DC=example,DC=com))","dns":["CN=g-loop-b,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.294}
-{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(member=CN=g-loop-b,OU=G,DC=corp,DC=example,DC=com))","dns":["CN=g-loop-a,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.276}
-{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(cn=g-loop-a))","dns":["CN=g-loop-a,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.258}
-{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(cn=g-loop-b))","dns":["CN=g-loop-b,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.246}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(&(objectCategory=person)(objectClass=user))(mail=dave@corp.example.com))","dns":["CN=dave,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.562}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(mail=dave@corp.example.com)","dns":["CN=dave,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.442}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(sAMAccountName=dave)","dns":["CN=dave,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.246}
+{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(member=CN=dave,OU=Staff,DC=corp,DC=example,DC=com))","dns":["CN=g-loop-a,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.286}
+{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(member=CN=g-loop-a,OU=G,DC=corp,DC=example,DC=com))","dns":["CN=g-loop-b,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.289}
+{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(member=CN=g-loop-b,OU=G,DC=corp,DC=example,DC=com))","dns":["CN=g-loop-a,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.266}
+{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(cn=g-loop-a))","dns":["CN=g-loop-a,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.225}
+{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(cn=g-loop-b))","dns":["CN=g-loop-b,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.201}
 {"event":"mark","label":"L42 alice direct"}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(&(objectCategory=person)(objectClass=user))(mail=alice@corp.example.com))","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.386}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(mail=alice@corp.example.com)","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.42}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(sAMAccountName=alice)","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.384}
-{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(member=CN=alice,OU=Staff,DC=corp,DC=example,DC=com))","dns":["CN=g-leaf,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.33}
-{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(cn=g-leaf))","dns":["CN=g-leaf,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.196}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(&(objectCategory=person)(objectClass=user))(mail=alice@corp.example.com))","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.373}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(mail=alice@corp.example.com)","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.298}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(sAMAccountName=alice)","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.292}
+{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(member=CN=alice,OU=Staff,DC=corp,DC=example,DC=com))","dns":["CN=g-leaf,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.292}
+{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(cn=g-leaf))","dns":["CN=g-leaf,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.219}
 {"event":"mark","label":"L42 carol direct"}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(&(objectCategory=person)(objectClass=user))(mail=carol@corp.example.com))","dns":["CN=carol,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.41}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(mail=carol@corp.example.com)","dns":["CN=carol,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.302}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(sAMAccountName=carol)","dns":["CN=carol,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.252}
-{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(member=CN=carol,OU=Staff,DC=corp,DC=example,DC=com))","dns":["CN=netops-oncall,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.306}
-{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(cn=netops-oncall))","dns":["CN=netops-oncall,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.265}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(&(objectCategory=person)(objectClass=user))(mail=carol@corp.example.com))","dns":["CN=carol,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.489}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(mail=carol@corp.example.com)","dns":["CN=carol,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.342}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(sAMAccountName=carol)","dns":["CN=carol,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.313}
+{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(member=CN=carol,OU=Staff,DC=corp,DC=example,DC=com))","dns":["CN=netops-oncall,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.367}
+{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(cn=netops-oncall))","dns":["CN=netops-oncall,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.306}
 {"event":"mark","label":"L42 dave direct"}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(&(objectCategory=person)(objectClass=user))(mail=dave@corp.example.com))","dns":["CN=dave,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.415}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(mail=dave@corp.example.com)","dns":["CN=dave,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.312}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(sAMAccountName=dave)","dns":["CN=dave,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.28}
-{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(member=CN=dave,OU=Staff,DC=corp,DC=example,DC=com))","dns":["CN=g-loop-a,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.31}
-{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(cn=g-loop-a))","dns":["CN=g-loop-a,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.275}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(&(objectCategory=person)(objectClass=user))(mail=dave@corp.example.com))","dns":["CN=dave,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.438}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(mail=dave@corp.example.com)","dns":["CN=dave,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.5}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(sAMAccountName=dave)","dns":["CN=dave,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.337}
+{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(member=CN=dave,OU=Staff,DC=corp,DC=example,DC=com))","dns":["CN=g-loop-a,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.282}
+{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(cn=g-loop-a))","dns":["CN=g-loop-a,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.231}
 {"event":"mark","label":"L42 memberOf on alice's entry"}
 {"event":"mark","label":"L44 root DSE supportedCapabilities"}
 {"event":"mark","label":"L44 simple over LDAPS"}
-{"event":"bind","mechanism":"simple","result_code":0,"duration_ms":3.649}
+{"event":"bind","mechanism":"simple","result_code":0,"duration_ms":3.716}
 {"event":"mark","label":"L44 simple over plain LDAP"}
-{"event":"bind","mechanism":"simple over plain LDAP, by hand","result_code":8,"error":"LDAP Result Code 8 \"Strong Auth Required\": 00002028: LdapErr: DSID-0C09035C, comment: The server requires binds to turn on integrity checking if SSL\\TLS are not already active on the connection, data 0, v65f4","duration_ms":2.069}
+{"event":"bind","mechanism":"simple over plain LDAP, by hand","result_code":8,"error":"LDAP Result Code 8 \"Strong Auth Required\": 00002028: LdapErr: DSID-0C09035C, comment: The server requires binds to turn on integrity checking if SSL\\TLS are not already active on the connection, data 0, v65f4","duration_ms":2.193}
 {"event":"mark","label":"L44 gssapi, LdapEnforceChannelBinding absent (this build's default)"}
-{"event":"bind","mechanism":"gssapi","result_code":49,"error":"LDAP Result Code 49 \"Invalid Credentials\": bind gssapi as port49@CORP.EXAMPLE.COM: LDAP result 49","duration_ms":5.127}
+{"event":"bind","mechanism":"gssapi","result_code":0,"duration_ms":6.747}
 {"event":"mark","label":"L44 external, AD CS certificate, port49's form on port49"}
-{"event":"bind","mechanism":"external","result_code":0,"duration_ms":7}
+{"event":"bind","mechanism":"external","result_code":0,"duration_ms":7.857}
 {"event":"mark","label":"L44 external over LDAPS, mapped, a documented observation"}
-{"event":"bind","mechanism":"external over LDAPS","result_code":7,"error":"LDAP Result Code 7 \"Auth Method Not Supported\": bind external as CN=port49-broker: LDAP result 7","duration_ms":6.67}
+{"event":"bind","mechanism":"external over LDAPS","result_code":7,"error":"LDAP Result Code 7 \"Auth Method Not Supported\": bind external as CN=port49-broker: LDAP result 7","duration_ms":7.625}
+{"event":"mark","label":"L44 LDAPS, the mapped certificate, no bind, a documented observation"}
+{"event":"whoami","label":"ldaps, no bind","authz_id":"u:CORP\\port49"}
 {"event":"mark","label":"L44 external, AD CS certificate, no mapping"}
-{"event":"bind","mechanism":"external, unmapped","result_code":49,"error":"LDAP Result Code 49 \"Invalid Credentials\": bind external as CN=port49-broker: LDAP result 49","duration_ms":6.091}
+{"event":"bind","mechanism":"external, unmapped","result_code":49,"error":"LDAP Result Code 49 \"Invalid Credentials\": bind external as CN=port49-broker: LDAP result 49","duration_ms":5.761}
 {"event":"mark","label":"L44 external, a certificate from the lab directory CA"}
-{"event":"bind","mechanism":"external, lab CA","result_code":49,"error":"LDAP Result Code 49 \"Invalid Credentials\": bind external as CN=port49-broker,O=port49 lab: LDAP result 49","duration_ms":3.48}
+{"event":"bind","mechanism":"external, lab CA","result_code":49,"error":"LDAP Result Code 49 \"Invalid Credentials\": bind external as CN=port49-broker,O=port49 lab: LDAP result 49","duration_ms":3.466}
 {"event":"mark","label":"L44 gssapi, LdapEnforceChannelBinding 2"}
-{"event":"bind","mechanism":"gssapi, channel binding 2","result_code":49,"error":"LDAP Result Code 49 \"Invalid Credentials\": bind gssapi as port49@CORP.EXAMPLE.COM: LDAP result 49","duration_ms":6.45}
-{"event":"bind","mechanism":"external, channel binding 2","result_code":0,"duration_ms":8.673}
-{"event":"bind","mechanism":"simple, channel binding 2","result_code":0,"duration_ms":4.319}
+{"event":"bind","mechanism":"gssapi, channel binding 2","result_code":49,"error":"LDAP Result Code 49 \"Invalid Credentials\": bind gssapi as port49@CORP.EXAMPLE.COM: LDAP result 49","duration_ms":6.869}
+{"event":"mark","label":"L44 external, LdapEnforceChannelBinding 2"}
+{"event":"bind","mechanism":"external, channel binding 2","result_code":0,"duration_ms":8.238}
+{"event":"mark","label":"L44 simple, LdapEnforceChannelBinding 2"}
+{"event":"bind","mechanism":"simple, channel binding 2","result_code":0,"duration_ms":4.026}
 {"event":"mark","label":"L43 a wrong password through the pool"}
-{"event":"bind","mechanism":"simple","result_code":49,"error":"LDAP Result Code 49 \"Invalid Credentials\": bind simple as CN=port49,OU=Svc,DC=corp,DC=example,DC=com: LDAP result 49","duration_ms":4.83}
+{"event":"bind","mechanism":"simple","result_code":49,"error":"LDAP Result Code 49 \"Invalid Credentials\": bind simple as CN=port49,OU=Svc,DC=corp,DC=example,DC=com: LDAP result 49","duration_ms":7.334}
 {"event":"mark","label":"L44 SID extensions against objectSid"}
 {"event":"mark","label":"L44 port49 sid mapping on alice's User certificate"}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(&(objectCategory=person)(objectClass=user))(objectSid=\\01\\05\\00\\00\\00\\00\\00\\05\\15\\00\\00\\00\\ab\\94\\b3\\c7\\2f\\9f\\df\\ea\\81\\03\\af\\60\\50\\04\\00\\00))","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.483}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(mail=alice@corp.example.com)","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.714}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(sAMAccountName=alice)","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.267}
-{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(member=CN=alice,OU=Staff,DC=corp,DC=example,DC=com))","dns":["CN=g-leaf,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.298}
-{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(cn=g-leaf))","dns":["CN=g-leaf,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.75}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(&(objectCategory=person)(objectClass=user))(objectSid=\\01\\05\\00\\00\\00\\00\\00\\05\\15\\00\\00\\00\\4d\\35\\ff\\79\\4b\\aa\\95\\09\\c1\\0a\\39\\bb\\50\\04\\00\\00))","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.69}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(mail=alice@corp.example.com)","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.851}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(sAMAccountName=alice)","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.391}
+{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(member=CN=alice,OU=Staff,DC=corp,DC=example,DC=com))","dns":["CN=g-leaf,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.424}
+{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(cn=g-leaf))","dns":["CN=g-leaf,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.852}
 {"event":"mark","label":"L44 port49 issuer_serial mapping on alice's OfflineRouter certificate"}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(&(objectCategory=person)(objectClass=user))(altSecurityIdentities=X509:<I>DC=com,DC=example,DC=corp,CN=corp-L44-CA<SR>05000000000098093768D7B00A8F0500000066))","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.544}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(mail=alice@corp.example.com)","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.298}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(sAMAccountName=alice)","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.245}
-{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(member=CN=alice,OU=Staff,DC=corp,DC=example,DC=com))","dns":["CN=g-leaf,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.296}
-{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(cn=g-leaf))","dns":["CN=g-leaf,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.314}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(&(objectCategory=person)(objectClass=user))(altSecurityIdentities=X509:<I>DC=com,DC=example,DC=corp,CN=corp-L44-CA<SR>05000000000091AD9FCEDDB1AAB8050000001E))","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.52}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(mail=alice@corp.example.com)","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.342}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(sAMAccountName=alice)","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.312}
+{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(member=CN=alice,OU=Staff,DC=corp,DC=example,DC=com))","dns":["CN=g-leaf,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.31}
+{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(cn=g-leaf))","dns":["CN=g-leaf,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.233}
 {"event":"mark","label":"L44 port49 issuer_serial on the comma CA's certificate, alice holding the quoted form"}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(&(objectCategory=person)(objectClass=user))(altSecurityIdentities=X509:<I>DC=com,DC=example,DC=corp,CN=lab-users, comma-CA<SR>93EF8ED827D16E06))","result_code":0,"duration_ms":0.968}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(&(objectCategory=person)(objectClass=user))(altSecurityIdentities=X509:<I>DC=com,DC=example,DC=corp,CN=lab-users, comma-CA<SR>FA5C0DE3B8300B15))","result_code":0,"duration_ms":0.554}
 {"event":"mark","label":"L43 mapping san_email alice"}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(&(objectCategory=person)(objectClass=user))(mail=alice@corp.example.com))","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.472}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(mail=alice@corp.example.com)","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.34}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(sAMAccountName=alice)","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.347}
-{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(member=CN=alice,OU=Staff,DC=corp,DC=example,DC=com))","dns":["CN=g-leaf,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.443}
-{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(cn=g-leaf))","dns":["CN=g-leaf,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.301}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(&(objectCategory=person)(objectClass=user))(mail=alice@corp.example.com))","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.559}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(mail=alice@corp.example.com)","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.369}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(sAMAccountName=alice)","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.376}
+{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(member=CN=alice,OU=Staff,DC=corp,DC=example,DC=com))","dns":["CN=g-leaf,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.386}
+{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(cn=g-leaf))","dns":["CN=g-leaf,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.294}
 {"event":"mark","label":"L43 mapping issuer_serial alice"}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(&(objectCategory=person)(objectClass=user))(altSecurityIdentities=X509:<I>DC=com,DC=example,DC=corp,CN=lab-users-CA<SR>E0956535AB3B6F30))","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.405}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(mail=alice@corp.example.com)","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.433}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(sAMAccountName=alice)","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.418}
-{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(member=CN=alice,OU=Staff,DC=corp,DC=example,DC=com))","dns":["CN=g-leaf,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.521}
-{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(cn=g-leaf))","dns":["CN=g-leaf,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.342}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(&(objectCategory=person)(objectClass=user))(altSecurityIdentities=X509:<I>DC=com,DC=example,DC=corp,CN=lab-users-CA<SR>A06D8034C246C901))","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.418}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(mail=alice@corp.example.com)","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.261}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(sAMAccountName=alice)","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.298}
+{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(member=CN=alice,OU=Staff,DC=corp,DC=example,DC=com))","dns":["CN=g-leaf,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.349}
+{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(cn=g-leaf))","dns":["CN=g-leaf,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.282}
 {"event":"mark","label":"L43 mapping sid alice"}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(&(objectCategory=person)(objectClass=user))(objectSid=\\01\\05\\00\\00\\00\\00\\00\\05\\15\\00\\00\\00\\ab\\94\\b3\\c7\\2f\\9f\\df\\ea\\81\\03\\af\\60\\50\\04\\00\\00))","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.499}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(mail=alice@corp.example.com)","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.396}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(sAMAccountName=alice)","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.397}
-{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(member=CN=alice,OU=Staff,DC=corp,DC=example,DC=com))","dns":["CN=g-leaf,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.374}
-{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(cn=g-leaf))","dns":["CN=g-leaf,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.234}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(&(objectCategory=person)(objectClass=user))(objectSid=\\01\\05\\00\\00\\00\\00\\00\\05\\15\\00\\00\\00\\4d\\35\\ff\\79\\4b\\aa\\95\\09\\c1\\0a\\39\\bb\\50\\04\\00\\00))","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.389}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(mail=alice@corp.example.com)","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.363}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(sAMAccountName=alice)","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.348}
+{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(member=CN=alice,OU=Staff,DC=corp,DC=example,DC=com))","dns":["CN=g-leaf,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.407}
+{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(cn=g-leaf))","dns":["CN=g-leaf,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.256}
 {"event":"mark","label":"L43 mapping san_email eve"}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(&(objectCategory=person)(objectClass=user))(mail=eve@corp.example.com))","dns":["CN=eve,OU=Staff,DC=corp,DC=example,DC=com","CN=eve2,OU=Contractors,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.664}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(&(objectCategory=person)(objectClass=user))(mail=eve@corp.example.com))","dns":["CN=eve,OU=Staff,DC=corp,DC=example,DC=com","CN=eve2,OU=Contractors,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.706}
 {"event":"mark","label":"L43 mapping mail collision: bob given alice's mail"}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(&(objectCategory=person)(objectClass=user))(altSecurityIdentities=X509:<I>DC=com,DC=example,DC=corp,CN=lab-users-CA<SR>E0956535AB3B6F30))","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.54}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(mail=alice@corp.example.com)","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com","CN=bob,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.4}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(&(objectCategory=person)(objectClass=user))(mail=alice@corp.example.com))","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com","CN=bob,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.37}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(&(objectCategory=person)(objectClass=user))(altSecurityIdentities=X509:<I>DC=com,DC=example,DC=corp,CN=lab-users-CA<SR>A06D8034C246C901))","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.57}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(mail=alice@corp.example.com)","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com","CN=bob,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.387}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(&(objectCategory=person)(objectClass=user))(mail=alice@corp.example.com))","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com","CN=bob,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.432}
 {"event":"mark","label":"L43 mapping mail collision: bob's mail restored"}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(&(objectCategory=person)(objectClass=user))(altSecurityIdentities=X509:<I>DC=com,DC=example,DC=corp,CN=lab-users-CA<SR>E0956535AB3B6F30))","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.957}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(mail=alice@corp.example.com)","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.417}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(sAMAccountName=alice)","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.356}
-{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(member=CN=alice,OU=Staff,DC=corp,DC=example,DC=com))","dns":["CN=g-leaf,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.316}
-{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(cn=g-leaf))","dns":["CN=g-leaf,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.257}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(&(objectCategory=person)(objectClass=user))(altSecurityIdentities=X509:<I>DC=com,DC=example,DC=corp,CN=lab-users-CA<SR>A06D8034C246C901))","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.816}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(mail=alice@corp.example.com)","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.346}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(sAMAccountName=alice)","dns":["CN=alice,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.309}
+{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(member=CN=alice,OU=Staff,DC=corp,DC=example,DC=com))","dns":["CN=g-leaf,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.352}
+{"event":"search","base":"OU=G,DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(cn=g-leaf))","dns":["CN=g-leaf,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.312}
 {"event":"mark","label":"L43 shared group name"}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(&(objectCategory=person)(objectClass=user))(mail=carol@corp.example.com))","dns":["CN=carol,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.425}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(mail=carol@corp.example.com)","dns":["CN=carol,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.313}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(sAMAccountName=carol)","dns":["CN=carol,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.293}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(member=CN=carol,OU=Staff,DC=corp,DC=example,DC=com))","dns":["CN=netops-oncall,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.344}
-{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(cn=netops-oncall))","dns":["CN=netops-oncall,OU=G,DC=corp,DC=example,DC=com","CN=netops-oncall,OU=Users-Can-Create,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.673}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(&(objectCategory=person)(objectClass=user))(mail=carol@corp.example.com))","dns":["CN=carol,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.464}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(mail=carol@corp.example.com)","dns":["CN=carol,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.319}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(sAMAccountName=carol)","dns":["CN=carol,OU=Staff,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.255}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(member=CN=carol,OU=Staff,DC=corp,DC=example,DC=com))","dns":["CN=netops-oncall,OU=G,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.321}
+{"event":"search","base":"DC=corp,DC=example,DC=com","scope":"sub","filter":"(&(objectClass=group)(cn=netops-oncall))","dns":["CN=netops-oncall,OU=G,DC=corp,DC=example,DC=com","CN=netops-oncall,OU=Users-Can-Create,DC=corp,DC=example,DC=com"],"result_code":0,"duration_ms":0.759}
 {"event":"mark","label":"L44 pkinit control-ski, StrongCertificateBindingEnforcement absent"}
-{"event":"kinit","label":"control-ski, enforcement absent","error":"—","duration_ms":464.153}
+{"event":"kinit","label":"control-ski, enforcement absent","error":"—","duration_ms":462.046}
 {"event":"mark","label":"L44 pkinit adcs-none, StrongCertificateBindingEnforcement absent"}
-{"event":"kinit","label":"adcs-none, enforcement absent","error":"-1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials","duration_ms":466.852,"dc_events":["KDC 39: The Key Distribution Center (KDC) encountered a user certificate that was valid but could not be mapped to a user in a secure way (such as via explicit mapping,..."]}
+{"event":"kinit","label":"adcs-none, enforcement absent","error":"-1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials","duration_ms":439.509,"dc_events":["KDC 39: The Key Distribution Center (KDC) encountered a user certificate that was valid but could not be mapped to a user in a secure way (such as via explicit mapping,..."]}
 {"event":"mark","label":"L44 pkinit adcs-port49, StrongCertificateBindingEnforcement absent"}
-{"event":"kinit","label":"adcs-port49, enforcement absent","error":"—","duration_ms":457.83}
+{"event":"kinit","label":"adcs-port49, enforcement absent","error":"—","duration_ms":438.337}
 {"event":"mark","label":"L44 pkinit adcs-forward, StrongCertificateBindingEnforcement absent"}
-{"event":"kinit","label":"adcs-forward, enforcement absent","error":"-1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials","duration_ms":438.977}
+{"event":"kinit","label":"adcs-forward, enforcement absent","error":"-1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials","duration_ms":451.181}
 {"event":"mark","label":"L44 pkinit adcs-unreversed, StrongCertificateBindingEnforcement absent"}
-{"event":"kinit","label":"adcs-unreversed, enforcement absent","error":"-1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials","duration_ms":464.741}
+{"event":"kinit","label":"adcs-unreversed, enforcement absent","error":"-1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials","duration_ms":459.596}
 {"event":"mark","label":"L44 pkinit sid-none, StrongCertificateBindingEnforcement absent"}
-{"event":"kinit","label":"sid-none, enforcement absent","error":"—","duration_ms":469.422}
+{"event":"kinit","label":"sid-none, enforcement absent","error":"—","duration_ms":454.214}
 {"event":"mark","label":"L44 pkinit comma-port49, StrongCertificateBindingEnforcement absent"}
-{"event":"kinit","label":"comma-port49, enforcement absent","error":"-1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials","duration_ms":458.729,"dc_events":["KDC 39: The Key Distribution Center (KDC) encountered a user certificate that was valid but could not be mapped to a user in a secure way (such as via explicit mapping,..."]}
+{"event":"kinit","label":"comma-port49, enforcement absent","error":"-1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials","duration_ms":446.995,"dc_events":["KDC 39: The Key Distribution Center (KDC) encountered a user certificate that was valid but could not be mapped to a user in a secure way (such as via explicit mapping,..."]}
 {"event":"mark","label":"L44 pkinit comma-quoted, StrongCertificateBindingEnforcement absent"}
-{"event":"kinit","label":"comma-quoted, enforcement absent","error":"—","duration_ms":451.136}
+{"event":"kinit","label":"comma-quoted, enforcement absent","error":"—","duration_ms":442.546}
 {"event":"mark","label":"L44 pkinit comma-escaped, StrongCertificateBindingEnforcement absent"}
-{"event":"kinit","label":"comma-escaped, enforcement absent","error":"-1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials","duration_ms":446.94}
+{"event":"kinit","label":"comma-escaped, enforcement absent","error":"-1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials","duration_ms":435.472}
 {"event":"mark","label":"L44 pkinit highbit-port49, StrongCertificateBindingEnforcement absent"}
-{"event":"kinit","label":"highbit-port49, enforcement absent","error":"-1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials","duration_ms":454.498,"dc_events":["KDC 39: The Key Distribution Center (KDC) encountered a user certificate that was valid but could not be mapped to a user in a secure way (such as via explicit mapping,..."]}
+{"event":"kinit","label":"highbit-port49, enforcement absent","error":"-1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials","duration_ms":443.285,"dc_events":["KDC 39: The Key Distribution Center (KDC) encountered a user certificate that was valid but could not be mapped to a user in a secure way (such as via explicit mapping,..."]}
 {"event":"mark","label":"L44 pkinit highbit-signbyte, StrongCertificateBindingEnforcement absent"}
-{"event":"kinit","label":"highbit-signbyte, enforcement absent","error":"—","duration_ms":466.972}
+{"event":"kinit","label":"highbit-signbyte, enforcement absent","error":"—","duration_ms":454.804}
 {"event":"mark","label":"L44 external under StrongCertificateBindingEnforcement absent"}
-{"event":"bind","mechanism":"external, enforcement absent","result_code":0,"duration_ms":7.898}
+{"event":"bind","mechanism":"external, enforcement absent","result_code":0,"duration_ms":7.334}
 {"event":"mark","label":"L44 pkinit control-ski, StrongCertificateBindingEnforcement 1"}
-{"event":"kinit","label":"control-ski, enforcement 1","error":"—","duration_ms":460.535}
+{"event":"kinit","label":"control-ski, enforcement 1","error":"—","duration_ms":446.874}
 {"event":"mark","label":"L44 pkinit adcs-none, StrongCertificateBindingEnforcement 1"}
-{"event":"kinit","label":"adcs-none, enforcement 1","error":"-1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials","duration_ms":454.949,"dc_events":["KDC 39: The Key Distribution Center (KDC) encountered a user certificate that was valid but could not be mapped to a user in a secure way (such as via explicit mapping,..."]}
+{"event":"kinit","label":"adcs-none, enforcement 1","error":"-1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials","duration_ms":436.719,"dc_events":["KDC 39: The Key Distribution Center (KDC) encountered a user certificate that was valid but could not be mapped to a user in a secure way (such as via explicit mapping,..."]}
 {"event":"mark","label":"L44 pkinit adcs-port49, StrongCertificateBindingEnforcement 1"}
-{"event":"kinit","label":"adcs-port49, enforcement 1","error":"—","duration_ms":458.372}
+{"event":"kinit","label":"adcs-port49, enforcement 1","error":"—","duration_ms":445.983}
 {"event":"mark","label":"L44 pkinit adcs-forward, StrongCertificateBindingEnforcement 1"}
-{"event":"kinit","label":"adcs-forward, enforcement 1","error":"-1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials","duration_ms":435.306}
+{"event":"kinit","label":"adcs-forward, enforcement 1","error":"-1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials","duration_ms":435.854}
 {"event":"mark","label":"L44 pkinit adcs-unreversed, StrongCertificateBindingEnforcement 1"}
-{"event":"kinit","label":"adcs-unreversed, enforcement 1","error":"-1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials","duration_ms":461.153}
+{"event":"kinit","label":"adcs-unreversed, enforcement 1","error":"-1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials","duration_ms":461.08}
 {"event":"mark","label":"L44 pkinit sid-none, StrongCertificateBindingEnforcement 1"}
-{"event":"kinit","label":"sid-none, enforcement 1","error":"—","duration_ms":440.771}
+{"event":"kinit","label":"sid-none, enforcement 1","error":"—","duration_ms":448.724}
 {"event":"mark","label":"L44 pkinit comma-port49, StrongCertificateBindingEnforcement 1"}
-{"event":"kinit","label":"comma-port49, enforcement 1","error":"-1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials","duration_ms":475.315,"dc_events":["KDC 39: The Key Distribution Center (KDC) encountered a user certificate that was valid but could not be mapped to a user in a secure way (such as via explicit mapping,..."]}
+{"event":"kinit","label":"comma-port49, enforcement 1","error":"-1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials","duration_ms":442.648,"dc_events":["KDC 39: The Key Distribution Center (KDC) encountered a user certificate that was valid but could not be mapped to a user in a secure way (such as via explicit mapping,..."]}
 {"event":"mark","label":"L44 pkinit comma-quoted, StrongCertificateBindingEnforcement 1"}
-{"event":"kinit","label":"comma-quoted, enforcement 1","error":"—","duration_ms":456.437}
+{"event":"kinit","label":"comma-quoted, enforcement 1","error":"—","duration_ms":450.914}
 {"event":"mark","label":"L44 pkinit comma-escaped, StrongCertificateBindingEnforcement 1"}
-{"event":"kinit","label":"comma-escaped, enforcement 1","error":"-1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials","duration_ms":462.634}
+{"event":"kinit","label":"comma-escaped, enforcement 1","error":"-1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials","duration_ms":451.815}
 {"event":"mark","label":"L44 pkinit highbit-port49, StrongCertificateBindingEnforcement 1"}
-{"event":"kinit","label":"highbit-port49, enforcement 1","error":"-1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials","duration_ms":464.058,"dc_events":["KDC 39: The Key Distribution Center (KDC) encountered a user certificate that was valid but could not be mapped to a user in a secure way (such as via explicit mapping,..."]}
+{"event":"kinit","label":"highbit-port49, enforcement 1","error":"-1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials","duration_ms":454.519,"dc_events":["KDC 39: The Key Distribution Center (KDC) encountered a user certificate that was valid but could not be mapped to a user in a secure way (such as via explicit mapping,..."]}
 {"event":"mark","label":"L44 pkinit highbit-signbyte, StrongCertificateBindingEnforcement 1"}
-{"event":"kinit","label":"highbit-signbyte, enforcement 1","error":"—","duration_ms":467.863}
+{"event":"kinit","label":"highbit-signbyte, enforcement 1","error":"—","duration_ms":462.115}
 {"event":"mark","label":"L44 external under StrongCertificateBindingEnforcement 1"}
-{"event":"bind","mechanism":"external, enforcement 1","result_code":0,"duration_ms":7.497}
+{"event":"bind","mechanism":"external, enforcement 1","result_code":0,"duration_ms":8.369}
 {"event":"mark","label":"L44 pkinit control-ski, StrongCertificateBindingEnforcement 2"}
-{"event":"kinit","label":"control-ski, enforcement 2","error":"—","duration_ms":454.607}
+{"event":"kinit","label":"control-ski, enforcement 2","error":"—","duration_ms":468.936}
 {"event":"mark","label":"L44 pkinit adcs-none, StrongCertificateBindingEnforcement 2"}
-{"event":"kinit","label":"adcs-none, enforcement 2","error":"-1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials","duration_ms":461.039,"dc_events":["KDC 39: The Key Distribution Center (KDC) encountered a user certificate that was valid but could not be mapped to a user in a secure way (such as via explicit mapping,..."]}
+{"event":"kinit","label":"adcs-none, enforcement 2","error":"-1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials","duration_ms":449.978,"dc_events":["KDC 39: The Key Distribution Center (KDC) encountered a user certificate that was valid but could not be mapped to a user in a secure way (such as via explicit mapping,..."]}
 {"event":"mark","label":"L44 pkinit adcs-port49, StrongCertificateBindingEnforcement 2"}
-{"event":"kinit","label":"adcs-port49, enforcement 2","error":"—","duration_ms":488.079}
+{"event":"kinit","label":"adcs-port49, enforcement 2","error":"—","duration_ms":444.023}
 {"event":"mark","label":"L44 pkinit adcs-forward, StrongCertificateBindingEnforcement 2"}
-{"event":"kinit","label":"adcs-forward, enforcement 2","error":"-1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials","duration_ms":472.871}
+{"event":"kinit","label":"adcs-forward, enforcement 2","error":"-1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials","duration_ms":444.495}
 {"event":"mark","label":"L44 pkinit adcs-unreversed, StrongCertificateBindingEnforcement 2"}
-{"event":"kinit","label":"adcs-unreversed, enforcement 2","error":"-1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials","duration_ms":466.932}
+{"event":"kinit","label":"adcs-unreversed, enforcement 2","error":"-1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials","duration_ms":441.996}
 {"event":"mark","label":"L44 pkinit sid-none, StrongCertificateBindingEnforcement 2"}
-{"event":"kinit","label":"sid-none, enforcement 2","error":"—","duration_ms":490}
+{"event":"kinit","label":"sid-none, enforcement 2","error":"—","duration_ms":463.546}
 {"event":"mark","label":"L44 pkinit comma-port49, StrongCertificateBindingEnforcement 2"}
-{"event":"kinit","label":"comma-port49, enforcement 2","error":"-1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials","duration_ms":457.929,"dc_events":["KDC 39: The Key Distribution Center (KDC) encountered a user certificate that was valid but could not be mapped to a user in a secure way (such as via explicit mapping,..."]}
+{"event":"kinit","label":"comma-port49, enforcement 2","error":"-1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials","duration_ms":449.549,"dc_events":["KDC 39: The Key Distribution Center (KDC) encountered a user certificate that was valid but could not be mapped to a user in a secure way (such as via explicit mapping,..."]}
 {"event":"mark","label":"L44 pkinit comma-quoted, StrongCertificateBindingEnforcement 2"}
-{"event":"kinit","label":"comma-quoted, enforcement 2","error":"—","duration_ms":467.957}
+{"event":"kinit","label":"comma-quoted, enforcement 2","error":"—","duration_ms":451.607}
 {"event":"mark","label":"L44 pkinit comma-escaped, StrongCertificateBindingEnforcement 2"}
-{"event":"kinit","label":"comma-escaped, enforcement 2","error":"-1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials","duration_ms":475.301}
+{"event":"kinit","label":"comma-escaped, enforcement 2","error":"-1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials","duration_ms":457.259}
 {"event":"mark","label":"L44 pkinit highbit-port49, StrongCertificateBindingEnforcement 2"}
-{"event":"kinit","label":"highbit-port49, enforcement 2","error":"-1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials","duration_ms":457.326,"dc_events":["KDC 39: The Key Distribution Center (KDC) encountered a user certificate that was valid but could not be mapped to a user in a secure way (such as via explicit mapping,..."]}
+{"event":"kinit","label":"highbit-port49, enforcement 2","error":"-1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials","duration_ms":443.522,"dc_events":["KDC 39: The Key Distribution Center (KDC) encountered a user certificate that was valid but could not be mapped to a user in a secure way (such as via explicit mapping,..."]}
 {"event":"mark","label":"L44 pkinit highbit-signbyte, StrongCertificateBindingEnforcement 2"}
-{"event":"kinit","label":"highbit-signbyte, enforcement 2","error":"—","duration_ms":494.986}
+{"event":"kinit","label":"highbit-signbyte, enforcement 2","error":"—","duration_ms":431.999}
 {"event":"mark","label":"L44 external under StrongCertificateBindingEnforcement 2"}
-{"event":"bind","mechanism":"external, enforcement 2","result_code":0,"duration_ms":8.14}
+{"event":"bind","mechanism":"external, enforcement 2","result_code":0,"duration_ms":6.659}
 {"event":"mark","label":"L44 OR-1 external, mapped, the DC's KDC up"}
-{"event":"bind","mechanism":"external, KDC up","result_code":0,"duration_ms":7.124}
+{"event":"bind","mechanism":"external, KDC up","result_code":0,"duration_ms":7.341}
 {"event":"mark","label":"L44 OR-1 external, mapped, the DC's KDC stopped"}
-{"event":"bind","mechanism":"external, KDC stopped","result_code":49,"error":"LDAP Result Code 49 \"Invalid Credentials\": bind external as CN=port49-broker: LDAP result 49","duration_ms":5.428}
+{"event":"bind","mechanism":"external, KDC stopped","result_code":49,"error":"LDAP Result Code 49 \"Invalid Credentials\": bind external as CN=port49-broker: LDAP result 49","duration_ms":5.58}
 {"event":"mark","label":"L44 OR-1 external, mapped, the DC's KDC started again"}
-{"event":"bind","mechanism":"external, KDC started again","result_code":0,"duration_ms":7.573}
+{"event":"bind","mechanism":"external, KDC started again","result_code":0,"duration_ms":7.454}
