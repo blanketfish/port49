@@ -7342,7 +7342,11 @@ every matching subject composes, and a scheduled refresh stamps refreshed_at.** 
   for mutual authentication, since a Windows DC answers an AP-REQ without it with 49, L44 run 8,
   `tests/lab/results/L44-windows_ad.md`) and `simple` (the password from the environment by name, said at start
   as the weakest). `ca_file` is required, server names are verified, `ldap://` needs
-  `start_tls`. The password, the keytab and a ticket are never logged. Measured on OpenLDAP and
+  `start_tls`. Active Directory takes `external` only over StartTLS ([MS-ADTS] 5.1.1.2): over
+  `ldaps://` it answers 7 (L44 run 8), so a 7 to an `external` bind over `ldaps://` is said with
+  that remedy, `ldap://` with `start_tls`. On Active Directory a 49 to `external` is said as
+  "the certificate is not mapped, or that DC's KDC is not answering" (L44 run 8 measured both).
+  The password, the keytab and a ticket are never logged. Measured on OpenLDAP and
   Samba AD (L43, closed): OpenLDAP accepts EXTERNAL (by `olcAuthzRegexp`) and simple over LDAPS
   and refuses plain LDAP with 13; Samba accepts simple and refuses plain LDAP (8), refuses EXTERNAL
   (1, under `strong auth = yes`; port49 counts 1 as a server fault, so configure `simple` or `gssapi` against Samba), and refuses GSSAPI over LDAPS with no SASL security layer (8) under
@@ -7351,7 +7355,13 @@ every matching subject composes, and a scheduled refresh stamps refreshed_at.** 
 - **9. The server pool.** Ranked same-site first, then `priority` descending, then file order;
   sticky until a server fault or an open breaker; a refused dial (network) is "this server did not
   answer" and fails over; a refused bind (LDAP 49, 48, 8, 13 or 7, a KDC's refusal) is no breaker
-  fault but holds off every new bind across the pool, 1m doubling on a server's repeat refusal
+  fault but holds off every new bind across the pool, except under `external`, where a refusal
+  holds off that server alone and the query fails over, and the pool holds off only once every
+  server not open has refused (Ryan, 2026-10-07, on L44 OR-1: a Windows DC whose KDC is stopped
+  answers a mapped certificate's EXTERNAL bind with 49, as it answers an unmapped one, L44 run 8,
+  so one DC's Kerberos outage must not stop every bind; `external` offers no password, and its
+  refusing servers are retried on the same per-server backoff, so the lockout bounds below
+  hold), 1m doubling on a server's repeat refusal
   to 15m, each refusing server on its own backoff, one probe bind per step, any accepted bind
   clearing it, bound connections still serving (the one service account, which AD locks out
   on failed binds counted across every DC; with N servers all refusing, at most N+4 failed
