@@ -162,7 +162,7 @@ func notAfter(t, now time.Time) time.Time {
 // loggedOut is the logout refusing a: by its sid, or by its sub when it was
 // issued at or before the sub's logout plus clock_skew (Ruling 13). A
 // machine has no session a provider logs out, so none refuses it
-// (pre-flight M-16); port49 revoke app:<client> does.
+// (pre-flight M-16); port49 revoke --principal app:<client> does.
 func (b *Broker) loggedOut(ctx context.Context, a oidc.Assertion) (store.Logout, bool, error) {
 	if a.Domain != oidc.Humans {
 		return store.Logout{}, false, nil
