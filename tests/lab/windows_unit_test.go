@@ -388,9 +388,33 @@ func TestWindowsParseKinit(t *testing.T) {
 func TestWindowsPKINITConf(t *testing.T) {
 	c := winPKINITConf(winKDCInNet)
 	for _, want := range []string{"default_realm = CORP.EXAMPLE.COM", "kdc = 172.30.44.10:88", "pkinit_anchors = FILE:/l44/adcs-root.pem",
+		"pkinit_anchors = FILE:/l44/lab-users-ca.pem", "pkinit_anchors = FILE:/l44/lab-users-comma-ca.pem",
 		"pkinit_kdc_hostname = dc1.corp.example.com", "udp_preference_limit = 1", "dns_lookup_kdc = false"} {
 		if !strings.Contains(c, want) {
 			t.Errorf("lacks %q", want)
+		}
+	}
+}
+
+// MIT verifies its own certificate's chain before it asks the KDC, so it needs
+// the issuer as an anchor: the lab users CA and the per-run comma CA sign the
+// comma and highbit certificates directly. perRun writes each one where the
+// client's krb5.conf anchors it.
+func TestWindowsPKINITAnchorsTheLabCAs(t *testing.T) {
+	b, err := os.ReadFile("windows_test.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(b)
+	if !strings.Contains(src, `winWriteFile0600(t, filepath.Join(w.dir, "pkinit", ca.name+".pem"), winPEMCert(ca.c))`) {
+		t.Error("perRun does not write each lab CA into the pkinit directory")
+	}
+	for _, name := range []string{`"lab-users-ca"`, `"lab-users-comma-ca"`} {
+		if !strings.Contains(src, name) {
+			t.Errorf("perRun does not name the CA %s", name)
+		}
+		if !strings.Contains(winPKINITConf(winKDCInNet), "FILE:/l44/"+strings.Trim(name, `"`)+".pem") {
+			t.Errorf("krb5.conf does not anchor %s", name)
 		}
 	}
 }

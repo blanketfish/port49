@@ -593,7 +593,7 @@ func winKDCErrCode(e string) (int, bool) {
 }
 
 // winPKINITConf is the PKINIT client's krb5.conf: the realm's KDC on the
-// project network, AD CS's root as the anchor, and pkinit_kdc_hostname, the
+// project network, AD CS's root and the lab's two client CAs as anchors, and pkinit_kdc_hostname, the
 // one setting MIT's documentation names for an Active Directory KDC.
 func winPKINITConf(kdc string) string {
 	return fmt.Sprintf(`[libdefaults]
@@ -606,6 +606,8 @@ func winPKINITConf(kdc string) string {
   %[1]s = {
     kdc = %[2]s
     pkinit_anchors = FILE:/l44/adcs-root.pem
+    pkinit_anchors = FILE:/l44/lab-users-ca.pem
+    pkinit_anchors = FILE:/l44/lab-users-comma-ca.pem
     pkinit_kdc_hostname = %[3]s
   }
 `, dirRealm, kdc, winDCHost)
@@ -1478,6 +1480,9 @@ func (w *winDC) perRun(t *testing.T, l *labDir) {
 		c    *x509.Certificate
 	}{{"lab-users-ca", d.pki.usersCA}, {"lab-users-comma-ca", comma}} {
 		w.run(t, "trust", map[string]any{"ca_pem": string(winPEMCert(ca.c)), "name": ca.name}, 5*time.Minute, nil)
+		// The PKINIT client must anchor its own certificate's issuer, or MIT
+		// fails before it asks the KDC ("unable to get local issuer certificate").
+		winWriteFile0600(t, filepath.Join(w.dir, "pkinit", ca.name+".pem"), winPEMCert(ca.c))
 	}
 	winWriteFile0600(t, filepath.Join(w.dir, "pkinit", "krb5.conf"), []byte(winPKINITConf(winKDCInNet)))
 	winWriteFile0600(t, filepath.Join(w.dir, "pkinit", "adcs-root.pem"), winPEMCert(w.adcsRoot))
