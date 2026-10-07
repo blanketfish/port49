@@ -7267,11 +7267,13 @@ every matching subject composes, and a scheduled refresh stamps refreshed_at.** 
   takes `kind` and `attribute` (each kind has a default). The strong kinds are `issuer_serial`
   (`altSecurityIdentities`, AD's `X509:<I>{issuer}<SR>{serial}` form, the issuer rendered from the
   leaf's raw DER with `DC=` included, never from `pkix.Name`; an RDN value is written as Windows'
-  CertNameToStr writes it, quoted when it is empty, starts or ends with white space, or holds
-  `, + = " \ < > # ;` or a newline, with an inner quote doubled; `<SR>` is the serial's DER
-  content bytes reversed, the sign byte DER keeps before a serial whose top bit is set included:
-  a Windows DC measured both, issuing a TGT only for those forms, L44 run 8,
-  `tests/lab/results/L44-windows_ad.md`) and `sid` (the SID extension,
+  CertNameToStr writes it, quoted with an inner quote doubled; a value holding a comma is
+  quoted, measured (L44 run 8, `tests/lab/results/L44-windows_ad.md`); the rest of the set
+  (empty, leading or trailing white space, `+ = " < > # ;`, and the backslash, slash or newline
+  Microsoft's CertNameToStr page lists inconsistently) is as Microsoft documents it, unmeasured
+  and provisional on L44; an issuer with a multi-valued RDN is `identity_unmapped` until
+  measured; `<SR>` is the serial's DER content bytes reversed, the sign byte DER keeps before a
+  serial whose top bit is set included, measured in the same run) and `sid` (the SID extension,
   1.3.6.1.4.1.311.25.2, on `objectSid`). The weak kinds are `san_upn`, `san_email`, `subject_dn`
   and `cn`. A weak kind, or an `attribute` repointed on a strong one, is refused at load without
   `allow_weak: true` and a non-empty `issuers:` pin, which is checked at every mapping, before
