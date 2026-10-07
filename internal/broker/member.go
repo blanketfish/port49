@@ -54,9 +54,9 @@ func (b *Broker) BindMap(ctx context.Context, cs tls.ConnectionState, _ store.Cr
 	switch {
 	case chainErr != nil:
 		// A chain no verifier may take (both anchors) is no one's, so the
-		// directory is not asked either.
-		return directory.Answer{}, &BindRefusal{Status: http.StatusUnauthorized, Reason: decision.IdentityUnmapped,
-			Error: string(decision.IdentityUnmapped), Detail: printsafe.Line(chainErr.Error(), 300)}
+		// directory is not asked either (spec §5.7).
+		return directory.Answer{}, &BindRefusal{Status: http.StatusUnauthorized, Reason: decision.TrustDomainUnresolved,
+			Error: string(decision.TrustDomainUnresolved), Detail: printsafe.Line(chainErr.Error(), 300)}
 	case machine:
 		// Defence in depth behind Listener.Caller (pre-flight I-4): a workload
 		// is never mapped through the directory (decision 40 ruling 5).

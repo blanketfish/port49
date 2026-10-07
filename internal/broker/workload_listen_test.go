@@ -158,7 +158,7 @@ func TestBindMapRefusesAChainEndingAtBothAnchors(t *testing.T) {
 	f.b.Directory = directory.ForTestsStaticResolver(f.st, nil, directory.ErrUnavailable)
 	cs := &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{w.Leaf, wca.Cert}, {w.Leaf, f.ca.Cert}}}
 	_, ref := f.b.BindMap(context.Background(), *cs, store.Credential{})
-	if ref == nil || ref.Reason != decision.IdentityUnmapped || f.b.Directory.Calls.Load() != 0 ||
+	if ref == nil || ref.Reason != decision.TrustDomainUnresolved || ref.Error != string(decision.TrustDomainUnresolved) || f.b.Directory.Calls.Load() != 0 ||
 		!strings.Contains(ref.Detail, "chains to both") {
 		t.Fatalf("refusal %+v, directory calls %d", ref, f.b.Directory.Calls.Load())
 	}
