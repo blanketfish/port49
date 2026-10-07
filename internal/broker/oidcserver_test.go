@@ -2,6 +2,7 @@ package broker
 
 import (
 	"bufio"
+	"context"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
@@ -17,6 +18,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/testpki"
 )
 
@@ -58,7 +60,17 @@ func TestAnOIDCOnlyServer(t *testing.T) {
 	if strings.Contains(err.Error(), "open :") || !strings.Contains(err.Error(), "anchor") {
 		t.Fatalf("the refusal does not say what is missing: %v", err)
 	}
+	// A nil anchor is served only as NoX509 with Identity: either alone starts
+	// a broker that then refuses everyone.
+	f.b.NoX509 = true
+	if _, err := f.b.Server("127.0.0.1:0", srvCert, nil); err == nil {
+		t.Fatal("an OIDC-only broker with no OIDC verifier was served")
+	}
+	f.b.NoX509 = false
 	f.withOIDC(t)
+	if _, err := f.b.Server("127.0.0.1:0", srvCert, nil); err == nil {
+		t.Fatal("a broker that offers x509 was served with no anchor")
+	}
 	f.b.NoX509 = true
 	// NoX509 with an anchor would still verify client certificates: refused
 	// (pre-flight M-19).
@@ -76,6 +88,22 @@ func TestAnOIDCOnlyServer(t *testing.T) {
 	f.b.Handler().ServeHTTP(w, httptest.NewRequest("GET", "/v1/config", nil))
 	if !strings.Contains(w.Body.String(), `"methods":["oidc"]`) {
 		t.Fatalf("config %s", w.Body)
+	}
+	// No bearer: the answer says what this broker takes, and the record is oidc's.
+	w = f.bearer(context.Background(), "POST", "/v1/tokens", mintLeaf1, "")
+	var e api.Error
+	if w.Code != 401 || json.Unmarshal(w.Body.Bytes(), &e) != nil ||
+		e.Error != "trust_domain_unresolved" || !strings.Contains(e.Detail, "OIDC ID token only") ||
+		strings.Contains(e.Detail, "certificate") {
+		t.Fatalf("no bearer on an OIDC-only broker: %s", shown(w))
+	}
+	recs := eventsOf(f.records(t), decision.EventMint)
+	if len(recs) == 0 {
+		t.Fatal("no mint record")
+	}
+	auth, _ := recs[len(recs)-1]["auth"].(map[string]any)
+	if auth["method"] != "oidc" {
+		t.Fatalf("the record's auth.method is %v", auth["method"])
 	}
 }
 

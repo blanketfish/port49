@@ -67,7 +67,8 @@ const MaxConns = 256
 // that swaps policy under a live daemon, and nothing on a path that can run
 // with device AAA already serving may end the process.
 //
-// An OIDC-only broker (NoX509, plan 7h) is served with a nil anchor and requests no certificate.
+// An OIDC-only broker (NoX509, plan 7h) is served with a nil anchor and
+// requests no certificate.
 func (b *Broker) Server(addr string, cert tls.Certificate, anchor *x509.CertPool) (*http.Server, error) {
 	clientAuth := tls.VerifyClientCertIfGiven
 	switch {

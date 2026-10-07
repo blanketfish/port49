@@ -497,6 +497,14 @@ func (b *Broker) authenticate(w http.ResponseWriter, r *http.Request, event, not
 		return caller{}, false
 	case hasBearer:
 		return b.bearerCaller(w, r, event, nothing, raw)
+	case b.NoX509:
+		// An OIDC-only broker has no anchor and asks for no certificate: say
+		// what it does take rather than blame a certificate.
+		b.emit(decision.Record{TS: b.Now(), Event: event, Verdict: decision.VerdictDeny,
+			Reason: decision.TrustDomainUnresolved, Auth: &decision.Auth{Method: "oidc"}})
+		writeError(w, http.StatusUnauthorized, string(decision.TrustDomainUnresolved),
+			"this broker accepts an OIDC ID token only (Authorization: Bearer); run `port49 login`")
+		return caller{}, false
 	}
 	now := b.Now()
 	authTime := b.authTime(r)
