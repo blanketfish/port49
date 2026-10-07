@@ -296,9 +296,23 @@ func (k *keycloak) SetLogoutURL(t *testing.T, u string) {
 	// receiver.invalid, and read as a measured "Keycloak sends nothing".
 	clients = nil
 	k.adminDo(t, "GET", "/clients?clientId="+kcClient, nil, &clients)
-	if got, _ := clients[0]["attributes"].(map[string]any)["backchannel.logout.url"].(string); len(clients) != 1 || got != u {
-		t.Fatalf("INVALID: %s's backchannel.logout.url did not take the receiver's URL; no note is written", kcClient)
+	if err := logoutURLProblem(clients, u); err != nil {
+		t.Fatalf("INVALID: %v; no note is written", err)
 	}
+}
+
+// logoutURLProblem says why clients, read back after the PUT, do not show want
+// as port49-cli's back-channel logout URL. It checks the count before it
+// indexes.
+func logoutURLProblem(clients []map[string]any, want string) error {
+	if len(clients) != 1 {
+		return fmt.Errorf("%d clients named %s on read-back", len(clients), kcClient)
+	}
+	attrs, _ := clients[0]["attributes"].(map[string]any)
+	if got, _ := attrs["backchannel.logout.url"].(string); got != want {
+		return fmt.Errorf("%s's backchannel.logout.url did not take the receiver's URL", kcClient)
+	}
+	return nil
 }
 
 func (k *keycloak) UserID(t *testing.T, username string) string {

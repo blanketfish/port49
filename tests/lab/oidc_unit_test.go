@@ -297,3 +297,23 @@ func TestOIDCCheckLogoutToken(t *testing.T) {
 		}
 	}
 }
+
+func TestOIDCLogoutURLProblem(t *testing.T) {
+	has := func(u string) map[string]any {
+		return map[string]any{"attributes": map[string]any{"backchannel.logout.url": u}}
+	}
+	for name, tc := range map[string]struct {
+		clients []map[string]any
+		good    bool
+	}{
+		"took":          {[]map[string]any{has("https://r/v1/logout")}, true},
+		"not taken":     {[]map[string]any{has("https://receiver.invalid/v1/logout")}, false},
+		"none":          {nil, false},
+		"two":           {[]map[string]any{has("https://r/v1/logout"), has("https://r/v1/logout")}, false},
+		"no attributes": {[]map[string]any{{}}, false},
+	} {
+		if err := logoutURLProblem(tc.clients, "https://r/v1/logout"); (err == nil) != tc.good {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
