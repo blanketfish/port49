@@ -11,7 +11,21 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
+
+	"github.com/rhwendt/port49/internal/broker/api"
 )
+
+// An issuer no source covers is said in the words port49 workload keys on to
+// treat the broker's 503 as final (api.UncoveredStatus; plan 8, pre-flight
+// I-2). A rewording here would turn that answer back into "run again".
+func TestAnUncoveredIssuerOpensWithTheAPIsWords(t *testing.T) {
+	root := newCA(t, "root CA")
+	c, _, _ := newChecker(t, Config{}, newClock())
+	if r := check(t, c, leaf(t, root, 100), root.Cert); r.Verdict != Unknown ||
+		!strings.HasPrefix(r.Detail, api.UncoveredStatus) {
+		t.Fatalf("%+v", r)
+	}
+}
 
 // crlFile writes der to a new file and returns its path.
 func crlFile(t *testing.T, der []byte) string {

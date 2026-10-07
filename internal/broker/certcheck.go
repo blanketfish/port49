@@ -95,7 +95,7 @@ func unknownClass(detail string) string {
 		return "crl"
 	case strings.HasPrefix(detail, "OCSP"):
 		return "ocsp"
-	case strings.HasPrefix(detail, "no fresh CRL or OCSP answer covers"):
+	case strings.HasPrefix(detail, api.UncoveredStatus):
 		return "uncovered"
 	}
 	return "other"

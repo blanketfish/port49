@@ -71,10 +71,15 @@ const MaxConns = 256
 // requests no certificate.
 func (b *Broker) Server(addr string, cert tls.Certificate, anchor *x509.CertPool) (*http.Server, error) {
 	clientAuth := tls.VerifyClientCertIfGiven
+	var pool *x509.CertPool
 	switch {
 	case anchor != nil && b.NoX509:
 		return nil, errors.New("broker: an OIDC-only broker (NoX509) takes no anchor: it would still verify " +
 			"client certificates")
+	case anchor == nil && b.Workload != nil:
+		// People by OIDC, workloads by certificate (plan 8): the one anchor
+		// is the workloads'.
+		pool = x509.NewCertPool()
 	case anchor == nil && b.NoX509 && b.Identity != nil:
 		// An OIDC-only broker (Ruling 1): no certificate is requested, and
 		// every caller authenticates by bearer.
@@ -82,6 +87,14 @@ func (b *Broker) Server(addr string, cert tls.Certificate, anchor *x509.CertPool
 	case anchor == nil || anchor.Equal(x509.NewCertPool()):
 		return nil, errors.New("broker: the broker trusts exactly one anchor; a nil pool would mean the system " +
 			"roots, and an empty one trusts no one (an OIDC-only broker sets NoX509 and Identity)")
+	default:
+		pool = anchor.Clone()
+	}
+	// One pool of both anchors (decision 40 ruling 2): the handshake verifies
+	// against either, and the anchor a chain ends at is its domain
+	// (CertCallerOf).
+	if b.Workload != nil {
+		pool.AddCert(b.Workload.Anchor)
 	}
 	return &http.Server{
 		Addr:    addr,
@@ -89,7 +102,7 @@ func (b *Broker) Server(addr string, cert tls.Certificate, anchor *x509.CertPool
 		TLSConfig: &tls.Config{
 			MinVersion:             tls.VersionTLS13,
 			Certificates:           []tls.Certificate{cert},
-			ClientCAs:              anchor,
+			ClientCAs:              pool,
 			ClientAuth:             clientAuth,
 			NextProtos:             []string{"http/1.1"},
 			SessionTicketsDisabled: true,
@@ -98,13 +111,14 @@ func (b *Broker) Server(addr string, cert tls.Certificate, anchor *x509.CertPool
 				if len(cs.PeerCertificates) == 0 {
 					return nil // /v1/config only; /v1/tokens refuses it
 				}
-				if b.Directory != nil {
-					// The chain is checked here, the mapping at bind: a leaf
-					// with no email SAN is a person a directory may know.
-					_, _, err := CertIdentity(&cs, b.Now())
-					return err
+				// A chain is checked here; a workload naming no principal is
+				// answered 401 identity_unmapped at bind, never as a TLS alert
+				// the client cannot read (decision 40 ruling 3); a person
+				// under a directory is mapped at bind.
+				_, err := b.CertCallerOf(&cs, b.Now())
+				if errors.Is(err, ErrWorkloadUnmapped) {
+					return nil
 				}
-				_, _, err := Identity(&cs, b.Now())
 				return err
 			},
 		},

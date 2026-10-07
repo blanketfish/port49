@@ -9,8 +9,11 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/rhwendt/port49/internal/printsafe"
 	"github.com/rhwendt/port49/internal/spiffe"
 	"github.com/rhwendt/port49/internal/store"
 )
@@ -22,6 +25,54 @@ import (
 type Workload struct {
 	Anchor       *x509.Certificate
 	TrustDomains []string
+
+	// mu guards late (and, from Task 7, issuers).
+	mu sync.Mutex
+	// late is when each certificate's late renewal was last said, by
+	// fingerprint: a map of its own, since sayOnce prunes its map by each
+	// caller's window, which would drop these 24h keys in a large fleet
+	// (pre-flight M-3).
+	late map[string]time.Time
+}
+
+// lateWindow is how often one certificate's late renewal is said.
+const lateWindow = 24 * time.Hour
+
+// lateOnce reports whether fp's late renewal was not said in the last
+// lateWindow, and notes it said now. Past 4096 certificates it drops the
+// ones said a window ago or more.
+func (w *Workload) lateOnce(fp string, now time.Time) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if at, ok := w.late[fp]; ok && now.Sub(at) < lateWindow {
+		return false
+	}
+	if w.late == nil {
+		w.late = map[string]time.Time{}
+	}
+	if len(w.late) >= 4096 {
+		for k, at := range w.late {
+			if now.Sub(at) >= lateWindow {
+				delete(w.late, k)
+			}
+		}
+	}
+	w.late[fp] = now
+	return true
+}
+
+// noteRenewal says a workload certificate presented late in its life, once
+// per certificate per 24h, and counts it (decision 40 ruling 9). It never
+// refuses: expiry does that.
+func (b *Broker) noteRenewal(cc CertCaller, now time.Time) {
+	if cc.Domain != DomainMachines || cc.Leaf == nil || b.Workload == nil || !api.LateRenewal(cc.Leaf, now) ||
+		!b.Workload.lateOnce(cc.Cred.Fingerprint, now) {
+		return
+	}
+	b.logf("identity: workload certificate %s (serial %s) expires %s with under a quarter of its validity left: "+
+		"its renewal is late; check the workload's renewal against its CA", printsafe.Line(cc.Principal, 300),
+		cc.Cred.Serial, cc.Leaf.NotAfter.UTC().Format(time.RFC3339))
+	b.Metrics.WorkloadRenewalLate.Inc()
 }
 
 // The trust domains, as broker.identity's lists name them.
