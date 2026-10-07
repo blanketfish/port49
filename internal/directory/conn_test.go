@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -18,6 +19,7 @@ import (
 	"github.com/go-ldap/ldap/v3"
 	"github.com/jcmturner/gokrb5/v8/iana/errorcode"
 	"github.com/jcmturner/gokrb5/v8/iana/etypeID"
+	krbflags "github.com/jcmturner/gokrb5/v8/iana/flags"
 	"github.com/jcmturner/gokrb5/v8/keytab"
 	"github.com/jcmturner/gokrb5/v8/messages"
 	"github.com/jcmturner/gokrb5/v8/types"
@@ -208,6 +210,20 @@ func TestABindErrorNamesItsMechanismAndWho(t *testing.T) {
 		if le.Err.Error() != want {
 			t.Errorf("%s: cause %q, want %q", cr.mech, le.Err.Error(), want)
 		}
+	}
+}
+
+// AD answers an AP-REQ without mutual-required with 49 (AcceptSecurityContext
+// data 57, L44), though go-ldap's client asks for mutual authentication in the
+// checksum; the bind must send the option, as MIT's client does.
+func TestAGSSAPIBindAsksForMutualRequired(t *testing.T) {
+	var got []int
+	cr := gssapiCredentials(t, "127.0.0.1:1")
+	cr.gssCtx = func() ldap.GSSAPIClient { return stubGSS{apOptions: &got} }
+	_ = bind(context.Background(), ldapBindServer(t, ldap.LDAPResultInvalidCredentials, ""),
+		Server{URI: "ldaps://dc-01.corp.example.com"}, cr)
+	if !slices.Contains(got, krbflags.APOptionMutualRequired) {
+		t.Fatalf("AP options %v lack mutual-required (%d)", got, krbflags.APOptionMutualRequired)
 	}
 }
 
