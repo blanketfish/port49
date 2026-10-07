@@ -50,6 +50,44 @@ func TestTheCopyKeepsAMarkAReloadFoundMissing(t *testing.T) {
 // A copy that does not decode is moved aside and replaced, never fatal:
 // the store holds every mark. It is said, naming where it was moved and
 // what is lost with it, and never trusted.
+// A lift whose delete the watch delivered before Lifted ran leaves no
+// tombstone: another replica's put-back of the same mark, at the same time,
+// is a mark the store holds, and the copy holds it too (review I-1).
+func TestALiftTheWatchDeliveredFirstLeavesNoTombstone(t *testing.T) {
+	path := filepath.Join(safeStateDir(t), "marks.json")
+	carol := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:carol@example.com", At: time.Unix(11, 0).UTC()}
+	c := openMarksCopy(path, &bytes.Buffer{})
+	c.Apply(store.MarkChange{Revocation: carol, Standing: true})
+	c.Apply(store.MarkChange{Revocation: carol}) // the watch delivers the lift first
+	c.Lifted(carol)                              // adminRevoke, after
+	if got := c.All(); len(got) != 0 {
+		t.Fatalf("the lifted mark is held: %+v", got)
+	}
+	c.Apply(store.MarkChange{Revocation: carol, Standing: true}) // another replica's put-back
+	if got := c.All(); len(got) != 1 || !got[0].At.Equal(carol.At) {
+		t.Fatalf("the store holds carol, the copy holds %+v", got)
+	}
+}
+
+// A tombstone ends at the watch's delivery of the lift: a put of the same
+// mark and time after it (a put-back) is held (review M-1).
+func TestALiftTombstoneEndsAtTheWatchsDelete(t *testing.T) {
+	path := filepath.Join(safeStateDir(t), "marks.json")
+	carol := store.Revocation{Kind: store.RevocationPrincipal, Key: "user:carol@example.com", At: time.Unix(11, 0).UTC()}
+	c := openMarksCopy(path, &bytes.Buffer{})
+	c.Apply(store.MarkChange{Revocation: carol, Standing: true})
+	c.Lifted(carol)
+	c.Apply(store.MarkChange{Revocation: carol, Standing: true}) // behind: skipped
+	if got := c.All(); len(got) != 0 {
+		t.Fatalf("the late put added the lifted mark back: %+v", got)
+	}
+	c.Apply(store.MarkChange{Revocation: carol}) // the watch delivers the lift
+	c.Apply(store.MarkChange{Revocation: carol, Standing: true})
+	if got := c.All(); len(got) != 1 {
+		t.Fatalf("a put after the lift was delivered is not held: %+v", got)
+	}
+}
+
 func TestACopyThatDoesNotDecodeIsMovedAside(t *testing.T) {
 	dir := safeStateDir(t)
 	path := filepath.Join(dir, "marks.json")

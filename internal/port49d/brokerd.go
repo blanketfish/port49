@@ -523,8 +523,8 @@ func runBroker(parent context.Context, cfgPath string) error {
 	// revision, which the feed follows from. Keep that order. The feed tells
 	// the copy every change the watch delivers and every mark a reload
 	// reads (copyingFeed), this replica's own revocations included; its
-	// own lifts leave the copy as the admin socket answers them (Lifted). Before a reload the runner's hook puts back what the store
-	// lost, refusing the reload when that fails, and every other replica's
+	// own lifts leave the copy as the admin socket answers them (Lifted).
+	// Before a reload the runner's hook puts back what the store lost, refusing the reload when that fails, and every other replica's
 	// keeps what its copy holds and the store lacks, refusing the reload
 	// when the marks cannot be read (final review 7e-1 C-1; re-review 1
 	// C-2; pre-flight 7e-2 P-3).

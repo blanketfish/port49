@@ -304,7 +304,10 @@ func (r *runner) reapplying(ctx context.Context) {
 // putBackMissing puts back, once, every mark this replica's copy holds
 // that the store lacks, and returns the ones that landed (plan 7e, Ruling
 // 12; pre-flight I5): an etcd restore's lost revocations, or a lift this
-// copy missed. Both deny more, and the line says how to lift.
+// copy missed. Both deny more, and the line says how to lift. A lift made
+// here between its delete's commit and marksCopy.Lifted can be put back
+// too, when the list above falls after the delete and the copy is read
+// before Lifted: the same, fail-closed.
 func (r *runner) putBackMissing(ctx context.Context) ([]store.Revocation, error) {
 	stored, err := r.st.ListRevocations(ctx)
 	if err != nil {
@@ -401,7 +404,7 @@ func (r *runner) reloadHook(ctx context.Context, rescans prometheus.Counter) fun
 // sayPutBack is the put-back line, naming each mark (re-check R4).
 func sayPutBack(put []store.Revocation) {
 	fmt.Fprintf(stderr, "port49-broker: runner: %d revocation(s) in broker.state_dir/marks.json were missing from the "+
-		"store (an etcd restore, or a lift made while this replica's watch was compacted away or it was stopped) "+
+		"store (an etcd restore, or a lift this replica's watch had not delivered: compacted away, or it stopped first) "+
 		"and are put back: %s; lift any that were lifted on purpose with port49 revoke --lift\n", len(put),
 		namedMarks(put))
 }

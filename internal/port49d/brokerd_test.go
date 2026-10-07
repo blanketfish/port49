@@ -1499,7 +1499,11 @@ func TestATakeoverPutsBackAMarkTheStoreLost(t *testing.T) {
 	}
 	// The lift is answered, so carol is out of the copy now and the watch,
 	// behind, cannot add her back (marksCopy.Lifted): this reads the state
-	// after her lift, not one the watch has yet to reach.
+	// after her lift, not one the watch has yet to reach. Without the fix
+	// this check is racy: the put-back line below, whose count would then
+	// name carol, is what catches a regression here; the unit test
+	// (TestALiftOnTheAdminSocketLeavesTheCopyBeforeItIsAnswered) is the
+	// deterministic one.
 	if got := copyHolds(t, f.stateDir(t), "user:carol@example.com"); got != "0" {
 		t.Fatalf("carol is in the copy after her lift was answered")
 	}
