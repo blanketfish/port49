@@ -345,6 +345,19 @@ func TestALogoutRequestIsAForm(t *testing.T) {
 			f.b.Handler().ServeHTTP(w, r)
 			return w
 		},
+		"text/plain": func() *httptest.ResponseRecorder {
+			r := httptest.NewRequest("POST", "/v1/logout", strings.NewReader(url.Values{"logout_token": {raw}}.Encode()))
+			r.Header.Set("Content-Type", "text/plain")
+			w := httptest.NewRecorder()
+			f.b.Handler().ServeHTTP(w, r)
+			return w
+		},
+		"no content type": func() *httptest.ResponseRecorder {
+			r := httptest.NewRequest("POST", "/v1/logout", strings.NewReader(url.Values{"logout_token": {raw}}.Encode()))
+			w := httptest.NewRecorder()
+			f.b.Handler().ServeHTTP(w, r)
+			return w
+		},
 		"oversized": func() *httptest.ResponseRecorder {
 			return f.postLogout(strings.Repeat("a", 17<<10))
 		},
@@ -354,8 +367,115 @@ func TestALogoutRequestIsAForm(t *testing.T) {
 			t.Errorf("%s: %s", name, lshown(w))
 		}
 		// Refused for its shape, not for failing to verify.
-		if !strings.Contains(w.Body.String(), "a logout ") {
+		if !strings.Contains(w.Body.String(), "a logout ") ||
+			(strings.HasPrefix(name, "text") || strings.HasPrefix(name, "no ")) && !strings.Contains(w.Body.String(), "is a form") {
 			t.Errorf("%s was not refused as a malformed request: %s", name, lshown(w))
 		}
+	}
+}
+
+// The logout record outlives the logged-out session's ID token while the
+// token could still be presented: it refuses it 2 minutes on, not only at
+// once (I1).
+func TestALogoutRecordOutlivesTheTokenItRefuses(t *testing.T) {
+	f, iss, tok := oidcLoggedIn(t)
+	if w := f.postLogout(logoutFor(t, f, iss, "s-sub-alice", "j-ttl")); w.Code != 200 {
+		t.Fatalf("%s", lshown(w))
+	}
+	f.advance(2 * time.Minute)
+	w := f.bearer(context.Background(), "POST", "/v1/tokens", mintLeaf1, tok)
+	if w.Code != 401 || !strings.Contains(w.Body.String(), string(decision.CredentialRevoked)) {
+		t.Fatalf("the logged-out session's token, 2m on: %s", shown(w))
+	}
+}
+
+// receiptsHook notes whose receipts are deleted, and, on the first
+// ContextsByPrincipal, writes alice a context after answering with the list
+// it read: a login landing between a logout's two context passes.
+type receiptsHook struct {
+	store.Store
+	deleted []string
+	late    func()
+	reads   int
+}
+
+func (s *receiptsHook) DeleteReceiptsByPrincipal(ctx context.Context, principal string) (int, error) {
+	s.deleted = append(s.deleted, principal)
+	return s.Store.DeleteReceiptsByPrincipal(ctx, principal)
+}
+
+func (s *receiptsHook) ContextsByPrincipal(ctx context.Context, principal string) ([]store.ContextRef, error) {
+	refs, err := s.Store.ContextsByPrincipal(ctx, principal)
+	if s.reads++; s.reads == 1 && s.late != nil {
+		s.late()
+	}
+	return refs, err
+}
+
+// A sub logout deletes each owner principal's receipts (spec §5.1.4: it
+// closes the concurrent duplicate's replay), as the sid path does through
+// the session manager (M2).
+func TestALogoutBySubDeletesEveryOwnPrincipalsReceipts(t *testing.T) {
+	f, iss, _ := oidcLoggedIn(t)
+	ctx := context.Background()
+	const alice2 = "user:alice2@example.com"
+	if err := f.st.PutOIDCOwner(ctx, store.OIDCKey(store.OIDCSub, iss.URL, "sub-alice"), alice2, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	st := &receiptsHook{Store: f.st}
+	f.b.Store = st
+	if w := f.postLogout(logoutFor(t, f, iss, "", "j-receipts")); w.Code != 200 {
+		t.Fatalf("%s", lshown(w))
+	}
+	if fmt.Sprint(st.deleted) != "["+alice2+" "+alicePrincipal+"]" {
+		t.Fatalf("receipts deleted for %v", st.deleted)
+	}
+}
+
+// A session that lands after the first context pass read is caught by the
+// second (spec §5.1.4: a redemption in flight) (M3).
+func TestALogoutMarksAContextThatLandsDuringItsFirstPass(t *testing.T) {
+	f, iss, _ := oidcLoggedIn(t)
+	now := f.b.Now()
+	f.b.Store = &receiptsHook{Store: f.st, late: func() {
+		f.liveContextAt(t, "nx1", "alice", alicePrincipal, "", now, now.Add(12*time.Hour))
+	}}
+	if w := f.postLogout(logoutFor(t, f, iss, "", "j-late")); w.Code != 200 {
+		t.Fatalf("%s", lshown(w))
+	}
+	if contextRevokedAt(t, f, "nx1").IsZero() {
+		t.Fatal("a context written during the first pass was not marked")
+	}
+}
+
+// A broker with no human verifier fails closed (M4).
+func TestLogoutAndRevokeSidWithNoIdentityFailClosed(t *testing.T) {
+	f := newFixture(t, 8)
+	f.b.Identity = nil
+	if _, err := f.b.RevokeSid(context.Background(), "https://sso.example.com", "s", "x"); err == nil {
+		t.Fatal("RevokeSid with no identity did not fail")
+	}
+	if _, err := f.b.Logout(context.Background(), oidc.LogoutToken{Issuer: "i", Sid: "s"}, "x"); err == nil {
+		t.Fatal("Logout with no identity did not fail")
+	}
+}
+
+// The say lines of a failed logout end with logoutRecovery's form, never a
+// bare port49 revoke: a logout is not a ban (M5).
+func TestAFailedLogoutSaysTheRecoveryNotABan(t *testing.T) {
+	f, iss, _ := oidcLoggedIn(t)
+	var said strings.Builder
+	f.b.Say = func(format string, args ...any) { said.WriteString(fmt.Sprintf(format, args...) + "\n") }
+	f.b.AdminSocket = "/run/port49/admin.sock"
+	f.b.Store = hookStore{Store: f.st, before: map[string]func() error{
+		"PutLogout": func() error { return store.ErrUnavailable },
+		"TakeOnce":  func() error { return store.ErrUnavailable }}}
+	if w := f.postLogout(logoutFor(t, f, iss, "s-sub-alice", "j-hand")); w.Code != 503 {
+		t.Fatalf("%s", lshown(w))
+	}
+	out := said.String()
+	if !strings.Contains(out, "--lift") || !strings.Contains(out, "port49 revoke --list") ||
+		strings.Contains(out, "revoke the principal with port49 revoke") || strings.Contains(out, "port49 revoke <principal>") {
+		t.Fatalf("the recovery said:\n%s", out)
 	}
 }

@@ -95,12 +95,11 @@ func (b *Broker) logout(w http.ResponseWriter, r *http.Request) {
 			outcome = "partial"
 		}
 		b.say("logout: a logout token from %s could not be applied: the store did not answer; answered 503 so the "+
-			"provider may retry; if it does not, revoke the principal with port49 revoke once the store returns",
-			lt.Issuer)
+			"provider may retry; if it does not, once the store returns: %s", lt.Issuer, b.logoutByHand(lt, rep))
 		if terr != nil && !errors.Is(terr, store.ErrNotFound) {
 			// The provider's retry will be answered 200 "replayed" and do
 			// nothing (pre-flight M-13): say how to end it by hand.
-			what, byHand := "sub "+printsafe.Line(lt.Subject, 80), "port49 revoke <principal>"
+			what, byHand := "sub "+printsafe.Line(lt.Subject, 80), b.logoutByHand(lt, rep)
 			if lt.Sid != "" {
 				what = "sid " + printsafe.Line(lt.Sid, 80)
 				byHand = fmt.Sprintf(`POST /v1/tokens/revoke {"sid": %q, "issuer": %q} or %s`, lt.Sid, lt.Issuer, byHand)
@@ -120,10 +119,34 @@ func (b *Broker) logout(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+// logoutByHand is how an operator ends what a logout that could not be
+// applied would have: logoutRecovery's form for each principal the logout
+// reached, never a bare port49 revoke (a logout is not a ban). A logout that
+// failed before it read its owner record names none, so the operator finds
+// them in the decision log.
+func (b *Broker) logoutByHand(lt oidc.LogoutToken, rep RevokeReport) string {
+	if len(rep.Principals) == 0 {
+		what := "sub"
+		if lt.Sid != "" {
+			what = "sid"
+		}
+		return "for each principal the decision log's mint records name for this " + what + ", and with its name for " +
+			"<principal> below, " + b.logoutRecovery("<principal>")
+	}
+	var each []string
+	for _, p := range rep.Principals {
+		each = append(each, b.logoutRecovery(p))
+	}
+	return strings.Join(each, "; and ")
+}
+
 // RevokeSid ends one OIDC session as a back-channel logout by sid does, at
 // the broker's now (Ruling 14), reaching only principals in the issuer's
 // human verifiers' domains (Ruling 22).
 func (b *Broker) RevokeSid(ctx context.Context, issuer, sid, origin string) (RevokeReport, error) {
+	if b.Identity == nil {
+		return RevokeReport{}, errors.New("broker: this broker has no human OIDC verifier, so it takes no logout")
+	}
 	return b.Logout(ctx, oidc.LogoutToken{Issuer: issuer, Sid: sid, IssuedAt: b.Now(),
 		Domains: b.Identity.HumanDomains(issuer)}, origin)
 }
@@ -135,6 +158,9 @@ func (b *Broker) RevokeSid(ctx context.Context, issuer, sid, origin string) (Rev
 // the logout record not written, when nothing was applied; a later step's
 // is the report's Err, and the steps after it still run.
 func (b *Broker) Logout(ctx context.Context, lt oidc.LogoutToken, origin string) (RevokeReport, error) {
+	if b.Identity == nil {
+		return RevokeReport{}, errors.New("broker: this broker has no human OIDC verifier, so it takes no logout")
+	}
 	ctx, cancel := b.detach(ctx)
 	defer cancel()
 	now := b.Now()
