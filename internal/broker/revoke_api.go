@@ -6,12 +6,14 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/rhwendt/port49/internal/broker/api"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/policy"
+	"github.com/rhwendt/port49/internal/printsafe"
 	"github.com/rhwendt/port49/internal/store"
 )
 
@@ -55,10 +57,11 @@ var errNotSaved = errors.New("port49d's log says why")
 // flight (revokeOwnOrKey). A lift and a revocation by certificate are the
 // admin socket's alone.
 func (b *Broker) tokensRevoke(w http.ResponseWriter, r *http.Request) {
-	caller, _, ok := b.authenticate(w, r, decision.EventRevoke, "revoked nothing")
+	c, ok := b.authenticate(w, r, decision.EventRevoke, "revoked nothing")
 	if !ok {
 		return
 	}
+	asker := c.principal
 	var req api.RevokeRequest
 	dec := json.NewDecoder(io.LimitReader(r.Body, 4<<10))
 	dec.DisallowUnknownFields()
@@ -75,17 +78,20 @@ func (b *Broker) tokensRevoke(w http.ResponseWriter, r *http.Request) {
 			"name mine, a principal, or a device and a username (a lift is "+b.proc()+"'s admin socket's)")
 		return
 	}
-	origin := "api " + caller
+	origin := "api " + asker
 	byKey := req.Device != "" || req.Username != ""
 	switch {
-	case req.Sid != "":
-		writeError(w, http.StatusBadRequest, "bad_request", "revocation by OIDC sid arrives with OIDC (plan 7h); "+
-			"revoke the principal")
+	case req.Sid != "" && (req.Mine || req.Principal != "" || byKey):
+		writeError(w, http.StatusBadRequest, "bad_request", "name a sid alone, with its issuer when more than one "+
+			"provider is configured")
+		return
+	case req.Issuer != "" && req.Sid == "":
+		writeError(w, http.StatusBadRequest, "bad_request", "an issuer names a sid's provider; name the sid")
 		return
 	case req.Mine && req.Principal != "", byKey && req.Principal != "":
 		writeError(w, http.StatusBadRequest, "bad_request", "name mine, a principal, or a device and a username, not both")
 		return
-	case !req.Mine && !byKey && req.Principal == "", byKey && (req.Device == "" || req.Username == ""):
+	case req.Sid == "" && !req.Mine && !byKey && req.Principal == "", byKey && (req.Device == "" || req.Username == ""):
 		writeError(w, http.StatusBadRequest, "bad_request", "name mine, a principal, or a device and a username "+
 			"(both, for one key)")
 		return
@@ -101,7 +107,7 @@ func (b *Broker) tokensRevoke(w http.ResponseWriter, r *http.Request) {
 	mayOthers := func() (bool, *BindRefusal) {
 		ctx, cancel := context.WithTimeout(r.Context(), b.memberBudget())
 		defer cancel()
-		m, _, err := b.memberFor(ctx, caller)
+		m, _, err := b.memberFor(ctx, asker)
 		if err != nil {
 			return false, directoryRefusal(err)
 		}
@@ -112,12 +118,16 @@ func (b *Broker) tokensRevoke(w http.ResponseWriter, r *http.Request) {
 		b.emit(rec)
 		b.answerRefusal(w, r, ref)
 	}
+	if req.Sid != "" {
+		b.revokeSid(w, r, pol, asker, origin, req, mayOthers, refused)
+		return
+	}
 	if byKey {
 		k := store.TokenKey{NAS: req.Device, Username: req.Username}
 		switch {
 		case req.Mine:
-			b.revokeOwnOrKey(w, pol, caller, origin, func() RevokeReport {
-				return b.RevokeOwn(r.Context(), caller, &k, origin)
+			b.revokeOwnOrKey(w, pol, asker, origin, func() RevokeReport {
+				return b.RevokeOwn(r.Context(), asker, &k, origin)
 			})
 		default:
 			now := b.Now()
@@ -127,10 +137,10 @@ func (b *Broker) tokensRevoke(w http.ResponseWriter, r *http.Request) {
 			ok, ref := mayOthers()
 			switch {
 			case ref != nil:
-				rec.Principal = caller // the key names no one; whose request it was
+				rec.Principal = asker // the key names no one; whose request it was
 				refused(ref, rec)
 			case ok:
-				b.revokeOwnOrKey(w, pol, caller, origin, func() RevokeReport {
+				b.revokeOwnOrKey(w, pol, asker, origin, func() RevokeReport {
 					return b.RevokeKey(r.Context(), k, origin)
 				})
 			default:
@@ -139,9 +149,9 @@ func (b *Broker) tokensRevoke(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	own := func() RevokeReport { return b.RevokeOwn(r.Context(), caller, nil, origin) }
+	own := func() RevokeReport { return b.RevokeOwn(r.Context(), asker, nil, origin) }
 	if req.Mine {
-		b.revokeOwnOrKey(w, pol, caller, origin, own)
+		b.revokeOwnOrKey(w, pol, asker, origin, own)
 		return
 	}
 	target, err := normalPrincipal(req.Principal)
@@ -149,11 +159,11 @@ func (b *Broker) tokensRevoke(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", strings.TrimPrefix(err.Error(), "broker: "))
 		return
 	}
-	if target == caller {
+	if target == asker {
 		// The caller's own, named as another's would be: a self
 		// revocation, no mark (decision 34). The answer says so first,
 		// since the CLI asked about a standing mark (final review M2).
-		b.revokeOwnOrKey(w, pol, caller, origin, func() RevokeReport {
+		b.revokeOwnOrKey(w, pol, asker, origin, func() RevokeReport {
 			rep := own()
 			rep.OwnNote = b.ownNote()
 			return rep
@@ -185,7 +195,7 @@ func (b *Broker) tokensRevoke(w http.ResponseWriter, r *http.Request) {
 		// The mark was not written, so nothing was revoked beyond this
 		// port49d's own copy (Revoke): Revoke's own error names the store's
 		// fault and the fallback, for port49d's log.
-		b.logf("broker: a revocation of %s asked by %s was not made: %v", target, caller, err)
+		b.logf("broker: a revocation of %s asked by %s was not made: %v", target, asker, err)
 		w.Header().Set("Retry-After", "10")
 		writeError(w, http.StatusServiceUnavailable, string(decision.StoreUnavailable), "the revocation could not "+
 			"be recorded, so nothing was revoked; "+b.unrecordedNote())
@@ -195,6 +205,70 @@ func (b *Broker) tokensRevoke(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// revokeSid is the sid form (Ruling 14): one OIDC session ended as a
+// back-channel logout by sid ends it, under revoke_others, its origin the
+// caller. It holds the asker's one revocation slot while it runs, as a self
+// or key revocation does (holdOwnRevoke): RevokeSid runs detached, so a
+// caller retrying against a slow store would otherwise stack one detached
+// logout per retry (pre-flight M-15).
+func (b *Broker) revokeSid(w http.ResponseWriter, r *http.Request, pol *policy.Policy, asker, origin string,
+	req api.RevokeRequest, mayOthers func() (bool, *BindRefusal), refused func(*BindRefusal, decision.Record)) {
+	var humans []string
+	if b.Identity != nil {
+		for _, v := range b.Identity.Humans() {
+			humans = append(humans, v.Issuer)
+		}
+	}
+	issuer := req.Issuer
+	switch {
+	case len(humans) == 0:
+		writeError(w, http.StatusBadRequest, "bad_request", "this broker has no human OIDC verifier, so no sid")
+		return
+	case issuer == "" && len(humans) > 1:
+		writeError(w, http.StatusBadRequest, "bad_request", "name the sid's issuer: more than one human OIDC "+
+			"verifier is configured")
+		return
+	case issuer == "":
+		issuer = humans[0]
+	case !slices.Contains(humans, issuer):
+		writeError(w, http.StatusBadRequest, "bad_request", "the issuer is no human OIDC verifier's")
+		return
+	}
+	if len(req.Sid) > 255 || strings.IndexFunc(req.Sid, func(r rune) bool { return r < 0x21 || r > 0x7e }) >= 0 {
+		writeError(w, http.StatusBadRequest, "bad_request", "a sid is 1 to 255 printable ASCII characters")
+		return
+	}
+	now := b.Now()
+	rec := decision.Record{TS: now, Event: decision.EventRevoke, Revocation: &decision.Revocation{By: ByLogoutSid,
+		OIDCIssuer: issuer, Sid: req.Sid, At: decision.FormatTime(now), Origin: origin}}
+	switch ok, ref := mayOthers(); {
+	case ref != nil:
+		rec.Principal = asker
+		refused(ref, rec)
+		return
+	case !ok:
+		b.refuseRight(w, rec, policy.RightRevokeOthers, "ending an OIDC session")
+		return
+	}
+	release, held := b.holdOwnRevoke(asker)
+	if !held {
+		writeBusy(w, "another revocation of yours is still running, so this session was not ended; try again once "+
+			"it finishes")
+		return
+	}
+	defer release()
+	rep, err := b.RevokeSid(r.Context(), issuer, req.Sid, origin)
+	if err != nil {
+		b.logf("broker: a revocation of sid %s at %s asked by %s was not made: %v", printsafe.Line(req.Sid, 80),
+			issuer, asker, err)
+		w.Header().Set("Retry-After", "10")
+		writeError(w, http.StatusServiceUnavailable, string(decision.StoreUnavailable), "the session's end could not "+
+			"be recorded, so nothing was revoked; try again")
+		return
+	}
+	b.answerRevocation(w, pol, rep, origin)
+}
+
 // revokeOwnOrKey runs one self or key revocation for caller and answers it.
 // Neither takes revokeSem, and each runs detached for up to RevokeTimeout
 // whatever the request does, so a caller retrying against a slow store
@@ -202,10 +276,10 @@ func (b *Broker) tokensRevoke(w http.ResponseWriter, r *http.Request) {
 // and another while it does is 503 revocation_busy and revokes nothing
 // (ruling M4). The slot is let go when run returns, which is when its
 // detached work has finished: run is synchronous.
-func (b *Broker) revokeOwnOrKey(w http.ResponseWriter, pol *policy.Policy, caller, origin string,
+func (b *Broker) revokeOwnOrKey(w http.ResponseWriter, pol *policy.Policy, asker, origin string,
 	run func() RevokeReport) {
 	rep, ran := func() (RevokeReport, bool) {
-		release, ok := b.holdOwnRevoke(caller)
+		release, ok := b.holdOwnRevoke(asker)
 		if !ok {
 			return RevokeReport{}, false
 		}
@@ -222,20 +296,20 @@ func (b *Broker) revokeOwnOrKey(w http.ResponseWriter, pol *policy.Policy, calle
 
 // holdOwnRevoke takes caller's one self-or-key revocation slot, or reports
 // false when it is taken. The map holds only callers with a run in flight.
-func (b *Broker) holdOwnRevoke(caller string) (func(), bool) {
+func (b *Broker) holdOwnRevoke(asker string) (func(), bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.ownRevoking[caller] {
+	if b.ownRevoking[asker] {
 		return nil, false
 	}
 	if b.ownRevoking == nil {
 		b.ownRevoking = map[string]bool{}
 	}
-	b.ownRevoking[caller] = true
+	b.ownRevoking[asker] = true
 	return func() {
 		b.mu.Lock()
 		defer b.mu.Unlock()
-		delete(b.ownRevoking, caller)
+		delete(b.ownRevoking, asker)
 	}, true
 }
 

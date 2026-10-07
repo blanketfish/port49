@@ -173,3 +173,26 @@ func TestWriteLabWithWritesEachPerson(t *testing.T) {
 		t.Fatalf("key mode: %v %v", fi, err)
 	}
 }
+
+// The lab broker's certificate names the compose host as well as the
+// loopback address: Keycloak reaches it as port49-broker (plan 7h).
+func TestTheLabBrokerCertificateNamesItsComposeHost(t *testing.T) {
+	dir := t.TempDir()
+	if err := WriteLab(dir, "alice@example.com", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	pair, err := tls.LoadX509KeyPair(filepath.Join(dir, LabServerCert), filepath.Join(dir, LabServerKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf, err := x509.ParseCertificate(pair.Certificate[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := leaf.VerifyHostname("port49-broker"); err != nil {
+		t.Fatalf("port49-broker: %v", err)
+	}
+	if err := leaf.VerifyHostname("127.0.0.1"); err != nil {
+		t.Fatalf("127.0.0.1: %v", err)
+	}
+}

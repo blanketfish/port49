@@ -170,6 +170,9 @@ type Request struct {
 	// Directory is where the membership this mint used was read, for the
 	// record's auth.directory; nil without a directory (spec §5.7).
 	Directory *decision.Directory
+	// OIDC is the verified token's identity for the record's auth.oidc; nil
+	// on the certificate path (plan 7h).
+	OIDC *decision.OIDC
 	// Log is where Mint writes its permit record; nil is the minter's own
 	// log. The broker passes a per-request decision.Buffer, flushed once
 	// the request lets go of the policy (plan 7e, Ruling 10).
@@ -492,7 +495,7 @@ func (m *Minter) Mint(ctx context.Context, r Request) (Result, error) {
 	}
 	log.Emit(decision.Record{TS: m.now(), Event: decision.EventMint, Verdict: decision.VerdictPermit,
 		Reason: decision.GrantsMatched, Principal: r.Subject.Principal,
-		Auth:       &decision.Auth{Method: r.Subject.Credential.Method, Directory: r.Directory},
+		Auth:       &decision.Auth{Method: r.Subject.Credential.Method, Directory: r.Directory, OIDC: r.OIDC},
 		Device:     &decision.Device{Name: r.Device, Platform: r.Platform},
 		Mint:       &decision.Mint{TokenSHA256: hashes, TTLSeconds: int(ttl.Seconds()), BlobHash: r.BlobHash},
 		Policy:     r.Policy,

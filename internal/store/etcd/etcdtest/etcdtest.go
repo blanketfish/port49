@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -27,6 +28,7 @@ import (
 	"go.etcd.io/etcd/client/pkg/v3/transport"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/server/v3/embed"
+	"go.etcd.io/etcd/server/v3/storage/wal"
 	"go.uber.org/zap"
 
 	"github.com/rhwendt/port49/internal/testpki"
@@ -38,10 +40,61 @@ var shared struct {
 	n        atomic.Int64
 }
 
+// init shrinks etcd's WAL segment from 64 MB to 1 MB before any member
+// starts: etcd preallocates a segment and a temp one, so a member's data
+// directory was ~123 MB, and a binary that panics or times out leaks it on a
+// tmpfs /tmp. Now a leak is ~2 MB.
+func init() { wal.SegmentSizeBytes = 1 << 20 }
+
+// dirPrefix names the shared member's data directory: port49-etcd-<pid>-<n>.
+const dirPrefix = "port49-etcd-"
+
+// staleDir reports whether a directory name in the temp dir is a shared
+// member's whose process is gone: its name is dirPrefix, a pid and a
+// suffix, and alive says the pid is not running. Any other name, and a
+// live pid's directory, is left alone.
+func staleDir(name string, alive func(pid int) bool) bool {
+	rest, ok := strings.CutPrefix(name, dirPrefix)
+	if !ok {
+		return false
+	}
+	pidText, suffix, ok := strings.Cut(rest, "-")
+	if !ok || suffix == "" {
+		return false
+	}
+	pid, err := strconv.Atoi(pidText)
+	if err != nil || pid <= 0 {
+		return false
+	}
+	return !alive(pid)
+}
+
+// pidAlive is whether a process with pid exists; a process another user
+// owns is alive too (EPERM).
+func pidAlive(pid int) bool {
+	err := syscall.Kill(pid, 0)
+	return err == nil || errors.Is(err, syscall.EPERM)
+}
+
+// sweepStale removes the data directories a crashed run left, which its
+// own defers never reached.
+func sweepStale() {
+	ents, err := os.ReadDir(os.TempDir())
+	if err != nil {
+		return
+	}
+	for _, e := range ents {
+		if e.IsDir() && staleDir(e.Name(), pidAlive) {
+			os.RemoveAll(filepath.Join(os.TempDir(), e.Name()))
+		}
+	}
+}
+
 // Main starts the package's shared member, runs its tests, and stops it.
 // A package whose tests need etcd calls it from TestMain.
 func Main(m *testing.M) int {
-	dir, err := os.MkdirTemp("", "port49-etcd-")
+	sweepStale()
+	dir, err := os.MkdirTemp("", fmt.Sprintf("%s%d-", dirPrefix, os.Getpid()))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "etcdtest:", err)
 		return 1

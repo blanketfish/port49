@@ -12,14 +12,16 @@ const RevokeSlotWait = 10 * time.Second
 // RevokeRequest is POST /v1/tokens/revoke (design §17; spec §5.1.4). Exactly
 // one form: Mine (alone, or with Device and Username for the caller's own
 // on one key); Principal; or Device and Username (whoever holds the key,
-// under revoke_others). Sid is refused until OIDC (plan 7h). A token is
-// never sent: the broker finds what to revoke itself.
+// under revoke_others). Sid, with Issuer when more than one human OIDC
+// verifier is configured, ends one OIDC session under revoke_others (plan
+// 7h). A token is never sent: the broker finds what to revoke itself.
 type RevokeRequest struct {
 	Mine      bool   `json:"mine,omitempty"`
 	Principal string `json:"principal,omitempty"`
 	Device    string `json:"device,omitempty"`
 	Username  string `json:"username,omitempty"`
 	Sid       string `json:"sid,omitempty"`
+	Issuer    string `json:"issuer,omitempty"`
 }
 
 // SessionRef names a live session by device and device-facing username.

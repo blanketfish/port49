@@ -11,6 +11,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/base32"
 	"encoding/json"
@@ -50,6 +51,7 @@ import (
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/engine"
 	"github.com/rhwendt/port49/internal/inventory"
+	"github.com/rhwendt/port49/internal/keyfile"
 	"github.com/rhwendt/port49/internal/keyring"
 	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/policy"
@@ -249,8 +251,19 @@ func buildBrokerAnchor(cfg config.Config, inventoryFrom string, st store.Store, 
 	}
 	now := time.Now()
 	sayPolicy(procOf(cfg), pol, now)
-	cert, anchorCert, err := broker.LoadTLSAnchor(cfg.Broker.TLSCertFile, cfg.Broker.TLSKeyFile, cfg.Broker.ClientCAFile)
+	var cert tls.Certificate
+	var anchorCert *x509.Certificate
+	if cfg.Broker.ClientCAFile != "" {
+		cert, anchorCert, err = broker.LoadTLSAnchor(cfg.Broker.TLSCertFile, cfg.Broker.TLSKeyFile, cfg.Broker.ClientCAFile)
+	} else {
+		cert, err = keyfile.LoadX509KeyPair(cfg.Broker.TLSCertFile, cfg.Broker.TLSKeyFile)
+	}
 	if err != nil {
+		if cfg.Broker.ClientCAFile == "" {
+			// An OIDC-only broker has no client_ca_file to name (plan 7h).
+			return nil, nil, nil, fmt.Errorf("broker TLS files (tls_cert_file %s, tls_key_file %s; an OIDC-only "+
+				"broker has no x509 verifier): %w", cfg.Broker.TLSCertFile, cfg.Broker.TLSKeyFile, err)
+		}
 		return nil, nil, nil, fmt.Errorf("broker TLS files (tls_cert_file %s, tls_key_file %s, client_ca_file %s): %w",
 			cfg.Broker.TLSCertFile, cfg.Broker.TLSKeyFile, cfg.Broker.ClientCAFile, err)
 	}
@@ -285,10 +298,26 @@ func buildBrokerAnchor(cfg config.Config, inventoryFrom string, st store.Store, 
 		return nil, nil, nil, err
 	}
 	announceDirectory(stderr, proc, cfg, pol)
-	anchor := x509.NewCertPool()
-	anchor.AddCert(anchorCert)
+	if b.Identity, err = openOIDC(cfg, brokerStateDir(cfg), m, func(format string, args ...any) {
+		fmt.Fprintf(stderr, proc+": "+format+"\n", args...)
+	}); err != nil {
+		return nil, nil, nil, err
+	}
+	b.NoX509 = cfg.Broker.ClientCAFile == ""
+	announceIdentity(stderr, proc, cfg, b.Identity)
+	var anchor *x509.CertPool
+	if anchorCert != nil {
+		anchor = x509.NewCertPool()
+		anchor.AddCert(anchorCert)
+	}
 	srv, err := b.Server(cfg.Broker.Listen, cert, anchor)
 	if err != nil {
+		// The key an operator edits: client_ca_file when it is set, else
+		// broker.identity, which must then name an OIDC verifier.
+		if cfg.Broker.ClientCAFile == "" {
+			return nil, nil, nil, fmt.Errorf("broker.identity (no x509 trust anchor is set, so it must name an oidc "+
+				"verifier): %w", err)
+		}
 		return nil, nil, nil, fmt.Errorf("broker.client_ca_file %s: %w", cfg.Broker.ClientCAFile, err)
 	}
 	// net/http logs what no handler sees — a handshake refused for an expired
@@ -955,7 +984,10 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 	var checker *certstatus.Checker
 	if brk != nil {
 		cs := cfg.Broker.CertificateStatus
-		if cs.Disabled {
+		if cs == nil {
+			fmt.Fprintln(stderr, procOf(cfg)+": broker: no x509 verifier is configured, so no client certificate's "+
+				"status is checked")
+		} else if cs.Disabled {
 			fmt.Fprintln(stderr, "port49d: broker: certificate status checking is disabled "+
 				"(broker.certificate_status.disabled): a certificate revoked at its CA keeps minting until "+
 				"`port49 revoke --cert`")
@@ -1226,8 +1258,9 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 	// own broker is the only minter here, so the pass is its own.
 	if brk != nil {
 		sayDir := func(format string, args ...any) { fmt.Fprintf(stderr, "port49d: "+format+"\n", args...) }
-		statusDone.Add(3)
+		statusDone.Add(4)
 		go func() { defer statusDone.Done(); runPool(ctx, brk.Directory) }()
+		go func() { defer statusDone.Done(); runKeySets(ctx, brk.Identity) }()
 		go func() { defer statusDone.Done(); scheduled(ctx, brk, cfg.Broker.RefreshInterval, sayDir) }()
 		go func() {
 			defer statusDone.Done()

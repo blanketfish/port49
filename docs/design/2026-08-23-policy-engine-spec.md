@@ -84,13 +84,26 @@ the policy string are the same string and the subject matcher is a comparison:
 | Verifier | Principal string |
 |---|---|
 | human x509 | `user:` + the entry's `principal_attribute` (default `userPrincipalName`), lower-cased, from the certificate-to-directory mapping (design document §7); without `broker.directory`, `user:` + the certificate's one email SAN |
-| human OIDC | `user:` + `preferred_username` (or `email` where the deployment says so) |
+| human OIDC | `user:` + the claim `broker.identity.humans[].principal_claim` names (required, no default: `preferred_username`, `email` only with `email_verified: true`, or `upn`), lower-cased, printable ASCII with an `@`, its domain one of the verifier's `principal_domains` (§13 decision 39 rulings 6, 22, 23) |
 | workload x509 | the SAN URI verbatim — `spiffe://…` |
 | Kubernetes | `system:serviceaccount:<namespace>:<name>` from the token's `sub` |
-| machine OIDC | `app:` + the token's `client_id` (`azp`) |
+| machine OIDC | `app:` + the token's `azp`, else its `client_id` claim, verbatim: a client the verifier's `clients` lists, the token's `sub` that client's pinned identity; a token carrying a person's session claim (`auth_time`, `sid`, `nonce`, `scp`, `amr`) or an `idtyp` other than `app` is never a machine's (§13 decision 39 ruling 21) |
 
 Every example in this document that shows a principal shows the prefixed form. §5.1.4's
 `credential.method` takes `cert`, `oidc`, or `k8s`, matching the verifier types.
+
+The amendment removes the human OIDC row's former "`preferred_username` by default": OIDC Core
+§5.7 says a relying party must not rely on that claim being unique, and Keycloak's documented
+default is the bare username, which has no `@` (§15 L46 measured `alice` for a user created as `alice`), so a default would refuse
+every Keycloak user whose username has no `@` (§13 decision 39 ruling 23).
+
+A principal's trust domain is the list its verifier is in, `broker.identity.humans` or
+`broker.identity.machines` (§13 decisions 16 and 39), and nothing in the credential decides it.
+A token two verifiers would accept is refused. A person's delegated token never becomes a
+machine principal, and no two OIDC issuers can give one human principal: each human verifier
+names the `principal_domains` it is authoritative for, and two that overlap are refused. Nor
+can two issuers give one machine principal: `app:` carries no issuer, so two machine
+verifiers on different issuers that list one `client_id` are refused.
 
 **What a subject may do through the broker API.** The API (design document §17) authorizes
 the caller as a principal and, by default, lets a principal act only on its own tokens and
@@ -109,7 +122,7 @@ subjects:
 
 | Right | Unlocks |
 |---|---|
-| `revoke_others` | `/v1/tokens/revoke` naming another principal (a standing mark), or a `(device, username)` key whoever holds it; by `sid` with OIDC (plan 7h) |
+| `revoke_others` | `/v1/tokens/revoke` naming another principal (a standing mark), or a `(device, username)` key whoever holds it; or an OIDC session by `sid` and issuer (§5.1.4; §13 decision 39) |
 | `explain_others` | `/v1/explain` for a principal other than the caller |
 | `sync` | reserved: no broker endpoint triggers a sync; the inventory service authorizes `POST /v1/sync` by its own `syncers` list (§10) |
 | `keys_show` | reserved: nothing renders a device key's secret (§12) |
@@ -141,7 +154,7 @@ fetches groups. No additional query:
 | Identity path | Username source |
 |---|---|
 | LDAP or AD | `sAMAccountName` / `uid`, from the group-resolution query |
-| OIDC | the `preferred_username` claim |
+| OIDC | with `broker.directory`, the directory's `username_attribute`, read for the principal as a certificate's is; without it, the identity subject's declared `username:`. The `preferred_username` claim is never a username (§13 decision 39) |
 | certificate | via the certificate-to-directory mapping (§7 of the design document) |
 
 With `broker.directory`, a `user:` identity subject declares no `username:`; the broker refuses
@@ -969,12 +982,13 @@ that lands after the agent's connection bound refuses its next mint `credential_
 ends the agent's session. Each revocation is one `revoke`
 record (§5.7) naming what it reached and the live contexts it could not, on a platform that never
 asks about a command (§13, decision 21) or on a device the inventory gives no platform. Revocation
-by an OIDC `sid` or `sub` arrives with plan 7h, and from a CRL or an OCSP response with plan 7b,
-each as a mark of this kind where the certificate is still held (see below).
+from a CRL or an OCSP response arrived with plan 7b, as a mark of this kind where the certificate
+is still held (see below); an OIDC back-channel logout, by `sid` or `sub`, with plan 7h, as no mark
+(below).
 
 **Over HTTP, as built (plan 7c; §13, decision 34).** `POST /v1/tokens/revoke` takes one of three
 bodies, and is refused 400 for any other (a principal and a key together, `mine` beside a
-principal, a `sid` until plan 7h, an unknown field):
+principal, a `sid` beside a principal or a key, an unknown field):
 
 - **`{"mine": true}`, or a principal equal to the caller's**, ends the caller's own sessions and
   leaves no mark. Its unspent tokens are deleted one by one, so another principal's under a
@@ -1002,6 +1016,10 @@ principal, a `sid` until plan 7h, an unknown field):
   there: the response says to close it on the device. Without the right it is refused 403
   `api_right_missing` and recorded with the key: the request's form, never the caller's rights,
   decides what it means, and the caller's own session on one key is `mine` with the key.
+- **`{"sid": …, "issuer": …}`**, under `revoke_others`, ends one OIDC session as a back-channel
+  logout by `sid` does (below), its origin `api <caller>`. `issuer` may be omitted when exactly
+  one human OIDC verifier is configured. Without the right it is refused 403
+  `api_right_missing` and recorded.
 
 A lift and a revocation by certificate are the admin socket's alone. One that cannot take the
 revocation slot within 10 s is answered `503 revocation_busy`, nothing revoked. A self or key
@@ -1059,6 +1077,43 @@ source covers) is refused unless `on_unavailable: allow`. The refusal is answere
 (HTTP 503, retried), never as a final verdict, so it ends no agent's session. An unavailable status
 never affects a live session: the daemon never reads certificate status (decision 13). The
 configuration is required with a broker, and `disabled: true` is the explicit choice not to check.
+
+**Back-channel logout, as built (plan 7h; §13 decision 39).** An identity provider ends a
+session by posting a logout token (OpenID Connect Back-Channel Logout 1.0) to `POST
+/v1/logout`. It needs no client certificate and no `api:` right: it authenticates by the
+provider's signature. The token is validated as an ID token is (§13 decision 39), against
+the human OIDC verifiers alone (`aud` and `azp` as for an ID token), and then: `iat` no older
+than 24h, `exp` honoured when present, a `jti`, the back-channel logout member in `events`, no
+`nonce`, and a `sub`, a `sid`, or both. A `jti` seen before is answered 200 and does nothing.
+
+A logout is not a standing mark: the person may log in again at once, and only an operator's
+`port49 revoke` bans. It reaches, in order:
+
+- **A logout record**, written first, kept `max_token_age` plus twice `clock_skew`. By `sid`, it
+  refuses every token naming that issuer and `sid`; by `sub` alone, every token for that issuer
+  and `sub` issued at or before the logout token's `iat` plus `clock_skew`. Every bearer
+  request reads it; a mint reads it again after its last token write and deletes what it wrote
+  if one appeared, as it reads the marks.
+- **The person's unspent tokens**, found through the principals an owner record names: at each
+  human OIDC mint and refresh the broker adds the minting principal to the record under
+  `(issuer, sid)` and `(issuer, sub)`, before its first token write, for
+  `max(session.max_session_age_default, 24h)`; a record keeps every principal written to it
+  until each one's own expiry, so a rename under one `sub` is reached too. They are deleted one
+  by one, each principal's own only, every session's: the token index holds no finer cut. A
+  principal outside the accepting verifier's `principal_domains` is never reached.
+- **The live contexts, twice.** By `sid`, those indexed under the issuer-qualified `sid`; by
+  `sub` alone, every context of the principal. A context is shared per (principal, device)
+  and holds the last login's credential (decision 15), so a `sub` logout ends a person's
+  certificate-path contexts too, and a `sid` logout ends a context another of the person's
+  sessions joined, or a certificate-path context an OIDC refresh extended under that `sid`.
+  The person's next login, with a token minted after, lifts the mark (§5.6).
+- **The receipts** of the principals behind those contexts.
+
+One `revoke` record is written, `by: sid` or `by: sub`, origin `backchannel_logout <issuer>`
+(§5.7). With no mark, a redemption that removed its token before the delete and writes its
+context after the second pass writes it unrevoked: one store round trip, as for a self
+revocation. A logout whose store writes fail is answered 503, so the provider may send it
+again; whether it does is the provider's (§15, L45).
 
 ### 5.2 Session authorization (daemon)
 
@@ -1837,6 +1892,26 @@ forcing a reconnect. Requirements:
   - **Who triggers it.** `port49 refresh` and `port49 login` run it; the agent never runs it on its
     own.
 
+**The refresh on the OIDC path, as built (plan 7h; §13 decision 39).** It is `POST
+/v1/refresh/challenge` and `POST /v1/refresh`, each with the caller's bearer:
+
+- **The nonce.** 32 random bytes, held in the store for 5m so any broker replica can take it,
+  once; one per principal per 10s. The agent sends it as the `nonce` of a `prompt=login`
+  authentication request.
+- **The proof.** The new ID token is the refresh's bearer. Its `nonce` must be that challenge,
+  unspent, issued to the same principal and issuer, and its `auth_time` no earlier than the
+  challenge less `clock_skew`; else 401 `refresh_challenge_missing` or `refresh_not_fresh`, and
+  nothing is extended.
+- **The clock.** `auth_time` is the assertion's, never the broker's (decision 17).
+- **The `sid`.** Each extended context is indexed under the new assertion's `sid` too, beside
+  the old and before it is extended, so a logout of either session reaches it. A logout that
+  lands during the refresh is caught by the refresh's reading of the logout records after its
+  writes, which then marks every context it extended before answering 401.
+
+Whether a provider moves `auth_time` and echoes the `nonce` on `prompt=login` is §15's L46
+(Keycloak: measured, it does, and a refresh-token grant keeps the last authentication's
+`auth_time`) and L47 (hosted providers, open).
+
 #### Why `enable: auto` is restricted
 
 Method lists fall through to a later method when the server is unreachable, and not on **FAIL**
@@ -2092,6 +2167,11 @@ Two fields carry what a directory contributed (plan 7g):
   server, site}`: `source` is `fresh` (read from a directory server for this request) or `grace`
   (the store's, verified at `verified_at`, no server answering); `server` and `site` are where it
   was read. It names no group: `policy.subjects` says which subjects matched.
+- `auth.oidc`: on a broker event whose caller presented an OIDC token, `{issuer, sub, sid, amr,
+  acr, auth_time}`, each from the verified token (`sid` the provider's own, not
+  issuer-qualified); `amr` and `acr` are recorded and consulted by nothing (decision 13). A
+  bearer that did not verify is recorded `auth: {method: oidc}` with no principal: none of its
+  claims is a validated value (§13 decision 39).
 
 A `revoke` record (plan 7a) is written once per revocation or lift that takes force: `deny
 credential_revoked` for a revocation, `permit revocation_lifted` for a lift. A revocation that took
@@ -2100,12 +2180,15 @@ mark that could not be written, a lift that found no mark or could not delete it
 request, one that gave up waiting behind another; a refusal for a missing `api:` right is
 recorded, below): `port49 revoke` reports it and exits 1. Its
 `principal` is the revoked principal when the revocation is by principal. Its body is `"revocation": {"by", "issuer", "serial", "device", "username", "at",
-"origin", "contexts", "token_keys", "connections", "unreached", "saved", "error"}`: `by` is
-`principal` or `cert` for a standing mark, `self` for a principal ending its own sessions, and
-`key` for one `(device, username)` ended; `device` and `username` name a `key` revocation's key,
+"origin", "contexts", "token_keys", "connections", "unreached", "saved", "error"}`: `by`
+is `principal` or `cert` for a standing mark, `self` for a principal ending its own sessions,
+`key` for one `(device, username)` ended, and `sid` or `sub` for an OIDC session or subject
+ended by a back-channel logout or by `/v1/tokens/revoke` (§5.1.4), which carry `oidc_issuer`
+and `sid` or `sub`, and `principals` when the logout reached more than one principal (the
+record's `principal` is then the first); `device` and `username` name a `key` revocation's key,
 or a `self` one limited to a key; `issuer` and `serial` name a certificate (the serial in lower-case hex);
 `at` is when the mark took force, an earlier mark's time when one already stood; `origin` is who
-asked (`admin_socket uid <n>`, e.g. `admin_socket uid 0`, `api <principal>` over HTTP, or `offline uid <n>` for a revoke written by `port49-broker revoke --offline` with every broker down); `contexts` how many live contexts were marked; `token_keys` how many
+asked (`admin_socket uid <n>`, e.g. `admin_socket uid 0`, `api <principal>` over HTTP, `backchannel_logout <issuer>`, or `offline uid <n>` for a revoke written by `port49-broker revoke --offline` with every broker down); `contexts` how many live contexts were marked; `token_keys` how many
 `(device, username)` keys had their unspent tokens deleted; `connections` how many held broker
 connections were closed; `unreached` each marked context, `{"device", "username"}`, on a platform
 that never asks about a command, or on a device the inventory gives no platform, so an incident
@@ -2148,18 +2231,18 @@ refused request named; any other path is recorded `mint`.
 | `grants_matched` | `mint`: at least one declared grant selected the device; blob written. `refresh`: the policy in force was written into the live context; or, on a session refresh, the context was extended. `identity`: the caller's subject holds a grant unexpired now |
 | `no_grants_matched` | `mint`: no declared grant for this principal selects the device. `refresh`: none does any more, and the live context is revoked. `identity`: it holds none |
 | `username_collision` | `mint`: the derived username is already held by a subject in another trust domain (§2); or the directory derives a username a policy subject declares, or a second directory entry holds the same username under `broker.directory.username_attribute` (§13 decision 38). At the broker's bind and on `refresh` likewise; on `refresh` every context of the principal is revoked. The process log names both claimants |
-| `identity_unmapped` | at the broker's bind, and on `mint`, `identity`, `explain` and `revoke`: the client certificate maps to no directory entry under `broker.directory.certificate_mapping`; or the value the mapping reads is not in the certificate (no SID extension; zero or several UPN or email SANs); or a weak mapping's issuer is not one its `issuers:` pins (design §7); or the entry's `principal_attribute` or `username_attribute` is absent, has several values, is not printable ASCII, gives a principal with no `@`, or a username that is not already canonical or is reserved (§2); or the principal it gives is pinned to another entry, by `objectGUID` or `entryUUID` (else DN), for as long as that principal's membership record lives or until an operator runs `port49 directory forget` (§13 decision 38). The API answers 401 and the connection is closed. On `refresh`: the principal's entry is gone or no longer usable, and every context of it is revoked |
+| `identity_unmapped` | at the broker's bind, and on `mint`, `identity`, `explain` and `revoke`: an OIDC token that verified but whose principal claim is absent, not one string, not printable ASCII with an `@`, outside the verifier's `principal_domains`, or an `email` without `email_verified: true`, or a machine token with neither `azp` nor `client_id` (§13 decision 39); or the client certificate maps to no directory entry under `broker.directory.certificate_mapping`; or the value the mapping reads is not in the certificate (no SID extension; zero or several UPN or email SANs); or a weak mapping's issuer is not one its `issuers:` pins (design §7); or the entry's `principal_attribute` or `username_attribute` is absent, has several values, is not printable ASCII, gives a principal with no `@`, or a username that is not already canonical or is reserved (§2); or the principal it gives is pinned to another entry, by `objectGUID` or `entryUUID` (else DN), for as long as that principal's membership record lives or until an operator runs `port49 directory forget` (§13 decision 38). The API answers 401 and the connection is closed. On `refresh`: the principal's entry is gone or no longer usable, and every context of it is revoked |
 | `identity_ambiguous` | as `identity_unmapped`, when the certificate maps to two or more entries, or the server refuses the search for its size limit; or when a second entry holds the same `broker.directory.principal_attribute` value as the mapped entry, so two people would share one principal (§13 decision 38); or when a uniqueness search (the username's, the principal's) does not return the entry itself, so the server's matching rule cannot prove the value is one entry's alone. Never resolved to the first entry (design §7). MUST be alertable on its own: two people matching one certificate is an impersonation path. On `refresh`: every context of the principal is revoked |
 | `directory_unavailable` | at the broker's bind, and on `mint`, `identity`, `explain` and `revoke`: no directory server answered within `broker.directory.query_timeout`, and the membership the store holds for the principal or the certificate was verified longer ago than `broker.directory.grace`, or there is none, or it records the directory's refusal (grace never overrules one) (§13 decision 38). Nothing is minted. The API answers 503 with `Retry-After`, to be retried, and no agent session is ended. Never on a scheduled or policy refresh: a principal the directory does not answer for keeps its contexts unstamped, and `context_stale` takes over at the ceiling. On a session refresh (`/v1/refresh`), as on `mint`: nothing is extended |
 | `composition_refused` | `mint`: the principal matches more than one subject, and their grants together compose on this device to a session reply a joint check refuses (§10): a level above the grants' ceiling, a reply over 255 bytes, an attribute the platform does not accept, or a blob the daemon would refuse. Refused for this principal on this device alone, never a quarantine. On `refresh`: the live context is revoked the same way. The process log names the subjects and the check |
-| `trust_domain_unresolved` | `mint`: no configured verifier accepted the credential (design document §7); or the revocation status of the certificate or one above it could not be established (a stale CRL, an OCSP responder that did not answer, an issuer no configured source covers) and `broker.certificate_status.on_unavailable` is `refuse` (§5.1.4). The API then answers 503 `certificate_status_unavailable`, to be retried, never a final 401. On `refresh`: the refresh challenge was not answered by the connection's key, or the certificate's status could not be established as on `mint` (503) |
+| `trust_domain_unresolved` | `mint`: no configured verifier accepted the credential (design document §7); or the revocation status of the certificate or one above it could not be established (a stale CRL, an OCSP responder that did not answer, an issuer no configured source covers) and `broker.certificate_status.on_unavailable` is `refuse` (§5.1.4). The API then answers 503 `certificate_status_unavailable`, to be retried, never a final 401. On `mint`, `refresh`, `identity`, `explain` and `revoke` also: an OIDC token none of `broker.identity`'s verifiers accepts, or that two accept (a bad signature, an algorithm the verifier does not pin, an `iss`, `aud` or `azp` that does not match, an expired or not-yet-valid token, one issued longer ago than `max_token_age`, a human token without `auth_time`, a machine token from a client the verifier does not list, with another `sub` than the client's, or carrying a person's session claim or an `idtyp` other than `app`) (§13 decision 39); the API answers a final 401, never `certificate_status_unavailable`. When the issuer's keys cannot be had (none fetched, none refreshed within `jwks_max_age`, or a token's `kid` not in the kept set and the refetch failing) the API answers 503 `identity_provider_unavailable`, to be retried, never a final 401. On `refresh`: the refresh challenge was not answered by the connection's key, or the certificate's status could not be established as on `mint` (503); also an OIDC refresh whose token's `nonce` is not the caller's unspent challenge (401 `refresh_challenge_missing`), or whose `auth_time` is before it (401 `refresh_not_fresh`) |
 | `candidate_cap_reached` | `mint`: `token.candidate_cap` unspent tokens already stand for this `(device, username)`; the mint is refused, never a redemption, and every token already issued stays usable (design document §8) |
 | `context_matched` | `authorize_session`: context found, attributes returned |
 | `escalation_granted` | `escalate`: the level was within `max_privilege` and the mechanism succeeded |
 | `permit_dominates` | a permit dominated every matching deny (§5.4) |
 | `pipe_stage_denied` | a pipeline stage matched no pipe permit (§4) |
 | `service_unsupported` | the authorization `service` is not one the platform authorizes; on `redeem`, the authentication action or type is not one port49 serves (only `login` with ASCII, PAP, or CHAP) and the reply is `ERROR` |
-| `store_unavailable` | any event: the store did not answer or returned an error, or, on `redeem`, port49d found the store restored from a snapshot and refuses every token redemption until a broker runner's purge is done (decision 36, the restore guard). On `redeem` and on accounting the reply is `ERROR`; on an authorization it is `FAIL` — fail closed, a break-glass account's commands included (plan 4, owner's ruling 2026-09-24), because an authorization `ERROR` hands the N9Kv's command to its local role checks and permits every command under IOS-XE's `if-authenticated` (§15, L4). Whether the device then falls through to its next method is per platform and is not what this reason promises: an authentication `ERROR` is final on IOS-XE and on Junos with `tacplus` alone, and where it does fall through (vEOS, the N9Kv) the authorization `FAIL` that follows leaves break-glass logged in and unable to run a command (§15, L4; `tests/lab/results/L4-error-*.md`). So a store outage is not the break-glass case; an unreachable port49 is. The operator's escape is to stop port49d, or reject TCP 49 with a reset, so each device finds the connection refused and treats the server as down. A break-glass account then logs in with its local password, under a method list that ends in `local` (measured over SSH on all five images, §15 L4 and L17). A firewall that drops TCP 49 silently is unmeasured as an escape (a silent server costs 5s per command on the Cisco and Arista images, L4), and so is whether commands in a session already open fall to local authorization. port49d will do this itself by closing its TACACS+ listener while the store is unhealthy (owner's ruling 2026-09-24; plan 7f). On etcd (plan 7d) it already closes every listener once its hold on the store is lost, or the token or context pool's circuit has stayed open, or every call on one has been refused, for `store.etcd.hold_ttl`, and opens them again when the store returns (§13, decision 35). Before then a store that does not answer, or a pool's open circuit, is answered within `store.packet_deadline`, never left for the device to time out (what each image does then: §15 L35). The log line is the evidence an operator needs at 3am |
+| `store_unavailable` | any event: the store did not answer or returned an error, or, on `redeem`, port49d found the store restored from a snapshot and refuses every token redemption until a broker runner's purge is done (decision 36, the restore guard), or, on `mint` at port49-broker, the replica's mark on `meta/judged` has not landed since its policy swap (the mint gate; one store round trip, `port49_broker_mint_gate_closed`). On `redeem` and on accounting the reply is `ERROR`; on an authorization it is `FAIL` — fail closed, a break-glass account's commands included (plan 4, owner's ruling 2026-09-24), because an authorization `ERROR` hands the N9Kv's command to its local role checks and permits every command under IOS-XE's `if-authenticated` (§15, L4). Whether the device then falls through to its next method is per platform and is not what this reason promises: an authentication `ERROR` is final on IOS-XE and on Junos with `tacplus` alone, and where it does fall through (vEOS, the N9Kv) the authorization `FAIL` that follows leaves break-glass logged in and unable to run a command (§15, L4; `tests/lab/results/L4-error-*.md`). So a store outage is not the break-glass case; an unreachable port49 is. The operator's escape is to stop port49d, or reject TCP 49 with a reset, so each device finds the connection refused and treats the server as down. A break-glass account then logs in with its local password, under a method list that ends in `local` (measured over SSH on all five images, §15 L4 and L17). A firewall that drops TCP 49 silently is unmeasured as an escape (a silent server costs 5s per command on the Cisco and Arista images, L4), and so is whether commands in a session already open fall to local authorization. port49d will do this itself by closing its TACACS+ listener while the store is unhealthy (owner's ruling 2026-09-24; plan 7f). On etcd (plan 7d) it already closes every listener once its hold on the store is lost, or the token or context pool's circuit has stayed open, or every call on one has been refused, for `store.etcd.hold_ttl`, and opens them again when the store returns (§13, decision 35). Before then a store that does not answer, or a pool's open circuit, is answered within `store.packet_deadline`, never left for the device to time out (what each image does then: §15 L35). The log line is the evidence an operator needs at 3am |
 | `token_redeemed` | `redeem`: a presented credential matched an unspent token |
 | `token_not_found` | `redeem`: the device tag matched but no unspent token for `(nas, username)` did — expired, spent, or mistyped, or its receipt deleted by an operator's revocation (§5.1.4) |
 | `token_spent` | `redeem`/`escalate`: the credential matched a receipt whose sliding window (`receipt_idle_ttl`) or absolute cap (`receipt_max_age`) had passed, or whose `ctx_id` is no longer the live context's — the context was replaced or reclaimed since, so the stored decision describes nothing that exists (§5.6); FAIL on the wire, distinguishable only in the log |
@@ -2175,9 +2258,9 @@ refused request named; any other path is recorded `mint`.
 | `username_mismatch` | the request's username differs from the one bound at redemption (§5.6). Reachable two ways, and a request under a name port49 never authenticated is neither of them — that is `context_missing`, because the username is the key. First, wherever the username is resolved from context rather than read off the wire: the `$enab{level}$` enable path through the `(nas, rem_addr)` index. Second, as a **store-fault guard** — the context lookup selects on the username, so a store answering with another principal's record fails the re-check that follows it and is denied rather than authorized. A correct store never produces the second |
 | `rem_addr_mismatch` | enable arrived from a different address than the bound one |
 | `privilege_exceeded` | the request is above the session's granted level |
-| `session_expired` | the session ceiling was reached; context retained through the grace window (§5.6). On `mint`: the held connection's authentication is older than `session.max_session_age_default`, and the caller must authenticate again (§13, decision 17). Per item on `mint`: the device's ceiling (the least `max_session_age` of its roles, §5.6) has passed since the connection authenticated; run `port49 refresh`. On `refresh`: the context is past its grace window and is not extended. On `redeem`: the token's ceiling has passed; the login is refused FAIL, the token is not spent, and no context is written (§5.6). |
+| `session_expired` | the session ceiling was reached; context retained through the grace window (§5.6). On `mint`: the held connection's authentication is older than `session.max_session_age_default`; on every endpoint but the refresh's challenge and refresh, an OIDC token's `auth_time` is; either way the caller must authenticate again (§13, decision 17). Per item on `mint`: the device's ceiling (the least `max_session_age` of its roles, §5.6) has passed since the connection authenticated; run `port49 refresh`. On `refresh`: the context is past its grace window and is not extended. On `redeem`: the token's ceiling has passed; the login is refused FAIL, the token is not spent, and no context is written (§5.6). |
 | `context_stale` | the broker has been unreachable past `staleness_ceiling`, or the principal's directory membership has not been verified for that long (§5.1.3); context retained, denies until refreshed (§5.1.1, design document §9) |
-| `credential_revoked` | the context's `revoked_at` is set — CRL, OCSP, back-channel logout, every grant on the device withdrawn, a subject's username changed, the principal's directory entry gone, ambiguous or renamed to a username another holds, their subjects' composition refused, the policy in force not compiling for the context, or a refresh finding a context it could not open, where the `refresh` record before it says which (§5.1.3, §5.6); on `redeem`, a login whose resulting context is revoked because its token was not minted after the revocation, or a retransmission answered while the context it names is revoked (§5.6); on `mint`, a revocation by principal or by this certificate stands (§5.1.4) or a CRL or OCSP response names the certificate or an intermediate above it, so nothing is minted and the connection is closed; on `refresh`, the caller's certificate is marked, or a CRL or OCSP response names it or an intermediate above it, so nothing is extended; on `revoke`, a revocation's own record |
+| `credential_revoked` | the context's `revoked_at` is set — CRL, OCSP, back-channel logout, every grant on the device withdrawn, a subject's username changed, the principal's directory entry gone, ambiguous or renamed to a username another holds, their subjects' composition refused, the policy in force not compiling for the context, or a refresh finding a context it could not open, where the `refresh` record before it says which (§5.1.3, §5.6); on `redeem`, a login whose resulting context is revoked because its token was not minted after the revocation, or a retransmission answered while the context it names is revoked (§5.6); on `mint`, a revocation by principal or by this certificate stands (§5.1.4), or an OIDC logout refuses the token's session or subject, or a CRL or OCSP response names the certificate or an intermediate above it, so nothing is minted and a held connection is closed; on `identity`, `explain` and `revoke`, an OIDC logout refuses the caller's token; on `refresh`, the caller's certificate is marked, or an OIDC logout refuses the caller's token, or a CRL or OCSP response names it or an intermediate above it, so nothing is extended; on `revoke`, a revocation's own record |
 | `revocation_lifted` | `revoke`: an operator lifted a revocation (§5.1.4). Mints by the principal or certificate are made again; a context the revocation marked stays revoked until a login whose token was minted after the revocation joins it (§5.6; §13, decision 15): for a principal's mark, after the lift; for a certificate's, by any of the principal's other certificates at any time |
 | `api_right_missing` | `revoke`, `explain`: the caller asked to act on another principal's tokens, sessions or decisions, or on a `(device, username)` whoever holds it, and its subject declares no `api:` right that unlocks it (§2). The API answers 403 `api_right_missing`; nothing is done |
 | `device_unknown` | the source address is not in the admission trie (§10). On an `unvalidated` record: a reload refused, removed, renamed, re-keyed or re-platformed the device an open connection was admitted as, so that admission is no longer one port49d knows, and the connection is reset with no strike (§10, "How a daemon refreshes its snapshot"). On `mint` and `refresh`: the device is in inventory and admission refuses it — no key group admits it, two tie on it, or its `key_ref` is one port49d holds no key for (§10) — so no token is minted for it and its live contexts are revoked: it cannot reach port49d, and a token for it would only be a login that falls to the device's local method (`tests/lab/results/quarantine-*.md`). As with a quarantine, a subject with no grant on the device is answered `no_grants_matched` first, so the API tells no caller which devices exist |
@@ -6014,8 +6097,8 @@ upgrade cycles, so the ambiguous case is rare — and when it fires, over-mitiga
 right failure. (§5.5)
 
 **8. The device-facing username — derived at mint, declared for machines.** Human usernames
-come from the same directory query that resolves groups, or the OIDC `preferred_username`
-claim; machine subjects declare one, since they have no directory entry. Unique across
+come from the same directory query that resolves groups, or, with no directory, the identity
+subject's declared `username` (decision 38 ruling 16; decision 39 ruling 7); machine subjects declare one, since they have no directory entry. Unique across
 subjects, and compared after case and domain normalization. (§2)
 
 **9. Platform data — compiled into the decision, not distributed to daemons.** The broker
@@ -7343,6 +7426,142 @@ one shape it refuses; L12 is the lab work that confirms or narrows both, in sequ
 The outcome is a per-platform list of shapes CI refuses. Recorded here only so it is not
 mistaken for an unresolved design question.
 
+**39. OIDC: a verifier per trust domain, a token validated per request, keys aged out, a logout
+that leaves no mark.** *Plan 7h, 2026-10-06.* Rulings rest on reasoning unless they say data.
+
+- **1. The lists.** `broker.identity.humans` and `.machines`. `x509` under `humans` (its
+  `trust_anchor_file`, at most one) and `oidc` under either (`issuer` with `client_id`,
+  `principal_claim` and `principal_domains` for humans; `audience` and `clients` for machines).
+  `x509` under `machines` and `k8s` are refused, plans 8 and
+  10. No `broker.identity` is `humans: [x509 from broker.client_ca_file]`; with it,
+  `client_ca_file` is refused. An OIDC-only broker requests no client certificate and takes no
+  `certificate_status`. Task 7.
+- **2. One verifier per token.** A token goes to every verifier whose issuer equals its `iss`;
+  exactly one must accept, two is `trust_domain_unresolved`. A human verifier needs `aud` ∋
+  `client_id`, `azp` = `client_id` when present and when `aud` has several values, and refuses
+  `typ: at+jwt`; a machine verifier needs `aud` ∋ `audience` and ruling 21's client checks.
+  A bearer with an `events` claim is refused (RFC 8725 §2.8). The header `typ`, compared
+  case-insensitively with any `application/` prefix removed, is allowed, never denied (RFC 8725
+  §3.11; Task 5 review): absent or `jwt` for a human verifier; absent, `jwt` or `at+jwt` for a
+  machine verifier; any other `typ` is refused (provisional on L45 and L47). A claim name
+  outside printable ASCII is refused, as `encoding/json` would match it to another. Task 5.
+- **3. The signature** (data: RFC 7515, 7518, 8725). Compact JWS only, 16 KiB at most;
+  `algorithms` per verifier, default `[RS256]`, from `RS256`, `PS256`, `ES256`, `ES384`,
+  `EdDSA`; `none` and `HS*` refused at load and at parse; algorithm and key type agree, and a
+  JWK's own `alg` when it has one; `crit` refused; `jku`, `jwk`, `x5u`, `x5c` never used; a
+  `kid` names one key, and with none the set holds one key of the type; JWKs with `use` not
+  `sig`, `key_ops` without `verify`, or RSA under 2048 or over 8192 bits are skipped; a set
+  of over 100 keys is refused. In-house on the standard library (OR-1), checked against the
+  RFC examples, Project Wycheproof's vectors, an algorithm × key-type matrix and fuzzing.
+  Task 3.
+- **4. Keys** (data: OIDC Discovery §4.3). Discovery's `issuer` equals the configured one;
+  `jwks_uri` is `https`, and is said when it changes; fetched with `ca_file` or the system
+  roots, through the environment's proxy when one is set, no redirect, 1 MiB, 10s; refreshed
+  every `jwks_refresh_interval` (1h) and on an unknown `kid` at most once a minute, on a
+  context no caller's hang-up cancels; a successful fetch with a usable key replaces the set,
+  and one with none is a failed fetch; the last good set is trusted until `jwks_max_age` (24h)
+  after its fetch, then every token is 503 `identity_provider_unavailable`; persisted 0600 in
+  the state directory and restored at start when younger than `jwks_max_age`, the staleness
+  gauge carrying its age; a start never waits on the provider; readiness never follows it.
+  OR-2 for the timings. Tasks 4 and 14.
+- **5. The claims** (data: OIDC Core §2, §3.1.3.7). `iss` exact; `exp` required; `nbf` honoured;
+  `iat` required and no older than `max_token_age` (2h); `sub` required; a human's
+  `auth_time` required; `clock_skew` 60s (0s–5m); every claim read by its exact name, a claim
+  named twice in different case refused; a date that is a JSON string refused. Task 5.
+- **6. The principal.** Human: `user:` + `principal_claim` (required: `preferred_username`,
+  `email` with `email_verified: true`, or `upn`), lower-cased, printable ASCII with an `@`, in
+  the verifier's `principal_domains`. Machine: `app:` + `azp`, else `client_id`, verbatim, a
+  listed client (ruling 21; else `trust_domain_unresolved`). A claim absent or unusable is
+  `identity_unmapped`. The claim must be one only the
+  provider's administrators set; the start says so. Task 5.
+- **7. The username and groups.** With a directory, the directory's, through `memberFor`, as a
+  certificate's; without one, the identity subject's declared `username`. No username and no
+  group is read from a token; spec §2 and decision 8 are amended to match decision 38 ruling
+  16. Task 9.
+- **8. A bearer per request, one credential per request.** No held connection on the OIDC
+  path; a certificate-less connection is charged to its source while open and closed when
+  idle, so the per-source cap bounds concurrent OIDC requests per address; a certificate and a
+  bearer together are refused 400; the marks apply to a bearer caller's principal. Tasks 9 and
+  10.
+- **9. The session clock** (data: spec §5.6, decision 17). A human token's `auth_time`; a
+  machine's `iat`. A request whose `auth_time` is older than
+  `session.max_session_age_default` is refused `session_expired`, but for the refresh's own
+  challenge and refresh. Task 9.
+- **10. The credential.** `{method: oidc, iss, sub, sid, amr, acr}`, `sid` issuer-qualified
+  (`store.SidKey`) so one issuer's logout never reaches another's session; `auth.oidc` on every
+  record of a bearer caller; nothing of an unverified token is recorded. Tasks 2 and 9.
+- **11. Owner records.** `(issuer, sid)` and `(issuer, sub)` to every principal minting under
+  them (ruling 24), written before the first token write of each human OIDC mint and refresh
+  (skipped while the principal's entry is under an hour old), for
+  `max(session.max_session_age_default, 24h)` per principal; a machine writes none; a failed
+  write refuses the mint `store_unavailable`. Tasks 8 and 9.
+- **12. `POST /v1/logout`** (data: OIDC Back-Channel Logout 1.0 §2.4–§2.8; provisional on L45
+  and L47). Form-encoded `logout_token`, 16 KiB; the human OIDC verifiers alone, `aud` and
+  `azp` as for an ID token; Ruling 3's signature; `iat` (no older than 24h), `exp` when
+  present, `jti`, `events`, no `nonce`, `sub` or `sid`, `typ` `logout+jwt` or `JWT` when
+  present. A `jti` seen before (24h + 2 × `clock_skew`) is 200 and nothing; a token that does
+  not validate is 400 `invalid_request`; a store failure is 503 with `Retry-After` and the
+  `jti` given back, departing from BCL §2.8's 400, and a `jti` that cannot be given back is
+  said with the manual ends. `Cache-Control: no-store`. Task 12.
+- **13. A logout leaves no mark.** A logout record first (by `sid`: every token naming it; by
+  `sub`: every token issued at or before the logout's `iat` + `clock_skew`; kept `max_token_age` +
+  2 × `clock_skew`); then each owner principal's own unspent tokens, only principals in the
+  verifier's `principal_domains`; then the contexts twice (by `sid`, or every context of each
+  principal by `sub`); the receipts; one `revoke` record by `sid` or `sub`. A `sid` logout
+  also ends a certificate-path context an OIDC refresh extended under it: fail closed. A mint
+  reads the logout records before and after its writes. The residual window is a self
+  revocation's. Tasks 8, 9 and 12.
+- **14. Revocation by `sid` over HTTP**, under `revoke_others`, `{sid, issuer}`, as a logout by
+  `sid`, origin `api <caller>`. Task 13.
+- **15. The OIDC refresh** (data: spec §5.6; measured on Keycloak, L46; provisional on L47). A store-held nonce
+  from `POST /v1/refresh/challenge` (5m, once, one per principal per 10s), sent as the `nonce`
+  of a `prompt=login` authentication; the new ID token's `nonce` taken once, its principal and
+  issuer the challenge's, its `auth_time` no earlier than the challenge less `clock_skew`; then
+  the certificate path's steps with `auth_time` as the clock; the new `sid` indexed beside the
+  old, before the extension; a logout read after the writes marks every context extended.
+  Task 11.
+- **16. `/v1/config`** lists `methods` and, per human OIDC verifier, `{issuer, client_id,
+  scopes}`. Task 10.
+- **17. The metrics.** `port49_oidc_tokens_total{issuer,outcome}`,
+  `port49_oidc_keys_last_success_timestamp_seconds{issuer}`,
+  `port49_oidc_keys_fetch_failures_total{issuer}`, `port49_oidc_logouts_total{outcome}`; no
+  principal and no device. The last-success gauge exists from the start and a restore sets it,
+  and its alert carries `or absent(...)`. Tasks 4, 5 and 12.
+- **18. What is never logged:** a bearer or logout token, a signature, a refresh nonce, the
+  `Authorization` header, any claim of a token that did not verify. Tasks 3 to 12.
+- **19. `app:` principals can be revoked:** `normalPrincipal` takes `app:`, verbatim after the
+  prefix. Task 2.
+- **20. The lab is Keycloak** (L45, L46); hosted providers are L47, open (OR-3). Rulings 12's
+  token shape, 13's `sid` and `sub` matching the ID token's, 15's `auth_time` and `nonce`, and
+  21's claim sets are provisional on them. Tasks 15 and 16. L46 closed on Keycloak (2026-10-07), so
+  rulings 15 and 21 stay provisional on L47 alone. L45 is measured but open: an administrator's
+  "sign out user" over two sessions sent one logout token naming one session's `sid`, which ruling
+  13's sid-first logout does not cover (awaiting a decision).
+- **21. A machine verifier takes listed clients with a pinned `sub`** (data: RFC 9068 §2.2;
+  OIDC Core §2; measured on Keycloak, L46; provisional on L47). `clients: [{client_id, sub}]`, required; the
+  client (`azp`, else `client_id`) listed and the `sub` its pinned one; `azp` and `client_id`
+  differing refused; a token carrying `auth_time`, `sid`, `nonce`, `scp` or `amr`, or an `idtyp`
+  other than `app`, refused: a person's delegated token never becomes `app:`. A token carrying
+  `act` or `may_act` (RFC 8693 §4.1, delegation) is refused as well (Task 5 review). Tasks 5 and 7.
+- **22. `principal_domains`.** Each human `oidc` verifier lists the domains whose principals it
+  may give, required; a principal outside them is `identity_unmapped`; two verifiers on
+  different issuers with overlapping domains are refused at load; a logout reaches only
+  principals in its verifier's domains. Machines likewise: two machine verifiers on different
+  issuers that list one `client_id` are refused at load, since `app:` + the client id names
+  no issuer (Task 2 review). Tasks 5, 7 and 12.
+- **23. `principal_claim` is required** (data: OIDC Core §5.7). No default; spec §2's
+  "`preferred_username` by default" is withdrawn. Task 7.
+- **24. Owner records hold every principal.** One record, a set of `{principal, expires_at}`
+  merged by compare-and-set; a logout ends each. Two human verifiers on one issuer with
+  different `principal_claim`s are refused. Tasks 7, 8, 9 and 12.
+
+*Open for Ryan (plan 7h's OR-1 to OR-3); the build uses each recommendation until they rule.*
+**OR-1:** the JOSE layer in-house on the standard library (ruling 3), not
+`github.com/go-jose/go-jose/v4`. **OR-2:** the defaults of rulings 4 and 5 and the refresh
+challenge: `clock_skew` 60s, `max_token_age` 2h, `jwks_refresh_interval` 1h, `jwks_max_age` 24h,
+5m. **OR-3:** hosted providers are L47, open until measured on an Entra ID and an Okta tenant
+(ruling 20); until then the operator notes say measured on Keycloak only.
+
 ---
 
 ## 14. Required test assertions
@@ -7602,7 +7821,7 @@ Beyond those already listed in the design document's §14:
 - **`max_session_age: never`** is accepted and produces no ceiling.
 - **Revocation reaches live sessions on command-authorizing platforms**: a back-channel
   logout naming `sid`, a `sub`-wide revocation, and a certificate appearing on a CRL each
-  invalidate the matching contexts and no others, and the next command on each is denied.
+  invalidate the matching contexts and no other principal's (a `sub` logout ends every context of its principal, decision 15), and the next command on each is denied.
 - **Revocation does not reach a session-only platform, and says so**: the same events against
   a live Junos login leave the device session running, the revocation record names that
   context as unreached, and `explain` reports the limit for that platform.
@@ -7784,7 +8003,13 @@ Beyond those already listed in the design document's §14:
   without `mine` included, is refused 403 `api_right_missing` and recorded with no `auth`; no
   right widens a mint or a refresh; an unknown device, and one outside the caller's grants that
   is quarantined or refused admission, is explained exactly as one with no grant; `/v1/logout`
-  succeeds with a valid logout token and no caller rights; every subject carrying `api:` appears
+  succeeds with a valid logout token and no caller rights;
+  a logout token replayed is answered 200 and does nothing; one that does not validate is 400 and
+  reaches nothing; a token naming a logged-out `sid` is refused at every endpoint; an OIDC token
+  two verifiers accept is refused; a person's delegated access token for a machine client is
+  refused, never `app:`; a token from one issuer naming a principal in another issuer's
+  `principal_domains` is refused, and that issuer's logout reaches none of the person's contexts;
+  every subject carrying `api:` appears
   in the CI report.
 - **Staleness ceiling**: with the broker unreachable, a context authorizes until
   `staleness_ceiling` elapses since `refreshed_at`, then denies `context_stale` with a
@@ -7986,6 +8211,9 @@ implemented against a guess. This section is the one place the distinction is ke
 | **L42** | Nested-group resolution, per directory. The fixture: a user three levels below a granted group (`alice` ∈ `g-leaf` ∈ `g-mid` ∈ `netops-oncall`), a loop (`dave` ∈ `g-loop-a` ∈ `g-loop-b` ∈ `g-loop-a`), and a user in the granted group directly (`carol` ∈ `netops-oncall`). For each user: which groups a search under the groups base returns with `member:1.2.840.113556.1.4.1941:=<user DN>` (`in_chain`), whether that search answers, errors or is refused on the loop, and how long it takes; whether the user entry's `memberOf` lists only its direct groups; what port49's `recursive` walk and `direct` read return; and whether a directory that does not implement the matching rule refuses the filter or answers it empty. | `broker.directory.nested_groups` and its three modes (§13 decision 38); design §10's "`memberOf` is not transitive" | OpenLDAP (slapd 2.5, `memberof` overlay), Samba AD (4.17) | closed — measured 2026-10-05; tests/lab/results/L42-openldap.md, tests/lab/results/L42-samba_ad.md |
 | **L43** | Which bind mechanisms each directory accepts from port49-broker, and how each refusal reads: SASL EXTERNAL over LDAPS with a client certificate (OpenLDAP mapping it by `olcAuthzRegexp`); GSSAPI with a keytab and no SASL security layer, over LDAPS (Samba AD's KDC); simple bind over LDAPS; and a simple bind over plain LDAP to a directory configured to require TLS. | `broker.directory.bind` (§13 decision 38); design §10's three mechanisms | OpenLDAP (EXTERNAL, simple), Samba AD (EXTERNAL, GSSAPI, simple) | closed — measured 2026-10-05; tests/lab/results/L43-openldap.md, tests/lab/results/L43-samba_ad.md |
 | **L44** | The Active Directory claims on a Windows DC: on L42's fixture and its loop, which groups `member:1.2.840.113556.1.4.1941:=<user DN>` returns and how the loop is answered; SASL EXTERNAL over LDAPS with a client certificate; GSSAPI with a keytab and no SASL security layer against the Windows KDC; whether `altSecurityIdentities` values written in port49's `X509:<I>{issuer}<SR>{serial}` form (issuer from the raw DER, `DC=` included) match the certificate the DC itself maps; whether the SID extension's value equals `objectSid`; and how KB5014754's strong-mapping enforcement treats each. | `broker.directory.nested_groups: in_chain`, the strong mappings `issuer_serial` and `sid`, and `broker.directory.bind` on AD (§13 decision 38, provisional on this row) | Windows Server AD | open — added 2026-10-05 (plan 7g); for the SER8 lab box |
+| **L45** | The back-channel logout token a provider sends to port49's `/v1/logout`, per way a session ends: an RP-initiated logout at the provider's end-session endpoint, an administrator signing a user out of every session, and an administrator ending one session. For each: the JWS header (`alg`, `kid`, `typ`); which of `iss`, `aud`, `azp`, `iat`, `exp`, `jti`, `sub`, `sid`, `events` it carries, and that `nonce` is absent; whether its `sid` and its `sub` equal the ID token's; one token per session or per user; the request's content type; and what the provider does when the answer is 503, or 400, or the connection is refused (retry or not, the end-session endpoint's own answer, and how it reports the failure). | `POST /v1/logout`'s validation and answers, a logout by `sid` reaching the context the ID token authorized, and a logout by `sub` finding the owner record the ID token's `sub` wrote (§5.1.4; §13 decision 39 rulings 12 and 13, provisional on this row) | Keycloak (26.x) | open — measured 2026-10-07 on Keycloak 26.4.7; tests/lab/results/L45-keycloak.md. Ruling 12 holds: `iss`, `aud`, `iat`, `exp` (`iat`+120s), `jti`, `sid`, `sub`, `events` present, `nonce` absent, `typ` `logout+jwt`, form-encoded; `events` also carries Keycloak's `revoke_offline_access: true`. An RP-initiated logout and an administrator ending one session each send one token whose `sid` and `sub` are the ID token's. An administrator signing a user out of two sessions sent one token naming one session's `sid` and the user's `sub`, so ruling 13's sid-first logout leaves the other session (a decision for Ryan; the row stays open on it). A 503, a 400 and a refused connection each got one request and no retry; the end-session endpoint answered 302 in every case |
+| **L46** | Fresh authentication on a provider: with an SSO session live, whether a plain second authorization request reuses it (no credentials asked, `auth_time` unchanged: the control); whether one with `prompt=login` makes the person enter their credentials again; whether the new ID token's `auth_time` is the new authentication's; whether it carries the request's `nonce`; whether its `sid` is the old session's or a new one; and beside it, what a refresh-token grant's ID token carries (`auth_time` unchanged, `nonce`, `sid`); and `max_age=0` against `prompt=login`. Also: the ID token's `preferred_username` for a user created with a bare username; and which of `auth_time`, `sid`, `nonce`, `scp`, `amr`, `idtyp`, `azp`, `client_id` and `sub` a client-credentials access token carries, beside a person's access token from the same realm (a delegated one). | The OIDC refresh (§5.6; §13 decision 39 ruling 15, provisional on this row); spec §5.6's "the identity provider will correctly report the *original* `auth_time`"; ruling 21's delegated-token markers and pinned `sub`; the Keycloak example in ruling 23's rationale | Keycloak (26.x) | closed — measured 2026-10-07; tests/lab/results/L46-keycloak.md. With an SSO session live a plain login reused it (no password, `auth_time` and `sid` unchanged); `prompt=login` and `max_age=0` each asked for the password, moved `auth_time` forward and echoed the request's `nonce`, keeping the `sid`; a refresh-token grant kept the last authentication's `auth_time` with no `nonce`. `preferred_username` for `alice` is `alice`. The client-credentials token carries none of `auth_time`, `sid`, `nonce`, `scp`, `amr`, `idtyp`, `client_id`; its `azp` is `port49-svc` and its `sub` the service account's fixed id |
+| **L47** | L45's and L46's claims on hosted providers, and their access tokens' `azp`, `aud` and `sub` under the client-credentials grant. For Microsoft Entra ID also: a v2 access token's `aud` (the application's GUID, or its `api://` URI); whether an ID token carries `email_verified` (if not, `principal_claim: email` refuses every Entra person); and the `idtyp` and `scp` claims an app-only and a delegated access token carry. | As L45 and L46, for hosted providers; `app:` + `azp` and the delegated-token refusal (§13 decision 39 rulings 6 and 21) | Microsoft Entra ID, Okta | open — added 2026-10-06 (plan 7h); needs a tenant each (OR-3) |
 
 **What has been measured so far, per row.** The measurements exist and the notes are in the
 repository. NX-OS was measured on 2026-09-20 and is no longer outstanding; **IOS-XE was

@@ -35,6 +35,9 @@ const (
 	ByCert      = store.RevocationCert
 	ByOwn       = "self"
 	ByKey       = "key"
+
+	ByLogoutSid = store.OIDCSid // an OIDC session ended (plan 7h)
+	ByLogoutSub = store.OIDCSub // every session of an OIDC subject ended
 )
 
 // RevokeRequest is one revocation or lift (spec §5.1.4): of a principal, or
@@ -65,8 +68,14 @@ type RevokeReport struct {
 	// OwnNote is the first line of a self revocation the request named by
 	// the caller's own principal, as it would another's: no mark was made,
 	// and who can make one. The endpoint sets it (ownNote); empty otherwise.
-	OwnNote     string
-	Mark        store.Revocation
+	OwnNote string
+	Mark    store.Revocation
+	// OIDCIssuer and Sid or Sub name what a ByLogoutSid or ByLogoutSub
+	// revocation ended (plan 7h).
+	OIDCIssuer, Sid, Sub string
+	// Principals is every owner principal a logout reached (Ruling 24);
+	// Request.Principal is the first.
+	Principals  []string
 	Contexts    []store.ContextRef
 	Unreached   []store.ContextRef
 	TokenKeys   int
@@ -80,14 +89,16 @@ type RevokeReport struct {
 	decimal bool
 }
 
-// principalPrefixes are the forms Identity and the policy give a principal
-// (spec §2). Only user: is minted for today; the others are refused until
-// their verifier exists, rather than marked under a key nothing spells.
-var principalPrefixes = []string{"user:"}
+// principalPrefixes are the forms a verifier gives a principal (spec §2):
+// user: for people, app: for an OIDC machine (plan 7h). spiffe:// and
+// system:serviceaccount: are refused until their verifiers exist (plans 8
+// and 10), rather than marked under a key nothing spells.
+var principalPrefixes = []string{"user:", "app:"}
 
 // normal checks req and puts it in the form a mark holds (pre-flight I2,
 // M16, M17): a principal as Identity spells it, user: and the lower-cased
-// email (the mapping is case-insensitive by construction), refusing one
+// email (the mapping is case-insensitive by construction), or app: and the
+// client id verbatim (a client id is case-sensitive), refusing one
 // without that prefix or with nothing after it; an issuer of valid UTF-8
 // with no control or format character (C0, C1, a bidi override), which the
 // log would carry raw; a serial in lower-case hex as big.Int.Text(16)
@@ -130,7 +141,8 @@ func (req RevokeRequest) normal() (RevokeRequest, string, string, error) {
 }
 
 // normalPrincipal is p as Identity spells it: user: and the lower-cased
-// email, the mapping being case-insensitive by construction. One that is
+// email, the mapping being case-insensitive by construction, or app: and the
+// client id verbatim (a client id is case-sensitive). One that is
 // not printable ASCII, has no known prefix, or nothing after it, is refused
 // (pre-flight I2, M16). The HTTP endpoints compare a caller to a principal
 // a request names only after this, so no spelling makes another principal
@@ -141,10 +153,13 @@ func normalPrincipal(p string) (string, error) {
 	}
 	for _, pre := range principalPrefixes {
 		if strings.HasPrefix(strings.ToLower(p), pre) && len(p) > len(pre) {
+			if pre == "app:" {
+				return pre + p[len(pre):], nil // a client id is case-sensitive
+			}
 			return pre + strings.ToLower(p[len(pre):]), nil
 		}
 	}
-	return "", fmt.Errorf("%w: a principal begins %s, as the log names it (user:alice@example.com)",
+	return "", fmt.Errorf("%w: a principal begins %s, as the log names it (user:alice@example.com, app:port49-ci)",
 		ErrBadRevocation, strings.Join(principalPrefixes, " or "))
 }
 
@@ -433,6 +448,10 @@ func (b *Broker) recordRevocation(now time.Time, rep RevokeReport, verdict strin
 	default:
 		rec.Principal = rep.Request.Principal // ByKey: the context's owner, when one was read
 	}
+	body.OIDCIssuer, body.Sid, body.Sub = rep.OIDCIssuer, rep.Sid, rep.Sub
+	if len(rep.Principals) > 1 {
+		body.Principals = rep.Principals
+	}
 	if rep.Key != (store.TokenKey{}) {
 		body.Device, body.Username = rep.Key.NAS, rep.Key.Username
 	}
@@ -514,6 +533,20 @@ func (r RevokeReport) Text() string {
 			"revoke the principal)", r.Key.NAS, r.Key.Username, owner, at, len(r.Contexts), r.TokenKeys)
 		fmt.Fprintf(&b, "\nthe owner's next login on %s re-admits any session still open on it under %s; close it "+
 			"on the device", r.Key.NAS, r.Key.Username)
+	case ByLogoutSid, ByLogoutSub:
+		what := "session sid " + r.Sid
+		if r.By == ByLogoutSub {
+			what = "every session of sub " + r.Sub
+		}
+		owner := ""
+		if len(r.Principals) > 0 {
+			owner = " (" + strings.Join(r.Principals, ", ") + ")"
+		} else if r.Request.Principal != "" {
+			owner = " (" + r.Request.Principal + ")"
+		}
+		fmt.Fprintf(&b, "ended %s at %s%s at %s: %d live context(s) marked, the unspent tokens under %d key(s) "+
+			"deleted; its tokens are refused from now on; no revocation stands, so a new login works at once (to "+
+			"stop that, revoke the principal)", what, r.OIDCIssuer, owner, at, len(r.Contexts), r.TokenKeys)
 	default:
 		b.WriteString(r.markText())
 		if r.LiftNote != "" {

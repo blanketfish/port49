@@ -170,7 +170,7 @@ func WriteLabWith(dir, email string, others []string, now time.Time) error {
 	if err != nil {
 		return err
 	}
-	srv, err := ca.Issue(Leaf{CommonName: "port49 lab broker", IPs: []net.IP{net.ParseIP("127.0.0.1")},
+	srv, err := ca.Issue(Leaf{CommonName: "port49 lab broker", DNSNames: []string{"port49-broker"}, IPs: []net.IP{net.ParseIP("127.0.0.1")},
 		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(24 * time.Hour)})
 	if err != nil {
 		return err

@@ -161,3 +161,43 @@ func TestSubjectsAndDirectoryShapes(t *testing.T) {
 		t.Fatalf("a record names no group: %s", b.String())
 	}
 }
+
+func TestAuthCarriesOIDC(t *testing.T) {
+	rec := Record{Event: EventMint, Verdict: VerdictPermit, Reason: GrantsMatched, Principal: "user:alice@corp.example.com",
+		Auth: &Auth{Method: "oidc", OIDC: &OIDC{Issuer: "https://sso.example.com/realms/corp", Sub: "8b2e",
+			Sid: "3c1f", AMR: []string{"pwd", "otp"}, ACR: "1", AuthTime: "2026-10-06T09:00:00Z"}}}
+	var buf bytes.Buffer
+	if err := NewJSONLines(&buf).Write(rec); err != nil {
+		t.Fatal(err)
+	}
+	want := `"auth":{"method":"oidc","oidc":{"issuer":"https://sso.example.com/realms/corp","sub":"8b2e","sid":"3c1f","amr":["pwd","otp"],"acr":"1","auth_time":"2026-10-06T09:00:00Z"}}`
+	if !strings.Contains(buf.String(), want) {
+		t.Fatalf("record %s does not carry %s", buf.String(), want)
+	}
+}
+
+func TestRevocationNamesAnOIDCSession(t *testing.T) {
+	rec := Record{Event: EventRevoke, Verdict: VerdictDeny, Reason: CredentialRevoked,
+		Revocation: &Revocation{By: "sid", OIDCIssuer: "https://sso.example.com/realms/corp", Sid: "3c1f",
+			At: "2026-10-06T10:00:00Z", Origin: "backchannel_logout https://sso.example.com/realms/corp"}}
+	var buf bytes.Buffer
+	if err := NewJSONLines(&buf).Write(rec); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"by":"sid"`, `"oidc_issuer":"https://sso.example.com/realms/corp"`, `"sid":"3c1f"`} {
+		if !strings.Contains(buf.String(), want) {
+			t.Fatalf("record %s lacks %s", buf.String(), want)
+		}
+	}
+	if strings.Contains(buf.String(), `"sub"`) || strings.Contains(buf.String(), `"principals"`) {
+		t.Fatalf("an empty sub or principals is written: %s", buf.String())
+	}
+	rec.Revocation.Principals = []string{"user:alice@example.com", "user:alice2@example.com"}
+	buf.Reset()
+	if err := NewJSONLines(&buf).Write(rec); err != nil {
+		t.Fatal(err)
+	}
+	if want := `"principals":["user:alice@example.com","user:alice2@example.com"]`; !strings.Contains(buf.String(), want) {
+		t.Fatalf("record %s lacks %s", buf.String(), want)
+	}
+}

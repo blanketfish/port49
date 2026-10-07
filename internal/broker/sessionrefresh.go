@@ -31,6 +31,10 @@ const (
 // 33). It is held on this connection alone; a new one replaces it. A
 // connection that refreshed within refreshEvery is told to wait.
 func (b *Broker) refreshChallenge(w http.ResponseWriter, r *http.Request) {
+	if _, ok, _ := bearerOf(r); ok {
+		b.oidcChallenge(w, r)
+		return
+	}
 	now := b.Now()
 	principal, _, cred, err := b.callerOf(r, now)
 	if err != nil {
@@ -66,6 +70,10 @@ func (b *Broker) refreshChallenge(w http.ResponseWriter, r *http.Request) {
 // refresh verifies the signed challenge and extends the caller's live
 // sessions (spec §5.6). The nonce is taken whatever the outcome: single use.
 func (b *Broker) refresh(w http.ResponseWriter, r *http.Request) {
+	if _, ok, _ := bearerOf(r); ok {
+		b.oidcRefresh(w, r)
+		return
+	}
 	now := b.Now()
 	principal, legacy, cred, err := b.callerOf(r, now)
 	if err != nil {
@@ -116,7 +124,7 @@ func (b *Broker) refresh(w http.ResponseWriter, r *http.Request) {
 	rv, revoked, err := b.revocation(ctx, principal, cred, legacy)
 	switch {
 	case err != nil:
-		b.refreshStoreError(w, now, principal, cred, refreshEvery,
+		b.refreshStoreError(w, now, principal, cred, nil, refreshEvery,
 			"the broker could not read the revocations in force, so it extended nothing; try again")
 		return
 	case revoked:
@@ -158,7 +166,7 @@ func (b *Broker) refresh(w http.ResponseWriter, r *http.Request) {
 	h.mu.Lock()
 	h.at, h.lastRefresh = at, at
 	h.mu.Unlock()
-	rep, err := b.RefreshSession(ctx, m, answer, cred, at)
+	rep, err := b.RefreshSession(ctx, m, answer, cred, at, nil)
 	if errors.Is(err, directory.ErrUsernameTaken) {
 		dref := directoryRefusal(err)
 		b.Metrics.SessionRefreshes.WithLabelValues("refused").Inc()
@@ -168,7 +176,7 @@ func (b *Broker) refresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		b.refreshStoreError(w, at, principal, cred, refreshEvery, partialRefreshText) // fixed text (M5)
+		b.refreshStoreError(w, at, principal, cred, nil, refreshEvery, partialRefreshText) // fixed text (M5)
 		return
 	}
 	// The marks again, after the extension's writes, as a mint reads them
@@ -176,7 +184,7 @@ func (b *Broker) refresh(w http.ResponseWriter, r *http.Request) {
 	// while this refresh extended is answered, not reported as extended.
 	switch rv, revoked, err := b.revocation(ctx, principal, cred, legacy); {
 	case err != nil:
-		b.refreshStoreError(w, at, principal, cred, refreshEvery, partialRefreshText)
+		b.refreshStoreError(w, at, principal, cred, nil, refreshEvery, partialRefreshText)
 		return
 	case revoked:
 		b.Metrics.SessionRefreshes.WithLabelValues("refused").Inc()
@@ -197,10 +205,10 @@ const partialRefreshText = "the broker could not finish extending your live sess
 // mint's store error is answered. A non-zero retry is sent as Retry-After:
 // the connection's pacing, which a retry sooner would meet as a 429.
 func (b *Broker) refreshStoreError(w http.ResponseWriter, now time.Time, principal string, cred store.Credential,
-	retry time.Duration, text string) {
+	via *decision.OIDC, retry time.Duration, text string) {
 	b.Metrics.SessionRefreshes.WithLabelValues("store_error").Inc()
 	b.emit(decision.Record{TS: now, Event: decision.EventRefresh, Verdict: decision.VerdictDeny,
-		Reason: decision.StoreUnavailable, Principal: principal, Auth: &decision.Auth{Method: cred.Method}})
+		Reason: decision.StoreUnavailable, Principal: principal, Auth: &decision.Auth{Method: cred.Method, OIDC: via}})
 	if retry > 0 {
 		w.Header().Set("Retry-After", strconv.Itoa(int(retry/time.Second)))
 	}
@@ -263,7 +271,7 @@ type SessionRefreshReport struct {
 // must not hold a reload (plan 7e, Ruling 10). A policy refresh, the pass
 // after a reload, holds no policy and writes at once.
 func (b *Broker) RefreshSession(ctx context.Context, m policy.Member, answer *directory.Answer,
-	cred store.Credential, at time.Time) (SessionRefreshReport, error) {
+	cred store.Credential, at time.Time, via *decision.OIDC) (SessionRefreshReport, error) {
 	principal := m.Principal
 	buf := newHeldLog()
 	pol, hold := b.Policy.Hold()
@@ -303,7 +311,7 @@ func (b *Broker) RefreshSession(ctx context.Context, m policy.Member, answer *di
 			visit.Outcome = "not_judged"
 		}
 		if visit.Outcome == "" {
-			visit.Outcome, visit.SessionExpires, err = b.extend(ctx, buf, pol, m, answer, cred, ref, dev, at, unreached)
+			visit.Outcome, visit.SessionExpires, err = b.extend(ctx, buf, pol, m, answer, cred, ref, dev, at, unreached, via)
 			if err != nil {
 				return rep, err
 			}
@@ -323,7 +331,7 @@ func (b *Broker) RefreshSession(ctx context.Context, m policy.Member, answer *di
 // no longer the caller's.
 func (b *Broker) extend(ctx context.Context, out decision.Emitter, pol *policy.Policy, m policy.Member,
 	answer *directory.Answer, cred store.Credential, ref store.ContextRef, dev admission.Device, at time.Time,
-	unreached bool) (string, time.Time, error) {
+	unreached bool, via *decision.OIDC) (string, time.Time, error) {
 	principal := m.Principal
 	k := store.ContextKey{NAS: ref.NAS, Username: ref.Username}
 	c, err := b.Store.GetContext(ctx, k)
@@ -338,7 +346,7 @@ func (b *Broker) extend(ctx context.Context, out decision.Emitter, pol *policy.P
 		return "revoked", time.Time{}, nil
 	}
 	rec := decision.Record{TS: at, Event: decision.EventRefresh, Principal: principal,
-		Auth:    &decision.Auth{Method: cred.Method, Fingerprint: cred.Fingerprint},
+		Auth:    &decision.Auth{Method: cred.Method, Fingerprint: cred.Fingerprint, OIDC: via},
 		Device:  &decision.Device{Name: ref.NAS, Platform: dev.Platform},
 		Session: &decision.Session{CtxID: c.CtxID, Username: c.Username, Unreached: unreached}}
 	if c.HasCeiling() && !at.Before(c.SessionExpires.Add(b.GraceWindow)) {
@@ -358,8 +366,18 @@ func (b *Broker) extend(ctx context.Context, out decision.Emitter, pol *policy.P
 	} else {
 		age = b.MaxSessionAge // a device with no platform: the default, as its mint would have
 	}
+	// The new sid is indexed before the extension (pre-flight I-2): a
+	// logout's RevokeBySid that runs after this reaches the context whether
+	// or not the extension has landed. An entry for a context the extension
+	// then does not reach is harmless: it names a context of this person.
+	sid := newSid(cred, c)
+	if sid != "" && b.Sessions != nil {
+		if err := b.Sessions.AddSid(ctx, principal, sid, ref); err != nil {
+			return "", time.Time{}, err
+		}
+	}
 	switch err := b.Store.RefreshContext(ctx, k, store.ContextRefresh{AuthTime: at, RefreshedAt: refreshedAt(answer, at),
-		SessionAge: &age, GraceCutoff: at.Add(-b.GraceWindow), ExpectRev: c.Rev}, b.ContextIdleTTL); {
+		SessionAge: &age, GraceCutoff: at.Add(-b.GraceWindow), Sid: sid, ExpectRev: c.Rev}, b.ContextIdleTTL); {
 	case errors.Is(err, store.ErrPastGrace):
 		return "past_grace", time.Time{}, nil
 	case errors.Is(err, store.ErrConflict), errors.Is(err, store.ErrNotFound):
@@ -379,6 +397,16 @@ func (b *Broker) extend(ctx context.Context, out decision.Emitter, pol *policy.P
 	rec.Verdict, rec.Reason = decision.VerdictPermit, decision.GrantsMatched
 	b.emitTo(out, rec)
 	return "extended", expires, nil
+}
+
+// newSid is the refresh's own sid when it differs from the context's: an
+// OIDC refresh under a new provider session (Ruling 15); "" otherwise,
+// and always on the certificate path, whose credential has none.
+func newSid(cred store.Credential, c store.Context) string {
+	if cred.Sid == "" || cred.Sid == c.Credential.Sid {
+		return ""
+	}
+	return cred.Sid
 }
 
 // refreshedAt is the staleness clock a session refresh writes: the

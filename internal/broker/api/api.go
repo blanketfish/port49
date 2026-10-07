@@ -13,6 +13,17 @@ type Config struct {
 	// CeilingWarningSeconds is session.ceiling_warning: how near a device's
 	// ceiling `port49 token` warns (plan 7b).
 	CeilingWarningSeconds int `json:"ceiling_warning_seconds,omitempty"`
+	// OIDC is each human OIDC verifier a public client may authenticate
+	// against (plan 7h; design §17): discovery data, never fleet data.
+	// Machine verifiers are not listed.
+	OIDC []OIDCProvider `json:"oidc,omitempty"`
+}
+
+// OIDCProvider is one human OIDC verifier as GET /v1/config names it.
+type OIDCProvider struct {
+	Issuer   string   `json:"issuer"`
+	ClientID string   `json:"client_id"`
+	Scopes   []string `json:"scopes"`
 }
 
 // MintRequest is POST /v1/tokens. TTLSeconds is a request, not an

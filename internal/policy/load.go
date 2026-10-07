@@ -1211,8 +1211,8 @@ func identityDomain(id string) (string, error) {
 	case strings.HasPrefix(id, "user:") && len(id) > len("user:"):
 		email := strings.TrimPrefix(id, "user:")
 		if !strings.Contains(email, "@") {
-			return "", fmt.Errorf("identity %q: the one human verifier is an x509 certificate, whose principal is "+
-				"`user:<email>` (spec §2)", id)
+			return "", fmt.Errorf("identity %q: a human principal is `user:<email>`, as the x509 and OIDC "+
+				"verifiers give it (spec §2)", id)
 		}
 		if lower := strings.ToLower(email); lower != email {
 			return "", fmt.Errorf("identity %q must be lower-case, because certificate identities are compared "+

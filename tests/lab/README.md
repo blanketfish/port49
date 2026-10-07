@@ -469,3 +469,38 @@ leaves nothing to commit; `PORT49_LAB_DIRECTORY_KEEP=1` leaves the containers up
 
 A recorded run is made from a detached worktree pinned at the commit under test, as every
 lab run is.
+
+## Identity provider (plan 7h)
+
+`make lab-oidc` runs L45 and L46 on one container, Keycloak, with no network device and no
+containerlab. It needs Docker and Compose v2.24.4 or later; in a shell that is not in the
+`docker` group the test runs docker as `sg docker -c`. The image is pinned by digest
+(`tests/lab/oidc/compose.yaml`, and `kcImage` in `oidc_test.go`, which a unit test holds equal);
+a note records `kc.sh --version` and the image ID it ran.
+
+`tests/lab/oidc_test.go` writes a PKI with `internal/testpki` under `tests/lab/logs/oidc/`
+(git-ignored), generates the admin password for the run (`admin.env`, mode 0600, never printed;
+a note that holds it is refused), brings the compose project `port49laboidc` up on
+`127.0.0.1:18443`, imports `tests/lab/oidc/keycloak/realm.json` and waits for the realm's
+discovery document (the import takes up to 90s). It takes the project down with its volumes at
+the end, keeping `keycloak.log`.
+
+- The issuer is `https://keycloak.port49.lab:18443/realms/port49-lab`. The test's client resolves
+  that name to the published port and trusts the run's own CA; the receiver's and the broker's
+  certificates come from the same CA.
+- Keycloak posts back-channel logouts to the receiver the test starts on the host's port 18750.
+  `host.port49.lab` must reach it from the container: compose maps it to `host-gateway`.
+- Evidence (`tests/lab/evidence/L45-keycloak.json`, `L46-keycloak.json`) holds decoded JWS
+  headers and claims, never a signature: the writer (and the note writer) refuse any value that holds a
+  compact JWS or a value the run registered as secret (the admin password, each code, state, token and
+  cookie value the flow handled). Failure messages carry no URL, Location query or page body.
+  The wire is TLS, so there is no pcap.
+- `realm.json` fixes `port49-svc`'s service-account user id, so its client-credentials tokens'
+  `sub` is known before Keycloak starts and the broker config can pin it (Ruling 21). L46 fails
+  if Keycloak did not keep that id, after writing its note.
+- L45 stops as INVALID, writing no note, if the receiver gets nothing within 20s of the first
+  end-session logout, or gets a request whose `iss`/`aud` are not this realm's and `port49-cli`'s.
+  The end-session request is a POST form, so the ID token is never in a URL.
+- L46 stops without writing its note if its SSO control (step 1b, a plain second login that must
+  reuse the session) fails: without it, "prompt=login asked for the password" proves nothing.
+- `PORT49_LAB_DIRECTORY_OUT=<dir>` redirects notes and evidence here too, for a dry run.

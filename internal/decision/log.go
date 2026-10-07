@@ -72,6 +72,23 @@ type Auth struct {
 	// names no group: Policy.Subjects says which subjects matched (spec
 	// §5.7; decision 38).
 	Directory *Directory `json:"directory,omitempty"`
+	// OIDC is the verified token's identity on a broker event whose caller
+	// presented one (plan 7h). A bearer that did not verify has none.
+	OIDC *OIDC `json:"oidc,omitempty"`
+}
+
+// OIDC is what an OIDC caller's verified token said of how it
+// authenticated (spec §5.1.4, §5.7; decision 39): the issuer, the subject,
+// the provider's own session id, and amr and acr, recorded because how
+// someone authenticated cannot be established afterwards, and consulted by
+// nothing (decision 13). Only a verified token's claims are ever here.
+type OIDC struct {
+	Issuer   string   `json:"issuer"`
+	Sub      string   `json:"sub"`
+	Sid      string   `json:"sid,omitempty"`
+	AMR      []string `json:"amr,omitempty"`
+	ACR      string   `json:"acr,omitempty"`
+	AuthTime string   `json:"auth_time,omitempty"`
 }
 
 // Directory says where a broker event's directory membership was read:
@@ -295,9 +312,18 @@ type Forget struct {
 // Revocation is what a revocation reached (spec §5.7): identity, never a
 // credential. A count of zero is absent.
 type Revocation struct {
-	By          string       `json:"by"`
-	Issuer      string       `json:"issuer,omitempty"`
-	Serial      string       `json:"serial,omitempty"`
+	By     string `json:"by"`
+	Issuer string `json:"issuer,omitempty"`
+	Serial string `json:"serial,omitempty"`
+	// OIDCIssuer and Sid or Sub name an OIDC session or subject a
+	// back-channel logout or a revocation by sid ended (by "sid" or "sub").
+	OIDCIssuer string `json:"oidc_issuer,omitempty"`
+	Sid        string `json:"sid,omitempty"`
+	Sub        string `json:"sub,omitempty"`
+	// Principals is every principal a logout reached when its owner record
+	// named more than one (a rename under one sub; Ruling 24); the record's
+	// Principal is then the first.
+	Principals  []string     `json:"principals,omitempty"`
 	Device      string       `json:"device,omitempty"`
 	Username    string       `json:"username,omitempty"`
 	At          string       `json:"at"`

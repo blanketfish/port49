@@ -1078,6 +1078,14 @@ func Run(t *testing.T, b Backend) {
 		{"MembershipKeyOutlivesNoRecord", MembershipKeyOutlivesNoRecord},
 		{"MembershipRefusedKeyKeepsItsClaimants", MembershipRefusedKeyKeepsItsClaimants},
 		{"MembershipForgetTombstoneOutlivesTheRecord", MembershipForgetTombstoneOutlivesTheRecord},
+		{"OncePutsOnceAndTakesOnce", OncePutsOnceAndTakesOnce},
+		{"OnceExpires", OnceExpires},
+		{"OnceRaces", OnceRaces},
+		{"OIDCOwnerKeepsEveryPrincipal", OIDCOwnerKeepsEveryPrincipal},
+		{"OIDCOwnerMergesUnderARace", OIDCOwnerMergesUnderARace},
+		{"LogoutKeepsTheLaterAndExpires", LogoutKeepsTheLaterAndExpires},
+		{"LogoutMergesUnderARace", LogoutMergesUnderARace},
+		{"OIDCRecordsRefuseWhatCannotBeKept", OIDCRecordsRefuseWhatCannotBeKept},
 	} {
 		p := p
 		t.Run(p.name, func(t *testing.T) { p.run(t, b) })

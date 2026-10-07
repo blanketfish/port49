@@ -500,3 +500,24 @@ func TestAMarkReturnsAnOutageOverAnUnreadableContext(t *testing.T) {
 		t.Fatalf("RevokeByCert = %v, %v; want the one context marked and the outage", refs, err)
 	}
 }
+
+func TestAddSidIndexesBesideTheOld(t *testing.T) {
+	st := memory.New(time.Now)
+	m := New(st, time.Now, time.Hour, time.Hour)
+	ctx := context.Background()
+	ref := store.ContextRef{NAS: "leaf1", Username: "alice"}
+	if err := st.IndexContext(ctx, "user:alice@example.com", "old", "", ref, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.AddSid(ctx, "user:alice@example.com", "new", ref); err != nil {
+		t.Fatal(err)
+	}
+	for _, sid := range []string{"old", "new"} {
+		if refs, _ := st.ContextsBySid(ctx, sid); len(refs) != 1 || refs[0] != ref {
+			t.Fatalf("by sid %s: %v", sid, refs)
+		}
+	}
+	if err := m.AddSid(ctx, "user:alice@example.com", "", ref); !errors.Is(err, ErrBlankRevocation) {
+		t.Fatalf("an empty sid: %v", err)
+	}
+}

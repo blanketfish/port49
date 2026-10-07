@@ -34,6 +34,7 @@ import (
 	"github.com/rhwendt/port49/internal/directory"
 	"github.com/rhwendt/port49/internal/fence"
 	"github.com/rhwendt/port49/internal/keyring"
+	"github.com/rhwendt/port49/internal/oidc"
 	"github.com/rhwendt/port49/internal/platform"
 	"github.com/rhwendt/port49/internal/store/crypt"
 	"github.com/rhwendt/port49/internal/yamlfault"
@@ -189,9 +190,16 @@ type BrokerConfig struct {
 	// followed.
 	TLSKeyFile string `yaml:"tls_key_file"`
 	// ClientCAFile is the one trust anchor client certificates are verified
-	// against. It must hold exactly one certificate (broker.LoadTLS).
+	// against: broker.client_ca_file when there is no broker.identity, else
+	// the x509 human verifier's trust_anchor_file, "" when there is none
+	// (plan 7h). It must hold exactly one certificate (broker.LoadTLS).
 	ClientCAFile string `yaml:"client_ca_file"`
-	PolicyFile   string `yaml:"policy_file"`
+	// Identity is broker.identity resolved (plan 7h): the verifier lists,
+	// or the shorthand of client_ca_file alone. Always set once checked.
+	// ClientCAFile is then its x509 anchor, "" on an OIDC-only broker.
+	Identity    *oidc.Config  `yaml:"-"`
+	IdentitySet *identityYAML `yaml:"identity"`
+	PolicyFile  string        `yaml:"policy_file"`
 	// BatchMax caps the devices in one mint request; a larger sweep pages
 	// (design §17). Default 100.
 	BatchMax int `yaml:"batch_max"`
@@ -1210,9 +1218,14 @@ func resolveKeys(c *Config, raw []byte) error {
 // broker's role broker.state_dir takes the revocations file's place
 // (Ruling 12): required, absolute, a directory that exists.
 func checkBroker(c Config, b BrokerConfig, role Role) (*BrokerConfig, error) {
+	id, err := checkIdentity(b.IdentitySet, b.ClientCAFile)
+	if err != nil {
+		return nil, err
+	}
+	b.Identity, b.ClientCAFile = id, id.X509AnchorFile
 	required := []struct{ key, v string }{
 		{"broker.listen", b.Listen}, {"broker.tls_cert_file", b.TLSCertFile}, {"broker.tls_key_file", b.TLSKeyFile},
-		{"broker.client_ca_file", b.ClientCAFile}, {"broker.policy_file", b.PolicyFile},
+		{"broker.policy_file", b.PolicyFile},
 	}
 	fix := "is required when broker: is present; remove the block to run port49d without a broker"
 	if role == RoleBroker {
@@ -1281,16 +1294,21 @@ func checkBroker(c Config, b BrokerConfig, role Role) (*BrokerConfig, error) {
 			return nil, err
 		}
 	}
-	if b.CertificateStatus == nil {
+	switch {
+	case b.CertificateStatus == nil && b.ClientCAFile != "":
 		return nil, fmt.Errorf("config: broker.certificate_status is required when broker: is present: " +
 			"name the CRLs or OCSP responder that say whether a client certificate is revoked, or set " +
 			"certificate_status: {disabled: true} to check none (spec §5.1.4)")
+	case b.CertificateStatus != nil && b.ClientCAFile == "":
+		return nil, errors.New("config: broker.certificate_status: no x509 verifier is configured, so no client " +
+			"certificate is checked; remove it")
+	case b.CertificateStatus != nil:
+		cs := *b.CertificateStatus
+		if err := checkCertificateStatus(&cs, b); err != nil {
+			return nil, err
+		}
+		b.CertificateStatus = &cs
 	}
-	cs := *b.CertificateStatus
-	if err := checkCertificateStatus(&cs, b); err != nil {
-		return nil, err
-	}
-	b.CertificateStatus = &cs
 	if b.DirectorySet != nil {
 		d, err := checkDirectory(*b.DirectorySet, os.Getenv)
 		if err != nil {
@@ -1646,6 +1664,15 @@ func ownRevocationsFile(c Config, b BrokerConfig) error {
 		{"inventory_file", c.InventoryFile}, {"accounting.spool_path", c.Accounting.SpoolPath},
 		{"admin_socket", c.AdminSocket},
 	}
+	for _, iss := range identityIssuers(&b) {
+		others = append(others, struct{ key, path string }{"broker.identity's kept keys for " + iss,
+			filepath.Join(BrokerStateDir(&b), oidc.KeyFileName(iss))})
+	}
+	if b.Identity != nil {
+		for _, v := range b.Identity.OIDC {
+			others = append(others, struct{ key, path string }{"broker.identity's ca_file for " + v.Issuer, v.CAFile})
+		}
+	}
 	if c.Lab != nil {
 		others = append(others, struct{ key, path string }{"lab.seed_token_file", c.Lab.SeedTokenFile},
 			struct{ key, path string }{"lab.fault_file", c.Lab.FaultFile})
@@ -1751,12 +1778,17 @@ func checkCertificateStatus(cs *CertificateStatusConfig, b BrokerConfig) error {
 		if b.RevocationsFile != "" {
 			marker = b.RevocationsFile + ".created"
 		}
-		for _, o := range []struct{ key, path string }{
+		others := []struct{ key, path string }{
 			{"broker.revocations_file", b.RevocationsFile}, {"broker.revocations_file's marker", marker},
 			{"broker.policy_file", b.PolicyFile}, {"broker.tls_cert_file", b.TLSCertFile},
 			{"broker.tls_key_file", b.TLSKeyFile}, {"broker.client_ca_file", b.ClientCAFile},
 			{at + ".file", src.File}, {at + ".issuer_file", src.IssuerFile},
-		} {
+		}
+		for _, iss := range identityIssuers(&b) {
+			others = append(others, struct{ key, path string }{"broker.identity's kept keys for " + iss,
+				filepath.Join(BrokerStateDir(&b), oidc.KeyFileName(iss))})
+		}
+		for _, o := range others {
 			if o.path == "" {
 				continue
 			}

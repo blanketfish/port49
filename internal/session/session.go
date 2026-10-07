@@ -131,6 +131,20 @@ func (m *Manager) Refresh(ctx context.Context, principal string, authTime, grace
 // context past its grace window. It refreshes nothing.
 var ErrNoGraceCutoff = errors.New("session: a refresh needs a grace cutoff")
 
+// AddSid indexes ref under sid beside the keys it already has (plan 7h,
+// Ruling 15): an OIDC refresh's new session, so a back-channel logout of
+// either the old or the new session reaches the context. It adds an entry;
+// it is not Refresh's ReindexSid, which moves one
+// (TestRefreshMovesAuthTimeKeepsWindowReindexesSid), and the old entry
+// staying is what Ruling 15 rests on. An empty sid is ErrBlankRevocation:
+// it would index every OIDC login without one.
+func (m *Manager) AddSid(ctx context.Context, principal, sid string, ref store.ContextRef) error {
+	if sid == "" {
+		return ErrBlankRevocation
+	}
+	return m.store.IndexContext(ctx, principal, sid, "", ref, m.indexTTL)
+}
+
 // ErrBlankRevocation is a revocation by an empty sid, or by a certificate
 // with no issuer or no serial. Every certificate login has sid "" and every
 // OIDC login a certificate with neither, so a revocation by a blank names

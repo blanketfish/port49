@@ -1049,3 +1049,19 @@ func TestRevokeAndLiftKeepTheDaemonsMarks(t *testing.T) {
 		t.Fatal("a lift left the mark in the daemon's marks")
 	}
 }
+
+func TestNormalPrincipalTakesAppVerbatim(t *testing.T) {
+	got, err := normalPrincipal("app:Port49-CI")
+	if err != nil || got != "app:Port49-CI" {
+		t.Fatalf("app:Port49-CI → %q, %v; a client id is case-sensitive", got, err)
+	}
+	if got, _ := normalPrincipal("APP:svc"); got != "app:svc" {
+		t.Fatalf("the prefix is not normalized: %q", got)
+	}
+	if got, _ := normalPrincipal("User:Alice@Example.com"); got != "user:alice@example.com" {
+		t.Fatalf("a user: principal is still lower-cased: %q", got)
+	}
+	if _, err := normalPrincipal("app:"); err == nil {
+		t.Fatal("an empty client id is a principal")
+	}
+}

@@ -28,6 +28,8 @@ import (
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/engine"
+	"github.com/rhwendt/port49/internal/oidc"
+	"github.com/rhwendt/port49/internal/oidc/oidctest"
 	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/session"
 	"github.com/rhwendt/port49/internal/store"
@@ -363,4 +365,76 @@ func eventsOf(recs []map[string]any, event string) []map[string]any {
 		}
 	}
 	return out
+}
+
+// testClientID is the human OIDC verifier's client_id in withOIDC.
+const testClientID = "port49-cli"
+
+// withOIDC gives f's broker an OIDC set over a test provider, on f's clock:
+// a human verifier (client_id port49-cli, principal from
+// preferred_username, for example.com) and a machine verifier (audience
+// api://port49-svc, client Oxidized-01 whose sub is svc).
+func (f *fixture) withOIDC(t *testing.T) *oidctest.Issuer {
+	t.Helper()
+	iss := oidctest.NewIssuer(t)
+	f.addIssuer(t, iss, "example.com", true)
+	return iss
+}
+
+// addIssuer adds iss to f's OIDC set (making the set if there is none): a
+// human verifier for domain, and, with machine, the machine verifier.
+func (f *fixture) addIssuer(t *testing.T, iss *oidctest.Issuer, domain string, machine bool) {
+	t.Helper()
+	ks := oidc.NewKeySet(oidc.KeySetConfig{Issuer: iss.URL, Client: oidc.NewClient(iss.Roots()), Refresh: time.Hour,
+		MaxAge: 24 * time.Hour, Now: f.b.Now, M: f.b.Metrics})
+	if f.b.Identity == nil {
+		f.b.Identity = &oidc.Set{Timing: oidc.DefaultTiming, Now: f.b.Now, M: f.b.Metrics}
+	}
+	f.b.Identity.Verifiers = append(f.b.Identity.Verifiers, &oidc.Verifier{VerifierConfig: oidc.VerifierConfig{
+		Domain: oidc.Humans, Issuer: iss.URL, ClientID: testClientID, PrincipalClaim: oidc.ClaimPreferredUsername,
+		PrincipalDomains: []string{domain}, Scopes: []string{"openid"}, Algorithms: []oidc.Alg{oidc.RS256}}, Keys: ks})
+	if machine {
+		f.b.Identity.Verifiers = append(f.b.Identity.Verifiers, &oidc.Verifier{VerifierConfig: oidc.VerifierConfig{
+			Domain: oidc.Machines, Issuer: iss.URL, Audience: "api://port49-svc",
+			Clients:    []oidc.MachineClient{{ClientID: "Oxidized-01", Sub: "svc"}},
+			Algorithms: []oidc.Alg{oidc.RS256}}, Keys: ks})
+	}
+}
+
+// idToken is alice's ID token from iss at f's now, sid s-alice, sub
+// sub-alice; extra overrides, nil deleting.
+func (f *fixture) idToken(t *testing.T, iss *oidctest.Issuer, extra map[string]any) string {
+	t.Helper()
+	c := map[string]any{"preferred_username": "alice@example.com", "amr": []string{"pwd", "otp"}, "acr": "1"}
+	for k, v := range extra {
+		c[k] = v
+	}
+	return iss.IDToken(t, "k1", testClientID, "sub-alice", f.b.Now(), c)
+}
+
+// bearer sends one request with no client certificate and token as its
+// bearer through the broker's handler.
+func (f *fixture) bearer(ctx context.Context, method, path, body, token string) *httptest.ResponseRecorder {
+	r := httptest.NewRequest(method, path, strings.NewReader(body)).WithContext(ctx)
+	r.TLS = &tls.ConnectionState{}
+	if token != "" {
+		r.Header.Set("Authorization", "Bearer "+token)
+	}
+	w := httptest.NewRecorder()
+	f.b.Handler().ServeHTTP(w, r)
+	return w
+}
+
+// httptestRequest is a request with no client certificate.
+func httptestRequest(method, path, body string) *http.Request {
+	r := httptest.NewRequest(method, path, strings.NewReader(body))
+	r.TLS = &tls.ConnectionState{}
+	return r
+}
+
+// httptestServe serves r through f's broker.
+func httptestServe(f *fixture, r *http.Request) *httptest.ResponseRecorder {
+	w := httptest.NewRecorder()
+	f.b.Handler().ServeHTTP(w, r)
+	return w
 }

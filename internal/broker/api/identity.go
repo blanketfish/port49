@@ -26,6 +26,18 @@ type Identity struct {
 	// connection must authenticate again. A device's own session ceiling
 	// may end a session sooner (pre-flight M16).
 	ConnectionEndsAt string `json:"connection_ends_at,omitempty"`
+	// OIDC is the verified token's identity when the caller presented one
+	// (plan 7h).
+	OIDC *IdentityOIDC `json:"oidc,omitempty"`
+}
+
+// IdentityOIDC is what GET /v1/identity says of an OIDC caller's token.
+type IdentityOIDC struct {
+	Issuer string   `json:"issuer"`
+	Sub    string   `json:"sub"`
+	Sid    string   `json:"sid,omitempty"`
+	AMR    []string `json:"amr,omitempty"`
+	ACR    string   `json:"acr,omitempty"`
 }
 
 // IdentityGrant is one grant row as the policy declares it.

@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/rhwendt/port49/internal/decision"
+	"github.com/rhwendt/port49/internal/oidc/oidctest"
 	"github.com/rhwendt/port49/internal/store"
 )
 
@@ -383,5 +385,180 @@ func TestALiftOverTheAPISaysWhichSocketLiftsPerProcess(t *testing.T) {
 		if w.Code != 400 || !strings.Contains(w.Body.String(), c.want) {
 			t.Errorf("proc %q: %d %s", c.proc, w.Code, w.Body)
 		}
+	}
+}
+
+// A policy where carol, on call, holds revoke_others.
+const onCallPolicy = `
+scopes:
+  - {name: all_devices, match: {}}
+roles:
+  - {name: network_admin, privilege: admin, permit: ["**"]}
+subjects:
+  - {name: netops, identity: ["user:alice@example.com"], username: alice, enable: token, token_ttl: 60s}
+  - {name: oncall, identity: ["user:carol@example.com"], username: carol, token_ttl: 60s, api: [revoke_others]}
+grants:
+  - {subject: netops, scope: all_devices, roles: [network_admin], max_privilege: admin}
+  - {subject: oncall, scope: all_devices, roles: [network_admin], max_privilege: admin}
+`
+
+func (f *fixture) carolToken(t *testing.T, iss *oidctest.Issuer) string {
+	t.Helper()
+	return iss.IDToken(t, "k1", testClientID, "sub-carol", f.b.Now(), map[string]any{"preferred_username": "carol@example.com"})
+}
+
+func TestRevokeBySidNeedsTheRightAndEndsTheSession(t *testing.T) {
+	f := newFixtureWithPolicy(t, 8, onCallPolicy)
+	iss := f.withOIDC(t)
+	ctx := context.Background()
+	now := f.b.Now()
+	if w := f.bearer(ctx, "POST", "/v1/tokens", mintLeaf1, f.idToken(t, iss, nil)); w.Code != 200 {
+		t.Fatalf("alice's mint: %d %s", w.Code, w.Body)
+	}
+	f.liveContextAt(t, "nx1", "alice", alicePrincipal, "", now, now.Add(12*time.Hour))
+	if err := f.st.IndexContext(ctx, alicePrincipal, store.SidKey(iss.URL, "s-sub-alice"), "",
+		store.ContextRef{NAS: "nx1", Username: "alice"}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"sid":"s-sub-alice"}`
+	// alice herself holds no right: 403, recorded, nothing ended.
+	if w := f.bearer(ctx, "POST", "/v1/tokens/revoke", body, f.idToken(t, iss, nil)); w.Code != 403 ||
+		!strings.Contains(w.Body.String(), "api_right_missing") {
+		t.Fatalf("without the right: %d %s", w.Code, w.Body)
+	}
+	w := f.bearer(ctx, "POST", "/v1/tokens/revoke", body, f.carolToken(t, iss))
+	var resp api.RevokeResponse
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &resp) != nil {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	if resp.By != "sid" || resp.Principal != alicePrincipal || resp.Standing || resp.Contexts != 1 || resp.TokenKeys != 1 ||
+		!strings.Contains(resp.Text, "s-sub-alice") {
+		t.Fatalf("response %+v", resp)
+	}
+	revs := eventsOf(f.records(t), decision.EventRevoke)
+	if rv := revs[len(revs)-1]["revocation"].(map[string]any); rv["origin"] != "api user:carol@example.com" {
+		t.Fatalf("origin %v", rv["origin"])
+	}
+}
+
+// The call Task 12's operator line (logoutByHand) tells an operator to make:
+// the sid with its issuer, both named.
+func TestRevokeBySidTakesTheShapeTheOperatorLineNames(t *testing.T) {
+	f := newFixtureWithPolicy(t, 8, onCallPolicy)
+	iss := f.withOIDC(t)
+	body := `{"sid": "s-sub-alice", "issuer": "` + iss.URL + `"}`
+	if w := f.bearer(context.Background(), "POST", "/v1/tokens/revoke", body, f.carolToken(t, iss)); w.Code != 200 {
+		t.Fatalf("the operator line's call: %d %s", w.Code, w.Body)
+	}
+}
+
+// Pre-flight M-15: a revocation by sid takes the asker's one revocation
+// slot, so a retry while one runs is 503 revocation_busy and ends nothing.
+func TestRevokeBySidHoldsTheAskersSlot(t *testing.T) {
+	f := newFixtureWithPolicy(t, 8, onCallPolicy)
+	iss := f.withOIDC(t)
+	release, ok := f.b.holdOwnRevoke("user:carol@example.com")
+	if !ok {
+		t.Fatal("the slot was taken")
+	}
+	w := f.bearer(context.Background(), "POST", "/v1/tokens/revoke", `{"sid":"s-sub-alice"}`, f.carolToken(t, iss))
+	release()
+	if w.Code != 503 || !strings.Contains(w.Body.String(), "revocation_busy") {
+		t.Fatalf("a sid revocation while carol's slot is held: %d %s", w.Code, w.Body)
+	}
+}
+
+func TestRevokeBySidRefusesWhatItCannotName(t *testing.T) {
+	f := newFixtureWithPolicy(t, 8, onCallPolicy)
+	iss := f.withOIDC(t)
+	carol := f.carolToken(t, iss)
+	for _, c := range []struct{ body, says string }{
+		{`{"sid":"s","principal":"user:alice@example.com"}`, "name a sid alone"},
+		{`{"sid":"s","mine":true}`, "name a sid alone"},
+		{`{"sid":"s","device":"leaf1","username":"alice"}`, "name a sid alone"},
+		{`{"sid":"s","issuer":"https://not-configured.example"}`, "no human OIDC verifier's"},
+		{`{"issuer":"` + iss.URL + `"}`, "name the sid"},
+		// Without its guard this is a standing ban on alice, the issuer dropped.
+		{`{"issuer":"` + iss.URL + `","principal":"user:alice@example.com"}`, "name the sid"},
+		{`{"sid":"has space"}`, "printable ASCII"},
+		{`{"sid":"` + strings.Repeat("a", 256) + `"}`, "printable ASCII"},
+	} {
+		w := f.bearer(context.Background(), "POST", "/v1/tokens/revoke", c.body, carol)
+		if w.Code != 400 || !strings.Contains(w.Body.String(), c.says) {
+			t.Errorf("%s: %d %s", c.body, w.Code, w.Body)
+		}
+	}
+	if n := len(eventsOf(f.records(t), decision.EventRevoke)); n != 0 {
+		t.Errorf("a refused request wrote %d revoke record(s)", n)
+	}
+	// 255 is the longest sid taken.
+	if w := f.bearer(context.Background(), "POST", "/v1/tokens/revoke",
+		`{"sid":"`+strings.Repeat("a", 255)+`"}`, carol); w.Code != 200 {
+		t.Errorf("a 255-character sid: %d %s", w.Code, w.Body)
+	}
+}
+
+// I1: a logout whose record the store cannot write ended nothing, and says
+// so: 503, never a 200 "ended".
+func TestRevokeBySidWithTheStoreDownIsNotAnAnswerOfSuccess(t *testing.T) {
+	f := newFixtureWithPolicy(t, 8, onCallPolicy)
+	iss := f.withOIDC(t)
+	f.b.Store = hookStore{Store: f.st, before: map[string]func() error{
+		"PutLogout": func() error { return store.ErrUnavailable }}}
+	w := f.bearer(context.Background(), "POST", "/v1/tokens/revoke", `{"sid":"s-sub-alice"}`, f.carolToken(t, iss))
+	if w.Code != 503 || w.Header().Get("Retry-After") != "10" || !strings.Contains(w.Body.String(), "store_unavailable") ||
+		!strings.Contains(w.Body.String(), "nothing was revoked") {
+		t.Fatalf("%d %v %s", w.Code, w.Header(), w.Body)
+	}
+	if n := len(eventsOf(f.records(t), decision.EventRevoke)); n != 0 {
+		t.Fatalf("a logout that did not apply wrote %d revoke record(s)", n)
+	}
+}
+
+// M2: with two human verifiers a bare sid names no provider; guessing the
+// first would end the wrong one's session.
+func TestRevokeBySidNeedsItsIssuerWithTwoProviders(t *testing.T) {
+	f := newFixtureWithPolicy(t, 8, onCallPolicy)
+	iss := f.withOIDC(t)
+	f.addIssuer(t, oidctest.NewIssuer(t), "example.com", false)
+	w := f.bearer(context.Background(), "POST", "/v1/tokens/revoke", `{"sid":"s-sub-alice"}`, f.carolToken(t, iss))
+	if w.Code != 400 || !strings.Contains(w.Body.String(), "name the sid's issuer") {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	body := `{"sid":"s-sub-alice","issuer":"` + iss.URL + `"}`
+	if w := f.bearer(context.Background(), "POST", "/v1/tokens/revoke", body, f.carolToken(t, iss)); w.Code != 200 {
+		t.Fatalf("with its issuer: %d %s", w.Code, w.Body)
+	}
+}
+
+// M4: a sid whose owner record names two principals ends both, and the
+// answer names both.
+func TestRevokeBySidAnswerNamesEveryOwnerPrincipal(t *testing.T) {
+	f := newFixtureWithPolicy(t, 8, onCallPolicy)
+	iss := f.withOIDC(t)
+	ctx := context.Background()
+	const alice2 = "user:alice2@example.com"
+	for _, p := range []string{alicePrincipal, alice2} {
+		if err := f.st.PutOIDCOwner(ctx, store.SidKey(iss.URL, "s-sub-alice"), p, time.Hour); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w := f.bearer(ctx, "POST", "/v1/tokens/revoke", `{"sid":"s-sub-alice"}`, f.carolToken(t, iss))
+	var resp api.RevokeResponse
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &resp) != nil {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	if !strings.Contains(resp.Text, alicePrincipal) || !strings.Contains(resp.Text, alice2) {
+		t.Fatalf("the text names one owner only: %s", resp.Text)
+	}
+}
+
+// With no human OIDC verifier there is no sid to end: a clear 400, never a
+// 503 that reads like a store fault.
+func TestRevokeBySidWithNoVerifierIsARefusalNotAStoreFault(t *testing.T) {
+	f := newFixtureWithPolicy(t, 8, onCallPolicy)
+	w := f.revokeAs(t, "carol@example.com", `{"sid":"s-sub-alice"}`)
+	if w.Code != 400 || strings.Contains(w.Body.String(), "store_unavailable") {
+		t.Fatalf("%d %s", w.Code, w.Body)
 	}
 }

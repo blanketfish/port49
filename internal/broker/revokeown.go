@@ -54,6 +54,40 @@ func (b *Broker) RevokeOwn(ctx context.Context, principal string, only *store.To
 	if only != nil {
 		rep.Key = *only
 	}
+	rep.TokenKeys = b.deleteOwnTokens(ctx, principal, only, note)
+	seen := map[store.ContextRef]bool{}
+	for pass := 0; pass < 2; pass++ {
+		refs, err := b.Store.ContextsByPrincipal(ctx, principal)
+		note(err)
+		for _, ref := range refs {
+			if only != nil && (ref.NAS != only.NAS || ref.Username != only.Username) {
+				continue
+			}
+			marked, err := b.revokeOwnContext(ctx, principal, ref, now)
+			note(err)
+			if marked && !seen[ref] {
+				seen[ref] = true
+				rep.Contexts = append(rep.Contexts, ref)
+			}
+		}
+	}
+	if _, err := b.Store.DeleteReceiptsByPrincipal(ctx, principal); err != nil {
+		note(err)
+	}
+	rep.Unreached = b.unreachedOf(rep.Contexts)
+	outcome := "applied"
+	if rep.Err != nil {
+		outcome = "partial"
+	}
+	b.recordRevocation(now, rep, decision.VerdictDeny, decision.CredentialRevoked, outcome)
+	return rep
+}
+
+// deleteOwnTokens deletes principal's own unspent tokens, by ID, everywhere
+// or on only, superseding each key it touched; it returns how many keys.
+// A store error is told to note and the rest still run.
+func (b *Broker) deleteOwnTokens(ctx context.Context, principal string, only *store.TokenKey, note func(error)) int {
+	n := 0
 	keys, err := b.Store.TokensByPrincipal(ctx, principal)
 	note(err)
 	for _, k := range keys {
@@ -84,35 +118,10 @@ func (b *Broker) RevokeOwn(ctx context.Context, principal string, only *store.To
 			// (device, username) pays for it too: its retry is minted fresh
 			// beside the token it still holds, nearer the outstanding cap.
 			b.supersede(ctx, k, b.Now())
-			rep.TokenKeys++
+			n++
 		}
 	}
-	seen := map[store.ContextRef]bool{}
-	for pass := 0; pass < 2; pass++ {
-		refs, err := b.Store.ContextsByPrincipal(ctx, principal)
-		note(err)
-		for _, ref := range refs {
-			if only != nil && (ref.NAS != only.NAS || ref.Username != only.Username) {
-				continue
-			}
-			marked, err := b.revokeOwnContext(ctx, principal, ref, now)
-			note(err)
-			if marked && !seen[ref] {
-				seen[ref] = true
-				rep.Contexts = append(rep.Contexts, ref)
-			}
-		}
-	}
-	if _, err := b.Store.DeleteReceiptsByPrincipal(ctx, principal); err != nil {
-		note(err)
-	}
-	rep.Unreached = b.unreachedOf(rep.Contexts)
-	outcome := "applied"
-	if rep.Err != nil {
-		outcome = "partial"
-	}
-	b.recordRevocation(now, rep, decision.VerdictDeny, decision.CredentialRevoked, outcome)
-	return rep
+	return n
 }
 
 // revokeOwnContext marks the context at ref revoked at at while it is

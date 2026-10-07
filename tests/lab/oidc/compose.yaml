@@ -1,0 +1,33 @@
+# Keycloak for plan 7h's lab (L45, L46): one realm imported at first start,
+# HTTPS only, from the lab PKI tests/lab/oidc_test.go writes under
+# tests/lab/logs/oidc (git-ignored) before `docker compose -p port49laboidc up`.
+# The image is pinned by digest (kcImage in oidc_test.go names the same
+# reference, and a unit test holds the two equal); the run's note records
+# `kc.sh --version` and the image ID, so the version a note names is the one
+# that ran.
+name: port49laboidc
+
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.4@sha256:9409c59bdfb65dbffa20b11e6f18b8abb9281d480c7ca402f51ed3d5977e6007
+    command:
+      - start-dev
+      - --import-realm
+      - --http-enabled=false
+      - --https-port=18443
+      - --https-certificate-file=/pki/keycloak.pem
+      - --https-certificate-key-file=/pki/keycloak-key.pem
+      - --hostname=https://keycloak.port49.lab:18443
+      - --truststore-paths=/pki/lab-ca.pem
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+    # KC_BOOTSTRAP_ADMIN_PASSWORD, generated per run, never in this file
+    env_file:
+      - path: ../logs/oidc/admin.env
+    volumes:
+      - ./keycloak/realm.json:/opt/keycloak/data/import/realm.json:ro
+      - ../logs/oidc/pki:/pki:ro
+    extra_hosts:
+      - "host.port49.lab:host-gateway"
+    ports:
+      - "127.0.0.1:18443:18443"

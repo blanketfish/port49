@@ -66,10 +66,22 @@ const MaxConns = 256
 // refusal rather than panicking (plan 4b): port49d now runs code after start
 // that swaps policy under a live daemon, and nothing on a path that can run
 // with device AAA already serving may end the process.
+//
+// An OIDC-only broker (NoX509, plan 7h) is served with a nil anchor and
+// requests no certificate.
 func (b *Broker) Server(addr string, cert tls.Certificate, anchor *x509.CertPool) (*http.Server, error) {
-	if anchor == nil || anchor.Equal(x509.NewCertPool()) {
+	clientAuth := tls.VerifyClientCertIfGiven
+	switch {
+	case anchor != nil && b.NoX509:
+		return nil, errors.New("broker: an OIDC-only broker (NoX509) takes no anchor: it would still verify " +
+			"client certificates")
+	case anchor == nil && b.NoX509 && b.Identity != nil:
+		// An OIDC-only broker (Ruling 1): no certificate is requested, and
+		// every caller authenticates by bearer.
+		clientAuth = tls.NoClientCert
+	case anchor == nil || anchor.Equal(x509.NewCertPool()):
 		return nil, errors.New("broker: the broker trusts exactly one anchor; a nil pool would mean the system " +
-			"roots, and an empty one trusts no one")
+			"roots, and an empty one trusts no one (an OIDC-only broker sets NoX509 and Identity)")
 	}
 	return &http.Server{
 		Addr:    addr,
@@ -78,7 +90,7 @@ func (b *Broker) Server(addr string, cert tls.Certificate, anchor *x509.CertPool
 			MinVersion:             tls.VersionTLS13,
 			Certificates:           []tls.Certificate{cert},
 			ClientCAs:              anchor,
-			ClientAuth:             tls.VerifyClientCertIfGiven,
+			ClientAuth:             clientAuth,
 			NextProtos:             []string{"http/1.1"},
 			SessionTicketsDisabled: true,
 			Time:                   b.Now,

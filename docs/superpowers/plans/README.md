@@ -4162,6 +4162,297 @@ fix round 4 stayed with the Sonnet implementer instead of escalating (the model 
 - `duties` has no test of its own beyond the etcd one (Task 16); `ldapClient` is exercised by the
   lab only.
 
+### Plan 7h — As built
+
+Executed from `2026-10-06-07h-oidc-and-trust-domains.md` on `feature/oidc-and-trust-domains`
+(base `2614adc`, 62 commits at `a4b8e83` before this one), each task reviewed, most through
+several fix rounds. The ledger is `.superpowers/sdd/2026-10-06-07h-oidc-and-trust-domains/progress.md`,
+with each task's brief, report and review beside it. A pre-flight review (2 critical, 13
+important, 23 minor) revised the plan before Task 1 (`2614adc`). What differs from the plan's
+text, task by task:
+
+- **Task 1 (spec and design; 76ab728, e6e8891, 4eac8dc, 11396dc, 19523c8, 9910174).** Four fix
+  rounds. Ruling R-4: an OIDC token a person holds ends at `exp` or `max_token_age`, so cached keys
+  cannot outlive it; the 24h `jwks_max_age` cut-off (503 `identity_provider_unavailable`) is the
+  broker's own, and the failure matrix keeps the two outages apart.
+- **Task 2 (decision, api, store; 6922518, c67d534, 2a30693).** Ruling: two machine verifiers on
+  different issuers that list one `client_id` are refused at load, since `app:` + the client id
+  names no issuer (decision 39 ruling 22 says so). An empty issuer has no OIDC key.
+- **Task 3 (the JOSE layer; f171cad, 6d90c2f, 212075c).** In-house on the standard library (OR-1,
+  pending). 1060 Wycheproof vectors, 0 failed, 0 skipped; fuzz clean. Review found base64 that
+  accepted CR/LF (token malleability, which breaks `credential_sha256` correlation) and header
+  and JWK members read case-insensitively with a duplicate keeping the last; both refused now.
+- **Flake (219de50, a0b28fa, f67e7f6, c54618a, 7f79685).** `TestALateReplicasContextIsCarriedWhenItReloads`
+  failed about 1 in 20 at the base: a test race (the swap opened the mint gate after the store
+  mark landed). The reload answering 503 `store_unavailable` in that millisecond window is the
+  anti-escalation gate working; the test waits for it, and spec §5.7's row names the gate.
+- **Task 4 (one issuer's keys; f1597b2, 3ced419, e65ed7d, 1062302).** Four rounds. A hung `Save`
+  frees the flight and keeps one pending file; one minute gate for `Key` and `Fetch`; an older key
+  file is never saved after a newer one; a proxy URL is validated and never printed with its
+  password.
+- **Task 5 (verifiers per trust domain; 5223b7a, 0e25cde, d4821ab, 5f4ced7).** Claims are read
+  through `exactObject`, so a repeated member is refused, never last-wins. Rulings (spec amended
+  first, `0e25cde`): `typ` is an allowlist (humans absent or `jwt`; machines also `at+jwt`);
+  `act` and `may_act` are refused on a machine token; a claim name outside printable ASCII is
+  refused. Also ruled, without a spec amendment (it follows from ruling 2's "exactly one must
+  accept"): an unavailable verifier beats an acceptance when the token's verifiers cannot all be
+  asked.
+- **Task 6 (logout tokens; 168ec02, 84415e0, a3ffd7d).** The controller reversed its own
+  provisional fail-closed ruling on review: one acceptance wins, and 503 comes only when no
+  verifier accepted and one is unavailable (refusing a validated logout is the anti-revocation
+  side). `aud` refuses an empty entry; `jti` is never encoded.
+- **Task 7 (config; e41caa8, b6542c2).** Issuer userinfo and opaque forms are refused, as are two
+  verifiers whose issuers differ only by trailing slash or case; values in refusals are quoted; a
+  verifier's `ca_file` joins the collision list.
+- **Task 8 (the store; 76c25ee, c585812, 8104b9e).** `PutOnce`, `TakeOnce`, `PutOIDCOwner`,
+  `PutLogout` and `GetLogout`; an owner with no principal or a record with no life is refused. The
+  etcd harness gained a 1 MB WAL segment and a sweep of data dirs a dead run left (a full `/tmp`
+  failed other suites). Owner and logout records are unsealed, like marks (pre-flight M-9, below).
+- **Task 9 (a bearer per request; e2287d7, 66f12a6, 37a87b2).** The sub-logout bound
+  (`+ clock_skew`), the owner renewal and the machine exemption are each pinned by a mutation;
+  `unmint`'s records carry `auth.oidc`; no test message prints a body that could hold a token.
+- **Task 10 (OIDC-only broker, `/v1/config`; d1a5aad, 4c211c4, b1b619f).** A bearer on a
+  `NoX509` broker mints (in process and over a real listener); no bearer answers what the broker
+  takes, `trust_domain_unresolved`, recorded as `auth.method: oidc`; a human verifier with no
+  scopes lists `[openid]`.
+- **Task 11 (the OIDC refresh; 6bedfab, a0ea153, 3f81e37, 7bd40b1, c5ca8d9, e9b23ec).** Five
+  rounds, the last by a fresh Opus implementer. A refresh marks what it extended whether it
+  finishes or fails, so a logout racing it cannot leave an extended context. A sid-less token
+  indexes nothing. The operator's recovery lines (`logoutRecovery`) say a logout is not a ban:
+  check the decision log, `revoke` then `--lift`, with the broker's own admin socket and, with no
+  admin socket, the policy-file grants fallback.
+- **Task 12 (back-channel logout; dd9ea52, 08d4208, 99ca10e, 36e122d).** The logout record's life
+  is `logoutRecordTTL`, shared with the advised lift time (a test captures the TTL, so the two
+  cannot drift); a `PutOnce` that errored gives its `jti` back before the 503, so Keycloak's
+  retry cannot be answered 200 and lose the logout; a store failure that wrote nothing says an
+  unconditional revoke with its lift time and the `sid` call first; `Logout` and `RevokeSid`
+  with no identity fail closed. Origin is exactly `backchannel_logout <issuer>`.
+- **Task 13 (`/v1/tokens/revoke` by `sid`; b5a2ac8, 7cf0c84).** The store-fault 503, an issuer
+  with no `sid` (never a standing ban), a multi-verifier refusal and the `sid` length bound are
+  each mutation-pinned; the answer names every owner principal.
+- **Task 14 (port49d wiring; 1f274a6, 3795cbc, 68ed52a).** The opener is `openOIDC` (`openIdentity`
+  was taken). Tests poll for the key file, since `Fetch` returning does not mean `Save` ran. The
+  state directory comes from `broker.revocations_file`, and a group-writable one is refused (a 7e
+  rule). `make test-race` caught a shared `strings.Builder` (`syncBuffer`); from Task 15 every
+  implementer ran `make test-race` too.
+- **Task 15 (Keycloak harness; 069eb98, 72bea35, 15f1699).** Keycloak 26.4, digest-pinned. A setup
+  fault is INVALID, never a measurement; `RedactNote` is Junos-only, so an `oidcNoteLeak` guard
+  keeps tokens out of notes; `end_session` URLs keep `id_token_hint` out of errors; the PKI keys
+  are 0600.
+- **Task 16 (lab; 2914930, 46b8973, 4aa4cb6, cd56f55, a4b8e83).** Split: the controller ran L45 and
+  L46 (431s), a Sonnet implementer built the end to end, and each was reviewed before its run. The
+  end to end passed on vEOS 4.31.2F (223s). An undelivered logout is INVALID, and an expired ID
+  token is not measured. See Lab, below.
+- **Task 17 (this section).** The roadmap's status line is not edited here: the L44 work owns a
+  line on main, and the controller updates it after the merge.
+
+**The rulings, as made** (decision 39; Rulings 1–24 of the plan). All twenty-four stood. Four
+carry an in-flight edit, each in decision 39's text: ruling 2 (`typ` allowlist, ASCII claim
+names; `0e25cde`), ruling 21 (`act` and `may_act` refused; `0e25cde`), ruling 22 (machine
+`client_id` across issuers; `2a30693`) and ruling 20 (L46 closed, L45 open; `a4b8e83`). Ruling 12
+stood as measured on Keycloak. **Ruling 13 is contradicted in one case** (an administrator's "sign
+out user" with several sessions; see Lab) and the question is Ryan's. No task departed from a
+ruling in a way decision 39's text does not already say, so the spec's "as built" text is not
+amended here.
+
+**Ryan's answers.** Pending. The build used each recommendation.
+
+- **OR-1, the JOSE layer in-house on the standard library:** pending; execution proceeded on the
+  recommendation (in-house, no new module, checked against Wycheproof, a matrix and fuzzing).
+- **OR-2, the defaults** (`clock_skew` 60s, `max_token_age` 2h, `jwks_refresh_interval` 1h,
+  `jwks_max_age` 24h, the refresh challenge's 5m): pending; execution proceeded on the
+  recommendation (those values).
+- **OR-3, hosted providers as their own row, L47:** pending; execution proceeded on the
+  recommendation (L47 stays open until measured on an Entra ID and an Okta tenant; the notes say
+  measured on Keycloak only).
+
+**Rulings made during execution.** Before Task 1 (planfix, pre-flight M-9), owner and logout
+records are unsealed, like marks: a store writer can already delete marks and tokens (sealing
+`oo/` records with principal AAD is carried to the pre-beta review). Task 2, two machine verifiers on different issuers list no
+shared `client_id`. Task 5, the `typ` allowlist, `act`/`may_act`, ASCII claim names, an
+unavailable verifier. Task 6, one acceptance wins (a reversal). Task 7, issuer spelling variants
+refused. Task 8, the etcd harness fix. Task 11, a logout is not a ban, and the recovery says so. Task
+12, a `jti` is given back on a `PutOnce` error. From Task 15,
+`make test-race` on touched packages. Task 16, L46 closes and L45 stays open.
+
+**The operator notes, as built** (the plan's notes, corrected by what the lab measured and the
+reviews found):
+
+- **`broker.identity`** (decision 39). As the plan's notes list it:
+  - **`humans`:** `x509` with `trust_anchor_file` (one anchor), or `oidc` with `issuer`,
+    `client_id`, `principal_claim` (required: `preferred_username`, `email` with
+    `email_verified`, or `upn`), `principal_domains` (required, exact), `scopes`, `algorithms`
+    (default `[RS256]`) and `ca_file`.
+  - **`machines`:** `oidc` with `issuer`, `audience`, `clients` (required: `[{client_id, sub}]`),
+    `algorithms`, `ca_file`; the principal is `app:<azp>`, case kept.
+  - **Without `broker.identity`,** `broker.client_ca_file` is the verifier as before; with it,
+    `client_ca_file` is refused. `x509` under `machines` and `k8s` are refused until plans 8 and 10.
+  - **A person's token is never a machine's:** one carrying `auth_time`, `sid`, `nonce`, `scp`,
+    `amr`, `act` or `may_act`, an `idtyp` other than `app`, another `sub` than the client's, or an
+    unlisted client is refused.
+  - **Timing:** `clock_skew` 60s, `max_token_age` 2h, `jwks_refresh_interval` 1h, `jwks_max_age`
+    24h (OR-2, pending).
+- **The principal claim must be one only your provider's administrators can set.** On Keycloak,
+  turn off "edit username", and "trust email" on a realm that brokers another provider.
+  Measured (L46): `preferred_username` for a user created as `alice` is `alice`, with no `@`, so
+  it is refused `identity_unmapped` unless the username is an address; `email` is the usual
+  choice there. Entra ID's `email_verified` is unmeasured (L47).
+- **Each provider names its own people** through `principal_domains`; a token naming a principal
+  outside them is `identity_unmapped`, and that provider's logout reaches none of your staff.
+- **OIDC people need a username source:** the directory's, or an identity subject's `username:`.
+  port49 never takes a username or a group from a token.
+- **Every OIDC request carries its token** (`Authorization: Bearer`). Its connection counts
+  against `broker.max_pending_conns_per_source` (16) while open: raise it for an office behind
+  one address. An OIDC-only broker (no `x509` verifier) asks for no client certificate and takes
+  no `certificate_status`.
+- **The session clock is the provider's `auth_time`;** an older one than
+  `session.max_session_age_default` is `session_expired`.
+- **Refresh:** `POST /v1/refresh/challenge`, a `prompt=login` login at the provider with that
+  nonce, `POST /v1/refresh` with the new ID token. Measured (L46): Keycloak honours `prompt=login`
+  and `max_age=0`, moves `auth_time` and echoes the `nonce`; a plain SSO login does not, and
+  answers `refresh_not_fresh`.
+- **Back-channel logout:** register `https://<broker>/v1/logout` as the client's back-channel
+  logout URL, "session required" on. Measured on Keycloak 26.4.7 (L45): the token is
+  form-encoded, `typ` `logout+jwt`, carries `iss`, `aud`, `iat`, `exp` (`iat` + 120s), `jti`,
+  `sid`, `sub` and `events`, never `nonce`, and `events` also carries Keycloak's
+  `revoke_offline_access`.
+  - **One session or one person.** A logout at the end-session endpoint, and an administrator
+    ending one session, each send one token with that session's `sid` and `sub`. **An
+    administrator's "sign out user" over several sessions sends one token naming one session's
+    `sid` and the user's `sub`, so only that session ends; the others' device contexts live until
+    their session ceiling and their held ID tokens can mint until `exp`.** Until Ryan rules (below),
+    end the rest with `port49 revoke --principal <principal>` on the serving process's admin socket,
+    and `--lift` it only after the time of the revoke plus `max_token_age` + 2 × `clock_skew`
+    (`logoutByHand`'s not-applied form): no logout record stands for the other sessions, so an
+    earlier lift lets their held ID tokens mint again.
+  - **Keycloak does not retry a logout:** a 503, a 400 and a refused connection each got one
+    request, and the end-session endpoint still answered 302. A logout port49 answers 503 is lost
+    unless the operator ends it by hand, so the broker says how.
+  - **A logout leaves no mark,** so the person can log in again at once. To ban, use
+    `port49 revoke`.
+  - **`logoutByHand`'s two recovery forms** (the broker prints one):
+    - **The logout wrote something:** check the decision log for the `revoke` record whose origin
+      is `backchannel_logout <issuer>`, and `port49 revoke --list` for a mark. If it is absent,
+      `port49 revoke --principal <principal>`, then `port49 revoke --principal <principal> --lift` after
+      the time the line prints (the logout record's life: `max_token_age` + 2 × `clock_skew`), on the serving
+      process's own `--socket`.
+    - **The logout wrote nothing (store error):** the line says an unconditional revoke with its
+      lift time, and the `sid` call first: `POST /v1/tokens/revoke {"sid", "issuer"}`.
+    - **With no `admin_socket`** (the memory backend) there is no socket to name: the line says
+      to cut the principal's grants in `policy_file`, restore them after the ceiling, or configure
+      `admin_socket`.
+  - **`POST /v1/tokens/revoke {"sid", "issuer"}`** ends one OIDC session and needs
+    `revoke_others`; an `issuer` with no `sid` is refused, never a standing ban.
+  - **A `sid` logout ends a certificate-path context an OIDC refresh extended under it.** A
+    `sub` logout finds the person through the owner record's life (a day, or
+    `session.max_session_age_default` if longer); a renamed person is reached under
+    both principals for a day.
+  - On Junos, as with every revocation, the open session keeps what it had at login.
+- **A provider outage.** Held tokens work against the keys last fetched, kept in the state
+  directory across a restart, until `jwks_max_age` after the last fetch; past it every OIDC
+  request is 503 `identity_provider_unavailable`. Certificate logins, live device sessions and
+  break-glass are unaffected. Alert at half: `time() -
+  port49_oidc_keys_last_success_timestamp_seconds > jwks_max_age / 2 or
+  absent(port49_oidc_keys_last_success_timestamp_seconds)`, with a `for:` of a few minutes.
+  - **The 3am escape:** raise `broker.identity.jwks_max_age` (up to 720h) and restart
+    port49-broker where you run one; a port49d restart also restarts device AAA.
+  - **In the decision log** an outage's refusals read `trust_domain_unresolved`; tell them from
+    bad tokens by the 503s' `identity_provider_unavailable`, the hourly "keys not refreshed" line
+    and `port49_oidc_tokens_total{outcome="unavailable"}`. A JWKS with no usable key is a failed
+    fetch: the last good keys stand.
+- **The state directory.** The kept keys (`oidc-<hash>.json`, 0600, written by rename) live in the
+  directory of `broker.revocations_file`, the one port49d and the broker already own. It must be
+  0700: a group-writable one is refused at start. **On Kubernetes with an `fsGroup` volume,
+  which is group-writable, use a 0700 subdirectory** (plan 12 owns the note).
+- **An egress proxy.** `HTTPS_PROXY` and `NO_PROXY` are honoured; the start says which, with the
+  password redacted.
+- **Upgrade order.** Upgrade every broker replica before setting `broker.identity` or
+  registering the logout URL: an older replica answers 404 to `/v1/logout` and that logout is
+  lost.
+- **Also new:** `port49 revoke --principal app:<client_id>`; `GET /v1/config`'s `oidc` and `methods`;
+  `auth.oidc` on every record of an OIDC caller; `revoke` records `by: sid|sub` with
+  `oidc_issuer` and `revocation.principals`; API errors `503 identity_provider_unavailable`,
+  `401 refresh_not_fresh`, `400 bad_request` for a client certificate and a bearer on one request;
+  metrics `port49_oidc_tokens_total{issuer,outcome}`,
+  `port49_oidc_keys_last_success_timestamp_seconds{issuer}`,
+  `port49_oidc_keys_fetch_failures_total{issuer}`, `port49_oidc_logouts_total{outcome}`. No reason
+  code is new.
+
+**Lab.**
+
+- **L46, closed** on Keycloak 26.4.7, 2026-10-07 (`tests/lab/results/L46-keycloak.md`): the control
+  held; `prompt=login` and `max_age=0` asked for the password, moved `auth_time` and echoed the
+  `nonce`, keeping the `sid`; a refresh-token grant keeps the last `auth_time` with no `nonce`;
+  a client-credentials token carries none of `auth_time`, `sid`, `nonce`, `scp`, `amr`, `idtyp`,
+  `client_id`, and its `sub` is the service account's fixed id. Rulings 15 and 21 stay
+  provisional on L47 alone.
+- **L45, measured and open** (`tests/lab/results/L45-keycloak.md`): ruling 12's token shape holds,
+  and Keycloak does not retry. In the administrator's "sign out user" case with two sessions,
+  Keycloak sent one logout token naming one session's `sid` plus the user's `sub`, which ruling
+  13's sid-first logout answers by ending that one session. Closing the row would make ruling 13
+  firm while the lab contradicts it, so it stays open on a **decision pending with Ryan**. The
+  two options, put to Ryan by the controller on 2026-10-07 (ledger):
+  - **(A) Status quo, sid-first.** An administrator's sign-out-user over N sessions ends one; the
+    others live until their session ceiling (a refresh needs `prompt=login` at the provider) and
+    their held ID tokens can mint until `exp`.
+  - **(B) A token carrying both `sid` and `sub` also ends every session of that `sub`.** It fails
+    closed, but Keycloak's three cases send indistinguishable tokens, so every RP logout and every
+    administrator ending one session would also end the person's other sessions (a re-login).
+  - **The controller recommends (B)**, security first; the recommendation is the controller's, and
+    Ryan decides. It is a change to ruling 13, a follow-up after the merge.
+- **End to end** (`tests/lab/results/oidc-e2e-arista_eos.md`, vEOS 4.31.2F): a Keycloak login mints,
+  SSH permits, an RP logout writes a revoke record by `sid` and the open session's next command is
+  `credential_revoked`, a new login works, a plain SSO answer to the refresh challenge is
+  `refresh_not_fresh`, a `prompt=login` one extends the session, and a client-credentials token
+  mints `app:port49-svc`.
+- **L47, open:** hosted providers (OR-3).
+
+**The interfaces 7h added.** `internal/oidc` (verifiers, `KeySet`, compact JWS and JWK, logout
+tokens, `oidctest`); `store` `PutOnce`, `TakeOnce`, `PutOIDCOwner`, `OIDCOwner`, `PutLogout`,
+`GetLogout`, `OIDCKey`, `SidKey`, types `OIDCOwner`, `OwnerPrincipal`, `Logout`; `broker`
+`Identity`, `NoX509`, `caller`, `bearerCaller`, `Logout`, `RevokeSid`, `oidcChallenge`,
+`oidcRefresh`, `noteOwner`, `loggedOut`; `session.AddSid`; `config` `Identity` and
+`BrokerStateDir`; `decision.Revocation.Principals`; the four metrics above.
+
+**Carried forward.**
+
+- **After the merge, on a fix/ branch:** the marks-lift durability fix
+  (`fix/marks-lift-durability`; the admin-socket lift answers before the marks copy learns it, so
+  a stop before the watch delivers loses the lift and restart re-asserts the mark, fail closed;
+  introduced in 7e, `9f4e941`). The diagnosis and a test are in
+  `.superpowers/sdd/marks-lift-durability-report.md` and `-fix.diff`; the racy `copyHolds=="10"`
+  wait in `TestATakeoverPutsBackAMarkTheStoreLost` goes with it. `logoutByHand`'s "revoke, then
+  lift" depends on the lift holding, so the operator docs owe this recovery.
+- **For the final review:**
+  - **The burst-logout question, answered and fixed.** The broker closed certificate-less
+    connections after each logout without saying so, so a second logout on Keycloak's pooled
+    connection within about 2s was lost (Keycloak does not retry). Every answer to a request with no
+    client certificate now carries `Connection: close`, so the provider opens a new connection; the
+    idle close stays as the backstop. A lab recheck (an administrator signs out two users back to
+    back, and two requests arrive) is cheap and open.
+- **For the pre-beta review:** sealing owner and logout records (`oo/`, with the principal as AAD;
+  pre-flight M-9).
+- **Parked:** Task 8's re-review N1 (the etcdtest sweep could remove a live data dir where
+  containers share `/tmp` across pid namespaces; test-only); Task 11's re-review 4 optional clarity
+  note.
+- **Ryan's pending answers:** OR-1, OR-2, OR-3, and the L45 sign-out-user decision above.
+- **Plan 8:** `x509` under `broker.identity.machines` (refused at load until then); a workload
+  certificate's directory entry through `Resolver.Map`.
+- **Plan 9:** the agent's OIDC public client with PKCE: `/v1/config`'s `oidc`, the refresh
+  challenge as the `nonce` of a `prompt=login` request, the ID token as each request's bearer,
+  re-login on `credential_revoked` from a logout, and the provider's refresh token kept per
+  design §7.
+- **Plan 10:** the `k8s` verifier under `machines`.
+- **Plan 12:** the alerts (`time() - port49_oidc_keys_last_success_timestamp_seconds >
+  jwks_max_age / 2 or absent(...)` with a `for:`; `port49_oidc_logouts_total{outcome=~"store_error|partial"}`
+  increasing; `port49_oidc_tokens_total{outcome="unavailable"}` increasing); per-source admission
+  sizing for an office behind one address; and the Kubernetes `fsGroup` note (a 0700
+  subdirectory of the volume for the state directory).
+- **Plan 13:** the operator docs for all of the above, including the three recovery forms and the
+  L45 sign-out-user caveat until it is decided.
+- **Unassigned:** L47, the hosted providers (OR-3), with Entra's `idtyp`, `scp`, v2 `aud` and
+  missing `email_verified` (pre-flight M-8, C-1).
+
 ## Plan 8 — Workload certificates (§19 step 8)
 
 Design §7 "Machine identity" option 2: enrollment, self-renewal, multi-identity subjects,

@@ -424,7 +424,7 @@ func TestTheRereadAfterAMintReadsTheLegacyMark(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !f.b.revokedSince(w, r, corpAlice, cred, nil) || w.Code != 401 {
+	if !f.b.revokedSince(w, r, caller{principal: corpAlice, cred: cred}, nil) || w.Code != 401 {
 		t.Fatalf("revokedSince under a legacy mark: %d %s", w.Code, w.Body)
 	}
 }
@@ -783,7 +783,7 @@ func TestAReloadBetweenTheMemberAndTheHoldRefusesARefresh(t *testing.T) {
 	f, _ := groupFixture(t, map[string]directory.Answer{corpAlice: a}, nil)
 	before := f.memberContext(t, a, "leaf1", f.now.Add(-time.Hour))
 	f.reloadDir(t, aliceDeclared)
-	_, err := f.b.RefreshSession(context.Background(), member(a), &a, store.Credential{Method: "cert"}, f.b.Now())
+	_, err := f.b.RefreshSession(context.Background(), member(a), &a, store.Credential{Method: "cert"}, f.b.Now(), nil)
 	if !errors.Is(err, directory.ErrUsernameTaken) {
 		t.Fatalf("%v", err)
 	}

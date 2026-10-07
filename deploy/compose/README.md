@@ -130,6 +130,21 @@ docker compose run --rm --entrypoint port49-broker port49-broker revoke --offlin
   docker run --rm -v <volume>:/s alpine:3.22 sh -c 'chown 65532:65532 /s && chmod 0700 /s'
   ```
 
+## OIDC
+
+The trial is certificate-only. To accept identity-provider tokens, replace `broker.client_ca_file`
+with the `broker.identity` block shown commented in `config/port49-broker.yaml`; an OIDC-only
+broker (no x509 verifier) is valid. The provider's signing keys are kept in `broker.state_dir`, so
+a broker restarted during a provider outage still validates tokens until `jwks_max_age`; a fetch
+failure never changes `/readyz`.
+
+- The broker must reach the provider's discovery and JWKS URLs. Where the site's egress is a proxy,
+  set `HTTPS_PROXY` on the broker service; the start line says how each issuer is fetched.
+- Register `https://<broker>:8443/v1/logout` as the provider's back-channel logout URL, with
+  "backchannel logout session required" on.
+- Each machine client's `sub` is read from the provider: in Keycloak, the client's "Service account
+  roles" user id; in Entra ID, the service principal's object id.
+
 ## Backups
 
 Each etcd data volume and `broker-state` (design §13's runbook).

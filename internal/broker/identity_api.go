@@ -15,19 +15,24 @@ import (
 // connection's, the request names no one, and no right shows another's
 // (spec §2; decision 34). It writes one identity record (spec §5.7).
 func (b *Broker) identity(w http.ResponseWriter, r *http.Request) {
-	principal, cred, ok := b.authenticate(w, r, decision.EventIdentity, "answered nothing")
+	c, ok := b.authenticate(w, r, decision.EventIdentity, "answered nothing")
 	if !ok {
 		return
 	}
-	now, at := b.Now(), b.authTime(r)
+	principal, cred := c.principal, c.cred
+	now, at := b.Now(), c.authTime
 	out := api.Identity{Principal: principal, Method: cred.Method, Fingerprint: cred.Fingerprint,
 		Groups: []string{}, Grants: []api.IdentityGrant{}, API: []string{}, AuthTime: at.UTC().Format(time.RFC3339)}
+	if c.oidc != nil {
+		out.OIDC = &api.IdentityOIDC{Issuer: c.oidc.Issuer, Sub: c.oidc.Subject, Sid: c.oidc.Sid,
+			AMR: c.oidc.AMR, ACR: c.oidc.ACR}
+	}
 	if b.MaxSessionAge > 0 {
 		out.ConnectionEndsAt = at.Add(b.MaxSessionAge).UTC().Format(time.RFC3339)
 	}
 	rec := decision.Record{TS: now, Event: decision.EventIdentity, Verdict: decision.VerdictDeny,
 		Reason: decision.NoGrantsMatched, Principal: principal,
-		Auth: &decision.Auth{Method: cred.Method, Fingerprint: cred.Fingerprint}}
+		Auth: c.auth()}
 	ctx, cancel := context.WithTimeout(r.Context(), b.memberBudget())
 	m, answer, err := b.memberFor(ctx, principal)
 	cancel()

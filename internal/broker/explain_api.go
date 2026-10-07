@@ -30,10 +30,11 @@ const maxExplainCommand = 1024
 // credential_revoked. One explain record, which names the bundle that
 // answered and never holds the command.
 func (b *Broker) explain(w http.ResponseWriter, r *http.Request) {
-	caller, cred, ok := b.authenticate(w, r, decision.EventExplain, "explained nothing")
+	c, ok := b.authenticate(w, r, decision.EventExplain, "explained nothing")
 	if !ok {
 		return
 	}
+	asker, cred := c.principal, c.cred
 	var req api.ExplainRequest
 	// Past the bound the body is refused, not read in part: a trailing byte
 	// beyond it would otherwise go unseen.
@@ -52,12 +53,12 @@ func (b *Broker) explain(w http.ResponseWriter, r *http.Request) {
 			maxExplainCommand))
 		return
 	}
-	about := caller
+	about := asker
 	if req.Principal != "" {
 		p, err := normalPrincipal(req.Principal)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "bad_request", "the principal is not one the broker spells: "+
-				"user: and an email, as the log names it")
+				"user: and an email, or app: and a client id, as the log names it")
 			return
 		}
 		about = p
@@ -69,22 +70,22 @@ func (b *Broker) explain(w http.ResponseWriter, r *http.Request) {
 	// always describe one credential (decision 34; pre-flight I8).
 	rec := decision.Record{TS: now, Event: decision.EventExplain, Principal: about,
 		Device: &decision.Device{Name: req.Device}, Policy: &decision.Policy{Bundle: pol.Bundle},
-		Explain: &decision.Explain{AskedBy: caller, AskedByFingerprint: cred.Fingerprint, Command: req.Command != ""}}
-	if about != caller {
+		Explain: &decision.Explain{AskedBy: asker, AskedByFingerprint: cred.Fingerprint, Command: req.Command != ""}}
+	if about != asker {
 		// The caller's own membership: a refusal is the caller's, recorded
 		// and answered as a mint's is (their certificate, their connection).
 		ctx, cancel := context.WithTimeout(r.Context(), b.memberBudget())
-		callerMember, _, err := b.memberFor(ctx, caller)
+		askerMember, _, err := b.memberFor(ctx, asker)
 		cancel()
 		if err != nil {
 			ref := directoryRefusal(err)
 			b.emit(decision.Record{TS: now, Event: decision.EventExplain, Verdict: decision.VerdictDeny,
-				Reason: ref.Reason, Principal: caller,
-				Auth: &decision.Auth{Method: cred.Method, Fingerprint: cred.Fingerprint}})
+				Reason: ref.Reason, Principal: asker,
+				Auth: c.auth()})
 			b.answerRefusal(w, r, ref)
 			return
 		}
-		if !pol.HasRightOf(callerMember, policy.RightExplainOthers) {
+		if !pol.HasRightOf(askerMember, policy.RightExplainOthers) {
 			b.refuseRight(w, rec, policy.RightExplainOthers, "explaining another principal")
 			return
 		}
@@ -113,11 +114,11 @@ func (b *Broker) explain(w http.ResponseWriter, r *http.Request) {
 			// The directory's "no" about the principal asked about is the
 			// answer, not a refusal of the caller: 200, the connection kept.
 			ref := directoryRefusal(merr)
-			if about == caller {
+			if about == asker {
 				// Their own membership: the caller's refusal, as a mint's.
 				b.emit(decision.Record{TS: now, Event: decision.EventExplain, Verdict: decision.VerdictDeny,
-					Reason: ref.Reason, Principal: caller,
-					Auth: &decision.Auth{Method: cred.Method, Fingerprint: cred.Fingerprint}})
+					Reason: ref.Reason, Principal: asker,
+					Auth: c.auth()})
 				b.answerRefusal(w, r, ref)
 				return
 			}

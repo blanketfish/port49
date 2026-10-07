@@ -90,3 +90,16 @@ func writeOwnerOnly(path string, body []byte) error {
 	}
 	return inventory.WriteAtomic(dir, filepath.Base(path), body, 0o600)
 }
+
+// readOwnerOnly reads a kept file the broker wrote itself: a regular file
+// owned by its user or root (ownedHere), or nothing when there is none.
+func readOwnerOnly(path string) ([]byte, error) {
+	if err := ownedHere(path, path, false); err != nil {
+		return nil, err
+	}
+	b, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	return b, err
+}

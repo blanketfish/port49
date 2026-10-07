@@ -1,4 +1,4 @@
-.PHONY: test test-race lab-unit vet fuzz lab lab-directory build evidence image compose-smoke
+.PHONY: test test-race lab-unit vet fuzz lab lab-directory lab-oidc build evidence image compose-smoke
 
 build:
 	go build -o bin/port49d ./cmd/port49d
@@ -66,6 +66,11 @@ evidence:
 # Compose v2.24.4+; see tests/lab/README.md, "Directories".
 lab-directory:
 	go test -tags lab ./tests/lab/ -run 'TestL42|TestL43' -count=1 -v -timeout 30m
+
+# The identity-provider lab (plan 7h): Keycloak as a container, no devices.
+# Needs Docker with Compose v2.24.4+; see tests/lab/README.md, "Identity provider".
+lab-oidc:
+	go test -tags lab ./tests/lab/ -run 'TestL45|TestL46' -count=1 -v -timeout 30m
 
 # Requires containerlab and device images; see tests/lab/README.md.
 #
