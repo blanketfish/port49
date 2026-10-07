@@ -60,15 +60,20 @@ const MaxConns = 256
 // that never comes would hold a slot of the cap for good (pre-flight F1). The
 // time between requests is IdleTimeout's, so a held connection is unaffected.
 //
-// anchor must hold the one trust anchor. Server refuses a nil pool, which
-// crypto/tls would take as the system roots — every public CA an anchor for
-// the email mapping — and an empty one, which trusts no one. It returns the
-// refusal rather than panicking (plan 4b): port49d now runs code after start
-// that swaps policy under a live daemon, and nothing on a path that can run
-// with device AAA already serving may end the process.
+// Without a workload verifier, anchor must hold the one trust anchor. Server
+// refuses a nil pool, which crypto/tls would take as the system roots — every
+// public CA an anchor for the email mapping — and an empty one, which trusts
+// no one. It returns the refusal rather than panicking (plan 4b): port49d now
+// runs code after start that swaps policy under a live daemon, and nothing on
+// a path that can run with device AAA already serving may end the process.
 //
-// An OIDC-only broker (NoX509, plan 7h) is served with a nil anchor and
-// requests no certificate.
+// An OIDC-only broker (NoX509, plan 7h) with no workload verifier is served
+// with a nil anchor and requests no certificate.
+//
+// With b.Workload set (plan 8), a nil anchor is accepted: the pool is the
+// workload anchor alone, and certificates are still requested
+// (VerifyClientCertIfGiven). Given a human anchor, the workload anchor is
+// added beside it, and the anchor a chain ends at names its domain.
 func (b *Broker) Server(addr string, cert tls.Certificate, anchor *x509.CertPool) (*http.Server, error) {
 	clientAuth := tls.VerifyClientCertIfGiven
 	var pool *x509.CertPool

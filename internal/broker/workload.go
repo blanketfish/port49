@@ -39,8 +39,9 @@ type Workload struct {
 const lateWindow = 24 * time.Hour
 
 // lateOnce reports whether fp's late renewal was not said in the last
-// lateWindow, and notes it said now. Past 4096 certificates it drops the
-// ones said a window ago or more.
+// lateWindow, and notes it said now. Past 4096 certificates it tries to prune
+// the ones said a window ago or more; it does not cap the map, so a fleet
+// whose certificates are all inside the window keeps them all.
 func (w *Workload) lateOnce(fp string, now time.Time) bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()

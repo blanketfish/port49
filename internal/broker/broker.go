@@ -557,7 +557,6 @@ func (b *Broker) authenticate(w http.ResponseWriter, r *http.Request, event, not
 		writeError(w, http.StatusUnauthorized, string(reason), err.Error())
 		return caller{}, false
 	}
-	b.noteRenewal(cc, now)
 	if b.MaxSessionAge > 0 && now.Sub(authTime) > b.MaxSessionAge {
 		b.emit(decision.Record{TS: now, Event: event, Verdict: decision.VerdictDeny,
 			Reason: decision.SessionExpired, Principal: named, Auth: &decision.Auth{Method: cred.Method}})
@@ -607,6 +606,8 @@ func (b *Broker) authenticate(w http.ResponseWriter, r *http.Request, event, not
 		if marked(principal) || status() {
 			return caller{}, false
 		}
+		// Only a certificate that is served is counted late.
+		b.noteRenewal(cc, now)
 		return caller{principal: principal, cred: cred, authTime: authTime}, true
 	}
 	// Under a directory the certificate's own marks (its key, and the

@@ -225,3 +225,33 @@ func TestTheServersPoolHoldsBothAnchors(t *testing.T) {
 		t.Fatal("ClientCAs is not the workload anchor alone")
 	}
 }
+
+// Only a certificate that is served is counted late: one refused
+// credential_revoked is told nothing more, and the operator's alert on the
+// counter stays true.
+func TestARefusedLateWorkloadIsNotCountedLate(t *testing.T) {
+	f, wca, w := newWorkloadFixture(t)
+	logged := &lockedBuffer{}
+	prev := log.Writer()
+	log.SetOutput(logged)
+	t.Cleanup(func() { log.SetOutput(prev) })
+	cc, err := f.b.CertCallerOf(chainState(w, wca), f.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.b.Revoke(context.Background(), RevokeRequest{Issuer: w.Leaf.Issuer.String(),
+		Serial: cc.Cred.Serial, Origin: "t"}); err != nil {
+		t.Fatal(err)
+	}
+	f.advance(19 * time.Hour)
+	res := f.post(context.Background(), chainState(w, wca), mintLeaf1, "k1")
+	if res.Code != http.StatusUnauthorized || !strings.Contains(res.Body.String(), "credential_revoked") {
+		t.Fatalf("%s", answer(res))
+	}
+	if got := testutil.ToFloat64(f.b.Metrics.WorkloadRenewalLate); got != 0 {
+		t.Fatalf("a refused certificate was counted late %v times", got)
+	}
+	if strings.Contains(logged.String(), "its renewal is late") {
+		t.Fatalf("the process log: %q", logged.String())
+	}
+}
