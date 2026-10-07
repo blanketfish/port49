@@ -90,12 +90,22 @@ type Timing struct {
 var DefaultTiming = Timing{ClockSkew: time.Minute, MaxTokenAge: 2 * time.Hour, JWKSRefresh: time.Hour,
 	JWKSMaxAge: 24 * time.Hour}
 
+// X509Machine is the workload certificate verifier (plan 8; spec §13
+// decision 40): x509 under broker.identity.machines, its one trust anchor's
+// file and the SPIFFE trust domains a certificate it verifies may name.
+type X509Machine struct {
+	AnchorFile   string
+	TrustDomains []string
+}
+
 // Config is broker.identity resolved: the one x509 human anchor ("" for
 // none), whether it came from broker.client_ca_file with no
 // broker.identity (Shorthand), the oidc verifiers, and the timing.
 type Config struct {
 	X509AnchorFile string
 	Shorthand      bool
-	OIDC           []VerifierConfig
-	Timing         Timing
+	// X509Machine is the workload verifier, nil without one (plan 8).
+	X509Machine *X509Machine
+	OIDC        []VerifierConfig
+	Timing      Timing
 }
