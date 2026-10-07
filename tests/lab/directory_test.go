@@ -27,6 +27,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode"
 
 	"github.com/go-ldap/ldap/v3"
 	"github.com/prometheus/client_golang/prometheus"
@@ -713,6 +714,14 @@ func errOrOK(err error) string {
 }
 
 func oneLineMax(s string, n int) string {
+	// AD ends an LDAP diagnosticMessage with a NUL; no control character
+	// belongs in a note (grep calls the file binary).
+	s = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, s)
 	s = strings.Join(strings.Fields(s), " ")
 	if len(s) > n {
 		s = s[:n] + "..."

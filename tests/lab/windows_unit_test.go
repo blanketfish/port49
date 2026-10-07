@@ -27,6 +27,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 	"unicode/utf16"
 
 	"golang.org/x/crypto/ssh"
@@ -2111,6 +2112,26 @@ func TestL44OR1NothingFatalAfterAFailedStart(t *testing.T) {
 			if strings.Contains(after[back+end:], call) {
 				t.Errorf("%s runs after the branches", call)
 			}
+		}
+	}
+}
+
+// AD ends an LDAP diagnosticMessage with a NUL, and no control character
+// belongs in a note (grep calls a file with one binary): oneLineMax turns each
+// into a space, and the whitespace collapses.
+func TestOneLineMaxDropsControlCharacters(t *testing.T) {
+	for name, tc := range map[string]struct{ in, want string }{
+		"ad error":  {"80090308: LdapErr: DSID-0C09044E, comment: AcceptSecurityContext error, data 0, v65f4\x00", "80090308: LdapErr: DSID-0C09044E, comment: AcceptSecurityContext error, data 0, v65f4"},
+		"mid nul":   {"a\x00b", "a b"},
+		"escape":    {"a\x1b[0mb", "a [0mb"},
+		"tab, crlf": {"a\tb\r\nc", "a b c"},
+		"plain":     {"a b", "a b"},
+	} {
+		if got := oneLineMax(tc.in, 400); got != tc.want {
+			t.Errorf("%s: %q, want %q", name, got, tc.want)
+		}
+		if got := oneLineMax(tc.in, 400); strings.ContainsFunc(got, unicode.IsControl) {
+			t.Errorf("%s: a control character survives: %q", name, got)
 		}
 	}
 }
