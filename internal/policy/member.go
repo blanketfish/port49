@@ -9,6 +9,7 @@ import (
 
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/directory"
+	"github.com/rhwendt/port49/internal/spiffe"
 )
 
 // DirectoryMode is whether the process loading a policy resolves humans
@@ -223,6 +224,19 @@ func (p *Policy) DeclaredUsernames() map[string]string {
 	for name, s := range p.subs {
 		if s.Username != "" {
 			out[s.Username] = name
+		}
+	}
+	return out
+}
+
+// SPIFFEIdentities is every spiffe:// identity a subject lists, with the
+// subject that lists it: the ones the start checks against the workload
+// verifier's trust domains (decision 40 ruling 16).
+func (p *Policy) SPIFFEIdentities() map[string]string {
+	out := map[string]string{}
+	for id, name := range p.byID {
+		if strings.HasPrefix(id, spiffe.Scheme) {
+			out[id] = name
 		}
 	}
 	return out

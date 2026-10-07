@@ -29,6 +29,7 @@ import (
 	"github.com/rhwendt/port49/internal/directory"
 	"github.com/rhwendt/port49/internal/engine"
 	"github.com/rhwendt/port49/internal/platform"
+	"github.com/rhwendt/port49/internal/spiffe"
 	"github.com/rhwendt/port49/internal/token"
 )
 
@@ -1219,8 +1220,16 @@ func identityDomain(id string) (string, error) {
 				"lower-case: write \"user:%s\"", id, lower)
 		}
 		return "humans", nil
-	case strings.HasPrefix(id, "spiffe://") && len(id) > len("spiffe://"),
-		serviceAccount.MatchString(id),
+	case strings.HasPrefix(strings.ToLower(id), spiffe.Scheme):
+		// A workload certificate's principal (plan 8): checked here as the
+		// verifier checks it, so a policy naming one it can never give
+		// fails CI rather than minting for no one (decision 40 ruling 4).
+		if _, err := spiffe.ParseWorkload(id); err != nil {
+			return "", fmt.Errorf("identity %q: a workload certificate's principal is its SPIFFE ID, "+
+				"spiffe://<trust domain>/<path>, verbatim (spec §2; §13 decision 40): %w", id, err)
+		}
+		return "machines", nil
+	case serviceAccount.MatchString(id),
 		strings.HasPrefix(id, "app:") && len(id) > len("app:"):
 		return "machines", nil
 	}

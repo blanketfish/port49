@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"fmt"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -572,5 +573,32 @@ func TestALoadErrorOnASecretRuleQuotesNoSecret(t *testing.T) {
 	if text := strings.Join(causes, "\n"); !strings.Contains(text, `rule #1 (role "r"): the deny splits more than`) ||
 		strings.Contains(text, "HUNTER2") {
 		t.Errorf("quarantine: %s", text)
+	}
+}
+
+// A spiffe:// identity outside SPIFFE ID §2 is a load error, never folded
+// (decision 40 ruling 4); one inside it is a machine's.
+func TestASpiffeIdentityMustBeAWorkloadID(t *testing.T) {
+	const tmpl = `
+scopes: [{name: all_devices, match: {}}]
+roles: [{name: r, privilege: readonly, permit: ["show **"]}]
+subjects: [{name: svc, identity: ["%s"], username: svc-backup, token_ttl: 60s}]
+grants: [{subject: svc, scope: all_devices, roles: [r]}]
+`
+	for id, want := range map[string]string{
+		"spiffe://Corp.example.com/host/x": "a workload certificate's principal is its SPIFFE ID",
+		"spiffe://corp.example.com":        "names the trust domain itself, not a workload",
+		"SPIFFE://corp.example.com/host/x": "a workload certificate's principal is its SPIFFE ID",
+	} {
+		if _, err := loadText(t, fmt.Sprintf(tmpl, id), DirectoryOff); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %v", id, err)
+		}
+	}
+	p, err := loadText(t, fmt.Sprintf(tmpl, "spiffe://corp.example.com/host/oxidized-01"), DirectoryOff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := p.SPIFFEIdentities(); len(got) != 1 || got["spiffe://corp.example.com/host/oxidized-01"] != "svc" {
+		t.Fatalf("SPIFFEIdentities %v", got)
 	}
 }
