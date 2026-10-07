@@ -511,3 +511,35 @@ type partialStore struct{ store.Store }
 func (s *partialStore) TokensByPrincipal(ctx context.Context, principal string) ([]store.TokenKey, error) {
 	return nil, store.ErrUnavailable
 }
+
+// ttlStore fails PutLogout, noting the ttl it was given.
+type ttlStore struct {
+	store.Store
+	ttl time.Duration
+}
+
+func (s *ttlStore) PutLogout(ctx context.Context, l store.Logout, ttl time.Duration) error {
+	s.ttl = ttl
+	return store.ErrUnavailable
+}
+
+// The lift time a failed logout advises is the life of the record it would
+// have written, not a second copy of the sum (P1).
+func TestTheAdvisedLiftTimeIsTheLogoutRecordsLife(t *testing.T) {
+	f, iss, _ := oidcLoggedIn(t)
+	var said strings.Builder
+	f.b.Say = func(format string, args ...any) { said.WriteString(fmt.Sprintf(format, args...) + "\n") }
+	f.b.AdminSocket = "/run/port49/admin.sock"
+	st := &ttlStore{Store: f.st}
+	f.b.Store = st
+	now := f.b.Now()
+	if w := f.postLogout(logoutFor(t, f, iss, "s-sub-alice", "j-life")); w.Code != 503 {
+		t.Fatalf("%s", lshown(w))
+	}
+	if st.ttl != f.b.logoutRecordTTL() {
+		t.Fatalf("PutLogout was given %s, the record's life is %s", st.ttl, f.b.logoutRecordTTL())
+	}
+	if want := now.Add(st.ttl).UTC().Format(time.RFC3339); !strings.Contains(said.String(), "only after "+want) {
+		t.Fatalf("the lift time is not now plus the record's life (%s):\n%s", want, said.String())
+	}
+}

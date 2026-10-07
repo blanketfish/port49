@@ -118,6 +118,14 @@ func (b *Broker) logout(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+// logoutRecordTTL is how long a logout record stands: while a token issued
+// before it could still be presented. The recovery's lift time is the same
+// quantity.
+func (b *Broker) logoutRecordTTL() time.Duration {
+	t := b.Identity.Timing
+	return t.MaxTokenAge + 2*t.ClockSkew
+}
+
 // logoutByHand is how an operator ends what a logout that could not be
 // applied would have, never a bare port49 revoke (a logout is not a ban).
 // For a sid it leads with the API call that runs the whole logout again.
@@ -141,7 +149,7 @@ func (b *Broker) logoutByHand(lt oidc.LogoutToken, rep RevokeReport, applied boo
 		if applied {
 			each = append(each, b.logoutRecovery(p))
 		} else {
-			each = append(each, b.logoutUnapplied(p, b.Now().Add(b.Identity.Timing.MaxTokenAge+2*b.Identity.Timing.ClockSkew)))
+			each = append(each, b.logoutUnapplied(p, b.Now().Add(b.logoutRecordTTL())))
 		}
 	}
 	out := lead + strings.Join(each, "; and ")
@@ -200,7 +208,7 @@ func (b *Broker) Logout(ctx context.Context, lt oidc.LogoutToken, origin string)
 		rep.By, rep.Sid, rep.Sub, key = ByLogoutSid, lt.Sid, "", store.SidKey(lt.Issuer, lt.Sid)
 	}
 	if err := b.Store.PutLogout(ctx, store.Logout{Key: key, At: lt.IssuedAt, Origin: origin},
-		t.MaxTokenAge+2*t.ClockSkew); err != nil {
+		b.logoutRecordTTL()); err != nil {
 		return RevokeReport{}, err
 	}
 	note := func(err error) {
