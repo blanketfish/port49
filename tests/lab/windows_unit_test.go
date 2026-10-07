@@ -2253,13 +2253,17 @@ func TestL44ConnFailed(t *testing.T) {
 	}
 }
 
+// asExchangeRefused is gokrb5's message for a KRB-ERROR to the AS exchange
+// (ASExchange.go); the TGS exchange's ends "... from KDC when requesting for
+// <spn>" (TGSExchange.go).
+const asExchangeRefused = "AS Exchange Error: kerberos error response from KDC"
+
 // kdcRefusal is the error conn.go's bind returns when the KDC answers a
 // gokrb5 exchange with a KRB-ERROR: gokrb5's own wrapping (krberror.Errorf
 // over messages.KRBError, as ASExchange.go and TGSExchange.go build it),
-// flattened to text under ErrBindRefused.
-func kdcRefusal(code int32, exchange string) error {
-	kerr := krberror.Errorf(messages.KRBError{ErrorCode: code}, krberror.KDCError,
-		"%s: kerberos error response from KDC", exchange)
+// flattened to text under ErrBindRefused. format is gokrb5's message.
+func kdcRefusal(code int32, format string, args ...any) error {
+	kerr := krberror.Errorf(messages.KRBError{ErrorCode: code}, krberror.KDCError, format, args...)
 	return fmt.Errorf("bind gssapi as port49@CORP.LAB refused: %w (%v)", directory.ErrBindRefused, kerr)
 }
 
@@ -2280,14 +2284,15 @@ func TestL44GSSAPIFailed(t *testing.T) {
 	}{
 		"AD refusal 49": {bindErr(49, "LDAP result 49"), false},
 		"AD refusal 8":  {bindErr(8, "LDAP result 8"), false},
-		"KDC refused the principal": {fmt.Errorf("bind gssapi as port49@CORP.LAB refused: %w (%v)",
-			directory.ErrBindRefused, errors.New("[Root cause: KDC_Error] KRB5KDC_ERR_PREAUTH_FAILED")), false},
-		"KDC refused the client principal": {kdcRefusal(errorcode.KDC_ERR_C_PRINCIPAL_UNKNOWN, "AS Exchange Error"), false},
-		"KDC revoked the client":           {kdcRefusal(errorcode.KDC_ERR_CLIENT_REVOKED, "AS Exchange Error"), false},
+		// AD's answer to a wrong key (ASExchange.go: the retry with pre-auth).
+		"KDC refused the key":              {kdcRefusal(errorcode.KDC_ERR_PREAUTH_FAILED, asExchangeRefused), false},
+		"KDC refused the client principal": {kdcRefusal(errorcode.KDC_ERR_C_PRINCIPAL_UNKNOWN, asExchangeRefused), false},
+		"KDC revoked the client":           {kdcRefusal(errorcode.KDC_ERR_CLIENT_REVOKED, asExchangeRefused), false},
 		// The service ticket and the clock are the lab's setup failing (gate
 		// runs 8 and 9: ldap/localhost off DC1$), not AD refusing port49.
-		"KDC does not know the service": {kdcRefusal(errorcode.KDC_ERR_S_PRINCIPAL_UNKNOWN, "TGS Exchange Error"), true},
-		"clock skew":                    {kdcRefusal(errorcode.KRB_AP_ERR_SKEW, "AS Exchange Error"), true},
+		"KDC does not know the service": {kdcRefusal(errorcode.KDC_ERR_S_PRINCIPAL_UNKNOWN,
+			"TGS Exchange Error: kerberos error response from KDC when requesting for %s", "ldap/dc1.corp.example.com"), true},
+		"clock skew": {kdcRefusal(errorcode.KRB_AP_ERR_SKEW, asExchangeRefused), true},
 		"KDC does not answer": {fmt.Errorf("bind gssapi as port49@CORP.LAB: %w",
 			errors.New("[Root cause: Networking_Error] dial tcp 127.0.0.1:30088: connect: connection refused")), true},
 		"network error code":              {ldap.NewError(ldap.ErrorNetwork, errors.New("connection reset")), true},
