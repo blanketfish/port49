@@ -4194,7 +4194,8 @@ text, task by task:
   through `exactObject`, so a repeated member is refused, never last-wins. Rulings (spec amended
   first, `0e25cde`): `typ` is an allowlist (humans absent or `jwt`; machines also `at+jwt`);
   `act` and `may_act` are refused on a machine token; a claim name outside printable ASCII is
-  refused; an unavailable verifier beats an acceptance when the token's verifiers cannot all be
+  refused. Also ruled, without a spec amendment (it follows from ruling 2's "exactly one must
+  accept"): an unavailable verifier beats an acceptance when the token's verifiers cannot all be
   asked.
 - **Task 6 (logout tokens; 168ec02, 84415e0, a3ffd7d).** The controller reversed its own
   provisional fail-closed ruling on review: one acceptance wins, and 503 comes only when no
@@ -4246,7 +4247,7 @@ text, task by task:
   line on main, and the controller updates it after the merge.
 
 **The rulings, as made** (decision 39; Rulings 1–24 of the plan). All twenty-four stood. Four
-carry an in-flight edit, each in the spec before the code: ruling 2 (`typ` allowlist, ASCII claim
+carry an in-flight edit, each in decision 39's text: ruling 2 (`typ` allowlist, ASCII claim
 names; `0e25cde`), ruling 21 (`act` and `may_act` refused; `0e25cde`), ruling 22 (machine
 `client_id` across issuers; `2a30693`) and ruling 20 (L46 closed, L45 open; `a4b8e83`). Ruling 12
 stood as measured on Keycloak. **Ruling 13 is contradicted in one case** (an administrator's "sign
@@ -4265,13 +4266,13 @@ amended here.
   recommendation (L47 stays open until measured on an Entra ID and an Okta tenant; the notes say
   measured on Keycloak only).
 
-**Rulings made during execution.** Task 2, two machine verifiers on different issuers list no
+**Rulings made during execution.** Before Task 1 (planfix, pre-flight M-9), owner and logout
+records are unsealed, like marks: a store writer can already delete marks and tokens (sealing
+`oo/` records with principal AAD is carried to the pre-beta review). Task 2, two machine verifiers on different issuers list no
 shared `client_id`. Task 5, the `typ` allowlist, `act`/`may_act`, ASCII claim names, an
 unavailable verifier. Task 6, one acceptance wins (a reversal). Task 7, issuer spelling variants
-refused. Task 8, the etcd harness fix. Task 9, owner and logout records unsealed (pre-flight M-9:
-a store writer can already delete marks and tokens; sealing `oo/` records with principal AAD is
-carried to the pre-beta review). Task 11, a logout is not a ban, and the recovery says so. Task
-12, a `jti` is given back on a `PutOnce` error. Task 14, the 0700 state directory. From Task 15,
+refused. Task 8, the etcd harness fix. Task 11, a logout is not a ban, and the recovery says so. Task
+12, a `jti` is given back on a `PutOnce` error. From Task 15,
 `make test-race` on touched packages. Task 16, L46 closes and L45 stays open.
 
 **The operator notes, as built** (the plan's notes, corrected by what the lab measured and the
@@ -4340,7 +4341,8 @@ reviews found):
   - **`POST /v1/tokens/revoke {"sid", "issuer"}`** ends one OIDC session and needs
     `revoke_others`; an `issuer` with no `sid` is refused, never a standing ban.
   - **A `sid` logout ends a certificate-path context an OIDC refresh extended under it.** A
-    `sub` logout finds the person through the last day's mints; a renamed person is reached under
+    `sub` logout finds the person through the owner record's life (a day, or
+    `session.max_session_age_default` if longer); a renamed person is reached under
     both principals for a day.
   - On Junos, as with every revocation, the open session keeps what it had at login.
 - **A provider outage.** Held tokens work against the keys last fetched, kept in the state
@@ -4364,10 +4366,11 @@ reviews found):
 - **Upgrade order.** Upgrade every broker replica before setting `broker.identity` or
   registering the logout URL: an older replica answers 404 to `/v1/logout` and that logout is
   lost.
-- **Also new:** `port49 revoke app:<client_id>`; `GET /v1/config`'s `oidc` and `methods`;
+- **Also new:** `port49 revoke --principal app:<client_id>`; `GET /v1/config`'s `oidc` and `methods`;
   `auth.oidc` on every record of an OIDC caller; `revoke` records `by: sid|sub` with
   `oidc_issuer` and `revocation.principals`; API errors `503 identity_provider_unavailable`,
-  `401 refresh_not_fresh`; metrics `port49_oidc_tokens_total{issuer,outcome}`,
+  `401 refresh_not_fresh`, `400 bad_request` for a client certificate and a bearer on one request;
+  metrics `port49_oidc_tokens_total{issuer,outcome}`,
   `port49_oidc_keys_last_success_timestamp_seconds{issuer}`,
   `port49_oidc_keys_fetch_failures_total{issuer}`, `port49_oidc_logouts_total{outcome}`. No reason
   code is new.
@@ -4385,10 +4388,15 @@ reviews found):
   Keycloak sent one logout token naming one session's `sid` plus the user's `sub`, which ruling
   13's sid-first logout answers by ending that one session. Closing the row would make ruling 13
   firm while the lab contradicts it, so it stays open on a **decision pending with Ryan**. The
-  recommendation: a token carrying both `sid` and `sub` also ends every session of that `sub`,
-  which fails closed at the cost of over-logout (an RP logout and an administrator ending one
-  session send the same two claims, so they would end the person's other sessions too; the
-  three cases' tokens cannot be told apart).
+  two options, put to Ryan by the controller on 2026-10-07 (ledger):
+  - **(A) Status quo, sid-first.** An administrator's sign-out-user over N sessions ends one; the
+    others live until their session ceiling (a refresh needs `prompt=login` at the provider) and
+    their held ID tokens can mint until `exp`.
+  - **(B) A token carrying both `sid` and `sub` also ends every session of that `sub`.** It fails
+    closed, but Keycloak's three cases send indistinguishable tokens, so every RP logout and every
+    administrator ending one session would also end the person's other sessions (a re-login).
+  - **The controller recommends (B)**, security first; the recommendation is the controller's, and
+    Ryan decides. It is a change to ruling 13, a follow-up after the merge.
 - **End to end** (`tests/lab/results/oidc-e2e-arista_eos.md`, vEOS 4.31.2F): a Keycloak login mints,
   SSH permits, an RP logout writes a revoke record by `sid` and the open session's next command is
   `credential_revoked`, a new login works, a plain SSO answer to the refresh challenge is
@@ -4417,7 +4425,11 @@ tokens, `oidctest`); `store` `PutOnce`, `TakeOnce`, `PutOIDCOwner`, `OIDCOwner`,
     logout, so two logouts within about 2s on one Keycloak keep-alive connection might fail on
     Keycloak's side, and Keycloak does not retry (L45). The reviewer traces whether that loses a
     logout and whether Keycloak reconnects (an administrator's mass sign-out is the case).
-  - **Sealing owner and logout records** (`oo/`, with the principal as AAD; pre-flight M-9).
+- **For the pre-beta review:** sealing owner and logout records (`oo/`, with the principal as AAD;
+  pre-flight M-9).
+- **Parked:** Task 8's re-review N1 (the etcdtest sweep could remove a live data dir where
+  containers share `/tmp` across pid namespaces; test-only); Task 11's re-review 4 optional clarity
+  note.
 - **Ryan's pending answers:** OR-1, OR-2, OR-3, and the L45 sign-out-user decision above.
 - **Plan 8:** `x509` under `broker.identity.machines` (refused at load until then); a workload
   certificate's directory entry through `Resolver.Map`.
