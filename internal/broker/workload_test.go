@@ -3,6 +3,8 @@ package broker
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/asn1"
 	"errors"
 	"net/url"
 	"strings"
@@ -171,6 +173,75 @@ func TestNoWorkloadVerifierKeepsTodaysReading(t *testing.T) {
 	}
 	cc, err := f.b.CertCallerOf(f.state(c), f.now)
 	if err != nil || cc.Domain != DomainHumans || cc.Principal != alicePrincipal {
+		t.Fatalf("%+v %v", cc, err)
+	}
+}
+
+// rawURISAN is a subjectAltName extension carrying uris byte for byte, as
+// crypto/x509 would not write them.
+func rawURISAN(t *testing.T, uris ...string) []pkix.Extension {
+	t.Helper()
+	var gns []asn1.RawValue
+	for _, u := range uris {
+		gns = append(gns, asn1.RawValue{Class: asn1.ClassContextSpecific, Tag: 6, Bytes: []byte(u)})
+	}
+	der, err := asn1.Marshal(gns)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return []pkix.Extension{{Id: asn1.ObjectIdentifier{2, 5, 29, 17}, Value: der}}
+}
+
+// crypto/x509 runs a URI SAN through url.Parse, which lower-cases the scheme
+// and drops an empty fragment; the strict parse must see the SAN's own bytes.
+func TestTheWorkloadPrincipalIsReadFromTheSANsOwnBytes(t *testing.T) {
+	f := newFixture(t, 8)
+	wca := f.withWorkload(t)
+	for name, san := range map[string]string{
+		"upper-case scheme":      "SPIFFE://corp.example.com/host/oxidized-01",
+		"mixed-case scheme":      "Spiffe://corp.example.com/host/oxidized-01",
+		"empty fragment":         "spiffe://corp.example.com/host/oxidized-01#",
+		"empty query":            "spiffe://corp.example.com/host/oxidized-01?",
+		"upper-case scheme+frag": "SPIFFE://corp.example.com/host/oxidized-01#",
+	} {
+		c, err := wca.Issue(testpki.Leaf{CommonName: "x", Client: true, NotBefore: f.now.Add(-time.Hour),
+			NotAfter: f.now.Add(time.Hour), ExtraExtensions: rawURISAN(t, san)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = f.b.CertCallerOf(chainState(c, wca), f.now)
+		if !errors.Is(err, ErrWorkloadUnmapped) {
+			t.Errorf("%s: got %v, want refused", name, err)
+		}
+	}
+}
+
+// Two URI SANs are counted over the raw names, whatever url.Parse makes of them.
+func TestTwoRawURISANsNameNoWorkload(t *testing.T) {
+	f := newFixture(t, 8)
+	wca := f.withWorkload(t)
+	c, err := wca.Issue(testpki.Leaf{CommonName: "x", Client: true, NotBefore: f.now.Add(-time.Hour),
+		NotAfter: f.now.Add(time.Hour), ExtraExtensions: rawURISAN(t, workloadID, workloadID)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = f.b.CertCallerOf(chainState(c, wca), f.now)
+	if !errors.Is(err, ErrWorkloadUnmapped) || !strings.Contains(err.Error(), "carries 2 URI SANs") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+// The exact bytes of a good ID are the principal.
+func TestARawSANThatIsAGoodIDIsTheWorkload(t *testing.T) {
+	f := newFixture(t, 8)
+	wca := f.withWorkload(t)
+	c, err := wca.Issue(testpki.Leaf{CommonName: "x", Client: true, NotBefore: f.now.Add(-time.Hour),
+		NotAfter: f.now.Add(time.Hour), ExtraExtensions: rawURISAN(t, workloadID)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cc, err := f.b.CertCallerOf(chainState(c, wca), f.now)
+	if err != nil || cc.Principal != workloadID {
 		t.Fatalf("%+v %v", cc, err)
 	}
 }

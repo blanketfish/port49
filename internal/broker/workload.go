@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/asn1"
 	"errors"
 	"fmt"
 	"slices"
@@ -140,11 +141,15 @@ func WorkloadPrincipal(leaf *x509.Certificate, trustDomains []string) (string, e
 		return "", fmt.Errorf("%w: it is a CA certificate, which no workload presents (X.509-SVID §4.1)",
 			ErrWorkloadUnmapped)
 	}
-	if len(leaf.URIs) != 1 {
-		return "", fmt.Errorf("%w: it carries %d URI SANs; exactly one SPIFFE ID names a workload",
-			ErrWorkloadUnmapped, len(leaf.URIs))
+	uris, err := rawURISANs(leaf)
+	if err != nil {
+		return "", fmt.Errorf("%w: its subjectAltName cannot be read: %v", ErrWorkloadUnmapped, err)
 	}
-	raw := leaf.URIs[0].String()
+	if len(uris) != 1 {
+		return "", fmt.Errorf("%w: it carries %d URI SANs; exactly one SPIFFE ID names a workload",
+			ErrWorkloadUnmapped, len(uris))
+	}
+	raw := uris[0]
 	id, err := spiffe.ParseWorkload(raw)
 	if err != nil {
 		return "", fmt.Errorf("%w: its URI SAN is %v", ErrWorkloadUnmapped, err)
@@ -154,4 +159,41 @@ func WorkloadPrincipal(leaf *x509.Certificate, trustDomains []string) (string, e
 			ErrWorkloadUnmapped, raw, strings.Join(trustDomains, ", "))
 	}
 	return raw, nil
+}
+
+var oidSubjectAltName = asn1.ObjectIdentifier{2, 5, 29, 17}
+
+// rawURISANs is leaf's URI SANs as the certificate carries them, byte for
+// byte. crypto/x509's URIs have been through url.Parse, which lower-cases the
+// scheme and drops an empty fragment, so a SAN the SPIFFE grammar refuses
+// would read as one it accepts; a workload's principal is never read from
+// them. A subjectAltName that does not parse is an error, never a fallback.
+func rawURISANs(leaf *x509.Certificate) ([]string, error) {
+	var ext []byte
+	for _, e := range leaf.Extensions {
+		if e.Id.Equal(oidSubjectAltName) {
+			ext = e.Value
+			break
+		}
+	}
+	if ext == nil {
+		return nil, nil
+	}
+	var seq asn1.RawValue
+	if rest, err := asn1.Unmarshal(ext, &seq); err != nil || len(rest) != 0 ||
+		seq.Class != asn1.ClassUniversal || seq.Tag != asn1.TagSequence || !seq.IsCompound {
+		return nil, errors.New("not a GeneralNames sequence")
+	}
+	var uris []string
+	for rest := seq.Bytes; len(rest) > 0; {
+		var gn asn1.RawValue
+		var err error
+		if rest, err = asn1.Unmarshal(rest, &gn); err != nil {
+			return nil, err
+		}
+		if gn.Class == asn1.ClassContextSpecific && gn.Tag == 6 { // uniformResourceIdentifier
+			uris = append(uris, string(gn.Bytes))
+		}
+	}
+	return uris, nil
 }
