@@ -154,17 +154,20 @@ func (req RevokeRequest) normal() (RevokeRequest, string, string, error) {
 // a request names only after this, so no spelling makes another principal
 // read as the caller, or the caller as another (decision 34).
 func normalPrincipal(p string) (string, error) {
-	if len(p) > 1024 || strings.IndexFunc(p, func(r rune) bool { return r < 0x21 || r > 0x7e }) >= 0 {
-		return "", fmt.Errorf("%w: a principal is printable ASCII", ErrBadRevocation)
-	}
 	if strings.HasPrefix(strings.ToLower(p), spiffe.Scheme) {
-		// Verbatim: the path is case-sensitive, and the verifier gives the
-		// ID only in the form ParseWorkload accepts (decision 40 ruling 4).
+		// Before the 1024-byte guard below: an ID may be spiffe.MaxLen bytes,
+		// and the verifier authenticates one that long, so the operator must be
+		// able to revoke it. Verbatim: the path is case-sensitive, and the
+		// verifier gives the ID only in the form ParseWorkload accepts, which
+		// bounds its length and characters (decision 40 ruling 4).
 		if _, err := spiffe.ParseWorkload(p); err != nil {
 			return "", fmt.Errorf("%w: %s is not a workload's SPIFFE ID as the broker spells one (%v)",
 				ErrBadRevocation, printsafe.Line(p, 200), err)
 		}
 		return p, nil
+	}
+	if len(p) > 1024 || strings.IndexFunc(p, func(r rune) bool { return r < 0x21 || r > 0x7e }) >= 0 {
+		return "", fmt.Errorf("%w: a principal is printable ASCII", ErrBadRevocation)
 	}
 	for _, pre := range principalPrefixes {
 		if strings.HasPrefix(strings.ToLower(p), pre) && len(p) > len(pre) {
@@ -622,7 +625,7 @@ func (r RevokeReport) markText() string {
 			"small one as 4096 (0x1000)), revoke it again with --cert FILE, then lift this one", r.Request.Serial)
 	}
 	if r.Mark.Kind == store.RevocationCert && r.workload {
-		b.WriteString("\nthis certificate's issuer is the workload trust anchor (broker.identity.machines): the " +
+		b.WriteString("\nthis certificate's issuer is the workload trust anchor (broker.identity.machines) or an intermediate under it: the " +
 			"workload renews it under a new serial this mark does not name; revoke its principal too (port49 " +
 			"revoke --principal spiffe://…), and revoke the certificate at your CA so it cannot be renewed")
 	}

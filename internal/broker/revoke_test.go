@@ -19,6 +19,7 @@ import (
 	"github.com/rhwendt/port49/internal/admission"
 	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/session"
+	"github.com/rhwendt/port49/internal/spiffe"
 	"github.com/rhwendt/port49/internal/store"
 )
 
@@ -1153,5 +1154,50 @@ func TestAnUnknownWorkloadPrincipalIsSaidInItsOwnTerms(t *testing.T) {
 		Origin: "admin_socket uid 0"})
 	if err != nil || !strings.Contains(rep.Text(), "a workload's principal is its certificate's SPIFFE ID, verbatim") {
 		t.Fatalf("%s %v", rep.Text(), err)
+	}
+}
+
+// longWorkloadID is a valid SPIFFE ID of n bytes in corp.example.com.
+func longWorkloadID(n int) string {
+	const head = "spiffe://corp.example.com/host/"
+	return head + strings.Repeat("a", n-len(head))
+}
+
+// WorkloadPrincipal accepts an ID up to spiffe.MaxLen, so revoke and explain
+// must too, or an operator cannot revoke what the log names.
+func TestALongWorkloadIDIsRevokedAndExplained(t *testing.T) {
+	id := longWorkloadID(1500)
+	f := newFixtureWithPolicy(t, 8, strings.Replace(workloadPolicy, workloadID, id, 1))
+	wca := f.withWorkload(t)
+	w := f.workloadCert(t, wca, id)
+	if got, err := normalPrincipal(id); err != nil || got != id {
+		t.Fatalf("%q %v", got, err)
+	}
+	if res := f.post(context.Background(), chainState(w, wca), mintLeaf1, "k1"); res.Code != http.StatusOK {
+		t.Fatalf("%s", answer(res))
+	}
+	f.loadPolicy(t, strings.Replace(strings.Replace(workloadPolicy, workloadID, id, 1), "username: alice, enable: token,",
+		"username: alice, api: [explain_others], enable: token,", 1))
+	res := f.call(context.Background(), f.state(f.alice), "POST", "/v1/explain",
+		`{"device":"leaf1","command":"show running-config","principal":"`+id+`"}`)
+	if res.Code != http.StatusOK || !strings.Contains(res.Body.String(), `"verdict":"permit"`) {
+		t.Fatalf("explain: %s", answer(res))
+	}
+	rep, err := f.b.Revoke(context.Background(), RevokeRequest{Principal: id, Origin: "admin_socket uid 0"})
+	if err != nil || rep.TokenKeys != 1 || rep.Mark.Key != id {
+		t.Fatalf("%+v %v", rep, err)
+	}
+	if res := f.post(context.Background(), chainState(w, wca), mintLeaf1, "k2"); res.Code != http.StatusUnauthorized ||
+		!strings.Contains(res.Body.String(), "credential_revoked") {
+		t.Fatalf("after the revocation: %s", answer(res))
+	}
+}
+
+func TestAnIDOverMaxLenIsRefusedByRevoke(t *testing.T) {
+	if got, err := normalPrincipal(longWorkloadID(spiffe.MaxLen)); err != nil {
+		t.Fatalf("MaxLen itself: %q %v", got, err)
+	}
+	if got, err := normalPrincipal(longWorkloadID(spiffe.MaxLen + 1)); !errors.Is(err, ErrBadRevocation) {
+		t.Fatalf("MaxLen+1: %q %v", got, err)
 	}
 }
