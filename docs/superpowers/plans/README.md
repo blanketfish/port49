@@ -4319,9 +4319,12 @@ reviews found):
   - **One session or one person.** A logout at the end-session endpoint, and an administrator
     ending one session, each send one token with that session's `sid` and `sub`. **An
     administrator's "sign out user" over several sessions sends one token naming one session's
-    `sid` and the user's `sub`, so only that session ends and the others live until their ID
-    token's `exp` or a refresh fails.** Until Ryan rules (below), end the rest with
-    `port49 revoke --principal <principal>`, then `--lift` once the sessions are gone.
+    `sid` and the user's `sub`, so only that session ends; the others' device contexts live until
+    their session ceiling and their held ID tokens can mint until `exp`.** Until Ryan rules (below),
+    end the rest with `port49 revoke --principal <principal>` on the serving process's admin socket,
+    and `--lift` it only after the time of the revoke plus `max_token_age` + 2 × `clock_skew`
+    (`logoutByHand`'s not-applied form): no logout record stands for the other sessions, so an
+    earlier lift lets their held ID tokens mint again.
   - **Keycloak does not retry a logout:** a 503, a 400 and a refused connection each got one
     request, and the end-session endpoint still answered 302. A logout port49 answers 503 is lost
     unless the operator ends it by hand, so the broker says how.
@@ -4421,10 +4424,12 @@ tokens, `oidctest`); `store` `PutOnce`, `TakeOnce`, `PutOIDCOwner`, `OIDCOwner`,
   wait in `TestATakeoverPutsBackAMarkTheStoreLost` goes with it. `logoutByHand`'s "revoke, then
   lift" depends on the lift holding, so the operator docs owe this recovery.
 - **For the final review:**
-  - **The burst-logout question.** The broker closes certificate-less connections after each
-    logout, so two logouts within about 2s on one Keycloak keep-alive connection might fail on
-    Keycloak's side, and Keycloak does not retry (L45). The reviewer traces whether that loses a
-    logout and whether Keycloak reconnects (an administrator's mass sign-out is the case).
+  - **The burst-logout question, answered and fixed.** The broker closed certificate-less
+    connections after each logout without saying so, so a second logout on Keycloak's pooled
+    connection within about 2s was lost (Keycloak does not retry). Every answer to a request with no
+    client certificate now carries `Connection: close`, so the provider opens a new connection; the
+    idle close stays as the backstop. A lab recheck (an administrator signs out two users back to
+    back, and two requests arrive) is cheap and open.
 - **For the pre-beta review:** sealing owner and logout records (`oo/`, with the principal as AAD;
   pre-flight M-9).
 - **Parked:** Task 8's re-review N1 (the etcdtest sweep could remove a live data dir where
