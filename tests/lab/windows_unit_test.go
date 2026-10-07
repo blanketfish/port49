@@ -1329,6 +1329,24 @@ func TestWindowsSessionCut(t *testing.T) {
 	}
 }
 
+// A dependent that will not start at once does not end registry.ps1: measured,
+// Restart-Service NTDS -Force threw when DNS would not start just after NTDS,
+// which left the KDC stopped and broke the next SSH logon. The restart's own
+// errors are caught, and each service that was running is started inside the
+// wait, again on every pass, until it runs or the deadline passes.
+func TestWindowsRegistryStartsEveryServiceAgain(t *testing.T) {
+	b, _ := winScriptFS.ReadFile("directory/windows/scripts/registry.ps1")
+	s := string(b)
+	if !strings.Contains(s, "try { Restart-Service $svc -Force } catch { }") {
+		t.Error("registry.ps1's Restart-Service can end the script when a dependent will not start")
+	}
+	loop := strings.Index(s, "while ((Get-Service $s).Status -ne 'Running') {")
+	start := strings.Index(s, "try { Start-Service $s } catch { }")
+	if loop < 0 || start < loop {
+		t.Error("registry.ps1 does not start each service again inside its wait")
+	}
+}
+
 // registry.ps1 waits up to N minutes for NTDS itself; the Go side outlasts it,
 // or a cell would read a DC that is still restarting.
 func TestWindowsRegistryDeadlineOutlastsTheScript(t *testing.T) {

@@ -15,13 +15,18 @@ $path, $svc = $known[$name]
 if ($value -lt 0) { Remove-ItemProperty -Path $path -Name $name -ErrorAction SilentlyContinue }
 else { New-ItemProperty -Path $path -Name $name -PropertyType DWord -Value $value -Force | Out-Null }
 $running = @(@($svc) + @((Get-Service $svc).DependentServices | Where-Object Status -eq 'Running' | ForEach-Object Name))
-Restart-Service $svc -Force
+# Restart-Service -Force also starts the dependents again, and one that is not
+# ready yet fails the whole restart: measured, DNS would not start just after
+# NTDS did, the throw left the KDC stopped, and the next SSH logon failed. So
+# the restart's own errors are not fatal; every service that was running is
+# started, and started again, until it runs or the deadline passes.
+try { Restart-Service $svc -Force } catch { }
 $deadline = (Get-Date).AddMinutes(5)
 foreach ($s in $running) {
-  Start-Service $s -ErrorAction SilentlyContinue
   while ((Get-Service $s).Status -ne 'Running') {
     if ((Get-Date) -gt $deadline) { throw "$s did not come back" }
-    Start-Sleep 2
+    try { Start-Service $s } catch { }
+    Start-Sleep 3
   }
 }
 $now = (Get-ItemProperty -Path $path -Name $name -ErrorAction SilentlyContinue).$name
