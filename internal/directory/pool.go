@@ -102,7 +102,8 @@ var ErrBindRefused = errors.New("directory: bind refused")
 // inappropriateAuthentication (48), strongAuthRequired (8),
 // confidentialityRequired (13), authMethodNotSupported (7), or
 // ErrBindRefused. Only a refusal starts the bind hold-off (under external,
-// only when every server not open is refusing and none is bound); any other dial error is a fault.
+// only when every server not open is refusing and none is bound); any
+// other dial error is a fault.
 func Refusal(err error) bool {
 	if errors.Is(err, ErrBindRefused) {
 		return true

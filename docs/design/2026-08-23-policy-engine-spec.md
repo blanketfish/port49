@@ -7364,7 +7364,7 @@ every matching subject composes, and a scheduled refresh stamps refreshed_at.** 
   hold), 1m doubling on a server's repeat refusal
   to 15m, each refusing server on its own backoff, one probe bind per step (refusers on one step take
   turns, the one whose own backoff ended first going first, so a repaired server is bound
-  within N × 15m at the cap), any accepted bind
+  within about N × 15m at the cap), any accepted bind
   clearing it, bound connections still serving (the one service account, which AD locks out
   on failed binds counted across every DC; with N servers all refusing, at most N+4 failed
   binds in the first 30 minutes, then one per 15; gauge
