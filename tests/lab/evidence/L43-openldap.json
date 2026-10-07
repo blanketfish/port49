@@ -1,22 +1,22 @@
 {"event":"mark","label":"L43 external"}
-{"event":"bind","mechanism":"external","result_code":0,"duration_ms":2.367}
+{"event":"bind","mechanism":"external","result_code":0,"duration_ms":2.419}
 {"event":"mark","label":"L43 simple over LDAPS"}
-{"event":"bind","mechanism":"simple","result_code":0,"duration_ms":0.843}
+{"event":"bind","mechanism":"simple","result_code":0,"duration_ms":1.002}
 {"event":"mark","label":"L43 simple over plain LDAP"}
-{"event":"bind","mechanism":"simple over plain LDAP, by hand","result_code":13,"error":"LDAP Result Code 13 \"Confidentiality Required\": TLS confidentiality required","duration_ms":0.422}
+{"event":"bind","mechanism":"simple over plain LDAP, by hand","result_code":13,"error":"LDAP Result Code 13 \"Confidentiality Required\": TLS confidentiality required","duration_ms":0.399}
 {"event":"mark","label":"L43 a wrong password through the pool"}
-{"event":"bind","mechanism":"simple","result_code":49,"error":"LDAP Result Code 49 \"Invalid Credentials\": bind simple as cn=port49,ou=Svc,dc=corp,dc=example,dc=com: LDAP result 49","duration_ms":0.837}
+{"event":"bind","mechanism":"simple","result_code":49,"error":"LDAP Result Code 49 \"Invalid Credentials\": bind simple as cn=port49,ou=Svc,dc=corp,dc=example,dc=com: LDAP result 49","duration_ms":0.799}
 {"event":"mark","label":"L43 mapping san_email alice"}
-{"event":"search","base":"dc=corp,dc=example,dc=com","scope":"sub","filter":"(&(objectClass=inetOrgPerson)(mail=alice@corp.example.com))","dns":["uid=alice,ou=Staff,dc=corp,dc=example,dc=com"],"result_code":0,"duration_ms":0.143}
-{"event":"search","base":"dc=corp,dc=example,dc=com","scope":"sub","filter":"(mail=alice@corp.example.com)","dns":["uid=alice,ou=Staff,dc=corp,dc=example,dc=com"],"result_code":0,"duration_ms":0.108}
-{"event":"search","base":"dc=corp,dc=example,dc=com","scope":"sub","filter":"(uid=alice)","dns":["uid=alice,ou=Staff,dc=corp,dc=example,dc=com"],"result_code":0,"duration_ms":0.106}
-{"event":"search","base":"ou=G,dc=corp,dc=example,dc=com","scope":"sub","filter":"(&(objectClass=groupOfNames)(member=uid=alice,ou=Staff,dc=corp,dc=example,dc=com))","dns":["cn=g-leaf,ou=G,dc=corp,dc=example,dc=com"],"result_code":0,"duration_ms":0.157}
-{"event":"search","base":"ou=G,dc=corp,dc=example,dc=com","scope":"sub","filter":"(&(objectClass=groupOfNames)(cn=g-leaf))","dns":["cn=g-leaf,ou=G,dc=corp,dc=example,dc=com"],"result_code":0,"duration_ms":0.121}
+{"event":"search","base":"dc=corp,dc=example,dc=com","scope":"sub","filter":"(&(objectClass=inetOrgPerson)(mail=alice@corp.example.com))","dns":["uid=alice,ou=Staff,dc=corp,dc=example,dc=com"],"result_code":0,"duration_ms":0.159}
+{"event":"search","base":"dc=corp,dc=example,dc=com","scope":"sub","filter":"(mail=alice@corp.example.com)","dns":["uid=alice,ou=Staff,dc=corp,dc=example,dc=com"],"result_code":0,"duration_ms":0.143}
+{"event":"search","base":"dc=corp,dc=example,dc=com","scope":"sub","filter":"(uid=alice)","dns":["uid=alice,ou=Staff,dc=corp,dc=example,dc=com"],"result_code":0,"duration_ms":0.131}
+{"event":"search","base":"ou=G,dc=corp,dc=example,dc=com","scope":"sub","filter":"(&(objectClass=groupOfNames)(member=uid=alice,ou=Staff,dc=corp,dc=example,dc=com))","dns":["cn=g-leaf,ou=G,dc=corp,dc=example,dc=com"],"result_code":0,"duration_ms":0.165}
+{"event":"search","base":"ou=G,dc=corp,dc=example,dc=com","scope":"sub","filter":"(&(objectClass=groupOfNames)(cn=g-leaf))","dns":["cn=g-leaf,ou=G,dc=corp,dc=example,dc=com"],"result_code":0,"duration_ms":0.124}
 {"event":"mark","label":"L43 mapping san_email eve"}
-{"event":"search","base":"dc=corp,dc=example,dc=com","scope":"sub","filter":"(&(objectClass=inetOrgPerson)(mail=eve@corp.example.com))","dns":["uid=eve,ou=Staff,dc=corp,dc=example,dc=com","uid=eve2,ou=Contractors,dc=corp,dc=example,dc=com"],"result_code":0,"duration_ms":0.157}
+{"event":"search","base":"dc=corp,dc=example,dc=com","scope":"sub","filter":"(&(objectClass=inetOrgPerson)(mail=eve@corp.example.com))","dns":["uid=eve,ou=Staff,dc=corp,dc=example,dc=com","uid=eve2,ou=Contractors,dc=corp,dc=example,dc=com"],"result_code":0,"duration_ms":0.142}
 {"event":"mark","label":"L43 shared group name"}
-{"event":"search","base":"dc=corp,dc=example,dc=com","scope":"sub","filter":"(&(objectClass=inetOrgPerson)(mail=carol@corp.example.com))","dns":["uid=carol,ou=Staff,dc=corp,dc=example,dc=com"],"result_code":0,"duration_ms":0.138}
-{"event":"search","base":"dc=corp,dc=example,dc=com","scope":"sub","filter":"(mail=carol@corp.example.com)","dns":["uid=carol,ou=Staff,dc=corp,dc=example,dc=com"],"result_code":0,"duration_ms":0.118}
-{"event":"search","base":"dc=corp,dc=example,dc=com","scope":"sub","filter":"(uid=carol)","dns":["uid=carol,ou=Staff,dc=corp,dc=example,dc=com"],"result_code":0,"duration_ms":0.13}
-{"event":"search","base":"dc=corp,dc=example,dc=com","scope":"sub","filter":"(&(objectClass=groupOfNames)(member=uid=carol,ou=Staff,dc=corp,dc=example,dc=com))","dns":["cn=netops-oncall,ou=G,dc=corp,dc=example,dc=com"],"result_code":0,"duration_ms":0.175}
-{"event":"search","base":"dc=corp,dc=example,dc=com","scope":"sub","filter":"(&(objectClass=groupOfNames)(cn=netops-oncall))","dns":["cn=netops-oncall,ou=G,dc=corp,dc=example,dc=com","cn=netops-oncall,ou=Users-Can-Create,dc=corp,dc=example,dc=com"],"result_code":0,"duration_ms":0.155}
+{"event":"search","base":"dc=corp,dc=example,dc=com","scope":"sub","filter":"(&(objectClass=inetOrgPerson)(mail=carol@corp.example.com))","dns":["uid=carol,ou=Staff,dc=corp,dc=example,dc=com"],"result_code":0,"duration_ms":0.125}
+{"event":"search","base":"dc=corp,dc=example,dc=com","scope":"sub","filter":"(mail=carol@corp.example.com)","dns":["uid=carol,ou=Staff,dc=corp,dc=example,dc=com"],"result_code":0,"duration_ms":0.139}
+{"event":"search","base":"dc=corp,dc=example,dc=com","scope":"sub","filter":"(uid=carol)","dns":["uid=carol,ou=Staff,dc=corp,dc=example,dc=com"],"result_code":0,"duration_ms":0.109}
+{"event":"search","base":"dc=corp,dc=example,dc=com","scope":"sub","filter":"(&(objectClass=groupOfNames)(member=uid=carol,ou=Staff,dc=corp,dc=example,dc=com))","dns":["cn=netops-oncall,ou=G,dc=corp,dc=example,dc=com"],"result_code":0,"duration_ms":0.122}
+{"event":"search","base":"dc=corp,dc=example,dc=com","scope":"sub","filter":"(&(objectClass=groupOfNames)(cn=netops-oncall))","dns":["cn=netops-oncall,ou=G,dc=corp,dc=example,dc=com","cn=netops-oncall,ou=Users-Can-Create,dc=corp,dc=example,dc=com"],"result_code":0,"duration_ms":0.124}

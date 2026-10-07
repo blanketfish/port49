@@ -1,9 +1,9 @@
 # L43 — openldap
 
-- **Date measured:** 2026-10-05
+- **Date measured:** 2026-10-07
 - **Platform:** openldap, as a container on `tests/lab/directory/compose.yaml` (no network device)
-- **Image version:** @(#) $OpenLDAP: slapd 2.5.13+dfsg-5 (Feb  8 2023 01:56:12) $; image `port49lab/openldap:bookworm` (port49lab/openldap@sha256:1b345ecf5fbfd503fee22ebb8be5ca315ce858b2a57605028ae5f0da62c8e548), built on debian@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251
-- **Run:** commit `1deabaa1e3590bc90e0eb5367131447a76f1b14a`, `go test -tags lab ./tests/lab/ -run 'TestL42|TestL43'`
+- **Image version:** @(#) $OpenLDAP: slapd 2.5.13+dfsg-5 (Feb  8 2023 01:56:12) $; image `port49lab/openldap:bookworm` (port49lab/openldap@sha256:e5ee1f178c6d1e471dd5614547c1e258ee56840644f2b36846fef00e18f86660), built on debian@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251
+- **Run:** commit `e3db1d3808e6faec0d54817e03260af6167b0125`, `go test -tags lab ./tests/lab/ -run 'TestL42|TestL43'`
 - **Capture:** `tests/lab/evidence/L43-openldap.json`: one JSON line per search, bind and step, with the base, scope, filter, the DNs returned, the LDAP result code and the duration, recorded by the broker's own client (the wire is LDAPS, so a pcap would be encrypted).
 - **Credentials:** none appear here or in the evidence. The bind password is generated for each run and never printed; the keytab and every ticket stay on the host that ran it.
 
