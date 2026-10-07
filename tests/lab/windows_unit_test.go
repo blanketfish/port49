@@ -1087,7 +1087,7 @@ func TestLabNeverPrintsAContainerEnvironment(t *testing.T) {
 	files, _ := filepath.Glob("*.go")
 	for _, f := range files {
 		b, _ := os.ReadFile(f)
-		if m := labEnvPrint.FindIndex(b); m != nil {
+		if m := winLabEnvPrint.FindIndex(b); m != nil {
 			t.Errorf("%s:%d prints a container environment", f, 1+strings.Count(string(b[:m[0]]), "\n"))
 		}
 	}
@@ -1134,16 +1134,16 @@ func TestLabEnvPrintPattern(t *testing.T) {
 		{"dockerCmd('exec', c, 'sh', '-c', 'cat /etc/hosts')", false},
 		{"cfg := loadConfig('config')", false},
 	} {
-		if got := labEnvPrint.MatchString(q(c.src)); got != c.bad {
+		if got := winLabEnvPrint.MatchString(q(c.src)); got != c.bad {
 			t.Errorf("%q: matched=%v, want %v", c.src, got, c.bad)
 		}
 	}
 }
 
-// labEnvPrint is each way a lab file could print a container's environment:
+// winLabEnvPrint is each way a lab file could print a container's environment:
 // docker's inspect (not an image's), compose's config or its alias convert, a
 // read of the process environment under /proc, or env, printenv or set run in the container by exec.
-var labEnvPrint = regexp.MustCompile(`docker\s+inspect|docker\s+compose\b[^\n'"]*\b(?:config|convert)\b|compose\s+(?:config|convert)\b|/proc/[^"'\s]*environ|` +
+var winLabEnvPrint = regexp.MustCompile(`docker\s+inspect|docker\s+compose\b[^\n'"]*\b(?:config|convert)\b|compose\s+(?:config|convert)\b|/proc/[^"'\s]*environ|` +
 	`docker\s+exec\b[^\n'"]*\b(?:printenv|env|set)\b|` +
 	`[dD]ocker\w*\(\s*(?:"container",\s*)?"inspect"|"docker",\s*"inspect"|` +
 	`[dD]ocker\w*\([^)\n]*"(?:config|convert)"|"compose"[^\n)]*"(?:config|convert)"|` +
@@ -2237,7 +2237,7 @@ func TestL44ConnFailed(t *testing.T) {
 		"tls error, unwrapped": {errors.New("tls: failed to verify certificate"), true},
 		"connect refused":      {ldap.NewError(ldap.ErrorNetwork, errors.New("connection refused")), true},
 	} {
-		c := l43Cell{code: ldapCode(tc.err), text: tc.err.Error(), fromBind: l43FromBind(tc.err, "external")}
+		c := l43Cell{code: ldapCode(tc.err), text: tc.err.Error(), fromBind: l44FromBind(tc.err, "external")}
 		if got := l44ConnFailed(c); (got != "") != tc.bad {
 			t.Errorf("%s: %q (text %q)", name, got, c.text)
 		}
@@ -2245,12 +2245,12 @@ func TestL44ConnFailed(t *testing.T) {
 	if !strings.Contains(l44Func(t, "l44ExternalOn"), "l44ConnFailed(") {
 		t.Error("l44ExternalOn does not judge a failed bind with l44ConnFailed")
 	}
-	if !strings.Contains(l43Src(t), "l43FromBind(err, string(bind.Mechanism))") {
+	if !strings.Contains(l44L43Src(t), "l44FromBind(err, string(bind.Mechanism))") {
 		t.Error("tryBind does not record whether the error is port49's bind error")
 	}
 }
 
-func l43Src(t *testing.T) string {
+func l44L43Src(t *testing.T) string {
 	t.Helper()
 	b, err := os.ReadFile("l43_test.go")
 	if err != nil {

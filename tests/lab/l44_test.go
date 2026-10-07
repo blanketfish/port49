@@ -738,11 +738,11 @@ func (l *labDir) l44ExternalOn(t *testing.T, ev *evidenceLog, label string, bind
 func (l *labDir) l44LDAPSNoBind(t *testing.T, bind directory.Bind) string {
 	t.Helper()
 	id, err := l.l44WhoAmI(t, bind, false)
-	return l44NoBindRow(winScrub(id, l.l44Secrets()...), errOrNil(err, l.l44Secrets()))
+	return l44NoBindRow(winScrub(id, l.l44Secrets()...), l44ErrOrNil(err, l.l44Secrets()))
 }
 
-// errOrNil is err scrubbed and cut, or nil.
-func errOrNil(err error, secrets []string) error {
+// l44ErrOrNil is err scrubbed and cut, or nil.
+func l44ErrOrNil(err error, secrets []string) error {
 	if err == nil {
 		return nil
 	}
@@ -775,7 +775,7 @@ func l44BindsTail(requested string, ldapsAccepted bool) string {
 
 // l44ConnFailed is why a refused EXTERNAL cell is no refusal, or "" when it is
 // one: only port49's own bind error (an *ldap.Error whose cause is "bind
-// external as ...", which l43FromBind reads off the error itself) carrying the
+// external as ...", which l44FromBind reads off the error itself) carrying the
 // directory's result code (1 to 199) is the DC saying no. A TLS or StartTLS
 // failure before the bind (port49 returns it unwrapped, and a server can refuse
 // StartTLS with an LDAP result too) and a timeout say nothing about the mapping.

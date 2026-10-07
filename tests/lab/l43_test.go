@@ -42,9 +42,9 @@ type l43Cell struct {
 	fromBind bool
 }
 
-// l43FromBind reports whether err is port49's bind error for mech (conn.go's
+// l44FromBind reports whether err is port49's bind error for mech (conn.go's
 // bind: an *ldap.Error whose cause names the mechanism).
-func l43FromBind(err error, mech string) bool {
+func l44FromBind(err error, mech string) bool {
 	var le *ldap.Error
 	return errors.As(err, &le) && le.Err != nil && strings.HasPrefix(le.Err.Error(), "bind "+mech+" as ")
 }
@@ -83,7 +83,7 @@ func (l *labDir) tryBind(t *testing.T, ev *evidenceLog, label string, bind direc
 	cell.took = time.Since(start)
 	ev.bind(label, err, cell.took)
 	if err != nil {
-		cell.text, cell.code, cell.fromBind = oneLineMax(err.Error(), 300), ldapCode(err), l43FromBind(err, string(bind.Mechanism))
+		cell.text, cell.code, cell.fromBind = oneLineMax(err.Error(), 300), ldapCode(err), l44FromBind(err, string(bind.Mechanism))
 		// Every refusal is said with the mechanism and, when the directory
 		// gave one, the code (port49's side of the claim).
 		if !strings.Contains(err.Error(), "bind "+string(bind.Mechanism)+" as ") {
