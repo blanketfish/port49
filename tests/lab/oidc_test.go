@@ -65,7 +65,7 @@ type keycloak struct {
 
 // labSecrets are realm.json's published values: not secret, but nothing the
 // lab writes has a reason to carry them either.
-var labSecrets = []string{"lab-only-alice-password", "lab-only-svc-secret"}
+var labSecrets = []string{"lab-only-alice-password", "lab-only-bob-password", "lab-only-carol-password", "lab-only-svc-secret"}
 
 // know registers values the run must never write out: the admin password, and
 // each code, verifier, state, token and cookie value the flow handles. A value
