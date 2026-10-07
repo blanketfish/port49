@@ -2466,6 +2466,45 @@ func TestWindowsQuirkForms(t *testing.T) {
 	}
 }
 
+// Port49's form is one the DC issued a TGT for: every port49 cell is true, and
+// for each quirk CA the string directory.ADIssuerSerial writes equals the
+// string of at least one other form whose cell is true. A regression in
+// adQuote fails here, not only in a lab run.
+func TestL44QuirkPort49FormIsMeasured(t *testing.T) {
+	cas, err := winQuirkCAs(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	forms := map[string]func(*x509.Certificate) (string, error){
+		"quoted": winAltSecQuoted, "escaped": winAltSecEscaped, "raw": winAltSecRaw}
+	issuer := func(v string) string { return strings.SplitN(v, "<SR>", 2)[0] }
+	for slug, cells := range winQuirkWant {
+		if !cells["port49"] {
+			t.Errorf("winQuirkWant[%s][port49] is false: port49's form is expected refused", slug)
+		}
+	}
+	for _, ca := range cas {
+		leaf, _, err := winPersonCert(ca.cert, ca.key, "alice", "alice@corp.example.com", dirSerial(), time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		p49 := issuer(directory.ADIssuerSerial(leaf))
+		matched := false
+		for name, f := range forms {
+			v, err := f(leaf)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tgt, ok := winQuirkWant[ca.slug][name]; ok && tgt && issuer(v) == p49 {
+				matched = true
+			}
+		}
+		if !matched {
+			t.Errorf("%s: port49's form %q equals no form measured to get a TGT", ca.slug, p49)
+		}
+	}
+}
+
 // The matrix has every quirk CA's rows once: port49's, quoted and escaped, and
 // the as-is row for each CA but the comma's; each row's label is a safe file
 // name (the kinit files carry it) and has a measured verdict in winQuirkWant.
@@ -2500,7 +2539,7 @@ func TestL44QuirkCases(t *testing.T) {
 			}
 		}
 	}
-	for want, label := range map[string]string{"**TGT issued**": "back-raw", "refused": "back-port49"} {
+	for want, label := range map[string]string{"**TGT issued**": "back-raw", "refused": "back-quoted"} {
 		if got, ok := l44QuirkWant(label); !ok || got != want {
 			t.Errorf("l44QuirkWant(%q) = %q, %v, want %q", label, got, ok, want)
 		}

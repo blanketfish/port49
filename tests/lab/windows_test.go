@@ -268,10 +268,10 @@ func winRDNs(raw []byte) ([][2]string, error) {
 // winQuote is an RDN value as CertNameToStr (CERT_X500_NAME_STR) writes it:
 // quoted when it is empty, starts or ends with white space, or holds
 // , + = " < > # ; or a backslash, a slash or a newline, an inner quote doubled
-// (Microsoft's CertNameToStrW reference). It is directory.adQuote's set, so
-// the lab's quoted form is port49's. The backslash, slash and newline members
-// are documented inconsistently ("\n" in the table, "Backslash (/)" in the
-// remarks) and unmeasured, provisional on L44: the quirk CAs' rows measure them.
+// (Microsoft's CertNameToStrW reference). This is CertNameToStr's documented
+// set, kept as the record of that hypothesis: L44 at ad1e4a9 refuted it for a
+// backslash and a slash (the DC's KDC matches them unquoted), so it is no
+// longer directory.adQuote's set and the lab's quoted form is not port49's.
 func winQuote(v string) string {
 	if v == "" || strings.ContainsAny(v, ",+=\"<>#;\\/\n") || strings.TrimSpace(v) != v {
 		return `"` + strings.ReplaceAll(v, `"`, `""`) + `"`
@@ -448,10 +448,10 @@ func (p *dirPKI) signServerCSR(csrPEM []byte, now time.Time) ([]byte, error) {
 
 // winQuirk is a CA whose CN holds one character in question for <I>'s quoting
 // (plan 7g's carried question, and Task 7a's): the comma (measured in run 8)
-// and the backslash, slash, plus, inner quote and leading space, which Microsoft's
-// CertNameToStr page documents inconsistently or not at all; winQuirkWant
-// holds what each measured. slug names the
-// CA's file and its matrix rows.
+// and the backslash, slash, plus, inner quote and leading space, which
+// Microsoft's CertNameToStr page documents inconsistently or not at all;
+// winQuirkWant holds what each measured. slug names the CA's file and its
+// matrix rows.
 type winQuirk struct{ slug, cn, holds string }
 
 var winQuirks = []winQuirk{
@@ -466,11 +466,14 @@ var winQuirks = []winQuirk{
 // winQuirkWant is the verdict L44 measured for each quirk CA's row (run at
 // ad1e4a9, the same under every StrongCertificateBindingEnforcement value),
 // keyed by slug and form (the label's suffix): true is a TGT, false a refusal.
-// The comma has no raw row.
+// The comma has no raw row. The port49 cell is port49's form today, so every
+// one is true: L44 measured it as the raw value for back and slash and as the
+// quoted value for the others. The ad1e4a9 port49 rows recorded the old
+// quoted form for back and slash, which the DC refused.
 var winQuirkWant = map[string]map[string]bool{
 	"comma": {"port49": true, "quoted": true, "escaped": false},
-	"back":  {"port49": false, "quoted": false, "escaped": false, "raw": true},
-	"slash": {"port49": false, "quoted": false, "escaped": true, "raw": true},
+	"back":  {"port49": true, "quoted": false, "escaped": false, "raw": true},
+	"slash": {"port49": true, "quoted": false, "escaped": true, "raw": true},
 	"plus":  {"port49": true, "quoted": true, "escaped": false, "raw": false},
 	"quote": {"port49": true, "quoted": true, "escaped": false, "raw": false},
 	"lead":  {"port49": true, "quoted": true, "escaped": false, "raw": false},
