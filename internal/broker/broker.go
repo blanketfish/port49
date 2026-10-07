@@ -24,6 +24,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -73,7 +74,10 @@ type Broker struct {
 	Directory *directory.Resolver
 	// Identity verifies OIDC bearer tokens (plan 7h): nil when no oidc
 	// verifier is configured, and a bearer is then refused.
-	Identity      *oidc.Set
+	Identity *oidc.Set
+	// NoX509 is an OIDC-only broker (Ruling 1): no x509 verifier, so Server
+	// requests no client certificate and /v1/config offers no x509.
+	NoX509        bool
 	Minter        *token.Minter
 	Store         store.Store
 	Log           decision.Emitter
@@ -250,9 +254,23 @@ func heldOf(r *http.Request) *heldConn {
 }
 
 func (b *Broker) config(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, api.Config{Methods: []string{"x509"},
-		MaxSessionAgeSeconds: int(b.MaxSessionAge / time.Second), BatchMax: b.BatchMax,
-		CeilingWarningSeconds: int(b.CeilingWarning / time.Second)})
+	c := api.Config{MaxSessionAgeSeconds: int(b.MaxSessionAge / time.Second), BatchMax: b.BatchMax,
+		CeilingWarningSeconds: int(b.CeilingWarning / time.Second)}
+	if !b.NoX509 {
+		c.Methods = append(c.Methods, "x509")
+	}
+	if b.Identity != nil {
+		c.Methods = append(c.Methods, "oidc")
+		for _, v := range b.Identity.Humans() {
+			// scopes is never null: a public client asks for at least openid.
+			scopes := slices.Clone(v.Scopes)
+			if len(scopes) == 0 {
+				scopes = []string{"openid"}
+			}
+			c.OIDC = append(c.OIDC, api.OIDCProvider{Issuer: v.Issuer, ClientID: v.ClientID, Scopes: scopes})
+		}
+	}
+	writeJSON(w, http.StatusOK, c)
 }
 
 // deviceName reports whether name can be an inventory name: 1 to
