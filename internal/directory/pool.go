@@ -79,6 +79,15 @@ func (s Server) Label() string {
 	return u.Host
 }
 
+// scheme is the URI's scheme, "" when the URI does not parse.
+func (s Server) scheme() string {
+	u, err := url.Parse(s.URI)
+	if err != nil {
+		return ""
+	}
+	return u.Scheme
+}
+
 // errWaitEnded is a query's budget ending while it waited for another
 // query's dial: that dial's outcome is the only one charged to the server.
 var errWaitEnded = errors.New("budget spent waiting for another query's dial")
@@ -92,8 +101,9 @@ var ErrBindRefused = errors.New("directory: bind refused")
 // than the server not answering: invalidCredentials (49),
 // inappropriateAuthentication (48), strongAuthRequired (8),
 // confidentialityRequired (13), authMethodNotSupported (7), or
-// ErrBindRefused. Only a refusal starts the bind hold-off; any other dial
-// error is a fault.
+// ErrBindRefused. Only a refusal starts the bind hold-off (under external,
+// only when every server not open is refusing and none is bound); any
+// other dial error is a fault.
 func Refusal(err error) bool {
 	if errors.Is(err, ErrBindRefused) {
 		return true
@@ -335,15 +345,23 @@ func (p *Pool) bestLocked(skip int) int {
 }
 
 // orderLocked is the order servers are tried to bind: those that have not
-// refused first (fewest refusals, then rank), so a probe goes to the
-// best-ranked server not under refusal and a server that has refused is
-// probed again only when none that has not is bindable.
+// refused first (fewest refusals), so a probe goes to a server not under
+// refusal and a server that has refused is probed again only when none that
+// has not is bindable. Servers on the same step go in the order their own
+// backoffs ended, then by rank, so at the 15m cap the probes take turns
+// among the refusers and a server repaired after hours is found within one
+// round, not starved behind the top-ranked one.
 func (p *Pool) orderLocked() []int {
 	order := make([]int, len(p.srv))
 	for j := range order {
 		order[j] = j
 	}
-	slices.SortStableFunc(order, func(a, b int) int { return int(p.srv[a].refuseStep - p.srv[b].refuseStep) })
+	slices.SortStableFunc(order, func(a, b int) int {
+		if d := p.srv[a].refuseStep - p.srv[b].refuseStep; d != 0 {
+			return int(d)
+		}
+		return p.srv[a].refuseUntil.Compare(p.srv[b].refuseUntil)
+	})
 	return order
 }
 
@@ -472,8 +490,11 @@ func (p *Pool) fault(i, gen int, err error) {
 // decides. A refusal is also its server's own: s is not dialled again until
 // its own backoff (the same schedule) ends, and orderLocked tries servers
 // that have not refused first, so one misconfigured DC does not hold off
-// the good ones. Any accepted bind clears the pool's hold-off; a server's
-// own backoff clears only on its own accepted bind.
+// the good ones. Under external the hold-off starts only when every server
+// not open is under its own backoff and none is bound (holdsOffLocked): one
+// DC's refusal holds that DC off alone and the query fails over. Any
+// accepted bind clears the pool's hold-off; a server's own backoff clears
+// only on its own accepted bind.
 func (p *Pool) bindableLocked(s *serverState) bool {
 	now := p.now()
 	switch {
@@ -489,9 +510,12 @@ func (p *Pool) bindableLocked(s *serverState) bool {
 // alone this round: nothing is bound yet and another closed server has
 // never refused, so a query is about to bind that one and a refusal here
 // would start a hold-off in its way. Once a server is bound, or when every
-// server has refused, a refuser is retried per its own backoff.
+// server has refused, a refuser is retried per its own backoff. Under
+// external, with no hold-off running, a refusal here starts none while a
+// closed server has never refused (holdsOffLocked), so the refuser is
+// retried per its own backoff then too.
 func (p *Pool) leaveRefuserLocked(s *serverState) bool {
-	if s.refuseStep == 0 {
+	if s.refuseStep == 0 || (p.cfg.Bind.Mechanism == "external" && p.holdStep == 0) {
 		return false
 	}
 	good := false
@@ -525,16 +549,25 @@ func (p *Pool) beginBindLocked() (probe bool) {
 // neither raised, since a wrong password is not a down server, nor reset),
 // steps its own backoff, and starts or steps the pool's hold-off: said once
 // per server an hour with the mechanism and the result code, and at each
-// pool step with the next attempt's time. The error carries neither the
-// password nor the keytab (Task 7).
+// pool step with the next attempt's time. Under external the pool's
+// hold-off starts only when no server is left to try (holdsOffLocked); the
+// line says when queries go to the next server, plus Active Directory's
+// remedy for a 49 or for a 7 over ldaps. The error carries neither the password
+// nor the keytab (Task 7).
 //
 // Operators: with every one of N servers refusing, the pool makes at most
 // N+4 failed binds in the first 30 minutes (N, one a minute, as each
 // server's first refusal holds the pool at 1m; then probes at N, N+2, N+6
 // and N+14 minutes as the hold-off doubles to its 15m cap) and one per 15
-// minutes after: 9 for five servers. Once any server accepts, each server
+// minutes after: 9 for five servers. The probes take turns among the
+// servers, the one whose own backoff ended first going first, so a server
+// repaired later is found within N probes. Once any server accepts, each server
 // that keeps refusing is bound again only per its own backoff, 1m doubling
-// to 15m, so at most 4 an hour each at the cap. Exempt the service account
+// to 15m, so at most 4 an hour each at the cap. Under external one refusing
+// server holds off only itself and the query goes to the next server; the
+// N+4 bound above still holds when every server refuses. The N refusals
+// then come at once, as one query or Check walks every server, and the
+// probes follow at 1, 3, 7 and 15 minutes. Exempt the service account
 // from lockout, or set its threshold above N+4 per 30 minutes.
 func (p *Pool) bindDoneLocked(s *serverState, probe bool, err error) {
 	if probe {
@@ -557,7 +590,8 @@ func (p *Pool) bindDoneLocked(s *serverState, probe bool, err error) {
 	first := s.refuseStep == 0
 	s.refuseStep = nextBackoff(s.refuseStep)
 	s.refuseUntil = now.Add(s.refuseStep)
-	if p.holdStep == 0 || !now.Before(p.holdUntil) {
+	holds := p.holdsOffLocked()
+	if holds && (p.holdStep == 0 || !now.Before(p.holdUntil)) {
 		// A server's first refusal holds the pool at its current step (1m
 		// from clear) without doubling it, so a probe walks the servers that
 		// have not refused at one a minute (Re-review I-4).
@@ -573,8 +607,45 @@ func (p *Pool) bindDoneLocked(s *serverState, probe bool, err error) {
 		return
 	}
 	s.refusedSaid = now
-	p.say("directory: %s refused the bind (%s): %s", s.Label(), p.cfg.Bind.Mechanism,
+	line := fmt.Sprintf("directory: %s refused the bind (%s): %s", s.Label(), p.cfg.Bind.Mechanism,
 		printsafe.Line(err.Error(), 300))
+	if p.cfg.Bind.Mechanism == "external" {
+		switch {
+		case ldap.IsErrorWithCode(err, ldap.LDAPResultInvalidCredentials):
+			line += "; on Active Directory this is a certificate that is not mapped, or that DC's KDC not answering " +
+				"(check its Kerberos service before the broker's certificate)"
+		case ldap.IsErrorWithCode(err, ldap.LDAPResultAuthMethodNotSupported) && s.scheme() == "ldaps":
+			line += "; Active Directory takes SASL EXTERNAL only over StartTLS ([MS-ADTS] 5.1.1.2): " +
+				"use ldap:// with start_tls: true"
+		}
+		if !holds {
+			line += fmt.Sprintf("; queries go to the next server, and this server is retried after its own backoff of %s, at %s",
+				s.refuseStep, s.refuseUntil.UTC().Format(time.RFC3339))
+		}
+	}
+	p.say("%s", line)
+}
+
+// holdsOffLocked is whether the refusal just counted on a server starts or
+// steps the pool's bind hold-off. Always, except under external: there a
+// refusal is the certificate's at that DC (not mapped, or its KDC not
+// answering) and counts toward no shared lockout, so only that server is held
+// off and the query fails over, unless a hold-off is already running or every
+// server whose breaker is not open is now under its own refusal backoff with
+// none bound, when it is today's behaviour.
+func (p *Pool) holdsOffLocked() bool {
+	if p.cfg.Bind.Mechanism != "external" || p.holdStep > 0 {
+		return true
+	}
+	now := p.now()
+	for _, o := range p.srv {
+		switch {
+		case o.open:
+		case o.conn != nil, o.refuseStep == 0, !now.Before(o.refuseUntil):
+			return false
+		}
+	}
+	return true
 }
 
 // nextBackoff is the step after d: 1m, doubling to 15m.

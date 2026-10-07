@@ -7362,7 +7362,9 @@ every matching subject composes, and a scheduled refresh stamps refreshed_at.** 
   so one DC's Kerberos outage must not stop every bind; `external` offers no password, and its
   refusing servers are retried on the same per-server backoff, so the lockout bounds below
   hold), 1m doubling on a server's repeat refusal
-  to 15m, each refusing server on its own backoff, one probe bind per step, any accepted bind
+  to 15m, each refusing server on its own backoff, one probe bind per step (refusers on one step take
+  turns, the one whose own backoff ended first going first, so a repaired server is bound
+  within about N × 15m at the cap), any accepted bind
   clearing it, bound connections still serving (the one service account, which AD locks out
   on failed binds counted across every DC; with N servers all refusing, at most N+4 failed
   binds in the first 30 minutes, then one per 15; gauge
