@@ -1,0 +1,67 @@
+{
+  "realm": "port49-lab",
+  "enabled": true,
+  "sslRequired": "all",
+  "accessTokenLifespan": 300,
+  "ssoSessionIdleTimeout": 1800,
+  "ssoSessionMaxLifespan": 36000,
+  "eventsEnabled": true,
+  "adminEventsEnabled": true,
+  "clients": [
+    {
+      "clientId": "port49-cli",
+      "name": "port49 lab public client",
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "implicitFlowEnabled": false,
+      "frontchannelLogout": false,
+      "redirectUris": ["http://127.0.0.1:18749/callback"],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "backchannel.logout.url": "https://receiver.invalid/v1/logout",
+        "backchannel.logout.session.required": "true",
+        "backchannel.logout.revoke.offline.tokens": "true",
+        "post.logout.redirect.uris": "http://127.0.0.1:18749/bye"
+      }
+    },
+    {
+      "clientId": "port49-svc",
+      "name": "port49 lab service",
+      "publicClient": false,
+      "secret": "lab-only-svc-secret",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "protocolMappers": [
+        {
+          "name": "port49 api audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.custom.audience": "api://port49-svc",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "alice",
+      "email": "alice@corp.example.com",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "Alice",
+      "lastName": "Lab",
+      "credentials": [{"type": "password", "value": "lab-only-alice-password", "temporary": false}]
+    },
+    {
+      "id": "5f3c2d1e-0000-4000-8000-000000000049",
+      "username": "service-account-port49-svc",
+      "enabled": true,
+      "serviceAccountClientId": "port49-svc"
+    }
+  ]
+}
