@@ -33,6 +33,37 @@ type Workload struct {
 	// caller's window, which would drop these 24h keys in a large fleet
 	// (pre-flight M-3).
 	late map[string]time.Time
+	// issuers are the leaf issuers seen on verified machine chains since the
+	// start, at most maxIssuers: an intermediate under the anchor, which the
+	// revoke note must know (pre-flight M-1). Per replica.
+	issuers map[string]bool
+}
+
+// maxIssuers bounds Workload.issuers: a workload CA has a handful.
+const maxIssuers = 64
+
+// noteIssuer records a verified machine chain's leaf issuer.
+func (w *Workload) noteIssuer(dn string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.issuers == nil {
+		w.issuers = map[string]bool{}
+	}
+	if len(w.issuers) < maxIssuers {
+		w.issuers[dn] = true
+	}
+}
+
+// Issued reports whether a certificate whose issuer is dn is a workload's as
+// far as this broker knows: the anchor issued it, or dn issued a verified
+// machine chain here.
+func (w *Workload) Issued(dn string) bool {
+	if dn == w.Anchor.Subject.String() {
+		return true
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.issuers[dn]
 }
 
 // lateWindow is how often one certificate's late renewal is said.
@@ -129,6 +160,7 @@ func (b *Broker) CertCallerOf(cs *tls.ConnectionState, now time.Time) (CertCalle
 			return cc, err
 		}
 		cc.Principal = p
+		b.Workload.noteIssuer(leaf.Issuer.String())
 		return cc, nil
 	}
 	if b.Directory != nil {

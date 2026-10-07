@@ -299,6 +299,31 @@ func writeFresh(path string, body []byte) error {
 	return f.Close()
 }
 
+// IssueCA signs a subordinate CA under ca, valid from notBefore to notAfter:
+// an issuing CA beneath a root, as the workload anchor's tests need.
+func (ca *CA) IssueCA(cn string, notBefore, notAfter time.Time) (*CA, error) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+	sn, err := serial()
+	if err != nil {
+		return nil, err
+	}
+	tmpl := &x509.Certificate{SerialNumber: sn, Subject: pkix.Name{CommonName: cn}, NotBefore: notBefore,
+		NotAfter: notAfter, IsCA: true, BasicConstraintsValid: true,
+		KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageCRLSign | x509.KeyUsageDigitalSignature}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, ca.Cert, &key.PublicKey, ca.Key)
+	if err != nil {
+		return nil, err
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		return nil, err
+	}
+	return &CA{Cert: cert, Key: key}, nil
+}
+
 func serial() (*big.Int, error) {
 	return rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 62))
 }

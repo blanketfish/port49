@@ -11,6 +11,7 @@ import (
 
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/printsafe"
+	"github.com/rhwendt/port49/internal/spiffe"
 	"github.com/rhwendt/port49/internal/store"
 )
 
@@ -87,13 +88,18 @@ type RevokeReport struct {
 	// decimal is set when the serial was typed in decimal digits alone,
 	// which is read as hex: openssl prints a small serial in decimal (M1).
 	decimal bool
+	// workload is set when a certificate revocation's issuer is a workload's
+	// (Workload.Issued): the workload renews under a new serial (decision 40
+	// ruling 8).
+	workload bool
 }
 
 // principalPrefixes are the forms a verifier gives a principal (spec §2):
-// user: for people, app: for an OIDC machine (plan 7h). spiffe:// and
-// system:serviceaccount: are refused until their verifiers exist (plans 8
-// and 10), rather than marked under a key nothing spells.
-var principalPrefixes = []string{"user:", "app:"}
+// user: for people, app: for an OIDC machine (plan 7h), spiffe:// for a
+// workload certificate (plan 8). system:serviceaccount: is refused until
+// its verifier exists (plan 10), rather than marked under a key nothing
+// spells.
+var principalPrefixes = []string{"user:", "app:", spiffe.Scheme}
 
 // normal checks req and puts it in the form a mark holds (pre-flight I2,
 // M16, M17): a principal as Identity spells it, user: and the lower-cased
@@ -151,6 +157,15 @@ func normalPrincipal(p string) (string, error) {
 	if len(p) > 1024 || strings.IndexFunc(p, func(r rune) bool { return r < 0x21 || r > 0x7e }) >= 0 {
 		return "", fmt.Errorf("%w: a principal is printable ASCII", ErrBadRevocation)
 	}
+	if strings.HasPrefix(strings.ToLower(p), spiffe.Scheme) {
+		// Verbatim: the path is case-sensitive, and the verifier gives the
+		// ID only in the form ParseWorkload accepts (decision 40 ruling 4).
+		if _, err := spiffe.ParseWorkload(p); err != nil {
+			return "", fmt.Errorf("%w: %s is not a workload's SPIFFE ID as the broker spells one (%v)",
+				ErrBadRevocation, printsafe.Line(p, 200), err)
+		}
+		return p, nil
+	}
 	for _, pre := range principalPrefixes {
 		if strings.HasPrefix(strings.ToLower(p), pre) && len(p) > len(pre) {
 			if pre == "app:" {
@@ -159,7 +174,7 @@ func normalPrincipal(p string) (string, error) {
 			return pre + strings.ToLower(p[len(pre):]), nil
 		}
 	}
-	return "", fmt.Errorf("%w: a principal begins %s, as the log names it (user:alice@example.com, app:port49-ci)",
+	return "", fmt.Errorf("%w: a principal begins %s, as the log names it (user:alice@example.com, app:port49-ci, spiffe://corp.example.com/host/oxidized-01)",
 		ErrBadRevocation, strings.Join(principalPrefixes, " or "))
 }
 
@@ -242,6 +257,7 @@ func (b *Broker) Revoke(ctx context.Context, req RevokeRequest) (RevokeReport, e
 			b.fallback(), b.proc(), b.proc(), err)
 	}
 	rep := RevokeReport{Request: req, By: kind, Mark: mark, decimal: decimal}
+	rep.workload = kind == store.RevocationCert && b.Workload != nil && b.Workload.Issued(req.Issuer)
 	if got, err := b.Store.GetRevocation(ctx, kind, key); err == nil {
 		rep.Mark = got // an earlier mark stands, with its own time
 	}
@@ -588,8 +604,11 @@ func (r RevokeReport) markText() string {
 		if r.Unnamed {
 			lead = "no subject in the policy in force names " + r.Request.Principal
 		}
-		fmt.Fprintf(&b, "%s; the broker spells a certificate's principal user:<lower-case email>, so check the "+
-			"spelling (the mark is written anyway)\n", lead)
+		spelled := "the broker spells a certificate's principal user:<lower-case email>"
+		if strings.HasPrefix(r.Request.Principal, spiffe.Scheme) {
+			spelled = "a workload's principal is its certificate's SPIFFE ID, verbatim"
+		}
+		fmt.Fprintf(&b, "%s; %s, so check the spelling (the mark is written anyway)\n", lead, spelled)
 	}
 	mints := "by " + r.Request.Principal
 	if r.Mark.Kind == store.RevocationCert {
@@ -601,6 +620,11 @@ func (r RevokeReport) markText() string {
 	if r.Mark.Kind == store.RevocationCert && r.decimal {
 		fmt.Fprintf(&b, "\nthe serial %s was read as hexadecimal; if you copied a decimal serial (openssl prints a "+
 			"small one as 4096 (0x1000)), revoke it again with --cert FILE, then lift this one", r.Request.Serial)
+	}
+	if r.Mark.Kind == store.RevocationCert && r.workload {
+		b.WriteString("\nthis certificate's issuer is the workload trust anchor (broker.identity.machines): the " +
+			"workload renews it under a new serial this mark does not name; revoke its principal too (port49 " +
+			"revoke --principal spiffe://…), and revoke the certificate at your CA so it cannot be renewed")
 	}
 	if r.Mark.Kind == store.RevocationCert && r.TokenKeys > 0 {
 		b.WriteString("\nunspent tokens are deleted by (device, username): the same principal's other certificates " +

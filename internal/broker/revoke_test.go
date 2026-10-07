@@ -2,6 +2,8 @@ package broker
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"net/http"
@@ -1063,5 +1065,93 @@ func TestNormalPrincipalTakesAppVerbatim(t *testing.T) {
 	}
 	if _, err := normalPrincipal("app:"); err == nil {
 		t.Fatal("an empty client id is a principal")
+	}
+}
+
+// A workload's principal is revoked as the log spells it, verbatim: every
+// certificate it renews to is refused, and its unspent tokens deleted
+// (decision 40 rulings 8 and 15).
+func TestARevokedPrincipalRefusesEveryCertificateOfTheWorkload(t *testing.T) {
+	f, wca, w := newWorkloadFixture(t)
+	if res := f.post(context.Background(), chainState(w, wca), mintLeaf1, "k1"); res.Code != http.StatusOK {
+		t.Fatalf("%s", answer(res))
+	}
+	rep, err := f.b.Revoke(context.Background(), RevokeRequest{Principal: workloadID, Origin: "admin_socket uid 0"})
+	if err != nil || rep.TokenKeys != 1 || rep.Mark.Key != workloadID {
+		t.Fatalf("%+v %v", rep, err)
+	}
+	renewed := f.workloadCert(t, wca, workloadID) // a new serial, the same ID
+	if res := f.post(context.Background(), chainState(renewed, wca), mintLeaf1, "k2"); res.Code != http.StatusUnauthorized ||
+		!strings.Contains(res.Body.String(), "credential_revoked") {
+		t.Fatalf("the renewed certificate: %s", answer(res))
+	}
+}
+
+func TestASpiffePrincipalIsNormalisedVerbatimOrRefused(t *testing.T) {
+	for in, want := range map[string]string{
+		workloadID: workloadID,
+		"spiffe://corp.example.com/ns/Netops/sa/Oxidized": "spiffe://corp.example.com/ns/Netops/sa/Oxidized",
+	} {
+		if got, err := normalPrincipal(in); err != nil || got != want {
+			t.Errorf("%s: %q %v", in, got, err)
+		}
+	}
+	for _, in := range []string{"SPIFFE://corp.example.com/x", "spiffe://Corp.example.com/x", "spiffe://corp.example.com",
+		"system:serviceaccount:netops:oxidized"} {
+		if got, err := normalPrincipal(in); !errors.Is(err, ErrBadRevocation) {
+			t.Errorf("%s: %q %v", in, got, err)
+		}
+	}
+}
+
+// A mark by certificate names (issuer, serial), and a renewal brings a new
+// serial: the answer says so for the workload anchor's certificates
+// (decision 40 ruling 8).
+func TestRevokingAWorkloadCertificateSaysItDoesNotFollowARenewal(t *testing.T) {
+	f, _, w := newWorkloadFixture(t)
+	rep, err := f.b.Revoke(context.Background(), RevokeRequest{Issuer: w.Leaf.Issuer.String(),
+		Serial: w.Leaf.SerialNumber.Text(16), Origin: "admin_socket uid 0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text := rep.Text(); !strings.Contains(text, "the workload renews it under a new serial this mark does not name") ||
+		!strings.Contains(text, "port49 revoke --principal spiffe://") {
+		t.Fatalf("%s", text)
+	}
+	alice, err := f.b.Revoke(context.Background(), RevokeRequest{Issuer: f.alice.Leaf.Issuer.String(),
+		Serial: f.alice.Leaf.SerialNumber.Text(16), Origin: "admin_socket uid 0"})
+	if err != nil || strings.Contains(alice.Text(), "renews it") {
+		t.Fatalf("a person's certificate: %s %v", alice.Text(), err)
+	}
+}
+
+// A workload certificate under an intermediate of the workload anchor gets
+// the note too, once the broker has seen that intermediate issue a verified
+// machine chain (pre-flight M-1).
+func TestRevokingAWorkloadCertificateUnderAnIntermediateSaysItToo(t *testing.T) {
+	f, wca, _ := newWorkloadFixture(t)
+	sub, err := wca.IssueCA("Workloads Issuing CA", f.now.Add(-time.Hour), f.now.Add(48*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := f.workloadCert(t, sub, workloadID)
+	cs := &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{w.Leaf, sub.Cert, wca.Cert}}}
+	if _, err := f.b.CertCallerOf(cs, f.now); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := f.b.Revoke(context.Background(), RevokeRequest{Issuer: w.Leaf.Issuer.String(),
+		Serial: w.Leaf.SerialNumber.Text(16), Origin: "admin_socket uid 0"})
+	if err != nil || !strings.Contains(rep.Text(), "the workload renews it under a new serial this mark does not name") {
+		t.Fatalf("%s %v", rep.Text(), err)
+	}
+}
+
+// Nothing found under a spiffe:// principal is said in a workload's terms.
+func TestAnUnknownWorkloadPrincipalIsSaidInItsOwnTerms(t *testing.T) {
+	f, _, _ := newWorkloadFixture(t)
+	rep, err := f.b.Revoke(context.Background(), RevokeRequest{Principal: "spiffe://corp.example.com/host/nobody",
+		Origin: "admin_socket uid 0"})
+	if err != nil || !strings.Contains(rep.Text(), "a workload's principal is its certificate's SPIFFE ID, verbatim") {
+		t.Fatalf("%s %v", rep.Text(), err)
 	}
 }
