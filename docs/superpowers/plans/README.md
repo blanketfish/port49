@@ -4038,7 +4038,8 @@ fix round 4 stayed with the Sonnet implementer instead of escalating (the model 
     closed), and `memberOf` is direct-only. Samba AD answers `in_chain` in full, loop included.
   - **Windows Server AD answers `in_chain` in full too** (L44, 2025): alice's three groups, carol's
     one and dave's two loop groups, in 5 to 6ms with no error. `memberOf` lists direct groups only.
-    `recursive` and `direct` also work; use `in_chain`.
+    `recursive` returns the same sets; `direct` returns direct groups only (alice got `g-leaf`
+    alone, so a grant on `netops-oncall` would deny her). Use `in_chain`.
   - Group names must be unique: a name that matches several groups is dropped and counted
     (`port49_directory_group_names_ambiguous`). The walk's log line says `revisits` (loops or
     diamonds), not loops. A walk cut by `max_depth` or the node bound is counted in
@@ -4054,31 +4055,44 @@ fix round 4 stayed with the Sonnet implementer instead of escalating (the model 
   - **Windows Server AD: use `external` over `ldap://` with `start_tls: true`** (L44, 2025). Over
     `ldaps://` the DC rejects EXTERNAL with 7 ([MS-ADTS] 5.1.1.2); over StartTLS it maps the
     broker's certificate through `altSecurityIdentities` (port49's `X509:<I>...<SR>...` form) and
-    binds it. A 49 on one DC means the certificate is not
-    mapped **or that DC's KDC is not answering** (the two answer alike): the query fails over to
-    the next DC at once; check that DC's Kerberos service before the broker's certificate.
+    binds it. A 49 means the certificate is not mapped **or that DC's KDC is not answering** (the
+    two answer alike): the query fails over to the next DC at once. At 3am, check in this order:
+    1. **One DC answers 49 while the others bind:** check that DC's KDC (its Kerberos service).
+       The broker log says `directory: <server> refused the bind (external) ...; queries go to
+       the next server`.
+    2. **Every DC answers 49** (`port49_directory_bind_holdoff_seconds` above 0; the log says
+       `no server is bound for ...`): check the broker certificate. Its account's
+       `altSecurityIdentities` must hold port49's `X509:<I>...<SR>...` value (L44 e2: with none,
+       49), and its issuing CA must be in NTAuth (L44 e3: a CA in Root alone, 49).
+    3. **7:** the `uri` is `ldaps://`; switch to `ldap://` with `start_tls: true`.
   - **Windows `gssapi`** is accepted as installed, and refused (49) under
     `LdapEnforceChannelBinding = 2`: **port49 sends no channel binding token.** On a DC that
-    enforces it, use `external` or `simple` (both accepted under 2). The `uri` must name the DC's
-    own FQDN: an `ldap/<alias>` SPN added to a DC account did not stay. "GSSAPI with channel
-    binding" is a hardening feature carried to the pre-beta review (OR-3).
+    enforces it, use `external` or `simple` (both accepted under 2). A 49 to `gssapi` on every DC:
+    check `LdapEnforceChannelBinding` (2 refuses it), and that the `uri` host is the DC's own
+    FQDN: an `ldap/localhost` SPN added to the DC's account did not stay (twice, within minutes).
+    "GSSAPI with channel binding" is a hardening feature carried to the pre-beta review (OR-3).
   - **Windows `simple`** is accepted over LDAPS; plain LDAP is refused (8, strong auth required).
-  - **A new Server 2025 forest's defaults differ from an upgraded 2022 domain's** (Microsoft's
-    documented signing enforcement and channel binding defaults; not measured here). L44 measured
-    a new 2025 forest alone (OR-2): a 2022 domain was not measured. On the lab DC, `StrongCertificateBindingEnforcement`
-    and `LdapEnforceChannelBinding` were absent as installed, and the KDC's outcomes were the same
-    with enforcement absent, 1 and 2.
+  - **A new Server 2025 forest's defaults differ from an upgraded 2022 domain's**: signing
+    enforcement, and channel binding "when supported" against "never" (Microsoft's documentation;
+    not measured). L44 measured a new 2025 forest alone (OR-2): a 2022 domain was not measured.
+    On the lab DC plain-LDAP simple was refused (8, signing enforced), and `ldapserverintegrity`
+    was 1. `StrongCertificateBindingEnforcement` and `LdapEnforceChannelBinding` were absent as
+    installed, and the KDC's outcomes were the same with enforcement absent, 1 and 2. Read
+    `LdapEnforceChannelBinding` on each DC before choosing `gssapi`.
   - **Writing `altSecurityIdentities` by hand** for an issuer whose RDN holds `\` or `/`: write
     the value as it is, unquoted; the DC's KDC refused the quoted one. An RDN holding a comma, a
     plus sign or an inner quote, or starting with a space, is quoted (inner quote doubled).
-  - **Upgrading from an earlier build:** an `issuer_serial` lookup for an issuer whose RDN holds
-    `\` or `/` now uses the raw value, not the quoted one. An `altSecurityIdentities` entry holding
-    the old quoted value never matched at the KDC, so rewrite it unquoted. The upgrade impact is nil
-    only because port49 is unreleased. A key held in the grace cache under the old value misses
-    until the principal is refreshed.
+  - **Upgrading from an earlier build:** the symptom is `identity_unmapped`. An `issuer_serial`
+    lookup for an issuer whose RDN holds `\` or `/` now uses the raw value, not the quoted one. An
+    `altSecurityIdentities` entry holding the old quoted value never matched at the KDC, so
+    rewrite it unquoted. Relative to the 7a build, 7a also quotes a comma, a plus sign, an inner
+    quote and a leading space, and 7b adds the `00` sign byte to a serial whose top bit is set:
+    a value written for an earlier build may differ there too. The upgrade impact is nil only
+    because port49 is unreleased. A key held in the grace cache under the old value misses until
+    the principal is refreshed.
   - The password and the keytab are never logged.
-- **A refused bind holds off every bind** (PF7g-g; Task 6). A rotated bind password or an
-  expired bind certificate is a refusal by the server (LDAP 49, 48, 8, 13 or 7; a KDC refusal),
+- **A refused bind holds off every bind, except under `external`** (PF7g-g; Task 6). A rotated
+  bind password or an expired bind certificate is a refusal by the server (LDAP 49, 48, 8, 13 or 7; a KDC refusal),
   not a down server: queries fail over only to servers already bound, grace serves, and the broker
   says the refusal hourly per server with the result code. The pool holds off every bind for 1m,
   doubling to 15m, one probe bind per step. With N servers all refusing, at most N+4 binds fail
@@ -4086,7 +4100,10 @@ fix round 4 stayed with the Sonnet implementer instead of escalating (the model 
   4 an hour once another accepts. **Exempt the service account from lockout, or set its threshold
   above N+4 per 30 minutes.** After you fix the credential the next probe succeeds within the
   current step, up to 15m; restarting the broker clears it. `port49_directory_bind_holdoff_seconds`
-  is the time left.
+  is the time left. Under `external` a refusal holds off that server alone and the query fails
+  over; the pool holds off only once every server whose breaker is not open has refused and none
+  is bound (L44 OR-1, PR #36; spec §13 decision 38 item 9). `port49_directory_bind_holdoff_seconds`
+  above 0 under `external` therefore means every DC refused.
 - **Every breaker open.** Queries are refused at once until the next probe, up to
   `circuit_breaker.probe_interval` plus `health_check.interval` (90s at the defaults) after the
   DCs return. Grace serves meanwhile. A cancelled caller is held up to `query_timeout` plus the
@@ -4136,8 +4153,8 @@ fix round 4 stayed with the Sonnet implementer instead of escalating (the model 
   (`tests/lab/results/L44-windows_ad.md`; "L44 — As built", below). The `issuer_serial` and `sid`
   rows on Samba show only that port49's form finds the attribute it wrote; the DC's own
   acceptance is L44's, and its answer to the quoting question this bullet once carried (Windows
-  quotes a `,` in `<I>`) is that port49's form had to quote it: fixed in 7a. The end-to-end on the compose stack (a nested grant, a removal, grace to
-  the ceiling, recovery) ran on EOS and vJunos-router
+  quotes a `,` in `<I>`) is that port49's form had to quote it: fixed in 7a. The end-to-end on the compose stack (a nested grant, a
+  removal, grace to the ceiling, recovery) ran on EOS and vJunos-router
   (`tests/lab/results/directory-e2e-*.md`); it is not a register row.
 
 **Interfaces 7g added:** `directory.Resolver` (`Map`, `Verify`, `Current`, `Stored`, `DeclaredBy`,
@@ -4175,8 +4192,9 @@ fix round 4 stayed with the Sonnet implementer instead of escalating (the model 
   answers EXTERNAL with 49 for an unmapped certificate (e2, the same certificate with no
   `altSecurityIdentities`; e3, a certificate from a CA in Root but not in NTAuth) and with 49
   for a mapped one while its KDC is stopped (e5; valid, since the mapped bind succeeded with the
-  KDC up before and after it). That is OR-1's branch (iii), the two getting one code (49 here, not 1), and Ryan
-  approved a per-DC refusal on EXTERNAL (PR #36): no 7c ran, and `Refusal` was not widened.
+  KDC up before and after it). That is the all-49 case (OR-1's branch (iii), as the brief and
+  Ryan named it): the two get one code (49 here, not 1), and Ryan approved a per-DC refusal on
+  EXTERNAL (PR #36): no 7c ran, and `Refusal` was not widened.
 - `port49 policy check` could take `--directory on|off`.
 - The etcd claimant read has no single-revision `WithRev` read (Task 5 n1).
 - Stray gssapi goroutines are bounded at about servers × (10s or the deadline), only when the
@@ -4201,7 +4219,7 @@ fix round 4 stayed with the Sonnet implementer instead of escalating (the model 
 Plan `2026-10-06-07g-l44-windows-server-ad.md`. **L44 closed 2026-10-07** on Windows Server 2025
 Standard Evaluation, build 26100.32230 (`tests/lab/results/L44-windows_ad.md`, from the confirm
 run at e612b71: 1904s, no INVALID cell). Every Task 6 cell was measured. Task 7's parts landed on
-`fix/` branches, each beside its own re-run; Task 8 is this docs commit.
+`fix/` branches, each beside its own re-run; Task 8 is the `docs/l44-close` branch.
 
 - **Tasks 1–3 (the harness's pure helpers, the compose project and setup scripts).** `478a47b`,
   `bdfd79c`, `7ccb7cf`. No secret reaches a log, the evidence or a note: a unit test scans the
@@ -4218,8 +4236,12 @@ run at e612b71: 1904s, no INVALID cell). Every Task 6 cell was measured. Task 7'
   (Server 2025's KDC answers FFDH PKINIT without MS-PKCA's `paChecksum2` with error 79, and MIT
   1.20 failed every cell with it); the KDC-stop cell registers a start task (an SSH logon fails
   while the KDC is down); EXTERNAL cells run over StartTLS (a DC rejects EXTERNAL on the LDAPS
-  port, [MS-ADTS] 5.1.1.2). Final review (0 Critical, 2 Important, 11 Minor): I1 and the minors fixed
-  (`eed4353`, `9972c3a`, `413a25b`, `11d0f94`), I2 (the OR-1 hazard) became OR-1; merged as PR #31 (`1b56020`).
+  port, [MS-ADTS] 5.1.1.2). The harness fixes between runs: `7da9618`, `dde9b3a`, `ddc1fd3`,
+  `09929c7`, `ce5f3b4`, `0e5f39c`, `4f81b01`, `7b95b9e`, `36d4bf4`, `e6d3d14`, `6d3fefb`,
+  `9040a92`, `7964ac3`, `50ee9ad`, `c9318a0`. Final review (0 Critical, 2 Important, 11 Minor):
+  I1 fixed, and minors M1–M7 and M9–M11 fixed (`eed4353`, `9972c3a`, `413a25b`, `11d0f94`); M8
+  went to the PR description and M11's leftover long line was parked. I2 (the OR-1 hazard)
+  became OR-1; merged as PR #31 (`1b56020`).
 - **Task 7 (what the note fired), each spec first.**
   - **7a, the issuer's quoting** (`586266b`, `093a361`) and **7b, the serial's sign byte**
     (`97a054c`), on `fix/l44-mapping`. The re-run at ad1e4a9 added five quirk CAs (`91a74cc`)
@@ -4237,8 +4259,8 @@ run at e612b71: 1904s, no INVALID cell). Every Task 6 cell was measured. Task 7'
 - **A harness follow-up (PR #37, `4ea7a08`, `0cfa267`).** A kept DC read its clock 7h off after a
   container restart; the DC now runs in the UTC time zone. A fresh run (1894s) and a restart plus
   reuse (484s) passed.
-- **Task 8 (this commit).** The §15 row, decision 38 items 1, 6 and 8, design §7 and §10, and
-  this README.
+- **Task 8 (the `docs/l44-close` branch, which the controller merges into `main`).** The §15
+  row, decision 38 items 1, 6 and 8, design §7 and §10, and this README.
 
 **Deviations from the plan, as built.**
 - **`winQuote` in `tests/lab` was not changed; only `adQuote` was.** The plan's reading rule
@@ -4250,11 +4272,11 @@ run at e612b71: 1904s, no INVALID cell). Every Task 6 cell was measured. Task 7'
 - **EXTERNAL is measured over StartTLS**, with one LDAPS EXTERNAL row kept as an observation.
 - **The Windows URIs name `dc1.corp.example.com`,** not `localhost`: an `ldap/localhost` SPN left
   the DC's account within minutes, twice, with no event naming who removed it.
-- **Task 7 ran on `fix/` branches after 7h, and Task 8 on `main`** (controller R1–R4): the L44
+- **Task 7 ran on `fix/` branches after 7h, and Task 8 on `docs/l44-close`** (controller R1–R4): the L44
   work edited neither the `Makefile` nor `tests/lab/README.md`, and there is no "Windows Server
   AD (L44)" subsection in `tests/lab/README.md`; Ryan did not ask for one.
 
-**The plan's rulings R1–R8, as they stood** (all stood): R1 Server 2025 alone; R2 `dockurr/windows`
+**The plan's rulings R1–R8, as they stood** (all stood except R4's transport, see the deviations): R1 Server 2025 alone; R2 `dockurr/windows`
 6.06 by digest, from a cached ISO checked by SHA-256; R3 setup only over OpenSSH as the domain
 Administrator (`ktpass`'s argv inside the VM is the one command line with a password); R4 "the
 certificate the DC maps" measured by PKINIT and by EXTERNAL, under enforcement absent, 1 and 2 (the
@@ -4280,7 +4302,8 @@ fresh DC at the pinned commit; R8 the carried questions answered with data.
 
 **Carried to the pre-beta review:** GSSAPI with channel binding (above); the CertNameToStr
 characters L44 did not measure (empty, trailing white space, `= < > # ;`, newline) are quoted as
-Microsoft documents them and unmeasured; `identity_unmapped` could print the value it searched.
+Microsoft documents them and unmeasured; an issuer with a multi-valued RDN is `identity_unmapped`
+and unmeasured; `identity_unmapped` could print the value it searched.
 
 ### Plan 7h — As built
 

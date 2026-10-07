@@ -7284,8 +7284,9 @@ every matching subject composes, and a scheduled refresh stamps refreshed_at.** 
   quoted one, where Microsoft's CertNameToStr page lists the backslash and slash
   inconsistently); the rest of CertNameToStr's set (empty, trailing white space, `= < > # ;`,
   newline) is as Microsoft documents it, and L44 did not measure it; an issuer with a
-  multi-valued RDN is `identity_unmapped` until measured; `<SR>` is the serial's DER content
-  bytes reversed, the sign byte DER keeps before a serial whose top bit is set included, measured in the same run) and `sid` (the SID extension,
+  multi-valued RDN is `identity_unmapped`, and L44 did not measure it (carried to the pre-beta
+  review); `<SR>` is the serial's DER content bytes reversed, the sign byte DER keeps before a
+  serial whose top bit is set included, measured in the same run) and `sid` (the SID extension,
   1.3.6.1.4.1.311.25.2, on `objectSid`). The weak kinds are `san_upn`, `san_email`, `subject_dn`
   and `cn`. A weak kind, or an `attribute` repointed on a strong one, is refused at load without
   `allow_weak: true` and a non-empty `issuers:` pin, which is checked at every mapping, before
@@ -7353,13 +7354,13 @@ every matching subject composes, and a scheduled refresh stamps refreshed_at.** 
 - **8. Binding is one of three mechanisms, always over TLS.** `external` (the broker's own
   client certificate), `gssapi` (a keytab read through `keyfile.ReadSecret`, no SASL security
   layer, pure Go: OR-2; the AP-REQ asks `mutual-required`, as MIT's client does when it asks
-  for mutual authentication, since a Windows DC answers an AP-REQ without it with 49, L44 run 8,
+  for mutual authentication, since a Windows DC answers an AP-REQ without it with 49,
   `tests/lab/results/L44-windows_ad.md`) and `simple` (the password from the environment by name, said at start
   as the weakest). `ca_file` is required, server names are verified, `ldap://` needs
   `start_tls`. Active Directory takes `external` only over StartTLS ([MS-ADTS] 5.1.1.2): over
-  `ldaps://` it answers 7 (L44 run 8), so a 7 to an `external` bind over `ldaps://` is said with
+  `ldaps://` it answers 7, so a 7 to an `external` bind over `ldaps://` is said with
   that remedy, `ldap://` with `start_tls`. On Active Directory a 49 to `external` is said as
-  "the certificate is not mapped, or that DC's KDC is not answering" (L44 run 8 measured both).
+  "the certificate is not mapped, or that DC's KDC is not answering" (the L44 note measured both).
   The password, the keytab and a ticket are never logged. Measured on OpenLDAP and
   Samba AD (L43, closed): OpenLDAP accepts EXTERNAL (by `olcAuthzRegexp`) and simple over LDAPS
   and refuses plain LDAP with 13; Samba accepts simple and refuses plain LDAP (8), refuses EXTERNAL
@@ -7367,13 +7368,14 @@ every matching subject composes, and a scheduled refresh stamps refreshed_at.** 
   `ldap server require strong auth = yes`, accepting it under `allow_sasl_over_tls`. Measured on
   Windows Server 2025 AD (L44, closed; `tests/lab/results/L44-windows_ad.md`): `external` over
   StartTLS with port49's mapped certificate is accepted (`u:CORP\port49`, result 0), also under
-  `LdapEnforceChannelBinding` 2; unmapped (no `altSecurityIdentities`, or a certificate from a CA in the DC's Root store but not
-  in NTAuth), 49; mapped
-  with the DC's KDC stopped, 49 (accepted again when the KDC was back); over `ldaps://` 7, mapped
-  or not. `gssapi` is accepted as installed, and refused (49) under `LdapEnforceChannelBinding`
+  `LdapEnforceChannelBinding` 2; unmapped (no `altSecurityIdentities`, or a certificate from a
+  CA in the DC's Root store but not in NTAuth), 49; mapped with the DC's KDC stopped, 49
+  (accepted again when the KDC was back); over `ldaps://`, 7 (the mapped certificate;
+  [MS-ADTS] 5.1.1.2 rejects EXTERNAL there). `gssapi` is accepted as installed, and refused (49) under `LdapEnforceChannelBinding`
   2, because port49 sends no channel binding token: against a DC that enforces it, use
   `external` or `simple`. It needs the SPN `ldap/<the URI's host>` on the DC's account, so the
-  `uri` names the DC's own FQDN (an `ldap/<alias>` SPN added to a DC account did not stay).
+  `uri` names the DC's own FQDN (an `ldap/localhost` SPN added to the DC's account did not
+  stay).
   `simple` over LDAPS is accepted, also under `LdapEnforceChannelBinding` 2; over plain LDAP it
   is refused (8, strong auth required). Tasks 4 and 7.
 - **9. The server pool.** Ranked same-site first, then `priority` descending, then file order;
