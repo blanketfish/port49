@@ -94,7 +94,8 @@ func TestAReloadEndsALiftsTombstone(t *testing.T) {
 	c := openMarksCopy(path, &bytes.Buffer{})
 	c.Apply(store.MarkChange{Revocation: carol, Standing: true})
 	c.Lifted(carol)
-	c.stand(nil)                                                 // the watch was compacted: the reload resumes past the delete
+	// The watch was compacted: the reload resumes past the delete.
+	c.stand(nil)
 	c.Apply(store.MarkChange{Revocation: carol, Standing: true}) // another replica's put-back
 	if got := c.All(); len(got) != 1 || !got[0].At.Equal(carol.At) {
 		t.Fatalf("the store holds carol, the copy holds %+v", got)

@@ -236,8 +236,11 @@ func (c *marksCopy) stand(rs []store.Revocation) {
 	changed := false
 	// A reload may resume past a lift's delete, so the watch never tells
 	// it: the tombstone would outlive its lift and skip a later put-back of
-	// the same mark. The reload ends it; the key is marked deleted, as the
-	// watch's delete would have, so a Lifted after the reload sets none.
+	// the same mark. The reload ends it, and marks the key deleted as the
+	// watch's delete would have. One window remains: a Lifted whose delete
+	// a reload already resumed past, run after that reload, sets a tombstone
+	// nothing ends. It matches only that lifted mark's At, so it can skip
+	// putting back the mark the operator lifted, never a later revocation.
 	for k := range c.lifted {
 		delete(c.lifted, k)
 		if c.deleted == nil {
