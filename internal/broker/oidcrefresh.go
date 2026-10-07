@@ -184,7 +184,7 @@ func (b *Broker) oidcRefresh(w http.ResponseWriter, r *http.Request) {
 	case out:
 		b.markExtended(ctx, c, rep)
 		b.Metrics.SessionRefreshes.WithLabelValues("refused").Inc()
-		answerLoggedOut(w, l)
+		b.answerLoggedOut(w, l)
 	default:
 		writeJSON(w, http.StatusOK, rep.response(b.MaxSessionAge))
 	}
@@ -219,8 +219,9 @@ func (b *Broker) markExtended(ctx context.Context, c caller, rep SessionRefreshR
 }
 
 // logoutRecovery is what an operator does about a session a logout may have
-// left extended. A logout is not a ban: the person may log in again at once,
-// so the tail ends their contexts and lifts the mark that does it
+// left extended. A logout is not a ban: the person may log in again once
+// clock_skew has passed after the logout (spec §5.1.4; the refusal names the
+// time), so the tail ends their contexts and lifts the mark that does it
 // (spec §5.1.4: a mark stands until an operator lifts it). With no admin
 // socket there is no revoke to run: the cut is the grants, as unrecordedNote
 // says.
@@ -259,7 +260,7 @@ func (b *Broker) failedRefresh(ctx context.Context, w http.ResponseWriter, now t
 		case out:
 			b.markExtended(ctx, c, rep)
 			b.Metrics.SessionRefreshes.WithLabelValues("refused").Inc()
-			answerLoggedOut(w, l)
+			b.answerLoggedOut(w, l)
 			return
 		}
 	}

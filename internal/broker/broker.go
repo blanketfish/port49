@@ -750,7 +750,7 @@ func (b *Broker) revokedSince(w http.ResponseWriter, r *http.Request, c caller, 
 			rec.Auth = c.auth()
 			b.emit(rec)
 		}
-		answerLoggedOut(w, l)
+		b.answerLoggedOut(w, l)
 		return true
 	}
 	return false

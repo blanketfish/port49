@@ -129,7 +129,7 @@ func (b *Broker) bearerCaller(w http.ResponseWriter, r *http.Request, event, not
 		if l, out, err = b.loggedOut(ctx, a); err == nil && out {
 			b.Metrics.OIDCTokens.WithLabelValues(a.Issuer, "logged_out").Inc()
 			deny(decision.CredentialRevoked, a.Principal, &a)
-			answerLoggedOut(w, l)
+			b.answerLoggedOut(w, l)
 			return caller{}, false
 		}
 	}
@@ -187,11 +187,20 @@ func (b *Broker) loggedOut(ctx context.Context, a oidc.Assertion) (store.Logout,
 }
 
 // answerLoggedOut is the 401 credential_revoked a logged-out session's
-// request is answered.
-func answerLoggedOut(w http.ResponseWriter, l store.Logout) {
-	writeJSON(w, http.StatusUnauthorized, api.Error{Error: string(decision.CredentialRevoked), Detail: fmt.Sprintf(
-		"your identity provider ended this session at %s (back-channel logout); log in again",
-		l.At.UTC().Format(time.RFC3339))})
+// request is answered. A refusal by the sub's record, which refuses every
+// login inside clock_skew of the logout (Ruling 13), names the time from
+// which a login is taken: the first whole second after the logout plus
+// clock_skew, since a token issued at that plus is still refused. A sid's
+// record refuses only its own session, so a new login is never held by it.
+func (b *Broker) answerLoggedOut(w http.ResponseWriter, l store.Logout) {
+	detail := fmt.Sprintf("your identity provider ended this session at %s (back-channel logout); log in again",
+		l.At.UTC().Format(time.RFC3339))
+	if strings.HasPrefix(l.Key, store.OIDCSub+" ") {
+		from := l.At.Add(b.Identity.Timing.ClockSkew).Truncate(time.Second).Add(time.Second)
+		detail = fmt.Sprintf("your identity provider ended your sessions at %s (back-channel logout); "+
+			"log in again from %s", l.At.UTC().Format(time.RFC3339), from.UTC().Format(time.RFC3339))
+	}
+	writeJSON(w, http.StatusUnauthorized, api.Error{Error: string(decision.CredentialRevoked), Detail: detail})
 }
 
 // ownerFresh is how long an owner record is left as it is before a mint
