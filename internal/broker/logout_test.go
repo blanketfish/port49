@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -31,8 +32,9 @@ func lshown(w *httptest.ResponseRecorder) string {
 	return fmt.Sprintf("code %d, error %q, detail %q", w.Code, e.Error, e.Description)
 }
 
-// logoutFor is a Keycloak-shaped logout token for alice from iss at f's
-// now: by sid alone when sid is not "", else by sub-alice.
+// logoutFor is a logout token for alice from iss at f's now: by sid alone
+// when sid is not "" (the RevokeSid and other-provider shape; Keycloak
+// always sends both, see logoutNaming), else by sub-alice.
 func logoutFor(t *testing.T, f *fixture, iss *oidctest.Issuer, sid, jti string) string {
 	t.Helper()
 	if sid != "" {
@@ -558,7 +560,7 @@ func TestTheAdvisedLiftTimeIsTheLogoutRecordsLife(t *testing.T) {
 }
 
 // twoSessions is oidcLoggedIn with a second session of alice's: a context
-// on nx1 indexed under another sid, and an unspent token on leaf1.
+// on nx1 indexed under another sid. (nx1's unspent token is oidcLoggedIn's.)
 func twoSessions(t *testing.T) (*fixture, *oidctest.Issuer) {
 	t.Helper()
 	f, iss, _ := oidcLoggedIn(t)
@@ -578,6 +580,8 @@ func twoSessions(t *testing.T) (*fixture, *oidctest.Issuer) {
 func TestALogoutCarryingSidAndSubEndsEverySessionOfTheSub(t *testing.T) {
 	f, iss := twoSessions(t)
 	ctx := context.Background()
+	st := &receiptsHook{Store: f.st}
+	f.b.Store = st
 	if w := f.postLogout(logoutNaming(t, f, iss, "s-sub-alice", "sub-alice", "j-both")); w.Code != 200 {
 		t.Fatalf("%s", lshown(w))
 	}
@@ -588,6 +592,9 @@ func TestALogoutCarryingSidAndSubEndsEverySessionOfTheSub(t *testing.T) {
 	}
 	if toks, _ := f.st.Candidates(ctx, store.TokenKey{NAS: "nx1", Username: "alice"}); len(toks) != 0 {
 		t.Fatal("the person's unspent token survived")
+	}
+	if fmt.Sprint(st.deleted) != "["+alicePrincipal+"]" {
+		t.Fatalf("receipts deleted for %v", st.deleted)
 	}
 	revs := eventsOf(f.records(t), decision.EventRevoke)
 	if len(revs) != 2 {
@@ -613,24 +620,56 @@ func TestRevokeSidEndsOnlyTheNamedSession(t *testing.T) {
 	}
 }
 
-// The merged report of a both-token names both, and unions the halves.
+// The merged report of a both-token names both, and unions the halves: a
+// rename the sub's owner record names and the sid's does not (Ruling 24) is
+// reached by the sub half alone, its context, token and Unreached included.
 func TestABothLogoutsReportIsTheUnionOfItsHalves(t *testing.T) {
 	f, iss := twoSessions(t)
-	rep, err := f.b.Logout(context.Background(), oidc.LogoutToken{Issuer: iss.URL, Sid: "s-sub-alice",
-		Subject: "sub-alice", IssuedAt: f.b.Now(), Domains: f.b.Identity.HumanDomains(iss.URL)}, "x")
+	ctx := context.Background()
+	now := f.b.Now()
+	const alice2 = "user:alice2@example.com"
+	if err := f.st.PutOIDCOwner(ctx, store.OIDCKey(store.OIDCSub, iss.URL, "sub-alice"), alice2, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	f.liveContextAt(t, "bare", "alice2", alice2, "", now, now.Add(12*time.Hour))
+	if _, err := f.st.PutToken(ctx, store.TokenKey{NAS: "leaf1", Username: "alice2"}, store.Token{ID: "t-alice2",
+		Secret: []byte("x"), Kind: store.KindLogin, ExpiresAt: now.Add(time.Minute), Principal: alice2,
+		Username: "alice2"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.st.IndexToken(ctx, alice2, "", store.TokenKey{NAS: "leaf1", Username: "alice2"}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := f.b.Logout(ctx, oidc.LogoutToken{Issuer: iss.URL, Sid: "s-sub-alice",
+		Subject: "sub-alice", IssuedAt: now, Domains: f.b.Identity.HumanDomains(iss.URL)}, "x")
 	if err != nil || rep.Err != nil {
 		t.Fatalf("%v, %v", err, rep.Err)
 	}
 	if rep.By != ByLogoutSid || rep.Sid != "s-sub-alice" || rep.Sub != "sub-alice" ||
-		fmt.Sprint(rep.Principals) != "["+alicePrincipal+"]" || len(rep.Contexts) != 2 {
+		fmt.Sprint(rep.Principals) != "["+alicePrincipal+" "+alice2+"]" || rep.Request.Principal != alicePrincipal {
 		t.Fatalf("report %+v", rep)
+	}
+	has := func(refs []store.ContextRef, ref store.ContextRef) bool { return slices.Contains(refs, ref) }
+	if len(rep.Contexts) != 3 || !has(rep.Contexts, store.ContextRef{NAS: "bare", Username: "alice2"}) {
+		t.Fatalf("contexts %v", rep.Contexts)
+	}
+	// The sid half deleted alice's token (1 key); the sub half, alice2's.
+	if rep.TokenKeys != 2 {
+		t.Fatalf("TokenKeys %d, want 2", rep.TokenKeys)
+	}
+	// bare serves no platform, so its context is unreached, and only the
+	// sub half's.
+	if !has(rep.Unreached, store.ContextRef{NAS: "bare", Username: "alice2"}) {
+		t.Fatalf("Unreached %v", rep.Unreached)
 	}
 }
 
-// The sub half's record failing after the sid half ran is partial: 503, the
-// jti given back, and the by-hand line the wide sub form with no sid-only API
-// call (which would end one session).
-func TestABothLogoutWhoseSubRecordFailsIsPartial(t *testing.T) {
+// The sub half's record failing after the sid half ran is 503 with the jti
+// given back, and the by-hand line is the unconditional sub form: the sid
+// half's revoke record is in the log, but no record refuses the person's
+// other sessions' ID tokens, so the lift waits and the sid-only API call
+// (one session) is not offered. Following the line ends the other session.
+func TestABothLogoutWhoseSubRecordFailsGivesTheUnconditionalForm(t *testing.T) {
 	f, iss := twoSessions(t)
 	var said strings.Builder
 	f.b.Say = func(format string, args ...any) { said.WriteString(fmt.Sprintf(format, args...) + "\n") }
@@ -642,15 +681,124 @@ func TestABothLogoutWhoseSubRecordFailsIsPartial(t *testing.T) {
 				return store.ErrUnavailable
 			}
 			return nil
-		},
-		"TakeOnce": func() error { return store.ErrUnavailable }}}
+		}}}
+	lift := f.b.Now().Add(f.b.Identity.Timing.MaxTokenAge + 2*f.b.Identity.Timing.ClockSkew).UTC().Format(time.RFC3339)
 	if w := f.postLogout(logoutNaming(t, f, iss, "s-sub-alice", "sub-alice", "j-half")); w.Code != 503 {
 		t.Fatalf("%s", lshown(w))
 	}
 	out := said.String()
-	if strings.Contains(out, `{"sid":`) || !strings.Contains(out, "sid s-sub-alice and sub sub-alice") ||
-		!strings.Contains(out, "could not be given back") || !strings.Contains(out, "port49 revoke --principal") {
+	last := out[strings.LastIndex(strings.TrimSpace(out), "\n")+1:]
+	if strings.Contains(out, `{"sid":`) || strings.Contains(out, "if the decision log has a revoke record") ||
+		!strings.Contains(last, "for each principal the decision log's mint records name for this sub") ||
+		!strings.Contains(last, "--lift` there only after "+lift) {
 		t.Fatalf("the recovery said:\n%s", out)
+	}
+	// The jti was given back: the provider's retry is applied, not replayed.
+	f.b.Store = f.st
+	if w := f.postLogout(logoutNaming(t, f, iss, "s-sub-alice", "sub-alice", "j-half")); w.Code != 200 ||
+		contextRevokedAt(t, f, "nx1").IsZero() {
+		t.Fatalf("the retry: %s", lshown(w))
+	}
+}
+
+// Following that line (a principal revoke, run at once) refuses a held ID
+// token of the other session, which no logout record does until the retry.
+func TestAHeldIDTokenOfTheOtherSessionIsRefusedOnceTheByHandLineIsFollowed(t *testing.T) {
+	f, iss := twoSessions(t)
+	calls := 0
+	f.b.Store = hookStore{Store: f.st, before: map[string]func() error{
+		"PutLogout": func() error {
+			if calls++; calls == 2 {
+				return store.ErrUnavailable
+			}
+			return nil
+		}}}
+	other := f.idToken(t, iss, map[string]any{"sid": "s-other"})
+	if w := f.postLogout(logoutNaming(t, f, iss, "s-sub-alice", "sub-alice", "j-held")); w.Code != 503 {
+		t.Fatalf("%s", lshown(w))
+	}
+	if w := f.bearer(context.Background(), "POST", "/v1/tokens", mintLeaf1, other); w.Code != 200 {
+		t.Fatalf("premise: nothing refuses the other session yet: %s", shown(w))
+	}
+	if _, err := f.b.Revoke(context.Background(), RevokeRequest{Principal: alicePrincipal, Origin: "by hand"}); err != nil {
+		t.Fatal(err)
+	}
+	if w := f.bearer(context.Background(), "POST", "/v1/tokens", mintLeaf1, other); w.Code == 200 {
+		t.Fatalf("the other session's held token minted after the by-hand revoke: %s", shown(w))
+	}
+}
+
+// partialSubStore fails ContextsByPrincipal, which only the sub half reads
+// (the sid half goes through the session manager).
+type partialSubStore struct{ store.Store }
+
+func (s partialSubStore) ContextsByPrincipal(context.Context, string) ([]store.ContextRef, error) {
+	return nil, store.ErrUnavailable
+}
+
+// The sub half failing part way, its record written, is 503 "partial", the
+// jti given back and the conditional by-hand line (its revoke record stands);
+// the retry ends the other session.
+func TestABothLogoutWhoseSubHalfFailsPartWayIsPartial(t *testing.T) {
+	f, iss := twoSessions(t)
+	var said strings.Builder
+	f.b.Say = func(format string, args ...any) { said.WriteString(fmt.Sprintf(format, args...) + "\n") }
+	f.b.AdminSocket = "/run/port49/admin.sock"
+	f.b.Store = partialSubStore{f.st}
+	raw := logoutNaming(t, f, iss, "s-sub-alice", "sub-alice", "j-part-sub")
+	if w := f.postLogout(raw); w.Code != 503 {
+		t.Fatalf("%s", lshown(w))
+	}
+	if out := said.String(); !strings.Contains(out, "if the decision log has a revoke record with origin "+
+		"backchannel_logout for "+alicePrincipal) || strings.Contains(out, `{"sid":`) {
+		t.Fatalf("the recovery said:\n%s", out)
+	}
+	f.b.Store = f.st
+	if w := f.postLogout(raw); w.Code != 200 || contextRevokedAt(t, f, "nx1").IsZero() {
+		t.Fatalf("the retry: %s", lshown(w))
+	}
+}
+
+// A both-token whose first record fails: 503, the retry ends both sessions.
+func TestABothLogoutTheStoreFailedIsRetriable(t *testing.T) {
+	f, iss := twoSessions(t)
+	f.b.Store = hookStore{Store: f.st, before: map[string]func() error{
+		"PutLogout": func() error { return store.ErrUnavailable }}}
+	raw := logoutNaming(t, f, iss, "s-sub-alice", "sub-alice", "j-both-retry")
+	if w := f.postLogout(raw); w.Code != 503 || w.Header().Get("Retry-After") != "30" {
+		t.Fatalf("%s %v", lshown(w), w.Header())
+	}
+	if !contextRevokedAt(t, f, "leaf1").IsZero() || !contextRevokedAt(t, f, "nx1").IsZero() {
+		t.Fatal("a logout whose record failed marked a context")
+	}
+	f.b.Store = f.st
+	if w := f.postLogout(raw); w.Code != 200 || contextRevokedAt(t, f, "leaf1").IsZero() ||
+		contextRevokedAt(t, f, "nx1").IsZero() {
+		t.Fatalf("the retry: %s", lshown(w))
+	}
+}
+
+// A both-token whose jti the store would not take: the sub form, no sid-only
+// API call, and neither the token nor its jti in the line.
+func TestABothLogoutWhosePutOnceFailedSaysSo(t *testing.T) {
+	f, iss := twoSessions(t)
+	var said strings.Builder
+	f.b.Say = func(format string, args ...any) { said.WriteString(fmt.Sprintf(format, args...) + "\n") }
+	f.b.AdminSocket = "/run/port49/admin.sock"
+	f.b.Store = hookStore{Store: f.st, before: map[string]func() error{
+		"PutOnce": func() error { return store.ErrUnavailable }}}
+	raw := logoutNaming(t, f, iss, "s-sub-alice", "sub-alice", "j-secret-both")
+	if w := f.postLogout(raw); w.Code != 503 {
+		t.Fatalf("%s", lshown(w))
+	}
+	out := said.String()
+	lift := f.b.Now().Add(f.b.Identity.Timing.MaxTokenAge + 2*f.b.Identity.Timing.ClockSkew).UTC().Format(time.RFC3339)
+	if !strings.Contains(out, "--lift` there only after "+lift) || strings.Contains(out, `{"sid":`) ||
+		!strings.Contains(out, "for this sub") {
+		t.Fatalf("the PutOnce failure said:\n%s", out)
+	}
+	if strings.Contains(out, raw) || strings.Contains(out, "j-secret-both") {
+		t.Fatalf("the line carries the token or its jti:\n%s", out)
 	}
 }
 

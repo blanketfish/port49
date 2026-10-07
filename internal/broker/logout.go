@@ -108,7 +108,7 @@ func (b *Broker) logout(w http.ResponseWriter, r *http.Request) {
 		// is safe to run twice.
 		_, terr := b.Store.TakeOnce(ctx, jtiKey(lt.Issuer, lt.JTI))
 		outcome := "store_error"
-		if err == nil {
+		if err == nil || rep.Sid != "" {
 			outcome = "partial"
 		}
 		b.say("logout: a logout token from %s could not be applied: the store did not answer; answered 503 so the "+
@@ -214,12 +214,15 @@ func (b *Broker) RevokeSid(ctx context.Context, issuer, sid, origin string) (Rev
 // own unspent tokens, then the contexts twice, the receipts, and one revoke
 // record. It leaves no standing mark. It reaches only owner principals in
 // lt.Domains (Ruling 22), and every one of them (Ruling 24). The error is
-// the logout record not written, when nothing was applied; a later step's
-// is the report's Err, and the steps after it still run. A token carrying
-// both sid and sub is a logout by the sid and then one by the sub, each as
-// above (Ruling 13): a provider's "sign out user" names one session and the
-// sub, and every session of the person ends. The sub half's record not
-// written, after the sid half ran, is the report's Err.
+// the logout record not written; a later step's is the report's Err, and
+// the steps after it still run. A token carrying both sid and sub is a
+// logout by the sid and then one by the sub, each as above (Ruling 13): a
+// provider's "sign out user" names one session and the sub, and every
+// session of the person ends. The sub half's record not written, after the
+// sid half ran, is the error too, with a report naming no principal: no
+// record refuses the person's other sessions, so the caller gives the
+// unapplied recovery, and the sid half's own revoke record is not a sign
+// the logout was done.
 func (b *Broker) Logout(ctx context.Context, lt oidc.LogoutToken, origin string) (RevokeReport, error) {
 	if b.Identity == nil {
 		return RevokeReport{}, errors.New("broker: this broker has no human OIDC verifier, so it takes no logout")
@@ -236,13 +239,10 @@ func (b *Broker) Logout(ctx context.Context, lt oidc.LogoutToken, origin string)
 		return RevokeReport{}, err
 	}
 	subRep, err := b.logoutOne(ctx, bySub, origin)
-	rep.Sub = lt.Subject
 	if err != nil {
-		if rep.Err == nil {
-			rep.Err = err
-		}
-		return rep, nil
+		return RevokeReport{By: ByLogoutSid, OIDCIssuer: lt.Issuer, Sid: lt.Sid, Sub: lt.Subject}, err
 	}
+	rep.Sub = lt.Subject
 	for _, p := range subRep.Principals {
 		if !slices.Contains(rep.Principals, p) {
 			rep.Principals = append(rep.Principals, p)
