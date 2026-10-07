@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -101,7 +102,9 @@ func TestOIDCE2EConfigAndPolicyLoad(t *testing.T) {
 	if err != nil || p == nil {
 		t.Fatalf("the lab policy does not load: %v", err)
 	}
-	for _, want := range []string{"user:alice@corp.example.com", "app:port49-svc", "username: alice", "slice_operator"} {
+	for _, want := range []string{"user:alice@corp.example.com", "user:bob@corp.example.com",
+		"user:carol@corp.example.com", "app:port49-svc", "username: alice", "username: bob", "username: carol", "subject: oidc_bob",
+		"subject: oidc_carol", "slice_operator"} {
 		if !strings.Contains(files["policy.yaml"], want) {
 			t.Errorf("policy.yaml lacks %q", want)
 		}
@@ -364,5 +367,232 @@ func TestOIDCIDTokenExpired(t *testing.T) {
 	}
 	if idTokenExpired("not-a-jws", now, 10*time.Second) {
 		t.Error("a token with no exp read as expired")
+	}
+}
+
+func TestOIDCLogoutRevokes(t *testing.T) {
+	const origin = "backchannel_logout https://kc/realms/r"
+	rec := func(by, o, sid string) map[string]any {
+		return map[string]any{"event": "revoke", "revocation": map[string]any{"by": by, "origin": o, "sid": sid, "sub": "u-bob"}}
+	}
+	recs := []map[string]any{{"event": "mint"}, rec("sid", origin, "s2"), rec("sub", origin, ""), rec("principal", origin, "")}
+	bySid, bySub, ok := logoutRevokes(recs, origin, "u-bob")
+	if !ok || bySid == nil || bySub == nil || sidLabel(bySid, []string{"s1", "s2"}) != 2 {
+		t.Errorf("sid then sub: %v %v %v", bySid, bySub, ok)
+	}
+	for name, bad := range map[string][]map[string]any{
+		"sub only":     {rec("sub", origin, "")},
+		"sid only":     {rec("sid", origin, "s1")},
+		"sub before":   {rec("sub", origin, ""), rec("sid", origin, "s1")},
+		"other origin": {rec("sid", "backchannel_logout https://other", "s1"), rec("sub", "backchannel_logout https://other", "")},
+		"admin origin": {rec("sid", "admin", "s1"), rec("sub", "admin", "")},
+		"no records":   nil,
+	} {
+		if _, _, ok := logoutRevokes(bad, origin, "u-bob"); ok {
+			t.Errorf("%s was accepted", name)
+		}
+	}
+	if _, _, ok := logoutRevokes(recs, origin, "u-someone-else"); ok {
+		t.Error("a by-sub record of another subject was accepted")
+	}
+	if sidLabel(bySid, []string{"x", "y"}) != 0 || sidLabel(rec("sid", origin, ""), []string{""}) != 0 {
+		t.Error("a sid outside the user's sessions got a label")
+	}
+}
+
+func TestOIDCSidOf(t *testing.T) {
+	if got := sidOf(jwsOf(map[string]any{"alg": "RS256"}, map[string]any{"sid": "abc-123"})); got != "abc-123" {
+		t.Errorf("sid %q", got)
+	}
+	if sidOf("not-a-jws") != "" {
+		t.Error("a sid from no token")
+	}
+}
+
+func TestOIDCLogoutCounts(t *testing.T) {
+	m := func(applied, nothing, invalid int) string {
+		return fmt.Sprintf("port49_oidc_logouts_total{outcome=\"applied\"} %d\nport49_oidc_logouts_total{outcome=\"nothing\"} %d\n"+
+			"port49_oidc_logouts_total{outcome=\"invalid\"} %d\nport49_oidc_logouts_totals 99\n", applied, nothing, invalid)
+	}
+	if total, applied, nothing := logoutCounts(m(2, 0, 1), m(10, 0, 1)); total != 8 || applied != 8 || nothing != 0 {
+		t.Errorf("eight applied: %v %v %v", total, applied, nothing)
+	}
+	// A burst of one principal's sessions: the first logout deletes every
+	// unspent token, so the rest find nothing; that is answered, not lost.
+	if total, applied, nothing := logoutCounts(m(5, 1, 0), m(6, 8, 0)); total != 8 || applied != 1 || nothing != 7 {
+		t.Errorf("one applied, seven nothing: %v %v %v", total, applied, nothing)
+	}
+	if total, applied, nothing := logoutCounts(m(0, 0, 0), m(3, 1, 0)); total != 4 || applied != 3 || nothing != 1 {
+		t.Errorf("one reached no context: %v %v %v", total, applied, nothing)
+	}
+	if total, applied, nothing := logoutCounts("", ""); total != 0 || applied != 0 || nothing != 0 {
+		t.Errorf("no metrics: %v %v %v", total, applied, nothing)
+	}
+}
+
+func TestOIDCLogoutAnswered(t *testing.T) {
+	for name, c := range map[string]struct {
+		total, applied, nothing float64
+		want                    bool
+	}{
+		"all applied":          {8, 8, 0, true},
+		"applied and nothing":  {8, 1, 7, true},
+		"one lost":             {7, 7, 0, false},
+		"one invalid":          {8, 6, 1, false},
+		"nothing but too many": {9, 1, 8, false},
+		"none":                 {0, 0, 0, false},
+	} {
+		if got := logoutAnswered(c.total, c.applied, c.nothing, 8); got != c.want {
+			t.Errorf("%s: %v", name, got)
+		}
+	}
+}
+
+func TestOIDCHasLogoutSeries(t *testing.T) {
+	if !hasLogoutSeries("# HELP x\nport49_oidc_logouts_total{outcome=\"applied\"} 0\n") {
+		t.Error("a series read as absent")
+	}
+	if hasLogoutSeries("") || hasLogoutSeries("port49_oidc_logouts_totals 4\nother_total 1\n") {
+		t.Error("no series read as present")
+	}
+}
+
+func TestOIDCBurstRevokes(t *testing.T) {
+	const origin = "backchannel_logout https://kc/realms/r"
+	sids := []string{"s1", "s2", "s3"}
+	rec := func(by, o, sid string) map[string]any {
+		return map[string]any{"event": "revoke", "revocation": map[string]any{"by": by, "origin": o, "sid": sid}}
+	}
+	all := []map[string]any{rec("sid", origin, "s1"), rec("sub", origin, ""), rec("sid", origin, "s3"), rec("sid", origin, "s2")}
+	if missing, foreign := burstRevokes(all, origin, sids); len(missing) != 0 || foreign != 0 {
+		t.Errorf("all present: %v %d", missing, foreign)
+	}
+	if missing, foreign := burstRevokes(all[:3], origin, sids); len(missing) != 1 || missing[0] != 2 || foreign != 0 {
+		t.Errorf("one missing: %v %d", missing, foreign)
+	}
+	extra := append(append([]map[string]any{}, all...), rec("sid", origin, "someone-else"))
+	if missing, foreign := burstRevokes(extra, origin, sids); len(missing) != 0 || foreign != 1 {
+		t.Errorf("a foreign sid: %v %d", missing, foreign)
+	}
+	other := []map[string]any{rec("sid", "admin", "s1"), rec("sid", "backchannel_logout https://other", "s2"), rec("sid", origin, "s3")}
+	if missing, foreign := burstRevokes(other, origin, sids); len(missing) != 2 || missing[0] != 1 || missing[1] != 2 || foreign != 0 {
+		t.Errorf("a wrong origin counted: %v %d", missing, foreign)
+	}
+	if missing, _ := burstRevokes(nil, origin, sids); len(missing) != 3 {
+		t.Errorf("no records: %v", missing)
+	}
+	dup := append(append([]map[string]any{}, all...), rec("sid", origin, "s1"))
+	if missing, foreign := burstRevokes(dup, origin, sids); len(missing) != 0 || foreign != 0 {
+		t.Errorf("a repeated sid: %v %d", missing, foreign)
+	}
+}
+
+func TestOIDCCountRevokes(t *testing.T) {
+	const origin = "backchannel_logout https://kc/realms/r"
+	rec := func(event, by, o string) map[string]any {
+		return map[string]any{"event": event, "revocation": map[string]any{"by": by, "origin": o}}
+	}
+	recs := []map[string]any{rec("revoke", "sid", origin), rec("revoke", "sid", origin), rec("revoke", "sub", origin),
+		rec("revoke", "sid", "admin"), rec("mint", "sid", origin)}
+	if n := countRevokes(recs, origin, "sid"); n != 2 {
+		t.Errorf("by sid: %d", n)
+	}
+	if n := countRevokes(recs, origin, "sub"); n != 1 || countRevokes(nil, origin, "sid") != 0 {
+		t.Errorf("by sub: %d", n)
+	}
+}
+
+func TestOIDCLoginAgainAt(t *testing.T) {
+	at := time.Unix(1_000_000, 0)
+	// A Keycloak logout token's iat is in whole seconds, and a sub record
+	// refuses an ID token issued by iat + clock_skew: the clear time is past
+	// both, with margin.
+	if got := loginAgainAt(at); got.Sub(at) != oidc.DefaultTiming.ClockSkew+5*time.Second {
+		t.Errorf("%v after the logout", got.Sub(at))
+	}
+}
+
+func TestOIDCSubOf(t *testing.T) {
+	if got := subOf(jwsOf(map[string]any{"alg": "RS256"}, map[string]any{"sub": "u-1"})); got != "u-1" {
+		t.Errorf("sub %q", got)
+	}
+	if subOf("not-a-jws") != "" {
+		t.Error("a sub from no token")
+	}
+}
+
+func TestOIDCMintFault(t *testing.T) {
+	if got := mintFault("burst session 7 of 8", "429 candidate_cap_reached: 8 candidates"); !strings.Contains(got, "candidate_cap_reached") ||
+		!strings.Contains(got, "burst session 7 of 8") || !strings.Contains(got, "token.candidate_cap") {
+		t.Errorf("the cap refusal does not say so: %q", got)
+	}
+	if got := mintFault("session 1 of 2", "503 identity_provider_unavailable"); strings.Contains(got, "token.candidate_cap") ||
+		!strings.Contains(got, "identity_provider_unavailable") {
+		t.Errorf("another refusal: %q", got)
+	}
+}
+
+func TestOIDCDeliveryCellText(t *testing.T) {
+	const sid = "0a1b2c3d-sid-value"
+	line := "keycloak-1  | WARN KC-SERVICES0057: Logout for client 'port49-cli' failed, session " + sid
+	got := deliveryCellText([]string{line, "second"}, []string{sid})
+	if strings.Contains(got, sid) || !strings.Contains(got, "[secret]") || !strings.Contains(got, "2 delivery failure line(s)") {
+		t.Errorf("a known sid in the line: %q", got)
+	}
+	if oidcNoteLeak("| 6d | "+got+" |", []string{sid}) != nil {
+		t.Error("the scrubbed cell still trips the leak check")
+	}
+}
+
+func TestOIDCDeliveryFailures(t *testing.T) {
+	logs := "keycloak-1  | INFO started\nkeycloak-1  | WARN Failed to send backchannel logout to client\nkeycloak-1  | logout ok\n"
+	if got := deliveryFailures(logs); len(got) != 1 || !strings.Contains(got[0], "Failed to send") {
+		t.Errorf("%v", got)
+	}
+	// Keycloak's own line, as the broker quotes it (logout.go).
+	real := "keycloak-1  | 2026-10-07 WARN [org.keycloak.services] (executor-thread-1) KC-SERVICES0057: " +
+		"Logout for client 'port49-cli' failed: Connection reset\n"
+	if got := deliveryFailures(real); len(got) != 1 {
+		t.Errorf("Keycloak's real failure line: %v", got)
+	}
+	// Both words, no failed delivery: a login failure and a clean logout line.
+	benign := "keycloak-1  | INFO logout of alice done; 3 failed login attempts cleared\nkeycloak-1  | LOGIN_ERROR failed: bad password\n"
+	if got := deliveryFailures(benign); len(got) != 0 {
+		t.Errorf("a benign line read as a delivery failure: %v", got)
+	}
+	if len(deliveryFailures("")) != 0 {
+		t.Error("failures in an empty log")
+	}
+}
+
+func TestOIDCNoteLeakCatchesASid(t *testing.T) {
+	const sid = "0a1b2c3d-sid-value"
+	secrets := []string{sid}
+	if oidcNoteLeak("| 6b | revoke by sid (session 1 of 2), then revoke by sub |", secrets) != nil {
+		t.Error("a labelled note read as a leak")
+	}
+	if oidcNoteLeak("| 6b | "+jsonCell(map[string]any{"sid": sid})+" |", secrets) == nil {
+		t.Error("a sid value in the note was not caught")
+	}
+}
+
+func TestSaidRevokedAnchorsOnTheCode(t *testing.T) {
+	for _, tc := range []struct {
+		said string
+		want bool
+	}{
+		{"401 credential_revoked: log in again from 12:00", true},
+		{"200 user:alice@corp.example.com: credential_revoked: log in again", true},
+		{"401 invalid_token: the token is not credential_revoked", false},
+		{"401 invalid_token: credential_revoked: a detail that opens with the words", false},
+		{"200 user:alice@corp.example.com: invalid_token: credential_revoked: x", false},
+		{"200 user:alice@corp.example.com: allow permit as alice", false},
+		{"no answer: credential_revoked:", false},
+		{"credential_revoked:", false},
+		{"", false},
+	} {
+		if got := saidRevoked(tc.said); got != tc.want {
+			t.Errorf("saidRevoked(%q) = %v, want %v", tc.said, got, tc.want)
+		}
 	}
 }
