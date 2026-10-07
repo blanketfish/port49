@@ -43,7 +43,11 @@ func serveThroughWith(t *testing.T, f *fixture, lim ListenerLimits, logf func(st
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv, err := f.b.Server("127.0.0.1:0", srvCert, f.ca.Pool())
+	anchor := f.ca.Pool()
+	if f.b.NoX509 {
+		anchor = nil // an OIDC-only broker takes no anchor
+	}
+	srv, err := f.b.Server("127.0.0.1:0", srvCert, anchor)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -67,7 +67,7 @@ func TestAnOIDCOnlyServer(t *testing.T) {
 		t.Fatal("an OIDC-only broker with no OIDC verifier was served")
 	}
 	f.b.NoX509 = false
-	f.withOIDC(t)
+	iss := f.withOIDC(t)
 	if _, err := f.b.Server("127.0.0.1:0", srvCert, nil); err == nil {
 		t.Fatal("a broker that offers x509 was served with no anchor")
 	}
@@ -88,6 +88,10 @@ func TestAnOIDCOnlyServer(t *testing.T) {
 	f.b.Handler().ServeHTTP(w, httptest.NewRequest("GET", "/v1/config", nil))
 	if !strings.Contains(w.Body.String(), `"methods":["oidc"]`) {
 		t.Fatalf("config %s", w.Body)
+	}
+	// A valid bearer mints on the same OIDC-only broker.
+	if w := f.bearer(context.Background(), "POST", "/v1/tokens", mintLeaf1, f.idToken(t, iss, nil)); w.Code != 200 {
+		t.Fatalf("a valid bearer on an OIDC-only broker: %s", shown(w))
 	}
 	// No bearer: the answer says what this broker takes, and the record is oidc's.
 	w = f.bearer(context.Background(), "POST", "/v1/tokens", mintLeaf1, "")
@@ -110,8 +114,15 @@ func TestAnOIDCOnlyServer(t *testing.T) {
 // A bearer over a real connection mints; the connection, which bound no
 // principal, is closed once it goes idle and gives its source slot back.
 func TestABearerMintsThroughTheListener(t *testing.T) {
+	t.Run("x509 and oidc", func(t *testing.T) { bearerMintsThroughTheListener(t, false) })
+	// A real OIDC-only server: no anchor, no certificate requested.
+	t.Run("oidc only", func(t *testing.T) { bearerMintsThroughTheListener(t, true) })
+}
+
+func bearerMintsThroughTheListener(t *testing.T, noX509 bool) {
 	f := newFixture(t, 8)
 	iss := f.withOIDC(t)
+	f.b.NoX509 = noX509
 	addr, _ := serveThrough(t, f, ListenerLimits{MaxPendingPerSource: 1, MaxPerPrincipal: 4,
 		HandshakeTimeout: 10 * time.Second}, nil)
 	mint := func() int {
