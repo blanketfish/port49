@@ -289,6 +289,33 @@ func (h hookStore) PutOIDCOwner(ctx context.Context, key, principal string, ttl 
 	return h.Store.PutOIDCOwner(ctx, key, principal, ttl)
 }
 
+func (h hookStore) PutLogout(ctx context.Context, l store.Logout, ttl time.Duration) error {
+	if f := h.before["PutLogout"]; f != nil {
+		if err := f(); err != nil {
+			return err
+		}
+	}
+	return h.Store.PutLogout(ctx, l, ttl)
+}
+
+func (h hookStore) TakeOnce(ctx context.Context, key string) ([]byte, error) {
+	if f := h.before["TakeOnce"]; f != nil {
+		if err := f(); err != nil {
+			return nil, err
+		}
+	}
+	return h.Store.TakeOnce(ctx, key)
+}
+
+func (h hookStore) PutOnce(ctx context.Context, key string, value []byte, ttl time.Duration) (bool, error) {
+	if f := h.before["PutOnce"]; f != nil {
+		if err := f(); err != nil {
+			return false, err
+		}
+	}
+	return h.Store.PutOnce(ctx, key, value, ttl)
+}
+
 // Review Focus 7: a logout that lands while the mint writes is read after
 // the last token write, and the mint's tokens are deleted.
 func TestAMintRacingALogoutLeavesNoToken(t *testing.T) {

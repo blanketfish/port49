@@ -195,6 +195,7 @@ func (b *Broker) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/config", b.config)
 	mux.HandleFunc("POST /v1/tokens", b.tokens)
+	mux.HandleFunc("POST /v1/logout", b.logout)
 	mux.HandleFunc("POST /v1/refresh/challenge", b.refreshChallenge)
 	mux.HandleFunc("POST /v1/refresh", b.refresh)
 	mux.HandleFunc("GET /v1/identity", b.identity)

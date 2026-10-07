@@ -35,6 +35,9 @@ const (
 	ByCert      = store.RevocationCert
 	ByOwn       = "self"
 	ByKey       = "key"
+
+	ByLogoutSid = store.OIDCSid // an OIDC session ended (plan 7h)
+	ByLogoutSub = store.OIDCSub // every session of an OIDC subject ended
 )
 
 // RevokeRequest is one revocation or lift (spec §5.1.4): of a principal, or
@@ -65,8 +68,14 @@ type RevokeReport struct {
 	// OwnNote is the first line of a self revocation the request named by
 	// the caller's own principal, as it would another's: no mark was made,
 	// and who can make one. The endpoint sets it (ownNote); empty otherwise.
-	OwnNote     string
-	Mark        store.Revocation
+	OwnNote string
+	Mark    store.Revocation
+	// OIDCIssuer and Sid or Sub name what a ByLogoutSid or ByLogoutSub
+	// revocation ended (plan 7h).
+	OIDCIssuer, Sid, Sub string
+	// Principals is every owner principal a logout reached (Ruling 24);
+	// Request.Principal is the first.
+	Principals  []string
 	Contexts    []store.ContextRef
 	Unreached   []store.ContextRef
 	TokenKeys   int
@@ -438,6 +447,10 @@ func (b *Broker) recordRevocation(now time.Time, rep RevokeReport, verdict strin
 		body.Issuer, body.Serial = rep.Request.Issuer, rep.Request.Serial
 	default:
 		rec.Principal = rep.Request.Principal // ByKey: the context's owner, when one was read
+	}
+	body.OIDCIssuer, body.Sid, body.Sub = rep.OIDCIssuer, rep.Sid, rep.Sub
+	if len(rep.Principals) > 1 {
+		body.Principals = rep.Principals
 	}
 	if rep.Key != (store.TokenKey{}) {
 		body.Device, body.Username = rep.Key.NAS, rep.Key.Username
