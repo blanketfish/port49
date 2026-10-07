@@ -216,7 +216,7 @@ func (b *Broker) Handler() http.Handler {
 // client sees the close and opens a new connection.
 func announceCloseWithoutCertificate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.TLS != nil && len(r.TLS.PeerCertificates) == 0 {
+		if r.TLS != nil && len(r.TLS.PeerCertificates) == 0 && len(r.TLS.VerifiedChains) == 0 {
 			w.Header().Set("Connection", "close")
 		}
 		next.ServeHTTP(w, r)
