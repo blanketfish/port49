@@ -2157,3 +2157,81 @@ func TestOneLineMaxDropsControlCharacters(t *testing.T) {
 		}
 	}
 }
+
+// [MS-ADTS] 5.1.1.2: on the LDAPS port the certificate authenticates the
+// connection and an EXTERNAL bind is rejected (result 7); over StartTLS an
+// EXTERNAL bind maps it. The harness measures EXTERNAL over StartTLS.
+func TestLabDirViaStartTLS(t *testing.T) {
+	l := &labDir{uri: "ldaps://dc1.corp.example.com:30636", plainURI: "ldap://dc1.corp.example.com:30389", d: &directories{pki: &dirPKI{}}}
+	s := l.viaStartTLS()
+	if s.uri != l.plainURI || !s.startTLS {
+		t.Errorf("the StartTLS server is %q (start_tls %v)", s.uri, s.startTLS)
+	}
+	if srv := s.config(directory.Nested("direct"), "", directory.Bind{}, directory.Mapping{}).Servers[0]; srv.URI != l.plainURI || !srv.StartTLS {
+		t.Errorf("its config names %+v", srv)
+	}
+	if srv := l.config(directory.Nested("direct"), "", directory.Bind{}, directory.Mapping{}).Servers[0]; srv.URI != l.uri || srv.StartTLS {
+		t.Errorf("the LDAPS server changed: %+v", srv)
+	}
+}
+
+// Every EXTERNAL cell goes through l44External, which measures over StartTLS;
+// the one LDAPS EXTERNAL row is the documented observation.
+func TestL44ExternalIsMeasuredOverStartTLS(t *testing.T) {
+	if !strings.Contains(l44Func(t, "l44External"), "viaStartTLS()") {
+		t.Error("l44External does not measure over StartTLS")
+	}
+	if !strings.Contains(l44Func(t, "l44External"), "l44ExternalOn(t, ev, label, bind, mapped)") {
+		t.Error("l44External does not hand its cell to l44ExternalOn")
+	}
+	for _, fn := range []string{"l44Binds", "l44Matrix", "l44OR1"} {
+		body := l44Func(t, fn)
+		if strings.Contains(body, `tryBind(t, ev, "external`) {
+			t.Errorf("%s binds EXTERNAL without l44External", fn)
+		}
+		if strings.Contains(body, "l44ExternalOn(") && fn != "l44Binds" {
+			t.Errorf("%s measures EXTERNAL on a chosen server", fn)
+		}
+		if strings.Contains(body, "SASL EXTERNAL over LDAPS") && !(fn == "l44Binds" && strings.Contains(body, "documented observation")) {
+			t.Errorf("%s labels an EXTERNAL row as LDAPS", fn)
+		}
+	}
+	if !strings.Contains(l44Func(t, "l44Binds"), "l44LDAPSNoBind(") || !strings.Contains(l44Func(t, "l44Binds"), "l.l44ExternalOn(") {
+		t.Error("l44Binds records no LDAPS observation")
+	}
+	if !strings.Contains(l44Func(t, "certPresented"), "l.dialTLS(") {
+		t.Error("certPresented does not follow the server's StartTLS")
+	}
+}
+
+// Over StartTLS an unmapped certificate is refused with 49, not 7.
+func TestL44ExternalRowsOverStartTLS(t *testing.T) {
+	refused := l44Ext{l43Cell: l43Cell{mech: "external", code: 49, text: "bind external: LDAP result 49"}}
+	if row := l44ExtRow("e2", refused); !strings.Contains(row, "| 49 |") {
+		t.Errorf("%s", row)
+	}
+	if row := l44ExternalRow("absent", refused, nil); !strings.Contains(row, "refused, LDAP result 49") || !strings.Contains(row, "over StartTLS") || strings.Contains(row, "over LDAPS") {
+		t.Errorf("%s", row)
+	}
+}
+
+func TestL44NoBindRow(t *testing.T) {
+	if r := l44NoBindRow(`u:CORP\port49`, nil); !strings.Contains(r, "`u:CORP\\port49`") || !strings.Contains(r, "no bind") {
+		t.Errorf("%s", r)
+	}
+	if r := l44NoBindRow("", errors.New("boom")); !strings.Contains(r, "failed") || !strings.Contains(r, "boom") {
+		t.Errorf("%s", r)
+	}
+	if r := l44NoBindRow("", nil); !strings.Contains(r, "anonymous") {
+		t.Errorf("an empty WhoAmI is anonymous: %s", r)
+	}
+}
+
+func TestWindowsNoteCitesWhyStartTLS(t *testing.T) {
+	n := (&winDC{}).configNote()
+	for _, want := range []string{"MS-ADTS", "5.1.1.2", "StartTLS", "7"} {
+		if !strings.Contains(n, want) {
+			t.Errorf("the note does not say %q", want)
+		}
+	}
+}

@@ -1782,6 +1782,11 @@ func (w *winDC) configNote() string {
 		"127.0.0.1 only.\n" +
 		"- L42's fixture, made by `scripts/seed.ps1` with global security groups; the second `netops-oncall` is renamed in, " +
 		"as on Samba.\n" +
+		"- SASL EXTERNAL is measured over StartTLS on `ldap://dc1.corp.example.com:30389`, port49's own `start_tls` " +
+		"connection. [MS-ADTS] 5.1.1.2: on the LDAPS port the DC authenticates the connection as the client certificate's " +
+		"identity at the handshake and rejects an EXTERNAL bind there; over StartTLS it maps the certificate when an EXTERNAL " +
+		"bind follows. One LDAPS EXTERNAL row is kept as an observation, with what the run read of that connection: its " +
+		"result code, and WhoAmI with no bind.\n" +
 		"- LDAPS serves a certificate from the lab CA (`localhost`, `dc1.corp.example.com`, 127.0.0.1), placed in the NTDS " +
 		"service's own store; the lab CA is in the DC's Root store.\n" +
 		"- The URIs name the DC, `dc1.corp.example.com`, which the test process alone resolves to 127.0.0.1, so port49's " +
@@ -1801,7 +1806,7 @@ func (w *winDC) configNote() string {
 		"access violation in `ntdsai.dll` 15 seconds after NTDS came back) and Windows restarting the VM; whether the " +
 		"restart or the binds under 2 that followed set it off was not separated. The DC's boot is read before and after " +
 		"the cells under 2, and a change makes them INVALID.\n" +
-		"- The KDC is stopped for one EXTERNAL cell (OR-1) and started again at once; the next cell repeats the mapped " +
+		"- The KDC is stopped for one EXTERNAL cell (OR-1) and started again by a task the stop registered; the next cell repeats the mapped " +
 		"bind to show the DC recovered.\n" +
 		"- Alice's `User` certificate is requested as alice over WinRM with CredSSP, under a session configuration only she " +
 		"may use; all of it is removed after, and her password for it is made on the DC, used once and replaced. " +

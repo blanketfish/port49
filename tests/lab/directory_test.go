@@ -73,6 +73,7 @@ const containerWhere = "as a container on `tests/lab/directory/compose.yaml` (no
 type labDir struct {
 	name, service string
 	uri, plainURI string
+	startTLS      bool // uri is an ldap:// server that is upgraded with StartTLS
 	bindDN        string
 	userFilter    string
 	groupFilter   string
@@ -569,6 +570,16 @@ func (l *labDir) bindSimple() directory.Bind {
 	return directory.Bind{Mechanism: "simple", BindDN: l.bindDN, PasswordEnv: "LAB_DIRECTORY_BIND_PASSWORD"}
 }
 
+// viaStartTLS is l as port49 reaches it over StartTLS on the plain LDAP port.
+// [MS-ADTS] 5.1.1.2: Active Directory authenticates a client certificate at
+// the LDAPS handshake and rejects an EXTERNAL bind there; over StartTLS an
+// EXTERNAL bind maps the certificate.
+func (l *labDir) viaStartTLS() *labDir {
+	c := *l
+	c.uri, c.startTLS = l.plainURI, true
+	return &c
+}
+
 func (l *labDir) bindExternal() directory.Bind {
 	return directory.Bind{Mechanism: "external", TLSCertFile: l.d.pki.brokerCert, TLSKeyFile: l.d.pki.brokerKey}
 }
@@ -590,7 +601,7 @@ func (l *labDir) config(mode directory.Nested, groupsBase string, bind directory
 		m.Attribute = m.Kind.DefaultAttribute()
 	}
 	return directory.Config{
-		Servers: []directory.Server{{URI: l.uri, Priority: 100}}, CAFile: l.d.pki.caFile, Bind: bind,
+		Servers: []directory.Server{{URI: l.uri, Priority: 100, StartTLS: l.startTLS}}, CAFile: l.d.pki.caFile, Bind: bind,
 		BaseDN: l.baseDN, GroupsBaseDN: groupsBase, UserFilter: l.userFilter, GroupFilter: l.groupFilter,
 		PrincipalAttribute: "mail", UsernameAttribute: l.usernameAttr, GroupNameAttribute: "cn", MemberAttribute: "member",
 		Mapping: m, Nested: mode, MaxDepth: 16, QueryTimeout: 15 * time.Second, HealthInterval: 30 * time.Second,
