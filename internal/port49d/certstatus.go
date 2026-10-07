@@ -154,6 +154,18 @@ func anchorCoverLine(a namedAnchor, cfg certstatus.Config, onUnavailable string)
 		"or sync it to a file: source", subj, a.key, outcome)
 }
 
+// intermediateCoverLine is what the start says of a CRL signer nothing
+// covers (uncoveredIssuers), for both daemons: what happens to its
+// certificates follows on_unavailable, as anchorCoverLine's does.
+func intermediateCoverLine(subject, onUnavailable string) string {
+	outcome := "will be refused (503, retried)"
+	if onUnavailable == "allow" {
+		outcome = "will be admitted with their revocation status unchecked (on_unavailable: allow)"
+	}
+	return fmt.Sprintf("broker: certificate status: certificates issued by %s %s: nothing covers %s itself; "+
+		"name the root CA's CRL", subject, outcome, subject)
+}
+
 // uncoveredIssuers names each CRL signer other than the anchor whose own
 // status nothing can establish: no source's issuer_file is the anchor and
 // OCSP is off. Every certificate it issued is then Unknown, and refused

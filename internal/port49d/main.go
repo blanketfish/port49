@@ -1075,8 +1075,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 					continue
 				}
 				for _, subject := range uncoveredIssuers(ccfg, a.cert) { // re-check R3
-					fmt.Fprintf(stderr, "port49d: broker: certificate status: certificates issued by %s will be refused: "+
-						"nothing covers %s itself; name the root CA's CRL\n", subject, subject)
+					fmt.Fprintf(stderr, "port49d: %s\n", intermediateCoverLine(subject, cs.OnUnavailable))
 				}
 			}
 			brk.CertStatus, brk.OnUnavailable = checker, cs.OnUnavailable

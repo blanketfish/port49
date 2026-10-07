@@ -496,8 +496,7 @@ func runBroker(parent context.Context, cfgPath string) error {
 				continue
 			}
 			for _, subject := range uncoveredIssuers(ccfg, a.cert) { // re-check R3
-				brokerSay("broker: certificate status: certificates issued by %s will be refused: nothing covers %s "+
-					"itself; name the root CA's CRL", subject, subject)
+				brokerSay("%s", intermediateCoverLine(subject, cs.OnUnavailable))
 			}
 		}
 		brk.CertStatus, brk.OnUnavailable = checker, cs.OnUnavailable
