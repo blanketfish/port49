@@ -217,7 +217,13 @@ func (l *labDir) l44Binds(t *testing.T, ev *evidenceLog) string {
 			t.Errorf("L44 %s: no keytab (%s); the cell is INVALID (R6)", label, noKeytab)
 			return fmt.Sprintf("| %s | INVALID (R6): no keytab: `%s` | n/a | — |\n", what, l44MDCell(noKeytab))
 		}
-		return l.tryBind(t, ev, label, l.bindGSSAPI(), "").row(what)
+		c := l.tryBind(t, ev, label, l.bindGSSAPI(), "")
+		c.text = winScrub(c.text, l.l44Secrets()...)
+		row, invalid := l44GSSAPIRow(what, c)
+		if invalid != "" {
+			t.Errorf("L44 %s: %s; the cell is INVALID (R6)", label, invalid)
+		}
+		return row
 	}
 	var b strings.Builder
 	b.WriteString("\n### Binds\n\n| mechanism | outcome | LDAP result | time |\n|---|---|---|---|\n")
@@ -784,6 +790,29 @@ func l44ConnFailed(c l43Cell) string {
 		return ""
 	}
 	return "the connection failed before the bind (TLS, StartTLS or a timeout): " + c.text
+}
+
+// l44GSSAPIFailed is why a refused GSSAPI cell is no refusal, or "" when it is
+// one: AD's answer to the bind (port49's own bind error with a code from 1 to
+// 199) or the KDC refusing the principal (directory.ErrBindRefused). A KDC that
+// does not answer, a timeout and a network error are the setup failing.
+func l44GSSAPIFailed(c l43Cell) string {
+	if c.kdcRefused || (c.fromBind && c.code > 0 && c.code < 200) {
+		return ""
+	}
+	return "the connection or the KDC failed before the bind: " + c.text
+}
+
+// l44GSSAPIRow is a GSSAPI cell's Binds row and, when the cell is INVALID
+// (R6), why. c.text arrives scrubbed.
+func l44GSSAPIRow(what string, c l43Cell) (string, string) {
+	if c.ok || c.atLoad {
+		return c.row(what), ""
+	}
+	if why := l44GSSAPIFailed(c); why != "" {
+		return fmt.Sprintf("| %s | INVALID (R6): %s | %d | %s |\n", what, l44MDCell(why), c.code, c.took.Round(time.Millisecond)), why
+	}
+	return c.row(what), ""
 }
 
 // l44ExtRow is an EXTERNAL cell in the Binds table.

@@ -2250,6 +2250,53 @@ func TestL44ConnFailed(t *testing.T) {
 	}
 }
 
+// A GSSAPI cell is a refusal only when AD answered the bind with a code or
+// port49's own KDC classification says the principal was refused; a KDC that
+// does not answer, a timeout or a network error is INVALID, as for EXTERNAL.
+func TestL44GSSAPIFailed(t *testing.T) {
+	// The shapes conn.go's bind returns: the directory's answer as an
+	// *ldap.Error naming the mechanism; the KDC refusing the principal wrapped
+	// in ErrBindRefused; a KDC that does not answer as the flattened gokrb5
+	// error under "bind gssapi as ...", which carries no LDAP code.
+	bindErr := func(code uint16, cause string) error {
+		return &ldap.Error{ResultCode: code, Err: fmt.Errorf("bind gssapi as port49@CORP.LAB: %s", cause)}
+	}
+	for name, tc := range map[string]struct {
+		err error
+		bad bool
+	}{
+		"AD refusal 49": {bindErr(49, "LDAP result 49"), false},
+		"AD refusal 8":  {bindErr(8, "LDAP result 8"), false},
+		"KDC refused the principal": {fmt.Errorf("bind gssapi as port49@CORP.LAB refused: %w (%v)",
+			directory.ErrBindRefused, errors.New("[Root cause: KDC_Error] KRB5KDC_ERR_PREAUTH_FAILED")), false},
+		"KDC does not answer": {fmt.Errorf("bind gssapi as port49@CORP.LAB: %w",
+			errors.New("[Root cause: Networking_Error] dial tcp 127.0.0.1:30088: connect: connection refused")), true},
+		"network error code":              {ldap.NewError(ldap.ErrorNetwork, errors.New("connection reset")), true},
+		"bind client code":                {bindErr(200, "LDAP result 200: tls: handshake failure"), true},
+		"deadline in the bind":            {fmt.Errorf("bind gssapi as port49@CORP.LAB: %w", context.DeadlineExceeded), true},
+		"deadline, wrapped by the dialer": {fmt.Errorf("dial: %w", context.DeadlineExceeded), true},
+	} {
+		c := l43Cell{code: ldapCode(tc.err), text: tc.err.Error(), fromBind: l44FromBind(tc.err, "gssapi"),
+			kdcRefused: errors.Is(tc.err, directory.ErrBindRefused)}
+		if got := l44GSSAPIFailed(c); (got != "") != tc.bad {
+			t.Errorf("%s: %q (text %q)", name, got, c.text)
+		}
+		row, invalid := l44GSSAPIRow("what", c)
+		if tc.bad && (invalid == "" || !strings.Contains(row, "INVALID (R6): the connection or the KDC failed before the bind")) {
+			t.Errorf("%s: row %q, invalid %q", name, row, invalid)
+		}
+		if !tc.bad && (invalid != "" || strings.Contains(row, "INVALID")) {
+			t.Errorf("%s: a refusal read as INVALID: %q", name, row)
+		}
+	}
+	if !strings.Contains(l44Func(t, "l44Binds"), "l44GSSAPIRow(") {
+		t.Error("l44Binds does not judge a failed GSSAPI bind with l44GSSAPIRow")
+	}
+	if !strings.Contains(l44L43Src(t), "errors.Is(err, directory.ErrBindRefused)") {
+		t.Error("tryBind does not record the KDC's own refusal")
+	}
+}
+
 func l44L43Src(t *testing.T) string {
 	t.Helper()
 	b, err := os.ReadFile("l43_test.go")

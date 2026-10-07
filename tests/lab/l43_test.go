@@ -40,6 +40,9 @@ type l43Cell struct {
 	// is "bind <mech> as ...", and not a failure before the bind (the network,
 	// TLS, StartTLS) or a timeout. Only such an error is the directory refusing.
 	fromBind bool
+	// kdcRefused: the error is port49's classification of the KDC refusing the
+	// principal (directory.ErrBindRefused), the GSSAPI refusal that has no code.
+	kdcRefused bool
 }
 
 // l44FromBind reports whether err is port49's bind error for mech (conn.go's
@@ -84,6 +87,7 @@ func (l *labDir) tryBind(t *testing.T, ev *evidenceLog, label string, bind direc
 	ev.bind(label, err, cell.took)
 	if err != nil {
 		cell.text, cell.code, cell.fromBind = oneLineMax(err.Error(), 300), ldapCode(err), l44FromBind(err, string(bind.Mechanism))
+		cell.kdcRefused = errors.Is(err, directory.ErrBindRefused)
 		// Every refusal is said with the mechanism and, when the directory
 		// gave one, the code (port49's side of the claim).
 		if !strings.Contains(err.Error(), "bind "+string(bind.Mechanism)+" as ") {
