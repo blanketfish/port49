@@ -80,7 +80,7 @@ var winScripts = map[string][]string{
 	"reset": {"port49_password", "alice_altsecid"}, "adcs": nil, "ldaps": {"step", "cert_pem", "lab_ca_pem"},
 	"keytab": {"port49_password"}, "trust": {"ca_pem", "name"}, "issue": {"csr_pem", "template"},
 	"enroll_as": {"csr_pem", "user"}, "set_attr": {"dn", "attribute", "values"}, "registry": {"name", "value"},
-	"service": {"name", "state"}, "events": {"since"}, "facts": nil,
+	"service": {"name", "state", "restart_after"}, "events": {"since"}, "facts": nil,
 }
 
 // winSecretParams are the parameters that carry a secret: no script may
@@ -925,17 +925,26 @@ func (w *winDC) run(t *testing.T, name string, params map[string]any, within tim
 	}
 }
 
-// service stops or starts the DC's KDC (service.ps1), fatal unless it
-// reaches the state asked.
-func (w *winDC) service(t *testing.T, name, state string) {
+// winKDCStop is what service.ps1's stop answers: the KDC's state, when it
+// stopped, and when the task it registered will start it again (all on the
+// DC's clock).
+type winKDCStop struct {
+	Status    string `json:"status"`
+	StoppedAt string `json:"stopped_at"`
+	StartAt   string `json:"start_at"`
+}
+
+// stopKDC stops the DC's KDC (service.ps1), fatal unless it stopped. The stop
+// registers its own start restartAfter later: an SSH logon fails while the
+// KDC is down, so nothing may call the DC until then.
+func (w *winDC) stopKDC(t *testing.T, restartAfter time.Duration) winKDCStop {
 	t.Helper()
-	var r struct {
-		Status string `json:"status"`
+	var r winKDCStop
+	w.run(t, "service", map[string]any{"name": "Kdc", "state": "stop", "restart_after": int(restartAfter / time.Second)}, 5*time.Minute, &r)
+	if r.Status != "Stopped" {
+		t.Fatalf("windows: Kdc is %s after stop, want Stopped", r.Status)
 	}
-	w.run(t, "service", map[string]any{"name": name, "state": state}, 5*time.Minute, &r)
-	if want := map[string]string{"stop": "Stopped", "start": "Running"}[state]; r.Status != want {
-		t.Fatalf("windows: %s is %s after %s, want %s", name, r.Status, state, want)
-	}
+	return r
 }
 
 // scrubbedTail is raw's last n bytes with the run's secrets scrubbed first:

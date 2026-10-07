@@ -1838,9 +1838,86 @@ func l44Func(t *testing.T, name string) string {
 	return rest
 }
 
-// OR-1 stops the KDC, and the start of it needs an SSH logon the KDC's absence
-// may break: it runs after everything else needs the KDC, its start is
-// non-fatal, and a deferred restart is registered before the stop (fix round 1, I1).
+// An SSH logon to the DC fails while its KDC is down, so the start cannot come
+// over SSH. service.ps1's stop registers a one-shot SYSTEM task that starts the
+// KDC, before it stops it, and throws (leaving the KDC up) if it cannot; its
+// check state, run once SSH answers, reports the task and removes it.
+func TestWindowsServiceScriptSchedulesItsOwnStart(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("directory", "windows", "scripts", "service.ps1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	reg, stop := strings.Index(s, "Register-ScheduledTask"), strings.Index(s, "Stop-Service Kdc")
+	if reg < 0 || stop < 0 || reg > stop {
+		t.Errorf("the start task must be registered before the KDC is stopped: register at %d, stop at %d", reg, stop)
+	}
+	for _, want := range []string{`NT AUTHORITY\SYSTEM`, "$restart_after", "-ne 'Kdc'", "'check'", "Unregister-ScheduledTask",
+		"LastTaskResult", "task_left", "stopped_at", "C:\\l44\\kdc-start.ps1", "Start-Service Kdc"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("service.ps1 lacks %q", want)
+		}
+	}
+	if strings.Contains(s, "$state -eq 'start'") {
+		t.Error("service.ps1 still has a start state, which needs the SSH logon the stopped KDC refuses")
+	}
+	if !regexp.MustCompile(`\$restart_after -lt \d+\) \{ throw`).MatchString(s) {
+		t.Error("service.ps1 does not refuse a restart_after too short to outlast the stop")
+	}
+}
+
+// OR-1's KDC-stopped cell is valid only if its bind ended well before the
+// KDC's scheduled start: a bind that ran into the start shows nothing.
+func TestL44KDCTooNear(t *testing.T) {
+	for name, tc := range map[string]struct {
+		elapsed time.Duration
+		bad     bool
+	}{
+		"quick":           {2 * time.Second, false},
+		"at the margin":   {l44KDCDown - l44KDCMargin, false},
+		"past the margin": {l44KDCDown - l44KDCMargin + time.Second, true},
+		"after the start": {l44KDCDown + time.Second, true},
+	} {
+		if got := l44KDCTooNear(tc.elapsed); (got != "") != tc.bad {
+			t.Errorf("%s: %q", name, got)
+		}
+	}
+}
+
+// The KDC counts as recovered when check says it is Running, the task ended
+// with 0, the task is gone, and the task ran no earlier than the stop (the
+// Task Scheduler cuts a trigger to the whole second).
+func TestL44KDCRecovered(t *testing.T) {
+	ok := l44KDCCheck{Status: "Running", TaskRan: "2026-10-07T08:31:20.0000000Z", TaskResult: "0"}
+	const stopped = "2026-10-07T08:30:21.6300000Z"
+	for name, tc := range map[string]struct {
+		mod func(*l44KDCCheck)
+		bad bool
+	}{
+		"recovered":           {func(*l44KDCCheck) {}, false},
+		"stopped":             {func(c *l44KDCCheck) { c.Status = "Stopped" }, true},
+		"task failed":         {func(c *l44KDCCheck) { c.TaskResult = "1" }, true},
+		"task never ran":      {func(c *l44KDCCheck) { c.TaskResult = "" }, true},
+		"task left":           {func(c *l44KDCCheck) { c.TaskLeft = true }, true},
+		"ran before stop":     {func(c *l44KDCCheck) { c.TaskRan = "2026-10-07T08:00:00.0000000Z" }, true},
+		"ran at the stop":     {func(c *l44KDCCheck) { c.TaskRan = "2026-10-07T08:30:20.0000000Z" }, false},
+		"ran time unreadable": {func(c *l44KDCCheck) { c.TaskRan = "never" }, true},
+	} {
+		c := ok
+		tc.mod(&c)
+		if got := l44KDCRecovered(c, stopped); (got != "") != tc.bad {
+			t.Errorf("%s: %q", name, got)
+		}
+	}
+	if got := l44KDCRecovered(ok, ""); got != "" {
+		t.Errorf("with no stop time to compare, a clean check is recovered: %q", got)
+	}
+}
+
+// OR-1 stops the KDC, and an SSH logon fails while it is down: the stop's own
+// task starts it, OR-1 runs after everything else needs the KDC, its wait for
+// the KDC is non-fatal and calls nothing before the scheduled start, and a
+// deferred wait is registered before the stop (fix round 1, I1).
 func TestL44OR1RunsLastAndStartsNonFatally(t *testing.T) {
 	top := l44Func(t, "TestL44WindowsAD")
 	or1, matrix := strings.Index(top, "l44OR1("), strings.Index(top, "l44Matrix(")
@@ -1851,20 +1928,35 @@ func TestL44OR1RunsLastAndStartsNonFatally(t *testing.T) {
 		t.Error("a section runs after OR-1")
 	}
 	b, _ := os.ReadFile("l44_test.go")
-	if strings.Contains(string(b), `service(t, "Kdc", "start")`) {
-		t.Error("the KDC is started with w.service, which is fatal")
+	if strings.Contains(string(b), `"state": "start"`) || strings.Contains(string(b), "l44StartKDC") {
+		t.Error("the KDC is started over SSH, which its stop breaks: the stop's own task starts it")
 	}
-	start := l44Func(t, "l44StartKDC")
-	if !strings.Contains(start, "w.try(") || strings.Contains(start, "Fatal") || strings.Contains(start, "w.run(") {
-		t.Error("l44StartKDC must use w.try and never fail the test fatally")
+	await := l44Func(t, "l44AwaitKDC")
+	if !strings.Contains(await, "w.try(") || strings.Contains(await, "Fatal") || strings.Contains(await, "w.run(") {
+		t.Error("l44AwaitKDC must use w.try and never fail the test fatally")
+	}
+	// Nothing calls the DC from the stop to the scheduled start: the wait comes first.
+	if w, p := strings.Index(await, "time.Sleep(time.Until(t0.Add(l44KDCDown"), strings.Index(await, "w.try("); w < 0 || p < 0 || w > p {
+		t.Errorf("l44AwaitKDC must wait out l44KDCDown before it calls the DC: wait at %d, call at %d", w, p)
 	}
 	body := l44Func(t, "l44OR1")
-	d, s := strings.Index(body, "defer "), strings.Index(body, `"stop"`)
+	d, s := strings.Index(body, "defer "), strings.Index(body, "w.stopKDC(")
 	if d < 0 || s < 0 || d > s {
 		t.Errorf("the deferred restart must be registered before the stop: defer at %d, stop at %d", d, s)
 	}
-	if !strings.Contains(body, "could not be started again") {
-		t.Error("a failed start does not mark e6 INVALID")
+	// e5 is the only DC call between the stop and the wait, and it is measured.
+	e5, aw := strings.Index(body, `"external, KDC stopped"`), strings.LastIndex(body, "l44AwaitKDC(t, t0")
+	if e5 < s || aw < e5 {
+		t.Errorf("OR-1 order must be stop, e5, await: stop %d, e5 %d, await %d", s, e5, aw)
+	}
+	if between := body[s:aw]; strings.Contains(between, "w.try(") || strings.Contains(between, "w.run(") || strings.Contains(between, "setAltSec(") {
+		t.Error("something calls the DC between the stop and the scheduled start")
+	}
+	if !strings.Contains(body, "l44KDCTooNear(") {
+		t.Error("OR-1 does not mark e5 INVALID when its bind ends too near the scheduled start")
+	}
+	if !strings.Contains(body, "the KDC did not come back") {
+		t.Error("a KDC that does not come back does not mark e6 INVALID")
 	}
 }
 
@@ -1985,20 +2077,20 @@ func TestStartWindowsDCLocksFirst(t *testing.T) {
 	}
 }
 
-// After the KDC start in OR-1, a fatal SSH call (run, service, setAltSec) may
+// After the KDC wait in OR-1, a fatal SSH call (run, stopKDC, setAltSec) may
 // run only in the branch where the KDC came back: otherwise it loses the note.
 func TestL44OR1NothingFatalAfterAFailedStart(t *testing.T) {
 	body := l44Func(t, "l44OR1")
-	i := strings.LastIndex(body, "l44StartKDC(t); err != nil") // the backstop defer has its own
+	i := strings.LastIndex(body, "l44AwaitKDC(t, t0") // the backstop defer has its own
 	if i < 0 {
-		t.Fatal("no l44StartKDC call in l44OR1")
+		t.Fatal("no l44AwaitKDC call in l44OR1")
 	}
 	after := body[i:]
 	back := strings.Index(after, "} else {")
 	if back < 0 {
 		t.Fatal("no KDC-is-back branch")
 	}
-	for _, call := range []string{"w.run(", "w.service(", "setAltSec("} {
+	for _, call := range []string{"w.run(", "w.stopKDC(", "setAltSec("} {
 		for off, rest := 0, after; ; {
 			j := strings.Index(rest, call)
 			if j < 0 {
@@ -2015,7 +2107,7 @@ func TestL44OR1NothingFatalAfterAFailedStart(t *testing.T) {
 	}
 	// the cleanup after the branch must not call them either
 	if end := strings.Index(after[back:], "\n\t}\n"); end >= 0 {
-		for _, call := range []string{"w.run(", "w.service(", "setAltSec("} {
+		for _, call := range []string{"w.run(", "w.stopKDC(", "setAltSec("} {
 			if strings.Contains(after[back+end:], call) {
 				t.Errorf("%s runs after the branches", call)
 			}

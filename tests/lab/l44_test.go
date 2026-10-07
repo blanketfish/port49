@@ -114,7 +114,7 @@ func TestL44WindowsAD(t *testing.T) {
 	obs.WriteString(dc.l44SID(t, ev))
 	obs.WriteString(dc.mappingChecks(t, ev))
 	obs.WriteString(dc.l44Matrix(t, ev))
-	obs.WriteString(dc.l44OR1(t, ev)) // last: its KDC restart needs a logon the stopped KDC may break
+	obs.WriteString(dc.l44OR1(t, ev)) // last: its KDC is down for l44KDCDown, with no SSH logon to the DC
 	ev.assertClean(t, dc.l44Secrets()...)
 	writeResult(t, d, "L44", dc, l44Claim, dc.version(t), obs.String(), "tests/lab/evidence/L44-"+platWindows+".json")
 }
@@ -295,19 +295,26 @@ func (l *labDir) l44Binds(t *testing.T, ev *evidenceLog) string {
 // needs, stopped) answers a mapped certificate with the same code an unmapped
 // one gets, that code cannot tell "the broker's certificate is refused" from
 // "this DC is broken". The cell is valid only when the same mapped bind
-// succeeds with the KDC up, just before and just after. It runs last: the
-// start needs an SSH logon the stopped KDC may break, and nothing after it
-// needs the KDC. A start that fails is the cell's INVALID, never the run's.
+// succeeds with the KDC up, just before and just after, and its own bind ended
+// well before the KDC's scheduled start. It runs last: an SSH logon fails
+// while the KDC is down, so the stop registers a task that starts it again
+// l44KDCDown later, nothing calls the DC until then, and nothing after it
+// needs the KDC. A KDC that does not come back is the cell's INVALID, never
+// the run's.
 func (l *labDir) l44OR1(t *testing.T, ev *evidenceLog) string {
 	t.Helper()
 	w := l.win
 	brokerDN := "CN=port49,OU=Svc," + dirBase
 	adcsExt := directory.Bind{Mechanism: "external", TLSCertFile: w.certs.brokerCertFile, TLSKeyFile: w.certs.brokerKeyFile}
-	stopped := false
-	defer func() { // the backstop: a fatal between the stop and the start still starts it
+	var (
+		t0      time.Time
+		stopped bool
+		stop    winKDCStop
+	)
+	defer func() { // the backstop: a fatal between the stop and the wait still waits for the start
 		if stopped {
-			if err := l.l44StartKDC(t); err != nil {
-				t.Errorf("L44 OR-1: the KDC could not be started again: %s", l.l44Err(err))
+			if _, err := l.l44AwaitKDC(t, t0, stop.StoppedAt); err != nil {
+				t.Errorf("L44 OR-1: the KDC did not come back: %s", l.l44Err(err))
 			}
 		}
 	}()
@@ -316,20 +323,28 @@ func (l *labDir) l44OR1(t *testing.T, ev *evidenceLog) string {
 	e0 := l.l44External(t, ev, "external, KDC up", adcsExt, true)
 	ev.mark("L44 OR-1 external, mapped, the DC's KDC stopped")
 	stopped = true
-	w.service(t, "Kdc", "stop")
+	t0 = time.Now()
+	stop = w.stopKDC(t, l44KDCDown)
 	e5 := l.l44External(t, ev, "external, KDC stopped", adcsExt, true)
+	e5Ended := time.Since(t0)
 	var e6 l44Ext
-	if err := l.l44StartKDC(t); err != nil {
-		e6 = l44Ext{l43Cell: l43Cell{mech: "external", code: -1}, invalid: "the KDC could not be started again: " + l.l44Err(err)}
+	var check l44KDCCheck
+	if c, err := l.l44AwaitKDC(t, t0, stop.StoppedAt); err != nil {
+		e6 = l44Ext{l43Cell: l43Cell{mech: "external", code: -1}, invalid: "the KDC did not come back: " + l.l44Err(err)}
 		t.Errorf("L44 OR-1: %s; the cell is INVALID (R6)", e6.invalid)
 		t.Logf("L44 OR-1: the broker's altSecurityIdentities is left set; the DC is destroyed at teardown")
 	} else {
-		stopped = false
+		stopped, check = false, c
 		ev.mark("L44 OR-1 external, mapped, the DC's KDC started again")
 		e6 = l.l44External(t, ev, "external, KDC started again", adcsExt, true)
 		// Only with the KDC back: a failed SSH call here is fatal and would lose the
 		// note. Otherwise the mapping stays; the DC is destroyed at teardown.
 		w.setAltSec(t, brokerDN, "")
+	}
+	if e5.invalid == "" {
+		if e5.invalid = l44KDCTooNear(e5Ended); e5.invalid != "" {
+			t.Errorf("L44 external, KDC stopped: %s; the cell is INVALID (R6)", e5.invalid)
+		}
 	}
 	if e5.invalid == "" {
 		if e5.invalid = l44KDCDownInvalid(e0, e6); e5.invalid != "" {
@@ -341,6 +356,12 @@ func (l *labDir) l44OR1(t *testing.T, ev *evidenceLog) string {
 	b.WriteString(l44ExtRow("SASL EXTERNAL over LDAPS, mapped, the KDC up (e5's control, before)", e0))
 	b.WriteString(l44ExtRow("SASL EXTERNAL over LDAPS, mapped, **the DC's KDC stopped**", e5))
 	b.WriteString(l44ExtRow("SASL EXTERNAL over LDAPS, mapped, the KDC started again (e5's control, after)", e6))
+	if check.Now != "" {
+		fmt.Fprintf(&b, "\nThe KDC's outage, on the DC's clock: stopped %s, its start task scheduled for %s and run at %s, "+
+			"found running at %s (result %s). An SSH logon fails while the KDC is down, so the stop registered that task and "+
+			"nothing called the DC until it had run. e5's bind ended %s after the stop.\n",
+			stop.StoppedAt, stop.StartAt, check.TaskRan, check.Now, check.TaskResult, e5Ended.Round(time.Millisecond))
+	}
 	return b.String()
 }
 
@@ -789,19 +810,86 @@ func (l *labDir) l44GuardRegistry(t *testing.T, name string, installed int) func
 	}
 }
 
-// l44StartKDC starts the DC's KDC and says why it could not, never failing the
-// test: the SSH logon it needs is unmeasured with the KDC down (OR-1).
-func (l *labDir) l44StartKDC(t *testing.T) error {
+// l44KDCDown is how long OR-1 keeps the KDC down: the scheduled start fires
+// that long after the stop registered it. l44KDCMargin is how close to it e5's
+// bind may end.
+const (
+	l44KDCDown   = 90 * time.Second
+	l44KDCMargin = 10 * time.Second
+)
+
+// l44KDCTooNear is why e5, which began after the stop and ended elapsed after
+// t0 (taken just before it), shows nothing: its bind ended too near the KDC's
+// scheduled start to have run against a stopped KDC. "" when it is valid.
+func l44KDCTooNear(elapsed time.Duration) string {
+	if elapsed > l44KDCDown-l44KDCMargin {
+		return fmt.Sprintf("the bind ended %s after the stop, too near the KDC's scheduled start (%s)",
+			elapsed.Round(time.Millisecond), l44KDCDown)
+	}
+	return ""
+}
+
+// l44KDCCheck is what service.ps1's check answers, on the DC's clock.
+type l44KDCCheck struct {
+	Status     string `json:"status"`
+	Now        string `json:"now"`
+	TaskRan    string `json:"task_ran"`
+	TaskResult string `json:"task_result"`
+	TaskLeft   bool   `json:"task_left"`
+}
+
+// l44KDCRecovered is why a check does not prove the KDC came back, or "" when
+// it does: Running, started by a task that ended with 0, the task gone, and
+// that task run no earlier than the stop (stoppedAt, "" if unknown, less two
+// seconds: the Task Scheduler cuts its trigger to the whole second).
+func l44KDCRecovered(c l44KDCCheck, stoppedAt string) string {
+	switch {
+	case c.Status != "Running":
+		return "the KDC is " + c.Status
+	case c.TaskResult != "0":
+		return "the start task's result is " + strconv.Quote(c.TaskResult)
+	case c.TaskLeft:
+		return "the start task could not be removed"
+	}
+	if stoppedAt == "" {
+		return ""
+	}
+	stopped, err := time.Parse(time.RFC3339Nano, stoppedAt)
+	if err != nil {
+		return "the stop time is unreadable: " + err.Error()
+	}
+	ran, err := time.Parse(time.RFC3339Nano, c.TaskRan)
+	if err != nil {
+		return "the start task's run time is unreadable: " + err.Error()
+	}
+	if ran.Before(stopped.Add(-2 * time.Second)) {
+		return "the start task last ran before the stop"
+	}
+	return ""
+}
+
+// l44AwaitKDC waits out the KDC's scheduled start (t0 is the host's clock just
+// before the stop), then asks service.ps1's check until the KDC is proved back
+// or the start is three minutes late. It calls nothing before the start: no
+// SSH logon works while the KDC is down. A failed logon after it is expected,
+// not an error. It never fails the test, and returns the last check it read.
+func (l *labDir) l44AwaitKDC(t *testing.T, t0 time.Time, stoppedAt string) (l44KDCCheck, error) {
 	t.Helper()
 	w := l.win
-	var r struct {
-		Status string `json:"status"`
+	time.Sleep(time.Until(t0.Add(l44KDCDown + 2*time.Second)))
+	deadline := t0.Add(l44KDCDown + 3*time.Minute)
+	var last l44KDCCheck
+	why := "no check answered"
+	for {
+		var r l44KDCCheck
+		if err := w.try(t, "service", map[string]any{"name": "Kdc", "state": "check"}, time.Minute, &r); err != nil {
+			why = "no check answered: " + l.l44Err(err)
+		} else if last, why = r, l44KDCRecovered(r, stoppedAt); why == "" {
+			return last, nil
+		}
+		if time.Now().After(deadline) {
+			return last, errors.New(why)
+		}
+		time.Sleep(10 * time.Second)
 	}
-	if err := w.try(t, "service", map[string]any{"name": "Kdc", "state": "start"}, 5*time.Minute, &r); err != nil {
-		return err
-	}
-	if r.Status != "Running" {
-		return fmt.Errorf("the KDC is %s after the start", r.Status)
-	}
-	return nil
 }
