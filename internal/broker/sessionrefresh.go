@@ -124,7 +124,7 @@ func (b *Broker) refresh(w http.ResponseWriter, r *http.Request) {
 	rv, revoked, err := b.revocation(ctx, principal, cred, legacy)
 	switch {
 	case err != nil:
-		b.refreshStoreError(w, now, principal, cred, refreshEvery,
+		b.refreshStoreError(w, now, principal, cred, nil, refreshEvery,
 			"the broker could not read the revocations in force, so it extended nothing; try again")
 		return
 	case revoked:
@@ -176,7 +176,7 @@ func (b *Broker) refresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		b.refreshStoreError(w, at, principal, cred, refreshEvery, partialRefreshText) // fixed text (M5)
+		b.refreshStoreError(w, at, principal, cred, nil, refreshEvery, partialRefreshText) // fixed text (M5)
 		return
 	}
 	// The marks again, after the extension's writes, as a mint reads them
@@ -184,7 +184,7 @@ func (b *Broker) refresh(w http.ResponseWriter, r *http.Request) {
 	// while this refresh extended is answered, not reported as extended.
 	switch rv, revoked, err := b.revocation(ctx, principal, cred, legacy); {
 	case err != nil:
-		b.refreshStoreError(w, at, principal, cred, refreshEvery, partialRefreshText)
+		b.refreshStoreError(w, at, principal, cred, nil, refreshEvery, partialRefreshText)
 		return
 	case revoked:
 		b.Metrics.SessionRefreshes.WithLabelValues("refused").Inc()
@@ -205,10 +205,10 @@ const partialRefreshText = "the broker could not finish extending your live sess
 // mint's store error is answered. A non-zero retry is sent as Retry-After:
 // the connection's pacing, which a retry sooner would meet as a 429.
 func (b *Broker) refreshStoreError(w http.ResponseWriter, now time.Time, principal string, cred store.Credential,
-	retry time.Duration, text string) {
+	via *decision.OIDC, retry time.Duration, text string) {
 	b.Metrics.SessionRefreshes.WithLabelValues("store_error").Inc()
 	b.emit(decision.Record{TS: now, Event: decision.EventRefresh, Verdict: decision.VerdictDeny,
-		Reason: decision.StoreUnavailable, Principal: principal, Auth: &decision.Auth{Method: cred.Method}})
+		Reason: decision.StoreUnavailable, Principal: principal, Auth: &decision.Auth{Method: cred.Method, OIDC: via}})
 	if retry > 0 {
 		w.Header().Set("Retry-After", strconv.Itoa(int(retry/time.Second)))
 	}

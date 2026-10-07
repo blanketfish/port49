@@ -61,7 +61,7 @@ func (b *Broker) oidcChallenge(w http.ResponseWriter, r *http.Request) {
 	first, err := b.Store.PutOnce(ctx, paceKey(c.principal), nil, refreshEvery)
 	switch {
 	case err != nil:
-		b.refreshStoreError(w, now, c.principal, c.cred, 0, "the broker could not issue a challenge; retry shortly")
+		b.refreshStoreError(w, now, c.principal, c.cred, c.auth().OIDC, 0, "the broker could not issue a challenge; retry shortly")
 		return
 	case !first:
 		b.Metrics.SessionRefreshes.WithLabelValues("too_soon").Inc()
@@ -77,7 +77,7 @@ func (b *Broker) oidcChallenge(w http.ResponseWriter, r *http.Request) {
 	nonce := base64.RawURLEncoding.EncodeToString(raw)
 	rec, _ := json.Marshal(challengeRec{Principal: c.principal, Issuer: c.oidc.Issuer, IssuedAt: now})
 	if ok, err := b.Store.PutOnce(ctx, challengeKey(nonce), rec, oidcChallengeTTL); err != nil || !ok {
-		b.refreshStoreError(w, now, c.principal, c.cred, 0, "the broker could not issue a challenge; retry shortly")
+		b.refreshStoreError(w, now, c.principal, c.cred, c.auth().OIDC, 0, "the broker could not issue a challenge; retry shortly")
 		return
 	}
 	writeJSON(w, http.StatusOK, api.RefreshChallenge{Nonce: nonce,
@@ -124,8 +124,8 @@ func (b *Broker) oidcRefresh(w http.ResponseWriter, r *http.Request) {
 			"and answer it within 5m, once")
 		return
 	case err != nil:
-		b.refreshStoreError(w, now, c.principal, c.cred, refreshEvery, "the broker could not read your challenge; "+
-			"ask for another and retry")
+		b.refreshStoreError(w, now, c.principal, c.cred, c.auth().OIDC, refreshEvery, "the broker could not read your challenge; "+
+			"ask for a new challenge (run `port49 refresh` again)")
 		return
 	}
 	var ch challengeRec
@@ -139,8 +139,8 @@ func (b *Broker) oidcRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := b.noteOwner(ctx, *c.oidc); err != nil {
-		b.refreshStoreError(w, now, c.principal, c.cred, refreshEvery, "the broker could not record your new "+
-			"session for a logout to find, so it extended nothing; retry")
+		b.refreshStoreError(w, now, c.principal, c.cred, c.auth().OIDC, refreshEvery, "the broker could not record your new "+
+			"session for a logout to find, so it extended nothing; ask for a new challenge (run `port49 refresh` again)")
 		return
 	}
 	dctx, dcancel := context.WithTimeout(r.Context(), b.memberBudget())
@@ -164,7 +164,7 @@ func (b *Broker) oidcRefresh(w http.ResponseWriter, r *http.Request) {
 		b.answerRefusal(w, r, dref)
 		return
 	case err != nil:
-		b.refreshStoreError(w, now, c.principal, c.cred, refreshEvery, partialRefreshText)
+		b.failedRefresh(ctx, w, now, c, rep)
 		return
 	}
 	// The marks and the logouts again, after the extension's writes, as on
@@ -177,37 +177,70 @@ func (b *Broker) oidcRefresh(w http.ResponseWriter, r *http.Request) {
 	}
 	switch {
 	case err != nil:
-		b.refreshStoreError(w, now, c.principal, c.cred, refreshEvery, partialRefreshText)
+		b.refreshStoreError(w, now, c.principal, c.cred, c.auth().OIDC, refreshEvery, oidcPartialRefreshText)
 	case revoked:
 		b.Metrics.SessionRefreshes.WithLabelValues("refused").Inc()
 		b.refuseRevokedAs(w, decision.EventRefresh, b.Now(), c.principal, c.cred, rv)
 	case out:
-		// A logout landed during the refresh (pre-flight I-2). Its passes may
-		// have run before the new sid was indexed, and a logout leaves no
-		// standing mark (Ruling 13), so what this refresh extended is marked
-		// here, by the new sid and context by context, before the answer.
-		at := b.Now()
-		var failed error
-		if b.Sessions != nil {
-			if _, err := b.Sessions.RevokeBySid(ctx, c.cred.Sid); err != nil {
-				failed = err
-			}
-		}
-		for _, s := range rep.Sessions {
-			if s.Outcome != "extended" {
-				continue
-			}
-			if _, err := b.revokeOwnContext(ctx, c.principal, s.Ref, at); err != nil && failed == nil {
-				failed = err
-			}
-		}
-		if failed != nil {
-			b.say("logout: a session %s's refresh extended could not be marked after a logout landed during it "+
-				"(%v); revoke the principal with port49 revoke", c.principal, failed)
-		}
+		b.markExtended(ctx, c, rep)
 		b.Metrics.SessionRefreshes.WithLabelValues("refused").Inc()
 		answerLoggedOut(w, l)
 	default:
 		writeJSON(w, http.StatusOK, rep.response(b.MaxSessionAge))
 	}
+}
+
+// oidcPartialRefreshText answers a refresh whose challenge is spent and whose
+// extension did not finish: a retry with the same token is refused, so the
+// text asks for a new challenge, not a retry.
+const oidcPartialRefreshText = "the broker could not finish extending your live sessions; some may have been " +
+	"extended; ask for a new challenge (run `port49 refresh` again) after Retry-After and it reports them all"
+
+// markExtended marks every context rep extended, context by context, after a
+// logout landed during the refresh (pre-flight I-2). The logout's passes may
+// have run before the new sid was indexed, and a logout leaves no standing
+// mark (Ruling 13), so what this refresh extended is marked here. A sid-less
+// token indexed nothing, and the loop does not need the index.
+func (b *Broker) markExtended(ctx context.Context, c caller, rep SessionRefreshReport) {
+	at := b.Now()
+	var failed error
+	for _, s := range rep.Sessions {
+		if s.Outcome != "extended" {
+			continue
+		}
+		if _, err := b.revokeOwnContext(ctx, c.principal, s.Ref, at); err != nil && failed == nil {
+			failed = err
+		}
+	}
+	if failed != nil {
+		b.say("logout: a session %s's refresh extended could not be marked after a logout landed during it "+
+			"(%v); revoke the principal with port49 revoke", c.principal, failed)
+	}
+}
+
+// failedRefresh answers a refresh whose extension failed part way. The
+// contexts already extended are checked against the logouts again as a
+// finished refresh's are (pre-flight I-2): the provider was answered 200 for
+// its logout and will not send it again.
+func (b *Broker) failedRefresh(ctx context.Context, w http.ResponseWriter, now time.Time, c caller,
+	rep SessionRefreshReport) {
+	extended := false
+	for _, s := range rep.Sessions {
+		extended = extended || s.Outcome == "extended"
+	}
+	if extended {
+		l, out, err := b.loggedOut(ctx, *c.oidc)
+		switch {
+		case err != nil:
+			b.say("logout: the logouts could not be read again after a refresh of %s failed part way (%v); a session "+
+				"it extended may have outlived a logout that landed during it; revoke the principal with port49 "+
+				"revoke if one did", c.principal, err)
+		case out:
+			b.markExtended(ctx, c, rep)
+			b.Metrics.SessionRefreshes.WithLabelValues("refused").Inc()
+			answerLoggedOut(w, l)
+			return
+		}
+	}
+	b.refreshStoreError(w, now, c.principal, c.cred, c.auth().OIDC, refreshEvery, oidcPartialRefreshText)
 }

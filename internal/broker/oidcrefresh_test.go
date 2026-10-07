@@ -3,11 +3,13 @@ package broker
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/oidc/oidctest"
 	"github.com/rhwendt/port49/internal/store"
 )
@@ -254,5 +256,175 @@ func TestAChallengeIsItsIssuersAlone(t *testing.T) {
 	if w := f.bearer(context.Background(), "POST", "/v1/refresh", "{}", other); w.Code != 401 ||
 		!strings.Contains(w.Body.String(), "refresh_challenge_missing") {
 		t.Fatalf("another issuer answering alice's challenge: %s", shown(w))
+	}
+}
+
+func (h hookStore) GetLogout(ctx context.Context, key string) (store.Logout, error) {
+	if f := h.before["GetLogout"]; f != nil {
+		if err := f(); err != nil {
+			return store.Logout{}, err
+		}
+	}
+	return h.Store.GetLogout(ctx, key)
+}
+
+// twoContexts adds alice's live context on nx1 to oidcSession's on leaf1.
+func twoContexts(t *testing.T, f *fixture) {
+	t.Helper()
+	at := f.b.Now().Add(-time.Hour)
+	f.liveContextAt(t, "nx1", "alice", alicePrincipal, "", at, at.Add(12*time.Hour))
+}
+
+// A refresh with no sid in its token indexes nothing: the per-context
+// marking alone ends what it extended, and the operator is told nothing
+// (review I1).
+func TestASidlessRefreshRacingALogoutSaysNothing(t *testing.T) {
+	f, tok, iss := oidcSession(t)
+	var said strings.Builder
+	f.b.Say = func(format string, args ...any) { said.WriteString(fmt.Sprintf(format, args...) + "\n") }
+	nonce := challenge(t, f, tok(nil))
+	f.advance(time.Minute)
+	f.b.Store = hookStore{Store: f.st, before: map[string]func() error{"RefreshContext": func() error {
+		return f.st.PutLogout(context.Background(), store.Logout{Key: store.OIDCKey(store.OIDCSub, iss, "sub-alice"),
+			At: f.b.Now()}, time.Hour)
+	}}}
+	w := f.bearer(context.Background(), "POST", "/v1/refresh", "{}", tok(map[string]any{"nonce": nonce,
+		"sid": nil, "auth_time": f.b.Now().Unix()}))
+	if w.Code != 401 || !strings.Contains(w.Body.String(), "credential_revoked") {
+		t.Fatalf("a sid-less refresh a logout landed during: %s", shown(w))
+	}
+	c, _ := f.st.GetContext(context.Background(), store.ContextKey{NAS: "leaf1", Username: "alice"})
+	if c.RevokedAt.IsZero() {
+		t.Fatal("a context the refresh extended outlived the logout")
+	}
+	if said.Len() != 0 {
+		t.Fatalf("the operator was told: %s", said.String())
+	}
+}
+
+// Review I2: a refresh that extends one context and fails on the next still
+// checks the logouts again, and marks what it extended.
+func TestAFailedRefreshStillHonoursALogout(t *testing.T) {
+	f, tok, iss := oidcSession(t)
+	twoContexts(t, f)
+	nonce := challenge(t, f, tok(nil))
+	f.advance(time.Minute)
+	calls := 0
+	f.b.Store = hookStore{Store: f.st, before: map[string]func() error{"RefreshContext": func() error {
+		calls++
+		if calls == 1 {
+			return f.st.PutLogout(context.Background(), store.Logout{Key: store.SidKey(iss, "s-second"), At: f.b.Now()},
+				time.Hour)
+		}
+		return store.ErrUnavailable
+	}}}
+	w := f.bearer(context.Background(), "POST", "/v1/refresh", "{}", tok(map[string]any{"nonce": nonce,
+		"sid": "s-second", "auth_time": f.b.Now().Unix()}))
+	if w.Code != 401 || !strings.Contains(w.Body.String(), "credential_revoked") {
+		t.Fatalf("a refresh that failed part way after a logout: %s", shown(w))
+	}
+	for _, nas := range []string{"leaf1", "nx1"} {
+		c, _ := f.st.GetContext(context.Background(), store.ContextKey{NAS: nas, Username: "alice"})
+		if c.AuthTime.After(f.b.Now().Add(-time.Hour)) && c.RevokedAt.IsZero() {
+			t.Fatalf("%s: a context the failed refresh extended outlived the logout", nas)
+		}
+	}
+}
+
+// A failed re-read says so, and the answer asks for a new challenge.
+func TestAFailedRefreshWhoseLogoutReadFailsSaysSo(t *testing.T) {
+	f, tok, _ := oidcSession(t)
+	twoContexts(t, f)
+	var said strings.Builder
+	f.b.Say = func(format string, args ...any) { said.WriteString(fmt.Sprintf(format, args...) + "\n") }
+	nonce := challenge(t, f, tok(nil))
+	f.advance(time.Minute)
+	calls, failed := 0, false
+	f.b.Store = hookStore{Store: f.st, before: map[string]func() error{
+		"RefreshContext": func() error {
+			if calls++; calls > 1 {
+				failed = true
+				return store.ErrUnavailable
+			}
+			return nil
+		},
+		"GetLogout": func() error {
+			if failed {
+				return store.ErrUnavailable
+			}
+			return nil
+		}}}
+	w := f.bearer(context.Background(), "POST", "/v1/refresh", "{}", tok(map[string]any{"nonce": nonce,
+		"sid": "s-second", "auth_time": f.b.Now().Unix()}))
+	if w.Code != 503 || !strings.Contains(w.Body.String(), "port49 refresh") || strings.Contains(w.Body.String(), "retry after") {
+		t.Fatalf("a refresh whose logout re-read failed: %s", shown(w))
+	}
+	if !strings.Contains(said.String(), "could not be read again") {
+		t.Fatalf("the operator was not told the logouts could not be re-read: %q", said.String())
+	}
+}
+
+// Review M1: a store failure after the challenge is spent asks for a new
+// challenge, and its record carries auth.oidc (M4).
+func TestAnOIDCRefreshStoreFailureAsksForANewChallenge(t *testing.T) {
+	f, tok, _ := oidcSession(t)
+	nonce := challenge(t, f, tok(nil))
+	f.advance(time.Minute)
+	f.b.Store = hookStore{Store: f.st, before: map[string]func() error{"RefreshContext": func() error {
+		return store.ErrUnavailable
+	}}}
+	w := f.bearer(context.Background(), "POST", "/v1/refresh", "{}", tok(map[string]any{"nonce": nonce,
+		"sid": "s-second", "auth_time": f.b.Now().Unix()}))
+	if w.Code != 503 || !strings.Contains(w.Body.String(), "port49 refresh") || strings.Contains(w.Body.String(), "retry after") {
+		t.Fatalf("%s", shown(w))
+	}
+	recs := eventsOf(f.records(t), decision.EventRefresh)
+	last := recs[len(recs)-1]
+	a, _ := last["auth"].(map[string]any)
+	if last["reason"] != string(decision.StoreUnavailable) || a == nil || a["oidc"] == nil {
+		t.Fatalf("the store failure's record: %v", last)
+	}
+}
+
+// Review M2: a challenge is answerable for 5m.
+func TestAChallengeExpiresAfterFiveMinutes(t *testing.T) {
+	f, tok, _ := oidcSession(t)
+	nonce := challenge(t, f, tok(nil))
+	f.advance(5*time.Minute + time.Second)
+	w := f.bearer(context.Background(), "POST", "/v1/refresh", "{}", tok(map[string]any{"nonce": nonce,
+		"auth_time": f.b.Now().Unix()}))
+	if w.Code != 401 || !strings.Contains(w.Body.String(), "refresh_challenge_missing") {
+		t.Fatalf("a challenge answered at 5m1s: %s", shown(w))
+	}
+}
+
+// Review M3: a refresh records its new session's owner for a logout to find.
+func TestARefreshRecordsTheNewSessionsOwner(t *testing.T) {
+	f, tok, iss := oidcSession(t)
+	nonce := challenge(t, f, tok(nil))
+	f.advance(time.Minute)
+	if w := f.bearer(context.Background(), "POST", "/v1/refresh", "{}", tok(map[string]any{"nonce": nonce,
+		"sid": "s-second", "auth_time": f.b.Now().Unix()})); w.Code != 200 {
+		t.Fatalf("%s", shown(w))
+	}
+	o, err := f.st.OIDCOwner(context.Background(), store.SidKey(iss, "s-second"))
+	if _, ok := o.Entry(alicePrincipal); err != nil || !ok {
+		t.Fatalf("the owner of the new session: %v %v", o, err)
+	}
+}
+
+// Review M1: a refresh that could not record its owner extends nothing and
+// asks for a new challenge: the spent one answers no retry.
+func TestARefreshThatCannotRecordItsOwnerAsksForANewChallenge(t *testing.T) {
+	f, tok, _ := oidcSession(t)
+	nonce := challenge(t, f, tok(nil))
+	f.advance(time.Minute)
+	f.b.Store = hookStore{Store: f.st, before: map[string]func() error{"PutOIDCOwner": func() error {
+		return store.ErrUnavailable
+	}}}
+	w := f.bearer(context.Background(), "POST", "/v1/refresh", "{}", tok(map[string]any{"nonce": nonce,
+		"sid": "s-second", "auth_time": f.b.Now().Unix()}))
+	if w.Code != 503 || !strings.Contains(w.Body.String(), "port49 refresh") || strings.Contains(w.Body.String(), "; retry") {
+		t.Fatalf("%s", shown(w))
 	}
 }
