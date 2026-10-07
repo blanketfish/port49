@@ -475,3 +475,13 @@ func TestValidPin(t *testing.T) {
 		}
 	}
 }
+
+// A Windows DC maps an issuer whose RDN value holds a comma only in the form
+// CertNameToStr writes, the value quoted (L44, tests/lab/results/L44-windows_ad.md).
+func TestADIssuerSerialQuotesAsWindowsDoes(t *testing.T) {
+	ca, key := issuingCA(t, pkix.RDNSequence{{{Type: oidDC, Value: "com"}}, {{Type: oidDC, Value: "corp"}},
+		{{Type: oidCN, Value: `corp, "east" CA`}}})
+	if got := ADIssuerSerial(issue(t, ca, key, nil)); got != `X509:<I>DC=com,DC=corp,CN="corp, ""east"" CA"<SR>11AC0000000012` {
+		t.Fatalf("%s", got)
+	}
+}

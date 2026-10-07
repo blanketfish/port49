@@ -329,7 +329,7 @@ func printable(s string) bool {
 // ADIssuerSerial is AD's altSecurityIdentities strong form: X509:<I> the
 // issuer's RDNs most significant first, read from RawIssuer so DC= is kept,
 // <SR> the serial's bytes reversed in upper-case hex (KB5014754). L43's run
-// checks it against Samba's form, and L44 against a Windows DC's. "" when
+// checks it against Samba's form, and L44 measured Windows' quoting. "" when
 // the issuer does not parse, which Lookup refuses.
 func ADIssuerSerial(leaf *x509.Certificate) string {
 	seq, err := rdnsOf(leaf.RawIssuer)
@@ -339,7 +339,7 @@ func ADIssuerSerial(leaf *x509.Certificate) string {
 	var parts []string
 	for _, rdn := range seq {
 		for _, atv := range rdn {
-			parts = append(parts, typeName(atv.Type)+"="+fmt.Sprint(atv.Value))
+			parts = append(parts, typeName(atv.Type)+"="+adQuote(fmt.Sprint(atv.Value)))
 		}
 	}
 	b := leaf.SerialNumber.Bytes()
@@ -348,6 +348,16 @@ func ADIssuerSerial(leaf *x509.Certificate) string {
 		r[i] = b[len(b)-1-i]
 	}
 	return "X509:<I>" + strings.Join(parts, ",") + "<SR>" + strings.ToUpper(hex.EncodeToString(r))
+}
+
+// adQuote is an RDN value as Windows' CertNameToStr writes it in
+// altSecurityIdentities (L44): quoted when it is empty, starts or ends with
+// white space, or holds , + = " \ < > # ; or a newline, an inner quote doubled.
+func adQuote(v string) string {
+	if v == "" || strings.ContainsAny(v, ",+=\"\\<>#;\n") || strings.TrimSpace(v) != v {
+		return `"` + strings.ReplaceAll(v, `"`, `""`) + `"`
+	}
+	return v
 }
 
 // commonNameOf is the one CN in leaf's subject, read from its DER: several
