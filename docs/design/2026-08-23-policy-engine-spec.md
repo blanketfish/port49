@@ -1086,8 +1086,12 @@ the human OIDC verifiers alone (`aud` and `azp` as for an ID token), and then: `
 than 24h, `exp` honoured when present, a `jti`, the back-channel logout member in `events`, no
 `nonce`, and a `sub`, a `sid`, or both. A `jti` seen before is answered 200 and does nothing.
 
-A logout is not a standing mark: the person may log in again at once, and only an operator's
-`port49 revoke` bans. A logout token carrying both `sid` and `sub` is a logout by `sid` and then
+A logout is not a standing mark: the person may log in again, and only an operator's
+`port49 revoke` bans. After a logout by `sub` (every Keycloak logout, below) a new login's token
+is refused until the logout's `iat` plus `clock_skew` has passed: its `iat` cannot be told from
+that of a token issued before the logout by a provider node whose clock runs ahead, so the
+window fails closed. The refusal names the time from which a login is taken (§13 decision 39
+ruling 13; Ryan's ruling B, 2026-10-07, measured by the L45 follow-up run). A logout token carrying both `sid` and `sub` is a logout by `sid` and then
 a logout by `sub`, each as below: a provider's "sign out user" over several sessions sends one
 token naming one session's `sid` and the person's `sub` (Keycloak, L45), which no claim tells
 apart from ending one session, so port49 ends every session of that `sub`, failing closed at
