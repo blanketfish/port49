@@ -124,12 +124,12 @@ func (b *Broker) bearerCaller(w http.ResponseWriter, r *http.Request, event, not
 	defer cancel()
 	rv, revoked, err := b.revocation(ctx, a.Principal, c.cred)
 	if err == nil && !revoked {
-		var l store.Logout
+		var l logoutRefusal
 		var out bool
 		if l, out, err = b.loggedOut(ctx, a); err == nil && out {
 			b.Metrics.OIDCTokens.WithLabelValues(a.Issuer, "logged_out").Inc()
 			deny(decision.CredentialRevoked, a.Principal, &a)
-			answerLoggedOut(w, l)
+			b.answerLoggedOut(w, l)
 			return caller{}, false
 		}
 	}
@@ -159,39 +159,60 @@ func notAfter(t, now time.Time) time.Time {
 	return t
 }
 
-// loggedOut is the logout refusing a: by its sid, or by its sub when it was
-// issued at or before the sub's logout plus clock_skew (Ruling 13). A
-// machine has no session a provider logs out, so none refuses it
-// (pre-flight M-16); port49 revoke --principal app:<client> does.
-func (b *Broker) loggedOut(ctx context.Context, a oidc.Assertion) (store.Logout, bool, error) {
+// logoutRefusal is the logout refusing a session, and whether it was the
+// sub's record that did.
+type logoutRefusal struct {
+	store.Logout
+	bySub bool
+}
+
+// loggedOut is the logout refusing a: by its sub when it was issued at or
+// before the sub's logout plus clock_skew, else by its sid (Ruling 13). The
+// sub is read first: Keycloak's logout writes both records, and the sub's
+// answer is the one that names when a login is taken. A machine has no
+// session a provider logs out, so none refuses it (pre-flight M-16); port49
+// revoke --principal app:<client> does.
+func (b *Broker) loggedOut(ctx context.Context, a oidc.Assertion) (logoutRefusal, bool, error) {
 	if a.Domain != oidc.Humans {
-		return store.Logout{}, false, nil
+		return logoutRefusal{}, false, nil
+	}
+	l, err := b.Store.GetLogout(ctx, store.OIDCKey(store.OIDCSub, a.Issuer, a.Subject))
+	switch {
+	case err == nil:
+		if !a.IssuedAt.After(l.At.Add(b.Identity.Timing.ClockSkew)) {
+			return logoutRefusal{l, true}, true, nil
+		}
+	case !errors.Is(err, store.ErrNotFound):
+		return logoutRefusal{}, false, err
 	}
 	if key := store.SidKey(a.Issuer, a.Sid); key != "" {
 		l, err := b.Store.GetLogout(ctx, key)
 		switch {
 		case err == nil:
-			return l, true, nil
+			return logoutRefusal{l, false}, true, nil
 		case !errors.Is(err, store.ErrNotFound):
-			return store.Logout{}, false, err
+			return logoutRefusal{}, false, err
 		}
 	}
-	l, err := b.Store.GetLogout(ctx, store.OIDCKey(store.OIDCSub, a.Issuer, a.Subject))
-	switch {
-	case errors.Is(err, store.ErrNotFound):
-		return store.Logout{}, false, nil
-	case err != nil:
-		return store.Logout{}, false, err
-	}
-	return l, !a.IssuedAt.After(l.At.Add(b.Identity.Timing.ClockSkew)), nil
+	return logoutRefusal{}, false, nil
 }
 
 // answerLoggedOut is the 401 credential_revoked a logged-out session's
-// request is answered.
-func answerLoggedOut(w http.ResponseWriter, l store.Logout) {
-	writeJSON(w, http.StatusUnauthorized, api.Error{Error: string(decision.CredentialRevoked), Detail: fmt.Sprintf(
-		"your identity provider ended this session at %s (back-channel logout); log in again",
-		l.At.UTC().Format(time.RFC3339))})
+// request is answered. A refusal by the sub's record, which refuses every
+// login inside clock_skew of the logout (Ruling 13), names the time from
+// which a login is taken: the first whole second after the logout plus
+// clock_skew, since a token issued at the logout plus clock_skew is still
+// refused; a time already past reads as now. A sid's record refuses only
+// its own session, so a new login is never held by it.
+func (b *Broker) answerLoggedOut(w http.ResponseWriter, l logoutRefusal) {
+	detail := fmt.Sprintf("your identity provider ended this session at %s (back-channel logout); log in again",
+		l.At.UTC().Format(time.RFC3339))
+	if l.bySub {
+		from := l.At.Add(b.Identity.Timing.ClockSkew).Truncate(time.Second).Add(time.Second)
+		detail = fmt.Sprintf("your identity provider ended your sessions at %s (back-channel logout); "+
+			"log in again from %s", l.At.UTC().Format(time.RFC3339), from.UTC().Format(time.RFC3339))
+	}
+	writeJSON(w, http.StatusUnauthorized, api.Error{Error: string(decision.CredentialRevoked), Detail: detail})
 }
 
 // ownerFresh is how long an owner record is left as it is before a mint
