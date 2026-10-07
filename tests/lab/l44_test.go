@@ -240,7 +240,6 @@ func (l *labDir) l44Binds(t *testing.T, ev *evidenceLog) string {
 	eL := l.l44ExternalOn(t, ev, "external over LDAPS", adcsExt, false)
 	b.WriteString(l44ExtRow("SASL EXTERNAL over LDAPS, the same mapped certificate (a documented observation; [MS-ADTS] 5.1.1.2 says EXTERNAL is rejected there)", eL))
 	if eL.ok {
-		b.WriteString("\nLDAPS accepted EXTERNAL here, contrary to [MS-ADTS] 5.1.1.2.\n\n")
 		t.Logf("L44: LDAPS accepted an EXTERNAL bind, contrary to MS-ADTS 5.1.1.2 (an observation, not a harness fault)")
 	}
 	b.WriteString(l.l44LDAPSNoBind(t, adcsExt))
@@ -287,7 +286,7 @@ func (l *labDir) l44Binds(t *testing.T, ev *evidenceLog) string {
 	restoreCBT()
 	l.waitLDAPS(t, 5*time.Minute) // the restore rebooted the DC
 
-	fmt.Fprintf(&b, "\nWhether the DC's LDAPS asked the client for a certificate (what EXTERNAL needs): %s.\n", l.certRequested(t))
+	b.WriteString(l44BindsTail(l.certRequested(t), eL.ok))
 	if !simple.ok || simple.read != 1 || !simple2.ok {
 		t.Errorf("the simple bind over LDAPS is the lab's premise and was not accepted: ok %v/%v, read %d", simple.ok, simple2.ok, simple.read)
 	}
@@ -761,6 +760,17 @@ func l44NoBindRow(id string, err error) string {
 		return fmt.Sprintf("| %sanonymous (empty) | — | — | — |\n", what)
 	}
 	return fmt.Sprintf("| %s`%s` | — | — | — |\n", what, l44MDCell(id))
+}
+
+// l44BindsTail is what follows the Binds table: whether the LDAPS port asked
+// for a certificate and, when LDAPS accepted EXTERNAL, a plain sentence saying
+// so. It is written after the table: a blank line inside it would split it.
+func l44BindsTail(requested string, ldapsAccepted bool) string {
+	s := fmt.Sprintf("\nWhether the DC's LDAPS asked the client for a certificate (what EXTERNAL needs): %s.\n", requested)
+	if ldapsAccepted {
+		s += "\nLDAPS accepted EXTERNAL here, contrary to [MS-ADTS] 5.1.1.2.\n"
+	}
+	return s
 }
 
 // l44ConnFailed is why a refused EXTERNAL cell is no refusal, or "" when it is

@@ -2264,3 +2264,23 @@ func TestWindowsNoteCitesWhyStartTLS(t *testing.T) {
 		}
 	}
 }
+
+// The Binds table is one block: nothing but rows is written between its
+// header and its end, so the sentence for an LDAPS acceptance follows it.
+func TestL44BindsTableIsNotSplit(t *testing.T) {
+	body := l44Func(t, "l44Binds")
+	head, end := strings.Index(body, "### Binds"), strings.Index(body, "l44BindsTail(")
+	if head < 0 || end < head {
+		t.Fatal("l44Binds does not write l44BindsTail after the table header")
+	}
+	if strings.Contains(body[head:end], "LDAPS accepted") {
+		t.Error("the LDAPS acceptance sentence is written inside the table")
+	}
+	tail := l44BindsTail("req", true)
+	if !strings.Contains(tail, "LDAPS accepted EXTERNAL here, contrary to [MS-ADTS] 5.1.1.2.") || !strings.HasPrefix(tail, "\nWhether") {
+		t.Errorf("%q", tail)
+	}
+	if strings.Contains(l44BindsTail("req", false), "accepted") {
+		t.Error("the sentence appears when LDAPS refused")
+	}
+}
