@@ -1,6 +1,7 @@
 package oidc
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
@@ -57,6 +58,10 @@ type KeySetConfig struct {
 	Load func() ([]byte, error)
 	Say  func(format string, args ...any)
 	M    *metrics.Metrics
+	// Proc names the process holding the keys, for the line that says to
+	// restart it: the broker may be embedded in port49d. Empty says "the
+	// broker's process".
+	Proc string
 }
 
 // NewClient is a provider's HTTP client: TLS 1.2 or later against roots
@@ -360,8 +365,8 @@ func (s *KeySet) sayStale(fetched time.Time, held int, err error, now time.Time)
 		s.c.Say("identity: %s: no key refreshed within broker.identity.jwks_max_age (%s; the last at %s); every "+
 			"token from it is refused identity_provider_unavailable until a fetch succeeds; certificate logins "+
 			"and live device sessions are unaffected; to accept the held keys meanwhile, raise "+
-			"broker.identity.jwks_max_age (up to 720h) and restart port49-broker", iss, s.c.MaxAge,
-			fetched.UTC().Format(time.RFC3339))
+			"broker.identity.jwks_max_age (up to 720h) and restart %s", iss, s.c.MaxAge,
+			fetched.UTC().Format(time.RFC3339), cmp.Or(s.c.Proc, "the broker's process"))
 	default:
 		s.c.Say("identity: %s: keys not refreshed since %s (the last error: %s); tokens signed by the %d keys "+
 			"held are accepted until %s (broker.identity.jwks_max_age), then refused identity_provider_unavailable",

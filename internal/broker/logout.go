@@ -293,12 +293,22 @@ func (b *Broker) Logout(ctx context.Context, lt oidc.LogoutToken, origin string)
 		outcome = "partial"
 	}
 	b.recordRevocation(now, rep, decision.VerdictDeny, decision.CredentialRevoked, outcome)
-	b.say("%s", rep.logoutText(lt.IssuedAt.Add(t.ClockSkew), b.ownerTTL()))
+	b.say("%s", rep.logoutText(lt.IssuedAt.Add(t.ClockSkew), b.ownerTTL(), b.revokeHow()))
 	return rep, nil
 }
 
+// revokeHow is how an operator ends one person's sessions at once, as every
+// recovery line says it: the revoke command on the admin socket.
+func (b *Broker) revokeHow() string {
+	if b.AdminSocket == "" {
+		return b.proc() + " has no admin_socket configured: configure one and run `port49 revoke --principal " +
+			"<principal>` there"
+	}
+	return "run `port49 revoke --principal <principal>` on " + b.proc() + "'s admin socket (" + b.AdminSocket + ")"
+}
+
 // logoutText is Logout's line (What the operator sees).
-func (r RevokeReport) logoutText(cutoff time.Time, ownerTTL time.Duration) string {
+func (r RevokeReport) logoutText(cutoff time.Time, ownerTTL time.Duration, revokeHow string) string {
 	who := strings.Join(r.Principals, ", ")
 	var where []string
 	for _, ref := range r.Contexts {
@@ -316,6 +326,6 @@ func (r RevokeReport) logoutText(cutoff time.Time, ownerTTL time.Duration) strin
 			"deleted", r.OIDCIssuer, printsafe.Line(r.Sub, 80), who, len(r.Contexts), strings.Join(where, ", "), r.TokenKeys)
 	}
 	return fmt.Sprintf("logout: %s ended every session of sub %s: no principal is on record for it (no mint in the "+
-		"last %s); tokens it issued before %s are refused from now on; to end a person's sessions at once use "+
-		"port49 revoke", r.OIDCIssuer, printsafe.Line(r.Sub, 80), ownerTTL, cutoff.UTC().Format(time.RFC3339))
+		"last %s); tokens it issued before %s are refused from now on; to end a person's sessions at once, %s",
+		r.OIDCIssuer, printsafe.Line(r.Sub, 80), ownerTTL, cutoff.UTC().Format(time.RFC3339), revokeHow)
 }

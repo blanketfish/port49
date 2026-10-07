@@ -77,7 +77,7 @@ func openOIDC(cfg config.Config, stateDir string, m *metrics.Metrics, say func(s
 			}
 			path := keyFile(stateDir, v.Issuer)
 			ks = oidc.NewKeySet(oidc.KeySetConfig{Issuer: v.Issuer, Client: oidc.NewClient(roots),
-				Refresh: id.Timing.JWKSRefresh, MaxAge: id.Timing.JWKSMaxAge, Now: time.Now, Say: say, M: m,
+				Refresh: id.Timing.JWKSRefresh, MaxAge: id.Timing.JWKSMaxAge, Now: time.Now, Say: say, M: m, Proc: procOf(cfg),
 				Save: func(b []byte) error {
 					if err := writeOwnerOnly(path, b); err != nil {
 						return errors.New(stateDirWords(cfg, stateDir, err))

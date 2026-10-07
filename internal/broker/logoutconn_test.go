@@ -200,3 +200,20 @@ func TestALogoutRefusedForUnavailableKeysSaysSo(t *testing.T) {
 		t.Fatalf("the line carries the token or its jti:\n%s", out)
 	}
 }
+
+// The no-principal sub-logout line gives the runnable command, on the
+// process's admin socket (final review F5).
+func TestASubLogoutWithNoPrincipalNamesTheRunnableRevoke(t *testing.T) {
+	f := newFixture(t, 8)
+	iss := f.withOIDC(t)
+	var said strings.Builder
+	f.b.Say = func(format string, args ...any) { said.WriteString(fmt.Sprintf(format, args...) + "\n") }
+	f.b.AdminSocket = "/run/port49/admin.sock"
+	if w := f.postLogout(logoutFor(t, f, iss, "", "j-nobody")); w.Code != 200 {
+		t.Fatalf("%s", lshown(w))
+	}
+	if out := said.String(); !strings.Contains(out, "no principal is on record") ||
+		!strings.Contains(out, "`port49 revoke --principal <principal>` on port49d's admin socket (/run/port49/admin.sock)") {
+		t.Fatalf("the line said:\n%s", out)
+	}
+}

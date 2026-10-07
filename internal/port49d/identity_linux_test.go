@@ -17,6 +17,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/rhwendt/port49/internal/broker"
+	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/oidc/oidctest"
 )
@@ -234,5 +235,42 @@ func TestReadinessNeverFollowsTheProvider(t *testing.T) {
 	addr := regexp.MustCompile(`port49d: broker listening on (\S+)`).FindStringSubmatch(out.String())[1]
 	if code, body := brokerReadyz(t, pki, addr); code != http.StatusOK || body != broker.ReadyServing {
 		t.Fatalf("broker /readyz with the provider unreachable: %d %q", code, body)
+	}
+}
+
+// The stale-keys line restarts the process that runs the broker: port49d when
+// it is embedded, port49-broker when it is the broker alone (final review F5).
+func TestTheStaleKeysLineNamesTheRunningProcess(t *testing.T) {
+	for _, tc := range []struct {
+		role config.Role
+		want string
+	}{{config.RoleBroker, "and restart port49-broker"}, {config.RoleDaemon, "and restart port49d"}} {
+		iss := oidctest.NewIssuer(t)
+		dir := stateDirT(t)
+		cfg := brokerConfig(t, directoryPolicy)
+		cfg.Role = tc.role
+		cfg.Broker.Identity = identityCfg(t, iss, dir)
+		cfg.Broker.Identity.Timing.JWKSMaxAge = 20 * time.Millisecond
+		var said syncBuffer
+		set, err := openOIDC(cfg, dir, metrics.New(prometheus.NewRegistry()), func(f string, a ...any) {
+			said.Write([]byte(fmtLine(f, a...)))
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ks := set.Verifiers[0].Keys
+		if err := ks.Fetch(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		iss.Fail(503)
+		time.Sleep(60 * time.Millisecond)
+		_ = ks.Fetch(context.Background())
+		deadline := time.Now().Add(5 * time.Second)
+		for !strings.Contains(said.String(), "no key refreshed within") && time.Now().Before(deadline) {
+			time.Sleep(5 * time.Millisecond)
+		}
+		if !strings.Contains(said.String(), tc.want) {
+			t.Errorf("role %v: the stale line:\n%s", tc.role, said.String())
+		}
 	}
 }

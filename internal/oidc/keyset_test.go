@@ -857,3 +857,29 @@ func TestAnOlderFileIsNeverSavedAfterANewerOne(t *testing.T) {
 		t.Fatalf("%d files; the last is fetched_at %v, want the newest %v", len(files), p.FetchedAt, c.Now())
 	}
 }
+
+// The stale line names the process that holds the keys, as the broker may be
+// embedded in port49d (final review F5), and never one it was not told of.
+func TestTheStaleLineNamesTheProcessToRestart(t *testing.T) {
+	for _, tc := range []struct{ proc, want string }{
+		{"port49d", "and restart port49d"},
+		{"port49-broker", "and restart port49-broker"},
+		{"", "and restart the broker's process"},
+	} {
+		iss, c, s := oidctest.NewIssuer(t), newClock(), &said{}
+		ks := oidc.NewKeySet(oidc.KeySetConfig{Issuer: iss.URL, Client: oidc.NewClient(iss.Roots()), Refresh: time.Hour,
+			MaxAge: 24 * time.Hour, Now: c.Now, Say: s.Say, Proc: tc.proc, M: metrics.New(prometheus.NewRegistry())})
+		if err := ks.Fetch(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		iss.Fail(503)
+		c.Add(25 * time.Hour)
+		if err := ks.Fetch(context.Background()); err == nil {
+			t.Fatal("a failing provider fetched")
+		}
+		s.await(t, "no key refreshed within", 1)
+		if out := s.all(); !strings.Contains(out, tc.want) || (tc.proc != "port49-broker" && strings.Contains(out, "port49-broker")) {
+			t.Errorf("proc %q: the stale line:\n%s", tc.proc, out)
+		}
+	}
+}
