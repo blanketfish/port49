@@ -129,7 +129,7 @@ func TestNoRightWidensAMintOrARefresh(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.advance(30 * time.Minute)
-	if _, err := f.b.RefreshSession(ctx, policy.MemberOf(alicePrincipal), nil, store.Credential{Method: "cert"}, f.b.Now()); err != nil {
+	if _, err := f.b.RefreshSession(ctx, policy.MemberOf(alicePrincipal), nil, store.Credential{Method: "cert"}, f.b.Now(), nil); err != nil {
 		t.Fatal(err)
 	}
 	c, err := f.st.GetContext(ctx, store.ContextKey{NAS: "nx1", Username: "carol"})

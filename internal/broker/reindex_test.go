@@ -381,7 +381,7 @@ func TestAContextUnderAnUnheldKeyIsNeverRevoked(t *testing.T) {
 		// caller is told what was left, not that a session ended (bd4ae7f).
 		{"session refresh", func(t *testing.T, f *fixture) {
 			rep, err := f.b.RefreshSession(context.Background(), policy.MemberOf(alicePrincipal), nil, store.Credential{Method: "cert"},
-				f.b.Now())
+				f.b.Now(), nil)
 			if err != nil || len(rep.Sessions) != 1 || rep.Sessions[0].Outcome != "not_judged" {
 				t.Fatalf("a session refresh: %+v %v", rep, err)
 			}

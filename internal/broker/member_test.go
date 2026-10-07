@@ -783,7 +783,7 @@ func TestAReloadBetweenTheMemberAndTheHoldRefusesARefresh(t *testing.T) {
 	f, _ := groupFixture(t, map[string]directory.Answer{corpAlice: a}, nil)
 	before := f.memberContext(t, a, "leaf1", f.now.Add(-time.Hour))
 	f.reloadDir(t, aliceDeclared)
-	_, err := f.b.RefreshSession(context.Background(), member(a), &a, store.Credential{Method: "cert"}, f.b.Now())
+	_, err := f.b.RefreshSession(context.Background(), member(a), &a, store.Credential{Method: "cert"}, f.b.Now(), nil)
 	if !errors.Is(err, directory.ErrUsernameTaken) {
 		t.Fatalf("%v", err)
 	}

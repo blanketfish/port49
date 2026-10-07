@@ -1,0 +1,258 @@
+package broker
+
+import (
+	"context"
+	"encoding/json"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/rhwendt/port49/internal/oidc/oidctest"
+	"github.com/rhwendt/port49/internal/store"
+)
+
+// oidcSession is a fixture with OIDC and alice's live context on leaf1,
+// authenticated an hour ago, indexed under her first session's sid.
+func oidcSession(t *testing.T) (*fixture, func(extra map[string]any) string, string) {
+	t.Helper()
+	f := newFixture(t, 8)
+	iss := f.withOIDC(t)
+	at := f.b.Now().Add(-time.Hour)
+	f.liveContextAt(t, "leaf1", "alice", alicePrincipal, "", at, at.Add(12*time.Hour))
+	if err := f.st.IndexContext(context.Background(), alicePrincipal, store.SidKey(iss.URL, "s-first"), "",
+		store.ContextRef{NAS: "leaf1", Username: "alice"}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	tok := func(extra map[string]any) string { return f.idToken(t, iss, extra) }
+	return f, tok, iss.URL
+}
+
+func challenge(t *testing.T, f *fixture, token string) string {
+	t.Helper()
+	w := f.bearer(context.Background(), "POST", "/v1/refresh/challenge", "", token)
+	var c api.RefreshChallenge
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &c) != nil || c.Nonce == "" {
+		t.Fatalf("challenge: %s", shown(w))
+	}
+	return c.Nonce
+}
+
+func TestAnOIDCRefreshExtendsFromTheNewAuthTime(t *testing.T) {
+	f, tok, iss := oidcSession(t)
+	nonce := challenge(t, f, tok(map[string]any{"auth_time": f.b.Now().Add(-time.Hour).Unix(), "sid": "s-first"}))
+	f.advance(time.Minute)
+	fresh := f.b.Now()
+	w := f.bearer(context.Background(), "POST", "/v1/refresh", "{}", tok(map[string]any{"nonce": nonce,
+		"sid": "s-second", "auth_time": fresh.Unix()}))
+	var resp api.RefreshResponse
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &resp) != nil {
+		t.Fatalf("%s", shown(w))
+	}
+	if resp.AuthTime != fresh.UTC().Format(time.RFC3339) || len(resp.Sessions) != 1 || resp.Sessions[0].Outcome != "extended" {
+		t.Fatalf("response %+v", resp)
+	}
+	c, _ := f.st.GetContext(context.Background(), store.ContextKey{NAS: "leaf1", Username: "alice"})
+	if !c.AuthTime.Equal(fresh) || !c.SessionExpires.Equal(fresh.Add(12*time.Hour)) {
+		t.Fatalf("context auth_time %v expires %v", c.AuthTime, c.SessionExpires)
+	}
+	// Ruling 15: a logout of either session still reaches it.
+	for _, sid := range []string{"s-first", "s-second"} {
+		if refs, _ := f.st.ContextsBySid(context.Background(), store.SidKey(iss, sid)); len(refs) != 1 {
+			t.Fatalf("by sid %s: %v", sid, refs)
+		}
+	}
+}
+
+func TestARefreshNeedsItsChallenge(t *testing.T) {
+	f, tok, _ := oidcSession(t)
+	if w := f.bearer(context.Background(), "POST", "/v1/refresh", "{}", tok(map[string]any{"nonce": "made-up"})); w.Code != 401 ||
+		!strings.Contains(w.Body.String(), "refresh_challenge_missing") {
+		t.Fatalf("a nonce the broker never issued: %s", shown(w))
+	}
+	if w := f.bearer(context.Background(), "POST", "/v1/refresh", "{}", tok(nil)); w.Code != 401 ||
+		!strings.Contains(w.Body.String(), "refresh_challenge_missing") {
+		t.Fatalf("no nonce: %s", shown(w))
+	}
+	nonce := challenge(t, f, tok(nil))
+	f.advance(time.Second)
+	again := tok(map[string]any{"nonce": nonce, "auth_time": f.b.Now().Unix()})
+	if w := f.bearer(context.Background(), "POST", "/v1/refresh", "{}", again); w.Code != 200 {
+		t.Fatalf("the refresh: %s", shown(w))
+	}
+	if w := f.bearer(context.Background(), "POST", "/v1/refresh", "{}", again); w.Code != 401 ||
+		!strings.Contains(w.Body.String(), "refresh_challenge_missing") {
+		t.Fatalf("the same token again: %s", shown(w))
+	}
+}
+
+// The provider must have authenticated the person after the challenge
+// (prompt=login honoured): an older auth_time extends nothing.
+func TestARefreshTheProviderDidNotReauthenticateIsNotFresh(t *testing.T) {
+	f, tok, _ := oidcSession(t)
+	before := f.b.Now()
+	nonce := challenge(t, f, tok(nil))
+	f.advance(time.Minute)
+	w := f.bearer(context.Background(), "POST", "/v1/refresh", "{}", tok(map[string]any{"nonce": nonce,
+		"auth_time": before.Add(-2 * time.Minute).Unix()}))
+	if w.Code != 401 || !strings.Contains(w.Body.String(), "refresh_not_fresh") ||
+		!strings.Contains(w.Body.String(), "prompt=login was not honoured") {
+		t.Fatalf("%s", shown(w))
+	}
+	c, _ := f.st.GetContext(context.Background(), store.ContextKey{NAS: "leaf1", Username: "alice"})
+	if !c.AuthTime.Equal(before.Add(-time.Hour)) {
+		t.Fatalf("a refused refresh moved auth_time to %v", c.AuthTime)
+	}
+}
+
+// Review Focus 6: within clock_skew of the challenge is fresh.
+func TestARefreshWithinSkewOfTheChallengeIsFresh(t *testing.T) {
+	f, tok, _ := oidcSession(t)
+	at := f.b.Now()
+	nonce := challenge(t, f, tok(nil))
+	w := f.bearer(context.Background(), "POST", "/v1/refresh", "{}", tok(map[string]any{"nonce": nonce,
+		"auth_time": at.Add(-30 * time.Second).Unix()}))
+	if w.Code != 200 {
+		t.Fatalf("an auth_time 30s before the challenge: %s", shown(w))
+	}
+}
+
+func TestAChallengeIsItsPrincipalsAlone(t *testing.T) {
+	f, tok, _ := oidcSession(t)
+	nonce := challenge(t, f, tok(nil))
+	carol := tok(map[string]any{"nonce": nonce, "preferred_username": "carol@example.com", "auth_time": f.b.Now().Unix()})
+	if w := f.bearer(context.Background(), "POST", "/v1/refresh", "{}", carol); w.Code != 401 ||
+		!strings.Contains(w.Body.String(), "refresh_challenge_missing") {
+		t.Fatalf("carol answering alice's challenge: %s", shown(w))
+	}
+}
+
+// Ruling 9: a person whose session reached the ceiling can still ask for a
+// challenge with the token they hold.
+func TestAChallengeOutlivesTheSessionCeiling(t *testing.T) {
+	f, tok, _ := oidcSession(t)
+	old := tok(map[string]any{"auth_time": f.b.Now().Add(-13 * time.Hour).Unix()})
+	if w := f.bearer(context.Background(), "POST", "/v1/tokens", mintLeaf1, old); w.Code != 401 {
+		t.Fatalf("a mint 13h after authentication: %s", shown(w))
+	}
+	nonce := challenge(t, f, old)
+	f.advance(time.Minute)
+	w := f.bearer(context.Background(), "POST", "/v1/refresh", "{}", tok(map[string]any{"nonce": nonce,
+		"auth_time": f.b.Now().Unix()}))
+	if w.Code != 200 {
+		t.Fatalf("the refresh after it: %s", shown(w))
+	}
+}
+
+func TestChallengesArePacedPerPrincipal(t *testing.T) {
+	f, tok, _ := oidcSession(t)
+	challenge(t, f, tok(nil))
+	w := f.bearer(context.Background(), "POST", "/v1/refresh/challenge", "", tok(nil))
+	if w.Code != 429 || w.Header().Get("Retry-After") == "" {
+		t.Fatalf("a second challenge within 10s: %s", shown(w))
+	}
+	f.advance(11 * time.Second)
+	challenge(t, f, tok(nil))
+}
+
+func TestAMachineHasNoSessionToRefresh(t *testing.T) {
+	f := newFixtureWithPolicy(t, 8, machinePolicy)
+	iss := f.withOIDC(t)
+	now := f.b.Now()
+	raw := iss.Token(t, "k1", map[string]any{"iss": iss.URL, "aud": "api://port49-svc", "sub": "svc",
+		"azp": "Oxidized-01", "iat": now.Unix(), "exp": now.Add(time.Hour).Unix()})
+	if w := f.bearer(context.Background(), "POST", "/v1/refresh/challenge", "", raw); w.Code != 400 {
+		t.Fatalf("%s", shown(w))
+	}
+}
+
+func TestARefreshBodyIsEmpty(t *testing.T) {
+	f, tok, _ := oidcSession(t)
+	nonce := challenge(t, f, tok(nil))
+	w := f.bearer(context.Background(), "POST", "/v1/refresh", `{"nonce":"x","signature":"y"}`,
+		tok(map[string]any{"nonce": nonce, "auth_time": f.b.Now().Unix()}))
+	if w.Code != 400 {
+		t.Fatalf("a certificate-path body on the OIDC path: %s", shown(w))
+	}
+}
+
+func (h hookStore) RefreshContext(ctx context.Context, k store.ContextKey, r store.ContextRefresh, ttl time.Duration) error {
+	if f := h.before["RefreshContext"]; f != nil {
+		if err := f(); err != nil {
+			return err
+		}
+	}
+	return h.Store.RefreshContext(ctx, k, r, ttl)
+}
+
+// Pre-flight I-2: a logout that lands while a refresh extends the session
+// never leaves an extended context alive to its new ceiling. The new sid is
+// indexed before the extension, so a logout's RevokeBySid that runs after
+// the index reaches the context; a logout whose passes ran before the index
+// leaves only its record, and the refresh's after-check marks what it
+// extended before it answers 401.
+func TestALogoutDuringARefreshMarksTheExtendedContext(t *testing.T) {
+	for name, during := range map[string]func(f *fixture, iss string) error{
+		"the logout's passes run after the index": func(f *fixture, iss string) error {
+			ctx := context.Background()
+			if err := f.st.PutLogout(ctx, store.Logout{Key: store.SidKey(iss, "s-second"), At: f.b.Now()},
+				time.Hour); err != nil {
+				return err
+			}
+			_, err := f.b.Sessions.RevokeBySid(ctx, store.SidKey(iss, "s-second"))
+			return err
+		},
+		"only the logout record stands": func(f *fixture, iss string) error {
+			return f.st.PutLogout(context.Background(), store.Logout{Key: store.SidKey(iss, "s-second"), At: f.b.Now()},
+				time.Hour)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f, tok, iss := oidcSession(t)
+			nonce := challenge(t, f, tok(nil))
+			f.advance(time.Minute)
+			fired := false
+			f.b.Store = hookStore{Store: f.st, before: map[string]func() error{"RefreshContext": func() error {
+				if fired {
+					return nil
+				}
+				fired = true
+				return during(f, iss)
+			}}}
+			w := f.bearer(context.Background(), "POST", "/v1/refresh", "{}", tok(map[string]any{"nonce": nonce,
+				"sid": "s-second", "auth_time": f.b.Now().Unix()}))
+			if w.Code != 401 || !strings.Contains(w.Body.String(), "credential_revoked") {
+				t.Fatalf("a refresh a logout landed during: %s", shown(w))
+			}
+			c, _ := f.st.GetContext(context.Background(), store.ContextKey{NAS: "leaf1", Username: "alice"})
+			if c.RevokedAt.IsZero() {
+				t.Fatal("a context the refresh extended outlived a logout that landed during it")
+			}
+		})
+	}
+}
+
+func TestAMachineCannotAnswerARefresh(t *testing.T) {
+	f := newFixtureWithPolicy(t, 8, machinePolicy)
+	iss := f.withOIDC(t)
+	now := f.b.Now()
+	raw := iss.Token(t, "k1", map[string]any{"iss": iss.URL, "aud": "api://port49-svc", "sub": "svc",
+		"azp": "Oxidized-01", "iat": now.Unix(), "exp": now.Add(time.Hour).Unix()})
+	if w := f.bearer(context.Background(), "POST", "/v1/refresh", "{}", raw); w.Code != 400 {
+		t.Fatalf("%s", shown(w))
+	}
+}
+
+// A challenge is the issuer's as well as the principal's: the same principal
+// from another issuer cannot answer it.
+func TestAChallengeIsItsIssuersAlone(t *testing.T) {
+	f, tok, _ := oidcSession(t)
+	iss2 := oidctest.NewIssuer(t)
+	f.addIssuer(t, iss2, "example.com", false)
+	nonce := challenge(t, f, tok(nil))
+	other := f.idToken(t, iss2, map[string]any{"nonce": nonce, "auth_time": f.b.Now().Unix()})
+	if w := f.bearer(context.Background(), "POST", "/v1/refresh", "{}", other); w.Code != 401 ||
+		!strings.Contains(w.Body.String(), "refresh_challenge_missing") {
+		t.Fatalf("another issuer answering alice's challenge: %s", shown(w))
+	}
+}
