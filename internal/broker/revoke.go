@@ -533,6 +533,18 @@ func (r RevokeReport) Text() string {
 			"revoke the principal)", r.Key.NAS, r.Key.Username, owner, at, len(r.Contexts), r.TokenKeys)
 		fmt.Fprintf(&b, "\nthe owner's next login on %s re-admits any session still open on it under %s; close it "+
 			"on the device", r.Key.NAS, r.Key.Username)
+	case ByLogoutSid, ByLogoutSub:
+		what := "session sid " + r.Sid
+		if r.By == ByLogoutSub {
+			what = "every session of sub " + r.Sub
+		}
+		owner := ""
+		if r.Request.Principal != "" {
+			owner = " (" + r.Request.Principal + ")"
+		}
+		fmt.Fprintf(&b, "ended %s at %s%s at %s: %d live context(s) marked, the unspent tokens under %d key(s) "+
+			"deleted; its tokens are refused from now on; no revocation stands, so a new login works at once (to "+
+			"stop that, revoke the principal)", what, r.OIDCIssuer, owner, at, len(r.Contexts), r.TokenKeys)
 	default:
 		b.WriteString(r.markText())
 		if r.LiftNote != "" {

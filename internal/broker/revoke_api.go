@@ -6,12 +6,14 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/rhwendt/port49/internal/broker/api"
 	"github.com/rhwendt/port49/internal/decision"
 	"github.com/rhwendt/port49/internal/policy"
+	"github.com/rhwendt/port49/internal/printsafe"
 	"github.com/rhwendt/port49/internal/store"
 )
 
@@ -79,14 +81,17 @@ func (b *Broker) tokensRevoke(w http.ResponseWriter, r *http.Request) {
 	origin := "api " + asker
 	byKey := req.Device != "" || req.Username != ""
 	switch {
-	case req.Sid != "":
-		writeError(w, http.StatusBadRequest, "bad_request", "revocation by OIDC sid arrives with OIDC (plan 7h); "+
-			"revoke the principal")
+	case req.Sid != "" && (req.Mine || req.Principal != "" || byKey):
+		writeError(w, http.StatusBadRequest, "bad_request", "name a sid alone, with its issuer when more than one "+
+			"provider is configured")
+		return
+	case req.Issuer != "" && req.Sid == "":
+		writeError(w, http.StatusBadRequest, "bad_request", "an issuer names a sid's provider; name the sid")
 		return
 	case req.Mine && req.Principal != "", byKey && req.Principal != "":
 		writeError(w, http.StatusBadRequest, "bad_request", "name mine, a principal, or a device and a username, not both")
 		return
-	case !req.Mine && !byKey && req.Principal == "", byKey && (req.Device == "" || req.Username == ""):
+	case req.Sid == "" && !req.Mine && !byKey && req.Principal == "", byKey && (req.Device == "" || req.Username == ""):
 		writeError(w, http.StatusBadRequest, "bad_request", "name mine, a principal, or a device and a username "+
 			"(both, for one key)")
 		return
@@ -112,6 +117,10 @@ func (b *Broker) tokensRevoke(w http.ResponseWriter, r *http.Request) {
 		rec.Verdict, rec.Reason = decision.VerdictDeny, ref.Reason
 		b.emit(rec)
 		b.answerRefusal(w, r, ref)
+	}
+	if req.Sid != "" {
+		b.revokeSid(w, r, pol, asker, origin, req, mayOthers, refused)
+		return
 	}
 	if byKey {
 		k := store.TokenKey{NAS: req.Device, Username: req.Username}
@@ -194,6 +203,70 @@ func (b *Broker) tokensRevoke(w http.ResponseWriter, r *http.Request) {
 		rep.LiftNote = b.liftNote()
 		b.answerRevocation(w, pol, rep, origin)
 	}
+}
+
+// revokeSid is the sid form (Ruling 14): one OIDC session ended as a
+// back-channel logout by sid ends it, under revoke_others, its origin the
+// caller. It holds the asker's one revocation slot while it runs, as a self
+// or key revocation does (holdOwnRevoke): RevokeSid runs detached, so a
+// caller retrying against a slow store would otherwise stack one detached
+// logout per retry (pre-flight M-15).
+func (b *Broker) revokeSid(w http.ResponseWriter, r *http.Request, pol *policy.Policy, asker, origin string,
+	req api.RevokeRequest, mayOthers func() (bool, *BindRefusal), refused func(*BindRefusal, decision.Record)) {
+	var humans []string
+	if b.Identity != nil {
+		for _, v := range b.Identity.Humans() {
+			humans = append(humans, v.Issuer)
+		}
+	}
+	issuer := req.Issuer
+	switch {
+	case len(humans) == 0:
+		writeError(w, http.StatusBadRequest, "bad_request", "this broker has no human OIDC verifier, so no sid")
+		return
+	case issuer == "" && len(humans) > 1:
+		writeError(w, http.StatusBadRequest, "bad_request", "name the sid's issuer: more than one human OIDC "+
+			"verifier is configured")
+		return
+	case issuer == "":
+		issuer = humans[0]
+	case !slices.Contains(humans, issuer):
+		writeError(w, http.StatusBadRequest, "bad_request", "the issuer is no human OIDC verifier's")
+		return
+	}
+	if len(req.Sid) > 255 || strings.IndexFunc(req.Sid, func(r rune) bool { return r < 0x21 || r > 0x7e }) >= 0 {
+		writeError(w, http.StatusBadRequest, "bad_request", "a sid is 1 to 255 printable ASCII characters")
+		return
+	}
+	now := b.Now()
+	rec := decision.Record{TS: now, Event: decision.EventRevoke, Revocation: &decision.Revocation{By: ByLogoutSid,
+		OIDCIssuer: issuer, Sid: req.Sid, At: decision.FormatTime(now), Origin: origin}}
+	switch ok, ref := mayOthers(); {
+	case ref != nil:
+		rec.Principal = asker
+		refused(ref, rec)
+		return
+	case !ok:
+		b.refuseRight(w, rec, policy.RightRevokeOthers, "ending an OIDC session")
+		return
+	}
+	release, held := b.holdOwnRevoke(asker)
+	if !held {
+		writeBusy(w, "another revocation of yours is still running, so this session was not ended; try again once "+
+			"it finishes")
+		return
+	}
+	defer release()
+	rep, err := b.RevokeSid(r.Context(), issuer, req.Sid, origin)
+	if err != nil {
+		b.logf("broker: a revocation of sid %s at %s asked by %s was not made: %v", printsafe.Line(req.Sid, 80),
+			issuer, asker, err)
+		w.Header().Set("Retry-After", "10")
+		writeError(w, http.StatusServiceUnavailable, string(decision.StoreUnavailable), "the session's end could not "+
+			"be recorded, so nothing was revoked; try again")
+		return
+	}
+	b.answerRevocation(w, pol, rep, origin)
 }
 
 // revokeOwnOrKey runs one self or key revocation for caller and answers it.
