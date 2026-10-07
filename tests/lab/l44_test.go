@@ -27,9 +27,9 @@ import (
 //
 //	PORT49_LAB_L44=1 go test -tags lab ./tests/lab/ -run '^TestL44Bringup$' -count=1 -v -timeout 240m
 //
-// Its evidence file, L44-bringup.json, goes under tests/lab/evidence of the run's
-// output root: set PORT49_LAB_DIRECTORY_OUT to keep a dry run out of the
-// repository, and never `git add` it.
+// Its evidence file, L44-bringup.json, goes under tests/lab/logs/windows of the
+// run's output root, which git ignores; set PORT49_LAB_DIRECTORY_OUT to write
+// it elsewhere.
 //
 // TestL44WindowsAD is the measurement (its comment has its command).
 func TestL44Bringup(t *testing.T) {
@@ -63,8 +63,8 @@ func TestL44Bringup(t *testing.T) {
 }
 
 const l44Claim = "The Active Directory claims on a Windows DC: on L42's fixture and its loop, which groups " +
-	"`member:1.2.840.113556.1.4.1941:=<user DN>` returns and how the loop is answered; SASL EXTERNAL over StartTLS (and what LDAPS answers it) with a " +
-	"client certificate; GSSAPI with a keytab and no SASL security layer against the Windows KDC; whether " +
+	"`member:1.2.840.113556.1.4.1941:=<user DN>` returns and how the loop is answered; SASL EXTERNAL over LDAPS with a " +
+	"client certificate (measured over StartTLS; [MS-ADTS] 5.1.1.2, with what LDAPS answers it); GSSAPI with a keytab and no SASL security layer against the Windows KDC; whether " +
 	"`altSecurityIdentities` values written in port49's `X509:<I>{issuer}<SR>{serial}` form (issuer from the raw DER, " +
 	"`DC=` included) match the certificate the DC itself maps; whether the SID extension's value equals `objectSid`; and " +
 	"how KB5014754's strong-mapping enforcement treats each (policy engine spec §15 L44). Also measured, for two questions " +
@@ -248,7 +248,7 @@ func (l *labDir) l44Binds(t *testing.T, ev *evidenceLog) string {
 	if eL.ok {
 		t.Logf("L44: LDAPS accepted an EXTERNAL bind, contrary to MS-ADTS 5.1.1.2 (an observation, not a harness fault)")
 	}
-	b.WriteString(l.l44LDAPSNoBind(t, adcsExt))
+	b.WriteString(l.l44LDAPSNoBind(t, ev, adcsExt))
 	w.setAltSec(t, brokerDN, "")
 	ev.mark("L44 external, AD CS certificate, no mapping")
 	e2 := l.l44External(t, ev, "external, unmapped", adcsExt, false)
@@ -273,9 +273,11 @@ func (l *labDir) l44Binds(t *testing.T, ev *evidenceLog) string {
 	ev.mark("L44 gssapi, LdapEnforceChannelBinding %s", got)
 	what := "GSSAPI over LDAPS, keytab, no SASL security layer, `LdapEnforceChannelBinding` " + got + " (port49 sends no channel binding token)"
 	under2 = append(under2, l44Cell{what, gssapi("gssapi, channel binding 2", what)})
+	ev.mark("L44 external, LdapEnforceChannelBinding %s", got)
 	e4 := l.l44External(t, ev, "external, channel binding 2", adcsExt, true)
 	what = "SASL EXTERNAL over StartTLS, mapped, `LdapEnforceChannelBinding` " + got
 	under2 = append(under2, l44Cell{what, l44ExtRow(what, e4)})
+	ev.mark("L44 simple, LdapEnforceChannelBinding %s", got)
 	simple2 := l.tryBind(t, ev, "simple, channel binding 2", l.bindSimple(), l.d.password)
 	what = "simple bind over LDAPS, `LdapEnforceChannelBinding` " + got
 	under2 = append(under2, l44Cell{what, simple2.row(what)})
@@ -379,9 +381,10 @@ func (l *labDir) l44OR1(t *testing.T, ev *evidenceLog) string {
 			"recovers it.\n")
 	}
 	if check.Now != "" {
-		fmt.Fprintf(&b, "\nThe KDC's outage, on the DC's clock: stopped %s, its start task scheduled for %s and run at %s, "+
-			"found running at %s (result %s). An SSH logon fails while the KDC is down, so the stop registered that task and "+
-			"nothing called the DC until it had run. e5's bind ended %s after the stop.\n",
+		fmt.Fprintf(&b, "\nThe KDC's outage, on the DC's clock: stopped %s, its start task scheduled for %s and run at %s "+
+			"(the Task Scheduler's trigger is whole seconds, so the run time can precede the scheduled instant by under a "+
+			"second), found running at %s (result %s). An SSH logon fails while the KDC is down, so the stop registered that "+
+			"task and nothing called the DC until it had run. e5's bind ended %s after the stop was asked.\n",
 			stop.StoppedAt, stop.StartAt, check.TaskRan, check.Now, check.TaskResult, e5Ended.Round(time.Millisecond))
 	}
 	return b.String()
@@ -454,7 +457,7 @@ func (l *labDir) l44SID(t *testing.T, ev *evidenceLog) string {
 		w.setAltSec(t, aliceDN, q)
 		ev.mark("L44 port49 issuer_serial on the comma CA's certificate, alice holding the quoted form")
 		_, err = r.Map(ctx, c.aliceComma)
-		fmt.Fprintf(&b, "| `issuer_serial`, the comma CA's certificate, alice holding the quoted form | %s |\n", l.l44Err(err))
+		fmt.Fprintf(&b, "| `issuer_serial`, the comma CA's certificate, alice holding the quoted form (recorded, not asserted (Task 7a)) | %s |\n", l.l44Err(err))
 	}
 	w.setAltSec(t, aliceDN, directory.ADIssuerSerial(l.d.pki.alice))
 	return b.String()
@@ -462,8 +465,8 @@ func (l *labDir) l44SID(t *testing.T, ev *evidenceLog) string {
 
 // l44Matrix offers each certificate to the DC's KDC by PKINIT under each
 // KB5014754 setting, alice holding only the altSecurityIdentities the case
-// names, and the broker's AD CS certificate to the DC by EXTERNAL over StartTLS, recording
-// what the KDC answered and logged. Each block starts with control-ski, a
+// names, and the broker's AD CS certificate to the DC by EXTERNAL over
+// StartTLS, recording what the KDC answered and logged. Each block starts with control-ski, a
 // strong mapping no part of the claim is about: if it gets no TGT, the
 // block's PKINIT is broken and every cell in it is INVALID. A setup failure
 // marks a cell INVALID (R6); only l44Judge's "refused" is a verdict.
@@ -618,10 +621,10 @@ func (l *labDir) dialTLS(tc *tls.Config) (*ldap.Conn, error) {
 
 // certPresented reports whether Go's TLS client, configured as port49's
 // dialer configures it (tls.Config.Certificates), would send certFile to
-// l's server, over StartTLS when l is one. When the DC's CertificateRequest lists acceptable CAs, Go sends
-// a certificate only if SupportsCertificate passes and otherwise silently
-// sends none; the bind is then refused for "no certificate", which is no
-// answer about the mapping (pre-flight I2).
+// l's server, over StartTLS when l is one. When the DC's CertificateRequest
+// lists acceptable CAs, Go sends a certificate only if SupportsCertificate
+// passes and otherwise silently sends none; the bind is then refused for "no
+// certificate", which is no answer about the mapping (pre-flight I2).
 func (l *labDir) certPresented(t *testing.T, certFile, keyFile string) (bool, string) {
 	t.Helper()
 	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
@@ -657,8 +660,9 @@ func (l *labDir) certPresented(t *testing.T, certFile, keyFile string) (bool, st
 }
 
 // l44WhoAmI is the identity the DC gives a connection that presented bind's
-// certificate, after an EXTERNAL bind when externalBind (RFC 4532, which AD supports as 1.3.6.1.4.1.4203.1.11.3), on a
-// connection built by hand: port49's Client exposes searches only.
+// certificate, after an EXTERNAL bind when externalBind (RFC 4532, which AD
+// supports as 1.3.6.1.4.1.4203.1.11.3), on a connection built by hand:
+// port49's Client exposes searches only.
 func (l *labDir) l44WhoAmI(t *testing.T, bind directory.Bind, externalBind bool) (string, error) {
 	t.Helper()
 	cert, err := tls.LoadX509KeyPair(bind.TLSCertFile, bind.TLSKeyFile)
@@ -741,10 +745,13 @@ func (l *labDir) l44ExternalOn(t *testing.T, ev *evidenceLog, label string, bind
 
 // l44LDAPSNoBind is the identity the DC gives an LDAPS connection that
 // presented bind's certificate and bound nothing.
-func (l *labDir) l44LDAPSNoBind(t *testing.T, bind directory.Bind) string {
+func (l *labDir) l44LDAPSNoBind(t *testing.T, ev *evidenceLog, bind directory.Bind) string {
 	t.Helper()
+	ev.mark("L44 LDAPS, the mapped certificate, no bind, a documented observation")
 	id, err := l.l44WhoAmI(t, bind, false)
-	return l44NoBindRow(winScrub(id, l.l44Secrets()...), l44ErrOrNil(err, l.l44Secrets()))
+	id, err = winScrub(id, l.l44Secrets()...), l44ErrOrNil(err, l.l44Secrets())
+	ev.whoami("ldaps, no bind", id, err)
+	return l44NoBindRow(id, err)
 }
 
 // l44ErrOrNil is err scrubbed and cut, or nil.
