@@ -1390,8 +1390,55 @@ func TestWindowsRegistryRebootsForNTDS(t *testing.T) {
 			t.Errorf("%s does not wait out the reboot an NTDS setting starts", c.fn)
 		}
 	}
-	if aw := src("windows_test.go", "awaitReboot"); strings.Contains(aw, "Fatal") || !strings.Contains(aw, "r.Boot != before") {
+	if aw := src("windows_test.go", "awaitReboot"); strings.Contains(aw, "Fatal") || !strings.Contains(aw, "winBootChanged(before, r.Boot)") {
 		t.Error("awaitReboot must never fail fatally, and must wait for a boot other than the one before")
+	}
+}
+
+// A reboot is a boot at least a minute later: LastBootUpTime moves when the
+// clock is stepped within one boot, and an unreadable time proves nothing.
+func TestWindowsBootChanged(t *testing.T) {
+	const b = "2026-10-07T00:34:28.1234567Z"
+	for _, c := range []struct {
+		now  string
+		want bool
+	}{
+		{b, false},
+		{"2026-10-07T00:34:28.6234567Z", false},
+		{"2026-10-07T00:34:58.1234567Z", false},
+		{"2026-10-07T02:34:28.1234567Z", true},
+		{"2026-10-07T00:36:00Z", true},
+		{"2026-10-06T22:34:28Z", false},
+		{"", false},
+		{"not a time", false},
+	} {
+		if got := winBootChanged(b, c.now); got != c.want {
+			t.Errorf("winBootChanged(%s, %q) = %v, want %v", b, c.now, got, c.want)
+		}
+	}
+	if winBootChanged("garbage", "2026-10-07T02:34:28Z") {
+		t.Error("an unreadable before proved a reboot")
+	}
+}
+
+// The cells under LdapEnforceChannelBinding 2 keep their rows only when the
+// DC's boot was read on both sides of them and did not change.
+func TestL44RowsUnder2(t *testing.T) {
+	cells := []l44Cell{{"gssapi under 2", "| gssapi under 2 | refused | 49 | 1s |\n"}, {"simple | under 2", "| simple | ok | 0 | 1s |\n"}}
+	const b, later = "2026-10-07T00:34:28Z", "2026-10-07T00:40:00Z"
+	rows, reason := l44RowsUnder2(cells, b, b, nil)
+	if reason != "" || rows != cells[0].row+cells[1].row {
+		t.Errorf("same boot: reason %q, rows %q", reason, rows)
+	}
+	for name, c := range map[string]struct {
+		after string
+		err   error
+	}{"rebooted": {later, nil}, "unread": {"", errors.New("ssh: handshake failed: EOF")}} {
+		rows, reason := l44RowsUnder2(cells, b, c.after, c.err)
+		if reason == "" || strings.Count(rows, "INVALID (R6)") != 2 || strings.Contains(rows, "refused") ||
+			!strings.Contains(rows, `simple \| under 2`) {
+			t.Errorf("%s: reason %q, rows %q", name, reason, rows)
+		}
 	}
 }
 

@@ -1046,7 +1046,7 @@ func (w *winDC) awaitReboot(t *testing.T, before string, within time.Duration) e
 			var r struct {
 				Boot string `json:"boot"`
 			}
-			if err = json.Unmarshal(res, &r); err == nil && r.Boot != "" && r.Boot != before {
+			if err = json.Unmarshal(res, &r); err == nil && winBootChanged(before, r.Boot) {
 				t.Logf("windows: the DC is back from its reboot after %s", time.Since(start).Round(time.Second))
 				return nil
 			}
@@ -1064,6 +1064,43 @@ func (w *winDC) awaitReboot(t *testing.T, before string, within time.Duration) e
 		}
 		time.Sleep(15 * time.Second)
 	}
+}
+
+// winBootChanged is whether now is a later boot than before, both as
+// ready.ps1 and registry.ps1 answer them (RFC 3339, UTC). LastBootUpTime is
+// derived, and moves when the clock is stepped within one boot, so a string
+// that differs is not enough: a reboot is at least a minute after the boot it
+// ends. An unreadable time is no proof of a reboot.
+func winBootChanged(before, now string) bool {
+	b, err := time.Parse(time.RFC3339Nano, before)
+	if err != nil {
+		return false
+	}
+	n, err := time.Parse(time.RFC3339Nano, now)
+	if err != nil {
+		return false
+	}
+	return n.Sub(b) > time.Minute
+}
+
+// bootNow is the boot ready.ps1 answers from, never failing the test.
+func (w *winDC) bootNow() (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	res, err := w.ps(ctx, "ready", nil)
+	if err != nil {
+		return "", err
+	}
+	var r struct {
+		Boot string `json:"boot"`
+	}
+	if err := json.Unmarshal(res, &r); err != nil {
+		return "", fmt.Errorf("ready.ps1's answer: %v", err)
+	}
+	if _, err := time.Parse(time.RFC3339Nano, r.Boot); err != nil {
+		return "", fmt.Errorf("ready.ps1's boot %q: %v", r.Boot, err)
+	}
+	return r.Boot, nil
 }
 
 // winWriteFile0600 writes body to path, owner-only.
@@ -1746,8 +1783,10 @@ func (w *winDC) configNote() string {
 		"- Each KB5014754 block starts with a control, `control-ski`: alice's AD CS certificate under the strong " +
 		"`X509:<SKI>` mapping, which no part of the claim is about. A block whose control got no TGT is INVALID.\n" +
 		"- Each `LdapEnforceChannelBinding` change reboots the DC, and the next cell waits for LDAPS. Restarting NTDS " +
-		"after setting 2 instead was followed by `lsass.exe` crashing (an access violation in `ntdsai.dll` 15 seconds " +
-		"after NTDS came back) and Windows restarting the VM.\n" +
+		"after setting 2 instead was followed, once, in an earlier run on its own fresh DC, by `lsass.exe` crashing (an " +
+		"access violation in `ntdsai.dll` 15 seconds after NTDS came back) and Windows restarting the VM; whether the " +
+		"restart or the binds under 2 that followed set it off was not separated. The DC's boot is read before and after " +
+		"the cells under 2, and a change makes them INVALID.\n" +
 		"- The KDC is stopped for one EXTERNAL cell (OR-1) and started again at once; the next cell repeats the mapped " +
 		"bind to show the DC recovered.\n" +
 		"- Alice's `User` certificate is requested as alice over WinRM with CredSSP, under a session configuration only she " +

@@ -7,6 +7,7 @@ import (
 	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -244,13 +245,28 @@ func (l *labDir) l44Binds(t *testing.T, ev *evidenceLog) string {
 	restoreCBT := l.l44GuardRegistry(t, "LdapEnforceChannelBinding", l44AsInstalled(cbtInstalled))
 	defer restoreCBT()
 	got := l.setRegistry(t, "LdapEnforceChannelBinding", 2)
+	// Measured once: lsass crashed 15s after NTDS restarted on 2, and which
+	// set it off was not separated. A cell under 2 that met a DC going down
+	// is no measurement, so the boot is read before and after them, and a
+	// change makes every one of them INVALID.
+	bootBefore, berr := w.bootNow()
+	var under2 []l44Cell
 	ev.mark("L44 gssapi, LdapEnforceChannelBinding %s", got)
-	b.WriteString(gssapi("gssapi, channel binding 2", "GSSAPI over LDAPS, keytab, no SASL security layer, `LdapEnforceChannelBinding` "+got+" (port49 sends no channel binding token)"))
+	what := "GSSAPI over LDAPS, keytab, no SASL security layer, `LdapEnforceChannelBinding` " + got + " (port49 sends no channel binding token)"
+	under2 = append(under2, l44Cell{what, gssapi("gssapi, channel binding 2", what)})
 	w.setAltSec(t, brokerDN, directory.ADIssuerSerial(w.certs.brokerADCS))
 	e4 := l.l44External(t, ev, "external, channel binding 2", adcsExt, true)
-	b.WriteString(l44ExtRow("SASL EXTERNAL over LDAPS, mapped, `LdapEnforceChannelBinding` "+got, e4))
+	what = "SASL EXTERNAL over LDAPS, mapped, `LdapEnforceChannelBinding` " + got
+	under2 = append(under2, l44Cell{what, l44ExtRow(what, e4)})
 	simple2 := l.tryBind(t, ev, "simple, channel binding 2", l.bindSimple(), l.d.password)
-	b.WriteString(simple2.row("simple bind over LDAPS, `LdapEnforceChannelBinding` " + got))
+	what = "simple bind over LDAPS, `LdapEnforceChannelBinding` " + got
+	under2 = append(under2, l44Cell{what, simple2.row(what)})
+	bootAfter, aerr := w.bootNow()
+	rows, invalid := l44RowsUnder2(under2, bootBefore, bootAfter, errors.Join(berr, aerr))
+	if invalid != "" {
+		t.Errorf("L44: the cells under LdapEnforceChannelBinding 2 are INVALID (R6): %s", invalid)
+	}
+	b.WriteString(rows)
 	restoreCBT()
 	l.waitLDAPS(t, 5*time.Minute) // the restore rebooted the DC
 
@@ -704,6 +720,31 @@ func l44PreconditionIDs(evs []winEvent) []int {
 }
 
 func l44MDCell(s string) string { return strings.ReplaceAll(s, "|", `\|`) }
+
+// l44Cell is one row of the binds table and what it measured.
+type l44Cell struct{ what, row string }
+
+// l44RowsUnder2 is the rows of the cells measured under
+// LdapEnforceChannelBinding 2, or, when the DC booted again during them or a
+// boot could not be read, an INVALID (R6) row for each and the reason.
+func l44RowsUnder2(cells []l44Cell, before, after string, err error) (string, string) {
+	reason := ""
+	switch {
+	case err != nil:
+		reason = "the DC's boot could not be read around them: " + err.Error()
+	case winBootChanged(before, after):
+		reason = fmt.Sprintf("the DC booted again during them (boot %s, then %s)", before, after)
+	}
+	var b strings.Builder
+	for _, c := range cells {
+		if reason == "" {
+			b.WriteString(c.row)
+		} else {
+			fmt.Fprintf(&b, "| %s | INVALID (R6): %s | n/a | — |\n", l44MDCell(c.what), l44MDCell(reason))
+		}
+	}
+	return b.String(), reason
+}
 
 // l44AsInstalled is the registry value a facts-table entry records, as
 // registry.ps1 sets it (-1 deletes): "absent" is the only value that means none.
