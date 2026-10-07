@@ -16,22 +16,22 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/rhwendt/port49/internal/broker/api"
+	"github.com/rhwendt/port49/internal/oidc"
 	"github.com/rhwendt/port49/internal/testpki"
 )
 
 const oidcE2EClaim = "A person who logs in at Keycloak mints a token from the broker with the ID token as a bearer " +
 	"and logs in to the device with it; a logout at Keycloak reaches the broker by back-channel and the open " +
-	"session's next command is denied credential_revoked; a new login after it works; a prompt=login refresh " +
+	"session's next command is denied credential_revoked; a new login once clock_skew has passed works (an immediate one is refused, for the sub record every Keycloak logout writes); a prompt=login refresh " +
 	"answering the broker's challenge extends the open session from the fresh auth_time, while a plain SSO login " +
 	"answering one is refused refresh_not_fresh; and a client-credentials token of the listed client mints for " +
 	"the machine subject (plan 7h Task 16; policy engine spec §14); Keycloak's admin sign-out of a user holding two " +
 	"sessions sends one logout token naming one session and the subject, and the broker ends both sessions (ruling 13, " +
-	"spec §5.1.4); and a burst of eight back-channel logouts, one per session ended at once, all reach the broker and " +
+	"spec §5.1.4); and a burst of eight back-channel logouts, one per session ended back to back, all reach the broker and " +
 	"all apply, none lost to a reused connection (plan 7h final review F1)."
 
 const (
@@ -243,6 +243,7 @@ func oidcEndToEnd(t *testing.T, l *lab) {
 	// ---- 2. Log out at Keycloak; the broker hears it; the next command is denied.
 	boff, doff := fileSize(c.brokerLog), l.mark()
 	kc.EndSession(t, first.IDToken)
+	endedAt := time.Now() // at or after the logout token's iat
 	recs := waitRecordsOf(c.brokerLog, boff, 30*time.Second, func(rs []map[string]any) bool {
 		return revokeBySid(rs) != nil
 	})
@@ -295,14 +296,25 @@ func oidcEndToEnd(t *testing.T, l *lab) {
 		}
 	}
 
-	// ---- 3. A new login after the logout works, and opens a live session
-	// for the refresh to extend (pre-flight I-10).
+	// ---- 3. A new login once clock_skew has passed works, and opens a live
+	// session for the refresh to extend (pre-flight I-10). Every Keycloak
+	// logout token carries sid and sub, so the broker also writes a sub record
+	// (ruling 13 B) that refuses an ID token issued within clock_skew of the
+	// logout: 3- records what an immediate re-login is told, then 3a waits it out.
 	kc.HTTP = keycloakClient(idpCA) // a fresh browser
+	soon := kc.Login(t, oidcAlice, oidcAlicePassword, nil)
+	_, saidSoon := br.mint(t, soon.IDToken, l.p.node)
+	cell("3-. a new Keycloak login at once after the logout, a new mint", saidSoon)
+	if !strings.Contains(saidSoon, "credential_revoked") {
+		fail("a login at once after the logout was not refused credential_revoked: %s", saidSoon)
+	}
+	time.Sleep(time.Until(loginAgainAt(endedAt)))
+	kc.HTTP = keycloakClient(idpCA)
 	second := kc.Login(t, oidcAlice, oidcAlicePassword, nil)
 	tok2, said2 := br.mint(t, second.IDToken, l.p.node)
-	cell("3a. a new Keycloak login, a new mint", said2)
+	cell("3a. a new Keycloak login after clock_skew, a new mint", said2)
 	if tok2 == "" {
-		t.Fatalf("INVALID: a login after the logout minted nothing: %s", said2)
+		t.Fatalf("INVALID: a login after the logout and clock_skew minted nothing: %s", said2)
 	}
 	sh2, err := l.shell(oidcAlice, tok2)
 	if err != nil {
@@ -374,48 +386,71 @@ func oidcEndToEnd(t *testing.T, l *lab) {
 	}
 
 	// ---- 6. Admin sign-out of a user with two sessions: one token names one
-	// sid and the sub; both sessions end (ruling 13 option B; L45 (b)). Alice's
-	// earlier sessions are over by now, and the two sessions here are fresh
-	// browsers, so no earlier step's state is read.
-	aliceID := kc.UserID(t, oidcAlice)
+	// sid and the sub; both sessions end (ruling 13 option B; L45 (b)). The user
+	// is bob, who has no session or mark from any earlier step, so he holds
+	// exactly the two sessions made here.
+	bobID := kc.UserID(t, oidcBob)
 	var pairIDs, pairSids []string
 	for i := 1; i <= 2; i++ {
 		kc.HTTP = keycloakClient(idpCA) // a fresh browser: a session of its own
-		lg := kc.Login(t, oidcAlice, oidcAlicePassword, nil)
+		lg := kc.Login(t, oidcBob, oidcBobPassword, nil)
 		sid := sidOf(lg.IDToken)
 		kc.know(sid)
 		if sid == "" {
 			t.Fatalf("INVALID: session %d of 2 has an ID token with no sid", i)
 		}
 		if tk, said := br.mint(t, lg.IDToken, l.p.node); tk == "" {
-			t.Fatalf("INVALID: the mint of session %d of 2 gave no token: %s", i, said)
+			t.Fatalf("%s", mintFault(fmt.Sprintf("session %d of 2", i), said))
 		}
 		pairIDs, pairSids = append(pairIDs, lg.IDToken), append(pairSids, sid)
 	}
 	if pairSids[0] == pairSids[1] {
 		t.Fatalf("INVALID: the two logins share one sid")
 	}
-	cell("6a. two fresh Keycloak logins as alice, a mint with each ID token", "both minted; two different sids")
+	bobSub := subOf(pairIDs[0])
+	cell("6a. two fresh Keycloak logins as bob, a mint with each ID token", "both minted; two different sids")
 	since := time.Now().UTC().Format(time.RFC3339)
-	boff = fileSize(c.brokerLog)
-	kc.LogoutUser(t, aliceID)
+	boff, errOff, mBefore := fileSize(c.brokerLog), fileSize(c.brokerErr), oidcBrokerMetrics()
+	kc.LogoutUser(t, bobID)
 	recs = waitRecordsOf(c.brokerLog, boff, 30*time.Second, func(rs []map[string]any) bool {
-		_, _, ok := logoutRevokes(rs, oidcLogoutOrigin+kc.URL)
+		_, _, ok := logoutRevokes(rs, oidcLogoutOrigin+kc.URL, bobSub)
 		return ok
 	})
-	rsid, _, ok := logoutRevokes(recs, oidcLogoutOrigin+kc.URL)
+	rsid, _, ok := logoutRevokes(recs, oidcLogoutOrigin+kc.URL, bobSub)
+	if !ok {
+		// As step 2: a request that never arrived is a setup fault; one that
+		// arrived and wrote the wrong records is a failed cell.
+		tail, _ := os.ReadFile(c.brokerErr)
+		if int64(len(tail)) > errOff {
+			tail = tail[errOff:]
+		} else {
+			tail = nil
+		}
+		refusal, _ := logoutArrival(string(tail), "")
+		answered, _, _ := logoutCounts(mBefore, oidcBrokerMetrics())
+		if refusal == "" && answered <= 0 {
+			t.Fatalf("INVALID: no logout request reached the broker within 30s of the admin sign-out: Keycloak's " +
+				"truststore, the port49-broker name, or the stack's network; no note is written")
+		}
+	}
 	switch {
 	case ok && sidLabel(rsid, pairSids) == 0:
 		cell("6b. the broker's revoke records after admin sign-out", "a revoke by sid then by sub, but the sid is neither session's")
 		fail("the revoke by sid names neither of the user's two sessions")
 	case ok:
 		cell("6b. the broker's revoke records after admin sign-out", fmt.Sprintf(
-			"revoke by sid (session %d of 2), then revoke by sub; origin %s<issuer>", sidLabel(rsid, pairSids), oidcLogoutOrigin))
+			"revoke by sid (session %d of 2), then revoke by sub (the user's); origin %s<issuer>", sidLabel(rsid, pairSids), oidcLogoutOrigin))
 	default:
 		cell("6b. the broker's revoke records after admin sign-out", fmt.Sprintf(
-			"no revoke by sid followed by a revoke by sub with origin %s<issuer> within 30s (%d revoke records)",
-			oidcLogoutOrigin, len(reasonsOf(recs, "revoke"))))
+			"a logout request arrived, but no revoke by sid followed by a revoke by the user's sub with origin %s<issuer> "+
+				"within 30s (%d revoke records)", oidcLogoutOrigin, len(reasonsOf(recs, "revoke"))))
 		fail("the sign-out of a user holding two sessions left no revoke by sid then by sub within 30s")
+	}
+	tokens, _, _ := logoutCounts(mBefore, oidcBrokerMetrics())
+	sidRecs := countRevokes(recs, oidcLogoutOrigin+kc.URL, "sid")
+	cell("6e. logout tokens Keycloak sent for the one sign-out", fmt.Sprintf("%.0f logout request(s) answered; %d revoke record(s) by sid", tokens, sidRecs))
+	if sidRecs != 1 {
+		fail("the sign-out sent %d logout token(s) naming a session, not one", sidRecs)
 	}
 	for i, id := range pairIDs {
 		if idTokenExpired(id, time.Now(), 10*time.Second) {
@@ -428,82 +463,98 @@ func oidcEndToEnd(t *testing.T, l *lab) {
 			fail("session %d of 2's ID token minted after the sign-out of its user: %s", i+1, again)
 		}
 	}
-	oidcDeliveryCell(c, since, cell, fail, "6d")
+	oidcDeliveryCell(c, kc, since, cell, fail, "6d")
 
-	// ---- 7. A burst: eight sessions ended at once. Keycloak's pooled client
+	// ---- 7. A burst: eight sessions ended back to back. Keycloak's pooled client
 	// reused a closed connection and never retried, so all but the first
 	// logout was lost (7h final review F1; Connection: close on the listener).
-	// The sub mark step 6 left is older than these logins' tokens.
-	time.Sleep(2 * time.Second)
+	// Back to back, because a reused connection is what failed: eight requests
+	// released at once each open a connection of their own and reuse none. The
+	// user is carol: an empty token key (device, username), so the eight mints
+	// fit token.candidate_cap, and a sub of her own that no earlier logout marked.
 	const burst = 8
 	var burstIDs, burstSids []string
 	for i := 1; i <= burst; i++ {
 		kc.HTTP = keycloakClient(idpCA)
-		lg := kc.Login(t, oidcAlice, oidcAlicePassword, nil)
+		lg := kc.Login(t, oidcCarol, oidcCarolPassword, nil)
 		sid := sidOf(lg.IDToken)
 		kc.know(sid)
 		if sid == "" {
 			t.Fatalf("INVALID: burst session %d of %d has an ID token with no sid", i, burst)
 		}
 		if tk, said := br.mint(t, lg.IDToken, l.p.node); tk == "" {
-			t.Fatalf("INVALID: the mint of burst session %d of %d gave no token: %s", i, burst, said)
+			t.Fatalf("%s", mintFault(fmt.Sprintf("burst session %d of %d", i, burst), said))
 		}
 		burstIDs, burstSids = append(burstIDs, lg.IDToken), append(burstSids, sid)
 	}
-	cell("7a. eight fresh Keycloak logins as alice, a mint with each ID token", "all eight minted")
+	cell("7a. eight fresh Keycloak logins as carol, a mint with each ID token", "all eight minted")
 	kc.HTTP = keycloakClient(idpCA)
 	adminTok := kc.Admin(t)
 	before := oidcBrokerMetrics()
-	since = time.Now().UTC().Format(time.RFC3339)
-	start := make(chan struct{})
-	errs := make([]error, burst)
-	var wg sync.WaitGroup
-	for i, sid := range burstSids {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			<-start
-			errs[i] = kc.deleteSessionWith(adminTok, sid)
-		}()
+	if !hasLogoutSeries(before) {
+		// Steps 2 and 6 already logged out: the series exists unless the metrics
+		// could not be read, and a delta against nothing counts steps 2 and 6 too.
+		t.Fatalf("INVALID: the broker's metrics before the burst could not be read or hold no port49_oidc_logouts_total")
 	}
-	close(start)
-	wg.Wait()
-	for i, err := range errs {
-		if err != nil {
+	since = time.Now().UTC().Format(time.RFC3339)
+	boff = fileSize(c.brokerLog)
+	for i, sid := range burstSids {
+		if err := kc.deleteSessionWith(adminTok, sid); err != nil {
 			t.Fatalf("INVALID: ending burst session %d of %d: %v", i+1, burst, err)
 		}
 	}
-	var total, applied float64
-	deadline := time.Now().Add(30 * time.Second)
-	for {
-		total, applied = logoutCounts(before, oidcBrokerMetrics())
-		if applied >= burst || !time.Now().Before(deadline) {
-			break
-		}
-		time.Sleep(500 * time.Millisecond)
+	burstOrigin := oidcLogoutOrigin + kc.URL
+	var missing []int
+	var foreign int
+	recs = waitRecordsOf(c.brokerLog, boff, 30*time.Second, func(rs []map[string]any) bool {
+		missing, foreign = burstRevokes(rs, burstOrigin, burstSids)
+		return len(missing) == 0
+	})
+	missing, foreign = burstRevokes(recs, burstOrigin, burstSids)
+	if len(missing) == 0 && foreign == 0 {
+		cell("7b. eight admin session ends back to back; the broker's revoke records by sid", fmt.Sprintf(
+			"a revoke by sid for each of the eight burst sessions within 30s; origin %s<issuer>", oidcLogoutOrigin))
+	} else {
+		cell("7b. eight admin session ends back to back; the broker's revoke records by sid", fmt.Sprintf(
+			"no revoke by sid within 30s for burst session(s) %v; %d record(s) by sid for no burst session", missing, foreign))
+		fail("of %d back-to-back back-channel logouts, burst session(s) %v left no revoke record by sid and %d record(s) named another sid",
+			burst, missing, foreign)
 	}
-	cell("7b. eight concurrent admin session ends; port49_oidc_logouts_total gained", fmt.Sprintf(
-		"%.0f logouts answered, %.0f applied (of %d ended)", total, applied, burst))
-	if total != burst || applied != burst {
-		fail("of %d concurrent back-channel logouts, %.0f reached the broker and %.0f applied", burst, total, applied)
+	if after := oidcBrokerMetrics(); !hasLogoutSeries(after) {
+		cell("7c. port49_oidc_logouts_total gained", "not measured: the metrics could not be read")
+	} else {
+		total, applied, nothing := logoutCounts(before, after)
+		cell("7c. port49_oidc_logouts_total gained", fmt.Sprintf("%.0f logouts answered: %.0f applied, %.0f found nothing to end, "+
+			"%.0f any other outcome (of %d ended)", total, applied, nothing, total-applied-nothing, burst))
+		if !logoutAnswered(total, applied, nothing, burst) {
+			fail("of %d back-to-back back-channel logouts, %.0f were answered and %.0f applied or found nothing to end", burst, total, applied+nothing)
+		}
 	}
 	for i, id := range burstIDs {
+		name := fmt.Sprintf("7d. burst session %d of %d's ID token mints again (refused by any one logout's sub record)", i+1, burst)
 		if idTokenExpired(id, time.Now(), 10*time.Second) {
-			cell(fmt.Sprintf("7c. burst session %d of %d's ID token mints again", i+1, burst), "not measured: the ID token had expired")
+			cell(name, "not measured: the ID token had expired")
 			continue
 		}
 		tk, again := br.mint(t, id, l.p.node)
-		cell(fmt.Sprintf("7c. burst session %d of %d's ID token mints again", i+1, burst), again)
+		cell(name, again)
 		if tk != "" || !strings.Contains(again, "credential_revoked") {
 			fail("burst session %d of %d's ID token minted after its session ended: %s", i+1, burst, again)
 		}
 	}
-	oidcDeliveryCell(c, since, cell, fail, "7d")
+	oidcDeliveryCell(c, kc, since, cell, fail, "7e")
 	complete = true
 }
 
 // oidcLogoutOrigin prefixes a back-channel logout's revoke origin; the issuer follows.
 const oidcLogoutOrigin = "backchannel_logout "
+
+// subOf is the ID token's sub claim, empty when it has none.
+func subOf(idToken string) string {
+	_, c := claimsOf(idToken)
+	s, _ := c["sub"].(string)
+	return s
+}
 
 // sidOf is the ID token's sid claim, empty when it has none.
 func sidOf(idToken string) string {
@@ -513,8 +564,9 @@ func sidOf(idToken string) string {
 }
 
 // logoutRevokes finds the revoke records one logout token wrote under ruling 13:
-// the first by sid with origin, and a by sub with the same origin after it.
-func logoutRevokes(recs []map[string]any, origin string) (bySid, bySub map[string]any, ok bool) {
+// the first by sid with origin, and a by sub with the same origin after it whose
+// sub is subject (so a stray logout of another person cannot satisfy it).
+func logoutRevokes(recs []map[string]any, origin, subject string) (bySid, bySub map[string]any, ok bool) {
 	for _, rec := range recs {
 		rv := sub(rec, "revocation")
 		if str(rec, "event") != "revoke" || str(rv, "origin") != origin {
@@ -526,12 +578,65 @@ func logoutRevokes(recs []map[string]any, origin string) (bySid, bySub map[strin
 				bySid = rec
 			}
 		case "sub":
-			if bySid != nil && bySub == nil {
+			if bySid != nil && bySub == nil && subject != "" && str(rv, "sub") == subject {
 				bySub = rec
 			}
 		}
 	}
 	return bySid, bySub, bySid != nil && bySub != nil
+}
+
+// burstRevokes matches the by-sid revoke records with origin against the sids a
+// burst ended: the 1-based labels of the sids no record names, and how many
+// distinct sids a record names that are not the burst's. Every logout writes its
+// records whatever its outcome, so this is the per-session evidence.
+func burstRevokes(recs []map[string]any, origin string, sids []string) (missing []int, foreign int) {
+	named := map[string]bool{}
+	for _, rec := range recs {
+		rv := sub(rec, "revocation")
+		if str(rec, "event") == "revoke" && str(rv, "origin") == origin && str(rv, "by") == "sid" {
+			named[str(rv, "sid")] = true
+		}
+	}
+	for i, s := range sids {
+		if named[s] {
+			delete(named, s)
+		} else {
+			missing = append(missing, i+1)
+		}
+	}
+	return missing, len(named)
+}
+
+// countRevokes is how many revoke records with origin are by the given key.
+func countRevokes(recs []map[string]any, origin, by string) int {
+	n := 0
+	for _, rec := range recs {
+		rv := sub(rec, "revocation")
+		if str(rec, "event") == "revoke" && str(rv, "origin") == origin && str(rv, "by") == by {
+			n++
+		}
+	}
+	return n
+}
+
+// loginAgainAt is the earliest time a person who logged out at at logs in again
+// and is not refused by the sub record every Keycloak logout writes (ruling 13
+// B): an ID token is refused until its iat passes the logout token's iat plus
+// clock_skew. The extra 5s is 1s for iat's truncation to whole seconds and the
+// rest margin. The e2e broker sets no clock_skew, so it is the default.
+func loginAgainAt(at time.Time) time.Time {
+	return at.Add(oidc.DefaultTiming.ClockSkew + 5*time.Second)
+}
+
+// mintFault is the INVALID message for a setup mint that gave no token; a
+// refusal for the candidate cap says which knob it is.
+func mintFault(what, said string) string {
+	msg := fmt.Sprintf("INVALID: the mint of %s gave no token: %s", what, said)
+	if strings.Contains(said, "candidate_cap_reached") {
+		msg += " (the unspent tokens of this device and username reached token.candidate_cap, 8 by default)"
+	}
+	return msg
 }
 
 // sidLabel is the 1-based place in sids of the sid a revoke record names, 0 for none.
@@ -557,11 +662,31 @@ func oidcBrokerMetrics() string {
 }
 
 // logoutCounts is how many logouts the broker answered between two metrics
-// texts, of any outcome, and how many of them applied.
-func logoutCounts(before, after string) (total, applied float64) {
+// texts, of any outcome, and how many of them applied and found nothing to end.
+func logoutCounts(before, after string) (total, applied, nothing float64) {
 	const name = "port49_oidc_logouts_total"
 	return metricSum(after, name) - metricSum(before, name),
-		metricOutcome(after, name, "applied") - metricOutcome(before, name, "applied")
+		metricOutcome(after, name, "applied") - metricOutcome(before, name, "applied"),
+		metricOutcome(after, name, "nothing") - metricOutcome(before, name, "nothing")
+}
+
+// logoutAnswered is whether want logouts were all answered cleanly: applied, or
+// nothing left to end (the first logout of a principal deletes every unspent
+// token, so the later ones find none). An invalid, unavailable, store_error or
+// partial outcome is the remainder and fails it.
+func logoutAnswered(total, applied, nothing float64, want int) bool {
+	return total == float64(want) && applied+nothing == float64(want)
+}
+
+// hasLogoutSeries is whether the metrics text holds a port49_oidc_logouts_total
+// sample, which it does from the first logout the broker answers.
+func hasLogoutSeries(text string) bool {
+	for _, line := range strings.Split(text, "\n") {
+		if rest, ok := strings.CutPrefix(line, "port49_oidc_logouts_total"); ok && rest != "" && (rest[0] == '{' || rest[0] == ' ') {
+			return true
+		}
+	}
+	return false
 }
 
 // metricOutcome is metricSum of the samples labelled outcome="outcome".
@@ -575,22 +700,33 @@ func metricOutcome(text, name, outcome string) float64 {
 	return metricSum(strings.Join(lines, "\n"), name)
 }
 
-// deliveryFailures is each line of Keycloak's log that says a logout failed.
+// deliveryFailures is each line of Keycloak's log that says a back-channel
+// logout failed: its own KC-SERVICES0057 ("Logout for client ... failed"), or a
+// line about a backchannel logout or a logout for a client that says it failed.
+// A line that only holds "logout" and "fail" (a failed-login counter) is not one.
 func deliveryFailures(logs string) []string {
 	var out []string
 	for _, line := range strings.Split(logs, "\n") {
 		low := strings.ToLower(line)
-		if strings.Contains(low, "logout") && strings.Contains(low, "fail") {
+		if strings.Contains(low, "logout") && strings.Contains(low, "fail") &&
+			(strings.Contains(low, "kc-services0057") || strings.Contains(low, "backchannel") || strings.Contains(low, "for client")) {
 			out = append(out, line)
 		}
 	}
 	return out
 }
 
+// deliveryCellText says how many delivery failure lines there are and the first,
+// scrubbed: Keycloak's line can name a session id, and a note holding a
+// registered value is refused whole.
+func deliveryCellText(bad []string, secrets []string) string {
+	return fmt.Sprintf("%d delivery failure line(s); first: %s", len(bad), oneLineMax(scrubbed(bad[0], secrets), 240))
+}
+
 // oidcDeliveryCell records the back-channel delivery failures in Keycloak's log
 // since a time; a failure is a failed cell. A log that cannot be read is no cell
 // of "none": it is said so.
-func oidcDeliveryCell(c *composeStack, since string, cell func(step, what string), fail func(string, ...any), step string) {
+func oidcDeliveryCell(c *composeStack, kc *keycloak, since string, cell func(step, what string), fail func(string, ...any), step string) {
 	logs, err := c.run("logs", "--no-color", "--since", since, "keycloak")
 	if err != nil {
 		cell(step+". Keycloak's log in the window", "not measured: its log could not be read")
@@ -601,7 +737,7 @@ func oidcDeliveryCell(c *composeStack, since string, cell func(step, what string
 		cell(step+". Keycloak's log in the window", "no back-channel delivery failure")
 		return
 	}
-	cell(step+". Keycloak's log in the window", fmt.Sprintf("%d delivery failure line(s); first: %s", len(bad), oneLineMax(bad[0], 240)))
+	cell(step+". Keycloak's log in the window", deliveryCellText(bad, kc.known()))
 	fail("Keycloak logged %d back-channel delivery failure(s) in the window", len(bad))
 }
 
