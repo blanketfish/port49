@@ -4085,7 +4085,7 @@ fix round 4 stayed with the Sonnet implementer instead of escalating (the model 
   - **Upgrading from an earlier build:** the symptom is `identity_unmapped`. An `issuer_serial`
     lookup for an issuer whose RDN holds `\` or `/` now uses the raw value, not the quoted one. An
     `altSecurityIdentities` entry holding the old quoted value never matched at the KDC, so
-    rewrite it unquoted. Relative to the 7a build, 7a also quotes a comma, a plus sign, an inner
+    rewrite it unquoted. Against a build from before 7a, 7a also quotes a comma, a plus sign, an inner
     quote and a leading space, and 7b adds the `00` sign byte to a serial whose top bit is set:
     a value written for an earlier build may differ there too. The upgrade impact is nil only
     because port49 is unreleased. A key held in the grace cache under the old value misses until
