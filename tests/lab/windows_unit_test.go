@@ -1347,7 +1347,55 @@ func TestWindowsRegistryStartsEveryServiceAgain(t *testing.T) {
 	}
 }
 
-// registry.ps1 waits up to N minutes for NTDS itself; the Go side outlasts it,
+// An NTDS setting reboots the DC and never restarts NTDS: measured, lsass
+// crashed in ntdsai.dll 15s after NTDS restarted on LdapEnforceChannelBinding
+// 2. Both the change and its restore wait for a later boot than the one the
+// change was made in, and the wait never fails fatally (a restore may run
+// while a failure unwinds).
+func TestWindowsRegistryRebootsForNTDS(t *testing.T) {
+	b, _ := winScriptFS.ReadFile("directory/windows/scripts/registry.ps1")
+	s := string(b)
+	reboot := strings.Index(s, "if ($svc -eq 'NTDS') {")
+	restart := strings.Index(s, "Restart-Service $svc")
+	if reboot < 0 || restart < reboot || !strings.Contains(s[reboot:restart], "shutdown.exe /r /t 15") ||
+		!strings.Contains(s[reboot:restart], "return @{") || !strings.Contains(s[reboot:restart], "boot = $boot") {
+		t.Error("registry.ps1 must answer with the boot time and reboot for an NTDS setting before any Restart-Service")
+	}
+	if regexp.MustCompile(`(?i)restart-service\s+(-name\s+)?['"]?ntds`).MatchString(s) {
+		t.Error("registry.ps1 restarts NTDS by name")
+	}
+	r, _ := winScriptFS.ReadFile("directory/windows/scripts/ready.ps1")
+	if !strings.Contains(string(r), "boot = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime") {
+		t.Error("ready.ps1 does not answer its boot time, so a reboot cannot be told from the boot before it")
+	}
+	src := func(file, fn string) string {
+		b, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := string(b)
+		i := strings.Index(s, ") "+fn+"(")
+		if i < 0 {
+			t.Fatalf("no func %s in %s", fn, file)
+		}
+		s = s[i:]
+		if end := strings.Index(s, "\n}\n"); end >= 0 {
+			s = s[:end]
+		}
+		return s
+	}
+	for _, c := range []struct{ file, fn string }{{"windows_test.go", "setRegistry"}, {"l44_test.go", "l44GuardRegistry"}} {
+		body := src(c.file, c.fn)
+		if !strings.Contains(body, `if r.Restarted == "reboot" {`) || !strings.Contains(body, "awaitReboot(t, r.Boot, winRebootWithin)") {
+			t.Errorf("%s does not wait out the reboot an NTDS setting starts", c.fn)
+		}
+	}
+	if aw := src("windows_test.go", "awaitReboot"); strings.Contains(aw, "Fatal") || !strings.Contains(aw, "r.Boot != before") {
+		t.Error("awaitReboot must never fail fatally, and must wait for a boot other than the one before")
+	}
+}
+
+// registry.ps1 waits up to N minutes for the KDC itself; the Go side outlasts it,
 // or a cell would read a DC that is still restarting.
 func TestWindowsRegistryDeadlineOutlastsTheScript(t *testing.T) {
 	b, _ := winScriptFS.ReadFile("directory/windows/scripts/registry.ps1")

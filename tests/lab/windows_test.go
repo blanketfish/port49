@@ -784,8 +784,12 @@ func (a *winAuthWatch) observe(err error, now time.Time) bool {
 	return a.stall > 0 && now.Sub(a.since) >= a.stall
 }
 
-// winRegistryWithin outlasts registry.ps1's own five-minute wait for NTDS.
+// winRegistryWithin outlasts registry.ps1's own five-minute wait for the KDC.
 const winRegistryWithin = 8 * time.Minute
+
+// winRebootWithin is how long the DC may take to answer again after
+// registry.ps1 reboots it for an NTDS setting.
+const winRebootWithin = 20 * time.Minute
 
 func (e *winScriptErr) Error() string { return "windows " + e.name + ": " + e.msg }
 
@@ -1019,6 +1023,44 @@ func (w *winDC) waitReady(t *testing.T, within time.Duration) {
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("windows: AD DS did not answer within %s of the promotion's reboot: %v", within, err)
+		}
+		time.Sleep(15 * time.Second)
+	}
+}
+
+// awaitReboot waits for the DC to come back from the reboot registry.ps1's
+// timer starts: until ready.ps1 answers from a boot other than before. It never
+// fails the test, because a registry restore may call it while a failure
+// unwinds; it says every two minutes that it is still waiting.
+func (w *winDC) awaitReboot(t *testing.T, before string, within time.Duration) error {
+	t.Helper()
+	start := time.Now()
+	deadline, next := start.Add(within), start.Add(2*time.Minute)
+	time.Sleep(30 * time.Second) // the timer is 15s; a probe before it fires reads the old boot
+	var last error
+	for {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		res, err := w.ps(ctx, "ready", nil)
+		cancel()
+		if err == nil {
+			var r struct {
+				Boot string `json:"boot"`
+			}
+			if err = json.Unmarshal(res, &r); err == nil && r.Boot != "" && r.Boot != before {
+				t.Logf("windows: the DC is back from its reboot after %s", time.Since(start).Round(time.Second))
+				return nil
+			}
+			if err == nil {
+				err = errors.New("ready.ps1 still answers from the boot before the reboot")
+			}
+		}
+		last = err
+		if time.Now().After(deadline) {
+			return fmt.Errorf("the DC was not back from its reboot within %s: %v", within, last)
+		}
+		if time.Now().After(next) {
+			t.Logf("windows: waiting for the DC to come back from its reboot (%s)", time.Since(start).Round(time.Second))
+			next = time.Now().Add(2 * time.Minute)
 		}
 		time.Sleep(15 * time.Second)
 	}
@@ -1577,17 +1619,25 @@ func (w *winDC) setAltSec(t *testing.T, dn, value string) {
 	w.setValues(t, dn, "altSecurityIdentities", vals)
 }
 
+// winRegistryResult is what registry.ps1 answers.
+type winRegistryResult struct {
+	Value     string `json:"value"`
+	Restarted string `json:"restarted"` // "Kdc", or "reboot" for an NTDS setting
+	Boot      string `json:"boot"`      // the boot the change was made in
+}
+
 // setRegistry sets one of the DC settings the run varies (-1 deletes it),
-// waits for LDAPS when NTDS restarted, and returns the value in force.
+// waits out the reboot and for LDAPS when the setting is NTDS's, and returns
+// the value in force.
 func (l *labDir) setRegistry(t *testing.T, name string, value int) string {
 	t.Helper()
-	var r struct {
-		Value     string `json:"value"`
-		Restarted string `json:"restarted"`
-	}
+	var r winRegistryResult
 	l.win.run(t, "registry", map[string]any{"name": name, "value": value}, winRegistryWithin, &r)
-	if r.Restarted == "NTDS" {
-		l.waitLDAPS(t, 3*time.Minute)
+	if r.Restarted == "reboot" {
+		if err := l.win.awaitReboot(t, r.Boot, winRebootWithin); err != nil {
+			t.Fatalf("windows: after setting %s: %v", name, err)
+		}
+		l.waitLDAPS(t, 5*time.Minute)
 	}
 	return r.Value
 }
@@ -1695,6 +1745,9 @@ func (w *winDC) configNote() string {
 		"second CA whose CN holds a comma are in the DC's Root store and in NTAuth.\n" +
 		"- Each KB5014754 block starts with a control, `control-ski`: alice's AD CS certificate under the strong " +
 		"`X509:<SKI>` mapping, which no part of the claim is about. A block whose control got no TGT is INVALID.\n" +
+		"- Each `LdapEnforceChannelBinding` change reboots the DC, and the next cell waits for LDAPS. Restarting NTDS " +
+		"after setting 2 instead was followed by `lsass.exe` crashing (an access violation in `ntdsai.dll` 15 seconds " +
+		"after NTDS came back) and Windows restarting the VM.\n" +
 		"- The KDC is stopped for one EXTERNAL cell (OR-1) and started again at once; the next cell repeats the mapped " +
 		"bind to show the DC recovered.\n" +
 		"- Alice's `User` certificate is requested as alice over WinRM with CredSSP, under a session configuration only she " +

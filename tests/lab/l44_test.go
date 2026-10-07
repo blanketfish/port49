@@ -252,7 +252,7 @@ func (l *labDir) l44Binds(t *testing.T, ev *evidenceLog) string {
 	simple2 := l.tryBind(t, ev, "simple, channel binding 2", l.bindSimple(), l.d.password)
 	b.WriteString(simple2.row("simple bind over LDAPS, `LdapEnforceChannelBinding` " + got))
 	restoreCBT()
-	l.waitLDAPS(t, 3*time.Minute) // the restore restarted NTDS
+	l.waitLDAPS(t, 5*time.Minute) // the restore rebooted the DC
 
 	fmt.Fprintf(&b, "\nWhether the DC's LDAPS asked the client for a certificate (what EXTERNAL needs): %s.\n", l.certRequested(t))
 	if !simple.ok || simple.read != 1 || !simple2.ok {
@@ -727,8 +727,15 @@ func (l *labDir) l44GuardRegistry(t *testing.T, name string, installed int) func
 			return
 		}
 		done = true
-		if err := l.win.try(t, "registry", map[string]any{"name": name, "value": installed}, winRegistryWithin, nil); err != nil {
+		var r winRegistryResult
+		if err := l.win.try(t, "registry", map[string]any{"name": name, "value": installed}, winRegistryWithin, &r); err != nil {
 			t.Errorf("L44: restoring %s to the value installed: %s", name, l.l44Err(err))
+			return
+		}
+		if r.Restarted == "reboot" {
+			if err := l.win.awaitReboot(t, r.Boot, winRebootWithin); err != nil {
+				t.Errorf("L44: restoring %s to the value installed: %v", name, err)
+			}
 		}
 	}
 }
