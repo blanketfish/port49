@@ -472,17 +472,84 @@ func TestRevokeBySidRefusesWhatItCannotName(t *testing.T) {
 	f := newFixtureWithPolicy(t, 8, onCallPolicy)
 	iss := f.withOIDC(t)
 	carol := f.carolToken(t, iss)
-	for _, body := range []string{
-		`{"sid":"s","principal":"user:alice@example.com"}`,
-		`{"sid":"s","mine":true}`,
-		`{"sid":"s","device":"leaf1","username":"alice"}`,
-		`{"sid":"s","issuer":"https://not-configured.example"}`,
-		`{"issuer":"` + iss.URL + `"}`,
-		`{"sid":"has space"}`,
+	for _, c := range []struct{ body, says string }{
+		{`{"sid":"s","principal":"user:alice@example.com"}`, "name a sid alone"},
+		{`{"sid":"s","mine":true}`, "name a sid alone"},
+		{`{"sid":"s","device":"leaf1","username":"alice"}`, "name a sid alone"},
+		{`{"sid":"s","issuer":"https://not-configured.example"}`, "no human OIDC verifier's"},
+		{`{"issuer":"` + iss.URL + `"}`, "name the sid"},
+		// Without its guard this is a standing ban on alice, the issuer dropped.
+		{`{"issuer":"` + iss.URL + `","principal":"user:alice@example.com"}`, "name the sid"},
+		{`{"sid":"has space"}`, "printable ASCII"},
+		{`{"sid":"` + strings.Repeat("a", 256) + `"}`, "printable ASCII"},
 	} {
-		if w := f.bearer(context.Background(), "POST", "/v1/tokens/revoke", body, carol); w.Code != 400 {
-			t.Errorf("%s: %d %s", body, w.Code, w.Body)
+		w := f.bearer(context.Background(), "POST", "/v1/tokens/revoke", c.body, carol)
+		if w.Code != 400 || !strings.Contains(w.Body.String(), c.says) {
+			t.Errorf("%s: %d %s", c.body, w.Code, w.Body)
 		}
+	}
+	if n := len(eventsOf(f.records(t), decision.EventRevoke)); n != 0 {
+		t.Errorf("a refused request wrote %d revoke record(s)", n)
+	}
+	// 255 is the longest sid taken.
+	if w := f.bearer(context.Background(), "POST", "/v1/tokens/revoke",
+		`{"sid":"`+strings.Repeat("a", 255)+`"}`, carol); w.Code != 200 {
+		t.Errorf("a 255-character sid: %d %s", w.Code, w.Body)
+	}
+}
+
+// I1: a logout whose record the store cannot write ended nothing, and says
+// so: 503, never a 200 "ended".
+func TestRevokeBySidWithTheStoreDownIsNotAnAnswerOfSuccess(t *testing.T) {
+	f := newFixtureWithPolicy(t, 8, onCallPolicy)
+	iss := f.withOIDC(t)
+	f.b.Store = hookStore{Store: f.st, before: map[string]func() error{
+		"PutLogout": func() error { return store.ErrUnavailable }}}
+	w := f.bearer(context.Background(), "POST", "/v1/tokens/revoke", `{"sid":"s-sub-alice"}`, f.carolToken(t, iss))
+	if w.Code != 503 || w.Header().Get("Retry-After") != "10" || !strings.Contains(w.Body.String(), "store_unavailable") ||
+		!strings.Contains(w.Body.String(), "nothing was revoked") {
+		t.Fatalf("%d %v %s", w.Code, w.Header(), w.Body)
+	}
+	if n := len(eventsOf(f.records(t), decision.EventRevoke)); n != 0 {
+		t.Fatalf("a logout that did not apply wrote %d revoke record(s)", n)
+	}
+}
+
+// M2: with two human verifiers a bare sid names no provider; guessing the
+// first would end the wrong one's session.
+func TestRevokeBySidNeedsItsIssuerWithTwoProviders(t *testing.T) {
+	f := newFixtureWithPolicy(t, 8, onCallPolicy)
+	iss := f.withOIDC(t)
+	f.addIssuer(t, oidctest.NewIssuer(t), "example.com", false)
+	w := f.bearer(context.Background(), "POST", "/v1/tokens/revoke", `{"sid":"s-sub-alice"}`, f.carolToken(t, iss))
+	if w.Code != 400 || !strings.Contains(w.Body.String(), "name the sid's issuer") {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	body := `{"sid":"s-sub-alice","issuer":"` + iss.URL + `"}`
+	if w := f.bearer(context.Background(), "POST", "/v1/tokens/revoke", body, f.carolToken(t, iss)); w.Code != 200 {
+		t.Fatalf("with its issuer: %d %s", w.Code, w.Body)
+	}
+}
+
+// M4: a sid whose owner record names two principals ends both, and the
+// answer names both.
+func TestRevokeBySidAnswerNamesEveryOwnerPrincipal(t *testing.T) {
+	f := newFixtureWithPolicy(t, 8, onCallPolicy)
+	iss := f.withOIDC(t)
+	ctx := context.Background()
+	const alice2 = "user:alice2@example.com"
+	for _, p := range []string{alicePrincipal, alice2} {
+		if err := f.st.PutOIDCOwner(ctx, store.SidKey(iss.URL, "s-sub-alice"), p, time.Hour); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w := f.bearer(ctx, "POST", "/v1/tokens/revoke", `{"sid":"s-sub-alice"}`, f.carolToken(t, iss))
+	var resp api.RevokeResponse
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &resp) != nil {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	if !strings.Contains(resp.Text, alicePrincipal) || !strings.Contains(resp.Text, alice2) {
+		t.Fatalf("the text names one owner only: %s", resp.Text)
 	}
 }
 

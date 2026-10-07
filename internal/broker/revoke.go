@@ -539,7 +539,9 @@ func (r RevokeReport) Text() string {
 			what = "every session of sub " + r.Sub
 		}
 		owner := ""
-		if r.Request.Principal != "" {
+		if len(r.Principals) > 0 {
+			owner = " (" + strings.Join(r.Principals, ", ") + ")"
+		} else if r.Request.Principal != "" {
 			owner = " (" + r.Request.Principal + ")"
 		}
 		fmt.Fprintf(&b, "ended %s at %s%s at %s: %d live context(s) marked, the unspent tokens under %d key(s) "+
