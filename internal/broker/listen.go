@@ -185,7 +185,8 @@ var ErrUnwired = errors.New("broker: the listener has a directory Map but no Cal
 
 // Wire sets l's hooks from b: the one way port49d and port49-broker wire
 // their listener (pre-flight I-4). Refused, Status and Caller always; Map
-// under a directory. Caller is what keeps a workload out of Map.
+// under a directory. Caller is what keeps a workload out of Map. It must run
+// before Serve (the first Accept): the hooks are read without a lock.
 func (b *Broker) Wire(l *Listener) {
 	l.Refused = b.RefusedAtBind
 	l.Status = b.BindStatus

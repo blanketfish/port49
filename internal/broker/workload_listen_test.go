@@ -3,6 +3,7 @@ package broker
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -146,6 +147,19 @@ func TestBindMapNeverMapsAWorkload(t *testing.T) {
 	f.b.Directory = directory.ForTestsStaticResolver(f.st, nil, directory.ErrUnavailable)
 	_, ref := f.b.BindMap(context.Background(), *chainState(w, wca), store.Credential{})
 	if ref == nil || ref.Reason != decision.IdentityUnmapped || f.b.Directory.Calls.Load() != 0 {
+		t.Fatalf("refusal %+v, directory calls %d", ref, f.b.Directory.Calls.Load())
+	}
+}
+
+// BindMap fails closed on a chain ending at both anchors too: machineChain
+// answers it an error, and the directory is not asked.
+func TestBindMapRefusesAChainEndingAtBothAnchors(t *testing.T) {
+	f, wca, w := newWorkloadFixture(t)
+	f.b.Directory = directory.ForTestsStaticResolver(f.st, nil, directory.ErrUnavailable)
+	cs := &tls.ConnectionState{VerifiedChains: [][]*x509.Certificate{{w.Leaf, wca.Cert}, {w.Leaf, f.ca.Cert}}}
+	_, ref := f.b.BindMap(context.Background(), *cs, store.Credential{})
+	if ref == nil || ref.Reason != decision.IdentityUnmapped || f.b.Directory.Calls.Load() != 0 ||
+		!strings.Contains(ref.Detail, "chains to both") {
 		t.Fatalf("refusal %+v, directory calls %d", ref, f.b.Directory.Calls.Load())
 	}
 }
