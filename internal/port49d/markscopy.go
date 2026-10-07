@@ -57,11 +57,12 @@ type marksCopy struct {
 	// a field a newer port49 added, never erases a revocation.
 	unread []json.RawMessage
 	// lifted is each mark this replica lifted (Lifted), by its time, until
-	// the watch delivers the lift: the watch's late put of that mark is
-	// not added back. A reload's stand ignores it.
+	// the watch delivers the lift or a reload (stand) ends it: the watch's
+	// late put of that mark is not added back. A reload may resume past the
+	// lift's delete, so it clears every tombstone.
 	lifted map[[2]string]time.Time
-	// deleted is each key whose lift the watch delivered since its last
-	// standing put: a Lifted for such a key sets no tombstone, since the
+	// deleted is each key whose lift the watch delivered, or a reload ended
+	// the tombstone of, since its last standing put: a Lifted for such a key sets no tombstone, since the
 	// watch is not behind, and a later put of it is the store's (another
 	// replica's put-back). The one case this gets wrong, a put still in
 	// flight behind that delete, keeps the mark, which denies more.
@@ -202,8 +203,9 @@ func (c *marksCopy) Apply(ch store.MarkChange) {
 // time, is dropped and the file written before the lift is answered, so a
 // stop before the watch delivers it does not keep or put the mark back. A
 // newer mark of the same key (another time) is kept. Until the watch
-// delivers the lift, its late put of r is not added back; when it already
-// delivered the lift, no such put is behind and none is skipped.
+// delivers the lift or a reload ends it (stand), its late put of r is not
+// added back; when the watch already delivered the lift, no such put is
+// behind and none is skipped.
 func (c *marksCopy) Lifted(r store.Revocation) {
 	if c == nil {
 		return
@@ -232,6 +234,17 @@ func (c *marksCopy) stand(rs []store.Revocation) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	changed := false
+	// A reload may resume past a lift's delete, so the watch never tells
+	// it: the tombstone would outlive its lift and skip a later put-back of
+	// the same mark. The reload ends it; the key is marked deleted, as the
+	// watch's delete would have, so a Lifted after the reload sets none.
+	for k := range c.lifted {
+		delete(c.lifted, k)
+		if c.deleted == nil {
+			c.deleted = map[[2]string]bool{}
+		}
+		c.deleted[k] = true
+	}
 	for _, r := range rs {
 		k := [2]string{r.Kind, r.Key}
 		if cur, ok := c.m[k]; r.At.IsZero() || (ok && cur.At.Equal(r.At)) {
