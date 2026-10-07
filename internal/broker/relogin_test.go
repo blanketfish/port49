@@ -201,3 +201,57 @@ func TestAKeycloakLogoutNamesTheLoginTimeToTheLoggedOutSession(t *testing.T) {
 		t.Fatalf("detail %q, want it to end %q", d, want)
 	}
 }
+
+// A sub record whose window has passed does not hold a later session, but a
+// sid record for that later session still refuses it, in the sid form: the
+// sub record being found must not end the lookup.
+func TestALaterSessionLoggedOutBySidIsRefusedAfterTheSubWindow(t *testing.T) {
+	f := newFixture(t, 8)
+	iss := f.withOIDC(t)
+	ctx := context.Background()
+	subLogoutAt(t, f, iss.URL, f.b.Now())
+	f.advance(f.b.Identity.Timing.ClockSkew + 2*time.Second)
+	if err := f.st.PutLogout(ctx, store.Logout{Key: store.SidKey(iss.URL, "s-later"), At: f.b.Now()}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	d := detailOf(t, f.bearer(ctx, "POST", "/v1/tokens", mintLeaf1, f.idToken(t, iss, map[string]any{"sid": "s-later"})))
+	if !strings.Contains(d, "ended this session at ") || strings.Contains(d, "from") || !strings.HasSuffix(d, "log in again") {
+		t.Fatalf("the sid form: %q", d)
+	}
+	if w := f.bearer(ctx, "POST", "/v1/tokens", mintLeaf1, f.idToken(t, iss, map[string]any{"sid": "s-other"})); w.Code != 200 {
+		t.Fatalf("another later session: %s", shown(w))
+	}
+}
+
+// logoutReadFault fails the read of one logout key and passes every other.
+type logoutReadFault struct {
+	store.Store
+	key string
+}
+
+func (s logoutReadFault) GetLogout(ctx context.Context, key string) (store.Logout, error) {
+	if key == s.key {
+		return store.Logout{}, store.ErrUnavailable
+	}
+	return s.Store.GetLogout(ctx, key)
+}
+
+// A logout record that cannot be read refuses the request as the store being
+// down, whichever of the sub's and the sid's it is, rather than letting a
+// possibly logged-out session through.
+func TestAnUnreadableLogoutRecordFailsClosed(t *testing.T) {
+	for name, key := range map[string]func(iss string) string{
+		"the sub record": func(iss string) string { return store.OIDCKey(store.OIDCSub, iss, "sub-alice") },
+		"the sid record": func(iss string) string { return store.SidKey(iss, "s-one") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t, 8)
+			iss := f.withOIDC(t)
+			f.b.Store = logoutReadFault{Store: f.st, key: key(iss.URL)}
+			w := f.bearer(context.Background(), "POST", "/v1/tokens", mintLeaf1, f.idToken(t, iss, map[string]any{"sid": "s-one"}))
+			if w.Code != 503 || !strings.Contains(w.Body.String(), string(decision.StoreUnavailable)) {
+				t.Fatalf("want 503 store_unavailable: %s", shown(w))
+			}
+		})
+	}
+}
