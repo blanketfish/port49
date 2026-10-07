@@ -7274,8 +7274,8 @@ every matching subject composes, and a scheduled refresh stamps refreshed_at.** 
   quoted one, where Microsoft's CertNameToStr page lists the backslash and slash
   inconsistently); the rest of CertNameToStr's set (empty, trailing white space, `= < > # ;`,
   newline) is as Microsoft documents it, unmeasured and provisional on L44; an issuer with a
-  multi-valued RDN is `identity_unmapped` until measured; `<SR>` is the serial's DER content bytes reversed, the sign byte DER keeps before a
-  serial whose top bit is set included, measured in the same run) and `sid` (the SID extension,
+  multi-valued RDN is `identity_unmapped` until measured; `<SR>` is the serial's DER content
+  bytes reversed, the sign byte DER keeps before a serial whose top bit is set included, measured in the same run) and `sid` (the SID extension,
   1.3.6.1.4.1.311.25.2, on `objectSid`). The weak kinds are `san_upn`, `san_email`, `subject_dn`
   and `cn`. A weak kind, or an `attribute` repointed on a strong one, is refused at load without
   `allow_weak: true` and a non-empty `issuers:` pin, which is checked at every mapping, before
