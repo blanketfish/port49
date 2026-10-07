@@ -948,7 +948,7 @@ func TestExternalOneRefusingDCFailsOverAtOnce(t *testing.T) {
 	}
 	if !say.has("refused the bind (external)") ||
 		!say.has("a certificate that is not mapped, or that DC's KDC not answering (check its Kerberos service before the broker's certificate)") ||
-		!say.has("failed over") || !say.has("its own backoff") {
+		!say.has("queries go to the next server") || !say.has("its own backoff") {
 		t.Fatalf("the refusal line lacks the AD hint or the fail-over note: %v", say.l)
 	}
 	if say.has("no server is bound for") {
@@ -990,23 +990,7 @@ func TestExternalEveryDCRefusingBindsAtMostNPlusFour(t *testing.T) {
 	}
 }
 
-// The hold-off starts at the refusal that leaves no server bindable.
-func TestExternalTheSecondRefusalStartsTheHoldoff(t *testing.T) {
-	f := newFakeServers(west1.URI, west2.URI)
-	f.setRefuse(west1.URI, errInvalid)
-	clk := newClock()
-	m := metrics.New(prometheus.NewRegistry())
-	p := NewPool(externalCfg(west1, west2), f.dial, noCheck, clk.Now, m, (&lines{}).say)
-	// A query that finds dc-02 down as well refuses on dc-01 first.
-	f.setRefuse(west2.URI, errInvalid)
-	if _, err := p.Do(context.Background(), searchFor("(x)")); !errors.Is(err, ErrUnavailable) {
-		t.Fatalf("%v", err)
-	}
-	if p.holdoffSeconds() <= 0 {
-		t.Fatal("every DC refused and the pool is not held off")
-	}
-}
-
+// The hold-off starts at the refusal that leaves no server to try, not at the first.
 func TestExternalFirstRefusalThenSecondLaterStartsTheHoldoff(t *testing.T) {
 	f := newFakeServers(west1.URI, west2.URI)
 	f.setRefuse(west1.URI, errInvalid)
@@ -1018,16 +1002,14 @@ func TestExternalFirstRefusalThenSecondLaterStartsTheHoldoff(t *testing.T) {
 	if p.holdoffSeconds() != 0 {
 		t.Fatal("hold-off after one refusal")
 	}
-	// dc-02 loses its connection and now refuses too, inside dc-01's backoff.
-	p.mu.Lock()
-	_ = p.srv[1].conn.Close()
-	p.srv[1].conn = nil
-	p.srv[1].gen++
-	p.mu.Unlock()
+	// dc-02 drops its connection and now refuses too, inside dc-01's backoff.
+	f.closeAll(west2.URI)
 	f.setRefuse(west2.URI, errInvalid)
 	clk.Add(10 * time.Second)
-	if _, err := p.Do(context.Background(), searchFor("(x)")); !errors.Is(err, ErrUnavailable) {
-		t.Fatalf("%v", err)
+	for i := 0; i < 2; i++ { // the first query finds the dropped connection, the next rebinds
+		if _, err := p.Do(context.Background(), searchFor("(x)")); !errors.Is(err, ErrUnavailable) {
+			t.Fatalf("%v", err)
+		}
 	}
 	if p.holdoffSeconds() <= 0 {
 		t.Fatal("the second refusal, with dc-01 still in its backoff, did not start the hold-off")
@@ -1063,7 +1045,7 @@ func TestTheExternalHintIsNotSaidForOtherMechanisms(t *testing.T) {
 	say := &lines{}
 	p := NewPool(poolCfg("us-west", west1), f.dial, noCheck, newClock().Now, metrics.New(prometheus.NewRegistry()), say.say)
 	_, _ = p.Do(context.Background(), searchFor("(x)"))
-	if say.has("Kerberos service") || say.has("failed over") {
+	if say.has("Kerberos service") || say.has("queries go to the next server") {
 		t.Fatalf("external hint under simple: %v", say.l)
 	}
 }
@@ -1077,5 +1059,146 @@ func TestSimpleOneRefusingDCStillHoldsTheWholePoolOff(t *testing.T) {
 	_, _ = p.Do(context.Background(), searchFor("(x)"))
 	if p.holdoffSeconds() <= 0 || f.dials[west2.URI] != 0 {
 		t.Fatalf("simple: hold-off %v, dc-02 dialled %d", p.holdoffSeconds(), f.dials[west2.URI])
+	}
+}
+
+// Under external a refusal on the Check health bind of the bound, serving DC
+// is not the end of every server's chance: dc-02 holds a connection, so no
+// hold-off starts although dc-01 is under its own backoff.
+func TestExternalARefusedHealthBindOnTheBoundDCStartsNoHoldoff(t *testing.T) {
+	f := newFakeServers(west1.URI, west2.URI)
+	f.setRefuse(west1.URI, errInvalid)
+	clk := newClock()
+	m := metrics.New(prometheus.NewRegistry())
+	p := NewPool(externalCfg(west1, west2), f.dial, noCheck, clk.Now, m, (&lines{}).say)
+	if srv, err := p.Do(context.Background(), searchFor("(x)")); err != nil || srv != west2 {
+		t.Fatalf("%v %v", srv, err)
+	}
+	f.setRefuse(west2.URI, errInvalid)
+	clk.Add(10 * time.Second)
+	p.Check(context.Background())
+	if f.dials[west2.URI] != 2 {
+		t.Fatalf("Check did not health-bind dc-02 (%d dials)", f.dials[west2.URI])
+	}
+	if p.holdoffSeconds() != 0 || testutil.ToFloat64(m.DirectoryBindHoldoff) != 0 {
+		t.Fatal("a refused health bind on the bound DC started the hold-off")
+	}
+	if srv, err := p.Do(context.Background(), searchFor("(x)")); err != nil || srv != west2 {
+		t.Fatalf("dc-02 stopped serving: %v %v", srv, err)
+	}
+}
+
+// A server whose own backoff has ended is left to try, so another's refusal
+// does not start the hold-off: dc-01 refused and its minute is over, dc-02
+// refuses now, and dc-01 (which then cannot be dialled) is still untried.
+func TestExternalARefusalWhileAnotherBackoffHasEndedStartsNoHoldoff(t *testing.T) {
+	f := newFakeServers(west1.URI, west2.URI)
+	f.setRefuse(west1.URI, errInvalid)
+	f.setDown(west2.URI, true)
+	clk := newClock()
+	p := NewPool(externalCfg(west1, west2), f.dial, noCheck, clk.Now, metrics.New(prometheus.NewRegistry()), (&lines{}).say)
+	if _, err := p.Do(context.Background(), searchFor("(x)")); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("%v", err)
+	}
+	if p.holdoffSeconds() != 0 {
+		t.Fatal("hold-off after dc-01's refusal with dc-02 untried")
+	}
+	clk.Add(70 * time.Second) // dc-01's backoff is over
+	f.setDown(west2.URI, false)
+	f.setRefuse(west2.URI, errInvalid)
+	f.setDown(west1.URI, true)
+	if _, err := p.Do(context.Background(), searchFor("(x)")); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("%v", err)
+	}
+	if p.holdoffSeconds() != 0 {
+		t.Fatal("dc-02's refusal started the hold-off although dc-01's backoff had ended")
+	}
+}
+
+// A server whose breaker is open is not one left to try: with dc-01 and
+// dc-02 refusing, the hold-off starts although dc-03 never refused.
+func TestExternalAnOpenBreakerDoesNotKeepTheHoldoffFromStarting(t *testing.T) {
+	west3 := Server{URI: "ldaps://dc-03", Priority: 80, Site: "us-west"}
+	f := newFakeServers(west1.URI, west2.URI, west3.URI)
+	f.setDown(west3.URI, true)
+	clk := newClock()
+	p := NewPool(externalCfg(west1, west2, west3), f.dial, noCheck, clk.Now, metrics.New(prometheus.NewRegistry()), (&lines{}).say)
+	for i := 0; i < 3; i++ { // three faults open dc-03's breaker
+		p.Check(context.Background())
+		clk.Add(time.Second)
+	}
+	p.mu.Lock()
+	open := p.srv[2].open
+	p.mu.Unlock()
+	if !open {
+		t.Fatal("dc-03's breaker did not open")
+	}
+	if _, err := p.Do(context.Background(), searchFor("(x)")); err != nil {
+		t.Fatal(err)
+	}
+	f.setRefuse(west1.URI, errInvalid)
+	f.setRefuse(west2.URI, errInvalid)
+	f.closeAll(west1.URI)
+	f.closeAll(west2.URI)
+	for i := 0; i < 6 && p.holdoffSeconds() == 0; i++ {
+		_, _ = p.Do(context.Background(), searchFor("(x)"))
+		clk.Add(time.Second)
+	}
+	if p.holdoffSeconds() <= 0 {
+		t.Fatal("dc-01 and dc-02 refused, dc-03's breaker is open, and no hold-off started")
+	}
+}
+
+// A refusing server repaired after hours of every server refusing is found:
+// the probes take turns among the servers on the same step, not always the
+// top-ranked one (review I-1). The probes are 15m apart at the cap, so the
+// repaired server is bound within N of them.
+func TestARepairedDCIsFoundAfterHoursOfEveryDCRefusing(t *testing.T) {
+	for _, mech := range []string{"simple", "external"} {
+		t.Run(mech, func(t *testing.T) {
+			servers := dcs(3)
+			f := newFakeServers()
+			for _, s := range servers {
+				f.dirs[s.URI] = newFakeDir()
+				f.setRefuse(s.URI, errInvalid)
+			}
+			cfg := poolCfg("us-west", servers...)
+			cfg.Bind.Mechanism = BindMechanism(mech)
+			clk := newClock()
+			p := NewPool(cfg, f.dial, noCheck, clk.Now, metrics.New(prometheus.NewRegistry()), (&lines{}).say)
+			tick := func() error {
+				_, err := p.Do(context.Background(), searchFor("(x)"))
+				p.Check(context.Background())
+				clk.Add(30 * time.Second)
+				return err
+			}
+			for at := time.Duration(0); at < 4*time.Hour; at += 30 * time.Second {
+				_ = tick()
+			}
+			f.setRefuse(servers[2].URI, nil) // dc-03 alone is repaired
+			bound := 3*15*time.Minute + time.Minute
+			for at := time.Duration(0); at <= bound; at += 30 * time.Second {
+				if tick() == nil {
+					return
+				}
+			}
+			t.Fatalf("dc-03 repaired and still not bound after %v (dials %v)", bound, f.dials)
+		})
+	}
+}
+
+// Under external, with nothing bound and another DC never refused, Check
+// retries the refuser per its own backoff, as the say line promises.
+func TestExternalCheckRetriesARefuserAtTheEndOfItsBackoffWithNothingBound(t *testing.T) {
+	f := newFakeServers(west1.URI, west2.URI)
+	f.setRefuse(west1.URI, errInvalid)
+	f.setDown(west2.URI, true)
+	clk := newClock()
+	p := NewPool(externalCfg(west1, west2), f.dial, noCheck, clk.Now, metrics.New(prometheus.NewRegistry()), (&lines{}).say)
+	_, _ = p.Do(context.Background(), searchFor("(x)"))
+	clk.Add(61 * time.Second)
+	p.Check(context.Background())
+	if f.dials[west1.URI] != 2 {
+		t.Fatalf("dc-01 dialled %d times, want a retry at the end of its backoff", f.dials[west1.URI])
 	}
 }
