@@ -203,7 +203,24 @@ func (b *Broker) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/explain", b.explain)
 	mux.HandleFunc("GET /healthz", b.healthz)
 	mux.HandleFunc("GET /readyz", b.readyz)
-	return mux
+	return announceCloseWithoutCertificate(mux)
+}
+
+// announceCloseWithoutCertificate says Connection: close on every answer to a
+// request that came over TLS with no client certificate. The server closes
+// such a connection the moment it goes idle (closeIdleWithoutCertificate);
+// without the header a client that pools connections and never retries
+// (Keycloak's back-channel logout, final review F1) writes its next request
+// into the closed socket, reads EOF, and the request is lost with nothing
+// said on either side. With it, net/http closes after the answer and the
+// client sees the close and opens a new connection.
+func announceCloseWithoutCertificate(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.TLS != nil && len(r.TLS.PeerCertificates) == 0 {
+			w.Header().Set("Connection", "close")
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // heldConn is one connection's session state (design §7: on the certificate
