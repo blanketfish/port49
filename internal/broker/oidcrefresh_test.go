@@ -473,7 +473,8 @@ func TestALogoutMarksOnlyWhatTheRefreshExtended(t *testing.T) {
 // logout is not a ban, and the person may log in again.
 func TestTheOperatorLinesNameTheLogoutRecovery(t *testing.T) {
 	want := []string{"backchannel_logout", "port49 revoke --principal " + alicePrincipal + "` on",
-		"port49 revoke --principal " + alicePrincipal + " --lift"}
+		"port49 revoke --principal " + alicePrincipal + " --lift",
+		"`port49 revoke --list` there shows no mark for " + alicePrincipal}
 	const sock = "/run/port49/broker.sock"
 	want = append(want, "port49-broker's admin socket ("+sock+")")
 	check := func(t *testing.T, said string) {

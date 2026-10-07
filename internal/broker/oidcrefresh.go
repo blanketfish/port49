@@ -229,7 +229,8 @@ func (b *Broker) logoutRecovery(principal string) string {
 	}
 	return "if the decision log has a revoke record with origin backchannel_logout for " + principal +
 		" just before this line, end its contexts with `port49 revoke --principal " + principal + "` on " + where +
-		", then `port49 revoke --principal " + principal + " --lift` there so they may log in again"
+		", then `port49 revoke --principal " + principal + " --lift` there so they may log in again; a lift can be lost across a " + b.proc() +
+		" stop, so last check that `port49 revoke --list` there shows no mark for " + principal
 }
 
 // failedRefresh answers a refresh whose extension failed part way. The
