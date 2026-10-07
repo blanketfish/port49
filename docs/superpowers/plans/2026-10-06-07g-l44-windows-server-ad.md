@@ -4721,8 +4721,12 @@ If the row stays open, the subject is `docs: narrow lab register entry L44 to wh
     - e5 is valid only when the same mapped bind succeeds with the KDC up, before it (e1) and
       after it (e6).
   - **The branches, read in Task 6 Step 3:**
-    - **(i) Unmapped is refused with a code that is already a refusal** (49, 48, 8, 13 or 7).
-      Nothing changes, no 7c, and the Samba note stands as Samba's alone.
+    - **(i) Unmapped is refused with a code that is already a refusal** (49, 48, 8, 13 or 7),
+      **and a valid e5 gets a different code.** Nothing changes, no 7c, and the Samba note
+      stands as Samba's alone. If a valid e5 shares unmapped's refusal code, this branch does
+      not hold: a DC with its KDC down then reads as a Refusal and starts the pool-wide
+      hold-off, which is the hazard above. Read it as "anything else". Run 8 measured exactly
+      this: e2, e3 and e5 all got 49 (`tests/lab/results/L44-windows_ad.md`).
     - **(ii) Unmapped gets 1, and a valid e5 gets a different code.** Then 1 tells "certificate
       refused" from "this DC's KDC is down".
       - **Recommended: Task 7c,** `Refusal` counting 1 on EXTERNAL only, spec text first
