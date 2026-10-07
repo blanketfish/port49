@@ -1443,6 +1443,21 @@ func TestL44RowsUnder2(t *testing.T) {
 	}
 }
 
+// events.ps1 asks only for providers this build registered: measured,
+// Get-WinEvent threw "The parameter is incorrect" past -ErrorAction for the
+// older KDC names, and the whole events read failed.
+func TestWindowsEventsAskOnlyRegisteredProviders(t *testing.T) {
+	b, _ := winScriptFS.ReadFile("directory/windows/scripts/events.ps1")
+	s := string(b)
+	list := strings.Index(s, "Get-WinEvent -ListProvider $names")
+	if list < 0 || !strings.Contains(s, "foreach ($p in $registered) { @{ LogName = 'System'; ProviderName = $p;") {
+		t.Error("events.ps1 does not filter by the providers -ListProvider found")
+	}
+	if regexp.MustCompile(`ProviderName\s*=\s*'`).MatchString(s) {
+		t.Error("events.ps1 names a provider in a filter without checking it is registered")
+	}
+}
+
 // No fatal step runs between the boot reads around the cells under 2: a DC
 // going down there must make the cells INVALID, not end the run first.
 func TestL44NothingFatalBetweenTheBootReads(t *testing.T) {
