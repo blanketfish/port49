@@ -34,9 +34,6 @@ type Credentials struct {
 	cert     *tls.Certificate  // external
 	krb      *krbclient.Client // gssapi; shared by every bind, each of which has a gssapi.Client (a security context) of its own
 	password string            // simple
-	// gssCtx makes the GSSAPI client for one bind. Nil in production, where it
-	// is a gssapi.Client over krb; a test sets it to see what the bind sends.
-	gssCtx func() ldap.GSSAPIClient
 }
 
 func (c *Credentials) String() string             { return fmt.Sprintf("directory bind %s as %s", c.mech, c.who) }
@@ -289,15 +286,11 @@ func bind(ctx context.Context, conn *ldap.Conn, s Server, cr *Credentials) error
 			done <- conn.ExternalBind()
 		case "gssapi":
 			u, _ := url.Parse(s.URI)
-			var gc ldap.GSSAPIClient = &gssapi.Client{Client: cr.krb}
-			if cr.gssCtx != nil {
-				gc = cr.gssCtx()
-			}
 			// go-ldap's client asks for mutual authentication in the GSS
 			// checksum but sends no AP options; AD refuses an AP-REQ without
 			// mutual-required (AcceptSecurityContext data 57, seen as LDAP
 			// 49, L44), as MIT always pairs the two.
-			done <- conn.GSSAPIBindRequestWithAPOptions(gc,
+			done <- conn.GSSAPIBindRequestWithAPOptions(&gssapi.Client{Client: cr.krb},
 				&ldap.GSSAPIBindRequest{ServicePrincipalName: "ldap/" + u.Hostname()},
 				[]int{krbflags.APOptionMutualRequired})
 		default:

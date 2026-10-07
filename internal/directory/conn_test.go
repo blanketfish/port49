@@ -9,7 +9,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -17,11 +16,16 @@ import (
 
 	ber "github.com/go-asn1-ber/asn1-ber"
 	"github.com/go-ldap/ldap/v3"
+	krbclient "github.com/jcmturner/gokrb5/v8/client"
+	krbconfig "github.com/jcmturner/gokrb5/v8/config"
+	"github.com/jcmturner/gokrb5/v8/credentials"
 	"github.com/jcmturner/gokrb5/v8/iana/errorcode"
 	"github.com/jcmturner/gokrb5/v8/iana/etypeID"
 	krbflags "github.com/jcmturner/gokrb5/v8/iana/flags"
+	"github.com/jcmturner/gokrb5/v8/iana/nametype"
 	"github.com/jcmturner/gokrb5/v8/keytab"
 	"github.com/jcmturner/gokrb5/v8/messages"
+	"github.com/jcmturner/gokrb5/v8/spnego"
 	"github.com/jcmturner/gokrb5/v8/types"
 	"github.com/prometheus/client_golang/prometheus"
 
@@ -173,20 +177,6 @@ func TestASimpleBindClassifiesItsResult(t *testing.T) {
 	}
 }
 
-// stubGSS is a GSSAPI client that sends one token and records the AP options
-// it was asked to send it with; the fake LDAP server then answers the bind.
-type stubGSS struct{ apOptions *[]int }
-
-func (g stubGSS) InitSecContext(string, []byte) ([]byte, bool, error) {
-	return g.InitSecContextWithOptions("", nil, nil)
-}
-func (g stubGSS) InitSecContextWithOptions(_ string, _ []byte, opts []int) ([]byte, bool, error) {
-	*g.apOptions = opts
-	return []byte("token"), false, nil
-}
-func (stubGSS) NegotiateSaslAuth([]byte, string) ([]byte, error) { return nil, nil }
-func (stubGSS) DeleteSecContext() error                          { return nil }
-
 // A bind's *ldap.Error cause reads "bind <mech> as <who>: LDAP result <code>".
 // The L44 harness (tests/lab, l44FromBind) tells the directory's own answer
 // from a failure before the bind by that prefix; a reword would turn real
@@ -198,7 +188,7 @@ func TestABindErrorNamesItsMechanismAndWho(t *testing.T) {
 	simple, _ := LoadCredentials(Bind{Mechanism: "simple", BindDN: "CN=port49,DC=corp", PasswordEnv: "P"},
 		func(string) string { return "pw" })
 	gss := gssapiCredentials(t, "127.0.0.1:1")
-	gss.gssCtx = func() ldap.GSSAPIClient { return stubGSS{apOptions: new([]int)} }
+	seedServiceTicket(t, gss, "dc-01.corp.example.com")
 	for _, cr := range []*Credentials{simple, external, gss} {
 		err := bind(context.Background(), ldapBindServer(t, ldap.LDAPResultInvalidCredentials, "diag"),
 			Server{URI: "ldaps://dc-01.corp.example.com"}, cr)
@@ -213,17 +203,95 @@ func TestABindErrorNamesItsMechanismAndWho(t *testing.T) {
 	}
 }
 
+// seedServiceTicket gives cr a gokrb5 client that holds a TGT and an
+// ldap/<host> service ticket, as opaque bytes under a known session key, so
+// the bind's GetServiceTicket answers from the cache and sends a real AP-REQ
+// without a KDC. The keys are fixture bytes.
+func seedServiceTicket(t *testing.T, cr *Credentials, host string) {
+	t.Helper()
+	const realm = "CORP.EXAMPLE.COM"
+	now := time.Now().UTC()
+	key := types.EncryptionKey{KeyType: etypeID.AES256_CTS_HMAC_SHA1_96, KeyValue: make([]byte, 32)}
+	cred := func(sname ...string) *credentials.Credential {
+		tkt := messages.Ticket{TktVNO: 5, Realm: realm, SName: types.PrincipalName{NameType: nametype.KRB_NT_SRV_INST, NameString: sname},
+			EncPart: types.EncryptedData{EType: key.KeyType, KVNO: 1, Cipher: []byte("opaque")}}
+		raw, err := tkt.Marshal()
+		if err != nil {
+			t.Fatal(err)
+		}
+		c := &credentials.Credential{Key: key, AuthTime: now.Add(-time.Minute), StartTime: now.Add(-time.Minute),
+			EndTime: now.Add(8 * time.Hour), RenewTill: now.Add(8 * time.Hour), Ticket: raw}
+		c.Client.Realm, c.Client.PrincipalName = realm, types.NewPrincipalName(nametype.KRB_NT_PRINCIPAL, "port49$")
+		c.Server.Realm, c.Server.PrincipalName = realm, tkt.SName
+		return c
+	}
+	cc := &credentials.CCache{Version: 4, Credentials: []*credentials.Credential{cred("krbtgt", realm), cred("ldap", host)}}
+	cc.DefaultPrincipal.Realm = realm
+	cc.DefaultPrincipal.PrincipalName = types.NewPrincipalName(nametype.KRB_NT_PRINCIPAL, "port49$")
+	conf, err := krbconfig.NewFromString(krb5conf("127.0.0.1:1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cl, err := krbclient.NewFromCCache(cc, conf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cr.krb = cl
+}
+
+// saslCredentialsServer answers the first bind with result 49 and sends the
+// SASL credentials it received (the GSS token) on the returned channel.
+func saslCredentialsServer(t *testing.T) (*ldap.Conn, <-chan []byte) {
+	t.Helper()
+	cc, sc := net.Pipe()
+	out := make(chan []byte, 1)
+	go func() {
+		defer sc.Close()
+		p, err := ber.ReadPacket(sc)
+		if err != nil {
+			return
+		}
+		// BindRequest: version, name, sasl (mechanism, credentials).
+		sasl := p.Children[1].Children[2]
+		out <- sasl.Children[1].ByteValue
+		env := ber.Encode(ber.ClassUniversal, ber.TypeConstructed, ber.TagSequence, nil, "LDAP Response")
+		env.AppendChild(ber.NewInteger(ber.ClassUniversal, ber.TypePrimitive, ber.TagInteger, p.Children[0].Value, "MessageID"))
+		resp := ber.Encode(ber.ClassApplication, ber.TypeConstructed, ldap.ApplicationBindResponse, nil, "Bind Response")
+		resp.AppendChild(ber.NewInteger(ber.ClassUniversal, ber.TypePrimitive, ber.TagEnumerated, ldap.LDAPResultInvalidCredentials, "resultCode"))
+		resp.AppendChild(ber.NewString(ber.ClassUniversal, ber.TypePrimitive, ber.TagOctetString, "", "matchedDN"))
+		resp.AppendChild(ber.NewString(ber.ClassUniversal, ber.TypePrimitive, ber.TagOctetString, "", "diagnosticMessage"))
+		env.AppendChild(resp)
+		_, _ = sc.Write(env.Bytes())
+		_, _ = io.Copy(io.Discard, sc)
+	}()
+	conn := ldap.NewConn(cc, false)
+	conn.Start()
+	t.Cleanup(func() { conn.Close() })
+	return conn, out
+}
+
 // AD answers an AP-REQ without mutual-required with 49 (AcceptSecurityContext
 // data 57, L44), though go-ldap's client asks for mutual authentication in the
-// checksum; the bind must send the option, as MIT's client does.
+// checksum; the bind must send the option, as MIT's client does. The test
+// reads the AP-REQ off the wire, so it holds only while gokrb5's
+// NewKRB5TokenAPREQ applies APOptions (spnego/krb5Token.go, v8.4.4).
 func TestAGSSAPIBindAsksForMutualRequired(t *testing.T) {
-	var got []int
 	cr := gssapiCredentials(t, "127.0.0.1:1")
-	cr.gssCtx = func() ldap.GSSAPIClient { return stubGSS{apOptions: &got} }
-	_ = bind(context.Background(), ldapBindServer(t, ldap.LDAPResultInvalidCredentials, ""),
-		Server{URI: "ldaps://dc-01.corp.example.com"}, cr)
-	if !slices.Contains(got, krbflags.APOptionMutualRequired) {
-		t.Fatalf("AP options %v lack mutual-required (%d)", got, krbflags.APOptionMutualRequired)
+	seedServiceTicket(t, cr, "dc-01.corp.example.com")
+	conn, creds := saslCredentialsServer(t)
+	_ = bind(context.Background(), conn, Server{URI: "ldaps://dc-01.corp.example.com"}, cr)
+	var raw []byte
+	select {
+	case raw = <-creds:
+	default:
+		t.Fatal("the bind sent no GSS token")
+	}
+	var tok spnego.KRB5Token
+	if err := tok.Unmarshal(raw); err != nil || !tok.IsAPReq() {
+		t.Fatalf("the bind's token is not an AP-REQ: %v", err)
+	}
+	if !types.IsFlagSet(&tok.APReq.APOptions, krbflags.APOptionMutualRequired) {
+		t.Fatalf("AP-REQ options %v lack mutual-required (%d)", tok.APReq.APOptions, krbflags.APOptionMutualRequired)
 	}
 }
 
