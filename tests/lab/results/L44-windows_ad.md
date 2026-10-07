@@ -3,13 +3,13 @@
 - **Date measured:** 2026-10-07
 - **Platform:** windows_ad, Windows Server 2025 Standard Evaluation as a KVM VM in `dockurr/windows`, on `tests/lab/directory/windows/compose.yaml` (no network device)
 - **Image version:** Microsoft Windows Server 2025 Standard Evaluation (ServerStandardEval), build 26100.32230; ISO `26100.32230.260111-0550.lt_release_svc_refresh_SERVER_EVAL_x64FRE_en-us.iso` (SHA-256 `7b052573ba7894c9924e3e87ba732ccd354d18cb75a883efa9b900ea125bfd51`); image `dockurr/windows:6.06@sha256:16fd7c39a3e48bb946d29c59dc6015942e5b900a1fa5d7e5552053bfc48ee2ea`
-- **Run:** commit `c9318a007788fb4113d1f5145938e147f760a4c0`, `go test -tags lab ./tests/lab/ -run '^TestL44WindowsAD$'`
-- **Capture:** `tests/lab/evidence/L44-windows_ad.json`: one JSON line per search, bind and step, with the base, scope, filter, the DNs returned, the LDAP result code and the duration, recorded by the broker's own client (the wire is LDAPS, so a pcap would be encrypted).
+- **Run:** commit `e3db1d3808e6faec0d54817e03260af6167b0125`, `PORT49_LAB_L44=1 go test -tags lab ./tests/lab/ -run '^TestL44WindowsAD$'`
+- **Capture:** `tests/lab/evidence/L44-windows_ad.json`: one JSON line per search, bind and step, with the base, scope, filter, the DNs returned, the LDAP result code and the duration, recorded by the broker's own client (the wire is TLS (LDAPS or StartTLS), so a pcap would be encrypted).
 - **Credentials:** none appear here or in the evidence. The Administrator, DSRM and port49 passwords are generated for each run, held only in 0600 files under `tests/lab/logs/windows`, and reach the VM on an SSH session's stdin, never on a host command line; the one command line that carries one is `ktpass`'s own, inside the VM, which is destroyed at the end of the run. Alice's is made on the DC and never leaves it. The keytab and every private key stay on the host that ran it, 0600, and are removed at the end of the run.
 
 ## Claim
 
-The Active Directory claims on a Windows DC: on L42's fixture and its loop, which groups `member:1.2.840.113556.1.4.1941:=<user DN>` returns and how the loop is answered; SASL EXTERNAL over StartTLS (and what LDAPS answers it) with a client certificate; GSSAPI with a keytab and no SASL security layer against the Windows KDC; whether `altSecurityIdentities` values written in port49's `X509:<I>{issuer}<SR>{serial}` form (issuer from the raw DER, `DC=` included) match the certificate the DC itself maps; whether the SID extension's value equals `objectSid`; and how KB5014754's strong-mapping enforcement treats each (policy engine spec §15 L44). Also measured, for two questions plan 7g carried: whether the DC advertises the AD capability 1.2.840.113556.1.4.800, and the LDAP result an EXTERNAL bind it refuses carries.
+The Active Directory claims on a Windows DC: on L42's fixture and its loop, which groups `member:1.2.840.113556.1.4.1941:=<user DN>` returns and how the loop is answered; SASL EXTERNAL over LDAPS with a client certificate (measured over StartTLS; [MS-ADTS] 5.1.1.2, with what LDAPS answers it); GSSAPI with a keytab and no SASL security layer against the Windows KDC; whether `altSecurityIdentities` values written in port49's `X509:<I>{issuer}<SR>{serial}` form (issuer from the raw DER, `DC=` included) match the certificate the DC itself maps; whether the SID extension's value equals `objectSid`; and how KB5014754's strong-mapping enforcement treats each (policy engine spec §15 L44). Also measured, for two questions plan 7g carried: whether the DC advertises the AD capability 1.2.840.113556.1.4.800, and the LDAP result an EXTERNAL bind it refuses carries.
 
 ## Observation
 
@@ -29,7 +29,7 @@ The Active Directory claims on a Windows DC: on L42's fixture and its loop, whic
 - Alice's `User` certificate is requested as alice over WinRM with CredSSP, under a session configuration only she may use; all of it is removed after, and her password for it is made on the DC, used once and replaced. `enroll_as` first registers `WSMAN/DC1` and `WSMAN/dc1.corp.example.com` on `DC1$` (this build's WinRM had registered none, and without them CredSSP refuses the DC as a target); they stay on the lab DC.
 - During the KB5014754 table only, `UseCachedCRLOnlyAndIgnoreRevocationUnknownErrors = 1` on the KDC: the harness's own CAs publish no CRL, and revocation is no part of the claim. Removed after.
 - LDAP interface diagnostics at level 2 (`16 LDAP Interface Events`), so the DC logs bind and channel-binding events.
-- PKINIT's client is MIT Kerberos (`kinit` from Fedora 43's `krb5-workstation` and `krb5-pkinit`, the versions its image recorded are in the facts table) on the project network, with `pkinit_kdc_hostname`, as MIT documents for an Active Directory KDC. MIT 1.22 or later is required: Windows Server 2025's KDC answers FFDH PKINIT without MS-PKCA's `paChecksum2` with KDC error 79 ("Checksum must be included"), and MIT added the field in 1.22 (krb5 commit 310793b); MIT 1.20 (Debian stable's, measured on this DC) failed every cell with it; 1.21 lacks the commit.
+- PKINIT's client is MIT Kerberos (`kinit` from Fedora 43's `krb5-workstation` and `krb5-pkinit`, the versions its image recorded are in the facts table) on the project network, with `pkinit_kdc_hostname`, as MIT documents for an Active Directory KDC. MIT 1.22 or later is required: Windows Server 2025's KDC answers FFDH PKINIT without MS-PKCA's `paChecksum2` with KDC error 79 ("Checksum must be included"), and MIT added the field in 1.22 (krb5 commit 310793b); MIT 1.20 (Debian stable's, measured on an earlier L44 DC of this build) failed every cell with it; 1.21 lacks the commit.
 
 ### Running it again
 
@@ -64,8 +64,8 @@ The Active Directory claims on a Windows DC: on L42's fixture and its loop, whic
 | carol | recursive | netops-oncall | ok | 5ms |
 | dave | recursive | g-loop-a, g-loop-b | ok | 6ms |
 | alice | direct | g-leaf | ok | 5ms |
-| carol | direct | netops-oncall | ok | 5ms |
-| dave | direct | g-loop-a | ok | 16ms |
+| carol | direct | netops-oncall | ok | 6ms |
+| dave | direct | g-loop-a | ok | 22ms |
 
 memberOf on alice's entry: CN=g-leaf,OU=G,DC=corp,DC=example,DC=com
 
@@ -83,14 +83,14 @@ memberOf on alice's entry: CN=g-leaf,OU=G,DC=corp,DC=example,DC=com
 |---|---|---|---|
 | simple bind over LDAPS | accepted; a search for alice found 1 entry | 0 | 4ms |
 | simple bind over plain LDAP, built by hand (an observation of this build's default) | refused: `LDAP Result Code 8 "Strong Auth Required": 00002028: LdapErr: DSID-0C09035C, comment: The server requires binds to turn on integrity checking if SSL\TLS are not already active on the connection, data 0, v65f4` | 8 | 2ms |
-| GSSAPI over LDAPS, keytab, no SASL security layer, `LdapEnforceChannelBinding` absent (this build's default) | refused: `LDAP Result Code 49 "Invalid Credentials": bind gssapi as port49@CORP.EXAMPLE.COM: LDAP result 49` | 49 | 5ms |
-| SASL EXTERNAL over StartTLS, the broker's AD CS certificate, `altSecurityIdentities` on port49 in port49's form | accepted; WhoAmI `u:CORP\port49`; a search for alice found 1 entry | 0 | 7ms |
-| SASL EXTERNAL over LDAPS, the same mapped certificate (a documented observation; [MS-ADTS] 5.1.1.2 says EXTERNAL is rejected there) | refused: `LDAP Result Code 7 "Auth Method Not Supported": bind external as CN=port49-broker: LDAP result 7` | 7 | 7ms |
+| GSSAPI over LDAPS, keytab, no SASL security layer, `LdapEnforceChannelBinding` absent (this build's default) | accepted; a search for alice found 1 entry | 0 | 7ms |
+| SASL EXTERNAL over StartTLS, the broker's AD CS certificate, `altSecurityIdentities` on port49 in port49's form | accepted; WhoAmI `u:CORP\port49`; a search for alice found 1 entry | 0 | 8ms |
+| SASL EXTERNAL over LDAPS, the same mapped certificate (a documented observation; [MS-ADTS] 5.1.1.2 says EXTERNAL is rejected there) | refused: `LDAP Result Code 7 "Auth Method Not Supported": bind external as CN=port49-broker: LDAP result 7` | 7 | 8ms |
 | LDAPS with the mapped certificate and no bind, an observation: WhoAmI is `u:CORP\port49` | — | — | — |
 | SASL EXTERNAL over StartTLS, the same certificate, no `altSecurityIdentities` on port49 (carried question b) | refused: `LDAP Result Code 49 "Invalid Credentials": bind external as CN=port49-broker: LDAP result 49` | 49 | 6ms |
 | SASL EXTERNAL over StartTLS, a certificate from the lab directory CA (in the DC's Root store, not in NTAuth), unmapped (carried question b) | refused: `LDAP Result Code 49 "Invalid Credentials": bind external as CN=port49-broker,O=port49 lab: LDAP result 49` | 49 | 3ms |
-| GSSAPI over LDAPS, keytab, no SASL security layer, `LdapEnforceChannelBinding` 2 (port49 sends no channel binding token) | refused: `LDAP Result Code 49 "Invalid Credentials": bind gssapi as port49@CORP.EXAMPLE.COM: LDAP result 49` | 49 | 6ms |
-| SASL EXTERNAL over StartTLS, mapped, `LdapEnforceChannelBinding` 2 | accepted; WhoAmI `u:CORP\port49`; a search for alice found 1 entry | 0 | 9ms |
+| GSSAPI over LDAPS, keytab, no SASL security layer, `LdapEnforceChannelBinding` 2 (port49 sends no channel binding token) | refused: `LDAP Result Code 49 "Invalid Credentials": bind gssapi as port49@CORP.EXAMPLE.COM: LDAP result 49` | 49 | 7ms |
+| SASL EXTERNAL over StartTLS, mapped, `LdapEnforceChannelBinding` 2 | accepted; WhoAmI `u:CORP\port49`; a search for alice found 1 entry | 0 | 8ms |
 | simple bind over LDAPS, `LdapEnforceChannelBinding` 2 | accepted; a search for alice found 1 entry | 0 | 4ms |
 
 Whether the DC's LDAPS asked the client for a certificate (what EXTERNAL needs): the server sent a CertificateRequest listing 0 acceptable CA name(s).
@@ -104,21 +104,21 @@ Whether the DC's LDAPS asked the client for a certificate (what EXTERNAL needs):
 | counters | queries{refused}=1, queries{fault}=0, server_up=1 |
 | lines the pool said | 4, none holding a password |
 
-What the DC logged during the binds: KDC 7: The Security Account Manager failed a KDC request in an unexpected way. The error is in the data field. The account name was and lookup type 0x108.; KDC 7: The Security Account Manager failed a KDC request in an unexpected way. The error is in the data field. The account name was and lookup type 0x108.; Schannel 36928: Could not retrieve an OCSP response. The Failure Reason is: REASON_OCSP_RESPONSE_RETRIEVAL_ERROR The OCSP Url is: The previous OCSP response contained the follo...; Schannel 36928: Could not retrieve an OCSP response. The Failure Reason is: REASON_OCSP_RESPONSE_RETRIEVAL_ERROR The OCSP Url is: The previous OCSP response contained the follo...; DS 2889: The following client performed a SASL (Negotiate/Kerberos/NTLM/Digest) LDAP bind without requesting signing (integrity verification), or performed a simple bind...
+What the DC logged during the binds: KDC 7: The Security Account Manager failed a KDC request in an unexpected way. The error is in the data field. The account name was and lookup type 0x108.; Schannel 36928: Could not retrieve an OCSP response. The Failure Reason is: REASON_OCSP_RESPONSE_RETRIEVAL_ERROR The OCSP Url is: The previous OCSP response contained the follo...; Schannel 36928: Could not retrieve an OCSP response. The Failure Reason is: REASON_OCSP_RESPONSE_RETRIEVAL_ERROR The OCSP Url is: The previous OCSP response contained the follo...; DS 3039: The following client performed an LDAP bind over SSL/TLS and failed the channel binding token validation. Either the client did not pass channel binding tokens ...; DS 2889: The following client performed a SASL (Negotiate/Kerberos/NTLM/Digest) LDAP bind without requesting signing (integrity verification), or performed a simple bind...
 
 ### The SID extension and objectSid
 
 | certificate | SID extension | objectSid | equal |
 |---|---|---|---|
-| alice's, AD CS `User` template, requested as alice | `S-1-5-21-3350434987-3940523823-1622082433-1104` | `S-1-5-21-3350434987-3940523823-1622082433-1104` | true |
-| a KDC-EKU certificate from the DC's store (`KerberosAuthentication`; not necessarily the one the KDC presents) | `S-1-5-21-3350434987-3940523823-1622082433-1001` | `S-1-5-21-3350434987-3940523823-1622082433-1001` | true |
-| alice's, AD CS `OfflineRouter` (subject from the request) | none: the certificate carries 0 SID extension values; exactly one maps | `S-1-5-21-3350434987-3940523823-1622082433-1104` | false |
+| alice's, AD CS `User` template, requested as alice | `S-1-5-21-2046768461-160803403-3141077697-1104` | `S-1-5-21-2046768461-160803403-3141077697-1104` | true |
+| a KDC-EKU certificate from the DC's store (`KerberosAuthentication`; not necessarily the one the KDC presents) | `S-1-5-21-2046768461-160803403-3141077697-1001` | `S-1-5-21-2046768461-160803403-3141077697-1001` | true |
+| alice's, AD CS `OfflineRouter` (subject from the request) | none: the certificate carries 0 SID extension values; exactly one maps | `S-1-5-21-2046768461-160803403-3141077697-1104` | false |
 
 | port49's mapping on the DC's certificates (asserted: port49's guarantees, not the DC's) | observed |
 |---|---|
 | `sid`, alice's `User` certificate | ok as `user:alice@corp.example.com` |
 | `issuer_serial`, alice's `OfflineRouter` certificate, alice holding port49's form | ok as `user:alice@corp.example.com` |
-| `issuer_serial`, the comma CA's certificate, alice holding the quoted form | directory: identity_unmapped: no entry under DC=corp,DC=example,DC=com |
+| `issuer_serial`, the comma CA's certificate, alice holding the quoted form (recorded, not asserted (Task 7a)) | directory: identity_unmapped: no entry under DC=corp,DC=example,DC=com |
 
 ### Also asserted: port49's mapping guarantees (not part of L43's claim)
 
@@ -141,50 +141,50 @@ Each certificate is offered to the KDC by PKINIT (MIT `kinit`) as `alice@CORP.EX
 
 | `StrongCertificateBindingEnforcement` | certificate | `altSecurityIdentities` held | outcome | the KDC said | DC events | time |
 |---|---|---|---|---|---|---|
-| absent | control: AD CS `OfflineRouter`, alice holding the strong `X509:<SKI>` mapping | `X509:<SKI>8ec04385111883f198f3b07b629119de3e51b849` | **TGT issued** | — | (none) | 464ms |
-| absent | AD CS `OfflineRouter` (UPN SAN, no SID extension) | (none) | refused | -1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials | KDC 39: The Key Distribution Center (KDC) encountered a user certificate that was valid but could not be mapped to a user in a secure way (such as via explicit mapping,... | 467ms |
-| absent | the same, alice holding port49's form | `X509:<I>DC=com,DC=example,DC=corp,CN=corp-L44-CA<SR>05000000000098093768D7B00A8F0500000066` | **TGT issued** | — | (none) | 458ms |
-| absent | the same, alice holding the issuer least significant RDN first | `X509:<I>CN=corp-L44-CA,DC=corp,DC=example,DC=com<SR>05000000000098093768D7B00A8F0500000066` | refused | -1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials | (none) | 439ms |
-| absent | the same, alice holding the serial in certificate byte order | `X509:<I>DC=com,DC=example,DC=corp,CN=corp-L44-CA<SR>66000000058F0AB0D768370998000000000005` | refused | -1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials | (none) | 465ms |
-| absent | AD CS `User`, requested as alice (SID extension) | (none) | **TGT issued** | — | (none) | 469ms |
-| absent | a CA whose CN holds a comma (`lab-users, comma-CA`), alice holding port49's form | `X509:<I>DC=com,DC=example,DC=corp,CN=lab-users, comma-CA<SR>93EF8ED827D16E06` | refused | -1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials | KDC 39: The Key Distribution Center (KDC) encountered a user certificate that was valid but could not be mapped to a user in a secure way (such as via explicit mapping,... | 459ms |
-| absent | the same, alice holding the value quoted as CertNameToStr quotes it | `X509:<I>DC=com,DC=example,DC=corp,CN="lab-users, comma-CA"<SR>93EF8ED827D16E06` | **TGT issued** | — | (none) | 451ms |
-| absent | the same, alice holding the value escaped as RFC 4514 escapes it | `X509:<I>DC=com,DC=example,DC=corp,CN=lab-users\, comma-CA<SR>93EF8ED827D16E06` | refused | -1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials | (none) | 447ms |
-| absent | the lab users CA, a serial whose top bit is set, alice holding port49's form | `X509:<I>DC=com,DC=example,DC=corp,CN=lab-users-CA<SR>5A2070D65056382BDE` | refused | -1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials | KDC 39: The Key Distribution Center (KDC) encountered a user certificate that was valid but could not be mapped to a user in a secure way (such as via explicit mapping,... | 454ms |
-| absent | the same, alice holding the serial with its DER sign byte | `X509:<I>DC=com,DC=example,DC=corp,CN=lab-users-CA<SR>5A2070D65056382BDE00` | **TGT issued** | — | (none) | 467ms |
-| absent | the broker's AD CS certificate, SASL EXTERNAL over StartTLS | port49's form, on port49 | **bound** as `u:CORP\port49` |  | (none) | 8ms |
-| 1 | control: AD CS `OfflineRouter`, alice holding the strong `X509:<SKI>` mapping | `X509:<SKI>8ec04385111883f198f3b07b629119de3e51b849` | **TGT issued** | — | (none) | 461ms |
-| 1 | AD CS `OfflineRouter` (UPN SAN, no SID extension) | (none) | refused | -1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials | KDC 39: The Key Distribution Center (KDC) encountered a user certificate that was valid but could not be mapped to a user in a secure way (such as via explicit mapping,... | 455ms |
-| 1 | the same, alice holding port49's form | `X509:<I>DC=com,DC=example,DC=corp,CN=corp-L44-CA<SR>05000000000098093768D7B00A8F0500000066` | **TGT issued** | — | (none) | 458ms |
-| 1 | the same, alice holding the issuer least significant RDN first | `X509:<I>CN=corp-L44-CA,DC=corp,DC=example,DC=com<SR>05000000000098093768D7B00A8F0500000066` | refused | -1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials | (none) | 435ms |
-| 1 | the same, alice holding the serial in certificate byte order | `X509:<I>DC=com,DC=example,DC=corp,CN=corp-L44-CA<SR>66000000058F0AB0D768370998000000000005` | refused | -1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials | (none) | 461ms |
-| 1 | AD CS `User`, requested as alice (SID extension) | (none) | **TGT issued** | — | (none) | 441ms |
-| 1 | a CA whose CN holds a comma (`lab-users, comma-CA`), alice holding port49's form | `X509:<I>DC=com,DC=example,DC=corp,CN=lab-users, comma-CA<SR>93EF8ED827D16E06` | refused | -1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials | KDC 39: The Key Distribution Center (KDC) encountered a user certificate that was valid but could not be mapped to a user in a secure way (such as via explicit mapping,... | 475ms |
-| 1 | the same, alice holding the value quoted as CertNameToStr quotes it | `X509:<I>DC=com,DC=example,DC=corp,CN="lab-users, comma-CA"<SR>93EF8ED827D16E06` | **TGT issued** | — | (none) | 456ms |
-| 1 | the same, alice holding the value escaped as RFC 4514 escapes it | `X509:<I>DC=com,DC=example,DC=corp,CN=lab-users\, comma-CA<SR>93EF8ED827D16E06` | refused | -1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials | (none) | 463ms |
-| 1 | the lab users CA, a serial whose top bit is set, alice holding port49's form | `X509:<I>DC=com,DC=example,DC=corp,CN=lab-users-CA<SR>5A2070D65056382BDE` | refused | -1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials | KDC 39: The Key Distribution Center (KDC) encountered a user certificate that was valid but could not be mapped to a user in a secure way (such as via explicit mapping,... | 464ms |
-| 1 | the same, alice holding the serial with its DER sign byte | `X509:<I>DC=com,DC=example,DC=corp,CN=lab-users-CA<SR>5A2070D65056382BDE00` | **TGT issued** | — | (none) | 468ms |
-| 1 | the broker's AD CS certificate, SASL EXTERNAL over StartTLS | port49's form, on port49 | **bound** as `u:CORP\port49` |  | (none) | 7ms |
-| 2 | control: AD CS `OfflineRouter`, alice holding the strong `X509:<SKI>` mapping | `X509:<SKI>8ec04385111883f198f3b07b629119de3e51b849` | **TGT issued** | — | (none) | 455ms |
-| 2 | AD CS `OfflineRouter` (UPN SAN, no SID extension) | (none) | refused | -1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials | KDC 39: The Key Distribution Center (KDC) encountered a user certificate that was valid but could not be mapped to a user in a secure way (such as via explicit mapping,... | 461ms |
-| 2 | the same, alice holding port49's form | `X509:<I>DC=com,DC=example,DC=corp,CN=corp-L44-CA<SR>05000000000098093768D7B00A8F0500000066` | **TGT issued** | — | (none) | 488ms |
-| 2 | the same, alice holding the issuer least significant RDN first | `X509:<I>CN=corp-L44-CA,DC=corp,DC=example,DC=com<SR>05000000000098093768D7B00A8F0500000066` | refused | -1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials | (none) | 473ms |
-| 2 | the same, alice holding the serial in certificate byte order | `X509:<I>DC=com,DC=example,DC=corp,CN=corp-L44-CA<SR>66000000058F0AB0D768370998000000000005` | refused | -1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials | (none) | 467ms |
-| 2 | AD CS `User`, requested as alice (SID extension) | (none) | **TGT issued** | — | (none) | 490ms |
-| 2 | a CA whose CN holds a comma (`lab-users, comma-CA`), alice holding port49's form | `X509:<I>DC=com,DC=example,DC=corp,CN=lab-users, comma-CA<SR>93EF8ED827D16E06` | refused | -1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials | KDC 39: The Key Distribution Center (KDC) encountered a user certificate that was valid but could not be mapped to a user in a secure way (such as via explicit mapping,... | 458ms |
-| 2 | the same, alice holding the value quoted as CertNameToStr quotes it | `X509:<I>DC=com,DC=example,DC=corp,CN="lab-users, comma-CA"<SR>93EF8ED827D16E06` | **TGT issued** | — | (none) | 468ms |
-| 2 | the same, alice holding the value escaped as RFC 4514 escapes it | `X509:<I>DC=com,DC=example,DC=corp,CN=lab-users\, comma-CA<SR>93EF8ED827D16E06` | refused | -1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials | (none) | 475ms |
-| 2 | the lab users CA, a serial whose top bit is set, alice holding port49's form | `X509:<I>DC=com,DC=example,DC=corp,CN=lab-users-CA<SR>5A2070D65056382BDE` | refused | -1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials | KDC 39: The Key Distribution Center (KDC) encountered a user certificate that was valid but could not be mapped to a user in a secure way (such as via explicit mapping,... | 457ms |
-| 2 | the same, alice holding the serial with its DER sign byte | `X509:<I>DC=com,DC=example,DC=corp,CN=lab-users-CA<SR>5A2070D65056382BDE00` | **TGT issued** | — | (none) | 495ms |
-| 2 | the broker's AD CS certificate, SASL EXTERNAL over StartTLS | port49's form, on port49 | **bound** as `u:CORP\port49` |  | (none) | 8ms |
+| absent | control: AD CS `OfflineRouter`, alice holding the strong `X509:<SKI>` mapping | `X509:<SKI>9a5442e4a1dd1b97e901b183bf8883bbc2ee905d` | **TGT issued** | — | (none) | 462ms |
+| absent | AD CS `OfflineRouter` (UPN SAN, no SID extension) | (none) | refused | -1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials | KDC 39: The Key Distribution Center (KDC) encountered a user certificate that was valid but could not be mapped to a user in a secure way (such as via explicit mapping,... | 440ms |
+| absent | the same, alice holding port49's form | `X509:<I>DC=com,DC=example,DC=corp,CN=corp-L44-CA<SR>05000000000091AD9FCEDDB1AAB8050000001E` | **TGT issued** | — | (none) | 438ms |
+| absent | the same, alice holding the issuer least significant RDN first | `X509:<I>CN=corp-L44-CA,DC=corp,DC=example,DC=com<SR>05000000000091AD9FCEDDB1AAB8050000001E` | refused | -1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials | (none) | 451ms |
+| absent | the same, alice holding the serial in certificate byte order | `X509:<I>DC=com,DC=example,DC=corp,CN=corp-L44-CA<SR>1E00000005B8AAB1DDCE9FAD91000000000005` | refused | -1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials | (none) | 460ms |
+| absent | AD CS `User`, requested as alice (SID extension) | (none) | **TGT issued** | — | (none) | 454ms |
+| absent | a CA whose CN holds a comma (`lab-users, comma-CA`), alice holding port49's form | `X509:<I>DC=com,DC=example,DC=corp,CN=lab-users, comma-CA<SR>FA5C0DE3B8300B15` | refused | -1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials | KDC 39: The Key Distribution Center (KDC) encountered a user certificate that was valid but could not be mapped to a user in a secure way (such as via explicit mapping,... | 447ms |
+| absent | the same, alice holding the value quoted as CertNameToStr quotes it | `X509:<I>DC=com,DC=example,DC=corp,CN="lab-users, comma-CA"<SR>FA5C0DE3B8300B15` | **TGT issued** | — | (none) | 443ms |
+| absent | the same, alice holding the value escaped as RFC 4514 escapes it | `X509:<I>DC=com,DC=example,DC=corp,CN=lab-users\, comma-CA<SR>FA5C0DE3B8300B15` | refused | -1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials | (none) | 435ms |
+| absent | the lab users CA, a serial whose top bit is set, alice holding port49's form | `X509:<I>DC=com,DC=example,DC=corp,CN=lab-users-CA<SR>2869F88E3F0BB5D0ED` | refused | -1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials | KDC 39: The Key Distribution Center (KDC) encountered a user certificate that was valid but could not be mapped to a user in a secure way (such as via explicit mapping,... | 443ms |
+| absent | the same, alice holding the serial with its DER sign byte | `X509:<I>DC=com,DC=example,DC=corp,CN=lab-users-CA<SR>2869F88E3F0BB5D0ED00` | **TGT issued** | — | (none) | 455ms |
+| absent | the broker's AD CS certificate, SASL EXTERNAL over StartTLS | port49's form, on port49 | **bound** as `u:CORP\port49` |  | (none) | 7ms |
+| 1 | control: AD CS `OfflineRouter`, alice holding the strong `X509:<SKI>` mapping | `X509:<SKI>9a5442e4a1dd1b97e901b183bf8883bbc2ee905d` | **TGT issued** | — | (none) | 447ms |
+| 1 | AD CS `OfflineRouter` (UPN SAN, no SID extension) | (none) | refused | -1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials | KDC 39: The Key Distribution Center (KDC) encountered a user certificate that was valid but could not be mapped to a user in a secure way (such as via explicit mapping,... | 437ms |
+| 1 | the same, alice holding port49's form | `X509:<I>DC=com,DC=example,DC=corp,CN=corp-L44-CA<SR>05000000000091AD9FCEDDB1AAB8050000001E` | **TGT issued** | — | (none) | 446ms |
+| 1 | the same, alice holding the issuer least significant RDN first | `X509:<I>CN=corp-L44-CA,DC=corp,DC=example,DC=com<SR>05000000000091AD9FCEDDB1AAB8050000001E` | refused | -1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials | (none) | 436ms |
+| 1 | the same, alice holding the serial in certificate byte order | `X509:<I>DC=com,DC=example,DC=corp,CN=corp-L44-CA<SR>1E00000005B8AAB1DDCE9FAD91000000000005` | refused | -1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials | (none) | 461ms |
+| 1 | AD CS `User`, requested as alice (SID extension) | (none) | **TGT issued** | — | (none) | 449ms |
+| 1 | a CA whose CN holds a comma (`lab-users, comma-CA`), alice holding port49's form | `X509:<I>DC=com,DC=example,DC=corp,CN=lab-users, comma-CA<SR>FA5C0DE3B8300B15` | refused | -1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials | KDC 39: The Key Distribution Center (KDC) encountered a user certificate that was valid but could not be mapped to a user in a secure way (such as via explicit mapping,... | 443ms |
+| 1 | the same, alice holding the value quoted as CertNameToStr quotes it | `X509:<I>DC=com,DC=example,DC=corp,CN="lab-users, comma-CA"<SR>FA5C0DE3B8300B15` | **TGT issued** | — | (none) | 451ms |
+| 1 | the same, alice holding the value escaped as RFC 4514 escapes it | `X509:<I>DC=com,DC=example,DC=corp,CN=lab-users\, comma-CA<SR>FA5C0DE3B8300B15` | refused | -1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials | (none) | 452ms |
+| 1 | the lab users CA, a serial whose top bit is set, alice holding port49's form | `X509:<I>DC=com,DC=example,DC=corp,CN=lab-users-CA<SR>2869F88E3F0BB5D0ED` | refused | -1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials | KDC 39: The Key Distribution Center (KDC) encountered a user certificate that was valid but could not be mapped to a user in a secure way (such as via explicit mapping,... | 455ms |
+| 1 | the same, alice holding the serial with its DER sign byte | `X509:<I>DC=com,DC=example,DC=corp,CN=lab-users-CA<SR>2869F88E3F0BB5D0ED00` | **TGT issued** | — | (none) | 462ms |
+| 1 | the broker's AD CS certificate, SASL EXTERNAL over StartTLS | port49's form, on port49 | **bound** as `u:CORP\port49` |  | (none) | 8ms |
+| 2 | control: AD CS `OfflineRouter`, alice holding the strong `X509:<SKI>` mapping | `X509:<SKI>9a5442e4a1dd1b97e901b183bf8883bbc2ee905d` | **TGT issued** | — | (none) | 469ms |
+| 2 | AD CS `OfflineRouter` (UPN SAN, no SID extension) | (none) | refused | -1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials | KDC 39: The Key Distribution Center (KDC) encountered a user certificate that was valid but could not be mapped to a user in a secure way (such as via explicit mapping,... | 450ms |
+| 2 | the same, alice holding port49's form | `X509:<I>DC=com,DC=example,DC=corp,CN=corp-L44-CA<SR>05000000000091AD9FCEDDB1AAB8050000001E` | **TGT issued** | — | (none) | 444ms |
+| 2 | the same, alice holding the issuer least significant RDN first | `X509:<I>CN=corp-L44-CA,DC=corp,DC=example,DC=com<SR>05000000000091AD9FCEDDB1AAB8050000001E` | refused | -1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials | (none) | 444ms |
+| 2 | the same, alice holding the serial in certificate byte order | `X509:<I>DC=com,DC=example,DC=corp,CN=corp-L44-CA<SR>1E00000005B8AAB1DDCE9FAD91000000000005` | refused | -1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials | (none) | 442ms |
+| 2 | AD CS `User`, requested as alice (SID extension) | (none) | **TGT issued** | — | (none) | 464ms |
+| 2 | a CA whose CN holds a comma (`lab-users, comma-CA`), alice holding port49's form | `X509:<I>DC=com,DC=example,DC=corp,CN=lab-users, comma-CA<SR>FA5C0DE3B8300B15` | refused | -1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials | KDC 39: The Key Distribution Center (KDC) encountered a user certificate that was valid but could not be mapped to a user in a secure way (such as via explicit mapping,... | 450ms |
+| 2 | the same, alice holding the value quoted as CertNameToStr quotes it | `X509:<I>DC=com,DC=example,DC=corp,CN="lab-users, comma-CA"<SR>FA5C0DE3B8300B15` | **TGT issued** | — | (none) | 452ms |
+| 2 | the same, alice holding the value escaped as RFC 4514 escapes it | `X509:<I>DC=com,DC=example,DC=corp,CN=lab-users\, comma-CA<SR>FA5C0DE3B8300B15` | refused | -1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials | (none) | 457ms |
+| 2 | the lab users CA, a serial whose top bit is set, alice holding port49's form | `X509:<I>DC=com,DC=example,DC=corp,CN=lab-users-CA<SR>2869F88E3F0BB5D0ED` | refused | -1765328318/Certificate mismatch; kinit: Certificate mismatch while getting initial credentials | KDC 39: The Key Distribution Center (KDC) encountered a user certificate that was valid but could not be mapped to a user in a secure way (such as via explicit mapping,... | 444ms |
+| 2 | the same, alice holding the serial with its DER sign byte | `X509:<I>DC=com,DC=example,DC=corp,CN=lab-users-CA<SR>2869F88E3F0BB5D0ED00` | **TGT issued** | — | (none) | 432ms |
+| 2 | the broker's AD CS certificate, SASL EXTERNAL over StartTLS | port49's form, on port49 | **bound** as `u:CORP\port49` |  | (none) | 7ms |
 
 ### OR-1: a mapped certificate while the DC's KDC is stopped
 
 | mechanism | outcome | LDAP result | time |
 |---|---|---|---|
 | SASL EXTERNAL over StartTLS, mapped, the KDC up (e5's control, before) | accepted; WhoAmI `u:CORP\port49`; a search for alice found 1 entry | 0 | 7ms |
-| SASL EXTERNAL over StartTLS, mapped, **the DC's KDC stopped** | refused: `LDAP Result Code 49 "Invalid Credentials": bind external as CN=port49-broker: LDAP result 49` | 49 | 5ms |
-| SASL EXTERNAL over StartTLS, mapped, the KDC started again (e5's control, after) | accepted; WhoAmI `u:CORP\port49`; a search for alice found 1 entry | 0 | 8ms |
+| SASL EXTERNAL over StartTLS, mapped, **the DC's KDC stopped** | refused: `LDAP Result Code 49 "Invalid Credentials": bind external as CN=port49-broker: LDAP result 49` | 49 | 6ms |
+| SASL EXTERNAL over StartTLS, mapped, the KDC started again (e5's control, after) | accepted; WhoAmI `u:CORP\port49`; a search for alice found 1 entry | 0 | 7ms |
 
-The KDC's outage, on the DC's clock: stopped 2026-10-07T03:31:57.5689352Z, its start task scheduled for 2026-10-07T03:33:26.7719944Z and run at 2026-10-07T03:33:26.0000000Z, found running at 2026-10-07T03:33:29.0219724Z (result 0). An SSH logon fails while the KDC is down, so the stop registered that task and nothing called the DC until it had run. e5's bind ended 1.251s after the stop.
+The KDC's outage, on the DC's clock: stopped 2026-10-07T11:27:14.8968522Z, its start task scheduled for 2026-10-07T11:28:44.1150548Z and run at 2026-10-07T11:28:44.0000000Z (the Task Scheduler's trigger is whole seconds, so the run time can precede the scheduled instant by under a second), found running at 2026-10-07T11:28:46.3338202Z (result 0). An SSH logon fails while the KDC is down, so the stop registered that task and nothing called the DC until it had run. e5's bind ended 1.287s after the stop was asked.
 

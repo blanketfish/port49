@@ -17,6 +17,7 @@ import (
 	"github.com/go-ldap/ldap/v3/gssapi"
 	krbclient "github.com/jcmturner/gokrb5/v8/client"
 	krbconfig "github.com/jcmturner/gokrb5/v8/config"
+	krbflags "github.com/jcmturner/gokrb5/v8/iana/flags"
 	"github.com/jcmturner/gokrb5/v8/iana/nametype"
 	"github.com/jcmturner/gokrb5/v8/keytab"
 	"github.com/jcmturner/gokrb5/v8/types"
@@ -285,7 +286,13 @@ func bind(ctx context.Context, conn *ldap.Conn, s Server, cr *Credentials) error
 			done <- conn.ExternalBind()
 		case "gssapi":
 			u, _ := url.Parse(s.URI)
-			done <- conn.GSSAPIBind(&gssapi.Client{Client: cr.krb}, "ldap/"+u.Hostname(), "")
+			// go-ldap's client asks for mutual authentication in the GSS
+			// checksum but sends no AP options; AD refuses an AP-REQ without
+			// mutual-required (AcceptSecurityContext data 57, seen as LDAP
+			// 49, L44), as MIT always pairs the two.
+			done <- conn.GSSAPIBindRequestWithAPOptions(&gssapi.Client{Client: cr.krb},
+				&ldap.GSSAPIBindRequest{ServicePrincipalName: "ldap/" + u.Hostname()},
+				[]int{krbflags.APOptionMutualRequired})
 		default:
 			done <- conn.Bind(cr.who, cr.password)
 		}
