@@ -48,12 +48,6 @@ broker:
   #   nested_groups: in_chain     # in_chain (Active Directory; OpenLDAP answers it empty, use recursive) | recursive | direct
   #   grace: 4h                   # how long a stored membership answers when no server does
   #   prewarm: {interval: 1h, max_principals: 10000}
-store:
-  backend: etcd
-  etcd:
-    endpoints: [https://etcd-1:2379, https://etcd-2:2379, https://etcd-3:2379]
-    ca_file: /etc/port49/etcd/ca.pem
-    broker: {cert_file: /etc/port49/etcd/port49-broker.pem, key_file: /etc/port49/etcd/port49-broker-key.pem}
   #
   # OIDC (spec §13 decision 39) is off here: the trial authenticates people
   # by certificate alone (broker.client_ca_file above). To accept tokens
@@ -81,3 +75,9 @@ store:
   #   # jwks_max_age: 24h                     # past it with no refresh, every OIDC request is refused 503
   # The provider posts back-channel logouts to https://<broker>:8443/v1/logout:
   # register that URL, with "backchannel logout session required" on.
+store:
+  backend: etcd
+  etcd:
+    endpoints: [https://etcd-1:2379, https://etcd-2:2379, https://etcd-3:2379]
+    ca_file: /etc/port49/etcd/ca.pem
+    broker: {cert_file: /etc/port49/etcd/port49-broker.pem, key_file: /etc/port49/etcd/port49-broker-key.pem}

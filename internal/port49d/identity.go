@@ -3,6 +3,7 @@ package port49d
 import (
 	"context"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -28,6 +29,20 @@ func keyFile(stateDir, issuer string) string {
 	return filepath.Join(stateDir, oidc.KeyFileName(issuer))
 }
 
+// stateDirWords is err, a refusal of the state directory (ownStateDir,
+// writeOwnerOnly), as the process that has no broker.state_dir says it: port49d
+// keeps its broker's state beside broker.revocations_file, so that is the key
+// to name and the one to move. port49-broker's own key stays as it is.
+func stateDirWords(cfg config.Config, stateDir string, err error) string {
+	text := printsafe.Line(err.Error(), 300)
+	if cfg.Broker.StateDir != "" {
+		return text
+	}
+	text = strings.ReplaceAll(text, "broker.state_dir "+stateDir, "the directory of broker.revocations_file ("+stateDir+")")
+	return strings.ReplaceAll(text, "port49-broker's own state is kept there; chmod 0700 it",
+		"the broker's own state is kept there; chmod it 0700, or move broker.revocations_file into a 0700 directory")
+}
+
 // openOIDC builds broker.identity's OIDC set: one key set per issuer,
 // shared by the issuer's verifiers, restored from stateDir and kept there.
 // It fetches nothing: runKeySets does, so a start never waits on a
@@ -41,7 +56,7 @@ func openOIDC(cfg config.Config, stateDir string, m *metrics.Metrics, say func(s
 	}
 	if err := ownStateDir(stateDir); err != nil {
 		say("identity: the state directory %s cannot keep the providers' keys (%s): a restart during a provider "+
-			"outage will refuse every OIDC token until a fetch succeeds", stateDir, printsafe.Line(err.Error(), 200))
+			"outage will refuse every OIDC token until a fetch succeeds", stateDir, stateDirWords(cfg, stateDir, err))
 	}
 	set := &oidc.Set{Timing: id.Timing, Now: time.Now, M: m}
 	byIssuer := map[string]*oidc.KeySet{}
@@ -63,7 +78,12 @@ func openOIDC(cfg config.Config, stateDir string, m *metrics.Metrics, say func(s
 			path := keyFile(stateDir, v.Issuer)
 			ks = oidc.NewKeySet(oidc.KeySetConfig{Issuer: v.Issuer, Client: oidc.NewClient(roots),
 				Refresh: id.Timing.JWKSRefresh, MaxAge: id.Timing.JWKSMaxAge, Now: time.Now, Say: say, M: m,
-				Save: func(b []byte) error { return writeOwnerOnly(path, b) },
+				Save: func(b []byte) error {
+					if err := writeOwnerOnly(path, b); err != nil {
+						return errors.New(stateDirWords(cfg, stateDir, err))
+					}
+					return nil
+				},
 				Load: func() ([]byte, error) { return readOwnerOnly(path) }})
 			switch n, at, err := ks.Restore(); {
 			case err != nil:
