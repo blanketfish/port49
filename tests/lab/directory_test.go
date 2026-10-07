@@ -767,13 +767,24 @@ type evidenceLine struct {
 	Error      string   `json:"error,omitempty"`
 	DurationMS float64  `json:"duration_ms,omitempty"`
 	DCEvents   []string `json:"dc_events,omitempty"`
+	AuthzID    string   `json:"authz_id,omitempty"`
 }
 
-// evidence opens tests/lab/evidence/<name>.json under the run's output root,
+// evidenceDir is where evidence file name goes under the output root: the
+// committed evidence directory, except for the Windows bring-up's, which is no
+// measurement and goes under the git-ignored logs.
+func evidenceDir(out, name string) string {
+	if name == "L44-bringup" {
+		return filepath.Join(out, "tests", "lab", "logs", "windows")
+	}
+	return filepath.Join(out, "tests", "lab", "evidence")
+}
+
+// evidence opens evidenceDir's <name>.json under the run's output root,
 // truncating whatever an earlier run left.
 func evidence(t *testing.T, d *directories, name string) *evidenceLog {
 	t.Helper()
-	dir := filepath.Join(d.out, "tests", "lab", "evidence")
+	dir := evidenceDir(d.out, name)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -815,6 +826,16 @@ func (e *evidenceLog) add(l evidenceLine) {
 // mark says what the lines after it belong to.
 func (e *evidenceLog) mark(format string, args ...any) {
 	e.add(evidenceLine{Event: "mark", Label: fmt.Sprintf(format, args...)})
+}
+
+// whoami records a WhoAmI observation: the authorization ID (a principal name,
+// never a secret) or the error. Both arrive scrubbed.
+func (e *evidenceLog) whoami(label, authzID string, err error) {
+	l := evidenceLine{Event: "whoami", Label: label, AuthzID: authzID}
+	if err != nil {
+		l.Error = oneLineMax(err.Error(), 400)
+	}
+	e.add(l)
 }
 
 // bind records one bind attempt's outcome.
@@ -889,7 +910,11 @@ func dirRunLine(sel string) string {
 			sha = strings.TrimSpace(string(out))
 		}
 	}
-	return fmt.Sprintf("commit `%s`, `go test -tags lab ./tests/lab/ -run '%s'`", sha, sel)
+	env := ""
+	if strings.Contains(sel, "TestL44") {
+		env = "PORT49_LAB_L44=1 " // without it L44's tests skip
+	}
+	return fmt.Sprintf("commit `%s`, `%sgo test -tags lab ./tests/lab/ -run '%s'`", sha, env, sel)
 }
 
 // noteHoldsSecret reports whether note holds any non-empty secret.
@@ -932,9 +957,13 @@ func noteText(d *directories, row string, l *labDir, claim, version, observation
 	fmt.Fprintf(&b, "- **Platform:** %s, %s\n", l.name, l.where)
 	fmt.Fprintf(&b, "- **Image version:** %s\n", version)
 	fmt.Fprintf(&b, "- **Run:** %s\n", dirRunLine(d.runSel))
+	wire := "LDAPS"
+	if l.name == platWindows {
+		wire = "TLS (LDAPS or StartTLS)" // L44's EXTERNAL cells run over StartTLS
+	}
 	fmt.Fprintf(&b, "- **Capture:** `%s`: one JSON line per search, bind and step, with the base, scope, filter, the DNs returned, "+
-		"the LDAP result code and the duration, recorded by the broker's own client (the wire is LDAPS, so a pcap would be "+
-		"encrypted).\n", evidencePath)
+		"the LDAP result code and the duration, recorded by the broker's own client (the wire is %s, so a pcap would be "+
+		"encrypted).\n", evidencePath, wire)
 	if l.credentials != "" {
 		fmt.Fprintf(&b, "- **Credentials:** %s\n", l.credentials)
 	} else {

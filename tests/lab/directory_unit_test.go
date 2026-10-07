@@ -4,6 +4,7 @@ package lab
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -110,6 +111,34 @@ func TestDirectoryPKIShape(t *testing.T) {
 	}
 }
 
+// A WhoAmI observation is one evidence line holding the result and the
+// authorization ID, which is a principal name.
+func TestDirectoryEvidenceWhoAmI(t *testing.T) {
+	f, err := os.Create(filepath.Join(t.TempDir(), "x.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	e := &evidenceLog{f: f, Path: f.Name()}
+	e.whoami("ldaps, no bind", `u:CORP\port49`, nil)
+	e.whoami("ldaps, no bind", "", errors.New("boom"))
+	b, _ := os.ReadFile(e.Path)
+	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("%d lines: %s", len(lines), b)
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &m); err != nil {
+		t.Fatal(err)
+	}
+	if m["event"] != "whoami" || m["authz_id"] != `u:CORP\port49` || m["label"] != "ldaps, no bind" {
+		t.Errorf("%s", lines[0])
+	}
+	if !strings.Contains(lines[1], `"error":"boom"`) || strings.Contains(lines[1], "authz_id") {
+		t.Errorf("%s", lines[1])
+	}
+}
+
 // The evidence is one snake_case JSON object per line, and holds what was
 // asked and what came back.
 func TestDirectoryEvidenceLines(t *testing.T) {
@@ -159,6 +188,42 @@ func TestDirectoryLDAPCode(t *testing.T) {
 func TestDirectoryRunLineNamesTheSelection(t *testing.T) {
 	if got := dirRunLine("TestL44"); !strings.Contains(got, "-run 'TestL44'") {
 		t.Fatalf("%s", got)
+	}
+}
+
+// L44's Run line carries the opt-in, or copied as it stands it would skip; the
+// containers' lines do not.
+func TestDirectoryRunLineCarriesL44OptIn(t *testing.T) {
+	if got := dirRunLine("^TestL44WindowsAD$"); !strings.Contains(got, "PORT49_LAB_L44=1 go test -tags lab") {
+		t.Errorf("%s", got)
+	}
+	if got := dirRunLine("TestL42|TestL43"); strings.Contains(got, "PORT49_LAB_L44") {
+		t.Errorf("%s", got)
+	}
+}
+
+// The Windows note names its wire as TLS, LDAPS or StartTLS; the containers'
+// keep "LDAPS".
+func TestDirectoryNoteCaptureWire(t *testing.T) {
+	d := &directories{out: t.TempDir(), password: "Aa1!pw", runSel: "x"}
+	win, _ := noteText(d, "L44", &labDir{name: platWindows, d: d}, "c", "v", "o", "e.json")
+	if !strings.Contains(win, "the wire is TLS (LDAPS or StartTLS)") {
+		t.Errorf("windows note: %s", win)
+	}
+	smb, _ := noteText(d, "L43", &labDir{name: platSamba, d: d}, "c", "v", "o", "e.json")
+	if !strings.Contains(smb, "the wire is LDAPS, so") {
+		t.Errorf("container note: %s", smb)
+	}
+}
+
+// The bring-up's evidence goes under the git-ignored logs, never beside the
+// committed evidence.
+func TestEvidenceDirKeepsTheBringupOutOfTheRepositoryEvidence(t *testing.T) {
+	if got := evidenceDir("/o", "L44-bringup"); got != filepath.Join("/o", "tests", "lab", "logs", "windows") {
+		t.Errorf("bring-up: %s", got)
+	}
+	if got := evidenceDir("/o", "L44-windows_ad"); got != filepath.Join("/o", "tests", "lab", "evidence") {
+		t.Errorf("measurement: %s", got)
 	}
 }
 
