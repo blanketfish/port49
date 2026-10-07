@@ -1037,15 +1037,19 @@ func TestWindowsSetAttrReadsBackNoValues(t *testing.T) {
 	}
 }
 
-// install.bat tells Windows the VM's clock is UTC, so a kept DC's container
-// restart does not put it hours out (harness review M5).
-func TestWindowsInstallBatSetsTheClockUniversal(t *testing.T) {
+// install.bat puts Windows in the UTC time zone, so a kept DC's container
+// restart does not put it hours out (harness review M5), and never sets
+// RealTimeIsUniversal, which put a fresh DC 7h behind.
+func TestWindowsInstallBatSetsTheTimeZoneUTC(t *testing.T) {
 	b, err := os.ReadFile(filepath.Join("directory", "windows", "oem", "install.bat"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(b), `'HKLM:\SYSTEM\CurrentControlSet\Control\TimeZoneInformation' -Name RealTimeIsUniversal -Value 1 -Type DWord`) {
-		t.Error("install.bat does not set RealTimeIsUniversal to 1")
+	if !strings.Contains(string(b), "Set-TimeZone -Id 'UTC'") {
+		t.Error("install.bat does not set the UTC time zone")
+	}
+	if strings.Contains(string(b), "-Name RealTimeIsUniversal") {
+		t.Error("install.bat sets RealTimeIsUniversal")
 	}
 }
 
