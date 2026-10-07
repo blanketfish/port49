@@ -335,3 +335,34 @@ func TestOIDCRevokeBySid(t *testing.T) {
 		t.Error("jsonCell")
 	}
 }
+
+func TestOIDCLogoutArrival(t *testing.T) {
+	refused := "2026-10-07T00:00:00Z logout: a logout request was refused: its iss is not x"
+	if r, ok := logoutArrival("noise\n"+refused+"\n", ""); !ok || r != refused {
+		t.Errorf("a refusal: %q %v", r, ok)
+	}
+	m := "# HELP x\nport49_oidc_logouts_total{outcome=\"applied\"} 1\nport49_oidc_logouts_total{outcome=\"invalid\"} 0\n"
+	if r, ok := logoutArrival("", m); !ok || r != "" {
+		t.Errorf("an applied logout: %q %v", r, ok)
+	}
+	if _, ok := logoutArrival("", "port49_oidc_logouts_total{outcome=\"applied\"} 0\nport49_oidc_logouts_totals 4\n"); ok {
+		t.Error("nothing reached the broker, and it read as arrived")
+	}
+	if _, ok := logoutArrival("", ""); ok {
+		t.Error("no metrics read as arrived")
+	}
+}
+
+func TestOIDCIDTokenExpired(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	tok := func(exp int64) string { return jwsOf(map[string]any{"alg": "RS256"}, map[string]any{"exp": exp}) }
+	if idTokenExpired(tok(now.Unix()+300), now, 10*time.Second) {
+		t.Error("a live token read as expired")
+	}
+	if !idTokenExpired(tok(now.Unix()+5), now, 10*time.Second) || !idTokenExpired(tok(now.Unix()-1), now, 10*time.Second) {
+		t.Error("an expiring or expired token read as live")
+	}
+	if idTokenExpired("not-a-jws", now, 10*time.Second) {
+		t.Error("a token with no exp read as expired")
+	}
+}

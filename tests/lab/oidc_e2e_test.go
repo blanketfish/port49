@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -229,9 +230,31 @@ func oidcEndToEnd(t *testing.T, l *lab) {
 		return revokeBySid(rs) != nil
 	})
 	rv := revokeBySid(recs)
-	cell("2a. RP-initiated logout at Keycloak; the broker's revoke record", jsonCell(sub(rv, "revocation")))
 	if rv == nil {
-		fail("no revoke record by sid within 30s of the logout")
+		// Keycloak's POST that never arrived is a setup fault (its truststore,
+		// the port49-broker name, the network), not a logout that revokes
+		// nothing: only a request the broker received, and refused or not
+		// acted on, is a measurement (Task 16 review I1).
+		errText, _ := os.ReadFile(c.brokerErr)
+		metrics := ""
+		if resp, err := (&http.Client{Timeout: 5 * time.Second}).Get("http://127.0.0.1:9050/metrics"); err == nil {
+			raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+			resp.Body.Close()
+			metrics = string(raw)
+		}
+		refusal, arrived := logoutArrival(string(errText), metrics)
+		if !arrived {
+			t.Fatalf("INVALID: no logout request reached the broker within 30s of the end-session logout: Keycloak's " +
+				"truststore, the port49-broker name, or the stack's network; no note is written")
+		}
+		if refusal != "" {
+			cell("2a. RP-initiated logout at Keycloak; the broker's answer", oneLineMax(scrubbed(refusal, kc.known()), 300))
+		} else {
+			cell("2a. RP-initiated logout at Keycloak; the broker's answer", "a logout request arrived and no revoke record by sid was written")
+		}
+		fail("no revoke record by sid within 30s of a logout the broker received")
+	} else {
+		cell("2a. RP-initiated logout at Keycloak; the broker's revoke record", jsonCell(sub(rv, "revocation")))
 	}
 	denied := l.runCmd(sh, "show version")
 	_, verdict, reason := ctxIDOf(l.waitForRecords(doff, 30*time.Second, func(rs []map[string]any) bool {
@@ -242,10 +265,17 @@ func oidcEndToEnd(t *testing.T, l *lab) {
 	if denied.permitted || verdict != "deny" || reason != "credential_revoked" {
 		fail("the session's command after the logout: %s; port49d %s %s", denied.cell, verdict, reason)
 	}
-	_, again := br.mint(t, first.IDToken, l.p.node)
-	cell("2c. the ended session's ID token mints again", again)
-	if !strings.Contains(again, "credential_revoked") {
-		fail("the ended session's ID token minted again: %s", again)
+	// The ID token lives 300s and the steps above may have used most of it: an
+	// expired token is refused for its expiry, which says nothing of the logout
+	// (Task 16 review M1).
+	if idTokenExpired(first.IDToken, time.Now(), 10*time.Second) {
+		cell("2c. the ended session's ID token mints again", "not measured: the ID token had expired")
+	} else {
+		_, again := br.mint(t, first.IDToken, l.p.node)
+		cell("2c. the ended session's ID token mints again", again)
+		if !strings.Contains(again, "credential_revoked") {
+			fail("the ended session's ID token minted again: %s", again)
+		}
 	}
 
 	// ---- 3. A new login after the logout works, and opens a live session
@@ -495,4 +525,42 @@ func refreshSaid(code int, body string, secrets []string) (api.RefreshResponse, 
 	}
 	return resp, oneLineMax(scrubbed(fmt.Sprintf("200 auth_time %s; sessions: %s", resp.AuthTime, strings.Join(ss, ", ")),
 		secrets), 300)
+}
+
+// logoutArrival reads the broker's stderr and metrics text after a logout: the
+// refusal line if the broker refused a logout request, and whether any logout
+// request reached it at all (a refusal, or port49_oidc_logouts_total above 0).
+func logoutArrival(brokerErr, metrics string) (refusal string, arrived bool) {
+	for _, line := range strings.Split(brokerErr, "\n") {
+		if strings.Contains(line, "a logout request was refused") {
+			refusal = line
+		}
+	}
+	return refusal, refusal != "" || metricSum(metrics, "port49_oidc_logouts_total") > 0
+}
+
+// metricSum is the sum of every sample of the labelled or unlabelled metric name.
+func metricSum(text, name string) float64 {
+	var sum float64
+	for _, line := range strings.Split(text, "\n") {
+		rest, ok := strings.CutPrefix(line, name)
+		if !ok || rest == "" || (rest[0] != '{' && rest[0] != ' ') {
+			continue
+		}
+		f := strings.Fields(rest[strings.LastIndexAny(rest, "} ")+1:])
+		if len(f) == 0 {
+			continue
+		}
+		if v, err := strconv.ParseFloat(f[0], 64); err == nil {
+			sum += v
+		}
+	}
+	return sum
+}
+
+// idTokenExpired says whether the ID token's exp is within margin of now.
+func idTokenExpired(idToken string, now time.Time, margin time.Duration) bool {
+	_, c := claimsOf(idToken)
+	exp, ok := c["exp"].(float64)
+	return ok && !now.Add(margin).Before(time.Unix(int64(exp), 0))
 }

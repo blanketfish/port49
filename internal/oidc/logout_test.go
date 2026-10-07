@@ -235,3 +235,23 @@ func TestALogoutIsAppliedByTheVerifierThatValidatedIt(t *testing.T) {
 		t.Errorf("no keys at all: %v", err)
 	}
 }
+
+// Keycloak 26.4's logout token, as the L45 run measured it
+// (tests/lab/results/L45-keycloak.md): a top-level typ claim "Logout", and an
+// events claim holding the back-channel member beside "revoke_offline_access":
+// true, which is no JSON object. Built here with the test signer, not
+// captured. Every Keycloak logout rests on port49 accepting it, so a tightening
+// of the events check (exactly one member, only objects) must fail this.
+func TestAKeycloakShapedLogoutTokenVerifies(t *testing.T) {
+	iss, c := oidctest.NewIssuer(t), newClock()
+	set := newSet(t, iss, c, human(iss, oidc.ClaimEmail))
+	extra := map[string]any{"typ": "Logout", "events": map[string]any{
+		oidc.BackchannelLogoutEvent: map[string]any{}, "revoke_offline_access": true}}
+	l, err := set.VerifyLogout(context.Background(), logoutToken(t, iss, c.Now(), extra))
+	if err != nil {
+		t.Fatalf("Keycloak's logout token shape is refused: %v", err)
+	}
+	if l.Sid != "s-8b2e" || l.Subject != "8b2e" {
+		t.Fatalf("logout %+v", l)
+	}
+}
