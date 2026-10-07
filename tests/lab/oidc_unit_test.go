@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -156,7 +157,14 @@ func TestOIDCRealmMatchesTheHarness(t *testing.T) {
 		} `json:"clients"`
 		Users []struct {
 			ID                     string `json:"id"`
+			Username               string `json:"username"`
+			Email                  string `json:"email"`
+			EmailVerified          bool   `json:"emailVerified"`
 			ServiceAccountClientID string `json:"serviceAccountClientId"`
+			Credentials            []struct {
+				Value     string `json:"value"`
+				Temporary bool   `json:"temporary"`
+			} `json:"credentials"`
 		} `json:"users"`
 	}
 	if err := json.Unmarshal(b, &realm); err != nil {
@@ -182,6 +190,24 @@ func TestOIDCRealmMatchesTheHarness(t *testing.T) {
 	}
 	if !sa {
 		t.Errorf("port49-svc's service account does not carry id %s", kcServiceAccountID)
+	}
+	// The e2e's three people: a verified email the policy subject names, and a
+	// permanent password the harness logs in with (and registers as a secret).
+	for user, password := range map[string]string{oidcAlice: oidcAlicePassword, oidcBob: oidcBobPassword, oidcCarol: oidcCarolPassword} {
+		var found bool
+		for _, u := range realm.Users {
+			if u.Username != user {
+				continue
+			}
+			found = u.Email == user+"@corp.example.com" && u.EmailVerified && len(u.Credentials) == 1 &&
+				u.Credentials[0].Value == password && !u.Credentials[0].Temporary
+		}
+		if !found {
+			t.Errorf("realm.json has no user %s with email %s@corp.example.com, verified, and password %s", user, user, password)
+		}
+		if !slices.Contains(labSecrets, password) {
+			t.Errorf("labSecrets lacks %s's password", user)
+		}
 	}
 }
 
