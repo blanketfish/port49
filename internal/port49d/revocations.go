@@ -534,7 +534,7 @@ func adminForget(brk *broker.Broker) func(context.Context, string, uint32) (stri
 
 // adminRevoke is the admin socket's revoke op over brk (plan 7a). The
 // record's origin is the uid the socket read off the caller.
-func adminRevoke(brk *broker.Broker) func(context.Context, admin.RevokeOp) (string, bool, error) {
+func adminRevoke(brk *broker.Broker, mc *marksCopy) func(context.Context, admin.RevokeOp) (string, bool, error) {
 	return func(ctx context.Context, op admin.RevokeOp) (string, bool, error) {
 		req := broker.RevokeRequest{Principal: op.Principal, Issuer: op.Issuer, Serial: op.Serial,
 			Origin: fmt.Sprintf("admin_socket uid %d", op.UID)}
@@ -543,6 +543,7 @@ func adminRevoke(brk *broker.Broker) func(context.Context, admin.RevokeOp) (stri
 			if err != nil {
 				return "", false, err
 			}
+			mc.Lifted(rep.Mark)
 			return rep.LiftedText(), rep.Partial(), nil
 		}
 		rep, err := brk.Revoke(ctx, req)

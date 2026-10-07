@@ -522,12 +522,13 @@ func runBroker(parent context.Context, cfgPath string) error {
 	// reach no listener, and the listener holds every mark at the load's
 	// revision, which the feed follows from. Keep that order. The feed tells
 	// the copy every change the watch delivers and every mark a reload
-	// reads (copyingFeed), this replica's own revocations and lifts
-	// included. Before a reload the runner's hook puts back what the store
-	// lost, refusing the reload when that fails, and every other replica's
-	// keeps what its copy holds and the store lacks, refusing the reload
-	// when the marks cannot be read (final review 7e-1 C-1; re-review 1
-	// C-2; pre-flight 7e-2 P-3).
+	// reads (copyingFeed), this replica's own revocations included; its
+	// own lifts leave the copy as the admin socket answers them (Lifted).
+	// Before a reload the runner's hook puts back what the store lost,
+	// refusing the reload when that fails, and every other replica's keeps
+	// what its copy holds and the store lacks, refusing the reload when the
+	// marks cannot be read (final review 7e-1 C-1; re-review 1 C-2;
+	// pre-flight 7e-2 P-3).
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -542,7 +543,7 @@ func runBroker(parent context.Context, cfgPath string) error {
 		bln.Close()
 		return fmt.Errorf("admin_socket %s: %w", cfg.AdminSocket, err)
 	}
-	asrv := &admin.Server{Revoke: adminRevoke(brk), Revocations: adminRevocations(bs.st),
+	asrv := &admin.Server{Revoke: adminRevoke(brk, marksCopy), Revocations: adminRevocations(bs.st),
 		Forget: adminForget(brk), Now: time.Now,
 		DiagnoseElsewhere: "port49d's admin socket", Proc: "port49-broker"}
 	wg.Add(1)

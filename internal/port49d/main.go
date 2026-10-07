@@ -1182,7 +1182,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 			// for both, so they cannot drift apart.
 			brk.RevokeTimeout = admin.OpTimeout
 			brk.AdminSocket = cfg.AdminSocket
-			srv.Revoke, srv.Revocations, srv.Forget = adminRevoke(brk), adminRevocations(brk.Store), adminForget(brk)
+			srv.Revoke, srv.Revocations, srv.Forget = adminRevoke(brk, nil), adminRevocations(brk.Store), adminForget(brk)
 		} else if sts.persistent {
 			// Beside port49-broker on etcd (plan 7e, Ruling 13).
 			srv.RevokeElsewhere = "port49-broker's admin socket (its admin_socket in port49-broker.yaml)"

@@ -28,9 +28,16 @@ import (
 // It errs toward denying: it adds every mark it is told stands, and drops
 // one only on a lift the watch delivered (Apply), never on a reload's
 // difference, which may be a restore's loss. So a mark the store lost is
-// put back, and so is a mark whose lift this copy missed (lifted while
-// this replica was stopped, or while its watch was compacted away). Both
-// deny more, and the put-back line names each one and how to lift it.
+// put back, and so is a mark whose lift this copy missed (lifted on
+// another replica and this one stopped before its watch delivered it, or
+// while it was stopped, or while its watch was compacted away). A lift made
+// on this replica's admin socket leaves the copy before it is answered
+// (Lifted), but three windows remain, each denying more: a reload whose
+// list was read before the lift's delete can stand the mark again until the
+// watch delivers the delete; the runner's putBackMissing, listing the store
+// after the delete's commit and reading the copy before Lifted, puts the
+// mark back; and another replica's lift is only the watch's to deliver.
+// The put-back line names each put-back and how to lift it.
 //
 // The file is rewritten on each change, owner only (writeOwnerOnly). A
 // write that fails leaves the mark in this run's copy, and is said once
@@ -49,6 +56,17 @@ type marksCopy struct {
 	// read, written back unchanged after the marks it does: a downgrade, or
 	// a field a newer port49 added, never erases a revocation.
 	unread []json.RawMessage
+	// lifted is each mark this replica lifted (Lifted), by its time, until
+	// the watch delivers the lift or a reload (stand) ends it: the watch's
+	// late put of that mark is not added back. A reload may resume past the
+	// lift's delete, so it clears every tombstone.
+	lifted map[[2]string]time.Time
+	// deleted is each key whose lift the watch delivered, or a reload ended
+	// the tombstone of, since its last standing put: a Lifted for such a key sets no tombstone, since the
+	// watch is not behind, and a later put of it is the store's (another
+	// replica's put-back). The one case this gets wrong, a put still in
+	// flight behind that delete, keeps the mark, which denies more.
+	deleted map[[2]string]bool
 }
 
 // marksFile is marks.json: every mark the copy holds, sorted by kind and
@@ -154,6 +172,10 @@ func (c *marksCopy) Apply(ch store.MarkChange) {
 	k := [2]string{ch.Kind, ch.Key}
 	switch {
 	case ch.Standing:
+		if at, ok := c.lifted[k]; ok && at.Equal(ch.At) {
+			return // lifted here already; the watch is behind
+		}
+		delete(c.deleted, k)
 		if cur, ok := c.m[k]; ok && (ch.At.IsZero() || cur.At.Equal(ch.At)) {
 			return
 		}
@@ -164,12 +186,43 @@ func (c *marksCopy) Apply(ch store.MarkChange) {
 	case ch.Reloaded:
 		return
 	default:
+		delete(c.lifted, k)
+		if c.deleted == nil {
+			c.deleted = map[[2]string]bool{}
+		}
+		c.deleted[k] = true
 		if _, ok := c.m[k]; !ok {
 			return
 		}
 		delete(c.m, k)
 	}
 	c.write()
+}
+
+// Lifted is a lift this replica made and the store committed: r, at its
+// time, is dropped and the file written before the lift is answered, so a
+// stop before the watch delivers it does not keep or put the mark back. A
+// newer mark of the same key (another time) is kept. Until the watch
+// delivers the lift or a reload ends it (stand), its late put of r is not
+// added back; when the watch already delivered the lift, no such put is
+// behind and none is skipped.
+func (c *marksCopy) Lifted(r store.Revocation) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	k := [2]string{r.Kind, r.Key}
+	if !c.deleted[k] {
+		if c.lifted == nil {
+			c.lifted = map[[2]string]time.Time{}
+		}
+		c.lifted[k] = r.At
+	}
+	if cur, ok := c.m[k]; ok && cur.At.Equal(r.At) {
+		delete(c.m, k)
+		c.write()
+	}
 }
 
 // stand adds every mark in rs, the store's at one revision, with one
@@ -181,6 +234,20 @@ func (c *marksCopy) stand(rs []store.Revocation) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	changed := false
+	// A reload may resume past a lift's delete, so the watch never tells
+	// it: the tombstone would outlive its lift and skip a later put-back of
+	// the same mark. The reload ends it, and marks the key deleted as the
+	// watch's delete would have. One window remains: a Lifted whose delete
+	// a reload already resumed past, run after that reload, sets a tombstone
+	// nothing ends. It matches only that lifted mark's At, so it can skip
+	// putting back the mark the operator lifted, never a later revocation.
+	for k := range c.lifted {
+		delete(c.lifted, k)
+		if c.deleted == nil {
+			c.deleted = map[[2]string]bool{}
+		}
+		c.deleted[k] = true
+	}
 	for _, r := range rs {
 		k := [2]string{r.Kind, r.Key}
 		if cur, ok := c.m[k]; r.At.IsZero() || (ok && cur.At.Equal(r.At)) {
@@ -284,7 +351,9 @@ func (c *marksCopy) All() []store.Revocation {
 // reads, as it happens: not the changes FollowMarks tells on, which skips a
 // change this process's marks already hold. A revocation or lift made on
 // this replica is applied to its marks before the watch delivers it
-// (broker.Revoke, Lift), and the copy must see it too.
+// (broker.Revoke, Lift), and the copy must see it too. A revocation reaches
+// it through the watch; a lift made on the admin socket, from adminRevoke
+// (Lifted), before it is answered, for a stop before the watch delivers it.
 type copyingFeed struct {
 	store.MarkFeed
 	copy *marksCopy
