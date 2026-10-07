@@ -4,6 +4,7 @@ package port49d
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/tls"
@@ -348,7 +349,7 @@ func adminOverBroker(t *testing.T, st store.Store, opTimeout time.Duration) stri
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	srv := &admin.Server{Now: time.Now, OpTimeout: opTimeout, Revoke: adminRevoke(brk), Revocations: adminRevocations(st)}
+	srv := &admin.Server{Now: time.Now, OpTimeout: opTimeout, Revoke: adminRevoke(brk, nil), Revocations: adminRevocations(st)}
 	go srv.Serve(ctx, ln)
 	return p
 }
@@ -489,5 +490,53 @@ func TestAFailedListSaysWhatFailed(t *testing.T) {
 	if err == nil || !strings.HasPrefix(err.Error(), "broker: the revocations in force could not be read") ||
 		!strings.Contains(err.Error(), "deadline exceeded") {
 		t.Fatalf("%v", err)
+	}
+}
+
+// A lift on the admin socket is out of this replica's copy, on disk, when
+// it is answered: a stop before the watch delivers it neither keeps the
+// mark in force at the restart nor puts it back (TestATakeoverPutsBackAMarkTheStoreLost).
+// The watch's late put of the lifted mark does not add it back; a newer
+// revocation of the key does.
+func TestALiftOnTheAdminSocketLeavesTheCopyBeforeItIsAnswered(t *testing.T) {
+	st := memory.New(time.Now)
+	cfg := brokerConfig(t, minimalPolicy)
+	m := newMetrics()
+	minter := token.NewMinter(st, decision.NewJSONLines(io.Discard), rand.Reader, token.TagKey([]byte("admin-test-key")),
+		time.Now, 8)
+	_, brk, err := buildBroker(cfg, "inventory_file "+cfg.InventoryFile, st, minter, decision.NewJSONLines(io.Discard), m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	brk.Sessions = session.New(st, time.Now, time.Hour, time.Hour)
+	path := filepath.Join(safeStateDir(t), "marks.json")
+	var out bytes.Buffer
+	c := openMarksCopy(path, &out)
+	revoke := adminRevoke(brk, c)
+	ctx := context.Background()
+	const carol = "user:carol@example.com"
+	if _, _, err := revoke(ctx, admin.RevokeOp{Principal: carol}); err != nil {
+		t.Fatal(err)
+	}
+	put, err := st.GetRevocation(ctx, store.RevocationPrincipal, carol)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Apply(store.MarkChange{Revocation: put, Standing: true}) // the watch delivers the revocation
+	if _, _, err := revoke(ctx, admin.RevokeOp{Principal: carol, Lift: true}); err != nil {
+		t.Fatal(err)
+	}
+	if got := openMarksCopy(path, io.Discard).All(); len(got) != 0 {
+		t.Fatalf("after the lift was answered the file holds %+v", got)
+	}
+	c.Apply(store.MarkChange{Revocation: put, Standing: true}) // the watch, behind, delivers the put again
+	if got := openMarksCopy(path, io.Discard).All(); len(got) != 0 {
+		t.Fatalf("the watch's late put added the lifted mark back: %+v", got)
+	}
+	newer := store.Revocation{Kind: put.Kind, Key: put.Key, At: put.At.Add(time.Second)}
+	c.Apply(store.MarkChange{Revocation: newer, Standing: true})
+	c.Lifted(put) // a stale lift never drops a newer mark
+	if got := openMarksCopy(path, io.Discard).All(); len(got) != 1 || !got[0].At.Equal(newer.At) {
+		t.Fatalf("a newer revocation of the key: %+v", got)
 	}
 }
