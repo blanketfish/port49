@@ -1865,6 +1865,15 @@ func TestWindowsServiceScriptSchedulesItsOwnStart(t *testing.T) {
 	if !regexp.MustCompile(`\$restart_after -lt \d+\) \{ throw`).MatchString(s) {
 		t.Error("service.ps1 does not refuse a restart_after too short to outlast the stop")
 	}
+	// The task is the KDC's only way back without a logon: it repeats, and
+	// check removes it only once the KDC runs and the task is not running.
+	if !strings.Contains(s, "-RepetitionInterval (New-TimeSpan -Minutes 2) -RepetitionDuration (New-TimeSpan -Minutes 30)") {
+		t.Error("the start task does not repeat, so one failed start strands the DC")
+	}
+	guard, unreg := strings.Index(s, "if ($r.status -eq 'Running' -and -not $busy) {"), strings.LastIndex(s, "Unregister-ScheduledTask")
+	if guard < 0 || unreg < guard {
+		t.Error("check removes the start task before the KDC runs or while the task is running")
+	}
 }
 
 // OR-1's KDC-stopped cell is valid only if its bind ended well before the
@@ -1912,6 +1921,19 @@ func TestL44KDCRecovered(t *testing.T) {
 	}
 	if got := l44KDCRecovered(ok, ""); got != "" {
 		t.Errorf("with no stop time to compare, a clean check is recovered: %q", got)
+	}
+	// A stop that never happened (its task was not registered) leaves a
+	// running KDC and no task: nothing to wait for.
+	if got := l44KDCRecovered(l44KDCCheck{Status: "Running"}, ""); got != "" {
+		t.Errorf("a stop that never happened is not recovered: %q", got)
+	}
+	for name, c := range map[string]l44KDCCheck{"stopped, no task": {Status: "Stopped"}, "task left": {Status: "Running", TaskLeft: true}} {
+		if l44KDCRecovered(c, "") == "" {
+			t.Errorf("%s counts as recovered with no stop time", name)
+		}
+	}
+	if l44KDCRecovered(l44KDCCheck{Status: "Running"}, "2026-10-07T08:30:21Z") == "" {
+		t.Error("a stop that happened is recovered without its task having run")
 	}
 }
 

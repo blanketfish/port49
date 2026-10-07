@@ -332,6 +332,8 @@ func (l *labDir) l44OR1(t *testing.T, ev *evidenceLog) string {
 	if c, err := l.l44AwaitKDC(t, t0, stop.StoppedAt); err != nil {
 		e6 = l44Ext{l43Cell: l43Cell{mech: "external", code: -1}, invalid: "the KDC did not come back: " + l.l44Err(err)}
 		t.Errorf("L44 OR-1: %s; the cell is INVALID (R6)", e6.invalid)
+		t.Errorf("L44 OR-1: the DC's KDC may be left stopped; no SSH logon works until it runs, and only a restart " +
+			"from outside Windows (docker compose restart dc) recovers it")
 		t.Logf("L44 OR-1: the broker's altSecurityIdentities is left set; the DC is destroyed at teardown")
 	} else {
 		stopped, check = false, c
@@ -356,6 +358,11 @@ func (l *labDir) l44OR1(t *testing.T, ev *evidenceLog) string {
 	b.WriteString(l44ExtRow("SASL EXTERNAL over LDAPS, mapped, the KDC up (e5's control, before)", e0))
 	b.WriteString(l44ExtRow("SASL EXTERNAL over LDAPS, mapped, **the DC's KDC stopped**", e5))
 	b.WriteString(l44ExtRow("SASL EXTERNAL over LDAPS, mapped, the KDC started again (e5's control, after)", e6))
+	if strings.HasPrefix(e6.invalid, "the KDC did not come back") {
+		b.WriteString("\nThe DC's KDC may be left stopped: no SSH logon works until it runs, its start task repeats every two " +
+			"minutes for half an hour, and after that only a restart from outside Windows (`docker compose restart dc`) " +
+			"recovers it.\n")
+	}
 	if check.Now != "" {
 		fmt.Fprintf(&b, "\nThe KDC's outage, on the DC's clock: stopped %s, its start task scheduled for %s and run at %s, "+
 			"found running at %s (result %s). An SSH logon fails while the KDC is down, so the stop registered that task and "+
@@ -843,6 +850,9 @@ type l44KDCCheck struct {
 // that task run no earlier than the stop (stoppedAt, "" if unknown, less two
 // seconds: the Task Scheduler cuts its trigger to the whole second).
 func l44KDCRecovered(c l44KDCCheck, stoppedAt string) string {
+	if stoppedAt == "" && c.Status == "Running" && c.TaskRan == "" && !c.TaskLeft {
+		return "" // the stop never happened (its task was not registered): nothing to come back from
+	}
 	switch {
 	case c.Status != "Running":
 		return "the KDC is " + c.Status

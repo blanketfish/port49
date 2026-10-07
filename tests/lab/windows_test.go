@@ -1813,9 +1813,9 @@ func (w *winDC) configNote() string {
 		"- PKINIT's client is MIT Kerberos (`kinit` from Fedora 43's `krb5-workstation` and `krb5-pkinit`, the versions its image recorded are in " +
 		"the facts table) on the project network, with `pkinit_kdc_hostname`, as MIT documents for an Active Directory KDC. " +
 		"MIT 1.22 or later is required: Windows Server 2025's KDC answers FFDH PKINIT without MS-PKCA's `paChecksum2` with " +
-		"KDC error 79 (\"Checksum must be included\"), and MIT added the field in 1.22 (krb5 commit 310793b); Debian stable's 1.20 and 1.21 fail every cell with it.\n\n" +
+		"KDC error 79 (\"Checksum must be included\"), and MIT added the field in 1.22 (krb5 commit 310793b); MIT 1.20 (Debian stable's, measured on this DC) failed every cell with it; 1.21 lacks the commit.\n\n" +
 		"### Running it again\n\n" +
-		"- From a worktree pinned at the commit under test: `go test -tags lab ./tests/lab/ -run '^TestL44WindowsAD$' " +
+		"- From a worktree pinned at the commit under test: `PORT49_LAB_L44=1 go test -tags lab ./tests/lab/ -run '^TestL44WindowsAD$' " +
 		"-count=1 -v -timeout 240m`. It needs `/dev/kvm`, Docker with Compose v2.24.4+, 6 GB of RAM and 66 GiB free; a " +
 		"fresh run takes 1.5 to 2.5 hours. Windows Setup can be watched at `http://127.0.0.1:8006`.\n" +
 		"- The evaluation ISO is cached in `PORT49_LAB_ISO_DIR` (default `~/.cache/port49-lab/iso`), checked by size and " +
