@@ -62,6 +62,20 @@ func (b *Broker) logout(w http.ResponseWriter, r *http.Request) {
 	vcancel()
 	switch {
 	case errors.Is(err, oidc.ErrUnavailable):
+		// Nothing in the token can be said: it was not verified. The issuers
+		// named are the configured ones. Keycloak sends a 503'd logout once, so
+		// the refused ones are found in its log.
+		var issuers []string
+		for _, v := range b.Identity.Humans() {
+			if !slices.Contains(issuers, v.Issuer) {
+				issuers = append(issuers, v.Issuer)
+			}
+		}
+		b.sayOnce("logout_unavailable", sayEvery, "logout: a logout request was refused with 503: the broker has no usable "+
+			"keys for its human issuer(s) %s (stale past jwks_max_age, or the provider's keys cannot be fetched); the "+
+			"provider may not retry, so the logouts refused meanwhile are in its own log (Keycloak: KC-SERVICES0057 "+
+			"\"Logout ... failed\"); once its keys are back, end those people's sessions by hand with `port49 revoke "+
+			"--principal <principal>` on %s's admin socket", strings.Join(issuers, ", "), b.proc())
 		retry("unavailable", "the broker cannot use the identity provider's keys right now")
 		return
 	case err != nil:
@@ -78,6 +92,9 @@ func (b *Broker) logout(w http.ResponseWriter, r *http.Request) {
 		// back, the provider's retry applies the logout instead of being
 		// answered 200 "replayed" (best effort).
 		_, _ = b.Store.TakeOnce(ctx, jtiKey(lt.Issuer, lt.JTI))
+		// The token verified, so its names are said; nothing was written.
+		b.say("logout: a logout token from %s could not be applied: the store did not answer; answered 503 so the "+
+			"provider may retry; if it does not, once the store returns: %s", lt.Issuer, b.logoutByHand(lt, RevokeReport{}, false))
 		retry("store_error", "the broker's store did not answer; the logout was not applied")
 		return
 	case !first:

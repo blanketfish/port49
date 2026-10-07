@@ -4,13 +4,17 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
+	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/rhwendt/port49/internal/store"
 )
 
 // rawConn is a client that does not retry: one TLS connection, requests
@@ -134,5 +138,65 @@ func TestOnlyCertificateLessAnswersAnnounceTheClose(t *testing.T) {
 		if err != nil || resp.StatusCode != 200 || resp.Close {
 			t.Fatalf("request %d with a certificate on one connection: err %v, resp %+v", i+1, err, resp)
 		}
+	}
+}
+
+// stdLog captures the standard logger, where sayOnce lines land, for the
+// rest of the test.
+func stdLog(t *testing.T) *lockedBuffer {
+	t.Helper()
+	w, prev := &lockedBuffer{}, log.Writer()
+	log.SetOutput(w)
+	t.Cleanup(func() { log.SetOutput(prev) })
+	return w
+}
+
+// A logout whose jti the store would not take is answered 503, and Keycloak
+// sends it once and never again: the operator is told, with the by-hand
+// recovery of a logout nothing of which was written (final review F2).
+func TestALogoutWhosePutOnceFailedSaysSo(t *testing.T) {
+	f, iss, _ := oidcLoggedIn(t)
+	var said strings.Builder
+	f.b.Say = func(format string, args ...any) { said.WriteString(fmt.Sprintf(format, args...) + "\n") }
+	f.b.AdminSocket = "/run/port49/admin.sock"
+	f.b.Store = hookStore{Store: f.st, before: map[string]func() error{
+		"PutOnce": func() error { return store.ErrUnavailable }}}
+	raw := logoutFor(t, f, iss, "s-sub-alice", "j-secret-jti")
+	if w := f.postLogout(raw); w.Code != 503 {
+		t.Fatalf("%s", lshown(w))
+	}
+	out := said.String()
+	lift := f.b.Now().Add(f.b.Identity.Timing.MaxTokenAge + 2*f.b.Identity.Timing.ClockSkew).UTC().Format(time.RFC3339)
+	if !strings.Contains(out, "the store did not answer") || !strings.Contains(out, "port49 revoke --principal") ||
+		!strings.Contains(out, "--lift` there only after "+lift) ||
+		!strings.Contains(out, `POST /v1/tokens/revoke {"sid": "s-sub-alice"`) {
+		t.Fatalf("the PutOnce failure said:\n%s", out)
+	}
+	if strings.Contains(out, raw) || strings.Contains(out, "j-secret-jti") {
+		t.Fatalf("the line carries the token or its jti:\n%s", out)
+	}
+}
+
+// Keys the broker cannot use give a 503 Keycloak never retries: the line
+// names the cause and where the refused logouts can be found.
+func TestALogoutRefusedForUnavailableKeysSaysSo(t *testing.T) {
+	f, iss, _ := oidcLoggedIn(t)
+	logs := stdLog(t)
+	// The keys went stale (past jwks_max_age) and cannot be fetched.
+	f.advance(72 * time.Hour)
+	raw := logoutFor(t, f, iss, "s-sub-alice", "j-secret-jti2")
+	iss.Fail(503)
+	for i := 0; i < 2; i++ { // the second is held back by the rate limit
+		if w := f.postLogout(raw); w.Code != 503 {
+			t.Fatalf("%s", lshown(w))
+		}
+	}
+	out := logs.String()
+	if n := strings.Count(out, "logout: "); n != 1 || !strings.Contains(out, iss.URL) ||
+		!strings.Contains(out, "keys") || !strings.Contains(out, "KC-SERVICES0057") {
+		t.Fatalf("the unavailable-keys line (want exactly one, naming the issuer and the provider's log):\n%s", out)
+	}
+	if strings.Contains(out, raw) || strings.Contains(out, "j-secret-jti2") {
+		t.Fatalf("the line carries the token or its jti:\n%s", out)
 	}
 }
