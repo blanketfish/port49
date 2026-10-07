@@ -7698,10 +7698,14 @@ Ryan may override any.
 - **9. A late renewal is said, never enforced.** Under a quarter of the validity left: one line per
   certificate per 24h and `port49_workload_certificates_renewal_late_total` at each broker replica;
   a warning from `port49 workload`. Tasks 5 and 9.
-- **10. The agentless client.** `port49 workload token` and `identity`: the files read each run, a
+- **10. The agentless client.** `port49 workload token` and `identity`: the broker reached over
+  `https` only and trusted by `--broker-ca` alone (never the system's roots, never a redirect
+  elsewhere), since the client presents the workload's certificate and takes tokens back; the files read each run, a
   mismatched pair read again up to three times; one request per `batch_max` page under its own
   `Idempotency-Key`, retried under it on 503 (but an uncovered status), 409
-  `idempotency_in_progress`, 429 and a failed connection, within `--deadline` (2m); tokens to
+  `idempotency_in_progress`, 429, a failed connection, and a 502 or 504 (a proxy in front of the
+  broker that could not reach it: the same failure as a refused connection, and the key makes the
+  retry safe), within `--deadline` (2m); tokens to
   stdout or `--out` (0600, renamed into place); exit 0 (all written), 1 (some written, some not),
   2 (usage), 75 (temporary; the pages minted are written) or 77 (nothing minted, final). Tasks 9
   and 10.
