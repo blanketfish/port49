@@ -291,7 +291,7 @@ func oidcEndToEnd(t *testing.T, l *lab) {
 	} else {
 		_, again := br.mint(t, first.IDToken, l.p.node)
 		cell("2c. the ended session's ID token mints again", again)
-		if !strings.Contains(again, "credential_revoked") {
+		if !saidRevoked(again) {
 			fail("the ended session's ID token minted again: %s", again)
 		}
 	}
@@ -305,7 +305,7 @@ func oidcEndToEnd(t *testing.T, l *lab) {
 	soon := kc.Login(t, oidcAlice, oidcAlicePassword, nil)
 	_, saidSoon := br.mint(t, soon.IDToken, l.p.node)
 	cell("3-. a new Keycloak login at once after the logout, a new mint", saidSoon)
-	if !strings.Contains(saidSoon, "credential_revoked") {
+	if !saidRevoked(saidSoon) {
 		fail("a login at once after the logout was not refused credential_revoked: %s", saidSoon)
 	}
 	time.Sleep(time.Until(loginAgainAt(endedAt)))
@@ -427,7 +427,12 @@ func oidcEndToEnd(t *testing.T, l *lab) {
 			tail = nil
 		}
 		refusal, _ := logoutArrival(string(tail), "")
-		answered, _, _ := logoutCounts(mBefore, oidcBrokerMetrics())
+		// Without a readable series before and after, a delta is cumulative or
+		// negative: arrival then rests on the stderr refusal and the records alone.
+		var answered float64
+		if mAfter := oidcBrokerMetrics(); hasLogoutSeries(mBefore) && hasLogoutSeries(mAfter) {
+			answered, _, _ = logoutCounts(mBefore, mAfter)
+		}
 		if refusal == "" && answered <= 0 {
 			t.Fatalf("INVALID: no logout request reached the broker within 30s of the admin sign-out: Keycloak's " +
 				"truststore, the port49-broker name, or the stack's network; no note is written")
@@ -446,12 +451,6 @@ func oidcEndToEnd(t *testing.T, l *lab) {
 				"within 30s (%d revoke records)", oidcLogoutOrigin, len(reasonsOf(recs, "revoke"))))
 		fail("the sign-out of a user holding two sessions left no revoke by sid then by sub within 30s")
 	}
-	tokens, _, _ := logoutCounts(mBefore, oidcBrokerMetrics())
-	sidRecs := countRevokes(recs, oidcLogoutOrigin+kc.URL, "sid")
-	cell("6e. logout tokens Keycloak sent for the one sign-out", fmt.Sprintf("%.0f logout request(s) answered; %d revoke record(s) by sid", tokens, sidRecs))
-	if sidRecs != 1 {
-		fail("the sign-out sent %d logout token(s) naming a session, not one", sidRecs)
-	}
 	for i, id := range pairIDs {
 		if idTokenExpired(id, time.Now(), 10*time.Second) {
 			cell(fmt.Sprintf("6c. session %d of 2's ID token mints again", i+1), "not measured: the ID token had expired")
@@ -459,9 +458,21 @@ func oidcEndToEnd(t *testing.T, l *lab) {
 		}
 		tk, again := br.mint(t, id, l.p.node)
 		cell(fmt.Sprintf("6c. session %d of 2's ID token mints again", i+1), again)
-		if tk != "" || !strings.Contains(again, "credential_revoked") {
+		if tk != "" || !saidRevoked(again) {
 			fail("session %d of 2's ID token minted after the sign-out of its user: %s", i+1, again)
 		}
+	}
+	// 6e recounts after 6c, so a late record is not missed; a count of 1 does
+	// not also fail when 6b already failed for no records at all.
+	sidRecs := countRevokes(recordsAt(c.brokerLog, boff), oidcLogoutOrigin+kc.URL, "sid")
+	requests := "not measured"
+	if mAfter := oidcBrokerMetrics(); hasLogoutSeries(mBefore) && hasLogoutSeries(mAfter) {
+		tokens, _, _ := logoutCounts(mBefore, mAfter)
+		requests = fmt.Sprintf("%.0f", tokens)
+	}
+	cell("6e. logout tokens Keycloak sent for the one sign-out", fmt.Sprintf("%s logout request(s) answered; %d revoke record(s) by sid", requests, sidRecs))
+	if sidRecs != 1 && ok {
+		fail("the sign-out sent %d logout token(s) naming a session, not one", sidRecs)
 	}
 	oidcDeliveryCell(c, kc, since, cell, fail, "6d")
 
@@ -538,7 +549,7 @@ func oidcEndToEnd(t *testing.T, l *lab) {
 		}
 		tk, again := br.mint(t, id, l.p.node)
 		cell(name, again)
-		if tk != "" || !strings.Contains(again, "credential_revoked") {
+		if tk != "" || !saidRevoked(again) {
 			fail("burst session %d of %d's ID token minted after its session ended: %s", i+1, burst, again)
 		}
 	}
@@ -676,6 +687,23 @@ func logoutCounts(before, after string) (total, applied, nothing float64) {
 // partial outcome is the remainder and fails it.
 func logoutAnswered(total, applied, nothing float64, want int) bool {
 	return total == float64(want) && applied+nothing == float64(want)
+}
+
+// saidRevoked is whether a mint answer from brokerSaid or mintSaid carries the
+// error code credential_revoked, and not merely a detail that mentions it. The
+// code follows the status ("401 credential_revoked: ...") or, for one device's
+// refusal in a 200, the principal ("200 user:a@b: credential_revoked: ...").
+func saidRevoked(said string) bool {
+	status, rest, ok := strings.Cut(said, " ")
+	if !ok {
+		return false
+	}
+	const code = "credential_revoked:"
+	if strings.HasPrefix(rest, code) {
+		return true
+	}
+	principal, rest, ok := strings.Cut(rest, ": ") // a 200's principal is kind:name
+	return ok && status == "200" && strings.Contains(principal, ":") && strings.HasPrefix(rest, code)
 }
 
 // hasLogoutSeries is whether the metrics text holds a port49_oidc_logouts_total

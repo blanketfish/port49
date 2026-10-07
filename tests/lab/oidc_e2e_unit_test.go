@@ -575,3 +575,24 @@ func TestOIDCNoteLeakCatchesASid(t *testing.T) {
 		t.Error("a sid value in the note was not caught")
 	}
 }
+
+func TestSaidRevokedAnchorsOnTheCode(t *testing.T) {
+	for _, tc := range []struct {
+		said string
+		want bool
+	}{
+		{"401 credential_revoked: log in again from 12:00", true},
+		{"200 user:alice@corp.example.com: credential_revoked: log in again", true},
+		{"401 invalid_token: the token is not credential_revoked", false},
+		{"401 invalid_token: credential_revoked: a detail that opens with the words", false},
+		{"200 user:alice@corp.example.com: invalid_token: credential_revoked: x", false},
+		{"200 user:alice@corp.example.com: allow permit as alice", false},
+		{"no answer: credential_revoked:", false},
+		{"credential_revoked:", false},
+		{"", false},
+	} {
+		if got := saidRevoked(tc.said); got != tc.want {
+			t.Errorf("saidRevoked(%q) = %v, want %v", tc.said, got, tc.want)
+		}
+	}
+}
