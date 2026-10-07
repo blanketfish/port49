@@ -221,13 +221,19 @@ func (b *Broker) markExtended(ctx context.Context, c caller, rep SessionRefreshR
 // logoutRecovery is what an operator does about a session a logout may have
 // left extended. A logout is not a ban: the person may log in again at once,
 // so the tail ends their contexts and lifts the mark that does it
-// (spec §5.1.4: a mark stands until an operator lifts it).
+// (spec §5.1.4: a mark stands until an operator lifts it). With no admin
+// socket there is no revoke to run: the cut is the grants, as unrecordedNote
+// says.
 func (b *Broker) logoutRecovery(principal string) string {
-	where := b.proc() + "'s admin socket"
-	if b.AdminSocket != "" {
-		where += " (" + b.AdminSocket + ")"
+	const seen = "if the decision log has a revoke record with origin backchannel_logout for "
+	if b.AdminSocket == "" {
+		return seen + principal + " just before this line, " + b.proc() + " has no admin_socket configured, so " +
+			"end its contexts: remove " + principal + "'s grants from broker.policy_file (live within two watch " +
+			"intervals), and restore them once " + principal + "'s session ceiling has passed so they may log " +
+			"in again; or configure admin_socket and revoke there"
 	}
-	return "if the decision log has a revoke record with origin backchannel_logout for " + principal +
+	where := b.proc() + "'s admin socket (" + b.AdminSocket + ")"
+	return seen + principal +
 		" just before this line, end its contexts with `port49 revoke --principal " + principal + "` on " + where +
 		", then `port49 revoke --principal " + principal + " --lift` there so they may log in again; a lift can be lost across a " + b.proc() +
 		" stop, so last check that `port49 revoke --list` there shows no mark for " + principal

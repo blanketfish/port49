@@ -477,7 +477,7 @@ func TestTheOperatorLinesNameTheLogoutRecovery(t *testing.T) {
 		"`port49 revoke --list` there shows no mark for " + alicePrincipal}
 	const sock = "/run/port49/broker.sock"
 	want = append(want, "port49-broker's admin socket ("+sock+")")
-	check := func(t *testing.T, said string) {
+	check := func(t *testing.T, said string, want []string) {
 		t.Helper()
 		for _, w := range want {
 			if !strings.Contains(said, w) {
@@ -485,7 +485,7 @@ func TestTheOperatorLinesNameTheLogoutRecovery(t *testing.T) {
 			}
 		}
 	}
-	t.Run("the marking failed", func(t *testing.T) {
+	markingFails := func(t *testing.T, sock string) string {
 		f, tok, iss := oidcSession(t)
 		f.b.Proc, f.b.AdminSocket = "port49-broker", sock
 		var said strings.Builder
@@ -510,7 +510,21 @@ func TestTheOperatorLinesNameTheLogoutRecovery(t *testing.T) {
 		if w.Code != 401 {
 			t.Fatalf("%s", shown(w))
 		}
-		check(t, said.String())
+		return said.String()
+	}
+	t.Run("the marking failed", func(t *testing.T) {
+		check(t, markingFails(t, sock), want)
+	})
+	// Without an admin socket there is no revoke to run: the line names the
+	// cut there is (revoke_api.go's unrecordedNote), not a socket.
+	t.Run("no admin socket", func(t *testing.T) {
+		said := markingFails(t, "")
+		check(t, said, []string{"backchannel_logout", "port49-broker has no admin_socket configured",
+			"remove " + alicePrincipal + "'s grants from broker.policy_file", "session ceiling has passed",
+			"restore them"})
+		if strings.Contains(said, "port49 revoke") {
+			t.Fatalf("the operator's line sends them to a socket there is none of: %s", said)
+		}
 	})
 	t.Run("the re-read failed", func(t *testing.T) {
 		f, tok, _ := oidcSession(t)
@@ -537,6 +551,6 @@ func TestTheOperatorLinesNameTheLogoutRecovery(t *testing.T) {
 			}}}
 		f.bearer(context.Background(), "POST", "/v1/refresh", "{}", tok(map[string]any{"nonce": nonce,
 			"sid": "s-second", "auth_time": f.b.Now().Unix()}))
-		check(t, said.String())
+		check(t, said.String(), want)
 	})
 }
