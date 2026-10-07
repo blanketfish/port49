@@ -1476,7 +1476,8 @@ func TestARunnersSwapMarksTheJudgedBundleInDoubt(t *testing.T) {
 // After a restore loses a revocation, the runner's takeover puts it back
 // from its copy and says so; a mark lifted through the watch is not put
 // back (Ruling 12; pre-flight I5). Both were made and the lift lifted on
-// the runner's own admin socket: its own changes reach its copy too.
+// the runner's own admin socket: its own changes reach its copy too, a
+// lift before it is answered (marksCopy.Lifted).
 func TestATakeoverPutsBackAMarkTheStoreLost(t *testing.T) {
 	var out syncBuffer
 	e := stderr
@@ -1495,6 +1496,12 @@ func TestATakeoverPutsBackAMarkTheStoreLost(t *testing.T) {
 		if resp := askSocket(t, sock, req); resp.Error != "" {
 			t.Fatalf("%+v: %+v", req, resp)
 		}
+	}
+	// The lift is answered, so carol is out of the copy now and the watch,
+	// behind, cannot add her back (marksCopy.Lifted): this reads the state
+	// after her lift, not one the watch has yet to reach.
+	if got := copyHolds(t, f.stateDir(t), "user:carol@example.com"); got != "0" {
+		t.Fatalf("carol is in the copy after her lift was answered")
 	}
 	waitUntil(t, "the copy to hold alice and not carol", func() bool {
 		return copyHolds(t, f.stateDir(t), "user:alice@example.com", "user:carol@example.com") == "10"
