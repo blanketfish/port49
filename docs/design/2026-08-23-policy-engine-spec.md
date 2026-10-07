@@ -7266,7 +7266,12 @@ every matching subject composes, and a scheduled refresh stamps refreshed_at.** 
 - **1. The mapping is configured, and it is one of six.** `broker.directory.certificate_mapping`
   takes `kind` and `attribute` (each kind has a default). The strong kinds are `issuer_serial`
   (`altSecurityIdentities`, AD's `X509:<I>{issuer}<SR>{serial}` form, the issuer rendered from the
-  leaf's raw DER with `DC=` included, never from `pkix.Name`) and `sid` (the SID extension,
+  leaf's raw DER with `DC=` included, never from `pkix.Name`; an RDN value is written as Windows'
+  CertNameToStr writes it, quoted when it is empty, starts or ends with white space, or holds
+  `, + = " \ < > # ;` or a newline, with an inner quote doubled; `<SR>` is the serial's DER
+  content bytes reversed, the sign byte DER keeps before a serial whose top bit is set included:
+  a Windows DC measured both, issuing a TGT only for those forms, L44 run 8,
+  `tests/lab/results/L44-windows_ad.md`) and `sid` (the SID extension,
   1.3.6.1.4.1.311.25.2, on `objectSid`). The weak kinds are `san_upn`, `san_email`, `subject_dn`
   and `cn`. A weak kind, or an `attribute` repointed on a strong one, is refused at load without
   `allow_weak: true` and a non-empty `issuers:` pin, which is checked at every mapping, before
@@ -7323,7 +7328,9 @@ every matching subject composes, and a scheduled refresh stamps refreshed_at.** 
   `base_dn`. Ambiguity fails closed. Tasks 9 and 11.
 - **8. Binding is one of three mechanisms, always over TLS.** `external` (the broker's own
   client certificate), `gssapi` (a keytab read through `keyfile.ReadSecret`, no SASL security
-  layer, pure Go: OR-2) and `simple` (the password from the environment by name, said at start
+  layer, pure Go: OR-2; the AP-REQ asks `mutual-required`, as MIT's client does when it asks
+  for mutual authentication, since a Windows DC answers an AP-REQ without it with 49, L44 run 8,
+  `tests/lab/results/L44-windows_ad.md`) and `simple` (the password from the environment by name, said at start
   as the weakest). `ca_file` is required, server names are verified, `ldap://` needs
   `start_tls`. The password, the keytab and a ticket are never logged. Measured on OpenLDAP and
   Samba AD (L43, closed): OpenLDAP accepts EXTERNAL (by `olcAuthzRegexp`) and simple over LDAPS
