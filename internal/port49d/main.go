@@ -1152,11 +1152,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 		for _, r := range authMarks.All() {
 			bl.Revoked(r, true)
 		}
-		bl.Refused = brk.RefusedAtBind
-		bl.Status = brk.BindStatus
-		if brk.Directory != nil {
-			bl.Map = brk.BindMap
-		}
+		brk.Wire(bl)
 		brk.Conns = bl
 	}
 	// The admin socket binds before anything says "listening", as the broker

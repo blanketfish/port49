@@ -512,11 +512,7 @@ func runBroker(parent context.Context, cfgPath string) error {
 	for _, r := range marks.All() {
 		bl.Revoked(r, true)
 	}
-	bl.Refused = brk.RefusedAtBind
-	bl.Status = brk.BindStatus
-	if brk.Directory != nil {
-		bl.Map = brk.BindMap
-	}
+	brk.Wire(bl)
 	brk.Conns = bl
 	// Only now the marks feed: a change told before brk.Conns was set would
 	// reach no listener, and the listener holds every mark at the load's

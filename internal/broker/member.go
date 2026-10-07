@@ -49,6 +49,13 @@ func (b *Broker) BindMap(ctx context.Context, cs tls.ConnectionState, _ store.Cr
 	if len(cs.VerifiedChains) == 0 || len(cs.VerifiedChains[0]) == 0 {
 		return directory.Answer{}, directoryRefusal(directory.ErrUnmapped)
 	}
+	if machine, _ := b.machineChain(&cs); machine {
+		// Defence in depth behind Listener.Caller (pre-flight I-4): a workload
+		// is never mapped through the directory (decision 40 ruling 5).
+		return directory.Answer{}, &BindRefusal{Status: http.StatusUnauthorized, Reason: decision.IdentityUnmapped,
+			Error: string(decision.IdentityUnmapped), Detail: "a workload certificate is never mapped through the " +
+				"directory; the broker's listener is wired without Caller, so tell the operator"}
+	}
 	a, err := b.Directory.Map(ctx, cs.VerifiedChains[0][0])
 	if err != nil {
 		return directory.Answer{}, directoryRefusal(err)

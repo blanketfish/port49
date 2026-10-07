@@ -52,7 +52,7 @@ func withDirectory(f *fixture, answers map[string]directory.Answer, err error) *
 // serveMapped serves f's broker behind a Listener that maps at bind.
 func serveMapped(t *testing.T, f *fixture) (string, *Listener) {
 	t.Helper()
-	return serveThroughWith(t, f, DefaultListenerLimits, nil, func(l *Listener) { l.Map = f.b.BindMap })
+	return serveThroughWith(t, f, DefaultListenerLimits, nil, func(l *Listener) { l.Caller = f.b.CertCallerOf; l.Map = f.b.BindMap })
 }
 
 // getOn writes a GET to path on the held connection c and reads the answer.
