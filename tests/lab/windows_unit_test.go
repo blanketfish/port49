@@ -1037,6 +1037,18 @@ func TestWindowsSetAttrReadsBackNoValues(t *testing.T) {
 	}
 }
 
+// install.bat tells Windows the VM's clock is UTC, so a kept DC's container
+// restart does not put it hours out (harness review M5).
+func TestWindowsInstallBatSetsTheClockUniversal(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("directory", "windows", "oem", "install.bat"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `'HKLM:\SYSTEM\CurrentControlSet\Control\TimeZoneInformation' -Name RealTimeIsUniversal -Value 1 -Type DWord`) {
+		t.Error("install.bat does not set RealTimeIsUniversal to 1")
+	}
+}
+
 // install.bat is a batch file: cmd.exe wants CRLF, and git keeps it so.
 func TestWindowsInstallBatIsCRLF(t *testing.T) {
 	b, err := os.ReadFile(filepath.Join("directory", "windows", "oem", "install.bat"))
