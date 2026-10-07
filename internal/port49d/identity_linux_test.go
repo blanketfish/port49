@@ -124,9 +124,9 @@ func TestARestartDuringAnOutageKeepsTheKeys(t *testing.T) {
 	raw := iss.IDToken(t, "k1", "port49-cli", "s", time.Now(), map[string]any{"email": "a@corp.example.com",
 		"email_verified": true})
 	iss.Close()
-	var said strings.Builder
+	var said syncBuffer
 	second, err := openOIDC(cfg, dir, metrics.New(prometheus.NewRegistry()), func(f string, a ...any) {
-		said.WriteString(fmtLine(f, a...))
+		said.Write([]byte(fmtLine(f, a...)))
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -147,9 +147,9 @@ func TestAnUnusableStateDirIsSaidAtStart(t *testing.T) {
 	cfg := brokerConfig(t, directoryPolicy)
 	cfg.Broker.Identity = identityCfg(t, iss, dir)
 	notADir := writeFile(t, dir, "a-file", []byte("x"))
-	var said strings.Builder
+	var said syncBuffer
 	if _, err := openOIDC(cfg, filepath.Join(notADir, "state"), metrics.New(prometheus.NewRegistry()),
-		func(f string, a ...any) { said.WriteString(fmtLine(f, a...)) }); err != nil {
+		func(f string, a ...any) { said.Write([]byte(fmtLine(f, a...))) }); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(said.String(), "cannot keep the providers' keys") {

@@ -141,9 +141,9 @@ func TestTheStateDirLineNamesTheKeyTheProcessHas(t *testing.T) {
 		cfg := brokerConfig(t, directoryPolicy)
 		cfg.Broker.StateDir = c.stateDir
 		cfg.Broker.Identity = identityCfg(t, iss, t.TempDir())
-		var said strings.Builder
+		var said syncBuffer
 		set, err := openOIDC(cfg, dir, metrics.New(prometheus.NewRegistry()), func(f string, a ...any) {
-			said.WriteString(fmtLine(f, a...))
+			said.Write([]byte(fmtLine(f, a...)))
 		})
 		if err != nil {
 			t.Fatal(err)
