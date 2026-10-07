@@ -129,3 +129,40 @@ func TestAnOIDCOnlyBrokersRefusalsNameTheKeyNotAnEmptyFile(t *testing.T) {
 }
 
 func fmtLine(format string, args ...any) string { return fmt.Sprintf(format, args...) + "\n" }
+
+// An HTTPS_PROXY that does not parse is said to be malformed, not "no
+// HTTPS_PROXY": the transport would drop or misread it, and the operator of a
+// proxy-only egress must not be told none is set (final review F3). The
+// value, a password included, is never in the line.
+func TestAMalformedProxyIsSaidMalformedNotAbsent(t *testing.T) {
+	iss := oidctest.NewIssuer(t)
+	cfg := brokerConfig(t, directoryPolicy)
+	cfg.Broker.Identity = identityCfg(t, iss, t.TempDir())
+	for _, tc := range []struct{ name, value string }{
+		{"a bad percent escape", "http://svc:p%zzsecret@proxy.example.com:3128"},
+		{"a slash in the password", "http://svc:pa/ssecret@proxy.example.com:3128"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("HTTPS_PROXY", tc.value)
+			t.Setenv("https_proxy", "")
+			var out syncBuffer
+			announceIdentity(&out, "port49d", cfg, nil)
+			line := ""
+			for _, l := range strings.Split(out.String(), "\n") {
+				if strings.Contains(l, iss.URL+" is fetched ") {
+					line = l
+				}
+			}
+			if line == "" || strings.Contains(line, "no HTTPS_PROXY") || !strings.Contains(line, "HTTPS_PROXY that is set but does not parse") ||
+				!strings.Contains(line, "proxy-only egress") || strings.Contains(line, "secret") {
+				t.Fatalf("the fetch line for a malformed proxy: %q", line)
+			}
+		})
+	}
+	t.Setenv("HTTPS_PROXY", "")
+	var out syncBuffer
+	announceIdentity(&out, "port49d", cfg, nil)
+	if !strings.Contains(out.String(), "is fetched directly (no HTTPS_PROXY)") {
+		t.Fatalf("with no proxy set the line must say so:\n%s", out.String())
+	}
+}

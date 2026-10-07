@@ -180,6 +180,13 @@ func announceIdentity(w io.Writer, proc string, cfg config.Config, _ *oidc.Set) 
 		how := "directly (no HTTPS_PROXY)"
 		if u, err := oidc.ProxyFor(v.Issuer); err == nil {
 			how = oidc.DescribeProxy(u)
+		} else {
+			// The transport takes the environment's proxy as it parses it: a
+			// value that does not is dropped or misread, never refused (final
+			// review F3). The value is not said: it carries a password.
+			how = "with an HTTPS_PROXY that is set but does not parse as a proxy URL (percent-encode '#', '/', '?' and " +
+				"'%' in its password): the key fetch drops it and dials directly, or misreads it and dials a host nobody " +
+				"configured, which a proxy-only egress refuses"
 		}
 		fmt.Fprintf(w, "%s: identity: %s is fetched %s\n", proc, v.Issuer, how)
 	}
