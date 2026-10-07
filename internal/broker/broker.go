@@ -718,7 +718,7 @@ func (b *Broker) revokedSince(w http.ResponseWriter, r *http.Request, c caller, 
 	defer cancel()
 	principal, cred := c.principal, c.cred
 	rv, revoked, err := b.revocation(ctx, principal, cred, b.legacyOf(r))
-	var l store.Logout
+	var l logoutRefusal
 	var out bool
 	if err == nil && !revoked && c.oidc != nil {
 		l, out, err = b.loggedOut(ctx, *c.oidc)

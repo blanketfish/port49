@@ -163,3 +163,41 @@ func TestEveryLogoutRefusalPathNamesTheLoginTimeForASubRecord(t *testing.T) {
 		})
 	}
 }
+
+// The time named is a literal, not the implementation's formula: a logout at
+// 15:30:04.4 with clock_skew 60s refuses a login until 15:31:04.4, so one is
+// taken from 15:31:05.
+func TestASubLogoutRefusalNamesALiteralLoginTime(t *testing.T) {
+	f := newFixture(t, 8)
+	iss := f.withOIDC(t)
+	f.b.Identity.Timing.ClockSkew = 60 * time.Second
+	at := time.Date(2026, 10, 7, 15, 30, 4, 400_000_000, time.UTC)
+	f.mu.Lock()
+	f.now = time.Date(2026, 10, 7, 15, 30, 30, 0, time.UTC)
+	f.mu.Unlock()
+	subLogoutAt(t, f, iss.URL, at)
+	d := detailOf(t, f.bearer(context.Background(), "POST", "/v1/tokens", mintLeaf1, f.idToken(t, iss, nil)))
+	want := "your identity provider ended your sessions at 2026-10-07T15:30:04Z (back-channel logout); " +
+		"log in again from 2026-10-07T15:31:05Z"
+	if d != want {
+		t.Fatalf("detail %q, want %q", d, want)
+	}
+}
+
+// Keycloak's logout writes the sid's record and the sub's. The session that
+// was logged out carries the sid, and is told when a login is taken, not just
+// to log in again: a login at once would be refused a second time.
+func TestAKeycloakLogoutNamesTheLoginTimeToTheLoggedOutSession(t *testing.T) {
+	f := newFixture(t, 8)
+	iss := f.withOIDC(t)
+	ctx := context.Background()
+	at := f.b.Now()
+	if err := f.st.PutLogout(ctx, store.Logout{Key: store.SidKey(iss.URL, "s-sub-alice"), At: at}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	subLogoutAt(t, f, iss.URL, at)
+	d := detailOf(t, f.bearer(ctx, "POST", "/v1/tokens", mintLeaf1, f.idToken(t, iss, map[string]any{"sid": "s-sub-alice"})))
+	if want := "log in again from " + reloginFrom(f, at); !strings.HasSuffix(d, want) {
+		t.Fatalf("detail %q, want it to end %q", d, want)
+	}
+}

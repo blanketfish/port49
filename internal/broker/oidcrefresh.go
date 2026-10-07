@@ -170,7 +170,7 @@ func (b *Broker) oidcRefresh(w http.ResponseWriter, r *http.Request) {
 	// The marks and the logouts again, after the extension's writes, as on
 	// the certificate path.
 	rv, revoked, err := b.revocation(ctx, c.principal, c.cred)
-	var l store.Logout
+	var l logoutRefusal
 	var out bool
 	if err == nil && !revoked {
 		l, out, err = b.loggedOut(ctx, *c.oidc)
