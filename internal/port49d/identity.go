@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -15,7 +17,9 @@ import (
 	"github.com/rhwendt/port49/internal/config"
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 	"github.com/rhwendt/port49/internal/oidc"
+	"github.com/rhwendt/port49/internal/policy"
 	"github.com/rhwendt/port49/internal/printsafe"
+	"github.com/rhwendt/port49/internal/spiffe"
 )
 
 // brokerStateDir is where the broker keeps its own state (config's
@@ -116,6 +120,39 @@ func runKeySets(ctx context.Context, set *oidc.Set) {
 	wg.Wait()
 }
 
+// announceWorkloadIdentities says the policy's spiffe:// identities no
+// verifier can give (decision 40 ruling 16): with no workload verifier, all
+// of them; with one, those whose trust domain it does not list. The policy
+// still loads, as a group subject without a directory does.
+func announceWorkloadIdentities(w io.Writer, proc string, cfg config.Config, pol *policy.Policy) {
+	ids := pol.SPIFFEIdentities()
+	if len(ids) == 0 || cfg.Broker == nil {
+		return
+	}
+	var m *oidc.X509Machine
+	if cfg.Broker.Identity != nil {
+		m = cfg.Broker.Identity.X509Machine
+	}
+	var lines []string
+	for _, id := range slices.Sorted(maps.Keys(ids)) {
+		parsed, err := spiffe.ParseWorkload(id)
+		switch {
+		case err != nil:
+			continue // the policy's load refused it already
+		case m == nil:
+			lines = append(lines, fmt.Sprintf("%s (subject %s): no broker.identity.machines x509 verifier is configured",
+				id, ids[id]))
+		case !slices.Contains(m.TrustDomains, parsed.TrustDomain):
+			lines = append(lines, fmt.Sprintf("%s (subject %s): no machines x509 verifier lists trust domain %s",
+				id, ids[id], parsed.TrustDomain))
+		}
+	}
+	if len(lines) > 0 {
+		fmt.Fprintf(w, "%s: policy: %d workload identities mint for no one: %s\n", proc, len(lines),
+			strings.Join(lines, "; "))
+	}
+}
+
 // announceIdentity is the start's identity lines (What the operator sees).
 func announceIdentity(w io.Writer, proc string, cfg config.Config, _ *oidc.Set) {
 	id := cfg.Broker.Identity
@@ -156,11 +193,20 @@ func announceIdentity(w io.Writer, proc string, cfg config.Config, _ *oidc.Set) 
 				"algorithms %s)", v.Issuer, v.Audience, strings.Join(clients, ", "), algs(v.Algorithms)))
 		}
 	}
+	if m := id.X509Machine; m != nil {
+		machines = append([]string{fmt.Sprintf("x509 (trust anchor %s; SPIFFE trust domains %s; principal: the "+
+			"certificate's one URI SAN)", m.AnchorFile, strings.Join(m.TrustDomains, ", "))}, machines...)
+	}
 	if len(humans) > 0 {
 		fmt.Fprintf(w, "%s: identity: humans: %s\n", proc, strings.Join(humans, "; "))
 	}
 	if len(machines) > 0 {
 		fmt.Fprintf(w, "%s: identity: machines: %s\n", proc, strings.Join(machines, "; "))
+	}
+	if id.X509Machine != nil {
+		fmt.Fprintf(w, "%s: identity: workload certificates are issued and renewed by your CA, never by port49; "+
+			"one presented with under a quarter of its validity left is said here and counted in "+
+			"port49_workload_certificates_renewal_late_total\n", proc)
 	}
 	for _, v := range id.OIDC {
 		if v.Domain == oidc.Humans {

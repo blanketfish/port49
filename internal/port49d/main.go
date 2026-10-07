@@ -8,6 +8,7 @@
 package port49d
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -237,11 +238,52 @@ func buildBroker(cfg config.Config, inventoryFrom string, st store.Store, minter
 	return srv, b, err
 }
 
-// buildBrokerAnchor is buildBroker with the one trust anchor it read from
-// client_ca_file, which broker.certificate_status's issuers are checked
-// against (certStatusConfig).
+// namedAnchor is a trust anchor the broker read, and the key naming its
+// file, for every line about it (plan 8).
+type namedAnchor struct {
+	key  string
+	cert *x509.Certificate
+}
+
+func certsOf(as []namedAnchor) []*x509.Certificate {
+	out := make([]*x509.Certificate, 0, len(as))
+	for _, a := range as {
+		out = append(out, a.cert)
+	}
+	return out
+}
+
+// distinctAnchors refuses a workload anchor that is the human anchor, or
+// that signs it or is signed by it (decision 40 ruling 2): a certificate
+// under the subordinate would chain to both, refused at every request or not
+// as its client's intermediates fall. A nil human anchor (people by OIDC)
+// has nothing to cross.
+func distinctAnchors(human, workload namedAnchor) error {
+	if human.cert == nil {
+		return nil
+	}
+	subj := func(c *x509.Certificate) string { return printsafe.Line(c.Subject.String(), 200) }
+	switch {
+	case bytes.Equal(human.cert.Raw, workload.cert.Raw):
+		return fmt.Errorf("%s: holds the same certificate as %s; a certificate it verifies would be a person's and "+
+			"a workload's at once", workload.key, human.key)
+	case workload.cert.CheckSignatureFrom(human.cert) == nil, human.cert.CheckSignatureFrom(workload.cert) == nil:
+		signer, signed := human, workload
+		if human.cert.CheckSignatureFrom(workload.cert) == nil {
+			signer, signed = workload, human
+		}
+		return fmt.Errorf("%s: %s signs %s (%s): a certificate under the one chains to both anchors and is refused "+
+			"at every request; anchor each list at its own issuing CA", workload.key, subj(signer.cert),
+			subj(signed.cert), human.key)
+	}
+	return nil
+}
+
+// buildBrokerAnchor is buildBroker with the trust anchors it read, which
+// broker.certificate_status's issuers are checked against (certStatusConfig):
+// the human one from client_ca_file, then the workload one.
 func buildBrokerAnchor(cfg config.Config, inventoryFrom string, st store.Store, minter *token.Minter,
-	log decision.Emitter, m *metrics.Metrics) (*http.Server, *broker.Broker, *x509.Certificate, error) {
+	log decision.Emitter, m *metrics.Metrics) (*http.Server, *broker.Broker, []namedAnchor, error) {
 	if cfg.Broker == nil {
 		return nil, nil, nil, nil
 	}
@@ -281,6 +323,27 @@ func buildBrokerAnchor(cfg config.Config, inventoryFrom string, st store.Store, 
 				"logins will fail\n", leaf.NotBefore.UTC().Format(time.RFC3339), cfg.Broker.TLSCertFile)
 		}
 	}
+	var anchors []namedAnchor
+	human := namedAnchor{key: "broker.client_ca_file", cert: anchorCert}
+	if id := cfg.Broker.Identity; id != nil && !id.Shorthand {
+		human.key = "broker.identity.humans' x509 trust_anchor_file"
+	}
+	if anchorCert != nil {
+		anchors = append(anchors, human)
+	}
+	var workload *broker.Workload
+	if f := cfg.Broker.WorkloadCAFile; f != "" {
+		wa, err := broker.ReadAnchor(f)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("broker.identity.machines' x509 trust_anchor_file %s: %w", f, err)
+		}
+		w := namedAnchor{key: "broker.identity.machines' x509 trust_anchor_file", cert: wa}
+		if err := distinctAnchors(human, w); err != nil {
+			return nil, nil, nil, err
+		}
+		anchors = append(anchors, w)
+		workload = &broker.Workload{Anchor: wa, TrustDomains: cfg.Broker.Identity.X509Machine.TrustDomains}
+	}
 	b := &broker.Broker{Policy: policy.NewLive(pol), Minter: minter, Store: st, Log: log, Metrics: m, Now: time.Now,
 		MaxSessionAge: cfg.Session.MaxSessionAgeDefault, BatchMax: cfg.Broker.BatchMax,
 		CeilingWarning: cfg.Session.CeilingWarning, ContextIdleTTL: cfg.ContextIdleTTL,
@@ -298,12 +361,14 @@ func buildBrokerAnchor(cfg config.Config, inventoryFrom string, st store.Store, 
 		return nil, nil, nil, err
 	}
 	announceDirectory(stderr, proc, cfg, pol)
+	announceWorkloadIdentities(stderr, proc, cfg, pol)
 	if b.Identity, err = openOIDC(cfg, brokerStateDir(cfg), m, func(format string, args ...any) {
 		fmt.Fprintf(stderr, proc+": "+format+"\n", args...)
 	}); err != nil {
 		return nil, nil, nil, err
 	}
 	b.NoX509 = cfg.Broker.ClientCAFile == ""
+	b.Workload = workload
 	announceIdentity(stderr, proc, cfg, b.Identity)
 	var anchor *x509.CertPool
 	if anchorCert != nil {
@@ -325,7 +390,7 @@ func buildBrokerAnchor(cfg config.Config, inventoryFrom string, st store.Store, 
 	// standard library's default logger; routed here it lands beside
 	// port49d's other lines, where an operator is already looking.
 	srv.ErrorLog = stdlog.New(stderr, procOf(cfg)+": broker: ", 0)
-	return srv, b, anchorCert, nil
+	return srv, b, anchors, nil
 }
 
 // policyKey is the key that named the policy file, for every line about
@@ -896,7 +961,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 	// through the Manager (plan 7a); Refresh behind /v1/refresh is plan 7b's.
 	sessions := session.New(st, time.Now, cfg.ContextIdleTTL, cfg.Session.IndexTTL)
 
-	brokerSrv, brk, anchorCert, err := buildBrokerAnchor(cfg, inventoryFrom, st, minter, log, m)
+	brokerSrv, brk, anchors, err := buildBrokerAnchor(cfg, inventoryFrom, st, minter, log, m)
 	if err != nil {
 		stopSpool()
 		<-spoolDone
@@ -992,7 +1057,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 				"(broker.certificate_status.disabled): a certificate revoked at its CA keeps minting until "+
 				"`port49 revoke --cert`")
 		} else {
-			ccfg, err := certStatusConfig(*cs, anchorCert, filepath.Dir(cfg.Broker.RevocationsFile))
+			ccfg, err := certStatusConfig(*cs, certsOf(anchors), filepath.Dir(cfg.Broker.RevocationsFile))
 			if err != nil {
 				stopSpool()
 				<-spoolDone
@@ -1004,9 +1069,15 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 			for _, err := range checker.LoadPersisted() {
 				fmt.Fprintf(stderr, "port49d: broker: certificate status: %s\n", printsafe.Line(err.Error(), 300))
 			}
-			for _, subject := range uncoveredIssuers(ccfg, anchorCert) { // re-check R3
-				fmt.Fprintf(stderr, "port49d: broker: certificate status: certificates issued by %s will be refused: "+
-					"nothing covers %s itself; name the root CA's CRL\n", subject, subject)
+			for _, a := range anchors {
+				if line := anchorCoverLine(a, ccfg); line != "" {
+					fmt.Fprintf(stderr, "port49d: %s\n", line)
+					continue
+				}
+				for _, subject := range uncoveredIssuers(ccfg, a.cert) { // re-check R3
+					fmt.Fprintf(stderr, "port49d: broker: certificate status: certificates issued by %s will be refused: "+
+						"nothing covers %s itself; name the root CA's CRL\n", subject, subject)
+				}
 			}
 			brk.CertStatus, brk.OnUnavailable = checker, cs.OnUnavailable
 		}

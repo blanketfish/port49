@@ -238,13 +238,13 @@ func TestCertStatusConfigChecksEachIssuerFile(t *testing.T) {
 		body []byte
 		want string
 	}{
-		"another CA's":     {other.PEM(), "is neither broker.client_ca_file's certificate nor signed by it"},
+		"another CA's":     {other.PEM(), "is neither a trust anchor's certificate nor signed by one"},
 		"a leaf":           {leafPEM, "is not a CA certificate"},
 		"two certificates": {append(inter.PEM(), anchor.PEM()...), "holds 2 PEM blocks"},
 		"a key":            {keyPEM, "holds a PRIVATE KEY PEM block"},
 		"no PEM":           {[]byte("not a certificate"), "holds 0 PEM blocks"},
 	} {
-		_, err := certStatusConfig(cfg(writeFile(t, dir, "issuer.pem", c.body)), anchor.Cert, dir)
+		_, err := certStatusConfig(cfg(writeFile(t, dir, "issuer.pem", c.body)), []*x509.Certificate{anchor.Cert}, dir)
 		if err == nil || !strings.Contains(err.Error(), "crls[1].issuer_file "+filepath.Join(dir, "issuer.pem")) ||
 			!strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: %v", name, err)
@@ -253,14 +253,14 @@ func TestCertStatusConfigChecksEachIssuerFile(t *testing.T) {
 			t.Errorf("the refusal repeats the file: %v", err)
 		}
 	}
-	if _, err := certStatusConfig(cfg(filepath.Join(dir, "missing.pem")), anchor.Cert, dir); err == nil ||
+	if _, err := certStatusConfig(cfg(filepath.Join(dir, "missing.pem")), []*x509.Certificate{anchor.Cert}, dir); err == nil ||
 		!strings.Contains(err.Error(), "crls[1].issuer_file") {
 		t.Errorf("a missing file: %v", err)
 	}
 
 	c := cfg(writeFile(t, dir, "issuer.pem", pemOf(inter.Cert)))
 	c.OCSP = &config.CertificateStatusOCSP{UseAIA: true, Timeout: time.Second, Hash: "sha1"}
-	got, err := certStatusConfig(c, anchor.Cert, dir)
+	got, err := certStatusConfig(c, []*x509.Certificate{anchor.Cert}, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -271,7 +271,7 @@ func TestCertStatusConfigChecksEachIssuerFile(t *testing.T) {
 		t.Fatalf("certstatus.Config: %+v %+v", got, got.OCSP)
 	}
 	c.OCSP.Hash = "sha256"
-	if got, err := certStatusConfig(c, anchor.Cert, dir); err != nil || got.OCSP.Hash.String() != "SHA-256" {
+	if got, err := certStatusConfig(c, []*x509.Certificate{anchor.Cert}, dir); err != nil || got.OCSP.Hash.String() != "SHA-256" {
 		t.Fatalf("sha256: %+v %v", got.OCSP, err)
 	}
 }

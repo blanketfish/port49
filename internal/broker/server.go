@@ -230,16 +230,25 @@ func LoadTLSAnchor(certFile, keyFile, anchorFile string) (tls.Certificate, *x509
 	if err != nil {
 		return tls.Certificate{}, nil, fmt.Errorf("broker: server certificate: %w", err)
 	}
-	raw, err := os.ReadFile(anchorFile)
+	anchor, err := ReadAnchor(anchorFile)
 	if err != nil {
-		return tls.Certificate{}, nil, fmt.Errorf("broker: client_ca_file: %w", err)
+		return tls.Certificate{}, nil, fmt.Errorf("broker: client_ca_file %w", err)
+	}
+	return cert, anchor, nil
+}
+
+// ReadAnchor reads a trust anchor file: exactly one certificate, as
+// client_ca_file and each trust_anchor_file must hold (design §19 step 3;
+// plan 8 for the workload anchor).
+func ReadAnchor(path string) (*x509.Certificate, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
 	}
 	var anchors []*x509.Certificate
-	rest := raw
-	for {
+	for rest := raw; ; {
 		var blk *pem.Block
-		blk, rest = pem.Decode(rest)
-		if blk == nil {
+		if blk, rest = pem.Decode(rest); blk == nil {
 			break
 		}
 		if blk.Type != "CERTIFICATE" {
@@ -247,15 +256,15 @@ func LoadTLSAnchor(certFile, keyFile, anchorFile string) (tls.Certificate, *x509
 		}
 		c, err := x509.ParseCertificate(blk.Bytes)
 		if err != nil {
-			return tls.Certificate{}, nil, fmt.Errorf("broker: client_ca_file %s: %w", anchorFile, err)
+			return nil, fmt.Errorf("%s: %w", path, err)
 		}
 		anchors = append(anchors, c)
 	}
 	if len(anchors) != 1 {
-		return tls.Certificate{}, nil, fmt.Errorf("broker: client_ca_file %s holds %d certificates; exactly one "+
-			"trust anchor is accepted (design §19 step 3)", anchorFile, len(anchors))
+		return nil, fmt.Errorf("%s holds %d certificates; exactly one trust anchor is accepted (design §19 step 3)",
+			path, len(anchors))
 	}
-	return cert, anchors[0], nil
+	return anchors[0], nil
 }
 
 // readTimeout is Server's ReadTimeout, swapped in tests. A mint request is a
