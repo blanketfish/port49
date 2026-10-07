@@ -214,7 +214,7 @@ func (b *Broker) markExtended(ctx context.Context, c caller, rep SessionRefreshR
 	}
 	if failed != nil {
 		b.say("logout: a session %s's refresh extended could not be marked after a logout landed during it "+
-			"(%v); %s", c.principal, failed, logoutRecovery(c.principal))
+			"(%v); %s", c.principal, failed, b.logoutRecovery(c.principal))
 	}
 }
 
@@ -222,10 +222,14 @@ func (b *Broker) markExtended(ctx context.Context, c caller, rep SessionRefreshR
 // left extended. A logout is not a ban: the person may log in again at once,
 // so the tail ends their contexts and lifts the mark that does it
 // (spec §5.1.4: a mark stands until an operator lifts it).
-func logoutRecovery(principal string) string {
+func (b *Broker) logoutRecovery(principal string) string {
+	where := b.proc() + "'s admin socket"
+	if b.AdminSocket != "" {
+		where += " (" + b.AdminSocket + ")"
+	}
 	return "if the decision log has a revoke record with origin backchannel_logout for " + principal +
-		" just before this line, end its contexts with `port49 revoke --principal " + principal +
-		"`, then `port49 revoke --principal " + principal + " --lift` so they may log in again"
+		" just before this line, end its contexts with `port49 revoke --principal " + principal + "` on " + where +
+		", then `port49 revoke --principal " + principal + " --lift` there so they may log in again"
 }
 
 // failedRefresh answers a refresh whose extension failed part way. The
@@ -244,7 +248,7 @@ func (b *Broker) failedRefresh(ctx context.Context, w http.ResponseWriter, now t
 		case err != nil:
 			b.say("logout: the logouts could not be read again after a refresh of %s failed part way (%v); a session "+
 				"it extended may have outlived a logout that landed during it; %s", c.principal, err,
-				logoutRecovery(c.principal))
+				b.logoutRecovery(c.principal))
 		case out:
 			b.markExtended(ctx, c, rep)
 			b.Metrics.SessionRefreshes.WithLabelValues("refused").Inc()

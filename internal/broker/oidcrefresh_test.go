@@ -472,8 +472,10 @@ func TestALogoutMarksOnlyWhatTheRefreshExtended(t *testing.T) {
 // Review N1: the operator's lines name the check and the two commands: a
 // logout is not a ban, and the person may log in again.
 func TestTheOperatorLinesNameTheLogoutRecovery(t *testing.T) {
-	want := []string{"backchannel_logout", "port49 revoke --principal " + alicePrincipal + "`",
+	want := []string{"backchannel_logout", "port49 revoke --principal " + alicePrincipal + "` on",
 		"port49 revoke --principal " + alicePrincipal + " --lift"}
+	const sock = "/run/port49/broker.sock"
+	want = append(want, "port49-broker's admin socket ("+sock+")")
 	check := func(t *testing.T, said string) {
 		t.Helper()
 		for _, w := range want {
@@ -484,6 +486,7 @@ func TestTheOperatorLinesNameTheLogoutRecovery(t *testing.T) {
 	}
 	t.Run("the marking failed", func(t *testing.T) {
 		f, tok, iss := oidcSession(t)
+		f.b.Proc, f.b.AdminSocket = "port49-broker", sock
 		var said strings.Builder
 		f.b.Say = func(format string, args ...any) { said.WriteString(fmt.Sprintf(format, args...) + "\n") }
 		nonce := challenge(t, f, tok(nil))
@@ -510,6 +513,7 @@ func TestTheOperatorLinesNameTheLogoutRecovery(t *testing.T) {
 	})
 	t.Run("the re-read failed", func(t *testing.T) {
 		f, tok, _ := oidcSession(t)
+		f.b.Proc, f.b.AdminSocket = "port49-broker", sock
 		twoContexts(t, f)
 		var said strings.Builder
 		f.b.Say = func(format string, args ...any) { said.WriteString(fmt.Sprintf(format, args...) + "\n") }
