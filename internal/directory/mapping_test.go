@@ -475,3 +475,85 @@ func TestValidPin(t *testing.T) {
 		}
 	}
 }
+
+// A Windows DC maps an issuer whose RDN value holds a comma only in the form
+// CertNameToStr writes, the value quoted (L44, tests/lab/results/L44-windows_ad.md).
+func TestADIssuerSerialQuotesAsWindowsDoes(t *testing.T) {
+	ca, key := issuingCA(t, pkix.RDNSequence{{{Type: oidDC, Value: "com"}}, {{Type: oidDC, Value: "corp"}},
+		{{Type: oidCN, Value: `corp, "east" CA`}}})
+	if got := ADIssuerSerial(issue(t, ca, key, nil)); got != `X509:<I>DC=com,DC=corp,CN="corp, ""east"" CA"<SR>11AC0000000012` {
+		t.Fatalf("%s", got)
+	}
+}
+
+// A Windows DC maps a serial whose top bit is set only with its DER sign byte
+// kept in <SR> (L44, tests/lab/results/L44-windows_ad.md).
+func TestADIssuerSerialKeepsTheSignByte(t *testing.T) {
+	c := leaf(t, func(c *x509.Certificate) { c.SerialNumber = new(big.Int).SetBytes([]byte{0x80, 0x01, 0x02}) })
+	if got := ADIssuerSerial(c); !strings.HasSuffix(got, "<SR>02018000") {
+		t.Fatalf("%s", got)
+	}
+}
+
+// DER encodes a zero serial as 00, so <SR> is 00, never empty. Go parses a
+// zero serial.
+func TestADIssuerSerialZeroSerialIsOneByte(t *testing.T) {
+	c := leaf(t, func(c *x509.Certificate) { c.SerialNumber = new(big.Int) })
+	if got := ADIssuerSerial(c); !strings.HasSuffix(got, "<SR>00") {
+		t.Fatalf("%s", got)
+	}
+}
+
+// A negative serial (parsed only under GODEBUG=x509negativeserial=1) has no
+// <SR> to write: "" is unmapped, which Lookup refuses.
+func TestADIssuerSerialRefusesANegativeSerial(t *testing.T) {
+	c := leaf(t, nil)
+	c.SerialNumber = big.NewInt(-5)
+	if got := ADIssuerSerial(c); got != "" {
+		t.Fatalf("a negative serial gave %q", got)
+	}
+	_, err := Mapping{Kind: MapIssuerSerial, Attribute: "altSecurityIdentities"}.Lookup(c, "(objectClass=person)")
+	if !errors.Is(err, ErrUnmapped) {
+		t.Fatalf("a negative serial: %v", err)
+	}
+}
+
+// CertNameToStr joins one RDN's values with " + " where port49 joins every
+// value with ",", so {CN=a + O=b} and CN=a,O=b could render alike: an issuer
+// with a multi-valued RDN is unmapped (fail closed), and Lookup says so as
+// identity_unmapped.
+func TestADIssuerSerialRefusesAMultiValuedIssuerRDN(t *testing.T) {
+	ca, key := issuingCA(t, pkix.RDNSequence{{{Type: oidDC, Value: "com"}},
+		{{Type: oidCN, Value: "a"}, {Type: asn1.ObjectIdentifier{2, 5, 4, 10}, Value: "b"}}})
+	c := issue(t, ca, key, nil)
+	if got := ADIssuerSerial(c); got != "" {
+		t.Fatalf("a multi-valued issuer RDN gave %q", got)
+	}
+	_, err := Mapping{Kind: MapIssuerSerial, Attribute: "altSecurityIdentities"}.Lookup(c, "(objectClass=person)")
+	if !errors.Is(err, ErrUnmapped) {
+		t.Fatalf("a multi-valued issuer RDN: %v", err)
+	}
+}
+
+// The quoting set is what L44 measured (comma, plus, inner quote, leading
+// space) plus CertNameToStr's unmeasured members; a backslash and a slash are
+// not in it (L44 at ad1e4a9).
+func TestADQuoteSet(t *testing.T) {
+	for in, want := range map[string]string{
+		"plain": "plain", "a,b": `"a,b"`, `say "hi"`: `"say ""hi"""`, " lead": `" lead"`, "trail ": `"trail "`,
+		"a+b": `"a+b"`, "a=b": `"a=b"`, "a#b": `"a#b"`, "a;b": `"a;b"`, "a<b": `"a<b"`, "a>b": `"a>b"`,
+		`a\b`: `a\b`, "a/b": "a/b", "a/b,c": `"a/b,c"`, "a\nb": "\"a\nb\"", "": `""`,
+	} {
+		if got := adQuote(in); got != want {
+			t.Errorf("adQuote(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// A comma still forces quoting, and a backslash inside the quotes is kept
+// verbatim, not doubled or escaped.
+func TestADQuoteKeepsABackslashInsideAQuotedValue(t *testing.T) {
+	if got, want := adQuote(`a\b, c/d`), `"a\b, c/d"`; got != want {
+		t.Errorf("adQuote = %q, want %q", got, want)
+	}
+}

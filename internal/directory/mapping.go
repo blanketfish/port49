@@ -329,25 +329,56 @@ func printable(s string) bool {
 // ADIssuerSerial is AD's altSecurityIdentities strong form: X509:<I> the
 // issuer's RDNs most significant first, read from RawIssuer so DC= is kept,
 // <SR> the serial's bytes reversed in upper-case hex (KB5014754). L43's run
-// checks it against Samba's form, and L44 against a Windows DC's. "" when
-// the issuer does not parse, which Lookup refuses.
+// checks it against Samba's form, and L44 measured Windows' quoting of a
+// comma and its sign byte. "" (unmapped, which Lookup refuses) when the issuer
+// does not parse, when an issuer RDN holds more than one attribute, and when
+// the serial is negative.
 func ADIssuerSerial(leaf *x509.Certificate) string {
 	seq, err := rdnsOf(leaf.RawIssuer)
-	if err != nil {
+	if err != nil || leaf.SerialNumber.Sign() < 0 {
 		return ""
 	}
 	var parts []string
 	for _, rdn := range seq {
+		// CertNameToStr joins one RDN's values with " + " where this joins
+		// every value with ",", so two different issuers could render alike
+		// (unmeasured, provisional on L44): fail closed.
+		if len(rdn) != 1 {
+			return ""
+		}
 		for _, atv := range rdn {
-			parts = append(parts, typeName(atv.Type)+"="+fmt.Sprint(atv.Value))
+			parts = append(parts, typeName(atv.Type)+"="+adQuote(fmt.Sprint(atv.Value)))
 		}
 	}
 	b := leaf.SerialNumber.Bytes()
+	if len(b) == 0 { // DER encodes zero as 00
+		b = []byte{0}
+	}
+	// DER keeps a 00 before a serial whose top bit is set; Windows' <SR> is
+	// the encoded bytes reversed, that 00 included (L44).
+	if b[0]&0x80 != 0 {
+		b = append([]byte{0}, b...)
+	}
 	r := make([]byte, len(b))
 	for i := range b {
 		r[i] = b[len(b)-1-i]
 	}
 	return "X509:<I>" + strings.Join(parts, ",") + "<SR>" + strings.ToUpper(hex.EncodeToString(r))
+}
+
+// adQuote is an RDN value as Windows writes it in altSecurityIdentities:
+// quoted when it holds a comma, a plus or an inner quote (doubled), or starts
+// with a space (L44 measured all four). A backslash and a slash are written as
+// they are, not quoted (L44 at ad1e4a9; Microsoft's CertNameToStr page is
+// inconsistent about them, and the measurement refutes quoting). The rest is
+// per CertNameToStr and unmeasured: an empty value, trailing white space, and
+// = < > # ; or a newline. White space beyond ' ' (tab, NBSP, ...) is
+// unmeasured too.
+func adQuote(v string) string {
+	if v == "" || strings.ContainsAny(v, ",+=\"<>#;\n") || strings.TrimSpace(v) != v {
+		return `"` + strings.ReplaceAll(v, `"`, `""`) + `"`
+	}
+	return v
 }
 
 // commonNameOf is the one CN in leaf's subject, read from its DER: several

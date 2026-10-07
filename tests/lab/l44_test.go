@@ -453,14 +453,54 @@ func (l *labDir) l44SID(t *testing.T, ev *evidenceLog) string {
 		t.Errorf("issuer_serial did not map alice's AD CS certificate to her: %q, %s", a.Principal, l.l44Err(err))
 	}
 	fmt.Fprintf(&b, "| `issuer_serial`, alice's `OfflineRouter` certificate, alice holding port49's form | %s as `%s` |\n", l.l44Err(err), a.Principal)
-	if q, qerr := winAltSecQuoted(c.aliceComma); qerr == nil {
+	if q, qerr := winAltSecQuoted(c.quirk["comma"].cert); qerr == nil {
 		w.setAltSec(t, aliceDN, q)
 		ev.mark("L44 port49 issuer_serial on the comma CA's certificate, alice holding the quoted form")
-		_, err = r.Map(ctx, c.aliceComma)
-		fmt.Fprintf(&b, "| `issuer_serial`, the comma CA's certificate, alice holding the quoted form (recorded, not asserted (Task 7a)) | %s |\n", l.l44Err(err))
+		a, err = r.Map(ctx, c.quirk["comma"].cert)
+		if err != nil || a.Principal != l.principal("alice") {
+			t.Errorf("issuer_serial did not map the comma CA's certificate to alice: %q, %s", a.Principal, l.l44Err(err))
+		}
+		fmt.Fprintf(&b, "| `issuer_serial`, the comma CA's certificate, alice holding the quoted form | %s as `%s` |\n", l.l44Err(err), a.Principal)
 	}
 	w.setAltSec(t, aliceDN, directory.ADIssuerSerial(l.d.pki.alice))
 	return b.String()
+}
+
+// l44QuirkCases are the quirk CAs' rows (Task 7a): alice offered each CA's
+// certificate under port49's form (through directory.ADIssuerSerial), the
+// value quoted as CertNameToStr quotes it, and the value escaped as RFC 4514
+// escapes it; and, for every CA but the comma's (run 8 measured the unquoted
+// comma), the value as it is. Every row is asserted against winQuirkWant, the
+// verdict L44 measured.
+func l44QuirkCases(c winCerts, port49Form func(*x509.Certificate) (string, error)) []l44Case {
+	var cases []l44Case
+	for _, q := range winQuirks {
+		qc := c.quirk[q.slug]
+		cases = append(cases,
+			l44Case{q.slug + "-port49", fmt.Sprintf("a CA whose CN holds %s (`%s`), alice holding port49's form", q.holds, q.cn),
+				qc.cert, qc.key, port49Form},
+			l44Case{q.slug + "-quoted", "the same, alice holding the value quoted as CertNameToStr quotes it",
+				qc.cert, qc.key, winAltSecQuoted},
+			l44Case{q.slug + "-escaped", "the same, alice holding the value escaped as RFC 4514 escapes it",
+				qc.cert, qc.key, winAltSecEscaped})
+		if q.slug != "comma" {
+			cases = append(cases, l44Case{q.slug + "-raw", "the same, alice holding the value as it is, neither quoted nor escaped",
+				qc.cert, qc.key, winAltSecRaw})
+		}
+	}
+	return cases
+}
+
+// l44QuirkSlug is the quirk CA a case label belongs to ("back" of
+// "back-port49"), or "" for any other case.
+func l44QuirkSlug(label string) string {
+	slug, _, _ := strings.Cut(label, "-")
+	for _, q := range winQuirks {
+		if q.slug == slug {
+			return slug
+		}
+	}
+	return ""
 }
 
 // l44Matrix offers each certificate to the DC's KDC by PKINIT under each
@@ -482,12 +522,11 @@ func (l *labDir) l44Matrix(t *testing.T, ev *evidenceLog) string {
 		{"adcs-forward", "the same, alice holding the issuer least significant RDN first", c.aliceADCS, c.aliceADCSKey, winAltSecForward},
 		{"adcs-unreversed", "the same, alice holding the serial in certificate byte order", c.aliceADCS, c.aliceADCSKey, winAltSecUnreversed},
 		{"sid-none", "AD CS `User`, requested as alice (SID extension)", c.aliceSID, c.aliceSIDKey, nil},
-		{"comma-port49", "a CA whose CN holds a comma (`lab-users, comma-CA`), alice holding port49's form", c.aliceComma, c.aliceCommaKey, port49Form},
-		{"comma-quoted", "the same, alice holding the value quoted as CertNameToStr quotes it", c.aliceComma, c.aliceCommaKey, winAltSecQuoted},
-		{"comma-escaped", "the same, alice holding the value escaped as RFC 4514 escapes it", c.aliceComma, c.aliceCommaKey, winAltSecEscaped},
-		{"highbit-port49", "the lab users CA, a serial whose top bit is set, alice holding port49's form", c.aliceHighBit, c.aliceHighBitKey, port49Form},
-		{"highbit-signbyte", "the same, alice holding the serial with its DER sign byte", c.aliceHighBit, c.aliceHighBitKey, winAltSecSignByte},
 	}
+	cases = append(cases, l44QuirkCases(c, port49Form)...)
+	cases = append(cases,
+		l44Case{"highbit-port49", "the lab users CA, a serial whose top bit is set, alice holding port49's form", c.aliceHighBit, c.aliceHighBitKey, port49Form},
+		l44Case{"highbit-signbyte", "the same, alice holding the serial with its DER sign byte", c.aliceHighBit, c.aliceHighBitKey, winAltSecSignByte})
 	aliceDN := "CN=alice,OU=Staff," + dirBase
 	brokerDN := "CN=port49,OU=Svc," + dirBase
 	adcsExt := directory.Bind{Mechanism: "external", TLSCertFile: c.brokerCertFile, TLSKeyFile: c.brokerKeyFile}
@@ -512,9 +551,15 @@ func (l *labDir) l44Matrix(t *testing.T, ev *evidenceLog) string {
 		w.checkSkew(t)
 		control := "" // why the block's control failed; "" while it holds
 		for _, cs := range cases {
+			why := ""
 			if cs.cert == nil { // the sid cells, when enroll_as failed three times
-				t.Errorf("L44 %s under %s: %s; the cell is INVALID (R6)", cs.label, inForce, noSID)
-				fmt.Fprintf(&b, "| %s | %s | — | INVALID (R6): `%s` | — | — | — |\n", inForce, cs.what, l44MDCell(noSID))
+				why = noSID
+			} else if slug := l44QuirkSlug(cs.label); slug != "" { // a quirk CA that failed to publish
+				why = w.invalidFor("ca_" + slug)
+			}
+			if why != "" {
+				t.Errorf("L44 %s under %s: %s; the cell is INVALID (R6)", cs.label, inForce, why)
+				fmt.Fprintf(&b, "| %s | %s | — | INVALID (R6): `%s` | — | — | — |\n", inForce, cs.what, l44MDCell(why))
 				continue
 			}
 			held := ""
@@ -546,6 +591,8 @@ func (l *labDir) l44Matrix(t *testing.T, ev *evidenceLog) string {
 			b.WriteString(l44MatrixRow(inForce, cs.what, held, outcome, r, evs))
 			if strings.HasPrefix(outcome, "INVALID") {
 				t.Errorf("L44 %s under %s: %s", cs.label, inForce, outcome)
+			} else if want, ok := l44QuirkWant(cs.label); ok && outcome != want {
+				t.Errorf("L44 %s under %s: %s, measured %s", cs.label, inForce, outcome, want)
 			}
 		}
 		w.setAltSec(t, brokerDN, directory.ADIssuerSerial(c.brokerADCS))

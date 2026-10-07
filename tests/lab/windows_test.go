@@ -267,10 +267,13 @@ func winRDNs(raw []byte) ([][2]string, error) {
 
 // winQuote is an RDN value as CertNameToStr (CERT_X500_NAME_STR) writes it:
 // quoted when it is empty, starts or ends with white space, or holds
-// , + = " \ < > # ; or a newline, an inner quote doubled (Microsoft's
-// CertNameToStrW reference).
+// , + = " < > # ; or a backslash, a slash or a newline, an inner quote doubled
+// (Microsoft's CertNameToStrW reference). This is CertNameToStr's documented
+// set, kept as the record of that hypothesis: L44 at ad1e4a9 refuted it for a
+// backslash and a slash (the DC's KDC matches them unquoted), so it is no
+// longer directory.adQuote's set and the lab's quoted form is not port49's.
 func winQuote(v string) string {
-	if v == "" || strings.ContainsAny(v, ",+=\"\\<>#;\n") || strings.TrimSpace(v) != v {
+	if v == "" || strings.ContainsAny(v, ",+=\"<>#;\\/\n") || strings.TrimSpace(v) != v {
 		return `"` + strings.ReplaceAll(v, `"`, `""`) + `"`
 	}
 	return v
@@ -290,7 +293,10 @@ func winEscape(v string) string {
 }
 
 // winForm is an altSecurityIdentities X509IssuerSerialNumber value with each
-// way it may differ from port49's own: the zero winForm is port49's form.
+// way it may differ from the plain form (values as they are, the serial
+// without its DER sign byte). Port49's form is winForm{quoted: true,
+// signByte: true}, which TestWindowsAltSecForms holds equal to
+// directory.ADIssuerSerial.
 type winForm struct{ forward, quoted, escaped, unreversed, signByte bool }
 
 func (f winForm) of(c *x509.Certificate) (string, error) {
@@ -330,6 +336,7 @@ var (
 	winAltSecQuoted     = winForm{quoted: true}.of     // values quoted as CertNameToStr quotes them
 	winAltSecEscaped    = winForm{escaped: true}.of    // values escaped as RFC 4514 escapes them
 	winAltSecSignByte   = winForm{signByte: true}.of   // the serial with its DER sign byte
+	winAltSecRaw        = winForm{}.of                 // values as they are: no quoting, no escaping
 )
 
 // winAltSecSKI is KB5014754's strong X509SKI mapping for c, the hex of its
@@ -439,13 +446,90 @@ func (p *dirPKI) signServerCSR(csrPEM []byte, now time.Time) ([]byte, error) {
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), nil
 }
 
-// winCommaCA is a CA named CN=lab-users\, comma-CA,DC=corp,DC=example,DC=com,
-// written in DER most significant first: plan 7g's carried question, whether a
-// Windows DC wants a `,` in <I> quoted.
-func winCommaCA(now time.Time) (*x509.Certificate, *ecdsa.PrivateKey, error) {
+// winQuirk is a CA whose CN holds one character in question for <I>'s quoting
+// (plan 7g's carried question, and Task 7a's): the comma (measured in run 8)
+// and the backslash, slash, plus, inner quote and leading space, which
+// Microsoft's CertNameToStr page documents inconsistently or not at all;
+// winQuirkWant holds what each measured. slug names the CA's file and its
+// matrix rows.
+type winQuirk struct{ slug, cn, holds string }
+
+var winQuirks = []winQuirk{
+	{"comma", "lab-users, comma-CA", "a comma"},
+	{"back", `lab-users\back-CA`, "a backslash"},
+	{"slash", "lab-users/slash-CA", "a forward slash"},
+	{"plus", "lab-users+plus-CA", "a plus sign"},
+	{"quote", `lab-users "q" CA`, "an inner quote"},
+	{"lead", " lab-users lead-CA", "a leading space"},
+}
+
+// winQuirkWant is the verdict L44 measured for each quirk CA's row (run at
+// ad1e4a9, the same under every StrongCertificateBindingEnforcement value),
+// keyed by slug and form (the label's suffix): true is a TGT, false a refusal.
+// The comma has no raw row. The port49 cell is port49's form today, so every
+// one is true: L44 measured it as the raw value for back and slash and as the
+// quoted value for the others. The ad1e4a9 port49 rows recorded the old
+// quoted form for back and slash, which the DC refused.
+var winQuirkWant = map[string]map[string]bool{
+	"comma": {"port49": true, "quoted": true, "escaped": false},
+	"back":  {"port49": true, "quoted": false, "escaped": false, "raw": true},
+	"slash": {"port49": true, "quoted": false, "escaped": true, "raw": true},
+	"plus":  {"port49": true, "quoted": true, "escaped": false, "raw": false},
+	"quote": {"port49": true, "quoted": true, "escaped": false, "raw": false},
+	"lead":  {"port49": true, "quoted": true, "escaped": false, "raw": false},
+}
+
+// l44QuirkWant is the l44Judge outcome a quirk row's label must get, and
+// whether the label is a quirk row at all.
+func l44QuirkWant(label string) (string, bool) {
+	slug, form, _ := strings.Cut(label, "-")
+	tgt, ok := winQuirkWant[slug][form]
+	switch {
+	case !ok:
+		return "", false
+	case tgt:
+		return "**TGT issued**", true
+	}
+	return "refused", true
+}
+
+// file is the CA's name in the DC's C:\l44, in the pkinit directory and in
+// the client's krb5.conf.
+func (q winQuirk) file() string { return "lab-users-" + q.slug + "-ca" }
+
+// winQuirkCA is a quirk CA with its key; winQuirkCert is alice's certificate
+// from it.
+type winQuirkCA struct {
+	winQuirk
+	cert *x509.Certificate
+	key  *ecdsa.PrivateKey
+}
+
+type winQuirkCert struct {
+	cert *x509.Certificate
+	key  *rsa.PrivateKey
+}
+
+// winQuirkCAs makes every quirk CA, each a self-signed CA with a distinct key
+// and serial.
+func winQuirkCAs(now time.Time) ([]winQuirkCA, error) {
+	var out []winQuirkCA
+	for i, q := range winQuirks {
+		c, key, err := winCA(q.cn, int64(2+i), now)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, winQuirkCA{q, c, key})
+	}
+	return out, nil
+}
+
+// winCA is a CA named CN=cn,DC=corp,DC=example,DC=com, written in DER most
+// significant first.
+func winCA(cn string, serial int64, now time.Time) (*x509.Certificate, *ecdsa.PrivateKey, error) {
 	raw, err := asn1.Marshal(pkix.RDNSequence{
 		{{Type: oidDirDC, Value: "com"}}, {{Type: oidDirDC, Value: "example"}}, {{Type: oidDirDC, Value: "corp"}},
-		{{Type: oidDirCN, Value: "lab-users, comma-CA"}}})
+		{{Type: oidDirCN, Value: cn}}})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -453,7 +537,7 @@ func winCommaCA(now time.Time) (*x509.Certificate, *ecdsa.PrivateKey, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	tmpl := &x509.Certificate{SerialNumber: big.NewInt(2), RawSubject: raw, NotBefore: now.Add(-time.Hour),
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(serial), RawSubject: raw, NotBefore: now.Add(-time.Hour),
 		NotAfter: now.Add(24 * time.Hour), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageCRLSign}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
 	if err != nil {
@@ -596,6 +680,10 @@ func winKDCErrCode(e string) (int, bool) {
 // project network, AD CS's root and the lab's two client CAs as anchors, and pkinit_kdc_hostname, the
 // one setting MIT's documentation names for an Active Directory KDC.
 func winPKINITConf(kdc string) string {
+	var quirkAnchors strings.Builder
+	for _, q := range winQuirks {
+		fmt.Fprintf(&quirkAnchors, "    pkinit_anchors = FILE:/l44/%s.pem\n", q.file())
+	}
 	return fmt.Sprintf(`[libdefaults]
   default_realm = %[1]s
   dns_lookup_kdc = false
@@ -607,10 +695,9 @@ func winPKINITConf(kdc string) string {
     kdc = %[2]s
     pkinit_anchors = FILE:/l44/adcs-root.pem
     pkinit_anchors = FILE:/l44/lab-users-ca.pem
-    pkinit_anchors = FILE:/l44/lab-users-comma-ca.pem
-    pkinit_kdc_hostname = %[3]s
+%[4]s    pkinit_kdc_hostname = %[3]s
   }
-`, dirRealm, kdc, winDCHost)
+`, dirRealm, kdc, winDCHost, quirkAnchors.String())
 }
 
 // winEvent is one event the DC logged.
@@ -715,9 +802,10 @@ type winFacts struct {
 
 // winCerts is the run's client certificates, each key on this host only.
 type winCerts struct {
-	brokerADCS, aliceADCS, aliceSID, aliceComma, aliceHighBit, dcKDC     *x509.Certificate
-	brokerKey, aliceADCSKey, aliceSIDKey, aliceCommaKey, aliceHighBitKey *rsa.PrivateKey
-	brokerCertFile, brokerKeyFile                                        string
+	brokerADCS, aliceADCS, aliceSID, aliceHighBit, dcKDC  *x509.Certificate
+	brokerKey, aliceADCSKey, aliceSIDKey, aliceHighBitKey *rsa.PrivateKey
+	brokerCertFile, brokerKeyFile                         string
+	quirk                                                 map[string]winQuirkCert // alice's certificate from each quirk CA, by slug
 }
 
 // winDC holds every password and private key of the run, so it prints as its
@@ -1480,22 +1568,33 @@ func (w *winDC) perRun(t *testing.T, l *labDir) {
 		w.invalid = append(w.invalid, "keytab: "+oneLineMax(winScrub(kerr.Error(), w.secrets()...), 300))
 	}
 	winWriteFile0600(t, l.krb5File, []byte(krb5Conf(winKDC)))
-	comma, commaKey, err := winCommaCA(time.Now())
+	quirks, err := winQuirkCAs(time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, ca := range []struct {
+	type trustCA struct {
 		name string
 		c    *x509.Certificate
-	}{{"lab-users-ca", d.pki.usersCA}, {"lab-users-comma-ca", comma}} {
-		w.run(t, "trust", map[string]any{"ca_pem": string(winPEMCert(ca.c)), "name": ca.name}, 5*time.Minute, nil)
+		slug string // a quirk CA's: its failing to publish makes its rows INVALID (R6), not the run's end
+	}
+	trust := []trustCA{{"lab-users-ca", d.pki.usersCA, ""}}
+	for _, q := range quirks {
+		trust = append(trust, trustCA{q.file(), q.cert, q.slug})
+	}
+	for _, ca := range trust {
+		params := map[string]any{"ca_pem": string(winPEMCert(ca.c)), "name": ca.name}
+		if ca.slug == "" {
+			w.run(t, "trust", params, 5*time.Minute, nil)
+		} else if terr := w.try(t, "trust", params, 5*time.Minute, nil); terr != nil {
+			w.invalid = append(w.invalid, "ca_"+ca.slug+": trust: "+oneLineMax(winScrub(terr.Error(), w.secrets()...), 300))
+		}
 		// The PKINIT client must anchor its own certificate's issuer, or MIT
 		// fails before it asks the KDC ("unable to get local issuer certificate").
 		winWriteFile0600(t, filepath.Join(w.dir, "pkinit", ca.name+".pem"), winPEMCert(ca.c))
 	}
 	winWriteFile0600(t, filepath.Join(w.dir, "pkinit", "krb5.conf"), []byte(winPKINITConf(winKDCInNet)))
 	winWriteFile0600(t, filepath.Join(w.dir, "pkinit", "adcs-root.pem"), winPEMCert(w.adcsRoot))
-	w.issueCerts(t, d, comma, commaKey)
+	w.issueCerts(t, d, quirks)
 	w.run(t, "facts", nil, 5*time.Minute, &w.facts)
 	w.facts.MIT = w.mitVersions(t)
 }
@@ -1528,7 +1627,7 @@ func winMITVersions(out string) string {
 
 // issueCerts issues the run's client certificates (R5) and checks none
 // predates alice's account.
-func (w *winDC) issueCerts(t *testing.T, d *directories, comma *x509.Certificate, commaKey *ecdsa.PrivateKey) {
+func (w *winDC) issueCerts(t *testing.T, d *directories, quirks []winQuirkCA) {
 	t.Helper()
 	// AD CS backdates NotBefore ten minutes. A certificate older than alice's
 	// account meets KB5014754's backdating check, which is no part of the claim.
@@ -1542,14 +1641,21 @@ func (w *winDC) issueCerts(t *testing.T, d *directories, comma *x509.Certificate
 	c.aliceSID, c.aliceSIDKey = w.enrollAs(t, "alice")
 	now := time.Now()
 	var err error
-	if c.aliceComma, c.aliceCommaKey, err = winPersonCert(comma, commaKey, "alice", "alice@corp.example.com", dirSerial(), now); err != nil {
-		t.Fatal(err)
+	c.quirk = map[string]winQuirkCert{}
+	people := []*x509.Certificate{c.aliceADCS}
+	for _, q := range quirks {
+		qc, qk, err := winPersonCert(q.cert, q.key, "alice", "alice@corp.example.com", dirSerial(), now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.quirk[q.slug] = winQuirkCert{qc, qk}
+		people = append(people, qc)
 	}
 	if c.aliceHighBit, c.aliceHighBitKey, err = winPersonCert(d.pki.usersCA, d.pki.usersKey, "alice", "alice@corp.example.com",
 		winHighBitSerial(), now); err != nil {
 		t.Fatal(err)
 	}
-	people := []*x509.Certificate{c.aliceADCS, c.aliceComma, c.aliceHighBit}
+	people = append(people, c.aliceHighBit)
 	if c.aliceSID != nil { // nil when enroll_as failed three times: the sid cells are INVALID
 		people = append(people, c.aliceSID)
 	}
@@ -1797,8 +1903,9 @@ func (w *winDC) configNote() string {
 		"`-mapuser CORP\\port49`), which also sets its UPN. `ktpass` takes the password on its own command line inside " +
 		"the VM, the one place a secret is on a command line.\n" +
 		"- AD CS: an enterprise root CA `corp-L44-CA` on the DC, `OfflineRouter` published for requests whose subject the " +
-		"harness supplies, and the DC's `KerberosAuthentication` certificate enrolled for PKINIT. The lab users CA and a " +
-		"second CA whose CN holds a comma are in the DC's Root store and in NTAuth.\n" +
+		"harness supplies, and the DC's `KerberosAuthentication` certificate enrolled for PKINIT. The lab users CA and " +
+		"six quirk CAs, each CN holding one character (a comma, a backslash, a slash, a plus, an inner quote, a leading " +
+		"space), are in the DC's Root store and in NTAuth; a quirk CA that failed to publish makes its rows INVALID.\n" +
 		"- Each KB5014754 block starts with a control, `control-ski`: alice's AD CS certificate under the strong " +
 		"`X509:<SKI>` mapping, which no part of the claim is about. A block whose control got no TGT is INVALID.\n" +
 		"- Each `LdapEnforceChannelBinding` change reboots the DC, and the next cell waits for LDAPS. Restarting NTDS " +

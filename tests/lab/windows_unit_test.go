@@ -165,7 +165,7 @@ func TestWindowsISOCheck(t *testing.T) {
 func TestWindowsQuote(t *testing.T) {
 	for in, want := range map[string]string{
 		"plain": "plain", "a,b": `"a,b"`, `say "hi"`: `"say ""hi"""`, " lead": `" lead"`, "trail ": `"trail "`,
-		"a+b": `"a+b"`, "a=b": `"a=b"`, "a#b": `"a#b"`, "a;b": `"a;b"`, "a<b": `"a<b"`, "a>b": `"a>b"`, `a\b`: `"a\b"`, "": `""`, "a\nb": "\"a\nb\"",
+		"a+b": `"a+b"`, "a=b": `"a=b"`, "a#b": `"a#b"`, "a;b": `"a;b"`, "a<b": `"a<b"`, "a>b": `"a>b"`, `a\b`: `"a\b"`, "a/b": `"a/b"`, "": `""`, "a\nb": "\"a\nb\"",
 	} {
 		if got := winQuote(in); got != want {
 			t.Errorf("winQuote(%q) = %q, want %q", in, got, want)
@@ -201,7 +201,7 @@ func TestWindowsAltSecSKI(t *testing.T) {
 // the lab's reading of the issuer is port49's own.
 func TestWindowsAltSecForms(t *testing.T) {
 	now := time.Now()
-	ca, caKey, err := winCommaCA(now)
+	ca, caKey, err := winCA("lab-users, comma-CA", 2, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,11 +210,12 @@ func TestWindowsAltSecForms(t *testing.T) {
 		t.Fatal(err)
 	}
 	const issuer = "DC=com,DC=example,DC=corp,CN=lab-users, comma-CA"
+	const quotedIssuer = `DC=com,DC=example,DC=corp,CN="lab-users, comma-CA"`
 	for name, tc := range map[string]struct {
 		f    func(*x509.Certificate) (string, error)
 		want string
 	}{
-		"port49":     {winForm{}.of, "X509:<I>" + issuer + "<SR>020180"},
+		"port49":     {winForm{quoted: true, signByte: true}.of, "X509:<I>" + quotedIssuer + "<SR>02018000"},
 		"forward":    {winAltSecForward, "X509:<I>CN=lab-users, comma-CA,DC=corp,DC=example,DC=com<SR>020180"},
 		"unreversed": {winAltSecUnreversed, "X509:<I>" + issuer + "<SR>800102"},
 		"quoted":     {winAltSecQuoted, `X509:<I>DC=com,DC=example,DC=corp,CN="lab-users, comma-CA"<SR>020180`},
@@ -225,7 +226,7 @@ func TestWindowsAltSecForms(t *testing.T) {
 			t.Errorf("%s: %q %v, want %q", name, got, err, tc.want)
 		}
 	}
-	if got, _ := (winForm{}).of(c); got != directory.ADIssuerSerial(c) {
+	if got, _ := (winForm{quoted: true, signByte: true}).of(c); got != directory.ADIssuerSerial(c) {
 		t.Errorf("the lab's port49 form %q is not directory.ADIssuerSerial's %q", got, directory.ADIssuerSerial(c))
 	}
 }
@@ -414,11 +415,15 @@ func TestWindowsPKINITAnchorsTheLabCAs(t *testing.T) {
 	if !strings.Contains(src, `winWriteFile0600(t, filepath.Join(w.dir, "pkinit", ca.name+".pem"), winPEMCert(ca.c))`) {
 		t.Error("perRun does not write each lab CA into the pkinit directory")
 	}
-	for _, name := range []string{`"lab-users-ca"`, `"lab-users-comma-ca"`} {
-		if !strings.Contains(src, name) {
-			t.Errorf("perRun does not name the CA %s", name)
-		}
-		if !strings.Contains(winPKINITConf(winKDCInNet), "FILE:/l44/"+strings.Trim(name, `"`)+".pem") {
+	names := []string{"lab-users-ca"}
+	for _, q := range winQuirks {
+		names = append(names, q.file())
+	}
+	if !strings.Contains(src, `[]trustCA{{"lab-users-ca", d.pki.usersCA, ""}}`) || !strings.Contains(src, "trustCA{q.file(), q.cert, q.slug}") {
+		t.Error("perRun does not trust the lab users CA and every quirk CA")
+	}
+	for _, name := range names {
+		if !strings.Contains(winPKINITConf(winKDCInNet), "FILE:/l44/"+name+".pem") {
 			t.Errorf("krb5.conf does not anchor %s", name)
 		}
 	}
@@ -2373,5 +2378,189 @@ func TestL44BindsTableIsNotSplit(t *testing.T) {
 	}
 	if strings.Contains(l44BindsTail("req", false), "accepted") {
 		t.Error("the sentence appears when LDAPS refused")
+	}
+}
+
+// Each quirk CA's subject reads back as CN=<its cn> under the DCs, its files
+// and rows are named by a slug that is safe in a path, a krb5.conf line and a
+// kinit label, and no two CAs share a name, a key or a serial.
+func TestWindowsQuirkCAs(t *testing.T) {
+	cas, err := winQuirkCAs(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cas) != len(winQuirks) || len(cas) < 6 {
+		t.Fatalf("%d CAs for %d quirks", len(cas), len(winQuirks))
+	}
+	safe := regexp.MustCompile(`^[a-z]+$`)
+	slugs, cns, serials := map[string]bool{}, map[string]bool{}, map[string]bool{}
+	for _, ca := range cas {
+		if !safe.MatchString(ca.slug) || slugs[ca.slug] || cns[ca.cn] || serials[ca.cert.SerialNumber.String()] {
+			t.Errorf("%q: an unsafe or repeated slug, CN or serial", ca.slug)
+		}
+		slugs[ca.slug], cns[ca.cn], serials[ca.cert.SerialNumber.String()] = true, true, true
+		rdns, err := winRDNs(ca.cert.RawSubject)
+		if err != nil || len(rdns) != 4 || rdns[3] != [2]string{"CN", ca.cn} {
+			t.Errorf("%s: subject %v %v", ca.slug, rdns, err)
+		}
+		if ca.cert.Subject.CommonName != ca.cn {
+			t.Errorf("%s: parsed CN %q", ca.slug, ca.cert.Subject.CommonName)
+		}
+		if ca.file() != "lab-users-"+ca.slug+"-ca" {
+			t.Errorf("%s: file %q", ca.slug, ca.file())
+		}
+	}
+	for _, want := range []string{"comma", "back", "slash", "plus", "quote", "lead"} {
+		if !slugs[want] {
+			t.Errorf("no %s CA", want)
+		}
+	}
+	if !strings.Contains(winQuirks[1].cn, `\`) || !strings.Contains(winQuirks[2].cn, "/") || !strings.Contains(winQuirks[3].cn, "+") ||
+		!strings.Contains(winQuirks[4].cn, `"`) || !strings.HasPrefix(winQuirks[5].cn, " ") {
+		t.Error("a quirk CA's CN lacks the character it is for")
+	}
+}
+
+// The forms offered for each quirk CA, as an operator would write them, and
+// port49's is directory.ADIssuerSerial's.
+func TestWindowsQuirkForms(t *testing.T) {
+	cas, err := winQuirkCAs(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	const pre = "X509:<I>DC=com,DC=example,DC=corp,CN="
+	want := map[string]struct{ port49, quoted, escaped, raw string }{
+		"back":  {`lab-users\back-CA`, `"lab-users\back-CA"`, `lab-users\\back-CA`, `lab-users\back-CA`},
+		"slash": {`lab-users/slash-CA`, `"lab-users/slash-CA"`, `lab-users/slash-CA`, `lab-users/slash-CA`},
+		"plus":  {`"lab-users+plus-CA"`, `"lab-users+plus-CA"`, `lab-users\+plus-CA`, `lab-users+plus-CA`},
+		"quote": {`"lab-users ""q"" CA"`, `"lab-users ""q"" CA"`, `lab-users \"q\" CA`, `lab-users "q" CA`},
+		"lead":  {`" lab-users lead-CA"`, `" lab-users lead-CA"`, `\ lab-users lead-CA`, ` lab-users lead-CA`},
+	}
+	for _, ca := range cas {
+		if ca.slug == "comma" {
+			continue
+		}
+		leaf, _, err := winPersonCert(ca.cert, ca.key, "alice", "alice@corp.example.com", dirSerial(), time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		w := want[ca.slug]
+		got := func(f func(*x509.Certificate) (string, error)) string {
+			v, err := f(leaf)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return strings.TrimPrefix(strings.SplitN(v, "<SR>", 2)[0], pre)
+		}
+		if g := got(func(c *x509.Certificate) (string, error) { return directory.ADIssuerSerial(c), nil }); g != w.port49 {
+			t.Errorf("%s: port49 %q, want %q", ca.slug, g, w.port49)
+		}
+		for name, tc := range map[string]struct {
+			f    func(*x509.Certificate) (string, error)
+			want string
+		}{"quoted": {winAltSecQuoted, w.quoted}, "escaped": {winAltSecEscaped, w.escaped}, "raw": {winAltSecRaw, w.raw}} {
+			if g := got(tc.f); g != tc.want {
+				t.Errorf("%s: %s %q, want %q", ca.slug, name, g, tc.want)
+			}
+		}
+	}
+}
+
+// Port49's form is one the DC issued a TGT for: every port49 cell is true, and
+// for each quirk CA the string directory.ADIssuerSerial writes equals the
+// string of at least one other form whose cell is true. A regression in
+// adQuote fails here, not only in a lab run.
+func TestL44QuirkPort49FormIsMeasured(t *testing.T) {
+	cas, err := winQuirkCAs(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	forms := map[string]func(*x509.Certificate) (string, error){
+		"quoted": winAltSecQuoted, "escaped": winAltSecEscaped, "raw": winAltSecRaw}
+	issuer := func(v string) string { return strings.SplitN(v, "<SR>", 2)[0] }
+	for slug, cells := range winQuirkWant {
+		if !cells["port49"] {
+			t.Errorf("winQuirkWant[%s][port49] is false: port49's form is expected refused", slug)
+		}
+	}
+	for _, ca := range cas {
+		leaf, _, err := winPersonCert(ca.cert, ca.key, "alice", "alice@corp.example.com", dirSerial(), time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		p49 := issuer(directory.ADIssuerSerial(leaf))
+		matched := false
+		for name, f := range forms {
+			v, err := f(leaf)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tgt, ok := winQuirkWant[ca.slug][name]; ok && tgt && issuer(v) == p49 {
+				matched = true
+			}
+		}
+		if !matched {
+			t.Errorf("%s: port49's form %q equals no form measured to get a TGT", ca.slug, p49)
+		}
+	}
+}
+
+// The matrix has every quirk CA's rows once: port49's, quoted and escaped, and
+// the as-is row for each CA but the comma's; each row's label is a safe file
+// name (the kinit files carry it) and has a measured verdict in winQuirkWant.
+func TestL44QuirkCases(t *testing.T) {
+	c := winCerts{quirk: map[string]winQuirkCert{}}
+	for _, q := range winQuirks {
+		c.quirk[q.slug] = winQuirkCert{cert: &x509.Certificate{}}
+	}
+	form := func(*x509.Certificate) (string, error) { return "", nil }
+	cases := l44QuirkCases(c, form)
+	if want := 3 + 4*(len(winQuirks)-1); len(cases) != want {
+		t.Fatalf("%d cases, want %d", len(cases), want)
+	}
+	seen := map[string]bool{}
+	safe := regexp.MustCompile(`^[a-z]+-(port49|quoted|escaped|raw)$`)
+	for _, cs := range cases {
+		if seen[cs.label] || !safe.MatchString(cs.label) || cs.cert != c.quirk[l44QuirkSlug(cs.label)].cert {
+			t.Errorf("%q: repeated, unsafe, or another CA's certificate", cs.label)
+		}
+		seen[cs.label] = true
+		if strings.Contains(cs.what, "recorded, not asserted") {
+			t.Errorf("%q: still says it is recorded, not asserted", cs.label)
+		}
+		if _, ok := l44QuirkWant(cs.label); !ok {
+			t.Errorf("%q: no measured verdict in winQuirkWant", cs.label)
+		}
+	}
+	for slug, forms := range winQuirkWant {
+		for form := range forms {
+			if !seen[slug+"-"+form] {
+				t.Errorf("winQuirkWant has %s-%s, no case generates it", slug, form)
+			}
+		}
+	}
+	for want, label := range map[string]string{"**TGT issued**": "back-raw", "refused": "back-quoted"} {
+		if got, ok := l44QuirkWant(label); !ok || got != want {
+			t.Errorf("l44QuirkWant(%q) = %q, %v, want %q", label, got, ok, want)
+		}
+	}
+	if _, ok := l44QuirkWant("control-ski"); ok {
+		t.Error("control-ski has a quirk verdict")
+	}
+	for _, q := range winQuirks {
+		for _, f := range []string{"port49", "quoted", "escaped"} {
+			if !seen[q.slug+"-"+f] {
+				t.Errorf("no %s-%s row", q.slug, f)
+			}
+		}
+		if raw := seen[q.slug+"-raw"]; raw != (q.slug != "comma") {
+			t.Errorf("%s-raw present: %v", q.slug, raw)
+		}
+	}
+	for label, want := range map[string]string{"back-raw": "back", "comma-port49": "comma", "control-ski": "", "adcs-port49": "",
+		"sid-none": "", "highbit-port49": "", "highbit-signbyte": ""} {
+		if got := l44QuirkSlug(label); got != want {
+			t.Errorf("l44QuirkSlug(%q) = %q, want %q", label, got, want)
+		}
 	}
 }
