@@ -75,7 +75,10 @@ Identities from different trust domains MUST remain distinguishable (§7 of the 
 document): listing a human and a machine identity under one subject is a policy load error,
 not a convenience. For CI to enforce that, an identity string carries its domain in its form —
 `user:alice@example.com`, `spiffe://…`, `system:serviceaccount:…`, `app:<client_id>` — and a
-string in no recognized form is itself a load error. At runtime the domain is never read from
+string in no recognized form is itself a load error. A `spiffe://` identity must be a SPIFFE ID with a path, in the form SPIFFE ID §2 gives (lower-case
+scheme and trust domain; path segments of `A-Z a-z 0-9 . - _`, never empty, `.` or `..`; no
+trailing `/`; at most 2048 bytes): one outside it is a load error, never folded to fit (§13
+decision 40 ruling 4). At runtime the domain is never read from
 the string; it is whichever verifier validated the credential (design document §7).
 
 **Each verifier produces the principal string, prefix included**, so the runtime string and
@@ -85,7 +88,7 @@ the policy string are the same string and the subject matcher is a comparison:
 |---|---|
 | human x509 | `user:` + the entry's `principal_attribute` (default `userPrincipalName`), lower-cased, from the certificate-to-directory mapping (design document §7); without `broker.directory`, `user:` + the certificate's one email SAN |
 | human OIDC | `user:` + the claim `broker.identity.humans[].principal_claim` names (required, no default: `preferred_username`, `email` only with `email_verified: true`, or `upn`), lower-cased, printable ASCII with an `@`, its domain one of the verifier's `principal_domains` (§13 decision 39 rulings 6, 22, 23) |
-| workload x509 | the SAN URI verbatim — `spiffe://…` |
+| workload x509 | the leaf's one URI SAN, verbatim: a SPIFFE ID with a path (`spiffe://<trust domain>/<path>`, SPIFFE ID §2), its trust domain one of `broker.identity.machines[].spiffe_trust_domains`; the leaf not a CA. Zero or several URI SANs, another URI, an ID with no path, or an unlisted trust domain is `identity_unmapped` (§13 decision 40 rulings 3 and 4). Its email SANs are never read |
 | Kubernetes | `system:serviceaccount:<namespace>:<name>` from the token's `sub` |
 | machine OIDC | `app:` + the token's `azp`, else its `client_id` claim, verbatim: a client the verifier's `clients` lists, the token's `sub` that client's pinned identity; a token carrying a person's session claim (`auth_time`, `sid`, `nonce`, `scp`, `amr`) or an `idtyp` other than `app` is never a machine's (§13 decision 39 ruling 21) |
 
@@ -160,7 +163,10 @@ fetches groups. No additional query:
 With `broker.directory`, a `user:` identity subject declares no `username:`; the broker refuses
 one at load. Without it, one is required, as before plan 7g.
 
-**Machine identities have no directory entry**, so the subject declares one:
+**Machine identities have no directory entry**, so the subject declares one. A machine principal is
+never sent to the directory, at mint or by the scheduled refresh, until plan 8b builds a workload
+certificate's opt-in directory mapping, and never matches a human `group:` subject, then or after
+(§13 decisions 16 and 40 ruling 5):
 
 ```yaml
 subjects:
@@ -172,8 +178,10 @@ subjects:
 **Usernames MUST be unique across subjects, and CI can only check half of it.** Declared
 machine usernames are checked against each other at load. Human usernames come from the
 directory at mint, so a machine subject declaring `username: alice` collides with a human
-`alice` only at runtime; the broker checks at mint and refuses the *later* claimant with a
-reason naming both. Two subjects claiming one username collide in
+`alice` only at runtime; the broker checks at bind, at mint and at every refresh, and refuses the
+directory's claimant `username_collision` with a reason naming both: the declared username stands,
+whichever came first, so a directory administrator who renames a person cannot take a workload's
+contexts (§13 decision 38 ruling 3; decision 40 ruling 6). Two subjects claiming one username collide in
 the `(nas, username)` store key and make the audit trail ambiguous; this is a policy load
 error. Collision with a device-local account name is the same hazard described in §5.6 and
 SHOULD be reported where port49 can observe it.
@@ -854,8 +862,9 @@ answer for is left as it is and unstamped, counted `unverified` in
 `port49_context_refreshes_total`, and its sessions deny `context_stale` once
 `session.staleness_ceiling` passes (§5.1.1). A principal whose entry is gone, is ambiguous or has
 its username taken has every context revoked. A machine principal (`spiffe://`,
-`system:serviceaccount:`, `app:`) is never sent to the directory: it is judged by the policy alone
-and stamped with the pass's instant. Without `broker.directory`, the pass judges against the
+`system:serviceaccount:`, `app:`) is never sent to the directory, until plan 8b builds a workload
+certificate's opt-in directory mapping (§13 decisions 16 and 40 ruling 5): it is judged by the
+policy alone and stamped with the pass's instant. Without `broker.directory`, the pass judges against the
 policy alone and stamps its own instant: the ceiling then bounds a broker outage. A policy refresh
 never stamps `refreshed_at`, and judges a group member by the membership last verified (held in
 the store; design §12), or by no groups where none is held, where the directory refused the
@@ -985,6 +994,19 @@ asks about a command (§13, decision 21) or on a device the inventory gives no p
 from a CRL or an OCSP response arrived with plan 7b, as a mark of this kind where the certificate
 is still held (see below); an OIDC back-channel logout, by `sid` or `sub`, with plan 7h, as no mark
 (below).
+
+**A workload certificate, as built (plan 8; §13 decision 40).** A workload certificate is a
+certificate credential like a person's: `method: cert`, its fingerprint, issuer, serial and
+subject, and the marks, `certificate_status` and the listener's copy apply to it unchanged. Its
+principal is its SPIFFE ID, so a renewal, which brings a new serial under the same ID, needs
+nothing from port49, and a mark by certificate does not follow it: to stop a workload, revoke its
+principal (`port49 revoke --principal spiffe://…`), which refuses every certificate it renews to,
+and revoke the certificate at its CA so it cannot be renewed. `port49 revoke` says so when the
+certificate's issuer is the workload anchor's subject, or an issuer the broker has seen on a
+verified workload chain. A workload certificate presented with less
+than a quarter of its validity left is said once a day and counted in
+`port49_workload_certificates_renewal_late_total`: its renewal is late, and expiry is refused
+`trust_domain_unresolved` as a person's is.
 
 **Over HTTP, as built (plan 7c; §13, decision 34).** `POST /v1/tokens/revoke` takes one of three
 bodies, and is refused 400 for any other (a principal and a key together, `mine` beside a
@@ -2240,12 +2262,13 @@ refused request named; any other path is recorded `mint`.
 |---|---|
 | `grants_matched` | `mint`: at least one declared grant selected the device; blob written. `refresh`: the policy in force was written into the live context; or, on a session refresh, the context was extended. `identity`: the caller's subject holds a grant unexpired now |
 | `no_grants_matched` | `mint`: no declared grant for this principal selects the device. `refresh`: none does any more, and the live context is revoked. `identity`: it holds none |
-| `username_collision` | `mint`: the derived username is already held by a subject in another trust domain (§2); or the directory derives a username a policy subject declares, or a second directory entry holds the same username under `broker.directory.username_attribute` (§13 decision 38). At the broker's bind and on `refresh` likewise; on `refresh` every context of the principal is revoked. The process log names both claimants |
-| `identity_unmapped` | at the broker's bind, and on `mint`, `identity`, `explain` and `revoke`: an OIDC token that verified but whose principal claim is absent, not one string, not printable ASCII with an `@`, outside the verifier's `principal_domains`, or an `email` without `email_verified: true`, or a machine token with neither `azp` nor `client_id` (§13 decision 39); or the client certificate maps to no directory entry under `broker.directory.certificate_mapping`; or the value the mapping reads is not in the certificate (no SID extension; zero or several UPN or email SANs); or a weak mapping's issuer is not one its `issuers:` pins (design §7); or the entry's `principal_attribute` or `username_attribute` is absent, has several values, is not printable ASCII, gives a principal with no `@`, or a username that is not already canonical or is reserved (§2); or the principal it gives is pinned to another entry, by `objectGUID` or `entryUUID` (else DN), for as long as that principal's membership record lives or until an operator runs `port49 directory forget` (§13 decision 38). The API answers 401 and the connection is closed. On `refresh`: the principal's entry is gone or no longer usable, and every context of it is revoked |
+| `username_collision` | `mint`: the derived username is already held by a subject in another trust domain (§2); or the directory derives a username a policy subject declares (the declared one
+stands, whichever came first; §13 decision 38 ruling 3, decision 40 ruling 6), or a second directory entry holds the same username under `broker.directory.username_attribute` (§13 decision 38). At the broker's bind and on `refresh` likewise; on `refresh` every context of the principal is revoked. The process log names both claimants |
+| `identity_unmapped` | at the broker's bind, and on `mint`, `identity`, `explain` and `revoke`: an OIDC token that verified but whose principal claim is absent, not one string, not printable ASCII with an `@`, outside the verifier's `principal_domains`, or an `email` without `email_verified: true`, or a machine token with neither `azp` nor `client_id` (§13 decision 39); or the client certificate maps to no directory entry under `broker.directory.certificate_mapping`; or the value the mapping reads is not in the certificate (no SID extension; zero or several UPN or email SANs); or a weak mapping's issuer is not one its `issuers:` pins (design §7); or a certificate the workload anchor verified names no workload: zero or several URI SANs, a URI that is not a SPIFFE ID with a path, a trust domain outside `broker.identity.machines[].spiffe_trust_domains`, or a leaf that is a CA (§13 decision 40), answered 401 at bind over HTTP, never as a TLS alert; or the entry's `principal_attribute` or `username_attribute` is absent, has several values, is not printable ASCII, gives a principal with no `@`, or a username that is not already canonical or is reserved (§2); or the principal it gives is pinned to another entry, by `objectGUID` or `entryUUID` (else DN), for as long as that principal's membership record lives or until an operator runs `port49 directory forget` (§13 decision 38). The API answers 401 and the connection is closed. On `refresh`: the principal's entry is gone or no longer usable, and every context of it is revoked |
 | `identity_ambiguous` | as `identity_unmapped`, when the certificate maps to two or more entries, or the server refuses the search for its size limit; or when a second entry holds the same `broker.directory.principal_attribute` value as the mapped entry, so two people would share one principal (§13 decision 38); or when a uniqueness search (the username's, the principal's) does not return the entry itself, so the server's matching rule cannot prove the value is one entry's alone. Never resolved to the first entry (design §7). MUST be alertable on its own: two people matching one certificate is an impersonation path. On `refresh`: every context of the principal is revoked |
 | `directory_unavailable` | at the broker's bind, and on `mint`, `identity`, `explain` and `revoke`: no directory server answered within `broker.directory.query_timeout`, and the membership the store holds for the principal or the certificate was verified longer ago than `broker.directory.grace`, or there is none, or it records the directory's refusal (grace never overrules one) (§13 decision 38). Nothing is minted. The API answers 503 with `Retry-After`, to be retried, and no agent session is ended. Never on a scheduled or policy refresh: a principal the directory does not answer for keeps its contexts unstamped, and `context_stale` takes over at the ceiling. On a session refresh (`/v1/refresh`), as on `mint`: nothing is extended |
 | `composition_refused` | `mint`: the principal matches more than one subject, and their grants together compose on this device to a session reply a joint check refuses (§10): a level above the grants' ceiling, a reply over 255 bytes, an attribute the platform does not accept, or a blob the daemon would refuse. Refused for this principal on this device alone, never a quarantine. On `refresh`: the live context is revoked the same way. The process log names the subjects and the check |
-| `trust_domain_unresolved` | `mint`: no configured verifier accepted the credential (design document §7); or the revocation status of the certificate or one above it could not be established (a stale CRL, an OCSP responder that did not answer, an issuer no configured source covers) and `broker.certificate_status.on_unavailable` is `refuse` (§5.1.4). The API then answers 503 `certificate_status_unavailable`, to be retried, never a final 401. On `mint`, `refresh`, `identity`, `explain` and `revoke` also: an OIDC token none of `broker.identity`'s verifiers accepts, or that two accept (a bad signature, an algorithm the verifier does not pin, an `iss`, `aud` or `azp` that does not match, an expired or not-yet-valid token, one issued longer ago than `max_token_age`, a human token without `auth_time`, a machine token from a client the verifier does not list, with another `sub` than the client's, or carrying a person's session claim or an `idtyp` other than `app`) (§13 decision 39); the API answers a final 401, never `certificate_status_unavailable`. When the issuer's keys cannot be had (none fetched, none refreshed within `jwks_max_age`, or a token's `kid` not in the kept set and the refetch failing) the API answers 503 `identity_provider_unavailable`, to be retried, never a final 401. On `refresh`: the refresh challenge was not answered by the connection's key, or the certificate's status could not be established as on `mint` (503); also an OIDC refresh whose token's `nonce` is not the caller's unspent challenge (401 `refresh_challenge_missing`), or whose `auth_time` is before it (401 `refresh_not_fresh`) |
+| `trust_domain_unresolved` | `mint`: no configured verifier accepted the credential (design document §7); or the certificate's verified chains end at both the human and the workload trust anchor, or, on a broker with no human x509 verifier, do not end at the workload anchor (§13 decision 40 ruling 2); or the revocation status of the certificate or one above it could not be established (a stale CRL, an OCSP responder that did not answer, an issuer no configured source covers) and `broker.certificate_status.on_unavailable` is `refuse` (§5.1.4). The API then answers 503 `certificate_status_unavailable`, to be retried, never a final 401. On `mint`, `refresh`, `identity`, `explain` and `revoke` also: an OIDC token none of `broker.identity`'s verifiers accepts, or that two accept (a bad signature, an algorithm the verifier does not pin, an `iss`, `aud` or `azp` that does not match, an expired or not-yet-valid token, one issued longer ago than `max_token_age`, a human token without `auth_time`, a machine token from a client the verifier does not list, with another `sub` than the client's, or carrying a person's session claim or an `idtyp` other than `app`) (§13 decision 39); the API answers a final 401, never `certificate_status_unavailable`. When the issuer's keys cannot be had (none fetched, none refreshed within `jwks_max_age`, or a token's `kid` not in the kept set and the refetch failing) the API answers 503 `identity_provider_unavailable`, to be retried, never a final 401. On `refresh`: the refresh challenge was not answered by the connection's key, or the certificate's status could not be established as on `mint` (503); also an OIDC refresh whose token's `nonce` is not the caller's unspent challenge (401 `refresh_challenge_missing`), or whose `auth_time` is before it (401 `refresh_not_fresh`) |
 | `candidate_cap_reached` | `mint`: `token.candidate_cap` unspent tokens already stand for this `(device, username)`; the mint is refused, never a redemption, and every token already issued stays usable (design document §8) |
 | `context_matched` | `authorize_session`: context found, attributes returned |
 | `escalation_granted` | `escalate`: the level was within `max_privilege` and the mechanism succeeded |
@@ -6339,8 +6362,11 @@ exactly the client-credentials case. A credential no verifier accepts is refused
 its own reason. Policy identity strings carry the domain in their form so CI can classify at
 load. There is no password path for service accounts: an LDAP-authenticated account moves to a
 workload certificate, a cluster token, or one OIDC application per service, and its directory
-entry may still supply groups through the certificate-to-directory mapping. (§2, design
-document §7)
+entry may still supply groups through the certificate-to-directory mapping. *Amended by decision
+40 ruling 5:* a workload's directory groups, when built, come only through a machine-scoped group
+subject, never a `group:` subject, which is a human subject (design document §7: a workload MUST
+NOT inherit a human principal's grants), and through a mapping keyed on the workload's SPIFFE ID.
+Plan 8 builds none; plan 8b owns it, with its own lab row (L50). (§2, design document §7)
 
 **17. Session refresh is a fresh authentication event, and the certificate-path session is a
 held connection.** The ceiling `auth_time + max_session_age` is only a compliance clock if
@@ -7487,8 +7513,7 @@ that leaves no mark.** *Plan 7h, 2026-10-06.* Rulings rest on reasoning unless t
 - **1. The lists.** `broker.identity.humans` and `.machines`. `x509` under `humans` (its
   `trust_anchor_file`, at most one) and `oidc` under either (`issuer` with `client_id`,
   `principal_claim` and `principal_domains` for humans; `audience` and `clients` for machines).
-  `x509` under `machines` and `k8s` are refused, plans 8 and
-  10. No `broker.identity` is `humans: [x509 from broker.client_ca_file]`; with it,
+  `x509` under `machines` is plan 8's (decision 40); `k8s` is refused, plan 10. No `broker.identity` is `humans: [x509 from broker.client_ca_file]`; with it,
   `client_ca_file` is refused. An OIDC-only broker requests no client certificate and takes no
   `certificate_status`. Task 7.
 - **2. One verifier per token.** A token goes to every verifier whose issuer equals its `iss`;
@@ -7622,6 +7647,82 @@ that leaves no mark.** *Plan 7h, 2026-10-06.* Rulings rest on reasoning unless t
 challenge: `clock_skew` 60s, `max_token_age` 2h, `jwks_refresh_interval` 1h, `jwks_max_age` 24h,
 5m. **OR-3:** hosted providers are L47, open until measured on an Entra ID and an Okta tenant
 (ruling 20); until then the operator notes say measured on Keycloak only.
+
+**40. Workload certificates: one more anchor, the chain's end decides the domain, a SPIFFE ID or
+no principal, no directory until plan 8b, and a renewal port49 does not need.** *Plan 8,
+2026-10-07.* Rulings rest on reasoning unless they say data. Rulings 5 and 7, and mint by `scope`,
+were the plan's open questions; the controller ruled each on recommendation at pre-flight, and
+Ryan may override any.
+
+- **1. The verifier.** `x509` under `broker.identity.machines`: `trust_anchor_file` (one
+  certificate) and `spiffe_trust_domains` (required), nothing else; at most one. Task 3.
+- **2. Exactly one anchor accepts.** The handshake verifies against one pool of both anchors; the
+  domain is the anchor every verified chain ends at; chains ending at both are
+  `trust_domain_unresolved`. Two anchor files holding one certificate, or one anchor signing the
+  other directly, refuse the start; an anchor further down the other's hierarchy is refused only
+  at a request whose chain shows it, so the two belong in unrelated hierarchies. On a broker with
+  no human x509 verifier, a chain not ending at the workload anchor is `trust_domain_unresolved`.
+  Tasks 4, 5 and 8.
+- **3. The principal** (data: X.509-SVID §4.1, §5.1). The leaf's one URI SAN, verbatim, a SPIFFE
+  ID with a path in a listed trust domain; the leaf not a CA; email SANs never read; else
+  `identity_unmapped`, 401 at bind, never a TLS alert. Tasks 4 and 6.
+- **4. The SPIFFE ID** (data: SPIFFE ID §2.1–§2.3). `spiffe://`, a trust domain of `a-z 0-9 . - _`,
+  path segments of `A-Z a-z 0-9 . - _` (none empty, `.` or `..`), no trailing `/`, at most 2048
+  bytes; upper case is refused, never folded. One parser for the policy, the verifier and a
+  revocation. Task 2.
+- **5. No directory for a workload in plan 8; its directory groups are plan 8b's, constrained.**
+  Plan 8 builds no directory path for a workload: never `Resolver.Map`, `Verify` or `Current`;
+  never a `group:` subject; the username declared. That is the default, and stays the default once
+  plan 8b is built. Decision 16's mapping is deferred, not withdrawn: plan 8b builds it opt-in per
+  verifier, keyed on the SPIFFE ID (no existing mapping kind survives a renewal or applies off AD
+  CS), reaching only a machine-scoped group subject, never a human `group:` subject (design §7),
+  with its own lab row, L50. Decisions 8 and 16 conflict only in the letter; §5.1.3 and decision 38
+  ruling 13 record 7g's as-built for the machine principals of the time. *The controller's ruling
+  on recommendation (plan 8's pre-flight Q1), deferring rather than cutting under the
+  follow-the-spec rule; Ryan may cancel plan 8b.* Tasks 1 and 5.
+- **6. The declared username stands.** A directory-derived username a subject declares is
+  `username_collision` for the directory's claimant, whichever came first. The authority is
+  decision 38 ruling 3 (plan 7g, a95b9fc), which superseded §2's "later claimant" sentence; §2 is
+  corrected to it, an editorial correction. Declaring a username a directory user holds locks that
+  user out at the next refresh, and `username_collision` names both. Tasks 1 and 5.
+- **7. One certificate status for both anchors, with no per-verifier opt-out.** Required with any
+  x509 verifier; a CRL's issuer is an anchor or a CA one signed; an anchor no CRL covers is said at
+  start, never a refused start (crossed anchors, ruling 2, are identity ambiguity, a security
+  fault; an uncovered anchor is an availability one, and a refused start takes device AAA down for
+  everyone). Decision 33 gives no opt-out, and one would weaken status checking: *the controller's
+  ruling on recommendation (plan 8's pre-flight Q2)*, revisited only if L48, its CRL fetch trusted,
+  measures step-ca's CRL unusable with port49. A 503 for an issuer no source covers is final at
+  `port49 workload`. Tasks 3, 8 and 9.
+- **8. The CA enrolls and renews; port49 relies.** A renewal gives the same principal; a mark by
+  certificate does not follow it, and `port49 revoke` says so for the workload anchor's issuer and
+  any issuer seen on a verified workload chain. Task 7; L48.
+- **9. A late renewal is said, never enforced.** Under a quarter of the validity left: one line per
+  certificate per 24h and `port49_workload_certificates_renewal_late_total` at each broker replica;
+  a warning from `port49 workload`. Tasks 5 and 9.
+- **10. The agentless client.** `port49 workload token` and `identity`: the files read each run, a
+  mismatched pair read again up to three times; one request per `batch_max` page under its own
+  `Idempotency-Key`, retried under it on 503 (but an uncovered status), 409
+  `idempotency_in_progress`, 429 and a failed connection, within `--deadline` (2m); tokens to
+  stdout or `--out` (0600, renamed into place); exit 0 (all written), 1 (some written, some not),
+  2 (usage), 75 (temporary; the pages minted are written) or 77 (nothing minted, final). Tasks 9
+  and 10.
+- **11. A workload's device sessions follow §5.6.** Two principals of one subject on one device
+  replace each other's context, logged; the verdicts are the subject's. Tasks 5 and 11.
+- **12. `/v1/config`'s `methods`** names a person's: `x509` only with a human anchor. Task 5.
+- **13. The lab.** L48 (step-ca) and L49 (Oxidized on five images); `examples/oxidized` is
+  provisional on L49. L50 opens for plan 8b. Tasks 12 to 14.
+- **14. What is logged.** A SPIFFE ID, through `printsafe.Line`; never a token; never an unverified
+  chain's URI; no SPIFFE ID or device in a metric label. Tasks 5, 6, 9, 10 and 12.
+- **15. Revocation and explain take `spiffe://`.** `normalPrincipal` accepts a SPIFFE ID verbatim;
+  `system:serviceaccount:` stays plan 10's. Task 7.
+- **16. A `spiffe://` identity no verifier can give mints for no one, and the start says so.** Task
+  8.
+
+*Ruled by the controller on recommendation (plan 8's pre-flight, 2026-10-07; Ryan may override
+any).* **Q1:** a workload certificate's directory groups are deferred to plan 8b, constrained to
+machine-scoped group subjects, not withdrawn (ruling 5). **Q2:** no per-verifier certificate-status
+opt-out (ruling 7). **Q3:** mint by `scope` (design §17) is plan 9's, which writes its spec text
+first.
 
 ---
 
@@ -8072,6 +8173,16 @@ Beyond those already listed in the design document's §14:
   `principal_domains` is refused, and that issuer's logout reaches none of the person's contexts;
   every subject carrying `api:` appears
   in the CI report.
+- **Workload certificates** (§13 decision 40): a certificate under the workload anchor mints as its
+  one SPIFFE ID, never as a person, and with every directory server down; one whose chains end at
+  both anchors is refused `trust_domain_unresolved`; one with zero or two URI SANs, an upper-case
+  or path-less ID, or an unlisted trust domain is refused `identity_unmapped` at bind over HTTP; a
+  renewed certificate mints as the same principal; a revocation by principal refuses every
+  certificate of the workload, and one by certificate is said not to follow a renewal; a
+  `spiffe://` principal and an `app:` principal of one subject mint one username; a directory
+  username a subject declares is refused `username_collision` and the declared one mints; a
+  scope's `attached_roles.machines` compose into a workload's grant and `attached_roles.humans` do
+  not.
 - **Staleness ceiling**: with the broker unreachable, a context authorizes until
   `staleness_ceiling` elapses since `refreshed_at`, then denies `context_stale` with a
   `server_msg`, and resumes on the first refresh after the broker returns.
@@ -8275,6 +8386,9 @@ implemented against a guess. This section is the one place the distinction is ke
 | **L45** | The back-channel logout token a provider sends to port49's `/v1/logout`, per way a session ends: an RP-initiated logout at the provider's end-session endpoint, an administrator signing a user out of every session, and an administrator ending one session. For each: the JWS header (`alg`, `kid`, `typ`); which of `iss`, `aud`, `azp`, `iat`, `exp`, `jti`, `sub`, `sid`, `events` it carries, and that `nonce` is absent; whether its `sid` and its `sub` equal the ID token's; one token per session or per user; the request's content type; and what the provider does when the answer is 503, or 400, or the connection is refused (retry or not, the end-session endpoint's own answer, and how it reports the failure). | `POST /v1/logout`'s validation and answers, a logout by `sid` reaching the context the ID token authorized, and a logout by `sub` finding the owner record the ID token's `sub` wrote (§5.1.4; §13 decision 39 rulings 12 and 13, provisional on this row) | Keycloak (26.x) | closed — measured 2026-10-07; tests/lab/results/L45-keycloak.md, tests/lab/results/oidc-e2e-arista_eos.md. Measured on Keycloak 26.4.7. Ruling 12 holds: `iss`, `aud`, `iat`, `exp` (`iat`+120s), `jti`, `sid`, `sub`, `events` present, `nonce` absent, `typ` `logout+jwt`, form-encoded; `events` also carries Keycloak's `revoke_offline_access: true`. An RP-initiated logout and an administrator ending one session each send one token whose `sid` and `sub` are the ID token's. An administrator signing a user out of two sessions sent one token naming one session's `sid` and the user's `sub`, so ruling 13's sid-first logout left the other session; ruled 2026-10-07 that a token carrying both `sid` and `sub` is also a logout by `sub`. The follow-up run (oidc-e2e-arista_eos.md, cells 6a–6e) measured it: the one token wrote a revoke by `sid`, then by `sub`, and both sessions' ID tokens were refused `credential_revoked`. Its burst recheck (7a–7e) had eight administrator session ends sent back to back all reach the broker, a revoke by `sid` for each within 30s. A 503, a 400 and a refused connection each got one request and no retry; the end-session endpoint answered 302 in every case |
 | **L46** | Fresh authentication on a provider: with an SSO session live, whether a plain second authorization request reuses it (no credentials asked, `auth_time` unchanged: the control); whether one with `prompt=login` makes the person enter their credentials again; whether the new ID token's `auth_time` is the new authentication's; whether it carries the request's `nonce`; whether its `sid` is the old session's or a new one; and beside it, what a refresh-token grant's ID token carries (`auth_time` unchanged, `nonce`, `sid`); and `max_age=0` against `prompt=login`. Also: the ID token's `preferred_username` for a user created with a bare username; and which of `auth_time`, `sid`, `nonce`, `scp`, `amr`, `idtyp`, `azp`, `client_id` and `sub` a client-credentials access token carries, beside a person's access token from the same realm (a delegated one). | The OIDC refresh (§5.6; §13 decision 39 ruling 15, provisional on this row); spec §5.6's "the identity provider will correctly report the *original* `auth_time`"; ruling 21's delegated-token markers and pinned `sub`; the Keycloak example in ruling 23's rationale | Keycloak (26.x) | closed — measured 2026-10-07; tests/lab/results/L46-keycloak.md. With an SSO session live a plain login reused it (no password, `auth_time` and `sid` unchanged); `prompt=login` and `max_age=0` each asked for the password, moved `auth_time` forward and echoed the request's `nonce`, keeping the `sid`; a refresh-token grant kept the last authentication's `auth_time` with no `nonce`. `preferred_username` for `alice` is `alice`. The client-credentials token carries none of `auth_time`, `sid`, `nonce`, `scp`, `amr`, `idtyp`, `client_id`; its `azp` is `port49-svc` and its `sub` the service account's fixed id |
 | **L47** | L45's and L46's claims on hosted providers, and their access tokens' `azp`, `aud` and `sub` under the client-credentials grant. For Microsoft Entra ID also: a v2 access token's `aud` (the application's GUID, or its `api://` URI); whether an ID token carries `email_verified` (if not, `principal_claim: email` refuses every Entra person); and the `idtyp` and `scp` claims an app-only and a delegated access token carry. | As L45 and L46, for hosted providers; `app:` + `azp` and the delegated-token refusal (§13 decision 39 rulings 6 and 21) | Microsoft Entra ID, Okta | open — added 2026-10-06 (plan 7h); needs a tenant each (OR-3) |
+| **L48** | A workload CA's behaviour with port49's workload verifier (plan 8). On step-ca: whether a certificate requested for a SPIFFE ID carries it as its one URI SAN, with `clientAuth`, not a CA; whether `step ca renew` keeps the ID and the key and changes the serial, and port49 mints for the renewed certificate with no change; when `step ca renew --daemon` renews, as a fraction of the lifetime; with step-ca stopped, whether port49 mints until `NotAfter` and refuses after, and when the late-renewal line comes; whether step-ca's CRL (`crl.enabled`) is DER, issued by the intermediate, and loaded by port49's `certificate_status` over https with the broker trusting step-ca's root (`SSL_CERT_FILE`), and whether a `step ca revoke` reaches port49 within `refresh_interval` and stops a renewal of the revoked certificate; whether a provisioner's x509 name policy allowing one URI refuses a request for another SPIFFE ID. | §13 decision 40 rulings 7–9 (ruling 7's revisit condition); the workload anchor's recommended placement (the intermediate); the README's advice to restrict the provisioner to the host's own ID | step-ca | open — added 2026-10-07 (plan 8) |
+| **L49** | Oxidized as the day-one consumer of minted tokens (plan 8): the commands each model (`eos`, `nxos`, `ios`, `junos`) sends at login and during a backup, as port49 receives them; whether Oxidized reads a node's username and password from its CSV source at each `/reload` and uses them at the node's next run (`/node/next/<node>`); with a token past its TTL, how many authentications one node's run costs and what Oxidized records; that no token appears in Oxidized's log at its default level; and that a backup made with a minted token holds the device's configuration, the decision log naming the workload's principal. | `examples/oxidized` (the role and the wrapper's REST calls; §13 decision 40 ruling 13) | EOS, NX-OS, IOS-XE, Junos (vJunos-router, vSRX) | open — added 2026-10-07 (plan 8) |
+| **L50** | Who can write the directory attribute a workload certificate's directory mapping reads (plan 8b; §13 decisions 16 and 40 ruling 5): on Windows AD and on Samba AD, whether an attribute holding a SPIFFE ID on a service account's entry can be written by the entry itself (`SELF`), by an account operator, or by a delegated OU administrator, under the default ACLs and under the ACL plan 8b's docs prescribe; and whether a write is in the directory's audit log. Until it closes, plan 8b's "only directory administrators can write it" is unmeasured. | §13 decision 40 ruling 5 (plan 8b's mapping kind) | Windows Server AD (L44's box), Samba AD | open — added 2026-10-07 (plan 8, for plan 8b) |
 
 **What has been measured so far, per row.** The measurements exist and the notes are in the
 repository. NX-OS was measured on 2026-09-20 and is no longer outstanding; **IOS-XE was

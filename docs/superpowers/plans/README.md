@@ -4621,6 +4621,37 @@ Design §7 "Machine identity" option 2: enrollment, self-renewal, multi-identity
 `username` declared on machine subjects, cross-domain username collision at mint. Unattended
 config backup (Oxidized) as the day-one consumer.
 
+## Plan 8b — Workload directory groups (design §7; spec §13 decisions 16 and 40 ruling 5)
+
+Deferred from plan 8 by the controller's ruling on its pre-flight Q1 (2026-10-07), on
+recommendation: deferred, not cut. Ryan may cancel it. Plan 8 builds no directory path for a
+workload, and that stays the default when this is built: a workload with no mapping mints with
+every DC down.
+
+- **The constraint.** A machine principal matches only a machine-scoped group subject, never a
+  human `group:` subject. Today's `group:` subject carries `attached_roles.humans` and human
+  `api:` rights (`buildSubjects` sets `Domain = "humans"`), which design §7 forbids a workload.
+  One subject of both domains is a load error. Decision 38 ruling 15's diff gate and the CI report
+  cover the machine form as they cover `group:`.
+- **The mapping.** Opt-in per verifier (a `directory:` key on the `x509` machine verifier), a new
+  mapping kind keyed on the SPIFFE ID: exactly one entry whose attribute equals it. No existing
+  kind serves: `issuer_serial` changes at every renewal, `sid` is AD CS's extension, and the weak
+  kinds need `allow_weak` and an `issuers:` pin. It is a weak kind under decision 38 ruling 1,
+  pinned to the workload anchor, the entry pinned by `objectGUID` or `entryUUID`.
+- **The username.** From the entry's `username_attribute`, under decision 38 ruling 3's collision
+  rules (amending decision 8), or declared on the machine group subject. Spec text first.
+- **Plumbing.** The `IsUser` gates (`memberFor`, `storedMemberOf`, the scheduled refresh,
+  `refresh.go`) become per domain; `forget`, pre-warm and `normalPrincipal` for `forget` widen
+  past `user:`; the membership record is keyed by the SPIFFE ID.
+- **Lab.** Its own row, L50 (opened by plan 8): who can write the attribute on Windows AD (L44's
+  box) and on Samba, since "only directory administrators can write it" is a directory-behaviour
+  claim.
+- **3am, with the mapping configured.** A DC outage past `broker.directory.grace` stops the
+  workload's mints (`directory_unavailable`, `port49 workload` exit 75), and its live device
+  sessions deny `context_stale` at `session.staleness_ceiling`. The start line and the operator
+  notes say so.
+- **Cost.** About 6 to 8 tasks and the lab row.
+
 ## Plan 9 — Agent in full (§19 step 9)
 
 `port49 ssh` with host-key verification and `port49 devices trust`, the OIDC public client,
