@@ -16,9 +16,12 @@ import (
 	"github.com/rhwendt/port49/internal/daemon/metrics"
 )
 
+// poolCfg pins the bind mechanism to simple, whose refusals hold the whole
+// pool off (AD's shared lockout); the external tests set their own.
 func poolCfg(site string, servers ...Server) Config {
 	return Config{Servers: servers, Site: site, QueryTimeout: time.Second, HealthInterval: 30 * time.Second,
-		HealthTimeout: 2 * time.Second, FailureThreshold: 3, ProbeInterval: time.Minute, StabilityWindow: 5 * time.Minute}
+		HealthTimeout: 2 * time.Second, FailureThreshold: 3, ProbeInterval: time.Minute, StabilityWindow: 5 * time.Minute,
+		Bind: Bind{Mechanism: "simple"}}
 }
 
 type lines struct {
@@ -901,5 +904,178 @@ func TestAnUnknownDialErrorIsAFaultNotARefusal(t *testing.T) {
 	if !Refusal(fmt.Errorf("x: %w", ErrBindRefused)) || !Refusal(ldap.NewError(ldap.LDAPResultStrongAuthRequired, errors.New("x"))) ||
 		Refusal(errors.New("x")) || Refusal(ldap.NewError(ldap.ErrorNetwork, errors.New("x"))) {
 		t.Fatal("Refusal misclassifies")
+	}
+}
+
+func externalCfg(servers ...Server) Config {
+	cfg := poolCfg("us-west", servers...)
+	cfg.Bind.Mechanism = "external"
+	return cfg
+}
+
+var errInvalid = ldap.NewError(ldap.LDAPResultInvalidCredentials, errors.New("invalid credentials"))
+
+// Under external a refusal is the certificate's at that DC (unmapped, or its
+// KDC down), not the shared service account's: the query fails over to the
+// next DC at once, the pool is not held off, and the refuser waits out its
+// own backoff alone (L44 OR-1).
+func TestExternalOneRefusingDCFailsOverAtOnce(t *testing.T) {
+	f := newFakeServers(west1.URI, west2.URI)
+	f.setRefuse(west1.URI, errInvalid)
+	clk := newClock()
+	say := &lines{}
+	m := metrics.New(prometheus.NewRegistry())
+	p := NewPool(externalCfg(west1, west2), f.dial, noCheck, clk.Now, m, say.say)
+	if srv, err := p.Do(context.Background(), searchFor("(x)")); err != nil || srv != west2 {
+		t.Fatalf("first query: %v %v, want dc-02", srv, err)
+	}
+	if p.holdoffSeconds() != 0 || testutil.ToFloat64(m.DirectoryBindHoldoff) != 0 {
+		t.Fatal("one refusing DC started the pool hold-off under external")
+	}
+	for i := 0; i < 5; i++ {
+		clk.Add(10 * time.Second)
+		if srv, err := p.Do(context.Background(), searchFor("(x)")); err != nil || srv != west2 {
+			t.Fatalf("query %d: %v %v", i, srv, err)
+		}
+	}
+	if f.dials[west1.URI] != 1 {
+		t.Fatalf("dc-01 dialled %d times inside its own backoff", f.dials[west1.URI])
+	}
+	clk.Add(11 * time.Second) // past 1m
+	p.Check(context.Background())
+	if f.dials[west1.URI] != 2 {
+		t.Fatalf("dc-01 dialled %d times after its backoff, want 2", f.dials[west1.URI])
+	}
+	if !say.has("refused the bind (external)") ||
+		!say.has("a certificate that is not mapped, or that DC's KDC not answering (check its Kerberos service before the broker's certificate)") ||
+		!say.has("failed over") || !say.has("its own backoff") {
+		t.Fatalf("the refusal line lacks the AD hint or the fail-over note: %v", say.l)
+	}
+	if say.has("no server is bound for") {
+		t.Fatalf("a hold-off line under external: %v", say.l)
+	}
+}
+
+// Every DC refusing under external is today's behaviour: the pool hold-off
+// starts and the lockout bound is N+4 failed binds in 30 minutes.
+func TestExternalEveryDCRefusingBindsAtMostNPlusFour(t *testing.T) {
+	servers := dcs(5)
+	f := newFakeServers()
+	for _, s := range servers {
+		f.dirs[s.URI] = newFakeDir()
+		f.setRefuse(s.URI, errInvalid)
+	}
+	clk := newClock()
+	say := &lines{}
+	m := metrics.New(prometheus.NewRegistry())
+	p := NewPool(externalCfg(servers...), f.dial, noCheck, clk.Now, m, say.say)
+	sawHold := false
+	for at := time.Duration(0); at < 30*time.Minute; at += 6 * time.Second {
+		if _, err := p.Do(context.Background(), searchFor("(x)")); !errors.Is(err, ErrUnavailable) {
+			t.Fatalf("at %v: %v", at, err)
+		}
+		if (at/(6*time.Second))%5 == 4 {
+			p.Check(context.Background())
+		}
+		if testutil.ToFloat64(m.DirectoryBindHoldoff) > 0 {
+			sawHold = true
+		}
+		clk.Add(6 * time.Second)
+	}
+	if !sawHold || !say.has("no server is bound for") {
+		t.Fatalf("the pool hold-off never started: %v", say.l)
+	}
+	if n := binds(f); n > 9 {
+		t.Fatalf("%d bind attempts in 30 minutes across 5 servers, want at most 9 (N+4)", n)
+	}
+}
+
+// The hold-off starts at the refusal that leaves no server bindable.
+func TestExternalTheSecondRefusalStartsTheHoldoff(t *testing.T) {
+	f := newFakeServers(west1.URI, west2.URI)
+	f.setRefuse(west1.URI, errInvalid)
+	clk := newClock()
+	m := metrics.New(prometheus.NewRegistry())
+	p := NewPool(externalCfg(west1, west2), f.dial, noCheck, clk.Now, m, (&lines{}).say)
+	// A query that finds dc-02 down as well refuses on dc-01 first.
+	f.setRefuse(west2.URI, errInvalid)
+	if _, err := p.Do(context.Background(), searchFor("(x)")); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("%v", err)
+	}
+	if p.holdoffSeconds() <= 0 {
+		t.Fatal("every DC refused and the pool is not held off")
+	}
+}
+
+func TestExternalFirstRefusalThenSecondLaterStartsTheHoldoff(t *testing.T) {
+	f := newFakeServers(west1.URI, west2.URI)
+	f.setRefuse(west1.URI, errInvalid)
+	clk := newClock()
+	p := NewPool(externalCfg(west1, west2), f.dial, noCheck, clk.Now, metrics.New(prometheus.NewRegistry()), (&lines{}).say)
+	if srv, err := p.Do(context.Background(), searchFor("(x)")); err != nil || srv != west2 {
+		t.Fatalf("%v %v", srv, err)
+	}
+	if p.holdoffSeconds() != 0 {
+		t.Fatal("hold-off after one refusal")
+	}
+	// dc-02 loses its connection and now refuses too, inside dc-01's backoff.
+	p.mu.Lock()
+	_ = p.srv[1].conn.Close()
+	p.srv[1].conn = nil
+	p.srv[1].gen++
+	p.mu.Unlock()
+	f.setRefuse(west2.URI, errInvalid)
+	clk.Add(10 * time.Second)
+	if _, err := p.Do(context.Background(), searchFor("(x)")); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("%v", err)
+	}
+	if p.holdoffSeconds() <= 0 {
+		t.Fatal("the second refusal, with dc-01 still in its backoff, did not start the hold-off")
+	}
+}
+
+// AD takes EXTERNAL only over StartTLS: a 7 over ldaps:// says so and names
+// the key; the same 7 over ldap:// with start_tls does not.
+func TestExternalAuthMethodNotSupportedOverLdapsNamesStartTLS(t *testing.T) {
+	notSupported := ldap.NewError(ldap.LDAPResultAuthMethodNotSupported, errors.New("auth method not supported"))
+	run := func(s Server) *lines {
+		f := newFakeServers(s.URI)
+		f.setRefuse(s.URI, notSupported)
+		say := &lines{}
+		p := NewPool(externalCfg(s), f.dial, noCheck, newClock().Now, metrics.New(prometheus.NewRegistry()), say.say)
+		_, _ = p.Do(context.Background(), searchFor("(x)"))
+		return say
+	}
+	const hint = "Active Directory takes SASL EXTERNAL only over StartTLS ([MS-ADTS] 5.1.1.2): use ldap:// with start_tls: true"
+	if say := run(west1); !say.has(hint) {
+		t.Fatalf("no StartTLS hint over ldaps: %v", say.l)
+	}
+	if say := run(Server{URI: "ldap://dc-01", Priority: 100, Site: "us-west", StartTLS: true}); say.has("StartTLS") ||
+		!say.has("refused the bind (external)") {
+		t.Fatalf("ldap+StartTLS 7: %v", say.l)
+	}
+}
+
+// The AD hint belongs to external's 49 alone.
+func TestTheExternalHintIsNotSaidForOtherMechanisms(t *testing.T) {
+	f := newFakeServers(west1.URI)
+	f.setRefuse(west1.URI, errInvalid)
+	say := &lines{}
+	p := NewPool(poolCfg("us-west", west1), f.dial, noCheck, newClock().Now, metrics.New(prometheus.NewRegistry()), say.say)
+	_, _ = p.Do(context.Background(), searchFor("(x)"))
+	if say.has("Kerberos service") || say.has("failed over") {
+		t.Fatalf("external hint under simple: %v", say.l)
+	}
+}
+
+// Under simple one refusing DC still holds the whole pool off (the lockout
+// is shared); see also TestABindRefusalReachesUnavailableAndBindsNoOtherServer.
+func TestSimpleOneRefusingDCStillHoldsTheWholePoolOff(t *testing.T) {
+	f := newFakeServers(west1.URI, west2.URI)
+	f.setRefuse(west1.URI, errInvalid)
+	p := NewPool(poolCfg("us-west", west1, west2), f.dial, noCheck, newClock().Now, metrics.New(prometheus.NewRegistry()), (&lines{}).say)
+	_, _ = p.Do(context.Background(), searchFor("(x)"))
+	if p.holdoffSeconds() <= 0 || f.dials[west2.URI] != 0 {
+		t.Fatalf("simple: hold-off %v, dc-02 dialled %d", p.holdoffSeconds(), f.dials[west2.URI])
 	}
 }
