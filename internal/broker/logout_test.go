@@ -32,14 +32,27 @@ func lshown(w *httptest.ResponseRecorder) string {
 }
 
 // logoutFor is a Keycloak-shaped logout token for alice from iss at f's
-// now: sub sub-alice, and sid when not "".
+// now: by sid alone when sid is not "", else by sub-alice.
 func logoutFor(t *testing.T, f *fixture, iss *oidctest.Issuer, sid, jti string) string {
+	t.Helper()
+	if sid != "" {
+		return logoutNaming(t, f, iss, sid, "", jti)
+	}
+	return logoutNaming(t, f, iss, "", "sub-alice", jti)
+}
+
+// logoutNaming is a logout token from iss at f's now carrying sid and sub,
+// each only when not "".
+func logoutNaming(t *testing.T, f *fixture, iss *oidctest.Issuer, sid, sub, jti string) string {
 	t.Helper()
 	now := f.b.Now()
 	c := map[string]any{"iss": iss.URL, "aud": testClientID, "iat": now.Unix(), "exp": now.Add(2 * time.Minute).Unix(),
-		"jti": jti, "sub": "sub-alice", "events": map[string]any{oidc.BackchannelLogoutEvent: map[string]any{}}}
+		"jti": jti, "events": map[string]any{oidc.BackchannelLogoutEvent: map[string]any{}}}
 	if sid != "" {
 		c["sid"] = sid
+	}
+	if sub != "" {
+		c["sub"] = sub
 	}
 	return iss.TokenWith(t, "k1", map[string]any{"kid": "k1", "typ": "logout+jwt"}, c)
 }
@@ -541,5 +554,122 @@ func TestTheAdvisedLiftTimeIsTheLogoutRecordsLife(t *testing.T) {
 	}
 	if want := now.Add(st.ttl).UTC().Format(time.RFC3339); !strings.Contains(said.String(), "only after "+want) {
 		t.Fatalf("the lift time is not now plus the record's life (%s):\n%s", want, said.String())
+	}
+}
+
+// twoSessions is oidcLoggedIn with a second session of alice's: a context
+// on nx1 indexed under another sid, and an unspent token on leaf1.
+func twoSessions(t *testing.T) (*fixture, *oidctest.Issuer) {
+	t.Helper()
+	f, iss, _ := oidcLoggedIn(t)
+	ctx := context.Background()
+	now := f.b.Now()
+	f.liveContextAt(t, "nx1", "alice", alicePrincipal, "", now, now.Add(12*time.Hour))
+	if err := f.st.IndexContext(ctx, alicePrincipal, store.SidKey(iss.URL, "s-other"), "",
+		store.ContextRef{NAS: "nx1", Username: "alice"}, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	return f, iss
+}
+
+// Ruling 13: a token carrying both sid and sub is a logout by the sid and
+// then one by the sub, so Keycloak's "sign out user" over several sessions
+// ends them all, not the one session its token names.
+func TestALogoutCarryingSidAndSubEndsEverySessionOfTheSub(t *testing.T) {
+	f, iss := twoSessions(t)
+	ctx := context.Background()
+	if w := f.postLogout(logoutNaming(t, f, iss, "s-sub-alice", "sub-alice", "j-both")); w.Code != 200 {
+		t.Fatalf("%s", lshown(w))
+	}
+	for _, d := range []string{"leaf1", "nx1"} {
+		if contextRevokedAt(t, f, d).IsZero() {
+			t.Fatalf("%s's context survived a logout naming the sub", d)
+		}
+	}
+	if toks, _ := f.st.Candidates(ctx, store.TokenKey{NAS: "nx1", Username: "alice"}); len(toks) != 0 {
+		t.Fatal("the person's unspent token survived")
+	}
+	revs := eventsOf(f.records(t), decision.EventRevoke)
+	if len(revs) != 2 {
+		t.Fatalf("%d revoke records, want 2", len(revs))
+	}
+	first, second := revs[0]["revocation"].(map[string]any), revs[1]["revocation"].(map[string]any)
+	if first["by"] != "sid" || first["sid"] != "s-sub-alice" || second["by"] != "sub" || second["sub"] != "sub-alice" {
+		t.Fatalf("revoke records %v, %v", first, second)
+	}
+}
+
+// The API stays narrow: RevokeSid, a sid alone, ends the one session.
+func TestRevokeSidEndsOnlyTheNamedSession(t *testing.T) {
+	f, iss := twoSessions(t)
+	if _, err := f.b.RevokeSid(context.Background(), iss.URL, "s-sub-alice", "api"); err != nil {
+		t.Fatal(err)
+	}
+	if contextRevokedAt(t, f, "leaf1").IsZero() {
+		t.Fatal("the named session's context was not marked")
+	}
+	if !contextRevokedAt(t, f, "nx1").IsZero() {
+		t.Fatal("RevokeSid ended another session")
+	}
+}
+
+// The merged report of a both-token names both, and unions the halves.
+func TestABothLogoutsReportIsTheUnionOfItsHalves(t *testing.T) {
+	f, iss := twoSessions(t)
+	rep, err := f.b.Logout(context.Background(), oidc.LogoutToken{Issuer: iss.URL, Sid: "s-sub-alice",
+		Subject: "sub-alice", IssuedAt: f.b.Now(), Domains: f.b.Identity.HumanDomains(iss.URL)}, "x")
+	if err != nil || rep.Err != nil {
+		t.Fatalf("%v, %v", err, rep.Err)
+	}
+	if rep.By != ByLogoutSid || rep.Sid != "s-sub-alice" || rep.Sub != "sub-alice" ||
+		fmt.Sprint(rep.Principals) != "["+alicePrincipal+"]" || len(rep.Contexts) != 2 {
+		t.Fatalf("report %+v", rep)
+	}
+}
+
+// The sub half's record failing after the sid half ran is partial: 503, the
+// jti given back, and the by-hand line the wide sub form with no sid-only API
+// call (which would end one session).
+func TestABothLogoutWhoseSubRecordFailsIsPartial(t *testing.T) {
+	f, iss := twoSessions(t)
+	var said strings.Builder
+	f.b.Say = func(format string, args ...any) { said.WriteString(fmt.Sprintf(format, args...) + "\n") }
+	f.b.AdminSocket = "/run/port49/admin.sock"
+	calls := 0
+	f.b.Store = hookStore{Store: f.st, before: map[string]func() error{
+		"PutLogout": func() error {
+			if calls++; calls == 2 {
+				return store.ErrUnavailable
+			}
+			return nil
+		},
+		"TakeOnce": func() error { return store.ErrUnavailable }}}
+	if w := f.postLogout(logoutNaming(t, f, iss, "s-sub-alice", "sub-alice", "j-half")); w.Code != 503 {
+		t.Fatalf("%s", lshown(w))
+	}
+	out := said.String()
+	if strings.Contains(out, `{"sid":`) || !strings.Contains(out, "sid s-sub-alice and sub sub-alice") ||
+		!strings.Contains(out, "could not be given back") || !strings.Contains(out, "port49 revoke --principal") {
+		t.Fatalf("the recovery said:\n%s", out)
+	}
+}
+
+func TestLogoutByHandAlternatives(t *testing.T) {
+	f, iss, _ := oidcLoggedIn(t)
+	cases := []struct {
+		name      string
+		lt        oidc.LogoutToken
+		sidAPI    bool
+		leadsWith string
+	}{
+		{"sid", oidc.LogoutToken{Issuer: iss.URL, Sid: "s1"}, true, ""},
+		{"sub", oidc.LogoutToken{Issuer: iss.URL, Subject: "u1"}, false, "for each principal the decision log's mint records name for this sub"},
+		{"both", oidc.LogoutToken{Issuer: iss.URL, Sid: "s1", Subject: "u1"}, false, "for each principal the decision log's mint records name for this sub"},
+	}
+	for _, c := range cases {
+		out := f.b.logoutByHand(c.lt, RevokeReport{}, false)
+		if strings.Contains(out, `POST /v1/tokens/revoke {"sid"`) != c.sidAPI || !strings.Contains(out, c.leadsWith) {
+			t.Errorf("%s: %s", c.name, out)
+		}
 	}
 }

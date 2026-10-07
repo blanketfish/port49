@@ -117,7 +117,10 @@ func (b *Broker) logout(w http.ResponseWriter, r *http.Request) {
 			// The provider's retry will be answered 200 "replayed" and do
 			// nothing (pre-flight M-13): say how to end it by hand.
 			what, byHand := "sub "+printsafe.Line(lt.Subject, 80), b.logoutByHand(lt, rep, err == nil)
-			if lt.Sid != "" {
+			switch {
+			case lt.Sid != "" && lt.Subject != "":
+				what = "sid " + printsafe.Line(lt.Sid, 80) + " and " + what
+			case lt.Sid != "":
 				what = "sid " + printsafe.Line(lt.Sid, 80)
 			}
 			b.say("logout: the logout of %s from %s could not be given back for a retry (%s): the provider's retry "+
@@ -145,7 +148,9 @@ func (b *Broker) logoutRecordTTL() time.Duration {
 
 // logoutByHand is how an operator ends what a logout that could not be
 // applied would have, never a bare port49 revoke (a logout is not a ban).
-// For a sid it leads with the API call that runs the whole logout again.
+// For a sid alone it leads with the API call that runs the whole logout
+// again; a token naming the sub as well gets the sub's form only, the API
+// call ending one session (Ruling 13).
 // applied is whether Logout got as far as writing its record: when it did
 // (a later step failed), logoutRecovery's form holds, its revoke record
 // being in the log; when it did not, nothing was written, so the form is
@@ -154,7 +159,8 @@ func (b *Broker) logoutByHand(lt oidc.LogoutToken, rep RevokeReport, applied boo
 	who := []string{"<principal>"}
 	lead := "for each principal the decision log's mint records name for this sub, and with its name for " +
 		"<principal> below, "
-	if lt.Sid != "" {
+	sidOnly := lt.Sid != "" && lt.Subject == ""
+	if sidOnly {
 		lead = "for each principal the decision log's mint records name for this sid, and with its name for " +
 			"<principal> below, "
 	}
@@ -170,7 +176,7 @@ func (b *Broker) logoutByHand(lt oidc.LogoutToken, rep RevokeReport, applied boo
 		}
 	}
 	out := lead + strings.Join(each, "; and ")
-	if lt.Sid != "" {
+	if sidOnly {
 		out = fmt.Sprintf(`POST /v1/tokens/revoke {"sid": %q, "issuer": %q} (needs revoke_others), or %s`, lt.Sid, lt.Issuer, out)
 	}
 	return out
@@ -209,13 +215,58 @@ func (b *Broker) RevokeSid(ctx context.Context, issuer, sid, origin string) (Rev
 // record. It leaves no standing mark. It reaches only owner principals in
 // lt.Domains (Ruling 22), and every one of them (Ruling 24). The error is
 // the logout record not written, when nothing was applied; a later step's
-// is the report's Err, and the steps after it still run.
+// is the report's Err, and the steps after it still run. A token carrying
+// both sid and sub is a logout by the sid and then one by the sub, each as
+// above (Ruling 13): a provider's "sign out user" names one session and the
+// sub, and every session of the person ends. The sub half's record not
+// written, after the sid half ran, is the report's Err.
 func (b *Broker) Logout(ctx context.Context, lt oidc.LogoutToken, origin string) (RevokeReport, error) {
 	if b.Identity == nil {
 		return RevokeReport{}, errors.New("broker: this broker has no human OIDC verifier, so it takes no logout")
 	}
 	ctx, cancel := b.detach(ctx)
 	defer cancel()
+	if lt.Sid == "" || lt.Subject == "" {
+		return b.logoutOne(ctx, lt, origin)
+	}
+	bySub := lt
+	bySub.Sid = ""
+	rep, err := b.logoutOne(ctx, lt, origin)
+	if err != nil {
+		return RevokeReport{}, err
+	}
+	subRep, err := b.logoutOne(ctx, bySub, origin)
+	rep.Sub = lt.Subject
+	if err != nil {
+		if rep.Err == nil {
+			rep.Err = err
+		}
+		return rep, nil
+	}
+	for _, p := range subRep.Principals {
+		if !slices.Contains(rep.Principals, p) {
+			rep.Principals = append(rep.Principals, p)
+		}
+	}
+	if len(rep.Principals) > 0 {
+		rep.Request.Principal = rep.Principals[0]
+	}
+	for _, ref := range subRep.Contexts {
+		if !slices.Contains(rep.Contexts, ref) {
+			rep.Contexts = append(rep.Contexts, ref)
+		}
+	}
+	rep.TokenKeys += subRep.TokenKeys
+	rep.Unreached = b.unreachedOf(rep.Contexts)
+	if rep.Err == nil {
+		rep.Err = subRep.Err
+	}
+	return rep, nil
+}
+
+// logoutOne is one logout of one kind, by lt.Sid when it names one, else by
+// lt.Subject: Logout's body, the same for either.
+func (b *Broker) logoutOne(ctx context.Context, lt oidc.LogoutToken, origin string) (RevokeReport, error) {
 	now := b.Now()
 	t := b.Identity.Timing
 	rep := RevokeReport{By: ByLogoutSub, OIDCIssuer: lt.Issuer, Sub: lt.Subject,
