@@ -774,12 +774,13 @@ func l44BindsTail(requested string, ldapsAccepted bool) string {
 }
 
 // l44ConnFailed is why a refused EXTERNAL cell is no refusal, or "" when it is
-// one: only port49's own bind refusal ("bind external as ...") carrying the
+// one: only port49's own bind error (an *ldap.Error whose cause is "bind
+// external as ...", which l43FromBind reads off the error itself) carrying the
 // directory's result code (1 to 199) is the DC saying no. A TLS or StartTLS
 // failure before the bind (port49 returns it unwrapped, and a server can refuse
 // StartTLS with an LDAP result too) and a timeout say nothing about the mapping.
 func l44ConnFailed(c l43Cell) string {
-	if strings.HasPrefix(c.text, "bind external as ") && c.code > 0 && c.code < 200 {
+	if c.fromBind && c.code > 0 && c.code < 200 {
 		return ""
 	}
 	return "the connection failed before the bind (TLS, StartTLS or a timeout): " + c.text

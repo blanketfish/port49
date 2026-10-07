@@ -32,6 +32,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
+	"github.com/go-ldap/ldap/v3"
 	"github.com/rhwendt/port49/internal/directory"
 )
 
@@ -2218,25 +2219,44 @@ func TestL44ExternalRowsOverStartTLS(t *testing.T) {
 // A refused EXTERNAL cell is a refusal only when port49's own bind said so with
 // the directory's code; a failure before the bind or a timeout is INVALID.
 func TestL44ConnFailed(t *testing.T) {
+	// The shapes port49 returns (internal/directory/conn.go): bind wraps the
+	// directory's answer in an *ldap.Error whose cause names the mechanism; a
+	// StartTLS or TLS failure comes back unwrapped.
+	bindErr := func(code uint16, cause string) error {
+		return &ldap.Error{ResultCode: code, Err: fmt.Errorf("bind external as CN=port49-broker: %s", cause)}
+	}
 	for name, tc := range map[string]struct {
-		c   l43Cell
+		err error
 		bad bool
 	}{
-		"startls refused, 52": {l43Cell{code: 52, text: "LDAP Result Code 52 \"Unavailable\": start tls"}, true},
-		"tls error":           {l43Cell{code: -1, text: "tls: failed to verify certificate"}, true},
-		"bind refusal 49":     {l43Cell{code: 49, text: "bind external as CN=port49: LDAP result 49"}, false},
-		"bind refusal 7":      {l43Cell{code: 7, text: "bind external as CN=port49: LDAP result 7"}, false},
-		"bind timeout":        {l43Cell{code: -1, text: "bind external as CN=port49: context deadline exceeded"}, true},
-		"bind, no code":       {l43Cell{code: 0, text: "bind external as CN=port49: x"}, true},
-		"load failure":        {l43Cell{code: -1, atLoad: true, text: "reading the key"}, true},
+		"bind refusal 49":      {bindErr(49, "LDAP result 49"), false},
+		"bind refusal 7":       {bindErr(7, "LDAP result 7"), false},
+		"startls refused, 52":  {ldap.NewError(52, errors.New("00002028: the server is shutting down")), true},
+		"bind timeout":         {fmt.Errorf("bind external as CN=port49-broker: %w", context.DeadlineExceeded), true},
+		"tls failure, 200+":    {bindErr(200, "LDAP result 200: tls: handshake failure"), true},
+		"tls error, unwrapped": {errors.New("tls: failed to verify certificate"), true},
+		"connect refused":      {ldap.NewError(ldap.ErrorNetwork, errors.New("connection refused")), true},
 	} {
-		if got := l44ConnFailed(tc.c); (got != "") != tc.bad {
-			t.Errorf("%s: %q", name, got)
+		c := l43Cell{code: ldapCode(tc.err), text: tc.err.Error(), fromBind: l43FromBind(tc.err, "external")}
+		if got := l44ConnFailed(c); (got != "") != tc.bad {
+			t.Errorf("%s: %q (text %q)", name, got, c.text)
 		}
 	}
 	if !strings.Contains(l44Func(t, "l44ExternalOn"), "l44ConnFailed(") {
 		t.Error("l44ExternalOn does not judge a failed bind with l44ConnFailed")
 	}
+	if !strings.Contains(l43Src(t), "l43FromBind(err, string(bind.Mechanism))") {
+		t.Error("tryBind does not record whether the error is port49's bind error")
+	}
+}
+
+func l43Src(t *testing.T) string {
+	t.Helper()
+	b, err := os.ReadFile("l43_test.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
 }
 
 func TestL44NoBindRow(t *testing.T) {
