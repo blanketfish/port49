@@ -171,6 +171,46 @@ func TestASimpleBindClassifiesItsResult(t *testing.T) {
 	}
 }
 
+// stubGSS is a GSSAPI client that sends one token and records the AP options
+// it was asked to send it with; the fake LDAP server then answers the bind.
+type stubGSS struct{ apOptions *[]int }
+
+func (g stubGSS) InitSecContext(string, []byte) ([]byte, bool, error) {
+	return g.InitSecContextWithOptions("", nil, nil)
+}
+func (g stubGSS) InitSecContextWithOptions(_ string, _ []byte, opts []int) ([]byte, bool, error) {
+	*g.apOptions = opts
+	return []byte("token"), false, nil
+}
+func (stubGSS) NegotiateSaslAuth([]byte, string) ([]byte, error) { return nil, nil }
+func (stubGSS) DeleteSecContext() error                          { return nil }
+
+// A bind's *ldap.Error cause reads "bind <mech> as <who>: LDAP result <code>".
+// The L44 harness (tests/lab, l44FromBind) tells the directory's own answer
+// from a failure before the bind by that prefix; a reword would turn real
+// refusals INVALID there.
+func TestABindErrorNamesItsMechanismAndWho(t *testing.T) {
+	// bind reads only mech and who of an external credential (the
+	// certificate is the TLS handshake's).
+	external := &Credentials{mech: "external", who: "CN=port49-svc,O=lab"}
+	simple, _ := LoadCredentials(Bind{Mechanism: "simple", BindDN: "CN=port49,DC=corp", PasswordEnv: "P"},
+		func(string) string { return "pw" })
+	gss := gssapiCredentials(t, "127.0.0.1:1")
+	gss.gssCtx = func() ldap.GSSAPIClient { return stubGSS{apOptions: new([]int)} }
+	for _, cr := range []*Credentials{simple, external, gss} {
+		err := bind(context.Background(), ldapBindServer(t, ldap.LDAPResultInvalidCredentials, "diag"),
+			Server{URI: "ldaps://dc-01.corp.example.com"}, cr)
+		var le *ldap.Error
+		if !errors.As(err, &le) || le.Err == nil {
+			t.Fatalf("%s: not an *ldap.Error with a cause: %v", cr.mech, err)
+		}
+		want := fmt.Sprintf("bind %s as %s: LDAP result 49", cr.mech, cr.who)
+		if le.Err.Error() != want {
+			t.Errorf("%s: cause %q, want %q", cr.mech, le.Err.Error(), want)
+		}
+	}
+}
+
 // writeKeytab is a keytab for port49$@CORP.EXAMPLE.COM, mode 0600.
 func writeKeytab(t *testing.T, dir string) string {
 	t.Helper()

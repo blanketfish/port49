@@ -33,6 +33,9 @@ type Credentials struct {
 	cert     *tls.Certificate  // external
 	krb      *krbclient.Client // gssapi; shared by every bind, each of which has a gssapi.Client (a security context) of its own
 	password string            // simple
+	// gssCtx makes the GSSAPI client for one bind. Nil in production, where it
+	// is a gssapi.Client over krb; a test sets it to see what the bind sends.
+	gssCtx func() ldap.GSSAPIClient
 }
 
 func (c *Credentials) String() string             { return fmt.Sprintf("directory bind %s as %s", c.mech, c.who) }
@@ -285,7 +288,11 @@ func bind(ctx context.Context, conn *ldap.Conn, s Server, cr *Credentials) error
 			done <- conn.ExternalBind()
 		case "gssapi":
 			u, _ := url.Parse(s.URI)
-			done <- conn.GSSAPIBind(&gssapi.Client{Client: cr.krb}, "ldap/"+u.Hostname(), "")
+			var gc ldap.GSSAPIClient = &gssapi.Client{Client: cr.krb}
+			if cr.gssCtx != nil {
+				gc = cr.gssCtx()
+			}
+			done <- conn.GSSAPIBind(gc, "ldap/"+u.Hostname(), "")
 		default:
 			done <- conn.Bind(cr.who, cr.password)
 		}
