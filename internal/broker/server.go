@@ -232,7 +232,7 @@ func LoadTLSAnchor(certFile, keyFile, anchorFile string) (tls.Certificate, *x509
 	}
 	anchor, err := ReadAnchor(anchorFile)
 	if err != nil {
-		return tls.Certificate{}, nil, fmt.Errorf("broker: client_ca_file %w", err)
+		return tls.Certificate{}, nil, fmt.Errorf("broker: client_ca_file: %w", err)
 	}
 	return cert, anchor, nil
 }

@@ -200,7 +200,7 @@ type BrokerConfig struct {
 	Identity    *oidc.Config  `yaml:"-"`
 	IdentitySet *identityYAML `yaml:"identity"`
 	// WorkloadCAFile is the workload verifier's trust anchor file (plan 8):
-	// broker.identity.machines' x509 trust_anchor_file, "" without one.
+	// broker.identity.machines[].trust_anchor_file, "" without one.
 	WorkloadCAFile string `yaml:"-"`
 	PolicyFile     string `yaml:"policy_file"`
 	// BatchMax caps the devices in one mint request; a larger sweep pages
@@ -1668,7 +1668,7 @@ func ownRevocationsFile(c Config, b BrokerConfig) error {
 	others := []struct{ key, path string }{
 		{"broker.policy_file", b.PolicyFile}, {"broker.tls_cert_file", b.TLSCertFile},
 		{"broker.tls_key_file", b.TLSKeyFile}, {"broker.client_ca_file", b.ClientCAFile},
-		{"broker.identity.machines' trust_anchor_file", b.WorkloadCAFile},
+		{"broker.identity.machines[].trust_anchor_file", b.WorkloadCAFile},
 		{"inventory_file", c.InventoryFile}, {"accounting.spool_path", c.Accounting.SpoolPath},
 		{"admin_socket", c.AdminSocket},
 	}
@@ -1790,7 +1790,7 @@ func checkCertificateStatus(cs *CertificateStatusConfig, b BrokerConfig) error {
 			{"broker.revocations_file", b.RevocationsFile}, {"broker.revocations_file's marker", marker},
 			{"broker.policy_file", b.PolicyFile}, {"broker.tls_cert_file", b.TLSCertFile},
 			{"broker.tls_key_file", b.TLSKeyFile}, {"broker.client_ca_file", b.ClientCAFile},
-			{"broker.identity.machines' trust_anchor_file", b.WorkloadCAFile},
+			{"broker.identity.machines[].trust_anchor_file", b.WorkloadCAFile},
 			{at + ".file", src.File}, {at + ".issuer_file", src.IssuerFile},
 		}
 		for _, iss := range identityIssuers(&b) {

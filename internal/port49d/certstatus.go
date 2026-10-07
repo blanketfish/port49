@@ -45,7 +45,7 @@ func certStatusConfig(cs config.CertificateStatusConfig, anchors []*x509.Certifi
 		})
 		if !under {
 			return certstatus.Config{}, fmt.Errorf("%s: %s is neither a trust anchor's certificate nor signed by "+
-				"one (broker.client_ca_file, or broker.identity's trust_anchor_file); CRL %s would vouch for "+
+				"one (broker.client_ca_file, or a broker.identity x509 trust_anchor_file); CRL %s would vouch for "+
 				"certificates the broker does not trust", key, printsafe.Line(issuer.Subject.String(), 200), src.Name)
 		}
 		if !issuer.BasicConstraintsValid || !issuer.IsCA {
@@ -124,24 +124,34 @@ func uncoveredAnchor(cfg certstatus.Config, anchor *x509.Certificate) bool {
 }
 
 // anchorCoverLine is what the start says of an anchor no CRL covers, "" when
-// one does. With no OCSP either, under on_unavailable: refuse every
-// certificate under it is refused; with OCSP alone, the cover is unchecked
-// for this anchor. The start never refuses itself over it (decision 40 ruling
-// 7): a refused port49d start takes device AAA down for everyone. It names
-// the safe path, never on_unavailable: allow.
-func anchorCoverLine(a namedAnchor, cfg certstatus.Config) string {
+// one does. With no OCSP either, every certificate under it has a status
+// nothing can establish: under on_unavailable: refuse (the default) each is
+// refused 503 and retried; under allow each is admitted with its status
+// unchecked. With OCSP alone, the cover is unchecked for this anchor. The
+// start never refuses itself over it (decision 40 ruling 7): a refused
+// port49d start takes device AAA down for everyone. It names the safe path,
+// never on_unavailable: allow.
+func anchorCoverLine(a namedAnchor, cfg certstatus.Config, onUnavailable string) string {
 	if !uncoveredAnchor(cfg, a.cert) {
 		return ""
 	}
 	subj := printsafe.Line(a.cert.Subject.String(), 200)
 	if cfg.OCSP != nil {
+		outcome := "is refused (503, retried)"
+		if onUnavailable == "allow" {
+			outcome = "is admitted unchecked (on_unavailable: allow)"
+		}
 		return fmt.Sprintf("broker: certificate status: certificates under %s (%s) are covered by OCSP alone, "+
-			"unchecked for this anchor: one with no OCSP URL, or one its responder does not answer for, is refused",
-			subj, a.key)
+			"unchecked for this anchor: one with no OCSP URL, or one its responder does not answer for, %s",
+			subj, a.key, outcome)
 	}
-	return fmt.Sprintf("broker: certificate status: every certificate under %s (%s) will be refused: no crls "+
+	outcome := "will be refused (503, retried)"
+	if onUnavailable == "allow" {
+		outcome = "will be admitted with its revocation status unchecked (on_unavailable: allow)"
+	}
+	return fmt.Sprintf("broker: certificate status: every certificate under %s (%s) %s: no crls "+
 		"entry is that anchor or a CA it signed, and no ocsp is set; turn the CA's CRL on and name it in crls, "+
-		"or sync it to a file: source", subj, a.key)
+		"or sync it to a file: source", subj, a.key, outcome)
 }
 
 // uncoveredIssuers names each CRL signer other than the anchor whose own

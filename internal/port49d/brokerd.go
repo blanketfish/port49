@@ -491,7 +491,7 @@ func runBroker(parent context.Context, cfgPath string) error {
 			brokerSay("broker: certificate status: %s", printsafe.Line(err.Error(), 300))
 		}
 		for _, a := range anchors {
-			if line := anchorCoverLine(a, ccfg); line != "" {
+			if line := anchorCoverLine(a, ccfg, cs.OnUnavailable); line != "" {
 				brokerSay("%s", line)
 				continue
 			}

@@ -387,7 +387,7 @@ func TestWorkloadVerifierRefusals(t *testing.T) {
 func TestTheWorkloadAnchorIsNotTheRevocationsFile(t *testing.T) {
 	block := strings.Replace(workloadLists, "/etc/port49/workloads-ca.pem", "/var/lib/port49/revocations.json", 1)
 	if _, err := loadWith(t, brokerWithIdentity(block)); err == nil ||
-		!strings.Contains(err.Error(), "broker.identity.machines' trust_anchor_file") {
+		!strings.Contains(err.Error(), "broker.identity.machines[].trust_anchor_file") {
 		t.Fatalf("got %v", err)
 	}
 }

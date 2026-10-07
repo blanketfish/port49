@@ -326,7 +326,7 @@ func buildBrokerAnchor(cfg config.Config, inventoryFrom string, st store.Store, 
 	var anchors []namedAnchor
 	human := namedAnchor{key: "broker.client_ca_file", cert: anchorCert}
 	if id := cfg.Broker.Identity; id != nil && !id.Shorthand {
-		human.key = "broker.identity.humans' x509 trust_anchor_file"
+		human.key = "broker.identity.humans[].trust_anchor_file"
 	}
 	if anchorCert != nil {
 		anchors = append(anchors, human)
@@ -335,9 +335,9 @@ func buildBrokerAnchor(cfg config.Config, inventoryFrom string, st store.Store, 
 	if f := cfg.Broker.WorkloadCAFile; f != "" {
 		wa, err := broker.ReadAnchor(f)
 		if err != nil {
-			return nil, nil, nil, fmt.Errorf("broker.identity.machines' x509 trust_anchor_file %s: %w", f, err)
+			return nil, nil, nil, fmt.Errorf("broker.identity.machines[].trust_anchor_file %s: %w", f, err)
 		}
-		w := namedAnchor{key: "broker.identity.machines' x509 trust_anchor_file", cert: wa}
+		w := namedAnchor{key: "broker.identity.machines[].trust_anchor_file", cert: wa}
 		if err := distinctAnchors(human, w); err != nil {
 			return nil, nil, nil, err
 		}
@@ -1070,7 +1070,7 @@ func runOnce(parent context.Context, cfgPath string, hup <-chan os.Signal, again
 				fmt.Fprintf(stderr, "port49d: broker: certificate status: %s\n", printsafe.Line(err.Error(), 300))
 			}
 			for _, a := range anchors {
-				if line := anchorCoverLine(a, ccfg); line != "" {
+				if line := anchorCoverLine(a, ccfg, cs.OnUnavailable); line != "" {
 					fmt.Fprintf(stderr, "port49d: %s\n", line)
 					continue
 				}
